@@ -1,0 +1,1703 @@
+# Constitution Registry — Ade Constitutional Cardano Node
+#
+# Tracks all invariants from the project constitution, derived invariants,
+# classification table, release obligations, and operational invariants.
+#
+# Authority: This is a tracking artifact. Normative sources are:
+#   - ade_replay_first_constitutional_node_plan_v1.md (§2–§4b)
+#   - classification_table.md
+#
+# Schema:
+#   true/derived entries: id, tier, statement, source, cross_ref, code_locus, tests, ci_script, status
+#   CN-* true/derived additionally: attack_rationale, evidence_notes
+#   release/operational entries: id, tier, statement, source, cross_ref, status
+#
+# All entries in Phase 0A: status = "declared"
+
+# =============================================================================
+# T-* True Invariants (Project Constitution §2)
+# =============================================================================
+
+[[rules]]
+id = "T-DET-01"
+tier = "true"
+statement = "Same canonical inputs -> same authoritative bytes (per Byte Authority Model)"
+source = "Project constitution §2, Byte Authority Model §3"
+cross_ref = ["CN-WIRE-01", "CN-WIRE-02", "CN-LEDGER-02", "CN-CONS-01"]
+code_locus = ""
+tests = []
+ci_script = ""
+status = "declared"
+
+[[rules]]
+id = "T-ENC-01"
+tier = "true"
+statement = "All persisted/hashed/transmitted data uses canonical encoding"
+source = "Project constitution §2"
+cross_ref = ["CN-WIRE-01", "CN-WIRE-02"]
+code_locus = ""
+tests = []
+ci_script = ""
+status = "declared"
+
+[[rules]]
+id = "T-ENC-02"
+tier = "true"
+statement = "Non-canonical bytes rejected deterministically"
+source = "Project constitution §2"
+cross_ref = []
+code_locus = ""
+tests = []
+ci_script = ""
+status = "declared"
+
+[[rules]]
+id = "T-ENC-03"
+tier = "true"
+statement = "Round-trip identity: encode(decode(bytes)) == bytes for valid encodings"
+source = "Project constitution §2, D-3"
+cross_ref = []
+code_locus = ""
+tests = []
+ci_script = ""
+status = "declared"
+
+[[rules]]
+id = "T-CORE-01"
+tier = "true"
+statement = "Authoritative logic is pure, side-effect-free, and replayable"
+source = "Project constitution §2"
+cross_ref = ["CN-LEDGER-01"]
+code_locus = ""
+tests = []
+ci_script = ""
+status = "declared"
+
+[[rules]]
+id = "T-CORE-02"
+tier = "true"
+statement = "No wall-clock, unseeded randomness, floats, or nondeterministic collections in authoritative paths"
+source = "Project constitution §2, D-2 through D-5"
+cross_ref = ["CN-CONS-05", "CN-PLUTUS-04"]
+code_locus = ""
+tests = []
+ci_script = ""
+status = "declared"
+
+[[rules]]
+id = "T-CORE-03"
+tier = "true"
+statement = "Explicit state transitions: consume old state, produce new state"
+source = "Project constitution §2, §5.2"
+cross_ref = ["CN-LEDGER-01"]
+code_locus = ""
+tests = []
+ci_script = ""
+status = "declared"
+
+[[rules]]
+id = "T-CORE-04"
+tier = "true"
+statement = "Illegal states unrepresentable via types where practical"
+source = "Project constitution §2, §5.1"
+cross_ref = []
+code_locus = ""
+tests = []
+ci_script = ""
+status = "declared"
+
+[[rules]]
+id = "T-ERR-01"
+tier = "true"
+statement = "Errors in authoritative paths are structured, comparable, canonical"
+source = "Project constitution §2"
+cross_ref = ["CN-META-02"]
+code_locus = ""
+tests = []
+ci_script = ""
+status = "declared"
+
+[[rules]]
+id = "T-ERR-02"
+tier = "true"
+statement = "Safety violations fail-fast deterministically"
+source = "Project constitution §2, E-1"
+cross_ref = []
+code_locus = ""
+tests = []
+ci_script = ""
+status = "declared"
+
+[[rules]]
+id = "T-BUILD-01"
+tier = "true"
+statement = "No semantic build variability in authoritative code"
+source = "Project constitution §2"
+cross_ref = ["CN-BUILD-01"]
+code_locus = ""
+tests = []
+ci_script = ""
+status = "declared"
+
+[[rules]]
+id = "T-BUILD-02"
+tier = "true"
+statement = "One semantic interpretation per protocol version and input set"
+source = "Project constitution §2"
+cross_ref = ["CN-BUILD-02", "CN-BUILD-03"]
+code_locus = ""
+tests = []
+ci_script = ""
+status = "declared"
+
+[[rules]]
+id = "T-REC-01"
+tier = "true"
+statement = "Recovery is replay-equivalent: restart produces byte-identical state to clean run"
+source = "Project constitution §2"
+cross_ref = ["CN-STORE-03", "CN-STORE-04"]
+code_locus = ""
+tests = []
+ci_script = ""
+status = "declared"
+
+[[rules]]
+id = "T-REC-02"
+tier = "true"
+statement = "All authoritative state derivable by replay from inputs"
+source = "Project constitution §2"
+cross_ref = ["CN-LEDGER-02", "CN-STORE-05"]
+code_locus = ""
+tests = []
+ci_script = ""
+status = "declared"
+
+[[rules]]
+id = "T-COLL-01"
+tier = "true"
+statement = "Deterministic iteration order for all semantically meaningful collections"
+source = "Project constitution §2, D-5"
+cross_ref = []
+code_locus = ""
+tests = []
+ci_script = ""
+status = "declared"
+
+[[rules]]
+id = "T-BOUND-01"
+tier = "true"
+statement = "Shell may observe nondeterminism but must convert to deterministic inputs before entering core"
+source = "Project constitution §2"
+cross_ref = []
+code_locus = ""
+tests = []
+ci_script = ""
+status = "declared"
+
+[[rules]]
+id = "T-BOUND-02"
+tier = "true"
+statement = "Authoritative crates never depend on shell crates"
+source = "Project constitution §2, GP-4"
+cross_ref = []
+code_locus = ""
+tests = []
+ci_script = ""
+status = "declared"
+
+[[rules]]
+id = "T-INGRESS-01"
+tier = "true"
+statement = "All authoritative external bytes enter the core through named canonical decode/validation chokepoints; unchecked bypasses forbidden except for explicitly whitelisted sites with CI enforcement"
+source = "Project constitution §2, audit #21"
+cross_ref = []
+code_locus = ""
+tests = []
+ci_script = ""
+status = "declared"
+
+[[rules]]
+id = "T-CI-01"
+tier = "true"
+statement = "Every true invariant has mechanical CI enforcement. No waivers."
+source = "Project constitution §2, CI-1"
+cross_ref = ["CN-META-01"]
+code_locus = ""
+tests = []
+ci_script = ""
+status = "declared"
+
+[[rules]]
+id = "T-KEY-01"
+tier = "true"
+statement = "Signing and private key operations confined to shell; verification in core"
+source = "Project constitution §2, audit #20"
+cross_ref = ["CN-CRYPTO-01"]
+code_locus = ""
+tests = []
+ci_script = ""
+status = "declared"
+
+[[rules]]
+id = "T-CONS-01"
+tier = "true"
+statement = "Chain selection depends only on canonical observables; same candidates -> same tip"
+source = "Project constitution §2, 01_core §12"
+cross_ref = ["CN-CONS-01"]
+code_locus = ""
+tests = []
+ci_script = ""
+status = "declared"
+
+[[rules]]
+id = "T-CONS-02"
+tier = "true"
+statement = "Authoritative consensus decisions must not depend on wall-clock, arrival-order, scheduler, or OS behavior"
+source = "Project constitution §2, 01_core §3 D-2, audit #9"
+cross_ref = ["CN-CONS-05"]
+code_locus = ""
+tests = []
+ci_script = ""
+status = "declared"
+
+[[rules]]
+id = "T-CONSERV-01"
+tier = "true"
+statement = "UTxO and asset conservation must hold for every accepted transition, except where protocol rules explicitly authorize mint, burn, rewards, or treasury effects"
+source = "Project constitution §2, audit #13"
+cross_ref = ["CN-LEDGER-07"]
+code_locus = ""
+tests = []
+ci_script = ""
+status = "declared"
+
+[[rules]]
+id = "T-NOSPEND-01"
+tier = "true"
+statement = "No input or equivalent spend authority may be consumed more than once in an accepted canonical chain"
+source = "Project constitution §2, audit #14"
+cross_ref = ["CN-LEDGER-08"]
+code_locus = ""
+tests = []
+ci_script = ""
+status = "declared"
+
+[[rules]]
+id = "T-EPOCH-01"
+tier = "true"
+statement = "Exactly one authoritative committee and governance interpretation per epoch"
+source = "Project constitution §2, 01_core §13, audit #18"
+cross_ref = ["CN-EPOCH-02"]
+code_locus = ""
+tests = []
+ci_script = ""
+status = "declared"
+
+[[rules]]
+id = "T-CAUSAL-01"
+tier = "true"
+statement = "Future decisions may not leak into present validation; no retroactive reinterpretation of prior checkpoints"
+source = "Project constitution §2, audit #17"
+cross_ref = ["CN-EPOCH-04"]
+code_locus = ""
+tests = []
+ci_script = ""
+status = "declared"
+
+[[rules]]
+id = "T-TRANSPORT-01"
+tier = "true"
+statement = "Transport nondeterminism (socket fragmentation, mux ordering, timeouts) must not leak into authoritative logic"
+source = "Project constitution §2, audit #4"
+cross_ref = ["CN-PROTO-04"]
+code_locus = ""
+tests = []
+ci_script = ""
+status = "declared"
+
+[[rules]]
+id = "T-RESOURCE-01"
+tier = "true"
+statement = "Untrusted inputs must not allocate unbounded authoritative resources before deterministic validation"
+source = "Project constitution §2, audit #5"
+cross_ref = ["CN-PROTO-05"]
+code_locus = ""
+tests = []
+ci_script = ""
+status = "declared"
+
+[[rules]]
+id = "T-PLATFORM-01"
+tier = "true"
+statement = "No host-environment property (locale, timezone, architecture, platform) may influence authoritative computation results"
+source = "Project constitution §2, audit #16"
+cross_ref = ["CN-PLUTUS-04"]
+code_locus = ""
+tests = []
+ci_script = ""
+status = "declared"
+
+# =============================================================================
+# DC-* Derived Cardano Compatibility Invariants (Project Constitution §3)
+# =============================================================================
+
+[[rules]]
+id = "DC-CBOR-01"
+tier = "derived"
+statement = "Cardano CBOR decode/encode round-trips to identical bytes for all era types"
+source = "Project constitution §3, T-ENC-01, T-ENC-03"
+cross_ref = []
+code_locus = ""
+tests = []
+ci_script = ""
+status = "declared"
+
+[[rules]]
+id = "DC-CBOR-02"
+tier = "derived"
+statement = "Original wire bytes preserved for hash computation on hash-critical paths (see Byte Authority Model)"
+source = "Project constitution §3, T-ENC-01, T-DET-01"
+cross_ref = []
+code_locus = ""
+tests = []
+ci_script = ""
+status = "declared"
+
+[[rules]]
+id = "DC-CRYPTO-01"
+tier = "derived"
+statement = "Crypto verification is pure and matches Haskell node on all test vectors"
+source = "Project constitution §3, T-CORE-01, T-DET-01"
+cross_ref = []
+code_locus = ""
+tests = []
+ci_script = ""
+status = "declared"
+
+[[rules]]
+id = "DC-CRYPTO-02"
+tier = "derived"
+statement = "All signing operations confined to shell"
+source = "Project constitution §3, T-BOUND-01"
+cross_ref = ["CN-CRYPTO-01"]
+code_locus = ""
+tests = []
+ci_script = ""
+status = "declared"
+
+[[rules]]
+id = "DC-LEDGER-01"
+tier = "derived"
+statement = "apply_block(state, block) is pure and deterministic"
+source = "Project constitution §3, T-CORE-01, T-CORE-03"
+cross_ref = []
+code_locus = ""
+tests = []
+ci_script = ""
+status = "declared"
+
+[[rules]]
+id = "DC-LEDGER-02"
+tier = "derived"
+statement = "Same genesis + same blocks = byte-identical ledger state"
+source = "Project constitution §3, T-DET-01"
+cross_ref = []
+code_locus = ""
+tests = []
+ci_script = ""
+status = "declared"
+
+[[rules]]
+id = "DC-LEDGER-03"
+tier = "derived"
+statement = "Tx/block validity agrees with Haskell node on all tested inputs"
+source = "Project constitution §3, T-DET-01, T-ERR-01"
+cross_ref = ["CN-LEDGER-03"]
+code_locus = ""
+tests = []
+ci_script = ""
+status = "declared"
+
+[[rules]]
+id = "DC-LEDGER-04"
+tier = "derived"
+statement = "Epoch boundary computations (stake snapshots, rewards) match Haskell"
+source = "Project constitution §3, T-DET-01"
+cross_ref = []
+code_locus = ""
+tests = []
+ci_script = ""
+status = "declared"
+
+[[rules]]
+id = "DC-PLUTUS-01"
+tier = "derived"
+statement = "UPLC evaluation is deterministic: same script + args + cost model = identical result"
+source = "Project constitution §3, T-DET-01, T-CORE-01"
+cross_ref = []
+code_locus = ""
+tests = []
+ci_script = ""
+status = "declared"
+
+[[rules]]
+id = "DC-PLUTUS-02"
+tier = "derived"
+statement = "Budget exhaustion produces deterministic structured error"
+source = "Project constitution §3, T-ERR-01"
+cross_ref = []
+code_locus = ""
+tests = []
+ci_script = ""
+status = "declared"
+
+[[rules]]
+id = "DC-CONSENSUS-01"
+tier = "derived"
+statement = "Chain selection is deterministic and matches Haskell node behavior"
+source = "Project constitution §3, T-DET-01, T-CORE-01"
+cross_ref = []
+code_locus = ""
+tests = []
+ci_script = ""
+status = "declared"
+
+[[rules]]
+id = "DC-CONSENSUS-02"
+tier = "derived"
+statement = "Leadership verification is pure"
+source = "Project constitution §3, T-CORE-01"
+cross_ref = []
+code_locus = ""
+tests = []
+ci_script = ""
+status = "declared"
+
+[[rules]]
+id = "DC-PROTO-01"
+tier = "derived"
+statement = "Protocol state machines have deterministic transitions"
+source = "Project constitution §3, T-CORE-03"
+cross_ref = []
+code_locus = ""
+tests = []
+ci_script = ""
+status = "declared"
+
+[[rules]]
+id = "DC-PROTO-02"
+tier = "derived"
+statement = "Transcript-equivalent miniprotocol behavior with Haskell node"
+source = "Project constitution §3, T-DET-01"
+cross_ref = []
+code_locus = ""
+tests = []
+ci_script = ""
+status = "declared"
+
+[[rules]]
+id = "DC-STORE-01"
+tier = "derived"
+statement = "Recovery from power-loss produces replay-equivalent state"
+source = "Project constitution §3, T-REC-01"
+cross_ref = []
+code_locus = ""
+tests = []
+ci_script = ""
+status = "declared"
+
+[[rules]]
+id = "DC-STORE-02"
+tier = "derived"
+statement = "Append-only provenance for finalized data"
+source = "Project constitution §3, T-REC-02"
+cross_ref = []
+code_locus = ""
+tests = []
+ci_script = ""
+status = "declared"
+
+[[rules]]
+id = "DC-STORE-03"
+tier = "derived"
+statement = "Atomic snapshots (fully written or absent)"
+source = "Project constitution §3, T-REC-01"
+cross_ref = []
+code_locus = ""
+tests = []
+ci_script = ""
+status = "declared"
+
+[[rules]]
+id = "DC-INGRESS-01"
+tier = "derived"
+statement = "Block/tx/protocol message decoding enters core through named chokepoints; no raw-byte bypass without CI-whitelisted justification"
+source = "Project constitution §3, T-INGRESS-01"
+cross_ref = []
+code_locus = ""
+tests = []
+ci_script = ""
+status = "declared"
+
+[[rules]]
+id = "DC-INGRESS-02"
+tier = "derived"
+statement = "Storage rehydration enters core through the same canonical decode chokepoints as network ingress"
+source = "Project constitution §3, T-INGRESS-01, T-ENC-01"
+cross_ref = []
+code_locus = ""
+tests = []
+ci_script = ""
+status = "declared"
+
+[[rules]]
+id = "DC-REF-01"
+tier = "derived"
+statement = "Every claimed equivalence check must identify its reference source, extraction method, and reproducibility path"
+source = "Project constitution §3, T-DET-01, T-CI-01"
+cross_ref = ["CN-META-03"]
+code_locus = ""
+tests = []
+ci_script = ""
+status = "declared"
+
+[[rules]]
+id = "DC-PROTO-03"
+tier = "derived"
+statement = "Full N2N mini-protocol surface: Handshake, ChainSync, BlockFetch, TxSubmission2, KeepAlive, PeerSharing"
+source = "Project constitution §3, T-DET-01, T-CORE-03"
+cross_ref = []
+code_locus = ""
+tests = []
+ci_script = ""
+status = "declared"
+
+[[rules]]
+id = "DC-PROTO-04"
+tier = "derived"
+statement = "Full N2C mini-protocol surface: Handshake, LocalChainSync, LocalTxSubmission, LocalStateQuery, LocalTxMonitor"
+source = "Project constitution §3, T-DET-01, T-CORE-03"
+cross_ref = []
+code_locus = ""
+tests = []
+ci_script = ""
+status = "declared"
+
+[[rules]]
+id = "DC-PROTO-05"
+tier = "derived"
+statement = "Version negotiation is closed: enumerated N2N/N2C versions, explicit handshake, deterministic refusal on mismatch"
+source = "Project constitution §3, T-ENC-02, T-CORE-03"
+cross_ref = []
+code_locus = ""
+tests = []
+ci_script = ""
+status = "declared"
+
+[[rules]]
+id = "DC-EPOCH-01"
+tier = "derived"
+statement = "Conway governance timing: proposals accumulate during epoch, ratification and enactment are atomic at epoch boundary, pulsing distributes DRep stake computation across epoch"
+source = "Project constitution §3, T-CAUSAL-01, T-EPOCH-01"
+cross_ref = []
+code_locus = ""
+tests = []
+ci_script = ""
+status = "declared"
+
+[[rules]]
+id = "DC-EPOCH-02"
+tier = "derived"
+statement = "Hard fork transitions triggered at deterministic slot/epoch boundaries; era translation functions mandatory; forecast horizon extends to era boundary"
+source = "Project constitution §3, T-DET-01, T-CORE-03"
+cross_ref = []
+code_locus = ""
+tests = []
+ci_script = ""
+status = "declared"
+
+[[rules]]
+id = "DC-STORE-04"
+tier = "derived"
+statement = "ChainDB structure: ImmutableDB (append-only, blocks immutable when k-deep), VolatileDB (recent blocks within k), LedgerDB (snapshots + forward replay)"
+source = "Project constitution §3, T-REC-01, T-REC-02"
+cross_ref = []
+code_locus = ""
+tests = []
+ci_script = ""
+status = "declared"
+
+[[rules]]
+id = "DC-STORE-05"
+tier = "derived"
+statement = "Recovery is snapshot + forward replay (not full genesis replay): load most recent valid snapshot, replay forward from ImmutableDB tip"
+source = "Project constitution §3, T-REC-01"
+cross_ref = []
+code_locus = ""
+tests = []
+ci_script = ""
+status = "declared"
+
+[[rules]]
+id = "DC-STORE-06"
+tier = "derived"
+statement = "VolatileDB uses ValidateAll after unclean shutdown; NoValidation acceptable during clean operation as optimization"
+source = "Project constitution §3, T-INGRESS-01"
+cross_ref = ["CN-STORE-06"]
+code_locus = ""
+tests = []
+ci_script = ""
+status = "declared"
+
+[[rules]]
+id = "DC-QUERY-01"
+tier = "derived"
+statement = "N2C queries are era-aware, typed, and version-gated: each NodeToClientVersion gates which queries are available"
+source = "Project constitution §3, T-DET-01, DC-PROTO-04"
+cross_ref = []
+code_locus = ""
+tests = []
+ci_script = ""
+status = "declared"
+
+[[rules]]
+id = "DC-NET-01"
+tier = "derived"
+statement = "Peer selection uses three-tier management (cold/warm/hot) with bounded admission, per-peer resource limits, and eviction policies"
+source = "Project constitution §3, T-RESOURCE-01, T-TRANSPORT-01"
+cross_ref = []
+code_locus = ""
+tests = []
+ci_script = ""
+status = "declared"
+
+[[rules]]
+id = "DC-LEDGER-05"
+tier = "derived"
+statement = "Witness binding is era-specific: Byron TxWitness, Shelley+ WitsVKey/Scripts/BootstrapWitnesses, Alonzo+ Redeemers/Datums, Conway governance witnesses"
+source = "Project constitution §3, T-DET-01"
+cross_ref = []
+code_locus = ""
+tests = []
+ci_script = ""
+status = "declared"
+
+[[rules]]
+id = "DC-LEDGER-06"
+tier = "derived"
+statement = "Script context (ScriptContext/TxInfo) derived from tx + ledger state + network-wide constants (EpochInfo, SystemStart); no host-environment data"
+source = "Project constitution §3, T-PLATFORM-01, T-DET-01"
+cross_ref = []
+code_locus = ""
+tests = []
+ci_script = ""
+status = "declared"
+
+[[rules]]
+id = "DC-LEDGER-07"
+tier = "derived"
+statement = "Coexisting supported versions must return same validity verdict for consensus-relevant inputs"
+source = "Project constitution §3, T-DET-01, T-BUILD-02"
+cross_ref = ["CN-LEDGER-04"]
+code_locus = ""
+tests = []
+ci_script = ""
+status = "declared"
+
+[[rules]]
+id = "DC-MEM-01"
+tier = "derived"
+statement = "Mempool acceptance rules must not contradict block/ledger acceptance rules"
+source = "Project constitution §3, T-DET-01, T-CORE-01"
+cross_ref = []
+code_locus = ""
+tests = []
+ci_script = ""
+status = "declared"
+
+[[rules]]
+id = "DC-MEM-02"
+tier = "derived"
+statement = "Overload shedding follows deterministic policy, not timing-dependent collapse"
+source = "Project constitution §3, T-DET-01, T-CORE-02"
+cross_ref = []
+code_locus = ""
+tests = []
+ci_script = ""
+status = "declared"
+
+# =============================================================================
+# CN-* Classification Table Invariants (classification_table.md)
+# =============================================================================
+
+# --- A. Wire, Decoding, and Byte Authority ---
+
+[[rules]]
+id = "CN-WIRE-01"
+tier = "true"
+statement = "Hash-critical original bytes must be preserved and used on all hash/signature-critical paths"
+source = "classification_table.md §A"
+cross_ref = ["T-DET-01", "T-ENC-01"]
+code_locus = ""
+tests = []
+ci_script = ""
+status = "declared"
+attack_rationale = "Prevents tx/block/header ID drift and signature mismatch caused by re-encoding or lossy normalization."
+evidence_notes = "Universal consequence of T-ENC-01/T-DET-01. Any system using content-addressed hashing must preserve original bytes for hash-critical paths. Governs the Byte Authority Model."
+
+[[rules]]
+id = "CN-WIRE-02"
+tier = "true"
+statement = "Internal replay/state surfaces must use exactly one canonical project encoding"
+source = "classification_table.md §A"
+cross_ref = ["T-DET-01", "T-ENC-01"]
+code_locus = ""
+tests = []
+ci_script = ""
+status = "declared"
+attack_rationale = "Prevents replay divergence from multiple internal byte authorities."
+evidence_notes = "Direct restatement of T-ENC-01 + T-DET-01 applied to internal surfaces. Universal: any replay-first system needs single canonical internal encoding."
+
+[[rules]]
+id = "CN-WIRE-03"
+tier = "derived"
+statement = "Consensus-critical deserialization must be equivalent across all supported versions and active code paths"
+source = "classification_table.md §A"
+cross_ref = []
+code_locus = ""
+tests = []
+ci_script = ""
+status = "declared"
+attack_rationale = "Directly addresses the November 2025 malformed delegation/deserialization fork."
+evidence_notes = "Cardano-specific: addresses version-skew within the Cardano protocol's multi-version support model. Evidence: ouroboros-network version types show this is a protocol-version-specific concern."
+
+[[rules]]
+id = "CN-WIRE-04"
+tier = "true"
+statement = "Malformed consensus-relevant inputs must be rejected deterministically before any authoritative state transition"
+source = "classification_table.md §A"
+cross_ref = []
+code_locus = ""
+tests = []
+ci_script = ""
+status = "declared"
+attack_rationale = "Prevents a single malformed transaction from producing split histories."
+evidence_notes = "Universal safety property: no system should allow malformed inputs to mutate authoritative state. Direct consequence of T-ERR-02 + T-INGRESS-01."
+
+[[rules]]
+id = "CN-WIRE-05"
+tier = "derived"
+statement = "No legacy or compatibility parser may accept bytes that the canonical parser rejects"
+source = "classification_table.md §A"
+cross_ref = []
+code_locus = ""
+tests = []
+ci_script = ""
+status = "declared"
+attack_rationale = "Covers permissive legacy paths that could create version-skew forks."
+evidence_notes = "Cardano-specific: addresses the multiple-era, multiple-version parser landscape specific to Cardano's evolution."
+
+[[rules]]
+id = "CN-WIRE-06"
+tier = "derived"
+statement = "Every network/storage ingress path must pass through named era-aware decode chokepoints"
+source = "classification_table.md §A"
+cross_ref = []
+code_locus = ""
+tests = []
+ci_script = ""
+status = "declared"
+attack_rationale = "Prevents privileged or inconsistent decode paths from bypassing consensus rules."
+evidence_notes = "Cardano-specific refinement of T-INGRESS-01: the era-aware part is Cardano's multi-era requirement."
+
+[[rules]]
+id = "CN-WIRE-07"
+tier = "derived"
+statement = "Each protocol-visible message must decode into one closed, versioned message type"
+source = "classification_table.md §A"
+cross_ref = []
+code_locus = ""
+tests = []
+ci_script = ""
+status = "declared"
+attack_rationale = "Prevents ambiguous dispatch and version confusion in miniprotocols."
+evidence_notes = "Cardano-specific: addresses Cardano's protocol message versioning (N2N/N2C version negotiation, per-version message sets)."
+
+# --- B. Ledger Validity and State Transition Safety ---
+
+[[rules]]
+id = "CN-LEDGER-01"
+tier = "true"
+statement = "apply_block must be a pure deterministic function of prior state and canonical block input"
+source = "classification_table.md §B"
+cross_ref = ["T-CORE-01", "T-CORE-03"]
+code_locus = ""
+tests = []
+ci_script = ""
+status = "declared"
+attack_rationale = "Core replay and consensus safety invariant."
+evidence_notes = "Universal: any replay-first system requires pure deterministic state transitions. Evidence: cardano-ledger STS framework confirms purely functional (Environment, State, Signal) -> State'."
+
+[[rules]]
+id = "CN-LEDGER-02"
+tier = "true"
+statement = "Same genesis/bootstrap + same block sequence must yield byte-identical authoritative state"
+source = "classification_table.md §B"
+cross_ref = ["T-DET-01", "T-REC-02"]
+code_locus = ""
+tests = []
+ci_script = ""
+status = "declared"
+attack_rationale = "Prevents semantic-match but state-byte divergence failures."
+evidence_notes = "Direct restatement of T-DET-01 + T-REC-02. Universal replay equivalence property."
+
+[[rules]]
+id = "CN-LEDGER-03"
+tier = "derived"
+statement = "Validity decisions for transactions and blocks must match the Cardano reference oracle for the same era/protocol version"
+source = "classification_table.md §B"
+cross_ref = ["DC-LEDGER-03"]
+code_locus = ""
+tests = []
+ci_script = ""
+status = "declared"
+attack_rationale = "Prevents acceptance/rejection drift from mainnet semantics."
+evidence_notes = "Cardano-specific: match Cardano reference oracle is a compatibility requirement. Requires differential testing against Haskell node."
+
+[[rules]]
+id = "CN-LEDGER-04"
+tier = "derived"
+statement = "Any two supported production versions that may coexist must return the same validity verdict for every consensus-relevant input"
+source = "classification_table.md §B"
+cross_ref = ["DC-LEDGER-07"]
+code_locus = ""
+tests = []
+ci_script = ""
+status = "declared"
+attack_rationale = "Covers mixed-version skew, not just latest-vs-reference comparison."
+evidence_notes = "Cardano-specific: addresses Cardano's rolling upgrade model where multiple node versions coexist."
+
+[[rules]]
+id = "CN-LEDGER-05"
+tier = "true"
+statement = "Each feature must have one semantic processing result; no alternate path may disagree on whether work was already applied, failed, or remains valid"
+source = "classification_table.md §B"
+cross_ref = []
+code_locus = ""
+tests = []
+ci_script = ""
+status = "declared"
+attack_rationale = "Learned from edge-case double-processing and nondeterminism failures in other chains."
+evidence_notes = "Universal: deterministic processing must yield single result per input. Direct consequence of T-DET-01."
+
+[[rules]]
+id = "CN-LEDGER-06"
+tier = "true"
+statement = "Failure-state residue must be deterministic and consensus-neutral"
+source = "classification_table.md §B"
+cross_ref = []
+code_locus = ""
+tests = []
+ci_script = ""
+status = "declared"
+attack_rationale = "Prevents failed transactions from leaving path-dependent artifacts that affect later validation."
+evidence_notes = "Universal: failed operations must not leave path-dependent artifacts. Direct consequence of T-DET-01 + T-ERR-01."
+
+[[rules]]
+id = "CN-LEDGER-07"
+tier = "true"
+statement = "UTxO and asset conservation must hold for every accepted transition, except where protocol rules explicitly authorize mint, burn, rewards, or treasury effects"
+source = "classification_table.md §B"
+cross_ref = ["T-CONSERV-01"]
+code_locus = ""
+tests = []
+ci_script = ""
+status = "declared"
+attack_rationale = "Prevents inflation and accounting bugs."
+evidence_notes = "Fundamental accounting law. Evidence: validateValueNotConservedUTxO in cardano-ledger enforces consumed == produced."
+
+[[rules]]
+id = "CN-LEDGER-08"
+tier = "true"
+statement = "No input or equivalent spend authority may be consumed more than once in an accepted canonical chain"
+source = "classification_table.md §B"
+cross_ref = ["T-NOSPEND-01"]
+code_locus = ""
+tests = []
+ci_script = ""
+status = "declared"
+attack_rationale = "Double-spend safety."
+evidence_notes = "Fundamental ledger safety property: each input consumed at most once. Evidence: inputs stored as Set + UTxO map deletion on spend in cardano-ledger."
+
+[[rules]]
+id = "CN-LEDGER-09"
+tier = "derived"
+statement = "Witnesses must bind exactly to the intended body, certificates, withdrawals, governance actions, and scripts for the era"
+source = "classification_table.md §B"
+cross_ref = []
+code_locus = ""
+tests = []
+ci_script = ""
+status = "declared"
+attack_rationale = "Prevents witness reuse and substitution."
+evidence_notes = "Cardano-specific: era-specific binding rules vary by era (Byron, Shelley, Alonzo, Conway each have different witness requirements)."
+
+[[rules]]
+id = "CN-LEDGER-10"
+tier = "derived"
+statement = "Conway governance and certificate transitions must occur only through explicit legal state transitions"
+source = "classification_table.md §B"
+cross_ref = []
+code_locus = ""
+tests = []
+ci_script = ""
+status = "declared"
+attack_rationale = "Prevents malformed governance or delegation actions from mutating state incorrectly."
+evidence_notes = "Cardano-specific: Conway governance is a Cardano protocol feature. Evidence: Conway/Rules/Ratify.hs, Enact.hs define Conway-specific governance state machine."
+
+# --- C. Epoch, Stake, Rewards, and Governance Timing ---
+
+[[rules]]
+id = "CN-EPOCH-01"
+tier = "derived"
+statement = "Stake, rewards, parameter changes, and governance effects may activate only at protocol-defined epoch boundaries"
+source = "classification_table.md §C"
+cross_ref = []
+code_locus = ""
+tests = []
+ci_script = ""
+status = "declared"
+attack_rationale = "Prevents early or delayed activation errors."
+evidence_notes = "Cardano-specific: epoch boundary semantics defined by Ouroboros Praos. Evidence: Conway/Rules/Epoch.hs, NewEpoch.hs show epoch-boundary-only enactment."
+
+[[rules]]
+id = "CN-EPOCH-02"
+tier = "true"
+statement = "At each slot or epoch point there is exactly one authoritative committee and governance interpretation"
+source = "classification_table.md §C"
+cross_ref = ["T-EPOCH-01"]
+code_locus = ""
+tests = []
+ci_script = ""
+status = "declared"
+attack_rationale = "Prevents split governance state."
+evidence_notes = "Universal: no system may have ambiguous authority at any point. Direct consequence of T-DET-01. Elevated to true because ambiguous authority would break determinism."
+
+[[rules]]
+id = "CN-EPOCH-03"
+tier = "derived"
+statement = "Stake snapshots and reward computations must be derivable solely from canonical chain state"
+source = "classification_table.md §C"
+cross_ref = []
+code_locus = ""
+tests = []
+ci_script = ""
+status = "declared"
+attack_rationale = "Prevents cache- or time-dependent reward divergence."
+evidence_notes = "Cardano-specific: stake snapshots and reward computation are Ouroboros Praos mechanisms."
+
+[[rules]]
+id = "CN-EPOCH-04"
+tier = "true"
+statement = "Future decisions may not leak into present validation, and later states may not retroactively reinterpret prior checkpoints"
+source = "classification_table.md §C"
+cross_ref = ["T-CAUSAL-01"]
+code_locus = ""
+tests = []
+ci_script = ""
+status = "declared"
+attack_rationale = "Prevents temporal ambiguity and non-local effects."
+evidence_notes = "Universal temporal causality: present validation must depend only on past/present state. Direct consequence of T-DET-01 + T-CORE-03."
+
+# --- D. Consensus and Chain Selection ---
+
+[[rules]]
+id = "CN-CONS-01"
+tier = "true"
+statement = "Chain selection must be deterministic for the same candidate chains and protocol observables"
+source = "classification_table.md §D"
+cross_ref = ["T-DET-01", "T-CONS-01"]
+code_locus = ""
+tests = []
+ci_script = ""
+status = "declared"
+attack_rationale = "Prevents fork-choice drift."
+evidence_notes = "Universal: any consensus system must have deterministic fork choice. Evidence: SelectView in ouroboros-consensus depends only on BlockNo + TiebreakerView."
+
+[[rules]]
+id = "CN-CONS-02"
+tier = "derived"
+statement = "Supported rollout skew must not allow a single adversarial input to induce persistent honest-node consensus divergence"
+source = "classification_table.md §D"
+cross_ref = []
+code_locus = ""
+tests = []
+ci_script = ""
+status = "declared"
+attack_rationale = "Direct lesson from the November 2025 fork."
+evidence_notes = "Cardano-specific: addresses Cardano's multi-version deployment model and the November 2025 fork incident."
+
+[[rules]]
+id = "CN-CONS-03"
+tier = "derived"
+statement = "After temporary partition, honest nodes must converge using only protocol-defined observables and declared emergency procedures"
+source = "classification_table.md §D"
+cross_ref = []
+code_locus = ""
+tests = []
+ci_script = ""
+status = "declared"
+attack_rationale = "Prevents ad hoc operator heuristics from becoming consensus inputs."
+evidence_notes = "Cardano-specific constraints on convergence mechanism beyond universal replay-equivalent convergence."
+
+[[rules]]
+id = "CN-CONS-04"
+tier = "derived"
+statement = "Header validation must bind exactly to the accepted body and consensus context"
+source = "classification_table.md §D"
+cross_ref = []
+code_locus = ""
+tests = []
+ci_script = ""
+status = "declared"
+attack_rationale = "Prevents partial-validation acceptance."
+evidence_notes = "Cardano-specific: header/body separation is a Cardano block structure choice."
+
+[[rules]]
+id = "CN-CONS-05"
+tier = "true"
+statement = "Authoritative consensus decisions must not depend on wall-clock time, arrival-order races, scheduler interleavings, or OS behavior"
+source = "classification_table.md §D"
+cross_ref = ["T-CORE-02", "T-CONS-02"]
+code_locus = ""
+tests = []
+ci_script = ""
+status = "declared"
+attack_rationale = "Core anti-nondeterminism rule."
+evidence_notes = "Direct restatement of T-CORE-02. Universal to any deterministic consensus system."
+
+# --- E. Scripts, Plutus, and Execution Determinism ---
+
+[[rules]]
+id = "CN-PLUTUS-01"
+tier = "derived"
+statement = "Same script + same redeemers/datum/context + same cost model must produce identical result and budget accounting"
+source = "classification_table.md §E"
+cross_ref = []
+code_locus = ""
+tests = []
+ci_script = ""
+status = "declared"
+attack_rationale = "Prevents script-result drift across nodes."
+evidence_notes = "Cardano-specific: Plutus scripts are a Cardano feature. Evidence: script context constructed from deterministic ledger components."
+
+[[rules]]
+id = "CN-PLUTUS-02"
+tier = "derived"
+statement = "Budget exhaustion and script failure must have a single deterministic failure shape"
+source = "classification_table.md §E"
+cross_ref = []
+code_locus = ""
+tests = []
+ci_script = ""
+status = "declared"
+attack_rationale = "Prevents runtime-dependent failure behavior."
+evidence_notes = "Cardano-specific: budget accounting is a Plutus mechanism."
+
+[[rules]]
+id = "CN-PLUTUS-03"
+tier = "derived"
+statement = "Script context must be canonically and completely derived from transaction plus ledger state"
+source = "classification_table.md §E"
+cross_ref = []
+code_locus = ""
+tests = []
+ci_script = ""
+status = "declared"
+attack_rationale = "Prevents context reconstruction drift."
+evidence_notes = "Cardano-specific: ScriptContext/TxInfo construction is Plutus/Cardano-specific."
+
+[[rules]]
+id = "CN-PLUTUS-04"
+tier = "true"
+statement = "No host-environment property may influence script results"
+source = "classification_table.md §E"
+cross_ref = ["T-CORE-02", "T-PLATFORM-01"]
+code_locus = ""
+tests = []
+ci_script = ""
+status = "declared"
+attack_rationale = "Prevents locale, timezone, architecture, or platform leakage into execution."
+evidence_notes = "Universal: no platform-dependent behavior may affect authoritative computation. Direct consequence of T-CORE-02."
+
+# --- F. Miniprotocols and Networking ---
+
+[[rules]]
+id = "CN-PROTO-01"
+tier = "derived"
+statement = "Each miniprotocol must be an explicit deterministic state machine with legal typed transitions only"
+source = "classification_table.md §F"
+cross_ref = []
+code_locus = ""
+tests = []
+ci_script = ""
+status = "declared"
+attack_rationale = "Prevents protocol confusion and transcript drift."
+evidence_notes = "Cardano-specific: miniprotocol is Cardano's specific protocol architecture. Evidence: ouroboros-network protocol modules define typed state machines with agency."
+
+[[rules]]
+id = "CN-PROTO-02"
+tier = "derived"
+statement = "For the same peer transcript, authoritative state and outbound transcript must be identical"
+source = "classification_table.md §F"
+cross_ref = []
+code_locus = ""
+tests = []
+ci_script = ""
+status = "declared"
+attack_rationale = "Transcript equivalence for interoperability."
+evidence_notes = "Cardano-specific: transcript equivalence is a Cardano interoperability requirement."
+
+[[rules]]
+id = "CN-PROTO-03"
+tier = "derived"
+statement = "Agency must be enforced strictly; impossible messages must fail deterministically"
+source = "classification_table.md §F"
+cross_ref = []
+code_locus = ""
+tests = []
+ci_script = ""
+status = "declared"
+attack_rationale = "Prevents invalid recovery or fallback behavior."
+evidence_notes = "Cardano-specific: agency is Cardano's mini-protocol concept."
+
+[[rules]]
+id = "CN-PROTO-04"
+tier = "true"
+statement = "Socket fragmentation, multiplexing, arrival order, and timeout behavior must not leak nondeterminism into authoritative logic"
+source = "classification_table.md §F"
+cross_ref = ["T-TRANSPORT-01"]
+code_locus = ""
+tests = []
+ci_script = ""
+status = "declared"
+attack_rationale = "Separates scheduling noise from authoritative decisions."
+evidence_notes = "Universal: transport nondeterminism must not leak into authoritative logic. Evidence: ouroboros-network mux uses STM-protected queues."
+
+[[rules]]
+id = "CN-PROTO-05"
+tier = "true"
+statement = "Untrusted network inputs must not allocate unbounded authoritative resources before deterministic validation"
+source = "classification_table.md §F"
+cross_ref = ["T-RESOURCE-01"]
+code_locus = ""
+tests = []
+ci_script = ""
+status = "declared"
+attack_rationale = "Basic DoS and heap-exhaustion protection."
+evidence_notes = "Universal DoS protection principle. Direct consequence of defensive input handling + T-INGRESS-01."
+
+# --- G. Topology, Eclipse Resistance, and Peer Trust Boundaries ---
+
+[[rules]]
+id = "CN-NET-01"
+tier = "operational"
+statement = "A block producer must not accept arbitrary public peer connectivity; it may connect only through trusted relay topology"
+source = "classification_table.md §G"
+cross_ref = ["OP-NET-01"]
+status = "declared"
+
+[[rules]]
+id = "CN-NET-02"
+tier = "operational"
+statement = "Relay paths must be geographically and topologically diverse enough that isolating one path does not prevent timely propagation"
+source = "classification_table.md §G"
+cross_ref = ["OP-NET-02"]
+status = "declared"
+
+[[rules]]
+id = "CN-NET-03"
+tier = "operational"
+statement = "No single peer, ASN, region, or operator cluster may dominate the node's authoritative view"
+source = "classification_table.md §G"
+cross_ref = ["OP-NET-03"]
+status = "declared"
+
+[[rules]]
+id = "CN-NET-04"
+tier = "derived"
+statement = "Peer selection and promotion policies must not allow one adversary-controlled set to deterministically starve honest views"
+source = "classification_table.md §G"
+cross_ref = []
+code_locus = ""
+tests = []
+ci_script = ""
+status = "declared"
+attack_rationale = "Strengthens anti-eclipse posture."
+evidence_notes = "Semantic implications for consensus liveness through peer selection governor policy. Evidence: three-tier peer management in ouroboros-network."
+
+# --- H. Mempool, Admission Control, and Overload Behavior ---
+
+[[rules]]
+id = "CN-MEM-01"
+tier = "derived"
+statement = "Untrusted inbound work must be admitted through deterministic bounded policies before consuming scarce authoritative resources"
+source = "classification_table.md §H"
+cross_ref = []
+code_locus = ""
+tests = []
+ci_script = ""
+status = "declared"
+attack_rationale = "Protects against spam and resource-exhaustion attacks."
+evidence_notes = "Cardano-specific mempool admission model (tx size limits, fee thresholds, per-protocol-version rules)."
+
+[[rules]]
+id = "CN-MEM-02"
+tier = "operational"
+statement = "Mempool pressure and peer churn must not starve block validation, chain selection, or persistence"
+source = "classification_table.md §H"
+cross_ref = ["OP-MEM-01"]
+status = "declared"
+
+[[rules]]
+id = "CN-MEM-03"
+tier = "derived"
+statement = "Under overload, work shedding must follow deterministic policy, not timing-dependent collapse"
+source = "classification_table.md §H"
+cross_ref = []
+code_locus = ""
+tests = []
+ci_script = ""
+status = "declared"
+attack_rationale = "Prevents overload from becoming a consensus bug."
+evidence_notes = "Shedding policy has semantic implications; the specific mechanism is Cardano-specific."
+
+[[rules]]
+id = "CN-MEM-04"
+tier = "derived"
+statement = "Mempool acceptance rules must never contradict block and ledger acceptance rules for the same authoritative semantics"
+source = "classification_table.md §H"
+cross_ref = []
+code_locus = ""
+tests = []
+ci_script = ""
+status = "declared"
+attack_rationale = "Prevents mempool/consensus disagreement."
+evidence_notes = "Cardano-specific: mempool/ledger consistency about Cardano's specific validation pipeline."
+
+# --- I. Storage, WAL, Checkpoints, and Crash Recovery ---
+
+[[rules]]
+id = "CN-STORE-01"
+tier = "true"
+statement = "No authoritative storage initialization may occur before bootstrap or anchor verification succeeds"
+source = "classification_table.md §I"
+cross_ref = []
+code_locus = ""
+tests = []
+ci_script = ""
+status = "declared"
+attack_rationale = "Prevents poisoned or unbound persistence."
+evidence_notes = "Universal: storage must not be populated before trust root is established."
+
+[[rules]]
+id = "CN-STORE-02"
+tier = "true"
+statement = "WAL entries, checkpoints, and recovered artifacts must be bound to exactly one anchor or bootstrap lineage"
+source = "classification_table.md §I"
+cross_ref = []
+code_locus = ""
+tests = []
+ci_script = ""
+status = "declared"
+attack_rationale = "Prevents replay across incompatible histories."
+evidence_notes = "Universal: replay equivalence requires all persisted state traceable to a single authority chain."
+
+[[rules]]
+id = "CN-STORE-03"
+tier = "true"
+statement = "Crash recovery must produce the same authoritative state as clean replay over the accepted canonical inputs"
+source = "classification_table.md §I"
+cross_ref = ["T-REC-01"]
+code_locus = ""
+tests = []
+ci_script = ""
+status = "declared"
+attack_rationale = "Core replay-first safety property."
+evidence_notes = "Direct restatement of T-REC-01. Evidence: ChainDB recovery in ouroboros-consensus loads snapshot + replays forward."
+
+[[rules]]
+id = "CN-STORE-04"
+tier = "true"
+statement = "Checkpoints must be atomic: fully committed and valid, or absent"
+source = "classification_table.md §I"
+cross_ref = ["T-REC-01"]
+code_locus = ""
+tests = []
+ci_script = ""
+status = "declared"
+attack_rationale = "Prevents half-state corruption from becoming authoritative."
+evidence_notes = "Universal: partial checkpoints could corrupt recovery. Evidence: ledger snapshot atomicity in ouroboros-consensus."
+
+[[rules]]
+id = "CN-STORE-05"
+tier = "true"
+statement = "Finalized provenance must be append-only, auditable, and replay-derivable"
+source = "classification_table.md §I"
+cross_ref = ["T-REC-02"]
+code_locus = ""
+tests = []
+ci_script = ""
+status = "declared"
+attack_rationale = "Ensures trustworthy recovery and debugging evidence."
+evidence_notes = "Universal: finalized data must be immutable. Evidence: ImmutableDB in ouroboros-consensus is append-only by design."
+
+[[rules]]
+id = "CN-STORE-06"
+tier = "derived"
+statement = "On-disk bytes must re-enter through the same canonical validation and decode chokepoints as network inputs"
+source = "classification_table.md §I"
+cross_ref = ["DC-STORE-06"]
+code_locus = ""
+tests = []
+ci_script = ""
+status = "declared"
+attack_rationale = "Prevents privileged storage-only semantics."
+evidence_notes = "Cardano-specific optimization: VolatileDB defaults to NoValidation during clean operation, ValidateAll after unclean shutdown."
+
+# --- J. Cryptographic Boundaries ---
+
+[[rules]]
+id = "CN-CRYPTO-01"
+tier = "true"
+statement = "Verification belongs to the authoritative core; signing belongs outside it"
+source = "classification_table.md §J"
+cross_ref = ["T-KEY-01", "DC-CRYPTO-02"]
+code_locus = ""
+tests = []
+ci_script = ""
+status = "declared"
+attack_rationale = "Keeps private-key operations and shell effects out of core consensus logic."
+evidence_notes = "Universal: private key operations must be outside pure core. Evidence: cardano-node loads keys at startup, signing in shell only."
+
+[[rules]]
+id = "CN-CRYPTO-02"
+tier = "true"
+statement = "All consensus-relevant hashes must be domain-separated and unambiguous"
+source = "classification_table.md §J"
+cross_ref = []
+code_locus = ""
+tests = []
+ci_script = ""
+status = "declared"
+attack_rationale = "Prevents cross-domain hash confusion."
+evidence_notes = "Universal: domain separation prevents cross-domain hash confusion in any cryptographic system."
+
+[[rules]]
+id = "CN-CRYPTO-03"
+tier = "true"
+statement = "All collections with consensus meaning must be ordered deterministically before hashing or comparison"
+source = "classification_table.md §J"
+cross_ref = []
+code_locus = ""
+tests = []
+ci_script = ""
+status = "declared"
+attack_rationale = "Prevents set and map iteration nondeterminism."
+evidence_notes = "Universal: direct consequence of T-COLL-01 + T-DET-01."
+
+[[rules]]
+id = "CN-CRYPTO-04"
+tier = "true"
+statement = "Verification failure must fail once and deterministically; no implicit parser or serialization fallback is allowed"
+source = "classification_table.md §J"
+cross_ref = []
+code_locus = ""
+tests = []
+ci_script = ""
+status = "declared"
+attack_rationale = "Prevents retry-into-acceptance bugs."
+evidence_notes = "Universal: retry-into-acceptance is a fundamental safety violation. Direct consequence of T-ERR-02."
+
+# --- K. Build, Configuration, and Semantic Stability ---
+
+[[rules]]
+id = "CN-BUILD-01"
+tier = "true"
+statement = "No build profile, feature flag, cfg, or optimization mode may alter authoritative semantics or persisted bytes"
+source = "classification_table.md §K"
+cross_ref = ["T-BUILD-01"]
+code_locus = ""
+tests = []
+ci_script = ""
+status = "declared"
+attack_rationale = "Prevents semantic build variability."
+evidence_notes = "Already in constitution as T-BUILD-01. Universal."
+
+[[rules]]
+id = "CN-BUILD-02"
+tier = "true"
+statement = "All semantic variability must be explicit runtime protocol data, not hidden compile-time choice"
+source = "classification_table.md §K"
+cross_ref = ["T-BUILD-02"]
+code_locus = ""
+tests = []
+ci_script = ""
+status = "declared"
+attack_rationale = "Makes behavior replayable and reviewable."
+evidence_notes = "Already in constitution as T-BUILD-02 equivalent. Universal."
+
+[[rules]]
+id = "CN-BUILD-03"
+tier = "true"
+statement = "Exactly one semantic interpretation may exist for a given protocol version and bootstrap anchor"
+source = "classification_table.md §K"
+cross_ref = ["T-BUILD-02"]
+code_locus = ""
+tests = []
+ci_script = ""
+status = "declared"
+attack_rationale = "Prevents implementation ambiguity."
+evidence_notes = "Already in constitution as T-BUILD-02. Universal."
+
+[[rules]]
+id = "CN-BUILD-04"
+tier = "derived"
+statement = "Operator configuration may tune transport, logging, and telemetry, but may not silently weaken ledger, consensus, or persistence semantics"
+source = "classification_table.md §K"
+cross_ref = []
+code_locus = ""
+tests = []
+ci_script = ""
+status = "declared"
+attack_rationale = "Prevents unsafe config footguns."
+evidence_notes = "Cardano-specific: the boundary between operator-tunable and semantic is implementation-defined."
+
+# --- L. Release, Testing, and Client-Diversity Controls ---
+
+[[rules]]
+id = "CN-TEST-01"
+tier = "release"
+statement = "Consensus-relevant inputs must be fuzzed differentially across all supported versions and decode or validation paths; any verdict mismatch is release-blocking"
+source = "classification_table.md §L"
+cross_ref = ["RO-TEST-01"]
+status = "declared"
+
+[[rules]]
+id = "CN-TEST-02"
+tier = "release"
+statement = "Every malformed or discrepant input that ever triggered a fork, preview mismatch, or parser disagreement becomes a permanent regression corpus entry"
+source = "classification_table.md §L"
+cross_ref = ["RO-TEST-02"]
+status = "declared"
+
+[[rules]]
+id = "CN-TEST-03"
+tier = "release"
+statement = "Previously failed, duplicate, or boundary-case inputs must remain verdict-stable under resubmission and replay"
+source = "classification_table.md §L"
+cross_ref = ["RO-TEST-03"]
+status = "declared"
+
+[[rules]]
+id = "CN-REL-01"
+tier = "release"
+statement = "A release is not mainnet-eligible unless mixed-version topologies against supported predecessors show consensus equivalence on malformed and boundary-case inputs"
+source = "classification_table.md §L"
+cross_ref = ["RO-REL-01"]
+status = "declared"
+
+[[rules]]
+id = "CN-REL-02"
+tier = "release"
+statement = "No single implementation bug should exceed the protocol's intended safety or liveness fault threshold at ecosystem level"
+source = "classification_table.md §L"
+cross_ref = ["RO-REL-03"]
+status = "declared"
+
+[[rules]]
+id = "CN-REL-03"
+tier = "release"
+statement = "Cross-implementation accept/reject agreement on authoritative corpora is release-blocking"
+source = "classification_table.md §L"
+cross_ref = ["RO-REL-02"]
+status = "declared"
+
+# --- M. Operations, Emergency Handling, and Reconciliation ---
+
+[[rules]]
+id = "CN-OPS-01"
+tier = "operational"
+statement = "After any partition, authoritative post-incident reconciliation must be derived solely from the recovered canonical chain"
+source = "classification_table.md §M"
+cross_ref = ["OP-OPS-01"]
+status = "declared"
+
+[[rules]]
+id = "CN-OPS-02"
+tier = "operational"
+statement = "Emergency recovery procedures must have explicit admissibility criteria, deterministic inputs and outputs, and defined authority thresholds"
+source = "classification_table.md §M"
+cross_ref = ["OP-OPS-02"]
+status = "declared"
+
+[[rules]]
+id = "CN-OPS-03"
+tier = "operational"
+statement = "Incident evidence must be sufficient to reconstruct the canonical decision path without relying on nondeterministic logs or local operator memory"
+source = "classification_table.md §M"
+cross_ref = ["OP-OPS-03"]
+status = "declared"
+
+# --- N. Meta-Invariants ---
+
+[[rules]]
+id = "CN-META-01"
+tier = "true"
+statement = "Every claimed invariant must have at least one mechanical enforcement point"
+source = "classification_table.md §N"
+cross_ref = ["T-CI-01"]
+code_locus = ""
+tests = []
+ci_script = ""
+status = "declared"
+attack_rationale = "Prevents document-only security."
+evidence_notes = "Already in constitution as T-CI-01. Universal."
+
+[[rules]]
+id = "CN-META-02"
+tier = "true"
+statement = "Every consensus-relevant failure mode must have a deterministic structured error shape"
+source = "classification_table.md §N"
+cross_ref = ["T-ERR-01"]
+code_locus = ""
+tests = []
+ci_script = ""
+status = "declared"
+attack_rationale = "Keeps failures replayable and auditable."
+evidence_notes = "Already in constitution as T-ERR-01. Universal."
+
+[[rules]]
+id = "CN-META-03"
+tier = "true"
+statement = "Every equivalence claim must be reproducible from named fixtures, oracle versions, and replay inputs"
+source = "classification_table.md §N"
+cross_ref = ["DC-REF-01"]
+code_locus = ""
+tests = []
+ci_script = ""
+status = "declared"
+attack_rationale = "Prevents unverifiable compatibility claims."
+evidence_notes = "Already covered by DC-REF-01. Universal traceability requirement."
+
+# =============================================================================
+# RO-* Release Obligations (Project Constitution §4a)
+# =============================================================================
+
+[[rules]]
+id = "RO-TEST-01"
+tier = "release"
+statement = "Consensus-relevant inputs fuzzed differentially across all supported versions; any verdict mismatch is release-blocking"
+source = "Project constitution §4a, T-DET-01, DC-LEDGER-07"
+cross_ref = ["CN-TEST-01"]
+status = "declared"
+
+[[rules]]
+id = "RO-TEST-02"
+tier = "release"
+statement = "Every fork/mismatch/parser disagreement that ever occurred becomes a permanent regression corpus entry"
+source = "Project constitution §4a, T-CI-01"
+cross_ref = ["CN-TEST-02"]
+status = "declared"
+
+[[rules]]
+id = "RO-TEST-03"
+tier = "release"
+statement = "Failed, duplicate, and boundary-case inputs remain verdict-stable under resubmission and replay"
+source = "Project constitution §4a, T-DET-01, T-REC-01"
+cross_ref = ["CN-TEST-03"]
+status = "declared"
+
+[[rules]]
+id = "RO-REL-01"
+tier = "release"
+statement = "Release not mainnet-eligible without mixed-version topology consensus equivalence on adversarial inputs"
+source = "Project constitution §4a, DC-LEDGER-07, T-DET-01"
+cross_ref = ["CN-REL-01"]
+status = "declared"
+
+[[rules]]
+id = "RO-REL-02"
+tier = "release"
+statement = "Cross-implementation accept/reject agreement on authoritative corpora is release-blocking"
+source = "Project constitution §4a, DC-LEDGER-03, T-DET-01"
+cross_ref = ["CN-REL-03"]
+status = "declared"
+
+[[rules]]
+id = "RO-REL-03"
+tier = "release"
+statement = "No single implementation bug should exceed the protocol's intended safety or liveness fault threshold at ecosystem level"
+source = "Project constitution §4a"
+cross_ref = ["CN-REL-02"]
+status = "declared"
+
+# =============================================================================
+# OP-* Operational Invariants (Project Constitution §4b)
+# =============================================================================
+
+[[rules]]
+id = "OP-NET-01"
+tier = "operational"
+statement = "Block producer connects only through trusted relay topology; no direct public peer connectivity"
+source = "Project constitution §4b"
+cross_ref = ["CN-NET-01"]
+status = "declared"
+
+[[rules]]
+id = "OP-NET-02"
+tier = "operational"
+statement = "Relay paths geographically and topologically diverse; isolating one path does not prevent timely propagation"
+source = "Project constitution §4b"
+cross_ref = ["CN-NET-02"]
+status = "declared"
+
+[[rules]]
+id = "OP-NET-03"
+tier = "operational"
+statement = "No single peer, ASN, region, or operator cluster dominates the node's authoritative view"
+source = "Project constitution §4b"
+cross_ref = ["CN-NET-03"]
+status = "declared"
+
+[[rules]]
+id = "OP-MEM-01"
+tier = "operational"
+statement = "Mempool pressure and peer churn must not starve block validation, chain selection, or persistence (scheduling priority)"
+source = "Project constitution §4b"
+cross_ref = ["CN-MEM-02"]
+status = "declared"
+
+[[rules]]
+id = "OP-OPS-01"
+tier = "operational"
+statement = "Post-incident reconciliation derived solely from recovered canonical chain"
+source = "Project constitution §4b"
+cross_ref = ["CN-OPS-01"]
+status = "declared"
+
+[[rules]]
+id = "OP-OPS-02"
+tier = "operational"
+statement = "Emergency recovery procedures have explicit admissibility criteria, deterministic inputs/outputs, and authority thresholds"
+source = "Project constitution §4b"
+cross_ref = ["CN-OPS-02"]
+status = "declared"
+
+[[rules]]
+id = "OP-OPS-03"
+tier = "operational"
+statement = "Incident evidence sufficient to reconstruct canonical decision path without relying on nondeterministic logs"
+source = "Project constitution §4b"
+cross_ref = ["CN-OPS-03"]
+status = "declared"
