@@ -1,0 +1,11 @@
+[workspace]
+resolver = "2"
+members = [
+    "crates/ade_codec",
+    "crates/ade_types",
+    "crates/ade_crypto",
+    "crates/ade_core",
+    "crates/ade_testkit",
+    "crates/ade_runtime",
+    "crates/ade_node",
+]
