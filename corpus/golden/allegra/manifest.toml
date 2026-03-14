@@ -1,2 +1,43 @@
 # allegra era golden fixtures — provenance manifest
-# No fixtures acquired yet for this era
+# Source: cardano-node 10.6.2 ImmutableDB (git rev 0d697f14)
+# Mithril snapshot: epoch 618, immutable 8419, hash 7e3e59b8
+
+[[fixtures]]
+file = "blocks/chunk00900_blk00000.cbor"
+era = "allegra"
+type = "block"
+chunk = 900
+block_index = 0
+era_tag = 3
+sha256 = "c05674ea1c1e861ae0910ffc12f71a18d354d145982485ed05f9e8e73cbb1524"
+source = "cardano-node 10.6.2 ImmutableDB (git rev 0d697f14)"
+fetch_tool = "ImmutableDB secondary index extraction + SCP"
+fetch_date = "2026-03-15"
+reproducibility = "Extract block index 00000 from ImmutableDB chunk 00900 of mithril snapshot epoch 618"
+
+[[fixtures]]
+file = "blocks/chunk00900_blk00545.cbor"
+era = "allegra"
+type = "block"
+chunk = 900
+block_index = 545
+era_tag = 3
+sha256 = "8b84cb533b1aa4248d1cac4bd41d00add12e91c72e9fd54d091cb9884aaa08e3"
+source = "cardano-node 10.6.2 ImmutableDB (git rev 0d697f14)"
+fetch_tool = "ImmutableDB secondary index extraction + SCP"
+fetch_date = "2026-03-15"
+reproducibility = "Extract block index 00545 from ImmutableDB chunk 00900 of mithril snapshot epoch 618"
+
+[[fixtures]]
+file = "blocks/chunk00900_blk01090.cbor"
+era = "allegra"
+type = "block"
+chunk = 900
+block_index = 1090
+era_tag = 3
+sha256 = "bc67bf71f100e9708f5034d27b791eddc5efc85e4b3ed530f291a26a2af50ac0"
+source = "cardano-node 10.6.2 ImmutableDB (git rev 0d697f14)"
+fetch_tool = "ImmutableDB secondary index extraction + SCP"
+fetch_date = "2026-03-15"
+reproducibility = "Extract block index 01090 from ImmutableDB chunk 00900 of mithril snapshot epoch 618"
+
