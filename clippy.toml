@@ -1,1 +1,9 @@
 msrv = "1.75"
+
+disallowed-types = [
+    { path = "std::collections::HashMap", reason = "Non-deterministic iteration order. Use BTreeMap." },
+    { path = "std::collections::HashSet", reason = "Non-deterministic iteration order. Use BTreeSet." },
+    { path = "std::time::SystemTime", reason = "Non-deterministic. Use LogicalTimestamp." },
+    { path = "std::time::Instant", reason = "Non-deterministic. Use LogicalTimestamp." },
+    { path = "anyhow::Error", reason = "Unstructured errors. Use structured error types." },
+]
