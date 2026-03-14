@@ -1,0 +1,43 @@
+# shelley era golden fixtures — provenance manifest
+# Source: cardano-node 10.6.2 ImmutableDB (git rev 0d697f14)
+# Mithril snapshot: epoch 618, immutable 8419, hash 7e3e59b8
+
+[[fixtures]]
+file = "blocks/chunk00500_blk00000.cbor"
+era = "shelley"
+type = "block"
+chunk = 500
+block_index = 0
+era_tag = 2
+sha256 = "b10dcc043a5a8d937037a102c21cecf9be395530a6ba296239f4deed8550359a"
+source = "cardano-node 10.6.2 ImmutableDB (git rev 0d697f14)"
+fetch_tool = "ImmutableDB secondary index extraction + SCP"
+fetch_date = "2026-03-14"
+reproducibility = "Extract block index 00000 from ImmutableDB chunk 00500 of mithril snapshot epoch 618"
+
+[[fixtures]]
+file = "blocks/chunk00500_blk00539.cbor"
+era = "shelley"
+type = "block"
+chunk = 500
+block_index = 539
+era_tag = 2
+sha256 = "2e89a774dbf74d6bbdb34aa7ff5c261581b3ff1544b79710f239509471937713"
+source = "cardano-node 10.6.2 ImmutableDB (git rev 0d697f14)"
+fetch_tool = "ImmutableDB secondary index extraction + SCP"
+fetch_date = "2026-03-14"
+reproducibility = "Extract block index 00539 from ImmutableDB chunk 00500 of mithril snapshot epoch 618"
+
+[[fixtures]]
+file = "blocks/chunk00500_blk01077.cbor"
+era = "shelley"
+type = "block"
+chunk = 500
+block_index = 1077
+era_tag = 2
+sha256 = "562bac52882495ab76fdb1ebd3e17ae27619a5f870497cef0b2ba211085a1c17"
+source = "cardano-node 10.6.2 ImmutableDB (git rev 0d697f14)"
+fetch_tool = "ImmutableDB secondary index extraction + SCP"
+fetch_date = "2026-03-14"
+reproducibility = "Extract block index 01077 from ImmutableDB chunk 00500 of mithril snapshot epoch 618"
+

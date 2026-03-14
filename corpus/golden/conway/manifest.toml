@@ -1,0 +1,199 @@
+# conway era golden fixtures — provenance manifest
+# Source: cardano-node 10.6.2 ImmutableDB (git rev 0d697f14)
+# Mithril snapshot: epoch 618, immutable 8419, hash 7e3e59b8
+
+[[fixtures]]
+file = "blocks/chunk06500_blk00000.cbor"
+era = "conway"
+type = "block"
+chunk = 6500
+block_index = 0
+era_tag = 7
+sha256 = "e14a5b063782916d56a48b23892bd4ad4114652b4f41bdcfb6bd0e3dfe8cf3bb"
+source = "cardano-node 10.6.2 ImmutableDB (git rev 0d697f14)"
+fetch_tool = "ImmutableDB secondary index extraction + SCP"
+fetch_date = "2026-03-14"
+reproducibility = "Extract block index 00000 from ImmutableDB chunk 06500 of mithril snapshot epoch 618"
+
+[[fixtures]]
+file = "blocks/chunk06500_blk00528.cbor"
+era = "conway"
+type = "block"
+chunk = 6500
+block_index = 528
+era_tag = 7
+sha256 = "65b3cb5b06d5e9988231d3f0185305f0ed913dac7c13f2ef6dd484074e3cb946"
+source = "cardano-node 10.6.2 ImmutableDB (git rev 0d697f14)"
+fetch_tool = "ImmutableDB secondary index extraction + SCP"
+fetch_date = "2026-03-14"
+reproducibility = "Extract block index 00528 from ImmutableDB chunk 06500 of mithril snapshot epoch 618"
+
+[[fixtures]]
+file = "blocks/chunk06500_blk01056.cbor"
+era = "conway"
+type = "block"
+chunk = 6500
+block_index = 1056
+era_tag = 7
+sha256 = "d9c0b4b5c3db323b0a66feacc6e1cb83df1fb438ef699648f30efb2f06865ad7"
+source = "cardano-node 10.6.2 ImmutableDB (git rev 0d697f14)"
+fetch_tool = "ImmutableDB secondary index extraction + SCP"
+fetch_date = "2026-03-14"
+reproducibility = "Extract block index 01056 from ImmutableDB chunk 06500 of mithril snapshot epoch 618"
+
+[[fixtures]]
+file = "blocks/chunk07500_blk00000.cbor"
+era = "conway"
+type = "block"
+chunk = 7500
+block_index = 0
+era_tag = 7
+sha256 = "af329fa1d57c434bd895dc08e97edbefb8a6ac1185313e2b5c02c91d13ee658f"
+source = "cardano-node 10.6.2 ImmutableDB (git rev 0d697f14)"
+fetch_tool = "ImmutableDB secondary index extraction + SCP"
+fetch_date = "2026-03-14"
+reproducibility = "Extract block index 00000 from ImmutableDB chunk 07500 of mithril snapshot epoch 618"
+
+[[fixtures]]
+file = "blocks/chunk07500_blk00529.cbor"
+era = "conway"
+type = "block"
+chunk = 7500
+block_index = 529
+era_tag = 7
+sha256 = "8b32369875298a34f51bb13a81086ced8b73c39fccaad4a9cb96c15cb9fe9357"
+source = "cardano-node 10.6.2 ImmutableDB (git rev 0d697f14)"
+fetch_tool = "ImmutableDB secondary index extraction + SCP"
+fetch_date = "2026-03-14"
+reproducibility = "Extract block index 00529 from ImmutableDB chunk 07500 of mithril snapshot epoch 618"
+
+[[fixtures]]
+file = "blocks/chunk07500_blk01058.cbor"
+era = "conway"
+type = "block"
+chunk = 7500
+block_index = 1058
+era_tag = 7
+sha256 = "64c4b5964962a1553ad74e8fae3c78c5faef8bb9a5111f6a274e9067630759da"
+source = "cardano-node 10.6.2 ImmutableDB (git rev 0d697f14)"
+fetch_tool = "ImmutableDB secondary index extraction + SCP"
+fetch_date = "2026-03-14"
+reproducibility = "Extract block index 01058 from ImmutableDB chunk 07500 of mithril snapshot epoch 618"
+
+[[fixtures]]
+file = "blocks/chunk08100_blk00000.cbor"
+era = "conway"
+type = "block"
+chunk = 8100
+block_index = 0
+era_tag = 7
+sha256 = "b07e9721496f1d9801e7a02c560140ffa5da09535e666d978fab1b2130b07735"
+source = "cardano-node 10.6.2 ImmutableDB (git rev 0d697f14)"
+fetch_tool = "ImmutableDB secondary index extraction + SCP"
+fetch_date = "2026-03-14"
+reproducibility = "Extract block index 00000 from ImmutableDB chunk 08100 of mithril snapshot epoch 618"
+
+[[fixtures]]
+file = "blocks/chunk08100_blk00561.cbor"
+era = "conway"
+type = "block"
+chunk = 8100
+block_index = 561
+era_tag = 7
+sha256 = "64f7b898d7395dea3995fc0ff31c4fde761ac337047b849725c3a685b3a551ee"
+source = "cardano-node 10.6.2 ImmutableDB (git rev 0d697f14)"
+fetch_tool = "ImmutableDB secondary index extraction + SCP"
+fetch_date = "2026-03-14"
+reproducibility = "Extract block index 00561 from ImmutableDB chunk 08100 of mithril snapshot epoch 618"
+
+[[fixtures]]
+file = "blocks/chunk08100_blk01121.cbor"
+era = "conway"
+type = "block"
+chunk = 8100
+block_index = 1121
+era_tag = 7
+sha256 = "5b1f04310d6977b504a9efaf2bdc8d1c1018619c4c2c40ae176485a9cf1215b3"
+source = "cardano-node 10.6.2 ImmutableDB (git rev 0d697f14)"
+fetch_tool = "ImmutableDB secondary index extraction + SCP"
+fetch_date = "2026-03-14"
+reproducibility = "Extract block index 01121 from ImmutableDB chunk 08100 of mithril snapshot epoch 618"
+
+[[fixtures]]
+file = "blocks/chunk08400_blk00000.cbor"
+era = "conway"
+type = "block"
+chunk = 8400
+block_index = 0
+era_tag = 7
+sha256 = "7a12ffec8fd28748219431ee3e4c90081e271206acad64927321b6537d6c6a68"
+source = "cardano-node 10.6.2 ImmutableDB (git rev 0d697f14)"
+fetch_tool = "ImmutableDB secondary index extraction + SCP"
+fetch_date = "2026-03-14"
+reproducibility = "Extract block index 00000 from ImmutableDB chunk 08400 of mithril snapshot epoch 618"
+
+[[fixtures]]
+file = "blocks/chunk08400_blk00497.cbor"
+era = "conway"
+type = "block"
+chunk = 8400
+block_index = 497
+era_tag = 7
+sha256 = "fbc77da82c647523d956cb53b62637d250bce66507986fcc4e225fe8a5561abc"
+source = "cardano-node 10.6.2 ImmutableDB (git rev 0d697f14)"
+fetch_tool = "ImmutableDB secondary index extraction + SCP"
+fetch_date = "2026-03-14"
+reproducibility = "Extract block index 00497 from ImmutableDB chunk 08400 of mithril snapshot epoch 618"
+
+[[fixtures]]
+file = "blocks/chunk08400_blk00994.cbor"
+era = "conway"
+type = "block"
+chunk = 8400
+block_index = 994
+era_tag = 7
+sha256 = "5848c834efdaa19f0ee6278e07e47cac7fde27e0506e1d729eaf5593791c1d6a"
+source = "cardano-node 10.6.2 ImmutableDB (git rev 0d697f14)"
+fetch_tool = "ImmutableDB secondary index extraction + SCP"
+fetch_date = "2026-03-14"
+reproducibility = "Extract block index 00994 from ImmutableDB chunk 08400 of mithril snapshot epoch 618"
+
+[[fixtures]]
+file = "blocks/chunk08419_blk00000.cbor"
+era = "conway"
+type = "block"
+chunk = 8419
+block_index = 0
+era_tag = 7
+sha256 = "bbb80280c016441eebe3690dda5633e1a597e03e563b0cf7db7a9286b0010cd3"
+source = "cardano-node 10.6.2 ImmutableDB (git rev 0d697f14)"
+fetch_tool = "ImmutableDB secondary index extraction + SCP"
+fetch_date = "2026-03-14"
+reproducibility = "Extract block index 00000 from ImmutableDB chunk 08419 of mithril snapshot epoch 618"
+
+[[fixtures]]
+file = "blocks/chunk08419_blk00541.cbor"
+era = "conway"
+type = "block"
+chunk = 8419
+block_index = 541
+era_tag = 7
+sha256 = "e2b5348edafa7e7d7b7f0e718f2ff85b127d486c725b9574df43ade0f6c475d7"
+source = "cardano-node 10.6.2 ImmutableDB (git rev 0d697f14)"
+fetch_tool = "ImmutableDB secondary index extraction + SCP"
+fetch_date = "2026-03-14"
+reproducibility = "Extract block index 00541 from ImmutableDB chunk 08419 of mithril snapshot epoch 618"
+
+[[fixtures]]
+file = "blocks/chunk08419_blk01081.cbor"
+era = "conway"
+type = "block"
+chunk = 8419
+block_index = 1081
+era_tag = 7
+sha256 = "eeaf91256102433b334ea42bf408177b810a24cc401651f2bde6e8d124499899"
+source = "cardano-node 10.6.2 ImmutableDB (git rev 0d697f14)"
+fetch_tool = "ImmutableDB secondary index extraction + SCP"
+fetch_date = "2026-03-14"
+reproducibility = "Extract block index 01081 from ImmutableDB chunk 08419 of mithril snapshot epoch 618"
+

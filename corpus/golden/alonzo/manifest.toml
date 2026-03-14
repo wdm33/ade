@@ -1,0 +1,43 @@
+# alonzo era golden fixtures — provenance manifest
+# Source: cardano-node 10.6.2 ImmutableDB (git rev 0d697f14)
+# Mithril snapshot: epoch 618, immutable 8419, hash 7e3e59b8
+
+[[fixtures]]
+file = "blocks/chunk03000_blk00000.cbor"
+era = "alonzo"
+type = "block"
+chunk = 3000
+block_index = 0
+era_tag = 5
+sha256 = "21d284fafe561530bbe4b0b49ad51f0be0cd0e4223888447c1edd513f30ac009"
+source = "cardano-node 10.6.2 ImmutableDB (git rev 0d697f14)"
+fetch_tool = "ImmutableDB secondary index extraction + SCP"
+fetch_date = "2026-03-14"
+reproducibility = "Extract block index 00000 from ImmutableDB chunk 03000 of mithril snapshot epoch 618"
+
+[[fixtures]]
+file = "blocks/chunk03000_blk00493.cbor"
+era = "alonzo"
+type = "block"
+chunk = 3000
+block_index = 493
+era_tag = 5
+sha256 = "a17e0a91bea292eab969d95ff6492838fe654ed0e3d95be56b90a89200658b87"
+source = "cardano-node 10.6.2 ImmutableDB (git rev 0d697f14)"
+fetch_tool = "ImmutableDB secondary index extraction + SCP"
+fetch_date = "2026-03-14"
+reproducibility = "Extract block index 00493 from ImmutableDB chunk 03000 of mithril snapshot epoch 618"
+
+[[fixtures]]
+file = "blocks/chunk03000_blk00986.cbor"
+era = "alonzo"
+type = "block"
+chunk = 3000
+block_index = 986
+era_tag = 5
+sha256 = "8fee685dcd01c50642b661c910cf5ab74fe4331458cb12874d56db8893b5bbbd"
+source = "cardano-node 10.6.2 ImmutableDB (git rev 0d697f14)"
+fetch_tool = "ImmutableDB secondary index extraction + SCP"
+fetch_date = "2026-03-14"
+reproducibility = "Extract block index 00986 from ImmutableDB chunk 03000 of mithril snapshot epoch 618"
+

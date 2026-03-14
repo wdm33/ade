@@ -1,0 +1,160 @@
+# babbage era golden fixtures — provenance manifest
+# Source: cardano-node 10.6.2 ImmutableDB (git rev 0d697f14)
+# Mithril snapshot: epoch 618, immutable 8419, hash 7e3e59b8
+
+[[fixtures]]
+file = "blocks/chunk04000_blk00000.cbor"
+era = "babbage"
+type = "block"
+chunk = 4000
+block_index = 0
+era_tag = 6
+sha256 = "10e8168c3db15ac46ae19e17198b05a49188026f10a986741ba6fa017353003f"
+source = "cardano-node 10.6.2 ImmutableDB (git rev 0d697f14)"
+fetch_tool = "ImmutableDB secondary index extraction + SCP"
+fetch_date = "2026-03-14"
+reproducibility = "Extract block index 00000 from ImmutableDB chunk 04000 of mithril snapshot epoch 618"
+
+[[fixtures]]
+file = "blocks/chunk04000_blk00540.cbor"
+era = "babbage"
+type = "block"
+chunk = 4000
+block_index = 540
+era_tag = 6
+sha256 = "8a2861df186b4370a945d63f2a56a1498f916b32663e6e27149927e801c00ddd"
+source = "cardano-node 10.6.2 ImmutableDB (git rev 0d697f14)"
+fetch_tool = "ImmutableDB secondary index extraction + SCP"
+fetch_date = "2026-03-14"
+reproducibility = "Extract block index 00540 from ImmutableDB chunk 04000 of mithril snapshot epoch 618"
+
+[[fixtures]]
+file = "blocks/chunk04000_blk01079.cbor"
+era = "babbage"
+type = "block"
+chunk = 4000
+block_index = 1079
+era_tag = 6
+sha256 = "244dbda3063e464a12cc5f084ae91f7da5fdb45fe6d274fd87b3361d6713e131"
+source = "cardano-node 10.6.2 ImmutableDB (git rev 0d697f14)"
+fetch_tool = "ImmutableDB secondary index extraction + SCP"
+fetch_date = "2026-03-14"
+reproducibility = "Extract block index 01079 from ImmutableDB chunk 04000 of mithril snapshot epoch 618"
+
+[[fixtures]]
+file = "blocks/chunk04700_blk00000.cbor"
+era = "babbage"
+type = "block"
+chunk = 4700
+block_index = 0
+era_tag = 6
+sha256 = "727eb0d0937f59c8fa8e76b3f3b12d03dac31ce97d7584360f7bd5d2b34d9c44"
+source = "cardano-node 10.6.2 ImmutableDB (git rev 0d697f14)"
+fetch_tool = "ImmutableDB secondary index extraction + SCP"
+fetch_date = "2026-03-14"
+reproducibility = "Extract block index 00000 from ImmutableDB chunk 04700 of mithril snapshot epoch 618"
+
+[[fixtures]]
+file = "blocks/chunk04700_blk00509.cbor"
+era = "babbage"
+type = "block"
+chunk = 4700
+block_index = 509
+era_tag = 6
+sha256 = "ef6208720e25bec0df684cd704a86953ba547b7c891d703eb8cea724d00bc371"
+source = "cardano-node 10.6.2 ImmutableDB (git rev 0d697f14)"
+fetch_tool = "ImmutableDB secondary index extraction + SCP"
+fetch_date = "2026-03-14"
+reproducibility = "Extract block index 00509 from ImmutableDB chunk 04700 of mithril snapshot epoch 618"
+
+[[fixtures]]
+file = "blocks/chunk04700_blk01018.cbor"
+era = "babbage"
+type = "block"
+chunk = 4700
+block_index = 1018
+era_tag = 6
+sha256 = "c6999e46f4aacbf2fe398e0e9d076c3317da966b32e6a6667955d3c17326d165"
+source = "cardano-node 10.6.2 ImmutableDB (git rev 0d697f14)"
+fetch_tool = "ImmutableDB secondary index extraction + SCP"
+fetch_date = "2026-03-14"
+reproducibility = "Extract block index 01018 from ImmutableDB chunk 04700 of mithril snapshot epoch 618"
+
+[[fixtures]]
+file = "blocks/chunk05000_blk00000.cbor"
+era = "babbage"
+type = "block"
+chunk = 5000
+block_index = 0
+era_tag = 6
+sha256 = "218d90a0fde4c57f2cdde12b7b864d565893154dee5593247087dce99d32a2a6"
+source = "cardano-node 10.6.2 ImmutableDB (git rev 0d697f14)"
+fetch_tool = "ImmutableDB secondary index extraction + SCP"
+fetch_date = "2026-03-14"
+reproducibility = "Extract block index 00000 from ImmutableDB chunk 05000 of mithril snapshot epoch 618"
+
+[[fixtures]]
+file = "blocks/chunk05000_blk00522.cbor"
+era = "babbage"
+type = "block"
+chunk = 5000
+block_index = 522
+era_tag = 6
+sha256 = "a216bb2ac788889a223e24952ffbe339938df59558b0757cb2c2f28023ecef3b"
+source = "cardano-node 10.6.2 ImmutableDB (git rev 0d697f14)"
+fetch_tool = "ImmutableDB secondary index extraction + SCP"
+fetch_date = "2026-03-14"
+reproducibility = "Extract block index 00522 from ImmutableDB chunk 05000 of mithril snapshot epoch 618"
+
+[[fixtures]]
+file = "blocks/chunk05000_blk01044.cbor"
+era = "babbage"
+type = "block"
+chunk = 5000
+block_index = 1044
+era_tag = 6
+sha256 = "d10e020d6ac65810ae2fed1cc99a7f5aad8373ea413ea98be1777f726b0b6c63"
+source = "cardano-node 10.6.2 ImmutableDB (git rev 0d697f14)"
+fetch_tool = "ImmutableDB secondary index extraction + SCP"
+fetch_date = "2026-03-14"
+reproducibility = "Extract block index 01044 from ImmutableDB chunk 05000 of mithril snapshot epoch 618"
+
+[[fixtures]]
+file = "blocks/chunk05500_blk00000.cbor"
+era = "babbage"
+type = "block"
+chunk = 5500
+block_index = 0
+era_tag = 6
+sha256 = "c20118fe4a7dc7a36592c774fb0b2bc766a127384bf0398726cdaf0876dfe4bd"
+source = "cardano-node 10.6.2 ImmutableDB (git rev 0d697f14)"
+fetch_tool = "ImmutableDB secondary index extraction + SCP"
+fetch_date = "2026-03-14"
+reproducibility = "Extract block index 00000 from ImmutableDB chunk 05500 of mithril snapshot epoch 618"
+
+[[fixtures]]
+file = "blocks/chunk05500_blk00547.cbor"
+era = "babbage"
+type = "block"
+chunk = 5500
+block_index = 547
+era_tag = 6
+sha256 = "a7b648d3ddef3d820e035b2903848f718b0aed35f02a7a0353ea17be66928b92"
+source = "cardano-node 10.6.2 ImmutableDB (git rev 0d697f14)"
+fetch_tool = "ImmutableDB secondary index extraction + SCP"
+fetch_date = "2026-03-14"
+reproducibility = "Extract block index 00547 from ImmutableDB chunk 05500 of mithril snapshot epoch 618"
+
+[[fixtures]]
+file = "blocks/chunk05500_blk01093.cbor"
+era = "babbage"
+type = "block"
+chunk = 5500
+block_index = 1093
+era_tag = 6
+sha256 = "7013fd34c4b698b0f4864899787ad59782951ed74c8fba0d1c91567d1ec01455"
+source = "cardano-node 10.6.2 ImmutableDB (git rev 0d697f14)"
+fetch_tool = "ImmutableDB secondary index extraction + SCP"
+fetch_date = "2026-03-14"
+reproducibility = "Extract block index 01093 from ImmutableDB chunk 05500 of mithril snapshot epoch 618"
+
