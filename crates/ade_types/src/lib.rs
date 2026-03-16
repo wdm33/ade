@@ -14,6 +14,7 @@
 pub mod byron;
 pub mod era;
 pub mod primitives;
+pub mod shelley;
 
 pub use era::CardanoEra;
 pub use primitives::{BlockNo, EpochNo, Hash28, Hash32, SlotNo};

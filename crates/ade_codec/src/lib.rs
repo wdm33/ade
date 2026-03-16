@@ -16,6 +16,7 @@ pub mod cbor;
 pub mod error;
 pub mod preserved;
 pub mod primitives;
+pub mod shelley;
 pub mod traits;
 
 pub use error::CodecError;
