@@ -10,7 +10,7 @@ use crate::error::CodecError;
 use crate::traits::{AdeEncode, CodecContext};
 use ade_types::shelley::block::*;
 
-pub(crate) fn decode_shelley_block_inner(
+pub fn decode_shelley_block_inner(
     data: &[u8],
     offset: &mut usize,
 ) -> Result<ShelleyBlock, CodecError> {

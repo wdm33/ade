@@ -11,9 +11,11 @@
 #![deny(clippy::panic)]
 #![deny(clippy::float_arithmetic)]
 
+pub mod allegra;
 pub mod byron;
 pub mod cbor;
 pub mod error;
+pub mod mary;
 pub mod preserved;
 pub mod primitives;
 pub mod shelley;
