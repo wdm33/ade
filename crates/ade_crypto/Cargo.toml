@@ -2,3 +2,9 @@
 name = "ade_crypto"
 version = "0.1.0"
 edition = "2021"
+
+[dependencies]
+ade_types = { path = "../ade_types" }
+blake2 = "0.10"
+cardano-crypto = { version = "1.0", default-features = false, features = ["vrf-draft03", "kes-sum", "dsign"] }
+ed25519-dalek = "2"

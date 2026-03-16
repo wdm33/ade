@@ -82,11 +82,5 @@ fn hex_encode(bytes: &[u8]) -> String {
 }
 
 fn blake2b_256(data: &[u8]) -> [u8; 32] {
-    use blake2::digest::Digest;
-    let mut hasher = blake2::Blake2b::<blake2::digest::consts::U32>::new();
-    hasher.update(data);
-    let result = hasher.finalize();
-    let mut output = [0u8; 32];
-    output.copy_from_slice(&result);
-    output
+    ade_crypto::blake2b_256(data).0
 }

@@ -15,8 +15,8 @@ FORBIDDEN_PATTERNS=(
     "std::net"
     "tokio"
     "async fn"
-    "f32"
-    "f64"
+    '\bf32\b'
+    '\bf64\b'
     "anyhow"
     "rand::thread_rng"
     "thread::spawn"
@@ -46,6 +46,43 @@ for crate in "${BLUE_CRATES[@]}"; do
             FAILED=1
         fi
     done
+done
+
+# Check for unsafe code in BLUE crates with documented allowlist.
+# Constitutional exception: VRF FFI in ade_crypto/src/vrf.rs (Slice 2A-3).
+UNSAFE_ALLOWLIST=(
+    "crates/ade_crypto/src/vrf.rs"
+)
+
+for crate in "${BLUE_CRATES[@]}"; do
+    SRC_DIR="$REPO_ROOT/crates/$crate/src"
+    if [ ! -d "$SRC_DIR" ]; then
+        continue
+    fi
+
+    # Find unsafe usage excluding deny attributes and comments
+    unsafe_matches=$(grep -rn 'unsafe' "$SRC_DIR" --include='*.rs' 2>/dev/null | \
+        grep -v ':[0-9]*:\s*//' | \
+        grep -v '#!\[deny(unsafe_code)' | \
+        grep -v '#\[allow(unsafe_code)' || true)
+
+    if [ -n "$unsafe_matches" ]; then
+        # Check each match against the allowlist
+        while IFS= read -r line; do
+            allowed=0
+            for entry in "${UNSAFE_ALLOWLIST[@]}"; do
+                if echo "$line" | grep -q "$entry"; then
+                    allowed=1
+                    break
+                fi
+            done
+            if [ "$allowed" -eq 0 ]; then
+                echo "FAIL: Unsafe code found outside allowlist in $crate:"
+                echo "$line"
+                FAILED=1
+            fi
+        done <<< "$unsafe_matches"
+    fi
 done
 
 if [ "$FAILED" -eq 0 ]; then
