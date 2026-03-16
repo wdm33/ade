@@ -151,10 +151,7 @@ mod tests {
     fn self_comparison_zero_divergences_alonzo() {
         let fields = make_block_fields(
             Era::Alonzo,
-            &[
-                ("slot", json!(39916800)),
-                ("script_count", json!(3)),
-            ],
+            &[("slot", json!(39916800)), ("script_count", json!(3))],
         );
         let report = diff_block_fields(&fields, &fields);
         assert!(report.is_empty());
@@ -197,7 +194,8 @@ mod tests {
 
     #[test]
     fn detects_missing_field() {
-        let expected = make_block_fields(Era::Shelley, &[("slot", json!(100)), ("hash", json!("x"))]);
+        let expected =
+            make_block_fields(Era::Shelley, &[("slot", json!(100)), ("hash", json!("x"))]);
         let actual = make_block_fields(Era::Shelley, &[("slot", json!(100))]);
         let report = diff_block_fields(&expected, &actual);
         assert_eq!(report.divergence_count(), 1);
@@ -257,14 +255,9 @@ mod tests {
 
     #[test]
     fn diff_report_deterministic_key_order() {
-        let expected = make_block_fields(
-            Era::Byron,
-            &[("z_field", json!(1)), ("a_field", json!(2))],
-        );
-        let actual = make_block_fields(
-            Era::Byron,
-            &[("z_field", json!(9)), ("a_field", json!(8))],
-        );
+        let expected =
+            make_block_fields(Era::Byron, &[("z_field", json!(1)), ("a_field", json!(2))]);
+        let actual = make_block_fields(Era::Byron, &[("z_field", json!(9)), ("a_field", json!(8))]);
         let report = diff_block_fields(&expected, &actual);
         let keys: Vec<&String> = report.divergences.keys().collect();
         assert_eq!(keys, vec!["a_field", "z_field"]);

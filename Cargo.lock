@@ -5,6 +5,10 @@ version = 4
 [[package]]
 name = "ade_codec"
 version = "0.1.0"
+dependencies = [
+ "ade_types",
+ "toml",
+]
 
 [[package]]
 name = "ade_core"
@@ -26,6 +30,8 @@ version = "0.1.0"
 name = "ade_testkit"
 version = "0.1.0"
 dependencies = [
+ "ade_codec",
+ "ade_types",
  "serde",
  "serde_json",
  "toml",

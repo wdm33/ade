@@ -1,5 +1,6 @@
 pub mod block_diff;
 pub mod diff_report;
+pub mod era_mapping;
 pub mod ledger_diff;
 pub mod protocol_diff;
 pub mod provenance;

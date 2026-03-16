@@ -2,3 +2,9 @@
 name = "ade_codec"
 version = "0.1.0"
 edition = "2021"
+
+[dependencies]
+ade_types = { path = "../ade_types" }
+
+[dev-dependencies]
+toml = "0.8"

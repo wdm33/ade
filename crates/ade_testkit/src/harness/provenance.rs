@@ -176,7 +176,10 @@ sha256 = "abcdef1234567890abcdef1234567890abcdef1234567890abcdef1234567890"
     fn validate_complete_manifest_no_violations() {
         let manifest = parse_manifest(sample_manifest_toml()).unwrap();
         let violations = validate_manifest(&manifest);
-        assert!(violations.is_empty(), "unexpected violations: {violations:?}");
+        assert!(
+            violations.is_empty(),
+            "unexpected violations: {violations:?}"
+        );
     }
 
     #[test]

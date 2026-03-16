@@ -242,10 +242,7 @@ mod tests {
             era: Era::Shelley,
             state_hashes: vec![hash_a, hash_b],
         };
-        let blocks = vec![
-            (Era::Shelley, vec![0u8; 10]),
-            (Era::Shelley, vec![0u8; 10]),
-        ];
+        let blocks = vec![(Era::Shelley, vec![0u8; 10]), (Era::Shelley, vec![0u8; 10])];
         let mut applicator = FakeApplicator {
             hashes: vec![hash_a, hash_b],
             index: 0,

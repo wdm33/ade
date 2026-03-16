@@ -10,3 +10,13 @@
 #![deny(clippy::expect_used)]
 #![deny(clippy::panic)]
 #![deny(clippy::float_arithmetic)]
+
+pub mod cbor;
+pub mod error;
+pub mod preserved;
+pub mod primitives;
+pub mod traits;
+
+pub use error::CodecError;
+pub use preserved::{PreservedCbor, RawCbor};
+pub use traits::{AdeDecode, AdeEncode, CodecContext};
