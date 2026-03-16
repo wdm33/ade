@@ -556,10 +556,10 @@ tier = "derived"
 statement = "Every claimed equivalence check must identify its reference source, extraction method, and reproducibility path"
 source = "Project constitution §3, T-DET-01, T-CI-01"
 cross_ref = ["CN-META-03"]
-code_locus = ""
-tests = []
-ci_script = ""
-status = "declared"
+code_locus = "crates/ade_testkit/src/harness/provenance.rs"
+tests = ["provenance_validation", "self_comparison_block_fields"]
+ci_script = "ci/ci_check_ref_provenance.sh"
+status = "partial"
 
 [[rules]]
 id = "DC-PROTO-03"

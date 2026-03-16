@@ -1,0 +1,23 @@
+{
+  "era": "conway",
+  "block_number": 12815540,
+  "slot": 174960014,
+  "prev_block_hash": "149caa186c7c12171c6a13f5e067a6f99ee83fa6b2108028a328efe007a71640",
+  "issuer_vkey_hash": "a607b3fe4e8a981e2ef22477230a3b2233b6e31d18efd400a85d14e0acd47f96",
+  "vrf_vkey": "e0fba67439a705af74fba28f93e5bf1ee30828efec9338412bf8b8c0c85bc90e",
+  "body_size": 16047,
+  "body_hash": "58b220f1d27502d59cd763b0a4fd87c77cb5205edafa18052d99082834706216",
+  "operational_cert": {
+    "hot_vkey": "85013eff0d14cbab92e74bd58cf22f95ebcb26a7f7688b4f936def12d5424fae",
+    "sequence_number": 10,
+    "kes_period": 1303
+  },
+  "protocol_version": {
+    "major": 10,
+    "minor": 6
+  },
+  "tx_count": 12,
+  "hfc_era_tag": 7,
+  "source_file_size": 16909,
+  "source_blake2b_256": "bc5eff78e1d6e8e759d40ca2214816ba0ad96ba3bc97b53429a66c2706ce4488"
+}

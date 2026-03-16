@@ -1,76 +1,76 @@
-# Corpus — Golden Mainnet Test Fixtures
+# Corpus — Golden Fixtures & Reference Oracle Data
 
-This directory stores raw mainnet CBOR block and transaction fixtures
-for all seven Cardano eras. These are opaque byte blobs with provenance
-metadata — no decoding, parsing, or semantic interpretation is performed.
+This directory stores mainnet CBOR block fixtures and reference oracle
+data extracted from the Haskell Cardano node for differential comparison.
 
 ## Directory Layout
 
 ```
 corpus/
 ├── README.md
-├── acquire_fixtures.sh      # Fetches golden blocks from Blockfrost API
+├── acquire_fixtures.sh       # Status report for golden block inventory
 ├── verify_checksums.sh       # Validates SHA-256 checksums against manifests
-└── golden/
-    ├── byron/
-    │   ├── manifest.toml     # Provenance metadata for all fixtures in this era
-    │   ├── blocks/           # Raw CBOR block files
-    │   └── transactions/     # Raw CBOR transaction files (deferred)
-    ├── shelley/              # Same structure
-    ├── allegra/
-    ├── mary/
-    ├── alonzo/
-    ├── babbage/
-    └── conway/
+├── golden/                   # Raw mainnet CBOR blocks (Phase 0A)
+│   ├── {era}/
+│   │   ├── manifest.toml    # Provenance metadata per fixture
+│   │   ├── blocks/          # Raw CBOR block files
+│   │   └── transactions/    # Scaffolded, not yet populated
+├── reference/                # Oracle reference data (Phase 0B)
+│   ├── block_fields/        # Decoded block fields (JSON) for differential comparison
+│   ├── ledger_state_hashes/ # Ledger state hashes at block boundaries
+│   └── protocol_transcripts/ # Demuxed mini-protocol message transcripts
+└── tools/                    # Extraction scripts (run on node host)
+    ├── .env.example
+    ├── extract_block_fields.sh
+    ├── extract_state_hashes.sh
+    ├── capture_transcripts.sh
+    └── demux_transcript.py
 ```
 
-## Provenance Model
+## Golden Blocks (corpus/golden/)
 
-Every fixture has full provenance tracked in the era's `manifest.toml`:
+42 raw mainnet CBOR blocks across all 7 Cardano eras, extracted from
+cardano-node 10.6.2 ImmutableDB (Mithril snapshot epoch 618, git rev 0d697f14).
 
-| Field           | Description |
-|-----------------|-------------|
-| `file`          | Relative path to the CBOR file |
-| `era`           | Cardano era name |
-| `type`          | Fixture type: "block" or "transaction" |
-| `height`        | Block height on mainnet |
-| `hash`          | Block hash (hex, from Blockfrost) |
-| `sha256`        | SHA-256 digest of the stored file |
-| `source`        | Exact API version or tool used |
-| `fetch_tool`    | Tool and version used for acquisition |
-| `fetch_date`    | ISO date when the fixture was fetched |
-| `reproducibility` | Executable instructions to reproduce the fetch |
+| Era | Blocks | Era Tags |
+|-----|--------|----------|
+| Byron | 3 | 0 (EBB), 1 (regular) |
+| Shelley | 3 | 2 |
+| Allegra | 3 | 3 |
+| Mary | 3 | 4 |
+| Alonzo | 3 | 5 |
+| Babbage | 12 | 6 |
+| Conway | 15 | 7 |
 
-All fields are mandatory. No placeholders or TODOs are permitted.
+Provenance tracked per fixture in `manifest.toml`: file, era, type, chunk,
+block_index, era_tag, sha256, source, fetch_tool, fetch_date, reproducibility.
 
-## Acquisition
+## Reference Oracle Data (corpus/reference/)
 
-Run `acquire_fixtures.sh` with a Blockfrost project ID:
+Each reference subdirectory has a `manifest.toml` with DC-REF-01 provenance
+fields. Validated by `ci/ci_check_ref_provenance.sh`.
 
-```sh
-BLOCKFROST_PROJECT_ID=mainnetXXX ./corpus/acquire_fixtures.sh
-```
+### Block Fields
 
-The script fetches one golden block per era from the Blockfrost mainnet API,
-stores raw CBOR bytes, computes SHA-256 checksums, and populates manifest
-entries. It is idempotent — existing files are skipped.
+42 JSON files (7 eras). Decoded from golden CBOR using Python cbor2 library.
+Each file contains header fields extracted from the HFC block envelope.
 
-The script does NOT decode, parse, normalize, or interpret CBOR content.
+### Ledger State Hashes
+
+15 JSON files (6 eras: Shelley through Babbage; Conway pending). Blake2b-256
+hashes of CBOR-serialized `ExtLedgerState` at block boundaries, extracted via
+`db-analyser` from ouroboros-consensus-cardano 0.26.0.3. See
+`ledger_state_hashes/hash_surface.md` for oracle evidence discipline.
+
+### Protocol Transcripts
+
+6 JSON files (Handshake, ChainSync, BlockFetch, TxSubmission2, KeepAlive,
+PeerSharing). Captured via tcpdump on loopback between two cardano-node 10.6.2
+instances, demuxed by `demux_transcript.py`. Byron-era block sync traffic.
 
 ## Verification
 
-Run `verify_checksums.sh` to validate all fixtures:
-
 ```sh
-./corpus/verify_checksums.sh
+./corpus/verify_checksums.sh          # Golden block checksums
+ci/ci_check_ref_provenance.sh         # Reference artifact provenance (DC-REF-01)
 ```
-
-Exits 0 if all checksums match, 1 on any mismatch or missing file.
-
-## Constraints
-
-- Bytes are stored exactly as received from the API (no re-encoding)
-- No CBOR decoding or parsing of fixture content
-- No domain types or semantic interpretations
-- No protocol transcript fixtures (deferred to Phase 0B/T-06)
-- Transaction directories are scaffolded but not yet populated

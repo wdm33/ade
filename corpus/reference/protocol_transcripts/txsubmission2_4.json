@@ -1,0 +1,19 @@
+{
+  "protocol": "TxSubmission2",
+  "miniprotocol_id": 4,
+  "protocol_version": "",
+  "messages": [
+    {
+      "index": 0,
+      "direction": "InitiatorToResponder",
+      "payload_hex": "8106",
+      "payload_length": 2
+    },
+    {
+      "index": 1,
+      "direction": "ResponderToInitiator",
+      "payload_hex": "8400f50003",
+      "payload_length": 5
+    }
+  ]
+}

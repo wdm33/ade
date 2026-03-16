@@ -78,10 +78,11 @@ for r in rules:
         fail(f"{rid}: OP-* entry must have tier 'operational', got '{tier}'")
 
 # --- 5. Validate status ---
+VALID_STATUSES = {"declared", "partial", "enforced"}
 for r in rules:
     status = r.get("status", "")
-    if status != "declared":
-        fail(f"{r['id']}: status must be 'declared', got '{status}'")
+    if status not in VALID_STATUSES:
+        fail(f"{r['id']}: invalid status '{status}', must be one of: {', '.join(sorted(VALID_STATUSES))}")
 
 # --- 6. Tier-appropriate field validation ---
 TRUE_DERIVED_REQUIRED = ["id", "tier", "statement", "source", "cross_ref", "code_locus", "tests", "ci_script", "status"]
@@ -116,12 +117,17 @@ for r in rules:
 
 # --- 7. Enforcement regression guard ---
 for r in rules:
-    if r.get("status") == "enforced":
+    status = r.get("status")
+    if status == "enforced":
         for field in ["code_locus", "ci_script"]:
             if not r.get(field):
                 fail(f"{r['id']}: 'enforced' entry must have non-empty '{field}'")
         if not r.get("tests"):
             fail(f"{r['id']}: 'enforced' entry must have non-empty 'tests'")
+    elif status == "partial":
+        has_evidence = bool(r.get("code_locus")) or bool(r.get("tests")) or bool(r.get("ci_script"))
+        if not has_evidence:
+            fail(f"{r['id']}: 'partial' entry must have at least one non-empty code_locus, tests, or ci_script")
 
 # --- 8. Cross-ref bidirectionality ---
 for r in rules:

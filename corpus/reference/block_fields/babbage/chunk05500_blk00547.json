@@ -1,0 +1,23 @@
+{
+  "era": "babbage",
+  "block_number": 10052775,
+  "slot": 118810696,
+  "prev_block_hash": "1afe6b83ec1b01537e85dcf01e476f42d5f981ad469390393309e0e3fec72a1b",
+  "issuer_vkey_hash": "8eaf96a13a463e9ad1fcc544cebbf3580a7a754d6f88059966cf34ea30cad4d4",
+  "vrf_vkey": "aa89ace368e24ba55ce2dfe2a765b835cb4cab1e706324de7b96c7c99e048ef4",
+  "body_size": 64224,
+  "body_hash": "5c6fe952d6dbeb30d0412d7ecf5064a5f63755fd79a06d239b8cc15b7f91480e",
+  "operational_cert": {
+    "hot_vkey": "f65a795a96efe310bee12590af48775455586cf998253fce856c4c4f4f3958fb",
+    "sequence_number": 13,
+    "kes_period": 915
+  },
+  "protocol_version": {
+    "major": 8,
+    "minor": 0
+  },
+  "tx_count": 16,
+  "hfc_era_tag": 6,
+  "source_file_size": 65086,
+  "source_blake2b_256": "8d55ce5301561d4bfab9ee800c79afc379ae9e25c9e415b1eabdbe49bfa9a3a7"
+}

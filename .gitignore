@@ -2,3 +2,13 @@
 **/*.rs.bk
 *.pdb
 *.d
+
+# Credentials and secrets — public repo, never commit these
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+id_rsa*
+ssh_config.local
+corpus/tools/.env

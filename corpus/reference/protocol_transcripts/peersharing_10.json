@@ -1,0 +1,19 @@
+{
+  "protocol": "PeerSharing",
+  "miniprotocol_id": 10,
+  "protocol_version": "",
+  "messages": [
+    {
+      "index": 0,
+      "direction": "InitiatorToResponder",
+      "payload_hex": "82001895",
+      "payload_length": 4
+    },
+    {
+      "index": 1,
+      "direction": "ResponderToInitiator",
+      "payload_hex": "820180",
+      "payload_length": 3
+    }
+  ]
+}

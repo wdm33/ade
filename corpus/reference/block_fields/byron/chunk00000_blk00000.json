@@ -1,0 +1,12 @@
+{
+  "era": "byron_ebb",
+  "protocol_magic": 764824073,
+  "prev_block_hash": "5f20df933584822601f9e3f8c024eb5eb252fe8cefb24d1317dc3d432e940ebb",
+  "body_proof": "54f0972807b68698fcd704e3dae675dc43c8a6656aeaf4891e6e3f23be2de00a",
+  "epoch": 0,
+  "slot": null,
+  "block_number": null,
+  "hfc_era_tag": 0,
+  "source_file_size": 648087,
+  "source_blake2b_256": "c81f19aad939d9dab23cc90e32c0ac80abe9b10e1ef2c0379a16ab8806f19f4c"
+}

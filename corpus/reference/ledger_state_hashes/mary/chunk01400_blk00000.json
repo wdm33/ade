@@ -1,0 +1,10 @@
+{
+  "block_file": "corpus/golden/mary/blocks/chunk01400_blk00000.cbor",
+  "slot": 30240058,
+  "state_hash_blake2b_256": "ce7521d55be400d1a7b9c1d9d1a86e91531ba1a3eba01e580408b0e5485d71f7",
+  "state_snapshot_size_bytes": 339349681,
+  "extraction_method": "db-analyser --store-ledger --lmdb, state file hash (identical to V1-in-mem CBOR ExtLedgerState)",
+  "cardano_node_version": "10.6.2",
+  "cardano_node_git_rev": "0d697f14",
+  "ouroboros_consensus_cardano_version": "0.26.0.3"
+}

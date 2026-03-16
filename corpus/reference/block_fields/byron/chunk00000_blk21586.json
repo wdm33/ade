@@ -1,0 +1,28 @@
+{
+  "era": "byron",
+  "protocol_magic": 764824073,
+  "prev_block_hash": "02517b67dab9416b39e333869b80e8425fe92665fcb0b2b5ee2b4c41d33901ab",
+  "body_proof": [
+    [
+      0,
+      "0e5751c026e543b2e8ab2eb06099daa1d1e5df47778f7787faab45cdf12fe3a8",
+      "afc0da64183bf2664f3d4eec7238d524ba607faeeab24fc100eb861dba69971b"
+    ],
+    [
+      2,
+      "d36a2619a672494604e11bb447cbcf5231e9f2ba25c2169177edc941bd50ad6c",
+      "d36a2619a672494604e11bb447cbcf5231e9f2ba25c2169177edc941bd50ad6c"
+    ],
+    "afc0da64183bf2664f3d4eec7238d524ba607faeeab24fc100eb861dba69971b",
+    "4e66280cd94d591072349bec0a3090a53aa945562efb6d08d56e53654b0e4098"
+  ],
+  "epoch": 0,
+  "slot_in_epoch": 21599,
+  "chain_difficulty": 21586,
+  "slot": null,
+  "block_number": null,
+  "delegator_pubkey": "1bc97a2fe02c297880ce8ecfd997fe4c1ec09ee10feeee9f686760166b05281d6283468ffd93becb0c956ccddd642df9b1244c915911185fa49355f6f22bfab9",
+  "hfc_era_tag": 1,
+  "source_file_size": 668,
+  "source_blake2b_256": "0ee663d299c915b74317ff1a72edb508295cdff6577313596fbc80b8d88f47e1"
+}

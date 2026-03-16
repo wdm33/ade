@@ -1,0 +1,10 @@
+{
+  "block_file": "corpus/golden/allegra/blocks/chunk00900_blk01090.cbor",
+  "slot": 19461595,
+  "state_hash_blake2b_256": "6ed37e7368075fc2b1dcdf0292fe62205c13c514b122032b952471b491a0e8e9",
+  "state_snapshot_size_bytes": 90753991,
+  "extraction_method": "db-analyser --store-ledger --lmdb, state file hash (identical to V1-in-mem CBOR ExtLedgerState)",
+  "cardano_node_version": "10.6.2",
+  "cardano_node_git_rev": "0d697f14",
+  "ouroboros_consensus_cardano_version": "0.26.0.3"
+}

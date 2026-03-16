@@ -1,0 +1,23 @@
+{
+  "era": "alonzo",
+  "block_number": 7429828,
+  "slot": 64809954,
+  "prev_block_hash": "c37b2212b1b82fe2b1fc53adefca1b4278e6b47a4b1d1472242092f657e81a60",
+  "issuer_vkey_hash": "1d126f074ef01d3aa717cecf192b53073db791cb82c305dc54a8763a89f52b26",
+  "vrf_vkey": "c6320d64449ce05a0da1e39282d2c6af40954cae14c94c974f1b4297fd028461",
+  "body_size": 39745,
+  "body_hash": "6a4f3256ddb858a75b59dd97201b5ba7f586532d152102a01cda3f7ae56ec599",
+  "operational_cert": {
+    "hot_vkey": "1b91c3c0330393e98724e5daca3e4794e427be1307a967702360124967165c73",
+    "sequence_number": 7,
+    "kes_period": 475
+  },
+  "protocol_version": {
+    "major": 6,
+    "minor": 0
+  },
+  "tx_count": 25,
+  "hfc_era_tag": 5,
+  "source_file_size": 40754,
+  "source_blake2b_256": "eae1419db2a768fcae4b1725dd95ef7b8e22644b483005d7c552060d3606e82f"
+}

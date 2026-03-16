@@ -1,0 +1,23 @@
+{
+  "era": "mary",
+  "block_number": 5758254,
+  "slot": 30261588,
+  "prev_block_hash": "8336e5482e062b2327664e8a26ec1002e275ba6934e108afdc566ed88ebc106c",
+  "issuer_vkey_hash": "c795446c14ba30fa15af6731d12cd9e5e25b3cef00702e268cf3a4ab7543d039",
+  "vrf_vkey": "58380ea9dd41ea1fac10c8defd65e061816dc1e4969499a7053ffe4292fc10a3",
+  "body_size": 3008,
+  "body_hash": "9a441313e3c317a5657060d1803f4aafa6d3133d12d67c5e1393a4dc181b61a6",
+  "operational_cert": {
+    "hot_vkey": "cacb184fcf54d2bb8ec33f5d11980a683cd33c7c4c81156e4e5677fb449c6774",
+    "sequence_number": 3,
+    "kes_period": 228
+  },
+  "protocol_version": {
+    "major": 4,
+    "minor": 0
+  },
+  "tx_count": 7,
+  "hfc_era_tag": 4,
+  "source_file_size": 4016,
+  "source_blake2b_256": "897da1a7243aa1e7c67331aaa52b886467fdedf32ef947bfde3b209b7464e4f1"
+}

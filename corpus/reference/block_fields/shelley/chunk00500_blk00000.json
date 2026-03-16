@@ -1,0 +1,23 @@
+{
+  "era": "shelley",
+  "block_number": 4802149,
+  "slot": 10800000,
+  "prev_block_hash": "ae89f2f60eb6609077ec3623aa53e8ebce7e1610bebbc7575aa07b1d73ef59da",
+  "issuer_vkey_hash": "f14f712dc600d793052d4842d50cefa4e65884ea6cf83707079eb8ce302efc85",
+  "vrf_vkey": "22f9cecbecf3986953c01ea54260da2fe95b4293141c0712754def9c69ab6c91",
+  "body_size": 3,
+  "body_hash": "1033376be025cb705fd8dd02eda11cc73975a062b5d14ffd74d6ff69e69a2ff7",
+  "operational_cert": {
+    "hot_vkey": "7e18c6d6b5c9679f6ba6e379f926fa812b28b75955166fef78897b7b5356627e",
+    "sequence_number": 0,
+    "kes_period": 55
+  },
+  "protocol_version": {
+    "major": 2,
+    "minor": 0
+  },
+  "tx_count": 0,
+  "hfc_era_tag": 2,
+  "source_file_size": 1009,
+  "source_blake2b_256": "ee0d96f3435c7abf6c9480019587fdb5e117cb990c6c62f0d9d9af165b3d981d"
+}

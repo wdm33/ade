@@ -1,0 +1,19 @@
+{
+  "protocol": "Handshake",
+  "miniprotocol_id": 0,
+  "protocol_version": "",
+  "messages": [
+    {
+      "index": 0,
+      "direction": "InitiatorToResponder",
+      "payload_hex": "8200a20e841a2d964a09f401f40f841a2d964a09f401f4",
+      "payload_length": 23
+    },
+    {
+      "index": 1,
+      "direction": "ResponderToInitiator",
+      "payload_hex": "83010f841a2d964a09f401f4",
+      "payload_length": 12
+    }
+  ]
+}

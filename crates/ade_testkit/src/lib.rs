@@ -6,3 +6,5 @@
 // - Canonical serialization for all persisted/hashed data
 
 #![deny(unsafe_code)]
+
+pub mod harness;

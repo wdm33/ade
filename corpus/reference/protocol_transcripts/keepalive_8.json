@@ -1,0 +1,403 @@
+{
+  "protocol": "KeepAlive",
+  "miniprotocol_id": 8,
+  "protocol_version": "",
+  "messages": [
+    {
+      "index": 0,
+      "direction": "InitiatorToResponder",
+      "payload_hex": "8200195348",
+      "payload_length": 5
+    },
+    {
+      "index": 1,
+      "direction": "ResponderToInitiator",
+      "payload_hex": "8201195348",
+      "payload_length": 5
+    },
+    {
+      "index": 2,
+      "direction": "InitiatorToResponder",
+      "payload_hex": "8200195908",
+      "payload_length": 5
+    },
+    {
+      "index": 3,
+      "direction": "ResponderToInitiator",
+      "payload_hex": "8201195908",
+      "payload_length": 5
+    },
+    {
+      "index": 4,
+      "direction": "InitiatorToResponder",
+      "payload_hex": "820019356b",
+      "payload_length": 5
+    },
+    {
+      "index": 5,
+      "direction": "ResponderToInitiator",
+      "payload_hex": "820119356b",
+      "payload_length": 5
+    },
+    {
+      "index": 6,
+      "direction": "InitiatorToResponder",
+      "payload_hex": "8200194a67",
+      "payload_length": 5
+    },
+    {
+      "index": 7,
+      "direction": "ResponderToInitiator",
+      "payload_hex": "8201194a67",
+      "payload_length": 5
+    },
+    {
+      "index": 8,
+      "direction": "InitiatorToResponder",
+      "payload_hex": "8200199ee5",
+      "payload_length": 5
+    },
+    {
+      "index": 9,
+      "direction": "ResponderToInitiator",
+      "payload_hex": "8201199ee5",
+      "payload_length": 5
+    },
+    {
+      "index": 10,
+      "direction": "InitiatorToResponder",
+      "payload_hex": "82001965d7",
+      "payload_length": 5
+    },
+    {
+      "index": 11,
+      "direction": "ResponderToInitiator",
+      "payload_hex": "82011965d7",
+      "payload_length": 5
+    },
+    {
+      "index": 12,
+      "direction": "InitiatorToResponder",
+      "payload_hex": "8200198027",
+      "payload_length": 5
+    },
+    {
+      "index": 13,
+      "direction": "ResponderToInitiator",
+      "payload_hex": "8201198027",
+      "payload_length": 5
+    },
+    {
+      "index": 14,
+      "direction": "InitiatorToResponder",
+      "payload_hex": "82001983e5",
+      "payload_length": 5
+    },
+    {
+      "index": 15,
+      "direction": "ResponderToInitiator",
+      "payload_hex": "82011983e5",
+      "payload_length": 5
+    },
+    {
+      "index": 16,
+      "direction": "InitiatorToResponder",
+      "payload_hex": "8200191fc5",
+      "payload_length": 5
+    },
+    {
+      "index": 17,
+      "direction": "ResponderToInitiator",
+      "payload_hex": "8201191fc5",
+      "payload_length": 5
+    },
+    {
+      "index": 18,
+      "direction": "InitiatorToResponder",
+      "payload_hex": "82001995c6",
+      "payload_length": 5
+    },
+    {
+      "index": 19,
+      "direction": "ResponderToInitiator",
+      "payload_hex": "82011995c6",
+      "payload_length": 5
+    },
+    {
+      "index": 20,
+      "direction": "InitiatorToResponder",
+      "payload_hex": "8200196c58",
+      "payload_length": 5
+    },
+    {
+      "index": 21,
+      "direction": "ResponderToInitiator",
+      "payload_hex": "8201196c58",
+      "payload_length": 5
+    },
+    {
+      "index": 22,
+      "direction": "InitiatorToResponder",
+      "payload_hex": "820019f951",
+      "payload_length": 5
+    },
+    {
+      "index": 23,
+      "direction": "ResponderToInitiator",
+      "payload_hex": "820119f951",
+      "payload_length": 5
+    },
+    {
+      "index": 24,
+      "direction": "InitiatorToResponder",
+      "payload_hex": "82001962c6",
+      "payload_length": 5
+    },
+    {
+      "index": 25,
+      "direction": "ResponderToInitiator",
+      "payload_hex": "82011962c6",
+      "payload_length": 5
+    },
+    {
+      "index": 26,
+      "direction": "InitiatorToResponder",
+      "payload_hex": "8200195f5e",
+      "payload_length": 5
+    },
+    {
+      "index": 27,
+      "direction": "ResponderToInitiator",
+      "payload_hex": "8201195f5e",
+      "payload_length": 5
+    },
+    {
+      "index": 28,
+      "direction": "InitiatorToResponder",
+      "payload_hex": "8200199bfc",
+      "payload_length": 5
+    },
+    {
+      "index": 29,
+      "direction": "ResponderToInitiator",
+      "payload_hex": "8201199bfc",
+      "payload_length": 5
+    },
+    {
+      "index": 30,
+      "direction": "InitiatorToResponder",
+      "payload_hex": "8200191d00",
+      "payload_length": 5
+    },
+    {
+      "index": 31,
+      "direction": "ResponderToInitiator",
+      "payload_hex": "8201191d00",
+      "payload_length": 5
+    },
+    {
+      "index": 32,
+      "direction": "InitiatorToResponder",
+      "payload_hex": "820019b156",
+      "payload_length": 5
+    },
+    {
+      "index": 33,
+      "direction": "ResponderToInitiator",
+      "payload_hex": "820119b156",
+      "payload_length": 5
+    },
+    {
+      "index": 34,
+      "direction": "InitiatorToResponder",
+      "payload_hex": "8200193719",
+      "payload_length": 5
+    },
+    {
+      "index": 35,
+      "direction": "ResponderToInitiator",
+      "payload_hex": "8201193719",
+      "payload_length": 5
+    },
+    {
+      "index": 36,
+      "direction": "InitiatorToResponder",
+      "payload_hex": "8200196012",
+      "payload_length": 5
+    },
+    {
+      "index": 37,
+      "direction": "ResponderToInitiator",
+      "payload_hex": "8201196012",
+      "payload_length": 5
+    },
+    {
+      "index": 38,
+      "direction": "InitiatorToResponder",
+      "payload_hex": "820019ed70",
+      "payload_length": 5
+    },
+    {
+      "index": 39,
+      "direction": "ResponderToInitiator",
+      "payload_hex": "820119ed70",
+      "payload_length": 5
+    },
+    {
+      "index": 40,
+      "direction": "InitiatorToResponder",
+      "payload_hex": "820019cb85",
+      "payload_length": 5
+    },
+    {
+      "index": 41,
+      "direction": "ResponderToInitiator",
+      "payload_hex": "820119cb85",
+      "payload_length": 5
+    },
+    {
+      "index": 42,
+      "direction": "InitiatorToResponder",
+      "payload_hex": "8200193b32",
+      "payload_length": 5
+    },
+    {
+      "index": 43,
+      "direction": "ResponderToInitiator",
+      "payload_hex": "8201193b32",
+      "payload_length": 5
+    },
+    {
+      "index": 44,
+      "direction": "InitiatorToResponder",
+      "payload_hex": "8200194fbd",
+      "payload_length": 5
+    },
+    {
+      "index": 45,
+      "direction": "ResponderToInitiator",
+      "payload_hex": "8201194fbd",
+      "payload_length": 5
+    },
+    {
+      "index": 46,
+      "direction": "InitiatorToResponder",
+      "payload_hex": "820019469a",
+      "payload_length": 5
+    },
+    {
+      "index": 47,
+      "direction": "ResponderToInitiator",
+      "payload_hex": "820119469a",
+      "payload_length": 5
+    },
+    {
+      "index": 48,
+      "direction": "InitiatorToResponder",
+      "payload_hex": "820019de98",
+      "payload_length": 5
+    },
+    {
+      "index": 49,
+      "direction": "ResponderToInitiator",
+      "payload_hex": "820119de98",
+      "payload_length": 5
+    },
+    {
+      "index": 50,
+      "direction": "InitiatorToResponder",
+      "payload_hex": "8200199bb4",
+      "payload_length": 5
+    },
+    {
+      "index": 51,
+      "direction": "ResponderToInitiator",
+      "payload_hex": "8201199bb4",
+      "payload_length": 5
+    },
+    {
+      "index": 52,
+      "direction": "InitiatorToResponder",
+      "payload_hex": "8200199e4f",
+      "payload_length": 5
+    },
+    {
+      "index": 53,
+      "direction": "ResponderToInitiator",
+      "payload_hex": "8201199e4f",
+      "payload_length": 5
+    },
+    {
+      "index": 54,
+      "direction": "InitiatorToResponder",
+      "payload_hex": "82001912ab",
+      "payload_length": 5
+    },
+    {
+      "index": 55,
+      "direction": "ResponderToInitiator",
+      "payload_hex": "82011912ab",
+      "payload_length": 5
+    },
+    {
+      "index": 56,
+      "direction": "InitiatorToResponder",
+      "payload_hex": "8200194c81",
+      "payload_length": 5
+    },
+    {
+      "index": 57,
+      "direction": "ResponderToInitiator",
+      "payload_hex": "8201194c81",
+      "payload_length": 5
+    },
+    {
+      "index": 58,
+      "direction": "InitiatorToResponder",
+      "payload_hex": "820019a805",
+      "payload_length": 5
+    },
+    {
+      "index": 59,
+      "direction": "ResponderToInitiator",
+      "payload_hex": "820119a805",
+      "payload_length": 5
+    },
+    {
+      "index": 60,
+      "direction": "InitiatorToResponder",
+      "payload_hex": "820019ae96",
+      "payload_length": 5
+    },
+    {
+      "index": 61,
+      "direction": "ResponderToInitiator",
+      "payload_hex": "820119ae96",
+      "payload_length": 5
+    },
+    {
+      "index": 62,
+      "direction": "InitiatorToResponder",
+      "payload_hex": "820019e777",
+      "payload_length": 5
+    },
+    {
+      "index": 63,
+      "direction": "ResponderToInitiator",
+      "payload_hex": "820119e777",
+      "payload_length": 5
+    },
+    {
+      "index": 64,
+      "direction": "InitiatorToResponder",
+      "payload_hex": "820019ea5a",
+      "payload_length": 5
+    },
+    {
+      "index": 65,
+      "direction": "ResponderToInitiator",
+      "payload_hex": "820119ea5a",
+      "payload_length": 5
+    }
+  ]
+}

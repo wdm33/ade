@@ -1,0 +1,23 @@
+{
+  "era": "allegra",
+  "block_number": 5226992,
+  "slot": 19440000,
+  "prev_block_hash": "af6f3c347c2a780ad3b80421a709eb4ef88b3ad8e747a7793ed69a0647260b48",
+  "issuer_vkey_hash": "8b53207629f9a30e4b2015044f337c01735abe67243c19470c9dae8c7b732798",
+  "vrf_vkey": "90561cf5fb4eada778f0564060b9b5138fbfa50c0e74fc496956c8c3507301a6",
+  "body_size": 1377,
+  "body_hash": "7626ac8971954809ff93659b403cc7e772ec35c6487bbff1f505d4b6e62eb980",
+  "operational_cert": {
+    "hot_vkey": "a8e96a58f12d08163564eda1fc8a074b7a8d3d7221a85a019b51d89a41a45caa",
+    "sequence_number": 1,
+    "kes_period": 113
+  },
+  "protocol_version": {
+    "major": 4,
+    "minor": 0
+  },
+  "tx_count": 2,
+  "hfc_era_tag": 3,
+  "source_file_size": 2385,
+  "source_blake2b_256": "e8c94e246b39f4c086de5d2547aefdbb8bc0be237c0d09261db02cb541eab9b4"
+}
