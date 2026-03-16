@@ -11,6 +11,7 @@
 #![deny(clippy::panic)]
 #![deny(clippy::float_arithmetic)]
 
+pub mod byron;
 pub mod cbor;
 pub mod error;
 pub mod preserved;

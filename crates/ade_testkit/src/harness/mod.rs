@@ -1,3 +1,4 @@
+pub mod adapters;
 pub mod block_diff;
 pub mod diff_report;
 pub mod era_mapping;

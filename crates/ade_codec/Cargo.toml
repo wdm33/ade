@@ -7,4 +7,5 @@ edition = "2021"
 ade_types = { path = "../ade_types" }
 
 [dev-dependencies]
+serde_json = "1"
 toml = "0.8"

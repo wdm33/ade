@@ -6,6 +6,7 @@ edition = "2021"
 [dependencies]
 ade_codec = { path = "../ade_codec" }
 ade_types = { path = "../ade_types" }
+blake2 = "0.10"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 toml = "0.8"
