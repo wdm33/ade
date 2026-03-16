@@ -7,9 +7,10 @@
 
 use crate::Hash32;
 
-/// Shelley-era block — HFC era tag 2.
+/// Post-Byron block structure shared by Shelley through Conway.
 ///
-/// Structure: array(4) [header, tx_bodies, witness_sets, metadata]
+/// Block is either array(4) (Shelley/Allegra/Mary) or array(5) (Alonzo+).
+/// Header body is either array(15) (Shelley-Alonzo) or array(10) (Babbage-Conway).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ShelleyBlock {
     pub header: ShelleyHeader,
@@ -21,9 +22,11 @@ pub struct ShelleyBlock {
     pub witness_sets: Vec<u8>,
     /// Transaction metadata map. Opaque CBOR.
     pub metadata: Vec<u8>,
+    /// Invalid transactions (present in Alonzo+). Absent for Shelley/Allegra/Mary.
+    pub invalid_txs: Option<Vec<u8>>,
 }
 
-/// Shelley block header: array(2) [header_body, kes_signature].
+/// Block header: array(2) [header_body, kes_signature].
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ShelleyHeader {
     pub body: ShelleyHeaderBody,
@@ -31,7 +34,12 @@ pub struct ShelleyHeader {
     pub kes_signature: Vec<u8>,
 }
 
-/// Shelley header body: array(15) with inlined operational cert and protocol version.
+/// Header body fields common across all post-Byron eras.
+///
+/// For Shelley-Alonzo: array(15) with inlined operational cert + protocol version,
+///   and split VRF certs (nonce_vrf + leader_vrf).
+/// For Babbage-Conway: array(10) with nested cert + version,
+///   and combined vrf_result.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ShelleyHeaderBody {
     pub block_number: u64,
@@ -41,17 +49,27 @@ pub struct ShelleyHeaderBody {
     pub issuer_vkey: Vec<u8>,
     /// VRF verification key (32 bytes).
     pub vrf_vkey: Vec<u8>,
-    /// Nonce VRF certificate. Opaque CBOR (array(2)).
-    pub nonce_vrf: Vec<u8>,
-    /// Leader VRF certificate. Opaque CBOR (array(2)).
-    pub leader_vrf: Vec<u8>,
+    /// VRF data — format varies by era.
+    pub vrf: VrfData,
     pub body_size: u64,
     pub body_hash: Hash32,
     pub operational_cert: OperationalCert,
     pub protocol_version: ProtocolVersion,
 }
 
-/// Operational certificate fields (inlined in header body array).
+/// VRF data — encoding format varies by era.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum VrfData {
+    /// Shelley-Alonzo: separate nonce and leader VRF certificates.
+    Split {
+        nonce_vrf: Vec<u8>,
+        leader_vrf: Vec<u8>,
+    },
+    /// Babbage-Conway: single combined VRF result.
+    Combined { vrf_result: Vec<u8> },
+}
+
+/// Operational certificate fields.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct OperationalCert {
     /// Hot KES verification key (32 bytes).
@@ -62,7 +80,7 @@ pub struct OperationalCert {
     pub sigma: Vec<u8>,
 }
 
-/// Protocol version (inlined in header body array).
+/// Protocol version.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct ProtocolVersion {
     pub major: u64,
