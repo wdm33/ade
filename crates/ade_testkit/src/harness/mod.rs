@@ -1,4 +1,5 @@
 pub mod adapters;
+pub mod address_extractor;
 pub mod block_diff;
 pub mod diff_report;
 pub mod era_mapping;

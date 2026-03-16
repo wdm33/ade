@@ -11,6 +11,7 @@
 #![deny(clippy::panic)]
 #![deny(clippy::float_arithmetic)]
 
+pub mod address;
 pub mod allegra;
 pub mod alonzo;
 pub mod babbage;
