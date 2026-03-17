@@ -4,7 +4,7 @@ set -euo pipefail
 # Grep BLUE crate src/ dirs for forbidden nondeterministic patterns (T-CORE-02).
 # Excludes comment lines and deny attribute lines.
 
-BLUE_CRATES=("ade_codec" "ade_types" "ade_crypto" "ade_core")
+BLUE_CRATES=("ade_codec" "ade_types" "ade_crypto" "ade_core" "ade_ledger")
 
 FORBIDDEN_PATTERNS=(
     "HashMap"

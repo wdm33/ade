@@ -6,6 +6,7 @@
 // - Canonical serialization for all persisted/hashed data
 
 pub mod block;
+pub mod tx;
 
 use crate::cbor;
 use crate::error::CodecError;

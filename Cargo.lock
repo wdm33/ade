@@ -26,6 +26,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "ade_ledger"
+version = "0.1.0"
+dependencies = [
+ "ade_codec",
+ "ade_crypto",
+ "ade_types",
+]
+
+[[package]]
 name = "ade_node"
 version = "0.1.0"
 

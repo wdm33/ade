@@ -5,6 +5,8 @@
 // - Explicit state transitions only
 // - Canonical serialization for all persisted/hashed data
 
+pub mod tx;
+
 use crate::error::CodecError;
 use crate::preserved::PreservedCbor;
 use ade_types::mary::MaryBlock;

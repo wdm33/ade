@@ -4,7 +4,7 @@ set -euo pipefail
 # Verify BLUE crates never depend on RED crates (T-BOUND-02).
 # Uses cargo metadata for resolved dependency tree verification.
 
-BLUE_CRATES=("ade_codec" "ade_types" "ade_crypto" "ade_core")
+BLUE_CRATES=("ade_codec" "ade_types" "ade_crypto" "ade_core" "ade_ledger")
 RED_CRATES=("ade_runtime" "ade_node")
 
 REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"

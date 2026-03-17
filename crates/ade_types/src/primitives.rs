@@ -18,11 +18,11 @@ pub struct BlockNo(pub u64);
 pub struct EpochNo(pub u64);
 
 /// 28-byte hash (e.g., Blake2b-224 for addresses, credential hashes).
-#[derive(Clone, PartialEq, Eq, Hash)]
+#[derive(Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct Hash28(pub [u8; 28]);
 
 /// 32-byte hash (e.g., Blake2b-256 for block hashes, tx IDs).
-#[derive(Clone, PartialEq, Eq, Hash)]
+#[derive(Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct Hash32(pub [u8; 32]);
 
 impl core::fmt::Debug for Hash28 {
