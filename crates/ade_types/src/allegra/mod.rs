@@ -5,6 +5,7 @@
 // - Explicit state transitions only
 // - Canonical serialization for all persisted/hashed data
 
+pub mod script;
 pub mod tx;
 
 /// Allegra block reuses Shelley's block structure (same array(4), header array(15)).

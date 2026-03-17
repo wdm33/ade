@@ -11,9 +11,15 @@
 #![deny(clippy::panic)]
 #![deny(clippy::float_arithmetic)]
 
+pub mod byron;
+pub mod epoch;
 pub mod error;
+pub mod hfc;
 pub mod pparams;
+pub mod rational;
 pub mod rules;
+pub mod scripts;
+pub mod shelley;
 pub mod state;
 pub mod utxo;
 pub mod value;

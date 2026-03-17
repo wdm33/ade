@@ -5,15 +5,24 @@
 // - Explicit state transitions only
 // - Canonical serialization for all persisted/hashed data
 
+use ade_types::tx::Coin;
 use ade_types::{CardanoEra, EpochNo, SlotNo};
+use crate::epoch::SnapshotState;
 use crate::pparams::ProtocolParameters;
 use crate::utxo::UTxOState;
 
-/// Minimal epoch state — expanded in later slices (S-14+).
+/// Epoch state — tracks current epoch, slot, stake distribution snapshots,
+/// reserves and treasury.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct EpochState {
     pub epoch: EpochNo,
     pub slot: SlotNo,
+    /// Stake distribution snapshots (mark/set/go pipeline).
+    pub snapshots: SnapshotState,
+    /// Ada reserves (un-minted lovelace).
+    pub reserves: Coin,
+    /// Treasury (accumulated from monetary expansion).
+    pub treasury: Coin,
 }
 
 impl EpochState {
@@ -21,6 +30,9 @@ impl EpochState {
         EpochState {
             epoch: EpochNo(0),
             slot: SlotNo(0),
+            snapshots: SnapshotState::new(),
+            reserves: Coin(0),
+            treasury: Coin(0),
         }
     }
 }

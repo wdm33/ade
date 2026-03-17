@@ -127,7 +127,7 @@ pub struct ScriptError {
     pub reason: NativeScriptFailure,
 }
 
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum NativeScriptFailure {
     MissingRequiredSignature { key_hash: Hash28 },
     TimelockNotSatisfied { required_slot: SlotNo, current_slot: SlotNo },
