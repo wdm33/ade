@@ -12,9 +12,11 @@
 #![deny(clippy::float_arithmetic)]
 
 pub mod byron;
+pub mod delegation;
 pub mod epoch;
 pub mod error;
 pub mod hfc;
+pub mod mary;
 pub mod pparams;
 pub mod rational;
 pub mod rules;
