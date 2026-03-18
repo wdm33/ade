@@ -4,8 +4,10 @@ pub mod block_diff;
 pub mod diff_report;
 pub mod era_mapping;
 pub mod ledger_diff;
+pub mod oracle_manifest;
 pub mod protocol_diff;
 pub mod provenance;
+pub mod regression_corpus;
 pub mod transcript;
 
 use serde::{Deserialize, Serialize};
