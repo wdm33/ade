@@ -3,6 +3,7 @@ pub mod address_extractor;
 pub mod block_diff;
 pub mod diff_report;
 pub mod era_mapping;
+pub mod genesis_loader;
 pub mod ledger_diff;
 pub mod oracle_manifest;
 pub mod protocol_diff;
