@@ -121,10 +121,12 @@ fn decode_allegra_outputs(
     let count = match enc {
         ContainerEncoding::Definite(n, _) => n,
         ContainerEncoding::Indefinite => {
-            return Err(CodecError::InvalidCborStructure {
-                offset: *offset,
-                detail: "Allegra tx outputs must be definite-length array",
-            });
+            let mut outputs = Vec::new();
+            while !cbor::is_break(data, *offset)? {
+                outputs.push(decode_shelley_tx_out(data, offset)?);
+            }
+            *offset += 1;
+            return Ok(outputs);
         }
     };
 

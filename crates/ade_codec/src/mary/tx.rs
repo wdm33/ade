@@ -126,10 +126,12 @@ fn decode_mary_tx_outputs(
     let count = match enc {
         ContainerEncoding::Definite(n, _) => n,
         ContainerEncoding::Indefinite => {
-            return Err(CodecError::InvalidCborStructure {
-                offset: *offset,
-                detail: "Mary tx outputs must be definite-length array",
-            });
+            let mut outputs = Vec::new();
+            while !cbor::is_break(data, *offset)? {
+                outputs.push(decode_mary_tx_out(data, offset)?);
+            }
+            *offset += 1;
+            return Ok(outputs);
         }
     };
 

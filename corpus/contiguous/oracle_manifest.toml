@@ -1,0 +1,61 @@
+# Oracle Manifest — Contiguous Corpus for Phase 2B Differential Comparison
+#
+# Authority: docs/active/comparison_surface_contract.md
+# This manifest captures oracle provenance for reproducibility.
+
+[oracle]
+cardano_node_version = "10.6.2"
+cardano_node_git_rev = "0d697f14"
+consensus_version = "ouroboros-consensus-cardano 0.26.0.3"
+extractor_tool = "db-analyser"
+extractor_commit = "0d697f14"
+db_snapshot_id = "mithril epoch 618, immutable 8419, hash 7e3e59b8"
+extraction_date = "2026-03-18"
+comparison_surface = "Blake2b-256 of encodeDiskExtLedgerState"
+hash_algorithm = "Blake2b-256 (RFC 7693, 32-byte output)"
+network = "mainnet"
+network_magic = 764824073
+
+[[eras]]
+era = "byron"
+block_count = 1500
+hash_count = 1502
+start_slot = 0
+end_slot = 1500
+blocks_dir = "byron/"
+blocks_index = "byron/blocks.json"
+state_hashes = "byron_state_hashes.txt"
+notes = "Byron includes EBBs; 1502 hashes for 1500 blocks due to 2 EBB entries at slot 0"
+
+[[eras]]
+era = "shelley"
+block_count = 1500
+hash_count = 1500
+start_slot = 10800019
+end_slot = 10830199
+blocks_dir = "shelley/"
+blocks_index = "shelley/blocks.json"
+state_hashes = "shelley_state_hashes.txt"
+notes = "First 1500 Shelley blocks from chunk 500"
+
+[[eras]]
+era = "allegra"
+block_count = 1500
+hash_count = 1500
+start_slot = 19440024
+end_slot = 19469679
+blocks_dir = "allegra/"
+blocks_index = "allegra/blocks.json"
+state_hashes = "allegra_state_hashes.txt"
+notes = "First 1500 Allegra blocks from chunk 900"
+
+[[eras]]
+era = "mary"
+block_count = 1500
+hash_count = 1500
+start_slot = 30240073
+end_slot = 30270668
+blocks_dir = "mary/"
+blocks_index = "mary/blocks.json"
+state_hashes = "mary_state_hashes.txt"
+notes = "First 1500 Mary blocks from chunk 1400"

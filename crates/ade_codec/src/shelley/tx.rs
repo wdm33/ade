@@ -174,21 +174,23 @@ fn decode_shelley_tx_outputs(
     offset: &mut usize,
 ) -> Result<Vec<ShelleyTxOut>, CodecError> {
     let enc = cbor::read_array_header(data, offset)?;
-    let count = match enc {
-        ContainerEncoding::Definite(n, _) => n,
-        ContainerEncoding::Indefinite => {
-            return Err(CodecError::InvalidCborStructure {
-                offset: *offset,
-                detail: "Shelley tx outputs must be definite-length array",
-            });
+    match enc {
+        ContainerEncoding::Definite(n, _) => {
+            let mut outputs = Vec::with_capacity(n as usize);
+            for _ in 0..n {
+                outputs.push(decode_shelley_tx_out(data, offset)?);
+            }
+            Ok(outputs)
         }
-    };
-
-    let mut outputs = Vec::with_capacity(count as usize);
-    for _ in 0..count {
-        outputs.push(decode_shelley_tx_out(data, offset)?);
+        ContainerEncoding::Indefinite => {
+            let mut outputs = Vec::new();
+            while !cbor::is_break(data, *offset)? {
+                outputs.push(decode_shelley_tx_out(data, offset)?);
+            }
+            *offset += 1;
+            Ok(outputs)
+        }
     }
-    Ok(outputs)
 }
 
 /// Decode a Shelley transaction output.
