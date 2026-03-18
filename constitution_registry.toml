@@ -24,10 +24,13 @@ tier = "true"
 statement = "Same canonical inputs -> same authoritative bytes (per Byte Authority Model)"
 source = "Project constitution §2, Byte Authority Model §3"
 cross_ref = ["CN-WIRE-01", "CN-WIRE-02", "CN-LEDGER-02", "CN-CONS-01"]
-code_locus = ""
-tests = []
-ci_script = ""
-status = "declared"
+code_locus = "crates/ade_ledger/src/rules.rs"
+tests = ["apply_block_deterministic"]
+ci_script = "ci/ci_check_forbidden_patterns.sh"
+status = "partial"
+authority_surface = "BLUE authoritative state transitions"
+cluster = "CL-LEDGER-VERDICT"
+evidence = []
 
 [[rules]]
 id = "T-ENC-01"
@@ -35,10 +38,13 @@ tier = "true"
 statement = "All persisted/hashed/transmitted data uses canonical encoding"
 source = "Project constitution §2"
 cross_ref = ["CN-WIRE-01", "CN-WIRE-02"]
-code_locus = ""
-tests = []
-ci_script = ""
-status = "declared"
+code_locus = "crates/ade_codec/src/preserved.rs"
+tests = ["preserved_wire_bytes_returned_exactly"]
+ci_script = "ci/ci_check_hash_uses_wire_bytes.sh"
+status = "partial"
+authority_surface = "hash-critical byte paths"
+cluster = "CL-CRYPTO-VERIFY"
+evidence = []
 
 [[rules]]
 id = "T-ENC-02"
@@ -57,10 +63,13 @@ tier = "true"
 statement = "Round-trip identity: encode(decode(bytes)) == bytes for valid encodings"
 source = "Project constitution §2, D-3"
 cross_ref = []
-code_locus = ""
-tests = []
-ci_script = ""
-status = "declared"
+code_locus = "crates/ade_codec/src/preserved.rs"
+tests = ["full_corpus_round_trip"]
+ci_script = "ci/ci_check_cbor_round_trip.sh"
+status = "partial"
+authority_surface = "CBOR wire-byte encode/decode"
+cluster = "CL-CRYPTO-VERIFY"
+evidence = []
 
 [[rules]]
 id = "T-CORE-01"
@@ -68,10 +77,13 @@ tier = "true"
 statement = "Authoritative logic is pure, side-effect-free, and replayable"
 source = "Project constitution §2"
 cross_ref = ["CN-LEDGER-01"]
-code_locus = ""
-tests = []
-ci_script = ""
-status = "declared"
+code_locus = "crates/ade_ledger/src/rules.rs"
+tests = ["apply_block_deterministic", "apply_block_never_returns_ok"]
+ci_script = "ci/ci_check_forbidden_patterns.sh"
+status = "partial"
+authority_surface = "BLUE authoritative state transitions"
+cluster = "CL-LEDGER-VERDICT"
+evidence = []
 
 [[rules]]
 id = "T-CORE-02"
@@ -79,10 +91,13 @@ tier = "true"
 statement = "No wall-clock, unseeded randomness, floats, or nondeterministic collections in authoritative paths"
 source = "Project constitution §2, D-2 through D-5"
 cross_ref = ["CN-CONS-05", "CN-PLUTUS-04"]
-code_locus = ""
+code_locus = "crates/ade_ledger/src/lib.rs"
 tests = []
-ci_script = ""
-status = "declared"
+ci_script = "ci/ci_check_forbidden_patterns.sh"
+status = "enforced"
+authority_surface = "BLUE crate source"
+cluster = "CL-LEDGER-VERDICT"
+evidence = []
 
 [[rules]]
 id = "T-CORE-03"
@@ -112,10 +127,13 @@ tier = "true"
 statement = "Errors in authoritative paths are structured, comparable, canonical"
 source = "Project constitution §2"
 cross_ref = ["CN-META-02"]
-code_locus = ""
-tests = []
+code_locus = "crates/ade_ledger/src/error.rs"
+tests = ["ledger_error_equality", "conservation_error_display", "codec_error_conversion"]
 ci_script = ""
-status = "declared"
+status = "partial"
+authority_surface = "ledger error taxonomy"
+cluster = "CL-LEDGER-VERDICT"
+evidence = []
 
 [[rules]]
 id = "T-ERR-02"
@@ -134,10 +152,13 @@ tier = "true"
 statement = "No semantic build variability in authoritative code"
 source = "Project constitution §2"
 cross_ref = ["CN-BUILD-01"]
-code_locus = ""
+code_locus = "crates/ade_ledger/src/lib.rs"
 tests = []
-ci_script = ""
-status = "declared"
+ci_script = "ci/ci_check_no_semantic_cfg.sh"
+status = "enforced"
+authority_surface = "BLUE crate build configuration"
+cluster = "CL-LEDGER-VERDICT"
+evidence = []
 
 [[rules]]
 id = "T-BUILD-02"
@@ -222,10 +243,13 @@ tier = "true"
 statement = "Every true invariant has mechanical CI enforcement. No waivers."
 source = "Project constitution §2, CI-1"
 cross_ref = ["CN-META-01"]
-code_locus = ""
+code_locus = "ci/"
 tests = []
-ci_script = ""
-status = "declared"
+ci_script = "ci/ci_check_constitution_coverage.sh"
+status = "partial"
+authority_surface = "CI pipeline"
+cluster = "CL-LEDGER-VERDICT"
+evidence = []
 
 [[rules]]
 id = "T-KEY-01"
@@ -369,10 +393,13 @@ tier = "derived"
 statement = "Crypto verification is pure and matches Haskell node on all test vectors"
 source = "Project constitution §3, T-CORE-01, T-DET-01"
 cross_ref = []
-code_locus = ""
-tests = []
-ci_script = ""
-status = "declared"
+code_locus = "crates/ade_crypto/src/"
+tests = ["blake2b_256_rfc_test_vectors", "ed25519_rfc_8032_test_1", "vrf_ietf_draft03_section_a3"]
+ci_script = "ci/ci_check_crypto_vectors.sh"
+status = "enforced"
+authority_surface = "crypto verification outcomes"
+cluster = "CL-CRYPTO-VERIFY"
+evidence = []
 
 [[rules]]
 id = "DC-CRYPTO-02"
@@ -380,10 +407,13 @@ tier = "derived"
 statement = "All signing operations confined to shell"
 source = "Project constitution §3, T-BOUND-01"
 cross_ref = ["CN-CRYPTO-01"]
-code_locus = ""
+code_locus = "crates/ade_crypto/src/lib.rs"
 tests = []
-ci_script = ""
-status = "declared"
+ci_script = "ci/ci_check_no_signing_in_blue.sh"
+status = "enforced"
+authority_surface = "BLUE/RED signing boundary"
+cluster = "CL-CRYPTO-VERIFY"
+evidence = []
 
 [[rules]]
 id = "DC-LEDGER-01"
@@ -391,10 +421,13 @@ tier = "derived"
 statement = "apply_block(state, block) is pure and deterministic"
 source = "Project constitution §3, T-CORE-01, T-CORE-03"
 cross_ref = []
-code_locus = ""
-tests = []
+code_locus = "crates/ade_ledger/src/rules.rs"
+tests = ["apply_block_byron_ebb_passes_through", "apply_block_deterministic"]
 ci_script = ""
-status = "declared"
+status = "partial"
+authority_surface = "block application verdicts"
+cluster = "CL-LEDGER-VERDICT"
+evidence = []
 
 [[rules]]
 id = "DC-LEDGER-02"
@@ -402,10 +435,13 @@ tier = "derived"
 statement = "Same genesis + same blocks = byte-identical ledger state"
 source = "Project constitution §3, T-DET-01"
 cross_ref = []
-code_locus = ""
-tests = []
+code_locus = "crates/ade_ledger/src/state.rs"
+tests = ["utxo_state_deterministic"]
 ci_script = ""
-status = "declared"
+status = "partial"
+authority_surface = "ledger state progression"
+cluster = "CL-LEDGER-VERDICT"
+evidence = []
 
 [[rules]]
 id = "DC-LEDGER-03"
@@ -413,10 +449,13 @@ tier = "derived"
 statement = "Tx/block validity agrees with Haskell node on all tested inputs"
 source = "Project constitution §3, T-DET-01, T-ERR-01"
 cross_ref = ["CN-LEDGER-03"]
-code_locus = ""
-tests = []
+code_locus = "crates/ade_ledger/src/byron.rs"
+tests = ["check_duplicate_inputs_catches_dupes", "resolve_inputs_missing_input", "missing_witnesses_rejected"]
 ci_script = ""
-status = "declared"
+status = "partial"
+authority_surface = "block/tx acceptance verdicts"
+cluster = "CL-LEDGER-VERDICT"
+evidence = []
 
 [[rules]]
 id = "DC-LEDGER-04"
@@ -555,11 +594,14 @@ id = "DC-REF-01"
 tier = "derived"
 statement = "Every claimed equivalence check must identify its reference source, extraction method, and reproducibility path"
 source = "Project constitution §3, T-DET-01, T-CI-01"
-cross_ref = ["CN-META-03"]
+cross_ref = ["CN-META-03", "DC-DIFF-01"]
 code_locus = "crates/ade_testkit/src/harness/provenance.rs"
 tests = ["provenance_validation", "self_comparison_block_fields"]
 ci_script = "ci/ci_check_ref_provenance.sh"
 status = "partial"
+authority_surface = "reference artifact provenance"
+cluster = "CL-LEDGER-VERDICT"
+evidence = ["corpus/reference/block_fields/manifest.toml", "corpus/reference/ledger_state_hashes/manifest.toml"]
 
 [[rules]]
 id = "DC-PROTO-03"
@@ -703,6 +745,20 @@ code_locus = ""
 tests = []
 ci_script = ""
 status = "declared"
+
+[[rules]]
+id = "DC-DIFF-01"
+tier = "derived"
+statement = "Differential harness must localize first divergence point between Ade and reference oracle"
+source = "Project constitution §3, T-DET-01, DC-REF-01"
+cross_ref = ["DC-REF-01"]
+code_locus = "crates/ade_testkit/src/harness/ledger_diff.rs"
+tests = ["diff_ledger_sequence", "mismatched_block_count_returns_error"]
+ci_script = ""
+authority_surface = "differential comparison outcomes"
+cluster = "CL-LEDGER-VERDICT"
+evidence = []
+status = "partial"
 
 [[rules]]
 id = "DC-MEM-01"

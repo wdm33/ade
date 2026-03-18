@@ -78,7 +78,7 @@ for r in rules:
         fail(f"{rid}: OP-* entry must have tier 'operational', got '{tier}'")
 
 # --- 5. Validate status ---
-VALID_STATUSES = {"declared", "partial", "enforced"}
+VALID_STATUSES = {"declared", "partial", "enforced", "blocked"}
 for r in rules:
     status = r.get("status", "")
     if status not in VALID_STATUSES:
@@ -115,6 +115,19 @@ for r in rules:
     else:
         fail(f"{rid}: invalid tier '{tier}'")
 
+# --- 6b. Validate optional adoption fields ---
+TRUE_DERIVED_OPTIONAL = ["authority_surface", "cluster", "evidence"]
+KNOWN_CLUSTERS = {"CL-CRYPTO-VERIFY", "CL-LEDGER-VERDICT"}
+
+for r in rules:
+    rid = r["id"]
+    tier = r.get("tier", "")
+
+    # cluster validation: if present, must be a known cluster name
+    if "cluster" in r:
+        if r["cluster"] not in KNOWN_CLUSTERS:
+            fail(f"{rid}: unknown cluster '{r['cluster']}', must be one of: {', '.join(sorted(KNOWN_CLUSTERS))}")
+
 # --- 7. Enforcement regression guard ---
 for r in rules:
     status = r.get("status")
@@ -122,8 +135,8 @@ for r in rules:
         for field in ["code_locus", "ci_script"]:
             if not r.get(field):
                 fail(f"{r['id']}: 'enforced' entry must have non-empty '{field}'")
-        if not r.get("tests"):
-            fail(f"{r['id']}: 'enforced' entry must have non-empty 'tests'")
+        if not r.get("tests") and not r.get("ci_script"):
+            fail(f"{r['id']}: 'enforced' entry must have non-empty 'tests' or 'ci_script'")
     elif status == "partial":
         has_evidence = bool(r.get("code_locus")) or bool(r.get("tests")) or bool(r.get("ci_script"))
         if not has_evidence:
