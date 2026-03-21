@@ -1,6 +1,6 @@
-//! Differential test: Contiguous replay across all Phase 2B eras.
+//! Differential test: Contiguous replay across all eras (Phase 2B + 2C).
 //!
-//! Replays 6,000 contiguous blocks (Byron–Mary) through apply_block.
+//! Replays 10,500 contiguous blocks (Byron–Conway) through apply_block.
 //! Verifies structural verdict agreement: every block the oracle accepted,
 //! Ade also accepts (block + tx body decoding succeeds).
 //!
@@ -118,7 +118,37 @@ fn mary_replay_all_1500() {
     assert_eq!(r.accepted, r.total, "Mary: {}/{}", r.accepted, r.total);
 }
 
-/// Summary test: all 4 eras, 6,000 blocks total.
+#[test]
+fn alonzo_replay_all_1500() {
+    let r = replay_era("alonzo", CardanoEra::Alonzo);
+    eprintln!("Alonzo: {}/{} accepted", r.accepted, r.total);
+    if let Some((idx, ref err)) = r.first_error {
+        eprintln!("  First error at block {idx}: {err}");
+    }
+    assert_eq!(r.accepted, r.total, "Alonzo: {}/{}", r.accepted, r.total);
+}
+
+#[test]
+fn babbage_replay_all_1500() {
+    let r = replay_era("babbage", CardanoEra::Babbage);
+    eprintln!("Babbage: {}/{} accepted", r.accepted, r.total);
+    if let Some((idx, ref err)) = r.first_error {
+        eprintln!("  First error at block {idx}: {err}");
+    }
+    assert_eq!(r.accepted, r.total, "Babbage: {}/{}", r.accepted, r.total);
+}
+
+#[test]
+fn conway_replay_all_1500() {
+    let r = replay_era("conway", CardanoEra::Conway);
+    eprintln!("Conway: {}/{} accepted", r.accepted, r.total);
+    if let Some((idx, ref err)) = r.first_error {
+        eprintln!("  First error at block {idx}: {err}");
+    }
+    assert_eq!(r.accepted, r.total, "Conway: {}/{}", r.accepted, r.total);
+}
+
+/// Summary test: all 7 eras, 10,500 blocks total.
 #[test]
 fn all_eras_replay_summary() {
     let results = vec![
@@ -126,13 +156,16 @@ fn all_eras_replay_summary() {
         replay_era("shelley", CardanoEra::Shelley),
         replay_era("allegra", CardanoEra::Allegra),
         replay_era("mary", CardanoEra::Mary),
+        replay_era("alonzo", CardanoEra::Alonzo),
+        replay_era("babbage", CardanoEra::Babbage),
+        replay_era("conway", CardanoEra::Conway),
     ];
 
     let mut total_blocks = 0usize;
     let mut total_accepted = 0usize;
     let mut any_failed = false;
 
-    eprintln!("\n=== Phase 2B Contiguous Replay Summary ===");
+    eprintln!("\n=== Phase 2B+2C Contiguous Replay Summary ===");
     for r in &results {
         let status = if r.accepted == r.total { "PASS" } else { "FAIL" };
         eprintln!("  {}: {}/{} [{}]", r.era, r.accepted, r.total, status);

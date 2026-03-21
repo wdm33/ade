@@ -1,15 +1,18 @@
 //! Integration test: Transaction body decoding on the contiguous corpus.
 //!
-//! Verifies that all transaction bodies within the 6,000 contiguous blocks
+//! Verifies that all transaction bodies within the 10,500 contiguous blocks
 //! decode correctly through the era-specific tx body decoders. This exercises
 //! S-04 (wire-byte decode boundary) at scale.
 
 use std::path::PathBuf;
 
 use ade_codec::allegra;
+use ade_codec::alonzo;
+use ade_codec::babbage;
 use ade_codec::byron;
 use ade_codec::cbor;
 use ade_codec::cbor::envelope::decode_block_envelope;
+use ade_codec::conway;
 use ade_codec::mary;
 use ade_codec::shelley;
 use ade_types::CardanoEra;
@@ -171,4 +174,124 @@ fn mary_contiguous_tx_decode() {
         }
     }
     eprintln!("Mary contiguous: {total_txs} transactions decoded from 1500 blocks");
+}
+
+#[test]
+fn alonzo_contiguous_tx_decode() {
+    let blocks_json = load_blocks_json("alonzo");
+    let blocks = blocks_json["blocks"].as_array().unwrap();
+    let era_dir = corpus_root().join("alonzo");
+
+    let mut total_txs = 0;
+    for block_entry in blocks {
+        let filename = block_entry["file"].as_str().unwrap();
+        let path = era_dir.join(filename);
+        let raw = std::fs::read(&path).unwrap();
+        let env = decode_block_envelope(&raw).unwrap();
+        let inner = &raw[env.block_start..env.block_end];
+
+        let preserved = alonzo::decode_alonzo_block(inner).unwrap();
+        let block = preserved.decoded();
+
+        if block.tx_count > 0 {
+            let mut offset = 0;
+            let tx_data = &block.tx_bodies;
+            let enc = cbor::read_array_header(tx_data, &mut offset).unwrap();
+            match enc {
+                cbor::ContainerEncoding::Definite(n, _) => {
+                    for _ in 0..n {
+                        let _tx = alonzo::tx::decode_alonzo_tx_body(tx_data, &mut offset).unwrap();
+                        total_txs += 1;
+                    }
+                }
+                cbor::ContainerEncoding::Indefinite => {
+                    while !cbor::is_break(tx_data, offset).unwrap() {
+                        let _tx = alonzo::tx::decode_alonzo_tx_body(tx_data, &mut offset).unwrap();
+                        total_txs += 1;
+                    }
+                }
+            }
+        }
+    }
+    eprintln!("Alonzo contiguous: {total_txs} transactions decoded from 1500 blocks");
+}
+
+#[test]
+fn babbage_contiguous_tx_decode() {
+    let blocks_json = load_blocks_json("babbage");
+    let blocks = blocks_json["blocks"].as_array().unwrap();
+    let era_dir = corpus_root().join("babbage");
+
+    let mut total_txs = 0;
+    for block_entry in blocks {
+        let filename = block_entry["file"].as_str().unwrap();
+        let path = era_dir.join(filename);
+        let raw = std::fs::read(&path).unwrap();
+        let env = decode_block_envelope(&raw).unwrap();
+        let inner = &raw[env.block_start..env.block_end];
+
+        let preserved = babbage::decode_babbage_block(inner).unwrap();
+        let block = preserved.decoded();
+
+        if block.tx_count > 0 {
+            let mut offset = 0;
+            let tx_data = &block.tx_bodies;
+            let enc = cbor::read_array_header(tx_data, &mut offset).unwrap();
+            match enc {
+                cbor::ContainerEncoding::Definite(n, _) => {
+                    for _ in 0..n {
+                        let _tx = babbage::tx::decode_babbage_tx_body(tx_data, &mut offset).unwrap();
+                        total_txs += 1;
+                    }
+                }
+                cbor::ContainerEncoding::Indefinite => {
+                    while !cbor::is_break(tx_data, offset).unwrap() {
+                        let _tx = babbage::tx::decode_babbage_tx_body(tx_data, &mut offset).unwrap();
+                        total_txs += 1;
+                    }
+                }
+            }
+        }
+    }
+    eprintln!("Babbage contiguous: {total_txs} transactions decoded from 1500 blocks");
+}
+
+#[test]
+fn conway_contiguous_tx_decode() {
+    let blocks_json = load_blocks_json("conway");
+    let blocks = blocks_json["blocks"].as_array().unwrap();
+    let era_dir = corpus_root().join("conway");
+
+    let mut total_txs = 0;
+    for block_entry in blocks {
+        let filename = block_entry["file"].as_str().unwrap();
+        let path = era_dir.join(filename);
+        let raw = std::fs::read(&path).unwrap();
+        let env = decode_block_envelope(&raw).unwrap();
+        let inner = &raw[env.block_start..env.block_end];
+
+        let preserved = conway::decode_conway_block(inner).unwrap();
+        let block = preserved.decoded();
+
+        if block.tx_count > 0 {
+            let mut offset = 0;
+            let tx_data = &block.tx_bodies;
+            let enc = cbor::read_array_header(tx_data, &mut offset).unwrap();
+            match enc {
+                cbor::ContainerEncoding::Definite(n, _) => {
+                    for _ in 0..n {
+                        let _tx = conway::tx::decode_conway_tx_body(tx_data, &mut offset).unwrap();
+                        total_txs += 1;
+                    }
+                }
+                cbor::ContainerEncoding::Indefinite => {
+                    while !cbor::is_break(tx_data, offset).unwrap() {
+                        let _tx = conway::tx::decode_conway_tx_body(tx_data, &mut offset).unwrap();
+                        total_txs += 1;
+                    }
+                }
+            }
+        }
+    }
+    eprintln!("Conway contiguous: {total_txs} transactions decoded from 1500 blocks");
 }

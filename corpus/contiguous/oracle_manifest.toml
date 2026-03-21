@@ -59,3 +59,36 @@ blocks_dir = "mary/"
 blocks_index = "mary/blocks.json"
 state_hashes = "mary_state_hashes.txt"
 notes = "First 1500 Mary blocks from chunk 1400"
+
+[[eras]]
+era = "alonzo"
+block_count = 1500
+hash_count = 1500
+start_slot = 39917142
+end_slot = 39948344
+blocks_dir = "alonzo/"
+blocks_index = "alonzo/blocks.json"
+state_hashes = "alonzo_state_hashes.txt"
+notes = "First 1500 Alonzo blocks from chunk 1848"
+
+[[eras]]
+era = "babbage"
+block_count = 1500
+hash_count = 1500
+start_slot = 72317013
+end_slot = 72347541
+blocks_dir = "babbage/"
+blocks_index = "babbage/blocks.json"
+state_hashes = "babbage_state_hashes.txt"
+notes = "First 1500 Babbage blocks from chunk 3348"
+
+[[eras]]
+era = "conway"
+block_count = 1500
+hash_count = 1500
+start_slot = 133661020
+end_slot = 133692593
+blocks_dir = "conway/"
+blocks_index = "conway/blocks.json"
+state_hashes = "conway_state_hashes.txt"
+notes = "First 1500 Conway blocks from chunk 6188"

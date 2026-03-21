@@ -1,6 +1,6 @@
 //! Integration test: Contiguous corpus block decoding.
 //!
-//! Verifies that all 6,000 contiguous blocks (Byron–Mary) decode successfully
+//! Verifies that all 10,500 contiguous blocks (Byron–Conway) decode successfully
 //! through the HFC envelope and era-specific block decoders. This is a
 //! prerequisite for differential comparison — blocks must parse before
 //! ledger rules can be applied.
@@ -48,6 +48,9 @@ fn expected_era(era_name: &str) -> &[CardanoEra] {
         "shelley" => &[CardanoEra::Shelley],
         "allegra" => &[CardanoEra::Allegra],
         "mary" => &[CardanoEra::Mary],
+        "alonzo" => &[CardanoEra::Alonzo],
+        "babbage" => &[CardanoEra::Babbage],
+        "conway" => &[CardanoEra::Conway],
         _ => &[],
     }
 }
@@ -101,7 +104,18 @@ fn decode_era_blocks(era_name: &str) -> usize {
                 ade_codec::mary::decode_mary_block(inner)
                     .unwrap_or_else(|e| panic!("Mary decode failed for {filename}: {e}"));
             }
-            _ => panic!("unexpected era {:?} for {filename}", env.era),
+            CardanoEra::Alonzo => {
+                ade_codec::alonzo::decode_alonzo_block(inner)
+                    .unwrap_or_else(|e| panic!("Alonzo decode failed for {filename}: {e}"));
+            }
+            CardanoEra::Babbage => {
+                ade_codec::babbage::decode_babbage_block(inner)
+                    .unwrap_or_else(|e| panic!("Babbage decode failed for {filename}: {e}"));
+            }
+            CardanoEra::Conway => {
+                ade_codec::conway::decode_conway_block(inner)
+                    .unwrap_or_else(|e| panic!("Conway decode failed for {filename}: {e}"));
+            }
         }
 
         decoded += 1;
@@ -139,6 +153,27 @@ fn mary_contiguous_blocks_decode() {
 }
 
 #[test]
+fn alonzo_contiguous_blocks_decode() {
+    let count = decode_era_blocks("alonzo");
+    assert_eq!(count, 1500, "expected 1500 Alonzo blocks");
+    eprintln!("Alonzo: {count} blocks decoded successfully");
+}
+
+#[test]
+fn babbage_contiguous_blocks_decode() {
+    let count = decode_era_blocks("babbage");
+    assert_eq!(count, 1500, "expected 1500 Babbage blocks");
+    eprintln!("Babbage: {count} blocks decoded successfully");
+}
+
+#[test]
+fn conway_contiguous_blocks_decode() {
+    let count = decode_era_blocks("conway");
+    assert_eq!(count, 1500, "expected 1500 Conway blocks");
+    eprintln!("Conway: {count} blocks decoded successfully");
+}
+
+#[test]
 fn state_hash_files_have_correct_counts() {
     let byron_hashes = load_state_hashes("byron");
     assert_eq!(byron_hashes.len(), 1502, "Byron: expected 1502 hashes");
@@ -151,11 +186,20 @@ fn state_hash_files_have_correct_counts() {
 
     let mary_hashes = load_state_hashes("mary");
     assert_eq!(mary_hashes.len(), 1500, "Mary: expected 1500 hashes");
+
+    let alonzo_hashes = load_state_hashes("alonzo");
+    assert_eq!(alonzo_hashes.len(), 1500, "Alonzo: expected 1500 hashes");
+
+    let babbage_hashes = load_state_hashes("babbage");
+    assert_eq!(babbage_hashes.len(), 1500, "Babbage: expected 1500 hashes");
+
+    let conway_hashes = load_state_hashes("conway");
+    assert_eq!(conway_hashes.len(), 1500, "Conway: expected 1500 hashes");
 }
 
 #[test]
 fn state_hashes_are_valid_hex() {
-    for era in &["byron", "shelley", "allegra", "mary"] {
+    for era in &["byron", "shelley", "allegra", "mary", "alonzo", "babbage", "conway"] {
         let hashes = load_state_hashes(era);
         for (slot, hash) in &hashes {
             assert_eq!(
@@ -195,5 +239,5 @@ fn oracle_manifest_exists_and_parses() {
 
     // Verify era entries
     let eras = parsed.get("eras").unwrap().as_array().unwrap();
-    assert_eq!(eras.len(), 4, "expected 4 era entries");
+    assert_eq!(eras.len(), 7, "expected 7 era entries");
 }

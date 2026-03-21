@@ -6,13 +6,16 @@
 // - Canonical serialization for all persisted/hashed data
 
 use ade_codec::allegra;
+use ade_codec::alonzo;
+use ade_codec::babbage;
 use ade_codec::byron;
 use ade_codec::cbor;
+use ade_codec::conway;
 use ade_codec::mary;
 use ade_codec::shelley;
 use ade_types::CardanoEra;
 use ade_types::SlotNo;
-use crate::error::{LedgerError, RuleNotYetEnforcedError, RuleName};
+use crate::error::LedgerError;
 use crate::state::LedgerState;
 
 /// Apply a block to ledger state, dispatching by era.
@@ -53,10 +56,21 @@ pub fn apply_block(
             let block = preserved.decoded();
             apply_shelley_era_block(state, block, CardanoEra::Mary)
         }
-        _ => Err(LedgerError::RuleNotYetEnforced(RuleNotYetEnforcedError {
-            era,
-            rule: RuleName::ApplyBlock,
-        })),
+        CardanoEra::Alonzo => {
+            let preserved = alonzo::decode_alonzo_block(block_cbor)?;
+            let block = preserved.decoded();
+            apply_shelley_era_block(state, block, CardanoEra::Alonzo)
+        }
+        CardanoEra::Babbage => {
+            let preserved = babbage::decode_babbage_block(block_cbor)?;
+            let block = preserved.decoded();
+            apply_shelley_era_block(state, block, CardanoEra::Babbage)
+        }
+        CardanoEra::Conway => {
+            let preserved = conway::decode_conway_block(block_cbor)?;
+            let block = preserved.decoded();
+            apply_shelley_era_block(state, block, CardanoEra::Conway)
+        }
     }
 }
 
@@ -139,6 +153,15 @@ fn decode_single_tx_body(
         CardanoEra::Mary => {
             let _tx = ade_codec::mary::tx::decode_mary_tx_body(data, offset)?;
         }
+        CardanoEra::Alonzo => {
+            let _tx = ade_codec::alonzo::tx::decode_alonzo_tx_body(data, offset)?;
+        }
+        CardanoEra::Babbage => {
+            let _tx = ade_codec::babbage::tx::decode_babbage_tx_body(data, offset)?;
+        }
+        CardanoEra::Conway => {
+            let _tx = ade_codec::conway::tx::decode_conway_tx_body(data, offset)?;
+        }
         _ => {
             let _ = cbor::skip_item(data, offset)?;
         }
@@ -183,23 +206,11 @@ mod tests {
     }
 
     #[test]
-    fn apply_block_alonzo_returns_not_yet_enforced() {
-        let state = LedgerState::new(CardanoEra::Alonzo);
-        let result = apply_block(&state, CardanoEra::Alonzo, &[]);
-        assert!(matches!(
-            result,
-            Err(LedgerError::RuleNotYetEnforced(RuleNotYetEnforcedError {
-                era: CardanoEra::Alonzo,
-                rule: RuleName::ApplyBlock,
-            }))
-        ));
-    }
-
-    #[test]
     fn apply_block_deterministic() {
+        // Determinism: same invalid input produces same error both times
         let state = LedgerState::new(CardanoEra::Mary);
-        let result1 = apply_block(&state, CardanoEra::Alonzo, &[0x83, 0x01, 0x02]);
-        let result2 = apply_block(&state, CardanoEra::Alonzo, &[0x83, 0x01, 0x02]);
+        let result1 = apply_block(&state, CardanoEra::Mary, &[0x83, 0x01, 0x02]);
+        let result2 = apply_block(&state, CardanoEra::Mary, &[0x83, 0x01, 0x02]);
         assert_eq!(result1, result2);
     }
 }
