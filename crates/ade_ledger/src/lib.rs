@@ -11,7 +11,10 @@
 #![deny(clippy::panic)]
 #![deny(clippy::float_arithmetic)]
 
+pub mod alonzo;
+pub mod babbage;
 pub mod byron;
+pub mod conway;
 pub mod delegation;
 pub mod epoch;
 pub mod error;
@@ -25,3 +28,4 @@ pub mod shelley;
 pub mod state;
 pub mod utxo;
 pub mod value;
+pub mod witness;

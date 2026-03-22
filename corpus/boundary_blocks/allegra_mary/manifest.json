@@ -1,0 +1,149 @@
+{
+  "transition": "allegra_mary",
+  "pre_chunk": 1062,
+  "post_chunk": 1063,
+  "pre_blocks": [
+    {
+      "file": "pre_chunk01062_idx01040.cbor",
+      "chunk": 1062,
+      "idx": 1040,
+      "size": 5113,
+      "blake2b_256": "ca22fe8e26ffa57f6d8123d078f227745158cd642bf1422ef02a94d0bc4c4810"
+    },
+    {
+      "file": "pre_chunk01062_idx01041.cbor",
+      "chunk": 1062,
+      "idx": 1041,
+      "size": 11225,
+      "blake2b_256": "fd4effb353874b22d33e6990d57dcbda2d10baaf5c385f17523b1c5e3c6221b8"
+    },
+    {
+      "file": "pre_chunk01062_idx01042.cbor",
+      "chunk": 1062,
+      "idx": 1042,
+      "size": 11571,
+      "blake2b_256": "a4f4e37babc83856496997875f3abf68fab132141c67da0a20ddef7ebfdda729"
+    },
+    {
+      "file": "pre_chunk01062_idx01043.cbor",
+      "chunk": 1062,
+      "idx": 1043,
+      "size": 2476,
+      "blake2b_256": "8c15be94adab0bdfc88416bd2e94d687847dc57ff89d5c79a280ad01529fa415"
+    },
+    {
+      "file": "pre_chunk01062_idx01044.cbor",
+      "chunk": 1062,
+      "idx": 1044,
+      "size": 1321,
+      "blake2b_256": "2a4e7bcad08e54ac0a864ac0f0015a08cea9260c5b713e1c9ea02c5ea21362d3"
+    },
+    {
+      "file": "pre_chunk01062_idx01045.cbor",
+      "chunk": 1062,
+      "idx": 1045,
+      "size": 2356,
+      "blake2b_256": "8625e743f6cc3d932092bd88048e0e6cc63fed0c52ca2450cfb77d29c3d46ea7"
+    },
+    {
+      "file": "pre_chunk01062_idx01046.cbor",
+      "chunk": 1062,
+      "idx": 1046,
+      "size": 8981,
+      "blake2b_256": "0adff3f6b22802cc30cbba0ac11b23593c1c769d01f14924f12d319c654c6b37"
+    },
+    {
+      "file": "pre_chunk01062_idx01047.cbor",
+      "chunk": 1062,
+      "idx": 1047,
+      "size": 3815,
+      "blake2b_256": "f7ee7929f24cdcd0b83dbcb7b14d5399d9feb0a470be8a828c501c90e84a9ce3"
+    },
+    {
+      "file": "pre_chunk01062_idx01048.cbor",
+      "chunk": 1062,
+      "idx": 1048,
+      "size": 10871,
+      "blake2b_256": "3148ed34276a59f89af67892df73d5e3db9e0ae497a45d34c60284cdee6e11f8"
+    },
+    {
+      "file": "pre_chunk01062_idx01049.cbor",
+      "chunk": 1062,
+      "idx": 1049,
+      "size": 1789,
+      "blake2b_256": "1ba147dcc50b6a23d40647e460e43ad9c981e776eb646be10da7fc79c3fa2019"
+    }
+  ],
+  "post_blocks": [
+    {
+      "file": "post_chunk01063_idx00000.cbor",
+      "chunk": 1063,
+      "idx": 0,
+      "size": 18810,
+      "blake2b_256": "cfc11abd1e9f601e04b412e4b0cdd651fdc8b670c92ff171e4589f1dce7de0a7"
+    },
+    {
+      "file": "post_chunk01063_idx00001.cbor",
+      "chunk": 1063,
+      "idx": 1,
+      "size": 3007,
+      "blake2b_256": "03bb103620c008f9eb4e9061f5fee43cd0cde4775d1a926b455fb2203841c59f"
+    },
+    {
+      "file": "post_chunk01063_idx00002.cbor",
+      "chunk": 1063,
+      "idx": 2,
+      "size": 7186,
+      "blake2b_256": "72599eb2e5c32c68072835ba6a265c8d47de055078e8af7e9fd4a770d33960c8"
+    },
+    {
+      "file": "post_chunk01063_idx00003.cbor",
+      "chunk": 1063,
+      "idx": 3,
+      "size": 10226,
+      "blake2b_256": "78799a1068e7f77803905739874efd30dc6723208c746e867592a00f117bf222"
+    },
+    {
+      "file": "post_chunk01063_idx00004.cbor",
+      "chunk": 1063,
+      "idx": 4,
+      "size": 10997,
+      "blake2b_256": "05ded5afbc082bd51fbe2d02a441a569ae68c4a7b00f7e6c4d95ec65a7e2c734"
+    },
+    {
+      "file": "post_chunk01063_idx00005.cbor",
+      "chunk": 1063,
+      "idx": 5,
+      "size": 2741,
+      "blake2b_256": "6300951c88223521e7abd63cca77b845e404950ddad9cfc7c2345f1504783887"
+    },
+    {
+      "file": "post_chunk01063_idx00006.cbor",
+      "chunk": 1063,
+      "idx": 6,
+      "size": 11710,
+      "blake2b_256": "3f127f242e106c8ca0b01af10b07f3c148219c5f4b040c358471fa9f0aa07ab0"
+    },
+    {
+      "file": "post_chunk01063_idx00007.cbor",
+      "chunk": 1063,
+      "idx": 7,
+      "size": 11977,
+      "blake2b_256": "6d1ff0a02a33263b50d86b82a9e5749f4dd1ccfb0de78ab335a89a0e18cd44af"
+    },
+    {
+      "file": "post_chunk01063_idx00008.cbor",
+      "chunk": 1063,
+      "idx": 8,
+      "size": 1009,
+      "blake2b_256": "72d33b28fadddfe81312d7abb0772bdc33441139d43b12e29af2308b3104ee09"
+    },
+    {
+      "file": "post_chunk01063_idx00009.cbor",
+      "chunk": 1063,
+      "idx": 9,
+      "size": 4578,
+      "blake2b_256": "258fc4c4d6a71f4f4745c20cd0993f7a8e086c43c717a3787809077f3ad8a633"
+    }
+  ]
+}

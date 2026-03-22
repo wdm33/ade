@@ -10,6 +10,7 @@ pub mod protocol_diff;
 pub mod provenance;
 pub mod regression_corpus;
 pub mod shelley_loader;
+pub mod snapshot_loader;
 pub mod transcript;
 
 use serde::{Deserialize, Serialize};

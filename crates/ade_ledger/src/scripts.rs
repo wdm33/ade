@@ -22,6 +22,23 @@ pub enum ScriptVerdict {
     NotYetEvaluated,
 }
 
+/// Deterministic classification of a transaction's script posture.
+///
+/// This is a classification surface, not a verdict. It describes what
+/// kind of scripts a transaction contains, determined purely from the
+/// parsed transaction body structure — no execution, no state lookup.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ScriptPosture {
+    /// Transaction contains no script-related indicators.
+    NoScripts,
+    /// Transaction may contain native scripts but no Plutus indicators.
+    /// (No `script_data_hash` in the body.)
+    NonPlutusScriptsOnly,
+    /// Transaction contains Plutus script indicators (`script_data_hash`
+    /// present). Execution is deferred to Phase 3.
+    PlutusPresentDeferred,
+}
+
 /// Evaluate a native script against available signatures and the current slot.
 ///
 /// Deterministic: same inputs always produce the same verdict.

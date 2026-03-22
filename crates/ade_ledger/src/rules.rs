@@ -81,92 +81,227 @@ pub fn apply_block(
 /// without full chain history), records the tx count but does not fail.
 /// This gives structural verdict agreement — the block is accepted if
 /// all transaction bodies and witness sets decode correctly.
+/// Apply a block and return both the new state and the structural classification.
+///
+/// Same as `apply_block` but exposes the `BlockVerdict` so the harness
+/// can separate ordinary accepted blocks from script-execution-deferred blocks.
+pub fn apply_block_classified(
+    state: &LedgerState,
+    era: CardanoEra,
+    block_cbor: &[u8],
+) -> Result<(LedgerState, BlockVerdict), LedgerError> {
+    match era {
+        CardanoEra::ByronEbb => Ok((
+            state.clone(),
+            BlockVerdict { tx_count: 0, plutus_deferred_count: 0, non_plutus_count: 0 },
+        )),
+        CardanoEra::ByronRegular => {
+            let preserved = byron::decode_byron_regular_block(block_cbor)?;
+            let block = preserved.decoded();
+            let new_state = crate::byron::validate_byron_block(state, block)?;
+            Ok((
+                new_state,
+                BlockVerdict { tx_count: 0, plutus_deferred_count: 0, non_plutus_count: 0 },
+            ))
+        }
+        _ => {
+            let decoded = match era {
+                CardanoEra::Shelley => shelley::decode_shelley_block(block_cbor)?,
+                CardanoEra::Allegra => allegra::decode_allegra_block(block_cbor)?,
+                CardanoEra::Mary => mary::decode_mary_block(block_cbor)?,
+                CardanoEra::Alonzo => alonzo::decode_alonzo_block(block_cbor)?,
+                CardanoEra::Babbage => babbage::decode_babbage_block(block_cbor)?,
+                CardanoEra::Conway => conway::decode_conway_block(block_cbor)?,
+                _ => return apply_block(state, era, block_cbor).map(|s| (s, BlockVerdict {
+                    tx_count: 0, plutus_deferred_count: 0, non_plutus_count: 0,
+                })),
+            };
+            let block = decoded.decoded();
+            apply_shelley_era_block_classified(state, block, era)
+        }
+    }
+}
+
 fn apply_shelley_era_block(
     state: &LedgerState,
     block: &ade_types::shelley::block::ShelleyBlock,
     era: CardanoEra,
 ) -> Result<LedgerState, LedgerError> {
-    // Extract slot from header for epoch tracking
+    apply_shelley_era_block_classified(state, block, era).map(|(s, _)| s)
+}
+
+fn apply_shelley_era_block_classified(
+    state: &LedgerState,
+    block: &ade_types::shelley::block::ShelleyBlock,
+    era: CardanoEra,
+) -> Result<(LedgerState, BlockVerdict), LedgerError> {
     let slot = SlotNo(block.header.body.slot);
+    let verdict = decode_validate_tx_bodies(block, era)?;
 
-    // Decode all tx bodies to verify structural validity
-    let _tx_count = decode_and_count_tx_bodies(block, era)?;
-
-    // Update epoch state with current slot
     let mut epoch_state = state.epoch_state.clone();
     epoch_state.slot = slot;
 
-    Ok(LedgerState {
-        utxo_state: state.utxo_state.clone(),
-        epoch_state,
-        protocol_params: state.protocol_params.clone(),
-        era,
-    })
+    Ok((
+        LedgerState {
+            utxo_state: state.utxo_state.clone(),
+            epoch_state,
+            protocol_params: state.protocol_params.clone(),
+            era,
+        },
+        verdict,
+    ))
 }
 
-/// Decode all transaction bodies from a post-Byron block.
-/// Returns the count of successfully decoded transactions.
-fn decode_and_count_tx_bodies(
+/// Block-level structural verdict from applying a post-Byron block.
+///
+/// Summarizes the script posture across all transactions in the block.
+/// This is a deterministic classification surface — the harness can use
+/// it to separate ordinary accepted blocks from script-execution-deferred blocks.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct BlockVerdict {
+    /// Total transactions decoded.
+    pub tx_count: u64,
+    /// Number of transactions with Plutus scripts (deferred).
+    pub plutus_deferred_count: u64,
+    /// Number of transactions with no Plutus involvement.
+    pub non_plutus_count: u64,
+}
+
+/// Decode and structurally validate all transaction bodies from a post-Byron block.
+///
+/// Parses both tx_bodies and witness_sets in parallel. Uses witness-confirmed
+/// Plutus detection (keys 3/6/7 in witness set) rather than body-only heuristics.
+/// Evaluates native scripts against available vkey hashes and current slot.
+fn decode_validate_tx_bodies(
     block: &ade_types::shelley::block::ShelleyBlock,
     era: CardanoEra,
-) -> Result<u64, LedgerError> {
+) -> Result<BlockVerdict, LedgerError> {
     if block.tx_count == 0 {
-        return Ok(0);
+        return Ok(BlockVerdict {
+            tx_count: 0,
+            plutus_deferred_count: 0,
+            non_plutus_count: 0,
+        });
     }
 
-    let mut offset = 0;
-    let data = &block.tx_bodies;
-    let enc = cbor::read_array_header(data, &mut offset)?;
+    let current_slot = block.header.body.slot;
 
-    let mut count = 0u64;
-    match enc {
+    // Parse witness sets for all txs
+    let witness_infos = crate::witness::decode_witness_infos(&block.witness_sets)?;
+
+    // Parse and validate tx bodies
+    let mut body_offset = 0;
+    let body_data = &block.tx_bodies;
+    let body_enc = cbor::read_array_header(body_data, &mut body_offset)?;
+
+    let mut tx_count = 0u64;
+    let mut plutus_deferred_count = 0u64;
+    let mut non_plutus_count = 0u64;
+    let mut tx_idx = 0usize;
+
+    let mut process_one = |body_data: &[u8], body_offset: &mut usize| -> Result<(), LedgerError> {
+        // Decode and structurally validate the tx body
+        let body_posture = decode_and_validate_single_tx(body_data, body_offset, era)?;
+
+        // Get witness info for this tx (if available)
+        let witness_info = witness_infos.get(tx_idx);
+
+        // Determine authoritative script verdict using witness confirmation
+        let has_plutus_in_witnesses = witness_info
+            .map(|w| w.has_plutus())
+            .unwrap_or(false);
+
+        // Witness-confirmed classification:
+        // - Plutus in witnesses → deferred (authoritative, regardless of body heuristic)
+        // - Body says Plutus but witnesses don't confirm → still deferred (conservative)
+        // - Native scripts in witnesses → evaluate them
+        // - Neither → non-Plutus
+        let is_deferred = has_plutus_in_witnesses
+            || body_posture == crate::scripts::ScriptPosture::PlutusPresentDeferred;
+
+        if is_deferred {
+            plutus_deferred_count += 1;
+        } else {
+            // Evaluate native scripts if present
+            if let Some(w) = witness_info {
+                for script in &w.native_scripts {
+                    let _verdict = crate::scripts::evaluate_native_script(
+                        script,
+                        &w.available_key_hashes,
+                        current_slot,
+                    );
+                    // Native script verdict is recorded but does not reject the block
+                    // in T-24B without UTxO state to determine which scripts are required.
+                    // Full rejection requires knowing which inputs are script-locked (T-24B+).
+                }
+            }
+            non_plutus_count += 1;
+        }
+
+        tx_count += 1;
+        tx_idx += 1;
+        Ok(())
+    };
+
+    match body_enc {
         cbor::ContainerEncoding::Definite(n, _) => {
             for _ in 0..n {
-                decode_single_tx_body(data, &mut offset, era)?;
-                count += 1;
+                process_one(body_data, &mut body_offset)?;
             }
         }
         cbor::ContainerEncoding::Indefinite => {
-            while !cbor::is_break(data, offset)? {
-                decode_single_tx_body(data, &mut offset, era)?;
-                count += 1;
+            while !cbor::is_break(body_data, body_offset)? {
+                process_one(body_data, &mut body_offset)?;
             }
         }
     }
 
-    Ok(count)
+    Ok(BlockVerdict {
+        tx_count,
+        plutus_deferred_count,
+        non_plutus_count,
+    })
 }
 
-/// Decode a single tx body based on era.
-fn decode_single_tx_body(
+/// Decode a single tx body, run structural validation, classify script posture.
+fn decode_and_validate_single_tx(
     data: &[u8],
     offset: &mut usize,
     era: CardanoEra,
-) -> Result<(), LedgerError> {
+) -> Result<crate::scripts::ScriptPosture, LedgerError> {
     match era {
         CardanoEra::Shelley => {
             let _tx = ade_codec::shelley::tx::decode_shelley_tx_body(data, offset)?;
+            Ok(crate::scripts::ScriptPosture::NonPlutusScriptsOnly)
         }
         CardanoEra::Allegra => {
             let _tx = ade_codec::allegra::tx::decode_allegra_tx_body(data, offset)?;
+            Ok(crate::scripts::ScriptPosture::NonPlutusScriptsOnly)
         }
         CardanoEra::Mary => {
             let _tx = ade_codec::mary::tx::decode_mary_tx_body(data, offset)?;
+            Ok(crate::scripts::ScriptPosture::NonPlutusScriptsOnly)
         }
         CardanoEra::Alonzo => {
-            let _tx = ade_codec::alonzo::tx::decode_alonzo_tx_body(data, offset)?;
+            let tx = ade_codec::alonzo::tx::decode_alonzo_tx_body(data, offset)?;
+            crate::alonzo::validate_alonzo_structure(&tx)?;
+            Ok(crate::alonzo::classify_alonzo_script_posture(&tx))
         }
         CardanoEra::Babbage => {
-            let _tx = ade_codec::babbage::tx::decode_babbage_tx_body(data, offset)?;
+            let tx = ade_codec::babbage::tx::decode_babbage_tx_body(data, offset)?;
+            crate::babbage::validate_babbage_structure(&tx)?;
+            Ok(crate::babbage::classify_babbage_script_posture(&tx))
         }
         CardanoEra::Conway => {
-            let _tx = ade_codec::conway::tx::decode_conway_tx_body(data, offset)?;
+            let tx = ade_codec::conway::tx::decode_conway_tx_body(data, offset)?;
+            crate::conway::validate_conway_structure(&tx)?;
+            Ok(crate::conway::classify_conway_script_posture(&tx))
         }
         _ => {
             let _ = cbor::skip_item(data, offset)?;
+            Ok(crate::scripts::ScriptPosture::NoScripts)
         }
     }
-    Ok(())
 }
 
 #[cfg(test)]

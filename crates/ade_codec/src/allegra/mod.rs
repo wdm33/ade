@@ -5,6 +5,7 @@
 // - Explicit state transitions only
 // - Canonical serialization for all persisted/hashed data
 
+pub mod script;
 pub mod tx;
 
 use crate::error::CodecError;

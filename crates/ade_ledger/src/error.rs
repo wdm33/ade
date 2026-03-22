@@ -51,6 +51,9 @@ pub enum LedgerError {
     // Rule authority — era/rule not yet enforced (deterministic refusal, never Ok)
     RuleNotYetEnforced(RuleNotYetEnforcedError),
 
+    // Structural domain (Alonzo+)
+    StructuralViolation(StructuralError),
+
     // Codec passthrough
     Decoding(DecodingError),
 }
@@ -199,6 +202,46 @@ pub enum TranslationFailureReason {
 }
 
 // ---------------------------------------------------------------------------
+// Structural domain errors (Alonzo+)
+// ---------------------------------------------------------------------------
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct StructuralError {
+    pub era: CardanoEra,
+    pub reason: StructuralFailureReason,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub enum StructuralFailureReason {
+    /// script_data_hash present but collateral_inputs absent (Alonzo+)
+    MissingCollateral,
+    /// collateral_return present but collateral_inputs absent (Babbage+)
+    CollateralReturnWithoutCollateral,
+    /// total_collateral present but collateral_inputs absent (Babbage+)
+    TotalCollateralWithoutCollateral,
+    /// collateral_inputs present in pre-Alonzo era
+    CollateralInPreAlonzoEra,
+    /// reference_inputs present in pre-Babbage era
+    ReferenceInputsInPreBabbageEra,
+    /// voting_procedures present in pre-Conway era
+    GovernanceFieldInPreConwayEra,
+    /// proposal_procedures present in pre-Conway era
+    ProposalFieldInPreConwayEra,
+    /// donation present in pre-Conway era
+    DonationInPreConwayEra,
+    /// treasury_value present in pre-Conway era
+    TreasuryInPreConwayEra,
+    /// transaction has no inputs
+    EmptyInputs,
+    /// transaction has no outputs
+    EmptyOutputs,
+    /// transaction fee is zero
+    ZeroFee,
+    /// an output has zero coin value
+    ZeroCoinOutput,
+}
+
+// ---------------------------------------------------------------------------
 // Rule authority errors
 // ---------------------------------------------------------------------------
 
@@ -303,6 +346,9 @@ impl core::fmt::Display for LedgerError {
                     "translation error {} -> {}: {:?}",
                     e.from_era, e.to_era, e.reason
                 )
+            }
+            LedgerError::StructuralViolation(e) => {
+                write!(f, "structural violation in {}: {:?}", e.era, e.reason)
             }
             LedgerError::RuleNotYetEnforced(e) => {
                 write!(f, "rule {:?} not yet enforced for era {}", e.rule, e.era)

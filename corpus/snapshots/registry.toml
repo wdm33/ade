@@ -1,0 +1,145 @@
+# Boundary Snapshot Registry — Proof-Grade Captures
+#
+# Authority: Each snapshot was extracted from cardano-node 10.6.2
+# using db-analyser on a Mithril-synced ImmutableDB snapshot.
+#
+# Oracle version: cardano-node 10.6.2 (git rev 0d697f14)
+# Consensus: ouroboros-consensus-cardano 0.26.0.3
+# DB snapshot: mithril epoch 618, immutable 8419, hash 7e3e59b8
+# Network: mainnet (magic 764824073)
+# Comparison surface: Blake2b-256 of encodeDiskExtLedgerState
+# Extraction date: 2026-03-22
+
+# =============================================================================
+# T-26 Pre-HFC Transition Snapshots (6)
+# =============================================================================
+
+[[snapshots]]
+slot = 4492800
+era = "byron"
+epoch = 207
+purpose = "pre_hfc_transition"
+target_ce = "CE-73"
+transition = "byron_to_shelley"
+state_size_bytes = 43269
+tarball = "snapshot_4492800.tar.gz"
+hashes = ""
+
+[[snapshots]]
+slot = 16588800
+era = "shelley"
+epoch = 235
+purpose = "pre_hfc_transition"
+target_ce = "CE-73"
+transition = "shelley_to_allegra"
+state_size_bytes = 14_000_000
+tarball = "snapshot_16588800.tar.gz"
+hashes = ""
+
+[[snapshots]]
+slot = 23068800
+era = "allegra"
+epoch = 250
+purpose = "pre_hfc_transition"
+target_ce = "CE-73"
+transition = "allegra_to_mary"
+state_size_bytes = 136_000_000
+tarball = "snapshot_23068800.tar.gz"
+hashes = ""
+
+[[snapshots]]
+slot = 39916975
+era = "mary"
+epoch = 290
+purpose = "pre_hfc_transition"
+target_ce = "CE-73"
+transition = "mary_to_alonzo"
+state_size_bytes = 386_000_000
+tarball = "snapshot_39916975.tar.gz"
+hashes = ""
+
+[[snapshots]]
+slot = 72316896
+era = "alonzo"
+epoch = 365
+purpose = "pre_hfc_transition"
+target_ce = "CE-73"
+transition = "alonzo_to_babbage"
+state_size_bytes = 553_000_000
+tarball = "snapshot_72316896.tar.gz"
+hashes = ""
+
+[[snapshots]]
+slot = 133660855
+era = "babbage"
+epoch = 506
+purpose = "pre_hfc_transition"
+target_ce = "CE-73"
+transition = "babbage_to_conway"
+state_size_bytes = 184_000_000
+tarball = "snapshot_133660855.tar.gz"
+hashes = ""
+
+# =============================================================================
+# T-25 Epoch Boundary Snapshots (6)
+# =============================================================================
+
+[[snapshots]]
+slot = 4924880
+era = "shelley"
+epoch = 209
+purpose = "epoch_boundary"
+target_ce = "CE-71"
+state_size_bytes = 7_000_000
+tarball = "snapshot_4924880.tar.gz"
+hashes = "hashes_4924880.txt"
+
+[[snapshots]]
+slot = 17020848
+era = "allegra"
+epoch = 237
+purpose = "epoch_boundary"
+target_ce = "CE-71"
+state_size_bytes = 53_000_000
+tarball = "snapshot_17020848.tar.gz"
+hashes = "hashes_17020848.txt"
+
+[[snapshots]]
+slot = 23500962
+era = "mary"
+epoch = 252
+purpose = "epoch_boundary"
+target_ce = "CE-71"
+state_size_bytes = 11_000_000
+tarball = "snapshot_23500962.tar.gz"
+hashes = "hashes_23500962.txt"
+
+[[snapshots]]
+slot = 40348902
+era = "alonzo"
+epoch = 291
+purpose = "epoch_boundary"
+target_ce = "CE-71"
+state_size_bytes = 392_000_000
+tarball = "snapshot_40348902.tar.gz"
+hashes = "hashes_40348902.txt"
+
+[[snapshots]]
+slot = 72748820
+era = "babbage"
+epoch = 366
+purpose = "epoch_boundary"
+target_ce = "CE-71"
+state_size_bytes = 554_000_000
+tarball = "snapshot_72748820.tar.gz"
+hashes = ""
+
+[[snapshots]]
+slot = 134092810
+era = "conway"
+epoch = 508
+purpose = "epoch_boundary"
+target_ce = "CE-72"
+state_size_bytes = 585_000_000
+tarball = "snapshot_134092810.tar.gz"
+hashes = "hashes_134092810.txt"
