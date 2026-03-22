@@ -27,7 +27,7 @@ fn boundary_blocks_dir() -> PathBuf {
 }
 
 /// Load a snapshot and replay boundary blocks with stateful UTxO tracking.
-/// Returns (blocks_applied, final_utxo_count, initial_utxo_placeholder_count).
+/// Returns (blocks_applied, final_utxo_count).
 fn stateful_boundary_replay(
     snapshot_file: &str,
     blocks_dir: &str,
