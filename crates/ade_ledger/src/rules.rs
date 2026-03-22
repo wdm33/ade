@@ -138,18 +138,146 @@ fn apply_shelley_era_block_classified(
     let slot = SlotNo(block.header.body.slot);
     let verdict = decode_validate_tx_bodies(block, era)?;
 
+    // Only track UTxO when the state is already populated (e.g., loaded from
+    // a snapshot). Empty-UTxO replay (contiguous corpus) skips tracking for
+    // performance — no clone-per-block overhead on an empty set.
+    let utxo_state = if state.utxo_state.is_empty() {
+        state.utxo_state.clone()
+    } else {
+        produce_utxo_outputs(block, era, &state.utxo_state)?
+    };
+
     let mut epoch_state = state.epoch_state.clone();
     epoch_state.slot = slot;
 
     Ok((
         LedgerState {
-            utxo_state: state.utxo_state.clone(),
+            utxo_state,
             epoch_state,
             protocol_params: state.protocol_params.clone(),
             era,
         },
         verdict,
     ))
+}
+
+/// Produce UTxO outputs from a block's transaction bodies.
+///
+/// For each transaction:
+/// 1. Capture the tx body wire bytes
+/// 2. Compute the tx hash (Blake2b-256 of wire bytes)
+/// 3. For each output, add to UTxO with key (tx_hash, output_index)
+///
+/// Does NOT consume inputs — that requires populated UTxO state.
+/// This is output-only tracking: the UTxO grows monotonically.
+fn produce_utxo_outputs(
+    block: &ade_types::shelley::block::ShelleyBlock,
+    era: CardanoEra,
+    current_utxo: &crate::utxo::UTxOState,
+) -> Result<crate::utxo::UTxOState, LedgerError> {
+    if block.tx_count == 0 {
+        return Ok(current_utxo.clone());
+    }
+
+    let mut utxo = current_utxo.clone();
+    let mut offset = 0;
+    let data = &block.tx_bodies;
+    let enc = cbor::read_array_header(data, &mut offset)?;
+
+    let mut process_one = |data: &[u8], offset: &mut usize| -> Result<(), LedgerError> {
+        let body_start = *offset;
+
+        // Decode tx body (advancing offset past it) and extract outputs
+        let outputs = extract_outputs_from_tx(data, offset, era)?;
+
+        let body_end = *offset;
+        let wire_bytes = &data[body_start..body_end];
+
+        // Compute tx hash = Blake2b-256(tx_body_wire_bytes)
+        let tx_hash = ade_crypto::blake2b_256(wire_bytes);
+
+        // Add each output to UTxO (in-place to avoid clone-per-insert)
+        for (idx, out) in outputs.into_iter().enumerate() {
+            let tx_in = ade_types::tx::TxIn {
+                tx_hash: tx_hash.clone(),
+                index: idx as u16,
+            };
+            utxo.utxos.insert(tx_in, out);
+        }
+
+        Ok(())
+    };
+
+    match enc {
+        cbor::ContainerEncoding::Definite(n, _) => {
+            for _ in 0..n {
+                process_one(data, &mut offset)?;
+            }
+        }
+        cbor::ContainerEncoding::Indefinite => {
+            while !cbor::is_break(data, offset)? {
+                process_one(data, &mut offset)?;
+            }
+        }
+    }
+
+    Ok(utxo)
+}
+
+/// Extract outputs from a decoded tx body as era-polymorphic TxOut values.
+fn extract_outputs_from_tx(
+    data: &[u8],
+    offset: &mut usize,
+    era: CardanoEra,
+) -> Result<Vec<crate::utxo::TxOut>, LedgerError> {
+    match era {
+        CardanoEra::Shelley => {
+            let tx = ade_codec::shelley::tx::decode_shelley_tx_body(data, offset)?;
+            Ok(tx.outputs.into_iter().map(|o| crate::utxo::TxOut::ShelleyMary {
+                address: o.address,
+                value: crate::value::Value::from_coin(o.coin),
+            }).collect())
+        }
+        CardanoEra::Allegra => {
+            let tx = ade_codec::allegra::tx::decode_allegra_tx_body(data, offset)?;
+            Ok(tx.outputs.into_iter().map(|o| crate::utxo::TxOut::ShelleyMary {
+                address: o.address,
+                value: crate::value::Value::from_coin(o.coin),
+            }).collect())
+        }
+        CardanoEra::Mary => {
+            let tx = ade_codec::mary::tx::decode_mary_tx_body(data, offset)?;
+            Ok(tx.outputs.into_iter().map(|o| crate::utxo::TxOut::ShelleyMary {
+                address: o.address,
+                value: crate::value::Value::from_coin(o.coin),
+            }).collect())
+        }
+        CardanoEra::Alonzo => {
+            let tx = ade_codec::alonzo::tx::decode_alonzo_tx_body(data, offset)?;
+            Ok(tx.outputs.into_iter().map(|o| crate::utxo::TxOut::ShelleyMary {
+                address: o.address,
+                value: crate::value::Value::from_coin(o.coin),
+            }).collect())
+        }
+        CardanoEra::Babbage => {
+            let tx = ade_codec::babbage::tx::decode_babbage_tx_body(data, offset)?;
+            Ok(tx.outputs.into_iter().map(|o| crate::utxo::TxOut::ShelleyMary {
+                address: o.address,
+                value: crate::value::Value::from_coin(o.coin),
+            }).collect())
+        }
+        CardanoEra::Conway => {
+            let tx = ade_codec::conway::tx::decode_conway_tx_body(data, offset)?;
+            Ok(tx.outputs.into_iter().map(|o| crate::utxo::TxOut::ShelleyMary {
+                address: o.address,
+                value: crate::value::Value::from_coin(o.coin),
+            }).collect())
+        }
+        _ => {
+            let _ = cbor::skip_item(data, offset)?;
+            Ok(Vec::new())
+        }
+    }
 }
 
 /// Block-level structural verdict from applying a post-Byron block.
