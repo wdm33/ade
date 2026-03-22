@@ -110,6 +110,121 @@ pub fn translate_allegra_to_mary(
     })
 }
 
+/// Translate Mary ledger state to Alonzo.
+///
+/// Mary -> Alonzo adds Plutus infrastructure:
+/// - UTxO set carries over (Mary outputs are valid in Alonzo)
+/// - Protocol parameters carry over (Alonzo-specific params like
+///   cost models are loaded from Alonzo genesis, not from translation)
+/// - Epoch state carries over with snapshots
+/// - Era tag changes to Alonzo
+///
+/// Note: Alonzo genesis parameters (cost models, execution unit limits,
+/// collateral percentage) are loaded from the genesis file, not derived
+/// from the Mary state. This translation only handles the era boundary.
+pub fn translate_mary_to_alonzo(
+    old_state: &LedgerState,
+) -> Result<LedgerState, LedgerError> {
+    if old_state.era != CardanoEra::Mary {
+        return Err(LedgerError::Translation(TranslationError {
+            from_era: old_state.era,
+            to_era: CardanoEra::Alonzo,
+            reason: TranslationFailureReason::InvalidSourceState,
+        }));
+    }
+
+    Ok(LedgerState {
+        utxo_state: old_state.utxo_state.clone(),
+        epoch_state: old_state.epoch_state.clone(),
+        protocol_params: old_state.protocol_params.clone(),
+        era: CardanoEra::Alonzo,
+    })
+}
+
+/// Translate Alonzo ledger state to Babbage.
+///
+/// Alonzo -> Babbage adds inline datums, reference scripts, reference inputs:
+/// - UTxO set carries over (Alonzo outputs are valid in Babbage)
+/// - Protocol parameters carry over
+/// - Epoch state carries over with snapshots
+/// - Era tag changes to Babbage
+pub fn translate_alonzo_to_babbage(
+    old_state: &LedgerState,
+) -> Result<LedgerState, LedgerError> {
+    if old_state.era != CardanoEra::Alonzo {
+        return Err(LedgerError::Translation(TranslationError {
+            from_era: old_state.era,
+            to_era: CardanoEra::Babbage,
+            reason: TranslationFailureReason::InvalidSourceState,
+        }));
+    }
+
+    Ok(LedgerState {
+        utxo_state: old_state.utxo_state.clone(),
+        epoch_state: old_state.epoch_state.clone(),
+        protocol_params: old_state.protocol_params.clone(),
+        era: CardanoEra::Babbage,
+    })
+}
+
+/// Translate Babbage ledger state to Conway.
+///
+/// Babbage -> Conway adds governance:
+/// - UTxO set carries over (Babbage outputs are valid in Conway)
+/// - Protocol parameters carry over (Conway governance parameters
+///   like DRep thresholds are loaded from Conway genesis)
+/// - Epoch state carries over with snapshots
+/// - Era tag changes to Conway
+///
+/// Note: Initial governance state (empty proposals, initial constitutional
+/// committee, initial constitution, empty DRep state) comes from the
+/// Conway genesis file, not from translation of Babbage state.
+pub fn translate_babbage_to_conway(
+    old_state: &LedgerState,
+) -> Result<LedgerState, LedgerError> {
+    if old_state.era != CardanoEra::Babbage {
+        return Err(LedgerError::Translation(TranslationError {
+            from_era: old_state.era,
+            to_era: CardanoEra::Conway,
+            reason: TranslationFailureReason::InvalidSourceState,
+        }));
+    }
+
+    Ok(LedgerState {
+        utxo_state: old_state.utxo_state.clone(),
+        epoch_state: old_state.epoch_state.clone(),
+        protocol_params: old_state.protocol_params.clone(),
+        era: CardanoEra::Conway,
+    })
+}
+
+/// Dispatch a translation by era pair.
+///
+/// Pure function: `(old_state) -> new_state`.
+/// Deterministic: same input always produces the same output.
+///
+/// This is the single entry point for all era translations.
+/// The caller (epoch boundary logic or test harness) determines
+/// WHEN to call it; this function only determines WHAT happens.
+pub fn translate_era(
+    old_state: &LedgerState,
+    target_era: CardanoEra,
+) -> Result<LedgerState, LedgerError> {
+    match (old_state.era, target_era) {
+        (e, CardanoEra::Shelley) if e.is_byron() => translate_byron_to_shelley(old_state),
+        (CardanoEra::Shelley, CardanoEra::Allegra) => translate_shelley_to_allegra(old_state),
+        (CardanoEra::Allegra, CardanoEra::Mary) => translate_allegra_to_mary(old_state),
+        (CardanoEra::Mary, CardanoEra::Alonzo) => translate_mary_to_alonzo(old_state),
+        (CardanoEra::Alonzo, CardanoEra::Babbage) => translate_alonzo_to_babbage(old_state),
+        (CardanoEra::Babbage, CardanoEra::Conway) => translate_babbage_to_conway(old_state),
+        _ => Err(LedgerError::Translation(TranslationError {
+            from_era: old_state.era,
+            to_era: target_era,
+            reason: TranslationFailureReason::InvalidSourceState,
+        })),
+    }
+}
+
 /// Compute initial Shelley reserves from the UTxO set.
 ///
 /// Total ADA supply is 45 billion ADA = 45_000_000_000_000_000 lovelace.
@@ -365,31 +480,226 @@ mod tests {
     // Full translation chain
     // -----------------------------------------------------------------------
 
+    fn make_mary_state() -> LedgerState {
+        LedgerState {
+            utxo_state: UTxOState::new(),
+            epoch_state: EpochState {
+                epoch: EpochNo(251),
+                slot: SlotNo(23_068_800),
+                snapshots: SnapshotState::new(),
+                reserves: Coin(45_000_000_000_000_000),
+                treasury: Coin(0),
+            },
+            protocol_params: ProtocolParameters::default(),
+            era: CardanoEra::Mary,
+        }
+    }
+
+    fn make_alonzo_state() -> LedgerState {
+        LedgerState {
+            utxo_state: UTxOState::new(),
+            epoch_state: EpochState {
+                epoch: EpochNo(290),
+                slot: SlotNo(39_916_975),
+                snapshots: SnapshotState::new(),
+                reserves: Coin(45_000_000_000_000_000),
+                treasury: Coin(0),
+            },
+            protocol_params: ProtocolParameters::default(),
+            era: CardanoEra::Alonzo,
+        }
+    }
+
+    fn make_babbage_state() -> LedgerState {
+        LedgerState {
+            utxo_state: UTxOState::new(),
+            epoch_state: EpochState {
+                epoch: EpochNo(365),
+                slot: SlotNo(72_316_896),
+                snapshots: SnapshotState::new(),
+                reserves: Coin(45_000_000_000_000_000),
+                treasury: Coin(0),
+            },
+            protocol_params: ProtocolParameters::default(),
+            era: CardanoEra::Babbage,
+        }
+    }
+
+    // -----------------------------------------------------------------------
+    // Mary -> Alonzo
+    // -----------------------------------------------------------------------
+
     #[test]
-    fn full_translation_chain_byron_through_mary() {
+    fn mary_to_alonzo_basic() {
+        let mary = make_mary_state();
+        let alonzo = translate_mary_to_alonzo(&mary).unwrap();
+        assert_eq!(alonzo.era, CardanoEra::Alonzo);
+        assert_eq!(alonzo.epoch_state.epoch, mary.epoch_state.epoch);
+        assert_eq!(alonzo.protocol_params, mary.protocol_params);
+    }
+
+    #[test]
+    fn mary_to_alonzo_preserves_utxo() {
+        let mut mary = make_mary_state();
+        let tx_in = TxIn { tx_hash: Hash32([0xee; 32]), index: 0 };
+        let tx_out = TxOut::ShelleyMary {
+            address: vec![0x01],
+            value: crate::value::Value::from_coin(Coin(4_000_000)),
+        };
+        mary.utxo_state = utxo_insert(&mary.utxo_state, tx_in.clone(), tx_out.clone());
+        let alonzo = translate_mary_to_alonzo(&mary).unwrap();
+        assert_eq!(alonzo.utxo_state.len(), 1);
+    }
+
+    #[test]
+    fn mary_to_alonzo_rejects_non_mary() {
+        let state = make_shelley_state();
+        assert!(translate_mary_to_alonzo(&state).is_err());
+    }
+
+    // -----------------------------------------------------------------------
+    // Alonzo -> Babbage
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn alonzo_to_babbage_basic() {
+        let alonzo = make_alonzo_state();
+        let babbage = translate_alonzo_to_babbage(&alonzo).unwrap();
+        assert_eq!(babbage.era, CardanoEra::Babbage);
+        assert_eq!(babbage.epoch_state.epoch, alonzo.epoch_state.epoch);
+    }
+
+    #[test]
+    fn alonzo_to_babbage_rejects_non_alonzo() {
+        let state = make_mary_state();
+        assert!(translate_alonzo_to_babbage(&state).is_err());
+    }
+
+    // -----------------------------------------------------------------------
+    // Babbage -> Conway
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn babbage_to_conway_basic() {
+        let babbage = make_babbage_state();
+        let conway = translate_babbage_to_conway(&babbage).unwrap();
+        assert_eq!(conway.era, CardanoEra::Conway);
+        assert_eq!(conway.epoch_state.epoch, babbage.epoch_state.epoch);
+    }
+
+    #[test]
+    fn babbage_to_conway_rejects_non_babbage() {
+        let state = make_alonzo_state();
+        assert!(translate_babbage_to_conway(&state).is_err());
+    }
+
+    // -----------------------------------------------------------------------
+    // translate_era dispatch
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn translate_era_dispatches_correctly() {
+        let byron = make_byron_state();
+        assert_eq!(translate_era(&byron, CardanoEra::Shelley).unwrap().era, CardanoEra::Shelley);
+
+        let shelley = make_shelley_state();
+        assert_eq!(translate_era(&shelley, CardanoEra::Allegra).unwrap().era, CardanoEra::Allegra);
+
+        let allegra = make_allegra_state();
+        assert_eq!(translate_era(&allegra, CardanoEra::Mary).unwrap().era, CardanoEra::Mary);
+
+        let mary = make_mary_state();
+        assert_eq!(translate_era(&mary, CardanoEra::Alonzo).unwrap().era, CardanoEra::Alonzo);
+
+        let alonzo = make_alonzo_state();
+        assert_eq!(translate_era(&alonzo, CardanoEra::Babbage).unwrap().era, CardanoEra::Babbage);
+
+        let babbage = make_babbage_state();
+        assert_eq!(translate_era(&babbage, CardanoEra::Conway).unwrap().era, CardanoEra::Conway);
+    }
+
+    #[test]
+    fn translate_era_rejects_invalid_pairs() {
+        let shelley = make_shelley_state();
+        // Can't go backwards
+        assert!(translate_era(&shelley, CardanoEra::ByronRegular).is_err());
+        // Can't skip eras
+        assert!(translate_era(&shelley, CardanoEra::Mary).is_err());
+    }
+
+    // -----------------------------------------------------------------------
+    // Full chain
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn full_translation_chain_byron_through_conway() {
         let byron = make_byron_state();
         let shelley = translate_byron_to_shelley(&byron).unwrap();
         let allegra = translate_shelley_to_allegra(&shelley).unwrap();
         let mary = translate_allegra_to_mary(&allegra).unwrap();
+        let alonzo = translate_mary_to_alonzo(&mary).unwrap();
+        let babbage = translate_alonzo_to_babbage(&alonzo).unwrap();
+        let conway = translate_babbage_to_conway(&babbage).unwrap();
 
-        assert_eq!(mary.era, CardanoEra::Mary);
-        assert_eq!(mary.epoch_state.epoch, byron.epoch_state.epoch);
+        assert_eq!(conway.era, CardanoEra::Conway);
+        assert_eq!(conway.epoch_state.epoch, byron.epoch_state.epoch);
     }
 
     #[test]
-    fn translation_is_deterministic() {
+    fn full_chain_via_dispatch() {
+        let mut state = make_byron_state();
+        for target in [
+            CardanoEra::Shelley,
+            CardanoEra::Allegra,
+            CardanoEra::Mary,
+            CardanoEra::Alonzo,
+            CardanoEra::Babbage,
+            CardanoEra::Conway,
+        ] {
+            state = translate_era(&state, target).unwrap();
+        }
+        assert_eq!(state.era, CardanoEra::Conway);
+    }
+
+    #[test]
+    fn translation_chain_is_deterministic() {
         let byron = make_byron_state();
-        let s1 = translate_byron_to_shelley(&byron).unwrap();
-        let s2 = translate_byron_to_shelley(&byron).unwrap();
-        assert_eq!(s1, s2);
 
-        let a1 = translate_shelley_to_allegra(&s1).unwrap();
-        let a2 = translate_shelley_to_allegra(&s2).unwrap();
-        assert_eq!(a1, a2);
+        let chain1 = translate_era(
+            &translate_era(
+                &translate_era(
+                    &translate_era(
+                        &translate_era(
+                            &translate_era(&byron, CardanoEra::Shelley).unwrap(),
+                            CardanoEra::Allegra,
+                        ).unwrap(),
+                        CardanoEra::Mary,
+                    ).unwrap(),
+                    CardanoEra::Alonzo,
+                ).unwrap(),
+                CardanoEra::Babbage,
+            ).unwrap(),
+            CardanoEra::Conway,
+        ).unwrap();
 
-        let m1 = translate_allegra_to_mary(&a1).unwrap();
-        let m2 = translate_allegra_to_mary(&a2).unwrap();
-        assert_eq!(m1, m2);
+        let chain2 = translate_era(
+            &translate_era(
+                &translate_era(
+                    &translate_era(
+                        &translate_era(
+                            &translate_era(&byron, CardanoEra::Shelley).unwrap(),
+                            CardanoEra::Allegra,
+                        ).unwrap(),
+                        CardanoEra::Mary,
+                    ).unwrap(),
+                    CardanoEra::Alonzo,
+                ).unwrap(),
+                CardanoEra::Babbage,
+            ).unwrap(),
+            CardanoEra::Conway,
+        ).unwrap();
+
+        assert_eq!(chain1, chain2);
     }
 
     #[test]

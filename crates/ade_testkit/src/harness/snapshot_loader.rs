@@ -5,6 +5,79 @@ use ade_types::Hash32;
 
 use super::HarnessError;
 
+/// A loaded snapshot: the raw oracle state bytes plus parsed metadata.
+///
+/// The raw CBOR bytes ARE the authoritative comparison surface.
+/// `state_hash()` = `Blake2b-256(raw_cbor)` — no re-encoding,
+/// the oracle bytes are preserved as the hash source.
+///
+/// This is the `reset_to` target for the differential harness:
+/// load a snapshot, verify its hash, use it as the starting state
+/// for boundary replay.
+#[derive(Clone)]
+pub struct LoadedSnapshot {
+    /// Raw ExtLedgerState CBOR bytes — the oracle comparison surface.
+    pub raw_cbor: Vec<u8>,
+    /// Parsed header metadata.
+    pub header: SnapshotHeader,
+    /// Pre-computed state hash (Blake2b-256 of raw_cbor).
+    pub state_hash: Hash32,
+}
+
+impl LoadedSnapshot {
+    /// Load a snapshot from a tarball, parse its header, compute its hash.
+    pub fn from_tarball(tarball_path: &std::path::Path) -> Result<Self, HarnessError> {
+        let raw_cbor = extract_state_from_tarball(tarball_path)?;
+        let header = parse_snapshot_header(&raw_cbor)?;
+        let state_hash = compute_state_hash(&raw_cbor);
+        Ok(Self {
+            raw_cbor,
+            header,
+            state_hash,
+        })
+    }
+
+    /// Build a minimal `LedgerState` from the snapshot metadata.
+    ///
+    /// The UTxO set is empty — this is a metadata-level reset, not a full
+    /// state load. The raw CBOR bytes remain the authoritative state surface
+    /// for hash comparison.
+    pub fn to_ledger_state(&self) -> ade_ledger::state::LedgerState {
+        use ade_ledger::state::{EpochState, LedgerState};
+        use ade_ledger::pparams::ProtocolParameters;
+        use ade_ledger::utxo::UTxOState;
+        use ade_types::{EpochNo, SlotNo};
+
+        // Map telescope length to era
+        let era = telescope_to_era(self.header.telescope_length);
+
+        LedgerState {
+            utxo_state: UTxOState::new(),
+            epoch_state: EpochState {
+                epoch: EpochNo(self.header.epoch),
+                slot: SlotNo(0), // Slot not in header — would need deeper parsing
+                ..EpochState::new()
+            },
+            protocol_params: ProtocolParameters::default(),
+            era,
+        }
+    }
+}
+
+fn telescope_to_era(telescope_length: u32) -> ade_types::CardanoEra {
+    use ade_types::CardanoEra;
+    match telescope_length {
+        1 => CardanoEra::ByronRegular,
+        2 => CardanoEra::Shelley,
+        3 => CardanoEra::Allegra,
+        4 => CardanoEra::Mary,
+        5 => CardanoEra::Alonzo,
+        6 => CardanoEra::Babbage,
+        7 => CardanoEra::Conway,
+        _ => CardanoEra::Conway,
+    }
+}
+
 /// Parsed header of an ExtLedgerState snapshot.
 ///
 /// Extracted from the CBOR structure without fully deserializing
@@ -510,6 +583,64 @@ mod tests {
             assert!(
                 pct < 1.0,
                 "{snap}: state size divergence too large: {pct:.2}%"
+            );
+        }
+    }
+
+    #[test]
+    fn loaded_snapshot_provides_reset_to() {
+        let tarball = snapshots_dir().join("snapshot_4492800.tar.gz");
+        if !tarball.exists() {
+            return;
+        }
+
+        let snap = LoadedSnapshot::from_tarball(&tarball).unwrap();
+
+        // State hash is deterministic
+        assert_eq!(snap.state_hash, compute_state_hash(&snap.raw_cbor));
+
+        // Can produce a LedgerState
+        let state = snap.to_ledger_state();
+        assert_eq!(state.epoch_state.epoch, ade_types::EpochNo(208));
+        assert_eq!(state.era, ade_types::CardanoEra::Shelley);
+
+        eprintln!(
+            "LoadedSnapshot: epoch={}, era={:?}, hash={}, size={}",
+            snap.header.epoch, state.era, snap.state_hash, snap.raw_cbor.len()
+        );
+    }
+
+    #[test]
+    fn hfc_pair_hashes_differ() {
+        // Pre-HFC and post-epoch-boundary snapshots for the same transition
+        // must have different state hashes (blocks were applied between them).
+        let pairs = [
+            ("snapshot_4492800.tar.gz", "snapshot_4924880.tar.gz"),
+            ("snapshot_16588800.tar.gz", "snapshot_17020848.tar.gz"),
+            ("snapshot_72316896.tar.gz", "snapshot_72748820.tar.gz"),
+        ];
+
+        for (pre, post) in &pairs {
+            let pre_path = snapshots_dir().join(pre);
+            let post_path = snapshots_dir().join(post);
+            if !pre_path.exists() || !post_path.exists() {
+                continue;
+            }
+
+            let pre_snap = LoadedSnapshot::from_tarball(&pre_path).unwrap();
+            let post_snap = LoadedSnapshot::from_tarball(&post_path).unwrap();
+
+            assert_ne!(
+                pre_snap.state_hash, post_snap.state_hash,
+                "pre-HFC and epoch boundary must have different hashes"
+            );
+
+            // Telescope should match (same era after HFC)
+            assert_eq!(pre_snap.header.telescope_length, post_snap.header.telescope_length);
+
+            eprintln!(
+                "{} -> {}: telescopes match ({}), hashes differ",
+                pre, post, pre_snap.header.telescope_length
             );
         }
     }
