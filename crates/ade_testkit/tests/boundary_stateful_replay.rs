@@ -39,18 +39,7 @@ fn stateful_boundary_replay(
 
     let snap = LoadedSnapshot::from_tarball(&tarball).unwrap();
     let mut state = snap.to_ledger_state();
-
-    // Seed the UTxO with a placeholder entry so tracking activates.
-    // In a full implementation, UTxO would be loaded from the snapshot CBOR.
-    let placeholder_in = ade_types::tx::TxIn {
-        tx_hash: ade_types::Hash32([0x00; 32]),
-        index: 0,
-    };
-    let placeholder_out = ade_ledger::utxo::TxOut::ShelleyMary {
-        address: vec![0x00],
-        value: ade_ledger::value::Value::from_coin(ade_types::tx::Coin(1)),
-    };
-    state.utxo_state.utxos.insert(placeholder_in, placeholder_out);
+    // track_utxo is true from snapshot — no placeholder needed.
 
     let block_dir = boundary_blocks_dir().join(blocks_dir);
     let manifest_path = block_dir.join("manifest.json");

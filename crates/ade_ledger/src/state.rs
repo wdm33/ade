@@ -50,6 +50,10 @@ pub struct LedgerState {
     pub epoch_state: EpochState,
     pub protocol_params: ProtocolParameters,
     pub era: CardanoEra,
+    /// When true, apply_block tracks UTxO (consume inputs, produce outputs).
+    /// When false (default), UTxO tracking is skipped for performance.
+    /// Set to true when state is loaded from a snapshot for boundary replay.
+    pub track_utxo: bool,
 }
 
 impl LedgerState {
@@ -59,6 +63,7 @@ impl LedgerState {
             epoch_state: EpochState::new(),
             protocol_params: ProtocolParameters::default(),
             era,
+            track_utxo: false,
         }
     }
 }

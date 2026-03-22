@@ -38,6 +38,7 @@ fn make_state(era: CardanoEra, epoch: u64, slot: u64) -> LedgerState {
         },
         protocol_params: ProtocolParameters::default(),
         era,
+        track_utxo: false,
     }
 }
 

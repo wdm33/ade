@@ -50,6 +50,7 @@ fn make_shelley_state() -> LedgerState {
         },
         protocol_params: ProtocolParameters::default(),
         era: CardanoEra::Shelley,
+        track_utxo: false,
     }
 }
 

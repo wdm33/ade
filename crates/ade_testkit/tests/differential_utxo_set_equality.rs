@@ -215,6 +215,7 @@ fn post_block_1_utxo_matches_oracle() {
         epoch_state: ade_ledger::state::EpochState::new(),
         protocol_params: ade_ledger::pparams::ProtocolParameters::default(),
         era: ade_types::CardanoEra::ByronRegular,
+        track_utxo: false,
     };
 
     state = ade_ledger::rules::apply_block(&state, env.era, inner).unwrap();

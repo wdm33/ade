@@ -790,6 +790,7 @@ mod tests {
             epoch_state,
             protocol_params: ProtocolParameters::default(),
             era: CardanoEra::Shelley,
+            track_utxo: false,
         };
 
         let new_mark = StakeSnapshot::new();

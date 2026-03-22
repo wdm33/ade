@@ -51,6 +51,7 @@ pub fn validate_byron_block(
         epoch_state: state.epoch_state.clone(),
         protocol_params: state.protocol_params.clone(),
         era: state.era,
+        track_utxo: state.track_utxo,
     })
 }
 

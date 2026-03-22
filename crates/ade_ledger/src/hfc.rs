@@ -54,6 +54,7 @@ pub fn translate_byron_to_shelley(
         epoch_state,
         protocol_params,
         era: CardanoEra::Shelley,
+        track_utxo: old_state.track_utxo,
     })
 }
 
@@ -81,6 +82,7 @@ pub fn translate_shelley_to_allegra(
         epoch_state: old_state.epoch_state.clone(),
         protocol_params: old_state.protocol_params.clone(),
         era: CardanoEra::Allegra,
+        track_utxo: old_state.track_utxo,
     })
 }
 
@@ -107,6 +109,7 @@ pub fn translate_allegra_to_mary(
         epoch_state: old_state.epoch_state.clone(),
         protocol_params: old_state.protocol_params.clone(),
         era: CardanoEra::Mary,
+        track_utxo: old_state.track_utxo,
     })
 }
 
@@ -138,6 +141,7 @@ pub fn translate_mary_to_alonzo(
         epoch_state: old_state.epoch_state.clone(),
         protocol_params: old_state.protocol_params.clone(),
         era: CardanoEra::Alonzo,
+        track_utxo: old_state.track_utxo,
     })
 }
 
@@ -164,6 +168,7 @@ pub fn translate_alonzo_to_babbage(
         epoch_state: old_state.epoch_state.clone(),
         protocol_params: old_state.protocol_params.clone(),
         era: CardanoEra::Babbage,
+        track_utxo: old_state.track_utxo,
     })
 }
 
@@ -195,6 +200,7 @@ pub fn translate_babbage_to_conway(
         epoch_state: old_state.epoch_state.clone(),
         protocol_params: old_state.protocol_params.clone(),
         era: CardanoEra::Conway,
+        track_utxo: old_state.track_utxo,
     })
 }
 
@@ -262,6 +268,7 @@ mod tests {
             },
             protocol_params: ProtocolParameters::default(),
             era: CardanoEra::ByronRegular,
+            track_utxo: false,
         }
     }
 
@@ -277,6 +284,7 @@ mod tests {
             },
             protocol_params: ProtocolParameters::default(),
             era: CardanoEra::Shelley,
+            track_utxo: false,
         }
     }
 
@@ -292,6 +300,7 @@ mod tests {
             },
             protocol_params: ProtocolParameters::default(),
             era: CardanoEra::Allegra,
+            track_utxo: false,
         }
     }
 
@@ -379,6 +388,7 @@ mod tests {
             epoch_state: EpochState::new(),
             protocol_params: ProtocolParameters::default(),
             era: CardanoEra::ByronEbb,
+            track_utxo: false,
         };
         let result = translate_byron_to_shelley(&state);
         assert!(result.is_ok());
@@ -492,6 +502,7 @@ mod tests {
             },
             protocol_params: ProtocolParameters::default(),
             era: CardanoEra::Mary,
+            track_utxo: false,
         }
     }
 
@@ -507,6 +518,7 @@ mod tests {
             },
             protocol_params: ProtocolParameters::default(),
             era: CardanoEra::Alonzo,
+            track_utxo: false,
         }
     }
 
@@ -522,6 +534,7 @@ mod tests {
             },
             protocol_params: ProtocolParameters::default(),
             era: CardanoEra::Babbage,
+            track_utxo: false,
         }
     }
 

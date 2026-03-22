@@ -138,13 +138,12 @@ fn apply_shelley_era_block_classified(
     let slot = SlotNo(block.header.body.slot);
     let verdict = decode_validate_tx_bodies(block, era)?;
 
-    // Only track UTxO when the state is already populated (e.g., loaded from
-    // a snapshot). Empty-UTxO replay (contiguous corpus) skips tracking for
-    // performance — no clone-per-block overhead on an empty set.
-    let utxo_state = if state.utxo_state.is_empty() {
-        state.utxo_state.clone()
-    } else {
+    // Track UTxO only when explicitly enabled (e.g., during boundary replay
+    // with snapshot-loaded state). Default replay skips for performance.
+    let utxo_state = if state.track_utxo {
         track_utxo(block, era, &state.utxo_state)?
+    } else {
+        state.utxo_state.clone()
     };
 
     let mut epoch_state = state.epoch_state.clone();
@@ -156,6 +155,7 @@ fn apply_shelley_era_block_classified(
             epoch_state,
             protocol_params: state.protocol_params.clone(),
             era,
+            track_utxo: state.track_utxo,
         },
         verdict,
     ))
