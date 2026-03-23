@@ -117,6 +117,75 @@ fn shelley_epoch_boundary_fires() {
     }
 }
 
+/// Compare Ade's epoch boundary output against the snapshot's own values.
+///
+/// This is the T-25A.2 diagnostic comparison surface. The snapshot
+/// header provides ground-truth treasury/reserves values parsed from
+/// CBOR. After a boundary with no rewards, these should be preserved.
+#[test]
+fn allegra_epoch_boundary_summary_comparison() {
+    let tarball_path = snapshots_dir().join("snapshot_17020848.tar.gz");
+    if !tarball_path.exists() {
+        eprintln!("Skipping: snapshot not available");
+        return;
+    }
+
+    // Load snapshot to get ground-truth values from CBOR
+    let snap = LoadedSnapshot::from_tarball(&tarball_path).unwrap();
+    let snap_treasury = snap.header.treasury;
+    let snap_reserves = snap.header.reserves;
+    let snap_epoch = snap.header.epoch;
+
+    let summary = replay_with_epoch_trigger(
+        "snapshot_17020848.tar.gz",
+        "allegra_epoch237",
+        1,
+    );
+
+    eprintln!("\n=== Allegra Epoch Boundary Comparison (T-25A.2) ===");
+    eprintln!("{:<25} {:>20} {:>20} {:>10}", "Field", "Ade (post)", "Snapshot", "Status");
+    eprintln!("{}", "-".repeat(78));
+
+    if let Some(s) = &summary {
+        let epoch_ok = s.to_epoch == snap_epoch;
+        eprintln!("{:<25} {:>20} {:>20} {:>10}",
+            "epoch", s.to_epoch, snap_epoch,
+            if epoch_ok { "match" } else { "MISMATCH" });
+
+        // Treasury/reserves: no rewards applied yet, should match snapshot
+        let treasury_ok = s.treasury == snap_treasury;
+        let reserves_ok = s.reserves == snap_reserves;
+        eprintln!("{:<25} {:>20} {:>20} {:>10}",
+            "treasury (lovelace)", s.treasury, snap_treasury,
+            if treasury_ok { "match" } else { "preserved" });
+        eprintln!("{:<25} {:>20} {:>20} {:>10}",
+            "reserves (lovelace)", s.reserves, snap_reserves,
+            if reserves_ok { "match" } else { "preserved" });
+
+        // Delegation/pool: starts empty, accumulates from block certs
+        eprintln!("{:<25} {:>20} {:>20} {:>10}",
+            "delegations", s.delegation_count, "—", "from replay");
+        eprintln!("{:<25} {:>20} {:>20} {:>10}",
+            "pools", s.pool_count, "—", "from replay");
+        eprintln!("{:<25} {:>20} {:>20} {:>10}",
+            "mark snapshot", s.mark_delegation_count, "—", "from replay");
+
+        eprintln!("\nDiagnosis:");
+        eprintln!("  {} Epoch: {}", if epoch_ok { "✓" } else { "✗" }, s.to_epoch);
+        eprintln!("  {} Treasury preserved across boundary (no rewards)", if treasury_ok { "✓" } else { "△" });
+        eprintln!("  {} Reserves preserved across boundary (no rewards)", if reserves_ok { "✓" } else { "△" });
+        eprintln!("  △ Delegation/pool state built from replay certs only");
+        eprintln!("  → Boundary skeleton works; reward math is T-25A.3");
+
+        assert!(epoch_ok, "epoch must match snapshot");
+        assert!(treasury_ok, "treasury must be preserved (no rewards)");
+        assert!(reserves_ok, "reserves must be preserved (no rewards)");
+    } else {
+        eprintln!("  SKIPPED");
+    }
+    eprintln!("====================================================\n");
+}
+
 #[test]
 fn all_epoch_boundaries_fire() {
     let cases = [

@@ -55,12 +55,14 @@ impl LoadedSnapshot {
             utxo_state: UTxOState::new(),
             epoch_state: EpochState {
                 epoch: EpochNo(self.header.epoch),
-                slot: SlotNo(0), // Slot not in header — would need deeper parsing
-                ..EpochState::new()
+                slot: SlotNo(0),
+                snapshots: ade_ledger::epoch::SnapshotState::new(),
+                reserves: ade_types::tx::Coin(self.header.reserves),
+                treasury: ade_types::tx::Coin(self.header.treasury),
             },
             protocol_params: ProtocolParameters::default(),
             era,
-            track_utxo: true, // Snapshot-loaded state enables UTxO tracking
+            track_utxo: true,
             cert_state: ade_ledger::delegation::CertState::new(),
         }
     }
@@ -93,6 +95,10 @@ pub struct SnapshotHeader {
     pub current_era_index: u32,
     /// Epoch number from the NewEpochState
     pub epoch: u64,
+    /// Treasury in lovelace (from AccountState)
+    pub treasury: u64,
+    /// Reserves in lovelace (from AccountState)
+    pub reserves: u64,
     /// Total size of the state CBOR in bytes
     pub state_size: usize,
 }
@@ -188,13 +194,32 @@ pub fn parse_snapshot_header(state_cbor: &[u8]) -> Result<SnapshotHeader, Harnes
     // NewEpochState: array(N) — first element is epoch uint
     let (off, _nes_len) = read_array_header(state_cbor, off)?;
 
-    // First element: epoch number
-    let (_, epoch) = read_uint(state_cbor, off)?;
+    // NES[0]: epoch number
+    let (off, epoch) = read_uint(state_cbor, off)?;
+
+    // Skip NES[1] (nesBprev), NES[2] (nesBcur) to reach NES[3] (EpochState)
+    let off = skip_cbor(state_cbor, off)?; // NES[1]
+    let off = skip_cbor(state_cbor, off)?; // NES[2]
+
+    // NES[3] = EpochState = array(4) [AccountState, LedgerState, SnapShots, NonMyopic]
+    let (off, _) = read_array_header(state_cbor, off)?;
+
+    // ES[0] = AccountState = array(2) [treasury, reserves]
+    let (off, acct_len) = read_array_header(state_cbor, off)?;
+    let (treasury, reserves) = if acct_len == 2 {
+        let (off, treasury) = read_uint(state_cbor, off)?;
+        let (_, reserves) = read_uint(state_cbor, off)?;
+        (treasury, reserves)
+    } else {
+        (0, 0)
+    };
 
     Ok(SnapshotHeader {
         telescope_length,
         current_era_index: telescope_length - 1,
         epoch,
+        treasury,
+        reserves,
         state_size,
     })
 }
