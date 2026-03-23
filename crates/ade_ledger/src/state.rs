@@ -27,6 +27,9 @@ pub struct EpochState {
     /// Block production counts per pool for the previous epoch (nesBprev).
     /// Pools not in this map produced zero blocks → zero rewards.
     pub block_production: std::collections::BTreeMap<ade_types::tx::PoolId, u64>,
+    /// Accumulated transaction fees from the epoch.
+    /// Added to the reward pot at the epoch boundary.
+    pub epoch_fees: Coin,
 }
 
 impl EpochState {
@@ -38,6 +41,7 @@ impl EpochState {
             reserves: Coin(0),
             treasury: Coin(0),
             block_production: std::collections::BTreeMap::new(),
+            epoch_fees: Coin(0),
         }
     }
 }

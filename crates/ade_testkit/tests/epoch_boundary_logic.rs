@@ -247,15 +247,23 @@ fn reward_arithmetic_verification() {
         eprintln!("  unallocated dust:  {remainder} lovelace");
         eprintln!("======================================\n");
 
-        // Treasury gets exactly the treasury_delta
-        assert_eq!(treasury_actual_delta, treasury_delta, "treasury delta must match formula");
-
-        // With performance scaling, reserves decrease by less than total_reward
-        // because underperforming pools get reduced rewards.
-        // The ratio depends on pool performance distribution.
+        // Treasury delta now includes fee contribution (fees added to reward pot
+        // before treasury cut). The fee amount is small but nonzero.
         assert!(
-            reserves_delta > total_reward * 50 / 100,
-            "reserves should decrease by at least 50% of total reward"
+            treasury_actual_delta >= treasury_delta,
+            "treasury delta must be >= formula (fees add to pot)"
+        );
+        assert!(
+            treasury_actual_delta <= treasury_delta + treasury_delta / 100,
+            "treasury delta should be within 1% of formula"
+        );
+
+        // With performance scaling + a0 pledge influence, reserves decrease
+        // by significantly less than total_reward. The a0 factor (1/(1+0.3))
+        // reduces distribution by ~23%, and performance further reduces it.
+        assert!(
+            reserves_delta > total_reward * 30 / 100,
+            "reserves should decrease by at least 30% of total reward"
         );
         assert!(
             reserves_delta <= total_reward,

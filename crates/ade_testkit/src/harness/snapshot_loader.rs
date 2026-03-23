@@ -76,6 +76,7 @@ impl LoadedSnapshot {
                         (PoolId(Hash28(pool_bytes)), count)
                     }).collect()
                 },
+                epoch_fees: ade_types::tx::Coin(self.header.epoch_fees),
             },
             protocol_params: ProtocolParameters::default(),
             era,
@@ -242,6 +243,8 @@ pub struct SnapshotHeader {
     pub treasury: u64,
     /// Reserves in lovelace (from AccountState)
     pub reserves: u64,
+    /// Accumulated fees from the epoch (SnapShots[3]).
+    pub epoch_fees: u64,
     /// Total size of the state CBOR in bytes
     pub state_size: usize,
 }
@@ -357,14 +360,37 @@ pub fn parse_snapshot_header(state_cbor: &[u8]) -> Result<SnapshotHeader, Harnes
         (0, 0)
     };
 
+    // Parse epoch fees separately (re-navigating is simpler than tracking offset)
+    let epoch_fees = parse_epoch_fees(state_cbor).unwrap_or(0);
+
     Ok(SnapshotHeader {
         telescope_length,
         current_era_index: telescope_length - 1,
         epoch,
         treasury,
         reserves,
+        epoch_fees,
         state_size,
     })
+}
+
+fn parse_epoch_fees(state_cbor: &[u8]) -> Result<u64, HarnessError> {
+    let off = navigate_to_nes(state_cbor)?;
+    let es = skip_nes_to_epoch_state(state_cbor, off)?;
+
+    // Skip ES[0] (AccountState), ES[1] (LedgerState) to reach ES[2] (SnapShots)
+    let off = skip_cbor(state_cbor, es)?; // ES[0]
+    let off = skip_cbor(state_cbor, off)?; // ES[1]
+
+    // ES[2] = SnapShots = array(4) [mark, set, go, fees]
+    let (ss_inner, _) = read_array_header(state_cbor, off)?;
+    let off = skip_cbor(state_cbor, ss_inner)?; // skip mark
+    let off = skip_cbor(state_cbor, off)?; // skip set
+    let off = skip_cbor(state_cbor, off)?; // skip go
+
+    // SS[3] = epoch fees
+    let (_, fees) = read_uint(state_cbor, off)?;
+    Ok(fees)
 }
 
 /// Compute the Blake2b-256 hash of a snapshot state file.
@@ -1168,6 +1194,32 @@ mod tests {
             assert!(params.cost.0 > 0, "pool cost must be non-zero");
             assert!(params.margin.1 > 0, "margin denominator must be non-zero");
         }
+    }
+
+    #[test]
+    fn go_snapshot_total_stake_matches_oracle() {
+        let tarball = snapshots_dir().join("snapshot_17020848.tar.gz");
+        if !tarball.exists() { return; }
+
+        let snap = LoadedSnapshot::from_tarball(&tarball).unwrap();
+        let state = snap.to_ledger_state();
+
+        let total_stake: u64 = state.epoch_state.snapshots.go.0.pool_stakes
+            .values().map(|c| c.0).sum();
+
+        // Oracle total stake (from Python): ~20.2T lovelace
+        eprintln!("Go snapshot total stake: {} lovelace = {} ADA",
+            total_stake, total_stake / 1_000_000);
+
+        let pool_count = state.epoch_state.snapshots.go.0.pool_stakes.len();
+        let deleg_count = state.epoch_state.snapshots.go.0.delegations.len();
+
+        eprintln!("  pool_stakes entries: {}", pool_count);
+        eprintln!("  delegation entries: {}", deleg_count);
+
+        // Should be in the right ballpark (~20B ADA)
+        assert!(total_stake > 1_000_000_000_000_000,
+            "total stake should be > 1B ADA in lovelace");
     }
 
     #[test]

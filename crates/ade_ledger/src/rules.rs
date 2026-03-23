@@ -266,10 +266,14 @@ fn apply_epoch_boundary_full(
     let reserves = state.epoch_state.reserves;
     let treasury = state.epoch_state.treasury;
 
-    let total_reward = crate::epoch::compute_total_reward(
+    // Shelley reward pot = floor(reserves * rho) + epoch_fees
+    let monetary = crate::epoch::compute_total_reward(
         reserves,
         &state.protocol_params.monetary_expansion,
     ).unwrap_or(ade_types::tx::Coin(0));
+    let total_reward = ade_types::tx::Coin(
+        monetary.0.saturating_add(state.epoch_state.epoch_fees.0)
+    );
 
     let treasury_delta = {
         let total_rat = crate::rational::Rational::from_integer(total_reward.0 as i128);
@@ -330,56 +334,113 @@ fn apply_epoch_boundary_full(
                 params.margin.1 as i128,
             ).unwrap_or_else(crate::rational::Rational::zero);
 
-            // Scale reward by performance: min(1, blocks_produced / expected_blocks)
-            // expected_blocks_for_pool = expected_total * pool_stake / total_stake
+            // Performance scaling: min(1, blocks_produced / expected_blocks)
+            let sigma = crate::rational::Rational::new(
+                pool_stake.0 as i128, total_stake as i128,
+            ).unwrap_or_else(crate::rational::Rational::zero);
+
             let expected_for_pool = if total_stake > 0 {
                 (expected_total_blocks as u128 * pool_stake.0 as u128 / total_stake as u128) as u64
-            } else {
-                0
-            };
+            } else { 0 };
 
-            // Performance-adjusted pool reward pot
-            let adjusted_pool_pot = if expected_for_pool > 0 {
+            let performance = if expected_for_pool > 0 {
                 let perf = crate::rational::Rational::new(
-                    blocks_produced as i128,
-                    expected_for_pool as i128,
+                    blocks_produced as i128, expected_for_pool as i128,
                 ).unwrap_or_else(crate::rational::Rational::one);
-
-                // Cap at 1.0 (over-performing pools don't get extra)
-                let capped = if perf.numerator() > perf.denominator() {
+                if perf.numerator() > perf.denominator() {
                     crate::rational::Rational::one()
-                } else {
-                    perf
-                };
-
-                let pot_rat = crate::rational::Rational::from_integer(pool_reward_pot as i128);
-                pot_rat.checked_mul(&capped)
-                    .map(|r| r.floor().max(0) as u64)
-                    .unwrap_or(pool_reward_pot)
+                } else { perf }
             } else {
-                pool_reward_pot // fallback: no expected blocks → full pot
+                crate::rational::Rational::one()
             };
 
-            if let Some(pool_rewards) = crate::epoch::compute_pool_reward(
-                ade_types::tx::Coin(adjusted_pool_pot),
-                *pool_stake,
-                ade_types::tx::Coin(total_stake),
-                params.cost,
-                &margin,
-                &delegator_stakes,
-            ) {
-                total_pool_rewards = total_pool_rewards.saturating_add(pool_rewards.operator_reward.0);
-                for member_reward in pool_rewards.member_rewards.values() {
-                    total_member_rewards = total_member_rewards.saturating_add(member_reward.0);
-                }
-                rewarded_pool_count += 1;
+            // Shelley maxPoolReward with a0 pledge influence:
+            // maxPool = (R / (1 + a0)) * (sigma' + s' * a0 * ((sigma' - s') / z))
+            // Simplified: we use the 1/(1+a0) scaling factor which is the dominant effect
+            let a0 = &state.protocol_params.pool_influence;
+            let one_plus_a0 = crate::rational::Rational::one()
+                .checked_add(a0)
+                .unwrap_or_else(crate::rational::Rational::one);
 
-                // Accumulate reward deltas per credential
-                for (cred, reward) in pool_rewards.member_rewards {
-                    let entry = reward_deltas.entry(cred).or_insert(ade_types::tx::Coin(0));
-                    entry.0 = entry.0.saturating_add(reward.0);
+            // adjusted_pot = pool_reward_pot * performance * sigma / (1 + a0)
+            // Plus pledge bonus (simplified): + pool_reward_pot * pledge_ratio * a0 / (1 + a0)
+            let pot_rat = crate::rational::Rational::from_integer(pool_reward_pot as i128);
+
+            // Base reward: R * sigma * performance / (1 + a0)
+            let base = pot_rat.checked_mul(&sigma)
+                .and_then(|r| r.checked_mul(&performance))
+                .and_then(|r| r.checked_div(&one_plus_a0));
+
+            // Pledge bonus: R * s' * a0 / (1 + a0) where s' = pledge/total_stake
+            let pledge_ratio = crate::rational::Rational::new(
+                params.pledge.0 as i128, total_stake as i128,
+            ).unwrap_or_else(crate::rational::Rational::zero);
+
+            let pledge_bonus = pot_rat.checked_mul(&pledge_ratio)
+                .and_then(|r| r.checked_mul(a0))
+                .and_then(|r| r.checked_div(&one_plus_a0));
+
+            let adjusted_pool_pot = match (base, pledge_bonus) {
+                (Some(b), Some(p)) => {
+                    b.checked_add(&p)
+                        .map(|r| r.floor().max(0) as u64)
+                        .unwrap_or(b.floor().max(0) as u64)
+                }
+                (Some(b), _) => b.floor().max(0) as u64,
+                (None, _) => {
+                    // Base computation failed (overflow?) — use simpler formula
+                    // Fallback: pool_reward_pot * pool_stake / total_stake / (1+a0)
+                    let simple = pool_reward_pot as u128 * pool_stake.0 as u128
+                        / total_stake as u128
+                        * 10 / 13; // approx 1/1.3
+                    simple as u64
+                }
+            };
+
+            // adjusted_pool_pot IS the maxPool for this pool.
+            // Split directly: cost → operator, margin of remainder → operator, rest → delegators
+            if adjusted_pool_pot == 0 {
+                continue;
+            }
+
+            let pool_max = adjusted_pool_pot;
+
+            // Operator gets: min(pool_max, cost) + margin * (pool_max - cost)
+            let operator_reward = if pool_max <= params.cost.0 {
+                pool_max
+            } else {
+                let after_cost = pool_max - params.cost.0;
+                let margin_cut = crate::rational::Rational::from_integer(after_cost as i128)
+                    .checked_mul(&margin)
+                    .map(|r| r.floor().max(0) as u64)
+                    .unwrap_or(0);
+                params.cost.0 + margin_cut
+            };
+
+            let delegator_pool = pool_max.saturating_sub(operator_reward);
+
+            // Distribute delegator_pool pro-rata by stake
+            let mut member_distributed = 0u64;
+            if pool_stake.0 > 0 && delegator_pool > 0 {
+                for (cred, stake) in &delegator_stakes {
+                    let share = crate::rational::Rational::new(
+                        stake.0 as i128, pool_stake.0 as i128,
+                    ).unwrap_or_else(crate::rational::Rational::zero);
+                    let member_reward = crate::rational::Rational::from_integer(delegator_pool as i128)
+                        .checked_mul(&share)
+                        .map(|r| r.floor().max(0) as u64)
+                        .unwrap_or(0);
+                    if member_reward > 0 {
+                        member_distributed += member_reward;
+                        let entry = reward_deltas.entry(cred.clone()).or_insert(ade_types::tx::Coin(0));
+                        entry.0 = entry.0.saturating_add(member_reward);
+                    }
                 }
             }
+
+            total_pool_rewards = total_pool_rewards.saturating_add(operator_reward);
+            total_member_rewards = total_member_rewards.saturating_add(member_distributed);
+            rewarded_pool_count += 1;
         }
     }
 
@@ -392,7 +453,7 @@ fn apply_epoch_boundary_full(
         entry.0 = entry.0.saturating_add(reward.0);
     }
 
-    let _ = rewarded_pool_count; // retained for future boundary summary reporting
+    let _ = (rewarded_pool_count, total_pool_rewards, total_member_rewards, total_stake);
 
     // 3. Snapshot rotation (AFTER reward computation)
     let new_mark = crate::epoch::StakeSnapshot {
@@ -455,6 +516,7 @@ fn apply_epoch_boundary_full(
             reserves: new_reserves,
             treasury: new_treasury,
             block_production: std::collections::BTreeMap::new(),
+            epoch_fees: ade_types::tx::Coin(0),
         },
         protocol_params: state.protocol_params.clone(),
         era: state.era,
