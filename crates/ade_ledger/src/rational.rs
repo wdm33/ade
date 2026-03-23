@@ -467,6 +467,52 @@ mod tests {
         assert_eq!(result, a);
     }
 
+    // -----------------------------------------------------------------------
+    // Canonical encoding (T-26A.3)
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn canonical_form_matches_oracle_encoding() {
+        // Oracle encodes rationals as tag(30, [n, d]) in lowest terms.
+        // Our Rational::new() must produce the same (n, d) as the oracle.
+
+        // treasury_growth: oracle = [1, 5], our default = Rational::new(2, 10)
+        let r = Rational::new(2, 10).unwrap();
+        assert_eq!(r.numerator(), 1, "2/10 must reduce to 1/5");
+        assert_eq!(r.denominator(), 5);
+
+        // pool_influence: oracle = [3, 10]
+        let r = Rational::new(3, 10).unwrap();
+        assert_eq!(r.numerator(), 3);
+        assert_eq!(r.denominator(), 10);
+
+        // monetary_expansion: oracle = [3, 1000]
+        let r = Rational::new(3, 1000).unwrap();
+        assert_eq!(r.numerator(), 3);
+        assert_eq!(r.denominator(), 1000);
+
+        // decentralization: oracle = [8, 25] (Shelley ep236)
+        let r = Rational::new(8, 25).unwrap();
+        assert_eq!(r.numerator(), 8);
+        assert_eq!(r.denominator(), 25);
+
+        // Equivalent representations must reduce to same canonical form
+        let a = Rational::new(2, 10).unwrap();
+        let b = Rational::new(1, 5).unwrap();
+        let c = Rational::new(4, 20).unwrap();
+        assert_eq!(a, b);
+        assert_eq!(b, c);
+        assert_eq!(a.numerator(), 1);
+        assert_eq!(a.denominator(), 5);
+    }
+
+    #[test]
+    fn already_canonical_unchanged() {
+        let r = Rational::new(1, 3).unwrap();
+        assert_eq!(r.numerator(), 1);
+        assert_eq!(r.denominator(), 3);
+    }
+
     #[test]
     fn gcd_helper() {
         assert_eq!(gcd(12, 8), 4);
