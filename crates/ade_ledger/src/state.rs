@@ -7,6 +7,7 @@
 
 use ade_types::tx::Coin;
 use ade_types::{CardanoEra, EpochNo, SlotNo};
+use crate::delegation::CertState;
 use crate::epoch::SnapshotState;
 use crate::pparams::ProtocolParameters;
 use crate::utxo::UTxOState;
@@ -50,10 +51,13 @@ pub struct LedgerState {
     pub epoch_state: EpochState,
     pub protocol_params: ProtocolParameters,
     pub era: CardanoEra,
-    /// When true, apply_block tracks UTxO (consume inputs, produce outputs).
-    /// When false (default), UTxO tracking is skipped for performance.
+    /// When true, apply_block tracks UTxO and delegation/pool state.
+    /// When false (default), state tracking is skipped for performance.
     /// Set to true when state is loaded from a snapshot for boundary replay.
     pub track_utxo: bool,
+    /// Accumulated certificate state (delegations, pools, retirements).
+    /// Populated during replay when track_utxo is true.
+    pub cert_state: CertState,
 }
 
 impl LedgerState {
@@ -64,6 +68,7 @@ impl LedgerState {
             protocol_params: ProtocolParameters::default(),
             era,
             track_utxo: false,
+            cert_state: CertState::new(),
         }
     }
 }

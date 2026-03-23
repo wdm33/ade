@@ -199,6 +199,7 @@ fn make_shelley_state_at_hfc() -> LedgerState {
         },
         era: CardanoEra::Shelley,
         track_utxo: false,
+        cert_state: ade_ledger::delegation::CertState::new(),
     }
 }
 

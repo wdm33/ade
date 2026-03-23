@@ -55,6 +55,7 @@ pub fn translate_byron_to_shelley(
         protocol_params,
         era: CardanoEra::Shelley,
         track_utxo: old_state.track_utxo,
+        cert_state: old_state.cert_state.clone(),
     })
 }
 
@@ -83,6 +84,7 @@ pub fn translate_shelley_to_allegra(
         protocol_params: old_state.protocol_params.clone(),
         era: CardanoEra::Allegra,
         track_utxo: old_state.track_utxo,
+        cert_state: old_state.cert_state.clone(),
     })
 }
 
@@ -110,6 +112,7 @@ pub fn translate_allegra_to_mary(
         protocol_params: old_state.protocol_params.clone(),
         era: CardanoEra::Mary,
         track_utxo: old_state.track_utxo,
+        cert_state: old_state.cert_state.clone(),
     })
 }
 
@@ -142,6 +145,7 @@ pub fn translate_mary_to_alonzo(
         protocol_params: old_state.protocol_params.clone(),
         era: CardanoEra::Alonzo,
         track_utxo: old_state.track_utxo,
+        cert_state: old_state.cert_state.clone(),
     })
 }
 
@@ -169,6 +173,7 @@ pub fn translate_alonzo_to_babbage(
         protocol_params: old_state.protocol_params.clone(),
         era: CardanoEra::Babbage,
         track_utxo: old_state.track_utxo,
+        cert_state: old_state.cert_state.clone(),
     })
 }
 
@@ -201,6 +206,7 @@ pub fn translate_babbage_to_conway(
         protocol_params: old_state.protocol_params.clone(),
         era: CardanoEra::Conway,
         track_utxo: old_state.track_utxo,
+        cert_state: old_state.cert_state.clone(),
     })
 }
 
@@ -251,6 +257,7 @@ fn initial_shelley_reserves(utxo_state: &crate::utxo::UTxOState) -> Coin {
 #[allow(clippy::unwrap_used)]
 mod tests {
     use super::*;
+    use crate::delegation::CertState;
     use ade_types::address::Address;
     use ade_types::tx::TxIn;
     use ade_types::{EpochNo, Hash32, SlotNo};
@@ -269,6 +276,7 @@ mod tests {
             protocol_params: ProtocolParameters::default(),
             era: CardanoEra::ByronRegular,
             track_utxo: false,
+            cert_state: CertState::new(),
         }
     }
 
@@ -285,6 +293,7 @@ mod tests {
             protocol_params: ProtocolParameters::default(),
             era: CardanoEra::Shelley,
             track_utxo: false,
+            cert_state: CertState::new(),
         }
     }
 
@@ -301,6 +310,7 @@ mod tests {
             protocol_params: ProtocolParameters::default(),
             era: CardanoEra::Allegra,
             track_utxo: false,
+            cert_state: CertState::new(),
         }
     }
 
@@ -389,6 +399,7 @@ mod tests {
             protocol_params: ProtocolParameters::default(),
             era: CardanoEra::ByronEbb,
             track_utxo: false,
+            cert_state: CertState::new(),
         };
         let result = translate_byron_to_shelley(&state);
         assert!(result.is_ok());
@@ -503,6 +514,7 @@ mod tests {
             protocol_params: ProtocolParameters::default(),
             era: CardanoEra::Mary,
             track_utxo: false,
+            cert_state: CertState::new(),
         }
     }
 
@@ -519,6 +531,7 @@ mod tests {
             protocol_params: ProtocolParameters::default(),
             era: CardanoEra::Alonzo,
             track_utxo: false,
+            cert_state: CertState::new(),
         }
     }
 
@@ -535,6 +548,7 @@ mod tests {
             protocol_params: ProtocolParameters::default(),
             era: CardanoEra::Babbage,
             track_utxo: false,
+            cert_state: CertState::new(),
         }
     }
 

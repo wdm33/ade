@@ -27,6 +27,7 @@ fn make_state(era: CardanoEra, epoch: u64, treasury: u64, reserves: u64) -> Ledg
         protocol_params: ProtocolParameters::default(),
         era,
         track_utxo: false,
+        cert_state: ade_ledger::delegation::CertState::new(),
     }
 }
 

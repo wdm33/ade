@@ -216,6 +216,7 @@ fn post_block_1_utxo_matches_oracle() {
         protocol_params: ade_ledger::pparams::ProtocolParameters::default(),
         era: ade_types::CardanoEra::ByronRegular,
         track_utxo: false,
+        cert_state: ade_ledger::delegation::CertState::new(),
     };
 
     state = ade_ledger::rules::apply_block(&state, env.era, inner).unwrap();

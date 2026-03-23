@@ -80,6 +80,12 @@ fn stateful_boundary_replay(
     }
 
     let final_utxo = state.utxo_state.len();
+    let delegations = state.cert_state.delegation.delegations.len();
+    let registrations = state.cert_state.delegation.registrations.len();
+    let pools = state.cert_state.pool.pools.len();
+    if delegations > 0 || registrations > 0 || pools > 0 {
+        eprintln!("    certs: {registrations} regs, {delegations} delegs, {pools} pools");
+    }
     (applied, final_utxo)
 }
 

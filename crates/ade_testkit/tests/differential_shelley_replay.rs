@@ -51,6 +51,7 @@ fn make_shelley_state() -> LedgerState {
         protocol_params: ProtocolParameters::default(),
         era: CardanoEra::Shelley,
         track_utxo: false,
+        cert_state: ade_ledger::delegation::CertState::new(),
     }
 }
 

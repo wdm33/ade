@@ -61,6 +61,7 @@ impl LoadedSnapshot {
             protocol_params: ProtocolParameters::default(),
             era,
             track_utxo: true, // Snapshot-loaded state enables UTxO tracking
+            cert_state: ade_ledger::delegation::CertState::new(),
         }
     }
 }

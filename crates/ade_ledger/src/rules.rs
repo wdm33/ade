@@ -156,6 +156,13 @@ fn apply_shelley_era_block_classified(
         current_state.utxo_state.clone()
     };
 
+    // Process certificates to accumulate delegation/pool state.
+    let cert_state = if current_state.track_utxo {
+        process_block_certificates(block, era, &current_state)?
+    } else {
+        current_state.cert_state.clone()
+    };
+
     let mut epoch_state = current_state.epoch_state;
     epoch_state.slot = slot;
 
@@ -166,6 +173,7 @@ fn apply_shelley_era_block_classified(
             protocol_params: current_state.protocol_params,
             era,
             track_utxo: current_state.track_utxo,
+            cert_state,
         },
         verdict,
     ))
@@ -237,6 +245,95 @@ fn track_utxo(
     }
 
     Ok(utxo)
+}
+
+/// Process certificates from a block to accumulate delegation/pool state.
+///
+/// For each tx body with a `certs` field (key 4), decode the certificates
+/// and apply them to the certificate state using `apply_cert`.
+fn process_block_certificates(
+    block: &ade_types::shelley::block::ShelleyBlock,
+    _era: CardanoEra,
+    state: &LedgerState,
+) -> Result<crate::delegation::CertState, LedgerError> {
+    if block.tx_count == 0 {
+        return Ok(state.cert_state.clone());
+    }
+
+    let mut cert_state = state.cert_state.clone();
+    let mut offset = 0;
+    let data = &block.tx_bodies;
+    let enc = cbor::read_array_header(data, &mut offset)?;
+
+    let mut process_one = |data: &[u8], offset: &mut usize| -> Result<(), LedgerError> {
+        // Read the tx body map to find key 4 (certs)
+        let map_enc = cbor::read_map_header(data, offset)?;
+        let map_len = match map_enc {
+            cbor::ContainerEncoding::Definite(n, _) => n,
+            cbor::ContainerEncoding::Indefinite => {
+                // Skip indefinite map
+                while !cbor::is_break(data, *offset)? {
+                    let _ = cbor::skip_item(data, offset)?;
+                    let _ = cbor::skip_item(data, offset)?;
+                }
+                *offset += 1;
+                return Ok(());
+            }
+        };
+
+        for _ in 0..map_len {
+            let (key, _) = cbor::read_uint(data, offset)?;
+            if key == 4 {
+                // Capture cert bytes
+                let cert_start = *offset;
+                let (_, cert_end) = cbor::skip_item(data, offset)?;
+                let cert_bytes = &data[cert_start..cert_end];
+
+                // Decode and apply certificates
+                match ade_codec::shelley::cert::decode_certificates(cert_bytes) {
+                    Ok(certs) => {
+                        let key_deposit = state.protocol_params.key_deposit;
+                        for (idx, cert) in certs.iter().enumerate() {
+                            match crate::delegation::apply_cert(
+                                &cert_state,
+                                cert,
+                                key_deposit,
+                                idx as u16,
+                            ) {
+                                Ok(new_state) => cert_state = new_state,
+                                Err(_) => {
+                                    // Certificate application errors are non-fatal
+                                    // during replay without full UTxO state.
+                                }
+                            }
+                        }
+                    }
+                    Err(_) => {
+                        // Cert decode errors are non-fatal during replay.
+                    }
+                }
+            } else {
+                let _ = cbor::skip_item(data, offset)?;
+            }
+        }
+
+        Ok(())
+    };
+
+    match enc {
+        cbor::ContainerEncoding::Definite(n, _) => {
+            for _ in 0..n {
+                process_one(data, &mut offset)?;
+            }
+        }
+        cbor::ContainerEncoding::Indefinite => {
+            while !cbor::is_break(data, offset)? {
+                process_one(data, &mut offset)?;
+            }
+        }
+    }
+
+    Ok(cert_state)
 }
 
 /// Extract inputs and outputs from a decoded tx body.

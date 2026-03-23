@@ -452,6 +452,7 @@ fn sum_distributed_rewards(rewards: &BTreeMap<PoolId, PoolRewards>) -> Coin {
 #[allow(clippy::unwrap_used)]
 mod tests {
     use super::*;
+    use crate::delegation::CertState;
     use crate::state::EpochState;
 
     fn make_pool_id(byte: u8) -> PoolId {
@@ -791,6 +792,7 @@ mod tests {
             protocol_params: ProtocolParameters::default(),
             era: CardanoEra::Shelley,
             track_utxo: false,
+            cert_state: CertState::new(),
         };
 
         let new_mark = StakeSnapshot::new();

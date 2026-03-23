@@ -6,7 +6,8 @@
 use std::path::PathBuf;
 
 use ade_codec::cbor::envelope::decode_block_envelope;
-use ade_codec::shelley::cert::{decode_certificates, Certificate};
+use ade_codec::shelley::cert::decode_certificates;
+use ade_types::shelley::cert::Certificate;
 use ade_types::CardanoEra;
 
 fn corpus_root() -> PathBuf {
@@ -84,12 +85,13 @@ fn count_certificates(era_name: &str) -> (usize, Vec<(u64, usize)>) {
                         Ok(certs) => {
                             for cert in &certs {
                                 let tag = match cert {
-                                    Certificate::StakeRegistration { .. } => 0,
-                                    Certificate::StakeDeregistration { .. } => 1,
+                                    Certificate::StakeRegistration(_) => 0,
+                                    Certificate::StakeDeregistration(_) => 1,
                                     Certificate::StakeDelegation { .. } => 2,
-                                    Certificate::PoolRegistration { .. } => 3,
+                                    Certificate::PoolRegistration(_) => 3,
                                     Certificate::PoolRetirement { .. } => 4,
-                                    Certificate::Other { tag, .. } => *tag,
+                                    Certificate::GenesisKeyDelegation { .. } => 5,
+                                    Certificate::MIRTransfer(_) => 6,
                                 };
                                 *type_counts.entry(tag).or_insert(0) += 1;
                                 total += 1;

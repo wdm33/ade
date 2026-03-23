@@ -18,6 +18,7 @@ use crate::error::{
 };
 use crate::pparams::ProtocolParameters;
 use crate::state::LedgerState;
+use crate::delegation::CertState;
 use crate::utxo::{utxo_delete, utxo_insert, TxOut, UTxOState};
 use crate::value::Value;
 
@@ -57,6 +58,7 @@ pub fn validate_shelley_block(
         protocol_params: state.protocol_params.clone(),
         era: state.era,
         track_utxo: state.track_utxo,
+        cert_state: CertState::new(),
     })
 }
 

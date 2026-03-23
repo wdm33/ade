@@ -156,6 +156,7 @@ fn make_byron_state(utxo: ade_ledger::utxo::UTxOState) -> LedgerState {
         protocol_params: ProtocolParameters::default(),
         era: CardanoEra::ByronRegular,
         track_utxo: false,
+        cert_state: ade_ledger::delegation::CertState::new(),
     }
 }
 
