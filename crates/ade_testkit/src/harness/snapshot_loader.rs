@@ -39,17 +39,21 @@ impl LoadedSnapshot {
 
     /// Build a minimal `LedgerState` from the snapshot metadata.
     ///
-    /// The UTxO set is empty — this is a metadata-level reset, not a full
-    /// state load. The raw CBOR bytes remain the authoritative state surface
-    /// for hash comparison.
+    /// Build a `LedgerState` from the snapshot, loading delegation data
+    /// from the go snapshot into the cert_state.
+    ///
+    /// The UTxO set is empty (compact format impedance). Delegation state
+    /// is populated from the oracle's go snapshot delegation map.
     pub fn to_ledger_state(&self) -> ade_ledger::state::LedgerState {
         use ade_ledger::state::{EpochState, LedgerState};
         use ade_ledger::pparams::ProtocolParameters;
         use ade_ledger::utxo::UTxOState;
         use ade_types::{EpochNo, SlotNo};
 
-        // Map telescope length to era
         let era = telescope_to_era(self.header.telescope_length);
+
+        // Load delegation data from the go snapshot
+        let cert_state = self.load_delegation_state();
 
         LedgerState {
             utxo_state: UTxOState::new(),
@@ -63,7 +67,48 @@ impl LoadedSnapshot {
             protocol_params: ProtocolParameters::default(),
             era,
             track_utxo: true,
-            cert_state: ade_ledger::delegation::CertState::new(),
+            cert_state,
+        }
+    }
+
+    /// Load delegation state from the go snapshot's delegation map.
+    fn load_delegation_state(&self) -> ade_ledger::delegation::CertState {
+        use ade_ledger::delegation::{CertState, DelegationState, PoolState};
+        use ade_types::shelley::cert::StakeCredential;
+        use ade_types::tx::PoolId;
+        use ade_types::Hash28;
+        use std::collections::BTreeMap;
+
+        let delegations_raw = match parse_go_delegations(&self.raw_cbor) {
+            Ok(d) => d,
+            Err(_) => return CertState::new(),
+        };
+
+        let mut delegations = BTreeMap::new();
+        let mut registrations = BTreeMap::new();
+
+        for (cred_hash, pool_hash) in &delegations_raw {
+            // Extract 28-byte credential hash (stored in first 28 bytes of Hash32)
+            let mut cred_bytes = [0u8; 28];
+            cred_bytes.copy_from_slice(&cred_hash.0[..28]);
+            let cred = StakeCredential(Hash28(cred_bytes));
+
+            let mut pool_bytes = [0u8; 28];
+            pool_bytes.copy_from_slice(&pool_hash.0[..28]);
+            let pool = PoolId(Hash28(pool_bytes));
+
+            delegations.insert(cred.clone(), pool);
+            // Register the credential with zero deposit (we don't have deposit data)
+            registrations.insert(cred, ade_types::tx::Coin(0));
+        }
+
+        CertState {
+            delegation: DelegationState {
+                registrations,
+                delegations,
+                rewards: BTreeMap::new(),
+            },
+            pool: PoolState::new(),
         }
     }
 }
@@ -817,6 +862,38 @@ mod tests {
                 pre, post, pre_snap.header.telescope_length
             );
         }
+    }
+
+    #[test]
+    fn to_ledger_state_preserves_delegation_count() {
+        let tarball = snapshots_dir().join("snapshot_17020848.tar.gz");
+        if !tarball.exists() {
+            return;
+        }
+
+        let snap = LoadedSnapshot::from_tarball(&tarball).unwrap();
+
+        // Parse count directly from CBOR
+        let (_, _, raw_deleg_count) = parse_go_snapshot_counts(&snap.raw_cbor).unwrap();
+
+        // Load into LedgerState
+        let state = snap.to_ledger_state();
+        let stored_deleg_count = state.cert_state.delegation.delegations.len();
+        let stored_reg_count = state.cert_state.delegation.registrations.len();
+
+        eprintln!("Delegation count chain:");
+        eprintln!("  raw CBOR:      {raw_deleg_count}");
+        eprintln!("  stored delegs: {stored_deleg_count}");
+        eprintln!("  stored regs:   {stored_reg_count}");
+
+        assert_eq!(
+            stored_deleg_count, raw_deleg_count,
+            "delegation count must survive parse → store conversion"
+        );
+        assert_eq!(
+            stored_reg_count, raw_deleg_count,
+            "registration count must match delegation count"
+        );
     }
 
     #[test]
