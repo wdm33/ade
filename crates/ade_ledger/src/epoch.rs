@@ -784,6 +784,7 @@ mod tests {
             snapshots: SnapshotState::new(),
             reserves: Coin(10_000_000_000),
             treasury: Coin(0),
+            block_production: std::collections::BTreeMap::new(),
         };
 
         let state = LedgerState {

@@ -298,12 +298,25 @@ fn apply_epoch_boundary_full(
     let mut rewarded_pool_count = 0usize;
     let mut reward_deltas = std::collections::BTreeMap::new();
 
+    // Expected blocks per epoch = epoch_length / slot_coeff ≈ 21600
+    let expected_total_blocks = 21600u64;
+
     if total_stake > 0 && pool_reward_pot > 0 {
         for (pool_id, pool_stake) in &go.0.pool_stakes {
             let params = match state.cert_state.pool.pools.get(pool_id) {
                 Some(p) => p,
                 None => continue,
             };
+
+            // Pool performance = blocks_produced / expected_blocks_for_this_pool
+            // expected_for_pool = expected_total * (pool_stake / total_stake)
+            let blocks_produced = state.epoch_state.block_production
+                .get(pool_id)
+                .copied()
+                .unwrap_or(0);
+            if blocks_produced == 0 {
+                continue; // Zero performance → zero reward
+            }
 
             // Gather delegator stakes for this pool
             let delegator_stakes: std::collections::BTreeMap<ade_types::Hash28, ade_types::tx::Coin> =
@@ -317,8 +330,38 @@ fn apply_epoch_boundary_full(
                 params.margin.1 as i128,
             ).unwrap_or_else(crate::rational::Rational::zero);
 
+            // Scale reward by performance: min(1, blocks_produced / expected_blocks)
+            // expected_blocks_for_pool = expected_total * pool_stake / total_stake
+            let expected_for_pool = if total_stake > 0 {
+                (expected_total_blocks as u128 * pool_stake.0 as u128 / total_stake as u128) as u64
+            } else {
+                0
+            };
+
+            // Performance-adjusted pool reward pot
+            let adjusted_pool_pot = if expected_for_pool > 0 {
+                let perf = crate::rational::Rational::new(
+                    blocks_produced as i128,
+                    expected_for_pool as i128,
+                ).unwrap_or_else(crate::rational::Rational::one);
+
+                // Cap at 1.0 (over-performing pools don't get extra)
+                let capped = if perf.numerator() > perf.denominator() {
+                    crate::rational::Rational::one()
+                } else {
+                    perf
+                };
+
+                let pot_rat = crate::rational::Rational::from_integer(pool_reward_pot as i128);
+                pot_rat.checked_mul(&capped)
+                    .map(|r| r.floor().max(0) as u64)
+                    .unwrap_or(pool_reward_pot)
+            } else {
+                pool_reward_pot // fallback: no expected blocks → full pot
+            };
+
             if let Some(pool_rewards) = crate::epoch::compute_pool_reward(
-                ade_types::tx::Coin(pool_reward_pot),
+                ade_types::tx::Coin(adjusted_pool_pot),
                 *pool_stake,
                 ade_types::tx::Coin(total_stake),
                 params.cost,
@@ -411,6 +454,7 @@ fn apply_epoch_boundary_full(
             snapshots: rotated,
             reserves: new_reserves,
             treasury: new_treasury,
+            block_production: std::collections::BTreeMap::new(),
         },
         protocol_params: state.protocol_params.clone(),
         era: state.era,

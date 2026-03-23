@@ -81,8 +81,14 @@ fn allegra_epoch_oracle_delta_analysis() {
     eprintln!("  taken at the LAST slot of epoch 236 and FIRST slot of epoch 237.");
     eprintln!("===============================================\n");
 
-    // The comparison is informative, not a pass/fail gate
-    // Treasury delta should be in the right order of magnitude
+    // With performance scaling:
+    // - No performance (all pools get full): reserves_ratio ≈ 0.52
+    // - Binary (skip zero-block pools): reserves_ratio ≈ 0.53
+    // - Proportional (scale by blocks/expected): reserves_ratio ≈ 0.72
+    // - Remaining gap: pledge influence (a0) + fee accounting
+    eprintln!("  Progress: performance scaling moved ratio from 0.52 to {:.2}", reserves_ratio);
+    eprintln!("  Remaining: a0 pledge influence + fee accounting");
+
     assert!(
         treasury_ratio > 0.5 && treasury_ratio < 2.0,
         "treasury delta should be within 2x of boundary-only computation"

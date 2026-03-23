@@ -178,6 +178,7 @@ fn make_shelley_state_at_hfc() -> LedgerState {
             snapshots: ade_ledger::epoch::SnapshotState::new(),
             reserves: Coin(13_112_607_632_000_000),
             treasury: Coin(217_021_606_000_000),
+            block_production: std::collections::BTreeMap::new(),
         },
         protocol_params: ProtocolParameters {
             min_fee_a: Coin(44),

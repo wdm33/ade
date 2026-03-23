@@ -66,6 +66,16 @@ impl LoadedSnapshot {
                 snapshots,
                 reserves: ade_types::tx::Coin(self.header.reserves),
                 treasury: ade_types::tx::Coin(self.header.treasury),
+                block_production: {
+                    use ade_types::tx::PoolId;
+                    use ade_types::Hash28;
+                    let bp = parse_block_production(&self.raw_cbor).unwrap_or_default();
+                    bp.into_iter().map(|(h, count)| {
+                        let mut pool_bytes = [0u8; 28];
+                        pool_bytes.copy_from_slice(&h.0[..28]);
+                        (PoolId(Hash28(pool_bytes)), count)
+                    }).collect()
+                },
             },
             protocol_params: ProtocolParameters::default(),
             era,
@@ -512,6 +522,40 @@ pub fn parse_go_delegations(
     }
 
     Ok(delegations)
+}
+
+/// Parse nesBprev (block production counts per pool) from NES[1].
+///
+/// Returns Vec of (pool_hash, blocks_produced).
+/// Pools not in this map produced zero blocks.
+pub fn parse_block_production(
+    state_cbor: &[u8],
+) -> Result<std::collections::BTreeMap<Hash32, u64>, HarnessError> {
+    let off = navigate_to_nes(state_cbor)?;
+
+    // NES[0] = epoch, NES[1] = nesBprev
+    let bprev_off = skip_cbor(state_cbor, off)?; // skip NES[0]
+
+    let (mut co, _, _) = read_cbor_initial(state_cbor, bprev_off)?;
+    let mut production = std::collections::BTreeMap::new();
+
+    while co < state_cbor.len() && state_cbor[co] != 0xff {
+        // Key: bytes(28) pool hash
+        let (key_start, key_maj, key_len) = read_cbor_initial(state_cbor, co)?;
+        let mut pool_hash = [0u8; 32];
+        if key_maj == 2 && key_len >= 28 {
+            pool_hash[..28].copy_from_slice(&state_cbor[key_start..key_start + 28]);
+        }
+        co = skip_cbor(state_cbor, co)?;
+
+        // Value: uint (block count)
+        let (_, blocks) = read_uint(state_cbor, co)?;
+        co = skip_cbor(state_cbor, co)?;
+
+        production.insert(Hash32(pool_hash), blocks);
+    }
+
+    Ok(production)
 }
 
 /// Parse stake distribution from the go snapshot.

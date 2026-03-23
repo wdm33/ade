@@ -23,6 +23,7 @@ fn make_state(era: CardanoEra, epoch: u64, treasury: u64, reserves: u64) -> Ledg
             snapshots: ade_ledger::epoch::SnapshotState::new(),
             reserves: Coin(reserves),
             treasury: Coin(treasury),
+            block_production: std::collections::BTreeMap::new(),
         },
         protocol_params: ProtocolParameters::default(),
         era,

@@ -24,6 +24,9 @@ pub struct EpochState {
     pub reserves: Coin,
     /// Treasury (accumulated from monetary expansion).
     pub treasury: Coin,
+    /// Block production counts per pool for the previous epoch (nesBprev).
+    /// Pools not in this map produced zero blocks → zero rewards.
+    pub block_production: std::collections::BTreeMap<ade_types::tx::PoolId, u64>,
 }
 
 impl EpochState {
@@ -34,6 +37,7 @@ impl EpochState {
             snapshots: SnapshotState::new(),
             reserves: Coin(0),
             treasury: Coin(0),
+            block_production: std::collections::BTreeMap::new(),
         }
     }
 }
