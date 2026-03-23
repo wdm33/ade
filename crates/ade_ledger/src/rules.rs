@@ -491,7 +491,7 @@ fn apply_epoch_boundary_full(
             // maxPool = R * performance / (1+a0) * (sigma' + s'*a0*(sigma'-s'*(z-sigma')/z))
             //
             // Simplify: compute the bracket term as a Rational, then multiply by R*perf/(1+a0)
-            // bracket = sigma' + s' * a0 * (sigma' - s' * (z - sigma') / z)
+            // bracket = σ' + s' * a0 * (σ' - s' * (z - σ') / z)
             let bracket = {
                 let z_minus_sigma = z.checked_sub(&sigma_prime);
                 let inner = z_minus_sigma.and_then(|diff| {
@@ -555,6 +555,15 @@ fn apply_epoch_boundary_full(
 
             let delegator_pool = pool_max.saturating_sub(operator_reward);
 
+            // Route operator reward to reward_account credential
+            if operator_reward > 0 && params.reward_account.len() >= 29 {
+                let mut reward_cred = [0u8; 28];
+                reward_cred.copy_from_slice(&params.reward_account[1..29]);
+                let entry = reward_deltas.entry(ade_types::Hash28(reward_cred))
+                    .or_insert(ade_types::tx::Coin(0));
+                entry.0 = entry.0.saturating_add(operator_reward);
+            }
+
             // Distribute delegator_pool pro-rata by stake
             let mut member_distributed = 0u64;
             if pool_stake.0 > 0 && delegator_pool > 0 {
@@ -572,15 +581,6 @@ fn apply_epoch_boundary_full(
                         entry.0 = entry.0.saturating_add(member_reward);
                     }
                 }
-            }
-
-            // Route operator reward to the pool's reward account credential
-            if operator_reward > 0 && params.reward_account.len() >= 29 {
-                let mut reward_cred = [0u8; 28];
-                reward_cred.copy_from_slice(&params.reward_account[1..29]);
-                let entry = reward_deltas.entry(ade_types::Hash28(reward_cred))
-                    .or_insert(ade_types::tx::Coin(0));
-                entry.0 = entry.0.saturating_add(operator_reward);
             }
 
             total_pool_rewards = total_pool_rewards.saturating_add(operator_reward);
