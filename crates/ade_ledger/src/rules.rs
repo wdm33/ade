@@ -144,7 +144,7 @@ fn apply_shelley_era_block_classified(
         current_state.epoch_state.epoch,
         slot,
     ) {
-        current_state.epoch_state.epoch = new_epoch;
+        current_state = apply_epoch_boundary_minimal(&current_state, new_epoch);
     }
 
     let verdict = decode_validate_tx_bodies(block, era)?;
@@ -245,6 +245,101 @@ fn track_utxo(
     }
 
     Ok(utxo)
+}
+
+/// Minimal epoch boundary transition (T-25A.1).
+///
+/// Performs snapshot rotation and pool retirements. Reward computation
+/// is deferred to T-25A.3 — this skeleton establishes the boundary
+/// trigger and accumulator carry-forward first.
+///
+/// Idempotent: only called once per epoch boundary crossing.
+fn apply_epoch_boundary_minimal(
+    state: &LedgerState,
+    new_epoch: ade_types::EpochNo,
+) -> LedgerState {
+    // 1. Snapshot rotation: mark <- current delegation, set <- mark, go <- set
+    let new_mark = crate::epoch::StakeSnapshot {
+        delegations: state.cert_state.delegation.delegations.iter()
+            .map(|(cred, pool)| {
+                let stake = state.cert_state.delegation.rewards
+                    .get(cred)
+                    .copied()
+                    .unwrap_or(ade_types::tx::Coin(0));
+                (cred.0.clone(), (pool.clone(), stake))
+            })
+            .collect(),
+        pool_stakes: {
+            let mut pool_stakes = std::collections::BTreeMap::new();
+            for pool in state.cert_state.delegation.delegations.values() {
+                let entry = pool_stakes
+                    .entry(pool.clone())
+                    .or_insert(ade_types::tx::Coin(0));
+                // Accumulate delegated stake per pool
+                entry.0 = entry.0.saturating_add(0); // placeholder — real stake comes from UTxO
+            }
+            pool_stakes
+        },
+    };
+    let rotated = crate::epoch::rotate_snapshots(
+        &state.epoch_state.snapshots,
+        new_mark,
+    );
+
+    // 2. Pool retirements effective at this epoch
+    let mut pool_state = state.cert_state.pool.clone();
+    let mut retired_pools = Vec::new();
+    pool_state.retiring.retain(|pool_id, retire_epoch| {
+        if retire_epoch.0 <= new_epoch.0 {
+            retired_pools.push(pool_id.clone());
+            false
+        } else {
+            true
+        }
+    });
+    for pool_id in &retired_pools {
+        pool_state.pools.remove(pool_id);
+    }
+
+    // 3. Reset per-epoch accumulators
+    let cert_state = crate::delegation::CertState {
+        delegation: state.cert_state.delegation.clone(),
+        pool: pool_state,
+    };
+
+    LedgerState {
+        utxo_state: state.utxo_state.clone(),
+        epoch_state: crate::state::EpochState {
+            epoch: new_epoch,
+            slot: state.epoch_state.slot,
+            snapshots: rotated,
+            reserves: state.epoch_state.reserves,
+            treasury: state.epoch_state.treasury,
+        },
+        protocol_params: state.protocol_params.clone(),
+        era: state.era,
+        track_utxo: state.track_utxo,
+        cert_state,
+    }
+}
+
+/// Structured summary of an epoch boundary transition.
+///
+/// This is the diagnostic comparison surface for T-25A — when oracle
+/// comparison fails, this tells you WHICH component diverged.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct EpochBoundarySummary {
+    pub from_epoch: u64,
+    pub to_epoch: u64,
+    pub delegation_count: usize,
+    pub pool_count: usize,
+    pub retiring_count: usize,
+    pub retired_count: usize,
+    pub mark_delegation_count: usize,
+    pub set_delegation_count: usize,
+    pub go_delegation_count: usize,
+    pub treasury: u64,
+    pub reserves: u64,
 }
 
 /// Process certificates from a block to accumulate delegation/pool state.
