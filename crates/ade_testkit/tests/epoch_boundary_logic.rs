@@ -170,20 +170,84 @@ fn allegra_epoch_boundary_summary_comparison() {
         eprintln!("{:<25} {:>20} {:>20} {:>10}",
             "mark snapshot", s.mark_delegation_count, "—", "from replay");
 
+        // With reward math: treasury should INCREASE, reserves should DECREASE
+        // because total_reward = floor(reserves * rho) is taken from reserves,
+        // and treasury_delta = floor(total_reward * tau) goes to treasury.
+        let treasury_increased = s.treasury > snap_treasury;
+        let reserves_decreased = s.reserves < snap_reserves;
+        let treasury_delta = s.treasury.saturating_sub(snap_treasury);
+        let reserves_delta = snap_reserves.saturating_sub(s.reserves);
+
         eprintln!("\nDiagnosis:");
         eprintln!("  {} Epoch: {}", if epoch_ok { "✓" } else { "✗" }, s.to_epoch);
-        eprintln!("  {} Treasury preserved across boundary (no rewards)", if treasury_ok { "✓" } else { "△" });
-        eprintln!("  {} Reserves preserved across boundary (no rewards)", if reserves_ok { "✓" } else { "△" });
+        if treasury_increased {
+            eprintln!("  ✓ Treasury increased by {} lovelace (reward math active)", treasury_delta);
+        } else if treasury_ok {
+            eprintln!("  △ Treasury unchanged (empty delegation → zero rewards)");
+        }
+        if reserves_decreased {
+            eprintln!("  ✓ Reserves decreased by {} lovelace (monetary expansion)", reserves_delta);
+        } else if reserves_ok {
+            eprintln!("  △ Reserves unchanged (empty delegation → zero rewards)");
+        }
         eprintln!("  △ Delegation/pool state built from replay certs only");
-        eprintln!("  → Boundary skeleton works; reward math is T-25A.3");
 
         assert!(epoch_ok, "epoch must match snapshot");
-        assert!(treasury_ok, "treasury must be preserved (no rewards)");
-        assert!(reserves_ok, "reserves must be preserved (no rewards)");
+        // Treasury/reserves either unchanged (no delegation data) or correctly adjusted
+        assert!(
+            treasury_ok || treasury_increased,
+            "treasury must be preserved or increased"
+        );
+        assert!(
+            reserves_ok || reserves_decreased,
+            "reserves must be preserved or decreased"
+        );
     } else {
         eprintln!("  SKIPPED");
     }
     eprintln!("====================================================\n");
+}
+
+/// Verify reward arithmetic is correct against hand-computed values.
+#[test]
+fn reward_arithmetic_verification() {
+    let tarball_path = snapshots_dir().join("snapshot_17020848.tar.gz");
+    if !tarball_path.exists() {
+        return;
+    }
+
+    let snap = LoadedSnapshot::from_tarball(&tarball_path).unwrap();
+    let summary = replay_with_epoch_trigger(
+        "snapshot_17020848.tar.gz",
+        "allegra_epoch237",
+        1,
+    );
+
+    if let Some(s) = summary {
+        let reserves_before = snap.header.reserves;
+        let treasury_before = snap.header.treasury;
+
+        // rho = 3/1000 (monetary expansion)
+        // tau = 1/5 (treasury growth)
+        let total_reward = reserves_before * 3 / 1000; // floor(reserves * rho)
+        let treasury_delta = total_reward / 5; // floor(total_reward * tau)
+
+        let expected_reserves = reserves_before - total_reward;
+        let expected_treasury = treasury_before + treasury_delta;
+
+        eprintln!("\n=== Reward Arithmetic Verification ===");
+        eprintln!("  reserves_before:  {reserves_before}");
+        eprintln!("  total_reward:     {total_reward} (= reserves * 3/1000)");
+        eprintln!("  treasury_delta:   {treasury_delta} (= total_reward / 5)");
+        eprintln!("  expected_reserves: {expected_reserves}");
+        eprintln!("  actual_reserves:   {}", s.reserves);
+        eprintln!("  expected_treasury: {expected_treasury}");
+        eprintln!("  actual_treasury:   {}", s.treasury);
+        eprintln!("======================================\n");
+
+        assert_eq!(s.reserves, expected_reserves, "reserves must match formula");
+        assert_eq!(s.treasury, expected_treasury, "treasury must match formula");
+    }
 }
 
 #[test]

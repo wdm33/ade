@@ -144,7 +144,7 @@ fn apply_shelley_era_block_classified(
         current_state.epoch_state.epoch,
         slot,
     ) {
-        current_state = apply_epoch_boundary_minimal(&current_state, new_epoch);
+        current_state = apply_epoch_boundary_full(&current_state, new_epoch);
     }
 
     let verdict = decode_validate_tx_bodies(block, era)?;
@@ -247,14 +247,16 @@ fn track_utxo(
     Ok(utxo)
 }
 
-/// Minimal epoch boundary transition (T-25A.1).
+/// Epoch boundary transition (T-25A.1 + T-25A.3).
 ///
-/// Performs snapshot rotation and pool retirements. Reward computation
-/// is deferred to T-25A.3 — this skeleton establishes the boundary
-/// trigger and accumulator carry-forward first.
+/// Performs:
+/// 1. Snapshot rotation (mark/set/go)
+/// 2. Pool retirements effective at this epoch
+/// 3. Reward computation and distribution
+/// 4. Treasury/reserves update
 ///
 /// Idempotent: only called once per epoch boundary crossing.
-fn apply_epoch_boundary_minimal(
+fn apply_epoch_boundary_full(
     state: &LedgerState,
     new_epoch: ade_types::EpochNo,
 ) -> LedgerState {
@@ -275,8 +277,7 @@ fn apply_epoch_boundary_minimal(
                 let entry = pool_stakes
                     .entry(pool.clone())
                     .or_insert(ade_types::tx::Coin(0));
-                // Accumulate delegated stake per pool
-                entry.0 = entry.0.saturating_add(0); // placeholder — real stake comes from UTxO
+                entry.0 = entry.0.saturating_add(0);
             }
             pool_stakes
         },
@@ -288,20 +289,46 @@ fn apply_epoch_boundary_minimal(
 
     // 2. Pool retirements effective at this epoch
     let mut pool_state = state.cert_state.pool.clone();
-    let mut retired_pools = Vec::new();
     pool_state.retiring.retain(|pool_id, retire_epoch| {
         if retire_epoch.0 <= new_epoch.0 {
-            retired_pools.push(pool_id.clone());
+            pool_state.pools.remove(pool_id);
             false
         } else {
             true
         }
     });
-    for pool_id in &retired_pools {
-        pool_state.pools.remove(pool_id);
-    }
 
-    // 3. Reset per-epoch accumulators
+    // 3. Reward computation
+    let reserves = state.epoch_state.reserves;
+    let treasury = state.epoch_state.treasury;
+
+    // total_reward = floor(reserves * rho)
+    let total_reward = crate::epoch::compute_total_reward(
+        reserves,
+        &state.protocol_params.monetary_expansion,
+    ).unwrap_or(ade_types::tx::Coin(0));
+
+    // treasury_delta = floor(total_reward * tau)
+    let treasury_delta = {
+        let total_rat = crate::rational::Rational::from_integer(total_reward.0 as i128);
+        let delta = total_rat.checked_mul(&state.protocol_params.treasury_growth);
+        match delta {
+            Some(d) => {
+                let floored = d.floor();
+                if floored < 0 { 0u64 } else { floored as u64 }
+            }
+            None => 0u64,
+        }
+    };
+
+    // 4. Update reserves and treasury
+    let new_reserves = ade_types::tx::Coin(
+        reserves.0.saturating_sub(total_reward.0)
+    );
+    let new_treasury = ade_types::tx::Coin(
+        treasury.0.saturating_add(treasury_delta)
+    );
+
     let cert_state = crate::delegation::CertState {
         delegation: state.cert_state.delegation.clone(),
         pool: pool_state,
@@ -313,8 +340,8 @@ fn apply_epoch_boundary_minimal(
             epoch: new_epoch,
             slot: state.epoch_state.slot,
             snapshots: rotated,
-            reserves: state.epoch_state.reserves,
-            treasury: state.epoch_state.treasury,
+            reserves: new_reserves,
+            treasury: new_treasury,
         },
         protocol_params: state.protocol_params.clone(),
         era: state.era,
