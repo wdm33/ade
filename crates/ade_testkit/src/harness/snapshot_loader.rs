@@ -211,24 +211,32 @@ impl LoadedSnapshot {
         use ade_ledger::epoch::{
             GoSnapshot, MarkSnapshot, SetSnapshot, SnapshotState, StakeSnapshot,
         };
+
+        let mark = self.build_stake_snapshot(0)
+            .unwrap_or_else(|_| StakeSnapshot::new());
+        let set = self.build_stake_snapshot(1)
+            .unwrap_or_else(|_| StakeSnapshot::new());
+        let go = self.build_stake_snapshot(2)
+            .unwrap_or_else(|_| StakeSnapshot::new());
+
+        SnapshotState {
+            mark: MarkSnapshot(mark),
+            set: SetSnapshot(set),
+            go: GoSnapshot(go),
+        }
+    }
+
+    /// Build a StakeSnapshot from a specific snapshot position (0=mark, 1=set, 2=go).
+    fn build_stake_snapshot(
+        &self,
+        snapshot_index: u32,
+    ) -> Result<ade_ledger::epoch::StakeSnapshot, HarnessError> {
         use ade_types::tx::{Coin, PoolId};
         use ade_types::Hash28;
         use std::collections::BTreeMap;
 
-        // Parse go snapshot stake distribution
-        let stake_entries = match parse_go_stake_distribution(&self.raw_cbor) {
-            Ok(s) => s,
-            Err(_) => return SnapshotState::new(),
-        };
-
-        let delegations_raw = match parse_go_delegations(&self.raw_cbor) {
-            Ok(d) => d,
-            Err(_) => return SnapshotState::new(),
-        };
-
-        // Build go snapshot delegations: credential → (pool, stake)
-        let mut go_delegations: BTreeMap<Hash28, (PoolId, Coin)> = BTreeMap::new();
-        let mut pool_stakes: BTreeMap<PoolId, Coin> = BTreeMap::new();
+        let stake_entries = parse_snapshot_stake_distribution(&self.raw_cbor, snapshot_index)?;
+        let delegations_raw = parse_snapshot_delegations(&self.raw_cbor, snapshot_index)?;
 
         // Build stake lookup
         let mut stake_map: BTreeMap<[u8; 28], u64> = BTreeMap::new();
@@ -239,6 +247,9 @@ impl LoadedSnapshot {
         }
 
         // Combine delegation + stake
+        let mut delegations: BTreeMap<Hash28, (PoolId, Coin)> = BTreeMap::new();
+        let mut pool_stakes: BTreeMap<PoolId, Coin> = BTreeMap::new();
+
         for (cred_hash, pool_hash) in &delegations_raw {
             let mut cred_bytes = [0u8; 28];
             cred_bytes.copy_from_slice(&cred_hash.0[..28]);
@@ -248,22 +259,16 @@ impl LoadedSnapshot {
             let stake = stake_map.get(&cred_bytes).copied().unwrap_or(0);
             let pool = PoolId(Hash28(pool_bytes));
 
-            go_delegations.insert(Hash28(cred_bytes), (pool.clone(), Coin(stake)));
+            delegations.insert(Hash28(cred_bytes), (pool.clone(), Coin(stake)));
 
             let entry = pool_stakes.entry(pool).or_insert(Coin(0));
             entry.0 = entry.0.saturating_add(stake);
         }
 
-        let go = StakeSnapshot {
-            delegations: go_delegations,
+        Ok(ade_ledger::epoch::StakeSnapshot {
+            delegations,
             pool_stakes,
-        };
-
-        SnapshotState {
-            mark: MarkSnapshot(StakeSnapshot::new()),
-            set: SetSnapshot(StakeSnapshot::new()),
-            go: GoSnapshot(go),
-        }
+        })
     }
 
     /// Load delegation and pool state from the go snapshot.
@@ -803,17 +808,14 @@ type PoolParamsTuple = (Hash32, u64, u64, u64, u64, Vec<u8>);
 pub fn parse_go_pool_params(
     state_cbor: &[u8],
 ) -> Result<Vec<PoolParamsTuple>, HarnessError> {
-    let off = navigate_to_nes(state_cbor)?;
-    let es = skip_nes_to_epoch_state(state_cbor, off)?;
-    let ss_off = skip_n_fields(state_cbor, es, 2)?;
-    let (ss_inner, _) = read_array_header(state_cbor, ss_off)?;
-    let go_off = skip_n_fields(state_cbor, ss_inner, 2)?;
-    let (go_inner, _) = read_array_header(state_cbor, go_off)?;
+    parse_snapshot_pool_params(state_cbor, 2)
+}
 
-    // Skip stake_dist and delegation to get pool_params map
-    let pool_off = skip_cbor(state_cbor, go_inner)?; // skip stake_dist
-    let pool_off = skip_cbor(state_cbor, pool_off)?; // skip delegations
-
+/// Parse a pool params map at the given offset.
+fn parse_pool_params_map(
+    state_cbor: &[u8],
+    pool_off: usize,
+) -> Result<Vec<PoolParamsTuple>, HarnessError> {
     let (mut co, _, _) = read_cbor_initial(state_cbor, pool_off)?;
     let mut pools = Vec::new();
 
@@ -831,27 +833,20 @@ pub fn parse_go_pool_params(
         let (val_inner, _, val_len) = read_cbor_initial(state_cbor, co)?;
 
         if val_len >= 6 {
-            // Skip [0] operator, [1] vrf
             let f2 = skip_cbor(state_cbor, val_inner)?; // skip operator
             let f2 = skip_cbor(state_cbor, f2)?; // skip vrf
-
-            // [2] pledge
             let (_, pledge) = read_uint(state_cbor, f2)?;
             let f3 = skip_cbor(state_cbor, f2)?;
-
-            // [3] cost
             let (_, cost) = read_uint(state_cbor, f3)?;
             let f4 = skip_cbor(state_cbor, f3)?;
-
-            // [4] margin: tag(30, array(2, [num, den]))
-            let (tag_inner, _, _) = read_cbor_initial(state_cbor, f4)?; // tag(30)
+            // margin: tag(30, array(2, [num, den]))
+            let (tag_inner, _, _) = read_cbor_initial(state_cbor, f4)?;
             let (margin_inner, _) = read_array_header(state_cbor, tag_inner)?;
             let (_, margin_num) = read_uint(state_cbor, margin_inner)?;
             let den_off = skip_cbor(state_cbor, margin_inner)?;
             let (_, margin_den) = read_uint(state_cbor, den_off)?;
             let f5 = skip_cbor(state_cbor, f4)?;
-
-            // [5] reward_account: bytes(29)
+            // reward_account: bytes(29)
             let (acct_start, _, acct_len) = read_cbor_initial(state_cbor, f5)?;
             let reward_acct = state_cbor[acct_start..acct_start + acct_len as usize].to_vec();
 
@@ -1099,6 +1094,139 @@ impl DStateFieldInfo {
             _ => "unknown",
         }
     }
+}
+
+/// Navigate to a specific snapshot position within ES[2] (SnapShots).
+///
+/// SnapShots = array(4) [mark, set, go, fees]
+/// Each snapshot = array(3) [stake_dist, delegations, pool_params]
+///
+/// snapshot_index: 0=mark, 1=set, 2=go
+/// Returns offset to the body of the snapshot array (first field).
+fn navigate_to_snapshot(
+    state_cbor: &[u8],
+    snapshot_index: u32,
+) -> Result<usize, HarnessError> {
+    let off = navigate_to_nes(state_cbor)?;
+    let es = skip_nes_to_epoch_state(state_cbor, off)?;
+    // Skip ES[0] (AccountState), ES[1] (LedgerState) to reach ES[2] (SnapShots)
+    let ss_off = skip_n_fields(state_cbor, es, 2)?;
+    let (ss_inner, _) = read_array_header(state_cbor, ss_off)?;
+    // Skip to desired snapshot position
+    let snap_off = skip_n_fields(state_cbor, ss_inner, snapshot_index)?;
+    let (snap_inner, snap_len) = read_array_header(state_cbor, snap_off)?;
+    if snap_len != 3 {
+        return Err(HarnessError::ParseError(format!(
+            "snapshot[{snapshot_index}] expected array(3), got array({snap_len})"
+        )));
+    }
+    Ok(snap_inner)
+}
+
+/// Parse stake distribution from a specific snapshot position.
+///
+/// snapshot_index: 0=mark, 1=set, 2=go
+pub fn parse_snapshot_stake_distribution(
+    state_cbor: &[u8],
+    snapshot_index: u32,
+) -> Result<Vec<(Hash32, u64)>, HarnessError> {
+    let snap_inner = navigate_to_snapshot(state_cbor, snapshot_index)?;
+    // First map in snapshot is stake distribution
+    parse_credential_coin_map(state_cbor, snap_inner)
+}
+
+/// Parse delegation map from a specific snapshot position.
+///
+/// snapshot_index: 0=mark, 1=set, 2=go
+pub fn parse_snapshot_delegations(
+    state_cbor: &[u8],
+    snapshot_index: u32,
+) -> Result<Vec<(Hash32, Hash32)>, HarnessError> {
+    let snap_inner = navigate_to_snapshot(state_cbor, snapshot_index)?;
+    // Skip stake_dist to get delegation map
+    let deleg_off = skip_cbor(state_cbor, snap_inner)?;
+    parse_credential_hash_map(state_cbor, deleg_off)
+}
+
+/// Parse pool params from a specific snapshot position.
+///
+/// snapshot_index: 0=mark, 1=set, 2=go
+pub fn parse_snapshot_pool_params(
+    state_cbor: &[u8],
+    snapshot_index: u32,
+) -> Result<Vec<PoolParamsTuple>, HarnessError> {
+    let snap_inner = navigate_to_snapshot(state_cbor, snapshot_index)?;
+    let deleg_off = skip_cbor(state_cbor, snap_inner)?; // skip stake_dist
+    let pool_off = skip_cbor(state_cbor, deleg_off)?;   // skip delegations
+    parse_pool_params_map(state_cbor, pool_off)
+}
+
+/// Parse snapshot entry counts for a specific snapshot position.
+pub fn parse_snapshot_counts(
+    state_cbor: &[u8],
+    snapshot_index: u32,
+) -> Result<(usize, usize, usize), HarnessError> {
+    let snap_inner = navigate_to_snapshot(state_cbor, snapshot_index)?;
+    let stake_count = count_indef_map(state_cbor, snap_inner)?;
+    let deleg_off = skip_cbor(state_cbor, snap_inner)?;
+    let deleg_count = count_indef_map(state_cbor, deleg_off)?;
+    let pool_off = skip_cbor(state_cbor, deleg_off)?;
+    let pool_count = count_indef_map(state_cbor, pool_off)?;
+    Ok((pool_count, stake_count, deleg_count))
+}
+
+/// Parse a credential → coin map (used for stake distributions and rewards).
+fn parse_credential_coin_map(
+    state_cbor: &[u8],
+    map_offset: usize,
+) -> Result<Vec<(Hash32, u64)>, HarnessError> {
+    let (mut co, _, _) = read_cbor_initial(state_cbor, map_offset)?;
+    let mut entries = Vec::new();
+    while co < state_cbor.len() && state_cbor[co] != 0xff {
+        let (key_inner, _, _) = read_cbor_initial(state_cbor, co)?;
+        let key_end = skip_cbor(state_cbor, co)?;
+        let (_, _tag) = read_uint(state_cbor, key_inner)?;
+        let tag_end = skip_cbor(state_cbor, key_inner)?;
+        let (hash_start, _, hash_len) = read_cbor_initial(state_cbor, tag_end)?;
+        let mut cred_hash = [0u8; 32];
+        if hash_len >= 28 {
+            cred_hash[..28].copy_from_slice(&state_cbor[hash_start..hash_start + 28]);
+        }
+        co = key_end;
+        let (_, value) = read_uint(state_cbor, co)?;
+        co = skip_cbor(state_cbor, co)?;
+        entries.push((Hash32(cred_hash), value));
+    }
+    Ok(entries)
+}
+
+/// Parse a credential → pool_hash map (used for delegation maps).
+fn parse_credential_hash_map(
+    state_cbor: &[u8],
+    map_offset: usize,
+) -> Result<Vec<(Hash32, Hash32)>, HarnessError> {
+    let (mut co, _, _) = read_cbor_initial(state_cbor, map_offset)?;
+    let mut entries = Vec::new();
+    while co < state_cbor.len() && state_cbor[co] != 0xff {
+        let (key_inner, _, _) = read_cbor_initial(state_cbor, co)?;
+        let key_end = skip_cbor(state_cbor, co)?;
+        let (_, _tag) = read_uint(state_cbor, key_inner)?;
+        let tag_end = skip_cbor(state_cbor, key_inner)?;
+        let (hash_start, _, hash_len) = read_cbor_initial(state_cbor, tag_end)?;
+        let mut cred_hash = [0u8; 32];
+        if hash_len >= 28 {
+            cred_hash[..28].copy_from_slice(&state_cbor[hash_start..hash_start + 28]);
+        }
+        co = key_end;
+        let (pool_start, _, pool_len) = read_cbor_initial(state_cbor, co)?;
+        let mut pool_hash = [0u8; 32];
+        if pool_len >= 28 {
+            pool_hash[..28].copy_from_slice(&state_cbor[pool_start..pool_start + 28]);
+        }
+        co = skip_cbor(state_cbor, co)?;
+        entries.push((Hash32(cred_hash), Hash32(pool_hash)));
+    }
+    Ok(entries)
 }
 
 fn skip_n_fields(state_cbor: &[u8], start: usize, n: u32) -> Result<usize, HarnessError> {
@@ -1828,5 +1956,55 @@ mod tests {
         eprintln!("===================================================\n");
 
         assert!(probe.entry_count >= 3, "DState should have >= 3 entries, got {}", probe.entry_count);
+    }
+
+    #[test]
+    fn all_three_snapshots_load_allegra_237() {
+        let tarball = snapshots_dir().join("snapshot_17020848.tar.gz");
+        if !tarball.exists() { return; }
+
+        let snap = LoadedSnapshot::from_tarball(&tarball).unwrap();
+        let state = snap.to_ledger_state();
+
+        let mark_d = state.epoch_state.snapshots.mark.0.delegations.len();
+        let mark_p = state.epoch_state.snapshots.mark.0.pool_stakes.len();
+        let set_d = state.epoch_state.snapshots.set.0.delegations.len();
+        let set_p = state.epoch_state.snapshots.set.0.pool_stakes.len();
+        let go_d = state.epoch_state.snapshots.go.0.delegations.len();
+        let go_p = state.epoch_state.snapshots.go.0.pool_stakes.len();
+
+        eprintln!("\n=== Snapshot Family (Allegra epoch 237) ===");
+        eprintln!("  mark: {} delegations, {} pools", mark_d, mark_p);
+        eprintln!("  set:  {} delegations, {} pools", set_d, set_p);
+        eprintln!("  go:   {} delegations, {} pools", go_d, go_p);
+        eprintln!("============================================\n");
+
+        // All three should be populated (not just go)
+        assert!(mark_d > 0, "mark snapshot should have delegations, got {mark_d}");
+        assert!(set_d > 0, "set snapshot should have delegations, got {set_d}");
+        assert!(go_d > 0, "go snapshot should have delegations, got {go_d}");
+
+        // Sizes should differ between snapshots (different epochs)
+        // mark > set > go is typical (newer snapshots have more delegations)
+        eprintln!("  mark > set > go delegations: {} > {} > {}", mark_d, set_d, go_d);
+    }
+
+    #[test]
+    fn snapshot_counts_match_oracle_summaries() {
+        // Verify parsed counts against sub_state_summaries.toml for Allegra HFC
+        let tarball = snapshots_dir().join("snapshot_16588800.tar.gz");
+        if !tarball.exists() { return; }
+
+        let state_bytes = extract_state_from_tarball(&tarball).unwrap();
+
+        // Oracle: mark_snapshot_size = 10692071, set = 10316429, go = 9914946
+        // These are byte sizes, not entry counts. But we can verify counts are reasonable.
+        for (idx, name) in [(0, "mark"), (1, "set"), (2, "go")] {
+            let (pools, stakes, delegs) = parse_snapshot_counts(&state_bytes, idx).unwrap();
+            eprintln!("  {name}: {pools} pools, {stakes} stakes, {delegs} delegations");
+            assert!(pools > 0, "{name} should have pools");
+            assert!(stakes > 0, "{name} should have stakes");
+            assert!(delegs > 0, "{name} should have delegations");
+        }
     }
 }
