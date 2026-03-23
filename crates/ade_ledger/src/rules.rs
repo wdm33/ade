@@ -93,7 +93,7 @@ pub fn apply_block_classified(
     match era {
         CardanoEra::ByronEbb => Ok((
             state.clone(),
-            BlockVerdict { tx_count: 0, plutus_deferred_count: 0, non_plutus_count: 0 },
+            BlockVerdict { tx_count: 0, plutus_deferred_count: 0, non_plutus_count: 0, native_script_passed: 0, native_script_failed: 0 },
         )),
         CardanoEra::ByronRegular => {
             let preserved = byron::decode_byron_regular_block(block_cbor)?;
@@ -101,7 +101,7 @@ pub fn apply_block_classified(
             let new_state = crate::byron::validate_byron_block(state, block)?;
             Ok((
                 new_state,
-                BlockVerdict { tx_count: 0, plutus_deferred_count: 0, non_plutus_count: 0 },
+                BlockVerdict { tx_count: 0, plutus_deferred_count: 0, non_plutus_count: 0, native_script_passed: 0, native_script_failed: 0 },
             ))
         }
         _ => {
@@ -114,6 +114,7 @@ pub fn apply_block_classified(
                 CardanoEra::Conway => conway::decode_conway_block(block_cbor)?,
                 _ => return apply_block(state, era, block_cbor).map(|s| (s, BlockVerdict {
                     tx_count: 0, plutus_deferred_count: 0, non_plutus_count: 0,
+                    native_script_passed: 0, native_script_failed: 0,
                 })),
             };
             let block = decoded.decoded();
@@ -266,15 +267,64 @@ fn apply_epoch_boundary_full(
     let reserves = state.epoch_state.reserves;
     let treasury = state.epoch_state.treasury;
 
-    // Shelley reward pot = floor(reserves * rho) + epoch_fees
-    let monetary = crate::epoch::compute_total_reward(
-        reserves,
-        &state.protocol_params.monetary_expansion,
-    ).unwrap_or(ade_types::tx::Coin(0));
+    // --- Shelley eta: decentralization-adjusted monetary expansion ---
+    // eta = min(1, blocksMade / expectedBlocks) when d < 0.8
+    // eta = 1 when d >= 0.8
+    // expectedBlocks = floor((1-d) * epochLength * activeSlotCoeff)
+    let d = &state.protocol_params.decentralization;
+    let d_threshold = crate::rational::Rational::new(4, 5)
+        .unwrap_or_else(crate::rational::Rational::one);
+
+    let total_blocks_produced: u64 = state.epoch_state.block_production
+        .values().copied().sum();
+
+    // Compute eta as Rational for precision
+    let eta = if d.numerator() * d_threshold.denominator()
+        >= d_threshold.numerator() * d.denominator()
+    {
+        // d >= 0.8: eta = 1 (highly centralized, use full expansion)
+        crate::rational::Rational::one()
+    } else {
+        // expectedBlocks = floor((1-d) * 432000 * 1/20)
+        // = floor((1-d) * 21600)
+        let one_minus_d = crate::rational::Rational::one()
+            .checked_sub(d)
+            .unwrap_or_else(crate::rational::Rational::one);
+        let epoch_slots = crate::rational::Rational::from_integer(21600);
+        let expected_rat = one_minus_d.checked_mul(&epoch_slots)
+            .unwrap_or_else(crate::rational::Rational::one);
+        let expected_blocks = expected_rat.floor().max(1) as u64;
+
+        if total_blocks_produced >= expected_blocks {
+            crate::rational::Rational::one()
+        } else if expected_blocks > 0 {
+            crate::rational::Rational::new(
+                total_blocks_produced as i128, expected_blocks as i128,
+            ).unwrap_or_else(crate::rational::Rational::one)
+        } else {
+            crate::rational::Rational::one()
+        }
+    };
+
+    // deltaR1 = floor(eta * rho * reserves)
+    let delta_r1 = {
+        let reserves_rat = crate::rational::Rational::from_integer(reserves.0 as i128);
+        let rho = &state.protocol_params.monetary_expansion;
+        reserves_rat.checked_mul(rho)
+            .and_then(|r| r.checked_mul(&eta))
+            .map(|r| {
+                let f = r.floor();
+                if f < 0 { 0u64 } else { f as u64 }
+            })
+            .unwrap_or(0u64)
+    };
+
+    // total_reward = deltaR1 + epoch_fees
     let total_reward = ade_types::tx::Coin(
-        monetary.0.saturating_add(state.epoch_state.epoch_fees.0)
+        delta_r1.saturating_add(state.epoch_state.epoch_fees.0)
     );
 
+    // deltaT1 = floor(total_reward * tau)
     let treasury_delta = {
         let total_rat = crate::rational::Rational::from_integer(total_reward.0 as i128);
         let delta = total_rat.checked_mul(&state.protocol_params.treasury_growth);
@@ -302,8 +352,18 @@ fn apply_epoch_boundary_full(
     let mut rewarded_pool_count = 0usize;
     let mut reward_deltas = std::collections::BTreeMap::new();
 
-    // Expected blocks per epoch = epoch_length / slot_coeff ≈ 21600
-    let expected_total_blocks = 21600u64;
+    // Expected blocks per epoch (pool-adjusted) for per-pool performance
+    // This is the same expected_blocks as in the eta computation above
+    let one_minus_d = crate::rational::Rational::one()
+        .checked_sub(d)
+        .unwrap_or_else(crate::rational::Rational::one);
+    let expected_total_blocks = {
+        let expected_rat = one_minus_d.checked_mul(
+            &crate::rational::Rational::from_integer(21600),
+        ).unwrap_or_else(crate::rational::Rational::one);
+        let floored = expected_rat.floor();
+        if floored <= 0 { 21600u64 } else { floored as u64 }
+    };
 
     if total_stake > 0 && pool_reward_pot > 0 {
         for (pool_id, pool_stake) in &go.0.pool_stakes {
@@ -461,19 +521,36 @@ fn apply_epoch_boundary_full(
                 }
             }
 
+            // Route operator reward to the pool's reward account credential
+            if operator_reward > 0 && params.reward_account.len() >= 29 {
+                let mut reward_cred = [0u8; 28];
+                reward_cred.copy_from_slice(&params.reward_account[1..29]);
+                let entry = reward_deltas.entry(ade_types::Hash28(reward_cred))
+                    .or_insert(ade_types::tx::Coin(0));
+                entry.0 = entry.0.saturating_add(operator_reward);
+            }
+
             total_pool_rewards = total_pool_rewards.saturating_add(operator_reward);
             total_member_rewards = total_member_rewards.saturating_add(member_distributed);
             rewarded_pool_count += 1;
         }
     }
 
-    // Apply reward deltas to delegation rewards
+    // deltaT2: filter rewards — only registered credentials receive rewards.
+    // Rewards to unregistered credentials go to treasury (Shelley spec).
+    // Requires complete registrations loaded from oracle DState rewards map.
+    let mut delta_t2 = 0u64;
     let mut delegation = state.cert_state.delegation.clone();
     for (cred, reward) in &reward_deltas {
-        let entry = delegation.rewards
-            .entry(ade_types::shelley::cert::StakeCredential(cred.clone()))
-            .or_insert(ade_types::tx::Coin(0));
-        entry.0 = entry.0.saturating_add(reward.0);
+        let stake_cred = ade_types::shelley::cert::StakeCredential(cred.clone());
+        if delegation.registrations.contains_key(&stake_cred) {
+            let entry = delegation.rewards
+                .entry(stake_cred)
+                .or_insert(ade_types::tx::Coin(0));
+            entry.0 = entry.0.saturating_add(reward.0);
+        } else {
+            delta_t2 = delta_t2.saturating_add(reward.0);
+        }
     }
 
     let _ = (rewarded_pool_count, total_pool_rewards, total_member_rewards, total_stake);
@@ -513,16 +590,21 @@ fn apply_epoch_boundary_full(
         }
     });
 
-    // 5. Update reserves and treasury
-    // Undistributed pool rewards stay in reserves (not deducted)
-    let distributed = treasury_delta
-        .saturating_add(total_pool_rewards)
-        .saturating_add(total_member_rewards);
+    // 5. Update reserves and treasury per Shelley spec:
+    //    deltaR2 = pool_pot - sum(all_computed_rewards)  [undistributed returns to reserves]
+    //    reserves' = reserves - deltaR1 + deltaR2
+    //    treasury' = treasury + deltaT1 + deltaT2  [deltaT2 = filtered undeliverable rewards]
+    let sum_rewards = total_pool_rewards.saturating_add(total_member_rewards);
+    let delta_r2 = pool_reward_pot.saturating_sub(sum_rewards);
     let new_reserves = ade_types::tx::Coin(
-        reserves.0.saturating_sub(distributed)
+        reserves.0
+            .saturating_sub(delta_r1)
+            .saturating_add(delta_r2)
     );
     let new_treasury = ade_types::tx::Coin(
-        treasury.0.saturating_add(treasury_delta)
+        treasury.0
+            .saturating_add(treasury_delta)
+            .saturating_add(delta_t2)
     );
 
     let cert_state = crate::delegation::CertState {
@@ -733,10 +815,16 @@ fn extract_inputs_outputs_from_tx(
 pub struct BlockVerdict {
     /// Total transactions decoded.
     pub tx_count: u64,
-    /// Number of transactions with Plutus scripts (deferred).
+    /// Plutus txs → ScriptVerdict::NotYetEvaluated (CE-77).
     pub plutus_deferred_count: u64,
-    /// Number of transactions with no Plutus involvement.
+    /// Non-Plutus txs (native scripts evaluated, or no scripts).
     pub non_plutus_count: u64,
+    /// Native scripts evaluated and passed.
+    pub native_script_passed: u64,
+    /// Native scripts evaluated and failed (structural — tx still accepted
+    /// because witness-level script failure is a Phase 2 ledger rule, not
+    /// a structural rejection at this level).
+    pub native_script_failed: u64,
 }
 
 /// Decode and structurally validate all transaction bodies from a post-Byron block.
@@ -753,6 +841,8 @@ fn decode_validate_tx_bodies(
             tx_count: 0,
             plutus_deferred_count: 0,
             non_plutus_count: 0,
+            native_script_passed: 0,
+            native_script_failed: 0,
         });
     }
 
@@ -769,6 +859,8 @@ fn decode_validate_tx_bodies(
     let mut tx_count = 0u64;
     let mut plutus_deferred_count = 0u64;
     let mut non_plutus_count = 0u64;
+    let mut native_script_passed = 0u64;
+    let mut native_script_failed = 0u64;
     let mut tx_idx = 0usize;
 
     let mut process_one = |body_data: &[u8], body_offset: &mut usize| -> Result<(), LedgerError> {
@@ -778,33 +870,39 @@ fn decode_validate_tx_bodies(
         // Get witness info for this tx (if available)
         let witness_info = witness_infos.get(tx_idx);
 
-        // Determine authoritative script verdict using witness confirmation
+        // Determine authoritative script verdict using witness confirmation (CE-77)
         let has_plutus_in_witnesses = witness_info
             .map(|w| w.has_plutus())
             .unwrap_or(false);
 
-        // Witness-confirmed classification:
-        // - Plutus in witnesses → deferred (authoritative, regardless of body heuristic)
-        // - Body says Plutus but witnesses don't confirm → still deferred (conservative)
-        // - Native scripts in witnesses → evaluate them
-        // - Neither → non-Plutus
+        // ScriptPosture → ScriptVerdict mapping (CE-77):
+        // - PlutusPresentDeferred or Plutus in witnesses → ScriptVerdict::NotYetEvaluated
+        // - NonPlutusScriptsOnly with native scripts → evaluate → NativeScriptPassed/Failed
+        // - NoScripts → ScriptVerdict::NativeScriptPassed (trivially)
         let is_deferred = has_plutus_in_witnesses
             || body_posture == crate::scripts::ScriptPosture::PlutusPresentDeferred;
 
         if is_deferred {
+            // ScriptVerdict::NotYetEvaluated — Plutus evaluation deferred to Phase 3
             plutus_deferred_count += 1;
         } else {
             // Evaluate native scripts if present
             if let Some(w) = witness_info {
                 for script in &w.native_scripts {
-                    let _verdict = crate::scripts::evaluate_native_script(
+                    let verdict = crate::scripts::evaluate_native_script(
                         script,
                         &w.available_key_hashes,
                         current_slot,
                     );
-                    // Native script verdict is recorded but does not reject the block
-                    // in T-24B without UTxO state to determine which scripts are required.
-                    // Full rejection requires knowing which inputs are script-locked (T-24B+).
+                    match verdict {
+                        crate::scripts::ScriptVerdict::NativeScriptPassed => {
+                            native_script_passed += 1;
+                        }
+                        crate::scripts::ScriptVerdict::NativeScriptFailed(_) => {
+                            native_script_failed += 1;
+                        }
+                        crate::scripts::ScriptVerdict::NotYetEvaluated => {}
+                    }
                 }
             }
             non_plutus_count += 1;
@@ -832,6 +930,8 @@ fn decode_validate_tx_bodies(
         tx_count,
         plutus_deferred_count,
         non_plutus_count,
+        native_script_passed,
+        native_script_failed,
     })
 }
 

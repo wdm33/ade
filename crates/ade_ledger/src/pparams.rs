@@ -72,6 +72,14 @@ pub struct ProtocolParameters {
 
     /// Minimum pool cost (in lovelace).
     pub min_pool_cost: Coin,
+
+    // -- Decentralization --
+
+    /// Decentralization parameter (d).
+    /// d = 1 means fully federated (all BFT blocks).
+    /// d = 0 means fully decentralized (all pool blocks).
+    /// Removed in Babbage (permanently 0).
+    pub decentralization: Rational,
 }
 
 impl Default for ProtocolParameters {
@@ -97,6 +105,8 @@ impl Default for ProtocolParameters {
             protocol_minor: 0,
             min_utxo_value: Coin(1_000_000),
             min_pool_cost: Coin(340_000_000),
+            // d = 1 at Shelley launch (fully federated); decreases over time to 0
+            decentralization: Rational::new(1, 1).unwrap_or_else(Rational::zero),
         }
     }
 }
@@ -123,6 +133,7 @@ pub struct ProtocolParameterUpdate {
     pub protocol_minor: Option<u32>,
     pub min_utxo_value: Option<Coin>,
     pub min_pool_cost: Option<Coin>,
+    pub decentralization: Option<Rational>,
 }
 
 impl ProtocolParameterUpdate {
@@ -145,6 +156,7 @@ impl ProtocolParameterUpdate {
             protocol_minor: None,
             min_utxo_value: None,
             min_pool_cost: None,
+            decentralization: None,
         }
     }
 }
@@ -263,8 +275,13 @@ fn merge_proposals(
         quorum_threshold,
     );
 
-    // Rational fields: pool_influence, monetary_expansion, treasury_growth
+    // Rational fields: pool_influence, monetary_expansion, treasury_growth, decentralization
     // For simplicity, these use the first proposal that reaches quorum
+    result.decentralization = find_quorum_rational(
+        proposals.values().filter_map(|p| p.decentralization.as_ref()),
+        quorum_threshold,
+    );
+
     result.pool_influence = find_quorum_rational(
         proposals.values().filter_map(|p| p.pool_influence.as_ref()),
         quorum_threshold,
@@ -438,6 +455,16 @@ fn apply_update(
     }
     if let Some(v) = update.min_pool_cost {
         pp.min_pool_cost = v;
+    }
+    if let Some(ref v) = update.decentralization {
+        if !v.is_non_negative() {
+            return Err(LedgerError::EpochTransition(EpochError {
+                epoch: current_epoch,
+                era: current_era,
+                reason: EpochFailureReason::InvalidParameterUpdate,
+            }));
+        }
+        pp.decentralization = v.clone();
     }
 
     Ok(pp)

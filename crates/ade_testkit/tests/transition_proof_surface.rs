@@ -80,13 +80,17 @@ fn shelley_allegra_transition_proof_surface() {
     )
     .unwrap();
 
-    let post_blocks = manifest["post_blocks"].as_array().unwrap();
+    let all_blocks = manifest["blocks"].as_array().unwrap();
+    // Post-boundary blocks have filenames starting with "blk_"
+    let post_blocks: Vec<_> = all_blocks.iter()
+        .filter(|e| e["file"].as_str().map(|f| f.starts_with("blk_")).unwrap_or(false))
+        .collect();
     let mut applied = 0;
     let mut total_txs = 0u64;
     let mut total_deferred = 0u64;
 
     eprintln!("\n  Replaying {} post-HFC blocks:", post_blocks.len());
-    for entry in post_blocks {
+    for entry in &post_blocks {
         let filename = entry["file"].as_str().unwrap();
         let raw = std::fs::read(block_dir.join(filename)).unwrap();
         let env = decode_block_envelope(&raw).unwrap();

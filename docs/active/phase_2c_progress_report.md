@@ -149,13 +149,16 @@ The cluster plan is at `docs/active/cluster_plan.md` with slice specs in `docs/a
 
 **Shelley maxPoolReward formula implemented**:
 ```
-total_reward = floor(reserves × rho) + epoch_fees
+eta = min(1, blocksMade / expectedBlocks)  [when d < 0.8]
+deltaR1 = floor(eta × rho × reserves)
+total_reward = deltaR1 + epoch_fees
 treasury_delta = floor(total_reward × tau)
 pool_reward_pot = total_reward - treasury_delta
 sigma' = min(pool_stake/total_stake, 1/k)
 s' = min(pledge/total_stake, 1/k)
 bracket = sigma' + s' × a0 × (sigma' - s'×(z-sigma')/z)
 maxPool = R × performance × bracket / (1 + a0)
+reserves' = reserves - deltaR1 + (pool_pot - sum_rewards)  [undistributed returns]
 ```
 
 **Oracle convergence (Allegra epoch 236→237)**:
@@ -165,10 +168,11 @@ maxPool = R × performance × bracket / (1 + a0)
 | No performance factor | 39.3T (100%) | 0.52 |
 | + proportional performance scaling | 28.5T (72%) | 0.72 |
 | + epoch fees + a0 pledge influence | 23.7T (60%) | 0.87 |
-| + saturation capping + correct n_opt=500 | **20.87T (53%)** | **1.016** |
+| + saturation capping + correct n_opt=500 | 20.87T (53%) | 1.016 |
+| + eta (decentralization-adjusted) + correct reserves accounting | **20.62T (53%)** | **1.004** |
 | Oracle | 20.54T (52%) | 1.000 |
 
-**Remaining 1.6% gap**: Multi-factor residual — snapshot timing offset, simplified performance ratio vs Shelley spec's beta-distribution likelihood, per-pool integer rounding accumulation. Formula is frozen; further refinement requires precise boundary-point comparison (now possible with re-extracted boundary blocks).
+**Remaining 0.4% gap**: deltaT2 — undeliverable rewards (pool operators without registered reward addresses) that the oracle sends to treasury. ~74B lovelace (~74K ADA). Modeling deltaT2 requires checking reward address registration status during reward distribution.
 
 **Protocol parameters from oracle (not genesis defaults)**:
 - n_opt = 500 (genesis default was 150)
@@ -220,9 +224,9 @@ Oracle sub-state values extracted at each HFC boundary: epoch, treasury, reserve
 ## 4. What Is Still Open
 
 ### CE-71 (Epoch Boundary Oracle Equivalence)
-- Formula is functionally complete (101.6% oracle ratio)
-- Remaining 1.6% gap: re-extracted boundary blocks at correct slots now enable precise comparison
-- Reward distribution arithmetic verified but not oracle-identical
+- Formula with eta + correct reserves accounting: **100.36% oracle ratio**
+- Two bugs fixed: missing eta (decentralization-adjusted monetary expansion) + wrong reserves accounting
+- Remaining 0.36% gap: deltaT2 (undeliverable rewards → treasury, ~74K ADA)
 - Conway epoch boundary (CE-72) not started — T-25B scope
 
 ### CE-73 (HFC Translation Oracle State-Hash Equality)

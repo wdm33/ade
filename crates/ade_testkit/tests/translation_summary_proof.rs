@@ -198,6 +198,7 @@ fn make_shelley_state_at_hfc() -> LedgerState {
             protocol_minor: 0,
             min_utxo_value: Coin(1_000_000),
             min_pool_cost: Coin(340_000_000),
+            decentralization: Rational::new(8, 25).unwrap(),
         },
         era: CardanoEra::Shelley,
         track_utxo: false,
