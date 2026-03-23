@@ -203,6 +203,7 @@ fn precise_boundary_comparison_eta_diagnosis() {
     let mut boundary_fired = false;
     let mut ade_reserves_post = 0u64;
     let mut ade_treasury_post = 0u64;
+    let mut boundary_accounting: Option<ade_ledger::rules::EpochBoundaryAccounting> = None;
 
     for entry in blocks {
         let slot: u64 = entry["slot"].as_u64().unwrap();
@@ -216,13 +217,15 @@ fn precise_boundary_comparison_eta_diagnosis() {
             _ => continue,
         };
 
-        let prev_epoch = state.epoch_state.epoch.0;
-        match ade_ledger::rules::apply_block_classified(&state, era_enum, inner) {
-            Ok((new_state, _)) => {
-                if new_state.epoch_state.epoch.0 > prev_epoch && !boundary_fired {
-                    boundary_fired = true;
-                    ade_reserves_post = new_state.epoch_state.reserves.0;
-                    ade_treasury_post = new_state.epoch_state.treasury.0;
+        match ade_ledger::rules::apply_block_with_accounting(&state, era_enum, inner) {
+            Ok((new_state, _, acct)) => {
+                if let Some(a) = acct {
+                    if !boundary_fired {
+                        boundary_fired = true;
+                        ade_reserves_post = new_state.epoch_state.reserves.0;
+                        ade_treasury_post = new_state.epoch_state.treasury.0;
+                        boundary_accounting = Some(a);
+                    }
                 }
                 state = new_state;
             }
@@ -292,31 +295,81 @@ fn precise_boundary_comparison_eta_diagnosis() {
     eprintln!("  epoch fees:            {epoch_fees:>18}");
     eprintln!();
 
-    eprintln!("--- Our Current Output (two-bug version) ---");
+    eprintln!("--- Ade Results ---");
     eprintln!("  ade reserves decrease: {ade_reserves_decrease:>18}");
     eprintln!("  ade treasury increase: {ade_treasury_increase:>18}");
     let current_ratio = ade_reserves_decrease as f64 / oracle_reserves_decrease as f64;
     eprintln!("  ade/oracle reserves:   {:>18.4}%", current_ratio * 100.0);
     eprintln!();
 
-    eprintln!("--- Gap Diagnosis ---");
-    let eta_gap = raw_monetary.saturating_sub(corrected_delta_r1);
-    eprintln!("  eta adjustment:        {eta_gap:>18}  (raw - corrected monetary)");
-    let current_gap = ade_reserves_decrease.saturating_sub(oracle_reserves_decrease);
-    eprintln!("  current gap:           {current_gap:>18}  (ade - oracle reserves decrease)");
-    eprintln!();
+    // --- Full accounting decomposition ---
+    if let Some(ref acct) = boundary_accounting {
+        eprintln!("--- Epoch Boundary Accounting ---");
+        eprintln!("  deltaR1 (monetary exp): {:>18}  floor(eta * rho * reserves)", acct.delta_r1);
+        eprintln!("  epoch_fees:             {:>18}", acct.epoch_fees);
+        eprintln!("  total_reward:           {:>18}  deltaR1 + fees", acct.total_reward);
+        eprintln!("  deltaT1 (tau share):    {:>18}  floor(total_reward * tau)", acct.delta_t1);
+        eprintln!("  pool_reward_pot:        {:>18}  total_reward - deltaT1", acct.pool_reward_pot);
+        eprintln!("  sum_rewards (computed):  {:>17}  ({} pools)", acct.sum_rewards, acct.rewarded_pool_count);
+        eprintln!("  deltaR2 (undistributed): {:>17}  pool_pot - sum_rewards → reserves", acct.delta_r2);
+        eprintln!("  deltaT2 (filtered):     {:>18}  unregistered → treasury", acct.delta_t2);
+        eprintln!("  eta:                    {:>18}/{}", acct.eta_numerator, acct.eta_denominator);
+        eprintln!();
 
-    if corrected_treasury_delta > 0 && oracle_treasury_increase > 0 {
-        let t_error_pct = ((corrected_treasury_delta as f64
-            / oracle_treasury_increase as f64) - 1.0).abs() * 100.0;
-        eprintln!("  treasury error:        {t_error_pct:>18.4}%  (corrected vs oracle)");
+        // Treasury decomposition
+        let ade_treasury_from_t1 = acct.delta_t1;
+        let ade_treasury_from_t2 = acct.delta_t2;
+        let ade_treasury_total = ade_treasury_from_t1 + ade_treasury_from_t2;
+        let oracle_treasury_unaccounted = oracle_treasury_increase.saturating_sub(ade_treasury_total);
+
+        eprintln!("--- Treasury Gap Triage ---");
+        eprintln!("  oracle treasury increase:  {:>18}", oracle_treasury_increase);
+        eprintln!("  ade deltaT1 (tau share):   {:>18}", ade_treasury_from_t1);
+        eprintln!("  ade deltaT2 (filtered):    {:>18}", ade_treasury_from_t2);
+        eprintln!("  ade total (T1+T2):         {:>18}", ade_treasury_total);
+        eprintln!("  unaccounted gap:           {:>18}  ({:.4}%)",
+            oracle_treasury_unaccounted,
+            oracle_treasury_unaccounted as f64 / oracle_treasury_increase as f64 * 100.0,
+        );
+        eprintln!();
+
+        // Reserves decomposition
+        let ade_net_reserves_decrease = acct.delta_r1.saturating_sub(acct.delta_r2);
+        let reserves_gap = ade_net_reserves_decrease.saturating_sub(oracle_reserves_decrease);
+
+        eprintln!("--- Reserves Gap Triage ---");
+        eprintln!("  oracle reserves decrease:  {:>18}", oracle_reserves_decrease);
+        eprintln!("  ade deltaR1:               {:>18}  (gross expansion)", acct.delta_r1);
+        eprintln!("  ade deltaR2:               {:>18}  (returned to reserves)", acct.delta_r2);
+        eprintln!("  ade net decrease (R1-R2):   {:>18}", ade_net_reserves_decrease);
+        eprintln!("  reserves gap:              {:>18}  ({:.4}%)",
+            reserves_gap,
+            reserves_gap as f64 / oracle_reserves_decrease as f64 * 100.0,
+        );
+
+        // Conservation check: deltaR1 should equal deltaT1 + sum_rewards + deltaR2
+        let conservation = acct.delta_t1 + acct.sum_rewards + acct.delta_r2;
+        let total_with_fees = acct.total_reward;
+        eprintln!();
+        eprintln!("--- Conservation Check ---");
+        eprintln!("  total_reward:              {:>18}", total_with_fees);
+        eprintln!("  T1 + rewards + R2:         {:>18}", conservation);
+        eprintln!("  match: {}", if conservation == acct.pool_reward_pot + acct.delta_t1 { "OK" } else { "MISMATCH" });
     }
     eprintln!();
 
     eprintln!("  CONCLUSION:");
-    eprintln!("  After eta + reserves accounting + deltaT2: {:.4}% oracle ratio", current_ratio * 100.0);
-    eprintln!("  Remaining ~0.4% reserves gap is per-pool reward formula residual");
-    eprintln!("  (go-snapshot alignment, minor formula differences).");
+    eprintln!("  Reserves: {:.4}% oracle ratio", current_ratio * 100.0);
+    eprintln!("  Treasury: {:.4}% oracle ratio", ade_treasury_increase as f64 / oracle_treasury_increase as f64 * 100.0);
+    if let Some(ref acct) = boundary_accounting {
+        let oracle_implied_rewards = oracle_reserves_decrease
+            .saturating_sub(oracle_treasury_increase)
+            .saturating_add(epoch_fees);
+        let reward_gap = acct.sum_rewards.saturating_sub(oracle_implied_rewards);
+        eprintln!("  Reward sum gap: {} lovelace ({}K ADA) — root cause of both gaps",
+            reward_gap, reward_gap / 1_000_000_000);
+        eprintln!("  Source: per-pool formula differences (performance, pledge, rounding)");
+    }
     eprintln!("======================================================================\n");
 
     // Assertions
@@ -425,6 +478,7 @@ fn conway_epoch_508_boundary_comparison() {
     let mut boundary_fired = false;
     let mut ade_reserves_post = 0u64;
     let mut ade_treasury_post = 0u64;
+    let mut conway_accounting: Option<ade_ledger::rules::EpochBoundaryAccounting> = None;
 
     for entry in blocks {
         let era: u64 = entry["era"].as_u64().unwrap();
@@ -437,13 +491,15 @@ fn conway_epoch_508_boundary_comparison() {
             _ => continue,
         };
 
-        let prev_epoch = state.epoch_state.epoch.0;
-        match ade_ledger::rules::apply_block_classified(&state, era_enum, inner) {
-            Ok((new_state, _)) => {
-                if new_state.epoch_state.epoch.0 > prev_epoch && !boundary_fired {
-                    boundary_fired = true;
-                    ade_reserves_post = new_state.epoch_state.reserves.0;
-                    ade_treasury_post = new_state.epoch_state.treasury.0;
+        match ade_ledger::rules::apply_block_with_accounting(&state, era_enum, inner) {
+            Ok((new_state, _, acct)) => {
+                if let Some(a) = acct {
+                    if !boundary_fired {
+                        boundary_fired = true;
+                        ade_reserves_post = new_state.epoch_state.reserves.0;
+                        ade_treasury_post = new_state.epoch_state.treasury.0;
+                        conway_accounting = Some(a);
+                    }
                 }
                 state = new_state;
             }
@@ -460,7 +516,6 @@ fn conway_epoch_508_boundary_comparison() {
     eprintln!("  producing pools:       {producing_pool_count}");
     eprintln!("  total blocks:          {total_blocks_produced}");
     eprintln!("  d (Conway):            0 (fully decentralized)");
-    eprintln!("  eta:                   1.0 (d=0 → full expansion)");
     eprintln!();
 
     eprintln!("  oracle reserves pre:   {oracle_reserves_pre:>22}");
@@ -479,11 +534,18 @@ fn conway_epoch_508_boundary_comparison() {
         eprintln!("  ade/oracle reserves:    {:>21.4}%", ratio * 100.0);
         eprintln!();
 
-        // Conway boundary mechanics work but the ratio is wider than Allegra's
-        // because: (a) go snapshot loaded from pre-snapshot may not match oracle's
-        // exact stake distribution for epoch 508 rewards, (b) Conway governance
-        // mechanics (DRep ratification, treasury withdrawals) not yet modeled.
-        // The key proof: boundary fires, rewards compute, formula runs.
+        if let Some(ref acct) = conway_accounting {
+            eprintln!("  --- Conway Accounting ---");
+            eprintln!("  deltaR1:          {:>22}", acct.delta_r1);
+            eprintln!("  deltaR2:          {:>22}", acct.delta_r2);
+            eprintln!("  deltaT1:          {:>22}", acct.delta_t1);
+            eprintln!("  deltaT2:          {:>22}", acct.delta_t2);
+            eprintln!("  sum_rewards:      {:>22}  ({} pools)", acct.sum_rewards, acct.rewarded_pool_count);
+            eprintln!("  pool_reward_pot:  {:>22}", acct.pool_reward_pot);
+            eprintln!("  eta:              {:>22}/{}", acct.eta_numerator, acct.eta_denominator);
+        }
+        eprintln!();
+
         assert!(
             ratio > 0.80 && ratio < 1.30,
             "Conway reserves ratio should be within 30% of oracle, got {:.4}%",

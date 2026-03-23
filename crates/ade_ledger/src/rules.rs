@@ -82,7 +82,56 @@ pub fn apply_block(
 /// This gives structural verdict agreement — the block is accepted if
 /// all transaction bodies and witness sets decode correctly.
 /// Apply a block and return both the new state and the structural classification.
+/// Apply a block and return the verdict plus any epoch boundary accounting.
 ///
+/// If the block triggers an epoch boundary, the accounting struct contains
+/// the full decomposition (deltaR1, deltaR2, deltaT1, deltaT2, etc.).
+/// If no boundary fires, accounting is None.
+pub fn apply_block_with_accounting(
+    state: &LedgerState,
+    era: CardanoEra,
+    block_cbor: &[u8],
+) -> Result<(LedgerState, BlockVerdict, Option<EpochBoundaryAccounting>), LedgerError> {
+    // Pre-decode the block to get the slot for epoch detection
+    let slot = match era {
+        CardanoEra::ByronEbb | CardanoEra::ByronRegular => {
+            let (s, v) = apply_block_classified(state, era, block_cbor)?;
+            return Ok((s, v, None));
+        }
+        _ => {
+            let decoded = match era {
+                CardanoEra::Shelley => shelley::decode_shelley_block(block_cbor)?,
+                CardanoEra::Allegra => allegra::decode_allegra_block(block_cbor)?,
+                CardanoEra::Mary => mary::decode_mary_block(block_cbor)?,
+                CardanoEra::Alonzo => alonzo::decode_alonzo_block(block_cbor)?,
+                CardanoEra::Babbage => babbage::decode_babbage_block(block_cbor)?,
+                CardanoEra::Conway => conway::decode_conway_block(block_cbor)?,
+                _ => {
+                    let (s, v) = apply_block_classified(state, era, block_cbor)?;
+                    return Ok((s, v, None));
+                }
+            };
+            SlotNo(decoded.decoded().header.body.slot)
+        }
+    };
+
+    // Check for epoch boundary, capture accounting if it fires
+    let mut accounting = None;
+    let pre_boundary_state = if let Some(new_epoch) = crate::state::detect_epoch_transition(
+        state.epoch_state.epoch, slot,
+    ) {
+        let (new_state, acct) = apply_epoch_boundary_full(state, new_epoch);
+        accounting = Some(acct);
+        new_state
+    } else {
+        state.clone()
+    };
+
+    // Apply block normally on the (possibly post-boundary) state
+    let (final_state, verdict) = apply_block_classified(&pre_boundary_state, era, block_cbor)?;
+    Ok((final_state, verdict, accounting))
+}
+
 /// Same as `apply_block` but exposes the `BlockVerdict` so the harness
 /// can separate ordinary accepted blocks from script-execution-deferred blocks.
 pub fn apply_block_classified(
@@ -145,7 +194,8 @@ fn apply_shelley_era_block_classified(
         current_state.epoch_state.epoch,
         slot,
     ) {
-        current_state = apply_epoch_boundary_full(&current_state, new_epoch);
+        let (new_state, _accounting) = apply_epoch_boundary_full(&current_state, new_epoch);
+        current_state = new_state;
     }
 
     let verdict = decode_validate_tx_bodies(block, era)?;
@@ -260,7 +310,7 @@ fn track_utxo(
 fn apply_epoch_boundary_full(
     state: &LedgerState,
     new_epoch: ade_types::EpochNo,
-) -> LedgerState {
+) -> (LedgerState, EpochBoundaryAccounting) {
     // 1. Reward computation from PRE-rotation go snapshot
     //    Rewards must be computed before rotation — after rotation,
     //    the go snapshot becomes the old set (which may be empty).
@@ -612,7 +662,24 @@ fn apply_epoch_boundary_full(
         pool: pool_state,
     };
 
-    LedgerState {
+    let eta_num = eta.numerator().unsigned_abs() as u64;
+    let eta_den = eta.denominator().unsigned_abs() as u64;
+
+    let accounting = EpochBoundaryAccounting {
+        delta_r1,
+        delta_r2,
+        delta_t1: treasury_delta,
+        delta_t2,
+        total_reward: total_reward.0,
+        pool_reward_pot,
+        sum_rewards,
+        rewarded_pool_count: rewarded_pool_count as u64,
+        eta_numerator: eta_num,
+        eta_denominator: eta_den.max(1),
+        epoch_fees: state.epoch_state.epoch_fees.0,
+    };
+
+    let new_state = LedgerState {
         utxo_state: state.utxo_state.clone(),
         epoch_state: crate::state::EpochState {
             epoch: new_epoch,
@@ -627,7 +694,9 @@ fn apply_epoch_boundary_full(
         era: state.era,
         track_utxo: state.track_utxo,
         cert_state,
-    }
+    };
+
+    (new_state, accounting)
 }
 
 /// Structured summary of an epoch boundary transition.
@@ -647,6 +716,35 @@ pub struct EpochBoundarySummary {
     pub go_delegation_count: usize,
     pub treasury: u64,
     pub reserves: u64,
+}
+
+/// Detailed accounting of an epoch boundary transition.
+///
+/// Decomposes the reserves and treasury changes into named buckets
+/// for precise oracle comparison. All values in lovelace.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct EpochBoundaryAccounting {
+    /// floor(min(1, eta) * rho * reserves) — monetary expansion from reserves
+    pub delta_r1: u64,
+    /// pool_pot - sum_rewards — undistributed remainder returned to reserves
+    pub delta_r2: u64,
+    /// floor(total_reward * tau) — treasury's share of the reward pot
+    pub delta_t1: u64,
+    /// sum of rewards filtered for unregistered credentials → treasury
+    pub delta_t2: u64,
+    /// total_reward = delta_r1 + epoch_fees
+    pub total_reward: u64,
+    /// pool_reward_pot = total_reward - delta_t1
+    pub pool_reward_pot: u64,
+    /// sum of all computed pool rewards (operator + member)
+    pub sum_rewards: u64,
+    /// number of pools that received rewards
+    pub rewarded_pool_count: u64,
+    /// eta = min(1, blocksMade / expectedBlocks)
+    pub eta_numerator: u64,
+    pub eta_denominator: u64,
+    /// epoch fees added to reward pot
+    pub epoch_fees: u64,
 }
 
 /// Process certificates from a block to accumulate delegation/pool state.
