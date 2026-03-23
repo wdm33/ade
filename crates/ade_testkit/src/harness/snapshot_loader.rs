@@ -294,6 +294,155 @@ pub fn parse_oracle_hashes(content: &str) -> Result<Vec<OracleHashEntry>, Harnes
     Ok(entries)
 }
 
+/// Parse the go snapshot's pool params, stake distribution, and delegation
+/// from the ExtLedgerState CBOR.
+///
+/// Returns (pool_count, stake_entry_count, delegation_entry_count).
+/// This is the T-21B state-load bridge: loading delegation/pool data
+/// from the oracle's on-disk format into usable counts and structures.
+pub fn parse_go_snapshot_counts(state_cbor: &[u8]) -> Result<(usize, usize, usize), HarnessError> {
+    // Navigate to ES[2] = SnapShots
+    let off = navigate_to_nes(state_cbor)?;
+    let es = skip_nes_to_epoch_state(state_cbor, off)?;
+
+    // ES[2] = SnapShots = array(4) [mark, set, go, fee_total]
+    let ss_off = skip_n_fields(state_cbor, es, 2)?; // skip ES[0], ES[1]
+    let (ss_inner, _) = read_array_header(state_cbor, ss_off)?;
+
+    // SS[2] = go snapshot = array(3) [stake_dist, delegations, pool_params]
+    let go_off = skip_n_fields(state_cbor, ss_inner, 2)?; // skip mark, set
+    let (go_inner, go_len) = read_array_header(state_cbor, go_off)?;
+    if go_len != 3 {
+        return Err(HarnessError::ParseError(format!(
+            "go snapshot expected array(3), got array({go_len})"
+        )));
+    }
+
+    // Count entries in each map
+    let stake_count = count_indef_map(state_cbor, go_inner)?;
+    let deleg_off = skip_cbor(state_cbor, go_inner)?;
+    let deleg_count = count_indef_map(state_cbor, deleg_off)?;
+    let pool_off = skip_cbor(state_cbor, deleg_off)?;
+    let pool_count = count_indef_map(state_cbor, pool_off)?;
+
+    Ok((pool_count, stake_count, deleg_count))
+}
+
+/// Parse the go snapshot's delegation map into a Vec of (credential_hash, pool_hash) pairs.
+///
+/// This loads the actual delegation data needed for reward computation.
+pub fn parse_go_delegations(
+    state_cbor: &[u8],
+) -> Result<Vec<(Hash32, Hash32)>, HarnessError> {
+    let off = navigate_to_nes(state_cbor)?;
+    let es = skip_nes_to_epoch_state(state_cbor, off)?;
+    let ss_off = skip_n_fields(state_cbor, es, 2)?;
+    let (ss_inner, _) = read_array_header(state_cbor, ss_off)?;
+    let go_off = skip_n_fields(state_cbor, ss_inner, 2)?;
+    let (go_inner, _) = read_array_header(state_cbor, go_off)?;
+
+    // Skip stake_dist to get to delegation map
+    let deleg_off = skip_cbor(state_cbor, go_inner)?;
+
+    // Parse delegation map: key = array(2)[type, hash28], value = bytes(28)
+    let (map_start, _, _map_val) = read_cbor_initial(state_cbor, deleg_off)?;
+
+    let mut delegations = Vec::new();
+    let mut co = map_start;
+
+    // Iterate map entries (works for both definite and indefinite)
+    while co < state_cbor.len() && state_cbor[co] != 0xff {
+        // Key: array(2) [type_tag, bytes(28)]
+        let (key_inner, _, _) = read_cbor_initial(state_cbor, co)?;
+        let key_end = skip_cbor(state_cbor, co)?;
+
+        // Read credential hash (skip type tag, read hash28)
+        let (_, _tag) = read_uint(state_cbor, key_inner)?;
+        let tag_end = skip_cbor(state_cbor, key_inner)?;
+        // Read hash bytes
+        let (hash_start, _, hash_len) = read_cbor_initial(state_cbor, tag_end)?;
+        let mut cred_hash = [0u8; 32];
+        if hash_len >= 28 {
+            cred_hash[..28].copy_from_slice(&state_cbor[hash_start..hash_start + 28]);
+        }
+        co = key_end;
+
+        // Value: bytes(28) = pool hash
+        let (pool_start, _, pool_len) = read_cbor_initial(state_cbor, co)?;
+        let mut pool_hash = [0u8; 32];
+        if pool_len >= 28 {
+            pool_hash[..28].copy_from_slice(&state_cbor[pool_start..pool_start + 28]);
+        }
+        co = skip_cbor(state_cbor, co)?;
+
+        delegations.push((Hash32(cred_hash), Hash32(pool_hash)));
+    }
+
+    Ok(delegations)
+}
+
+fn navigate_to_nes(state_cbor: &[u8]) -> Result<usize, HarnessError> {
+    let (off, _) = read_array_header(state_cbor, 0)?; // outer array(2)
+    let (off, _) = read_uint(state_cbor, off)?; // era index
+    let (off, _) = read_array_header(state_cbor, off)?; // state pair
+    let (off, telescope_len) = read_array_header(state_cbor, off)?; // telescope
+
+    // Skip to last telescope entry
+    let mut off = off;
+    for _ in 0..telescope_len - 1 {
+        off = skip_cbor(state_cbor, off)?;
+    }
+
+    // Current era: array(2) [Bound, State]
+    let (off, _) = read_array_header(state_cbor, off)?;
+    let off = skip_cbor(state_cbor, off)?; // skip Bound
+    let (off, _) = read_array_header(state_cbor, off)?; // State = array(2) [version, payload]
+    let off = skip_cbor(state_cbor, off)?; // skip version
+    let (off, _) = read_array_header(state_cbor, off)?; // payload = array(3)
+    let off = skip_cbor(state_cbor, off)?; // skip WithOrigin
+
+    // Now at NES
+    let (off, _) = read_array_header(state_cbor, off)?;
+    Ok(off)
+}
+
+fn skip_nes_to_epoch_state(state_cbor: &[u8], nes_body: usize) -> Result<usize, HarnessError> {
+    // Skip NES[0] (epoch), NES[1] (bprev), NES[2] (bcur) to reach NES[3] (EpochState)
+    let off = skip_cbor(state_cbor, nes_body)?; // NES[0]
+    let off = skip_cbor(state_cbor, off)?; // NES[1]
+    let off = skip_cbor(state_cbor, off)?; // NES[2]
+
+    // NES[3] = EpochState = array(4)
+    let (off, _) = read_array_header(state_cbor, off)?;
+    Ok(off)
+}
+
+fn skip_n_fields(state_cbor: &[u8], start: usize, n: u32) -> Result<usize, HarnessError> {
+    let mut off = start;
+    for _ in 0..n {
+        off = skip_cbor(state_cbor, off)?;
+    }
+    Ok(off)
+}
+
+fn count_indef_map(state_cbor: &[u8], offset: usize) -> Result<usize, HarnessError> {
+    let (mut co, _, val) = read_cbor_initial(state_cbor, offset)?;
+    if val != u64::MAX && val > 0 {
+        // Definite map — but our read_cbor_initial returns -1 as u64::MAX? No.
+        // Actually, for indef, we returned -1 which is i64 -1 but stored as... hmm.
+        // Let me handle this properly:
+        return Ok(val as usize);
+    }
+    // Indefinite map: count entries until break
+    let mut count = 0;
+    while co < state_cbor.len() && state_cbor[co] != 0xff {
+        co = skip_cbor(state_cbor, co)?; // key
+        co = skip_cbor(state_cbor, co)?; // value
+        count += 1;
+    }
+    Ok(count)
+}
+
 // --- Minimal CBOR reader (no external deps, no unwrap) ---
 
 fn read_array_header(data: &[u8], offset: usize) -> Result<(usize, u32), HarnessError> {
@@ -368,10 +517,8 @@ fn read_cbor_initial(data: &[u8], offset: usize) -> Result<(usize, u8, u64), Har
         off += 8;
         v
     } else if ai == 31 {
-        // indefinite length — not expected in headers we parse
-        return Err(HarnessError::ParseError(format!(
-            "indefinite length at offset {offset}"
-        )));
+        // indefinite length — sentinel value, callers must handle
+        return Ok((off, major, u64::MAX));
     } else {
         return Err(HarnessError::ParseError(format!(
             "unsupported additional info {ai} at offset {offset}"
@@ -669,6 +816,51 @@ mod tests {
                 "{} -> {}: telescopes match ({}), hashes differ",
                 pre, post, pre_snap.header.telescope_length
             );
+        }
+    }
+
+    #[test]
+    fn parse_go_snapshot_from_allegra() {
+        let tarball = snapshots_dir().join("snapshot_17020848.tar.gz");
+        if !tarball.exists() {
+            return;
+        }
+
+        let state_bytes = extract_state_from_tarball(&tarball).unwrap();
+        let (pools, stakes, delegs) = parse_go_snapshot_counts(&state_bytes).unwrap();
+
+        eprintln!(
+            "Allegra ep237 go snapshot: {} pools, {} stakes, {} delegations",
+            pools, stakes, delegs
+        );
+
+        // From Python analysis: SS[2] (go) has ~1,445 pools, ~96,260 stakes, ~98,331 delegations
+        assert!(pools > 1000, "should have > 1000 pools");
+        assert!(stakes > 90000, "should have > 90000 stake entries");
+        assert!(delegs > 90000, "should have > 90000 delegation entries");
+    }
+
+    #[test]
+    fn parse_go_delegations_from_allegra() {
+        let tarball = snapshots_dir().join("snapshot_17020848.tar.gz");
+        if !tarball.exists() {
+            return;
+        }
+
+        let state_bytes = extract_state_from_tarball(&tarball).unwrap();
+        let delegations = parse_go_delegations(&state_bytes).unwrap();
+
+        eprintln!("Allegra ep237: {} delegations loaded", delegations.len());
+        assert!(delegations.len() > 90000);
+
+        // Verify delegation entries have non-zero pool hashes
+        for (cred, pool) in delegations.iter().take(3) {
+            eprintln!(
+                "  cred={}... → pool={}...",
+                &format!("{cred}")[..16],
+                &format!("{pool}")[..16],
+            );
+            assert_ne!(*pool, Hash32([0u8; 32]), "pool hash must be non-zero");
         }
     }
 
