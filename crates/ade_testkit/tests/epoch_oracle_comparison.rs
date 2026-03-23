@@ -175,9 +175,21 @@ fn precise_boundary_comparison_eta_diagnosis() {
     let corrected_delta_r1 = (eta_num * 3 * oracle_reserves_pre as u128
         / (eta_den * 1000)) as u64;
 
+    // --- Epoch fees ---
+    // SS[3] at the pre-snapshot is the fee pot for the current epoch.
+    // At epoch 236 start (snapshot 16588800), this should have the epoch 235
+    // fees that were already consumed, or 0 if reset. Check both sources.
+    let pre_fees = pre_snap.header.epoch_fees;
+    let post_fees = post_snap.header.epoch_fees;
+    eprintln!("  pre-snapshot SS[3] fees:  {pre_fees} ({} ADA)", pre_fees / 1_000_000);
+    eprintln!("  post-snapshot SS[3] fees: {post_fees} ({} ADA)", post_fees / 1_000_000);
+
+    // Use the pre-snapshot fees if nonzero (accumulated during the epoch
+    // before the boundary consumed them). Otherwise fall back to post-snapshot.
+    let epoch_fees = if pre_fees > 0 { pre_fees } else { post_fees };
+
     // --- Treasury from corrected formula ---
     // total_reward = deltaR1 + epoch_fees
-    let epoch_fees = post_snap.header.epoch_fees;
     let corrected_total_reward = corrected_delta_r1 + epoch_fees;
     let corrected_treasury_delta = corrected_total_reward / 5; // floor(total_reward * tau)
 

@@ -402,18 +402,8 @@ fn apply_epoch_boundary_full(
     let mut rewarded_pool_count = 0usize;
     let mut reward_deltas = std::collections::BTreeMap::new();
 
-    // Expected blocks per epoch (pool-adjusted) for per-pool performance
-    // This is the same expected_blocks as in the eta computation above
-    let one_minus_d = crate::rational::Rational::one()
-        .checked_sub(d)
-        .unwrap_or_else(crate::rational::Rational::one);
-    let expected_total_blocks = {
-        let expected_rat = one_minus_d.checked_mul(
-            &crate::rational::Rational::from_integer(21600),
-        ).unwrap_or_else(crate::rational::Rational::one);
-        let floored = expected_rat.floor();
-        if floored <= 0 { 21600u64 } else { floored as u64 }
-    };
+    // Per-pool performance now uses apparentPerformance = β/σ with
+    // total_blocks_produced as denominator (not expected_total_blocks).
 
     if total_stake > 0 && pool_reward_pot > 0 {
         for (pool_id, pool_stake) in &go.0.pool_stakes {
@@ -444,18 +434,17 @@ fn apply_epoch_boundary_full(
                 params.margin.1 as i128,
             ).unwrap_or_else(crate::rational::Rational::zero);
 
-            // Performance scaling: min(1, blocks_produced / expected_blocks)
+            // Shelley apparentPerformance = min(1, β/σ)
+            // where β = pool_blocks / total_blocks, σ = pool_stake / total_stake
+            // This is: min(1, (pool_blocks * total_stake) / (total_blocks * pool_stake))
             let sigma = crate::rational::Rational::new(
                 pool_stake.0 as i128, total_stake as i128,
             ).unwrap_or_else(crate::rational::Rational::zero);
 
-            let expected_for_pool = if total_stake > 0 {
-                (expected_total_blocks as u128 * pool_stake.0 as u128 / total_stake as u128) as u64
-            } else { 0 };
-
-            let performance = if expected_for_pool > 0 {
+            let performance = if total_blocks_produced > 0 && pool_stake.0 > 0 {
                 let perf = crate::rational::Rational::new(
-                    blocks_produced as i128, expected_for_pool as i128,
+                    (blocks_produced as i128) * (total_stake as i128),
+                    (total_blocks_produced as i128) * (pool_stake.0 as i128),
                 ).unwrap_or_else(crate::rational::Rational::one);
                 if perf.numerator() > perf.denominator() {
                     crate::rational::Rational::one()
@@ -464,8 +453,9 @@ fn apply_epoch_boundary_full(
                 crate::rational::Rational::one()
             };
 
-            // Full Shelley maxPoolReward with saturation + a0:
-            //   maxPool = (R / (1 + a0)) * (sigma' + s' * a0 * ((sigma' - s'*(z-sigma')/z)))
+            // Shelley maxPoolReward (two-step with separate floors):
+            //   maxPool = floor(R / (1+a0) * (sigma' + s'*a0*(sigma'-s'*(z-sigma')/z)))
+            //   poolReward = floor(maxPool * apparentPerformance)
             // where sigma' = min(sigma, z), s' = min(s, z), z = 1/k
             let a0 = &state.protocol_params.pool_influence;
             let k = state.protocol_params.n_opt as i128;
@@ -508,35 +498,40 @@ fn apply_epoch_boundary_full(
                 pledge_term.and_then(|pt| sigma_prime.checked_add(&pt))
             };
 
-            // maxPool = R * performance * bracket / (1 + a0)
+            // Step 1: maxPool = floor(R / (1+a0) * bracket)
             let one_plus_a0 = crate::rational::Rational::one()
                 .checked_add(a0)
                 .unwrap_or_else(crate::rational::Rational::one);
 
-            let adjusted_pool_pot = if let Some(br) = bracket {
+            let max_pool = if let Some(br) = bracket {
                 let pot_rat = crate::rational::Rational::from_integer(pool_reward_pot as i128);
-                pot_rat.checked_mul(&performance)
-                    .and_then(|r| r.checked_mul(&br))
+                pot_rat.checked_mul(&br)
                     .and_then(|r| r.checked_div(&one_plus_a0))
                     .map(|r| r.floor().max(0) as u64)
                     .unwrap_or_else(|| {
-                        // Fallback for overflow
                         (pool_reward_pot as u128 * pool_stake.0 as u128
                             / total_stake as u128 * 10 / 13) as u64
                     })
             } else {
-                // Bracket computation failed — use simple fallback
                 (pool_reward_pot as u128 * pool_stake.0 as u128
                     / total_stake as u128 * 10 / 13) as u64
             };
 
-            // adjusted_pool_pot IS the maxPool for this pool.
-            // Split directly: cost → operator, margin of remainder → operator, rest → delegators
-            if adjusted_pool_pot == 0 {
+            if max_pool == 0 {
                 continue;
             }
 
-            let pool_max = adjusted_pool_pot;
+            // Step 2: poolReward = floor(maxPool * apparentPerformance)
+            let pool_max = {
+                let max_rat = crate::rational::Rational::from_integer(max_pool as i128);
+                max_rat.checked_mul(&performance)
+                    .map(|r| r.floor().max(0) as u64)
+                    .unwrap_or(max_pool)
+            };
+
+            if pool_max == 0 {
+                continue;
+            }
 
             // Operator gets: min(pool_max, cost) + margin * (pool_max - cost)
             let operator_reward = if pool_max <= params.cost.0 {
