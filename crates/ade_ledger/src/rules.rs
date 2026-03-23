@@ -136,26 +136,36 @@ fn apply_shelley_era_block_classified(
     era: CardanoEra,
 ) -> Result<(LedgerState, BlockVerdict), LedgerError> {
     let slot = SlotNo(block.header.body.slot);
+
+    // Detect epoch transition: if this block's slot falls in a new epoch,
+    // apply the epoch boundary transition before processing the block.
+    let mut current_state = state.clone();
+    if let Some(new_epoch) = crate::state::detect_epoch_transition(
+        current_state.epoch_state.epoch,
+        slot,
+    ) {
+        current_state.epoch_state.epoch = new_epoch;
+    }
+
     let verdict = decode_validate_tx_bodies(block, era)?;
 
-    // Track UTxO only when explicitly enabled (e.g., during boundary replay
-    // with snapshot-loaded state). Default replay skips for performance.
-    let utxo_state = if state.track_utxo {
-        track_utxo(block, era, &state.utxo_state)?
+    // Track UTxO only when explicitly enabled.
+    let utxo_state = if current_state.track_utxo {
+        track_utxo(block, era, &current_state.utxo_state)?
     } else {
-        state.utxo_state.clone()
+        current_state.utxo_state.clone()
     };
 
-    let mut epoch_state = state.epoch_state.clone();
+    let mut epoch_state = current_state.epoch_state;
     epoch_state.slot = slot;
 
     Ok((
         LedgerState {
             utxo_state,
             epoch_state,
-            protocol_params: state.protocol_params.clone(),
+            protocol_params: current_state.protocol_params,
             era,
-            track_utxo: state.track_utxo,
+            track_utxo: current_state.track_utxo,
         },
         verdict,
     ))
