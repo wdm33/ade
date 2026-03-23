@@ -436,16 +436,24 @@ fn apply_epoch_boundary_full(
 
             // Shelley apparentPerformance = min(1, β/σ)
             // where β = pool_blocks / total_blocks, σ = pool_stake / total_stake
-            // This is: min(1, (pool_blocks * total_stake) / (total_blocks * pool_stake))
+            //
+            // Equivalent: min(1, pool_blocks / (sigma * total_blocks))
+            //
+            // Note: total_blocks here is total pool blocks from nesBprev (14091),
+            // NOT expected pool blocks (14688). The Shelley spec uses the actual
+            // total block count, not the expected count.
             let sigma = crate::rational::Rational::new(
                 pool_stake.0 as i128, total_stake as i128,
             ).unwrap_or_else(crate::rational::Rational::zero);
 
+            // apparentPerformance as exact Rational: pool_blocks / (sigma * T)
+            // = pool_blocks * total_stake / (pool_stake * total_blocks)
             let performance = if total_blocks_produced > 0 && pool_stake.0 > 0 {
                 let perf = crate::rational::Rational::new(
                     (blocks_produced as i128) * (total_stake as i128),
                     (total_blocks_produced as i128) * (pool_stake.0 as i128),
                 ).unwrap_or_else(crate::rational::Rational::one);
+                // Cap at 1 — pool can't earn more than maxPool
                 if perf.numerator() > perf.denominator() {
                     crate::rational::Rational::one()
                 } else { perf }

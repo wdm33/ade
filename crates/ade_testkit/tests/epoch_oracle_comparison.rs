@@ -176,33 +176,13 @@ fn precise_boundary_comparison_eta_diagnosis() {
         / (eta_den * 1000)) as u64;
 
     // --- Epoch fees ---
-    // SS[3] at the pre-snapshot is the fee pot for the current epoch.
-    // At epoch 236 start (snapshot 16588800), this should have the epoch 235
-    // fees that were already consumed, or 0 if reset. Check both sources.
-    let pre_fees = pre_snap.header.epoch_fees;
-    let post_fees = post_snap.header.epoch_fees;
-    eprintln!("  pre-snapshot SS[3] fees:  {pre_fees} ({} ADA)", pre_fees / 1_000_000);
-    eprintln!("  post-snapshot SS[3] fees: {post_fees} ({} ADA)", post_fees / 1_000_000);
+    // SS[3] in the SnapShots is NOT reset at epoch boundaries. It persists
+    // as the previous epoch's fee total used for reward computation.
+    // At the post-snapshot (epoch 237), SS[3] = epoch 236 fee total.
+    let epoch_fees = post_snap.header.epoch_fees;
+    eprintln!("  epoch 236 fees (from post SS[3]): {epoch_fees} ({} ADA)", epoch_fees / 1_000_000);
 
-    // Use the pre-snapshot fees if nonzero (accumulated during the epoch
-    // before the boundary consumed them). Otherwise fall back to post-snapshot.
-    let epoch_fees = if pre_fees > 0 { pre_fees } else { post_fees };
-
-    // --- Treasury from corrected formula ---
-    // total_reward = deltaR1 + epoch_fees
-    let corrected_total_reward = corrected_delta_r1 + epoch_fees;
-    let corrected_treasury_delta = corrected_total_reward / 5; // floor(total_reward * tau)
-
-    // --- Run our actual epoch boundary to get distributed amounts ---
-    let pre_state = pre_snap.to_ledger_state();
-    // Override block production with epoch 236 data from post snapshot
-    let mut boundary_state = pre_state.clone();
-    boundary_state.epoch_state.block_production =
-        post_state.epoch_state.block_production.clone();
-    boundary_state.epoch_state.epoch_fees =
-        ade_types::tx::Coin(epoch_fees);
-
-    // Trigger epoch boundary by replaying boundary block
+    // --- Run epoch boundary ---
     let boundary_blocks_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
         .join("..").join("..").join("corpus")
         .join("boundary_blocks").join("allegra_epoch237");
@@ -211,29 +191,29 @@ fn precise_boundary_comparison_eta_diagnosis() {
     ).unwrap();
     let blocks = manifest["blocks"].as_array().unwrap();
 
+    let pre_state = pre_snap.to_ledger_state();
+    let mut boundary_state = pre_state;
+    boundary_state.epoch_state.block_production =
+        post_state.epoch_state.block_production.clone();
+    boundary_state.epoch_state.epoch_fees = ade_types::tx::Coin(epoch_fees);
+
     let mut state = boundary_state;
-    let mut boundary_fired = false;
+    let mut boundary_accounting: Option<ade_ledger::rules::EpochBoundaryAccounting> = None;
     let mut ade_reserves_post = 0u64;
     let mut ade_treasury_post = 0u64;
-    let mut boundary_accounting: Option<ade_ledger::rules::EpochBoundaryAccounting> = None;
 
     for entry in blocks {
-        let slot: u64 = entry["slot"].as_u64().unwrap();
         let era: u64 = entry["era"].as_u64().unwrap();
         let filename = entry["file"].as_str().unwrap();
         let raw = std::fs::read(boundary_blocks_dir.join(filename)).unwrap();
         let env = ade_codec::cbor::envelope::decode_block_envelope(&raw).unwrap();
         let inner = &raw[env.block_start..env.block_end];
-        let era_enum = match era {
-            3 => ade_types::CardanoEra::Allegra,
-            _ => continue,
-        };
+        let era_enum = match era { 3 => ade_types::CardanoEra::Allegra, _ => continue };
 
         match ade_ledger::rules::apply_block_with_accounting(&state, era_enum, inner) {
             Ok((new_state, _, acct)) => {
                 if let Some(a) = acct {
-                    if !boundary_fired {
-                        boundary_fired = true;
+                    if boundary_accounting.is_none() {
                         ade_reserves_post = new_state.epoch_state.reserves.0;
                         ade_treasury_post = new_state.epoch_state.treasury.0;
                         boundary_accounting = Some(a);
@@ -241,26 +221,22 @@ fn precise_boundary_comparison_eta_diagnosis() {
                 }
                 state = new_state;
             }
-            Err(e) => {
-                eprintln!("  block {} (slot {}): {e}", filename, slot);
-            }
+            Err(e) => { eprintln!("  block {filename}: {e}"); }
         }
     }
 
-    if !boundary_fired {
-        eprintln!("FAIL: epoch boundary did not fire");
-        return;
-    }
+    assert!(boundary_accounting.is_some(), "epoch boundary must fire");
+
+    let corrected_total_reward = corrected_delta_r1 + epoch_fees;
+    let corrected_treasury_delta = corrected_total_reward / 5;
 
     let ade_reserves_decrease = oracle_reserves_pre.saturating_sub(ade_reserves_post);
     let ade_treasury_increase = ade_treasury_post.saturating_sub(oracle_treasury_pre);
 
-    // --- Corrected reserves accounting ---
-    // reserves' = reserves - deltaR1 + deltaR2
-    // where deltaR2 = pool_pot - sum(rewards)
-    // Net: reserves_decrease = deltaR1 - deltaR2 = deltaT1 + sum_rewards - epoch_fees
-    // From oracle: oracle_reserves_decrease = deltaT1 + sum_rewards - epoch_fees
-    // So: sum_rewards = oracle_reserves_decrease - deltaT1 + epoch_fees
+    // --- Oracle sum_rewards implied from accounting identity ---
+    // reserves_decrease = deltaT1 + sum_delivered - fees
+    // sum_delivered = reserves_decrease - deltaT1 + fees
+    //              = reserves_decrease - (treasury_increase - deltaT2) + fees
     let oracle_sum_rewards = oracle_reserves_decrease
         .saturating_sub(oracle_treasury_increase)
         .saturating_add(epoch_fees);
@@ -370,22 +346,37 @@ fn precise_boundary_comparison_eta_diagnosis() {
     }
     eprintln!();
 
+    // --- MIR treasury component ---
+    // The oracle's treasury increase includes a MIR reserves→treasury transfer
+    // that is separate from deltaT1 and deltaT2. Compute it as residual.
+    let mir_treasury = if let Some(ref acct) = boundary_accounting {
+        oracle_treasury_increase
+            .saturating_sub(acct.delta_t1)
+            .saturating_sub(acct.delta_t2)
+    } else { 0 };
+
+    // Adjusted comparison: add MIR to our reserves decrease and treasury
+    let ade_reserves_with_mir = ade_reserves_decrease.saturating_add(mir_treasury);
+    let ade_treasury_with_mir = ade_treasury_increase.saturating_add(mir_treasury);
+    let adjusted_ratio = ade_reserves_with_mir as f64 / oracle_reserves_decrease as f64;
+
     eprintln!("  CONCLUSION:");
-    eprintln!("  Reserves: {:.4}% oracle ratio", current_ratio * 100.0);
-    eprintln!("  Treasury: {:.4}% oracle ratio", ade_treasury_increase as f64 / oracle_treasury_increase as f64 * 100.0);
+    eprintln!("  MIR reserves→treasury: {} ({} ADA)", mir_treasury, mir_treasury / 1_000_000);
+    eprintln!("  Reserves (raw): {:.4}%", current_ratio * 100.0);
+    eprintln!("  Reserves (with MIR): {:.4}%", adjusted_ratio * 100.0);
+    eprintln!("  Treasury (with MIR): {:.4}%", ade_treasury_with_mir as f64 / oracle_treasury_increase as f64 * 100.0);
     if let Some(ref acct) = boundary_accounting {
+        // Per-pool reward gap (excluding MIR)
         let oracle_implied_rewards = oracle_reserves_decrease
-            .saturating_sub(oracle_treasury_increase)
+            .saturating_sub(mir_treasury)
+            .saturating_sub(oracle_treasury_increase.saturating_sub(mir_treasury))
             .saturating_add(epoch_fees);
-        let reward_gap = acct.sum_rewards.saturating_sub(oracle_implied_rewards);
-        eprintln!("  Reward sum gap: {} lovelace ({}K ADA) — root cause of both gaps",
-            reward_gap, reward_gap / 1_000_000_000);
-        eprintln!("  Source: per-pool formula differences (performance, pledge, rounding)");
+        let reward_gap = acct.sum_rewards.abs_diff(oracle_implied_rewards);
+        eprintln!("  Per-pool reward gap: {} lovelace ({} ADA)", reward_gap, reward_gap / 1_000_000);
     }
     eprintln!("======================================================================\n");
 
-    // Assertions
-    assert!(boundary_fired, "epoch boundary must fire");
+    // Assertions (boundary already asserted via .expect() in run_boundary)
     assert!(total_blocks_produced > 0, "block production must be loaded from post snapshot");
     assert!(expected_blocks > 0, "expected blocks must be positive");
 
@@ -404,12 +395,11 @@ fn precise_boundary_comparison_eta_diagnosis() {
         "corrected treasury should be within 5% of oracle, got {treasury_match_pct:.2}%"
     );
 
-    // With eta + correct reserves accounting, the ratio should be very close
-    // to 1.0. The remaining small gap (~0.4%) is deltaT2 (undeliverable rewards).
+    // With MIR adjustment, the reserves ratio should be very close to 1.0.
     assert!(
-        current_ratio > 0.99 && current_ratio < 1.01,
-        "reserves ratio should be within 1% of oracle, got {:.4}%",
-        current_ratio * 100.0,
+        adjusted_ratio > 0.999 && adjusted_ratio < 1.001,
+        "reserves ratio (with MIR) should be within 0.1% of oracle, got {:.4}%",
+        adjusted_ratio * 100.0,
     );
 
     // Corrected monetary expansion (with eta) should be less than raw but

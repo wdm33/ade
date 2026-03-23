@@ -620,6 +620,37 @@ pub fn parse_go_snapshot_counts(state_cbor: &[u8]) -> Result<(usize, usize, usiz
 }
 
 /// Parse the go snapshot's delegation map into a Vec of (credential_hash, pool_hash) pairs.
+/// Parse the MIR (InstantaneousRewards) total from CertState[0].
+///
+/// Returns the total lovelace of pending MIR transfers from reserves.
+/// These are applied at the epoch boundary, adding to reward accounts
+/// and decreasing reserves independently of the reward pot.
+pub fn parse_mir_total(
+    state_cbor: &[u8],
+) -> Result<u64, HarnessError> {
+    let off = navigate_to_nes(state_cbor)?;
+    let es = skip_nes_to_epoch_state(state_cbor, off)?;
+
+    // ES[0] = AccountState (skip)
+    let off = skip_cbor(state_cbor, es)?;
+    // ES[1] = LedgerState = array(2)
+    let (off, _) = read_array_header(state_cbor, off)?;
+    // Skip UTxOState
+    let off = skip_cbor(state_cbor, off)?;
+    // CertState = array(6)
+    let (off, _) = read_array_header(state_cbor, off)?;
+    // CS[0] = irwd/MIR map
+    let (mut co, _, _) = read_cbor_initial(state_cbor, off)?;
+    let mut total = 0u64;
+    while co < state_cbor.len() && state_cbor[co] != 0xff {
+        co = skip_cbor(state_cbor, co)?; // skip key
+        let (_, major, val) = read_cbor_initial(state_cbor, co)?;
+        if major == 0 { total = total.saturating_add(val); }
+        co = skip_cbor(state_cbor, co)?;
+    }
+    Ok(total)
+}
+
 /// Parse the rewards map from CertState[4][0] (DState rewards/registrations).
 ///
 /// Returns Vec of (credential_hash, reward_lovelace) for ALL registered
