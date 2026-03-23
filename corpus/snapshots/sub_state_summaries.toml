@@ -9,6 +9,11 @@
 # UTxO is actually empty.
 #
 # Oracle: cardano-node 10.6.2, extraction date 2026-03-22
+#
+# Extended fields (T-26A.2): pool_count, deleg_count, bprev_count,
+# mark_snapshot_size, set_snapshot_size, go_snapshot_size.
+# These are the remainder-state comparison surface for CE-73.
+# Translation must preserve ALL of these exactly at HFC boundaries.
 
 [[snapshots]]
 slot = 4492800
@@ -36,6 +41,12 @@ telescope = 3
 utxo_count = 123583
 treasury_lovelace = 217021606000000
 reserves_lovelace = 13112607632000000
+pool_count = 1414
+deleg_count = 131554
+bprev_count = 611
+mark_snapshot_size = 10692071
+set_snapshot_size = 10316429
+go_snapshot_size = 9914946
 
 [[snapshots]]
 slot = 17020848
@@ -54,6 +65,12 @@ telescope = 4
 utxo_count = 317311
 treasury_lovelace = 330358412000000
 reserves_lovelace = 12759915293000000
+pool_count = 1882
+deleg_count = 381413
+bprev_count = 858
+mark_snapshot_size = 29872110
+set_snapshot_size = 27340357
+go_snapshot_size = 24754391
 
 [[snapshots]]
 slot = 23500962
@@ -72,6 +89,12 @@ telescope = 5
 utxo_count = 851331
 treasury_lovelace = 609002818000000
 reserves_lovelace = 11860319467000000
+pool_count = 2961
+deleg_count = 976341
+bprev_count = 1099
+mark_snapshot_size = 82681917
+set_snapshot_size = 81397623
+go_snapshot_size = 80088097
 
 [[snapshots]]
 slot = 40348902
@@ -90,6 +113,12 @@ telescope = 6
 utxo_count = 1262881
 treasury_lovelace = 1037476762000000
 reserves_lovelace = 10049419651000000
+pool_count = 3123
+deleg_count = 1646774
+bprev_count = 1134
+mark_snapshot_size = 121350975
+set_snapshot_size = 121281187
+go_snapshot_size = 121179103
 
 [[snapshots]]
 slot = 72748820
