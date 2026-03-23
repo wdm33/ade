@@ -1,0 +1,119 @@
+# Sub-State Summaries — Oracle ExtLedgerState Snapshots
+#
+# Extracted from encodeDiskExtLedgerState CBOR via CBOR navigation.
+# These are the comparison surface for T-26A.1: each HFC translation
+# must preserve treasury, reserves, and UTxO count exactly.
+#
+# UTxO count = 0 for Byron and Conway means the navigator doesn't
+# reach those eras' UTxO maps (different encoding), not that the
+# UTxO is actually empty.
+#
+# Oracle: cardano-node 10.6.2, extraction date 2026-03-22
+
+[[snapshots]]
+slot = 4492800
+label = "byron_shelley_hfc"
+epoch = 208
+telescope = 2
+utxo_count = 0
+treasury_lovelace = 0
+reserves_lovelace = 13888022853000000
+
+[[snapshots]]
+slot = 4924880
+label = "shelley_epoch_209"
+epoch = 209
+telescope = 2
+utxo_count = 40009
+treasury_lovelace = 8332814000000
+reserves_lovelace = 13286160713000000
+
+[[snapshots]]
+slot = 16588800
+label = "shelley_allegra_hfc"
+epoch = 236
+telescope = 3
+utxo_count = 123583
+treasury_lovelace = 217021606000000
+reserves_lovelace = 13112607632000000
+
+[[snapshots]]
+slot = 17020848
+label = "allegra_epoch_237"
+epoch = 237
+telescope = 3
+utxo_count = 127229
+treasury_lovelace = 224755310000000
+reserves_lovelace = 13092064399000000
+
+[[snapshots]]
+slot = 23068800
+label = "allegra_mary_hfc"
+epoch = 251
+telescope = 4
+utxo_count = 317311
+treasury_lovelace = 330358412000000
+reserves_lovelace = 12759915293000000
+
+[[snapshots]]
+slot = 23500962
+label = "mary_epoch_252"
+epoch = 252
+telescope = 4
+utxo_count = 342452
+treasury_lovelace = 337791818000000
+reserves_lovelace = 12736017186000000
+
+[[snapshots]]
+slot = 39916975
+label = "mary_alonzo_hfc"
+epoch = 290
+telescope = 5
+utxo_count = 851331
+treasury_lovelace = 609002818000000
+reserves_lovelace = 11860319467000000
+
+[[snapshots]]
+slot = 40348902
+label = "alonzo_epoch_291"
+epoch = 291
+telescope = 5
+utxo_count = 865875
+treasury_lovelace = 616008493000000
+reserves_lovelace = 11838146882000000
+
+[[snapshots]]
+slot = 72316896
+label = "alonzo_babbage_hfc"
+epoch = 365
+telescope = 6
+utxo_count = 1262881
+treasury_lovelace = 1037476762000000
+reserves_lovelace = 10049419651000000
+
+[[snapshots]]
+slot = 72748820
+label = "babbage_epoch_366"
+epoch = 366
+telescope = 6
+utxo_count = 1263435
+treasury_lovelace = 1043351944000000
+reserves_lovelace = 10030500599000000
+
+[[snapshots]]
+slot = 133660855
+label = "babbage_conway_hfc"
+epoch = 507
+telescope = 7
+utxo_count = 0
+treasury_lovelace = 1528154948000000
+reserves_lovelace = 7816251181000000
+
+[[snapshots]]
+slot = 134092810
+label = "conway_epoch_508"
+epoch = 508
+telescope = 7
+utxo_count = 0
+treasury_lovelace = 1532828946000000
+reserves_lovelace = 7802782713000000
