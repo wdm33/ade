@@ -78,7 +78,14 @@ impl LoadedSnapshot {
                 },
                 epoch_fees: ade_types::tx::Coin(self.header.epoch_fees),
             },
-            protocol_params: ProtocolParameters::default(),
+            protocol_params: {
+                let mut pp = ProtocolParameters::default();
+                // Oracle mainnet values differ from genesis defaults
+                pp.n_opt = 500; // mainnet n_opt (not genesis 150)
+                pp.treasury_growth = ade_ledger::rational::Rational::new(1, 5)
+                    .unwrap_or_else(ade_ledger::rational::Rational::zero);
+                pp
+            },
             era,
             track_utxo: true,
             cert_state,

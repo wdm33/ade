@@ -354,47 +354,70 @@ fn apply_epoch_boundary_full(
                 crate::rational::Rational::one()
             };
 
-            // Shelley maxPoolReward with a0 pledge influence:
-            // maxPool = (R / (1 + a0)) * (sigma' + s' * a0 * ((sigma' - s') / z))
-            // Simplified: we use the 1/(1+a0) scaling factor which is the dominant effect
+            // Full Shelley maxPoolReward with saturation + a0:
+            //   maxPool = (R / (1 + a0)) * (sigma' + s' * a0 * ((sigma' - s'*(z-sigma')/z)))
+            // where sigma' = min(sigma, z), s' = min(s, z), z = 1/k
             let a0 = &state.protocol_params.pool_influence;
+            let k = state.protocol_params.n_opt as i128;
+            let z = crate::rational::Rational::new(1, k)
+                .unwrap_or_else(crate::rational::Rational::zero);
+
+            // sigma' = min(sigma, z) — cap at saturation
+            let sigma_prime = if sigma.numerator() * z.denominator() > z.numerator() * sigma.denominator() {
+                z.clone()
+            } else {
+                sigma.clone()
+            };
+
+            // s' = min(pledge/total_stake, z)
+            let s = crate::rational::Rational::new(
+                params.pledge.0 as i128, total_stake as i128,
+            ).unwrap_or_else(crate::rational::Rational::zero);
+            let s_prime = if s.numerator() * z.denominator() > z.numerator() * s.denominator() {
+                z.clone()
+            } else {
+                s
+            };
+
+            // Use u128 integer arithmetic to avoid Rational overflow:
+            // maxPool = R * performance / (1+a0) * (sigma' + s'*a0*(sigma'-s'*(z-sigma')/z))
+            //
+            // Simplify: compute the bracket term as a Rational, then multiply by R*perf/(1+a0)
+            // bracket = sigma' + s' * a0 * (sigma' - s' * (z - sigma') / z)
+            let bracket = {
+                let z_minus_sigma = z.checked_sub(&sigma_prime);
+                let inner = z_minus_sigma.and_then(|diff| {
+                    s_prime.checked_mul(&diff)
+                        .and_then(|r| r.checked_div(&z))
+                });
+                let sigma_minus_inner = inner.and_then(|i| sigma_prime.checked_sub(&i));
+                let pledge_term = sigma_minus_inner.and_then(|smi| {
+                    s_prime.checked_mul(a0)
+                        .and_then(|r| r.checked_mul(&smi))
+                });
+                pledge_term.and_then(|pt| sigma_prime.checked_add(&pt))
+            };
+
+            // maxPool = R * performance * bracket / (1 + a0)
             let one_plus_a0 = crate::rational::Rational::one()
                 .checked_add(a0)
                 .unwrap_or_else(crate::rational::Rational::one);
 
-            // adjusted_pot = pool_reward_pot * performance * sigma / (1 + a0)
-            // Plus pledge bonus (simplified): + pool_reward_pot * pledge_ratio * a0 / (1 + a0)
-            let pot_rat = crate::rational::Rational::from_integer(pool_reward_pot as i128);
-
-            // Base reward: R * sigma * performance / (1 + a0)
-            let base = pot_rat.checked_mul(&sigma)
-                .and_then(|r| r.checked_mul(&performance))
-                .and_then(|r| r.checked_div(&one_plus_a0));
-
-            // Pledge bonus: R * s' * a0 / (1 + a0) where s' = pledge/total_stake
-            let pledge_ratio = crate::rational::Rational::new(
-                params.pledge.0 as i128, total_stake as i128,
-            ).unwrap_or_else(crate::rational::Rational::zero);
-
-            let pledge_bonus = pot_rat.checked_mul(&pledge_ratio)
-                .and_then(|r| r.checked_mul(a0))
-                .and_then(|r| r.checked_div(&one_plus_a0));
-
-            let adjusted_pool_pot = match (base, pledge_bonus) {
-                (Some(b), Some(p)) => {
-                    b.checked_add(&p)
-                        .map(|r| r.floor().max(0) as u64)
-                        .unwrap_or(b.floor().max(0) as u64)
-                }
-                (Some(b), _) => b.floor().max(0) as u64,
-                (None, _) => {
-                    // Base computation failed (overflow?) — use simpler formula
-                    // Fallback: pool_reward_pot * pool_stake / total_stake / (1+a0)
-                    let simple = pool_reward_pot as u128 * pool_stake.0 as u128
-                        / total_stake as u128
-                        * 10 / 13; // approx 1/1.3
-                    simple as u64
-                }
+            let adjusted_pool_pot = if let Some(br) = bracket {
+                let pot_rat = crate::rational::Rational::from_integer(pool_reward_pot as i128);
+                pot_rat.checked_mul(&performance)
+                    .and_then(|r| r.checked_mul(&br))
+                    .and_then(|r| r.checked_div(&one_plus_a0))
+                    .map(|r| r.floor().max(0) as u64)
+                    .unwrap_or_else(|| {
+                        // Fallback for overflow
+                        (pool_reward_pot as u128 * pool_stake.0 as u128
+                            / total_stake as u128 * 10 / 13) as u64
+                    })
+            } else {
+                // Bracket computation failed — use simple fallback
+                (pool_reward_pot as u128 * pool_stake.0 as u128
+                    / total_stake as u128 * 10 / 13) as u64
             };
 
             // adjusted_pool_pot IS the maxPool for this pool.
