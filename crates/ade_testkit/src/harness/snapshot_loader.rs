@@ -55,12 +55,15 @@ impl LoadedSnapshot {
         // Load delegation data from the go snapshot
         let cert_state = self.load_delegation_state();
 
+        // Load go snapshot stake distribution
+        let snapshots = self.load_snapshot_state();
+
         LedgerState {
             utxo_state: UTxOState::new(),
             epoch_state: EpochState {
                 epoch: EpochNo(self.header.epoch),
                 slot: SlotNo(0),
-                snapshots: ade_ledger::epoch::SnapshotState::new(),
+                snapshots,
                 reserves: ade_types::tx::Coin(self.header.reserves),
                 treasury: ade_types::tx::Coin(self.header.treasury),
             },
@@ -68,6 +71,70 @@ impl LoadedSnapshot {
             era,
             track_utxo: true,
             cert_state,
+        }
+    }
+
+    /// Load snapshot state (mark/set/go) from the oracle CBOR.
+    ///
+    /// Populates the go snapshot with stake distribution and pool stakes
+    /// from the oracle. Mark and set start empty (they'd need the previous
+    /// epoch's data which we don't have loaded).
+    fn load_snapshot_state(&self) -> ade_ledger::epoch::SnapshotState {
+        use ade_ledger::epoch::{
+            GoSnapshot, MarkSnapshot, SetSnapshot, SnapshotState, StakeSnapshot,
+        };
+        use ade_types::tx::{Coin, PoolId};
+        use ade_types::Hash28;
+        use std::collections::BTreeMap;
+
+        // Parse go snapshot stake distribution
+        let stake_entries = match parse_go_stake_distribution(&self.raw_cbor) {
+            Ok(s) => s,
+            Err(_) => return SnapshotState::new(),
+        };
+
+        let delegations_raw = match parse_go_delegations(&self.raw_cbor) {
+            Ok(d) => d,
+            Err(_) => return SnapshotState::new(),
+        };
+
+        // Build go snapshot delegations: credential → (pool, stake)
+        let mut go_delegations: BTreeMap<Hash28, (PoolId, Coin)> = BTreeMap::new();
+        let mut pool_stakes: BTreeMap<PoolId, Coin> = BTreeMap::new();
+
+        // Build stake lookup
+        let mut stake_map: BTreeMap<[u8; 28], u64> = BTreeMap::new();
+        for (cred_hash, stake) in &stake_entries {
+            let mut key = [0u8; 28];
+            key.copy_from_slice(&cred_hash.0[..28]);
+            stake_map.insert(key, *stake);
+        }
+
+        // Combine delegation + stake
+        for (cred_hash, pool_hash) in &delegations_raw {
+            let mut cred_bytes = [0u8; 28];
+            cred_bytes.copy_from_slice(&cred_hash.0[..28]);
+            let mut pool_bytes = [0u8; 28];
+            pool_bytes.copy_from_slice(&pool_hash.0[..28]);
+
+            let stake = stake_map.get(&cred_bytes).copied().unwrap_or(0);
+            let pool = PoolId(Hash28(pool_bytes));
+
+            go_delegations.insert(Hash28(cred_bytes), (pool.clone(), Coin(stake)));
+
+            let entry = pool_stakes.entry(pool).or_insert(Coin(0));
+            entry.0 = entry.0.saturating_add(stake);
+        }
+
+        let go = StakeSnapshot {
+            delegations: go_delegations,
+            pool_stakes,
+        };
+
+        SnapshotState {
+            mark: MarkSnapshot(StakeSnapshot::new()),
+            set: SetSnapshot(StakeSnapshot::new()),
+            go: GoSnapshot(go),
         }
     }
 
@@ -445,6 +512,47 @@ pub fn parse_go_delegations(
     }
 
     Ok(delegations)
+}
+
+/// Parse stake distribution from the go snapshot.
+///
+/// Returns Vec of (credential_hash, stake_lovelace).
+pub fn parse_go_stake_distribution(
+    state_cbor: &[u8],
+) -> Result<Vec<(Hash32, u64)>, HarnessError> {
+    let off = navigate_to_nes(state_cbor)?;
+    let es = skip_nes_to_epoch_state(state_cbor, off)?;
+    let ss_off = skip_n_fields(state_cbor, es, 2)?;
+    let (ss_inner, _) = read_array_header(state_cbor, ss_off)?;
+    let go_off = skip_n_fields(state_cbor, ss_inner, 2)?;
+    let (go_inner, _) = read_array_header(state_cbor, go_off)?;
+
+    // First map in go snapshot is stake distribution
+    let (mut co, _, _) = read_cbor_initial(state_cbor, go_inner)?;
+    let mut stakes = Vec::new();
+
+    while co < state_cbor.len() && state_cbor[co] != 0xff {
+        // Key: array(2) [type_tag, bytes(28)]
+        let (key_inner, _, _) = read_cbor_initial(state_cbor, co)?;
+        let key_end = skip_cbor(state_cbor, co)?;
+
+        let (_, _tag) = read_uint(state_cbor, key_inner)?;
+        let tag_end = skip_cbor(state_cbor, key_inner)?;
+        let (hash_start, _, hash_len) = read_cbor_initial(state_cbor, tag_end)?;
+        let mut cred_hash = [0u8; 32];
+        if hash_len >= 28 {
+            cred_hash[..28].copy_from_slice(&state_cbor[hash_start..hash_start + 28]);
+        }
+        co = key_end;
+
+        // Value: uint (stake in lovelace)
+        let (_, stake) = read_uint(state_cbor, co)?;
+        co = skip_cbor(state_cbor, co)?;
+
+        stakes.push((Hash32(cred_hash), stake));
+    }
+
+    Ok(stakes)
 }
 
 /// Pool params tuple: (pool_hash, pledge, cost, margin_num, margin_den, reward_account).

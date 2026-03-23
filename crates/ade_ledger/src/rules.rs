@@ -260,55 +260,17 @@ fn apply_epoch_boundary_full(
     state: &LedgerState,
     new_epoch: ade_types::EpochNo,
 ) -> LedgerState {
-    // 1. Snapshot rotation: mark <- current delegation, set <- mark, go <- set
-    let new_mark = crate::epoch::StakeSnapshot {
-        delegations: state.cert_state.delegation.delegations.iter()
-            .map(|(cred, pool)| {
-                let stake = state.cert_state.delegation.rewards
-                    .get(cred)
-                    .copied()
-                    .unwrap_or(ade_types::tx::Coin(0));
-                (cred.0.clone(), (pool.clone(), stake))
-            })
-            .collect(),
-        pool_stakes: {
-            let mut pool_stakes = std::collections::BTreeMap::new();
-            for pool in state.cert_state.delegation.delegations.values() {
-                let entry = pool_stakes
-                    .entry(pool.clone())
-                    .or_insert(ade_types::tx::Coin(0));
-                entry.0 = entry.0.saturating_add(0);
-            }
-            pool_stakes
-        },
-    };
-    let rotated = crate::epoch::rotate_snapshots(
-        &state.epoch_state.snapshots,
-        new_mark,
-    );
-
-    // 2. Pool retirements effective at this epoch
-    let mut pool_state = state.cert_state.pool.clone();
-    pool_state.retiring.retain(|pool_id, retire_epoch| {
-        if retire_epoch.0 <= new_epoch.0 {
-            pool_state.pools.remove(pool_id);
-            false
-        } else {
-            true
-        }
-    });
-
-    // 3. Reward computation
+    // 1. Reward computation from PRE-rotation go snapshot
+    //    Rewards must be computed before rotation — after rotation,
+    //    the go snapshot becomes the old set (which may be empty).
     let reserves = state.epoch_state.reserves;
     let treasury = state.epoch_state.treasury;
 
-    // total_reward = floor(reserves * rho)
     let total_reward = crate::epoch::compute_total_reward(
         reserves,
         &state.protocol_params.monetary_expansion,
     ).unwrap_or(ade_types::tx::Coin(0));
 
-    // treasury_delta = floor(total_reward * tau)
     let treasury_delta = {
         let total_rat = crate::rational::Rational::from_integer(total_reward.0 as i128);
         let delta = total_rat.checked_mul(&state.protocol_params.treasury_growth);
@@ -321,16 +283,123 @@ fn apply_epoch_boundary_full(
         }
     };
 
-    // 4. Update reserves and treasury
+    // 2. Pool reward allocation from PRE-rotation go snapshot
+    let pool_reward_pot = total_reward.0.saturating_sub(treasury_delta);
+    let go = &state.epoch_state.snapshots.go;
+
+    // Compute total active stake from go snapshot
+    let total_stake: u64 = go.0.pool_stakes.values()
+        .map(|c| c.0)
+        .fold(0u64, |a, b| a.saturating_add(b));
+
+    // Allocate rewards to pools that have params
+    let mut total_pool_rewards = 0u64;
+    let mut total_member_rewards = 0u64;
+    let mut rewarded_pool_count = 0usize;
+    let mut reward_deltas = std::collections::BTreeMap::new();
+
+    if total_stake > 0 && pool_reward_pot > 0 {
+        for (pool_id, pool_stake) in &go.0.pool_stakes {
+            let params = match state.cert_state.pool.pools.get(pool_id) {
+                Some(p) => p,
+                None => continue,
+            };
+
+            // Gather delegator stakes for this pool
+            let delegator_stakes: std::collections::BTreeMap<ade_types::Hash28, ade_types::tx::Coin> =
+                go.0.delegations.iter()
+                    .filter(|(_, (pid, _))| pid == pool_id)
+                    .map(|(cred, (_, coin))| (cred.clone(), *coin))
+                    .collect();
+
+            let margin = crate::rational::Rational::new(
+                params.margin.0 as i128,
+                params.margin.1 as i128,
+            ).unwrap_or_else(crate::rational::Rational::zero);
+
+            if let Some(pool_rewards) = crate::epoch::compute_pool_reward(
+                ade_types::tx::Coin(pool_reward_pot),
+                *pool_stake,
+                ade_types::tx::Coin(total_stake),
+                params.cost,
+                &margin,
+                &delegator_stakes,
+            ) {
+                total_pool_rewards = total_pool_rewards.saturating_add(pool_rewards.operator_reward.0);
+                for member_reward in pool_rewards.member_rewards.values() {
+                    total_member_rewards = total_member_rewards.saturating_add(member_reward.0);
+                }
+                rewarded_pool_count += 1;
+
+                // Accumulate reward deltas per credential
+                for (cred, reward) in pool_rewards.member_rewards {
+                    let entry = reward_deltas.entry(cred).or_insert(ade_types::tx::Coin(0));
+                    entry.0 = entry.0.saturating_add(reward.0);
+                }
+            }
+        }
+    }
+
+    // Apply reward deltas to delegation rewards
+    let mut delegation = state.cert_state.delegation.clone();
+    for (cred, reward) in &reward_deltas {
+        let entry = delegation.rewards
+            .entry(ade_types::shelley::cert::StakeCredential(cred.clone()))
+            .or_insert(ade_types::tx::Coin(0));
+        entry.0 = entry.0.saturating_add(reward.0);
+    }
+
+    let _ = rewarded_pool_count; // retained for future boundary summary reporting
+
+    // 3. Snapshot rotation (AFTER reward computation)
+    let new_mark = crate::epoch::StakeSnapshot {
+        delegations: state.cert_state.delegation.delegations.iter()
+            .map(|(cred, pool)| {
+                let stake = state.cert_state.delegation.rewards
+                    .get(cred)
+                    .copied()
+                    .unwrap_or(ade_types::tx::Coin(0));
+                (cred.0.clone(), (pool.clone(), stake))
+            })
+            .collect(),
+        pool_stakes: {
+            let mut ps = std::collections::BTreeMap::new();
+            for pool in state.cert_state.delegation.delegations.values() {
+                ps.entry(pool.clone()).or_insert(ade_types::tx::Coin(0));
+            }
+            ps
+        },
+    };
+    let rotated = crate::epoch::rotate_snapshots(
+        &state.epoch_state.snapshots,
+        new_mark,
+    );
+
+    // 4. Pool retirements effective at this epoch
+    let mut pool_state = state.cert_state.pool.clone();
+    pool_state.retiring.retain(|pool_id, retire_epoch| {
+        if retire_epoch.0 <= new_epoch.0 {
+            pool_state.pools.remove(pool_id);
+            false
+        } else {
+            true
+        }
+    });
+
+    // 5. Update reserves and treasury
+    // Undistributed pool rewards stay in reserves (not deducted)
+    let distributed = treasury_delta
+        .saturating_add(total_pool_rewards)
+        .saturating_add(total_member_rewards);
     let new_reserves = ade_types::tx::Coin(
-        reserves.0.saturating_sub(total_reward.0)
+        reserves.0.saturating_sub(distributed)
     );
     let new_treasury = ade_types::tx::Coin(
         treasury.0.saturating_add(treasury_delta)
     );
 
     let cert_state = crate::delegation::CertState {
-        delegation: state.cert_state.delegation.clone(),
+        delegation,
         pool: pool_state,
     };
 

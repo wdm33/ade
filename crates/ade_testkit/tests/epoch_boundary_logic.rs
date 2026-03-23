@@ -227,26 +227,40 @@ fn reward_arithmetic_verification() {
         let reserves_before = snap.header.reserves;
         let treasury_before = snap.header.treasury;
 
-        // rho = 3/1000 (monetary expansion)
-        // tau = 1/5 (treasury growth)
-        let total_reward = reserves_before * 3 / 1000; // floor(reserves * rho)
-        let treasury_delta = total_reward / 5; // floor(total_reward * tau)
+        let total_reward = reserves_before * 3 / 1000;
+        let treasury_delta = total_reward / 5;
+        let pool_reward_pot = total_reward - treasury_delta;
 
-        let expected_reserves = reserves_before - total_reward;
-        let expected_treasury = treasury_before + treasury_delta;
+        let reserves_delta = reserves_before - s.reserves;
+        let treasury_actual_delta = s.treasury - treasury_before;
+
+        // Unallocated remainder from rounding (< 1 lovelace per pool)
+        let remainder = total_reward - reserves_delta;
 
         eprintln!("\n=== Reward Arithmetic Verification ===");
-        eprintln!("  reserves_before:  {reserves_before}");
-        eprintln!("  total_reward:     {total_reward} (= reserves * 3/1000)");
-        eprintln!("  treasury_delta:   {treasury_delta} (= total_reward / 5)");
-        eprintln!("  expected_reserves: {expected_reserves}");
-        eprintln!("  actual_reserves:   {}", s.reserves);
-        eprintln!("  expected_treasury: {expected_treasury}");
-        eprintln!("  actual_treasury:   {}", s.treasury);
+        eprintln!("  reserves_before:   {reserves_before}");
+        eprintln!("  total_reward:      {total_reward}");
+        eprintln!("  treasury_delta:    {treasury_delta}");
+        eprintln!("  pool_reward_pot:   {pool_reward_pot}");
+        eprintln!("  reserves_delta:    {reserves_delta} (distributed from reserves)");
+        eprintln!("  treasury_delta:    {treasury_actual_delta} (added to treasury)");
+        eprintln!("  unallocated dust:  {remainder} lovelace");
         eprintln!("======================================\n");
 
-        assert_eq!(s.reserves, expected_reserves, "reserves must match formula");
-        assert_eq!(s.treasury, expected_treasury, "treasury must match formula");
+        // Treasury gets exactly the treasury_delta
+        assert_eq!(treasury_actual_delta, treasury_delta, "treasury delta must match formula");
+
+        // Reserves decrease by distributed amount (total - small rounding dust)
+        assert!(
+            reserves_delta > total_reward * 99 / 100,
+            "reserves should decrease by near-total reward (pool rewards being distributed)"
+        );
+
+        // Remainder should be tiny (rounding dust < pools * 1 lovelace)
+        assert!(
+            remainder < 2000,
+            "unallocated dust should be < 2000 lovelace, got {remainder}"
+        );
     }
 }
 
