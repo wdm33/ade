@@ -224,32 +224,34 @@ Oracle sub-state values extracted at each HFC boundary: epoch, treasury, reserve
 ## 4. What Is Still Open
 
 ### CE-71 (Epoch Boundary Oracle Equivalence)
-- Formula with eta + correct reserves accounting: **100.36% oracle ratio**
-- Two bugs fixed: missing eta (decentralization-adjusted monetary expansion) + wrong reserves accounting
-- Remaining 0.36% gap: deltaT2 (undeliverable rewards → treasury, ~74K ADA)
-- Conway epoch boundary (CE-72) not started — T-25B scope
+- Reserves (with MIR): **99.93%** oracle ratio at Allegra epoch 236→237
+- Treasury (with MIR): **100.00%** exact match
+- Per-pool reward gap: 949 ADA on 12.8T distributed (0.0074%)
+- All formula components proven correct: eta, apparentPerformance (β/σ), two-step maxPool, deltaT2 filtering, MIR reserves→treasury (170K ADA)
+- 949 ADA residual: likely from i128 Rational precision vs Haskell arbitrary-precision Integer
+- **Status: PARTIAL** — requires either `num-bigint` or per-pool oracle comparison to close the last 0.0074%
+- Conway T-25B: 117.6% ratio, dominated by go-snapshot alignment, not formula
+
+### CE-72 (Conway Epoch Boundary)
+- Skeleton in place: boundary fires, rewards compute, 1037 pools, 20803 blocks
+- 117.6% ratio needs corrected starting-state (go snapshot alignment)
+- DRep stake, ratification, enactment not yet implemented
+- **Status: PARTIAL** — infrastructure ready, governance semantics pending
 
 ### CE-73 (HFC Translation Oracle State-Hash Equality)
-- Translation logic proven semantically correct (22/22 fields match)
-- State hash comparison blocked on CBOR encoding surface mismatch
-- Decision pending: full oracle-format encoding vs encoding-independent comparison surface
-- Encoding analysis complete: rational normalization OK, CBOR width/length mixed in oracle
+- Translation logic semantically correct (22/22 fields match)
+- State hash requires full LedgerState→CBOR encoder (4-6 weeks estimated)
+- **Status: OPEN** — requires go/no-go decision on encoder work
 
 ### CE-77 (ScriptVerdict)
-- ScriptPosture exists with correct classification
-- Native script evaluation wired into pipeline
-- CE-77 shape mismatch: cluster expects ScriptVerdict with exactly three variants; ScriptPosture has different names
-- Needs mapping from ScriptPosture to cluster-facing verdict surface
+- ScriptVerdict wired through pipeline with native_script_passed/failed counts
+- Plutus txs → NotYetEvaluated
+- **Status: shape satisfied**
 
 ### CE-68/69/70 (Alonzo/Babbage/Conway Structural Validation)
 - Partial: parsed tx bodies + structural classification done
-- Missing: state-backed checks (collateral existence, datum-hash presence against UTxO)
-- These are T-24B deferred items requiring populated UTxO state
-
-### Conway-Specific (CE-72, T-25B)
-- Not started
-- Requires: DRep stake computation, governance ratification, enactment ordering, atomic pulser proof
-- Depends on T-25A being stable
+- Missing: state-backed checks (collateral existence, datum-hash presence)
+- **Status: PARTIAL** — deferred to Phase 3 with Plutus
 
 ---
 
