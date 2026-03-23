@@ -1,0 +1,102 @@
+# Oracle Protocol Parameters at HFC Boundaries
+#
+# Extracted from encodeDiskExtLedgerState CBOR.
+# These are the ACTUAL on-chain parameters, not genesis defaults.
+# Parameters are updated via on-chain governance proposals.
+#
+# Rational values use Cardano CBOR encoding: tag(30, [numerator, denominator])
+# Our internal Rational may store equivalent values differently (e.g. 2/10 vs 1/5).
+# This is a known source of state hash mismatch.
+#
+# T-26A.3: protocol parameter triage for comparison-surface narrowing.
+
+[shelley_allegra_hfc]
+slot = 16588800
+epoch = 236
+protocol_version = [3, 0]
+min_fee_a = 44
+min_fee_b = 155381
+max_block_body_size = 65536
+max_tx_size = 16384
+max_block_header_size = 1100
+key_deposit = 2000000
+pool_deposit = 500000000
+e_max = 18
+n_opt = 500
+pool_influence = [3, 10]
+monetary_expansion = [3, 1000]
+treasury_growth = [1, 5]
+decentralization = [8, 25]
+min_utxo_value = 1000000
+min_pool_cost = 340000000
+param_count = 17
+
+[allegra_mary_hfc]
+slot = 23068800
+epoch = 251
+protocol_version = [4, 0]
+min_fee_a = 44
+min_fee_b = 155381
+max_block_body_size = 65536
+max_tx_size = 16384
+max_block_header_size = 1100
+key_deposit = 2000000
+pool_deposit = 500000000
+e_max = 18
+n_opt = 500
+pool_influence = [3, 10]
+monetary_expansion = [3, 1000]
+treasury_growth = [1, 5]
+decentralization = [3, 25]
+min_utxo_value = 1000000
+min_pool_cost = 340000000
+param_count = 17
+
+[mary_alonzo_hfc]
+slot = 39916975
+epoch = 290
+protocol_version = [5, 0]
+min_fee_a = 44
+min_fee_b = 155381
+max_block_body_size = 65536
+max_tx_size = 16384
+max_block_header_size = 1100
+key_deposit = 2000000
+pool_deposit = 500000000
+e_max = 18
+n_opt = 500
+pool_influence = [3, 10]
+monetary_expansion = [3, 1000]
+treasury_growth = [1, 5]
+decentralization = [0, 1]
+coins_per_utxo_word = 34482
+min_pool_cost = 340000000
+param_count = 24
+# Alonzo adds: cost_models, execution_prices, max_tx_ex_units,
+# max_block_ex_units, max_value_size, collateral_pct, max_collateral_inputs
+
+[alonzo_babbage_hfc]
+slot = 72316896
+epoch = 365
+protocol_version = [7, 0]
+min_fee_a = 44
+min_fee_b = 155381
+max_block_body_size = 90112
+max_tx_size = 16384
+max_block_header_size = 1100
+key_deposit = 2000000
+pool_deposit = 500000000
+e_max = 18
+n_opt = 500
+pool_influence = [3, 10]
+monetary_expansion = [3, 1000]
+treasury_growth = [1, 5]
+param_count = 22
+# Note: max_block_body_size changed from 65536 to 90112
+# Note: Babbage reorganizes param encoding
+
+# Encoding observations:
+# - Rationals: tag(30, [n, d]) — our Rational may use different n/d for same value
+# - Protocol version: array(2) [major, minor] inside the params
+# - Decentralization removed in Babbage (fully decentralized)
+# - Alonzo adds 7 params for Plutus; some restructured in Babbage
