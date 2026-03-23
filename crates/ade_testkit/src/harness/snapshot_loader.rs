@@ -71,11 +71,11 @@ impl LoadedSnapshot {
         }
     }
 
-    /// Load delegation state from the go snapshot's delegation map.
+    /// Load delegation and pool state from the go snapshot.
     fn load_delegation_state(&self) -> ade_ledger::delegation::CertState {
-        use ade_ledger::delegation::{CertState, DelegationState, PoolState};
+        use ade_ledger::delegation::{CertState, DelegationState, PoolState, PoolParams};
         use ade_types::shelley::cert::StakeCredential;
-        use ade_types::tx::PoolId;
+        use ade_types::tx::{Coin, PoolId};
         use ade_types::Hash28;
         use std::collections::BTreeMap;
 
@@ -84,11 +84,13 @@ impl LoadedSnapshot {
             Err(_) => return CertState::new(),
         };
 
+        let pools_raw = parse_go_pool_params(&self.raw_cbor).unwrap_or_default();
+
+        // Build delegation state
         let mut delegations = BTreeMap::new();
         let mut registrations = BTreeMap::new();
 
         for (cred_hash, pool_hash) in &delegations_raw {
-            // Extract 28-byte credential hash (stored in first 28 bytes of Hash32)
             let mut cred_bytes = [0u8; 28];
             cred_bytes.copy_from_slice(&cred_hash.0[..28]);
             let cred = StakeCredential(Hash28(cred_bytes));
@@ -98,8 +100,24 @@ impl LoadedSnapshot {
             let pool = PoolId(Hash28(pool_bytes));
 
             delegations.insert(cred.clone(), pool);
-            // Register the credential with zero deposit (we don't have deposit data)
-            registrations.insert(cred, ade_types::tx::Coin(0));
+            registrations.insert(cred, Coin(0));
+        }
+
+        // Build pool state
+        let mut pools = BTreeMap::new();
+        for (pool_hash, pledge, cost, margin_num, margin_den, reward_acct) in &pools_raw {
+            let mut pool_bytes = [0u8; 28];
+            pool_bytes.copy_from_slice(&pool_hash.0[..28]);
+            let pool_id = PoolId(Hash28(pool_bytes));
+
+            pools.insert(pool_id.clone(), PoolParams {
+                pool_id,
+                vrf_hash: ade_types::Hash32([0u8; 32]), // not needed for rewards
+                pledge: Coin(*pledge),
+                cost: Coin(*cost),
+                margin: (*margin_num, *margin_den),
+                reward_account: reward_acct.clone(),
+            });
         }
 
         CertState {
@@ -108,7 +126,10 @@ impl LoadedSnapshot {
                 delegations,
                 rewards: BTreeMap::new(),
             },
-            pool: PoolState::new(),
+            pool: PoolState {
+                pools,
+                retiring: BTreeMap::new(),
+            },
         }
     }
 }
@@ -424,6 +445,74 @@ pub fn parse_go_delegations(
     }
 
     Ok(delegations)
+}
+
+/// Pool params tuple: (pool_hash, pledge, cost, margin_num, margin_den, reward_account).
+type PoolParamsTuple = (Hash32, u64, u64, u64, u64, Vec<u8>);
+
+/// Parse pool params from the go snapshot.
+pub fn parse_go_pool_params(
+    state_cbor: &[u8],
+) -> Result<Vec<PoolParamsTuple>, HarnessError> {
+    let off = navigate_to_nes(state_cbor)?;
+    let es = skip_nes_to_epoch_state(state_cbor, off)?;
+    let ss_off = skip_n_fields(state_cbor, es, 2)?;
+    let (ss_inner, _) = read_array_header(state_cbor, ss_off)?;
+    let go_off = skip_n_fields(state_cbor, ss_inner, 2)?;
+    let (go_inner, _) = read_array_header(state_cbor, go_off)?;
+
+    // Skip stake_dist and delegation to get pool_params map
+    let pool_off = skip_cbor(state_cbor, go_inner)?; // skip stake_dist
+    let pool_off = skip_cbor(state_cbor, pool_off)?; // skip delegations
+
+    let (mut co, _, _) = read_cbor_initial(state_cbor, pool_off)?;
+    let mut pools = Vec::new();
+
+    while co < state_cbor.len() && state_cbor[co] != 0xff {
+        // Key: bytes(28) = pool hash
+        let (key_start, key_maj, key_len) = read_cbor_initial(state_cbor, co)?;
+        let mut pool_hash = [0u8; 32];
+        if key_maj == 2 && key_len >= 28 {
+            pool_hash[..28].copy_from_slice(&state_cbor[key_start..key_start + 28]);
+        }
+        co = skip_cbor(state_cbor, co)?;
+
+        // Value: array(9) [operator, vrf, pledge, cost, margin, reward_acct, ...]
+        let val_start = co;
+        let (val_inner, _, val_len) = read_cbor_initial(state_cbor, co)?;
+
+        if val_len >= 6 {
+            // Skip [0] operator, [1] vrf
+            let f2 = skip_cbor(state_cbor, val_inner)?; // skip operator
+            let f2 = skip_cbor(state_cbor, f2)?; // skip vrf
+
+            // [2] pledge
+            let (_, pledge) = read_uint(state_cbor, f2)?;
+            let f3 = skip_cbor(state_cbor, f2)?;
+
+            // [3] cost
+            let (_, cost) = read_uint(state_cbor, f3)?;
+            let f4 = skip_cbor(state_cbor, f3)?;
+
+            // [4] margin: tag(30, array(2, [num, den]))
+            let (tag_inner, _, _) = read_cbor_initial(state_cbor, f4)?; // tag(30)
+            let (margin_inner, _) = read_array_header(state_cbor, tag_inner)?;
+            let (_, margin_num) = read_uint(state_cbor, margin_inner)?;
+            let den_off = skip_cbor(state_cbor, margin_inner)?;
+            let (_, margin_den) = read_uint(state_cbor, den_off)?;
+            let f5 = skip_cbor(state_cbor, f4)?;
+
+            // [5] reward_account: bytes(29)
+            let (acct_start, _, acct_len) = read_cbor_initial(state_cbor, f5)?;
+            let reward_acct = state_cbor[acct_start..acct_start + acct_len as usize].to_vec();
+
+            pools.push((Hash32(pool_hash), pledge, cost, margin_num, margin_den, reward_acct));
+        }
+
+        co = skip_cbor(state_cbor, val_start)?;
+    }
+
+    Ok(pools)
 }
 
 fn navigate_to_nes(state_cbor: &[u8]) -> Result<usize, HarnessError> {
@@ -894,6 +983,39 @@ mod tests {
             stored_reg_count, raw_deleg_count,
             "registration count must match delegation count"
         );
+    }
+
+    #[test]
+    fn to_ledger_state_preserves_pool_count() {
+        let tarball = snapshots_dir().join("snapshot_17020848.tar.gz");
+        if !tarball.exists() {
+            return;
+        }
+
+        let snap = LoadedSnapshot::from_tarball(&tarball).unwrap();
+        let (raw_pool_count, _, _) = parse_go_snapshot_counts(&snap.raw_cbor).unwrap();
+        let state = snap.to_ledger_state();
+        let stored_pool_count = state.cert_state.pool.pools.len();
+
+        eprintln!("Pool count chain:");
+        eprintln!("  raw CBOR:     {raw_pool_count}");
+        eprintln!("  stored pools: {stored_pool_count}");
+
+        assert_eq!(
+            stored_pool_count, raw_pool_count,
+            "pool count must survive parse → store conversion"
+        );
+
+        // Verify pool params have correct values
+        if let Some((_, params)) = state.cert_state.pool.pools.iter().next() {
+            eprintln!("  first pool: pledge={}, cost={}, margin={}/{}",
+                params.pledge.0 / 1_000_000,
+                params.cost.0 / 1_000_000,
+                params.margin.0, params.margin.1,
+            );
+            assert!(params.cost.0 > 0, "pool cost must be non-zero");
+            assert!(params.margin.1 > 0, "margin denominator must be non-zero");
+        }
     }
 
     #[test]
