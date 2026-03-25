@@ -258,13 +258,16 @@ Oracle sub-state values extracted at each HFC boundary: epoch, treasury, reserve
 - **Status: OPEN** — requires go/no-go decision on encoder work
 
 ### CE-74 (Ledger Determinism CI)
-- `ci_check_ledger_determinism.sh` not yet written
-- **Status: NOT STARTED**
+- `ci_check_ledger_determinism.sh` exists, runs `ledger_determinism.rs`
+- Current coverage: structural decode determinism on empty state (CBOR parse + structural validation). 7 eras, single-block and multi-block sequences. Passes in <1s.
+- **Missing for closure**: stateful replay with loaded snapshots, UTxO tracking enabled, epoch boundary crossings, reward computation. The current test proves the parser is deterministic but does not exercise the state paths where nondeterminism could hide.
+- **Status: PARTIAL** — structural smoke test only. Needs stateful depth.
 
 ### CE-75 (Differential Divergence CI)
-- `ci_check_differential_divergence.sh` not yet written
-- Corpus and harness exist; need the CI script wrapper
-- **Status: NOT STARTED**
+- `ci_check_differential_divergence.sh` exists, runs `differential_replay_all_eras.rs`
+- Current coverage: verdict agreement (accept/reject) across 10,500 blocks (1,500 per era, 7 eras). All non-Plutus blocks accepted. Passes in <2s.
+- **Missing for closure**: per-block state comparison against oracle state hashes (not just accept/reject). Epoch boundary portion explicitly required by the CE definition. Current test exercises the decoder, not the full ledger.
+- **Status: PARTIAL** — verdict agreement only. Needs state-level comparison.
 
 ### CE-77 (ScriptVerdict)
 - ScriptVerdict wired through pipeline with native_script_passed/failed counts
