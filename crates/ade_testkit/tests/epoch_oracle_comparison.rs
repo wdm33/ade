@@ -485,7 +485,7 @@ fn conway_epoch_508_boundary_comparison() {
 
     // Build pre-boundary state from pre snapshot + block production from post
     let pre_state = pre_snap.to_ledger_state();
-    let mut boundary_state = pre_state;
+    let mut boundary_state = pre_state.clone();
     boundary_state.epoch_state.block_production =
         post_state.epoch_state.block_production.clone();
     boundary_state.epoch_state.epoch_fees =
@@ -573,7 +573,97 @@ fn conway_epoch_508_boundary_comparison() {
             eprintln!("  deltaT2:          {:>22}", acct.delta_t2);
             eprintln!("  sum_rewards:      {:>22}  ({} pools)", acct.sum_rewards, acct.rewarded_pool_count);
             eprintln!("  pool_reward_pot:  {:>22}", acct.pool_reward_pot);
+            eprintln!("  epoch_fees:       {:>22}", acct.epoch_fees);
             eprintln!("  eta:              {:>22}/{}", acct.eta_numerator, acct.eta_denominator);
+
+            // --- Four-flow decomposition for Conway ---
+            let reward_reserves_outflow = acct.delta_r1.saturating_sub(acct.delta_r2);
+            let reward_treasury_inflow = acct.delta_t1 + acct.delta_t2;
+
+            // For Conway, "MIR" is replaced by governance effects
+            // Positive = oracle decreased more (extra outflow we don't model)
+            // Negative = we decreased more (we over-distribute)
+            let reserves_residual = oracle_reserves_decrease as i64 - reward_reserves_outflow as i64;
+            let treasury_residual = oracle_treasury_increase as i64 - reward_treasury_inflow as i64;
+
+            eprintln!();
+            eprintln!("  --- Four-Flow Decomposition ---");
+            eprintln!("  [Reward distribution]");
+            eprintln!("    reserves outflow (R1-R2):    {:>18}", reward_reserves_outflow);
+            eprintln!("    treasury inflow (T1+T2):     {:>18}", reward_treasury_inflow);
+            eprintln!("  [Governance / MIR residual]");
+            eprintln!("    reserves residual:           {:>18}  (oracle - reward)", reserves_residual);
+            eprintln!("    treasury residual:           {:>18}  (oracle - reward)", treasury_residual);
+
+            if reserves_residual < 0 {
+                eprintln!();
+                eprintln!("  DIAGNOSIS: reserves_residual is NEGATIVE ({} ADA)",
+                    (-reserves_residual) / 1_000_000);
+                eprintln!("  Our reward formula distributes MORE than the oracle's total");
+                eprintln!("  reserves decrease. This means either:");
+                eprintln!("    a) Go snapshot stake data is wrong (too high sigma → too high rewards)");
+                eprintln!("    b) Conway governance returned funds TO reserves at the boundary");
+                eprintln!("    c) Our epoch_fees or reserves starting value is wrong");
+            }
+            if treasury_residual < 0 {
+                eprintln!("  Treasury residual is NEGATIVE ({} ADA) — governance likely",
+                    (-treasury_residual) / 1_000_000);
+                eprintln!("  withdrew from treasury to stake addresses at this boundary.");
+            }
+        }
+
+        // Go snapshot data verification
+        eprintln!();
+        eprintln!("  --- Go Snapshot Data ---");
+        let go = &pre_state.epoch_state.snapshots.go;
+        let total_stake: u64 = go.0.pool_stakes.values().map(|c| c.0).sum();
+        let pool_stake_count = go.0.pool_stakes.len();
+        let delegation_count = go.0.delegations.len();
+        eprintln!("    total_stake:     {} ({} ADA)", total_stake, total_stake / 1_000_000);
+        eprintln!("    pools w/ stake:  {pool_stake_count}");
+        eprintln!("    delegations:     {delegation_count}");
+        eprintln!("    producing pools: {producing_pool_count}");
+        eprintln!("    producing not in go: {}",
+            post_state.epoch_state.block_production.keys()
+                .filter(|pid| !go.0.pool_stakes.contains_key(*pid))
+                .count()
+        );
+
+        // Conway pledge satisfaction check: pools where pledge > pool_stake
+        // In Conway (protocol major >= 9), these pools get ZERO rewards.
+        // Our formula doesn't enforce this, causing over-distribution.
+        let pool_pot = conway_accounting.as_ref().map(|a| a.pool_reward_pot).unwrap_or(0);
+        let mut pledge_violations = 0usize;
+        let mut pledge_violation_rewards = 0u64;
+        for (pool_id, pool_stake) in &go.0.pool_stakes {
+            let blocks = post_state.epoch_state.block_production
+                .get(pool_id).copied().unwrap_or(0);
+            if blocks == 0 { continue; }
+
+            if let Some(params) = pre_state.cert_state.pool.pools.get(pool_id) {
+                if params.pledge.0 > pool_stake.0 {
+                    pledge_violations += 1;
+                    let est = (pool_stake.0 as u128)
+                        .saturating_mul(pool_pot as u128)
+                        / (total_stake as u128);
+                    pledge_violation_rewards += est as u64;
+                }
+            }
+        }
+        eprintln!();
+        eprintln!("  --- Pledge Satisfaction (Conway-specific) ---");
+        eprintln!("    producing pools violating pledge: {pledge_violations}");
+        eprintln!("    estimated excess rewards:         {} ({} ADA)",
+            pledge_violation_rewards, pledge_violation_rewards / 1_000_000);
+        eprintln!("    reserves over-distribution:       {} ADA",
+            if ade_reserves_decrease > oracle_reserves_decrease {
+                (ade_reserves_decrease - oracle_reserves_decrease) / 1_000_000
+            } else { 0 });
+        if pledge_violations > 0 {
+            eprintln!("    HYPOTHESIS: pledge violations explain {:.1}% of the over-distribution",
+                pledge_violation_rewards as f64 /
+                    ade_reserves_decrease.saturating_sub(oracle_reserves_decrease).max(1) as f64
+                    * 100.0);
         }
         eprintln!();
 
