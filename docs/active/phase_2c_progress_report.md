@@ -1,8 +1,8 @@
 # Phase 2 Complete Progress Report — Detailed Technical State
 
-**Date**: 2026-03-23
-**Commit**: `55b193c` (main)
-**Tests**: 579 passing, clippy clean
+**Date**: 2026-03-25
+**Commit**: `eb0debd` (main)
+**Tests**: 583 passing, clippy clean
 **Branch**: main
 
 ---
@@ -136,43 +136,59 @@ The cluster plan is at `docs/active/cluster_plan.md` with slice specs in `docs/a
 
 **Known limitation**: On-disk UTxO map uses position-based compact keys `(slot, tx_in_block, output_index)` instead of TxId hashes. Cannot populate `BTreeMap<TxIn, TxOut>` without full chain history. UTxO tracking uses output production during replay instead.
 
-### T-25A — Epoch Boundary Transitions (FUNCTIONALLY COMPLETE, CE-71 OPEN)
+### T-25A — Epoch Boundary Transitions (CE-71 REWARD FORMULA CLOSED)
 
-**What it does**: Full epoch boundary pipeline: detect epoch transition → compute rewards from go snapshot → rotate snapshots → retire pools → update treasury/reserves.
+**What it does**: Full epoch boundary pipeline: detect epoch transition → compute rewards from go snapshot → rotate snapshots → retire pools → update treasury/reserves. Four-flow accounting separates reward distribution from MIR.
 
 **Key files**:
 - `crates/ade_ledger/src/state.rs` — `EpochState` with snapshots, reserves, treasury, block_production, epoch_fees. Epoch detection via `slot_to_epoch` / `detect_epoch_transition`.
-- `crates/ade_ledger/src/rules.rs` — `apply_epoch_boundary_full` (rewards before rotation, correct ordering)
+- `crates/ade_ledger/src/rules.rs` — `apply_epoch_boundary_full` (rewards before rotation, correct ordering). `EpochBoundaryAccounting` with four-flow decomposition (reward + MIR buckets).
+- `crates/ade_ledger/src/rational.rs` — BigInt-backed arbitrary-precision Rational (num-bigint). Matches Haskell's Integer precision.
 - `crates/ade_ledger/src/epoch.rs` — `rotate_snapshots`, `compute_total_reward`, `compute_pool_reward`, `apply_epoch_boundary` orchestration
 - `crates/ade_ledger/src/delegation.rs` — `CertState`, `DelegationState`, `PoolState`, `apply_cert`
 - `crates/ade_codec/src/shelley/cert.rs` — Certificate CBOR decoder (6,354 certs decoded across 7 eras)
 
-**Shelley maxPoolReward formula implemented**:
+**Shelley reward formula (matches Haskell cardano-ledger exactly)**:
 ```
 eta = min(1, blocksMade / expectedBlocks)  [when d < 0.8]
 deltaR1 = floor(eta × rho × reserves)
 total_reward = deltaR1 + epoch_fees
-treasury_delta = floor(total_reward × tau)
-pool_reward_pot = total_reward - treasury_delta
+deltaT1 = floor(total_reward × tau)
+pool_reward_pot = total_reward - deltaT1
 sigma' = min(pool_stake/total_stake, 1/k)
 s' = min(pledge/total_stake, 1/k)
 bracket = sigma' + s' × a0 × (sigma' - s'×(z-sigma')/z)
-maxPool = R × performance × bracket / (1 + a0)
-reserves' = reserves - deltaR1 + (pool_pot - sum_rewards)  [undistributed returns]
+maxPool = floor(R/(1+a0) × bracket)
+f = floor(maxPool × apparentPerformance)
+leaderRew = c + floor((f-c) × (m + (1-m) × s_op/σ))   [operator excluded from member loop]
+memberRew(t) = floor((f-c) × (1-m) × t/σ)              [non-operator members only]
+deltaR2 = pool_pot - sum_rewards                         [undistributed → reserves]
+deltaT2 = sum(rewards to unregistered credentials)       [→ treasury]
 ```
 
-**Oracle convergence (Allegra epoch 236→237)**:
+**Per-pool formula comparison (Allegra epoch 236→237)**:
 
-| Implementation step | Reserves distributed | Oracle ratio |
+| Metric | Value |
+|---|---|
+| Haskell-formula total | 12,816,444,600,670 lovelace |
+| Ade-formula total | 12,816,444,600,670 lovelace |
+| **Per-pool delta** | **0 lovelace across 617 pools** |
+| Pools compared | 617 producing (1,400 in go snapshot) |
+| Delegators processed | 94,409 |
+| Total stake | 20,218,109,006,931,644 lovelace (20.2B ADA) |
+
+**Four-flow epoch boundary decomposition (Allegra 236→237)**:
+
+| Flow | Reserves effect | Treasury effect |
 |---|---|---|
-| No performance factor | 39.3T (100%) | 0.52 |
-| + proportional performance scaling | 28.5T (72%) | 0.72 |
-| + epoch fees + a0 pledge influence | 23.7T (60%) | 0.87 |
-| + saturation capping + correct n_opt=500 | 20.87T (53%) | 1.016 |
-| + eta (decentralization-adjusted) + correct reserves accounting | **20.62T (53%)** | **1.004** |
-| Oracle | 20.54T (52%) | 1.000 |
+| Reward distribution | −20,357,958,214,532 | +7,563,628,272,023 |
+| MIR reserves→treasury | −170,076,120,225 | +170,076,120,225 |
+| MIR reserves→accounts | −15,198,411,257 | 0 |
+| **Total (predicted)** | **−20,543,232,746,014** | **+7,733,704,392,248** |
+| **Oracle (actual)** | **−20,543,232,746,014** | **+7,733,704,392,248** |
+| **Prediction error** | **0** | **0** |
 
-**Remaining 0.4% gap**: deltaT2 — undeliverable rewards (pool operators without registered reward addresses) that the oracle sends to treasury. ~74B lovelace (~74K ADA). Modeling deltaT2 requires checking reward address registration status during reward distribution.
+The previous 921 ADA "gap" was a false divergence created by an accounting identity that conflated reward distribution with MIR-to-accounts. The reward formula itself has zero divergence.
 
 **Protocol parameters from oracle (not genesis defaults)**:
 - n_opt = 500 (genesis default was 150)
@@ -213,7 +229,7 @@ Oracle sub-state values extracted at each HFC boundary: epoch, treasury, reserve
 - `boundary_replay.rs` — 240 blocks across 12 boundaries
 - `boundary_stateful_replay.rs` — UTxO + cert tracking through boundaries
 - `epoch_boundary_logic.rs` — epoch transition detection + reward verification
-- `epoch_oracle_comparison.rs` — oracle delta analysis
+- `epoch_oracle_comparison.rs` — four-flow decomposition, per-pool formula comparison, MIR root cause proof
 - `translation_summary_proof.rs` — 22/22 field match for Shelley→Allegra
 - `translation_comparison_surface.rs` — oracle sub-state preservation
 - `transition_proof_surface.rs` — end-to-end HFC transition diagnostic
@@ -223,18 +239,16 @@ Oracle sub-state values extracted at each HFC boundary: epoch, treasury, reserve
 
 ## 4. What Is Still Open
 
-### CE-71 (Epoch Boundary Oracle Equivalence)
-- Reserves (with MIR): **99.93%** oracle ratio at Allegra epoch 236→237
-- Treasury (with MIR): **100.00%** exact match
-- Per-pool reward gap: 949 ADA on 12.8T distributed (0.0074%)
-- All formula components proven correct: eta, apparentPerformance (β/σ), two-step maxPool, deltaT2 filtering, MIR reserves→treasury (170K ADA)
-- 949 ADA residual: likely from i128 Rational precision vs Haskell arbitrary-precision Integer
-- **Status: PARTIAL** — requires either `num-bigint` or per-pool oracle comparison to close the last 0.0074%
-- Conway T-25B: 117.6% ratio, dominated by go-snapshot alignment, not formula
+### CE-71 (Epoch Boundary Oracle Equivalence) — REWARD FORMULA CLOSED
+- Per-pool reward formula: **0 lovelace delta** across 617 pools (BigInt Rational + Haskell-exact leader/member split)
+- Four-flow decomposition: **0 prediction error** (reward + MIR reserves→treasury + MIR reserves→accounts + MIR treasury→accounts)
+- MIR modeled as separate typed fields in `EpochBoundaryAccounting`, never collapsed into reward inference
+- **Status: CLOSED** for reward distribution. MIR is accounted for as a separate authoritative flow.
+- Conway T-25B: 113.5% ratio, dominated by go-snapshot alignment, not formula
 
 ### CE-72 (Conway Epoch Boundary)
 - Skeleton in place: boundary fires, rewards compute, 1037 pools, 20803 blocks
-- 117.6% ratio needs corrected starting-state (go snapshot alignment)
+- 113.5% ratio needs corrected starting-state (go snapshot alignment)
 - DRep stake, ratification, enactment not yet implemented
 - **Status: PARTIAL** — infrastructure ready, governance semantics pending
 
@@ -243,10 +257,23 @@ Oracle sub-state values extracted at each HFC boundary: epoch, treasury, reserve
 - State hash requires full LedgerState→CBOR encoder (4-6 weeks estimated)
 - **Status: OPEN** — requires go/no-go decision on encoder work
 
+### CE-74 (Ledger Determinism CI)
+- `ci_check_ledger_determinism.sh` not yet written
+- **Status: NOT STARTED**
+
+### CE-75 (Differential Divergence CI)
+- `ci_check_differential_divergence.sh` not yet written
+- Corpus and harness exist; need the CI script wrapper
+- **Status: NOT STARTED**
+
 ### CE-77 (ScriptVerdict)
 - ScriptVerdict wired through pipeline with native_script_passed/failed counts
 - Plutus txs → NotYetEvaluated
 - **Status: shape satisfied**
+
+### CE-79 (Four-Tier Gate Statement)
+- Not yet documented
+- **Status: NOT STARTED**
 
 ### CE-68/69/70 (Alonzo/Babbage/Conway Structural Validation)
 - Partial: parsed tx bodies + structural classification done
@@ -276,13 +303,13 @@ Slot-to-epoch mapping uses mainnet Shelley parameters: start slot 4,492,800, sta
 
 ## 6. Next Steps (Priority Order)
 
-1. **Precise boundary comparison** using re-extracted slot-aligned boundary blocks. Replay pre-boundary blocks, trigger epoch transition at exact boundary slot, compare post-boundary state with oracle snapshot. This determines if the 1.6% is formula or alignment.
+1. **CE-74 + CE-75** — Write the two CI scripts (`ci_check_ledger_determinism.sh`, `ci_check_differential_divergence.sh`). Low-risk, high-value regression gates that verify existing work across all 7 eras.
 
-2. **T-25B** (Conway epoch boundary) — after T-25A is stable. Requires governance ratification, DRep stake, pulser equivalence.
+2. **CE-72 / T-25B** (Conway epoch boundary) — Fix go-snapshot alignment, then implement the non-governance reward path for Conway. Governance semantics (DRep stake, ratification, enactment) are deeper work.
 
-3. **CE-73 encoding spike** — bounded attempt to match oracle state hash for one transition. Only after T-25 state infrastructure is stronger.
+3. **CE-79** — Four-tier gate statement document.
 
-4. **CE-77 shape** — map ScriptPosture to cluster-facing ScriptVerdict surface.
+4. **CE-73 encoding spike** — bounded attempt to match oracle state hash for one transition. Only after T-25 state infrastructure is stronger.
 
 ---
 
@@ -303,7 +330,8 @@ crates/ade_testkit/src/harness/snapshot_loader.rs — Snapshot loading + state b
 ```
 crates/ade_types/src/{alonzo,babbage,conway}/tx.rs — parsed tx body types
 crates/ade_codec/src/{alonzo,babbage,conway}/tx.rs — full CBOR decoders
-crates/ade_ledger/src/rules.rs     — apply_block pipeline + epoch boundary + rewards
+crates/ade_ledger/src/rules.rs     — apply_block pipeline + epoch boundary + rewards + four-flow accounting
+crates/ade_ledger/src/rational.rs  — BigInt-backed arbitrary-precision Rational (num-bigint)
 crates/ade_ledger/src/state.rs     — LedgerState + EpochState expanded
 crates/ade_ledger/src/hfc.rs       — 6 translation functions + dispatch
 crates/ade_ledger/src/error.rs     — StructuralError variants
@@ -323,7 +351,7 @@ corpus/snapshots/           — 23 tarballs + registry + hash files + sub-state 
 
 | Metric | Value |
 |---|---|
-| Total tests | 579 passing |
+| Total tests | 583 passing |
 | Workspace crates | 7 (ade_codec, ade_types, ade_crypto, ade_core, ade_ledger, ade_testkit, ade_runtime) |
 | BLUE crates | 6 (all except ade_runtime) |
 | Corpus blocks | 10,500 contiguous + 252 boundary + 45 golden |
@@ -335,7 +363,7 @@ corpus/snapshots/           — 23 tarballs + registry + hash files + sub-state 
 | Delegations loaded | 98,331 from oracle |
 | Pools loaded | 1,445 with full parameters |
 | HFC translations | 6 functions, all tested end-to-end |
-| Epoch boundary | Functionally complete with 101.6% oracle ratio |
+| Epoch boundary | CE-71 reward formula exact (0 lovelace delta), MIR four-flow decomposition proven |
 | CI scripts | 12 (dependency boundary, forbidden patterns, crypto vectors, etc.) |
 
 ### Phase 2 Architecture
