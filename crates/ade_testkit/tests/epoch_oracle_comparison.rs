@@ -672,6 +672,111 @@ fn conway_epoch_508_boundary_comparison() {
             "Conway reserves ratio should be within 30% of oracle, got {:.4}%",
             ratio * 100.0,
         );
+        // --- Per-pool reward comparison ---
+        // Compute rewards using the Haskell formula independently and compare
+        // against our apply_epoch_boundary_full result. If they match, the gap
+        // is entirely from governance/MIR. If they differ, inputs are wrong.
+        if let Some(ref acct) = conway_accounting {
+            let a0 = ade_ledger::rational::Rational::new(3, 10).unwrap();
+            let one_plus_a0 = ade_ledger::rational::Rational::new(13, 10).unwrap();
+            let z = ade_ledger::rational::Rational::new(1, 500).unwrap();
+
+            let mut independent_sum = 0u64;
+            let mut pool_count = 0usize;
+            for (pool_id, pool_stake) in &go.0.pool_stakes {
+                let params = match pre_state.cert_state.pool.pools.get(pool_id) {
+                    Some(p) => p,
+                    None => continue,
+                };
+                let blocks = post_state.epoch_state.block_production
+                    .get(pool_id).copied().unwrap_or(0);
+                if blocks == 0 || pool_stake.0 == 0 { continue; }
+
+                let margin = ade_ledger::rational::Rational::new(
+                    params.margin.0 as i128, params.margin.1 as i128,
+                ).unwrap_or_else(ade_ledger::rational::Rational::zero);
+                let sigma = ade_ledger::rational::Rational::new(
+                    pool_stake.0 as i128, total_stake as i128,
+                ).unwrap();
+                let s_pledge = ade_ledger::rational::Rational::new(
+                    params.pledge.0 as i128, total_stake as i128,
+                ).unwrap();
+                let sigma_prime = if sigma.numerator() * z.denominator() > z.numerator() * sigma.denominator() { z.clone() } else { sigma.clone() };
+                let s_prime = if s_pledge.numerator() * z.denominator() > z.numerator() * s_pledge.denominator() { z.clone() } else { s_pledge };
+                let perf = {
+                    let p = ade_ledger::rational::Rational::new(
+                        (blocks as i128) * (total_stake as i128),
+                        (total_blocks_produced as i128) * (pool_stake.0 as i128),
+                    ).unwrap_or_else(ade_ledger::rational::Rational::one);
+                    if p.numerator() > p.denominator() { ade_ledger::rational::Rational::one() } else { p }
+                };
+                let bracket = z.checked_sub(&sigma_prime)
+                    .and_then(|d| s_prime.checked_mul(&d))
+                    .and_then(|r| r.checked_div(&z))
+                    .and_then(|inner| sigma_prime.checked_sub(&inner))
+                    .and_then(|smi| s_prime.checked_mul(&a0).and_then(|r| r.checked_mul(&smi)))
+                    .and_then(|pt| sigma_prime.checked_add(&pt));
+                let max_pool = match bracket {
+                    Some(br) => {
+                        let pot = ade_ledger::rational::Rational::from_integer(acct.pool_reward_pot as i128);
+                        pot.checked_mul(&br)
+                            .and_then(|r| r.checked_div(&one_plus_a0))
+                            .map(|r| r.floor().max(0) as u64)
+                            .unwrap_or(0)
+                    }
+                    None => 0,
+                };
+                if max_pool == 0 { continue; }
+                let f = ade_ledger::rational::Rational::from_integer(max_pool as i128)
+                    .checked_mul(&perf)
+                    .map(|r| r.floor().max(0) as u64)
+                    .unwrap_or(0);
+                if f == 0 { continue; }
+
+                let cost = params.cost.0;
+                if f <= cost { independent_sum += f; pool_count += 1; continue; }
+                let f_minus_c = f - cost;
+                let one_minus_m = ade_ledger::rational::Rational::one().checked_sub(&margin).unwrap();
+
+                // Leader reward
+                let op_cred_key: Option<[u8; 28]> = if params.reward_account.len() >= 29 {
+                    let mut k = [0u8; 28]; k.copy_from_slice(&params.reward_account[1..29]); Some(k)
+                } else { None };
+                let op_stake = op_cred_key.and_then(|k|
+                    go.0.delegations.get(&ade_types::Hash28(k)).map(|(_, c)| c.0)
+                ).unwrap_or(0);
+                let op_share = ade_ledger::rational::Rational::new(op_stake as i128, pool_stake.0 as i128)
+                    .unwrap_or_else(ade_ledger::rational::Rational::zero);
+                let leader_term = margin.checked_add(&one_minus_m.checked_mul(&op_share).unwrap()).unwrap();
+                let leader_rew = cost + ade_ledger::rational::Rational::from_integer(f_minus_c as i128)
+                    .checked_mul(&leader_term).unwrap().floor().max(0) as u64;
+                let member_factor = ade_ledger::rational::Rational::from_integer(f_minus_c as i128)
+                    .checked_mul(&one_minus_m).unwrap();
+
+                let mut pool_total = leader_rew;
+                for (cred, (pid, coin)) in &go.0.delegations {
+                    if pid != pool_id { continue; }
+                    if op_cred_key.as_ref() == Some(&cred.0) { continue; }
+                    if coin.0 == 0 { continue; }
+                    let share = ade_ledger::rational::Rational::new(coin.0 as i128, pool_stake.0 as i128).unwrap();
+                    let mr = member_factor.checked_mul(&share).unwrap().floor().max(0) as u64;
+                    pool_total += mr;
+                }
+                independent_sum += pool_total;
+                pool_count += 1;
+            }
+
+            let formula_delta = independent_sum.abs_diff(acct.sum_rewards);
+            eprintln!("  --- Per-Pool Formula Check ---");
+            eprintln!("    independent sum:     {} ({} pools)", independent_sum, pool_count);
+            eprintln!("    apply_boundary sum:  {} ({} pools)", acct.sum_rewards, acct.rewarded_pool_count);
+            eprintln!("    formula delta:       {} lovelace ({} ADA)", formula_delta, formula_delta / 1_000_000);
+            if formula_delta == 0 {
+                eprintln!("    CONFIRMED: formula matches. 1.82M ADA gap is NOT from reward computation.");
+                eprintln!("    Gap must be from Conway governance effects on reserves/treasury.");
+            }
+        }
+
         eprintln!("  NOTE: wider gap than Allegra is expected — go snapshot");
         eprintln!("  alignment + unmodeled Conway governance mechanics.");
     } else {
