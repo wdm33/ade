@@ -247,10 +247,15 @@ Oracle sub-state values extracted at each HFC boundary: epoch, treasury, reserve
 - Conway T-25B: 113.5% ratio, dominated by go-snapshot alignment, not formula
 
 ### CE-72 (Conway Epoch Boundary)
-- Skeleton in place: boundary fires, rewards compute, 1037 pools, 20803 blocks
-- 113.5% ratio needs corrected starting-state (go snapshot alignment)
+- Boundary fires, rewards compute, 1037 pools, 20803 blocks, eta=20803/21600
+- 113.5% reserves ratio — **1,816,201 ADA over-distribution confirmed from governance**
+- Per-pool formula delta: 3,649 ADA (0.03%) — reward formula is correct
+- Treasury residual: −203,400 ADA (governance treasury withdrawals at boundary)
+- Reserves residual: −1,816,201 ADA (governance effects on reserves, not formula)
+- Confirmed NOT the cause: CBOR layout, fee parsing, stake data, pledge violations, pool params
 - DRep stake, ratification, enactment not yet implemented
-- **Status: PARTIAL** — infrastructure ready, governance semantics pending
+- **Status: PARTIAL** — reward formula proven, governance enactment is the remaining work
+- **Next**: parse Conway VState from snapshot, implement ratification + enactment
 
 ### CE-73 (HFC Translation Oracle State-Hash Equality)
 - Translation logic semantically correct (22/22 fields match)
