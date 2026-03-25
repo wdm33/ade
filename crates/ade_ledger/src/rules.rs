@@ -541,38 +541,85 @@ fn apply_epoch_boundary_full(
                 continue;
             }
 
-            // Operator gets: min(pool_max, cost) + margin * (pool_max - cost)
-            let operator_reward = if pool_max <= params.cost.0 {
-                pool_max
+            // Shelley reward split (matches Haskell cardano-ledger exactly):
+            //
+            // leaderReward = c + floor((f-c) * (m + (1-m)*s_op/σ))
+            //   where s_op = operator's own stake in the pool
+            //   Bundles the operator's margin AND their pro-rata member share
+            //   into a single floor operation.
+            //
+            // memberReward(t) = floor((f-c) * (1-m) * t / σ)
+            //   Applied to each delegator EXCEPT the operator (who already
+            //   got their share via leaderReward).
+
+            // Identify operator credential from reward_account
+            let op_cred: Option<ade_types::Hash28> = if params.reward_account.len() >= 29 {
+                let mut cred_bytes = [0u8; 28];
+                cred_bytes.copy_from_slice(&params.reward_account[1..29]);
+                Some(ade_types::Hash28(cred_bytes))
             } else {
-                let after_cost = pool_max - params.cost.0;
-                let margin_cut = crate::rational::Rational::from_integer(after_cost as i128)
-                    .checked_mul(&margin)
-                    .map(|r| r.floor().max(0) as u64)
-                    .unwrap_or(0);
-                params.cost.0 + margin_cut
+                None
             };
 
-            let delegator_pool = pool_max.saturating_sub(operator_reward);
-
-            // Route operator reward to reward_account credential
-            if operator_reward > 0 && params.reward_account.len() >= 29 {
-                let mut reward_cred = [0u8; 28];
-                reward_cred.copy_from_slice(&params.reward_account[1..29]);
-                let entry = reward_deltas.entry(ade_types::Hash28(reward_cred))
-                    .or_insert(ade_types::tx::Coin(0));
-                entry.0 = entry.0.saturating_add(operator_reward);
+            if pool_max <= params.cost.0 {
+                // Pool reward doesn't cover cost — operator gets all of it
+                if let Some(ref oc) = op_cred {
+                    let entry = reward_deltas.entry(oc.clone())
+                        .or_insert(ade_types::tx::Coin(0));
+                    entry.0 = entry.0.saturating_add(pool_max);
+                }
+                total_pool_rewards = total_pool_rewards.saturating_add(pool_max);
+                rewarded_pool_count += 1;
+                continue;
             }
 
-            // Distribute delegator_pool pro-rata by stake
+            let f_minus_c = pool_max - params.cost.0;
+            let one_minus_m = crate::rational::Rational::one()
+                .checked_sub(&margin)
+                .unwrap_or_else(crate::rational::Rational::one);
+
+            // Operator's stake share in the pool
+            let op_stake = op_cred.as_ref()
+                .and_then(|oc| delegator_stakes.get(oc))
+                .map(|c| c.0)
+                .unwrap_or(0);
+            let op_share = crate::rational::Rational::new(
+                op_stake as i128, pool_stake.0 as i128,
+            ).unwrap_or_else(crate::rational::Rational::zero);
+
+            // leaderReward = c + floor((f-c) * (m + (1-m)*s_op/σ))
+            let leader_term = margin.checked_add(
+                &one_minus_m.checked_mul(&op_share)
+                    .unwrap_or_else(crate::rational::Rational::zero)
+            ).unwrap_or(margin.clone());
+            let leader_reward = params.cost.0 + crate::rational::Rational::from_integer(f_minus_c as i128)
+                .checked_mul(&leader_term)
+                .map(|r| r.floor().max(0) as u64)
+                .unwrap_or(0);
+
+            // Route leader reward to operator's reward account
+            if let Some(ref oc) = op_cred {
+                let entry = reward_deltas.entry(oc.clone())
+                    .or_insert(ade_types::tx::Coin(0));
+                entry.0 = entry.0.saturating_add(leader_reward);
+            }
+
+            // memberReward(t) = floor((f-c) * (1-m) * t / σ)
+            // for each delegator EXCEPT the operator
+            let member_factor = crate::rational::Rational::from_integer(f_minus_c as i128)
+                .checked_mul(&one_minus_m)
+                .unwrap_or_else(crate::rational::Rational::zero);
+
             let mut member_distributed = 0u64;
-            if pool_stake.0 > 0 && delegator_pool > 0 {
+            if pool_stake.0 > 0 {
                 for (cred, stake) in &delegator_stakes {
+                    // Skip operator — already got their share via leaderReward
+                    if op_cred.as_ref() == Some(cred) { continue; }
+                    if stake.0 == 0 { continue; }
                     let share = crate::rational::Rational::new(
                         stake.0 as i128, pool_stake.0 as i128,
                     ).unwrap_or_else(crate::rational::Rational::zero);
-                    let member_reward = crate::rational::Rational::from_integer(delegator_pool as i128)
-                        .checked_mul(&share)
+                    let member_reward = member_factor.checked_mul(&share)
                         .map(|r| r.floor().max(0) as u64)
                         .unwrap_or(0);
                     if member_reward > 0 {
@@ -583,7 +630,7 @@ fn apply_epoch_boundary_full(
                 }
             }
 
-            total_pool_rewards = total_pool_rewards.saturating_add(operator_reward);
+            total_pool_rewards = total_pool_rewards.saturating_add(leader_reward);
             total_member_rewards = total_member_rewards.saturating_add(member_distributed);
             rewarded_pool_count += 1;
         }
@@ -680,6 +727,12 @@ fn apply_epoch_boundary_full(
         eta_numerator: eta_num,
         eta_denominator: eta_den.max(1),
         epoch_fees: state.epoch_state.epoch_fees.0,
+        // MIR: zeroed here — populated by the caller when MIR data is available.
+        // MIR cannot be computed from the reward formula alone; it requires
+        // parsing the InstantaneousRewards from the ledger state.
+        mir_reserves_to_treasury: 0,
+        mir_reserves_to_accounts: 0,
+        mir_treasury_to_accounts: 0,
     };
 
     let new_state = LedgerState {
@@ -723,10 +776,33 @@ pub struct EpochBoundarySummary {
 
 /// Detailed accounting of an epoch boundary transition.
 ///
-/// Decomposes the reserves and treasury changes into named buckets
-/// for precise oracle comparison. All values in lovelace.
+/// Decomposes reserves and treasury changes into four distinct flows:
+///
+/// 1. **Reward distribution**: reserves → reward pot → pools → accounts + treasury
+///    - delta_r1: monetary expansion from reserves
+///    - delta_r2: undistributed rewards returned to reserves
+///    - delta_t1: treasury's share (tau) of the reward pot
+///    - delta_t2: rewards to unregistered credentials redirected to treasury
+///    - sum_rewards: total computed pool rewards (operator + member)
+///
+/// 2. **MIR reserves→treasury**: direct transfer, separate from rewards
+///    - mir_reserves_to_treasury
+///
+/// 3. **MIR reserves→accounts**: reserves directly to individual staker accounts
+///    - mir_reserves_to_accounts
+///
+/// 4. **MIR treasury→accounts**: treasury directly to individual staker accounts
+///    - mir_treasury_to_accounts
+///
+/// These flows must never be collapsed into a single number. The accounting
+/// identity `implied_sum = reserves_decrease - treasury_increase + fees`
+/// conflates reward distribution with MIR effects and will produce false
+/// divergences if MIR is non-zero.
+///
+/// All values in lovelace.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct EpochBoundaryAccounting {
+    // --- Reward distribution ---
     /// floor(min(1, eta) * rho * reserves) — monetary expansion from reserves
     pub delta_r1: u64,
     /// pool_pot - sum_rewards — undistributed remainder returned to reserves
@@ -748,6 +824,16 @@ pub struct EpochBoundaryAccounting {
     pub eta_denominator: u64,
     /// epoch fees added to reward pot
     pub epoch_fees: u64,
+
+    // --- MIR (Move Instantaneous Rewards) ---
+    // Protocol-authorized transfers separate from ordinary rewards.
+    // Accumulated during the epoch via MIR certificates, applied at boundary.
+    /// MIR: reserves → treasury (direct transfer, not via reward pot)
+    pub mir_reserves_to_treasury: u64,
+    /// MIR: reserves → individual staker accounts (bypasses reward pot)
+    pub mir_reserves_to_accounts: u64,
+    /// MIR: treasury → individual staker accounts
+    pub mir_treasury_to_accounts: u64,
 }
 
 /// Process certificates from a block to accumulate delegation/pool state.

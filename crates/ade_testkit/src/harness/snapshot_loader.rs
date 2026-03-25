@@ -1192,6 +1192,36 @@ pub fn parse_snapshot_pool_params(
     parse_pool_params_map(state_cbor, pool_off)
 }
 
+/// Parse pool params from the CURRENT PState (the live registration state,
+/// NOT the go snapshot).
+///
+/// In the Shelley spec, reward computation uses the current PState pool params,
+/// not the go snapshot's pool params. Pools that changed cost/margin/pledge
+/// between the snapshot epoch and the current epoch will have different params.
+///
+/// Path: ES[1] → LedgerState → DPState[1] → PState → pool_params map
+pub fn parse_current_pool_params(
+    state_cbor: &[u8],
+) -> Result<Vec<PoolParamsTuple>, HarnessError> {
+    let off = navigate_to_nes(state_cbor)?;
+    let es = skip_nes_to_epoch_state(state_cbor, off)?;
+
+    // ES[0] = AccountState (skip)
+    let off = skip_cbor(state_cbor, es)?;
+    // ES[1] = LedgerState = array(2) [UTxOState, DPState]
+    let (off, _) = read_array_header(state_cbor, off)?;
+    // Skip UTxOState
+    let off = skip_cbor(state_cbor, off)?;
+    // DPState = array(2) [DState, PState]
+    let (dp_inner, _) = read_array_header(state_cbor, off)?;
+    // Skip DState to reach PState
+    let pstate_off = skip_cbor(state_cbor, dp_inner)?;
+    // PState = array(N) where first element is pool_params map
+    let (ps_inner, _) = read_array_header(state_cbor, pstate_off)?;
+    // PState[0] = pool_params map (pool_hash → pool_params)
+    parse_pool_params_map(state_cbor, ps_inner)
+}
+
 /// Parse snapshot entry counts for a specific snapshot position.
 pub fn parse_snapshot_counts(
     state_cbor: &[u8],

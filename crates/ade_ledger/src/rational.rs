@@ -5,17 +5,23 @@
 // - Explicit state transitions only
 // - Canonical serialization for all persisted/hashed data
 
-/// Exact rational number using i128 numerator and denominator.
+use num_bigint::BigInt;
+use num_integer::Integer;
+use num_traits::{One, Signed, Zero};
+
+/// Exact rational number using arbitrary-precision BigInt numerator and denominator.
 ///
 /// Invariants:
 /// - Denominator is always > 0
 /// - Stored in reduced form (GCD = 1) after construction
 ///
 /// No floating point arithmetic — all operations are exact integer math.
+/// Uses BigInt to match Haskell's arbitrary-precision Integer, eliminating
+/// overflow in intermediate computations (e.g., per-pool bracket formula).
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Rational {
-    num: i128,
-    den: i128,
+    num: BigInt,
+    den: BigInt,
 }
 
 impl Rational {
@@ -26,34 +32,49 @@ impl Rational {
         if den == 0 {
             return None;
         }
-        let mut r = Rational { num, den };
+        let mut r = Rational {
+            num: BigInt::from(num),
+            den: BigInt::from(den),
+        };
         r.reduce();
         Some(r)
     }
 
     /// Create a rational from an integer (denominator = 1).
     pub fn from_integer(n: i128) -> Self {
-        Rational { num: n, den: 1 }
+        Rational {
+            num: BigInt::from(n),
+            den: BigInt::one(),
+        }
     }
 
     /// Zero.
     pub fn zero() -> Self {
-        Rational { num: 0, den: 1 }
+        Rational {
+            num: BigInt::zero(),
+            den: BigInt::one(),
+        }
     }
 
     /// One.
     pub fn one() -> Self {
-        Rational { num: 1, den: 1 }
+        Rational {
+            num: BigInt::one(),
+            den: BigInt::one(),
+        }
     }
 
-    /// Numerator.
+    /// Numerator (as i128 — truncates if value exceeds i128 range).
+    ///
+    /// For protocol parameter rationals and final floor results, this always fits.
+    /// For intermediate computations, use the BigInt methods directly.
     pub fn numerator(&self) -> i128 {
-        self.num
+        bigint_to_i128(&self.num)
     }
 
-    /// Denominator (always > 0).
+    /// Denominator (always > 0, as i128 — truncates if value exceeds i128 range).
     pub fn denominator(&self) -> i128 {
-        self.den
+        bigint_to_i128(&self.den)
     }
 
     /// Floor: largest integer <= self.
@@ -61,93 +82,85 @@ impl Rational {
     /// For positive values: num / den (truncating division).
     /// For negative values: rounds toward negative infinity.
     pub fn floor(&self) -> i128 {
-        if self.num >= 0 {
-            self.num / self.den
+        let (q, r) = self.num.div_rem(&self.den);
+        if r.is_negative() {
+            bigint_to_i128(&(q - BigInt::one()))
         } else {
-            // For negative: floor division
-            // e.g., -7/2 = -4 (not -3)
-            let abs_num = self.num.saturating_neg();
-            let q = abs_num / self.den;
-            let r = abs_num % self.den;
-            if r == 0 {
-                self.num / self.den
-            } else {
-                -(q + 1)
-            }
+            bigint_to_i128(&q)
         }
     }
 
     /// Ceiling: smallest integer >= self.
     pub fn ceiling(&self) -> i128 {
-        if self.num >= 0 {
-            let q = self.num / self.den;
-            let r = self.num % self.den;
-            if r == 0 { q } else { q + 1 }
+        let (q, r) = self.num.div_rem(&self.den);
+        if r.is_positive() {
+            bigint_to_i128(&(q + BigInt::one()))
         } else {
-            // For negative: ceiling is just truncation
-            self.num / self.den
+            bigint_to_i128(&q)
         }
     }
 
-    /// Checked addition.
+    /// Checked addition. Always succeeds with BigInt (no overflow).
     pub fn checked_add(&self, other: &Rational) -> Option<Rational> {
-        // a/b + c/d = (a*d + c*b) / (b*d)
-        let num = self.num.checked_mul(other.den)?
-            .checked_add(other.num.checked_mul(self.den)?)?;
-        let den = self.den.checked_mul(other.den)?;
-        Rational::new(num, den)
+        let num = &self.num * &other.den + &other.num * &self.den;
+        let den = &self.den * &other.den;
+        let mut r = Rational { num, den };
+        r.reduce();
+        Some(r)
     }
 
-    /// Checked subtraction.
+    /// Checked subtraction. Always succeeds with BigInt (no overflow).
     pub fn checked_sub(&self, other: &Rational) -> Option<Rational> {
-        // a/b - c/d = (a*d - c*b) / (b*d)
-        let num = self.num.checked_mul(other.den)?
-            .checked_sub(other.num.checked_mul(self.den)?)?;
-        let den = self.den.checked_mul(other.den)?;
-        Rational::new(num, den)
+        let num = &self.num * &other.den - &other.num * &self.den;
+        let den = &self.den * &other.den;
+        let mut r = Rational { num, den };
+        r.reduce();
+        Some(r)
     }
 
-    /// Checked multiplication.
+    /// Checked multiplication. Always succeeds with BigInt (no overflow).
     pub fn checked_mul(&self, other: &Rational) -> Option<Rational> {
-        // a/b * c/d = (a*c) / (b*d)
-        let num = self.num.checked_mul(other.num)?;
-        let den = self.den.checked_mul(other.den)?;
-        Rational::new(num, den)
+        let num = &self.num * &other.num;
+        let den = &self.den * &other.den;
+        let mut r = Rational { num, den };
+        r.reduce();
+        Some(r)
     }
 
-    /// Checked division.
+    /// Checked division. Returns None only if dividing by zero.
     pub fn checked_div(&self, other: &Rational) -> Option<Rational> {
-        if other.num == 0 {
+        if other.num.is_zero() {
             return None;
         }
-        // a/b / c/d = (a*d) / (b*c)
-        let num = self.num.checked_mul(other.den)?;
-        let den = self.den.checked_mul(other.num)?;
-        Rational::new(num, den)
+        let num = &self.num * &other.den;
+        let den = &self.den * &other.num;
+        let mut r = Rational { num, den };
+        r.reduce();
+        Some(r)
     }
 
     /// Returns true if this rational is non-negative.
     pub fn is_non_negative(&self) -> bool {
-        self.num >= 0
+        !self.num.is_negative()
     }
 
     /// Reduce to canonical form: GCD = 1, denominator > 0.
     fn reduce(&mut self) {
-        if self.num == 0 {
-            self.den = 1;
+        if self.num.is_zero() {
+            self.den = BigInt::one();
             return;
         }
 
         // Ensure denominator is positive
-        if self.den < 0 {
-            self.num = self.num.saturating_neg();
-            self.den = self.den.saturating_neg();
+        if self.den.is_negative() {
+            self.num = -&self.num;
+            self.den = -&self.den;
         }
 
-        let g = gcd(abs_i128(self.num), abs_i128(self.den));
-        if g > 1 {
-            self.num /= g;
-            self.den /= g;
+        let g = self.num.abs().gcd(&self.den);
+        if g > BigInt::one() {
+            self.num /= &g;
+            self.den /= &g;
         }
     }
 }
@@ -161,15 +174,15 @@ impl PartialOrd for Rational {
 impl Ord for Rational {
     fn cmp(&self, other: &Self) -> core::cmp::Ordering {
         // a/b vs c/d => a*d vs c*b (both denominators are positive)
-        let lhs = self.num.saturating_mul(other.den);
-        let rhs = other.num.saturating_mul(self.den);
+        let lhs = &self.num * &other.den;
+        let rhs = &other.num * &self.den;
         lhs.cmp(&rhs)
     }
 }
 
 impl core::fmt::Display for Rational {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
-        if self.den == 1 {
+        if self.den == BigInt::one() {
             write!(f, "{}", self.num)
         } else {
             write!(f, "{}/{}", self.num, self.den)
@@ -177,23 +190,16 @@ impl core::fmt::Display for Rational {
     }
 }
 
-/// Compute GCD using Euclidean algorithm. Inputs must be non-negative.
-fn gcd(mut a: i128, mut b: i128) -> i128 {
-    while b != 0 {
-        let t = b;
-        b = a % b;
-        a = t;
-    }
-    a
-}
-
-/// Absolute value for i128, handling MIN correctly.
-fn abs_i128(x: i128) -> i128 {
-    if x < 0 {
-        x.saturating_neg()
-    } else {
-        x
-    }
+/// Convert BigInt to i128, clamping to i128::MIN/MAX on overflow.
+fn bigint_to_i128(b: &BigInt) -> i128 {
+    use num_traits::ToPrimitive;
+    b.to_i128().unwrap_or_else(|| {
+        if b.is_negative() {
+            i128::MIN
+        } else {
+            i128::MAX
+        }
+    })
 }
 
 #[cfg(test)]
@@ -513,11 +519,46 @@ mod tests {
         assert_eq!(r.denominator(), 3);
     }
 
+    // -----------------------------------------------------------------------
+    // BigInt precision: values that would overflow i128
+    // -----------------------------------------------------------------------
+
     #[test]
-    fn gcd_helper() {
-        assert_eq!(gcd(12, 8), 4);
-        assert_eq!(gcd(17, 13), 1);
-        assert_eq!(gcd(0, 5), 5);
-        assert_eq!(gcd(5, 0), 5);
+    fn large_intermediate_no_overflow() {
+        // Simulate a computation similar to the bracket formula:
+        // pool_reward_pot * bracket / (1 + a0) where pot is ~30T
+        let pot = Rational::from_integer(30_000_000_000_000); // 30T lovelace
+        let bracket = Rational::new(1, 500).unwrap(); // sigma' ≈ 1/500
+        let one_plus_a0 = Rational::new(13, 10).unwrap(); // 1 + 3/10
+
+        // With i128, pot * bracket could overflow if bracket had large num/den
+        let result = pot.checked_mul(&bracket)
+            .and_then(|r| r.checked_div(&one_plus_a0))
+            .unwrap();
+        assert!(result.floor() > 0);
+    }
+
+    #[test]
+    fn chain_operations_exact() {
+        // Chain of operations that would accumulate precision loss with i128
+        let total_stake = 20_400_000_000_000_000i128; // 20.4B ADA in lovelace
+        let pool_stake = 50_000_000_000_000i128; // 50M ADA
+        let sigma = Rational::new(pool_stake, total_stake).unwrap();
+        let z = Rational::new(1, 500).unwrap();
+        let a0 = Rational::new(3, 10).unwrap();
+        let s = Rational::new(1_000_000_000_000, total_stake).unwrap(); // 1M ADA pledge
+
+        // bracket = σ' + s' * a0 * (σ' - s' * (z - σ') / z)
+        let z_minus_sigma = z.checked_sub(&sigma).unwrap();
+        let inner = s.checked_mul(&z_minus_sigma).unwrap();
+        let inner_div_z = inner.checked_div(&z).unwrap();
+        let sigma_minus = sigma.checked_sub(&inner_div_z).unwrap();
+        let pledge_term = s.checked_mul(&a0).unwrap()
+            .checked_mul(&sigma_minus).unwrap();
+        let bracket = sigma.checked_add(&pledge_term).unwrap();
+
+        // Should be a small positive rational
+        assert!(bracket.floor() >= 0);
+        assert!(bracket.numerator() > 0);
     }
 }
