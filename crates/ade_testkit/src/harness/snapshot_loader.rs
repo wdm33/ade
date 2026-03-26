@@ -3704,11 +3704,16 @@ mod tests {
     #[test]
     fn treasury_values_all_pre_snapshots() {
         let snapshots = [
-            ("Allegra 236 PRE", "snapshot_16588800.tar.gz"),
-            ("Mary    251 PRE", "snapshot_23068800.tar.gz"),
-            ("Alonzo  290 PRE", "snapshot_39916975.tar.gz"),
-            ("Babbage 365 PRE", "snapshot_72316896.tar.gz"),
-            ("Conway  507 PRE", "snapshot_133660855.tar.gz"),
+            ("Allegra 236 PRE ", "snapshot_16588800.tar.gz"),
+            ("Allegra 237 POST", "snapshot_17020848.tar.gz"),
+            ("Mary    251 PRE ", "snapshot_23068800.tar.gz"),
+            ("Mary    252 POST", "snapshot_23500962.tar.gz"),
+            ("Alonzo  290 PRE ", "snapshot_39916975.tar.gz"),
+            ("Alonzo  291 POST", "snapshot_40348902.tar.gz"),
+            ("Babbage 365 PRE ", "snapshot_72316896.tar.gz"),
+            ("Babbage 366 POST", "snapshot_72748820.tar.gz"),
+            ("Conway  507 PRE ", "snapshot_133660855.tar.gz"),
+            ("Conway  508 POST", "snapshot_134092810.tar.gz"),
         ];
 
         eprintln!("\n=== Treasury & Reserves from PRE snapshots ===");

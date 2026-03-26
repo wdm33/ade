@@ -493,23 +493,23 @@ fn apply_epoch_boundary_full(
                 s
             };
 
-            // Use u128 integer arithmetic to avoid Rational overflow:
-            // maxPool = R * performance / (1+a0) * (sigma' + s'*a0*(sigma'-s'*(z-sigma')/z))
-            //
-            // Simplify: compute the bracket term as a Rational, then multiply by R*perf/(1+a0)
-            // bracket = σ' + s' * a0 * (σ' - s' * (z - σ') / z)
+            // Shelley maxPool bracket (matches Haskell exactly):
+            //   factor4 = (z - σ') / z
+            //   factor3 = (σ' - s' × factor4) / z
+            //   bracket = σ' + s' × a0 × factor3
             let bracket = {
-                let z_minus_sigma = z.checked_sub(&sigma_prime);
-                let inner = z_minus_sigma.and_then(|diff| {
-                    s_prime.checked_mul(&diff)
-                        .and_then(|r| r.checked_div(&z))
+                let factor4 = z.checked_sub(&sigma_prime)
+                    .and_then(|d| d.checked_div(&z));
+                let factor3 = factor4.and_then(|f4| {
+                    s_prime.checked_mul(&f4)
+                        .and_then(|sf4| sigma_prime.checked_sub(&sf4))
+                        .and_then(|num| num.checked_div(&z))
                 });
-                let sigma_minus_inner = inner.and_then(|i| sigma_prime.checked_sub(&i));
-                let pledge_term = sigma_minus_inner.and_then(|smi| {
+                let pledge_bonus = factor3.and_then(|f3| {
                     s_prime.checked_mul(a0)
-                        .and_then(|r| r.checked_mul(&smi))
+                        .and_then(|r| r.checked_mul(&f3))
                 });
-                pledge_term.and_then(|pt| sigma_prime.checked_add(&pt))
+                pledge_bonus.and_then(|pb| sigma_prime.checked_add(&pb))
             };
 
             // Step 1: maxPool = floor(R / (1+a0) * bracket)

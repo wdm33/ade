@@ -2205,30 +2205,39 @@ fn reward_formula_bisection_all_eras() {
         let pre_blocks: u64 = pre_state.epoch_state.block_production.values().sum();
         let post_blocks: u64 = post_state.epoch_state.block_production.values().sum();
 
-        // Three variants:
-        // POST-go: PRE reserves/treasury + POST go snapshot + POST blocks + POST fees
-        //   (correct: SNAP rotates go before startStep, blocks from nesBcur)
-        // POST: PRE everything + POST blocks/fees only (old approach)
-        // PRE:  PRE everything (previous epoch)
-        let variants: [(&str, ade_ledger::state::LedgerState); 3] = [
+        // Four variants testing which combination of PRE/POST data matches oracle:
+        //
+        // HYBRID: POST go (post-rotation) + PRE blocks/fees + PRE reserves
+        //   Theory: SNAP rotates go before startStep. Blocks/fees from the epoch
+        //   when the computation was created (PRE nesBprev/ssFee). Reserves from PRE.
+        //
+        // FIXED: POST go + POST blocks/fees + PRE reserves
+        // POST:  PRE go + POST blocks/fees + PRE reserves (old approach)
+        // PRE:   PRE everything
+        let variants: [(&str, ade_ledger::state::LedgerState); 4] = [
+            ("HYBRD", {
+                let mut s = pre_state.clone();
+                // POST go (post-rotation) + POST pool params
+                s.epoch_state.snapshots = post_state.epoch_state.snapshots.clone();
+                s.cert_state = post_state.cert_state.clone();
+                // PRE blocks + PRE fees (kept from pre_state)
+                s
+            }),
             ("FIXED", {
-                // Use PRE reserves/treasury/params but POST go snapshot, blocks, fees, pool params
                 let mut s = pre_state.clone();
                 s.epoch_state.block_production = post_state.epoch_state.block_production.clone();
                 s.epoch_state.epoch_fees = ade_types::tx::Coin(post_snap.header.epoch_fees);
-                // Critical fix: use POST go snapshot (post-rotation)
                 s.epoch_state.snapshots = post_state.epoch_state.snapshots.clone();
-                // Use POST pool params (from POST CertState)
                 s.cert_state = post_state.cert_state.clone();
                 s
             }),
-            ("POST", {
+            ("POST ", {
                 let mut s = pre_state.clone();
                 s.epoch_state.block_production = post_state.epoch_state.block_production.clone();
                 s.epoch_state.epoch_fees = ade_types::tx::Coin(post_snap.header.epoch_fees);
                 s
             }),
-            ("PRE ", {
+            ("PRE  ", {
                 pre_state.clone()
             }),
         ];
