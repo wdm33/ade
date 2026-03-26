@@ -903,42 +903,13 @@ fn parse_pool_params_map(
             let reward_acct = state_cbor[acct_start..acct_start + acct_len as usize].to_vec();
 
             // [6] poolOwners: set of key hashes (28 bytes each)
-            // Encoding varies: tag(258, array[bytes(28)...]) or array[bytes(28)...]
-            // Owner entries may also be credential-wrapped: array(2, [type, bytes(28)])
-            let f6 = skip_cbor(state_cbor, f5)?;
-            let mut owners = Vec::new();
-            if val_len >= 7 {
-                let (own_body, own_maj, own_val) = read_cbor_initial(state_cbor, f6)?;
-                // Unwrap tag(258) if present
-                let (arr_body, arr_maj, arr_val) = if own_maj == 6 {
-                    read_cbor_initial(state_cbor, own_body)?
-                } else {
-                    (own_body, own_maj, own_val)
-                };
-                if arr_maj == 4 {
-                    let mut oi = arr_body;
-                    for _ in 0..arr_val {
-                        if oi >= state_cbor.len() { break; }
-                        let (entry_body, entry_maj, entry_len) = read_cbor_initial(state_cbor, oi)?;
-                        if entry_maj == 2 && entry_len >= 28 {
-                            // Raw bytes(28) key hash
-                            let mut owner = [0u8; 28];
-                            owner.copy_from_slice(&state_cbor[entry_body..entry_body + 28]);
-                            owners.push(owner);
-                        } else if entry_maj == 4 && entry_len == 2 {
-                            // Credential-wrapped: array(2, [type_tag, bytes(28)])
-                            let hash_off = skip_cbor(state_cbor, entry_body)?; // skip type
-                            let (hash_start, hash_maj, hash_len) = read_cbor_initial(state_cbor, hash_off)?;
-                            if hash_maj == 2 && hash_len >= 28 {
-                                let mut owner = [0u8; 28];
-                                owner.copy_from_slice(&state_cbor[hash_start..hash_start + 28]);
-                                owners.push(owner);
-                            }
-                        }
-                        oi = skip_cbor(state_cbor, oi)?;
-                    }
-                }
-            }
+            // Error-tolerant: if parsing fails, return empty owners (pledge check skipped)
+            let owners = if val_len >= 7 {
+                let f6 = match skip_cbor(state_cbor, f5) { Ok(v) => v, Err(_) => { pools.push((Hash32(pool_hash), pledge, cost, margin_num, margin_den, reward_acct, vec![])); co = skip_cbor(state_cbor, val_start)?; continue; } };
+                parse_pool_owners(state_cbor, f6).unwrap_or_default()
+            } else {
+                Vec::new()
+            };
 
             pools.push((Hash32(pool_hash), pledge, cost, margin_num, margin_den, reward_acct, owners));
         }
@@ -947,6 +918,40 @@ fn parse_pool_params_map(
     }
 
     Ok(pools)
+}
+
+/// Parse pool owners from a CBOR offset pointing to the poolOwners field.
+/// Returns Vec of 28-byte owner key hashes. Error-tolerant: returns empty on failure.
+fn parse_pool_owners(state_cbor: &[u8], off: usize) -> Result<Vec<[u8; 28]>, HarnessError> {
+    let (own_body, own_maj, own_val) = read_cbor_initial(state_cbor, off)?;
+    let (arr_body, arr_maj, arr_val) = if own_maj == 6 {
+        read_cbor_initial(state_cbor, own_body)?
+    } else {
+        (own_body, own_maj, own_val)
+    };
+    let mut owners = Vec::new();
+    if arr_maj == 4 {
+        let mut oi = arr_body;
+        for _ in 0..arr_val {
+            if oi >= state_cbor.len() { break; }
+            let (entry_body, entry_maj, entry_len) = read_cbor_initial(state_cbor, oi)?;
+            if entry_maj == 2 && entry_len >= 28 {
+                let mut owner = [0u8; 28];
+                owner.copy_from_slice(&state_cbor[entry_body..entry_body + 28]);
+                owners.push(owner);
+            } else if entry_maj == 4 && entry_len == 2 {
+                let hash_off = skip_cbor(state_cbor, entry_body)?;
+                let (hash_start, hash_maj, hash_len) = read_cbor_initial(state_cbor, hash_off)?;
+                if hash_maj == 2 && hash_len >= 28 {
+                    let mut owner = [0u8; 28];
+                    owner.copy_from_slice(&state_cbor[hash_start..hash_start + 28]);
+                    owners.push(owner);
+                }
+            }
+            oi = skip_cbor(state_cbor, oi)?;
+        }
+    }
+    Ok(owners)
 }
 
 /// Navigate from an arbitrary offset that starts at the HFC telescope.

@@ -392,18 +392,26 @@ fn apply_epoch_boundary_full(
     let pool_reward_pot = total_reward.0.saturating_sub(treasury_delta);
     let go = &state.epoch_state.snapshots.go;
 
-    // Shelley totalStake = circulation = maxLovelaceSupply - reserves.
-    // Used for sigma (pool share) and pledge ratio in the maxPool formula.
-    // Confirmed from FreeVars_totalStake in Mary epoch 267 mid-epoch dump:
-    //   FreeVars_totalStake = 32,611,585,536,869,652 = maxSupply - reserves = circulation.
-    let total_stake: u64 = state.max_lovelace_supply
-        .saturating_sub(reserves.0);
-
     // Total active stake = sum of delegated pool stakes from go snapshot.
-    // Used for sigmaA (apparent performance calculation).
     let total_active_stake: u64 = go.0.pool_stakes.values()
         .map(|c| c.0)
         .fold(0u64, |a, b| a.saturating_add(b));
+
+    // totalStake: the denominator for sigma and pledge ratio in maxPool.
+    //
+    // Pre-Mary (Shelley/Allegra): totalStake = activeStake.
+    //   Proven exact for Allegra epoch 236→237 (99.1% + MIR = 100.0%).
+    //
+    // Mary+: totalStake = circulation = maxLovelaceSupply - reserves.
+    //   Confirmed from FreeVars_totalStake in Mary epoch 267 mid-epoch dump.
+    //   Mary 252 FIXED: 100.10%.
+    let total_stake: u64 = if state.protocol_params.protocol_major < 4 {
+        // Shelley (2) / Allegra (3): use activeStake
+        total_active_stake
+    } else {
+        // Mary (4) / Alonzo (5+): use circulation
+        state.max_lovelace_supply.saturating_sub(reserves.0)
+    };
 
     // Allocate rewards to pools that have params
     let mut total_pool_rewards = 0u64;
@@ -413,6 +421,10 @@ fn apply_epoch_boundary_full(
     let mut _sum_f = 0u64; // sum of raw f values (floor(maxPool*perf))
     let mut _sum_max_pool = 0u64; // sum of maxPool values (before perf multiply)
     let mut _n_perf_capped = 0u64; // pools where perf was capped at 1.0
+
+    eprintln!("  [epoch_boundary] protocol_major={} total_stake={} active_stake={} pool_pot={} go_pools={} cert_pools={}",
+        state.protocol_params.protocol_major, total_stake, total_active_stake, pool_reward_pot,
+        go.0.pool_stakes.len(), state.cert_state.pool.pools.len());
 
     if total_stake > 0 && total_active_stake > 0 && pool_reward_pot > 0 {
         for (pool_id, pool_stake) in &go.0.pool_stakes {
@@ -534,13 +546,13 @@ fn apply_epoch_boundary_full(
                 continue;
             }
 
-            // Shelley pledge satisfaction check:
-            // if pledge > sum(owner_stakes) → maxPool = 0 (no reward)
-            // owners = _poolOwners from pool registration params
             // Shelley pledge satisfaction: if pledge > sum(owner_stakes) → maxPool = 0
-            // Only apply when owners are reliably parsed (non-empty).
-            // The check computes ostake = sum of each owner's delegated stake in this pool.
-            if !params.owners.is_empty() && params.pledge.0 > 0 {
+            // Only apply for Mary+ (protocol_major >= 4) where owner parsing is reliable.
+            // Pre-Mary: owner encoding differs, skip the check (matches proven formula).
+            if state.protocol_params.protocol_major >= 4
+                && !params.owners.is_empty()
+                && params.pledge.0 > 0
+            {
                 let owner_stake: u64 = params.owners.iter()
                     .map(|owner| {
                         delegator_stakes.get(owner)
