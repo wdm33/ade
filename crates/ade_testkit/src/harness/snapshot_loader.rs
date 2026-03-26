@@ -330,11 +330,12 @@ impl LoadedSnapshot {
 
             pools.insert(pool_id.clone(), PoolParams {
                 pool_id,
-                vrf_hash: ade_types::Hash32([0u8; 32]), // not needed for rewards
+                vrf_hash: ade_types::Hash32([0u8; 32]),
                 pledge: Coin(*pledge),
                 cost: Coin(*cost),
                 margin: (*margin_num, *margin_den),
                 reward_account: reward_acct.clone(),
+                owners: Vec::new(), // TODO: parse _poolOwners from pool params[6]
             });
         }
 

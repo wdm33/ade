@@ -534,6 +534,12 @@ fn apply_epoch_boundary_full(
                 continue;
             }
 
+            // TODO: Shelley pledge satisfaction check
+            // Haskell: if pledge > sum(owner_stakes) → maxPool = 0
+            // Requires parsing _poolOwners (Set of KeyHash) from pool params
+            // and summing their delegated stakes. Not yet implemented —
+            // using single reward_account as proxy excludes ~25% of pools.
+
             // Debug: log first 3 pools for formula verification
             if rewarded_pool_count < 3 {
                 eprintln!("  [pool {}] stake={} sigma={:.10} sigma'={:.10} maxPool={} perf={:.10} blocks={}",

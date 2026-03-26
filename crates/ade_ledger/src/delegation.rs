@@ -98,6 +98,9 @@ pub struct PoolParams {
     pub cost: Coin,
     pub margin: (u64, u64),
     pub reward_account: Vec<u8>,
+    /// Pool owner key hashes (for pledge satisfaction check).
+    /// If empty, pledge check is skipped.
+    pub owners: Vec<ade_types::Hash28>,
 }
 
 /// Apply a single certificate to the certificate state.
@@ -234,6 +237,7 @@ fn apply_pool_registration(
         cost: pool_cert.cost,
         margin: pool_cert.margin,
         reward_account: pool_cert.reward_account.clone(),
+        owners: Vec::new(), // TODO: parse from registration cert
     };
 
     let mut new_state = state.clone();
