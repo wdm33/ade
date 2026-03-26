@@ -410,6 +410,9 @@ fn apply_epoch_boundary_full(
     let mut total_member_rewards = 0u64;
     let mut rewarded_pool_count = 0usize;
     let mut reward_deltas = std::collections::BTreeMap::new();
+    let mut _sum_f = 0u64; // sum of raw f values (floor(maxPool*perf))
+    let mut _sum_max_pool = 0u64; // sum of maxPool values (before perf multiply)
+    let mut _n_perf_capped = 0u64; // pools where perf was capped at 1.0
 
     if total_stake > 0 && total_active_stake > 0 && pool_reward_pot > 0 {
         for (pool_id, pool_stake) in &go.0.pool_stakes {
@@ -446,12 +449,14 @@ fn apply_epoch_boundary_full(
                 pool_stake.0 as i128, total_stake as i128,
             ).unwrap_or_else(crate::rational::Rational::zero);
 
-            // apparentPerformance = beta / sigmaA
-            // = (blocks / totalBlocks) / (pool_stake / totalActiveStake)
-            // = blocks * totalActiveStake / (totalBlocks * pool_stake)
+            // apparentPerformance = beta / sigma
+            // = (blocks / totalBlocks) / (pool_stake / totalStake)
+            // = blocks * totalStake / (totalBlocks * pool_stake)
+            // Note: both sigma and sigmaA use totalStake (= circulation).
+            // This matches the deployed oracle behavior (confirmed Mary 267).
             let performance = if total_blocks_produced > 0 && pool_stake.0 > 0 {
                 let perf = crate::rational::Rational::new(
-                    (blocks_produced as i128) * (total_active_stake as i128),
+                    (blocks_produced as i128) * (total_stake as i128),
                     (total_blocks_produced as i128) * (pool_stake.0 as i128),
                 ).unwrap_or_else(crate::rational::Rational::one);
                 // Cap at 1 — pool can't earn more than maxPool
@@ -530,6 +535,18 @@ fn apply_epoch_boundary_full(
                 continue;
             }
 
+            // Debug: log first 3 pools for formula verification
+            if rewarded_pool_count < 3 {
+                eprintln!("  [pool {}] stake={} sigma={:.10} sigma'={:.10} maxPool={} perf={:.10} blocks={}",
+                    rewarded_pool_count, pool_stake.0,
+                    sigma.numerator() as f64 / sigma.denominator() as f64,
+                    sigma_prime.numerator() as f64 / sigma_prime.denominator() as f64,
+                    max_pool,
+                    performance.numerator() as f64 / performance.denominator() as f64,
+                    blocks_produced);
+                eprintln!("    totalStake(circ)={} activeStake={} pool_pot={}", total_stake, total_active_stake, pool_reward_pot);
+            }
+
             // Step 2: poolReward = floor(maxPool * apparentPerformance)
             let pool_max = {
                 let max_rat = crate::rational::Rational::from_integer(max_pool as i128);
@@ -561,6 +578,12 @@ fn apply_epoch_boundary_full(
             } else {
                 None
             };
+
+            _sum_f += pool_max;
+            _sum_max_pool += max_pool;
+            if performance.numerator() >= performance.denominator() {
+                _n_perf_capped += 1;
+            }
 
             if pool_max <= params.cost.0 {
                 // Pool reward doesn't cover cost — operator gets all of it
@@ -636,6 +659,13 @@ fn apply_epoch_boundary_full(
             rewarded_pool_count += 1;
         }
     }
+
+    // Debug: compare sum(f) with sum(leader+member)
+    let sum_rewards_check = total_pool_rewards.saturating_add(total_member_rewards);
+    eprintln!("  [reward_debug] sum_f={} sum_maxPool={} perf_capped={}/{} pools={} totalStake={} activeStake={} sum_f/pot={:.4}",
+        _sum_f, _sum_max_pool, _n_perf_capped, rewarded_pool_count,
+        rewarded_pool_count, total_stake, total_active_stake,
+        _sum_f as f64 / pool_reward_pot as f64);
 
     // deltaT2: filter rewards — only registered credentials receive rewards.
     // Rewards to unregistered credentials go to treasury (Shelley spec).
