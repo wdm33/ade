@@ -58,6 +58,7 @@ pub fn translate_byron_to_shelley(
         era: CardanoEra::Shelley,
         track_utxo: old_state.track_utxo,
         cert_state: old_state.cert_state.clone(),
+        max_lovelace_supply: old_state.max_lovelace_supply,
     })
 }
 
@@ -87,6 +88,7 @@ pub fn translate_shelley_to_allegra(
         era: CardanoEra::Allegra,
         track_utxo: old_state.track_utxo,
         cert_state: old_state.cert_state.clone(),
+        max_lovelace_supply: old_state.max_lovelace_supply,
     })
 }
 
@@ -115,6 +117,7 @@ pub fn translate_allegra_to_mary(
         era: CardanoEra::Mary,
         track_utxo: old_state.track_utxo,
         cert_state: old_state.cert_state.clone(),
+        max_lovelace_supply: old_state.max_lovelace_supply,
     })
 }
 
@@ -148,6 +151,7 @@ pub fn translate_mary_to_alonzo(
         era: CardanoEra::Alonzo,
         track_utxo: old_state.track_utxo,
         cert_state: old_state.cert_state.clone(),
+        max_lovelace_supply: old_state.max_lovelace_supply,
     })
 }
 
@@ -176,6 +180,7 @@ pub fn translate_alonzo_to_babbage(
         era: CardanoEra::Babbage,
         track_utxo: old_state.track_utxo,
         cert_state: old_state.cert_state.clone(),
+        max_lovelace_supply: old_state.max_lovelace_supply,
     })
 }
 
@@ -209,6 +214,7 @@ pub fn translate_babbage_to_conway(
         era: CardanoEra::Conway,
         track_utxo: old_state.track_utxo,
         cert_state: old_state.cert_state.clone(),
+        max_lovelace_supply: old_state.max_lovelace_supply,
     })
 }
 
@@ -281,6 +287,7 @@ mod tests {
             era: CardanoEra::ByronRegular,
             track_utxo: false,
             cert_state: CertState::new(),
+            max_lovelace_supply: 45_000_000_000_000_000,
         }
     }
 
@@ -300,6 +307,7 @@ mod tests {
             era: CardanoEra::Shelley,
             track_utxo: false,
             cert_state: CertState::new(),
+            max_lovelace_supply: 45_000_000_000_000_000,
         }
     }
 
@@ -319,6 +327,7 @@ mod tests {
             era: CardanoEra::Allegra,
             track_utxo: false,
             cert_state: CertState::new(),
+            max_lovelace_supply: 45_000_000_000_000_000,
         }
     }
 
@@ -408,6 +417,7 @@ mod tests {
             era: CardanoEra::ByronEbb,
             track_utxo: false,
             cert_state: CertState::new(),
+            max_lovelace_supply: 45_000_000_000_000_000,
         };
         let result = translate_byron_to_shelley(&state);
         assert!(result.is_ok());
@@ -525,6 +535,7 @@ mod tests {
             era: CardanoEra::Mary,
             track_utxo: false,
             cert_state: CertState::new(),
+            max_lovelace_supply: 45_000_000_000_000_000,
         }
     }
 
@@ -544,6 +555,7 @@ mod tests {
             era: CardanoEra::Alonzo,
             track_utxo: false,
             cert_state: CertState::new(),
+            max_lovelace_supply: 45_000_000_000_000_000,
         }
     }
 
@@ -563,6 +575,7 @@ mod tests {
             era: CardanoEra::Babbage,
             track_utxo: false,
             cert_state: CertState::new(),
+            max_lovelace_supply: 45_000_000_000_000_000,
         }
     }
 

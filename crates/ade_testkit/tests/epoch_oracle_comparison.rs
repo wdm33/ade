@@ -444,6 +444,222 @@ fn precise_boundary_comparison_eta_diagnosis() {
     }
 }
 
+/// Test: does totalStake = circulation produce correct results for Allegra
+/// when MIR is properly accounted for?
+///
+/// The existing Allegra test uses totalStake = sum(pool_stakes) and gets 99.1%.
+/// This test uses totalStake = maxLovelaceSupply - reserves (circulation) and
+/// checks whether the MIR-adjusted result matches the oracle.
+#[test]
+fn allegra_circulation_totalstake_test() {
+    let pre_path = snapshots_dir().join("snapshot_16588800.tar.gz");
+    let post_path = snapshots_dir().join("snapshot_17020848.tar.gz");
+    if !pre_path.exists() || !post_path.exists() {
+        eprintln!("Skipping: snapshots not available");
+        return;
+    }
+
+    let pre_snap = LoadedSnapshot::from_tarball(&pre_path).unwrap();
+    let post_snap = LoadedSnapshot::from_tarball(&post_path).unwrap();
+
+    let oracle_reserves_decrease = pre_snap.header.reserves
+        .saturating_sub(post_snap.header.reserves);
+    let oracle_treasury_increase = post_snap.header.treasury
+        .saturating_sub(pre_snap.header.treasury);
+
+    // Build boundary state
+    let post_state = post_snap.to_ledger_state();
+    let pre_state = pre_snap.to_ledger_state();
+    let mut state = pre_state.clone();
+    state.epoch_state.block_production = post_state.epoch_state.block_production.clone();
+    state.epoch_state.epoch_fees = ade_types::tx::Coin(post_snap.header.epoch_fees);
+
+    let go = &state.epoch_state.snapshots.go;
+    let active_stake: u64 = go.0.pool_stakes.values().map(|c| c.0).sum();
+    let circulation: u64 = state.max_lovelace_supply
+        .saturating_sub(state.epoch_state.reserves.0);
+    let total_blocks: u64 = state.epoch_state.block_production.values().sum();
+
+    // Compute delta_r1 (same for both — doesn't depend on totalStake)
+    let d = &state.protocol_params.decentralization;
+    let d_thresh = ade_ledger::rational::Rational::new(4, 5).unwrap();
+    let eta = if d.numerator() * d_thresh.denominator() >= d_thresh.numerator() * d.denominator() {
+        ade_ledger::rational::Rational::one()
+    } else {
+        let one_minus_d = ade_ledger::rational::Rational::one().checked_sub(d).unwrap();
+        let expected = one_minus_d.checked_mul(
+            &ade_ledger::rational::Rational::from_integer(21600)
+        ).unwrap().floor().max(1) as u64;
+        if total_blocks >= expected {
+            ade_ledger::rational::Rational::one()
+        } else {
+            ade_ledger::rational::Rational::new(total_blocks as i128, expected as i128).unwrap()
+        }
+    };
+
+    let reserves_rat = ade_ledger::rational::Rational::from_integer(
+        state.epoch_state.reserves.0 as i128);
+    let rho = ade_ledger::rational::Rational::new(3, 1000).unwrap();
+    let delta_r1 = reserves_rat.checked_mul(&rho).unwrap()
+        .checked_mul(&eta).unwrap().floor().max(0) as u64;
+    let total_reward = delta_r1 + state.epoch_state.epoch_fees.0;
+    let delta_t1 = (ade_ledger::rational::Rational::from_integer(total_reward as i128)
+        .checked_mul(&ade_ledger::rational::Rational::new(1, 5).unwrap()).unwrap())
+        .floor().max(0) as u64;
+    let pool_pot = total_reward - delta_t1;
+
+    // Compute per-pool rewards with BOTH totalStake values
+    let a0 = ade_ledger::rational::Rational::new(3, 10).unwrap();
+    let one_plus_a0 = ade_ledger::rational::Rational::new(13, 10).unwrap();
+    let z = ade_ledger::rational::Rational::new(1, 500).unwrap();
+
+    let compute_sum = |total_stake: u64| -> (u64, usize) {
+        let mut sum = 0u64;
+        let mut count = 0usize;
+        for (pool_id, pool_stake) in &go.0.pool_stakes {
+            let params = match state.cert_state.pool.pools.get(pool_id) {
+                Some(p) => p,
+                None => continue,
+            };
+            let blocks = state.epoch_state.block_production.get(pool_id).copied().unwrap_or(0);
+            if blocks == 0 || pool_stake.0 == 0 { continue; }
+
+            // sigma uses total_stake (the variable under test)
+            let sigma = ade_ledger::rational::Rational::new(
+                pool_stake.0 as i128, total_stake as i128).unwrap();
+            let s = ade_ledger::rational::Rational::new(
+                params.pledge.0 as i128, total_stake as i128).unwrap();
+            let sigma_prime = if sigma.numerator() * z.denominator() > z.numerator() * sigma.denominator()
+                { z.clone() } else { sigma.clone() };
+            let s_prime = if s.numerator() * z.denominator() > z.numerator() * s.denominator()
+                { z.clone() } else { s.clone() };
+
+            // apparentPerformance uses active_stake (always)
+            let perf = {
+                let p = ade_ledger::rational::Rational::new(
+                    (blocks as i128) * (active_stake as i128),
+                    (total_blocks as i128) * (pool_stake.0 as i128),
+                ).unwrap_or_else(ade_ledger::rational::Rational::one);
+                if p.numerator() > p.denominator()
+                    { ade_ledger::rational::Rational::one() } else { p }
+            };
+
+            let bracket = z.checked_sub(&sigma_prime)
+                .and_then(|d| s_prime.checked_mul(&d))
+                .and_then(|r| r.checked_div(&z))
+                .and_then(|inner| sigma_prime.checked_sub(&inner))
+                .and_then(|smi| s_prime.checked_mul(&a0).and_then(|r| r.checked_mul(&smi)))
+                .and_then(|pt| sigma_prime.checked_add(&pt));
+            let max_pool = match bracket {
+                Some(br) => ade_ledger::rational::Rational::from_integer(pool_pot as i128)
+                    .checked_mul(&br)
+                    .and_then(|r| r.checked_div(&one_plus_a0))
+                    .map(|r| r.floor().max(0) as u64)
+                    .unwrap_or(0),
+                None => 0,
+            };
+            if max_pool == 0 { continue; }
+
+            let f = ade_ledger::rational::Rational::from_integer(max_pool as i128)
+                .checked_mul(&perf)
+                .map(|r| r.floor().max(0) as u64)
+                .unwrap_or(0);
+            if f == 0 { continue; }
+
+            // Simplified total (leader + members)
+            let margin = ade_ledger::rational::Rational::new(
+                params.margin.0 as i128, params.margin.1 as i128,
+            ).unwrap_or_else(ade_ledger::rational::Rational::zero);
+            let cost = params.cost.0;
+            let pool_total = if f <= cost { f } else {
+                let f_minus_c = f - cost;
+                let one_minus_m = ade_ledger::rational::Rational::one().checked_sub(&margin).unwrap();
+                let op_cred: Option<[u8; 28]> = if params.reward_account.len() >= 29 {
+                    let mut k = [0u8; 28]; k.copy_from_slice(&params.reward_account[1..29]); Some(k)
+                } else { None };
+                let op_stake = op_cred.and_then(|k|
+                    go.0.delegations.get(&ade_types::Hash28(k)).map(|(_, c)| c.0)
+                ).unwrap_or(0);
+                let op_share = ade_ledger::rational::Rational::new(
+                    op_stake as i128, pool_stake.0 as i128
+                ).unwrap_or_else(ade_ledger::rational::Rational::zero);
+                let leader_term = margin.checked_add(&one_minus_m.checked_mul(&op_share).unwrap()).unwrap();
+                let leader_rew = cost + ade_ledger::rational::Rational::from_integer(f_minus_c as i128)
+                    .checked_mul(&leader_term).unwrap().floor().max(0) as u64;
+                let member_factor = ade_ledger::rational::Rational::from_integer(f_minus_c as i128)
+                    .checked_mul(&one_minus_m).unwrap();
+                let mut total = leader_rew;
+                for (cred, (pid, coin)) in &go.0.delegations {
+                    if pid != pool_id { continue; }
+                    if op_cred.as_ref() == Some(&cred.0) { continue; }
+                    if coin.0 == 0 { continue; }
+                    let share = ade_ledger::rational::Rational::new(
+                        coin.0 as i128, pool_stake.0 as i128).unwrap();
+                    total += member_factor.checked_mul(&share).unwrap().floor().max(0) as u64;
+                }
+                total
+            };
+            sum += pool_total;
+            count += 1;
+        }
+        (sum, count)
+    };
+
+    let (sum_active, pools_active) = compute_sum(active_stake);
+    let (sum_circ, pools_circ) = compute_sum(circulation);
+
+    // Compute reserves decrease for each
+    let dr2_active = pool_pot - sum_active;
+    let dr2_circ = pool_pot - sum_circ;
+    let res_decr_active = delta_r1 - dr2_active;
+    let res_decr_circ = delta_r1 - dr2_circ;
+
+    // Known MIR for Allegra (from the existing precise test)
+    // MIR_reserves_total ≈ 185,274,531,477 lovelace
+    // This is an ADDITIONAL reserves outflow beyond the reward formula
+    let mir_reserves_total = oracle_reserves_decrease.saturating_sub(res_decr_active);
+    let mir_reserves_total_circ = oracle_reserves_decrease.saturating_sub(res_decr_circ);
+
+    let ratio_active = res_decr_active as f64 / oracle_reserves_decrease as f64;
+    let ratio_circ = res_decr_circ as f64 / oracle_reserves_decrease as f64;
+
+    eprintln!("\n{}", "=".repeat(70));
+    eprintln!("=== ALLEGRA CIRCULATION vs ACTIVE STAKE TEST ===");
+    eprintln!("{}", "=".repeat(70));
+    eprintln!("  reserves:       {} ({} ADA)", state.epoch_state.reserves.0,
+        state.epoch_state.reserves.0 / 1_000_000);
+    eprintln!("  active_stake:   {} ({} ADA)", active_stake, active_stake / 1_000_000);
+    eprintln!("  circulation:    {} ({} ADA)", circulation, circulation / 1_000_000);
+    eprintln!("  circ/active:    {:.4}", circulation as f64 / active_stake as f64);
+    eprintln!("  delta_r1:       {delta_r1}");
+    eprintln!("  pool_pot:       {pool_pot}");
+    eprintln!();
+    eprintln!("  ACTIVE STAKE:   sum={sum_active} ({pools_active} pools)");
+    eprintln!("    reserves Δ:   {res_decr_active}");
+    eprintln!("    ratio:        {:.4}%", ratio_active * 100.0);
+    eprintln!("    implied MIR:  {} ({} ADA)", mir_reserves_total, mir_reserves_total / 1_000_000);
+    eprintln!();
+    eprintln!("  CIRCULATION:    sum={sum_circ} ({pools_circ} pools)");
+    eprintln!("    reserves Δ:   {res_decr_circ}");
+    eprintln!("    ratio:        {:.4}%", ratio_circ * 100.0);
+    eprintln!("    implied MIR:  {} ({} ADA)", mir_reserves_total_circ, mir_reserves_total_circ / 1_000_000);
+    eprintln!();
+
+    // The test: with active stake, MIR ≈ 185K ADA (known correct).
+    // With circulation, MIR should also be ≈ 185K ADA if circulation is correct.
+    // If circulation gives MIR >> 185K, it's wrong for Allegra.
+    eprintln!("  VERDICT:");
+    eprintln!("    Active MIR = {} ADA (expected ~185K)", mir_reserves_total / 1_000_000);
+    eprintln!("    Circ   MIR = {} ADA (expected ~185K)", mir_reserves_total_circ / 1_000_000);
+
+    let active_mir_ok = (mir_reserves_total / 1_000_000) > 150 && (mir_reserves_total / 1_000_000) < 220;
+    let circ_mir_ok = (mir_reserves_total_circ / 1_000_000) > 150 && (mir_reserves_total_circ / 1_000_000) < 220;
+    eprintln!("    Active stake MIR plausible: {active_mir_ok}");
+    eprintln!("    Circulation MIR plausible:  {circ_mir_ok}");
+
+    eprintln!("\n{}\n", "=".repeat(70));
+}
+
 /// Conway epoch 507→508 boundary comparison (T-25B).
 ///
 /// Conway epoch boundary is structurally identical to Shelley-Babbage for
@@ -771,10 +987,245 @@ fn conway_epoch_508_boundary_comparison() {
             eprintln!("    independent sum:     {} ({} pools)", independent_sum, pool_count);
             eprintln!("    apply_boundary sum:  {} ({} pools)", acct.sum_rewards, acct.rewarded_pool_count);
             eprintln!("    formula delta:       {} lovelace ({} ADA)", formula_delta, formula_delta / 1_000_000);
-            if formula_delta == 0 {
-                eprintln!("    CONFIRMED: formula matches. 1.82M ADA gap is NOT from reward computation.");
-                eprintln!("    Gap must be from Conway governance effects on reserves/treasury.");
+            // --- Circulation-based totalStake test ---
+            // Hypothesis: Shelley formula uses totalStake = maxLovelaceSupply - reserves
+            // (circulation), NOT sum of go snapshot delegated stakes.
+            let max_lovelace_supply: u64 = 45_000_000_000_000_000; // 45B ADA
+            let circulation = max_lovelace_supply - oracle_reserves_pre;
+            eprintln!();
+            eprintln!("  --- Circulation-Based totalStake Test ---");
+            eprintln!("    maxLovelaceSupply:   {max_lovelace_supply} ({} ADA)", max_lovelace_supply / 1_000_000);
+            eprintln!("    reserves:            {oracle_reserves_pre} ({} ADA)", oracle_reserves_pre / 1_000_000);
+            eprintln!("    circulation:         {circulation} ({} ADA)", circulation / 1_000_000);
+            eprintln!("    active delegated:    {total_stake} ({} ADA)", total_stake / 1_000_000);
+            eprintln!("    ratio:               {:.4}%", total_stake as f64 / circulation as f64 * 100.0);
+
+            let mut circ_sum = 0u64;
+            let mut circ_pool_count = 0usize;
+            for (pool_id, pool_stake) in &go.0.pool_stakes {
+                let params = match pre_state.cert_state.pool.pools.get(pool_id) {
+                    Some(p) => p,
+                    None => continue,
+                };
+                let blocks = post_state.epoch_state.block_production
+                    .get(pool_id).copied().unwrap_or(0);
+                if blocks == 0 || pool_stake.0 == 0 { continue; }
+
+                let margin = ade_ledger::rational::Rational::new(
+                    params.margin.0 as i128, params.margin.1 as i128,
+                ).unwrap_or_else(ade_ledger::rational::Rational::zero);
+                // Shelley formula: sigma and s use CIRCULATION as denominator
+                // but apparentPerformance uses totalActiveStake
+                let sigma = ade_ledger::rational::Rational::new(
+                    pool_stake.0 as i128, circulation as i128,
+                ).unwrap();
+                let s_pledge = ade_ledger::rational::Rational::new(
+                    params.pledge.0 as i128, circulation as i128,
+                ).unwrap();
+                let sigma_prime = if sigma.numerator() * z.denominator() > z.numerator() * sigma.denominator() { z.clone() } else { sigma.clone() };
+                let s_prime = if s_pledge.numerator() * z.denominator() > z.numerator() * s_pledge.denominator() { z.clone() } else { s_pledge };
+                // apparentPerformance uses sigmaA = poolStake / totalActiveStake
+                let perf = {
+                    let p = ade_ledger::rational::Rational::new(
+                        (blocks as i128) * (total_stake as i128),
+                        (total_blocks_produced as i128) * (pool_stake.0 as i128),
+                    ).unwrap_or_else(ade_ledger::rational::Rational::one);
+                    if p.numerator() > p.denominator() { ade_ledger::rational::Rational::one() } else { p }
+                };
+                let bracket = z.checked_sub(&sigma_prime)
+                    .and_then(|d| s_prime.checked_mul(&d))
+                    .and_then(|r| r.checked_div(&z))
+                    .and_then(|inner| sigma_prime.checked_sub(&inner))
+                    .and_then(|smi| s_prime.checked_mul(&a0).and_then(|r| r.checked_mul(&smi)))
+                    .and_then(|pt| sigma_prime.checked_add(&pt));
+                let max_pool = match bracket {
+                    Some(br) => {
+                        let pot = ade_ledger::rational::Rational::from_integer(acct.pool_reward_pot as i128);
+                        pot.checked_mul(&br)
+                            .and_then(|r| r.checked_div(&one_plus_a0))
+                            .map(|r| r.floor().max(0) as u64)
+                            .unwrap_or(0)
+                    }
+                    None => 0,
+                };
+                if max_pool == 0 { continue; }
+                let f = ade_ledger::rational::Rational::from_integer(max_pool as i128)
+                    .checked_mul(&perf)
+                    .map(|r| r.floor().max(0) as u64)
+                    .unwrap_or(0);
+                if f == 0 { continue; }
+
+                let cost = params.cost.0;
+                if f <= cost { circ_sum += f; circ_pool_count += 1; continue; }
+                let f_minus_c = f - cost;
+                let one_minus_m = ade_ledger::rational::Rational::one().checked_sub(&margin).unwrap();
+                let op_cred_key: Option<[u8; 28]> = if params.reward_account.len() >= 29 {
+                    let mut k = [0u8; 28]; k.copy_from_slice(&params.reward_account[1..29]); Some(k)
+                } else { None };
+                let op_stake = op_cred_key.and_then(|k|
+                    go.0.delegations.get(&ade_types::Hash28(k)).map(|(_, c)| c.0)
+                ).unwrap_or(0);
+                let op_share = ade_ledger::rational::Rational::new(op_stake as i128, pool_stake.0 as i128)
+                    .unwrap_or_else(ade_ledger::rational::Rational::zero);
+                let leader_term = margin.checked_add(&one_minus_m.checked_mul(&op_share).unwrap()).unwrap();
+                let leader_rew = cost + ade_ledger::rational::Rational::from_integer(f_minus_c as i128)
+                    .checked_mul(&leader_term).unwrap().floor().max(0) as u64;
+                let member_factor = ade_ledger::rational::Rational::from_integer(f_minus_c as i128)
+                    .checked_mul(&one_minus_m).unwrap();
+
+                let mut pool_total = leader_rew;
+                for (cred, (pid, coin)) in &go.0.delegations {
+                    if pid != pool_id { continue; }
+                    if op_cred_key.as_ref() == Some(&cred.0) { continue; }
+                    if coin.0 == 0 { continue; }
+                    let share = ade_ledger::rational::Rational::new(coin.0 as i128, pool_stake.0 as i128).unwrap();
+                    let mr = member_factor.checked_mul(&share).unwrap().floor().max(0) as u64;
+                    pool_total += mr;
+                }
+                circ_sum += pool_total;
+                circ_pool_count += 1;
             }
+
+            let circ_delta_r2 = acct.pool_reward_pot - circ_sum;
+            let circ_reserves_decrease = acct.delta_r1 - circ_delta_r2;
+            let circ_ratio = circ_reserves_decrease as f64 / oracle_reserves_decrease as f64;
+            let circ_gap = circ_reserves_decrease.abs_diff(oracle_reserves_decrease);
+            let orig_gap = ade_reserves_decrease.abs_diff(oracle_reserves_decrease);
+            eprintln!("    circ sum_rewards:    {} ({} pools)", circ_sum, circ_pool_count);
+            eprintln!("    oracle sum_rewards:  ~{}", acct.pool_reward_pot.saturating_sub(acct.delta_r1.saturating_sub(oracle_reserves_decrease)));
+            eprintln!("    circ/oracle ratio:   {:.4}%", circ_ratio * 100.0);
+            eprintln!("    gap: {} ADA → {} ADA ({})",
+                orig_gap / 1_000_000, circ_gap / 1_000_000,
+                if circ_gap < orig_gap { "IMPROVED" } else { "WORSE" });
+            if circ_gap < orig_gap / 2 {
+                eprintln!("    *** CIRCULATION totalStake explains >50% of the gap! ***");
+            }
+        }
+
+        // --- Cross-epoch block production test ---
+        // Hypothesis: the DRepPulser was initialized with epoch 506's per-pool blocks
+        // at the 506→507 boundary. Test by recomputing rewards with PRE bprev.
+        if let Some(ref acct) = conway_accounting {
+            let a0 = ade_ledger::rational::Rational::new(3, 10).unwrap();
+            let one_plus_a0 = ade_ledger::rational::Rational::new(13, 10).unwrap();
+            let z = ade_ledger::rational::Rational::new(1, 500).unwrap();
+
+            // Load epoch 506's block production from PRE snapshot bprev
+            let pre_bp = ade_testkit::harness::snapshot_loader::parse_block_production(
+                &pre_snap.raw_cbor,
+            ).unwrap_or_default();
+            let pre_total_blocks: u64 = pre_bp.values().sum();
+
+            // Compute sum_rewards using epoch 506 per-pool blocks but same pool_pot
+            let mut epoch506_sum = 0u64;
+            let mut epoch506_pool_count = 0usize;
+            for (pool_id, pool_stake) in &go.0.pool_stakes {
+                let params = match pre_state.cert_state.pool.pools.get(pool_id) {
+                    Some(p) => p,
+                    None => continue,
+                };
+                // Use epoch 506 blocks for this pool
+                let pool_hash_32 = {
+                    let mut h = [0u8; 32];
+                    h[..28].copy_from_slice(&pool_id.0.0);
+                    ade_types::Hash32(h)
+                };
+                let blocks = pre_bp.get(&pool_hash_32).copied().unwrap_or(0);
+                if blocks == 0 || pool_stake.0 == 0 { continue; }
+
+                let margin = ade_ledger::rational::Rational::new(
+                    params.margin.0 as i128, params.margin.1 as i128,
+                ).unwrap_or_else(ade_ledger::rational::Rational::zero);
+                let sigma = ade_ledger::rational::Rational::new(
+                    pool_stake.0 as i128, total_stake as i128,
+                ).unwrap();
+                let s_pledge = ade_ledger::rational::Rational::new(
+                    params.pledge.0 as i128, total_stake as i128,
+                ).unwrap();
+                let sigma_prime = if sigma.numerator() * z.denominator() > z.numerator() * sigma.denominator() { z.clone() } else { sigma.clone() };
+                let s_prime = if s_pledge.numerator() * z.denominator() > z.numerator() * s_pledge.denominator() { z.clone() } else { s_pledge };
+                // Performance uses epoch 506 total blocks
+                let perf = {
+                    let p = ade_ledger::rational::Rational::new(
+                        (blocks as i128) * (total_stake as i128),
+                        (pre_total_blocks as i128) * (pool_stake.0 as i128),
+                    ).unwrap_or_else(ade_ledger::rational::Rational::one);
+                    if p.numerator() > p.denominator() { ade_ledger::rational::Rational::one() } else { p }
+                };
+                let bracket = z.checked_sub(&sigma_prime)
+                    .and_then(|d| s_prime.checked_mul(&d))
+                    .and_then(|r| r.checked_div(&z))
+                    .and_then(|inner| sigma_prime.checked_sub(&inner))
+                    .and_then(|smi| s_prime.checked_mul(&a0).and_then(|r| r.checked_mul(&smi)))
+                    .and_then(|pt| sigma_prime.checked_add(&pt));
+                let max_pool = match bracket {
+                    Some(br) => {
+                        let pot = ade_ledger::rational::Rational::from_integer(acct.pool_reward_pot as i128);
+                        pot.checked_mul(&br)
+                            .and_then(|r| r.checked_div(&one_plus_a0))
+                            .map(|r| r.floor().max(0) as u64)
+                            .unwrap_or(0)
+                    }
+                    None => 0,
+                };
+                if max_pool == 0 { continue; }
+                let f = ade_ledger::rational::Rational::from_integer(max_pool as i128)
+                    .checked_mul(&perf)
+                    .map(|r| r.floor().max(0) as u64)
+                    .unwrap_or(0);
+                if f == 0 { continue; }
+
+                let cost = params.cost.0;
+                if f <= cost { epoch506_sum += f; epoch506_pool_count += 1; continue; }
+                let f_minus_c = f - cost;
+                let one_minus_m = ade_ledger::rational::Rational::one().checked_sub(&margin).unwrap();
+                let op_cred_key: Option<[u8; 28]> = if params.reward_account.len() >= 29 {
+                    let mut k = [0u8; 28]; k.copy_from_slice(&params.reward_account[1..29]); Some(k)
+                } else { None };
+                let op_stake = op_cred_key.and_then(|k|
+                    go.0.delegations.get(&ade_types::Hash28(k)).map(|(_, c)| c.0)
+                ).unwrap_or(0);
+                let op_share = ade_ledger::rational::Rational::new(op_stake as i128, pool_stake.0 as i128)
+                    .unwrap_or_else(ade_ledger::rational::Rational::zero);
+                let leader_term = margin.checked_add(&one_minus_m.checked_mul(&op_share).unwrap()).unwrap();
+                let leader_rew = cost + ade_ledger::rational::Rational::from_integer(f_minus_c as i128)
+                    .checked_mul(&leader_term).unwrap().floor().max(0) as u64;
+                let member_factor = ade_ledger::rational::Rational::from_integer(f_minus_c as i128)
+                    .checked_mul(&one_minus_m).unwrap();
+
+                let mut pool_total = leader_rew;
+                for (cred, (pid, coin)) in &go.0.delegations {
+                    if pid != pool_id { continue; }
+                    if op_cred_key.as_ref() == Some(&cred.0) { continue; }
+                    if coin.0 == 0 { continue; }
+                    let share = ade_ledger::rational::Rational::new(coin.0 as i128, pool_stake.0 as i128).unwrap();
+                    let mr = member_factor.checked_mul(&share).unwrap().floor().max(0) as u64;
+                    pool_total += mr;
+                }
+                epoch506_sum += pool_total;
+                epoch506_pool_count += 1;
+            }
+
+            let epoch506_delta_r2 = acct.pool_reward_pot - epoch506_sum;
+            let epoch506_reserves_decrease = acct.delta_r1 - epoch506_delta_r2;
+            let epoch506_ratio = epoch506_reserves_decrease as f64 / oracle_reserves_decrease as f64;
+
+            eprintln!("\n  --- Epoch 506 Block Production Test ---");
+            eprintln!("    epoch 506 total blocks:  {pre_total_blocks}");
+            eprintln!("    epoch 507 total blocks:  {total_blocks_produced}");
+            eprintln!("    epoch506 sum_rewards:    {} ({} pools)", epoch506_sum, epoch506_pool_count);
+            eprintln!("    epoch507 sum_rewards:    {} ({} pools)", acct.sum_rewards, acct.rewarded_pool_count);
+            let oracle_delta_r2_est = acct.delta_r1.saturating_sub(oracle_reserves_decrease);
+            let oracle_sum_est = acct.pool_reward_pot.saturating_sub(oracle_delta_r2_est);
+            eprintln!("    oracle   sum_rewards:    ~{} (estimated)", oracle_sum_est);
+            eprintln!("    epoch506 reserves_decr:  {epoch506_reserves_decrease}");
+            eprintln!("    oracle   reserves_decr:  {oracle_reserves_decrease}");
+            eprintln!("    epoch506/oracle ratio:   {:.4}%", epoch506_ratio * 100.0);
+            let orig_gap = ade_reserves_decrease.abs_diff(oracle_reserves_decrease);
+            let new_gap = epoch506_reserves_decrease.abs_diff(oracle_reserves_decrease);
+            eprintln!("    gap change:              {} ADA → {} ADA ({})",
+                orig_gap / 1_000_000, new_gap / 1_000_000,
+                if new_gap < orig_gap { "IMPROVED" } else { "WORSE" });
         }
 
         eprintln!("  NOTE: wider gap than Allegra is expected — go snapshot");
@@ -1373,4 +1824,491 @@ fn ce71_root_cause_isolation() {
     // Assertions
     assert!(go_map.len() > 1000, "go snapshot should have pools");
     assert!(post_go_map.len() > 1000, "post go snapshot should have pools");
+}
+
+/// Per-pool reward intermediate diagnostic at the Mary 251→252 boundary.
+///
+/// Mary is the first era where the reward formula diverges from the oracle.
+/// This test emits per-pool intermediates (sigma, maxPool, perf, f, reward)
+/// to localize whether the divergence is uniform (global factor) or
+/// concentrated in specific pool classes.
+#[test]
+fn mary_per_pool_reward_intermediates() {
+    let pre_path = snapshots_dir().join("snapshot_23068800.tar.gz");
+    let post_path = snapshots_dir().join("snapshot_23500962.tar.gz");
+    if !pre_path.exists() || !post_path.exists() {
+        eprintln!("Skipping: Mary snapshots not available");
+        return;
+    }
+
+    let pre_snap = LoadedSnapshot::from_tarball(&pre_path).unwrap();
+    let post_snap = LoadedSnapshot::from_tarball(&post_path).unwrap();
+
+    let oracle_reserves_decrease = pre_snap.header.reserves
+        .saturating_sub(post_snap.header.reserves);
+
+    let post_state = post_snap.to_ledger_state();
+    let pre_state = pre_snap.to_ledger_state();
+    let mut state = pre_state.clone();
+    state.epoch_state.block_production = post_state.epoch_state.block_production.clone();
+    state.epoch_state.epoch_fees = ade_types::tx::Coin(post_snap.header.epoch_fees);
+
+    let go = &state.epoch_state.snapshots.go;
+    let total_active_stake: u64 = go.0.pool_stakes.values().map(|c| c.0).sum();
+    let total_blocks: u64 = state.epoch_state.block_production.values().sum();
+    let circulation: u64 = state.max_lovelace_supply.saturating_sub(state.epoch_state.reserves.0);
+
+    // Compute delta_r1, pool_pot
+    let rho = ade_ledger::rational::Rational::new(3, 1000).unwrap();
+    let d = &state.protocol_params.decentralization;
+    let d_thresh = ade_ledger::rational::Rational::new(4, 5).unwrap();
+    let eta = if d.numerator() * d_thresh.denominator() >= d_thresh.numerator() * d.denominator() {
+        ade_ledger::rational::Rational::one()
+    } else {
+        let one_minus_d = ade_ledger::rational::Rational::one().checked_sub(d).unwrap();
+        let expected_rat = one_minus_d.checked_mul(
+            &ade_ledger::rational::Rational::from_integer(21600)
+        ).unwrap();
+        let expected = expected_rat.floor().max(1) as u64;
+        if total_blocks >= expected {
+            ade_ledger::rational::Rational::one()
+        } else {
+            ade_ledger::rational::Rational::new(total_blocks as i128, expected as i128).unwrap()
+        }
+    };
+
+    let reserves_rat = ade_ledger::rational::Rational::from_integer(state.epoch_state.reserves.0 as i128);
+    let delta_r1 = reserves_rat.checked_mul(&rho).unwrap()
+        .checked_mul(&eta).unwrap().floor().max(0) as u64;
+    let total_reward = delta_r1 + state.epoch_state.epoch_fees.0;
+    let delta_t1 = (ade_ledger::rational::Rational::from_integer(total_reward as i128)
+        .checked_mul(&ade_ledger::rational::Rational::new(1, 5).unwrap()).unwrap())
+        .floor().max(0) as u64;
+    let pool_pot = total_reward - delta_t1;
+
+    let oracle_delta_r2 = delta_r1.saturating_sub(oracle_reserves_decrease);
+    let oracle_sum = pool_pot.saturating_sub(oracle_delta_r2);
+
+    // --- Pot-chain audit: reverse-engineer oracle's delta_r1 ---
+    // If the oracle uses the same tau and fees, we can derive its delta_r1
+    // from the treasury delta, then compare with ours.
+    let oracle_treasury_increase = post_snap.header.treasury
+        .saturating_sub(pre_snap.header.treasury);
+
+    // oracle_treasury_increase = oracle_delta_t1 + oracle_delta_t2 + oracle_MIR_to_treasury
+    // oracle_delta_t1 = floor(oracle_total_reward * tau) = floor((oracle_delta_r1 + fees) / 5)
+    //
+    // Since delta_t2 >= 0 and MIR >= 0:
+    //   oracle_delta_t1 <= oracle_treasury_increase
+    //   oracle_total_reward <= 5 * oracle_treasury_increase + 4
+    //   oracle_delta_r1 <= 5 * oracle_treasury_increase + 4 - fees
+    let oracle_delta_r1_max = 5 * oracle_treasury_increase + 4 - state.epoch_state.epoch_fees.0;
+
+    // If delta_t2 = 0 and MIR = 0 (best case):
+    //   oracle_delta_t1 = oracle_treasury_increase
+    //   oracle_total_reward = 5 * oracle_treasury_increase or 5 * oracle_treasury_increase + {1,2,3,4}
+    //   (because floor(x/5) = oracle_treasury_increase ⟹ x ∈ [5*oti, 5*oti+4])
+    // Try each:
+    let mut oracle_delta_r1_candidates = Vec::new();
+    for offset in 0..5u64 {
+        let candidate_total = 5 * oracle_treasury_increase + offset;
+        let candidate_dt1 = candidate_total / 5; // floor
+        if candidate_dt1 == oracle_treasury_increase {
+            let candidate_dr1 = candidate_total.saturating_sub(state.epoch_state.epoch_fees.0);
+            oracle_delta_r1_candidates.push((candidate_dr1, offset, 0u64)); // (dr1, floor_offset, delta_t2)
+        }
+    }
+    // Also try with small delta_t2 values
+    for dt2 in [100_000_000u64, 500_000_000, 1_000_000_000, 5_000_000_000,
+                10_000_000_000, 50_000_000_000, 100_000_000_000, 200_000_000_000] {
+        let oti_minus_dt2 = oracle_treasury_increase.saturating_sub(dt2);
+        for offset in 0..5u64 {
+            let candidate_total = 5 * oti_minus_dt2 + offset;
+            let candidate_dt1 = candidate_total / 5;
+            if candidate_dt1 == oti_minus_dt2 {
+                let candidate_dr1 = candidate_total.saturating_sub(state.epoch_state.epoch_fees.0);
+                oracle_delta_r1_candidates.push((candidate_dr1, offset, dt2));
+            }
+        }
+    }
+
+    eprintln!("\n{}", "=".repeat(70));
+    eprintln!("=== MARY 251→252 POT-CHAIN AUDIT ===");
+    eprintln!("{}", "=".repeat(70));
+    eprintln!("  reserves:          {} ({} ADA)", state.epoch_state.reserves.0,
+        state.epoch_state.reserves.0 / 1_000_000);
+    eprintln!("  d:                 {}/{}", d.numerator(), d.denominator());
+    eprintln!("  eta:               {}/{}", eta.numerator(), eta.denominator());
+    eprintln!("  our delta_r1:      {delta_r1}");
+    eprintln!("  our pool_pot:      {pool_pot}");
+    eprintln!("  our total_reward:  {total_reward}");
+    eprintln!("  our delta_t1:      {delta_t1}");
+    eprintln!("  epoch_fees:        {}", state.epoch_state.epoch_fees.0);
+    eprintln!();
+    eprintln!("  oracle reserves Δ: {oracle_reserves_decrease}");
+    eprintln!("  oracle treasury Δ: {oracle_treasury_increase}");
+    eprintln!();
+    eprintln!("  --- Oracle delta_r1 candidates (assuming same fees, tau) ---");
+    for (dr1, off, dt2) in &oracle_delta_r1_candidates {
+        let total = dr1 + state.epoch_state.epoch_fees.0;
+        let dt1 = total / 5;
+        let ppot = total - dt1;
+        let dr2 = dr1.saturating_sub(oracle_reserves_decrease);
+        let sum_r = ppot.saturating_sub(dr2);
+        let ratio_vs_ours = *dr1 as f64 / delta_r1 as f64;
+        let eta_implied = *dr1 as f64 / (state.epoch_state.reserves.0 as f64 * 0.003);
+        eprintln!("    dt2={:>12} off={off}: dr1={dr1} (ratio={:.6}, implied_eta={:.6})",
+            dt2, ratio_vs_ours, eta_implied);
+        eprintln!("      pool_pot={ppot}, sum_rewards~{sum_r}");
+    }
+    eprintln!();
+    // Compute what eta the oracle would need for each candidate
+    eprintln!("  --- Our eta vs implied oracle eta ---");
+    eprintln!("  our eta:           {:.6} ({}/{})",
+        eta.numerator() as f64 / eta.denominator() as f64,
+        eta.numerator(), eta.denominator());
+    if let Some((best_dr1, _, _)) = oracle_delta_r1_candidates.first() {
+        let implied = *best_dr1 as f64 / (state.epoch_state.reserves.0 as f64 * 0.003);
+        eprintln!("  oracle implied η:  {:.6} (if dt2=0)", implied);
+        eprintln!("  η ratio:           {:.6}", implied / (eta.numerator() as f64 / eta.denominator() as f64));
+    }
+    eprintln!();
+
+    eprintln!("  total_active:      {total_active_stake} ({} ADA)", total_active_stake / 1_000_000);
+    eprintln!("  circulation:       {circulation} ({} ADA)", circulation / 1_000_000);
+    eprintln!("  total_blocks:      {total_blocks}");
+    eprintln!("  oracle sum:        ~{oracle_sum}");
+    eprintln!();
+
+    let a0 = ade_ledger::rational::Rational::new(3, 10).unwrap();
+    let one_plus_a0 = ade_ledger::rational::Rational::new(13, 10).unwrap();
+    let z = ade_ledger::rational::Rational::new(1, 500).unwrap();
+
+    // Per-pool computation with full intermediates
+    struct PoolIntermediate {
+        blocks: u64,
+        stake: u64,
+        sigma_pct: f64,     // sigma as percentage of total
+        perf: f64,          // apparentPerformance
+        max_pool: u64,      // maxPool (pre-performance)
+        f: u64,             // floor(maxPool * perf)
+        reward: u64,        // total pool reward (leader + members)
+        cost: u64,
+        pledge: u64,
+    }
+
+    let mut intermediates: Vec<(String, PoolIntermediate)> = Vec::new();
+    let mut our_sum = 0u64;
+
+    for (pool_id, pool_stake) in &go.0.pool_stakes {
+        let params = match state.cert_state.pool.pools.get(pool_id) {
+            Some(p) => p,
+            None => continue,
+        };
+        let blocks = state.epoch_state.block_production.get(pool_id).copied().unwrap_or(0);
+        if blocks == 0 || pool_stake.0 == 0 { continue; }
+
+        let sigma = ade_ledger::rational::Rational::new(
+            pool_stake.0 as i128, total_active_stake as i128).unwrap();
+        let s = ade_ledger::rational::Rational::new(
+            params.pledge.0 as i128, total_active_stake as i128).unwrap();
+        let sigma_prime = if sigma.numerator() * z.denominator() > z.numerator() * sigma.denominator()
+            { z.clone() } else { sigma.clone() };
+        let s_prime = if s.numerator() * z.denominator() > z.numerator() * s.denominator()
+            { z.clone() } else { s.clone() };
+
+        let perf_rat = ade_ledger::rational::Rational::new(
+            (blocks as i128) * (total_active_stake as i128),
+            (total_blocks as i128) * (pool_stake.0 as i128),
+        ).unwrap_or_else(ade_ledger::rational::Rational::one);
+        let perf_capped = if perf_rat.numerator() > perf_rat.denominator()
+            { ade_ledger::rational::Rational::one() } else { perf_rat.clone() };
+
+        let bracket = z.checked_sub(&sigma_prime)
+            .and_then(|d| s_prime.checked_mul(&d))
+            .and_then(|r| r.checked_div(&z))
+            .and_then(|inner| sigma_prime.checked_sub(&inner))
+            .and_then(|smi| s_prime.checked_mul(&a0).and_then(|r| r.checked_mul(&smi)))
+            .and_then(|pt| sigma_prime.checked_add(&pt));
+
+        let max_pool = match bracket {
+            Some(br) => {
+                ade_ledger::rational::Rational::from_integer(pool_pot as i128)
+                    .checked_mul(&br)
+                    .and_then(|r| r.checked_div(&one_plus_a0))
+                    .map(|r| r.floor().max(0) as u64)
+                    .unwrap_or(0)
+            }
+            None => 0,
+        };
+        if max_pool == 0 { continue; }
+
+        let f = ade_ledger::rational::Rational::from_integer(max_pool as i128)
+            .checked_mul(&perf_capped)
+            .map(|r| r.floor().max(0) as u64)
+            .unwrap_or(0);
+        if f == 0 { continue; }
+
+        // Total pool reward (simplified: just sum leader + members)
+        let margin = ade_ledger::rational::Rational::new(
+            params.margin.0 as i128, params.margin.1 as i128,
+        ).unwrap_or_else(ade_ledger::rational::Rational::zero);
+        let cost = params.cost.0;
+        let pool_total = if f <= cost {
+            f
+        } else {
+            let f_minus_c = f - cost;
+            let one_minus_m = ade_ledger::rational::Rational::one().checked_sub(&margin).unwrap();
+            let op_cred: Option<[u8; 28]> = if params.reward_account.len() >= 29 {
+                let mut k = [0u8; 28]; k.copy_from_slice(&params.reward_account[1..29]); Some(k)
+            } else { None };
+            let op_stake = op_cred.and_then(|k|
+                go.0.delegations.get(&ade_types::Hash28(k)).map(|(_, c)| c.0)
+            ).unwrap_or(0);
+            let op_share = ade_ledger::rational::Rational::new(
+                op_stake as i128, pool_stake.0 as i128
+            ).unwrap_or_else(ade_ledger::rational::Rational::zero);
+            let leader_term = margin.checked_add(&one_minus_m.checked_mul(&op_share).unwrap()).unwrap();
+            let leader_rew = cost + ade_ledger::rational::Rational::from_integer(f_minus_c as i128)
+                .checked_mul(&leader_term).unwrap().floor().max(0) as u64;
+            let member_factor = ade_ledger::rational::Rational::from_integer(f_minus_c as i128)
+                .checked_mul(&one_minus_m).unwrap();
+            let mut total = leader_rew;
+            for (cred, (pid, coin)) in &go.0.delegations {
+                if pid != pool_id { continue; }
+                if op_cred.as_ref() == Some(&cred.0) { continue; }
+                if coin.0 == 0 { continue; }
+                let share = ade_ledger::rational::Rational::new(
+                    coin.0 as i128, pool_stake.0 as i128).unwrap();
+                total += member_factor.checked_mul(&share).unwrap().floor().max(0) as u64;
+            }
+            total
+        };
+
+        our_sum += pool_total;
+
+        let sigma_pct = pool_stake.0 as f64 / total_active_stake as f64 * 100.0;
+        let perf_f64 = if perf_capped.denominator() != 0 {
+            perf_capped.numerator() as f64 / perf_capped.denominator() as f64
+        } else { 1.0 };
+
+        let pool_hex = format!("{:02x}{:02x}{:02x}{:02x}",
+            pool_id.0.0[0], pool_id.0.0[1], pool_id.0.0[2], pool_id.0.0[3]);
+        intermediates.push((pool_hex, PoolIntermediate {
+            blocks, stake: pool_stake.0, sigma_pct, perf: perf_f64,
+            max_pool, f, reward: pool_total, cost, pledge: params.pledge.0,
+        }));
+    }
+
+    // Sort by reward descending
+    intermediates.sort_by(|a, b| b.1.reward.cmp(&a.1.reward));
+
+    let our_delta_r2 = pool_pot - our_sum;
+    let our_reserves_decrease = delta_r1 - our_delta_r2;
+
+    eprintln!("  our sum_rewards:   {our_sum} ({} pools)", intermediates.len());
+    eprintln!("  oracle sum:        ~{oracle_sum}");
+    eprintln!("  over-distribution: {} ADA", our_sum.saturating_sub(oracle_sum) / 1_000_000);
+    eprintln!("  our/oracle:        {:.4}%", our_sum as f64 / oracle_sum as f64 * 100.0);
+    eprintln!();
+
+    // Distribution analysis
+    let perf_eq_1 = intermediates.iter().filter(|(_, p)| p.perf >= 0.9999).count();
+    let perf_lt_1 = intermediates.iter().filter(|(_, p)| p.perf < 0.9999).count();
+    let saturated = intermediates.iter().filter(|(_, p)| p.sigma_pct >= 0.2).count();
+    eprintln!("  pools with perf=1.0:    {perf_eq_1}");
+    eprintln!("  pools with perf<1.0:    {perf_lt_1}");
+    eprintln!("  pools near saturation:  {saturated} (sigma >= 0.2%)");
+    eprintln!();
+
+    // Top 5 and bottom 5 pools
+    eprintln!("  --- Top 5 pools by reward ---");
+    eprintln!("  {:>6} {:>8} {:>8} {:>7} {:>14} {:>14} {:>14}", "pool", "blocks", "sigma%", "perf", "maxPool", "f", "reward");
+    for (hex, p) in intermediates.iter().take(5) {
+        eprintln!("  {:>6} {:>8} {:>7.4}% {:>7.4} {:>14} {:>14} {:>14}",
+            hex, p.blocks, p.sigma_pct, p.perf, p.max_pool, p.f, p.reward);
+    }
+    eprintln!();
+    eprintln!("  --- Bottom 5 producing pools ---");
+    for (hex, p) in intermediates.iter().rev().take(5) {
+        eprintln!("  {:>6} {:>8} {:>7.4}% {:>7.4} {:>14} {:>14} {:>14}",
+            hex, p.blocks, p.sigma_pct, p.perf, p.max_pool, p.f, p.reward);
+    }
+    eprintln!();
+
+    // Check if over-distribution is uniform
+    // If all pools over-distribute by the same %, it's a global factor
+    // Compute what each pool's reward would be if scaled to match oracle total
+    let scale = oracle_sum as f64 / our_sum as f64;
+    let mut max_deviation = 0.0f64;
+    let mut deviation_sum = 0.0f64;
+    for (_, p) in &intermediates {
+        let scaled = (p.reward as f64 * scale) as u64;
+        let deviation = (p.reward as f64 - scaled as f64).abs() / p.reward.max(1) as f64;
+        deviation_sum += deviation;
+        if deviation > max_deviation { max_deviation = deviation; }
+    }
+    let avg_deviation = deviation_sum / intermediates.len().max(1) as f64;
+    eprintln!("  --- Uniformity check ---");
+    eprintln!("  If gap is uniform, scaling all pools by {:.6} should match oracle.", scale);
+    eprintln!("  avg per-pool scaling deviation: {:.6}%", avg_deviation * 100.0);
+    eprintln!("  max per-pool scaling deviation: {:.6}%", max_deviation * 100.0);
+    eprintln!("  → {} (all pools deviate by same % → global factor)",
+        if max_deviation < 0.001 { "UNIFORM — global factor" } else { "NOT uniform — per-pool issue" });
+
+    eprintln!("\n{}\n", "=".repeat(70));
+}
+
+/// Bisection test: run the reward formula across ALL available era boundaries
+/// to find where the Conway 16.7% gap first appears.
+///
+/// Each boundary pair: (pre_snapshot, post_snapshot, era_label).
+/// For each pair, compute our reward reserves decrease and compare with oracle.
+#[test]
+fn reward_formula_bisection_all_eras() {
+    let pairs: &[(&str, &str, &str)] = &[
+        // (pre_snapshot, post_snapshot, label)
+        ("snapshot_16588800.tar.gz", "snapshot_17020848.tar.gz", "Allegra 236→237"),
+        ("snapshot_23068800.tar.gz", "snapshot_23500962.tar.gz", "Mary    251→252"),
+        ("snapshot_39916975.tar.gz", "snapshot_40348902.tar.gz", "Alonzo  290→291"),
+        ("snapshot_72316896.tar.gz", "snapshot_72748820.tar.gz", "Babbage 365→366"),
+        ("snapshot_133660855.tar.gz", "snapshot_134092810.tar.gz", "Conway  507→508"),
+    ];
+
+    eprintln!("\n{}", "=".repeat(70));
+    eprintln!("=== REWARD FORMULA BISECTION ACROSS ALL ERAS ===");
+    eprintln!("{}\n", "=".repeat(70));
+
+    for (pre_file, post_file, label) in pairs {
+        let pre_path = snapshots_dir().join(pre_file);
+        let post_path = snapshots_dir().join(post_file);
+        if !pre_path.exists() || !post_path.exists() {
+            eprintln!("  {label}: SKIPPED (snapshots not available)");
+            continue;
+        }
+
+        let pre_snap = LoadedSnapshot::from_tarball(&pre_path).unwrap();
+        let post_snap = LoadedSnapshot::from_tarball(&post_path).unwrap();
+
+        let oracle_reserves_pre = pre_snap.header.reserves;
+        let oracle_reserves_post = post_snap.header.reserves;
+        let oracle_treasury_pre = pre_snap.header.treasury;
+        let oracle_treasury_post = post_snap.header.treasury;
+
+        let oracle_reserves_decrease = oracle_reserves_pre.saturating_sub(oracle_reserves_post);
+        let oracle_treasury_increase = oracle_treasury_post.saturating_sub(oracle_treasury_pre);
+
+        // Run boundary with BOTH POST and PRE data sources
+        let post_state = post_snap.to_ledger_state();
+        let pre_state = pre_snap.to_ledger_state();
+
+        let pre_blocks: u64 = pre_state.epoch_state.block_production.values().sum();
+        let post_blocks: u64 = post_state.epoch_state.block_production.values().sum();
+
+        // Three variants:
+        // POST-go: PRE reserves/treasury + POST go snapshot + POST blocks + POST fees
+        //   (correct: SNAP rotates go before startStep, blocks from nesBcur)
+        // POST: PRE everything + POST blocks/fees only (old approach)
+        // PRE:  PRE everything (previous epoch)
+        let variants: [(&str, ade_ledger::state::LedgerState); 3] = [
+            ("FIXED", {
+                // Use PRE reserves/treasury/params but POST go snapshot, blocks, fees, pool params
+                let mut s = pre_state.clone();
+                s.epoch_state.block_production = post_state.epoch_state.block_production.clone();
+                s.epoch_state.epoch_fees = ade_types::tx::Coin(post_snap.header.epoch_fees);
+                // Critical fix: use POST go snapshot (post-rotation)
+                s.epoch_state.snapshots = post_state.epoch_state.snapshots.clone();
+                // Use POST pool params (from POST CertState)
+                s.cert_state = post_state.cert_state.clone();
+                s
+            }),
+            ("POST", {
+                let mut s = pre_state.clone();
+                s.epoch_state.block_production = post_state.epoch_state.block_production.clone();
+                s.epoch_state.epoch_fees = ade_types::tx::Coin(post_snap.header.epoch_fees);
+                s
+            }),
+            ("PRE ", {
+                pre_state.clone()
+            }),
+        ];
+
+        let boundary_dir_name = match *label {
+            l if l.contains("Allegra") => "allegra_epoch237",
+            l if l.contains("Mary") => "mary_epoch252",
+            l if l.contains("Alonzo") => "alonzo_epoch291",
+            l if l.contains("Babbage") => "babbage_epoch366",
+            l if l.contains("Conway") => "conway_epoch508",
+            _ => continue,
+        };
+        let boundary_blocks_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("..").join("..").join("corpus")
+            .join("boundary_blocks").join(boundary_dir_name);
+        let manifest_path = boundary_blocks_dir.join("manifest.json");
+        if !manifest_path.exists() {
+            eprintln!("  {label}: SKIPPED (no boundary blocks)");
+            continue;
+        }
+        let manifest: serde_json::Value = serde_json::from_str(
+            &std::fs::read_to_string(&manifest_path).unwrap(),
+        ).unwrap();
+        let block_entries = manifest["blocks"].as_array().unwrap();
+
+        eprintln!("  {label} (PRE blocks={pre_blocks}, POST blocks={post_blocks}):");
+
+        for (variant_name, boundary_state) in &variants {
+            let mut state = boundary_state.clone();
+            let mut boundary_fired = false;
+            let mut ade_reserves_post_val = 0u64;
+            let mut accounting: Option<ade_ledger::rules::EpochBoundaryAccounting> = None;
+
+            for entry in block_entries {
+                let block_era: u64 = entry["era"].as_u64().unwrap();
+                let filename = entry["file"].as_str().unwrap();
+                let raw = std::fs::read(boundary_blocks_dir.join(filename)).unwrap();
+                let env = ade_codec::cbor::envelope::decode_block_envelope(&raw).unwrap();
+                let inner = &raw[env.block_start..env.block_end];
+                let era_enum = match block_era {
+                    1 => ade_types::CardanoEra::ByronRegular,
+                    2 => ade_types::CardanoEra::Shelley,
+                    3 => ade_types::CardanoEra::Allegra,
+                    4 => ade_types::CardanoEra::Mary,
+                    5 => ade_types::CardanoEra::Alonzo,
+                    6 => ade_types::CardanoEra::Babbage,
+                    7 => ade_types::CardanoEra::Conway,
+                    _ => continue,
+                };
+
+                match ade_ledger::rules::apply_block_with_accounting(&state, era_enum, inner) {
+                    Ok((new_state, _, acct)) => {
+                        if let Some(a) = acct {
+                            if !boundary_fired {
+                                boundary_fired = true;
+                                ade_reserves_post_val = new_state.epoch_state.reserves.0;
+                                accounting = Some(a);
+                            }
+                        }
+                        state = new_state;
+                    }
+                    Err(_) => {}
+                }
+            }
+
+            if !boundary_fired {
+                eprintln!("    {variant_name}: boundary did NOT fire");
+                continue;
+            }
+
+            let ade_reserves_decrease = oracle_reserves_pre.saturating_sub(ade_reserves_post_val);
+            let ratio = ade_reserves_decrease as f64 / oracle_reserves_decrease as f64;
+            let acct = accounting.unwrap();
+
+            eprintln!("    {variant_name}: ratio={:>8.4}%  dr1={:>16}  fees={:>12}  sum={:>16} ({} pools)",
+                ratio * 100.0, acct.delta_r1, acct.epoch_fees,
+                acct.sum_rewards, acct.rewarded_pool_count);
+        }
+        eprintln!();
+    }
+
+    eprintln!("{}\n", "=".repeat(70));
 }

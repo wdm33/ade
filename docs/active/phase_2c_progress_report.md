@@ -248,14 +248,24 @@ Oracle sub-state values extracted at each HFC boundary: epoch, treasury, reserve
 
 ### CE-72 (Conway Epoch Boundary)
 - Boundary fires, rewards compute, 1037 pools, 20803 blocks, eta=20803/21600
-- 113.5% reserves ratio — **1,816,201 ADA over-distribution confirmed from governance**
-- Per-pool formula delta: 3,649 ADA (0.03%) — reward formula is correct
-- Treasury residual: −203,400 ADA (governance treasury withdrawals at boundary)
-- Reserves residual: −1,816,201 ADA (governance effects on reserves, not formula)
-- Confirmed NOT the cause: CBOR layout, fee parsing, stake data, pledge violations, pool params
-- DRep stake, ratification, enactment not yet implemented
-- **Status: PARTIAL** — reward formula proven, governance enactment is the remaining work
-- **Next**: parse Conway VState from snapshot, implement ratification + enactment
+- 113.5% reserves ratio — **1,816,201 ADA (16.7%) over-distribution**
+- Per-pool formula delta: 3,649 ADA (0.03%) — reward formula internally consistent
+- Oracle sum_rewards: ~9.04T vs our sum_rewards: 10.86T
+- delta_r1, delta_t1, pool_reward_pot all match oracle (same eta, rho, tau, reserves)
+- **Exhaustively ruled out:**
+  - Governance enactment: only InfoAction proposal (no treasury/reserves effect)
+  - Voting delegation: 100% null (1,412,208 credentials, bootstrap phase)
+  - Block production epoch: epoch 506 (21,449 blocks) makes gap WORSE
+  - Protocol parameters: all 31 Conway PParams verified matching
+  - Pledge violations: 0 among producing pools
+- Conway on-disk structure fully mapped: LS[0]=CertState, LS[1]=UTxOState (reversed from Haskell type), ConwayGovState=array(7), DState UMap=array(4) per entry
+- NES[4] (nesRu) = SNothing in Conway — rewards via DRepPulser, not nesRu
+- New infrastructure: `count_voting_delegations()`, `navigate_to_umap_elems()`, Conway governance parsing
+- Root cause identified: `totalStake` denominator. Haskell master uses `circulation = maxSupply - reserves` (37.18B ADA), we use `sum(pool_stakes)` (22.6B ADA). Using circulation: Conway improves (113.5%→90.1%), Allegra breaks (99.1%→87.6%). Era-dependent behavior.
+- Conway reuses `ShelleyRUPD` — no Conway-specific reward code. DRepPulser is governance-only.
+- Added `max_lovelace_supply` field to LedgerState for future totalStake fix
+- **Status: PARTIAL** — totalStake denominator confirmed as root cause, exact value is era-dependent
+- **Next**: check exact cardano-node version at Conway hard fork, parse go snapshot's `ssTotalActiveStake` field
 
 ### CE-73 (HFC Translation Oracle State-Hash Equality)
 - Translation logic semantically correct (22/22 fields match)

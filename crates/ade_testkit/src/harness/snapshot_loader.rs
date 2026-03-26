@@ -105,6 +105,7 @@ impl LoadedSnapshot {
             era,
             track_utxo: true,
             cert_state,
+            max_lovelace_supply: 45_000_000_000_000_000, // 45B ADA mainnet
         }
     }
 
@@ -144,7 +145,16 @@ impl LoadedSnapshot {
             decentralization: Rational::new(1, 1).unwrap_or_else(zero),
         };
 
-        // Era/epoch-specific overrides from oracle
+        // Try to parse d from the actual snapshot CBOR (ground truth).
+        // Fall back to era-specific approximation if parsing fails.
+        if let Ok((d_num, d_den)) = parse_decentralization_param(&self.raw_cbor) {
+            if d_den > 0 {
+                pp.decentralization = Rational::new(d_num as i128, d_den as i128)
+                    .unwrap_or_else(zero);
+            }
+        }
+
+        // Era/epoch-specific overrides from oracle (d is now from CBOR above)
         match era {
             ade_types::CardanoEra::Shelley => {
                 pp.protocol_major = 2;
@@ -158,26 +168,34 @@ impl LoadedSnapshot {
             }
             ade_types::CardanoEra::Allegra => {
                 pp.protocol_major = 3;
-                // oracle: d = 8/25 at epoch 236
+                // oracle: d = 8/25 at epoch 236, d = 3/25 at epoch 251
+                // d was decreased through governance proposals, not linearly.
+                // Use oracle-confirmed values at known epochs, interpolate between.
                 if epoch <= 236 {
                     pp.decentralization = Rational::new(8, 25).unwrap_or_else(zero);
                 } else {
-                    // d decreased further during Allegra
-                    let delta = epoch.saturating_sub(236);
-                    let d_num = 8u64.saturating_sub(delta);
-                    pp.decentralization = Rational::new(d_num as i128, 25)
+                    // Between epoch 236 (d=8/25) and epoch 251 (d=3/25):
+                    // 5/25 decrease over 15 epochs = 1/75 per epoch
+                    let epochs_past = epoch.saturating_sub(236);
+                    // d = 8/25 - epochs_past/75 = (8*3 - epochs_past)/75 = (24 - epochs_past)/75
+                    let d_num_75 = 24u64.saturating_sub(epochs_past);
+                    pp.decentralization = Rational::new(d_num_75 as i128, 75)
                         .unwrap_or_else(zero);
                 }
             }
             ade_types::CardanoEra::Mary => {
                 pp.protocol_major = 4;
-                // oracle: d = 3/25 at epoch 251
+                // oracle: d = 3/25 at epoch 251, d = 0 at epoch 257
+                // 3/25 decrease over 6 epochs = 1/50 per epoch
                 if epoch <= 251 {
                     pp.decentralization = Rational::new(3, 25).unwrap_or_else(zero);
+                } else if epoch >= 257 {
+                    pp.decentralization = Rational::zero();
                 } else {
-                    let delta = epoch.saturating_sub(251);
-                    let d_num = 3u64.saturating_sub(delta);
-                    pp.decentralization = Rational::new(d_num as i128, 25)
+                    let epochs_past = epoch.saturating_sub(251);
+                    // d = 3/25 - epochs_past/50 = (6 - epochs_past)/50
+                    let d_num_50 = 6u64.saturating_sub(epochs_past);
+                    pp.decentralization = Rational::new(d_num_50 as i128, 50)
                         .unwrap_or_else(zero);
                 }
             }
@@ -890,6 +908,27 @@ fn parse_pool_params_map(
     Ok(pools)
 }
 
+/// Navigate from an arbitrary offset that starts at the HFC telescope.
+/// Used for .bin ExtLedgerState files where the LedgerState part starts
+/// at a different offset than the tarball format.
+fn navigate_to_nes_from(state_cbor: &[u8], telescope_start: usize) -> Result<usize, HarnessError> {
+    let (off, telescope_len) = read_array_header(state_cbor, telescope_start)?;
+
+    let mut off = off;
+    for _ in 0..telescope_len - 1 {
+        off = skip_cbor(state_cbor, off)?;
+    }
+
+    let (off, _) = read_array_header(state_cbor, off)?;
+    let off = skip_cbor(state_cbor, off)?;
+    let (off, _) = read_array_header(state_cbor, off)?;
+    let off = skip_cbor(state_cbor, off)?;
+    let (off, _) = read_array_header(state_cbor, off)?;
+    let off = skip_cbor(state_cbor, off)?;
+    let (off, _) = read_array_header(state_cbor, off)?;
+    Ok(off)
+}
+
 fn navigate_to_nes(state_cbor: &[u8]) -> Result<usize, HarnessError> {
     let (off, _) = read_array_header(state_cbor, 0)?; // outer array(2)
     let (off, _) = read_uint(state_cbor, off)?; // era index
@@ -1220,6 +1259,387 @@ pub fn parse_current_pool_params(
     let (ps_inner, _) = read_array_header(state_cbor, pstate_off)?;
     // PState[0] = pool_params map (pool_hash → pool_params)
     parse_pool_params_map(state_cbor, ps_inner)
+}
+
+/// Navigate to the DState UMap within LS[0] (CertState).
+///
+/// On-disk layout (verified empirically):
+///   LS[0] = CertState = array(3) [VState, PState, DState]  (Conway)
+///   LS[1] = UTxOState = array(6) [UTxO, deposited, fees, GovState, IncrStake, donation]
+///
+/// Note: disk order is CertState first, UTxOState second (opposite of Haskell type).
+///
+/// DState = array(4) [UMap, futureGenDelegs, genDelegs, iRewards]
+/// UMap = array(2) [umElems, umPtrs]
+/// umElems = map(credential → UMElem)
+///
+/// Returns offset to the umElems map body.
+fn navigate_to_umap_elems(state_cbor: &[u8]) -> Result<usize, HarnessError> {
+    let off = navigate_to_nes(state_cbor)?;
+    let es = skip_nes_to_epoch_state(state_cbor, off)?;
+
+    // ES[0] = AccountState (skip)
+    let off = skip_cbor(state_cbor, es)?;
+
+    // ES[1] = LedgerState = array(2)
+    let (ls_body, _) = read_array_header(state_cbor, off)?;
+
+    // LS[0] = CertState = array(N)
+    let (cs_body, cs_len) = read_array_header(state_cbor, ls_body)?;
+
+    // Navigate to DState
+    let dstate_off = if cs_len == 3 {
+        // Conway: skip VState, PState → DState
+        let off = skip_cbor(state_cbor, cs_body)?;
+        skip_cbor(state_cbor, off)?
+    } else if cs_len == 6 {
+        // Pre-Conway on-disk layout: CertState = array(6) = UTxOState fields
+        // In this layout, LS[0] is actually UTxOState and LS[1] is CertState
+        // (or both Allegra and Conway use array(6) for LS[1])
+        // Need to navigate differently — go to LS[1] instead
+        return navigate_to_umap_elems_via_ls1(state_cbor, ls_body);
+    } else {
+        // Pre-Conway: DState is first element of DPState = array(2)
+        cs_body
+    };
+
+    // DState — could be array(4) or map or other encoding
+    let (_, ds_maj, _ds_val) = read_cbor_initial(state_cbor, dstate_off)?;
+
+    if ds_maj == 4 {
+        // DState = array(N)
+        let (ds_body, _) = read_array_header(state_cbor, dstate_off)?;
+        // DState[0] = UMap
+        let (_, umap_maj, _) = read_cbor_initial(state_cbor, ds_body)?;
+        if umap_maj == 4 {
+            // UMap = array(2) [umElems, umPtrs]
+            let (umap_body, _) = read_array_header(state_cbor, ds_body)?;
+            Ok(umap_body)
+        } else if umap_maj == 5 {
+            // UMap might be encoded directly as a map
+            Ok(ds_body)
+        } else {
+            Err(HarnessError::ParseError(format!(
+                "UMap at offset {}: expected array or map, got major {umap_maj}", ds_body
+            )))
+        }
+    } else if ds_maj == 5 {
+        // DState is a map — UMap might be the whole thing
+        Ok(dstate_off)
+    } else {
+        Err(HarnessError::ParseError(format!(
+            "DState at offset {dstate_off}: expected array or map, got major {ds_maj}"
+        )))
+    }
+}
+
+/// Alternative UMap navigation: go through LS[1] when LS[0] isn't CertState.
+fn navigate_to_umap_elems_via_ls1(
+    state_cbor: &[u8],
+    ls_body: usize,
+) -> Result<usize, HarnessError> {
+    // Skip LS[0] to reach LS[1]
+    let ls1_off = skip_cbor(state_cbor, ls_body)?;
+    let (ls1_body, ls1_len) = read_array_header(state_cbor, ls1_off)?;
+
+    // Determine if LS[1] is CertState or UTxOState
+    // If LS[1] is array(3) in Conway, it's CertState = [VState, PState, DState]
+    // If LS[1] is array(6), it's UTxOState (our initial labeling was wrong)
+    if ls1_len == 3 {
+        // CertState: skip VState, PState → DState
+        let off = skip_cbor(state_cbor, ls1_body)?;
+        let dstate_off = skip_cbor(state_cbor, off)?;
+        let (ds_body, _) = read_array_header(state_cbor, dstate_off)?;
+        let (_, umap_maj, _) = read_cbor_initial(state_cbor, ds_body)?;
+        if umap_maj == 4 {
+            let (umap_body, _) = read_array_header(state_cbor, ds_body)?;
+            Ok(umap_body)
+        } else {
+            Ok(ds_body)
+        }
+    } else {
+        Err(HarnessError::ParseError(format!(
+            "Cannot find CertState in LedgerState: LS[0]=array(6), LS[1]=array({ls1_len})"
+        )))
+    }
+}
+
+/// Voting delegation statistics from the Conway DState UMap.
+#[derive(Debug)]
+pub struct VotingDelegationStats {
+    /// Total credentials in the UMap.
+    pub total_credentials: u64,
+    /// Credentials with an active voting delegation (DRep, Abstain, or NoConfidence).
+    pub with_voting: u64,
+    /// Credentials without voting delegation (SNothing).
+    pub without_voting: u64,
+    /// Parse errors encountered (skipped entries).
+    pub errors: u64,
+}
+
+/// Count voting delegations in the Conway DState UMap.
+///
+/// In Conway (CIP-1694), credentials without an active voting delegation
+/// (DRep, AlwaysAbstain, or AlwaysNoConfidence) do NOT receive staking rewards.
+///
+/// UMElem = array(4) [rdPair, ptrs, stakePoolDelegation, voteDelegation]
+/// voteDelegation: StrictMaybe DRep
+///   SNothing → array(0) = 0x80
+///   SJust x  → array(1) [x]
+pub fn count_voting_delegations(
+    state_cbor: &[u8],
+) -> Result<VotingDelegationStats, HarnessError> {
+    let umap_off = navigate_to_umap_elems(state_cbor)?;
+
+    let (mut co, _major, val) = read_cbor_initial(state_cbor, umap_off)?;
+    let is_indef = val == u64::MAX;
+
+    let mut total = 0u64;
+    let mut with_voting = 0u64;
+    let mut without_voting = 0u64;
+    let mut errors = 0u64;
+
+    let limit = if is_indef { u64::MAX } else { val };
+
+    for _ in 0..limit {
+        if co >= state_cbor.len() {
+            break;
+        }
+        if is_indef && state_cbor[co] == 0xff {
+            break;
+        }
+
+        // Skip key (credential)
+        co = skip_cbor(state_cbor, co)?;
+
+        // Value: UMElem = array(4) [rdPair, ptrs, sPool, drep]
+        let (elem_body, elem_maj, elem_val) = read_cbor_initial(state_cbor, co)?;
+        let elem_end = skip_cbor(state_cbor, co)?;
+
+        if elem_maj == 4 && elem_val >= 4 {
+            // Skip rdPair, ptrs, sPool to reach drep (field 3)
+            let mut field_off = elem_body;
+            for _ in 0..3 {
+                field_off = skip_cbor(state_cbor, field_off)?;
+            }
+
+            // drep field: NullMaybe encoding
+            // null (major 7, val 22 = 0xf6) → SNothing → no voting delegation
+            // anything else → SJust → has voting delegation
+            let (_, drep_maj, drep_val) = read_cbor_initial(state_cbor, field_off)?;
+
+            if drep_maj == 7 && drep_val == 22 {
+                // CBOR null → no voting delegation
+                without_voting += 1;
+            } else {
+                // Has voting delegation (DRepCredential, AlwaysAbstain, AlwaysNoConfidence)
+                with_voting += 1;
+            }
+        } else {
+            errors += 1;
+        }
+
+        total += 1;
+        co = elem_end;
+    }
+
+    Ok(VotingDelegationStats {
+        total_credentials: total,
+        with_voting,
+        without_voting,
+        errors,
+    })
+}
+
+/// Parse the decentralization parameter `d` from the snapshot's on-disk protocol parameters.
+///
+/// Path: EpochState[1] → LedgerState[1] → UTxOState[3] → GovState[2] → PParams[12]
+///
+/// For Shelley/Allegra/Mary: GovState = ShelleyGovState = array(5), curPParams at [2]
+/// For Conway: GovState = ConwayGovState = array(7), curPParams at [3]
+///
+/// PParams field 12 = decentralization = tag(30, [numerator, denominator])
+///
+/// Returns (numerator, denominator) or None if not found/parseable.
+pub fn parse_decentralization_param(
+    state_cbor: &[u8],
+) -> Result<(u64, u64), HarnessError> {
+    let off = navigate_to_nes(state_cbor)?;
+    let es = skip_nes_to_epoch_state(state_cbor, off)?;
+
+    // ES[0] = AccountState (skip)
+    let off = skip_cbor(state_cbor, es)?;
+
+    // ES[1] = LedgerState = array(2) [CertState, UTxOState]
+    // Note: disk order is CertState first, UTxOState second
+    let (ls_body, _) = read_array_header(state_cbor, off)?;
+
+    // LS[0] = CertState (skip)
+    let off = skip_cbor(state_cbor, ls_body)?;
+
+    // LS[1] = UTxOState = array(6) [UTxO, deposited, fees, GovState, IncrStake, donation]
+    let (utxo_body, _) = read_array_header(state_cbor, off)?;
+
+    // Skip UTxO[0..2] to reach UTxO[3] = GovState
+    let mut off = utxo_body;
+    for _ in 0..3 { off = skip_cbor(state_cbor, off)?; }
+
+    // GovState: array(5) for Shelley/Allegra/Mary, array(7) for Conway
+    let (gs_body, gs_len) = read_array_header(state_cbor, off)?;
+
+    // curPParams position: [2] for ShelleyGovState, [3] for ConwayGovState
+    let pp_index = if gs_len >= 7 { 3u32 } else { 2 };
+    let mut off = gs_body;
+    for _ in 0..pp_index { off = skip_cbor(state_cbor, off)?; }
+
+    // curPParams = array(N) where N depends on era
+    let (pp_body, pp_len) = read_array_header(state_cbor, off)?;
+
+    // For Shelley-era: d is at position 12
+    // For Conway: d was removed. Return (0, 1).
+    if pp_len <= 12 {
+        return Ok((0, 1)); // Conway or era without d
+    }
+
+    // Skip PP[0..11] to reach PP[12] = d
+    let mut off = pp_body;
+    for _ in 0..12 { off = skip_cbor(state_cbor, off)?; }
+
+    // d = tag(30, [numerator, denominator]) — Rational
+    let (tag_body, maj, _) = read_cbor_initial(state_cbor, off)?;
+    if maj == 6 {
+        // tag(30) wrapping array(2)
+        let (arr_body, _) = read_array_header(state_cbor, tag_body)?;
+        let (off, num) = read_uint(state_cbor, arr_body)?;
+        let (_, den) = read_uint(state_cbor, off)?;
+        Ok((num, den))
+    } else if maj == 0 {
+        // Plain uint (d=0 stored as just 0)
+        let (_, val) = read_uint(state_cbor, off)?;
+        Ok((val, 1))
+    } else {
+        Err(HarnessError::ParseError(format!(
+            "d parameter: expected tag or uint, got major {maj} at offset {off}"
+        )))
+    }
+}
+
+/// MIR (Move Instantaneous Rewards) parsed from DState[3].
+#[derive(Debug, Default)]
+pub struct InstantaneousRewardsSummary {
+    /// Total MIR from reserves to individual accounts (lovelace).
+    pub reserves_to_accounts: u64,
+    /// Number of accounts receiving MIR from reserves.
+    pub reserves_to_accounts_count: usize,
+    /// Total MIR from treasury to individual accounts (lovelace).
+    pub treasury_to_accounts: u64,
+    /// Number of accounts receiving MIR from treasury.
+    pub treasury_to_accounts_count: usize,
+    /// Bulk reserves→treasury transfer (DeltaCoin, can be negative).
+    pub delta_reserves: i64,
+    /// Bulk treasury→reserves transfer (DeltaCoin, can be negative).
+    pub delta_treasury: i64,
+}
+
+/// Parse InstantaneousRewards from DState[3].
+///
+/// DState = array(4) [UMap, futureGenDelegs, genDelegs, iRewards]
+/// iRewards = array(4) [iRReserves_map, iRTreasury_map, deltaReserves, deltaTreasury]
+///
+/// For Conway era (no MIR), DState may have fewer fields or iRewards may be empty.
+pub fn parse_instantaneous_rewards(
+    state_cbor: &[u8],
+) -> Result<InstantaneousRewardsSummary, HarnessError> {
+    let off = navigate_to_nes(state_cbor)?;
+    let es = skip_nes_to_epoch_state(state_cbor, off)?;
+
+    // ES[0] = AccountState (skip)
+    let off = skip_cbor(state_cbor, es)?;
+    // ES[1] = LedgerState = array(2) [CertState, UTxOState]
+    let (ls_body, _) = read_array_header(state_cbor, off)?;
+    // LS[0] = CertState
+    let (cs_body, cs_len) = read_array_header(state_cbor, ls_body)?;
+
+    // Navigate to DState
+    let dstate_off = if cs_len == 3 {
+        // Conway: [VState, PState, DState]
+        let off = skip_cbor(state_cbor, cs_body)?;
+        skip_cbor(state_cbor, off)?
+    } else if cs_len == 2 {
+        // Pre-Conway: [DState, PState]
+        cs_body
+    } else {
+        // Unknown layout — try navigating through LS[1] instead
+        return Ok(InstantaneousRewardsSummary::default());
+    };
+
+    // DState = array(4) [UMap, futureGenDelegs, genDelegs, iRewards]
+    let (ds_body, ds_maj, ds_len) = read_cbor_initial(state_cbor, dstate_off)?;
+    if ds_maj != 4 || ds_len < 4 {
+        return Ok(InstantaneousRewardsSummary::default());
+    }
+
+    // Skip DState[0..2] to reach DState[3] = iRewards
+    let mut off = ds_body;
+    for _ in 0..3 { off = skip_cbor(state_cbor, off)?; }
+
+    // iRewards = array(4) [iRReserves, iRTreasury, deltaReserves, deltaTreasury]
+    let (ir_body, ir_maj, ir_len) = read_cbor_initial(state_cbor, off)?;
+    if ir_maj != 4 || ir_len < 4 {
+        return Ok(InstantaneousRewardsSummary::default());
+    }
+
+    // [0] iRReserves: map(credential → coin)
+    let mut reserves_to_accounts = 0u64;
+    let mut reserves_count = 0usize;
+    let (mut co, _, _) = read_cbor_initial(state_cbor, ir_body)?;
+    while co < state_cbor.len() && state_cbor[co] != 0xff {
+        co = skip_cbor(state_cbor, co)?; // key
+        let (_, val) = read_uint(state_cbor, co)?;
+        reserves_to_accounts += val;
+        reserves_count += 1;
+        co = skip_cbor(state_cbor, co)?; // value
+    }
+    let ir1_off = skip_cbor(state_cbor, ir_body)?;
+
+    // [1] iRTreasury: map(credential → coin)
+    let mut treasury_to_accounts = 0u64;
+    let mut treasury_count = 0usize;
+    let (mut co, _, _) = read_cbor_initial(state_cbor, ir1_off)?;
+    while co < state_cbor.len() && state_cbor[co] != 0xff {
+        co = skip_cbor(state_cbor, co)?; // key
+        let (_, val) = read_uint(state_cbor, co)?;
+        treasury_to_accounts += val;
+        treasury_count += 1;
+        co = skip_cbor(state_cbor, co)?;
+    }
+    let ir2_off = skip_cbor(state_cbor, ir1_off)?;
+
+    // [2] deltaReserves: int (major 0 = positive, major 1 = negative)
+    let (_, dr_maj, dr_val) = read_cbor_initial(state_cbor, ir2_off)?;
+    let delta_reserves = if dr_maj == 0 {
+        dr_val as i64
+    } else if dr_maj == 1 {
+        -(dr_val as i64 + 1)
+    } else { 0 };
+    let ir3_off = skip_cbor(state_cbor, ir2_off)?;
+
+    // [3] deltaTreasury: int
+    let (_, dt_maj, dt_val) = read_cbor_initial(state_cbor, ir3_off)?;
+    let delta_treasury = if dt_maj == 0 {
+        dt_val as i64
+    } else if dt_maj == 1 {
+        -(dt_val as i64 + 1)
+    } else { 0 };
+
+    Ok(InstantaneousRewardsSummary {
+        reserves_to_accounts,
+        reserves_to_accounts_count: reserves_count,
+        treasury_to_accounts,
+        treasury_to_accounts_count: treasury_count,
+        delta_reserves,
+        delta_treasury,
+    })
 }
 
 /// Parse snapshot entry counts for a specific snapshot position.
@@ -2020,6 +2440,726 @@ mod tests {
     }
 
     #[test]
+    fn probe_conway_certstate_navigation() {
+        let tarball = snapshots_dir().join("snapshot_134092810.tar.gz");
+        if !tarball.exists() {
+            return;
+        }
+
+        let state_bytes = extract_state_from_tarball(&tarball).unwrap();
+
+        // Step-by-step navigation with diagnostics
+        let off = navigate_to_nes(&state_bytes).unwrap();
+        let es = skip_nes_to_epoch_state(&state_bytes, off).unwrap();
+
+        // ES[0] = AccountState
+        let (_, acct_maj, acct_val) = read_cbor_initial(&state_bytes, es).unwrap();
+        let acct_size = skip_cbor(&state_bytes, es).unwrap() - es;
+        eprintln!("\n=== Conway CertState Navigation ===");
+        eprintln!("  ES[0] AccountState: major={acct_maj} val={acct_val} size={acct_size}B");
+
+        let off = skip_cbor(&state_bytes, es).unwrap();
+
+        // ES[1] = LedgerState
+        let (_, ls_maj, ls_val) = read_cbor_initial(&state_bytes, off).unwrap();
+        eprintln!("  ES[1] LedgerState: major={ls_maj} val={ls_val}");
+        let (ls_body, ls_len) = read_array_header(&state_bytes, off).unwrap();
+        eprintln!("    array length: {ls_len}");
+
+        // LS[0] = UTxOState
+        let (_, utxo_maj, utxo_val) = read_cbor_initial(&state_bytes, ls_body).unwrap();
+        let utxo_size = skip_cbor(&state_bytes, ls_body).unwrap() - ls_body;
+        eprintln!("  LS[0] UTxOState: major={utxo_maj} val={utxo_val} size={}MB", utxo_size / 1_000_000);
+
+        // If UTxOState is an array, probe its elements
+        if utxo_maj == 4 {
+            let (mut elem_off, utxo_len) = read_array_header(&state_bytes, ls_body).unwrap();
+            eprintln!("    UTxOState array length: {utxo_len}");
+            for i in 0..utxo_len.min(10) {
+                let (_, em, ev) = read_cbor_initial(&state_bytes, elem_off).unwrap();
+                let esize = skip_cbor(&state_bytes, elem_off).unwrap() - elem_off;
+                let etype = match em { 0 => "uint", 2 => "bytes", 3 => "text", 4 => "array", 5 => "map", 6 => "tag", _ => "?" };
+                eprintln!("    UTxO[{i}]: {etype}(val={ev}) size={}",
+                    if esize > 1_000_000 { format!("{}MB", esize / 1_000_000) } else { format!("{esize}B") });
+                elem_off = skip_cbor(&state_bytes, elem_off).unwrap();
+            }
+        }
+
+        let off = skip_cbor(&state_bytes, ls_body).unwrap();
+
+        // LS[1] = CertState (or whatever is here)
+        let (_, cs_maj, cs_val) = read_cbor_initial(&state_bytes, off).unwrap();
+        let cs_size = skip_cbor(&state_bytes, off).unwrap() - off;
+        eprintln!("  LS[1] CertState: major={cs_maj} val={cs_val} size={}",
+            if cs_size > 1_000_000 { format!("{}MB", cs_size / 1_000_000) } else { format!("{cs_size}B") });
+
+        // If CertState is an array, probe its elements
+        if cs_maj == 4 {
+            let (mut elem_off, cs_len) = read_array_header(&state_bytes, off).unwrap();
+            eprintln!("    CertState array length: {cs_len}");
+            for i in 0..cs_len.min(10) {
+                let (_, em, ev) = read_cbor_initial(&state_bytes, elem_off).unwrap();
+                let esize = skip_cbor(&state_bytes, elem_off).unwrap() - elem_off;
+                let etype = match em { 0 => "uint", 2 => "bytes", 3 => "text", 4 => "array", 5 => "map", 6 => "tag", _ => "?" };
+                eprintln!("    CS[{i}]: {etype}(val={ev}) size={}",
+                    if esize > 1_000_000 { format!("{}MB", esize / 1_000_000) } else { format!("{esize}B") });
+                elem_off = skip_cbor(&state_bytes, elem_off).unwrap();
+            }
+        }
+
+        // If LS has more than 2 elements, show them
+        if ls_len > 2 {
+            let mut extra_off = skip_cbor(&state_bytes, off).unwrap();
+            for i in 2..ls_len.min(10) {
+                let (_, em, ev) = read_cbor_initial(&state_bytes, extra_off).unwrap();
+                let esize = skip_cbor(&state_bytes, extra_off).unwrap() - extra_off;
+                let etype = match em { 0 => "uint", 2 => "bytes", 3 => "text", 4 => "array", 5 => "map", 6 => "tag", _ => "?" };
+                eprintln!("  LS[{i}]: {etype}(val={ev}) size={}",
+                    if esize > 1_000_000 { format!("{}MB", esize / 1_000_000) } else { format!("{esize}B") });
+                extra_off = skip_cbor(&state_bytes, extra_off).unwrap();
+            }
+        }
+
+        // Deep probe into CS[3] (likely VState/governance)
+        if cs_maj == 4 {
+            let (mut elem_off, cs_len) = read_array_header(&state_bytes, off).unwrap();
+            // Navigate to CS[3]
+            for _ in 0..3.min(cs_len) {
+                elem_off = skip_cbor(&state_bytes, elem_off).unwrap();
+            }
+            if cs_len > 3 {
+                let (_, g_maj, _g_val) = read_cbor_initial(&state_bytes, elem_off).unwrap();
+                let _g_size = skip_cbor(&state_bytes, elem_off).unwrap() - elem_off;
+                eprintln!("\n  --- CS[3] deep probe (array(7), 212KB) ---");
+                if g_maj == 4 {
+                    let (mut gi, g_len) = read_array_header(&state_bytes, elem_off).unwrap();
+                    for i in 0..g_len.min(10) {
+                        let (_, gm, gv) = read_cbor_initial(&state_bytes, gi).unwrap();
+                        let gs = skip_cbor(&state_bytes, gi).unwrap() - gi;
+                        let gt = match gm { 0 => "uint", 2 => "bytes", 3 => "text", 4 => "array", 5 => "map", 6 => "tag", _ => "?" };
+                        eprintln!("    CS3[{i}]: {gt}(val={gv}) size={}",
+                            if gs > 1_000 { format!("{}KB", gs / 1_000) } else { format!("{gs}B") });
+                        gi = skip_cbor(&state_bytes, gi).unwrap();
+                    }
+                }
+            }
+        }
+
+        // Probe VState from LS[0] (CertState) = array(3) [VState, PState, DState]
+        // LS[0] = CertState (disk order: CertState first, UTxOState second)
+        {
+            // Re-navigate cleanly to LedgerState
+            let off2 = navigate_to_nes(&state_bytes).unwrap();
+            let es2 = skip_nes_to_epoch_state(&state_bytes, off2).unwrap();
+            let off2 = skip_cbor(&state_bytes, es2).unwrap(); // skip AccountState
+            let (ls_body, _ls_len) = read_array_header(&state_bytes, off2).unwrap();
+
+            eprintln!("\n  --- LS[0] = CertState (Conway) ---");
+            let (_, ls0_maj, ls0_val) = read_cbor_initial(&state_bytes, ls_body).unwrap();
+            let ls0_size = skip_cbor(&state_bytes, ls_body).unwrap() - ls_body;
+            let ls0_type = match ls0_maj { 4 => "array", 5 => "map", _ => "?" };
+            eprintln!("    LS[0]: {ls0_type}({ls0_val}) size={}MB", ls0_size / 1_000_000);
+
+            if ls0_maj == 4 {
+                let (mut elem, ls0_len) = read_array_header(&state_bytes, ls_body).unwrap();
+                let names = ["VState", "PState", "DState"];
+                for i in 0..ls0_len.min(3) {
+                    let (_, em, ev) = read_cbor_initial(&state_bytes, elem).unwrap();
+                    let es = skip_cbor(&state_bytes, elem).unwrap() - elem;
+                    let et = match em { 4 => "array", 5 => "map", _ => "?" };
+                    let name = names.get(i as usize).unwrap_or(&"?");
+                    eprintln!("    LS0[{i}] {name}: {et}({ev}) size={}",
+                        if es > 1_000_000 { format!("{}MB", es / 1_000_000) } else if es > 1_000 { format!("{}KB", es / 1_000) } else { format!("{es}B") });
+
+                    // Deep probe VState
+                    if i == 0 && em == 4 {
+                        let (mut vi, vlen) = read_array_header(&state_bytes, elem).unwrap();
+                        for j in 0..vlen.min(5) {
+                            let (_, vm, vv) = read_cbor_initial(&state_bytes, vi).unwrap();
+                            let vs = skip_cbor(&state_bytes, vi).unwrap() - vi;
+                            let vt = match vm { 0 => "uint", 4 => "array", 5 => "map", 6 => "tag", _ => "?" };
+                            eprintln!("      VS[{j}]: {vt}(val={vv}) size={}",
+                                if vs > 1_000 { format!("{}KB", vs / 1_000) } else { format!("{vs}B") });
+                            vi = skip_cbor(&state_bytes, vi).unwrap();
+                        }
+                    }
+
+                    elem = skip_cbor(&state_bytes, elem).unwrap();
+                }
+            }
+
+            // Now probe ConwayGovState proposals: LS[1][3][0]
+            let utxo_off = skip_cbor(&state_bytes, ls_body).unwrap(); // LS[1] = UTxOState
+            let (utxo_body, _) = read_array_header(&state_bytes, utxo_off).unwrap();
+            // Skip UTxO[0], UTxO[1], UTxO[2] to reach UTxO[3] = GovState
+            let gs_off = skip_cbor(&state_bytes,
+                skip_cbor(&state_bytes,
+                    skip_cbor(&state_bytes, utxo_body).unwrap()
+                ).unwrap()
+            ).unwrap();
+            let (gs_body, gs_len) = read_array_header(&state_bytes, gs_off).unwrap();
+            eprintln!("\n  --- ConwayGovState = LS[1][3] = array({gs_len}) ---");
+
+            // GovState[0] = Proposals
+            let (_, p_maj, p_val) = read_cbor_initial(&state_bytes, gs_body).unwrap();
+            let p_size = skip_cbor(&state_bytes, gs_body).unwrap() - gs_body;
+            eprintln!("    GS[0] Proposals: {}({p_val}) size={p_size}B", match p_maj { 4 => "array", 5 => "map", _ => "?" });
+
+            // Probe inside Proposals
+            if p_maj == 4 {
+                let (mut pi, plen) = read_array_header(&state_bytes, gs_body).unwrap();
+                for j in 0..plen.min(5) {
+                    let (_, pm, pv) = read_cbor_initial(&state_bytes, pi).unwrap();
+                    let ps = skip_cbor(&state_bytes, pi).unwrap() - pi;
+                    let pt = match pm { 0 => "uint", 2 => "bytes", 4 => "array", 5 => "map", 6 => "tag", _ => "?" };
+                    eprintln!("      P[{j}]: {pt}(val={pv}) size={ps}B");
+
+                    // If this is a map (proposals map), probe first few entries
+                    if pm == 5 && ps > 10 {
+                        let (mut mi, _, _) = read_cbor_initial(&state_bytes, pi).unwrap();
+                        let mut count = 0;
+                        let limit = 3;
+                        while mi < state_bytes.len() && state_bytes[mi] != 0xff && count < limit {
+                            let key_start = mi;
+                            mi = skip_cbor(&state_bytes, mi).unwrap(); // key
+                            let key_size = mi - key_start;
+                            let val_start = mi;
+                            let (_, vm, vv) = read_cbor_initial(&state_bytes, mi).unwrap();
+                            mi = skip_cbor(&state_bytes, mi).unwrap(); // value
+                            let val_size = mi - val_start;
+                            let vt = match vm { 4 => "array", 5 => "map", 6 => "tag", _ => "?" };
+                            eprintln!("        entry[{count}]: key={key_size}B → {vt}(val={vv}) {val_size}B");
+                            count += 1;
+                        }
+                        if count == 0 {
+                            eprintln!("        (empty map)");
+                        }
+                    }
+
+                    pi = skip_cbor(&state_bytes, pi).unwrap();
+                }
+            }
+
+            // GovState[3] = CurPParams — probe first few params
+            let mut gs_elem = gs_body;
+            for _ in 0..3 { gs_elem = skip_cbor(&state_bytes, gs_elem).unwrap(); }
+            let (pp_body, pp_len) = read_array_header(&state_bytes, gs_elem).unwrap();
+            eprintln!("\n    GS[3] CurPParams: array({pp_len})");
+            let mut pp_off = pp_body;
+            for i in 0..pp_len.min(10) {
+                let (_, pm, pv) = read_cbor_initial(&state_bytes, pp_off).unwrap();
+                let ps = skip_cbor(&state_bytes, pp_off).unwrap() - pp_off;
+                let pt = match pm { 0 => "uint", 6 => "tag", _ => "?" };
+                eprintln!("      PP[{i}]: {pt}(val={pv}) size={ps}B");
+                pp_off = skip_cbor(&state_bytes, pp_off).unwrap();
+            }
+        }
+
+        // Deep probe the single governance proposal in P[1]
+        {
+            let off2 = navigate_to_nes(&state_bytes).unwrap();
+            let es2 = skip_nes_to_epoch_state(&state_bytes, off2).unwrap();
+            let off2 = skip_cbor(&state_bytes, es2).unwrap(); // skip AccountState
+            let (ls_body, _) = read_array_header(&state_bytes, off2).unwrap();
+            let utxo_off = skip_cbor(&state_bytes, ls_body).unwrap(); // skip CertState → UTxOState
+            let (utxo_body, _) = read_array_header(&state_bytes, utxo_off).unwrap();
+            // Skip UTxO[0], [1], [2] to GovState
+            let gs_off = skip_cbor(&state_bytes,
+                skip_cbor(&state_bytes,
+                    skip_cbor(&state_bytes, utxo_body).unwrap()
+                ).unwrap()
+            ).unwrap();
+            let (gs_body, _) = read_array_header(&state_bytes, gs_off).unwrap();
+            // GS[0] = Proposals = array(2)
+            let (prop_body, _) = read_array_header(&state_bytes, gs_body).unwrap();
+            // P[0] = metadata, P[1] = proposals sequence
+            let p1_off = skip_cbor(&state_bytes, prop_body).unwrap();
+            let (p1_body, p1_len) = read_array_header(&state_bytes, p1_off).unwrap();
+            eprintln!("\n  --- Governance Proposal Deep Probe ---");
+            eprintln!("    P[1] = array({p1_len}) (proposals sequence)");
+
+            // Each proposal entry
+            let mut prop_off = p1_body;
+            for pi in 0..p1_len.min(5) {
+                let (_, pm, pv) = read_cbor_initial(&state_bytes, prop_off).unwrap();
+                let ps = skip_cbor(&state_bytes, prop_off).unwrap() - prop_off;
+                let pt = match pm { 4 => "array", 5 => "map", 6 => "tag", _ => "?" };
+                eprintln!("    proposal[{pi}]: {pt}(val={pv}) size={ps}B");
+
+                // If it's an array, show sub-elements (GovActionState fields)
+                if pm == 4 {
+                    let (mut gi, glen) = read_array_header(&state_bytes, prop_off).unwrap();
+                    let field_names = ["gasId", "committeeVotes", "drepVotes", "spoVotes",
+                                       "proposalProcedure", "proposedIn", "expiresAfter"];
+                    for j in 0..glen.min(10) {
+                        let (_, gm, gv) = read_cbor_initial(&state_bytes, gi).unwrap();
+                        let gs = skip_cbor(&state_bytes, gi).unwrap() - gi;
+                        let gt = match gm { 0 => "uint", 2 => "bytes", 3 => "text", 4 => "array", 5 => "map", 6 => "tag", _ => "?" };
+                        let fname = field_names.get(j as usize).unwrap_or(&"?");
+                        eprintln!("      [{j}] {fname}: {gt}(val={gv}) size={gs}B");
+
+                        // Deep probe ProposalProcedure (field 4)
+                        if j == 4 && gm == 4 {
+                            let (mut pi2, plen) = read_array_header(&state_bytes, gi).unwrap();
+                            let pp_names = ["deposit", "returnAddr", "govAction", "anchor"];
+                            for k in 0..plen.min(5) {
+                                let (_, km, kv) = read_cbor_initial(&state_bytes, pi2).unwrap();
+                                let ks = skip_cbor(&state_bytes, pi2).unwrap() - pi2;
+                                let kt = match km { 0 => "uint", 2 => "bytes", 4 => "array", 5 => "map", 6 => "tag", _ => "?" };
+                                let ppn = pp_names.get(k as usize).unwrap_or(&"?");
+                                eprintln!("        PP[{k}] {ppn}: {kt}(val={kv}) size={ks}B");
+
+                                // Deep probe govAction
+                                if k == 2 && km == 4 {
+                                    let (mut ai, alen) = read_array_header(&state_bytes, pi2).unwrap();
+                                    eprintln!("          govAction = array({alen}):");
+                                    for l in 0..alen.min(5) {
+                                        let (_, am, av) = read_cbor_initial(&state_bytes, ai).unwrap();
+                                        let az = skip_cbor(&state_bytes, ai).unwrap() - ai;
+                                        let at2 = match am { 0 => "uint", 2 => "bytes", 4 => "array", 5 => "map", 6 => "tag", _ => "?" };
+                                        eprintln!("          GA[{l}]: {at2}(val={av}) size={az}B");
+
+                                        // If first element is uint, it's the action tag
+                                        if l == 0 && am == 0 {
+                                            let action_name = match av {
+                                                0 => "ParameterChange",
+                                                1 => "HardForkInitiation",
+                                                2 => "TreasuryWithdrawals",
+                                                3 => "NoConfidence",
+                                                4 => "UpdateCommittee",
+                                                5 => "NewConstitution",
+                                                6 => "InfoAction",
+                                                _ => "Unknown",
+                                            };
+                                            eprintln!("          → ACTION TYPE: {action_name}");
+                                        }
+
+                                        // If TreasuryWithdrawals, GA[1] = map(RewardAccount → Coin)
+                                        if l == 1 && am == 5 {
+                                            eprintln!("          → Treasury withdrawal map with {av} entries");
+                                            let (mut mi, _, _) = read_cbor_initial(&state_bytes, ai).unwrap();
+                                            let mut total_withdrawal = 0u64;
+                                            let mut w_count = 0u64;
+                                            while mi < state_bytes.len() && state_bytes[mi] != 0xff {
+                                                // key = RewardAccount (bytes)
+                                                mi = skip_cbor(&state_bytes, mi).unwrap();
+                                                // value = Coin (uint)
+                                                let (next, coin_val) = read_uint(&state_bytes, mi).unwrap();
+                                                mi = next;
+                                                total_withdrawal += coin_val;
+                                                w_count += 1;
+                                                if w_count <= 5 {
+                                                    eprintln!("            withdrawal[{}]: {} lovelace ({} ADA)",
+                                                        w_count - 1, coin_val, coin_val / 1_000_000);
+                                                }
+                                            }
+                                            eprintln!("          → TOTAL WITHDRAWAL: {} lovelace ({} ADA), {} recipients",
+                                                total_withdrawal, total_withdrawal / 1_000_000, w_count);
+                                        }
+                                        // If map for definite-length
+                                        if l == 1 && am == 5 && av != u64::MAX {
+                                            let (mut mi, _, _) = read_cbor_initial(&state_bytes, ai).unwrap();
+                                            let mut total_withdrawal = 0u64;
+                                            for entry in 0..av {
+                                                mi = skip_cbor(&state_bytes, mi).unwrap(); // key
+                                                let (next, coin_val) = read_uint(&state_bytes, mi).unwrap();
+                                                mi = next;
+                                                total_withdrawal += coin_val;
+                                                if entry < 5 {
+                                                    eprintln!("            withdrawal[{entry}]: {} lovelace ({} ADA)",
+                                                        coin_val, coin_val / 1_000_000);
+                                                }
+                                            }
+                                            eprintln!("          → TOTAL WITHDRAWAL (definite): {} lovelace ({} ADA)",
+                                                total_withdrawal, total_withdrawal / 1_000_000);
+                                        }
+
+                                        ai = skip_cbor(&state_bytes, ai).unwrap();
+                                    }
+                                }
+
+                                pi2 = skip_cbor(&state_bytes, pi2).unwrap();
+                            }
+                        }
+
+                        gi = skip_cbor(&state_bytes, gi).unwrap();
+                    }
+                }
+
+                prop_off = skip_cbor(&state_bytes, prop_off).unwrap();
+            }
+        }
+
+        // Now probe what Allegra CertState looks like for comparison
+        let allegra_tarball = snapshots_dir().join("snapshot_17020848.tar.gz");
+        if allegra_tarball.exists() {
+            let allegra_bytes = extract_state_from_tarball(&allegra_tarball).unwrap();
+            let aoff = navigate_to_nes(&allegra_bytes).unwrap();
+            let aes = skip_nes_to_epoch_state(&allegra_bytes, aoff).unwrap();
+            let aoff = skip_cbor(&allegra_bytes, aes).unwrap(); // skip AccountState
+            let (als_body, als_len) = read_array_header(&allegra_bytes, aoff).unwrap();
+            let aoff = skip_cbor(&allegra_bytes, als_body).unwrap(); // skip UTxOState
+            let (_, acs_maj, acs_val) = read_cbor_initial(&allegra_bytes, aoff).unwrap();
+            let acs_size = skip_cbor(&allegra_bytes, aoff).unwrap() - aoff;
+            eprintln!("\n  --- Allegra CertState comparison ---");
+            eprintln!("  LS length: {als_len}");
+            eprintln!("  CertState: major={acs_maj} val={acs_val} size={}MB", acs_size / 1_000_000);
+            if acs_maj == 4 {
+                let (mut aelem, acs_len) = read_array_header(&allegra_bytes, aoff).unwrap();
+                eprintln!("    array length: {acs_len}");
+                for i in 0..acs_len.min(10) {
+                    let (_, am, av) = read_cbor_initial(&allegra_bytes, aelem).unwrap();
+                    let asz = skip_cbor(&allegra_bytes, aelem).unwrap() - aelem;
+                    let at = match am { 0 => "uint", 2 => "bytes", 3 => "text", 4 => "array", 5 => "map", 6 => "tag", _ => "?" };
+                    eprintln!("    ACS[{i}]: {at}(val={av}) size={}",
+                        if asz > 1_000_000 { format!("{}MB", asz / 1_000_000) } else if asz > 1_000 { format!("{}KB", asz / 1_000) } else { format!("{asz}B") });
+                    aelem = skip_cbor(&allegra_bytes, aelem).unwrap();
+                }
+            }
+        }
+
+        eprintln!("===================================\n");
+    }
+
+    #[test]
+    fn conway_voting_delegation_stats() {
+        let tarball = snapshots_dir().join("snapshot_133660855.tar.gz");
+        if !tarball.exists() {
+            eprintln!("Skipping: Conway pre-boundary snapshot not available");
+            return;
+        }
+
+        let state_bytes = extract_state_from_tarball(&tarball).unwrap();
+        // First, probe the UMElem encoding by looking at a few entries
+        {
+            let umap_off = navigate_to_umap_elems(&state_bytes).unwrap();
+            let (mut co, _, _) = read_cbor_initial(&state_bytes, umap_off).unwrap();
+            eprintln!("\n=== UMap Entry Probe ===");
+            for i in 0..5 {
+                if co >= state_bytes.len() || state_bytes[co] == 0xff { break; }
+                // Key
+                let (_, km, kv) = read_cbor_initial(&state_bytes, co).unwrap();
+                let key_size = skip_cbor(&state_bytes, co).unwrap() - co;
+                let kt = match km { 0 => "uint", 2 => "bytes", 4 => "array", 5 => "map", 6 => "tag", _ => "?" };
+                eprintln!("  entry[{i}] key: {kt}(val={kv}) size={key_size}B");
+                co = skip_cbor(&state_bytes, co).unwrap();
+
+                // Value (UMElem)
+                let (elem_body, em, ev) = read_cbor_initial(&state_bytes, co).unwrap();
+                let val_size = skip_cbor(&state_bytes, co).unwrap() - co;
+                let et = match em { 0 => "uint", 2 => "bytes", 4 => "array", 5 => "map", 6 => "tag", _ => "?" };
+                eprintln!("  entry[{i}] val: {et}(val={ev}) size={val_size}B");
+
+                // If it's an array, show sub-elements
+                if em == 4 {
+                    let mut si = elem_body;
+                    for j in 0..(ev as u32).min(6) {
+                        let (_, sm, sv) = read_cbor_initial(&state_bytes, si).unwrap();
+                        let ss = skip_cbor(&state_bytes, si).unwrap() - si;
+                        let st = match sm { 0 => "uint", 2 => "bytes", 4 => "array", 5 => "map", 6 => "tag", 7 => "special", _ => "?" };
+                        eprintln!("    [{j}]: {st}(val={sv}) size={ss}B");
+                        si = skip_cbor(&state_bytes, si).unwrap();
+                    }
+                }
+                // If it's a map, show first few key-value pairs
+                if em == 5 {
+                    let (mut mi, _, _) = read_cbor_initial(&state_bytes, co).unwrap();
+                    for j in 0..3 {
+                        if mi >= state_bytes.len() || state_bytes[mi] == 0xff { break; }
+                        let (_, mk, mkv) = read_cbor_initial(&state_bytes, mi).unwrap();
+                        let mks = skip_cbor(&state_bytes, mi).unwrap() - mi;
+                        mi = skip_cbor(&state_bytes, mi).unwrap();
+                        let (_, mv, mvv) = read_cbor_initial(&state_bytes, mi).unwrap();
+                        let mvs = skip_cbor(&state_bytes, mi).unwrap() - mi;
+                        mi = skip_cbor(&state_bytes, mi).unwrap();
+                        let mkt = match mk { 0 => "uint", 2 => "bytes", _ => "?" };
+                        let mvt = match mv { 0 => "uint", 2 => "bytes", 4 => "array", _ => "?" };
+                        eprintln!("    [{j}]: key={mkt}({mkv},{mks}B) → val={mvt}({mvv},{mvs}B)");
+                    }
+                }
+
+                co = skip_cbor(&state_bytes, co).unwrap();
+            }
+            eprintln!("========================\n");
+        }
+
+        let stats = count_voting_delegations(&state_bytes).unwrap();
+
+        eprintln!("\n=== Conway Voting Delegation Stats (epoch 507 pre-boundary) ===");
+        eprintln!("  total credentials:    {}", stats.total_credentials);
+        eprintln!("  with voting deleg:    {} ({:.1}%)",
+            stats.with_voting,
+            stats.with_voting as f64 / stats.total_credentials.max(1) as f64 * 100.0);
+        eprintln!("  without voting deleg: {} ({:.1}%)",
+            stats.without_voting,
+            stats.without_voting as f64 / stats.total_credentials.max(1) as f64 * 100.0);
+        eprintln!("  parse errors:         {}", stats.errors);
+        eprintln!("===============================================================\n");
+
+        assert!(stats.total_credentials > 100_000,
+            "should have significant credentials, got {}", stats.total_credentials);
+        assert_eq!(stats.errors, 0, "should have no parse errors");
+    }
+
+    #[test]
+    fn conway_nes_reward_update_probe() {
+        let tarball = snapshots_dir().join("snapshot_133660855.tar.gz");
+        if !tarball.exists() {
+            eprintln!("Skipping: Conway pre-boundary snapshot not available");
+            return;
+        }
+
+        let state_bytes = extract_state_from_tarball(&tarball).unwrap();
+        let nes_body = navigate_to_nes(&state_bytes).unwrap();
+
+        // NES = array(7+) [epoch, bprev, bcur, ES, nesRu, stashed, pd]
+        // Skip NES[0..3] to reach NES[4] = nesRu
+        let mut off = nes_body;
+        for i in 0..4 {
+            let (_, m, v) = read_cbor_initial(&state_bytes, off).unwrap();
+            let sz = skip_cbor(&state_bytes, off).unwrap() - off;
+            let t = match m { 0 => "uint", 4 => "array", 5 => "map", 6 => "tag", 7 => "special", _ => "?" };
+            eprintln!("  NES[{i}]: {t}(val={v}) size={}",
+                if sz > 1_000_000 { format!("{}MB", sz / 1_000_000) } else if sz > 1_000 { format!("{}KB", sz / 1_000) } else { format!("{sz}B") });
+            off = skip_cbor(&state_bytes, off).unwrap();
+        }
+
+        // NES[4] = nesRu = StrictMaybe (PulsingRewUpdate)
+        let (ru_body, ru_maj, ru_val) = read_cbor_initial(&state_bytes, off).unwrap();
+        let ru_size = skip_cbor(&state_bytes, off).unwrap() - off;
+        let ru_type = match ru_maj { 0 => "uint", 4 => "array", 5 => "map", 6 => "tag", 7 => "special", _ => "?" };
+        eprintln!("\n=== NES[4] nesRu (Reward Update) ===");
+        eprintln!("  type: {ru_type}(val={ru_val}) size={}",
+            if ru_size > 1_000_000 { format!("{}MB", ru_size / 1_000_000) } else if ru_size > 1_000 { format!("{}KB", ru_size / 1_000) } else { format!("{ru_size}B") });
+
+        // If it's an array (StrictMaybe wrapped), probe contents
+        if ru_maj == 4 && ru_val > 0 {
+            let mut ri = ru_body;
+            for i in 0..(ru_val as u32).min(10) {
+                let (_, rm, rv) = read_cbor_initial(&state_bytes, ri).unwrap();
+                let rs = skip_cbor(&state_bytes, ri).unwrap() - ri;
+                let rt = match rm { 0 => "uint", 2 => "bytes", 4 => "array", 5 => "map", 6 => "tag", 7 => "special", _ => "?" };
+                eprintln!("  RU[{i}]: {rt}(val={rv}) size={}",
+                    if rs > 1_000_000 { format!("{}MB", rs / 1_000_000) } else if rs > 1_000 { format!("{}KB", rs / 1_000) } else { format!("{rs}B") });
+
+                // If RU is a RewardUpdate, it has: deltaT, deltaR, rs (reward map), deltaF, nonMyopic
+                // The reward map (rs) would be huge — that tells us total rewards
+                if rm == 5 && rs > 1_000 {
+                    // This is likely the rewards map: credential → Set(Reward)
+                    let count = count_indef_map(&state_bytes, ri).unwrap_or(0);
+                    eprintln!("    → map with {count} entries");
+
+                    // Sum up rewards
+                    let (mut mi, _, _) = read_cbor_initial(&state_bytes, ri).unwrap();
+                    let mut total_reward = 0u128;
+                    let mut sampled = 0usize;
+                    while mi < state_bytes.len() && state_bytes[mi] != 0xff && sampled < 20 {
+                        mi = skip_cbor(&state_bytes, mi).unwrap(); // key
+                        // Value: Set(Reward) or just Reward
+                        let (_, vm, vv) = read_cbor_initial(&state_bytes, mi).unwrap();
+                        if vm == 0 {
+                            total_reward += vv as u128;
+                        }
+                        mi = skip_cbor(&state_bytes, mi).unwrap();
+                        sampled += 1;
+                    }
+                    if sampled > 0 {
+                        eprintln!("    → first {sampled} rewards total: {} lovelace", total_reward);
+                    }
+                }
+
+                // If it's a tagged/uint value, it might be deltaT or deltaR
+                if rm == 0 {
+                    eprintln!("    → uint value: {} ({} ADA)", rv, rv / 1_000_000);
+                }
+                // Negative int (major 1) for delta values
+                if rm == 1 {
+                    eprintln!("    → negint value: -{} (-{} ADA)", rv + 1, (rv + 1) / 1_000_000);
+                }
+
+                ri = skip_cbor(&state_bytes, ri).unwrap();
+            }
+        }
+
+        // Also show NES[5] and NES[6]
+        off = skip_cbor(&state_bytes, off).unwrap(); // skip NES[4]
+        for i in 5..7 {
+            if off >= state_bytes.len() { break; }
+            let (_, m, v) = read_cbor_initial(&state_bytes, off).unwrap();
+            let sz = skip_cbor(&state_bytes, off).unwrap() - off;
+            let t = match m { 0 => "uint", 4 => "array", 5 => "map", 6 => "tag", 7 => "special", _ => "?" };
+            eprintln!("  NES[{i}]: {t}(val={v}) size={}",
+                if sz > 1_000_000 { format!("{}MB", sz / 1_000_000) } else if sz > 1_000 { format!("{}KB", sz / 1_000) } else { format!("{sz}B") });
+            off = skip_cbor(&state_bytes, off).unwrap();
+        }
+
+        eprintln!("====================================\n");
+
+        // Probe DRepPulsingState from ConwayGovState[6]
+        // Path: ES[1] → LS[1] → UTxOState[3] → GovState[6]
+        {
+            let off = navigate_to_nes(&state_bytes).unwrap();
+            let es = skip_nes_to_epoch_state(&state_bytes, off).unwrap();
+            let off = skip_cbor(&state_bytes, es).unwrap(); // skip AccountState
+            let (ls_body, _) = read_array_header(&state_bytes, off).unwrap();
+            let utxo_off = skip_cbor(&state_bytes, ls_body).unwrap(); // skip CertState
+            let (utxo_body, _) = read_array_header(&state_bytes, utxo_off).unwrap();
+            // Skip UTxO[0..2] to GovState[3]
+            let mut goff = utxo_body;
+            for _ in 0..3 { goff = skip_cbor(&state_bytes, goff).unwrap(); }
+            let (gs_body, _gs_len) = read_array_header(&state_bytes, goff).unwrap();
+
+            // Skip GS[0..5] to reach GS[6] = DRepPulsingState
+            let mut drp_off = gs_body;
+            for _ in 0..6 { drp_off = skip_cbor(&state_bytes, drp_off).unwrap(); }
+
+            let (drp_body, drp_maj, drp_val) = read_cbor_initial(&state_bytes, drp_off).unwrap();
+            let drp_size = skip_cbor(&state_bytes, drp_off).unwrap() - drp_off;
+            eprintln!("=== DRepPulsingState (GovState[6]) ===");
+            eprintln!("  type: {}(val={drp_val}) size={}KB",
+                match drp_maj { 4 => "array", 5 => "map", _ => "?" }, drp_size / 1_000);
+
+            if drp_maj == 4 {
+                let mut di = drp_body;
+                for i in 0..(drp_val as u32).min(10) {
+                    let (_, dm, dv) = read_cbor_initial(&state_bytes, di).unwrap();
+                    let ds = skip_cbor(&state_bytes, di).unwrap() - di;
+                    let dt = match dm { 0 => "uint", 1 => "negint", 2 => "bytes", 4 => "array", 5 => "map", 6 => "tag", 7 => "special", _ => "?" };
+                    eprintln!("  DRP[{i}]: {dt}(val={dv}) size={}",
+                        if ds > 1_000_000 { format!("{}MB", ds / 1_000_000) } else if ds > 1_000 { format!("{}KB", ds / 1_000) } else { format!("{ds}B") });
+
+                    // Show uint values (likely deltaT, deltaR)
+                    if dm == 0 {
+                        eprintln!("    → {} lovelace ({} ADA)", dv, dv / 1_000_000);
+                    }
+                    if dm == 1 {
+                        eprintln!("    → -{} lovelace (-{} ADA)", dv + 1, (dv + 1) / 1_000_000);
+                    }
+
+                    // If it's an array, show sub-elements
+                    if dm == 4 && ds > 100 {
+                        let (mut si, _, sv) = read_cbor_initial(&state_bytes, di).unwrap();
+                        for j in 0..(sv as u32).min(8) {
+                            let (_, sm, sv2) = read_cbor_initial(&state_bytes, si).unwrap();
+                            let ss = skip_cbor(&state_bytes, si).unwrap() - si;
+                            let st = match sm { 0 => "uint", 1 => "negint", 4 => "array", 5 => "map", 6 => "tag", _ => "?" };
+                            eprintln!("    [{j}]: {st}(val={sv2}) size={}",
+                                if ss > 1_000_000 { format!("{}MB", ss / 1_000_000) } else if ss > 1_000 { format!("{}KB", ss / 1_000) } else { format!("{ss}B") });
+                            if sm == 0 { eprintln!("      → {} lovelace ({} ADA)", sv2, sv2 / 1_000_000); }
+                            if sm == 1 { eprintln!("      → -{} lovelace (-{} ADA)", sv2 + 1, (sv2 + 1) / 1_000_000); }
+                            si = skip_cbor(&state_bytes, si).unwrap();
+                        }
+                    }
+
+                    di = skip_cbor(&state_bytes, di).unwrap();
+                }
+            }
+            eprintln!("======================================\n");
+
+            // Probe ALL 31 protocol parameters from CurPParams
+            let mut pp_off2 = gs_body;
+            for _ in 0..3 { pp_off2 = skip_cbor(&state_bytes, pp_off2).unwrap(); }
+            let (pp_body2, pp_len2) = read_array_header(&state_bytes, pp_off2).unwrap();
+            eprintln!("=== Conway CurPParams (all {pp_len2} fields) ===");
+            let mut ppi = pp_body2;
+            let pp_names = [
+                "minFeeA", "minFeeB", "maxBlockBodySize", "maxTxSize", "maxBlockHeaderSize",
+                "keyDeposit", "poolDeposit", "eMax", "nOpt", "a0",
+                "rho", "tau", "d_deprecated", "extraEntropy_deprecated", "protocolVersion",
+                "minPoolCost", "adaPerUTxOByte", "costModels", "executionPrices", "maxTxExUnits",
+                "maxBlockExUnits", "maxValSize", "collateralPercent", "maxCollateralInputs",
+                "poolVotingThresholds", "dRepVotingThresholds", "committeeMinSize",
+                "committeeMaxTermLength", "govActionLifetime", "govActionDeposit", "dRepDeposit",
+            ];
+            for i in 0..pp_len2.min(31) {
+                let (inner, pm, pv) = read_cbor_initial(&state_bytes, ppi).unwrap();
+                let ps = skip_cbor(&state_bytes, ppi).unwrap() - ppi;
+                let name = pp_names.get(i as usize).unwrap_or(&"?");
+
+                if pm == 0 {
+                    eprintln!("  PP[{i:2}] {name}: uint({pv})");
+                } else if pm == 6 {
+                    // Tag — likely rational tag(30, [num, den])
+                    let (arr_body, _, _) = read_cbor_initial(&state_bytes, inner).unwrap();
+                    if let Ok((_, num)) = read_uint(&state_bytes, arr_body) {
+                        let den_off = skip_cbor(&state_bytes, arr_body).unwrap();
+                        if let Ok((_, den)) = read_uint(&state_bytes, den_off) {
+                            eprintln!("  PP[{i:2}] {name}: rational({num}/{den})");
+                        } else {
+                            eprintln!("  PP[{i:2}] {name}: tag({pv}) size={ps}B");
+                        }
+                    } else {
+                        eprintln!("  PP[{i:2}] {name}: tag({pv}) size={ps}B");
+                    }
+                } else {
+                    let pt = match pm { 2 => "bytes", 4 => "array", 5 => "map", _ => "?" };
+                    eprintln!("  PP[{i:2}] {name}: {pt}(val={pv}) size={ps}B");
+                }
+
+                ppi = skip_cbor(&state_bytes, ppi).unwrap();
+            }
+            eprintln!("========================================\n");
+        }
+    }
+
+    #[test]
+    fn conway_block_production_epoch_comparison() {
+        let pre_path = snapshots_dir().join("snapshot_133660855.tar.gz");
+        let post_path = snapshots_dir().join("snapshot_134092810.tar.gz");
+        if !pre_path.exists() || !post_path.exists() {
+            eprintln!("Skipping: Conway snapshots not available");
+            return;
+        }
+
+        let pre_bytes = extract_state_from_tarball(&pre_path).unwrap();
+        let post_bytes = extract_state_from_tarball(&post_path).unwrap();
+
+        let bp_pre = parse_block_production(&pre_bytes).unwrap();
+        let bp_post = parse_block_production(&post_bytes).unwrap();
+
+        let total_pre: u64 = bp_pre.values().sum();
+        let total_post: u64 = bp_post.values().sum();
+        let pools_pre = bp_pre.len();
+        let pools_post = bp_post.len();
+
+        eprintln!("\n=== Block Production Comparison ===");
+        eprintln!("  PRE  bprev (epoch 506): {} blocks, {} pools", total_pre, pools_pre);
+        eprintln!("  POST bprev (epoch 507): {} blocks, {} pools", total_post, pools_post);
+        eprintln!();
+        eprintln!("  eta_506 = {total_pre}/21600 = {:.6}", total_pre as f64 / 21600.0);
+        eprintln!("  eta_507 = {total_post}/21600 = {:.6}", total_post as f64 / 21600.0);
+        eprintln!();
+
+        // Compute delta_r1 for both epochs using same reserves
+        let header = parse_snapshot_header(&pre_bytes).unwrap();
+        let reserves = header.reserves;
+        eprintln!("  reserves: {} ({} ADA)", reserves, reserves / 1_000_000);
+
+        // rho = 3/1000
+        let dr1_506 = (reserves as u128 * 3 * total_pre as u128
+            / (1000u128 * 21600)) as u64;
+        let dr1_507 = (reserves as u128 * 3 * total_post as u128
+            / (1000u128 * 21600)) as u64;
+
+        eprintln!("  delta_r1 (epoch 506 blocks): {} ({} ADA)", dr1_506, dr1_506 / 1_000_000);
+        eprintln!("  delta_r1 (epoch 507 blocks): {} ({} ADA)", dr1_507, dr1_507 / 1_000_000);
+        eprintln!("  delta_r1 difference:         {} ({} ADA)",
+            dr1_506.abs_diff(dr1_507), dr1_506.abs_diff(dr1_507) / 1_000_000);
+        eprintln!();
+
+        // Check pool overlap
+        let pre_keys: std::collections::BTreeSet<_> = bp_pre.keys().collect();
+        let post_keys: std::collections::BTreeSet<_> = bp_post.keys().collect();
+        let both = pre_keys.intersection(&post_keys).count();
+        let only_pre = pre_keys.difference(&post_keys).count();
+        let only_post = post_keys.difference(&pre_keys).count();
+        eprintln!("  pools in both epochs:    {both}");
+        eprintln!("  pools only in epoch 506: {only_pre}");
+        eprintln!("  pools only in epoch 507: {only_post}");
+        eprintln!("====================================\n");
+    }
+
+    #[test]
     fn all_three_snapshots_load_allegra_237() {
         let tarball = snapshots_dir().join("snapshot_17020848.tar.gz");
         if !tarball.exists() { return; }
@@ -2066,6 +3206,677 @@ mod tests {
             assert!(pools > 0, "{name} should have pools");
             assert!(stakes > 0, "{name} should have stakes");
             assert!(delegs > 0, "{name} should have delegations");
+        }
+    }
+
+    /// Compare raw stake_dist sum vs reconstructed pool_stakes sum.
+    ///
+    /// The oracle's `totalActiveStake` is `sum(stake_dist values)` in the go snapshot.
+    /// Our `total_stake` is `sum(pool_stakes)` where pool_stakes are aggregated from
+    /// the intersection of stake_dist and delegations. If these differ, the gap
+    /// explains the reward formula mismatch.
+    #[test]
+    fn stake_dist_sum_vs_pool_stakes_sum() {
+        let snapshots = [
+            ("Allegra PRE 236", "snapshot_16588800.tar.gz"),
+            ("Allegra POST 237", "snapshot_17020848.tar.gz"),
+            ("Mary    PRE 251", "snapshot_23068800.tar.gz"),
+            ("Mary    POST 252", "snapshot_23500962.tar.gz"),
+            ("Conway  PRE 507", "snapshot_133660855.tar.gz"),
+            ("Conway  POST 508", "snapshot_134092810.tar.gz"),
+        ];
+
+        for (label, filename) in &snapshots {
+            let tarball = snapshots_dir().join(filename);
+            if !tarball.exists() {
+                eprintln!("Skipping {label}: {filename} not available");
+                continue;
+            }
+
+            let snap = LoadedSnapshot::from_tarball(&tarball).unwrap();
+            let state = snap.to_ledger_state();
+
+            // Raw stake_dist sum from go snapshot (oracle's totalActiveStake)
+            let raw_stakes = parse_snapshot_stake_distribution(&snap.raw_cbor, 2).unwrap();
+            let raw_sum: u128 = raw_stakes.iter().map(|(_, v)| *v as u128).sum();
+            let raw_count = raw_stakes.len();
+
+            // Our reconstructed pool_stakes sum
+            let pool_sum: u128 = state.epoch_state.snapshots.go.0.pool_stakes
+                .values().map(|c| c.0 as u128).sum();
+            let pool_count = state.epoch_state.snapshots.go.0.pool_stakes.len();
+
+            // Delegation count
+            let deleg_count = state.epoch_state.snapshots.go.0.delegations.len();
+
+            // Raw delegations from go snapshot
+            let raw_delegs = parse_snapshot_delegations(&snap.raw_cbor, 2).unwrap();
+            let raw_deleg_count = raw_delegs.len();
+
+            // Credentials in stake_dist but NOT in delegations
+            let deleg_set: std::collections::BTreeSet<[u8; 28]> = raw_delegs.iter()
+                .map(|(h, _)| {
+                    let mut k = [0u8; 28];
+                    k.copy_from_slice(&h.0[..28]);
+                    k
+                }).collect();
+            let stake_only_count = raw_stakes.iter().filter(|(h, _)| {
+                let mut k = [0u8; 28];
+                k.copy_from_slice(&h.0[..28]);
+                !deleg_set.contains(&k)
+            }).count();
+            let stake_only_sum: u128 = raw_stakes.iter().filter(|(h, _)| {
+                let mut k = [0u8; 28];
+                k.copy_from_slice(&h.0[..28]);
+                !deleg_set.contains(&k)
+            }).map(|(_, v)| *v as u128).sum();
+
+            // Also check SnapShots array length — Conway may have extra fields
+            let snap_off = {
+                let off = navigate_to_nes(&snap.raw_cbor).unwrap();
+                let es = skip_nes_to_epoch_state(&snap.raw_cbor, off).unwrap();
+                skip_n_fields(&snap.raw_cbor, es, 2).unwrap()
+            };
+            let (ss_inner, ss_len) = read_array_header(&snap.raw_cbor, snap_off).unwrap();
+            // Probe each element type
+            let mut ss_elem = ss_inner;
+            let mut ss_fields = Vec::new();
+            for i in 0..ss_len.min(10) {
+                let (_, maj, val) = read_cbor_initial(&snap.raw_cbor, ss_elem).unwrap();
+                let sz = skip_cbor(&snap.raw_cbor, ss_elem).unwrap() - ss_elem;
+                let t = match maj { 0 => "uint", 4 => "array", 5 => "map", 6 => "tag", _ => "?" };
+                ss_fields.push(format!("SS[{i}]={t}({val}),{}",
+                    if sz > 1_000_000 { format!("{}MB", sz / 1_000_000) }
+                    else if sz > 1_000 { format!("{}KB", sz / 1_000) }
+                    else { format!("{sz}B") }));
+                ss_elem = skip_cbor(&snap.raw_cbor, ss_elem).unwrap();
+            }
+
+            let delta = raw_sum.abs_diff(pool_sum);
+            let pct = if raw_sum > 0 { delta as f64 / raw_sum as f64 * 100.0 } else { 0.0 };
+
+            eprintln!("\n=== {label} — stake_dist vs pool_stakes ===");
+            eprintln!("  SnapShots = array({ss_len}): {}", ss_fields.join(", "));
+            eprintln!("  raw stake_dist sum:      {} ({} entries)", raw_sum, raw_count);
+            eprintln!("  reconstructed pool sum:  {} ({} pools)", pool_sum, pool_count);
+            eprintln!("  delta:                   {} ({:.6}%)", delta, pct);
+            eprintln!("  raw delegations:         {raw_deleg_count}");
+            eprintln!("  our delegations:         {deleg_count}");
+            eprintln!("  stake-only (no deleg):   {stake_only_count} creds, {} lovelace", stake_only_sum);
+            if delta > 0 {
+                eprintln!("  delta in ADA:            {} ADA", delta / 1_000_000);
+            }
+            eprintln!("=============================================\n");
+        }
+    }
+
+    /// Compare PRE vs POST nesBprev block counts for each era boundary.
+    /// The reward pulser is initialized at boundary N→N+1 with nesBcur = epoch N blocks.
+    /// After the boundary, nesBprev = epoch N blocks (what the pulser used).
+    /// PRE snapshot nesBprev = epoch (N-1) blocks.
+    /// POST snapshot nesBprev = epoch N blocks.
+    #[test]
+    fn block_production_pre_vs_post_all_eras() {
+        let pairs = [
+            ("Allegra 236→237", "snapshot_16588800.tar.gz", "snapshot_17020848.tar.gz"),
+            ("Mary    251→252", "snapshot_23068800.tar.gz", "snapshot_23500962.tar.gz"),
+            ("Alonzo  290→291", "snapshot_39916975.tar.gz", "snapshot_40348902.tar.gz"),
+            ("Babbage 365→366", "snapshot_72316896.tar.gz", "snapshot_72748820.tar.gz"),
+            ("Conway  507→508", "snapshot_133660855.tar.gz", "snapshot_134092810.tar.gz"),
+        ];
+
+        eprintln!("\n=== Block Production PRE vs POST nesBprev ===");
+        for (label, pre_file, post_file) in &pairs {
+            let pre_path = snapshots_dir().join(pre_file);
+            let post_path = snapshots_dir().join(post_file);
+            if !pre_path.exists() || !post_path.exists() {
+                eprintln!("  {label}: SKIPPED");
+                continue;
+            }
+
+            let pre_bytes = extract_state_from_tarball(&pre_path).unwrap();
+            let post_bytes = extract_state_from_tarball(&post_path).unwrap();
+
+            let pre_bp = parse_block_production(&pre_bytes).unwrap_or_default();
+            let post_bp = parse_block_production(&post_bytes).unwrap_or_default();
+
+            let pre_total: u64 = pre_bp.values().sum();
+            let post_total: u64 = post_bp.values().sum();
+            let pre_pools = pre_bp.len();
+            let post_pools = post_bp.len();
+
+            // Also get d from CBOR for eta computation
+            let (d_num, d_den) = parse_decentralization_param(&pre_bytes).unwrap_or((0, 1));
+            let d_val = d_num as f64 / d_den.max(1) as f64;
+            let expected = ((1.0 - d_val) * 21600.0).floor() as u64;
+
+            let eta_pre = if pre_total >= expected { 1.0 } else { pre_total as f64 / expected as f64 };
+            let eta_post = if post_total >= expected { 1.0 } else { post_total as f64 / expected as f64 };
+
+            eprintln!("  {label}:");
+            eprintln!("    d = {d_num}/{d_den} = {d_val:.4}, expected = {expected}");
+            eprintln!("    PRE  nesBprev: {pre_total:>6} blocks ({pre_pools} pools) → eta = {eta_pre:.6}");
+            eprintln!("    POST nesBprev: {post_total:>6} blocks ({post_pools} pools) → eta = {eta_post:.6}");
+            eprintln!("    delta:         {:>6} blocks", post_total as i64 - pre_total as i64);
+        }
+        eprintln!("=============================================\n");
+    }
+
+    /// Extract total reward account balances from DState.
+    ///
+    /// Pre-Conway: DState[0] = rewards map (credential → coin)
+    /// Conway: DState[0] = UMap, entries = array(4) [reward, deposit, poolDeleg, voteDeleg]
+    ///
+    /// Navigation: ES[1] → LS[0] → CertState → DState → first field
+    #[test]
+    fn total_reward_balances_all_pre_snapshots() {
+        let snapshots = [
+            ("Allegra PRE  236", "snapshot_16588800.tar.gz"),
+            ("Allegra POST 237", "snapshot_17020848.tar.gz"),
+            ("Mary    PRE  251", "snapshot_23068800.tar.gz"),
+            ("Mary    POST 252", "snapshot_23500962.tar.gz"),
+            ("Conway  PRE  507", "snapshot_133660855.tar.gz"),
+            ("Conway  POST 508", "snapshot_134092810.tar.gz"),
+        ];
+
+        eprintln!("\n=== Total Reward Balances from DState (PRE vs POST) ===");
+        for (label, filename) in &snapshots {
+            let path = snapshots_dir().join(filename);
+            if !path.exists() { continue; }
+            let bytes = extract_state_from_tarball(&path).unwrap();
+
+            // Navigate: NES → ES → ES[1] = LS → LS[0] = CertState
+            let off = navigate_to_nes(&bytes).unwrap();
+            let es = skip_nes_to_epoch_state(&bytes, off).unwrap();
+            let off = skip_cbor(&bytes, es).unwrap(); // skip ES[0] AccountState
+            let (ls_body, _) = read_array_header(&bytes, off).unwrap(); // ES[1] = LS
+            let (cs_body, cs_len) = read_array_header(&bytes, ls_body).unwrap(); // LS[0] = CertState
+
+            // Probe CertState elements to find DState
+            if cs_len == 2 {
+                for ci in 0..2 {
+                    let ci_off = if ci == 0 { cs_body } else { skip_cbor(&bytes, cs_body).unwrap() };
+                    let (_, cm, cv) = read_cbor_initial(&bytes, ci_off).unwrap();
+                    let csz = skip_cbor(&bytes, ci_off).unwrap() - ci_off;
+                    let ct = match cm { 4=>"array", 5=>"map", _=>"?" };
+                    eprintln!("    CS[{ci}]: {ct}(val={cv}) size={}",
+                        if csz > 1_000_000 { format!("{}MB", csz/1_000_000) }
+                        else if csz > 1_000 { format!("{}KB", csz/1_000) }
+                        else { format!("{csz}B") });
+                }
+            }
+
+            // Navigate to DState within CertState
+            let ds_off = if cs_len == 3 {
+                // Conway: [VState, PState, DState]
+                let o = skip_cbor(&bytes, cs_body).unwrap();
+                skip_cbor(&bytes, o).unwrap()
+            } else if cs_len == 2 {
+                // Try SECOND element (CertState might be [PState, DState])
+                skip_cbor(&bytes, cs_body).unwrap()
+            } else {
+                eprintln!("  {label}: unexpected CertState length {cs_len}");
+                continue;
+            };
+
+            // DState = array(N)
+            let (ds_body, ds_maj, ds_len) = read_cbor_initial(&bytes, ds_off).unwrap();
+            if ds_maj != 4 {
+                eprintln!("  {label}: DState not array (major={ds_maj})");
+                continue;
+            }
+
+            // Probe all DState fields to identify the rewards map
+            let mut probe_off = ds_body;
+            for i in 0..ds_len.min(6) {
+                let (_, fm, fv) = read_cbor_initial(&bytes, probe_off).unwrap();
+                let fsize = skip_cbor(&bytes, probe_off).unwrap() - probe_off;
+                let ft = match fm { 0=>"uint", 4=>"array", 5=>"map", 6=>"tag", _=>"?" };
+                let count = if fm == 5 { count_indef_map(&bytes, probe_off).unwrap_or(0) } else { 0 };
+                eprintln!("    DS[{i}]: {ft}(val={fv}) size={} count={count}",
+                    if fsize > 1_000_000 { format!("{}MB", fsize/1_000_000) }
+                    else if fsize > 1_000 { format!("{}KB", fsize/1_000) }
+                    else { format!("{fsize}B") });
+                probe_off = skip_cbor(&bytes, probe_off).unwrap();
+            }
+
+            // Probe first entry of DS[0] (the unified/rewards structure)
+            let (um_body, um_maj, um_val) = read_cbor_initial(&bytes, ds_body).unwrap();
+            if um_maj == 4 && um_val == 2 {
+                // array(2) = [credMap, ptrMap]
+                let (cred_body, cred_maj, cred_val) = read_cbor_initial(&bytes, um_body).unwrap();
+                let cred_size = skip_cbor(&bytes, um_body).unwrap() - um_body;
+                eprintln!("    DS[0] inner: array(2), credMap: {}(val={}) size={}",
+                    match cred_maj { 5=>"map", _=>"?" }, cred_val,
+                    if cred_size > 1_000_000 { format!("{}MB", cred_size/1_000_000) }
+                    else if cred_size > 1_000 { format!("{}KB", cred_size/1_000) }
+                    else { format!("{cred_size}B") });
+
+                // Probe first credential entry
+                let (mut co, _, _) = read_cbor_initial(&bytes, um_body).unwrap();
+                if co < bytes.len() && bytes[co] != 0xff {
+                    let key_start = co;
+                    co = skip_cbor(&bytes, co).unwrap();
+                    let key_size = co - key_start;
+                    let (val_body, val_maj, val_val) = read_cbor_initial(&bytes, co).unwrap();
+                    let val_size = skip_cbor(&bytes, co).unwrap() - co;
+                    let vt = match val_maj { 0=>"uint", 4=>"array", 5=>"map", 6=>"tag", _=>"?" };
+                    eprintln!("    first cred entry: key={key_size}B → {vt}(val={val_val}) {val_size}B");
+                    if val_maj == 4 && val_val <= 6 {
+                        let mut si = val_body;
+                        for i in 0..(val_val as u32).min(6) {
+                            let (_, sm, sv) = read_cbor_initial(&bytes, si).unwrap();
+                            let ss = skip_cbor(&bytes, si).unwrap() - si;
+                            let st = match sm { 0=>"uint", 2=>"bytes", 4=>"array", 5=>"map", 7=>"special", _=>"?" };
+                            eprintln!("      [{i}]: {st}(val={sv}) {ss}B");
+                            si = skip_cbor(&bytes, si).unwrap();
+                        }
+                    }
+                }
+            }
+
+            let (_first_body, first_maj, _first_val) = read_cbor_initial(&bytes, ds_body).unwrap();
+
+            let mut total_rewards: u128 = 0;
+            let mut count = 0u64;
+
+            if first_maj == 5 {
+                // Map — iterate entries
+                let (mut co, _, _) = read_cbor_initial(&bytes, ds_body).unwrap();
+                while co < bytes.len() && bytes[co] != 0xff {
+                    co = skip_cbor(&bytes, co).unwrap(); // key
+                    let (val_body, val_maj, val_val) = read_cbor_initial(&bytes, co).unwrap();
+                    if val_maj == 0 {
+                        total_rewards += val_val as u128;
+                    } else if val_maj == 4 && val_val >= 2 {
+                        // UMap entry: auto-detect format
+                        let (_, f0_maj, f0_val) = read_cbor_initial(&bytes, val_body).unwrap();
+                        if f0_maj == 0 {
+                            // Conway: [0]=reward(uint)
+                            total_rewards += f0_val as u128;
+                        } else {
+                            // Pre-Conway: [0]=rdpair(array), [1]=reward(uint)
+                            let off1 = skip_cbor(&bytes, val_body).unwrap();
+                            if let Ok((_, reward)) = read_uint(&bytes, off1) {
+                                total_rewards += reward as u128;
+                            }
+                        }
+                    }
+                    count += 1;
+                    co = skip_cbor(&bytes, co).unwrap();
+                }
+            } else if first_maj == 4 {
+                // UMap = array(2) [umElems, umPtrs]
+                let (umap_body, _) = read_array_header(&bytes, ds_body).unwrap();
+                let (mut co, _, val) = read_cbor_initial(&bytes, umap_body).unwrap();
+                let is_indef = val == u64::MAX;
+                let limit = if is_indef { u64::MAX } else { val };
+                for _ in 0..limit {
+                    if co >= bytes.len() || (is_indef && bytes[co] == 0xff) { break; }
+                    co = skip_cbor(&bytes, co).unwrap(); // key
+                    let (elem_body, elem_maj, _) = read_cbor_initial(&bytes, co).unwrap();
+                    let elem_end = skip_cbor(&bytes, co).unwrap();
+                    if elem_maj == 4 {
+                        // array(4) entry — check if [0] is uint (Conway) or array (pre-Conway)
+                        let (_, f0_maj, f0_val) = read_cbor_initial(&bytes, elem_body).unwrap();
+                        if f0_maj == 0 {
+                            // Conway: [0]=reward(uint), [1]=deposit(uint)
+                            total_rewards += f0_val as u128;
+                        } else {
+                            // Pre-Conway: [0]=rdpair(array), [1]=reward(uint)
+                            let off1 = skip_cbor(&bytes, elem_body).unwrap();
+                            if let Ok((_, reward)) = read_uint(&bytes, off1) {
+                                total_rewards += reward as u128;
+                            }
+                        }
+                    }
+                    count += 1;
+                    co = elem_end;
+                }
+            }
+
+            let header = parse_snapshot_header(&bytes).unwrap();
+            eprintln!("  {label}: DState=array({ds_len}), {count} creds, rewards={} ADA, treasury={} ADA",
+                total_rewards / 1_000_000, header.treasury / 1_000_000);
+        }
+        eprintln!("=========================================\n");
+    }
+
+    /// Extract nesRu from mid-epoch state dumps.
+    /// Mid-epoch states should have nesRu = SJust(...) with the in-progress
+    /// reward computation, unlike boundary snapshots where nesRu is cleared.
+    #[test]
+    fn nesru_from_mid_epoch_dumps() {
+        let dumps = [
+            ("Allegra epoch 242 (60%)", "corpus/ext_ledger_state_dumps/allegra/slot_19440024.bin"),
+            ("Mary    epoch 267 (60%)", "corpus/ext_ledger_state_dumps/mary/slot_30240073.bin"),
+        ];
+
+        eprintln!("\n=== nesRu from mid-epoch state dumps ===");
+        for (label, relpath) in &dumps {
+            let path = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+                .join("..").join("..").join(relpath);
+            if !path.exists() {
+                eprintln!("  {label}: SKIPPED ({relpath} not found)");
+                continue;
+            }
+
+            let data = std::fs::read(&path).unwrap();
+            eprintln!("  {label}: loaded {} bytes", data.len());
+
+            // .bin files are ExtLedgerState = array(2) [HeaderState, LedgerState]
+            let (ext_body, ext_len) = read_array_header(&data, 0).unwrap();
+            eprintln!("    outer: array({ext_len})");
+
+            // Probe first element
+            let (_, h_maj, h_val) = read_cbor_initial(&data, ext_body).unwrap();
+            let h_size = skip_cbor(&data, ext_body).unwrap() - ext_body;
+            eprintln!("    [0] HeaderState: {}(val={h_val}) size={}B",
+                match h_maj { 4=>"array", _=>"?" }, h_size);
+
+            let ls_start = skip_cbor(&data, ext_body).unwrap();
+            let (_, ls_maj, ls_val) = read_cbor_initial(&data, ls_start).unwrap();
+            let ls_size = data.len() - ls_start;
+            eprintln!("    [1] LedgerState: {}(val={ls_val}) at offset {ls_start}, ~{ls_size}B",
+                match ls_maj { 4=>"array", _=>"?" });
+
+            // The LedgerState might be the telescope directly
+            // or might need different navigation
+            // Probe its first few elements
+            if ls_maj == 4 {
+                let (mut si, _) = read_array_header(&data, ls_start).unwrap();
+                for i in 0..ls_val.min(5) as u32 {
+                    let (_, sm, sv) = read_cbor_initial(&data, si).unwrap();
+                    let ss = skip_cbor(&data, si).unwrap() - si;
+                    let st = match sm { 0=>"uint", 4=>"array", 5=>"map", 6=>"tag", _=>"?" };
+                    eprintln!("      LS[{i}]: {st}(val={sv}) size={}",
+                        if ss > 1_000_000 { format!("{}MB", ss/1_000_000) }
+                        else if ss > 1_000 { format!("{}KB", ss/1_000) }
+                        else { format!("{ss}B") });
+                    si = skip_cbor(&data, si).unwrap();
+                }
+            }
+
+            // Try navigate_to_nes on the raw data (tarball-style)
+            let nes_body = match navigate_to_nes(&data) {
+                Ok(off) => { eprintln!("    navigate_to_nes (tarball): OK at {off}"); off }
+                Err(_) => {
+                    // Try from ls_start (telescope start)
+                    match navigate_to_nes_from(&data, ls_start) {
+                        Ok(off) => { eprintln!("    navigate_to_nes_from: OK at {off}"); off }
+                        Err(e) => { eprintln!("    both navigations failed: {e}"); continue; }
+                    }
+                }
+            };
+
+            // NES[0] = epoch
+            let (off, epoch) = read_uint(&data, nes_body).unwrap();
+            eprintln!("    epoch: {epoch}");
+
+            // Skip NES[1..3] to reach NES[4] = nesRu
+            let off = skip_cbor(&data, off).unwrap(); // NES[1] bprev
+            let off = skip_cbor(&data, off).unwrap(); // NES[2] bcur
+            let off = skip_cbor(&data, off).unwrap(); // NES[3] EpochState
+
+            // NES[4] = nesRu = StrictMaybe (PulsingRewUpdate)
+            let (ru_body, ru_maj, ru_val) = read_cbor_initial(&data, off).unwrap();
+            let ru_size = skip_cbor(&data, off).unwrap() - off;
+            let ru_type = match ru_maj { 0=>"uint", 4=>"array", 5=>"map", 6=>"tag", 7=>"special", _=>"?" };
+
+            eprintln!("    nesRu: {ru_type}(val={ru_val}) size={}",
+                if ru_size > 1_000_000 { format!("{}MB", ru_size / 1_000_000) }
+                else if ru_size > 1_000 { format!("{}KB", ru_size / 1_000) }
+                else { format!("{ru_size}B") });
+
+            // If nesRu is non-empty (array with elements), probe its contents
+            if ru_maj == 4 && ru_val > 0 {
+                eprintln!("    nesRu is SJust! Probing reward update...");
+                let mut ri = ru_body;
+                for i in 0..(ru_val as u32).min(10) {
+                    let (_, rm, rv) = read_cbor_initial(&data, ri).unwrap();
+                    let rs = skip_cbor(&data, ri).unwrap() - ri;
+                    let rt = match rm { 0=>"uint", 1=>"negint", 4=>"array", 5=>"map", 6=>"tag", _=>"?" };
+                    let rs_str = if rs > 1_000_000 { format!("{}MB", rs/1_000_000) }
+                        else if rs > 1_000 { format!("{}KB", rs/1_000) }
+                        else { format!("{rs}B") };
+                    eprintln!("      RU[{i}]: {rt}(val={rv}) size={rs_str}");
+
+                    // Show values for uint/negint fields
+                    if rm == 0 {
+                        eprintln!("        → {} lovelace ({} ADA)", rv, rv / 1_000_000);
+                    }
+                    if rm == 1 {
+                        eprintln!("        → -{} lovelace (-{} ADA)", rv + 1, (rv + 1) / 1_000_000);
+                    }
+                    // Show map entry count
+                    if rm == 5 {
+                        let count = count_indef_map(&data, ri).unwrap_or(0);
+                        eprintln!("        → {count} entries");
+                    }
+                    ri = skip_cbor(&data, ri).unwrap();
+                }
+            } else if ru_maj == 4 && ru_val == 0 {
+                eprintln!("    nesRu is SNothing (empty array)");
+            }
+        }
+        eprintln!("========================================\n");
+    }
+
+    #[test]
+    fn mir_from_all_pre_snapshots() {
+        let snapshots = [
+            ("Allegra 236 PRE", "snapshot_16588800.tar.gz"),
+            ("Mary    251 PRE", "snapshot_23068800.tar.gz"),
+            ("Alonzo  290 PRE", "snapshot_39916975.tar.gz"),
+            ("Babbage 365 PRE", "snapshot_72316896.tar.gz"),
+            ("Conway  507 PRE", "snapshot_133660855.tar.gz"),
+        ];
+
+        eprintln!("\n=== InstantaneousRewards from PRE snapshots ===");
+        for (label, filename) in &snapshots {
+            let path = snapshots_dir().join(filename);
+            if !path.exists() { continue; }
+            let bytes = extract_state_from_tarball(&path).unwrap();
+            match parse_instantaneous_rewards(&bytes) {
+                Ok(mir) => {
+                    let total_res = mir.reserves_to_accounts as i64 + mir.delta_reserves;
+                    let total_trs = mir.treasury_to_accounts as i64 + mir.delta_treasury;
+                    eprintln!("  {label}:");
+                    eprintln!("    reserves→accounts: {} ({} entries, {} ADA)",
+                        mir.reserves_to_accounts, mir.reserves_to_accounts_count,
+                        mir.reserves_to_accounts / 1_000_000);
+                    eprintln!("    treasury→accounts: {} ({} entries, {} ADA)",
+                        mir.treasury_to_accounts, mir.treasury_to_accounts_count,
+                        mir.treasury_to_accounts / 1_000_000);
+                    eprintln!("    deltaReserves:     {} ({} ADA)", mir.delta_reserves,
+                        mir.delta_reserves / 1_000_000);
+                    eprintln!("    deltaTreasury:     {} ({} ADA)", mir.delta_treasury,
+                        mir.delta_treasury / 1_000_000);
+                    eprintln!("    net from reserves: {} ADA", total_res / 1_000_000);
+                    eprintln!("    net from treasury: {} ADA", total_trs / 1_000_000);
+                }
+                Err(e) => eprintln!("  {label}: ERROR: {e}"),
+            }
+        }
+        eprintln!("================================================\n");
+    }
+
+    #[test]
+    fn treasury_values_all_pre_snapshots() {
+        let snapshots = [
+            ("Allegra 236 PRE", "snapshot_16588800.tar.gz"),
+            ("Mary    251 PRE", "snapshot_23068800.tar.gz"),
+            ("Alonzo  290 PRE", "snapshot_39916975.tar.gz"),
+            ("Babbage 365 PRE", "snapshot_72316896.tar.gz"),
+            ("Conway  507 PRE", "snapshot_133660855.tar.gz"),
+        ];
+
+        eprintln!("\n=== Treasury & Reserves from PRE snapshots ===");
+        for (label, filename) in &snapshots {
+            let path = snapshots_dir().join(filename);
+            if !path.exists() { continue; }
+            let snap = LoadedSnapshot::from_tarball(&path).unwrap();
+            let treasury = snap.header.treasury;
+            let reserves = snap.header.reserves;
+            eprintln!("  {label}: treasury={:>15} ({:>8} ADA)  reserves={:>18} ({:>12} ADA)",
+                treasury, treasury / 1_000_000, reserves, reserves / 1_000_000);
+        }
+        eprintln!("=============================================\n");
+    }
+
+    /// Extract SS[3] (epoch fees) from PRE and POST snapshots for each boundary.
+    #[test]
+    fn epoch_fees_pre_vs_post() {
+        let pairs = [
+            ("Allegra 236→237", "snapshot_16588800.tar.gz", "snapshot_17020848.tar.gz"),
+            ("Mary    251→252", "snapshot_23068800.tar.gz", "snapshot_23500962.tar.gz"),
+            ("Alonzo  290→291", "snapshot_39916975.tar.gz", "snapshot_40348902.tar.gz"),
+            ("Babbage 365→366", "snapshot_72316896.tar.gz", "snapshot_72748820.tar.gz"),
+            ("Conway  507→508", "snapshot_133660855.tar.gz", "snapshot_134092810.tar.gz"),
+        ];
+
+        eprintln!("\n=== Epoch Fees (SS[3]) PRE vs POST ===");
+        for (label, pre_file, post_file) in &pairs {
+            let pre_path = snapshots_dir().join(pre_file);
+            let post_path = snapshots_dir().join(post_file);
+
+            let pre_fees = if pre_path.exists() {
+                let bytes = extract_state_from_tarball(&pre_path).unwrap();
+                parse_epoch_fees(&bytes).unwrap_or(0)
+            } else { 0 };
+
+            let post_fees = if post_path.exists() {
+                let bytes = extract_state_from_tarball(&post_path).unwrap();
+                parse_epoch_fees(&bytes).unwrap_or(0)
+            } else { 0 };
+
+            eprintln!("  {label}:");
+            eprintln!("    PRE  SS[3]: {:>15} ({:>8} ADA)", pre_fees, pre_fees / 1_000_000);
+            eprintln!("    POST SS[3]: {:>15} ({:>8} ADA)", post_fees, post_fees / 1_000_000);
+            eprintln!("    delta:      {:>15} ({:>8} ADA)", post_fees as i64 - pre_fees as i64,
+                (post_fees as i64 - pre_fees as i64) / 1_000_000);
+        }
+        eprintln!("======================================\n");
+    }
+
+    #[test]
+    fn parse_d_from_all_snapshots() {
+        let snapshots = [
+            ("Allegra 237 (post)", "snapshot_17020848.tar.gz"),
+            ("Allegra 251 (pre-Mary)", "snapshot_23068800.tar.gz"),
+            ("Mary    252 (post)", "snapshot_23500962.tar.gz"),
+            ("Mary    290 (pre-Alonzo)", "snapshot_39916975.tar.gz"),
+            ("Alonzo  291 (post)", "snapshot_40348902.tar.gz"),
+            ("Alonzo  365 (pre-Babbage)", "snapshot_72316896.tar.gz"),
+            ("Babbage 366 (post)", "snapshot_72748820.tar.gz"),
+            ("Babbage 507 (pre-Conway)", "snapshot_133660855.tar.gz"),
+            ("Conway  508 (post)", "snapshot_134092810.tar.gz"),
+        ];
+
+        eprintln!("\n=== Decentralization parameter from CBOR ===");
+        for (label, filename) in &snapshots {
+            let tarball = snapshots_dir().join(filename);
+            if !tarball.exists() {
+                eprintln!("  {label}: SKIPPED");
+                continue;
+            }
+            let state_bytes = extract_state_from_tarball(&tarball).unwrap();
+            match parse_decentralization_param(&state_bytes) {
+                Ok((num, den)) => {
+                    let d = num as f64 / den as f64;
+                    eprintln!("  {label}: d = {num}/{den} = {d:.6}");
+                }
+                Err(e) => {
+                    eprintln!("  {label}: ERROR: {e}");
+                }
+            }
+        }
+        eprintln!("=============================================\n");
+    }
+
+    /// Probe the exact CBOR structure of each go snapshot field.
+    ///
+    /// Check whether `totalActiveStake` exists as a separate precomputed
+    /// field in the snapshot, or is only derivable from the stake map.
+    #[test]
+    fn go_snapshot_field_structure() {
+        let snapshots = [
+            ("Allegra 237", "snapshot_17020848.tar.gz"),
+            ("Conway  507", "snapshot_133660855.tar.gz"),
+        ];
+
+        for (label, filename) in &snapshots {
+            let tarball = snapshots_dir().join(filename);
+            if !tarball.exists() { continue; }
+            let state_bytes = extract_state_from_tarball(&tarball).unwrap();
+
+            // Navigate to go snapshot = SnapShots[2]
+            let off = navigate_to_nes(&state_bytes).unwrap();
+            let es = skip_nes_to_epoch_state(&state_bytes, off).unwrap();
+            let ss_off = skip_n_fields(&state_bytes, es, 2).unwrap();
+            let (ss_inner, ss_len) = read_array_header(&state_bytes, ss_off).unwrap();
+            let go_off = skip_n_fields(&state_bytes, ss_inner, 2).unwrap();
+            let (go_inner, go_len) = read_array_header(&state_bytes, go_off).unwrap();
+
+            eprintln!("\n=== {label} go snapshot = array({go_len}) ===");
+
+            let mut field_off = go_inner;
+            for i in 0..go_len.min(10) {
+                let (body, maj, val) = read_cbor_initial(&state_bytes, field_off).unwrap();
+                let size = skip_cbor(&state_bytes, field_off).unwrap() - field_off;
+                let type_name = match maj {
+                    0 => "uint", 1 => "negint", 2 => "bytes", 3 => "text",
+                    4 => "array", 5 => "map", 6 => "tag", 7 => "special", _ => "?"
+                };
+                let size_str = if size > 1_000_000 { format!("{}MB", size / 1_000_000) }
+                    else if size > 1_000 { format!("{}KB", size / 1_000) }
+                    else { format!("{size}B") };
+                eprintln!("  [{i}]: {type_name}(val={val}) size={size_str}");
+
+                // If it's a uint, show the value (might be totalActiveStake)
+                if maj == 0 {
+                    eprintln!("       → value: {val} ({} ADA)", val / 1_000_000);
+                }
+
+                // If it's a map, show entry count and first entry structure
+                if maj == 5 || (maj == 5 && val == u64::MAX) {
+                    let count = count_indef_map(&state_bytes, field_off).unwrap_or(0);
+                    eprintln!("       → {count} entries");
+                    // Probe first entry
+                    let (mut mi, _, _) = read_cbor_initial(&state_bytes, field_off).unwrap();
+                    if mi < state_bytes.len() && state_bytes[mi] != 0xff {
+                        let (_, km, kv) = read_cbor_initial(&state_bytes, mi).unwrap();
+                        let ks = skip_cbor(&state_bytes, mi).unwrap() - mi;
+                        mi = skip_cbor(&state_bytes, mi).unwrap();
+                        let (_, vm, vv) = read_cbor_initial(&state_bytes, mi).unwrap();
+                        let vs = skip_cbor(&state_bytes, mi).unwrap() - mi;
+                        let kt = match km { 0=>"uint", 2=>"bytes", 4=>"array", 6=>"tag", _=>"?" };
+                        let vt = match vm { 0=>"uint", 2=>"bytes", 4=>"array", 6=>"tag", _=>"?" };
+                        eprintln!("       first entry: key={kt}({kv},{ks}B) → val={vt}({vv},{vs}B)");
+                    }
+                }
+
+                // If it's an array, probe sub-elements (might be [map, uint])
+                if maj == 4 && val <= 5 {
+                    let mut si = body;
+                    for j in 0..(val as u32).min(5) {
+                        let (_, sm, sv) = read_cbor_initial(&state_bytes, si).unwrap();
+                        let ss = skip_cbor(&state_bytes, si).unwrap() - si;
+                        let st = match sm { 0=>"uint", 5=>"map", 4=>"array", _=>"?" };
+                        let ss_str = if ss > 1_000_000 { format!("{}MB", ss / 1_000_000) }
+                            else if ss > 1_000 { format!("{}KB", ss / 1_000) }
+                            else { format!("{ss}B") };
+                        eprintln!("       [{j}]: {st}(val={sv}) size={ss_str}");
+                        if sm == 0 {
+                            eprintln!("            → uint value: {sv} ({} ADA)", sv / 1_000_000);
+                        }
+                        si = skip_cbor(&state_bytes, si).unwrap();
+                    }
+                }
+
+                field_off = skip_cbor(&state_bytes, field_off).unwrap();
+            }
+            eprintln!("=============================================\n");
         }
     }
 }

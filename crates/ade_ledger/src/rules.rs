@@ -225,6 +225,7 @@ fn apply_shelley_era_block_classified(
             era,
             track_utxo: current_state.track_utxo,
             cert_state,
+            max_lovelace_supply: current_state.max_lovelace_supply,
         },
         verdict,
     ))
@@ -391,8 +392,16 @@ fn apply_epoch_boundary_full(
     let pool_reward_pot = total_reward.0.saturating_sub(treasury_delta);
     let go = &state.epoch_state.snapshots.go;
 
-    // Compute total active stake from go snapshot
-    let total_stake: u64 = go.0.pool_stakes.values()
+    // Shelley totalStake = circulation = maxLovelaceSupply - reserves.
+    // Used for sigma (pool share) and pledge ratio in the maxPool formula.
+    // Confirmed from FreeVars_totalStake in Mary epoch 267 mid-epoch dump:
+    //   FreeVars_totalStake = 32,611,585,536,869,652 = maxSupply - reserves = circulation.
+    let total_stake: u64 = state.max_lovelace_supply
+        .saturating_sub(reserves.0);
+
+    // Total active stake = sum of delegated pool stakes from go snapshot.
+    // Used for sigmaA (apparent performance calculation).
+    let total_active_stake: u64 = go.0.pool_stakes.values()
         .map(|c| c.0)
         .fold(0u64, |a, b| a.saturating_add(b));
 
@@ -402,10 +411,7 @@ fn apply_epoch_boundary_full(
     let mut rewarded_pool_count = 0usize;
     let mut reward_deltas = std::collections::BTreeMap::new();
 
-    // Per-pool performance now uses apparentPerformance = β/σ with
-    // total_blocks_produced as denominator (not expected_total_blocks).
-
-    if total_stake > 0 && pool_reward_pot > 0 {
+    if total_stake > 0 && total_active_stake > 0 && pool_reward_pot > 0 {
         for (pool_id, pool_stake) in &go.0.pool_stakes {
             let params = match state.cert_state.pool.pools.get(pool_id) {
                 Some(p) => p,
@@ -434,23 +440,18 @@ fn apply_epoch_boundary_full(
                 params.margin.1 as i128,
             ).unwrap_or_else(crate::rational::Rational::zero);
 
-            // Shelley apparentPerformance = min(1, β/σ)
-            // where β = pool_blocks / total_blocks, σ = pool_stake / total_stake
-            //
-            // Equivalent: min(1, pool_blocks / (sigma * total_blocks))
-            //
-            // Note: total_blocks here is total pool blocks from nesBprev (14091),
-            // NOT expected pool blocks (14688). The Shelley spec uses the actual
-            // total block count, not the expected count.
+            // sigma = pool_stake / totalStake (circulation) — for maxPool bracket
+            // sigmaA = pool_stake / totalActiveStake — for apparentPerformance
             let sigma = crate::rational::Rational::new(
                 pool_stake.0 as i128, total_stake as i128,
             ).unwrap_or_else(crate::rational::Rational::zero);
 
-            // apparentPerformance as exact Rational: pool_blocks / (sigma * T)
-            // = pool_blocks * total_stake / (pool_stake * total_blocks)
+            // apparentPerformance = beta / sigmaA
+            // = (blocks / totalBlocks) / (pool_stake / totalActiveStake)
+            // = blocks * totalActiveStake / (totalBlocks * pool_stake)
             let performance = if total_blocks_produced > 0 && pool_stake.0 > 0 {
                 let perf = crate::rational::Rational::new(
-                    (blocks_produced as i128) * (total_stake as i128),
+                    (blocks_produced as i128) * (total_active_stake as i128),
                     (total_blocks_produced as i128) * (pool_stake.0 as i128),
                 ).unwrap_or_else(crate::rational::Rational::one);
                 // Cap at 1 — pool can't earn more than maxPool
@@ -750,6 +751,7 @@ fn apply_epoch_boundary_full(
         era: state.era,
         track_utxo: state.track_utxo,
         cert_state,
+        max_lovelace_supply: state.max_lovelace_supply,
     };
 
     (new_state, accounting)

@@ -795,6 +795,7 @@ mod tests {
             era: CardanoEra::Shelley,
             track_utxo: false,
             cert_state: CertState::new(),
+            max_lovelace_supply: 45_000_000_000_000_000,
         };
 
         let new_mark = StakeSnapshot::new();

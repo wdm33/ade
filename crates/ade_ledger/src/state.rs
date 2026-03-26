@@ -66,6 +66,9 @@ pub struct LedgerState {
     /// Accumulated certificate state (delegations, pools, retirements).
     /// Populated during replay when track_utxo is true.
     pub cert_state: CertState,
+    /// Maximum lovelace supply (from Shelley genesis). Default: 45B ADA.
+    /// Used for `circulation = maxLovelaceSupply - reserves` in reward formula.
+    pub max_lovelace_supply: u64,
 }
 
 impl LedgerState {
@@ -77,6 +80,7 @@ impl LedgerState {
             era,
             track_utxo: false,
             cert_state: CertState::new(),
+            max_lovelace_supply: 45_000_000_000_000_000, // 45B ADA mainnet default
         }
     }
 }
