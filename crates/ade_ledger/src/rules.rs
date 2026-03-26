@@ -450,10 +450,9 @@ fn apply_epoch_boundary_full(
             ).unwrap_or_else(crate::rational::Rational::zero);
 
             // apparentPerformance = beta / sigma
-            // = (blocks / totalBlocks) / (pool_stake / totalStake)
-            // = blocks * totalStake / (totalBlocks * pool_stake)
-            // Note: both sigma and sigmaA use totalStake (= circulation).
-            // This matches the deployed oracle behavior (confirmed Mary 267).
+            // Both sigma and sigmaA use totalStake (= circulation).
+            // Confirmed: circ+circ gives 99-100% match; circ+active gives 94-96%.
+            // perf = blocks * totalStake / (totalBlocks * pool_stake)
             let performance = if total_blocks_produced > 0 && pool_stake.0 > 0 {
                 let perf = crate::rational::Rational::new(
                     (blocks_produced as i128) * (total_stake as i128),
