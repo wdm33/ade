@@ -900,6 +900,10 @@ fn parse_pool_params_map(
             let (acct_start, _, acct_len) = read_cbor_initial(state_cbor, f5)?;
             let reward_acct = state_cbor[acct_start..acct_start + acct_len as usize].to_vec();
 
+            // [6] poolOwners: TODO — parse for pledge satisfaction check
+            // Requires iterating the owner set and looking up each owner's
+            // delegated stake in the pool. Deferred to CE-72 pledge slice.
+
             pools.push((Hash32(pool_hash), pledge, cost, margin_num, margin_den, reward_acct));
         }
 
