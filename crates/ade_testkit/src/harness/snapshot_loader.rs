@@ -323,27 +323,10 @@ impl LoadedSnapshot {
 
         // Build pool state
         let mut pools = BTreeMap::new();
-        let hex_short = |b: &[u8]| -> String {
-            b.iter().take(4).map(|x| format!("{:02x}", x)).collect::<String>()
-        };
-        let mut _owner_match_count = 0u32;
-        let mut _owner_total = 0u32;
         for (pool_hash, pledge, cost, margin_num, margin_den, reward_acct, owner_hashes) in &pools_raw {
             let mut pool_bytes = [0u8; 28];
             pool_bytes.copy_from_slice(&pool_hash.0[..28]);
             let pool_id = PoolId(Hash28(pool_bytes));
-
-            // Debug: check if owners appear in delegations
-            for oh in owner_hashes {
-                let owner_cred = StakeCredential(Hash28(*oh));
-                let found = delegations.contains_key(&owner_cred);
-                if _owner_total < 3 {
-                    eprintln!("  owner_debug: pool={} owner={} found_in_deleg={}",
-                        hex_short(&pool_bytes), hex_short(oh), found);
-                }
-                if found { _owner_match_count += 1; }
-                _owner_total += 1;
-            }
 
             pools.insert(pool_id.clone(), PoolParams {
                 pool_id,
@@ -356,12 +339,6 @@ impl LoadedSnapshot {
                     .map(|h| ade_types::Hash28(*h))
                     .collect(),
             });
-        }
-
-        if _owner_total > 0 {
-            eprintln!("  owner_summary: {}/{} owners found in delegations ({:.1}%)",
-                _owner_match_count, _owner_total,
-                _owner_match_count as f64 / _owner_total as f64 * 100.0);
         }
 
         CertState {
