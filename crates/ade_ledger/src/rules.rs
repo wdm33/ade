@@ -534,11 +534,24 @@ fn apply_epoch_boundary_full(
                 continue;
             }
 
-            // TODO: Shelley pledge satisfaction check
-            // Haskell: if pledge > sum(owner_stakes) → maxPool = 0
-            // Requires parsing _poolOwners (Set of KeyHash) from pool params
-            // and summing their delegated stakes. Not yet implemented —
-            // using single reward_account as proxy excludes ~25% of pools.
+            // Shelley pledge satisfaction check:
+            // if pledge > sum(owner_stakes) → maxPool = 0 (no reward)
+            // owners = _poolOwners from pool registration params
+            // Shelley pledge satisfaction: if pledge > sum(owner_stakes) → maxPool = 0
+            // Only apply when owners are reliably parsed (non-empty).
+            // The check computes ostake = sum of each owner's delegated stake in this pool.
+            if !params.owners.is_empty() && params.pledge.0 > 0 {
+                let owner_stake: u64 = params.owners.iter()
+                    .map(|owner| {
+                        delegator_stakes.get(owner)
+                            .map(|c| c.0)
+                            .unwrap_or(0)
+                    })
+                    .sum();
+                if params.pledge.0 > owner_stake {
+                    continue;
+                }
+            }
 
             // Debug: log first 3 pools for formula verification
             if rewarded_pool_count < 3 {

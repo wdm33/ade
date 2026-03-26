@@ -323,7 +323,7 @@ impl LoadedSnapshot {
 
         // Build pool state
         let mut pools = BTreeMap::new();
-        for (pool_hash, pledge, cost, margin_num, margin_den, reward_acct) in &pools_raw {
+        for (pool_hash, pledge, cost, margin_num, margin_den, reward_acct, owner_hashes) in &pools_raw {
             let mut pool_bytes = [0u8; 28];
             pool_bytes.copy_from_slice(&pool_hash.0[..28]);
             let pool_id = PoolId(Hash28(pool_bytes));
@@ -335,7 +335,9 @@ impl LoadedSnapshot {
                 cost: Coin(*cost),
                 margin: (*margin_num, *margin_den),
                 reward_account: reward_acct.clone(),
-                owners: Vec::new(), // TODO: parse _poolOwners from pool params[6]
+                owners: owner_hashes.iter()
+                    .map(|h| ade_types::Hash28(*h))
+                    .collect(),
             });
         }
 
@@ -851,8 +853,8 @@ pub fn parse_go_stake_distribution(
     Ok(stakes)
 }
 
-/// Pool params tuple: (pool_hash, pledge, cost, margin_num, margin_den, reward_account).
-type PoolParamsTuple = (Hash32, u64, u64, u64, u64, Vec<u8>);
+/// Pool params tuple: (pool_hash, pledge, cost, margin_num, margin_den, reward_account, owners).
+type PoolParamsTuple = (Hash32, u64, u64, u64, u64, Vec<u8>, Vec<[u8; 28]>);
 
 /// Parse pool params from the go snapshot.
 pub fn parse_go_pool_params(
@@ -900,11 +902,45 @@ fn parse_pool_params_map(
             let (acct_start, _, acct_len) = read_cbor_initial(state_cbor, f5)?;
             let reward_acct = state_cbor[acct_start..acct_start + acct_len as usize].to_vec();
 
-            // [6] poolOwners: TODO — parse for pledge satisfaction check
-            // Requires iterating the owner set and looking up each owner's
-            // delegated stake in the pool. Deferred to CE-72 pledge slice.
+            // [6] poolOwners: set of key hashes (28 bytes each)
+            // Encoding varies: tag(258, array[bytes(28)...]) or array[bytes(28)...]
+            // Owner entries may also be credential-wrapped: array(2, [type, bytes(28)])
+            let f6 = skip_cbor(state_cbor, f5)?;
+            let mut owners = Vec::new();
+            if val_len >= 7 {
+                let (own_body, own_maj, own_val) = read_cbor_initial(state_cbor, f6)?;
+                // Unwrap tag(258) if present
+                let (arr_body, arr_maj, arr_val) = if own_maj == 6 {
+                    read_cbor_initial(state_cbor, own_body)?
+                } else {
+                    (own_body, own_maj, own_val)
+                };
+                if arr_maj == 4 {
+                    let mut oi = arr_body;
+                    for _ in 0..arr_val {
+                        if oi >= state_cbor.len() { break; }
+                        let (entry_body, entry_maj, entry_len) = read_cbor_initial(state_cbor, oi)?;
+                        if entry_maj == 2 && entry_len >= 28 {
+                            // Raw bytes(28) key hash
+                            let mut owner = [0u8; 28];
+                            owner.copy_from_slice(&state_cbor[entry_body..entry_body + 28]);
+                            owners.push(owner);
+                        } else if entry_maj == 4 && entry_len == 2 {
+                            // Credential-wrapped: array(2, [type_tag, bytes(28)])
+                            let hash_off = skip_cbor(state_cbor, entry_body)?; // skip type
+                            let (hash_start, hash_maj, hash_len) = read_cbor_initial(state_cbor, hash_off)?;
+                            if hash_maj == 2 && hash_len >= 28 {
+                                let mut owner = [0u8; 28];
+                                owner.copy_from_slice(&state_cbor[hash_start..hash_start + 28]);
+                                owners.push(owner);
+                            }
+                        }
+                        oi = skip_cbor(state_cbor, oi)?;
+                    }
+                }
+            }
 
-            pools.push((Hash32(pool_hash), pledge, cost, margin_num, margin_den, reward_acct));
+            pools.push((Hash32(pool_hash), pledge, cost, margin_num, margin_den, reward_acct, owners));
         }
 
         co = skip_cbor(state_cbor, val_start)?;

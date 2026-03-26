@@ -1283,9 +1283,9 @@ fn ce71_root_cause_isolation() {
     // Index by pool hash for comparison
     type ParamTuple = (u64, u64, u64, u64); // (pledge, cost, margin_num, margin_den)
     #[allow(clippy::type_complexity)]
-    let index_params = |params: &[(ade_types::Hash32, u64, u64, u64, u64, Vec<u8>)]| -> BTreeMap<[u8; 28], ParamTuple> {
+    let index_params = |params: &[(ade_types::Hash32, u64, u64, u64, u64, Vec<u8>, Vec<[u8; 28]>)]| -> BTreeMap<[u8; 28], ParamTuple> {
         params.iter()
-            .map(|(h, pledge, cost, m_num, m_den, _)| {
+            .map(|(h, pledge, cost, m_num, m_den, _, _)| {
                 let mut k = [0u8; 28];
                 k.copy_from_slice(&h.0[..28]);
                 (k, (*pledge, *cost, *m_num, *m_den))
@@ -1491,7 +1491,7 @@ fn ce71_root_cause_isolation() {
     boundary_state.epoch_state.epoch_fees = ade_types::tx::Coin(epoch_fees);
 
     // Overwrite go snapshot pool params with mark snapshot params (newer)
-    for (pool_hash, pledge, cost, margin_num, margin_den, reward_acct) in &pre_mark_params {
+    for (pool_hash, pledge, cost, margin_num, margin_den, reward_acct, _owners) in &pre_mark_params {
         let mut pool_bytes = [0u8; 28];
         pool_bytes.copy_from_slice(&pool_hash.0[..28]);
         let pool_id = ade_types::tx::PoolId(ade_types::Hash28(pool_bytes));
