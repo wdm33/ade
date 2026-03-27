@@ -2321,3 +2321,171 @@ fn reward_formula_bisection_all_eras() {
 
     eprintln!("{}\n", "=".repeat(70));
 }
+
+/// Regular epoch boundary comparison: Alonzo 310→311 and Babbage 406→407.
+/// Tests reward formula at NON-HFC boundaries to isolate HFC-specific effects.
+/// Uses direct formula computation (no boundary block replay needed).
+#[test]
+fn regular_epoch_boundary_comparison() {
+    let pairs: &[(&str, &str, &str)] = &[
+        ("Alonzo  310→311", "snapshot_48557136.tar.gz", "snapshot_48989209.tar.gz"),
+        ("Babbage 406→407", "snapshot_90028903.tar.gz", "snapshot_90461000.tar.gz"), // if available
+    ];
+
+    eprintln!("\n=== REGULAR EPOCH BOUNDARY COMPARISON ===");
+
+    for (label, pre_file, post_file) in pairs {
+        let pre_path = snapshots_dir().join(pre_file);
+        let post_path = snapshots_dir().join(post_file);
+        if !pre_path.exists() || !post_path.exists() {
+            eprintln!("  {label}: SKIPPED (snapshots not available)");
+            continue;
+        }
+
+        let pre_snap = LoadedSnapshot::from_tarball(&pre_path).unwrap();
+        let post_snap = LoadedSnapshot::from_tarball(&post_path).unwrap();
+
+        let oracle_res_decr = pre_snap.header.reserves.saturating_sub(post_snap.header.reserves);
+        let oracle_trs_incr = post_snap.header.treasury.saturating_sub(pre_snap.header.treasury);
+
+        let pre_state = pre_snap.to_ledger_state();
+        let post_state = post_snap.to_ledger_state();
+
+        // Compute reward formula for FIXED and POST variants
+        let variants: [(&str, &ade_ledger::state::LedgerState); 2] = [
+            ("FIXED", &{
+                let mut s = pre_state.clone();
+                s.epoch_state.block_production = post_state.epoch_state.block_production.clone();
+                s.epoch_state.epoch_fees = ade_types::tx::Coin(post_snap.header.epoch_fees);
+                s.epoch_state.snapshots = post_state.epoch_state.snapshots.clone();
+                s.cert_state = post_state.cert_state.clone();
+                s
+            }),
+            ("POST ", &{
+                let mut s = pre_state.clone();
+                s.epoch_state.block_production = post_state.epoch_state.block_production.clone();
+                s.epoch_state.epoch_fees = ade_types::tx::Coin(post_snap.header.epoch_fees);
+                s
+            }),
+        ];
+
+        eprintln!("  {label}:");
+        eprintln!("    oracle res Δ: {} ({} ADA)", oracle_res_decr, oracle_res_decr / 1_000_000);
+        eprintln!("    oracle trs Δ: {} ({} ADA)", oracle_trs_incr, oracle_trs_incr / 1_000_000);
+
+        for (vname, state) in &variants {
+            let go = &state.epoch_state.snapshots.go;
+            let total_active: u64 = go.0.pool_stakes.values().map(|c| c.0).sum();
+            let total_blocks: u64 = state.epoch_state.block_production.values().sum();
+            let reserves = state.epoch_state.reserves.0;
+            let circ = state.max_lovelace_supply.saturating_sub(reserves);
+
+            // Compute pot chain
+            let d = &state.protocol_params.decentralization;
+            let d_thresh = ade_ledger::rational::Rational::new(4, 5).unwrap();
+            let eta = if d.numerator() * d_thresh.denominator() >= d_thresh.numerator() * d.denominator() {
+                ade_ledger::rational::Rational::one()
+            } else {
+                let one_minus_d = ade_ledger::rational::Rational::one().checked_sub(d).unwrap();
+                let expected = one_minus_d.checked_mul(
+                    &ade_ledger::rational::Rational::from_integer(21600)
+                ).unwrap().floor().max(1) as u64;
+                if total_blocks >= expected {
+                    ade_ledger::rational::Rational::one()
+                } else {
+                    ade_ledger::rational::Rational::new(total_blocks as i128, expected as i128).unwrap()
+                }
+            };
+
+            let rho = ade_ledger::rational::Rational::new(3, 1000).unwrap();
+            let reserves_rat = ade_ledger::rational::Rational::from_integer(reserves as i128);
+            let dr1 = reserves_rat.checked_mul(&rho).unwrap()
+                .checked_mul(&eta).unwrap().floor().max(0) as u64;
+            let total_reward = dr1 + state.epoch_state.epoch_fees.0;
+            let dt1 = (ade_ledger::rational::Rational::from_integer(total_reward as i128)
+                .checked_mul(&ade_ledger::rational::Rational::new(1, 5).unwrap()).unwrap())
+                .floor().max(0) as u64;
+            let pool_pot = total_reward - dt1;
+
+            // Use circulation for sigma (Mary+ formula)
+            let total_stake = circ;
+
+            // Compute per-pool rewards
+            let a0 = ade_ledger::rational::Rational::new(3, 10).unwrap();
+            let one_plus_a0 = ade_ledger::rational::Rational::new(13, 10).unwrap();
+            let z = ade_ledger::rational::Rational::new(1, 500).unwrap();
+
+            let mut sum_rewards = 0u64;
+            let mut pool_count = 0usize;
+
+            for (pool_id, pool_stake) in &go.0.pool_stakes {
+                let params = match state.cert_state.pool.pools.get(pool_id) {
+                    Some(p) => p,
+                    None => continue,
+                };
+                let blocks = state.epoch_state.block_production.get(pool_id).copied().unwrap_or(0);
+                if blocks == 0 || pool_stake.0 == 0 { continue; }
+
+                let sigma = ade_ledger::rational::Rational::new(
+                    pool_stake.0 as i128, total_stake as i128).unwrap();
+                let s = ade_ledger::rational::Rational::new(
+                    params.pledge.0 as i128, total_stake as i128).unwrap();
+                let sigma_prime = if sigma.numerator() * z.denominator() > z.numerator() * sigma.denominator()
+                    { z.clone() } else { sigma.clone() };
+                let s_prime = if s.numerator() * z.denominator() > z.numerator() * s.denominator()
+                    { z.clone() } else { s.clone() };
+
+                // Bracket (with /z fix)
+                let f4 = z.checked_sub(&sigma_prime).and_then(|d| d.checked_div(&z));
+                let f3 = f4.and_then(|f| s_prime.checked_mul(&f)
+                    .and_then(|sf| sigma_prime.checked_sub(&sf))
+                    .and_then(|n| n.checked_div(&z)));
+                let bracket = f3.and_then(|f| s_prime.checked_mul(&a0)
+                    .and_then(|r| r.checked_mul(&f)))
+                    .and_then(|pb| sigma_prime.checked_add(&pb));
+
+                let max_pool = match bracket {
+                    Some(br) => ade_ledger::rational::Rational::from_integer(pool_pot as i128)
+                        .checked_mul(&br)
+                        .and_then(|r| r.checked_div(&one_plus_a0))
+                        .map(|r| r.floor().max(0) as u64)
+                        .unwrap_or(0),
+                    None => 0,
+                };
+                if max_pool == 0 { continue; }
+
+                // Pledge check (Mary+)
+                if !params.owners.is_empty() && params.pledge.0 > 0 {
+                    let delegator_stakes = &go.0.delegations;
+                    let ostake: u64 = params.owners.iter()
+                        .map(|o| delegator_stakes.get(o).map(|(_, c)| c.0).unwrap_or(0))
+                        .sum();
+                    if params.pledge.0 > ostake { continue; }
+                }
+
+                let perf = ade_ledger::rational::Rational::new(
+                    (blocks as i128) * (total_stake as i128),
+                    (total_blocks as i128) * (pool_stake.0 as i128),
+                ).unwrap_or_else(ade_ledger::rational::Rational::one);
+                let perf_capped = if perf.numerator() > perf.denominator()
+                    { ade_ledger::rational::Rational::one() } else { perf };
+
+                let f = ade_ledger::rational::Rational::from_integer(max_pool as i128)
+                    .checked_mul(&perf_capped)
+                    .map(|r| r.floor().max(0) as u64)
+                    .unwrap_or(0);
+
+                sum_rewards += f;
+                pool_count += 1;
+            }
+
+            let our_dr2 = pool_pot - sum_rewards;
+            let our_res_decr = dr1 - our_dr2;
+            let ratio = our_res_decr as f64 / oracle_res_decr as f64 * 100.0;
+            let trs_headroom = oracle_trs_incr as i64 - dt1 as i64;
+
+            eprintln!("    {vname}: ratio={ratio:>8.4}%  sum={sum_rewards}  pools={pool_count}  blocks={total_blocks}  trs_h={}", trs_headroom / 1_000_000);
+        }
+    }
+    eprintln!("==========================================\n");
+}

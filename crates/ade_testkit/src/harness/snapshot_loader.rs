@@ -3756,6 +3756,8 @@ mod tests {
             ("Mary    252 POST", "snapshot_23500962.tar.gz"),
             ("Alonzo  290 PRE ", "snapshot_39916975.tar.gz"),
             ("Alonzo  291 POST", "snapshot_40348902.tar.gz"),
+            ("Alonzo  310 PRE ", "snapshot_48557136.tar.gz"),
+            ("Alonzo  311 POST", "snapshot_48989209.tar.gz"),
             ("Babbage 365 PRE ", "snapshot_72316896.tar.gz"),
             ("Babbage 366 POST", "snapshot_72748820.tar.gz"),
             ("Conway  507 PRE ", "snapshot_133660855.tar.gz"),
