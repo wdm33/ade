@@ -399,17 +399,31 @@ fn apply_epoch_boundary_full(
 
     // totalStake: the denominator for sigma and pledge ratio in maxPool.
     //
-    // Pre-Mary (Shelley/Allegra): totalStake = activeStake.
-    //   Proven exact for Allegra epoch 236→237 (99.1% + MIR = 100.0%).
+    // Haskell source (confirmed): `totalStake = circulation es maxSupply`
+    // where `circulation (EpochState acnt _ _ _) supply = supply <-> casReserves acnt`
+    // i.e. totalStake = maxLovelaceSupply - reserves. Same for ALL protocol versions.
     //
-    // Mary+: totalStake = circulation = maxLovelaceSupply - reserves.
-    //   Confirmed from FreeVars_totalStake in Mary epoch 267 mid-epoch dump.
-    //   Mary 252 FIXED: 100.10%.
+    // Pre-Mary (Shelley/Allegra, PV < 4): totalStake = activeStake.
+    //   Proven exact for Allegra epoch 236→237 (99.1% + MIR = 100.0%).
+    //   The Haskell source uses circulation for all eras, but Allegra empirically
+    //   matches activeStake. The PV < 4 branch may reflect a different code path
+    //   in the pre-Mary Haskell implementation (before the SnapShot refactor).
+    //
+    // Mary+ (PV >= 4): totalStake = circulation = maxLovelaceSupply - reserves.
+    //   Confirmed from: (1) FreeVars_totalStake in Mary epoch 267 mid-epoch dump,
+    //   (2) Haskell source: `circulation` function in PulsingReward.hs.
+    //   Alonzo 310→311: 99.95%. Babbage 406→407: 97.97%. Conway 528→529: 100.38%.
+    //
+    // Dual-denominator (PV 4+, confirmed from Haskell source + oracle data):
+    //   sigma  = poolStake / totalStake (circulation) — for maxPool bracket
+    //   sigmaA = poolStake / totalActiveStake          — for apparentPerformance
+    //   apparentPerformance is NOT capped at 1.0 (over-performing pools get more than maxPool)
+    //   Confirmed: PREALL/circ/actv/noc gives 100.0000% for Babbage 406→407 and Conway 528→529.
     let total_stake: u64 = if state.protocol_params.protocol_major < 4 {
         // Shelley (2) / Allegra (3): use activeStake
         total_active_stake
     } else {
-        // Mary (4) / Alonzo (5+): use circulation
+        // Mary (4+): use circulation = maxLovelaceSupply - reserves
         state.max_lovelace_supply.saturating_sub(reserves.0)
     };
 
@@ -420,7 +434,6 @@ fn apply_epoch_boundary_full(
     let mut reward_deltas = std::collections::BTreeMap::new();
     let mut _sum_f = 0u64; // sum of raw f values (floor(maxPool*perf))
     let mut _sum_max_pool = 0u64; // sum of maxPool values (before perf multiply)
-    let mut _n_perf_capped = 0u64; // pools where perf was capped at 1.0
 
     eprintln!("  [epoch_boundary] protocol_major={} total_stake={} active_stake={} pool_pot={} go_pools={} cert_pools={}",
         state.protocol_params.protocol_major, total_stake, total_active_stake, pool_reward_pot,
@@ -461,19 +474,22 @@ fn apply_epoch_boundary_full(
                 pool_stake.0 as i128, total_stake as i128,
             ).unwrap_or_else(crate::rational::Rational::zero);
 
-            // apparentPerformance = beta / sigma
-            // Both sigma and sigmaA use totalStake (= circulation).
-            // Confirmed: circ+circ gives 99-100% match; circ+active gives 94-96%.
-            // perf = blocks * totalStake / (totalBlocks * pool_stake)
+            // apparentPerformance = beta / sigmaA (Haskell: mkApparentPerformance)
+            //   beta = blocks / totalBlocks
+            //   sigmaA = poolStake / totalActiveStake
+            //   perf = beta / sigmaA = blocks * totalActiveStake / (totalBlocks * poolStake)
+            //   NOT capped at 1.0 — over-performing pools earn more than maxPool.
+            //   Confirmed: uncapped + activeStake gives 100.0000% for Babbage/Conway.
+            let perf_denom = if state.protocol_params.protocol_major < 4 {
+                total_active_stake // Allegra: same as totalStake (both use activeStake)
+            } else {
+                total_active_stake // Mary+: sigmaA uses activeStake (NOT circulation)
+            };
             let performance = if total_blocks_produced > 0 && pool_stake.0 > 0 {
-                let perf = crate::rational::Rational::new(
-                    (blocks_produced as i128) * (total_stake as i128),
+                crate::rational::Rational::new(
+                    (blocks_produced as i128) * (perf_denom as i128),
                     (total_blocks_produced as i128) * (pool_stake.0 as i128),
-                ).unwrap_or_else(crate::rational::Rational::one);
-                // Cap at 1 — pool can't earn more than maxPool
-                if perf.numerator() > perf.denominator() {
-                    crate::rational::Rational::one()
-                } else { perf }
+                ).unwrap_or_else(crate::rational::Rational::one)
             } else {
                 crate::rational::Rational::one()
             };
@@ -612,7 +628,7 @@ fn apply_epoch_boundary_full(
             _sum_f += pool_max;
             _sum_max_pool += max_pool;
             if performance.numerator() >= performance.denominator() {
-                _n_perf_capped += 1;
+                // (performance uncapped — over-performing pools earn more than maxPool)
             }
 
             if pool_max <= params.cost.0 {
@@ -692,8 +708,8 @@ fn apply_epoch_boundary_full(
 
     // Debug: compare sum(f) with sum(leader+member)
     let sum_rewards_check = total_pool_rewards.saturating_add(total_member_rewards);
-    eprintln!("  [reward_debug] sum_f={} sum_maxPool={} perf_capped={}/{} pools={} totalStake={} activeStake={} sum_f/pot={:.4}",
-        _sum_f, _sum_max_pool, _n_perf_capped, rewarded_pool_count,
+    eprintln!("  [reward_debug] sum_f={} sum_maxPool={} pools={} totalStake={} activeStake={} sum_f/pot={:.4}",
+        _sum_f, _sum_max_pool,
         rewarded_pool_count, total_stake, total_active_stake,
         _sum_f as f64 / pool_reward_pot as f64);
 

@@ -1570,6 +1570,95 @@ pub fn parse_decentralization_param(
     }
 }
 
+// ── Public wrappers for CBOR navigation (used by integration tests) ──
+
+pub fn navigate_to_nes_pub(data: &[u8]) -> Result<usize, HarnessError> { navigate_to_nes(data) }
+pub fn read_array_header_pub(data: &[u8], off: usize) -> Result<(usize, u32), HarnessError> { read_array_header(data, off) }
+pub fn read_uint_pub(data: &[u8], off: usize) -> Result<(usize, u64), HarnessError> { read_uint(data, off) }
+pub fn skip_cbor_pub(data: &[u8], off: usize) -> Result<usize, HarnessError> { skip_cbor(data, off) }
+pub fn read_cbor_initial_pub(data: &[u8], off: usize) -> Result<(usize, u8, u64), HarnessError> { read_cbor_initial(data, off) }
+
+/// Parse the aggregate deposits value from UTxOState[1].
+///
+/// Path: NES → ES → LS[1] = UTxOState → UTxOState[1] = deposited (uint)
+/// On-disk: LS[0] = CertState, LS[1] = UTxOState
+pub fn parse_utxo_deposits(state_cbor: &[u8]) -> Result<u64, HarnessError> {
+    let off = navigate_to_nes(state_cbor)?;
+    let es = skip_nes_to_epoch_state(state_cbor, off)?;
+    let off = skip_cbor(state_cbor, es)?; // skip AccountState
+    let (ls_body, _) = read_array_header(state_cbor, off)?;
+    let off = skip_cbor(state_cbor, ls_body)?; // skip LS[0] = CertState
+    let (utxo_body, _) = read_array_header(state_cbor, off)?;
+    let off = skip_cbor(state_cbor, utxo_body)?; // skip UTxOState[0] = UTxO
+    let (_, deposited) = read_uint(state_cbor, off)?;
+    Ok(deposited)
+}
+
+/// Reward-relevant protocol parameters parsed from CBOR.
+#[derive(Debug)]
+pub struct RewardParams {
+    pub n_opt: u64,
+    pub a0_num: u64,
+    pub a0_den: u64,
+    pub rho_num: u64,
+    pub rho_den: u64,
+    pub tau_num: u64,
+    pub tau_den: u64,
+}
+
+/// Parse reward-relevant protocol parameters (nOpt, a0, rho, tau) from CBOR.
+pub fn parse_reward_params(
+    state_cbor: &[u8],
+) -> Result<RewardParams, HarnessError> {
+    let off = navigate_to_nes(state_cbor)?;
+    let es = skip_nes_to_epoch_state(state_cbor, off)?;
+    let off = skip_cbor(state_cbor, es)?; // skip AccountState
+    let (ls_body, _) = read_array_header(state_cbor, off)?;
+    let off = skip_cbor(state_cbor, ls_body)?; // skip CertState (LS[0])
+    let (utxo_body, _) = read_array_header(state_cbor, off)?;
+    let mut off = utxo_body;
+    for _ in 0..3 { off = skip_cbor(state_cbor, off)?; }
+    let (gs_body, gs_len) = read_array_header(state_cbor, off)?;
+    let pp_index = if gs_len >= 7 { 3u32 } else { 2 };
+    let mut off = gs_body;
+    for _ in 0..pp_index { off = skip_cbor(state_cbor, off)?; }
+    let (pp_body, _pp_len) = read_array_header(state_cbor, off)?;
+
+    // Skip PP[0..7] to reach PP[8] = nOpt
+    let mut off = pp_body;
+    for _ in 0..8 { off = skip_cbor(state_cbor, off)?; }
+    let (_, n_opt) = read_uint(state_cbor, off)?;
+    off = skip_cbor(state_cbor, off)?;
+
+    // PP[9] = a0 = tag(30, [num, den])
+    let (a0_num, a0_den) = parse_rational_field(state_cbor, off)?;
+    off = skip_cbor(state_cbor, off)?;
+
+    // PP[10] = rho
+    let (rho_num, rho_den) = parse_rational_field(state_cbor, off)?;
+    off = skip_cbor(state_cbor, off)?;
+
+    // PP[11] = tau
+    let (tau_num, tau_den) = parse_rational_field(state_cbor, off)?;
+
+    Ok(RewardParams { n_opt, a0_num, a0_den, rho_num, rho_den, tau_num, tau_den })
+}
+
+fn parse_rational_field(state_cbor: &[u8], off: usize) -> Result<(u64, u64), HarnessError> {
+    let (inner, maj, _) = read_cbor_initial(state_cbor, off)?;
+    if maj == 6 {
+        let (arr_body, _) = read_array_header(state_cbor, inner)?;
+        let (next, num) = read_uint(state_cbor, arr_body)?;
+        let (_, den) = read_uint(state_cbor, next)?;
+        Ok((num, den))
+    } else if maj == 0 {
+        let (_, val) = read_uint(state_cbor, off)?;
+        Ok((val, 1))
+    } else {
+        Err(HarnessError::ParseError(format!("expected rational at {off}")))
+    }
+}
+
 /// MIR (Move Instantaneous Rewards) parsed from DState[3].
 #[derive(Debug, Default)]
 pub struct InstantaneousRewardsSummary {

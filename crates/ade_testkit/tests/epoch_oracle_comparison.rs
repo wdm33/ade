@@ -2329,7 +2329,8 @@ fn reward_formula_bisection_all_eras() {
 fn regular_epoch_boundary_comparison() {
     let pairs: &[(&str, &str, &str)] = &[
         ("Alonzo  310→311", "snapshot_48557136.tar.gz", "snapshot_48989209.tar.gz"),
-        ("Babbage 406→407", "snapshot_90028903.tar.gz", "snapshot_90461000.tar.gz"), // if available
+        ("Babbage 406→407", "snapshot_90028903.tar.gz", "snapshot_90461227.tar.gz"),
+        ("Conway  528→529", "snapshot_142732816.tar.gz", "snapshot_143164817.tar.gz"),
     ];
 
     eprintln!("\n=== REGULAR EPOCH BOUNDARY COMPARISON ===");
@@ -2351,8 +2352,12 @@ fn regular_epoch_boundary_comparison() {
         let pre_state = pre_snap.to_ledger_state();
         let post_state = post_snap.to_ledger_state();
 
-        // Compute reward formula for FIXED and POST variants
-        let variants: [(&str, &ade_ledger::state::LedgerState); 2] = [
+        // The reserves decrease between PRE(N) and POST(N+1) is from applying the
+        // (N-1→N) reward computation, NOT the (N→N+1) computation.
+        // The (N-1→N) computation used: PRE(N) go, PRE(N) bprev, PRE(N) fees, PRE(N) reserves.
+        // So "PRE_ALL" (using only PRE data) should match the oracle exactly.
+        let variants: [(&str, &ade_ledger::state::LedgerState); 3] = [
+            ("PREALL", &pre_state),  // ALL from PRE — matches the oracle's actual inputs
             ("FIXED", &{
                 let mut s = pre_state.clone();
                 s.epoch_state.block_production = post_state.epoch_state.block_production.clone();
@@ -2407,85 +2412,828 @@ fn regular_epoch_boundary_comparison() {
                 .floor().max(0) as u64;
             let pool_pot = total_reward - dt1;
 
-            // Use circulation for sigma (Mary+ formula)
-            let total_stake = circ;
-
             // Compute per-pool rewards
             let a0 = ade_ledger::rational::Rational::new(3, 10).unwrap();
             let one_plus_a0 = ade_ledger::rational::Rational::new(13, 10).unwrap();
             let z = ade_ledger::rational::Rational::new(1, 500).unwrap();
 
-            let mut sum_rewards = 0u64;
-            let mut pool_count = 0usize;
+            let go_pool_count = go.0.pool_stakes.len();
+            let implied_oracle_sum = (oracle_res_decr as i128 + state.epoch_state.epoch_fees.0 as i128 - dt1 as i128) as i64;
 
-            for (pool_id, pool_stake) in &go.0.pool_stakes {
-                let params = match state.cert_state.pool.pools.get(pool_id) {
-                    Some(p) => p,
-                    None => continue,
-                };
-                let blocks = state.epoch_state.block_production.get(pool_id).copied().unwrap_or(0);
-                if blocks == 0 || pool_stake.0 == 0 { continue; }
+            // Try different totalStake + performance formulas
+            // Haskell uses: sigma = poolStake/circulation (bracket), sigmaA = poolStake/activeStake (perf)
+            // perf = blocks / (expectedSlots * sigmaA) where expectedSlots = 21600
+            let variants_ts: &[(&str, u64, u64, bool)] = &[
+                ("circ/circ/cap", circ, circ, true),    // our current formula (capped)
+                ("circ/circ/noc", circ, circ, false),   // uncapped performance
+                ("circ/actv/noc", circ, total_active, false),  // Haskell: dual-denom, uncapped
+            ];
+            for (ts_label, bracket_ts, perf_ts, cap_perf) in variants_ts {
+                let total_stake = *bracket_ts;
+                let perf_total = *perf_ts;
+                let mut sum_rewards = 0u64;
+                let mut pool_count = 0usize;
 
-                let sigma = ade_ledger::rational::Rational::new(
-                    pool_stake.0 as i128, total_stake as i128).unwrap();
-                let s = ade_ledger::rational::Rational::new(
-                    params.pledge.0 as i128, total_stake as i128).unwrap();
-                let sigma_prime = if sigma.numerator() * z.denominator() > z.numerator() * sigma.denominator()
-                    { z.clone() } else { sigma.clone() };
-                let s_prime = if s.numerator() * z.denominator() > z.numerator() * s.denominator()
-                    { z.clone() } else { s.clone() };
+                for (pool_id, pool_stake) in &go.0.pool_stakes {
+                    let params = match state.cert_state.pool.pools.get(pool_id) {
+                        Some(p) => p,
+                        None => continue,
+                    };
+                    let blocks = state.epoch_state.block_production.get(pool_id).copied().unwrap_or(0);
+                    if blocks == 0 || pool_stake.0 == 0 { continue; }
 
-                // Bracket (with /z fix)
-                let f4 = z.checked_sub(&sigma_prime).and_then(|d| d.checked_div(&z));
-                let f3 = f4.and_then(|f| s_prime.checked_mul(&f)
-                    .and_then(|sf| sigma_prime.checked_sub(&sf))
-                    .and_then(|n| n.checked_div(&z)));
-                let bracket = f3.and_then(|f| s_prime.checked_mul(&a0)
-                    .and_then(|r| r.checked_mul(&f)))
-                    .and_then(|pb| sigma_prime.checked_add(&pb));
+                    let sigma = ade_ledger::rational::Rational::new(
+                        pool_stake.0 as i128, total_stake as i128).unwrap();
+                    let s = ade_ledger::rational::Rational::new(
+                        params.pledge.0 as i128, total_stake as i128).unwrap();
+                    let sigma_prime = if sigma.numerator() * z.denominator() > z.numerator() * sigma.denominator()
+                        { z.clone() } else { sigma.clone() };
+                    let s_prime = if s.numerator() * z.denominator() > z.numerator() * s.denominator()
+                        { z.clone() } else { s.clone() };
 
-                let max_pool = match bracket {
-                    Some(br) => ade_ledger::rational::Rational::from_integer(pool_pot as i128)
-                        .checked_mul(&br)
-                        .and_then(|r| r.checked_div(&one_plus_a0))
+                    let f4 = z.checked_sub(&sigma_prime).and_then(|d| d.checked_div(&z));
+                    let f3 = f4.and_then(|f| s_prime.checked_mul(&f)
+                        .and_then(|sf| sigma_prime.checked_sub(&sf))
+                        .and_then(|n| n.checked_div(&z)));
+                    let bracket = f3.and_then(|f| s_prime.checked_mul(&a0)
+                        .and_then(|r| r.checked_mul(&f)))
+                        .and_then(|pb| sigma_prime.checked_add(&pb));
+
+                    let max_pool = match bracket {
+                        Some(br) => ade_ledger::rational::Rational::from_integer(pool_pot as i128)
+                            .checked_mul(&br)
+                            .and_then(|r| r.checked_div(&one_plus_a0))
+                            .map(|r| r.floor().max(0) as u64)
+                            .unwrap_or(0),
+                        None => 0,
+                    };
+                    if max_pool == 0 { continue; }
+
+                    if !params.owners.is_empty() && params.pledge.0 > 0 {
+                        let delegator_stakes = &go.0.delegations;
+                        let ostake: u64 = params.owners.iter()
+                            .map(|o| delegator_stakes.get(o).map(|(_, c)| c.0).unwrap_or(0))
+                            .sum();
+                        if params.pledge.0 > ostake { continue; }
+                    }
+
+                    let perf = ade_ledger::rational::Rational::new(
+                        (blocks as i128) * (perf_total as i128),
+                        (total_blocks as i128) * (pool_stake.0 as i128),
+                    ).unwrap_or_else(ade_ledger::rational::Rational::one);
+                    let perf_capped = if *cap_perf && perf.numerator() > perf.denominator()
+                        { ade_ledger::rational::Rational::one() } else { perf };
+
+                    let f = ade_ledger::rational::Rational::from_integer(max_pool as i128)
+                        .checked_mul(&perf_capped)
                         .map(|r| r.floor().max(0) as u64)
-                        .unwrap_or(0),
-                    None => 0,
-                };
-                if max_pool == 0 { continue; }
+                        .unwrap_or(0);
 
-                // Pledge check (Mary+)
-                if !params.owners.is_empty() && params.pledge.0 > 0 {
-                    let delegator_stakes = &go.0.delegations;
-                    let ostake: u64 = params.owners.iter()
-                        .map(|o| delegator_stakes.get(o).map(|(_, c)| c.0).unwrap_or(0))
-                        .sum();
-                    if params.pledge.0 > ostake { continue; }
+                    sum_rewards += f;
+                    pool_count += 1;
                 }
 
-                let perf = ade_ledger::rational::Rational::new(
-                    (blocks as i128) * (total_stake as i128),
-                    (total_blocks as i128) * (pool_stake.0 as i128),
-                ).unwrap_or_else(ade_ledger::rational::Rational::one);
-                let perf_capped = if perf.numerator() > perf.denominator()
-                    { ade_ledger::rational::Rational::one() } else { perf };
+                let our_dr2 = pool_pot - sum_rewards;
+                let our_res_decr = dr1 - our_dr2;
+                let ratio = our_res_decr as f64 / oracle_res_decr as f64 * 100.0;
 
-                let f = ade_ledger::rational::Rational::from_integer(max_pool as i128)
-                    .checked_mul(&perf_capped)
-                    .map(|r| r.floor().max(0) as u64)
-                    .unwrap_or(0);
-
-                sum_rewards += f;
-                pool_count += 1;
+                eprintln!("    {vname}/{ts_label}: ratio={ratio:>8.4}%  sum={sum_rewards}  oracle_sum~={}  pools={pool_count}/{go_pool_count}",
+                    implied_oracle_sum / 1_000_000);
             }
-
-            let our_dr2 = pool_pot - sum_rewards;
-            let our_res_decr = dr1 - our_dr2;
-            let ratio = our_res_decr as f64 / oracle_res_decr as f64 * 100.0;
-            let trs_headroom = oracle_trs_incr as i64 - dt1 as i64;
-
-            eprintln!("    {vname}: ratio={ratio:>8.4}%  sum={sum_rewards}  pools={pool_count}  blocks={total_blocks}  trs_h={}", trs_headroom / 1_000_000);
+            eprintln!("           dr1={}  fees={}  pool_pot={}  circ={}  res={}  eta={:.6}",
+                dr1 / 1_000_000,
+                state.epoch_state.epoch_fees.0 / 1_000_000,
+                pool_pot / 1_000_000,
+                circ / 1_000_000,
+                reserves / 1_000_000,
+                eta.numerator() as f64 / eta.denominator() as f64,
+                );
         }
     }
     eprintln!("==========================================\n");
+}
+
+/// Per-pool reward diagnostics: find where Babbage diverges from Alonzo.
+#[test]
+fn per_pool_scaling_diagnostic() {
+    let pairs: &[(&str, &str, &str)] = &[
+        ("Alonzo  310→311", "snapshot_48557136.tar.gz", "snapshot_48989209.tar.gz"),
+        ("Babbage 406→407", "snapshot_90028903.tar.gz", "snapshot_90461227.tar.gz"),
+    ];
+
+    eprintln!("\n=== PER-POOL SCALING DIAGNOSTIC ===");
+    for (label, pre_file, post_file) in pairs {
+        let pre_path = snapshots_dir().join(pre_file);
+        let post_path = snapshots_dir().join(post_file);
+        if !pre_path.exists() || !post_path.exists() { continue; }
+
+        let pre_snap = LoadedSnapshot::from_tarball(&pre_path).unwrap();
+        let post_snap = LoadedSnapshot::from_tarball(&post_path).unwrap();
+        let pre_state = pre_snap.to_ledger_state();
+        let post_state = post_snap.to_ledger_state();
+
+        // FIXED variant
+        let state = {
+            let mut s = pre_state.clone();
+            s.epoch_state.block_production = post_state.epoch_state.block_production.clone();
+            s.epoch_state.epoch_fees = ade_types::tx::Coin(post_snap.header.epoch_fees);
+            s.epoch_state.snapshots = post_state.epoch_state.snapshots.clone();
+            s.cert_state = post_state.cert_state.clone();
+            s
+        };
+
+        let go = &state.epoch_state.snapshots.go;
+        let total_active: u64 = go.0.pool_stakes.values().map(|c| c.0).sum();
+        let total_blocks: u64 = state.epoch_state.block_production.values().sum();
+        let reserves = state.epoch_state.reserves.0;
+        let circ = state.max_lovelace_supply.saturating_sub(reserves);
+        let total_stake = circ;
+
+        // Pot chain
+        let rho = ade_ledger::rational::Rational::new(3, 1000).unwrap();
+        let reserves_rat = ade_ledger::rational::Rational::from_integer(reserves as i128);
+        let eta_n = total_blocks;
+        let eta_d = 21600u64;
+        let eta = ade_ledger::rational::Rational::new(eta_n as i128, eta_d as i128).unwrap();
+        let dr1 = reserves_rat.checked_mul(&rho).unwrap()
+            .checked_mul(&eta).unwrap().floor().max(0) as u64;
+        let total_reward = dr1 + state.epoch_state.epoch_fees.0;
+        let dt1 = (ade_ledger::rational::Rational::from_integer(total_reward as i128)
+            .checked_mul(&ade_ledger::rational::Rational::new(1, 5).unwrap()).unwrap())
+            .floor().max(0) as u64;
+        let pool_pot = total_reward - dt1;
+
+        let a0 = ade_ledger::rational::Rational::new(3, 10).unwrap();
+        let one_plus_a0 = ade_ledger::rational::Rational::new(13, 10).unwrap();
+        let z = ade_ledger::rational::Rational::new(1, 500).unwrap();
+
+        // Collect per-pool details
+        struct PoolDetail { blocks: u64, stake: u64, sigma_f: f64, max_pool: u64, perf_f: f64, reward: u64 }
+        let mut details: Vec<(String, PoolDetail)> = Vec::new();
+
+        for (pool_id, pool_stake) in &go.0.pool_stakes {
+            let params = match state.cert_state.pool.pools.get(pool_id) {
+                Some(p) => p, None => continue,
+            };
+            let blocks = state.epoch_state.block_production.get(pool_id).copied().unwrap_or(0);
+            if blocks == 0 || pool_stake.0 == 0 { continue; }
+
+            let sigma = ade_ledger::rational::Rational::new(pool_stake.0 as i128, total_stake as i128).unwrap();
+            let s = ade_ledger::rational::Rational::new(params.pledge.0 as i128, total_stake as i128).unwrap();
+            let sigma_prime = if sigma.numerator() * z.denominator() > z.numerator() * sigma.denominator() { z.clone() } else { sigma.clone() };
+            let s_prime = if s.numerator() * z.denominator() > z.numerator() * s.denominator() { z.clone() } else { s.clone() };
+
+            let f4 = z.checked_sub(&sigma_prime).and_then(|d| d.checked_div(&z));
+            let f3 = f4.and_then(|f| s_prime.checked_mul(&f).and_then(|sf| sigma_prime.checked_sub(&sf)).and_then(|n| n.checked_div(&z)));
+            let bracket = f3.and_then(|f| s_prime.checked_mul(&a0).and_then(|r| r.checked_mul(&f))).and_then(|pb| sigma_prime.checked_add(&pb));
+            let max_pool = match bracket {
+                Some(br) => ade_ledger::rational::Rational::from_integer(pool_pot as i128)
+                    .checked_mul(&br).and_then(|r| r.checked_div(&one_plus_a0))
+                    .map(|r| r.floor().max(0) as u64).unwrap_or(0),
+                None => 0,
+            };
+            if max_pool == 0 { continue; }
+            if !params.owners.is_empty() && params.pledge.0 > 0 {
+                let ostake: u64 = params.owners.iter().map(|o| go.0.delegations.get(o).map(|(_, c)| c.0).unwrap_or(0)).sum();
+                if params.pledge.0 > ostake { continue; }
+            }
+
+            let perf = ade_ledger::rational::Rational::new((blocks as i128) * (total_stake as i128), (total_blocks as i128) * (pool_stake.0 as i128)).unwrap_or_else(ade_ledger::rational::Rational::one);
+            let perf_capped = if perf.numerator() > perf.denominator() { ade_ledger::rational::Rational::one() } else { perf.clone() };
+            let f = ade_ledger::rational::Rational::from_integer(max_pool as i128).checked_mul(&perf_capped).map(|r| r.floor().max(0) as u64).unwrap_or(0);
+
+            let sigma_f = sigma.numerator() as f64 / sigma.denominator() as f64;
+            let perf_f = perf.numerator() as f64 / perf.denominator() as f64;
+            let pid_hex = format!("{:02x}{:02x}{:02x}{:02x}", pool_id.0.0[0], pool_id.0.0[1], pool_id.0.0[2], pool_id.0.0[3]);
+            details.push((pid_hex, PoolDetail { blocks, stake: pool_stake.0, sigma_f, max_pool, perf_f, reward: f }));
+        }
+
+        details.sort_by(|a, b| b.1.reward.cmp(&a.1.reward));
+
+        eprintln!("  {label} (pool_pot={} ADA, circ={} ADA, active={} ADA):",
+            pool_pot / 1_000_000, circ / 1_000_000, total_active / 1_000_000);
+
+        // Count pools by perf status
+        let perf_capped = details.iter().filter(|(_, d)| d.perf_f >= 1.0).count();
+        let perf_below = details.iter().filter(|(_, d)| d.perf_f < 1.0).count();
+        let avg_perf: f64 = details.iter().map(|(_, d)| d.perf_f.min(1.0)).sum::<f64>() / details.len() as f64;
+        let sum_rewards: u64 = details.iter().map(|(_, d)| d.reward).sum();
+        let sum_maxpool: u64 = details.iter().map(|(_, d)| d.max_pool).sum();
+        eprintln!("    pools={} perf_capped={} perf_below={} avg_perf={avg_perf:.4} sum_rewards={} sum_maxpool={} utilization={:.2}%",
+            details.len(), perf_capped, perf_below, sum_rewards / 1_000_000, sum_maxpool / 1_000_000,
+            sum_rewards as f64 / sum_maxpool as f64 * 100.0);
+
+        eprintln!("    Top 10 by reward:");
+        for (pid, d) in details.iter().take(10) {
+            eprintln!("      {pid}: blocks={:>4} stake={:>12} sigma={:.6} maxPool={:>10} perf={:.4} reward={:>10}",
+                d.blocks, d.stake / 1_000_000, d.sigma_f, d.max_pool / 1_000_000, d.perf_f, d.reward / 1_000_000);
+        }
+    }
+    eprintln!("====================================\n");
+}
+
+/// Compare go snapshot structure across eras to find parsing divergence.
+#[test]
+fn go_snapshot_structure_comparison() {
+    use ade_testkit::harness::snapshot_loader::{
+        extract_state_from_tarball, parse_go_snapshot_counts,
+        parse_snapshot_stake_distribution, parse_snapshot_delegations,
+    };
+
+    let snapshots: &[(&str, &str)] = &[
+        ("Alonzo  310 PRE",  "snapshot_48557136.tar.gz"),
+        ("Alonzo  311 POST", "snapshot_48989209.tar.gz"),
+        ("Babbage 406 PRE",  "snapshot_90028903.tar.gz"),
+        ("Babbage 407 POST", "snapshot_90461227.tar.gz"),
+        ("Conway  528 PRE",  "snapshot_142732816.tar.gz"),
+        ("Conway  529 POST", "snapshot_143164817.tar.gz"),
+    ];
+
+    eprintln!("\n=== GO SNAPSHOT STRUCTURE ===");
+    for (label, file) in snapshots {
+        let path = snapshots_dir().join(file);
+        if !path.exists() { eprintln!("  {label}: SKIPPED"); continue; }
+        let data = extract_state_from_tarball(&path).unwrap();
+
+        // Counts from the go snapshot CBOR
+        let (pools, stakes, delegs) = parse_go_snapshot_counts(&data).unwrap_or((0, 0, 0));
+
+        // Parse actual stake distribution for go
+        let stake_dist = parse_snapshot_stake_distribution(&data, 2).unwrap_or_default();
+        let total_stake: u64 = stake_dist.iter().map(|(_, s)| *s).sum();
+
+        // Parse actual delegations for go
+        let delegations = parse_snapshot_delegations(&data, 2).unwrap_or_default();
+
+        // Also check mark and set counts
+        let (mark_pools, mark_stakes, mark_delegs) = {
+            let s = parse_snapshot_stake_distribution(&data, 0).unwrap_or_default();
+            let d = parse_snapshot_delegations(&data, 0).unwrap_or_default();
+            let total: u64 = s.iter().map(|(_, v)| *v).sum();
+            (0usize, s.len(), d.len())  // pool count from pool_params, skip
+        };
+
+        eprintln!("  {label}:");
+        eprintln!("    go:   pools={pools}  stakes={stakes}  delegs={delegs}  parsed_stakes={}  parsed_delegs={}  total_stake={} ADA",
+            stake_dist.len(), delegations.len(), total_stake / 1_000_000);
+        eprintln!("    mark: stakes={}  delegs={}", mark_stakes, mark_delegs);
+
+        // Check for orphaned stakes (stake entries without matching delegations)
+        let stake_creds: std::collections::BTreeSet<[u8;28]> = stake_dist.iter()
+            .map(|(h, _)| { let mut k = [0u8;28]; k.copy_from_slice(&h.0[..28]); k })
+            .collect();
+        let deleg_creds: std::collections::BTreeSet<[u8;28]> = delegations.iter()
+            .map(|(h, _)| { let mut k = [0u8;28]; k.copy_from_slice(&h.0[..28]); k })
+            .collect();
+        let orphaned_stakes = stake_creds.difference(&deleg_creds).count();
+        let orphaned_delegs = deleg_creds.difference(&stake_creds).count();
+        let orphaned_stake_total: u64 = stake_dist.iter()
+            .filter(|(h, _)| {
+                let mut k = [0u8;28]; k.copy_from_slice(&h.0[..28]);
+                !deleg_creds.contains(&k)
+            })
+            .map(|(_, s)| *s)
+            .sum();
+        eprintln!("    orphaned: stakes_no_deleg={} ({} ADA)  delegs_no_stake={}",
+            orphaned_stakes, orphaned_stake_total / 1_000_000, orphaned_delegs);
+    }
+    eprintln!("============================\n");
+}
+
+/// Binary search for totalStake that gives exactly 100% ratio.
+#[test]
+fn binary_search_totalstake() {
+    let pairs: &[(&str, &str, &str)] = &[
+        ("Alonzo  310→311", "snapshot_48557136.tar.gz", "snapshot_48989209.tar.gz"),
+        ("Babbage 406→407", "snapshot_90028903.tar.gz", "snapshot_90461227.tar.gz"),
+        ("Conway  528→529", "snapshot_142732816.tar.gz", "snapshot_143164817.tar.gz"),
+    ];
+
+    eprintln!("\n=== BINARY SEARCH FOR TOTALSTAKE ===");
+    for (label, pre_file, post_file) in pairs {
+        let pre_path = snapshots_dir().join(pre_file);
+        let post_path = snapshots_dir().join(post_file);
+        if !pre_path.exists() || !post_path.exists() { continue; }
+
+        let pre_snap = LoadedSnapshot::from_tarball(&pre_path).unwrap();
+        let post_snap = LoadedSnapshot::from_tarball(&post_path).unwrap();
+        let oracle_res_decr = pre_snap.header.reserves.saturating_sub(post_snap.header.reserves);
+
+        let pre_state = pre_snap.to_ledger_state();
+        let post_state = post_snap.to_ledger_state();
+        let state = {
+            let mut s = pre_state.clone();
+            s.epoch_state.block_production = post_state.epoch_state.block_production.clone();
+            s.epoch_state.epoch_fees = ade_types::tx::Coin(post_snap.header.epoch_fees);
+            s.epoch_state.snapshots = post_state.epoch_state.snapshots.clone();
+            s.cert_state = post_state.cert_state.clone();
+            s
+        };
+
+        let go = &state.epoch_state.snapshots.go;
+        let total_blocks: u64 = state.epoch_state.block_production.values().sum();
+        let reserves = state.epoch_state.reserves.0;
+        let circ = state.max_lovelace_supply.saturating_sub(reserves);
+        let total_active: u64 = go.0.pool_stakes.values().map(|c| c.0).sum();
+
+        let rho = ade_ledger::rational::Rational::new(3, 1000).unwrap();
+        let eta = ade_ledger::rational::Rational::new(total_blocks as i128, 21600).unwrap();
+        let dr1 = ade_ledger::rational::Rational::from_integer(reserves as i128)
+            .checked_mul(&rho).unwrap().checked_mul(&eta).unwrap().floor().max(0) as u64;
+        let total_reward = dr1 + state.epoch_state.epoch_fees.0;
+        let dt1 = (ade_ledger::rational::Rational::from_integer(total_reward as i128)
+            .checked_mul(&ade_ledger::rational::Rational::new(1, 5).unwrap()).unwrap())
+            .floor().max(0) as u64;
+        let pool_pot = total_reward - dt1;
+
+        let a0 = ade_ledger::rational::Rational::new(3, 10).unwrap();
+        let one_plus_a0 = ade_ledger::rational::Rational::new(13, 10).unwrap();
+        let z = ade_ledger::rational::Rational::new(1, 500).unwrap();
+
+        // Function to compute ratio for a given totalStake
+        let compute_ratio = |total_stake: u64| -> f64 {
+            let mut sum_rewards = 0u64;
+            for (pool_id, pool_stake) in &go.0.pool_stakes {
+                let params = match state.cert_state.pool.pools.get(pool_id) { Some(p) => p, None => continue };
+                let blocks = state.epoch_state.block_production.get(pool_id).copied().unwrap_or(0);
+                if blocks == 0 || pool_stake.0 == 0 { continue; }
+
+                let sigma = ade_ledger::rational::Rational::new(pool_stake.0 as i128, total_stake as i128).unwrap();
+                let s = ade_ledger::rational::Rational::new(params.pledge.0 as i128, total_stake as i128).unwrap();
+                let sp = if sigma.numerator() * z.denominator() > z.numerator() * sigma.denominator() { z.clone() } else { sigma.clone() };
+                let ss = if s.numerator() * z.denominator() > z.numerator() * s.denominator() { z.clone() } else { s.clone() };
+
+                let f4 = z.checked_sub(&sp).and_then(|d| d.checked_div(&z));
+                let f3 = f4.and_then(|f| ss.checked_mul(&f).and_then(|sf| sp.checked_sub(&sf)).and_then(|n| n.checked_div(&z)));
+                let bracket = f3.and_then(|f| ss.checked_mul(&a0).and_then(|r| r.checked_mul(&f))).and_then(|pb| sp.checked_add(&pb));
+                let max_pool = match bracket {
+                    Some(br) => ade_ledger::rational::Rational::from_integer(pool_pot as i128)
+                        .checked_mul(&br).and_then(|r| r.checked_div(&one_plus_a0))
+                        .map(|r| r.floor().max(0) as u64).unwrap_or(0),
+                    None => 0,
+                };
+                if max_pool == 0 { continue; }
+                if !params.owners.is_empty() && params.pledge.0 > 0 {
+                    let ostake: u64 = params.owners.iter().map(|o| go.0.delegations.get(o).map(|(_, c)| c.0).unwrap_or(0)).sum();
+                    if params.pledge.0 > ostake { continue; }
+                }
+
+                let perf = ade_ledger::rational::Rational::new((blocks as i128) * (total_stake as i128), (total_blocks as i128) * (pool_stake.0 as i128)).unwrap_or_else(ade_ledger::rational::Rational::one);
+                let perf_capped = if perf.numerator() > perf.denominator() { ade_ledger::rational::Rational::one() } else { perf };
+                let f = ade_ledger::rational::Rational::from_integer(max_pool as i128).checked_mul(&perf_capped).map(|r| r.floor().max(0) as u64).unwrap_or(0);
+                sum_rewards += f;
+            }
+            let our_dr2 = pool_pot - sum_rewards;
+            let our_res_decr = dr1 - our_dr2;
+            our_res_decr as f64 / oracle_res_decr as f64 * 100.0
+        };
+
+        // Binary search between active and circ
+        let mut lo = total_active;
+        let mut hi = circ;
+        for _ in 0..40 {
+            let mid = lo + (hi - lo) / 2;
+            let ratio = compute_ratio(mid);
+            if ratio < 100.0 { hi = mid; } else { lo = mid; }
+        }
+        let best_ts = lo + (hi - lo) / 2;
+        let best_ratio = compute_ratio(best_ts);
+
+        eprintln!("  {label}:");
+        eprintln!("    circ = {circ}  active = {total_active}  best_ts = {best_ts}");
+        eprintln!("    ratio@circ = {:.4}%  ratio@active = {:.4}%  ratio@best = {best_ratio:.4}%",
+            compute_ratio(circ), compute_ratio(total_active));
+        eprintln!("    best_ts / circ = {:.6}  diff = {} ADA",
+            best_ts as f64 / circ as f64, (circ as i64 - best_ts as i64).unsigned_abs() / 1_000_000);
+    }
+    eprintln!("====================================\n");
+}
+
+/// Test circ vs circ-treasury at ALL boundaries (HFC + regular) to detect PV branching.
+#[test]
+fn pv_branching_circ_vs_circ_treasury() {
+    let pairs: &[(&str, &str, &str, u32)] = &[
+        // (pre, post, label, protocol_version_at_boundary)
+        ("snapshot_16588800.tar.gz", "snapshot_17020848.tar.gz", "Allegra HFC 236→237 PV3", 3),
+        ("snapshot_23068800.tar.gz", "snapshot_23500962.tar.gz", "Mary    HFC 251→252 PV4", 4),
+        ("snapshot_39916975.tar.gz", "snapshot_40348902.tar.gz", "Alonzo  HFC 290→291 PV5", 5),
+        ("snapshot_48557136.tar.gz", "snapshot_48989209.tar.gz", "Alonzo  reg 310→311 PV6", 6),
+        ("snapshot_72316896.tar.gz", "snapshot_72748820.tar.gz", "Babbage HFC 365→366 PV7", 7),
+        ("snapshot_90028903.tar.gz", "snapshot_90461227.tar.gz", "Babbage reg 406→407 PV8", 8),
+        ("snapshot_133660855.tar.gz", "snapshot_134092810.tar.gz", "Conway  HFC 507→508 PV9", 9),
+        ("snapshot_142732816.tar.gz", "snapshot_143164817.tar.gz", "Conway  reg 528→529 PV9", 9),
+    ];
+
+    eprintln!("\n=== PV BRANCHING: circ vs circ-treasury ===");
+    for (pre_file, post_file, label, pv) in pairs {
+        let pre_path = snapshots_dir().join(pre_file);
+        let post_path = snapshots_dir().join(post_file);
+        if !pre_path.exists() || !post_path.exists() { eprintln!("  {label}: SKIP"); continue; }
+
+        let pre_snap = LoadedSnapshot::from_tarball(&pre_path).unwrap();
+        let post_snap = LoadedSnapshot::from_tarball(&post_path).unwrap();
+        let oracle_res_decr = pre_snap.header.reserves.saturating_sub(post_snap.header.reserves);
+        if oracle_res_decr == 0 { eprintln!("  {label}: no res decrease"); continue; }
+
+        let pre_state = pre_snap.to_ledger_state();
+        let post_state = post_snap.to_ledger_state();
+        let state = {
+            let mut s = pre_state.clone();
+            s.epoch_state.block_production = post_state.epoch_state.block_production.clone();
+            s.epoch_state.epoch_fees = ade_types::tx::Coin(post_snap.header.epoch_fees);
+            s.epoch_state.snapshots = post_state.epoch_state.snapshots.clone();
+            s.cert_state = post_state.cert_state.clone();
+            s
+        };
+
+        let go = &state.epoch_state.snapshots.go;
+        let total_blocks: u64 = state.epoch_state.block_production.values().sum();
+        let reserves = state.epoch_state.reserves.0;
+        let circ = state.max_lovelace_supply.saturating_sub(reserves);
+        let treasury = pre_snap.header.treasury;
+
+        let eta = ade_ledger::rational::Rational::new(total_blocks as i128, 21600).unwrap();
+        let rho = ade_ledger::rational::Rational::new(3, 1000).unwrap();
+        let dr1 = ade_ledger::rational::Rational::from_integer(reserves as i128)
+            .checked_mul(&rho).unwrap().checked_mul(&eta).unwrap().floor().max(0) as u64;
+        let total_reward = dr1 + state.epoch_state.epoch_fees.0;
+        let dt1 = (ade_ledger::rational::Rational::from_integer(total_reward as i128)
+            .checked_mul(&ade_ledger::rational::Rational::new(1, 5).unwrap()).unwrap())
+            .floor().max(0) as u64;
+        let pool_pot = total_reward - dt1;
+
+        let a0 = ade_ledger::rational::Rational::new(3, 10).unwrap();
+        let one_plus_a0 = ade_ledger::rational::Rational::new(13, 10).unwrap();
+        let z = ade_ledger::rational::Rational::new(1, 500).unwrap();
+
+        let total_active: u64 = go.0.pool_stakes.values().map(|c| c.0).sum();
+        let compute = |total_stake: u64, perf_denom: u64, cap: bool| -> f64 {
+            let mut sum_rewards = 0u64;
+            for (pool_id, pool_stake) in &go.0.pool_stakes {
+                let params = match state.cert_state.pool.pools.get(pool_id) { Some(p) => p, None => continue };
+                let blocks = state.epoch_state.block_production.get(pool_id).copied().unwrap_or(0);
+                if blocks == 0 || pool_stake.0 == 0 { continue; }
+                let sigma = ade_ledger::rational::Rational::new(pool_stake.0 as i128, total_stake as i128).unwrap();
+                let s = ade_ledger::rational::Rational::new(params.pledge.0 as i128, total_stake as i128).unwrap();
+                let sp = if sigma.numerator() * z.denominator() > z.numerator() * sigma.denominator() { z.clone() } else { sigma.clone() };
+                let ss = if s.numerator() * z.denominator() > z.numerator() * s.denominator() { z.clone() } else { s.clone() };
+                let f4 = z.checked_sub(&sp).and_then(|d| d.checked_div(&z));
+                let f3 = f4.and_then(|f| ss.checked_mul(&f).and_then(|sf| sp.checked_sub(&sf)).and_then(|n| n.checked_div(&z)));
+                let bracket = f3.and_then(|f| ss.checked_mul(&a0).and_then(|r| r.checked_mul(&f))).and_then(|pb| sp.checked_add(&pb));
+                let max_pool = match bracket {
+                    Some(br) => ade_ledger::rational::Rational::from_integer(pool_pot as i128)
+                        .checked_mul(&br).and_then(|r| r.checked_div(&one_plus_a0))
+                        .map(|r| r.floor().max(0) as u64).unwrap_or(0),
+                    None => 0,
+                };
+                if max_pool == 0 { continue; }
+                if *pv >= 4 && !params.owners.is_empty() && params.pledge.0 > 0 {
+                    let ostake: u64 = params.owners.iter().map(|o| go.0.delegations.get(o).map(|(_, c)| c.0).unwrap_or(0)).sum();
+                    if params.pledge.0 > ostake { continue; }
+                }
+                let perf = ade_ledger::rational::Rational::new((blocks as i128) * (perf_denom as i128), (total_blocks as i128) * (pool_stake.0 as i128)).unwrap_or_else(ade_ledger::rational::Rational::one);
+                let pc = if cap && perf.numerator() > perf.denominator() { ade_ledger::rational::Rational::one() } else { perf };
+                sum_rewards += ade_ledger::rational::Rational::from_integer(max_pool as i128).checked_mul(&pc).map(|r| r.floor().max(0) as u64).unwrap_or(0);
+            }
+            let dr2 = pool_pot - sum_rewards;
+            let res_decr = dr1 - dr2;
+            res_decr as f64 / oracle_res_decr as f64 * 100.0
+        };
+
+        let r_old = compute(circ, circ, true);           // old: circ/circ/capped
+        let r_new = compute(circ, total_active, false);  // new: circ/actv/uncapped
+
+        eprintln!("  {label}:  old={r_old:>8.4}%  new={r_new:>8.4}%  active={} ADA",
+            total_active / 1_000_000);
+    }
+    eprintln!("==========================================\n");
+}
+
+/// Probe the CBOR structure of go snapshot pool entries to check PoolParams vs StakePoolSnapShot.
+#[test]
+fn probe_go_snapshot_pool_entry_structure() {
+    use ade_testkit::harness::snapshot_loader::{
+        extract_state_from_tarball, parse_snapshot_pool_params,
+    };
+
+    let snapshots: &[(&str, &str)] = &[
+        ("Alonzo  311", "snapshot_48989209.tar.gz"),
+        ("Babbage 407", "snapshot_90461227.tar.gz"),
+    ];
+
+    eprintln!("\n=== GO SNAPSHOT POOL ENTRY STRUCTURE ===");
+    for (label, file) in snapshots {
+        let path = snapshots_dir().join(file);
+        if !path.exists() { continue; }
+        let data = extract_state_from_tarball(&path).unwrap();
+
+        // Parse pool params from go snapshot (position 2)
+        let pools = parse_snapshot_pool_params(&data, 2).unwrap_or_default();
+        eprintln!("  {label}: {} pool entries parsed", pools.len());
+
+        // Show first 3 entries
+        for (i, (hash, pledge, cost, margin_num, margin_den, reward_acct, owners)) in pools.iter().take(3).enumerate() {
+            eprintln!("    pool[{i}]: hash={:02x}{:02x}.. pledge={} cost={} margin={}/{} acct_len={} owners={}",
+                hash.0[0], hash.0[1], pledge, cost, margin_num, margin_den, reward_acct.len(), owners.len());
+        }
+
+        // Sanity: are pledge/cost values reasonable for Cardano mainnet?
+        let reasonable_pledges = pools.iter().filter(|(_, p, _, _, _, _, _)| *p > 0 && *p < 100_000_000_000_000).count();
+        let reasonable_costs = pools.iter().filter(|(_, _, c, _, _, _, _)| *c >= 170_000_000 && *c <= 100_000_000_000).count();
+        eprintln!("    reasonable pledges (0 < p < 100M ADA): {}/{}", reasonable_pledges, pools.len());
+        eprintln!("    reasonable costs (170-100000 ADA): {}/{}", reasonable_costs, pools.len());
+    }
+    eprintln!("========================================\n");
+}
+
+/// Extract nesRu from Babbage mid-epoch dump to get oracle's exact intermediate values.
+#[test]
+fn babbage_nesru_extraction() {
+    // The ledger state file is raw CBOR NES (not tarball, not ExtLedgerState-wrapped)
+    let path = std::path::PathBuf::from("/home/ts/Code/rust/ade/corpus/snapshots/reward_provenance/ledger_state_babbage.json");
+    if !path.exists() {
+        eprintln!("SKIPPED: Babbage mid-epoch ledger state not available");
+        return;
+    }
+
+    let data = std::fs::read(&path).unwrap();
+    eprintln!("\n=== BABBAGE MID-EPOCH nesRu EXTRACTION ===");
+    eprintln!("  snapshot: slot 90150011, epoch 406 (28% through)");
+    eprintln!("  data size: {} MB", data.len() / 1_000_000);
+
+    // File is raw NES (0x87 = array(7)), not ExtLedgerState wrapped
+    let (nes_body, nes_len) = ade_testkit::harness::snapshot_loader::read_array_header_pub(&data, 0).unwrap();
+    eprintln!("  NES: array({nes_len})");
+
+    // NES[0] = epoch
+    let (mut off, epoch) = ade_testkit::harness::snapshot_loader::read_uint_pub(&data, nes_body).unwrap();
+    eprintln!("  epoch: {epoch}");
+
+    // Skip NES[1] bprev, NES[2] bcur, NES[3] EpochState
+    for _ in 0..3 {
+        off = ade_testkit::harness::snapshot_loader::skip_cbor_pub(&data, off).unwrap();
+    }
+
+    // NES[4] = nesRu
+    let (ru_body, ru_maj, ru_val) = ade_testkit::harness::snapshot_loader::read_cbor_initial_pub(&data, off).unwrap();
+    let ru_end = ade_testkit::harness::snapshot_loader::skip_cbor_pub(&data, off).unwrap();
+    let ru_size = ru_end - off;
+    eprintln!("  nesRu: major={ru_maj} val={ru_val} size={}MB", ru_size / 1_000_000);
+
+    if ru_maj == 4 && ru_val == 0 {
+        eprintln!("  nesRu is SNothing — pulser not active at this slot!");
+        return;
+    }
+    if ru_maj != 4 || ru_val < 1 {
+        eprintln!("  nesRu unexpected structure: major={ru_maj} val={ru_val}");
+        return;
+    }
+
+    eprintln!("  nesRu is SJust! Probing reward update structure...");
+
+    // Probe top-level fields of the PulsingRewUpdate
+    let mut ri = ru_body;
+    for i in 0..(ru_val.min(15) as u32) {
+        let (_, rm, rv) = ade_testkit::harness::snapshot_loader::read_cbor_initial_pub(&data, ri).unwrap();
+        let rs = ade_testkit::harness::snapshot_loader::skip_cbor_pub(&data, ri).unwrap() - ri;
+        let rt = match rm { 0=>"uint", 1=>"negint", 2=>"bytes", 3=>"text", 4=>"array", 5=>"map", 6=>"tag", 7=>"special", _=>"?" };
+        let rs_str = if rs > 1_000_000 { format!("{}MB", rs/1_000_000) }
+            else if rs > 1_000 { format!("{}KB", rs/1_000) }
+            else { format!("{rs}B") };
+
+        eprint!("    RU[{i}]: {rt}(val={rv}) size={rs_str}");
+        if rm == 0 { eprint!("  → {} ADA", rv / 1_000_000); }
+        if rm == 1 { eprint!("  → -{} ADA", (rv + 1) / 1_000_000); }
+        eprintln!();
+
+        // For arrays, probe sub-structure (2 levels deep)
+        if rm == 4 && rv > 0 && rv <= 20 {
+            let (inner, _, _) = ade_testkit::harness::snapshot_loader::read_cbor_initial_pub(&data, ri).unwrap();
+            let mut si = inner;
+            for j in 0..(rv.min(10) as u32) {
+                let (_, sm, sv) = ade_testkit::harness::snapshot_loader::read_cbor_initial_pub(&data, si).unwrap();
+                let ss = ade_testkit::harness::snapshot_loader::skip_cbor_pub(&data, si).unwrap() - si;
+                let st = match sm { 0=>"uint", 1=>"negint", 2=>"bytes", 4=>"array", 5=>"map", 6=>"tag", 7=>"special", _=>"?" };
+                let ss_str = if ss > 1_000_000 { format!("{}MB", ss/1_000_000) }
+                    else if ss > 1_000 { format!("{}KB", ss/1_000) }
+                    else { format!("{ss}B") };
+                eprint!("      RU[{i}][{j}]: {st}(val={sv}) size={ss_str}");
+                if sm == 0 { eprint!("  → {} ADA", sv / 1_000_000); }
+                if sm == 1 { eprint!("  → -{} ADA", (sv + 1) / 1_000_000); }
+                eprintln!();
+
+                // 3rd level for the RewardSnapShot
+                if rm == 4 && sm == 4 && sv > 0 && sv <= 20 {
+                    let (inner2, _, _) = ade_testkit::harness::snapshot_loader::read_cbor_initial_pub(&data, si).unwrap();
+                    let mut si2 = inner2;
+                    for k in 0..(sv.min(15) as u32) {
+                        let (_, sm2, sv2) = ade_testkit::harness::snapshot_loader::read_cbor_initial_pub(&data, si2).unwrap();
+                        let ss2 = ade_testkit::harness::snapshot_loader::skip_cbor_pub(&data, si2).unwrap() - si2;
+                        let st2 = match sm2 { 0=>"uint", 1=>"negint", 2=>"bytes", 4=>"array", 5=>"map", 6=>"tag", 7=>"special", _=>"?" };
+                        let ss2_str = if ss2 > 1_000_000 { format!("{}MB", ss2/1_000_000) }
+                            else if ss2 > 1_000 { format!("{}KB", ss2/1_000) }
+                            else { format!("{ss2}B") };
+                        eprint!("        RU[{i}][{j}][{k}]: {st2}(val={sv2}) size={ss2_str}");
+                        if sm2 == 0 { eprint!("  → {} ADA", sv2 / 1_000_000); }
+                        if sm2 == 1 { eprint!("  → -{} ADA", (sv2 + 1) / 1_000_000); }
+                        eprintln!();
+                        si2 = ade_testkit::harness::snapshot_loader::skip_cbor_pub(&data, si2).unwrap();
+                    }
+                }
+
+                si = ade_testkit::harness::snapshot_loader::skip_cbor_pub(&data, si).unwrap();
+            }
+        }
+
+        ri = ade_testkit::harness::snapshot_loader::skip_cbor_pub(&data, ri).unwrap();
+    }
+    // Now probe the FreeVars directly. The Pulser is at RU[0][2] = array(4).
+    // FreeVars is at RU[0][2][3] = array(2) = 3MB.
+    // Navigate there.
+    eprintln!("\n  --- FreeVars extraction ---");
+    // ri is currently past the last RU[0] field. Rewind to RU[0][2].
+    let (ru0_body, _, _) = ade_testkit::harness::snapshot_loader::read_cbor_initial_pub(&data, ru_body).unwrap();
+    // ru0_body is past the outer array(3) header. RU[0][0] is at ru0_body.
+    // Skip RU[0][0] (tag/status)
+    let p = ade_testkit::harness::snapshot_loader::skip_cbor_pub(&data, ru0_body).unwrap();
+    // Skip RU[0][1] (RewardSnapShot)
+    let pulser_off = ade_testkit::harness::snapshot_loader::skip_cbor_pub(&data, p).unwrap();
+    // RU[0][2] = Pulser = array(4) [step, remaining, accumulated, freevars]
+    let (pulser_body, pulser_len) = ade_testkit::harness::snapshot_loader::read_array_header_pub(&data, pulser_off).unwrap();
+    eprintln!("  Pulser: array({pulser_len})");
+
+    // Skip Pulser[0] (step counter), [1] (remaining), [2] (accumulated) to reach [3] (FreeVars)
+    let mut fv_off = pulser_body;
+    for _ in 0..3 {
+        fv_off = ade_testkit::harness::snapshot_loader::skip_cbor_pub(&data, fv_off).unwrap();
+    }
+
+    let (fv_body, fv_maj, fv_len) = ade_testkit::harness::snapshot_loader::read_cbor_initial_pub(&data, fv_off).unwrap();
+    let fv_size = ade_testkit::harness::snapshot_loader::skip_cbor_pub(&data, fv_off).unwrap() - fv_off;
+    eprintln!("  FreeVars: major={fv_maj} val={fv_len} size={}KB", fv_size / 1_000);
+
+    if fv_maj == 4 {
+        let mut fi = fv_body;
+        for i in 0..(fv_len.min(20) as u32) {
+            let (_, fm, fval) = ade_testkit::harness::snapshot_loader::read_cbor_initial_pub(&data, fi).unwrap();
+            let fs = ade_testkit::harness::snapshot_loader::skip_cbor_pub(&data, fi).unwrap() - fi;
+            let ft = match fm { 0=>"uint", 1=>"negint", 2=>"bytes", 3=>"text", 4=>"array", 5=>"map", 6=>"tag", 7=>"special", _=>"?" };
+            let fs_str = if fs > 1_000_000 { format!("{}MB", fs/1_000_000) }
+                else if fs > 1_000 { format!("{}KB", fs/1_000) }
+                else { format!("{fs}B") };
+            eprint!("    FV[{i}]: {ft}(val={fval}) size={fs_str}");
+            if fm == 0 { eprint!("  → {} ADA", fval / 1_000_000); }
+            if fm == 1 { eprint!("  → -{} ADA", (fval + 1) / 1_000_000); }
+            if fm == 6 {
+                // Tag — probe inner
+                let (inner, im, iv) = ade_testkit::harness::snapshot_loader::read_cbor_initial_pub(&data, fv_body + (fi - fv_body)).unwrap();
+                let (inner2, im2, iv2) = ade_testkit::harness::snapshot_loader::read_cbor_initial_pub(&data, inner).unwrap();
+                if im2 == 4 {
+                    // Tagged array — probe elements
+                    let mut ti = inner2;
+                    for t in 0..iv2.min(3) {
+                        let (_, tm, tv) = ade_testkit::harness::snapshot_loader::read_cbor_initial_pub(&data, ti).unwrap();
+                        if tm == 0 { eprint!("  tag_inner[{t}]={tv}"); }
+                        ti = ade_testkit::harness::snapshot_loader::skip_cbor_pub(&data, ti).unwrap();
+                    }
+                }
+            }
+            eprintln!();
+            fi = ade_testkit::harness::snapshot_loader::skip_cbor_pub(&data, fi).unwrap();
+        }
+    }
+
+    // Also extract the RewardSnapShot values more precisely
+    eprintln!("\n  --- RewardSnapShot key values ---");
+    // Navigate to RU[0][1] again
+    let rs_off = ade_testkit::harness::snapshot_loader::skip_cbor_pub(&data, ru0_body).unwrap();
+    let (rs_body, rs_len) = ade_testkit::harness::snapshot_loader::read_array_header_pub(&data, rs_off).unwrap();
+    eprintln!("  RewardSnapShot: array({rs_len})");
+
+    // RS[0] = rewFees
+    let (next, fees) = ade_testkit::harness::snapshot_loader::read_uint_pub(&data, rs_body).unwrap();
+    eprintln!("  rewFees:    {fees:>20} ({} ADA)", fees / 1_000_000);
+
+    // RS[1] = rewProtocolVersion = array(2) [major, minor]
+    let (pv_body, _pv_len) = ade_testkit::harness::snapshot_loader::read_array_header_pub(&data, next).unwrap();
+    let (pv_next, pv_major) = ade_testkit::harness::snapshot_loader::read_uint_pub(&data, pv_body).unwrap();
+    let (_, pv_minor) = ade_testkit::harness::snapshot_loader::read_uint_pub(&data, pv_next).unwrap();
+    let next = ade_testkit::harness::snapshot_loader::skip_cbor_pub(&data, next).unwrap();
+    eprintln!("  protocolVer: {pv_major}.{pv_minor}");
+
+    // RS[2] = rewNonMyopic (skip)
+    let next = ade_testkit::harness::snapshot_loader::skip_cbor_pub(&data, next).unwrap();
+
+    // RS[3] = rewDeltaR1
+    let (next, dr1) = ade_testkit::harness::snapshot_loader::read_uint_pub(&data, next).unwrap();
+    eprintln!("  rewDeltaR1: {dr1:>20} ({} ADA)", dr1 / 1_000_000);
+
+    // RS[4] = rewR (remaining pool pot)
+    let (next, r_remaining) = ade_testkit::harness::snapshot_loader::read_uint_pub(&data, next).unwrap();
+    eprintln!("  rewR:       {r_remaining:>20} ({} ADA)", r_remaining / 1_000_000);
+
+    // RS[5] = rewDeltaT1
+    let (_, dt1) = ade_testkit::harness::snapshot_loader::read_uint_pub(&data, next).unwrap();
+    eprintln!("  rewDeltaT1: {dt1:>20} ({} ADA)", dt1 / 1_000_000);
+
+    let total_reward = dr1 + fees;
+    eprintln!("  totalReward (dr1+fees): {} ADA", total_reward / 1_000_000);
+    eprintln!("  pool_pot (totalReward - dt1): {} ADA", (total_reward - dt1) / 1_000_000);
+
+    eprintln!("==========================================\n");
+}
+
+/// Check deposits and treasury at each boundary to explain the totalStake gap.
+#[test]
+fn deposits_and_treasury_diagnostic() {
+    use ade_testkit::harness::snapshot_loader::{extract_state_from_tarball, parse_utxo_deposits};
+
+    let snapshots: &[(&str, &str)] = &[
+        ("Alonzo  310", "snapshot_48557136.tar.gz"),
+        ("Alonzo  311", "snapshot_48989209.tar.gz"),
+        ("Babbage 406", "snapshot_90028903.tar.gz"),
+        ("Babbage 407", "snapshot_90461227.tar.gz"),
+        ("Conway  528", "snapshot_142732816.tar.gz"),
+        ("Conway  529", "snapshot_143164817.tar.gz"),
+    ];
+
+    eprintln!("\n=== DEPOSITS & TREASURY ===");
+    for (label, file) in snapshots {
+        let path = snapshots_dir().join(file);
+        if !path.exists() { eprintln!("  {label}: SKIPPED"); continue; }
+        let data = extract_state_from_tarball(&path).unwrap();
+        let header = ade_testkit::harness::snapshot_loader::parse_snapshot_header(&data).unwrap();
+        let deposits = parse_utxo_deposits(&data).unwrap_or(0);
+        let circ = 45_000_000_000_000_000u64.saturating_sub(header.reserves);
+
+        eprintln!("  {label}:");
+        eprintln!("    reserves:   {:>15} ({:>10} ADA)", header.reserves, header.reserves / 1_000_000);
+        eprintln!("    treasury:   {:>15} ({:>10} ADA)", header.treasury, header.treasury / 1_000_000);
+        eprintln!("    deposits:   {:>15} ({:>10} ADA)", deposits, deposits / 1_000_000);
+        eprintln!("    circ:       {:>15} ({:>10} ADA)", circ, circ / 1_000_000);
+        eprintln!("    circ-dep:   {:>15} ({:>10} ADA)", circ - deposits, (circ - deposits) / 1_000_000);
+        eprintln!("    circ-trs:   {:>15} ({:>10} ADA)", circ - header.treasury, (circ - header.treasury) / 1_000_000);
+        eprintln!("    circ-d-t:   {:>15} ({:>10} ADA)", circ - deposits - header.treasury, (circ - deposits - header.treasury) / 1_000_000);
+    }
+    eprintln!("===========================\n");
+}
+
+/// Check MIR at REGULAR epoch boundaries (not just HFC).
+#[test]
+fn mir_at_regular_boundaries() {
+    use ade_testkit::harness::snapshot_loader::{extract_state_from_tarball, parse_instantaneous_rewards};
+
+    let snapshots: &[(&str, &str)] = &[
+        ("Alonzo  310 PRE",  "snapshot_48557136.tar.gz"),
+        ("Alonzo  311 POST", "snapshot_48989209.tar.gz"),
+        ("Babbage 406 PRE",  "snapshot_90028903.tar.gz"),
+        ("Babbage 407 POST", "snapshot_90461227.tar.gz"),
+        ("Conway  528 PRE",  "snapshot_142732816.tar.gz"),
+        ("Conway  529 POST", "snapshot_143164817.tar.gz"),
+    ];
+
+    eprintln!("\n=== MIR AT REGULAR BOUNDARIES ===");
+    for (label, file) in snapshots {
+        let path = snapshots_dir().join(file);
+        if !path.exists() { eprintln!("  {label}: SKIPPED"); continue; }
+        let data = extract_state_from_tarball(&path).unwrap();
+
+        match parse_instantaneous_rewards(&data) {
+            Ok(mir) => {
+                eprintln!("  {label}: res→acct={} ({} ADA, {} entries)  trs→acct={} ({} ADA, {} entries)  deltaR={} deltaT={}",
+                    mir.reserves_to_accounts, mir.reserves_to_accounts / 1_000_000, mir.reserves_to_accounts_count,
+                    mir.treasury_to_accounts, mir.treasury_to_accounts / 1_000_000, mir.treasury_to_accounts_count,
+                    mir.delta_reserves, mir.delta_treasury);
+            }
+            Err(e) => eprintln!("  {label}: ERROR: {e}"),
+        }
+    }
+    eprintln!("=================================\n");
+}
+
+/// Verify protocol parameters (nOpt, a0, rho, tau) from raw CBOR for each era.
+#[test]
+fn verify_reward_params_from_cbor() {
+    use ade_testkit::harness::snapshot_loader::{extract_state_from_tarball, parse_reward_params};
+
+    let snapshots = [
+        ("Alonzo  311", "snapshot_48989209.tar.gz"),
+        ("Babbage 407", "snapshot_90461227.tar.gz"),
+        ("Conway  529", "snapshot_143164817.tar.gz"),
+    ];
+
+    eprintln!("\n=== PROTOCOL PARAMS FROM CBOR ===");
+    for (label, file) in &snapshots {
+        let path = snapshots_dir().join(file);
+        if !path.exists() { eprintln!("  {label}: SKIPPED"); continue; }
+        let data = extract_state_from_tarball(&path).unwrap();
+        match parse_reward_params(&data) {
+            Ok(rp) => {
+                eprintln!("  {label}: nOpt={}  a0={}/{}  rho={}/{}  tau={}/{}",
+                    rp.n_opt, rp.a0_num, rp.a0_den, rp.rho_num, rp.rho_den, rp.tau_num, rp.tau_den);
+            }
+            Err(e) => eprintln!("  {label}: ERROR: {e}"),
+        }
+    }
+    eprintln!("=================================\n");
 }
