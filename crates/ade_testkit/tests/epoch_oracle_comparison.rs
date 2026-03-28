@@ -3283,15 +3283,100 @@ fn conway_governance_ratification_test() {
     let (active, expired_check) = expire_proposals(&pre_proposals, 529);
     eprintln!("  Expiry at epoch 529: {} active, {} expired", active.len(), expired_check.len());
 
-    // Compare with oracle: the POST snapshot should reflect the enacted changes
-    eprintln!("\n  Oracle comparison:");
-    let pre_header = &pre_snap.header;
+    // Differential: compare our governance decisions with oracle's actual state
+    eprintln!("\n  --- Differential Governance Comparison ---");
     let post_snap = LoadedSnapshot::from_tarball(&post_path).unwrap();
-    let post_header = &post_snap.header;
-    let treasury_change = post_header.treasury as i64 - pre_header.treasury as i64;
-    eprintln!("    treasury change: {} ADA", treasury_change / 1_000_000);
-    eprintln!("    (positive = treasury grew from rewards/fees)");
+    let post_state = post_snap.to_ledger_state();
+
+    // Compare proposal counts
+    let post_gov = post_state.gov_state.as_ref();
+    let post_proposal_count = post_gov.map(|g| g.proposals.len()).unwrap_or(0);
+    eprintln!("    PRE proposals:  {}", pre_proposals.len());
+    eprintln!("    POST proposals: {post_proposal_count} (oracle)");
+    eprintln!("    Our remaining:  {}", result.remaining.len());
+    eprintln!("    Our ratified:   {}", result.ratified.len());
+    eprintln!("    Our expired:    {}", result.expired.len());
+
+    // Check: does POST have the same proposal as PRE (InfoAction persists)?
+    // Or did the oracle remove it (ratified or expired)?
+    if let Some(post_g) = post_gov {
+        for p in &post_g.proposals {
+            let action_type = match &p.gov_action {
+                ade_types::conway::governance::GovAction::InfoAction => "InfoAction",
+                _ => "other",
+            };
+            eprintln!("    POST proposal: {action_type} proposed={} expires={}",
+                p.proposed_in.0, p.expires_after.0);
+        }
+    }
+
+    // Committee comparison
+    let post_committee_count = post_gov.map(|g| g.committee.len()).unwrap_or(0);
+    let pre_committee_count = pre_state.gov_state.as_ref().map(|g| g.committee.len()).unwrap_or(0);
+    eprintln!("    committee: PRE={pre_committee_count} POST={post_committee_count}");
+
+    // Treasury comparison
+    let treasury_change = post_snap.header.treasury as i64 - pre_snap.header.treasury as i64;
+    eprintln!("    treasury change: {} ADA (rewards + governance effects)", treasury_change / 1_000_000);
+
+    // DRep count comparison
+    let post_drep_count = post_gov.map(|g| g.drep_expiry.len()).unwrap_or(0);
+    let pre_drep_count = pre_state.gov_state.as_ref().map(|g| g.drep_expiry.len()).unwrap_or(0);
+    eprintln!("    drep registrations: PRE={pre_drep_count} POST={post_drep_count}");
+
+    // Vote delegation comparison
+    let post_vd_count = post_gov.map(|g| g.vote_delegations.len()).unwrap_or(0);
+    let pre_vd_count = pre_state.gov_state.as_ref().map(|g| g.vote_delegations.len()).unwrap_or(0);
+    eprintln!("    vote delegations: PRE={pre_vd_count} POST={post_vd_count}");
+
     eprintln!("=============================================\n");
+}
+
+/// Probe all ConwayGovState fields to find committee membership.
+#[test]
+fn conway_govstate_full_probe() {
+    use ade_testkit::harness::snapshot_loader::extract_state_from_tarball;
+
+    let path = snapshots_dir().join("snapshot_134092810.tar.gz");
+    if !path.exists() { eprintln!("SKIPPED"); return; }
+    let data = extract_state_from_tarball(&path).unwrap();
+
+    let off = ade_testkit::harness::snapshot_loader::navigate_to_nes_pub(&data).unwrap();
+    let off = ade_testkit::harness::snapshot_loader::skip_cbor_pub(&data, off).unwrap();
+    let off = ade_testkit::harness::snapshot_loader::skip_cbor_pub(&data, off).unwrap();
+    let off = ade_testkit::harness::snapshot_loader::skip_cbor_pub(&data, off).unwrap();
+    let (es_body, _) = ade_testkit::harness::snapshot_loader::read_array_header_pub(&data, off).unwrap();
+    let off = ade_testkit::harness::snapshot_loader::skip_cbor_pub(&data, es_body).unwrap();
+    let (ls_body, _) = ade_testkit::harness::snapshot_loader::read_array_header_pub(&data, off).unwrap();
+    let off = ade_testkit::harness::snapshot_loader::skip_cbor_pub(&data, ls_body).unwrap();
+    let (utxo_body, _) = ade_testkit::harness::snapshot_loader::read_array_header_pub(&data, off).unwrap();
+    let mut off = utxo_body as usize;
+    for _ in 0..3 { off = ade_testkit::harness::snapshot_loader::skip_cbor_pub(&data, off).unwrap(); }
+    let (gs_body, gs_len) = ade_testkit::harness::snapshot_loader::read_array_header_pub(&data, off).unwrap();
+
+    eprintln!("\n=== CONWAY GOVSTATE FULL PROBE ===");
+    let mut fi = gs_body as usize;
+    for i in 0..gs_len.min(7) {
+        let (_, fm, fv) = ade_testkit::harness::snapshot_loader::read_cbor_initial_pub(&data, fi).unwrap();
+        let fs = ade_testkit::harness::snapshot_loader::skip_cbor_pub(&data, fi).unwrap() - fi;
+        let ft = match fm { 0=>"uint", 2=>"bytes", 4=>"arr", 5=>"map", 6=>"tag", _=>"?" };
+        let fss = if fs > 1_000_000 { format!("{}MB", fs/1_000_000) } else if fs > 1000 { format!("{}KB", fs/1000) } else { format!("{fs}B") };
+        eprintln!("  GS[{i}]: {ft}(val={fv}) size={fss}");
+        if fm == 4 && fv > 0 && fv <= 10 {
+            let (body, _) = ade_testkit::harness::snapshot_loader::read_array_header_pub(&data, fi).unwrap();
+            let mut si = body as usize;
+            for j in 0..fv.min(5) {
+                let (_, sm, sv) = ade_testkit::harness::snapshot_loader::read_cbor_initial_pub(&data, si).unwrap();
+                let ss = ade_testkit::harness::snapshot_loader::skip_cbor_pub(&data, si).unwrap() - si;
+                let st = match sm { 0=>"uint", 2=>"bytes", 4=>"arr", 5=>"map", 6=>"tag", _=>"?" };
+                let sss = if ss > 1000 { format!("{}KB", ss/1000) } else { format!("{ss}B") };
+                eprintln!("    GS[{i}][{j}]: {st}(val={sv}) {sss}");
+                si = ade_testkit::harness::snapshot_loader::skip_cbor_pub(&data, si).unwrap();
+            }
+        }
+        fi = ade_testkit::harness::snapshot_loader::skip_cbor_pub(&data, fi).unwrap();
+    }
+    eprintln!("=================================\n");
 }
 
 /// Parse VState: DRep registrations and committee members.

@@ -121,7 +121,9 @@ impl LoadedSnapshot {
         }
 
         let proposals = parse_governance_proposals(&self.raw_cbor).unwrap_or_default();
-        let committee = parse_committee_members(&self.raw_cbor).unwrap_or_default();
+        let comm_state = parse_committee_state(&self.raw_cbor).unwrap_or(CommitteeState {
+            members: std::collections::BTreeMap::new(), quorum: (2, 3),
+        });
         let drep_regs = parse_drep_registrations(&self.raw_cbor).unwrap_or_default();
         let gov_params = parse_conway_gov_params(&self.raw_cbor).ok();
 
@@ -129,9 +131,7 @@ impl LoadedSnapshot {
             .map(|(cred, reg)| (cred.clone(), reg.expiry_epoch))
             .collect();
 
-        let (quorum_num, quorum_den) = gov_params.as_ref()
-            .and_then(|gp| gp.drep_voting_thresholds.first().copied())
-            .unwrap_or((2, 3));
+        let (quorum_num, quorum_den) = comm_state.quorum;
 
         let gov_action_lifetime = gov_params.as_ref()
             .map(|gp| gp.gov_action_lifetime)
@@ -148,7 +148,7 @@ impl LoadedSnapshot {
 
         Some(ade_ledger::state::ConwayGovState {
             proposals,
-            committee,
+            committee: comm_state.members,
             committee_quorum: (quorum_num, quorum_den),
             drep_expiry,
             gov_action_lifetime,
@@ -1749,32 +1749,61 @@ pub fn parse_drep_registrations(
     Ok(regs)
 }
 
-/// Parse committee members from VState[1] (Conway CertState[0][1]).
+/// Committee state parsed from ConwayGovState.
+#[derive(Debug, Clone)]
+pub struct CommitteeState {
+    /// Cold committee credentials → expiry epoch.
+    pub members: std::collections::BTreeMap<ade_types::Hash28, u64>,
+    /// Committee quorum as rational (numerator, denominator).
+    pub quorum: (u64, u64),
+}
+
+/// Parse committee members from ConwayGovState[1].
 ///
-/// Returns a map of committee credential hash → expiry epoch.
+/// GS[1] = array(1) [SJust(Committee)] where Committee = array(2) [members_map, quorum].
+/// Returns committee members (cold credential → expiry epoch) and quorum.
 pub fn parse_committee_members(
     state_cbor: &[u8],
 ) -> Result<std::collections::BTreeMap<ade_types::Hash28, u64>, HarnessError> {
+    parse_committee_state(state_cbor).map(|cs| cs.members)
+}
+
+/// Parse full committee state from ConwayGovState[1].
+pub fn parse_committee_state(
+    state_cbor: &[u8],
+) -> Result<CommitteeState, HarnessError> {
     let off = navigate_to_nes(state_cbor)?;
     let es = skip_nes_to_epoch_state(state_cbor, off)?;
-    let off = skip_cbor(state_cbor, es)?;
+    let off = skip_cbor(state_cbor, es)?; // skip AccountState
     let (ls_body, _) = read_array_header(state_cbor, off)?;
-    let (cs_body, cs_len) = read_array_header(state_cbor, ls_body)?;
+    let off = skip_cbor(state_cbor, ls_body)?; // skip CertState
+    let (utxo_body, _) = read_array_header(state_cbor, off)?;
+    let mut off = utxo_body;
+    for _ in 0..3 { off = skip_cbor(state_cbor, off)?; }
+    let (gs_body, gs_len) = read_array_header(state_cbor, off)?;
 
-    if cs_len != 3 {
-        return Err(HarnessError::ParseError("not Conway CertState".to_string()));
+    if gs_len < 7 {
+        return Ok(CommitteeState { members: std::collections::BTreeMap::new(), quorum: (2, 3) });
     }
 
-    let (vs_body, vs_len) = read_array_header(state_cbor, cs_body)?;
-    if vs_len < 2 { return Ok(std::collections::BTreeMap::new()); }
+    // GS[1] = Committee wrapper
+    let gs1_off = skip_cbor(state_cbor, gs_body)?; // skip GS[0] Proposals
+    let (gs1_body, gs1_len) = read_array_header(state_cbor, gs1_off)?;
 
-    // Skip VS[0] (DRep regs) to reach VS[1] (committee)
-    let vs1_off = skip_cbor(state_cbor, vs_body)?;
+    if gs1_len == 0 {
+        // SNothing — no committee
+        return Ok(CommitteeState { members: std::collections::BTreeMap::new(), quorum: (2, 3) });
+    }
 
-    // VS[1] = committee map (credential → expiry epoch)
-    let (mut co, _, map_val) = read_cbor_initial(state_cbor, vs1_off)?;
+    // GS[1][0] = Committee = array(2) [members_map, quorum]
+    let (comm_body, comm_len) = read_array_header(state_cbor, gs1_body)?;
+    if comm_len < 2 {
+        return Ok(CommitteeState { members: std::collections::BTreeMap::new(), quorum: (2, 3) });
+    }
+
+    // comm[0] = members map: credential → epoch
+    let (mut co, _, map_val) = read_cbor_initial(state_cbor, comm_body)?;
     let mut members = std::collections::BTreeMap::new();
-
     let is_indef = map_val == u64::MAX;
     let mut count = 0u64;
 
@@ -1782,34 +1811,33 @@ pub fn parse_committee_members(
         if is_indef && state_cbor[co] == 0xff { break; }
         if !is_indef && count >= map_val { break; }
 
-        // Key: credential = bytes(28) or array(2) [type, hash]
+        // Key: credential = array(2) [type, hash28]
         let (k_body, k_maj, k_val) = read_cbor_initial(state_cbor, co)?;
         let key_end = skip_cbor(state_cbor, co)?;
         let mut hash = [0u8; 28];
-        if k_maj == 2 && k_val >= 28 {
-            hash.copy_from_slice(&state_cbor[k_body..k_body + 28]);
-        } else if k_maj == 4 {
+        if k_maj == 4 {
             let tag_end = skip_cbor(state_cbor, k_body)?;
             let (h_start, _, h_len) = read_cbor_initial(state_cbor, tag_end)?;
             if h_len >= 28 { hash.copy_from_slice(&state_cbor[h_start..h_start + 28]); }
+        } else if k_maj == 2 && k_val >= 28 {
+            hash.copy_from_slice(&state_cbor[k_body..k_body + 28]);
         }
         co = key_end;
 
-        // Value: expiry epoch — uint or array containing epoch
-        let (v_body, v_maj, v_val) = read_cbor_initial(state_cbor, co)?;
-        let expiry = if v_maj == 0 {
-            v_val
-        } else if v_maj == 4 {
-            // Array — first element might be the epoch
-            read_uint(state_cbor, v_body).map(|(_, v)| v).unwrap_or(0)
-        } else { 0 };
+        // Value: expiry epoch (uint)
+        let (_, expiry) = read_uint(state_cbor, co)?;
         co = skip_cbor(state_cbor, co)?;
 
         members.insert(ade_types::Hash28(hash), expiry);
         count += 1;
     }
 
-    Ok(members)
+    // comm[1] = quorum = tag(30, [num, den])
+    let quorum_off = skip_cbor(state_cbor, comm_body)?; // skip members map
+    let quorum = parse_rational_field(state_cbor, quorum_off)
+        .unwrap_or((2, 3));
+
+    Ok(CommitteeState { members, quorum })
 }
 
 /// Parse vote delegations from the DState UMap.

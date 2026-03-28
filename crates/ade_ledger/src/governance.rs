@@ -73,7 +73,12 @@ pub fn evaluate_ratification(
         }
 
         let is_ratified = match &proposal.gov_action {
-            GovAction::InfoAction => true, // Always ratified
+            GovAction::InfoAction => {
+                // InfoAction is always "ratified" but has no enactment effect.
+                // It stays in the proposal list until natural expiry.
+                remaining.push(proposal.clone());
+                continue;
+            }
             action => {
                 let action_idx = gov_action_threshold_index(action);
                 check_ratification(
