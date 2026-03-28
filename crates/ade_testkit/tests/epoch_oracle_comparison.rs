@@ -3091,6 +3091,56 @@ fn conway_drep_stake_distribution() {
     eprintln!("======================================\n");
 }
 
+/// Parse Conway governance proposals from snapshots.
+#[test]
+fn conway_governance_proposals() {
+    use ade_testkit::harness::snapshot_loader::{extract_state_from_tarball, parse_governance_proposals};
+    use ade_types::conway::governance::*;
+
+    let snapshots: &[(&str, &str)] = &[
+        ("Conway HFC 507", "snapshot_133660855.tar.gz"),
+        ("Conway 508", "snapshot_134092810.tar.gz"),
+        ("Conway 528", "snapshot_142732816.tar.gz"),
+        ("Conway 529", "snapshot_143164817.tar.gz"),
+    ];
+
+    eprintln!("\n=== CONWAY GOVERNANCE PROPOSALS ===");
+    for (label, file) in snapshots {
+        let path = snapshots_dir().join(file);
+        if !path.exists() { eprintln!("  {label}: SKIPPED"); continue; }
+        let data = extract_state_from_tarball(&path).unwrap();
+
+        // Try calling parse_reward_params AND parse_governance_proposals to compare
+        let rp = ade_testkit::harness::snapshot_loader::parse_reward_params(&data);
+        eprintln!("    reward_params: {:?}", rp.as_ref().map(|r| format!("nOpt={}", r.n_opt)).unwrap_or_else(|e| format!("ERR: {e}")));
+        match parse_governance_proposals(&data) {
+            Ok(proposals) => {
+                eprintln!("  {label}: {} proposals", proposals.len());
+                for (i, p) in proposals.iter().enumerate() {
+                    let action_type = match &p.gov_action {
+                        GovAction::ParameterChange { .. } => "ParameterChange",
+                        GovAction::HardForkInitiation { .. } => "HardForkInitiation",
+                        GovAction::TreasuryWithdrawals { .. } => "TreasuryWithdrawals",
+                        GovAction::NoConfidence { .. } => "NoConfidence",
+                        GovAction::UpdateCommittee { .. } => "UpdateCommittee",
+                        GovAction::NewConstitution { .. } => "NewConstitution",
+                        GovAction::InfoAction => "InfoAction",
+                    };
+                    eprintln!("    [{i}] {action_type}  deposit={} ADA  proposed={}  expires={}  committee_votes={}  drep_votes={}  spo_votes={}",
+                        p.deposit.0 / 1_000_000,
+                        p.proposed_in.0,
+                        p.expires_after.0,
+                        p.committee_votes.len(),
+                        p.drep_votes.len(),
+                        p.spo_votes.len());
+                }
+            }
+            Err(e) => eprintln!("  {label}: FAILED: {e}"),
+        }
+    }
+    eprintln!("===================================\n");
+}
+
 /// Probe the CBOR structure of go snapshot pool entries to check PoolParams vs StakePoolSnapShot.
 #[test]
 fn probe_go_snapshot_pool_entry_structure() {

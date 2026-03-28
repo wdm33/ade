@@ -5,44 +5,57 @@
 // - Explicit state transitions only
 // - Canonical serialization for all persisted/hashed data
 
-/// Voting procedures map. Opaque in Phase 1.
+use crate::{Hash28, Hash32, EpochNo};
+use crate::tx::Coin;
+
+/// Governance action identifier: transaction hash + index within that transaction.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
+pub struct GovActionId {
+    pub tx_hash: Hash32,
+    pub index: u32,
+}
+
+/// Vote on a governance proposal.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Vote {
+    No,
+    Yes,
+    Abstain,
+}
+
+/// Governance action type (CIP-1694).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum GovAction {
+    ParameterChange { prev_action: Option<GovActionId>, update: Vec<u8>, policy_hash: Option<Hash28> },
+    HardForkInitiation { prev_action: Option<GovActionId>, protocol_version: (u64, u64) },
+    TreasuryWithdrawals { withdrawals: Vec<(Vec<u8>, Coin)>, policy_hash: Option<Hash28> },
+    NoConfidence { prev_action: Option<GovActionId> },
+    UpdateCommittee { prev_action: Option<GovActionId>, raw: Vec<u8> },
+    NewConstitution { prev_action: Option<GovActionId>, raw: Vec<u8> },
+    InfoAction,
+}
+
+/// The state of a governance proposal: votes collected, procedure, timing.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct GovActionState {
+    pub action_id: GovActionId,
+    pub committee_votes: Vec<(Hash28, Vote)>,
+    pub drep_votes: Vec<(Hash28, Vote)>,
+    pub spo_votes: Vec<(Hash28, Vote)>,
+    pub deposit: Coin,
+    pub return_addr: Vec<u8>,
+    pub gov_action: GovAction,
+    pub proposed_in: EpochNo,
+    pub expires_after: EpochNo,
+}
+
+/// Voting procedures in a transaction body. Opaque — parsed at validation time.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct VotingProcedures {
     pub raw: Vec<u8>,
 }
 
-/// Proposal procedure (deposit + reward account + gov action + anchor). Opaque in Phase 1.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct ProposalProcedure {
-    pub raw: Vec<u8>,
-}
-
-/// Governance action (parameter change, hard fork, treasury withdrawal, etc.).
-/// Opaque in Phase 1.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct GovAction {
-    pub raw: Vec<u8>,
-}
-
-/// Governance action identifier (tx hash + index). Opaque in Phase 1.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct GovActionId {
-    pub raw: Vec<u8>,
-}
-
-/// Voter (constitutional committee, DRep, or SPO). Opaque in Phase 1.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct Voter {
-    pub raw: Vec<u8>,
-}
-
-/// Vote (yes, no, abstain). Opaque in Phase 1.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct Vote {
-    pub raw: Vec<u8>,
-}
-
-/// Anchor (URL + content hash for off-chain metadata). Opaque in Phase 1.
+/// Anchor (URL + content hash for off-chain metadata). Opaque.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Anchor {
     pub raw: Vec<u8>,

@@ -1332,13 +1332,7 @@ fn navigate_to_umap_elems(state_cbor: &[u8]) -> Result<usize, HarnessError> {
 
     // LS[0] = CertState = array(N)
     let (cs_body, cs_len) = read_array_header(state_cbor, ls_body)?;
-    // Probe both LS fields to understand the on-disk layout
-    let ls1_off = skip_cbor(state_cbor, ls_body)?;
-    let (_, ls1_maj, ls1_val) = read_cbor_initial(state_cbor, ls1_off)?;
-    let ls1_size = skip_cbor(state_cbor, ls1_off).unwrap_or(ls1_off + 1) - ls1_off;
-    let ls0_size = ls1_off - ls_body;
-    eprintln!("    [navigate_to_umap_elems] LS[0] = array({cs_len}) size={}KB  LS[1] = major={ls1_maj}(val={ls1_val}) size={}KB",
-        ls0_size / 1000, ls1_size / 1000);
+    // LS[0] = CertState/DPState
 
     // Navigate to DState
     let dstate_off = if cs_len == 3 {
@@ -1359,26 +1353,12 @@ fn navigate_to_umap_elems(state_cbor: &[u8]) -> Result<usize, HarnessError> {
 
     // DState — could be array(4) or map or other encoding
     let (_, ds_maj, _ds_val) = read_cbor_initial(state_cbor, dstate_off)?;
-    eprintln!("    [navigate_to_umap_elems] DState: major={ds_maj} val={_ds_val}");
+    // DState major={ds_maj}
 
     if ds_maj == 4 {
         // DState = array(N). Find the UMap (largest map field).
         let (ds_body, ds_len) = read_array_header(state_cbor, dstate_off)?;
-        eprintln!("    [navigate_to_umap_elems] DState = array({ds_len}) at offset {dstate_off}");
-        // Probe fields
-        {
-            let mut p = ds_body;
-            for fi in 0..ds_len.min(6) {
-                let (_, pm, pv) = read_cbor_initial(state_cbor, p).unwrap_or((0, 99, 0));
-                let end = skip_cbor(state_cbor, p).unwrap_or(0);
-                let sz = if end > p { end - p } else { 0 };
-                let pt = match pm { 0=>"uint", 2=>"bytes", 4=>"arr", 5=>"map", 6=>"tag", 7=>"spc", _=>"?" };
-                let ss = if sz > 1_000_000 { format!("{}MB", sz/1_000_000) } else if sz > 1000 { format!("{}KB", sz/1000) } else { format!("{sz}B") };
-                eprintln!("      DState[{fi}]: {pt}(val={pv}) size={ss}");
-                if end == 0 { eprintln!("      DState[{fi}]: skip_cbor FAILED"); break; }
-                p = end;
-            }
-        }
+        // DState[0] is always the UMap
         // DState[0] is always the UMap (verified empirically for all eras)
         let (_, umap_maj, _) = read_cbor_initial(state_cbor, ds_body)?;
         if umap_maj == 4 {
@@ -1744,6 +1724,188 @@ pub fn compute_drep_stake_distribution(
         }
     }
     dist
+}
+
+/// Parse governance proposals from ConwayGovState[0].
+///
+/// Path: NES → ES → LS[1] (UTxOState) → UTxOState[3] (GovState) → GS[0] (Proposals)
+/// Proposals = array(2) [metadata, proposals_sequence]
+/// proposals_sequence = array of GovActionState entries
+///
+/// GovActionState = array(7):
+///   [0] gasId: array(2) [txHash, index]
+///   [1] committeeVotes: map(credential → vote)
+///   [2] drepVotes: map(credential → vote)
+///   [3] spoVotes: map(poolHash → vote)
+///   [4] proposalProcedure: array(4) [deposit, returnAddr, govAction, anchor]
+///   [5] proposedIn: epoch
+///   [6] expiresAfter: epoch
+pub fn parse_governance_proposals(
+    state_cbor: &[u8],
+) -> Result<Vec<ade_types::conway::governance::GovActionState>, HarnessError> {
+    use ade_types::conway::governance::*;
+
+    // Use the exact same navigation as parse_reward_params.
+    let off = navigate_to_nes(state_cbor)?;
+    let es = skip_nes_to_epoch_state(state_cbor, off)?;
+    let off = skip_cbor(state_cbor, es)?; // skip AccountState
+    let (ls_body, _) = read_array_header(state_cbor, off)?;
+    let off = skip_cbor(state_cbor, ls_body)?; // skip CertState (LS[0])
+    let (utxo_body, _) = read_array_header(state_cbor, off)?;
+    let mut off = utxo_body;
+    for _ in 0..3 { off = skip_cbor(state_cbor, off)?; }
+    let (gs_body, gs_len) = read_array_header(state_cbor, off)?;
+
+    if gs_len < 7 {
+        return Ok(Vec::new()); // Not Conway GovState
+    }
+
+    // GS[0] = Proposals = array(2) [metadata, proposals_sequence]
+    let (prop_body, prop_len) = read_array_header(state_cbor, gs_body)?;
+    if prop_len < 2 { return Ok(Vec::new()); }
+
+    // Skip metadata (P[0]), get proposals sequence (P[1])
+    let p1_off = skip_cbor(state_cbor, prop_body)?;
+    let (p1_body, p1_len) = read_array_header(state_cbor, p1_off)?;
+
+    let mut proposals = Vec::new();
+    let mut off = p1_body;
+
+    for _ in 0..p1_len {
+        let (gas_body, gas_len) = read_array_header(state_cbor, off)?;
+        if gas_len != 7 {
+            off = skip_cbor(state_cbor, off)?;
+            continue;
+        }
+
+        // [0] gasId = array(2) [txHash(bytes32), index(uint)]
+        let (id_body, _) = read_array_header(state_cbor, gas_body)?;
+        let (h_start, _, h_len) = read_cbor_initial(state_cbor, id_body)?;
+        let mut tx_hash = [0u8; 32];
+        if h_len >= 32 { tx_hash.copy_from_slice(&state_cbor[h_start..h_start + 32]); }
+        let id_next = skip_cbor(state_cbor, id_body)?;
+        let (_, index) = read_uint(state_cbor, id_next)?;
+        let action_id = GovActionId { tx_hash: ade_types::Hash32(tx_hash), index: index as u32 };
+        let f1 = skip_cbor(state_cbor, gas_body)?;
+
+        // [1] committeeVotes, [2] drepVotes, [3] spoVotes
+        let committee_votes = parse_vote_map(state_cbor, f1)?;
+        let f2 = skip_cbor(state_cbor, f1)?;
+        let drep_votes = parse_vote_map(state_cbor, f2)?;
+        let f3 = skip_cbor(state_cbor, f2)?;
+        let spo_votes = parse_vote_map(state_cbor, f3)?;
+        let f4 = skip_cbor(state_cbor, f3)?;
+
+        // [4] proposalProcedure = array(4) [deposit, returnAddr, govAction, anchor]
+        let (pp_body, _) = read_array_header(state_cbor, f4)?;
+        let (_, deposit) = read_uint(state_cbor, pp_body)?;
+        let pp1 = skip_cbor(state_cbor, pp_body)?;
+        let (ra_start, _, ra_len) = read_cbor_initial(state_cbor, pp1)?;
+        let return_addr = state_cbor[ra_start..ra_start + ra_len as usize].to_vec();
+        let pp2 = skip_cbor(state_cbor, pp1)?;
+        let gov_action = parse_gov_action(state_cbor, pp2)?;
+        let f5 = skip_cbor(state_cbor, f4)?;
+
+        // [5] proposedIn, [6] expiresAfter
+        let (f6, proposed_in) = read_uint(state_cbor, f5)?;
+        let (_, expires_after) = read_uint(state_cbor, f6)?;
+
+        proposals.push(GovActionState {
+            action_id,
+            committee_votes,
+            drep_votes,
+            spo_votes,
+            deposit: ade_types::tx::Coin(deposit),
+            return_addr,
+            gov_action,
+            proposed_in: ade_types::EpochNo(proposed_in),
+            expires_after: ade_types::EpochNo(expires_after),
+        });
+
+        off = skip_cbor(state_cbor, off)?;
+    }
+
+    Ok(proposals)
+}
+
+fn parse_vote_map(
+    state_cbor: &[u8],
+    map_off: usize,
+) -> Result<Vec<(ade_types::Hash28, ade_types::conway::governance::Vote)>, HarnessError> {
+    use ade_types::conway::governance::Vote;
+
+    let (mut co, _, map_val) = read_cbor_initial(state_cbor, map_off)?;
+    let mut votes = Vec::new();
+
+    if map_val == 0 { return Ok(votes); } // empty definite map
+
+    let is_indef = map_val == u64::MAX;
+    let mut count = 0u64;
+
+    while co < state_cbor.len() {
+        if is_indef && state_cbor[co] == 0xff { break; }
+        if !is_indef && count >= map_val { break; }
+
+        // Key: either credential = array(2) [type, hash28] OR raw hash = bytes(28)
+        let (key_body, key_maj, key_val) = read_cbor_initial(state_cbor, co)?;
+        let key_end = skip_cbor(state_cbor, co)?;
+        let mut hash = [0u8; 28];
+        if key_maj == 4 {
+            // Credential: array(2) [type_tag, bytes(28)]
+            let tag_end = skip_cbor(state_cbor, key_body)?;
+            let (h_start, _, h_len) = read_cbor_initial(state_cbor, tag_end)?;
+            if h_len >= 28 { hash.copy_from_slice(&state_cbor[h_start..h_start + 28]); }
+        } else if key_maj == 2 && key_val >= 28 {
+            // Raw hash: bytes(28)
+            hash.copy_from_slice(&state_cbor[key_body..key_body + 28]);
+        }
+        co = key_end;
+
+        // Value: uint (0=No, 1=Yes, 2=Abstain)
+        let (_, vote_val) = read_uint(state_cbor, co)?;
+        let vote = match vote_val {
+            0 => Vote::No,
+            1 => Vote::Yes,
+            _ => Vote::Abstain,
+        };
+        co = skip_cbor(state_cbor, co)?;
+
+        votes.push((ade_types::Hash28(hash), vote));
+        count += 1;
+    }
+    Ok(votes)
+}
+
+fn parse_gov_action(
+    state_cbor: &[u8],
+    off: usize,
+) -> Result<ade_types::conway::governance::GovAction, HarnessError> {
+    use ade_types::conway::governance::GovAction;
+
+    let (body, _, len) = read_cbor_initial(state_cbor, off)?;
+    if len == 0 { return Ok(GovAction::InfoAction); }
+
+    let (_, tag) = read_uint(state_cbor, body)?;
+    match tag {
+        6 => Ok(GovAction::InfoAction),
+        0 => Ok(GovAction::ParameterChange {
+            prev_action: None, update: Vec::new(), policy_hash: None,
+        }),
+        1 => Ok(GovAction::HardForkInitiation {
+            prev_action: None, protocol_version: (0, 0),
+        }),
+        2 => Ok(GovAction::TreasuryWithdrawals {
+            withdrawals: Vec::new(), policy_hash: None,
+        }),
+        3 => Ok(GovAction::NoConfidence { prev_action: None }),
+        4 => Ok(GovAction::UpdateCommittee {
+            prev_action: None, raw: Vec::new(),
+        }),
+        5 => Ok(GovAction::NewConstitution {
+            prev_action: None, raw: Vec::new(),
+        }),
+        _ => Ok(GovAction::InfoAction),
+    }
 }
 
 // ── Public wrappers for CBOR navigation (used by integration tests) ──
