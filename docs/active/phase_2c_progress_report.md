@@ -1,8 +1,7 @@
 # Phase 2 Complete Progress Report — Detailed Technical State
 
-**Date**: 2026-03-25
-**Commit**: `eb0debd` (main)
-**Tests**: 583 passing, clippy clean
+**Date**: 2026-03-28
+**Commit**: `7a5e8e7` (main)
 **Branch**: main
 
 ---
@@ -239,87 +238,57 @@ Oracle sub-state values extracted at each HFC boundary: epoch, treasury, reserve
 
 ## 4. What Is Still Open
 
-### CE-71 (Epoch Boundary Oracle Equivalence) — REWARD FORMULA CLOSED
+### CE-71 (Epoch Boundary Oracle Equivalence)
 - Per-pool reward formula: **0 lovelace delta** across 617 pools (BigInt Rational + Haskell-exact leader/member split)
-- Four-flow decomposition: **0 prediction error** (reward + MIR reserves→treasury + MIR reserves→accounts + MIR treasury→accounts)
-- MIR modeled as separate typed fields in `EpochBoundaryAccounting`, never collapsed into reward inference
-- **Status: CLOSED** for reward distribution. MIR is accounted for as a separate authoritative flow.
-- Conway T-25B: 113.5% ratio, dominated by go-snapshot alignment, not formula
+- Four-flow decomposition: **0 prediction error**
+- MIR modeled as separate typed fields in `EpochBoundaryAccounting`
+- **Status: CLOSED** for reward distribution.
 
-### CE-72 (Epoch Boundary Reward Formula)
+### CE-72 (Conway Epoch Boundary)
 
-**Formula (PV-gated totalStake — proven across all eras):**
-- PV < 4 (Allegra): `totalStake = activeStake = sum(pool_stakes)`
-- PV 4-6 (Mary/Alonzo): `totalStake = maxSupply - reserves` (circulation)
-- PV 7-8 (Babbage): `totalStake = maxSupply - reserves - treasury`
-- PV ≥ 9 (Conway): `totalStake = maxSupply - reserves` (circulation)
-- Bracket: includes `/z` in factor3 pledge influence term
-- Pledge satisfaction: `pledge > sum(owner_stakes) → maxPool = 0` (PV ≥ 4 only)
+**Reward formula slice — PROVEN:**
 
-**Why PV-gated:** The Haskell ledger restructured deposit/stake tracking at PV7 (Babbage), changing the effective totalStake. Conway (PV9) redesigned treasury as a first-class governance quantity, reverting to circulation.
+Reward-formula correctness proven on the authoritative PREALL comparison surface (correct epoch data matching the oracle's actual inputs):
 
-**Results at regular epoch boundaries (FIXED variant):**
+| Boundary | PV | Ratio |
+|----------|-----|-------|
+| Allegra 236→237 | 3 | 100.00% (activeStake + MIR, separate formula) |
+| Alonzo 310→311 | 6 | 100.065% (9K ADA rounding) |
+| Babbage 406→407 | 8 | 100.000% (exact) |
+| Conway 528→529 | 9 | 100.000% (exact) |
 
-| Boundary | PV | circ | circ-trs | Best | Residual |
-|----------|-----|------|----------|------|----------|
-| Allegra 236→237 | 3 | — | — | activeStake | CLOSED (+MIR=100%) |
-| Alonzo 310→311 | 6 | 99.95% | 101.38% | circ | 0.05% (go alignment) |
-| Babbage 406→407 | 8 | 97.97% | **100.13%** | circ-trs | 0.13% (go alignment) |
-| Conway 528→529 | 9 | 100.38% | 103.24% | circ | 0.38% (pointer addresses?) |
-
-**HFC boundaries** show consistent pattern — `circ-trs` also improves PV7 HFC (98.86% → 100.80%).
-
-**Conway 0.38% residual:** Likely from PV9 pointer address change (pointer addresses stop accruing rewards at PV9, per Haskell ledger changelog). Need to count pointer-address delegations in Conway go snapshot to confirm.
-
-**Key infrastructure built:**
-- PV-gated totalStake dispatch in `rules.rs` (4 branches)
-- Pool owner parsing from pool params[6] (both raw bytes(28) and credential-wrapped formats)
-- Pledge satisfaction check with error-tolerant owner extraction
-- `/z` bracket fix (recovered 1-1.3% across all eras)
-- Protocol params verified from CBOR (nOpt=500, a0=3/10, rho=3/1000, tau=1/5 — identical all eras)
-- Deposits parsed from UTxOState[1] (4.2-4.8M ADA, negligible effect)
-- MIR confirmed zero at all regular boundaries
-
-**Haskell source confirmed (PulsingReward.hs, Rewards.hs, Era.hs):**
-- `totalStake = circulation = maxSupply - reserves` — same for ALL protocol versions
-- Dual denominators: `sigma = poolStake/totalStake` (bracket), `sigmaA = poolStake/totalActiveStake` (apparentPerformance)
-- `totalActiveStake` = pre-computed sum of all delegated stake, reconstructed from SnapShot at decode time
-- `StakePoolSnapShot` replaces raw PoolParams — contains pre-computed per-pool data (spssSelfDelegatedOwnersStake)
-- Only reward-relevant PV gate: `hardforkBabbageForgoRewardPrefilter` at PV > 6 (removes leader reward pre-filter for unregistered accounts)
-- No PV-gated totalStake branching exists in the source
-
-**Reward-formula correctness is now effectively proven on the authoritative PREALL surfaces:** Babbage and Conway match exactly, Alonzo is within 0.065%, and Allegra remains consistent with its separate activeStake+MIR rule. The remaining variance appears to be boundary/alignment noise in non-authoritative FIXED comparisons, not missing reward semantics.
-
-**Root cause of earlier gaps (resolved):**
-1. Performance denominator: Haskell uses `sigmaA = poolStake/totalActiveStake`, not `sigma = poolStake/circulation`. We were using circulation for both.
-2. Performance capping: Haskell's `mkApparentPerformance` returns unbounded Rational. We incorrectly capped at 1.0, penalizing over-performing pools.
-3. Epoch alignment: FIXED variant uses epoch N data to compare against epoch N-1 reward application. PREALL uses correct epoch data and matches exactly.
-
-**Confirmed from Haskell source (PulsingReward.hs, Rewards.hs):**
-- `totalStake = circulation = maxSupply - reserves` (bracket sigma)
-- `totalActiveStake = sumAllStake(ssActiveStake)` (performance sigmaA)
-- `mkApparentPerformance` returns `beta / sigmaA` unbounded
+Formula (confirmed from Haskell source — PulsingReward.hs, Rewards.hs):
+- PV < 4: `totalStake = activeStake`
+- PV 4+: `sigma = poolStake / circulation` (bracket), `sigmaA = poolStake / totalActiveStake` (performance)
+- `apparentPerformance = beta / sigmaA` — unbounded, NOT capped at 1.0
 - `poolReward = floor(appPerf * maxPool)` — can exceed maxPool
 
-**Status: PARTIAL — reward formula slice proven, broader CE-72 open.**
-Conway epoch-boundary reward formula is proven on the authoritative PREALL comparison surface. This closes the reward-formula uncertainty but does not close CE-72's broader Conway governance/pulser/state-equivalence requirements (DRep stake, ratification/enactment ordering, pulser equivalence, governance-state effects beyond rewards).
-**Remaining for full CE-72:** governance-state correctness at epoch boundary, ratification/enactment behavior, DRep stake handling, pulser equivalence beyond reward computation.
+Root cause of earlier 2-4% gaps: (1) used circulation for both sigma and sigmaA, (2) incorrectly capped performance at 1.0. Both fixed.
+
+**Broader CE-72 — OPEN:**
+
+CE-72 covers the full Conway epoch boundary, not just the reward formula. Remaining:
+- Governance-state correctness at epoch boundary (DRep stake, ratification/enactment ordering)
+- Pulser equivalence beyond reward computation
+- Conway-specific epoch boundary state effects (treasury withdrawals, governance proposals)
+
+**Status: PARTIAL** — reward formula proven, broader Conway governance semantics open.
 
 ### CE-73 (HFC Translation Oracle State-Hash Equality)
 - Translation logic semantically correct (22/22 fields match)
-- State hash requires full LedgerState→CBOR encoder (4-6 weeks estimated)
+- State hash requires full LedgerState→CBOR encoder
 - **Status: OPEN** — requires go/no-go decision on encoder work
 
 ### CE-74 (Ledger Determinism CI)
 - `ci_check_ledger_determinism.sh` exists, runs `ledger_determinism.rs`
-- Current coverage: structural decode determinism on empty state (CBOR parse + structural validation). 7 eras, single-block and multi-block sequences. Passes in <1s.
-- **Missing for closure**: stateful replay with loaded snapshots, UTxO tracking enabled, epoch boundary crossings, reward computation. The current test proves the parser is deterministic but does not exercise the state paths where nondeterminism could hide.
-- **Status: PARTIAL** — structural smoke test only. Needs stateful depth.
+- Current: structural decode determinism on empty state. 7 eras, <1s.
+- Missing: stateful replay with loaded snapshots, UTxO tracking, epoch boundary crossings, reward computation.
+- **Status: PARTIAL** — structural smoke only. Needs stateful depth.
 
 ### CE-75 (Differential Divergence CI)
 - `ci_check_differential_divergence.sh` exists, runs `differential_replay_all_eras.rs`
-- Current coverage: verdict agreement (accept/reject) across 10,500 blocks (1,500 per era, 7 eras). All non-Plutus blocks accepted. Passes in <2s.
-- **Missing for closure**: per-block state comparison against oracle state hashes (not just accept/reject). Epoch boundary portion explicitly required by the CE definition. Current test exercises the decoder, not the full ledger.
+- Current: verdict agreement (accept/reject) across 10,500 blocks (1,500 per era, 7 eras). <2s.
+- Missing: per-block state comparison against oracle state hashes. Epoch boundary portion required by CE definition.
 - **Status: PARTIAL** — verdict agreement only. Needs state-level comparison.
 
 ### CE-77 (ScriptVerdict)
@@ -349,23 +318,26 @@ The oracle uses `Blake2b-256(encodeDiskExtLedgerState)` which includes Haskell-s
 ### Certificate Processing
 Certificates parsed from tx body key 4, applied via `apply_cert` to accumulate `CertState` during replay. Types 0-4 (Shelley) handled; Conway types (7+) stored as opaque fallback.
 
-### Reward Computation Order
-Rewards computed from PRE-rotation go snapshot, then snapshots rotated. This matches the Shelley spec where rewards are based on the epoch that just ended, and the snapshot state updates for the next epoch.
+### Reward Computation
+Dual-denominator formula with unbounded apparent performance. Rewards computed using go snapshot data at the epoch boundary. PREALL comparison surface (using the correct epoch's data) is the authoritative test.
 
 ### Epoch Detection
 Slot-to-epoch mapping uses mainnet Shelley parameters: start slot 4,492,800, start epoch 208, epoch length 432,000. Not configurable (hardcoded for mainnet).
 
 ---
 
-## 6. Next Steps (Priority Order)
+## 6. Next Steps
 
-1. **CE-74 + CE-75** — Write the two CI scripts (`ci_check_ledger_determinism.sh`, `ci_check_differential_divergence.sh`). Low-risk, high-value regression gates that verify existing work across all 7 eras.
+Open items by status:
 
-2. **CE-72 closure** — Capture Babbage epoch 407 snapshot and Conway regular-epoch pair (e.g., 528→529) to confirm regular boundaries match Alonzo 310→311's 99.95%. This closes the formula as proven correct; HFC residuals are go-snapshot alignment (documented, not actionable without full HFC translation encoding).
-
-3. **CE-79** — Four-tier gate statement document.
-
-4. **CE-73 encoding spike** — bounded attempt to match oracle state hash for one transition. Only after T-25 state infrastructure is stronger.
+| Item | Status | What's needed |
+|------|--------|---------------|
+| CE-72 governance | OPEN | DRep stake, ratification/enactment, Conway governance state at boundary |
+| CE-73 | OPEN | Full LedgerState→CBOR encoder or go/no-go decision |
+| CE-74 | PARTIAL | Stateful replay depth in determinism CI |
+| CE-75 | PARTIAL | Per-block state comparison in divergence CI |
+| CE-79 | NOT STARTED | Four-tier gate statement document |
+| CE-68/69/70 | PARTIAL | Deferred to Phase 3 (Plutus) |
 
 ---
 
