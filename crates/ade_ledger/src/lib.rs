@@ -18,6 +18,7 @@ pub mod conway;
 pub mod delegation;
 pub mod epoch;
 pub mod error;
+pub mod governance;
 pub mod hfc;
 pub mod mary;
 pub mod pparams;
