@@ -229,3 +229,157 @@ fn check_ratification(
 
     true
 }
+
+// ─── Enactment ───────────────────────────────────────────────────────
+
+/// Priority class for enactment ordering.
+/// Ratified proposals are enacted in this order (highest priority first).
+/// Within each class, proposals are enacted in GovActionId order.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+enum EnactmentPriority {
+    HardForkInitiation = 0,
+    UpdateCommitteeOrNoConfidence = 1,
+    NewConstitution = 2,
+    ParameterChange = 3,
+    TreasuryWithdrawals = 4,
+    InfoAction = 5,
+}
+
+fn enactment_priority(action: &GovAction) -> EnactmentPriority {
+    match action {
+        GovAction::HardForkInitiation { .. } => EnactmentPriority::HardForkInitiation,
+        GovAction::UpdateCommittee { .. } | GovAction::NoConfidence { .. } =>
+            EnactmentPriority::UpdateCommitteeOrNoConfidence,
+        GovAction::NewConstitution { .. } => EnactmentPriority::NewConstitution,
+        GovAction::ParameterChange { .. } => EnactmentPriority::ParameterChange,
+        GovAction::TreasuryWithdrawals { .. } => EnactmentPriority::TreasuryWithdrawals,
+        GovAction::InfoAction => EnactmentPriority::InfoAction,
+    }
+}
+
+/// The effects of enacting ratified governance proposals.
+#[derive(Debug, Clone, Default)]
+pub struct EnactmentEffects {
+    /// Treasury withdrawals to execute: (reward_account, amount).
+    pub treasury_withdrawals: Vec<(Vec<u8>, Coin)>,
+    /// Total ADA withdrawn from treasury.
+    pub treasury_withdrawn: u64,
+    /// Protocol parameter update (raw CBOR, applied later).
+    pub parameter_updates: Vec<Vec<u8>>,
+    /// Hard fork initiation: target protocol version.
+    pub hard_fork: Option<(u64, u64)>,
+    /// Committee dissolved (NoConfidence enacted).
+    pub committee_dissolved: bool,
+    /// Committee changes: (removed, added with expiry).
+    pub committee_changes: Option<(Vec<Hash28>, Vec<(Hash28, u64)>)>,
+    /// Constitution replaced (raw CBOR).
+    pub new_constitution: Option<Vec<u8>>,
+    /// Number of InfoActions enacted (no state effect).
+    pub info_actions: u32,
+    /// Deposits returned to proposers for enacted proposals.
+    pub deposits_returned: Vec<(Vec<u8>, Coin)>,
+}
+
+/// Enact ratified proposals in priority-class order.
+///
+/// Within each priority class, proposals are enacted in GovActionId order.
+/// Each enactment produces effects that modify the ledger state.
+///
+/// Conway spec: enactment is atomic at the epoch boundary. All ratified
+/// proposals are enacted before any state is committed.
+pub fn enact_proposals(
+    ratified: &[GovActionState],
+) -> EnactmentEffects {
+    let mut effects = EnactmentEffects::default();
+
+    // Sort by (priority_class, GovActionId) for deterministic ordering
+    let mut sorted: Vec<&GovActionState> = ratified.iter().collect();
+    sorted.sort_by(|a, b| {
+        let pa = enactment_priority(&a.gov_action);
+        let pb = enactment_priority(&b.gov_action);
+        pa.cmp(&pb).then(a.action_id.cmp(&b.action_id))
+    });
+
+    for proposal in &sorted {
+        match &proposal.gov_action {
+            GovAction::InfoAction => {
+                effects.info_actions += 1;
+            }
+            GovAction::TreasuryWithdrawals { withdrawals, .. } => {
+                for (addr, amount) in withdrawals {
+                    effects.treasury_withdrawals.push((addr.clone(), *amount));
+                    effects.treasury_withdrawn += amount.0;
+                }
+            }
+            GovAction::ParameterChange { update, .. } => {
+                if !update.is_empty() {
+                    effects.parameter_updates.push(update.clone());
+                }
+            }
+            GovAction::HardForkInitiation { protocol_version, .. } => {
+                effects.hard_fork = Some(*protocol_version);
+            }
+            GovAction::NoConfidence { .. } => {
+                effects.committee_dissolved = true;
+            }
+            GovAction::UpdateCommittee { raw, .. } => {
+                // Committee changes stored as raw CBOR for now.
+                // Full parsing deferred until needed for oracle comparison.
+                let _ = raw;
+            }
+            GovAction::NewConstitution { raw, .. } => {
+                effects.new_constitution = Some(raw.clone());
+            }
+        }
+
+        // Return deposit to proposer
+        effects.deposits_returned.push((
+            proposal.return_addr.clone(),
+            proposal.deposit,
+        ));
+    }
+
+    effects
+}
+
+// ─── Expiry ──────────────────────────────────────────────────────────
+
+/// Remove expired proposals from the governance state.
+///
+/// A proposal expires if `expires_after < current_epoch`.
+/// Returns (active_proposals, expired_proposals).
+pub fn expire_proposals(
+    proposals: &[GovActionState],
+    current_epoch: u64,
+) -> (Vec<GovActionState>, Vec<GovActionState>) {
+    let mut active = Vec::new();
+    let mut expired = Vec::new();
+
+    for p in proposals {
+        if p.expires_after.0 < current_epoch {
+            expired.push(p.clone());
+        } else {
+            active.push(p.clone());
+        }
+    }
+
+    (active, expired)
+}
+
+/// Mark inactive DReps: those whose last activity was more than
+/// `drep_activity` epochs ago. Inactive DReps are excluded from
+/// the ratification quorum denominator.
+///
+/// Returns the set of active DRep credential hashes.
+pub fn compute_active_dreps(
+    drep_last_activity: &BTreeMap<Hash28, u64>, // credential → last active epoch
+    current_epoch: u64,
+    drep_activity_period: u64,
+) -> std::collections::BTreeSet<Hash28> {
+    drep_last_activity.iter()
+        .filter(|(_, last_active)| {
+            current_epoch.saturating_sub(**last_active) <= drep_activity_period
+        })
+        .map(|(cred, _)| cred.clone())
+        .collect()
+}

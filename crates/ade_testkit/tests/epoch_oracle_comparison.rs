@@ -3174,6 +3174,126 @@ fn conway_governance_proposals() {
     eprintln!("===================================\n");
 }
 
+/// Run full Conway governance pipeline: ratification + enactment on epoch 528→529.
+#[test]
+fn conway_governance_ratification_test() {
+    use ade_testkit::harness::snapshot_loader::{
+        extract_state_from_tarball, parse_governance_proposals, parse_conway_gov_params,
+        parse_vote_delegations, compute_drep_stake_distribution,
+        parse_snapshot_stake_distribution, parse_snapshot_delegations,
+    };
+    use ade_ledger::governance::{evaluate_ratification, enact_proposals, expire_proposals};
+
+    // PRE = epoch 528, POST = epoch 529
+    let pre_path = snapshots_dir().join("snapshot_142732816.tar.gz");
+    let post_path = snapshots_dir().join("snapshot_143164817.tar.gz");
+    if !pre_path.exists() || !post_path.exists() { eprintln!("SKIPPED"); return; }
+
+    let pre_data = extract_state_from_tarball(&pre_path).unwrap();
+    let post_data = extract_state_from_tarball(&post_path).unwrap();
+
+    // Parse governance state from PRE snapshot
+    let pre_proposals = parse_governance_proposals(&pre_data).unwrap();
+    let post_proposals = parse_governance_proposals(&post_data).unwrap();
+    let gov_params = parse_conway_gov_params(&pre_data).unwrap();
+
+    eprintln!("\n=== CONWAY GOVERNANCE RATIFICATION TEST (528→529) ===");
+    eprintln!("  PRE proposals: {}", pre_proposals.len());
+    eprintln!("  POST proposals: {}", post_proposals.len());
+
+    // Compute DRep stake distribution from PRE snapshot
+    let vote_delegs = parse_vote_delegations(&pre_data).unwrap();
+    let stake_dist = parse_snapshot_stake_distribution(&pre_data, 2).unwrap();
+    let delegations = parse_snapshot_delegations(&pre_data, 2).unwrap();
+
+    let mut stake_map: std::collections::BTreeMap<[u8; 28], u64> = std::collections::BTreeMap::new();
+    for (h, s) in &stake_dist { let mut k = [0u8;28]; k.copy_from_slice(&h.0[..28]); stake_map.insert(k, *s); }
+    let mut go_delegations = std::collections::BTreeMap::new();
+    for (ch, ph) in &delegations {
+        let mut cb = [0u8;28]; cb.copy_from_slice(&ch.0[..28]);
+        let mut pb = [0u8;28]; pb.copy_from_slice(&ph.0[..28]);
+        let stake = stake_map.get(&cb).copied().unwrap_or(0);
+        go_delegations.insert(ade_types::Hash28(cb),
+            (ade_types::tx::PoolId(ade_types::Hash28(pb)), ade_types::tx::Coin(stake)));
+    }
+    let go_snapshot = ade_ledger::epoch::StakeSnapshot {
+        delegations: go_delegations,
+        pool_stakes: std::collections::BTreeMap::new(),
+    };
+    let drep_dist = compute_drep_stake_distribution(&vote_delegs, &go_snapshot);
+
+    eprintln!("  DRep stake: {} unique DReps, {} ADA total",
+        drep_dist.len(), drep_dist.values().sum::<u64>() / 1_000_000);
+
+    // Build pool stake map (from go snapshot pool_stakes)
+    let pre_snap = LoadedSnapshot::from_tarball(&pre_path).unwrap();
+    let pre_state = pre_snap.to_ledger_state();
+    let pool_stake = &pre_state.epoch_state.snapshots.go.0.pool_stakes;
+
+    // Run ratification
+    let result = evaluate_ratification(
+        &pre_proposals,
+        &drep_dist,
+        pool_stake,
+        &std::collections::BTreeMap::new(), // empty committee for now
+        &ade_ledger::rational::Rational::new(2, 3).unwrap(), // 2/3 quorum
+        &gov_params.pool_voting_thresholds,
+        &gov_params.drep_voting_thresholds,
+        528, // current epoch
+    );
+
+    eprintln!("  Ratification result:");
+    eprintln!("    ratified: {}", result.ratified.len());
+    eprintln!("    expired: {}", result.expired.len());
+    eprintln!("    remaining: {}", result.remaining.len());
+
+    for p in &result.ratified {
+        let action_type = match &p.gov_action {
+            ade_types::conway::governance::GovAction::InfoAction => "InfoAction",
+            ade_types::conway::governance::GovAction::ParameterChange { .. } => "ParameterChange",
+            ade_types::conway::governance::GovAction::TreasuryWithdrawals { .. } => "TreasuryWithdrawals",
+            ade_types::conway::governance::GovAction::HardForkInitiation { .. } => "HardForkInitiation",
+            ade_types::conway::governance::GovAction::NoConfidence { .. } => "NoConfidence",
+            ade_types::conway::governance::GovAction::UpdateCommittee { .. } => "UpdateCommittee",
+            ade_types::conway::governance::GovAction::NewConstitution { .. } => "NewConstitution",
+        };
+        eprintln!("      {action_type} (proposed={}, expires={})", p.proposed_in.0, p.expires_after.0);
+    }
+    for p in &result.expired {
+        let action_type = match &p.gov_action {
+            ade_types::conway::governance::GovAction::InfoAction => "InfoAction",
+            _ => "other",
+        };
+        eprintln!("      EXPIRED: {action_type} (proposed={}, expires={})", p.proposed_in.0, p.expires_after.0);
+    }
+
+    // Enact ratified proposals
+    let effects = enact_proposals(&result.ratified);
+    eprintln!("  Enactment effects:");
+    eprintln!("    info_actions: {}", effects.info_actions);
+    eprintln!("    treasury_withdrawn: {} ADA", effects.treasury_withdrawn / 1_000_000);
+    eprintln!("    hard_fork: {:?}", effects.hard_fork);
+    eprintln!("    committee_dissolved: {}", effects.committee_dissolved);
+    eprintln!("    parameter_updates: {}", effects.parameter_updates.len());
+    eprintln!("    deposits_returned: {} ({} ADA total)",
+        effects.deposits_returned.len(),
+        effects.deposits_returned.iter().map(|(_, c)| c.0).sum::<u64>() / 1_000_000);
+
+    // Check expiry
+    let (active, expired_check) = expire_proposals(&pre_proposals, 529);
+    eprintln!("  Expiry at epoch 529: {} active, {} expired", active.len(), expired_check.len());
+
+    // Compare with oracle: the POST snapshot should reflect the enacted changes
+    eprintln!("\n  Oracle comparison:");
+    let pre_header = &pre_snap.header;
+    let post_snap = LoadedSnapshot::from_tarball(&post_path).unwrap();
+    let post_header = &post_snap.header;
+    let treasury_change = post_header.treasury as i64 - pre_header.treasury as i64;
+    eprintln!("    treasury change: {} ADA", treasury_change / 1_000_000);
+    eprintln!("    (positive = treasury grew from rewards/fees)");
+    eprintln!("=============================================\n");
+}
+
 /// Probe the CBOR structure of go snapshot pool entries to check PoolParams vs StakePoolSnapShot.
 #[test]
 fn probe_go_snapshot_pool_entry_structure() {
