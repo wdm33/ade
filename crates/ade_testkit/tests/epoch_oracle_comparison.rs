@@ -3294,6 +3294,157 @@ fn conway_governance_ratification_test() {
     eprintln!("=============================================\n");
 }
 
+/// Parse VState: DRep registrations and committee members.
+#[test]
+fn conway_vstate_parse() {
+    use ade_testkit::harness::snapshot_loader::{
+        extract_state_from_tarball, parse_drep_registrations, parse_committee_members,
+    };
+
+    let snapshots: &[(&str, &str)] = &[
+        ("Conway 508", "snapshot_134092810.tar.gz"),
+        ("Conway 528", "snapshot_142732816.tar.gz"),
+    ];
+
+    eprintln!("\n=== CONWAY VSTATE PARSE ===");
+    for (label, file) in snapshots {
+        let path = snapshots_dir().join(file);
+        if !path.exists() { eprintln!("  {label}: SKIPPED"); continue; }
+        let data = extract_state_from_tarball(&path).unwrap();
+
+        match parse_drep_registrations(&data) {
+            Ok(regs) => {
+                let active_at_current: usize = regs.values()
+                    .filter(|r| r.expiry_epoch >= 528)
+                    .count();
+                let total_deposit: u64 = regs.values().map(|r| r.deposit).sum();
+                let min_expiry = regs.values().map(|r| r.expiry_epoch).min().unwrap_or(0);
+                let max_expiry = regs.values().map(|r| r.expiry_epoch).max().unwrap_or(0);
+                eprintln!("  {label}: {} DRep registrations", regs.len());
+                eprintln!("    active (expiry >= 528): {active_at_current}");
+                eprintln!("    total deposit: {} ADA", total_deposit / 1_000_000);
+                eprintln!("    expiry range: {min_expiry}..{max_expiry}");
+            }
+            Err(e) => eprintln!("  {label} DRep regs: FAILED: {e}"),
+        }
+
+        match parse_committee_members(&data) {
+            Ok(members) => {
+                eprintln!("    committee members: {}", members.len());
+                for (hash, expiry) in &members {
+                    eprintln!("      {:02x}{:02x}{:02x}{:02x}.. expiry={expiry}",
+                        hash.0[0], hash.0[1], hash.0[2], hash.0[3]);
+                }
+            }
+            Err(e) => eprintln!("  {label} committee: FAILED: {e}"),
+        }
+    }
+    eprintln!("===========================\n");
+}
+
+/// Probe VState structure across Conway snapshots for DRep activity tracking.
+#[test]
+fn conway_vstate_probe() {
+    use ade_testkit::harness::snapshot_loader::extract_state_from_tarball;
+
+    let snapshots: &[(&str, &str)] = &[
+        ("Conway HFC 507", "snapshot_133660855.tar.gz"),
+        ("Conway 508", "snapshot_134092810.tar.gz"),
+        ("Conway 528", "snapshot_142732816.tar.gz"),
+    ];
+
+    eprintln!("\n=== CONWAY VSTATE PROBE ===");
+    for (label, file) in snapshots {
+        let path = snapshots_dir().join(file);
+        if !path.exists() { eprintln!("  {label}: SKIPPED"); continue; }
+        let data = extract_state_from_tarball(&path).unwrap();
+
+        // Navigate to VState: NES → ES → LS → LS[0] = CertState = array(3) → CS[0] = VState
+        let off = ade_testkit::harness::snapshot_loader::navigate_to_nes_pub(&data).unwrap();
+        let es = ade_testkit::harness::snapshot_loader::skip_cbor_pub(&data,
+            ade_testkit::harness::snapshot_loader::skip_cbor_pub(&data,
+                ade_testkit::harness::snapshot_loader::skip_cbor_pub(&data, off).unwrap() // NES[1]
+            ).unwrap() // NES[2]
+        ).unwrap(); // NES[3] = ES body (past array header via skip_nes_to_epoch_state)
+
+        // Actually use the proper path
+        let nes_body = off;
+        // Skip NES[0] epoch
+        let off2 = ade_testkit::harness::snapshot_loader::skip_cbor_pub(&data, nes_body).unwrap();
+        // Skip NES[1] bprev
+        let off2 = ade_testkit::harness::snapshot_loader::skip_cbor_pub(&data, off2).unwrap();
+        // Skip NES[2] bcur
+        let off2 = ade_testkit::harness::snapshot_loader::skip_cbor_pub(&data, off2).unwrap();
+        // NES[3] = EpochState = array(4)
+        let (es_body, _) = ade_testkit::harness::snapshot_loader::read_array_header_pub(&data, off2).unwrap();
+        // Skip ES[0] AccountState
+        let off2 = ade_testkit::harness::snapshot_loader::skip_cbor_pub(&data, es_body).unwrap();
+        // ES[1] = LedgerState = array(2)
+        let (ls_body, _) = ade_testkit::harness::snapshot_loader::read_array_header_pub(&data, off2).unwrap();
+        // LS[0] = CertState = array(3) for Conway
+        let (cs_body, cs_len) = ade_testkit::harness::snapshot_loader::read_array_header_pub(&data, ls_body).unwrap();
+        if cs_len != 3 { eprintln!("  {label}: CertState = array({cs_len}), not Conway"); continue; }
+        // CS[0] = VState = array(3)
+        let (vs_body, vs_len) = ade_testkit::harness::snapshot_loader::read_array_header_pub(&data, cs_body).unwrap();
+        eprintln!("  {label}: VState = array({vs_len})");
+
+        // Probe VState fields
+        let mut fi = vs_body;
+        for i in 0..vs_len.min(5) {
+            let (_, fm, fv) = ade_testkit::harness::snapshot_loader::read_cbor_initial_pub(&data, fi).unwrap();
+            let fs = ade_testkit::harness::snapshot_loader::skip_cbor_pub(&data, fi).unwrap() - fi;
+            let ft = match fm { 0=>"uint", 2=>"bytes", 4=>"arr", 5=>"map", 6=>"tag", _=>"?" };
+            let fss = if fs > 1000 { format!("{}KB", fs/1000) } else { format!("{fs}B") };
+            eprintln!("    VS[{i}]: {ft}(val={fv}) size={fss}");
+
+            // For VS[0] (DRep registrations), probe first few entries
+            if i == 0 && fm == 5 {
+                let (mut co, _, _) = ade_testkit::harness::snapshot_loader::read_cbor_initial_pub(&data, fi).unwrap();
+                let mut count = 0u32;
+                while co < data.len() && data[co] != 0xff && count < 3 {
+                    // Key: credential
+                    let key_end = ade_testkit::harness::snapshot_loader::skip_cbor_pub(&data, co).unwrap();
+                    let ks = key_end - co;
+                    // Value: DRepState
+                    let (val_body, vm, vv) = ade_testkit::harness::snapshot_loader::read_cbor_initial_pub(&data, key_end).unwrap();
+                    let val_end = ade_testkit::harness::snapshot_loader::skip_cbor_pub(&data, key_end).unwrap();
+                    let vs = val_end - key_end;
+                    let vt = match vm { 0=>"uint", 4=>"arr", 5=>"map", 6=>"tag", _=>"?" };
+                    eprintln!("      drep[{count}]: key={ks}B → {vt}(val={vv}) {vs}B");
+
+                    // If DRepState is array, probe its fields
+                    if vm == 4 {
+                        let mut si = val_body;
+                        for j in 0..vv.min(5) {
+                            let (_, sm, sv) = ade_testkit::harness::snapshot_loader::read_cbor_initial_pub(&data, si).unwrap();
+                            let ss = ade_testkit::harness::snapshot_loader::skip_cbor_pub(&data, si).unwrap() - si;
+                            let st = match sm { 0=>"uint", 2=>"bytes", 4=>"arr", 5=>"map", 6=>"tag", 7=>"spc", _=>"?" };
+                            eprint!("        DS[{j}]: {st}(val={sv}) {ss}B");
+                            if sm == 0 { eprint!(" epoch={sv}"); }
+                            eprintln!();
+                            si = ade_testkit::harness::snapshot_loader::skip_cbor_pub(&data, si).unwrap();
+                        }
+                    }
+
+                    co = val_end;
+                    count += 1;
+                }
+                // Count total entries
+                let mut total = count;
+                while co < data.len() && data[co] != 0xff {
+                    co = ade_testkit::harness::snapshot_loader::skip_cbor_pub(&data, co).unwrap();
+                    co = ade_testkit::harness::snapshot_loader::skip_cbor_pub(&data, co).unwrap();
+                    total += 1;
+                }
+                eprintln!("      total DRep registrations: {total}");
+            }
+
+            fi = ade_testkit::harness::snapshot_loader::skip_cbor_pub(&data, fi).unwrap();
+        }
+    }
+    eprintln!("===========================\n");
+}
+
 /// Probe the CBOR structure of go snapshot pool entries to check PoolParams vs StakePoolSnapShot.
 #[test]
 fn probe_go_snapshot_pool_entry_structure() {

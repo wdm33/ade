@@ -1626,6 +1626,143 @@ pub fn parse_registered_credentials(
     Ok(creds)
 }
 
+/// DRep registration state parsed from VState.
+#[derive(Debug, Clone)]
+pub struct DRepRegistration {
+    /// Expiry epoch: DRep is active if this >= current_epoch.
+    pub expiry_epoch: u64,
+    /// Deposit amount (lovelace).
+    pub deposit: u64,
+}
+
+/// Parse DRep registrations from VState[0] (Conway CertState[0]).
+///
+/// Returns a map of DRep credential hash → DRepRegistration.
+/// Used for:
+/// - DRep activity/expiry tracking (DS[0] = expiry epoch)
+/// - Deposit accounting (DS[2] = deposit)
+pub fn parse_drep_registrations(
+    state_cbor: &[u8],
+) -> Result<std::collections::BTreeMap<ade_types::Hash28, DRepRegistration>, HarnessError> {
+    let off = navigate_to_nes(state_cbor)?;
+    let es = skip_nes_to_epoch_state(state_cbor, off)?;
+    let off = skip_cbor(state_cbor, es)?; // skip AccountState
+    let (ls_body, _) = read_array_header(state_cbor, off)?;
+    let (cs_body, cs_len) = read_array_header(state_cbor, ls_body)?;
+
+    if cs_len != 3 {
+        return Err(HarnessError::ParseError(format!(
+            "VState: expected Conway CertState array(3), got array({cs_len})"
+        )));
+    }
+
+    // CS[0] = VState = array(3) [drepRegs, committee, epochNo]
+    let (vs_body, vs_len) = read_array_header(state_cbor, cs_body)?;
+    if vs_len < 1 {
+        return Ok(std::collections::BTreeMap::new());
+    }
+
+    // VS[0] = DRep registrations map (credential → DRepState)
+    let (mut co, _, _) = read_cbor_initial(state_cbor, vs_body)?;
+    let mut regs = std::collections::BTreeMap::new();
+
+    while co < state_cbor.len() && state_cbor[co] != 0xff {
+        // Key: credential = array(2) [type, hash28] or bytes(28)
+        let (k_body, k_maj, k_val) = read_cbor_initial(state_cbor, co)?;
+        let key_end = skip_cbor(state_cbor, co)?;
+        let mut hash = [0u8; 28];
+        if k_maj == 4 {
+            // Credential array: skip type tag, read hash
+            let tag_end = skip_cbor(state_cbor, k_body)?;
+            let (h_start, _, h_len) = read_cbor_initial(state_cbor, tag_end)?;
+            if h_len >= 28 { hash.copy_from_slice(&state_cbor[h_start..h_start + 28]); }
+        } else if k_maj == 2 && k_val >= 28 {
+            hash.copy_from_slice(&state_cbor[k_body..k_body + 28]);
+        }
+        co = key_end;
+
+        // Value: DRepState = array(4) [expiry, anchor, deposit, delegators]
+        let (ds_body, ds_maj, ds_len) = read_cbor_initial(state_cbor, co)?;
+        if ds_maj == 4 && ds_len >= 3 {
+            let (_, expiry_epoch) = read_uint(state_cbor, ds_body)?;
+            let f1 = skip_cbor(state_cbor, ds_body)?; // skip expiry
+            let f2 = skip_cbor(state_cbor, f1)?;       // skip anchor
+            let (_, deposit) = read_uint(state_cbor, f2)?;
+
+            regs.insert(ade_types::Hash28(hash), DRepRegistration {
+                expiry_epoch,
+                deposit,
+            });
+        }
+        co = skip_cbor(state_cbor, co)?;
+    }
+
+    Ok(regs)
+}
+
+/// Parse committee members from VState[1] (Conway CertState[0][1]).
+///
+/// Returns a map of committee credential hash → expiry epoch.
+pub fn parse_committee_members(
+    state_cbor: &[u8],
+) -> Result<std::collections::BTreeMap<ade_types::Hash28, u64>, HarnessError> {
+    let off = navigate_to_nes(state_cbor)?;
+    let es = skip_nes_to_epoch_state(state_cbor, off)?;
+    let off = skip_cbor(state_cbor, es)?;
+    let (ls_body, _) = read_array_header(state_cbor, off)?;
+    let (cs_body, cs_len) = read_array_header(state_cbor, ls_body)?;
+
+    if cs_len != 3 {
+        return Err(HarnessError::ParseError("not Conway CertState".to_string()));
+    }
+
+    let (vs_body, vs_len) = read_array_header(state_cbor, cs_body)?;
+    if vs_len < 2 { return Ok(std::collections::BTreeMap::new()); }
+
+    // Skip VS[0] (DRep regs) to reach VS[1] (committee)
+    let vs1_off = skip_cbor(state_cbor, vs_body)?;
+
+    // VS[1] = committee map (credential → expiry epoch)
+    let (mut co, _, map_val) = read_cbor_initial(state_cbor, vs1_off)?;
+    let mut members = std::collections::BTreeMap::new();
+
+    let is_indef = map_val == u64::MAX;
+    let mut count = 0u64;
+
+    while co < state_cbor.len() {
+        if is_indef && state_cbor[co] == 0xff { break; }
+        if !is_indef && count >= map_val { break; }
+
+        // Key: credential = bytes(28) or array(2) [type, hash]
+        let (k_body, k_maj, k_val) = read_cbor_initial(state_cbor, co)?;
+        let key_end = skip_cbor(state_cbor, co)?;
+        let mut hash = [0u8; 28];
+        if k_maj == 2 && k_val >= 28 {
+            hash.copy_from_slice(&state_cbor[k_body..k_body + 28]);
+        } else if k_maj == 4 {
+            let tag_end = skip_cbor(state_cbor, k_body)?;
+            let (h_start, _, h_len) = read_cbor_initial(state_cbor, tag_end)?;
+            if h_len >= 28 { hash.copy_from_slice(&state_cbor[h_start..h_start + 28]); }
+        }
+        co = key_end;
+
+        // Value: expiry epoch — uint or array containing epoch
+        let (v_body, v_maj, v_val) = read_cbor_initial(state_cbor, co)?;
+        let expiry = if v_maj == 0 {
+            v_val
+        } else if v_maj == 4 {
+            // Array — first element might be the epoch
+            read_uint(state_cbor, v_body).map(|(_, v)| v).unwrap_or(0)
+        } else { 0 };
+        co = skip_cbor(state_cbor, co)?;
+
+        members.insert(ade_types::Hash28(hash), expiry);
+        count += 1;
+    }
+
+    Ok(members)
+}
+
 /// Parse vote delegations from the DState UMap.
 ///
 /// Returns a map of credential hash → DRep for all credentials with
