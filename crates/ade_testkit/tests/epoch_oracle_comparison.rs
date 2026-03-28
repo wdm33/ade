@@ -3091,6 +3091,42 @@ fn conway_drep_stake_distribution() {
     eprintln!("======================================\n");
 }
 
+/// Parse Conway governance parameters (voting thresholds, committee size, etc.)
+#[test]
+fn conway_governance_params() {
+    use ade_testkit::harness::snapshot_loader::{extract_state_from_tarball, parse_conway_gov_params};
+
+    let path = snapshots_dir().join("snapshot_133660855.tar.gz"); // Conway HFC 507
+    if !path.exists() { eprintln!("SKIPPED"); return; }
+    let data = extract_state_from_tarball(&path).unwrap();
+
+    // Raw probe PP[24-30]
+    if let Ok(rp) = ade_testkit::harness::snapshot_loader::parse_reward_params(&data) {
+        eprintln!("  reward_params OK: nOpt={}", rp.n_opt);
+    }
+    match parse_conway_gov_params(&data) {
+        Ok(gp) => {
+            eprintln!("\n=== CONWAY GOVERNANCE PARAMS ===");
+            eprintln!("  poolVotingThresholds ({}):", gp.pool_voting_thresholds.len());
+            for (i, (n, d)) in gp.pool_voting_thresholds.iter().enumerate() {
+                eprintln!("    [{i}] {n}/{d}");
+            }
+            eprintln!("  dRepVotingThresholds ({}):", gp.drep_voting_thresholds.len());
+            for (i, (n, d)) in gp.drep_voting_thresholds.iter().enumerate() {
+                eprintln!("    [{i}] {n}/{d}");
+            }
+            // Also show raw types for debugging
+            eprintln!("  committeeMinSize: {} (raw)", gp.committee_min_size);
+            eprintln!("  committeeMaxTermLength: {}", gp.committee_max_term_length);
+            eprintln!("  govActionLifetime: {}", gp.gov_action_lifetime);
+            eprintln!("  govActionDeposit: {} ADA", gp.gov_action_deposit / 1_000_000);
+            eprintln!("  dRepDeposit: {} ADA", gp.drep_deposit / 1_000_000);
+            eprintln!("================================\n");
+        }
+        Err(e) => eprintln!("FAILED: {e}"),
+    }
+}
+
 /// Parse Conway governance proposals from snapshots.
 #[test]
 fn conway_governance_proposals() {
@@ -3110,9 +3146,6 @@ fn conway_governance_proposals() {
         if !path.exists() { eprintln!("  {label}: SKIPPED"); continue; }
         let data = extract_state_from_tarball(&path).unwrap();
 
-        // Try calling parse_reward_params AND parse_governance_proposals to compare
-        let rp = ade_testkit::harness::snapshot_loader::parse_reward_params(&data);
-        eprintln!("    reward_params: {:?}", rp.as_ref().map(|r| format!("nOpt={}", r.n_opt)).unwrap_or_else(|e| format!("ERR: {e}")));
         match parse_governance_proposals(&data) {
             Ok(proposals) => {
                 eprintln!("  {label}: {} proposals", proposals.len());

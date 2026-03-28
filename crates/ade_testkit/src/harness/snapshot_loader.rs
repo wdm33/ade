@@ -1982,6 +1982,126 @@ pub fn parse_reward_params(
     Ok(RewardParams { n_opt, a0_num, a0_den, rho_num, rho_den, tau_num, tau_den })
 }
 
+/// Conway governance protocol parameters (PParams fields 24-30).
+#[derive(Debug)]
+pub struct ConwayGovParams {
+    /// PP[24] = poolVotingThresholds: array of rationals
+    pub pool_voting_thresholds: Vec<(u64, u64)>,
+    /// PP[25] = dRepVotingThresholds: array of rationals
+    pub drep_voting_thresholds: Vec<(u64, u64)>,
+    /// PP[26] = committeeMinSize
+    pub committee_min_size: u64,
+    /// PP[27] = committeeMaxTermLength
+    pub committee_max_term_length: u64,
+    /// PP[28] = govActionLifetime
+    pub gov_action_lifetime: u64,
+    /// PP[29] = govActionDeposit
+    pub gov_action_deposit: u64,
+    /// PP[30] = dRepDeposit
+    pub drep_deposit: u64,
+}
+
+/// Parse Conway governance protocol parameters (fields 24-30) from CBOR.
+pub fn parse_conway_gov_params(
+    state_cbor: &[u8],
+) -> Result<ConwayGovParams, HarnessError> {
+    let off = navigate_to_nes(state_cbor)?;
+    let es = skip_nes_to_epoch_state(state_cbor, off)?;
+    let off = skip_cbor(state_cbor, es)?;
+    let (ls_body, _) = read_array_header(state_cbor, off)?;
+    let off = skip_cbor(state_cbor, ls_body)?;
+    let (utxo_body, _) = read_array_header(state_cbor, off)?;
+    let mut off = utxo_body;
+    for _ in 0..3 { off = skip_cbor(state_cbor, off)?; }
+    let (gs_body, gs_len) = read_array_header(state_cbor, off)?;
+    if gs_len < 7 {
+        return Err(HarnessError::ParseError("not Conway GovState".to_string()));
+    }
+    let pp_index = 3u32;
+    let mut off = gs_body;
+    for _ in 0..pp_index { off = skip_cbor(state_cbor, off)?; }
+    let (pp_body, pp_len) = read_array_header(state_cbor, off)?;
+    if pp_len < 31 {
+        return Err(HarnessError::ParseError(format!("PParams has {pp_len} fields, need 31")));
+    }
+
+    // Read all 31 fields, extracting the ones we need.
+    // PP[0..23] = standard Shelley+ params (skip)
+    // PP[24] = poolVotingThresholds, PP[25] = dRepVotingThresholds
+    // PP[26] = committeeMinSize, PP[27] = committeeMaxTermLength
+    // PP[28] = govActionLifetime, PP[29] = govActionDeposit, PP[30] = dRepDeposit
+    let mut offsets = Vec::new();
+    let mut off = pp_body;
+    for i in 0..pp_len.min(31) {
+        let (_, m, v) = read_cbor_initial(state_cbor, off).unwrap_or((0, 0, 0));
+        let sz = skip_cbor(state_cbor, off).unwrap_or(off + 1) - off;
+        let _ = (m, v, sz); // suppress unused warnings
+        offsets.push(off);
+        off = skip_cbor(state_cbor, off)?;
+    }
+
+    // Conway PParams field mapping (empirically verified):
+    // PP[22] = poolVotingThresholds (array of rationals)
+    // PP[23] = dRepVotingThresholds (array of rationals)
+    // PP[24] = committeeMinSize
+    // PP[25] = committeeMaxTermLength
+    // PP[26] = govActionLifetime
+    // PP[27] = govActionDeposit
+    // PP[28] = dRepDeposit
+    let pool_thresholds = if offsets.len() > 22 {
+        parse_threshold_array(state_cbor, offsets[22]).unwrap_or_default()
+    } else { Vec::new() };
+    let drep_thresholds = if offsets.len() > 23 {
+        parse_threshold_array(state_cbor, offsets[23]).unwrap_or_default()
+    } else { Vec::new() };
+
+    let read_uint_field = |idx: usize| -> u64 {
+        if idx >= offsets.len() { return 0; }
+        let (inner, maj, val) = read_cbor_initial(state_cbor, offsets[idx]).unwrap_or((0, 0, 0));
+        if maj == 0 { val }
+        else if maj == 6 {
+            read_uint(state_cbor, inner).map(|(_, v)| v).unwrap_or(0)
+        } else { 0 }
+    };
+
+    let committee_min_size = read_uint_field(24);
+    let committee_max_term_length = read_uint_field(25);
+    let gov_action_lifetime = read_uint_field(26);
+    let gov_action_deposit = read_uint_field(27);
+    let drep_deposit = read_uint_field(28);
+
+    Ok(ConwayGovParams {
+        pool_voting_thresholds: pool_thresholds,
+        drep_voting_thresholds: drep_thresholds,
+        committee_min_size,
+        committee_max_term_length,
+        gov_action_lifetime,
+        gov_action_deposit,
+        drep_deposit,
+    })
+}
+
+fn parse_threshold_array(state_cbor: &[u8], off: usize) -> Result<Vec<(u64, u64)>, HarnessError> {
+    let (body, maj, len) = read_cbor_initial(state_cbor, off)?;
+    if maj != 4 { return Ok(Vec::new()); }
+    let mut thresholds = Vec::new();
+    let mut fi = body;
+    for _ in 0..len {
+        let result = parse_rational_field(state_cbor, fi);
+        match result {
+            Ok((num, den)) => thresholds.push((num, den)),
+            Err(_) => {
+                // Some thresholds might be encoded as plain uint (e.g., 0 or 1)
+                if let Ok((_, val)) = read_uint(state_cbor, fi) {
+                    thresholds.push((val, 1));
+                }
+            }
+        }
+        fi = skip_cbor(state_cbor, fi)?;
+    }
+    Ok(thresholds)
+}
+
 fn parse_rational_field(state_cbor: &[u8], off: usize) -> Result<(u64, u64), HarnessError> {
     let (inner, maj, _) = read_cbor_initial(state_cbor, off)?;
     if maj == 6 {
