@@ -250,20 +250,44 @@ Oracle sub-state values extracted at each HFC boundary: epoch, treasury, reserve
 
 Reward-formula correctness proven on the authoritative PREALL comparison surface (correct epoch data matching the oracle's actual inputs):
 
-| Boundary | PV | Ratio |
-|----------|-----|-------|
-| Allegra 236→237 | 3 | 100.00% (activeStake + MIR, separate formula) |
-| Alonzo 310→311 | 6 | 100.065% (9K ADA rounding) |
-| Babbage 406→407 | 8 | 100.000% (exact) |
-| Conway 528→529 | 9 | 100.000% (exact) |
+| Boundary | PV | Ratio | Residual |
+|----------|-----|-------|----------|
+| Allegra 236→237 | 3 | 100.000% | 0 (activeStake + MIR, separate formula) |
+| Alonzo 310→311 | 6 | 100.0008% | 164 ADA (see residual analysis below) |
+| Babbage 406→407 | 8 | 100.0000% | 0 (exact) |
+| Conway 528→529 | 9 | 100.0000% | 0 (exact) |
 
 Formula (confirmed from Haskell source — PulsingReward.hs, Rewards.hs):
 - PV < 4: `totalStake = activeStake`
 - PV 4+: `sigma = poolStake / circulation` (bracket), `sigmaA = poolStake / totalActiveStake` (performance)
 - `apparentPerformance = beta / sigmaA` — unbounded, NOT capped at 1.0
 - `poolReward = floor(appPerf * maxPool)` — can exceed maxPool
+- PV ≤ 6: `hardforkBabbageForgoRewardPrefilter` is inactive — leader/member rewards only distributed to registered accounts (DState UMap entries with non-null RDPair)
+- PV > 6: pre-filter skipped, all rewards distributed regardless of registration
 
 Root cause of earlier 2-4% gaps: (1) used circulation for both sigma and sigmaA, (2) incorrectly capped performance at 1.0. Both fixed.
+
+**Alonzo 164 ADA residual — root cause analysis:**
+
+The Alonzo residual (100.0008%, 164 ADA on a 20.4B ADA boundary) comes from the leader/member reward pre-filter at PV ≤ 6. The exact mechanism:
+
+1. At PV ≤ 6, the Haskell only distributes rewards to **registered** accounts. The registration set = DState UMap entries with non-null RDPair (reward+deposit pair). Unregistered credentials' rewards go back to reserves (dr2).
+
+2. The registration set the oracle uses is the DState at **startStep time** — after all epoch N-1 blocks have been processed but before the boundary tick. This state doesn't exist in our PRE/POST snapshot pair:
+   - PRE snapshot = start of epoch N (after previous boundary processing)
+   - POST snapshot = start of epoch N+1 (after current boundary processing)
+   - Oracle's set = end of epoch N-1, after all N-1 blocks (between PRE N-1 and PRE N)
+
+3. We approximate with POST registered credentials (1,055,538). The oracle's actual set is slightly smaller — accounts that registered during epoch 310's first block (POST capture point) or were added by applyRUpd are in our set but not in the oracle's. The ~6,411 extra registrations cause us to distribute ~164 ADA to accounts the oracle didn't.
+
+4. **Where to look if this becomes an issue:**
+   - `parse_registered_credentials()` in `snapshot_loader.rs` — parses UMap from DState
+   - The UMap for pre-Conway is at `LS[0] → DPState[1] → DState[0] → array(2) [umElems, umPtrs]`
+   - The UMap for Conway is at `LS[0] → CertState[2] → DState[0] → map(indefinite)`
+   - The RDPair check: UMElem[0] major=4 (array) with val > 0 = registered (SJust)
+   - To close the 164 ADA exactly: need the DState at the exact epoch boundary tick, OR implement the full pulser with per-credential registration checking against the epoch-end DState
+
+5. **This does NOT affect Babbage/Conway** — at PV > 6, `hardforkBabbageForgoRewardPrefilter` returns True, skipping the registration check entirely. All rewards are distributed regardless of registration status.
 
 **Broader CE-72 — OPEN:**
 

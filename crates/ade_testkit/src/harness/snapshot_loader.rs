@@ -1332,6 +1332,13 @@ fn navigate_to_umap_elems(state_cbor: &[u8]) -> Result<usize, HarnessError> {
 
     // LS[0] = CertState = array(N)
     let (cs_body, cs_len) = read_array_header(state_cbor, ls_body)?;
+    // Probe both LS fields to understand the on-disk layout
+    let ls1_off = skip_cbor(state_cbor, ls_body)?;
+    let (_, ls1_maj, ls1_val) = read_cbor_initial(state_cbor, ls1_off)?;
+    let ls1_size = skip_cbor(state_cbor, ls1_off).unwrap_or(ls1_off + 1) - ls1_off;
+    let ls0_size = ls1_off - ls_body;
+    eprintln!("    [navigate_to_umap_elems] LS[0] = array({cs_len}) size={}KB  LS[1] = major={ls1_maj}(val={ls1_val}) size={}KB",
+        ls0_size / 1000, ls1_size / 1000);
 
     // Navigate to DState
     let dstate_off = if cs_len == 3 {
@@ -1345,24 +1352,41 @@ fn navigate_to_umap_elems(state_cbor: &[u8]) -> Result<usize, HarnessError> {
         // Need to navigate differently — go to LS[1] instead
         return navigate_to_umap_elems_via_ls1(state_cbor, ls_body);
     } else {
-        // Pre-Conway: DState is first element of DPState = array(2)
-        cs_body
+        // Pre-Conway: DPState = array(2) [PState, DState] (on-disk order)
+        // DState is the SECOND element (the large one with credentials)
+        skip_cbor(state_cbor, cs_body)?
     };
 
     // DState — could be array(4) or map or other encoding
     let (_, ds_maj, _ds_val) = read_cbor_initial(state_cbor, dstate_off)?;
+    eprintln!("    [navigate_to_umap_elems] DState: major={ds_maj} val={_ds_val}");
 
     if ds_maj == 4 {
-        // DState = array(N)
-        let (ds_body, _) = read_array_header(state_cbor, dstate_off)?;
-        // DState[0] = UMap
+        // DState = array(N). Find the UMap (largest map field).
+        let (ds_body, ds_len) = read_array_header(state_cbor, dstate_off)?;
+        eprintln!("    [navigate_to_umap_elems] DState = array({ds_len}) at offset {dstate_off}");
+        // Probe fields
+        {
+            let mut p = ds_body;
+            for fi in 0..ds_len.min(6) {
+                let (_, pm, pv) = read_cbor_initial(state_cbor, p).unwrap_or((0, 99, 0));
+                let end = skip_cbor(state_cbor, p).unwrap_or(0);
+                let sz = if end > p { end - p } else { 0 };
+                let pt = match pm { 0=>"uint", 2=>"bytes", 4=>"arr", 5=>"map", 6=>"tag", 7=>"spc", _=>"?" };
+                let ss = if sz > 1_000_000 { format!("{}MB", sz/1_000_000) } else if sz > 1000 { format!("{}KB", sz/1000) } else { format!("{sz}B") };
+                eprintln!("      DState[{fi}]: {pt}(val={pv}) size={ss}");
+                if end == 0 { eprintln!("      DState[{fi}]: skip_cbor FAILED"); break; }
+                p = end;
+            }
+        }
+        // DState[0] is always the UMap (verified empirically for all eras)
         let (_, umap_maj, _) = read_cbor_initial(state_cbor, ds_body)?;
         if umap_maj == 4 {
-            // UMap = array(2) [umElems, umPtrs]
+            // Pre-Conway: UMap = array(2) [umElems, umPtrs]
             let (umap_body, _) = read_array_header(state_cbor, ds_body)?;
             Ok(umap_body)
         } else if umap_maj == 5 {
-            // UMap might be encoded directly as a map
+            // Conway: UMap encoded directly as indefinite map
             Ok(ds_body)
         } else {
             Err(HarnessError::ParseError(format!(
@@ -1568,6 +1592,58 @@ pub fn parse_decentralization_param(
             "d parameter: expected tag or uint, got major {maj} at offset {off}"
         )))
     }
+}
+
+/// Parse the set of registered credential hashes from the DState UMap.
+///
+/// Uses navigate_to_umap_elems to handle era-specific on-disk layout.
+/// The UMap umElems map keys are the registered credential hashes.
+///
+/// Returns the set of 28-byte credential hashes. Used for the leader reward
+/// pre-filter (hardforkBabbageForgoRewardPrefilter at PV ≤ 6).
+pub fn parse_registered_credentials(
+    state_cbor: &[u8],
+) -> Result<std::collections::BTreeSet<ade_types::Hash28>, HarnessError> {
+    let umap_body = navigate_to_umap_elems(state_cbor)?;
+
+    // umElems = map(credential → UMElem)
+    // UMElem = array(4) [StrictMaybe RDPair, Set Ptr, StrictMaybe PoolHash, StrictMaybe DRep]
+    // A credential is "account registered" only if UMElem[0] (RDPair) is non-null.
+    // StrictMaybe encoding: SNothing = array(0), SJust x = array(1, [x])
+    let (mut co, _, _) = read_cbor_initial(state_cbor, umap_body)?;
+    let mut creds = std::collections::BTreeSet::new();
+    while co < state_cbor.len() && state_cbor[co] != 0xff {
+        // Key: array(2) [type_tag, bytes(28)]
+        let (key_inner, _, _) = read_cbor_initial(state_cbor, co)?;
+        let key_end = skip_cbor(state_cbor, co)?;
+        let tag_end = skip_cbor(state_cbor, key_inner)?;
+        let (hash_start, _, hash_len) = read_cbor_initial(state_cbor, tag_end)?;
+        let mut h = [0u8; 28];
+        if hash_len >= 28 {
+            h.copy_from_slice(&state_cbor[hash_start..hash_start + 28]);
+        }
+        co = key_end;
+
+        // Value: UMElem = array(4) [rdpair, ptrs, pool, drep]
+        // Check if UMElem[0] (RDPair) is non-null (SJust = array(1+))
+        let (elem_body, elem_maj, _) = read_cbor_initial(state_cbor, co)?;
+        if elem_maj == 4 {
+            // UMElem is array(4). Read first field = StrictMaybe RDPair
+            let (_, rdp_maj, rdp_val) = read_cbor_initial(state_cbor, elem_body)?;
+            // SNothing = array(0), SJust = array(1, [...])
+            let is_registered = rdp_maj == 4 && rdp_val > 0;
+            if is_registered && hash_len >= 28 {
+                creds.insert(ade_types::Hash28(h));
+            }
+        } else {
+            // Non-array UMElem — treat as registered (conservative)
+            if hash_len >= 28 {
+                creds.insert(ade_types::Hash28(h));
+            }
+        }
+        co = skip_cbor(state_cbor, co)?;
+    }
+    Ok(creds)
 }
 
 // ── Public wrappers for CBOR navigation (used by integration tests) ──

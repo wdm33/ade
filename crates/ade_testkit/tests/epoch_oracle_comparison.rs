@@ -2356,6 +2356,18 @@ fn regular_epoch_boundary_comparison() {
         // (N-1→N) reward computation, NOT the (N→N+1) computation.
         // The (N-1→N) computation used: PRE(N) go, PRE(N) bprev, PRE(N) fees, PRE(N) reserves.
         // So "PRE_ALL" (using only PRE data) should match the oracle exactly.
+        // Load registered credentials for leader reward pre-filter (PV ≤ 6)
+        // Use POST registered set: closer to what the oracle uses at startStep time
+        // (accounts that deregistered during the epoch are not in POST but are in PRE)
+        let registered_creds = match ade_testkit::harness::snapshot_loader::parse_registered_credentials(&post_snap.raw_cbor) {
+            Ok(c) => { eprintln!("    registered credentials (POST): {}", c.len()); c },
+            Err(e) => {
+                eprintln!("    registered credentials POST failed: {e}, trying PRE");
+                ade_testkit::harness::snapshot_loader::parse_registered_credentials(&pre_snap.raw_cbor)
+                    .unwrap_or_default()
+            },
+        };
+
         let variants: [(&str, &ade_ledger::state::LedgerState); 3] = [
             ("PREALL", &pre_state),  // ALL from PRE — matches the oracle's actual inputs
             ("FIXED", &{
@@ -2424,9 +2436,7 @@ fn regular_epoch_boundary_comparison() {
             // Haskell uses: sigma = poolStake/circulation (bracket), sigmaA = poolStake/activeStake (perf)
             // perf = blocks / (expectedSlots * sigmaA) where expectedSlots = 21600
             let variants_ts: &[(&str, u64, u64, bool)] = &[
-                ("circ/circ/cap", circ, circ, true),    // our current formula (capped)
-                ("circ/circ/noc", circ, circ, false),   // uncapped performance
-                ("circ/actv/noc", circ, total_active, false),  // Haskell: dual-denom, uncapped
+                ("circ/actv/noc", circ, total_active, false),  // Haskell formula
             ];
             for (ts_label, bracket_ts, perf_ts, cap_perf) in variants_ts {
                 let total_stake = *bracket_ts;
@@ -2489,7 +2499,79 @@ fn regular_epoch_boundary_comparison() {
                         .map(|r| r.floor().max(0) as u64)
                         .unwrap_or(0);
 
-                    sum_rewards += f;
+                    // hardforkBabbageForgoRewardPrefilter: at PV ≤ 6, leader/member
+                    // rewards are only distributed to registered accounts.
+                    // Compute exact per-member rewards with floor arithmetic.
+                    let pv = state.protocol_params.protocol_major;
+                    if pv <= 6 {
+                        // Exact Haskell reward split:
+                        // leaderReward = c + floor((f-c) * (m + (1-m)*s_op/σ_pool))
+                        // memberReward(t) = floor((f-c) * (1-m) * t/σ_pool)
+                        let cost = params.cost.0.min(f);
+                        let f_minus_c = f - cost;
+                        let margin_rat = ade_ledger::rational::Rational::new(
+                            params.margin.0 as i128, params.margin.1.max(1) as i128,
+                        ).unwrap_or_else(ade_ledger::rational::Rational::zero);
+                        let one_minus_m = ade_ledger::rational::Rational::one()
+                            .checked_sub(&margin_rat)
+                            .unwrap_or_else(ade_ledger::rational::Rational::one);
+
+                        // Operator credential from reward_account
+                        let op_cred = if params.reward_account.len() >= 29 {
+                            let mut c = [0u8; 28];
+                            c.copy_from_slice(&params.reward_account[1..29]);
+                            Some(ade_types::Hash28(c))
+                        } else { None };
+
+                        // Operator stake share
+                        let op_stake = op_cred.as_ref()
+                            .and_then(|oc| go.0.delegations.get(oc))
+                            .map(|(_, c)| c.0)
+                            .unwrap_or(0);
+                        let op_share = ade_ledger::rational::Rational::new(
+                            op_stake as i128, pool_stake.0.max(1) as i128,
+                        ).unwrap_or_else(ade_ledger::rational::Rational::zero);
+
+                        // Leader reward
+                        let leader_term = margin_rat.checked_add(
+                            &one_minus_m.checked_mul(&op_share)
+                                .unwrap_or_else(ade_ledger::rational::Rational::zero)
+                        ).unwrap_or(margin_rat.clone());
+                        let leader_reward = cost + ade_ledger::rational::Rational::from_integer(f_minus_c as i128)
+                            .checked_mul(&leader_term)
+                            .map(|r| r.floor().max(0) as u64)
+                            .unwrap_or(0);
+
+                        // Only distribute leader reward if operator is registered
+                        let op_registered = op_cred.as_ref()
+                            .map(|oc| registered_creds.contains(oc))
+                            .unwrap_or(false);
+                        let mut pool_distributed = if op_registered { leader_reward } else { 0 };
+
+                        // Per-member rewards (exact floor arithmetic)
+                        let member_factor = ade_ledger::rational::Rational::from_integer(f_minus_c as i128)
+                            .checked_mul(&one_minus_m)
+                            .unwrap_or_else(ade_ledger::rational::Rational::zero);
+                        for (cred, (_, stake)) in go.0.delegations.iter()
+                            .filter(|(_, (pid, _))| pid == pool_id)
+                        {
+                            if op_cred.as_ref() == Some(cred) { continue; }
+                            if stake.0 == 0 { continue; }
+                            // Only distribute if member is registered
+                            if !registered_creds.contains(cred) { continue; }
+                            let share = ade_ledger::rational::Rational::new(
+                                stake.0 as i128, pool_stake.0.max(1) as i128,
+                            ).unwrap_or_else(ade_ledger::rational::Rational::zero);
+                            let member_reward = member_factor.checked_mul(&share)
+                                .map(|r| r.floor().max(0) as u64)
+                                .unwrap_or(0);
+                            pool_distributed += member_reward;
+                        }
+
+                        sum_rewards += pool_distributed;
+                    } else {
+                        sum_rewards += f;
+                    }
                     pool_count += 1;
                 }
 
