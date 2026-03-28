@@ -106,8 +106,56 @@ impl LoadedSnapshot {
             track_utxo: true,
             cert_state,
             max_lovelace_supply: 45_000_000_000_000_000, // 45B ADA mainnet
-            gov_state: None,
+            gov_state: self.load_gov_state(era),
         }
+    }
+
+    /// Load Conway governance state from the snapshot CBOR.
+    /// Returns None for pre-Conway eras.
+    fn load_gov_state(
+        &self,
+        era: ade_types::CardanoEra,
+    ) -> Option<ade_ledger::state::ConwayGovState> {
+        if era != ade_types::CardanoEra::Conway {
+            return None;
+        }
+
+        let proposals = parse_governance_proposals(&self.raw_cbor).unwrap_or_default();
+        let committee = parse_committee_members(&self.raw_cbor).unwrap_or_default();
+        let drep_regs = parse_drep_registrations(&self.raw_cbor).unwrap_or_default();
+        let gov_params = parse_conway_gov_params(&self.raw_cbor).ok();
+
+        let drep_expiry: std::collections::BTreeMap<ade_types::Hash28, u64> = drep_regs.iter()
+            .map(|(cred, reg)| (cred.clone(), reg.expiry_epoch))
+            .collect();
+
+        let (quorum_num, quorum_den) = gov_params.as_ref()
+            .and_then(|gp| gp.drep_voting_thresholds.first().copied())
+            .unwrap_or((2, 3));
+
+        let gov_action_lifetime = gov_params.as_ref()
+            .map(|gp| gp.gov_action_lifetime)
+            .unwrap_or(6);
+
+        let vote_delegations = parse_vote_delegations(&self.raw_cbor).unwrap_or_default();
+
+        let pool_voting_thresholds = gov_params.as_ref()
+            .map(|gp| gp.pool_voting_thresholds.clone())
+            .unwrap_or_default();
+        let drep_voting_thresholds = gov_params.as_ref()
+            .map(|gp| gp.drep_voting_thresholds.clone())
+            .unwrap_or_default();
+
+        Some(ade_ledger::state::ConwayGovState {
+            proposals,
+            committee,
+            committee_quorum: (quorum_num, quorum_den),
+            drep_expiry,
+            gov_action_lifetime,
+            vote_delegations,
+            pool_voting_thresholds,
+            drep_voting_thresholds,
+        })
     }
 
     /// Load protocol parameters based on era and epoch.

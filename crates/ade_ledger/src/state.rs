@@ -86,6 +86,12 @@ pub struct ConwayGovState {
     pub drep_expiry: std::collections::BTreeMap<ade_types::Hash28, u64>,
     /// Governance action lifetime in epochs.
     pub gov_action_lifetime: u64,
+    /// Vote delegations: credential → DRep. Loaded from UMap.
+    pub vote_delegations: std::collections::BTreeMap<ade_types::Hash28, ade_types::conway::cert::DRep>,
+    /// Pool voting thresholds: per-action-type rationals (num, den).
+    pub pool_voting_thresholds: Vec<(u64, u64)>,
+    /// DRep voting thresholds: per-action-type rationals (num, den).
+    pub drep_voting_thresholds: Vec<(u64, u64)>,
 }
 
 impl LedgerState {

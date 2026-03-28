@@ -772,10 +772,17 @@ fn apply_epoch_boundary_full(
     let mut governance_treasury_withdrawn = 0u64;
     let new_gov_state = if state.era == ade_types::CardanoEra::Conway {
         if let Some(ref gov) = state.gov_state {
-            // DRep stake distribution — populated when vote delegations are loaded
-            // into LedgerState.gov_state from the snapshot loader.
-            let drep_stake: crate::governance::DRepStakeDistribution =
+            // Compute DRep stake distribution from vote delegations + go snapshot
+            let mut drep_stake: crate::governance::DRepStakeDistribution =
                 std::collections::BTreeMap::new();
+            for (cred, drep) in &gov.vote_delegations {
+                let stake = go.0.delegations.get(cred)
+                    .map(|(_, c)| c.0)
+                    .unwrap_or(0);
+                if stake > 0 {
+                    *drep_stake.entry(drep.clone()).or_insert(0) += stake;
+                }
+            }
 
             let committee_quorum = crate::rational::Rational::new(
                 gov.committee_quorum.0 as i128,
@@ -788,8 +795,8 @@ fn apply_epoch_boundary_full(
                 &go.0.pool_stakes,
                 &gov.committee,
                 &committee_quorum,
-                &[], // pool voting thresholds — from ConwayGovParams
-                &[], // drep voting thresholds — from ConwayGovParams
+                &gov.pool_voting_thresholds,
+                &gov.drep_voting_thresholds,
                 new_epoch.0,
             );
 
@@ -802,6 +809,9 @@ fn apply_epoch_boundary_full(
                 committee_quorum: gov.committee_quorum,
                 drep_expiry: gov.drep_expiry.clone(),
                 gov_action_lifetime: gov.gov_action_lifetime,
+                vote_delegations: gov.vote_delegations.clone(),
+                pool_voting_thresholds: gov.pool_voting_thresholds.clone(),
+                drep_voting_thresholds: gov.drep_voting_thresholds.clone(),
             })
         } else {
             None
