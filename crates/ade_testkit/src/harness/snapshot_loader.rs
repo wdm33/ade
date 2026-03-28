@@ -106,6 +106,7 @@ impl LoadedSnapshot {
             track_utxo: true,
             cert_state,
             max_lovelace_supply: 45_000_000_000_000_000, // 45B ADA mainnet
+            gov_state: None,
         }
     }
 

@@ -69,6 +69,23 @@ pub struct LedgerState {
     /// Maximum lovelace supply (from Shelley genesis). Default: 45B ADA.
     /// Used for `circulation = maxLovelaceSupply - reserves` in reward formula.
     pub max_lovelace_supply: u64,
+    /// Conway governance state. None for pre-Conway eras.
+    pub gov_state: Option<ConwayGovState>,
+}
+
+/// Conway governance state at the epoch boundary.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ConwayGovState {
+    /// Active governance proposals.
+    pub proposals: Vec<ade_types::conway::governance::GovActionState>,
+    /// Committee members: credential hash → expiry epoch.
+    pub committee: std::collections::BTreeMap<ade_types::Hash28, u64>,
+    /// Committee quorum (numerator, denominator).
+    pub committee_quorum: (u64, u64),
+    /// DRep expiry epochs: credential hash → expiry epoch.
+    pub drep_expiry: std::collections::BTreeMap<ade_types::Hash28, u64>,
+    /// Governance action lifetime in epochs.
+    pub gov_action_lifetime: u64,
 }
 
 impl LedgerState {
@@ -81,6 +98,7 @@ impl LedgerState {
             track_utxo: false,
             cert_state: CertState::new(),
             max_lovelace_supply: 45_000_000_000_000_000, // 45B ADA mainnet default
+            gov_state: None,
         }
     }
 }

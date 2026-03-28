@@ -59,6 +59,7 @@ pub fn translate_byron_to_shelley(
         track_utxo: old_state.track_utxo,
         cert_state: old_state.cert_state.clone(),
         max_lovelace_supply: old_state.max_lovelace_supply,
+        gov_state: None,
     })
 }
 
@@ -89,6 +90,7 @@ pub fn translate_shelley_to_allegra(
         track_utxo: old_state.track_utxo,
         cert_state: old_state.cert_state.clone(),
         max_lovelace_supply: old_state.max_lovelace_supply,
+        gov_state: None,
     })
 }
 
@@ -118,6 +120,7 @@ pub fn translate_allegra_to_mary(
         track_utxo: old_state.track_utxo,
         cert_state: old_state.cert_state.clone(),
         max_lovelace_supply: old_state.max_lovelace_supply,
+        gov_state: None,
     })
 }
 
@@ -152,6 +155,7 @@ pub fn translate_mary_to_alonzo(
         track_utxo: old_state.track_utxo,
         cert_state: old_state.cert_state.clone(),
         max_lovelace_supply: old_state.max_lovelace_supply,
+        gov_state: None,
     })
 }
 
@@ -181,6 +185,7 @@ pub fn translate_alonzo_to_babbage(
         track_utxo: old_state.track_utxo,
         cert_state: old_state.cert_state.clone(),
         max_lovelace_supply: old_state.max_lovelace_supply,
+        gov_state: None,
     })
 }
 
@@ -215,6 +220,7 @@ pub fn translate_babbage_to_conway(
         track_utxo: old_state.track_utxo,
         cert_state: old_state.cert_state.clone(),
         max_lovelace_supply: old_state.max_lovelace_supply,
+        gov_state: None,
     })
 }
 
@@ -288,6 +294,7 @@ mod tests {
             track_utxo: false,
             cert_state: CertState::new(),
             max_lovelace_supply: 45_000_000_000_000_000,
+        gov_state: None,
         }
     }
 
@@ -308,6 +315,7 @@ mod tests {
             track_utxo: false,
             cert_state: CertState::new(),
             max_lovelace_supply: 45_000_000_000_000_000,
+        gov_state: None,
         }
     }
 
@@ -328,6 +336,7 @@ mod tests {
             track_utxo: false,
             cert_state: CertState::new(),
             max_lovelace_supply: 45_000_000_000_000_000,
+        gov_state: None,
         }
     }
 
@@ -418,6 +427,7 @@ mod tests {
             track_utxo: false,
             cert_state: CertState::new(),
             max_lovelace_supply: 45_000_000_000_000_000,
+        gov_state: None,
         };
         let result = translate_byron_to_shelley(&state);
         assert!(result.is_ok());
@@ -536,6 +546,7 @@ mod tests {
             track_utxo: false,
             cert_state: CertState::new(),
             max_lovelace_supply: 45_000_000_000_000_000,
+        gov_state: None,
         }
     }
 
@@ -556,6 +567,7 @@ mod tests {
             track_utxo: false,
             cert_state: CertState::new(),
             max_lovelace_supply: 45_000_000_000_000_000,
+        gov_state: None,
         }
     }
 
@@ -576,6 +588,7 @@ mod tests {
             track_utxo: false,
             cert_state: CertState::new(),
             max_lovelace_supply: 45_000_000_000_000_000,
+        gov_state: None,
         }
     }
 

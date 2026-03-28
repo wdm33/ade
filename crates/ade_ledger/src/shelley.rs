@@ -60,6 +60,7 @@ pub fn validate_shelley_block(
         track_utxo: state.track_utxo,
         cert_state: CertState::new(),
         max_lovelace_supply: state.max_lovelace_supply,
+        gov_state: None,
     })
 }
 

@@ -226,6 +226,7 @@ fn apply_shelley_era_block_classified(
             track_utxo: current_state.track_utxo,
             cert_state,
             max_lovelace_supply: current_state.max_lovelace_supply,
+        gov_state: None,
         },
         verdict,
     ))
@@ -767,6 +768,48 @@ fn apply_epoch_boundary_full(
         }
     });
 
+    // 4b. Conway governance: ratification, enactment, expiry
+    let mut governance_treasury_withdrawn = 0u64;
+    let new_gov_state = if state.era == ade_types::CardanoEra::Conway {
+        if let Some(ref gov) = state.gov_state {
+            // DRep stake distribution — populated when vote delegations are loaded
+            // into LedgerState.gov_state from the snapshot loader.
+            let drep_stake: crate::governance::DRepStakeDistribution =
+                std::collections::BTreeMap::new();
+
+            let committee_quorum = crate::rational::Rational::new(
+                gov.committee_quorum.0 as i128,
+                gov.committee_quorum.1.max(1) as i128,
+            ).unwrap_or_else(crate::rational::Rational::one);
+
+            let result = crate::governance::evaluate_ratification(
+                &gov.proposals,
+                &drep_stake,
+                &go.0.pool_stakes,
+                &gov.committee,
+                &committee_quorum,
+                &[], // pool voting thresholds — from ConwayGovParams
+                &[], // drep voting thresholds — from ConwayGovParams
+                new_epoch.0,
+            );
+
+            let effects = crate::governance::enact_proposals(&result.ratified);
+            governance_treasury_withdrawn = effects.treasury_withdrawn;
+
+            Some(crate::state::ConwayGovState {
+                proposals: result.remaining,
+                committee: gov.committee.clone(),
+                committee_quorum: gov.committee_quorum,
+                drep_expiry: gov.drep_expiry.clone(),
+                gov_action_lifetime: gov.gov_action_lifetime,
+            })
+        } else {
+            None
+        }
+    } else {
+        state.gov_state.clone()
+    };
+
     // 5. Update reserves and treasury per Shelley spec:
     //    deltaR2 = pool_pot - sum(all_computed_rewards)  [undistributed returns to reserves]
     //    reserves' = reserves - deltaR1 + deltaR2
@@ -782,6 +825,7 @@ fn apply_epoch_boundary_full(
         treasury.0
             .saturating_add(treasury_delta)
             .saturating_add(delta_t2)
+            .saturating_sub(governance_treasury_withdrawn)
     );
 
     let cert_state = crate::delegation::CertState {
@@ -828,6 +872,7 @@ fn apply_epoch_boundary_full(
         track_utxo: state.track_utxo,
         cert_state,
         max_lovelace_supply: state.max_lovelace_supply,
+        gov_state: new_gov_state,
     };
 
     (new_state, accounting)

@@ -796,6 +796,7 @@ mod tests {
             track_utxo: false,
             cert_state: CertState::new(),
             max_lovelace_supply: 45_000_000_000_000_000,
+        gov_state: None,
         };
 
         let new_mark = StakeSnapshot::new();

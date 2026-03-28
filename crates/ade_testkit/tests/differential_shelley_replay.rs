@@ -53,6 +53,7 @@ fn make_shelley_state() -> LedgerState {
         track_utxo: false,
         cert_state: ade_ledger::delegation::CertState::new(),
         max_lovelace_supply: 45_000_000_000_000_000,
+        gov_state: None,
     }
 }
 
