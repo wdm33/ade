@@ -1646,6 +1646,106 @@ pub fn parse_registered_credentials(
     Ok(creds)
 }
 
+/// Parse vote delegations from the DState UMap.
+///
+/// Returns a map of credential hash → DRep for all credentials with
+/// an active voting delegation (UMElem[3] is non-null).
+///
+/// The DRep encoding in CBOR:
+///   - array(2) [0, hash28] → DRep::KeyHash
+///   - array(2) [1, hash28] → DRep::ScriptHash
+///   - array(1) [0] → DRep::AlwaysAbstain (constructor 0, no fields)
+///   - array(1) [1] → DRep::AlwaysNoConfidence (constructor 1, no fields)
+///   - CBOR null (0xf6) → SNothing (no delegation)
+pub fn parse_vote_delegations(
+    state_cbor: &[u8],
+) -> Result<std::collections::BTreeMap<ade_types::Hash28, ade_types::conway::cert::DRep>, HarnessError> {
+    let umap_body = navigate_to_umap_elems(state_cbor)?;
+
+    let (mut co, _, _) = read_cbor_initial(state_cbor, umap_body)?;
+    let mut delegations = std::collections::BTreeMap::new();
+
+    while co < state_cbor.len() && state_cbor[co] != 0xff {
+        // Key: credential = array(2) [type_tag, bytes(28)]
+        let (key_inner, _, _) = read_cbor_initial(state_cbor, co)?;
+        let key_end = skip_cbor(state_cbor, co)?;
+        let tag_end = skip_cbor(state_cbor, key_inner)?;
+        let (hash_start, _, hash_len) = read_cbor_initial(state_cbor, tag_end)?;
+        let mut cred_hash = [0u8; 28];
+        if hash_len >= 28 {
+            cred_hash.copy_from_slice(&state_cbor[hash_start..hash_start + 28]);
+        }
+        co = key_end;
+
+        // Value: UMElem = array(4) [rdPair, ptrs, poolDeleg, voteDeleg]
+        let (elem_body, elem_maj, _) = read_cbor_initial(state_cbor, co)?;
+        if elem_maj == 4 {
+            // Skip to UMElem[3] = voteDeleg
+            let f1 = skip_cbor(state_cbor, elem_body)?;   // skip rdPair
+            let f2 = skip_cbor(state_cbor, f1)?;           // skip ptrs
+            let f3 = skip_cbor(state_cbor, f2)?;           // skip poolDeleg
+            // UMElem[3] = StrictMaybe DRep (NullMaybe encoding)
+            let vd_byte = state_cbor[f3];
+            if vd_byte != 0xf6 {
+                // Non-null → has voting delegation. Parse DRep.
+                let (vd_body, vd_maj, vd_val) = read_cbor_initial(state_cbor, f3)?;
+                let drep = if vd_maj == 4 && vd_val == 2 {
+                    // array(2) [tag, hash] → DRepCredential
+                    let (_, tag) = read_uint(state_cbor, vd_body)?;
+                    let tag_end = skip_cbor(state_cbor, vd_body)?;
+                    let (h_start, _, h_len) = read_cbor_initial(state_cbor, tag_end)?;
+                    if h_len >= 28 {
+                        let mut h = [0u8; 28];
+                        h.copy_from_slice(&state_cbor[h_start..h_start + 28]);
+                        if tag == 0 {
+                            Some(ade_types::conway::cert::DRep::KeyHash(ade_types::Hash28(h)))
+                        } else {
+                            Some(ade_types::conway::cert::DRep::ScriptHash(ade_types::Hash28(h)))
+                        }
+                    } else { None }
+                } else if vd_maj == 4 && vd_val == 1 {
+                    // array(1) [tag] → AlwaysAbstain or AlwaysNoConfidence
+                    let (_, tag) = read_uint(state_cbor, vd_body)?;
+                    match tag {
+                        0 => Some(ade_types::conway::cert::DRep::AlwaysAbstain),
+                        1 => Some(ade_types::conway::cert::DRep::AlwaysNoConfidence),
+                        _ => None,
+                    }
+                } else { None };
+
+                if let Some(d) = drep {
+                    delegations.insert(ade_types::Hash28(cred_hash), d);
+                }
+            }
+        }
+        co = skip_cbor(state_cbor, co)?;
+    }
+    Ok(delegations)
+}
+
+/// Compute the DRep stake distribution from vote delegations and the go snapshot.
+///
+/// For each credential with a vote delegation, look up their stake in the
+/// go snapshot and sum per DRep. Returns the total stake per DRep.
+pub fn compute_drep_stake_distribution(
+    vote_delegations: &std::collections::BTreeMap<ade_types::Hash28, ade_types::conway::cert::DRep>,
+    go_snapshot: &ade_ledger::epoch::StakeSnapshot,
+) -> std::collections::BTreeMap<ade_types::conway::cert::DRep, u64> {
+    let mut dist: std::collections::BTreeMap<ade_types::conway::cert::DRep, u64> =
+        std::collections::BTreeMap::new();
+
+    for (cred, drep) in vote_delegations {
+        // Look up this credential's stake from the go snapshot delegations
+        let stake = go_snapshot.delegations.get(cred)
+            .map(|(_, coin)| coin.0)
+            .unwrap_or(0);
+        if stake > 0 {
+            *dist.entry(drep.clone()).or_insert(0) += stake;
+        }
+    }
+    dist
+}
+
 // ── Public wrappers for CBOR navigation (used by integration tests) ──
 
 pub fn navigate_to_nes_pub(data: &[u8]) -> Result<usize, HarnessError> { navigate_to_nes(data) }

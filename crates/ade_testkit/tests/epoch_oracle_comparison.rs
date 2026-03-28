@@ -2991,6 +2991,106 @@ fn pv_branching_circ_vs_circ_treasury() {
     eprintln!("==========================================\n");
 }
 
+/// Compute Conway DRep stake distribution and compare with oracle data.
+#[test]
+fn conway_drep_stake_distribution() {
+    use ade_testkit::harness::snapshot_loader::{
+        extract_state_from_tarball, parse_vote_delegations, compute_drep_stake_distribution,
+        parse_snapshot_stake_distribution, parse_snapshot_delegations,
+    };
+    use ade_types::conway::cert::DRep;
+
+    // Use Conway PRE snapshot (epoch 528)
+    let path = snapshots_dir().join("snapshot_142732816.tar.gz");
+    if !path.exists() { eprintln!("SKIPPED: Conway snapshot not available"); return; }
+
+    let data = extract_state_from_tarball(&path).unwrap();
+
+    // Parse vote delegations from UMap
+    let vote_delegs = parse_vote_delegations(&data).unwrap();
+    eprintln!("\n=== CONWAY DRep STAKE DISTRIBUTION ===");
+    eprintln!("  total vote delegations: {}", vote_delegs.len());
+
+    // Count by DRep type
+    let mut key_hash = 0usize;
+    let mut script_hash = 0usize;
+    let mut always_abstain = 0usize;
+    let mut always_no_conf = 0usize;
+    for drep in vote_delegs.values() {
+        match drep {
+            DRep::KeyHash(_) => key_hash += 1,
+            DRep::ScriptHash(_) => script_hash += 1,
+            DRep::AlwaysAbstain => always_abstain += 1,
+            DRep::AlwaysNoConfidence => always_no_conf += 1,
+        }
+    }
+    eprintln!("  key_hash: {key_hash}  script_hash: {script_hash}  abstain: {always_abstain}  no_conf: {always_no_conf}");
+
+    // Build the go snapshot stake data for computing distribution
+    let stake_dist = parse_snapshot_stake_distribution(&data, 2).unwrap();
+    let delegations = parse_snapshot_delegations(&data, 2).unwrap();
+
+    // Build stake snapshot
+    let mut stake_map: std::collections::BTreeMap<[u8; 28], u64> = std::collections::BTreeMap::new();
+    for (h, s) in &stake_dist {
+        let mut k = [0u8; 28];
+        k.copy_from_slice(&h.0[..28]);
+        stake_map.insert(k, *s);
+    }
+
+    let mut go_delegations: std::collections::BTreeMap<ade_types::Hash28, (ade_types::tx::PoolId, ade_types::tx::Coin)> = std::collections::BTreeMap::new();
+    for (cred_hash, pool_hash) in &delegations {
+        let mut cb = [0u8; 28];
+        cb.copy_from_slice(&cred_hash.0[..28]);
+        let mut pb = [0u8; 28];
+        pb.copy_from_slice(&pool_hash.0[..28]);
+        let stake = stake_map.get(&cb).copied().unwrap_or(0);
+        go_delegations.insert(ade_types::Hash28(cb),
+            (ade_types::tx::PoolId(ade_types::Hash28(pb)), ade_types::tx::Coin(stake)));
+    }
+
+    let go_snapshot = ade_ledger::epoch::StakeSnapshot {
+        delegations: go_delegations,
+        pool_stakes: std::collections::BTreeMap::new(), // not needed for DRep computation
+    };
+
+    // Compute DRep stake distribution
+    let drep_dist = compute_drep_stake_distribution(&vote_delegs, &go_snapshot);
+
+    // Summary
+    let total_drep_stake: u64 = drep_dist.values().sum();
+    let total_active: u64 = stake_dist.iter().map(|(_, s)| *s).sum();
+    let num_dreps = drep_dist.len();
+
+    eprintln!("  unique DReps with stake: {num_dreps}");
+    eprintln!("  total DRep-delegated stake: {} ADA ({:.2}% of active)",
+        total_drep_stake / 1_000_000,
+        total_drep_stake as f64 / total_active as f64 * 100.0);
+
+    // Show top 10 DReps by stake
+    let mut sorted: Vec<_> = drep_dist.iter().collect();
+    sorted.sort_by(|a, b| b.1.cmp(a.1));
+    eprintln!("  top 10 DReps by stake:");
+    for (drep, stake) in sorted.iter().take(10) {
+        let label = match drep {
+            DRep::KeyHash(h) => format!("key:{:02x}{:02x}{:02x}{:02x}", h.0[0], h.0[1], h.0[2], h.0[3]),
+            DRep::ScriptHash(h) => format!("scr:{:02x}{:02x}{:02x}{:02x}", h.0[0], h.0[1], h.0[2], h.0[3]),
+            DRep::AlwaysAbstain => "AlwaysAbstain".to_string(),
+            DRep::AlwaysNoConfidence => "AlwaysNoConfidence".to_string(),
+        };
+        eprintln!("    {label}: {} ADA", *stake / 1_000_000);
+    }
+
+    // Show abstain and no-confidence totals
+    let abstain_stake = drep_dist.get(&DRep::AlwaysAbstain).copied().unwrap_or(0);
+    let noconf_stake = drep_dist.get(&DRep::AlwaysNoConfidence).copied().unwrap_or(0);
+    eprintln!("  AlwaysAbstain total: {} ADA", abstain_stake / 1_000_000);
+    eprintln!("  AlwaysNoConfidence total: {} ADA", noconf_stake / 1_000_000);
+    eprintln!("  Active DRep voting stake (excl abstain): {} ADA",
+        (total_drep_stake - abstain_stake) / 1_000_000);
+    eprintln!("======================================\n");
+}
+
 /// Probe the CBOR structure of go snapshot pool entries to check PoolParams vs StakePoolSnapShot.
 #[test]
 fn probe_go_snapshot_pool_entry_structure() {
