@@ -3407,7 +3407,8 @@ fn conway_governance_ratification_test() {
         eprintln!("    treasury change: {} ADA", t_treasury_change / 1_000_000);
 
         // Run our ratification on epoch 576 data
-        let t_drep_stake: ade_ledger::governance::DRepStakeDistribution = {
+        // Test both go and mark snapshots for DRep stake
+        let t_drep_stake_go: ade_ledger::governance::DRepStakeDistribution = {
             let mut ds = std::collections::BTreeMap::new();
             let go = &t_pre_state.epoch_state.snapshots.go;
             for (cred, drep) in &t_pre_gov.vote_delegations {
@@ -3416,6 +3417,76 @@ fn conway_governance_ratification_test() {
             }
             ds
         };
+        let t_drep_stake_mark: ade_ledger::governance::DRepStakeDistribution = {
+            let mut ds = std::collections::BTreeMap::new();
+            let mark = &t_pre_state.epoch_state.snapshots.mark;
+            for (cred, drep) in &t_pre_gov.vote_delegations {
+                let stake = mark.0.delegations.get(cred).map(|(_, c)| c.0).unwrap_or(0);
+                if stake > 0 { *ds.entry(drep.clone()).or_insert(0) += stake; }
+            }
+            ds
+        };
+        let t_drep_stake_set: ade_ledger::governance::DRepStakeDistribution = {
+            let mut ds = std::collections::BTreeMap::new();
+            let set = &t_pre_state.epoch_state.snapshots.set;
+            for (cred, drep) in &t_pre_gov.vote_delegations {
+                let stake = set.0.delegations.get(cred).map(|(_, c)| c.0).unwrap_or(0);
+                if stake > 0 { *ds.entry(drep.clone()).or_insert(0) += stake; }
+            }
+            ds
+        };
+        let go_total: u64 = t_drep_stake_go.values().sum();
+        let set_total: u64 = t_drep_stake_set.values().sum();
+        let mark_total: u64 = t_drep_stake_mark.values().sum();
+        eprintln!("    DRep stake (go):   {} DReps, {} ADA", t_drep_stake_go.len(), go_total / 1_000_000);
+        eprintln!("    DRep stake (set):  {} DReps, {} ADA", t_drep_stake_set.len(), set_total / 1_000_000);
+        eprintln!("    DRep stake (mark): {} DReps, {} ADA", t_drep_stake_mark.len(), mark_total / 1_000_000);
+
+        // Filter: exclude stake delegated to unregistered DReps
+        let t_pre_drep_regs = &t_pre_gov.drep_expiry; // credential → expiry
+        let t_drep_stake_filtered: ade_ledger::governance::DRepStakeDistribution = {
+            let mut ds = std::collections::BTreeMap::new();
+            let mark = &t_pre_state.epoch_state.snapshots.mark;
+            for (cred, drep) in &t_pre_gov.vote_delegations {
+                // Only include if the DRep is registered
+                let drep_registered = match drep {
+                    ade_types::conway::cert::DRep::KeyHash(h) | ade_types::conway::cert::DRep::ScriptHash(h) => {
+                        t_pre_drep_regs.contains_key(h)
+                    }
+                    _ => true, // AlwaysAbstain/AlwaysNoConfidence always count
+                };
+                if !drep_registered { continue; }
+                let stake = mark.0.delegations.get(cred).map(|(_, c)| c.0).unwrap_or(0);
+                if stake > 0 { *ds.entry(drep.clone()).or_insert(0) += stake; }
+            }
+            ds
+        };
+        let filtered_total: u64 = t_drep_stake_filtered.values().sum();
+        eprintln!("    DRep stake (mark+filtered): {} DReps, {} ADA", t_drep_stake_filtered.len(), filtered_total / 1_000_000);
+
+        // Test all variants — find which gives 2 ratified (matching oracle)
+        for (snap_name, snap_stake) in [("go", &t_drep_stake_go), ("set", &t_drep_stake_set), ("mark", &t_drep_stake_mark), ("filtered", &t_drep_stake_filtered)] {
+            let snap_quorum = ade_ledger::rational::Rational::new(
+                t_pre_gov.committee_quorum.0 as i128,
+                t_pre_gov.committee_quorum.1.max(1) as i128,
+            ).unwrap_or_else(ade_ledger::rational::Rational::one);
+            let snap_result = ade_ledger::governance::evaluate_ratification(
+                &t_pre_gov.proposals,
+                snap_stake,
+                &t_pre_state.epoch_state.snapshots.go.0.pool_stakes,
+                &t_pre_gov.committee,
+                &snap_quorum,
+                &t_pre_gov.pool_voting_thresholds,
+                &t_pre_gov.drep_voting_thresholds,
+                576,
+                &t_pre_gov.committee_hot_keys,
+            );
+            eprintln!("    {snap_name}: ratified={} expired={} remaining={}",
+                snap_result.ratified.len(), snap_result.expired.len(), snap_result.remaining.len());
+        }
+
+        // Use mark (closest to Haskell DRepPulser InstantStake)
+        let t_drep_stake = &t_drep_stake_mark;
 
         let t_committee_quorum = ade_ledger::rational::Rational::new(
             t_pre_gov.committee_quorum.0 as i128,

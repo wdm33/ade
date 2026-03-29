@@ -110,7 +110,13 @@ pub fn evaluate_ratification(
 }
 
 /// Compute total active DRep stake (excluding AlwaysAbstain).
-/// This is the denominator for DRep threshold checks.
+/// This is the denominator for DRep threshold checks (Haskell: dRepAcceptedRatio).
+///
+/// The Haskell DRepPulser computes this from live InstantStake (post-applyRUpd).
+/// Our approximation uses the most recent snapshot. Known gap: ~400M ADA at
+/// epoch 576 (7% of total), causing 1 of 2 oracle-enacted TreasuryWithdrawals
+/// to not meet our threshold. Closing requires a Conway mid-epoch dump with
+/// the DRepPulser's computed distribution.
 fn compute_active_drep_stake(drep_stake: &DRepStakeDistribution) -> u64 {
     drep_stake.iter()
         .filter(|(drep, _)| !matches!(drep, DRep::AlwaysAbstain))

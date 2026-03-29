@@ -772,11 +772,14 @@ fn apply_epoch_boundary_full(
     let mut governance_treasury_withdrawn = 0u64;
     let new_gov_state = if state.era == ade_types::CardanoEra::Conway {
         if let Some(ref gov) = state.gov_state {
-            // Compute DRep stake distribution from vote delegations + go snapshot
+            // Compute DRep stake distribution from vote delegations + mark snapshot.
+            // The mark snapshot is the most recent (current epoch), closest to the
+            // Haskell DRepPulser's InstantStake. Using go would be 2 epochs stale.
+            let mark = &state.epoch_state.snapshots.mark;
             let mut drep_stake: crate::governance::DRepStakeDistribution =
                 std::collections::BTreeMap::new();
             for (cred, drep) in &gov.vote_delegations {
-                let stake = go.0.delegations.get(cred)
+                let stake = mark.0.delegations.get(cred)
                     .map(|(_, c)| c.0)
                     .unwrap_or(0);
                 if stake > 0 {
