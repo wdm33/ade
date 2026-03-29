@@ -3138,6 +3138,8 @@ fn conway_governance_proposals() {
         ("Conway 508", "snapshot_134092810.tar.gz"),
         ("Conway 528", "snapshot_142732816.tar.gz"),
         ("Conway 529", "snapshot_143164817.tar.gz"),
+        ("Conway 536 (pre-Plomin)", "snapshot_146189262.tar.gz"),
+        ("Conway 537 (post-Plomin)", "snapshot_146621361.tar.gz"),
         ("Conway 576 (pre-treasury)", "snapshot_163468813.tar.gz"),
         ("Conway 577 (post-treasury)", "snapshot_163901617.tar.gz"),
     ];
@@ -3285,7 +3287,77 @@ fn conway_governance_ratification_test() {
     let (active, expired_check) = expire_proposals(&pre_proposals, 529);
     eprintln!("  Expiry at epoch 529: {} active, {} expired", active.len(), expired_check.len());
 
-    // Also test the treasury epoch 576→577 if available
+    // Plomin HFC test (536→537): HardForkInitiation enacted
+    let plomin_pre = snapshots_dir().join("snapshot_146189262.tar.gz");
+    let plomin_post = snapshots_dir().join("snapshot_146621361.tar.gz");
+    if plomin_pre.exists() && plomin_post.exists() {
+        eprintln!("\n  === PLOMIN HFC ENACTMENT TEST (536→537) ===");
+        let p_pre_snap = LoadedSnapshot::from_tarball(&plomin_pre).unwrap();
+        let p_post_snap = LoadedSnapshot::from_tarball(&plomin_post).unwrap();
+        let p_pre_state = p_pre_snap.to_ledger_state();
+        let p_post_state = p_post_snap.to_ledger_state();
+        let p_pre_gov = p_pre_state.gov_state.as_ref().unwrap();
+        let p_post_gov = p_post_state.gov_state.as_ref();
+
+        eprintln!("    PRE proposals: {}", p_pre_gov.proposals.len());
+        eprintln!("    POST proposals: {}", p_post_gov.map(|g| g.proposals.len()).unwrap_or(0));
+
+        for p in &p_pre_gov.proposals {
+            let t = match &p.gov_action {
+                ade_types::conway::governance::GovAction::HardForkInitiation { .. } => "HardFork",
+                ade_types::conway::governance::GovAction::InfoAction => "Info",
+                _ => "Other",
+            };
+            eprintln!("    PRE: {t} proposed={} expires={} committee={} drep={} spo={}",
+                p.proposed_in.0, p.expires_after.0,
+                p.committee_votes.len(), p.drep_votes.len(), p.spo_votes.len());
+        }
+
+        // Run ratification
+        let p_drep_stake: ade_ledger::governance::DRepStakeDistribution = {
+            let mut ds = std::collections::BTreeMap::new();
+            let go = &p_pre_state.epoch_state.snapshots.go;
+            for (cred, drep) in &p_pre_gov.vote_delegations {
+                let stake = go.0.delegations.get(cred).map(|(_, c)| c.0).unwrap_or(0);
+                if stake > 0 { *ds.entry(drep.clone()).or_insert(0) += stake; }
+            }
+            ds
+        };
+        let p_quorum = ade_ledger::rational::Rational::new(
+            p_pre_gov.committee_quorum.0 as i128,
+            p_pre_gov.committee_quorum.1.max(1) as i128,
+        ).unwrap_or_else(ade_ledger::rational::Rational::one);
+
+        let p_result = ade_ledger::governance::evaluate_ratification(
+            &p_pre_gov.proposals,
+            &p_drep_stake,
+            &p_pre_state.epoch_state.snapshots.go.0.pool_stakes,
+            &p_pre_gov.committee,
+            &p_quorum,
+            &p_pre_gov.pool_voting_thresholds,
+            &p_pre_gov.drep_voting_thresholds,
+            536,
+        );
+
+        eprintln!("    our ratified: {}", p_result.ratified.len());
+        eprintln!("    our expired: {}", p_result.expired.len());
+        eprintln!("    our remaining: {}", p_result.remaining.len());
+        for p in &p_result.ratified {
+            let t = match &p.gov_action {
+                ade_types::conway::governance::GovAction::HardForkInitiation { .. } => "HardFork",
+                _ => "Other",
+            };
+            eprintln!("      RATIFIED: {t}");
+        }
+
+        let p_effects = ade_ledger::governance::enact_proposals(&p_result.ratified);
+        eprintln!("    hard_fork: {:?}", p_effects.hard_fork);
+        eprintln!("    match oracle: PRE=1→POST={} (expect 0)",
+            p_post_gov.map(|g| g.proposals.len()).unwrap_or(0));
+        eprintln!("  ==========================================");
+    }
+
+    // Treasury test (576→577): TreasuryWithdrawals enacted
     let treasury_pre = snapshots_dir().join("snapshot_163468813.tar.gz");
     let treasury_post = snapshots_dir().join("snapshot_163901617.tar.gz");
     if treasury_pre.exists() && treasury_post.exists() {
