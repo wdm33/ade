@@ -161,18 +161,18 @@ fn check_ratification(
         GovAction::NoConfidence { .. } | GovAction::UpdateCommittee { .. }
     );
     if needs_committee && !committee_members.is_empty() {
-        let active_members: Vec<_> = committee_members.iter()
+        let active_members_count = committee_members.iter()
             .filter(|(_, expiry)| **expiry >= current_epoch)
-            .collect();
-        if !active_members.is_empty() {
+            .count();
+        if active_members_count > 0 {
+            // Committee votes use HOT credentials, committee_members has COLD credentials.
+            // Until VState hot→cold mapping is implemented, count all Yes votes
+            // from the proposal's committee_votes directly.
             let yes_votes = proposal.committee_votes.iter()
-                .filter(|(cred, vote)| {
-                    matches!(vote, Vote::Yes) && active_members.iter().any(|(c, _)| *c == cred)
-                })
+                .filter(|(_, vote)| matches!(vote, Vote::Yes))
                 .count();
-            let total_active = active_members.len();
-            // Check against committee quorum
-            let yes_rat = Rational::new(yes_votes as i128, total_active as i128)
+            // Check against committee quorum: yes / active_members >= quorum
+            let yes_rat = Rational::new(yes_votes as i128, active_members_count as i128)
                 .unwrap_or_else(Rational::zero);
             if yes_rat.numerator() * committee_quorum.denominator()
                 < committee_quorum.numerator() * yes_rat.denominator()
@@ -182,52 +182,72 @@ fn check_ratification(
         }
     }
 
-    // DRep check
+    // DRep check: CIP-1694 threshold = yes_stake / (yes_stake + no_stake)
+    // Non-voting and abstaining DReps don't count against the threshold.
     if let Some(idx) = drep_idx {
-        if idx < drep_thresholds.len() && *total_drep_active_stake > 0 {
+        if idx < drep_thresholds.len() {
             let (thresh_num, thresh_den) = drep_thresholds[idx];
             if thresh_den > 0 {
+                let lookup_stake = |cred: &Hash28| -> u64 {
+                    drep_stake.get(&DRep::KeyHash(cred.clone()))
+                        .or_else(|| drep_stake.get(&DRep::ScriptHash(cred.clone())))
+                        .copied()
+                        .unwrap_or(0)
+                };
                 let yes_stake: u64 = proposal.drep_votes.iter()
                     .filter(|(_, vote)| matches!(vote, Vote::Yes))
-                    .map(|(cred, _)| {
-                        drep_stake.get(&DRep::KeyHash(cred.clone()))
-                            .or_else(|| drep_stake.get(&DRep::ScriptHash(cred.clone())))
-                            .copied()
-                            .unwrap_or(0)
-                    })
+                    .map(|(cred, _)| lookup_stake(cred))
                     .sum();
-                // Check: yes_stake / total_active >= threshold
-                let yes_128 = yes_stake as u128;
-                let td_128 = thresh_den as u128;
-                let tn_128 = thresh_num as u128;
-                let total_128 = *total_drep_active_stake as u128;
-                if yes_128 * td_128 < tn_128 * total_128 {
-                    return false;
+                let no_stake: u64 = proposal.drep_votes.iter()
+                    .filter(|(_, vote)| matches!(vote, Vote::No))
+                    .map(|(cred, _)| lookup_stake(cred))
+                    .sum();
+                let voted_stake = yes_stake + no_stake;
+                if voted_stake > 0 {
+                    // Check: yes_stake / (yes_stake + no_stake) >= threshold
+                    let yes_128 = yes_stake as u128;
+                    let td_128 = thresh_den as u128;
+                    let tn_128 = thresh_num as u128;
+                    let voted_128 = voted_stake as u128;
+                    if yes_128 * td_128 < tn_128 * voted_128 {
+                        return false;
+                    }
+                } else {
+                    return false; // No votes cast → not ratified
                 }
             }
         }
     }
 
-    // SPO check
+    // SPO check: same yes/(yes+no) semantics as DRep
     if let Some(idx) = pool_idx {
-        if idx < pool_thresholds.len() && total_pool_stake > 0 {
+        if idx < pool_thresholds.len() {
             let (thresh_num, thresh_den) = pool_thresholds[idx];
             if thresh_den > 0 {
+                let lookup_pool = |hash: &Hash28| -> u64 {
+                    pool_stake.get(&ade_types::tx::PoolId(hash.clone()))
+                        .map(|c| c.0)
+                        .unwrap_or(0)
+                };
                 let yes_stake: u64 = proposal.spo_votes.iter()
                     .filter(|(_, vote)| matches!(vote, Vote::Yes))
-                    .map(|(hash, _)| {
-                        pool_stake.get(&ade_types::tx::PoolId(hash.clone()))
-                            .map(|c| c.0)
-                            .unwrap_or(0)
-                    })
+                    .map(|(hash, _)| lookup_pool(hash))
                     .sum();
-                let yes_128 = yes_stake as u128;
-                let td_128 = thresh_den as u128;
-                let tn_128 = thresh_num as u128;
-                let tp_128 = total_pool_stake as u128;
-                if yes_128 * td_128 < tn_128 * tp_128 {
-                    return false;
+                let no_stake: u64 = proposal.spo_votes.iter()
+                    .filter(|(_, vote)| matches!(vote, Vote::No))
+                    .map(|(hash, _)| lookup_pool(hash))
+                    .sum();
+                let voted_stake = yes_stake + no_stake;
+                if voted_stake > 0 {
+                    let yes_128 = yes_stake as u128;
+                    let td_128 = thresh_den as u128;
+                    let tn_128 = thresh_num as u128;
+                    let voted_128 = voted_stake as u128;
+                    if yes_128 * td_128 < tn_128 * voted_128 {
+                        return false;
+                    }
                 }
+                // If no SPO votes cast, SPO check passes (no quorum required)
             }
         }
     }

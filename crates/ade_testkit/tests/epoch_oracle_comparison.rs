@@ -3138,6 +3138,8 @@ fn conway_governance_proposals() {
         ("Conway 508", "snapshot_134092810.tar.gz"),
         ("Conway 528", "snapshot_142732816.tar.gz"),
         ("Conway 529", "snapshot_143164817.tar.gz"),
+        ("Conway 576 (pre-treasury)", "snapshot_163468813.tar.gz"),
+        ("Conway 577 (post-treasury)", "snapshot_163901617.tar.gz"),
     ];
 
     eprintln!("\n=== CONWAY GOVERNANCE PROPOSALS ===");
@@ -3282,6 +3284,180 @@ fn conway_governance_ratification_test() {
     // Check expiry
     let (active, expired_check) = expire_proposals(&pre_proposals, 529);
     eprintln!("  Expiry at epoch 529: {} active, {} expired", active.len(), expired_check.len());
+
+    // Also test the treasury epoch 576→577 if available
+    let treasury_pre = snapshots_dir().join("snapshot_163468813.tar.gz");
+    let treasury_post = snapshots_dir().join("snapshot_163901617.tar.gz");
+    if treasury_pre.exists() && treasury_post.exists() {
+        eprintln!("\n  === TREASURY ENACTMENT TEST (576→577) ===");
+        let t_pre_snap = LoadedSnapshot::from_tarball(&treasury_pre).unwrap();
+        let t_post_snap = LoadedSnapshot::from_tarball(&treasury_post).unwrap();
+        let t_pre_state = t_pre_snap.to_ledger_state();
+        let t_post_state = t_post_snap.to_ledger_state();
+
+        let t_pre_gov = t_pre_state.gov_state.as_ref().unwrap();
+        let t_post_gov = t_post_state.gov_state.as_ref().unwrap();
+
+        eprintln!("    PRE proposals: {}", t_pre_gov.proposals.len());
+        eprintln!("    POST proposals: {}", t_post_gov.proposals.len());
+        eprintln!("    proposals removed: {}", t_pre_gov.proposals.len() as i32 - t_post_gov.proposals.len() as i32);
+
+        // Count by type
+        let mut pre_types = std::collections::BTreeMap::new();
+        for p in &t_pre_gov.proposals {
+            let t = match &p.gov_action {
+                ade_types::conway::governance::GovAction::InfoAction => "Info",
+                ade_types::conway::governance::GovAction::TreasuryWithdrawals { .. } => "Treasury",
+                ade_types::conway::governance::GovAction::UpdateCommittee { .. } => "Committee",
+                ade_types::conway::governance::GovAction::ParameterChange { .. } => "Params",
+                _ => "Other",
+            };
+            *pre_types.entry(t).or_insert(0u32) += 1;
+        }
+        let mut post_types = std::collections::BTreeMap::new();
+        for p in &t_post_gov.proposals {
+            let t = match &p.gov_action {
+                ade_types::conway::governance::GovAction::InfoAction => "Info",
+                ade_types::conway::governance::GovAction::TreasuryWithdrawals { .. } => "Treasury",
+                ade_types::conway::governance::GovAction::UpdateCommittee { .. } => "Committee",
+                ade_types::conway::governance::GovAction::ParameterChange { .. } => "Params",
+                _ => "Other",
+            };
+            *post_types.entry(t).or_insert(0u32) += 1;
+        }
+        eprintln!("    PRE by type: {:?}", pre_types);
+        eprintln!("    POST by type: {:?}", post_types);
+
+        // Treasury comparison — the key metric
+        let t_treasury_change = t_post_snap.header.treasury as i64 - t_pre_snap.header.treasury as i64;
+        eprintln!("    treasury change: {} ADA", t_treasury_change / 1_000_000);
+
+        // Run our ratification on epoch 576 data
+        let t_drep_stake: ade_ledger::governance::DRepStakeDistribution = {
+            let mut ds = std::collections::BTreeMap::new();
+            let go = &t_pre_state.epoch_state.snapshots.go;
+            for (cred, drep) in &t_pre_gov.vote_delegations {
+                let stake = go.0.delegations.get(cred).map(|(_, c)| c.0).unwrap_or(0);
+                if stake > 0 { *ds.entry(drep.clone()).or_insert(0) += stake; }
+            }
+            ds
+        };
+
+        let t_committee_quorum = ade_ledger::rational::Rational::new(
+            t_pre_gov.committee_quorum.0 as i128,
+            t_pre_gov.committee_quorum.1.max(1) as i128,
+        ).unwrap_or_else(ade_ledger::rational::Rational::one);
+
+        let t_total_drep: u64 = t_drep_stake.values().sum();
+        eprintln!("    DRep stake: {} DReps, {} ADA total", t_drep_stake.len(), t_total_drep / 1_000_000);
+        eprintln!("    vote delegations: {}", t_pre_gov.vote_delegations.len());
+        eprintln!("    committee: {} members, quorum={}/{}", t_pre_gov.committee.len(),
+            t_pre_gov.committee_quorum.0, t_pre_gov.committee_quorum.1);
+        eprintln!("    pool thresholds: {:?}", t_pre_gov.pool_voting_thresholds);
+        eprintln!("    drep thresholds: {:?}", t_pre_gov.drep_voting_thresholds);
+
+        let t_result = ade_ledger::governance::evaluate_ratification(
+            &t_pre_gov.proposals,
+            &t_drep_stake,
+            &t_pre_state.epoch_state.snapshots.go.0.pool_stakes,
+            &t_pre_gov.committee,
+            &t_committee_quorum,
+            &t_pre_gov.pool_voting_thresholds,
+            &t_pre_gov.drep_voting_thresholds,
+            576,
+        );
+
+        eprintln!("    our ratified: {}", t_result.ratified.len());
+        eprintln!("    our expired: {}", t_result.expired.len());
+        eprintln!("    our remaining: {}", t_result.remaining.len());
+
+        // Debug: check vote stake for first treasury proposal
+        if let Some(tp) = t_pre_gov.proposals.iter().find(|p|
+            matches!(p.gov_action, ade_types::conway::governance::GovAction::TreasuryWithdrawals { .. }))
+        {
+            let yes_votes = tp.drep_votes.iter()
+                .filter(|(_, v)| matches!(v, ade_types::conway::governance::Vote::Yes))
+                .count();
+            let yes_stake: u64 = tp.drep_votes.iter()
+                .filter(|(_, v)| matches!(v, ade_types::conway::governance::Vote::Yes))
+                .map(|(cred, _)| {
+                    let k = ade_types::conway::cert::DRep::KeyHash(cred.clone());
+                    let s = ade_types::conway::cert::DRep::ScriptHash(cred.clone());
+                    t_drep_stake.get(&k).or_else(|| t_drep_stake.get(&s)).copied().unwrap_or(0)
+                })
+                .sum();
+            let no_votes: u64 = tp.drep_votes.iter()
+                .filter(|(_, v)| matches!(v, ade_types::conway::governance::Vote::No))
+                .count() as u64;
+            eprintln!("    first treasury: yes_votes={yes_votes} yes_stake={} ADA, no_votes={no_votes}",
+                yes_stake / 1_000_000);
+            eprintln!("    need: {}% of {} ADA = {} ADA",
+                67, t_total_drep / 1_000_000,
+                t_total_drep * 67 / 100 / 1_000_000);
+            // Check how many DRep votes have matching stake
+            let matched = tp.drep_votes.iter()
+                .filter(|(cred, _)| {
+                    let k = ade_types::conway::cert::DRep::KeyHash(cred.clone());
+                    let s = ade_types::conway::cert::DRep::ScriptHash(cred.clone());
+                    t_drep_stake.contains_key(&k) || t_drep_stake.contains_key(&s)
+                })
+                .count();
+            eprintln!("    votes with stake: {matched}/{}", tp.drep_votes.len());
+
+            // Check active DRep stake (exclude expired DReps)
+            let active_drep_stake: u64 = t_drep_stake.iter()
+                .filter(|(drep, _)| {
+                    match drep {
+                        ade_types::conway::cert::DRep::KeyHash(h) | ade_types::conway::cert::DRep::ScriptHash(h) => {
+                            t_pre_gov.drep_expiry.get(h).map(|e| *e >= 576).unwrap_or(true)
+                        }
+                        _ => true,
+                    }
+                })
+                .map(|(_, s)| *s)
+                .sum();
+            let inactive_drep_stake = t_total_drep - active_drep_stake;
+            eprintln!("    active DRep stake: {} ADA (excl {} ADA inactive)",
+                active_drep_stake / 1_000_000, inactive_drep_stake / 1_000_000);
+            eprintln!("    with active denominator: {}% (need 67%)",
+                yes_stake * 100 / active_drep_stake.max(1));
+
+            // Alternative: yes / (yes + no) — CIP-1694 ratification semantics
+            let no_stake: u64 = tp.drep_votes.iter()
+                .filter(|(_, v)| matches!(v, ade_types::conway::governance::Vote::No))
+                .map(|(cred, _)| {
+                    let k = ade_types::conway::cert::DRep::KeyHash(cred.clone());
+                    let s = ade_types::conway::cert::DRep::ScriptHash(cred.clone());
+                    t_drep_stake.get(&k).or_else(|| t_drep_stake.get(&s)).copied().unwrap_or(0)
+                })
+                .sum();
+            let abstain_votes: u64 = tp.drep_votes.iter()
+                .filter(|(_, v)| matches!(v, ade_types::conway::governance::Vote::Abstain))
+                .count() as u64;
+            eprintln!("    no_stake: {} ADA ({} votes), abstain: {} votes",
+                no_stake / 1_000_000, no_votes, abstain_votes);
+            if yes_stake + no_stake > 0 {
+                eprintln!("    yes/(yes+no): {}% (need 67%)",
+                    yes_stake * 100 / (yes_stake + no_stake));
+            }
+        }
+
+        for p in &t_result.ratified {
+            let t = match &p.gov_action {
+                ade_types::conway::governance::GovAction::TreasuryWithdrawals { .. } => "Treasury",
+                ade_types::conway::governance::GovAction::UpdateCommittee { .. } => "Committee",
+                _ => "Other",
+            };
+            eprintln!("      RATIFIED: {t} (proposed={}, expires={})", p.proposed_in.0, p.expires_after.0);
+        }
+
+        let t_effects = ade_ledger::governance::enact_proposals(&t_result.ratified);
+        eprintln!("    enactment: treasury_withdrawn={} ADA, deposits_returned={} ({} ADA)",
+            t_effects.treasury_withdrawn / 1_000_000,
+            t_effects.deposits_returned.len(),
+            t_effects.deposits_returned.iter().map(|(_, c)| c.0).sum::<u64>() / 1_000_000);
+        eprintln!("  ==========================================");
+    }
 
     // Differential: compare our governance decisions with oracle's actual state
     eprintln!("\n  --- Differential Governance Comparison ---");
