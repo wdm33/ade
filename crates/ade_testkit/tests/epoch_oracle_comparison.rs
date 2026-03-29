@@ -3428,6 +3428,30 @@ fn conway_governance_ratification_test() {
         eprintln!("    pool thresholds: {:?}", t_pre_gov.pool_voting_thresholds);
         eprintln!("    drep thresholds: {:?}", t_pre_gov.drep_voting_thresholds);
 
+        // Per-proposal DRep vote analysis
+        for (i, p) in t_pre_gov.proposals.iter().enumerate() {
+            if !matches!(p.gov_action, ade_types::conway::governance::GovAction::TreasuryWithdrawals { .. }) { continue; }
+            let yes: u64 = p.drep_votes.iter()
+                .filter(|(_, v)| matches!(v, ade_types::conway::governance::Vote::Yes))
+                .map(|(c, _)| {
+                    let k = ade_types::conway::cert::DRep::KeyHash(c.clone());
+                    let s = ade_types::conway::cert::DRep::ScriptHash(c.clone());
+                    t_drep_stake.get(&k).or_else(|| t_drep_stake.get(&s)).copied().unwrap_or(0)
+                }).sum();
+            let no: u64 = p.drep_votes.iter()
+                .filter(|(_, v)| matches!(v, ade_types::conway::governance::Vote::No))
+                .map(|(c, _)| {
+                    let k = ade_types::conway::cert::DRep::KeyHash(c.clone());
+                    let s = ade_types::conway::cert::DRep::ScriptHash(c.clone());
+                    t_drep_stake.get(&k).or_else(|| t_drep_stake.get(&s)).copied().unwrap_or(0)
+                }).sum();
+            let ratio = if yes + no > 0 { yes * 100 / (yes + no) } else { 0 };
+            let yes_v = p.drep_votes.iter().filter(|(_, v)| matches!(v, ade_types::conway::governance::Vote::Yes)).count();
+            let no_v = p.drep_votes.iter().filter(|(_, v)| matches!(v, ade_types::conway::governance::Vote::No)).count();
+            eprintln!("    proposal[{i}] Treasury: yes={yes_v}({} ADA) no={no_v}({} ADA) → {ratio}% (need 67%)",
+                yes / 1_000_000, no / 1_000_000);
+        }
+
         let t_result = ade_ledger::governance::evaluate_ratification(
             &t_pre_gov.proposals,
             &t_drep_stake,

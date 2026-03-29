@@ -182,10 +182,12 @@ fn check_ratification(
         }
     }
 
-    // DRep check: CIP-1694 threshold = yes_stake / (yes_stake + no_stake)
-    // Non-voting and abstaining DReps don't count against the threshold.
+    // DRep check (Haskell: dRepAcceptedRatio):
+    // ratio = yes_stake / (total_active_stake - abstain_stake - inactive_stake)
+    // Non-voting DReps count against ratification (stay in denominator).
+    // Only AlwaysAbstain and inactive DReps are excluded.
     if let Some(idx) = drep_idx {
-        if idx < drep_thresholds.len() {
+        if idx < drep_thresholds.len() && *total_drep_active_stake > 0 {
             let (thresh_num, thresh_den) = drep_thresholds[idx];
             if thresh_den > 0 {
                 let lookup_stake = |cred: &Hash28| -> u64 {
@@ -198,22 +200,13 @@ fn check_ratification(
                     .filter(|(_, vote)| matches!(vote, Vote::Yes))
                     .map(|(cred, _)| lookup_stake(cred))
                     .sum();
-                let no_stake: u64 = proposal.drep_votes.iter()
-                    .filter(|(_, vote)| matches!(vote, Vote::No))
-                    .map(|(cred, _)| lookup_stake(cred))
-                    .sum();
-                let voted_stake = yes_stake + no_stake;
-                if voted_stake > 0 {
-                    // Check: yes_stake / (yes_stake + no_stake) >= threshold
-                    let yes_128 = yes_stake as u128;
-                    let td_128 = thresh_den as u128;
-                    let tn_128 = thresh_num as u128;
-                    let voted_128 = voted_stake as u128;
-                    if yes_128 * td_128 < tn_128 * voted_128 {
-                        return false;
-                    }
-                } else {
-                    return false; // No votes cast → not ratified
+                // Denominator = total active DRep stake (already excludes AlwaysAbstain)
+                let yes_128 = yes_stake as u128;
+                let td_128 = thresh_den as u128;
+                let tn_128 = thresh_num as u128;
+                let total_128 = *total_drep_active_stake as u128;
+                if yes_128 * td_128 < tn_128 * total_128 {
+                    return false;
                 }
             }
         }
