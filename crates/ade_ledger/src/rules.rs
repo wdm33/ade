@@ -809,10 +809,18 @@ pub fn apply_epoch_boundary_full(
             );
 
             let effects = crate::governance::enact_proposals(&result.ratified);
-            governance_treasury_withdrawn = effects.treasury_withdrawn;
-            eprintln!("  [governance] ratified={} expired={} remaining={} treasury_withdrawn={} ADA",
+
+            // Deposit refunds: enacted proposal deposits returned from treasury.
+            // Only enacted proposals have deposits refunded from treasury.
+            // Expired proposal deposits are returned from the deposit pot, not treasury.
+            let enacted_deposit_refunds: u64 = effects.deposits_returned.iter()
+                .map(|(_, c)| c.0)
+                .sum();
+
+            governance_treasury_withdrawn = effects.treasury_withdrawn + enacted_deposit_refunds;
+            eprintln!("  [governance] ratified={} expired={} remaining={} treasury_withdrawn={} ADA deposit_refunds={} ADA",
                 result.ratified.len(), result.expired.len(), result.remaining.len(),
-                governance_treasury_withdrawn / 1_000_000);
+                effects.treasury_withdrawn / 1_000_000, enacted_deposit_refunds / 1_000_000);
 
             Some(crate::state::ConwayGovState {
                 proposals: result.remaining,
