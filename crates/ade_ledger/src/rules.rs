@@ -757,10 +757,36 @@ pub fn apply_epoch_boundary_full(
         new_mark,
     );
 
-    // 4. Pool retirements effective at this epoch
+    // 4. Pool retirements effective at this epoch (POOLREAP)
+    //
+    // When a pool retires:
+    // - Pool is removed from the registered pools map
+    // - Pool deposit is returned to the operator's reward account
+    // - If the operator's reward account is unregistered, deposit goes to treasury
     let mut pool_state = state.cert_state.pool.clone();
+    let mut poolreap_to_treasury = 0u64;
+    let pool_deposit = state.protocol_params.pool_deposit.0;
     pool_state.retiring.retain(|pool_id, retire_epoch| {
         if retire_epoch.0 <= new_epoch.0 {
+            // Check if the pool operator's reward account is registered
+            if let Some(params) = pool_state.pools.get(pool_id) {
+                if params.reward_account.len() >= 29 {
+                    let mut cred = [0u8; 28];
+                    cred.copy_from_slice(&params.reward_account[1..29]);
+                    let stake_cred = ade_types::shelley::cert::StakeCredential(
+                        ade_types::Hash28(cred));
+                    if delegation.registrations.contains_key(&stake_cred) {
+                        // Registered — return deposit to reward account
+                        let entry = delegation.rewards
+                            .entry(stake_cred)
+                            .or_insert(ade_types::tx::Coin(0));
+                        entry.0 = entry.0.saturating_add(pool_deposit);
+                    } else {
+                        // Unregistered — deposit goes to treasury
+                        poolreap_to_treasury += pool_deposit;
+                    }
+                }
+            }
             pool_state.pools.remove(pool_id);
             false
         } else {
@@ -855,6 +881,7 @@ pub fn apply_epoch_boundary_full(
         treasury.0
             .saturating_add(treasury_delta)
             .saturating_add(delta_t2)
+            .saturating_add(poolreap_to_treasury)
             .saturating_sub(governance_treasury_withdrawn)
     );
 
