@@ -802,6 +802,7 @@ fn apply_epoch_boundary_full(
                 &gov.drep_voting_thresholds,
                 new_epoch.0,
                 &gov.committee_hot_keys,
+                &gov.drep_expiry,
             );
 
             let effects = crate::governance::enact_proposals(&result.ratified);

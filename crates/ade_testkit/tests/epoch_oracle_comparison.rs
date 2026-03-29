@@ -3245,6 +3245,7 @@ fn conway_governance_ratification_test() {
         &gov_params.drep_voting_thresholds,
         528,
         &pre_state.gov_state.as_ref().map(|g| g.committee_hot_keys.clone()).unwrap_or_default(),
+        &pre_state.gov_state.as_ref().map(|g| g.drep_expiry.clone()).unwrap_or_default(),
     );
 
     eprintln!("  Ratification result:");
@@ -3339,6 +3340,7 @@ fn conway_governance_ratification_test() {
             &p_pre_gov.drep_voting_thresholds,
             536,
             &p_pre_gov.committee_hot_keys,
+            &p_pre_gov.drep_expiry,
         );
 
         eprintln!("    our ratified: {}", p_result.ratified.len());
@@ -3480,6 +3482,7 @@ fn conway_governance_ratification_test() {
                 &t_pre_gov.drep_voting_thresholds,
                 576,
                 &t_pre_gov.committee_hot_keys,
+                &t_pre_gov.drep_expiry,
             );
             eprintln!("    {snap_name}: ratified={} expired={} remaining={}",
                 snap_result.ratified.len(), snap_result.expired.len(), snap_result.remaining.len());
@@ -3535,6 +3538,7 @@ fn conway_governance_ratification_test() {
             &t_pre_gov.drep_voting_thresholds,
             576,
             &t_pre_gov.committee_hot_keys,
+            &t_pre_gov.drep_expiry,
         );
 
         eprintln!("    our ratified: {}", t_result.ratified.len());

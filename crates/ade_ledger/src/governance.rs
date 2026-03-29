@@ -58,8 +58,22 @@ pub fn evaluate_ratification(
     drep_thresholds: &[(u64, u64)],   // per-action-type DRep voting thresholds
     current_epoch: u64,
     committee_hot_keys: &BTreeMap<Hash28, Hash28>, // hot → cold mapping
+    drep_expiry: &BTreeMap<Hash28, u64>, // DRep credential → expiry epoch
 ) -> RatificationResult {
-    let total_drep_active_stake = compute_active_drep_stake(drep_stake);
+    // Filter DRep stake: exclude AlwaysAbstain AND inactive DReps
+    let active_drep_stake: DRepStakeDistribution = drep_stake.iter()
+        .filter(|(drep, _)| {
+            match drep {
+                DRep::AlwaysAbstain => false,
+                DRep::KeyHash(h) | DRep::ScriptHash(h) => {
+                    drep_expiry.get(h).map(|e| *e >= current_epoch).unwrap_or(true)
+                }
+                _ => true,
+            }
+        })
+        .map(|(k, v)| (k.clone(), *v))
+        .collect();
+    let total_drep_active_stake = active_drep_stake.values().sum::<u64>();
     let total_pool_stake: u64 = pool_stake.values().map(|c| c.0).sum();
 
     let mut ratified = Vec::new();
@@ -86,7 +100,7 @@ pub fn evaluate_ratification(
                     proposal,
                     action_idx,
                     &total_drep_active_stake,
-                    drep_stake,
+                    &active_drep_stake,
                     total_pool_stake,
                     pool_stake,
                     committee_members,
