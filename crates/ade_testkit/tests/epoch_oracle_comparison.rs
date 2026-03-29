@@ -3682,6 +3682,84 @@ fn conway_governance_ratification_test() {
     eprintln!("=============================================\n");
 }
 
+/// End-to-end epoch boundary test: apply_epoch_boundary_full on Conway 576→577,
+/// diff resulting state against POST oracle snapshot.
+#[test]
+fn conway_epoch_boundary_end_to_end() {
+    let pre_path = snapshots_dir().join("snapshot_163468813.tar.gz");
+    let post_path = snapshots_dir().join("snapshot_163901617.tar.gz");
+    if !pre_path.exists() || !post_path.exists() { eprintln!("SKIPPED"); return; }
+
+    let pre_snap = LoadedSnapshot::from_tarball(&pre_path).unwrap();
+    let post_snap = LoadedSnapshot::from_tarball(&post_path).unwrap();
+
+    let pre_state = pre_snap.to_ledger_state();
+    let post_state = post_snap.to_ledger_state();
+
+    eprintln!("\n=== CONWAY EPOCH BOUNDARY END-TO-END (576→577) ===");
+    eprintln!("  PRE: epoch={} reserves={} ADA  treasury={} ADA",
+        pre_state.epoch_state.epoch.0,
+        pre_state.epoch_state.reserves.0 / 1_000_000,
+        pre_state.epoch_state.treasury.0 / 1_000_000);
+
+    // Run apply_epoch_boundary_full
+    let new_epoch = ade_types::EpochNo(577);
+    let (result_state, accounting) = ade_ledger::rules::apply_epoch_boundary_full(
+        &pre_state, new_epoch,
+    );
+
+    eprintln!("  RESULT: epoch={} reserves={} ADA  treasury={} ADA",
+        result_state.epoch_state.epoch.0,
+        result_state.epoch_state.reserves.0 / 1_000_000,
+        result_state.epoch_state.treasury.0 / 1_000_000);
+    eprintln!("  POST (oracle): reserves={} ADA  treasury={} ADA",
+        post_state.epoch_state.reserves.0 / 1_000_000,
+        post_state.epoch_state.treasury.0 / 1_000_000);
+
+    // Diff reserves
+    let our_reserves_decr = pre_state.epoch_state.reserves.0.saturating_sub(result_state.epoch_state.reserves.0);
+    let oracle_reserves_decr = pre_state.epoch_state.reserves.0.saturating_sub(post_state.epoch_state.reserves.0);
+    let reserves_ratio = if oracle_reserves_decr > 0 {
+        our_reserves_decr as f64 / oracle_reserves_decr as f64 * 100.0
+    } else { 100.0 };
+
+    eprintln!("\n  Reserves decrease:");
+    eprintln!("    ours:   {} ADA", our_reserves_decr / 1_000_000);
+    eprintln!("    oracle: {} ADA", oracle_reserves_decr / 1_000_000);
+    eprintln!("    ratio:  {reserves_ratio:.4}%");
+
+    // Diff treasury
+    let our_treasury_incr = result_state.epoch_state.treasury.0.saturating_sub(pre_state.epoch_state.treasury.0);
+    let oracle_treasury_incr = post_state.epoch_state.treasury.0.saturating_sub(pre_state.epoch_state.treasury.0);
+    // Treasury might decrease due to withdrawals
+    let our_treasury_change = result_state.epoch_state.treasury.0 as i64 - pre_state.epoch_state.treasury.0 as i64;
+    let oracle_treasury_change = post_state.epoch_state.treasury.0 as i64 - pre_state.epoch_state.treasury.0 as i64;
+
+    eprintln!("\n  Treasury change:");
+    eprintln!("    ours:   {} ADA", our_treasury_change / 1_000_000);
+    eprintln!("    oracle: {} ADA", oracle_treasury_change / 1_000_000);
+    eprintln!("    diff:   {} ADA", (our_treasury_change - oracle_treasury_change) / 1_000_000);
+
+    // Governance state diff
+    if let (Some(our_gov), Some(post_gov)) = (&result_state.gov_state, &post_state.gov_state) {
+        eprintln!("\n  Governance state:");
+        eprintln!("    proposals: ours={} oracle={}", our_gov.proposals.len(), post_gov.proposals.len());
+        eprintln!("    committee: ours={} oracle={}", our_gov.committee.len(), post_gov.committee.len());
+    }
+
+    // Accounting details
+    eprintln!("\n  Accounting:");
+    eprintln!("    delta_r1: {} ADA", accounting.delta_r1 / 1_000_000);
+    eprintln!("    delta_r2: {} ADA", accounting.delta_r2 / 1_000_000);
+    eprintln!("    delta_t1: {} ADA", accounting.delta_t1 / 1_000_000);
+    eprintln!("    delta_t2: {} ADA", accounting.delta_t2 / 1_000_000);
+    eprintln!("    pool_pot: {} ADA", accounting.pool_reward_pot / 1_000_000);
+    eprintln!("    sum_rewards: {} ADA", accounting.sum_rewards / 1_000_000);
+    eprintln!("    pools: {}", accounting.rewarded_pool_count);
+    eprintln!("    eta: {}/{}", accounting.eta_numerator, accounting.eta_denominator);
+    eprintln!("==================================================\n");
+}
+
 /// Probe all ConwayGovState fields to find committee membership.
 #[test]
 fn conway_govstate_full_probe() {

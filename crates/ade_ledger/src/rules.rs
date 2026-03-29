@@ -309,7 +309,7 @@ fn track_utxo(
 /// 4. Treasury/reserves update
 ///
 /// Idempotent: only called once per epoch boundary crossing.
-fn apply_epoch_boundary_full(
+pub fn apply_epoch_boundary_full(
     state: &LedgerState,
     new_epoch: ade_types::EpochNo,
 ) -> (LedgerState, EpochBoundaryAccounting) {
@@ -792,6 +792,9 @@ fn apply_epoch_boundary_full(
                 gov.committee_quorum.1.max(1) as i128,
             ).unwrap_or_else(crate::rational::Rational::one);
 
+            // Ratification uses the ENDING epoch (before boundary), not the new epoch.
+            // Proposals with expires_after >= ending_epoch are still active.
+            let ending_epoch = new_epoch.0.saturating_sub(1);
             let result = crate::governance::evaluate_ratification(
                 &gov.proposals,
                 &drep_stake,
@@ -800,13 +803,16 @@ fn apply_epoch_boundary_full(
                 &committee_quorum,
                 &gov.pool_voting_thresholds,
                 &gov.drep_voting_thresholds,
-                new_epoch.0,
+                ending_epoch,
                 &gov.committee_hot_keys,
                 &gov.drep_expiry,
             );
 
             let effects = crate::governance::enact_proposals(&result.ratified);
             governance_treasury_withdrawn = effects.treasury_withdrawn;
+            eprintln!("  [governance] ratified={} expired={} remaining={} treasury_withdrawn={} ADA",
+                result.ratified.len(), result.expired.len(), result.remaining.len(),
+                governance_treasury_withdrawn / 1_000_000);
 
             Some(crate::state::ConwayGovState {
                 proposals: result.remaining,
