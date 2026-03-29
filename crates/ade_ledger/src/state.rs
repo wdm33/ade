@@ -92,6 +92,9 @@ pub struct ConwayGovState {
     pub pool_voting_thresholds: Vec<(u64, u64)>,
     /// DRep voting thresholds: per-action-type rationals (num, den).
     pub drep_voting_thresholds: Vec<(u64, u64)>,
+    /// Committee hot→cold credential mapping (from VState).
+    /// Used to resolve committee vote credentials (hot) to member credentials (cold).
+    pub committee_hot_keys: std::collections::BTreeMap<ade_types::Hash28, ade_types::Hash28>,
 }
 
 impl LedgerState {

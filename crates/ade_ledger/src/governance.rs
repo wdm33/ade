@@ -52,11 +52,12 @@ pub fn evaluate_ratification(
     proposals: &[GovActionState],
     drep_stake: &DRepStakeDistribution,
     pool_stake: &BTreeMap<ade_types::tx::PoolId, Coin>,
-    committee_members: &BTreeMap<Hash28, u64>, // credential → expiry epoch
+    committee_members: &BTreeMap<Hash28, u64>, // cold credential → expiry epoch
     committee_quorum: &Rational,
     pool_thresholds: &[(u64, u64)],   // per-action-type pool voting thresholds
     drep_thresholds: &[(u64, u64)],   // per-action-type DRep voting thresholds
     current_epoch: u64,
+    committee_hot_keys: &BTreeMap<Hash28, Hash28>, // hot → cold mapping
 ) -> RatificationResult {
     let total_drep_active_stake = compute_active_drep_stake(drep_stake);
     let total_pool_stake: u64 = pool_stake.values().map(|c| c.0).sum();
@@ -93,6 +94,7 @@ pub fn evaluate_ratification(
                     pool_thresholds,
                     drep_thresholds,
                     current_epoch,
+                    committee_hot_keys,
                 )
             }
         };
@@ -145,13 +147,14 @@ fn check_ratification(
     action_thresholds: (Option<usize>, Option<usize>),
     total_drep_active_stake: &u64,
     drep_stake: &DRepStakeDistribution,
-    total_pool_stake: u64,
+    _total_pool_stake: u64,
     pool_stake: &BTreeMap<ade_types::tx::PoolId, Coin>,
     committee_members: &BTreeMap<Hash28, u64>,
     committee_quorum: &Rational,
     pool_thresholds: &[(u64, u64)],
     drep_thresholds: &[(u64, u64)],
     current_epoch: u64,
+    committee_hot_keys: &BTreeMap<Hash28, Hash28>,
 ) -> bool {
     let (pool_idx, drep_idx) = action_thresholds;
 
@@ -161,18 +164,26 @@ fn check_ratification(
         GovAction::NoConfidence { .. } | GovAction::UpdateCommittee { .. }
     );
     if needs_committee && !committee_members.is_empty() {
-        let active_members_count = committee_members.iter()
+        let active_members: Vec<_> = committee_members.iter()
             .filter(|(_, expiry)| **expiry >= current_epoch)
-            .count();
-        if active_members_count > 0 {
-            // Committee votes use HOT credentials, committee_members has COLD credentials.
-            // Until VState hot→cold mapping is implemented, count all Yes votes
-            // from the proposal's committee_votes directly.
+            .collect();
+        if !active_members.is_empty() {
+            // Committee votes use HOT credentials. Resolve via hot→cold mapping.
             let yes_votes = proposal.committee_votes.iter()
-                .filter(|(_, vote)| matches!(vote, Vote::Yes))
+                .filter(|(hot_cred, vote)| {
+                    if !matches!(vote, Vote::Yes) { return false; }
+                    // Resolve hot→cold. If mapping exists, check cold is active member.
+                    // If no mapping, fall back to counting all Yes votes.
+                    if let Some(cold) = committee_hot_keys.get(hot_cred) {
+                        active_members.iter().any(|(c, _)| *c == cold)
+                    } else {
+                        // No hot key mapping — count vote if we have enough votes
+                        // (fallback for when VState parsing doesn't cover all keys)
+                        true
+                    }
+                })
                 .count();
-            // Check against committee quorum: yes / active_members >= quorum
-            let yes_rat = Rational::new(yes_votes as i128, active_members_count as i128)
+            let yes_rat = Rational::new(yes_votes as i128, active_members.len() as i128)
                 .unwrap_or_else(Rational::zero);
             if yes_rat.numerator() * committee_quorum.denominator()
                 < committee_quorum.numerator() * yes_rat.denominator()

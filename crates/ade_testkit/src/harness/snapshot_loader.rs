@@ -138,6 +138,7 @@ impl LoadedSnapshot {
             .unwrap_or(6);
 
         let vote_delegations = parse_vote_delegations(&self.raw_cbor).unwrap_or_default();
+        let committee_hot_keys = parse_committee_hot_keys(&self.raw_cbor).unwrap_or_default();
 
         let pool_voting_thresholds = gov_params.as_ref()
             .map(|gp| gp.pool_voting_thresholds.clone())
@@ -155,6 +156,7 @@ impl LoadedSnapshot {
             vote_delegations,
             pool_voting_thresholds,
             drep_voting_thresholds,
+            committee_hot_keys,
         })
     }
 
@@ -1840,6 +1842,86 @@ pub fn parse_committee_state(
     Ok(CommitteeState { members, quorum })
 }
 
+/// Parse committee hot→cold credential mapping from VState[1].
+///
+/// VState[1] = CommitteeState = Map (Credential ColdCommitteeRole) CommitteeAuthorization
+/// CommitteeAuthorization = CommitteeHotCredential(hot_cred) | CommitteeMemberResigned
+///
+/// Returns a map of hot_credential → cold_credential for active (non-resigned) members.
+/// Used to resolve committee vote credentials (hot) to committee member credentials (cold).
+pub fn parse_committee_hot_keys(
+    state_cbor: &[u8],
+) -> Result<std::collections::BTreeMap<ade_types::Hash28, ade_types::Hash28>, HarnessError> {
+    let off = navigate_to_nes(state_cbor)?;
+    let es = skip_nes_to_epoch_state(state_cbor, off)?;
+    let off = skip_cbor(state_cbor, es)?; // skip AccountState
+    let (ls_body, _) = read_array_header(state_cbor, off)?;
+    let (cs_body, cs_len) = read_array_header(state_cbor, ls_body)?;
+
+    if cs_len != 3 {
+        return Ok(std::collections::BTreeMap::new()); // Not Conway
+    }
+
+    // CS[0] = VState = array(3) [drepRegs, committeeState, epochNo]
+    let (vs_body, vs_len) = read_array_header(state_cbor, cs_body)?;
+    if vs_len < 2 { return Ok(std::collections::BTreeMap::new()); }
+
+    // Skip VS[0] (DRep regs) to reach VS[1] (committee state)
+    let vs1_off = skip_cbor(state_cbor, vs_body)?;
+
+    // VS[1] = map(cold_credential → CommitteeAuthorization)
+    let (mut co, _, map_val) = read_cbor_initial(state_cbor, vs1_off)?;
+    let mut hot_to_cold = std::collections::BTreeMap::new();
+    let is_indef = map_val == u64::MAX;
+    let mut count = 0u64;
+
+    while co < state_cbor.len() {
+        if is_indef && state_cbor[co] == 0xff { break; }
+        if !is_indef && count >= map_val { break; }
+
+        // Key: cold credential = array(2) [type, hash28]
+        let (k_body, k_maj, _) = read_cbor_initial(state_cbor, co)?;
+        let key_end = skip_cbor(state_cbor, co)?;
+        let mut cold_hash = [0u8; 28];
+        if k_maj == 4 {
+            let tag_end = skip_cbor(state_cbor, k_body)?;
+            let (h_start, _, h_len) = read_cbor_initial(state_cbor, tag_end)?;
+            if h_len >= 28 { cold_hash.copy_from_slice(&state_cbor[h_start..h_start + 28]); }
+        }
+        co = key_end;
+
+        // Value: CommitteeAuthorization
+        // CommitteeHotCredential = array(2) [0, credential] — active
+        // CommitteeMemberResigned = array(2) [1, anchor_or_null] — resigned
+        let (v_body, v_maj, v_len) = read_cbor_initial(state_cbor, co)?;
+        if v_maj == 4 && v_len >= 1 {
+            let (_, auth_tag) = read_uint(state_cbor, v_body)?;
+            if auth_tag == 0 && v_len >= 2 {
+                // CommitteeHotCredential — extract hot credential hash
+                let hot_cred_off = skip_cbor(state_cbor, v_body)?; // skip tag
+                let (hc_body, hc_maj, _) = read_cbor_initial(state_cbor, hot_cred_off)?;
+                if hc_maj == 4 {
+                    let ht_end = skip_cbor(state_cbor, hc_body)?;
+                    let (hh_start, _, hh_len) = read_cbor_initial(state_cbor, ht_end)?;
+                    if hh_len >= 28 {
+                        let mut hot_hash = [0u8; 28];
+                        hot_hash.copy_from_slice(&state_cbor[hh_start..hh_start + 28]);
+                        hot_to_cold.insert(
+                            ade_types::Hash28(hot_hash),
+                            ade_types::Hash28(cold_hash),
+                        );
+                    }
+                }
+            }
+            // auth_tag == 1 → resigned, skip
+        }
+        co = skip_cbor(state_cbor, co)?;
+        count += 1;
+    }
+
+    Ok(hot_to_cold)
+}
+
 /// Parse vote delegations from the DState UMap.
 ///
 /// Returns a map of credential hash → DRep for all credentials with
@@ -2099,18 +2181,45 @@ fn parse_gov_action(
     let (body, _, len) = read_cbor_initial(state_cbor, off)?;
     if len == 0 { return Ok(GovAction::InfoAction); }
 
-    let (_, tag) = read_uint(state_cbor, body)?;
+    let (next, tag) = read_uint(state_cbor, body)?;
     match tag {
         6 => Ok(GovAction::InfoAction),
         0 => Ok(GovAction::ParameterChange {
             prev_action: None, update: Vec::new(), policy_hash: None,
         }),
-        1 => Ok(GovAction::HardForkInitiation {
-            prev_action: None, protocol_version: (0, 0),
-        }),
-        2 => Ok(GovAction::TreasuryWithdrawals {
-            withdrawals: Vec::new(), policy_hash: None,
-        }),
+        1 => {
+            // HardForkInitiation = [1, prev_action_or_null, protocol_version]
+            let f1 = skip_cbor(state_cbor, next)?; // skip prev_action
+            let (pv_body, _, _) = read_cbor_initial(state_cbor, f1)?;
+            let (pv_next, major) = read_uint(state_cbor, pv_body)?;
+            let (_, minor) = read_uint(state_cbor, pv_next)?;
+            Ok(GovAction::HardForkInitiation {
+                prev_action: None, protocol_version: (major, minor),
+            })
+        }
+        2 => {
+            // TreasuryWithdrawals = [2, withdrawal_map, policy_hash_or_null]
+            let (mut co, _, map_val) = read_cbor_initial(state_cbor, next)?;
+            let mut withdrawals = Vec::new();
+            let is_indef = map_val == u64::MAX;
+            let mut count = 0u64;
+            while co < state_cbor.len() {
+                if is_indef && state_cbor[co] == 0xff { break; }
+                if !is_indef && count >= map_val { break; }
+                // Key: reward_account = bytes(29)
+                let (addr_start, _, addr_len) = read_cbor_initial(state_cbor, co)?;
+                let addr = state_cbor[addr_start..addr_start + addr_len as usize].to_vec();
+                co = skip_cbor(state_cbor, co)?;
+                // Value: coin = uint
+                let (_, amount) = read_uint(state_cbor, co)?;
+                co = skip_cbor(state_cbor, co)?;
+                withdrawals.push((addr, ade_types::tx::Coin(amount)));
+                count += 1;
+            }
+            Ok(GovAction::TreasuryWithdrawals {
+                withdrawals, policy_hash: None,
+            })
+        }
         3 => Ok(GovAction::NoConfidence { prev_action: None }),
         4 => Ok(GovAction::UpdateCommittee {
             prev_action: None, raw: Vec::new(),

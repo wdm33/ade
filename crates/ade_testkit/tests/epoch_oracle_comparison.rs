@@ -3243,7 +3243,8 @@ fn conway_governance_ratification_test() {
         &ade_ledger::rational::Rational::new(2, 3).unwrap(), // 2/3 quorum
         &gov_params.pool_voting_thresholds,
         &gov_params.drep_voting_thresholds,
-        528, // current epoch
+        528,
+        &pre_state.gov_state.as_ref().map(|g| g.committee_hot_keys.clone()).unwrap_or_default(),
     );
 
     eprintln!("  Ratification result:");
@@ -3337,6 +3338,7 @@ fn conway_governance_ratification_test() {
             &p_pre_gov.pool_voting_thresholds,
             &p_pre_gov.drep_voting_thresholds,
             536,
+            &p_pre_gov.committee_hot_keys,
         );
 
         eprintln!("    our ratified: {}", p_result.ratified.len());
@@ -3461,6 +3463,7 @@ fn conway_governance_ratification_test() {
             &t_pre_gov.pool_voting_thresholds,
             &t_pre_gov.drep_voting_thresholds,
             576,
+            &t_pre_gov.committee_hot_keys,
         );
 
         eprintln!("    our ratified: {}", t_result.ratified.len());

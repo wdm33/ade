@@ -798,6 +798,7 @@ fn apply_epoch_boundary_full(
                 &gov.pool_voting_thresholds,
                 &gov.drep_voting_thresholds,
                 new_epoch.0,
+                &gov.committee_hot_keys,
             );
 
             let effects = crate::governance::enact_proposals(&result.ratified);
@@ -812,6 +813,7 @@ fn apply_epoch_boundary_full(
                 vote_delegations: gov.vote_delegations.clone(),
                 pool_voting_thresholds: gov.pool_voting_thresholds.clone(),
                 drep_voting_thresholds: gov.drep_voting_thresholds.clone(),
+                committee_hot_keys: gov.committee_hot_keys.clone(),
             })
         } else {
             None
