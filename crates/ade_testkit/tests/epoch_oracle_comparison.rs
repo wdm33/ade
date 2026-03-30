@@ -3734,7 +3734,47 @@ fn conway_epoch_boundary_end_to_end() {
             rs.gov_state.as_ref().map(|g| g.proposals.len()).unwrap_or(0));
     }
 
-    // Use the best variant for the detailed output
+    // Extract the actual reward values (deltaR1, deltaT1, fees) from DRepPulsingState
+    // in the PRE snapshot's ConwayGovState[6]. These are from the 575→576 reward
+    // computation that will be applied at the 576→577 boundary.
+    {
+        let pre_data = ade_testkit::harness::snapshot_loader::extract_state_from_tarball(&pre_path).unwrap();
+        let off = ade_testkit::harness::snapshot_loader::navigate_to_nes_pub(&pre_data).unwrap();
+        // Skip NES[0..2] to ES
+        let off = ade_testkit::harness::snapshot_loader::skip_cbor_pub(&pre_data, off).unwrap();
+        let off = ade_testkit::harness::snapshot_loader::skip_cbor_pub(&pre_data, off).unwrap();
+        let off = ade_testkit::harness::snapshot_loader::skip_cbor_pub(&pre_data, off).unwrap();
+        let (es_body, _) = ade_testkit::harness::snapshot_loader::read_array_header_pub(&pre_data, off).unwrap();
+        let off = ade_testkit::harness::snapshot_loader::skip_cbor_pub(&pre_data, es_body).unwrap();
+        let (ls_body, _) = ade_testkit::harness::snapshot_loader::read_array_header_pub(&pre_data, off).unwrap();
+        let off = ade_testkit::harness::snapshot_loader::skip_cbor_pub(&pre_data, ls_body).unwrap();
+        let (utxo_body, _) = ade_testkit::harness::snapshot_loader::read_array_header_pub(&pre_data, off).unwrap();
+        let mut off = utxo_body as usize;
+        for _ in 0..3 { off = ade_testkit::harness::snapshot_loader::skip_cbor_pub(&pre_data, off).unwrap(); }
+        let (gs_body, _) = ade_testkit::harness::snapshot_loader::read_array_header_pub(&pre_data, off).unwrap();
+        // Skip GS[0..5] to GS[6] = DRepPulsingState
+        let mut off = gs_body as usize;
+        for _ in 0..6 { off = ade_testkit::harness::snapshot_loader::skip_cbor_pub(&pre_data, off).unwrap(); }
+        // GS[6] = array(2) [PulsingSnapshot, RatifyState]
+        let (gs6_body, gs6_len) = ade_testkit::harness::snapshot_loader::read_array_header_pub(&pre_data, off).unwrap();
+        eprintln!("  DRepPulsingState: array({gs6_len})");
+        // GS[6][0] = PulsingSnapshot = array(4)
+        let (ps_body, ps_len) = ade_testkit::harness::snapshot_loader::read_array_header_pub(&pre_data, gs6_body as usize).unwrap();
+        eprintln!("  PulsingSnapshot: array({ps_len})");
+        // Probe PulsingSnapshot fields
+        let mut fi = ps_body as usize;
+        for i in 0..ps_len.min(5) {
+            let (_, fm, fv) = ade_testkit::harness::snapshot_loader::read_cbor_initial_pub(&pre_data, fi).unwrap();
+            let fs = ade_testkit::harness::snapshot_loader::skip_cbor_pub(&pre_data, fi).unwrap() - fi;
+            let ft = match fm { 0=>"uint", 2=>"bytes", 4=>"arr", 5=>"map", 6=>"tag", _=>"?" };
+            let fss = if fs > 1_000_000 { format!("{}MB", fs/1_000_000) } else if fs > 1000 { format!("{}KB", fs/1000) } else { format!("{fs}B") };
+            eprint!("    PS[{i}]: {ft}(val={fv}) {fss}");
+            if fm == 0 { eprint!(" = {} ADA", fv / 1_000_000); }
+            eprintln!();
+            fi = ade_testkit::harness::snapshot_loader::skip_cbor_pub(&pre_data, fi).unwrap();
+        }
+    }
+
     let (result_state, accounting) = ade_ledger::rules::apply_epoch_boundary_full(
         &pre_state, new_epoch,
     );
