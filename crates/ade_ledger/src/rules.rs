@@ -313,6 +313,20 @@ pub fn apply_epoch_boundary_full(
     state: &LedgerState,
     new_epoch: ade_types::EpochNo,
 ) -> (LedgerState, EpochBoundaryAccounting) {
+    apply_epoch_boundary_with_registrations(state, new_epoch, None)
+}
+
+/// Apply epoch boundary with an optional override for the credential registration set.
+///
+/// When `registration_override` is None, uses the PRE state's registrations.
+/// When provided, uses the override set for the delta_t2 computation. This allows
+/// passing the POST snapshot's registration set, which is closer to the oracle's
+/// DState at the boundary tick.
+pub fn apply_epoch_boundary_with_registrations(
+    state: &LedgerState,
+    new_epoch: ade_types::EpochNo,
+    registration_override: Option<&std::collections::BTreeMap<ade_types::shelley::cert::StakeCredential, ()>>,
+) -> (LedgerState, EpochBoundaryAccounting) {
     // 1. Reward computation from PRE-rotation go snapshot
     //    Rewards must be computed before rotation — after rotation,
     //    the go snapshot becomes the old set (which may be empty).
@@ -714,20 +728,42 @@ pub fn apply_epoch_boundary_full(
         rewarded_pool_count, total_stake, total_active_stake,
         _sum_f as f64 / pool_reward_pot as f64);
 
-    // deltaT2: filter rewards — only registered credentials receive rewards.
-    // Rewards to unregistered credentials go to treasury (Shelley spec).
-    // Requires complete registrations loaded from oracle DState rewards map.
+    // deltaT2: unregistered credential reward handling.
+    //
+    // PV ≤ 6: rewards to unregistered credentials go to treasury (delta_t2).
+    //   hardforkBabbageForgoRewardPrefilter is inactive — leader rewards filtered.
+    //
+    // PV > 6 (Babbage/Conway): delta_t2 = 0.
+    //   hardforkBabbageForgoRewardPrefilter is active — ALL leader rewards delivered
+    //   regardless of registration. Member rewards for unregistered accounts stay in
+    //   dr2 (reserves), not treasury. No reward flow to treasury beyond dt1.
     let mut delta_t2 = 0u64;
     let mut delegation = state.cert_state.delegation.clone();
+    let skip_registration_filter = state.protocol_params.protocol_major > 6;
+
     for (cred, reward) in &reward_deltas {
         let stake_cred = ade_types::shelley::cert::StakeCredential(cred.clone());
-        if delegation.registrations.contains_key(&stake_cred) {
+        if skip_registration_filter {
+            // PV > 6: all rewards delivered, no delta_t2
             let entry = delegation.rewards
                 .entry(stake_cred)
                 .or_insert(ade_types::tx::Coin(0));
             entry.0 = entry.0.saturating_add(reward.0);
         } else {
-            delta_t2 = delta_t2.saturating_add(reward.0);
+            // PV ≤ 6: check registration
+            let is_registered = if let Some(override_regs) = registration_override {
+                override_regs.contains_key(&stake_cred)
+            } else {
+                delegation.registrations.contains_key(&stake_cred)
+            };
+            if is_registered {
+                let entry = delegation.rewards
+                    .entry(stake_cred)
+                    .or_insert(ade_types::tx::Coin(0));
+                entry.0 = entry.0.saturating_add(reward.0);
+            } else {
+                delta_t2 = delta_t2.saturating_add(reward.0);
+            }
         }
     }
 
@@ -843,7 +879,13 @@ pub fn apply_epoch_boundary_full(
                 .map(|(_, c)| c.0)
                 .sum();
 
-            governance_treasury_withdrawn = effects.treasury_withdrawn + enacted_deposit_refunds;
+            // Deposit refunds for enacted proposals: in Conway, proposal deposits
+            // go to the governance deposit pot. When enacted, deposits are returned
+            // from that pot, not from treasury. Test both.
+            // Treasury outflows from governance:
+            // 1. Treasury withdrawals from enacted TreasuryWithdrawal proposals
+            // 2. Deposit refunds NOT from treasury (deposits come from deposit pot)
+            governance_treasury_withdrawn = effects.treasury_withdrawn;
             eprintln!("  [governance] ratified={} expired={} remaining={} treasury_withdrawn={} ADA deposit_refunds={} ADA",
                 result.ratified.len(), result.expired.len(), result.remaining.len(),
                 effects.treasury_withdrawn / 1_000_000, enacted_deposit_refunds / 1_000_000);

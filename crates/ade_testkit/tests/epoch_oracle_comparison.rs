@@ -3702,8 +3702,39 @@ fn conway_epoch_boundary_end_to_end() {
         pre_state.epoch_state.reserves.0 / 1_000_000,
         pre_state.epoch_state.treasury.0 / 1_000_000);
 
-    // Run apply_epoch_boundary_full
+    eprintln!("  registrations: PRE={}",
+        pre_state.cert_state.delegation.registrations.len());
+
+    // Test both: with PRE registrations and with "all registered" (delta_t2=0)
     let new_epoch = ade_types::EpochNo(577);
+
+    // "All registered" = every credential that exists in the DState
+    // Use PRE registration set + all go delegation credentials
+    let mut all_registered: std::collections::BTreeMap<ade_types::shelley::cert::StakeCredential, ()> =
+        pre_state.cert_state.delegation.registrations.keys()
+            .map(|k| (k.clone(), ()))
+            .collect();
+    // Also add all go delegation credentials (some operators may not be in registrations)
+    for k in pre_state.epoch_state.snapshots.go.0.delegations.keys() {
+        all_registered.insert(ade_types::shelley::cert::StakeCredential(k.clone()), ());
+    }
+
+    for (label, regs) in [("PRE", None), ("ALL", Some(&all_registered))] {
+        let (rs, ac) = ade_ledger::rules::apply_epoch_boundary_with_registrations(
+            &pre_state, new_epoch, regs,
+        );
+        let our_res_decr = pre_state.epoch_state.reserves.0.saturating_sub(rs.epoch_state.reserves.0);
+        let oracle_res_decr = pre_state.epoch_state.reserves.0.saturating_sub(post_state.epoch_state.reserves.0);
+        let res_ratio = if oracle_res_decr > 0 { our_res_decr as f64 / oracle_res_decr as f64 * 100.0 } else { 100.0 };
+        let our_trs = rs.epoch_state.treasury.0 as i64 - pre_state.epoch_state.treasury.0 as i64;
+        let oracle_trs = post_state.epoch_state.treasury.0 as i64 - pre_state.epoch_state.treasury.0 as i64;
+        let trs_diff = (our_trs - oracle_trs) / 1_000_000;
+        eprintln!("  [{label}] reserves={res_ratio:.4}%  treasury_diff={trs_diff} ADA  dt2={} ADA  proposals={}",
+            ac.delta_t2 / 1_000_000,
+            rs.gov_state.as_ref().map(|g| g.proposals.len()).unwrap_or(0));
+    }
+
+    // Use the best variant for the detailed output
     let (result_state, accounting) = ade_ledger::rules::apply_epoch_boundary_full(
         &pre_state, new_epoch,
     );
