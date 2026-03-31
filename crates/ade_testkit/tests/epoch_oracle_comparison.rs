@@ -3775,8 +3775,12 @@ fn conway_epoch_boundary_end_to_end() {
         }
     }
 
+    // Use unadjusted PRE state — the dt1 epoch-alignment gap is understood
+    // and cannot be closed without the exact epoch N-2 reserves.
+    let adjusted_state = pre_state.clone();
+
     let (result_state, accounting) = ade_ledger::rules::apply_epoch_boundary_full(
-        &pre_state, new_epoch,
+        &adjusted_state, new_epoch,
     );
 
     eprintln!("  RESULT: epoch={} reserves={} ADA  treasury={} ADA",
@@ -3819,15 +3823,35 @@ fn conway_epoch_boundary_end_to_end() {
     }
 
     // Accounting details
-    eprintln!("\n  Accounting:");
-    eprintln!("    delta_r1: {} ADA", accounting.delta_r1 / 1_000_000);
-    eprintln!("    delta_r2: {} ADA", accounting.delta_r2 / 1_000_000);
-    eprintln!("    delta_t1: {} ADA", accounting.delta_t1 / 1_000_000);
-    eprintln!("    delta_t2: {} ADA", accounting.delta_t2 / 1_000_000);
-    eprintln!("    pool_pot: {} ADA", accounting.pool_reward_pot / 1_000_000);
-    eprintln!("    sum_rewards: {} ADA", accounting.sum_rewards / 1_000_000);
-    eprintln!("    pools: {}", accounting.rewarded_pool_count);
-    eprintln!("    eta: {}/{}", accounting.eta_numerator, accounting.eta_denominator);
+    // Exact lovelace accounting for treasury verification
+    let our_total_reward = accounting.delta_r1 + pre_state.epoch_state.epoch_fees.0;
+    let our_dt1_check = our_total_reward / 5; // floor(0.2 * total_reward)
+    let oracle_treasury_withdrawn = 18_000_000_000_000u64; // 18M ADA from 2 TreasuryWithdrawals
+    let oracle_trs_change = post_state.epoch_state.treasury.0 as i64 - pre_state.epoch_state.treasury.0 as i64;
+    let oracle_dt1_inferred = oracle_trs_change + oracle_treasury_withdrawn as i64;
+
+    eprintln!("\n  Exact Accounting (lovelace):");
+    eprintln!("    dr1:            {}", accounting.delta_r1);
+    eprintln!("    fees:           {}", pre_state.epoch_state.epoch_fees.0);
+    eprintln!("    total_reward:   {}", our_total_reward);
+    eprintln!("    our dt1:        {} (= floor(total_reward / 5))", our_dt1_check);
+    eprintln!("    accounting dt1: {}", accounting.delta_t1);
+    eprintln!("    dt2:            {}", accounting.delta_t2);
+    eprintln!("    dr2:            {}", accounting.delta_r2);
+    eprintln!("    sum_rewards:    {}", accounting.sum_rewards);
+    eprintln!("    pools:          {}", accounting.rewarded_pool_count);
+    eprintln!("    eta:            {}/{}", accounting.eta_numerator, accounting.eta_denominator);
+    eprintln!("    gov_withdrawn:  {}", oracle_treasury_withdrawn);
+    eprintln!();
+    eprintln!("    oracle trs Δ:   {}", oracle_trs_change);
+    eprintln!("    oracle dt1 (inferred): {}", oracle_dt1_inferred);
+    eprintln!("    our dt1:               {}", accounting.delta_t1);
+    eprintln!("    dt1 diff:              {}", oracle_dt1_inferred - accounting.delta_t1 as i64);
+    eprintln!();
+    // Verify: is the treasury diff EXACTLY the dt1 diff?
+    let our_trs_change = result_state.epoch_state.treasury.0 as i64 - pre_state.epoch_state.treasury.0 as i64;
+    eprintln!("    our trs Δ:      {}", our_trs_change);
+    eprintln!("    trs diff:       {} (should equal dt1 diff)", oracle_trs_change - our_trs_change);
     eprintln!("==================================================\n");
 }
 
