@@ -3775,12 +3775,37 @@ fn conway_epoch_boundary_end_to_end() {
         }
     }
 
-    // Use unadjusted PRE state — the dt1 epoch-alignment gap is understood
-    // and cannot be closed without the exact epoch N-2 reserves.
+    // Use the FULL registration set from the mid-epoch JSON DState accounts.
+    // Our delegation.registrations only has DELEGATING credentials (~1.34M).
+    // The oracle's DState accounts has ALL registered credentials (~1.45M).
+    let oracle_regs_path = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("../../corpus/snapshots/reward_provenance/conway576_registered_creds.txt");
+    let oracle_regs: std::collections::BTreeMap<ade_types::shelley::cert::StakeCredential, ()> =
+        if oracle_regs_path.exists() {
+            std::fs::read_to_string(&oracle_regs_path).unwrap()
+                .lines()
+                .filter_map(|line| {
+                    let bytes = (0..line.len()).step_by(2)
+                        .map(|i| u8::from_str_radix(&line[i..i+2], 16).ok())
+                        .collect::<Option<Vec<u8>>>()?;
+                    if bytes.len() == 28 {
+                        let mut h = [0u8; 28];
+                        h.copy_from_slice(&bytes);
+                        Some((ade_types::shelley::cert::StakeCredential(ade_types::Hash28(h)), ()))
+                    } else { None }
+                })
+                .collect()
+        } else {
+            std::collections::BTreeMap::new()
+        };
+    eprintln!("  registrations: delegation={} oracle_json={}",
+        pre_state.cert_state.delegation.registrations.len(),
+        oracle_regs.len());
     let adjusted_state = pre_state.clone();
 
-    let (result_state, accounting) = ade_ledger::rules::apply_epoch_boundary_full(
-        &adjusted_state, new_epoch,
+    let regs_override = if oracle_regs.is_empty() { None } else { Some(&oracle_regs) };
+    let (result_state, accounting) = ade_ledger::rules::apply_epoch_boundary_with_registrations(
+        &adjusted_state, new_epoch, regs_override,
     );
 
     eprintln!("  RESULT: epoch={} reserves={} ADA  treasury={} ADA",
@@ -3852,6 +3877,30 @@ fn conway_epoch_boundary_end_to_end() {
     let our_trs_change = result_state.epoch_state.treasury.0 as i64 - pre_state.epoch_state.treasury.0 as i64;
     eprintln!("    our trs Δ:      {}", our_trs_change);
     eprintln!("    trs diff:       {} (should equal dt1 diff)", oracle_trs_change - our_trs_change);
+
+    // PRE(N-1) analysis: compute dt1 from epoch N-1 reserves + fees
+    let prev_path = snapshots_dir().join("snapshot_163036834.tar.gz"); // PRE(575)
+    if prev_path.exists() {
+        let prev_snap = LoadedSnapshot::from_tarball(&prev_path).unwrap();
+        let prev_dr1 = {
+            let eta = ade_ledger::rational::Rational::new(
+                accounting.eta_numerator as i128, accounting.eta_denominator as i128,
+            ).unwrap_or_else(ade_ledger::rational::Rational::one);
+            let rho = ade_ledger::rational::Rational::new(3, 1000).unwrap();
+            let r = ade_ledger::rational::Rational::from_integer(prev_snap.header.reserves as i128);
+            r.checked_mul(&rho).unwrap().checked_mul(&eta).unwrap().floor().max(0) as u64
+        };
+        let prev_total = prev_dr1 + prev_snap.header.epoch_fees;
+        let prev_dt1 = prev_total / 5;
+        let prev_diff = oracle_dt1_inferred - prev_dt1 as i64;
+        eprintln!("\n    PRE(575) dt1 analysis:");
+        eprintln!("      reserves: {} (vs PRE(576) {})", prev_snap.header.reserves, pre_state.epoch_state.reserves.0);
+        eprintln!("      fees:     {} (vs PRE(576) {})", prev_snap.header.epoch_fees, pre_state.epoch_state.epoch_fees.0);
+        eprintln!("      dr1:      {} (vs {})", prev_dr1, accounting.delta_r1);
+        eprintln!("      dt1:      {} (vs {})", prev_dt1, accounting.delta_t1);
+        eprintln!("      oracle:   {}", oracle_dt1_inferred);
+        eprintln!("      diff:     {} ({} ADA)", prev_diff, prev_diff / 1_000_000);
+    }
     eprintln!("==================================================\n");
 }
 

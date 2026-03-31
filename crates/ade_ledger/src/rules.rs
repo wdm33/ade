@@ -728,42 +728,29 @@ pub fn apply_epoch_boundary_with_registrations(
         rewarded_pool_count, total_stake, total_active_stake,
         _sum_f as f64 / pool_reward_pot as f64);
 
-    // deltaT2: unregistered credential reward handling.
-    //
-    // PV ≤ 6: rewards to unregistered credentials go to treasury (delta_t2).
-    //   hardforkBabbageForgoRewardPrefilter is inactive — leader rewards filtered.
-    //
-    // PV > 6 (Babbage/Conway): delta_t2 = 0.
-    //   hardforkBabbageForgoRewardPrefilter is active — ALL leader rewards delivered
-    //   regardless of registration. Member rewards for unregistered accounts stay in
-    //   dr2 (reserves), not treasury. No reward flow to treasury beyond dt1.
+    // deltaT2: rewards to unregistered credentials go to treasury.
+    // Haskell applyRUpd: treasury receives deltaT + frTotalUnregistered.
+    // frTotalUnregistered = rewards for credentials NOT in the DState accounts map.
+    // This applies at ALL protocol versions (not just PV ≤ 6).
+    // hardforkBabbageForgoRewardPrefilter only affects leader reward COLLECTION,
+    // not the final applyRUpd filtering.
     let mut delta_t2 = 0u64;
     let mut delegation = state.cert_state.delegation.clone();
-    let skip_registration_filter = state.protocol_params.protocol_major > 6;
 
     for (cred, reward) in &reward_deltas {
         let stake_cred = ade_types::shelley::cert::StakeCredential(cred.clone());
-        if skip_registration_filter {
-            // PV > 6: all rewards delivered, no delta_t2
+        let is_registered = if let Some(override_regs) = registration_override {
+            override_regs.contains_key(&stake_cred)
+        } else {
+            delegation.registrations.contains_key(&stake_cred)
+        };
+        if is_registered {
             let entry = delegation.rewards
                 .entry(stake_cred)
                 .or_insert(ade_types::tx::Coin(0));
             entry.0 = entry.0.saturating_add(reward.0);
         } else {
-            // PV ≤ 6: check registration
-            let is_registered = if let Some(override_regs) = registration_override {
-                override_regs.contains_key(&stake_cred)
-            } else {
-                delegation.registrations.contains_key(&stake_cred)
-            };
-            if is_registered {
-                let entry = delegation.rewards
-                    .entry(stake_cred)
-                    .or_insert(ade_types::tx::Coin(0));
-                entry.0 = entry.0.saturating_add(reward.0);
-            } else {
-                delta_t2 = delta_t2.saturating_add(reward.0);
-            }
+            delta_t2 = delta_t2.saturating_add(reward.0);
         }
     }
 
