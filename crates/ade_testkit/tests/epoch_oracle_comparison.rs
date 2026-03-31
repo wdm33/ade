@@ -3778,8 +3778,9 @@ fn conway_epoch_boundary_end_to_end() {
     // Use the FULL registration set from the mid-epoch JSON DState accounts.
     // Our delegation.registrations only has DELEGATING credentials (~1.34M).
     // The oracle's DState accounts has ALL registered credentials (~1.45M).
+    // Use late-epoch (88%) registration set — closest to boundary tick
     let oracle_regs_path = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .join("../../corpus/snapshots/reward_provenance/conway576_registered_creds.txt");
+        .join("../../corpus/snapshots/reward_provenance/conway576_late_registered_creds.txt");
     let oracle_regs: std::collections::BTreeMap<ade_types::shelley::cert::StakeCredential, ()> =
         if oracle_regs_path.exists() {
             std::fs::read_to_string(&oracle_regs_path).unwrap()
