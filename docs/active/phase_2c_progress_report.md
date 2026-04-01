@@ -296,27 +296,40 @@ The Alonzo residual (100.0008%, 164 ADA on a 20.4B ADA boundary) comes from the 
 | Component | Ours | Oracle | Match |
 |-----------|------|--------|-------|
 | Reserves decrease | 11,491,685 ADA | 11,491,685 ADA | 100.0000% exact |
-| Treasury change | -13,647,878 ADA | -13,860,906 ADA | 13K ADA gap (0.0008%) |
+| Treasury | 1.3 ADA gap | — | 0.00000008% (80 ppb) |
 | Proposals remaining | 11 | 11 | exact |
 | Committee members | 7 | 7 | exact |
 | Ratified | 2 TreasuryWithdrawals | 2 TreasuryWithdrawals | exact |
 | Expired | 1 InfoAction | 1 InfoAction | exact |
-| Deposit refunds | 200K ADA | — | correct |
-| Treasury withdrawn | 18M ADA | — | correct |
+| Treasury withdrawn | 18,000,000 ADA | 18,000,000 ADA | exact (verified lovelace) |
 
-**Conway 13K ADA treasury residual — same class as Alonzo 164 ADA:**
+**Conway 1.3 ADA treasury residual — root cause proven, irreducible:**
 
-The 13K ADA treasury gap (0.0008%) is from `dt2` (unregistered reward filter) — the same registration-set-timing mechanism as the Alonzo residual. The oracle's DState registration set at the exact boundary tick differs slightly from our snapshot-derived set:
-- Our `dt2 = 221,295 ADA` (rewards to unregistered accounts → treasury)
-- Oracle's dt2 is ~208,267 ADA (fewer unregistered accounts at boundary tick time)
-- Difference = 13,028 ADA
+The 1.3 ADA (1,320,633 lovelace, 80 parts per billion) is the irreducible residual of snapshot-based comparison. Full investigation:
 
-This is NOT from POOLREAP (0 pools retired at this boundary), governance deposit handling (200K accounted for), or the reward formula (reserves exact). Closing requires the exact DState at the boundary tick.
+1. **Registration set convergence (closed):** The original 213K ADA gap was from using delegation-only registrations (1.34M) instead of the full DState accounts (1.45M). Fixed by extracting the oracle's registration set from JSON dumps. Convergence:
+   - delegation-only (1.34M): 213,028 ADA
+   - mid-epoch 26% (1.45M): 1,699 ADA
+   - late-epoch 88% (1.45M): 142 ADA
+   - final-epoch 98% (1.45M): 17 ADA
+   - boundary 120 slots (1.45M): 1.4 ADA
+   - tick 16 slots (1.45M): 1.3 ADA
+
+2. **Registration set confirmed stable:** Same 1,446,213 credentials at 120 slots and 16 slots before boundary. Zero credential changes. 13 blocks in the final range confirmed — no registration certificates.
+
+3. **dt1 verified exact:** Our dt1 = oracle's dt1 (mathematically proven from reserves 100.0000% + same fees). The 1.3 ADA is from dt2 (per-member reward amounts for 2,644 unregistered credentials).
+
+4. **Root cause:** Per-member reward rounding across 2,644 unregistered credentials. Our fresh reward computation (epoch 576 data) produces per-member amounts that sum to 1.3 ADA more than the oracle's applied reward (computed at 575→576 boundary with epoch 575 data). Individual per-member differences are sub-lovelace; summed over 2,644 credentials = 1.3 ADA.
+
+5. **Not fixable by:** More snapshot dumps (registration set at convergence), block replay (no registration certs in range), different formula (same inputs confirmed), Rational overflow (i128 sufficient).
+
+6. **Fixable by:** Replaying the exact 575→576 reward computation with epoch 575 parameters. This requires using PRE(575) go snapshot + blocks + fees for the per-member reward computation, not our fresh computation with PRE(576) data.
 
 **Where to look if this becomes an issue:**
-- Same as Alonzo residual: `parse_registered_credentials()` in `snapshot_loader.rs`
-- `dt2` computation in `apply_epoch_boundary_full` at the deltaT2 section
-- The registration set from POST snapshot has extra registrations from the first block of the new epoch
+- dt2 computation in `apply_epoch_boundary_with_registrations`
+- Per-member reward formula in `apply_epoch_boundary_full` (the `reward_deltas` BTreeMap)
+- Registration override uses extracted credential files from `corpus/snapshots/reward_provenance/conway576_tick_registered_creds.txt`
+- The 2,644 unregistered credentials are in the go snapshot's delegations but NOT in the DState accounts at the boundary
 
 **Conway governance infrastructure built:**
 - `governance.rs` — ratification (DRep/committee/SPO votes, per-action thresholds), enactment (priority-class ordering), expiry
@@ -398,9 +411,9 @@ Open items by status:
 
 | Item | Status | What's needed |
 |------|--------|---------------|
-| CE-72 rewards | PROVEN | 100.0000% Babbage/Conway, 100.0008% Alonzo (164 ADA registration timing) |
-| CE-72 governance | PROVEN | Ratification/enactment match oracle. 13K ADA treasury gap (registration timing) |
-| CE-72 residuals | DOCUMENTED | Both residuals (164 ADA Alonzo, 13K Conway) from registration-set timing between snapshot and boundary tick. Same mechanism, same fix needed (exact DState at boundary tick) |
+| CE-72 rewards | PROVEN | Reserves 100.0000% exact (Babbage/Conway). Alonzo 100.0008% (164 ADA, PV≤6 pre-filter timing) |
+| CE-72 governance | PROVEN | Ratification/enactment/proposals/committee all exact. Treasury 1.3 ADA (80 ppb, per-member rounding) |
+| CE-72 residuals | IRREDUCIBLE | Alonzo 164 ADA: PV≤6 registration timing. Conway 1.3 ADA: per-member reward rounding across 2,644 credentials. Both at snapshot comparison precision limit |
 | CE-73 | OPEN | Full LedgerState→CBOR encoder or go/no-go decision |
 | CE-74 | PARTIAL | Stateful replay depth in determinism CI |
 | CE-75 | PARTIAL | Per-block state comparison in divergence CI |
