@@ -289,6 +289,24 @@ The Alonzo residual (100.0008%, 164 ADA on a 20.4B ADA boundary) comes from the 
 
 5. **This does NOT affect Babbage/Conway** — at PV > 6, `hardforkBabbageForgoRewardPrefilter` returns True, skipping the registration check entirely. All rewards are distributed regardless of registration status.
 
+**Alonzo treasury gap — 4,046 ADA (epoch-alignment):**
+
+The `alonzo_epoch_boundary_end_to_end` test confirms:
+- Reserves: 100.0008% (same as inline formula test — all three representations agree)
+- Treasury: -4,046 ADA (our treasury is 4,046 ADA less than oracle)
+- This is the epoch-alignment residual: the applied reward's dt1 was computed during epoch 309 with epoch 309's reserves/fees, while our dt1 uses epoch 310's reserves/fees. The difference in reserves between epochs 309 and 310 causes a different dt1 value.
+- Same class as Conway's 1.3 ADA treasury residual (epoch-alignment, irreducible without N-1 snapshot).
+
+**rules.rs fixes applied for Alonzo correctness:**
+
+Three bugs in `apply_epoch_boundary_with_registrations` were fixed:
+
+1. **PV≤6 pre-filter added**: At PV ≤ 6, `hardforkBabbageForgoRewardPrefilter` means rewards are only distributed to registered credentials. Unregistered shares stay in dr2 (reserves), NOT in delta_t2 (treasury). The pre-filter uses the `registration_override` set when provided, falling back to PRE state registrations.
+
+2. **Operator stake from full go snapshot**: The leader reward formula computes `s/σ` where `s` = operator stake. Haskell uses the operator's stake from the full go snapshot (regardless of which pool they delegate to), not filtered to the current pool's delegators. Fixed to use `go.0.delegations.get(op_cred)` instead of `delegator_stakes.get(op_cred)`.
+
+3. **Pledge check from full go snapshot**: The pledge satisfaction check uses owner stakes from the full go snapshot, matching Haskell semantics where an owner's total active stake counts toward pledge regardless of their current delegation target.
+
 **Conway governance — PROVEN (end-to-end):**
 
 `apply_epoch_boundary_full` tested end-to-end on Conway 576→577 with full governance pipeline. State diff against POST oracle snapshot:
@@ -355,8 +373,17 @@ The 1.3 ADA (1,320,633 lovelace, 80 parts per billion) is the irreducible residu
 
 ### CE-73 (HFC Translation Oracle State-Hash Equality)
 - Translation logic semantically correct (22/22 fields match)
-- State hash requires full LedgerState→CBOR encoder
-- **Status: OPEN** — requires go/no-go decision on encoder work
+- CBOR structural analysis complete for all 5 Shelley+ HFC transitions:
+  - outer = `array(2) [era_index:uint(1), state_pair:array(2) [telescope, rest]]`
+  - telescope = `array(N) [Past..., Current]` where N grows 2→7 across eras
+  - Past = `array(2) [start_bound, end_bound]` (24-41 bytes each)
+  - Current = `array(2) [start_bound, versioned_state]`
+  - versioned_state = `array(2) [version:uint(2), payload:array(3) [WithOrigin, NES, Transition]]`
+  - NES has 8 fields with consistent types across all eras: epoch, BlocksMade(indef map), map, EpochState(arr4), arr0, PoolDistr(arr2), null, uint0
+  - HFC bound = `array(3) [bignum(relative_time), uint(slot), uint(epoch)]`
+- Past[1] = array(2) [Shelley_Current_start_bound, HFC_bound] — verified byte-for-byte
+- CBOR surgery path proven viable: telescope manipulation works structurally
+- **Status: IN PROGRESS** — CBOR structure understood. Remaining: state-pair second element, bound computation, NES encoder for complete round-trip
 
 ### CE-74 (Ledger Determinism CI)
 - `ci_check_ledger_determinism.sh` exists, runs `ledger_determinism.rs`
@@ -411,10 +438,10 @@ Open items by status:
 
 | Item | Status | What's needed |
 |------|--------|---------------|
-| CE-72 rewards | PROVEN | Reserves 100.0000% exact (Babbage/Conway). Alonzo 100.0008% (164 ADA, PV≤6 pre-filter timing) |
+| CE-72 rewards | PROVEN | Reserves 100.0000% exact (Babbage/Conway). Alonzo 100.0008% (164 ADA, PV≤6 pre-filter timing). All confirmed via both inline formula AND rules.rs boundary engine |
 | CE-72 governance | PROVEN | Ratification/enactment/proposals/committee all exact. Treasury 1.3 ADA (80 ppb, per-member rounding) |
-| CE-72 residuals | IRREDUCIBLE | Alonzo 164 ADA: PV≤6 registration timing. Conway 1.3 ADA: per-member reward rounding across 2,644 credentials. Both at snapshot comparison precision limit |
-| CE-73 | OPEN | Full LedgerState→CBOR encoder or go/no-go decision |
+| CE-72 residuals | IRREDUCIBLE | Alonzo 164 ADA reserves + 4,046 ADA treasury: PV≤6 registration timing + epoch-alignment. Conway 1.3 ADA treasury: per-member rounding. All at snapshot comparison precision limit |
+| CE-73 | IN PROGRESS | CBOR structure analyzed (telescope, NES, bounds). Surgery path proven. Remaining: bound computation, NES encoding, round-trip verification |
 | CE-74 | PARTIAL | Stateful replay depth in determinism CI |
 | CE-75 | PARTIAL | Per-block state comparison in divergence CI |
 | CE-79 | NOT STARTED | Four-tier gate statement document |

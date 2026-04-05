@@ -3905,6 +3905,127 @@ fn conway_epoch_boundary_end_to_end() {
     eprintln!("==================================================\n");
 }
 
+/// End-to-end epoch boundary test: apply_epoch_boundary_with_registrations on
+/// Alonzo 310→311, diff resulting state against POST oracle snapshot.
+/// Tests the PV≤6 hardforkBabbageForgoRewardPrefilter: unregistered credentials
+/// have their reward shares stay in dr2 (reserves), not delta_t2 (treasury).
+#[test]
+fn alonzo_epoch_boundary_end_to_end() {
+    let pre_path = snapshots_dir().join("snapshot_48557136.tar.gz");
+    let post_path = snapshots_dir().join("snapshot_48989209.tar.gz");
+    if !pre_path.exists() || !post_path.exists() { eprintln!("SKIPPED"); return; }
+
+    let pre_snap = LoadedSnapshot::from_tarball(&pre_path).unwrap();
+    let post_snap = LoadedSnapshot::from_tarball(&post_path).unwrap();
+
+    let pre_state = pre_snap.to_ledger_state();
+    let post_state = post_snap.to_ledger_state();
+
+    eprintln!("\n=== ALONZO EPOCH BOUNDARY END-TO-END (310→311) ===");
+    eprintln!("  PRE: epoch={} pv={} reserves={} ADA  treasury={} ADA",
+        pre_state.epoch_state.epoch.0,
+        pre_state.protocol_params.protocol_major,
+        pre_state.epoch_state.reserves.0 / 1_000_000,
+        pre_state.epoch_state.treasury.0 / 1_000_000);
+
+    let new_epoch = ade_types::EpochNo(311);
+
+    // Parse POST registered credentials — closer to oracle's DState at boundary tick
+    let post_registered = match ade_testkit::harness::snapshot_loader::parse_registered_credentials(&post_snap.raw_cbor) {
+        Ok(c) => {
+            eprintln!("  registered credentials (POST): {}", c.len());
+            let btree: std::collections::BTreeMap<ade_types::shelley::cert::StakeCredential, ()> =
+                c.iter().map(|h| (ade_types::shelley::cert::StakeCredential(h.clone()), ())).collect();
+            btree
+        },
+        Err(e) => {
+            eprintln!("  registered credentials POST parse failed: {e}");
+            std::collections::BTreeMap::new()
+        },
+    };
+    eprintln!("  registrations: PRE(delegation)={} POST(DState)={}",
+        pre_state.cert_state.delegation.registrations.len(),
+        post_registered.len());
+
+    // Diagnostic: check overlap between go delegators and PRE registrations
+    let go_deleg_count = pre_state.epoch_state.snapshots.go.0.delegations.len();
+    let go_in_pre_regs = pre_state.epoch_state.snapshots.go.0.delegations.keys()
+        .filter(|k| pre_state.cert_state.delegation.registrations.contains_key(
+            &ade_types::shelley::cert::StakeCredential((*k).clone())))
+        .count();
+    let go_in_post_regs = pre_state.epoch_state.snapshots.go.0.delegations.keys()
+        .filter(|k| post_registered.contains_key(
+            &ade_types::shelley::cert::StakeCredential((*k).clone())))
+        .count();
+    eprintln!("  go delegators: {} in_PRE_regs={} in_POST_regs={}",
+        go_deleg_count, go_in_pre_regs, go_in_post_regs);
+
+    // Test variants: PRE regs only, POST DState regs
+    let variants: &[(&str, Option<&std::collections::BTreeMap<ade_types::shelley::cert::StakeCredential, ()>>)] = &[
+        ("PRE", None),
+        ("POST", if post_registered.is_empty() { None } else { Some(&post_registered) }),
+    ];
+
+    let oracle_res_decr = pre_state.epoch_state.reserves.0.saturating_sub(post_state.epoch_state.reserves.0);
+    let oracle_trs_change = post_state.epoch_state.treasury.0 as i64 - pre_state.epoch_state.treasury.0 as i64;
+    eprintln!("  oracle: res_decr={} ADA  trs_change={} ADA",
+        oracle_res_decr / 1_000_000, oracle_trs_change / 1_000_000);
+
+    for (label, regs_override) in variants {
+        let (rs, ac) = ade_ledger::rules::apply_epoch_boundary_with_registrations(
+            &pre_state, new_epoch, *regs_override,
+        );
+        let our_res_decr = pre_state.epoch_state.reserves.0.saturating_sub(rs.epoch_state.reserves.0);
+        let res_ratio = if oracle_res_decr > 0 {
+            our_res_decr as f64 / oracle_res_decr as f64 * 100.0
+        } else { 100.0 };
+        let our_trs_change = rs.epoch_state.treasury.0 as i64 - pre_state.epoch_state.treasury.0 as i64;
+        let trs_diff_ada = (our_trs_change - oracle_trs_change) / 1_000_000;
+        let trs_diff_lovelace = our_trs_change - oracle_trs_change;
+
+        eprintln!("  [{label}] reserves={res_ratio:.4}%  trs_diff={trs_diff_ada} ADA ({trs_diff_lovelace} lovelace)");
+        eprintln!("         dr1={} dt1={} dt2={} dr2={} sum_rewards={} pools={}",
+            ac.delta_r1, ac.delta_t1, ac.delta_t2, ac.delta_r2,
+            ac.sum_rewards, ac.rewarded_pool_count);
+        eprintln!("         our_res_decr={} oracle_res_decr={}", our_res_decr, oracle_res_decr);
+        eprintln!("         our_trs={} oracle_trs={}", rs.epoch_state.treasury.0, post_state.epoch_state.treasury.0);
+    }
+
+    // Also load oracle registration dump if available (like Conway tick approach)
+    let oracle_regs_path = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("../../corpus/snapshots/reward_provenance/alonzo310_tick_registered_creds.txt");
+    if oracle_regs_path.exists() {
+        let oracle_regs: std::collections::BTreeMap<ade_types::shelley::cert::StakeCredential, ()> =
+            std::fs::read_to_string(&oracle_regs_path).unwrap()
+                .lines()
+                .filter_map(|line| {
+                    let bytes = (0..line.len()).step_by(2)
+                        .map(|i| u8::from_str_radix(&line[i..i+2], 16).ok())
+                        .collect::<Option<Vec<u8>>>()?;
+                    if bytes.len() == 28 {
+                        let mut h = [0u8; 28];
+                        h.copy_from_slice(&bytes);
+                        Some((ade_types::shelley::cert::StakeCredential(ade_types::Hash28(h)), ()))
+                    } else { None }
+                })
+                .collect();
+        eprintln!("  oracle tick registrations: {}", oracle_regs.len());
+        let (rs, ac) = ade_ledger::rules::apply_epoch_boundary_with_registrations(
+            &pre_state, new_epoch, Some(&oracle_regs),
+        );
+        let our_res_decr = pre_state.epoch_state.reserves.0.saturating_sub(rs.epoch_state.reserves.0);
+        let res_ratio = if oracle_res_decr > 0 {
+            our_res_decr as f64 / oracle_res_decr as f64 * 100.0
+        } else { 100.0 };
+        let our_trs_change = rs.epoch_state.treasury.0 as i64 - pre_state.epoch_state.treasury.0 as i64;
+        let trs_diff = (our_trs_change - oracle_trs_change) / 1_000_000;
+        eprintln!("  [ORACLE] reserves={res_ratio:.4}%  trs_diff={trs_diff} ADA  dt2={} pools={}",
+            ac.delta_t2, ac.rewarded_pool_count);
+    }
+
+    eprintln!("==================================================\n");
+}
+
 /// Probe all ConwayGovState fields to find committee membership.
 #[test]
 fn conway_govstate_full_probe() {

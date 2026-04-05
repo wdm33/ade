@@ -578,6 +578,8 @@ pub fn apply_epoch_boundary_with_registrations(
             }
 
             // Shelley pledge satisfaction: if pledge > sum(owner_stakes) → maxPool = 0
+            // Haskell uses full go snapshot stake (not filtered by pool): an owner's
+            // total active stake counts toward pledge regardless of their delegation.
             // Only apply for Mary+ (protocol_major >= 4) where owner parsing is reliable.
             // Pre-Mary: owner encoding differs, skip the check (matches proven formula).
             if state.protocol_params.protocol_major >= 4
@@ -586,8 +588,8 @@ pub fn apply_epoch_boundary_with_registrations(
             {
                 let owner_stake: u64 = params.owners.iter()
                     .map(|owner| {
-                        delegator_stakes.get(owner)
-                            .map(|c| c.0)
+                        go.0.delegations.get(owner)
+                            .map(|(_, c)| c.0)
                             .unwrap_or(0)
                     })
                     .sum();
@@ -646,8 +648,39 @@ pub fn apply_epoch_boundary_with_registrations(
                 // (performance uncapped — over-performing pools earn more than maxPool)
             }
 
+            // hardforkBabbageForgoRewardPrefilter: at PV ≤ 6, leader/member
+            // rewards are only distributed to registered accounts. Unregistered
+            // accounts' shares stay in the pool residual (dr2 → reserves).
+            // At PV > 6 (Babbage+), rewards are computed for ALL accounts;
+            // unregistered rewards are routed to treasury via delta_t2 in applyRUpd.
+            let pv_prefilter = state.protocol_params.protocol_major <= 6;
+            // For PV≤6 pre-filter, use registration_override if provided (closest
+            // to the DState when the pulser actually ran), otherwise fall back to
+            // state.cert_state.delegation.registrations. The delta_t2 check in
+            // applyRUpd uses the same registration source for consistency.
+
+            // Registration check helper: uses override set if provided,
+            // falls back to PRE state registrations.
+            let is_cred_registered = |h: &ade_types::Hash28| -> bool {
+                let sc = ade_types::shelley::cert::StakeCredential(h.clone());
+                if let Some(override_regs) = registration_override {
+                    override_regs.contains_key(&sc)
+                } else {
+                    state.cert_state.delegation.registrations.contains_key(&sc)
+                }
+            };
+
             if pool_max <= params.cost.0 {
                 // Pool reward doesn't cover cost — operator gets all of it
+                if pv_prefilter {
+                    let op_registered = op_cred.as_ref()
+                        .map(|oc| is_cred_registered(oc))
+                        .unwrap_or(false);
+                    if !op_registered {
+                        rewarded_pool_count += 1;
+                        continue;
+                    }
+                }
                 if let Some(ref oc) = op_cred {
                     let entry = reward_deltas.entry(oc.clone())
                         .or_insert(ade_types::tx::Coin(0));
@@ -663,10 +696,12 @@ pub fn apply_epoch_boundary_with_registrations(
                 .checked_sub(&margin)
                 .unwrap_or_else(crate::rational::Rational::one);
 
-            // Operator's stake share in the pool
+            // Operator's stake share: Haskell uses the full go snapshot stake
+            // (not filtered by pool) so an operator's stake counts even if they
+            // delegate elsewhere. This matches s/σ in the leader reward formula.
             let op_stake = op_cred.as_ref()
-                .and_then(|oc| delegator_stakes.get(oc))
-                .map(|c| c.0)
+                .and_then(|oc| go.0.delegations.get(oc))
+                .map(|(_, c)| c.0)
                 .unwrap_or(0);
             let op_share = crate::rational::Rational::new(
                 op_stake as i128, pool_stake.0 as i128,
@@ -682,11 +717,22 @@ pub fn apply_epoch_boundary_with_registrations(
                 .map(|r| r.floor().max(0) as u64)
                 .unwrap_or(0);
 
-            // Route leader reward to operator's reward account
-            if let Some(ref oc) = op_cred {
-                let entry = reward_deltas.entry(oc.clone())
-                    .or_insert(ade_types::tx::Coin(0));
-                entry.0 = entry.0.saturating_add(leader_reward);
+            // Route leader reward: at PV≤6, only distribute if operator is registered
+            let distribute_leader = if pv_prefilter {
+                op_cred.as_ref()
+                    .map(|oc| is_cred_registered(oc))
+                    .unwrap_or(false)
+            } else {
+                true
+            };
+
+            if distribute_leader {
+                if let Some(ref oc) = op_cred {
+                    let entry = reward_deltas.entry(oc.clone())
+                        .or_insert(ade_types::tx::Coin(0));
+                    entry.0 = entry.0.saturating_add(leader_reward);
+                }
+                total_pool_rewards = total_pool_rewards.saturating_add(leader_reward);
             }
 
             // memberReward(t) = floor((f-c) * (1-m) * t / σ)
@@ -701,6 +747,10 @@ pub fn apply_epoch_boundary_with_registrations(
                     // Skip operator — already got their share via leaderReward
                     if op_cred.as_ref() == Some(cred) { continue; }
                     if stake.0 == 0 { continue; }
+                    // PV≤6 pre-filter: skip unregistered members
+                    if pv_prefilter && !is_cred_registered(cred) {
+                        continue;
+                    }
                     let share = crate::rational::Rational::new(
                         stake.0 as i128, pool_stake.0 as i128,
                     ).unwrap_or_else(crate::rational::Rational::zero);
@@ -715,7 +765,10 @@ pub fn apply_epoch_boundary_with_registrations(
                 }
             }
 
-            total_pool_rewards = total_pool_rewards.saturating_add(leader_reward);
+            if !distribute_leader {
+                // Count leader reward as part of pool processing for pool count,
+                // but don't add to total (stays in dr2)
+            }
             total_member_rewards = total_member_rewards.saturating_add(member_distributed);
             rewarded_pool_count += 1;
         }

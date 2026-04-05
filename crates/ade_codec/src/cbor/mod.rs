@@ -774,3 +774,50 @@ mod tests {
         assert!(!is_break(&[0x00], 0).unwrap());
     }
 }
+
+// ---------------------------------------------------------------------------
+// HFC Bound Encoding
+// ---------------------------------------------------------------------------
+
+/// Encode a CBOR null (simple value 22 = 0xf6).
+pub fn write_null(buf: &mut Vec<u8>) {
+    buf.push(0xf6);
+}
+
+/// Encode a positive bignum (tag 2 + byte string) using canonical widths.
+///
+/// Used for relative_time in HFC bounds (picoseconds from genesis).
+/// Strips leading zero bytes to produce minimal encoding.
+pub fn write_positive_bignum(buf: &mut Vec<u8>, value: &[u8]) {
+    write_tag(buf, 2, canonical_width(2));
+    let start = value.iter().position(|&b| b != 0).unwrap_or(value.len().saturating_sub(1));
+    write_bytes_canonical(buf, &value[start..]);
+}
+
+/// Encode an HFC era Bound: array(3) [relative_time_pico, slot, epoch].
+///
+/// relative_time is encoded as uint(0) when zero, or positive bignum (tag 2)
+/// for non-zero values. This matches the Haskell `NominalDiffTime` encoding.
+/// slot and epoch are plain uints with canonical width.
+pub fn write_hfc_bound(buf: &mut Vec<u8>, epoch: u64, slot: u64, relative_time_pico: u128) {
+    write_array_header(buf, ContainerEncoding::Definite(3, canonical_width(3)));
+    if relative_time_pico == 0 {
+        write_uint_canonical(buf, 0);
+    } else {
+        let pico_bytes = relative_time_pico.to_be_bytes();
+        write_positive_bignum(buf, &pico_bytes);
+    }
+    write_uint_canonical(buf, slot);
+    write_uint_canonical(buf, epoch);
+}
+
+/// Encode an HFC Past entry: array(2) [start_bound, end_bound].
+pub fn write_hfc_past(
+    buf: &mut Vec<u8>,
+    start_epoch: u64, start_slot: u64, start_time_pico: u128,
+    end_epoch: u64, end_slot: u64, end_time_pico: u128,
+) {
+    write_array_header(buf, ContainerEncoding::Definite(2, canonical_width(2)));
+    write_hfc_bound(buf, start_epoch, start_slot, start_time_pico);
+    write_hfc_bound(buf, end_epoch, end_slot, end_time_pico);
+}
