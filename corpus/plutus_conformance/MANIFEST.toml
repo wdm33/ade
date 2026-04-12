@@ -1,0 +1,53 @@
+# Plutus Conformance Corpus — Vendored Provenance
+#
+# Primary oracle for Phase 3 Cluster P-B (UPLC Evaluation Authority).
+# Per Phase 3 cluster plan, this corpus is the authoritative source
+# for UPLC semantic correctness, builtin function behavior, and
+# CPU/memory budget accounting.
+#
+# Each test case consists of three files:
+#   <name>.uplc                   — textual UPLC source program
+#   <name>.uplc.expected          — expected evaluation result (value or error)
+#   <name>.uplc.budget.expected   — expected CPU/memory budget consumption
+#
+# Test-cases are byte-for-byte vendored from upstream. They are
+# NEVER modified in-tree. Any correctness regression in aiken's
+# UPLC evaluator surfaces as a `.uplc.expected` or
+# `.uplc.budget.expected` mismatch here.
+
+[source]
+repository    = "https://github.com/IntersectMBO/plutus"
+license       = "Apache-2.0"
+license_file  = "UPSTREAM_LICENSE.md"
+path          = "plutus-conformance/test-cases/uplc"
+
+[snapshot]
+commit        = "643ddd135bfa465bc532c51e679939daf8b1e3d9"
+commit_date   = "2026-04-10T13:53:58Z"
+commit_title  = "spec: make it clear that some builtins cannot fail (#7710)"
+extracted     = "2026-04-12"
+
+[categories]
+evaluation    = "UPLC term-level evaluation across reduction rules"
+builtin       = "Per-builtin conformance including BLS12-381 (V3, CIP-0381)"
+example       = "Integration examples larger than single-term cases"
+term          = "Core term forms: variables, lambdas, application, constants, errors"
+
+[counts]
+uplc_sources             = 1998
+uplc_expected            = 1998
+uplc_budget_expected     = 1998
+
+[version_scope]
+cardano_node      = "10.6.2"
+plutus_crate      = "must match cardano-node 10.6.2's plutus dep; discharge in slice-entry obligation O-29.1"
+aiken_commit      = "pinned at slice S-29; discharge in O-29.1"
+
+[authority]
+surface       = "UPLC evaluation result and budget consumption"
+cluster       = "P-B (UPLC Evaluation Authority)"
+target_ce     = ["CE-85", "CE-86"]
+
+[notes]
+modification  = "This corpus is immutable in Ade's tree. To upgrade, replace wholesale from a new upstream snapshot and bump the snapshot.commit field."
+usage         = "Consumed by ci/ci_check_plutus_conformance.sh (added in slice S-30)."

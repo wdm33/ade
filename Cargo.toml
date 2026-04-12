@@ -6,6 +6,7 @@ members = [
     "crates/ade_crypto",
     "crates/ade_core",
     "crates/ade_ledger",
+    "crates/ade_plutus",
     "crates/ade_testkit",
     "crates/ade_runtime",
     "crates/ade_node",

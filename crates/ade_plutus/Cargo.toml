@@ -1,0 +1,15 @@
+[package]
+name = "ade_plutus"
+version = "0.1.0"
+edition = "2021"
+# Phase 3 scaffold. No functional code yet — modules are stubs with
+# proof obligations recorded in docs/active/phase_3_cluster_plan.md.
+
+[dependencies]
+ade_types = { path = "../ade_types" }
+ade_crypto = { path = "../ade_crypto" }
+ade_codec = { path = "../ade_codec" }
+# aiken UPLC dependency intentionally NOT yet added.
+# See slice S-29 entry obligation O-29.1: pin the aiken commit whose
+# conformance-test output matches plutus version used by cardano-node 10.6.2.
+# Adding it blindly now would defeat the proof-obligation discipline.

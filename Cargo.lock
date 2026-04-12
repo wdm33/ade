@@ -42,6 +42,15 @@ name = "ade_node"
 version = "0.1.0"
 
 [[package]]
+name = "ade_plutus"
+version = "0.1.0"
+dependencies = [
+ "ade_codec",
+ "ade_crypto",
+ "ade_types",
+]
+
+[[package]]
 name = "ade_runtime"
 version = "0.1.0"
 
