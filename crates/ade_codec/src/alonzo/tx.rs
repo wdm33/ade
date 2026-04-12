@@ -7,9 +7,10 @@
 
 use std::collections::BTreeSet;
 
-use crate::cbor::{self, ContainerEncoding};
+use crate::cbor::{self, ContainerEncoding, IntWidth};
 use crate::error::CodecError;
 use crate::shelley::tx::decode_tx_inputs;
+use crate::traits::{AdeEncode, CodecContext};
 use ade_types::alonzo::tx::{AlonzoTxBody, AlonzoTxOut};
 use ade_types::tx::{Coin, TxIn};
 use ade_types::{Hash28, Hash32, SlotNo};
@@ -251,4 +252,90 @@ pub(crate) fn read_hash28(
     let mut arr = [0u8; 28];
     arr.copy_from_slice(&bytes);
     Ok(Hash28(arr))
+}
+
+impl AdeEncode for AlonzoTxOut {
+    fn ade_encode(&self, buf: &mut Vec<u8>, _ctx: &CodecContext) -> Result<(), CodecError> {
+        let arr_len: u64 = if self.datum_hash.is_some() { 3 } else { 2 };
+        cbor::write_array_header(
+            buf,
+            ContainerEncoding::Definite(arr_len, IntWidth::Inline),
+        );
+        cbor::write_bytes_canonical(buf, &self.address);
+
+        if let Some(ref ma) = self.multi_asset {
+            cbor::write_array_header(
+                buf,
+                ContainerEncoding::Definite(2, IntWidth::Inline),
+            );
+            cbor::write_uint_canonical(buf, self.coin.0);
+            buf.extend_from_slice(ma);
+        } else {
+            cbor::write_uint_canonical(buf, self.coin.0);
+        }
+
+        if let Some(ref dh) = self.datum_hash {
+            cbor::write_bytes_canonical(buf, &dh.0);
+        }
+
+        Ok(())
+    }
+}
+
+#[cfg(test)]
+#[allow(clippy::unwrap_used, clippy::panic)]
+mod tests {
+    use super::*;
+    use crate::traits::CodecContext;
+    use ade_types::CardanoEra;
+
+    fn ctx() -> CodecContext {
+        CodecContext {
+            era: CardanoEra::Alonzo,
+        }
+    }
+
+    fn round_trip(data: &[u8]) {
+        let mut offset = 0;
+        let out = decode_alonzo_tx_out(data, &mut offset).unwrap();
+        assert_eq!(offset, data.len(), "decoder must consume all bytes");
+        let mut buf = Vec::new();
+        out.ade_encode(&mut buf, &ctx()).unwrap();
+        assert_eq!(buf.as_slice(), data, "encode must be byte-identical to input");
+    }
+
+    #[test]
+    fn round_trip_coin_only_no_datum() {
+        // [address(bstr(3)), uint(42)]
+        let data = [0x82, 0x43, 0x01, 0x02, 0x03, 0x18, 0x2a];
+        round_trip(&data);
+    }
+
+    #[test]
+    fn round_trip_multi_asset_no_datum() {
+        // [address(bstr(3)), [uint(10), {}]]
+        let data = [0x82, 0x43, 0x01, 0x02, 0x03, 0x82, 0x0a, 0xa0];
+        round_trip(&data);
+    }
+
+    #[test]
+    fn round_trip_coin_with_datum() {
+        // [address(bstr(3)), uint(42), bstr(32)[...]]
+        let mut data: Vec<u8> = vec![0x83, 0x43, 0x01, 0x02, 0x03, 0x18, 0x2a, 0x58, 0x20];
+        data.extend_from_slice(&[0xAA; 32]);
+        round_trip(&data);
+    }
+
+    #[test]
+    fn round_trip_multi_asset_with_datum() {
+        // [address(bstr(3)), [uint(10), {1:...}], bstr(32)]
+        let mut data: Vec<u8> = vec![
+            0x83, 0x43, 0x01, 0x02, 0x03,
+            0x82, 0x0a,
+            0xa1, 0x41, 0x11, 0xa1, 0x41, 0x22, 0x18, 0x64,
+            0x58, 0x20,
+        ];
+        data.extend_from_slice(&[0xBB; 32]);
+        round_trip(&data);
+    }
 }

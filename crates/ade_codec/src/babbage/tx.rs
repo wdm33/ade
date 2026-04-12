@@ -8,9 +8,10 @@
 use std::collections::BTreeSet;
 
 use crate::alonzo::tx::read_hash28;
-use crate::cbor::{self, ContainerEncoding};
+use crate::cbor::{self, ContainerEncoding, IntWidth};
 use crate::error::CodecError;
 use crate::shelley::tx::decode_tx_inputs;
+use crate::traits::{AdeEncode, CodecContext};
 use ade_types::babbage::tx::{BabbageTxBody, BabbageTxOut};
 use ade_types::tx::{Coin, TxIn};
 use ade_types::{Hash28, Hash32, SlotNo};
@@ -294,6 +295,92 @@ fn decode_babbage_tx_out_map(
     })
 }
 
+/// Encode a Babbage tx output in canonical map form.
+///
+/// `{0: address, 1: value, ?2: datum_option_raw, ?3: script_ref_raw}`
+/// Value is `uint(coin)` when multi_asset is absent, else `[coin, multi_asset]`.
+pub fn encode_babbage_tx_out_map(
+    buf: &mut Vec<u8>,
+    output: &BabbageTxOut,
+) -> Result<(), CodecError> {
+    let mut count: u64 = 2;
+    if output.datum_option.is_some() {
+        count += 1;
+    }
+    if output.script_ref.is_some() {
+        count += 1;
+    }
+    cbor::write_map_header(buf, ContainerEncoding::Definite(count, IntWidth::Inline));
+
+    cbor::write_uint_canonical(buf, 0);
+    cbor::write_bytes_canonical(buf, &output.address);
+
+    cbor::write_uint_canonical(buf, 1);
+    if let Some(ref ma) = output.multi_asset {
+        cbor::write_array_header(buf, ContainerEncoding::Definite(2, IntWidth::Inline));
+        cbor::write_uint_canonical(buf, output.coin.0);
+        buf.extend_from_slice(ma);
+    } else {
+        cbor::write_uint_canonical(buf, output.coin.0);
+    }
+
+    if let Some(ref d) = output.datum_option {
+        cbor::write_uint_canonical(buf, 2);
+        buf.extend_from_slice(d);
+    }
+
+    if let Some(ref s) = output.script_ref {
+        cbor::write_uint_canonical(buf, 3);
+        buf.extend_from_slice(s);
+    }
+
+    Ok(())
+}
+
+/// Encode a Babbage tx output in legacy array form.
+///
+/// `[address, value, ?datum_option, ?script_ref]` — used when a mainnet tx
+/// was originally decoded from an array-form output and byte-identity matters.
+pub fn encode_babbage_tx_out_array(
+    buf: &mut Vec<u8>,
+    output: &BabbageTxOut,
+) -> Result<(), CodecError> {
+    let mut count: u64 = 2;
+    if output.datum_option.is_some() {
+        count += 1;
+    }
+    if output.script_ref.is_some() {
+        count += 1;
+    }
+    cbor::write_array_header(buf, ContainerEncoding::Definite(count, IntWidth::Inline));
+
+    cbor::write_bytes_canonical(buf, &output.address);
+
+    if let Some(ref ma) = output.multi_asset {
+        cbor::write_array_header(buf, ContainerEncoding::Definite(2, IntWidth::Inline));
+        cbor::write_uint_canonical(buf, output.coin.0);
+        buf.extend_from_slice(ma);
+    } else {
+        cbor::write_uint_canonical(buf, output.coin.0);
+    }
+
+    if let Some(ref d) = output.datum_option {
+        buf.extend_from_slice(d);
+    }
+
+    if let Some(ref s) = output.script_ref {
+        buf.extend_from_slice(s);
+    }
+
+    Ok(())
+}
+
+impl AdeEncode for BabbageTxOut {
+    fn ade_encode(&self, buf: &mut Vec<u8>, _ctx: &CodecContext) -> Result<(), CodecError> {
+        encode_babbage_tx_out_map(buf, self)
+    }
+}
+
 /// Decode Babbage tx output in legacy array format: `[address, value, datum_option?, script_ref?]`
 fn decode_babbage_tx_out_array(
     data: &[u8],
@@ -359,4 +446,99 @@ fn decode_babbage_tx_out_array(
         datum_option,
         script_ref,
     })
+}
+
+#[cfg(test)]
+#[allow(clippy::unwrap_used, clippy::panic)]
+mod tests {
+    use super::*;
+    use ade_types::CardanoEra;
+
+    fn ctx() -> CodecContext {
+        CodecContext {
+            era: CardanoEra::Babbage,
+        }
+    }
+
+    fn round_trip_map(data: &[u8]) {
+        let mut offset = 0;
+        let out = decode_babbage_tx_out(data, &mut offset).unwrap();
+        assert_eq!(offset, data.len(), "decoder must consume all bytes");
+        let mut buf = Vec::new();
+        out.ade_encode(&mut buf, &ctx()).unwrap();
+        assert_eq!(buf.as_slice(), data, "map-form encode must be byte-identical");
+    }
+
+    fn round_trip_array(data: &[u8]) {
+        let mut offset = 0;
+        let out = decode_babbage_tx_out(data, &mut offset).unwrap();
+        assert_eq!(offset, data.len(), "decoder must consume all bytes");
+        let mut buf = Vec::new();
+        encode_babbage_tx_out_array(&mut buf, &out).unwrap();
+        assert_eq!(buf.as_slice(), data, "array-form encode must be byte-identical");
+    }
+
+    #[test]
+    fn map_round_trip_coin_only() {
+        // {0: bstr(3)[01,02,03], 1: uint(42)}
+        let data = [0xa2, 0x00, 0x43, 0x01, 0x02, 0x03, 0x01, 0x18, 0x2a];
+        round_trip_map(&data);
+    }
+
+    #[test]
+    fn map_round_trip_multi_asset() {
+        // {0: addr, 1: [uint(10), {}]}
+        let data = [
+            0xa2, 0x00, 0x43, 0x01, 0x02, 0x03, 0x01, 0x82, 0x0a, 0xa0,
+        ];
+        round_trip_map(&data);
+    }
+
+    #[test]
+    fn map_round_trip_with_datum_option() {
+        // {0: addr, 1: uint(42), 2: [0, bstr(32)]}
+        let mut data: Vec<u8> = vec![
+            0xa3, 0x00, 0x43, 0x01, 0x02, 0x03, 0x01, 0x18, 0x2a, 0x02, 0x82, 0x00, 0x58, 0x20,
+        ];
+        data.extend_from_slice(&[0xCC; 32]);
+        round_trip_map(&data);
+    }
+
+    #[test]
+    fn map_round_trip_with_datum_and_script_ref() {
+        // {0: addr, 1: uint(42), 2: [1, bstr(...)], 3: bstr(wrapped_script)}
+        let data: Vec<u8> = vec![
+            0xa4, 0x00, 0x43, 0x01, 0x02, 0x03, 0x01, 0x18, 0x2a,
+            0x02, 0x82, 0x01, 0x41, 0x99,
+            0x03, 0x44, 0xaa, 0xbb, 0xcc, 0xdd,
+        ];
+        round_trip_map(&data);
+    }
+
+    #[test]
+    fn array_round_trip_coin_only() {
+        // [addr, uint(42)]
+        let data = [0x82, 0x43, 0x01, 0x02, 0x03, 0x18, 0x2a];
+        round_trip_array(&data);
+    }
+
+    #[test]
+    fn array_round_trip_with_datum() {
+        // [addr, uint(42), bstr(32)] — legacy Alonzo-compatible form
+        let mut data: Vec<u8> = vec![0x83, 0x43, 0x01, 0x02, 0x03, 0x18, 0x2a, 0x58, 0x20];
+        data.extend_from_slice(&[0xDD; 32]);
+        round_trip_array(&data);
+    }
+
+    #[test]
+    fn array_round_trip_full() {
+        // [addr, [uint(10), {}], datum, script_ref]
+        let data = [
+            0x84, 0x43, 0x01, 0x02, 0x03,
+            0x82, 0x0a, 0xa0,
+            0x41, 0x11,
+            0x42, 0xaa, 0xbb,
+        ];
+        round_trip_array(&data);
+    }
 }
