@@ -24,6 +24,8 @@ pub mod cost_model;
 pub mod evaluator;
 pub mod script_context;
 pub mod script_verdict;
+pub mod tx_eval;
 
 pub use cost_model::{CostModels, DecoderMode};
 pub use evaluator::{EvalOutput, PlutusError, PlutusLanguage, PlutusScript};
+pub use tx_eval::{eval_tx_phase_two, PerScriptResult, TxEvalResult};
