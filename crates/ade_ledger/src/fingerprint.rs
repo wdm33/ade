@@ -752,26 +752,59 @@ mod tests {
         assert_eq!(f.combined_hex().len(), 64);
     }
 
-    /// Emits golden fingerprint hashes for every era's empty `LedgerState`.
-    /// Run with `cargo test -p ade_ledger golden_empty_state_per_era -- --ignored --nocapture`.
-    /// Not part of the default suite — used to capture reference hashes for pinning.
+    /// Golden fingerprint hashes for every era's empty `LedgerState`.
+    ///
+    /// These hashes are hard-pinned. Any change to the fingerprint encoding
+    /// (or to the default `LedgerState` / `ProtocolParameters` values) must
+    /// come with a deliberate schema bump via `FINGERPRINT_VERSION` plus an
+    /// update to the expected hex below.
+    ///
+    /// Captured at FINGERPRINT_VERSION = 1 on an empty `LedgerState::new(era)`
+    /// with `ProtocolParameters::default()` (Shelley mainnet genesis values).
     #[test]
-    #[ignore]
     fn golden_empty_state_per_era() {
-        let eras = [
-            CardanoEra::ByronEbb,
-            CardanoEra::ByronRegular,
-            CardanoEra::Shelley,
-            CardanoEra::Allegra,
-            CardanoEra::Mary,
-            CardanoEra::Alonzo,
-            CardanoEra::Babbage,
-            CardanoEra::Conway,
+        let cases: &[(CardanoEra, &str)] = &[
+            (
+                CardanoEra::ByronEbb,
+                "51925421496599b5a16a56e1b6faba1435aa2a4db20638734b3c4af1b562361f",
+            ),
+            (
+                CardanoEra::ByronRegular,
+                "a9f5b2235da477cdf875621293c5668940cee267047aaaa73e51c2f4e9269fc0",
+            ),
+            (
+                CardanoEra::Shelley,
+                "9ecbf79943422f72aa6ce6086201239ea2e73354464be788226c66ea5abdcea4",
+            ),
+            (
+                CardanoEra::Allegra,
+                "4975fae5bcbbff43fcfb22f49b4ef77511f9adc65e12fac636d5602eb85f2c69",
+            ),
+            (
+                CardanoEra::Mary,
+                "1355112da8f327da4f92649706a849a6ea94da48e61a0a3864b6040fd52c1aea",
+            ),
+            (
+                CardanoEra::Alonzo,
+                "8505c7d61da6f96ca8b6a85389d7656334de112191f12c6920412ddf78469e2a",
+            ),
+            (
+                CardanoEra::Babbage,
+                "045b7fb1a74568c0f78210ad0fa7d2cac1dba72ef8f6ac7a425adc082b0008a9",
+            ),
+            (
+                CardanoEra::Conway,
+                "4b569a2b7c8e013d9d04202f3def36c8d7c8165954775a2150580b165888a816",
+            ),
         ];
-        for era in eras {
-            let s = LedgerState::new(era);
+        for (era, expected) in cases {
+            let s = LedgerState::new(*era);
             let f = fingerprint(&s);
-            println!("{era:?}  combined = {}", f.combined);
+            assert_eq!(
+                f.combined_hex(),
+                *expected,
+                "golden fingerprint drift for {era:?} — bump FINGERPRINT_VERSION and update golden if this is intentional"
+            );
         }
     }
 

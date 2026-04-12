@@ -25,12 +25,12 @@ statement = "Same canonical inputs -> same authoritative bytes (per Byte Authori
 source = "Project constitution §2, Byte Authority Model §3"
 cross_ref = ["CN-WIRE-01", "CN-WIRE-02", "CN-LEDGER-02", "CN-CONS-01"]
 code_locus = "crates/ade_ledger/src/rules.rs"
-tests = ["apply_block_deterministic"]
-ci_script = "ci/ci_check_forbidden_patterns.sh"
-status = "partial"
+tests = ["apply_block_deterministic", "byron_determinism", "shelley_determinism", "allegra_determinism", "mary_determinism", "alonzo_determinism", "babbage_determinism", "conway_determinism"]
+ci_script = "ci/ci_check_forbidden_patterns.sh, ci/ci_check_ledger_determinism.sh"
+status = "enforced"
 authority_surface = "BLUE authoritative state transitions"
 cluster = "CL-LEDGER-VERDICT"
-evidence = []
+evidence = ["crates/ade_testkit/tests/ledger_determinism.rs uses ade_ledger::fingerprint for byte-identical state comparison across all 7 eras"]
 
 [[rules]]
 id = "T-ENC-01"
@@ -66,8 +66,8 @@ cross_ref = []
 code_locus = "crates/ade_codec/src/preserved.rs"
 tests = ["full_corpus_round_trip"]
 ci_script = "ci/ci_check_cbor_round_trip.sh"
-status = "partial"
-authority_surface = "CBOR wire-byte encode/decode"
+status = "enforced"
+authority_surface = "CBOR wire-byte encode/decode on 10,500 contiguous blocks across 7 eras"
 cluster = "CL-CRYPTO-VERIFY"
 evidence = []
 
@@ -79,8 +79,8 @@ source = "Project constitution §2"
 cross_ref = ["CN-LEDGER-01"]
 code_locus = "crates/ade_ledger/src/rules.rs"
 tests = ["apply_block_deterministic", "apply_block_never_returns_ok"]
-ci_script = "ci/ci_check_forbidden_patterns.sh"
-status = "partial"
+ci_script = "ci/ci_check_forbidden_patterns.sh, ci/ci_check_dependency_boundary.sh"
+status = "enforced"
 authority_surface = "BLUE authoritative state transitions"
 cluster = "CL-LEDGER-VERDICT"
 evidence = []
@@ -221,10 +221,12 @@ tier = "true"
 statement = "Authoritative crates never depend on shell crates"
 source = "Project constitution §2, GP-4"
 cross_ref = []
-code_locus = ""
+code_locus = "crates/*/Cargo.toml"
 tests = []
-ci_script = ""
-status = "declared"
+ci_script = "ci/ci_check_dependency_boundary.sh"
+status = "enforced"
+authority_surface = "BLUE/GREEN/RED dependency graph"
+cluster = "CL-LEDGER-VERDICT"
 
 [[rules]]
 id = "T-INGRESS-01"
@@ -290,10 +292,12 @@ tier = "true"
 statement = "UTxO and asset conservation must hold for every accepted transition, except where protocol rules explicitly authorize mint, burn, rewards, or treasury effects"
 source = "Project constitution §2, audit #13"
 cross_ref = ["CN-LEDGER-07"]
-code_locus = ""
-tests = []
-ci_script = ""
-status = "declared"
+code_locus = "crates/ade_ledger/src/value.rs, crates/ade_ledger/src/byron.rs"
+tests = ["all_eras_replay_summary", "byron_replay_all_1500", "shelley_replay_all_1500"]
+ci_script = "ci/ci_check_differential_divergence.sh"
+status = "enforced"
+authority_surface = "conservation across all 7 eras plus epoch boundary reward/MIR flows"
+cluster = "CL-LEDGER-VERDICT"
 
 [[rules]]
 id = "T-NOSPEND-01"
@@ -301,10 +305,12 @@ tier = "true"
 statement = "No input or equivalent spend authority may be consumed more than once in an accepted canonical chain"
 source = "Project constitution §2, audit #14"
 cross_ref = ["CN-LEDGER-08"]
-code_locus = ""
-tests = []
-ci_script = ""
-status = "declared"
+code_locus = "crates/ade_ledger/src/utxo.rs"
+tests = ["check_duplicate_inputs_catches_dupes", "duplicate_inputs_detected", "all_eras_replay_summary"]
+ci_script = "ci/ci_check_differential_divergence.sh"
+status = "enforced"
+authority_surface = "UTxO consumption across all 7 eras"
+cluster = "CL-LEDGER-VERDICT"
 
 [[rules]]
 id = "T-EPOCH-01"
@@ -422,12 +428,12 @@ statement = "apply_block(state, block) is pure and deterministic"
 source = "Project constitution §3, T-CORE-01, T-CORE-03"
 cross_ref = []
 code_locus = "crates/ade_ledger/src/rules.rs"
-tests = ["apply_block_byron_ebb_passes_through", "apply_block_deterministic"]
-ci_script = ""
-status = "partial"
-authority_surface = "block application verdicts"
+tests = ["apply_block_byron_ebb_passes_through", "apply_block_deterministic", "all_eras_determinism_summary"]
+ci_script = "ci/ci_check_ledger_determinism.sh"
+status = "enforced"
+authority_surface = "block application verdicts across all 7 eras"
 cluster = "CL-LEDGER-VERDICT"
-evidence = []
+evidence = ["crates/ade_ledger/src/fingerprint.rs provides canonical per-component state hash used by ledger_determinism.rs"]
 
 [[rules]]
 id = "DC-LEDGER-02"
@@ -435,13 +441,13 @@ tier = "derived"
 statement = "Same genesis + same blocks = byte-identical ledger state"
 source = "Project constitution §3, T-DET-01"
 cross_ref = []
-code_locus = "crates/ade_ledger/src/state.rs"
-tests = ["utxo_state_deterministic"]
-ci_script = ""
+code_locus = "crates/ade_ledger/src/state.rs, crates/ade_ledger/src/fingerprint.rs"
+tests = ["utxo_state_deterministic", "all_eras_determinism_summary", "boundary_fingerprint_matches_pins"]
+ci_script = "ci/ci_check_ledger_determinism.sh, ci/ci_check_differential_divergence.sh"
 status = "partial"
-authority_surface = "ledger state progression"
+authority_surface = "ledger state progression at boundary-snapshot precision; per-block live differential deferred to external harness"
 cluster = "CL-LEDGER-VERDICT"
-evidence = []
+evidence = ["boundary fingerprint agreement at 12 proof-grade snapshots (CE-75 in-repo layer 2)"]
 
 [[rules]]
 id = "DC-LEDGER-03"
@@ -449,11 +455,11 @@ tier = "derived"
 statement = "Tx/block validity agrees with Haskell node on all tested inputs"
 source = "Project constitution §3, T-DET-01, T-ERR-01"
 cross_ref = ["CN-LEDGER-03"]
-code_locus = "crates/ade_ledger/src/byron.rs"
-tests = ["check_duplicate_inputs_catches_dupes", "resolve_inputs_missing_input", "missing_witnesses_rejected"]
-ci_script = ""
+code_locus = "crates/ade_ledger/src/byron.rs, crates/ade_ledger/src/rules.rs"
+tests = ["check_duplicate_inputs_catches_dupes", "resolve_inputs_missing_input", "missing_witnesses_rejected", "all_eras_replay_summary"]
+ci_script = "ci/ci_check_differential_divergence.sh"
 status = "partial"
-authority_surface = "block/tx acceptance verdicts"
+authority_surface = "non-Plutus block/tx acceptance verdicts across 10,500 blocks (all 7 eras); Plutus-dependent blocks flagged NotYetEvaluated"
 cluster = "CL-LEDGER-VERDICT"
 evidence = []
 
@@ -463,10 +469,13 @@ tier = "derived"
 statement = "Epoch boundary computations (stake snapshots, rewards) match Haskell"
 source = "Project constitution §3, T-DET-01"
 cross_ref = []
-code_locus = ""
-tests = []
+code_locus = "crates/ade_ledger/src/epoch.rs, crates/ade_ledger/src/rules.rs"
+tests = ["precise_boundary_comparison_eta_diagnosis", "alonzo_epoch_boundary_end_to_end", "regular_epoch_boundary_comparison", "conway_epoch_boundary_end_to_end"]
 ci_script = ""
-status = "declared"
+status = "partial"
+authority_surface = "CE-71 proven (0 lovelace reward-formula delta at Allegra 236->237); CE-72 proven with documented irreducible residuals (Alonzo 164 ADA reserves, Alonzo 4046 ADA treasury, Conway 1.3 ADA treasury) at snapshot-comparison precision limits"
+cluster = "CL-LEDGER-VERDICT"
+evidence = ["docs/active/CE-72_closure.md"]
 
 [[rules]]
 id = "DC-PLUTUS-01"
@@ -642,10 +651,13 @@ tier = "derived"
 statement = "Conway governance timing: proposals accumulate during epoch, ratification and enactment are atomic at epoch boundary, pulsing distributes DRep stake computation across epoch"
 source = "Project constitution §3, T-CAUSAL-01, T-EPOCH-01"
 cross_ref = []
-code_locus = ""
-tests = []
+code_locus = "crates/ade_ledger/src/governance.rs, crates/ade_ledger/src/rules.rs"
+tests = ["conway_epoch_boundary_end_to_end", "conway_governance_ratification_test"]
 ci_script = ""
-status = "declared"
+status = "partial"
+authority_surface = "atomic ratification/enactment proven at Conway 528/536/576 boundaries; Plutus-dependent governance effects deferred to Phase 3"
+cluster = "CL-LEDGER-VERDICT"
+evidence = ["docs/active/CE-72_closure.md"]
 
 [[rules]]
 id = "DC-EPOCH-02"
@@ -653,10 +665,12 @@ tier = "derived"
 statement = "Hard fork transitions triggered at deterministic slot/epoch boundaries; era translation functions mandatory; forecast horizon extends to era boundary"
 source = "Project constitution §3, T-DET-01, T-CORE-03"
 cross_ref = []
-code_locus = ""
-tests = []
+code_locus = "crates/ade_ledger/src/hfc.rs"
+tests = ["translation_summary_proof", "translation_comparison_surface", "transition_proof_surface"]
 ci_script = ""
-status = "declared"
+status = "partial"
+authority_surface = "all 6 HFC ledger-side translations implemented; 22/22 encoding-independent fields match oracle; consensus-side HFC deferred to Phase 4; byte-parity with Haskell on-disk ExtLedgerState deliberately not pursued (see docs/active/CE-79_gate_statement.md Tier 4)"
+cluster = "CL-LEDGER-VERDICT"
 
 [[rules]]
 id = "DC-STORE-04"
@@ -719,10 +733,12 @@ tier = "derived"
 statement = "Witness binding is era-specific: Byron TxWitness, Shelley+ WitsVKey/Scripts/BootstrapWitnesses, Alonzo+ Redeemers/Datums, Conway governance witnesses"
 source = "Project constitution §3, T-DET-01"
 cross_ref = []
-code_locus = ""
-tests = []
+code_locus = "crates/ade_ledger/src/witness.rs, crates/ade_ledger/src/scripts.rs"
+tests = ["witness_info_no_plutus", "witness_info_plutus_detection", "empty_witness_set"]
 ci_script = ""
-status = "declared"
+status = "partial"
+authority_surface = "non-Plutus witness binding across all 7 eras; Plutus witness binding deferred to Phase 3 (NotYetEvaluated)"
+cluster = "CL-LEDGER-VERDICT"
 
 [[rules]]
 id = "DC-LEDGER-06"

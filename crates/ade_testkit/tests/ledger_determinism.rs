@@ -1,15 +1,23 @@
 //! Ledger determinism test (CE-74).
 //!
 //! Applies the same block sequence twice from identical initial state
-//! and asserts the resulting LedgerState is identical. Covers all 7 eras
-//! with both single-block and multi-block sequences.
+//! and asserts the resulting LedgerState is byte-identical at the
+//! fingerprint level. Covers all 7 eras with both single-block and
+//! multi-block sequences.
 //!
 //! This is the authoritative test for DC-LEDGER-01:
 //! "same canonical inputs → same authoritative bytes."
+//!
+//! Comparison uses `ade_ledger::fingerprint` — a canonical per-component
+//! Blake2b-256 hash of the state. If two fingerprints diverge, the test
+//! reports which component diverged (era / utxo / cert / epoch / snapshots
+//! / pparams / governance), making failure localization immediate without
+//! inspecting state contents.
 
 use std::path::PathBuf;
 
 use ade_codec::cbor::envelope::decode_block_envelope;
+use ade_ledger::fingerprint::{fingerprint, LedgerFingerprint};
 use ade_ledger::rules::apply_block;
 use ade_ledger::state::LedgerState;
 use ade_types::CardanoEra;
@@ -60,48 +68,40 @@ fn replay_sequence(
     state
 }
 
-/// Assert two LedgerStates are identical on all determinism-relevant fields.
+/// Assert two LedgerStates produce byte-identical fingerprints.
+///
+/// On mismatch, reports the first diverging component for fast
+/// localization (era / utxo / cert / epoch / snapshots / pparams / governance).
 fn assert_states_identical(a: &LedgerState, b: &LedgerState, label: &str) {
-    assert_eq!(a.era, b.era, "{label}: era mismatch");
-    assert_eq!(
-        a.epoch_state.epoch, b.epoch_state.epoch,
-        "{label}: epoch mismatch"
-    );
-    assert_eq!(
-        a.epoch_state.slot, b.epoch_state.slot,
-        "{label}: slot mismatch"
-    );
-    assert_eq!(
-        a.epoch_state.reserves, b.epoch_state.reserves,
-        "{label}: reserves mismatch"
-    );
-    assert_eq!(
-        a.epoch_state.treasury, b.epoch_state.treasury,
-        "{label}: treasury mismatch"
-    );
-    assert_eq!(
-        a.epoch_state.epoch_fees, b.epoch_state.epoch_fees,
-        "{label}: epoch_fees mismatch"
-    );
-    assert_eq!(
-        a.epoch_state.block_production, b.epoch_state.block_production,
-        "{label}: block_production mismatch"
-    );
-    assert_eq!(
-        a.utxo_state.len(),
-        b.utxo_state.len(),
-        "{label}: utxo count mismatch"
-    );
-    assert_eq!(
-        a.cert_state.delegation.delegations.len(),
-        b.cert_state.delegation.delegations.len(),
-        "{label}: delegation count mismatch"
-    );
-    assert_eq!(
-        a.cert_state.pool.pools.len(),
-        b.cert_state.pool.pools.len(),
-        "{label}: pool count mismatch"
-    );
+    let fa = fingerprint(a);
+    let fb = fingerprint(b);
+    if fa.combined != fb.combined {
+        panic!("{label}: fingerprint divergence\n{}", diverging_component(&fa, &fb));
+    }
+}
+
+/// Return a human-readable report of which component(s) diverged.
+fn diverging_component(a: &LedgerFingerprint, b: &LedgerFingerprint) -> String {
+    let mut lines = Vec::new();
+    let components: [(&str, &ade_types::Hash32, &ade_types::Hash32); 7] = [
+        ("era", &a.era, &b.era),
+        ("utxo", &a.utxo, &b.utxo),
+        ("cert", &a.cert, &b.cert),
+        ("epoch", &a.epoch, &b.epoch),
+        ("snapshots", &a.snapshots, &b.snapshots),
+        ("pparams", &a.pparams, &b.pparams),
+        ("governance", &a.governance, &b.governance),
+    ];
+    for (name, ha, hb) in components {
+        if ha != hb {
+            lines.push(format!("  {name}: {ha} != {hb}"));
+        }
+    }
+    if lines.is_empty() {
+        format!("  combined differs but no component differs — encoder bug\n  a.combined = {}\n  b.combined = {}", a.combined, b.combined)
+    } else {
+        lines.join("\n")
+    }
 }
 
 /// Run determinism test for one era: apply N blocks twice, compare.
