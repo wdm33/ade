@@ -99,6 +99,11 @@ pub fn classify_failure_phase(err: &LedgerError) -> ValidationPhase {
         LedgerError::WrongNetworkInTxBody(_) => ValidationPhase::Phase1,
         LedgerError::WrongNetworkInOutput(_) => ValidationPhase::Phase1,
         LedgerError::ExUnitsTooBigUTxO(_) => ValidationPhase::Phase1,
+
+        // Phase-2: the TWO Plutus-specific variants from O-32.1.
+        LedgerError::PlutusExecutionFailed(_) => ValidationPhase::Phase2,
+        LedgerError::PlutusContextBuildFailed(_) => ValidationPhase::Phase2,
+
         LedgerError::Decoding(_) => ValidationPhase::Phase1,
     }
 }
@@ -191,6 +196,7 @@ mod tests {
     use crate::error::{
         BadInputsError, ExUnitsTooBigError, IncorrectTotalCollateralError,
         InsufficientCollateralError, NonDisjointRefInputsError,
+        PlutusContextBuildError, PlutusContextBuildReason, PlutusExecutionError,
     };
     use crate::value::{MultiAsset, Value};
 
@@ -266,6 +272,52 @@ mod tests {
             classify_failure_phase(&LedgerError::CollateralContainsNonADA),
             ValidationPhase::Phase1
         );
+    }
+
+    // -----------------------------------------------------------------------
+    // Phase-2 classification (the only two Plutus-specific error classes)
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn phase2_for_plutus_execution_failure() {
+        let err = LedgerError::PlutusExecutionFailed(PlutusExecutionError {
+            redeemer_index: 0,
+            budget_exhausted: false,
+        });
+        assert_eq!(classify_failure_phase(&err), ValidationPhase::Phase2);
+    }
+
+    #[test]
+    fn phase2_for_plutus_budget_exhaustion() {
+        let err = LedgerError::PlutusExecutionFailed(PlutusExecutionError {
+            redeemer_index: 2,
+            budget_exhausted: true,
+        });
+        assert_eq!(classify_failure_phase(&err), ValidationPhase::Phase2);
+    }
+
+    #[test]
+    fn phase2_for_plutus_context_build_missing_redeemer() {
+        let err = LedgerError::PlutusContextBuildFailed(PlutusContextBuildError {
+            reason: PlutusContextBuildReason::MissingRedeemer,
+        });
+        assert_eq!(classify_failure_phase(&err), ValidationPhase::Phase2);
+    }
+
+    #[test]
+    fn phase2_for_plutus_context_build_missing_cost_model() {
+        let err = LedgerError::PlutusContextBuildFailed(PlutusContextBuildError {
+            reason: PlutusContextBuildReason::MissingCostModel,
+        });
+        assert_eq!(classify_failure_phase(&err), ValidationPhase::Phase2);
+    }
+
+    #[test]
+    fn phase2_for_plutus_context_build_bad_translation() {
+        let err = LedgerError::PlutusContextBuildFailed(PlutusContextBuildError {
+            reason: PlutusContextBuildReason::BadTranslation,
+        });
+        assert_eq!(classify_failure_phase(&err), ValidationPhase::Phase2);
     }
 
     // -----------------------------------------------------------------------

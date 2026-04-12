@@ -73,6 +73,18 @@ pub enum LedgerError {
     // Phase-1 tx-level budget cap (Alonzo+) — O-30.3
     ExUnitsTooBigUTxO(ExUnitsTooBigError),
 
+    // Phase-2 Plutus failures (Alonzo+) — O-32.1
+    // Mirrors Haskell `AlonzoUtxosPredFailure::ValidationTagMismatch
+    // FailedUnexpectedly` and `CollectErrors` respectively.
+    //
+    // These are the ONLY two LedgerError categories that
+    // `phase::classify_failure_phase` routes to Phase2. All other
+    // variants are Phase1 (tx rejected, no state delta). Phase2
+    // means the tx stays in the block with a collateral-only state
+    // delta applied via `phase::apply_phase_2_failure`.
+    PlutusExecutionFailed(PlutusExecutionError),
+    PlutusContextBuildFailed(PlutusContextBuildError),
+
     // Codec passthrough
     Decoding(DecodingError),
 }
@@ -184,6 +196,51 @@ pub struct ExUnitsTooBigError {
     pub declared_cpu: i64,
     pub max_mem: i64,
     pub max_cpu: i64,
+}
+
+/// Phase-2: one or more Plutus scripts failed during CEK
+/// evaluation or exhausted their declared `ex_units` budget.
+/// Mirrors Haskell `ValidationTagMismatch (IsValid True)
+/// FailedUnexpectedly`.
+///
+/// Triggers the collateral-consumption state delta via
+/// `phase::apply_phase_2_failure`. The tx stays in the block but
+/// only collateral is consumed; regular outputs, certs, mint,
+/// withdrawals are NOT applied.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PlutusExecutionError {
+    /// Index of the failing redeemer in the tx witness set.
+    pub redeemer_index: u32,
+    /// Whether the failure was budget exhaustion (true) or a
+    /// CEK-level error term (false).
+    pub budget_exhausted: bool,
+}
+
+/// Phase-2: ScriptContext / redeemer / cost-model couldn't be
+/// constructed for one or more scripts. Mirrors Haskell
+/// `CollectErrors` sub-variants (`NoRedeemer`, `NoWitness`,
+/// `NoCostModel`, `BadTranslation`).
+///
+/// Like `PlutusExecutionFailed`, triggers the collateral-only
+/// state delta.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PlutusContextBuildError {
+    pub reason: PlutusContextBuildReason,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum PlutusContextBuildReason {
+    /// Redeemer referenced by a script is missing from the
+    /// witness set.
+    MissingRedeemer,
+    /// Witness required for ScriptContext construction is absent.
+    MissingWitness,
+    /// Cost model for the script's language version is not
+    /// present in protocol parameters.
+    MissingCostModel,
+    /// A tx field could not be translated into PlutusData form
+    /// (e.g., address too long, invalid datum, etc.).
+    BadTranslation,
 }
 
 // ---------------------------------------------------------------------------
@@ -527,6 +584,24 @@ impl core::fmt::Display for LedgerError {
                     "ex_units too big: declared (mem={}, cpu={}) exceeds cap (mem={}, cpu={})",
                     e.declared_mem, e.declared_cpu, e.max_mem, e.max_cpu
                 )
+            }
+            LedgerError::PlutusExecutionFailed(e) => {
+                if e.budget_exhausted {
+                    write!(
+                        f,
+                        "plutus execution failed: redeemer index {} exhausted declared ex_units",
+                        e.redeemer_index
+                    )
+                } else {
+                    write!(
+                        f,
+                        "plutus execution failed: redeemer index {} produced error term",
+                        e.redeemer_index
+                    )
+                }
+            }
+            LedgerError::PlutusContextBuildFailed(e) => {
+                write!(f, "plutus context build failed: {:?}", e.reason)
             }
         }
     }
