@@ -70,6 +70,9 @@ pub enum LedgerError {
     WrongNetworkInTxBody(WrongNetworkError),
     WrongNetworkInOutput(WrongNetworkOutputError),
 
+    // Phase-1 tx-level budget cap (Alonzo+) — O-30.3
+    ExUnitsTooBigUTxO(ExUnitsTooBigError),
+
     // Codec passthrough
     Decoding(DecodingError),
 }
@@ -169,6 +172,18 @@ pub struct WrongNetworkError {
 pub struct WrongNetworkOutputError {
     pub address_first_byte: u8,
     pub current: u8,
+}
+
+/// Alonzo+: sum of redeemer `ex_units` across the tx exceeds
+/// `ppMaxTxExUnits`. Mirrors `ExUnitsTooBigUTxO` (Alonzo
+/// `AlonzoUtxoPredFailure`, CBOR tag 15). Pointwise check:
+/// declared exceeds cap in mem, cpu, or both.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ExUnitsTooBigError {
+    pub declared_mem: i64,
+    pub declared_cpu: i64,
+    pub max_mem: i64,
+    pub max_cpu: i64,
 }
 
 // ---------------------------------------------------------------------------
@@ -504,6 +519,13 @@ impl core::fmt::Display for LedgerError {
                     "output address network nibble {} does not match current network {}",
                     e.address_first_byte & 0x0f,
                     e.current
+                )
+            }
+            LedgerError::ExUnitsTooBigUTxO(e) => {
+                write!(
+                    f,
+                    "ex_units too big: declared (mem={}, cpu={}) exceeds cap (mem={}, cpu={})",
+                    e.declared_mem, e.declared_cpu, e.max_mem, e.max_cpu
                 )
             }
         }

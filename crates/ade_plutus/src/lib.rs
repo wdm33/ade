@@ -24,3 +24,6 @@ pub mod cost_model;
 pub mod evaluator;
 pub mod script_context;
 pub mod script_verdict;
+
+pub use cost_model::{CostModels, DecoderMode};
+pub use evaluator::{EvalOutput, PlutusError, PlutusLanguage, PlutusScript};

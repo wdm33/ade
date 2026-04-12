@@ -14,8 +14,8 @@ use ade_types::CardanoEra;
 use crate::error::{LedgerError, StructuralError, StructuralFailureReason};
 use crate::late_era_validation::{
     check_address_network, check_collateral_contains_non_ada, check_collateral_non_empty,
-    check_collateral_percent, check_inputs_present, check_required_signers, check_tx_network_id,
-    compute_collateral_balance,
+    check_collateral_percent, check_inputs_present, check_required_signers,
+    check_tx_ex_units_within_cap, check_tx_network_id, compute_collateral_balance,
 };
 use crate::scripts::ScriptPosture;
 use crate::utxo::TxOut;
@@ -107,7 +107,16 @@ pub fn validate_alonzo_state_backed(
     witness_info: &WitnessInfo,
     collateral_percent: u16,
     current_network: u8,
+    max_tx_ex_units: (i64, i64),
 ) -> Result<(), LedgerError> {
+    // 0. Tx-level ex_units cap (O-30.3).
+    check_tx_ex_units_within_cap(
+        witness_info.total_ex_units.mem,
+        witness_info.total_ex_units.cpu,
+        max_tx_ex_units.0,
+        max_tx_ex_units.1,
+    )?;
+
     // 1. Input resolution (spend + collateral)
     let mut all_inputs: BTreeSet<TxIn> = body.inputs.iter().cloned().collect();
     if let Some(col) = &body.collateral_inputs {
@@ -321,6 +330,7 @@ mod tests {
             has_plutus_v1: false,
             has_plutus_v2: false,
             has_plutus_v3: false,
+            total_ex_units: Default::default(),
         }
     }
 
@@ -360,6 +370,7 @@ mod tests {
         let witness = witness_with_keys(&[]);
         let res = validate_alonzo_state_backed(
             &body, &utxo, &witness, MAINNET_COLLATERAL_PERCENT, MAINNET_NETWORK,
+            (i64::MAX, i64::MAX),
         );
         assert!(res.is_ok(), "expected Ok, got {res:?}");
     }
@@ -372,6 +383,7 @@ mod tests {
         assert!(matches!(
             validate_alonzo_state_backed(
                 &body, &utxo, &witness, MAINNET_COLLATERAL_PERCENT, MAINNET_NETWORK,
+                (i64::MAX, i64::MAX),
             ),
             Err(LedgerError::BadInputs(_))
         ));
@@ -387,6 +399,7 @@ mod tests {
         assert!(matches!(
             validate_alonzo_state_backed(
                 &body, &utxo, &witness, MAINNET_COLLATERAL_PERCENT, MAINNET_NETWORK,
+                (i64::MAX, i64::MAX),
             ),
             Err(LedgerError::NoCollateralInputs)
         ));
@@ -409,6 +422,7 @@ mod tests {
         assert!(matches!(
             validate_alonzo_state_backed(
                 &body, &utxo, &witness, MAINNET_COLLATERAL_PERCENT, MAINNET_NETWORK,
+                (i64::MAX, i64::MAX),
             ),
             Err(LedgerError::InsufficientCollateral(_))
         ));
@@ -425,6 +439,7 @@ mod tests {
         assert!(matches!(
             validate_alonzo_state_backed(
                 &body, &utxo, &witness, MAINNET_COLLATERAL_PERCENT, MAINNET_NETWORK,
+                (i64::MAX, i64::MAX),
             ),
             Err(LedgerError::MissingRequiredSigners(_))
         ));
@@ -439,6 +454,7 @@ mod tests {
         assert!(matches!(
             validate_alonzo_state_backed(
                 &body, &utxo, &witness, MAINNET_COLLATERAL_PERCENT, MAINNET_NETWORK,
+                (i64::MAX, i64::MAX),
             ),
             Err(LedgerError::WrongNetworkInTxBody(_))
         ));
@@ -454,8 +470,36 @@ mod tests {
         assert!(matches!(
             validate_alonzo_state_backed(
                 &body, &utxo, &witness, MAINNET_COLLATERAL_PERCENT, MAINNET_NETWORK,
+                (i64::MAX, i64::MAX),
             ),
             Err(LedgerError::WrongNetworkInOutput(_))
         ));
+    }
+
+    #[test]
+    fn alonzo_state_backed_ex_units_cap_exceeded() {
+        let body = alonzo_body_for_state_backed();
+        let utxo = utxo_with(&[(TxIn { tx_hash: Hash32([0x01; 32]), index: 0 }, 5_000_000)]);
+        let mut witness = witness_with_keys(&[]);
+        witness.total_ex_units = crate::witness::TotalExUnits { mem: 100, cpu: 200 };
+        assert!(matches!(
+            validate_alonzo_state_backed(
+                &body, &utxo, &witness, MAINNET_COLLATERAL_PERCENT, MAINNET_NETWORK,
+                (99, 1000), // mem cap exceeded
+            ),
+            Err(LedgerError::ExUnitsTooBigUTxO(_))
+        ));
+    }
+
+    #[test]
+    fn alonzo_state_backed_ex_units_within_cap() {
+        let body = alonzo_body_for_state_backed();
+        let utxo = utxo_with(&[(TxIn { tx_hash: Hash32([0x01; 32]), index: 0 }, 5_000_000)]);
+        let mut witness = witness_with_keys(&[]);
+        witness.total_ex_units = crate::witness::TotalExUnits { mem: 100, cpu: 200 };
+        assert!(validate_alonzo_state_backed(
+            &body, &utxo, &witness, MAINNET_COLLATERAL_PERCENT, MAINNET_NETWORK,
+            (1000, 1000),
+        ).is_ok());
     }
 }

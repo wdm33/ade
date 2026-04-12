@@ -15,7 +15,7 @@ use crate::error::LedgerError;
 use crate::late_era_validation::{
     check_address_network, check_collateral_contains_non_ada, check_collateral_non_empty,
     check_collateral_percent, check_inputs_present, check_required_signers, check_total_collateral,
-    check_tx_network_id, compute_collateral_balance,
+    check_tx_ex_units_within_cap, check_tx_network_id, compute_collateral_balance,
 };
 use crate::scripts::ScriptPosture;
 use crate::utxo::TxOut;
@@ -66,7 +66,16 @@ pub fn validate_babbage_state_backed(
     witness_info: &WitnessInfo,
     collateral_percent: u16,
     current_network: u8,
+    max_tx_ex_units: (i64, i64),
 ) -> Result<(), LedgerError> {
+    // 0. Tx-level ex_units cap (O-30.3).
+    check_tx_ex_units_within_cap(
+        witness_info.total_ex_units.mem,
+        witness_info.total_ex_units.cpu,
+        max_tx_ex_units.0,
+        max_tx_ex_units.1,
+    )?;
+
     // 1. Input resolution (spend + collateral + reference) — all use
     //    the same `BadInputsUTxO` constructor per O-28.1.
     let mut all_inputs: BTreeSet<TxIn> = body.inputs.iter().cloned().collect();
@@ -276,6 +285,7 @@ mod tests {
             has_plutus_v1: false,
             has_plutus_v2: false,
             has_plutus_v3: false,
+            total_ex_units: Default::default(),
         }
     }
 
@@ -290,7 +300,7 @@ mod tests {
         let body = babbage_body();
         let utxo = utxo_with(&[(TxIn { tx_hash: Hash32([0x01; 32]), index: 0 }, 5_000_000)]);
         assert!(validate_babbage_state_backed(
-            &body, &utxo, &empty_witness(), MAINNET_PERCENT, MAINNET_NET,
+            &body, &utxo, &empty_witness(), MAINNET_PERCENT, MAINNET_NET, (i64::MAX, i64::MAX),
         ).is_ok());
     }
 
@@ -303,7 +313,7 @@ mod tests {
         let utxo = utxo_with(&[(TxIn { tx_hash: Hash32([0x01; 32]), index: 0 }, 5_000_000)]);
         assert!(matches!(
             validate_babbage_state_backed(
-                &body, &utxo, &empty_witness(), MAINNET_PERCENT, MAINNET_NET,
+                &body, &utxo, &empty_witness(), MAINNET_PERCENT, MAINNET_NET, (i64::MAX, i64::MAX),
             ),
             Err(LedgerError::BadInputs(_))
         ));
@@ -323,7 +333,7 @@ mod tests {
         // UTxO must have the shared input
         let utxo = utxo_with(&[(shared, 5_000_000)]);
         assert!(validate_babbage_state_backed(
-            &body, &utxo, &empty_witness(), MAINNET_PERCENT, MAINNET_NET,
+            &body, &utxo, &empty_witness(), MAINNET_PERCENT, MAINNET_NET, (i64::MAX, i64::MAX),
         ).is_ok());
     }
 
@@ -343,7 +353,7 @@ mod tests {
         ]);
         assert!(matches!(
             validate_babbage_state_backed(
-                &body, &utxo, &empty_witness(), MAINNET_PERCENT, MAINNET_NET,
+                &body, &utxo, &empty_witness(), MAINNET_PERCENT, MAINNET_NET, (i64::MAX, i64::MAX),
             ),
             Err(LedgerError::IncorrectTotalCollateral(_))
         ));
@@ -370,7 +380,7 @@ mod tests {
             (col_in, 3_000_000), // 3M - 2.85M = 150k, exactly required
         ]);
         assert!(validate_babbage_state_backed(
-            &body, &utxo, &empty_witness(), MAINNET_PERCENT, MAINNET_NET,
+            &body, &utxo, &empty_witness(), MAINNET_PERCENT, MAINNET_NET, (i64::MAX, i64::MAX),
         ).is_ok());
     }
 
@@ -395,7 +405,7 @@ mod tests {
             (col_in, 1_000_000),
         ]);
         match validate_babbage_state_backed(
-            &body, &utxo, &empty_witness(), MAINNET_PERCENT, MAINNET_NET,
+            &body, &utxo, &empty_witness(), MAINNET_PERCENT, MAINNET_NET, (i64::MAX, i64::MAX),
         ) {
             Err(LedgerError::InsufficientCollateral(e)) => {
                 assert_eq!(e.balance, -2_000_000);
@@ -417,7 +427,7 @@ mod tests {
         let utxo = utxo_with(&[(TxIn { tx_hash: Hash32([0x01; 32]), index: 0 }, 5_000_000)]);
         assert!(matches!(
             validate_babbage_state_backed(
-                &body, &utxo, &empty_witness(), MAINNET_PERCENT, MAINNET_NET,
+                &body, &utxo, &empty_witness(), MAINNET_PERCENT, MAINNET_NET, (i64::MAX, i64::MAX),
             ),
             Err(LedgerError::WrongNetworkInOutput(_))
         ));

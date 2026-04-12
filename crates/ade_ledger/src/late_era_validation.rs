@@ -26,9 +26,10 @@ use ade_types::tx::{Coin, TxIn};
 use ade_types::{Hash28, Hash32};
 
 use crate::error::{
-    BadInputsError, IncorrectTotalCollateralError, InsufficientCollateralError, LedgerError,
-    MissingRequiredDatumsError, MissingRequiredSignersError, NonDisjointRefInputsError,
-    WrongNetworkError, WrongNetworkOutputError,
+    BadInputsError, ExUnitsTooBigError, IncorrectTotalCollateralError,
+    InsufficientCollateralError, LedgerError, MissingRequiredDatumsError,
+    MissingRequiredSignersError, NonDisjointRefInputsError, WrongNetworkError,
+    WrongNetworkOutputError,
 };
 
 // ---------------------------------------------------------------------------
@@ -348,6 +349,42 @@ pub fn check_address_network(address: &[u8], current: u8) -> Result<(), LedgerEr
         Err(LedgerError::WrongNetworkInOutput(WrongNetworkOutputError {
             address_first_byte: first,
             current,
+        }))
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Tx-level ex_units cap (O-30.3)
+// ---------------------------------------------------------------------------
+
+/// Enforce `totalExUnits(tx) <=[pointwise] ppMaxTxExUnits`.
+///
+/// From O-30.3 discharge: the ledger sums each redeemer's declared
+/// `ex_units` (already accumulated into
+/// `WitnessInfo::total_ex_units`) and compares pointwise against the
+/// protocol-parameter cap. Exceedance in EITHER dimension is a
+/// phase-1 failure with constructor `ExUnitsTooBigUTxO`.
+///
+/// The check is phase-1 — it runs in UTXO before UTXOS, meaning the
+/// tx is rejected outright (no collateral consumed) if it over-
+/// declares. This mirrors Haskell's `validateExUnitsTooBigUTxO` and
+/// is invariant across Alonzo / Babbage / Conway.
+///
+/// Mirrors Haskell `validateExUnitsTooBigUTxO`.
+pub fn check_tx_ex_units_within_cap(
+    declared_mem: i64,
+    declared_cpu: i64,
+    max_mem: i64,
+    max_cpu: i64,
+) -> Result<(), LedgerError> {
+    if declared_mem <= max_mem && declared_cpu <= max_cpu {
+        Ok(())
+    } else {
+        Err(LedgerError::ExUnitsTooBigUTxO(ExUnitsTooBigError {
+            declared_mem,
+            declared_cpu,
+            max_mem,
+            max_cpu,
         }))
     }
 }
@@ -905,6 +942,51 @@ mod tests {
             assert!(check_address_network(&addr, 1).is_ok(),
                 "high nibble {:x} should not affect network check", high);
         }
+    }
+
+    // -----------------------------------------------------------------------
+    // check_tx_ex_units_within_cap (O-30.3)
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn ex_units_within_cap_passes() {
+        // Declared (1M, 5M) vs cap (10M, 10M) — passes.
+        assert!(check_tx_ex_units_within_cap(1_000_000, 5_000_000, 10_000_000, 10_000_000).is_ok());
+    }
+
+    #[test]
+    fn ex_units_equal_cap_passes() {
+        // Boundary: equal is fine (inclusive <=).
+        assert!(check_tx_ex_units_within_cap(10, 20, 10, 20).is_ok());
+    }
+
+    #[test]
+    fn ex_units_mem_exceeds_fails() {
+        match check_tx_ex_units_within_cap(100, 50, 99, 100) {
+            Err(LedgerError::ExUnitsTooBigUTxO(e)) => {
+                assert_eq!(e.declared_mem, 100);
+                assert_eq!(e.max_mem, 99);
+            }
+            other => panic!("expected ExUnitsTooBigUTxO, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn ex_units_cpu_exceeds_fails() {
+        match check_tx_ex_units_within_cap(100, 200, 1000, 199) {
+            Err(LedgerError::ExUnitsTooBigUTxO(e)) => {
+                assert_eq!(e.declared_cpu, 200);
+                assert_eq!(e.max_cpu, 199);
+            }
+            other => panic!("expected ExUnitsTooBigUTxO, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn ex_units_zero_declared_always_passes() {
+        // No scripts → zero ex_units → passes regardless of cap.
+        assert!(check_tx_ex_units_within_cap(0, 0, 10, 10).is_ok());
+        assert!(check_tx_ex_units_within_cap(0, 0, 0, 0).is_ok());
     }
 
     // -----------------------------------------------------------------------

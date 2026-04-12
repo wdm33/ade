@@ -45,6 +45,174 @@ pub struct PlutusScriptEntry {
     pub flat_bytes: Vec<u8>,
 }
 
+/// Sum `ex_units` across all redeemers in a witness set.
+///
+/// Handles both wire forms:
+///
+/// - **Alonzo / Babbage array form**: `[* redeemer]` where each
+///   `redeemer = [tag, index, data, ex_units]` and
+///   `ex_units = [mem, cpu]`.
+///
+/// - **Conway map form**: `{(tag, index) => (data, ex_units)}`
+///   keyed by a 2-tuple. Introduced in Conway for compactness.
+///
+/// Detection is by CBOR major type: major 4 (array) = Alonzo form,
+/// major 5 (map) = Conway form. Major 6 (tag) can wrap the map
+/// (tag 258 set encoding) — stripped transparently.
+///
+/// Silent-skips the redeemers item and returns `(0, 0)` if the wire
+/// form is malformed in a way the two parsers don't recognize.
+/// Callers treat `(0, 0)` as "no redeemers" for the budget-cap
+/// check; a real tx with scripts would not under-declare to 0 and
+/// expect to pass validation.
+fn sum_redeemer_ex_units(
+    data: &[u8],
+    offset: &mut usize,
+) -> Result<TotalExUnits, LedgerError> {
+    skip_optional_tag(data, offset)?;
+    if *offset >= data.len() {
+        return Err(LedgerError::Decoding(crate::error::DecodingError {
+            offset: *offset,
+            reason: crate::error::DecodingFailureReason::InvalidStructure,
+        }));
+    }
+    let major = data[*offset] >> 5;
+    match major {
+        4 => sum_redeemers_array(data, offset),
+        5 => sum_redeemers_map(data, offset),
+        _ => {
+            // Unknown form — skip, declare zero. Real txs never hit this.
+            let _ = cbor::skip_item(data, offset)?;
+            Ok(TotalExUnits::default())
+        }
+    }
+}
+
+/// Alonzo/Babbage: `[* [tag, index, data, [mem, cpu]]]`.
+fn sum_redeemers_array(
+    data: &[u8],
+    offset: &mut usize,
+) -> Result<TotalExUnits, LedgerError> {
+    let enc = cbor::read_array_header(data, offset)?;
+    let mut total = TotalExUnits::default();
+
+    let mut process_one =
+        |data: &[u8], offset: &mut usize| -> Result<(), LedgerError> {
+            let inner = cbor::read_array_header(data, offset)?;
+            let expected_len = 4;
+            match inner {
+                ContainerEncoding::Definite(n, _) if n == expected_len => {}
+                _ => {
+                    return Err(LedgerError::Decoding(crate::error::DecodingError {
+                        offset: *offset,
+                        reason: crate::error::DecodingFailureReason::InvalidStructure,
+                    }));
+                }
+            }
+            // Skip tag (uint), index (uint), data (any).
+            let _ = cbor::skip_item(data, offset)?;
+            let _ = cbor::skip_item(data, offset)?;
+            let _ = cbor::skip_item(data, offset)?;
+            // ex_units: [mem, cpu]
+            let (mem, cpu) = read_ex_units(data, offset)?;
+            total.mem = total.mem.saturating_add(mem);
+            total.cpu = total.cpu.saturating_add(cpu);
+            Ok(())
+        };
+
+    match enc {
+        ContainerEncoding::Definite(n, _) => {
+            for _ in 0..n {
+                process_one(data, offset)?;
+            }
+        }
+        ContainerEncoding::Indefinite => {
+            while !cbor::is_break(data, *offset)? {
+                process_one(data, offset)?;
+            }
+            *offset += 1;
+        }
+    }
+
+    Ok(total)
+}
+
+/// Conway: `{[tag, index] => [data, [mem, cpu]]}`.
+fn sum_redeemers_map(
+    data: &[u8],
+    offset: &mut usize,
+) -> Result<TotalExUnits, LedgerError> {
+    let enc = cbor::read_map_header(data, offset)?;
+    let mut total = TotalExUnits::default();
+
+    let mut process_one =
+        |data: &[u8], offset: &mut usize| -> Result<(), LedgerError> {
+            // Key: [tag, index] — skip entirely.
+            let _ = cbor::skip_item(data, offset)?;
+            // Value: [data, [mem, cpu]]
+            let val_hdr = cbor::read_array_header(data, offset)?;
+            match val_hdr {
+                ContainerEncoding::Definite(2, _) => {}
+                _ => {
+                    return Err(LedgerError::Decoding(crate::error::DecodingError {
+                        offset: *offset,
+                        reason: crate::error::DecodingFailureReason::InvalidStructure,
+                    }));
+                }
+            }
+            // Skip data
+            let _ = cbor::skip_item(data, offset)?;
+            // Read ex_units
+            let (mem, cpu) = read_ex_units(data, offset)?;
+            total.mem = total.mem.saturating_add(mem);
+            total.cpu = total.cpu.saturating_add(cpu);
+            Ok(())
+        };
+
+    match enc {
+        ContainerEncoding::Definite(n, _) => {
+            for _ in 0..n {
+                process_one(data, offset)?;
+            }
+        }
+        ContainerEncoding::Indefinite => {
+            while !cbor::is_break(data, *offset)? {
+                process_one(data, offset)?;
+            }
+            *offset += 1;
+        }
+    }
+
+    Ok(total)
+}
+
+/// Read `[mem, cpu]` as `(i64, i64)`. Values are CBOR unsigned ints
+/// on wire; we store as `i64` to match Haskell's `ExUnits` (Natural
+/// → Int64 at the budget-check layer).
+fn read_ex_units(data: &[u8], offset: &mut usize) -> Result<(i64, i64), LedgerError> {
+    let hdr = cbor::read_array_header(data, offset)?;
+    match hdr {
+        ContainerEncoding::Definite(2, _) => {}
+        _ => {
+            return Err(LedgerError::Decoding(crate::error::DecodingError {
+                offset: *offset,
+                reason: crate::error::DecodingFailureReason::InvalidStructure,
+            }));
+        }
+    }
+    let (mem, _) = cbor::read_uint(data, offset)?;
+    let (cpu, _) = cbor::read_uint(data, offset)?;
+    Ok((clamp_u64_to_i64(mem), clamp_u64_to_i64(cpu)))
+}
+
+fn clamp_u64_to_i64(v: u64) -> i64 {
+    if v > i64::MAX as u64 {
+        i64::MAX
+    } else {
+        v as i64
+    }
+}
+
 /// Extract the Plutus script bytes from a single witness set's CBOR.
 ///
 /// Complements `decode_single_witness_info`, which only detects
@@ -161,6 +329,27 @@ pub fn decode_all_plutus_scripts_in_block(
     Ok(out)
 }
 
+/// Aggregate execution units declared across all redeemers in a
+/// witness set.
+///
+/// Shelley-through-Mary witness sets don't carry redeemers at all;
+/// this is `(0, 0)` for those eras. Alonzo/Babbage use the array
+/// form `[* redeemer]` where each `redeemer = [tag, index, data,
+/// ex_units]`. Conway introduced the map form `{(tag, index) =>
+/// (data, ex_units)}`; both are decoded. Redeemer payloads other
+/// than `ex_units` are not retained here — Phase 3B slices parse
+/// them where they're needed.
+///
+/// The declared values are authoritative for the tx-level budget cap
+/// check (`validateExUnitsTooBigUTxO` in cardano-ledger): the ledger
+/// sums pointwise across all redeemers and compares against
+/// `ppMaxTxExUnits`. See O-30.3 discharge.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct TotalExUnits {
+    pub mem: i64,
+    pub cpu: i64,
+}
+
 /// Structured classification of what a witness set contains.
 ///
 /// Deterministic: same CBOR input always produces the same classification.
@@ -177,6 +366,10 @@ pub struct WitnessInfo {
     pub has_plutus_v2: bool,
     /// Whether Plutus V3 scripts are present (key 7).
     pub has_plutus_v3: bool,
+    /// Sum of declared `ex_units` across all redeemers (key 5).
+    /// `(0, 0)` if redeemers are absent or unparseable. See
+    /// [`TotalExUnits`] for format details.
+    pub total_ex_units: TotalExUnits,
 }
 
 impl WitnessInfo {
@@ -235,6 +428,7 @@ fn decode_single_witness_info(
         has_plutus_v1: false,
         has_plutus_v2: false,
         has_plutus_v3: false,
+        total_ex_units: TotalExUnits::default(),
     };
 
     let process_key = |data: &[u8],
@@ -268,8 +462,14 @@ fn decode_single_witness_info(
                 info.has_plutus_v3 = true;
                 let _ = cbor::skip_item(data, offset)?;
             }
+            5 => {
+                // Redeemers: sum ex_units across all entries. See
+                // `sum_redeemer_ex_units` for format handling
+                // (Alonzo/Babbage array vs. Conway map).
+                info.total_ex_units = sum_redeemer_ex_units(data, offset)?;
+            }
             _ => {
-                // Keys 2 (bootstrap), 4 (datums), 5 (redeemers), others: skip
+                // Keys 2 (bootstrap), 4 (datums), others: skip.
                 let _ = cbor::skip_item(data, offset)?;
             }
         }
@@ -368,6 +568,7 @@ mod tests {
             has_plutus_v1: true,
             has_plutus_v2: false,
             has_plutus_v3: false,
+            total_ex_units: TotalExUnits::default(),
         };
         assert!(info.has_plutus());
     }
@@ -380,6 +581,7 @@ mod tests {
             has_plutus_v1: false,
             has_plutus_v2: false,
             has_plutus_v3: false,
+            total_ex_units: TotalExUnits::default(),
         };
         assert!(!info.has_plutus());
     }

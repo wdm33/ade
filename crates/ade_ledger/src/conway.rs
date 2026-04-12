@@ -15,8 +15,8 @@ use crate::error::LedgerError;
 use crate::late_era_validation::{
     check_address_network, check_collateral_contains_non_ada, check_collateral_non_empty,
     check_collateral_percent, check_inputs_present, check_reference_input_disjoint,
-    check_required_signers, check_total_collateral, check_tx_network_id,
-    compute_collateral_balance,
+    check_required_signers, check_total_collateral, check_tx_ex_units_within_cap,
+    check_tx_network_id, compute_collateral_balance,
 };
 use crate::scripts::ScriptPosture;
 use crate::utxo::TxOut;
@@ -66,7 +66,16 @@ pub fn validate_conway_state_backed(
     collateral_percent: u16,
     current_network: u8,
     protocol_version_major: u16,
+    max_tx_ex_units: (i64, i64),
 ) -> Result<(), LedgerError> {
+    // 0. Tx-level ex_units cap (O-30.3).
+    check_tx_ex_units_within_cap(
+        witness_info.total_ex_units.mem,
+        witness_info.total_ex_units.cpu,
+        max_tx_ex_units.0,
+        max_tx_ex_units.1,
+    )?;
+
     // 1. Input resolution (spend + collateral + reference)
     let mut all_inputs: BTreeSet<TxIn> = body.inputs.iter().cloned().collect();
     if let Some(col) = &body.collateral_inputs {
@@ -271,6 +280,7 @@ mod tests {
             has_plutus_v1: false,
             has_plutus_v2: false,
             has_plutus_v3: false,
+            total_ex_units: Default::default(),
         }
     }
 
@@ -285,7 +295,7 @@ mod tests {
         let body = conway_body();
         let utxo = utxo_with(&[(TxIn { tx_hash: Hash32([0x01; 32]), index: 0 }, 5_000_000)]);
         assert!(validate_conway_state_backed(
-            &body, &utxo, &empty_witness(), MAINNET_PERCENT, MAINNET_NET, PV_CONWAY,
+            &body, &utxo, &empty_witness(), MAINNET_PERCENT, MAINNET_NET, PV_CONWAY, (i64::MAX, i64::MAX),
         ).is_ok());
     }
 
@@ -301,7 +311,7 @@ mod tests {
         let utxo = utxo_with(&[(shared, 5_000_000)]);
         assert!(matches!(
             validate_conway_state_backed(
-                &body, &utxo, &empty_witness(), MAINNET_PERCENT, MAINNET_NET, PV_CONWAY,
+                &body, &utxo, &empty_witness(), MAINNET_PERCENT, MAINNET_NET, PV_CONWAY, (i64::MAX, i64::MAX),
             ),
             Err(LedgerError::NonDisjointRefInputs(_))
         ));
@@ -319,7 +329,7 @@ mod tests {
             (ref_in, 1_000_000),
         ]);
         assert!(validate_conway_state_backed(
-            &body, &utxo, &empty_witness(), MAINNET_PERCENT, MAINNET_NET, PV_CONWAY,
+            &body, &utxo, &empty_witness(), MAINNET_PERCENT, MAINNET_NET, PV_CONWAY, (i64::MAX, i64::MAX),
         ).is_ok());
     }
 
@@ -335,7 +345,7 @@ mod tests {
         body.reference_inputs = Some(refs);
         let utxo = utxo_with(&[(shared, 5_000_000)]);
         assert!(validate_conway_state_backed(
-            &body, &utxo, &empty_witness(), MAINNET_PERCENT, MAINNET_NET, 11,
+            &body, &utxo, &empty_witness(), MAINNET_PERCENT, MAINNET_NET, 11, (i64::MAX, i64::MAX),
         ).is_ok());
     }
 
@@ -351,7 +361,7 @@ mod tests {
         body.donation = Some(CoinT(500));
         let utxo = utxo_with(&[(TxIn { tx_hash: Hash32([0x01; 32]), index: 0 }, 5_000_000)]);
         assert!(validate_conway_state_backed(
-            &body, &utxo, &empty_witness(), MAINNET_PERCENT, MAINNET_NET, PV_CONWAY,
+            &body, &utxo, &empty_witness(), MAINNET_PERCENT, MAINNET_NET, PV_CONWAY, (i64::MAX, i64::MAX),
         ).is_ok());
     }
 }

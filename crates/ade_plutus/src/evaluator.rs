@@ -191,6 +191,47 @@ impl PlutusScript {
         )
     }
 
+    /// Evaluate with explicit cost-model coefficients (from parsed
+    /// pparams) and a CPU/memory budget cap.
+    ///
+    /// `costs` is the positional coefficient vector produced by
+    /// `crate::cost_model::decode_cost_models` and looked up via
+    /// `CostModels::get(version)`. Aiken's `eval_as` consumes this
+    /// array directly without needing a typed struct adapter.
+    ///
+    /// This is the primary evaluation path for on-chain scripts: the
+    /// ledger passes protocol-parameter-derived cost coefficients to
+    /// each script execution.
+    pub fn eval_with_costs(
+        self,
+        version: PlutusLanguage,
+        costs: &[i64],
+        initial: ExBudget,
+    ) -> EvalOutput {
+        let named: Program<aiken_uplc::ast::NamedDeBruijn> = self.inner.into();
+        let aiken_version = version.to_aiken();
+        let result = named.eval_as(&aiken_version, costs, Some(&initial));
+
+        let consumed = result.cost();
+        let errored = matches!(
+            result.result(),
+            Err(_) | Ok(aiken_uplc::ast::Term::Error)
+        );
+        let result_text = match result.result() {
+            Ok(term) => format!("{term}"),
+            Err(e) => format!("{e}"),
+        };
+        let logs = result.logs();
+
+        EvalOutput {
+            errored,
+            cpu: consumed.cpu,
+            mem: consumed.mem,
+            result_text,
+            logs,
+        }
+    }
+
     /// Evaluate with an explicit CPU/mem budget cap.
     ///
     /// Exhausting the budget produces an errored `EvalOutput` with
