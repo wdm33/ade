@@ -107,6 +107,25 @@ impl PlutusScript {
     }
 }
 
+/// Compare two textual UPLC program strings for alpha-equivalence.
+///
+/// Parses both through aiken's textual parser, converts to DeBruijn
+/// form (which strips variable names to indices), and compares
+/// structurally. This matches the "same program up to bound-variable
+/// renaming" property — which is what IOG's conformance tests
+/// actually intend when they produce pretty-printed output.
+///
+/// Returns `Ok(true)` on structural match, `Ok(false)` on mismatch,
+/// and `Err(_)` if either side fails to parse (in which case the
+/// caller typically falls back to string comparison).
+pub fn programs_alpha_equivalent(a: &str, b: &str) -> Result<bool, PlutusError> {
+    let pa = PlutusScript::parse_textual(a)?;
+    let pb = PlutusScript::parse_textual(b)?;
+    // Compare in DeBruijn form: bound-variable names have been
+    // normalized to indices, so alpha-equivalent programs are `==`.
+    Ok(pa.inner == pb.inner)
+}
+
 /// Plutus language version, mirroring aiken's `Language` enum.
 ///
 /// The numeric tag matches the on-chain `cost_models` map key
