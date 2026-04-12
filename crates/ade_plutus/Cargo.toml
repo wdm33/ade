@@ -2,14 +2,23 @@
 name = "ade_plutus"
 version = "0.1.0"
 edition = "2021"
-# Phase 3 scaffold. No functional code yet — modules are stubs with
-# proof obligations recorded in docs/active/phase_3_cluster_plan.md.
+# Phase 3 UPLC evaluator quarantine (Cluster P-B).
+#
+# This crate is the ONLY place in Ade where aiken-originated and
+# pallas-originated types live. Its public API exposes Ade-canonical
+# types only. Aiken's uplc crate is pinned to v1.1.21 per slice-entry
+# proof obligation O-29.1 (see docs/active/S-29_obligation_discharge.md).
 
 [dependencies]
 ade_types = { path = "../ade_types" }
 ade_crypto = { path = "../ade_crypto" }
 ade_codec = { path = "../ade_codec" }
-# aiken UPLC dependency intentionally NOT yet added.
-# See slice S-29 entry obligation O-29.1: pin the aiken commit whose
-# conformance-test output matches plutus version used by cardano-node 10.6.2.
-# Adding it blindly now would defeat the proof-obligation discipline.
+
+# Aiken UPLC evaluator — pinned to commit 42babe5d (tag v1.1.21, 2025-12-12).
+# See docs/active/S-29_obligation_discharge.md for the rationale:
+#   - matches cardano-node 10.6.2's plutus 1.57 under PV10
+#   - PV11 builtins (ExpModInteger / CaseList / CaseData) intentionally
+#     gated off in aiken, matching mainnet's unactivated PV11
+#   - conformance tests against IOG vectors pass at this commit
+# The `package = "uplc"` rename disambiguates aiken's crate name.
+aiken_uplc = { git = "https://github.com/aiken-lang/aiken", tag = "v1.1.21", package = "uplc" }

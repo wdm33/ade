@@ -1,0 +1,162 @@
+ade_plutus v0.1.0 (/home/ts/Code/rust/ade/crates/ade_plutus)
+├── ade_codec v0.1.0 (/home/ts/Code/rust/ade/crates/ade_codec)
+│   └── ade_types v0.1.0 (/home/ts/Code/rust/ade/crates/ade_types)
+├── ade_crypto v0.1.0 (/home/ts/Code/rust/ade/crates/ade_crypto)
+│   ├── ade_types v0.1.0 (/home/ts/Code/rust/ade/crates/ade_types)
+│   ├── blake2 v0.10.6
+│   │   └── digest v0.10.7
+│   │       ├── block-buffer v0.10.4
+│   │       ├── crypto-common v0.1.7
+│   │       └── subtle v2.6.1
+│   ├── cardano-crypto v1.0.8
+│   │   ├── base64ct v1.7.3
+│   │   ├── blake2 v0.10.6 (*)
+│   │   ├── curve25519-dalek v4.1.3
+│   │   │   ├── cfg-if v1.0.4
+│   │   │   ├── cpufeatures v0.2.17
+│   │   │   ├── curve25519-dalek-derive v0.1.1 (proc-macro)
+│   │   │   ├── digest v0.10.7 (*)
+│   │   │   ├── subtle v2.6.1
+│   │   │   └── zeroize v1.8.2
+│   │   │   [build-dependencies]
+│   │   │   └── rustc_version v0.4.1
+│   │   ├── curve25519-elligator2 v0.1.0-alpha.2
+│   │   │   ├── cfg-if v1.0.4
+│   │   │   ├── cpufeatures v0.2.17
+│   │   │   ├── curve25519-dalek-derive v0.1.1 (proc-macro) (*)
+│   │   │   ├── digest v0.10.7 (*)
+│   │   │   └── subtle v2.6.1
+│   │   │   [build-dependencies]
+│   │   │   └── rustc_version v0.4.1 (*)
+│   │   ├── digest v0.10.7 (*)
+│   │   ├── ed25519-dalek v2.2.0
+│   │   │   ├── curve25519-dalek v4.1.3 (*)
+│   │   │   ├── ed25519 v2.2.3
+│   │   │   ├── sha2 v0.10.9
+│   │   │   ├── subtle v2.6.1
+│   │   │   └── zeroize v1.8.2 (*)
+│   │   ├── fiat-crypto v0.3.0
+│   │   ├── ripemd v0.1.3
+│   │   │   └── digest v0.10.7 (*)
+│   │   ├── sha2 v0.10.9 (*)
+│   │   ├── sha3 v0.10.8
+│   │   │   ├── digest v0.10.7 (*)
+│   │   │   └── keccak v0.1.6
+│   │   ├── subtle v2.6.1
+│   │   └── zeroize v1.8.2 (*)
+│   └── ed25519-dalek v2.2.0 (*)
+├── ade_types v0.1.0 (/home/ts/Code/rust/ade/crates/ade_types)
+└── uplc v1.1.21 (https://github.com/aiken-lang/aiken?tag=v1.1.21#42babe5d)
+    ├── bitvec v1.0.1
+    │   ├── funty v2.0.0
+    │   ├── radium v0.7.0
+    │   ├── tap v1.0.1
+    │   └── wyz v0.5.1
+    │       └── tap v1.0.1
+    ├── blst v0.3.16
+    │   ├── threadpool v1.8.1
+    │   │   └── num_cpus v1.17.0
+    │   └── zeroize v1.8.2 (*)
+    │   [build-dependencies]
+    │   └── cc v1.2.60
+    │       ├── find-msvc-tools v0.1.9
+    │       └── shlex v1.3.0
+    ├── cryptoxide v0.4.4
+    ├── hamming v0.1.3
+    ├── hex v0.4.3
+    ├── indexmap v1.9.3
+    │   └── hashbrown v0.12.3
+    │   [build-dependencies]
+    │   └── autocfg v1.5.0
+    ├── itertools v0.10.5
+    │   └── either v1.15.0
+    ├── miette v5.10.0
+    │   ├── miette-derive v5.10.0 (proc-macro)
+    │   │   ├── proc-macro2 v1.0.106
+    │   │   ├── quote v1.0.45
+    │   │   └── syn v2.0.117
+    │   ├── once_cell v1.21.4
+    │   ├── thiserror v1.0.69
+    │   │   └── thiserror-impl v1.0.69 (proc-macro)
+    │   └── unicode-width v0.1.14
+    ├── num-bigint v0.4.6
+    │   ├── num-integer v0.1.46
+    │   │   └── num-traits v0.2.19
+    │   │       [build-dependencies]
+    │   └── num-traits v0.2.19 (*)
+    ├── num-integer v0.1.46 (*)
+    ├── num-traits v0.2.19 (*)
+    ├── once_cell v1.21.4
+    ├── pallas-addresses v0.33.0
+    │   ├── base58 v0.2.0
+    │   ├── bech32 v0.9.1
+    │   ├── crc v3.4.0
+    │   │   └── crc-catalog v2.4.0
+    │   ├── cryptoxide v0.4.4
+    │   ├── hex v0.4.3
+    │   ├── pallas-codec v0.33.0
+    │   │   ├── hex v0.4.3
+    │   │   ├── minicbor v0.25.1
+    │   │   ├── num-bigint v0.4.6 (*)
+    │   │   ├── serde v1.0.228
+    │   │   └── thiserror v1.0.69 (*)
+    │   ├── pallas-crypto v0.33.0
+    │   │   ├── cryptoxide v0.4.4
+    │   │   ├── hex v0.4.3
+    │   │   ├── pallas-codec v0.33.0 (*)
+    │   │   ├── rand_core v0.6.4
+    │   │   ├── serde v1.0.228 (*)
+    │   │   ├── thiserror v1.0.69 (*)
+    │   │   └── zeroize v1.8.2 (*)
+    │   └── thiserror v1.0.69 (*)
+    ├── pallas-codec v0.33.0 (*)
+    ├── pallas-crypto v0.33.0 (*)
+    ├── pallas-primitives v0.33.0
+    │   ├── base58 v0.2.0
+    │   ├── bech32 v0.9.1
+    │   ├── hex v0.4.3
+    │   ├── log v0.4.29
+    │   ├── pallas-codec v0.33.0 (*)
+    │   ├── pallas-crypto v0.33.0 (*)
+    │   ├── serde v1.0.228 (*)
+    │   └── serde_json v1.0.149
+    │       ├── itoa v1.0.17
+    │       ├── memchr v2.8.0
+    │       ├── serde_core v1.0.228
+    │       └── zmij v1.0.21
+    ├── pallas-traverse v0.33.0
+    │   ├── hex v0.4.3
+    │   ├── itertools v0.13.0
+    │   │   └── either v1.15.0
+    │   ├── pallas-addresses v0.33.0 (*)
+    │   ├── pallas-codec v0.33.0 (*)
+    │   ├── pallas-crypto v0.33.0 (*)
+    │   ├── pallas-primitives v0.33.0 (*)
+    │   ├── paste v1.0.15 (proc-macro)
+    │   ├── serde v1.0.228 (*)
+    │   └── thiserror v1.0.69 (*)
+    ├── peg v0.8.5
+    │   ├── peg-macros v0.8.5 (proc-macro)
+    │   │   ├── peg-runtime v0.8.5
+    │   │   ├── proc-macro2 v1.0.106 (*)
+    │   │   └── quote v1.0.45 (*)
+    │   └── peg-runtime v0.8.5
+    ├── pretty v0.11.3
+    │   ├── arrayvec v0.5.2
+    │   ├── log v0.4.29
+    │   ├── typed-arena v2.0.2
+    │   └── unicode-segmentation v1.13.2
+    ├── secp256k1 v0.26.0
+    │   └── secp256k1-sys v0.8.2
+    │       [build-dependencies]
+    │       └── cc v1.2.60 (*)
+    ├── serde v1.0.228 (*)
+    ├── serde_json v1.0.149 (*)
+    ├── strum v0.26.3
+    │   └── strum_macros v0.26.4 (proc-macro)
+    │       ├── heck v0.5.0
+    │       ├── proc-macro2 v1.0.106 (*)
+    │       ├── quote v1.0.45 (*)
+    │       ├── rustversion v1.0.22 (proc-macro)
+    │       └── syn v2.0.117 (*)
+    └── thiserror v1.0.69 (*)
