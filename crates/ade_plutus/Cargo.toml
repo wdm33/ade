@@ -22,3 +22,7 @@ ade_codec = { path = "../ade_codec" }
 #   - conformance tests against IOG vectors pass at this commit
 # The `package = "uplc"` rename disambiguates aiken's crate name.
 aiken_uplc = { git = "https://github.com/aiken-lang/aiken", tag = "v1.1.21", package = "uplc" }
+
+# pallas_primitives comes transitively via aiken; we reference its
+# `Language` type inside the quarantine. Not re-exported from ade_plutus.
+pallas-primitives = "0.33"

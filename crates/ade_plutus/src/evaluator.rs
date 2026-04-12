@@ -24,6 +24,7 @@
 //! in the public API. Callers see Ade-canonical bytes and errors only.
 
 use aiken_uplc::ast::{DeBruijn, Program};
+use aiken_uplc::machine::cost_model::ExBudget;
 
 use crate::evaluator::PlutusError::{DecodeFailed, EncodeFailed};
 
@@ -39,6 +40,21 @@ pub struct PlutusScript {
 }
 
 impl PlutusScript {
+    /// Parse textual UPLC source (the `(program 1.0.0 …)` form found
+    /// in IOG's conformance `*.uplc` test inputs).
+    ///
+    /// Useful for conformance tests; on-chain scripts use flat/CBOR
+    /// encoding, never textual.
+    pub fn parse_textual(source: &str) -> Result<Self, PlutusError> {
+        let named = aiken_uplc::parser::program(source)
+            .map_err(|e| DecodeFailed(format!("parse: {e}")))?;
+        let named: Program<aiken_uplc::ast::NamedDeBruijn> = named
+            .try_into()
+            .map_err(|e| DecodeFailed(format!("convert to NamedDeBruijn: {e:?}")))?;
+        let debruijn: Program<DeBruijn> = named.into();
+        Ok(PlutusScript { inner: debruijn })
+    }
+
     /// Decode a flat-encoded UPLC script.
     ///
     /// The Flat format is aiken's native wire encoding for UPLC.
@@ -88,6 +104,104 @@ impl PlutusScript {
     /// PV11 (not yet activated).
     pub fn version(&self) -> (usize, usize, usize) {
         self.inner.version
+    }
+}
+
+/// Plutus language version, mirroring aiken's `Language` enum.
+///
+/// The numeric tag matches the on-chain `cost_models` map key
+/// (Babbage+): `0 = V1`, `1 = V2`, `2 = V3`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PlutusLanguage {
+    V1,
+    V2,
+    V3,
+}
+
+impl PlutusLanguage {
+    fn to_aiken(self) -> pallas_primitives::conway::Language {
+        use pallas_primitives::conway::Language as L;
+        match self {
+            PlutusLanguage::V1 => L::PlutusV1,
+            PlutusLanguage::V2 => L::PlutusV2,
+            PlutusLanguage::V3 => L::PlutusV3,
+        }
+    }
+}
+
+/// Canonical output of a Plutus evaluation.
+///
+/// Mirrors the subset of aiken's `EvalResult` that Ade commits to
+/// matching byte-identically against the IOG conformance suite. Aiken
+/// types are NOT leaked — `result_text` is the textual UPLC (as in
+/// `*.uplc.expected` files) and `cost` is an i64 pair.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct EvalOutput {
+    /// Whether evaluation produced an error term (`Term::Error` or
+    /// `Err(_)`). Separate from "the result was `false`".
+    pub errored: bool,
+    /// CPU steps consumed.
+    pub cpu: i64,
+    /// Memory units consumed.
+    pub mem: i64,
+    /// Textual UPLC of the result term. When `errored` is true, the
+    /// textual form is the aiken-produced error representation (e.g.
+    /// `(error)` or a builtin-specific error term).
+    pub result_text: String,
+    /// Any trace messages the program emitted via `trace`.
+    pub logs: Vec<String>,
+}
+
+impl PlutusScript {
+    /// Evaluate this script under the given Plutus language version,
+    /// using aiken's default cost model for that version and a budget
+    /// of `(i64::MAX, i64::MAX)` so that resource-limit checks happen
+    /// only at the CEK runtime level, not at the initial-budget level.
+    ///
+    /// Use `eval_with_budget` when enforcing a real budget cap.
+    ///
+    /// Consumes the script — aiken's `eval_version` takes `self` by
+    /// value because CEK execution threads the term.
+    pub fn eval_default(self, version: PlutusLanguage) -> EvalOutput {
+        self.eval_with_budget(
+            version,
+            ExBudget {
+                mem: i64::MAX,
+                cpu: i64::MAX,
+            },
+        )
+    }
+
+    /// Evaluate with an explicit CPU/mem budget cap.
+    ///
+    /// Exhausting the budget produces an errored `EvalOutput` with
+    /// `errored = true`. `cpu` and `mem` in the output are the
+    /// quantities actually consumed (initial − remaining).
+    pub fn eval_with_budget(self, version: PlutusLanguage, initial: ExBudget) -> EvalOutput {
+        // aiken's eval uses NamedDeBruijn internally. Convert from our
+        // DeBruijn-backed program first; aiken provides the From impl.
+        let named: Program<aiken_uplc::ast::NamedDeBruijn> = self.inner.into();
+        let aiken_version = version.to_aiken();
+        let result = named.eval_version(initial, &aiken_version);
+
+        let consumed = result.cost();
+        let errored = matches!(
+            result.result(),
+            Err(_) | Ok(aiken_uplc::ast::Term::Error)
+        );
+        let result_text = match result.result() {
+            Ok(term) => format!("{term}"),
+            Err(e) => format!("{e}"),
+        };
+        let logs = result.logs();
+
+        EvalOutput {
+            errored,
+            cpu: consumed.cpu,
+            mem: consumed.mem,
+            result_text,
+            logs,
+        }
     }
 }
 
@@ -196,5 +310,33 @@ mod tests {
     fn error_display_is_useful() {
         let err = PlutusError::DecodeFailed("test error".into());
         assert!(err.to_string().contains("test error"));
+    }
+
+    #[test]
+    fn eval_identity_program_returns_constant() {
+        // (program 1.0.0 (con integer 42)) — trivially evaluates to 42
+        let bytes = make_identity_program_flat();
+        let script = PlutusScript::from_flat(&bytes).expect("decode");
+        let out = script.eval_default(PlutusLanguage::V1);
+        assert!(!out.errored, "eval errored: {:?}", out.result_text);
+        assert!(
+            out.result_text.contains("42"),
+            "expected '42' in result, got: {}",
+            out.result_text
+        );
+        // Simple const evaluation consumes a non-zero budget.
+        assert!(out.cpu > 0);
+        assert!(out.mem > 0);
+    }
+
+    #[test]
+    fn eval_consumes_budget_deterministically() {
+        let bytes1 = make_identity_program_flat();
+        let bytes2 = make_identity_program_flat();
+        let out1 = PlutusScript::from_flat(&bytes1).unwrap().eval_default(PlutusLanguage::V1);
+        let out2 = PlutusScript::from_flat(&bytes2).unwrap().eval_default(PlutusLanguage::V1);
+        assert_eq!(out1.cpu, out2.cpu);
+        assert_eq!(out1.mem, out2.mem);
+        assert_eq!(out1.result_text, out2.result_text);
     }
 }

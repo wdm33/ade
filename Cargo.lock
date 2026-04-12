@@ -48,6 +48,7 @@ dependencies = [
  "ade_codec",
  "ade_crypto",
  "ade_types",
+ "pallas-primitives",
  "uplc",
 ]
 
@@ -62,6 +63,7 @@ dependencies = [
  "ade_codec",
  "ade_crypto",
  "ade_ledger",
+ "ade_plutus",
  "ade_types",
  "blake2",
  "flate2",
