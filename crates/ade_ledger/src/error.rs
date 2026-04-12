@@ -5,6 +5,8 @@
 // - Explicit state transitions only
 // - Canonical serialization for all persisted/hashed data
 
+use std::collections::BTreeSet;
+
 use ade_types::tx::{Coin, TxIn};
 use ade_types::{CardanoEra, EpochNo, Hash28, SlotNo};
 
@@ -54,6 +56,13 @@ pub enum LedgerError {
     // Structural domain (Alonzo+)
     StructuralViolation(StructuralError),
 
+    // Late-era state-backed validation (Alonzo+) — O-27 obligations
+    BadInputs(BadInputsError),
+    NoCollateralInputs,
+    InsufficientCollateral(InsufficientCollateralError),
+    CollateralContainsNonADA,
+    IncorrectTotalCollateral(IncorrectTotalCollateralError),
+
     // Codec passthrough
     Decoding(DecodingError),
 }
@@ -70,6 +79,49 @@ pub struct InputNotFoundError {
 #[derive(Debug, Clone, PartialEq)]
 pub struct DuplicateInputError {
     pub tx_in: TxIn,
+}
+
+// ---------------------------------------------------------------------------
+// Late-era state-backed validation errors (Alonzo+)
+//
+// Mirror the Haskell cardano-ledger error constructors:
+//   - BadInputs           <- BadInputsUTxO              (Shelley UTXO, reused)
+//   - NoCollateralInputs  <- NoCollateralInputs         (Alonzo Utxo)
+//   - InsufficientCollateral <- InsufficientCollateral  (Alonzo Utxo)
+//   - CollateralContainsNonADA <- CollateralContainsNonADA (Alonzo Utxo)
+//   - IncorrectTotalCollateral <- IncorrectTotalCollateralField (Babbage Utxo)
+//
+// See docs/active/S-27_obligation_discharge.md for citations.
+// ---------------------------------------------------------------------------
+
+/// Set of transaction inputs that are not present in the UTxO.
+///
+/// Covers spend inputs (all eras), collateral inputs (Alonzo+), and
+/// reference inputs (Babbage+). The Haskell cardano-ledger treats all
+/// three with the same constructor.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct BadInputsError {
+    pub missing: BTreeSet<TxIn>,
+}
+
+/// Collateral percent rule: `100 * balance < collateral_percent * fee`.
+///
+/// `balance` is signed (`i128`) to mirror the Haskell `DeltaCoin`-backed
+/// `Integer` and to tolerate adversarial fees without overflow.
+/// `required` is the ceiling-rounded required amount, reporting-only.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct InsufficientCollateralError {
+    pub balance: i128,
+    pub required: u64,
+    pub percent: u16,
+    pub fee: u64,
+}
+
+/// Babbage's `totalCollateral` declaration did not match the computed balance.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct IncorrectTotalCollateralError {
+    pub balance: i128,
+    pub declared: u64,
 }
 
 // ---------------------------------------------------------------------------
@@ -355,6 +407,29 @@ impl core::fmt::Display for LedgerError {
             }
             LedgerError::Decoding(e) => {
                 write!(f, "decoding error at offset {}: {:?}", e.offset, e.reason)
+            }
+            LedgerError::BadInputs(e) => {
+                write!(f, "bad inputs: {} missing from UTxO", e.missing.len())
+            }
+            LedgerError::NoCollateralInputs => {
+                write!(f, "no collateral inputs provided")
+            }
+            LedgerError::InsufficientCollateral(e) => {
+                write!(
+                    f,
+                    "insufficient collateral: balance {} < required {} (percent {} of fee {})",
+                    e.balance, e.required, e.percent, e.fee
+                )
+            }
+            LedgerError::CollateralContainsNonADA => {
+                write!(f, "collateral contains non-ADA assets without collateral return")
+            }
+            LedgerError::IncorrectTotalCollateral(e) => {
+                write!(
+                    f,
+                    "incorrect total_collateral: declared {} != balance {}",
+                    e.declared, e.balance
+                )
             }
         }
     }
