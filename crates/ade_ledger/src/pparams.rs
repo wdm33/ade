@@ -80,6 +80,21 @@ pub struct ProtocolParameters {
     /// d = 0 means fully decentralized (all pool blocks).
     /// Removed in Babbage (permanently 0).
     pub decentralization: Rational,
+
+    // -- Alonzo+ (Plutus) parameters --
+
+    /// Collateral percent (integer; 100 = 100%). Alonzo mainnet default is 150.
+    /// Used by the late-era composer via `100 * bal >= percent * fee`.
+    pub collateral_percent: u16,
+    /// Tx-level memory ex_units cap (summed across redeemers).
+    /// Alonzo mainnet default is 14_000_000.
+    pub max_tx_ex_units_mem: u64,
+    /// Tx-level CPU ex_units cap (summed across redeemers).
+    /// Alonzo mainnet default is 10_000_000_000.
+    pub max_tx_ex_units_cpu: u64,
+    /// Network id byte for tx-body network and output-address network checks.
+    /// Mainnet = 1, testnet = 0.
+    pub network_id: u8,
 }
 
 impl Default for ProtocolParameters {
@@ -107,6 +122,10 @@ impl Default for ProtocolParameters {
             min_pool_cost: Coin(340_000_000),
             // d = 1 at Shelley launch (fully federated); decreases over time to 0
             decentralization: Rational::new(1, 1).unwrap_or_else(Rational::zero),
+            collateral_percent: 150,
+            max_tx_ex_units_mem: 14_000_000,
+            max_tx_ex_units_cpu: 10_000_000_000,
+            network_id: 1,
         }
     }
 }

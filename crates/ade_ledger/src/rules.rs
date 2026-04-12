@@ -142,7 +142,7 @@ pub fn apply_block_classified(
     match era {
         CardanoEra::ByronEbb => Ok((
             state.clone(),
-            BlockVerdict { tx_count: 0, plutus_deferred_count: 0, non_plutus_count: 0, native_script_passed: 0, native_script_failed: 0 },
+            BlockVerdict { tx_count: 0, plutus_deferred_count: 0, non_plutus_count: 0, native_script_passed: 0, native_script_failed: 0, state_backed_phase1_rejected: 0 },
         )),
         CardanoEra::ByronRegular => {
             let preserved = byron::decode_byron_regular_block(block_cbor)?;
@@ -150,7 +150,7 @@ pub fn apply_block_classified(
             let new_state = crate::byron::validate_byron_block(state, block)?;
             Ok((
                 new_state,
-                BlockVerdict { tx_count: 0, plutus_deferred_count: 0, non_plutus_count: 0, native_script_passed: 0, native_script_failed: 0 },
+                BlockVerdict { tx_count: 0, plutus_deferred_count: 0, non_plutus_count: 0, native_script_passed: 0, native_script_failed: 0, state_backed_phase1_rejected: 0 },
             ))
         }
         _ => {
@@ -164,6 +164,7 @@ pub fn apply_block_classified(
                 _ => return apply_block(state, era, block_cbor).map(|s| (s, BlockVerdict {
                     tx_count: 0, plutus_deferred_count: 0, non_plutus_count: 0,
                     native_script_passed: 0, native_script_failed: 0,
+                    state_backed_phase1_rejected: 0,
                 })),
             };
             let block = decoded.decoded();
@@ -198,7 +199,7 @@ fn apply_shelley_era_block_classified(
         current_state = new_state;
     }
 
-    let verdict = decode_validate_tx_bodies(block, era)?;
+    let mut verdict = decode_validate_tx_bodies(block, era)?;
 
     // Track UTxO only when explicitly enabled.
     let utxo_state = if current_state.track_utxo {
@@ -206,6 +207,20 @@ fn apply_shelley_era_block_classified(
     } else {
         current_state.utxo_state.clone()
     };
+
+    // Run state-backed Phase 1 composer for Alonzo+ eras.
+    // Only when track_utxo is on (otherwise UTxO resolution is impossible).
+    // Runs against the PRE-block UTxO — the composer's input-resolution
+    // invariant is evaluated at the block boundary, not per-tx mid-block.
+    if current_state.track_utxo
+        && matches!(
+            era,
+            CardanoEra::Alonzo | CardanoEra::Babbage | CardanoEra::Conway
+        )
+    {
+        verdict.state_backed_phase1_rejected =
+            run_phase_one_composers(block, era, &current_state)?;
+    }
 
     // Process certificates to accumulate delegation/pool state.
     let cert_state = if current_state.track_utxo {
@@ -1256,6 +1271,11 @@ pub struct BlockVerdict {
     /// because witness-level script failure is a Phase 2 ledger rule, not
     /// a structural rejection at this level).
     pub native_script_failed: u64,
+    /// Alonzo+ txs rejected by the state-backed Phase-1 composer.
+    /// Only incremented when `track_utxo=true` and all inputs resolve; txs
+    /// whose inputs predate the replay window are silently skipped (same
+    /// policy as the UTxO tracker). 0 for pre-Alonzo eras.
+    pub state_backed_phase1_rejected: u64,
 }
 
 /// Decode and structurally validate all transaction bodies from a post-Byron block.
@@ -1274,6 +1294,7 @@ fn decode_validate_tx_bodies(
             non_plutus_count: 0,
             native_script_passed: 0,
             native_script_failed: 0,
+            state_backed_phase1_rejected: 0,
         });
     }
 
@@ -1370,7 +1391,121 @@ fn decode_validate_tx_bodies(
         non_plutus_count,
         native_script_passed,
         native_script_failed,
+        state_backed_phase1_rejected: 0,
     })
+}
+
+/// Walk the block's tx bodies + witness sets in parallel, invoking the
+/// per-era state-backed composer against the pre-block UTxO. Returns the
+/// number of transactions rejected by the composer.
+///
+/// A tx whose composer returns `BadInputs` is silently skipped — inputs may
+/// predate the replay window, mirroring the UTxO-tracker policy. Any other
+/// error increments the rejection count.
+///
+/// Assumes era is Alonzo/Babbage/Conway and `state.track_utxo == true`.
+fn run_phase_one_composers(
+    block: &ade_types::shelley::block::ShelleyBlock,
+    era: CardanoEra,
+    state: &LedgerState,
+) -> Result<u64, LedgerError> {
+    if block.tx_count == 0 {
+        return Ok(0);
+    }
+
+    let witness_infos = crate::witness::decode_witness_infos(&block.witness_sets)?;
+
+    let mut body_offset = 0;
+    let body_data = &block.tx_bodies;
+    let body_enc = cbor::read_array_header(body_data, &mut body_offset)?;
+
+    let pp = &state.protocol_params;
+    let collateral_percent = pp.collateral_percent;
+    let current_network = pp.network_id;
+    let max_ex_units: (i64, i64) =
+        (pp.max_tx_ex_units_mem as i64, pp.max_tx_ex_units_cpu as i64);
+    let utxo = &state.utxo_state.utxos;
+
+    let mut rejected = 0u64;
+    let mut tx_idx = 0usize;
+    let empty_wi = crate::witness::WitnessInfo {
+        available_key_hashes: std::collections::BTreeSet::new(),
+        native_scripts: Vec::new(),
+        has_plutus_v1: false,
+        has_plutus_v2: false,
+        has_plutus_v3: false,
+        total_ex_units: crate::witness::TotalExUnits { mem: 0, cpu: 0 },
+    };
+
+    let mut process_one = |data: &[u8], offset: &mut usize| -> Result<(), LedgerError> {
+        let wi = witness_infos.get(tx_idx).unwrap_or(&empty_wi);
+
+        let result = match era {
+            CardanoEra::Alonzo => {
+                let body = ade_codec::alonzo::tx::decode_alonzo_tx_body(data, offset)?;
+                crate::alonzo::validate_alonzo_state_backed(
+                    &body,
+                    utxo,
+                    wi,
+                    collateral_percent,
+                    current_network,
+                    max_ex_units,
+                )
+            }
+            CardanoEra::Babbage => {
+                let body = ade_codec::babbage::tx::decode_babbage_tx_body(data, offset)?;
+                crate::babbage::validate_babbage_state_backed(
+                    &body,
+                    utxo,
+                    wi,
+                    collateral_percent,
+                    current_network,
+                    max_ex_units,
+                )
+            }
+            CardanoEra::Conway => {
+                let body = ade_codec::conway::tx::decode_conway_tx_body(data, offset)?;
+                crate::conway::validate_conway_state_backed(
+                    &body,
+                    utxo,
+                    wi,
+                    collateral_percent,
+                    current_network,
+                    pp.protocol_major as u16,
+                    max_ex_units,
+                )
+            }
+            _ => Ok(()),
+        };
+
+        match result {
+            Ok(()) => {}
+            Err(crate::error::LedgerError::BadInputs(_)) => {
+                // UTxO predates replay window — silent skip, same policy
+                // as the contiguous-replay UTxO tracker.
+            }
+            Err(_) => {
+                rejected = rejected.saturating_add(1);
+            }
+        }
+        tx_idx += 1;
+        Ok(())
+    };
+
+    match body_enc {
+        cbor::ContainerEncoding::Definite(n, _) => {
+            for _ in 0..n {
+                process_one(body_data, &mut body_offset)?;
+            }
+        }
+        cbor::ContainerEncoding::Indefinite => {
+            while !cbor::is_break(body_data, body_offset)? {
+                process_one(body_data, &mut body_offset)?;
+            }
+        }
+    }
+
+    Ok(rejected)
 }
 
 /// Decode a single tx body, run structural validation, classify script posture.
@@ -1457,5 +1592,51 @@ mod tests {
         let result1 = apply_block(&state, CardanoEra::Mary, &[0x83, 0x01, 0x02]);
         let result2 = apply_block(&state, CardanoEra::Mary, &[0x83, 0x01, 0x02]);
         assert_eq!(result1, result2);
+    }
+
+    #[test]
+    fn bad_inputs_are_silently_skipped() {
+        // Build a minimal Alonzo block with a tx whose inputs are not in UTxO
+        // but track_utxo=true. Composer returns BadInputs; wiring must skip it
+        // without incrementing state_backed_phase1_rejected (replay-window policy).
+        use std::collections::BTreeSet;
+        let mut body = ade_types::alonzo::tx::AlonzoTxBody {
+            inputs: BTreeSet::new(),
+            outputs: Vec::new(),
+            fee: ade_types::tx::Coin(0),
+            ttl: None,
+            certs: None,
+            withdrawals: None,
+            update: None,
+            metadata_hash: None,
+            validity_interval_start: None,
+            mint: None,
+            script_data_hash: None,
+            collateral_inputs: None,
+            required_signers: None,
+            network_id: None,
+        };
+        // Insert one input missing from the (empty) UTxO.
+        body.inputs.insert(ade_types::tx::TxIn {
+            tx_hash: ade_types::Hash32([0x11; 32]),
+            index: 0,
+        });
+
+        let utxo = std::collections::BTreeMap::new();
+        let wi = crate::witness::WitnessInfo {
+            available_key_hashes: BTreeSet::new(),
+            native_scripts: Vec::new(),
+            has_plutus_v1: false,
+            has_plutus_v2: false,
+            has_plutus_v3: false,
+            total_ex_units: crate::witness::TotalExUnits { mem: 0, cpu: 0 },
+        };
+        let res = crate::alonzo::validate_alonzo_state_backed(
+            &body, &utxo, &wi, 150, 1, (14_000_000, 10_000_000_000),
+        );
+        assert!(
+            matches!(res, Err(crate::error::LedgerError::BadInputs(_))),
+            "composer must return BadInputs when input predates UTxO",
+        );
     }
 }

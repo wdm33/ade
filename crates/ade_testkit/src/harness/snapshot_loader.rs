@@ -194,6 +194,10 @@ impl LoadedSnapshot {
             min_utxo_value: Coin(1_000_000),
             min_pool_cost: Coin(340_000_000),
             decentralization: Rational::new(1, 1).unwrap_or_else(zero),
+            collateral_percent: 150,
+            max_tx_ex_units_mem: 14_000_000,
+            max_tx_ex_units_cpu: 10_000_000_000,
+            network_id: 1,
         };
 
         // Try to parse d from the actual snapshot CBOR (ground truth).
