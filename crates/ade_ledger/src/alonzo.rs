@@ -5,11 +5,21 @@
 // - Explicit state transitions only
 // - Canonical serialization for all persisted/hashed data
 
+use std::collections::{BTreeMap, BTreeSet};
+
 use ade_types::alonzo::tx::AlonzoTxBody;
+use ade_types::tx::TxIn;
 use ade_types::CardanoEra;
 
 use crate::error::{LedgerError, StructuralError, StructuralFailureReason};
+use crate::late_era_validation::{
+    check_address_network, check_collateral_contains_non_ada, check_collateral_non_empty,
+    check_collateral_percent, check_inputs_present, check_required_signers, check_tx_network_id,
+    compute_collateral_balance,
+};
 use crate::scripts::ScriptPosture;
+use crate::utxo::TxOut;
+use crate::witness::WitnessInfo;
 
 /// Classify the script posture of an Alonzo transaction body.
 ///
@@ -67,6 +77,108 @@ pub(crate) fn validate_common_structure(
         }));
     }
     Ok(())
+}
+
+// ---------------------------------------------------------------------------
+// Alonzo state-backed validation (S-27 + S-28 composer)
+// ---------------------------------------------------------------------------
+
+/// State-backed late-era validation for an Alonzo transaction body.
+///
+/// Composes the pure check functions from `late_era_validation` into
+/// the Alonzo-specific sequence:
+/// 1. Spend + collateral inputs must resolve in UTxO (O-27.3)
+/// 2. If script_data_hash present: collateral inputs must be non-empty (O-27.2)
+/// 3. If collateral present: percent rule (O-27.1) + non-ADA rule (O-27.2)
+/// 4. required_signers ⊆ witness key hashes (O-28.3)
+/// 5. tx-body network_id matches current network (O-28.4)
+/// 6. Every output's address network nibble matches current network (O-28.4)
+///
+/// Intentionally NOT wired into `apply_block` in this slice — the default
+/// replay path uses `track_utxo=false` (empty UTxO), under which state-
+/// backed checks trivially fail on every input. Integration with real
+/// UTxO state is S-32 work (verdict integration).
+///
+/// Callers that HAVE real UTxO state (future harness, Plutus test
+/// scaffolding) invoke this function directly.
+pub fn validate_alonzo_state_backed(
+    body: &AlonzoTxBody,
+    utxo: &BTreeMap<TxIn, TxOut>,
+    witness_info: &WitnessInfo,
+    collateral_percent: u16,
+    current_network: u8,
+) -> Result<(), LedgerError> {
+    // 1. Input resolution (spend + collateral)
+    let mut all_inputs: BTreeSet<TxIn> = body.inputs.iter().cloned().collect();
+    if let Some(col) = &body.collateral_inputs {
+        for tx_in in col {
+            all_inputs.insert(tx_in.clone());
+        }
+    }
+    check_inputs_present(&all_inputs, utxo)?;
+
+    // 2. Plutus-gated collateral requirement
+    if body.script_data_hash.is_some() {
+        let empty = BTreeSet::new();
+        let col = body.collateral_inputs.as_ref().unwrap_or(&empty);
+        check_collateral_non_empty(col)?;
+    }
+
+    // 3. Collateral checks (when provided)
+    if let Some(col) = &body.collateral_inputs {
+        if !col.is_empty() {
+            let (sum_coin, any_non_ada) = sum_collateral(col, utxo);
+            // Alonzo has no collateral_return, so balance = full sum
+            let balance = compute_collateral_balance(sum_coin, 0);
+            check_collateral_percent(balance, collateral_percent, body.fee)?;
+            // Alonzo cannot return non-ADA collateral (no collateral_return field)
+            check_collateral_contains_non_ada(any_non_ada, false)?;
+        }
+    }
+
+    // 4. Required signers
+    if let Some(req) = &body.required_signers {
+        check_required_signers(req, &witness_info.available_key_hashes)?;
+    }
+
+    // 5. Tx-body network_id
+    check_tx_network_id(body.network_id, current_network)?;
+
+    // 6. Output address networks
+    for out in &body.outputs {
+        check_address_network(&out.address, current_network)?;
+    }
+
+    Ok(())
+}
+
+/// Sum the coin values of a collateral input set against resolved UTxO.
+///
+/// Returns `(sum_coin as u128, any_has_non_ada)`. Silently skips inputs
+/// not present in `utxo` — callers should invoke
+/// `check_inputs_present` first to ensure all collateral is resolvable.
+pub(crate) fn sum_collateral(
+    collateral_inputs: &BTreeSet<TxIn>,
+    utxo: &BTreeMap<TxIn, TxOut>,
+) -> (u128, bool) {
+    let mut sum: u128 = 0;
+    let mut any_non_ada = false;
+    for tx_in in collateral_inputs {
+        if let Some(out) = utxo.get(tx_in) {
+            match out {
+                TxOut::Byron { coin, .. } => {
+                    sum = sum.saturating_add(coin.0 as u128);
+                }
+                TxOut::ShelleyMary { value, .. } => {
+                    sum = sum.saturating_add(value.coin.0 as u128);
+                    if !value.multi_asset.0.is_empty() {
+                        any_non_ada = true;
+                    }
+                }
+            }
+        }
+    }
+    (sum, any_non_ada)
 }
 
 #[cfg(test)]
@@ -162,5 +274,188 @@ mod tests {
         let mut body = minimal_body();
         body.outputs = Vec::new();
         assert!(validate_alonzo_structure(&body).is_ok());
+    }
+
+    // -----------------------------------------------------------------------
+    // Alonzo state-backed validation (S-28.5 composer)
+    // -----------------------------------------------------------------------
+
+    use crate::value::{MultiAsset, Value};
+    use ade_types::tx::Coin as CoinT;
+
+    const MAINNET_COLLATERAL_PERCENT: u16 = 150;
+    const MAINNET_NETWORK: u8 = 1;
+
+    fn mainnet_addr() -> Vec<u8> {
+        // Shelley enterprise address: high nibble 6, low nibble 1 (mainnet)
+        let mut v = vec![0x61u8];
+        v.extend_from_slice(&[0xaa; 28]);
+        v
+    }
+
+    fn utxo_with(entries: &[(TxIn, u64)]) -> BTreeMap<TxIn, TxOut> {
+        let mut u = BTreeMap::new();
+        for (tx_in, coin) in entries {
+            u.insert(
+                tx_in.clone(),
+                TxOut::ShelleyMary {
+                    address: mainnet_addr(),
+                    value: Value {
+                        coin: CoinT(*coin),
+                        multi_asset: MultiAsset::new(),
+                    },
+                },
+            );
+        }
+        u
+    }
+
+    fn witness_with_keys(keys: &[[u8; 28]]) -> WitnessInfo {
+        let mut hashes = BTreeSet::new();
+        for k in keys {
+            hashes.insert(ade_types::Hash28(*k));
+        }
+        WitnessInfo {
+            available_key_hashes: hashes,
+            native_scripts: Vec::new(),
+            has_plutus_v1: false,
+            has_plutus_v2: false,
+            has_plutus_v3: false,
+        }
+    }
+
+    fn alonzo_body_for_state_backed() -> AlonzoTxBody {
+        let mut inputs = BTreeSet::new();
+        inputs.insert(TxIn {
+            tx_hash: Hash32([0x01; 32]),
+            index: 0,
+        });
+        AlonzoTxBody {
+            inputs,
+            outputs: vec![ade_types::alonzo::tx::AlonzoTxOut {
+                address: mainnet_addr(),
+                coin: CoinT(1_000_000),
+                multi_asset: None,
+                datum_hash: None,
+            }],
+            fee: CoinT(200_000),
+            ttl: Some(SlotNo(100)),
+            certs: None,
+            withdrawals: None,
+            update: None,
+            metadata_hash: None,
+            validity_interval_start: None,
+            mint: None,
+            script_data_hash: None,
+            collateral_inputs: None,
+            required_signers: None,
+            network_id: None,
+        }
+    }
+
+    #[test]
+    fn alonzo_state_backed_happy_path_no_scripts() {
+        let body = alonzo_body_for_state_backed();
+        let utxo = utxo_with(&[(TxIn { tx_hash: Hash32([0x01; 32]), index: 0 }, 5_000_000)]);
+        let witness = witness_with_keys(&[]);
+        let res = validate_alonzo_state_backed(
+            &body, &utxo, &witness, MAINNET_COLLATERAL_PERCENT, MAINNET_NETWORK,
+        );
+        assert!(res.is_ok(), "expected Ok, got {res:?}");
+    }
+
+    #[test]
+    fn alonzo_state_backed_missing_input_fails() {
+        let body = alonzo_body_for_state_backed();
+        let utxo = BTreeMap::new();
+        let witness = witness_with_keys(&[]);
+        assert!(matches!(
+            validate_alonzo_state_backed(
+                &body, &utxo, &witness, MAINNET_COLLATERAL_PERCENT, MAINNET_NETWORK,
+            ),
+            Err(LedgerError::BadInputs(_))
+        ));
+    }
+
+    #[test]
+    fn alonzo_state_backed_plutus_requires_collateral() {
+        let mut body = alonzo_body_for_state_backed();
+        body.script_data_hash = Some(Hash32([0xAA; 32]));
+        body.collateral_inputs = Some(BTreeSet::new()); // empty → fail
+        let utxo = utxo_with(&[(TxIn { tx_hash: Hash32([0x01; 32]), index: 0 }, 5_000_000)]);
+        let witness = witness_with_keys(&[]);
+        assert!(matches!(
+            validate_alonzo_state_backed(
+                &body, &utxo, &witness, MAINNET_COLLATERAL_PERCENT, MAINNET_NETWORK,
+            ),
+            Err(LedgerError::NoCollateralInputs)
+        ));
+    }
+
+    #[test]
+    fn alonzo_state_backed_insufficient_collateral() {
+        let mut body = alonzo_body_for_state_backed();
+        body.script_data_hash = Some(Hash32([0xAA; 32]));
+        let mut col = BTreeSet::new();
+        let col_in = TxIn { tx_hash: Hash32([0x99; 32]), index: 0 };
+        col.insert(col_in.clone());
+        body.collateral_inputs = Some(col);
+        body.fee = CoinT(1_000_000); // 150% of 1M = 1.5M required
+        let utxo = utxo_with(&[
+            (TxIn { tx_hash: Hash32([0x01; 32]), index: 0 }, 5_000_000),
+            (col_in, 1_000_000), // only 1M, less than 1.5M
+        ]);
+        let witness = witness_with_keys(&[]);
+        assert!(matches!(
+            validate_alonzo_state_backed(
+                &body, &utxo, &witness, MAINNET_COLLATERAL_PERCENT, MAINNET_NETWORK,
+            ),
+            Err(LedgerError::InsufficientCollateral(_))
+        ));
+    }
+
+    #[test]
+    fn alonzo_state_backed_required_signer_missing() {
+        let mut body = alonzo_body_for_state_backed();
+        let mut req = BTreeSet::new();
+        req.insert(ade_types::Hash28([0x77; 28]));
+        body.required_signers = Some(req);
+        let utxo = utxo_with(&[(TxIn { tx_hash: Hash32([0x01; 32]), index: 0 }, 5_000_000)]);
+        let witness = witness_with_keys(&[[0x66; 28]]); // not matching
+        assert!(matches!(
+            validate_alonzo_state_backed(
+                &body, &utxo, &witness, MAINNET_COLLATERAL_PERCENT, MAINNET_NETWORK,
+            ),
+            Err(LedgerError::MissingRequiredSigners(_))
+        ));
+    }
+
+    #[test]
+    fn alonzo_state_backed_wrong_network_in_tx_body() {
+        let mut body = alonzo_body_for_state_backed();
+        body.network_id = Some(0); // declared testnet, current is mainnet
+        let utxo = utxo_with(&[(TxIn { tx_hash: Hash32([0x01; 32]), index: 0 }, 5_000_000)]);
+        let witness = witness_with_keys(&[]);
+        assert!(matches!(
+            validate_alonzo_state_backed(
+                &body, &utxo, &witness, MAINNET_COLLATERAL_PERCENT, MAINNET_NETWORK,
+            ),
+            Err(LedgerError::WrongNetworkInTxBody(_))
+        ));
+    }
+
+    #[test]
+    fn alonzo_state_backed_wrong_network_in_output() {
+        let mut body = alonzo_body_for_state_backed();
+        // Testnet address (low nibble 0) while current is mainnet (1)
+        body.outputs[0].address = vec![0x60u8, 0xaa];
+        let utxo = utxo_with(&[(TxIn { tx_hash: Hash32([0x01; 32]), index: 0 }, 5_000_000)]);
+        let witness = witness_with_keys(&[]);
+        assert!(matches!(
+            validate_alonzo_state_backed(
+                &body, &utxo, &witness, MAINNET_COLLATERAL_PERCENT, MAINNET_NETWORK,
+            ),
+            Err(LedgerError::WrongNetworkInOutput(_))
+        ));
     }
 }
