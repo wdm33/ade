@@ -115,15 +115,45 @@ impl PlutusScript {
 /// renaming" property — which is what IOG's conformance tests
 /// actually intend when they produce pretty-printed output.
 ///
+/// Each input is first run through `sanitize_for_aiken_parser` to
+/// convert IOG's `name-scope` variable notation (e.g. `x-0`, `j_1-0`)
+/// into aiken-parser-compatible identifiers (underscore-joined).
+/// DeBruijn normalization then strips names entirely, so this
+/// rewriting preserves alpha-equivalence.
+///
 /// Returns `Ok(true)` on structural match, `Ok(false)` on mismatch,
 /// and `Err(_)` if either side fails to parse (in which case the
 /// caller typically falls back to string comparison).
 pub fn programs_alpha_equivalent(a: &str, b: &str) -> Result<bool, PlutusError> {
-    let pa = PlutusScript::parse_textual(a)?;
-    let pb = PlutusScript::parse_textual(b)?;
+    let sa = sanitize_for_aiken_parser(a);
+    let sb = sanitize_for_aiken_parser(b);
+    let pa = PlutusScript::parse_textual(&sa)?;
+    let pb = PlutusScript::parse_textual(&sb)?;
     // Compare in DeBruijn form: bound-variable names have been
     // normalized to indices, so alpha-equivalent programs are `==`.
     Ok(pa.inner == pb.inner)
+}
+
+/// Rewrite IOG-style `name-scope` variable identifiers (e.g. `x-0`,
+/// `j_1-0`) into aiken-parser-compatible identifiers by converting
+/// the internal `-` to `_`. Preserves negative-integer `-` tokens
+/// (those are preceded by whitespace or `(`).
+///
+/// Rule: replace every `-` whose preceding character is alphanumeric
+/// or `_` with `_`. This rewrite is lossless for alpha-equivalence
+/// since DeBruijn normalization discards names entirely.
+fn sanitize_for_aiken_parser(s: &str) -> String {
+    let mut out = String::with_capacity(s.len());
+    let mut prev: char = ' ';
+    for c in s.chars() {
+        if c == '-' && (prev.is_alphanumeric() || prev == '_') {
+            out.push('_');
+        } else {
+            out.push(c);
+        }
+        prev = c;
+    }
+    out
 }
 
 /// Plutus language version, mirroring aiken's `Language` enum.
