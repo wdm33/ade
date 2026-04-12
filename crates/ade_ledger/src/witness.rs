@@ -26,6 +26,141 @@ fn skip_optional_tag(data: &[u8], offset: &mut usize) -> Result<(), LedgerError>
     Ok(())
 }
 
+/// Plutus script version, matching witness-set map keys 3/6/7.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PlutusVersion {
+    V1,
+    V2,
+    V3,
+}
+
+/// A single Plutus script extracted from a witness set.
+///
+/// `flat_bytes` is the inner Flat-encoded UPLC program (the content of
+/// the CBOR bytestring stored under the witness-set map). Callers
+/// invoke `ade_plutus::PlutusScript::from_flat(&flat_bytes)` on these.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PlutusScriptEntry {
+    pub version: PlutusVersion,
+    pub flat_bytes: Vec<u8>,
+}
+
+/// Extract the Plutus script bytes from a single witness set's CBOR.
+///
+/// Complements `decode_single_witness_info`, which only detects
+/// presence. This function returns the raw Flat-encoded UPLC for each
+/// script found under witness-set map keys 3 (V1), 6 (V2), 7 (V3).
+///
+/// Used by the S-29 Flat decoder probe
+/// (docs/active/S-29_flat_decoder_probe.md) and by future slices that
+/// actually evaluate scripts.
+pub fn decode_plutus_scripts_in_witness_set(
+    data: &[u8],
+    offset: &mut usize,
+) -> Result<Vec<PlutusScriptEntry>, LedgerError> {
+    let enc = cbor::read_map_header(data, offset)?;
+    let mut out = Vec::new();
+
+    let mut process_key =
+        |data: &[u8], offset: &mut usize| -> Result<(), LedgerError> {
+            let (key, _) = cbor::read_uint(data, offset)?;
+            match key {
+                3 => out.extend(decode_plutus_script_array(data, offset, PlutusVersion::V1)?),
+                6 => out.extend(decode_plutus_script_array(data, offset, PlutusVersion::V2)?),
+                7 => out.extend(decode_plutus_script_array(data, offset, PlutusVersion::V3)?),
+                _ => {
+                    let _ = cbor::skip_item(data, offset)?;
+                }
+            }
+            Ok(())
+        };
+
+    match enc {
+        ContainerEncoding::Definite(n, _) => {
+            for _ in 0..n {
+                process_key(data, offset)?;
+            }
+        }
+        ContainerEncoding::Indefinite => {
+            while !cbor::is_break(data, *offset)? {
+                process_key(data, offset)?;
+            }
+            *offset += 1;
+        }
+    }
+
+    Ok(out)
+}
+
+fn decode_plutus_script_array(
+    data: &[u8],
+    offset: &mut usize,
+    version: PlutusVersion,
+) -> Result<Vec<PlutusScriptEntry>, LedgerError> {
+    // Conway may wrap the array with tag(258) for set encoding.
+    skip_optional_tag(data, offset)?;
+    let enc = cbor::read_array_header(data, offset)?;
+    let mut out = Vec::new();
+
+    let mut read_one = |data: &[u8], offset: &mut usize| -> Result<(), LedgerError> {
+        let (bytes, _width) = cbor::read_bytes(data, offset)?;
+        out.push(PlutusScriptEntry {
+            version,
+            flat_bytes: bytes,
+        });
+        Ok(())
+    };
+
+    match enc {
+        ContainerEncoding::Definite(n, _) => {
+            for _ in 0..n {
+                read_one(data, offset)?;
+            }
+        }
+        ContainerEncoding::Indefinite => {
+            while !cbor::is_break(data, *offset)? {
+                read_one(data, offset)?;
+            }
+            *offset += 1;
+        }
+    }
+
+    Ok(out)
+}
+
+/// Extract Plutus script entries from an entire witness_sets CBOR array
+/// (the block-level witness container). Returns a flat list across all
+/// transactions in the block; tx boundaries are not preserved.
+///
+/// For tx-boundary-preserving extraction, iterate
+/// `decode_plutus_scripts_in_witness_set` manually.
+pub fn decode_all_plutus_scripts_in_block(
+    witness_sets_cbor: &[u8],
+) -> Result<Vec<PlutusScriptEntry>, LedgerError> {
+    let mut offset = 0;
+    let enc = cbor::read_array_header(witness_sets_cbor, &mut offset)?;
+    let mut out = Vec::new();
+    match enc {
+        ContainerEncoding::Definite(n, _) => {
+            for _ in 0..n {
+                out.extend(decode_plutus_scripts_in_witness_set(
+                    witness_sets_cbor,
+                    &mut offset,
+                )?);
+            }
+        }
+        ContainerEncoding::Indefinite => {
+            while !cbor::is_break(witness_sets_cbor, offset)? {
+                out.extend(decode_plutus_scripts_in_witness_set(
+                    witness_sets_cbor,
+                    &mut offset,
+                )?);
+            }
+        }
+    }
+    Ok(out)
+}
+
 /// Structured classification of what a witness set contains.
 ///
 /// Deterministic: same CBOR input always produces the same classification.

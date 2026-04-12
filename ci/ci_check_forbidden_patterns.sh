@@ -3,12 +3,20 @@ set -euo pipefail
 
 # Grep BLUE crate src/ dirs for forbidden nondeterministic patterns (T-CORE-02).
 # Excludes comment lines and deny attribute lines.
+#
+# ade_plutus is BLUE by declaration (pure-functional UPLC wrapper) and
+# is included in the scan. Its source must also respect these
+# constraints. Aiken's transitive use of `indexmap` stays inside the
+# aiken crate tree (not in our sources) and therefore is not flagged.
 
-BLUE_CRATES=("ade_codec" "ade_types" "ade_crypto" "ade_core" "ade_ledger")
+BLUE_CRATES=("ade_codec" "ade_types" "ade_crypto" "ade_core" "ade_ledger" "ade_plutus")
 
 FORBIDDEN_PATTERNS=(
     "HashMap"
     "HashSet"
+    "IndexMap"
+    "IndexSet"
+    "indexmap::"
     "SystemTime"
     "Instant"
     "std::fs"

@@ -7,6 +7,7 @@ edition = "2021"
 ade_codec = { path = "../ade_codec" }
 ade_crypto = { path = "../ade_crypto" }
 ade_ledger = { path = "../ade_ledger" }
+ade_plutus = { path = "../ade_plutus" }
 ade_types = { path = "../ade_types" }
 blake2 = "0.10"
 flate2 = "1"

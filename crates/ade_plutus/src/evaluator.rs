@@ -23,7 +23,7 @@
 //! aiken `Program<NamedDeBruijn>` internally but does not expose it
 //! in the public API. Callers see Ade-canonical bytes and errors only.
 
-use aiken_uplc::ast::{NamedDeBruijn, Program};
+use aiken_uplc::ast::{DeBruijn, Program};
 
 use crate::evaluator::PlutusError::{DecodeFailed, EncodeFailed};
 
@@ -35,7 +35,7 @@ use crate::evaluator::PlutusError::{DecodeFailed, EncodeFailed};
 /// return Ade-canonical bytes and errors.
 #[derive(Debug, Clone)]
 pub struct PlutusScript {
-    inner: Program<NamedDeBruijn>,
+    inner: Program<DeBruijn>,
 }
 
 impl PlutusScript {
@@ -47,7 +47,7 @@ impl PlutusScript {
     /// (`*.uplc.expected` compared against `.uplc` source after
     /// execution; the source itself is textual UPLC, not Flat).
     pub fn from_flat(bytes: &[u8]) -> Result<Self, PlutusError> {
-        Program::<NamedDeBruijn>::from_flat(bytes)
+        Program::<DeBruijn>::from_flat(bytes)
             .map(|inner| PlutusScript { inner })
             .map_err(|e| DecodeFailed(e.to_string()))
     }
@@ -60,7 +60,7 @@ impl PlutusScript {
     pub fn from_cbor(bytes: &[u8]) -> Result<Self, PlutusError> {
         let owned_in = bytes.to_vec();
         let mut buf = Vec::new();
-        Program::<NamedDeBruijn>::from_cbor(&owned_in, &mut buf)
+        Program::<DeBruijn>::from_cbor(&owned_in, &mut buf)
             .map(|inner| PlutusScript { inner })
             .map_err(|e| DecodeFailed(e.to_string()))
     }
@@ -140,15 +140,16 @@ mod tests {
     /// known-good textual form via aiken's parser and rely on
     /// re-encoding to produce canonical Flat.
     fn make_identity_program_flat() -> Vec<u8> {
-        // Build a trivial Program programmatically to avoid any hex
-        // fragility. Aiken's AST builder produces a canonical form.
+        // Build a trivial Program programmatically via aiken's textual
+        // parser, then convert to DeBruijn (the on-chain representation
+        // PlutusScript uses internally). This avoids any hex fragility.
         let program_src = "(program 1.0.0 (con integer 42))";
-        let program = aiken_uplc::parser::program(program_src)
+        let named: Program<aiken_uplc::ast::NamedDeBruijn> = aiken_uplc::parser::program(program_src)
             .expect("parse source")
             .try_into()
             .expect("convert to NamedDeBruijn");
-        let program: Program<NamedDeBruijn> = program;
-        program.to_flat().expect("encode flat")
+        let debruijn: Program<DeBruijn> = named.into();
+        debruijn.to_flat().expect("encode flat")
     }
 
     #[test]

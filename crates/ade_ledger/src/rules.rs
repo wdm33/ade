@@ -598,18 +598,6 @@ pub fn apply_epoch_boundary_with_registrations(
                 }
             }
 
-            // Debug: log first 3 pools for formula verification
-            if rewarded_pool_count < 3 {
-                eprintln!("  [pool {}] stake={} sigma={:.10} sigma'={:.10} maxPool={} perf={:.10} blocks={}",
-                    rewarded_pool_count, pool_stake.0,
-                    sigma.numerator() as f64 / sigma.denominator() as f64,
-                    sigma_prime.numerator() as f64 / sigma_prime.denominator() as f64,
-                    max_pool,
-                    performance.numerator() as f64 / performance.denominator() as f64,
-                    blocks_produced);
-                eprintln!("    totalStake(circ)={} activeStake={} pool_pot={}", total_stake, total_active_stake, pool_reward_pot);
-            }
-
             // Step 2: poolReward = floor(maxPool * apparentPerformance)
             let pool_max = {
                 let max_rat = crate::rational::Rational::from_integer(max_pool as i128);
@@ -774,12 +762,6 @@ pub fn apply_epoch_boundary_with_registrations(
         }
     }
 
-    // Debug: compare sum(f) with sum(leader+member)
-    let sum_rewards_check = total_pool_rewards.saturating_add(total_member_rewards);
-    eprintln!("  [reward_debug] sum_f={} sum_maxPool={} pools={} totalStake={} activeStake={} sum_f/pot={:.4}",
-        _sum_f, _sum_max_pool,
-        rewarded_pool_count, total_stake, total_active_stake,
-        _sum_f as f64 / pool_reward_pot as f64);
 
     // deltaT2: rewards to unregistered credentials go to treasury.
     // Haskell applyRUpd: treasury receives deltaT + frTotalUnregistered.
