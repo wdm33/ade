@@ -23,6 +23,7 @@ pub mod governance;
 pub mod hfc;
 pub mod late_era_validation;
 pub mod mary;
+pub mod phase;
 pub mod pparams;
 pub mod rational;
 pub mod rules;

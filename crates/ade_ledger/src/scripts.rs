@@ -11,15 +11,53 @@ use ade_types::Hash28;
 
 use crate::error::NativeScriptFailure;
 
-/// Result of evaluating a native script against its environment.
+/// Result of evaluating a script against its environment.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ScriptVerdict {
     /// All conditions of the native script were satisfied.
     NativeScriptPassed,
     /// At least one condition of the native script was not satisfied.
     NativeScriptFailed(NativeScriptFailure),
-    /// The script has not been evaluated yet (initial state).
+    /// Plutus script executed successfully within the declared
+    /// ex_units budget. The verdict agrees with `isValid = True`.
+    PlutusPassed {
+        /// CPU steps consumed.
+        cpu: i64,
+        /// Memory units consumed.
+        mem: i64,
+    },
+    /// Plutus script failed during evaluation. Triggers phase-2
+    /// (collateral consumed) if `isValid = True` was declared,
+    /// or phase-1 if `isValid = False` was declared and this
+    /// script should have failed (tx dropped).
+    PlutusFailed {
+        /// CPU steps attempted before the failure.
+        cpu_attempted: i64,
+        /// Memory units attempted before the failure.
+        mem_attempted: i64,
+        /// Classification of the failure cause.
+        reason: PlutusFailureReason,
+    },
+    /// The script has not been evaluated yet (initial state /
+    /// deferred). Deprecated — being phased out in S-32 as
+    /// Plutus evaluation lands.
     NotYetEvaluated,
+}
+
+/// Classification of Plutus script evaluation failure modes.
+///
+/// Mirrors the Haskell `FailureDescription` from `cardano-ledger`'s
+/// `AlonzoUtxosPredFailure::ValidationTagMismatch`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum PlutusFailureReason {
+    /// CEK machine returned an error term or the evaluator
+    /// exhausted its budget (over-ran declared ex_units).
+    ExecutionFailed,
+    /// Script context / redeemer / cost-model couldn't be
+    /// constructed. Mirrors `CollectErrors`.
+    ContextBuildFailed,
+    /// Budget consumed exceeded the declared ex_units ceiling.
+    BudgetExhausted,
 }
 
 /// Deterministic classification of a transaction's script posture.

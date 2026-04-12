@@ -1332,7 +1332,14 @@ fn decode_validate_tx_bodies(
                         crate::scripts::ScriptVerdict::NativeScriptFailed(_) => {
                             native_script_failed += 1;
                         }
-                        crate::scripts::ScriptVerdict::NotYetEvaluated => {}
+                        crate::scripts::ScriptVerdict::NotYetEvaluated
+                        | crate::scripts::ScriptVerdict::PlutusPassed { .. }
+                        | crate::scripts::ScriptVerdict::PlutusFailed { .. } => {
+                            // Plutus verdicts do not arise from
+                            // evaluate_native_script (native scripts
+                            // never produce Plutus verdicts). The
+                            // match is exhaustive for future-proofing.
+                        }
                     }
                 }
             }
