@@ -63,6 +63,13 @@ pub enum LedgerError {
     CollateralContainsNonADA,
     IncorrectTotalCollateral(IncorrectTotalCollateralError),
 
+    // Late-era state-backed validation (Babbage+/Conway+) — O-28 obligations
+    NonDisjointRefInputs(NonDisjointRefInputsError),
+    MissingRequiredDatums(MissingRequiredDatumsError),
+    MissingRequiredSigners(MissingRequiredSignersError),
+    WrongNetworkInTxBody(WrongNetworkError),
+    WrongNetworkInOutput(WrongNetworkOutputError),
+
     // Codec passthrough
     Decoding(DecodingError),
 }
@@ -122,6 +129,46 @@ pub struct InsufficientCollateralError {
 pub struct IncorrectTotalCollateralError {
     pub balance: i128,
     pub declared: u64,
+}
+
+/// Conway (PV ≥ 9): a `TxIn` appears in both `inputs` and
+/// `reference_inputs`. Mirrors `BabbageNonDisjointRefInputs`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct NonDisjointRefInputsError {
+    pub intersection: BTreeSet<TxIn>,
+}
+
+/// Alonzo+: one or more required datum hashes could not be matched by
+/// any witness-provided datum. Mirrors `MissingRequiredDatums`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct MissingRequiredDatumsError {
+    pub missing: BTreeSet<ade_types::Hash32>,
+}
+
+/// Alonzo+: one or more hashes in `required_signers` are not matched
+/// by any vkey witness. Mirrors `MissingVKeyWitnessesUTXOW` when
+/// caused specifically by `required_signers` shortfall.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct MissingRequiredSignersError {
+    pub missing: BTreeSet<Hash28>,
+}
+
+/// Alonzo+: `network_id` tx body field (key 15) does not match the
+/// current network. Mirrors `WrongNetworkInTxBody`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct WrongNetworkError {
+    pub declared: u8,
+    pub current: u8,
+}
+
+/// Shelley+: an output's address network byte does not match the
+/// current network. Mirrors `WrongNetwork`. Reported one output at a
+/// time (Haskell reports a set; Ade's equivalent carries one and
+/// callers gather as needed).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct WrongNetworkOutputError {
+    pub address_first_byte: u8,
+    pub current: u8,
 }
 
 // ---------------------------------------------------------------------------
@@ -429,6 +476,34 @@ impl core::fmt::Display for LedgerError {
                     f,
                     "incorrect total_collateral: declared {} != balance {}",
                     e.declared, e.balance
+                )
+            }
+            LedgerError::NonDisjointRefInputs(e) => {
+                write!(
+                    f,
+                    "reference inputs overlap spend inputs: {} offending",
+                    e.intersection.len()
+                )
+            }
+            LedgerError::MissingRequiredDatums(e) => {
+                write!(f, "missing required datums: {} unmatched", e.missing.len())
+            }
+            LedgerError::MissingRequiredSigners(e) => {
+                write!(f, "missing required signers: {} unmatched", e.missing.len())
+            }
+            LedgerError::WrongNetworkInTxBody(e) => {
+                write!(
+                    f,
+                    "tx body network_id {} does not match current network {}",
+                    e.declared, e.current
+                )
+            }
+            LedgerError::WrongNetworkInOutput(e) => {
+                write!(
+                    f,
+                    "output address network nibble {} does not match current network {}",
+                    e.address_first_byte & 0x0f,
+                    e.current
                 )
             }
         }
