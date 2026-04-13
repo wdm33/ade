@@ -142,7 +142,7 @@ pub fn apply_block_classified(
     match era {
         CardanoEra::ByronEbb => Ok((
             state.clone(),
-            BlockVerdict { tx_count: 0, plutus_deferred_count: 0, non_plutus_count: 0, native_script_passed: 0, native_script_failed: 0, state_backed_phase1_rejected: 0 },
+            BlockVerdict { tx_count: 0, plutus_deferred_count: 0, non_plutus_count: 0, native_script_passed: 0, native_script_failed: 0, state_backed_phase1_rejected: 0, plutus_eval_passed: 0, plutus_eval_failed: 0 },
         )),
         CardanoEra::ByronRegular => {
             let preserved = byron::decode_byron_regular_block(block_cbor)?;
@@ -150,7 +150,7 @@ pub fn apply_block_classified(
             let new_state = crate::byron::validate_byron_block(state, block)?;
             Ok((
                 new_state,
-                BlockVerdict { tx_count: 0, plutus_deferred_count: 0, non_plutus_count: 0, native_script_passed: 0, native_script_failed: 0, state_backed_phase1_rejected: 0 },
+                BlockVerdict { tx_count: 0, plutus_deferred_count: 0, non_plutus_count: 0, native_script_passed: 0, native_script_failed: 0, state_backed_phase1_rejected: 0, plutus_eval_passed: 0, plutus_eval_failed: 0 },
             ))
         }
         _ => {
@@ -165,6 +165,7 @@ pub fn apply_block_classified(
                     tx_count: 0, plutus_deferred_count: 0, non_plutus_count: 0,
                     native_script_passed: 0, native_script_failed: 0,
                     state_backed_phase1_rejected: 0,
+                    plutus_eval_passed: 0, plutus_eval_failed: 0,
                 })),
             };
             let block = decoded.decoded();
@@ -218,8 +219,10 @@ fn apply_shelley_era_block_classified(
             CardanoEra::Alonzo | CardanoEra::Babbage | CardanoEra::Conway
         )
     {
-        verdict.state_backed_phase1_rejected =
-            run_phase_one_composers(block, era, &current_state)?;
+        let stats = run_phase_one_composers(block, era, &current_state)?;
+        verdict.state_backed_phase1_rejected = stats.rejected;
+        verdict.plutus_eval_passed = stats.plutus_eval_passed;
+        verdict.plutus_eval_failed = stats.plutus_eval_failed;
     }
 
     // Process certificates to accumulate delegation/pool state.
@@ -1276,6 +1279,15 @@ pub struct BlockVerdict {
     /// whose inputs predate the replay window are silently skipped (same
     /// policy as the UTxO tracker). 0 for pre-Alonzo eras.
     pub state_backed_phase1_rejected: u64,
+    /// Plutus txs that `ade_plutus::eval_tx_phase_two` ran to completion.
+    /// Zero on pre-Alonzo / when `track_utxo=false` / when no inputs
+    /// resolve (the tx lands on `PlutusEvalOutcome::Ineligible`).
+    pub plutus_eval_passed: u64,
+    /// Plutus txs aiken returned a failure for (decode / budget / script
+    /// failure / context build). Surfaces CE-89's "every Plutus verdict
+    /// reaches the evaluator" contract — anything here is reported to
+    /// downstream consumers instead of being deferred.
+    pub plutus_eval_failed: u64,
 }
 
 /// Decode and structurally validate all transaction bodies from a post-Byron block.
@@ -1295,6 +1307,8 @@ fn decode_validate_tx_bodies(
             native_script_passed: 0,
             native_script_failed: 0,
             state_backed_phase1_rejected: 0,
+            plutus_eval_passed: 0,
+            plutus_eval_failed: 0,
         });
     }
 
@@ -1392,6 +1406,8 @@ fn decode_validate_tx_bodies(
         native_script_passed,
         native_script_failed,
         state_backed_phase1_rejected: 0,
+        plutus_eval_passed: 0,
+        plutus_eval_failed: 0,
     })
 }
 
@@ -1478,22 +1494,36 @@ pub fn run_phase_one_composers_diagnostic(
     Ok(rejections)
 }
 
+/// Counts returned by the composer + Plutus-eval integrated pass.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub(crate) struct ComposerStats {
+    pub rejected: u64,
+    pub plutus_eval_passed: u64,
+    pub plutus_eval_failed: u64,
+}
+
 /// Walk the block's tx bodies + witness sets in parallel, invoking the
-/// per-era state-backed composer against the pre-block UTxO. Returns the
-/// number of transactions rejected by the composer.
+/// per-era state-backed composer against the pre-block UTxO. Runs
+/// `ade_plutus::eval_tx_phase_two` inline for any Plutus tx whose Phase-1
+/// checks passed and whose inputs fully resolve in the UTxO snapshot.
 ///
-/// A tx whose composer returns `BadInputs` is silently skipped — inputs may
-/// predate the replay window, mirroring the UTxO-tracker policy. Any other
-/// error increments the rejection count.
+/// A tx whose composer returns `BadInputs` is silently skipped — inputs
+/// may predate the replay window, mirroring the UTxO-tracker policy.
+/// Any other error increments `rejected`.
+///
+/// Plutus txs land on `PlutusEvalOutcome::Ineligible` (silent — not
+/// counted as pass or fail) when any input doesn't resolve. Successful
+/// aiken runs increment `plutus_eval_passed`; aiken errors bump
+/// `plutus_eval_failed`.
 ///
 /// Assumes era is Alonzo/Babbage/Conway and `state.track_utxo == true`.
 fn run_phase_one_composers(
     block: &ade_types::shelley::block::ShelleyBlock,
     era: CardanoEra,
     state: &LedgerState,
-) -> Result<u64, LedgerError> {
+) -> Result<ComposerStats, LedgerError> {
     if block.tx_count == 0 {
-        return Ok(0);
+        return Ok(ComposerStats::default());
     }
 
     let witness_infos = crate::witness::decode_witness_infos(&block.witness_sets)?;
@@ -1502,6 +1532,15 @@ fn run_phase_one_composers(
     let body_data = &block.tx_bodies;
     let body_enc = cbor::read_array_header(body_data, &mut body_offset)?;
 
+    // Parallel-walk witness sets to capture each tx's raw witness-set slice.
+    let mut witness_offset = 0;
+    let witness_data = &block.witness_sets;
+    let witness_enc = cbor::read_array_header(witness_data, &mut witness_offset)?;
+    let witness_count = match witness_enc {
+        cbor::ContainerEncoding::Definite(n, _) => n,
+        cbor::ContainerEncoding::Indefinite => u64::MAX,
+    };
+
     let pp = &state.protocol_params;
     let collateral_percent = pp.collateral_percent;
     let current_network = pp.network_id;
@@ -1509,7 +1548,7 @@ fn run_phase_one_composers(
         (pp.max_tx_ex_units_mem as i64, pp.max_tx_ex_units_cpu as i64);
     let utxo = &state.utxo_state.utxos;
 
-    let mut rejected = 0u64;
+    let mut stats = ComposerStats::default();
     let mut tx_idx = 0usize;
     let empty_wi = crate::witness::WitnessInfo {
         available_key_hashes: std::collections::BTreeSet::new(),
@@ -1520,75 +1559,170 @@ fn run_phase_one_composers(
         total_ex_units: crate::witness::TotalExUnits { mem: 0, cpu: 0 },
     };
 
-    let mut process_one = |data: &[u8], offset: &mut usize| -> Result<(), LedgerError> {
+    // Budget per tx for aiken. We reuse the pparams tx-level cap as the
+    // initial budget — phase-1 has already verified the tx stays within it,
+    // so this is the right upper bound for aiken too.
+    let budget = (pp.max_tx_ex_units_cpu, pp.max_tx_ex_units_mem);
+
+    let tx_count = match body_enc {
+        cbor::ContainerEncoding::Definite(n, _) => n,
+        cbor::ContainerEncoding::Indefinite => u64::MAX,
+    };
+    let mut witness_remaining = witness_count;
+
+    loop {
+        // Termination: definite → we've consumed tx_count entries;
+        // indefinite → break byte in body.
+        if matches!(body_enc, cbor::ContainerEncoding::Definite(_, _))
+            && tx_idx as u64 >= tx_count
+        {
+            break;
+        }
+        if matches!(body_enc, cbor::ContainerEncoding::Indefinite)
+            && cbor::is_break(body_data, body_offset)?
+        {
+            break;
+        }
+
         let wi = witness_infos.get(tx_idx).unwrap_or(&empty_wi);
 
-        let result = match era {
-            CardanoEra::Alonzo => {
-                let body = ade_codec::alonzo::tx::decode_alonzo_tx_body(data, offset)?;
-                crate::alonzo::validate_alonzo_state_backed(
-                    &body,
-                    utxo,
-                    wi,
-                    collateral_percent,
-                    current_network,
-                    max_ex_units,
-                )
-            }
-            CardanoEra::Babbage => {
-                let body = ade_codec::babbage::tx::decode_babbage_tx_body(data, offset)?;
-                crate::babbage::validate_babbage_state_backed(
-                    &body,
-                    utxo,
-                    wi,
-                    collateral_percent,
-                    current_network,
-                    max_ex_units,
-                )
-            }
-            CardanoEra::Conway => {
-                let body = ade_codec::conway::tx::decode_conway_tx_body(data, offset)?;
-                crate::conway::validate_conway_state_backed(
-                    &body,
-                    utxo,
-                    wi,
-                    collateral_percent,
-                    current_network,
-                    pp.protocol_major as u16,
-                    max_ex_units,
-                )
-            }
-            _ => Ok(()),
-        };
+        // Capture body slice.
+        let body_start = body_offset;
 
-        match result {
-            Ok(()) => {}
+        // Run the phase-1 composer by decoding the body. This advances
+        // body_offset to the end of this tx's body.
+        let (phase_one_result, body_tx_meta) = decode_and_phase_one(
+            era,
+            body_data,
+            &mut body_offset,
+            utxo,
+            wi,
+            collateral_percent,
+            current_network,
+            max_ex_units,
+            pp.protocol_major as u16,
+        )?;
+        let body_end = body_offset;
+
+        // Advance witness cursor in parallel. Capture witness slice.
+        let witness_start = witness_offset;
+        if witness_remaining > 0 {
+            let _ = cbor::skip_item(witness_data, &mut witness_offset)?;
+            witness_remaining = witness_remaining.saturating_sub(1);
+        }
+        let witness_end = witness_offset;
+
+        match phase_one_result {
+            Ok(()) => {
+                // Phase-1 passed. Try Plutus eval if the tx carries any
+                // Plutus script. The call short-circuits to Ineligible
+                // on missing resolved UTxO inputs, which we don't count.
+                if wi.has_plutus() {
+                    let outcome = crate::plutus_eval::try_evaluate_tx(
+                        &body_data[body_start..body_end],
+                        &witness_data[witness_start..witness_end],
+                        &body_tx_meta.inputs,
+                        body_tx_meta.collateral_inputs.as_ref(),
+                        body_tx_meta.reference_inputs.as_ref(),
+                        utxo,
+                        era,
+                        budget,
+                    );
+                    match outcome {
+                        crate::plutus_eval::PlutusEvalOutcome::Ineligible => {}
+                        crate::plutus_eval::PlutusEvalOutcome::Passed { .. } => {
+                            stats.plutus_eval_passed =
+                                stats.plutus_eval_passed.saturating_add(1);
+                        }
+                        crate::plutus_eval::PlutusEvalOutcome::Failed { .. } => {
+                            stats.plutus_eval_failed =
+                                stats.plutus_eval_failed.saturating_add(1);
+                        }
+                    }
+                }
+            }
             Err(crate::error::LedgerError::BadInputs(_)) => {
-                // UTxO predates replay window — silent skip, same policy
-                // as the contiguous-replay UTxO tracker.
+                // Silent skip — replay-window policy.
             }
             Err(_) => {
-                rejected = rejected.saturating_add(1);
+                stats.rejected = stats.rejected.saturating_add(1);
             }
         }
-        tx_idx += 1;
-        Ok(())
-    };
 
-    match body_enc {
-        cbor::ContainerEncoding::Definite(n, _) => {
-            for _ in 0..n {
-                process_one(body_data, &mut body_offset)?;
-            }
-        }
-        cbor::ContainerEncoding::Indefinite => {
-            while !cbor::is_break(body_data, body_offset)? {
-                process_one(body_data, &mut body_offset)?;
-            }
-        }
+        tx_idx += 1;
     }
 
-    Ok(rejected)
+    Ok(stats)
+}
+
+/// Phase-1 call per era, returning both the result and the minimal tx
+/// metadata the Plutus-eval path needs (input sets).
+struct TxInputSets {
+    inputs: std::collections::BTreeSet<ade_types::tx::TxIn>,
+    collateral_inputs: Option<std::collections::BTreeSet<ade_types::tx::TxIn>>,
+    reference_inputs: Option<std::collections::BTreeSet<ade_types::tx::TxIn>>,
+}
+
+#[allow(clippy::too_many_arguments)]
+fn decode_and_phase_one(
+    era: CardanoEra,
+    data: &[u8],
+    offset: &mut usize,
+    utxo: &std::collections::BTreeMap<ade_types::tx::TxIn, crate::utxo::TxOut>,
+    wi: &crate::witness::WitnessInfo,
+    collateral_percent: u16,
+    current_network: u8,
+    max_ex_units: (i64, i64),
+    protocol_major: u16,
+) -> Result<(Result<(), LedgerError>, TxInputSets), LedgerError> {
+    match era {
+        CardanoEra::Alonzo => {
+            let body = ade_codec::alonzo::tx::decode_alonzo_tx_body(data, offset)?;
+            let r = crate::alonzo::validate_alonzo_state_backed(
+                &body, utxo, wi, collateral_percent, current_network, max_ex_units,
+            );
+            let meta = TxInputSets {
+                inputs: body.inputs.clone(),
+                collateral_inputs: body.collateral_inputs.clone(),
+                reference_inputs: None,
+            };
+            Ok((r, meta))
+        }
+        CardanoEra::Babbage => {
+            let body = ade_codec::babbage::tx::decode_babbage_tx_body(data, offset)?;
+            let r = crate::babbage::validate_babbage_state_backed(
+                &body, utxo, wi, collateral_percent, current_network, max_ex_units,
+            );
+            let meta = TxInputSets {
+                inputs: body.inputs.clone(),
+                collateral_inputs: body.collateral_inputs.clone(),
+                reference_inputs: body.reference_inputs.clone(),
+            };
+            Ok((r, meta))
+        }
+        CardanoEra::Conway => {
+            let body = ade_codec::conway::tx::decode_conway_tx_body(data, offset)?;
+            let r = crate::conway::validate_conway_state_backed(
+                &body, utxo, wi, collateral_percent, current_network,
+                protocol_major, max_ex_units,
+            );
+            let meta = TxInputSets {
+                inputs: body.inputs.clone(),
+                collateral_inputs: body.collateral_inputs.clone(),
+                reference_inputs: body.reference_inputs.clone(),
+            };
+            Ok((r, meta))
+        }
+        _ => {
+            // Shouldn't be called for other eras; skip item and return Ok.
+            let _ = cbor::skip_item(data, offset)?;
+            Ok((Ok(()), TxInputSets {
+                inputs: std::collections::BTreeSet::new(),
+                collateral_inputs: None,
+                reference_inputs: None,
+            }))
+        }
+    }
 }
 
 /// Decode a single tx body, run structural validation, classify script posture.

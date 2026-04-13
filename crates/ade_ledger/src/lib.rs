@@ -24,6 +24,7 @@ pub mod hfc;
 pub mod late_era_validation;
 pub mod mary;
 pub mod phase;
+pub mod plutus_eval;
 pub mod pparams;
 pub mod rational;
 pub mod rules;
