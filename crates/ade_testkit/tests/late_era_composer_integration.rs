@@ -18,13 +18,9 @@
 //!     source is a mismatch between the composer's assumed pparams and the
 //!     block's actual epoch pparams.
 //!
-//! **Known gap** (tracked as follow-up): the snapshot loader hardcodes the
-//! Alonzo+ pparams (collateral_percent=150, max_tx_ex_units=14M/10B,
-//! network_id=1) because it doesn't yet parse them from the live snapshot
-//! CBOR. On-chain pparams for these fields changed mid-Alonzo (ex_units
-//! cap was raised), so a small fraction of txs will hit spurious
-//! `ExUnitsTooBigUTxO` from the defaults. The tests report the counts as
-//! diagnostic output and only assert they remain bounded.
+//! Post–commit-4f345ab: the composer produces 0 rejections across every
+//! Plutus-era mainnet block we have corpus for. Tests assert exact zero,
+//! not a bound — any regression surfaces immediately.
 //!
 //! Pre-Alonzo eras keep the existing behavior (counter always 0).
 
@@ -168,14 +164,10 @@ fn alonzo_boundary_composer_does_not_spuriously_reject() {
         agg.eras_seen.contains(&CardanoEra::Alonzo),
         "replay must exercise Alonzo era (composer path)",
     );
-    // Bounded-rejection contract: with default pparams, real mainnet txs
-    // should mostly pass the composer. Spurious rejections are bounded to
-    // <5% until the snapshot loader parses Alonzo+ pparams (see module doc).
-    // `20 * rejected < total` is equivalent to `rejected/total < 5%`,
-    // evaluated in integers to stay within the no-float contract.
-    assert!(
-        agg.total_phase1_rejected.saturating_mul(20) < agg.total_tx.max(1),
-        "phase1 reject count exceeds 5% bound ({} rejected / {} total)",
+    assert_eq!(
+        agg.total_phase1_rejected, 0,
+        "Alonzo composer must produce 0 rejections on mainnet corpus \
+         ({} rejected / {} total txs)",
         agg.total_phase1_rejected,
         agg.total_tx,
     );
@@ -201,9 +193,10 @@ fn babbage_boundary_composer_does_not_spuriously_reject() {
         agg.eras_seen.contains(&CardanoEra::Babbage),
         "replay must exercise Babbage era (composer path)",
     );
-    assert!(
-        agg.total_phase1_rejected.saturating_mul(20) < agg.total_tx.max(1),
-        "Babbage phase1 reject count exceeds 5% bound ({} / {})",
+    assert_eq!(
+        agg.total_phase1_rejected, 0,
+        "Babbage composer must produce 0 rejections on mainnet corpus \
+         ({} rejected / {} total txs)",
         agg.total_phase1_rejected,
         agg.total_tx,
     );
@@ -229,9 +222,10 @@ fn conway_boundary_composer_does_not_spuriously_reject() {
         agg.eras_seen.contains(&CardanoEra::Conway),
         "replay must exercise Conway era (composer path)",
     );
-    assert!(
-        agg.total_phase1_rejected.saturating_mul(20) < agg.total_tx.max(1),
-        "Conway phase1 reject count exceeds 5% bound ({} / {})",
+    assert_eq!(
+        agg.total_phase1_rejected, 0,
+        "Conway composer must produce 0 rejections on mainnet corpus \
+         ({} rejected / {} total txs)",
         agg.total_phase1_rejected,
         agg.total_tx,
     );
@@ -263,6 +257,134 @@ fn diagnose_plutus_pparam_parse() {
             parsed.max_tx_ex_units_cpu,
         );
     }
+}
+
+#[test]
+fn mary_alonzo_hfc_composer_zero_rejections() {
+    // Mary → Alonzo HFC — first blocks into Alonzo era. Composer activates.
+    let result = replay_with_verdict_aggregation(
+        "snapshot_39916975.tar.gz",
+        "mary_alonzo",
+    );
+    let Some(agg) = result else {
+        eprintln!("Mary→Alonzo HFC snapshot/blocks unavailable — test skipped");
+        return;
+    };
+    eprintln!(
+        "Mary→Alonzo HFC: {} blocks, {} txs, {} phase1_rejected, eras={:?}",
+        agg.blocks_applied, agg.total_tx, agg.total_phase1_rejected, agg.eras_seen
+    );
+    assert!(agg.blocks_applied > 0);
+    assert_eq!(
+        agg.total_phase1_rejected, 0,
+        "Mary→Alonzo HFC composer must produce 0 rejections ({} / {})",
+        agg.total_phase1_rejected,
+        agg.total_tx,
+    );
+}
+
+#[test]
+fn alonzo_babbage_hfc_composer_zero_rejections() {
+    let result = replay_with_verdict_aggregation(
+        "snapshot_72316896.tar.gz",
+        "alonzo_babbage",
+    );
+    let Some(agg) = result else {
+        eprintln!("Alonzo→Babbage HFC snapshot/blocks unavailable — test skipped");
+        return;
+    };
+    eprintln!(
+        "Alonzo→Babbage HFC: {} blocks, {} txs, {} phase1_rejected, eras={:?}",
+        agg.blocks_applied, agg.total_tx, agg.total_phase1_rejected, agg.eras_seen
+    );
+    assert!(agg.blocks_applied > 0);
+    assert_eq!(
+        agg.total_phase1_rejected, 0,
+        "Alonzo→Babbage HFC composer must produce 0 rejections ({} / {})",
+        agg.total_phase1_rejected,
+        agg.total_tx,
+    );
+}
+
+#[test]
+fn babbage_conway_hfc_composer_zero_rejections() {
+    let result = replay_with_verdict_aggregation(
+        "snapshot_133660855.tar.gz",
+        "babbage_conway",
+    );
+    let Some(agg) = result else {
+        eprintln!("Babbage→Conway HFC snapshot/blocks unavailable — test skipped");
+        return;
+    };
+    eprintln!(
+        "Babbage→Conway HFC: {} blocks, {} txs, {} phase1_rejected, eras={:?}",
+        agg.blocks_applied, agg.total_tx, agg.total_phase1_rejected, agg.eras_seen
+    );
+    assert!(agg.blocks_applied > 0);
+    assert_eq!(
+        agg.total_phase1_rejected, 0,
+        "Babbage→Conway HFC composer must produce 0 rejections ({} / {})",
+        agg.total_phase1_rejected,
+        agg.total_tx,
+    );
+}
+
+#[test]
+fn all_plutus_boundaries_aggregate_zero_rejections() {
+    // Aggregate gate: across every Plutus-era boundary we have corpus for,
+    // the composer must produce 0 rejections. This is the strongest
+    // signal we have today that the composer is mainnet-correct — if any
+    // future change introduces a false positive anywhere in the corpus,
+    // the aggregate count diverges from 0 and this test catches it.
+    let cases = [
+        ("snapshot_39916975.tar.gz", "mary_alonzo"),
+        ("snapshot_40348902.tar.gz", "alonzo_epoch291"),
+        ("snapshot_72316896.tar.gz", "alonzo_babbage"),
+        ("snapshot_72748820.tar.gz", "babbage_epoch366"),
+        ("snapshot_133660855.tar.gz", "babbage_conway"),
+        ("snapshot_134092810.tar.gz", "conway_epoch508"),
+    ];
+
+    let mut total_blocks = 0usize;
+    let mut total_txs = 0u64;
+    let mut total_rejected = 0u64;
+    let mut skipped: Vec<&str> = Vec::new();
+
+    eprintln!("\n=== All Plutus-Era Boundaries — Composer Rejection Audit ===");
+    eprintln!("{:<22} {:>7} {:>7} {:>9}", "Boundary", "Blocks", "Txs", "Rejected");
+    eprintln!("{}", "-".repeat(48));
+
+    for (snap, subdir) in &cases {
+        match replay_with_verdict_aggregation(snap, subdir) {
+            Some(agg) => {
+                eprintln!(
+                    "{:<22} {:>7} {:>7} {:>9}",
+                    subdir, agg.blocks_applied, agg.total_tx, agg.total_phase1_rejected
+                );
+                total_blocks += agg.blocks_applied;
+                total_txs += agg.total_tx;
+                total_rejected += agg.total_phase1_rejected;
+            }
+            None => skipped.push(subdir),
+        }
+    }
+    eprintln!("{}", "-".repeat(48));
+    eprintln!("{:<22} {:>7} {:>7} {:>9}", "TOTAL", total_blocks, total_txs, total_rejected);
+    if !skipped.is_empty() {
+        eprintln!("Skipped (missing corpus): {skipped:?}");
+    }
+    eprintln!();
+
+    assert!(
+        total_blocks > 0,
+        "aggregate must exercise at least one boundary",
+    );
+    assert_eq!(
+        total_rejected, 0,
+        "aggregate composer rejection count must be 0 across all Plutus-era \
+         boundaries ({total_rejected} rejected across {total_txs} txs, \
+         {total_blocks} blocks)",
+    );
 }
 
 #[test]
