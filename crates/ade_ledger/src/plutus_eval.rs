@@ -63,14 +63,30 @@ pub enum PlutusEvalOutcome {
 /// Assemble a full Alonzo+ transaction CBOR from body + witness slices.
 ///
 /// Wire format: `[body, witness_set, is_valid(true), aux_data(null)]`
-/// — a 4-element definite-length array.
+/// — a 4-element definite-length array. Uses `assemble_full_tx_with` for
+/// callers who need non-default `is_valid` / `aux_data`.
 pub fn assemble_full_tx_cbor(body_bytes: &[u8], witness_bytes: &[u8]) -> Vec<u8> {
-    let mut buf = Vec::with_capacity(body_bytes.len() + witness_bytes.len() + 3);
+    assemble_full_tx_with(body_bytes, witness_bytes, true, None)
+}
+
+/// Full-tx wrapper with explicit `is_valid` flag and optional aux_data
+/// CBOR bytes (use `None` for `null`).
+pub fn assemble_full_tx_with(
+    body_bytes: &[u8],
+    witness_bytes: &[u8],
+    is_valid: bool,
+    aux_data_cbor: Option<&[u8]>,
+) -> Vec<u8> {
+    let aux_len = aux_data_cbor.map(|a| a.len()).unwrap_or(1);
+    let mut buf = Vec::with_capacity(body_bytes.len() + witness_bytes.len() + 2 + aux_len);
     buf.push(0x84); // array(4)
     buf.extend_from_slice(body_bytes);
     buf.extend_from_slice(witness_bytes);
-    buf.push(0xf5); // is_valid = true
-    buf.push(0xf6); // aux_data = null
+    buf.push(if is_valid { 0xf5 } else { 0xf4 });
+    match aux_data_cbor {
+        Some(bytes) => buf.extend_from_slice(bytes),
+        None => buf.push(0xf6), // null
+    }
     buf
 }
 
