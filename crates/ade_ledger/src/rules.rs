@@ -206,6 +206,7 @@ pub fn apply_block_with_verdicts(
             new_state,
             verdict,
             tx_verdicts: Vec::new(),
+            invalid_tx_indices: std::collections::BTreeSet::new(),
         });
     }
 
@@ -224,6 +225,7 @@ pub fn apply_block_with_verdicts(
                 new_state,
                 verdict,
                 tx_verdicts: Vec::new(),
+                invalid_tx_indices: std::collections::BTreeSet::new(),
             });
         }
     };
@@ -282,6 +284,10 @@ fn apply_shelley_era_block_with_verdicts(
     let mut epoch_state = current_state.epoch_state;
     epoch_state.slot = slot;
 
+    let invalid_tx_indices = crate::plutus_eval::decode_invalid_tx_indices(
+        block.invalid_txs.as_deref(),
+    );
+
     Ok(BlockApplyResult {
         new_state: LedgerState {
             utxo_state,
@@ -295,6 +301,7 @@ fn apply_shelley_era_block_with_verdicts(
         },
         verdict,
         tx_verdicts,
+        invalid_tx_indices,
     })
 }
 
@@ -1523,6 +1530,13 @@ pub struct BlockApplyResult {
     /// track_utxo=false), since per-tx classification only runs when
     /// the state-backed composer runs.
     pub tx_verdicts: Vec<TxVerdict>,
+    /// Tx indices in the block's `invalid_transactions` field
+    /// (Alonzo+). Empty for pre-Alonzo blocks (field doesn't exist)
+    /// or blocks with no invalid txs. A tx at index `i` is a phase-2
+    /// failure (is_valid=false) iff `i` is in this set.
+    /// Exposed so oracle-diff harnesses can cross-reference our Plutus
+    /// verdicts against the chain's ground truth.
+    pub invalid_tx_indices: std::collections::BTreeSet<u64>,
 }
 
 /// Block-level structural verdict from applying a post-Byron block.

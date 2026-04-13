@@ -54,6 +54,21 @@ struct OutcomeTally {
     // Aggregate cpu / mem across all PlutusPassed txs.
     total_plutus_cpu: i128,
     total_plutus_mem: i128,
+    // Oracle agreement on Plutus verdicts — cross-referenced against
+    // the block's `invalid_transactions` field.
+    //
+    //   agreed_pass  = our PlutusPassed AND tx_idx NOT in invalid_txs (chain accepted, we accept)
+    //   agreed_fail  = our PlutusFailed AND tx_idx IN invalid_txs     (chain phase-2-fail, we fail)
+    //   diverge_pass = our PlutusPassed AND tx_idx IN invalid_txs     (chain said invalid, we passed — BUG)
+    //   diverge_fail = our PlutusFailed AND tx_idx NOT in invalid_txs (chain said valid, we failed — BUG)
+    oracle_agreed_pass: usize,
+    oracle_agreed_fail: usize,
+    oracle_diverge_pass: usize,
+    oracle_diverge_fail: usize,
+    /// Reasons (aiken error strings) for each divergent failure — only
+    /// populated when our evaluator failed but the chain accepted.
+    /// These are the real-bug candidates worth investigating.
+    diverge_fail_reasons: Vec<String>,
     // Block limit hit (for debugging — stops when apply_block fails).
     first_apply_error: Option<String>,
 }
@@ -111,7 +126,9 @@ fn replay_contiguous(
             Ok(result) => {
                 tally.blocks_applied += 1;
                 tally.total_tx_verdicts += result.tx_verdicts.len();
+                let invalid = &result.invalid_tx_indices;
                 for v in &result.tx_verdicts {
+                    let is_oracle_invalid = invalid.contains(&(v.tx_index as u64));
                     match &v.outcome {
                         TxOutcome::Passed => tally.passed += 1,
                         TxOutcome::InputsUnresolved => tally.inputs_unresolved += 1,
@@ -122,8 +139,24 @@ fn replay_contiguous(
                                 tally.total_plutus_cpu.saturating_add(*cpu as i128);
                             tally.total_plutus_mem =
                                 tally.total_plutus_mem.saturating_add(*mem as i128);
+                            if is_oracle_invalid {
+                                tally.oracle_diverge_pass += 1;
+                            } else {
+                                tally.oracle_agreed_pass += 1;
+                            }
                         }
-                        TxOutcome::PlutusFailed { .. } => tally.plutus_failed += 1,
+                        TxOutcome::PlutusFailed { reason } => {
+                            tally.plutus_failed += 1;
+                            if is_oracle_invalid {
+                                tally.oracle_agreed_fail += 1;
+                            } else {
+                                tally.oracle_diverge_fail += 1;
+                                tally.diverge_fail_reasons.push(format!(
+                                    "tx#{}: {}",
+                                    v.tx_index, reason,
+                                ));
+                            }
+                        }
                         TxOutcome::PlutusIneligible => tally.plutus_ineligible += 1,
                         TxOutcome::Skipped => {}
                     }
@@ -142,7 +175,7 @@ fn replay_contiguous(
 
 fn print_tally(label: &str, t: &OutcomeTally) {
     eprintln!(
-        "\n=== {label} ===\n  blocks={}  tx_verdicts={}\n  Passed={}  Inputs-unresolved={}  Phase1-rejected={}\n  Plutus-passed={}  Plutus-failed={}  Plutus-ineligible={}\n  Sum(Plutus cpu)={}  Sum(Plutus mem)={}",
+        "\n=== {label} ===\n  blocks={}  tx_verdicts={}\n  Passed={}  Inputs-unresolved={}  Phase1-rejected={}\n  Plutus-passed={}  Plutus-failed={}  Plutus-ineligible={}\n  Oracle-agree(pass/fail)={}/{}  Oracle-DIVERGE(pass/fail)={}/{}\n  Sum(Plutus cpu)={}  Sum(Plutus mem)={}",
         t.blocks_applied,
         t.total_tx_verdicts,
         t.passed,
@@ -151,11 +184,21 @@ fn print_tally(label: &str, t: &OutcomeTally) {
         t.plutus_passed,
         t.plutus_failed,
         t.plutus_ineligible,
+        t.oracle_agreed_pass,
+        t.oracle_agreed_fail,
+        t.oracle_diverge_pass,
+        t.oracle_diverge_fail,
         t.total_plutus_cpu,
         t.total_plutus_mem,
     );
     if let Some(ref e) = t.first_apply_error {
         eprintln!("  NOTE: replay stopped — {e}");
+    }
+    if !t.diverge_fail_reasons.is_empty() {
+        eprintln!("  Divergent-fail reasons (our fail, chain accept):");
+        for r in &t.diverge_fail_reasons {
+            eprintln!("    - {r}");
+        }
     }
 }
 
@@ -207,6 +250,38 @@ fn plutus_era_contiguous_smoke() {
         any_plutus,
         "no Plutus evals fired across contiguous replay — wire-in broken?",
     );
+
+    // Gate 3: oracle agreement on Plutus verdicts.
+    //   - diverge_pass = our PASS but chain FAIL → hard bug (we accept what
+    //                    the chain rejects as phase-2). Zero tolerance.
+    //   - diverge_fail = our FAIL but chain PASS → informational for now;
+    //                    known sources: PV11 builtins we don't yet cover,
+    //                    cost-model coefficient drift after governance
+    //                    updates, aiken-upstream bugs we inherit.
+    //                    Characterized but not gated — the reasons are
+    //                    printed so a human can triage.
+    let diverge_pass: usize = aggregated
+        .values()
+        .map(|t| t.oracle_diverge_pass)
+        .sum();
+    let diverge_fail: usize = aggregated
+        .values()
+        .map(|t| t.oracle_diverge_fail)
+        .sum();
+
+    assert_eq!(
+        diverge_pass, 0,
+        "Plutus verdict: our PASS, chain FAIL — hard bug (we accepted a tx \
+         the chain treated as phase-2 invalid)",
+    );
+
+    if diverge_fail > 0 {
+        eprintln!(
+            "\n[TRIAGE] {diverge_fail} txs failed in our evaluator but chain \
+             accepted. Reasons printed per-era above. Likely causes: PV11 \
+             builtins, cost-model drift, aiken upstream. Not gated."
+        );
+    }
 }
 
 /// Full 1,500-block replay per Plutus era. Slow (many minutes per era).

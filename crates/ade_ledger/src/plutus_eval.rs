@@ -38,6 +38,51 @@ use ade_types::CardanoEra;
 
 use crate::utxo::TxOut;
 
+/// Decode the block's `invalid_transactions` CBOR (Alonzo+ field) into
+/// the set of tx indices flagged `is_valid=false`.
+///
+/// Cardano semantics: a tx at index `i` in the block's `tx_bodies`
+/// array has `is_valid=false` iff `i ∈ invalid_transactions`. Those txs
+/// are phase-2 failures by design — they're expected to have Plutus
+/// scripts fail, get included in the block, and consume collateral.
+///
+/// Returns an empty set for pre-Alonzo eras (no `invalid_transactions`
+/// field) or when the field is absent. Malformed CBOR returns empty
+/// rather than erroring — this is a diagnostic helper, not a hard
+/// validation path.
+pub fn decode_invalid_tx_indices(invalid_txs_cbor: Option<&[u8]>) -> BTreeSet<u64> {
+    use ade_codec::cbor::{self, ContainerEncoding};
+    let bytes = match invalid_txs_cbor {
+        Some(b) if !b.is_empty() => b,
+        _ => return BTreeSet::new(),
+    };
+    let mut offset = 0;
+    let enc = match cbor::read_array_header(bytes, &mut offset) {
+        Ok(e) => e,
+        Err(_) => return BTreeSet::new(),
+    };
+    let mut out = BTreeSet::new();
+    match enc {
+        ContainerEncoding::Definite(n, _) => {
+            for _ in 0..n {
+                if let Ok((v, _)) = cbor::read_uint(bytes, &mut offset) {
+                    out.insert(v);
+                }
+            }
+        }
+        ContainerEncoding::Indefinite => {
+            while !cbor::is_break(bytes, offset).unwrap_or(true) {
+                if let Ok((v, _)) = cbor::read_uint(bytes, &mut offset) {
+                    out.insert(v);
+                } else {
+                    break;
+                }
+            }
+        }
+    }
+    out
+}
+
 /// Outcome of attempting to evaluate a single Plutus tx.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum PlutusEvalOutcome {
