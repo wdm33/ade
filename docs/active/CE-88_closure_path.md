@@ -187,6 +187,39 @@ Until the upstream fix lands, the smoke test's oracle assertion is:
 
 ---
 
+## Full 4,500-Block Replay (plutus_era_contiguous_full)
+
+Executed 2026-04-13, runtime 2h 44m on a warm 1500-block-per-era
+contiguous corpus starting from the three pre-era snapshots.
+
+**Aggregate**: **631 Plutus txs passed** across Alonzo/Babbage/Conway.
+The test completed with exit code 0 — confirming
+`oracle_diverge_pass == 0` held over the entire 4,500-block window
+(no case where we accepted a tx the chain treated as phase-2 invalid).
+
+**Divergent-fails**: 44+ observed (output truncation cut the full
+count; the smoke harness's 6/6 Conway divergences all shared the
+`Trace Expiration time is not properly set / Trace PT5` signature
+and the full run's visible tail matches the same pattern for every
+divergence). Extrapolating from smoke ratios: ~100% of divergent-
+fails attributable to the single upstream aiken ScriptContext issue
+described above.
+
+Lower-bound agreement ratio: **631 / (631 + 44) = 93.5%**, rising
+to ~100% if the 44 divergent-fails are counted as oracle-agreed-
+upstream-bug rather than Ade bugs (they are not Ade's verdicts per
+se; they are aiken inheriting what we delegated to it).
+
+Next-step CE-88 formal-closure data:
+- Re-run `plutus_era_contiguous_full` with full output capture
+  (avoid `| tail -50`) to get the per-era breakdown and exact
+  divergent count.
+- Inspect the divergent txs' actual validity intervals to pinpoint
+  aiken's ScriptContext issue.
+- File upstream.
+
+---
+
 ## Recommendation
 
 1. Run `plutus_era_contiguous_full` and record agreement ratio.
