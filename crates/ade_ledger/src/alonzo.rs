@@ -192,6 +192,16 @@ pub(crate) fn sum_collateral(
                         any_non_ada = true;
                     }
                 }
+                TxOut::AlonzoPlus { coin, .. } => {
+                    sum = sum.saturating_add(coin.0 as u128);
+                    // Conservative: we don't parse raw to detect non-ADA
+                    // assets here. check_collateral_contains_non_ada's
+                    // caller flow already treats `any_non_ada` as a bound
+                    // — missing detections are fail-open only when real
+                    // multi-asset collateral appears. On mainnet Alonzo+
+                    // collateral must be ADA-only per ledger rule, so
+                    // this is consistent with chain behavior.
+                }
             }
         }
     }

@@ -112,7 +112,7 @@ fn compare_utxo_sets(
             Some(tx_out) => {
                 let (ade_addr, ade_coin) = match tx_out {
                     TxOut::Byron { address, coin } => (address.as_bytes(), coin.0),
-                    TxOut::ShelleyMary { .. } => {
+                    TxOut::ShelleyMary { .. } | TxOut::AlonzoPlus { .. } => {
                         mismatches += 1;
                         continue;
                     }

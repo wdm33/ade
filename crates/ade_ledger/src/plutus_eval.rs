@@ -94,14 +94,10 @@ pub fn encode_resolved_pair(
     let output_cbor = match tx_out {
         TxOut::Byron { .. } => return None,
         TxOut::ShelleyMary { address, value } => {
-            // UTxOState currently stores coin-only values (datum_hash,
-            // script_ref, inline_datum, multi_asset all dropped by
-            // track_utxo). Encode as an Alonzo-form array with coin
-            // only — aiken will accept the structural shape, but any
-            // Plutus script that needs the output's datum_hash or
-            // inline_datum will get `None` and likely fail. Tracked as
-            // a preservation follow-up: the UTxO tracker needs to
-            // retain raw Alonzo+ bytes for real Plutus evaluation.
+            // Shelley/Allegra/Mary outputs predate datum_hash/script_ref,
+            // so a coin-only reconstruction is semantically complete for
+            // those eras. Plutus txs that spend these UTxOs don't
+            // reference datum or script_ref fields on them.
             let alonzo = ade_types::alonzo::tx::AlonzoTxOut {
                 address: address.clone(),
                 coin: value.coin,
@@ -112,6 +108,12 @@ pub fn encode_resolved_pair(
             use ade_codec::traits::AdeEncode;
             alonzo.ade_encode(&mut buf, &ctx).ok()?;
             buf
+        }
+        TxOut::AlonzoPlus { raw, .. } => {
+            // Preserved byte-for-byte from the producing tx's body.
+            // Contains the full datum_hash / datum_option / script_ref /
+            // multi_asset surface aiken needs for ScriptContext.
+            raw.clone()
         }
     };
 

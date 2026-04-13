@@ -143,6 +143,7 @@ pub fn apply_phase_2_failure(
         let coin = match out {
             TxOut::Byron { coin, .. } => coin.0,
             TxOut::ShelleyMary { value, .. } => value.coin.0,
+            TxOut::AlonzoPlus { coin, .. } => coin.0,
         };
         sum_collateral = sum_collateral.saturating_add(coin);
     }
@@ -151,6 +152,7 @@ pub fn apply_phase_2_failure(
         .map(|(_, o)| match o {
             TxOut::Byron { coin, .. } => coin.0,
             TxOut::ShelleyMary { value, .. } => value.coin.0,
+            TxOut::AlonzoPlus { coin, .. } => coin.0,
         })
         .unwrap_or(0);
     let computed_credit = sum_collateral.saturating_sub(return_coin);

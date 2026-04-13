@@ -55,6 +55,7 @@ struct CompositeVerdict {
     total_phase1_rejected: u64,
     total_plutus_eval_passed: u64,
     total_plutus_eval_failed: u64,
+    total_plutus_eval_ineligible: u64,
     eras_seen: Vec<CardanoEra>,
 }
 
@@ -93,6 +94,7 @@ fn replay_with_verdict_aggregation(
         total_phase1_rejected: 0,
         total_plutus_eval_passed: 0,
         total_plutus_eval_failed: 0,
+        total_plutus_eval_ineligible: 0,
         eras_seen: Vec::new(),
     };
 
@@ -118,6 +120,7 @@ fn replay_with_verdict_aggregation(
                 agg.total_phase1_rejected += verdict.state_backed_phase1_rejected;
                 agg.total_plutus_eval_passed += verdict.plutus_eval_passed;
                 agg.total_plutus_eval_failed += verdict.plutus_eval_failed;
+                agg.total_plutus_eval_ineligible += verdict.plutus_eval_ineligible;
                 if !agg.eras_seen.contains(&env.era) {
                     agg.eras_seen.push(env.era);
                 }
@@ -353,10 +356,10 @@ fn plutus_evaluator_reachable_on_corpus() {
 
     eprintln!("\n=== Plutus Evaluator Reachability ===");
     eprintln!(
-        "{:<22} {:>7} {:>9} {:>9} {:>9}",
-        "Boundary", "Txs", "P1-rej", "Eval-ok", "Eval-err"
+        "{:<22} {:>7} {:>9} {:>9} {:>9} {:>11}",
+        "Boundary", "Txs", "P1-rej", "Eval-ok", "Eval-err", "Ineligible"
     );
-    eprintln!("{}", "-".repeat(58));
+    eprintln!("{}", "-".repeat(70));
 
     let mut saw_any_plutus_attempt = false;
     for (snap, subdir) in &cases {
@@ -364,12 +367,13 @@ fn plutus_evaluator_reachable_on_corpus() {
             continue;
         };
         eprintln!(
-            "{:<22} {:>7} {:>9} {:>9} {:>9}",
+            "{:<22} {:>7} {:>9} {:>9} {:>9} {:>11}",
             subdir,
             agg.total_tx,
             agg.total_phase1_rejected,
             agg.total_plutus_eval_passed,
             agg.total_plutus_eval_failed,
+            agg.total_plutus_eval_ineligible,
         );
         // Counter sanity: pass + fail ≤ tx_count (Ineligible txs not counted).
         assert!(
@@ -377,23 +381,26 @@ fn plutus_evaluator_reachable_on_corpus() {
                 <= agg.total_tx,
             "eval counters exceed tx count in {subdir}",
         );
-        if agg.total_plutus_eval_passed + agg.total_plutus_eval_failed > 0 {
+        if agg.total_plutus_eval_passed
+            + agg.total_plutus_eval_failed
+            + agg.total_plutus_eval_ineligible
+            > 0
+        {
             saw_any_plutus_attempt = true;
         }
     }
     eprintln!();
 
-    // Sanity: across the three Plutus-era boundaries, we should have
-    // attempted at least SOME Plutus evaluations (even if most fail due
-    // to the UTxO preservation gap). If zero attempts, the wire-in isn't
-    // actually firing.
-    if !saw_any_plutus_attempt {
-        eprintln!(
-            "NOTE: no Plutus-eval attempts registered. This is expected \
-             when the boundary-block UTxO window doesn't contain any \
-             Plutus-script-invoking tx whose inputs fully resolve."
-        );
-    }
+    // The wire-in must identify Plutus txs even when their inputs predate
+    // the replay window (classified as Ineligible). If this assertion
+    // fires, the pipeline isn't reaching the Plutus-eval dispatch at all.
+    assert!(
+        saw_any_plutus_attempt,
+        "Plutus-eval wire-in must fire on Plutus txs. If zero across all \
+         three boundaries, the dispatch is broken (should at minimum see \
+         Ineligible counts from Babbage e366, which has ~60 Plutus txs \
+         whose inputs predate the snapshot).",
+    );
 }
 
 #[test]

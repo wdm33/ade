@@ -427,6 +427,20 @@ fn write_tx_out(buf: &mut Vec<u8>, tx_out: &TxOut) {
             write_bytes_canonical(buf, address);
             write_value(buf, value);
         }
+        TxOut::AlonzoPlus { raw, address, coin } => {
+            // Fingerprint: tag 2 + address + coin + raw-len + raw.
+            // Including raw makes the fingerprint sensitive to
+            // datum_hash / datum_option / script_ref changes — a
+            // Plutus tx writing a new script-ref is now distinguishable
+            // from one that doesn't, which is the whole point of
+            // preserving the raw bytes.
+            write_array_canonical(buf, 5);
+            write_uint_canonical(buf, 2); // variant tag
+            write_bytes_canonical(buf, address);
+            write_coin(buf, *coin);
+            write_uint_canonical(buf, raw.len() as u64);
+            buf.extend_from_slice(raw);
+        }
     }
 }
 

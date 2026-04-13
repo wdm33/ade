@@ -126,6 +126,7 @@ fn resolve_mary_inputs(
         let out_value = match &tx_out {
             TxOut::Byron { coin, .. } => Value::from_coin(*coin),
             TxOut::ShelleyMary { value, .. } => value.clone(),
+            TxOut::AlonzoPlus { coin, .. } => Value::from_coin(*coin),
         };
         consumed = value::value_add(&consumed, &out_value)?;
         state = new_state;

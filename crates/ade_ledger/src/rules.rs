@@ -142,7 +142,7 @@ pub fn apply_block_classified(
     match era {
         CardanoEra::ByronEbb => Ok((
             state.clone(),
-            BlockVerdict { tx_count: 0, plutus_deferred_count: 0, non_plutus_count: 0, native_script_passed: 0, native_script_failed: 0, state_backed_phase1_rejected: 0, plutus_eval_passed: 0, plutus_eval_failed: 0 },
+            BlockVerdict { tx_count: 0, plutus_deferred_count: 0, non_plutus_count: 0, native_script_passed: 0, native_script_failed: 0, state_backed_phase1_rejected: 0, plutus_eval_passed: 0, plutus_eval_failed: 0, plutus_eval_ineligible: 0 },
         )),
         CardanoEra::ByronRegular => {
             let preserved = byron::decode_byron_regular_block(block_cbor)?;
@@ -150,7 +150,7 @@ pub fn apply_block_classified(
             let new_state = crate::byron::validate_byron_block(state, block)?;
             Ok((
                 new_state,
-                BlockVerdict { tx_count: 0, plutus_deferred_count: 0, non_plutus_count: 0, native_script_passed: 0, native_script_failed: 0, state_backed_phase1_rejected: 0, plutus_eval_passed: 0, plutus_eval_failed: 0 },
+                BlockVerdict { tx_count: 0, plutus_deferred_count: 0, non_plutus_count: 0, native_script_passed: 0, native_script_failed: 0, state_backed_phase1_rejected: 0, plutus_eval_passed: 0, plutus_eval_failed: 0, plutus_eval_ineligible: 0 },
             ))
         }
         _ => {
@@ -166,6 +166,7 @@ pub fn apply_block_classified(
                     native_script_passed: 0, native_script_failed: 0,
                     state_backed_phase1_rejected: 0,
                     plutus_eval_passed: 0, plutus_eval_failed: 0,
+                    plutus_eval_ineligible: 0,
                 })),
             };
             let block = decoded.decoded();
@@ -223,6 +224,7 @@ fn apply_shelley_era_block_classified(
         verdict.state_backed_phase1_rejected = stats.rejected;
         verdict.plutus_eval_passed = stats.plutus_eval_passed;
         verdict.plutus_eval_failed = stats.plutus_eval_failed;
+        verdict.plutus_eval_ineligible = stats.plutus_eval_ineligible;
     }
 
     // Process certificates to accumulate delegation/pool state.
@@ -1187,6 +1189,60 @@ fn process_block_certificates(
     Ok(cert_state)
 }
 
+/// Locate per-output byte slices in an already-parsed Alonzo+ tx body.
+///
+/// Re-walks the body CBOR to find map key 1 (outputs) and returns the
+/// start/end offsets of each output within `body_bytes`. Used to
+/// preserve raw output CBOR in `TxOut::AlonzoPlus` — the structured
+/// decoder already returned the outputs as parsed values, but aiken's
+/// Plutus ScriptContext construction needs the byte-identical wire form.
+fn locate_alonzo_plus_output_slices(
+    body_bytes: &[u8],
+) -> Result<Vec<(usize, usize)>, LedgerError> {
+    let mut off = 0;
+    let enc = cbor::read_map_header(body_bytes, &mut off)?;
+    let map_len = match enc {
+        cbor::ContainerEncoding::Definite(n, _) => n,
+        cbor::ContainerEncoding::Indefinite => {
+            return Err(ade_codec::error::CodecError::InvalidCborStructure {
+                offset: 0,
+                detail: "Alonzo+ tx body must be definite-length map",
+            }
+            .into());
+        }
+    };
+
+    let mut slices: Vec<(usize, usize)> = Vec::new();
+    for _ in 0..map_len {
+        let (key, _) = cbor::read_uint(body_bytes, &mut off)?;
+        if key == 1 {
+            // outputs array — slice each element.
+            let arr_enc = cbor::read_array_header(body_bytes, &mut off)?;
+            match arr_enc {
+                cbor::ContainerEncoding::Definite(n, _) => {
+                    for _ in 0..n {
+                        let start = off;
+                        let _ = cbor::skip_item(body_bytes, &mut off)?;
+                        slices.push((start, off));
+                    }
+                }
+                cbor::ContainerEncoding::Indefinite => {
+                    while !cbor::is_break(body_bytes, off)? {
+                        let start = off;
+                        let _ = cbor::skip_item(body_bytes, &mut off)?;
+                        slices.push((start, off));
+                    }
+                    off += 1; // consume break
+                }
+            }
+            // Keep scanning — we've captured the outputs; skip other keys.
+            continue;
+        }
+        let _ = cbor::skip_item(body_bytes, &mut off)?;
+    }
+    Ok(slices)
+}
+
 /// Extract inputs and outputs from a decoded tx body.
 fn extract_inputs_outputs_from_tx(
     data: &[u8],
@@ -1222,30 +1278,60 @@ fn extract_inputs_outputs_from_tx(
             Ok((inputs, outputs))
         }
         CardanoEra::Alonzo => {
+            let body_start = *offset;
             let tx = ade_codec::alonzo::tx::decode_alonzo_tx_body(data, offset)?;
+            let body_end = *offset;
+            let body_bytes = &data[body_start..body_end];
+            let slices = locate_alonzo_plus_output_slices(body_bytes)?;
             let inputs: Vec<_> = tx.inputs.into_iter().collect();
-            let outputs = tx.outputs.into_iter().map(|o| crate::utxo::TxOut::ShelleyMary {
-                address: o.address,
-                value: crate::value::Value::from_coin(o.coin),
-            }).collect();
+            let outputs = tx
+                .outputs
+                .into_iter()
+                .zip(slices.into_iter())
+                .map(|(o, (s, e))| crate::utxo::TxOut::AlonzoPlus {
+                    raw: body_bytes[s..e].to_vec(),
+                    address: o.address,
+                    coin: o.coin,
+                })
+                .collect();
             Ok((inputs, outputs))
         }
         CardanoEra::Babbage => {
+            let body_start = *offset;
             let tx = ade_codec::babbage::tx::decode_babbage_tx_body(data, offset)?;
+            let body_end = *offset;
+            let body_bytes = &data[body_start..body_end];
+            let slices = locate_alonzo_plus_output_slices(body_bytes)?;
             let inputs: Vec<_> = tx.inputs.into_iter().collect();
-            let outputs = tx.outputs.into_iter().map(|o| crate::utxo::TxOut::ShelleyMary {
-                address: o.address,
-                value: crate::value::Value::from_coin(o.coin),
-            }).collect();
+            let outputs = tx
+                .outputs
+                .into_iter()
+                .zip(slices.into_iter())
+                .map(|(o, (s, e))| crate::utxo::TxOut::AlonzoPlus {
+                    raw: body_bytes[s..e].to_vec(),
+                    address: o.address,
+                    coin: o.coin,
+                })
+                .collect();
             Ok((inputs, outputs))
         }
         CardanoEra::Conway => {
+            let body_start = *offset;
             let tx = ade_codec::conway::tx::decode_conway_tx_body(data, offset)?;
+            let body_end = *offset;
+            let body_bytes = &data[body_start..body_end];
+            let slices = locate_alonzo_plus_output_slices(body_bytes)?;
             let inputs: Vec<_> = tx.inputs.into_iter().collect();
-            let outputs = tx.outputs.into_iter().map(|o| crate::utxo::TxOut::ShelleyMary {
-                address: o.address,
-                value: crate::value::Value::from_coin(o.coin),
-            }).collect();
+            let outputs = tx
+                .outputs
+                .into_iter()
+                .zip(slices.into_iter())
+                .map(|(o, (s, e))| crate::utxo::TxOut::AlonzoPlus {
+                    raw: body_bytes[s..e].to_vec(),
+                    address: o.address,
+                    coin: o.coin,
+                })
+                .collect();
             Ok((inputs, outputs))
         }
         _ => {
@@ -1288,6 +1374,12 @@ pub struct BlockVerdict {
     /// reaches the evaluator" contract — anything here is reported to
     /// downstream consumers instead of being deferred.
     pub plutus_eval_failed: u64,
+    /// Plutus-carrying txs that couldn't be evaluated because at least
+    /// one input / collateral / reference input didn't resolve in the
+    /// pre-block UTxO. Diagnostic surface: a positive count here means
+    /// the pipeline CAN see Plutus txs but the UTxO window doesn't hold
+    /// their predecessors.
+    pub plutus_eval_ineligible: u64,
 }
 
 /// Decode and structurally validate all transaction bodies from a post-Byron block.
@@ -1309,6 +1401,7 @@ fn decode_validate_tx_bodies(
             state_backed_phase1_rejected: 0,
             plutus_eval_passed: 0,
             plutus_eval_failed: 0,
+            plutus_eval_ineligible: 0,
         });
     }
 
@@ -1408,6 +1501,7 @@ fn decode_validate_tx_bodies(
         state_backed_phase1_rejected: 0,
         plutus_eval_passed: 0,
         plutus_eval_failed: 0,
+        plutus_eval_ineligible: 0,
     })
 }
 
@@ -1500,6 +1594,7 @@ pub(crate) struct ComposerStats {
     pub rejected: u64,
     pub plutus_eval_passed: u64,
     pub plutus_eval_failed: u64,
+    pub plutus_eval_ineligible: u64,
 }
 
 /// Walk the block's tx bodies + witness sets in parallel, invoking the
@@ -1615,8 +1710,7 @@ fn run_phase_one_composers(
         match phase_one_result {
             Ok(()) => {
                 // Phase-1 passed. Try Plutus eval if the tx carries any
-                // Plutus script. The call short-circuits to Ineligible
-                // on missing resolved UTxO inputs, which we don't count.
+                // Plutus script.
                 if wi.has_plutus() {
                     let outcome = crate::plutus_eval::try_evaluate_tx(
                         &body_data[body_start..body_end],
@@ -1629,7 +1723,10 @@ fn run_phase_one_composers(
                         budget,
                     );
                     match outcome {
-                        crate::plutus_eval::PlutusEvalOutcome::Ineligible => {}
+                        crate::plutus_eval::PlutusEvalOutcome::Ineligible => {
+                            stats.plutus_eval_ineligible =
+                                stats.plutus_eval_ineligible.saturating_add(1);
+                        }
                         crate::plutus_eval::PlutusEvalOutcome::Passed { .. } => {
                             stats.plutus_eval_passed =
                                 stats.plutus_eval_passed.saturating_add(1);
@@ -1642,7 +1739,16 @@ fn run_phase_one_composers(
                 }
             }
             Err(crate::error::LedgerError::BadInputs(_)) => {
-                // Silent skip — replay-window policy.
+                // Silent skip for Phase-1 accounting (replay-window policy).
+                // For diagnostic accounting: if this was a Plutus tx, its
+                // unresolved inputs are also the reason we can't eval, so
+                // count it as plutus_eval_ineligible. This distinguishes
+                // "Plutus tx we never saw" from "Plutus tx we couldn't
+                // feed to aiken."
+                if wi.has_plutus() {
+                    stats.plutus_eval_ineligible =
+                        stats.plutus_eval_ineligible.saturating_add(1);
+                }
             }
             Err(_) => {
                 stats.rejected = stats.rejected.saturating_add(1);

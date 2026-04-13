@@ -18,6 +18,19 @@ pub enum TxOut {
     Byron { address: Address, coin: Coin },
     /// Shelley through Mary output: address + value (coin + optional multi-asset).
     ShelleyMary { address: Vec<u8>, value: Value },
+    /// Alonzo/Babbage/Conway output with byte-preserved wire form.
+    ///
+    /// `raw` holds the exact CBOR slice lifted from the tx body (array
+    /// form in Alonzo, array or map form in Babbage+, including any
+    /// datum_hash / datum_option / script_ref / multi_asset fields).
+    /// `address` and `coin` are extracted at construction for O(1)
+    /// access by existing match arms.
+    ///
+    /// Required by `ade_plutus` evaluation: aiken's ScriptContext
+    /// construction needs the full output CBOR (not a reconstruction),
+    /// otherwise scripts that read datum hashes / inline datums / script
+    /// refs from their inputs fail spuriously.
+    AlonzoPlus { raw: Vec<u8>, address: Vec<u8>, coin: Coin },
 }
 
 impl TxOut {
@@ -26,6 +39,7 @@ impl TxOut {
         match self {
             TxOut::Byron { coin, .. } => *coin,
             TxOut::ShelleyMary { value, .. } => value.coin,
+            TxOut::AlonzoPlus { coin, .. } => *coin,
         }
     }
 }

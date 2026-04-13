@@ -118,11 +118,11 @@ fn genesis_utxo_set_equality() {
             Some(tx_out) => {
                 let (ade_addr, ade_coin) = match tx_out {
                     TxOut::Byron { address, coin } => (address.as_bytes().to_vec(), coin.0),
-                    TxOut::ShelleyMary { .. } => {
+                    TxOut::ShelleyMary { .. } | TxOut::AlonzoPlus { .. } => {
                         mismatches += 1;
                         if first_mismatch.is_none() {
                             first_mismatch = Some(format!(
-                                "TxIn {:?}#{}: expected Byron TxOut, got ShelleyMary",
+                                "TxIn {:?}#{}: expected Byron TxOut, got post-Byron",
                                 tx_in.tx_hash, tx_in.index
                             ));
                         }
