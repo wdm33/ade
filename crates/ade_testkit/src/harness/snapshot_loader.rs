@@ -209,6 +209,20 @@ impl LoadedSnapshot {
             }
         }
 
+        // Parse Alonzo+ Plutus pparams from the snapshot. Pre-Alonzo returns
+        // all-None (shorter PP array) and the defaults set above stand.
+        if let Ok(plutus) = parse_alonzo_plutus_params(&self.raw_cbor) {
+            if let Some(v) = plutus.collateral_percent {
+                pp.collateral_percent = v;
+            }
+            if let Some(v) = plutus.max_tx_ex_units_mem {
+                pp.max_tx_ex_units_mem = v;
+            }
+            if let Some(v) = plutus.max_tx_ex_units_cpu {
+                pp.max_tx_ex_units_cpu = v;
+            }
+        }
+
         // Era/epoch-specific overrides from oracle (d is now from CBOR above)
         match era {
             ade_types::CardanoEra::Shelley => {
@@ -1566,6 +1580,119 @@ pub fn count_voting_delegations(
 /// PParams field 12 = decentralization = tag(30, [numerator, denominator])
 ///
 /// Returns (numerator, denominator) or None if not found/parseable.
+/// Parsed Alonzo+ Plutus pparams: `(collateral_percent, max_tx_ex_units_mem,
+/// max_tx_ex_units_cpu)`. Returned as `Option` fields — Shelley/Allegra/Mary
+/// snapshots don't carry these (shorter PParams array) and yield `None`.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct AlonzoPlutusParams {
+    pub collateral_percent: Option<u16>,
+    pub max_tx_ex_units_mem: Option<u64>,
+    pub max_tx_ex_units_cpu: Option<u64>,
+}
+
+/// Parse `(max_tx_ex_units, collateral_percent)` from a snapshot CBOR.
+///
+/// Navigates NES → EpochState → LedgerState → UTxOState → GovState →
+/// curPParams (same path as `parse_decentralization_param`), then reads
+/// positional PP fields:
+///   - PP[19] = `maxTxExUnits` = `[mem, steps]` (2-array of uints)
+///   - PP[22] = `collateralPercent` = uint
+///
+/// Pre-Alonzo PP arrays are shorter than 20 entries; we return `None` for
+/// fields that don't exist so the caller keeps its defaults.
+pub fn parse_alonzo_plutus_params(
+    state_cbor: &[u8],
+) -> Result<AlonzoPlutusParams, HarnessError> {
+    parse_alonzo_plutus_params_verbose(state_cbor, false)
+}
+
+/// Same as `parse_alonzo_plutus_params` but emits diagnostic traces when
+/// `trace=true`. Used by tests to localize navigation mismatches.
+pub fn parse_alonzo_plutus_params_verbose(
+    state_cbor: &[u8],
+    trace: bool,
+) -> Result<AlonzoPlutusParams, HarnessError> {
+    let off = navigate_to_nes(state_cbor)?;
+    let es = skip_nes_to_epoch_state(state_cbor, off)?;
+
+    // ES[0] = AccountState (skip)
+    let off = skip_cbor(state_cbor, es)?;
+
+    // ES[1] = LedgerState = array(2) [CertState, UTxOState]
+    let (ls_body, _) = read_array_header(state_cbor, off)?;
+
+    // LS[0] = CertState (skip)
+    let off = skip_cbor(state_cbor, ls_body)?;
+
+    // LS[1] = UTxOState = array(6) [UTxO, deposited, fees, GovState, IncrStake, donation]
+    let (utxo_body, _) = read_array_header(state_cbor, off)?;
+
+    // Skip UTxO[0..2] to reach UTxO[3] = GovState
+    let mut off = utxo_body;
+    for _ in 0..3 { off = skip_cbor(state_cbor, off)?; }
+
+    // GovState: array(5) for Shelley–Babbage, array(7) for Conway
+    let (gs_body, gs_len) = read_array_header(state_cbor, off)?;
+    if trace { eprintln!("[plutus-pp] gs_len={gs_len}"); }
+
+    // curPParams position: [2] for ShelleyGovState, [3] for ConwayGovState
+    let pp_index = if gs_len >= 7 { 3u32 } else { 2 };
+    let mut off = gs_body;
+    for _ in 0..pp_index { off = skip_cbor(state_cbor, off)?; }
+
+    // curPParams = array(N) where N depends on era
+    let (pp_body, pp_len) = read_array_header(state_cbor, off)?;
+    if trace { eprintln!("[plutus-pp] pp_len={pp_len}"); }
+
+    // Era-specific index map for maxTxExUnits and collateralPercent.
+    //   Alonzo pp_len=24:   includes d + extraEntropy → maxTxExUnits=19, coll=22
+    //   Babbage pp_len=22:  d + extraEntropy removed → maxTxExUnits=17, coll=20
+    //   Conway pp_len=31:   governance fields appended after coll → same as Babbage
+    // Pre-Alonzo pp_len < 22 → no Plutus params to read.
+    let (ex_idx, coll_idx) = match pp_len {
+        24 => (19usize, 22usize), // Alonzo
+        22 | 31 => (17usize, 20usize), // Babbage / Conway
+        _ => return Ok(AlonzoPlutusParams::default()), // pre-Alonzo or unknown era
+    };
+
+    let mut result = AlonzoPlutusParams::default();
+
+    // maxTxExUnits = array(2) [mem, steps]
+    if pp_len as usize > ex_idx {
+        let mut o = pp_body;
+        for _ in 0..ex_idx { o = skip_cbor(state_cbor, o)?; }
+        let maj = (state_cbor[o] >> 5) & 0x07;
+        if maj == 4 {
+            let (arr_body, _) = read_array_header(state_cbor, o)?;
+            let (next, mem) = read_uint(state_cbor, arr_body)?;
+            let (_, cpu) = read_uint(state_cbor, next)?;
+            result.max_tx_ex_units_mem = Some(mem);
+            result.max_tx_ex_units_cpu = Some(cpu);
+        } else if maj == 6 {
+            let (ex_body, _, _) = read_cbor_initial(state_cbor, o)?;
+            let (arr_body, _) = read_array_header(state_cbor, ex_body)?;
+            let (next, mem) = read_uint(state_cbor, arr_body)?;
+            let (_, cpu) = read_uint(state_cbor, next)?;
+            result.max_tx_ex_units_mem = Some(mem);
+            result.max_tx_ex_units_cpu = Some(cpu);
+        }
+    }
+
+    // collateralPercent = uint
+    if pp_len as usize > coll_idx {
+        let mut o = pp_body;
+        for _ in 0..coll_idx { o = skip_cbor(state_cbor, o)?; }
+        let maj = (state_cbor[o] >> 5) & 0x07;
+        if maj == 0 {
+            if let Ok((_, pct)) = read_uint(state_cbor, o) {
+                result.collateral_percent = Some(pct.min(u16::MAX as u64) as u16);
+            }
+        }
+    }
+
+    Ok(result)
+}
+
 pub fn parse_decentralization_param(
     state_cbor: &[u8],
 ) -> Result<(u64, u64), HarnessError> {

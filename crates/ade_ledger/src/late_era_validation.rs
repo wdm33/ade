@@ -342,6 +342,22 @@ pub fn check_address_network(address: &[u8], current: u8) -> Result<(), LedgerEr
         }));
     }
     let first = address[0];
+
+    // Byron bootstrap addresses have no network field. Haskell:
+    //   wrongNetwork (AddrBootstrap _) = Nothing
+    //   wrongNetwork (Addr net _ _)    = if net == myNet then Nothing else Just net
+    // Byron-address bytes (inside the outer CBOR bstr) begin with CBOR
+    // array headers like 0x82 / 0x83 — high nibble = 0x8. Shelley+ types
+    // use high nibbles 0x0–0x7 (base / pointer / enterprise / reward).
+    // Concretely: `type = (first >> 4)`, Byron bootstrap => type in {8, 9}.
+    // We treat the whole 0x8_ range as bootstrap (defensive: legacy Byron
+    // wire forms start with array headers and never legitimately collide
+    // with Shelley type codes, which are 0..=0xE with bit 7 = 1 reserved).
+    let addr_type_high = first >> 4;
+    if addr_type_high == 0x8 {
+        return Ok(());
+    }
+
     let network_nibble = first & 0x0f;
     if network_nibble == current {
         Ok(())

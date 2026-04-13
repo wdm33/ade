@@ -1395,6 +1395,89 @@ fn decode_validate_tx_bodies(
     })
 }
 
+/// Same as `run_phase_one_composers` but returns per-rejection error
+/// variant names (one entry per non-BadInputs failure). Used by
+/// diagnostic tests to characterize what the composer is catching.
+pub fn run_phase_one_composers_diagnostic(
+    block: &ade_types::shelley::block::ShelleyBlock,
+    era: CardanoEra,
+    state: &LedgerState,
+) -> Result<Vec<String>, LedgerError> {
+    if block.tx_count == 0 {
+        return Ok(Vec::new());
+    }
+    let witness_infos = crate::witness::decode_witness_infos(&block.witness_sets)?;
+
+    let mut body_offset = 0;
+    let body_data = &block.tx_bodies;
+    let body_enc = cbor::read_array_header(body_data, &mut body_offset)?;
+
+    let pp = &state.protocol_params;
+    let collateral_percent = pp.collateral_percent;
+    let current_network = pp.network_id;
+    let max_ex_units: (i64, i64) =
+        (pp.max_tx_ex_units_mem as i64, pp.max_tx_ex_units_cpu as i64);
+    let utxo = &state.utxo_state.utxos;
+
+    let mut rejections = Vec::new();
+    let mut tx_idx = 0usize;
+    let empty_wi = crate::witness::WitnessInfo {
+        available_key_hashes: std::collections::BTreeSet::new(),
+        native_scripts: Vec::new(),
+        has_plutus_v1: false,
+        has_plutus_v2: false,
+        has_plutus_v3: false,
+        total_ex_units: crate::witness::TotalExUnits { mem: 0, cpu: 0 },
+    };
+
+    let mut process_one = |data: &[u8], offset: &mut usize| -> Result<(), LedgerError> {
+        let wi = witness_infos.get(tx_idx).unwrap_or(&empty_wi);
+        let result = match era {
+            CardanoEra::Alonzo => {
+                let body = ade_codec::alonzo::tx::decode_alonzo_tx_body(data, offset)?;
+                crate::alonzo::validate_alonzo_state_backed(
+                    &body, utxo, wi, collateral_percent, current_network, max_ex_units,
+                )
+            }
+            CardanoEra::Babbage => {
+                let body = ade_codec::babbage::tx::decode_babbage_tx_body(data, offset)?;
+                crate::babbage::validate_babbage_state_backed(
+                    &body, utxo, wi, collateral_percent, current_network, max_ex_units,
+                )
+            }
+            CardanoEra::Conway => {
+                let body = ade_codec::conway::tx::decode_conway_tx_body(data, offset)?;
+                crate::conway::validate_conway_state_backed(
+                    &body, utxo, wi, collateral_percent, current_network,
+                    pp.protocol_major as u16, max_ex_units,
+                )
+            }
+            _ => Ok(()),
+        };
+        match result {
+            Ok(()) | Err(crate::error::LedgerError::BadInputs(_)) => {}
+            Err(e) => {
+                rejections.push(format!("tx#{tx_idx}: {e:?}"));
+            }
+        }
+        tx_idx += 1;
+        Ok(())
+    };
+
+    match body_enc {
+        cbor::ContainerEncoding::Definite(n, _) => {
+            for _ in 0..n { process_one(body_data, &mut body_offset)?; }
+        }
+        cbor::ContainerEncoding::Indefinite => {
+            while !cbor::is_break(body_data, body_offset)? {
+                process_one(body_data, &mut body_offset)?;
+            }
+        }
+    }
+
+    Ok(rejections)
+}
+
 /// Walk the block's tx bodies + witness sets in parallel, invoking the
 /// per-era state-backed composer against the pre-block UTxO. Returns the
 /// number of transactions rejected by the composer.

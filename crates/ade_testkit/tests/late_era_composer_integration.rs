@@ -238,6 +238,34 @@ fn conway_boundary_composer_does_not_spuriously_reject() {
 }
 
 #[test]
+fn diagnose_plutus_pparam_parse() {
+    // Prove the parser pulls epoch-specific values, not defaults.
+    for (label, snapshot) in [
+        ("Alonzo e291", "snapshot_40348902.tar.gz"),
+        ("Babbage e366", "snapshot_72748820.tar.gz"),
+        ("Conway e508", "snapshot_134092810.tar.gz"),
+        ("Mary e252", "snapshot_23500962.tar.gz"),
+    ] {
+        let path = snapshots_dir().join(snapshot);
+        if !path.exists() {
+            eprintln!("[skip] {label}: snapshot missing");
+            continue;
+        }
+        let snap = LoadedSnapshot::from_tarball(&path).unwrap();
+        let parsed = ade_testkit::harness::snapshot_loader::parse_alonzo_plutus_params(
+            &snap.raw_cbor,
+        )
+        .unwrap();
+        eprintln!(
+            "{label}: collateral_percent={:?}, max_tx_ex_mem={:?}, max_tx_ex_cpu={:?}",
+            parsed.collateral_percent,
+            parsed.max_tx_ex_units_mem,
+            parsed.max_tx_ex_units_cpu,
+        );
+    }
+}
+
+#[test]
 fn pre_alonzo_boundary_composer_not_invoked() {
     // Shelley/Allegra/Mary don't touch the Alonzo+ composer; the assertion
     // inside replay_with_verdict_aggregation is the per-block guard.

@@ -91,8 +91,14 @@ pub fn validate_babbage_state_backed(
     }
     check_inputs_present(&all_inputs, utxo)?;
 
-    // 2. Plutus-gated collateral non-empty
-    if body.script_data_hash.is_some() {
+    // 2. Plutus-gated collateral non-empty.
+    //
+    // Gate on redeemers, not script_data_hash — see alonzo.rs check for
+    // the same adjustment. Datum-binding txs set script_data_hash with
+    // no redeemers and must be accepted without collateral.
+    let has_redeemers = witness_info.total_ex_units.mem > 0
+        || witness_info.total_ex_units.cpu > 0;
+    if has_redeemers {
         let empty = BTreeSet::new();
         let col = body.collateral_inputs.as_ref().unwrap_or(&empty);
         check_collateral_non_empty(col)?;

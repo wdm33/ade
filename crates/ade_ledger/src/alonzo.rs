@@ -126,8 +126,16 @@ pub fn validate_alonzo_state_backed(
     }
     check_inputs_present(&all_inputs, utxo)?;
 
-    // 2. Plutus-gated collateral requirement
-    if body.script_data_hash.is_some() {
+    // 2. Plutus-gated collateral requirement.
+    //
+    // Cardano gates this on the PRESENCE OF REDEEMERS, not on script_data_hash.
+    // A tx may set script_data_hash to bind datum hashes or cost models
+    // without actually running scripts (e.g., datum-propagation txs).
+    // Empirically confirmed: mainnet Babbage blocks contain such txs
+    // and cardano-node accepts them without collateral.
+    let has_redeemers = witness_info.total_ex_units.mem > 0
+        || witness_info.total_ex_units.cpu > 0;
+    if has_redeemers {
         let empty = BTreeSet::new();
         let col = body.collateral_inputs.as_ref().unwrap_or(&empty);
         check_collateral_non_empty(col)?;
@@ -391,11 +399,15 @@ mod tests {
 
     #[test]
     fn alonzo_state_backed_plutus_requires_collateral() {
+        // Redeemers present (ex_units > 0) and no collateral → NoCollateralInputs.
+        // The gate is on redeemers, not script_data_hash: datum-propagation txs
+        // set script_data_hash without redeemers and need no collateral.
         let mut body = alonzo_body_for_state_backed();
         body.script_data_hash = Some(Hash32([0xAA; 32]));
         body.collateral_inputs = Some(BTreeSet::new()); // empty → fail
         let utxo = utxo_with(&[(TxIn { tx_hash: Hash32([0x01; 32]), index: 0 }, 5_000_000)]);
-        let witness = witness_with_keys(&[]);
+        let mut witness = witness_with_keys(&[]);
+        witness.total_ex_units = crate::witness::TotalExUnits { mem: 100, cpu: 200 };
         assert!(matches!(
             validate_alonzo_state_backed(
                 &body, &utxo, &witness, MAINNET_COLLATERAL_PERCENT, MAINNET_NETWORK,
@@ -403,6 +415,22 @@ mod tests {
             ),
             Err(LedgerError::NoCollateralInputs)
         ));
+    }
+
+    #[test]
+    fn alonzo_state_backed_script_data_hash_without_redeemers_needs_no_collateral() {
+        // Guards the regression: mainnet Babbage blocks contain txs that set
+        // script_data_hash (binding datum hashes / cost models) but carry no
+        // redeemers. Cardano accepts these without collateral; we must too.
+        let mut body = alonzo_body_for_state_backed();
+        body.script_data_hash = Some(Hash32([0xAA; 32]));
+        body.collateral_inputs = None;
+        let utxo = utxo_with(&[(TxIn { tx_hash: Hash32([0x01; 32]), index: 0 }, 5_000_000)]);
+        let witness = witness_with_keys(&[]); // total_ex_units = (0, 0)
+        assert!(validate_alonzo_state_backed(
+            &body, &utxo, &witness, MAINNET_COLLATERAL_PERCENT, MAINNET_NETWORK,
+            (i64::MAX, i64::MAX),
+        ).is_ok());
     }
 
     #[test]
@@ -493,8 +521,17 @@ mod tests {
 
     #[test]
     fn alonzo_state_backed_ex_units_within_cap() {
-        let body = alonzo_body_for_state_backed();
-        let utxo = utxo_with(&[(TxIn { tx_hash: Hash32([0x01; 32]), index: 0 }, 5_000_000)]);
+        // Redeemers with ex_units > 0 require collateral (post–composer-gate
+        // fix). Seed collateral so the test exercises only the cap check.
+        let mut body = alonzo_body_for_state_backed();
+        let col_in = TxIn { tx_hash: Hash32([0x99; 32]), index: 0 };
+        let mut col = BTreeSet::new();
+        col.insert(col_in.clone());
+        body.collateral_inputs = Some(col);
+        let utxo = utxo_with(&[
+            (TxIn { tx_hash: Hash32([0x01; 32]), index: 0 }, 5_000_000),
+            (col_in, 5_000_000),
+        ]);
         let mut witness = witness_with_keys(&[]);
         witness.total_ex_units = crate::witness::TotalExUnits { mem: 100, cpu: 200 };
         assert!(validate_alonzo_state_backed(

@@ -95,8 +95,11 @@ pub fn validate_conway_state_backed(
     let refs = body.reference_inputs.as_ref().unwrap_or(&empty_refs);
     check_reference_input_disjoint(&body.inputs, refs, protocol_version_major)?;
 
-    // 3. Plutus-gated collateral non-empty
-    if body.script_data_hash.is_some() {
+    // 3. Plutus-gated collateral non-empty — gate on redeemers, not
+    //    script_data_hash (see alonzo.rs / babbage.rs for rationale).
+    let has_redeemers = witness_info.total_ex_units.mem > 0
+        || witness_info.total_ex_units.cpu > 0;
+    if has_redeemers {
         let empty = BTreeSet::new();
         let col = body.collateral_inputs.as_ref().unwrap_or(&empty);
         check_collateral_non_empty(col)?;
