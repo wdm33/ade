@@ -95,6 +95,16 @@ pub struct ProtocolParameters {
     /// Network id byte for tx-body network and output-address network checks.
     /// Mainnet = 1, testnet = 0.
     pub network_id: u8,
+    /// Raw CBOR bytes of the `cost_models` pparam entry, as consumed by
+    /// aiken's `eval_phase_two_raw` for budget accounting. `None` falls
+    /// back to aiken's default coefficients (fine for smoke tests, wrong
+    /// for mainnet budget-exact comparisons).
+    ///
+    /// Format: `{ uint_lang_id => [int; N] }` where the array is the
+    /// positional plutus `ParamName` coefficients for that language.
+    /// Preserved byte-for-byte from the snapshot so aiken's decoder sees
+    /// the exact wire form the on-chain node used.
+    pub cost_models_cbor: Option<Vec<u8>>,
 }
 
 impl Default for ProtocolParameters {
@@ -126,6 +136,7 @@ impl Default for ProtocolParameters {
             max_tx_ex_units_mem: 14_000_000,
             max_tx_ex_units_cpu: 10_000_000_000,
             network_id: 1,
+            cost_models_cbor: None,
         }
     }
 }

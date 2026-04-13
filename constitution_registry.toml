@@ -455,13 +455,13 @@ tier = "derived"
 statement = "Tx/block validity agrees with Haskell node on all tested inputs"
 source = "Project constitution §3, T-DET-01, T-ERR-01"
 cross_ref = ["CN-LEDGER-03"]
-code_locus = "crates/ade_ledger/src/byron.rs, crates/ade_ledger/src/rules.rs"
-tests = ["check_duplicate_inputs_catches_dupes", "resolve_inputs_missing_input", "missing_witnesses_rejected", "all_eras_replay_summary"]
+code_locus = "crates/ade_ledger/src/byron.rs, crates/ade_ledger/src/rules.rs, crates/ade_ledger/src/plutus_eval.rs"
+tests = ["check_duplicate_inputs_catches_dupes", "resolve_inputs_missing_input", "missing_witnesses_rejected", "all_eras_replay_summary", "all_plutus_boundaries_aggregate_zero_rejections", "plutus_era_contiguous_smoke"]
 ci_script = "ci/ci_check_differential_divergence.sh"
 status = "partial"
-authority_surface = "non-Plutus block/tx acceptance verdicts across 10,500 blocks (all 7 eras); Plutus-dependent blocks flagged NotYetEvaluated"
+authority_surface = "non-Plutus block/tx acceptance verdicts across 10,500 blocks (all 7 eras); Phase 3 lands: (a) state-backed composer for Alonzo+ with 0 false positives across 2,400 boundary-set txs, (b) Plutus evaluator wired end-to-end (mem=747528 matches aiken oracle on fixture), (c) 72+ mainnet Plutus txs reach the dispatch on 20-block windows, contiguous-corpus harness exists but full 9,436-tx oracle diff (CE-88) deferred to release-gate work"
 cluster = "CL-LEDGER-VERDICT"
-evidence = []
+evidence = ["docs/active/phase_3_status.md"]
 
 [[rules]]
 id = "DC-LEDGER-04"
@@ -655,9 +655,9 @@ code_locus = "crates/ade_ledger/src/governance.rs, crates/ade_ledger/src/rules.r
 tests = ["conway_epoch_boundary_end_to_end", "conway_governance_ratification_test"]
 ci_script = ""
 status = "partial"
-authority_surface = "atomic ratification/enactment proven at Conway 528/536/576 boundaries; Plutus-dependent governance effects deferred to Phase 3"
+authority_surface = "atomic ratification/enactment proven at Conway 528/536/576 boundaries; Phase 3 lands the Plutus-eval path for Conway governance-action scripts (voting/proposing script purposes supported via ade_plutus ScriptContext V3 delegation through aiken). Full governance-Plutus oracle-diff deferred to CE-88 closure."
 cluster = "CL-LEDGER-VERDICT"
-evidence = ["docs/active/CE-72_closure.md"]
+evidence = ["docs/active/CE-72_closure.md", "docs/active/phase_3_status.md"]
 
 [[rules]]
 id = "DC-EPOCH-02"
@@ -733,12 +733,13 @@ tier = "derived"
 statement = "Witness binding is era-specific: Byron TxWitness, Shelley+ WitsVKey/Scripts/BootstrapWitnesses, Alonzo+ Redeemers/Datums, Conway governance witnesses"
 source = "Project constitution §3, T-DET-01"
 cross_ref = []
-code_locus = "crates/ade_ledger/src/witness.rs, crates/ade_ledger/src/scripts.rs"
-tests = ["witness_info_no_plutus", "witness_info_plutus_detection", "empty_witness_set"]
+code_locus = "crates/ade_ledger/src/witness.rs, crates/ade_ledger/src/scripts.rs, crates/ade_plutus/src/evaluator.rs"
+tests = ["witness_info_no_plutus", "witness_info_plutus_detection", "empty_witness_set", "aiken_fixture_tx_evaluates_end_to_end"]
 ci_script = ""
 status = "partial"
-authority_surface = "non-Plutus witness binding across all 7 eras; Plutus witness binding deferred to Phase 3 (NotYetEvaluated)"
+authority_surface = "non-Plutus witness binding across all 7 eras; Plutus witness binding (V1/V2/V3 scripts, redeemers, datums) structurally wired in Phase 3 — parsed via ade_ledger::witness, evaluated via ade_plutus::eval_tx_phase_two, verdicts surface via TxOutcome enum. NotYetEvaluated variant retired. Oracle-diff closure (CE-88) deferred to release-gate work."
 cluster = "CL-LEDGER-VERDICT"
+evidence = ["docs/active/phase_3_status.md"]
 
 [[rules]]
 id = "DC-LEDGER-06"

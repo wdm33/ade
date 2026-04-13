@@ -260,10 +260,11 @@ fn diagnose_plutus_pparam_parse() {
         )
         .unwrap();
         eprintln!(
-            "{label}: collateral_percent={:?}, max_tx_ex_mem={:?}, max_tx_ex_cpu={:?}",
+            "{label}: collateral_percent={:?}, max_tx_ex_mem={:?}, max_tx_ex_cpu={:?}, cost_models={} bytes",
             parsed.collateral_percent,
             parsed.max_tx_ex_units_mem,
             parsed.max_tx_ex_units_cpu,
+            parsed.cost_models_cbor.as_ref().map(|b| b.len()).unwrap_or(0),
         );
     }
 }

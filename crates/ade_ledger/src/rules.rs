@@ -183,6 +183,121 @@ fn apply_shelley_era_block(
     apply_shelley_era_block_classified(state, block, era).map(|(s, _)| s)
 }
 
+/// Apply a block and return `BlockApplyResult` — state transition,
+/// block-level verdict counters, AND per-tx verdicts.
+///
+/// This is the S-32-item-7 surface: callers that need to diff tx-by-tx
+/// against an oracle (CE-88) use this. The existing `apply_block` /
+/// `apply_block_classified` entry points are unchanged and retain
+/// their tuple return shapes for other callers.
+///
+/// Per-tx verdicts are only populated for Alonzo/Babbage/Conway blocks
+/// with `track_utxo=true` — pre-Alonzo or unresolved blocks return
+/// `tx_verdicts: Vec::new()`.
+pub fn apply_block_with_verdicts(
+    state: &LedgerState,
+    era: CardanoEra,
+    block_cbor: &[u8],
+) -> Result<BlockApplyResult, LedgerError> {
+    // For Byron and empty-tx cases, reuse the existing classified path.
+    if matches!(era, CardanoEra::ByronEbb | CardanoEra::ByronRegular) {
+        let (new_state, verdict) = apply_block_classified(state, era, block_cbor)?;
+        return Ok(BlockApplyResult {
+            new_state,
+            verdict,
+            tx_verdicts: Vec::new(),
+        });
+    }
+
+    // Decode the block once; run the full classified pipeline PLUS
+    // per-tx verdict collection when the composer path activates.
+    let decoded = match era {
+        CardanoEra::Shelley => shelley::decode_shelley_block(block_cbor)?,
+        CardanoEra::Allegra => allegra::decode_allegra_block(block_cbor)?,
+        CardanoEra::Mary => mary::decode_mary_block(block_cbor)?,
+        CardanoEra::Alonzo => alonzo::decode_alonzo_block(block_cbor)?,
+        CardanoEra::Babbage => babbage::decode_babbage_block(block_cbor)?,
+        CardanoEra::Conway => conway::decode_conway_block(block_cbor)?,
+        _ => {
+            let (new_state, verdict) = apply_block_classified(state, era, block_cbor)?;
+            return Ok(BlockApplyResult {
+                new_state,
+                verdict,
+                tx_verdicts: Vec::new(),
+            });
+        }
+    };
+    let block = decoded.decoded();
+    apply_shelley_era_block_with_verdicts(state, block, era)
+}
+
+fn apply_shelley_era_block_with_verdicts(
+    state: &LedgerState,
+    block: &ade_types::shelley::block::ShelleyBlock,
+    era: CardanoEra,
+) -> Result<BlockApplyResult, LedgerError> {
+    let slot = SlotNo(block.header.body.slot);
+
+    let mut current_state = state.clone();
+    if let Some(new_epoch) = crate::state::detect_epoch_transition(
+        current_state.epoch_state.epoch,
+        slot,
+    ) {
+        let (new_state, _accounting) = apply_epoch_boundary_full(&current_state, new_epoch);
+        current_state = new_state;
+    }
+
+    let mut verdict = decode_validate_tx_bodies(block, era)?;
+
+    let utxo_state = if current_state.track_utxo {
+        track_utxo(block, era, &current_state.utxo_state)?
+    } else {
+        current_state.utxo_state.clone()
+    };
+
+    // Run the composer + Plutus-eval dispatch, capturing per-tx verdicts.
+    let tx_verdicts = if current_state.track_utxo
+        && matches!(
+            era,
+            CardanoEra::Alonzo | CardanoEra::Babbage | CardanoEra::Conway
+        )
+    {
+        let (stats, verdicts) =
+            run_phase_one_composers(block, era, &current_state)?;
+        verdict.state_backed_phase1_rejected = stats.rejected;
+        verdict.plutus_eval_passed = stats.plutus_eval_passed;
+        verdict.plutus_eval_failed = stats.plutus_eval_failed;
+        verdict.plutus_eval_ineligible = stats.plutus_eval_ineligible;
+        verdicts
+    } else {
+        Vec::new()
+    };
+
+    let cert_state = if current_state.track_utxo {
+        process_block_certificates(block, era, &current_state)?
+    } else {
+        current_state.cert_state.clone()
+    };
+
+    let mut epoch_state = current_state.epoch_state;
+    epoch_state.slot = slot;
+
+    Ok(BlockApplyResult {
+        new_state: LedgerState {
+            utxo_state,
+            epoch_state,
+            protocol_params: current_state.protocol_params,
+            era,
+            track_utxo: current_state.track_utxo,
+            cert_state,
+            max_lovelace_supply: current_state.max_lovelace_supply,
+            gov_state: None,
+        },
+        verdict,
+        tx_verdicts,
+    })
+}
+
 fn apply_shelley_era_block_classified(
     state: &LedgerState,
     block: &ade_types::shelley::block::ShelleyBlock,
@@ -220,7 +335,7 @@ fn apply_shelley_era_block_classified(
             CardanoEra::Alonzo | CardanoEra::Babbage | CardanoEra::Conway
         )
     {
-        let stats = run_phase_one_composers(block, era, &current_state)?;
+        let (stats, _tx_verdicts) = run_phase_one_composers(block, era, &current_state)?;
         verdict.state_backed_phase1_rejected = stats.rejected;
         verdict.plutus_eval_passed = stats.plutus_eval_passed;
         verdict.plutus_eval_failed = stats.plutus_eval_failed;
@@ -1341,6 +1456,75 @@ fn extract_inputs_outputs_from_tx(
     }
 }
 
+/// Per-transaction outcome class. Maps each tx's combined Phase-1 +
+/// Plutus verdict into a small sum type the diff-against-oracle harness
+/// can compare against. The S-32 discharge doc promised this surface
+/// (item 7): callers need per-tx pass/fail as values, not just block-
+/// level aggregate counters.
+#[derive(Debug, Clone, PartialEq)]
+pub enum TxOutcome {
+    /// Tx passed all state-backed Phase-1 checks and, if it carried
+    /// Plutus scripts, every script ran to completion successfully.
+    Passed,
+    /// Tx's Phase-1 composer returned `BadInputs` — not all inputs
+    /// resolve in the pre-block UTxO. We treat this as "not classifiable"
+    /// rather than a pass/fail verdict, mirroring the silent-skip policy
+    /// of the UTxO tracker itself.
+    InputsUnresolved,
+    /// Phase-1 state-backed check failed. The full LedgerError is
+    /// preserved so the harness can diff against oracle error classes.
+    Phase1Rejected {
+        reason: crate::error::LedgerError,
+    },
+    /// Phase-1 passed; tx carries Plutus scripts; aiken returned a
+    /// successful evaluation for every script.
+    PlutusPassed {
+        /// Aggregate cpu across all scripts in the tx.
+        cpu: i64,
+        /// Aggregate mem across all scripts in the tx.
+        mem: i64,
+        /// Number of scripts executed.
+        script_count: usize,
+    },
+    /// Phase-1 passed; tx carries Plutus scripts; aiken returned an
+    /// error for at least one script.
+    PlutusFailed { reason: String },
+    /// Phase-1 passed; tx carries Plutus scripts but at least one
+    /// input / collateral / reference input didn't resolve in the
+    /// pre-block UTxO. Distinct from `InputsUnresolved` because
+    /// Phase-1 did resolve the spend-set but the Plutus evaluator
+    /// needs additional context (ref inputs / collateral).
+    PlutusIneligible,
+    /// Tx was processed but didn't go through the Alonzo+ composer
+    /// path (e.g., pre-Alonzo era or `track_utxo=false`). No verdict
+    /// claim is made — the harness should treat this as "out of scope."
+    Skipped,
+}
+
+/// Single-transaction verdict emitted by `apply_block_with_verdicts`.
+#[derive(Debug, Clone, PartialEq)]
+pub struct TxVerdict {
+    /// 0-based tx index within the block.
+    pub tx_index: usize,
+    /// Classification of this tx's outcome.
+    pub outcome: TxOutcome,
+}
+
+/// Full apply-block result with per-tx verdicts. Returned by the new
+/// `apply_block_with_verdicts` entry point; existing callers of
+/// `apply_block_classified` keep their `(LedgerState, BlockVerdict)`
+/// tuple shape unchanged.
+#[derive(Debug, Clone)]
+pub struct BlockApplyResult {
+    pub new_state: LedgerState,
+    pub verdict: BlockVerdict,
+    /// Per-tx outcomes in block order. Empty for blocks that don't
+    /// go through the Alonzo+ composer path (pre-Alonzo or
+    /// track_utxo=false), since per-tx classification only runs when
+    /// the state-backed composer runs.
+    pub tx_verdicts: Vec<TxVerdict>,
+}
+
 /// Block-level structural verdict from applying a post-Byron block.
 ///
 /// Summarizes the script posture across all transactions in the block.
@@ -1350,7 +1534,10 @@ fn extract_inputs_outputs_from_tx(
 pub struct BlockVerdict {
     /// Total transactions decoded.
     pub tx_count: u64,
-    /// Plutus txs → ScriptVerdict::NotYetEvaluated (CE-77).
+    /// Plutus-bearing txs identified by witness-set inspection.
+    /// Actual eval outcome lives in the `plutus_eval_*` counters
+    /// below; this is retained as a classification signal (how many
+    /// txs the Plutus dispatch had jurisdiction over).
     pub plutus_deferred_count: u64,
     /// Non-Plutus txs (native scripts evaluated, or no scripts).
     pub non_plutus_count: u64,
@@ -1434,15 +1621,13 @@ fn decode_validate_tx_bodies(
             .map(|w| w.has_plutus())
             .unwrap_or(false);
 
-        // ScriptPosture → ScriptVerdict mapping (CE-77):
-        // - PlutusPresentDeferred or Plutus in witnesses → ScriptVerdict::NotYetEvaluated
-        // - NonPlutusScriptsOnly with native scripts → evaluate → NativeScriptPassed/Failed
-        // - NoScripts → ScriptVerdict::NativeScriptPassed (trivially)
+        // Plutus-bearing tx classification — actual eval outcome is
+        // counted separately in `plutus_eval_{passed,failed,ineligible}`
+        // by run_phase_one_composers when track_utxo=true.
         let is_deferred = has_plutus_in_witnesses
             || body_posture == crate::scripts::ScriptPosture::PlutusPresentDeferred;
 
         if is_deferred {
-            // ScriptVerdict::NotYetEvaluated — Plutus evaluation deferred to Phase 3
             plutus_deferred_count += 1;
         } else {
             // Evaluate native scripts if present
@@ -1460,8 +1645,7 @@ fn decode_validate_tx_bodies(
                         crate::scripts::ScriptVerdict::NativeScriptFailed(_) => {
                             native_script_failed += 1;
                         }
-                        crate::scripts::ScriptVerdict::NotYetEvaluated
-                        | crate::scripts::ScriptVerdict::PlutusPassed { .. }
+                        crate::scripts::ScriptVerdict::PlutusPassed { .. }
                         | crate::scripts::ScriptVerdict::PlutusFailed { .. } => {
                             // Plutus verdicts do not arise from
                             // evaluate_native_script (native scripts
@@ -1616,9 +1800,9 @@ fn run_phase_one_composers(
     block: &ade_types::shelley::block::ShelleyBlock,
     era: CardanoEra,
     state: &LedgerState,
-) -> Result<ComposerStats, LedgerError> {
+) -> Result<(ComposerStats, Vec<TxVerdict>), LedgerError> {
     if block.tx_count == 0 {
-        return Ok(ComposerStats::default());
+        return Ok((ComposerStats::default(), Vec::new()));
     }
 
     let witness_infos = crate::witness::decode_witness_infos(&block.witness_sets)?;
@@ -1644,6 +1828,7 @@ fn run_phase_one_composers(
     let utxo = &state.utxo_state.utxos;
 
     let mut stats = ComposerStats::default();
+    let mut tx_verdicts: Vec<TxVerdict> = Vec::new();
     let mut tx_idx = 0usize;
     let empty_wi = crate::witness::WitnessInfo {
         available_key_hashes: std::collections::BTreeSet::new(),
@@ -1721,21 +1906,40 @@ fn run_phase_one_composers(
                         utxo,
                         era,
                         budget,
+                        pp.cost_models_cbor.as_deref(),
                     );
-                    match outcome {
+                    let verdict_outcome = match outcome {
                         crate::plutus_eval::PlutusEvalOutcome::Ineligible => {
                             stats.plutus_eval_ineligible =
                                 stats.plutus_eval_ineligible.saturating_add(1);
+                            TxOutcome::PlutusIneligible
                         }
-                        crate::plutus_eval::PlutusEvalOutcome::Passed { .. } => {
+                        crate::plutus_eval::PlutusEvalOutcome::Passed {
+                            total_cpu,
+                            total_mem,
+                            script_count,
+                        } => {
                             stats.plutus_eval_passed =
                                 stats.plutus_eval_passed.saturating_add(1);
+                            TxOutcome::PlutusPassed {
+                                cpu: total_cpu,
+                                mem: total_mem,
+                                script_count,
+                            }
                         }
-                        crate::plutus_eval::PlutusEvalOutcome::Failed { .. } => {
+                        crate::plutus_eval::PlutusEvalOutcome::Failed { reason } => {
                             stats.plutus_eval_failed =
                                 stats.plutus_eval_failed.saturating_add(1);
+                            TxOutcome::PlutusFailed { reason }
                         }
-                    }
+                    };
+                    tx_verdicts.push(TxVerdict { tx_index: tx_idx, outcome: verdict_outcome });
+                } else {
+                    // Phase-1 passed, no Plutus scripts.
+                    tx_verdicts.push(TxVerdict {
+                        tx_index: tx_idx,
+                        outcome: TxOutcome::Passed,
+                    });
                 }
             }
             Err(crate::error::LedgerError::BadInputs(_)) => {
@@ -1748,17 +1952,30 @@ fn run_phase_one_composers(
                 if wi.has_plutus() {
                     stats.plutus_eval_ineligible =
                         stats.plutus_eval_ineligible.saturating_add(1);
+                    tx_verdicts.push(TxVerdict {
+                        tx_index: tx_idx,
+                        outcome: TxOutcome::PlutusIneligible,
+                    });
+                } else {
+                    tx_verdicts.push(TxVerdict {
+                        tx_index: tx_idx,
+                        outcome: TxOutcome::InputsUnresolved,
+                    });
                 }
             }
-            Err(_) => {
+            Err(e) => {
                 stats.rejected = stats.rejected.saturating_add(1);
+                tx_verdicts.push(TxVerdict {
+                    tx_index: tx_idx,
+                    outcome: TxOutcome::Phase1Rejected { reason: e },
+                });
             }
         }
 
         tx_idx += 1;
     }
 
-    Ok(stats)
+    Ok((stats, tx_verdicts))
 }
 
 /// Phase-1 call per era, returning both the result and the minimal tx

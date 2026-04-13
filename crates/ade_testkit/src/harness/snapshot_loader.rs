@@ -198,6 +198,7 @@ impl LoadedSnapshot {
             max_tx_ex_units_mem: 14_000_000,
             max_tx_ex_units_cpu: 10_000_000_000,
             network_id: 1,
+            cost_models_cbor: None,
         };
 
         // Try to parse d from the actual snapshot CBOR (ground truth).
@@ -220,6 +221,9 @@ impl LoadedSnapshot {
             }
             if let Some(v) = plutus.max_tx_ex_units_cpu {
                 pp.max_tx_ex_units_cpu = v;
+            }
+            if plutus.cost_models_cbor.is_some() {
+                pp.cost_models_cbor = plutus.cost_models_cbor;
             }
         }
 
@@ -1581,13 +1585,19 @@ pub fn count_voting_delegations(
 ///
 /// Returns (numerator, denominator) or None if not found/parseable.
 /// Parsed Alonzo+ Plutus pparams: `(collateral_percent, max_tx_ex_units_mem,
-/// max_tx_ex_units_cpu)`. Returned as `Option` fields — Shelley/Allegra/Mary
-/// snapshots don't carry these (shorter PParams array) and yield `None`.
-#[derive(Debug, Clone, Copy, Default)]
+/// max_tx_ex_units_cpu, cost_models_cbor)`. Returned as `Option` fields —
+/// Shelley/Allegra/Mary snapshots don't carry these (shorter PParams array)
+/// and yield `None`.
+#[derive(Debug, Clone, Default)]
 pub struct AlonzoPlutusParams {
     pub collateral_percent: Option<u16>,
     pub max_tx_ex_units_mem: Option<u64>,
     pub max_tx_ex_units_cpu: Option<u64>,
+    /// Raw CBOR bytes of the `cost_models` pparam — the map value at
+    /// PP[17] (Alonzo) or PP[15] (Babbage/Conway). Preserved byte-for-
+    /// byte so aiken's decoder sees the exact wire form the on-chain
+    /// node used.
+    pub cost_models_cbor: Option<Vec<u8>>,
 }
 
 /// Parse `(max_tx_ex_units, collateral_percent)` from a snapshot CBOR.
@@ -1644,18 +1654,28 @@ pub fn parse_alonzo_plutus_params_verbose(
     let (pp_body, pp_len) = read_array_header(state_cbor, off)?;
     if trace { eprintln!("[plutus-pp] pp_len={pp_len}"); }
 
-    // Era-specific index map for maxTxExUnits and collateralPercent.
-    //   Alonzo pp_len=24:   includes d + extraEntropy → maxTxExUnits=19, coll=22
-    //   Babbage pp_len=22:  d + extraEntropy removed → maxTxExUnits=17, coll=20
-    //   Conway pp_len=31:   governance fields appended after coll → same as Babbage
+    // Era-specific index map for the Plutus-era PP fields we consume.
+    //   Alonzo pp_len=24:  d+extraEntropy present → costModels=17, maxTxExUnits=19, coll=22
+    //   Babbage pp_len=22: d+extraEntropy removed → costModels=15, maxTxExUnits=17, coll=20
+    //   Conway pp_len=31:  governance fields appended after coll → same as Babbage
     // Pre-Alonzo pp_len < 22 → no Plutus params to read.
-    let (ex_idx, coll_idx) = match pp_len {
-        24 => (19usize, 22usize), // Alonzo
-        22 | 31 => (17usize, 20usize), // Babbage / Conway
+    let (cost_idx, ex_idx, coll_idx) = match pp_len {
+        24 => (17usize, 19usize, 22usize), // Alonzo
+        22 | 31 => (15usize, 17usize, 20usize), // Babbage / Conway
         _ => return Ok(AlonzoPlutusParams::default()), // pre-Alonzo or unknown era
     };
 
     let mut result = AlonzoPlutusParams::default();
+
+    // costModels = { uint_lang_id => [int; N] }. Preserve the raw CBOR
+    // slice verbatim — aiken consumes it unchanged via eval_phase_two_raw.
+    if pp_len as usize > cost_idx {
+        let mut o = pp_body;
+        for _ in 0..cost_idx { o = skip_cbor(state_cbor, o)?; }
+        let start = o;
+        let end = skip_cbor(state_cbor, o)?;
+        result.cost_models_cbor = Some(state_cbor[start..end].to_vec());
+    }
 
     // maxTxExUnits = array(2) [mem, steps]
     if pp_len as usize > ex_idx {

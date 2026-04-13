@@ -38,10 +38,6 @@ pub enum ScriptVerdict {
         /// Classification of the failure cause.
         reason: PlutusFailureReason,
     },
-    /// The script has not been evaluated yet (initial state /
-    /// deferred). Deprecated — being phased out in S-32 as
-    /// Plutus evaluation lands.
-    NotYetEvaluated,
 }
 
 /// Classification of Plutus script evaluation failure modes.
@@ -472,9 +468,4 @@ mod tests {
         assert_eq!(v1, v2);
     }
 
-    #[test]
-    fn not_yet_evaluated_variant() {
-        let v = ScriptVerdict::NotYetEvaluated;
-        assert_ne!(v, ScriptVerdict::NativeScriptPassed);
-    }
 }

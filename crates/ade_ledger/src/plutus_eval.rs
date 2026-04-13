@@ -177,6 +177,12 @@ pub fn build_resolved_utxos(
 
 /// Run aiken's phase-2 evaluator for a single tx. Short-circuits to
 /// `Ineligible` when any input doesn't resolve.
+///
+/// `cost_models_cbor` is the raw CBOR bytes of `pparams.cost_models`
+/// as preserved from the snapshot / ledger state. `None` falls back to
+/// aiken's defaults, which match for Alonzo/Babbage baseline
+/// coefficients but can drift on Conway where governance votes shift
+/// step weights mid-era.
 pub fn try_evaluate_tx(
     body_bytes: &[u8],
     witness_bytes: &[u8],
@@ -186,6 +192,7 @@ pub fn try_evaluate_tx(
     utxo: &BTreeMap<TxIn, TxOut>,
     era: CardanoEra,
     initial_budget: (u64, u64),
+    cost_models_cbor: Option<&[u8]>,
 ) -> PlutusEvalOutcome {
     let resolved =
         match build_resolved_utxos(inputs, collateral, reference_inputs, utxo, era) {
@@ -198,7 +205,7 @@ pub fn try_evaluate_tx(
     match ade_plutus::eval_tx_phase_two(
         &tx_cbor,
         &resolved,
-        None, // cost models: aiken defaults (fine for classification; fine-tuning is CE-86)
+        cost_models_cbor,
         initial_budget,
         ade_plutus::tx_eval::MAINNET_SLOT_CONFIG,
     ) {

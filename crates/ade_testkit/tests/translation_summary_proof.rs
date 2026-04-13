@@ -203,6 +203,7 @@ fn make_shelley_state_at_hfc() -> LedgerState {
             max_tx_ex_units_mem: 14_000_000,
             max_tx_ex_units_cpu: 10_000_000_000,
             network_id: 1,
+            cost_models_cbor: None,
         },
         era: CardanoEra::Shelley,
         track_utxo: false,
