@@ -254,6 +254,137 @@ pub(crate) fn read_hash28(
     Ok(Hash28(arr))
 }
 
+/// Encode an Alonzo transaction body in canonical map form.
+///
+/// Produces definite-length CBOR map with keys in ascending order.
+/// Opaque fields (certs, withdrawals, update, mint) are written as
+/// their stored raw bytes, preserving the exact wire form captured
+/// at decode time. Structural fields (inputs, outputs, collateral,
+/// required_signers) are re-encoded canonically.
+///
+/// Note on round-trip fidelity: mainnet bodies may use non-canonical
+/// integer widths or indefinite containers that this encoder
+/// normalizes. The encoder is suitable for synthetic-tx construction
+/// and for feeding aiken's Plutus evaluator; it is NOT guaranteed to
+/// reproduce mainnet body bytes byte-identically.
+pub fn encode_alonzo_tx_body(
+    buf: &mut Vec<u8>,
+    body: &AlonzoTxBody,
+    ctx: &CodecContext,
+) -> Result<(), CodecError> {
+    let mut count: u64 = 3; // inputs, outputs, fee mandatory
+    if body.ttl.is_some() { count += 1; }
+    if body.certs.is_some() { count += 1; }
+    if body.withdrawals.is_some() { count += 1; }
+    if body.update.is_some() { count += 1; }
+    if body.metadata_hash.is_some() { count += 1; }
+    if body.validity_interval_start.is_some() { count += 1; }
+    if body.mint.is_some() { count += 1; }
+    if body.script_data_hash.is_some() { count += 1; }
+    if body.collateral_inputs.is_some() { count += 1; }
+    if body.required_signers.is_some() { count += 1; }
+    if body.network_id.is_some() { count += 1; }
+
+    cbor::write_map_header(
+        buf,
+        ContainerEncoding::Definite(count, cbor::canonical_width(count)),
+    );
+
+    // Key 0: inputs
+    cbor::write_uint_canonical(buf, 0);
+    crate::shelley::tx::encode_tx_inputs(buf, &body.inputs, ctx)?;
+
+    // Key 1: outputs
+    cbor::write_uint_canonical(buf, 1);
+    cbor::write_array_header(
+        buf,
+        ContainerEncoding::Definite(body.outputs.len() as u64, cbor::canonical_width(body.outputs.len() as u64)),
+    );
+    for o in &body.outputs {
+        <AlonzoTxOut as AdeEncode>::ade_encode(o, buf, ctx)?;
+    }
+
+    // Key 2: fee
+    cbor::write_uint_canonical(buf, 2);
+    cbor::write_uint_canonical(buf, body.fee.0);
+
+    // Key 3: ttl
+    if let Some(SlotNo(v)) = body.ttl {
+        cbor::write_uint_canonical(buf, 3);
+        cbor::write_uint_canonical(buf, v);
+    }
+
+    // Keys 4-6: opaque passthrough
+    if let Some(ref bytes) = body.certs {
+        cbor::write_uint_canonical(buf, 4);
+        buf.extend_from_slice(bytes);
+    }
+    if let Some(ref bytes) = body.withdrawals {
+        cbor::write_uint_canonical(buf, 5);
+        buf.extend_from_slice(bytes);
+    }
+    if let Some(ref bytes) = body.update {
+        cbor::write_uint_canonical(buf, 6);
+        buf.extend_from_slice(bytes);
+    }
+
+    // Key 7: metadata_hash
+    if let Some(ref h) = body.metadata_hash {
+        cbor::write_uint_canonical(buf, 7);
+        cbor::write_bytes_canonical(buf, &h.0);
+    }
+
+    // Key 8: validity_interval_start
+    if let Some(SlotNo(v)) = body.validity_interval_start {
+        cbor::write_uint_canonical(buf, 8);
+        cbor::write_uint_canonical(buf, v);
+    }
+
+    // Key 9: mint (opaque)
+    if let Some(ref bytes) = body.mint {
+        cbor::write_uint_canonical(buf, 9);
+        buf.extend_from_slice(bytes);
+    }
+
+    // Key 11: script_data_hash
+    if let Some(ref h) = body.script_data_hash {
+        cbor::write_uint_canonical(buf, 11);
+        cbor::write_bytes_canonical(buf, &h.0);
+    }
+
+    // Key 13: collateral_inputs
+    if let Some(ref col) = body.collateral_inputs {
+        cbor::write_uint_canonical(buf, 13);
+        crate::shelley::tx::encode_tx_inputs(buf, col, ctx)?;
+    }
+
+    // Key 14: required_signers
+    if let Some(ref signers) = body.required_signers {
+        cbor::write_uint_canonical(buf, 14);
+        cbor::write_array_header(
+            buf,
+            ContainerEncoding::Definite(signers.len() as u64, cbor::canonical_width(signers.len() as u64)),
+        );
+        for s in signers {
+            cbor::write_bytes_canonical(buf, &s.0);
+        }
+    }
+
+    // Key 15: network_id
+    if let Some(nid) = body.network_id {
+        cbor::write_uint_canonical(buf, 15);
+        cbor::write_uint_canonical(buf, nid as u64);
+    }
+
+    Ok(())
+}
+
+impl AdeEncode for AlonzoTxBody {
+    fn ade_encode(&self, buf: &mut Vec<u8>, ctx: &CodecContext) -> Result<(), CodecError> {
+        encode_alonzo_tx_body(buf, self, ctx)
+    }
+}
+
 impl AdeEncode for AlonzoTxOut {
     fn ade_encode(&self, buf: &mut Vec<u8>, _ctx: &CodecContext) -> Result<(), CodecError> {
         let arr_len: u64 = if self.datum_hash.is_some() { 3 } else { 2 };
@@ -337,5 +468,85 @@ mod tests {
         ];
         data.extend_from_slice(&[0xBB; 32]);
         round_trip(&data);
+    }
+
+    // -----------------------------------------------------------------------
+    // AlonzoTxBody encoder → decoder round trips.
+    // -----------------------------------------------------------------------
+
+    fn body_round_trip(body: AlonzoTxBody) {
+        let mut buf = Vec::new();
+        <AlonzoTxBody as AdeEncode>::ade_encode(&body, &mut buf, &ctx()).unwrap();
+        let mut off = 0;
+        let decoded = decode_alonzo_tx_body(&buf, &mut off).unwrap();
+        assert_eq!(off, buf.len(), "decoder must consume all bytes");
+        assert_eq!(body, decoded, "round-trip must preserve body");
+    }
+
+    fn minimal_alonzo_body() -> AlonzoTxBody {
+        let mut inputs = BTreeSet::new();
+        inputs.insert(TxIn {
+            tx_hash: Hash32([0xAA; 32]),
+            index: 0,
+        });
+        AlonzoTxBody {
+            inputs,
+            outputs: vec![AlonzoTxOut {
+                address: vec![0x60, 0x01, 0x02, 0x03, 0x04],
+                coin: Coin(1_000_000),
+                multi_asset: None,
+                datum_hash: None,
+            }],
+            fee: Coin(200_000),
+            ttl: None,
+            certs: None,
+            withdrawals: None,
+            update: None,
+            metadata_hash: None,
+            validity_interval_start: None,
+            mint: None,
+            script_data_hash: None,
+            collateral_inputs: None,
+            required_signers: None,
+            network_id: None,
+        }
+    }
+
+    #[test]
+    fn body_minimal() {
+        body_round_trip(minimal_alonzo_body());
+    }
+
+    #[test]
+    fn body_with_ttl_and_network() {
+        let mut b = minimal_alonzo_body();
+        b.ttl = Some(SlotNo(12345678));
+        b.network_id = Some(1);
+        body_round_trip(b);
+    }
+
+    #[test]
+    fn body_with_plutus_fields() {
+        let mut b = minimal_alonzo_body();
+        b.script_data_hash = Some(Hash32([0xCC; 32]));
+        let mut col = BTreeSet::new();
+        col.insert(TxIn {
+            tx_hash: Hash32([0x99; 32]),
+            index: 0,
+        });
+        b.collateral_inputs = Some(col);
+        let mut signers = BTreeSet::new();
+        signers.insert(Hash28([0x11; 28]));
+        signers.insert(Hash28([0x22; 28]));
+        b.required_signers = Some(signers);
+        body_round_trip(b);
+    }
+
+    #[test]
+    fn body_with_validity_and_metadata() {
+        let mut b = minimal_alonzo_body();
+        b.validity_interval_start = Some(SlotNo(100));
+        b.metadata_hash = Some(Hash32([0xDD; 32]));
+        body_round_trip(b);
     }
 }

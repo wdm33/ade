@@ -295,6 +295,150 @@ fn decode_babbage_tx_out_map(
     })
 }
 
+/// Encode a Babbage transaction body in canonical map form.
+///
+/// Extends the Alonzo body layout with keys 16 (collateral_return),
+/// 17 (total_collateral), and 18 (reference_inputs). See
+/// `encode_alonzo_tx_body` for notes on round-trip fidelity.
+pub fn encode_babbage_tx_body(
+    buf: &mut Vec<u8>,
+    body: &BabbageTxBody,
+    ctx: &CodecContext,
+) -> Result<(), CodecError> {
+    let mut count: u64 = 3; // inputs, outputs, fee mandatory
+    if body.ttl.is_some() { count += 1; }
+    if body.certs.is_some() { count += 1; }
+    if body.withdrawals.is_some() { count += 1; }
+    if body.update.is_some() { count += 1; }
+    if body.metadata_hash.is_some() { count += 1; }
+    if body.validity_interval_start.is_some() { count += 1; }
+    if body.mint.is_some() { count += 1; }
+    if body.script_data_hash.is_some() { count += 1; }
+    if body.collateral_inputs.is_some() { count += 1; }
+    if body.required_signers.is_some() { count += 1; }
+    if body.network_id.is_some() { count += 1; }
+    if body.collateral_return.is_some() { count += 1; }
+    if body.total_collateral.is_some() { count += 1; }
+    if body.reference_inputs.is_some() { count += 1; }
+
+    cbor::write_map_header(
+        buf,
+        ContainerEncoding::Definite(count, cbor::canonical_width(count)),
+    );
+
+    // Key 0: inputs
+    cbor::write_uint_canonical(buf, 0);
+    crate::shelley::tx::encode_tx_inputs(buf, &body.inputs, ctx)?;
+
+    // Key 1: outputs (Babbage map form for each)
+    cbor::write_uint_canonical(buf, 1);
+    cbor::write_array_header(
+        buf,
+        ContainerEncoding::Definite(body.outputs.len() as u64, cbor::canonical_width(body.outputs.len() as u64)),
+    );
+    for o in &body.outputs {
+        encode_babbage_tx_out_map(buf, o)?;
+    }
+
+    // Key 2: fee
+    cbor::write_uint_canonical(buf, 2);
+    cbor::write_uint_canonical(buf, body.fee.0);
+
+    // Key 3: ttl
+    if let Some(SlotNo(v)) = body.ttl {
+        cbor::write_uint_canonical(buf, 3);
+        cbor::write_uint_canonical(buf, v);
+    }
+
+    // Keys 4-6: opaque
+    if let Some(ref b) = body.certs {
+        cbor::write_uint_canonical(buf, 4);
+        buf.extend_from_slice(b);
+    }
+    if let Some(ref b) = body.withdrawals {
+        cbor::write_uint_canonical(buf, 5);
+        buf.extend_from_slice(b);
+    }
+    if let Some(ref b) = body.update {
+        cbor::write_uint_canonical(buf, 6);
+        buf.extend_from_slice(b);
+    }
+
+    // Key 7: metadata_hash
+    if let Some(ref h) = body.metadata_hash {
+        cbor::write_uint_canonical(buf, 7);
+        cbor::write_bytes_canonical(buf, &h.0);
+    }
+
+    // Key 8: validity_interval_start
+    if let Some(SlotNo(v)) = body.validity_interval_start {
+        cbor::write_uint_canonical(buf, 8);
+        cbor::write_uint_canonical(buf, v);
+    }
+
+    // Key 9: mint (opaque)
+    if let Some(ref b) = body.mint {
+        cbor::write_uint_canonical(buf, 9);
+        buf.extend_from_slice(b);
+    }
+
+    // Key 11: script_data_hash
+    if let Some(ref h) = body.script_data_hash {
+        cbor::write_uint_canonical(buf, 11);
+        cbor::write_bytes_canonical(buf, &h.0);
+    }
+
+    // Key 13: collateral_inputs
+    if let Some(ref col) = body.collateral_inputs {
+        cbor::write_uint_canonical(buf, 13);
+        crate::shelley::tx::encode_tx_inputs(buf, col, ctx)?;
+    }
+
+    // Key 14: required_signers
+    if let Some(ref signers) = body.required_signers {
+        cbor::write_uint_canonical(buf, 14);
+        cbor::write_array_header(
+            buf,
+            ContainerEncoding::Definite(signers.len() as u64, cbor::canonical_width(signers.len() as u64)),
+        );
+        for s in signers {
+            cbor::write_bytes_canonical(buf, &s.0);
+        }
+    }
+
+    // Key 15: network_id
+    if let Some(nid) = body.network_id {
+        cbor::write_uint_canonical(buf, 15);
+        cbor::write_uint_canonical(buf, nid as u64);
+    }
+
+    // Key 16: collateral_return (map-form output)
+    if let Some(ref ret) = body.collateral_return {
+        cbor::write_uint_canonical(buf, 16);
+        encode_babbage_tx_out_map(buf, ret)?;
+    }
+
+    // Key 17: total_collateral
+    if let Some(Coin(v)) = body.total_collateral {
+        cbor::write_uint_canonical(buf, 17);
+        cbor::write_uint_canonical(buf, v);
+    }
+
+    // Key 18: reference_inputs
+    if let Some(ref refs) = body.reference_inputs {
+        cbor::write_uint_canonical(buf, 18);
+        crate::shelley::tx::encode_tx_inputs(buf, refs, ctx)?;
+    }
+
+    Ok(())
+}
+
+impl AdeEncode for BabbageTxBody {
+    fn ade_encode(&self, buf: &mut Vec<u8>, ctx: &CodecContext) -> Result<(), CodecError> {
+        encode_babbage_tx_body(buf, self, ctx)
+    }
+}
+
 /// Encode a Babbage tx output in canonical map form.
 ///
 /// `{0: address, 1: value, ?2: datum_option_raw, ?3: script_ref_raw}`
@@ -528,6 +672,82 @@ mod tests {
         let mut data: Vec<u8> = vec![0x83, 0x43, 0x01, 0x02, 0x03, 0x18, 0x2a, 0x58, 0x20];
         data.extend_from_slice(&[0xDD; 32]);
         round_trip_array(&data);
+    }
+
+    fn babbage_body_round_trip(body: BabbageTxBody) {
+        let mut buf = Vec::new();
+        <BabbageTxBody as AdeEncode>::ade_encode(&body, &mut buf, &ctx()).unwrap();
+        let mut off = 0;
+        let decoded = decode_babbage_tx_body(&buf, &mut off).unwrap();
+        assert_eq!(off, buf.len(), "decoder must consume all bytes");
+        assert_eq!(body, decoded, "body round-trip must preserve fields");
+    }
+
+    fn minimal_babbage_body() -> BabbageTxBody {
+        let mut inputs = BTreeSet::new();
+        inputs.insert(TxIn {
+            tx_hash: Hash32([0xAA; 32]),
+            index: 0,
+        });
+        BabbageTxBody {
+            inputs,
+            outputs: vec![BabbageTxOut {
+                address: vec![0x60, 0x01, 0x02, 0x03, 0x04],
+                coin: Coin(1_000_000),
+                multi_asset: None,
+                datum_option: None,
+                script_ref: None,
+            }],
+            fee: Coin(200_000),
+            ttl: None,
+            certs: None,
+            withdrawals: None,
+            update: None,
+            metadata_hash: None,
+            validity_interval_start: None,
+            mint: None,
+            script_data_hash: None,
+            collateral_inputs: None,
+            required_signers: None,
+            network_id: None,
+            collateral_return: None,
+            total_collateral: None,
+            reference_inputs: None,
+        }
+    }
+
+    #[test]
+    fn body_babbage_minimal() {
+        babbage_body_round_trip(minimal_babbage_body());
+    }
+
+    #[test]
+    fn body_babbage_with_plutus_and_babbage_fields() {
+        let mut b = minimal_babbage_body();
+        b.script_data_hash = Some(Hash32([0xCC; 32]));
+        let mut col = BTreeSet::new();
+        col.insert(TxIn {
+            tx_hash: Hash32([0x99; 32]),
+            index: 0,
+        });
+        b.collateral_inputs = Some(col.clone());
+        b.reference_inputs = Some({
+            let mut r = BTreeSet::new();
+            r.insert(TxIn {
+                tx_hash: Hash32([0x88; 32]),
+                index: 1,
+            });
+            r
+        });
+        b.collateral_return = Some(BabbageTxOut {
+            address: vec![0x60, 0xDE, 0xAD],
+            coin: Coin(50_000),
+            multi_asset: None,
+            datum_option: None,
+            script_ref: None,
+        });
+        b.total_collateral = Some(Coin(100_000));
+        babbage_body_round_trip(b);
     }
 
     #[test]

@@ -293,7 +293,7 @@ impl AdeEncode for ShelleyTxBody {
     }
 }
 
-fn encode_tx_inputs(
+pub(crate) fn encode_tx_inputs(
     buf: &mut Vec<u8>,
     inputs: &BTreeSet<TxIn>,
     _ctx: &CodecContext,
@@ -306,7 +306,7 @@ fn encode_tx_inputs(
     Ok(())
 }
 
-fn encode_tx_in(buf: &mut Vec<u8>, input: &TxIn) -> Result<(), CodecError> {
+pub(crate) fn encode_tx_in(buf: &mut Vec<u8>, input: &TxIn) -> Result<(), CodecError> {
     cbor::write_array_header(buf, ContainerEncoding::Definite(2, IntWidth::Inline));
     cbor::write_bytes_canonical(buf, &input.tx_hash.0);
     cbor::write_uint_canonical(buf, u64::from(input.index));
