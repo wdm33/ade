@@ -19,13 +19,17 @@
 //! subject of slice S-34.
 
 mod contract;
+mod crash_safety;
 mod error;
 mod in_memory;
+mod persistent;
 mod types;
 
 pub use contract::run_contract_tests;
+pub use crash_safety::{run_crash_safety_tests, KillStrategy, NoKill};
 pub use error::ChainDbError;
 pub use in_memory::InMemoryChainDb;
+pub use persistent::{PersistentChainDb, PersistentChainDbOptions, SyncCadence};
 pub use types::{ChainTip, StoredBlock};
 
 use ade_types::primitives::{Hash32, SlotNo};

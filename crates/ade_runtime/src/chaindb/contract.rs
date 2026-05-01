@@ -35,10 +35,13 @@ fn block(slot: u64, hash_byte: u8) -> StoredBlock {
 /// Run every assertion in the contract suite against a fresh
 /// `ChainDb` produced by `make_db`. Panics on first failure (the
 /// usual `#[test]` convention).
-pub fn run_contract_tests<D, F>(make_db: F)
+///
+/// `make_db` is `FnMut` so callers can share state (e.g., a counter
+/// for unique persistent paths) across invocations.
+pub fn run_contract_tests<D, F>(mut make_db: F)
 where
     D: ChainDb,
-    F: Fn() -> D,
+    F: FnMut() -> D,
 {
     empty_db_has_no_tip(&make_db());
     put_then_get_by_hash(&make_db());

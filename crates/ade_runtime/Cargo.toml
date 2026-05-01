@@ -5,3 +5,10 @@ edition = "2021"
 
 [dependencies]
 ade_types = { path = "../ade_types" }
+# Persistent ChainDb backing store (S-34, Tier 5 choice).
+# See docs/active/S-34_obligation_discharge.md §O-34.1.
+# Pure Rust, ACID, single-file. MIT/Apache.
+redb = "2"
+
+[dev-dependencies]
+tempfile = "3"
