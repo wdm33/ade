@@ -23,6 +23,7 @@ mod crash_safety;
 mod error;
 mod in_memory;
 mod persistent;
+mod snapshot_contract;
 mod types;
 
 pub use contract::run_contract_tests;
@@ -30,6 +31,7 @@ pub use crash_safety::{run_crash_safety_tests, KillStrategy, NoKill};
 pub use error::ChainDbError;
 pub use in_memory::InMemoryChainDb;
 pub use persistent::{PersistentChainDb, PersistentChainDbOptions, SyncCadence};
+pub use snapshot_contract::run_snapshot_contract_tests;
 pub use types::{ChainTip, StoredBlock};
 
 use ade_types::primitives::{Hash32, SlotNo};
@@ -81,4 +83,35 @@ pub trait ChainDb: Send + Sync {
     /// After return, no read operation observes such a block.
     /// Rolling back beyond the empty tip is `Ok(())` (no-op).
     fn rollback_to_slot(&self, slot: SlotNo) -> Result<(), ChainDbError>;
+}
+
+/// Snapshot storage surface (S-35).
+///
+/// Separate from [`ChainDb`] because snapshot lifecycle differs from
+/// block storage (write cadence, read pattern, optionality). Callers
+/// that need both take `D: ChainDb + SnapshotStore`. Bytes are opaque
+/// at this layer — caller chooses the encoding (typically Ade's
+/// canonical fingerprint format per the Phase 4 cluster plan).
+pub trait SnapshotStore: Send + Sync {
+    /// Insert a snapshot at `slot`. Idempotent if the same bytes
+    /// were already stored at the same slot; conflicting bytes at
+    /// the same slot return `InvalidOperation`.
+    fn put_snapshot(
+        &self,
+        slot: SlotNo,
+        bytes: &[u8],
+    ) -> Result<(), ChainDbError>;
+
+    /// Look up a snapshot by slot. `Ok(None)` if absent.
+    fn get_snapshot(&self, slot: SlotNo) -> Result<Option<Vec<u8>>, ChainDbError>;
+
+    /// Highest-slot snapshot, or `None` if none exist.
+    fn latest_snapshot(&self)
+        -> Result<Option<(SlotNo, Vec<u8>)>, ChainDbError>;
+
+    /// All slots with stored snapshots, in ascending order.
+    fn list_snapshot_slots(&self) -> Result<Vec<SlotNo>, ChainDbError>;
+
+    /// Remove a snapshot at `slot`. `Ok(())` whether present or not.
+    fn delete_snapshot(&self, slot: SlotNo) -> Result<(), ChainDbError>;
 }

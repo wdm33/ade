@@ -20,15 +20,21 @@ use redb::{Database, ReadableTable, TableDefinition};
 
 use ade_types::primitives::{Hash32, SlotNo};
 
-use super::{BlockIter, ChainDb, ChainDbError, ChainTip, StoredBlock};
+use super::{BlockIter, ChainDb, ChainDbError, ChainTip, SnapshotStore, StoredBlock};
 
 const BLOCKS_BY_SLOT: TableDefinition<u64, &[u8]> =
     TableDefinition::new("blocks_by_slot");
 const SLOT_BY_HASH: TableDefinition<&[u8; 32], u64> =
     TableDefinition::new("slot_by_hash");
+const SNAPSHOTS_BY_SLOT: TableDefinition<u64, &[u8]> =
+    TableDefinition::new("snapshots_by_slot");
 const META: TableDefinition<&str, &[u8]> = TableDefinition::new("meta");
 
-const SCHEMA_VERSION: u32 = 1;
+/// Schema version. Bumped from 1 to 2 in S-35 to add the
+/// `snapshots_by_slot` table. Forward-compatible with v1 files —
+/// opening a v1 file succeeds; the schema_version is bumped to 2 on
+/// the first write.
+const SCHEMA_VERSION: u32 = 2;
 const MAGIC_BYTES: &[u8] = b"ADE\0CHAINDB\0";
 const META_KEY_MAGIC: &str = "magic";
 const META_KEY_SCHEMA: &str = "schema_version";
@@ -117,13 +123,21 @@ impl PersistentChainDb {
                                         "schema_version absent".into(),
                                     )
                                 })?;
-                            if version != SCHEMA_VERSION {
+                            // Forward-compatible: v1 files are
+                            // accepted. Schema is upgraded to current
+                            // on first write below.
+                            if version > SCHEMA_VERSION {
                                 return Err(ChainDbError::SchemaMismatch {
                                     expected: SCHEMA_VERSION,
                                     found: version,
                                 });
                             }
-                            false
+                            if version < SCHEMA_VERSION {
+                                // upgrade on next write
+                                true
+                            } else {
+                                false
+                            }
                         }
                         Some(_) => {
                             return Err(ChainDbError::Corruption(
@@ -438,6 +452,109 @@ impl ChainDb for PersistentChainDb {
     }
 }
 
+impl SnapshotStore for PersistentChainDb {
+    fn put_snapshot(
+        &self,
+        slot: SlotNo,
+        bytes: &[u8],
+    ) -> Result<(), ChainDbError> {
+        let _guard = self.write_lock.lock().map_err(lock_poisoned)?;
+        let txn = self.begin_write()?;
+
+        // Conflict / idempotency check.
+        let conflict = {
+            let snapshots =
+                txn.open_table(SNAPSHOTS_BY_SLOT).map_err(map_table_err)?;
+            let existing = snapshots
+                .get(slot.0)
+                .map_err(map_storage_err)?
+                .map(|v| v.value().to_vec());
+            existing
+        };
+
+        match conflict {
+            Some(existing_bytes) if existing_bytes == bytes => {
+                txn.commit().map_err(map_commit_err)?;
+                return Ok(());
+            }
+            Some(_) => {
+                return Err(ChainDbError::InvalidOperation(format!(
+                    "snapshot at slot {} already occupied by different bytes",
+                    slot.0,
+                )));
+            }
+            None => {}
+        }
+
+        {
+            let mut snapshots =
+                txn.open_table(SNAPSHOTS_BY_SLOT).map_err(map_table_err)?;
+            snapshots
+                .insert(slot.0, bytes)
+                .map_err(map_storage_err)?;
+        }
+        txn.commit().map_err(map_commit_err)?;
+        Ok(())
+    }
+
+    fn get_snapshot(&self, slot: SlotNo) -> Result<Option<Vec<u8>>, ChainDbError> {
+        let txn = self.db.begin_read().map_err(map_txn_err)?;
+        let snapshots = match txn.open_table(SNAPSHOTS_BY_SLOT) {
+            Ok(t) => t,
+            Err(redb::TableError::TableDoesNotExist(_)) => return Ok(None),
+            Err(e) => return Err(map_table_err(e)),
+        };
+        let bytes = snapshots.get(slot.0).map_err(map_storage_err)?;
+        Ok(bytes.map(|v| v.value().to_vec()))
+    }
+
+    fn latest_snapshot(
+        &self,
+    ) -> Result<Option<(SlotNo, Vec<u8>)>, ChainDbError> {
+        let txn = self.db.begin_read().map_err(map_txn_err)?;
+        let snapshots = match txn.open_table(SNAPSHOTS_BY_SLOT) {
+            Ok(t) => t,
+            Err(redb::TableError::TableDoesNotExist(_)) => return Ok(None),
+            Err(e) => return Err(map_table_err(e)),
+        };
+        let last: Option<(u64, Vec<u8>)> = snapshots
+            .iter()
+            .map_err(map_storage_err)?
+            .filter_map(|r| r.ok())
+            .map(|(s, b)| (s.value(), b.value().to_vec()))
+            .last();
+        Ok(last.map(|(s, b)| (SlotNo(s), b)))
+    }
+
+    fn list_snapshot_slots(&self) -> Result<Vec<SlotNo>, ChainDbError> {
+        let txn = self.db.begin_read().map_err(map_txn_err)?;
+        let snapshots = match txn.open_table(SNAPSHOTS_BY_SLOT) {
+            Ok(t) => t,
+            Err(redb::TableError::TableDoesNotExist(_)) => return Ok(Vec::new()),
+            Err(e) => return Err(map_table_err(e)),
+        };
+        let slots: Vec<SlotNo> = snapshots
+            .iter()
+            .map_err(map_storage_err)?
+            .filter_map(|r| r.ok())
+            .map(|(s, _)| SlotNo(s.value()))
+            .collect();
+        Ok(slots)
+    }
+
+    fn delete_snapshot(&self, slot: SlotNo) -> Result<(), ChainDbError> {
+        let _guard = self.write_lock.lock().map_err(lock_poisoned)?;
+        let txn = self.begin_write()?;
+        {
+            let mut snapshots =
+                txn.open_table(SNAPSHOTS_BY_SLOT).map_err(map_table_err)?;
+            snapshots.remove(slot.0).map_err(map_storage_err)?;
+        }
+        txn.commit().map_err(map_commit_err)?;
+        Ok(())
+    }
+}
+
 // ---------- error mapping ----------
 
 fn lock_poisoned<T>(_: std::sync::PoisonError<T>) -> ChainDbError {
@@ -511,6 +628,36 @@ mod tests {
             counter.set(counter.get() + 1);
             fresh_db(&tmp, &format!("contract_{}.chaindb", counter.get()))
         });
+    }
+
+    #[test]
+    fn persistent_passes_snapshot_contract() {
+        use crate::chaindb::run_snapshot_contract_tests;
+        let tmp = TempDir::new().expect("tempdir");
+        let counter = std::cell::Cell::new(0u32);
+        run_snapshot_contract_tests(|| {
+            counter.set(counter.get() + 1);
+            fresh_db(&tmp, &format!("snap_{}.chaindb", counter.get()))
+        });
+    }
+
+    #[test]
+    fn snapshots_persist_across_reopen() {
+        use crate::chaindb::SnapshotStore;
+        let tmp = TempDir::new().expect("tempdir");
+        let path = tmp.path().join("snap_reopen.chaindb");
+        {
+            let db = PersistentChainDb::open(PersistentChainDbOptions::at(&path))
+                .expect("open");
+            db.put_snapshot(SlotNo(42), b"snapshot bytes").expect("put");
+        }
+        let db = PersistentChainDb::open(PersistentChainDbOptions::at(&path))
+            .expect("reopen");
+        let got = db
+            .get_snapshot(SlotNo(42))
+            .expect("get")
+            .expect("present");
+        assert_eq!(got, b"snapshot bytes");
     }
 
     #[test]

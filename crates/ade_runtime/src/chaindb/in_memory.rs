@@ -17,7 +17,7 @@ use std::sync::Mutex;
 
 use ade_types::primitives::{Hash32, SlotNo};
 
-use super::{BlockIter, ChainDb, ChainDbError, ChainTip, StoredBlock};
+use super::{BlockIter, ChainDb, ChainDbError, ChainTip, SnapshotStore, StoredBlock};
 
 /// In-memory chain database.
 ///
@@ -34,6 +34,7 @@ pub struct InMemoryChainDb {
 struct Inner {
     by_slot: BTreeMap<SlotNo, StoredBlock>,
     by_hash: BTreeMap<Hash32, SlotNo>,
+    snapshots: BTreeMap<SlotNo, Vec<u8>>,
 }
 
 impl InMemoryChainDb {
@@ -118,6 +119,54 @@ impl ChainDb for InMemoryChainDb {
                 inner.by_hash.remove(&block.hash);
             }
         }
+        Ok(())
+    }
+}
+
+impl SnapshotStore for InMemoryChainDb {
+    fn put_snapshot(
+        &self,
+        slot: SlotNo,
+        bytes: &[u8],
+    ) -> Result<(), ChainDbError> {
+        let mut inner = self.inner.lock().map_err(lock_poisoned)?;
+        if let Some(existing) = inner.snapshots.get(&slot) {
+            if existing.as_slice() != bytes {
+                return Err(ChainDbError::InvalidOperation(format!(
+                    "snapshot at slot {} already occupied by different bytes",
+                    slot.0,
+                )));
+            }
+            return Ok(());
+        }
+        inner.snapshots.insert(slot, bytes.to_vec());
+        Ok(())
+    }
+
+    fn get_snapshot(&self, slot: SlotNo) -> Result<Option<Vec<u8>>, ChainDbError> {
+        let inner = self.inner.lock().map_err(lock_poisoned)?;
+        Ok(inner.snapshots.get(&slot).cloned())
+    }
+
+    fn latest_snapshot(
+        &self,
+    ) -> Result<Option<(SlotNo, Vec<u8>)>, ChainDbError> {
+        let inner = self.inner.lock().map_err(lock_poisoned)?;
+        Ok(inner
+            .snapshots
+            .iter()
+            .next_back()
+            .map(|(s, b)| (*s, b.clone())))
+    }
+
+    fn list_snapshot_slots(&self) -> Result<Vec<SlotNo>, ChainDbError> {
+        let inner = self.inner.lock().map_err(lock_poisoned)?;
+        Ok(inner.snapshots.keys().copied().collect())
+    }
+
+    fn delete_snapshot(&self, slot: SlotNo) -> Result<(), ChainDbError> {
+        let mut inner = self.inner.lock().map_err(lock_poisoned)?;
+        inner.snapshots.remove(&slot);
         Ok(())
     }
 }
