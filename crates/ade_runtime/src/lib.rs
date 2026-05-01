@@ -8,3 +8,4 @@
 #![deny(unsafe_code)]
 
 pub mod chaindb;
+pub mod recovery;
