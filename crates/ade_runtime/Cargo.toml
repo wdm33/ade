@@ -2,3 +2,6 @@
 name = "ade_runtime"
 version = "0.1.0"
 edition = "2021"
+
+[dependencies]
+ade_types = { path = "../ade_types" }
