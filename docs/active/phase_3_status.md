@@ -150,20 +150,23 @@ No exact match in aiken's issue tracker. Two relevant items:
 | [aiken#1203](https://github.com/aiken-lang/aiken/issues/1203) | Open | Datum/redeemer re-serialisation in ScriptContext. Same problem family. |
 | [aiken PR #1298](https://github.com/aiken-lang/aiken/pull/1298) | Open (filed 2026-04-05) | Actively fixes #1203 via canonical PlutusData re-encoding. **Likely fixes our bug too.** |
 
-### Pending decision: test before file?
+### Pre-filing test result (2026-05-01)
 
-**Recommended next action**: test our reproducer against aiken `main`
-(post-PR-1283 merge, with PR-1298 applied) before filing a new issue.
+Tested reproducer against aiken `main` at commit `5538a42b`, which
+**includes** PR #1298 (canonical PlutusData re-encoding, merged
+2026-04-18 as `437351c2`).
 
-Three possible outcomes:
-1. Reproducer passes on master → don't file; bump our aiken pin to
-   v1.1.22+ when released.
-2. Still fails but PR #1298 fixes it → comment on #1203/PR #1298
-   with our fixture.
-3. Still fails even with PR #1298 → file new issue with full
-   reproducer.
+**Result**: same trace signature
+(`Trace Expiration time is not properly set / Trace PT5`). PR #1298
+does **not** resolve this divergence.
 
-Estimated cost: ~30 min for option (1), ~45 min for option (2).
+**Decision**: file a new upstream issue (Option C from the
+pre-test branch matrix). Issue body in
+`docs/active/aiken_upstream_issue_draft.md` already includes the
+"also reproduced against main" line.
+
+Cargo state restored to the v1.1.21 pin / `pallas-primitives = "0.33"`
+after the experiment — no in-tree changes remain.
 
 ---
 
@@ -207,36 +210,33 @@ reproducer.
 
 ## Next Session Pickup
 
-### Immediate next step (30–45 min)
+### Immediate next step
 
-**Test reproducer against aiken `main`** before filing upstream:
-
-1. Edit `crates/ade_plutus/Cargo.toml`:
-   ```toml
-   aiken_uplc = { git = "https://github.com/aiken-lang/aiken", branch = "main", package = "uplc" }
-   ```
-2. Optionally also try PR #1298 branch (`canonical-plutus-data-encoding`
-   or similar — check the PR).
-3. Run: `cargo test -p ade_plutus --test conway_validity_range_reproducer -- --ignored --nocapture`
-4. Record outcome in `docs/active/aiken_upstream_issue_draft.md`.
-5. Proceed per outcome (don't file / comment on #1203 / file new).
+**File the upstream issue** — body ready in
+`docs/active/aiken_upstream_issue_draft.md`. Test against aiken
+`main` (commit `5538a42b`, includes PR #1298) confirmed the bug is
+not fixed there.
 
 ### After that
 
-- If upstream fix works: bump pin, rerun `plutus_era_contiguous_full`
-  to confirm 0 divergent-fails, then flip CE-88 Partial → Closed and
-  CE-90 authority_surfaces → `enforced`.
-- If upstream fix doesn't work: file the new issue, then continue
-  waiting / inheriting.
+- File upstream issue → wait for triage / fix.
+- When upstream fix lands and is released: bump pin, rerun
+  `plutus_era_contiguous_full` to confirm 0 divergent-fails, then
+  flip CE-88 Partial → Closed and CE-90 authority_surfaces →
+  `enforced`.
+- Until then: CE-88 stays "strong partial," CE-90 stays "partial,"
+  CE-87 stays "delegated with known upstream issue."
 
 ### Nothing-blocking follow-ups
 
 - Re-run `plutus_era_contiguous_full` with output redirected to a
   file (not `| tail -50`) to capture per-era breakdown.
-- Add a standalone unit test for `decode_invalid_tx_indices` with
-  malformed inputs (currently exercised only end-to-end).
-- Consider exposing `plutus_eval_ineligible` on `BlockVerdict` via
-  `apply_block_classified` too (currently only on `BlockApplyResult`).
+
+(Earlier draft listed two more items — `decode_invalid_tx_indices`
+unit tests and exposing `plutus_eval_ineligible` on `BlockVerdict`.
+Both are landed: 11 unit tests in `crates/ade_ledger/src/plutus_eval.rs::tests`,
+and `BlockVerdict::plutus_eval_ineligible` already populated by
+`apply_block_classified` since commit `2952ba0`.)
 
 ### What's explicitly NOT on the menu
 

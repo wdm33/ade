@@ -7,6 +7,32 @@
 
 Paste everything below the `---` into the GitHub form.
 
+## Pre-filing test results
+
+| Date | aiken ref | uplc commit | PR #1298 included? | Reproducer result | Decision |
+|---|---|---|---|---|---|
+| 2026-05-01 | `branch = main` | `5538a42b` | **Yes** (merged 2026-04-18 as `437351c2`) | **FAIL** — same `Trace Expiration time is not properly set / Trace PT5` signature | File new upstream issue (Option C). PR #1298's canonical PlutusData re-encoding does not address this path. |
+
+Test command:
+
+```
+cargo +nightly test -p ade_plutus --test conway_validity_range_reproducer \
+    -- --ignored --nocapture
+```
+
+Error chain (verbatim):
+
+```
+DecodeFailed("eval_phase_two_raw: failed script execution
+     Spend[0] the validator crashed / exited prematurely
+        Trace Expiration time is not properly set
+        Trace PT5")
+```
+
+After recording the outcome, the v1.1.21 pin and
+`pallas-primitives = "0.33"` were restored. No code or lockfile changes
+remain in tree from this experiment.
+
 ---
 
 ## `eval_phase_two_raw` rejects mainnet Conway txs the chain accepted — `txInfoValidRange` divergence
@@ -129,7 +155,11 @@ these must be true:
 ### Environment
 
 - aiken: pinned at commit `42babe5d` (tag v1.1.21)
-- pallas-primitives: 0.33.0
+- Also reproduced against `main` at commit `5538a42b` (which
+  includes PR #1298, merged 2026-04-18 as `437351c2`). PR #1298's
+  canonical PlutusData re-encoding does **not** resolve this
+  divergence — the same trace signature appears.
+- pallas-primitives: 0.33.0 (with v1.1.21); 0.35.0 (with main)
 - Protocol version under test: 10 (Conway as of cardano-node 10.6.2
   mainnet)
 - Cost models: the pparams values parsed from the Conway

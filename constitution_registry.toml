@@ -667,10 +667,15 @@ source = "Project constitution §3, T-DET-01, T-CORE-03"
 cross_ref = []
 code_locus = "crates/ade_ledger/src/hfc.rs"
 tests = ["translation_summary_proof", "translation_comparison_surface", "transition_proof_surface"]
-ci_script = ""
-status = "partial"
-authority_surface = "all 6 HFC ledger-side translations implemented; 22/22 encoding-independent fields match oracle; consensus-side HFC deferred to Phase 4; byte-parity with Haskell on-disk ExtLedgerState deliberately not pursued (see docs/active/CE-79_gate_statement.md Tier 4)"
+ci_script = "ci/ci_check_hfc_translation.sh"
+status = "enforced"
+authority_surface = "ledger-side HFC translation enforced: all 6 transitions implemented, 22/22 encoding-independent fields match oracle (CE-73-semantic, Tier 2 closed). Byte-parity with Haskell on-disk ExtLedgerState CBOR is explicit non-goal (CE-73-bytes, Tier 4 per docs/active/CE-79_gate_statement.md and docs/active/CE-73_reclassification.md). Consensus-side HFC scheduling tracked separately under Phase 4 cluster N-B."
 cluster = "CL-LEDGER-VERDICT"
+evidence = [
+  "docs/active/phase_2c_progress_report.md",
+  "docs/active/CE-73_reclassification.md",
+  "docs/active/T-26_hfc_ledger_side.md",
+]
 
 [[rules]]
 id = "DC-STORE-04"

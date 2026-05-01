@@ -338,4 +338,77 @@ mod tests {
         let pairs = build_resolved_utxos(&inputs, None, None, &utxo, CardanoEra::Alonzo);
         assert!(pairs.is_none(), "Byron UTxO for Plutus tx → Ineligible");
     }
+
+    #[test]
+    fn decode_invalid_tx_indices_none_is_empty() {
+        assert!(decode_invalid_tx_indices(None).is_empty());
+    }
+
+    #[test]
+    fn decode_invalid_tx_indices_empty_slice_is_empty() {
+        assert!(decode_invalid_tx_indices(Some(&[])).is_empty());
+    }
+
+    #[test]
+    fn decode_invalid_tx_indices_empty_definite_array() {
+        // CBOR 0x80 = array(0)
+        assert!(decode_invalid_tx_indices(Some(&[0x80])).is_empty());
+    }
+
+    #[test]
+    fn decode_invalid_tx_indices_empty_indefinite_array() {
+        // CBOR 0x9f 0xff = indefinite array, immediate break
+        assert!(decode_invalid_tx_indices(Some(&[0x9f, 0xff])).is_empty());
+    }
+
+    #[test]
+    fn decode_invalid_tx_indices_definite_uints() {
+        // CBOR 0x83 = array(3); 0x07 0x18 2a 0x19 01 00 = 7, 42, 256
+        let bytes = [0x83, 0x07, 0x18, 0x2a, 0x19, 0x01, 0x00];
+        let got = decode_invalid_tx_indices(Some(&bytes));
+        assert_eq!(got.iter().copied().collect::<Vec<_>>(), vec![7u64, 42, 256]);
+    }
+
+    #[test]
+    fn decode_invalid_tx_indices_indefinite_uints() {
+        // 0x9f indef-array, 0x00, 0x05, 0xff
+        let bytes = [0x9f, 0x00, 0x05, 0xff];
+        let got = decode_invalid_tx_indices(Some(&bytes));
+        assert_eq!(got.iter().copied().collect::<Vec<_>>(), vec![0u64, 5]);
+    }
+
+    #[test]
+    fn decode_invalid_tx_indices_duplicates_collapsed() {
+        // BTreeSet semantics — repeats deduplicate.
+        // array(4): 3, 3, 7, 3
+        let bytes = [0x84, 0x03, 0x03, 0x07, 0x03];
+        let got = decode_invalid_tx_indices(Some(&bytes));
+        assert_eq!(got.iter().copied().collect::<Vec<_>>(), vec![3u64, 7]);
+    }
+
+    #[test]
+    fn decode_invalid_tx_indices_malformed_header_returns_empty() {
+        // 0xff is a stray break — not a valid array header.
+        assert!(decode_invalid_tx_indices(Some(&[0xff])).is_empty());
+    }
+
+    #[test]
+    fn decode_invalid_tx_indices_non_uint_entry_truncates() {
+        // array(2) with first entry = uint 9, second entry = bstr h'ab'.
+        // Definite-length path: read_uint failure on the bstr is silently
+        // skipped (per the function's diagnostic-helper contract). The
+        // already-decoded uint stays in the set.
+        let bytes = [0x82, 0x09, 0x41, 0xab];
+        let got = decode_invalid_tx_indices(Some(&bytes));
+        assert_eq!(got.iter().copied().collect::<Vec<_>>(), vec![9u64]);
+    }
+
+    #[test]
+    fn decode_invalid_tx_indices_indefinite_non_uint_breaks_loop() {
+        // indef-array, 0x00, 0x41 0xab (bstr — non-uint), 0xff.
+        // Indefinite path: hitting the non-uint terminates the read loop.
+        let bytes = [0x9f, 0x00, 0x41, 0xab, 0xff];
+        let got = decode_invalid_tx_indices(Some(&bytes));
+        assert_eq!(got.iter().copied().collect::<Vec<_>>(), vec![0u64]);
+    }
 }
