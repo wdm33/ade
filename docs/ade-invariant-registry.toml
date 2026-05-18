@@ -177,10 +177,10 @@ tier = "true"
 statement = "Recovery is replay-equivalent: restart produces byte-identical state to clean run"
 source = "Project constitution §2"
 cross_ref = ["CN-STORE-03", "CN-STORE-04"]
-code_locus = ""
-tests = []
-ci_script = ""
-status = "declared"
+code_locus = "crates/ade_runtime/src/recovery.rs, crates/ade_runtime/src/chaindb/crash_safety.rs"
+tests = ["recover_from_snapshot_and_replay_forward", "recover_from_genesis_when_no_snapshot", "apply_failure_surfaces_with_slot", "snapshot_decode_failure_surfaces_as_error", "snapshot_with_no_post_blocks_is_ok", "stress_kill_smoke", "stress_kill_1000", "snapshot_table_intact_after_kill_loop", "persistent_passes_crash_safety_with_no_kill"]
+ci_script = "ci/ci_check_recovery_contract.sh, ci/ci_check_chaindb_crash_safety.sh"
+status = "enforced"
 
 [[rules]]
 id = "T-REC-02"
@@ -188,10 +188,10 @@ tier = "true"
 statement = "All authoritative state derivable by replay from inputs"
 source = "Project constitution §2"
 cross_ref = ["CN-LEDGER-02", "CN-STORE-05"]
-code_locus = ""
-tests = []
-ci_script = ""
-status = "declared"
+code_locus = "crates/ade_runtime/src/recovery.rs"
+tests = ["recover_from_snapshot_and_replay_forward", "recover_from_genesis_when_no_snapshot"]
+ci_script = "ci/ci_check_recovery_contract.sh"
+status = "enforced"
 
 [[rules]]
 id = "T-COLL-01"
@@ -549,10 +549,10 @@ tier = "derived"
 statement = "Recovery from power-loss produces replay-equivalent state"
 source = "Project constitution §3, T-REC-01"
 cross_ref = []
-code_locus = ""
-tests = []
-ci_script = ""
-status = "declared"
+code_locus = "crates/ade_runtime/src/chaindb/crash_safety.rs, crates/ade_runtime/tests/stress_kill_harness.rs"
+tests = ["stress_kill_smoke", "stress_kill_1000", "snapshot_table_intact_after_kill_loop", "persistent_passes_crash_safety_with_no_kill"]
+ci_script = "ci/ci_check_chaindb_crash_safety.sh"
+status = "enforced"
 
 [[rules]]
 id = "DC-STORE-02"
@@ -560,10 +560,10 @@ tier = "derived"
 statement = "Append-only provenance for finalized data"
 source = "Project constitution §3, T-REC-02"
 cross_ref = []
-code_locus = ""
-tests = []
-ci_script = ""
-status = "declared"
+code_locus = "crates/ade_runtime/src/chaindb/persistent.rs, crates/ade_runtime/src/chaindb/contract.rs"
+tests = ["persistent_passes_contract", "in_memory_passes_contract", "reopen_observes_committed_block"]
+ci_script = "ci/ci_check_chaindb_contract.sh"
+status = "enforced"
 
 [[rules]]
 id = "DC-STORE-03"
@@ -571,10 +571,10 @@ tier = "derived"
 statement = "Atomic snapshots (fully written or absent)"
 source = "Project constitution §3, T-REC-01"
 cross_ref = []
-code_locus = ""
-tests = []
-ci_script = ""
-status = "declared"
+code_locus = "crates/ade_runtime/src/chaindb/snapshot_contract.rs, crates/ade_runtime/src/chaindb/persistent.rs"
+tests = ["persistent_passes_snapshot_contract", "in_memory_passes_snapshot_contract", "snapshots_persist_across_reopen", "corrupted_magic_returns_corruption_error"]
+ci_script = "ci/ci_check_chaindb_contract.sh"
+status = "enforced"
 
 [[rules]]
 id = "DC-INGRESS-01"
@@ -677,6 +677,19 @@ evidence = [
   "docs/active/T-26_hfc_ledger_side.md",
 ]
 
+# DC-STORE-04 describes the cardano-node three-DB architecture
+# (ImmutableDB + VolatileDB + LedgerDB). Ade has deliberately diverged
+# per CE-79 Tier 5 (intentional-divergence on non-hash-critical
+# operator-facing surfaces): a single redb-backed store with logical
+# separation via key prefixes (slots_by_hash, hashes_by_slot,
+# snapshots_by_slot). The semantic guarantees of DC-STORE-04 —
+# append-only finalized data and atomic snapshots — survive and are
+# enforced by DC-STORE-02 and DC-STORE-03, both now enforced. The
+# rule remains "declared" rather than "enforced" because Ade does
+# not implement the literal three-DB topology DC-STORE-04 names.
+# IDD discipline: rules are append-only; reclassification requires
+# explicit user action (e.g., a new DC-STORE-04A strengthening that
+# states the equivalent guarantee in Ade's terms).
 [[rules]]
 id = "DC-STORE-04"
 tier = "derived"
@@ -694,10 +707,10 @@ tier = "derived"
 statement = "Recovery is snapshot + forward replay (not full genesis replay): load most recent valid snapshot, replay forward from ImmutableDB tip"
 source = "Project constitution §3, T-REC-01"
 cross_ref = []
-code_locus = ""
-tests = []
-ci_script = ""
-status = "declared"
+code_locus = "crates/ade_runtime/src/recovery.rs"
+tests = ["recover_from_snapshot_and_replay_forward", "recover_from_genesis_when_no_snapshot", "no_starting_point_error", "snapshot_with_no_post_blocks_is_ok"]
+ci_script = "ci/ci_check_recovery_contract.sh"
+status = "enforced"
 
 [[rules]]
 id = "DC-STORE-06"
@@ -1397,10 +1410,10 @@ tier = "true"
 statement = "Crash recovery must produce the same authoritative state as clean replay over the accepted canonical inputs"
 source = "classification_table.md §I"
 cross_ref = ["T-REC-01"]
-code_locus = ""
-tests = []
-ci_script = ""
-status = "declared"
+code_locus = "crates/ade_runtime/src/chaindb/crash_safety.rs, crates/ade_runtime/tests/stress_kill_harness.rs"
+tests = ["stress_kill_smoke", "stress_kill_1000", "snapshot_table_intact_after_kill_loop", "persistent_passes_crash_safety_with_no_kill"]
+ci_script = "ci/ci_check_chaindb_crash_safety.sh"
+status = "enforced"
 attack_rationale = "Core replay-first safety property."
 evidence_notes = "Direct restatement of T-REC-01. Evidence: ChainDB recovery in ouroboros-consensus loads snapshot + replays forward."
 
@@ -1410,10 +1423,10 @@ tier = "true"
 statement = "Checkpoints must be atomic: fully committed and valid, or absent"
 source = "classification_table.md §I"
 cross_ref = ["T-REC-01"]
-code_locus = ""
-tests = []
-ci_script = ""
-status = "declared"
+code_locus = "crates/ade_runtime/src/chaindb/snapshot_contract.rs, crates/ade_runtime/src/chaindb/persistent.rs"
+tests = ["persistent_passes_snapshot_contract", "in_memory_passes_snapshot_contract", "snapshots_persist_across_reopen", "corrupted_magic_returns_corruption_error"]
+ci_script = "ci/ci_check_chaindb_contract.sh"
+status = "enforced"
 attack_rationale = "Prevents half-state corruption from becoming authoritative."
 evidence_notes = "Universal: partial checkpoints could corrupt recovery. Evidence: ledger snapshot atomicity in ouroboros-consensus."
 
@@ -1423,10 +1436,10 @@ tier = "true"
 statement = "Finalized provenance must be append-only, auditable, and replay-derivable"
 source = "classification_table.md §I"
 cross_ref = ["T-REC-02"]
-code_locus = ""
-tests = []
-ci_script = ""
-status = "declared"
+code_locus = "crates/ade_runtime/src/chaindb/persistent.rs, crates/ade_runtime/src/chaindb/contract.rs"
+tests = ["persistent_passes_contract", "in_memory_passes_contract", "reopen_observes_committed_block"]
+ci_script = "ci/ci_check_chaindb_contract.sh"
+status = "enforced"
 attack_rationale = "Ensures trustworthy recovery and debugging evidence."
 evidence_notes = "Universal: finalized data must be immutable. Evidence: ImmutableDB in ouroboros-consensus is append-only by design."
 
