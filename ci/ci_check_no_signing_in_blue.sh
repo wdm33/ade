@@ -5,7 +5,7 @@ set -euo pipefail
 # Signing operations must be confined to the RED shell.
 # Verification is permitted in BLUE; signing is not.
 
-BLUE_CRATES=("ade_codec" "ade_types" "ade_crypto" "ade_core")
+BLUE_CRATES=("ade_codec" "ade_types" "ade_crypto" "ade_core" "ade_ledger" "ade_plutus")
 
 SIGNING_PATTERNS=(
     "SigningKey"

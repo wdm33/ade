@@ -4,7 +4,7 @@ set -euo pipefail
 # Grep BLUE crate src/ for semantic cfg attributes (T-BUILD-01).
 # Feature flags in authoritative code could alter semantics per build profile.
 
-BLUE_CRATES=("ade_codec" "ade_types" "ade_crypto" "ade_core")
+BLUE_CRATES=("ade_codec" "ade_types" "ade_crypto" "ade_core" "ade_ledger" "ade_plutus")
 
 REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 

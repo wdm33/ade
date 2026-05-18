@@ -2,10 +2,10 @@
 set -euo pipefail
 
 # Verify contract header present as first line of every .rs source file
-# in BLUE crates only (ade_codec, ade_types, ade_crypto, ade_core).
+# in BLUE crates only (ade_codec, ade_types, ade_crypto, ade_core, ade_ledger, ade_plutus).
 # GREEN and RED crates are outside CE-04 scope.
 
-BLUE_CRATES=("ade_codec" "ade_types" "ade_crypto" "ade_core")
+BLUE_CRATES=("ade_codec" "ade_types" "ade_crypto" "ade_core" "ade_ledger" "ade_plutus")
 EXPECTED_FIRST_LINE="// Core Contract:"
 
 REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"

@@ -5,17 +5,23 @@ set -euo pipefail
 # Pattern scan: no raw CBOR decoding outside named chokepoint functions.
 #
 # Named chokepoints (grows with each era slice):
-#   - decode_block_envelope
-#   - decode_byron_ebb_block, decode_byron_regular_block
-#   - decode_shelley_block, decode_allegra_block, decode_mary_block
-#   - decode_alonzo_block, decode_babbage_block, decode_conway_block
-#   - decode_address
+#   - decode_block_envelope                              (ade_codec)
+#   - decode_byron_ebb_block, decode_byron_regular_block (ade_codec)
+#   - decode_shelley_block, decode_allegra_block,
+#     decode_mary_block, decode_alonzo_block,
+#     decode_babbage_block, decode_conway_block          (ade_codec)
+#   - decode_address                                     (ade_codec)
+#   - PlutusScript::from_cbor                            (ade_plutus)
+#
+# Block CBOR ingress lives in ade_codec. Plutus script CBOR is a
+# distinct ingress surface and lives in ade_plutus — its chokepoint
+# file is exempt from Check 3 (see allowlist below).
 #
 # Invariants: DC-INGRESS-01, T-INGRESS-01
 
 REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 
-BLUE_CRATES=("ade_codec" "ade_types" "ade_crypto" "ade_core")
+BLUE_CRATES=("ade_codec" "ade_types" "ade_crypto" "ade_core" "ade_ledger" "ade_plutus")
 
 FAILED=0
 
@@ -54,6 +60,9 @@ else
 fi
 
 # Check 3: No direct minicbor::decode or raw CBOR parsing outside ade_codec
+# Allowlist: ade_plutus/src/evaluator.rs hosts PlutusScript::from_cbor,
+# the named chokepoint for Plutus script ingress (a distinct surface from
+# block CBOR, with its own decoder via aiken/pallas).
 for crate in "${BLUE_CRATES[@]}"; do
     if [ "$crate" = "ade_codec" ]; then
         continue
@@ -65,7 +74,8 @@ for crate in "${BLUE_CRATES[@]}"; do
     fi
 
     matches=$(grep -rn 'minicbor::decode\|minicbor::Decode\|from_cbor\|cbor_decode' "$SRC_DIR" --include='*.rs' 2>/dev/null | \
-        grep -v ':[0-9]*:\s*//' || true)
+        grep -v ':[0-9]*:\s*//' | \
+        grep -v '/ade_plutus/src/evaluator\.rs:' || true)
 
     if [ -n "$matches" ]; then
         echo "FAIL: Raw CBOR decoding outside ade_codec in $crate:"
