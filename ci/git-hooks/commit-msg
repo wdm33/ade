@@ -1,0 +1,43 @@
+#!/usr/bin/env bash
+# commit-msg hook: require Co-Authored-By: Claude trailer.
+#
+# Repo-specific exception to the global no-AI-attribution rule. The
+# vibe-coded challenge requires model attribution on every commit;
+# falling below 90% of total commits would put the prize at risk.
+#
+# Activate (per clone): git config core.hooksPath ci/git-hooks
+#
+# Bypass for legitimate non-AI commits (rare): git commit --no-verify
+
+set -euo pipefail
+
+msg_file="$1"
+
+first_line="$(head -n1 "$msg_file" 2>/dev/null || true)"
+case "$first_line" in
+    "Merge "*|"Revert "*) exit 0 ;;
+esac
+
+git_dir="$(git rev-parse --git-dir 2>/dev/null || echo .git)"
+if [[ -f "$git_dir/MERGE_MSG" ]]; then
+    exit 0
+fi
+
+if grep -v '^#' "$msg_file" | grep -q '^Co-Authored-By: Claude'; then
+    exit 0
+fi
+
+cat >&2 <<'EOF'
+error: commit message missing required trailer.
+
+Ade repo policy (vibe-coded attribution discipline):
+  every commit must include a trailer of the form
+    Co-Authored-By: Claude <model+context> <noreply@anthropic.com>
+
+To keep total trailer coverage at >=90% (currently 102/156 = 65.4%),
+no untrailered commits may be added from this point forward.
+
+Bypass for legitimate non-AI commits (use sparingly):
+  git commit --no-verify
+EOF
+exit 1
