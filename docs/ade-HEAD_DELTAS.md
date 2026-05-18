@@ -5,24 +5,34 @@
 > `.idd-config.json` (`head_deltas_baseline`).
 
 > Baseline: `d509f02` (Phase 3 handoff snapshot, 2026-04-15)
-> HEAD: `3eddcbb` (chore(idd): add .idd-config.json, 2026-05-19)
-> 9 commits, 34 files changed, +4579 / −46 lines
+> HEAD: `c8fa37f` (chore(idd): refresh CODEMAP + TRACEABILITY after BLUE-list drift closure, 2026-05-19)
+> 12 commits, 44 files changed, +7196 / −59 lines
 
-The delta covers three threads of work, in roughly this proportion of the
+The delta covers five threads of work, in roughly this proportion of the
 change budget:
 
-1. **Phase 4 cluster N-D (ChainDB persistence)** — the substantive code work.
-   Slices S-33 through S-36 shipped end-to-end; S-37 (stress kill harness)
-   is in-flight at HEAD with code landed but obligation-discharge doc
-   uncommitted.
-2. **Phase 3 close-out / CE-73 reclassification** — single commit splitting
-   CE-73 into a Tier-2 semantic gate (now enforced via new CI) and an
-   explicit Tier-4 non-goal.
-3. **IDD canonicalization** — four `chore(idd)` commits at the tail that
-   make the repo legible to the global IDD slash commands: `.idd-config.json`,
+1. **Phase 4 cluster N-D (ChainDB persistence)** — the substantive code
+   work. Slices S-33 through S-36 shipped end-to-end as `feat(phase-4):`
+   commits. S-37 (1,000-kill-9 durability stress harness) has code
+   landed under a chore commit but its obligation-discharge doc remains
+   uncommitted; the slice is not-yet-closed and CE-N-D-1 is the gating
+   obligation.
+2. **Phase 2C close-out / CE-73 reclassification** — single commit
+   splitting CE-73 into a Tier-2 semantic gate (now enforced via new
+   `ci_check_hfc_translation.sh`) and an explicit Tier-4 bytes non-goal.
+3. **IDD canonicalization** — four `chore(idd)` commits that make the
+   repo legible to the global IDD slash commands: `.idd-config.json`,
    registry rename (`constitution_registry.toml` → `docs/ade-invariant-registry.toml`),
    cluster N-D moved into `docs/clusters/PHASE4-N-D/`, repo-local
    commit-msg trailer hook.
+4. **Grounding-doc generation** — `a87c3a3` produced the first cuts of
+   CODEMAP, SEAMS, HEAD_DELTAS, and TRACEABILITY at the canonical
+   `docs/ade-*.md` paths.
+5. **BLUE-list drift closure + grounding-doc ripple** — `5b70bee`
+   extended six CI scripts from a 4-crate (or 5-crate for
+   dependency_boundary) BLUE scope to the full 6-crate scope declared
+   in `.idd-config.json`, then `c8fa37f` refreshed CODEMAP and
+   TRACEABILITY to remove 14 `_(scope gap)_` markers across 13 rules.
 
 ---
 
@@ -30,6 +40,9 @@ change budget:
 
 | Hash | Type | Summary |
 |------|------|---------|
+| `c8fa37f` | chore | chore(idd): refresh CODEMAP + TRACEABILITY after BLUE-list drift closure |
+| `5b70bee` | chore | chore(ci): close BLUE-list drift — extend 6 CI scripts to full BLUE scope |
+| `a87c3a3` | chore | chore(idd): generate four grounding docs (CODEMAP, SEAMS, HEAD_DELTAS, TRACEABILITY) |
 | `3eddcbb` | chore | chore(idd): add .idd-config.json — opt the repo into IDD enforcement |
 | `76c1f64` | chore | chore(idd): move in-flight cluster N-D into canonical clusters layout |
 | `39865f6` | chore | chore(idd): update active-doc + CI refs to canonical registry path |
@@ -40,7 +53,7 @@ change budget:
 | `994203b` | feat | feat(phase-4): begin cluster N-D — ChainDb trait + InMemoryChainDb (S-33) |
 | `9b15378` | feat | feat(phase-2c): reclassify CE-73 — semantic enforced, bytes Tier 4 non-goal |
 
-Verbatim from `git log d509f02..HEAD`. Aggregation is in §3.
+Verbatim from `git log d509f02..HEAD`. Aggregation is in §3 and §5.
 
 ---
 
@@ -63,9 +76,8 @@ aligns with the cluster N-F single-static-binary goal), plus
 `tempfile = "3"` as a dev-dependency for persistent-impl tests, plus a
 local-path dependency on `ade_types`.
 
-CODEMAP cross-reference: **CODEMAP does not yet exist at this path**
-(`docs/ade-CODEMAP.md`). The new modules will need to be added when CODEMAP
-is first generated.
+CODEMAP cross-reference: all three new modules are entered in
+`docs/ade-CODEMAP.md` §RED at HEAD.
 
 ---
 
@@ -76,11 +88,12 @@ is first generated.
 | `ade_runtime` (root crate) | +13 files, +2163 lines | Crate went from empty shell to substantive RED module set. New top-level submodules `chaindb` and `recovery` exported from `lib.rs`. New bin target `chaindb_kill_target` and integration test `tests/stress_kill_harness.rs` (S-37 in-flight). New deps: `ade_types` (path), `redb = "2"`, `tempfile = "3"` (dev). All landed across S-33 / S-34 / S-35 / S-36 / S-37. Tier isolation continuously verified: `rg "redb\|rocksdb\|sled\|sqlite" crates/ade_runtime/src/` matches only `chaindb/persistent.rs`. |
 | `ade_ledger` | +1 file, +73 lines | Single change: 10 new unit tests for `decode_invalid_tx_indices` in `plutus_eval.rs` covering empty/definite/indefinite CBOR arrays, duplicate-collapse via BTreeSet, malformed headers, non-uint truncation in both definite and indefinite paths. Shipped piggybacked on the CE-73 reclassification commit (`9b15378`). No production-code change in this crate. |
 
-No other crate had non-trivial changes since baseline. `ade_codec`,
+No other crate had non-trivial source changes since baseline. `ade_codec`,
 `ade_types`, `ade_crypto`, `ade_plutus`, `ade_core`, `ade_testkit`,
-and `ade_node` were untouched by code commits (the only modifications
-to their tree were the global IDD scaffolding chores, which did not
-edit their source).
+and `ade_node` were untouched by code commits. `ade_plutus`'s
+`evaluator.rs` is **referenced** by the BLUE-scope CI extension
+(see §5) as the named chokepoint for `PlutusScript::from_cbor` but
+the source file itself was not modified.
 
 ---
 
@@ -100,9 +113,10 @@ unchanged — zero feature flags at baseline, zero at HEAD.**
 ## 5. CI Checks
 
 The CI surface is the shell-script set under `ci/` (no `.github/workflows`
-in this repo). All 15 baseline scripts are still present and substantively
-unchanged. Two additions and one path-only edit landed in this delta;
-group-aligned per cluster.
+in this repo). All 15 baseline scripts are still present; one new script
+shipped, one new repo-local git hook shipped, six scripts had their
+BLUE-scope arrays extended, and one had a path-only registry edit.
+Grouped by cluster.
 
 ### CE-73 reclassification (Phase 2C close-out)
 
@@ -117,10 +131,38 @@ group-aligned per cluster.
 | `ci/ci_check_constitution_coverage.sh` | Modified (`39865f6`) | Path-only edit: `REGISTRY` and Python `REGISTRY_PATH` default now point at `docs/ade-invariant-registry.toml` (was `constitution_registry.toml`). What it enforces is unchanged: registry coverage against `PLAN_DOC` and `CLASSIFICATION_TABLE`. CI-script verified locally at 147 entries. |
 | `ci/git-hooks/commit-msg` | **New** (`2047c42`) | Local git hook (not a CI script proper): rejects commit messages lacking a `Co-Authored-By: Claude ...` trailer. Activated per clone via `git config core.hooksPath ci/git-hooks`. Skip-conditions: `Merge`/`Revert` first lines and merge-message file present. Bypass via `--no-verify`. Repo-local exception to the global no-AI-attribution rule, scoped to commit messages only. |
 
-TRACEABILITY cross-reference: TRACEABILITY does not yet exist at this
-path (`docs/ade-TRACEABILITY.md`). When generated, `ci_check_hfc_translation.sh`
-must show as the enforcement for `DC-EPOCH-02`; the registry already
-encodes that linkage (`ci_script = "ci/ci_check_hfc_translation.sh"`).
+### BLUE-list drift closure (`5b70bee`)
+
+Surface drift surfaced by the grounding-doc generation step: six CI
+scripts hard-coded a narrower `BLUE_CRATES` array than the 6-crate set
+declared in `.idd-config.json` `core_paths`. Five scripts scanned only
+4 crates (`ade_codec`, `ade_types`, `ade_crypto`, `ade_core`);
+`ci_check_dependency_boundary.sh` scanned 5 (missing `ade_plutus`
+only). All six were extended to the full 6-crate set (`ade_codec`,
+`ade_types`, `ade_crypto`, `ade_core`, `ade_ledger`, `ade_plutus`).
+
+| Check | Status | What it checks |
+|-------|--------|----------------|
+| `ci/ci_check_module_headers.sh` | Modified — BLUE-scope (`5b70bee`) | `// Core Contract:` first-line header on every `.rs` in BLUE crates. Scope now includes `ade_ledger` and `ade_plutus`; in-script header comment updated to match. Enforces `T-BUILD-01`. |
+| `ci/ci_check_no_semantic_cfg.sh` | Modified — BLUE-scope (`5b70bee`) | No semantic `#[cfg(...)]` in BLUE crate `src/`. Scope extended to `ade_ledger` + `ade_plutus`. Enforces `T-BUILD-01`. |
+| `ci/ci_check_no_signing_in_blue.sh` | Modified — BLUE-scope (`5b70bee`) | No `SigningKey`/signing primitives in BLUE crates. Scope extended to `ade_ledger` + `ade_plutus`. Enforces `T-KEY-01`. |
+| `ci/ci_check_hash_uses_wire_bytes.sh` | Modified — BLUE-scope (`5b70bee`) | All hashing in BLUE goes via wire-byte fingerprint surfaces. Scope extended to `ade_ledger` + `ade_plutus`. Enforces `T-ENC-01`, `DC-CBOR-02`. |
+| `ci/ci_check_ingress_chokepoints.sh` | Modified — BLUE-scope + named-chokepoint registry growth (`5b70bee`) | No raw CBOR decoding outside named chokepoints in BLUE. Scope extended; the script also now lists `PlutusScript::from_cbor` (in `ade_plutus`) alongside the per-era block decoders (in `ade_codec`), and Check 3 explicitly allowlists `crates/ade_plutus/src/evaluator.rs` because Plutus script CBOR is a distinct ingress surface from block CBOR (decoded via aiken/pallas). Named-chokepoint registry grew 10 → 11. Enforces `T-INGRESS-01`, `DC-INGRESS-01`. |
+| `ci/ci_check_dependency_boundary.sh` | Modified — BLUE-scope (`5b70bee`) | BLUE crates must not depend on RED crates. Scope previously held 5 crates and was missing `ade_plutus` only; extended to 6. Enforces `T-BOUND-02`. |
+
+All six scripts pass at extended scope. The follow-up commit `c8fa37f`
+re-ran CODEMAP and TRACEABILITY generation against the new scope,
+removing 14 `_(scope gap)_` markers across 13 rules (`T-ENC-01`,
+`T-BUILD-01`, `T-BOUND-02`, `T-INGRESS-01`, `T-KEY-01`, `DC-CBOR-02`,
+`DC-CRYPTO-02`, `CN-WIRE-01`, `CN-WIRE-06`, `CN-PLUTUS-04`,
+`CN-CRYPTO-01`, `CN-BUILD-01`, `CN-BUILD-02`). The fully-enforced
+rule count rose by ~13 (CI-with-caveat → CI-no-caveat); code/tests
+gaps were not touched by this commit.
+
+TRACEABILITY cross-reference: `ci_check_hfc_translation.sh` is the
+enforcement for `DC-EPOCH-02`; the six BLUE-scope-extended scripts
+are the enforcement for the 13 rules above. All edges appear in
+`docs/ade-TRACEABILITY.md` at HEAD.
 
 ---
 
@@ -143,18 +185,25 @@ root) to `docs/ade-invariant-registry.toml` (98% similarity per
 - Rules at HEAD: **147** (in `docs/ade-invariant-registry.toml`)
 - Net additions: **0**
 - Removals: **0** (expected under append-only discipline; clean)
-- Modifications: **1** — `DC-EPOCH-02` (CE-73 reclassification, commit
-  `9b15378`):
-  - `status`: `partial` → `enforced` (strengthened)
-  - `ci_script`: `""` → `"ci/ci_check_hfc_translation.sh"`
-  - `authority_surface`: rewritten to reference CE-73-semantic (closed,
-    Tier 2) vs CE-73-bytes (explicit Tier 4 non-goal) split, plus the
-    deferral of consensus-side HFC to Phase 4 cluster N-B.
-  - `evidence`: three references added (`phase_2c_progress_report.md`,
-    `CE-73_reclassification.md`, `T-26_hfc_ledger_side.md`).
+- Modifications:
+  - `DC-EPOCH-02` (CE-73 reclassification, commit `9b15378`):
+    - `status`: `partial` → `enforced` (strengthened)
+    - `ci_script`: `""` → `"ci/ci_check_hfc_translation.sh"`
+    - `authority_surface`: rewritten to reference CE-73-semantic (closed,
+      Tier 2) vs CE-73-bytes (explicit Tier 4 non-goal) split, plus the
+      deferral of consensus-side HFC to Phase 4 cluster N-B.
+    - `evidence`: three references added (`phase_2c_progress_report.md`,
+      `CE-73_reclassification.md`, `T-26_hfc_ledger_side.md`).
+  - 13 further rules had their TRACEABILITY rows annotated by `c8fa37f`
+    to remove `_(scope gap)_` markers — these are TRACEABILITY-document
+    edits, not registry edits; the registry rows for those rules were
+    not modified.
 
-This is a permitted strengthening, not a weakening — `partial → enforced`
-is the legal direction. No rule IDs were retired or reassigned.
+These are permitted strengthenings, not weakenings — `partial →
+enforced` is the legal direction. No rule IDs were retired or
+reassigned. Family counts unchanged (T=30, DC=37, CN=64, RO=6,
+OP=7; remaining 3 attributed to test-stub / placeholder families
+per `/traceability` report).
 
 Normative-doc rule extraction (the `normative_docs` list in
 `.idd-config.json`) is approximate and not regenerated here — the
@@ -164,23 +213,25 @@ structured registry is the authoritative source.
 
 ## Anomalies and Cross-Reference Warnings
 
-- **CODEMAP missing.** `docs/ade-CODEMAP.md` does not yet exist. New
-  modules `ade_runtime::chaindb` and `ade_runtime::recovery` (RED) and
-  the in-flight `chaindb_kill_target` bin (RED) need entries when
-  CODEMAP is first generated.
-- **TRACEABILITY missing.** `docs/ade-TRACEABILITY.md` does not yet
-  exist. The newly-enforced `DC-EPOCH-02` → `ci_check_hfc_translation.sh`
-  edge needs to appear in TRACEABILITY when generated.
-- **SEAMS missing.** `docs/ade-SEAMS.md` does not yet exist. The new
-  `ChainDb` and `SnapshotStore` traits (Tier 1 surface) and the
-  `Recoverable` extension point are SEAMS-relevant.
 - **S-37 in-flight at HEAD.** Slice S-37 code landed in `2047c42`
   (`chaindb_kill_target.rs`, `tests/stress_kill_harness.rs`) under a
   chore commit, not a `feat(phase-4)` commit. The slice's
   obligation-discharge doc remains untracked in the working tree
   (`docs/active/S-37_obligation_discharge.md`). Treat the slice as
   not-yet-closed; CE-N-D-1 (1,000-kill-9 durability) is the gating
-  obligation.
+  obligation. CODEMAP at HEAD lists test count 841 (≈838 + S-37 harness).
+- **SEAMS stale on PlutusScript::from_cbor.** `c8fa37f`'s commit body
+  flags that `docs/ade-SEAMS.md` §3 Closed should add
+  `PlutusScript::from_cbor` to the named ingress chokepoints (now
+  enforced by Check 3 of `ci_check_ingress_chokepoints.sh`). Not
+  refreshed in this delta — flagged for next `/seams` run.
+- **`ade_core` is BLUE by config but empty.** Acknowledged in CODEMAP
+  callout and TRACEABILITY; treated as a CE-79 Tier-4 non-goal
+  (no enforcement to perform, flagged so a reviewer doesn't mistake
+  the empty crate for missing work). Not new in this delta.
+- **`ade_node` MUST NOT list is forward-looking.** Binary is a
+  hello-world stub; no authority surface exercised yet. Cluster N-E
+  (ledger + runtime composition) will activate it. Not new in this delta.
 - No removed canonical types (n/a — no separate registry).
 - No removed registry rules (expected: 0; actual: 0).
 - No commit subjects in the delta lack a conventional-commits prefix.

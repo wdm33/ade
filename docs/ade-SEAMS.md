@@ -3,7 +3,7 @@
 > **Status:** Living architectural document. Regenerated; not hand-edited.
 > Per-project instance of `~/.claude/methodology/templates/seams.md`.
 
-> 9 crates, 182 canonical types, 838 tests, 16 CI checks at HEAD (`3eddcbb`).
+> 9 crates, 182 canonical types, 841 tests, 16 CI checks at HEAD (`c8fa37f`).
 > Reads CODEMAP for the module list and TCB colors; reads the invariant
 > registry (`docs/ade-invariant-registry.toml`, 147 rules) for rule IDs;
 > reads the Phase 4 cluster plan (`docs/active/phase_4_cluster_plan.md`)
@@ -26,8 +26,9 @@ This document names where the system opens and where it stays closed.
 ## 1. Surface Reduction Rules
 
 > External inputs reduce to canonical form before entering authoritative
-> pipelines. At HEAD the only fully-wired ingress is block bytes; the
-> Phase 4 plan adds five further surfaces.
+> pipelines. At HEAD there are two fully-wired ingress surfaces (block
+> bytes and Plutus script bytes), one in-flight (snapshot bytes via N-D),
+> and five further surfaces named in the Phase 4 plan.
 
 ### Surface: Block bytes (wired today)
 
@@ -39,8 +40,10 @@ Reduces to: BlockEnvelope { era: CardanoEra, era_block: PreservedCbor<EraBlock> 
 Pipeline (fixed step ordering — no reorder, no shortcut):
   1. decode_block_envelope(&[u8]) -> BlockEnvelope
      (era tag dispatch; the only constructor of PreservedCbor for blocks)
-  2. era-specific decode_{byron,shelley,allegra,mary,alonzo,babbage,conway}_block
-     (closed set — 7 chokepoints, named in `ci_check_ingress_chokepoints.sh`)
+  2. era-specific decode_{byron_ebb,byron_regular,shelley,allegra,
+     mary,alonzo,babbage,conway}_block
+     (closed set — 8 era-block decoders, named in
+     `ci_check_ingress_chokepoints.sh`)
   3. ade_ledger::rules::apply_block_with_verdicts(state, &PreservedCbor<EraBlock>, ctx)
      (BLUE — single canonical chokepoint that produces BlockVerdict + new state)
 Cross-surface state sharing: none today (Phase 3 was an offline oracle).
@@ -51,11 +54,41 @@ Cross-surface state sharing: none today (Phase 3 was an offline oracle).
 **Rule.** New ingress that produces block bytes (e.g., the upcoming
 N-A `block-fetch` mini-protocol, N-D recovery replay, N-F
 `local-tx-monitor`) **MUST** enter through `decode_block_envelope` and
-flow through one of the seven era-specific decoders before reaching any
+flow through one of the era-specific block decoders before reaching any
 ledger code. The pipeline cannot be reordered: hash-bearing bytes must
 be preserved via `PreservedCbor` before they reach ledger rules
 (enforced by `ci_check_hash_uses_wire_bytes.sh`,
 `ci_check_ingress_chokepoints.sh`).
+
+### Surface: Plutus script bytes (wired today)
+
+```
+Surface: Plutus script bytes (CBOR-wrapped Flat, extracted from witness sets)
+Reduces to: PlutusScript { inner: aiken_uplc::ast::Program<DeBruijn> }
+            (defined in `ade_plutus::evaluator`; aiken types do not
+             leak past this boundary)
+Pipeline:
+  1. ade_plutus::evaluator::PlutusScript::from_cbor(&[u8]) -> Result<PlutusScript, PlutusError>
+     (named ingress chokepoint — the only public path that turns Plutus
+     script CBOR into a runnable program; uses the aiken/pallas decoder,
+     not the ade_codec primitives)
+  2. ade_plutus::tx_eval::eval_tx_phase_two(...) -> TxEvalResult
+     (BLUE — single canonical phase-2 evaluation entry; aiken `uplc`
+     machine is invoked internally and aiken types do not escape)
+Cross-surface state sharing: none — phase-2 evaluation is pure
+  fn(script, ScriptContext, CostModels, ExUnits) -> EvalOutput.
+```
+
+**Rule.** Plutus script CBOR is a **distinct ingress surface** from
+block CBOR. It does not go through `decode_block_envelope` because its
+wire format is CBOR-wrapped Flat decoded by `aiken_uplc`, not by the
+project's own `ade_codec` primitives. The chokepoint is
+`PlutusScript::from_cbor` in `ade_plutus/src/evaluator.rs`, named
+explicitly in the header comment of `ci_check_ingress_chokepoints.sh`
+and allowlisted from Check 3 of that script (Check 3 forbids
+`from_cbor`/`minicbor::decode`/`cbor_decode` everywhere in BLUE except
+in `ade_plutus/src/evaluator.rs`). All other BLUE crates remain
+forbidden from decoding raw CBOR.
 
 ### Surface: Snapshot bytes (wired in N-D)
 
@@ -131,6 +164,7 @@ that touches block / tx CBOR adds parse / pack support inside
 | Layer | Module | Color | Role |
 |-------|--------|-------|------|
 | **Data-only tooling** | `ade_plutus::cost_model`, `ade_plutus::script_context` | BLUE | Decodes cost-model CBOR; builds the V1/V2/V3 `ScriptContext`. Does not run programs. |
+| **Script ingress** | `ade_plutus::evaluator::PlutusScript::from_cbor` | BLUE | Named ingress chokepoint for Plutus script CBOR. Allowlisted in `ci_check_ingress_chokepoints.sh` Check 3 because the decoder is `aiken_uplc`/`pallas`, not `ade_codec`. |
 | **Authoritative enforcement** | `ade_plutus::tx_eval::eval_tx_phase_two` | BLUE | Single entry to phase-two evaluation. Internally wraps the aiken `uplc` machine; aiken types do not leak (enforced by `ci_check_pallas_quarantine.sh`). |
 | **Quarantine** | (the `aiken_uplc` git dep, pinned tag `v1.1.21` commit `42babe5d`) | external | Frozen at tag — never re-exported. PV11 builtins gated off (S-29). |
 
@@ -138,7 +172,10 @@ that touches block / tx CBOR adds parse / pack support inside
 requires a registry diff (see §3) plus a pinned-version bump of
 `aiken_uplc`; the chokepoint `eval_tx_phase_two` does not move. No
 second public entry into the evaluator is allowed; tests use the same
-entry as production callers.
+entry as production callers. **No new BLUE callsite of
+`PlutusScript::from_cbor` may be added outside `ade_plutus` itself** —
+the chokepoint exists to keep aiken-decoded bytes inside the
+quarantine.
 
 ### Governance ratification / enactment (Conway)
 
@@ -156,14 +193,20 @@ code coverage for governance rules.
 ### Where the boundary is enforced
 
 - `ci_check_dependency_boundary.sh` — no BLUE crate may depend on
-  `ade_runtime` or `ade_node`.
+  `ade_runtime` or `ade_node` (full 6-crate BLUE scope as of `5b70bee`).
 - `ci_check_pallas_quarantine.sh` — only `ade_plutus` may name
   `pallas_*`.
 - `ci_check_no_signing_in_blue.sh` — signing patterns
   (`SigningKey`/`sign_message`/etc.) forbidden in BLUE; only
   `ade_runtime` may sign.
-- `ci_check_ingress_chokepoints.sh` — `PreservedCbor::new` constructed
-  only by the 7 named `decode_*_block` chokepoints.
+- `ci_check_ingress_chokepoints.sh` — three checks:
+  (1) `PreservedCbor::new` constructed only inside `ade_codec`;
+  (2) `decode_block_envelope` exists as a named function in
+      `ade_codec::cbor::envelope`;
+  (3) raw CBOR decoding (`from_cbor`, `minicbor::decode`, `cbor_decode`)
+      is forbidden in every BLUE crate except `ade_codec` itself
+      **and** `ade_plutus/src/evaluator.rs` (allowlisted — see §1
+      Plutus surface).
 
 ---
 
@@ -187,8 +230,9 @@ operator-config or testkit-only.
 | `PlutusLanguage` | `ade_plutus::evaluator` | 3 variants (V1, V2, V3) | New variant = new Plutus version. Requires cost-model table extension + aiken bump. PV11 builtins gated off (S-29) — they cannot be activated without a documented gate flip. |
 | `Datum` / `DatumOption` | `ade_types::alonzo::plutus`, `ade_types::babbage::output` | Closed shapes — Datum hash vs. inline | Schema frozen at Babbage. |
 | `NativeScript` | `ade_types::allegra::script` | Shelley/Allegra/Mary native script variants | Frozen. |
-| **Per-era decode chokepoints (`BlockEnvelope` consumers)** | `ade_codec::{byron,shelley,allegra,mary,alonzo,babbage,conway}::decode_*_block` | 7 (one per non-EBB era + `decode_byron_block` for both Byron variants) | New era = new chokepoint added in lockstep with a `CardanoEra` variant; `ci_check_ingress_chokepoints.sh` enumerates them. |
-| **`PreservedCbor::new` constructor** | `ade_codec::preserved` | 1 chokepoint, `pub(crate)` | Construction lives inside `ade_codec`. Adding a new `PreservedCbor<T>` requires either (a) extending an existing decoder or (b) adding a new named decoder added to the `ci_check_ingress_chokepoints.sh` allowlist. |
+| **Named ingress chokepoints (block CBOR)** | `ade_codec::{cbor::envelope, byron, shelley, allegra, mary, alonzo, babbage, conway, address}` | 10 — `decode_block_envelope`, `decode_byron_ebb_block`, `decode_byron_regular_block`, `decode_shelley_block`, `decode_allegra_block`, `decode_mary_block`, `decode_alonzo_block`, `decode_babbage_block`, `decode_conway_block`, `decode_address` | The header comment of `ci_check_ingress_chokepoints.sh` enumerates this set. New era = new chokepoint added in lockstep with a `CardanoEra` variant; new address form = new chokepoint or extension to `decode_address`. Removal forbidden. |
+| **Named ingress chokepoint (Plutus script CBOR)** | `ade_plutus::evaluator::PlutusScript::from_cbor` | 1 — file `crates/ade_plutus/src/evaluator.rs` | Distinct from the block-CBOR chokepoints because the decoder is `aiken_uplc`/`pallas`, not `ade_codec`. Allowlisted by exact file path in Check 3 of `ci_check_ingress_chokepoints.sh`. New Plutus ingress variant = either extend `PlutusScript::from_cbor` or add a new function in the same file and extend the allowlist comment. No second allowlisted file is permitted without an explicit cluster gate. |
+| **`PreservedCbor::new` constructor** | `ade_codec::preserved` | 1 chokepoint, `pub(crate)` | Construction lives inside `ade_codec`. Adding a new `PreservedCbor<T>` requires extending an existing decoder or adding a new named decoder added to the `ci_check_ingress_chokepoints.sh` header list. |
 | **`ChainDb` trait surface** | `ade_runtime::chaindb::mod` | 6 methods (`put_block`, `get_block_by_hash`, `get_block_by_slot`, `tip`, `iter_from_slot`, `rollback_to_slot`) | Object-safe; intended for multiple impls (in-memory + redb at HEAD; future: sharded / network-backed). **Surface is closed** — new method = new contract test in `chaindb::contract`; method removal forbidden. |
 | **`SnapshotStore` trait surface** | `ade_runtime::chaindb::mod` | 5 methods (`put_snapshot`, `get_snapshot`, `latest_snapshot`, `list_snapshot_slots`, `delete_snapshot`) | Same closure discipline as `ChainDb`. Bytes are opaque at this layer (S-35). |
 | **`Recoverable` trait surface** | `ade_runtime::recovery` | 2 methods (`decode_snapshot`, `apply_block`) + 1 associated type (`Error`) | Caller-supplied. Trait deliberately commits to a single error type per impl; multi-error callers wrap. |
@@ -246,6 +290,11 @@ enforcement shape.
   Blake2b-256 for block / transaction / Merkle hashes. Algorithm is
   protocol-fixed. Ed25519, Byron-bootstrap (extended Ed25519), KES-sum,
   VRF-draft-03 — all wired in `ade_crypto`, all protocol-frozen.
+- **Plutus script ingress chokepoint**: `PlutusScript::from_cbor` in
+  `crates/ade_plutus/src/evaluator.rs`. Moving the function to another
+  file would invalidate the path-exact allowlist in
+  `ci_check_ingress_chokepoints.sh` Check 3 and is therefore a
+  coordinated change (file rename + script update + slice doc).
 - **Plutus language set**: V1, V2, V3. PV11 builtins (`ExpModInteger`,
   `CaseList`, `CaseData`) deliberately gated off to match mainnet's
   unactivated state — see S-29.
@@ -256,7 +305,8 @@ enforcement shape.
   they entered. Adding fields requires a versioned gate; renaming is
   forbidden.
 - **TCB color assignments**: Per `.idd-config.json` `core_paths`. BLUE
-  ↔ RED separation is mechanical (`ci_check_dependency_boundary.sh`).
+  ↔ RED separation is mechanical (`ci_check_dependency_boundary.sh`,
+  scoped to the full 6-crate BLUE list).
 - **`ChainDb` / `SnapshotStore` / `Recoverable` trait shapes** (N-D, in
   flight): once N-D closes, the trait method set is frozen. Adding a
   method = new slice with a contract-test extension.
@@ -265,7 +315,9 @@ enforcement shape.
 
 - **New `CardanoEra` variant**: requires new `decode_*_block`
   chokepoint, new per-era composer in `ade_ledger`, new hfc
-  translation arm, new addition to `CardanoEra::ALL`.
+  translation arm, new addition to `CardanoEra::ALL`, and an extension
+  of the named-chokepoint header in
+  `ci_check_ingress_chokepoints.sh`.
 - **New `GovAction` / `ConwayCert` / Plutus version variant**:
   requires registry diff (§3) plus arms in every chokepoint.
 - **New protocol parameter field**: append to `ProtocolParameters`;
@@ -299,19 +351,22 @@ new crates under `crates/`.
 2. **Declare TCB color** by editing `.idd-config.json` `core_paths` if
    BLUE, or by documenting GREEN / RED placement (the doc string
    `_core_paths_doc` is the authoritative classifier for GREEN / RED).
-3. **CI script update obligations:**
-   - BLUE: add the crate path to `ci_check_forbidden_patterns.sh` and
-     `ci_check_dependency_boundary.sh`. **Decide whether the new crate
-     joins the narrow BLUE list** (`ci_check_module_headers.sh`,
-     `ci_check_no_semantic_cfg.sh`, `ci_check_no_signing_in_blue.sh`,
-     `ci_check_hash_uses_wire_bytes.sh`, `ci_check_ingress_chokepoints.sh`)
-     or stays only in the wider list. **The current drift between
-     these lists is a known gap** (see CODEMAP §Gap surfaced) — new
-     BLUE crates should default to the wider list and explicitly opt
-     into narrower scripts as needed.
-   - RED: add to `ci_check_dependency_boundary.sh` as a "BLUE-cannot-depend-on"
-     entry. Verify no BLUE crate's `Cargo.toml` lists the new crate.
-   - GREEN: no script change required; runtime tests cover it.
+3. **CI script update obligations** — as of commit `5b70bee` the six
+   BLUE-scoped scripts (`ci_check_module_headers.sh`,
+   `ci_check_no_semantic_cfg.sh`, `ci_check_no_signing_in_blue.sh`,
+   `ci_check_hash_uses_wire_bytes.sh`, `ci_check_ingress_chokepoints.sh`,
+   `ci_check_dependency_boundary.sh`) all carry the same 6-crate BLUE
+   list `{ade_codec, ade_types, ade_crypto, ade_core, ade_ledger,
+   ade_plutus}`. A new BLUE crate therefore has a single, unambiguous
+   update target: extend that list in all six scripts in lockstep.
+   - BLUE: append the new crate's name to the `BLUE_CRATES` array in
+     every BLUE-scoped script, and add the crate path to
+     `ci_check_forbidden_patterns.sh`.
+   - RED: add to `ci_check_dependency_boundary.sh` as a
+     "BLUE-cannot-depend-on" entry. Verify no BLUE crate's `Cargo.toml`
+     lists the new crate.
+   - GREEN: no BLUE-scoped script change required; runtime tests cover
+     it.
 4. **Add contract banner** (BLUE) to every `.rs` file.
 5. **Add deny attributes** to `lib.rs` (BLUE).
 6. **New canonical types:** at HEAD the canonical-type registry is
@@ -352,14 +407,19 @@ candidate placements** — user confirmation needed at cluster entry.
 - No `unsafe` outside an explicit allowlist (currently only
   `ade_crypto::vrf`'s FFI binding).
 - No `#[cfg(feature = ...)]` semantic gating —
-  `ci_check_no_semantic_cfg.sh` (narrow BLUE list).
+  `ci_check_no_semantic_cfg.sh` (full 6-crate BLUE scope).
 - No signing patterns (`SigningKey`/`SecretKey`/`PrivateKey`/
   `sign_message`/`sign_block`) — `ci_check_no_signing_in_blue.sh`
-  (narrow BLUE list).
+  (full 6-crate BLUE scope).
 - No re-hashing of `canonical_bytes` or re-encoded bytes — wire bytes
-  only. `ci_check_hash_uses_wire_bytes.sh` (narrow BLUE list).
-- No construction of `PreservedCbor` outside the 7 named
-  `decode_*_block` chokepoints — `ci_check_ingress_chokepoints.sh`.
+  only. `ci_check_hash_uses_wire_bytes.sh` (full 6-crate BLUE scope).
+- No construction of `PreservedCbor` outside `ade_codec` (chokepoints:
+  `decode_block_envelope`, the 8 per-era `decode_*_block` functions,
+  `decode_address`) — `ci_check_ingress_chokepoints.sh` Checks 1 & 2.
+- No raw CBOR decoding (`from_cbor`, `minicbor::decode`, `cbor_decode`)
+  in any BLUE crate except `ade_codec` and the single allowlisted file
+  `crates/ade_plutus/src/evaluator.rs` (`PlutusScript::from_cbor`) —
+  `ci_check_ingress_chokepoints.sh` Check 3.
 - No `pallas_*` reference outside `ade_plutus` —
   `ci_check_pallas_quarantine.sh`.
 
