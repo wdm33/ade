@@ -5,10 +5,10 @@
 > `.idd-config.json` (`head_deltas_baseline`).
 
 > Baseline: `d509f02` (Phase 3 handoff snapshot, 2026-04-15)
-> HEAD: `c8fa37f` (chore(idd): refresh CODEMAP + TRACEABILITY after BLUE-list drift closure, 2026-05-19)
-> 12 commits, 44 files changed, +7196 / −59 lines
+> HEAD: `78da6c9` (chore(ci): close Phase 4 N-D CI gap — 3 new scripts, 9 rules enforced, 2026-05-19)
+> 14 commits, 47 files changed, +7449 / −96 lines
 
-The delta covers five threads of work, in roughly this proportion of the
+The delta covers six threads of work, in roughly this proportion of the
 change budget:
 
 1. **Phase 4 cluster N-D (ChainDB persistence)** — the substantive code
@@ -25,14 +25,24 @@ change budget:
    registry rename (`constitution_registry.toml` → `docs/ade-invariant-registry.toml`),
    cluster N-D moved into `docs/clusters/PHASE4-N-D/`, repo-local
    commit-msg trailer hook.
-4. **Grounding-doc generation** — `a87c3a3` produced the first cuts of
-   CODEMAP, SEAMS, HEAD_DELTAS, and TRACEABILITY at the canonical
-   `docs/ade-*.md` paths.
-5. **BLUE-list drift closure + grounding-doc ripple** — `5b70bee`
-   extended six CI scripts from a 4-crate (or 5-crate for
-   dependency_boundary) BLUE scope to the full 6-crate scope declared
-   in `.idd-config.json`, then `c8fa37f` refreshed CODEMAP and
-   TRACEABILITY to remove 14 `_(scope gap)_` markers across 13 rules.
+4. **Grounding-doc generation + ripple** — `a87c3a3` produced the first
+   cuts of CODEMAP, SEAMS, HEAD_DELTAS, and TRACEABILITY at the
+   canonical `docs/ade-*.md` paths; `f0b0fd6` refreshed HEAD_DELTAS and
+   SEAMS after the BLUE-scope closure.
+5. **BLUE-list drift closure** — `5b70bee` extended six CI scripts from
+   a 4-crate (or 5-crate for `dependency_boundary`) BLUE scope to the
+   full 6-crate scope declared in `.idd-config.json`, then `c8fa37f`
+   refreshed CODEMAP and TRACEABILITY to remove 14 `_(scope gap)_`
+   markers across 13 rules.
+6. **Phase 4 N-D CI gap closure** — `78da6c9` added three new RED-scope
+   CI scripts (`ci_check_chaindb_contract.sh`,
+   `ci_check_recovery_contract.sh`, `ci_check_chaindb_crash_safety.sh`)
+   for the N-D recovery surface and flipped nine registry rules from
+   `declared` → `enforced` (T-REC-01, T-REC-02, DC-STORE-01,
+   DC-STORE-02, DC-STORE-03, DC-STORE-05, CN-STORE-03, CN-STORE-04,
+   CN-STORE-05). DC-STORE-04 was left `declared` with an explanatory
+   Tier-5-divergence comment block — a comment edit, not a rule edit,
+   per the IDD no-weakening discipline.
 
 ---
 
@@ -40,6 +50,8 @@ change budget:
 
 | Hash | Type | Summary |
 |------|------|---------|
+| `78da6c9` | chore | chore(ci): close Phase 4 N-D CI gap — 3 new scripts, 9 rules enforced |
+| `f0b0fd6` | chore | chore(idd): refresh HEAD_DELTAS + SEAMS to align with BLUE-scope closure |
 | `c8fa37f` | chore | chore(idd): refresh CODEMAP + TRACEABILITY after BLUE-list drift closure |
 | `5b70bee` | chore | chore(ci): close BLUE-list drift — extend 6 CI scripts to full BLUE scope |
 | `a87c3a3` | chore | chore(idd): generate four grounding docs (CODEMAP, SEAMS, HEAD_DELTAS, TRACEABILITY) |
@@ -113,10 +125,15 @@ unchanged — zero feature flags at baseline, zero at HEAD.**
 ## 5. CI Checks
 
 The CI surface is the shell-script set under `ci/` (no `.github/workflows`
-in this repo). All 15 baseline scripts are still present; one new script
-shipped, one new repo-local git hook shipped, six scripts had their
-BLUE-scope arrays extended, and one had a path-only registry edit.
-Grouped by cluster.
+in this repo). At baseline there were 15 scripts. At HEAD there are 19:
+the CE-73 reclassification added one (`ci_check_hfc_translation.sh`),
+and the Phase 4 N-D CI gap closure (`78da6c9`) added three more
+(`ci_check_chaindb_contract.sh`, `ci_check_recovery_contract.sh`,
+`ci_check_chaindb_crash_safety.sh`). The prior CODEMAP refresh at
+`c8fa37f` recorded the count as 16 (15 baseline + 1 from CE-73); the
+next CODEMAP refresh will move 16 → 19. One new repo-local git hook
+also shipped, six scripts had their BLUE-scope arrays extended, and
+one had a path-only registry edit. Grouped by cluster.
 
 ### CE-73 reclassification (Phase 2C close-out)
 
@@ -159,10 +176,34 @@ removing 14 `_(scope gap)_` markers across 13 rules (`T-ENC-01`,
 rule count rose by ~13 (CI-with-caveat → CI-no-caveat); code/tests
 gaps were not touched by this commit.
 
+### Phase 4 N-D CI gap closure (`78da6c9`)
+
+TRACEABILITY surfaced that the Phase 4 N-D recovery surface had landed
+code in `ade_runtime::{chaindb,recovery}` and tests in
+`tests/stress_kill_harness.rs`, but no dedicated CI scripts existed
+to drive them — leaving nine recovery/storage rules in a "code +
+tests filled, `ci_script` empty" partial-enforcement state. This
+commit added three RED-scope CI scripts, one per surface, and flipped
+those nine rules to `enforced` in the same atomic edit.
+
+| Check | Status | What it checks |
+|-------|--------|----------------|
+| `ci/ci_check_chaindb_contract.sh` | **New** (`78da6c9`) | Runs `cargo test -p ade_runtime --lib chaindb::` — the 8-test bundle exercising the `run_contract_tests` and `run_snapshot_contract_tests` suites against both `InMemoryChainDb` and `PersistentChainDb`. Enforces `DC-STORE-02` (append-only finalized provenance), `DC-STORE-03` (atomic snapshots), `CN-STORE-04` (atomic checkpoints), `CN-STORE-05` (finalized provenance append-only). |
+| `ci/ci_check_recovery_contract.sh` | **New** (`78da6c9`) | Runs `cargo test -p ade_runtime --lib recovery::` — the 6-test bundle covering `recover_from_snapshot_and_replay_forward`, `recover_from_genesis_when_no_snapshot`, `no_starting_point_error`, `apply_failure_surfaces_with_slot`, `snapshot_decode_failure_surfaces_as_error`, `snapshot_with_no_post_blocks_is_ok`. Enforces `T-REC-01` (recovery is replay-equivalent), `T-REC-02` (all authoritative state derivable by replay), `DC-STORE-05` (recovery is snapshot + forward replay). |
+| `ci/ci_check_chaindb_crash_safety.sh` | **New** (`78da6c9`) | Runs the **smoke variant** of the subprocess-SIGKILL harness (`stress_kill_smoke`, 10 iterations) plus the `snapshot_table_intact_after_kill_loop` post-kill integrity check, plus `persistent_passes_crash_safety_with_no_kill`. The **1,000-iteration closure-gate variant** (`stress_kill_1000`) remains `#[ignore]` in the harness and is run manually for CE-N-D-1 closure evidence — not invoked on every CI run. Enforces `T-REC-01`, `DC-STORE-01` (recovery from power-loss is replay-equivalent), `CN-STORE-03` (crash recovery == clean replay). |
+
+All three pass at HEAD; the commit body records:
+`cargo test -p ade_runtime --lib chaindb::` → 8 passed,
+`cargo test -p ade_runtime --lib recovery::` → 6 passed,
+`cargo test -p ade_runtime --test stress_kill_harness stress_kill_smoke`
+→ 1 passed (plus `snapshot_table_intact_after_kill_loop`).
+
 TRACEABILITY cross-reference: `ci_check_hfc_translation.sh` is the
 enforcement for `DC-EPOCH-02`; the six BLUE-scope-extended scripts
-are the enforcement for the 13 rules above. All edges appear in
-`docs/ade-TRACEABILITY.md` at HEAD.
+are the enforcement for the 13 rules above; the three new N-D scripts
+are the enforcement for the 9 rules listed in §7. The next
+`/traceability` refresh will retire the prior audit's "9 rules with
+empty `ci_script`" gap-count line.
 
 ---
 
@@ -185,25 +226,73 @@ root) to `docs/ade-invariant-registry.toml` (98% similarity per
 - Rules at HEAD: **147** (in `docs/ade-invariant-registry.toml`)
 - Net additions: **0**
 - Removals: **0** (expected under append-only discipline; clean)
-- Modifications:
-  - `DC-EPOCH-02` (CE-73 reclassification, commit `9b15378`):
-    - `status`: `partial` → `enforced` (strengthened)
-    - `ci_script`: `""` → `"ci/ci_check_hfc_translation.sh"`
-    - `authority_surface`: rewritten to reference CE-73-semantic (closed,
-      Tier 2) vs CE-73-bytes (explicit Tier 4 non-goal) split, plus the
-      deferral of consensus-side HFC to Phase 4 cluster N-B.
-    - `evidence`: three references added (`phase_2c_progress_report.md`,
-      `CE-73_reclassification.md`, `T-26_hfc_ledger_side.md`).
-  - 13 further rules had their TRACEABILITY rows annotated by `c8fa37f`
-    to remove `_(scope gap)_` markers — these are TRACEABILITY-document
-    edits, not registry edits; the registry rows for those rules were
-    not modified.
+- Strengthenings (`declared` / `partial` → `enforced`):
+  - **`DC-EPOCH-02`** (CE-73 reclassification, commit `9b15378`):
+    `status` `partial` → `enforced`; `ci_script` `""` →
+    `"ci/ci_check_hfc_translation.sh"`; `authority_surface` rewritten
+    to reference the CE-73-semantic (closed, Tier 2) vs CE-73-bytes
+    (explicit Tier 4 non-goal) split; three evidence references added.
+  - **`T-REC-01`** (Phase 4 N-D CI gap closure, commit `78da6c9`):
+    `status` `declared` → `enforced`; `code_locus` populated with
+    `crates/ade_runtime/src/recovery.rs,
+    crates/ade_runtime/src/chaindb/crash_safety.rs`; nine `tests`
+    enumerated; `ci_script` populated with
+    `ci/ci_check_recovery_contract.sh, ci/ci_check_chaindb_crash_safety.sh`.
+  - **`T-REC-02`** (`78da6c9`): `declared` → `enforced`; bound to
+    `crates/ade_runtime/src/recovery.rs`, two tests,
+    `ci/ci_check_recovery_contract.sh`.
+  - **`DC-STORE-01`** (`78da6c9`): `declared` → `enforced`; bound to
+    `crates/ade_runtime/src/chaindb/crash_safety.rs` and
+    `crates/ade_runtime/tests/stress_kill_harness.rs`, four tests,
+    `ci/ci_check_chaindb_crash_safety.sh`.
+  - **`DC-STORE-02`** (`78da6c9`): `declared` → `enforced`; bound to
+    `crates/ade_runtime/src/chaindb/persistent.rs,
+    crates/ade_runtime/src/chaindb/contract.rs`, three tests,
+    `ci/ci_check_chaindb_contract.sh`.
+  - **`DC-STORE-03`** (`78da6c9`): `declared` → `enforced`; bound to
+    `crates/ade_runtime/src/chaindb/snapshot_contract.rs,
+    crates/ade_runtime/src/chaindb/persistent.rs`, four tests,
+    `ci/ci_check_chaindb_contract.sh`.
+  - **`DC-STORE-05`** (`78da6c9`): `declared` → `enforced`; bound to
+    `crates/ade_runtime/src/recovery.rs`, four tests,
+    `ci/ci_check_recovery_contract.sh`.
+  - **`CN-STORE-03`** (`78da6c9`): `declared` → `enforced`; bound to
+    `crates/ade_runtime/src/chaindb/crash_safety.rs` and
+    `crates/ade_runtime/tests/stress_kill_harness.rs`, four tests,
+    `ci/ci_check_chaindb_crash_safety.sh`.
+  - **`CN-STORE-04`** (`78da6c9`): `declared` → `enforced`; bound to
+    `crates/ade_runtime/src/chaindb/snapshot_contract.rs,
+    crates/ade_runtime/src/chaindb/persistent.rs`, four tests,
+    `ci/ci_check_chaindb_contract.sh`.
+  - **`CN-STORE-05`** (`78da6c9`): `declared` → `enforced`; bound to
+    `crates/ade_runtime/src/chaindb/persistent.rs,
+    crates/ade_runtime/src/chaindb/contract.rs`, three tests,
+    `ci/ci_check_chaindb_contract.sh`.
+- Annotated but unchanged:
+  - **`DC-STORE-04`** (`78da6c9`): 12-line comment block appended
+    *above* the rule entry explaining that the rule names
+    cardano-node's literal three-DB topology (ImmutableDB +
+    VolatileDB + LedgerDB) and that Ade has deliberately diverged
+    per CE-79 Tier 5 (single redb-backed store with logical
+    separation via key prefixes). The semantic guarantees
+    DC-STORE-04 names — append-only finalized data, atomic
+    snapshots — survive and are now enforced by DC-STORE-02 and
+    DC-STORE-03 (both flipped to `enforced` in the same commit).
+    The rule entry itself (status, code_locus, tests, ci_script)
+    is **not modified** — the comment block is metadata above the
+    `[[rules]]` table header. IDD discipline forbids weakening a
+    rule in place; reclassification (if pursued) requires an
+    explicit new strengthening entry (e.g., `DC-STORE-04A`).
+  - 13 further rules had their TRACEABILITY rows annotated by
+    `c8fa37f` to remove `_(scope gap)_` markers — these are
+    TRACEABILITY-document edits, not registry edits.
 
-These are permitted strengthenings, not weakenings — `partial →
-enforced` is the legal direction. No rule IDs were retired or
-reassigned. Family counts unchanged (T=30, DC=37, CN=64, RO=6,
-OP=7; remaining 3 attributed to test-stub / placeholder families
-per `/traceability` report).
+Net strengthening this delta: **10 rules** flipped `declared`/`partial`
+→ `enforced` (1 from `9b15378` + 9 from `78da6c9`). All are permitted
+strengthenings, not weakenings. No rule IDs were retired or reassigned.
+Family counts unchanged (T=30, DC=37, CN=64, RO=6, OP=7; remaining 3
+attributed to test-stub / placeholder families per `/traceability`
+report).
 
 Normative-doc rule extraction (the `normative_docs` list in
 `.idd-config.json`) is approximate and not regenerated here — the
@@ -217,14 +306,25 @@ structured registry is the authoritative source.
   (`chaindb_kill_target.rs`, `tests/stress_kill_harness.rs`) under a
   chore commit, not a `feat(phase-4)` commit. The slice's
   obligation-discharge doc remains untracked in the working tree
-  (`docs/active/S-37_obligation_discharge.md`). Treat the slice as
-  not-yet-closed; CE-N-D-1 (1,000-kill-9 durability) is the gating
-  obligation. CODEMAP at HEAD lists test count 841 (≈838 + S-37 harness).
-- **SEAMS stale on PlutusScript::from_cbor.** `c8fa37f`'s commit body
-  flags that `docs/ade-SEAMS.md` §3 Closed should add
-  `PlutusScript::from_cbor` to the named ingress chokepoints (now
-  enforced by Check 3 of `ci_check_ingress_chokepoints.sh`). Not
-  refreshed in this delta — flagged for next `/seams` run.
+  (`docs/active/S-37_obligation_discharge.md`). The smoke variant of
+  the harness is now wired into CI by `ci_check_chaindb_crash_safety.sh`
+  (`78da6c9`), but the 1,000-iteration closure-gate variant remains
+  `#[ignore]` and is the gating obligation for CE-N-D-1. Treat the
+  slice as not-yet-closed until that variant is run for closure
+  evidence.
+- **CODEMAP stale on CI-script count.** CODEMAP §"CI enforcement"
+  table header at HEAD still reads "(16 scripts under `ci/`)"; the
+  actual count at HEAD is 19 after `78da6c9`'s three new RED-scope
+  scripts. Flagged for the next `/codemap` run.
+- **TRACEABILITY stale on 9 rule status flips.** The prior
+  TRACEABILITY at HEAD (refreshed by `c8fa37f`) was generated before
+  `78da6c9` flipped the 9 N-D rules to `enforced`. The audit's gap
+  counts will need to be regenerated. Commit body of `78da6c9`
+  explicitly calls this out.
+- **SEAMS stale on PlutusScript::from_cbor — closed.** The previous
+  HEAD_DELTAS flagged this; `f0b0fd6` refreshed SEAMS to add
+  `PlutusScript::from_cbor` to §3 closed registries (16 → 17) and
+  §4 frozen contracts (9 → 10). No longer an anomaly.
 - **`ade_core` is BLUE by config but empty.** Acknowledged in CODEMAP
   callout and TRACEABILITY; treated as a CE-79 Tier-4 non-goal
   (no enforcement to perform, flagged so a reviewer doesn't mistake

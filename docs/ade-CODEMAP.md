@@ -3,7 +3,7 @@
 > **Status:** Living architectural document. Regenerated; not hand-edited.
 > Per-project instance of `~/.claude/methodology/templates/codemap.md`.
 
-> 9 crates, 182 canonical types, 841 tests, 16 CI checks at HEAD (`5b70bee`).
+> 9 crates, 182 canonical types, 841 tests, 19 CI checks at HEAD (`78da6c9`).
 
 ---
 
@@ -17,9 +17,9 @@
   3. `docs/active/phase_2c_progress_report.md` — historical placement of `ade_testkit` as GREEN and `ade_node` as RED.
 - Counts:
   - Crates: 9, from `Cargo.toml` `[workspace] members`.
-  - Canonical types: 182, from `grep -rE "^pub (struct|enum) "` across the 6 BLUE crates (registry `canonical_type_registry: null`, so a structural count is used).
-  - Tests: 841 — count of `#[test]` / `#[tokio::test]` attributes across `crates/`. Reported as approximate per the template's fallback rule (test runner not executed). +3 since the previous CODEMAP run reflects the S-37 stress kill harness.
-  - CI checks: 16 — file count under `ci/ci_check_*.sh`. No `.github/workflows/` yet.
+  - Canonical types: 182, from `grep -rE "^pub (struct|enum) "` across the 6 BLUE crates (registry `canonical_type_registry: null`, so a structural count is used). Unchanged since the previous run.
+  - Tests: 841 — count of `#[test]` / `#[tokio::test]` attributes across `crates/`. Reported as approximate per the template's fallback rule (test runner not executed). Unchanged since the previous run; the 3 new CI scripts wire existing tests into CI rather than adding new ones.
+  - CI checks: 19 — file count under `ci/ci_check_*.sh`. **+3 since the previous run** (`ci_check_chaindb_contract.sh`, `ci_check_recovery_contract.sh`, `ci_check_chaindb_crash_safety.sh`) added in commit `78da6c9` to close the Phase 4 N-D enforcement gap. No `.github/workflows/` yet.
 
 ---
 
@@ -29,7 +29,7 @@
 > `// Core Contract:` and the following deny attributes are present in each `lib.rs`:
 > `#![deny(unsafe_code)]`, `#![deny(clippy::unwrap_used)]`, `#![deny(clippy::expect_used)]`,
 > `#![deny(clippy::panic)]`, `#![deny(clippy::float_arithmetic)]`.
-> CI scripts that enforce the shared rules (all 6 now scope the full BLUE set `{ade_codec, ade_types, ade_crypto, ade_core, ade_ledger, ade_plutus}` — drift closed in commit `5b70bee`):
+> CI scripts that enforce the shared rules (all 6 scope the full BLUE set `{ade_codec, ade_types, ade_crypto, ade_core, ade_ledger, ade_plutus}` — drift closed in commit `5b70bee`):
 > - `ci/ci_check_module_headers.sh` — banner first-line check.
 > - `ci/ci_check_forbidden_patterns.sh` — `HashMap`, `HashSet`, `IndexMap`/`IndexSet`/`indexmap::`, `SystemTime`, `Instant`, `std::fs`, `std::net`, `tokio`, `async fn`, `f32`/`f64`, `anyhow`, `rand::thread_rng`, `thread::spawn`, plus `unsafe` outside a documented allowlist.
 > - `ci/ci_check_dependency_boundary.sh` — no BLUE crate depends on a RED crate.
@@ -40,6 +40,7 @@
 > - `ci/ci_check_pallas_quarantine.sh` — `pallas-*` references confined to `ade_plutus`.
 >
 > A BLUE crate that adds a feature flag, an async function, a `HashMap`, or a RED dep fails CI on push.
+> The 3 CI scripts added in commit `78da6c9` (`ci_check_chaindb_contract.sh`, `ci_check_recovery_contract.sh`, `ci_check_chaindb_crash_safety.sh`) are **RED-scoped** — they run `cargo test -p ade_runtime ...` and do not appear in this shared header. They are documented in the cross-module CI matrix at the bottom.
 
 ---
 
@@ -185,7 +186,8 @@
 | **Inbound deps** | None at compile time; `crates/ade_testkit/tests/` and `crates/ade_runtime/tests/` exercise it directly via 2 `use ade_runtime::chaindb::{ ... }` sites. The binary `chaindb_kill_target` (added in S-37) lives at `src/bin/`. |
 | **Outbound deps** | `ade_types`, `redb` (S-34 Tier-5 choice — single-file ACID, MIT/Apache). Dev-deps: `tempfile`. |
 | **Entry points** | `ade_runtime::chaindb::ChainDb`, `ade_runtime::chaindb::SnapshotStore`, `ade_runtime::chaindb::PersistentChainDb` / `PersistentChainDbOptions` / `SyncCadence`, `ade_runtime::chaindb::InMemoryChainDb`, `ade_runtime::chaindb::run_contract_tests` / `run_snapshot_contract_tests` / `run_crash_safety_tests`, `ade_runtime::recovery::recover`, `ade_runtime::recovery::Recoverable`. |
-| **Key modules** | `chaindb/mod.rs` (the `ChainDb` + `SnapshotStore` trait definitions), `chaindb/contract.rs` (block-store contract test battery), `chaindb/snapshot_contract.rs` (snapshot-store contract tests), `chaindb/crash_safety.rs` (kill-strategy framework), `chaindb/in_memory.rs` (S-33 reference impl), `chaindb/persistent.rs` (S-34 redb-backed real impl), `chaindb/types.rs`, `chaindb/error.rs`, `recovery.rs` (S-36 snapshot + forward-replay), `bin/chaindb_kill_target.rs` (S-37 subprocess SIGKILL stress target). |
+| **Key modules** | `chaindb/mod.rs` (the `ChainDb` + `SnapshotStore` trait definitions), `chaindb/contract.rs` (block-store contract test battery), `chaindb/snapshot_contract.rs` (snapshot-store contract tests), `chaindb/crash_safety.rs` (kill-strategy framework), `chaindb/in_memory.rs` (S-33 reference impl), `chaindb/persistent.rs` (S-34 redb-backed real impl), `chaindb/types.rs`, `chaindb/error.rs`, `recovery.rs` (S-36 snapshot + forward replay), `bin/chaindb_kill_target.rs` (S-37 subprocess SIGKILL stress target). |
+| **Mechanical enforcement** | The chaindb / recovery / crash-safety surface above is now backed by three dedicated CI scripts added in commit `78da6c9`: `ci/ci_check_chaindb_contract.sh` runs `cargo test -p ade_runtime --lib chaindb::` (covers `in_memory_passes_contract`, `persistent_passes_contract`, `in_memory_passes_snapshot_contract`, `persistent_passes_snapshot_contract`, `reopen_observes_committed_block`, `corrupted_magic_returns_corruption_error`, `snapshots_persist_across_reopen`, `persistent_passes_crash_safety_with_no_kill` — 8 tests) and enforces DC-STORE-02, DC-STORE-03, CN-STORE-04, CN-STORE-05. `ci/ci_check_recovery_contract.sh` runs `cargo test -p ade_runtime --lib recovery::` (covers `recover_from_snapshot_and_replay_forward`, `recover_from_genesis_when_no_snapshot`, `no_starting_point_error`, `snapshot_decode_failure_surfaces_as_error`, `apply_failure_surfaces_with_slot`, `snapshot_with_no_post_blocks_is_ok` — 6 tests) and enforces T-REC-01, T-REC-02, DC-STORE-05. `ci/ci_check_chaindb_crash_safety.sh` runs `stress_kill_smoke` (10 iterations) + `snapshot_table_intact_after_kill_loop` against the subprocess SIGKILL harness in `crates/ade_runtime/tests/stress_kill_harness.rs` and enforces T-REC-01 (crash variant), DC-STORE-01, CN-STORE-03 plus the CE-N-D-1 mechanical-acceptance gate. The 1000-iteration variant `stress_kill_1000` is `#[ignore]` and runs manually for closure-gate evidence. |
 
 ---
 
@@ -202,17 +204,19 @@
 `ade_types` → `{}`.
 `ade_core` → `{}`.
 
-**Forbidden directions.** Any BLUE crate depending on `ade_runtime` or `ade_node` is a CI failure (`ci_check_dependency_boundary.sh`, now scoped to the full 6-crate BLUE list). Any non-`ade_plutus` crate referring to `pallas_*` is a CI failure (`ci_check_pallas_quarantine.sh`).
+**Forbidden directions.** Any BLUE crate depending on `ade_runtime` or `ade_node` is a CI failure (`ci_check_dependency_boundary.sh`, scoped to the full 6-crate BLUE list). Any non-`ade_plutus` crate referring to `pallas_*` is a CI failure (`ci_check_pallas_quarantine.sh`).
 
 ### Naming convention
 
-All crates are prefixed `ade_`. TCB color is not encoded in the name. The authoritative classifier is `.idd-config.json` `core_paths`; CI scripts hard-code their BLUE list. As of commit `5b70bee` all six BLUE-scoped scripts (`ci_check_module_headers.sh`, `ci_check_no_semantic_cfg.sh`, `ci_check_no_signing_in_blue.sh`, `ci_check_hash_uses_wire_bytes.sh`, `ci_check_ingress_chokepoints.sh`, `ci_check_dependency_boundary.sh`) use the full BLUE set `{ade_codec, ade_types, ade_crypto, ade_core, ade_ledger, ade_plutus}`. The previous CODEMAP run flagged a drift where five of these scripts used a narrow 4-crate list and one (`ci_check_dependency_boundary.sh`) was missing `ade_plutus` only — that drift is closed.
+All crates are prefixed `ade_`. TCB color is not encoded in the name. The authoritative classifier is `.idd-config.json` `core_paths`; CI scripts hard-code their BLUE list. As of commit `5b70bee` all six BLUE-scoped scripts (`ci_check_module_headers.sh`, `ci_check_no_semantic_cfg.sh`, `ci_check_no_signing_in_blue.sh`, `ci_check_hash_uses_wire_bytes.sh`, `ci_check_ingress_chokepoints.sh`, `ci_check_dependency_boundary.sh`) use the full BLUE set `{ade_codec, ade_types, ade_crypto, ade_core, ade_ledger, ade_plutus}`.
 
-### CI enforcement (16 scripts under `ci/`)
+### CI enforcement (19 scripts under `ci/`)
 
 | Script | Enforces | Scope |
 |---|---|---|
 | `ci_check_cbor_round_trip.sh` | T-ENC-03, DC-CBOR-01, DC-CBOR-02 | golden corpus |
+| `ci_check_chaindb_contract.sh` *(new in `78da6c9`)* | DC-STORE-02, DC-STORE-03, CN-STORE-04, CN-STORE-05 | `ade_runtime --lib chaindb::` (RED) |
+| `ci_check_chaindb_crash_safety.sh` *(new in `78da6c9`)* | T-REC-01 (crash variant), DC-STORE-01, CN-STORE-03; CE-N-D-1 gate | `ade_runtime --test stress_kill_harness` (RED) |
 | `ci_check_constitution_coverage.sh` | invariant-registry ↔ code/test coverage | repo-wide |
 | `ci_check_crypto_vectors.sh` | crypto KAT regression | `ade_crypto` |
 | `ci_check_dependency_boundary.sh` | T-BOUND-02 — BLUE ⇎ RED separation | full BLUE (6-crate) |
@@ -227,4 +231,7 @@ All crates are prefixed `ade_`. TCB color is not encoded in the name. The author
 | `ci_check_no_semantic_cfg.sh` | T-BUILD-01 — no `#[cfg(feature)]` | full BLUE (6-crate) |
 | `ci_check_no_signing_in_blue.sh` | CE-05, T-KEY-01 — signing in RED only | full BLUE (6-crate) |
 | `ci_check_pallas_quarantine.sh` | O-29.2 — `pallas-*` confined to `ade_plutus` | non-`ade_plutus` |
+| `ci_check_recovery_contract.sh` *(new in `78da6c9`)* | T-REC-01, T-REC-02, DC-STORE-05 | `ade_runtime --lib recovery::` (RED) |
 | `ci_check_ref_provenance.sh` | DC-REF-01 — manifest checksum integrity | reference corpus |
+
+> **RED-scope note.** The three new scripts in commit `78da6c9` close a TRACEABILITY-surfaced gap where 9 storage / recovery rules had code and tests but empty `ci_script` fields (status `declared`). With this commit they flip to `enforced`: T-REC-01, T-REC-02, DC-STORE-01, DC-STORE-02, DC-STORE-03, DC-STORE-05, CN-STORE-03, CN-STORE-04, CN-STORE-05. DC-STORE-04 remains `declared` by design — it names cardano-node's literal three-DB topology (ImmutableDB + VolatileDB + LedgerDB), and Ade has deliberately diverged per CE-79 Tier 5 to a single redb store with logical key-prefix separation; the semantic guarantees DC-STORE-04 stated survive under DC-STORE-02 / DC-STORE-03.
