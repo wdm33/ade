@@ -12,7 +12,7 @@
 //! process to close CE-N-D-1 (1,000-kill-9 corruption-free
 //! invariant). The interfaces live here so S-37 has a stable target.
 //!
-//! See `docs/active/S-34_obligation_discharge.md` §O-34.5.
+//! See `docs/clusters/PHASE4-N-D/S-34.md` §O-34.5.
 
 use ade_types::primitives::{Hash32, SlotNo};
 

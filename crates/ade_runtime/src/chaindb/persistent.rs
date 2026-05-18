@@ -7,7 +7,7 @@
 
 //! Persistent `ChainDb` implementation backed by redb (S-34).
 //!
-//! Tier 5 choice per `docs/active/S-34_obligation_discharge.md` §O-34.1.
+//! Tier 5 choice per `docs/clusters/PHASE4-N-D/S-34.md` §O-34.1.
 //! All redb-specific types stay inside this module; the public surface
 //! is the [`ChainDb`] trait from the parent module. This isolation is
 //! enforced by `rg "redb" crates/ade_runtime/src/chaindb/` showing

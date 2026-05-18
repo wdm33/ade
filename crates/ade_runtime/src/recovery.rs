@@ -14,7 +14,7 @@
 //! provide their own state type — `ade_runtime` stays decoupled
 //! from `ade_ledger`.
 //!
-//! See `docs/active/S-36_obligation_discharge.md`.
+//! See `docs/clusters/PHASE4-N-D/S-36.md`.
 
 use ade_types::primitives::SlotNo;
 
@@ -105,7 +105,7 @@ impl<E> From<ChainDbError> for RecoveryError<E> {
 
 /// Recover a state-at-tip from a chaindb + snapshot store.
 ///
-/// Algorithm (per `docs/active/S-36_obligation_discharge.md` §O-36.5):
+/// Algorithm (per `docs/clusters/PHASE4-N-D/S-36.md` §O-36.5):
 /// 1. If `snapshots.latest_snapshot()` returns `Some((slot, bytes))`,
 ///    decode and replay blocks from `slot+1` onward.
 /// 2. Else if `genesis` is `Some`, replay all blocks from slot 0.
