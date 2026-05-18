@@ -3,7 +3,7 @@
 > **Status:** Living architectural document. Regenerated; not hand-edited.
 > Per-project instance of `~/.claude/methodology/templates/codemap.md`.
 
-> 9 crates, 182 canonical types, 838 tests, 16 CI checks at HEAD (`3eddcbb`).
+> 9 crates, 182 canonical types, 841 tests, 16 CI checks at HEAD (`5b70bee`).
 
 ---
 
@@ -18,7 +18,7 @@
 - Counts:
   - Crates: 9, from `Cargo.toml` `[workspace] members`.
   - Canonical types: 182, from `grep -rE "^pub (struct|enum) "` across the 6 BLUE crates (registry `canonical_type_registry: null`, so a structural count is used).
-  - Tests: 838 — count of `#[test]` attributes across `crates/`. Reported as approximate per the template's fallback rule (test runner not executed).
+  - Tests: 841 — count of `#[test]` / `#[tokio::test]` attributes across `crates/`. Reported as approximate per the template's fallback rule (test runner not executed). +3 since the previous CODEMAP run reflects the S-37 stress kill harness.
   - CI checks: 16 — file count under `ci/ci_check_*.sh`. No `.github/workflows/` yet.
 
 ---
@@ -29,19 +29,17 @@
 > `// Core Contract:` and the following deny attributes are present in each `lib.rs`:
 > `#![deny(unsafe_code)]`, `#![deny(clippy::unwrap_used)]`, `#![deny(clippy::expect_used)]`,
 > `#![deny(clippy::panic)]`, `#![deny(clippy::float_arithmetic)]`.
-> CI scripts that enforce the shared rules:
+> CI scripts that enforce the shared rules (all 6 now scope the full BLUE set `{ade_codec, ade_types, ade_crypto, ade_core, ade_ledger, ade_plutus}` — drift closed in commit `5b70bee`):
 > - `ci/ci_check_module_headers.sh` — banner first-line check.
 > - `ci/ci_check_forbidden_patterns.sh` — `HashMap`, `HashSet`, `IndexMap`/`IndexSet`/`indexmap::`, `SystemTime`, `Instant`, `std::fs`, `std::net`, `tokio`, `async fn`, `f32`/`f64`, `anyhow`, `rand::thread_rng`, `thread::spawn`, plus `unsafe` outside a documented allowlist.
 > - `ci/ci_check_dependency_boundary.sh` — no BLUE crate depends on a RED crate.
 > - `ci/ci_check_no_signing_in_blue.sh` — `SigningKey`/`SecretKey`/`PrivateKey`/`private_key`/`sign_message`/`sign_block` forbidden in BLUE.
 > - `ci/ci_check_no_semantic_cfg.sh` — `#[cfg(feature = ...)]` and `cfg!(feature = ...)` forbidden in BLUE.
 > - `ci/ci_check_hash_uses_wire_bytes.sh` — no hashing of `canonical_bytes` / re-encoded bytes in BLUE.
-> - `ci/ci_check_ingress_chokepoints.sh` — only named `decode_*` chokepoints construct `PreservedCbor`.
+> - `ci/ci_check_ingress_chokepoints.sh` — only named `decode_*` chokepoints construct `PreservedCbor`. The named-chokepoint list covers `decode_block_envelope`, the per-era block decoders (`decode_byron_ebb_block`, `decode_byron_regular_block`, `decode_shelley_block`, `decode_allegra_block`, `decode_mary_block`, `decode_alonzo_block`, `decode_babbage_block`, `decode_conway_block`), `decode_address`, and `PlutusScript::from_cbor` in `ade_plutus`. Check 3 explicitly allowlists `ade_plutus/src/evaluator.rs` because Plutus script CBOR is a distinct ingress surface from block CBOR (its decoder goes through aiken/pallas rather than the ade_codec primitives).
 > - `ci/ci_check_pallas_quarantine.sh` — `pallas-*` references confined to `ade_plutus`.
 >
 > A BLUE crate that adds a feature flag, an async function, a `HashMap`, or a RED dep fails CI on push.
-
-> **Subtlety in BLUE scope.** Two CI scripts use a narrower BLUE list of `{ade_codec, ade_types, ade_crypto, ade_core}` (e.g. `ci_check_module_headers.sh`, `ci_check_no_semantic_cfg.sh`, `ci_check_no_signing_in_blue.sh`, `ci_check_hash_uses_wire_bytes.sh`, `ci_check_ingress_chokepoints.sh`) while `ci_check_forbidden_patterns.sh` and `ci_check_dependency_boundary.sh` cover the full BLUE set including `ade_ledger` and `ade_plutus`. **Gap surfaced:** the narrower scripts have not been extended to `ade_ledger`/`ade_plutus` even though `.idd-config.json` declares them BLUE.
 
 ---
 
@@ -97,7 +95,7 @@
 | **Purpose** | The functional core: stateless ledger rules for every Cardano era — UTxO transitions, certificate effects, fee/value conservation, epoch boundary accounting, hard-fork translations, governance ratification/enactment, and canonical fingerprint of `LedgerState`. |
 | **Creates** | `LedgerState`, `EpochState`, `UTxOState`, `TxOut`, `Value`, `MultiAsset`, `AssetName`, `DelegationState`, `CertState`, `PoolParams`, `PoolState`, `PoolRetirement`, `PoolRewards`, `SnapshotState`, `StakeSnapshot`, `MarkSnapshot`, `SetSnapshot`, `GoSnapshot`, `ConwayGovState`, `GovActionState`, `RatificationResult`, `EnactmentEffects`, `ProtocolParameters`, `ProtocolParameterUpdate`, `BlockApplyResult`, `BlockVerdict`, `TxVerdict`, `TxOutcome`, `ScriptPosture`, `ScriptVerdict`, `EpochBoundaryAccounting`, `EpochBoundaryResult`, `EpochBoundarySummary`, `LedgerFingerprint`, `Rational`, `WitnessInfo`, `ValidationPhase`, plus a layered family of error enums (`LedgerError`, `ValidityError`, `ConservationError`, `WitnessError`, `ScriptError`, `MintError`, `CertificateError`, `FeeError`, `EpochError`, `TranslationError`, `StructuralError`, `DecodingError`, `RuleNotYetEnforcedError`). |
 | **Interprets** | Decoded canonical types from `ade_codec`. Hosts the per-era validation composers under `alonzo.rs`, `babbage.rs`, `conway.rs`, etc., and the late-era witness decoder via `decode_all_plutus_scripts_in_block` / `decode_witness_infos`. |
-| **MUST NOT** | (1) Perform I/O (shared header). (2) Use `HashMap`, floats, or any other BLUE-forbidden pattern (`ci_check_forbidden_patterns.sh`). (3) Hash anything other than wire bytes (`ci_check_hash_uses_wire_bytes.sh`). (4) Construct `PreservedCbor` directly. (5) Depend on `ade_runtime` (enforced by `ci_check_dependency_boundary.sh`). (6) Re-implement BLUE-narrow CI gates (the headers / signing / cfg / wire-bytes / ingress scripts currently scope only the 4-crate narrow BLUE list and don't see this crate — see Gap above). |
+| **MUST NOT** | (1) Perform I/O (shared header). (2) Use `HashMap`, floats, or any other BLUE-forbidden pattern (`ci_check_forbidden_patterns.sh`). (3) Hash anything other than wire bytes (`ci_check_hash_uses_wire_bytes.sh`). (4) Construct `PreservedCbor` directly (`ci_check_ingress_chokepoints.sh`). (5) Depend on `ade_runtime` (enforced by `ci_check_dependency_boundary.sh`). (6) Use signing primitives or add `#[cfg(feature)]` gates (`ci_check_no_signing_in_blue.sh`, `ci_check_no_semantic_cfg.sh`). (7) Omit the `// Core Contract:` banner from any `.rs` (`ci_check_module_headers.sh`). |
 | **Inbound deps** | `ade_testkit`. |
 | **Outbound deps** | `ade_types`, `ade_crypto`, `ade_codec`, `ade_plutus`, `num-bigint`, `num-integer`, `num-traits`. No external runtime / I/O crates. |
 | **Entry points** | `ade_ledger::rules::apply_block` (8 import sites), `ade_ledger::rules::apply_block_classified`, `ade_ledger::rules::apply_block_with_accounting`, `ade_ledger::rules::apply_block_with_verdicts`, `ade_ledger::rules::apply_epoch_boundary_full`, `ade_ledger::rules::apply_epoch_boundary_with_registrations`, `ade_ledger::state::LedgerState`, `ade_ledger::state::EpochState`, `ade_ledger::pparams::ProtocolParameters`, `ade_ledger::utxo::UTxOState`, `ade_ledger::hfc::translate_era`, `ade_ledger::fingerprint::fingerprint`, `ade_ledger::governance::{evaluate_ratification, enact_proposals, expire_proposals}`, `ade_ledger::delegation::{apply_cert, apply_certs}`, `ade_ledger::epoch::{rotate_snapshots, compute_rewards, retire_pools, apply_epoch_boundary}`, `ade_ledger::witness::{decode_all_plutus_scripts_in_block, decode_witness_infos}`. |
@@ -111,12 +109,12 @@
 |-----------|-------|
 | **Purpose** | Quarantine boundary between the Ade-canonical ledger and the ported UPLC evaluator from `aiken-lang/aiken` (pinned to tag `v1.1.21`, commit `42babe5d`). Exposes Ade-canonical types only; aiken- and pallas-originated types are strictly internal. |
 | **Creates** | `PlutusScript`, `PlutusLanguage`, `EvalOutput`, `PlutusError`, `CostModels`, `DecoderMode`, `PerScriptResult`, `TxEvalResult`. |
-| **Interprets** | UPLC scripts (Plutus V1/V2/V3) and `CostModels` CBOR (with the project's PV-mode decoder). Phase-two transaction evaluation. |
-| **MUST NOT** | (1) Re-export any `pallas_*` or `aiken_uplc::` type from its public surface (enforced by `ci_check_pallas_quarantine.sh`; only `ade_plutus` may depend on `pallas-*`). (2) Allow another BLUE crate to import an evaluator entry point bypassing the canonical entry. (3) Activate PV11 builtins (`ExpModInteger`, `CaseList`, `CaseData`) — gated off to match mainnet's unactivated PV11; see `docs/active/S-29_obligation_discharge.md`. (4) Use any BLUE-forbidden pattern; `aiken_uplc`'s transitive `indexmap` is allowed only because it lives inside the aiken tree, not in Ade sources. |
+| **Interprets** | UPLC scripts (Plutus V1/V2/V3) and `CostModels` CBOR (with the project's PV-mode decoder). Phase-two transaction evaluation. `PlutusScript::from_cbor` (`crates/ade_plutus/src/evaluator.rs`) is a named ingress chokepoint under `ci_check_ingress_chokepoints.sh`, allowlisted in Check 3 because Plutus script CBOR uses the aiken/pallas decoder rather than `ade_codec` primitives. |
+| **MUST NOT** | (1) Re-export any `pallas_*` or `aiken_uplc::` type from its public surface (enforced by `ci_check_pallas_quarantine.sh`; only `ade_plutus` may depend on `pallas-*`). (2) Allow another BLUE crate to import an evaluator entry point bypassing the canonical entry. (3) Activate PV11 builtins (`ExpModInteger`, `CaseList`, `CaseData`) — gated off to match mainnet's unactivated PV11; see `docs/active/S-29_obligation_discharge.md`. (4) Use any BLUE-forbidden pattern (shared header — now in scope under `ci_check_no_signing_in_blue.sh`, `ci_check_no_semantic_cfg.sh`, `ci_check_hash_uses_wire_bytes.sh`, `ci_check_module_headers.sh`); `aiken_uplc`'s transitive `indexmap` is allowed only because it lives inside the aiken tree, not in Ade sources. (5) Construct `PreservedCbor` outside `ade_codec` — `PlutusScript::from_cbor` is the chokepoint for Plutus script CBOR but produces `PlutusScript`, not `PreservedCbor`. |
 | **Inbound deps** | `ade_ledger`, `ade_testkit`. |
 | **Outbound deps** | `ade_types`, `ade_crypto`, `ade_codec`, `aiken_uplc` (git, tag `v1.1.21`, renamed from `uplc`), `pallas-primitives` (referenced internally for `Language` only; not re-exported). |
 | **Entry points** | `ade_plutus::eval_tx_phase_two` (and `ade_plutus::tx_eval::SlotConfig` / `MAINNET_SLOT_CONFIG`), `ade_plutus::evaluator::{programs_alpha_equivalent, EvalOutput, PlutusLanguage, PlutusScript}`, `ade_plutus::cost_model::{CostModels, DecoderMode, decode_cost_models}`. |
-| **Key modules** | `evaluator.rs` (aiken wrapper), `cost_model.rs` (CBOR decoder for Plutus cost models), `script_context.rs` (Ade-canonical V1/V2/V3 ScriptContext builder), `script_verdict.rs`, `tx_eval.rs` (phase-2 entry). |
+| **Key modules** | `evaluator.rs` (aiken wrapper; hosts `PlutusScript::from_cbor` ingress chokepoint), `cost_model.rs` (CBOR decoder for Plutus cost models), `script_context.rs` (Ade-canonical V1/V2/V3 ScriptContext builder), `script_verdict.rs`, `tx_eval.rs` (phase-2 entry). |
 
 ---
 
@@ -204,11 +202,11 @@
 `ade_types` → `{}`.
 `ade_core` → `{}`.
 
-**Forbidden directions.** Any BLUE crate depending on `ade_runtime` or `ade_node` is a CI failure (`ci_check_dependency_boundary.sh`). Any non-`ade_plutus` crate referring to `pallas_*` is a CI failure (`ci_check_pallas_quarantine.sh`).
+**Forbidden directions.** Any BLUE crate depending on `ade_runtime` or `ade_node` is a CI failure (`ci_check_dependency_boundary.sh`, now scoped to the full 6-crate BLUE list). Any non-`ade_plutus` crate referring to `pallas_*` is a CI failure (`ci_check_pallas_quarantine.sh`).
 
 ### Naming convention
 
-All crates are prefixed `ade_`. TCB color is not encoded in the name. The authoritative classifier is `.idd-config.json` `core_paths`; the CI scripts hard-code their BLUE list. Two CI scripts (`ci_check_module_headers.sh`, `ci_check_no_semantic_cfg.sh`, `ci_check_no_signing_in_blue.sh`, `ci_check_hash_uses_wire_bytes.sh`, `ci_check_ingress_chokepoints.sh`) currently use a narrow BLUE list of `{ade_codec, ade_types, ade_crypto, ade_core}`. The wider BLUE-list scripts (`ci_check_forbidden_patterns.sh`, `ci_check_dependency_boundary.sh`) include `ade_ledger` and `ade_plutus`. **Drift between the two lists is the largest enforcement gap in the workspace** — see report below.
+All crates are prefixed `ade_`. TCB color is not encoded in the name. The authoritative classifier is `.idd-config.json` `core_paths`; CI scripts hard-code their BLUE list. As of commit `5b70bee` all six BLUE-scoped scripts (`ci_check_module_headers.sh`, `ci_check_no_semantic_cfg.sh`, `ci_check_no_signing_in_blue.sh`, `ci_check_hash_uses_wire_bytes.sh`, `ci_check_ingress_chokepoints.sh`, `ci_check_dependency_boundary.sh`) use the full BLUE set `{ade_codec, ade_types, ade_crypto, ade_core, ade_ledger, ade_plutus}`. The previous CODEMAP run flagged a drift where five of these scripts used a narrow 4-crate list and one (`ci_check_dependency_boundary.sh`) was missing `ade_plutus` only — that drift is closed.
 
 ### CI enforcement (16 scripts under `ci/`)
 
@@ -217,16 +215,16 @@ All crates are prefixed `ade_`. TCB color is not encoded in the name. The author
 | `ci_check_cbor_round_trip.sh` | T-ENC-03, DC-CBOR-01, DC-CBOR-02 | golden corpus |
 | `ci_check_constitution_coverage.sh` | invariant-registry ↔ code/test coverage | repo-wide |
 | `ci_check_crypto_vectors.sh` | crypto KAT regression | `ade_crypto` |
-| `ci_check_dependency_boundary.sh` | T-BOUND-02 — BLUE ⇎ RED separation | workspace |
+| `ci_check_dependency_boundary.sh` | T-BOUND-02 — BLUE ⇎ RED separation | full BLUE (6-crate) |
 | `ci_check_differential_divergence.sh` | DC-DIFF-* | replay outputs |
 | `ci_check_forbidden_patterns.sh` | T-CORE-02 — no `HashMap`/floats/clocks/etc. + `unsafe` allowlist | BLUE crates |
-| `ci_check_hash_uses_wire_bytes.sh` | DC-CBOR-02, T-ENC-01 | narrow BLUE (4-crate) |
+| `ci_check_hash_uses_wire_bytes.sh` | DC-CBOR-02, T-ENC-01 | full BLUE (6-crate) |
 | `ci_check_hfc_translation.sh` | DC-EPOCH-02 (CE-73-semantic) | `ade_ledger::hfc` |
-| `ci_check_ingress_chokepoints.sh` | DC-INGRESS-01, T-INGRESS-01 — `PreservedCbor` via named decoders only | narrow BLUE |
+| `ci_check_ingress_chokepoints.sh` | DC-INGRESS-01, T-INGRESS-01 — `PreservedCbor` via named decoders only; Check 3 allowlists `ade_plutus/src/evaluator.rs` for the `PlutusScript::from_cbor` chokepoint | full BLUE (6-crate) |
 | `ci_check_ledger_determinism.sh` | DC-LEDGER-01 (CE-74) | `ade_ledger` |
-| `ci_check_module_headers.sh` | CE-04 contract banner | narrow BLUE |
+| `ci_check_module_headers.sh` | CE-04 contract banner | full BLUE (6-crate) |
 | `ci_check_no_secrets.sh` | no credentials/IPs/keys in tree | repo-wide |
-| `ci_check_no_semantic_cfg.sh` | T-BUILD-01 — no `#[cfg(feature)]` | narrow BLUE |
-| `ci_check_no_signing_in_blue.sh` | CE-05, T-KEY-01 — signing in RED only | narrow BLUE |
+| `ci_check_no_semantic_cfg.sh` | T-BUILD-01 — no `#[cfg(feature)]` | full BLUE (6-crate) |
+| `ci_check_no_signing_in_blue.sh` | CE-05, T-KEY-01 — signing in RED only | full BLUE (6-crate) |
 | `ci_check_pallas_quarantine.sh` | O-29.2 — `pallas-*` confined to `ade_plutus` | non-`ade_plutus` |
 | `ci_check_ref_provenance.sh` | DC-REF-01 — manifest checksum integrity | reference corpus |
