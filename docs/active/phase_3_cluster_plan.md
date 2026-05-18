@@ -92,7 +92,7 @@ them invalidates downstream slice scopes and proof obligations.
 | Full verdict integration | `crates/ade_ledger/src/scripts.rs` | `ScriptVerdict::Passed` / `Failed` replace `NotYetEvaluated` |
 | Conformance corpus | `corpus/plutus_conformance/` | Vendored IOG `.uplc` test vectors with provenance manifest |
 | CI scripts | `ci/ci_check_plutus_conformance.sh`, `ci/ci_check_plutus_mainnet_verdict.sh` | Conformance-pass + mainnet-verdict gates |
-| Registry updates | `constitution_registry.toml` | DC-LEDGER-03/05 and DC-EPOCH-01 move `partial → enforced` |
+| Registry updates | `docs/ade-invariant-registry.toml` | DC-LEDGER-03/05 and DC-EPOCH-01 move `partial → enforced` |
 
 ---
 

@@ -143,7 +143,7 @@ inference from the release.
 
 ## 3. How Claims Reference the Gate
 
-Every closure statement in `constitution_registry.toml` cites the
+Every closure statement in `docs/ade-invariant-registry.toml` cites the
 applicable tier(s). Example:
 
 ```toml

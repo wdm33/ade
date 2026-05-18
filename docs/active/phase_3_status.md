@@ -4,7 +4,7 @@
 > contributors. Read this before picking up Phase 3 work.
 >
 > **Authority**: planning doc, not a claim doc. The authoritative
-> closure statements live in `constitution_registry.toml` exit-criteria
+> closure statements live in `docs/ade-invariant-registry.toml` exit-criteria
 > entries. This file summarizes their state.
 
 **Version scope** (inherited, CE-91): cardano-node 10.6.2 / plutus
@@ -256,7 +256,7 @@ and `BlockVerdict::plutus_eval_ineligible` already populated by
 | Phase 3 cluster plan (authoritative) | `docs/active/phase_3_cluster_plan.md` |
 | CE-88 closure strategy + full-replay evidence | `docs/active/CE-88_closure_path.md` |
 | Upstream aiken issue draft | `docs/active/aiken_upstream_issue_draft.md` |
-| Constitution registry | `constitution_registry.toml` |
+| Constitution registry | `docs/ade-invariant-registry.toml` |
 | Plutus-era contiguous harness | `crates/ade_testkit/tests/contiguous_plutus_verdict_harness.rs` |
 | Upstream-bug reproducer | `crates/ade_plutus/tests/conway_validity_range_reproducer.rs` |
 | Upstream-bug fixture generator | `crates/ade_testkit/tests/emit_divergent_fixture.rs` |
@@ -270,6 +270,6 @@ and `BlockVerdict::plutus_eval_ineligible` already populated by
 
 This document is descriptive, not prescriptive. The exit-criteria
 text in `docs/active/phase_3_cluster_plan.md` is authoritative for
-what counts as closure; `constitution_registry.toml` is
+what counts as closure; `docs/ade-invariant-registry.toml` is
 authoritative for which CEs are marked closed. If either of those
 conflicts with this snapshot, they win.

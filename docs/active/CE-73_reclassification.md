@@ -1,7 +1,7 @@
 # CE-73 Reclassification Proposal
 
 > **Status**: draft for review. Does NOT modify
-> `constitution_registry.toml` or `docs/active/phase_2c_progress_report.md`
+> `docs/ade-invariant-registry.toml` or `docs/active/phase_2c_progress_report.md`
 > until approved.
 
 ## Problem
@@ -80,7 +80,7 @@ release-scoped (Tier 3) optional feature, not as a Tier 1 hard gate.
 CE-73 is a doctrinal exit criterion, not a `[[rules]]` registry entry.
 The registry tracks `T-` / `CN-` / `DC-` rules; the rule that carries
 CE-73's scope is **`DC-EPOCH-02`** at
-`constitution_registry.toml:662-673`.
+`docs/ade-invariant-registry.toml:662-673`.
 
 The proposed registry-side change is documented as a unified diff in
 **`docs/active/CE-73_registry_diff.md`**. Summary:
@@ -110,4 +110,4 @@ implications. Verification is doctrinal:
   claim.
 - Confirm CE-79 Tier 4 statement still names the on-disk format as
   non-goal.
-- Confirm `constitution_registry.toml` accepts the split entries.
+- Confirm `docs/ade-invariant-registry.toml` accepts the split entries.

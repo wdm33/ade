@@ -224,7 +224,7 @@ Next-step CE-88 formal-closure data:
 
 1. Run `plutus_era_contiguous_full` and record agreement ratio.
 2. If ratio = 100%, move CE-88 from **Partial** to **Closed** in
-   `constitution_registry.toml` with this doc as evidence. Add the
+   `docs/ade-invariant-registry.toml` with this doc as evidence. Add the
    caveat that closure is for block-included Plutus txs; pre-
    inclusion phase-1 rejections remain unproven without an external
    mempool oracle.

@@ -6,14 +6,14 @@ set -euo pipefail
 # Uses python3 with tomllib (Python 3.11+).
 
 REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
-REGISTRY="$REPO_ROOT/constitution_registry.toml"
+REGISTRY="$REPO_ROOT/docs/ade-invariant-registry.toml"
 
 # Source documents for mechanical ID extraction
 PLAN_DOC="$HOME/Documents/ade-planning/ade_replay_first_constitutional_node_plan_v1.md"
 CLASSIFICATION_TABLE="$HOME/Documents/ade-planning/classification_table.md"
 
 if [ ! -f "$REGISTRY" ]; then
-    echo "FAIL: constitution_registry.toml not found"
+    echo "FAIL: docs/ade-invariant-registry.toml not found"
     exit 1
 fi
 
@@ -23,7 +23,7 @@ import re
 import sys
 import os
 
-REGISTRY_PATH = os.environ.get("REGISTRY", "constitution_registry.toml")
+REGISTRY_PATH = os.environ.get("REGISTRY", "docs/ade-invariant-registry.toml")
 PLAN_DOC = os.environ.get("PLAN_DOC", "")
 CLASSIFICATION_TABLE = os.environ.get("CLASSIFICATION_TABLE", "")
 

@@ -231,7 +231,7 @@ adoption-driver metrics for the operator pitch.
 ## Authority
 
 This document is a planning skeleton. Authority for specific CEs
-belongs to `constitution_registry.toml` once entries are added.
+belongs to `docs/ade-invariant-registry.toml` once entries are added.
 Slice-level work begins per cluster as obligation discharge documents
 are written; this plan does not yet break clusters into slices.
 
