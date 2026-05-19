@@ -1,0 +1,12 @@
+# Captured handshake fixture (S-A9 corpus).
+peer = "backbone.mainnet.cardanofoundation.org:3001"
+captured_at_utc = "2026-05-19T12:19:03Z"
+network_magic = 764824073
+versions_proposed = [11, 12, 13, 14, 15, 16]
+expected_negotiated = "v16 (cardano-node 11.0.1 max common)"
+sent_bytes_len = 72
+recv_bytes_len = 20
+protocol = "Handshake"
+direction_sent = "Initiator"
+direction_recv = "Responder"
+mini_protocol_id = 0
