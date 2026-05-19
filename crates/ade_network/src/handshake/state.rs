@@ -8,7 +8,7 @@
 // Handshake state machine types — pure values, no I/O, no async.
 //
 // `VersionData` models the negotiated per-version handshake-data
-// payload for cardano-node 10.6.2 N2N versions 11..=14. The shape
+// payload for cardano-node 11.0.1 (10.6.2 forward-compatible) N2N versions 11..=16. The shape
 // follows the IOG `ouroboros-network` published spec; precise byte-
 // level fidelity is re-pinned against captured frames in S-A9 (see
 // §17 of S-A3 slice doc). S-A3 verifies the state-machine surface
@@ -23,17 +23,19 @@ use crate::codec::version::{N2CVersion, N2NVersion};
 /// Encoded on the wire as `NoPeerSharing = 0`, `PeerSharingPublic = 1`
 /// per the ouroboros-network handshake-data CDDL. Closed enum: the
 /// historical `PeerSharingPrivate` discriminant was dropped before
-/// cardano-node 10.6.2 and is not represented here.
+/// cardano-node 11.0.1 (10.6.2 forward-compatible) and is not represented here.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PeerSharingFlag {
     NoPeerSharing,
     PeerSharingPublic,
 }
 
-/// Negotiated N2N handshake-data payload (cardano-node 10.6.2, V11+).
+/// Negotiated N2N handshake-data payload (cardano-node 11.0.1 (10.6.2 forward-compatible), V11+).
 ///
-/// Closed struct — every field is required for V11..=V14. The struct
-/// is `Copy` because all fields are value-typed; the handshake state
+/// Closed struct — every field is a typed input to the BLUE handshake
+/// transition. `peras_support` was introduced at NodeToNodeV_16 (cardano-
+/// node 11.0.1); for V11..=V15 it defaults to `false`. The struct is
+/// `Copy` because all fields are value-typed; the handshake state
 /// machine clones it freely without allocation.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct VersionData {
@@ -41,9 +43,10 @@ pub struct VersionData {
     pub initiator_only_diffusion: bool,
     pub peer_sharing: PeerSharingFlag,
     pub query: bool,
+    pub peras_support: bool,
 }
 
-/// Negotiated N2C handshake-data payload (cardano-node 10.6.2, V15+).
+/// Negotiated N2C handshake-data payload (cardano-node 11.0.1 (10.6.2 forward-compatible), V16+; V15 dropped at cardano-node 10.2).
 ///
 /// N2C handshake-data is narrower than N2N: only network magic and the
 /// query flag are negotiated.

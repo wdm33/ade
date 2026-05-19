@@ -8,7 +8,7 @@
 // Block-fetch state machine types — pure values, no I/O, no async.
 //
 // `BlockFetchState` encodes the four protocol states from the Ouroboros
-// block-fetch mini-protocol per cardano-node 10.6.2. `BlockFetchOutput`
+// block-fetch mini-protocol per cardano-node 11.0.1 (10.6.2 forward-compatible). `BlockFetchOutput`
 // distinguishes wire replies (locally-originated messages to be encoded
 // by the S-A2 codec) from batch-delivery events (consensus-interface
 // values consumed by N-B). `BlockFetchError` is structured — every

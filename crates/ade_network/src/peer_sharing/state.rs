@@ -8,7 +8,7 @@
 // Peer-sharing state machine types — pure values, no I/O, no async.
 //
 // `PeerSharingState` encodes the three protocol states from the
-// Ouroboros peer-sharing mini-protocol per cardano-node 10.6.2. The
+// Ouroboros peer-sharing mini-protocol per cardano-node 11.0.1 (10.6.2 forward-compatible). The
 // `Busy { amount }` variant carries the requested amount so the state
 // machine can reject overlarge replies without consulting any ambient
 // session state. The amount is a u8 — bounded by the on-wire grammar

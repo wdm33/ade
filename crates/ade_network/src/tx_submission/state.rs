@@ -8,7 +8,7 @@
 // Tx-submission2 state machine types — pure values, no I/O, no async.
 //
 // `TxSubmission2State` encodes the six protocol states from the
-// Ouroboros tx-submission2 mini-protocol per cardano-node 10.6.2. The
+// Ouroboros tx-submission2 mini-protocol per cardano-node 11.0.1 (10.6.2 forward-compatible). The
 // `TxIdsBlocking` and `TxIdsNonBlocking` variants are kept separate
 // (rather than collapsed to a single `TxIdsAwaiting { blocking: bool }`)
 // because the grammar differs: blocking replies must be non-empty,

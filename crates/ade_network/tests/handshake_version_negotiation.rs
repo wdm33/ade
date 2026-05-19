@@ -61,41 +61,51 @@ fn n2n_test_matrix() -> Vec<(Vec<u16>, Expected)> {
         (vec![12], Expected::Selected(12)),
         (vec![13], Expected::Selected(13)),
         (vec![14], Expected::Selected(14)),
+        (vec![15], Expected::Selected(15)),
+        (vec![16], Expected::Selected(16)),
         // Multi-version overlap: pick the max.
         (vec![11, 12], Expected::Selected(12)),
         (vec![12, 13], Expected::Selected(13)),
         (vec![13, 14], Expected::Selected(14)),
-        (vec![11, 12, 13, 14], Expected::Selected(14)),
+        (vec![14, 15], Expected::Selected(15)),
+        (vec![15, 16], Expected::Selected(16)),
+        (vec![11, 12, 13, 14, 15, 16], Expected::Selected(16)),
+        // cardano-node 11.0.1 advertises V14, V15, V16 — common ground.
+        (vec![14, 15, 16], Expected::Selected(16)),
         // Partial overlap.
         (vec![9, 10, 11], Expected::Selected(11)),
-        (vec![10, 14, 99], Expected::Selected(14)),
+        (vec![10, 16, 99], Expected::Selected(16)),
         // No overlap.
         (vec![1, 2, 3], Expected::Mismatch),
         (vec![9, 10], Expected::Mismatch),
-        (vec![15, 16, 17], Expected::Mismatch),
+        (vec![17, 18, 19], Expected::Mismatch),
     ]
 }
 
 fn n2c_test_matrix() -> Vec<(Vec<u16>, Expected)> {
     vec![
-        // Single-version overlap at each supported version.
-        (vec![15], Expected::Selected(15)),
+        // Single-version overlap at each supported version (V15 dropped).
         (vec![16], Expected::Selected(16)),
         (vec![17], Expected::Selected(17)),
         (vec![18], Expected::Selected(18)),
         (vec![19], Expected::Selected(19)),
         (vec![20], Expected::Selected(20)),
+        (vec![21], Expected::Selected(21)),
+        (vec![22], Expected::Selected(22)),
+        (vec![23], Expected::Selected(23)),
         // Multi-version overlap: pick the max.
-        (vec![15, 16], Expected::Selected(16)),
+        (vec![16, 17], Expected::Selected(17)),
         (vec![18, 20], Expected::Selected(20)),
-        (vec![15, 16, 17, 18, 19, 20], Expected::Selected(20)),
+        (vec![20, 21, 22, 23], Expected::Selected(23)),
+        (vec![16, 17, 18, 19, 20, 21, 22, 23], Expected::Selected(23)),
         // Partial overlap.
-        (vec![13, 14, 15], Expected::Selected(15)),
-        (vec![14, 20, 99], Expected::Selected(20)),
-        // No overlap.
+        (vec![13, 14, 16], Expected::Selected(16)),
+        (vec![14, 23, 99], Expected::Selected(23)),
+        // No overlap — V15 was dropped at cardano-node 10.2.
         (vec![1, 2, 3], Expected::Mismatch),
         (vec![10, 11, 12], Expected::Mismatch),
-        (vec![21, 22, 23], Expected::Mismatch),
+        (vec![15], Expected::Mismatch),
+        (vec![24, 25, 26], Expected::Mismatch),
     ]
 }
 

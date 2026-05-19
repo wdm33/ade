@@ -8,7 +8,7 @@
 // Chain-sync state machine types — pure values, no I/O, no async.
 //
 // `ChainSyncState` encodes the five protocol states from the Ouroboros
-// chain-sync mini-protocol per cardano-node 10.6.2. `ChainSyncOutput`
+// chain-sync mini-protocol per cardano-node 11.0.1 (10.6.2 forward-compatible). `ChainSyncOutput`
 // distinguishes wire replies (locally-originated messages to be encoded
 // by the S-A2 codec) from fork-choice signals (consensus-interface
 // values consumed by N-B). `ChainSyncError` is structured — every

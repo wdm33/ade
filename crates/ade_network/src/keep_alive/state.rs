@@ -8,7 +8,7 @@
 // Keep-alive state machine types — pure values, no I/O, no async.
 //
 // `KeepAliveState` encodes the three protocol states from the
-// Ouroboros keep-alive mini-protocol per cardano-node 10.6.2. The
+// Ouroboros keep-alive mini-protocol per cardano-node 11.0.1 (10.6.2 forward-compatible). The
 // `ServerHasAgency` variant carries the request cookie so the state
 // machine can reject mismatched server responses without consulting
 // any ambient session state. The cookie is a u16 — a single 2-byte

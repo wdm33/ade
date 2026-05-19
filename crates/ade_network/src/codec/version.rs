@@ -14,7 +14,7 @@
 // compile boundary.
 //
 // All newtypes wrap `u16` since the on-the-wire encoding uses CBOR
-// unsigned integers that fit in `u16` for every cardano-node 10.6.2
+// unsigned integers that fit in `u16` for every cardano-node 11.0.1 (10.6.2 forward-compatible)
 // supported version. Versions are intentionally `Copy` — they're
 // value-typed identifiers, not resources.
 

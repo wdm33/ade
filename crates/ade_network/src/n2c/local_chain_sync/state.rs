@@ -8,7 +8,7 @@
 // LocalChainSync state machine types — pure values, no I/O, no async.
 //
 // `LocalChainSyncState` encodes the five protocol states from the
-// Ouroboros local-chain-sync mini-protocol per cardano-node 10.6.2.
+// Ouroboros local-chain-sync mini-protocol per cardano-node 11.0.1 (10.6.2 forward-compatible).
 // `LocalChainSyncOutput` distinguishes wire replies (locally-originated
 // messages to be encoded by the S-A2 codec) from local-chain-sync
 // events (consumer-interface values). `LocalChainSyncError` is

@@ -30,7 +30,7 @@ functions of canonical inputs with no ambient session influence) and
   binding this cluster
 - `docs/active/PHASE4-N-A_cluster_plan.md` — 10-slice authority-aligned
   plan
-- External: cardano-node 10.6.2 Ouroboros mini-protocol specs
+- External: cardano-node 11.0.1 Ouroboros mini-protocol specs
   (IOG `ouroboros-network` Haskell package)
 
 ---
@@ -66,11 +66,11 @@ human review may substitute for these checks.
 
 | CE | Check | Closed by |
 |---|---|---|
-| **CE-N-A-1** | `cargo test -p ade_network --test handshake_version_negotiation` PASS across cardano-node 10.6.2 supported version tables, exercised by corpus at `corpus/network/n2n/handshake/` | S-A3 |
+| **CE-N-A-1** | `cargo test -p ade_network --test handshake_version_negotiation` PASS across cardano-node 11.0.1 supported version tables, exercised by corpus at `corpus/network/n2n/handshake/` | S-A3 |
 | **CE-N-A-2** | `cargo test -p ade_network --test chain_sync_signal_trace` PASS — chain-sync state machine produces same fork-choice signal sequence as cardano-node oracle for curated divergence corpus at `corpus/network/n2n/chain_sync/` | S-A4 |
 | **CE-N-A-3** | `cargo test -p ade_network --test block_fetch_frame_corpus` PASS — block-fetch delivers blocks byte-identically and in same order as cardano-node oracle for curated batch at `corpus/network/n2n/block_fetch/` | S-A5 |
 | **CE-N-A-4** | `cargo test -p ade_network --test tx_submission2_mempool_trace` PASS — tx-submission2 round-trips curated mempool trace with byte-identical wire frames at `corpus/network/n2n/tx_submission2/` | S-A6 |
-| **CE-N-A-5** | `cargo test -p ade_network_interop --test live_cardano_node_session --release -- --ignored` PASS against pinned-Docker cardano-node 10.6.2 — full N2N+N2C session establishes, exchanges blocks, exchanges txs, doesn't drop. Closure-gate evidence captured at `docs/clusters/PHASE4-N-A/CE-N-A-5_<date>.log` | S-A10 |
+| **CE-N-A-5** | `cargo test -p ade_network_interop --test live_cardano_node_session --release -- --ignored` PASS against pinned-Docker cardano-node 11.0.1 — full N2N+N2C session establishes, exchanges blocks, exchanges txs, doesn't drop. Closure-gate evidence captured at `docs/clusters/PHASE4-N-A/CE-N-A-5_<date>.log` | S-A10 |
 
 ---
 

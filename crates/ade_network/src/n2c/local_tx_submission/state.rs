@@ -9,7 +9,7 @@
 // async.
 //
 // `LocalTxSubmissionState` encodes the three protocol states from the
-// Ouroboros local-tx-submission mini-protocol per cardano-node 10.6.2.
+// Ouroboros local-tx-submission mini-protocol per cardano-node 11.0.1 (10.6.2 forward-compatible).
 // `LocalTxSubmissionOutput` carries an event per client/server message
 // (Reply is not separately modeled — every transition either yields an
 // event or terminates the session). `LocalTxSubmissionError` is

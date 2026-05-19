@@ -7,7 +7,7 @@
 //
 // N2N TxSubmission2 mini-protocol message codec (BLUE).
 //
-// Wire shape (cardano-node 10.6.2 NodeToNodeV13+):
+// Wire shape (cardano-node 11.0.1 (10.6.2 forward-compatible) NodeToNodeV13+):
 //   txSubmission2Message =
 //       [6]                                       ; MsgInit
 //     / [0, blocking(bool), ackTxIds(u16), reqTxIds(u16)] ; MsgRequestTxIds

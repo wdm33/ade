@@ -291,7 +291,7 @@ mod tests {
         match err {
             HandshakeError::VersionMismatch { proposed_set, supported_set } => {
                 assert_eq!(proposed_set, vec![1u16, 2u16]);
-                assert_eq!(supported_set, vec![11u16, 12, 13, 14]);
+                assert_eq!(supported_set, vec![11u16, 12, 13, 14, 15, 16]);
             }
             other => panic!("expected VersionMismatch, got {other:?}"),
         }
@@ -426,5 +426,140 @@ mod tests {
         let b1 = encode_n2c_handshake_message(&N2cMsg::AcceptVersion(v, p.clone()));
         let b2 = encode_n2c_handshake_message(&N2cMsg::AcceptVersion(v, p));
         assert_eq!(b1, b2);
+    }
+
+    #[test]
+    fn n2n_v15_happy_path() {
+        let table = VersionTable(vec![(N2NVersion::new(15), params_uint(1))]);
+        let (st, out) = n2n_transition(
+            HandshakeState::Idle,
+            HandshakeAgency::ClientHasAgency,
+            N2N_SUPPORTED,
+            HMsg::ProposeVersions(table),
+        )
+        .expect("v15 happy");
+        assert_eq!(st, HandshakeState::Done);
+        match out {
+            N2nHandshakeOutput::Selected(v, _) => assert_eq!(v.get(), 15),
+            other => panic!("expected Selected(15), got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn n2n_v16_happy_path_with_peras_support_field() {
+        let table = VersionTable(vec![(N2NVersion::new(16), params_uint(1))]);
+        let (st, out) = n2n_transition(
+            HandshakeState::Idle,
+            HandshakeAgency::ClientHasAgency,
+            N2N_SUPPORTED,
+            HMsg::ProposeVersions(table),
+        )
+        .expect("v16 happy");
+        assert_eq!(st, HandshakeState::Done);
+        match out {
+            N2nHandshakeOutput::Selected(v, data) => {
+                assert_eq!(v.get(), 16);
+                // peras_support field present on VersionData; defaults
+                // to false until Peras consensus integration lands.
+                assert!(!data.peras_support);
+            }
+            other => panic!("expected Selected(16, ..), got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn n2c_v21_happy_path() {
+        let table = N2cVersionTable(vec![(N2CVersion::new(21), n2c_params_uint(1))]);
+        let (st, out) = n2c_transition(
+            HandshakeState::Idle,
+            HandshakeAgency::ClientHasAgency,
+            N2C_SUPPORTED,
+            N2cMsg::ProposeVersions(table),
+        )
+        .expect("v21 happy");
+        assert_eq!(st, HandshakeState::Done);
+        match out {
+            N2cHandshakeOutput::Selected(v, _) => assert_eq!(v.get(), 21),
+            other => panic!("expected Selected(21), got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn n2c_v22_happy_path() {
+        let table = N2cVersionTable(vec![(N2CVersion::new(22), n2c_params_uint(1))]);
+        let (st, out) = n2c_transition(
+            HandshakeState::Idle,
+            HandshakeAgency::ClientHasAgency,
+            N2C_SUPPORTED,
+            N2cMsg::ProposeVersions(table),
+        )
+        .expect("v22 happy");
+        assert_eq!(st, HandshakeState::Done);
+        match out {
+            N2cHandshakeOutput::Selected(v, _) => assert_eq!(v.get(), 22),
+            other => panic!("expected Selected(22), got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn n2c_v23_happy_path() {
+        let table = N2cVersionTable(vec![(N2CVersion::new(23), n2c_params_uint(1))]);
+        let (st, out) = n2c_transition(
+            HandshakeState::Idle,
+            HandshakeAgency::ClientHasAgency,
+            N2C_SUPPORTED,
+            N2cMsg::ProposeVersions(table),
+        )
+        .expect("v23 happy");
+        assert_eq!(st, HandshakeState::Done);
+        match out {
+            N2cHandshakeOutput::Selected(v, _) => assert_eq!(v.get(), 23),
+            other => panic!("expected Selected(23), got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn n2c_v15_no_longer_advertised() {
+        // cardano-node 10.2+ dropped N2C V15; our supported set must
+        // not advertise it. Peer proposing V15-only must be refused.
+        let supported_versions: Vec<u16> = N2C_SUPPORTED.iter().map(|(v, _)| *v).collect();
+        assert!(!supported_versions.contains(&15));
+
+        let table = N2cVersionTable(vec![(N2CVersion::new(15), n2c_params_uint(1))]);
+        let err = n2c_transition(
+            HandshakeState::Idle,
+            HandshakeAgency::ClientHasAgency,
+            N2C_SUPPORTED,
+            N2cMsg::ProposeVersions(table),
+        )
+        .expect_err("must refuse v15");
+        match err {
+            HandshakeError::VersionMismatch { proposed_set, .. } => {
+                assert_eq!(proposed_set, vec![15u16]);
+            }
+            other => panic!("expected VersionMismatch, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn n2n_overlap_picks_v16_when_both_offer_v14_to_v16() {
+        // Peer offers V14, V15, V16; we support up to V16. Selection
+        // must pick the highest common version per the spec.
+        let table = VersionTable(vec![
+            (N2NVersion::new(14), params_uint(1)),
+            (N2NVersion::new(15), params_uint(1)),
+            (N2NVersion::new(16), params_uint(1)),
+        ]);
+        let (_, out) = n2n_transition(
+            HandshakeState::Idle,
+            HandshakeAgency::ClientHasAgency,
+            N2N_SUPPORTED,
+            HMsg::ProposeVersions(table),
+        )
+        .expect("overlap happy");
+        match out {
+            N2nHandshakeOutput::Selected(v, _) => assert_eq!(v.get(), 16),
+            other => panic!("expected Selected(16), got {other:?}"),
+        }
     }
 }

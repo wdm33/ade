@@ -40,7 +40,7 @@ use crate::n2c::local_chain_sync::state::{
 /// accepts.
 ///
 /// LocalChainSync has shipped a single closed grammar (8 messages, no
-/// version-gated variants) for every cardano-node 10.6.2 supported
+/// version-gated variants) for every cardano-node 11.0.1 (10.6.2 forward-compatible) supported
 /// version. We pin the upper bound at `MAX_LOCAL_CHAIN_SYNC_VERSION`
 /// so a future spec extension cannot silently transit messages whose
 /// semantics this state machine has not been updated for — the

@@ -8,7 +8,7 @@
 // LocalStateQuery state machine types — pure values, no I/O, no async.
 //
 // `LocalStateQueryState` encodes the five protocol states from the
-// Ouroboros local-state-query mini-protocol per cardano-node 10.6.2.
+// Ouroboros local-state-query mini-protocol per cardano-node 11.0.1 (10.6.2 forward-compatible).
 // `LocalStateQueryOutput` carries an event per client/server message
 // (Reply is not separately modeled — every transition either yields an
 // event or terminates the session). `LocalStateQueryError` is

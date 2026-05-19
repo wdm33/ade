@@ -43,7 +43,7 @@ use crate::tx_submission::state::{TxSubmission2Error, TxSubmission2Output, TxSub
 /// Highest tx-submission2 mini-protocol version this state machine accepts.
 ///
 /// Tx-submission2 has shipped a single closed grammar (6 messages, no
-/// version-gated variants) for every cardano-node 10.6.2 supported
+/// version-gated variants) for every cardano-node 11.0.1 (10.6.2 forward-compatible) supported
 /// version. We pin the upper bound at `MAX_TX_SUBMISSION_VERSION` so a
 /// future spec extension cannot silently transit messages whose
 /// semantics this state machine has not been updated for — the
@@ -541,7 +541,7 @@ mod tests {
 
     #[test]
     fn version_gating_rejects_out_of_version_message() {
-        // The tx-submission2 wire grammar across cardano-node 10.6.2
+        // The tx-submission2 wire grammar across cardano-node 11.0.1 (10.6.2 forward-compatible)
         // has shipped a single closed message set for every supported
         // version, so there is no real per-variant version gating yet.
         // The state machine still has to expose the InvalidForVersion

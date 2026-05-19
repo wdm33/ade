@@ -39,7 +39,7 @@ use crate::codec::version::BlockFetchVersion;
 /// Highest block-fetch mini-protocol version this state machine accepts.
 ///
 /// Block-fetch has shipped a single closed grammar (6 messages, no
-/// version-gated variants) for every cardano-node 10.6.2 supported
+/// version-gated variants) for every cardano-node 11.0.1 (10.6.2 forward-compatible) supported
 /// version. We pin the upper bound at `MAX_BLOCK_FETCH_VERSION` so a
 /// future spec extension cannot silently transit messages whose
 /// semantics this state machine has not been updated for — the
@@ -352,7 +352,7 @@ mod tests {
 
     #[test]
     fn version_gating_rejects_out_of_version_message() {
-        // The block-fetch wire grammar across cardano-node 10.6.2 has
+        // The block-fetch wire grammar across cardano-node 11.0.1 (10.6.2 forward-compatible) has
         // shipped a single closed message set for every supported
         // version, so there is no real per-variant version gating yet
         // (the codec already accepts all 6 variants on the wire). The
