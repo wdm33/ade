@@ -10,6 +10,7 @@ pub mod era_schedule;
 pub mod errors;
 pub mod events;
 pub mod praos_state;
+pub mod vrf_cert;
 
 pub use encoding::{
     decode_chain_dep_state, decode_chain_event, encode_chain_dep_state, encode_chain_event,
@@ -26,3 +27,7 @@ pub use events::{
     BlockDistance, ChainEvent, ChainHash, ChainSelectionReject, Point, SecurityParam,
 };
 pub use praos_state::{Nonce, OpCertCounterMap, PraosChainDepState};
+pub use vrf_cert::{
+    check_leader_claim, is_leader, leader_value_bytes, verify_vrf_cert, ActiveSlotsCoeff,
+    StakeFraction, VerifiedVrf, VrfRole, VRF_INPUT_LEN,
+};

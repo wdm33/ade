@@ -5,7 +5,9 @@ edition = "2021"
 
 [dependencies]
 ade_types = { path = "../ade_types" }
+ade_crypto = { path = "../ade_crypto" }
 minicbor = { version = "0.25", default-features = false, features = ["alloc"] }
 
 [dev-dependencies]
 serde_json = "1"
+cardano-crypto = { version = "1.0", default-features = false, features = ["vrf-draft03"] }

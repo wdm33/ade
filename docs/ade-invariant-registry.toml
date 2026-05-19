@@ -93,13 +93,14 @@ tier = "true"
 statement = "No wall-clock, unseeded randomness, floats, or nondeterministic collections in authoritative paths"
 source = "Project constitution §2, D-2 through D-5"
 cross_ref = ["CN-CONS-05", "CN-PLUTUS-04", "DC-CORE-01", "DC-PROTO-06"]
-code_locus = "crates/ade_ledger/src/lib.rs"
-tests = []
-ci_script = "ci/ci_check_forbidden_patterns.sh"
+code_locus = "crates/ade_ledger/src/lib.rs, crates/ade_core/src/consensus/vrf_cert.rs"
+tests = ["taylor_exp_cmp_le_zero_x_returns_false", "taylor_exp_cmp_le_x_equals_one_returns_true", "taylor_exp_cmp_le_monotone_in_x", "is_leader_determinism", "is_leader_known_vector_matches_reference"]
+ci_script = "ci/ci_check_forbidden_patterns.sh, ci/ci_check_no_float_in_consensus.sh"
 status = "enforced"
 authority_surface = "BLUE crate source"
 cluster = "CL-LEDGER-VERDICT"
 evidence = []
+strengthened_in = ["PHASE4-N-B"]
 
 [[rules]]
 id = "T-CORE-03"
@@ -401,13 +402,14 @@ tier = "derived"
 statement = "Crypto verification is pure and matches Haskell node on all test vectors"
 source = "Project constitution §3, T-CORE-01, T-DET-01"
 cross_ref = []
-code_locus = "crates/ade_crypto/src/"
-tests = ["blake2b_256_rfc_test_vectors", "ed25519_rfc_8032_test_1", "vrf_ietf_draft03_section_a3"]
+code_locus = "crates/ade_crypto/src/, crates/ade_core/src/consensus/vrf_cert.rs"
+tests = ["blake2b_256_rfc_test_vectors", "ed25519_rfc_8032_test_1", "vrf_ietf_draft03_section_a3", "verify_vrf_cert_accepts_valid_proof", "verify_vrf_cert_rejects_wrong_alpha", "verify_vrf_cert_rejects_malformed_proof"]
 ci_script = "ci/ci_check_crypto_vectors.sh"
 status = "enforced"
 authority_surface = "crypto verification outcomes"
 cluster = "CL-CRYPTO-VERIFY"
 evidence = []
+strengthened_in = ["PHASE4-N-B"]
 
 [[rules]]
 id = "DC-CRYPTO-02"
@@ -1509,12 +1511,13 @@ tier = "true"
 statement = "All consensus-relevant hashes must be domain-separated and unambiguous"
 source = "classification_table.md §J"
 cross_ref = []
-code_locus = ""
-tests = []
+code_locus = "crates/ade_core/src/consensus/vrf_cert.rs"
+tests = ["vrf_input_layout_is_41_bytes_with_correct_tag", "vrf_role_tags_match_convention", "vrf_input_byte_layout"]
 ci_script = ""
-status = "declared"
+status = "partial"
 attack_rationale = "Prevents cross-domain hash confusion."
-evidence_notes = "Universal: domain separation prevents cross-domain hash confusion in any cryptographic system."
+evidence_notes = "Universal: domain separation prevents cross-domain hash confusion in any cryptographic system. PHASE4-N-B S-B3 adds the typed Praos VRF input — 8-byte BE slot || 32-byte epoch nonce || 1-byte role tag (NONCE=0x4E, LEADER=0x4C) — built by a single audited function so callers cannot accidentally cross domains."
+strengthened_in = ["PHASE4-N-B"]
 
 [[rules]]
 id = "CN-CRYPTO-03"

@@ -15,7 +15,9 @@ dependencies = [
 name = "ade_core"
 version = "0.1.0"
 dependencies = [
+ "ade_crypto",
  "ade_types",
+ "cardano-crypto",
  "minicbor",
  "serde_json",
 ]
