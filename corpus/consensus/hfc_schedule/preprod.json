@@ -1,0 +1,23 @@
+{
+  "network": "preprod",
+  "system_start_unix_ms": 1654041600000,
+  "expected_anchor_hex": "1111111111111111111111111111111111111111111111111111111111111111",
+  "expected_eras": [
+    { "era": "ByronRegular", "start_slot": 0,      "start_epoch": 0,   "slot_length_ms": 20000, "epoch_length_slots": 21600,  "safe_zone_slots": 129600 },
+    { "era": "Shelley",      "start_slot": 86400,  "start_epoch": 4,   "slot_length_ms": 1000,  "epoch_length_slots": 432000, "safe_zone_slots": 129600 },
+    { "era": "Allegra",      "start_slot": 518400, "start_epoch": 5,   "slot_length_ms": 1000,  "epoch_length_slots": 432000, "safe_zone_slots": 129600 },
+    { "era": "Mary",         "start_slot": 950400, "start_epoch": 6,   "slot_length_ms": 1000,  "epoch_length_slots": 432000, "safe_zone_slots": 129600 },
+    { "era": "Alonzo",       "start_slot": 1382400, "start_epoch": 7,  "slot_length_ms": 1000,  "epoch_length_slots": 432000, "safe_zone_slots": 129600 },
+    { "era": "Babbage",      "start_slot": 1814400, "start_epoch": 8,  "slot_length_ms": 1000,  "epoch_length_slots": 432000, "safe_zone_slots": 129600 },
+    { "era": "Conway",       "start_slot": 55814400, "start_epoch": 132, "slot_length_ms": 1000,  "epoch_length_slots": 432000, "safe_zone_slots": 129600 }
+  ],
+  "probe_points": [
+    { "slot": 0,        "era": "ByronRegular", "epoch": 0,   "relative": 0, "time_ms": 1654041600000 },
+    { "slot": 86400,    "era": "Shelley",      "epoch": 4,   "relative": 0, "time_ms": 1655769600000 },
+    { "slot": 518400,   "era": "Allegra",      "epoch": 5,   "relative": 0, "time_ms": 1656201600000 },
+    { "slot": 1382400,  "era": "Alonzo",       "epoch": 7,   "relative": 0, "time_ms": 1657065600000 },
+    { "slot": 1814400,  "era": "Babbage",      "epoch": 8,   "relative": 0, "time_ms": 1657497600000 },
+    { "slot": 55814400, "era": "Conway",       "epoch": 132, "relative": 0, "time_ms": 1711497600000 }
+  ],
+  "horizon_probe": { "slot": 999999999999, "expected_horizon_error": true }
+}

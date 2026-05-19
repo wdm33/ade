@@ -18,7 +18,7 @@
     "crates/ade_network/src/peer_sharing/",
     "crates/ade_network/src/n2c/"
   ],
-  "_core_paths_doc": "BLUE crates per CLAUDE.md. ade_runtime is RED (shell); ade_testkit and ade_node are neither. ade_network has per-submodule BLUE scoping: mux::frame is BLUE; mux::transport and session are RED. Substring matches against absolute file paths.",
+  "_core_paths_doc": "BLUE crates per CLAUDE.md. ade_runtime is RED (shell); ade_testkit and ade_node are neither. ade_network has per-submodule BLUE scoping: mux::frame is BLUE; mux::transport and session are RED. ade_core::consensus (S-B1 onward) is BLUE under the already-listed crate prefix. Substring matches against absolute file paths.",
 
   "test_cmd": "cargo test --workspace",
   "replay_cmd": "cargo test -p ade_testkit",

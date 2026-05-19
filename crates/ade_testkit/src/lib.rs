@@ -7,4 +7,5 @@
 
 #![deny(unsafe_code)]
 
+pub mod consensus;
 pub mod harness;

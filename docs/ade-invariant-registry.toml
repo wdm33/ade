@@ -671,17 +671,18 @@ tier = "derived"
 statement = "Hard fork transitions triggered at deterministic slot/epoch boundaries; era translation functions mandatory; forecast horizon extends to era boundary"
 source = "Project constitution §3, T-DET-01, T-CORE-03"
 cross_ref = []
-code_locus = "crates/ade_ledger/src/hfc.rs"
-tests = ["translation_summary_proof", "translation_comparison_surface", "transition_proof_surface"]
+code_locus = "crates/ade_ledger/src/hfc.rs, crates/ade_core/src/consensus/era_schedule.rs"
+tests = ["translation_summary_proof", "translation_comparison_surface", "transition_proof_surface", "consensus::era_schedule::tests::locate_first_slot_of_each_era", "consensus::era_schedule::tests::locate_last_slot_of_each_era", "consensus::era_schedule::tests::forecast_horizon_boundary", "mainnet_corpus_translation_matches_oracle", "preprod_corpus_translation_matches_oracle"]
 ci_script = "ci/ci_check_hfc_translation.sh"
 status = "enforced"
-authority_surface = "ledger-side HFC translation enforced: all 6 transitions implemented, 22/22 encoding-independent fields match oracle (CE-73-semantic, Tier 2 closed). Byte-parity with Haskell on-disk ExtLedgerState CBOR is explicit non-goal (CE-73-bytes, Tier 4 per docs/active/CE-79_gate_statement.md and docs/active/CE-73_reclassification.md). Consensus-side HFC scheduling tracked separately under Phase 4 cluster N-B."
+authority_surface = "ledger-side HFC translation enforced: all 6 transitions implemented, 22/22 encoding-independent fields match oracle (CE-73-semantic, Tier 2 closed). Byte-parity with Haskell on-disk ExtLedgerState CBOR is explicit non-goal (CE-73-bytes, Tier 4 per docs/active/CE-79_gate_statement.md and docs/active/CE-73_reclassification.md). Consensus-side HFC scheduling enforced under PHASE4-N-B via typed EraSchedule + slot/era/time translation (S-B1)."
 cluster = "CL-LEDGER-VERDICT"
 evidence = [
   "docs/active/phase_2c_progress_report.md",
   "docs/active/CE-73_reclassification.md",
   "docs/active/T-26_hfc_ledger_side.md",
 ]
+strengthened_in = ["PHASE4-N-B"]
 
 # DC-STORE-04 describes the cardano-node three-DB architecture
 # (ImmutableDB + VolatileDB + LedgerDB). Ade has deliberately diverged
@@ -1884,10 +1885,11 @@ tier = "derived"
 statement = "BLUE consensus must consume the HFC schedule only as a typed EraSchedule value anchored to BootstrapAnchorHash. Genesis text parsing happens in RED; BLUE never reads files, JSON, or operator config directly. The schedule is part of replay evidence."
 source = "Project constitution §3, DC-CORE-01, DC-EPOCH-02"
 cross_ref = ["DC-CORE-01", "DC-EPOCH-02"]
-code_locus = ""
-tests = []
-ci_script = ""
-status = "declared"
+code_locus = "crates/ade_core/src/consensus/era_schedule.rs, crates/ade_runtime/src/consensus/genesis_parser.rs"
+tests = ["consensus::era_schedule::tests::eraschedule_constructor_rejects_empty", "consensus::era_schedule::tests::eraschedule_constructor_rejects_non_monotonic", "consensus::era_schedule::tests::eraschedule_constructor_rejects_zero_slot_length", "consensus::era_schedule::tests::eraschedule_constructor_rejects_zero_epoch_length", "consensus::genesis_parser::tests::anchor_hash_deterministic", "consensus::genesis_parser::tests::anchor_hash_distinguishes_inputs", "mainnet_corpus_translation_matches_oracle", "preprod_corpus_translation_matches_oracle", "bootstrap_anchor_hash_distinguishes_genesis_variants", "mainnet_parser_eras_match_corpus_oracle", "preprod_parser_eras_match_corpus_oracle", "parser_anchor_is_deterministic"]
+ci_script = "ci/ci_check_no_chaindb_in_consensus_blue.sh"
+status = "enforced"
+strengthened_in = ["PHASE4-N-B"]
 
 [[rules]]
 id = "DC-CONS-08"
@@ -1895,10 +1897,11 @@ tier = "derived"
 statement = "slot_to_time(EraSchedule, SystemStart, SlotNo) is a pure function; no BLUE consensus path may consult the wall clock to derive a slot or UTC instant for an authoritative decision."
 source = "Project constitution §3, CN-CONS-05, DC-CORE-01"
 cross_ref = ["DC-CORE-01", "CN-CONS-05"]
-code_locus = ""
-tests = []
-ci_script = ""
-status = "declared"
+code_locus = "crates/ade_core/src/consensus/era_schedule.rs"
+tests = ["consensus::era_schedule::tests::slot_to_time_monotone_increasing", "consensus::era_schedule::tests::slot_to_time_overflow_returns_structured_error", "consensus::era_schedule::tests::determinism_across_runs", "consensus::era_schedule::tests::locate_first_slot_of_each_era", "consensus::era_schedule::tests::locate_last_slot_of_each_era", "consensus::era_schedule::tests::locate_before_system_start_errors", "mainnet_corpus_translation_matches_oracle", "preprod_corpus_translation_matches_oracle"]
+ci_script = "ci/ci_check_no_float_in_consensus.sh"
+status = "enforced"
+strengthened_in = ["PHASE4-N-B"]
 
 [[rules]]
 id = "DC-CONS-09"
@@ -1906,10 +1909,11 @@ tier = "derived"
 statement = "Consensus-derived queries for slots beyond the ledger-view safe zone return OutsideForecastRange, never guessed values. The bound is derived from era history + safe zone + HFC schedule, not encoded as a magic constant in caller code."
 source = "Project constitution §3, DC-EPOCH-02"
 cross_ref = ["DC-EPOCH-02", "DC-CONS-07"]
-code_locus = ""
-tests = []
+code_locus = "crates/ade_core/src/consensus/era_schedule.rs"
+tests = ["consensus::era_schedule::tests::forecast_horizon_boundary", "mainnet_corpus_translation_matches_oracle", "preprod_corpus_translation_matches_oracle"]
 ci_script = ""
-status = "declared"
+status = "enforced"
+strengthened_in = ["PHASE4-N-B"]
 
 [[rules]]
 id = "DC-CONS-10"

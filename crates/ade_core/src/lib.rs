@@ -10,3 +10,5 @@
 #![deny(clippy::expect_used)]
 #![deny(clippy::panic)]
 #![deny(clippy::float_arithmetic)]
+
+pub mod consensus;

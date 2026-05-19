@@ -1,0 +1,23 @@
+{
+  "network": "mainnet",
+  "system_start_unix_ms": 1506203091000,
+  "expected_anchor_hex": "0000000000000000000000000000000000000000000000000000000000000000",
+  "expected_eras": [
+    { "era": "ByronRegular", "start_slot": 0,         "start_epoch": 0,   "slot_length_ms": 20000, "epoch_length_slots": 21600,  "safe_zone_slots": 129600 },
+    { "era": "Shelley",      "start_slot": 4492800,   "start_epoch": 208, "slot_length_ms": 1000,  "epoch_length_slots": 432000, "safe_zone_slots": 129600 },
+    { "era": "Allegra",      "start_slot": 16588800,  "start_epoch": 236, "slot_length_ms": 1000,  "epoch_length_slots": 432000, "safe_zone_slots": 129600 },
+    { "era": "Mary",         "start_slot": 23068800,  "start_epoch": 251, "slot_length_ms": 1000,  "epoch_length_slots": 432000, "safe_zone_slots": 129600 },
+    { "era": "Alonzo",       "start_slot": 39916800,  "start_epoch": 290, "slot_length_ms": 1000,  "epoch_length_slots": 432000, "safe_zone_slots": 129600 },
+    { "era": "Babbage",      "start_slot": 72316796,  "start_epoch": 365, "slot_length_ms": 1000,  "epoch_length_slots": 432000, "safe_zone_slots": 129600 },
+    { "era": "Conway",       "start_slot": 133660800, "start_epoch": 507, "slot_length_ms": 1000,  "epoch_length_slots": 432000, "safe_zone_slots": 129600 }
+  ],
+  "probe_points": [
+    { "slot": 0,         "era": "ByronRegular", "epoch": 0,   "relative": 0, "time_ms": 1506203091000 },
+    { "slot": 4492800,   "era": "Shelley",      "epoch": 208, "relative": 0, "time_ms": 1596059091000 },
+    { "slot": 16588800,  "era": "Allegra",      "epoch": 236, "relative": 0, "time_ms": 1608155091000 },
+    { "slot": 39916800,  "era": "Alonzo",       "epoch": 290, "relative": 0, "time_ms": 1631483091000 },
+    { "slot": 72316796,  "era": "Babbage",      "epoch": 365, "relative": 0, "time_ms": 1663883087000 },
+    { "slot": 133660800, "era": "Conway",       "epoch": 507, "relative": 0, "time_ms": 1725227091000 }
+  ],
+  "horizon_probe": { "slot": 999999999999, "expected_horizon_error": true }
+}

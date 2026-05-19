@@ -14,6 +14,10 @@ dependencies = [
 [[package]]
 name = "ade_core"
 version = "0.1.0"
+dependencies = [
+ "ade_types",
+ "serde_json",
+]
 
 [[package]]
 name = "ade_crypto"
@@ -66,8 +70,12 @@ dependencies = [
 name = "ade_runtime"
 version = "0.1.0"
 dependencies = [
+ "ade_codec",
+ "ade_core",
+ "ade_crypto",
  "ade_types",
  "redb",
+ "serde_json",
  "tempfile",
 ]
 
