@@ -96,9 +96,14 @@ pub fn encode_chain_sync_message(msg: &ChainSyncMessage) -> Vec<u8> {
             encode_u64(&mut buf, 1);
         }
         ChainSyncMessage::RollForward { header, tip } => {
+            // N2N RollForward wraps the era-specific header in
+            //   [serialisationInfo: word, encodedHeader: tag(24, bytes)]
+            // We carry `header` as the BYTES OF THE ENTIRE WRAPPED ITEM
+            // (starting with the array(2) header) so round-trip is
+            // byte-identical. Decoder slices the same range out.
             encode_array_header(&mut buf, 3);
             encode_u64(&mut buf, 2);
-            encode_bytes(&mut buf, header);
+            buf.extend_from_slice(header);
             encode_tip(&mut buf, tip);
         }
         ChainSyncMessage::RollBackward { point, tip } => {
@@ -192,7 +197,16 @@ pub fn decode_chain_sync_message(bytes: &[u8]) -> Result<ChainSyncMessage, Codec
         (0, 1) => ChainSyncMessage::RequestNext,
         (1, 1) => ChainSyncMessage::AwaitReply,
         (2, 3) => {
-            let header = decode_bytes(PROTOCOL, bytes, &mut offset)?;
+            // N2N RollForward header is wrapped per the cardano-node
+            // hard-fork-combinator era discriminator. Shape varies by
+            // era (e.g. Byron-EBB wraps differently than Shelley+);
+            // we treat it as opaque CBOR pass-through and consume one
+            // whole CBOR item, capturing its bytes verbatim for
+            // byte-identical round-trip.
+            let start = offset;
+            ade_codec::cbor_primitives::skip_item(bytes, &mut offset)
+                .map_err(|e| CodecError::MalformedCbor { protocol: PROTOCOL, source: e })?;
+            let header = bytes[start..offset].to_vec();
             let tip = decode_tip(bytes, &mut offset)?;
             ChainSyncMessage::RollForward { header, tip }
         }
@@ -239,12 +253,24 @@ mod tests {
         }
     }
 
+    /// Build a synthetic wrapped header matching the N2N wire format:
+    /// `[serialisationInfo, tag(24, bytes(inner))]`.
+    fn wrapped_header(info_word: u64, inner: &[u8]) -> Vec<u8> {
+        let mut buf = Vec::new();
+        encode_array_header(&mut buf, 2);
+        encode_u64(&mut buf, info_word);
+        buf.push(0xd8);
+        buf.push(0x18);
+        encode_bytes(&mut buf, inner);
+        buf
+    }
+
     fn sample_messages() -> Vec<ChainSyncMessage> {
         vec![
             ChainSyncMessage::RequestNext,
             ChainSyncMessage::AwaitReply,
             ChainSyncMessage::RollForward {
-                header: vec![0x01, 0x02, 0x03, 0x04],
+                header: wrapped_header(1, &[0x01, 0x02, 0x03, 0x04]),
                 tip: sample_tip(),
             },
             ChainSyncMessage::RollBackward {
@@ -289,7 +315,7 @@ mod tests {
     #[test]
     fn decode_rejects_truncated_input() {
         let full = encode_chain_sync_message(&ChainSyncMessage::RollForward {
-            header: vec![0x01, 0x02, 0x03, 0x04],
+            header: wrapped_header(1, &[0x01, 0x02, 0x03, 0x04]),
             tip: sample_tip(),
         });
         for n in 0..full.len() {

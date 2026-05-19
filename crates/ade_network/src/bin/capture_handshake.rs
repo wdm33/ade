@@ -42,13 +42,15 @@ use ade_network::mux::frame::{
 };
 
 const MAINNET_MAGIC: u32 = 764_824_073;
+const PREPROD_MAGIC: u32 = 1;
+const PREVIEW_MAGIC: u32 = 2;
 const HANDSHAKE_PROTOCOL_ID: u16 = 0;
 
-fn version_params_for_n2n(version: u16) -> VersionParams {
+fn version_params_for_n2n(version: u16, magic: u32) -> VersionParams {
     let mut buf = Vec::new();
     let field_count: u64 = if version >= 16 { 5 } else { 4 };
     encode_array_header(&mut buf, field_count);
-    encode_u64(&mut buf, MAINNET_MAGIC as u64);
+    encode_u64(&mut buf, magic as u64);
     // initiatorOnlyDiffusionMode = true: we are a client, never accept inbound.
     encode_bool(&mut buf, true);
     // peerSharing = NoPeerSharing (0).
@@ -78,6 +80,15 @@ async fn main() -> io::Result<()> {
         .unwrap_or_else(|| PathBuf::from("corpus/network/n2n/handshake"));
     let scenario =
         arg_value(&args, "--scenario").unwrap_or_else(|| "mainnet_v11_v16_propose".into());
+    let network_magic: u32 = arg_value(&args, "--magic")
+        .as_deref()
+        .map(|s| match s {
+            "mainnet" => MAINNET_MAGIC,
+            "preprod" => PREPROD_MAGIC,
+            "preview" => PREVIEW_MAGIC,
+            other => other.parse::<u32>().unwrap_or(MAINNET_MAGIC),
+        })
+        .unwrap_or(MAINNET_MAGIC);
 
     fs::create_dir_all(&out_dir)?;
 
@@ -102,7 +113,7 @@ async fn main() -> io::Result<()> {
         .unwrap_or_else(|| vec![11, 12, 13, 14, 15, 16]);
     let mut entries = Vec::with_capacity(proposed.len());
     for v in &proposed {
-        entries.push((N2NVersion::new(*v), version_params_for_n2n(*v)));
+        entries.push((N2NVersion::new(*v), version_params_for_n2n(*v, network_magic)));
     }
     let table = VersionTable(entries);
     let payload = encode_handshake_message(&HandshakeMessage::ProposeVersions(table));
@@ -232,7 +243,7 @@ mini_protocol_id = {protocol_id}
 "#,
         peer = peer,
         utc = chrono_like_utc(),
-        magic = MAINNET_MAGIC,
+        magic = network_magic,
         versions = proposed,
         sent_len = sent_bytes.len(),
         recv_len = recv_bytes.len(),

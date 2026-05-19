@@ -15,4 +15,8 @@ tokio = { version = "1", features = ["net", "rt", "io-util", "macros", "time"] }
 name = "ade_handshake_capture"
 path = "src/bin/capture_handshake.rs"
 
+[[bin]]
+name = "ade_chain_sync_capture"
+path = "src/bin/capture_chain_sync.rs"
+
 [dev-dependencies]
