@@ -198,7 +198,7 @@ fn decode_refuse_reason(data: &[u8], offset: &mut usize) -> Result<RefuseReason,
     match (tag, arr_len) {
         (0, 2) => {
             let n = decode_array_header(PROTOCOL, data, offset)?;
-            let mut vs = Vec::with_capacity(n as usize);
+            let mut vs = Vec::with_capacity((n as usize).min(data.len()));
             for _ in 0..n {
                 let v = decode_u32(PROTOCOL, data, offset, "version number")?;
                 if v > u16::MAX as u32 {

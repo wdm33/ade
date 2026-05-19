@@ -184,7 +184,7 @@ fn decode_refuse(data: &[u8], offset: &mut usize) -> Result<N2cRefuseReason, Cod
     match (tag, arr_len) {
         (0, 2) => {
             let n = decode_array_header(PROTOCOL, data, offset)?;
-            let mut vs = Vec::with_capacity(n as usize);
+            let mut vs = Vec::with_capacity((n as usize).min(data.len()));
             for _ in 0..n {
                 let v = decode_u32(PROTOCOL, data, offset, "version number")?;
                 vs.push(wire_to_version(v)?);

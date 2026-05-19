@@ -217,7 +217,7 @@ pub fn decode_chain_sync_message(bytes: &[u8]) -> Result<ChainSyncMessage, Codec
         }
         (4, 2) => {
             let n = decode_array_header(PROTOCOL, bytes, &mut offset)?;
-            let mut points = Vec::with_capacity(n as usize);
+            let mut points = Vec::with_capacity((n as usize).min(bytes.len()));
             for _ in 0..n {
                 points.push(decode_point(bytes, &mut offset)?);
             }

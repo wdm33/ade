@@ -143,7 +143,7 @@ pub fn decode_peer_sharing_message(bytes: &[u8]) -> Result<PeerSharingMessage, C
         }
         (1, 2) => {
             let n = decode_array_header(PROTOCOL, bytes, &mut offset)?;
-            let mut peers = Vec::with_capacity(n as usize);
+            let mut peers = Vec::with_capacity((n as usize).min(bytes.len()));
             for _ in 0..n {
                 peers.push(decode_peer_address(bytes, &mut offset)?);
             }

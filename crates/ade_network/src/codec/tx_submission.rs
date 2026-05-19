@@ -138,7 +138,7 @@ pub fn decode_tx_submission_message(bytes: &[u8]) -> Result<TxSubmission2Message
         }
         (1, 2) => {
             let n = decode_array_header(PROTOCOL, bytes, &mut offset)?;
-            let mut entries = Vec::with_capacity(n as usize);
+            let mut entries = Vec::with_capacity((n as usize).min(bytes.len()));
             for _ in 0..n {
                 let pair_len = decode_array_header(PROTOCOL, bytes, &mut offset)?;
                 if pair_len != 2 {
@@ -155,7 +155,7 @@ pub fn decode_tx_submission_message(bytes: &[u8]) -> Result<TxSubmission2Message
         }
         (2, 2) => {
             let n = decode_array_header(PROTOCOL, bytes, &mut offset)?;
-            let mut ids = Vec::with_capacity(n as usize);
+            let mut ids = Vec::with_capacity((n as usize).min(bytes.len()));
             for _ in 0..n {
                 ids.push(decode_tx_id(bytes, &mut offset)?);
             }
@@ -163,7 +163,7 @@ pub fn decode_tx_submission_message(bytes: &[u8]) -> Result<TxSubmission2Message
         }
         (3, 2) => {
             let n = decode_array_header(PROTOCOL, bytes, &mut offset)?;
-            let mut txs = Vec::with_capacity(n as usize);
+            let mut txs = Vec::with_capacity((n as usize).min(bytes.len()));
             for _ in 0..n {
                 let start = offset;
                 ade_codec::cbor_primitives::skip_item(bytes, &mut offset)
