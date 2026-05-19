@@ -1,0 +1,17 @@
+{
+  "scenario": "two_pools_three_observations_each_strictly_increasing",
+  "observations": [
+    { "pool_hex": "aa01aa01aa01aa01aa01aa01aa01aa01aa01aa01aa01aa01aa01aa01", "kes_period": 100, "counter": 0 },
+    { "pool_hex": "aa01aa01aa01aa01aa01aa01aa01aa01aa01aa01aa01aa01aa01aa01", "kes_period": 100, "counter": 1 },
+    { "pool_hex": "aa01aa01aa01aa01aa01aa01aa01aa01aa01aa01aa01aa01aa01aa01", "kes_period": 100, "counter": 5 },
+    { "pool_hex": "bb02bb02bb02bb02bb02bb02bb02bb02bb02bb02bb02bb02bb02bb02", "kes_period": 100, "counter": 0 },
+    { "pool_hex": "bb02bb02bb02bb02bb02bb02bb02bb02bb02bb02bb02bb02bb02bb02", "kes_period": 100, "counter": 2 },
+    { "pool_hex": "bb02bb02bb02bb02bb02bb02bb02bb02bb02bb02bb02bb02bb02bb02", "kes_period": 101, "counter": 0 }
+  ],
+  "expected_final_map_size": 3,
+  "expected_final_counters": [
+    { "pool_hex": "aa01aa01aa01aa01aa01aa01aa01aa01aa01aa01aa01aa01aa01aa01", "kes_period": 100, "counter": 5 },
+    { "pool_hex": "bb02bb02bb02bb02bb02bb02bb02bb02bb02bb02bb02bb02bb02bb02", "kes_period": 100, "counter": 2 },
+    { "pool_hex": "bb02bb02bb02bb02bb02bb02bb02bb02bb02bb02bb02bb02bb02bb02", "kes_period": 101, "counter": 0 }
+  ]
+}

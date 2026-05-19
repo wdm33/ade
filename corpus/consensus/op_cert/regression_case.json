@@ -1,0 +1,11 @@
+{
+  "scenario": "regression_after_two_progressions",
+  "observations": [
+    { "pool_hex": "cc03cc03cc03cc03cc03cc03cc03cc03cc03cc03cc03cc03cc03cc03", "kes_period": 200, "counter": 0 },
+    { "pool_hex": "cc03cc03cc03cc03cc03cc03cc03cc03cc03cc03cc03cc03cc03cc03", "kes_period": 200, "counter": 5 }
+  ],
+  "regression_observation": {
+    "pool_hex": "cc03cc03cc03cc03cc03cc03cc03cc03cc03cc03cc03cc03cc03cc03", "kes_period": 200, "counter": 4
+  },
+  "expected_error": { "kind": "Regression", "existing": 5, "attempted": 4 }
+}

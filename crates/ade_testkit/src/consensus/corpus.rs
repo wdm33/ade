@@ -26,3 +26,8 @@ pub fn corpus_path(manifest_dir: &str, dir: &str, name: &str) -> PathBuf {
 pub fn nonce_evolution_corpus_path(manifest_dir: &str, name: &str) -> PathBuf {
     corpus_path(manifest_dir, "nonce_evolution", name)
 }
+
+/// Convenience: resolve `corpus/consensus/op_cert/<name>`.
+pub fn op_cert_corpus_path(manifest_dir: &str, name: &str) -> PathBuf {
+    corpus_path(manifest_dir, "op_cert", name)
+}
