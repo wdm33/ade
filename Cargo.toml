@@ -9,5 +9,6 @@ members = [
     "crates/ade_plutus",
     "crates/ade_testkit",
     "crates/ade_runtime",
+    "crates/ade_network",
     "crates/ade_node",
 ]

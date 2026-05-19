@@ -1,0 +1,13 @@
+[package]
+name = "ade_network"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+ade_types = { path = "../ade_types" }
+# tokio is confined to ade_network::mux::transport (RED).
+# DC-CORE-01 prohibits tokio in any BLUE submodule; enforced by
+# ci/ci_check_no_async_in_blue.sh.
+tokio = { version = "1", features = ["net", "rt", "io-util"] }
+
+[dev-dependencies]

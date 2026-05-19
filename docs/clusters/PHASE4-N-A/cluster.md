@@ -98,7 +98,8 @@ Concrete to this cluster, not generic:
 | `ade_network::keep_alive` | **BLUE** | Pure cookie protocol. |
 | `ade_network::peer_sharing` | **BLUE** | Pure message exchange. Emits `PeerSharingOutput` events; does NOT own a peer book. |
 | `ade_network::n2c` | **BLUE** | All 4 N2C state machines. LSQ codec owns closed wire grammar, NOT ledger meaning. |
-| `ade_network::mux` | **RED** | Sockets, tokio, framing, flow control. The only place tokio first appears. |
+| `ade_network::mux::frame` | **BLUE** | Pure Ouroboros mux frame encode/decode. Sync-only. No I/O. |
+| `ade_network::mux::transport` | **RED** | Sockets, tokio. The only place tokio first appears. Flow control composes in S-A9 session. |
 | `ade_network::session` | **RED** | Composition glue: socket ↔ mux ↔ codec ↔ state machine. Holds selected version; threads it as explicit input to BLUE transitions. |
 | `crates/ade_network/src/bin/ade_network_interop.rs` | **RED** | Live cardano-node interop driver binary. |
 | `ade_testkit::network` | **GREEN** | Frame corpus harness, transcript replay. Non-authoritative test infrastructure. |

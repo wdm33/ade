@@ -4,7 +4,12 @@ set -euo pipefail
 # Verify BLUE crates never depend on RED crates (T-BOUND-02).
 # Uses cargo metadata for resolved dependency tree verification.
 
-BLUE_CRATES=("ade_codec" "ade_types" "ade_crypto" "ade_core" "ade_ledger" "ade_plutus")
+# ade_network is mixed-color at submodule granularity (mux::frame and 8
+# placeholders are BLUE; mux::transport and session are RED). At the
+# crate-dependency level the whole crate must still avoid depending on
+# any RED crate (ade_runtime, ade_node); per-submodule async/tokio
+# enforcement lives in ci/ci_check_no_async_in_blue.sh.
+BLUE_CRATES=("ade_codec" "ade_types" "ade_crypto" "ade_core" "ade_ledger" "ade_plutus" "ade_network")
 RED_CRATES=("ade_runtime" "ade_node")
 
 REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"

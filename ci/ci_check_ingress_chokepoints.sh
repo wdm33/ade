@@ -22,6 +22,17 @@ set -euo pipefail
 REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 
 BLUE_CRATES=("ade_codec" "ade_types" "ade_crypto" "ade_core" "ade_ledger" "ade_plutus")
+ADE_NETWORK_BLUE_PATHS=(
+    "crates/ade_network/src/mux/frame.rs"
+    "crates/ade_network/src/codec"
+    "crates/ade_network/src/handshake"
+    "crates/ade_network/src/chain_sync"
+    "crates/ade_network/src/block_fetch"
+    "crates/ade_network/src/tx_submission"
+    "crates/ade_network/src/keep_alive"
+    "crates/ade_network/src/peer_sharing"
+    "crates/ade_network/src/n2c"
+)
 
 FAILED=0
 
@@ -42,6 +53,21 @@ for crate in "${BLUE_CRATES[@]}"; do
 
     if [ -n "$matches" ]; then
         echo "FAIL: PreservedCbor construction outside ade_codec in $crate:"
+        echo "$matches"
+        FAILED=1
+    fi
+done
+
+for path in "${ADE_NETWORK_BLUE_PATHS[@]}"; do
+    FULL_PATH="$REPO_ROOT/$path"
+    if [ ! -e "$FULL_PATH" ]; then
+        continue
+    fi
+    matches=$(grep -rn 'PreservedCbor::new\|PreservedCbor\s*{' "$FULL_PATH" --include='*.rs' 2>/dev/null | \
+        grep -v ':[0-9]*:\s*//' || true)
+
+    if [ -n "$matches" ]; then
+        echo "FAIL: PreservedCbor construction outside ade_codec in ade_network path $path:"
         echo "$matches"
         FAILED=1
     fi
@@ -79,6 +105,21 @@ for crate in "${BLUE_CRATES[@]}"; do
 
     if [ -n "$matches" ]; then
         echo "FAIL: Raw CBOR decoding outside ade_codec in $crate:"
+        echo "$matches"
+        FAILED=1
+    fi
+done
+
+for path in "${ADE_NETWORK_BLUE_PATHS[@]}"; do
+    FULL_PATH="$REPO_ROOT/$path"
+    if [ ! -e "$FULL_PATH" ]; then
+        continue
+    fi
+    matches=$(grep -rn 'minicbor::decode\|minicbor::Decode\|from_cbor\|cbor_decode' "$FULL_PATH" --include='*.rs' 2>/dev/null | \
+        grep -v ':[0-9]*:\s*//' || true)
+
+    if [ -n "$matches" ]; then
+        echo "FAIL: Raw CBOR decoding outside ade_codec in ade_network path $path:"
         echo "$matches"
         FAILED=1
     fi
