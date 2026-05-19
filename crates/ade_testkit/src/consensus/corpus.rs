@@ -41,3 +41,8 @@ pub fn leader_schedule_corpus_path(manifest_dir: &str, name: &str) -> PathBuf {
 pub fn fork_choice_corpus_path(manifest_dir: &str, name: &str) -> PathBuf {
     corpus_path(manifest_dir, "fork_choice", name)
 }
+
+/// Convenience: resolve `corpus/consensus/rollback/<name>`.
+pub fn rollback_corpus_path(manifest_dir: &str, name: &str) -> PathBuf {
+    corpus_path(manifest_dir, "rollback", name)
+}

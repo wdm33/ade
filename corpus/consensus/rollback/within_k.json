@@ -1,0 +1,32 @@
+{
+  "scenario": "rollback_within_k_succeeds",
+  "state": {
+    "current_tip": { "slot": 1000, "hash_hex": "1111111111111111111111111111111111111111111111111111111111111111" },
+    "current_tip_block_no": 500,
+    "current_tiebreaker": {
+      "slot": 1000,
+      "issuer_hex": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "op_cert_counter": 7,
+      "vrf_output_first_8_hex": "0102030405060708"
+    },
+    "immutable_tip": { "slot": 100, "hash_hex": "0000000000000000000000000000000000000000000000000000000000000000" },
+    "immutable_tip_block_no": 50,
+    "security_param": 100
+  },
+  "rolled_back_chain_dep_seed_hex": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+  "rolled_back_tiebreaker": {
+    "slot": 950,
+    "issuer_hex": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+    "op_cert_counter": 6,
+    "vrf_output_first_8_hex": "0a0b0c0d0e0f1011"
+  },
+  "request": {
+    "to_point": { "slot": 950, "hash_hex": "2222222222222222222222222222222222222222222222222222222222222222" },
+    "to_block_no": 495,
+    "depth": 5
+  },
+  "expected_event_kind": "RolledBack",
+  "expected_to_block_no": 495,
+  "expected_depth": 5,
+  "expected_event_bytes_hex": "820182821903b65820222222222222222222222222222222222222222222222222222222222222222205"
+}

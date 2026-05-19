@@ -1,0 +1,33 @@
+{
+  "scenario": "rollback_before_immutable_rejected",
+  "state": {
+    "current_tip": { "slot": 1000, "hash_hex": "1111111111111111111111111111111111111111111111111111111111111111" },
+    "current_tip_block_no": 500,
+    "current_tiebreaker": {
+      "slot": 1000,
+      "issuer_hex": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "op_cert_counter": 7,
+      "vrf_output_first_8_hex": "0102030405060708"
+    },
+    "immutable_tip": { "slot": 100, "hash_hex": "0000000000000000000000000000000000000000000000000000000000000000" },
+    "immutable_tip_block_no": 50,
+    "security_param": 2160
+  },
+  "rolled_back_chain_dep_seed_hex": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+  "rolled_back_tiebreaker": {
+    "slot": 60,
+    "issuer_hex": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+    "op_cert_counter": 6,
+    "vrf_output_first_8_hex": "0a0b0c0d0e0f1011"
+  },
+  "request": {
+    "to_point": { "slot": 60, "hash_hex": "4444444444444444444444444444444444444444444444444444444444444444" },
+    "to_block_no": 30,
+    "depth": 470
+  },
+  "expected_event_kind": "Rejected",
+  "expected_reason_kind": "ForkBeforeImmutableTip",
+  "expected_rollback_depth": 470,
+  "expected_security_param": 2160,
+  "expected_event_bytes_hex": "8204818200848218645820000000000000000000000000000000000000000000000000000000000000000082183c582044444444444444444444444444444444444444444444444444444444444444441901d6190870"
+}

@@ -508,10 +508,10 @@ id = "DC-CONSENSUS-01"
 tier = "derived"
 statement = "Chain selection is deterministic and matches Haskell node behavior"
 source = "Project constitution §3, T-DET-01, T-CORE-01"
-cross_ref = ["DC-CONS-03", "CN-CONS-01"]
-code_locus = "crates/ade_core/src/consensus/fork_choice.rs, crates/ade_core/src/consensus/candidate.rs"
-tests = ["higher_block_no_wins", "equal_block_no_tiebreaker_decides", "fork_before_immutable_tip_rejected", "exceeded_rollback_rejected", "tiebreaker_loss_keeps_current", "replay_is_deterministic", "reject_reason_bytes_are_stable", "no_candidates_returns_error", "consensus::fork_choice::tests::tiebreaker_prefer_lower_slot_wins", "consensus::fork_choice::tests::tiebreaker_prefer_higher_op_cert_wins_on_equal_slot_and_issuer", "consensus::fork_choice::tests::tiebreaker_prefer_lower_vrf_value_wins_on_full_tie"]
-ci_script = "ci/ci_check_no_density_in_fork_choice.sh, ci/ci_check_consensus_closed_enums.sh"
+cross_ref = ["DC-CONS-03", "DC-CONS-05", "DC-CONS-06", "CN-CONS-01"]
+code_locus = "crates/ade_core/src/consensus/fork_choice.rs, crates/ade_core/src/consensus/candidate.rs, crates/ade_core/src/consensus/rollback.rs"
+tests = ["higher_block_no_wins", "equal_block_no_tiebreaker_decides", "fork_before_immutable_tip_rejected", "exceeded_rollback_rejected", "tiebreaker_loss_keeps_current", "replay_is_deterministic", "reject_reason_bytes_are_stable", "no_candidates_returns_error", "consensus::fork_choice::tests::tiebreaker_prefer_lower_slot_wins", "consensus::fork_choice::tests::tiebreaker_prefer_higher_op_cert_wins_on_equal_slot_and_issuer", "consensus::fork_choice::tests::tiebreaker_prefer_lower_vrf_value_wins_on_full_tie", "rollback_within_k_succeeds", "rollback_exceeding_k_rejected_with_typed_reason", "rollback_before_immutable_tip_rejected", "rollback_event_bytes_are_stable", "rollback_is_deterministic", "rollback_equivalent_to_truncated_replay"]
+ci_script = "ci/ci_check_no_density_in_fork_choice.sh, ci/ci_check_consensus_closed_enums.sh, ci/ci_check_no_chaindb_in_consensus_blue.sh"
 status = "partial"
 strengthened_in = ["PHASE4-N-B"]
 
@@ -1878,10 +1878,11 @@ tier = "derived"
 statement = "Authoritative rollback must never exceed the security parameter k measured in blocks (mainnet k = 2160). Rollback requests deeper than k return ExceededRollback. Forecast/stability windows may be slot-based but must accommodate at least k+1 blocks."
 source = "Project constitution §3, ouroboros-consensus consensus report"
 cross_ref = ["DC-CONS-06", "CN-CONS-01"]
-code_locus = ""
-tests = []
-ci_script = ""
-status = "declared"
+code_locus = "crates/ade_core/src/consensus/rollback.rs, crates/ade_core/src/consensus/events.rs"
+tests = ["consensus::rollback::tests::rollback_preserves_immutable_tip", "consensus::rollback::tests::rollback_preserves_security_param", "consensus::rollback::tests::rollback_with_zero_depth_is_noop", "consensus::rollback::tests::rollback_to_equal_block_no_as_immutable_succeeds", "consensus::rollback::tests::rollback_to_one_below_immutable_rejected", "rollback_within_k_succeeds", "rollback_exceeding_k_rejected_with_typed_reason", "rollback_before_immutable_tip_rejected", "rollback_event_bytes_are_stable", "rollback_is_deterministic", "rollback_equivalent_to_truncated_replay"]
+ci_script = "ci/ci_check_consensus_closed_enums.sh, ci/ci_check_no_chaindb_in_consensus_blue.sh"
+status = "enforced"
+strengthened_in = ["PHASE4-N-B"]
 
 [[rules]]
 id = "DC-CONS-06"
@@ -1889,10 +1890,11 @@ tier = "derived"
 statement = "rollback(state, depth) produces state byte-identical to truncated replay from the nearest checkpoint. Rollback that would cross the immutable tip (≥ k deep) returns ForkBeforeImmutableTip and never alters state."
 source = "Project constitution §3, T-DET-01"
 cross_ref = ["DC-CONS-05", "T-DET-01"]
-code_locus = ""
-tests = []
-ci_script = ""
-status = "declared"
+code_locus = "crates/ade_core/src/consensus/rollback.rs"
+tests = ["rollback_equivalent_to_truncated_replay", "rollback_is_deterministic", "rollback_within_k_succeeds", "rollback_before_immutable_tip_rejected", "rollback_event_bytes_are_stable", "consensus::rollback::tests::rollback_to_one_below_immutable_rejected", "consensus::rollback::tests::rollback_preserves_immutable_tip"]
+ci_script = "ci/ci_check_consensus_closed_enums.sh"
+status = "enforced"
+strengthened_in = ["PHASE4-N-B"]
 
 [[rules]]
 id = "DC-CONS-07"
