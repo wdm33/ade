@@ -11,6 +11,18 @@
 // keyed by `N2CVersion`. The per-protocol closed enum is deliberately
 // distinct from `HandshakeMessage` so the type system rejects mixing
 // N2N and N2C handshakes across session boundaries.
+//
+// N2C VERSION WIRE FLAG (0x8000): cardano-node distinguishes N2C
+// version numbers from N2N on the wire by OR-ing 0x8000 into the
+// version integer. Semantic N2C V_16 is encoded as the CBOR int
+// 32784 (= 0x8000 + 16). Our `N2CVersion(N)` carries the semantic
+// version internally; the codec adds the flag on encode and strips
+// it on decode. Decoding a value without the flag (or with the
+// version-payload exceeding u16 once stripped) is rejected as
+// malformed — that's an N2N table coming in on the N2C surface.
+// Real interop against cardano-node 11.0.1 caught this: without
+// the flag, the server returned Refuse(VersionMismatch[32784..32791])
+// listing its supported set in the wire encoding.
 
 use crate::codec::error::{CodecError, ProtocolKind};
 use crate::codec::primitives::{
@@ -20,6 +32,32 @@ use crate::codec::primitives::{
 use crate::codec::version::N2CVersion;
 
 const PROTOCOL: ProtocolKind = ProtocolKind::N2cHandshake;
+
+/// Bit OR'd into every N2C wire version number to distinguish N2C
+/// from N2N at the handshake layer. cardano-node convention.
+const N2C_WIRE_FLAG: u32 = 0x8000;
+
+fn version_to_wire(v: N2CVersion) -> u32 {
+    (v.get() as u32) | N2C_WIRE_FLAG
+}
+
+fn wire_to_version(w: u32) -> Result<N2CVersion, CodecError> {
+    if (w & N2C_WIRE_FLAG) == 0 {
+        return Err(CodecError::InvalidProtocolMessage {
+            protocol: PROTOCOL,
+            reason: "N2C version number missing 0x8000 wire flag",
+        });
+    }
+    let semantic = w & !N2C_WIRE_FLAG;
+    if semantic > u16::MAX as u32 {
+        return Err(CodecError::InvalidIntegerRange {
+            protocol: PROTOCOL,
+            field: "n2c version (semantic)",
+            value: semantic as u64,
+        });
+    }
+    Ok(N2CVersion::new(semantic as u16))
+}
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct N2cVersionParams(pub Vec<u8>);
@@ -52,7 +90,7 @@ fn encode_table(buf: &mut Vec<u8>, table: &N2cVersionTable) {
         ),
     );
     for (ver, params) in &table.0 {
-        encode_u64(buf, ver.get() as u64);
+        encode_u64(buf, version_to_wire(*ver) as u64);
         buf.extend_from_slice(&params.0);
     }
 }
@@ -64,19 +102,19 @@ fn encode_refuse(buf: &mut Vec<u8>, reason: &N2cRefuseReason) {
             encode_u64(buf, 0);
             encode_array_header(buf, vs.len() as u64);
             for v in vs {
-                encode_u64(buf, v.get() as u64);
+                encode_u64(buf, version_to_wire(*v) as u64);
             }
         }
         N2cRefuseReason::HandshakeDecodeError { version, reason } => {
             encode_array_header(buf, 3);
             encode_u64(buf, 1);
-            encode_u64(buf, version.get() as u64);
+            encode_u64(buf, version_to_wire(*version) as u64);
             encode_text(buf, reason);
         }
         N2cRefuseReason::Refused { version, reason } => {
             encode_array_header(buf, 3);
             encode_u64(buf, 2);
-            encode_u64(buf, version.get() as u64);
+            encode_u64(buf, version_to_wire(*version) as u64);
             encode_text(buf, reason);
         }
     }
@@ -93,7 +131,7 @@ pub fn encode_n2c_handshake_message(msg: &N2cHandshakeMessage) -> Vec<u8> {
         N2cHandshakeMessage::AcceptVersion(ver, params) => {
             encode_array_header(&mut buf, 3);
             encode_u64(&mut buf, 1);
-            encode_u64(&mut buf, ver.get() as u64);
+            encode_u64(&mut buf, version_to_wire(*ver) as u64);
             buf.extend_from_slice(&params.0);
         }
         N2cHandshakeMessage::Refuse(reason) => {
@@ -125,17 +163,11 @@ fn decode_table(data: &[u8], offset: &mut usize) -> Result<N2cVersionTable, Code
     let mut entries = Vec::with_capacity(len as usize);
     for _ in 0..len {
         let v = decode_u32(PROTOCOL, data, offset, "version number")?;
-        if v > u16::MAX as u32 {
-            return Err(CodecError::InvalidIntegerRange {
-                protocol: PROTOCOL,
-                field: "version number",
-                value: v as u64,
-            });
-        }
+        let semver = wire_to_version(v)?;
         let start = *offset;
         let (_, end) = ade_codec::cbor_primitives::skip_item(data, offset)
             .map_err(|source| CodecError::MalformedCbor { protocol: PROTOCOL, source })?;
-        entries.push((N2CVersion::new(v as u16), N2cVersionParams(data[start..end].to_vec())));
+        entries.push((semver, N2cVersionParams(data[start..end].to_vec())));
     }
     Ok(N2cVersionTable(entries))
 }
@@ -155,43 +187,21 @@ fn decode_refuse(data: &[u8], offset: &mut usize) -> Result<N2cRefuseReason, Cod
             let mut vs = Vec::with_capacity(n as usize);
             for _ in 0..n {
                 let v = decode_u32(PROTOCOL, data, offset, "version number")?;
-                if v > u16::MAX as u32 {
-                    return Err(CodecError::InvalidIntegerRange {
-                        protocol: PROTOCOL,
-                        field: "version number",
-                        value: v as u64,
-                    });
-                }
-                vs.push(N2CVersion::new(v as u16));
+                vs.push(wire_to_version(v)?);
             }
             Ok(N2cRefuseReason::VersionMismatch(vs))
         }
         (1, 3) => {
             let v = decode_u32(PROTOCOL, data, offset, "version number")?;
-            if v > u16::MAX as u32 {
-                return Err(CodecError::InvalidIntegerRange {
-                    protocol: PROTOCOL,
-                    field: "version number",
-                    value: v as u64,
-                });
-            }
+            let version = wire_to_version(v)?;
             let reason = decode_text(PROTOCOL, data, offset, "handshake decode error reason")?;
-            Ok(N2cRefuseReason::HandshakeDecodeError {
-                version: N2CVersion::new(v as u16),
-                reason,
-            })
+            Ok(N2cRefuseReason::HandshakeDecodeError { version, reason })
         }
         (2, 3) => {
             let v = decode_u32(PROTOCOL, data, offset, "version number")?;
-            if v > u16::MAX as u32 {
-                return Err(CodecError::InvalidIntegerRange {
-                    protocol: PROTOCOL,
-                    field: "version number",
-                    value: v as u64,
-                });
-            }
+            let version = wire_to_version(v)?;
             let reason = decode_text(PROTOCOL, data, offset, "refused reason")?;
-            Ok(N2cRefuseReason::Refused { version: N2CVersion::new(v as u16), reason })
+            Ok(N2cRefuseReason::Refused { version, reason })
         }
         (other, _) => Err(CodecError::UnknownTag { protocol: PROTOCOL, tag: other }),
     }
@@ -214,20 +224,11 @@ pub fn decode_n2c_handshake_message(bytes: &[u8]) -> Result<N2cHandshakeMessage,
         (0, 2) => N2cHandshakeMessage::ProposeVersions(decode_table(bytes, &mut offset)?),
         (1, 3) => {
             let v = decode_u32(PROTOCOL, bytes, &mut offset, "version number")?;
-            if v > u16::MAX as u32 {
-                return Err(CodecError::InvalidIntegerRange {
-                    protocol: PROTOCOL,
-                    field: "version number",
-                    value: v as u64,
-                });
-            }
+            let semver = wire_to_version(v)?;
             let start = offset;
             let (_, end) = ade_codec::cbor_primitives::skip_item(bytes, &mut offset)
                 .map_err(|source| CodecError::MalformedCbor { protocol: PROTOCOL, source })?;
-            N2cHandshakeMessage::AcceptVersion(
-                N2CVersion::new(v as u16),
-                N2cVersionParams(bytes[start..end].to_vec()),
-            )
+            N2cHandshakeMessage::AcceptVersion(semver, N2cVersionParams(bytes[start..end].to_vec()))
         }
         (2, 2) => N2cHandshakeMessage::Refuse(decode_refuse(bytes, &mut offset)?),
         (3, 2) => N2cHandshakeMessage::QueryReply(decode_table(bytes, &mut offset)?),
@@ -318,7 +319,7 @@ mod tests {
         encode_u64(&mut buf, 2);
         encode_array_header(&mut buf, 3);
         encode_u64(&mut buf, 2);
-        encode_u64(&mut buf, 16);
+        encode_u64(&mut buf, 0x8000 + 16); // wire-encoded V_16
         buf.push(0x62);
         buf.push(0xff);
         buf.push(0xfe);

@@ -23,4 +23,16 @@ path = "src/bin/capture_chain_sync.rs"
 name = "ade_block_fetch_capture"
 path = "src/bin/capture_block_fetch.rs"
 
+[[bin]]
+name = "ade_keep_alive_capture"
+path = "src/bin/capture_keep_alive.rs"
+
+[[bin]]
+name = "ade_peer_sharing_capture"
+path = "src/bin/capture_peer_sharing.rs"
+
+[[bin]]
+name = "ade_n2c_handshake_capture"
+path = "src/bin/capture_n2c_handshake.rs"
+
 [dev-dependencies]

@@ -1,0 +1,7 @@
+# Captured N2C handshake corpus (S-A9 real-capture for N2C handshake).
+socket = "/home/ts/Code/rust/ade/.cardano-node-preprod/ipc/node.socket"
+network_magic = 1
+negotiated_n2c_version = 23
+captured_at_utc = "2026-05-19T13:37:33Z"
+protocol = "N2cHandshake"
+mini_protocol_id = 0
