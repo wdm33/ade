@@ -42,6 +42,7 @@ dependencies = [
 name = "ade_network"
 version = "0.1.0"
 dependencies = [
+ "ade_codec",
  "ade_types",
  "tokio",
 ]

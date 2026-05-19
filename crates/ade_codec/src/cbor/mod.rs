@@ -201,6 +201,70 @@ pub fn read_bytes(data: &[u8], offset: &mut usize) -> Result<(Vec<u8>, IntWidth)
     Ok((bytes, width))
 }
 
+/// Read a CBOR text string (major type 3), returning the raw bytes and length width.
+///
+/// Validates UTF-8. Only supports definite-length text strings.
+pub fn read_text(data: &[u8], offset: &mut usize) -> Result<(String, IntWidth), CodecError> {
+    let start = *offset;
+    let (major, ai) = decode_initial(data, offset)?;
+    if major != MAJOR_TEXT {
+        return Err(CodecError::UnexpectedCborType {
+            offset: start,
+            expected: "text string",
+            actual: major,
+        });
+    }
+    if ai == AI_INDEFINITE {
+        return Err(CodecError::InvalidCborStructure {
+            offset: start,
+            detail: "indefinite-length text string not supported",
+        });
+    }
+    let (len, width) = decode_argument(data, offset, ai, start)?;
+    let len = len as usize;
+    if *offset + len > data.len() {
+        return Err(CodecError::UnexpectedEof {
+            offset: *offset,
+            needed: len,
+        });
+    }
+    let raw = data[*offset..*offset + len].to_vec();
+    *offset += len;
+    let s = String::from_utf8(raw).map_err(|_| CodecError::InvalidCborStructure {
+        offset: start,
+        detail: "invalid UTF-8 in text string",
+    })?;
+    Ok((s, width))
+}
+
+/// Write a CBOR text string with canonical length encoding.
+pub fn write_text_canonical(buf: &mut Vec<u8>, text: &str) {
+    let bytes = text.as_bytes();
+    let len = bytes.len() as u64;
+    write_argument(buf, MAJOR_TEXT, len, canonical_width(len));
+    buf.extend_from_slice(bytes);
+}
+
+/// Write a CBOR boolean (simple value 20 for false, 21 for true).
+pub fn write_bool(buf: &mut Vec<u8>, b: bool) {
+    let byte = if b { 0xf5u8 } else { 0xf4u8 };
+    buf.push(byte);
+}
+
+/// Read a CBOR boolean (simple value 20 / 21). Returns the boolean.
+pub fn read_bool(data: &[u8], offset: &mut usize) -> Result<bool, CodecError> {
+    let start = *offset;
+    let b = read_byte(data, offset)?;
+    match b {
+        0xf4 => Ok(false),
+        0xf5 => Ok(true),
+        _ => Err(CodecError::InvalidCborStructure {
+            offset: start,
+            detail: "expected CBOR boolean (0xf4/0xf5)",
+        }),
+    }
+}
+
 /// Read a CBOR array header (major type 4).
 pub fn read_array_header(data: &[u8], offset: &mut usize) -> Result<ContainerEncoding, CodecError> {
     let start = *offset;

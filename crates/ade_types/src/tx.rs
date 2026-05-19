@@ -7,6 +7,28 @@
 
 use crate::Hash32;
 
+/// Canonical transaction identifier — Blake2b-256 of the transaction body bytes
+/// per the Cardano protocol. A typed newtype over Hash32 so APIs that consume or
+/// produce transaction identities never silently accept arbitrary 32-byte hashes.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct TxId(pub Hash32);
+
+impl TxId {
+    pub const fn from_bytes(bytes: [u8; 32]) -> Self {
+        TxId(Hash32(bytes))
+    }
+
+    pub const fn as_bytes(&self) -> &[u8; 32] {
+        &self.0 .0
+    }
+}
+
+impl core::fmt::Display for TxId {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        write!(f, "{}", self.0)
+    }
+}
+
 /// Transaction input reference — identifies a specific output from a previous transaction.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct TxIn {

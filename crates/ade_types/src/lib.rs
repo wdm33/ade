@@ -25,4 +25,4 @@ pub mod tx;
 
 pub use era::CardanoEra;
 pub use primitives::{BlockNo, EpochNo, Hash28, Hash32, SlotNo};
-pub use tx::{Coin, PoolId, TxIn};
+pub use tx::{Coin, PoolId, TxId, TxIn};

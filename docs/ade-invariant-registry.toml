@@ -63,13 +63,14 @@ tier = "true"
 statement = "Round-trip identity: encode(decode(bytes)) == bytes for valid encodings"
 source = "Project constitution §2, D-3"
 cross_ref = []
-code_locus = "crates/ade_codec/src/preserved.rs"
-tests = ["full_corpus_round_trip"]
+code_locus = "crates/ade_codec/src/preserved.rs, crates/ade_network/src/codec/handshake.rs, crates/ade_network/src/codec/n2c_handshake.rs, crates/ade_network/src/codec/chain_sync.rs, crates/ade_network/src/codec/block_fetch.rs, crates/ade_network/src/codec/tx_submission.rs, crates/ade_network/src/codec/keep_alive.rs, crates/ade_network/src/codec/peer_sharing.rs, crates/ade_network/src/codec/local_chain_sync.rs, crates/ade_network/src/codec/local_tx_submission.rs, crates/ade_network/src/codec/local_state_query.rs, crates/ade_network/src/codec/local_tx_monitor.rs"
+tests = ["full_corpus_round_trip", "codec::handshake::tests::roundtrip_every_variant", "codec::n2c_handshake::tests::roundtrip_every_variant", "codec::chain_sync::tests::roundtrip_every_variant", "codec::block_fetch::tests::roundtrip_every_variant", "codec::tx_submission::tests::roundtrip_every_variant", "codec::keep_alive::tests::roundtrip_every_variant", "codec::peer_sharing::tests::roundtrip_every_variant", "codec::local_chain_sync::tests::roundtrip_every_variant", "codec::local_tx_submission::tests::roundtrip_every_variant", "codec::local_state_query::tests::roundtrip_every_variant", "codec::local_tx_monitor::tests::roundtrip_every_variant"]
 ci_script = "ci/ci_check_cbor_round_trip.sh"
 status = "enforced"
-authority_surface = "CBOR wire-byte encode/decode on 10,500 contiguous blocks across 7 eras"
+authority_surface = "CBOR wire-byte encode/decode on 10,500 contiguous blocks across 7 eras; per-variant round-trip across all 11 Ouroboros mini-protocol message taxonomies (S-A2)"
 cluster = "CL-CRYPTO-VERIFY"
 evidence = []
+strengthened_in = ["PHASE4-N-A"]
 
 [[rules]]
 id = "T-CORE-01"
@@ -618,10 +619,11 @@ tier = "derived"
 statement = "Full N2N mini-protocol surface: Handshake, ChainSync, BlockFetch, TxSubmission2, KeepAlive, PeerSharing"
 source = "Project constitution §3, T-DET-01, T-CORE-03"
 cross_ref = []
-code_locus = ""
-tests = []
+code_locus = "crates/ade_network/src/codec/handshake.rs, crates/ade_network/src/codec/chain_sync.rs, crates/ade_network/src/codec/block_fetch.rs, crates/ade_network/src/codec/tx_submission.rs, crates/ade_network/src/codec/keep_alive.rs, crates/ade_network/src/codec/peer_sharing.rs"
+tests = ["codec::handshake::tests::roundtrip_every_variant", "codec::chain_sync::tests::roundtrip_every_variant", "codec::block_fetch::tests::roundtrip_every_variant", "codec::tx_submission::tests::roundtrip_every_variant", "codec::keep_alive::tests::roundtrip_every_variant", "codec::peer_sharing::tests::roundtrip_every_variant"]
 ci_script = ""
 status = "declared"
+strengthened_in = ["PHASE4-N-A"]
 
 [[rules]]
 id = "DC-PROTO-04"
@@ -629,10 +631,11 @@ tier = "derived"
 statement = "Full N2C mini-protocol surface: Handshake, LocalChainSync, LocalTxSubmission, LocalStateQuery, LocalTxMonitor"
 source = "Project constitution §3, T-DET-01, T-CORE-03"
 cross_ref = []
-code_locus = ""
-tests = []
+code_locus = "crates/ade_network/src/codec/n2c_handshake.rs, crates/ade_network/src/codec/local_chain_sync.rs, crates/ade_network/src/codec/local_tx_submission.rs, crates/ade_network/src/codec/local_state_query.rs, crates/ade_network/src/codec/local_tx_monitor.rs"
+tests = ["codec::n2c_handshake::tests::roundtrip_every_variant", "codec::local_chain_sync::tests::roundtrip_every_variant", "codec::local_tx_submission::tests::roundtrip_every_variant", "codec::local_state_query::tests::roundtrip_every_variant", "codec::local_tx_monitor::tests::roundtrip_every_variant"]
 ci_script = ""
 status = "declared"
+strengthened_in = ["PHASE4-N-A"]
 
 [[rules]]
 id = "DC-PROTO-05"
@@ -929,12 +932,13 @@ tier = "derived"
 statement = "Each protocol-visible message must decode into one closed, versioned message type"
 source = "classification_table.md §A"
 cross_ref = []
-code_locus = ""
-tests = []
+code_locus = "crates/ade_network/src/codec/error.rs, crates/ade_network/src/codec/version.rs, crates/ade_network/src/codec/handshake.rs, crates/ade_network/src/codec/n2c_handshake.rs, crates/ade_network/src/codec/chain_sync.rs, crates/ade_network/src/codec/block_fetch.rs, crates/ade_network/src/codec/tx_submission.rs, crates/ade_network/src/codec/keep_alive.rs, crates/ade_network/src/codec/peer_sharing.rs, crates/ade_network/src/codec/local_chain_sync.rs, crates/ade_network/src/codec/local_tx_submission.rs, crates/ade_network/src/codec/local_state_query.rs, crates/ade_network/src/codec/local_tx_monitor.rs"
+tests = ["codec::handshake::tests::roundtrip_every_variant", "codec::handshake::tests::decode_rejects_unknown_tag", "codec::handshake::tests::decode_rejects_truncated_input", "codec::handshake::tests::decode_rejects_invalid_utf8_in_text_fields", "codec::n2c_handshake::tests::roundtrip_every_variant", "codec::n2c_handshake::tests::decode_rejects_unknown_tag", "codec::n2c_handshake::tests::decode_rejects_truncated_input", "codec::n2c_handshake::tests::decode_rejects_invalid_utf8_in_text_fields", "codec::chain_sync::tests::roundtrip_every_variant", "codec::chain_sync::tests::decode_rejects_unknown_tag", "codec::chain_sync::tests::decode_rejects_truncated_input", "codec::block_fetch::tests::roundtrip_every_variant", "codec::block_fetch::tests::decode_rejects_unknown_tag", "codec::block_fetch::tests::decode_rejects_truncated_input", "codec::tx_submission::tests::roundtrip_every_variant", "codec::tx_submission::tests::decode_rejects_unknown_tag", "codec::tx_submission::tests::decode_rejects_truncated_input", "codec::keep_alive::tests::roundtrip_every_variant", "codec::keep_alive::tests::decode_rejects_unknown_tag", "codec::keep_alive::tests::decode_rejects_truncated_input", "codec::peer_sharing::tests::roundtrip_every_variant", "codec::peer_sharing::tests::decode_rejects_unknown_tag", "codec::peer_sharing::tests::decode_rejects_truncated_input", "codec::local_chain_sync::tests::roundtrip_every_variant", "codec::local_chain_sync::tests::decode_rejects_unknown_tag", "codec::local_chain_sync::tests::decode_rejects_truncated_input", "codec::local_tx_submission::tests::roundtrip_every_variant", "codec::local_tx_submission::tests::decode_rejects_unknown_tag", "codec::local_tx_submission::tests::decode_rejects_truncated_input", "codec::local_state_query::tests::roundtrip_every_variant", "codec::local_state_query::tests::decode_rejects_unknown_tag", "codec::local_state_query::tests::decode_rejects_truncated_input", "codec::local_tx_monitor::tests::roundtrip_every_variant", "codec::local_tx_monitor::tests::decode_rejects_unknown_tag", "codec::local_tx_monitor::tests::decode_rejects_truncated_input"]
 ci_script = ""
 status = "declared"
 attack_rationale = "Prevents ambiguous dispatch and version confusion in miniprotocols."
-evidence_notes = "Cardano-specific: addresses Cardano's protocol message versioning (N2N/N2C version negotiation, per-version message sets)."
+evidence_notes = "Cardano-specific: addresses Cardano's protocol message versioning (N2N/N2C version negotiation, per-version message sets). S-A2 lands closed message taxonomy + CBOR codecs for all 11 protocols; byte-identicality with cardano-node corpus pending S-A3..S-A6."
+strengthened_in = ["PHASE4-N-A"]
 
 # --- B. Ledger Validity and State Transition Safety ---
 
