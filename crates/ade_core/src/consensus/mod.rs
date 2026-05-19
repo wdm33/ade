@@ -9,6 +9,7 @@ pub mod encoding;
 pub mod era_schedule;
 pub mod errors;
 pub mod events;
+pub mod nonce;
 pub mod praos_state;
 pub mod vrf_cert;
 
@@ -26,6 +27,7 @@ pub use errors::{
 pub use events::{
     BlockDistance, ChainEvent, ChainHash, ChainSelectionReject, Point, SecurityParam,
 };
+pub use nonce::{apply_nonce_input, NonceInput};
 pub use praos_state::{Nonce, OpCertCounterMap, PraosChainDepState};
 pub use vrf_cert::{
     check_leader_claim, is_leader, leader_value_bytes, verify_vrf_cert, ActiveSlotsCoeff,

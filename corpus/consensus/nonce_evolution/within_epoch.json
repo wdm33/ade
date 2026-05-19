@@ -1,0 +1,20 @@
+{
+  "scenario": "within_epoch_three_header_contributions",
+  "initial_state": {
+    "evolving_nonce":       "0000000000000000000000000000000000000000000000000000000000000000",
+    "candidate_nonce":      "0000000000000000000000000000000000000000000000000000000000000000",
+    "epoch_nonce":          "1111111111111111111111111111111111111111111111111111111111111111",
+    "previous_epoch_nonce": "2222222222222222222222222222222222222222222222222222222222222222",
+    "lab_nonce":            "3333333333333333333333333333333333333333333333333333333333333333",
+    "last_epoch_block":     208,
+    "last_slot":            4500000,
+    "last_block_no":        7800000
+  },
+  "inputs": [
+    { "kind": "HeaderContribution", "slot": 4500001, "vrf_output_hex": "a0a1a2a3a4a5a6a7a8a9aaabacadaeafb0b1b2b3b4b5b6b7b8b9babbbcbdbebfc0c1c2c3c4c5c6c7c8c9cacbcccdcecfd0d1d2d3d4d5d6d7d8d9dadbdcdddedf" },
+    { "kind": "HeaderContribution", "slot": 4500002, "vrf_output_hex": "b0b1b2b3b4b5b6b7b8b9babbbcbdbebfc0c1c2c3c4c5c6c7c8c9cacbcccdcecfd0d1d2d3d4d5d6d7d8d9dadbdcdddedfe0e1e2e3e4e5e6e7e8e9eaebecedeeef" },
+    { "kind": "HeaderContribution", "slot": 4500003, "vrf_output_hex": "c0c1c2c3c4c5c6c7c8c9cacbcccdcecfd0d1d2d3d4d5d6d7d8d9dadbdcdddedfe0e1e2e3e4e5e6e7e8e9eaebecedeeeff0f1f2f3f4f5f6f7f8f9fafbfcfdfeff" }
+  ],
+  "expected_final_evolving_nonce": "7c41b5d2c4a7fd5cbc05cc6f50360fa8fd58697a7ff998edad2a9264d5832ff8",
+  "expected_final_last_slot":     4500003
+}
