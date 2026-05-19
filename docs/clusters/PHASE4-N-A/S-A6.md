@@ -1,6 +1,6 @@
 # Slice S-A6 — Tx-submission2 transition authority
 
-> **Status**: Proposed
+> **Status**: Merged
 > **Cluster**: [PHASE4-N-A](cluster.md)
 
 ## 2. Slice Header

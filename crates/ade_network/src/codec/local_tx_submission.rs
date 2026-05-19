@@ -21,8 +21,7 @@
 
 use crate::codec::error::{CodecError, ProtocolKind};
 use crate::codec::primitives::{
-    decode_array_header, decode_bytes, decode_u64, encode_array_header, encode_bytes, encode_u64,
-    require_consumed,
+    decode_array_header, decode_u64, encode_array_header, encode_u64, require_consumed,
 };
 
 const PROTOCOL: ProtocolKind = ProtocolKind::LocalTxSubmission;
@@ -49,18 +48,24 @@ pub fn encode_local_tx_submission_message(msg: &LocalTxSubmissionMessage) -> Vec
     let mut buf = Vec::new();
     match msg {
         LocalTxSubmissionMessage::SubmitTx { tx_bytes } => {
+            // Inner tx is an era-discriminated Hard-Fork-Combinator CBOR
+            // item `[era_index, encoded_tx]`, NOT a CBOR byte string.
+            // Real interop against cardano-node 11.0.1 closes the
+            // connection on `[0, bytes(...)]`.
             encode_array_header(&mut buf, 2);
             encode_u64(&mut buf, 0);
-            encode_bytes(&mut buf, tx_bytes);
+            buf.extend_from_slice(tx_bytes);
         }
         LocalTxSubmissionMessage::AcceptTx(_) => {
             encode_array_header(&mut buf, 1);
             encode_u64(&mut buf, 1);
         }
         LocalTxSubmissionMessage::RejectTx(reason) => {
+            // Reject reason is also an era-discriminated opaque CBOR
+            // item (ApplyTxErr), not a byte string.
             encode_array_header(&mut buf, 2);
             encode_u64(&mut buf, 2);
-            encode_bytes(&mut buf, &reason.0);
+            buf.extend_from_slice(&reason.0);
         }
         LocalTxSubmissionMessage::Done => {
             encode_array_header(&mut buf, 1);
@@ -87,13 +92,17 @@ pub fn decode_local_tx_submission_message(
     let tag = decode_u64(PROTOCOL, bytes, &mut offset)?;
     let msg = match (tag, arr_len) {
         (0, 2) => {
-            let tx_bytes = decode_bytes(PROTOCOL, bytes, &mut offset)?;
-            LocalTxSubmissionMessage::SubmitTx { tx_bytes }
+            let start = offset;
+            ade_codec::cbor_primitives::skip_item(bytes, &mut offset)
+                .map_err(|e| CodecError::MalformedCbor { protocol: PROTOCOL, source: e })?;
+            LocalTxSubmissionMessage::SubmitTx { tx_bytes: bytes[start..offset].to_vec() }
         }
         (1, 1) => LocalTxSubmissionMessage::AcceptTx(TxAcceptance),
         (2, 2) => {
-            let reason = decode_bytes(PROTOCOL, bytes, &mut offset)?;
-            LocalTxSubmissionMessage::RejectTx(TxRejection(reason))
+            let start = offset;
+            ade_codec::cbor_primitives::skip_item(bytes, &mut offset)
+                .map_err(|e| CodecError::MalformedCbor { protocol: PROTOCOL, source: e })?;
+            LocalTxSubmissionMessage::RejectTx(TxRejection(bytes[start..offset].to_vec()))
         }
         (3, 1) => LocalTxSubmissionMessage::Done,
         (other, _) => return Err(CodecError::UnknownTag { protocol: PROTOCOL, tag: other }),
@@ -109,11 +118,29 @@ pub fn decode_local_tx_submission_message(
 mod tests {
     use super::*;
 
+    /// Build a synthetic HFC-era-wrapped tx: `[era_idx, h'<inner>']`.
+    fn wrapped_tx(era: u64, inner: &[u8]) -> Vec<u8> {
+        let mut buf = Vec::new();
+        encode_array_header(&mut buf, 2);
+        encode_u64(&mut buf, era);
+        // bytes(...) header
+        if inner.len() < 24 {
+            buf.push(0x40 | (inner.len() as u8));
+        } else {
+            buf.push(0x58);
+            buf.push(inner.len() as u8);
+        }
+        buf.extend_from_slice(inner);
+        buf
+    }
+
     fn sample_messages() -> Vec<LocalTxSubmissionMessage> {
         vec![
-            LocalTxSubmissionMessage::SubmitTx { tx_bytes: vec![0x01, 0x02, 0x03, 0x04] },
+            LocalTxSubmissionMessage::SubmitTx {
+                tx_bytes: wrapped_tx(6, &[0x01, 0x02, 0x03, 0x04]),
+            },
             LocalTxSubmissionMessage::AcceptTx(TxAcceptance),
-            LocalTxSubmissionMessage::RejectTx(TxRejection(vec![0xDE, 0xAD])),
+            LocalTxSubmissionMessage::RejectTx(TxRejection(wrapped_tx(6, &[0xDE, 0xAD]))),
             LocalTxSubmissionMessage::Done,
         ]
     }
@@ -143,7 +170,7 @@ mod tests {
     #[test]
     fn decode_rejects_truncated_input() {
         let full = encode_local_tx_submission_message(&LocalTxSubmissionMessage::SubmitTx {
-            tx_bytes: vec![0x01, 0x02, 0x03, 0x04],
+            tx_bytes: wrapped_tx(6, &[0x01, 0x02, 0x03, 0x04]),
         });
         for n in 0..full.len() {
             let slice = &full[..n];

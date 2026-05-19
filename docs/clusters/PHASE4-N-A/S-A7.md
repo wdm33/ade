@@ -1,6 +1,6 @@
 # Slice S-A7 — Keep-alive + Peer-sharing transition authority
 
-> **Status**: Proposed
+> **Status**: Merged
 > **Cluster**: [PHASE4-N-A](cluster.md)
 
 ## 2. Slice Header

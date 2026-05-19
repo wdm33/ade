@@ -12,3 +12,5 @@
 id_rsa*
 ssh_config.local
 corpus/tools/.env
+# Local dev: cardano-node docker volume (DB + ipc) — do not commit
+.cardano-node-preprod/

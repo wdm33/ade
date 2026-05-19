@@ -64,10 +64,20 @@ pub fn local_state_query_transition(
         (
             LocalStateQueryState::Idle,
             LocalStateQueryAgency::Client,
-            LocalStateQueryMessage::Acquire { point },
+            LocalStateQueryMessage::Acquire(point),
         ) => Ok((
             LocalStateQueryState::Acquiring,
-            LocalStateQueryOutput::Event(LocalStateQueryEvent::AcquireRequested { point }),
+            LocalStateQueryOutput::Event(LocalStateQueryEvent::AcquireRequested {
+                point: Some(point),
+            }),
+        )),
+        (
+            LocalStateQueryState::Idle,
+            LocalStateQueryAgency::Client,
+            LocalStateQueryMessage::AcquireNoPoint,
+        ) => Ok((
+            LocalStateQueryState::Acquiring,
+            LocalStateQueryOutput::Event(LocalStateQueryEvent::AcquireRequested { point: None }),
         )),
         (
             LocalStateQueryState::Idle,
@@ -117,10 +127,20 @@ pub fn local_state_query_transition(
         (
             LocalStateQueryState::Acquired,
             LocalStateQueryAgency::Client,
-            LocalStateQueryMessage::ReAcquire { point },
+            LocalStateQueryMessage::ReAcquire(point),
         ) => Ok((
             LocalStateQueryState::Acquiring,
-            LocalStateQueryOutput::Event(LocalStateQueryEvent::ReAcquireRequested { point }),
+            LocalStateQueryOutput::Event(LocalStateQueryEvent::ReAcquireRequested {
+                point: Some(point),
+            }),
+        )),
+        (
+            LocalStateQueryState::Acquired,
+            LocalStateQueryAgency::Client,
+            LocalStateQueryMessage::ReAcquireNoPoint,
+        ) => Ok((
+            LocalStateQueryState::Acquiring,
+            LocalStateQueryOutput::Event(LocalStateQueryEvent::ReAcquireRequested { point: None }),
         )),
         (
             LocalStateQueryState::Acquired,
@@ -137,13 +157,15 @@ pub fn local_state_query_transition(
 
 fn message_tag(msg: &LocalStateQueryMessage) -> &'static str {
     match msg {
-        LocalStateQueryMessage::Acquire { .. } => "Acquire",
+        LocalStateQueryMessage::Acquire(_) => "Acquire",
+        LocalStateQueryMessage::AcquireNoPoint => "AcquireNoPoint",
         LocalStateQueryMessage::Acquired => "Acquired",
         LocalStateQueryMessage::Failure(_) => "Failure",
         LocalStateQueryMessage::Query(_) => "Query",
         LocalStateQueryMessage::Result(_) => "Result",
         LocalStateQueryMessage::Release => "Release",
-        LocalStateQueryMessage::ReAcquire { .. } => "ReAcquire",
+        LocalStateQueryMessage::ReAcquire(_) => "ReAcquire",
+        LocalStateQueryMessage::ReAcquireNoPoint => "ReAcquireNoPoint",
         LocalStateQueryMessage::Done => "Done",
     }
 }
@@ -170,20 +192,18 @@ mod tests {
 
     #[test]
     fn acquire_then_acquired_transitions_to_acquired() {
-        let point_in = Some(sample_point());
+        let point_in = sample_point();
         let (st1, out1) = local_state_query_transition(
             LocalStateQueryState::Idle,
             LocalStateQueryAgency::Client,
             version(),
-            LocalStateQueryMessage::Acquire {
-                point: point_in.clone(),
-            },
+            LocalStateQueryMessage::Acquire(point_in.clone()),
         )
         .expect("idle+acquire");
         assert_eq!(st1, LocalStateQueryState::Acquiring);
         match out1 {
             LocalStateQueryOutput::Event(LocalStateQueryEvent::AcquireRequested { point }) => {
-                assert_eq!(point, point_in);
+                assert_eq!(point, Some(point_in));
             }
             other => panic!("expected Event(AcquireRequested), got {other:?}"),
         }
@@ -208,7 +228,7 @@ mod tests {
             LocalStateQueryState::Idle,
             LocalStateQueryAgency::Client,
             version(),
-            LocalStateQueryMessage::Acquire { point: None },
+            LocalStateQueryMessage::AcquireNoPoint,
         )
         .expect("idle+acquire");
         assert_eq!(st1, LocalStateQueryState::Acquiring);
@@ -282,20 +302,18 @@ mod tests {
 
     #[test]
     fn re_acquire_from_acquired_transitions_to_acquiring() {
-        let point_in = Some(sample_point());
+        let point_in = sample_point();
         let (st, out) = local_state_query_transition(
             LocalStateQueryState::Acquired,
             LocalStateQueryAgency::Client,
             version(),
-            LocalStateQueryMessage::ReAcquire {
-                point: point_in.clone(),
-            },
+            LocalStateQueryMessage::ReAcquire(point_in.clone()),
         )
         .expect("acquired+re_acquire");
         assert_eq!(st, LocalStateQueryState::Acquiring);
         match out {
             LocalStateQueryOutput::Event(LocalStateQueryEvent::ReAcquireRequested { point }) => {
-                assert_eq!(point, point_in);
+                assert_eq!(point, Some(point_in));
             }
             other => panic!("expected Event(ReAcquireRequested), got {other:?}"),
         }
@@ -341,7 +359,7 @@ mod tests {
             LocalStateQueryState::Idle,
             LocalStateQueryAgency::Server,
             version(),
-            LocalStateQueryMessage::Acquire { point: None },
+            LocalStateQueryMessage::AcquireNoPoint,
         )
         .expect_err("must reject");
         match err {
@@ -350,7 +368,7 @@ mod tests {
                 agency,
                 ..
             } => {
-                assert_eq!(message_tag, "Acquire");
+                assert_eq!(message_tag, "AcquireNoPoint");
                 assert_eq!(agency, LocalStateQueryAgency::Server);
             }
             other => panic!("expected IllegalTransition, got {other:?}"),

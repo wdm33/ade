@@ -79,13 +79,13 @@ fn drive(steps: &[Step]) -> Vec<LocalStateQueryEvent> {
 }
 
 fn acquire_query_release() -> (Vec<Step>, Vec<LocalStateQueryEvent>) {
-    let pt = Some(block_point(1000, 0x11));
+    let pt = block_point(1000, 0x11);
     let q = query_body(0x11, 64);
     let r = result_body(0x11, 96);
     let steps = vec![
         (
             LocalStateQueryAgency::Client,
-            LocalStateQueryMessage::Acquire { point: pt.clone() },
+            LocalStateQueryMessage::Acquire(pt.clone()),
         ),
         (
             LocalStateQueryAgency::Server,
@@ -105,7 +105,7 @@ fn acquire_query_release() -> (Vec<Step>, Vec<LocalStateQueryEvent>) {
         ),
     ];
     let expected = vec![
-        LocalStateQueryEvent::AcquireRequested { point: pt },
+        LocalStateQueryEvent::AcquireRequested { point: Some(pt) },
         LocalStateQueryEvent::SnapshotAcquired,
         LocalStateQueryEvent::QueryRequested {
             payload: QueryPayload(q),
@@ -119,11 +119,11 @@ fn acquire_query_release() -> (Vec<Step>, Vec<LocalStateQueryEvent>) {
 }
 
 fn acquire_then_failure() -> (Vec<Step>, Vec<LocalStateQueryEvent>) {
-    let pt = Some(block_point(99, 0xAA));
+    let pt = block_point(99, 0xAA);
     let steps = vec![
         (
             LocalStateQueryAgency::Client,
-            LocalStateQueryMessage::Acquire { point: pt.clone() },
+            LocalStateQueryMessage::Acquire(pt.clone()),
         ),
         (
             LocalStateQueryAgency::Server,
@@ -131,7 +131,7 @@ fn acquire_then_failure() -> (Vec<Step>, Vec<LocalStateQueryEvent>) {
         ),
     ];
     let expected = vec![
-        LocalStateQueryEvent::AcquireRequested { point: pt },
+        LocalStateQueryEvent::AcquireRequested { point: Some(pt) },
         LocalStateQueryEvent::AcquireFailed {
             reason: AcquireFailure::PointTooOld,
         },
@@ -140,14 +140,12 @@ fn acquire_then_failure() -> (Vec<Step>, Vec<LocalStateQueryEvent>) {
 }
 
 fn re_acquire_chain() -> (Vec<Step>, Vec<LocalStateQueryEvent>) {
-    let pt_a = Some(block_point(2000, 0x22));
-    let pt_b = Some(block_point(2100, 0x23));
+    let pt_a = block_point(2000, 0x22);
+    let pt_b = block_point(2100, 0x23);
     let steps = vec![
         (
             LocalStateQueryAgency::Client,
-            LocalStateQueryMessage::Acquire {
-                point: pt_a.clone(),
-            },
+            LocalStateQueryMessage::Acquire(pt_a.clone()),
         ),
         (
             LocalStateQueryAgency::Server,
@@ -155,9 +153,7 @@ fn re_acquire_chain() -> (Vec<Step>, Vec<LocalStateQueryEvent>) {
         ),
         (
             LocalStateQueryAgency::Client,
-            LocalStateQueryMessage::ReAcquire {
-                point: pt_b.clone(),
-            },
+            LocalStateQueryMessage::ReAcquire(pt_b.clone()),
         ),
         (
             LocalStateQueryAgency::Server,
@@ -169,9 +165,9 @@ fn re_acquire_chain() -> (Vec<Step>, Vec<LocalStateQueryEvent>) {
         ),
     ];
     let expected = vec![
-        LocalStateQueryEvent::AcquireRequested { point: pt_a },
+        LocalStateQueryEvent::AcquireRequested { point: Some(pt_a) },
         LocalStateQueryEvent::SnapshotAcquired,
-        LocalStateQueryEvent::ReAcquireRequested { point: pt_b },
+        LocalStateQueryEvent::ReAcquireRequested { point: Some(pt_b) },
         LocalStateQueryEvent::SnapshotAcquired,
         LocalStateQueryEvent::SnapshotReleased,
     ];
@@ -188,7 +184,7 @@ fn multiple_queries_same_snapshot() -> (Vec<Step>, Vec<LocalStateQueryEvent>) {
     let steps = vec![
         (
             LocalStateQueryAgency::Client,
-            LocalStateQueryMessage::Acquire { point: None },
+            LocalStateQueryMessage::AcquireNoPoint,
         ),
         (
             LocalStateQueryAgency::Server,
@@ -253,7 +249,7 @@ fn acquire_done_terminates_from_acquired() -> (Vec<Step>, Vec<LocalStateQueryEve
     let steps = vec![
         (
             LocalStateQueryAgency::Client,
-            LocalStateQueryMessage::Acquire { point: None },
+            LocalStateQueryMessage::AcquireNoPoint,
         ),
         (
             LocalStateQueryAgency::Server,
@@ -274,11 +270,11 @@ fn immediate_client_done() -> (Vec<Step>, Vec<LocalStateQueryEvent>) {
 }
 
 fn point_not_on_chain_failure() -> (Vec<Step>, Vec<LocalStateQueryEvent>) {
-    let pt = Some(block_point(5000, 0x88));
+    let pt = block_point(5000, 0x88);
     let steps = vec![
         (
             LocalStateQueryAgency::Client,
-            LocalStateQueryMessage::Acquire { point: pt.clone() },
+            LocalStateQueryMessage::Acquire(pt.clone()),
         ),
         (
             LocalStateQueryAgency::Server,
@@ -286,7 +282,7 @@ fn point_not_on_chain_failure() -> (Vec<Step>, Vec<LocalStateQueryEvent>) {
         ),
     ];
     let expected = vec![
-        LocalStateQueryEvent::AcquireRequested { point: pt },
+        LocalStateQueryEvent::AcquireRequested { point: Some(pt) },
         LocalStateQueryEvent::AcquireFailed {
             reason: AcquireFailure::PointNotOnChain,
         },

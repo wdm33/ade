@@ -96,11 +96,15 @@ pub fn encode_tx_submission_message(msg: &TxSubmission2Message) -> Vec<u8> {
             }
         }
         TxSubmission2Message::ReplyTxs(txs) => {
+            // Each tx is an era-discriminated HFC-wrapped CBOR item
+            // `[era_idx, tag24(bytes)]`, NOT a byte string. Same wire
+            // form as LocalTxSubmission MsgSubmitTx. We carry the
+            // wrapped item verbatim — opaque to this codec layer.
             encode_array_header(&mut buf, 2);
             encode_u64(&mut buf, 3);
             encode_array_header(&mut buf, txs.len() as u64);
             for tx in txs {
-                encode_bytes(&mut buf, tx);
+                buf.extend_from_slice(tx);
             }
         }
         TxSubmission2Message::Done => {
@@ -161,7 +165,10 @@ pub fn decode_tx_submission_message(bytes: &[u8]) -> Result<TxSubmission2Message
             let n = decode_array_header(PROTOCOL, bytes, &mut offset)?;
             let mut txs = Vec::with_capacity(n as usize);
             for _ in 0..n {
-                txs.push(decode_bytes(PROTOCOL, bytes, &mut offset)?);
+                let start = offset;
+                ade_codec::cbor_primitives::skip_item(bytes, &mut offset)
+                    .map_err(|e| CodecError::MalformedCbor { protocol: PROTOCOL, source: e })?;
+                txs.push(bytes[start..offset].to_vec());
             }
             TxSubmission2Message::ReplyTxs(txs)
         }
@@ -193,7 +200,13 @@ mod tests {
                 TxIdAndSize { tx_id: tx_id(0x02), size: 300 },
             ]),
             TxSubmission2Message::RequestTxs(vec![tx_id(0x11), tx_id(0x22)]),
-            TxSubmission2Message::ReplyTxs(vec![vec![0xAA, 0xBB], vec![0xCC]]),
+            // Synthetic HFC-wrapped txs: `[era_idx, tag24(bytes)]`.
+            // Encoded bytes for `[6, tag(24, h'aabb')]` and
+            // `[6, tag(24, h'cc')]` respectively.
+            TxSubmission2Message::ReplyTxs(vec![
+                vec![0x82, 0x06, 0xd8, 0x18, 0x42, 0xAA, 0xBB],
+                vec![0x82, 0x06, 0xd8, 0x18, 0x41, 0xCC],
+            ]),
             TxSubmission2Message::Done,
         ]
     }

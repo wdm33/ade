@@ -1,6 +1,6 @@
 # Slice S-A8 — N2C transition authority (4 state machines)
 
-> **Status**: Proposed
+> **Status**: Merged
 > **Cluster**: [PHASE4-N-A](cluster.md)
 
 ## 2. Slice Header

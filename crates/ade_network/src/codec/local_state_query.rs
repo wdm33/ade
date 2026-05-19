@@ -67,28 +67,31 @@ pub struct ResultPayload(pub Vec<u8>);
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum LocalStateQueryMessage {
-    /// Acquire a snapshot; `point` is `None` to mean "current immutable tip".
-    Acquire { point: Option<Point> },
+    /// Acquire a snapshot at a specific Point. Wire form `[0, point]`.
+    Acquire(Point),
+    /// Acquire the current immutable tip (no point given). Wire form `[8]`.
+    AcquireNoPoint,
     Acquired,
     Failure(AcquireFailure),
     Query(QueryPayload),
     Result(ResultPayload),
     Release,
-    ReAcquire { point: Option<Point> },
+    /// Re-acquire at a specific Point. Wire form `[6, point]`.
+    ReAcquire(Point),
+    /// Re-acquire the current immutable tip. Wire form `[9]`.
+    ReAcquireNoPoint,
     Done,
 }
 
-fn encode_opt_point(buf: &mut Vec<u8>, p: &Option<Point>) {
+/// Encode a Point per Ouroboros LSQ wire form:
+///   Point::Origin   → `[]` (encodeListLen 0)
+///   Point::Block    → `[slot, hash32]` (encodeListLen 2)
+/// No Option-wrapper on the wire — `Maybe Point` is expressed by
+/// using a different message tag (8/9 for No-Point variants).
+fn encode_point(buf: &mut Vec<u8>, p: &Point) {
     match p {
-        None => encode_array_header(buf, 0),
-        Some(Point::Origin) => {
-            // The "Origin" point is encoded as an inner empty array
-            // wrapped in an outer "Some" array of length 1.
-            encode_array_header(buf, 1);
-            encode_array_header(buf, 0);
-        }
-        Some(Point::Block { slot, hash }) => {
-            encode_array_header(buf, 1);
+        Point::Origin => encode_array_header(buf, 0),
+        Point::Block { slot, hash } => {
             encode_array_header(buf, 2);
             encode_u64(buf, slot.0);
             encode_bytes(buf, &hash.0);
@@ -96,36 +99,26 @@ fn encode_opt_point(buf: &mut Vec<u8>, p: &Option<Point>) {
     }
 }
 
-fn decode_opt_point(data: &[u8], offset: &mut usize) -> Result<Option<Point>, CodecError> {
+fn decode_point(data: &[u8], offset: &mut usize) -> Result<Point, CodecError> {
     let arr_len = decode_array_header(PROTOCOL, data, offset)?;
     match arr_len {
-        0 => Ok(None),
-        1 => {
-            let inner = decode_array_header(PROTOCOL, data, offset)?;
-            match inner {
-                0 => Ok(Some(Point::Origin)),
-                2 => {
-                    let slot = decode_u64(PROTOCOL, data, offset)?;
-                    let hash_bytes = decode_bytes(PROTOCOL, data, offset)?;
-                    if hash_bytes.len() != 32 {
-                        return Err(CodecError::InvalidProtocolMessage {
-                            protocol: PROTOCOL,
-                            reason: "point hash not 32 bytes",
-                        });
-                    }
-                    let mut h = [0u8; 32];
-                    h.copy_from_slice(&hash_bytes);
-                    Ok(Some(Point::Block { slot: SlotNo(slot), hash: Hash32(h) }))
-                }
-                _ => Err(CodecError::InvalidProtocolMessage {
+        0 => Ok(Point::Origin),
+        2 => {
+            let slot = decode_u64(PROTOCOL, data, offset)?;
+            let hash_bytes = decode_bytes(PROTOCOL, data, offset)?;
+            if hash_bytes.len() != 32 {
+                return Err(CodecError::InvalidProtocolMessage {
                     protocol: PROTOCOL,
-                    reason: "inner point array must be 0 or 2 elements",
-                }),
+                    reason: "point hash not 32 bytes",
+                });
             }
+            let mut h = [0u8; 32];
+            h.copy_from_slice(&hash_bytes);
+            Ok(Point::Block { slot: SlotNo(slot), hash: Hash32(h) })
         }
         _ => Err(CodecError::InvalidProtocolMessage {
             protocol: PROTOCOL,
-            reason: "optional point array must be 0 or 1 elements",
+            reason: "point array must be 0 or 2 elements",
         }),
     }
 }
@@ -133,10 +126,10 @@ fn decode_opt_point(data: &[u8], offset: &mut usize) -> Result<Option<Point>, Co
 pub fn encode_local_state_query_message(msg: &LocalStateQueryMessage) -> Vec<u8> {
     let mut buf = Vec::new();
     match msg {
-        LocalStateQueryMessage::Acquire { point } => {
+        LocalStateQueryMessage::Acquire(point) => {
             encode_array_header(&mut buf, 2);
             encode_u64(&mut buf, 0);
-            encode_opt_point(&mut buf, point);
+            encode_point(&mut buf, point);
         }
         LocalStateQueryMessage::Acquired => {
             encode_array_header(&mut buf, 1);
@@ -165,14 +158,22 @@ pub fn encode_local_state_query_message(msg: &LocalStateQueryMessage) -> Vec<u8>
             encode_array_header(&mut buf, 1);
             encode_u64(&mut buf, 5);
         }
-        LocalStateQueryMessage::ReAcquire { point } => {
+        LocalStateQueryMessage::ReAcquire(point) => {
             encode_array_header(&mut buf, 2);
             encode_u64(&mut buf, 6);
-            encode_opt_point(&mut buf, point);
+            encode_point(&mut buf, point);
         }
         LocalStateQueryMessage::Done => {
             encode_array_header(&mut buf, 1);
             encode_u64(&mut buf, 7);
+        }
+        LocalStateQueryMessage::AcquireNoPoint => {
+            encode_array_header(&mut buf, 1);
+            encode_u64(&mut buf, 8);
+        }
+        LocalStateQueryMessage::ReAcquireNoPoint => {
+            encode_array_header(&mut buf, 1);
+            encode_u64(&mut buf, 9);
         }
     }
     buf
@@ -194,10 +195,7 @@ pub fn decode_local_state_query_message(
     }
     let tag = decode_u64(PROTOCOL, bytes, &mut offset)?;
     let msg = match (tag, arr_len) {
-        (0, 2) => {
-            let point = decode_opt_point(bytes, &mut offset)?;
-            LocalStateQueryMessage::Acquire { point }
-        }
+        (0, 2) => LocalStateQueryMessage::Acquire(decode_point(bytes, &mut offset)?),
         (1, 1) => LocalStateQueryMessage::Acquired,
         (2, 2) => {
             let code = decode_u64(PROTOCOL, bytes, &mut offset)?;
@@ -223,11 +221,10 @@ pub fn decode_local_state_query_message(
             LocalStateQueryMessage::Result(ResultPayload(r))
         }
         (5, 1) => LocalStateQueryMessage::Release,
-        (6, 2) => {
-            let point = decode_opt_point(bytes, &mut offset)?;
-            LocalStateQueryMessage::ReAcquire { point }
-        }
+        (6, 2) => LocalStateQueryMessage::ReAcquire(decode_point(bytes, &mut offset)?),
         (7, 1) => LocalStateQueryMessage::Done,
+        (8, 1) => LocalStateQueryMessage::AcquireNoPoint,
+        (9, 1) => LocalStateQueryMessage::ReAcquireNoPoint,
         (other, _) => return Err(CodecError::UnknownTag { protocol: PROTOCOL, tag: other }),
     };
     require_consumed(PROTOCOL, bytes, offset)?;
@@ -243,21 +240,23 @@ mod tests {
 
     fn sample_messages() -> Vec<LocalStateQueryMessage> {
         vec![
-            LocalStateQueryMessage::Acquire { point: None },
-            LocalStateQueryMessage::Acquire { point: Some(Point::Origin) },
-            LocalStateQueryMessage::Acquire {
-                point: Some(Point::Block { slot: SlotNo(99), hash: Hash32([0xAB; 32]) }),
-            },
+            LocalStateQueryMessage::AcquireNoPoint,
+            LocalStateQueryMessage::Acquire(Point::Origin),
+            LocalStateQueryMessage::Acquire(Point::Block {
+                slot: SlotNo(99),
+                hash: Hash32([0xAB; 32]),
+            }),
             LocalStateQueryMessage::Acquired,
             LocalStateQueryMessage::Failure(AcquireFailure::PointTooOld),
             LocalStateQueryMessage::Failure(AcquireFailure::PointNotOnChain),
             LocalStateQueryMessage::Query(QueryPayload(vec![0xCA, 0xFE])),
             LocalStateQueryMessage::Result(ResultPayload(vec![0xBA, 0xBE])),
             LocalStateQueryMessage::Release,
-            LocalStateQueryMessage::ReAcquire { point: None },
-            LocalStateQueryMessage::ReAcquire {
-                point: Some(Point::Block { slot: SlotNo(42), hash: Hash32([0xCD; 32]) }),
-            },
+            LocalStateQueryMessage::ReAcquireNoPoint,
+            LocalStateQueryMessage::ReAcquire(Point::Block {
+                slot: SlotNo(42),
+                hash: Hash32([0xCD; 32]),
+            }),
             LocalStateQueryMessage::Done,
         ]
     }

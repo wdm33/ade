@@ -1,6 +1,6 @@
 # Slice S-A1 — Mux/framing + `ade_network` scaffold + sync-only CI gate
 
-> **Status**: Proposed
+> **Status**: Merged
 > **Cluster**: [PHASE4-N-A](cluster.md) — Network mini-protocols
 
 ## 2. Slice Header

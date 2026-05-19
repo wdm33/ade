@@ -1,6 +1,6 @@
 # Slice S-A3 — Version negotiation authority (N2N + N2C handshake)
 
-> **Status**: Proposed
+> **Status**: Merged
 > **Cluster**: [PHASE4-N-A](cluster.md)
 
 ## 2. Slice Header

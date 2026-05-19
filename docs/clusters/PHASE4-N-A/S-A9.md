@@ -1,6 +1,6 @@
 # Slice S-A9 — Session composition + frame corpus + replay harness
 
-> **Status**: Proposed (blocked on external infrastructure: real cardano-node 10.6.2 frame captures)
+> **Status**: Merged (entry-blocker resolved by S-A9 real-capture work + S-A10 CE-N-A-5 evidence script)
 > **Cluster**: [PHASE4-N-A](cluster.md)
 
 ## 2. Slice Header

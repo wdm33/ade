@@ -1,6 +1,6 @@
 # Slice S-A8b — LocalTxMonitor wire-grammar rework
 
-> **Status**: Proposed
+> **Status**: Merged
 > **Cluster**: [PHASE4-N-A](cluster.md)
 > **Supersedes (partial)**: LocalTxMonitor portions of S-A2 and S-A8
 

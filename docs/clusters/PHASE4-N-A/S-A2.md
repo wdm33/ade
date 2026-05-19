@@ -1,6 +1,6 @@
 # Slice S-A2 — Protocol message codec authority (all 11 mini-protocols)
 
-> **Status**: Proposed
+> **Status**: Merged
 > **Cluster**: [PHASE4-N-A](cluster.md)
 
 ## 2. Slice Header

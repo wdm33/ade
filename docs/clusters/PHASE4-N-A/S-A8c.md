@@ -1,6 +1,6 @@
 # Slice S-A8c — Version table alignment with cardano-node 11.0.1
 
-> **Status**: Proposed
+> **Status**: Merged
 > **Cluster**: [PHASE4-N-A](cluster.md)
 > **Augments**: S-A3 version-table pinning
 

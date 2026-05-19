@@ -35,4 +35,12 @@ path = "src/bin/capture_peer_sharing.rs"
 name = "ade_n2c_handshake_capture"
 path = "src/bin/capture_n2c_handshake.rs"
 
+[[bin]]
+name = "ade_n2c_protocols_capture"
+path = "src/bin/capture_n2c_protocols.rs"
+
+[[bin]]
+name = "ade_tx_submission2_capture"
+path = "src/bin/capture_tx_submission2.rs"
+
 [dev-dependencies]
