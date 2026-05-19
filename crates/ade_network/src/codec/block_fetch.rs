@@ -93,9 +93,14 @@ pub fn encode_block_fetch_message(msg: &BlockFetchMessage) -> Vec<u8> {
             encode_u64(&mut buf, 3);
         }
         BlockFetchMessage::Block { bytes } => {
+            // The block body is wrapped per the cardano-node hard-fork-
+            // combinator era discriminator: [serialisationInfo, tag24(bytes)]
+            // or similar nested shape varying by era. We carry the FULL
+            // wrapped CBOR item as opaque bytes for byte-identical
+            // round-trip; the decoder slices the same range.
             encode_array_header(&mut buf, 2);
             encode_u64(&mut buf, 4);
-            encode_bytes(&mut buf, bytes);
+            buf.extend_from_slice(bytes);
         }
         BlockFetchMessage::BatchDone => {
             encode_array_header(&mut buf, 1);
@@ -161,7 +166,13 @@ pub fn decode_block_fetch_message(bytes: &[u8]) -> Result<BlockFetchMessage, Cod
         (2, 1) => BlockFetchMessage::StartBatch,
         (3, 1) => BlockFetchMessage::NoBlocks,
         (4, 2) => {
-            let body = decode_bytes(PROTOCOL, bytes, &mut offset)?;
+            // See encode comment: block body is era-discriminated wrapped
+            // CBOR. Consume one whole item via skip_item, capture its
+            // bytes verbatim for byte-identical round-trip.
+            let start = offset;
+            ade_codec::cbor_primitives::skip_item(bytes, &mut offset)
+                .map_err(|e| CodecError::MalformedCbor { protocol: PROTOCOL, source: e })?;
+            let body = bytes[start..offset].to_vec();
             BlockFetchMessage::Block { bytes: body }
         }
         (5, 1) => BlockFetchMessage::BatchDone,
@@ -178,6 +189,18 @@ pub fn decode_block_fetch_message(bytes: &[u8]) -> Result<BlockFetchMessage, Cod
 mod tests {
     use super::*;
 
+    /// Build a synthetic wrapped block matching the N2N wire shape:
+    /// `[serialisationInfo, tag(24, bytes(inner))]`.
+    fn wrapped_block(info_word: u64, inner: &[u8]) -> Vec<u8> {
+        let mut buf = Vec::new();
+        encode_array_header(&mut buf, 2);
+        encode_u64(&mut buf, info_word);
+        buf.push(0xd8);
+        buf.push(0x18);
+        encode_bytes(&mut buf, inner);
+        buf
+    }
+
     fn sample_messages() -> Vec<BlockFetchMessage> {
         vec![
             BlockFetchMessage::RequestRange(Range {
@@ -187,7 +210,7 @@ mod tests {
             BlockFetchMessage::ClientDone,
             BlockFetchMessage::StartBatch,
             BlockFetchMessage::NoBlocks,
-            BlockFetchMessage::Block { bytes: vec![0xDE, 0xAD, 0xBE, 0xEF] },
+            BlockFetchMessage::Block { bytes: wrapped_block(1, &[0xDE, 0xAD, 0xBE, 0xEF]) },
             BlockFetchMessage::BatchDone,
         ]
     }

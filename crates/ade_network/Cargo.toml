@@ -19,4 +19,8 @@ path = "src/bin/capture_handshake.rs"
 name = "ade_chain_sync_capture"
 path = "src/bin/capture_chain_sync.rs"
 
+[[bin]]
+name = "ade_block_fetch_capture"
+path = "src/bin/capture_block_fetch.rs"
+
 [dev-dependencies]
