@@ -10,7 +10,8 @@ use minicbor::data::Type;
 use minicbor::{Decoder, Encoder};
 
 use crate::consensus::errors::{
-    HFCError, HeaderValidationError, NonceEvolutionError, OpCertCounterError, VrfCertError,
+    HFCError, HeaderValidationError, NonceEvolutionError, OpCertCounterError, OutsideForecastRange,
+    VrfCertError,
 };
 use crate::consensus::events::{
     BlockDistance, ChainEvent, ChainSelectionReject, Point, SecurityParam,
@@ -559,6 +560,7 @@ const HVE_BLOCK_NO_OUT_OF_ORDER: u32 = 4;
 const HVE_BODY_HASH_MISMATCH: u32 = 5;
 const HVE_ERA_MISMATCH: u32 = 6;
 const HVE_HFC: u32 = 7;
+const HVE_OUTSIDE_FORECAST_RANGE: u32 = 8;
 
 fn encode_header_validation_error(
     enc: &mut Encoder<&mut Vec<u8>>,
@@ -609,6 +611,12 @@ fn encode_header_validation_error(
             enc.u32(HVE_HFC).map_err(enc_err)?;
             encode_hfc_error(enc, h)?;
         }
+        HeaderValidationError::OutsideForecastRange(o) => {
+            enc.u32(HVE_OUTSIDE_FORECAST_RANGE).map_err(enc_err)?;
+            enc.array(2).map_err(enc_err)?;
+            enc.u64(o.requested.0).map_err(enc_err)?;
+            enc.u64(o.horizon.0).map_err(enc_err)?;
+        }
     }
     Ok(())
 }
@@ -654,6 +662,17 @@ fn decode_header_validation_error(
             })
         }
         HVE_HFC => Ok(HeaderValidationError::HFC(decode_hfc_error(dec)?)),
+        HVE_OUTSIDE_FORECAST_RANGE => {
+            expect_array_len(dec, 2)?;
+            let requested = SlotNo(dec.u64()?);
+            let horizon = SlotNo(dec.u64()?);
+            Ok(HeaderValidationError::OutsideForecastRange(
+                OutsideForecastRange {
+                    requested,
+                    horizon,
+                },
+            ))
+        }
         other => Err(DecodeError::UnknownDiscriminant {
             for_enum: "HeaderValidationError",
             found: other,

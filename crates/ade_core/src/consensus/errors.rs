@@ -62,6 +62,7 @@ pub enum HeaderValidationError {
     BodyHashMismatch { expected: Hash32, actual: Hash32 },
     EraMismatch { schedule_era: u8, header_era: u8 },
     HFC(HFCError),
+    OutsideForecastRange(OutsideForecastRange),
 }
 
 /// VRF certificate verification errors. `LeaderValueAboveThreshold`

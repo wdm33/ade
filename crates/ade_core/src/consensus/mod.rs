@@ -9,6 +9,8 @@ pub mod encoding;
 pub mod era_schedule;
 pub mod errors;
 pub mod events;
+pub mod header_summary;
+pub mod header_validate;
 pub mod leader_schedule;
 pub mod ledger_view;
 pub mod nonce;
@@ -30,6 +32,8 @@ pub use errors::{
 pub use events::{
     BlockDistance, ChainEvent, ChainHash, ChainSelectionReject, Point, SecurityParam,
 };
+pub use header_summary::{HeaderInput, ValidatedHeaderSummary};
+pub use header_validate::{validate_and_apply_header, HeaderApplied};
 pub use leader_schedule::{
     is_leader_for_vrf_output, query_leader_schedule, LeaderScheduleAnswer, LeaderScheduleQuery,
 };
