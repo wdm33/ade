@@ -9,5 +9,6 @@ ade_crypto = { path = "../ade_crypto" }
 minicbor = { version = "0.25", default-features = false, features = ["alloc"] }
 
 [dev-dependencies]
+ade_testkit = { path = "../ade_testkit" }
 serde_json = "1"
 cardano-crypto = { version = "1.0", default-features = false, features = ["vrf-draft03"] }

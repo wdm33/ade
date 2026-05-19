@@ -1,0 +1,74 @@
+{
+  "scenario": "leader_schedule_two_pools_one_epoch",
+  "_note": "Synthetic, self-consistent fixture pinning byte-identity for (expected_vrf_input, stake_fraction, asc, error variants). Pool hashes and epoch_nonce are flat deterministic bytes; VRF keys are derived from fixed 32-byte seeds via cardano_crypto::vrf::VrfDraft03::keypair_from_seed.",
+  "era_schedule": {
+    "system_start_unix_ms": 0,
+    "eras": [
+      {
+        "era": "Shelley",
+        "start_slot": 0,
+        "start_epoch": 0,
+        "slot_length_ms": 1000,
+        "epoch_length_slots": 200000000,
+        "safe_zone_slots": 200000000
+      }
+    ]
+  },
+  "epoch": 0,
+  "epoch_nonce_hex": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+  "asc": { "numer": 1, "denom": 20 },
+  "pools": [
+    {
+      "name": "A",
+      "pool_hex": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "vrf_seed_hex": "0101010101010101010101010101010101010101010101010101010101010101",
+      "vrf_key_hex": "8a88e3dd7409f195fd52db2d3cba5d72ca6709bf1d94121bf3748801b40f6f5c",
+      "active_stake": 1000000000000
+    },
+    {
+      "name": "B",
+      "pool_hex": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      "vrf_seed_hex": "0202020202020202020202020202020202020202020202020202020202020202",
+      "vrf_key_hex": "8139770ea87d175f56a35466c34c7ecccb8d8a91b4ee37a25df60f5b8fc9b394",
+      "active_stake": 4000000000000
+    }
+  ],
+  "total_active_stake": 5000000000000,
+  "queries": [
+    {
+      "_desc": "Pool A, slot 80_000_000 — known pool, in horizon, in epoch 0.",
+      "slot": 80000000,
+      "pool_hex": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "expected_epoch": 0,
+      "expected_stake_fraction": [1000000000000, 5000000000000],
+      "expected_vrf_input_hex": "0000000004c4b400cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc4c"
+    },
+    {
+      "_desc": "Pool B, slot 80_000_001 — known pool with the larger stake.",
+      "slot": 80000001,
+      "pool_hex": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+      "expected_epoch": 0,
+      "expected_stake_fraction": [4000000000000, 5000000000000],
+      "expected_vrf_input_hex": "0000000004c4b401cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc4c"
+    },
+    {
+      "_desc": "Unknown pool — must yield LeaderScheduleError::UnknownPool.",
+      "slot": 80000002,
+      "pool_hex": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+      "expected_error": "UnknownPool"
+    }
+  ],
+  "leader_probe": {
+    "_desc": "Saturated VRF output (all 0xFF) — leader_value ≈ 1.0, way above the threshold 1-(1-f)^σ for f=1/20, σ=1/5 ≈ 0.01. is_leader_for_vrf_output returns false.",
+    "slot": 80000000,
+    "pool_hex": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "vrf_output_hex": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+    "expected_leads": false
+  },
+  "horizon_probe": {
+    "_desc": "Slot strictly past safe_zone_slots horizon (200_000_000) must yield OutsideForecastRange with horizon = 200_000_000.",
+    "slot": 999999999999,
+    "expected_error": "OutsideForecastRange",
+    "expected_horizon": 200000000
+  }
+}

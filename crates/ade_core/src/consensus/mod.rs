@@ -9,6 +9,8 @@ pub mod encoding;
 pub mod era_schedule;
 pub mod errors;
 pub mod events;
+pub mod leader_schedule;
+pub mod ledger_view;
 pub mod nonce;
 pub mod op_cert;
 pub mod praos_state;
@@ -28,6 +30,10 @@ pub use errors::{
 pub use events::{
     BlockDistance, ChainEvent, ChainHash, ChainSelectionReject, Point, SecurityParam,
 };
+pub use leader_schedule::{
+    is_leader_for_vrf_output, query_leader_schedule, LeaderScheduleAnswer, LeaderScheduleQuery,
+};
+pub use ledger_view::LedgerView;
 pub use nonce::{apply_nonce_input, NonceInput};
 pub use op_cert::{apply_op_cert, OpCertObservation};
 pub use praos_state::{Nonce, OpCertCounterMap, PraosChainDepState};

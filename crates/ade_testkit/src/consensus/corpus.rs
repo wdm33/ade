@@ -31,3 +31,8 @@ pub fn nonce_evolution_corpus_path(manifest_dir: &str, name: &str) -> PathBuf {
 pub fn op_cert_corpus_path(manifest_dir: &str, name: &str) -> PathBuf {
     corpus_path(manifest_dir, "op_cert", name)
 }
+
+/// Convenience: resolve `corpus/consensus/leader_schedule/<name>`.
+pub fn leader_schedule_corpus_path(manifest_dir: &str, name: &str) -> PathBuf {
+    corpus_path(manifest_dir, "leader_schedule", name)
+}

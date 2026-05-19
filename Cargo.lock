@@ -16,6 +16,7 @@ name = "ade_core"
 version = "0.1.0"
 dependencies = [
  "ade_crypto",
+ "ade_testkit",
  "ade_types",
  "cardano-crypto",
  "minicbor",
@@ -87,6 +88,7 @@ name = "ade_testkit"
 version = "0.1.0"
 dependencies = [
  "ade_codec",
+ "ade_core",
  "ade_crypto",
  "ade_ledger",
  "ade_plutus",
