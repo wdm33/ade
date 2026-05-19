@@ -40,7 +40,7 @@ Phase 4's first cluster pursued.
 | [S-34](S-34.md) | `PersistentChainDb` (redb), `SyncCadence`, `ChainDbError` | 5 | Closed (`fb4a5d4`) |
 | [S-35](S-35.md) | `SnapshotStore` trait + impls | 1/5 | Closed (`e52fe9f`) |
 | [S-36](S-36.md) | Snapshot + forward-replay recovery (`Recoverable`) | 1 | Closed (`5eecc8a`) |
-| [S-37](S-37.md) | Subprocess SIGKILL stress harness; closes CE-N-D-1 | 5 | Bundled in `2047c42` (IDD scaffolding commit) |
+| [S-37](S-37.md) | Subprocess SIGKILL stress harness; closes CE-N-D-1 | 5 | Closed — code bundled in `2047c42`; closure-gate evidence at [`CE-N-D-1_2026-05-19.log`](CE-N-D-1_2026-05-19.log) |
 
 ## Engineering surface
 
@@ -73,10 +73,15 @@ Phase 4's first cluster pursued.
 
 ## Exit gate
 
-CE-N-D-1 closed at `<S-37 commit>` per the stress-kill-1000 evidence
-log (see `docs/active/phase_4_status.md`). CE-N-D-2 and CE-N-D-3 are
-Tier 5 improvement targets that accumulate evidence as cluster N-D
-matures; they do not gate cluster closure.
+**CE-N-D-1 closed** at `CE-N-D-1_2026-05-19.log`: 1000/1000
+iterations green over 20,163.71 s of test execution time (~5h 36m).
+Zero corruption, zero invariant failures. The closure-gate evidence
+log sits next to this cluster doc.
 
-Cluster is **near-closed**: ships when CE-N-D-1 evidence is logged
-under the canonical layout and `/cluster-close` is run.
+CE-N-D-2 and CE-N-D-3 are Tier 5 improvement targets that accumulate
+evidence as cluster N-D matures; they do not gate cluster closure.
+
+Cluster is **ready for `/cluster-close`** — all 5 slices shipped,
+headline CE-N-D-1 proven. `/cluster-close PHASE4-N-D` archives this
+doc to `docs/clusters/completed/PHASE4-N-D/` and regenerates the
+four grounding docs.

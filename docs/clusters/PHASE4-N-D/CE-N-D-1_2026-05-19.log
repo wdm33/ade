@@ -1,0 +1,42 @@
+   Compiling libc v0.2.183
+   Compiling redb v2.6.3
+   Compiling rustix v1.1.4
+   Compiling getrandom v0.4.2
+   Compiling cfg-if v1.0.4
+   Compiling linux-raw-sys v0.12.1
+   Compiling bitflags v2.11.0
+   Compiling ade_types v0.1.0 (/home/ts/Code/rust/ade/crates/ade_types)
+   Compiling once_cell v1.21.4
+   Compiling fastrand v2.4.1
+   Compiling tempfile v3.27.0
+   Compiling ade_runtime v0.1.0 (/home/ts/Code/rust/ade/crates/ade_runtime)
+    Finished `release` profile [optimized] target(s) in 5.34s
+     Running tests/stress_kill_harness.rs (target/release/deps/stress_kill_harness-a4cecfec6a5ae1d8)
+
+running 1 test
+iter 0/1000
+iter 50/1000
+iter 100/1000
+test stress_kill_1000 has been running for over 60 seconds
+iter 150/1000
+iter 200/1000
+iter 250/1000
+iter 300/1000
+iter 350/1000
+iter 400/1000
+iter 450/1000
+iter 500/1000
+iter 550/1000
+iter 600/1000
+iter 650/1000
+iter 700/1000
+iter 750/1000
+iter 800/1000
+iter 850/1000
+iter 900/1000
+iter 950/1000
+stress_kill_1000: 1000/1000 iterations green; CE-N-D-1 closure evidence
+test stress_kill_1000 ... ok
+
+test result: ok. 1 passed; 0 failed; 0 ignored; 0 measured; 2 filtered out; finished in 20163.71s
+
