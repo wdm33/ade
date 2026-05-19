@@ -9,3 +9,4 @@
 
 pub mod corpus;
 pub mod ledger_view_stub;
+pub mod stream_replay;

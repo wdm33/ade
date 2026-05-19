@@ -16,3 +16,5 @@ serde_json = "1"
 
 [dev-dependencies]
 tempfile = "3"
+ade_testkit = { path = "../ade_testkit" }
+cardano-crypto = { version = "1.0", default-features = false, features = ["vrf-draft03"] }

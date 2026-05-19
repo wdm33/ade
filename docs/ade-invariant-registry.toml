@@ -24,13 +24,13 @@ tier = "true"
 statement = "Same canonical inputs -> same authoritative bytes (per Byte Authority Model)"
 source = "Project constitution §2, Byte Authority Model §3"
 cross_ref = ["CN-WIRE-01", "CN-WIRE-02", "CN-LEDGER-02", "CN-CONS-01"]
-code_locus = "crates/ade_ledger/src/rules.rs, crates/ade_core/src/consensus/encoding.rs"
-tests = ["apply_block_deterministic", "byron_determinism", "shelley_determinism", "allegra_determinism", "mary_determinism", "alonzo_determinism", "babbage_determinism", "conway_determinism", "layout_is_stable", "roundtrip_empty_state", "roundtrip_genesis_state", "roundtrip_populated_state", "roundtrip_chain_event_all_variants", "roundtrip_chain_selection_reject_all_variants", "op_cert_counter_map_iteration_is_deterministic"]
+code_locus = "crates/ade_ledger/src/rules.rs, crates/ade_core/src/consensus/encoding.rs, crates/ade_runtime/src/consensus/chain_selector.rs, crates/ade_testkit/src/consensus/stream_replay.rs"
+tests = ["apply_block_deterministic", "byron_determinism", "shelley_determinism", "allegra_determinism", "mary_determinism", "alonzo_determinism", "babbage_determinism", "conway_determinism", "layout_is_stable", "roundtrip_empty_state", "roundtrip_genesis_state", "roundtrip_populated_state", "roundtrip_chain_event_all_variants", "roundtrip_chain_selection_reject_all_variants", "op_cert_counter_map_iteration_is_deterministic", "synthetic_session_replays_identically", "synthetic_session_event_kinds_match_corpus", "synthetic_session_final_state_matches_corpus", "op_cert_regression_header_rejected_mid_stream"]
 ci_script = "ci/ci_check_forbidden_patterns.sh, ci/ci_check_ledger_determinism.sh, ci/ci_check_consensus_closed_enums.sh"
 status = "enforced"
 authority_surface = "BLUE authoritative state transitions"
 cluster = "CL-LEDGER-VERDICT"
-evidence = ["crates/ade_testkit/tests/ledger_determinism.rs uses ade_ledger::fingerprint for byte-identical state comparison across all 7 eras"]
+evidence = ["crates/ade_testkit/tests/ledger_determinism.rs uses ade_ledger::fingerprint for byte-identical state comparison across all 7 eras", "crates/ade_testkit/tests/consensus_stream_replay.rs replays the canonical chain-selector stream twice and asserts byte-identical event lists and final orchestrator state — closes T-DET-01 for the consensus subset"]
 strengthened_in = ["PHASE4-N-B"]
 
 [[rules]]
@@ -509,10 +509,11 @@ tier = "derived"
 statement = "Chain selection is deterministic and matches Haskell node behavior"
 source = "Project constitution §3, T-DET-01, T-CORE-01"
 cross_ref = ["DC-CONS-03", "DC-CONS-05", "DC-CONS-06", "CN-CONS-01"]
-code_locus = "crates/ade_core/src/consensus/fork_choice.rs, crates/ade_core/src/consensus/candidate.rs, crates/ade_core/src/consensus/rollback.rs"
-tests = ["higher_block_no_wins", "equal_block_no_tiebreaker_decides", "fork_before_immutable_tip_rejected", "exceeded_rollback_rejected", "tiebreaker_loss_keeps_current", "replay_is_deterministic", "reject_reason_bytes_are_stable", "no_candidates_returns_error", "consensus::fork_choice::tests::tiebreaker_prefer_lower_slot_wins", "consensus::fork_choice::tests::tiebreaker_prefer_higher_op_cert_wins_on_equal_slot_and_issuer", "consensus::fork_choice::tests::tiebreaker_prefer_lower_vrf_value_wins_on_full_tie", "rollback_within_k_succeeds", "rollback_exceeding_k_rejected_with_typed_reason", "rollback_before_immutable_tip_rejected", "rollback_event_bytes_are_stable", "rollback_is_deterministic", "rollback_equivalent_to_truncated_replay"]
+code_locus = "crates/ade_core/src/consensus/fork_choice.rs, crates/ade_core/src/consensus/candidate.rs, crates/ade_core/src/consensus/rollback.rs, crates/ade_runtime/src/consensus/chain_selector.rs, crates/ade_core_interop/src/lib.rs, crates/ade_core_interop/src/bin/live_consensus_session.rs"
+tests = ["higher_block_no_wins", "equal_block_no_tiebreaker_decides", "fork_before_immutable_tip_rejected", "exceeded_rollback_rejected", "tiebreaker_loss_keeps_current", "replay_is_deterministic", "reject_reason_bytes_are_stable", "no_candidates_returns_error", "consensus::fork_choice::tests::tiebreaker_prefer_lower_slot_wins", "consensus::fork_choice::tests::tiebreaker_prefer_higher_op_cert_wins_on_equal_slot_and_issuer", "consensus::fork_choice::tests::tiebreaker_prefer_lower_vrf_value_wins_on_full_tie", "rollback_within_k_succeeds", "rollback_exceeding_k_rejected_with_typed_reason", "rollback_before_immutable_tip_rejected", "rollback_event_bytes_are_stable", "rollback_is_deterministic", "rollback_equivalent_to_truncated_replay", "consensus::chain_selector::tests::header_arrival_updates_state_and_selector", "consensus::chain_selector::tests::rollback_walks_back_via_recent_snapshots", "consensus::chain_selector::tests::rollback_to_block_older_than_snapshots_rejected", "consensus::chain_selector::tests::epoch_boundary_emits_no_event", "synthetic_session_replays_identically", "synthetic_session_event_kinds_match_corpus", "synthetic_session_final_state_matches_corpus", "op_cert_regression_header_rejected_mid_stream", "cardano_node_session_sustained_window"]
 ci_script = "ci/ci_check_no_density_in_fork_choice.sh, ci/ci_check_consensus_closed_enums.sh, ci/ci_check_no_chaindb_in_consensus_blue.sh"
-status = "partial"
+status = "enforced"
+evidence = ["crates/ade_testkit/tests/consensus_stream_replay.rs drives a canonical stream of HeaderArrival / RollBack / EpochBoundary inputs through the GREEN chain-selector orchestrator and asserts replay equivalence (CE-N-B-5)", "crates/ade_core_interop/tests/live_consensus_session.rs gates the live-peer evidence pass against a pinned cardano-node 10.6.2 (CE-N-B-6, #[ignore] by default, operator-driven)"]
 strengthened_in = ["PHASE4-N-B"]
 
 [[rules]]
@@ -835,10 +836,12 @@ tier = "derived"
 statement = "BLUE authoritative crates are sync-only: no async fn, .await, tokio::, async_std::, Future, futures::, task spawning, async channels, or timers. Async runtime concerns are confined to RED transport/runtime code."
 source = "Project constitution §2, T-CORE-02; PHASE4-N-A scope decisions §Decision 2 (docs/active/PHASE4-N-A_scope_decisions.md)"
 cross_ref = ["T-CORE-02", "DC-PROTO-01", "DC-PROTO-06"]
-code_locus = ""
-tests = []
-ci_script = ""
+code_locus = "crates/ade_runtime/src/consensus/chain_selector.rs, crates/ade_core_interop/src/lib.rs, crates/ade_core_interop/src/bin/live_consensus_session.rs"
+tests = ["consensus::chain_selector::tests::header_arrival_updates_state_and_selector", "consensus::chain_selector::tests::rollback_walks_back_via_recent_snapshots", "consensus::chain_selector::tests::rollback_to_block_older_than_snapshots_rejected", "consensus::chain_selector::tests::epoch_boundary_emits_no_event", "cardano_node_session_sustained_window"]
+ci_script = "ci/ci_check_no_async_in_blue.sh"
 status = "declared"
+evidence = ["crates/ade_runtime/src/consensus/chain_selector.rs is the GREEN orchestrator that bridges BLUE ade_core::consensus transitions to RED N-A network inputs; BLUE never receives sockets or tokio types — verified by code_locus partitioning and ci_check_no_async_in_blue.sh", "crates/ade_core_interop is the RED live-peer driver crate; it depends on ade_core only via the typed Orchestrator surface and never on internal BLUE modules"]
+strengthened_in = ["PHASE4-N-A", "PHASE4-N-B"]
 
 [[rules]]
 id = "DC-PROTO-06"

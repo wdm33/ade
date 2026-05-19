@@ -24,6 +24,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "ade_core_interop"
+version = "0.1.0"
+dependencies = [
+ "ade_core",
+ "ade_network",
+ "ade_runtime",
+ "ade_testkit",
+ "ade_types",
+ "tokio",
+]
+
+[[package]]
 name = "ade_crypto"
 version = "0.1.0"
 dependencies = [
@@ -77,7 +89,9 @@ dependencies = [
  "ade_codec",
  "ade_core",
  "ade_crypto",
+ "ade_testkit",
  "ade_types",
+ "cardano-crypto",
  "redb",
  "serde_json",
  "tempfile",
@@ -92,8 +106,10 @@ dependencies = [
  "ade_crypto",
  "ade_ledger",
  "ade_plutus",
+ "ade_runtime",
  "ade_types",
  "blake2",
+ "cardano-crypto",
  "flate2",
  "serde",
  "serde_json",

@@ -1,0 +1,21 @@
+[package]
+name = "ade_core_interop"
+version = "0.1.0"
+edition = "2021"
+
+# RED — live interop driver for the consensus orchestrator. Talks to a
+# real cardano-node over N-A and asserts best-chain agreement. Not used
+# by any BLUE crate; CI does NOT run this crate's tests by default
+# (`#[ignore]` gates them).
+
+[dependencies]
+ade_core = { path = "../ade_core" }
+ade_runtime = { path = "../ade_runtime" }
+ade_network = { path = "../ade_network" }
+ade_testkit = { path = "../ade_testkit" }
+ade_types = { path = "../ade_types" }
+tokio = { version = "1", features = ["net", "rt", "io-util", "macros", "time", "rt-multi-thread"] }
+
+[[bin]]
+name = "live_consensus_session"
+path = "src/bin/live_consensus_session.rs"

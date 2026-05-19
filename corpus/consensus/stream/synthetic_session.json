@@ -1,0 +1,43 @@
+{
+  "description": "S-B10 synthetic chain-selector replay session. Inputs are materialised by the test driver from a fixed VRF seed; this file pins the canonical event-kind sequence and the final orchestrator-state checkpoints. See crates/ade_testkit/tests/consensus_stream_replay.rs.",
+  "vrf_seed_hex": "0707070707070707070707070707070707070707070707070707070707070707",
+  "pool_hash28_hex": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+  "snapshot_limit": 100,
+  "security_param_k": 2160,
+  "inputs": [
+    { "kind": "header_arrival", "slot": 1, "block_no": 1, "op_cert_counter": 1, "kes_period": 0, "expect": "chain_selected" },
+    { "kind": "header_arrival", "slot": 2, "block_no": 2, "op_cert_counter": 2, "kes_period": 0, "expect": "chain_selected" },
+    { "kind": "header_arrival", "slot": 3, "block_no": 3, "op_cert_counter": 3, "kes_period": 0, "expect": "chain_selected" },
+    { "kind": "header_arrival", "slot": 4, "block_no": 4, "op_cert_counter": 4, "kes_period": 0, "expect": "chain_selected" },
+    { "kind": "header_arrival", "slot": 5, "block_no": 5, "op_cert_counter": 5, "kes_period": 0, "expect": "chain_selected" },
+    { "kind": "rollback", "to_slot": 3, "to_block_no": 3, "depth": 2, "expect": "rolled_back" },
+    { "kind": "header_arrival", "slot": 10, "block_no": 4, "op_cert_counter": 4, "kes_period": 0, "expect": "chain_selected" },
+    { "kind": "header_arrival", "slot": 11, "block_no": 5, "op_cert_counter": 5, "kes_period": 0, "expect": "chain_selected" },
+    { "kind": "header_arrival", "slot": 12, "block_no": 6, "op_cert_counter": 6, "kes_period": 0, "expect": "chain_selected" },
+    { "kind": "header_arrival", "slot": 13, "block_no": 7, "op_cert_counter": 7, "kes_period": 0, "expect": "chain_selected" },
+    { "kind": "header_arrival_expecting_err", "slot": 14, "block_no": 8, "op_cert_counter": 3, "kes_period": 0, "expect_err": "op_cert_regression" },
+    { "kind": "header_arrival", "slot": 14, "block_no": 8, "op_cert_counter": 8, "kes_period": 0, "expect": "chain_selected" },
+    { "kind": "epoch_boundary", "new_epoch": 1, "last_block_of_prev_epoch": 0, "expect": "none" },
+    { "kind": "header_arrival", "slot": 15, "block_no": 9, "op_cert_counter": 9, "kes_period": 0, "expect": "chain_selected" },
+    { "kind": "header_arrival", "slot": 16, "block_no": 10, "op_cert_counter": 10, "kes_period": 0, "expect": "chain_selected" }
+  ],
+  "expected_event_kinds_filtered": [
+    "ChainSelected",
+    "ChainSelected",
+    "ChainSelected",
+    "ChainSelected",
+    "ChainSelected",
+    "RolledBack",
+    "ChainSelected",
+    "ChainSelected",
+    "ChainSelected",
+    "ChainSelected",
+    "ChainSelected",
+    "ChainSelected",
+    "ChainSelected"
+  ],
+  "expected_final_current_tip_block_no": 10,
+  "expected_final_last_block_no": 10,
+  "expected_final_last_slot": 16,
+  "expected_final_recent_snapshot_count": 10
+}
