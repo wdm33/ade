@@ -97,15 +97,209 @@ Each state machine encodes explicit agency in the state type (illegal agency com
 
 8 BLUE modules, 2 RED modules in `ade_network`. Plus GREEN test infra and one RED interop driver. Cleanest FC/IS partition in the project so far: every authoritative concern is a pure transition.
 
-## 7. Open questions (to resolve before /cluster-doc)
+## 7. Closed decisions
 
-1. **Protocol-version state location**: where does the selected version live during a session — in RED session-glue (BLUE state machines stay pure-state) or threaded through state-machine input? Lean: thread it as input.
-2. **Peer-sharing authority**: peer-sharing message exchange is BLUE, but the peer-book it describes — does that live in `ade_network` (RED) or in cluster N-F (operator surface)? Lean: peer-book is RED operational state owned by N-F; peer-sharing is just transport.
-3. **LocalStateQuery taxonomy**: query types overlap with ledger-state types. Where does the typed-query taxonomy live — `ade_network::codec` (BLUE, frames only) or in an `ade_ledger` query surface? Lean: codec models the wire shape; semantic interpretation of query results is N-B/N-F concern.
-4. **Tx-submission2 ↔ mempool boundary**: tx-submission2 inventory negotiation references tx ids. `ade_types` has the canonical tx-id type; `ade_network::codec` should reference but not redefine.
-5. **Frame corpus location**: `corpus/network/` alongside existing `corpus/snapshots/`, or a separate top-level location? Lean: `corpus/network/`.
-6. **Live interop infrastructure**: docker-compose with cardano-node committed to the repo, or operator-provided peer? The repo's `corpus/boundary_blocks/` etc. originate from external data, so external-peer-provided model has precedent.
-7. **Agency type encoding**: per-protocol agency states (`ClientHasAgency` / `ServerHasAgency`) as separate types per protocol, or one generic `Agency<P>` wrapper? Generic is more code-reusable; per-protocol is more type-safe.
+The seven questions originally raised here are closed. They split into
+three categories — semantic authority, evidence / release
+infrastructure, and slice-shaping — only two of which materially
+shape slice design (#1 and #6).
+
+| # | Decision | Tier | Boundary | Verdict |
+|---|---|---|---|---|
+| 1 | Thread selected protocol version explicitly into BLUE transitions | true + derived | BLUE | Accept B |
+| 2 | Peer-book lives outside `ade_network`; peer-sharing transports peer blobs only | operational | RED | Accept B |
+| 3 | LocalStateQuery codec owns envelope and closed discriminants, not ledger semantics | derived | BLUE/GREEN boundary | Accept B with caveat |
+| 4 | Reuse `ade_types::TxId` | true | BLUE | Accept B |
+| 5 | Put frame corpus under `corpus/network/` | release | evidence layout | Accept A |
+| 6 | Hybrid live interop; Docker default, operator peer optional | release + operational | RED test infra | Accept C |
+| 7 | Per-protocol agency types | true + derived | BLUE | Accept A |
+
+### #1 — Protocol-version state location
+
+**Load-bearing statement**: a BLUE transition must be a pure function
+of canonical prior state, canonical input message, selected protocol
+version, and deterministic configuration. **No session-glue state may
+alter authoritative behavior invisibly.**
+
+Signatures take version as an explicit input:
+
+```rust
+chain_sync_transition(state, version, msg) -> Result<(state', output), err>
+```
+
+not `chain_sync_transition(state, msg)` with version hidden in RED
+context.
+
+Version markers are **typed per protocol**, not loose integers:
+
+```rust
+struct N2NVersion(...)
+struct ChainSyncVersion(...)
+struct LocalStateQueryVersion(...)
+```
+
+(or a protocol-indexed wrapper). Otherwise the design is explicit but
+under-typed.
+
+**Mechanical enforcement** (S-A1 deliverable): the replay-trace record
+includes `protocol_id`, `selected_version`, `input_message_canonical_bytes`,
+`pre_state_hash`, `post_state_hash`, `output_or_error`. CI rejects BLUE
+transition APIs that read ambient session state.
+
+Captured in registry as **DC-PROTO-06** (added with this commit, cross-
+referenced bidirectionally with T-CORE-02, DC-PROTO-01, DC-PROTO-05,
+DC-CORE-01).
+
+### #2 — Peer-sharing authority
+
+`ade_network::peer_sharing` (BLUE) owns:
+message taxonomy, agency, version gates, canonical decode/encode,
+state machine, structured errors.
+
+It does **not** own:
+peer reputation, operator preferences, retention policy, dial
+scheduling, topology strategy, geo preferences, liveness scoring.
+
+The interface is an **output event**, not a callback into N-F:
+
+```rust
+PeerSharingOutput::ReceivedPeers(CanonicalPeerList)
+PeerSharingOutput::SendPeers(CanonicalPeerList)
+PeerSharingOutput::ProtocolError(...)
+```
+
+RED/GREEN glue takes the peer list into the operator surface (N-F).
+
+### #3 — LocalStateQuery taxonomy (B with caveat)
+
+The codec is **not** "opaque bytes everywhere." It owns the closed
+wire grammar:
+
+- mini-protocol framing
+- agency
+- query envelope
+- query discriminant bytes
+- era/version gating
+- canonical preservation of payload bytes
+- structured decode errors
+
+It does **not** own:
+
+- what the query means
+- whether the requested state exists
+- how results are computed
+- era-specific ledger interpretation
+- typed result construction
+
+**Correct framing**: *codec models the closed wire grammar, not the
+ledger meaning.* If the codec treated too much as opaque, it would
+fail to enforce malformed-input rejection at the right boundary.
+
+### #4 — `TxId` reuse
+
+One canonical type authority for persisted, compared, hashed, or
+protocol-visible identities. `ade_network` depends on `ade_types`.
+
+**Byte-authority caveat**: For Cardano transaction IDs, the type
+records *which bytes were hashed*. If the protocol-defined hash uses
+preserved-original transaction bytes, do not silently recompute from
+project-canonical bytes unless equivalence has been proven. Cluster
+doc captures this requirement explicitly so S-A6 (tx-submission2)
+doesn't trip the trap.
+
+### #5 — Frame corpus location
+
+`corpus/network/`, structured as:
+
+```
+corpus/network/
+  n2n/
+    handshake/  chain_sync/  block_fetch/  tx_submission2/
+    keep_alive/  peer_sharing/
+  n2c/
+    handshake/  local_chain_sync/  local_tx_submission/
+    local_state_query/  local_tx_monitor/
+```
+
+Each captured frame carries metadata: cardano-node version, network
+magic, protocol, mini-protocol version, direction, agency, raw bytes,
+expected decode result, expected re-encode bytes.
+
+**Acceptance criterion**: preserved input bytes decode to a typed
+value AND re-encode to byte-identical wire bytes where the protocol
+demands preservation.
+
+### #6 — Live interop infrastructure
+
+Two gates defined separately:
+
+- **CI smoke interop gate** — pinned Docker, reproducible, runs every CI
+- **Manual closure interop gate (CE-N-A-5)** — Docker default, operator-provided peer as supported override; full closure-gate evidence captured
+
+Full closure must not depend only on an operator-provided peer
+(evidence wouldn't reproduce). Full live interop suite must not run in
+every CI (would be flaky and expensive).
+
+Pinned cardano-node 10.6.2 belongs in evidence metadata. Repo records
+the compatibility target explicitly:
+
+```
+interop target:
+  cardano-node: 10.6.2
+  network: preview / preprod / mainnet
+  supported protocol versions: <enumerated list>
+```
+
+**CE-N-A-5 proof obligation** (lowest acceptable):
+1. Handshake version negotiation succeeds/fails deterministically
+2. All 11 mini-protocols reject unsupported versions deterministically
+3. Captured frames decode and re-encode byte-identically where required
+4. Live peer interaction produces expected agency transitions
+5. Malformed frames produce canonical structured errors
+
+### #7 — Per-protocol agency types
+
+Even if variants look similar, their types are non-interchangeable.
+
+```rust
+enum ChainSyncAgency      { ClientHasAgency, ServerHasAgency, NobodyHasAgency }
+enum BlockFetchAgency     { ClientHasAgency, ServerHasAgency, NobodyHasAgency }
+enum TxSubmission2Agency  { InitiatorHasAgency, ResponderHasAgency, NobodyHasAgency }
+```
+
+Verbose, but compile-time prevents passing a `ChainSyncAgency` where
+a `BlockFetchAgency` is expected. No generic transition fn for BLUE
+paths:
+
+```rust
+// NO
+fn transition(agency: GenericAgency, msg: AnyMessage) -> ...
+
+// YES
+fn chain_sync_transition(
+    state: ChainSyncState,
+    version: ChainSyncVersion,
+    agency: ChainSyncAgency,
+    msg: ChainSyncMessage,
+) -> ChainSyncTransitionResult
+```
+
+IDD doctrine favors illegal-state-unrepresentability over code
+compression.
+
+### Slice-shaping implications
+
+**#1 affects S-A2 through S-A8**: every BLUE mini-protocol state
+machine acquires an explicit `version` parameter. Decided before
+writing any signature, test vector, or replay-trace schema. **Hard
+S-A2 entry requirement**: no BLUE mini-protocol transition may read
+selected protocol version from RED session state.
+
+**#6 affects CE-N-A-5**: interop infra must not block early
+codec/state-machine slices, but the evidence schema must be designed
+now so captured corpus (S-A9) and live interop (S-A10) produce the
+same artifact shape — selected versions, frame bytes, decoded
+messages, agency transitions, errors, final transcript hash.
 
 ## Can N-A be expressed as `canonical input → canonical output`?
 
