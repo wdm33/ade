@@ -1822,3 +1822,102 @@ statement = "Incident evidence sufficient to reconstruct canonical decision path
 source = "Project constitution §4b"
 cross_ref = ["CN-OPS-03"]
 status = "declared"
+
+# =============================================================================
+# DC-CONS-* Praos Consensus Runtime (PHASE4-N-B; sub-family within DC family)
+#
+# Coexists with the older DC-CONSENSUS-* sub-family (DC-CONSENSUS-01, -02).
+# IDs DC-CONS-03..10 introduced 2026-05-19 from
+# docs/planning/phase4-n-b-invariants.md. The DC-CONS-* prefix was chosen at
+# sketch time and preserved here to honour the append-only ID-assignment rule
+# once approved. New consensus-family rules should continue this prefix unless
+# the registry is rebased.
+# =============================================================================
+
+[[rules]]
+id = "DC-CONS-03"
+tier = "derived"
+statement = "Praos chain selection ordering: block number first, then Praos TiebreakerView (slot, issuer, op-cert issue number, VRF output). Density-based ordering is reserved for Genesis/catch-up and must not be used for caught-up Praos fork-choice."
+source = "Project constitution §3, ouroboros-consensus (pin at code-lock); CN-CONS-01"
+cross_ref = ["DC-CONSENSUS-01", "CN-CONS-01"]
+code_locus = ""
+tests = []
+ci_script = ""
+status = "declared"
+
+[[rules]]
+id = "DC-CONS-04"
+tier = "derived"
+statement = "Praos chain-dep state (evolving/candidate/epoch/previous_epoch/lab/last_epoch_block nonces, op-cert counters, last_slot) is owned by N-B consensus, not by the ledger, and evolves deterministically as a function of validated headers and epoch boundaries."
+source = "Project constitution §3, ouroboros-consensus PraosChainDepState"
+cross_ref = ["DC-CONSENSUS-02", "DC-CONS-10"]
+code_locus = ""
+tests = []
+ci_script = ""
+status = "declared"
+
+[[rules]]
+id = "DC-CONS-05"
+tier = "derived"
+statement = "Authoritative rollback must never exceed the security parameter k measured in blocks (mainnet k = 2160). Rollback requests deeper than k return ExceededRollback. Forecast/stability windows may be slot-based but must accommodate at least k+1 blocks."
+source = "Project constitution §3, ouroboros-consensus consensus report"
+cross_ref = ["DC-CONS-06", "CN-CONS-01"]
+code_locus = ""
+tests = []
+ci_script = ""
+status = "declared"
+
+[[rules]]
+id = "DC-CONS-06"
+tier = "derived"
+statement = "rollback(state, depth) produces state byte-identical to truncated replay from the nearest checkpoint. Rollback that would cross the immutable tip (≥ k deep) returns ForkBeforeImmutableTip and never alters state."
+source = "Project constitution §3, T-DET-01"
+cross_ref = ["DC-CONS-05", "T-DET-01"]
+code_locus = ""
+tests = []
+ci_script = ""
+status = "declared"
+
+[[rules]]
+id = "DC-CONS-07"
+tier = "derived"
+statement = "BLUE consensus must consume the HFC schedule only as a typed EraSchedule value anchored to BootstrapAnchorHash. Genesis text parsing happens in RED; BLUE never reads files, JSON, or operator config directly. The schedule is part of replay evidence."
+source = "Project constitution §3, DC-CORE-01, DC-EPOCH-02"
+cross_ref = ["DC-CORE-01", "DC-EPOCH-02"]
+code_locus = ""
+tests = []
+ci_script = ""
+status = "declared"
+
+[[rules]]
+id = "DC-CONS-08"
+tier = "derived"
+statement = "slot_to_time(EraSchedule, SystemStart, SlotNo) is a pure function; no BLUE consensus path may consult the wall clock to derive a slot or UTC instant for an authoritative decision."
+source = "Project constitution §3, CN-CONS-05, DC-CORE-01"
+cross_ref = ["DC-CORE-01", "CN-CONS-05"]
+code_locus = ""
+tests = []
+ci_script = ""
+status = "declared"
+
+[[rules]]
+id = "DC-CONS-09"
+tier = "derived"
+statement = "Consensus-derived queries for slots beyond the ledger-view safe zone return OutsideForecastRange, never guessed values. The bound is derived from era history + safe zone + HFC schedule, not encoded as a magic constant in caller code."
+source = "Project constitution §3, DC-EPOCH-02"
+cross_ref = ["DC-EPOCH-02", "DC-CONS-07"]
+code_locus = ""
+tests = []
+ci_script = ""
+status = "declared"
+
+[[rules]]
+id = "DC-CONS-10"
+tier = "derived"
+statement = "A header's op-cert issue counter must be >= the highest observed counter for the same (pool, kes_period). Regression yields HeaderInvalid with a typed OpCertCounterError reason; ChainDepState never accepts a regression."
+source = "Project constitution §3, ouroboros-consensus OperationalCertificate"
+cross_ref = ["DC-CONS-04"]
+code_locus = ""
+tests = []
+ci_script = ""
+status = "declared"
