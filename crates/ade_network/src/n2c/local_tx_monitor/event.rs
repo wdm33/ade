@@ -7,34 +7,35 @@
 //
 // LocalTxMonitor event taxonomy emitted by the state machine.
 //
-// Per slice S-A8 §9: N-A produces values, downstream interprets effects.
-// The state machine does not decode `LocalTxMonitorQuery` /
-// `LocalTxMonitorReply`, does not touch mempool state, and does not
-// perform query evaluation — it emits a `LocalTxMonitorEvent` value
-// derived from each client/server message.
-//
-// `LocalTxMonitorQuery` and `LocalTxMonitorReply` are re-exported from
-// the S-A2 codec module so every consumer references the same
-// canonical types.
+// Per slice S-A8b: the state machine owns the closed wire grammar of
+// LocalTxMonitor and emits a `LocalTxMonitorEvent` value per
+// client/server message. Mempool-semantic interpretation (e.g.
+// looking up transactions by id, materialising measures) belongs to
+// downstream consumers.
 
-use ade_types::SlotNo;
+use ade_types::{SlotNo, TxId};
 
-pub use crate::codec::local_tx_monitor::{LocalTxMonitorQuery, LocalTxMonitorReply};
+pub use crate::codec::local_tx_monitor::{MempoolMeasures, MempoolSizeAndCapacity};
 
 /// LocalTxMonitor event taxonomy. Closed enum; consumers exhaustively
 /// match.
 ///
-/// `QueryRequested.payload` and `QueryReplied.payload` are opaque —
-/// the exact bytes the client or server sent on the wire, passed
-/// through verbatim. Mempool-semantic interpretation belongs to a
-/// future cluster (N-F). `MempoolAcquired.slot` is the snapshot slot
-/// the server pinned the mempool view at.
+/// `ReAcquireRequested` is emitted when the client sends an `Acquire`
+/// while in the `Acquired` state — on the wire this is the
+/// `MsgAwaitAcquire` form (same tag-1 encoding) and tells the server
+/// to re-acquire a fresh mempool snapshot.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum LocalTxMonitorEvent {
     AcquireRequested,
-    AwaitingAcquisition,
+    ReAcquireRequested,
     MempoolAcquired { slot: SlotNo },
-    QueryRequested { payload: LocalTxMonitorQuery },
-    QueryReplied { payload: LocalTxMonitorReply },
     MempoolReleased,
+    NextTxRequested,
+    NextTxReplied { tx_bytes: Option<Vec<u8>> },
+    HasTxRequested { tx_id: TxId },
+    HasTxReplied { present: bool },
+    SizesRequested,
+    SizesReplied(MempoolSizeAndCapacity),
+    MeasuresRequested,
+    MeasuresReplied(MempoolMeasures),
 }

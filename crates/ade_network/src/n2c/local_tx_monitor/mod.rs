@@ -5,15 +5,11 @@
 // - Explicit state transitions only
 // - Canonical serialization for all persisted/hashed data
 //
-// N2C LocalTxMonitor mini-protocol state machine (BLUE) — S-A8.
+// N2C LocalTxMonitor mini-protocol state machine (BLUE) — S-A8b.
 //
-// Pure local-tx-monitor transition that consumes the codec types
-// defined in S-A2 (`LocalTxMonitorMessage`, `LocalTxMonitorQuery`,
-// `LocalTxMonitorReply`) and emits `LocalTxMonitorEvent` values. The
-// state machine owns the closed wire grammar of the LocalTxMonitor
-// protocol but NOT the mempool-semantic interpretation of
-// query/reply payloads — those are opaque `Vec<u8>` at this layer
-// (DC-PROTO-06).
+// Pure local-tx-monitor transition that consumes the codec types from
+// `codec::local_tx_monitor` (closed 12-message wire grammar matching
+// cardano-node 11.0.1) and emits `LocalTxMonitorEvent` values.
 //
 // Per-protocol agency type per locked §7 #7: `LocalTxMonitorAgency`
 // is non-interchangeable with any other per-protocol agency. The
@@ -25,6 +21,6 @@ pub mod state;
 pub mod transition;
 
 pub use agency::LocalTxMonitorAgency;
-pub use event::{LocalTxMonitorEvent, LocalTxMonitorQuery, LocalTxMonitorReply};
-pub use state::{LocalTxMonitorError, LocalTxMonitorOutput, LocalTxMonitorState};
+pub use event::{LocalTxMonitorEvent, MempoolMeasures, MempoolSizeAndCapacity};
+pub use state::{BusyKind, LocalTxMonitorError, LocalTxMonitorOutput, LocalTxMonitorState};
 pub use transition::local_tx_monitor_transition;

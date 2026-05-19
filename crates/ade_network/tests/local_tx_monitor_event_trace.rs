@@ -5,54 +5,63 @@
 // - Explicit state transitions only
 // - Canonical serialization for all persisted/hashed data
 //
-// Integration test for S-A8 (LocalTxMonitor portion): drives the N2C
-// LocalTxMonitor transition through curated synthetic scenarios and
-// asserts:
+// Integration test for S-A8b (LocalTxMonitor wire-grammar rework):
+// drives the N2C LocalTxMonitor transition through curated synthetic
+// scenarios covering the four query kinds, release / re-acquire
+// patterns, and version-gated Measures use cases. Asserts:
 //   1. The emitted `LocalTxMonitorEvent` sequence matches the
 //      spec-derived expected sequence for each scenario.
 //   2. The event sequence is deterministic — replaying any scenario
-//      1000 times yields byte-identical event traces (including the
-//      opaque `LocalTxMonitorQuery` and `LocalTxMonitorReply` bytes).
-//
-// Real-capture verification against captured N2C frames follows in
-// S-A9; the test bodies stay unchanged.
+//      1000 times yields byte-identical event traces.
 
 #![allow(clippy::unwrap_used)]
 #![allow(clippy::expect_used)]
 #![allow(clippy::panic)]
 
-use ade_network::codec::local_tx_monitor::LocalTxMonitorMessage;
+use std::collections::BTreeMap;
+
+use ade_network::codec::local_tx_monitor::{
+    LocalTxMonitorMessage, MeasureName, MeasureSizeAndCapacity, MempoolMeasures,
+    MempoolSizeAndCapacity,
+};
 use ade_network::codec::version::LocalTxMonitorVersion;
 use ade_network::n2c::local_tx_monitor::{
     local_tx_monitor_transition, LocalTxMonitorAgency, LocalTxMonitorEvent, LocalTxMonitorOutput,
-    LocalTxMonitorQuery, LocalTxMonitorReply, LocalTxMonitorState,
+    LocalTxMonitorState,
 };
-use ade_types::SlotNo;
+use ade_types::{Hash32, SlotNo, TxId};
 
 fn v() -> LocalTxMonitorVersion {
-    LocalTxMonitorVersion::new(16)
+    LocalTxMonitorVersion::new(2)
 }
 
-fn query_body(seed: u8, size: usize) -> Vec<u8> {
-    let mut buf = Vec::with_capacity(size);
-    buf.extend_from_slice(&[0x82, seed]);
-    let fill = seed.wrapping_add(0x77);
-    while buf.len() < size {
-        buf.push(fill);
-    }
-    buf.truncate(size);
-    buf
+fn tx_id(seed: u8) -> TxId {
+    TxId(Hash32([seed; 32]))
 }
 
-fn reply_body(seed: u8, size: usize) -> Vec<u8> {
-    let mut buf = Vec::with_capacity(size);
-    buf.extend_from_slice(&[0x83, seed]);
-    let fill = seed.wrapping_add(0xBB);
-    while buf.len() < size {
-        buf.push(fill);
+fn sizes(capacity_bytes: u32, size_bytes: u32, tx_count: u32) -> MempoolSizeAndCapacity {
+    MempoolSizeAndCapacity {
+        capacity_bytes,
+        size_bytes,
+        tx_count,
     }
-    buf.truncate(size);
-    buf
+}
+
+fn measures(tx_count: u32, entries: &[(&str, u64, u64)]) -> MempoolMeasures {
+    let mut m = BTreeMap::new();
+    for (name, size, capacity) in entries {
+        m.insert(
+            MeasureName::new(name),
+            MeasureSizeAndCapacity {
+                size: *size,
+                capacity: *capacity,
+            },
+        );
+    }
+    MempoolMeasures {
+        tx_count,
+        measures: m,
+    }
 }
 
 type Step = (LocalTxMonitorAgency, LocalTxMonitorMessage);
@@ -71,195 +80,338 @@ fn drive(steps: &[Step]) -> Vec<LocalTxMonitorEvent> {
     events
 }
 
-fn acquire_query_release() -> (Vec<Step>, Vec<LocalTxMonitorEvent>) {
+fn acquire_release() -> (Vec<Step>, Vec<LocalTxMonitorEvent>) {
     let slot = SlotNo(100_000);
-    let q = query_body(0x11, 32);
-    let r = reply_body(0x11, 64);
     let steps = vec![
-        (
-            LocalTxMonitorAgency::Client,
-            LocalTxMonitorMessage::Acquire,
-        ),
+        (LocalTxMonitorAgency::Client, LocalTxMonitorMessage::Acquire),
         (
             LocalTxMonitorAgency::Server,
             LocalTxMonitorMessage::Acquired { slot },
         ),
-        (
-            LocalTxMonitorAgency::Client,
-            LocalTxMonitorMessage::Query(LocalTxMonitorQuery(q.clone())),
-        ),
-        (
-            LocalTxMonitorAgency::Server,
-            LocalTxMonitorMessage::Reply(LocalTxMonitorReply(r.clone())),
-        ),
-        (
-            LocalTxMonitorAgency::Client,
-            LocalTxMonitorMessage::Release,
-        ),
+        (LocalTxMonitorAgency::Client, LocalTxMonitorMessage::Release),
     ];
     let expected = vec![
         LocalTxMonitorEvent::AcquireRequested,
         LocalTxMonitorEvent::MempoolAcquired { slot },
-        LocalTxMonitorEvent::QueryRequested {
-            payload: LocalTxMonitorQuery(q),
-        },
-        LocalTxMonitorEvent::QueryReplied {
-            payload: LocalTxMonitorReply(r),
-        },
         LocalTxMonitorEvent::MempoolReleased,
     ];
     (steps, expected)
 }
 
-fn acquire_with_await_loop() -> (Vec<Step>, Vec<LocalTxMonitorEvent>) {
-    let slot = SlotNo(200_000);
+fn acquire_await_acquire_reacquire() -> (Vec<Step>, Vec<LocalTxMonitorEvent>) {
+    let slot_a = SlotNo(200_000);
+    let slot_b = SlotNo(200_100);
     let steps = vec![
-        (
-            LocalTxMonitorAgency::Client,
-            LocalTxMonitorMessage::Acquire,
-        ),
-        (
-            LocalTxMonitorAgency::Server,
-            LocalTxMonitorMessage::AwaitAcquire,
-        ),
-        (
-            LocalTxMonitorAgency::Server,
-            LocalTxMonitorMessage::AwaitAcquire,
-        ),
-        (
-            LocalTxMonitorAgency::Server,
-            LocalTxMonitorMessage::Acquired { slot },
-        ),
-    ];
-    let expected = vec![
-        LocalTxMonitorEvent::AcquireRequested,
-        LocalTxMonitorEvent::AwaitingAcquisition,
-        LocalTxMonitorEvent::AwaitingAcquisition,
-        LocalTxMonitorEvent::MempoolAcquired { slot },
-    ];
-    (steps, expected)
-}
-
-fn multiple_queries_same_snapshot() -> (Vec<Step>, Vec<LocalTxMonitorEvent>) {
-    let slot = SlotNo(300_000);
-    let q1 = query_body(0x31, 16);
-    let r1 = reply_body(0x31, 32);
-    let q2 = query_body(0x32, 24);
-    let r2 = reply_body(0x32, 48);
-    let q3 = query_body(0x33, 8);
-    let r3 = reply_body(0x33, 16);
-    let steps = vec![
-        (
-            LocalTxMonitorAgency::Client,
-            LocalTxMonitorMessage::Acquire,
-        ),
-        (
-            LocalTxMonitorAgency::Server,
-            LocalTxMonitorMessage::Acquired { slot },
-        ),
-        (
-            LocalTxMonitorAgency::Client,
-            LocalTxMonitorMessage::Query(LocalTxMonitorQuery(q1.clone())),
-        ),
-        (
-            LocalTxMonitorAgency::Server,
-            LocalTxMonitorMessage::Reply(LocalTxMonitorReply(r1.clone())),
-        ),
-        (
-            LocalTxMonitorAgency::Client,
-            LocalTxMonitorMessage::Query(LocalTxMonitorQuery(q2.clone())),
-        ),
-        (
-            LocalTxMonitorAgency::Server,
-            LocalTxMonitorMessage::Reply(LocalTxMonitorReply(r2.clone())),
-        ),
-        (
-            LocalTxMonitorAgency::Client,
-            LocalTxMonitorMessage::Query(LocalTxMonitorQuery(q3.clone())),
-        ),
-        (
-            LocalTxMonitorAgency::Server,
-            LocalTxMonitorMessage::Reply(LocalTxMonitorReply(r3.clone())),
-        ),
-        (
-            LocalTxMonitorAgency::Client,
-            LocalTxMonitorMessage::Release,
-        ),
-    ];
-    let expected = vec![
-        LocalTxMonitorEvent::AcquireRequested,
-        LocalTxMonitorEvent::MempoolAcquired { slot },
-        LocalTxMonitorEvent::QueryRequested {
-            payload: LocalTxMonitorQuery(q1),
-        },
-        LocalTxMonitorEvent::QueryReplied {
-            payload: LocalTxMonitorReply(r1),
-        },
-        LocalTxMonitorEvent::QueryRequested {
-            payload: LocalTxMonitorQuery(q2),
-        },
-        LocalTxMonitorEvent::QueryReplied {
-            payload: LocalTxMonitorReply(r2),
-        },
-        LocalTxMonitorEvent::QueryRequested {
-            payload: LocalTxMonitorQuery(q3),
-        },
-        LocalTxMonitorEvent::QueryReplied {
-            payload: LocalTxMonitorReply(r3),
-        },
-        LocalTxMonitorEvent::MempoolReleased,
-    ];
-    (steps, expected)
-}
-
-fn acquire_done_terminates_from_acquired() -> (Vec<Step>, Vec<LocalTxMonitorEvent>) {
-    let slot = SlotNo(400_000);
-    let steps = vec![
-        (
-            LocalTxMonitorAgency::Client,
-            LocalTxMonitorMessage::Acquire,
-        ),
-        (
-            LocalTxMonitorAgency::Server,
-            LocalTxMonitorMessage::Acquired { slot },
-        ),
-        (LocalTxMonitorAgency::Client, LocalTxMonitorMessage::Done),
-    ];
-    let expected = vec![
-        LocalTxMonitorEvent::AcquireRequested,
-        LocalTxMonitorEvent::MempoolAcquired { slot },
-    ];
-    (steps, expected)
-}
-
-fn re_acquire_after_release() -> (Vec<Step>, Vec<LocalTxMonitorEvent>) {
-    let slot_a = SlotNo(500_000);
-    let slot_b = SlotNo(500_100);
-    let steps = vec![
-        (
-            LocalTxMonitorAgency::Client,
-            LocalTxMonitorMessage::Acquire,
-        ),
+        (LocalTxMonitorAgency::Client, LocalTxMonitorMessage::Acquire),
         (
             LocalTxMonitorAgency::Server,
             LocalTxMonitorMessage::Acquired { slot: slot_a },
         ),
-        (
-            LocalTxMonitorAgency::Client,
-            LocalTxMonitorMessage::Release,
-        ),
-        (
-            LocalTxMonitorAgency::Client,
-            LocalTxMonitorMessage::Acquire,
-        ),
+        // Client sends MsgAwaitAcquire (encoded as tag-1 same as Acquire);
+        // the state machine reinterprets `(Acquired, Client, Acquire)`
+        // as ReAcquireRequested.
+        (LocalTxMonitorAgency::Client, LocalTxMonitorMessage::Acquire),
         (
             LocalTxMonitorAgency::Server,
             LocalTxMonitorMessage::Acquired { slot: slot_b },
         ),
+        (LocalTxMonitorAgency::Client, LocalTxMonitorMessage::Release),
+    ];
+    let expected = vec![
+        LocalTxMonitorEvent::AcquireRequested,
+        LocalTxMonitorEvent::MempoolAcquired { slot: slot_a },
+        LocalTxMonitorEvent::ReAcquireRequested,
+        LocalTxMonitorEvent::MempoolAcquired { slot: slot_b },
+        LocalTxMonitorEvent::MempoolReleased,
+    ];
+    (steps, expected)
+}
+
+fn single_next_tx_round() -> (Vec<Step>, Vec<LocalTxMonitorEvent>) {
+    let slot = SlotNo(300_000);
+    let tx = vec![0xCA, 0xFE, 0xBA, 0xBE];
+    let steps = vec![
+        (LocalTxMonitorAgency::Client, LocalTxMonitorMessage::Acquire),
+        (
+            LocalTxMonitorAgency::Server,
+            LocalTxMonitorMessage::Acquired { slot },
+        ),
+        (LocalTxMonitorAgency::Client, LocalTxMonitorMessage::NextTx),
+        (
+            LocalTxMonitorAgency::Server,
+            LocalTxMonitorMessage::ReplyNextTx {
+                tx_bytes: Some(tx.clone()),
+            },
+        ),
+        (LocalTxMonitorAgency::Client, LocalTxMonitorMessage::Release),
+    ];
+    let expected = vec![
+        LocalTxMonitorEvent::AcquireRequested,
+        LocalTxMonitorEvent::MempoolAcquired { slot },
+        LocalTxMonitorEvent::NextTxRequested,
+        LocalTxMonitorEvent::NextTxReplied {
+            tx_bytes: Some(tx),
+        },
+        LocalTxMonitorEvent::MempoolReleased,
+    ];
+    (steps, expected)
+}
+
+fn multi_next_tx_until_empty() -> (Vec<Step>, Vec<LocalTxMonitorEvent>) {
+    let slot = SlotNo(310_000);
+    let tx1 = vec![0x01, 0x02, 0x03];
+    let tx2 = vec![0x04, 0x05, 0x06, 0x07];
+    let steps = vec![
+        (LocalTxMonitorAgency::Client, LocalTxMonitorMessage::Acquire),
+        (
+            LocalTxMonitorAgency::Server,
+            LocalTxMonitorMessage::Acquired { slot },
+        ),
+        (LocalTxMonitorAgency::Client, LocalTxMonitorMessage::NextTx),
+        (
+            LocalTxMonitorAgency::Server,
+            LocalTxMonitorMessage::ReplyNextTx {
+                tx_bytes: Some(tx1.clone()),
+            },
+        ),
+        (LocalTxMonitorAgency::Client, LocalTxMonitorMessage::NextTx),
+        (
+            LocalTxMonitorAgency::Server,
+            LocalTxMonitorMessage::ReplyNextTx {
+                tx_bytes: Some(tx2.clone()),
+            },
+        ),
+        (LocalTxMonitorAgency::Client, LocalTxMonitorMessage::NextTx),
+        (
+            LocalTxMonitorAgency::Server,
+            LocalTxMonitorMessage::ReplyNextTx { tx_bytes: None },
+        ),
+        (LocalTxMonitorAgency::Client, LocalTxMonitorMessage::Release),
+    ];
+    let expected = vec![
+        LocalTxMonitorEvent::AcquireRequested,
+        LocalTxMonitorEvent::MempoolAcquired { slot },
+        LocalTxMonitorEvent::NextTxRequested,
+        LocalTxMonitorEvent::NextTxReplied {
+            tx_bytes: Some(tx1),
+        },
+        LocalTxMonitorEvent::NextTxRequested,
+        LocalTxMonitorEvent::NextTxReplied {
+            tx_bytes: Some(tx2),
+        },
+        LocalTxMonitorEvent::NextTxRequested,
+        LocalTxMonitorEvent::NextTxReplied { tx_bytes: None },
+        LocalTxMonitorEvent::MempoolReleased,
+    ];
+    (steps, expected)
+}
+
+fn has_tx_present() -> (Vec<Step>, Vec<LocalTxMonitorEvent>) {
+    let slot = SlotNo(400_000);
+    let id = tx_id(0x11);
+    let steps = vec![
+        (LocalTxMonitorAgency::Client, LocalTxMonitorMessage::Acquire),
+        (
+            LocalTxMonitorAgency::Server,
+            LocalTxMonitorMessage::Acquired { slot },
+        ),
         (
             LocalTxMonitorAgency::Client,
-            LocalTxMonitorMessage::Release,
+            LocalTxMonitorMessage::HasTx { tx_id: id.clone() },
         ),
+        (
+            LocalTxMonitorAgency::Server,
+            LocalTxMonitorMessage::ReplyHasTx { present: true },
+        ),
+        (LocalTxMonitorAgency::Client, LocalTxMonitorMessage::Release),
+    ];
+    let expected = vec![
+        LocalTxMonitorEvent::AcquireRequested,
+        LocalTxMonitorEvent::MempoolAcquired { slot },
+        LocalTxMonitorEvent::HasTxRequested { tx_id: id },
+        LocalTxMonitorEvent::HasTxReplied { present: true },
+        LocalTxMonitorEvent::MempoolReleased,
+    ];
+    (steps, expected)
+}
+
+fn has_tx_absent() -> (Vec<Step>, Vec<LocalTxMonitorEvent>) {
+    let slot = SlotNo(410_000);
+    let id = tx_id(0x22);
+    let steps = vec![
+        (LocalTxMonitorAgency::Client, LocalTxMonitorMessage::Acquire),
+        (
+            LocalTxMonitorAgency::Server,
+            LocalTxMonitorMessage::Acquired { slot },
+        ),
+        (
+            LocalTxMonitorAgency::Client,
+            LocalTxMonitorMessage::HasTx { tx_id: id.clone() },
+        ),
+        (
+            LocalTxMonitorAgency::Server,
+            LocalTxMonitorMessage::ReplyHasTx { present: false },
+        ),
+        (LocalTxMonitorAgency::Client, LocalTxMonitorMessage::Release),
+    ];
+    let expected = vec![
+        LocalTxMonitorEvent::AcquireRequested,
+        LocalTxMonitorEvent::MempoolAcquired { slot },
+        LocalTxMonitorEvent::HasTxRequested { tx_id: id },
+        LocalTxMonitorEvent::HasTxReplied { present: false },
+        LocalTxMonitorEvent::MempoolReleased,
+    ];
+    (steps, expected)
+}
+
+fn get_sizes_round() -> (Vec<Step>, Vec<LocalTxMonitorEvent>) {
+    let slot = SlotNo(500_000);
+    let s = sizes(1_048_576, 12_345, 7);
+    let steps = vec![
+        (LocalTxMonitorAgency::Client, LocalTxMonitorMessage::Acquire),
+        (
+            LocalTxMonitorAgency::Server,
+            LocalTxMonitorMessage::Acquired { slot },
+        ),
+        (
+            LocalTxMonitorAgency::Client,
+            LocalTxMonitorMessage::GetSizes,
+        ),
+        (
+            LocalTxMonitorAgency::Server,
+            LocalTxMonitorMessage::ReplyGetSizes(s),
+        ),
+        (LocalTxMonitorAgency::Client, LocalTxMonitorMessage::Release),
+    ];
+    let expected = vec![
+        LocalTxMonitorEvent::AcquireRequested,
+        LocalTxMonitorEvent::MempoolAcquired { slot },
+        LocalTxMonitorEvent::SizesRequested,
+        LocalTxMonitorEvent::SizesReplied(s),
+        LocalTxMonitorEvent::MempoolReleased,
+    ];
+    (steps, expected)
+}
+
+fn get_measures_round() -> (Vec<Step>, Vec<LocalTxMonitorEvent>) {
+    let slot = SlotNo(600_000);
+    let m = measures(
+        9,
+        &[
+            ("bytes", 4096, 65536),
+            ("txs", 9, 256),
+        ],
+    );
+    let steps = vec![
+        (LocalTxMonitorAgency::Client, LocalTxMonitorMessage::Acquire),
+        (
+            LocalTxMonitorAgency::Server,
+            LocalTxMonitorMessage::Acquired { slot },
+        ),
+        (
+            LocalTxMonitorAgency::Client,
+            LocalTxMonitorMessage::GetMeasures,
+        ),
+        (
+            LocalTxMonitorAgency::Server,
+            LocalTxMonitorMessage::ReplyGetMeasures(m.clone()),
+        ),
+        (LocalTxMonitorAgency::Client, LocalTxMonitorMessage::Release),
+    ];
+    let expected = vec![
+        LocalTxMonitorEvent::AcquireRequested,
+        LocalTxMonitorEvent::MempoolAcquired { slot },
+        LocalTxMonitorEvent::MeasuresRequested,
+        LocalTxMonitorEvent::MeasuresReplied(m),
+        LocalTxMonitorEvent::MempoolReleased,
+    ];
+    (steps, expected)
+}
+
+fn mixed_query_kinds_one_session() -> (Vec<Step>, Vec<LocalTxMonitorEvent>) {
+    let slot = SlotNo(700_000);
+    let id = tx_id(0xAB);
+    let tx = vec![0x10, 0x20, 0x30];
+    let s = sizes(1024, 16, 1);
+    let m = measures(1, &[("bytes", 16, 1024)]);
+    let steps = vec![
+        (LocalTxMonitorAgency::Client, LocalTxMonitorMessage::Acquire),
+        (
+            LocalTxMonitorAgency::Server,
+            LocalTxMonitorMessage::Acquired { slot },
+        ),
+        (LocalTxMonitorAgency::Client, LocalTxMonitorMessage::NextTx),
+        (
+            LocalTxMonitorAgency::Server,
+            LocalTxMonitorMessage::ReplyNextTx {
+                tx_bytes: Some(tx.clone()),
+            },
+        ),
+        (
+            LocalTxMonitorAgency::Client,
+            LocalTxMonitorMessage::HasTx { tx_id: id.clone() },
+        ),
+        (
+            LocalTxMonitorAgency::Server,
+            LocalTxMonitorMessage::ReplyHasTx { present: true },
+        ),
+        (
+            LocalTxMonitorAgency::Client,
+            LocalTxMonitorMessage::GetSizes,
+        ),
+        (
+            LocalTxMonitorAgency::Server,
+            LocalTxMonitorMessage::ReplyGetSizes(s),
+        ),
+        (
+            LocalTxMonitorAgency::Client,
+            LocalTxMonitorMessage::GetMeasures,
+        ),
+        (
+            LocalTxMonitorAgency::Server,
+            LocalTxMonitorMessage::ReplyGetMeasures(m.clone()),
+        ),
+        (LocalTxMonitorAgency::Client, LocalTxMonitorMessage::Release),
+    ];
+    let expected = vec![
+        LocalTxMonitorEvent::AcquireRequested,
+        LocalTxMonitorEvent::MempoolAcquired { slot },
+        LocalTxMonitorEvent::NextTxRequested,
+        LocalTxMonitorEvent::NextTxReplied {
+            tx_bytes: Some(tx),
+        },
+        LocalTxMonitorEvent::HasTxRequested { tx_id: id },
+        LocalTxMonitorEvent::HasTxReplied { present: true },
+        LocalTxMonitorEvent::SizesRequested,
+        LocalTxMonitorEvent::SizesReplied(s),
+        LocalTxMonitorEvent::MeasuresRequested,
+        LocalTxMonitorEvent::MeasuresReplied(m),
+        LocalTxMonitorEvent::MempoolReleased,
+    ];
+    (steps, expected)
+}
+
+fn immediate_client_done() -> (Vec<Step>, Vec<LocalTxMonitorEvent>) {
+    let steps = vec![(LocalTxMonitorAgency::Client, LocalTxMonitorMessage::Done)];
+    (steps, Vec::new())
+}
+
+fn re_acquire_after_release() -> (Vec<Step>, Vec<LocalTxMonitorEvent>) {
+    let slot_a = SlotNo(800_000);
+    let slot_b = SlotNo(800_100);
+    let steps = vec![
+        (LocalTxMonitorAgency::Client, LocalTxMonitorMessage::Acquire),
+        (
+            LocalTxMonitorAgency::Server,
+            LocalTxMonitorMessage::Acquired { slot: slot_a },
+        ),
+        (LocalTxMonitorAgency::Client, LocalTxMonitorMessage::Release),
+        (LocalTxMonitorAgency::Client, LocalTxMonitorMessage::Acquire),
+        (
+            LocalTxMonitorAgency::Server,
+            LocalTxMonitorMessage::Acquired { slot: slot_b },
+        ),
+        (LocalTxMonitorAgency::Client, LocalTxMonitorMessage::Release),
     ];
     let expected = vec![
         LocalTxMonitorEvent::AcquireRequested,
@@ -272,36 +424,51 @@ fn re_acquire_after_release() -> (Vec<Step>, Vec<LocalTxMonitorEvent>) {
     (steps, expected)
 }
 
-fn immediate_client_done() -> (Vec<Step>, Vec<LocalTxMonitorEvent>) {
-    let steps = vec![(LocalTxMonitorAgency::Client, LocalTxMonitorMessage::Done)];
-    (steps, Vec::new())
-}
-
 fn scenarios() -> Vec<(&'static str, Vec<Step>, Vec<LocalTxMonitorEvent>)> {
     vec![
         {
-            let (s, e) = acquire_query_release();
-            ("acquire_query_release", s, e)
+            let (s, e) = acquire_release();
+            ("acquire_release", s, e)
         },
         {
-            let (s, e) = acquire_with_await_loop();
-            ("acquire_with_await_loop", s, e)
+            let (s, e) = acquire_await_acquire_reacquire();
+            ("acquire_await_acquire_reacquire", s, e)
         },
         {
-            let (s, e) = multiple_queries_same_snapshot();
-            ("multiple_queries_same_snapshot", s, e)
+            let (s, e) = single_next_tx_round();
+            ("single_next_tx_round", s, e)
         },
         {
-            let (s, e) = acquire_done_terminates_from_acquired();
-            ("acquire_done_terminates_from_acquired", s, e)
+            let (s, e) = multi_next_tx_until_empty();
+            ("multi_next_tx_until_empty", s, e)
         },
         {
-            let (s, e) = re_acquire_after_release();
-            ("re_acquire_after_release", s, e)
+            let (s, e) = has_tx_present();
+            ("has_tx_present", s, e)
+        },
+        {
+            let (s, e) = has_tx_absent();
+            ("has_tx_absent", s, e)
+        },
+        {
+            let (s, e) = get_sizes_round();
+            ("get_sizes_round", s, e)
+        },
+        {
+            let (s, e) = get_measures_round();
+            ("get_measures_round", s, e)
+        },
+        {
+            let (s, e) = mixed_query_kinds_one_session();
+            ("mixed_query_kinds_one_session", s, e)
         },
         {
             let (s, e) = immediate_client_done();
             ("immediate_client_done", s, e)
+        },
+        {
+            let (s, e) = re_acquire_after_release();
+            ("re_acquire_after_release", s, e)
         },
     ]
 }
@@ -309,7 +476,7 @@ fn scenarios() -> Vec<(&'static str, Vec<Step>, Vec<LocalTxMonitorEvent>)> {
 #[test]
 fn local_tx_monitor_event_trace() {
     let cases = scenarios();
-    assert!(cases.len() >= 6, "S-A8 requires ≥6 scenarios");
+    assert!(cases.len() >= 10, "S-A8b requires >=10 scenarios");
 
     for (name, steps, expected) in &cases {
         let actual = drive(steps);

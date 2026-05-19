@@ -7,12 +7,13 @@
 //
 // LocalTxMonitor state machine types — pure values, no I/O, no async.
 //
-// `LocalTxMonitorState` encodes the five protocol states from the
-// Ouroboros local-tx-monitor mini-protocol per cardano-node 10.6.2.
-// `LocalTxMonitorOutput` carries an event per client/server message
-// (Reply is not separately modeled — every transition either yields an
-// event or terminates the session). `LocalTxMonitorError` is
-// structured — every variant carries typed context, no `String`.
+// `LocalTxMonitorState` encodes the protocol states from the Ouroboros
+// local-tx-monitor mini-protocol per cardano-node 11.0.1. The Busy
+// state is parameterised by `BusyKind` to capture which query the
+// client issued, so the state machine knows which Reply variant is
+// legal next. `LocalTxMonitorOutput` carries an event per
+// client/server message. `LocalTxMonitorError` is structured — every
+// variant carries typed context, no `String`.
 
 use crate::codec::version::LocalTxMonitorVersion;
 use crate::n2c::local_tx_monitor::agency::LocalTxMonitorAgency;
@@ -22,29 +23,44 @@ use crate::n2c::local_tx_monitor::event::LocalTxMonitorEvent;
 /// spec.
 ///
 /// State graph:
-///   Idle      -- client Acquire             --> Acquiring
-///   Idle      -- client Done                --> Done
-///   Acquiring -- server AwaitAcquire        --> Acquiring
-///   Acquiring -- server Acquired{slot}      --> Acquired
-///   Acquired  -- client Query(payload)      --> Querying
-///   Querying  -- server Reply(payload)      --> Acquired
-///   Acquired  -- client Release             --> Idle
-///   Acquired  -- client Done                --> Done
+///   Idle              -- client Done                  --> Done
+///   Idle              -- client Acquire               --> Acquiring
+///   Acquiring         -- server Acquired{slot}        --> Acquired
+///   Acquired          -- client Acquire (re-acquire)  --> Acquiring
+///   Acquired          -- client Release               --> Idle
+///   Acquired          -- client NextTx                --> Busy{NextTx}
+///   Acquired          -- client HasTx{tx_id}          --> Busy{HasTx}
+///   Acquired          -- client GetSizes              --> Busy{GetSizes}
+///   Acquired          -- client GetMeasures [v2+]     --> Busy{GetMeasures}
+///   Busy{NextTx}      -- server ReplyNextTx           --> Acquired
+///   Busy{HasTx}       -- server ReplyHasTx            --> Acquired
+///   Busy{GetSizes}    -- server ReplyGetSizes         --> Acquired
+///   Busy{GetMeasures} -- server ReplyGetMeasures [v2+]--> Acquired
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum LocalTxMonitorState {
     Idle,
     Acquiring,
     Acquired,
-    Querying,
+    Busy { kind: BusyKind },
     Done,
+}
+
+/// Which query is in flight in a `Busy` state. The codec emits four
+/// distinct reply messages — `BusyKind` selects which one is legal as
+/// the next server-agency transition.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum BusyKind {
+    NextTx,
+    HasTx,
+    GetSizes,
+    GetMeasures,
 }
 
 /// Output of a single LocalTxMonitor transition.
 ///
 /// `Event` carries a `LocalTxMonitorEvent` derived from the incoming
 /// message. `Done` is emitted only on the client Done terminal
-/// transition. The state machine does not decode query/reply payloads
-/// or mutate mempool state.
+/// transition. The state machine does not interpret mempool state.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum LocalTxMonitorOutput {
     Event(LocalTxMonitorEvent),
