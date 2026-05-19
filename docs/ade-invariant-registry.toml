@@ -643,10 +643,11 @@ tier = "derived"
 statement = "Version negotiation is closed: enumerated N2N/N2C versions, explicit handshake, deterministic refusal on mismatch"
 source = "Project constitution §3, T-ENC-02, T-CORE-03"
 cross_ref = ["DC-PROTO-06"]
-code_locus = ""
-tests = []
+code_locus = "crates/ade_network/src/handshake/mod.rs, crates/ade_network/src/handshake/state.rs, crates/ade_network/src/handshake/agency.rs, crates/ade_network/src/handshake/selection.rs, crates/ade_network/src/handshake/transition.rs, crates/ade_network/src/handshake/version_table.rs"
+tests = ["handshake::transition::tests::n2n_happy_path_each_supported_version", "handshake::transition::tests::n2c_happy_path_each_supported_version", "handshake::transition::tests::version_mismatch_refused", "handshake::transition::tests::illegal_message_in_idle_returns_error", "handshake::transition::tests::wrong_agency_returns_error", "handshake::transition::tests::overlap_picks_highest_common", "handshake::transition::tests::empty_intersection_refuses_deterministically", "handshake::transition::tests::version_data_passed_through_byte_identical", "version_negotiation_across_supported_table"]
 ci_script = ""
 status = "declared"
+strengthened_in = ["PHASE4-N-A"]
 
 [[rules]]
 id = "DC-EPOCH-01"
