@@ -24,13 +24,14 @@ tier = "true"
 statement = "Same canonical inputs -> same authoritative bytes (per Byte Authority Model)"
 source = "Project constitution §2, Byte Authority Model §3"
 cross_ref = ["CN-WIRE-01", "CN-WIRE-02", "CN-LEDGER-02", "CN-CONS-01"]
-code_locus = "crates/ade_ledger/src/rules.rs"
-tests = ["apply_block_deterministic", "byron_determinism", "shelley_determinism", "allegra_determinism", "mary_determinism", "alonzo_determinism", "babbage_determinism", "conway_determinism"]
-ci_script = "ci/ci_check_forbidden_patterns.sh, ci/ci_check_ledger_determinism.sh"
+code_locus = "crates/ade_ledger/src/rules.rs, crates/ade_core/src/consensus/encoding.rs"
+tests = ["apply_block_deterministic", "byron_determinism", "shelley_determinism", "allegra_determinism", "mary_determinism", "alonzo_determinism", "babbage_determinism", "conway_determinism", "layout_is_stable", "roundtrip_empty_state", "roundtrip_genesis_state", "roundtrip_populated_state", "roundtrip_chain_event_all_variants", "roundtrip_chain_selection_reject_all_variants", "op_cert_counter_map_iteration_is_deterministic"]
+ci_script = "ci/ci_check_forbidden_patterns.sh, ci/ci_check_ledger_determinism.sh, ci/ci_check_consensus_closed_enums.sh"
 status = "enforced"
 authority_surface = "BLUE authoritative state transitions"
 cluster = "CL-LEDGER-VERDICT"
 evidence = ["crates/ade_testkit/tests/ledger_determinism.rs uses ade_ledger::fingerprint for byte-identical state comparison across all 7 eras"]
+strengthened_in = ["PHASE4-N-B"]
 
 [[rules]]
 id = "T-ENC-01"
@@ -1852,10 +1853,11 @@ tier = "derived"
 statement = "Praos chain-dep state (evolving/candidate/epoch/previous_epoch/lab/last_epoch_block nonces, op-cert counters, last_slot) is owned by N-B consensus, not by the ledger, and evolves deterministically as a function of validated headers and epoch boundaries."
 source = "Project constitution §3, ouroboros-consensus PraosChainDepState"
 cross_ref = ["DC-CONSENSUS-02", "DC-CONS-10"]
-code_locus = ""
-tests = []
-ci_script = ""
+code_locus = "crates/ade_core/src/consensus/praos_state.rs, crates/ade_core/src/consensus/events.rs, crates/ade_core/src/consensus/errors.rs, crates/ade_core/src/consensus/encoding.rs"
+tests = ["consensus::praos_state::tests::op_cert_upsert_rejects_regression", "consensus::praos_state::tests::op_cert_upsert_rejects_equal_counter", "consensus::praos_state::tests::op_cert_upsert_accepts_strictly_increasing", "consensus::praos_state::tests::genesis_state_is_well_formed", "consensus::praos_state::tests::nonce_zero_constant_is_zero_bytes", "consensus::encoding::tests::op_cert_counter_map_iteration_is_deterministic", "layout_is_stable", "roundtrip_empty_state", "roundtrip_genesis_state", "roundtrip_populated_state", "roundtrip_chain_event_all_variants", "roundtrip_chain_selection_reject_all_variants", "decode_rejects_unknown_discriminant", "decode_rejects_short_array", "op_cert_counter_map_iteration_is_deterministic"]
+ci_script = "ci/ci_check_consensus_closed_enums.sh"
 status = "declared"
+strengthened_in = ["PHASE4-N-B"]
 
 [[rules]]
 id = "DC-CONS-05"

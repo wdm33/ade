@@ -16,6 +16,7 @@ name = "ade_core"
 version = "0.1.0"
 dependencies = [
  "ade_types",
+ "minicbor",
  "serde_json",
 ]
 
