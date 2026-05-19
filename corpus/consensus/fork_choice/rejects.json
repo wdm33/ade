@@ -1,0 +1,109 @@
+{
+  "scenarios": [
+    {
+      "name": "fork_before_immutable_tip",
+      "state": {
+        "current_tip": { "slot": 100, "hash_hex": "1111111111111111111111111111111111111111111111111111111111111111" },
+        "current_tip_block_no": 50,
+        "current_tiebreaker": {
+          "slot": 100,
+          "issuer_hex": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "op_cert_counter": 5,
+          "vrf_output_first_8_hex": "0102030405060708"
+        },
+        "immutable_tip": { "slot": 50, "hash_hex": "0000000000000000000000000000000000000000000000000000000000000000" },
+        "immutable_tip_block_no": 25,
+        "security_param": 2160
+      },
+      "candidates": [
+        {
+          "anchor": { "slot": 40, "hash_hex": "7777777777777777777777777777777777777777777777777777777777777777" },
+          "anchor_block_no": 20,
+          "headers": [
+            { "slot": 41, "block_no": 21, "body_hash_hex": "5555555555555555555555555555555555555555555555555555555555555555", "issuer_pool_hex": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddd", "op_cert_counter": 3 }
+          ],
+          "select_view": {
+            "slot": 41,
+            "issuer_hex": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddd",
+            "op_cert_counter": 3,
+            "vrf_output_first_8_hex": "5050505050505050"
+          },
+          "rollback_depth": 30
+        }
+      ],
+      "expected_event_kind": "Rejected",
+      "expected_reason_kind": "ForkBeforeImmutableTip",
+      "expected_event_bytes_hex": "8204818200848218325820000000000000000000000000000000000000000000000000000000000000000082182858207777777777777777777777777777777777777777777777777777777777777777181e190870"
+    },
+    {
+      "name": "exceeded_rollback",
+      "state": {
+        "current_tip": { "slot": 100, "hash_hex": "1111111111111111111111111111111111111111111111111111111111111111" },
+        "current_tip_block_no": 50,
+        "current_tiebreaker": {
+          "slot": 100,
+          "issuer_hex": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "op_cert_counter": 5,
+          "vrf_output_first_8_hex": "0102030405060708"
+        },
+        "immutable_tip": { "slot": 50, "hash_hex": "0000000000000000000000000000000000000000000000000000000000000000" },
+        "immutable_tip_block_no": 25,
+        "security_param": 100
+      },
+      "candidates": [
+        {
+          "anchor": { "slot": 60, "hash_hex": "6666666666666666666666666666666666666666666666666666666666666666" },
+          "anchor_block_no": 30,
+          "headers": [
+            { "slot": 200, "block_no": 999, "body_hash_hex": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff", "issuer_pool_hex": "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee", "op_cert_counter": 9 }
+          ],
+          "select_view": {
+            "slot": 200,
+            "issuer_hex": "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+            "op_cert_counter": 9,
+            "vrf_output_first_8_hex": "0606060606060606"
+          },
+          "rollback_depth": 200
+        }
+      ],
+      "expected_event_kind": "Rejected",
+      "expected_reason_kind": "ExceededRollback",
+      "expected_event_bytes_hex": "82048182018218c81864"
+    },
+    {
+      "name": "tiebreaker_loss",
+      "state": {
+        "current_tip": { "slot": 100, "hash_hex": "1111111111111111111111111111111111111111111111111111111111111111" },
+        "current_tip_block_no": 50,
+        "current_tiebreaker": {
+          "slot": 100,
+          "issuer_hex": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+          "op_cert_counter": 5,
+          "vrf_output_first_8_hex": "0102030405060708"
+        },
+        "immutable_tip": { "slot": 50, "hash_hex": "0000000000000000000000000000000000000000000000000000000000000000" },
+        "immutable_tip_block_no": 25,
+        "security_param": 2160
+      },
+      "candidates": [
+        {
+          "anchor": { "slot": 95, "hash_hex": "2222222222222222222222222222222222222222222222222222222222222222" },
+          "anchor_block_no": 49,
+          "headers": [
+            { "slot": 100, "block_no": 50, "body_hash_hex": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc", "issuer_pool_hex": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffff", "op_cert_counter": 4 }
+          ],
+          "select_view": {
+            "slot": 100,
+            "issuer_hex": "ffffffffffffffffffffffffffffffffffffffffffffffffffffffff",
+            "op_cert_counter": 4,
+            "vrf_output_first_8_hex": "0102030405060708"
+          },
+          "rollback_depth": 1
+        }
+      ],
+      "expected_event_kind": "Rejected",
+      "expected_reason_kind": "TiebreakerLossKeepCurrent",
+      "expected_event_bytes_hex": "820481820382821864582011111111111111111111111111111111111111111111111111111111111111118218645820cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
+    }
+  ]
+}

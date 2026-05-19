@@ -1,0 +1,54 @@
+{
+  "scenario": "two_candidates_one_higher_block_no_wins",
+  "state": {
+    "current_tip": { "slot": 100, "hash_hex": "1111111111111111111111111111111111111111111111111111111111111111" },
+    "current_tip_block_no": 50,
+    "current_tiebreaker": {
+      "slot": 100,
+      "issuer_hex": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "op_cert_counter": 5,
+      "vrf_output_first_8_hex": "0102030405060708"
+    },
+    "immutable_tip": { "slot": 50, "hash_hex": "0000000000000000000000000000000000000000000000000000000000000000" },
+    "immutable_tip_block_no": 25,
+    "security_param": 2160
+  },
+  "candidates": [
+    {
+      "anchor": { "slot": 95, "hash_hex": "2222222222222222222222222222222222222222222222222222222222222222" },
+      "anchor_block_no": 48,
+      "headers": [
+        { "slot": 96,  "block_no": 49, "body_hash_hex": "9999999999999999999999999999999999999999999999999999999999999999", "issuer_pool_hex": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb", "op_cert_counter": 8 },
+        { "slot": 105, "block_no": 50, "body_hash_hex": "8888888888888888888888888888888888888888888888888888888888888888", "issuer_pool_hex": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb", "op_cert_counter": 8 },
+        { "slot": 110, "block_no": 51, "body_hash_hex": "3333333333333333333333333333333333333333333333333333333333333333", "issuer_pool_hex": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb", "op_cert_counter": 8 }
+      ],
+      "select_view": {
+        "slot": 110,
+        "issuer_hex": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+        "op_cert_counter": 8,
+        "vrf_output_first_8_hex": "0a0a0a0a0a0a0a0a"
+      },
+      "rollback_depth": 2
+    },
+    {
+      "anchor": { "slot": 95, "hash_hex": "2222222222222222222222222222222222222222222222222222222222222222" },
+      "anchor_block_no": 48,
+      "headers": [
+        { "slot": 96,  "block_no": 49, "body_hash_hex": "9999999999999999999999999999999999999999999999999999999999999999", "issuer_pool_hex": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccc", "op_cert_counter": 7 },
+        { "slot": 105, "block_no": 50, "body_hash_hex": "4444444444444444444444444444444444444444444444444444444444444444", "issuer_pool_hex": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccc", "op_cert_counter": 7 }
+      ],
+      "select_view": {
+        "slot": 105,
+        "issuer_hex": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccc",
+        "op_cert_counter": 7,
+        "vrf_output_first_8_hex": "0202020202020202"
+      },
+      "rollback_depth": 2
+    }
+  ],
+  "expected": {
+    "event": "ChainSelected",
+    "new_tip": { "slot": 110, "hash_hex": "3333333333333333333333333333333333333333333333333333333333333333" },
+    "replaced_tip": { "slot": 100, "hash_hex": "1111111111111111111111111111111111111111111111111111111111111111" }
+  }
+}

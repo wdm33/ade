@@ -36,3 +36,8 @@ pub fn op_cert_corpus_path(manifest_dir: &str, name: &str) -> PathBuf {
 pub fn leader_schedule_corpus_path(manifest_dir: &str, name: &str) -> PathBuf {
     corpus_path(manifest_dir, "leader_schedule", name)
 }
+
+/// Convenience: resolve `corpus/consensus/fork_choice/<name>`.
+pub fn fork_choice_corpus_path(manifest_dir: &str, name: &str) -> PathBuf {
+    corpus_path(manifest_dir, "fork_choice", name)
+}

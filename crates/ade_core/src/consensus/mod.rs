@@ -5,10 +5,12 @@
 // - Explicit state transitions only
 // - Canonical serialization for all persisted/hashed data
 
+pub mod candidate;
 pub mod encoding;
 pub mod era_schedule;
 pub mod errors;
 pub mod events;
+pub mod fork_choice;
 pub mod header_summary;
 pub mod header_validate;
 pub mod leader_schedule;
@@ -18,10 +20,14 @@ pub mod op_cert;
 pub mod praos_state;
 pub mod vrf_cert;
 
+pub use candidate::{
+    tiebreaker_prefer, CandidateFragment, ChainSelectorState, TiebreakerView,
+};
 pub use encoding::{
     decode_chain_dep_state, decode_chain_event, encode_chain_dep_state, encode_chain_event,
     DecodeError,
 };
+pub use fork_choice::{select_best_chain, ForkChoiceError};
 pub use era_schedule::{
     BootstrapAnchorHash, EraLocation, EraSchedule, EraSummary,
 };
