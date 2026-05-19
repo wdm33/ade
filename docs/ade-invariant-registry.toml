@@ -528,10 +528,11 @@ tier = "derived"
 statement = "Protocol state machines have deterministic transitions"
 source = "Project constitution §3, T-CORE-03"
 cross_ref = ["DC-CORE-01", "DC-PROTO-06"]
-code_locus = ""
-tests = []
+code_locus = "crates/ade_network/src/chain_sync/state.rs, crates/ade_network/src/chain_sync/agency.rs, crates/ade_network/src/chain_sync/signal.rs, crates/ade_network/src/chain_sync/transition.rs"
+tests = ["chain_sync::transition::tests::idle_request_next_with_immediate_data_yields_can_await_then_roll_forward", "chain_sync::transition::tests::idle_request_next_with_no_data_yields_must_reply_via_await", "chain_sync::transition::tests::roll_forward_signal_carries_header_and_tip_byte_identical", "chain_sync::transition::tests::roll_backward_signal_carries_point_and_tip_byte_identical", "chain_sync::transition::tests::find_intersect_with_known_point_yields_intersected_signal", "chain_sync::transition::tests::find_intersect_with_unknown_points_yields_no_intersection", "chain_sync::transition::tests::client_done_terminates_session", "chain_sync::transition::tests::illegal_message_in_idle_returns_error", "chain_sync::transition::tests::wrong_agency_returns_error", "chain_sync::transition::tests::version_gating_rejects_out_of_version_message", "chain_sync::transition::tests::empty_find_intersect_points_returns_malformed", "signal_trace_synthetic_divergence_corpus"]
 ci_script = ""
 status = "declared"
+strengthened_in = ["PHASE4-N-A"]
 
 [[rules]]
 id = "DC-PROTO-02"
@@ -539,10 +540,11 @@ tier = "derived"
 statement = "Transcript-equivalent miniprotocol behavior with Haskell node"
 source = "Project constitution §3, T-DET-01"
 cross_ref = []
-code_locus = ""
-tests = []
+code_locus = "crates/ade_network/src/chain_sync/state.rs, crates/ade_network/src/chain_sync/agency.rs, crates/ade_network/src/chain_sync/signal.rs, crates/ade_network/src/chain_sync/transition.rs"
+tests = ["chain_sync::transition::tests::idle_request_next_with_immediate_data_yields_can_await_then_roll_forward", "chain_sync::transition::tests::idle_request_next_with_no_data_yields_must_reply_via_await", "chain_sync::transition::tests::roll_forward_signal_carries_header_and_tip_byte_identical", "chain_sync::transition::tests::roll_backward_signal_carries_point_and_tip_byte_identical", "chain_sync::transition::tests::find_intersect_with_known_point_yields_intersected_signal", "chain_sync::transition::tests::find_intersect_with_unknown_points_yields_no_intersection", "chain_sync::transition::tests::client_done_terminates_session", "chain_sync::transition::tests::illegal_message_in_idle_returns_error", "chain_sync::transition::tests::wrong_agency_returns_error", "chain_sync::transition::tests::version_gating_rejects_out_of_version_message", "chain_sync::transition::tests::empty_find_intersect_points_returns_malformed", "signal_trace_synthetic_divergence_corpus"]
 ci_script = ""
 status = "declared"
+strengthened_in = ["PHASE4-N-A"]
 
 [[rules]]
 id = "DC-STORE-01"
@@ -838,10 +840,11 @@ tier = "derived"
 statement = "BLUE mini-protocol transitions are pure functions of (canonical prior state, canonical input message, selected protocol version, deterministic configuration); no ambient session-glue state may alter authoritative behavior. Selected version is an explicit input, never read from RED context."
 source = "Project constitution §2; PHASE4-N-A invariants §7 decision 1 (docs/active/PHASE4-N-A_invariants.md)"
 cross_ref = ["T-CORE-02", "DC-PROTO-01", "DC-PROTO-05", "DC-CORE-01"]
-code_locus = ""
-tests = []
+code_locus = "crates/ade_network/src/chain_sync/state.rs, crates/ade_network/src/chain_sync/agency.rs, crates/ade_network/src/chain_sync/signal.rs, crates/ade_network/src/chain_sync/transition.rs"
+tests = ["chain_sync::transition::tests::idle_request_next_with_immediate_data_yields_can_await_then_roll_forward", "chain_sync::transition::tests::idle_request_next_with_no_data_yields_must_reply_via_await", "chain_sync::transition::tests::roll_forward_signal_carries_header_and_tip_byte_identical", "chain_sync::transition::tests::roll_backward_signal_carries_point_and_tip_byte_identical", "chain_sync::transition::tests::find_intersect_with_known_point_yields_intersected_signal", "chain_sync::transition::tests::find_intersect_with_unknown_points_yields_no_intersection", "chain_sync::transition::tests::client_done_terminates_session", "chain_sync::transition::tests::illegal_message_in_idle_returns_error", "chain_sync::transition::tests::wrong_agency_returns_error", "chain_sync::transition::tests::version_gating_rejects_out_of_version_message", "chain_sync::transition::tests::empty_find_intersect_points_returns_malformed", "signal_trace_synthetic_divergence_corpus"]
 ci_script = ""
 status = "declared"
+strengthened_in = ["PHASE4-N-A"]
 
 # =============================================================================
 # CN-* Classification Table Invariants (classification_table.md)
