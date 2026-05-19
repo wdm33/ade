@@ -7,17 +7,23 @@
 //
 // N2N BlockFetch mini-protocol message codec (BLUE).
 //
-// Wire shape:
+// Wire shape (matches Ouroboros.Network.Protocol.BlockFetch.Codec):
 //   blockFetchMessage =
-//       [0, range]                 ; MsgRequestRange
+//       [0, point, point]          ; MsgRequestRange — FLAT 3-element array
 //     / [1]                        ; MsgClientDone
 //     / [2]                        ; MsgStartBatch
 //     / [3]                        ; MsgNoBlocks
 //     / [4, block_bytes]           ; MsgBlock
 //     / [5]                        ; MsgBatchDone
 //
-//   range = [point, point]         ; (from, to) inclusive
 //   point = [] | [slot, hash32]    ; identical shape to chain-sync
+//
+// The MsgRequestRange (from, to) is a flat triple — there is no
+// nested `range` wrapper on the wire. Internally we keep a Range
+// struct for ergonomics, but the encoder emits the two points
+// inline at the top level. Round-trip with cardano-node verified
+// against a local node (DeserialiseFailure if 2-element form is
+// emitted: "unexpected key (0, 2)").
 //
 // The block body is opaque bytes — era-aware parsing belongs to
 // ade_codec, not the block-fetch protocol codec.
@@ -66,19 +72,18 @@ fn encode_point(buf: &mut Vec<u8>, p: &Point) {
     }
 }
 
-fn encode_range(buf: &mut Vec<u8>, r: &Range) {
-    encode_array_header(buf, 2);
-    encode_point(buf, &r.from);
-    encode_point(buf, &r.to);
-}
-
 pub fn encode_block_fetch_message(msg: &BlockFetchMessage) -> Vec<u8> {
     let mut buf = Vec::new();
     match msg {
         BlockFetchMessage::RequestRange(r) => {
-            encode_array_header(&mut buf, 2);
+            // Wire format is FLAT: [0, from_point, to_point] — three
+            // top-level elements. Real interop against cardano-node
+            // 11.0.1 rejects a nested-range encoding with
+            // DeserialiseFailure "unexpected key (0, 2)".
+            encode_array_header(&mut buf, 3);
             encode_u64(&mut buf, 0);
-            encode_range(&mut buf, r);
+            encode_point(&mut buf, &r.from);
+            encode_point(&mut buf, &r.to);
         }
         BlockFetchMessage::ClientDone => {
             encode_array_header(&mut buf, 1);
@@ -134,19 +139,6 @@ fn decode_point(data: &[u8], offset: &mut usize) -> Result<Point, CodecError> {
     }
 }
 
-fn decode_range(data: &[u8], offset: &mut usize) -> Result<Range, CodecError> {
-    let n = decode_array_header(PROTOCOL, data, offset)?;
-    if n != 2 {
-        return Err(CodecError::InvalidProtocolMessage {
-            protocol: PROTOCOL,
-            reason: "range array must be 2 elements",
-        });
-    }
-    let from = decode_point(data, offset)?;
-    let to = decode_point(data, offset)?;
-    Ok(Range { from, to })
-}
-
 pub fn decode_block_fetch_message(bytes: &[u8]) -> Result<BlockFetchMessage, CodecError> {
     if bytes.is_empty() {
         return Err(CodecError::Truncated { needed: 1, got: 0 });
@@ -161,7 +153,12 @@ pub fn decode_block_fetch_message(bytes: &[u8]) -> Result<BlockFetchMessage, Cod
     }
     let tag = decode_u64(PROTOCOL, bytes, &mut offset)?;
     let msg = match (tag, arr_len) {
-        (0, 2) => BlockFetchMessage::RequestRange(decode_range(bytes, &mut offset)?),
+        (0, 3) => {
+            // Flat 3-element wire form: [0, from_point, to_point].
+            let from = decode_point(bytes, &mut offset)?;
+            let to = decode_point(bytes, &mut offset)?;
+            BlockFetchMessage::RequestRange(Range { from, to })
+        }
         (1, 1) => BlockFetchMessage::ClientDone,
         (2, 1) => BlockFetchMessage::StartBatch,
         (3, 1) => BlockFetchMessage::NoBlocks,

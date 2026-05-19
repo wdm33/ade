@@ -1,0 +1,11 @@
+# Captured block-fetch corpus (S-A9 real-capture portion for CE-N-A-3).
+peer = "127.0.0.1:3001"
+network_magic = 1
+negotiated_n2n_version = 15
+messages_captured = 3
+captured_at_utc = "2026-05-19T13:16:05Z"
+protocol = "BlockFetch"
+mini_protocol_id = 3
+# Each *_msg_NN_<kind>.cbor contains the FULL chain of mux frame
+# payload bytes (reassembled across mux fragments) that constitute one
+# BlockFetch message.

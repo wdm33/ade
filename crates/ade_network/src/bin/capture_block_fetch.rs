@@ -15,16 +15,24 @@
 // <scenario>_msg_NN_<kind>.cbor file containing the FULL CBOR payload
 // (reassembled across mux frames). Plus a meta TOML.
 //
-// EMPIRICAL NOTE (2026-05): IOG-operated public relays
-// (preprod-node.play.dev.cardano.org, backbone.cardano.iog.io) accept
-// handshake + chain-sync + keep-alive from random clients but reset the
-// TCP connection on MsgRequestRange — block-fetch is gated to
-// topology-known peers, regardless of `initiator_only_diffusion_mode`.
-// The same RequestRange bytes our codec emits are structurally identical
-// to what cardano-node produces (verified by raw-hex inspection); the
-// reset is a policy decision, not a codec error. Use against a local
-// cardano-node or a permissive community relay to obtain real
-// block-fetch corpus.
+// EMPIRICAL NOTES (2026-05, against cardano-node 11.0.1 on preprod):
+// - IOG-operated public relays
+//   (preprod-node.play.dev.cardano.org, backbone.cardano.iog.io)
+//   accept handshake + chain-sync + keep-alive from random clients
+//   but TCP-reset on MsgRequestRange — block-fetch is gated to
+//   topology-known peers regardless of `initiator_only_diffusion_mode`.
+//   Against a local node, the wire-level codec is the only obstacle.
+// - The block-fetch server can take >15s to reply to a RequestRange
+//   while the node is still bulk-syncing (the ChainDB streamBlocks
+//   path queues behind sync I/O). Use a generous per-frame read
+//   timeout (default 120s) when capturing against a non-tip-stable
+//   node.
+// - cardano-node BlockFetch decoder rejects the nested-range
+//   wire form `[0, [from, to]]` with `DeserialiseFailure "unexpected
+//   key (0, 2)"`; the correct grammar is the FLAT triple
+//   `[0, from_point, to_point]`. Our codec was on the nested form
+//   before this fix; the synthetic round-trip tests passed but real
+//   interop failed.
 
 use std::collections::HashMap;
 use std::env;
@@ -154,7 +162,7 @@ where
         }
 
         let (proto, _mode, payload) =
-            timeout(Duration::from_secs(15), read_one_frame(stream))
+            timeout(Duration::from_secs(120), read_one_frame(stream))
                 .await
                 .map_err(|_| io::Error::new(io::ErrorKind::TimedOut, "frame read timeout"))??;
         buffers.entry(proto).or_default().extend_from_slice(&payload);
