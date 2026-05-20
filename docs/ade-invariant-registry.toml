@@ -24,14 +24,14 @@ tier = "true"
 statement = "Same canonical inputs -> same authoritative bytes (per Byte Authority Model)"
 source = "Project constitution §2, Byte Authority Model §3"
 cross_ref = ["CN-WIRE-01", "CN-WIRE-02", "CN-LEDGER-02", "CN-CONS-01"]
-code_locus = "crates/ade_ledger/src/rules.rs, crates/ade_core/src/consensus/encoding.rs, crates/ade_runtime/src/consensus/chain_selector.rs, crates/ade_testkit/src/consensus/stream_replay.rs, crates/ade_testkit/src/validity/replay.rs (block_validity verdict-surface replay over the Conway-576 positive corpus; PHASE4-B1-S6)"
-tests = ["apply_block_deterministic", "byron_determinism", "shelley_determinism", "allegra_determinism", "mary_determinism", "alonzo_determinism", "babbage_determinism", "conway_determinism", "layout_is_stable", "roundtrip_empty_state", "roundtrip_genesis_state", "roundtrip_populated_state", "roundtrip_chain_event_all_variants", "roundtrip_chain_selection_reject_all_variants", "op_cert_counter_map_iteration_is_deterministic", "synthetic_session_replays_identically", "synthetic_session_event_kinds_match_corpus", "synthetic_session_final_state_matches_corpus", "op_cert_regression_header_rejected_mid_stream", "verdict_stream_replays_identically"]
+code_locus = "crates/ade_ledger/src/rules.rs, crates/ade_core/src/consensus/encoding.rs, crates/ade_runtime/src/consensus/chain_selector.rs, crates/ade_testkit/src/consensus/stream_replay.rs, crates/ade_testkit/src/validity/replay.rs (block_validity verdict-surface replay over the Conway-576 positive corpus; PHASE4-B1-S6), crates/ade_testkit/src/tx_validity/ (tx-validity verdict-surface replay: replay_tx_validity drives the BLUE tx_validity over every extracted Conway-576 corpus tx twice and the surfaces are byte-identical; PHASE4-B2-S3)"
+tests = ["apply_block_deterministic", "byron_determinism", "shelley_determinism", "allegra_determinism", "mary_determinism", "alonzo_determinism", "babbage_determinism", "conway_determinism", "layout_is_stable", "roundtrip_empty_state", "roundtrip_genesis_state", "roundtrip_populated_state", "roundtrip_chain_event_all_variants", "roundtrip_chain_selection_reject_all_variants", "op_cert_counter_map_iteration_is_deterministic", "synthetic_session_replays_identically", "synthetic_session_event_kinds_match_corpus", "synthetic_session_final_state_matches_corpus", "op_cert_regression_header_rejected_mid_stream", "verdict_stream_replays_identically", "tx_verdict_stream_replays_identically"]
 ci_script = "ci/ci_check_forbidden_patterns.sh, ci/ci_check_ledger_determinism.sh, ci/ci_check_consensus_closed_enums.sh"
 status = "enforced"
 authority_surface = "BLUE authoritative state transitions"
 cluster = "CL-LEDGER-VERDICT"
 evidence = ["crates/ade_testkit/tests/ledger_determinism.rs uses ade_ledger::fingerprint for byte-identical state comparison across all 7 eras", "crates/ade_testkit/tests/consensus_stream_replay.rs replays the canonical chain-selector stream twice and asserts byte-identical event lists and final orchestrator state — closes T-DET-01 for the consensus subset"]
-strengthened_in = ["PHASE4-N-B", "PHASE4-B1"]
+strengthened_in = ["PHASE4-N-B", "PHASE4-B1", "PHASE4-B2"]
 
 [[rules]]
 id = "T-ENC-01"
@@ -2068,10 +2068,11 @@ tier = "derived"
 statement = "Ade's Valid/Invalid verdict for a transaction equals the reference cardano-node verdict, including the reason class where the reference exposes it. Established over a positive corpus (real on-chain txs) and a mandatory adversarial corpus (txs the reference rejects). A false-accept is release-blocking."
 source = "cardano-node reference behavior; Cardano ledger spec"
 cross_ref = ["DC-LEDGER-02", "CN-LEDGER-02", "DC-VAL-04"]
-code_locus = ""
-tests = []
+code_locus = "crates/ade_testkit/src/tx_validity/ (GREEN harness: extracts every on-wire Conway tx from the committed Conway-576 corpus blocks and drives the BLUE tx_validity over each at track_utxo=false — partial scope: structural + witness closure; UTxO-dependent checks deferred); crates/ade_ledger/src/tx_validity/phase1.rs (tx_phase_one gates the UTxO-dependent state-backed checks behind track_utxo, mirroring the block path's verify_conway_witness_closure + run_phase_one_composers split — the witness closure runs unconditionally); PHASE4-B2-S3 (positive half only — agreement CE closes in B2-S4)"
+tests = ["all_corpus_txs_valid", "corpus_tx_count_nonzero"]
 ci_script = ""
 status = "declared"
+strengthened_in = ["PHASE4-B2"]
 
 [[rules]]
 id = "DC-TXV-04"

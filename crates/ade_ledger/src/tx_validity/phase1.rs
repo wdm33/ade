@@ -20,6 +20,32 @@
 //!    input resolution, value/fee, collateral, network id — the SAME function
 //!    the block loop's `decode_and_phase_one` calls.
 //!
+//! ## The `track_utxo` boundary (honest scope)
+//!
+//! This mirrors the B1 block path (`rules::apply_*_block_classified` +
+//! `verify_conway_witness_closure`) exactly:
+//!
+//! - The **witness closure (step 1) runs unconditionally**, regardless of
+//!   `track_utxo`: tx-derived required-signer coverage (explicit / withdrawal /
+//!   cert / voter sources) plus supplied-witness Ed25519 verification over the
+//!   preserved body hash, fail-closed. This is never gated.
+//! - The **UTxO-dependent state-backed checks (step 2) run only when
+//!   `ledger.track_utxo` is true**: input presence/resolution, value balance,
+//!   fee, collateral, and input-credential coverage all need the resolved
+//!   pre-tx UTxO, which is meaningless without UTxO tracking.
+//!
+//! Therefore `track_utxo = false` is the **PARTIAL corpus/replay mode**
+//! (structural + witness closure; the UTxO-dependent checks are DEFERRED), and
+//! `track_utxo = true` is full validation. `track_utxo = false` must NOT be
+//! read as "full validity": it is a strict subset.
+//!
+//! **No-false-accept boundary**: because value-balance and input-resolution are
+//! skipped at `track_utxo = false`, an adversarial tx with a value imbalance or
+//! an unresolvable input would NOT be rejected here. Such adversarial cases
+//! belong to the `track_utxo = true` path (synthetic UTxO) in B2-S4;
+//! witness-mutation adversarial cases run against real txs. This is the same
+//! honest boundary the B1 block path carries.
+//!
 //! Decode + witness-set parsing lives in [`decode_tx`], which lifts the
 //! preserved body slice and the witness-set slice out of the full Conway
 //! transaction CBOR `[body, witness_set, is_valid, aux_data]` so the tx id
@@ -162,22 +188,31 @@ pub fn tx_phase_one(ledger: &LedgerState, decoded: &DecodedTx) -> Result<(), TxV
     super::verify_required_witnesses(&decoded.tx_id, &required, &decoded.vkey_witnesses)
         .map_err(TxValidityError::Witness)?;
 
-    // 2. State-backed checks — the SAME authority the block loop calls.
-    let pp = &ledger.protocol_params;
-    let max_ex_units: (i64, i64) = (
-        pp.max_tx_ex_units_mem as i64,
-        pp.max_tx_ex_units_cpu as i64,
-    );
-    crate::conway::validate_conway_state_backed(
-        &decoded.body,
-        &ledger.utxo_state.utxos,
-        &decoded.witness_info,
-        pp.collateral_percent,
-        pp.network_id,
-        pp.protocol_major as u16,
-        max_ex_units,
-    )
-    .map_err(TxValidityError::Phase1)?;
+    // 2. UTxO-dependent state-backed checks — the SAME authority the block
+    //    loop calls (input resolution / value-fee balance / collateral /
+    //    network id). Gated on `track_utxo`, mirroring the block path: the
+    //    block loop only runs `run_phase_one_composers` (which calls
+    //    `validate_conway_state_backed`) when `track_utxo` is on, because
+    //    every check inside resolves against the pre-tx UTxO. At
+    //    `track_utxo = false` the UTxO is empty, so these checks are deferred
+    //    (see the module-level `track_utxo` boundary note).
+    if ledger.track_utxo {
+        let pp = &ledger.protocol_params;
+        let max_ex_units: (i64, i64) = (
+            pp.max_tx_ex_units_mem as i64,
+            pp.max_tx_ex_units_cpu as i64,
+        );
+        crate::conway::validate_conway_state_backed(
+            &decoded.body,
+            &ledger.utxo_state.utxos,
+            &decoded.witness_info,
+            pp.collateral_percent,
+            pp.network_id,
+            pp.protocol_major as u16,
+            max_ex_units,
+        )
+        .map_err(TxValidityError::Phase1)?;
+    }
 
     Ok(())
 }

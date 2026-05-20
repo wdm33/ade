@@ -21,12 +21,16 @@
 //! `getVKeyWitnessConwayTxCert`); see `required_signers.rs` for the
 //! per-source citations.
 
+pub mod encoding;
 pub mod phase1;
 pub mod required_signers;
 pub mod transition;
 pub mod verdict;
 pub mod witness;
 
+pub use encoding::{
+    decode_tx_verdict_surface, encode_tx_verdict_surface, TxSurfaceDecodeError, TxVerdictSurface,
+};
 pub use phase1::{decode_tx, tx_phase_one, DecodedTx};
 pub use required_signers::{
     required_signers, tx_derived_required_signers, RequiredSignerError, RequiredSigners,

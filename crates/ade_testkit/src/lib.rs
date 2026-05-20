@@ -9,4 +9,5 @@
 
 pub mod consensus;
 pub mod harness;
+pub mod tx_validity;
 pub mod validity;
