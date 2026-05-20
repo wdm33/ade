@@ -122,3 +122,18 @@ the dump.
 Loaded by `ade_testkit::validity::ConwayValidityCorpus::load`.
 Self-consistency asserted by
 `crates/ade_ledger/tests/consensus_input_extract.rs::corpus_loads_and_is_self_consistent`.
+
+## CE-B1-3 outcome (B1-S6, 2026-05-20)
+
+All **14** blocks drive through `ade_ledger::block_validity::block_validity`
+(per-block-independent: chain-dep seeded with eta0(576), `last_slot = None`;
+mainnet Conway `EraSchedule`; Conway `LedgerState` with `track_utxo = false`;
+`PoolDistrView` from this corpus) to a full **`Valid`** verdict — header + body
++ body-hash binding, including full body application. **None** hit the
+externally-blocked CE-88 / aiken Plutus-eval limitation, so CE-B1-3 closes
+**outright** (no header-only carve-out). The verdict-surface byte stream is
+byte-identical across two runs (replay-equivalence, CE-B1-5 replay half).
+
+Asserted by `crates/ade_ledger/tests/block_validity_positive_corpus.rs`
+(`corpus_block_count_is_14`, `all_corpus_blocks_valid`,
+`verdict_stream_replays_identically`).
