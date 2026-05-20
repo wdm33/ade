@@ -2027,3 +2027,66 @@ tests = ["expect_size_rejects_wrong_length", "praos_malformed_kes_sig_rejected",
 ci_script = ""
 status = "enforced"
 strengthened_in = ["PHASE4-B1"]
+
+# =============================================================================
+# DC-TXV — Transaction-validity agreement (PHASE4-B2)
+# Introduced by the PHASE4-B2 invariant sketch (docs/planning/phase4-b2-invariants.md).
+# Bounty-observable contract: same LedgerState + same tx_cbor => same Valid/Invalid
+# verdict as the Haskell reference. A false-accept is release-blocking.
+# status = "declared" until B2 slices land enforcement.
+# =============================================================================
+
+[[rules]]
+id = "DC-TXV-01"
+tier = "derived"
+statement = "tx_validity is a pure function of (LedgerState, tx_cbor). No wall-clock, arrival order, HashMap/HashSet iteration, float, or ambient state may influence a transaction's Valid/Invalid verdict."
+source = "Cardano ledger spec; IDD determinism doctrine"
+cross_ref = ["DC-VAL-01", "DC-CORE-01", "T-DET-01"]
+code_locus = ""
+tests = []
+ci_script = ""
+status = "declared"
+
+[[rules]]
+id = "DC-TXV-02"
+tier = "derived"
+statement = "A transaction is Valid iff both phase-1 (structural + UTxO rules + witnesses) and phase-2 (Plutus, when scripts are present) accept it. No path may produce a Valid verdict while skipping either phase."
+source = "Cardano ledger spec (UTXOW/UTXO/PPUP, Plutus phase-2)"
+cross_ref = ["DC-VAL-02", "DC-PLUTUS-01", "CN-LEDGER-09"]
+code_locus = ""
+tests = []
+ci_script = ""
+status = "declared"
+
+[[rules]]
+id = "DC-TXV-03"
+tier = "derived"
+statement = "Ade's Valid/Invalid verdict for a transaction equals the reference cardano-node verdict, including the reason class where the reference exposes it. Established over a positive corpus (real on-chain txs) and a mandatory adversarial corpus (txs the reference rejects). A false-accept is release-blocking."
+source = "cardano-node reference behavior; Cardano ledger spec"
+cross_ref = ["DC-LEDGER-02", "CN-LEDGER-02", "DC-VAL-04"]
+code_locus = ""
+tests = []
+ci_script = ""
+status = "declared"
+
+[[rules]]
+id = "DC-TXV-04"
+tier = "derived"
+statement = "A Valid transaction yields an applied LedgerState' (the mempool's accumulating view); an Invalid transaction leaves the input state unchanged plus a structured reason. No partial or in-place mutation occurs on the invalid path."
+source = "IDD explicit-total-transition doctrine; Cardano ledger spec"
+cross_ref = ["DC-VAL-05", "DC-LEDGER-02"]
+code_locus = ""
+tests = []
+ci_script = ""
+status = "declared"
+
+[[rules]]
+id = "DC-TXV-05"
+tier = "derived"
+statement = "For each era, required_signers(state, tx_body) is a closed, explicit, era-versioned function over every signer source (resolved input payment credentials, explicit required-signers, certificate key hashes, withdrawal key hashes, Conway governance/voting witnesses, collateral-input implications). A signer source not represented in the era's closed enumeration is impossible to silently omit; incomplete enumeration is a forbidden false-accept path."
+source = "Cardano ledger spec (UTXOW required-signers per era); IDD fail-fast + closed-surface doctrine"
+cross_ref = ["DC-LEDGER-05", "CN-LEDGER-09", "DC-TXV-03"]
+code_locus = ""
+tests = []
+ci_script = ""
+status = "declared"
