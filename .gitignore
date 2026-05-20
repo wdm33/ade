@@ -14,3 +14,6 @@ ssh_config.local
 corpus/tools/.env
 # Local dev: cardano-node docker volume (DB + ipc) — do not commit
 .cardano-node-preprod/
+
+# Multi-GB ledger-state dumps belong in S3 (ade-corpus-snapshots), never in git
+corpus/ext_ledger_state_dumps/
