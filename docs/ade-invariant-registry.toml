@@ -2110,11 +2110,11 @@ source = "Cardano ledger spec (Conway CDDL certificate tags 0..18; UTXO deposit/
 cross_ref = ["T-CONSERV-01", "CN-LEDGER-07", "DC-VAL-06", "DC-TXV-05", "DC-TXV-07"]
 code_locus = "crates/ade_codec/src/conway/cert.rs (decode_conway_certs, closed ConwayCert grammar); crates/ade_codec/src/error.rs (CodecError::UnknownCertTag); crates/ade_types/src/conway/cert.rs (ConwayCert, CertDisposition, DepositEffect, CoinSource); crates/ade_ledger/src/cert_classify.rs (classify); crates/ade_ledger/src/error.rs (UnsupportedStateDependentDepositAccounting); corpus/conway_certs/{classification_table.md,tags.json}"
 tests = ["decode_total_over_tags_0_18", "unknown_cert_tag_is_codec_error", "removed_tag_5_6_is_not_valid_in_conway", "malformed_cert_cbor_rejected", "decode_is_replay_deterministic", "class_mapping_is_total", "legacy_unregistration_unresolved_is_unsupported_state_dependent", "legacy_unregistration_resolves_recorded_deposit", "pool_reregistration_is_neutral", "pool_new_registration_charges_pool_deposit"]
-ci_script = ""
-status = "partial"
+ci_script = "ci/ci_check_conway_cert_classification_closed.sh"
+status = "enforced"
 authority_surface = "BLUE Conway value-conservation accounting"
 cluster = "CL-LEDGER-VERDICT"
-strengthened_in = ["PHASE4-B3"]
+strengthened_in = ["PHASE4-B3", "PHASE4-B3F"]
 
 [[rules]]
 id = "DC-TXV-07"
