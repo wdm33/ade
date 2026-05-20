@@ -3,14 +3,25 @@
 > **Status:** Living architectural document. Regenerated; not hand-edited.
 > Per-project instance of `~/.claude/methodology/templates/seams.md`.
 
-> 11 crates, 26 CI checks at HEAD (`7784bf8`).
+> 11 crates, 27 CI checks at HEAD (`193d2fc`).
 > Reads CODEMAP for the module list and TCB colors; reads the invariant
 > registry (`docs/ade-invariant-registry.toml`) for rule IDs; reads the
 > Phase 4 cluster plan (`docs/active/phase_4_cluster_plan.md`), the
-> closed N-D / N-A / N-B / B1 / B2 cluster docs, and the just-closed
+> closed N-D / N-A / N-B / B1 / B2 cluster docs, and the
 > PHASE4-B3 cluster doc plus its slices
 > (`docs/clusters/PHASE4-B3/cluster.md`,
 > `docs/clusters/PHASE4-B3/B3-S{1..6}.md`).
+>
+> **This is a B3F follow-up refresh (HEAD `193d2fc`).** The body was
+> fully regenerated at PHASE4-B3 close (`7784bf8`); this revision folds in
+> only the B3F hardening deltas — the new
+> `ci_check_conway_cert_classification_closed.sh` grep-gate (the closed
+> `ConwayCert` / `CertDisposition` / `DepositEffect` / `CoinSource`
+> surfaces and the `decode_conway_certs` closed grammar are now
+> mechanically CI-gated, DC-TXV-06 partial→enforced) and the cert decoder's
+> trailing-byte rejection + bounded preallocation (DC-VAL-06). The prior
+> "B3 closed enums are test-and-review-enforced, not grep-gated" candidate
+> is RESOLVED.
 
 Ade is a Cardano block-producing node. Its closure surface is dominated
 by two facts:
@@ -274,7 +285,11 @@ envelope), and it never constructs `PreservedCbor` itself. B3's
 `decode_conway_certs` / `decode_withdrawals` are sub-grammar readers
 *inside* the Conway tx body (keys 4 and 5); they consume already-lifted
 body byte slices via the `ade_codec` primitive set and likewise never
-construct `PreservedCbor`.
+construct `PreservedCbor`. **B3F hardened both readers to the same
+exact-CBOR-item posture:** `decode_conway_certs` now rejects trailing
+bytes with `CodecError::TrailingBytes` (parity with `decode_withdrawals`)
+and bounds its preallocation (`with_capacity(n.min(remaining_len))`) so a
+hostile length prefix cannot force a large allocation (DC-VAL-06).
 
 ### Surface: Plutus script bytes (wired today)
 
@@ -584,7 +599,7 @@ existing codec authority.**
 
 | Layer | Module | Color | Role |
 |-------|--------|-------|------|
-| **Data-only — cert grammar** | `ade_codec::conway::cert::decode_conway_certs` | BLUE | Closed CDDL grammar over tags `0..18` → `Vec<ConwayCert>`. **No catch-all accept arm:** tags ≥19 reject with `CodecError::UnknownCertTag { tag, offset }`; tags 5/6 decode to `ConwayCert::RemovedInConway { tag }` (an explicit marker, never an accept). Only deposit/refund-relevant fields are retained; every other field is structurally consumed and dropped. Asserts nothing about ledger semantics. |
+| **Data-only — cert grammar** | `ade_codec::conway::cert::decode_conway_certs` | BLUE | Closed CDDL grammar over tags `0..18` → `Vec<ConwayCert>`. **No catch-all accept arm:** tags ≥19 reject with `CodecError::UnknownCertTag { tag, offset }`; tags 5/6 decode to `ConwayCert::RemovedInConway { tag }` (an explicit marker, never an accept). Only deposit/refund-relevant fields are retained; every other field is structurally consumed and dropped. **B3F:** trailing bytes after the cert array reject with `CodecError::TrailingBytes` and preallocation is bounded (DC-VAL-06). The closure (no `_ =>` accept arm, `UnknownCertTag` for ≥19) is now grep-gated by `ci_check_conway_cert_classification_closed.sh`. Asserts nothing about ledger semantics. |
 | **Data-only — withdrawals grammar** | `ade_codec::conway::withdrawals::{decode_withdrawals, withdrawals_sum}` | BLUE | Closed map grammar (tx-body key 5) → `BTreeMap<RewardAccount, Coin>`. A repeated `RewardAccount` key rejects with `CodecError::DuplicateMapKey { offset }` — **never last-wins**; trailing bytes after the map reject. `withdrawals_sum` is exact `i128` over the deduplicated map. |
 | **Closed cert domain types** | `ade_types::conway::cert::{ConwayCert, CertDisposition, DepositEffect, CoinSource}` | BLUE | The closed sum types the codec produces and the classifier consumes (see §3). `CertDisposition` = `Accountable(DepositEffect)` / `Neutral` / `NotValidInConway`; `DepositEffect` = `NewDeposit(CoinSource)` / `Refund(CoinSource)`; `CoinSource` = `ExplicitInCert(Coin)` / `DepositParam(Coin)` / `RegistrationState(Coin)`. Era-grammar reject (`NotValidInConway`) is deliberately NOT a `DepositEffect`. |
 | **Canonical deposit-param surface** | `ade_ledger::pparams::{ConwayOnlyDepositParams, ConwayDepositParams}` + `ade_ledger::state::{conway_deposit_params, conway_deposit_view}` | BLUE | `ConwayDepositParams` is the single view combining `ProtocolParameters.{key_deposit, pool_deposit}` with the Conway-only `{drep_deposit, gov_action_deposit}`. `conway_deposit_view()` is `Some` iff Conway and fails fast with `ValidationEnvironmentError::MissingConwayDepositParams` otherwise. The **sole canonical authority** for every deposit/refund amount (DC-TXV-07). |
@@ -878,6 +893,19 @@ governance literal (DC-TXV-07).
   deposit field nor from a testkit `ConwayGovParams`. The sole allowlisted
   non-canonical source is the RED snapshot loader in `ade_testkit`
   (DC-TXV-07).
+- `ci_check_conway_cert_classification_closed.sh` *(NEW in B3F —
+  DC-TXV-06 partial→enforced)* — three closure gates the compiler-match +
+  tests previously carried alone: (1) the classification value types
+  `ConwayCert` / `CertDisposition` / `DepositEffect` / `CoinSource` in
+  `crates/ade_types/src/conway/cert.rs` stay closed — no
+  `#[non_exhaustive]`, no open-tail `Other` / `Unknown` variant; (2)
+  `decode_conway_certs` in `crates/ade_codec/src/conway/cert.rs` keeps
+  `CodecError::UnknownCertTag` and has no catch-all `_ =>` arm that
+  constructs a `ConwayCert` (the reintroduced-Shelley-fallback
+  anti-pattern); (3) `cert_classify::classify` in
+  `crates/ade_ledger/src/cert_classify.rs` stays exhaustive — no `_ =>`
+  wildcard, so a new `ConwayCert` variant breaks the build instead of
+  being silently classified. A closure regression now fails CI.
 - `ci_check_no_chaindb_in_consensus_blue.sh` *(N-B)* — forbids any
   `ChainDb` / `chain_db` token in `crates/ade_core/src/consensus`.
 - `ci_check_no_float_in_consensus.sh` *(N-B)* — forbids `f32` / `f64`
@@ -893,8 +921,10 @@ governance literal (DC-TXV-07).
   It is the **sole CI script** carrying `DC-TXV-01..05` and `DC-MEM-01/02`.
   **B3's closed cert/disposition sum types live in
   `crates/ade_types/src/conway/cert.rs`, which is OUTSIDE this `TARGETS`
-  set** — their closed shape and the cert-decoder closure are
-  test-and-review-enforced, not grep-gated (see §3 gap note).
+  set** — but B3F added the dedicated
+  `ci_check_conway_cert_classification_closed.sh` to grep-gate exactly
+  those surfaces, so the cert/disposition closure is now mechanically
+  enforced by its own check (see §3, gap note RESOLVED).
 - `ci_check_pallas_quarantine.sh` — only `ade_plutus` may name
   `pallas_*`.
 - `ci_check_no_signing_in_blue.sh` — signing patterns forbidden in BLUE;
@@ -925,7 +955,7 @@ taxonomies — and **no extensible one**.
 |----------|----------|-------|-------------|
 | `CardanoEra` | `ade_types::era` | 8 variants (ByronEbb, ByronRegular, Shelley, Allegra, Mary, Alonzo, Babbage, Conway) | New variant = new hard fork. Coordinated change across `ade_codec`, `ade_ledger`, the canonical type list, and the genesis parser's `later_eras` table. Unknown era tags produce a `CodecError`, never a fallback. |
 | `Certificate` | `ade_types::shelley::cert` | 7 variants | Frozen Shelley-era certificate set. New cert types live in `ConwayCert`. |
-| **`ConwayCert`** *(closed CDDL grammar — refined in B3)* | `ade_types::conway::cert` | **19 variants** over CDDL tags `0..18` (incl. the explicit `RemovedInConway { tag }` marker for tags 5/6) | The closed Conway-complete certificate domain type. **No `#[non_exhaustive]`, no open-tail `Other`/`Unknown`** — `RemovedInConway` is an explicit closed marker, not an open tail. New cert tag = a new explicit variant + a `decode_conway_certs` decoder arm + a `cert_classify::classify` arm, version-gated. Decoder rejects tags ≥19 with `CodecError::UnknownCertTag`. |
+| **`ConwayCert`** *(closed CDDL grammar — refined in B3)* | `ade_types::conway::cert` | **19 variants** over CDDL tags `0..18` (incl. the explicit `RemovedInConway { tag }` marker for tags 5/6) | The closed Conway-complete certificate domain type. **No `#[non_exhaustive]`, no open-tail `Other`/`Unknown`** — `RemovedInConway` is an explicit closed marker, not an open tail. New cert tag = a new explicit variant + a `decode_conway_certs` decoder arm + a `cert_classify::classify` arm, version-gated. Decoder rejects tags ≥19 with `CodecError::UnknownCertTag`; B3F also rejects trailing bytes (`TrailingBytes`) and bounds preallocation. **Closure now grep-gated by `ci_check_conway_cert_classification_closed.sh`** (no `#[non_exhaustive]`/open-tail on the type; no catch-all `_ =>` accept arm in the decoder; exhaustive `classify`). |
 | `GovAction` | `ade_types::conway::governance` | 7 variants | CIP-1694 fixed; new variant = CIP amendment + ratification chokepoint update. |
 | `MIRPot` | `ade_types::shelley::cert` | 2 variants (Reserves, Treasury) | Frozen. |
 | `DRep` | `ade_types::conway::cert` | 4 variants | CIP-1694 fixed. |
@@ -934,7 +964,7 @@ taxonomies — and **no extensible one**.
 | **`CoinSource`** *(NEW in B3)* | `ade_types::conway::cert` | 3 variants — `ExplicitInCert(Coin)`, `DepositParam(Coin)`, `RegistrationState(Coin)` | Where a deposit/refund coin comes from. The three sources are the closed provenance set: explicit-in-cert, canonical deposit-param, and registration-state. A fourth source is a versioned change. |
 | `PlutusLanguage` | `ade_plutus::evaluator` | 3 variants (V1, V2, V3) | New variant = new Plutus version. Requires cost-model table extension + aiken bump. PV11 builtins gated off (S-29). |
 | **Named ingress chokepoints (block CBOR)** | `ade_codec::{cbor::envelope, byron, shelley, allegra, mary, alonzo, babbage, conway, address}` | 10 — `decode_block_envelope`, the per-era block decoders, `decode_address` | Header comment of `ci_check_ingress_chokepoints.sh` enumerates this set. New era = new chokepoint in lockstep with a `CardanoEra` variant. Removal forbidden. |
-| **Conway cert/withdrawals sub-grammar decoders** *(NEW in B3)* | `ade_codec::conway::{cert::decode_conway_certs, withdrawals::{decode_withdrawals, withdrawals_sum}}` | 3 functions | Closed sub-grammars inside the Conway tx body (keys 4 and 5). NOT block-envelope chokepoints; they read already-lifted body slices via the `ade_codec` primitive set. **No catch-all accept arm in `decode_conway_certs`** (tags ≥19 → `UnknownCertTag`); `decode_withdrawals` rejects a repeated key with `DuplicateMapKey` (never last-wins). Removal/renaming forbidden. |
+| **Conway cert/withdrawals sub-grammar decoders** *(NEW in B3)* | `ade_codec::conway::{cert::decode_conway_certs, withdrawals::{decode_withdrawals, withdrawals_sum}}` | 3 functions | Closed sub-grammars inside the Conway tx body (keys 4 and 5). NOT block-envelope chokepoints; they read already-lifted body slices via the `ade_codec` primitive set. **No catch-all accept arm in `decode_conway_certs`** (tags ≥19 → `UnknownCertTag`; B3F: trailing bytes → `TrailingBytes`, bounded preallocation — DC-VAL-06); `decode_withdrawals` rejects a repeated key with `DuplicateMapKey` (never last-wins). The cert-decoder closure is grep-gated by `ci_check_conway_cert_classification_closed.sh` (B3F). Removal/renaming forbidden. |
 | **Named ingress chokepoint (Plutus script CBOR)** | `ade_plutus::evaluator::PlutusScript::from_cbor` | 1 — file `crates/ade_plutus/src/evaluator.rs` | Distinct from the block-CBOR chokepoints. Allowlisted by exact file path in Check 3 of `ci_check_ingress_chokepoints.sh`. |
 | **`PreservedCbor::new` constructor** | `ade_codec::preserved` | 1 chokepoint, `pub(crate)` | Construction lives inside `ade_codec`. |
 | **`CodecError` variants** *(extended in B3)* | `ade_codec::error` | + `UnknownCertTag { tag, offset }`, `DuplicateMapKey { offset }` | The closed codec-error taxonomy; B3 added the two cert/withdrawal-grammar rejects. Flat-data, no `String`. |
@@ -983,7 +1013,7 @@ taxonomies — and **no extensible one**.
 | **`PraosNonces` / `NonceScanError`** *(B1)* | `ade_ledger::consensus_input_extract` | 1 struct (5 nonces) + 1 error | The consensus-input extraction shape. Exact-five-nonce requirement is a closure invariant. |
 | **`PraosChainDepState` / `ChainEvent` canonical encodings** *(N-B)* | `ade_core::consensus::encoding` | 4 chokepoints | Frozen CBOR; round-trip required (T-DET-01); field additions are version-gated. |
 | **`LedgerFingerprint` fold** *(B3-extended)* | `ade_ledger::fingerprint` | + `CONWAY_DEPOSIT_PARAMS_TAG` fold | The canonical `LedgerState` fingerprint; B3 added a deposit-param fold that is byte-identical for any non-Conway state (DC-LEDGER-01, enforced by `ci_check_ledger_determinism.sh`). |
-| **CI check set** | `ci/ci_check_*.sh` | 26 scripts | Existing checks may be tightened, never relaxed. New CI check is additive. Deleting a script requires recording the deprecation in the registry's `ci_scripts` arrays. (B3 added `ci_check_deposit_param_authority.sh`.) |
+| **CI check set** | `ci/ci_check_*.sh` | 27 scripts | Existing checks may be tightened, never relaxed. New CI check is additive. Deleting a script requires recording the deprecation in the registry's `ci_scripts` arrays. (B3 added `ci_check_deposit_param_authority.sh`; B3F added `ci_check_conway_cert_classification_closed.sh`.) |
 | **Invariant registry families** | `docs/ade-invariant-registry.toml` | Families T / CN / DC / OP / RO; DC extended in N-A (`DC-PROTO-*`, `DC-CORE-01`), N-B (`DC-CONS-03..10`), B1 (`DC-VAL-01..06`), B2 (`DC-TXV-01..05`, `DC-MEM-01/02`), and **B3 (`DC-TXV-06`, `DC-TXV-07`)** | Append-only IDs; rules may be strengthened, never weakened; deprecation needs an explicit `deprecated_in`. |
 
 ### Extensible (open within constraints)
@@ -1034,9 +1064,11 @@ extension is proposed:
    tags ≥19 → `CodecError::UnknownCertTag`, tags 5/6 → the explicit
    `RemovedInConway` marker. A new Conway cert tag is an explicit
    versioned variant + decoder arm + classifier arm — never an open tail.
-   **Test-and-review-enforced, not grep-gated** (`ade_types::conway::cert.rs`
-   is outside the `ci_check_consensus_closed_enums.sh` `TARGETS` set; see
-   the gap note).
+   B3F also rejects trailing bytes after the cert array (`TrailingBytes`)
+   and bounds preallocation (DC-VAL-06). **Grep-gated as of B3F** by the
+   dedicated `ci_check_conway_cert_classification_closed.sh` (no catch-all
+   `_ =>` accept arm; `UnknownCertTag` present); the gap note below is now
+   RESOLVED.
 2. `CertDisposition` / `DepositEffect` / `CoinSource` — **closed by
    intent.** The classifier `cert_classify::classify` is a total,
    compiler-exhaustive map; an unresolvable state-dependent deposit/refund
@@ -1044,7 +1076,10 @@ extension is proposed:
    never a fabricated amount and never the `key_deposit` param. Era-grammar
    reject (`NotValidInConway`) is deliberately NOT a `DepositEffect`. The
    three `CoinSource` variants are the closed deposit-provenance set.
-   Test-and-review-enforced.
+   **Grep-gated as of B3F** — `ci_check_conway_cert_classification_closed.sh`
+   asserts the value types stay closed (no `#[non_exhaustive]`/open-tail)
+   and that `classify` keeps no `_ =>` wildcard, so a new `ConwayCert`
+   variant breaks the build instead of being silently classified.
 3. Withdrawals map grammar (`decode_withdrawals`) — **closed by intent.**
    A repeated `RewardAccount` key is a hard `DuplicateMapKey` reject —
    **never last-wins** — so `withdrawals_sum` only ever runs over a fully
@@ -1062,16 +1097,21 @@ extension is proposed:
    ordering; no later check may mask an earlier failure (T-CONSERV-01 /
    CN-LEDGER-07 strengthened).
 
-**Gap note — B3 closed enums are test-and-review-enforced, not
-grep-gated.** The closed `ConwayCert` / `CertDisposition` / `DepositEffect`
-/ `CoinSource` enums and the cert-decoder closure (no catch-all,
-`UnknownCertTag` for ≥19, `RemovedInConway` for 5/6) rest on the
-compiler-exhaustive `match` in `cert_classify::classify` plus named
-`cargo test` targets (CE-B3-2). `crates/ade_types/src/conway/cert.rs` is
-**not** in the `TARGETS` array of `ci_check_consensus_closed_enums.sh`.
-Extending that `TARGETS` array to `crates/ade_types/src/conway/`, or
-adding a dedicated cert-grammar closure gate, would mechanize the closure
-now resting on tests + review. **Candidate flag for the next cluster.**
+**Gap note — RESOLVED in B3F.** The prior revision flagged that the
+closed `ConwayCert` / `CertDisposition` / `DepositEffect` / `CoinSource`
+enums and the cert-decoder closure (no catch-all, `UnknownCertTag` for
+≥19, `RemovedInConway` for 5/6) rested only on the compiler-exhaustive
+`match` in `cert_classify::classify` plus named `cargo test` targets
+(CE-B3-2), because `crates/ade_types/src/conway/cert.rs` was not in the
+`TARGETS` array of `ci_check_consensus_closed_enums.sh`. B3F closed this:
+the new `ci_check_conway_cert_classification_closed.sh` grep-gates exactly
+those three files — the closed value types
+(`crates/ade_types/src/conway/cert.rs`), the no-catch-all decoder
+(`crates/ade_codec/src/conway/cert.rs`), and the exhaustive `classify`
+(`crates/ade_ledger/src/cert_classify.rs`). A closure regression
+(open-tail variant, `#[non_exhaustive]`, a catch-all decoder arm
+constructing a `ConwayCert`, or a `_ =>` wildcard in `classify`) now fails
+CI. DC-TXV-06 moved partial→enforced. **No remaining candidate here.**
 
 No surfaces in this cluster look closed by accident.
 
@@ -1100,12 +1140,16 @@ No surfaces in this cluster look closed by accident.
   blake2b_256(preserved_body_slice)` — the body slice is lifted
   byte-for-byte out of the full tx CBOR; never a re-encode (T-ENC-01).
   Both `tx_validity` and the witness closure pivot on this hash.
-- **Conway certificate CDDL grammar** *(NEW in B3)*: `decode_conway_certs`
-  is a closed grammar over tags `0..18` with **no catch-all accept arm** —
-  tags ≥19 → `CodecError::UnknownCertTag`, tags 5/6 →
-  `ConwayCert::RemovedInConway`. The 19-variant `ConwayCert` shape is
-  frozen for the Conway protocol version; a new tag is a version-gated
-  variant + decoder arm + classifier arm.
+- **Conway certificate CDDL grammar** *(NEW in B3; hardened + grep-gated
+  in B3F)*: `decode_conway_certs` is a closed grammar over tags `0..18`
+  with **no catch-all accept arm** — tags ≥19 → `CodecError::UnknownCertTag`,
+  tags 5/6 → `ConwayCert::RemovedInConway`. B3F made the reader exact:
+  trailing bytes after the cert array → `CodecError::TrailingBytes`
+  (parity with `decode_withdrawals`), and preallocation is bounded
+  (DC-VAL-06). The 19-variant `ConwayCert` shape is frozen for the Conway
+  protocol version; a new tag is a version-gated variant + decoder arm +
+  classifier arm. The closure is mechanically defended by
+  `ci_check_conway_cert_classification_closed.sh` (B3F).
 - **Conway withdrawals map grammar** *(NEW in B3)*: `decode_withdrawals`
   produces a deduplicated `BTreeMap<RewardAccount, Coin>` — a repeated key
   is a hard `CodecError::DuplicateMapKey` reject (never last-wins);
@@ -1284,7 +1328,7 @@ authority and its data-only feeders, never add a composer.
 
 | Color | Naming convention | Build-config flags | May depend on | MUST NOT depend on |
 |-------|-------------------|--------------------|----------------|--------------------|
-| **BLUE** | `ade_*` (no color in name) | First line of every `.rs` is the contract banner `// Core Contract:`. `lib.rs` carries `#![deny(unsafe_code)]`, `#![deny(clippy::unwrap_used/expect_used/panic/float_arithmetic)]`. No `#[cfg(feature = ...)]`. No async (DC-CORE-01). No `ChainDb`/`f32`/`f64`/density inside `ade_core::consensus`. No `#[non_exhaustive]`/open-tail/`String`/`Box<dyn>` in `ade_core::consensus`, `ade_ledger::block_validity`, `ade_ledger::tx_validity`, and `ade_ledger::mempool` (B3's closed cert/disposition enums in `ade_types::conway::cert` hold the same shape but are test-and-review-enforced — see §3 gap note). No deposit/refund literal next to a deposit field; no testkit `ConwayGovParams` read (DC-TXV-07). | Other BLUE crates / submodules only (incl. the `ade_ledger → ade_core` edge) | Any RED submodule or crate; GREEN in non-dev deps; `pallas_*` (except `ade_plutus`); async runtime; `HashMap`/`HashSet`/`IndexMap`; clock/rand/float/env/I/O. |
+| **BLUE** | `ade_*` (no color in name) | First line of every `.rs` is the contract banner `// Core Contract:`. `lib.rs` carries `#![deny(unsafe_code)]`, `#![deny(clippy::unwrap_used/expect_used/panic/float_arithmetic)]`. No `#[cfg(feature = ...)]`. No async (DC-CORE-01). No `ChainDb`/`f32`/`f64`/density inside `ade_core::consensus`. No `#[non_exhaustive]`/open-tail/`String`/`Box<dyn>` in `ade_core::consensus`, `ade_ledger::block_validity`, `ade_ledger::tx_validity`, and `ade_ledger::mempool` (B3's closed cert/disposition enums in `ade_types::conway::cert` hold the same shape and are grep-gated as of B3F by `ci_check_conway_cert_classification_closed.sh`). No deposit/refund literal next to a deposit field; no testkit `ConwayGovParams` read (DC-TXV-07). | Other BLUE crates / submodules only (incl. the `ade_ledger → ade_core` edge) | Any RED submodule or crate; GREEN in non-dev deps; `pallas_*` (except `ade_plutus`); async runtime; `HashMap`/`HashSet`/`IndexMap`; clock/rand/float/env/I/O. |
 | **GREEN** | `ade_*` | Banner + deny attrs are project convention but not currently enforced for `ade_testkit` / `ade_network::mux::mod` / `ade_ledger::mempool::policy`. May use `HashMap`/`serde_json`/`flate2`/`tar` for fixture I/O (testkit). `ade_runtime::consensus::chain_selector` and `ade_ledger::mempool::policy` are GREEN-behavior but live in BLUE crates for dep convenience. The `ade_testkit` snapshot loader is the one allowlisted source of `conway_deposit_params` (DC-TXV-07). | BLUE crates + standard library + ecosystem crates | `ade_runtime` (for `ade_testkit`); RED submodules in non-test paths. Results must never feed back into a BLUE authoritative decision (policy must never affect `admit`). |
 | **RED** | `ade_*` | No special header. Free to use clocks, I/O, async, `HashMap`, signing keys (`ade_runtime` is the only crate that may sign). | Any BLUE / GREEN crate or submodule (one-way) | Cannot be depended on by BLUE (`ci_check_dependency_boundary.sh`, `ci_check_no_async_in_blue.sh`). |
 
@@ -1301,9 +1345,10 @@ authority and its data-only feeders, never add a composer.
    no-`String` file list in `ci_check_consensus_closed_enums.sh` (whose
    set now covers `ade_core::consensus`, `ade_ledger::block_validity`,
    `ade_ledger::tx_validity`, and `ade_ledger::mempool` — **note B3's
-   `ade_types::conway::cert` closed enums are NOT in this set**; extending
-   `TARGETS` to `crates/ade_types/src/conway/` is an open candidate). For
-   any new deposit/refund amount source, add the path to the
+   `ade_types::conway::cert` closed enums are NOT in this set** — B3F gave
+   them their own grep-gate, `ci_check_conway_cert_classification_closed.sh`,
+   so a new cert/disposition surface must extend that check rather than
+   this one). For any new deposit/refund amount source, add the path to the
    `ci_check_deposit_param_authority.sh` scan and route the amount through
    `conway_deposit_view()`. For consensus-shaped additions also extend
    `ci_check_no_chaindb_in_consensus_blue.sh`,
@@ -1415,14 +1460,17 @@ cluster entry.
 - **(B2 specific — `mempool::admit`)** No false accept — a tx is admitted
   iff `tx_validity(accumulating, tx)` is `Valid` (DC-MEM-01); on Invalid
   the mempool is returned unchanged.
-- **(B3 specific — cert grammar)** No catch-all accept arm in
-  `decode_conway_certs` — an unknown tag (≥19) is a hard
+- **(B3 specific — cert grammar; grep-gated in B3F)** No catch-all accept
+  arm in `decode_conway_certs` — an unknown tag (≥19) is a hard
   `CodecError::UnknownCertTag`, and tags 5/6 decode to the explicit
-  `RemovedInConway` marker, never an accept. No `#[non_exhaustive]` /
-  open-tail / owned `String` / `Box<dyn>` on `ConwayCert` /
-  `CertDisposition` / `DepositEffect` / `CoinSource` (test-and-review-
-  enforced; `ade_types::conway::cert` is outside the
-  `ci_check_consensus_closed_enums.sh` `TARGETS` set — see §3 gap note).
+  `RemovedInConway` marker, never an accept. **B3F:** trailing bytes after
+  the cert array are a hard `CodecError::TrailingBytes` and preallocation
+  is bounded (DC-VAL-06). No `#[non_exhaustive]` / open-tail / owned
+  `String` / `Box<dyn>` on `ConwayCert` / `CertDisposition` /
+  `DepositEffect` / `CoinSource`. These were test-and-review-enforced at
+  B3; **B3F added `ci_check_conway_cert_classification_closed.sh`** which
+  grep-gates the closed value types, the no-catch-all decoder, and the
+  exhaustive `classify` (DC-TXV-06 partial→enforced; §3 gap note RESOLVED).
 - **(B3 specific — withdrawals grammar)** No last-wins on a repeated
   withdrawals-map key — a duplicate `RewardAccount` is a hard
   `CodecError::DuplicateMapKey`. `withdrawals_sum` only ever runs over a
@@ -1531,19 +1579,23 @@ cluster entry.
 
 - CODEMAP: `docs/ade-CODEMAP.md` — module-by-module authority table,
   upstream of this document. **Cross-reference check:** CODEMAP was
-  regenerated at the same HEAD (`7784bf8`) and its narrative folds in
-  PHASE4-B3 — the new `ade_codec::conway::{cert, withdrawals}`,
+  regenerated at HEAD (`193d2fc`) and its narrative folds in PHASE4-B3 plus
+  the B3F follow-up — the `ade_codec::conway::{cert, withdrawals}`,
   `ade_ledger::cert_classify`, `ade_ledger::pparams` deposit-param views,
   and `ade_types::conway::cert` closed types all appear in its entries,
-  and it records the new `ci_check_deposit_param_authority.sh` and the
-  residual closed-enum grep-gating gap on `ade_types::conway::cert`. The
-  two docs are consistent at this SHA.
+  and it records both `ci_check_deposit_param_authority.sh` and the B3F
+  `ci_check_conway_cert_classification_closed.sh`. The prior residual
+  closed-enum grep-gating gap on `ade_types::conway::cert` is now closed.
+  The two docs are consistent at this SHA.
 - Invariant registry: `docs/ade-invariant-registry.toml` — rule families
   incl. `T`, `CN`, `DC` (with `DC-PROTO-*` + `DC-CORE-01` under N-A,
   `DC-CONS-03..10` under N-B, `DC-VAL-01..06` under B1,
   `DC-TXV-01..05` + `DC-MEM-01/02` under B2, and **`DC-TXV-06` +
-  `DC-TXV-07` under B3**; `T-CONSERV-01` / `CN-LEDGER-07` / `DC-VAL-06`
-  strengthened in B3), `OP`, `RO`.
+  `DC-TXV-07` under B3** (`DC-TXV-06` moved partial→enforced in B3F via
+  `ci_check_conway_cert_classification_closed.sh`); `T-CONSERV-01` /
+  `CN-LEDGER-07` / `DC-VAL-06` strengthened in B3 — `DC-VAL-06` further
+  reinforced in B3F by the cert decoder's trailing-byte rejection +
+  bounded preallocation), `OP`, `RO`.
 - Phase 4 cluster plan: `docs/active/phase_4_cluster_plan.md`.
 - Tier doctrine: `docs/active/CE-79_gate_statement.md` and
   `docs/active/CE-79_tier5_addendum.md`.
