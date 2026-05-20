@@ -23,6 +23,7 @@
 //! `exp(x)` for the negative `x` arguments we feed (the partial sums
 //! never exceed ~e in magnitude during the iteration).
 
+use ade_crypto::blake2b::blake2b_256;
 use ade_crypto::vrf::{verify_vrf as crypto_verify_vrf, VrfOutput, VrfProof, VrfVerificationKey};
 use ade_crypto::CryptoError;
 use ade_types::SlotNo;
@@ -105,6 +106,80 @@ fn map_crypto_error(e: CryptoError) -> VrfCertError {
 /// 64 bytes with implicit denominator `2^512`.
 pub fn leader_value_bytes(output: &VrfOutput) -> [u8; 64] {
     output.0
+}
+
+// ---------------------------------------------------------------------------
+// Praos (Babbage, Conway) single combined-VRF construction.
+//
+// Unlike TPraos (Shelley..Alonzo), which carries two role-tagged VRF proofs,
+// Praos carries ONE proof. The leader value AND the nonce contribution are
+// both derived from its single 64-byte certified output, by domain-separated
+// re-hashing. Pinned against `Ouroboros.Consensus.Protocol.Praos.VRF`
+// (`mkInputVRF`, `vrfLeaderValue`, `vrfNonceValue`) and validated against the
+// 14 real Conway-576 corpus blocks.
+// ---------------------------------------------------------------------------
+
+/// Praos VRF range-extension domain tags (`hashVRF`): `"L"` for the leader
+/// value, `"N"` for the nonce value. ASCII bytes, matching cardano-base.
+const PRAOS_LEADER_TAG: u8 = b'L';
+const PRAOS_NONCE_TAG: u8 = b'N';
+
+/// Build the Praos VRF input (`mkInputVRF`): `blake2b256(slot_be8 ‖ eta0_32)`.
+///
+/// No role tag — the role split is a TPraos concept. The single proof in the
+/// header certifies over exactly this 32-byte input.
+pub fn praos_vrf_input(slot: SlotNo, epoch_nonce: &Nonce) -> [u8; 32] {
+    let mut pre = [0u8; 40];
+    pre[0..8].copy_from_slice(&slot.0.to_be_bytes());
+    pre[8..40].copy_from_slice(epoch_nonce.as_bytes());
+    blake2b_256(&pre).0
+}
+
+/// Verify the single Praos combined-VRF proof.
+///
+/// Builds the input via `praos_vrf_input`, verifies `proof` under `vk`, and
+/// returns the certified 64-byte output. The returned output must equal the
+/// `output` bytes carried in the header (the caller binds them).
+pub fn verify_praos_vrf(
+    vk: &VrfVerificationKey,
+    proof: &VrfProof,
+    slot: SlotNo,
+    epoch_nonce: &Nonce,
+) -> Result<VrfOutput, VrfCertError> {
+    let alpha = praos_vrf_input(slot, epoch_nonce);
+    crypto_verify_vrf(vk, proof, &alpha).map_err(map_crypto_error)
+}
+
+/// Praos `vrfLeaderValue`: range-extend the certified output for the leader
+/// check via `blake2b256("L" ‖ output64)` — a 32-byte value interpreted as a
+/// natural with implicit denominator `2^256`.
+///
+/// Returned as a `VrfOutput` (the leader-value hash in the high 32 bytes, the
+/// low 32 bytes zero) so it feeds the existing `check_leader_claim`, which
+/// reads the top-8-byte fractional prefix. The denominator difference vs the
+/// raw output (`2^256` here, `2^512` for the raw output) is irrelevant under
+/// the top-64-bit fractional truncation both share.
+pub fn praos_leader_value(output: &VrfOutput) -> VrfOutput {
+    let mut pre = [0u8; 65];
+    pre[0] = PRAOS_LEADER_TAG;
+    pre[1..65].copy_from_slice(&output.0);
+    let h = blake2b_256(&pre).0;
+    let mut out = [0u8; 64];
+    out[0..32].copy_from_slice(&h);
+    VrfOutput(out)
+}
+
+/// Praos `vrfNonceValue`: derive the 32-byte nonce contribution from the
+/// certified output via `blake2b256(blake2b256("N" ‖ output64))`.
+///
+/// The double hash is intentional: the inner hash is the VRF-paper range
+/// extension; the outer hash is the fixed-`Blake2b_256` nonce derivation.
+pub fn praos_nonce_value(output: &VrfOutput) -> Nonce {
+    let mut pre = [0u8; 65];
+    pre[0] = PRAOS_NONCE_TAG;
+    pre[1..65].copy_from_slice(&output.0);
+    let inner = blake2b_256(&pre).0;
+    Nonce(blake2b_256(&inner))
 }
 
 /// Pool stake fraction `(active_stake_for_pool, total_active_stake)`,

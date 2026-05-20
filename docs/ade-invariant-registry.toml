@@ -402,14 +402,14 @@ tier = "derived"
 statement = "Crypto verification is pure and matches Haskell node on all test vectors"
 source = "Project constitution §3, T-CORE-01, T-DET-01"
 cross_ref = []
-code_locus = "crates/ade_crypto/src/, crates/ade_core/src/consensus/vrf_cert.rs"
-tests = ["blake2b_256_rfc_test_vectors", "ed25519_rfc_8032_test_1", "vrf_ietf_draft03_section_a3", "verify_vrf_cert_accepts_valid_proof", "verify_vrf_cert_rejects_wrong_alpha", "verify_vrf_cert_rejects_malformed_proof"]
+code_locus = "crates/ade_crypto/src/, crates/ade_core/src/consensus/vrf_cert.rs (Praos single-VRF input + leader/nonce range extension; PHASE4-B1-S5), crates/ade_core/src/consensus/kes_check.rs (KES + op-cert wiring; PHASE4-B1-S5)"
+tests = ["blake2b_256_rfc_test_vectors", "ed25519_rfc_8032_test_1", "vrf_ietf_draft03_section_a3", "verify_vrf_cert_accepts_valid_proof", "verify_vrf_cert_rejects_wrong_alpha", "verify_vrf_cert_rejects_malformed_proof", "conway_corpus_headers_all_pass_leader_check", "conway_corpus_nonce_contribution_is_deterministic", "praos_malformed_vrf_proof_rejected", "opcert_signable_format"]
 ci_script = "ci/ci_check_crypto_vectors.sh"
 status = "enforced"
 authority_surface = "crypto verification outcomes"
 cluster = "CL-CRYPTO-VERIFY"
 evidence = []
-strengthened_in = ["PHASE4-N-B"]
+strengthened_in = ["PHASE4-N-B", "PHASE4-B1"]
 
 [[rules]]
 id = "DC-CRYPTO-02"
@@ -1190,11 +1190,11 @@ tier = "derived"
 statement = "Header validation must bind exactly to the accepted body and consensus context"
 source = "classification_table.md §D"
 cross_ref = []
-code_locus = "crates/ade_core/src/consensus/header_validate.rs, crates/ade_core/src/consensus/header_summary.rs, crates/ade_core/src/consensus/fork_choice.rs"
-tests = ["consensus::header_validate::tests::pipeline_short_circuits_on_first_failure", "consensus::header_validate::tests::nonce_contribution_uses_nonce_role_vrf_output_not_leader_role", "valid_header_accepted_advances_state", "header_with_slot_regression_rejected", "header_with_block_no_regression_rejected", "header_with_op_cert_regression_rejected", "header_with_invalid_vrf_proof_rejected", "header_beyond_forecast_horizon_rejected", "validate_replay_is_deterministic", "consensus::candidate::tests::candidate_fragment_carries_anchor_block_no"]
+code_locus = "crates/ade_core/src/consensus/header_validate.rs, crates/ade_core/src/consensus/header_summary.rs, crates/ade_core/src/consensus/fork_choice.rs, crates/ade_core/src/consensus/kes_check.rs (VRF-keyhash binding + KES authentication for Praos headers; PHASE4-B1-S5)"
+tests = ["consensus::header_validate::tests::pipeline_short_circuits_on_first_failure", "consensus::header_validate::tests::nonce_contribution_uses_nonce_role_vrf_output_not_leader_role", "valid_header_accepted_advances_state", "header_with_slot_regression_rejected", "header_with_block_no_regression_rejected", "header_with_op_cert_regression_rejected", "header_with_invalid_vrf_proof_rejected", "header_beyond_forecast_horizon_rejected", "validate_replay_is_deterministic", "consensus::candidate::tests::candidate_fragment_carries_anchor_block_no", "conway_corpus_headers_all_pass_leader_check", "praos_vrf_keyhash_mismatch_rejected"]
 ci_script = ""
 status = "declared"
-strengthened_in = ["PHASE4-N-B"]
+strengthened_in = ["PHASE4-N-B", "PHASE4-B1"]
 attack_rationale = "Prevents partial-validation acceptance."
 evidence_notes = "Cardano-specific: header/body separation is a Cardano block structure choice."
 
@@ -2016,7 +2016,8 @@ tier = "derived"
 statement = "Every crypto-input, field-size, and structural check on the authority path rejects (produces Invalid) on wrong size or shape and never silently skips. The pattern `if X.len() == K { check } else { skip }` is forbidden in BLUE validation; size checks go through a helper that returns an error. No defined-but-unwired check and no tautological (value-compared-to-itself) guard may stand in for a real check."
 source = "Cardano ledger spec (mandatory witness/field checks); IDD fail-fast doctrine"
 cross_ref = ["DC-LEDGER-02", "T-ENC-01", "DC-CRYPTO-01"]
-code_locus = "crates/ade_ledger/src/block_validity/verdict.rs (FieldKind/FieldError closed fail-closed field taxonomy; PHASE4-B1-S3)"
-tests = []
+code_locus = "crates/ade_ledger/src/block_validity/verdict.rs (FieldKind/FieldError closed fail-closed field taxonomy; PHASE4-B1-S3); crates/ade_core/src/consensus/kes_check.rs (expect_size fail-closed header crypto-field guard; PHASE4-B1-S5)"
+tests = ["expect_size_rejects_wrong_length", "praos_malformed_kes_sig_rejected"]
 ci_script = ""
 status = "declared"
+strengthened_in = ["PHASE4-B1"]

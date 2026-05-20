@@ -10,8 +10,8 @@ use minicbor::data::Type;
 use minicbor::{Decoder, Encoder};
 
 use crate::consensus::errors::{
-    HFCError, HeaderValidationError, NonceEvolutionError, OpCertCounterError, OutsideForecastRange,
-    VrfCertError,
+    FieldError, FieldKind, HFCError, HeaderValidationError, NonceEvolutionError,
+    OpCertCounterError, OutsideForecastRange, VrfCertError,
 };
 use crate::consensus::events::{
     BlockDistance, ChainEvent, ChainSelectionReject, Point, SecurityParam,
@@ -561,6 +561,10 @@ const HVE_BODY_HASH_MISMATCH: u32 = 5;
 const HVE_ERA_MISMATCH: u32 = 6;
 const HVE_HFC: u32 = 7;
 const HVE_OUTSIDE_FORECAST_RANGE: u32 = 8;
+const HVE_MALFORMED_FIELD: u32 = 9;
+const HVE_VRF_KEYHASH_MISMATCH: u32 = 10;
+const HVE_KES_INVALID: u32 = 11;
+const HVE_OP_CERT_INVALID: u32 = 12;
 
 fn encode_header_validation_error(
     enc: &mut Encoder<&mut Vec<u8>>,
@@ -617,8 +621,82 @@ fn encode_header_validation_error(
             enc.u64(o.requested.0).map_err(enc_err)?;
             enc.u64(o.horizon.0).map_err(enc_err)?;
         }
+        HeaderValidationError::MalformedField(fe) => {
+            enc.u32(HVE_MALFORMED_FIELD).map_err(enc_err)?;
+            encode_field_error(enc, fe)?;
+        }
+        HeaderValidationError::VrfKeyhashMismatch { expected, actual } => {
+            enc.u32(HVE_VRF_KEYHASH_MISMATCH).map_err(enc_err)?;
+            enc.array(2).map_err(enc_err)?;
+            encode_hash32(enc, expected)?;
+            encode_hash32(enc, actual)?;
+        }
+        HeaderValidationError::KesInvalid => {
+            enc.u32(HVE_KES_INVALID).map_err(enc_err)?;
+            enc.array(0).map_err(enc_err)?;
+        }
+        HeaderValidationError::OpCertInvalid => {
+            enc.u32(HVE_OP_CERT_INVALID).map_err(enc_err)?;
+            enc.array(0).map_err(enc_err)?;
+        }
     }
     Ok(())
+}
+
+// FieldKind discriminants (closed).
+const FK_VRF_VKEY: u32 = 0;
+const FK_VRF_PROOF: u32 = 1;
+const FK_VRF_OUTPUT: u32 = 2;
+const FK_KES_VKEY: u32 = 3;
+const FK_KES_SIGNATURE: u32 = 4;
+const FK_OP_CERT_SIGNATURE: u32 = 5;
+const FK_ISSUER_VKEY: u32 = 6;
+
+fn encode_field_error(
+    enc: &mut Encoder<&mut Vec<u8>>,
+    fe: &FieldError,
+) -> Result<(), DecodeError> {
+    enc.array(3).map_err(enc_err)?;
+    let kind = match fe.field {
+        FieldKind::VrfVkey => FK_VRF_VKEY,
+        FieldKind::VrfProof => FK_VRF_PROOF,
+        FieldKind::VrfOutput => FK_VRF_OUTPUT,
+        FieldKind::KesVkey => FK_KES_VKEY,
+        FieldKind::KesSignature => FK_KES_SIGNATURE,
+        FieldKind::OpCertSignature => FK_OP_CERT_SIGNATURE,
+        FieldKind::IssuerVkey => FK_ISSUER_VKEY,
+    };
+    enc.u32(kind).map_err(enc_err)?;
+    enc.u64(fe.expected as u64).map_err(enc_err)?;
+    enc.u64(fe.actual as u64).map_err(enc_err)?;
+    Ok(())
+}
+
+fn decode_field_error(dec: &mut Decoder<'_>) -> Result<FieldError, DecodeError> {
+    expect_array_len(dec, 3)?;
+    let kind_disc = dec.u32()?;
+    let field = match kind_disc {
+        FK_VRF_VKEY => FieldKind::VrfVkey,
+        FK_VRF_PROOF => FieldKind::VrfProof,
+        FK_VRF_OUTPUT => FieldKind::VrfOutput,
+        FK_KES_VKEY => FieldKind::KesVkey,
+        FK_KES_SIGNATURE => FieldKind::KesSignature,
+        FK_OP_CERT_SIGNATURE => FieldKind::OpCertSignature,
+        FK_ISSUER_VKEY => FieldKind::IssuerVkey,
+        other => {
+            return Err(DecodeError::UnknownDiscriminant {
+                for_enum: "FieldKind",
+                found: other,
+            })
+        }
+    };
+    let expected = dec.u64()? as usize;
+    let actual = dec.u64()? as usize;
+    Ok(FieldError {
+        field,
+        expected,
+        actual,
+    })
 }
 
 fn decode_header_validation_error(
@@ -672,6 +750,23 @@ fn decode_header_validation_error(
                     horizon,
                 },
             ))
+        }
+        HVE_MALFORMED_FIELD => Ok(HeaderValidationError::MalformedField(decode_field_error(
+            dec,
+        )?)),
+        HVE_VRF_KEYHASH_MISMATCH => {
+            expect_array_len(dec, 2)?;
+            let expected = decode_hash32(dec)?;
+            let actual = decode_hash32(dec)?;
+            Ok(HeaderValidationError::VrfKeyhashMismatch { expected, actual })
+        }
+        HVE_KES_INVALID => {
+            expect_array_len(dec, 0)?;
+            Ok(HeaderValidationError::KesInvalid)
+        }
+        HVE_OP_CERT_INVALID => {
+            expect_array_len(dec, 0)?;
+            Ok(HeaderValidationError::OpCertInvalid)
         }
         other => Err(DecodeError::UnknownDiscriminant {
             for_enum: "HeaderValidationError",

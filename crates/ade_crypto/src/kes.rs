@@ -134,12 +134,12 @@ pub struct OperationalCertData {
 
 /// Verify an operational certificate.
 ///
-/// The cold verification key signs the "signable" encoding of:
+/// The cold verification key signs the `OCertSignable` representation:
 ///   hot_vkey (32 bytes) || sequence_number (8 bytes BE) || kes_period (8 bytes BE)
 ///
-/// Note: The exact signable encoding must match the Haskell OCertSignable toCBOR.
-/// The Haskell encoding uses CBOR serialization of (vk_hot, counter, kes_period).
-/// This is: CBOR bytes(32) for vk_hot || CBOR uint for counter || CBOR uint for kes_period
+/// This is the raw byte concatenation from `Cardano.Protocol.TPraos.OCert`
+/// (`getSignableRepresentation (OCertSignable vk counter period)`), NOT a CBOR
+/// encoding — confirmed against real mainnet Conway op-certs.
 ///
 /// Returns:
 ///   `Ok(true)`  — valid: cold key signed this opcert
@@ -155,45 +155,15 @@ pub fn verify_opcert(
 
 /// Build the signable bytes for an operational certificate.
 ///
-/// Matches the Haskell OCertSignable toCBOR encoding:
-/// CBOR encoding of (vk_hot_bytes, counter, kes_period)
-///
-/// The CBOR structure is:
-///   bytes(32) [hot vkey] || uint [sequence_number] || uint [kes_period]
+/// Matches the Haskell `OCertSignable` `SignableRepresentation`: the raw
+/// concatenation `kesVkey(32) || counter (u64 BE) || kesPeriod (u64 BE)`,
+/// 48 bytes total. No CBOR framing.
 fn build_opcert_signable(opcert: &OperationalCertData) -> alloc::vec::Vec<u8> {
-    let mut buf = alloc::vec::Vec::with_capacity(64);
-
-    // CBOR bytes(32) for hot vkey: major type 2, length 32 = 0x5820
-    buf.push(0x58);
-    buf.push(0x20);
+    let mut buf = alloc::vec::Vec::with_capacity(48);
     buf.extend_from_slice(&opcert.hot_vkey.0);
-
-    // CBOR uint for sequence_number
-    cbor_encode_uint(&mut buf, opcert.sequence_number);
-
-    // CBOR uint for kes_period
-    cbor_encode_uint(&mut buf, opcert.kes_period);
-
+    buf.extend_from_slice(&opcert.sequence_number.to_be_bytes());
+    buf.extend_from_slice(&opcert.kes_period.to_be_bytes());
     buf
-}
-
-/// Encode a u64 as CBOR unsigned integer.
-fn cbor_encode_uint(buf: &mut alloc::vec::Vec<u8>, value: u64) {
-    if value < 24 {
-        buf.push(value as u8);
-    } else if value <= 0xFF {
-        buf.push(0x18);
-        buf.push(value as u8);
-    } else if value <= 0xFFFF {
-        buf.push(0x19);
-        buf.extend_from_slice(&(value as u16).to_be_bytes());
-    } else if value <= 0xFFFF_FFFF {
-        buf.push(0x1A);
-        buf.extend_from_slice(&(value as u32).to_be_bytes());
-    } else {
-        buf.push(0x1B);
-        buf.extend_from_slice(&value.to_be_bytes());
-    }
 }
 
 extern crate alloc;
@@ -360,55 +330,28 @@ mod tests {
         assert_eq!(r1, Ok(true));
     }
 
-    // CBOR uint encoding
-
-    #[test]
-    fn cbor_encode_small() {
-        let mut buf = alloc::vec::Vec::new();
-        cbor_encode_uint(&mut buf, 0);
-        assert_eq!(buf, [0x00]);
-
-        buf.clear();
-        cbor_encode_uint(&mut buf, 23);
-        assert_eq!(buf, [23]);
-    }
-
-    #[test]
-    fn cbor_encode_one_byte() {
-        let mut buf = alloc::vec::Vec::new();
-        cbor_encode_uint(&mut buf, 24);
-        assert_eq!(buf, [0x18, 24]);
-
-        buf.clear();
-        cbor_encode_uint(&mut buf, 255);
-        assert_eq!(buf, [0x18, 0xFF]);
-    }
-
-    #[test]
-    fn cbor_encode_two_byte() {
-        let mut buf = alloc::vec::Vec::new();
-        cbor_encode_uint(&mut buf, 256);
-        assert_eq!(buf, [0x19, 0x01, 0x00]);
-    }
-
-    // Opcert signable encoding
+    // Opcert signable encoding — raw concatenation, 48 bytes.
     #[test]
     fn opcert_signable_format() {
         let opcert = OperationalCertData {
             hot_vkey: KesVerificationKey([0xAB; 32]),
-            sequence_number: 0,
-            kes_period: 0,
+            sequence_number: 0x0102_0304_0506_0708,
+            kes_period: 0x1112_1314_1516_1718,
             cold_signature: Ed25519Signature([0u8; 64]),
         };
 
         let signable = build_opcert_signable(&opcert);
-        // CBOR bytes(32): 0x5820 + 32 bytes + CBOR uint(0) + CBOR uint(0) = 34 + 1 + 1 = 36
-        assert_eq!(signable.len(), 36);
-        assert_eq!(signable[0], 0x58); // CBOR bytes prefix
-        assert_eq!(signable[1], 0x20); // length 32
-        assert_eq!(signable[2], 0xAB); // first byte of hot vkey
-        assert_eq!(signable[34], 0x00); // sequence_number = 0
-        assert_eq!(signable[35], 0x00); // kes_period = 0
+        // 32 (hot vkey) + 8 (counter BE) + 8 (period BE) = 48.
+        assert_eq!(signable.len(), 48);
+        assert_eq!(&signable[0..32], &[0xAB; 32]);
+        assert_eq!(
+            &signable[32..40],
+            &[0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08]
+        );
+        assert_eq!(
+            &signable[40..48],
+            &[0x11, 0x12, 0x13, 0x14, 0x15, 0x16, 0x17, 0x18]
+        );
     }
 
     #[test]

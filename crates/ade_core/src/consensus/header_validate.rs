@@ -9,38 +9,47 @@
 //!
 //! `validate_and_apply_header` is the single point of header admission
 //! into `PraosChainDepState`. It composes — but does not re-implement —
-//! the substrate transitions:
+//! the substrate transitions. The pipeline branches on the header's VRF
+//! protocol:
 //!
 //!   1. forecast-horizon check (`EraSchedule::check_forecast_horizon`)
 //!   2. monotone slot check (`state.last_slot`)
 //!   3. monotone block-no check (`state.last_block_no`)
 //!   4. op-cert counter monotonicity (pre-check vs `state.op_cert_counters`)
-//!   5. VRF cert verify — nonce role (`vrf_cert::verify_vrf_cert`)
-//!   6. VRF cert verify — leader role (`vrf_cert::verify_vrf_cert`)
-//!   7. leader threshold check (`vrf_cert::check_leader_claim`)
+//!   5. VRF keyhash binding (`blake2b_256(vrf_vk) == pool_vrf_keyhash`)
+//!   6. VRF verification + leader threshold + nonce derivation:
+//!      - **TPraos** (Shelley..Alonzo): two role-tagged proofs; nonce-role
+//!        output feeds the nonce, leader-role output feeds the threshold.
+//!      - **Praos** (Babbage, Conway): one combined proof; the single output
+//!        is range-extended to both a leader value and a nonce value.
+//!   7. KES + op-cert verification (Praos headers — fail-closed)
 //!   8. apply op-cert observation (`op_cert::apply_op_cert`)
-//!   9. apply nonce contribution (`nonce::apply_nonce_input` using the
-//!      **nonce-role** VRF output from step 5)
+//!   9. apply nonce contribution (`nonce::apply_nonce_input`)
 //!  10. advance `last_slot` and `last_block_no`
 //!
 //! The pipeline is sequential and fail-fast — the first failure is the
 //! only failure reported. No partial state is ever returned; on any
 //! error the caller's state remains unchanged.
 //!
-//! KES sig over op-cert is checked at body-admission time (out of N-B).
 //! `HeaderValidationError::BodyHashMismatch` and `EraMismatch` exist in
 //! the closed enum but are not produced here — they belong to body-
 //! admission (block-fetch / chain-db) consumers.
 
+use ade_crypto::blake2b::blake2b_256;
+use ade_crypto::vrf::VrfOutput;
+use ade_types::Hash32;
+
 use crate::consensus::era_schedule::EraSchedule;
 use crate::consensus::errors::{HeaderValidationError, VrfCertError};
-use crate::consensus::header_summary::{HeaderInput, ValidatedHeaderSummary};
+use crate::consensus::header_summary::{HeaderInput, HeaderVrf, ValidatedHeaderSummary};
+use crate::consensus::kes_check::verify_header_kes;
 use crate::consensus::ledger_view::LedgerView;
 use crate::consensus::nonce::{apply_nonce_input, NonceInput};
 use crate::consensus::op_cert::{apply_op_cert, OpCertObservation};
 use crate::consensus::praos_state::PraosChainDepState;
 use crate::consensus::vrf_cert::{
-    check_leader_claim, verify_vrf_cert, StakeFraction, VrfRole,
+    check_leader_claim, praos_leader_value, praos_nonce_value, verify_praos_vrf, verify_vrf_cert,
+    StakeFraction, VrfRole,
 };
 
 /// The successful result of `validate_and_apply_header`.
@@ -113,25 +122,64 @@ pub fn validate_and_apply_header(
         .map_err(HeaderValidationError::HFC)?;
     let epoch = location.epoch;
 
-    // Step 5: VRF cert verify — nonce role.
-    let verified_nonce = verify_vrf_cert(
-        &header.vrf_vk,
-        &header.vrf_nonce_proof,
-        header.slot,
-        &state.epoch_nonce,
-        VrfRole::NonceContribution,
-    )
-    .map_err(HeaderValidationError::VrfCert)?;
+    // Step 5: VRF keyhash binding. The header carries the VRF vkey; the
+    // snapshot carries only its hash. Reject if they disagree — this is what
+    // ties the proof to the pool that holds the registered stake.
+    if let Some(expected) = ledger_view.pool_vrf_keyhash(epoch, &header.issuer_pool) {
+        let actual = Hash32(blake2b_256(&header.vrf_vk.0).0);
+        if actual != expected {
+            return Err(HeaderValidationError::VrfKeyhashMismatch { expected, actual });
+        }
+    }
 
-    // Step 6: VRF cert verify — leader role.
-    let verified_leader = verify_vrf_cert(
-        &header.vrf_vk,
-        &header.vrf_leader_proof,
-        header.slot,
-        &state.epoch_nonce,
-        VrfRole::LeaderEligibility,
-    )
-    .map_err(HeaderValidationError::VrfCert)?;
+    // Step 6: VRF verification + leader/nonce derivation. The output fed to
+    // the leader threshold and the output fed to the nonce contribution differ
+    // by protocol — encoded by the `HeaderVrf` variant.
+    let (leader_value_output, nonce_output) = match &header.vrf {
+        HeaderVrf::Tpraos {
+            nonce_proof,
+            leader_proof,
+        } => {
+            let verified_nonce = verify_vrf_cert(
+                &header.vrf_vk,
+                nonce_proof,
+                header.slot,
+                &state.epoch_nonce,
+                VrfRole::NonceContribution,
+            )
+            .map_err(HeaderValidationError::VrfCert)?;
+            let verified_leader = verify_vrf_cert(
+                &header.vrf_vk,
+                leader_proof,
+                header.slot,
+                &state.epoch_nonce,
+                VrfRole::LeaderEligibility,
+            )
+            .map_err(HeaderValidationError::VrfCert)?;
+            (verified_leader.output, verified_nonce.output)
+        }
+        HeaderVrf::Praos { proof, output } => {
+            // Verify the single combined proof over the Praos input and bind
+            // the recomputed output to the one the header carries.
+            let recomputed =
+                verify_praos_vrf(&header.vrf_vk, proof, header.slot, &state.epoch_nonce)
+                    .map_err(HeaderValidationError::VrfCert)?;
+            if &recomputed != output {
+                return Err(HeaderValidationError::VrfCert(
+                    VrfCertError::VerificationFailed,
+                ));
+            }
+            // Range-extend the single output into a leader value and a nonce
+            // value (cardano-base `vrfLeaderValue` / `vrfNonceValue`).
+            let leader_value = praos_leader_value(&recomputed);
+            let nonce_value = praos_nonce_value(&recomputed);
+            // Carry the 32-byte nonce value in the high bytes of a VrfOutput so
+            // the existing `HeaderContribution` transition mixes exactly it.
+            let mut nonce_out = [0u8; 64];
+            nonce_out[0..32].copy_from_slice(nonce_value.as_bytes());
+            (leader_value, VrfOutput(nonce_out))
+        }
+    };
 
     // Step 7: leader threshold check.
     // Stake fraction and active-slots-coefficient come from the ledger
@@ -162,8 +210,19 @@ pub fn validate_and_apply_header(
         numer: pool_stake,
         denom: total_stake,
     };
-    check_leader_claim(&verified_leader.output, sigma, asc)
+    check_leader_claim(&leader_value_output, sigma, asc)
         .map_err(HeaderValidationError::VrfCert)?;
+
+    // Step 7b: KES signature + op-cert verification (Praos headers carry the
+    // material; TPraos headers were authenticated under the legacy N-B model).
+    if let Some(kes) = &header.kes {
+        verify_header_kes(
+            kes,
+            header.slot,
+            header.op_cert_counter,
+            header.op_cert_kes_period,
+        )?;
+    }
 
     // Step 8: apply op-cert observation. Step 4 already gated the
     // counter; this call cannot fail in practice but the same typed
@@ -178,14 +237,14 @@ pub fn validate_and_apply_header(
     )
     .map_err(HeaderValidationError::OpCertCounter)?;
 
-    // Step 9: apply nonce contribution using the *nonce-role* VRF
-    // output (step 5), not the leader-role output. Mixing them would
+    // Step 9: apply nonce contribution using the nonce-role output (TPraos)
+    // or the derived nonce value (Praos). Mixing the leader output here would
     // silently desynchronise the evolving nonce from cardano-node.
     let after_nonce = apply_nonce_input(
         &after_op_cert,
         &NonceInput::HeaderContribution {
             slot: header.slot,
-            vrf_output: verified_nonce.output.clone(),
+            vrf_output: nonce_output,
         },
     )
     .map_err(HeaderValidationError::Nonce)?;
@@ -201,7 +260,7 @@ pub fn validate_and_apply_header(
         body_hash: header.body_hash.clone(),
         issuer_pool: header.issuer_pool.clone(),
         op_cert_counter: header.op_cert_counter,
-        vrf_leader_output: verified_leader.output,
+        vrf_leader_output: leader_value_output,
     };
     Ok(HeaderApplied { new_state, summary })
 }
@@ -317,8 +376,11 @@ mod tests {
             op_cert_kes_period: 0,
             op_cert_counter: 0,
             vrf_vk: vk,
-            vrf_nonce_proof: prove_nonce(sk, slot, &state.epoch_nonce),
-            vrf_leader_proof: prove_leader(sk, slot, &state.epoch_nonce),
+            vrf: HeaderVrf::Tpraos {
+                nonce_proof: prove_nonce(sk, slot, &state.epoch_nonce),
+                leader_proof: prove_leader(sk, slot, &state.epoch_nonce),
+            },
+            kes: None,
         }
     }
 
@@ -347,8 +409,11 @@ mod tests {
             op_cert_kes_period: 0,
             op_cert_counter: 0,
             vrf_vk: vk.clone(),
-            vrf_nonce_proof: bogus_proof,
-            vrf_leader_proof: bogus_leader,
+            vrf: HeaderVrf::Tpraos {
+                nonce_proof: bogus_proof,
+                leader_proof: bogus_leader,
+            },
+            kes: None,
         };
 
         let res = validate_and_apply_header(&state, &header, &ledger(vk), &schedule());
@@ -371,13 +436,19 @@ mod tests {
 
         // Compute both VRF outputs independently so we can verify which
         // one the evolving nonce mixes in.
+        let (nonce_proof, leader_proof) = match &header.vrf {
+            HeaderVrf::Tpraos {
+                nonce_proof,
+                leader_proof,
+            } => (nonce_proof, leader_proof),
+            HeaderVrf::Praos { .. } => panic!("happy_header builds a TPraos header"),
+        };
         let nonce_alpha = vrf_input(header.slot, &state.epoch_nonce, VrfRole::NonceContribution);
-        let nonce_output_bytes = VrfDraft03::verify(&vk.0, &header.vrf_nonce_proof.0, &nonce_alpha)
+        let nonce_output_bytes = VrfDraft03::verify(&vk.0, &nonce_proof.0, &nonce_alpha)
             .expect("nonce proof verifies");
         let leader_alpha = vrf_input(header.slot, &state.epoch_nonce, VrfRole::LeaderEligibility);
-        let leader_output_bytes =
-            VrfDraft03::verify(&vk.0, &header.vrf_leader_proof.0, &leader_alpha)
-                .expect("leader proof verifies");
+        let leader_output_bytes = VrfDraft03::verify(&vk.0, &leader_proof.0, &leader_alpha)
+            .expect("leader proof verifies");
 
         // The two outputs MUST differ — otherwise the test cannot tell
         // which one was used.

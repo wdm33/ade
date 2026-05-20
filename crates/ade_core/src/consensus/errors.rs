@@ -63,6 +63,38 @@ pub enum HeaderValidationError {
     EraMismatch { schedule_era: u8, header_era: u8 },
     HFC(HFCError),
     OutsideForecastRange(OutsideForecastRange),
+    /// A fixed-size header crypto field had the wrong length — fail-closed.
+    MalformedField(FieldError),
+    /// `blake2b_256(header.vrf_vkey)` did not match the pool's registered
+    /// VRF keyhash. The header VRF key is not the one the snapshot bound.
+    VrfKeyhashMismatch { expected: Hash32, actual: Hash32 },
+    /// KES signature over the header body failed verification.
+    KesInvalid,
+    /// Operational-certificate cold-key signature failed verification.
+    OpCertInvalid,
+}
+
+/// Wrong-length fixed-size header crypto field. Flat value data so reject
+/// reasons compare byte-for-byte. Parallels
+/// `ade_ledger::block_validity::verdict::FieldError` (ade_core cannot depend
+/// on ade_ledger); ade_ledger converts at the composition boundary.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct FieldError {
+    pub field: FieldKind,
+    pub expected: usize,
+    pub actual: usize,
+}
+
+/// Closed set of fixed-size header fields whose length is checked fail-closed.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum FieldKind {
+    VrfVkey,
+    VrfProof,
+    VrfOutput,
+    KesVkey,
+    KesSignature,
+    OpCertSignature,
+    IssuerVkey,
 }
 
 /// VRF certificate verification errors. `LeaderValueAboveThreshold`

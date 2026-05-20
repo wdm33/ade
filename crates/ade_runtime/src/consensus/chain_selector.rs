@@ -278,6 +278,7 @@ mod tests {
 
     use ade_core::consensus::candidate::ChainSelectorState;
     use ade_core::consensus::era_schedule::{BootstrapAnchorHash, EraSummary};
+    use ade_core::consensus::header_summary::HeaderVrf;
     use ade_core::consensus::events::{Point, SecurityParam};
     use ade_core::consensus::praos_state::{Nonce, PraosChainDepState};
     use ade_core::consensus::vrf_cert::{vrf_input, ActiveSlotsCoeff, VrfRole};
@@ -393,8 +394,11 @@ mod tests {
             op_cert_kes_period: 0,
             op_cert_counter,
             vrf_vk: vk.clone(),
-            vrf_nonce_proof: prove(sk, slot, &chain_dep.epoch_nonce, VrfRole::NonceContribution),
-            vrf_leader_proof: prove(sk, slot, &chain_dep.epoch_nonce, VrfRole::LeaderEligibility),
+            vrf: HeaderVrf::Tpraos {
+                nonce_proof: prove(sk, slot, &chain_dep.epoch_nonce, VrfRole::NonceContribution),
+                leader_proof: prove(sk, slot, &chain_dep.epoch_nonce, VrfRole::LeaderEligibility),
+            },
+            kes: None,
         }
     }
 

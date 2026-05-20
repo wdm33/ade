@@ -13,6 +13,7 @@ pub mod events;
 pub mod fork_choice;
 pub mod header_summary;
 pub mod header_validate;
+pub mod kes_check;
 pub mod leader_schedule;
 pub mod ledger_view;
 pub mod nonce;
@@ -33,14 +34,15 @@ pub use era_schedule::{
     BootstrapAnchorHash, EraLocation, EraSchedule, EraSummary,
 };
 pub use errors::{
-    HFCError, HeaderValidationError, LeaderScheduleError, NonceEvolutionError,
-    OpCertCounterError, OutsideForecastRange, SlotTimeError, VrfCertError,
+    FieldError, FieldKind, HFCError, HeaderValidationError, LeaderScheduleError,
+    NonceEvolutionError, OpCertCounterError, OutsideForecastRange, SlotTimeError, VrfCertError,
 };
 pub use events::{
     BlockDistance, ChainEvent, ChainHash, ChainSelectionReject, Point, SecurityParam,
 };
-pub use header_summary::{HeaderInput, ValidatedHeaderSummary};
+pub use header_summary::{HeaderInput, HeaderKes, HeaderVrf, ValidatedHeaderSummary};
 pub use header_validate::{validate_and_apply_header, HeaderApplied};
+pub use kes_check::{expect_size, verify_header_kes, SLOTS_PER_KES_PERIOD};
 pub use leader_schedule::{
     is_leader_for_vrf_output, query_leader_schedule, LeaderScheduleAnswer, LeaderScheduleQuery,
 };
@@ -50,6 +52,7 @@ pub use op_cert::{apply_op_cert, OpCertObservation};
 pub use praos_state::{Nonce, OpCertCounterMap, PraosChainDepState};
 pub use rollback::{apply_rollback, RollBackApplied, RollBackRequest};
 pub use vrf_cert::{
-    check_leader_claim, is_leader, leader_value_bytes, verify_vrf_cert, ActiveSlotsCoeff,
-    StakeFraction, VerifiedVrf, VrfRole, VRF_INPUT_LEN,
+    check_leader_claim, is_leader, leader_value_bytes, praos_leader_value, praos_nonce_value,
+    praos_vrf_input, verify_praos_vrf, verify_vrf_cert, ActiveSlotsCoeff, StakeFraction,
+    VerifiedVrf, VrfRole, VRF_INPUT_LEN,
 };

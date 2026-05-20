@@ -14,7 +14,7 @@ use std::fs;
 use ade_core::consensus::candidate::{ChainSelectorState, TiebreakerView};
 use ade_core::consensus::era_schedule::{BootstrapAnchorHash, EraSchedule, EraSummary};
 use ade_core::consensus::events::{BlockDistance, ChainEvent, ChainSelectionReject, Point, SecurityParam};
-use ade_core::consensus::header_summary::HeaderInput;
+use ade_core::consensus::header_summary::{HeaderInput, HeaderVrf};
 use ade_core::consensus::praos_state::{Nonce, PraosChainDepState};
 use ade_core::consensus::rollback::RollBackRequest;
 use ade_core::consensus::vrf_cert::{vrf_input, ActiveSlotsCoeff, VrfRole};
@@ -168,8 +168,11 @@ fn header_input(
         op_cert_kes_period: kes_period,
         op_cert_counter,
         vrf_vk: vk.clone(),
-        vrf_nonce_proof: prove(sk, slot, &chain_dep.epoch_nonce, VrfRole::NonceContribution),
-        vrf_leader_proof: prove(sk, slot, &chain_dep.epoch_nonce, VrfRole::LeaderEligibility),
+        vrf: HeaderVrf::Tpraos {
+            nonce_proof: prove(sk, slot, &chain_dep.epoch_nonce, VrfRole::NonceContribution),
+            leader_proof: prove(sk, slot, &chain_dep.epoch_nonce, VrfRole::LeaderEligibility),
+        },
+        kes: None,
     }
 }
 

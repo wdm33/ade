@@ -24,8 +24,8 @@ use ade_core::consensus::vrf_cert::vrf_input;
 use ade_core::consensus::{
     apply_rollback, encode_chain_event, validate_and_apply_header, ActiveSlotsCoeff,
     BlockDistance, BootstrapAnchorHash, ChainEvent, ChainSelectionReject, ChainSelectorState,
-    EraSchedule, EraSummary, HeaderInput, Nonce, Point, PraosChainDepState, RollBackRequest,
-    SecurityParam, TiebreakerView, VrfRole,
+    EraSchedule, EraSummary, HeaderInput, HeaderVrf, Nonce, Point, PraosChainDepState,
+    RollBackRequest, SecurityParam, TiebreakerView, VrfRole,
 };
 use ade_crypto::vrf::{VrfProof, VrfVerificationKey};
 use ade_testkit::consensus::ledger_view_stub::{
@@ -390,8 +390,11 @@ fn header_at(
         op_cert_kes_period: 0,
         op_cert_counter,
         vrf_vk: vk.clone(),
-        vrf_nonce_proof: prove(sk, slot, &state.epoch_nonce, VrfRole::NonceContribution),
-        vrf_leader_proof: prove(sk, slot, &state.epoch_nonce, VrfRole::LeaderEligibility),
+        vrf: HeaderVrf::Tpraos {
+            nonce_proof: prove(sk, slot, &state.epoch_nonce, VrfRole::NonceContribution),
+            leader_proof: prove(sk, slot, &state.epoch_nonce, VrfRole::LeaderEligibility),
+        },
+        kes: None,
     }
 }
 
