@@ -65,7 +65,7 @@ pub struct LeaderScheduleAnswer {
 ///    are refused deterministically with `OutsideForecastRange`.
 /// 2. `era_schedule.locate` — slot to `(era, epoch)` mapping;
 ///    `HFCError` is wrapped into `LeaderScheduleError::HFC`.
-/// 3. The ledger view is consulted for `(pool_vrf_key, pool_active_stake,
+/// 3. The ledger view is consulted for `(pool_vrf_keyhash, pool_active_stake,
 ///    total_active_stake, active_slots_coeff)`. Any missing piece is a
 ///    typed `UnknownPool` failure — N-B never guesses.
 /// 4. The canonical 41-byte VRF input is built via
@@ -89,9 +89,10 @@ pub fn query_leader_schedule(
         .map_err(LeaderScheduleError::HFC)?;
     let epoch = location.epoch;
 
-    // VRF key is the strongest "do we know this pool?" signal; resolve
-    // it first so callers fast-fail uniformly on unknown pools.
-    if ledger_view.pool_vrf_key(epoch, &query.pool).is_none() {
+    // The registered VRF keyhash is the strongest "do we know this pool?"
+    // signal; resolve it first so callers fast-fail uniformly on unknown
+    // pools. The keyhash binding itself is checked at header validation.
+    if ledger_view.pool_vrf_keyhash(epoch, &query.pool).is_none() {
         return Err(LeaderScheduleError::UnknownPool);
     }
     let pool_stake = ledger_view
@@ -138,7 +139,6 @@ pub fn is_leader_for_vrf_output(answer: &LeaderScheduleAnswer, output: &VrfOutpu
 mod tests {
     use super::*;
 
-    use ade_crypto::vrf::VrfVerificationKey;
     use ade_types::{CardanoEra, Hash32};
 
     use crate::consensus::era_schedule::{BootstrapAnchorHash, EraSummary};
@@ -148,7 +148,7 @@ mod tests {
     struct TestLedger {
         epoch: EpochNo,
         pool_known: Hash28,
-        vk: VrfVerificationKey,
+        vrf_keyhash: Hash32,
         pool_stake: u64,
         total_stake: u64,
         asc: ActiveSlotsCoeff,
@@ -161,8 +161,8 @@ mod tests {
         fn pool_active_stake(&self, epoch: EpochNo, pool: &Hash28) -> Option<u64> {
             (epoch == self.epoch && pool == &self.pool_known).then_some(self.pool_stake)
         }
-        fn pool_vrf_key(&self, epoch: EpochNo, pool: &Hash28) -> Option<VrfVerificationKey> {
-            (epoch == self.epoch && pool == &self.pool_known).then(|| self.vk.clone())
+        fn pool_vrf_keyhash(&self, epoch: EpochNo, pool: &Hash28) -> Option<Hash32> {
+            (epoch == self.epoch && pool == &self.pool_known).then(|| self.vrf_keyhash.clone())
         }
         fn active_slots_coeff(&self, epoch: EpochNo) -> Option<ActiveSlotsCoeff> {
             (epoch == self.epoch).then_some(self.asc)
@@ -186,8 +186,8 @@ mod tests {
         Hash28([0xAA; 28])
     }
 
-    fn vk() -> VrfVerificationKey {
-        VrfVerificationKey([0xBB; 32])
+    fn vrf_keyhash() -> Hash32 {
+        Hash32([0xBB; 32])
     }
 
     fn state_with_nonce(byte: u8) -> PraosChainDepState {
@@ -200,7 +200,7 @@ mod tests {
         TestLedger {
             epoch: EpochNo(0),
             pool_known: pool(),
-            vk: vk(),
+            vrf_keyhash: vrf_keyhash(),
             pool_stake: 1_000,
             total_stake: 10_000,
             asc,

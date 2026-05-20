@@ -93,7 +93,9 @@ fn ledger(vk: VrfVerificationKey, pool: Hash28) -> LedgerViewStub {
         pool,
         PoolFixture {
             active_stake: 1,
-            vrf_key: vk,
+            // The ledger holds the registered keyhash, not the vkey; the vkey
+            // travels in the block header and is bound at header validation.
+            vrf_keyhash: ade_crypto::blake2b::blake2b_256(&vk.0),
         },
     );
     // asc = 1/1, sigma = 1/1 — leader threshold trivially passes per

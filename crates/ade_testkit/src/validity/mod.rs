@@ -11,5 +11,7 @@
 //! B1 block-validity replay tests.
 
 pub mod corpus;
+pub mod ledger_view;
 
 pub use corpus::{ConwayValidityCorpus, CorpusLoadError, CorpusPool, CorpusRatio};
+pub use ledger_view::{pool_distr_view_from_corpus, CorpusViewError};

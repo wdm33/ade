@@ -15,8 +15,7 @@ use std::collections::BTreeMap;
 
 use ade_core::consensus::ledger_view::LedgerView;
 use ade_core::consensus::vrf_cert::ActiveSlotsCoeff;
-use ade_crypto::vrf::VrfVerificationKey;
-use ade_types::{EpochNo, Hash28};
+use ade_types::{EpochNo, Hash28, Hash32};
 
 /// Per-epoch fixture: the four facts a `LedgerView` must surface.
 #[derive(Debug, Clone)]
@@ -30,7 +29,8 @@ pub struct EpochStakeFixture {
 #[derive(Debug, Clone)]
 pub struct PoolFixture {
     pub active_stake: u64,
-    pub vrf_key: VrfVerificationKey,
+    /// Registered VRF key *hash* (`blake2b-256` of the VRF vkey).
+    pub vrf_keyhash: Hash32,
 }
 
 /// In-memory `LedgerView`. Construct via `LedgerViewStub::new()` and
@@ -64,11 +64,11 @@ impl LedgerView for LedgerViewStub {
             .map(|p| p.active_stake)
     }
 
-    fn pool_vrf_key(&self, epoch: EpochNo, pool: &Hash28) -> Option<VrfVerificationKey> {
+    fn pool_vrf_keyhash(&self, epoch: EpochNo, pool: &Hash28) -> Option<Hash32> {
         self.epochs
             .get(&epoch)
             .and_then(|f| f.pools.get(pool))
-            .map(|p| p.vrf_key.clone())
+            .map(|p| p.vrf_keyhash.clone())
     }
 
     fn active_slots_coeff(&self, epoch: EpochNo) -> Option<ActiveSlotsCoeff> {

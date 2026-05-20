@@ -43,6 +43,9 @@ pub struct ConwayValidityCorpus {
     pub epoch_nonce: [u8; 32],
     /// Active-slots coefficient.
     pub asc: CorpusRatio,
+    /// Pool-distribution total active stake (`pdTotalActiveStake`); the shared
+    /// denominator base every pool's `sigma` reduces from.
+    pub pd_total_active_stake: u64,
     /// Issuing pools, keyed by pool id for deterministic lookup.
     pub pools: BTreeMap<[u8; 28], CorpusPool>,
 }
@@ -82,6 +85,7 @@ struct PoolJson {
 struct ConsensusInputsJson {
     epoch_nonce: String,
     active_slots_coeff: CorpusRatio,
+    pd_total_active_stake: u64,
     pools: Vec<PoolJson>,
 }
 
@@ -158,6 +162,7 @@ impl ConwayValidityCorpus {
             blocks,
             epoch_nonce,
             asc: parsed.active_slots_coeff,
+            pd_total_active_stake: parsed.pd_total_active_stake,
             pools,
         })
     }

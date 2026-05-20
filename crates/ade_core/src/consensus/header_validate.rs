@@ -242,8 +242,8 @@ mod tests {
         fn pool_active_stake(&self, _: EpochNo, pool: &Hash28) -> Option<u64> {
             (pool == &self.pool).then_some(self.sigma.0)
         }
-        fn pool_vrf_key(&self, _: EpochNo, pool: &Hash28) -> Option<VrfVerificationKey> {
-            (pool == &self.pool).then(|| self.vk.clone())
+        fn pool_vrf_keyhash(&self, _: EpochNo, pool: &Hash28) -> Option<Hash32> {
+            (pool == &self.pool).then(|| ade_crypto::blake2b::blake2b_256(&self.vk.0))
         }
         fn active_slots_coeff(&self, _: EpochNo) -> Option<ActiveSlotsCoeff> {
             Some(self.asc)

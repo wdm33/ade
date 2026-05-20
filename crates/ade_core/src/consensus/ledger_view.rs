@@ -18,8 +18,7 @@
 //! consensus error (e.g. `LeaderScheduleError::UnknownPool`) map the
 //! `None` themselves so the failure taxonomy stays in BLUE.
 
-use ade_crypto::vrf::VrfVerificationKey;
-use ade_types::{EpochNo, Hash28};
+use ade_types::{EpochNo, Hash28, Hash32};
 
 use crate::consensus::vrf_cert::ActiveSlotsCoeff;
 
@@ -39,9 +38,13 @@ pub trait LedgerView {
     /// unknown to this snapshot.
     fn pool_active_stake(&self, epoch: EpochNo, pool: &Hash28) -> Option<u64>;
 
-    /// Pool's registered VRF verification key for the operating
-    /// epoch. Returns `None` if unknown.
-    fn pool_vrf_key(&self, epoch: EpochNo, pool: &Hash28) -> Option<VrfVerificationKey>;
+    /// Pool's registered VRF key *hash* (`blake2b-256` of the VRF
+    /// verification key) for the operating epoch. The ledger holds the
+    /// keyhash, not the vkey; the vkey itself arrives in the block header,
+    /// and header validation binds the two by checking
+    /// `blake2b_256(header.vrf_vkey) == pool_vrf_keyhash`. Returns `None`
+    /// if the pool is unknown to this snapshot.
+    fn pool_vrf_keyhash(&self, epoch: EpochNo, pool: &Hash28) -> Option<Hash32>;
 
     /// Active-slots-coefficient for the operating epoch — pulled
     /// from the era's protocol parameters; ledger surfaces it so

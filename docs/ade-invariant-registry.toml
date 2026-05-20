@@ -522,11 +522,11 @@ tier = "derived"
 statement = "Leadership verification is pure"
 source = "Project constitution §3, T-CORE-01"
 cross_ref = []
-code_locus = "crates/ade_core/src/consensus/leader_schedule.rs, crates/ade_core/src/consensus/ledger_view.rs, crates/ade_core/src/consensus/vrf_cert.rs"
-tests = ["consensus::leader_schedule::tests::query_uses_state_epoch_nonce_for_vrf_input", "consensus::leader_schedule::tests::query_returns_unknown_pool_when_no_vrf_key", "consensus::leader_schedule::tests::query_returns_outside_forecast_range_for_far_future", "consensus::leader_schedule::tests::query_does_not_mutate_state", "consensus::leader_schedule::tests::is_leader_for_vrf_output_delegates_to_vrf_cert", "corpus_returns_canonical_answer_for_known_pools", "corpus_rejects_unknown_pool", "corpus_rejects_out_of_forecast_horizon", "corpus_is_leader_helper_matches_pinned_probe", "corpus_is_deterministic_across_runs"]
+code_locus = "crates/ade_core/src/consensus/leader_schedule.rs, crates/ade_core/src/consensus/ledger_view.rs, crates/ade_core/src/consensus/vrf_cert.rs, crates/ade_ledger/src/consensus_view.rs"
+tests = ["consensus::leader_schedule::tests::query_uses_state_epoch_nonce_for_vrf_input", "consensus::leader_schedule::tests::query_returns_unknown_pool_when_no_vrf_key", "consensus::leader_schedule::tests::query_returns_outside_forecast_range_for_far_future", "consensus::leader_schedule::tests::query_does_not_mutate_state", "consensus::leader_schedule::tests::is_leader_for_vrf_output_delegates_to_vrf_cert", "corpus_returns_canonical_answer_for_known_pools", "corpus_rejects_unknown_pool", "corpus_rejects_out_of_forecast_horizon", "corpus_is_leader_helper_matches_pinned_probe", "corpus_is_deterministic_across_runs", "view_returns_corpus_pool_stake_and_vrf_keyhash", "view_unknown_pool_returns_none", "view_unknown_epoch_returns_none", "view_is_pure", "consensus_view::tests::pool_distr_view_no_hashmap"]
 ci_script = ""
 status = "partial"
-strengthened_in = ["PHASE4-N-B"]
+strengthened_in = ["PHASE4-N-B", "PHASE4-B1"]
 
 [[rules]]
 id = "DC-PROTO-01"
@@ -1093,11 +1093,11 @@ tier = "derived"
 statement = "Stake, rewards, parameter changes, and governance effects may activate only at protocol-defined epoch boundaries"
 source = "classification_table.md §C"
 cross_ref = []
-code_locus = "crates/ade_core/src/consensus/leader_schedule.rs, crates/ade_core/src/consensus/ledger_view.rs"
-tests = ["consensus::leader_schedule::tests::query_uses_state_epoch_nonce_for_vrf_input", "corpus_returns_canonical_answer_for_known_pools", "corpus_rejects_unknown_pool", "corpus_is_deterministic_across_runs"]
+code_locus = "crates/ade_core/src/consensus/leader_schedule.rs, crates/ade_core/src/consensus/ledger_view.rs, crates/ade_ledger/src/consensus_view.rs"
+tests = ["consensus::leader_schedule::tests::query_uses_state_epoch_nonce_for_vrf_input", "corpus_returns_canonical_answer_for_known_pools", "corpus_rejects_unknown_pool", "corpus_is_deterministic_across_runs", "view_returns_corpus_pool_stake_and_vrf_keyhash", "view_unknown_epoch_returns_none", "view_is_pure"]
 ci_script = ""
 status = "partial"
-strengthened_in = ["PHASE4-N-B"]
+strengthened_in = ["PHASE4-N-B", "PHASE4-B1"]
 attack_rationale = "Prevents early or delayed activation errors."
 evidence_notes = "Cardano-specific: epoch boundary semantics defined by Ouroboros Praos. Evidence: Conway/Rules/Epoch.hs, NewEpoch.hs show epoch-boundary-only enactment."
 
@@ -1960,10 +1960,11 @@ tier = "derived"
 statement = "A block's validity verdict is a pure function of (LedgerState, PraosChainDepState, EraSchedule, LedgerView, block_cbor). No wall-clock, arrival order, HashMap/HashSet iteration, float, or ambient state may influence it."
 source = "Cardano ledger spec; Ouroboros Praos spec; IDD determinism doctrine"
 cross_ref = ["DC-CORE-01", "T-DET-01", "DC-CONSENSUS-01"]
-code_locus = "crates/ade_ledger/src/consensus_input_extract.rs"
-tests = ["corpus_loads_and_is_self_consistent", "extract_nonces_field_order", "extract_nonces_requires_exactly_five", "extract_nonces_is_deterministic"]
+code_locus = "crates/ade_ledger/src/consensus_input_extract.rs, crates/ade_ledger/src/consensus_view.rs, crates/ade_core/src/consensus/ledger_view.rs"
+tests = ["corpus_loads_and_is_self_consistent", "extract_nonces_field_order", "extract_nonces_requires_exactly_five", "extract_nonces_is_deterministic", "view_returns_corpus_pool_stake_and_vrf_keyhash", "view_unknown_pool_returns_none", "view_unknown_epoch_returns_none", "view_is_pure"]
 ci_script = ""
-status = "declared"
+status = "enforced"
+strengthened_in = ["PHASE4-B1"]
 
 [[rules]]
 id = "DC-VAL-02"

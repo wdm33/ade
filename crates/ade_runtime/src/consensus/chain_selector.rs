@@ -321,7 +321,7 @@ mod tests {
             pool(),
             PoolFixture {
                 active_stake: 1,
-                vrf_key: vk,
+                vrf_keyhash: ade_crypto::blake2b::blake2b_256(&vk.0),
             },
         );
         // asc = 1/1 + sigma = 1/1 → every VRF output trivially leads.

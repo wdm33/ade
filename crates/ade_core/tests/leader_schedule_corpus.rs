@@ -25,6 +25,7 @@ use ade_core::consensus::{
     EraSchedule, EraSummary, LeaderScheduleError, LeaderScheduleQuery, Nonce,
     OutsideForecastRange, PraosChainDepState,
 };
+use ade_crypto::blake2b::blake2b_256;
 use ade_crypto::vrf::{VrfOutput, VrfVerificationKey};
 use ade_testkit::consensus::ledger_view_stub::{
     EpochStakeFixture, LedgerViewStub, PoolFixture,
@@ -146,12 +147,15 @@ fn build_ledger(corpus: &Value) -> LedgerViewStub {
     for p in corpus["pools"].as_array().expect("pools array") {
         let pool = hash28_from_hex(p["pool_hex"].as_str().expect("pool_hex"));
         let vk = vrf_key_from_hex(p["vrf_key_hex"].as_str().expect("vrf_key_hex"));
+        // The ledger holds the registered keyhash, not the vkey; the corpus
+        // pins the vkey, so derive the keyhash the same way the chain does.
+        let vrf_keyhash = blake2b_256(&vk.0);
         let stake = p["active_stake"].as_u64().expect("active_stake");
         pools.insert(
             pool,
             PoolFixture {
                 active_stake: stake,
-                vrf_key: vk,
+                vrf_keyhash,
             },
         );
     }
