@@ -1,0 +1,166 @@
+{
+  "era": "babbage_praos",
+  "note": "RED follow-mode projection of real boundary-block headers; selection-only, NOT validated.",
+  "headers": [
+    {
+      "block_no": 7812716,
+      "slot": 72748495,
+      "hash": "644ae6fe8849bfc0348ba8078126ad5f78f0437a6f55196b35045bf76c5ad12b",
+      "issuer_pool": "eaa778d97077ff7725fe4cbb70b514d840407a45a3c244ac05f6a83d",
+      "op_cert_counter": 12,
+      "vrf_output_first_8": "75b97bb73b34200b"
+    },
+    {
+      "block_no": 7812717,
+      "slot": 72748572,
+      "hash": "daea1a840bc03f938ba7a0f4e116ee1a107e2094e549abf38bec90171c7eefee",
+      "issuer_pool": "04c60c78417132a195cbb74975346462410f72612952a7c4ade7e438",
+      "op_cert_counter": 11,
+      "vrf_output_first_8": "43467432f487043a"
+    },
+    {
+      "block_no": 7812718,
+      "slot": 72748609,
+      "hash": "0002c7ba1e7e83a9e300e64b741c997d5ca11106635a6a8d51726233cf638341",
+      "issuer_pool": "571b0be3f126255004d9828f37f11026551b9ca391c4aed3b05d6a75",
+      "op_cert_counter": 10,
+      "vrf_output_first_8": "b8a30239ca75efc4"
+    },
+    {
+      "block_no": 7812719,
+      "slot": 72748624,
+      "hash": "ece725317a89aaf22df06faffba73c4812c6349a6e3887e3f1f95160a70bee7a",
+      "issuer_pool": "0322ccfd1f68a8a288057d64428123bb6efed9d6b5c9fe2864db7507",
+      "op_cert_counter": 1659973695,
+      "vrf_output_first_8": "88910eedc88184f7"
+    },
+    {
+      "block_no": 7812720,
+      "slot": 72748642,
+      "hash": "1a77c0e5c1fabb1a133b9c07543a1de4b666e6ba97cf6813a61ff2e2e2c50da7",
+      "issuer_pool": "dda4bc64e339336e3f7bc158177df0c71dc760ff11cb8b0651b3ece4",
+      "op_cert_counter": 0,
+      "vrf_output_first_8": "fd3437b66268731c"
+    },
+    {
+      "block_no": 7812721,
+      "slot": 72748691,
+      "hash": "e4a179c81e171409badd42e9938ea865a1800e253e0248380513f38c11314fb7",
+      "issuer_pool": "a3e71398e80739522e907c35b8f652064e5268e62e9b78a9603f6b98",
+      "op_cert_counter": 8,
+      "vrf_output_first_8": "0814f5515fbd2935"
+    },
+    {
+      "block_no": 7812722,
+      "slot": 72748724,
+      "hash": "c4ff1ccd6b6590fe6b6fe593eb3d04022f9637eb766a0dc67682b7698490666b",
+      "issuer_pool": "a5cc5b8b27e7f1076b3ec673f12839da911e170a2b819ae602b5e019",
+      "op_cert_counter": 2,
+      "vrf_output_first_8": "0561683ca52802c9"
+    },
+    {
+      "block_no": 7812723,
+      "slot": 72748732,
+      "hash": "0844debe68f8b901a4846755fc3bcc038f8c2ab9bf97ffce0d7e4a1651150d04",
+      "issuer_pool": "3635fed04554336e1f58a8db3e30d26e229b9c2d5f67f419a4297069",
+      "op_cert_counter": 21,
+      "vrf_output_first_8": "7855adb4056271ad"
+    },
+    {
+      "block_no": 7812724,
+      "slot": 72748776,
+      "hash": "205d470881552f8a2eeffead9fada8487fcc77eca5e479b7cd733e53399d25dc",
+      "issuer_pool": "bd87416177933138a533c62b205a98598c91da3ebfb8d6826c336b8e",
+      "op_cert_counter": 6,
+      "vrf_output_first_8": "8c662033b88c8d28"
+    },
+    {
+      "block_no": 7812725,
+      "slot": 72748785,
+      "hash": "21ade5f5c1287989ad1159a57568382ad854b8f2f2319996f600107122153024",
+      "issuer_pool": "2c88e3a7f6279bda114f92dbbcd78b734f0ebff40ff2bdce647e9c53",
+      "op_cert_counter": 7,
+      "vrf_output_first_8": "4c7f66ad25e6d52c"
+    },
+    {
+      "block_no": 7812726,
+      "slot": 72748820,
+      "hash": "32010e7cd2d0dcfb73366d4d795f890655b3d151f91564c87c89510d5cc9ec5f",
+      "issuer_pool": "2885a48f88db36756708fd2f7a30117962dad843add43a313b5ebfdf",
+      "op_cert_counter": 1659972975,
+      "vrf_output_first_8": "8acb3e9bdf8b0826"
+    },
+    {
+      "block_no": 7812727,
+      "slot": 72748954,
+      "hash": "a4c463318974da5dd20bbab435a26b70d8c732c61d0278ed0105fb8d8f3d9819",
+      "issuer_pool": "b6a310df0c12af2bcab4cb1ceef2aea7b52080f1ee114b9eae5465de",
+      "op_cert_counter": 5,
+      "vrf_output_first_8": "745f90af2d51509d"
+    },
+    {
+      "block_no": 7812728,
+      "slot": 72748995,
+      "hash": "d86e9f41a81d4e372d9255a07856c46e9026d2eabe847d5404da2bbe5fb7f3c1",
+      "issuer_pool": "90ac71b92a4c29f7a9bbde83ba2e6e2c17b69e41db204a55e7a338ae",
+      "op_cert_counter": 4,
+      "vrf_output_first_8": "2be055c7b2c8daac"
+    },
+    {
+      "block_no": 7812729,
+      "slot": 72749030,
+      "hash": "7cba3842df8d26bf78d6cc50ed547003878556f76c2f5ddc3737e5544f16d473",
+      "issuer_pool": "9ad2692a4865c5999f27d65baf170be5ba38b25489c8e21007193edd",
+      "op_cert_counter": 8,
+      "vrf_output_first_8": "6778f21cc638d982"
+    },
+    {
+      "block_no": 7812730,
+      "slot": 72749032,
+      "hash": "a7b2dadca292340329b166fa275200cc85936dec02bd05b3063b1462ebd92c64",
+      "issuer_pool": "cb11e3e5013a120ee55e8d99bdb7395366bd3164d3da1737300a2b7e",
+      "op_cert_counter": 10,
+      "vrf_output_first_8": "ce29ef953c7a20ea"
+    },
+    {
+      "block_no": 7812731,
+      "slot": 72749039,
+      "hash": "afc387e209ffb5bf9fe205f21cf031c72761e684c49f95cde6d70b7538547e0d",
+      "issuer_pool": "08453273401b3ee2f380ec570f8c926d5f3bd3522337d03b566a6b61",
+      "op_cert_counter": 14,
+      "vrf_output_first_8": "b44bf7cd8b976c2d"
+    },
+    {
+      "block_no": 7812732,
+      "slot": 72749046,
+      "hash": "98f9234147eb3accc2fbe432f43b23a374679f23472e46e3d7c073473024dc6c",
+      "issuer_pool": "93ca5c2f1eb63054f7c768a807408a43e65d7c68fe56e330db20af51",
+      "op_cert_counter": 10,
+      "vrf_output_first_8": "b46c82e89ebe94c3"
+    },
+    {
+      "block_no": 7812733,
+      "slot": 72749048,
+      "hash": "e06f6d0005c46c0e07682e2411747e5407f196815f18d4268dfff9f1024793a6",
+      "issuer_pool": "04357793d81097a7d2c15ec6cd6067a58cdd2fb21aaf07e56c306ecf",
+      "op_cert_counter": 11,
+      "vrf_output_first_8": "f5e1fef2f4056b60"
+    },
+    {
+      "block_no": 7812734,
+      "slot": 72749098,
+      "hash": "e4f245fe0510adf51bb3f4191d1ac9cb0b74389acc94fef692ea8b471644b9c4",
+      "issuer_pool": "c7a434e33111ad62c0b99882c748e9e748c3442d161565661ad8dda4",
+      "op_cert_counter": 10,
+      "vrf_output_first_8": "21adcae916d28f75"
+    },
+    {
+      "block_no": 7812735,
+      "slot": 72749114,
+      "hash": "38aae36693b7c80ed1aa2b829c99d64620fbed8ff616929720748b3d37cd0e85",
+      "issuer_pool": "92bda83eb105d569b23cb6fa1d407dd42de0d2d7e6562718b7ac5c02",
+      "op_cert_counter": 1659973471,
+      "vrf_output_first_8": "e69291509ead3233"
+    }
+  ]
+}

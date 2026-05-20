@@ -1,19 +1,19 @@
-// RED — CE-N-B-6 closure-gate test. `#[ignore]` by default; the test
-// asserts the `live_consensus_session` binary builds and starts,
-// surfacing the orchestrator's initial state.
+// RED — CE-N-B-6 closure-gate test. `#[ignore]` by default (needs
+// network egress to a preprod relay); the test asserts the
+// `live_consensus_session` binary builds and starts.
 //
-// Manual run (operator):
+// Live evidence capture (automated — no manual operator):
 //
-//     docker run --rm -p 3001:3001 \
-//         ghcr.io/intersectmbo/cardano-node:11.0.1
-//     cargo test -p ade_core_interop --release \
-//         --test live_consensus_session -- --ignored \
-//         > docs/clusters/PHASE4-N-B/CE-N-B-6_$(date +%Y%m%d).log
+//     cargo run -p ade_core_interop --bin live_consensus_session -- \
+//         --connect --network preprod --lag-seconds 200 --max-headers 25
 //
-// Full live tip-agreement validation (subscribe to chain-sync, feed
-// arriving headers into `process_stream_input`, assert peer tip
-// equality for a sustained window) is captured in the operator's
-// transcript at the path above. CI does not run this test.
+// This discovers the peer tip, waits offline while the chain advances,
+// reconnects, intersects at the now-stale tip, follows the real
+// roll-forward window, and asserts tip agreement at every block,
+// writing docs/clusters/PHASE4-N-B/CE-N-B-6_<date>.log. A captured run
+// against live preprod (8 Conway headers, 0 disagreements) is committed
+// at that path. The deterministic CI gate is the offline replay test
+// (`tests/follow_offline_replay.rs`); CI does not run this network test.
 
 #![allow(clippy::unwrap_used)]
 #![allow(clippy::expect_used)]
@@ -26,13 +26,13 @@ fn manifest_dir() -> std::path::PathBuf {
 }
 
 #[test]
-#[ignore = "requires pinned-Docker cardano-node 11.0.1 reachable on localhost:3001 — operator-driven evidence capture"]
+#[ignore = "needs network egress to a preprod relay; run the binary with --connect to capture live evidence"]
 fn cardano_node_session_sustained_window() {
-    // The binary, in this slice's scope, only proves wire-up: it
-    // constructs the orchestrator and prints a readiness banner.
-    // The operator's manual evidence pass extends the session driver
-    // to subscribe to chain-sync and assert sustained tip equality
-    // with a real cardano-node peer.
+    // Hermetic gate: assert the binary builds and starts (prints the
+    // readiness banner) without opening a socket. The live tip-agreement
+    // window is captured by running the binary with --connect (see the
+    // module comment); a real preprod run is committed under
+    // docs/clusters/PHASE4-N-B/.
     let bin = manifest_dir()
         .parent()
         .unwrap()

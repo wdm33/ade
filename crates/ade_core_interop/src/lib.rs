@@ -13,6 +13,8 @@
 
 #![deny(unsafe_code)]
 
+pub mod follow;
+
 use ade_core::consensus::candidate::{ChainSelectorState, TiebreakerView};
 use ade_core::consensus::events::{Point, SecurityParam};
 use ade_core::consensus::praos_state::{Nonce, PraosChainDepState};

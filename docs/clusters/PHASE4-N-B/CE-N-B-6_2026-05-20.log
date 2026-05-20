@@ -1,0 +1,17 @@
+[live] follow-mode (RED, peer-trusted, selection-only) network=preprod magic=1 peer=<preprod-relay> max_headers=25
+[live] handshake accepted at v15
+[live] peer tip at connect: block_no=4729381 point=Point { slot: SlotNo(123568502), hash: Hash32(629cfba36f270b565c7e0f1f3fe816628f3aa6d93c487907210252ec9f4b654c) }
+[live] waiting 200s offline for the chain to advance
+[live] reconnected, handshake at v15
+[live] rollback event: RolledBack { to_point: Point { slot: SlotNo(123568502), hash: Hash32(629cfba36f270b565c7e0f1f3fe816628f3aa6d93c487907210252ec9f4b654c) }, depth: BlockDistance(0) }
+[live] +block 4729382 slot 123568505 -> tip [69, 195, 173, 39]
+[live] +block 4729383 slot 123568525 -> tip [252, 210, 197, 213]
+[live] +block 4729384 slot 123568540 -> tip [66, 116, 84, 223]
+[live] +block 4729385 slot 123568627 -> tip [130, 218, 7, 134]
+[live] +block 4729386 slot 123568628 -> tip [68, 196, 153, 5]
+[live] +block 4729387 slot 123568640 -> tip [195, 188, 37, 44]
+[live] +block 4729388 slot 123568668 -> tip [198, 91, 147, 167]
+[live] +block 4729389 slot 123568683 -> tip [213, 202, 82, 254]
+[live] caught up to peer tip
+[live] AGREEMENT at block_no=4729389
+[live] headers_seen=8 disagreements=0 ade_tip_block_no=4729389

@@ -27,7 +27,9 @@ dependencies = [
 name = "ade_core_interop"
 version = "0.1.0"
 dependencies = [
+ "ade_codec",
  "ade_core",
+ "ade_crypto",
  "ade_network",
  "ade_runtime",
  "ade_testkit",
