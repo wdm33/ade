@@ -766,10 +766,11 @@ tier = "derived"
 statement = "Witness binding is era-specific: Byron TxWitness, Shelley+ WitsVKey/Scripts/BootstrapWitnesses, Alonzo+ Redeemers/Datums, Conway governance witnesses"
 source = "Project constitution §3, T-DET-01"
 cross_ref = []
-code_locus = "crates/ade_ledger/src/witness.rs, crates/ade_ledger/src/scripts.rs, crates/ade_plutus/src/evaluator.rs"
-tests = ["witness_info_no_plutus", "witness_info_plutus_detection", "empty_witness_set", "aiken_fixture_tx_evaluates_end_to_end"]
+code_locus = "crates/ade_ledger/src/witness.rs, crates/ade_ledger/src/scripts.rs, crates/ade_plutus/src/evaluator.rs, crates/ade_ledger/src/tx_validity/witness.rs (Conway vkey-witness binding: fail-closed Ed25519 coverage over preserved body hash; PHASE4-B2-S1)"
+tests = ["witness_info_no_plutus", "witness_info_plutus_detection", "empty_witness_set", "aiken_fixture_tx_evaluates_end_to_end", "all_required_covered_is_valid", "signature_over_wrong_body_rejected", "witness_correct_key_wrong_body_rejected", "wrong_size_signature_rejected", "wrong_size_vkey_rejected"]
 ci_script = ""
 status = "partial"
+strengthened_in = ["PHASE4-B2"]
 authority_surface = "non-Plutus witness binding across all 7 eras; Plutus witness binding (V1/V2/V3 scripts, redeemers, datums) structurally wired in Phase 3 — parsed via ade_ledger::witness, evaluated via ade_plutus::eval_tx_phase_two, verdicts surface via TxOutcome enum. NotYetEvaluated variant retired. Oracle-diff closure (CE-88) deferred to release-gate work."
 cluster = "CL-LEDGER-VERDICT"
 evidence = ["docs/active/phase_3_status.md"]
@@ -1067,10 +1068,11 @@ tier = "derived"
 statement = "Witnesses must bind exactly to the intended body, certificates, withdrawals, governance actions, and scripts for the era"
 source = "classification_table.md §B"
 cross_ref = []
-code_locus = ""
-tests = []
+code_locus = "crates/ade_ledger/src/tx_validity/required_signers.rs (Conway required-signer enumeration over inputs/certs/withdrawals/voters/collateral, grounded in getConwayWitsVKeyNeeded); crates/ade_ledger/src/tx_validity/witness.rs (each required key bound by a witness whose Ed25519 sig over the preserved body hash verifies; an extra irrelevant witness never substitutes); PHASE4-B2-S1"
+tests = ["all_required_covered_is_valid", "extra_irrelevant_witness_does_not_substitute", "missing_certificate_witness_rejected", "missing_withdrawal_witness_rejected", "missing_governance_voter_witness_rejected", "witness_correct_key_wrong_body_rejected"]
 ci_script = ""
-status = "declared"
+status = "partial"
+strengthened_in = ["PHASE4-B2"]
 attack_rationale = "Prevents witness reuse and substitution."
 evidence_notes = "Cardano-specific: era-specific binding rules vary by era (Byron, Shelley, Alonzo, Conway each have different witness requirements)."
 
@@ -2022,11 +2024,11 @@ tier = "derived"
 statement = "Every crypto-input, field-size, and structural check on the authority path rejects (produces Invalid) on wrong size or shape and never silently skips. The pattern `if X.len() == K { check } else { skip }` is forbidden in BLUE validation; size checks go through a helper that returns an error. No defined-but-unwired check and no tautological (value-compared-to-itself) guard may stand in for a real check."
 source = "Cardano ledger spec (mandatory witness/field checks); IDD fail-fast doctrine"
 cross_ref = ["DC-LEDGER-02", "T-ENC-01", "DC-CRYPTO-01"]
-code_locus = "crates/ade_ledger/src/block_validity/verdict.rs (FieldKind/FieldError closed fail-closed field taxonomy; PHASE4-B1-S3); crates/ade_core/src/consensus/kes_check.rs (expect_size fail-closed header crypto-field guard; PHASE4-B1-S5); crates/ade_testkit/src/validity/adversarial.rs (M1 truncated VRF proof, M3 flipped KES sig, M4 slot-beyond-horizon adversarial mutators exercising the fail-closed checks; PHASE4-B1-S7)"
-tests = ["expect_size_rejects_wrong_length", "praos_malformed_kes_sig_rejected", "no_mutation_is_ever_valid", "each_mutation_maps_to_expected_class"]
+code_locus = "crates/ade_ledger/src/block_validity/verdict.rs (FieldKind/FieldError closed fail-closed field taxonomy; PHASE4-B1-S3); crates/ade_core/src/consensus/kes_check.rs (expect_size fail-closed header crypto-field guard; PHASE4-B1-S5); crates/ade_testkit/src/validity/adversarial.rs (M1 truncated VRF proof, M3 flipped KES sig, M4 slot-beyond-horizon adversarial mutators exercising the fail-closed checks; PHASE4-B1-S7); crates/ade_ledger/src/tx_validity/witness.rs (wrong-size vkey/sig → MalformedWitnessField via from_bytes, never skipped); crates/ade_ledger/src/tx_validity/required_signers.rs (unresolvable input / malformed certs|withdrawals|voters CBOR → structured RequiredSignerError, never silent skip; PHASE4-B2-S1)"
+tests = ["expect_size_rejects_wrong_length", "praos_malformed_kes_sig_rejected", "no_mutation_is_ever_valid", "each_mutation_maps_to_expected_class", "wrong_size_signature_rejected", "wrong_size_vkey_rejected", "unresolvable_input_is_fail_fast", "unresolvable_collateral_input_is_fail_fast"]
 ci_script = ""
 status = "enforced"
-strengthened_in = ["PHASE4-B1"]
+strengthened_in = ["PHASE4-B1", "PHASE4-B2"]
 
 # =============================================================================
 # DC-TXV — Transaction-validity agreement (PHASE4-B2)
@@ -2086,7 +2088,8 @@ tier = "derived"
 statement = "For each era, required_signers(state, tx_body) is a closed, explicit, era-versioned function over every signer source (resolved input payment credentials, explicit required-signers, certificate key hashes, withdrawal key hashes, Conway governance/voting witnesses, collateral-input implications). A signer source not represented in the era's closed enumeration is impossible to silently omit; incomplete enumeration is a forbidden false-accept path."
 source = "Cardano ledger spec (UTXOW required-signers per era); IDD fail-fast + closed-surface doctrine"
 cross_ref = ["DC-LEDGER-05", "CN-LEDGER-09", "DC-TXV-03"]
-code_locus = ""
-tests = []
-ci_script = ""
-status = "declared"
+code_locus = "crates/ade_ledger/src/tx_validity/required_signers.rs (closed era-versioned SignerSource enum + required_signers/tx_derived_required_signers grounded in Conway getConwayWitsVKeyNeeded + getVKeyWitnessConwayTxCert; PHASE4-B2-S1); crates/ade_ledger/src/tx_validity/witness.rs (fail-closed coverage over preserved body hash); crates/ade_ledger/src/rules.rs (verify_conway_witness_closure body-path wiring)"
+tests = ["all_required_covered_is_valid", "missing_input_payment_witness_rejected", "missing_explicit_required_signer_rejected", "missing_withdrawal_witness_rejected", "missing_certificate_witness_rejected", "missing_governance_voter_witness_rejected", "unresolvable_input_is_fail_fast", "unresolvable_collateral_input_is_fail_fast", "script_credential_input_not_a_vkey_signer", "script_credential_certificate_not_a_vkey_signer", "collateral_payment_key_is_required", "non_conway_era_is_unsupported", "closure_is_deterministic"]
+ci_script = "ci/ci_check_consensus_closed_enums.sh"
+status = "enforced"
+strengthened_in = ["PHASE4-B2"]

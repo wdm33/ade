@@ -3,14 +3,18 @@ set -euo pipefail
 
 # CI: enforce that consensus error enums and event taxonomies are closed.
 # Disallows `#[non_exhaustive]` plus `Other` / `Unknown` open-tail variants
-# anywhere in ade_core::consensus AND ade_ledger::block_validity. Strengthens
-# DC-CONS-04 / DC-CONS-10 / T-DET-01 (consensus) and DC-VAL-02/04/05/06
-# (block-validity) by ensuring every reject reason is a structured value.
+# anywhere in ade_core::consensus, ade_ledger::block_validity, AND
+# ade_ledger::tx_validity. Strengthens DC-CONS-04 / DC-CONS-10 / T-DET-01
+# (consensus) and DC-VAL-02/04/05/06 (block-validity) and DC-TXV-05 /
+# DC-VAL-06 (tx-validity: SignerSource / RequiredSignerError /
+# WitnessClosureError must stay closed structured values) by ensuring
+# every reject reason and signer source is a structured value.
 
 REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 TARGETS=(
     "$REPO_ROOT/crates/ade_core/src/consensus"
     "$REPO_ROOT/crates/ade_ledger/src/block_validity"
+    "$REPO_ROOT/crates/ade_ledger/src/tx_validity"
 )
 
 # Files whose enums must stay flat-data (no owned String). `&'static str`
@@ -21,6 +25,8 @@ STRING_SCOPE=(
     "$REPO_ROOT/crates/ade_core/src/consensus/events.rs"
     "$REPO_ROOT/crates/ade_ledger/src/block_validity/verdict.rs"
     "$REPO_ROOT/crates/ade_ledger/src/block_validity/encoding.rs"
+    "$REPO_ROOT/crates/ade_ledger/src/tx_validity/required_signers.rs"
+    "$REPO_ROOT/crates/ade_ledger/src/tx_validity/witness.rs"
 )
 
 FAIL=0
@@ -84,4 +90,4 @@ if [ "$FAIL" -ne 0 ]; then
     exit 1
 fi
 
-echo "OK: ade_core::consensus + ade_ledger::block_validity error / event enums are closed"
+echo "OK: ade_core::consensus + ade_ledger::block_validity + ade_ledger::tx_validity error / event / signer enums are closed"

@@ -16,3 +16,4 @@ num-traits = "0.2"
 
 [dev-dependencies]
 ade_testkit = { path = "../ade_testkit" }
+ed25519-dalek = "2"

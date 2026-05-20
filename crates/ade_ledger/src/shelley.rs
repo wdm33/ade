@@ -294,6 +294,72 @@ fn decode_witness_sets_from_block(
     Ok(results)
 }
 
+/// Decode the per-tx vkey witnesses from a block's `witness_sets` CBOR
+/// array. Conway witness sets carry vkey witnesses under map key 0 in the
+/// same `[vkey, signature]` shape as Shelley, but the array may be wrapped
+/// in CBOR tag 258 (set encoding). Returns one `Vec<VKeyWitness>` per tx,
+/// in tx_bodies order.
+///
+/// Used by the PHASE4-B2-S1 Conway witness-closure body-path wiring.
+pub fn decode_conway_vkey_witness_sets(
+    witness_sets_cbor: &[u8],
+) -> Result<Vec<Vec<VKeyWitness>>, LedgerError> {
+    let mut offset = 0;
+    let data = witness_sets_cbor;
+    let enc = cbor::read_array_header(data, &mut offset)?;
+    let mut results = Vec::new();
+    match enc {
+        cbor::ContainerEncoding::Definite(n, _) => {
+            for _ in 0..n {
+                results.push(decode_conway_single_witness_set(data, &mut offset)?);
+            }
+        }
+        cbor::ContainerEncoding::Indefinite => {
+            while !cbor::is_break(data, offset)? {
+                results.push(decode_conway_single_witness_set(data, &mut offset)?);
+            }
+        }
+    }
+    Ok(results)
+}
+
+/// Conway-aware single witness-set decoder: like [`decode_single_witness_set`]
+/// but strips the optional tag 258 that wraps the vkey-witness array.
+fn decode_conway_single_witness_set(
+    data: &[u8],
+    offset: &mut usize,
+) -> Result<Vec<VKeyWitness>, LedgerError> {
+    let enc = cbor::read_map_header(data, offset)?;
+    let mut witnesses = Vec::new();
+    let mut process_key = |data: &[u8], offset: &mut usize| -> Result<(), LedgerError> {
+        let (key, _) = cbor::read_uint(data, offset)?;
+        if key == 0 {
+            // The vkey-witness array may be tag(258)-wrapped in Conway.
+            if *offset < data.len() && ((data[*offset] >> 5) & 0x7) == 6 {
+                let _ = cbor::read_tag(data, offset)?;
+            }
+            witnesses = decode_vkey_witnesses(data, offset)?;
+        } else {
+            let _ = cbor::skip_item(data, offset)?;
+        }
+        Ok(())
+    };
+    match enc {
+        cbor::ContainerEncoding::Definite(n, _) => {
+            for _ in 0..n {
+                process_key(data, offset)?;
+            }
+        }
+        cbor::ContainerEncoding::Indefinite => {
+            while !cbor::is_break(data, *offset)? {
+                process_key(data, offset)?;
+            }
+            *offset += 1;
+        }
+    }
+    Ok(witnesses)
+}
+
 /// Decode a single witness set from CBOR map.
 fn decode_single_witness_set(
     data: &[u8],

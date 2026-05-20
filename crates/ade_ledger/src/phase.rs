@@ -104,6 +104,11 @@ pub fn classify_failure_phase(err: &LedgerError) -> ValidationPhase {
         LedgerError::PlutusExecutionFailed(_) => ValidationPhase::Phase2,
         LedgerError::PlutusContextBuildFailed(_) => ValidationPhase::Phase2,
 
+        // Conway vkey-witness + required-signer closure is phase-1
+        // (UTXOW runs before UTXOS/phase-2).
+        LedgerError::WitnessClosure(_) => ValidationPhase::Phase1,
+        LedgerError::RequiredSignerDerivation(_) => ValidationPhase::Phase1,
+
         LedgerError::Decoding(_) => ValidationPhase::Phase1,
     }
 }

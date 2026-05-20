@@ -251,6 +251,13 @@ fn apply_shelley_era_block_with_verdicts(
 
     let mut verdict = decode_validate_tx_bodies(block, era)?;
 
+    // Conway vkey-witness + required-signer closure (CE-B2-1). Runs
+    // against the pre-block UTxO; tx-derived sources are checked
+    // regardless of track_utxo (the slice doc track_utxo note).
+    if era == CardanoEra::Conway {
+        verify_conway_witness_closure(block, &current_state)?;
+    }
+
     let utxo_state = if current_state.track_utxo {
         track_utxo(block, era, &current_state.utxo_state)?
     } else {
@@ -324,6 +331,13 @@ fn apply_shelley_era_block_classified(
     }
 
     let mut verdict = decode_validate_tx_bodies(block, era)?;
+
+    // Conway vkey-witness + required-signer closure (CE-B2-1). Runs
+    // against the pre-block UTxO; tx-derived sources are checked
+    // regardless of track_utxo (the slice doc track_utxo note).
+    if era == CardanoEra::Conway {
+        verify_conway_witness_closure(block, &current_state)?;
+    }
 
     // Track UTxO only when explicitly enabled.
     let utxo_state = if current_state.track_utxo {
@@ -440,6 +454,143 @@ fn track_utxo(
     }
 
     Ok(utxo)
+}
+
+/// Conway vkey-witness + required-signer closure over a block's txs
+/// (PHASE4-B2-S1, CE-B2-1).
+///
+/// For each Conway tx:
+/// 1. Derive the closed required-signer set
+///    ([`crate::tx_validity::required_signers`]). The tx-derived sources
+///    (explicit / withdrawal / certificate / governance voter) are
+///    derived **regardless of `track_utxo`** — they need no UTxO. The
+///    input/collateral payment-key sources are added only when
+///    `track_utxo` is on and the spent/collateral outputs resolve in the
+///    pre-block UTxO (the slice doc track_utxo note: full input-cred
+///    coverage is exercised on real UTxO in B2-S3; here the B1 corpus
+///    runs `track_utxo=false`, so only tx-derived coverage applies).
+/// 2. Verify every required key hash is covered by a witness whose
+///    Ed25519 signature over the PRESERVED tx body hash verifies
+///    ([`crate::tx_validity::verify_required_witnesses`]). Fail-closed.
+///
+/// Returns the FIRST failure as a `LedgerError`; an all-covered block
+/// returns `Ok(())`. Pure over `(block, utxo)`; no I/O.
+fn verify_conway_witness_closure(
+    block: &ade_types::shelley::block::ShelleyBlock,
+    state: &LedgerState,
+) -> Result<(), LedgerError> {
+    use crate::tx_validity::{
+        required_signers, tx_derived_required_signers, verify_required_witnesses, ResolvedInputs,
+        ResolvedOutput, VKeyWitnessRef,
+    };
+
+    if block.tx_count == 0 {
+        return Ok(());
+    }
+
+    let track = state.track_utxo;
+    let utxo = &state.utxo_state.utxos;
+
+    // Decode witness sets once (each is a Vec<VKeyWitness> from key 0).
+    let witness_sets = shelley_witness_sets(block)?;
+
+    let mut body_offset = 0;
+    let body_data = &block.tx_bodies;
+    let body_enc = cbor::read_array_header(body_data, &mut body_offset)?;
+
+    let mut tx_idx = 0usize;
+    let mut process = |data: &[u8], offset: &mut usize| -> Result<(), LedgerError> {
+        let body_start = *offset;
+        let body = ade_codec::conway::tx::decode_conway_tx_body(data, offset)?;
+        let body_end = *offset;
+        let body_wire = &data[body_start..body_end];
+        let body_hash = ade_crypto::blake2b_256(body_wire);
+
+        // 1. Required signers.
+        let required = if track {
+            // Resolve spend + collateral inputs against the pre-block UTxO.
+            // An input that does not resolve makes the closed function
+            // fail-fast (UnresolvableInput) UNLESS we cannot see it because
+            // it predates the replay window — in that case full input-cred
+            // coverage is not provable here, so fall back to the tx-derived
+            // subset (the real-UTxO coverage proof lives in B2-S3).
+            let mut resolved = ResolvedInputs::new();
+            let mut all_resolved = true;
+            for input in body.inputs.iter().chain(
+                body.collateral_inputs.iter().flat_map(|c| c.iter()),
+            ) {
+                match utxo.get(input) {
+                    Some(out) => {
+                        resolved.insert(
+                            input.clone(),
+                            ResolvedOutput {
+                                address: out.address_bytes().to_vec(),
+                            },
+                        );
+                    }
+                    None => {
+                        all_resolved = false;
+                        break;
+                    }
+                }
+            }
+            if all_resolved {
+                required_signers(&body, &resolved, CardanoEra::Conway)
+                    .map_err(LedgerError::RequiredSignerDerivation)?
+            } else {
+                tx_derived_required_signers(&body, CardanoEra::Conway)
+                    .map_err(LedgerError::RequiredSignerDerivation)?
+            }
+        } else {
+            tx_derived_required_signers(&body, CardanoEra::Conway)
+                .map_err(LedgerError::RequiredSignerDerivation)?
+        };
+
+        // 2. Coverage over the preserved body hash.
+        let empty: Vec<VKeyWitnessRef> = Vec::new();
+        let witnesses = witness_sets.get(tx_idx).unwrap_or(&empty);
+        verify_required_witnesses(&body_hash, &required, witnesses)
+            .map_err(LedgerError::WitnessClosure)?;
+
+        tx_idx += 1;
+        Ok(())
+    };
+
+    match body_enc {
+        cbor::ContainerEncoding::Definite(n, _) => {
+            for _ in 0..n {
+                process(body_data, &mut body_offset)?;
+            }
+        }
+        cbor::ContainerEncoding::Indefinite => {
+            while !cbor::is_break(body_data, body_offset)? {
+                process(body_data, &mut body_offset)?;
+            }
+        }
+    }
+
+    Ok(())
+}
+
+/// Decode each tx's vkey witnesses (witness-set key 0) into the
+/// tx_validity witness shape. Reuses the Shelley witness-set decoder
+/// (Conway witness sets carry vkey witnesses under key 0 in the same
+/// `[vkey, signature]` shape).
+fn shelley_witness_sets(
+    block: &ade_types::shelley::block::ShelleyBlock,
+) -> Result<Vec<Vec<crate::tx_validity::VKeyWitnessRef>>, LedgerError> {
+    let raw = crate::shelley::decode_conway_vkey_witness_sets(&block.witness_sets)?;
+    Ok(raw
+        .into_iter()
+        .map(|set| {
+            set.into_iter()
+                .map(|w| crate::tx_validity::VKeyWitnessRef {
+                    vkey: w.vkey,
+                    signature: w.signature,
+                })
+                .collect()
+        })
+        .collect())
 }
 
 /// Epoch boundary transition (T-25A.1 + T-25A.3).

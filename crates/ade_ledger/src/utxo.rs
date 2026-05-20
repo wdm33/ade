@@ -42,6 +42,18 @@ impl TxOut {
             TxOut::AlonzoPlus { coin, .. } => *coin,
         }
     }
+
+    /// The raw address bytes of this output. For Shelley+ outputs these
+    /// are the on-wire address bytes whose header byte classifies the
+    /// payment credential (key-hash vs script-hash). Byron addresses
+    /// return their raw legacy bytes (no Shelley payment credential).
+    pub fn address_bytes(&self) -> &[u8] {
+        match self {
+            TxOut::Byron { address, .. } => address.as_bytes(),
+            TxOut::ShelleyMary { address, .. } => address,
+            TxOut::AlonzoPlus { address, .. } => address,
+        }
+    }
 }
 
 /// Minimal UTxO state — deterministic BTreeMap for ordered iteration.

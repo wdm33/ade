@@ -85,6 +85,13 @@ pub enum LedgerError {
     PlutusExecutionFailed(PlutusExecutionError),
     PlutusContextBuildFailed(PlutusContextBuildError),
 
+    // Conway vkey-witness + required-signer closure (PHASE4-B2-S1).
+    // A required signer was not covered by a verifying witness, or a
+    // signer source could not be derived. Carries the closed
+    // tx_validity taxonomy so the precise cause survives.
+    WitnessClosure(crate::tx_validity::WitnessClosureError),
+    RequiredSignerDerivation(crate::tx_validity::RequiredSignerError),
+
     // Codec passthrough
     Decoding(DecodingError),
 }
@@ -602,6 +609,12 @@ impl core::fmt::Display for LedgerError {
             }
             LedgerError::PlutusContextBuildFailed(e) => {
                 write!(f, "plutus context build failed: {:?}", e.reason)
+            }
+            LedgerError::WitnessClosure(e) => {
+                write!(f, "witness closure failure: {:?}", e)
+            }
+            LedgerError::RequiredSignerDerivation(e) => {
+                write!(f, "required-signer derivation failure: {:?}", e)
             }
         }
     }
