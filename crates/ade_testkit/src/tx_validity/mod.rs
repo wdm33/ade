@@ -19,12 +19,14 @@
 
 pub mod adversarial;
 pub mod extract;
+pub mod valid_synthetic;
 
 pub use adversarial::{
     build_synthetic, has_tx_derived_requirement, judge, ledger_partial_at_576, mutate_witness,
     SyntheticCase, SyntheticMutation, WitnessMutation, WitnessMutationOutcome,
 };
 pub use extract::{extract_block_txs, extract_corpus_txs, ExtractError, ExtractedTx};
+pub use valid_synthetic::{build_dependent_pair, build_valid, DependentPair, ValidCase};
 
 use ade_ledger::state::LedgerState;
 use ade_ledger::tx_validity::{encode_tx_verdict_surface, tx_validity, TxValidityVerdict};

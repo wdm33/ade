@@ -3,19 +3,22 @@ set -euo pipefail
 
 # CI: enforce that consensus error enums and event taxonomies are closed.
 # Disallows `#[non_exhaustive]` plus `Other` / `Unknown` open-tail variants
-# anywhere in ade_core::consensus, ade_ledger::block_validity, AND
-# ade_ledger::tx_validity. Strengthens DC-CONS-04 / DC-CONS-10 / T-DET-01
-# (consensus) and DC-VAL-02/04/05/06 (block-validity) and DC-TXV-01/02/04/05 /
-# DC-VAL-06 (tx-validity: SignerSource / RequiredSignerError /
-# WitnessClosureError / TxValidityVerdict / TxRejectClass / TxValidityError
-# must stay closed structured values) by ensuring every reject reason, signer
-# source, and tx verdict class is a structured value.
+# anywhere in ade_core::consensus, ade_ledger::block_validity,
+# ade_ledger::tx_validity, AND ade_ledger::mempool. Strengthens
+# DC-CONS-04 / DC-CONS-10 / T-DET-01 (consensus) and DC-VAL-02/04/05/06
+# (block-validity) and DC-TXV-01/02/04/05 / DC-VAL-06 (tx-validity: SignerSource
+# / RequiredSignerError / WitnessClosureError / TxValidityVerdict / TxRejectClass
+# / TxValidityError must stay closed structured values) and DC-MEM-01/02
+# (mempool: AdmitOutcome / OrderPolicy must stay closed structured values) by
+# ensuring every reject reason, signer source, tx verdict class, and admission
+# outcome is a structured value.
 
 REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 TARGETS=(
     "$REPO_ROOT/crates/ade_core/src/consensus"
     "$REPO_ROOT/crates/ade_ledger/src/block_validity"
     "$REPO_ROOT/crates/ade_ledger/src/tx_validity"
+    "$REPO_ROOT/crates/ade_ledger/src/mempool"
 )
 
 # Files whose enums must stay flat-data (no owned String). `&'static str`
@@ -31,6 +34,8 @@ STRING_SCOPE=(
     "$REPO_ROOT/crates/ade_ledger/src/tx_validity/verdict.rs"
     "$REPO_ROOT/crates/ade_ledger/src/tx_validity/phase1.rs"
     "$REPO_ROOT/crates/ade_ledger/src/tx_validity/transition.rs"
+    "$REPO_ROOT/crates/ade_ledger/src/mempool/admit.rs"
+    "$REPO_ROOT/crates/ade_ledger/src/mempool/policy.rs"
 )
 
 FAIL=0
@@ -94,4 +99,4 @@ if [ "$FAIL" -ne 0 ]; then
     exit 1
 fi
 
-echo "OK: ade_core::consensus + ade_ledger::block_validity + ade_ledger::tx_validity error / event / signer enums are closed"
+echo "OK: ade_core::consensus + ade_ledger::block_validity + ade_ledger::tx_validity + ade_ledger::mempool error / event / signer / admission enums are closed"

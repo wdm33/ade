@@ -817,10 +817,11 @@ tier = "derived"
 statement = "Mempool acceptance rules must not contradict block/ledger acceptance rules"
 source = "Project constitution §3, T-DET-01, T-CORE-01"
 cross_ref = []
-code_locus = ""
-tests = []
-ci_script = ""
-status = "declared"
+code_locus = "crates/ade_ledger/src/mempool/admit.rs"
+tests = ["valid_tx_admitted_and_accumulates", "invalid_tx_rejected_no_false_accept", "admission_equals_tx_validity_verdict", "dependent_tx_admitted_against_accumulating_state"]
+ci_script = "ci/ci_check_consensus_closed_enums.sh"
+status = "enforced"
+strengthened_in = ["PHASE4-B2"]
 
 [[rules]]
 id = "DC-MEM-02"
@@ -828,10 +829,11 @@ tier = "derived"
 statement = "Overload shedding follows deterministic policy, not timing-dependent collapse"
 source = "Project constitution §3, T-DET-01, T-CORE-02"
 cross_ref = []
-code_locus = ""
-tests = []
-ci_script = ""
-status = "declared"
+code_locus = "crates/ade_ledger/src/mempool/policy.rs"
+tests = ["policy_does_not_change_validity", "determinism"]
+ci_script = "ci/ci_check_consensus_closed_enums.sh"
+status = "enforced"
+strengthened_in = ["PHASE4-B2"]
 
 [[rules]]
 id = "DC-CORE-01"

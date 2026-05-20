@@ -26,6 +26,7 @@ pub mod governance;
 pub mod hfc;
 pub mod late_era_validation;
 pub mod mary;
+pub mod mempool;
 pub mod phase;
 pub mod plutus_eval;
 pub mod pparams;
