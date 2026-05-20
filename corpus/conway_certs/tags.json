@@ -1,0 +1,24 @@
+{
+  "source": "eras/conway/impl/cddl/data/conway.cddl (IntersectMBO/cardano-ledger), certificate sum type tags 0..18",
+  "certs": [
+    { "tag": 0,  "constructor": "account_registration_cert",                                  "disposition": "NewDeposit",       "coin_source": "DepositParam",      "state_dependent": false },
+    { "tag": 1,  "constructor": "account_unregistration_cert",                                "disposition": "Refund",           "coin_source": "RegistrationState", "state_dependent": true  },
+    { "tag": 2,  "constructor": "delegation_to_stake_pool_cert",                              "disposition": "Neutral",          "coin_source": "none",              "state_dependent": false },
+    { "tag": 3,  "constructor": "pool_registration_cert",                                     "disposition": "NewDeposit",       "coin_source": "DepositParam",      "state_dependent": true  },
+    { "tag": 4,  "constructor": "pool_retirement_cert",                                       "disposition": "Neutral",          "coin_source": "none",              "state_dependent": false },
+    { "tag": 5,  "constructor": "removed_in_conway",                                          "disposition": "NotValidInConway", "coin_source": "none",              "state_dependent": false },
+    { "tag": 6,  "constructor": "removed_in_conway",                                          "disposition": "NotValidInConway", "coin_source": "none",              "state_dependent": false },
+    { "tag": 7,  "constructor": "account_registration_deposit_cert",                          "disposition": "NewDeposit",       "coin_source": "ExplicitInCert",    "state_dependent": false },
+    { "tag": 8,  "constructor": "account_unregistration_deposit_cert",                        "disposition": "Refund",           "coin_source": "ExplicitInCert",    "state_dependent": false },
+    { "tag": 9,  "constructor": "delegation_to_drep_cert",                                    "disposition": "Neutral",          "coin_source": "none",              "state_dependent": false },
+    { "tag": 10, "constructor": "delegation_to_stake_pool_and_drep_cert",                     "disposition": "Neutral",          "coin_source": "none",              "state_dependent": false },
+    { "tag": 11, "constructor": "account_registration_delegation_to_stake_pool_cert",         "disposition": "NewDeposit",       "coin_source": "ExplicitInCert",    "state_dependent": false },
+    { "tag": 12, "constructor": "account_registration_delegation_to_drep_cert",               "disposition": "NewDeposit",       "coin_source": "ExplicitInCert",    "state_dependent": false },
+    { "tag": 13, "constructor": "account_registration_delegation_to_stake_pool_and_drep_cert","disposition": "NewDeposit",       "coin_source": "ExplicitInCert",    "state_dependent": false },
+    { "tag": 14, "constructor": "committee_authorization_cert",                               "disposition": "Neutral",          "coin_source": "none",              "state_dependent": false },
+    { "tag": 15, "constructor": "committee_resignation_cert",                                 "disposition": "Neutral",          "coin_source": "none",              "state_dependent": false },
+    { "tag": 16, "constructor": "drep_registration_cert",                                     "disposition": "NewDeposit",       "coin_source": "ExplicitInCert",    "state_dependent": false },
+    { "tag": 17, "constructor": "drep_unregistration_cert",                                   "disposition": "Refund",           "coin_source": "ExplicitInCert",    "state_dependent": false },
+    { "tag": 18, "constructor": "drep_update_cert",                                           "disposition": "Neutral",          "coin_source": "none",              "state_dependent": false }
+  ]
+}
