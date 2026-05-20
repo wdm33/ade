@@ -8,7 +8,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use ade_types::conway::tx::ConwayTxBody;
-use ade_types::tx::TxIn;
+use ade_types::tx::{Coin, TxIn};
 use ade_types::CardanoEra;
 
 use crate::error::LedgerError;
@@ -122,6 +122,14 @@ pub fn validate_conway_state_backed(
         check_required_signers(req, &witness_info.available_key_hashes)?;
     }
 
+    // 5b. Coin-level preservation of value (the no-false-accept gap closed in
+    //     PHASE4-B2-S4). The Conway/Babbage/Alonzo state-backed path previously
+    //     verified input presence, collateral, network, and required signers
+    //     but never the value equation, so a tx whose outputs + fee did not
+    //     equal its inputs was accepted at track_utxo=true. See
+    //     `check_conway_coin_conservation` for the exact (conservative) scope.
+    check_conway_coin_conservation(body, utxo)?;
+
     // 6. Tx-body network_id
     check_tx_network_id(body.network_id, current_network)?;
 
@@ -133,6 +141,63 @@ pub fn validate_conway_state_backed(
         check_address_network(&ret.address, current_network)?;
     }
 
+    Ok(())
+}
+
+/// Coin-level preservation of value for a Conway transaction body.
+///
+/// The Cardano `UTXO` rule requires `consumed == produced`, where (coin level):
+///
+/// ```text
+/// consumed = sum(resolved input coins) + sum(withdrawals) + refunded_deposits
+/// produced = sum(output coins) + fee + donation + new_deposits
+/// ```
+///
+/// This function enforces the equation in its closed, deposit-free form —
+/// `sum(input coins) == sum(output coins) + fee + donation` — and applies it
+/// ONLY when the tx carries neither certificates (which add deposit/refund
+/// terms) nor withdrawals (which add a consumed term). For a tx that DOES carry
+/// certs or withdrawals, the full deposit/withdrawal accounting is out of this
+/// slice's scope, so the check is conservatively DEFERRED rather than guessed —
+/// deferral can never produce a false REJECT (the other state-backed checks and
+/// the witness closure still run), only the residual value imbalance for
+/// deposit/withdrawal-bearing txs is not yet caught here.
+///
+/// Inputs are guaranteed resolvable: `check_inputs_present` runs earlier in the
+/// composer, so a missing input is already a `BadInputs` rejection by the time
+/// this is reached. `i128` arithmetic; no float, no rounding.
+fn check_conway_coin_conservation(
+    body: &ConwayTxBody,
+    utxo: &BTreeMap<TxIn, TxOut>,
+) -> Result<(), LedgerError> {
+    // Deposit/withdrawal-bearing txs are deferred (see docstring).
+    if body.certs.is_some() || body.withdrawals.is_some() {
+        return Ok(());
+    }
+
+    let mut consumed: i128 = 0;
+    for input in &body.inputs {
+        // Present by construction (check_inputs_present ran first); a defensive
+        // miss contributes nothing and is caught upstream, never silently here.
+        if let Some(out) = utxo.get(input) {
+            consumed = consumed.saturating_add(out.coin().0 as i128);
+        }
+    }
+
+    let mut produced: i128 = body.fee.0 as i128;
+    for out in &body.outputs {
+        produced = produced.saturating_add(out.coin.0 as i128);
+    }
+    if let Some(donation) = body.donation {
+        produced = produced.saturating_add(donation.0 as i128);
+    }
+
+    if consumed != produced {
+        return Err(LedgerError::Conservation(crate::error::ConservationError {
+            consumed_coin: Coin(consumed.max(0).min(u64::MAX as i128) as u64),
+            produced_coin: Coin(produced.max(0).min(u64::MAX as i128) as u64),
+        }));
+    }
     Ok(())
 }
 
@@ -296,7 +361,9 @@ mod tests {
     #[test]
     fn conway_state_backed_happy_path() {
         let body = conway_body();
-        let utxo = utxo_with(&[(TxIn { tx_hash: Hash32([0x01; 32]), index: 0 }, 5_000_000)]);
+        // Input must balance output(1_000_000) + fee(200_000) = 1_200_000 to
+        // satisfy coin-level preservation of value (PHASE4-B2-S4).
+        let utxo = utxo_with(&[(TxIn { tx_hash: Hash32([0x01; 32]), index: 0 }, 1_200_000)]);
         assert!(validate_conway_state_backed(
             &body, &utxo, &empty_witness(), MAINNET_PERCENT, MAINNET_NET, PV_CONWAY, (i64::MAX, i64::MAX),
         ).is_ok());
@@ -327,8 +394,10 @@ mod tests {
         let mut refs = BTreeSet::new();
         refs.insert(ref_in.clone());
         body.reference_inputs = Some(refs);
+        // Spend input balances output + fee; the reference input is not
+        // consumed, so it does not contribute to preservation of value.
         let utxo = utxo_with(&[
-            (TxIn { tx_hash: Hash32([0x01; 32]), index: 0 }, 5_000_000),
+            (TxIn { tx_hash: Hash32([0x01; 32]), index: 0 }, 1_200_000),
             (ref_in, 1_000_000),
         ]);
         assert!(validate_conway_state_backed(
@@ -346,7 +415,9 @@ mod tests {
         let mut refs = BTreeSet::new();
         refs.insert(shared.clone());
         body.reference_inputs = Some(refs);
-        let utxo = utxo_with(&[(shared, 5_000_000)]);
+        // Balanced spend (output + fee) so the conservation check passes; this
+        // test isolates the PV-11 reference-input overlap behavior.
+        let utxo = utxo_with(&[(shared, 1_200_000)]);
         assert!(validate_conway_state_backed(
             &body, &utxo, &empty_witness(), MAINNET_PERCENT, MAINNET_NET, 11, (i64::MAX, i64::MAX),
         ).is_ok());
@@ -362,7 +433,9 @@ mod tests {
         body.proposal_procedures = Some(vec![0x80]);
         body.treasury_value = Some(CoinT(1_000_000));
         body.donation = Some(CoinT(500));
-        let utxo = utxo_with(&[(TxIn { tx_hash: Hash32([0x01; 32]), index: 0 }, 5_000_000)]);
+        // Balance: output(1_000_000) + fee(200_000) + donation(500). treasury_value
+        // is a governance read, not a produced-value term.
+        let utxo = utxo_with(&[(TxIn { tx_hash: Hash32([0x01; 32]), index: 0 }, 1_200_500)]);
         assert!(validate_conway_state_backed(
             &body, &utxo, &empty_witness(), MAINNET_PERCENT, MAINNET_NET, PV_CONWAY, (i64::MAX, i64::MAX),
         ).is_ok());

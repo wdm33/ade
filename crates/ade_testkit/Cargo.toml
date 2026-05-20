@@ -12,6 +12,7 @@ ade_plutus = { path = "../ade_plutus" }
 ade_runtime = { path = "../ade_runtime" }
 ade_types = { path = "../ade_types" }
 blake2 = "0.10"
+ed25519-dalek = "2"
 flate2 = "1"
 tar = "0.4"
 serde = { version = "1", features = ["derive"] }

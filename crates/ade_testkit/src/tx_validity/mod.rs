@@ -17,8 +17,13 @@
 //! UTxO and is proven synthetically in B2-S1). It asserts nothing itself — the
 //! calling tests assert agreement and replay-equivalence.
 
+pub mod adversarial;
 pub mod extract;
 
+pub use adversarial::{
+    build_synthetic, has_tx_derived_requirement, judge, ledger_partial_at_576, mutate_witness,
+    SyntheticCase, SyntheticMutation, WitnessMutation, WitnessMutationOutcome,
+};
 pub use extract::{extract_block_txs, extract_corpus_txs, ExtractError, ExtractedTx};
 
 use ade_ledger::state::LedgerState;

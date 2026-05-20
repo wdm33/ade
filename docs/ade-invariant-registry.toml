@@ -446,14 +446,14 @@ tier = "derived"
 statement = "Same genesis + same blocks = byte-identical ledger state"
 source = "Project constitution §3, T-DET-01"
 cross_ref = []
-code_locus = "crates/ade_ledger/src/state.rs, crates/ade_ledger/src/fingerprint.rs, crates/ade_testkit/src/validity/adversarial.rs (GREEN no-false-accept adversarial corpus: no mutation of a real block ever yields Valid through block_validity; PHASE4-B1-S7)"
+code_locus = "crates/ade_ledger/src/state.rs, crates/ade_ledger/src/fingerprint.rs, crates/ade_testkit/src/validity/adversarial.rs (GREEN no-false-accept adversarial corpus: no mutation of a real block ever yields Valid through block_validity; PHASE4-B1-S7); crates/ade_testkit/src/tx_validity/adversarial.rs (GREEN no-false-accept tx adversarial corpus: deterministic witness/value/input mutations replay byte-identically through tx_validity, no mutation ever yields Valid; PHASE4-B2-S4)"
 tests = ["utxo_state_deterministic", "all_eras_determinism_summary", "boundary_fingerprint_matches_pins", "no_mutation_is_ever_valid", "adversarial_replays_identically"]
 ci_script = "ci/ci_check_ledger_determinism.sh, ci/ci_check_differential_divergence.sh"
 status = "partial"
 authority_surface = "ledger state progression at boundary-snapshot precision; per-block live differential deferred to external harness"
 cluster = "CL-LEDGER-VERDICT"
 evidence = ["boundary fingerprint agreement at 12 proof-grade snapshots (CE-75 in-repo layer 2)"]
-strengthened_in = ["PHASE4-B1"]
+strengthened_in = ["PHASE4-B1", "PHASE4-B2"]
 
 [[rules]]
 id = "DC-LEDGER-03"
@@ -2024,7 +2024,7 @@ tier = "derived"
 statement = "Every crypto-input, field-size, and structural check on the authority path rejects (produces Invalid) on wrong size or shape and never silently skips. The pattern `if X.len() == K { check } else { skip }` is forbidden in BLUE validation; size checks go through a helper that returns an error. No defined-but-unwired check and no tautological (value-compared-to-itself) guard may stand in for a real check."
 source = "Cardano ledger spec (mandatory witness/field checks); IDD fail-fast doctrine"
 cross_ref = ["DC-LEDGER-02", "T-ENC-01", "DC-CRYPTO-01"]
-code_locus = "crates/ade_ledger/src/block_validity/verdict.rs (FieldKind/FieldError closed fail-closed field taxonomy; PHASE4-B1-S3); crates/ade_core/src/consensus/kes_check.rs (expect_size fail-closed header crypto-field guard; PHASE4-B1-S5); crates/ade_testkit/src/validity/adversarial.rs (M1 truncated VRF proof, M3 flipped KES sig, M4 slot-beyond-horizon adversarial mutators exercising the fail-closed checks; PHASE4-B1-S7); crates/ade_ledger/src/tx_validity/witness.rs (wrong-size vkey/sig → MalformedWitnessField via from_bytes, never skipped); crates/ade_ledger/src/tx_validity/required_signers.rs (unresolvable input / malformed certs|withdrawals|voters CBOR → structured RequiredSignerError, never silent skip; PHASE4-B2-S1)"
+code_locus = "crates/ade_ledger/src/block_validity/verdict.rs (FieldKind/FieldError closed fail-closed field taxonomy; PHASE4-B1-S3); crates/ade_core/src/consensus/kes_check.rs (expect_size fail-closed header crypto-field guard; PHASE4-B1-S5); crates/ade_testkit/src/validity/adversarial.rs (M1 truncated VRF proof, M3 flipped KES sig, M4 slot-beyond-horizon adversarial mutators exercising the fail-closed checks; PHASE4-B1-S7); crates/ade_ledger/src/tx_validity/witness.rs (wrong-size vkey/sig → MalformedWitnessField via from_bytes, never skipped); crates/ade_ledger/src/tx_validity/required_signers.rs (unresolvable input / malformed certs|withdrawals|voters CBOR → structured RequiredSignerError, never silent skip; PHASE4-B2-S1); crates/ade_ledger/src/conway.rs (check_conway_coin_conservation: closed coin-level preservation-of-value check wired into validate_conway_state_backed — closes the state-backed fail-open gap where outputs+fee != inputs was accepted at track_utxo=true; PHASE4-B2-S4); crates/ade_testkit/src/tx_validity/adversarial.rs (GREEN witness/value/input mutators driving tx_validity fail-closed; PHASE4-B2-S4)"
 tests = ["expect_size_rejects_wrong_length", "praos_malformed_kes_sig_rejected", "no_mutation_is_ever_valid", "each_mutation_maps_to_expected_class", "wrong_size_signature_rejected", "wrong_size_vkey_rejected", "unresolvable_input_is_fail_fast", "unresolvable_collateral_input_is_fail_fast"]
 ci_script = ""
 status = "enforced"
@@ -2068,8 +2068,8 @@ tier = "derived"
 statement = "Ade's Valid/Invalid verdict for a transaction equals the reference cardano-node verdict, including the reason class where the reference exposes it. Established over a positive corpus (real on-chain txs) and a mandatory adversarial corpus (txs the reference rejects). A false-accept is release-blocking."
 source = "cardano-node reference behavior; Cardano ledger spec"
 cross_ref = ["DC-LEDGER-02", "CN-LEDGER-02", "DC-VAL-04"]
-code_locus = "crates/ade_testkit/src/tx_validity/ (GREEN harness: extracts every on-wire Conway tx from the committed Conway-576 corpus blocks and drives the BLUE tx_validity over each at track_utxo=false — partial scope: structural + witness closure; UTxO-dependent checks deferred); crates/ade_ledger/src/tx_validity/phase1.rs (tx_phase_one gates the UTxO-dependent state-backed checks behind track_utxo, mirroring the block path's verify_conway_witness_closure + run_phase_one_composers split — the witness closure runs unconditionally); PHASE4-B2-S3 (positive half only — agreement CE closes in B2-S4)"
-tests = ["all_corpus_txs_valid", "corpus_tx_count_nonzero"]
+code_locus = "crates/ade_testkit/src/tx_validity/ (GREEN harness: extracts every on-wire Conway tx from the committed Conway-576 corpus blocks and drives the BLUE tx_validity over each at track_utxo=false — partial scope: structural + witness closure; UTxO-dependent checks deferred); crates/ade_ledger/src/tx_validity/phase1.rs (tx_phase_one gates the UTxO-dependent state-backed checks behind track_utxo, mirroring the block path's verify_conway_witness_closure + run_phase_one_composers split — the witness closure runs unconditionally); PHASE4-B2-S3 (positive half); crates/ade_testkit/src/tx_validity/adversarial.rs + crates/ade_ledger/tests/tx_validity_adversarial_corpus.rs (NEGATIVE half: family A witness mutations on real corpus txs at track_utxo=false + family B synthetic value/input/witness mutations at track_utxo=true — every mutation → Invalid, no false accept; PHASE4-B2-S4)"
+tests = ["all_corpus_txs_valid", "corpus_tx_count_nonzero", "no_mutation_is_ever_valid", "each_mutation_maps_to_expected_class", "adversarial_replays_identically"]
 ci_script = ""
 status = "declared"
 strengthened_in = ["PHASE4-B2"]
