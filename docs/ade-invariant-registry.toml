@@ -1190,8 +1190,8 @@ tier = "derived"
 statement = "Header validation must bind exactly to the accepted body and consensus context"
 source = "classification_table.md §D"
 cross_ref = []
-code_locus = "crates/ade_core/src/consensus/header_validate.rs, crates/ade_core/src/consensus/header_summary.rs, crates/ade_core/src/consensus/fork_choice.rs, crates/ade_core/src/consensus/kes_check.rs (VRF-keyhash binding + KES authentication for Praos headers; PHASE4-B1-S5)"
-tests = ["consensus::header_validate::tests::pipeline_short_circuits_on_first_failure", "consensus::header_validate::tests::nonce_contribution_uses_nonce_role_vrf_output_not_leader_role", "valid_header_accepted_advances_state", "header_with_slot_regression_rejected", "header_with_block_no_regression_rejected", "header_with_op_cert_regression_rejected", "header_with_invalid_vrf_proof_rejected", "header_beyond_forecast_horizon_rejected", "validate_replay_is_deterministic", "consensus::candidate::tests::candidate_fragment_carries_anchor_block_no", "conway_corpus_headers_all_pass_leader_check", "praos_vrf_keyhash_mismatch_rejected"]
+code_locus = "crates/ade_core/src/consensus/header_validate.rs, crates/ade_core/src/consensus/header_summary.rs, crates/ade_core/src/consensus/fork_choice.rs, crates/ade_core/src/consensus/kes_check.rs (VRF-keyhash binding + KES authentication for Praos headers; PHASE4-B1-S5), crates/ade_ledger/src/block_validity/transition.rs, crates/ade_ledger/src/block_validity/header_input.rs (wired body-hash binding: recomputed segwit body hash compared to the validated header body_hash before body application; PHASE4-B1-S4)"
+tests = ["consensus::header_validate::tests::pipeline_short_circuits_on_first_failure", "consensus::header_validate::tests::nonce_contribution_uses_nonce_role_vrf_output_not_leader_role", "valid_header_accepted_advances_state", "header_with_slot_regression_rejected", "header_with_block_no_regression_rejected", "header_with_op_cert_regression_rejected", "header_with_invalid_vrf_proof_rejected", "header_beyond_forecast_horizon_rejected", "validate_replay_is_deterministic", "consensus::candidate::tests::candidate_fragment_carries_anchor_block_no", "conway_corpus_headers_all_pass_leader_check", "praos_vrf_keyhash_mismatch_rejected", "altered_body_rejected_by_hash_binding"]
 ci_script = ""
 status = "declared"
 strengthened_in = ["PHASE4-N-B", "PHASE4-B1"]
@@ -1972,10 +1972,11 @@ tier = "derived"
 statement = "A block is Valid iff both the consensus header authority (validate_and_apply_header) and the ledger body authority (apply_block_with_verdicts) accept it. No path may produce a Valid verdict while skipping either authority."
 source = "Cardano ledger spec; Ouroboros Praos spec"
 cross_ref = ["DC-LEDGER-02", "CN-CONS-04", "DC-CONS-04"]
-code_locus = "crates/ade_ledger/src/block_validity/ (closed verdict/error taxonomy substrate; PHASE4-B1-S3)"
-tests = []
+code_locus = "crates/ade_ledger/src/block_validity/ (closed verdict/error taxonomy substrate; PHASE4-B1-S3), crates/ade_ledger/src/block_validity/transition.rs, crates/ade_ledger/src/block_validity/header_input.rs (header ∧ body composition; PHASE4-B1-S4)"
+tests = ["valid_block_evolves_both_states", "header_before_body_fail_fast"]
 ci_script = ""
 status = "declared"
+strengthened_in = ["PHASE4-B1"]
 
 [[rules]]
 id = "DC-VAL-03"
@@ -1983,10 +1984,11 @@ tier = "derived"
 statement = "The header is validated before the body; body validation never runs on a header-invalid block. The first failing authority determines the reason (fail-fast ordering)."
 source = "Ouroboros Praos spec; IDD fail-fast doctrine"
 cross_ref = ["DC-VAL-02"]
-code_locus = ""
-tests = []
+code_locus = "crates/ade_ledger/src/block_validity/transition.rs (header authority decided before body; body authority unreachable on header failure; PHASE4-B1-S4)"
+tests = ["header_before_body_fail_fast"]
 ci_script = ""
 status = "declared"
+strengthened_in = ["PHASE4-B1"]
 
 [[rules]]
 id = "DC-VAL-04"
@@ -2005,10 +2007,11 @@ tier = "derived"
 statement = "A Valid block yields evolved (LedgerState', PraosChainDepState'); an Invalid block yields the unchanged input states plus a structured reason. No partial or in-place mutation occurs on the invalid path."
 source = "IDD explicit-total-transition doctrine; Cardano ledger spec"
 cross_ref = ["DC-LEDGER-02"]
-code_locus = "crates/ade_ledger/src/block_validity/ (closed verdict taxonomy: Valid carries evolved-state stats, Invalid carries structured reason; PHASE4-B1-S3)"
-tests = []
+code_locus = "crates/ade_ledger/src/block_validity/ (closed verdict taxonomy: Valid carries evolved-state stats, Invalid carries structured reason; PHASE4-B1-S3), crates/ade_ledger/src/block_validity/transition.rs (Valid returns evolved (ledger', chain_dep'); Invalid returns input clones; PHASE4-B1-S4)"
+tests = ["invalid_block_leaves_state_unchanged", "valid_block_evolves_both_states"]
 ci_script = ""
 status = "declared"
+strengthened_in = ["PHASE4-B1"]
 
 [[rules]]
 id = "DC-VAL-06"
