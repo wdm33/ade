@@ -323,6 +323,17 @@ pub fn decode_conway_vkey_witness_sets(
     Ok(results)
 }
 
+/// Decode a SINGLE Conway witness-set map (one transaction's witness set,
+/// NOT the block-level array) into its vkey witnesses. Used by the standalone
+/// tx_validity path (PHASE4-B2-S2). Strips the optional tag 258 around the
+/// vkey-witness array, exactly as the block-path decoder does.
+pub fn decode_conway_vkey_witness_set_single(
+    witness_set_cbor: &[u8],
+) -> Result<Vec<VKeyWitness>, LedgerError> {
+    let mut offset = 0;
+    decode_conway_single_witness_set(witness_set_cbor, &mut offset)
+}
+
 /// Conway-aware single witness-set decoder: like [`decode_single_witness_set`]
 /// but strips the optional tag 258 that wraps the vkey-witness array.
 fn decode_conway_single_witness_set(

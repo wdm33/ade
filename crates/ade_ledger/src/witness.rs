@@ -379,6 +379,15 @@ impl WitnessInfo {
     }
 }
 
+/// Decode a SINGLE witness-set map (one transaction's witness set, NOT the
+/// block-level array) into [`WitnessInfo`]. Used by the standalone tx_validity
+/// path (PHASE4-B2-S2), which carries one tx's witness set as a slice lifted
+/// from the full transaction CBOR.
+pub fn decode_witness_info_single(witness_set_cbor: &[u8]) -> Result<WitnessInfo, LedgerError> {
+    let mut offset = 0;
+    decode_single_witness_info(witness_set_cbor, &mut offset)
+}
+
 /// Decode all witness sets from a block's witness_sets CBOR array.
 ///
 /// Returns one WitnessInfo per transaction, in the same order as tx_bodies.

@@ -5,10 +5,11 @@ set -euo pipefail
 # Disallows `#[non_exhaustive]` plus `Other` / `Unknown` open-tail variants
 # anywhere in ade_core::consensus, ade_ledger::block_validity, AND
 # ade_ledger::tx_validity. Strengthens DC-CONS-04 / DC-CONS-10 / T-DET-01
-# (consensus) and DC-VAL-02/04/05/06 (block-validity) and DC-TXV-05 /
+# (consensus) and DC-VAL-02/04/05/06 (block-validity) and DC-TXV-01/02/04/05 /
 # DC-VAL-06 (tx-validity: SignerSource / RequiredSignerError /
-# WitnessClosureError must stay closed structured values) by ensuring
-# every reject reason and signer source is a structured value.
+# WitnessClosureError / TxValidityVerdict / TxRejectClass / TxValidityError
+# must stay closed structured values) by ensuring every reject reason, signer
+# source, and tx verdict class is a structured value.
 
 REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 TARGETS=(
@@ -27,6 +28,9 @@ STRING_SCOPE=(
     "$REPO_ROOT/crates/ade_ledger/src/block_validity/encoding.rs"
     "$REPO_ROOT/crates/ade_ledger/src/tx_validity/required_signers.rs"
     "$REPO_ROOT/crates/ade_ledger/src/tx_validity/witness.rs"
+    "$REPO_ROOT/crates/ade_ledger/src/tx_validity/verdict.rs"
+    "$REPO_ROOT/crates/ade_ledger/src/tx_validity/phase1.rs"
+    "$REPO_ROOT/crates/ade_ledger/src/tx_validity/transition.rs"
 )
 
 FAIL=0

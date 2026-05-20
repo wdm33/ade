@@ -1517,6 +1517,42 @@ fn locate_alonzo_plus_output_slices(
 }
 
 /// Extract inputs and outputs from a decoded tx body.
+/// Apply a single Conway transaction to a UTxO state — the canonical UTxO
+/// transition the block path uses (`track_utxo`'s inner closure), factored for
+/// one tx so the standalone `tx_validity` path (PHASE4-B2-S2) and the block
+/// body path produce byte-identical UTxO outputs. Consumes the body's inputs
+/// and produces its outputs under `tx_id` (computed from preserved body bytes).
+///
+/// `body_bytes` MUST be the preserved body slice `tx_id` was hashed over, so
+/// the produced `AlonzoPlus` outputs carry their byte-exact `raw` slices.
+pub fn apply_conway_tx_to_utxo(
+    utxo: &crate::utxo::UTxOState,
+    body: &ade_types::conway::tx::ConwayTxBody,
+    body_bytes: &[u8],
+    tx_id: &ade_types::Hash32,
+) -> Result<crate::utxo::UTxOState, LedgerError> {
+    let mut new_utxo = utxo.clone();
+    for input in &body.inputs {
+        new_utxo.utxos.remove(input);
+    }
+    let slices = locate_alonzo_plus_output_slices(body_bytes)?;
+    for (idx, (out, (s, e))) in body.outputs.iter().zip(slices).enumerate() {
+        let tx_in = ade_types::tx::TxIn {
+            tx_hash: tx_id.clone(),
+            index: idx as u16,
+        };
+        new_utxo.utxos.insert(
+            tx_in,
+            crate::utxo::TxOut::AlonzoPlus {
+                raw: body_bytes[s..e].to_vec(),
+                address: out.address.clone(),
+                coin: out.coin,
+            },
+        );
+    }
+    Ok(new_utxo)
+}
+
 fn extract_inputs_outputs_from_tx(
     data: &[u8],
     offset: &mut usize,

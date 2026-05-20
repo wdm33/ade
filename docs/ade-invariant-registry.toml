@@ -39,11 +39,11 @@ tier = "true"
 statement = "All persisted/hashed/transmitted data uses canonical encoding"
 source = "Project constitution §2"
 cross_ref = ["CN-WIRE-01", "CN-WIRE-02"]
-code_locus = "crates/ade_codec/src/preserved.rs, crates/ade_ledger/src/block_validity/header_input.rs (block body hash computed over preserved CBOR segment bytes, never re-encoded; PHASE4-B1-S4)"
-tests = ["preserved_wire_bytes_returned_exactly", "altered_body_rejected_by_hash_binding"]
+code_locus = "crates/ade_codec/src/preserved.rs, crates/ade_ledger/src/block_validity/header_input.rs (block body hash computed over preserved CBOR segment bytes, never re-encoded; PHASE4-B1-S4); crates/ade_ledger/src/tx_validity/phase1.rs (decode_tx: tx_id = blake2b_256 of the body slice lifted byte-for-byte from the full tx CBOR, never a re-encode; PHASE4-B2-S2)"
+tests = ["preserved_wire_bytes_returned_exactly", "altered_body_rejected_by_hash_binding", "tx_id_uses_preserved_bytes"]
 ci_script = "ci/ci_check_hash_uses_wire_bytes.sh"
 status = "partial"
-strengthened_in = ["PHASE4-B1"]
+strengthened_in = ["PHASE4-B1", "PHASE4-B2"]
 authority_surface = "hash-critical byte paths"
 cluster = "CL-CRYPTO-VERIFY"
 evidence = []
@@ -2044,10 +2044,11 @@ tier = "derived"
 statement = "tx_validity is a pure function of (LedgerState, tx_cbor). No wall-clock, arrival order, HashMap/HashSet iteration, float, or ambient state may influence a transaction's Valid/Invalid verdict."
 source = "Cardano ledger spec; IDD determinism doctrine"
 cross_ref = ["DC-VAL-01", "DC-CORE-01", "T-DET-01"]
-code_locus = ""
-tests = []
-ci_script = ""
-status = "declared"
+code_locus = "crates/ade_ledger/src/tx_validity/transition.rs (tx_validity: pure composition over (&LedgerState, &[u8])); crates/ade_ledger/src/tx_validity/phase1.rs (tx_phase_one + decode_tx, no I/O / clock / rand); PHASE4-B2-S2"
+tests = ["tx_validity_is_deterministic"]
+ci_script = "ci/ci_check_consensus_closed_enums.sh"
+status = "enforced"
+strengthened_in = ["PHASE4-B2"]
 
 [[rules]]
 id = "DC-TXV-02"
@@ -2055,10 +2056,11 @@ tier = "derived"
 statement = "A transaction is Valid iff both phase-1 (structural + UTxO rules + witnesses) and phase-2 (Plutus, when scripts are present) accept it. No path may produce a Valid verdict while skipping either phase."
 source = "Cardano ledger spec (UTXOW/UTXO/PPUP, Plutus phase-2)"
 cross_ref = ["DC-VAL-02", "DC-PLUTUS-01", "CN-LEDGER-09"]
-code_locus = ""
-tests = []
-ci_script = ""
-status = "declared"
+code_locus = "crates/ade_ledger/src/tx_validity/transition.rs (tx_validity: fail-fast — phase-1 decided first, phase-2 dispatch via plutus_eval::try_evaluate_tx never runs when phase-1 fails or when no Plutus scripts present); crates/ade_ledger/src/tx_validity/phase1.rs (tx_phase_one composes B2-S1 witness closure + validate_conway_state_backed); PHASE4-B2-S2"
+tests = ["valid_tx_is_valid_and_applies", "phase1_failure_short_circuits_phase2"]
+ci_script = "ci/ci_check_consensus_closed_enums.sh"
+status = "enforced"
+strengthened_in = ["PHASE4-B2"]
 
 [[rules]]
 id = "DC-TXV-03"
@@ -2077,10 +2079,11 @@ tier = "derived"
 statement = "A Valid transaction yields an applied LedgerState' (the mempool's accumulating view); an Invalid transaction leaves the input state unchanged plus a structured reason. No partial or in-place mutation occurs on the invalid path."
 source = "IDD explicit-total-transition doctrine; Cardano ledger spec"
 cross_ref = ["DC-VAL-05", "DC-LEDGER-02"]
-code_locus = ""
-tests = []
-ci_script = ""
-status = "declared"
+code_locus = "crates/ade_ledger/src/tx_validity/transition.rs (tx_validity: Valid → applied state via rules::apply_conway_tx_to_utxo; every Invalid path returns invalid() which clones the input state unchanged); crates/ade_ledger/src/tx_validity/verdict.rs (closed TxValidityVerdict/TxRejectClass/TxValidityError; total class()); PHASE4-B2-S2"
+tests = ["valid_tx_is_valid_and_applies", "invalid_tx_leaves_state_unchanged", "class_mapping_is_total"]
+ci_script = "ci/ci_check_consensus_closed_enums.sh"
+status = "enforced"
+strengthened_in = ["PHASE4-B2"]
 
 [[rules]]
 id = "DC-TXV-05"

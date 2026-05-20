@@ -21,11 +21,17 @@
 //! `getVKeyWitnessConwayTxCert`); see `required_signers.rs` for the
 //! per-source citations.
 
+pub mod phase1;
 pub mod required_signers;
+pub mod transition;
+pub mod verdict;
 pub mod witness;
 
+pub use phase1::{decode_tx, tx_phase_one, DecodedTx};
 pub use required_signers::{
     required_signers, tx_derived_required_signers, RequiredSignerError, RequiredSigners,
     ResolvedInputs, ResolvedOutput, SignerSource,
 };
-pub use witness::{verify_required_witnesses, VKeyWitnessRef, WitnessClosureError};
+pub use transition::{tx_validity, TxValidityOutcome};
+pub use verdict::{TxRejectClass, TxValidityError, TxValidityVerdict};
+pub use witness::{verify_required_witnesses, VKeyWitnessRef, WitnessClosureError, WitnessField};
