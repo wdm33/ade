@@ -61,7 +61,7 @@ strengthen **`DC-LEDGER-02`** (no-false-accept / CE-88 lineage),
 |---|---|---|
 | **CE-B1-1** | `cargo test -p ade_ledger --lib consensus_view` + `cargo test -p ade_ledger --test ledger_view_corpus` PASS — production `LedgerView` returns correct `(σ, total_active_stake, vrf_key, asc)` for Conway 577 from a loaded `LedgerState`; no `HashMap`, no rederivation. | B1-S2 |
 | **CE-B1-2** | `cargo test -p ade_ledger --lib block_validity` PASS — composition is `header ∧ body`, header-before-body fail-fast ordering, body-hash binding wired (proven by `body_hash_mismatch_rejected`, a negative test). | B1-S4 |
-| **CE-B1-3** | `cargo test -p ade_ledger --test block_validity_positive_corpus` PASS — every block in `corpus/validity/conway_epoch577/` → Valid (oracle = on-chain inclusion); verdict stream byte-identical across two runs. | B1-S6 |
+| **CE-B1-3** | `cargo test -p ade_ledger --test block_validity_positive_corpus` PASS — every block in `corpus/validity/conway_epoch576/` → Valid (oracle = on-chain inclusion); verdict stream byte-identical across two runs. | B1-S6 |
 | **CE-B1-4** | `cargo test -p ade_ledger --test block_validity_adversarial_corpus` PASS — every block in `corpus/validity/adversarial/` → Invalid with the spec-defined fail-closed reason class (bad witness/key/sig size, fabricated witness, bignum overflow, altered body-vs-header-hash, future slot, era-mismatched VRF, bad KES sig, missing required signer). | B1-S5 + B1-S7 |
 | **CE-B1-5** | `cargo test -p ade_ledger --test block_validity_positive_corpus -- evolution` PASS — Valid → evolved `(LedgerState', PraosChainDepState')`; Invalid → unchanged states + reason; asserted by `invalid_block_leaves_state_unchanged`. | B1-S4 + B1-S6 |
 
@@ -154,7 +154,7 @@ crates/ade_ledger/tests/
     block_validity_positive_corpus.rs    # CE-B1-3, CE-B1-5
     block_validity_adversarial_corpus.rs # CE-B1-4
 corpus/validity/
-    conway_epoch577/               # positive
+    conway_epoch576/               # positive
     adversarial/                   # negative
 ci/
     ci_check_no_fail_open_in_validation.sh   # DC-VAL-06 grep gate
@@ -169,7 +169,7 @@ ci/
   in B1-S3.
 - **New authoritative transition**: `block_validity` (composes existing
   authorities; no new ambient state).
-- **New replay corpus**: `corpus/validity/conway_epoch577/` (positive) and
+- **New replay corpus**: `corpus/validity/conway_epoch576/` (positive) and
   `corpus/validity/adversarial/` (negative). Both replay byte-identically;
   anchored by `T-DET-01`, `DC-LEDGER-02`.
 

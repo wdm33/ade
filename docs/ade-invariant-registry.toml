@@ -39,10 +39,11 @@ tier = "true"
 statement = "All persisted/hashed/transmitted data uses canonical encoding"
 source = "Project constitution §2"
 cross_ref = ["CN-WIRE-01", "CN-WIRE-02"]
-code_locus = "crates/ade_codec/src/preserved.rs"
-tests = ["preserved_wire_bytes_returned_exactly"]
+code_locus = "crates/ade_codec/src/preserved.rs, crates/ade_ledger/src/block_validity/header_input.rs (block body hash computed over preserved CBOR segment bytes, never re-encoded; PHASE4-B1-S4)"
+tests = ["preserved_wire_bytes_returned_exactly", "altered_body_rejected_by_hash_binding"]
 ci_script = "ci/ci_check_hash_uses_wire_bytes.sh"
 status = "partial"
+strengthened_in = ["PHASE4-B1"]
 authority_surface = "hash-critical byte paths"
 cluster = "CL-CRYPTO-VERIFY"
 evidence = []
@@ -1976,7 +1977,7 @@ cross_ref = ["DC-LEDGER-02", "CN-CONS-04", "DC-CONS-04"]
 code_locus = "crates/ade_ledger/src/block_validity/ (closed verdict/error taxonomy substrate; PHASE4-B1-S3), crates/ade_ledger/src/block_validity/transition.rs, crates/ade_ledger/src/block_validity/header_input.rs (header ∧ body composition; PHASE4-B1-S4)"
 tests = ["valid_block_evolves_both_states", "header_before_body_fail_fast"]
 ci_script = ""
-status = "declared"
+status = "enforced"
 strengthened_in = ["PHASE4-B1"]
 
 [[rules]]
@@ -1988,7 +1989,7 @@ cross_ref = ["DC-VAL-02"]
 code_locus = "crates/ade_ledger/src/block_validity/transition.rs (header authority decided before body; body authority unreachable on header failure; PHASE4-B1-S4)"
 tests = ["header_before_body_fail_fast"]
 ci_script = ""
-status = "declared"
+status = "enforced"
 strengthened_in = ["PHASE4-B1"]
 
 [[rules]]
@@ -2000,7 +2001,7 @@ cross_ref = ["DC-LEDGER-02", "CN-LEDGER-02"]
 code_locus = "crates/ade_ledger/src/block_validity/ (closed Valid/Invalid + reject-class comparison surface; PHASE4-B1-S3), crates/ade_testkit/src/validity/replay.rs (GREEN positive-corpus replay harness driving block_validity over all 14 Conway-576 blocks; PHASE4-B1-S6), crates/ade_testkit/src/validity/adversarial.rs (GREEN deterministic block mutators M1-M6 deriving adversarial blocks from the real corpus; PHASE4-B1-S7)"
 tests = ["corpus_block_count_is_14", "all_corpus_blocks_valid", "verdict_stream_replays_identically", "no_mutation_is_ever_valid", "each_mutation_maps_to_expected_class", "adversarial_replays_identically"]
 ci_script = ""
-status = "declared"
+status = "enforced"
 strengthened_in = ["PHASE4-B1"]
 
 [[rules]]
@@ -2012,7 +2013,7 @@ cross_ref = ["DC-LEDGER-02"]
 code_locus = "crates/ade_ledger/src/block_validity/ (closed verdict taxonomy: Valid carries evolved-state stats, Invalid carries structured reason; PHASE4-B1-S3), crates/ade_ledger/src/block_validity/transition.rs (Valid returns evolved (ledger', chain_dep'); Invalid returns input clones; PHASE4-B1-S4)"
 tests = ["invalid_block_leaves_state_unchanged", "valid_block_evolves_both_states"]
 ci_script = ""
-status = "declared"
+status = "enforced"
 strengthened_in = ["PHASE4-B1"]
 
 [[rules]]
@@ -2024,5 +2025,5 @@ cross_ref = ["DC-LEDGER-02", "T-ENC-01", "DC-CRYPTO-01"]
 code_locus = "crates/ade_ledger/src/block_validity/verdict.rs (FieldKind/FieldError closed fail-closed field taxonomy; PHASE4-B1-S3); crates/ade_core/src/consensus/kes_check.rs (expect_size fail-closed header crypto-field guard; PHASE4-B1-S5); crates/ade_testkit/src/validity/adversarial.rs (M1 truncated VRF proof, M3 flipped KES sig, M4 slot-beyond-horizon adversarial mutators exercising the fail-closed checks; PHASE4-B1-S7)"
 tests = ["expect_size_rejects_wrong_length", "praos_malformed_kes_sig_rejected", "no_mutation_is_ever_valid", "each_mutation_maps_to_expected_class"]
 ci_script = ""
-status = "declared"
+status = "enforced"
 strengthened_in = ["PHASE4-B1"]

@@ -5,8 +5,8 @@
 > `.idd-config.json` (`head_deltas_baseline`).
 
 > Baseline: `d509f02` (Phase 3 handoff snapshot, 2026-04-15)
-> HEAD: `744ef34` (chore(phase-4): complete PHASE4-N-A close — DoS hardening + grounding doc refreshes, 2026-05-20)
-> 63 commits, 11,097 files changed, +139,775 / −1,448,977 lines
+> HEAD: `0d4457e` (feat(validity): B1-S7 adversarial corpus — closes CE-B1-4, 2026-05-20)
+> 76 commits, 11,153 files changed, +148,623 / −1,449,058 lines
 
 Headline numbers note: the negative line count is dominated by the
 **corpus relayout** under `corpus/snapshots/` and the deletion of two
@@ -15,7 +15,10 @@ multi-MB credentialed-snapshot text files (`*_tick_registered_creds.txt`
 deltas are far smaller — the per-crate breakdown in §3 is the
 representative view.
 
-The delta covers nine threads of work, in roughly this proportion of
+The delta covers eleven threads of work. The newest threads — the
+PHASE4-N-B close, the CE-N-B-6 follow-mode bridge, and the entire
+PHASE4-B1 full-block-validity arc — landed after the previous
+HEAD_DELTAS regen (which was cut at `744ef34`). In rough proportion of
 the substantive change budget:
 
 1. **Phase 4 cluster N-A (network mini-protocols)** — the largest
@@ -32,10 +35,10 @@ the substantive change budget:
    AcquireNoPoint split and a LocalTxSubmission / N2N TxSubmission2
    inner-tx HFC envelope fix, plus DoS-hardening on
    `Vec::with_capacity` in eight codecs.
-2. **Phase 4 cluster N-B (consensus runtime) — closed at HEAD.**
-   10 slices (S-B1 through S-B10) shipped as `feat(consensus):`
-   commits, opened by `d9f0426` (invariant sketch v2 + 8 new
-   `DC-CONS-*` registry rules) and closed by `744ef34`. Built out
+2. **Phase 4 cluster N-B (consensus runtime) — closed.** 10 slices
+   (S-B1 through S-B10) shipped as `feat(consensus):` commits, opened
+   by `d9f0426` (invariant sketch v2 + 8 new `DC-CONS-*` registry
+   rules) and **closed by `fb7f6dc`** (`Close PHASE4-N-B`). Built out
    the BLUE `ade_core::consensus` module (15 source files: closed
    `PraosChainDepState`, `EraSchedule`, fork-choice, rollback,
    nonce/op-cert/leader-schedule/VRF/header validation, plus
@@ -47,48 +50,70 @@ the substantive change budget:
    fork_choice, rollback, stream, op_cert}` (13 fixtures). All
    **6 CEs closed** (CE-N-B-1 fork choice, CE-N-B-2 rollback, CE-N-B-3
    header validation, CE-N-B-4 leader schedule, CE-N-B-5 stream
-   replay, CE-N-B-6 live interop); **4 new RED workspace artifacts**:
-   `ade_core_interop` crate (live tip-agreement driver) and 4 new CI
-   scripts.
-3. **Phase 4 cluster N-D (ChainDB persistence)** — closed earlier in
+   replay, CE-N-B-6 live interop).
+3. **CE-N-B-6 follow-mode bridge** — `c828449` retargeted the N-B
+   live-interop pin to cardano-node 11.0.1, then `8b7e19e` added the
+   RED `ade_core_interop::follow` follow-mode bridge plus live preprod
+   tip-agreement evidence. Follow mode runs BLUE fork-choice
+   (`select_best_chain`) and rollback (`apply_rollback`) only — it
+   trusts the already-validated peer for header/VRF/leader/nonce/KES,
+   so it carries no authoritative validation decision.
+4. **Phase 4 cluster B1 (full block validity agreement) — closed at
+   HEAD.** A 7-slice arc (S-B1 through S-B7, plus the cluster open /
+   plan / doc commits) shipped as `feat(validity):` commits. This is
+   the first thread to compose the N-A wire layer, the N-B consensus
+   header authority, and the existing `ade_ledger` body authority into
+   a single block verdict. It introduced the new BLUE `block_validity`
+   submodule in `ade_ledger`, a BLUE `consensus_view` `LedgerView`
+   projection, a RED `consensus_input_extract` snapshot tail-scan, a
+   GREEN `validity` testkit harness, the `kes_check` fail-closed header
+   crypto guard in `ade_core::consensus`, and the `corpus/validity/`
+   positive + adversarial corpora. **All 5 CEs closed** (CE-B1-1
+   LedgerView projection, CE-B1-2 header∧body composition, CE-B1-3
+   positive-agreement replay, CE-B1-4 no-false-accept adversarial,
+   CE-B1-5 fail-fast / unchanged-state-on-invalid). The arc opened the
+   new **`DC-VAL-*` registry family** (6 rules) and added the new
+   crate dependency edge **`ade_ledger -> ade_core`**.
+5. **Phase 4 cluster N-D (ChainDB persistence)** — closed earlier in
    the delta (`436b1d7`). Slices S-33 through S-37 shipped end-to-end.
    CE-N-D-1 closure evidence (1000/1000 stress-kill iterations) at
    `docs/clusters/completed/PHASE4-N-D/CE-N-D-1_2026-05-19.log`.
-4. **Phase 2C close-out / CE-73 reclassification** — single commit
+6. **Phase 2C close-out / CE-73 reclassification** — single commit
    splitting CE-73 into a Tier-2 semantic gate (now enforced via new
    `ci_check_hfc_translation.sh`) and an explicit Tier-4 bytes non-goal.
-5. **IDD canonicalization** — four `chore(idd)` commits that make the
+7. **IDD canonicalization** — four `chore(idd)` commits that make the
    repo legible to the global IDD slash commands: `.idd-config.json`,
    registry rename (`constitution_registry.toml` → `docs/ade-invariant-registry.toml`),
    cluster N-D moved into `docs/clusters/PHASE4-N-D/`, repo-local
    commit-msg trailer hook.
-6. **Grounding-doc generation + ripple** — `a87c3a3` produced the first
+8. **Grounding-doc generation + ripple** — `a87c3a3` produced the first
    cuts of CODEMAP, SEAMS, HEAD_DELTAS, and TRACEABILITY at the
    canonical `docs/ade-*.md` paths; `f0b0fd6` refreshed HEAD_DELTAS
    and SEAMS after the BLUE-scope closure; `a2c7ac8` refreshed all
    three after the N-D CI closure; `744ef34` refreshed CODEMAP /
-   SEAMS / TRACEABILITY for the N-A close (but **not** for N-B —
-   N-B grounding-doc ripple is pending).
-7. **BLUE-list drift closure** — `5b70bee` extended six CI scripts from
+   SEAMS / TRACEABILITY for the N-A close. **No grounding-doc refresh
+   commit landed for N-B, the follow-bridge, or B1** — those three
+   threads are reflected in this regen but not yet in CODEMAP / SEAMS /
+   TRACEABILITY (see Anomalies).
+9. **BLUE-list drift closure** — `5b70bee` extended six CI scripts from
    a 4-crate (or 5-crate for `dependency_boundary`) BLUE scope to the
    full 6-crate scope declared in `.idd-config.json`, then `c8fa37f`
    refreshed CODEMAP and TRACEABILITY to remove 14 `_(scope gap)_`
    markers across 13 rules.
-8. **Phase 4 N-D CI gap closure** — `78da6c9` added three new RED-scope
-   CI scripts (`ci_check_chaindb_contract.sh`,
-   `ci_check_recovery_contract.sh`, `ci_check_chaindb_crash_safety.sh`)
-   for the N-D recovery surface and flipped nine registry rules from
-   `declared` → `enforced` (T-REC-01, T-REC-02, DC-STORE-01,
-   DC-STORE-02, DC-STORE-03, DC-STORE-05, CN-STORE-03, CN-STORE-04,
-   CN-STORE-05). DC-STORE-04 was left `declared` with an explanatory
-   Tier-5-divergence comment block — a comment edit, not a rule edit,
-   per the IDD no-weakening discipline.
-9. **Corpus relayout** — `corpus/snapshots/*` and the
-   `reward_provenance/*_registered_creds.txt` files were removed
-   (they carried credential material that does not belong in a
-   public repo); 12 boundary-block sets were re-extracted at exact
-   era-boundary slots and committed under `corpus/boundary_blocks/`;
-   the consensus corpus (`corpus/consensus/*`) was newly added by N-B.
+10. **Phase 4 N-D CI gap closure** — `78da6c9` added three new RED-scope
+    CI scripts (`ci_check_chaindb_contract.sh`,
+    `ci_check_recovery_contract.sh`, `ci_check_chaindb_crash_safety.sh`)
+    for the N-D recovery surface and flipped nine registry rules from
+    `declared` → `enforced`. DC-STORE-04 was left `declared` with an
+    explanatory Tier-5-divergence comment block — a comment edit, not a
+    rule edit, per the IDD no-weakening discipline.
+11. **Corpus relayout** — `corpus/snapshots/*` and the
+    `reward_provenance/*_registered_creds.txt` files were removed
+    (they carried credential material that does not belong in a
+    public repo); 12 boundary-block sets were re-extracted at exact
+    era-boundary slots and committed under `corpus/boundary_blocks/`;
+    the consensus corpus (`corpus/consensus/*`) was added by N-B and
+    the validity corpus (`corpus/validity/*`) by B1.
 
 ---
 
@@ -96,9 +121,19 @@ the substantive change budget:
 
 | Hash | Type | Summary |
 |------|------|---------|
-| `744ef34` | chore | chore(phase-4): complete PHASE4-N-A close — DoS hardening + grounding doc refreshes |
-| `d9f0426` | docs | docs(phase-4): PHASE4-N-B invariant sketch v2 + 8 new DC-CONS-* registry rules |
-| `69a2862` | chore | Close PHASE4-N-A — Ouroboros mini-protocols (11) wire-grammar conformance + state-machine determinism + real-interop validation |
+| `0d4457e` | feat | feat(validity): B1-S7 adversarial corpus — closes CE-B1-4 (no false accept) |
+| `37498f2` | feat | feat(validity): B1-S6 positive agreement corpus + replay — closes CE-B1-3 |
+| `c4723d4` | feat | feat(validity): B1-S4 block_validity composition — closes CE-B1-2 + CE-B1-5 |
+| `62d25a3` | feat | feat(validity): B1-S5 Praos single-VRF + KES header validation — 14/14 real Conway headers validate |
+| `2197355` | feat | feat(validity): B1-S3 BlockValidity verdict/error taxonomies + canonical surface encoding |
+| `ee694f4` | feat | feat(validity): B1-S2 production LedgerView projection — closes CE-B1-1 |
+| `bf353c4` | feat | feat(validity): B1-S1 consensus-input extractor + Conway-576 corpus |
+| `af4a4db` | docs | docs(phase-4): PHASE4-B1 cluster doc — full block validity agreement |
+| `c85cb7a` | docs | docs(phase-4): PHASE4-B1 cluster/slice plan — 7-slice full-block-validity arc |
+| `2e58189` | docs | docs(phase-4): open PHASE4-B1 — full block validity agreement invariant sketch + DC-VAL registry family |
+| `8b7e19e` | feat | feat(interop): CE-N-B-6 follow-mode bridge + live preprod tip-agreement evidence |
+| `c828449` | docs | docs(consensus): retarget N-B live-interop pin to cardano-node 11.0.1 |
+| `fb7f6dc` | chore | Close PHASE4-N-B — consensus runtime (Praos) authority + replay equivalence |
 | `b9ff041` | feat | feat(consensus): S-B10 stream replay + orchestrator + live interop — closes CE-N-B-5 + CE-N-B-6 |
 | `ecfaf70` | feat | feat(consensus): S-B9 rollback authority — closes CE-N-B-2 |
 | `795a9ef` | feat | feat(consensus): S-B8 fork choice + CandidateFragment — closes CE-N-B-1 |
@@ -109,6 +144,9 @@ the substantive change budget:
 | `059e5e2` | feat | feat(consensus): S-B3 VRF cert verification wiring + Praos VRF input + leader threshold |
 | `23d360e` | feat | feat(consensus): S-B2 PraosChainDepState canonical type + closed event/error taxonomies |
 | `418ba9e` | feat | feat(consensus): S-B1 EraSchedule canonical authority + slot/era/time translation |
+| `744ef34` | chore | chore(phase-4): complete PHASE4-N-A close — DoS hardening + grounding doc refreshes |
+| `d9f0426` | docs | docs(phase-4): PHASE4-N-B invariant sketch v2 + 8 new DC-CONS-* registry rules |
+| `69a2862` | chore | Close PHASE4-N-A — Ouroboros mini-protocols (11) wire-grammar conformance + state-machine determinism + real-interop validation |
 | `56bfa7b` | feat | feat(phase-4): close CE-N-A-5 — 4 N2C real captures + LSQ/LTS/TxSubmission2 wire-form fixes + condition 4 + 5 + S-A10 evidence script |
 | `d977640` | docs | docs(registry): wire S-A9 real-capture tests into PHASE4-N-A invariants |
 | `b7cd39d` | feat | feat(phase-4): S-A9 N2C handshake + N2N keep-alive + peer-sharing real captures (3 more protocols + N2C 0x8000 wire-flag fix) |
@@ -160,7 +198,8 @@ the substantive change budget:
 | `994203b` | feat | feat(phase-4): begin cluster N-D — ChainDb trait + InMemoryChainDb (S-33) |
 | `9b15378` | feat | feat(phase-2c): reclassify CE-73 — semantic enforced, bytes Tier 4 non-goal |
 
-Verbatim from `git log d509f02..HEAD`. Aggregation is in §3 and §5.
+Verbatim from `git log d509f02..HEAD` (`--no-merges`; history is
+linear, no merge commits in range). Aggregation is in §3 and §5.
 
 ---
 
@@ -168,57 +207,71 @@ Verbatim from `git log d509f02..HEAD`. Aggregation is in §3 and §5.
 
 | Module | Color | Purpose | Key sub-paths | Added in (cluster/slice) |
 |--------|-------|---------|---------------|--------------------------|
-| `ade_network` (new workspace crate) | BLUE-majority (per-submodule scoped in `.idd-config.json` `core_paths`) | Ouroboros mini-protocol authority: 11 closed-grammar codecs, 8 pure transition state machines, Ouroboros mux frame codec, RED session/transport substrate. Wire bytes are Tier 1 — no Tier 5 latitude. Sync-only in BLUE submodules (DC-CORE-01); tokio is confined to `mux::transport`. | `codec/` (11 protocol message codecs); `handshake/` (version negotiation state machine, version_table.rs aligned to cardano-node 11.0.1); `chain_sync/`, `block_fetch/`, `tx_submission/`, `keep_alive/`, `peer_sharing/` (BLUE pure transitions); `n2c/{local_chain_sync,local_state_query,local_tx_monitor,local_tx_submission}/`; `mux/frame.rs` (BLUE), `mux/transport.rs` (RED — tokio first appears here), `mux/mod.rs` (GREEN); `session/` (RED); 8 RED capture binaries under `src/bin/capture_*.rs` | PHASE4-N-A / S-A1 → S-A10 |
-| `ade_core::consensus` (new submodule of an existing BLUE crate) | BLUE | Praos consensus authority: closed `PraosChainDepState`, era-aware slot/time translation, header validation, nonce evolution, op-cert counter monotonicity, leader schedule, fork choice, rollback. Closed-grammar `ChainEvent` / `ChainSelectionReject` taxonomies; flat-data error enums (`HeaderValidationError`, `NonceEvolutionError`, `OpCertCounterError`, `VrfCertError`, `LeaderScheduleError`, `HFCError`, `SlotTimeError`, `OutsideForecastRange`, `ForkChoiceError`). No async, no ChainDb, no floats. | `mod.rs`, `candidate.rs` (CandidateFragment, ChainSelectorState, TiebreakerView), `encoding.rs` (canonical ChainDepState / ChainEvent encode/decode), `era_schedule.rs` (EraSchedule, EraSummary, BootstrapAnchorHash, slot/era/time translation), `errors.rs` (closed error taxonomy), `events.rs` (Point, ChainHash, SecurityParam, BlockDistance, ChainEvent, ChainSelectionReject), `fork_choice.rs` (`select_best_chain`), `header_summary.rs` (HeaderInput, ValidatedHeaderSummary), `header_validate.rs` (`validate_and_apply_header`, `HeaderApplied`), `leader_schedule.rs` (`query_leader_schedule`, `is_leader_for_vrf_output`), `ledger_view.rs` (`LedgerView` trait), `nonce.rs` (`apply_nonce_input`, `NonceInput`), `op_cert.rs` (`apply_op_cert`, `OpCertObservation`), `praos_state.rs` (Nonce, OpCertCounterMap, PraosChainDepState), `rollback.rs`, `vrf_cert.rs` | PHASE4-N-B / S-B1 (era schedule) → S-B2 (state) → S-B3 (VRF) → S-B4 (nonce) → S-B5 (op-cert) → S-B6 (leader schedule) → S-B7 (header validate) → S-B8 (fork choice) → S-B9 (rollback) |
-| `ade_runtime::consensus` (new submodule of an existing RED crate) | GREEN/RED mix | Imperative-shell composition for consensus: stream-driven orchestrator (GREEN — pure on canonical inputs), candidate-fragment builder, and a RED genesis parser that turns genesis JSON into the BLUE-consumed `EraSchedule`. | `mod.rs`, `candidate_fragment.rs` (`build_candidate_fragment`), `chain_selector.rs` (`process_stream_input`, `OrchestratorState`, `OrchestratorError`, `RollbackSnapshot`, `StreamInput`, `DEFAULT_SNAPSHOT_LIMIT`), `genesis_parser.rs` (`parse_genesis`, `compute_anchor_hash`, `GenesisBlob`, `GenesisBundle`, `GenesisParseError`, `NetworkMagic`) | PHASE4-N-B / S-B8, S-B10 |
-| `ade_core_interop` (new workspace crate) | RED | Live cardano-node interop driver for CE-N-B-6. Carries no authoritative decisions; thin readiness probe (`fresh_orchestrator`) plus a `live_consensus_session` binary that drives the tip-agreement loop against a real peer. CI does not run this crate by default — tests are `#[ignore]`-gated; closure evidence is captured by manual operator pass. | `src/lib.rs` (`fresh_orchestrator`), `src/bin/live_consensus_session.rs`, `tests/live_consensus_session.rs` (`#[ignore]`-gated readiness probe) | PHASE4-N-B / S-B10 |
-| `ade_testkit::consensus` (new submodule of an existing crate) | GREEN | Test-only harness for consensus replay corpora. Loads JSON fixtures from `corpus/consensus/*`, provides a `LedgerView` stub, and the `consensus_stream_replay` driver that exercises the orchestrator end-to-end against canonical input sequences. | `consensus/mod.rs`, `consensus/corpus.rs`, `consensus/ledger_view_stub.rs`, `consensus/stream_replay.rs` | PHASE4-N-B / S-B1, S-B6, S-B8, S-B9, S-B10 |
+| `ade_ledger::block_validity` (new submodule of an existing BLUE crate) | BLUE | Full-block verdict authority: closed `BlockValidityVerdict` (Valid / Invalid), closed `BlockValidityError` / `BlockRejectClass` reject taxonomy, fail-closed `FieldKind` / `FieldError` field-size taxonomy, and the `block_validity(...)` transition that composes the N-B header authority (`validate_and_apply_header`) with the body authority and returns evolved `(LedgerState', PraosChainDepState')` on Valid or unchanged input states + structured reason on Invalid. Header is validated before body (fail-fast). Canonical CBOR `VerdictSurface` encode/decode for the replay/comparison surface. Types-only `mod.rs` (no transition logic); composition lives in `transition.rs`. | `mod.rs` (re-exports), `verdict.rs` (`BlockValidityVerdict`, `BlockValidityError`, `BlockRejectClass`, `FieldError`, `FieldKind`, `MissingInput`), `transition.rs` (`block_validity`, `BlockValidityOutcome`), `header_input.rs` (`decode_block`, `DecodedBlock`), `encoding.rs` (`encode_verdict_surface`, `decode_verdict_surface`, `VerdictSurface`, `SurfaceDecodeError`) | PHASE4-B1 / S-B3 (taxonomy), S-B4 (composition) |
+| `ade_ledger::consensus_view` (new file in an existing BLUE crate) | BLUE | Production `LedgerView` projection. `PoolDistrView` projects a `LedgerState`'s pool-distribution (`nesPd` / `stakeDistrib.unPoolDistr`) into exactly the four leadership-relevant facts BLUE consensus consumes through the `ade_core::consensus::LedgerView` boundary — total active stake, per-pool active stake, per-pool registered VRF keyhash, active-slots coefficient — and nothing else. | `consensus_view.rs` (`PoolDistrView`) | PHASE4-B1 / S-B2 |
+| `ade_ledger::consensus_input_extract` (new file in an existing BLUE crate) | RED | Tail-scan of a snapshot `state` CBOR (a UTxO-HD `utxohd-mem` `ExtLedgerState` dump) for the five `PraosState` nonces. Classified RED because it parses an external dump format rather than an authoritative canonical type; the scan itself is pure over the input bytes and fail-closed (requires exactly five non-neutral nonces). | `consensus_input_extract.rs` | PHASE4-B1 / S-B1 |
+| `ade_core::consensus::kes_check` (new file in an existing BLUE crate) | BLUE | Fail-closed wiring of `ade_crypto::kes` into Praos header validation. `expect_size` rejects wrong-length crypto fields rather than skipping them (DC-VAL-06 fail-closed pattern). Adds the single-VRF + KES header verification path exercised by 14/14 real Conway headers. | `kes_check.rs` (`expect_size` + KES header guard) | PHASE4-B1 / S-B5 |
+| `ade_testkit::validity` (new submodule of an existing crate) | GREEN | Test-only block-validity harness. Loads the committed positive Conway-576 corpus and drives `block_validity` over all blocks (`replay.rs`); supplies a corpus-backed `LedgerView` (`ledger_view.rs`); derives adversarial blocks from the real corpus via deterministic mutators M1–M6 (`adversarial.rs`); fixture loader (`corpus.rs`). Non-authoritative. | `validity/mod.rs`, `validity/corpus.rs`, `validity/ledger_view.rs`, `validity/replay.rs`, `validity/adversarial.rs` | PHASE4-B1 / S-B6, S-B7 |
+| `ade_core_interop::follow` (new file in an existing RED crate) | RED | Follow-mode bridge between a peer's ChainSync stream and BLUE fork-choice. Runs BLUE `select_best_chain` + `apply_rollback` ONLY; does **not** call `validate_and_apply_header`, builds no `LedgerView`, verifies no VRF/leader/nonce/KES. Asserts tip-selection agreement with an already-validated peer; trusts the peer for body/header validity (those need workstream-B ledger stake state). Carries no authoritative decision. | `follow.rs`, `tests/follow_offline_replay.rs` | CE-N-B-6 follow-bridge (`8b7e19e`) |
+| `ade_network` (new workspace crate) | BLUE-majority (per-submodule scoped in `.idd-config.json` `core_paths`) | Ouroboros mini-protocol authority: 11 closed-grammar codecs, 8 pure transition state machines, Ouroboros mux frame codec, RED session/transport substrate. Wire bytes are Tier 1 — no Tier 5 latitude. Sync-only in BLUE submodules (DC-CORE-01); tokio is confined to `mux::transport`. | `codec/` (11 protocol message codecs); `handshake/`; `chain_sync/`, `block_fetch/`, `tx_submission/`, `keep_alive/`, `peer_sharing/`; `n2c/{local_chain_sync,local_state_query,local_tx_monitor,local_tx_submission}/`; `mux/frame.rs` (BLUE), `mux/transport.rs` (RED), `mux/mod.rs` (GREEN); `session/` (RED); 8 RED capture binaries under `src/bin/capture_*.rs` | PHASE4-N-A / S-A1 → S-A10 |
+| `ade_core::consensus` (new submodule of an existing BLUE crate) | BLUE | Praos consensus authority: closed `PraosChainDepState`, era-aware slot/time translation, header validation, nonce evolution, op-cert counter monotonicity, leader schedule, fork choice, rollback. Closed-grammar `ChainEvent` / `ChainSelectionReject` taxonomies; flat-data error enums. No async, no ChainDb, no floats. | `mod.rs`, `candidate.rs`, `encoding.rs`, `era_schedule.rs`, `errors.rs`, `events.rs`, `fork_choice.rs`, `header_summary.rs`, `header_validate.rs`, `kes_check.rs` (B1), `leader_schedule.rs`, `ledger_view.rs`, `nonce.rs`, `op_cert.rs`, `praos_state.rs`, `rollback.rs`, `vrf_cert.rs` | PHASE4-N-B / S-B1 → S-B9 (kes_check from PHASE4-B1) |
+| `ade_runtime::consensus` (new submodule of an existing RED crate) | GREEN/RED mix | Imperative-shell composition for consensus: stream-driven orchestrator (GREEN), candidate-fragment builder, and a RED genesis parser turning genesis JSON into the BLUE-consumed `EraSchedule`. | `mod.rs`, `candidate_fragment.rs`, `chain_selector.rs`, `genesis_parser.rs` | PHASE4-N-B / S-B8, S-B10 |
+| `ade_core_interop` (new workspace crate) | RED | Live cardano-node interop driver for CE-N-B-6. Carries no authoritative decisions; `fresh_orchestrator` readiness probe, `live_consensus_session` binary, and (B1-era) the `follow` bridge. CI does not run this crate by default — tests are `#[ignore]`-gated or offline-replay only. | `src/lib.rs`, `src/follow.rs` (follow-bridge), `src/bin/live_consensus_session.rs`, `tests/live_consensus_session.rs`, `tests/follow_offline_replay.rs` | PHASE4-N-B / S-B10; follow-bridge `8b7e19e` |
+| `ade_testkit::consensus` (new submodule of an existing crate) | GREEN | Test-only harness for consensus replay corpora. Loads JSON fixtures from `corpus/consensus/*`, provides a `LedgerView` stub, and the `consensus_stream_replay` driver. | `consensus/mod.rs`, `consensus/corpus.rs`, `consensus/ledger_view_stub.rs`, `consensus/stream_replay.rs` | PHASE4-N-B / S-B1, S-B6, S-B8, S-B9, S-B10 |
 | `ade_runtime::chaindb` | RED | Block-store abstraction and impls. Trait surface is Tier 1; backing-store choice and on-disk layout are Tier 5. | `mod.rs`, `types.rs`, `error.rs`, `in_memory.rs`, `persistent.rs` (redb-backed), `contract.rs`, `snapshot_contract.rs`, `crash_safety.rs` | PHASE4-N-D / S-33, S-34, S-35 |
-| `ade_runtime::recovery` | RED | Composes ChainDb + SnapshotStore into a generic recovery primitive: load latest snapshot, replay blocks forward to chain tip. | `recovery.rs` (Recoverable trait, RecoveryReport, RecoveryError, `recover<C, S, R>`) | PHASE4-N-D / S-36 |
+| `ade_runtime::recovery` | RED | Composes ChainDb + SnapshotStore into a generic recovery primitive: load latest snapshot, replay blocks forward to chain tip. | `recovery.rs` (Recoverable, RecoveryReport, RecoveryError, `recover<C, S, R>`) | PHASE4-N-D / S-36 |
 | `ade_runtime` bin `chaindb_kill_target` | RED | Kill-target child process driver for the 1,000-kill-9 durability stress harness. | `src/bin/chaindb_kill_target.rs`, `tests/stress_kill_harness.rs` | PHASE4-N-D / S-37 |
 
-Workspace-level membership grew by **two crates** across the delta:
+Workspace-level membership grew by **two crates** across the full delta:
 `ade_network` (PHASE4-N-A) and `ade_core_interop` (PHASE4-N-B). Both
-are RED-or-mixed; `ade_core_interop` is `#[ignore]`-gated.
+are RED-or-mixed; `ade_core_interop` tests are `#[ignore]`-gated or
+offline-replay only.
 
 Crate dependency shape at HEAD (new deps in this delta):
 - `ade_core` gained `ade_types`, `ade_crypto`, `minicbor` (deps);
-  `ade_testkit`, `serde_json`, `cardano-crypto` with `vrf-draft03` (dev).
+  `ade_codec` (dep, added in B1 arc); `ade_testkit`, `serde_json`,
+  `cardano-crypto` with `vrf-draft03` (dev).
+- **`ade_ledger` gained a new `ade_core` dep edge** (PHASE4-B1) so the
+  block-validity composition can call the consensus header authority,
+  plus `minicbor` (dep) and `ade_testkit` (dev). This is the first time
+  the ledger crate depends on the consensus crate.
 - `ade_runtime` gained `ade_core`, `ade_crypto`, `ade_codec`,
-  `serde_json` (deps); `ade_testkit`, `cardano-crypto` (dev). Also
-  carries the pre-existing N-D deps `redb = "2"` (Tier 5) and
-  `tempfile = "3"` (dev).
+  `serde_json` (deps); `ade_testkit`, `cardano-crypto` (dev). Carries
+  the N-D deps `redb = "2"` (Tier 5) and `tempfile = "3"` (dev).
 - `ade_testkit` gained `ade_core`, `ade_runtime` (deps);
   `cardano-crypto` (dev).
 - `ade_core_interop` is new (deps: `ade_core`, `ade_runtime`,
-  `ade_network`, `ade_testkit`, `ade_types`, `tokio`).
+  `ade_network`, `ade_testkit`, `ade_types`, `tokio`); gained
+  `ade_codec`, `ade_crypto` in the B1 arc for the follow-bridge
+  offline-replay path.
 
 The N-A capture corpus shipped under `corpus/network/{n2n,n2c}/` —
-**11 protocol directories** (6 N2N, 5 N2C) holding ~55 CBOR frame
-captures plus their TOML metadata, against mainnet / preprod relays
-and a local cardano-node 11.0.1.
+11 protocol directories. The N-B replay corpus shipped under
+`corpus/consensus/` — 13 JSON fixtures across seven sub-paths.
 
-The N-B replay corpus shipped under `corpus/consensus/` — **13 JSON
-fixtures** across seven sub-paths:
-- `hfc_schedule/mainnet.json`, `hfc_schedule/preprod.json` (S-B1)
-- `nonce_evolution/within_epoch.json`,
-  `nonce_evolution/epoch_boundary.json` (S-B4)
-- `op_cert/normal_progression.json`,
-  `op_cert/regression_case.json` (S-B5)
-- `leader_schedule/scenario_one_epoch.json` (S-B6)
-- `fork_choice/multi_tip.json`, `fork_choice/rejects.json` (S-B8)
-- `rollback/within_k.json`, `rollback/exceeds_k.json`,
-  `rollback/before_immutable.json` (S-B9)
-- `stream/synthetic_session.json` (S-B10)
+The B1 validity corpus shipped under `corpus/validity/` (16 files):
+- `conway_epoch576/blocks/` (13 block CBOR files), plus
+  `conway_epoch576/consensus_inputs.json` and a README — the positive
+  Conway-576 corpus that all blocks validate against (the commit
+  subjects frame this as "14/14 real Conway headers").
+- `adversarial/README.md` — the adversarial corpus is **not** committed
+  as fixture blocks; it is derived deterministically at test time by
+  the M1–M6 mutators in `ade_testkit::validity::adversarial`, which
+  mutate the real positive corpus (truncated VRF proof, flipped KES
+  sig, slot-beyond-horizon, etc.).
 
 Cross-reference: CODEMAP must be regenerated to add per-submodule
-entries for `ade_core::consensus`, `ade_runtime::consensus`, the new
-`ade_core_interop` crate, and the new `ade_testkit::consensus`
-submodule. SEAMS must be regenerated to record the consensus seam
-(closed `PraosChainDepState`, frozen `ChainEvent` / `ChainSelectionReject`
-taxonomies, the `LedgerView` trait extension point). TRACEABILITY
-must add rows for the 8 new `DC-CONS-*` rules. **All three are stale
-on N-B as of HEAD** — `744ef34` only refreshed them for N-A.
+entries for `ade_ledger::block_validity`, `ade_ledger::consensus_view`,
+`ade_ledger::consensus_input_extract`, `ade_core::consensus::kes_check`,
+`ade_testkit::validity`, `ade_core_interop::follow`, plus the N-B
+surfaces (`ade_core::consensus`, `ade_runtime::consensus`,
+`ade_testkit::consensus`, the `ade_core_interop` crate). SEAMS must
+record the block-validity seam (closed `BlockValidityVerdict` /
+`BlockValidityError` / `BlockRejectClass`, the `VerdictSurface`
+comparison surface, the `LedgerView` projection boundary) plus the N-B
+consensus seam. TRACEABILITY must add rows for the 8 `DC-CONS-*` rules
+and the 6 `DC-VAL-*` rules. **All three are stale on N-B + B1 as of
+HEAD** — the last grounding-doc refresh was `744ef34` (N-A only).
 
 ---
 
@@ -226,46 +279,47 @@ on N-B as of HEAD** — `744ef34` only refreshed them for N-A.
 
 | Module | Scope | Key changes |
 |--------|-------|-------------|
-| `ade_core` | +15 source files, +10 test files, +7,334 lines (entirely in `src/consensus/` and `tests/`) | Crate went from a stub `lib.rs` to a substantive BLUE consensus module. New top-level `pub mod consensus;` and per-submodule re-exports in `lib.rs`. 15 new source files under `src/consensus/` build out `PraosChainDepState`, `EraSchedule`, header validation, nonce evolution, op-cert monotonicity, VRF threshold, leader schedule, fork choice, rollback, and the canonical event/error encodings. 10 new integration tests under `tests/`: `praos_state_canonical_roundtrip.rs` (335 lines), `vrf_cert_threshold.rs` (227), `nonce_evolution_corpus.rs`, `op_cert_counter_corpus.rs` (164), `leader_schedule_corpus.rs`, `header_validate_compose.rs`, `fork_choice_corpus.rs`, `rollback_corpus.rs` (538), `hfc_schedule_corpus.rs`. New manifest deps: `ade_types`, `ade_crypto`, `minicbor`; dev deps `ade_testkit`, `serde_json`, `cardano-crypto` (vrf-draft03). All shipped in PHASE4-N-B (S-B1 through S-B10). |
-| `ade_network` (existing crate, refined) | 6 source files modified, +8 / −8 lines | **DoS hardening of 6 codecs** (`744ef34`, post-N-A close): `chain_sync.rs`, `handshake.rs`, `local_chain_sync.rs`, `n2c_handshake.rs`, `peer_sharing.rs`, `tx_submission.rs` each replaced `Vec::with_capacity(n as usize)` with `Vec::with_capacity((n as usize).min(data.len()))` to cap untrusted allocator hints at the remaining wire-bytes budget. Targeted refinement only; no transition-authority changes since N-A closure. (The full N-A surface inventory — codec/handshake/state-machines/n2c/mux::frame — was introduced in this delta but is itself a §2 New Module entry, not a §3 modification.) |
-| `ade_runtime` | +4 new source files in `consensus/`, +6 deps in manifest, +1,273 lines under consensus subtree | New top-level `pub mod consensus;` in `lib.rs`. Three new files under `src/consensus/`: `candidate_fragment.rs` (`build_candidate_fragment`, S-B8), `chain_selector.rs` (`process_stream_input` orchestrator with `RollbackSnapshot` history and `DEFAULT_SNAPSHOT_LIMIT`, S-B10), `genesis_parser.rs` (505 lines — RED parser turning Shelley/Byron/Conway genesis JSON into the BLUE `EraSchedule`, S-B10). New integration test `tests/genesis_parser_corpus.rs` (191 lines). New deps: `ade_core`, `ade_crypto`, `ade_codec`, `serde_json`; dev `ade_testkit`, `cardano-crypto`. The pre-existing N-D submodules (`chaindb`, `recovery`) and the `chaindb_kill_target` binary are §2 New Modules. |
-| `ade_testkit` | +4 new source files in `consensus/`, +1 integration test, +652 lines | New `pub mod consensus;` in `lib.rs`. Four new files under `src/consensus/`: `mod.rs`, `corpus.rs` (JSON fixture loader for `corpus/consensus/*`), `ledger_view_stub.rs` (test `LedgerView` impl), `stream_replay.rs` (replay driver). New integration test `tests/consensus_stream_replay.rs` (433 lines). New deps: `ade_core`, `ade_runtime`; dev `cardano-crypto`. All landed across PHASE4-N-B slices. |
-| `ade_ledger` | +1 file, +73 lines | Single change: 10 new unit tests for `decode_invalid_tx_indices` in `plutus_eval.rs` covering empty/definite/indefinite CBOR arrays, duplicate-collapse via BTreeSet, malformed headers, non-uint truncation. Shipped piggybacked on the CE-73 reclassification commit (`9b15378`). No production-code change in this crate. |
+| `ade_ledger` | +13 source/test files, +1,755 lines (B1 arc); +1 file, +73 lines (CE-73 reclassification) | **PHASE4-B1 (primary):** the crate gained the `block_validity/` submodule (5 files), the BLUE `consensus_view.rs` `LedgerView` projection, and the RED `consensus_input_extract.rs` snapshot tail-scan, plus integration tests `block_validity_types.rs`, `block_validity_compose.rs`, `block_validity_positive_corpus.rs`, `block_validity_adversarial_corpus.rs`, `consensus_view.rs`, `consensus_input_extract.rs`. New manifest deps: **`ade_core`** (first ledger→consensus edge), `minicbor`; dev dep `ade_testkit`. This is where the full-block verdict is composed from the header authority and body authority. **CE-73 (earlier):** 10 unit tests for `decode_invalid_tx_indices` in `plutus_eval.rs` (piggybacked on `9b15378`), no production-code change. |
+| `ade_core` | +15 source files + 10 tests (N-B, +7,334 lines); +828 / −86 across 16 files (B1 arc) | **PHASE4-N-B:** crate went from a stub `lib.rs` to a substantive BLUE consensus module — 15 source files under `src/consensus/` (`PraosChainDepState`, `EraSchedule`, header validation, nonce evolution, op-cert monotonicity, VRF threshold, leader schedule, fork choice, rollback, canonical event/error encodings) plus 10 integration tests. **PHASE4-B1:** added `consensus/kes_check.rs` (fail-closed `expect_size` + KES header guard) and `praos_header_validate.rs` test; touched `header_validate.rs`, `vrf_cert.rs`, `leader_schedule.rs`, `fork_choice.rs`, `header_summary.rs`, `ledger_view.rs`, `errors.rs`, `encoding.rs`, `mod.rs` to wire single-VRF + KES header validation (62d25a3, "14/14 real Conway headers validate"). New dep `ade_codec` (B1). |
+| `ade_crypto` | 1 file, +24 / −81 lines (B1 arc) | Single change in `kes.rs` (`62d25a3`): **`build_opcert_signable` fixed** as part of the B1-S5 KES header-validation path; the function was reworked (net 57 fewer lines) to produce the correct KES op-cert signable bytes consumed by `ade_core::consensus::kes_check`. No other source change to this crate across the delta. |
+| `ade_core_interop` | +1,426 / −37 across 6 files (B1 arc) | **CE-N-B-6 follow-bridge (`8b7e19e`) + pin retarget (`c828449`):** added the RED `follow.rs` follow-mode bridge (BLUE fork-choice + rollback only, no validation) and `follow_offline_replay.rs` test; reworked `lib.rs`, `bin/live_consensus_session.rs`, and `live_consensus_session.rs` test for the live preprod tip-agreement evidence path. New deps `ade_codec`, `ade_crypto` for the offline-replay path. |
+| `ade_network` (existing crate, refined) | 6 source files, +8 / −8 lines | **DoS hardening of 6 codecs** (`744ef34`, post-N-A close): `chain_sync.rs`, `handshake.rs`, `local_chain_sync.rs`, `n2c_handshake.rs`, `peer_sharing.rs`, `tx_submission.rs` each capped untrusted `Vec::with_capacity` allocator hints at the remaining wire-bytes budget. No transition-authority changes since N-A closure. |
+| `ade_runtime` | +4 source files in `consensus/`, +1,273 lines (N-B); +1 file, +7/−3 (B1 arc) | **PHASE4-N-B:** new `consensus/` submodule — `candidate_fragment.rs`, `chain_selector.rs`, `genesis_parser.rs` (RED genesis JSON → BLUE `EraSchedule`), plus `genesis_parser_corpus.rs` test. New deps `ade_core`, `ade_crypto`, `ade_codec`, `serde_json`; dev `ade_testkit`, `cardano-crypto`. **PHASE4-B1:** one small file touch (+7/−3). The N-D submodules (`chaindb`, `recovery`) and `chaindb_kill_target` binary are §2 New Modules. |
+| `ade_testkit` | +4 files in `consensus/` (N-B); +5 files in `validity/`, +1,024 / −9 (B1 arc) | **PHASE4-N-B:** `consensus/` submodule (`mod.rs`, `corpus.rs`, `ledger_view_stub.rs`, `stream_replay.rs`) + `consensus_stream_replay.rs` test. **PHASE4-B1:** new `validity/` submodule (`mod.rs`, `corpus.rs`, `ledger_view.rs`, `replay.rs`, `adversarial.rs`) hosting the positive-corpus replay driver and the M1–M6 adversarial mutators. New deps `ade_core`, `ade_runtime`; dev `cardano-crypto`. |
 
 No other crate had non-trivial source changes since baseline.
-`ade_codec`, `ade_types`, `ade_crypto`, `ade_plutus`, and `ade_node`
-were untouched by code commits. `ade_plutus`'s `evaluator.rs` is
-**referenced** by the BLUE-scope CI extension (see §5) as the named
-chokepoint for `PlutusScript::from_cbor` but the source file itself
-was not modified.
+`ade_codec`, `ade_types`, `ade_plutus`, and `ade_node` were untouched
+by code commits. `ade_plutus`'s `evaluator.rs` is **referenced** by the
+BLUE-scope CI extension (see §5) as the named chokepoint for
+`PlutusScript::from_cbor` but the source file itself was not modified.
 
-`.idd-config.json` had one prose edit during the delta: the
-`_core_paths_doc` was extended to note that
-`ade_core::consensus` (S-B1 onward) is BLUE under the already-listed
-`crates/ade_core/` prefix. The `core_paths` array itself was not
-modified — `ade_core` was already listed.
+`.idd-config.json` had prose edits during the delta (the
+`_core_paths_doc` and the registry-count note); the `core_paths` array
+itself was extended only for the `ade_network` per-submodule scope —
+`ade_core` and `ade_ledger` were already listed, so the new
+`block_validity` / `consensus` surfaces are covered automatically.
 
 ---
 
 ## 4. Feature Flags
 
-No Cargo `[features]` tables exist at HEAD in any workspace crate
-(including the new `ade_network`, `ade_core_interop`, and the
-newly-substantive `ade_core::consensus` surface), and none existed
-at baseline. The project does not use Cargo feature flags as a
-semantic surface — closed semantic surfaces are encoded in the type
-system per the IDD core principles, and conditional compilation is
-checked out of BLUE code via `ci/ci_check_no_semantic_cfg.sh`
-(scoped over the full 6-crate BLUE set plus all `ade_network`
-BLUE submodules; `ade_core::consensus` is covered by that crate-level
-scope).
+No Cargo `[features]` tables exist at HEAD in any workspace crate, and
+none existed at baseline. The project does not use Cargo feature flags
+as a semantic surface — closed semantic surfaces are encoded in the
+type system per the IDD core principles, and conditional compilation is
+checked out of BLUE code via `ci/ci_check_no_semantic_cfg.sh` (scoped
+over the full 6-crate BLUE set plus all `ade_network` BLUE submodules;
+the new `ade_core::consensus` and `ade_ledger::block_validity` surfaces
+are covered by their crate-level scope).
 
 No `#[cfg(feature = ...)]` gates appear at either ref. `cardano-crypto`
-is declared with `default-features = false, features = ["vrf-draft03"]`
-in the new dev-dependency entries — this is upstream-crate feature
-selection, not an Ade-side flag.
+is declared `default-features = false, features = ["vrf-draft03"]` in
+the dev-dependency entries (and `minicbor` with
+`default-features = false, features = ["alloc"]` in the new
+`ade_ledger` / `ade_core` deps) — these are upstream-crate feature
+selections, not Ade-side flags.
 
-**Status: unchanged — zero feature flags at baseline, zero at HEAD.**
+**Status: unchanged — zero Ade feature flags at baseline, zero at HEAD.**
 
 ---
 
@@ -273,93 +327,82 @@ selection, not an Ade-side flag.
 
 The CI surface is the shell-script set under `ci/` (no
 `.github/workflows` in this repo). At baseline there were 15 scripts.
-At HEAD there are **25**: CE-73 reclassification added one
-(`ci_check_hfc_translation.sh`), Phase 4 N-D added three
-(`ci_check_chaindb_contract.sh`, `ci_check_recovery_contract.sh`,
-`ci_check_chaindb_crash_safety.sh`), Phase 4 N-A added two
-(`ci_check_no_async_in_blue.sh` from S-A1; `ci_check_ce_n_a_5_proof.sh`
-from S-A10), and Phase 4 N-B added four
-(`ci_check_consensus_closed_enums.sh`,
-`ci_check_no_chaindb_in_consensus_blue.sh`,
-`ci_check_no_density_in_fork_choice.sh`,
-`ci_check_no_float_in_consensus.sh`). One repo-local git hook also
-shipped, six scripts had their BLUE-scope arrays extended, and one
-had a path-only registry edit. Grouped by cluster.
+At HEAD there are **24 scripts plus one git hook**: CE-73
+reclassification added one (`ci_check_hfc_translation.sh`), N-D added
+three, N-A added two, N-B added four, and one repo-local git hook
+(`ci/git-hooks/commit-msg`) shipped. PHASE4-B1 added **no new CI
+script** — instead it **extended one existing N-B script**
+(`ci_check_consensus_closed_enums.sh`) to also cover
+`ade_ledger::block_validity`. Six scripts had BLUE-scope arrays
+extended; one had a path-only registry edit. Grouped by cluster.
 
 ### CE-73 reclassification (Phase 2C close-out)
 
 | Check | Status | What it checks |
 |-------|--------|----------------|
-| `ci/ci_check_hfc_translation.sh` | **New** (`9b15378`) | CE-73-semantic gate: runs the three HFC ledger-side translation proof surfaces — `translation_summary_proof` (22/22 encoding-independent fields match oracle at Allegra→Mary), `translation_comparison_surface`, `transition_proof_surface`. Authoritative test for invariant `DC-EPOCH-02`. |
+| `ci/ci_check_hfc_translation.sh` | **New** (`9b15378`) | CE-73-semantic gate: runs the three HFC ledger-side translation proof surfaces. Authoritative test for invariant `DC-EPOCH-02`. |
 
 ### IDD canonicalization (post-Phase-4-N-D)
 
 | Check | Status | What it checks |
 |-------|--------|----------------|
-| `ci/ci_check_constitution_coverage.sh` | Modified (`39865f6`) | Path-only edit: `REGISTRY` and Python `REGISTRY_PATH` default now point at `docs/ade-invariant-registry.toml` (was `constitution_registry.toml`). What it enforces is unchanged: registry coverage against `PLAN_DOC` and `CLASSIFICATION_TABLE`. |
-| `ci/git-hooks/commit-msg` | **New** (`2047c42`) | Local git hook (not a CI script proper): rejects commit messages lacking a `Co-Authored-By: Claude ...` trailer. Activated per clone via `git config core.hooksPath ci/git-hooks`. Repo-local exception to the global no-AI-attribution rule, scoped to commit messages only. |
+| `ci/ci_check_constitution_coverage.sh` | Modified (`39865f6`) | Path-only edit: registry path now `docs/ade-invariant-registry.toml`. Coverage enforcement unchanged. |
+| `ci/git-hooks/commit-msg` | **New** (`2047c42`) | Local git hook: rejects commit messages lacking a `Co-Authored-By: Claude ...` trailer. Repo-local exception to the global no-AI-attribution rule, commit-messages only. |
 
 ### BLUE-list drift closure (`5b70bee`)
 
-Six CI scripts hard-coded a narrower `BLUE_CRATES` array than the
-6-crate set declared in `.idd-config.json` `core_paths`. All six
-were extended to the full 6-crate set (`ade_codec`, `ade_types`,
-`ade_crypto`, `ade_core`, `ade_ledger`, `ade_plutus`).
+Six CI scripts were extended to the full 6-crate BLUE set
+(`ade_codec`, `ade_types`, `ade_crypto`, `ade_core`, `ade_ledger`,
+`ade_plutus`).
 
 | Check | Status | What it checks |
 |-------|--------|----------------|
-| `ci/ci_check_module_headers.sh` | Modified — BLUE-scope (`5b70bee`) | `// Core Contract:` first-line header on every `.rs` in BLUE crates. Enforces `T-BUILD-01`. |
-| `ci/ci_check_no_semantic_cfg.sh` | Modified — BLUE-scope (`5b70bee`) | No semantic `#[cfg(...)]` in BLUE crate `src/`. Enforces `T-BUILD-01`. |
-| `ci/ci_check_no_signing_in_blue.sh` | Modified — BLUE-scope (`5b70bee`) | No `SigningKey`/signing primitives in BLUE crates. Enforces `T-KEY-01`. |
-| `ci/ci_check_hash_uses_wire_bytes.sh` | Modified — BLUE-scope (`5b70bee`) | All hashing in BLUE goes via wire-byte fingerprint surfaces. Enforces `T-ENC-01`, `DC-CBOR-02`. |
-| `ci/ci_check_ingress_chokepoints.sh` | Modified — BLUE-scope + named-chokepoint registry growth (`5b70bee`) | No raw CBOR decoding outside named chokepoints in BLUE. Named-chokepoint registry grew 10 → 11 (added `PlutusScript::from_cbor` in `ade_plutus`). Enforces `T-INGRESS-01`, `DC-INGRESS-01`. |
-| `ci/ci_check_dependency_boundary.sh` | Modified — BLUE-scope (`5b70bee`) | BLUE crates must not depend on RED crates. Enforces `T-BOUND-02`. |
+| `ci/ci_check_module_headers.sh` | Modified — BLUE-scope (`5b70bee`) | `// Core Contract:` header on every `.rs` in BLUE crates. `T-BUILD-01`. |
+| `ci/ci_check_no_semantic_cfg.sh` | Modified — BLUE-scope (`5b70bee`) | No semantic `#[cfg(...)]` in BLUE `src/`. `T-BUILD-01`. |
+| `ci/ci_check_no_signing_in_blue.sh` | Modified — BLUE-scope (`5b70bee`) | No signing primitives in BLUE crates. `T-KEY-01`. |
+| `ci/ci_check_hash_uses_wire_bytes.sh` | Modified — BLUE-scope (`5b70bee`) | All BLUE hashing via wire-byte fingerprint surfaces. `T-ENC-01`, `DC-CBOR-02`. |
+| `ci/ci_check_ingress_chokepoints.sh` | Modified — BLUE-scope + registry growth (`5b70bee`) | No raw CBOR decoding outside named chokepoints in BLUE. Registry grew 10 → 11 (`PlutusScript::from_cbor`). `T-INGRESS-01`, `DC-INGRESS-01`. |
+| `ci/ci_check_dependency_boundary.sh` | Modified — BLUE-scope (`5b70bee`) | BLUE crates must not depend on RED crates. `T-BOUND-02`. |
 
-Follow-up commit `c8fa37f` re-ran CODEMAP and TRACEABILITY generation
-against the new scope, removing 14 `_(scope gap)_` markers across
-13 rules.
+Follow-up `c8fa37f` re-ran CODEMAP and TRACEABILITY against the new
+scope, removing 14 `_(scope gap)_` markers across 13 rules.
 
 ### Phase 4 N-D CI gap closure (`78da6c9`)
 
-Three new RED-scope CI scripts; nine recovery/storage rules flipped
-to `enforced` in the same atomic edit.
-
 | Check | Status | What it checks |
 |-------|--------|----------------|
-| `ci/ci_check_chaindb_contract.sh` | **New** (`78da6c9`) | Runs `cargo test -p ade_runtime --lib chaindb::` — 8 tests across `run_contract_tests` + `run_snapshot_contract_tests`. Enforces `DC-STORE-02`, `DC-STORE-03`, `CN-STORE-04`, `CN-STORE-05`. |
-| `ci/ci_check_recovery_contract.sh` | **New** (`78da6c9`) | Runs `cargo test -p ade_runtime --lib recovery::` — 6-test recovery bundle. Enforces `T-REC-01`, `T-REC-02`, `DC-STORE-05`. |
-| `ci/ci_check_chaindb_crash_safety.sh` | **New** (`78da6c9`) | Smoke variant of the subprocess-SIGKILL harness (`stress_kill_smoke`, 10 iterations) plus integrity post-checks. Closure-gate variant (`stress_kill_1000`) remains `#[ignore]`. Enforces `T-REC-01`, `DC-STORE-01`, `CN-STORE-03`. |
+| `ci/ci_check_chaindb_contract.sh` | **New** (`78da6c9`) | `cargo test -p ade_runtime --lib chaindb::` — 8 contract tests. `DC-STORE-02`, `DC-STORE-03`, `CN-STORE-04`, `CN-STORE-05`. |
+| `ci/ci_check_recovery_contract.sh` | **New** (`78da6c9`) | `cargo test -p ade_runtime --lib recovery::` — 6-test recovery bundle. `T-REC-01`, `T-REC-02`, `DC-STORE-05`. |
+| `ci/ci_check_chaindb_crash_safety.sh` | **New** (`78da6c9`) | Smoke variant of the subprocess-SIGKILL harness + integrity post-checks. `T-REC-01`, `DC-STORE-01`, `CN-STORE-03`. |
 
 ### Phase 4 N-A wire + semantic enforcement (S-A1, S-A10)
 
 | Check | Status | What it checks |
 |-------|--------|----------------|
-| `ci/ci_check_no_async_in_blue.sh` | **New** (`4fde3a7`, S-A1) | Mechanically enforces `DC-CORE-01` — BLUE authoritative code is sync-only. Scans every `.rs` under each BLUE path in `.idd-config.json` `core_paths` for `async fn`, `.await`, `tokio`, `async_std`, `futures::`, and `spawn` (with a `std::thread::spawn` allowlist filter). Reads BLUE paths from `.idd-config.json` `core_paths` so `ade_network`'s per-submodule BLUE scope is enforced automatically. Also covers `ade_core::consensus` because the `ade_core` crate prefix is listed there. |
-| `ci/ci_check_ce_n_a_5_proof.sh` | **New** (`56bfa7b`, S-A10) | CE-N-A-5 closure-gate evidence script. Exercises all 5 conditions of the CE-N-A-5 proof obligation against the captured real-cardano-node corpus. Logs results in the §7 #6 evidence schema to `docs/active/CE-N-A-5_evidence.toml`. Authoritative gate for CE-N-A-5. |
+| `ci/ci_check_no_async_in_blue.sh` | **New** (`4fde3a7`, S-A1) | Enforces `DC-CORE-01` — BLUE code is sync-only. Scans every BLUE path in `.idd-config.json` `core_paths` for async/tokio/futures. Covers `ade_core::consensus` and `ade_ledger::block_validity` via crate prefixes. |
+| `ci/ci_check_ce_n_a_5_proof.sh` | **New** (`56bfa7b`, S-A10) | CE-N-A-5 closure-gate evidence over the real-cardano-node corpus; logs to `docs/active/CE-N-A-5_evidence.toml`. |
 
-### Phase 4 N-B consensus authority enforcement (S-B1, S-B2, S-B8)
+### Phase 4 N-B consensus authority enforcement (S-B1, S-B2, S-B8) — extended by B1
 
-Four new BLUE-scope CI scripts targeting `crates/ade_core/src/consensus/`.
-All four are surface-narrow (scope is exactly the consensus submodule
-tree) and discriminator-based — they enforce structural invariants on
-the consensus authority surface rather than running tests.
+Four BLUE-scope CI scripts targeting `crates/ade_core/src/consensus/`.
+The closed-enums script was **extended in PHASE4-B1** to also scan
+`crates/ade_ledger/src/block_validity/`.
 
 | Check | Status | What it checks |
 |-------|--------|----------------|
-| `ci/ci_check_consensus_closed_enums.sh` | **New** (N-B) | Four-part scan over `crates/ade_core/src/consensus/`: (1) no `#[non_exhaustive]` attribute anywhere; (2) no open-tail `Other` / `Unknown` variant in any enum; (3) no owned `String` in `errors.rs` / `encoding.rs` / `events.rs` (`&'static str` allowed in `DecodeError::Cbor`); (4) no `Box<dyn ...>` anywhere. Strengthens `DC-CONS-04`, `DC-CONS-10`, `T-DET-01` — every reject reason must be a structured, flat-data value. |
-| `ci/ci_check_no_chaindb_in_consensus_blue.sh` | **New** (N-B / S-B1) | Greps `crates/ade_core/src/consensus/` for any `ChainDb` or `chain_db` token; failure on hit. Enforces the BLUE/RED boundary inside the new submodule: consensus authority must not name-reach the persistence layer. Strengthens `DC-CORE-01` and `DC-CONS-07`. |
-| `ci/ci_check_no_density_in_fork_choice.sh` | **New** (N-B / S-B8) | Case-insensitive grep of `consensus/fork_choice.rs` and `consensus/candidate.rs` for any `density` token (allowlist: lines whose first non-blank prefix is `// no-density:`). Praos fork-choice ordering is `(BlockNo, TiebreakerView)` only — density is reserved for Genesis/catch-up and must not leak into the caught-up surface. Strengthens `DC-CONS-03`. |
-| `ci/ci_check_no_float_in_consensus.sh` | **New** (N-B / S-B1) | Greps `crates/ade_core/src/consensus/` for any `f32` / `f64` token. Strengthens `T-CORE-02` (no floats in BLUE) and the leader-threshold determinism contract (`DC-CONS-07`, `DC-CONS-08`, `DC-CONS-09`). |
+| `ci/ci_check_consensus_closed_enums.sh` | **New** (N-B); **Modified** (B1, `c4723d4`) | Four-part scan now over **both** `ade_core/src/consensus/` and `ade_ledger/src/block_validity/`: no `#[non_exhaustive]`; no open-tail `Other`/`Unknown` variant; no owned `String` in the error/encoding/events files (`verdict.rs` and `encoding.rs` added to the string-scope list); no `Box<dyn ...>`. Strengthens `DC-CONS-04`, `DC-CONS-10`, `T-DET-01` (consensus) **and now `DC-VAL-02`/`-04`/`-05`/`-06`** (block-validity) — every reject reason a structured flat-data value. |
+| `ci/ci_check_no_chaindb_in_consensus_blue.sh` | **New** (N-B / S-B1) | No `ChainDb`/`chain_db` token in `consensus/`. Strengthens `DC-CORE-01`, `DC-CONS-07`. |
+| `ci/ci_check_no_density_in_fork_choice.sh` | **New** (N-B / S-B8) | No `density` token in `fork_choice.rs` / `candidate.rs`. Praos fork-choice ordering is `(BlockNo, TiebreakerView)` only. Strengthens `DC-CONS-03`. |
+| `ci/ci_check_no_float_in_consensus.sh` | **New** (N-B / S-B1) | No `f32`/`f64` in `consensus/`. Strengthens `T-CORE-02`, `DC-CONS-07/08/09`. |
 
-TRACEABILITY cross-reference: the four new N-B scripts plus the four
-new `DC-CONS-*` enforcement points map to a total of **8 new
-registry rules** (`DC-CONS-03` through `DC-CONS-10`); their
-TRACEABILITY rows do not yet exist — they will be added on the next
-`/traceability` refresh. `ci_check_no_async_in_blue.sh` is also the
-de facto enforcement for `DC-CONS-08` (no wall-clock in BLUE) because
-the `ade_core` crate prefix is covered by its scope; the
-no-density and no-float scripts both target consensus-specific
-surfaces and have no analog elsewhere in CI.
+TRACEABILITY cross-reference: the four N-B scripts map to the 8
+`DC-CONS-*` rules; the extended closed-enums script now also enforces
+four of the six `DC-VAL-*` rules. The six `DC-VAL-*` rules are
+otherwise **test-enforced, not script-enforced** — their registry
+`ci_script` field is empty and enforcement is carried by named
+integration tests in `ade_ledger/tests/` and `ade_testkit`. None of
+the new N-B or B1 rows exist in TRACEABILITY yet (last refresh
+`744ef34`, N-A only).
 
 ---
 
@@ -376,80 +419,68 @@ The project's invariant registry tracks structured rules (TOML), not
 prose normative-doc rules; this section reports on it.
 
 - Rules at baseline: **147** (in `constitution_registry.toml`)
-- Rules at HEAD: **157** (in `docs/ade-invariant-registry.toml`)
-- Net additions: **+10** (PHASE4-N-A: 2; PHASE4-N-B: 8)
-  - PHASE4-N-A (recap from prior delta):
-    - **`DC-CORE-01`** (`492de56`): BLUE authoritative code is sync-only.
-      Enforced by `ci/ci_check_no_async_in_blue.sh`.
-    - **`DC-PROTO-06`** (`ae9c473`): BLUE mini-protocol transitions are
-      pure functions of canonical inputs with no ambient session
-      influence (closes DC-PROTO-02 under DC-CORE-01).
-  - PHASE4-N-B (`d9f0426`, invariant sketch v2):
-    - **`DC-CONS-03`** — Praos chain selection ordering: `(BlockNo,
-      TiebreakerView)` only for caught-up fork-choice; density is
-      reserved for Genesis/catch-up. Enforced by
-      `ci_check_no_density_in_fork_choice.sh`.
-    - **`DC-CONS-04`** — `PraosChainDepState` (evolving / candidate /
-      epoch / previous_epoch / lab / last_epoch_block nonces, op-cert
-      counters, last_slot) is owned by N-B consensus, not by the
-      ledger. Enforced by `ci_check_consensus_closed_enums.sh` plus
-      `praos_state_canonical_roundtrip.rs`.
-    - **`DC-CONS-05`** — Authoritative rollback must never exceed
-      security parameter k. Enforced by `rollback_corpus.rs`
-      (exceeds_k.json fixture).
-    - **`DC-CONS-06`** — `rollback(state, depth)` produces state
-      byte-identical to truncated replay; rollback crossing the
-      immutable tip returns `ForkBeforeImmutableTip` and never
-      alters state. Enforced by `rollback_corpus.rs`
-      (before_immutable.json + within_k.json fixtures).
-    - **`DC-CONS-07`** — BLUE consensus consumes the HFC schedule only
-      as a typed `EraSchedule` anchored to `BootstrapAnchorHash`;
-      genesis text parsing happens in RED. Enforced by
-      `ci_check_no_chaindb_in_consensus_blue.sh` plus the
-      `genesis_parser.rs` RED placement.
-    - **`DC-CONS-08`** — `slot_to_time(EraSchedule, SystemStart,
-      SlotNo)` is a pure function; no BLUE consensus path may consult
-      the wall clock. Enforced by `ci_check_no_async_in_blue.sh`
-      (tokio + clock guards) plus `hfc_schedule_corpus.rs`.
-    - **`DC-CONS-09`** — Consensus-derived queries beyond the
-      ledger-view safe zone return `OutsideForecastRange`. Enforced
-      by `header_validate_compose.rs` and the `OutsideForecastRange`
-      flat-data error variant.
-    - **`DC-CONS-10`** — A header's op-cert issue counter must be ≥
-      the highest observed counter for the same `(pool, kes_period)`;
-      regression yields `HeaderInvalid` with typed
-      `OpCertCounterError`. Enforced by `op_cert_counter_corpus.rs`
-      (regression_case.json fixture).
+- Rules at HEAD: **163** (in `docs/ade-invariant-registry.toml`)
+- Net additions: **+16** (PHASE4-N-A: 2; PHASE4-N-B: 8; PHASE4-B1: 6)
+  - PHASE4-N-A: `DC-CORE-01` (BLUE sync-only); `DC-PROTO-06` (pure
+    transitions).
+  - PHASE4-N-B (`d9f0426`): `DC-CONS-03` (Praos `(BlockNo,
+    TiebreakerView)` ordering, no density), `DC-CONS-04`
+    (`PraosChainDepState` owned by consensus), `DC-CONS-05` (rollback
+    never exceeds k), `DC-CONS-06` (rollback = truncated replay /
+    `ForkBeforeImmutableTip`), `DC-CONS-07` (HFC schedule consumed as
+    typed `EraSchedule`), `DC-CONS-08` (`slot_to_time` pure, no BLUE
+    wall clock), `DC-CONS-09` (`OutsideForecastRange` beyond safe
+    zone), `DC-CONS-10` (op-cert counter monotonicity).
+  - **PHASE4-B1 (`2e58189`, new `DC-VAL` family):**
+    - **`DC-VAL-01`** — A block's verdict is a pure function of
+      `(LedgerState, PraosChainDepState, EraSchedule, LedgerView,
+      block_cbor)`; no wall-clock/arrival-order/HashMap/float/ambient
+      influence. Status **`enforced`**. Tests in
+      `consensus_input_extract` / `consensus_view`; cross-ref
+      `DC-CORE-01`, `T-DET-01`, `DC-CONSENSUS-01`.
+    - **`DC-VAL-02`** — Valid iff *both* the consensus header authority
+      and the ledger body authority accept; no Valid verdict may skip
+      either. Status `declared`. Enforced via
+      `ci_check_consensus_closed_enums.sh` (B1 extension) + composition
+      tests.
+    - **`DC-VAL-03`** — Header validated before body; body never runs
+      on a header-invalid block; first failing authority sets the
+      reason (fail-fast). Status `declared`. Test
+      `header_before_body_fail_fast`.
+    - **`DC-VAL-04`** — Ade's verdict equals the reference
+      cardano-node verdict (incl. reject class), over both a positive
+      corpus and a mandatory adversarial corpus. Status `declared`.
+      Tests: `corpus_block_count_is_14`, `all_corpus_blocks_valid`,
+      `verdict_stream_replays_identically`, `no_mutation_is_ever_valid`,
+      `each_mutation_maps_to_expected_class`.
+    - **`DC-VAL-05`** — Valid → evolved `(LedgerState',
+      PraosChainDepState')`; Invalid → unchanged input states +
+      structured reason; no partial/in-place mutation. Status
+      `declared`.
+    - **`DC-VAL-06`** — Every crypto-input / field-size / structural
+      check rejects on wrong size/shape and never silently skips;
+      `if X.len() == K { check } else { skip }` forbidden in BLUE; no
+      defined-but-unwired or tautological guard. Status `declared`.
+      Tests: `expect_size_rejects_wrong_length`,
+      `praos_malformed_kes_sig_rejected`, plus adversarial mutators.
 - Removals: **0** (expected under append-only discipline; clean)
 - Strengthenings (`declared` / `partial` → `enforced`):
-  - **`DC-EPOCH-02`** (`9b15378`): `partial` → `enforced` via
-    `ci/ci_check_hfc_translation.sh`.
-  - **`T-REC-01`**, **`T-REC-02`**, **`DC-STORE-01`**, **`DC-STORE-02`**,
-    **`DC-STORE-03`**, **`DC-STORE-05`**, **`CN-STORE-03`**,
-    **`CN-STORE-04`**, **`CN-STORE-05`** (all `78da6c9`):
-    `declared` → `enforced` via the three new N-D CI scripts.
-  - **`T-ENC-03`**, **`CN-WIRE-07`**, **`DC-PROTO-02`**,
-    **`DC-PROTO-05`** (PHASE4-N-A): each gained real-capture corpus
-    tests and `ci_check_ce_n_a_5_proof.sh`. Status movement reflected
-    in TRACEABILITY at `744ef34`.
-  - **`T-CORE-02`** (S-B1, N-B): `declared` → `enforced` for the
-    consensus surface via `ci_check_no_float_in_consensus.sh`.
-- Annotated but unchanged:
-  - **`DC-STORE-04`** (`78da6c9`): 12-line Tier-5-divergence comment
-    block appended above the rule entry; rule body unchanged.
-  - 13 further rules had their TRACEABILITY rows annotated by
-    `c8fa37f` to remove `_(scope gap)_` markers — TRACEABILITY-doc
-    edits, not registry edits.
+  - `DC-EPOCH-02` (`9b15378`): `partial` → `enforced`.
+  - `T-REC-01`, `T-REC-02`, `DC-STORE-01`, `DC-STORE-02`,
+    `DC-STORE-03`, `DC-STORE-05`, `CN-STORE-03`, `CN-STORE-04`,
+    `CN-STORE-05` (all `78da6c9`): `declared` → `enforced`.
+  - `T-ENC-03`, `CN-WIRE-07`, `DC-PROTO-02`, `DC-PROTO-05`
+    (PHASE4-N-A): real-capture corpus + `ci_check_ce_n_a_5_proof.sh`.
+  - `T-CORE-02` (S-B1, N-B): `declared` → `enforced` for the consensus
+    surface.
+  - The six `DC-VAL-*` rules each carry `strengthened_in =
+    ["PHASE4-B1"]` in the registry even though the family was *created*
+    in PHASE4-B1 — recorded faithfully here; see Anomalies.
 
-Net strengthening this delta: **15 rules** moved
-`declared` / `partial` → `enforced` (1 from `9b15378`, 9 from
-`78da6c9`, 4 from the PHASE4-N-A real-capture wiring, 1 from
-PHASE4-N-B). All are permitted strengthenings, not weakenings. No
-rule IDs were retired or reassigned.
-
-Family counts at HEAD (per `^id = "<FAM>-"` count in
-`docs/ade-invariant-registry.toml`): T=30, DC=47 (+2 N-A + 8 N-B
-relative to baseline 37), CN=64, RO=6, OP=7, remainder unchanged.
+Family counts at HEAD (per `^id = "<FAM>-"`): CN dominates (~64),
+DC = 53 (now including `DC-CONS` ×8, `DC-VAL` ×6), T = 30, RO/OP ×9
+combined. The `DC` family grew most this delta (+2 N-A, +8 N-B, +6 B1
+= +16 DC-family additions net of the families they sit in).
 
 Normative-doc rule extraction (the `normative_docs` list in
 `.idd-config.json`) is approximate and not regenerated here — the
@@ -459,62 +490,81 @@ structured registry is the authoritative source.
 
 ## Anomalies and Cross-Reference Warnings
 
-- **PHASE4-N-B closed at HEAD.** All six CEs (CE-N-B-1 through
-  CE-N-B-6) closed via S-B8, S-B9, S-B7+S-B6, S-B6, S-B10, S-B10
-  respectively. The cluster doc is at `docs/clusters/PHASE4-N-B/`
-  and is **not yet archived** to `docs/clusters/completed/PHASE4-N-B/`
-  — no `Close PHASE4-N-B` commit appears in the log. Surface for the
-  next housekeeping commit.
-- **PHASE4-N-A closed at HEAD.** Cluster archived to
-  `docs/clusters/completed/PHASE4-N-A/` (`69a2862`); DoS-hardening
-  + grounding-doc refresh follow-up at `744ef34`.
-- **PHASE4-N-D closed.** Cluster archived at
-  `docs/clusters/completed/PHASE4-N-D/` (`436b1d7`); CE-N-D-1
-  evidence at `CE-N-D-1_2026-05-19.log` (1000/1000 stress-kill
-  iterations green).
-- **CODEMAP stale on N-B surface.** CODEMAP was refreshed for N-A
-  closure at `744ef34` but contains no entries for
-  `ade_core::consensus` (15 BLUE source files), `ade_runtime::consensus`
-  (GREEN orchestrator + RED genesis parser), `ade_testkit::consensus`
-  (GREEN), or the new `ade_core_interop` crate (RED). The CI-script
-  count must also tick from 21 → 25 (four new N-B scripts). Flagged
-  for the next `/codemap` run.
-- **SEAMS stale on N-B surface.** No entries for the closed-grammar
-  `PraosChainDepState` seam, the frozen `ChainEvent` /
-  `ChainSelectionReject` taxonomies, the `LedgerView` extension-point
-  trait, or the EraSchedule consumption boundary. Flagged for the
-  next `/seams` run.
-- **TRACEABILITY stale on N-B rule wiring.** The 8 new `DC-CONS-*`
-  rules need TRACEABILITY rows mapping rule → source → tests → CI.
-  `T-CORE-02` strengthening (declared → enforced) also needs a row
-  update. Flagged for the next `/traceability` run.
-- **`ade_core_interop` tests are `#[ignore]`-gated by design.** CE-N-B-6
-  closure evidence is captured by manual operator pass at
-  `docs/clusters/PHASE4-N-B/CE-N-B-6_<date>.log`; CI does not run
-  the live-tip-agreement loop. This is by design (RED interop, no
-  authority), but the closure-evidence log path must be present at
-  cluster close — confirm before archiving N-B.
-- **`ade_core` is BLUE by config; surface populated by N-B.** Prior to
-  N-B the crate was an empty BLUE shell flagged in CODEMAP as a
-  CE-79 Tier-4 non-goal. As of HEAD the crate hosts the full BLUE
-  consensus surface; the CODEMAP callout is now stale.
-- **`ade_node` MUST NOT list is forward-looking.** Binary is a
-  hello-world stub; no authority surface exercised yet. Cluster N-E
-  (ledger + runtime composition) will activate it. Not new in this
-  delta.
-- **Corpus relayout: credentialed snapshots removed.** The deleted
-  `corpus/snapshots/reward_provenance/*_registered_creds.txt` files
-  carried registered credentials that did not belong in a public
-  repo. They were replaced by 12 re-extracted boundary-block sets
-  at exact era-boundary slots under `corpus/boundary_blocks/`. The
-  large negative line count in the header is dominated by this
-  deletion.
+- **PHASE4-B1 closed at HEAD; cluster doc not yet archived.** All five
+  CEs closed (CE-B1-1 `ee694f4`, CE-B1-2 + CE-B1-5 `c4723d4`, CE-B1-3
+  `37498f2`, CE-B1-4 `0d4457e`). The cluster doc lives at
+  `docs/clusters/PHASE4-B1/` (opened `2e58189`/`af4a4db`); no
+  `Close PHASE4-B1` commit appears in the log and it is **not** yet
+  moved to `docs/clusters/completed/PHASE4-B1/`. Surface for the next
+  housekeeping commit.
+- **PHASE4-N-B closed.** `fb7f6dc` (`Close PHASE4-N-B`) archived the
+  cluster; the prior HEAD_DELTAS regen predated this commit and called
+  N-B "closed at HEAD but not archived" — that is now resolved. The
+  CE-N-B-6 live-interop pin was retargeted to cardano-node 11.0.1
+  (`c828449`) and the follow-mode bridge landed at `8b7e19e`.
+- **DC-VAL status mismatch vs. closure claim.** PHASE4-B1 is reported
+  as fully closed (all CEs green), but in the registry only
+  **`DC-VAL-01` is `enforced`** — `DC-VAL-02` through `DC-VAL-06`
+  remain `status = "declared"` despite having named tests and (for
+  02/04/05/06) the extended `ci_check_consensus_closed_enums.sh`
+  enforcement point. Either the registry statuses need flipping to
+  `enforced` on the next `/traceability` pass, or the cluster-close
+  gate should confirm the declared rules are mechanically green before
+  archiving. Flagged — this is the kind of premature-status-flip-vs-
+  reality gap the complete-work-only discipline targets.
+- **`DC-VAL-*` `strengthened_in = ["PHASE4-B1"]` on freshly-created
+  rules.** The six DC-VAL rules were *introduced* in PHASE4-B1 yet each
+  records `strengthened_in = ["PHASE4-B1"]`. `strengthened_in`
+  ordinarily records *later* clusters that tightened a pre-existing
+  rule; using it for the introducing cluster is unusual but harmless
+  (no weakening). Reported faithfully; consider normalizing on the
+  next registry curation pass.
+- **Grounding docs stale on N-B + follow-bridge + B1.** CODEMAP, SEAMS,
+  and TRACEABILITY were last refreshed at `744ef34` (N-A only). They
+  carry **no** entries for: `ade_core::consensus` + `kes_check`,
+  `ade_runtime::consensus`, `ade_testkit::consensus`, the
+  `ade_core_interop` crate + `follow` bridge, `ade_ledger::block_validity`,
+  `ade_ledger::consensus_view`, `ade_ledger::consensus_input_extract`,
+  or `ade_testkit::validity`. TRACEABILITY is missing rows for all 8
+  `DC-CONS-*` and all 6 `DC-VAL-*` rules. The CI-script count in
+  CODEMAP must tick to 24 scripts + 1 hook. Run `/codemap`, `/seams`,
+  `/traceability`.
+- **New `ade_ledger -> ade_core` dependency edge.** First time the
+  ledger crate depends on the consensus crate. Both are BLUE, so the
+  `ci_check_dependency_boundary.sh` BLUE→RED guard is unaffected, but
+  CODEMAP's dependency graph and SEAMS' module-addition rules should
+  record the new intra-BLUE edge (consensus header authority is now a
+  ledger-side composition dependency).
+- **`ade_crypto::kes::build_opcert_signable` fixed in B1-S5.** A
+  correctness fix (`62d25a3`) to the KES op-cert signable-bytes
+  derivation, validated by 14/14 real Conway headers. This is a BLUE
+  crypto-surface behavioral change; confirm crypto-vector CI
+  (`ci_check_crypto_vectors.sh`) still covers it on the next
+  TRACEABILITY pass.
+- **Adversarial corpus is derived, not committed.** `corpus/validity/
+  adversarial/` holds only a README; the adversarial blocks are
+  generated deterministically at test time by the M1–M6 mutators in
+  `ade_testkit::validity::adversarial`. This is intentional (keeps the
+  corpus a pure function of the positive corpus), but means the
+  CE-B1-4 no-false-accept evidence lives in test code, not fixtures.
+- **PHASE4-N-A / N-D closed.** N-A archived (`69a2862`, DoS-hardening
+  follow-up `744ef34`); N-D archived (`436b1d7`, CE-N-D-1 evidence
+  1000/1000 stress-kill green).
+- **`ade_core_interop` tests are `#[ignore]`-gated / offline-replay by
+  design.** Live tip-agreement is not run in CI; the follow-bridge has
+  an offline-replay test (`follow_offline_replay.rs`). CE-N-B-6 closure
+  evidence is a manual operator pass. By design (RED, no authority).
+- **`ade_node` MUST NOT list is forward-looking.** Binary is a stub;
+  no authority surface exercised. Not new in this delta.
+- **Corpus relayout: credentialed snapshots removed.** Deleted
+  `corpus/snapshots/reward_provenance/*_registered_creds.txt`
+  dominates the large negative line count; replaced by 12 re-extracted
+  boundary-block sets under `corpus/boundary_blocks/`.
 - No removed canonical types (n/a — no separate registry).
 - No removed registry rules (expected: 0; actual: 0).
-- No commit subjects in the delta lack a conventional-commits prefix
-  (the two `Close PHASE4-N-*` chore commits at `69a2862` and
-  `436b1d7` use a freeform prefix; classified as `chore` here on
-  scope grounds — they are cluster-close housekeeping commits).
+- No commit subjects lack a conventional-commits prefix except the two
+  `Close PHASE4-N-*` chore commits (`69a2862`, `436b1d7`, `fb7f6dc`) —
+  cluster-close housekeeping, classified `chore` on scope grounds.
 
 ---
 
@@ -523,5 +573,5 @@ structured registry is the authoritative source.
 Regenerate via `/head-deltas <baseline>` or by re-running the
 `head-deltas-generator` agent with the same baseline. Baseline lives
 in `.idd-config.json` `head_deltas_baseline`. Update on next phase
-boundary (Phase 4 close, or when the next cluster — N-C / N-E / N-F
-— closes).
+boundary (Phase 4 close, or when the next cluster — N-C / N-E / N-F /
+the next B-series — closes).
