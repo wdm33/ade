@@ -1,17 +1,23 @@
-# Invariant Cluster — PHASE4-B3F (B3 follow-up: DC-TXV-06 mechanical closure)
+# Invariant Cluster — PHASE4-B3F (B3 follow-up hardening)
 
-> **Status:** Planning Artifact (Non-Normative). Single-slice follow-up to the closed
+> **Status:** Planning Artifact (Non-Normative). Follow-up hardening to the closed
 > PHASE4-B3 cluster. Authority: `docs/ade-invariant-registry.toml`.
 
-### Cluster PHASE4-B3F — Mechanically gate the Conway cert-classification closure
+### Cluster PHASE4-B3F — Defend the Conway cert grammar & classification closure
 
 **Primary invariant:**
-> The closed/total Conway certificate-deposit classification (`DC-TXV-06`) is enforced
-> **mechanically by CI**, not only by the compiler-exhaustive match + named tests — a
-> reintroduced catch-all accept arm, an open-tail (`Other`/`Unknown`) cert variant, a
-> `#[non_exhaustive]`, or a `_ =>` wildcard in `classify` fails CI.
+> The Conway certificate decode + classification stays closed/total and fail-closed,
+> defended **mechanically** — (S1) a reintroduced catch-all accept arm, open-tail
+> (`Other`/`Unknown`) cert variant, `#[non_exhaustive]`, or `_ =>` wildcard in `classify`
+> fails CI (`DC-TXV-06`); (S2) the cert decoder rejects trailing bytes and a crafted
+> oversize array count, matching the withdrawals decoder (`DC-VAL-06`).
 
-**Normative anchors:** `docs/ade-invariant-registry.toml` — `DC-TXV-06` (flips `partial → enforced`).
+**Normative anchors:** `docs/ade-invariant-registry.toml` — `DC-TXV-06` (flips
+`partial → enforced`, S1) and `DC-VAL-06` (decoder strictness, S2).
+
+**Slices:**
+- **B3F-S1** — DC-TXV-06 CI grep-gate (`ci/ci_check_conway_cert_classification_closed.sh`). Merged.
+- **B3F-S2** — cert decoder trailing-bytes reject + bounded preallocation (`DC-VAL-06`). Merged.
 
 **Entry conditions:** PHASE4-B3 closed. The cert surface already satisfies the target
 properties (decoder `_ => Err(UnknownCertTag)`, closed `ConwayCert`, exhaustive `classify`);
@@ -24,6 +30,10 @@ this cluster adds the CI gate that defends them against regression. **No cert-co
   open-tail variant or `#[non_exhaustive]` on the cert types; a `_ =>` wildcard in `classify`.
   `docs/ade-invariant-registry.toml` `DC-TXV-06` → `status = "enforced"`,
   `ci_script = "ci/ci_check_conway_cert_classification_closed.sh"`; `ci_check_constitution_coverage.sh` still PASSES.
+- [ ] **CE-B3F-2** — `decode_conway_certs` rejects trailing bytes (`CodecError::TrailingBytes`)
+  and bounds its preallocation; covered by `trailing_bytes_after_cert_array_rejected` +
+  `huge_array_count_rejects_without_overallocating`; existing decoder/conservation tests stay
+  green; `DC-VAL-06` `strengthened_in += PHASE4-B3F`.
 
 **TCB color map:** the gate is a CI script (off the BLUE authority path; enforcement tooling).
 No BLUE/GREEN/RED code changes.

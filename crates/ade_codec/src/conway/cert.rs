@@ -31,7 +31,12 @@ pub fn decode_conway_certs(data: &[u8]) -> Result<Vec<ConwayCert>, CodecError> {
     let enc = cbor::read_array_header(data, &mut offset)?;
     let certs = match enc {
         ContainerEncoding::Definite(n, _) => {
-            let mut certs = Vec::with_capacity(n as usize);
+            // Bound the preallocation by the remaining input: a CBOR array of `n`
+            // elements needs at least `n` bytes, so capping at `data.len()`
+            // cannot under-allocate for valid input and defangs a crafted huge
+            // count (the loop still validates every element, hitting
+            // UnexpectedEof when the data runs out).
+            let mut certs = Vec::with_capacity((n as usize).min(data.len()));
             for _ in 0..n {
                 certs.push(decode_single_cert(data, &mut offset)?);
             }
@@ -42,9 +47,20 @@ pub fn decode_conway_certs(data: &[u8]) -> Result<Vec<ConwayCert>, CodecError> {
             while !cbor::is_break(data, offset)? {
                 certs.push(decode_single_cert(data, &mut offset)?);
             }
+            offset += 1; // consume the break byte
             certs
         }
     };
+
+    // Closed grammar: `data` is the exact CBOR item for tx-body key 4. Trailing
+    // bytes after the cert array are malformed input, rejected — not silently
+    // ignored (parity with `decode_withdrawals`).
+    if offset != data.len() {
+        return Err(CodecError::TrailingBytes {
+            consumed: offset,
+            total: data.len(),
+        });
+    }
 
     Ok(certs)
 }

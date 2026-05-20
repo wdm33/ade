@@ -382,3 +382,29 @@ fn decode_is_replay_deterministic() {
         assert_eq!(first, second, "tag {tag} decode not deterministic");
     }
 }
+
+#[test]
+fn trailing_bytes_after_cert_array_rejected() {
+    // A valid single-cert array with one extra byte appended. The cert field is
+    // an exact CBOR item; trailing bytes are malformed input, not ignored.
+    let mut bytes = build_cert_array(2);
+    bytes.push(0x00);
+    match decode_conway_certs(&bytes) {
+        Err(CodecError::TrailingBytes { .. }) => {}
+        other => panic!("expected TrailingBytes, got {other:?}"),
+    }
+}
+
+#[test]
+fn huge_array_count_rejects_without_overallocating() {
+    // An array header claiming u64::MAX elements with no element bytes. The
+    // decoder must reject (data runs out) rather than attempt a huge allocation.
+    let mut bytes = Vec::new();
+    arr(&mut bytes, u64::MAX);
+    match decode_conway_certs(&bytes) {
+        Err(CodecError::UnexpectedEof { .. })
+        | Err(CodecError::InvalidCborStructure { .. })
+        | Err(CodecError::UnexpectedCborType { .. }) => {}
+        other => panic!("expected reject on oversize count, got {other:?}"),
+    }
+}
