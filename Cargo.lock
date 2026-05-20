@@ -15,6 +15,7 @@ dependencies = [
 name = "ade_core"
 version = "0.1.0"
 dependencies = [
+ "ade_codec",
  "ade_crypto",
  "ade_testkit",
  "ade_types",
@@ -52,9 +53,12 @@ name = "ade_ledger"
 version = "0.1.0"
 dependencies = [
  "ade_codec",
+ "ade_core",
  "ade_crypto",
  "ade_plutus",
+ "ade_testkit",
  "ade_types",
+ "minicbor",
  "num-bigint",
  "num-integer",
  "num-traits",
