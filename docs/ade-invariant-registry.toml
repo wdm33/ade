@@ -1946,3 +1946,76 @@ tests = ["consensus::op_cert::tests::apply_op_cert_inserts_first_observation", "
 ci_script = ""
 status = "enforced"
 strengthened_in = ["PHASE4-N-B"]
+
+# =============================================================================
+# DC-VAL — Block-validity composition + reference agreement (PHASE4-B1)
+# Introduced by the PHASE4-B1 invariant sketch (docs/planning/phase4-b1-invariants.md).
+# status = "declared" until B1 slices land enforcement; code_locus/tests/ci_script
+# populated as enforcement is implemented.
+# =============================================================================
+
+[[rules]]
+id = "DC-VAL-01"
+tier = "derived"
+statement = "A block's validity verdict is a pure function of (LedgerState, PraosChainDepState, EraSchedule, LedgerView, block_cbor). No wall-clock, arrival order, HashMap/HashSet iteration, float, or ambient state may influence it."
+source = "Cardano ledger spec; Ouroboros Praos spec; IDD determinism doctrine"
+cross_ref = ["DC-CORE-01", "T-DET-01", "DC-CONSENSUS-01"]
+code_locus = ""
+tests = []
+ci_script = ""
+status = "declared"
+
+[[rules]]
+id = "DC-VAL-02"
+tier = "derived"
+statement = "A block is Valid iff both the consensus header authority (validate_and_apply_header) and the ledger body authority (apply_block_with_verdicts) accept it. No path may produce a Valid verdict while skipping either authority."
+source = "Cardano ledger spec; Ouroboros Praos spec"
+cross_ref = ["DC-LEDGER-02", "CN-CONS-04", "DC-CONS-04"]
+code_locus = ""
+tests = []
+ci_script = ""
+status = "declared"
+
+[[rules]]
+id = "DC-VAL-03"
+tier = "derived"
+statement = "The header is validated before the body; body validation never runs on a header-invalid block. The first failing authority determines the reason (fail-fast ordering)."
+source = "Ouroboros Praos spec; IDD fail-fast doctrine"
+cross_ref = ["DC-VAL-02"]
+code_locus = ""
+tests = []
+ci_script = ""
+status = "declared"
+
+[[rules]]
+id = "DC-VAL-04"
+tier = "derived"
+statement = "Ade's Valid/Invalid verdict for a block equals the reference cardano-node verdict, including the reason class where the reference exposes it. Established over both a positive corpus (real valid blocks) and a mandatory adversarial corpus (blocks the reference rejects)."
+source = "cardano-node reference behavior; Cardano ledger spec"
+cross_ref = ["DC-LEDGER-02", "CN-LEDGER-02"]
+code_locus = ""
+tests = []
+ci_script = ""
+status = "declared"
+
+[[rules]]
+id = "DC-VAL-05"
+tier = "derived"
+statement = "A Valid block yields evolved (LedgerState', PraosChainDepState'); an Invalid block yields the unchanged input states plus a structured reason. No partial or in-place mutation occurs on the invalid path."
+source = "IDD explicit-total-transition doctrine; Cardano ledger spec"
+cross_ref = ["DC-LEDGER-02"]
+code_locus = ""
+tests = []
+ci_script = ""
+status = "declared"
+
+[[rules]]
+id = "DC-VAL-06"
+tier = "derived"
+statement = "Every crypto-input, field-size, and structural check on the authority path rejects (produces Invalid) on wrong size or shape and never silently skips. The pattern `if X.len() == K { check } else { skip }` is forbidden in BLUE validation; size checks go through a helper that returns an error. No defined-but-unwired check and no tautological (value-compared-to-itself) guard may stand in for a real check."
+source = "Cardano ledger spec (mandatory witness/field checks); IDD fail-fast doctrine"
+cross_ref = ["DC-LEDGER-02", "T-ENC-01", "DC-CRYPTO-01"]
+code_locus = ""
+tests = []
+ci_script = ""
+status = "declared"
