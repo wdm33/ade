@@ -297,11 +297,12 @@ statement = "UTxO and asset conservation must hold for every accepted transition
 source = "Project constitution §2, audit #13"
 cross_ref = ["CN-LEDGER-07"]
 code_locus = "crates/ade_ledger/src/value.rs, crates/ade_ledger/src/byron.rs"
-tests = ["all_eras_replay_summary", "byron_replay_all_1500", "shelley_replay_all_1500"]
+tests = ["all_eras_replay_summary", "byron_replay_all_1500", "shelley_replay_all_1500", "conway_conservation_full"]
 ci_script = "ci/ci_check_differential_divergence.sh"
 status = "enforced"
 authority_surface = "conservation across all 7 eras plus epoch boundary reward/MIR flows"
 cluster = "CL-LEDGER-VERDICT"
+strengthened_in = ["PHASE4-B3"]
 
 [[rules]]
 id = "T-NOSPEND-01"
@@ -1045,11 +1046,12 @@ statement = "UTxO and asset conservation must hold for every accepted transition
 source = "classification_table.md §B"
 cross_ref = ["T-CONSERV-01"]
 code_locus = ""
-tests = []
+tests = ["conway_conservation_full"]
 ci_script = ""
 status = "declared"
 attack_rationale = "Prevents inflation and accounting bugs."
 evidence_notes = "Fundamental accounting law. Evidence: validateValueNotConservedUTxO in cardano-ledger enforces consumed == produced."
+strengthened_in = ["PHASE4-B3"]
 
 [[rules]]
 id = "CN-LEDGER-08"
@@ -2027,10 +2029,10 @@ statement = "Every crypto-input, field-size, and structural check on the authori
 source = "Cardano ledger spec (mandatory witness/field checks); IDD fail-fast doctrine"
 cross_ref = ["DC-LEDGER-02", "T-ENC-01", "DC-CRYPTO-01"]
 code_locus = "crates/ade_ledger/src/block_validity/verdict.rs (FieldKind/FieldError closed fail-closed field taxonomy; PHASE4-B1-S3); crates/ade_core/src/consensus/kes_check.rs (expect_size fail-closed header crypto-field guard; PHASE4-B1-S5); crates/ade_testkit/src/validity/adversarial.rs (M1 truncated VRF proof, M3 flipped KES sig, M4 slot-beyond-horizon adversarial mutators exercising the fail-closed checks; PHASE4-B1-S7); crates/ade_ledger/src/tx_validity/witness.rs (wrong-size vkey/sig → MalformedWitnessField via from_bytes, never skipped); crates/ade_ledger/src/tx_validity/required_signers.rs (unresolvable input / malformed certs|withdrawals|voters CBOR → structured RequiredSignerError, never silent skip; PHASE4-B2-S1); crates/ade_ledger/src/conway.rs (check_conway_coin_conservation: closed coin-level preservation-of-value check wired into validate_conway_state_backed — closes the state-backed fail-open gap where outputs+fee != inputs was accepted at track_utxo=true; PHASE4-B2-S4); crates/ade_testkit/src/tx_validity/adversarial.rs (GREEN witness/value/input mutators driving tx_validity fail-closed; PHASE4-B2-S4)"
-tests = ["expect_size_rejects_wrong_length", "praos_malformed_kes_sig_rejected", "no_mutation_is_ever_valid", "each_mutation_maps_to_expected_class", "wrong_size_signature_rejected", "wrong_size_vkey_rejected", "unresolvable_input_is_fail_fast", "unresolvable_collateral_input_is_fail_fast"]
+tests = ["expect_size_rejects_wrong_length", "praos_malformed_kes_sig_rejected", "no_mutation_is_ever_valid", "each_mutation_maps_to_expected_class", "wrong_size_signature_rejected", "wrong_size_vkey_rejected", "unresolvable_input_is_fail_fast", "unresolvable_collateral_input_is_fail_fast", "conway_conservation_full", "conservation_early_out_removed", "adversarial_imbalanced_via_deposit", "adversarial_imbalanced_via_withdrawal", "adversarial_unknown_cert_tag_rejects_as_decode", "adversarial_removed_tag_rejects_as_era_invalid", "adversarial_truncated_withdrawals_rejects_as_decode", "adversarial_state_dependent_unaccountable_rejects", "adversarial_no_false_accept", "adversarial_verdicts_replay_byte_identical"]
 ci_script = "ci/ci_check_consensus_closed_enums.sh"
 status = "enforced"
-strengthened_in = ["PHASE4-B1", "PHASE4-B2"]
+strengthened_in = ["PHASE4-B1", "PHASE4-B2", "PHASE4-B3"]
 
 # =============================================================================
 # DC-TXV — Transaction-validity agreement (PHASE4-B2)
@@ -2071,10 +2073,10 @@ statement = "Ade's Valid/Invalid verdict for a transaction equals the reference 
 source = "cardano-node reference behavior; Cardano ledger spec"
 cross_ref = ["DC-LEDGER-02", "CN-LEDGER-02", "DC-VAL-04", "DC-TXV-05"]
 code_locus = "crates/ade_testkit/src/tx_validity/ (GREEN harness: extracts every on-wire Conway tx from the committed Conway-576 corpus blocks and drives the BLUE tx_validity over each at track_utxo=false — partial scope: structural + witness closure; UTxO-dependent checks deferred); crates/ade_ledger/src/tx_validity/phase1.rs (tx_phase_one gates the UTxO-dependent state-backed checks behind track_utxo, mirroring the block path's verify_conway_witness_closure + run_phase_one_composers split — the witness closure runs unconditionally); PHASE4-B2-S3 (positive half); crates/ade_testkit/src/tx_validity/adversarial.rs + crates/ade_ledger/tests/tx_validity_adversarial_corpus.rs (NEGATIVE half: family A witness mutations on real corpus txs at track_utxo=false + family B synthetic value/input/witness mutations at track_utxo=true — every mutation → Invalid, no false accept; PHASE4-B2-S4)"
-tests = ["all_corpus_txs_valid", "corpus_tx_count_nonzero", "no_mutation_is_ever_valid", "each_mutation_maps_to_expected_class", "adversarial_replays_identically"]
+tests = ["all_corpus_txs_valid", "corpus_tx_count_nonzero", "no_mutation_is_ever_valid", "each_mutation_maps_to_expected_class", "adversarial_replays_identically", "adversarial_imbalanced_via_deposit", "adversarial_imbalanced_via_withdrawal", "adversarial_unknown_cert_tag_rejects_as_decode", "adversarial_removed_tag_rejects_as_era_invalid", "adversarial_truncated_withdrawals_rejects_as_decode", "adversarial_state_dependent_unaccountable_rejects", "adversarial_no_false_accept", "adversarial_verdicts_replay_byte_identical", "real_cert_withdrawal_txs_are_valid_at_track_utxo_true", "real_positive_verdict_stream_replays_byte_identical", "synthetic_balanced_cert_withdrawal_txs_are_valid", "synthetic_positive_verdict_stream_replays_byte_identical"]
 ci_script = "ci/ci_check_consensus_closed_enums.sh"
 status = "enforced"
-strengthened_in = ["PHASE4-B2"]
+strengthened_in = ["PHASE4-B2", "PHASE4-B3"]
 
 [[rules]]
 id = "DC-TXV-04"
@@ -2099,3 +2101,31 @@ tests = ["all_required_covered_is_valid", "missing_input_payment_witness_rejecte
 ci_script = "ci/ci_check_consensus_closed_enums.sh"
 status = "enforced"
 strengthened_in = ["PHASE4-B2"]
+
+[[rules]]
+id = "DC-TXV-06"
+tier = "derived"
+statement = "For each era, the certificate-deposit classification map(state, cert) is a closed, total, era-versioned function: every certificate variant resolves to exactly one of new_deposit(coin) | refund(coin) | neutral | explicit_reject, with the coin sourced from the cert (Conway explicit-deposit variants, tags 7/8) or the protocol parameter (legacy variants, tags 0/1). An unrecognized cert tag, malformed cert CBOR, or undecodable withdrawals field is a deterministic reject, never a silent neutral. State-dependent cases that cannot be accounted (e.g. pool re-registration charged as a new deposit) reject with a structured UnsupportedStateDependentDepositAccounting error rather than guessing. Incomplete classification is a forbidden false-accept path feeding the value-conservation equation."
+source = "Cardano ledger spec (Conway CDDL certificate tags 0..18; UTXO deposit/refund accounting); IDD fail-fast + closed-surface doctrine"
+cross_ref = ["T-CONSERV-01", "CN-LEDGER-07", "DC-VAL-06", "DC-TXV-05"]
+code_locus = "crates/ade_codec/src/conway/cert.rs (decode_conway_certs, closed ConwayCert grammar); crates/ade_codec/src/error.rs (CodecError::UnknownCertTag); crates/ade_types/src/conway/cert.rs (ConwayCert, CertDisposition, DepositEffect, CoinSource); crates/ade_ledger/src/cert_classify.rs (classify); crates/ade_ledger/src/error.rs (UnsupportedStateDependentDepositAccounting); corpus/conway_certs/{classification_table.md,tags.json}"
+tests = ["decode_total_over_tags_0_18", "unknown_cert_tag_is_codec_error", "removed_tag_5_6_is_not_valid_in_conway", "malformed_cert_cbor_rejected", "decode_is_replay_deterministic", "class_mapping_is_total", "legacy_unregistration_unresolved_is_unsupported_state_dependent", "legacy_unregistration_resolves_recorded_deposit", "pool_reregistration_is_neutral", "pool_new_registration_charges_pool_deposit"]
+ci_script = ""
+status = "enforced"
+authority_surface = "BLUE Conway value-conservation accounting"
+cluster = "PHASE4-B3"
+strengthened_in = []
+
+[[rules]]
+id = "DC-TXV-07"
+tier = "derived"
+statement = "All deposit/refund amounts used by Conway transaction value-conservation accounting must be sourced from canonical ledger protocol parameters or explicit certificate fields, never from testkit defaults, shell configuration, ambient ConwayGovParams, or fallback constants."
+source = "IDD determinism doctrine (deposit params are canonical input); Conway protocol-parameter surface"
+cross_ref = ["T-DET-01", "T-CONSERV-01", "CN-LEDGER-07", "DC-TXV-06"]
+code_locus = "crates/ade_ledger/src/pparams.rs (ConwayOnlyDepositParams, ConwayDepositParams); crates/ade_ledger/src/state.rs (LedgerState.conway_deposit_params, conway_deposit_view); crates/ade_ledger/src/fingerprint.rs (fingerprint_pparams Conway-gated migration)"
+tests = ["conway_deposit_params_canonical_source", "non_conway_state_has_no_conway_deposit_params", "pparams_fingerprint_stable_for_non_conway", "pparams_fingerprint_includes_conway_deposits_when_present"]
+ci_script = "ci/ci_check_deposit_param_authority.sh"
+status = "enforced"
+authority_surface = "BLUE Conway deposit parameter authority"
+cluster = "PHASE4-B3"
+strengthened_in = ["PHASE4-B3"]
