@@ -10,10 +10,12 @@
 //! Non-authoritative: loads the committed positive-validation corpus for the
 //! B1 block-validity replay tests.
 
+pub mod adversarial;
 pub mod corpus;
 pub mod ledger_view;
 pub mod replay;
 
+pub use adversarial::{MutateError, Mutation};
 pub use corpus::{ConwayValidityCorpus, CorpusLoadError, CorpusPool, CorpusRatio};
 pub use ledger_view::{pool_distr_view_from_corpus, CorpusViewError};
-pub use replay::{replay_block_validity, BlockReplay};
+pub use replay::{replay_block_validity, validate_block_against_corpus, BlockReplay};

@@ -66,6 +66,28 @@ fn ledger_at_576() -> LedgerState {
     l
 }
 
+/// Validate a single arbitrary block (e.g. an adversarial mutation of a corpus
+/// block) against the corpus's per-block consensus recipe — the SAME inputs
+/// `replay_block_validity` uses (eta0(576), epoch-576 ledger, the corpus
+/// pool-distribution view, the mainnet Conway schedule). Returns the verdict
+/// and its canonical surface bytes. Used by the B1-S7 adversarial harness so
+/// every mutation is judged by exactly the recipe the positive corpus passes.
+pub fn validate_block_against_corpus(
+    corpus: &ConwayValidityCorpus,
+    block_cbor: &[u8],
+) -> Result<BlockReplay, CorpusViewError> {
+    let view: PoolDistrView = pool_distr_view_from_corpus(corpus, EPOCH_576)?;
+    let era_schedule = schedule();
+    let ledger = ledger_at_576();
+    let chain_dep = state_with_eta0(corpus.epoch_nonce);
+    let outcome = block_validity(&ledger, &chain_dep, &era_schedule, &view, block_cbor);
+    let surface = encode_verdict_surface(&outcome.verdict);
+    Ok(BlockReplay {
+        verdict: outcome.verdict,
+        surface,
+    })
+}
+
 /// Drive `block_validity` over every corpus block, validating each independently
 /// against the per-block-reseeded chain-dep state, the corpus pool-distribution
 /// view, and the mainnet Conway era schedule. Returns one `BlockReplay` per

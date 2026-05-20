@@ -445,13 +445,14 @@ tier = "derived"
 statement = "Same genesis + same blocks = byte-identical ledger state"
 source = "Project constitution §3, T-DET-01"
 cross_ref = []
-code_locus = "crates/ade_ledger/src/state.rs, crates/ade_ledger/src/fingerprint.rs"
-tests = ["utxo_state_deterministic", "all_eras_determinism_summary", "boundary_fingerprint_matches_pins"]
+code_locus = "crates/ade_ledger/src/state.rs, crates/ade_ledger/src/fingerprint.rs, crates/ade_testkit/src/validity/adversarial.rs (GREEN no-false-accept adversarial corpus: no mutation of a real block ever yields Valid through block_validity; PHASE4-B1-S7)"
+tests = ["utxo_state_deterministic", "all_eras_determinism_summary", "boundary_fingerprint_matches_pins", "no_mutation_is_ever_valid", "adversarial_replays_identically"]
 ci_script = "ci/ci_check_ledger_determinism.sh, ci/ci_check_differential_divergence.sh"
 status = "partial"
 authority_surface = "ledger state progression at boundary-snapshot precision; per-block live differential deferred to external harness"
 cluster = "CL-LEDGER-VERDICT"
 evidence = ["boundary fingerprint agreement at 12 proof-grade snapshots (CE-75 in-repo layer 2)"]
+strengthened_in = ["PHASE4-B1"]
 
 [[rules]]
 id = "DC-LEDGER-03"
@@ -1996,8 +1997,8 @@ tier = "derived"
 statement = "Ade's Valid/Invalid verdict for a block equals the reference cardano-node verdict, including the reason class where the reference exposes it. Established over both a positive corpus (real valid blocks) and a mandatory adversarial corpus (blocks the reference rejects)."
 source = "cardano-node reference behavior; Cardano ledger spec"
 cross_ref = ["DC-LEDGER-02", "CN-LEDGER-02"]
-code_locus = "crates/ade_ledger/src/block_validity/ (closed Valid/Invalid + reject-class comparison surface; PHASE4-B1-S3), crates/ade_testkit/src/validity/replay.rs (GREEN positive-corpus replay harness driving block_validity over all 14 Conway-576 blocks; PHASE4-B1-S6)"
-tests = ["corpus_block_count_is_14", "all_corpus_blocks_valid", "verdict_stream_replays_identically"]
+code_locus = "crates/ade_ledger/src/block_validity/ (closed Valid/Invalid + reject-class comparison surface; PHASE4-B1-S3), crates/ade_testkit/src/validity/replay.rs (GREEN positive-corpus replay harness driving block_validity over all 14 Conway-576 blocks; PHASE4-B1-S6), crates/ade_testkit/src/validity/adversarial.rs (GREEN deterministic block mutators M1-M6 deriving adversarial blocks from the real corpus; PHASE4-B1-S7)"
+tests = ["corpus_block_count_is_14", "all_corpus_blocks_valid", "verdict_stream_replays_identically", "no_mutation_is_ever_valid", "each_mutation_maps_to_expected_class", "adversarial_replays_identically"]
 ci_script = ""
 status = "declared"
 strengthened_in = ["PHASE4-B1"]
@@ -2020,8 +2021,8 @@ tier = "derived"
 statement = "Every crypto-input, field-size, and structural check on the authority path rejects (produces Invalid) on wrong size or shape and never silently skips. The pattern `if X.len() == K { check } else { skip }` is forbidden in BLUE validation; size checks go through a helper that returns an error. No defined-but-unwired check and no tautological (value-compared-to-itself) guard may stand in for a real check."
 source = "Cardano ledger spec (mandatory witness/field checks); IDD fail-fast doctrine"
 cross_ref = ["DC-LEDGER-02", "T-ENC-01", "DC-CRYPTO-01"]
-code_locus = "crates/ade_ledger/src/block_validity/verdict.rs (FieldKind/FieldError closed fail-closed field taxonomy; PHASE4-B1-S3); crates/ade_core/src/consensus/kes_check.rs (expect_size fail-closed header crypto-field guard; PHASE4-B1-S5)"
-tests = ["expect_size_rejects_wrong_length", "praos_malformed_kes_sig_rejected"]
+code_locus = "crates/ade_ledger/src/block_validity/verdict.rs (FieldKind/FieldError closed fail-closed field taxonomy; PHASE4-B1-S3); crates/ade_core/src/consensus/kes_check.rs (expect_size fail-closed header crypto-field guard; PHASE4-B1-S5); crates/ade_testkit/src/validity/adversarial.rs (M1 truncated VRF proof, M3 flipped KES sig, M4 slot-beyond-horizon adversarial mutators exercising the fail-closed checks; PHASE4-B1-S7)"
+tests = ["expect_size_rejects_wrong_length", "praos_malformed_kes_sig_rejected", "no_mutation_is_ever_valid", "each_mutation_maps_to_expected_class"]
 ci_script = ""
 status = "declared"
 strengthened_in = ["PHASE4-B1"]
