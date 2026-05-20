@@ -1,0 +1,125 @@
+{
+  "network": "mainnet",
+  "epoch": 576,
+  "epoch_nonce": "d4d5f9dc027133f27b2551711c078e7d34575daba4aa0ee7c82e4b9dd9f55c51",
+  "active_slots_coeff": {
+    "numer": 1,
+    "denom": 20
+  },
+  "pd_total_active_stake": 21879134170304901,
+  "pools": [
+    {
+      "pool_id": "1ec2c7dde1ce090ee2e75c9fa618c575b8a0b77eaeec5c7266f50aca",
+      "vrf_keyhash": "bc051f0cbc210adf0db332ebbeafca046010ce0cf3885ce635b89a7714b81ac5",
+      "sigma": {
+        "numer": 46299443748770,
+        "denom": 21879134170304901
+      }
+    },
+    {
+      "pool_id": "24cc639f00790ec41c830464376b21df8602f4e7a1591ac005f8a44f",
+      "vrf_keyhash": "af565c69aed2cfa787c7403bc311070ea1e5eafddcb0ba159e0a26be2357475c",
+      "sigma": {
+        "numer": 12486933150561,
+        "denom": 7293044723434967
+      }
+    },
+    {
+      "pool_id": "2a8294ad7538b15353b9ffd81e26dafe846ffc3f6b9e331d4c1dc030",
+      "vrf_keyhash": "09fee6e4ac217e3397eece74d8b2c64c9f12b0b6981bdcae0be5c3a907521872",
+      "sigma": {
+        "numer": 72283296326545,
+        "denom": 21879134170304901
+      }
+    },
+    {
+      "pool_id": "37c7da28cacc3cddc181de02a2a957396f1aebaecf89ce6b55cd1e46",
+      "vrf_keyhash": "7344578be94068da25bd29a8280aae0adf2f3bd792ed6b7eca8ddfd2d4c37bba",
+      "sigma": {
+        "numer": 28991988986321,
+        "denom": 21879134170304901
+      }
+    },
+    {
+      "pool_id": "38ee2f8d878f7c444bd80d38c3b4cff02d3a3477c9e77d262065d9ad",
+      "vrf_keyhash": "4903e9b9e8cc4649f22841a77210b7d0c473b9233b49744c7ac991bbdbd5a5f2",
+      "sigma": {
+        "numer": 38857204808276,
+        "denom": 21879134170304901
+      }
+    },
+    {
+      "pool_id": "3b3327c0a885ba7c1ebeec8b44158aab79c32148d45b4c701344cd97",
+      "vrf_keyhash": "79b3d744b51b91f949d2b46ec7aee54956de612af113193e84e20c5ff297d863",
+      "sigma": {
+        "numer": 70183317740540,
+        "denom": 21879134170304901
+      }
+    },
+    {
+      "pool_id": "4511bcca3896bcb6d43b66fb89fe079f00f44bed505c9ca232704dc9",
+      "vrf_keyhash": "e5061c10c7e88d14004df20faf7fe00489c3f592d3f4efd83b0a9242ff2b6529",
+      "sigma": {
+        "numer": 11001314933242,
+        "denom": 7293044723434967
+      }
+    },
+    {
+      "pool_id": "4e0356a826bbf3e0525cd4612061a1304710b0c8d12df5457ac17cdf",
+      "vrf_keyhash": "4853d10c614c16db271f4eef339aee99f3091a0dc1a01e63dab5059158963e25",
+      "sigma": {
+        "numer": 24922766306509,
+        "denom": 7293044723434967
+      }
+    },
+    {
+      "pool_id": "8bf11b20369617d452af97a060247fbc361c69a7e3e7e96b03d97a42",
+      "vrf_keyhash": "f5f6cfc854acf5ed21ba646cbb730b7fdf2e10cc76fc84610c5b00972f7ecf56",
+      "sigma": {
+        "numer": 1009208518917,
+        "denom": 1041863531919281
+      }
+    },
+    {
+      "pool_id": "9b97ad981c8456110e17b1297a58961147209b7dc0d8e78b44ed8bcb",
+      "vrf_keyhash": "39fc25dcc28d80bea42d1b28967742a12529846cc94b5b4e6fbca407920a6a3e",
+      "sigma": {
+        "numer": 7545595287848,
+        "denom": 7293044723434967
+      }
+    },
+    {
+      "pool_id": "abacadaba9f12a8b5382fc370e4e7e69421fb59831bb4ecca3a11d9b",
+      "vrf_keyhash": "d6c75719ebe0cef157f8a25fd0df7ea1dcdfbc6427f816939e29a579d81c9434",
+      "sigma": {
+        "numer": 19281815030631,
+        "denom": 7293044723434967
+      }
+    },
+    {
+      "pool_id": "ac5ba151fae6889e25021acc723b0e34655828bf3328b6f1180e1d65",
+      "vrf_keyhash": "81fb7e6c4d8aae9eb17849fa02a6f32a18e53493981204186705175f2c788ed6",
+      "sigma": {
+        "numer": 70022495073691,
+        "denom": 21879134170304901
+      }
+    },
+    {
+      "pool_id": "b6f7db82bc0ef7491d36bc4dd2b1be43529b04e16d7a6e6137abaad7",
+      "vrf_keyhash": "8cbfc6eb5955b3457f11b7442ed3e2c12eab3e3ccc4ccc6974145bbc117276db",
+      "sigma": {
+        "numer": 24970966183686,
+        "denom": 7293044723434967
+      }
+    },
+    {
+      "pool_id": "c0d70a23601c6a880e7a730774c0a4005e49f0eb52ea38d1e609df0d",
+      "vrf_keyhash": "596442a743adb42eb01f4aa23daa0f4d418d27339113299519c32f61bf88adec",
+      "sigma": {
+        "numer": 10592758971691,
+        "denom": 21879134170304901
+      }
+    }
+  ],
+  "era_schedule_ref": "mainnet"
+}

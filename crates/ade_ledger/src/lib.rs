@@ -14,6 +14,7 @@
 pub mod alonzo;
 pub mod babbage;
 pub mod byron;
+pub mod consensus_input_extract;
 pub mod conway;
 pub mod delegation;
 pub mod epoch;

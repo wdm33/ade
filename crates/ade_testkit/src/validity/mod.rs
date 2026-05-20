@@ -5,8 +5,11 @@
 // - Explicit state transitions only
 // - Canonical serialization for all persisted/hashed data
 
-#![deny(unsafe_code)]
+//! GREEN block-validity test harness (PHASE4-B1).
+//!
+//! Non-authoritative: loads the committed positive-validation corpus for the
+//! B1 block-validity replay tests.
 
-pub mod consensus;
-pub mod harness;
-pub mod validity;
+pub mod corpus;
+
+pub use corpus::{ConwayValidityCorpus, CorpusLoadError, CorpusPool, CorpusRatio};
