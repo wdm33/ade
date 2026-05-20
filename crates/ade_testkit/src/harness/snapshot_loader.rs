@@ -107,7 +107,27 @@ impl LoadedSnapshot {
             cert_state,
             max_lovelace_supply: 45_000_000_000_000_000, // 45B ADA mainnet
             gov_state: self.load_gov_state(era),
+            conway_deposit_params: self.load_conway_deposit_params(era),
         }
+    }
+
+    /// Load the canonical Conway-only deposit params from the snapshot's
+    /// parsed `ConwayGovParams`. Returns None for pre-Conway eras (the field
+    /// is structurally absent there). After this, BLUE code reads these
+    /// deposit values only from canonical `LedgerState`, never from the
+    /// testkit `ConwayGovParams` object.
+    fn load_conway_deposit_params(
+        &self,
+        era: ade_types::CardanoEra,
+    ) -> Option<ade_ledger::pparams::ConwayOnlyDepositParams> {
+        if era != ade_types::CardanoEra::Conway {
+            return None;
+        }
+        let gov_params = parse_conway_gov_params(&self.raw_cbor).ok()?;
+        Some(ade_ledger::pparams::ConwayOnlyDepositParams {
+            drep_deposit: ade_types::tx::Coin(gov_params.drep_deposit),
+            gov_action_deposit: ade_types::tx::Coin(gov_params.gov_action_deposit),
+        })
     }
 
     /// Load Conway governance state from the snapshot CBOR.

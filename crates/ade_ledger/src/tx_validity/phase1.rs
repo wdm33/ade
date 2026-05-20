@@ -202,6 +202,12 @@ pub fn tx_phase_one(ledger: &LedgerState, decoded: &DecodedTx) -> Result<(), TxV
             pp.max_tx_ex_units_mem as i64,
             pp.max_tx_ex_units_cpu as i64,
         );
+        // Assemble the canonical Conway deposit-param view; a Conway state
+        // missing its deposit params is a validation-environment fault that
+        // fails fast here (never a default substitution).
+        let deposit_params = ledger
+            .conway_deposit_view()
+            .map_err(|e| TxValidityError::Phase1(LedgerError::ValidationEnvironment(e)))?;
         crate::conway::validate_conway_state_backed(
             &decoded.body,
             &ledger.utxo_state.utxos,
@@ -210,6 +216,8 @@ pub fn tx_phase_one(ledger: &LedgerState, decoded: &DecodedTx) -> Result<(), TxV
             pp.network_id,
             pp.protocol_major as u16,
             max_ex_units,
+            &deposit_params,
+            &ledger.cert_state,
         )
         .map_err(TxValidityError::Phase1)?;
     }

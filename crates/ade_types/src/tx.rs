@@ -70,6 +70,12 @@ impl core::fmt::Display for PoolId {
     }
 }
 
+/// On-chain reward account: a 29-byte address (1 network/header byte followed by
+/// a 28-byte staking credential hash). Used as a deterministic `BTreeMap` key for
+/// the transaction withdrawals field.
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
+pub struct RewardAccount(pub [u8; 29]);
+
 #[cfg(test)]
 mod tests {
     use super::*;

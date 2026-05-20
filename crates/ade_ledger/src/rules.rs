@@ -305,6 +305,7 @@ fn apply_shelley_era_block_with_verdicts(
             cert_state,
             max_lovelace_supply: current_state.max_lovelace_supply,
             gov_state: None,
+            conway_deposit_params: current_state.conway_deposit_params.clone(),
         },
         verdict,
         tx_verdicts,
@@ -383,6 +384,7 @@ fn apply_shelley_era_block_classified(
             cert_state,
             max_lovelace_supply: current_state.max_lovelace_supply,
         gov_state: None,
+        conway_deposit_params: current_state.conway_deposit_params.clone(),
         },
         verdict,
     ))
@@ -1287,6 +1289,7 @@ pub fn apply_epoch_boundary_with_registrations(
         cert_state,
         max_lovelace_supply: state.max_lovelace_supply,
         gov_state: new_gov_state,
+        conway_deposit_params: state.conway_deposit_params.clone(),
     };
 
     (new_state, accounting)
@@ -1942,9 +1945,13 @@ pub fn run_phase_one_composers_diagnostic(
             }
             CardanoEra::Conway => {
                 let body = ade_codec::conway::tx::decode_conway_tx_body(data, offset)?;
+                let deposit_params = state
+                    .conway_deposit_view()
+                    .map_err(LedgerError::ValidationEnvironment)?;
                 crate::conway::validate_conway_state_backed(
                     &body, utxo, wi, collateral_percent, current_network,
-                    pp.protocol_major as u16, max_ex_units,
+                    pp.protocol_major as u16, max_ex_units, &deposit_params,
+                    &state.cert_state,
                 )
             }
             _ => Ok(()),
@@ -2028,6 +2035,19 @@ fn run_phase_one_composers(
         (pp.max_tx_ex_units_mem as i64, pp.max_tx_ex_units_cpu as i64);
     let utxo = &state.utxo_state.utxos;
 
+    // Conway requires its canonical deposit params present; assemble the view
+    // once and fail fast for the whole block if the environment is missing it.
+    // Pre-Conway eras never read this and carry `None`.
+    let conway_deposit_params = if era == CardanoEra::Conway {
+        Some(
+            state
+                .conway_deposit_view()
+                .map_err(LedgerError::ValidationEnvironment)?,
+        )
+    } else {
+        None
+    };
+
     let mut stats = ComposerStats::default();
     let mut tx_verdicts: Vec<TxVerdict> = Vec::new();
     let mut tx_idx = 0usize;
@@ -2082,6 +2102,8 @@ fn run_phase_one_composers(
             current_network,
             max_ex_units,
             pp.protocol_major as u16,
+            conway_deposit_params.as_ref(),
+            &state.cert_state,
         )?;
         let body_end = body_offset;
 
@@ -2198,6 +2220,8 @@ fn decode_and_phase_one(
     current_network: u8,
     max_ex_units: (i64, i64),
     protocol_major: u16,
+    conway_deposit_params: Option<&crate::pparams::ConwayDepositParams>,
+    cert_state: &crate::delegation::CertState,
 ) -> Result<(Result<(), LedgerError>, TxInputSets), LedgerError> {
     match era {
         CardanoEra::Alonzo => {
@@ -2226,9 +2250,14 @@ fn decode_and_phase_one(
         }
         CardanoEra::Conway => {
             let body = ade_codec::conway::tx::decode_conway_tx_body(data, offset)?;
+            let deposit_params = conway_deposit_params.ok_or(
+                LedgerError::ValidationEnvironment(
+                    crate::error::ValidationEnvironmentError::MissingConwayDepositParams,
+                ),
+            )?;
             let r = crate::conway::validate_conway_state_backed(
                 &body, utxo, wi, collateral_percent, current_network,
-                protocol_major, max_ex_units,
+                protocol_major, max_ex_units, deposit_params, cert_state,
             );
             let meta = TxInputSets {
                 inputs: body.inputs.clone(),

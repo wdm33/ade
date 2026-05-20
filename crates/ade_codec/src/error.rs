@@ -14,6 +14,9 @@ pub enum CodecError {
     /// An unknown HFC era tag was encountered.
     UnknownEraTag { tag: u8 },
 
+    /// A certificate carried a tag outside the closed Conway grammar (`>= 19`).
+    UnknownCertTag { tag: u64, offset: usize },
+
     /// Unexpected end of input.
     UnexpectedEof { offset: usize, needed: usize },
 
@@ -32,6 +35,10 @@ pub enum CodecError {
 
     /// Invalid length or count.
     InvalidLength { offset: usize, detail: &'static str },
+
+    /// A definite-length CBOR map carried a duplicate key. Last-wins is forbidden;
+    /// a duplicate key makes the map ambiguous and rejects deterministically.
+    DuplicateMapKey { offset: usize },
 }
 
 impl core::fmt::Display for CodecError {
@@ -39,6 +46,9 @@ impl core::fmt::Display for CodecError {
         match self {
             CodecError::UnknownEraTag { tag } => {
                 write!(f, "unknown era tag: {tag}")
+            }
+            CodecError::UnknownCertTag { tag, offset } => {
+                write!(f, "unknown certificate tag {tag} at offset {offset}")
             }
             CodecError::UnexpectedEof { offset, needed } => {
                 write!(
@@ -64,6 +74,9 @@ impl core::fmt::Display for CodecError {
             }
             CodecError::InvalidLength { offset, detail } => {
                 write!(f, "invalid length at offset {offset}: {detail}")
+            }
+            CodecError::DuplicateMapKey { offset } => {
+                write!(f, "duplicate map key at offset {offset}")
             }
         }
     }

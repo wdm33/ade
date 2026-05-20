@@ -172,6 +172,10 @@ fn body_slice_of(tx_cbor: &[u8]) -> Vec<u8> {
 fn state_with_input(input: &TxIn, payment_key: &Hash28) -> LedgerState {
     let mut state = LedgerState::new(CardanoEra::Conway);
     state.track_utxo = true;
+    state.conway_deposit_params = Some(ade_ledger::pparams::ConwayOnlyDepositParams {
+        drep_deposit: Coin(500_000_000),
+        gov_action_deposit: Coin(100_000_000_000),
+    });
     let raw = {
         // A self-contained AlonzoPlus output whose `raw` is its own minimal
         // CBOR encoding (address + coin map) — only address_bytes() is read by

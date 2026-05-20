@@ -210,6 +210,7 @@ fn make_shelley_state_at_hfc() -> LedgerState {
         cert_state: ade_ledger::delegation::CertState::new(),
         max_lovelace_supply: 45_000_000_000_000_000,
         gov_state: None,
+        conway_deposit_params: None,
     }
 }
 

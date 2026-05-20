@@ -797,6 +797,7 @@ mod tests {
             cert_state: CertState::new(),
             max_lovelace_supply: 45_000_000_000_000_000,
         gov_state: None,
+        conway_deposit_params: None,
         };
 
         let new_mark = StakeSnapshot::new();

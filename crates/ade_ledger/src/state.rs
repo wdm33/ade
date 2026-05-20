@@ -9,7 +9,8 @@ use ade_types::tx::Coin;
 use ade_types::{CardanoEra, EpochNo, SlotNo};
 use crate::delegation::CertState;
 use crate::epoch::SnapshotState;
-use crate::pparams::ProtocolParameters;
+use crate::error::ValidationEnvironmentError;
+use crate::pparams::{ConwayDepositParams, ConwayOnlyDepositParams, ProtocolParameters};
 use crate::utxo::UTxOState;
 
 /// Epoch state — tracks current epoch, slot, stake distribution snapshots,
@@ -71,6 +72,10 @@ pub struct LedgerState {
     pub max_lovelace_supply: u64,
     /// Conway governance state. None for pre-Conway eras.
     pub gov_state: Option<ConwayGovState>,
+    /// Conway-only deposit parameters (`drep_deposit`, `gov_action_deposit`).
+    /// `Some` iff `era == Conway`; `None` (structurally absent, not defaulted)
+    /// for every other era.
+    pub conway_deposit_params: Option<ConwayOnlyDepositParams>,
 }
 
 /// Conway governance state at the epoch boundary.
@@ -108,6 +113,27 @@ impl LedgerState {
             cert_state: CertState::new(),
             max_lovelace_supply: 45_000_000_000_000_000, // 45B ADA mainnet default
             gov_state: None,
+            conway_deposit_params: None,
+        }
+    }
+
+    /// Assemble the validator-boundary [`ConwayDepositParams`] view from the
+    /// two canonical sources in this state.
+    ///
+    /// Fail-fast: if the Conway-only deposit params are absent, returns
+    /// [`ValidationEnvironmentError::MissingConwayDepositParams`] — a
+    /// validation-environment error, never a default substitution and never a
+    /// tx-validity reject. Callers reach this only on the Conway path, where
+    /// the params are required to be present.
+    pub fn conway_deposit_view(&self) -> Result<ConwayDepositParams, ValidationEnvironmentError> {
+        match &self.conway_deposit_params {
+            Some(c) => Ok(ConwayDepositParams {
+                key_deposit: self.protocol_params.key_deposit,
+                pool_deposit: self.protocol_params.pool_deposit,
+                drep_deposit: c.drep_deposit,
+                gov_action_deposit: c.gov_action_deposit,
+            }),
+            None => Err(ValidationEnvironmentError::MissingConwayDepositParams),
         }
     }
 }

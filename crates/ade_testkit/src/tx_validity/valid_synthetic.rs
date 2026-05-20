@@ -158,6 +158,12 @@ fn ledger_with_utxo(input: &TxIn, payment_key: &Hash28, coin: u64) -> LedgerStat
     let mut l = LedgerState::new(CardanoEra::Conway);
     l.epoch_state.epoch = EPOCH_576;
     l.track_utxo = true;
+    // Conway states carry their canonical deposit params (mainnet values);
+    // tx_validity's view assembly requires them present.
+    l.conway_deposit_params = Some(ade_ledger::pparams::ConwayOnlyDepositParams {
+        drep_deposit: Coin(500_000_000),
+        gov_action_deposit: Coin(100_000_000_000),
+    });
     let addr = enterprise_keyhash_address(payment_key);
     let mut raw = Vec::new();
     cbor::write_array_header(&mut raw, ContainerEncoding::Definite(2, canonical_width(2)));

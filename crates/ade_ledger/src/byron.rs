@@ -56,6 +56,7 @@ pub fn validate_byron_block(
         cert_state: CertState::new(),
         max_lovelace_supply: state.max_lovelace_supply,
         gov_state: None,
+        conway_deposit_params: state.conway_deposit_params.clone(),
     })
 }
 

@@ -5,7 +5,9 @@
 // - Explicit state transitions only
 // - Canonical serialization for all persisted/hashed data
 
+pub mod cert;
 pub mod tx;
+pub mod withdrawals;
 
 use crate::error::CodecError;
 use crate::preserved::PreservedCbor;

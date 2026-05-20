@@ -7,17 +7,21 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
+use ade_types::conway::cert::{CertDisposition, CoinSource, DepositEffect};
 use ade_types::conway::tx::ConwayTxBody;
 use ade_types::tx::{Coin, TxIn};
 use ade_types::CardanoEra;
 
-use crate::error::LedgerError;
+use crate::cert_classify::classify;
+use crate::delegation::CertState;
+use crate::error::{EraInvalidCertificateError, LedgerError};
 use crate::late_era_validation::{
     check_address_network, check_collateral_contains_non_ada, check_collateral_non_empty,
     check_collateral_percent, check_inputs_present, check_reference_input_disjoint,
     check_required_signers, check_total_collateral, check_tx_ex_units_within_cap,
     check_tx_network_id, compute_collateral_balance,
 };
+use crate::pparams::ConwayDepositParams;
 use crate::scripts::ScriptPosture;
 use crate::utxo::TxOut;
 use crate::witness::WitnessInfo;
@@ -59,6 +63,7 @@ pub fn validate_conway_structure(body: &ConwayTxBody) -> Result<(), LedgerError>
 ///
 /// Intentionally NOT wired into `apply_block` in this slice (see
 /// Alonzo composer docstring). S-32 integrates.
+#[allow(clippy::too_many_arguments)]
 pub fn validate_conway_state_backed(
     body: &ConwayTxBody,
     utxo: &BTreeMap<TxIn, TxOut>,
@@ -67,6 +72,8 @@ pub fn validate_conway_state_backed(
     current_network: u8,
     protocol_version_major: u16,
     max_tx_ex_units: (i64, i64),
+    deposit_params: &ConwayDepositParams,
+    cert_state: &CertState,
 ) -> Result<(), LedgerError> {
     // 0. Tx-level ex_units cap (O-30.3).
     check_tx_ex_units_within_cap(
@@ -128,7 +135,7 @@ pub fn validate_conway_state_backed(
     //     but never the value equation, so a tx whose outputs + fee did not
     //     equal its inputs was accepted at track_utxo=true. See
     //     `check_conway_coin_conservation` for the exact (conservative) scope.
-    check_conway_coin_conservation(body, utxo)?;
+    check_conway_coin_conservation(body, utxo, deposit_params, cert_state)?;
 
     // 6. Tx-body network_id
     check_tx_network_id(body.network_id, current_network)?;
@@ -149,30 +156,79 @@ pub fn validate_conway_state_backed(
 /// The Cardano `UTXO` rule requires `consumed == produced`, where (coin level):
 ///
 /// ```text
-/// consumed = sum(resolved input coins) + sum(withdrawals) + refunded_deposits
-/// produced = sum(output coins) + fee + donation + new_deposits
+/// consumed = Σ(resolved input coins) + Σ(withdrawals) + refunded_deposits
+/// produced = Σ(output coins) + fee + donation + new_deposits
+/// accept ⟺ consumed == produced
 /// ```
 ///
-/// This function enforces the equation in its closed, deposit-free form —
-/// `sum(input coins) == sum(output coins) + fee + donation` — and applies it
-/// ONLY when the tx carries neither certificates (which add deposit/refund
-/// terms) nor withdrawals (which add a consumed term). For a tx that DOES carry
-/// certs or withdrawals, the full deposit/withdrawal accounting is out of this
-/// slice's scope, so the check is conservatively DEFERRED rather than guessed —
-/// deferral can never produce a false REJECT (the other state-backed checks and
-/// the witness closure still run), only the residual value imbalance for
-/// deposit/withdrawal-bearing txs is not yet caught here.
+/// This is the full equation: certs and withdrawals are decoded and accounted,
+/// never skipped (PHASE4-B3-S4 removed the deposit/withdrawal early-out that was
+/// the cluster's known false-accept path). `donation` (key 22) is a produced
+/// term; `treasury_value` (key 21) carries no conservation weight.
+///
+/// The accounting pipeline runs in §9.1 precedence order so the rejected reason
+/// is deterministic and independent of evaluation order:
+///   1. decode failure (certs / withdrawals) — `CodecError` → `Decoding`;
+///   2. era-invalid cert (`CertDisposition::NotValidInConway`, tags 5/6);
+///   3. (missing validation environment — handled at the S1 view assembly upstream);
+///   4. unsupported state-dependent accounting (`classify` reject);
+///   5. value not conserved (`ConservationError`).
+///
+/// A tx triggering several of these rejects with the lowest-numbered reason;
+/// no later check may mask an earlier failure.
 ///
 /// Inputs are guaranteed resolvable: `check_inputs_present` runs earlier in the
 /// composer, so a missing input is already a `BadInputs` rejection by the time
-/// this is reached. `i128` arithmetic; no float, no rounding.
+/// this is reached. `i128` arithmetic throughout; no float, no rounding.
 fn check_conway_coin_conservation(
     body: &ConwayTxBody,
     utxo: &BTreeMap<TxIn, TxOut>,
+    deposit_params: &ConwayDepositParams,
+    cert_state: &CertState,
 ) -> Result<(), LedgerError> {
-    // Deposit/withdrawal-bearing txs are deferred (see docstring).
-    if body.certs.is_some() || body.withdrawals.is_some() {
-        return Ok(());
+    // 1. Decode withdrawals (consumed term) — decode failure is the
+    //    highest-precedence reject.
+    let withdrawals_total: i128 = match &body.withdrawals {
+        Some(bytes) => {
+            let map = ade_codec::conway::withdrawals::decode_withdrawals(bytes)?;
+            ade_codec::conway::withdrawals::withdrawals_sum(&map)
+        }
+        None => 0,
+    };
+
+    // 1. Decode certs, then 2. era-validity, then 4. classify accounting.
+    //    Decode runs to completion before any classification so a decode
+    //    failure cannot be masked by a later accounting reject.
+    let mut new_deposits: i128 = 0;
+    let mut refunded_deposits: i128 = 0;
+    if let Some(bytes) = &body.certs {
+        let certs = ade_codec::conway::cert::decode_conway_certs(bytes)?;
+        // 2. Era-validity sweep across ALL certs before any accounting, so a
+        //    removed tag is reported ahead of a state-dependent or value reject
+        //    regardless of cert ordering.
+        for (idx, cert) in certs.iter().enumerate() {
+            if let CertDisposition::NotValidInConway = classify(cert, deposit_params, cert_state)? {
+                return Err(LedgerError::EraInvalidCertificate(
+                    EraInvalidCertificateError {
+                        cert_index: idx as u16,
+                        removed_tag: removed_tag_of(cert),
+                    },
+                ));
+            }
+        }
+        // 4. Accounting fold — `classify` already proven non-Err and non-removed.
+        for cert in &certs {
+            match classify(cert, deposit_params, cert_state)? {
+                CertDisposition::Accountable(DepositEffect::NewDeposit(src)) => {
+                    new_deposits = new_deposits.saturating_add(coin_of(&src) as i128);
+                }
+                CertDisposition::Accountable(DepositEffect::Refund(src)) => {
+                    refunded_deposits = refunded_deposits.saturating_add(coin_of(&src) as i128);
+                }
+                CertDisposition::Neutral => {}
+                CertDisposition::NotValidInConway => unreachable!("era-validity swept above"),
+            }
+        }
     }
 
     let mut consumed: i128 = 0;
@@ -183,6 +239,8 @@ fn check_conway_coin_conservation(
             consumed = consumed.saturating_add(out.coin().0 as i128);
         }
     }
+    consumed = consumed.saturating_add(withdrawals_total);
+    consumed = consumed.saturating_add(refunded_deposits);
 
     let mut produced: i128 = body.fee.0 as i128;
     for out in &body.outputs {
@@ -191,7 +249,9 @@ fn check_conway_coin_conservation(
     if let Some(donation) = body.donation {
         produced = produced.saturating_add(donation.0 as i128);
     }
+    produced = produced.saturating_add(new_deposits);
 
+    // 5. Value conservation — the final, lowest-precedence reject.
     if consumed != produced {
         return Err(LedgerError::Conservation(crate::error::ConservationError {
             consumed_coin: Coin(consumed.max(0).min(u64::MAX as i128) as u64),
@@ -199,6 +259,23 @@ fn check_conway_coin_conservation(
         }));
     }
     Ok(())
+}
+
+/// Extract the resolved coin from a [`CoinSource`]; every variant carries it.
+fn coin_of(src: &CoinSource) -> u64 {
+    match src {
+        CoinSource::ExplicitInCert(c)
+        | CoinSource::DepositParam(c)
+        | CoinSource::RegistrationState(c) => c.0,
+    }
+}
+
+/// The CDDL tag of a known-but-removed Conway certificate (tags 5/6).
+fn removed_tag_of(cert: &ade_types::conway::cert::ConwayCert) -> u64 {
+    match cert {
+        ade_types::conway::cert::ConwayCert::RemovedInConway { tag } => *tag,
+        _ => unreachable!("removed_tag_of called on a non-removed cert"),
+    }
 }
 
 #[cfg(test)]
@@ -318,6 +395,15 @@ mod tests {
     const MAINNET_NET: u8 = 1;
     const PV_CONWAY: u16 = 9;
 
+    fn deposit_params() -> ConwayDepositParams {
+        ConwayDepositParams {
+            key_deposit: Coin(2_000_000),
+            pool_deposit: Coin(500_000_000),
+            drep_deposit: Coin(500_000_000),
+            gov_action_deposit: Coin(100_000_000_000),
+        }
+    }
+
     fn mainnet_addr() -> Vec<u8> {
         let mut v = vec![0x61u8];
         v.extend_from_slice(&[0xaa; 28]);
@@ -365,7 +451,7 @@ mod tests {
         // satisfy coin-level preservation of value (PHASE4-B2-S4).
         let utxo = utxo_with(&[(TxIn { tx_hash: Hash32([0x01; 32]), index: 0 }, 1_200_000)]);
         assert!(validate_conway_state_backed(
-            &body, &utxo, &empty_witness(), MAINNET_PERCENT, MAINNET_NET, PV_CONWAY, (i64::MAX, i64::MAX),
+            &body, &utxo, &empty_witness(), MAINNET_PERCENT, MAINNET_NET, PV_CONWAY, (i64::MAX, i64::MAX), &deposit_params(), &CertState::new(),
         ).is_ok());
     }
 
@@ -381,7 +467,7 @@ mod tests {
         let utxo = utxo_with(&[(shared, 5_000_000)]);
         assert!(matches!(
             validate_conway_state_backed(
-                &body, &utxo, &empty_witness(), MAINNET_PERCENT, MAINNET_NET, PV_CONWAY, (i64::MAX, i64::MAX),
+                &body, &utxo, &empty_witness(), MAINNET_PERCENT, MAINNET_NET, PV_CONWAY, (i64::MAX, i64::MAX), &deposit_params(), &CertState::new(),
             ),
             Err(LedgerError::NonDisjointRefInputs(_))
         ));
@@ -401,7 +487,7 @@ mod tests {
             (ref_in, 1_000_000),
         ]);
         assert!(validate_conway_state_backed(
-            &body, &utxo, &empty_witness(), MAINNET_PERCENT, MAINNET_NET, PV_CONWAY, (i64::MAX, i64::MAX),
+            &body, &utxo, &empty_witness(), MAINNET_PERCENT, MAINNET_NET, PV_CONWAY, (i64::MAX, i64::MAX), &deposit_params(), &CertState::new(),
         ).is_ok());
     }
 
@@ -419,7 +505,7 @@ mod tests {
         // test isolates the PV-11 reference-input overlap behavior.
         let utxo = utxo_with(&[(shared, 1_200_000)]);
         assert!(validate_conway_state_backed(
-            &body, &utxo, &empty_witness(), MAINNET_PERCENT, MAINNET_NET, 11, (i64::MAX, i64::MAX),
+            &body, &utxo, &empty_witness(), MAINNET_PERCENT, MAINNET_NET, 11, (i64::MAX, i64::MAX), &deposit_params(), &CertState::new(),
         ).is_ok());
     }
 
@@ -437,7 +523,7 @@ mod tests {
         // is a governance read, not a produced-value term.
         let utxo = utxo_with(&[(TxIn { tx_hash: Hash32([0x01; 32]), index: 0 }, 1_200_500)]);
         assert!(validate_conway_state_backed(
-            &body, &utxo, &empty_witness(), MAINNET_PERCENT, MAINNET_NET, PV_CONWAY, (i64::MAX, i64::MAX),
+            &body, &utxo, &empty_witness(), MAINNET_PERCENT, MAINNET_NET, PV_CONWAY, (i64::MAX, i64::MAX), &deposit_params(), &CertState::new(),
         ).is_ok());
     }
 }

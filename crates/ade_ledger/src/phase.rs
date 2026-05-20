@@ -110,6 +110,19 @@ pub fn classify_failure_phase(err: &LedgerError) -> ValidationPhase {
         LedgerError::RequiredSignerDerivation(_) => ValidationPhase::Phase1,
 
         LedgerError::Decoding(_) => ValidationPhase::Phase1,
+
+        // Conway accounting rejects (PHASE4-B3-S4): an era-removed cert and an
+        // unaccountable state-dependent deposit are both Phase1 (tx rejected,
+        // no collateral delta) — neither carries a phase-2 consequence.
+        LedgerError::EraInvalidCertificate(_) => ValidationPhase::Phase1,
+        LedgerError::UnsupportedStateDependentDeposit(_) => ValidationPhase::Phase1,
+
+        // A validation-environment fault is not a per-tx failure: it fails
+        // fast at the composer boundary (a function-level `Result` error)
+        // before any per-tx phase routing, so it never reaches this classifier
+        // in practice. Classified Phase1 (no collateral delta) for totality —
+        // there is never a phase-2 collateral consequence to an env fault.
+        LedgerError::ValidationEnvironment(_) => ValidationPhase::Phase1,
     }
 }
 

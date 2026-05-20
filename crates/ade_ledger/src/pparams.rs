@@ -141,6 +141,36 @@ impl Default for ProtocolParameters {
     }
 }
 
+/// Conway-only deposit parameters that have no home on the shared
+/// [`ProtocolParameters`] (which carries `key_deposit`/`pool_deposit` for
+/// Shelley+).
+///
+/// This is the narrow canonical state type: it holds ONLY the two deposit
+/// params introduced in Conway. It is carried on [`crate::state::LedgerState`]
+/// as `Option`, present iff the era is Conway — so a Conway-only deposit param
+/// is never representable (let alone defaulted) in a non-Conway state.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ConwayOnlyDepositParams {
+    /// DRep registration deposit (Conway `dRepDeposit`, PParams field 30).
+    pub drep_deposit: Coin,
+    /// Governance-action deposit (Conway `govActionDeposit`, PParams field 29).
+    pub gov_action_deposit: Coin,
+}
+
+/// Validator-boundary view of the full Conway deposit-parameter set.
+///
+/// Assembled at the call site from the two canonical sources —
+/// `ProtocolParameters.{key_deposit,pool_deposit}` (shared, Shelley+) and
+/// [`ConwayOnlyDepositParams`] (Conway-only) — so each field has a single
+/// source of truth and no field is duplicated in storage.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ConwayDepositParams {
+    pub key_deposit: Coin,
+    pub pool_deposit: Coin,
+    pub drep_deposit: Coin,
+    pub gov_action_deposit: Coin,
+}
+
 /// A proposed protocol parameter update.
 ///
 /// Each field is optional — only fields that are being updated are Some.
@@ -748,5 +778,53 @@ mod tests {
         let r1 = apply_parameter_updates(&pp, &proposals, 1, EpochNo(1), CardanoEra::Shelley).unwrap();
         let r2 = apply_parameter_updates(&pp, &proposals, 1, EpochNo(1), CardanoEra::Shelley).unwrap();
         assert_eq!(r1, r2);
+    }
+
+    // -----------------------------------------------------------------------
+    // Conway deposit-parameter authority (DC-TXV-07)
+    // -----------------------------------------------------------------------
+
+    use crate::state::LedgerState;
+
+    /// The validator-boundary view draws every field from canonical state:
+    /// `key_deposit`/`pool_deposit` from the shared `ProtocolParameters`, and
+    /// `drep_deposit`/`gov_action_deposit` from the Conway-only state type.
+    #[test]
+    fn conway_deposit_params_canonical_source() {
+        let mut state = LedgerState::new(CardanoEra::Conway);
+        state.protocol_params.key_deposit = Coin(2_000_000);
+        state.protocol_params.pool_deposit = Coin(500_000_000);
+        state.conway_deposit_params = Some(ConwayOnlyDepositParams {
+            drep_deposit: Coin(500_000_000),
+            gov_action_deposit: Coin(100_000_000_000),
+        });
+
+        let view = state.conway_deposit_view().unwrap();
+        assert_eq!(view.key_deposit, Coin(2_000_000));
+        assert_eq!(view.pool_deposit, Coin(500_000_000));
+        assert_eq!(view.drep_deposit, Coin(500_000_000));
+        assert_eq!(view.gov_action_deposit, Coin(100_000_000_000));
+    }
+
+    /// Conway-only deposit params are structurally absent (`None`) for every
+    /// pre-Conway era — never defaulted onto a non-Conway state.
+    #[test]
+    fn non_conway_state_has_no_conway_deposit_params() {
+        let eras = [
+            CardanoEra::ByronEbb,
+            CardanoEra::ByronRegular,
+            CardanoEra::Shelley,
+            CardanoEra::Allegra,
+            CardanoEra::Mary,
+            CardanoEra::Alonzo,
+            CardanoEra::Babbage,
+        ];
+        for era in eras {
+            let state = LedgerState::new(era);
+            assert_eq!(
+                state.conway_deposit_params, None,
+                "{era:?} must have no Conway-only deposit params"
+            );
+        }
     }
 }

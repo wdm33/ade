@@ -219,6 +219,7 @@ fn post_block_1_utxo_matches_oracle() {
         cert_state: ade_ledger::delegation::CertState::new(),
         max_lovelace_supply: 45_000_000_000_000_000,
         gov_state: None,
+        conway_deposit_params: None,
     };
 
     state = ade_ledger::rules::apply_block(&state, env.era, inner).unwrap();

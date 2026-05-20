@@ -38,7 +38,7 @@ use ade_types::{CardanoEra, Hash28, Hash32};
 
 use crate::delegation::{CertState, PoolParams as CertPoolParams};
 use crate::epoch::{SnapshotState, StakeSnapshot};
-use crate::pparams::ProtocolParameters;
+use crate::pparams::{ConwayOnlyDepositParams, ProtocolParameters};
 use crate::rational::Rational;
 use crate::state::{ConwayGovState, EpochState, LedgerState};
 use crate::utxo::{TxOut, UTxOState};
@@ -50,6 +50,11 @@ use crate::value::{MultiAsset, Value};
 
 /// Version of the fingerprint schema. Bump on any encoding change.
 const FINGERPRINT_VERSION: u64 = 1;
+
+/// Explicit tag preceding the Conway-only deposit params in the pparams
+/// component (PHASE4-B3-S1). Emitted only when the params are present, so the
+/// non-Conway pparams encoding is unchanged.
+const CONWAY_DEPOSIT_PARAMS_TAG: u64 = 1;
 
 /// Per-component fingerprint of a ledger state.
 ///
@@ -86,7 +91,7 @@ pub fn fingerprint(state: &LedgerState) -> LedgerFingerprint {
     let cert = fingerprint_cert(&state.cert_state);
     let epoch = fingerprint_epoch(&state.epoch_state);
     let snapshots = fingerprint_snapshots(&state.epoch_state.snapshots);
-    let pparams = fingerprint_pparams(&state.protocol_params);
+    let pparams = fingerprint_pparams(&state.protocol_params, state.conway_deposit_params.as_ref());
     let governance = fingerprint_governance(state.gov_state.as_ref());
     let combined = rollup(&[
         &era,
@@ -206,7 +211,10 @@ fn fingerprint_snapshots(snapshots: &SnapshotState) -> Hash32 {
     blake2b_256(&buf)
 }
 
-fn fingerprint_pparams(pp: &ProtocolParameters) -> Hash32 {
+fn fingerprint_pparams(
+    pp: &ProtocolParameters,
+    conway_deposits: Option<&ConwayOnlyDepositParams>,
+) -> Hash32 {
     let mut buf = Vec::new();
     write_component_header(&mut buf, b"ade/fp/pparams");
     write_array_canonical(&mut buf, 17);
@@ -227,6 +235,17 @@ fn fingerprint_pparams(pp: &ProtocolParameters) -> Hash32 {
     write_coin(&mut buf, pp.min_utxo_value);
     write_coin(&mut buf, pp.min_pool_cost);
     write_rational(&mut buf, &pp.decentralization);
+    // Conway deposit-param migration (PHASE4-B3-S1): the two Conway-only
+    // deposit params enter the fingerprint ONLY when present, under an explicit
+    // versioned tag appended after the unchanged 17-field body. A non-Conway
+    // state carries `None` here, emits nothing, and so its pparams fingerprint
+    // is byte-identical to the pre-migration encoding.
+    if let Some(c) = conway_deposits {
+        write_uint_canonical(&mut buf, CONWAY_DEPOSIT_PARAMS_TAG);
+        write_array_canonical(&mut buf, 2);
+        write_coin(&mut buf, c.drep_deposit);
+        write_coin(&mut buf, c.gov_action_deposit);
+    }
     blake2b_256(&buf)
 }
 
@@ -820,6 +839,97 @@ mod tests {
                 "golden fingerprint drift for {era:?} — bump FINGERPRINT_VERSION and update golden if this is intentional"
             );
         }
+    }
+
+    /// The Conway deposit-param migration must not perturb any non-Conway
+    /// state's pparams fingerprint: a state whose `conway_deposit_params` is
+    /// `None` emits the identical pre-migration encoding. Pinned per era.
+    #[test]
+    fn pparams_fingerprint_stable_for_non_conway() {
+        let cases: &[(CardanoEra, &str)] = &[
+            (
+                CardanoEra::ByronEbb,
+                "51925421496599b5a16a56e1b6faba1435aa2a4db20638734b3c4af1b562361f",
+            ),
+            (
+                CardanoEra::ByronRegular,
+                "a9f5b2235da477cdf875621293c5668940cee267047aaaa73e51c2f4e9269fc0",
+            ),
+            (
+                CardanoEra::Shelley,
+                "9ecbf79943422f72aa6ce6086201239ea2e73354464be788226c66ea5abdcea4",
+            ),
+            (
+                CardanoEra::Allegra,
+                "4975fae5bcbbff43fcfb22f49b4ef77511f9adc65e12fac636d5602eb85f2c69",
+            ),
+            (
+                CardanoEra::Mary,
+                "1355112da8f327da4f92649706a849a6ea94da48e61a0a3864b6040fd52c1aea",
+            ),
+            (
+                CardanoEra::Alonzo,
+                "8505c7d61da6f96ca8b6a85389d7656334de112191f12c6920412ddf78469e2a",
+            ),
+            (
+                CardanoEra::Babbage,
+                "045b7fb1a74568c0f78210ad0fa7d2cac1dba72ef8f6ac7a425adc082b0008a9",
+            ),
+        ];
+        for (era, expected) in cases {
+            let s = LedgerState::new(*era);
+            assert_eq!(s.conway_deposit_params, None);
+            let f = fingerprint(&s);
+            assert_eq!(
+                f.combined_hex(),
+                *expected,
+                "non-Conway fingerprint for {era:?} must be byte-identical post-migration"
+            );
+        }
+    }
+
+    /// When the Conway-only deposit params are present, they fold into the
+    /// pparams component (and only that component); changing either deposit
+    /// field flips the pparams hash, and the present encoding matches a golden.
+    #[test]
+    fn pparams_fingerprint_includes_conway_deposits_when_present() {
+        let base = LedgerState::new(CardanoEra::Conway);
+        assert_eq!(base.conway_deposit_params, None);
+
+        let mut with_deposits = base.clone();
+        with_deposits.conway_deposit_params = Some(crate::pparams::ConwayOnlyDepositParams {
+            drep_deposit: Coin(500_000_000),
+            gov_action_deposit: Coin(100_000_000_000),
+        });
+
+        let f_base = fingerprint(&base);
+        let f_dep = fingerprint(&with_deposits);
+
+        // Presence changes the pparams component (and the rollup), nothing else.
+        assert_ne!(f_base.pparams, f_dep.pparams);
+        assert_ne!(f_base.combined, f_dep.combined);
+        assert_eq!(f_base.era, f_dep.era);
+        assert_eq!(f_base.utxo, f_dep.utxo);
+        assert_eq!(f_base.cert, f_dep.cert);
+        assert_eq!(f_base.epoch, f_dep.epoch);
+        assert_eq!(f_base.snapshots, f_dep.snapshots);
+        assert_eq!(f_base.governance, f_dep.governance);
+
+        // Golden for the Conway-with-deposits combined fingerprint.
+        assert_eq!(
+            f_dep.combined_hex(),
+            "b69422ef2ece8c97b832f969298bba163fcb793ac76a8d22ae3c7195768e71d9",
+            "Conway deposit-param fingerprint golden drift — review the migration diff"
+        );
+
+        // Changing a deposit field flips the pparams component.
+        let mut mutated = with_deposits.clone();
+        mutated.conway_deposit_params = Some(crate::pparams::ConwayOnlyDepositParams {
+            drep_deposit: Coin(500_000_001),
+            gov_action_deposit: Coin(100_000_000_000),
+        });
+        let f_mut = fingerprint(&mutated);
+        assert_ne!(f_dep.pparams, f_mut.pparams);
     }
 
     #[test]

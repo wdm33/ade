@@ -44,6 +44,17 @@ pub enum LedgerError {
     // Certificate domain
     InvalidCertificate(CertificateError),
 
+    // Conway full-conservation accounting (PHASE4-B3-S4).
+    //
+    // A certificate that is known but structurally removed in Conway (CDDL
+    // tags 5/6); an era-validity reject, distinct from a decode failure and
+    // from any value-conservation reject. See §9.1 reject precedence.
+    EraInvalidCertificate(EraInvalidCertificateError),
+    // A cert deposit/refund effect whose coin amount depends on ledger
+    // registration state that is unavailable. Never a guessed amount, never a
+    // conservation reject — its own distinct accounting-environment class.
+    UnsupportedStateDependentDeposit(UnsupportedStateDependentDepositAccounting),
+
     // Epoch domain
     EpochTransition(EpochError),
 
@@ -94,6 +105,60 @@ pub enum LedgerError {
 
     // Codec passthrough
     Decoding(DecodingError),
+
+    // Validation-environment fault — the validator was invoked against an
+    // ill-formed environment (e.g. a Conway state missing its canonical
+    // deposit params), NOT a defect of the transaction. Structurally distinct
+    // from every tx-validity reject class so a bad environment is never
+    // reported as a bad transaction. Fails fast and deterministically.
+    ValidationEnvironment(ValidationEnvironmentError),
+}
+
+/// A fault in the validation *environment* rather than the transaction.
+///
+/// Distinct from any tx-validity reject reason: a `ValidationEnvironmentError`
+/// means the validator was asked to run against state that is not fit for
+/// validation. It is never a default-substitution path and never collapses
+/// into a tx reject class.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ValidationEnvironmentError {
+    /// A Conway transaction was validated against a state whose canonical
+    /// Conway deposit params (`drep_deposit`/`gov_action_deposit`) are absent.
+    MissingConwayDepositParams,
+}
+
+/// A Conway certificate carries a deposit/refund effect whose coin amount
+/// depends on ledger registration state that is not available (or does not
+/// record the credential/pool).
+///
+/// This is the third, distinct failure class in the cert-classification
+/// taxonomy: it is neither a decode failure (`CodecError`) nor an era-validity
+/// reject (`CertDisposition::NotValidInConway`). The classifier returns it
+/// rather than guessing a deposit amount — a state-dependent effect is never
+/// fabricated from a protocol-parameter default.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum UnsupportedStateDependentDepositAccounting {
+    /// A legacy `account_unregistration_cert` (tag 1) refund could not be
+    /// resolved because the credential's recorded registration deposit is
+    /// absent from state.
+    LegacyUnregistrationRefundUnresolved,
+}
+
+/// A certificate that decodes to a known-but-removed Conway tag (CDDL 5/6).
+///
+/// Era validity is not an accounting effect: this reject is distinct from a
+/// decode failure (`CodecError`) and from a value-conservation reject. The
+/// `cert_index` is the position of the offending cert in the decoded sequence.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct EraInvalidCertificateError {
+    pub cert_index: u16,
+    pub removed_tag: u64,
+}
+
+impl From<UnsupportedStateDependentDepositAccounting> for LedgerError {
+    fn from(e: UnsupportedStateDependentDepositAccounting) -> Self {
+        LedgerError::UnsupportedStateDependentDeposit(e)
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -616,6 +681,21 @@ impl core::fmt::Display for LedgerError {
             LedgerError::RequiredSignerDerivation(e) => {
                 write!(f, "required-signer derivation failure: {:?}", e)
             }
+            LedgerError::EraInvalidCertificate(e) => {
+                write!(
+                    f,
+                    "certificate at index {} uses Conway-removed tag {}",
+                    e.cert_index, e.removed_tag
+                )
+            }
+            LedgerError::UnsupportedStateDependentDeposit(e) => {
+                write!(f, "unsupported state-dependent deposit accounting: {:?}", e)
+            }
+            LedgerError::ValidationEnvironment(e) => match e {
+                ValidationEnvironmentError::MissingConwayDepositParams => {
+                    write!(f, "validation environment: Conway deposit params absent from state")
+                }
+            },
         }
     }
 }
@@ -640,7 +720,13 @@ impl From<ade_codec::CodecError> for LedgerError {
             ade_codec::CodecError::UnknownEraTag { .. } => {
                 (0, DecodingFailureReason::UnexpectedType)
             }
+            ade_codec::CodecError::UnknownCertTag { offset, .. } => {
+                (offset, DecodingFailureReason::UnexpectedType)
+            }
             ade_codec::CodecError::InvalidLength { offset, .. } => {
+                (offset, DecodingFailureReason::InvalidStructure)
+            }
+            ade_codec::CodecError::DuplicateMapKey { offset } => {
                 (offset, DecodingFailureReason::InvalidStructure)
             }
         };
