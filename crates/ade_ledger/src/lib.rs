@@ -13,6 +13,7 @@
 
 pub mod alonzo;
 pub mod babbage;
+pub mod block_validity;
 pub mod byron;
 pub mod consensus_input_extract;
 pub mod consensus_view;

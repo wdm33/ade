@@ -9,6 +9,7 @@ ade_crypto = { path = "../ade_crypto" }
 ade_codec = { path = "../ade_codec" }
 ade_core = { path = "../ade_core" }
 ade_plutus = { path = "../ade_plutus" }
+minicbor = { version = "0.25", default-features = false, features = ["alloc"] }
 num-bigint = "0.4"
 num-integer = "0.1"
 num-traits = "0.2"
