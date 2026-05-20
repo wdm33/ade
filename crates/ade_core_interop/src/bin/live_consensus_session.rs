@@ -3,7 +3,7 @@
 //
 // Scaffold: builds the orchestrator at genesis and prints "ready" so a
 // human operator running the binary against a pinned-Docker
-// cardano-node 10.6.2 can confirm the wiring before they extend the
+// cardano-node 11.0.1 can confirm the wiring before they extend the
 // session driver to subscribe to chain-sync via `ade_network` and feed
 // arriving headers into `process_stream_input`.
 //

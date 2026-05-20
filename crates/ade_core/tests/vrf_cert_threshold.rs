@@ -170,7 +170,7 @@ fn is_leader_determinism() {
 /// - top byte 0x01 -> value ≈ 1/256 ≈ 0.00391 (well below threshold) -> leads
 /// - top byte 0x80 -> value ≈ 0.5 (well above threshold) -> does NOT lead
 ///
-/// S-B10's live-interop pass replaces this with a real cardano-node 10.6.2
+/// S-B10's live-interop pass replaces this with a real cardano-node 11.0.1
 /// vector pinned against the oracle.
 #[test]
 fn is_leader_known_vector_matches_reference() {

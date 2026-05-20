@@ -33,8 +33,10 @@ listed in `docs/planning/phase4-n-b-invariants.md` §"Registry entries".
 - `docs/active/phase_4_cluster_plan.md` § N-B — headline CEs.
 - `docs/planning/phase4-n-b-invariants.md` — full sketch with closure
   table.
-- External: cardano-node 10.6.2 + ouroboros-consensus reference for
-  Praos `TiebreakerView` ordering. Exact revision pinned at S-B8 entry.
+- External: cardano-node 11.0.1 + ouroboros-consensus reference for
+  Praos `TiebreakerView` ordering (matches N-A's CE-N-A-5 interop
+  target). Exact revision pinned at S-B8 entry; `PraosTiebreaker`
+  shape is forward-compatible from 10.6.2.
 
 ---
 
@@ -75,7 +77,7 @@ human review may substitute for these checks.
 | **CE-N-B-3** | `cargo test -p ade_core --test hfc_schedule_corpus` PASS over `corpus/consensus/hfc_schedule/`; `EraSchedule` translation matches oracle's known hard-fork slots exactly; bound to `BootstrapAnchorHash`; slot→time is pure | S-B1 |
 | **CE-N-B-4** | `cargo test -p ade_core --test leader_schedule_corpus` PASS over `corpus/consensus/leader_schedule/`; `is_leader` and `expected_vrf_proof` are byte-identical with oracle; `OutsideForecastRange` fires deterministically | S-B6 |
 | **CE-N-B-5** | `cargo test -p ade_testkit --test consensus_stream_replay` PASS — ordered canonical stream `(HeaderArrival | EpochBoundary | RollBackRequest)` produces identical `ChainEvent` sequence and `PraosChainDepState` at every checkpoint across two consecutive runs | S-B10 |
-| **CE-N-B-6** | `cargo test -p ade_core_interop --test live_consensus_session --release -- --ignored` PASS against pinned cardano-node 10.6.2; transcripts captured at `docs/clusters/PHASE4-N-B/CE-N-B-6_<date>.log` | S-B10 |
+| **CE-N-B-6** | `cargo test -p ade_core_interop --test live_consensus_session --release -- --ignored` PASS against pinned cardano-node 11.0.1; transcripts captured at `docs/clusters/PHASE4-N-B/CE-N-B-6_<date>.log` | S-B10 |
 
 ---
 
@@ -251,7 +253,7 @@ existing BLUE list).
   tests replay byte-identically.
 - **Cluster-level replay MAC**: replayed end-to-end, the corpus
   produces the same `ChainEvent` sequence and `PraosChainDepState` as
-  a parallel cardano-node 10.6.2 oracle session (`CE-N-B-5` +
+  a parallel cardano-node 11.0.1 oracle session (`CE-N-B-5` +
   `CE-N-B-6`).
 
 ---

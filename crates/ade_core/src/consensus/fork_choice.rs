@@ -8,9 +8,12 @@
 //! Praos fork-choice — BLUE authoritative transition.
 //!
 //! Pinned reference (DC-CONS-03 auditable artifact): cardano-node
-//! **10.6.2** ships with ouroboros-consensus **~0.22.x**
-//! (`ouroboros-consensus` package version visible in cardano-node
-//! 10.6.2's `cabal.project.freeze`). The `SelectView` ordering encoded
+//! **11.0.1** (the version Ade's live interop peers with — see
+//! CE-N-B-6 and N-A's CE-N-A-5). The exact `ouroboros-consensus`
+//! package version is read from cardano-node 11.0.1's
+//! `cabal.project.freeze`; the `PraosTiebreaker` `SelectView` shape is
+//! unchanged from the 10.6.2 release the ordering was originally
+//! validated against (forward-compatible). The ordering encoded
 //! here matches the `PraosTiebreaker` shape from that release:
 //! `(BlockNo, then TiebreakerView (slot, issuer, op_cert_counter,
 //! vrf_output_first_8))`. Chain-length-weight ordering is reserved

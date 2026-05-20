@@ -43,7 +43,7 @@ network or makes Ade un-peerable.
 
 **Headline CEs**:
 - **CE-N-A-1**: handshake version negotiation byte-identical to oracle
-  across cardano-node 10.6.2 supported versions.
+  across cardano-node 11.0.1 supported versions.
 - **CE-N-A-2**: chain-sync state machine produces the same
   fork-choice signals as oracle on a curated divergence corpus.
 - **CE-N-A-3**: block-fetch protocol delivers blocks byte-identically
@@ -202,8 +202,14 @@ relay → full producer.
 
 ## Out of scope
 
-- **PV11+ protocol versions.** Version-scoped to cardano-node 10.6.2
-  per CE-91 carry-over. PV11 is a future phase decision.
+- **PV11+ protocol-feature semantics.** Ade interops against the
+  cardano-node **11.0.1** binary (the version N-A's CE-N-A-5 and
+  N-B's CE-N-B-6 peer with), but the *protocol-version feature set*
+  remains PV10-scoped per CE-91 carry-over — PV11 protocol-feature
+  activation (new ledger rules, cost models, governance changes) is a
+  future phase decision. The node-version pin and the protocol-feature
+  scope are independent: N-B's Praos consensus rules are
+  version-stable across the 10.6.2→11.0.1 ouroboros-consensus.
 - **Multi-node consensus testing at scale.** Phase 5+.
 - **Light-client / SPV mode.** Phase 6+.
 - **Genesis replay path** as a recovery primary.  Recovery is

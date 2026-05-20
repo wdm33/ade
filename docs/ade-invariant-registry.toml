@@ -513,7 +513,7 @@ code_locus = "crates/ade_core/src/consensus/fork_choice.rs, crates/ade_core/src/
 tests = ["higher_block_no_wins", "equal_block_no_tiebreaker_decides", "fork_before_immutable_tip_rejected", "exceeded_rollback_rejected", "tiebreaker_loss_keeps_current", "replay_is_deterministic", "reject_reason_bytes_are_stable", "no_candidates_returns_error", "consensus::fork_choice::tests::tiebreaker_prefer_lower_slot_wins", "consensus::fork_choice::tests::tiebreaker_prefer_higher_op_cert_wins_on_equal_slot_and_issuer", "consensus::fork_choice::tests::tiebreaker_prefer_lower_vrf_value_wins_on_full_tie", "rollback_within_k_succeeds", "rollback_exceeding_k_rejected_with_typed_reason", "rollback_before_immutable_tip_rejected", "rollback_event_bytes_are_stable", "rollback_is_deterministic", "rollback_equivalent_to_truncated_replay", "consensus::chain_selector::tests::header_arrival_updates_state_and_selector", "consensus::chain_selector::tests::rollback_walks_back_via_recent_snapshots", "consensus::chain_selector::tests::rollback_to_block_older_than_snapshots_rejected", "consensus::chain_selector::tests::epoch_boundary_emits_no_event", "synthetic_session_replays_identically", "synthetic_session_event_kinds_match_corpus", "synthetic_session_final_state_matches_corpus", "op_cert_regression_header_rejected_mid_stream", "cardano_node_session_sustained_window"]
 ci_script = "ci/ci_check_no_density_in_fork_choice.sh, ci/ci_check_consensus_closed_enums.sh, ci/ci_check_no_chaindb_in_consensus_blue.sh"
 status = "enforced"
-evidence = ["crates/ade_testkit/tests/consensus_stream_replay.rs drives a canonical stream of HeaderArrival / RollBack / EpochBoundary inputs through the GREEN chain-selector orchestrator and asserts replay equivalence (CE-N-B-5)", "crates/ade_core_interop/tests/live_consensus_session.rs gates the live-peer evidence pass against a pinned cardano-node 10.6.2 (CE-N-B-6, #[ignore] by default, operator-driven)"]
+evidence = ["crates/ade_testkit/tests/consensus_stream_replay.rs drives a canonical stream of HeaderArrival / RollBack / EpochBoundary inputs through the GREEN chain-selector orchestrator and asserts replay equivalence (CE-N-B-5)", "crates/ade_core_interop/tests/live_consensus_session.rs gates the live-peer evidence pass against a pinned cardano-node 11.0.1 (CE-N-B-6, #[ignore] by default, operator-driven)"]
 strengthened_in = ["PHASE4-N-B"]
 
 [[rules]]
@@ -1861,7 +1861,7 @@ tests = ["consensus::fork_choice::tests::tiebreaker_prefer_lower_slot_wins", "co
 ci_script = "ci/ci_check_no_density_in_fork_choice.sh, ci/ci_check_no_chaindb_in_consensus_blue.sh, ci/ci_check_no_float_in_consensus.sh, ci/ci_check_consensus_closed_enums.sh"
 status = "enforced"
 strengthened_in = ["PHASE4-N-B"]
-pinned_reference = "cardano-node 10.6.2 → ouroboros-consensus ~0.22.x"
+pinned_reference = "cardano-node 11.0.1 (ouroboros-consensus version per its cabal.project.freeze); PraosTiebreaker SelectView shape forward-compatible from the 10.6.2 release the ordering was originally validated against"
 
 [[rules]]
 id = "DC-CONS-04"
