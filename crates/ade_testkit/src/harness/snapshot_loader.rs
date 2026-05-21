@@ -2453,6 +2453,118 @@ fn parse_credential_vote_map(
     Ok(votes)
 }
 
+/// Parse a Conway `committee_cold_credential = credential = [tag, bytes(28)]`,
+/// preserving the key/script discriminant. Fail-closed (N-4 / DC-LEDGER-10): an
+/// unknown credential tag, a non-array shape, or a wrong-length hash is a
+/// structured reject — never a defaulted `KeyHash` coercion. Returns the offset
+/// past the credential and the discriminated credential.
+fn parse_cold_credential(
+    data: &[u8],
+    off: usize,
+) -> Result<(usize, ade_types::shelley::cert::StakeCredential), HarnessError> {
+    use ade_types::shelley::cert::StakeCredential;
+    let (body, maj, len) = read_cbor_initial(data, off)?;
+    if maj != 4 || len != 2 {
+        return Err(HarnessError::ParseError(format!(
+            "committee cold credential must be array(2) [tag, bytes28]; got major {maj} len {len} at {off}"
+        )));
+    }
+    let (_, tag) = read_uint(data, body)?;
+    let tag_end = skip_cbor(data, body)?;
+    let (h_start, h_maj, h_len) = read_cbor_initial(data, tag_end)?;
+    if h_maj != 2 || h_len != 28 {
+        return Err(HarnessError::ParseError(format!(
+            "committee cold credential hash must be bytes(28); got major {h_maj} len {h_len} at {tag_end}"
+        )));
+    }
+    let mut hash = [0u8; 28];
+    hash.copy_from_slice(&data[h_start..h_start + 28]);
+    let cred = match tag {
+        0 => StakeCredential::KeyHash(ade_types::Hash28(hash)),
+        1 => StakeCredential::ScriptHash(ade_types::Hash28(hash)),
+        other => {
+            return Err(HarnessError::ParseError(format!(
+                "unknown committee cold credential tag {other} at {off} (expected 0=key, 1=script)"
+            )))
+        }
+    };
+    Ok((skip_cbor(data, off)?, cred))
+}
+
+/// Parse `set<committee_cold_credential>` — accepts both the tag-258-wrapped
+/// array and a plain array (Conway permits either). Returns the offset past the
+/// set and the discriminated members.
+fn parse_cold_credential_set(
+    data: &[u8],
+    off: usize,
+) -> Result<(usize, std::collections::BTreeSet<ade_types::shelley::cert::StakeCredential>), HarnessError> {
+    let (after_tag, maj, val) = read_cbor_initial(data, off)?;
+    let arr_off = if maj == 6 && val == 258 { after_tag } else { off };
+    let (mut co, amaj, alen) = read_cbor_initial(data, arr_off)?;
+    if amaj != 4 {
+        return Err(HarnessError::ParseError(format!(
+            "committee removed-set must be an array (or tag-258 array); got major {amaj} at {arr_off}"
+        )));
+    }
+    let is_indef = alen == u64::MAX;
+    let mut set = std::collections::BTreeSet::new();
+    let mut count = 0u64;
+    while co < data.len() {
+        if is_indef && data[co] == 0xff { co += 1; break; }
+        if !is_indef && count >= alen { break; }
+        let (next, cred) = parse_cold_credential(data, co)?;
+        set.insert(cred);
+        co = next;
+        count += 1;
+    }
+    Ok((co, set))
+}
+
+/// Parse `{ committee_cold_credential => epoch_no }` — added members and their
+/// term-expiry epochs. Returns the offset past the map and the discriminated
+/// member→epoch entries.
+fn parse_cold_credential_epoch_map(
+    data: &[u8],
+    off: usize,
+) -> Result<(usize, std::collections::BTreeMap<ade_types::shelley::cert::StakeCredential, u64>), HarnessError> {
+    let (mut co, maj, mlen) = read_cbor_initial(data, off)?;
+    if maj != 5 {
+        return Err(HarnessError::ParseError(format!(
+            "committee added-map must be a map; got major {maj} at {off}"
+        )));
+    }
+    let is_indef = mlen == u64::MAX;
+    let mut map = std::collections::BTreeMap::new();
+    let mut count = 0u64;
+    while co < data.len() {
+        if is_indef && data[co] == 0xff { co += 1; break; }
+        if !is_indef && count >= mlen { break; }
+        let (after_key, cred) = parse_cold_credential(data, co)?;
+        let (_, epoch) = read_uint(data, after_key)?;
+        co = skip_cbor(data, after_key)?;
+        map.insert(cred, epoch);
+        count += 1;
+    }
+    Ok((co, map))
+}
+
+/// Parse `unit_interval = #6.30([uint, uint])` (the committee quorum threshold).
+/// Accepts the tag-30-wrapped array and a bare 2-element array. Returns
+/// (numerator, denominator).
+fn parse_unit_interval(data: &[u8], off: usize) -> Result<(u64, u64), HarnessError> {
+    let (after_tag, maj, val) = read_cbor_initial(data, off)?;
+    let arr_off = if maj == 6 && val == 30 { after_tag } else { off };
+    let (abody, amaj, alen) = read_cbor_initial(data, arr_off)?;
+    if amaj != 4 || alen != 2 {
+        return Err(HarnessError::ParseError(format!(
+            "unit_interval must be array(2) [num, den]; got major {amaj} len {alen} at {arr_off}"
+        )));
+    }
+    let (num_next, num) = read_uint(data, abody)?;
+    let (_, den) = read_uint(data, num_next)?;
+    Ok((num, den))
+}
+
 fn parse_gov_action(
     state_cbor: &[u8],
     off: usize,
@@ -2502,9 +2614,19 @@ fn parse_gov_action(
             })
         }
         3 => Ok(GovAction::NoConfidence { prev_action: None }),
-        4 => Ok(GovAction::UpdateCommittee {
-            prev_action: None, raw: Vec::new(),
-        }),
+        4 => {
+            // update_committee = [4, gov_action_id/null, set<cold_cred>,
+            //                     { cold_cred => epoch_no }, unit_interval]
+            // `next` is element index 1 (prev_action); skip it (prev_action is
+            // not reconstructed by the loader, consistent with the other arms).
+            let after_prev = skip_cbor(state_cbor, next)?;
+            let (after_removed, removed) = parse_cold_credential_set(state_cbor, after_prev)?;
+            let (after_added, added) = parse_cold_credential_epoch_map(state_cbor, after_removed)?;
+            let threshold = parse_unit_interval(state_cbor, after_added)?;
+            Ok(GovAction::UpdateCommittee {
+                prev_action: None, removed, added, threshold,
+            })
+        }
         5 => Ok(GovAction::NewConstitution {
             prev_action: None, raw: Vec::new(),
         }),
@@ -3131,6 +3253,134 @@ mod tests {
             .join("..")
             .join("corpus")
             .join("snapshots")
+    }
+
+    // ── ENACTMENT-COMMITTEE-WRITEBACK S1: update_committee decode (CE-1..CE-3) ──
+    // Minimal CBOR builders for a Conway `update_committee` gov action, so the
+    // decode is exercised against hand-built wire bytes (PO-1).
+
+    fn cbor_uint(n: u64) -> Vec<u8> {
+        if n < 24 {
+            vec![n as u8]
+        } else if n < 0x100 {
+            vec![0x18, n as u8]
+        } else if n < 0x1_0000 {
+            let b = (n as u16).to_be_bytes();
+            vec![0x19, b[0], b[1]]
+        } else {
+            let b = (n as u32).to_be_bytes();
+            vec![0x1a, b[0], b[1], b[2], b[3]]
+        }
+    }
+
+    fn cbor_bytes28(fill: u8) -> Vec<u8> {
+        let mut v = vec![0x58, 0x1c]; // bytes(28)
+        v.extend_from_slice(&[fill; 28]);
+        v
+    }
+
+    /// `credential = [tag, bytes(28)]` (tag 0 = key, 1 = script).
+    fn cbor_cred(tag: u8, fill: u8) -> Vec<u8> {
+        let mut v = vec![0x82, tag]; // array(2), inline tag
+        v.extend(cbor_bytes28(fill));
+        v
+    }
+
+    /// Build `[4, null, set<cred>, {cred=>epoch}, unit_interval]`.
+    /// `set_tag258` selects the tag-258-wrapped set encoding vs a plain array.
+    fn build_update_committee(
+        removed: &[(u8, u8)],
+        added: &[(u8, u8, u64)],
+        threshold: (u64, u64),
+        set_tag258: bool,
+    ) -> Vec<u8> {
+        let mut v = vec![0x85, 0x04, 0xf6]; // array(5), 4, null prev_action
+        // removed set
+        if set_tag258 {
+            v.extend_from_slice(&[0xd9, 0x01, 0x02]); // tag 258
+        }
+        v.push(0x80 | removed.len() as u8); // array(n)
+        for (tag, fill) in removed {
+            v.extend(cbor_cred(*tag, *fill));
+        }
+        // added map
+        v.push(0xa0 | added.len() as u8); // map(n)
+        for (tag, fill, epoch) in added {
+            v.extend(cbor_cred(*tag, *fill));
+            v.extend(cbor_uint(*epoch));
+        }
+        // unit_interval = tag 30 [num, den]
+        v.extend_from_slice(&[0xd8, 0x1e, 0x82]);
+        v.extend(cbor_uint(threshold.0));
+        v.extend(cbor_uint(threshold.1));
+        v
+    }
+
+    #[test]
+    fn update_committee_decodes_removed_added_threshold() {
+        use ade_types::conway::governance::GovAction;
+        use ade_types::shelley::cert::StakeCredential;
+        for set_tag258 in [false, true] {
+            let bytes = build_update_committee(
+                &[(0, 0xAA)],            // remove one key-hash member
+                &[(1, 0xBB, 500), (0, 0xCC, 700)], // add a script and a key member
+                (2, 3),
+                set_tag258,
+            );
+            let action = parse_gov_action(&bytes, 0).unwrap();
+            match action {
+                GovAction::UpdateCommittee { removed, added, threshold, .. } => {
+                    assert_eq!(removed.len(), 1, "set_tag258={set_tag258}");
+                    assert!(removed.contains(&StakeCredential::KeyHash(ade_types::Hash28([0xAA; 28]))));
+                    assert_eq!(added.len(), 2);
+                    assert_eq!(added.get(&StakeCredential::ScriptHash(ade_types::Hash28([0xBB; 28]))), Some(&500));
+                    assert_eq!(added.get(&StakeCredential::KeyHash(ade_types::Hash28([0xCC; 28]))), Some(&700));
+                    assert_eq!(threshold, (2, 3));
+                }
+                other => panic!("expected UpdateCommittee, got {other:?}"),
+            }
+        }
+    }
+
+    #[test]
+    fn update_committee_keyhash_scripthash_members_distinct() {
+        use ade_types::conway::governance::GovAction;
+        use ade_types::shelley::cert::StakeCredential;
+        // Same 28 bytes, different discriminant: must be two distinct added entries.
+        let bytes = build_update_committee(
+            &[],
+            &[(0, 0x11, 100), (1, 0x11, 200)],
+            (1, 2),
+            false,
+        );
+        match parse_gov_action(&bytes, 0).unwrap() {
+            GovAction::UpdateCommittee { added, .. } => {
+                assert_eq!(added.len(), 2, "key/script of equal bytes must not collapse");
+                assert_eq!(added.get(&StakeCredential::KeyHash(ade_types::Hash28([0x11; 28]))), Some(&100));
+                assert_eq!(added.get(&StakeCredential::ScriptHash(ade_types::Hash28([0x11; 28]))), Some(&200));
+            }
+            other => panic!("expected UpdateCommittee, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn update_committee_decode_rejects_malformed() {
+        // Unknown credential tag (2) in the removed set → structured reject (N-4).
+        let mut bad_tag = vec![0x85, 0x04, 0xf6, 0x81];
+        bad_tag.extend(cbor_cred(2, 0x01)); // tag 2 is not key/script
+        bad_tag.push(0xa0); // empty added map
+        bad_tag.extend_from_slice(&[0xd8, 0x1e, 0x82, 0x01, 0x02]);
+        assert!(parse_gov_action(&bad_tag, 0).is_err(), "unknown cred tag must reject");
+
+        // Truncated: array(5) header then 4 then null, nothing more.
+        let truncated = vec![0x85, 0x04, 0xf6];
+        assert!(parse_gov_action(&truncated, 0).is_err(), "truncated payload must reject");
+
+        // Hash not 28 bytes: credential with bytes(4).
+        let mut short = vec![0x85, 0x04, 0xf6, 0x81, 0x82, 0x00, 0x44, 0, 0, 0, 0];
+        short.push(0xa0);
+        short.extend_from_slice(&[0xd8, 0x1e, 0x82, 0x01, 0x02]);
+        assert!(parse_gov_action(&short, 0).is_err(), "short hash must reject");
     }
 
     #[test]

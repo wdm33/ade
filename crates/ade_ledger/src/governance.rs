@@ -396,10 +396,9 @@ pub fn enact_proposals(
             GovAction::NoConfidence { .. } => {
                 effects.committee_dissolved = true;
             }
-            GovAction::UpdateCommittee { raw, .. } => {
-                // Committee changes stored as raw CBOR for now.
-                // Full parsing deferred until needed for oracle comparison.
-                let _ = raw;
+            GovAction::UpdateCommittee { removed, added, threshold, .. } => {
+                // Write-back logic wired in S2; S1 only structures the type.
+                let _ = (removed, added, threshold);
             }
             GovAction::NewConstitution { raw, .. } => {
                 effects.new_constitution = Some(raw.clone());

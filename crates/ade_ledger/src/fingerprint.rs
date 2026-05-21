@@ -661,11 +661,26 @@ fn write_gov_action(buf: &mut Vec<u8>, action: &GovAction) {
             write_uint_canonical(buf, 3);
             write_optional_gov_action_id(buf, prev_action.as_ref());
         }
-        GovAction::UpdateCommittee { prev_action, raw } => {
-            write_array_canonical(buf, 3);
+        GovAction::UpdateCommittee { prev_action, removed, added, threshold } => {
+            // Structured Conway `update_committee` (5 fields), serialized in the
+            // internal canonical convention (discriminated cold credentials via
+            // write_stake_credential). Replaces the prior opaque [4, prev, bytes]
+            // encoding — a deliberate fingerprint migration (T-DET-01). BTreeSet/
+            // BTreeMap give deterministic member order.
+            write_array_canonical(buf, 5);
             write_uint_canonical(buf, 4);
             write_optional_gov_action_id(buf, prev_action.as_ref());
-            write_bytes_canonical(buf, raw);
+            write_array_canonical(buf, removed.len() as u64);
+            for cred in removed {
+                write_stake_credential(buf, cred);
+            }
+            write_map_canonical(buf, added.len() as u64);
+            for (cred, epoch) in added {
+                write_stake_credential(buf, cred);
+                write_uint_canonical(buf, *epoch);
+            }
+            write_uint_canonical(buf, threshold.0);
+            write_uint_canonical(buf, threshold.1);
         }
         GovAction::NewConstitution { prev_action, raw } => {
             write_array_canonical(buf, 3);
@@ -804,6 +819,83 @@ mod tests {
         assert_ne!(f_absent.governance, f_present.governance);
         assert_eq!(f_absent.utxo, f_present.utxo);
         assert_eq!(f_absent.pparams, f_present.pparams);
+    }
+
+    /// ENACTMENT-COMMITTEE-WRITEBACK S1: the structured `UpdateCommittee`
+    /// encoding fingerprints its removed/added/threshold fields (replacing the
+    /// prior opaque-bytes `raw`), and the discriminated cold credential is
+    /// serialized — a key-hash and a script-hash member of equal bytes
+    /// fingerprint differently (DC-LEDGER-10 / R-1 / T-DET-01).
+    #[test]
+    fn update_committee_structured_fields_change_fingerprint() {
+        use ade_types::conway::governance::{GovAction, GovActionId, GovActionState};
+        use ade_types::shelley::cert::StakeCredential;
+        use ade_types::EpochNo;
+
+        let mk = |action: GovAction| {
+            let mut s = LedgerState::new(CardanoEra::Conway);
+            s.gov_state = Some(ConwayGovState {
+                proposals: vec![GovActionState {
+                    action_id: GovActionId { tx_hash: Hash32([0x07; 32]), index: 0 },
+                    committee_votes: Vec::new(),
+                    drep_votes: Vec::new(),
+                    spo_votes: Vec::new(),
+                    deposit: Coin(0),
+                    return_addr: Vec::new(),
+                    gov_action: action,
+                    proposed_in: EpochNo(500),
+                    expires_after: EpochNo(506),
+                }],
+                committee: BTreeMap::new(),
+                committee_quorum: (2, 3),
+                drep_expiry: BTreeMap::new(),
+                gov_action_lifetime: 6,
+                vote_delegations: BTreeMap::new(),
+                pool_voting_thresholds: Vec::new(),
+                drep_voting_thresholds: Vec::new(),
+                committee_hot_keys: BTreeMap::new(),
+            });
+            fingerprint(&s).governance
+        };
+
+        let key_member = || {
+            let mut added = BTreeMap::new();
+            added.insert(StakeCredential::KeyHash(Hash28([0x42; 28])), 600u64);
+            GovAction::UpdateCommittee {
+                prev_action: None,
+                removed: Default::default(),
+                added,
+                threshold: (2, 3),
+            }
+        };
+        let script_member = || {
+            let mut added = BTreeMap::new();
+            added.insert(StakeCredential::ScriptHash(Hash28([0x42; 28])), 600u64);
+            GovAction::UpdateCommittee {
+                prev_action: None,
+                removed: Default::default(),
+                added,
+                threshold: (2, 3),
+            }
+        };
+        let diff_threshold = || {
+            let mut added = BTreeMap::new();
+            added.insert(StakeCredential::KeyHash(Hash28([0x42; 28])), 600u64);
+            GovAction::UpdateCommittee {
+                prev_action: None,
+                removed: Default::default(),
+                added,
+                threshold: (1, 2),
+            }
+        };
+
+        // Same bytes, different key/script discriminant → different fingerprint.
+        assert_ne!(mk(key_member()), mk(script_member()));
+        // Same member, different threshold → different fingerprint (threshold is
+        // captured, not dropped as it was under the opaque `raw` encoding).
+        assert_ne!(mk(key_member()), mk(diff_threshold()));
+        // Deterministic.
+        assert_eq!(mk(key_member()), mk(key_member()));
     }
 
     /// OQ5-S1: a key-hash credential and a script-hash credential over identical

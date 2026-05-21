@@ -8,6 +8,7 @@
 use crate::{Hash28, Hash32, EpochNo};
 use crate::tx::Coin;
 use crate::shelley::cert::StakeCredential;
+use std::collections::{BTreeMap, BTreeSet};
 
 /// Governance action identifier: transaction hash + index within that transaction.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
@@ -31,7 +32,20 @@ pub enum GovAction {
     HardForkInitiation { prev_action: Option<GovActionId>, protocol_version: (u64, u64) },
     TreasuryWithdrawals { withdrawals: Vec<(Vec<u8>, Coin)>, policy_hash: Option<Hash28> },
     NoConfidence { prev_action: Option<GovActionId> },
-    UpdateCommittee { prev_action: Option<GovActionId>, raw: Vec<u8> },
+    /// CIP-1694 `update_committee = (4, gov_action_id/null,
+    /// set<committee_cold_credential>, { committee_cold_credential => epoch_no },
+    /// unit_interval)`. Structured (not opaque bytes): the cold credentials are
+    /// discriminated `StakeCredential` (DC-LEDGER-10) so committee-enactment
+    /// write-back cannot re-collapse the key/script discriminant.
+    UpdateCommittee {
+        prev_action: Option<GovActionId>,
+        /// Cold credentials to remove from the committee.
+        removed: BTreeSet<StakeCredential>,
+        /// Cold credentials to add, each with its term-expiry epoch.
+        added: BTreeMap<StakeCredential, u64>,
+        /// New committee quorum threshold (unit_interval numerator, denominator).
+        threshold: (u64, u64),
+    },
     NewConstitution { prev_action: Option<GovActionId>, raw: Vec<u8> },
     InfoAction,
 }
