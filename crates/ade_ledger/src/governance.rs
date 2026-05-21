@@ -448,3 +448,79 @@ pub fn compute_active_dreps(
         .map(|(cred, _)| cred.clone())
         .collect()
 }
+
+#[cfg(test)]
+#[allow(clippy::unwrap_used)]
+mod committee_fidelity_tests {
+    use super::*;
+    use ade_types::conway::governance::{GovAction, GovActionId, GovActionState, Vote};
+    use ade_types::shelley::cert::StakeCredential;
+    use ade_types::{EpochNo, Hash28, Hash32};
+
+    fn key(b: u8) -> StakeCredential {
+        StakeCredential::KeyHash(Hash28([b; 28]))
+    }
+    fn script(b: u8) -> StakeCredential {
+        StakeCredential::ScriptHash(Hash28([b; 28]))
+    }
+
+    /// A ParameterChange proposal with one committee Yes vote from hot KeyHash(X),
+    /// hot->cold mapping KeyHash(X)->KeyHash(C). DRep/pool checks are skipped
+    /// (no thresholds), so the committee gate is the sole determinant.
+    fn proposal_with_committee_yes() -> GovActionState {
+        GovActionState {
+            action_id: GovActionId { tx_hash: Hash32([0u8; 32]), index: 0 },
+            committee_votes: vec![(key(0), Vote::Yes)], // placeholder, replaced in `ratifies`
+            drep_votes: Vec::new(),
+            spo_votes: Vec::new(),
+            deposit: Coin(0),
+            return_addr: Vec::new(),
+            gov_action: GovAction::ParameterChange {
+                prev_action: None,
+                update: Vec::new(),
+                policy_hash: None,
+            },
+            proposed_in: EpochNo(0),
+            expires_after: EpochNo(100),
+        }
+    }
+
+    fn ratifies(committee_members: &BTreeMap<StakeCredential, u64>) -> bool {
+        let mut p = proposal_with_committee_yes();
+        p.committee_votes = vec![(key(0x11), Vote::Yes)]; // hot voter KeyHash(0x11)
+        let hot_keys: BTreeMap<StakeCredential, StakeCredential> =
+            [(key(0x11), key(0xCC))].into_iter().collect(); // hot KeyHash(0x11) -> cold KeyHash(0xCC)
+        let quorum = Rational::new(1, 1).unwrap();
+        let empty_drep: DRepStakeDistribution = BTreeMap::new();
+        let empty_pool: BTreeMap<ade_types::tx::PoolId, Coin> = BTreeMap::new();
+        check_ratification(
+            &p,
+            (None, None), // pool_idx / drep_idx absent -> those checks skipped
+            &0,
+            &empty_drep,
+            0,
+            &empty_pool,
+            committee_members,
+            &quorum,
+            &[],
+            &[],
+            0,
+            &hot_keys,
+        )
+    }
+
+    /// CE-2 (no cross-resolve): the resolved cold credential KeyHash(0xCC) must
+    /// NOT match a ScriptHash(0xCC) committee member of equal bytes — the vote
+    /// does not count, committee quorum fails, ratification is denied.
+    #[test]
+    fn committee_keyhash_scripthash_do_not_cross_resolve() {
+        let cross: BTreeMap<StakeCredential, u64> =
+            [(script(0xCC), 1000u64)].into_iter().collect(); // member is ScriptHash, hot resolves to KeyHash
+        assert!(!ratifies(&cross), "key-hash cold must not cross-resolve to a script-hash member of equal bytes");
+
+        // Positive control: a KeyHash(0xCC) member of the same bytes DOES match.
+        let matching: BTreeMap<StakeCredential, u64> =
+            [(key(0xCC), 1000u64)].into_iter().collect();
+        assert!(ratifies(&matching), "matching-variant member ratifies (discriminant is the only difference)");
+    }
+}

@@ -83,6 +83,38 @@ fn keyhash_scripthash_same_bytes_are_distinct_govstate() {
     assert_eq!(g.vote_delegations.get(&script(7)), Some(&DRep::AlwaysNoConfidence));
 }
 
+/// COMMITTEE-CRED-FIDELITY CE-3: a key-hash and a script-hash committee member
+/// over identical 28 bytes are distinct members — no collapse.
+#[test]
+fn committee_keyhash_scripthash_same_bytes_distinct() {
+    let mut g = base_gov();
+    g.committee.insert(key(7), 100);
+    g.committee.insert(script(7), 100);
+    assert_eq!(g.committee.len(), 2, "key vs script committee members are distinct");
+    assert!(g.committee.contains_key(&key(7)));
+    assert!(g.committee.contains_key(&script(7)));
+}
+
+/// COMMITTEE-CRED-FIDELITY CE-4: two states differing only in a committee
+/// member's discriminant fingerprint differently.
+#[test]
+fn committee_discriminant_changes_fingerprint() {
+    let mut g_key = base_gov();
+    g_key.committee.insert(key(7), 100);
+    let mut g_script = base_gov();
+    g_script.committee.insert(script(7), 100);
+
+    let mut s_key = LedgerState::new(CardanoEra::Conway);
+    s_key.gov_state = Some(g_key);
+    let mut s_script = LedgerState::new(CardanoEra::Conway);
+    s_script.gov_state = Some(g_script);
+    assert_ne!(
+        ade_ledger::fingerprint::fingerprint(&s_key).governance,
+        ade_ledger::fingerprint::fingerprint(&s_script).governance,
+        "committee member discriminant must change the fingerprint",
+    );
+}
+
 /// CE-4: two states differing only in a credential's key/script discriminant
 /// fingerprint differently (the discriminant is in the canonical encoding).
 #[test]

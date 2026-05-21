@@ -63,7 +63,21 @@ if [ -n "$COERCE" ]; then
     FAIL=1
 fi
 
+# 4. committee credential surface stays discriminated (COMMITTEE-CRED-FIDELITY,
+#    strengthens DC-LEDGER-10): the committee member map and committee_votes must
+#    key/carry the discriminated StakeCredential, never bare Hash28.
+STATE="$REPO_ROOT/crates/ade_ledger/src/state.rs"
+GOVTYPE="$REPO_ROOT/crates/ade_types/src/conway/governance.rs"
+if [ -f "$STATE" ] && ! grep -qE 'pub committee:.*BTreeMap<.*StakeCredential' "$STATE"; then
+    echo "FAIL: ConwayGovState.committee is not StakeCredential-keyed (committee member discriminant lost)"
+    FAIL=1
+fi
+if [ -f "$GOVTYPE" ] && ! grep -qE 'pub committee_votes:.*StakeCredential' "$GOVTYPE"; then
+    echo "FAIL: GovActionState.committee_votes does not carry StakeCredential (committee voter discriminant lost)"
+    FAIL=1
+fi
+
 if [ "$FAIL" -eq 0 ]; then
-    echo "PASS: DC-LEDGER-10 credential discriminant is closed and faithful"
+    echo "PASS: DC-LEDGER-10 credential discriminant is closed and faithful (incl. committee surface)"
 fi
 exit "$FAIL"
