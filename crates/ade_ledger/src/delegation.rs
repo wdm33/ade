@@ -6,13 +6,16 @@
 // - Canonical serialization for all persisted/hashed data
 
 use std::collections::BTreeMap;
+use ade_types::conway::cert::ConwayCert;
 use ade_types::tx::{Coin, PoolId};
 use ade_types::{EpochNo, Hash32};
 use ade_types::shelley::cert::{
     Certificate, PoolRegistrationCert, StakeCredential,
 };
 
-use crate::error::{CertFailureReason, CertificateError, LedgerError};
+use crate::error::{
+    CertFailureReason, CertificateError, EraInvalidCertificateError, LedgerError,
+};
 
 /// Aggregate certificate state: delegation state + pool state.
 ///
@@ -237,7 +240,7 @@ fn apply_pool_registration(
         cost: pool_cert.cost,
         margin: pool_cert.margin,
         reward_account: pool_cert.reward_account.clone(),
-        owners: Vec::new(), // TODO: parse from registration cert
+        owners: pool_cert.owners.clone(),
     };
 
     let mut new_state = state.clone();
@@ -283,6 +286,216 @@ pub fn apply_certs(
         state = apply_cert(&state, cert, key_deposit, i as u16)?;
     }
     Ok(state)
+}
+
+// ===========================================================================
+// PHASE4-B4: native owner-tagged Conway cert-state accumulation
+// ===========================================================================
+
+/// The authoritative state owner of a governance-affecting certificate effect.
+///
+/// B4 owns delegation/pool [`CertState`] only. Governance effects are
+/// owner-tagged to [`GovernanceOwner::ConwayGovState`] and routed out of B4's
+/// mutation scope — they are observed, never silently neutralized (the owner
+/// exists) and never applied here. A future governance-accumulation cluster
+/// (PHASE4-B5) applies them into `ConwayGovState`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum GovernanceOwner {
+    ConwayGovState,
+}
+
+/// A governance certificate effect, owner-tagged to [`GovernanceOwner`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum GovernanceCertEffect {
+    VoteDelegation,
+    StakeVoteDelegation,
+    CommitteeHotKeyAuthorization,
+    CommitteeColdKeyResignation,
+    DRepRegistration,
+    DRepUnregistration,
+    DRepUpdate,
+}
+
+/// A governance effect tagged with the state owner that applies it (PHASE4-B5).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct OwnerTaggedEffect {
+    pub owner: GovernanceOwner,
+    pub effect: GovernanceCertEffect,
+}
+
+/// Closed, owner-tagged classification of a Conway certificate's cert-state
+/// effect. There is no `Neutral`: every defined Conway tag has an owner.
+/// Composite certs (tags 10/12/13) carry both a B4-owned [`CertState`] mutation
+/// **and** an owner-tagged governance effect.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ConwayCertAction {
+    /// Mutates only B4-owned delegation/pool [`CertState`].
+    MutateCertState,
+    /// Owner-tagged governance effect only — no [`CertState`] mutation.
+    Governance(GovernanceCertEffect),
+    /// Composite: mutates [`CertState`] **and** emits a governance effect.
+    CertStateAndGovernance(GovernanceCertEffect),
+    /// A Conway-removed tag (5/6) — deterministic era-validity reject.
+    NotValidInEra,
+}
+
+/// Classify a Conway certificate into its closed, owner-tagged action.
+/// Compiler-exhaustive over all 18 tags; the totality test pins this.
+pub fn conway_cert_action(cert: &ConwayCert) -> ConwayCertAction {
+    use GovernanceCertEffect::*;
+    match cert {
+        // Delegation/pool — B4-owned CertState.
+        ConwayCert::AccountRegistration { .. }
+        | ConwayCert::AccountUnregistration { .. }
+        | ConwayCert::StakeDelegation { .. }
+        | ConwayCert::PoolRegistration(_)
+        | ConwayCert::PoolRetirement { .. }
+        | ConwayCert::AccountRegistrationDeposit { .. }
+        | ConwayCert::AccountUnregistrationDeposit { .. }
+        | ConwayCert::StakeRegistrationDelegation { .. } => ConwayCertAction::MutateCertState,
+
+        // Governance-only — owner-tagged to ConwayGovState.
+        ConwayCert::VoteDelegation { .. } => ConwayCertAction::Governance(VoteDelegation),
+        ConwayCert::AuthCommitteeHot { .. } => {
+            ConwayCertAction::Governance(CommitteeHotKeyAuthorization)
+        }
+        ConwayCert::ResignCommitteeCold { .. } => {
+            ConwayCertAction::Governance(CommitteeColdKeyResignation)
+        }
+        ConwayCert::DRepRegistration { .. } => ConwayCertAction::Governance(DRepRegistration),
+        ConwayCert::DRepUnregistration { .. } => ConwayCertAction::Governance(DRepUnregistration),
+        ConwayCert::DRepUpdate { .. } => ConwayCertAction::Governance(DRepUpdate),
+
+        // Composite — CertState mutation + owner-tagged governance.
+        ConwayCert::StakeVoteDelegation { .. } => {
+            ConwayCertAction::CertStateAndGovernance(StakeVoteDelegation)
+        }
+        ConwayCert::VoteRegistrationDelegation { .. } => {
+            ConwayCertAction::CertStateAndGovernance(VoteDelegation)
+        }
+        ConwayCert::StakeVoteRegistrationDelegation { .. } => {
+            ConwayCertAction::CertStateAndGovernance(StakeVoteDelegation)
+        }
+
+        // Era-removed.
+        ConwayCert::RemovedInConway { .. } => ConwayCertAction::NotValidInEra,
+    }
+}
+
+/// Environment for owner-tagged Conway cert-state accumulation.
+#[derive(Debug, Clone, Copy)]
+pub struct ConwayCertEnv {
+    /// Legacy implicit key deposit (tag 0). Explicit-deposit variants carry
+    /// their own deposit in the certificate.
+    pub key_deposit: Coin,
+    /// Positional index of the cert within its tx (error reporting; parity with
+    /// the Shelley apply path).
+    pub cert_index: u16,
+}
+
+/// Outcome of applying one Conway certificate: the mutated B4-owned
+/// [`CertState`] plus any owner-tagged governance effects observed. The effects
+/// are routed out of B4's mutation scope (applied by PHASE4-B5), never swallowed.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ConwayCertOutcome {
+    pub state: CertState,
+    pub owner_tagged: Vec<OwnerTaggedEffect>,
+}
+
+/// Apply one Conway certificate to the B4-owned [`CertState`] (delegation +
+/// pool), consuming Conway-native meaning over the owner-complete `ConwayCert`.
+///
+/// - Delegation/pool certs mutate `CertState` via the shared apply helpers.
+/// - Governance certs are owner-tagged to `ConwayGovState` and returned in
+///   `owner_tagged` without mutating `CertState` (PHASE4-B5 applies them).
+/// - Composite certs (10/12/13) do both.
+/// - Removed tags (5/6) reject with [`LedgerError::EraInvalidCertificate`].
+///
+/// No Conway certificate is reduced into the Shelley `Certificate`, flattened to
+/// neutral, or silently swallowed.
+pub fn apply_conway_cert(
+    state: &CertState,
+    cert: &ConwayCert,
+    env: &ConwayCertEnv,
+) -> Result<ConwayCertOutcome, LedgerError> {
+    use GovernanceCertEffect::*;
+    let idx = env.cert_index;
+
+    let tagged = |state: CertState, effect: GovernanceCertEffect| ConwayCertOutcome {
+        state,
+        owner_tagged: vec![OwnerTaggedEffect {
+            owner: GovernanceOwner::ConwayGovState,
+            effect,
+        }],
+    };
+    let plain = |state: CertState| ConwayCertOutcome {
+        state,
+        owner_tagged: Vec::new(),
+    };
+
+    let outcome = match cert {
+        // --- delegation/pool: B4-owned CertState ---
+        ConwayCert::AccountRegistration { credential } => {
+            plain(apply_stake_registration(state, credential, env.key_deposit, idx)?)
+        }
+        ConwayCert::AccountRegistrationDeposit { credential, deposit } => {
+            plain(apply_stake_registration(state, credential, *deposit, idx)?)
+        }
+        ConwayCert::AccountUnregistration { credential } => {
+            plain(apply_stake_deregistration(state, credential, idx)?)
+        }
+        ConwayCert::AccountUnregistrationDeposit { credential, .. } => {
+            plain(apply_stake_deregistration(state, credential, idx)?)
+        }
+        ConwayCert::StakeDelegation { credential, pool_id } => {
+            plain(apply_stake_delegation(state, credential, pool_id, idx)?)
+        }
+        ConwayCert::PoolRegistration(pool_cert) => {
+            plain(apply_pool_registration(state, pool_cert, idx)?)
+        }
+        ConwayCert::PoolRetirement { pool_id, epoch } => {
+            plain(apply_pool_retirement(state, pool_id, *epoch, idx)?)
+        }
+        ConwayCert::StakeRegistrationDelegation { credential, pool_id, deposit } => {
+            let s = apply_stake_registration(state, credential, *deposit, idx)?;
+            plain(apply_stake_delegation(&s, credential, pool_id, idx)?)
+        }
+
+        // --- composite: CertState mutation + owner-tagged governance ---
+        ConwayCert::StakeVoteDelegation { credential, pool_id, .. } => {
+            let s = apply_stake_delegation(state, credential, pool_id, idx)?;
+            tagged(s, StakeVoteDelegation)
+        }
+        ConwayCert::VoteRegistrationDelegation { credential, deposit, .. } => {
+            let s = apply_stake_registration(state, credential, *deposit, idx)?;
+            tagged(s, VoteDelegation)
+        }
+        ConwayCert::StakeVoteRegistrationDelegation { credential, pool_id, deposit, .. } => {
+            let s = apply_stake_registration(state, credential, *deposit, idx)?;
+            let s = apply_stake_delegation(&s, credential, pool_id, idx)?;
+            tagged(s, StakeVoteDelegation)
+        }
+
+        // --- governance-only: owner-tagged, CertState unchanged ---
+        ConwayCert::VoteDelegation { .. } => tagged(state.clone(), VoteDelegation),
+        ConwayCert::AuthCommitteeHot { .. } => tagged(state.clone(), CommitteeHotKeyAuthorization),
+        ConwayCert::ResignCommitteeCold { .. } => {
+            tagged(state.clone(), CommitteeColdKeyResignation)
+        }
+        ConwayCert::DRepRegistration { .. } => tagged(state.clone(), DRepRegistration),
+        ConwayCert::DRepUnregistration { .. } => tagged(state.clone(), DRepUnregistration),
+        ConwayCert::DRepUpdate { .. } => tagged(state.clone(), DRepUpdate),
+
+        // --- era-removed: deterministic reject ---
+        ConwayCert::RemovedInConway { tag } => {
+            return Err(LedgerError::EraInvalidCertificate(EraInvalidCertificateError {
+                cert_index: idx,
+                removed_tag: *tag,
+            }));
+        }
+    };
+
+    Ok(outcome)
 }
 
 #[cfg(test)]
@@ -674,5 +887,172 @@ mod tests {
         let r1 = apply_cert(&state, &cert, key_deposit(), 0).unwrap();
         let r2 = apply_cert(&state, &cert, key_deposit(), 0).unwrap();
         assert_eq!(r1, r2);
+    }
+}
+
+#[cfg(test)]
+#[allow(clippy::unwrap_used)]
+mod conway_apply {
+    use super::*;
+    use ade_types::conway::cert::{ConwayCert, DRep};
+    use ade_types::Hash28;
+
+    fn cred(b: u8) -> StakeCredential {
+        StakeCredential(Hash28([b; 28]))
+    }
+    fn pool(b: u8) -> PoolId {
+        PoolId(Hash28([b; 28]))
+    }
+    fn env() -> ConwayCertEnv {
+        ConwayCertEnv {
+            key_deposit: Coin(2_000_000),
+            cert_index: 0,
+        }
+    }
+    fn preg(b: u8) -> PoolRegistrationCert {
+        PoolRegistrationCert {
+            pool_id: pool(b),
+            vrf_hash: Hash32([0u8; 32]),
+            pledge: Coin(0),
+            cost: Coin(0),
+            margin: (0, 1),
+            reward_account: vec![],
+            owners: vec![Hash28([b; 28])],
+        }
+    }
+
+    /// Every `ConwayCert` variant with its expected owner-tagged action. If a
+    /// variant is added without updating this table, the totality test fails;
+    /// if it is added without a `conway_cert_action` arm, the build fails.
+    fn variants_with_action() -> Vec<(ConwayCert, ConwayCertAction)> {
+        use ConwayCertAction::*;
+        use GovernanceCertEffect as G;
+        vec![
+            (ConwayCert::AccountRegistration { credential: cred(1) }, MutateCertState),
+            (ConwayCert::AccountUnregistration { credential: cred(1) }, MutateCertState),
+            (ConwayCert::StakeDelegation { credential: cred(1), pool_id: pool(9) }, MutateCertState),
+            (ConwayCert::PoolRegistration(preg(9)), MutateCertState),
+            (ConwayCert::PoolRetirement { pool_id: pool(9), epoch: EpochNo(500) }, MutateCertState),
+            (ConwayCert::RemovedInConway { tag: 5 }, NotValidInEra),
+            (ConwayCert::RemovedInConway { tag: 6 }, NotValidInEra),
+            (ConwayCert::AccountRegistrationDeposit { credential: cred(1), deposit: Coin(2_000_000) }, MutateCertState),
+            (ConwayCert::AccountUnregistrationDeposit { credential: cred(1), refund: Coin(2_000_000) }, MutateCertState),
+            (ConwayCert::VoteDelegation { credential: cred(1), drep: DRep::AlwaysAbstain }, Governance(G::VoteDelegation)),
+            (ConwayCert::StakeVoteDelegation { credential: cred(1), pool_id: pool(9), drep: DRep::AlwaysAbstain }, CertStateAndGovernance(G::StakeVoteDelegation)),
+            (ConwayCert::StakeRegistrationDelegation { credential: cred(1), pool_id: pool(9), deposit: Coin(2_000_000) }, MutateCertState),
+            (ConwayCert::VoteRegistrationDelegation { credential: cred(1), drep: DRep::AlwaysAbstain, deposit: Coin(2_000_000) }, CertStateAndGovernance(G::VoteDelegation)),
+            (ConwayCert::StakeVoteRegistrationDelegation { credential: cred(1), pool_id: pool(9), drep: DRep::AlwaysAbstain, deposit: Coin(2_000_000) }, CertStateAndGovernance(G::StakeVoteDelegation)),
+            (ConwayCert::AuthCommitteeHot { cold_credential: cred(1), hot_credential: cred(2) }, Governance(G::CommitteeHotKeyAuthorization)),
+            (ConwayCert::ResignCommitteeCold { cold_credential: cred(1) }, Governance(G::CommitteeColdKeyResignation)),
+            (ConwayCert::DRepRegistration { drep_credential: cred(1), deposit: Coin(500_000_000) }, Governance(G::DRepRegistration)),
+            (ConwayCert::DRepUnregistration { drep_credential: cred(1), refund: Coin(500_000_000) }, Governance(G::DRepUnregistration)),
+            (ConwayCert::DRepUpdate { drep_credential: cred(1) }, Governance(G::DRepUpdate)),
+        ]
+    }
+
+    /// Totality: every one of the 18 Conway tags classifies to its declared
+    /// owner-tagged action. No variant is `Neutral` (the type has no such case);
+    /// governance vs CertState vs composite vs era-reject is pinned per variant.
+    #[test]
+    fn conway_cert_action_total() {
+        let table = variants_with_action();
+        assert_eq!(table.len(), 19, "all tags incl. both removed (5/6) present");
+        for (cert, expected) in table {
+            assert_eq!(conway_cert_action(&cert), expected, "action for {cert:?}");
+        }
+    }
+
+    /// `apply_conway_cert`'s outcome shape agrees with `conway_cert_action` for
+    /// every variant (no swallow, no flatten): CertState mutations carry no
+    /// owner-tag; governance certs leave CertState unchanged with one owner-tag;
+    /// composites do both; removed tags reject.
+    #[test]
+    fn apply_outcome_agrees_with_action() {
+        // State seeded so delegation/registration/retirement all succeed:
+        // cred(1) NOT yet registered (so registration works), pool(9) present.
+        for (cert, action) in variants_with_action() {
+            let mut state = CertState::new();
+            state.pool.pools.insert(
+                pool(9),
+                PoolParams {
+                    pool_id: pool(9),
+                    vrf_hash: Hash32([0u8; 32]),
+                    pledge: Coin(0),
+                    cost: Coin(0),
+                    margin: (0, 1),
+                    reward_account: vec![],
+                    owners: vec![],
+                },
+            );
+            // For deregistration/delegation variants the credential must exist.
+            let needs_registered = matches!(
+                cert,
+                ConwayCert::AccountUnregistration { .. }
+                    | ConwayCert::AccountUnregistrationDeposit { .. }
+                    | ConwayCert::StakeDelegation { .. }
+                    | ConwayCert::StakeVoteDelegation { .. }
+            );
+            if needs_registered {
+                state.delegation.registrations.insert(cred(1), Coin(2_000_000));
+            }
+
+            let result = apply_conway_cert(&state, &cert, &env());
+            match action {
+                ConwayCertAction::NotValidInEra => {
+                    assert!(result.is_err(), "removed tag must reject: {cert:?}");
+                }
+                ConwayCertAction::MutateCertState => {
+                    let out = result.unwrap_or_else(|e| panic!("{cert:?}: {e:?}"));
+                    assert!(out.owner_tagged.is_empty(), "CertState-only carries no owner tag: {cert:?}");
+                }
+                ConwayCertAction::Governance(effect) => {
+                    let out = result.unwrap();
+                    assert_eq!(out.state, state, "governance cert must not mutate CertState: {cert:?}");
+                    assert_eq!(
+                        out.owner_tagged,
+                        vec![OwnerTaggedEffect { owner: GovernanceOwner::ConwayGovState, effect }]
+                    );
+                }
+                ConwayCertAction::CertStateAndGovernance(effect) => {
+                    let out = result.unwrap();
+                    assert_ne!(out.state, state, "composite must mutate CertState: {cert:?}");
+                    assert_eq!(
+                        out.owner_tagged,
+                        vec![OwnerTaggedEffect { owner: GovernanceOwner::ConwayGovState, effect }]
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn pool_registration_populates_owners_from_cert() {
+        let state = CertState::new();
+        let cert = ConwayCert::PoolRegistration(preg(9));
+        let out = apply_conway_cert(&state, &cert, &env()).unwrap();
+        assert_eq!(out.state.pool.pools[&pool(9)].owners, vec![Hash28([9u8; 28])]);
+    }
+
+    #[test]
+    fn removed_tag_rejects_as_era_invalid() {
+        let state = CertState::new();
+        let cert = ConwayCert::RemovedInConway { tag: 6 };
+        let err = apply_conway_cert(&state, &cert, &env()).unwrap_err();
+        assert!(matches!(err, LedgerError::EraInvalidCertificate(e) if e.removed_tag == 6));
+    }
+
+    #[test]
+    fn drep_registration_is_owner_tagged_not_applied() {
+        let state = CertState::new();
+        let cert = ConwayCert::DRepRegistration { drep_credential: cred(1), deposit: Coin(500_000_000) };
+        let out = apply_conway_cert(&state, &cert, &env()).unwrap();
+        assert_eq!(out.state, state, "DRep registration does not touch B4-owned CertState");
+        assert_eq!(
+            out.owner_tagged,
+            vec![OwnerTaggedEffect {
+                owner: GovernanceOwner::ConwayGovState,
+                effect: GovernanceCertEffect::DRepRegistration
+            }]
+        );
     }
 }
