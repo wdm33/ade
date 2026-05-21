@@ -282,10 +282,10 @@ fn apply_shelley_era_block_with_verdicts(
         Vec::new()
     };
 
-    let cert_state = if current_state.track_utxo {
+    let (cert_state, gov_state) = if current_state.track_utxo {
         process_block_certificates(block, era, &current_state)?
     } else {
-        current_state.cert_state.clone()
+        (current_state.cert_state.clone(), current_state.gov_state.clone())
     };
 
     let mut epoch_state = current_state.epoch_state;
@@ -304,7 +304,9 @@ fn apply_shelley_era_block_with_verdicts(
             track_utxo: current_state.track_utxo,
             cert_state,
             max_lovelace_supply: current_state.max_lovelace_supply,
-            gov_state: None,
+            // PHASE4-B5: governance state is carried forward (cert-accumulated
+            // when tracked), no longer nulled at every block apply.
+            gov_state,
             conway_deposit_params: current_state.conway_deposit_params.clone(),
         },
         verdict,
@@ -364,11 +366,12 @@ fn apply_shelley_era_block_classified(
         verdict.plutus_eval_ineligible = stats.plutus_eval_ineligible;
     }
 
-    // Process certificates to accumulate delegation/pool state.
-    let cert_state = if current_state.track_utxo {
+    // Process certificates to accumulate delegation/pool state and (PHASE4-B5)
+    // governance state.
+    let (cert_state, gov_state) = if current_state.track_utxo {
         process_block_certificates(block, era, &current_state)?
     } else {
-        current_state.cert_state.clone()
+        (current_state.cert_state.clone(), current_state.gov_state.clone())
     };
 
     let mut epoch_state = current_state.epoch_state;
@@ -383,7 +386,9 @@ fn apply_shelley_era_block_classified(
             track_utxo: current_state.track_utxo,
             cert_state,
             max_lovelace_supply: current_state.max_lovelace_supply,
-        gov_state: None,
+        // PHASE4-B5: governance state carried forward (cert-accumulated when
+        // tracked), no longer nulled at every block apply.
+        gov_state,
         conway_deposit_params: current_state.conway_deposit_params.clone(),
         },
         verdict,
@@ -1384,12 +1389,21 @@ fn process_block_certificates(
     block: &ade_types::shelley::block::ShelleyBlock,
     era: CardanoEra,
     state: &LedgerState,
-) -> Result<crate::delegation::CertState, LedgerError> {
+) -> Result<(crate::delegation::CertState, Option<crate::state::ConwayGovState>), LedgerError> {
     if block.tx_count == 0 {
-        return Ok(state.cert_state.clone());
+        return Ok((state.cert_state.clone(), state.gov_state.clone()));
     }
 
     let mut cert_state = state.cert_state.clone();
+    // PHASE4-B5: governance state is threaded alongside cert-state. When present
+    // (Conway, governance tracked) gov-affecting certs accumulate into it; when
+    // absent (None) governance is not tracked and the gov half is skipped — the
+    // same gating as track_utxo for cert-state.
+    let mut gov_state = state.gov_state.clone();
+    // Lazy env: only DRep register/update (tags 16/18) consult it, so an absent
+    // drep_activity fails fast exactly when an expiry must be computed, never for
+    // env-free gov certs.
+    let gov_env = state.gov_cert_env().ok();
     let mut offset = 0;
     let data = &block.tx_bodies;
     let enc = cbor::read_array_header(data, &mut offset)?;
@@ -1421,7 +1435,16 @@ fn process_block_certificates(
                 let cert_start = *offset;
                 let (_, cert_end) = cbor::skip_item(data, offset)?;
                 let cert_bytes = &data[cert_start..cert_end];
-                cert_state = accumulate_tx_certs(era, cert_bytes, &cert_state, key_deposit)?;
+                let (cs, gs) = accumulate_tx_certs(
+                    era,
+                    cert_bytes,
+                    &cert_state,
+                    &gov_state,
+                    key_deposit,
+                    gov_env.as_ref(),
+                )?;
+                cert_state = cs;
+                gov_state = gs;
             } else {
                 let _ = cbor::skip_item(data, offset)?;
             }
@@ -1443,27 +1466,36 @@ fn process_block_certificates(
         }
     }
 
-    Ok(cert_state)
+    Ok((cert_state, gov_state))
 }
 
-/// Accumulate one tx's certificate array into the cert-state, era-dispatched and
-/// fail-closed (PHASE4-B4-S3/S4).
+/// Accumulate one tx's certificate array into cert-state and governance state,
+/// era-dispatched and fail-closed (PHASE4-B4-S3/S4 cert-state; PHASE4-B5-S3
+/// governance).
 ///
 /// Conway certs decode through the owner-complete closed grammar
-/// (`decode_conway_certs`) and apply via `apply_conway_cert`; Shelley..Babbage
-/// use the Shelley decoder + `apply_cert`. A decode error or an apply error
-/// propagates as a structured `LedgerError` — never swallowed. Governance
-/// effects from Conway certs are owner-tagged to `ConwayGovState` and routed out
-/// of B4's mutation scope (applied by the PHASE4-B5 governance cluster); they are
-/// a pure function of the cert, re-derivable there, so observing-without-applying
-/// here loses no information.
+/// (`decode_conway_certs`); each applies to B4-owned `CertState` via
+/// `apply_conway_cert` **and**, when governance is tracked (`gov_state` present),
+/// to `ConwayGovState` via `apply_conway_gov_cert` — replacing B4's
+/// observe-and-drop with application. Shelley..Babbage use the Shelley decoder +
+/// `apply_cert` (no governance). A decode error, a cert-state apply error, or a
+/// governance apply error (e.g. a DRep expiry needed with `drep_activity` absent)
+/// propagates as a structured `LedgerError` — never swallowed.
+///
+/// `gov_env` is consulted only by DRep register/update (tags 16/18); env-free gov
+/// certs accumulate regardless. `gov_state == None` means governance is not
+/// tracked for this replay (the gov half is skipped, paralleling track_utxo
+/// gating for cert-state).
 fn accumulate_tx_certs(
     era: CardanoEra,
     cert_bytes: &[u8],
     cert_state: &crate::delegation::CertState,
+    gov_state: &Option<crate::state::ConwayGovState>,
     key_deposit: ade_types::tx::Coin,
-) -> Result<crate::delegation::CertState, LedgerError> {
+    gov_env: Option<&crate::state::GovCertEnv>,
+) -> Result<(crate::delegation::CertState, Option<crate::state::ConwayGovState>), LedgerError> {
     let mut state = cert_state.clone();
+    let mut gov = gov_state.clone();
     if era == CardanoEra::Conway {
         let certs = ade_codec::conway::cert::decode_conway_certs(cert_bytes)?;
         for (idx, cert) in certs.iter().enumerate() {
@@ -1473,9 +1505,12 @@ fn accumulate_tx_certs(
             };
             let outcome = crate::delegation::apply_conway_cert(&state, cert, &env)?;
             state = outcome.state;
-            // outcome.owner_tagged: governance effects owned by ConwayGovState,
-            // observed and routed out of B4 mutation scope (not applied, not
-            // swallowed).
+            // PHASE4-B5: apply the governance half (vote-delegation / committee /
+            // DRep) into ConwayGovState when governance is tracked. A gov apply
+            // error propagates and halts the block transition.
+            if let Some(g) = gov.as_ref() {
+                gov = Some(crate::gov_cert::apply_conway_gov_cert(g, cert, gov_env)?);
+            }
         }
     } else {
         let certs = ade_codec::shelley::cert::decode_certificates(cert_bytes)?;
@@ -1483,7 +1518,7 @@ fn accumulate_tx_certs(
             state = crate::delegation::apply_cert(&state, cert, key_deposit, idx as u16)?;
         }
     }
-    Ok(state)
+    Ok((state, gov))
 }
 
 /// Locate per-output byte slices in an already-parsed Alonzo+ tx body.
@@ -2514,14 +2549,14 @@ mod cert_state_dispatch {
     #[test]
     fn era_dispatch_conway_accumulates_via_conway_path() {
         let bytes = cert_array(reg_cert(1));
-        let out = accumulate_tx_certs(CardanoEra::Conway, &bytes, &CertState::new(), KD).unwrap();
+        let (out, _gov) = accumulate_tx_certs(CardanoEra::Conway, &bytes, &CertState::new(), &None, KD, None).unwrap();
         assert_eq!(out.delegation.registrations.len(), 1, "Conway reg accumulated");
     }
 
     #[test]
     fn era_dispatch_shelley_accumulates_via_shelley_path() {
         let bytes = cert_array(reg_cert(1));
-        let out = accumulate_tx_certs(CardanoEra::Shelley, &bytes, &CertState::new(), KD).unwrap();
+        let (out, _gov) = accumulate_tx_certs(CardanoEra::Shelley, &bytes, &CertState::new(), &None, KD, None).unwrap();
         assert_eq!(out.delegation.registrations.len(), 1, "Shelley reg accumulated");
     }
 
@@ -2530,21 +2565,21 @@ mod cert_state_dispatch {
         // Cert array header claims 1 element but no cert follows → decode error.
         let mut bytes = Vec::new();
         arr(&mut bytes, 1);
-        let res = accumulate_tx_certs(CardanoEra::Conway, &bytes, &CertState::new(), KD);
+        let res = accumulate_tx_certs(CardanoEra::Conway, &bytes, &CertState::new(), &None, KD, None);
         assert!(res.is_err(), "truncated cert array must fail closed, not swallow");
     }
 
     #[test]
     fn conway_unknown_tag_is_fail_closed() {
         let bytes = cert_array(tag_only_cert(19));
-        let res = accumulate_tx_certs(CardanoEra::Conway, &bytes, &CertState::new(), KD);
+        let res = accumulate_tx_certs(CardanoEra::Conway, &bytes, &CertState::new(), &None, KD, None);
         assert!(res.is_err(), "unknown cert tag must fail closed");
     }
 
     #[test]
     fn conway_removed_tag_is_fail_closed() {
         let bytes = cert_array(tag_only_cert(5));
-        let res = accumulate_tx_certs(CardanoEra::Conway, &bytes, &CertState::new(), KD);
+        let res = accumulate_tx_certs(CardanoEra::Conway, &bytes, &CertState::new(), &None, KD, None);
         assert!(
             matches!(res, Err(LedgerError::EraInvalidCertificate(_))),
             "removed tag 5 must reject as era-invalid, not swallow",
@@ -2556,17 +2591,20 @@ mod cert_state_dispatch {
         // Delegation for an unregistered credential → apply error must PROPAGATE
         // (this is the swallow that B4 removes — CE-B4-4).
         let bytes = cert_array(deleg_cert(1, 2));
-        let res = accumulate_tx_certs(CardanoEra::Conway, &bytes, &CertState::new(), KD);
+        let res = accumulate_tx_certs(CardanoEra::Conway, &bytes, &CertState::new(), &None, KD, None);
         assert!(res.is_err(), "apply error must propagate, not be swallowed as non-fatal");
     }
 
     #[test]
     fn conway_governance_cert_routed_out_of_scope() {
-        // A DRep registration is owner-tagged to ConwayGovState: it must NOT
-        // error and must NOT mutate the B4-owned delegation/pool CertState.
+        // A DRep registration mutates ConwayGovState, never the B4-owned
+        // delegation/pool CertState. With gov_state = None (governance not
+        // tracked here) the gov half is skipped; CertState stays unchanged
+        // either way — owner exclusivity (DC-LEDGER-08 strengthened by
+        // DC-LEDGER-09).
         let bytes = cert_array(drep_reg_cert(1));
         let before = CertState::new();
-        let out = accumulate_tx_certs(CardanoEra::Conway, &bytes, &before, KD).unwrap();
+        let (out, _gov) = accumulate_tx_certs(CardanoEra::Conway, &bytes, &before, &None, KD, None).unwrap();
         assert_eq!(out, before, "governance cert leaves B4-owned cert-state unchanged");
     }
 }
