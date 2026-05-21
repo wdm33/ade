@@ -185,6 +185,11 @@ posture as B1/B2.
 
 ## Cluster PHASE4-B4 — Conway cert-state accumulation fail-closed path *(future)*
 
+> **Superseded for planning by `docs/planning/phase4-b4-cluster-slice-plan.md`.**
+> Authority remains `docs/ade-invariant-registry.toml` and the PHASE4-B4
+> cluster/slice docs. This stub is retained for history only — do not follow it
+> for B4 scope.
+
 > Registered now so the `rules.rs:1419-1440` fail-open is not lost as a loose note.
 > Scoped **out** of B3: B3 owns value-conservation accounting; this path is
 > cert-state accumulation. Folding it into B3 would blur authority and make B3-S4
