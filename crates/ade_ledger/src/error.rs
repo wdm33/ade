@@ -125,6 +125,11 @@ pub enum ValidationEnvironmentError {
     /// A Conway transaction was validated against a state whose canonical
     /// Conway deposit params (`drep_deposit`/`gov_action_deposit`) are absent.
     MissingConwayDepositParams,
+    /// Governance-cert accumulation was asked to compute a DRep expiry on the
+    /// Conway path but the canonical `drep_activity` parameter is absent from
+    /// state. Never defaulted — a DRep expiry is never fabricated from a missing
+    /// activity period (PHASE4-B5).
+    MissingDRepActivityParam,
 }
 
 /// A Conway certificate carries a deposit/refund effect whose coin amount
@@ -694,6 +699,9 @@ impl core::fmt::Display for LedgerError {
             LedgerError::ValidationEnvironment(e) => match e {
                 ValidationEnvironmentError::MissingConwayDepositParams => {
                     write!(f, "validation environment: Conway deposit params absent from state")
+                }
+                ValidationEnvironmentError::MissingDRepActivityParam => {
+                    write!(f, "validation environment: Conway drep_activity param absent from state")
                 }
             },
         }

@@ -127,6 +127,7 @@ impl LoadedSnapshot {
         Some(ade_ledger::pparams::ConwayOnlyDepositParams {
             drep_deposit: ade_types::tx::Coin(gov_params.drep_deposit),
             gov_action_deposit: ade_types::tx::Coin(gov_params.gov_action_deposit),
+            drep_activity: gov_params.drep_activity,
         })
     }
 
@@ -2493,6 +2494,10 @@ pub struct ConwayGovParams {
     pub gov_action_deposit: u64,
     /// PP[30] = dRepDeposit
     pub drep_deposit: u64,
+    /// PP[31] = dRepActivity (epochs); read at the offset immediately after
+    /// dRepDeposit (empirically `read_uint_field(29)` with this loader's
+    /// offset table).
+    pub drep_activity: u64,
 }
 
 /// Parse Conway governance protocol parameters (fields 24-30) from CBOR.
@@ -2563,6 +2568,7 @@ pub fn parse_conway_gov_params(
     let gov_action_lifetime = read_uint_field(26);
     let gov_action_deposit = read_uint_field(27);
     let drep_deposit = read_uint_field(28);
+    let drep_activity = read_uint_field(29);
 
     Ok(ConwayGovParams {
         pool_voting_thresholds: pool_thresholds,
@@ -2572,6 +2578,7 @@ pub fn parse_conway_gov_params(
         gov_action_lifetime,
         gov_action_deposit,
         drep_deposit,
+        drep_activity,
     })
 }
 

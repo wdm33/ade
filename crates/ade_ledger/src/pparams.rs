@@ -155,6 +155,13 @@ pub struct ConwayOnlyDepositParams {
     pub drep_deposit: Coin,
     /// Governance-action deposit (Conway `govActionDeposit`, PParams field 29).
     pub gov_action_deposit: Coin,
+    /// DRep activity period in epochs (Conway `dRepActivity`, PParams field 31).
+    /// A registered or updated DRep's `drep_expiry` is set to
+    /// `current_epoch + drep_activity`. Carried here because it is a Conway-only
+    /// parameter absent from the shared `ProtocolParameters`; the `Option`-gating
+    /// on `LedgerState` keeps it unrepresentable in non-Conway states. Consumed
+    /// by governance-cert accumulation via [`crate::state::GovCertEnv`].
+    pub drep_activity: u64,
 }
 
 /// Validator-boundary view of the full Conway deposit-parameter set.
@@ -797,6 +804,7 @@ mod tests {
         state.conway_deposit_params = Some(ConwayOnlyDepositParams {
             drep_deposit: Coin(500_000_000),
             gov_action_deposit: Coin(100_000_000_000),
+            drep_activity: 20,
         });
 
         let view = state.conway_deposit_view().unwrap();

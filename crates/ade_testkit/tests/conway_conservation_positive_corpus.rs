@@ -108,6 +108,7 @@ fn ledger_576_with_utxo(utxo: BTreeMap<TxIn, TxOut>) -> ade_ledger::state::Ledge
     l.conway_deposit_params = Some(ConwayOnlyDepositParams {
         drep_deposit: Coin(500_000_000),
         gov_action_deposit: Coin(100_000_000_000),
+        drep_activity: 20,
     });
     l
 }

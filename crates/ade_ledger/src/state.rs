@@ -136,6 +136,35 @@ impl LedgerState {
             None => Err(ValidationEnvironmentError::MissingConwayDepositParams),
         }
     }
+
+    /// Assemble the governance-cert accumulation environment from this state's
+    /// two canonical sources: the current epoch (`epoch_state.epoch`) and the
+    /// Conway-only `drep_activity` parameter.
+    ///
+    /// Fail-fast: if the Conway-only deposit params are absent, returns
+    /// [`ValidationEnvironmentError::MissingDRepActivityParam`] — never a
+    /// default substitution. Callers reach this only on the Conway
+    /// governance-cert accumulation path, where the param is required.
+    pub fn gov_cert_env(&self) -> Result<GovCertEnv, ValidationEnvironmentError> {
+        match &self.conway_deposit_params {
+            Some(c) => Ok(GovCertEnv {
+                current_epoch: self.epoch_state.epoch.0,
+                drep_activity: c.drep_activity,
+            }),
+            None => Err(ValidationEnvironmentError::MissingDRepActivityParam),
+        }
+    }
+}
+
+/// Environment for Conway governance-certificate accumulation (PHASE4-B5).
+///
+/// The two canonical inputs a DRep-expiry mutation needs: the current epoch and
+/// the `drep_activity` parameter. Constructed only via
+/// [`LedgerState::gov_cert_env`] (fail-fast on absent param), never defaulted.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct GovCertEnv {
+    pub current_epoch: u64,
+    pub drep_activity: u64,
 }
 
 /// Mainnet epoch parameters for Shelley+ eras.
@@ -175,6 +204,33 @@ pub fn detect_epoch_transition(current_epoch: EpochNo, slot: SlotNo) -> Option<E
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::pparams::ConwayOnlyDepositParams;
+
+    #[test]
+    fn gov_cert_env_present_ok() {
+        let mut state = LedgerState::new(CardanoEra::Conway);
+        state.epoch_state.epoch = EpochNo(576);
+        state.conway_deposit_params = Some(ConwayOnlyDepositParams {
+            drep_deposit: ade_types::tx::Coin(500_000_000),
+            gov_action_deposit: ade_types::tx::Coin(100_000_000_000),
+            drep_activity: 20,
+        });
+        let env = state.gov_cert_env().unwrap();
+        assert_eq!(env.current_epoch, 576);
+        assert_eq!(env.drep_activity, 20);
+    }
+
+    #[test]
+    fn gov_cert_env_missing_drep_activity_is_fail_fast() {
+        // Conway state without conway_deposit_params: the env is unavailable and
+        // must be a structured fail-fast, never a defaulted activity period.
+        let state = LedgerState::new(CardanoEra::Conway);
+        assert_eq!(state.conway_deposit_params, None);
+        assert_eq!(
+            state.gov_cert_env(),
+            Err(ValidationEnvironmentError::MissingDRepActivityParam)
+        );
+    }
 
     #[test]
     fn slot_to_epoch_shelley_start() {

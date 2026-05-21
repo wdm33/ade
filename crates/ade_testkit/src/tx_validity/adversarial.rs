@@ -505,6 +505,7 @@ fn ledger_with_utxo(input: &TxIn, payment_key: &Hash28, coin: u64) -> LedgerStat
     l.conway_deposit_params = Some(ade_ledger::pparams::ConwayOnlyDepositParams {
         drep_deposit: Coin(500_000_000),
         gov_action_deposit: Coin(100_000_000_000),
+        drep_activity: 20,
     });
     let addr = enterprise_keyhash_address(payment_key);
     // A minimal preserved Conway output `[address, coin]` for the AlonzoPlus raw

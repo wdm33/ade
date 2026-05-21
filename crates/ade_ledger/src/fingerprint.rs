@@ -242,9 +242,14 @@ fn fingerprint_pparams(
     // is byte-identical to the pre-migration encoding.
     if let Some(c) = conway_deposits {
         write_uint_canonical(&mut buf, CONWAY_DEPOSIT_PARAMS_TAG);
-        write_array_canonical(&mut buf, 2);
+        // PHASE4-B5-S1: array extended 2 -> 3 to include the Conway-only
+        // `drep_activity` parameter. Additive and gated — only states carrying
+        // `conway_deposit_params` differ; non-Conway / param-absent states emit
+        // nothing here and keep their pre-B5 pparams fingerprint byte-identical.
+        write_array_canonical(&mut buf, 3);
         write_coin(&mut buf, c.drep_deposit);
         write_coin(&mut buf, c.gov_action_deposit);
+        write_uint_canonical(&mut buf, c.drep_activity);
     }
     blake2b_256(&buf)
 }
@@ -900,6 +905,7 @@ mod tests {
         with_deposits.conway_deposit_params = Some(crate::pparams::ConwayOnlyDepositParams {
             drep_deposit: Coin(500_000_000),
             gov_action_deposit: Coin(100_000_000_000),
+            drep_activity: 20,
         });
 
         let f_base = fingerprint(&base);
@@ -918,7 +924,10 @@ mod tests {
         // Golden for the Conway-with-deposits combined fingerprint.
         assert_eq!(
             f_dep.combined_hex(),
-            "b69422ef2ece8c97b832f969298bba163fcb793ac76a8d22ae3c7195768e71d9",
+            // PHASE4-B5-S1 migration: Conway-deposit tag extended 2 -> 3 fields
+            // to include `drep_activity`. Regenerated golden (was
+            // b69422ef…71d9 at the 2-field encoding).
+            "d1803cb7fe953b6edf732e003cb2f80058a59acd3bb7feb694307176466a8827",
             "Conway deposit-param fingerprint golden drift — review the migration diff"
         );
 
@@ -927,6 +936,7 @@ mod tests {
         mutated.conway_deposit_params = Some(crate::pparams::ConwayOnlyDepositParams {
             drep_deposit: Coin(500_000_001),
             gov_action_deposit: Coin(100_000_000_000),
+            drep_activity: 20,
         });
         let f_mut = fingerprint(&mutated);
         assert_ne!(f_dep.pparams, f_mut.pparams);
