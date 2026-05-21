@@ -91,7 +91,16 @@ if [ -f "$GOVLOGIC" ] && grep -qE 'DRep::KeyHash\([^)]*\)\)?\s*\.or_else' "$GOVL
     FAIL=1
 fi
 
+# 6. EnactmentEffects.committee_changes stays discriminated (ENACTMENT-COMMITTEE-
+#    FIDELITY, strengthens DC-LEDGER-10): the (dormant) committee-enactment
+#    effect carries StakeCredential, never bare Hash28 — so committee enactment,
+#    when wired, cannot re-collapse the discriminated committee map on write-back.
+if [ -f "$GOVLOGIC" ] && ! grep -qE 'pub committee_changes:.*StakeCredential' "$GOVLOGIC"; then
+    echo "FAIL: EnactmentEffects.committee_changes is not StakeCredential-typed (committee-enactment re-collapse risk)"
+    FAIL=1
+fi
+
 if [ "$FAIL" -eq 0 ]; then
-    echo "PASS: DC-LEDGER-10 credential discriminant is closed and faithful (incl. committee + DRep-vote surfaces)"
+    echo "PASS: DC-LEDGER-10 credential discriminant is closed and faithful (committee + DRep-vote + enactment surfaces)"
 fi
 exit "$FAIL"

@@ -340,8 +340,12 @@ pub struct EnactmentEffects {
     pub hard_fork: Option<(u64, u64)>,
     /// Committee dissolved (NoConfidence enacted).
     pub committee_dissolved: bool,
-    /// Committee changes: (removed, added with expiry).
-    pub committee_changes: Option<(Vec<Hash28>, Vec<(Hash28, u64)>)>,
+    /// Committee changes: (removed, added with expiry). Discriminated
+    /// `StakeCredential` (cold committee credentials) — never bare `Hash28` — so
+    /// when `UpdateCommittee` enactment is implemented it cannot re-collapse the
+    /// discriminated `ConwayGovState.committee` map on write-back (DC-LEDGER-10,
+    /// ENACTMENT-COMMITTEE-FIDELITY). Currently dormant (always `None`).
+    pub committee_changes: Option<(Vec<StakeCredential>, Vec<(StakeCredential, u64)>)>,
     /// Constitution replaced (raw CBOR).
     pub new_constitution: Option<Vec<u8>>,
     /// Number of InfoActions enacted (no state effect).
@@ -569,5 +573,27 @@ mod committee_fidelity_tests {
         let matching: DRepStakeDistribution =
             [(DRep::KeyHash(Hash28([0x11; 28])), 1000u64)].into_iter().collect();
         assert!(ratifies_drep(&matching), "matching-variant DRep stake ratifies (discriminant is the only difference)");
+    }
+
+    /// ENACTMENT-COMMITTEE-FIDELITY CE-2: the `EnactmentEffects.committee_changes`
+    /// type holds discriminated committee credentials — a key-hash and a
+    /// script-hash member of equal bytes are distinct entries (the field cannot
+    /// re-collapse the committee map when enactment is wired). The field stays
+    /// dormant (`None`) by default; this pins the type, not live behavior.
+    #[test]
+    fn enactment_committee_changes_keyhash_scripthash_distinct() {
+        let removed = vec![key(0xC0), script(0xC0)];
+        let added = vec![(key(0xC1), 580u64), (script(0xC1), 580u64)];
+        let effects = EnactmentEffects {
+            committee_changes: Some((removed.clone(), added.clone())),
+            ..EnactmentEffects::default()
+        };
+        let (rem, add) = effects.committee_changes.unwrap();
+        assert_eq!(rem.len(), 2, "key vs script removed members are distinct");
+        assert_ne!(rem[0], rem[1], "KeyHash(0xC0) != ScriptHash(0xC0)");
+        assert_eq!(add.len(), 2, "key vs script added members are distinct");
+        assert_ne!(add[0].0, add[1].0, "KeyHash(0xC1) != ScriptHash(0xC1)");
+        // Default stays dormant.
+        assert!(EnactmentEffects::default().committee_changes.is_none());
     }
 }
