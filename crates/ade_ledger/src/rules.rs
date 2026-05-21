@@ -1382,7 +1382,7 @@ pub struct EpochBoundaryAccounting {
 /// and apply them to the certificate state using `apply_cert`.
 fn process_block_certificates(
     block: &ade_types::shelley::block::ShelleyBlock,
-    _era: CardanoEra,
+    era: CardanoEra,
     state: &LedgerState,
 ) -> Result<crate::delegation::CertState, LedgerError> {
     if block.tx_count == 0 {
@@ -1393,6 +1393,7 @@ fn process_block_certificates(
     let mut offset = 0;
     let data = &block.tx_bodies;
     let enc = cbor::read_array_header(data, &mut offset)?;
+    let key_deposit = state.protocol_params.key_deposit;
 
     let mut process_one = |data: &[u8], offset: &mut usize| -> Result<(), LedgerError> {
         // Read the tx body map to find key 4 (certs)
@@ -1413,34 +1414,14 @@ fn process_block_certificates(
         for _ in 0..map_len {
             let (key, _) = cbor::read_uint(data, offset)?;
             if key == 4 {
-                // Capture cert bytes
+                // Capture cert bytes and accumulate fail-closed: a decode or
+                // apply error halts the block transition (this path runs only at
+                // track_utxo, i.e. with full state present — there is no
+                // reduced-state replay accommodation to swallow for).
                 let cert_start = *offset;
                 let (_, cert_end) = cbor::skip_item(data, offset)?;
                 let cert_bytes = &data[cert_start..cert_end];
-
-                // Decode and apply certificates
-                match ade_codec::shelley::cert::decode_certificates(cert_bytes) {
-                    Ok(certs) => {
-                        let key_deposit = state.protocol_params.key_deposit;
-                        for (idx, cert) in certs.iter().enumerate() {
-                            match crate::delegation::apply_cert(
-                                &cert_state,
-                                cert,
-                                key_deposit,
-                                idx as u16,
-                            ) {
-                                Ok(new_state) => cert_state = new_state,
-                                Err(_) => {
-                                    // Certificate application errors are non-fatal
-                                    // during replay without full UTxO state.
-                                }
-                            }
-                        }
-                    }
-                    Err(_) => {
-                        // Cert decode errors are non-fatal during replay.
-                    }
-                }
+                cert_state = accumulate_tx_certs(era, cert_bytes, &cert_state, key_deposit)?;
             } else {
                 let _ = cbor::skip_item(data, offset)?;
             }
@@ -1463,6 +1444,46 @@ fn process_block_certificates(
     }
 
     Ok(cert_state)
+}
+
+/// Accumulate one tx's certificate array into the cert-state, era-dispatched and
+/// fail-closed (PHASE4-B4-S3/S4).
+///
+/// Conway certs decode through the owner-complete closed grammar
+/// (`decode_conway_certs`) and apply via `apply_conway_cert`; Shelley..Babbage
+/// use the Shelley decoder + `apply_cert`. A decode error or an apply error
+/// propagates as a structured `LedgerError` — never swallowed. Governance
+/// effects from Conway certs are owner-tagged to `ConwayGovState` and routed out
+/// of B4's mutation scope (applied by the PHASE4-B5 governance cluster); they are
+/// a pure function of the cert, re-derivable there, so observing-without-applying
+/// here loses no information.
+fn accumulate_tx_certs(
+    era: CardanoEra,
+    cert_bytes: &[u8],
+    cert_state: &crate::delegation::CertState,
+    key_deposit: ade_types::tx::Coin,
+) -> Result<crate::delegation::CertState, LedgerError> {
+    let mut state = cert_state.clone();
+    if era == CardanoEra::Conway {
+        let certs = ade_codec::conway::cert::decode_conway_certs(cert_bytes)?;
+        for (idx, cert) in certs.iter().enumerate() {
+            let env = crate::delegation::ConwayCertEnv {
+                key_deposit,
+                cert_index: idx as u16,
+            };
+            let outcome = crate::delegation::apply_conway_cert(&state, cert, &env)?;
+            state = outcome.state;
+            // outcome.owner_tagged: governance effects owned by ConwayGovState,
+            // observed and routed out of B4 mutation scope (not applied, not
+            // swallowed).
+        }
+    } else {
+        let certs = ade_codec::shelley::cert::decode_certificates(cert_bytes)?;
+        for (idx, cert) in certs.iter().enumerate() {
+            state = crate::delegation::apply_cert(&state, cert, key_deposit, idx as u16)?;
+        }
+    }
+    Ok(state)
 }
 
 /// Locate per-output byte slices in an already-parsed Alonzo+ tx body.
@@ -2408,5 +2429,144 @@ mod tests {
             matches!(res, Err(crate::error::LedgerError::BadInputs(_))),
             "composer must return BadInputs when input predates UTxO",
         );
+    }
+}
+
+#[cfg(test)]
+#[allow(clippy::unwrap_used)]
+mod cert_state_dispatch {
+    //! PHASE4-B4-S3/S4 (CE-B4-3, CE-B4-4): era-dispatched, fail-closed
+    //! cert-state accumulation. Conway certs route through the owner-complete
+    //! `decode_conway_certs` + `apply_conway_cert`; decode and apply errors
+    //! propagate; governance effects are owner-tagged out of B4 scope.
+    use super::accumulate_tx_certs;
+    use crate::delegation::CertState;
+    use crate::error::LedgerError;
+    use ade_types::tx::Coin;
+    use ade_types::CardanoEra;
+
+    fn cbor_uint(buf: &mut Vec<u8>, major: u8, v: u64) {
+        let m = major << 5;
+        if v < 24 {
+            buf.push(m | v as u8);
+        } else if v < 0x100 {
+            buf.push(m | 24);
+            buf.push(v as u8);
+        } else {
+            buf.push(m | 25);
+            buf.extend_from_slice(&(v as u16).to_be_bytes());
+        }
+    }
+    fn arr(b: &mut Vec<u8>, n: u64) {
+        cbor_uint(b, 4, n);
+    }
+    fn uint(b: &mut Vec<u8>, v: u64) {
+        cbor_uint(b, 0, v);
+    }
+    fn cred(b: &mut Vec<u8>, marker: u8) {
+        arr(b, 2);
+        uint(b, 0);
+        cbor_uint(b, 2, 28);
+        b.extend_from_slice(&[marker; 28]);
+    }
+    fn h28(b: &mut Vec<u8>, marker: u8) {
+        cbor_uint(b, 2, 28);
+        b.extend_from_slice(&[marker; 28]);
+    }
+    fn cert_array(cert: Vec<u8>) -> Vec<u8> {
+        let mut b = Vec::new();
+        arr(&mut b, 1);
+        b.extend_from_slice(&cert);
+        b
+    }
+    fn reg_cert(marker: u8) -> Vec<u8> {
+        let mut b = Vec::new();
+        arr(&mut b, 2);
+        uint(&mut b, 0);
+        cred(&mut b, marker);
+        b
+    }
+    fn deleg_cert(cred_m: u8, pool_m: u8) -> Vec<u8> {
+        let mut b = Vec::new();
+        arr(&mut b, 3);
+        uint(&mut b, 2);
+        cred(&mut b, cred_m);
+        h28(&mut b, pool_m);
+        b
+    }
+    fn drep_reg_cert(marker: u8) -> Vec<u8> {
+        let mut b = Vec::new();
+        arr(&mut b, 4);
+        uint(&mut b, 16);
+        cred(&mut b, marker);
+        uint(&mut b, 500_000_000);
+        b.push(0xf6); // anchor = null
+        b
+    }
+    fn tag_only_cert(tag: u64) -> Vec<u8> {
+        let mut b = Vec::new();
+        arr(&mut b, 1);
+        uint(&mut b, tag);
+        b
+    }
+    const KD: Coin = Coin(2_000_000);
+
+    #[test]
+    fn era_dispatch_conway_accumulates_via_conway_path() {
+        let bytes = cert_array(reg_cert(1));
+        let out = accumulate_tx_certs(CardanoEra::Conway, &bytes, &CertState::new(), KD).unwrap();
+        assert_eq!(out.delegation.registrations.len(), 1, "Conway reg accumulated");
+    }
+
+    #[test]
+    fn era_dispatch_shelley_accumulates_via_shelley_path() {
+        let bytes = cert_array(reg_cert(1));
+        let out = accumulate_tx_certs(CardanoEra::Shelley, &bytes, &CertState::new(), KD).unwrap();
+        assert_eq!(out.delegation.registrations.len(), 1, "Shelley reg accumulated");
+    }
+
+    #[test]
+    fn conway_decode_error_is_fail_closed() {
+        // Cert array header claims 1 element but no cert follows → decode error.
+        let mut bytes = Vec::new();
+        arr(&mut bytes, 1);
+        let res = accumulate_tx_certs(CardanoEra::Conway, &bytes, &CertState::new(), KD);
+        assert!(res.is_err(), "truncated cert array must fail closed, not swallow");
+    }
+
+    #[test]
+    fn conway_unknown_tag_is_fail_closed() {
+        let bytes = cert_array(tag_only_cert(19));
+        let res = accumulate_tx_certs(CardanoEra::Conway, &bytes, &CertState::new(), KD);
+        assert!(res.is_err(), "unknown cert tag must fail closed");
+    }
+
+    #[test]
+    fn conway_removed_tag_is_fail_closed() {
+        let bytes = cert_array(tag_only_cert(5));
+        let res = accumulate_tx_certs(CardanoEra::Conway, &bytes, &CertState::new(), KD);
+        assert!(
+            matches!(res, Err(LedgerError::EraInvalidCertificate(_))),
+            "removed tag 5 must reject as era-invalid, not swallow",
+        );
+    }
+
+    #[test]
+    fn conway_apply_error_is_fail_closed() {
+        // Delegation for an unregistered credential → apply error must PROPAGATE
+        // (this is the swallow that B4 removes — CE-B4-4).
+        let bytes = cert_array(deleg_cert(1, 2));
+        let res = accumulate_tx_certs(CardanoEra::Conway, &bytes, &CertState::new(), KD);
+        assert!(res.is_err(), "apply error must propagate, not be swallowed as non-fatal");
+    }
+
+    #[test]
+    fn conway_governance_cert_routed_out_of_scope() {
+        // A DRep registration is owner-tagged to ConwayGovState: it must NOT
+        // error and must NOT mutate the B4-owned delegation/pool CertState.
+        let bytes = cert_array(drep_reg_cert(1));
+        let before = CertState::new();
+        let out = accumulate_tx_certs(CardanoEra::Conway, &bytes, &before, KD).unwrap();
+        assert_eq!(out, before, "governance cert leaves B4-owned cert-state unchanged");
     }
 }

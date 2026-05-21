@@ -93,6 +93,23 @@ for crate in "${BLUE_CRATES[@]}"; do
     fi
 done
 
+# PHASE4-B4-S3/S4 (CE-B4-4, DC-LEDGER-08): the cert-state accumulation path must
+# stay fail-closed. The removed swallow carried the rationale "non-fatal during
+# replay"; that justification was false (the path runs only at track_utxo, i.e.
+# with full state present). Fail if it — or a bare Err(_) swallow arm in the
+# cert-state accumulation function — reappears.
+SWALLOW_MATCHES=$(grep -rn "non-fatal during replay" "$REPO_ROOT/crates" --include='*.rs' 2>/dev/null || true)
+if [ -n "$SWALLOW_MATCHES" ]; then
+    echo "FAIL: cert-state fail-open rationale 'non-fatal during replay' reintroduced (DC-LEDGER-08):"
+    echo "$SWALLOW_MATCHES"
+    FAILED=1
+fi
+ACC_BODY=$(awk '/fn accumulate_tx_certs/,/^}/' "$REPO_ROOT/crates/ade_ledger/src/rules.rs" 2>/dev/null || true)
+if echo "$ACC_BODY" | grep -qE 'Err\(_\)\s*=>'; then
+    echo "FAIL: accumulate_tx_certs contains an Err(_) swallow arm (DC-LEDGER-08 fail-closed)"
+    FAILED=1
+fi
+
 if [ "$FAILED" -eq 0 ]; then
     echo "PASS: No forbidden patterns in BLUE crates"
     exit 0
