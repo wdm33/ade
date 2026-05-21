@@ -41,7 +41,7 @@ pub enum GovAction {
 pub struct GovActionState {
     pub action_id: GovActionId,
     pub committee_votes: Vec<(StakeCredential, Vote)>,
-    pub drep_votes: Vec<(Hash28, Vote)>,
+    pub drep_votes: Vec<(StakeCredential, Vote)>,
     pub spo_votes: Vec<(Hash28, Vote)>,
     pub deposit: Coin,
     pub return_addr: Vec<u8>,

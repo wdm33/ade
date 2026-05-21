@@ -2309,10 +2309,11 @@ pub fn parse_governance_proposals(
         let action_id = GovActionId { tx_hash: ade_types::Hash32(tx_hash), index: index as u32 };
         let f1 = skip_cbor(state_cbor, gas_body)?;
 
-        // [1] committeeVotes (discriminated voter), [2] drepVotes, [3] spoVotes
-        let committee_votes = parse_committee_vote_map(state_cbor, f1)?;
+        // [1] committeeVotes (discriminated voter), [2] drepVotes (discriminated
+        // voter), [3] spoVotes (pool key-hash, bare)
+        let committee_votes = parse_credential_vote_map(state_cbor, f1)?;
         let f2 = skip_cbor(state_cbor, f1)?;
-        let drep_votes = parse_vote_map(state_cbor, f2)?;
+        let drep_votes = parse_credential_vote_map(state_cbor, f2)?;
         let f3 = skip_cbor(state_cbor, f2)?;
         let spo_votes = parse_vote_map(state_cbor, f3)?;
         let f4 = skip_cbor(state_cbor, f3)?;
@@ -2397,12 +2398,13 @@ fn parse_vote_map(
     Ok(votes)
 }
 
-/// Parse a committee vote map (`map(Credential HotCommitteeRole → vote)`),
-/// preserving the discriminated voter credential. Mirrors [`parse_vote_map`]
-/// (used for drep/spo votes which stay bare `Hash28`) but reads the voter's
-/// key/script type tag so a key-hash and script-hash voter of equal bytes stay
-/// distinct on the BLUE committee path.
-fn parse_committee_vote_map(
+/// Parse a discriminated vote map (`map(Credential → vote)`) preserving the
+/// voter's key/script type tag — used for committee and DRep votes (which key on
+/// the discriminated `StakeCredential`). Mirrors [`parse_vote_map`] (used for
+/// spo votes, which stay bare `Hash28` since pools are always key-hash) but reads
+/// the voter type tag so a key-hash and script-hash voter of equal bytes stay
+/// distinct on the BLUE path.
+fn parse_credential_vote_map(
     state_cbor: &[u8],
     map_off: usize,
 ) -> Result<Vec<(ade_types::shelley::cert::StakeCredential, ade_types::conway::governance::Vote)>, HarnessError> {

@@ -237,11 +237,16 @@ fn check_ratification(
         if idx < drep_thresholds.len() && *total_drep_active_stake > 0 {
             let (thresh_num, thresh_den) = drep_thresholds[idx];
             if thresh_den > 0 {
-                let lookup_stake = |cred: &Hash28| -> u64 {
-                    drep_stake.get(&DRep::KeyHash(cred.clone()))
-                        .or_else(|| drep_stake.get(&DRep::ScriptHash(cred.clone())))
-                        .copied()
-                        .unwrap_or(0)
+                // DRep-voter discriminant fidelity: the voter credential carries
+                // its key/script tag, so it resolves to EXACTLY one DRep stake
+                // key — never a key/script OR-fallback that would let a key-hash
+                // voter tally a script-hash DRep's stake of equal bytes.
+                let lookup_stake = |cred: &StakeCredential| -> u64 {
+                    let drep = match cred {
+                        StakeCredential::KeyHash(h) => DRep::KeyHash(h.clone()),
+                        StakeCredential::ScriptHash(h) => DRep::ScriptHash(h.clone()),
+                    };
+                    drep_stake.get(&drep).copied().unwrap_or(0)
                 };
                 let yes_stake: u64 = proposal.drep_votes.iter()
                     .filter(|(_, vote)| matches!(vote, Vote::Yes))

@@ -563,8 +563,8 @@ fn write_drep(buf: &mut Vec<u8>, drep: &DRep) {
 fn write_gov_action_state(buf: &mut Vec<u8>, s: &GovActionState) {
     write_array_canonical(buf, 9);
     write_gov_action_id(buf, &s.action_id);
-    write_committee_vote_list(buf, &s.committee_votes);
-    write_vote_list(buf, &s.drep_votes);
+    write_credential_vote_list(buf, &s.committee_votes);
+    write_credential_vote_list(buf, &s.drep_votes);
     write_vote_list(buf, &s.spo_votes);
     write_coin(buf, s.deposit);
     write_bytes_canonical(buf, &s.return_addr);
@@ -592,7 +592,7 @@ fn write_vote_list(buf: &mut Vec<u8>, votes: &[(Hash28, Vote)]) {
     }
 }
 
-fn write_committee_vote_list(buf: &mut Vec<u8>, votes: &[(StakeCredential, Vote)]) {
+fn write_credential_vote_list(buf: &mut Vec<u8>, votes: &[(StakeCredential, Vote)]) {
     // Vec<(StakeCredential, Vote)> insertion order is not a state-level invariant;
     // sort by the discriminated credential's Ord for canonical encoding.
     let mut sorted: Vec<(&StakeCredential, Vote)> =

@@ -3513,16 +3513,20 @@ fn conway_governance_ratification_test() {
             let yes: u64 = p.drep_votes.iter()
                 .filter(|(_, v)| matches!(v, ade_types::conway::governance::Vote::Yes))
                 .map(|(c, _)| {
-                    let k = ade_types::conway::cert::DRep::KeyHash(c.clone());
-                    let s = ade_types::conway::cert::DRep::ScriptHash(c.clone());
-                    t_drep_stake.get(&k).or_else(|| t_drep_stake.get(&s)).copied().unwrap_or(0)
+                    let d = match c {
+                        ade_types::shelley::cert::StakeCredential::KeyHash(h) => ade_types::conway::cert::DRep::KeyHash(h.clone()),
+                        ade_types::shelley::cert::StakeCredential::ScriptHash(h) => ade_types::conway::cert::DRep::ScriptHash(h.clone()),
+                    };
+                    t_drep_stake.get(&d).copied().unwrap_or(0)
                 }).sum();
             let no: u64 = p.drep_votes.iter()
                 .filter(|(_, v)| matches!(v, ade_types::conway::governance::Vote::No))
                 .map(|(c, _)| {
-                    let k = ade_types::conway::cert::DRep::KeyHash(c.clone());
-                    let s = ade_types::conway::cert::DRep::ScriptHash(c.clone());
-                    t_drep_stake.get(&k).or_else(|| t_drep_stake.get(&s)).copied().unwrap_or(0)
+                    let d = match c {
+                        ade_types::shelley::cert::StakeCredential::KeyHash(h) => ade_types::conway::cert::DRep::KeyHash(h.clone()),
+                        ade_types::shelley::cert::StakeCredential::ScriptHash(h) => ade_types::conway::cert::DRep::ScriptHash(h.clone()),
+                    };
+                    t_drep_stake.get(&d).copied().unwrap_or(0)
                 }).sum();
             let ratio = if yes + no > 0 { yes * 100 / (yes + no) } else { 0 };
             let yes_v = p.drep_votes.iter().filter(|(_, v)| matches!(v, ade_types::conway::governance::Vote::Yes)).count();
@@ -3558,9 +3562,11 @@ fn conway_governance_ratification_test() {
             let yes_stake: u64 = tp.drep_votes.iter()
                 .filter(|(_, v)| matches!(v, ade_types::conway::governance::Vote::Yes))
                 .map(|(cred, _)| {
-                    let k = ade_types::conway::cert::DRep::KeyHash(cred.clone());
-                    let s = ade_types::conway::cert::DRep::ScriptHash(cred.clone());
-                    t_drep_stake.get(&k).or_else(|| t_drep_stake.get(&s)).copied().unwrap_or(0)
+                    let d = match cred {
+                        ade_types::shelley::cert::StakeCredential::KeyHash(h) => ade_types::conway::cert::DRep::KeyHash(h.clone()),
+                        ade_types::shelley::cert::StakeCredential::ScriptHash(h) => ade_types::conway::cert::DRep::ScriptHash(h.clone()),
+                    };
+                    t_drep_stake.get(&d).copied().unwrap_or(0)
                 })
                 .sum();
             let no_votes: u64 = tp.drep_votes.iter()
@@ -3574,9 +3580,11 @@ fn conway_governance_ratification_test() {
             // Check how many DRep votes have matching stake
             let matched = tp.drep_votes.iter()
                 .filter(|(cred, _)| {
-                    let k = ade_types::conway::cert::DRep::KeyHash(cred.clone());
-                    let s = ade_types::conway::cert::DRep::ScriptHash(cred.clone());
-                    t_drep_stake.contains_key(&k) || t_drep_stake.contains_key(&s)
+                    let d = match cred {
+                        ade_types::shelley::cert::StakeCredential::KeyHash(h) => ade_types::conway::cert::DRep::KeyHash(h.clone()),
+                        ade_types::shelley::cert::StakeCredential::ScriptHash(h) => ade_types::conway::cert::DRep::ScriptHash(h.clone()),
+                    };
+                    t_drep_stake.contains_key(&d)
                 })
                 .count();
             eprintln!("    votes with stake: {matched}/{}", tp.drep_votes.len());
@@ -3606,9 +3614,11 @@ fn conway_governance_ratification_test() {
             let no_stake: u64 = tp.drep_votes.iter()
                 .filter(|(_, v)| matches!(v, ade_types::conway::governance::Vote::No))
                 .map(|(cred, _)| {
-                    let k = ade_types::conway::cert::DRep::KeyHash(cred.clone());
-                    let s = ade_types::conway::cert::DRep::ScriptHash(cred.clone());
-                    t_drep_stake.get(&k).or_else(|| t_drep_stake.get(&s)).copied().unwrap_or(0)
+                    let d = match cred {
+                        ade_types::shelley::cert::StakeCredential::KeyHash(h) => ade_types::conway::cert::DRep::KeyHash(h.clone()),
+                        ade_types::shelley::cert::StakeCredential::ScriptHash(h) => ade_types::conway::cert::DRep::ScriptHash(h.clone()),
+                    };
+                    t_drep_stake.get(&d).copied().unwrap_or(0)
                 })
                 .sum();
             let abstain_votes: u64 = tp.drep_votes.iter()
