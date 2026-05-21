@@ -2476,7 +2476,8 @@ mod cert_state_dispatch {
     //! propagate; governance effects are owner-tagged out of B4 scope.
     use super::accumulate_tx_certs;
     use crate::delegation::CertState;
-    use crate::error::LedgerError;
+    use crate::error::{LedgerError, ValidationEnvironmentError};
+    use crate::state::{ConwayGovState, GovCertEnv};
     use ade_types::tx::Coin;
     use ade_types::CardanoEra;
 
@@ -2606,5 +2607,57 @@ mod cert_state_dispatch {
         let before = CertState::new();
         let (out, _gov) = accumulate_tx_certs(CardanoEra::Conway, &bytes, &before, &None, KD, None).unwrap();
         assert_eq!(out, before, "governance cert leaves B4-owned cert-state unchanged");
+    }
+
+    fn empty_gov() -> ConwayGovState {
+        ConwayGovState {
+            proposals: Vec::new(),
+            committee: std::collections::BTreeMap::new(),
+            committee_quorum: (2, 3),
+            drep_expiry: std::collections::BTreeMap::new(),
+            gov_action_lifetime: 6,
+            vote_delegations: std::collections::BTreeMap::new(),
+            pool_voting_thresholds: Vec::new(),
+            drep_voting_thresholds: Vec::new(),
+            committee_hot_keys: std::collections::BTreeMap::new(),
+        }
+    }
+
+    /// PHASE4-B5: the block-path accumulator now APPLIES the governance half — a
+    /// DRep registration lands in gov_state.drep_expiry (was observed-and-dropped
+    /// in B4). Proves the wiring accumulates, not just compiles.
+    #[test]
+    fn gov_accumulation_applies_drep_registration_into_gov_state() {
+        let bytes = cert_array(drep_reg_cert(1));
+        let gov = Some(empty_gov());
+        let env = GovCertEnv { current_epoch: 576, drep_activity: 20 };
+        let (_cs, gov_out) =
+            accumulate_tx_certs(CardanoEra::Conway, &bytes, &CertState::new(), &gov, KD, Some(&env))
+                .unwrap();
+        let g = gov_out.expect("governance tracked");
+        let cred = ade_types::Hash28([1u8; 28]);
+        assert_eq!(
+            g.drep_expiry.get(&cred),
+            Some(&(576 + 20)),
+            "DRep expiry accumulated into gov_state from the block path",
+        );
+    }
+
+    /// A governance apply error (DRep expiry needed, drep_activity absent) halts
+    /// accumulation fail-closed — never a defaulted expiry, never a swallow.
+    #[test]
+    fn gov_apply_error_halts_accumulation() {
+        let bytes = cert_array(drep_reg_cert(1));
+        let gov = Some(empty_gov());
+        let res = accumulate_tx_certs(CardanoEra::Conway, &bytes, &CertState::new(), &gov, KD, None);
+        assert!(
+            matches!(
+                res,
+                Err(LedgerError::ValidationEnvironment(
+                    ValidationEnvironmentError::MissingDRepActivityParam
+                ))
+            ),
+            "DRep accumulation with absent env must halt fail-closed",
+        );
     }
 }
