@@ -2135,7 +2135,7 @@ id = "DC-LEDGER-08"
 tier = "derived"
 statement = "Conway cert-state accumulation is a closed, total, era-versioned transition: for each block at track_utxo, certificates decode through the era-correct closed grammar (Conway via the completed single decode_conway_certs retaining all owner payloads, tags 0..18) selected by explicit era dispatch — never the Shelley 6-variant decoder on Conway bytes, never reduced into the 7-variant Shelley Certificate, never with payload fields dropped. Every certificate resolves to an owner-tagged disposition: it mutates B4-owned CertState (delegation/pool), or it is owner-tagged to ConwayGovState and routed out-of-mutation-scope (observed, not swallowed, not applied), or it is a structured reject (NotValidInEra for removed tags 5/6, Malformed for bad CBOR, UnsupportedUntilStateOwner only for genuinely-ownerless cases — unreachable on the real corpus). Composite certs (tags 10/12/13) carry both a B4-owned mutation and an owner-tagged governance effect; both are represented. No certificate is flattened to neutral because there is nowhere to put it (the owner exists), decode-dropped, or apply-swallowed; a decode or apply error propagates as a structured LedgerError and halts the block transition. Incomplete or best-effort accumulation is a forbidden fail-open. (Wiring the owner-tagged ConwayGovState effects into applied governance state is PHASE4-B5, not B4.)"
 source = "Cardano ledger spec (Conway CDDL certificate tags 0..18; delegation/pool state transitions); IDD fail-fast + closed-surface doctrine"
-cross_ref = ["DC-VAL-06", "DC-TXV-06", "DC-LEDGER-07", "T-DET-01", "CN-LEDGER-07"]
+cross_ref = ["DC-VAL-06", "DC-TXV-06", "DC-LEDGER-07", "T-DET-01", "CN-LEDGER-07", "DC-LEDGER-09"]
 code_locus = "crates/ade_types/src/conway/cert.rs (owner-complete ConwayCert); crates/ade_types/src/shelley/cert.rs (PoolRegistrationCert.owners); crates/ade_codec/src/conway/cert.rs (decode_conway_certs payload retention + decode_drep); crates/ade_codec/src/shelley/cert.rs (shared read_pool_registration_cert) — PHASE4-B4-S1 decoder-completeness clause; crates/ade_ledger/src/delegation.rs (apply_conway_cert + ConwayCertAction/ConwayCertOutcome owner-tagged apply model, total over 18 tags) — PHASE4-B4-S2 apply-totality clause"
 tests = ["each_tag_retains_owner_payloads", "drep_grammar_total", "conway_cert_action_total", "apply_outcome_agrees_with_action", "removed_tag_rejects_as_era_invalid", "drep_registration_is_owner_tagged_not_applied", "era_dispatch_conway_accumulates_via_conway_path", "era_dispatch_shelley_accumulates_via_shelley_path", "conway_decode_error_is_fail_closed", "conway_unknown_tag_is_fail_closed", "conway_removed_tag_is_fail_closed", "conway_apply_error_is_fail_closed", "conway_governance_cert_routed_out_of_scope", "positive_synthetic_cert_state_accumulates", "cert_state_replay_byte_identical", "adversarial_no_false_accept"]
 ci_script = "ci/ci_check_forbidden_patterns.sh"
@@ -2144,3 +2144,25 @@ open_obligation = "Real epoch-576 cert-state-vs-cardano-node oracle is environme
 authority_surface = "BLUE Conway cert-state accumulation"
 cluster = "CL-LEDGER-VERDICT"
 strengthened_in = ["PHASE4-B4"]
+
+# =============================================================================
+# DC-LEDGER-09 — Conway governance-certificate accumulation authority (PHASE4-B5)
+# Introduced by the PHASE4-B5 invariant sketch (docs/planning/phase4-b5-invariants.md).
+# Makes B4's owner-tagged ConwayGovState effects APPLIED rather than observed-and-
+# dropped. Strengthens DC-LEDGER-08 (retires its "routed out-of-mutation-scope"
+# disposition for governance certs). status = "declared" until B5 slices land.
+# =============================================================================
+
+[[rules]]
+id = "DC-LEDGER-09"
+tier = "derived"
+statement = """
+Conway governance-certificate accumulation is a closed, total, era-versioned transition into ConwayGovState: every governance-affecting Conway cert that B4 owner-tagged to ConwayGovState (vote-delegation tags 9/10/12/13 -> vote_delegations; committee tags 14/15 -> committee_hot_keys; DRep tags 16/17/18 -> drep_expiry) resolves to exactly one explicit ConwayGovState mutation or a structured reject -- never observed-and-dropped, never flattened, never with payload fields lost. B5 mutates only governance-owned fields; it does not touch B4-owned CertState and does not double-apply the delegation/pool half of composite certs (10/12/13). DRep expiry is computed only from an explicit gov-env (current epoch + drepActivity); a missing required env input is a structured fail-fast, never a defaulted expiry. A cert that cannot be applied propagates a structured LedgerError and halts the block transition; incomplete or best-effort accumulation is a forbidden fail-open. ConwayGovState becomes a deterministic function of (boundary-loaded base then replayed block-stream cert effects) rather than a frozen snapshot -- a deliberate, oracle-confirmable fingerprint migration (T-DET-01)."""
+source = "Cardano ledger spec (Conway CDDL gov cert tags 9..18; CONWAY CERTS/GOVCERT/COMMITTEE transitions; CIP-1694); IDD fail-fast + closed-surface doctrine"
+cross_ref = ["DC-LEDGER-08", "DC-VAL-06", "DC-TXV-06", "T-DET-01", "CN-LEDGER-07"]
+code_locus = ""
+tests = []
+ci_script = ""
+status = "declared"
+authority_surface = "BLUE Conway governance-state accumulation"
+cluster = "CL-LEDGER-VERDICT"
