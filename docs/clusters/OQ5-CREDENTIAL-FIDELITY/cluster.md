@@ -172,3 +172,16 @@ pub enum StakeCredential {
 ## Declared non-goals
 - Withdrawal / required-signer / address credential discriminant fidelity.
 - Byron credential surface.
+
+## Follow-ups (per-cluster security review; bounded to non-goal surfaces, NOT regressions)
+- **Committee member/vote discrimination (WARN MEDIUM).** `committee_hot_keys` is
+  now discriminated, but `committee` (members) and `committee_votes` stay bare
+  `Hash28` (out of OQ5 scope), so `governance.rs` committee resolution compares
+  at hash level. Sound today (committee creds don't realistically alias
+  key/script bytes). When those types are discriminated, replace the `.hash()`
+  comparisons with full-credential equality and add a (KeyHash X / ScriptHash X)
+  cross-resolution negative test.
+- **Shelley unknown-cert zero-hash placeholder (WARN LOW).** `shelley/cert.rs`
+  returns `StakeRegistration(KeyHash(zero-hash))` for unmodeled cert tags
+  (pre-existing; ignored by `apply_cert`). Close when the Shelley cert grammar is
+  closed.
