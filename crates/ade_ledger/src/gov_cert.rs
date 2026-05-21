@@ -58,7 +58,7 @@ pub fn apply_conway_gov_cert(
         | ConwayCert::StakeVoteDelegation { credential, drep, .. }
         | ConwayCert::VoteRegistrationDelegation { credential, drep, .. }
         | ConwayCert::StakeVoteRegistrationDelegation { credential, drep, .. } => {
-            gov.vote_delegations.insert(credential.0.clone(), drep.clone());
+            gov.vote_delegations.insert(credential.clone(), drep.clone());
         }
 
         // --- committee hot-key authorization: committee_hot_keys[hot] = cold ---
@@ -67,12 +67,12 @@ pub fn apply_conway_gov_cert(
             hot_credential,
         } => {
             gov.committee_hot_keys
-                .insert(hot_credential.0.clone(), cold_credential.0.clone());
+                .insert(hot_credential.clone(), cold_credential.clone());
         }
 
         // --- committee cold resignation: drop the member's hot authorization ---
         ConwayCert::ResignCommitteeCold { cold_credential } => {
-            let cold = cold_credential.0.clone();
+            let cold = cold_credential.clone();
             gov.committee_hot_keys.retain(|_hot, c| *c != cold);
         }
 
@@ -91,12 +91,12 @@ pub fn apply_conway_gov_cert(
                     ValidationEnvironmentError::DRepActivityOverflow,
                 ),
             )?;
-            gov.drep_expiry.insert(drep_credential.0.clone(), expiry);
+            gov.drep_expiry.insert(drep_credential.clone(), expiry);
         }
 
         // --- DRep unregistration: remove expiry (env-free) ---
         ConwayCert::DRepUnregistration { drep_credential, .. } => {
-            gov.drep_expiry.remove(&drep_credential.0);
+            gov.drep_expiry.remove(drep_credential);
         }
 
         // --- no governance effect: B4-owned CertState certs + removed tags ---
@@ -126,7 +126,7 @@ mod tests {
     use std::collections::BTreeMap;
 
     fn cred(b: u8) -> StakeCredential {
-        StakeCredential(Hash28([b; 28]))
+        StakeCredential::KeyHash(Hash28([b; 28]))
     }
     fn pool(b: u8) -> PoolId {
         PoolId(Hash28([b; 28]))
@@ -182,7 +182,7 @@ mod tests {
             ConwayCert::StakeVoteRegistrationDelegation { credential: cred(1), pool_id: pool(9), drep: drep.clone(), deposit: Coin(2_000_000) },
         ] {
             let out = apply_conway_gov_cert(&g, &cert, Some(&e)).unwrap();
-            assert_eq!(out.vote_delegations.get(&h(1)), Some(&drep), "{cert:?}");
+            assert_eq!(out.vote_delegations.get(&cred(1)), Some(&drep), "{cert:?}");
             assert!(out.committee_hot_keys.is_empty() && out.drep_expiry.is_empty(), "{cert:?}");
         }
 
@@ -192,20 +192,20 @@ mod tests {
             &ConwayCert::AuthCommitteeHot { cold_credential: cred(0xC0), hot_credential: cred(0x40) },
             Some(&e),
         ).unwrap();
-        assert_eq!(out.committee_hot_keys.get(&h(0x40)), Some(&h(0xC0)));
+        assert_eq!(out.committee_hot_keys.get(&cred(0x40)), Some(&cred(0xC0)));
         assert!(out.vote_delegations.is_empty() && out.drep_expiry.is_empty());
 
         // -- committee cold resignation (15): remove entries authorizing cold --
         let mut g_auth = empty_gov();
-        g_auth.committee_hot_keys.insert(h(0x40), h(0xC0));
-        g_auth.committee_hot_keys.insert(h(0x41), h(0xC1));
+        g_auth.committee_hot_keys.insert(cred(0x40), cred(0xC0));
+        g_auth.committee_hot_keys.insert(cred(0x41), cred(0xC1));
         let out = apply_conway_gov_cert(
             &g_auth,
             &ConwayCert::ResignCommitteeCold { cold_credential: cred(0xC0) },
             Some(&e),
         ).unwrap();
-        assert_eq!(out.committee_hot_keys.get(&h(0x40)), None, "0xC0 authorization removed");
-        assert_eq!(out.committee_hot_keys.get(&h(0x41)), Some(&h(0xC1)), "0xC1 untouched");
+        assert_eq!(out.committee_hot_keys.get(&cred(0x40)), None, "0xC0 authorization removed");
+        assert_eq!(out.committee_hot_keys.get(&cred(0x41)), Some(&cred(0xC1)), "0xC1 untouched");
 
         // -- DRep registration/update (16/18): drep_expiry = epoch + activity --
         for cert in [
@@ -213,18 +213,18 @@ mod tests {
             ConwayCert::DRepUpdate { drep_credential: cred(0xAA) },
         ] {
             let out = apply_conway_gov_cert(&g, &cert, Some(&e)).unwrap();
-            assert_eq!(out.drep_expiry.get(&h(0xAA)), Some(&(576 + 20)), "{cert:?}");
+            assert_eq!(out.drep_expiry.get(&cred(0xAA)), Some(&(576 + 20)), "{cert:?}");
         }
 
         // -- DRep unregistration (17): remove drep_expiry --
         let mut g_drep = empty_gov();
-        g_drep.drep_expiry.insert(h(0xAA), 600);
+        g_drep.drep_expiry.insert(cred(0xAA), 600);
         let out = apply_conway_gov_cert(
             &g_drep,
             &ConwayCert::DRepUnregistration { drep_credential: cred(0xAA), refund: Coin(500_000_000) },
             Some(&e),
         ).unwrap();
-        assert_eq!(out.drep_expiry.get(&h(0xAA)), None);
+        assert_eq!(out.drep_expiry.get(&cred(0xAA)), None);
 
         // -- CertState-only (0/2/3/4/7/8/11) + removed (5/6): gov unchanged --
         for cert in [
@@ -279,7 +279,7 @@ mod tests {
         // B5 half: gov.vote_delegations set; CertState is structurally inaccessible.
         let g = empty_gov();
         let b5 = apply_conway_gov_cert(&g, &cert, Some(&env())).unwrap();
-        assert_eq!(b5.vote_delegations.get(&h(1)), Some(&drep), "B5 applied drep half exactly once");
+        assert_eq!(b5.vote_delegations.get(&cred(1)), Some(&drep), "B5 applied drep half exactly once");
         // B5 output is a ConwayGovState only — no delegation/pool fields exist to double-apply.
     }
 
@@ -292,7 +292,7 @@ mod tests {
             &ConwayCert::DRepRegistration { drep_credential: cred(0xAA), deposit: Coin(500_000_000) },
             Some(&e),
         ).unwrap();
-        assert_eq!(out.drep_expiry.get(&h(0xAA)), Some(&107));
+        assert_eq!(out.drep_expiry.get(&cred(0xAA)), Some(&107));
     }
 
     /// Env-free certs (here: vote delegation) apply with `env = None`.
@@ -305,7 +305,7 @@ mod tests {
             &ConwayCert::VoteDelegation { credential: cred(1), drep: drep.clone() },
             None,
         ).unwrap();
-        assert_eq!(out.vote_delegations.get(&h(1)), Some(&drep));
+        assert_eq!(out.vote_delegations.get(&cred(1)), Some(&drep));
 
         // committee + DRep-unregistration are also env-free.
         let out = apply_conway_gov_cert(
@@ -313,7 +313,7 @@ mod tests {
             &ConwayCert::AuthCommitteeHot { cold_credential: cred(0xC0), hot_credential: cred(0x40) },
             None,
         ).unwrap();
-        assert_eq!(out.committee_hot_keys.get(&h(0x40)), Some(&h(0xC0)));
+        assert_eq!(out.committee_hot_keys.get(&cred(0x40)), Some(&cred(0xC0)));
     }
 
     /// DRep register/update with env absent is a structured fail-fast — never a

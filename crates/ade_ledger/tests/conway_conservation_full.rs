@@ -260,7 +260,7 @@ fn seeded_state(cred_fill: u8, recorded: u64) -> CertState {
     let mut s = CertState::new();
     s.delegation
         .registrations
-        .insert(StakeCredential(Hash28([cred_fill; 28])), Coin(recorded));
+        .insert(StakeCredential::KeyHash(Hash28([cred_fill; 28])), Coin(recorded));
     s
 }
 

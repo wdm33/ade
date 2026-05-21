@@ -87,19 +87,22 @@ pub struct ConwayGovState {
     pub committee: std::collections::BTreeMap<ade_types::Hash28, u64>,
     /// Committee quorum (numerator, denominator).
     pub committee_quorum: (u64, u64),
-    /// DRep expiry epochs: credential hash → expiry epoch.
-    pub drep_expiry: std::collections::BTreeMap<ade_types::Hash28, u64>,
+    /// DRep expiry epochs: DRep credential → expiry epoch.
+    pub drep_expiry: std::collections::BTreeMap<ade_types::shelley::cert::StakeCredential, u64>,
     /// Governance action lifetime in epochs.
     pub gov_action_lifetime: u64,
     /// Vote delegations: credential → DRep. Loaded from UMap.
-    pub vote_delegations: std::collections::BTreeMap<ade_types::Hash28, ade_types::conway::cert::DRep>,
+    pub vote_delegations: std::collections::BTreeMap<ade_types::shelley::cert::StakeCredential, ade_types::conway::cert::DRep>,
     /// Pool voting thresholds: per-action-type rationals (num, den).
     pub pool_voting_thresholds: Vec<(u64, u64)>,
     /// DRep voting thresholds: per-action-type rationals (num, den).
     pub drep_voting_thresholds: Vec<(u64, u64)>,
     /// Committee hot→cold credential mapping (from VState).
     /// Used to resolve committee vote credentials (hot) to member credentials (cold).
-    pub committee_hot_keys: std::collections::BTreeMap<ade_types::Hash28, ade_types::Hash28>,
+    pub committee_hot_keys: std::collections::BTreeMap<
+        ade_types::shelley::cert::StakeCredential,
+        ade_types::shelley::cert::StakeCredential,
+    >,
 }
 
 impl LedgerState {

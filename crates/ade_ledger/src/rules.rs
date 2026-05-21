@@ -950,7 +950,10 @@ pub fn apply_epoch_boundary_with_registrations(
             // Registration check helper: uses override set if provided,
             // falls back to PRE state registrations.
             let is_cred_registered = |h: &ade_types::Hash28| -> bool {
-                let sc = ade_types::shelley::cert::StakeCredential(h.clone());
+                // Reward-account hash from address bytes — no key/script discriminant
+                // is encoded at this boundary; the CertState registrations map is
+                // keyed the same way, so KeyHash is the consistent projection.
+                let sc = ade_types::shelley::cert::StakeCredential::KeyHash(h.clone());
                 if let Some(override_regs) = registration_override {
                     override_regs.contains_key(&sc)
                 } else {
@@ -1073,7 +1076,7 @@ pub fn apply_epoch_boundary_with_registrations(
     let mut delegation = state.cert_state.delegation.clone();
 
     for (cred, reward) in &reward_deltas {
-        let stake_cred = ade_types::shelley::cert::StakeCredential(cred.clone());
+        let stake_cred = ade_types::shelley::cert::StakeCredential::KeyHash(cred.clone());
         let is_registered = if let Some(override_regs) = registration_override {
             override_regs.contains_key(&stake_cred)
         } else {
@@ -1099,7 +1102,7 @@ pub fn apply_epoch_boundary_with_registrations(
                     .get(cred)
                     .copied()
                     .unwrap_or(ade_types::tx::Coin(0));
-                (cred.0.clone(), (pool.clone(), stake))
+                (cred.hash().clone(), (pool.clone(), stake))
             })
             .collect(),
         pool_stakes: {
@@ -1131,7 +1134,9 @@ pub fn apply_epoch_boundary_with_registrations(
                 if params.reward_account.len() >= 29 {
                     let mut cred = [0u8; 28];
                     cred.copy_from_slice(&params.reward_account[1..29]);
-                    let stake_cred = ade_types::shelley::cert::StakeCredential(
+                    // Reward-account hash from address bytes — no discriminant at
+                    // this boundary; KeyHash matches how the registrations map is keyed.
+                    let stake_cred = ade_types::shelley::cert::StakeCredential::KeyHash(
                         ade_types::Hash28(cred));
                     if delegation.registrations.contains_key(&stake_cred) {
                         // Registered — return deposit to reward account
@@ -1163,7 +1168,7 @@ pub fn apply_epoch_boundary_with_registrations(
             let mut drep_stake: crate::governance::DRepStakeDistribution =
                 std::collections::BTreeMap::new();
             for (cred, drep) in &gov.vote_delegations {
-                let stake = mark.0.delegations.get(cred)
+                let stake = mark.0.delegations.get(cred.hash())
                     .map(|(_, c)| c.0)
                     .unwrap_or(0);
                 if stake > 0 {
@@ -2635,7 +2640,7 @@ mod cert_state_dispatch {
             accumulate_tx_certs(CardanoEra::Conway, &bytes, &CertState::new(), &gov, KD, Some(&env))
                 .unwrap();
         let g = gov_out.expect("governance tracked");
-        let cred = ade_types::Hash28([1u8; 28]);
+        let cred = ade_types::shelley::cert::StakeCredential::KeyHash(ade_types::Hash28([1u8; 28]));
         assert_eq!(
             g.drep_expiry.get(&cred),
             Some(&(576 + 20)),

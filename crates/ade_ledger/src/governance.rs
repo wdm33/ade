@@ -19,6 +19,7 @@
 
 use ade_types::conway::cert::DRep;
 use ade_types::conway::governance::{GovAction, GovActionState, Vote};
+use ade_types::shelley::cert::StakeCredential;
 use ade_types::tx::Coin;
 use ade_types::Hash28;
 use crate::rational::Rational;
@@ -57,17 +58,24 @@ pub fn evaluate_ratification(
     pool_thresholds: &[(u64, u64)],   // per-action-type pool voting thresholds
     drep_thresholds: &[(u64, u64)],   // per-action-type DRep voting thresholds
     current_epoch: u64,
-    committee_hot_keys: &BTreeMap<Hash28, Hash28>, // hot → cold mapping
-    drep_expiry: &BTreeMap<Hash28, u64>, // DRep credential → expiry epoch
+    committee_hot_keys: &BTreeMap<StakeCredential, StakeCredential>, // hot → cold mapping
+    drep_expiry: &BTreeMap<StakeCredential, u64>, // DRep credential → expiry epoch
 ) -> RatificationResult {
     // Filter DRep stake: exclude AlwaysAbstain AND inactive DReps
     let active_drep_stake: DRepStakeDistribution = drep_stake.iter()
         .filter(|(drep, _)| {
             match drep {
                 DRep::AlwaysAbstain => false,
-                DRep::KeyHash(h) | DRep::ScriptHash(h) => {
-                    drep_expiry.get(h).map(|e| *e >= current_epoch).unwrap_or(true)
-                }
+                // A DRep's key/script discriminant maps to the matching credential
+                // variant — the drep_expiry map is keyed by the discriminated credential.
+                DRep::KeyHash(h) => drep_expiry
+                    .get(&StakeCredential::KeyHash(h.clone()))
+                    .map(|e| *e >= current_epoch)
+                    .unwrap_or(true),
+                DRep::ScriptHash(h) => drep_expiry
+                    .get(&StakeCredential::ScriptHash(h.clone()))
+                    .map(|e| *e >= current_epoch)
+                    .unwrap_or(true),
                 _ => true,
             }
         })
@@ -174,7 +182,7 @@ fn check_ratification(
     pool_thresholds: &[(u64, u64)],
     drep_thresholds: &[(u64, u64)],
     current_epoch: u64,
-    committee_hot_keys: &BTreeMap<Hash28, Hash28>,
+    committee_hot_keys: &BTreeMap<StakeCredential, StakeCredential>,
 ) -> bool {
     let (pool_idx, drep_idx) = action_thresholds;
 
@@ -194,8 +202,16 @@ fn check_ratification(
                     if !matches!(vote, Vote::Yes) { return false; }
                     // Resolve hot→cold. If mapping exists, check cold is active member.
                     // If no mapping, fall back to counting all Yes votes.
-                    if let Some(cold) = committee_hot_keys.get(hot_cred) {
-                        active_members.iter().any(|(c, _)| *c == cold)
+                    // Committee votes carry a bare hot-key hash (no discriminant), so
+                    // the discriminated committee_hot_keys is matched on its hash; the
+                    // resolved cold credential is likewise compared by hash against the
+                    // Hash28-keyed committee member set.
+                    if let Some(cold) = committee_hot_keys
+                        .iter()
+                        .find(|(hot, _)| hot.hash() == hot_cred)
+                        .map(|(_, cold)| cold)
+                    {
+                        active_members.iter().any(|(c, _)| **c == *cold.hash())
                     } else {
                         // No hot key mapping — count vote if we have enough votes
                         // (fallback for when VState parsing doesn't cover all keys)

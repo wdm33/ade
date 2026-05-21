@@ -119,7 +119,7 @@ fn decode_single_certificate(
             // Return as StakeRegistration with zero hash as a safe fallback.
             // This is a compromise — Conway certs (7+) will hit this path.
             // They'll be ignored by apply_cert which only handles Shelley types.
-            Ok(Certificate::StakeRegistration(StakeCredential(Hash28([0u8; 28]))))
+            Ok(Certificate::StakeRegistration(StakeCredential::KeyHash(Hash28([0u8; 28]))))
         }
     }
 }
@@ -139,9 +139,17 @@ fn decode_stake_credential(
         }
     }
 
-    let (_tag, _) = cbor::read_uint(data, offset)?;
+    let tag_offset = *offset;
+    let (tag, _) = cbor::read_uint(data, offset)?;
     let hash = read_hash28(data, offset)?;
-    Ok(StakeCredential(hash))
+    match tag {
+        0 => Ok(StakeCredential::KeyHash(hash)),
+        1 => Ok(StakeCredential::ScriptHash(hash)),
+        _ => Err(CodecError::InvalidCborStructure {
+            offset: tag_offset,
+            detail: "unknown stake credential type",
+        }),
+    }
 }
 
 /// Decode `pool_params` (era-stable across Shelley..Conway) into the shared

@@ -233,9 +233,17 @@ fn decode_stake_credential(
             });
         }
     }
-    let (_cred_type, _) = cbor::read_uint(data, offset)?;
+    let cred_type_offset = *offset;
+    let (cred_type, _) = cbor::read_uint(data, offset)?;
     let hash = read_hash28(data, offset)?;
-    Ok(StakeCredential(hash))
+    match cred_type {
+        0 => Ok(StakeCredential::KeyHash(hash)),
+        1 => Ok(StakeCredential::ScriptHash(hash)),
+        _ => Err(CodecError::InvalidCborStructure {
+            offset: cred_type_offset,
+            detail: "unknown stake credential type",
+        }),
+    }
 }
 
 /// Decode a `drep = [0, addr_keyhash // 1, script_hash // 2 // 3]` delegation

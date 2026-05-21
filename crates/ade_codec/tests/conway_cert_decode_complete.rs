@@ -115,7 +115,7 @@ fn each_tag_retains_owner_payloads() {
     h28(&mut b, POOL);
     match decode_one(b) {
         ConwayCert::StakeDelegation { credential, pool_id } => {
-            assert_eq!(credential.0, h(CRED));
+            assert_eq!(*credential.hash(), h(CRED));
             assert_eq!(pool_id.0, h(POOL));
         }
         other => panic!("tag 2 → {other:?}"),
@@ -161,7 +161,7 @@ fn each_tag_retains_owner_payloads() {
     drep_key(&mut b, DREPK);
     match decode_one(b) {
         ConwayCert::VoteDelegation { credential, drep } => {
-            assert_eq!(credential.0, h(CRED));
+            assert_eq!(*credential.hash(), h(CRED));
             assert_eq!(drep, DRep::KeyHash(h(DREPK)));
         }
         other => panic!("tag 9 → {other:?}"),
@@ -176,7 +176,7 @@ fn each_tag_retains_owner_payloads() {
     drep_key(&mut b, DREPK);
     match decode_one(b) {
         ConwayCert::StakeVoteDelegation { credential, pool_id, drep } => {
-            assert_eq!(credential.0, h(CRED));
+            assert_eq!(*credential.hash(), h(CRED));
             assert_eq!(pool_id.0, h(POOL));
             assert_eq!(drep, DRep::KeyHash(h(DREPK)));
         }
@@ -193,7 +193,7 @@ fn each_tag_retains_owner_payloads() {
     uint(&mut b, 2_000_000);
     match decode_one(b) {
         ConwayCert::StakeVoteRegistrationDelegation { credential, pool_id, drep, deposit } => {
-            assert_eq!(credential.0, h(CRED));
+            assert_eq!(*credential.hash(), h(CRED));
             assert_eq!(pool_id.0, h(POOL));
             assert_eq!(drep, DRep::KeyHash(h(DREPK)));
             assert_eq!(deposit.0, 2_000_000);
@@ -209,8 +209,8 @@ fn each_tag_retains_owner_payloads() {
     cred(&mut b, HOT);
     match decode_one(b) {
         ConwayCert::AuthCommitteeHot { cold_credential, hot_credential } => {
-            assert_eq!(cold_credential.0, h(COLD));
-            assert_eq!(hot_credential.0, h(HOT));
+            assert_eq!(*cold_credential.hash(), h(COLD));
+            assert_eq!(*hot_credential.hash(), h(HOT));
         }
         other => panic!("tag 14 → {other:?}"),
     }
@@ -223,7 +223,7 @@ fn each_tag_retains_owner_payloads() {
     b.push(0xf6); // anchor = null
     match decode_one(b) {
         ConwayCert::ResignCommitteeCold { cold_credential } => {
-            assert_eq!(cold_credential.0, h(COLD));
+            assert_eq!(*cold_credential.hash(), h(COLD));
         }
         other => panic!("tag 15 → {other:?}"),
     }
@@ -237,7 +237,7 @@ fn each_tag_retains_owner_payloads() {
     b.push(0xf6);
     match decode_one(b) {
         ConwayCert::DRepRegistration { drep_credential, deposit } => {
-            assert_eq!(drep_credential.0, h(DREPK));
+            assert_eq!(*drep_credential.hash(), h(DREPK));
             assert_eq!(deposit.0, 500_000_000);
         }
         other => panic!("tag 16 → {other:?}"),
@@ -251,7 +251,7 @@ fn each_tag_retains_owner_payloads() {
     b.push(0xf6);
     match decode_one(b) {
         ConwayCert::DRepUpdate { drep_credential } => {
-            assert_eq!(drep_credential.0, h(DREPK));
+            assert_eq!(*drep_credential.hash(), h(DREPK));
         }
         other => panic!("tag 18 → {other:?}"),
     }
@@ -310,4 +310,57 @@ fn drep_grammar_total() {
     arr(&mut arr_buf, 1);
     arr_buf.extend_from_slice(&b);
     assert!(decode_conway_certs(&arr_buf).is_err(), "unknown drep variant must reject");
+}
+
+/// A credential `array(2) [type_tag, bytes(28)]` with an explicit type tag.
+fn cred_tag(buf: &mut Vec<u8>, tag: u64, marker: u8) {
+    arr(buf, 2);
+    uint(buf, tag);
+    h28(buf, marker);
+}
+
+#[test]
+fn conway_credential_preserves_discriminant() {
+    use ade_types::shelley::cert::StakeCredential;
+
+    // tag 0 → KeyHash
+    let mut b = Vec::new();
+    arr(&mut b, 2);
+    uint(&mut b, 0); // AccountRegistration
+    cred_tag(&mut b, 0, CRED);
+    match decode_one(b) {
+        ConwayCert::AccountRegistration { credential } => {
+            assert_eq!(credential, StakeCredential::KeyHash(h(CRED)));
+        }
+        other => panic!("expected AccountRegistration, got {other:?}"),
+    }
+
+    // tag 1 → ScriptHash, same 28 bytes is a distinct credential
+    let mut b = Vec::new();
+    arr(&mut b, 2);
+    uint(&mut b, 0);
+    cred_tag(&mut b, 1, CRED);
+    match decode_one(b) {
+        ConwayCert::AccountRegistration { credential } => {
+            assert_eq!(credential, StakeCredential::ScriptHash(h(CRED)));
+            assert_ne!(credential, StakeCredential::KeyHash(h(CRED)));
+        }
+        other => panic!("expected AccountRegistration, got {other:?}"),
+    }
+}
+
+#[test]
+fn unknown_credential_tag_rejects() {
+    // Credential type tag 2 is not key/script — deterministic reject, no tag drop.
+    let mut b = Vec::new();
+    arr(&mut b, 2);
+    uint(&mut b, 0); // AccountRegistration
+    cred_tag(&mut b, 2, CRED);
+    let mut arr_buf = Vec::new();
+    arr(&mut arr_buf, 1);
+    arr_buf.extend_from_slice(&b);
+    assert!(
+        decode_conway_certs(&arr_buf).is_err(),
+        "unknown stake credential type tag must reject deterministically"
+    );
 }

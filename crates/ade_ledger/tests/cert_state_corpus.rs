@@ -116,7 +116,7 @@ fn positive_sequence() -> Vec<u8> {
 #[test]
 fn positive_synthetic_cert_state_accumulates() {
     let state = accumulate(&positive_sequence()).expect("balanced sequence accumulates");
-    let c1 = ade_types::shelley::cert::StakeCredential(ade_types::Hash28([1u8; 28]));
+    let c1 = ade_types::shelley::cert::StakeCredential::KeyHash(ade_types::Hash28([1u8; 28]));
     let p9 = ade_types::tx::PoolId(ade_types::Hash28([9u8; 28]));
     assert!(state.delegation.registrations.contains_key(&c1), "key registered");
     assert!(state.pool.pools.contains_key(&p9), "pool registered");

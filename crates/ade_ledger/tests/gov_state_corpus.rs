@@ -38,7 +38,7 @@ use ade_types::{CardanoEra, Hash28};
 use std::collections::BTreeMap;
 
 fn cred(b: u8) -> StakeCredential {
-    StakeCredential(Hash28([b; 28]))
+    StakeCredential::KeyHash(Hash28([b; 28]))
 }
 fn h(b: u8) -> Hash28 {
     Hash28([b; 28])
@@ -90,9 +90,9 @@ fn positive_sequence() -> Vec<ConwayCert> {
 #[test]
 fn positive_synthetic_gov_state_accumulates() {
     let gov = accumulate_gov(&base_gov(), &positive_sequence(), Some(&env())).unwrap();
-    assert_eq!(gov.vote_delegations.get(&h(1)), Some(&DRep::KeyHash(h(0xDD))), "vote delegation");
-    assert_eq!(gov.committee_hot_keys.get(&h(0x40)), Some(&h(0xC0)), "committee hot key");
-    assert_eq!(gov.drep_expiry.get(&h(0xAA)), Some(&(576 + 20)), "DRep expiry = epoch + activity");
+    assert_eq!(gov.vote_delegations.get(&cred(1)), Some(&DRep::KeyHash(h(0xDD))), "vote delegation");
+    assert_eq!(gov.committee_hot_keys.get(&cred(0x40)), Some(&cred(0xC0)), "committee hot key");
+    assert_eq!(gov.drep_expiry.get(&cred(0xAA)), Some(&(576 + 20)), "DRep expiry = epoch + activity");
 }
 
 #[test]
@@ -197,11 +197,11 @@ fn adversarial_double_resign_is_deterministic() {
     // Resigning the same cold credential twice is idempotent and deterministic:
     // the first removes the hot authorization, the second is a no-op.
     let mut g = base_gov();
-    g.committee_hot_keys.insert(h(0x40), h(0xC0));
+    g.committee_hot_keys.insert(cred(0x40), cred(0xC0));
     let resign = ConwayCert::ResignCommitteeCold { cold_credential: cred(0xC0) };
 
     let once = accumulate_gov(&g, &[resign.clone()], Some(&env())).unwrap();
     let twice = accumulate_gov(&g, &[resign.clone(), resign.clone()], Some(&env())).unwrap();
-    assert_eq!(once.committee_hot_keys.get(&h(0x40)), None, "first resign clears authorization");
+    assert_eq!(once.committee_hot_keys.get(&cred(0x40)), None, "first resign clears authorization");
     assert_eq!(once, twice, "double resign is idempotent and deterministic");
 }

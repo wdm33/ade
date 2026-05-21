@@ -506,7 +506,7 @@ mod tests {
     use ade_types::shelley::cert::{MIRCert, MIRPot};
 
     fn make_cred(byte: u8) -> StakeCredential {
-        StakeCredential(Hash28([byte; 28]))
+        StakeCredential::KeyHash(Hash28([byte; 28]))
     }
 
     fn make_pool_id(byte: u8) -> PoolId {
@@ -898,7 +898,7 @@ mod conway_apply {
     use ade_types::Hash28;
 
     fn cred(b: u8) -> StakeCredential {
-        StakeCredential(Hash28([b; 28]))
+        StakeCredential::KeyHash(Hash28([b; 28]))
     }
     fn pool(b: u8) -> PoolId {
         PoolId(Hash28([b; 28]))

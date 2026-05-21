@@ -41,9 +41,25 @@ pub enum Certificate {
     MIRTransfer(MIRCert),
 }
 
-/// Staking credential — a 28-byte hash identifying a stake key.
+/// Staking credential — a closed sum over key-hash and script-hash, each a
+/// 28-byte hash. `Ord` derives lexicographically over (variant, hash), so a
+/// key-hash and a script-hash sharing the same 28 bytes are distinct keys.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash)]
-pub struct StakeCredential(pub Hash28);
+pub enum StakeCredential {
+    KeyHash(Hash28),
+    ScriptHash(Hash28),
+}
+
+impl StakeCredential {
+    /// The 28-byte hash, discriminant-erased. ONLY for boundary adapters that
+    /// genuinely key on bare bytes (stake-distribution snapshot, addresses) —
+    /// never to re-key authoritative cert/gov state.
+    pub fn hash(&self) -> &Hash28 {
+        match self {
+            StakeCredential::KeyHash(h) | StakeCredential::ScriptHash(h) => h,
+        }
+    }
+}
 
 /// Full pool registration certificate parameters.
 #[derive(Debug, Clone, PartialEq, Eq)]

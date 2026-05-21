@@ -109,7 +109,7 @@ mod tests {
     }
 
     fn cred(byte: u8) -> StakeCredential {
-        StakeCredential(Hash28([byte; 28]))
+        StakeCredential::KeyHash(Hash28([byte; 28]))
     }
 
     fn pool(byte: u8) -> PoolId {

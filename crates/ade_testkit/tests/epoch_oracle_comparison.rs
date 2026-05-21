@@ -3320,7 +3320,7 @@ fn conway_governance_ratification_test() {
             let mut ds = std::collections::BTreeMap::new();
             let go = &p_pre_state.epoch_state.snapshots.go;
             for (cred, drep) in &p_pre_gov.vote_delegations {
-                let stake = go.0.delegations.get(cred).map(|(_, c)| c.0).unwrap_or(0);
+                let stake = go.0.delegations.get(cred.hash()).map(|(_, c)| c.0).unwrap_or(0);
                 if stake > 0 { *ds.entry(drep.clone()).or_insert(0) += stake; }
             }
             ds
@@ -3414,7 +3414,7 @@ fn conway_governance_ratification_test() {
             let mut ds = std::collections::BTreeMap::new();
             let go = &t_pre_state.epoch_state.snapshots.go;
             for (cred, drep) in &t_pre_gov.vote_delegations {
-                let stake = go.0.delegations.get(cred).map(|(_, c)| c.0).unwrap_or(0);
+                let stake = go.0.delegations.get(cred.hash()).map(|(_, c)| c.0).unwrap_or(0);
                 if stake > 0 { *ds.entry(drep.clone()).or_insert(0) += stake; }
             }
             ds
@@ -3423,7 +3423,7 @@ fn conway_governance_ratification_test() {
             let mut ds = std::collections::BTreeMap::new();
             let mark = &t_pre_state.epoch_state.snapshots.mark;
             for (cred, drep) in &t_pre_gov.vote_delegations {
-                let stake = mark.0.delegations.get(cred).map(|(_, c)| c.0).unwrap_or(0);
+                let stake = mark.0.delegations.get(cred.hash()).map(|(_, c)| c.0).unwrap_or(0);
                 if stake > 0 { *ds.entry(drep.clone()).or_insert(0) += stake; }
             }
             ds
@@ -3432,7 +3432,7 @@ fn conway_governance_ratification_test() {
             let mut ds = std::collections::BTreeMap::new();
             let set = &t_pre_state.epoch_state.snapshots.set;
             for (cred, drep) in &t_pre_gov.vote_delegations {
-                let stake = set.0.delegations.get(cred).map(|(_, c)| c.0).unwrap_or(0);
+                let stake = set.0.delegations.get(cred.hash()).map(|(_, c)| c.0).unwrap_or(0);
                 if stake > 0 { *ds.entry(drep.clone()).or_insert(0) += stake; }
             }
             ds
@@ -3452,13 +3452,16 @@ fn conway_governance_ratification_test() {
             for (cred, drep) in &t_pre_gov.vote_delegations {
                 // Only include if the DRep is registered
                 let drep_registered = match drep {
-                    ade_types::conway::cert::DRep::KeyHash(h) | ade_types::conway::cert::DRep::ScriptHash(h) => {
-                        t_pre_drep_regs.contains_key(h)
+                    ade_types::conway::cert::DRep::KeyHash(h) => {
+                        t_pre_drep_regs.contains_key(&ade_types::shelley::cert::StakeCredential::KeyHash(h.clone()))
+                    }
+                    ade_types::conway::cert::DRep::ScriptHash(h) => {
+                        t_pre_drep_regs.contains_key(&ade_types::shelley::cert::StakeCredential::ScriptHash(h.clone()))
                     }
                     _ => true, // AlwaysAbstain/AlwaysNoConfidence always count
                 };
                 if !drep_registered { continue; }
-                let stake = mark.0.delegations.get(cred).map(|(_, c)| c.0).unwrap_or(0);
+                let stake = mark.0.delegations.get(cred.hash()).map(|(_, c)| c.0).unwrap_or(0);
                 if stake > 0 { *ds.entry(drep.clone()).or_insert(0) += stake; }
             }
             ds
@@ -3582,8 +3585,11 @@ fn conway_governance_ratification_test() {
             let active_drep_stake: u64 = t_drep_stake.iter()
                 .filter(|(drep, _)| {
                     match drep {
-                        ade_types::conway::cert::DRep::KeyHash(h) | ade_types::conway::cert::DRep::ScriptHash(h) => {
-                            t_pre_gov.drep_expiry.get(h).map(|e| *e >= 576).unwrap_or(true)
+                        ade_types::conway::cert::DRep::KeyHash(h) => {
+                            t_pre_gov.drep_expiry.get(&ade_types::shelley::cert::StakeCredential::KeyHash(h.clone())).map(|e| *e >= 576).unwrap_or(true)
+                        }
+                        ade_types::conway::cert::DRep::ScriptHash(h) => {
+                            t_pre_gov.drep_expiry.get(&ade_types::shelley::cert::StakeCredential::ScriptHash(h.clone())).map(|e| *e >= 576).unwrap_or(true)
                         }
                         _ => true,
                     }
@@ -3716,7 +3722,7 @@ fn conway_epoch_boundary_end_to_end() {
             .collect();
     // Also add all go delegation credentials (some operators may not be in registrations)
     for k in pre_state.epoch_state.snapshots.go.0.delegations.keys() {
-        all_registered.insert(ade_types::shelley::cert::StakeCredential(k.clone()), ());
+        all_registered.insert(ade_types::shelley::cert::StakeCredential::KeyHash(k.clone()), ());
     }
 
     for (label, regs) in [("PRE", None), ("ALL", Some(&all_registered))] {
@@ -3792,7 +3798,7 @@ fn conway_epoch_boundary_end_to_end() {
                     if bytes.len() == 28 {
                         let mut h = [0u8; 28];
                         h.copy_from_slice(&bytes);
-                        Some((ade_types::shelley::cert::StakeCredential(ade_types::Hash28(h)), ()))
+                        Some((ade_types::shelley::cert::StakeCredential::KeyHash(ade_types::Hash28(h)), ()))
                     } else { None }
                 })
                 .collect()
@@ -3935,7 +3941,7 @@ fn alonzo_epoch_boundary_end_to_end() {
         Ok(c) => {
             eprintln!("  registered credentials (POST): {}", c.len());
             let btree: std::collections::BTreeMap<ade_types::shelley::cert::StakeCredential, ()> =
-                c.iter().map(|h| (ade_types::shelley::cert::StakeCredential(h.clone()), ())).collect();
+                c.iter().map(|h| (ade_types::shelley::cert::StakeCredential::KeyHash(h.clone()), ())).collect();
             btree
         },
         Err(e) => {
@@ -3951,11 +3957,11 @@ fn alonzo_epoch_boundary_end_to_end() {
     let go_deleg_count = pre_state.epoch_state.snapshots.go.0.delegations.len();
     let go_in_pre_regs = pre_state.epoch_state.snapshots.go.0.delegations.keys()
         .filter(|k| pre_state.cert_state.delegation.registrations.contains_key(
-            &ade_types::shelley::cert::StakeCredential((*k).clone())))
+            &ade_types::shelley::cert::StakeCredential::KeyHash((*k).clone())))
         .count();
     let go_in_post_regs = pre_state.epoch_state.snapshots.go.0.delegations.keys()
         .filter(|k| post_registered.contains_key(
-            &ade_types::shelley::cert::StakeCredential((*k).clone())))
+            &ade_types::shelley::cert::StakeCredential::KeyHash((*k).clone())))
         .count();
     eprintln!("  go delegators: {} in_PRE_regs={} in_POST_regs={}",
         go_deleg_count, go_in_pre_regs, go_in_post_regs);
@@ -4005,7 +4011,7 @@ fn alonzo_epoch_boundary_end_to_end() {
                     if bytes.len() == 28 {
                         let mut h = [0u8; 28];
                         h.copy_from_slice(&bytes);
-                        Some((ade_types::shelley::cert::StakeCredential(ade_types::Hash28(h)), ()))
+                        Some((ade_types::shelley::cert::StakeCredential::KeyHash(ade_types::Hash28(h)), ()))
                     } else { None }
                 })
                 .collect();

@@ -283,7 +283,7 @@ fn fingerprint_governance(gov: Option<&ConwayGovState>) -> Hash32 {
             // 4. drep_expiry
             write_map_canonical(&mut buf, g.drep_expiry.len() as u64);
             for (cred, expiry) in &g.drep_expiry {
-                write_hash28(&mut buf, cred);
+                write_stake_credential(&mut buf, cred);
                 write_uint_canonical(&mut buf, *expiry);
             }
 
@@ -293,7 +293,7 @@ fn fingerprint_governance(gov: Option<&ConwayGovState>) -> Hash32 {
             // 6. vote_delegations
             write_map_canonical(&mut buf, g.vote_delegations.len() as u64);
             for (cred, drep) in &g.vote_delegations {
-                write_hash28(&mut buf, cred);
+                write_stake_credential(&mut buf, cred);
                 write_drep(&mut buf, drep);
             }
 
@@ -316,8 +316,8 @@ fn fingerprint_governance(gov: Option<&ConwayGovState>) -> Hash32 {
             // 9. committee_hot_keys
             write_map_canonical(&mut buf, g.committee_hot_keys.len() as u64);
             for (hot, cold) in &g.committee_hot_keys {
-                write_hash28(&mut buf, hot);
-                write_hash28(&mut buf, cold);
+                write_stake_credential(&mut buf, hot);
+                write_stake_credential(&mut buf, cold);
             }
         }
     }
@@ -392,7 +392,16 @@ fn write_pool_id(buf: &mut Vec<u8>, pool: &PoolId) {
 }
 
 fn write_stake_credential(buf: &mut Vec<u8>, cred: &StakeCredential) {
-    write_hash28(buf, &cred.0);
+    match cred {
+        StakeCredential::KeyHash(h) => {
+            write_uint_canonical(buf, 0);
+            write_hash28(buf, h);
+        }
+        StakeCredential::ScriptHash(h) => {
+            write_uint_canonical(buf, 1);
+            write_hash28(buf, h);
+        }
+    }
 }
 
 fn write_i64_cbor(buf: &mut Vec<u8>, value: i64) {
@@ -781,6 +790,65 @@ mod tests {
         assert_ne!(f_absent.governance, f_present.governance);
         assert_eq!(f_absent.utxo, f_present.utxo);
         assert_eq!(f_absent.pparams, f_present.pparams);
+    }
+
+    /// OQ5-S1: a key-hash credential and a script-hash credential over identical
+    /// 28 bytes fingerprint differently — the discriminant is serialized. Proven
+    /// on the cert component (registrations) and the governance component
+    /// (drep_expiry); the change isolates to the affected component.
+    #[test]
+    fn discriminant_changes_fingerprint() {
+        use ade_types::shelley::cert::StakeCredential;
+
+        let bytes = Hash28([0x42; 28]);
+
+        // Cert component: registration keyed by KeyHash vs ScriptHash.
+        let mut s_key = LedgerState::new(CardanoEra::Conway);
+        s_key
+            .cert_state
+            .delegation
+            .registrations
+            .insert(StakeCredential::KeyHash(bytes.clone()), Coin(2_000_000));
+        let mut s_script = LedgerState::new(CardanoEra::Conway);
+        s_script
+            .cert_state
+            .delegation
+            .registrations
+            .insert(StakeCredential::ScriptHash(bytes.clone()), Coin(2_000_000));
+
+        let f_key = fingerprint(&s_key);
+        let f_script = fingerprint(&s_script);
+        assert_ne!(
+            f_key.cert, f_script.cert,
+            "cert fingerprint must distinguish key-hash from script-hash credential"
+        );
+        assert_ne!(f_key.combined, f_script.combined);
+
+        // Governance component: drep_expiry keyed by KeyHash vs ScriptHash.
+        let gov = |cred: StakeCredential| {
+            let mut s = LedgerState::new(CardanoEra::Conway);
+            let mut drep_expiry = BTreeMap::new();
+            drep_expiry.insert(cred, 600u64);
+            s.gov_state = Some(ConwayGovState {
+                proposals: Vec::new(),
+                committee: BTreeMap::new(),
+                committee_quorum: (2, 3),
+                drep_expiry,
+                gov_action_lifetime: 6,
+                vote_delegations: BTreeMap::new(),
+                pool_voting_thresholds: Vec::new(),
+                drep_voting_thresholds: Vec::new(),
+                committee_hot_keys: BTreeMap::new(),
+            });
+            s
+        };
+        let g_key = fingerprint(&gov(StakeCredential::KeyHash(bytes.clone())));
+        let g_script = fingerprint(&gov(StakeCredential::ScriptHash(bytes.clone())));
+        assert_ne!(
+            g_key.governance, g_script.governance,
+            "gov fingerprint must distinguish key-hash from script-hash credential"
+        );
+        assert_ne!(g_key.combined, g_script.combined);
     }
 
     #[test]
