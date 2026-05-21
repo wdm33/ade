@@ -82,10 +82,16 @@ pub fn apply_conway_gov_cert(
             let env = env.ok_or(LedgerError::ValidationEnvironment(
                 ValidationEnvironmentError::MissingDRepActivityParam,
             ))?;
-            gov.drep_expiry.insert(
-                drep_credential.0.clone(),
-                env.current_epoch + env.drep_activity,
-            );
+            // Checked: a DRep-activity param large enough to overflow u64 is an
+            // ill-formed environment — deterministic halt, never a silent wrap to
+            // a wrong expiry (matches the ledger's checked/saturating arithmetic
+            // convention for authoritative state).
+            let expiry = env.current_epoch.checked_add(env.drep_activity).ok_or(
+                LedgerError::ValidationEnvironment(
+                    ValidationEnvironmentError::DRepActivityOverflow,
+                ),
+            )?;
+            gov.drep_expiry.insert(drep_credential.0.clone(), expiry);
         }
 
         // --- DRep unregistration: remove expiry (env-free) ---
@@ -324,6 +330,26 @@ mod tests {
                 err,
                 LedgerError::ValidationEnvironment(
                     ValidationEnvironmentError::MissingDRepActivityParam
+                )
+            ), "{cert:?}");
+        }
+    }
+
+    /// A `drep_activity` large enough to overflow the DRep-expiry sum is a
+    /// deterministic fail-closed halt — never a silent wrap to a wrong expiry.
+    #[test]
+    fn drep_expiry_overflow_is_fail_closed() {
+        let g = empty_gov();
+        let e = GovCertEnv { current_epoch: 10, drep_activity: u64::MAX };
+        for cert in [
+            ConwayCert::DRepRegistration { drep_credential: cred(0xAA), deposit: Coin(500_000_000) },
+            ConwayCert::DRepUpdate { drep_credential: cred(0xAA) },
+        ] {
+            let err = apply_conway_gov_cert(&g, &cert, Some(&e)).unwrap_err();
+            assert!(matches!(
+                err,
+                LedgerError::ValidationEnvironment(
+                    ValidationEnvironmentError::DRepActivityOverflow
                 )
             ), "{cert:?}");
         }

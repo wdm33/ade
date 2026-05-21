@@ -252,3 +252,16 @@ Color is resolved; no open color questions.
   committee member is a tx-validity (GOVCERT) concern, separable from gov-state
   accumulation; a future `DC-TXV` strengthening. B5 accumulates unconditionally
   (OQ-3).
+- **Credential key/script discriminant (OQ-5)** — `ConwayGovState` keys gov state
+  on bare `Hash28`; the codec collapses the credential key/script discriminant
+  (pre-existing decoder behavior, untouched by B5, but newly promoted to
+  *authority* by B5). cardano-node keys on the full discriminated `Credential`.
+  Carrying the discriminant into `StakeCredential`/`DRep` is a cross-cutting
+  follow-up (touches the whole credential surface); recorded in DC-LEDGER-09's
+  `open_obligation` per the per-cluster security review. 28-byte collision is not
+  cheaply forgeable.
+
+## Slice B5-S5 (hardening, post-review)
+- Added at cluster-close after the per-cluster security review raised a BLOCK on
+  unchecked DRep-expiry arithmetic. `checked_add` + `DRepActivityOverflow`
+  fail-fast + tests + CI guard. See `B5-S5.md`.

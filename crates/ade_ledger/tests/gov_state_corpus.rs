@@ -172,6 +172,27 @@ fn adversarial_decode_layer_rejects_guard_gov_path() {
 }
 
 #[test]
+fn adversarial_drep_expiry_overflow_rejected() {
+    // An absurd drep_activity (overflowing current_epoch + drep_activity) is a
+    // deterministic fail-closed halt, never a silent wrap to a wrong expiry.
+    let e = GovCertEnv { current_epoch: 10, drep_activity: u64::MAX };
+    let res = accumulate_gov(
+        &base_gov(),
+        &[ConwayCert::DRepRegistration { drep_credential: cred(0xAA), deposit: Coin(500_000_000) }],
+        Some(&e),
+    );
+    assert!(
+        matches!(
+            res,
+            Err(LedgerError::ValidationEnvironment(
+                ValidationEnvironmentError::DRepActivityOverflow
+            ))
+        ),
+        "overflowing DRep expiry must reject fail-closed",
+    );
+}
+
+#[test]
 fn adversarial_double_resign_is_deterministic() {
     // Resigning the same cold credential twice is idempotent and deterministic:
     // the first removes the hot authorization, the second is a no-op.

@@ -130,6 +130,11 @@ pub enum ValidationEnvironmentError {
     /// state. Never defaulted — a DRep expiry is never fabricated from a missing
     /// activity period (PHASE4-B5).
     MissingDRepActivityParam,
+    /// A DRep expiry computation `current_epoch + drep_activity` overflowed
+    /// `u64` — only reachable with an absurd `drep_activity` parameter (an
+    /// ill-formed environment). A deterministic halt, never a silent wrap to a
+    /// wrong expiry (PHASE4-B5).
+    DRepActivityOverflow,
 }
 
 /// A Conway certificate carries a deposit/refund effect whose coin amount
@@ -702,6 +707,9 @@ impl core::fmt::Display for LedgerError {
                 }
                 ValidationEnvironmentError::MissingDRepActivityParam => {
                     write!(f, "validation environment: Conway drep_activity param absent from state")
+                }
+                ValidationEnvironmentError::DRepActivityOverflow => {
+                    write!(f, "validation environment: DRep expiry current_epoch + drep_activity overflowed u64")
                 }
             },
         }

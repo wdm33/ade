@@ -43,6 +43,16 @@ if grep -Eq '^\s*_\s*=>' "$GOV_CERT"; then
     echo "FAIL: gov_cert.rs has a catch-all '_ =>' arm — the gov dispatch must stay exhaustive"
     FAIL=1
 fi
+# DRep expiry must use checked arithmetic — a bare `current_epoch + drep_activity`
+# would wrap silently in release (no overflow-checks profile) instead of halting.
+if grep -E 'current_epoch[[:space:]]*\+' "$GOV_CERT" | grep -vE '^[[:space:]]*//' | grep -q .; then
+    echo "FAIL: gov_cert.rs computes DRep expiry with unchecked '+' — use checked_add (deterministic fail-closed)"
+    FAIL=1
+fi
+if ! grep -q 'checked_add' "$GOV_CERT"; then
+    echo "FAIL: gov_cert.rs DRep expiry does not use checked_add"
+    FAIL=1
+fi
 
 # 2. B4 observe-and-drop is gone; accumulate_tx_certs applies the gov half.
 if grep -q 'routed out of B4 mutation scope' "$RULES"; then
