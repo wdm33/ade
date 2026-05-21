@@ -528,4 +528,46 @@ mod committee_fidelity_tests {
             [(key(0xCC), 1000u64)].into_iter().collect();
         assert!(ratifies(&matching), "matching-variant member ratifies (discriminant is the only difference)");
     }
+
+    /// A ParameterChange proposal with one DRep Yes vote from KeyHash(0x11);
+    /// committee empty (skipped), pool absent. The DRep gate (need 50% of the
+    /// 1000 active stake) is the sole determinant.
+    fn ratifies_drep(drep_stake: &DRepStakeDistribution) -> bool {
+        let mut p = proposal_with_committee_yes();
+        p.committee_votes = Vec::new();
+        p.drep_votes = vec![(key(0x11), Vote::Yes)];
+        let no_committee: BTreeMap<StakeCredential, u64> = BTreeMap::new();
+        let no_hot: BTreeMap<StakeCredential, StakeCredential> = BTreeMap::new();
+        let no_pool: BTreeMap<ade_types::tx::PoolId, Coin> = BTreeMap::new();
+        let quorum = Rational::new(1, 1).unwrap();
+        check_ratification(
+            &p,
+            (None, Some(0)), // drep_idx = 0; pool_idx absent
+            &1000,           // total_drep_active_stake
+            drep_stake,
+            0,
+            &no_pool,
+            &no_committee, // committee empty -> committee gate skipped
+            &quorum,
+            &[],          // pool_thresholds (unused, pool_idx None)
+            &[(1, 2)],    // drep_thresholds[0] = 50%
+            0,
+            &no_hot,
+        )
+    }
+
+    /// CE-2 (no cross-resolve): a key-hash DRep voter (resolving to DRep::KeyHash)
+    /// must NOT tally a ScriptHash DRep's stake of equal bytes — yes-stake is 0,
+    /// the DRep threshold fails, ratification is denied.
+    #[test]
+    fn drep_keyhash_scripthash_do_not_cross_resolve() {
+        let cross: DRepStakeDistribution =
+            [(DRep::ScriptHash(Hash28([0x11; 28])), 1000u64)].into_iter().collect();
+        assert!(!ratifies_drep(&cross), "key-hash DRep voter must not tally a script-hash DRep's stake of equal bytes");
+
+        // Positive control: the matching KeyHash(0x11) DRep holds the stake.
+        let matching: DRepStakeDistribution =
+            [(DRep::KeyHash(Hash28([0x11; 28])), 1000u64)].into_iter().collect();
+        assert!(ratifies_drep(&matching), "matching-variant DRep stake ratifies (discriminant is the only difference)");
+    }
 }

@@ -83,6 +83,44 @@ fn keyhash_scripthash_same_bytes_are_distinct_govstate() {
     assert_eq!(g.vote_delegations.get(&script(7)), Some(&DRep::AlwaysNoConfidence));
 }
 
+/// DREP-VOTE-FIDELITY CE-3: two proposals differing only in a DRep voter's
+/// key/script discriminant fingerprint differently (drep_votes carry the
+/// discriminated credential through write_credential_vote_list).
+#[test]
+fn drep_vote_discriminant_changes_fingerprint() {
+    use ade_types::conway::governance::{GovAction, GovActionId, GovActionState, Vote};
+    use ade_types::{EpochNo, Hash32};
+
+    fn proposal_with_drep_voter(voter: StakeCredential) -> GovActionState {
+        GovActionState {
+            action_id: GovActionId { tx_hash: Hash32([0u8; 32]), index: 0 },
+            committee_votes: Vec::new(),
+            drep_votes: vec![(voter, Vote::Yes)],
+            spo_votes: Vec::new(),
+            deposit: Coin(0),
+            return_addr: Vec::new(),
+            gov_action: GovAction::InfoAction,
+            proposed_in: EpochNo(0),
+            expires_after: EpochNo(100),
+        }
+    }
+
+    let mut g_key = base_gov();
+    g_key.proposals = vec![proposal_with_drep_voter(key(7))];
+    let mut g_script = base_gov();
+    g_script.proposals = vec![proposal_with_drep_voter(script(7))];
+
+    let mut s_key = LedgerState::new(CardanoEra::Conway);
+    s_key.gov_state = Some(g_key);
+    let mut s_script = LedgerState::new(CardanoEra::Conway);
+    s_script.gov_state = Some(g_script);
+    assert_ne!(
+        ade_ledger::fingerprint::fingerprint(&s_key).governance,
+        ade_ledger::fingerprint::fingerprint(&s_script).governance,
+        "DRep voter discriminant must change the fingerprint",
+    );
+}
+
 /// COMMITTEE-CRED-FIDELITY CE-3: a key-hash and a script-hash committee member
 /// over identical 28 bytes are distinct members — no collapse.
 #[test]

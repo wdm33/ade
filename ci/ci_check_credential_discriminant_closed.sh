@@ -77,7 +77,21 @@ if [ -f "$GOVTYPE" ] && ! grep -qE 'pub committee_votes:.*StakeCredential' "$GOV
     FAIL=1
 fi
 
+# 5. DRep-voter surface stays discriminated (DREP-VOTE-FIDELITY, strengthens
+#    DC-LEDGER-10): drep_votes carries StakeCredential, and DRep stake resolution
+#    has NO key/script OR-fallback (a key-hash voter must not tally a script-hash
+#    DRep's stake of equal bytes).
+GOVLOGIC="$REPO_ROOT/crates/ade_ledger/src/governance.rs"
+if [ -f "$GOVTYPE" ] && ! grep -qE 'pub drep_votes:.*StakeCredential' "$GOVTYPE"; then
+    echo "FAIL: GovActionState.drep_votes does not carry StakeCredential (DRep voter discriminant lost)"
+    FAIL=1
+fi
+if [ -f "$GOVLOGIC" ] && grep -qE 'DRep::KeyHash\([^)]*\)\)?\s*\.or_else' "$GOVLOGIC"; then
+    echo "FAIL: governance.rs has a DRep key/script OR-fallback (cross-resolution) — resolve to the exact variant"
+    FAIL=1
+fi
+
 if [ "$FAIL" -eq 0 ]; then
-    echo "PASS: DC-LEDGER-10 credential discriminant is closed and faithful (incl. committee surface)"
+    echo "PASS: DC-LEDGER-10 credential discriminant is closed and faithful (incl. committee + DRep-vote surfaces)"
 fi
 exit "$FAIL"
