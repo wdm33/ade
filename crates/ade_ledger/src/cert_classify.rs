@@ -48,8 +48,8 @@ pub fn classify(
 
         // tag 3 — pool registration: a new deposit only when the pool is new;
         // re-registration is an update with no tx-time deposit.
-        ConwayCert::PoolRegistration { pool_id } => {
-            if registration_state.pool.pools.contains_key(pool_id) {
+        ConwayCert::PoolRegistration(cert) => {
+            if registration_state.pool.pools.contains_key(&cert.pool_id) {
                 CertDisposition::Neutral
             } else {
                 CertDisposition::Accountable(DepositEffect::NewDeposit(CoinSource::DepositParam(
@@ -59,30 +59,30 @@ pub fn classify(
         }
 
         // Explicit-deposit registration variants — coin carried in the cert.
-        ConwayCert::AccountRegistrationDeposit { deposit }
-        | ConwayCert::StakeRegistrationDelegation { deposit }
-        | ConwayCert::VoteRegistrationDelegation { deposit }
-        | ConwayCert::StakeVoteRegistrationDelegation { deposit }
-        | ConwayCert::DRepRegistration { deposit } => CertDisposition::Accountable(
+        ConwayCert::AccountRegistrationDeposit { deposit, .. }
+        | ConwayCert::StakeRegistrationDelegation { deposit, .. }
+        | ConwayCert::VoteRegistrationDelegation { deposit, .. }
+        | ConwayCert::StakeVoteRegistrationDelegation { deposit, .. }
+        | ConwayCert::DRepRegistration { deposit, .. } => CertDisposition::Accountable(
             DepositEffect::NewDeposit(CoinSource::ExplicitInCert(*deposit)),
         ),
 
         // Explicit-refund variants — coin carried in the cert.
-        ConwayCert::AccountUnregistrationDeposit { refund } => CertDisposition::Accountable(
+        ConwayCert::AccountUnregistrationDeposit { refund, .. } => CertDisposition::Accountable(
             DepositEffect::Refund(CoinSource::ExplicitInCert(*refund)),
         ),
-        ConwayCert::DRepUnregistration { refund } => CertDisposition::Accountable(
+        ConwayCert::DRepUnregistration { refund, .. } => CertDisposition::Accountable(
             DepositEffect::Refund(CoinSource::ExplicitInCert(*refund)),
         ),
 
         // Neutral certs — no tx-time conservation effect.
-        ConwayCert::StakeDelegation
-        | ConwayCert::PoolRetirement
-        | ConwayCert::VoteDelegation
-        | ConwayCert::StakeVoteDelegation
-        | ConwayCert::AuthCommitteeHot
-        | ConwayCert::ResignCommitteeCold
-        | ConwayCert::DRepUpdate => CertDisposition::Neutral,
+        ConwayCert::StakeDelegation { .. }
+        | ConwayCert::PoolRetirement { .. }
+        | ConwayCert::VoteDelegation { .. }
+        | ConwayCert::StakeVoteDelegation { .. }
+        | ConwayCert::AuthCommitteeHot { .. }
+        | ConwayCert::ResignCommitteeCold { .. }
+        | ConwayCert::DRepUpdate { .. } => CertDisposition::Neutral,
 
         // Era-validity reject — known-but-removed tags (5/6).
         ConwayCert::RemovedInConway { .. } => CertDisposition::NotValidInConway,
@@ -94,9 +94,10 @@ pub fn classify(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use ade_types::shelley::cert::StakeCredential;
+    use ade_types::conway::cert::DRep;
+    use ade_types::shelley::cert::{PoolRegistrationCert, StakeCredential};
     use ade_types::tx::{Coin, PoolId};
-    use ade_types::Hash28;
+    use ade_types::{EpochNo, Hash28};
 
     fn params() -> ConwayDepositParams {
         ConwayDepositParams {
@@ -115,6 +116,18 @@ mod tests {
         PoolId(Hash28([byte; 28]))
     }
 
+    fn preg(byte: u8) -> PoolRegistrationCert {
+        PoolRegistrationCert {
+            pool_id: pool(byte),
+            vrf_hash: ade_types::Hash32([0u8; 32]),
+            pledge: Coin(0),
+            cost: Coin(0),
+            margin: (0, 1),
+            reward_account: vec![],
+            owners: vec![],
+        }
+    }
+
     /// Every `ConwayCert` variant, enumerated. If a variant is added without a
     /// classifier arm, `classify` fails to compile (exhaustive match); if a
     /// variant is added without being listed here, this slice's totality test
@@ -123,23 +136,40 @@ mod tests {
         vec![
             ConwayCert::AccountRegistration { credential: cred(1) },
             ConwayCert::AccountUnregistration { credential: cred(1) },
-            ConwayCert::StakeDelegation,
-            ConwayCert::PoolRegistration { pool_id: pool(9) },
-            ConwayCert::PoolRetirement,
+            ConwayCert::StakeDelegation { credential: cred(1), pool_id: pool(9) },
+            ConwayCert::PoolRegistration(preg(9)),
+            ConwayCert::PoolRetirement { pool_id: pool(9), epoch: EpochNo(500) },
             ConwayCert::RemovedInConway { tag: 5 },
             ConwayCert::RemovedInConway { tag: 6 },
-            ConwayCert::AccountRegistrationDeposit { deposit: Coin(2_000_000) },
-            ConwayCert::AccountUnregistrationDeposit { refund: Coin(2_000_000) },
-            ConwayCert::VoteDelegation,
-            ConwayCert::StakeVoteDelegation,
-            ConwayCert::StakeRegistrationDelegation { deposit: Coin(2_000_000) },
-            ConwayCert::VoteRegistrationDelegation { deposit: Coin(2_000_000) },
-            ConwayCert::StakeVoteRegistrationDelegation { deposit: Coin(2_000_000) },
-            ConwayCert::AuthCommitteeHot,
-            ConwayCert::ResignCommitteeCold,
-            ConwayCert::DRepRegistration { deposit: Coin(500_000_000) },
-            ConwayCert::DRepUnregistration { refund: Coin(500_000_000) },
-            ConwayCert::DRepUpdate,
+            ConwayCert::AccountRegistrationDeposit { credential: cred(1), deposit: Coin(2_000_000) },
+            ConwayCert::AccountUnregistrationDeposit { credential: cred(1), refund: Coin(2_000_000) },
+            ConwayCert::VoteDelegation { credential: cred(1), drep: DRep::AlwaysAbstain },
+            ConwayCert::StakeVoteDelegation {
+                credential: cred(1),
+                pool_id: pool(9),
+                drep: DRep::AlwaysAbstain,
+            },
+            ConwayCert::StakeRegistrationDelegation {
+                credential: cred(1),
+                pool_id: pool(9),
+                deposit: Coin(2_000_000),
+            },
+            ConwayCert::VoteRegistrationDelegation {
+                credential: cred(1),
+                drep: DRep::AlwaysAbstain,
+                deposit: Coin(2_000_000),
+            },
+            ConwayCert::StakeVoteRegistrationDelegation {
+                credential: cred(1),
+                pool_id: pool(9),
+                drep: DRep::AlwaysAbstain,
+                deposit: Coin(2_000_000),
+            },
+            ConwayCert::AuthCommitteeHot { cold_credential: cred(1), hot_credential: cred(2) },
+            ConwayCert::ResignCommitteeCold { cold_credential: cred(1) },
+            ConwayCert::DRepRegistration { drep_credential: cred(1), deposit: Coin(500_000_000) },
+            ConwayCert::DRepUnregistration { drep_credential: cred(1), refund: Coin(500_000_000) },
+            ConwayCert::DRepUpdate { drep_credential: cred(1) },
         ]
     }
 
@@ -219,7 +249,7 @@ mod tests {
                 owners: vec![],
             },
         );
-        let cert = ConwayCert::PoolRegistration { pool_id: pool(9) };
+        let cert = ConwayCert::PoolRegistration(preg(9));
         let result = classify(&cert, &params, &state);
         assert_eq!(result, Ok(CertDisposition::Neutral));
     }
@@ -228,7 +258,7 @@ mod tests {
     fn pool_new_registration_charges_pool_deposit() {
         let params = params();
         let state = CertState::new();
-        let cert = ConwayCert::PoolRegistration { pool_id: pool(9) };
+        let cert = ConwayCert::PoolRegistration(preg(9));
         let result = classify(&cert, &params, &state);
         assert_eq!(
             result,

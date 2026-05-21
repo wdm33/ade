@@ -60,6 +60,10 @@ pub struct PoolRegistrationCert {
     pub margin: (u64, u64),
     /// Reward account address (raw bytes).
     pub reward_account: Vec<u8>,
+    /// Pool owner stake key hashes (`pool_owners = set<addr_keyhash>`). Retained
+    /// for cert-state accumulation (`PoolParams.owners`); relays and pool
+    /// metadata are not stored by any authoritative owner and remain dropped.
+    pub owners: Vec<Hash28>,
 }
 
 /// Move Instantaneous Rewards certificate — transfers from a pot to stake credentials.

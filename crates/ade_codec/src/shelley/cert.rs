@@ -80,43 +80,15 @@ fn decode_single_certificate(
             })
         }
         3 => {
-            let pool_id = read_pool_id(data, offset)?;
-            let vrf_hash = crate::byron::read_hash32(data, offset)?;
-            let (pledge, _) = cbor::read_uint(data, offset)?;
-            let (cost, _) = cbor::read_uint(data, offset)?;
+            let cert = read_pool_registration_cert(data, offset)?;
 
-            // Margin: tag(30, [numerator, denominator])
-            let _ = cbor::read_tag(data, offset)?;
-            let margin_enc = cbor::read_array_header(data, offset)?;
-            match margin_enc {
-                ContainerEncoding::Definite(2, _) => {}
-                _ => {
-                    return Err(CodecError::InvalidCborStructure {
-                        offset: *offset,
-                        detail: "pool margin must be array(2)",
-                    });
-                }
-            }
-            let (margin_num, _) = cbor::read_uint(data, offset)?;
-            let (margin_den, _) = cbor::read_uint(data, offset)?;
-
-            // Reward account
-            let (reward_account, _) = cbor::read_bytes(data, offset)?;
-
-            // Skip remaining fields (owners, relays, metadata)
-            // Jump to end of cert array
+            // Relays and pool metadata are not stored by any authoritative owner;
+            // jump to the end of the cert array to consume them.
             *offset = cert_start;
             let (_, end) = cbor::skip_item(data, offset)?;
             *offset = end;
 
-            Ok(Certificate::PoolRegistration(PoolRegistrationCert {
-                pool_id,
-                vrf_hash,
-                pledge: Coin(pledge),
-                cost: Coin(cost),
-                margin: (margin_num, margin_den),
-                reward_account,
-            }))
+            Ok(Certificate::PoolRegistration(cert))
         }
         4 => {
             let pool_id = read_pool_id(data, offset)?;
@@ -170,6 +142,78 @@ fn decode_stake_credential(
     let (_tag, _) = cbor::read_uint(data, offset)?;
     let hash = read_hash28(data, offset)?;
     Ok(StakeCredential(hash))
+}
+
+/// Decode `pool_params` (era-stable across Shelley..Conway) into the shared
+/// [`PoolRegistrationCert`], retaining `pool_owners`. Reads up to and including
+/// `pool_owners`; the caller consumes any trailing relays/metadata (not stored
+/// by any authoritative owner) by skipping the enclosing cert array. This is the
+/// single pool-registration param decoder, shared by the Shelley and Conway
+/// certificate decoders.
+pub(crate) fn read_pool_registration_cert(
+    data: &[u8],
+    offset: &mut usize,
+) -> Result<PoolRegistrationCert, CodecError> {
+    let pool_id = read_pool_id(data, offset)?;
+    let vrf_hash = crate::byron::read_hash32(data, offset)?;
+    let (pledge, _) = cbor::read_uint(data, offset)?;
+    let (cost, _) = cbor::read_uint(data, offset)?;
+
+    // Margin: tag(30, [numerator, denominator])
+    let _ = cbor::read_tag(data, offset)?;
+    let margin_enc = cbor::read_array_header(data, offset)?;
+    match margin_enc {
+        ContainerEncoding::Definite(2, _) => {}
+        _ => {
+            return Err(CodecError::InvalidCborStructure {
+                offset: *offset,
+                detail: "pool margin must be array(2)",
+            });
+        }
+    }
+    let (margin_num, _) = cbor::read_uint(data, offset)?;
+    let (margin_den, _) = cbor::read_uint(data, offset)?;
+
+    let (reward_account, _) = cbor::read_bytes(data, offset)?;
+    let owners = read_addr_keyhash_set(data, offset)?;
+
+    Ok(PoolRegistrationCert {
+        pool_id,
+        vrf_hash,
+        pledge: Coin(pledge),
+        cost: Coin(cost),
+        margin: (margin_num, margin_den),
+        reward_account,
+        owners,
+    })
+}
+
+/// Decode `set<addr_keyhash>` — an optional tag(258) wrapper around a (definite
+/// or indefinite) array of 28-byte key hashes. Preallocation is bounded by the
+/// remaining input (parity with the cert-array decoder).
+fn read_addr_keyhash_set(data: &[u8], offset: &mut usize) -> Result<Vec<Hash28>, CodecError> {
+    if cbor::peek_major(data, *offset)? == 6 {
+        let _ = cbor::read_tag(data, offset)?;
+    }
+    let enc = cbor::read_array_header(data, offset)?;
+    let owners = match enc {
+        ContainerEncoding::Definite(n, _) => {
+            let mut v = Vec::with_capacity((n as usize).min(data.len()));
+            for _ in 0..n {
+                v.push(read_hash28(data, offset)?);
+            }
+            v
+        }
+        ContainerEncoding::Indefinite => {
+            let mut v = Vec::new();
+            while !cbor::is_break(data, *offset)? {
+                v.push(read_hash28(data, offset)?);
+            }
+            *offset += 1; // consume break
+            v
+        }
+    };
+    Ok(owners)
 }
 
 fn read_pool_id(data: &[u8], offset: &mut usize) -> Result<PoolId, CodecError> {

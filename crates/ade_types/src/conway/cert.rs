@@ -5,17 +5,21 @@
 // - Explicit state transitions only
 // - Canonical serialization for all persisted/hashed data
 
-use crate::shelley::cert::StakeCredential;
+use crate::shelley::cert::{PoolRegistrationCert, StakeCredential};
 use crate::tx::{Coin, PoolId};
+use crate::EpochNo;
 
 /// Closed Conway certificate grammar over CDDL tags `0..18`.
 ///
-/// Only the deposit/refund-relevant fields are retained; every other field is
-/// structurally consumed during decode and dropped. There is no catch-all
-/// accept arm: unknown tags reject at decode and tags `5`/`6`
-/// (genesis-key-delegation / MIR, removed in Conway) decode to
-/// [`ConwayCert::RemovedInConway`] so the classifier maps them to a distinct
-/// era-validity disposition rather than an accept.
+/// **Owner-complete** (PHASE4-B4): every field any authoritative owner needs is
+/// retained — stake/DRep/committee credentials, pool id, full pool parameters,
+/// and DRep delegation targets — alongside the deposit/refund fields used by the
+/// B3 value-conservation projection. Fields no authoritative owner stores
+/// (certificate anchors, pool relays, pool metadata) are structurally consumed
+/// during decode and dropped. There is no catch-all accept arm: unknown tags
+/// reject at decode and tags `5`/`6` (genesis-key-delegation / MIR, removed in
+/// Conway) decode to [`ConwayCert::RemovedInConway`] so the classifier maps them
+/// to a distinct era-validity disposition rather than an accept.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ConwayCert {
     /// tag 0 — `account_registration_cert` (legacy, implicit key deposit).
@@ -23,37 +27,75 @@ pub enum ConwayCert {
     /// tag 1 — `account_unregistration_cert` (legacy, implicit refund).
     AccountUnregistration { credential: StakeCredential },
     /// tag 2 — `delegation_to_stake_pool_cert`.
-    StakeDelegation,
+    StakeDelegation {
+        credential: StakeCredential,
+        pool_id: PoolId,
+    },
     /// tag 3 — `pool_registration_cert` (new-vs-update is resolved against state).
-    PoolRegistration { pool_id: PoolId },
+    PoolRegistration(PoolRegistrationCert),
     /// tag 4 — `pool_retirement_cert` (refund happens at POOLREAP, not tx-time).
-    PoolRetirement,
+    PoolRetirement { pool_id: PoolId, epoch: EpochNo },
     /// tags 5/6 — genesis-key-delegation / MIR, structurally removed in Conway.
     RemovedInConway { tag: u64 },
     /// tag 7 — `account_registration_deposit_cert` (explicit deposit).
-    AccountRegistrationDeposit { deposit: Coin },
+    AccountRegistrationDeposit {
+        credential: StakeCredential,
+        deposit: Coin,
+    },
     /// tag 8 — `account_unregistration_deposit_cert` (explicit refund).
-    AccountUnregistrationDeposit { refund: Coin },
+    AccountUnregistrationDeposit {
+        credential: StakeCredential,
+        refund: Coin,
+    },
     /// tag 9 — `delegation_to_drep_cert`.
-    VoteDelegation,
+    VoteDelegation {
+        credential: StakeCredential,
+        drep: DRep,
+    },
     /// tag 10 — `delegation_to_stake_pool_and_drep_cert`.
-    StakeVoteDelegation,
+    StakeVoteDelegation {
+        credential: StakeCredential,
+        pool_id: PoolId,
+        drep: DRep,
+    },
     /// tag 11 — `account_registration_delegation_to_stake_pool_cert` (explicit deposit).
-    StakeRegistrationDelegation { deposit: Coin },
+    StakeRegistrationDelegation {
+        credential: StakeCredential,
+        pool_id: PoolId,
+        deposit: Coin,
+    },
     /// tag 12 — `account_registration_delegation_to_drep_cert` (explicit deposit).
-    VoteRegistrationDelegation { deposit: Coin },
+    VoteRegistrationDelegation {
+        credential: StakeCredential,
+        drep: DRep,
+        deposit: Coin,
+    },
     /// tag 13 — `account_registration_delegation_to_stake_pool_and_drep_cert` (explicit deposit).
-    StakeVoteRegistrationDelegation { deposit: Coin },
+    StakeVoteRegistrationDelegation {
+        credential: StakeCredential,
+        pool_id: PoolId,
+        drep: DRep,
+        deposit: Coin,
+    },
     /// tag 14 — `committee_authorization_cert`.
-    AuthCommitteeHot,
-    /// tag 15 — `committee_resignation_cert`.
-    ResignCommitteeCold,
-    /// tag 16 — `drep_registration_cert` (explicit deposit).
-    DRepRegistration { deposit: Coin },
+    AuthCommitteeHot {
+        cold_credential: StakeCredential,
+        hot_credential: StakeCredential,
+    },
+    /// tag 15 — `committee_resignation_cert` (anchor consumed, not retained).
+    ResignCommitteeCold { cold_credential: StakeCredential },
+    /// tag 16 — `drep_registration_cert` (explicit deposit; anchor consumed).
+    DRepRegistration {
+        drep_credential: StakeCredential,
+        deposit: Coin,
+    },
     /// tag 17 — `drep_unregistration_cert` (explicit refund).
-    DRepUnregistration { refund: Coin },
-    /// tag 18 — `drep_update_cert`.
-    DRepUpdate,
+    DRepUnregistration {
+        drep_credential: StakeCredential,
+        refund: Coin,
+    },
+    /// tag 18 — `drep_update_cert` (anchor consumed, not retained).
+    DRepUpdate { drep_credential: StakeCredential },
 }
 
 /// Closed disposition taxonomy for a single Conway certificate.

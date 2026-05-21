@@ -7,9 +7,10 @@
 
 use crate::cbor::{self, ContainerEncoding};
 use crate::error::CodecError;
-use ade_types::conway::cert::ConwayCert;
+use ade_types::conway::cert::{ConwayCert, DRep};
 use ade_types::shelley::cert::StakeCredential;
 use ade_types::tx::{Coin, PoolId};
+use ade_types::EpochNo;
 use ade_types::Hash28;
 
 /// Decode a Conway certificate array (tx body key 4) into the closed
@@ -90,57 +91,117 @@ fn decode_single_cert(data: &[u8], offset: &mut usize) -> Result<ConwayCert, Cod
             let credential = decode_stake_credential(data, offset)?;
             ConwayCert::AccountUnregistration { credential }
         }
-        2 => ConwayCert::StakeDelegation,
-        3 => {
+        2 => {
+            let credential = decode_stake_credential(data, offset)?;
             let pool_id = read_pool_id(data, offset)?;
-            ConwayCert::PoolRegistration { pool_id }
+            ConwayCert::StakeDelegation { credential, pool_id }
         }
-        4 => ConwayCert::PoolRetirement,
+        3 => {
+            // Reuse the single shared pool_params decoder (era-stable, PO-1).
+            let cert = crate::shelley::cert::read_pool_registration_cert(data, offset)?;
+            ConwayCert::PoolRegistration(cert)
+        }
+        4 => {
+            let pool_id = read_pool_id(data, offset)?;
+            let (epoch, _) = cbor::read_uint(data, offset)?;
+            ConwayCert::PoolRetirement {
+                pool_id,
+                epoch: EpochNo(epoch),
+            }
+        }
         5 | 6 => ConwayCert::RemovedInConway { tag },
         7 => {
-            let _credential = decode_stake_credential(data, offset)?;
+            let credential = decode_stake_credential(data, offset)?;
             let deposit = read_coin(data, offset)?;
-            ConwayCert::AccountRegistrationDeposit { deposit }
+            ConwayCert::AccountRegistrationDeposit { credential, deposit }
         }
         8 => {
-            let _credential = decode_stake_credential(data, offset)?;
+            let credential = decode_stake_credential(data, offset)?;
             let refund = read_coin(data, offset)?;
-            ConwayCert::AccountUnregistrationDeposit { refund }
+            ConwayCert::AccountUnregistrationDeposit { credential, refund }
         }
-        9 => ConwayCert::VoteDelegation,
-        10 => ConwayCert::StakeVoteDelegation,
+        9 => {
+            let credential = decode_stake_credential(data, offset)?;
+            let drep = decode_drep(data, offset)?;
+            ConwayCert::VoteDelegation { credential, drep }
+        }
+        10 => {
+            let credential = decode_stake_credential(data, offset)?;
+            let pool_id = read_pool_id(data, offset)?;
+            let drep = decode_drep(data, offset)?;
+            ConwayCert::StakeVoteDelegation {
+                credential,
+                pool_id,
+                drep,
+            }
+        }
         11 => {
-            let _credential = decode_stake_credential(data, offset)?;
-            let _pool = read_hash28(data, offset)?;
+            let credential = decode_stake_credential(data, offset)?;
+            let pool_id = read_pool_id(data, offset)?;
             let deposit = read_coin(data, offset)?;
-            ConwayCert::StakeRegistrationDelegation { deposit }
+            ConwayCert::StakeRegistrationDelegation {
+                credential,
+                pool_id,
+                deposit,
+            }
         }
         12 => {
-            let _credential = decode_stake_credential(data, offset)?;
-            skip_drep(data, offset)?;
+            let credential = decode_stake_credential(data, offset)?;
+            let drep = decode_drep(data, offset)?;
             let deposit = read_coin(data, offset)?;
-            ConwayCert::VoteRegistrationDelegation { deposit }
+            ConwayCert::VoteRegistrationDelegation {
+                credential,
+                drep,
+                deposit,
+            }
         }
         13 => {
-            let _credential = decode_stake_credential(data, offset)?;
-            let _pool = read_hash28(data, offset)?;
-            skip_drep(data, offset)?;
+            let credential = decode_stake_credential(data, offset)?;
+            let pool_id = read_pool_id(data, offset)?;
+            let drep = decode_drep(data, offset)?;
             let deposit = read_coin(data, offset)?;
-            ConwayCert::StakeVoteRegistrationDelegation { deposit }
+            ConwayCert::StakeVoteRegistrationDelegation {
+                credential,
+                pool_id,
+                drep,
+                deposit,
+            }
         }
-        14 => ConwayCert::AuthCommitteeHot,
-        15 => ConwayCert::ResignCommitteeCold,
+        14 => {
+            let cold_credential = decode_stake_credential(data, offset)?;
+            let hot_credential = decode_stake_credential(data, offset)?;
+            ConwayCert::AuthCommitteeHot {
+                cold_credential,
+                hot_credential,
+            }
+        }
+        15 => {
+            let cold_credential = decode_stake_credential(data, offset)?;
+            // anchor/nil: consumed by the trailing cert-array skip below.
+            ConwayCert::ResignCommitteeCold { cold_credential }
+        }
         16 => {
-            let _drep_credential = decode_stake_credential(data, offset)?;
+            let drep_credential = decode_stake_credential(data, offset)?;
             let deposit = read_coin(data, offset)?;
-            ConwayCert::DRepRegistration { deposit }
+            // anchor/nil: consumed by the trailing cert-array skip below.
+            ConwayCert::DRepRegistration {
+                drep_credential,
+                deposit,
+            }
         }
         17 => {
-            let _drep_credential = decode_stake_credential(data, offset)?;
+            let drep_credential = decode_stake_credential(data, offset)?;
             let refund = read_coin(data, offset)?;
-            ConwayCert::DRepUnregistration { refund }
+            ConwayCert::DRepUnregistration {
+                drep_credential,
+                refund,
+            }
         }
-        18 => ConwayCert::DRepUpdate,
+        18 => {
+            let drep_credential = decode_stake_credential(data, offset)?;
+            // anchor/nil: consumed by the trailing cert-array skip below.
+            ConwayCert::DRepUpdate { drep_credential }
+        }
         _ => {
             return Err(CodecError::UnknownCertTag {
                 tag,
@@ -177,9 +238,35 @@ fn decode_stake_credential(
     Ok(StakeCredential(hash))
 }
 
-fn skip_drep(data: &[u8], offset: &mut usize) -> Result<(), CodecError> {
-    let _ = cbor::skip_item(data, offset)?;
-    Ok(())
+/// Decode a `drep = [0, addr_keyhash // 1, script_hash // 2 // 3]` delegation
+/// target into the closed [`DRep`] grammar. No catch-all: an unknown DRep
+/// variant tag rejects deterministically.
+fn decode_drep(data: &[u8], offset: &mut usize) -> Result<DRep, CodecError> {
+    let enc = cbor::read_array_header(data, offset)?;
+    match enc {
+        ContainerEncoding::Definite(n, _) if n >= 1 => {}
+        _ => {
+            return Err(CodecError::InvalidCborStructure {
+                offset: *offset,
+                detail: "drep must be a non-empty definite-length array",
+            });
+        }
+    }
+    let variant_offset = *offset;
+    let (variant, _) = cbor::read_uint(data, offset)?;
+    let drep = match variant {
+        0 => DRep::KeyHash(read_hash28(data, offset)?),
+        1 => DRep::ScriptHash(read_hash28(data, offset)?),
+        2 => DRep::AlwaysAbstain,
+        3 => DRep::AlwaysNoConfidence,
+        _ => {
+            return Err(CodecError::InvalidCborStructure {
+                offset: variant_offset,
+                detail: "unknown drep variant tag",
+            });
+        }
+    };
+    Ok(drep)
 }
 
 fn read_coin(data: &[u8], offset: &mut usize) -> Result<Coin, CodecError> {

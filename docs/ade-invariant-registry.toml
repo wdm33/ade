@@ -2129,3 +2129,17 @@ status = "enforced"
 authority_surface = "BLUE Conway deposit parameter authority"
 cluster = "CL-LEDGER-VERDICT"
 strengthened_in = ["PHASE4-B3"]
+
+[[rules]]
+id = "DC-LEDGER-08"
+tier = "derived"
+statement = "Conway cert-state accumulation is a closed, total, era-versioned transition: for each block at track_utxo, certificates decode through the era-correct closed grammar (Conway via the completed single decode_conway_certs retaining all owner payloads, tags 0..18) selected by explicit era dispatch — never the Shelley 6-variant decoder on Conway bytes, never reduced into the 7-variant Shelley Certificate, never with payload fields dropped. Every certificate resolves to an owner-tagged disposition: it mutates B4-owned CertState (delegation/pool), or it is owner-tagged to ConwayGovState and routed out-of-mutation-scope (observed, not swallowed, not applied), or it is a structured reject (NotValidInEra for removed tags 5/6, Malformed for bad CBOR, UnsupportedUntilStateOwner only for genuinely-ownerless cases — unreachable on the real corpus). Composite certs (tags 10/12/13) carry both a B4-owned mutation and an owner-tagged governance effect; both are represented. No certificate is flattened to neutral because there is nowhere to put it (the owner exists), decode-dropped, or apply-swallowed; a decode or apply error propagates as a structured LedgerError and halts the block transition. Incomplete or best-effort accumulation is a forbidden fail-open. (Wiring the owner-tagged ConwayGovState effects into applied governance state is PHASE4-B5, not B4.)"
+source = "Cardano ledger spec (Conway CDDL certificate tags 0..18; delegation/pool state transitions); IDD fail-fast + closed-surface doctrine"
+cross_ref = ["DC-VAL-06", "DC-TXV-06", "DC-LEDGER-07", "T-DET-01", "CN-LEDGER-07"]
+code_locus = "crates/ade_types/src/conway/cert.rs (owner-complete ConwayCert); crates/ade_types/src/shelley/cert.rs (PoolRegistrationCert.owners); crates/ade_codec/src/conway/cert.rs (decode_conway_certs payload retention + decode_drep); crates/ade_codec/src/shelley/cert.rs (shared read_pool_registration_cert) — PHASE4-B4-S1 decoder-completeness clause"
+tests = ["each_tag_retains_owner_payloads", "drep_grammar_total"]
+ci_script = ""
+status = "declared"
+authority_surface = "BLUE Conway cert-state accumulation"
+cluster = "CL-LEDGER-VERDICT"
+strengthened_in = ["PHASE4-B4"]

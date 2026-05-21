@@ -308,6 +308,7 @@ mod tests {
             cost: Coin(340_000_000),
             margin: (1, 100),
             reward_account: vec![0xe0, byte],
+            owners: vec![Hash28([byte; 28])],
         }
     }
 

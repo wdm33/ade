@@ -282,13 +282,13 @@ fn category(cert: &ConwayCert) -> &'static str {
         ConwayCert::AccountUnregistration { .. }
         | ConwayCert::AccountUnregistrationDeposit { .. }
         | ConwayCert::DRepUnregistration { .. } => "Refund",
-        ConwayCert::StakeDelegation
-        | ConwayCert::PoolRetirement
-        | ConwayCert::VoteDelegation
-        | ConwayCert::StakeVoteDelegation
-        | ConwayCert::AuthCommitteeHot
-        | ConwayCert::ResignCommitteeCold
-        | ConwayCert::DRepUpdate => "Neutral",
+        ConwayCert::StakeDelegation { .. }
+        | ConwayCert::PoolRetirement { .. }
+        | ConwayCert::VoteDelegation { .. }
+        | ConwayCert::StakeVoteDelegation { .. }
+        | ConwayCert::AuthCommitteeHot { .. }
+        | ConwayCert::ResignCommitteeCold { .. }
+        | ConwayCert::DRepUpdate { .. } => "Neutral",
         ConwayCert::RemovedInConway { .. } => "NotValidInConway",
     }
 }
