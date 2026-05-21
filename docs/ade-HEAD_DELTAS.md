@@ -5,8 +5,8 @@
 > `.idd-config.json` (`head_deltas_baseline`).
 
 > Baseline: `d509f02` (Phase 3 handoff snapshot, 2026-04-15)
-> HEAD: `193d2fc` (feat(codec): Conway cert decoder strictness — reject trailing bytes, bound preallocation (PHASE4-B3F), 2026-05-21)
-> 94 commits, 11,228 files changed, +163,078 / −7,233,365 lines
+> HEAD: `ee35493` (test(ledger): Conway cert-state accumulation corpus (PHASE4-B4-S5), 2026-05-21)
+> 99 commits, 11,239 files changed, +165,596 / −7,233,425 lines
 
 Headline numbers note: the massive negative line count is dominated by
 the **corpus relayout** under `corpus/snapshots/` and the deletion of
@@ -19,11 +19,38 @@ far smaller — the per-crate breakdown in §3 is the representative view.
 > `0d4457e` (B1-S7) — references commit hashes from a history that has
 > since been rewritten; e.g. B1-S7 is now `2630267`, the N-A close is
 > `69a2862` (unchanged), and the B1 close is `993f363`. All hashes
-> below are verbatim from `git log d509f02..HEAD` at this HEAD.
+> below are verbatim from `git log d509f02..HEAD` at this HEAD. The
+> five PHASE4-B4 commits (`ae1300a`, `228415b`, `da30706`, `302d22c`,
+> `ee35493`) extend the previous (B3F-level) regen's HEAD `193d2fc`.
 
-> **B3 close + B3F follow-up note.** This regen is cut at committed HEAD
-> `193d2fc`. Since the prior (B3-close-level) regen — cut at `7784bf8`
-> with the close in flight — three commits have landed: the
+> **B4 cluster note (newest thread).** This regen is cut at committed
+> HEAD `ee35493`. Since the prior (B3F-level) regen — cut at `193d2fc`,
+> with the B3F CODEMAP/SEAMS/TRACEABILITY ripple in flight — the
+> **PHASE4-B4 Conway certificate-state accumulation arc** has landed as
+> five commits: `ae1300a` (B4 grounding — invariants, cluster plan,
+> cluster doc, B4-S1 slice; introduces `DC-LEDGER-08`), `228415b`
+> (B4-S1, owner-complete Conway cert decoder), `da30706` (B4-S2, native
+> owner-tagged Conway cert apply model), `302d22c` (B4-S3/S4,
+> era-dispatched fail-closed cert-state accumulation), and `ee35493`
+> (B4-S5, cert-state accumulation corpus). B4 closes the
+> cert-state-accumulation fail-open: the cert decoder is now
+> **owner-complete** (retains every owner payload, not the deposit-only
+> projection B3 left), the ledger gains a **native owner-tagged apply
+> model** total over the 18 Conway tags, and `process_block_certificates`
+> now **propagates** decode/apply errors instead of swallowing them
+> "non-fatal during replay". `DC-LEDGER-08` is introduced and flipped to
+> **`enforced`** (strengthens `DC-VAL-06`); the declared follow-up is
+> **PHASE4-B5** (Conway governance-certificate accumulation authority —
+> wiring the owner-tagged `ConwayGovState` effects into applied state).
+> The real epoch-576 cert-state-vs-cardano-node oracle is
+> **environment-blocked** (UMap snapshot absent) and reclassified per
+> tier doctrine, the same constraint as `DC-TXV-06`/`DC-TXV-03`. All
+> five B4 commits carry the model-attribution trailer. Whether the B3F
+> grounding-doc ripple is committed alongside the B4 close is tracked in
+> Anomalies.
+
+> **B3 close + B3F follow-up note (carried forward).** The prior regen
+> was cut at committed HEAD `193d2fc`. Three commits preceded it: the
 > **`Close PHASE4-B3`** commit `d766eb0` (which committed the B3
 > grounding-doc refresh, moved the `docs/clusters/PHASE4-B3/*` slice
 > docs to `docs/clusters/completed/`, and set `DC-TXV-06` =
@@ -33,17 +60,64 @@ far smaller — the per-crate breakdown in §3 is the representative view.
 > follow-up (flips it `partial` → **`enforced`** with a standing CI
 > invariant) and tightens the Conway cert decoder. The
 > formerly-in-flight B3 anomalies (no close commit, committed-vs-working
-> `DC-TXV-06` disagreement) are therefore **resolved**; the residual
-> grounding-doc staleness is now scoped to CODEMAP/SEAMS/TRACEABILITY
-> only (this file is current). Both B3F commits carry the
-> model-attribution trailer.
+> `DC-TXV-06` disagreement) were resolved at that point. Both B3F
+> commits carry the model-attribution trailer.
 
-The delta covers fourteen threads of work. The two newest threads — the
-**PHASE4-B3 Conway value-conservation accounting arc** and its
-**PHASE4-B3F follow-up hardening** — landed on top of the PHASE4-B2
-close (`c1cba82`). In rough proportion of the substantive change budget:
+The delta covers fifteen threads of work. The newest thread — the
+**PHASE4-B4 Conway certificate-state accumulation arc** — landed on top
+of the PHASE4-B3F follow-up hardening (`193d2fc`), which itself sat on
+the **PHASE4-B3 Conway value-conservation accounting arc** above the
+PHASE4-B2 close (`c1cba82`). In rough proportion of the substantive
+change budget:
 
-0. **Phase 4 cluster B3F (follow-up hardening) — committed
+0. **Phase 4 cluster B4 (Conway cert-state accumulation, fail-closed) —
+   closed (`ee35493`).** A 5-slice arc that closes the cert-state
+   accumulation fail-open. **B4 grounding** (`ae1300a`) opened the
+   cluster (invariants, cluster plan, cluster doc, B4-S1 slice) and
+   introduced registry rule `DC-LEDGER-08`. **B4-S1** (`228415b`) made
+   the Conway cert decoder **owner-complete**: `ConwayCert` (in
+   `ade_types::conway::cert`) and `decode_conway_certs` (in
+   `ade_codec::conway::cert`) now retain **all** owner payloads —
+   stake/DRep/committee credentials, pool id, full pool parameters
+   (incl. `pool_owners`), DRep delegation targets — where B3 kept only
+   the deposit/refund projection; the shared
+   `read_pool_registration_cert` (`ade_codec::shelley::cert`) now
+   retains `pool_owners` (new `PoolRegistrationCert.owners` field), a
+   new `decode_drep` reads the DRep target, and a new `DRep` enum lands
+   in `ade_types::conway::cert`. Fields no owner stores (cert anchors,
+   pool relays/metadata) are still structurally consumed and dropped;
+   unknown tags still reject; removed tags 5/6 still decode to
+   `RemovedInConway`. **B4-S2** (`da30706`) added a **native
+   owner-tagged apply model** in `ade_ledger::delegation`:
+   `conway_cert_action` + `apply_conway_cert` with
+   `ConwayCertAction`/`ConwayCertOutcome` and the
+   `GovernanceOwner`/`GovernanceCertEffect`/`OwnerTaggedEffect` owner
+   tags, **total over all 18 Conway tags** — governance certs
+   (vote-deleg / committee auth+resign / DRep reg/unreg/update) are
+   owner-tagged to `ConwayGovState` and **routed out of B4 mutation
+   scope** (observed, not applied — deferred to the declared
+   **PHASE4-B5**); composite certs (tags 10/12/13) carry both a B4-owned
+   cert-state mutation and an owner-tagged governance effect, both
+   represented (`CertStateAndGovernance`); no Conway cert is flattened
+   to `Neutral` for lack of an owner. **B4-S3/S4** (`302d22c`) made the
+   block-level accumulation **era-dispatched and fail-closed**:
+   `process_block_certificates` now calls a new `accumulate_tx_certs`
+   (`ade_ledger::rules`) that **removes the `_era` discard** (explicit
+   `CardanoEra` dispatch — Conway via `decode_conway_certs` +
+   `apply_conway_cert`, Shelley..Babbage via the Shelley path) and
+   **removes the two "non-fatal during replay" swallows**; decode and
+   apply errors now propagate as structured `LedgerError` and halt the
+   block transition. `ci/ci_check_forbidden_patterns.sh` was extended to
+   fail if either the `non-fatal during replay` rationale or an
+   `Err(_) =>` swallow arm in `accumulate_tx_certs` is reintroduced.
+   **B4-S5** (`ee35493`) shipped the corpus: synthetic positive
+   accumulation + replay byte-identical + adversarial no-false-accept
+   (`cert_state_corpus.rs`, `conway_cert_decode_complete.rs`,
+   `corpus/cert_state/README.md`). `DC-LEDGER-08` is **`enforced`**
+   (strengthens `DC-VAL-06`); the real epoch-576 cert-state oracle is
+   **environment-blocked** (UMap snapshot absent) and reclassified per
+   tier doctrine.
+1. **Phase 4 cluster B3F (follow-up hardening) — committed
    (`193d2fc`).** A 2-slice follow-up that closes the two named B3
    carry-overs without a new module or crate. **B3F-S1** (`d6c1993`)
    adds the CI grep-gate `ci/ci_check_conway_cert_classification_closed.sh`
@@ -64,7 +138,7 @@ close (`c1cba82`). In rough proportion of the substantive change budget:
    (`strengthened_in += PHASE4-B3F`); +2 tests
    (`trailing_bytes_after_cert_array_rejected`,
    `huge_array_count_rejects_without_overallocating`).
-1. **Phase 4 cluster B3 (Conway value-conservation accounting) —
+2. **Phase 4 cluster B3 (Conway value-conservation accounting) —
    closed (`d766eb0`).** Three implementation/planning commits plus the
    close: the planning commit `3aebbe5` (invariants, cluster/slice plan,
    registry rules `DC-TXV-06`/`DC-TXV-07`), the implementation `978c222`
@@ -89,7 +163,7 @@ close (`c1cba82`). In rough proportion of the substantive change budget:
    (canonical deposit-parameter authority — `enforced` via the new
    `ci_check_deposit_param_authority.sh`). Strengthens
    `T-CONSERV-01`/`CN-LEDGER-07`, `DC-VAL-06`, and `DC-TXV-03`.
-2. **Phase 4 cluster B2 (tx validity agreement) — closed (`c1cba82`).**
+3. **Phase 4 cluster B2 (tx validity agreement) — closed (`c1cba82`).**
    A 5-slice arc (B2-S1 → B2-S5) shipped as `feat(tx-validity):`
    commits, opened by the planning trio `b79f632` (invariant sketch +
    `DC-TXV` family), `b32fef3` (cluster/slice plan), `7263699`
@@ -107,7 +181,7 @@ close (`c1cba82`). In rough proportion of the substantive change budget:
    `enforced`, and — critically — **found and fixed a real
    value-conservation fail-open** (`617139f`, B2-S4) whose deferred
    deposit/withdrawal residual B3 has now closed (thread 1).
-3. **Conway value-conservation: the B2-S4 fail-open and its B3
+4. **Conway value-conservation: the B2-S4 fail-open and its B3
    completion.** B2-S4 (`617139f`) added
    `ade_ledger::conway::check_conway_coin_conservation`, but with a
    **deliberate early-out** — it returned before checking value for any
@@ -120,7 +194,7 @@ close (`c1cba82`). In rough proportion of the substantive change budget:
    `ade_ledger::cert_classify::classify` over the closed `ConwayCert`
    grammar. The named tx-validity-completeness follow-up from the B2
    regen is therefore **discharged** for Conway cert/withdrawal txs.
-4. **Phase 4 cluster B1 (full block validity agreement) — closed
+5. **Phase 4 cluster B1 (full block validity agreement) — closed
    (`993f363`).** The 7-slice arc (B1-S1 → B1-S7) composes the N-A wire
    layer, the N-B consensus header authority, and the `ade_ledger` body
    authority into a single block verdict. Introduced the BLUE
@@ -133,7 +207,7 @@ close (`c1cba82`). In rough proportion of the substantive change budget:
    added the new crate dependency edge `ade_ledger -> ade_core`. Closed
    by `993f363`; `3552bc2` synced `Cargo.lock` for the new edges and
    `e0af99d` gitignored the multi-GB ledger-state dumps.
-5. **Phase 4 cluster N-A (network mini-protocols) — closed.** 10
+6. **Phase 4 cluster N-A (network mini-protocols) — closed.** 10
    slices (S-A1 → S-A10, with S-A8b/S-A8c rework). Introduced the new
    BLUE workspace crate `ade_network` with 11 mini-protocol codecs, 8
    state machines, the Ouroboros mux frame codec, a RED `session`
@@ -143,7 +217,7 @@ close (`c1cba82`). In rough proportion of the substantive change budget:
    flight, plus an LSQ Acquire/AcquireNoPoint split, a
    LocalTxSubmission/N2N TxSubmission2 inner-tx HFC envelope fix, and
    DoS-hardening on `Vec::with_capacity` in eight codecs.
-6. **Phase 4 cluster N-B (consensus runtime) — closed (`a0c73e1`).**
+7. **Phase 4 cluster N-B (consensus runtime) — closed (`a0c73e1`).**
    10 slices (S-B1 → S-B10), opened by `d9f0426` (invariant sketch v2 +
    8 `DC-CONS-*` rules). Built out the BLUE `ade_core::consensus` module
    (15+ source files: closed `PraosChainDepState`, `EraSchedule`,
@@ -152,24 +226,24 @@ close (`c1cba82`). In rough proportion of the substantive change budget:
    GREEN `ade_runtime::consensus` shipped the chain-selector
    orchestrator, candidate-fragment builder, and a RED genesis parser.
    New replay corpora under `corpus/consensus/`. All 6 CEs closed.
-7. **CE-N-B-6 follow-mode bridge** — `807bcb6` retargeted the N-B
+8. **CE-N-B-6 follow-mode bridge** — `807bcb6` retargeted the N-B
    live-interop pin to cardano-node 11.0.1, then `e5f1f64` added the RED
    `ade_core_interop::follow` bridge plus live preprod tip-agreement
    evidence. Follow mode runs BLUE fork-choice + rollback only — it
    trusts the already-validated peer for header/VRF/leader/nonce/KES, so
    it carries no authoritative validation decision.
-8. **Phase 4 cluster N-D (ChainDB persistence) — closed (`436b1d7`).**
+9. **Phase 4 cluster N-D (ChainDB persistence) — closed (`436b1d7`).**
    Slices S-33 → S-37. CE-N-D-1 closure evidence (1000/1000 stress-kill
    iterations).
-9. **Phase 2C close-out / CE-73 reclassification** — single commit
+10. **Phase 2C close-out / CE-73 reclassification** — single commit
    (`9b15378`) splitting CE-73 into a Tier-2 semantic gate (enforced via
    `ci_check_hfc_translation.sh`) and an explicit Tier-4 bytes non-goal.
-10. **IDD canonicalization** — `chore(idd)` commits that make the repo
+11. **IDD canonicalization** — `chore(idd)` commits that make the repo
     legible to the global IDD slash commands: `.idd-config.json`,
     registry rename (`constitution_registry.toml` →
     `docs/ade-invariant-registry.toml`), cluster N-D moved into
     `docs/clusters/PHASE4-N-D/`, repo-local commit-msg trailer hook.
-11. **Grounding-doc generation + ripple** — `a87c3a3` produced the
+12. **Grounding-doc generation + ripple** — `a87c3a3` produced the
     first cuts of CODEMAP/SEAMS/HEAD_DELTAS/TRACEABILITY; `f0b0fd6`,
     `a2c7ac8`, `744ef34`, the B2-close refresh in `c1cba82`, and the
     B3-close refresh in `d766eb0` refreshed subsets after the
@@ -177,10 +251,10 @@ close (`c1cba82`). In rough proportion of the substantive change budget:
     grounding-doc refresh commit landed for N-B, the follow-bridge, or
     B1**, and the CODEMAP/SEAMS/TRACEABILITY refresh for the B3F
     follow-up is the in-flight working tree (see Anomalies).
-12. **BLUE-list drift closure** — `5b70bee` extended six CI scripts to
+13. **BLUE-list drift closure** — `5b70bee` extended six CI scripts to
     the full 6-crate BLUE scope; `c8fa37f` refreshed CODEMAP and
     TRACEABILITY to remove 14 `_(scope gap)_` markers across 13 rules.
-13. **Corpus relayout** — `corpus/snapshots/*` and the
+14. **Corpus relayout** — `corpus/snapshots/*` and the
     `reward_provenance/*_registered_creds.txt` files were removed (they
     carried credential material that does not belong in a public repo);
     12 boundary-block sets were re-extracted at exact era-boundary
@@ -197,6 +271,11 @@ close (`c1cba82`). In rough proportion of the substantive change budget:
 
 | Hash | Type | Summary |
 |------|------|---------|
+| `ee35493` | test | test(ledger): Conway cert-state accumulation corpus (PHASE4-B4-S5) |
+| `302d22c` | feat | feat(ledger): era-dispatched fail-closed cert-state accumulation (PHASE4-B4-S3/S4) |
+| `da30706` | feat | feat(ledger): native owner-tagged Conway cert apply model (PHASE4-B4-S2) |
+| `228415b` | feat | feat(codec): owner-complete Conway certificate decoder (PHASE4-B4-S1) |
+| `ae1300a` | docs | docs(planning): PHASE4-B4 grounding — invariants, cluster plan, cluster doc, B4-S1 slice (DC-LEDGER-08) |
 | `193d2fc` | feat | feat(codec): Conway cert decoder strictness — reject trailing bytes, bound preallocation (PHASE4-B3F) |
 | `d6c1993` | feat | feat(ci): DC-TXV-06 cert-classification closure gate — flip partial to enforced (PHASE4-B3F) |
 | `d766eb0` | chore | Close PHASE4-B3 — full Conway tx value-conservation accounting |
@@ -324,11 +403,18 @@ linear, no merge commits in range). Aggregation is in §3 and §5.
 
 Workspace-level membership grew by **two crates** across the full
 delta: `ade_network` (PHASE4-N-A) and `ade_core_interop` (PHASE4-N-B).
-Both are RED-or-mixed. **Neither PHASE4-B3 nor PHASE4-B3F added a new
+Both are RED-or-mixed. **None of PHASE4-B3, B3F, or B4 added a new
 crate** — B3's new surfaces are submodules/files of the existing BLUE
-crates `ade_codec`, `ade_ledger`, and `ade_types`, and B3F added **no
-new module at all** (a CI script + a strictness change to the existing
-`ade_codec::conway::cert` decoder).
+crates `ade_codec`, `ade_ledger`, and `ade_types`; B3F added **no new
+module at all** (a CI script + a strictness change to the existing
+`ade_codec::conway::cert` decoder); and **PHASE4-B4 added no new module
+either** — it enriched the existing B3 BLUE surfaces in place
+(owner-complete `ConwayCert`, the `DRep` enum and
+`PoolRegistrationCert.owners` field in `ade_types`, the
+`apply_conway_cert` owner-tagged apply model and `GovernanceOwner` tags
+in `ade_ledger::delegation`, and the `accumulate_tx_certs` era-dispatch
+in `ade_ledger::rules`) plus a CI-gate extension and a new corpus. The
+B4 surfaces are §3 module modifications, not new modules.
 
 Crate dependency shape at HEAD (new deps in this delta):
 - `ade_core` gained `ade_types`, `ade_crypto`, `minicbor`, and
@@ -359,24 +445,40 @@ the real epoch-576 resolved-input oracle
 (`corpus/validity/conway_epoch576/{resolution_set.txt,resolved_inputs.json}`),
 and the extraction tool note (`corpus/tools/extract_conway_resolved_inputs.md`).
 **PHASE4-B3F added no corpus** (the strictness tests are inline unit
-tests in `conway_cert_classification.rs`).
+tests in `conway_cert_classification.rs`). **PHASE4-B4 added** the
+cert-state accumulation corpus note (`corpus/cert_state/README.md`,
+recording the environment-blocked epoch-576 oracle); the positive /
+replay-byte-identical / adversarial cert-state cases are synthetic and
+derived at test time in `crates/ade_ledger/tests/cert_state_corpus.rs`
+and `crates/ade_codec/tests/conway_cert_decode_complete.rs`.
 
 Cross-reference: CODEMAP must be regenerated to add per-submodule/file
 entries for the B3 BLUE surfaces (`ade_codec::conway::cert`,
 `ade_codec::conway::withdrawals`, `ade_ledger::cert_classify`) in
-addition to the still-unrecorded N-B + B1 + B2 surfaces, and to record
-the B3F strictness on `conway::cert`. SEAMS must record the closed
-Conway cert grammar (tags 0..18, `UnknownCertTag` reject, trailing-byte
-reject), the closed deposit-classification surface
-(`CertDisposition` / `DepositEffect` / `CoinSource` in
-`ade_types::conway::cert`), and the canonical deposit-param authority
-(`ConwayOnlyDepositParams` / `ConwayDepositParams` /
-`LedgerState::conway_deposit_view`). TRACEABILITY must add rows for
-`DC-TXV-06` (now `enforced`) and `DC-TXV-07` (and still owes the 5
-`DC-TXV-*`, 2 `DC-MEM-*`, 8 `DC-CONS-*`, and 6 `DC-VAL-*` rows). **The
-B3 grounding-doc refresh landed in `d766eb0`; the B3F
-CODEMAP/SEAMS/TRACEABILITY refresh is in the working tree, uncommitted
-(this HEAD_DELTAS is current).**
+addition to the still-unrecorded N-B + B1 + B2 surfaces, to record the
+B3F strictness on `conway::cert`, and to record the **B4 enrichments**:
+the owner-complete `ConwayCert` grammar, the `DRep` enum and
+`PoolRegistrationCert.owners` field in `ade_types`, the
+`apply_conway_cert` owner-tagged apply model
+(`ConwayCertAction`/`ConwayCertOutcome`/`GovernanceOwner`) in
+`ade_ledger::delegation`, and the `accumulate_tx_certs` era-dispatch in
+`ade_ledger::rules`. SEAMS must record the closed Conway cert grammar
+(tags 0..18, `UnknownCertTag` reject, trailing-byte reject), the closed
+deposit-classification surface (`CertDisposition` / `DepositEffect` /
+`CoinSource` in `ade_types::conway::cert`), the canonical deposit-param
+authority (`ConwayOnlyDepositParams` / `ConwayDepositParams` /
+`LedgerState::conway_deposit_view`), and the **B4 closed cert-apply
+surface** — the owner-tagged `ConwayCertAction` taxonomy (total over 18
+tags), the governance-owner routing of vote-deleg/committee/DRep certs
+to `ConwayGovState` (out of B4 mutation scope, deferred to PHASE4-B5),
+and the fail-closed `accumulate_tx_certs` era-dispatch chokepoint.
+TRACEABILITY must add a row for **`DC-LEDGER-08`** (`enforced`, CI
+`ci_check_forbidden_patterns.sh`) on top of `DC-TXV-06` (now
+`enforced`) and `DC-TXV-07` (and still owes the 5 `DC-TXV-*`, 2
+`DC-MEM-*`, 8 `DC-CONS-*`, and 6 `DC-VAL-*` rows). **The B3
+grounding-doc refresh landed in `d766eb0`; the B3F + B4
+CODEMAP/SEAMS/TRACEABILITY refresh is the in-flight working tree (this
+HEAD_DELTAS is current).**
 
 ---
 
@@ -384,9 +486,9 @@ CODEMAP/SEAMS/TRACEABILITY refresh is in the working tree, uncommitted
 
 | Module | Scope | Key changes |
 |--------|-------|-------------|
-| `ade_ledger` | +48 source/test files, +7,701 / −17 lines over the full delta (of which **PHASE4-B3: +12 files, +1,558 / −12 lines**; PHASE4-B2: +24 files, +3,817 / −5; PHASE4-B1: +13 files, +1,755; CE-73: +73). **PHASE4-B3F: no source change** | **PHASE4-B3 (primary value-conservation thread):** the crate gained the closed cert-deposit classifier `cert_classify.rs` (`classify`, `CertState` bridge) and substantially reworked the value-conservation accounting. **`conway.rs`** (+130 / −): `check_conway_coin_conservation` rewritten to the **full equation** `Σ(inputs) + Σ(withdrawals) + refunded_deposits == Σ(outputs) + fee + donation + new_deposits` (i128) — **the cert/withdrawal early-out is REMOVED**; certs and withdrawals are now decoded and accounted, never skipped. **`error.rs`** (+86): new `LedgerError::EraInvalidCertificate(EraInvalidCertificateError)` and `LedgerError::UnsupportedStateDependentDeposit(UnsupportedStateDependentDepositAccounting)`, plus `ValidationEnvironmentError::MissingConwayDepositParams`. **`pparams.rs`** (+78): new `ConwayOnlyDepositParams` (Conway-only, structurally `None` for pre-Conway) and the resolved `ConwayDepositParams` view. **`state.rs`** (+28): `LedgerState.conway_deposit_params: Option<ConwayOnlyDepositParams>` field + `conway_deposit_view()` accessor. **`fingerprint.rs`** (+116): Conway deposit-param fold added to the state fingerprint; the pre-Conway fold is **byte-identical** (the new field folds to nothing when `None`). Small wiring touches in `rules.rs`, `phase.rs`, `tx_validity/phase1.rs`, `byron.rs`, `epoch.rs`, `hfc.rs`, `shelley.rs`, `lib.rs` + 3 conservation test suites (`conway_conservation_full.rs`, `conway_conservation_adversarial.rs`, `conway_conservation_positive_synthetic.rs`). **PHASE4-B2:** the `tx_validity/` (7 files) and `mempool/` (3 files) submodules + B2 integration tests; the B2-S4 `check_conway_coin_conservation` first cut (deposit-free form). **PHASE4-B1:** the `block_validity/` submodule, `consensus_view.rs`, `consensus_input_extract.rs`, the `ade_core` dep edge. **CE-73:** 10 unit tests for `decode_invalid_tx_indices`. **PHASE4-B3F:** no `ade_ledger` source change — the B3F-S1 grep-gate references `cert_classify.rs` from CI but does not edit it. |
-| `ade_codec` | +9 source/test files, +967 lines (PHASE4-B3 + B3F) | **PHASE4-B3:** the new BLUE `conway::cert` decoder (`cert.rs`, closed grammar tags 0..18) and `conway::withdrawals` decoder (`withdrawals.rs`, `RewardAccount` map, i128 sum), wired through `conway/mod.rs`; `error.rs` (+13) added `CodecError::UnknownCertTag { tag, offset }` and `CodecError::DuplicateMapKey { offset }`. Two new test suites: `conway_cert_classification.rs` (decode total over tags 0..18, unknown-tag reject, removed-tag-5/6 reject, malformed-CBOR reject, replay-determinism), `conway_withdrawals.rs`. **PHASE4-B3F-S2 (`193d2fc`, +18 in `cert.rs`):** `decode_conway_certs` hardened — **trailing bytes after the cert array now reject** with `CodecError::TrailingBytes { consumed, total }` (parity with `decode_withdrawals`); the indefinite-array break byte is consumed; definite-array preallocation bounded by `(n).min(data.len())` (no over-allocation on a crafted huge count, no behavioral change for valid input). +2 tests in `conway_cert_classification.rs` (`trailing_bytes_after_cert_array_rejected`, `huge_array_count_rejects_without_overallocating`). `ade_codec` was untouched before B3. |
-| `ade_types` | +3 files, +109 / −5 lines (all PHASE4-B3) | **PHASE4-B3:** `conway/cert.rs` (+84) gained the closed `ConwayCert` enum plus the classification value types `CertDisposition`, `DepositEffect`, `CoinSource` consumed by `ade_ledger::cert_classify`; `tx.rs` (+6) added `RewardAccount(pub [u8; 29])` for the withdrawals decoder; `lib.rs` re-export wiring. First delta since baseline. The B3F-S1 grep-gate references this file (closed-variant guard) but does not edit it. |
+| `ade_ledger` | +51 source/test files over the full delta (of which **PHASE4-B4: +3 files touched, +780 / −~30 lines** — `delegation.rs` +385, `rules.rs` +212, `cert_classify.rs` +100, `cert_state_corpus.rs` +183 new; **PHASE4-B3: +12 files, +1,558 / −12 lines**; PHASE4-B2: +24 files, +3,817 / −5; PHASE4-B1: +13 files, +1,755; CE-73: +73). **PHASE4-B3F: no source change** | **PHASE4-B3 (primary value-conservation thread):** the crate gained the closed cert-deposit classifier `cert_classify.rs` (`classify`, `CertState` bridge) and substantially reworked the value-conservation accounting. **`conway.rs`** (+130 / −): `check_conway_coin_conservation` rewritten to the **full equation** `Σ(inputs) + Σ(withdrawals) + refunded_deposits == Σ(outputs) + fee + donation + new_deposits` (i128) — **the cert/withdrawal early-out is REMOVED**; certs and withdrawals are now decoded and accounted, never skipped. **`error.rs`** (+86): new `LedgerError::EraInvalidCertificate(EraInvalidCertificateError)` and `LedgerError::UnsupportedStateDependentDeposit(UnsupportedStateDependentDepositAccounting)`, plus `ValidationEnvironmentError::MissingConwayDepositParams`. **`pparams.rs`** (+78): new `ConwayOnlyDepositParams` (Conway-only, structurally `None` for pre-Conway) and the resolved `ConwayDepositParams` view. **`state.rs`** (+28): `LedgerState.conway_deposit_params: Option<ConwayOnlyDepositParams>` field + `conway_deposit_view()` accessor. **`fingerprint.rs`** (+116): Conway deposit-param fold added to the state fingerprint; the pre-Conway fold is **byte-identical** (the new field folds to nothing when `None`). Small wiring touches in `rules.rs`, `phase.rs`, `tx_validity/phase1.rs`, `byron.rs`, `epoch.rs`, `hfc.rs`, `shelley.rs`, `lib.rs` + 3 conservation test suites (`conway_conservation_full.rs`, `conway_conservation_adversarial.rs`, `conway_conservation_positive_synthetic.rs`). **PHASE4-B2:** the `tx_validity/` (7 files) and `mempool/` (3 files) submodules + B2 integration tests; the B2-S4 `check_conway_coin_conservation` first cut (deposit-free form). **PHASE4-B1:** the `block_validity/` submodule, `consensus_view.rs`, `consensus_input_extract.rs`, the `ade_core` dep edge. **CE-73:** 10 unit tests for `decode_invalid_tx_indices`. **PHASE4-B3F:** no `ade_ledger` source change — the B3F-S1 grep-gate references `cert_classify.rs` from CI but does not edit it. **PHASE4-B4 (primary cert-state-accumulation thread):** **`delegation.rs`** (+385) gained the **native owner-tagged apply model** — `conway_cert_action` + `apply_conway_cert` returning `ConwayCertOutcome`, the `ConwayCertAction` taxonomy (`MutateCertState` / `Governance(effect)` / `CertStateAndGovernance(effect)` / `NotValidInEra`) total over the 18 Conway tags, the owner tags `GovernanceOwner` / `GovernanceCertEffect` / `OwnerTaggedEffect`, and `ConwayCertEnv`; governance certs (vote-deleg / committee auth+resign / DRep reg/unreg/update) are owner-tagged to `ConwayGovState` and routed out of B4 mutation scope (observed, not applied — deferred to PHASE4-B5), composite tags 10/12/13 carry both a cert-state mutation and a governance effect, and no Conway cert maps to `Neutral` for lack of an owner. **`rules.rs`** (+212): `process_block_certificates` now calls the new fail-closed `accumulate_tx_certs(era, cert_bytes, &cert_state, key_deposit) -> Result<CertState, LedgerError>` — the **`_era` discard is removed** (explicit `CardanoEra` dispatch: Conway via `ade_codec::conway::cert::decode_conway_certs` + `apply_conway_cert`, Shelley..Babbage via the Shelley path) and the **two "non-fatal during replay" swallows are removed**; decode/apply errors propagate as structured `LedgerError` and halt the block transition (with an inline test module exercising era-dispatch + fail-closed decode/apply/unknown-tag/removed-tag/governance-routing). **`cert_classify.rs`** (+100): re-pointed at the owner-complete `ConwayCert` shape (`PoolRegistration(cert)`, struct variants now `{ .., deposit }` / `{ refund, .. }`); classification dispositions unchanged, exhaustiveness preserved (still no `_ =>` wildcard). New test corpus `tests/cert_state_corpus.rs` (+183, synthetic positive accumulation + replay byte-identical + adversarial no-false-accept). |
+| `ade_codec` | +11 source/test files (PHASE4-B3 + B3F + B4; B4: `conway/cert.rs` +147, `shelley/cert.rs` +108, `conway_cert_decode_complete.rs` +313 new, `conway_cert_classification.rs` +14) | **PHASE4-B3:** the new BLUE `conway::cert` decoder (`cert.rs`, closed grammar tags 0..18) and `conway::withdrawals` decoder (`withdrawals.rs`, `RewardAccount` map, i128 sum), wired through `conway/mod.rs`; `error.rs` (+13) added `CodecError::UnknownCertTag { tag, offset }` and `CodecError::DuplicateMapKey { offset }`. Two new test suites: `conway_cert_classification.rs` (decode total over tags 0..18, unknown-tag reject, removed-tag-5/6 reject, malformed-CBOR reject, replay-determinism), `conway_withdrawals.rs`. **PHASE4-B3F-S2 (`193d2fc`, +18 in `cert.rs`):** `decode_conway_certs` hardened — **trailing bytes after the cert array now reject** with `CodecError::TrailingBytes { consumed, total }` (parity with `decode_withdrawals`); the indefinite-array break byte is consumed; definite-array preallocation bounded by `(n).min(data.len())` (no over-allocation on a crafted huge count, no behavioral change for valid input). +2 tests in `conway_cert_classification.rs` (`trailing_bytes_after_cert_array_rejected`, `huge_array_count_rejects_without_overallocating`). `ade_codec` was untouched before B3. **PHASE4-B4-S1 (`228415b`, +147 in `conway/cert.rs`, +108 in `shelley/cert.rs`):** `decode_conway_certs` made **owner-complete** — it now reads and retains every owner payload for all 18 tags (credentials, pool id, full pool params incl. `pool_owners`, DRep delegation targets) where it previously kept only the deposit/refund projection; a new `decode_drep` reads the DRep target; the shared `read_pool_registration_cert` (`shelley/cert.rs`) now reads up to and including `pool_owners` (the caller consumes trailing relays/metadata) and returns them via the new `PoolRegistrationCert.owners`. Fields no owner stores (cert anchors, relays, metadata) remain structurally consumed; unknown-tag reject, removed-tag-5/6 → `RemovedInConway`, trailing-byte reject, and bounded preallocation are unchanged. New test suite `conway_cert_decode_complete.rs` (+313, per-tag owner-payload retention) + `conway_cert_classification.rs` (+14, updated to the new variant shapes). |
+| `ade_types` | +3 files (B3) + 2 files (B4); B4: `conway/cert.rs` +92, `shelley/cert.rs` +4 | **PHASE4-B3:** `conway/cert.rs` (+84) gained the closed `ConwayCert` enum plus the classification value types `CertDisposition`, `DepositEffect`, `CoinSource` consumed by `ade_ledger::cert_classify`; `tx.rs` (+6) added `RewardAccount(pub [u8; 29])` for the withdrawals decoder; `lib.rs` re-export wiring. First delta since baseline. The B3F-S1 grep-gate references this file (closed-variant guard) but does not edit it. **PHASE4-B4-S1 (`228415b`, +92 in `conway/cert.rs`, +4 in `shelley/cert.rs`):** `ConwayCert` made **owner-complete** — formerly payload-free variants now carry their owner fields (`StakeDelegation { credential, pool_id }`, `PoolRegistration(PoolRegistrationCert)`, `PoolRetirement { pool_id, epoch }`, `VoteDelegation { credential, drep }`, the composite tags 10/12/13 with their full field sets, `AuthCommitteeHot { cold_credential, hot_credential }`, `ResignCommitteeCold`, `DRepRegistration`/`DRepUnregistration`/`DRepUpdate` with `drep_credential`); the deposit-bearing variants additionally retain `credential`/`deposit`/`refund`. New **`DRep` enum** added for the vote-delegation target. `shelley/cert.rs` (+4) added the **`PoolRegistrationCert.owners: Vec<Hash28>`** field (`pool_owners`, retained for cert-state accumulation; relays/metadata still dropped). The closed taxonomy stays closed (no `#[non_exhaustive]`, no open-tail variant) — the B3F grep-gate continues to guard it. |
 | `ade_core` | +29 source files + tests (N-B, +8,076 lines); +828 / −86 across 16 files (B1) | **PHASE4-N-B:** stub `lib.rs` → substantive BLUE consensus module under `src/consensus/`. **PHASE4-B1:** added `consensus/kes_check.rs` (fail-closed `expect_size` + KES header guard); wired single-VRF + KES header validation across `header_validate.rs`, `vrf_cert.rs`, `leader_schedule.rs`, `fork_choice.rs`, etc. (14/14 real Conway headers validate). New dep `ade_codec` (B1). **No B2, B3, or B3F source change** — tx-validity and value-conservation compose only `ade_ledger` surfaces. |
 | `ade_crypto` | 1 file, +24 / −81 lines (B1) | Single change in `kes.rs` (`500589b`): **`build_opcert_signable` fixed** as part of B1-S5 KES header validation. No source change in N-A, N-B, N-D, B2, B3, or B3F. |
 | `ade_core_interop` | +1,546 across 6 files (B1) | **CE-N-B-6 follow-bridge (`e5f1f64`) + pin retarget (`807bcb6`):** RED `follow.rs` (BLUE fork-choice + rollback only) + `follow_offline_replay.rs`; reworked `lib.rs`, the live-session binary and test. New deps `ade_codec`, `ade_crypto` for offline replay. |
@@ -395,11 +497,14 @@ CODEMAP/SEAMS/TRACEABILITY refresh is in the working tree, uncommitted
 | `ade_testkit` | +28 files, +3,251 lines: `consensus/` (N-B); `validity/` (B1); `tx_validity/` (B2); **B3 conservation extensions** | **PHASE4-N-B:** `consensus/` harness. **PHASE4-B1:** `validity/` harness (M1–M6 mutators). **PHASE4-B2:** `tx_validity/` submodule (extractor, synthetic builders, W1–W4 / S1–S4 mutators + judge). **PHASE4-B3:** extended `harness/snapshot_loader.rs` (+20, intra-corpus input resolution), `tx_validity/{adversarial,valid_synthetic}.rs` for conservation cases, added the real epoch-576 positive-corpus suite `tests/conway_conservation_positive_corpus.rs` (10 non-Plutus cert/withdrawal txs Valid at `track_utxo=true`; Plutus carved out per CE-88), and three RED example bins that materialize the B3 corpora (`examples/{dump_b3_cert_tags,dump_b3_resolution_set,resolve_b3_intra_corpus}.rs`). New deps `ade_core`, `ade_runtime` (B1). **No B3F change.** |
 
 No other crate had non-trivial source changes since baseline.
-`ade_plutus` and `ade_node` were untouched by code commits.
-`.idd-config.json` had prose edits during the delta; the `core_paths`
-array already covers the B3 surfaces (`ade_codec::conway::*`,
-`ade_ledger::cert_classify`) and the B3F-hardened decoder via the
-already-listed `ade_codec` / `ade_ledger` crate prefixes.
+`ade_plutus` and `ade_node` were untouched by code commits. **PHASE4-B4
+touched only `ade_codec`, `ade_types`, and `ade_ledger`** (plus the CI
+script and corpus). `.idd-config.json` had prose edits during the
+delta; the `core_paths` array already covers the B3 and B4 surfaces
+(`ade_codec::conway::*`, `ade_ledger::cert_classify`,
+`ade_ledger::delegation`, `ade_ledger::rules`) and the B3F-hardened
+decoder via the already-listed `ade_codec` / `ade_ledger` / `ade_types`
+crate prefixes.
 
 ---
 
@@ -412,8 +517,10 @@ type system per the IDD core principles, and conditional compilation is
 checked out of BLUE code via `ci/ci_check_no_semantic_cfg.sh` (scoped
 over the full 6-crate BLUE set; the B3 surfaces
 `ade_codec::conway::cert`/`::withdrawals` and
-`ade_ledger::cert_classify` are covered by their crate-level scope, as
-are the B2 `tx_validity`/`mempool` and B1 `block_validity` surfaces).
+`ade_ledger::cert_classify`, and the B4 surfaces
+`ade_ledger::delegation`/`::rules`, are covered by their crate-level
+scope, as are the B2 `tx_validity`/`mempool` and B1 `block_validity`
+surfaces).
 
 No `#[cfg(feature = ...)]` gates appear at either ref. `cardano-crypto`
 (`vrf-draft03`) and `minicbor` (`alloc`) feature selections in the
@@ -433,7 +540,10 @@ added four, PHASE4-B3 added one (`ci_check_deposit_param_authority.sh`),
 **PHASE4-B3F added one** (`ci_check_conway_cert_classification_closed.sh`),
 and one repo-local git hook (`ci/git-hooks/commit-msg`). **PHASE4-B1
 and PHASE4-B2 each added no new CI script** (both reused/extended the
-N-B closed-enums script). Grouped by cluster.
+N-B closed-enums script). **PHASE4-B4 added no new CI script** — it
+**extended the baseline `ci_check_forbidden_patterns.sh`** with a
+fail-closed cert-state-accumulation guard (see the B4 subsection
+below). Grouped by cluster.
 
 ### CE-73 reclassification (Phase 2C close-out)
 
@@ -512,13 +622,21 @@ supersedes the prior "guarded by tests only" note).
 |-------|--------|----------------|
 | `ci/ci_check_conway_cert_classification_closed.sh` | **New** (`d6c1993`, B3F-S1) | **Enforces `DC-TXV-06` (closed Conway cert-deposit classification) — flips the rule `partial` → `enforced`.** Three-part grep-gate: (1) the classification value types stay CLOSED — no `#[non_exhaustive]` and no open-tail `Other`/`Unknown` variant on `ConwayCert` / `CertDisposition` / `DepositEffect` / `CoinSource` (`ade_types::conway::cert`); (2) the decoder rejects unknown cert tags and has NO catch-all accept arm — `CodecError::UnknownCertTag` present and no `_ =>` arm constructs a `ConwayCert` (the reintroduced-Shelley-fallback anti-pattern; `ade_codec::conway::cert`); (3) `classify` stays exhaustive — no `_ =>` wildcard arm, so adding a new `ConwayCert` variant breaks the build instead of silently classifying it (`ade_ledger::cert_classify`). |
 
+### Phase 4 B4 cert-state-accumulation fail-closed enforcement (`302d22c`)
+
+| Check | Status | What it checks |
+|-------|--------|----------------|
+| `ci/ci_check_forbidden_patterns.sh` | **Modified** (`302d22c`, B4-S3/S4) | **Enforces `DC-LEDGER-08` (fail-closed cert-state accumulation).** Two new grep clauses on top of the baseline forbidden-pattern set: (1) fail if the cert-state fail-open rationale string `non-fatal during replay` reappears anywhere in `crates/**/*.rs` (the swallow that B4-S3/S4 removed — the justification was false, since the path runs only at `track_utxo` with full state present); (2) fail if `accumulate_tx_certs` (in `ade_ledger/src/rules.rs`) contains an `Err(_) =>` swallow arm. A reintroduced decode/apply swallow on the cert-state path is therefore caught by a standing CI invariant, not just tests. |
+
 TRACEABILITY cross-reference: the four N-B scripts map to the 8
 `DC-CONS-*` rules; the closed-enums script also enforces four
 `DC-VAL-*`, four `DC-TXV-*` (01/02/04/05), and both `DC-MEM-*` rules;
 `ci_check_deposit_param_authority.sh` is the `ci_script` for
-`DC-TXV-07`; **the new B3F script
-`ci_check_conway_cert_classification_closed.sh` is now the `ci_script`
-for `DC-TXV-06`** (the registry field, formerly empty, is set at HEAD).
+`DC-TXV-07`; the B3F script
+`ci_check_conway_cert_classification_closed.sh` is the `ci_script` for
+`DC-TXV-06` (set at HEAD); and **the extended
+`ci_check_forbidden_patterns.sh` is now the `ci_script` for the new
+`DC-LEDGER-08`** (set in the B4 registry edit).
 The N-B / B1 / B2 rows and the B3 rows
 (`DC-TXV-06`/`07`) landed in the *committed* TRACEABILITY at the B3
 close `d766eb0`; the **B3F TRACEABILITY edit** (DC-TXV-06 row now
@@ -540,13 +658,14 @@ The project's invariant registry tracks structured rules (TOML), not
 prose normative-doc rules; this section reports on it.
 
 - Rules at baseline: **147** (in `constitution_registry.toml`)
-- Rules at HEAD: **170** (in `docs/ade-invariant-registry.toml`)
-- Net additions: **+23** (PHASE4-N-A: 2; PHASE4-N-B: 8; PHASE4-B1: 6;
+- Rules at HEAD: **171** (in `docs/ade-invariant-registry.toml`)
+- Net additions: **+24** (PHASE4-N-A: 2; PHASE4-N-B: 8; PHASE4-B1: 6;
   PHASE4-B2: 5; PHASE4-B3: 2; **PHASE4-B3F: 0** — B3F added no rule; it
   flipped `DC-TXV-06` `partial` → `enforced` and strengthened
-  `DC-VAL-06`, both already counted). The two `DC-MEM-*` rules were
-  *introduced earlier* (`2047c42`, `status = "declared"`) and were
-  flipped to `enforced` in B2, not counted as new.
+  `DC-VAL-06`, both already counted; **PHASE4-B4: 1** — `DC-LEDGER-08`).
+  The two `DC-MEM-*` rules were *introduced earlier* (`2047c42`,
+  `status = "declared"`) and were flipped to `enforced` in B2, not
+  counted as new.
   - PHASE4-N-A: `DC-CORE-01`, `DC-PROTO-06`.
   - PHASE4-N-B (`d9f0426`): `DC-CONS-03` → `DC-CONS-10` (8 rules).
   - PHASE4-B1 (`c0acd59`, `DC-VAL` family): `DC-VAL-01` → `DC-VAL-06`.
@@ -593,20 +712,68 @@ prose normative-doc rules; this section reports on it.
       constants, or env config. **Status: `enforced`** via
       `ci/ci_check_deposit_param_authority.sh`. cross_ref:
       `T-DET-01`, `T-CONSERV-01`, `CN-LEDGER-07`, `DC-TXV-06`.
+  - PHASE4-B4 (`ae1300a`, one new `DC-LEDGER` rule):
+    - **`DC-LEDGER-08`** — Conway cert-state accumulation is a closed,
+      total, era-versioned transition: at `track_utxo`, certificates
+      decode through the era-correct closed grammar (Conway via the
+      completed `decode_conway_certs` retaining all owner payloads, tags
+      0..18) selected by explicit era dispatch — never the Shelley
+      6-variant decoder on Conway bytes, never reduced into the Shelley
+      `Certificate`, never with payload fields dropped. Every cert
+      resolves to an owner-tagged disposition: it mutates B4-owned
+      `CertState` (delegation/pool), or is owner-tagged to
+      `ConwayGovState` and routed out-of-mutation-scope (observed, not
+      swallowed, not applied), or is a structured reject
+      (`NotValidInEra` for removed tags 5/6, `Malformed` for bad CBOR).
+      Composite certs (tags 10/12/13) carry both a B4-owned mutation and
+      a governance effect; both are represented. No cert is flattened to
+      neutral, decode-dropped, or apply-swallowed; a decode/apply error
+      propagates as a structured `LedgerError` and halts the block
+      transition. Incomplete/best-effort accumulation is a forbidden
+      fail-open. (Wiring the owner-tagged `ConwayGovState` effects into
+      applied governance state is **PHASE4-B5**, not B4.)
+      code_locus: `ade_types::conway::cert` (owner-complete `ConwayCert`,
+      `DRep`), `ade_types::shelley::cert` (`PoolRegistrationCert.owners`),
+      `ade_codec::conway::cert` (`decode_conway_certs` retention +
+      `decode_drep`), `ade_codec::shelley::cert`
+      (`read_pool_registration_cert`), `ade_ledger::delegation`
+      (`apply_conway_cert` + `ConwayCertAction`/`ConwayCertOutcome`),
+      `ade_ledger::rules` (`accumulate_tx_certs` era-dispatch).
+      Tests: `each_tag_retains_owner_payloads`, `drep_grammar_total`,
+      `conway_cert_action_total`, `apply_outcome_agrees_with_action`,
+      `removed_tag_rejects_as_era_invalid`,
+      `drep_registration_is_owner_tagged_not_applied`,
+      `era_dispatch_conway_accumulates_via_conway_path`,
+      `era_dispatch_shelley_accumulates_via_shelley_path`,
+      `conway_decode_error_is_fail_closed`,
+      `conway_unknown_tag_is_fail_closed`,
+      `conway_removed_tag_is_fail_closed`,
+      `conway_apply_error_is_fail_closed`,
+      `conway_governance_cert_routed_out_of_scope`,
+      `positive_synthetic_cert_state_accumulates`,
+      `cert_state_replay_byte_identical`, `adversarial_no_false_accept`.
+      **Status: `enforced`** via `ci/ci_check_forbidden_patterns.sh`
+      (fail-closed swallow-guard); `strengthened_in = ["PHASE4-B4"]`;
+      `cluster = "CL-LEDGER-VERDICT"`; `cross_ref = [DC-VAL-06,
+      DC-TXV-06, DC-LEDGER-07, T-DET-01, CN-LEDGER-07]`.
+      `open_obligation`: the real epoch-576 cert-state-vs-cardano-node
+      oracle is environment-blocked (UMap snapshot absent) and
+      reclassified per tier doctrine — same constraint as
+      `DC-TXV-06`/`DC-TXV-03`.
 - Removals: **0** (expected under append-only discipline; clean).
 - Strengthenings (`declared`/`partial` → `enforced`, or tightened):
   - **`DC-TXV-06`** (B3F, `d6c1993`): `partial` → **`enforced`** — the
     closed cert-deposit classification now carries a standing CI
     grep-gate, not only exhaustive-match + tests.
     `strengthened_in += "PHASE4-B3F"`.
-  - **`DC-VAL-06`** (B3F, `193d2fc`): the fail-closed-field rule
-    strengthened — the Conway cert decoder now rejects trailing bytes
-    and bounds preallocation; `tests` extended with
-    `trailing_bytes_after_cert_array_rejected` and
-    `huge_array_count_rejects_without_overallocating`;
+  - **`DC-VAL-06`** (B3F, `193d2fc`; B4, `302d22c`): the
+    fail-closed-field rule strengthened — the Conway cert decoder
+    rejects trailing bytes and bounds preallocation (B3F), and the
+    cert-state accumulation path now propagates decode/apply errors
+    instead of swallowing them "non-fatal during replay" (B4);
     `strengthened_in = ["PHASE4-B1", "PHASE4-B2", "PHASE4-B3",
-    "PHASE4-B3F"]`. (Also strengthened in B3 with the fail-closed
-    deposit/refund accounting on the body-validity path.)
+    "PHASE4-B3F", "PHASE4-B4"]`. (Also strengthened in B3 with the
+    fail-closed deposit/refund accounting on the body-validity path.)
   - **`T-CONSERV-01` / `CN-LEDGER-07`** (B3, `978c222`): the
     preservation-of-value invariant is strengthened from the
     deposit-free form to the **full** Conway equation
@@ -630,7 +797,8 @@ prose normative-doc rules; this section reports on it.
     faithfully; see Anomalies.
 
 Family counts at HEAD: CN dominates (~64), DC grew most across the delta
-(now including `DC-CONS` ×8, `DC-VAL` ×6, `DC-TXV` ×7, `DC-MEM` ×2),
+(now including `DC-CONS` ×8, `DC-VAL` ×6, `DC-TXV` ×7, `DC-MEM` ×2, and
+the new `DC-LEDGER-08` joining the existing `DC-LEDGER` rules),
 T = 30, RO/OP combined ×9.
 
 Normative-doc rule extraction (the `normative_docs` list in
@@ -641,6 +809,46 @@ structured registry is the authoritative source.
 
 ## Anomalies and Cross-Reference Warnings
 
+- **PHASE4-B4 closed (`ee35493`) — cert-state accumulation fail-open
+  CLOSED.** The fail-open that B3 left on the block-level
+  cert-accumulation path (the `_era` discard plus the two "non-fatal
+  during replay" swallows in `process_block_certificates`) is removed:
+  `accumulate_tx_certs` era-dispatches and propagates decode/apply
+  errors as structured `LedgerError`, the Conway decoder is now
+  owner-complete (no payload dropping), and the apply model is total
+  over all 18 tags. `DC-LEDGER-08` introduced and `enforced` (CI guard
+  in `ci_check_forbidden_patterns.sh`); strengthens `DC-VAL-06`.
+- **B4 governance certs deferred to PHASE4-B5 (declared follow-up).**
+  Vote-delegation, committee auth/resign, and DRep reg/unreg/update
+  certs are decoded and **owner-tagged to `ConwayGovState`** but routed
+  **out of B4 mutation scope** — observed, not applied. This is a
+  deliberate, declared boundary (`DC-LEDGER-08` names it explicitly),
+  not a gap: wiring the owner-tagged governance effects into applied
+  governance state is **PHASE4-B5 (Conway governance-certificate
+  accumulation authority)**. Composite tags 10/12/13 already represent
+  both their B4-owned cert-state mutation and their governance effect.
+- **B4 real cert-state oracle environment-blocked (reclassified).** The
+  real epoch-576 cert-state-vs-cardano-node oracle could not run — the
+  epoch-576 UMap snapshot is absent (`corpus/cert_state/README.md`,
+  `corpus/validity/conway_epoch576/README.md`). Reclassified per tier
+  doctrine, the **same environment constraint as `DC-TXV-06`/`DC-TXV-03`**.
+  Mechanical closure shipped instead: owner-complete decode + total
+  owner-tagged apply + era-dispatched fail-closed accumulation +
+  synthetic positive / replay-byte-identical / adversarial corpus
+  (`cert_state_corpus.rs`, `conway_cert_decode_complete.rs`). Not a
+  coverage gap in the transition itself.
+- **Grounding docs partially stale (B3F + B4).** CODEMAP, SEAMS, and
+  TRACEABILITY were *committed*-refreshed at the B3 close `d766eb0`
+  (N-B + B1 + B2 + B3 rows). The **B3F edits** (the `DC-TXV-06` row to
+  `enforced`, the new `ci_check_conway_cert_classification_closed.sh`,
+  the `conway::cert` strictness note) **and the B4 edits** (the new
+  `DC-LEDGER-08` row, the owner-complete `ConwayCert` / `DRep` /
+  `PoolRegistrationCert.owners` surfaces in CODEMAP, the
+  `apply_conway_cert` / `accumulate_tx_certs` closed cert-apply seam in
+  SEAMS, the extended `ci_check_forbidden_patterns.sh` in the CI
+  cross-reference) are the **in-flight working tree**. **This
+  HEAD_DELTAS is current.** Run `/codemap`, `/seams`, `/traceability`
+  and commit alongside the B4 close.
 - **PHASE4-B3 closed (`d766eb0`); PHASE4-B3F follow-up committed
   (`193d2fc`).** The prior regen's "B3 close in flight" anomaly is
   **resolved** — the `Close PHASE4-B3` commit landed, archived the
@@ -674,16 +882,6 @@ structured registry is the authoritative source.
   valid input (the cert field is an exact CBOR item); the change closes
   a malformed-trailing-input acceptance edge and a crafted-huge-count
   over-allocation. Strengthens `DC-VAL-06`.
-- **Grounding docs partially stale (B3F).** CODEMAP, SEAMS, and
-  TRACEABILITY were *committed*-refreshed at the B3 close `d766eb0`
-  (which carried the N-B + B1 + B2 + B3 rows). The **B3F edits** — the
-  `DC-TXV-06` row flipping to `enforced` with the new `ci_script` in
-  TRACEABILITY, the new `ci_check_conway_cert_classification_closed.sh`
-  in the CI cross-reference, and the `conway::cert` strictness note in
-  SEAMS — are the **in-flight working tree** (`docs/ade-CODEMAP.md`,
-  `docs/ade-SEAMS.md`, `docs/ade-TRACEABILITY.md` are `M` in
-  `git status`). **This HEAD_DELTAS is current.** Run `/codemap`,
-  `/seams`, `/traceability` and commit alongside the B3F close.
 - **DC-VAL status mismatch vs. closure claim (B1, carried forward).**
   PHASE4-B1 is reported fully closed, but in the registry only
   `DC-VAL-01` is `enforced` — `DC-VAL-02` → `DC-VAL-05` remain
@@ -716,10 +914,12 @@ structured registry is the authoritative source.
   (`corpus/validity/conway_epoch576/resolved_inputs.json`,
   `resolution_set.txt`) because it is a real on-chain input-resolution
   set, not a derivable mutation.
-- **PHASE4-N-A / N-B / N-D / B1 / B2 / B3 closed.** N-A `69a2862`
+- **PHASE4-N-A / N-B / N-D / B1 / B2 / B3 / B4 closed.** N-A `69a2862`
   (+`744ef34`); N-B `a0c73e1`; N-D `436b1d7`; B1 `993f363`; B2
-  `c1cba82`; B3 `d766eb0`. B3F follow-up committed (`193d2fc`);
-  its grounding-doc ripple is in flight.
+  `c1cba82`; B3 `d766eb0`; B4 `ee35493` (B4-S5 corpus closes the arc).
+  B3F follow-up committed (`193d2fc`); the combined B3F + B4
+  grounding-doc ripple is in flight. **Declared follow-up: PHASE4-B5**
+  (Conway governance-certificate accumulation authority).
 - **`ade_core_interop` tests `#[ignore]`-gated / offline-replay by
   design.** Live tip-agreement not run in CI; CE-N-B-6 closure evidence
   is a manual operator pass.
@@ -728,15 +928,18 @@ structured registry is the authoritative source.
   the ~7M-line negative line count; replaced by 12 re-extracted
   boundary-block sets.
 - No removed canonical types (n/a — no separate registry).
-- No removed registry rules (expected: 0; actual: 0).
+- No removed registry rules (expected: 0; actual: 0). B4 added
+  `DC-LEDGER-08` (append-only; net +1).
 - **All commit subjects carry a conventional-commits prefix or are
   cluster-close housekeeping.** The four `Close PHASE4-*` commits
   (`69a2862`, `436b1d7`, `a0c73e1`, `993f363`, `d766eb0`) and the bare
   `chore:` commits (`3552bc2`, `e0af99d`) are classified `chore` on
   scope grounds. The B3 trio (`3aebbe5` docs, `978c222` feat, `7784bf8`
-  test) and the B3F pair (`d6c1993` feat(ci), `193d2fc` feat(codec)) are
-  conventional. No unclassifiable subjects. Both B3F commits carry the
-  repo-required `Co-Authored-By` model-attribution trailer.
+  test), the B3F pair (`d6c1993` feat(ci), `193d2fc` feat(codec)), and
+  the B4 quintet (`ae1300a` docs(planning), `228415b` feat(codec),
+  `da30706`/`302d22c` feat(ledger), `ee35493` test(ledger)) are all
+  conventional. No unclassifiable subjects. All five B4 commits carry
+  the repo-required `Co-Authored-By` model-attribution trailer.
 
 ---
 
@@ -749,5 +952,6 @@ cluster-close-level follow-up refresh, not a phase boundary, so the
 baseline is unchanged**). Update the baseline on the next phase boundary
 (Phase 4 close). Note the commit-hash rewrite caveat at the top —
 re-derive hashes from `git log` at each regen rather than carrying them
-forward. This regen was cut at committed HEAD `193d2fc` (PHASE4-B3F-S2)
-with the B3F CODEMAP/SEAMS/TRACEABILITY ripple still in the working tree.
+forward. This regen was cut at committed HEAD `ee35493` (PHASE4-B4-S5)
+with the combined B3F + B4 CODEMAP/SEAMS/TRACEABILITY ripple still in
+the working tree.
