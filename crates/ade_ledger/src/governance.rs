@@ -53,7 +53,7 @@ pub fn evaluate_ratification(
     proposals: &[GovActionState],
     drep_stake: &DRepStakeDistribution,
     pool_stake: &BTreeMap<ade_types::tx::PoolId, Coin>,
-    committee_members: &BTreeMap<Hash28, u64>, // cold credential → expiry epoch
+    committee_members: &BTreeMap<StakeCredential, u64>, // cold credential → expiry epoch
     committee_quorum: &Rational,
     pool_thresholds: &[(u64, u64)],   // per-action-type pool voting thresholds
     drep_thresholds: &[(u64, u64)],   // per-action-type DRep voting thresholds
@@ -177,7 +177,7 @@ fn check_ratification(
     drep_stake: &DRepStakeDistribution,
     _total_pool_stake: u64,
     pool_stake: &BTreeMap<ade_types::tx::PoolId, Coin>,
-    committee_members: &BTreeMap<Hash28, u64>,
+    committee_members: &BTreeMap<StakeCredential, u64>,
     committee_quorum: &Rational,
     pool_thresholds: &[(u64, u64)],
     drep_thresholds: &[(u64, u64)],
@@ -202,16 +202,16 @@ fn check_ratification(
                     if !matches!(vote, Vote::Yes) { return false; }
                     // Resolve hot→cold. If mapping exists, check cold is active member.
                     // If no mapping, fall back to counting all Yes votes.
-                    // Committee votes carry a bare hot-key hash (no discriminant), so
-                    // the discriminated committee_hot_keys is matched on its hash; the
-                    // resolved cold credential is likewise compared by hash against the
-                    // Hash28-keyed committee member set.
+                    // Hot voter, hot→cold mapping, and cold member are all
+                    // discriminated credentials; resolution is full-credential
+                    // equality so a key-hash hot key never cross-resolves to a
+                    // script-hash member of equal bytes.
                     if let Some(cold) = committee_hot_keys
                         .iter()
-                        .find(|(hot, _)| hot.hash() == hot_cred)
+                        .find(|(hot, _)| *hot == hot_cred)
                         .map(|(_, cold)| cold)
                     {
-                        active_members.iter().any(|(c, _)| **c == *cold.hash())
+                        active_members.iter().any(|(c, _)| **c == *cold)
                     } else {
                         // No hot key mapping — count vote if we have enough votes
                         // (fallback for when VState parsing doesn't cover all keys)

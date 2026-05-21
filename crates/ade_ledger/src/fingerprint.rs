@@ -271,7 +271,7 @@ fn fingerprint_governance(gov: Option<&ConwayGovState>) -> Hash32 {
             // 2. committee
             write_map_canonical(&mut buf, g.committee.len() as u64);
             for (cred, expiry) in &g.committee {
-                write_hash28(&mut buf, cred);
+                write_stake_credential(&mut buf, cred);
                 write_uint_canonical(&mut buf, *expiry);
             }
 
@@ -563,7 +563,7 @@ fn write_drep(buf: &mut Vec<u8>, drep: &DRep) {
 fn write_gov_action_state(buf: &mut Vec<u8>, s: &GovActionState) {
     write_array_canonical(buf, 9);
     write_gov_action_id(buf, &s.action_id);
-    write_vote_list(buf, &s.committee_votes);
+    write_committee_vote_list(buf, &s.committee_votes);
     write_vote_list(buf, &s.drep_votes);
     write_vote_list(buf, &s.spo_votes);
     write_coin(buf, s.deposit);
@@ -588,6 +588,20 @@ fn write_vote_list(buf: &mut Vec<u8>, votes: &[(Hash28, Vote)]) {
     for (hash, vote) in sorted {
         write_array_canonical(buf, 2);
         write_hash28(buf, hash);
+        write_uint_canonical(buf, vote_tag(vote));
+    }
+}
+
+fn write_committee_vote_list(buf: &mut Vec<u8>, votes: &[(StakeCredential, Vote)]) {
+    // Vec<(StakeCredential, Vote)> insertion order is not a state-level invariant;
+    // sort by the discriminated credential's Ord for canonical encoding.
+    let mut sorted: Vec<(&StakeCredential, Vote)> =
+        votes.iter().map(|(c, v)| (c, *v)).collect();
+    sorted.sort_by(|(a, _), (b, _)| a.cmp(b));
+    write_array_canonical(buf, sorted.len() as u64);
+    for (cred, vote) in sorted {
+        write_array_canonical(buf, 2);
+        write_stake_credential(buf, cred);
         write_uint_canonical(buf, vote_tag(vote));
     }
 }

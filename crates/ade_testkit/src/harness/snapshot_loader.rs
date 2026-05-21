@@ -1952,8 +1952,8 @@ pub fn parse_drep_registrations(
 /// Committee state parsed from ConwayGovState.
 #[derive(Debug, Clone)]
 pub struct CommitteeState {
-    /// Cold committee credentials → expiry epoch.
-    pub members: std::collections::BTreeMap<ade_types::Hash28, u64>,
+    /// Discriminated cold committee credentials → expiry epoch.
+    pub members: std::collections::BTreeMap<ade_types::shelley::cert::StakeCredential, u64>,
     /// Committee quorum as rational (numerator, denominator).
     pub quorum: (u64, u64),
 }
@@ -1964,7 +1964,7 @@ pub struct CommitteeState {
 /// Returns committee members (cold credential → expiry epoch) and quorum.
 pub fn parse_committee_members(
     state_cbor: &[u8],
-) -> Result<std::collections::BTreeMap<ade_types::Hash28, u64>, HarnessError> {
+) -> Result<std::collections::BTreeMap<ade_types::shelley::cert::StakeCredential, u64>, HarnessError> {
     parse_committee_state(state_cbor).map(|cs| cs.members)
 }
 
@@ -2011,11 +2011,17 @@ pub fn parse_committee_state(
         if is_indef && state_cbor[co] == 0xff { break; }
         if !is_indef && count >= map_val { break; }
 
-        // Key: credential = array(2) [type, hash28]
+        // Key: Credential ColdCommitteeRole = array(2) [type_tag, hash28] — a
+        // discriminated credential on the wire (see VState comment below). Preserve
+        // the type tag so a key-hash and script-hash member of equal bytes stay
+        // distinct.
         let (k_body, k_maj, k_val) = read_cbor_initial(state_cbor, co)?;
         let key_end = skip_cbor(state_cbor, co)?;
         let mut hash = [0u8; 28];
+        let mut tag = 0u64; // GREEN: tag unavailable for the raw-bytes fallback below
         if k_maj == 4 {
+            let (_, _, type_tag) = read_cbor_initial(state_cbor, k_body)?;
+            tag = type_tag;
             let tag_end = skip_cbor(state_cbor, k_body)?;
             let (h_start, _, h_len) = read_cbor_initial(state_cbor, tag_end)?;
             if h_len >= 28 { hash.copy_from_slice(&state_cbor[h_start..h_start + 28]); }
@@ -2028,7 +2034,7 @@ pub fn parse_committee_state(
         let (_, expiry) = read_uint(state_cbor, co)?;
         co = skip_cbor(state_cbor, co)?;
 
-        members.insert(ade_types::Hash28(hash), expiry);
+        members.insert(mk_credential(tag, hash), expiry);
         count += 1;
     }
 
@@ -2303,8 +2309,8 @@ pub fn parse_governance_proposals(
         let action_id = GovActionId { tx_hash: ade_types::Hash32(tx_hash), index: index as u32 };
         let f1 = skip_cbor(state_cbor, gas_body)?;
 
-        // [1] committeeVotes, [2] drepVotes, [3] spoVotes
-        let committee_votes = parse_vote_map(state_cbor, f1)?;
+        // [1] committeeVotes (discriminated voter), [2] drepVotes, [3] spoVotes
+        let committee_votes = parse_committee_vote_map(state_cbor, f1)?;
         let f2 = skip_cbor(state_cbor, f1)?;
         let drep_votes = parse_vote_map(state_cbor, f2)?;
         let f3 = skip_cbor(state_cbor, f2)?;
@@ -2386,6 +2392,60 @@ fn parse_vote_map(
         co = skip_cbor(state_cbor, co)?;
 
         votes.push((ade_types::Hash28(hash), vote));
+        count += 1;
+    }
+    Ok(votes)
+}
+
+/// Parse a committee vote map (`map(Credential HotCommitteeRole → vote)`),
+/// preserving the discriminated voter credential. Mirrors [`parse_vote_map`]
+/// (used for drep/spo votes which stay bare `Hash28`) but reads the voter's
+/// key/script type tag so a key-hash and script-hash voter of equal bytes stay
+/// distinct on the BLUE committee path.
+fn parse_committee_vote_map(
+    state_cbor: &[u8],
+    map_off: usize,
+) -> Result<Vec<(ade_types::shelley::cert::StakeCredential, ade_types::conway::governance::Vote)>, HarnessError> {
+    use ade_types::conway::governance::Vote;
+
+    let (mut co, _, map_val) = read_cbor_initial(state_cbor, map_off)?;
+    let mut votes = Vec::new();
+
+    if map_val == 0 { return Ok(votes); } // empty definite map
+
+    let is_indef = map_val == u64::MAX;
+    let mut count = 0u64;
+
+    while co < state_cbor.len() {
+        if is_indef && state_cbor[co] == 0xff { break; }
+        if !is_indef && count >= map_val { break; }
+
+        // Key: Credential = array(2) [type_tag, bytes(28)] OR raw hash = bytes(28)
+        let (key_body, key_maj, key_val) = read_cbor_initial(state_cbor, co)?;
+        let key_end = skip_cbor(state_cbor, co)?;
+        let mut hash = [0u8; 28];
+        let mut tag = 0u64; // GREEN: tag unavailable for the raw-bytes fallback below
+        if key_maj == 4 {
+            let (_, _, type_tag) = read_cbor_initial(state_cbor, key_body)?;
+            tag = type_tag;
+            let tag_end = skip_cbor(state_cbor, key_body)?;
+            let (h_start, _, h_len) = read_cbor_initial(state_cbor, tag_end)?;
+            if h_len >= 28 { hash.copy_from_slice(&state_cbor[h_start..h_start + 28]); }
+        } else if key_maj == 2 && key_val >= 28 {
+            hash.copy_from_slice(&state_cbor[key_body..key_body + 28]);
+        }
+        co = key_end;
+
+        // Value: uint (0=No, 1=Yes, 2=Abstain)
+        let (_, vote_val) = read_uint(state_cbor, co)?;
+        let vote = match vote_val {
+            0 => Vote::No,
+            1 => Vote::Yes,
+            _ => Vote::Abstain,
+        };
+        co = skip_cbor(state_cbor, co)?;
+
+        votes.push((mk_credential(tag, hash), vote));
         count += 1;
     }
     Ok(votes)

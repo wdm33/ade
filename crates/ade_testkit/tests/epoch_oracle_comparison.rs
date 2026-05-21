@@ -4116,7 +4116,8 @@ fn conway_vstate_parse() {
         match parse_committee_members(&data) {
             Ok(members) => {
                 eprintln!("    committee members: {}", members.len());
-                for (hash, expiry) in &members {
+                for (cred, expiry) in &members {
+                    let hash = cred.hash();
                     eprintln!("      {:02x}{:02x}{:02x}{:02x}.. expiry={expiry}",
                         hash.0[0], hash.0[1], hash.0[2], hash.0[3]);
                 }

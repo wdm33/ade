@@ -83,8 +83,8 @@ pub struct LedgerState {
 pub struct ConwayGovState {
     /// Active governance proposals.
     pub proposals: Vec<ade_types::conway::governance::GovActionState>,
-    /// Committee members: credential hash → expiry epoch.
-    pub committee: std::collections::BTreeMap<ade_types::Hash28, u64>,
+    /// Committee members: discriminated cold credential → expiry epoch.
+    pub committee: std::collections::BTreeMap<ade_types::shelley::cert::StakeCredential, u64>,
     /// Committee quorum (numerator, denominator).
     pub committee_quorum: (u64, u64),
     /// DRep expiry epochs: DRep credential → expiry epoch.

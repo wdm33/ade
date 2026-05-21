@@ -7,6 +7,7 @@
 
 use crate::{Hash28, Hash32, EpochNo};
 use crate::tx::Coin;
+use crate::shelley::cert::StakeCredential;
 
 /// Governance action identifier: transaction hash + index within that transaction.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
@@ -39,7 +40,7 @@ pub enum GovAction {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct GovActionState {
     pub action_id: GovActionId,
-    pub committee_votes: Vec<(Hash28, Vote)>,
+    pub committee_votes: Vec<(StakeCredential, Vote)>,
     pub drep_votes: Vec<(Hash28, Vote)>,
     pub spo_votes: Vec<(Hash28, Vote)>,
     pub deposit: Coin,
