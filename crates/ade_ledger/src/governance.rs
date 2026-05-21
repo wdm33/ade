@@ -346,6 +346,10 @@ pub struct EnactmentEffects {
     /// discriminated `ConwayGovState.committee` map on write-back (DC-LEDGER-10,
     /// ENACTMENT-COMMITTEE-FIDELITY). Currently dormant (always `None`).
     pub committee_changes: Option<(Vec<StakeCredential>, Vec<(StakeCredential, u64)>)>,
+    /// New committee quorum threshold (numerator, denominator) set by a ratified
+    /// `UpdateCommittee`. Applied to `ConwayGovState.committee_quorum` on
+    /// write-back; `None` leaves the quorum unchanged.
+    pub committee_threshold: Option<(u64, u64)>,
     /// Constitution replaced (raw CBOR).
     pub new_constitution: Option<Vec<u8>>,
     /// Number of InfoActions enacted (no state effect).
@@ -397,8 +401,18 @@ pub fn enact_proposals(
                 effects.committee_dissolved = true;
             }
             GovAction::UpdateCommittee { removed, added, threshold, .. } => {
-                // Write-back logic wired in S2; S1 only structures the type.
-                let _ = (removed, added, threshold);
+                // Removed + added members and the new quorum threshold become the
+                // committee write-back effect, applied at the epoch boundary
+                // (rules.rs). BTreeSet/BTreeMap iteration is sorted, so the Vecs
+                // are deterministic. Cold credentials stay discriminated
+                // (DC-LEDGER-10). If more than one UpdateCommittee ratified
+                // (prevented in practice by prev-action lineage), the last in the
+                // deterministic sort order wins.
+                effects.committee_changes = Some((
+                    removed.iter().cloned().collect(),
+                    added.iter().map(|(c, e)| (c.clone(), *e)).collect(),
+                ));
+                effects.committee_threshold = Some(*threshold);
             }
             GovAction::NewConstitution { raw, .. } => {
                 effects.new_constitution = Some(raw.clone());
@@ -413,6 +427,42 @@ pub fn enact_proposals(
     }
 
     effects
+}
+
+/// Apply the committee-changing enactment effects to the committee map and
+/// quorum, producing the next-epoch committee state. Pure, total, deterministic
+/// (BLUE): the sole authority for committee write-back at the epoch boundary.
+///
+/// - `NoConfidence` (`committee_dissolved`) clears the committee.
+/// - `UpdateCommittee` (`committee_changes`) removes the removed cold
+///   credentials, then inserts the added ones with their term-expiry epoch.
+/// - `committee_threshold` sets the new quorum; `None` leaves it unchanged.
+///
+/// Dissolve is applied before the add/remove so that members from a (non-spec)
+/// co-ratified `UpdateCommittee` still take effect. Cold credentials stay
+/// discriminated `StakeCredential` (DC-LEDGER-10) — the map cannot re-collapse.
+pub fn apply_committee_enactment(
+    committee: &BTreeMap<StakeCredential, u64>,
+    quorum: (u64, u64),
+    effects: &EnactmentEffects,
+) -> (BTreeMap<StakeCredential, u64>, (u64, u64)) {
+    let mut next = committee.clone();
+    let mut next_quorum = quorum;
+    if effects.committee_dissolved {
+        next.clear();
+    }
+    if let Some((removed, added)) = &effects.committee_changes {
+        for cred in removed {
+            next.remove(cred);
+        }
+        for (cred, expiry) in added {
+            next.insert(cred.clone(), *expiry);
+        }
+    }
+    if let Some(threshold) = effects.committee_threshold {
+        next_quorum = threshold;
+    }
+    (next, next_quorum)
 }
 
 // ─── Expiry ──────────────────────────────────────────────────────────
@@ -594,5 +644,133 @@ mod committee_fidelity_tests {
         assert_ne!(add[0].0, add[1].0, "KeyHash(0xC1) != ScriptHash(0xC1)");
         // Default stays dormant.
         assert!(EnactmentEffects::default().committee_changes.is_none());
+    }
+
+    // ── ENACTMENT-COMMITTEE-WRITEBACK S2: enactment write-back (CE-4..CE-6) ──
+
+    fn ratified_with(action: GovAction) -> GovActionState {
+        GovActionState {
+            action_id: GovActionId { tx_hash: Hash32([0x09; 32]), index: 0 },
+            committee_votes: Vec::new(),
+            drep_votes: Vec::new(),
+            spo_votes: Vec::new(),
+            deposit: Coin(0),
+            return_addr: Vec::new(),
+            gov_action: action,
+            proposed_in: EpochNo(500),
+            expires_after: EpochNo(506),
+        }
+    }
+
+    fn base_committee() -> std::collections::BTreeMap<StakeCredential, u64> {
+        [(key(0xA0), 600u64), (script(0xA1), 600u64)].into_iter().collect()
+    }
+
+    /// CE-4: a ratified NoConfidence dissolves the committee to empty on
+    /// write-back (the gap this cluster closes — the apply site used to clone
+    /// the committee unchanged).
+    #[test]
+    fn enact_noconfidence_dissolves_committee() {
+        let effects = enact_proposals(&[ratified_with(GovAction::NoConfidence { prev_action: None })]);
+        assert!(effects.committee_dissolved, "NoConfidence sets committee_dissolved");
+        assert!(effects.committee_changes.is_none());
+
+        let (next, quorum) = apply_committee_enactment(&base_committee(), (2, 3), &effects);
+        assert!(next.is_empty(), "committee dissolved to empty");
+        assert_eq!(quorum, (2, 3), "NoConfidence does not change the quorum");
+    }
+
+    /// CE-5: a ratified UpdateCommittee removes the removed members, inserts the
+    /// added ones with their expiry, and sets the new quorum threshold.
+    #[test]
+    fn enact_update_committee_applies_changes() {
+        let removed: std::collections::BTreeSet<StakeCredential> =
+            [key(0xA0)].into_iter().collect();
+        let added: std::collections::BTreeMap<StakeCredential, u64> =
+            [(key(0xB0), 720u64), (script(0xB1), 730u64)].into_iter().collect();
+        let action = GovAction::UpdateCommittee {
+            prev_action: None,
+            removed,
+            added,
+            threshold: (3, 5),
+        };
+        let effects = enact_proposals(&[ratified_with(action)]);
+        assert_eq!(effects.committee_threshold, Some((3, 5)));
+        let (rem, add) = effects.committee_changes.as_ref().unwrap();
+        assert_eq!(rem.len(), 1);
+        assert_eq!(add.len(), 2);
+
+        let (next, quorum) = apply_committee_enactment(&base_committee(), (2, 3), &effects);
+        assert!(!next.contains_key(&key(0xA0)), "removed member is gone");
+        assert!(next.contains_key(&script(0xA1)), "untouched member survives");
+        assert_eq!(next.get(&key(0xB0)), Some(&720), "added key member with its expiry");
+        assert_eq!(next.get(&script(0xB1)), Some(&730), "added script member with its expiry");
+        assert_eq!(quorum, (3, 5), "quorum becomes the new threshold");
+    }
+
+    /// CE-5 (no collapse): a removed key-hash member does NOT remove a
+    /// script-hash member of equal bytes, and an added key/script pair of equal
+    /// bytes are two distinct entries (DC-LEDGER-10 through the write-back).
+    #[test]
+    fn enact_update_committee_keyhash_scripthash_distinct() {
+        let added: std::collections::BTreeMap<StakeCredential, u64> =
+            [(key(0x55), 700u64), (script(0x55), 701u64)].into_iter().collect();
+        let removed: std::collections::BTreeSet<StakeCredential> =
+            [key(0x55)].into_iter().collect();
+        let effects = enact_proposals(&[ratified_with(GovAction::UpdateCommittee {
+            prev_action: None, removed, added, threshold: (1, 2),
+        })]);
+        // Base committee holds a script member of the same bytes as the removed key.
+        let base: std::collections::BTreeMap<StakeCredential, u64> =
+            [(script(0x55), 600u64)].into_iter().collect();
+        let (next, _) = apply_committee_enactment(&base, (2, 3), &effects);
+        // The pre-existing script(0x55) is overwritten by the added script(0x55)=701,
+        // and the added key(0x55)=700 is a distinct entry; removing key(0x55) only
+        // affects the key variant.
+        assert_eq!(next.get(&key(0x55)), Some(&700), "added key member present");
+        assert_eq!(next.get(&script(0x55)), Some(&701), "script member distinct, not collapsed by the key removal");
+        assert_eq!(next.len(), 2, "key and script of equal bytes are two entries");
+    }
+
+    /// CE-6: committee enactment is deterministic and the post-enactment
+    /// gov-state fingerprint is byte-identical across two runs (R-1 / T-DET-01).
+    #[test]
+    fn committee_enactment_replays_byte_identical() {
+        use crate::state::{ConwayGovState, LedgerState};
+        use ade_types::CardanoEra;
+
+        let added: std::collections::BTreeMap<StakeCredential, u64> =
+            [(key(0xB0), 720u64), (script(0xB1), 730u64)].into_iter().collect();
+        let removed: std::collections::BTreeSet<StakeCredential> =
+            [key(0xA0)].into_iter().collect();
+        let effects = enact_proposals(&[ratified_with(GovAction::UpdateCommittee {
+            prev_action: None, removed, added, threshold: (3, 5),
+        })]);
+
+        let build = || {
+            let (committee, quorum) =
+                apply_committee_enactment(&base_committee(), (2, 3), &effects);
+            let mut s = LedgerState::new(CardanoEra::Conway);
+            s.gov_state = Some(ConwayGovState {
+                proposals: Vec::new(),
+                committee,
+                committee_quorum: quorum,
+                drep_expiry: Default::default(),
+                gov_action_lifetime: 6,
+                vote_delegations: Default::default(),
+                pool_voting_thresholds: Vec::new(),
+                drep_voting_thresholds: Vec::new(),
+                committee_hot_keys: Default::default(),
+            });
+            crate::fingerprint::fingerprint(&s).governance
+        };
+
+        // Deterministic helper output.
+        assert_eq!(
+            apply_committee_enactment(&base_committee(), (2, 3), &effects),
+            apply_committee_enactment(&base_committee(), (2, 3), &effects),
+        );
+        // Byte-identical gov-state fingerprint across runs.
+        assert_eq!(build(), build());
     }
 }

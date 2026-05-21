@@ -1217,10 +1217,20 @@ pub fn apply_epoch_boundary_with_registrations(
                 result.ratified.len(), result.expired.len(), result.remaining.len(),
                 effects.treasury_withdrawn / 1_000_000, enacted_deposit_refunds / 1_000_000);
 
+            // Committee write-back (ENACTMENT-COMMITTEE-WRITEBACK): apply the
+            // ratified committee-changing effects to the next-epoch committee +
+            // quorum via the pure transition, instead of cloning them unchanged.
+            let (new_committee, new_committee_quorum) =
+                crate::governance::apply_committee_enactment(
+                    &gov.committee,
+                    gov.committee_quorum,
+                    &effects,
+                );
+
             Some(crate::state::ConwayGovState {
                 proposals: result.remaining,
-                committee: gov.committee.clone(),
-                committee_quorum: gov.committee_quorum,
+                committee: new_committee,
+                committee_quorum: new_committee_quorum,
                 drep_expiry: gov.drep_expiry.clone(),
                 gov_action_lifetime: gov.gov_action_lifetime,
                 vote_delegations: gov.vote_delegations.clone(),
@@ -2645,6 +2655,49 @@ mod cert_state_dispatch {
             g.drep_expiry.get(&cred),
             Some(&(576 + 20)),
             "DRep expiry accumulated into gov_state from the block path",
+        );
+    }
+
+    /// ENACTMENT-COMMITTEE-WRITEBACK S2: the epoch-boundary apply site now writes
+    /// the committee back. A ratified NoConfidence (empty stake distributions →
+    /// DRep/SPO gates skip; committee gate skipped for NoConfidence) dissolves the
+    /// committee in the next-epoch ConwayGovState — it used to be cloned unchanged.
+    /// Proves the wiring, not just the pure helper.
+    #[test]
+    fn epoch_boundary_ratified_noconfidence_dissolves_committee() {
+        use crate::state::LedgerState;
+        use super::apply_epoch_boundary_full;
+        use ade_types::conway::governance::{GovAction, GovActionId, GovActionState};
+        use ade_types::shelley::cert::StakeCredential;
+        use ade_types::{EpochNo, Hash28, Hash32};
+
+        let mut state = LedgerState::new(CardanoEra::Conway);
+        state.epoch_state.epoch = EpochNo(500);
+        let mut gov = empty_gov();
+        gov.committee = [
+            (StakeCredential::KeyHash(Hash28([0xA0; 28])), 600u64),
+            (StakeCredential::ScriptHash(Hash28([0xA1; 28])), 600u64),
+        ]
+        .into_iter()
+        .collect();
+        gov.proposals = vec![GovActionState {
+            action_id: GovActionId { tx_hash: Hash32([0x01; 32]), index: 0 },
+            committee_votes: Vec::new(),
+            drep_votes: Vec::new(),
+            spo_votes: Vec::new(),
+            deposit: Coin(0),
+            return_addr: Vec::new(),
+            gov_action: GovAction::NoConfidence { prev_action: None },
+            proposed_in: EpochNo(499),
+            expires_after: EpochNo(510),
+        }];
+        state.gov_state = Some(gov);
+
+        let (new_state, _acct) = apply_epoch_boundary_full(&state, EpochNo(501));
+        let new_gov = new_state.gov_state.expect("conway gov state present");
+        assert!(
+            new_gov.committee.is_empty(),
+            "ratified NoConfidence must dissolve the committee at the epoch boundary",
         );
     }
 
