@@ -3,18 +3,45 @@
 > **Status:** Living architectural document. Regenerated; not hand-edited.
 > Per-project instance of `~/.claude/methodology/templates/seams.md`.
 
-> 11 crates, 29 CI checks at HEAD (`a3ee2da`).
+> 11 crates, 29 CI checks at HEAD (`2aeea16`).
 > Reads CODEMAP for the module list and TCB colors; reads the invariant
 > registry (`docs/ade-invariant-registry.toml`) for rule IDs; reads the
 > Phase 4 cluster plan (`docs/active/phase_4_cluster_plan.md`), the
 > closed N-D / N-A / N-B / B1 / B2 / B3 / B4 / B5 cluster docs, and the
-> OQ5-CREDENTIAL-FIDELITY cluster doc plus its slices.
+> OQ5-CREDENTIAL-FIDELITY and COMMITTEE-CRED-FIDELITY cluster docs plus
+> their slices.
 >
-> **This is an OQ5-CREDENTIAL-FIDELITY close refresh (HEAD `a3ee2da`).** The
+> **This is a COMMITTEE-CRED-FIDELITY close refresh (HEAD `2aeea16`).** The
 > body was fully regenerated at PHASE4-B3 close (`7784bf8`), folded in the B3F
-> hardening deltas (`193d2fc`), the PHASE4-B4 deltas (`ee35493`), and the
-> PHASE4-B5 deltas (`644eb03`); this revision folds in the
-> OQ5-CREDENTIAL-FIDELITY deltas. **THE KEY OQ5 DELTA:** the credential
+> hardening deltas (`193d2fc`), the PHASE4-B4 deltas (`ee35493`), the
+> PHASE4-B5 deltas (`644eb03`), and the OQ5-CREDENTIAL-FIDELITY deltas
+> (`a3ee2da`); this revision folds in the COMMITTEE-CRED-FIDELITY deltas
+> (`2aeea16`). **THE KEY COMMITTEE-CRED-FIDELITY DELTA:** the committee
+> credential surface is now CLOSED/discriminated. `ConwayGovState.committee`
+> (the elected-member set) is re-keyed from bare `Hash28` to the discriminated
+> `StakeCredential`, and `GovActionState.committee_votes` (in
+> `ade_types::conway::governance`) is re-typed `Vec<(Hash28, Vote)>` →
+> `Vec<(StakeCredential, Vote)>`. Committee ratification in
+> `ade_ledger::governance` resolves hot→cold→member by **full-credential
+> equality** (`*hot == hot_cred`, `**c == *cold`) — no `.hash()` collapse — so a
+> key-hash hot key never cross-resolves to a script-hash member of equal bytes.
+> The new closed fingerprint writer `ade_ledger::fingerprint::write_committee_vote_list`
+> emits the credential discriminant before each vote (via `write_stake_credential`);
+> the DRep / SPO vote lists (`drep_votes` / `spo_votes`) stay `Hash28`-keyed via
+> the unchanged `write_vote_list`. **COMMITTEE-CRED-FIDELITY STRENGTHENS
+> DC-LEDGER-10 (no new rule)** and **EXTENDS the existing CI gate**
+> `ci/ci_check_credential_discriminant_closed.sh` (no new gate, no new file —
+> CI count stays 29) to also defend the committee surface: `ConwayGovState.committee`
+> must stay `StakeCredential`-keyed and `GovActionState.committee_votes` must
+> stay `Vec<(StakeCredential, Vote)>` (no reversion to `Hash28`). **It added no
+> new crate, no new module, no new ingress surface, no new public composer, and
+> no net new canonical type** — the `committee` re-key and the `committee_votes`
+> re-type are field-type changes on existing types; `write_committee_vote_list`
+> is a serializer function, not a type. **This closes the committee half of the
+> OQ5-declared `committee` / `committee_votes` non-goal candidate seam** (a
+> security-review follow-up); the remaining declared non-goal credential surfaces
+> are carried below. **(Prior context — OQ5-CREDENTIAL-FIDELITY close, HEAD
+> `a3ee2da`.) THE KEY OQ5 DELTA:** the credential
 > key/script discriminant the codec previously collapsed onto a bare `Hash28`
 > is now **preserved end-to-end** — `ade_types::shelley::cert::StakeCredential`
 > changed from the tuple-struct `StakeCredential(pub Hash28)` to the **closed
@@ -48,16 +75,19 @@
 > `governance::evaluate_ratification` / `check_ratification`,
 > `rules::apply_epoch_boundary_with_registrations`) and the bare-`Hash28`
 > committee member / committee-vote sets — never to re-key authoritative state.
-> **The prior B5 follow-up OQ-5 (credential key/script discriminant collapse) is
-> now WIRED AND CLOSED** by this cluster; the remaining declared separable
-> follow-up OQ-3 (GOVCERT committee-membership tx-validity gate) stays a
-> **candidate future seam, NOT an open extension point now**. A new set of
-> declared non-goal candidate seams is recorded below: the
-> withdrawal/required-signer/address credential discriminant; the
-> `Hash28`-keyed stake-distribution snapshot; committee member/vote
-> discrimination (security-review follow-up — `committee_hot_keys` is now
-> discriminated but `committee` / `committee_votes` are not); and the Byron
-> credential surface. The carried B4 narrow gap stands: the
+> **COMMITTEE-CRED-FIDELITY then CLOSED the committee half of OQ5's `committee` /
+> `committee_votes` non-goal seam** — both are now `StakeCredential`-discriminated
+> (the `committee_hot_keys` map was already discriminated at OQ5). The prior B5
+> follow-up OQ-5 (credential key/script discriminant collapse) was WIRED AND
+> CLOSED at OQ5; the remaining declared separable follow-up OQ-3 (GOVCERT
+> committee-membership tx-validity gate) stays a **candidate future seam, NOT an
+> open extension point now**. The remaining declared non-goal candidate seams are
+> recorded below: the withdrawal/required-signer/address credential discriminant;
+> the `Hash28`-keyed stake-distribution snapshot; **DRep-vote discrimination** (the
+> `drep_votes` lookup_stake key/script OR-fallback in `ade_ledger::governance` — the
+> recommended next discriminant cluster); **`EnactmentEffects.committee_changes`**
+> (still a dormant bare-`Hash28` — must migrate before committee enactment); and
+> the Byron credential surface. The carried B4 narrow gap stands: the
 > `ade_ledger::delegation` owner-tagged apply *types* are still outside the
 > `ci_check_consensus_closed_enums.sh` `TARGETS` array.
 >
@@ -253,6 +283,24 @@ future seams, NOT open extension points at this HEAD.**
 > committee member / committee-vote sets). It is a one-way down-projection, never
 > a re-key of authoritative state — see the candidate-seam table for the
 > declared non-goal surfaces it touches.
+>
+> **COMMITTEE-CRED-FIDELITY added no new external ingress surface either.** It is
+> the committee half of the same credential-discriminant fidelity refactor across
+> the existing gov-state-key + gov-cert-decode + fingerprint surfaces, not a new
+> entry point. **The changed seams are internal type-fidelity migrations:**
+> `ConwayGovState.committee` re-keyed `Hash28` → `StakeCredential`,
+> `GovActionState.committee_votes` re-typed `Vec<(Hash28, Vote)>` →
+> `Vec<(StakeCredential, Vote)>`, the committee ratification hot→cold→member
+> resolution in `ade_ledger::governance` now compares full discriminated
+> credentials (no `.hash()` collapse), and the new
+> `fingerprint::write_committee_vote_list` emits the discriminant. **Two of the
+> declared non-goal surfaces the OQ5 `cred.hash()` adapter touched are now
+> discriminated and no longer use the adapter** (the `committee` member set and
+> the `committee_votes` set); `cred.hash()` is still the sanctioned one-way
+> down-projection against the remaining `Hash28`-keyed stake-distribution
+> snapshot. No new CI gate — `ci_check_credential_discriminant_closed.sh` was
+> extended to also defend the committee key/vote shapes (DC-LEDGER-10
+> strengthened, no new rule).
 
 ### Surface: Single-tx validity (composition root — wired in B2)
 
@@ -746,10 +794,18 @@ tx-validity gate) stays a **candidate future seam**, and OQ5 added a new set of
 **declared non-goal candidate seams** (recorded in the rows below): the
 withdrawal/required-signer/address credential discriminant; the `Hash28`-keyed
 stake-distribution snapshot; committee member/vote discrimination
-(security-review follow-up — `committee_hot_keys` is now discriminated, but the
-`committee` and `committee_votes` sets are not); and the Byron credential
-surface. These are framed exactly as the cluster declares them: separable
-non-goals, not wired, not open extension points now.
+(security-review follow-up — at OQ5 `committee_hot_keys` was discriminated, but the
+`committee` and `committee_votes` sets were not); and the Byron credential
+surface. These were framed exactly as the OQ5 cluster declared them: separable
+non-goals, not wired, not open extension points then. **COMMITTEE-CRED-FIDELITY
+(HEAD `2aeea16`) then WIRED AND CLOSED the committee member/vote discrimination
+non-goal** — `ConwayGovState.committee` and `GovActionState.committee_votes` are
+now `StakeCredential`-discriminated and committee ratification resolves by
+full-credential equality (DC-LEDGER-10 strengthened, no new rule, no new gate);
+the remaining non-goals (withdrawal/required-signer/address; stake-distribution
+snapshot; **DRep-vote discrimination** — the recommended next discriminant cluster;
+**`EnactmentEffects.committee_changes`** — must migrate before committee enactment;
+Byron credentials) stay separable non-goals, not open extension points now.
 
 | Cluster | Surface | Expected reduction target | Expected chokepoint | Confidence |
 |---------|---------|---------------------------|---------------------|------------|
@@ -758,7 +814,9 @@ non-goals, not wired, not open extension points now.
 | **OQ-5** *(WIRED + CLOSED in OQ5-CREDENTIAL-FIDELITY)* | Credential key/script discriminant — gov-state was keyed on a bare `Hash28`, collapsing key-hash vs. script-hash credentials of the same 28 bytes | A discriminant-preserving credential representation threaded codec → gov-state | **DONE:** `ade_types::shelley::cert::StakeCredential` is now the closed 2-variant enum `{ KeyHash, ScriptHash }`; both `decode_stake_credential` (Shelley + Conway) preserve the discriminant and reject an unknown tag; `ConwayGovState.{vote_delegations, committee_hot_keys, drep_expiry}` re-keyed on it; `fingerprint::write_stake_credential` emits the discriminant. Gated by `ci_check_credential_discriminant_closed.sh` (DC-LEDGER-10) | **wired & closed in OQ5** (was the B5 separable follow-up; now a closed credential surface) |
 | OQ5+ *(declared non-goal — NOT an open seam now)* | **Withdrawal / required-signer / address credential discriminant** — `RewardAccount` / `SignerSource::WithdrawalKey,CertificateKey,GovernanceVoter` / address payment-and-stake credentials still arrive without (or project away) the key/script discriminant on the BLUE path | A discriminant-faithful credential threaded through these surfaces | extend the closed `StakeCredential` discriminant through `decode_withdrawals` keys, `required_signers`, and `decode_address` — a SEPARABLE per-surface fidelity follow-up, not a change to `decode_stake_credential` | candidate (declared non-goal in OQ5 — confirm before any of these surfaces must distinguish key vs. script credentials) |
 | OQ5+ *(declared non-goal — NOT an open seam now)* | **`Hash28`-keyed stake-distribution snapshot** — `epoch.rs` keys the stake-distribution snapshot on bare `Hash28`; `governance::evaluate_ratification` / `apply_epoch_boundary_with_registrations` reach it via the read-only `cred.hash()` adapter | A discriminant-faithful stake-distribution snapshot key | re-key the snapshot on `StakeCredential` (touches the snapshot loader + every `cred.hash()` call site) — a SEPARABLE snapshot-fidelity follow-up; the `cred.hash()` adapter is a deliberate one-way down-projection until then | candidate (declared non-goal in OQ5 — `cred.hash()` is a sanctioned boundary adapter, never a re-key) |
-| OQ5+ *(declared non-goal — security-review follow-up — NOT an open seam now)* | **Committee member / committee-vote discrimination** — `committee_hot_keys` is now discriminated, but the `committee` member set and `committee_votes` set in `ConwayGovState` are still bare `Hash28` | discriminant-faithful committee member / vote sets | extend the `StakeCredential` discriminant into the `committee` / `committee_votes` shapes (touches the gov-cert apply + ratification reads) — a SEPARABLE committee-fidelity follow-up | candidate (declared non-goal + security-review follow-up in OQ5 — confirm before committee authority pivots on the member/vote discriminant) |
+| **Committee member / committee-vote discrimination** *(WIRED + CLOSED in COMMITTEE-CRED-FIDELITY)* | `committee` member set + `committee_votes` set were bare `Hash28` at OQ5 (only `committee_hot_keys` was discriminated) | discriminant-faithful committee member / vote sets | **DONE:** `ConwayGovState.committee` re-keyed `Hash28` → `StakeCredential`; `GovActionState.committee_votes` re-typed `Vec<(Hash28, Vote)>` → `Vec<(StakeCredential, Vote)>`; committee ratification resolves hot→cold→member by full-credential equality (no `.hash()` collapse); `fingerprint::write_committee_vote_list` emits the discriminant. Gated by the EXTENDED `ci_check_credential_discriminant_closed.sh` (DC-LEDGER-10 strengthened, no new gate) | **wired & closed in COMMITTEE-CRED-FIDELITY** (was the OQ5 security-review follow-up; now a closed committee credential surface) |
+| CRED-FIDELITY+ *(declared non-goal — NOT an open seam now)* | **DRep-vote discrimination** — `ade_ledger::governance` `drep_votes` `lookup_stake` still does a key/script OR-fallback (`drep_stake.get(KeyHash).or_else(ScriptHash)`) over a bare `Hash28` rather than reading a discriminated DRep credential directly | discriminant-faithful DRep-vote lookup (no OR-fallback) | thread the DRep credential discriminant into `drep_votes` + the `lookup_stake` closure — a SEPARABLE per-surface fidelity follow-up; **the recommended next discriminant cluster** | candidate (declared non-goal in COMMITTEE-CRED-FIDELITY — confirm at the next discriminant cluster entry) |
+| CRED-FIDELITY+ *(declared non-goal — NOT an open seam now)* | **`EnactmentEffects.committee_changes`** — the committee-enactment effect still carries a dormant bare-`Hash28` committee-change set (unused at this HEAD; committee enactment is not yet wired) | discriminant-faithful committee-change set | re-type `EnactmentEffects.committee_changes` on `StakeCredential` **before** committee enactment is wired — a SEPARABLE follow-up; the bare-`Hash28` shape must migrate first | candidate (declared non-goal in COMMITTEE-CRED-FIDELITY — must migrate before committee enactment) |
 | OQ5+ *(declared non-goal — NOT an open seam now)* | **Byron credential surface** — Byron-era credential structures are outside the OQ5 Shelley..Conway `StakeCredential` discriminant migration | discriminant-faithful Byron credentials (if ever required) | a SEPARABLE Byron-era follow-up — only if a Byron credential surface needs the key/script distinction | candidate (declared non-goal in OQ5) |
 | B+ / N-E | **N2N/N2C tx-submission ingest → mempool** — the RED ingress that delivers a candidate tx from the `tx-submission2` (N2N) or `local-tx-submission` (N2C) opaque-bytes payload into the Tier-1 gate | `mempool::admit(mempool, tx_cbor)` | A RED bridge (likely `ade_node` / `ade_runtime`) translating `TxSubmission2Message` / `LocalTxSubmissionMessage` delivered tx bytes into an `admit` call | candidate (B2 explicitly scoped this OUT — cluster doc §15) |
 | B+ (full tx UTxO scope) | Full-scope single-tx validity over real resolved UTxO (today the positive corpus runs at `track_utxo=false`; value/fee/input-resolution + the B3 deposit/refund/withdrawal accounting run at `track_utxo=true`) | `TxValidityVerdict` at `track_utxo=true` over a real or synthetic UTxO | `tx_validity` (existing) — the gating already exists in `tx_phase_one`; this is corpus + state wiring, not a new chokepoint | candidate |
@@ -786,14 +844,20 @@ in the per-era decoders and threaded into the `ConwayGovState` keys).
 still a separable future seam, not an open extension point** — it needs
 confirmation before a GOVCERT-validity or committee-authority cluster opens,
 framed as: "Is the committee-membership precondition a `tx_validity` gate or a
-`cert_classify` disposition?" **The new OQ5-declared non-goal candidate seams**
-(withdrawal/required-signer/address credential discriminant; `Hash28`-keyed
-stake-distribution snapshot; committee member/vote discrimination — a
-security-review follow-up since `committee` / `committee_votes` are still
-undiscriminated; Byron credential surface) each need confirmation before a
-surface that must distinguish key vs. script credentials is opened, framed as:
-"Does this surface need the discriminant, or is the bare-`Hash28` projection via
-`cred.hash()` still the right declared non-goal?"
+`cert_classify` disposition?" **COMMITTEE-CRED-FIDELITY then CLOSED the committee
+member/vote half of OQ5's `committee` / `committee_votes` non-goal seam** —
+`ConwayGovState.committee` and `GovActionState.committee_votes` are now
+`StakeCredential`-discriminated and committee ratification resolves by
+full-credential equality (the OQ5 row below is updated to wired-and-closed).
+**The remaining declared non-goal candidate seams** (withdrawal/required-signer/address
+credential discriminant; `Hash28`-keyed stake-distribution snapshot; **DRep-vote
+discrimination** — the recommended next discriminant cluster, since `drep_votes`
+`lookup_stake` still does a key/script OR-fallback; **`EnactmentEffects.committee_changes`**
+— a dormant bare-`Hash28` that must migrate before committee enactment; the Byron
+credential surface) each need confirmation before a surface that must distinguish
+key vs. script credentials is opened, framed as: "Does this surface need the
+discriminant, or is the bare-`Hash28` projection via `cred.hash()` still the right
+declared non-goal?"
 
 ---
 
@@ -817,7 +881,12 @@ wired and closed. OQ5-CREDENTIAL-FIDELITY added one more — the credential
 discriminant-fidelity authority — closing the credential key/script discriminant
 across the per-era credential decoders, the `ConwayGovState` keys, and the
 canonical fingerprint (a type-fidelity refactor of the existing credential
-surface, not a new chokepoint).**
+surface, not a new chokepoint). COMMITTEE-CRED-FIDELITY then EXTENDED that same
+credential discriminant-fidelity authority to the committee surface — the
+`ConwayGovState.committee` member set, the `GovActionState.committee_votes` set,
+the committee ratification hot→cold→member resolution, and the committee-vote
+fingerprint — strengthening DC-LEDGER-10 (no new domain, no new rule, no new
+chokepoint).**
 
 ### Conway value-conservation accounting — the deposit/refund/withdrawal authority (NEW in B3)
 
@@ -920,9 +989,9 @@ positive/replay/adversarial corpus.
 |-------|--------|-------|------|
 | **Closed credential domain type** | `ade_types::shelley::cert::StakeCredential` | BLUE | The closed 2-variant enum `{ KeyHash(Hash28), ScriptHash(Hash28) }` (was the tuple-struct `StakeCredential(pub Hash28)`). A key-hash and a script-hash of the same 28 bytes are now distinct values. Carries a read-only `hash()` accessor (the narrow boundary seam). No `#[non_exhaustive]`, no open tail. |
 | **Data-only — closed credential-decode chokepoints** | `ade_codec::shelley::cert::decode_stake_credential` / `ade_codec::conway::cert::decode_stake_credential` | BLUE | Each reads the credential type tag and maps `0 → StakeCredential::KeyHash`, `1 → StakeCredential::ScriptHash`, rejecting any other tag with `CodecError::InvalidCborStructure { detail: "unknown stake credential type" }`. **No tag-erasing** (`let (_cred_type\|_tag, _)` is gone), **no bare-`Hash28` coercion** (`StakeCredential(<hash>)` is no longer constructible on the BLUE path). A closed credential grammar — an unknown discriminant is a deterministic reject. |
-| **Authoritative enforcement — gov-state key surface** | `ade_ledger::state::ConwayGovState.{vote_delegations, committee_hot_keys, drep_expiry}` | BLUE | Re-keyed from bare `Hash28` to the discriminated `StakeCredential` (matching cardano-node's `Credential`-keyed UMap/VState). `gov_cert::apply_conway_gov_cert` consumes the discriminated credential directly (`credential.clone()` / `hot_credential.clone()`), not a `.0` projection. |
-| **Determinism — discriminant-faithful fingerprint** | `ade_ledger::fingerprint::write_stake_credential` | BLUE | Emits the discriminant (`0`/`1`) before the 28-byte hash; the gov-map fingerprint writers (`drep_expiry`, `vote_delegations`, `committee_hot_keys`) call it instead of `write_hash28`, so two states differing only in a credential's key/script tag fingerprint differently (T-DET-01 / strengthens T-ENC-03). |
-| **Narrow read-only boundary adapter** | `StakeCredential::hash()` at `epoch.rs` / `governance::{evaluate_ratification, check_ratification}` / `rules::apply_epoch_boundary_with_registrations` | BLUE | A deliberate discriminant-discarding extraction used ONLY against declared non-goal surfaces: the `Hash28`-keyed stake-distribution snapshot and the bare-`Hash28` committee member / committee-vote sets. The `DRep::{KeyHash,ScriptHash}` discriminant is rebuilt into the matching `StakeCredential` variant to read `drep_expiry`; committee-vote / reward-account / pool-owner hashes that arrive without a discriminant are projected through `KeyHash` to match how the snapshot is keyed. **A one-way down-projection, never a re-key of authoritative state.** |
+| **Authoritative enforcement — gov-state key surface** | `ade_ledger::state::ConwayGovState.{vote_delegations, committee_hot_keys, drep_expiry, committee}` + `ade_types::conway::governance::GovActionState.committee_votes` | BLUE | Re-keyed/re-typed from bare `Hash28` to the discriminated `StakeCredential` (matching cardano-node's `Credential`-keyed UMap/VState). OQ5 did `vote_delegations` / `committee_hot_keys` / `drep_expiry`; **COMMITTEE-CRED-FIDELITY added `committee` (the elected-member set, `BTreeMap<StakeCredential, u64>`) and `committee_votes` (`Vec<(StakeCredential, Vote)>` on `GovActionState`)**. `gov_cert::apply_conway_gov_cert` consumes the discriminated credential directly, not a `.0` projection. **Committee ratification (`ade_ledger::governance`) resolves hot→cold→member by full-credential equality** (`*hot == hot_cred`, `**c == *cold`) — no `.hash()` collapse — so a key-hash hot key never cross-resolves to a script-hash member of equal bytes. |
+| **Determinism — discriminant-faithful fingerprint** | `ade_ledger::fingerprint::{write_stake_credential, write_committee_vote_list}` | BLUE | `write_stake_credential` emits the discriminant (`0`/`1`) before the 28-byte hash; the gov-map fingerprint writers (`drep_expiry`, `vote_delegations`, `committee_hot_keys`, and **COMMITTEE-CRED-FIDELITY's `committee`**) call it instead of `write_hash28`. **The new `write_committee_vote_list`** is the closed discriminant-emitting committee-vote writer (sorts by the discriminated credential's `Ord`, then emits `write_stake_credential` + vote tag); the DRep / SPO vote lists keep the unchanged `Hash28`-keyed `write_vote_list`. Two states differing only in a committee credential's key/script tag fingerprint differently (T-DET-01 / strengthens T-ENC-03). |
+| **Narrow read-only boundary adapter** | `StakeCredential::hash()` at `epoch.rs` / `governance::{evaluate_ratification, check_ratification}` / `rules::apply_epoch_boundary_with_registrations` | BLUE | A deliberate discriminant-discarding extraction used ONLY against the remaining declared non-goal surface: the `Hash28`-keyed stake-distribution snapshot. **COMMITTEE-CRED-FIDELITY removed the committee member / committee-vote sets from this adapter's scope** — they are now `StakeCredential`-discriminated and committee ratification compares full credentials directly. The `DRep::{KeyHash,ScriptHash}` discriminant is rebuilt into the matching `StakeCredential` variant to read `drep_expiry`; reward-account / pool-owner hashes that arrive without a discriminant are still projected through `KeyHash` to match how the snapshot is keyed. **A one-way down-projection, never a re-key of authoritative state.** |
 | **Adversarial / fidelity corpus** | `ade_ledger` credential-fidelity corpus + codec discriminant tests | GREEN/BLUE-test | `keyhash_scripthash_same_bytes_are_distinct_certstate`, `keyhash_scripthash_same_bytes_are_distinct_govstate`, `discriminant_changes_fingerprint(_corpus)`, `credential_accumulation_replays_byte_identical`; codec `shelley_credential_preserves_discriminant` / `conway_credential_preserves_discriminant` / `unknown_credential_tag_rejects`. |
 
 **Rule.** The credential key/script discriminant is **preserved end-to-end** on
@@ -933,16 +1002,20 @@ discriminated keys, and emitted into the canonical fingerprint (DC-LEDGER-10).
 the tag-discard decode form, and any `StakeCredential(<hash>)` bare-hash
 coercion are grep-forbidden by `ci_check_credential_discriminant_closed.sh`.
 **The ONE sanctioned discriminant-discarding move is `cred.hash()`**, a
-read-only adapter used ONLY against the declared non-goal surfaces (the
-`Hash28`-keyed stake-distribution snapshot, the bare-`Hash28` committee
-member/vote sets). New work that needs the discriminant on a surface that does
-not yet carry it (withdrawals/required-signer/address credentials; the
-stake-distribution snapshot; the `committee` / `committee_votes` sets — a
-security-review follow-up since only `committee_hot_keys` is discriminated
-today; the Byron credential surface) **extends the closed `StakeCredential`
-discriminant into that surface** — a separable per-surface fidelity follow-up,
-not a change to `decode_stake_credential`. These are declared non-goal candidate
-seams (§1, §3), not open extension points at this HEAD.
+read-only adapter used ONLY against the remaining declared non-goal surface (the
+`Hash28`-keyed stake-distribution snapshot). **COMMITTEE-CRED-FIDELITY removed
+the committee member / committee-vote sets from that adapter's scope** — they are
+now `StakeCredential`-discriminated (DC-LEDGER-10 strengthened; the EXTENDED
+`ci_check_credential_discriminant_closed.sh` defends the `committee` key shape and
+the `committee_votes` element type). New work that needs the discriminant on a
+surface that does not yet carry it (withdrawals/required-signer/address
+credentials; the stake-distribution snapshot; the `drep_votes` lookup_stake
+key/script OR-fallback — the recommended next discriminant cluster;
+`EnactmentEffects.committee_changes` — a dormant bare-`Hash28` that must migrate
+before committee enactment; the Byron credential surface) **extends the closed
+`StakeCredential` discriminant into that surface** — a separable per-surface
+fidelity follow-up, not a change to `decode_stake_credential`. These are declared
+non-goal candidate seams (§1, §3), not open extension points at this HEAD.
 
 ### Conway governance-cert accumulation — the owner-tagged apply authority (NEW in B5)
 
@@ -1176,9 +1249,17 @@ discriminant (OQ-5):** `ConwayGovState`'s `vote_delegations` / `committee_hot_ke
 ratification reads use the read-only `cred.hash()` adapter only against the
 `Hash28`-keyed stake-distribution snapshot (a declared non-goal surface — see
 §2 "Credential discriminant fidelity"). The committee-membership precondition
-gate (OQ-3) remains a separable follow-up (DC-LEDGER-09); committee member/vote
-discrimination is a declared non-goal candidate seam (§1, §3), since today only
-`committee_hot_keys` carries the discriminant (DC-LEDGER-10).
+gate (OQ-3) remains a separable follow-up (DC-LEDGER-09). **COMMITTEE-CRED-FIDELITY
+then CLOSED the committee member/vote discrimination half:** `ConwayGovState.committee`
+and `GovActionState.committee_votes` are now `StakeCredential`-discriminated, and
+`evaluate_ratification` / `check_ratification` resolve committee hot→cold→member by
+full-credential equality (no `.hash()` collapse), so a key-hash hot key never
+cross-resolves to a script-hash member of equal bytes (DC-LEDGER-10 strengthened).
+**Remaining declared non-goal credential surfaces in this domain:** the DRep-vote
+`lookup_stake` key/script OR-fallback (`drep_votes` — the recommended next
+discriminant cluster) and `EnactmentEffects.committee_changes` (a dormant
+bare-`Hash28` that must migrate before committee enactment) — both candidate
+future seams (§1, §3), not open extension points now.
 
 ### Mini-protocol wire conformance (N-A)
 
@@ -1363,7 +1444,13 @@ re-shaped one existing closed surface and made it discriminant-faithful** —
 `StakeCredential(pub Hash28)`); it added the new CI gate
 `ci_check_credential_discriminant_closed.sh` (DC-LEDGER-10) and re-keyed three
 `ConwayGovState` maps on the discriminated credential, with no net new type and
-no new open extension point.
+no new open extension point. **COMMITTEE-CRED-FIDELITY extended that same closed
+`StakeCredential` discriminant to the committee surface** — `ConwayGovState.committee`
+re-keyed `Hash28` → `StakeCredential`, `GovActionState.committee_votes` re-typed
+`Vec<(Hash28, Vote)>` → `Vec<(StakeCredential, Vote)>`, and the new closed
+fingerprint writer `write_committee_vote_list` — strengthening DC-LEDGER-10 and
+**extending the existing CI gate** (no new gate, no new file, CI count stays 29),
+with no net new type and no new open extension point.
 
 ### Closed (frozen — version-gated changes only)
 
@@ -1371,7 +1458,7 @@ no new open extension point.
 |----------|----------|-------|-------------|
 | `CardanoEra` | `ade_types::era` | 8 variants (ByronEbb, ByronRegular, Shelley, Allegra, Mary, Alonzo, Babbage, Conway) | New variant = new hard fork. Coordinated change across `ade_codec`, `ade_ledger`, the canonical type list, and the genesis parser's `later_eras` table. Unknown era tags produce a `CodecError`, never a fallback. |
 | `Certificate` | `ade_types::shelley::cert` | 7 variants | Frozen Shelley-era certificate set. New cert types live in `ConwayCert`. **B4:** `PoolRegistrationCert` (in `ade_types::shelley::cert`) gained an `owners: Vec<Hash28>` field (`pool_owners`, additive within the closed surface) and is decoded by the single shared `ade_codec::shelley::cert::read_pool_registration_cert`, the ONE pool-params decode site for both the Shelley and Conway cert decoders. |
-| **`StakeCredential`** *(closed 2-variant enum — NEW shape in OQ5)* | `ade_types::shelley::cert` | 2 variants — `KeyHash(Hash28)`, `ScriptHash(Hash28)` | The closed credential discriminant (was the tuple-struct `StakeCredential(pub Hash28)`). A key-hash and a script-hash of the same 28 bytes are distinct. No `#[non_exhaustive]`, no open tail; carries a read-only `hash()` accessor (the narrow boundary seam). New credential kind = a versioned variant + arm in both `decode_stake_credential` decoders + every match site. **Grep-gated by `ci_check_credential_discriminant_closed.sh`** (the tuple-struct shape may not reappear; neither decoder may revert to a tag-discard form; no bare-`Hash28` `StakeCredential(<hash>)` coercion may reappear on the BLUE path — DC-LEDGER-10). |
+| **`StakeCredential`** *(closed 2-variant enum — NEW shape in OQ5; committee surface added in COMMITTEE-CRED-FIDELITY)* | `ade_types::shelley::cert` | 2 variants — `KeyHash(Hash28)`, `ScriptHash(Hash28)` | The closed credential discriminant (was the tuple-struct `StakeCredential(pub Hash28)`). A key-hash and a script-hash of the same 28 bytes are distinct. No `#[non_exhaustive]`, no open tail; carries a read-only `hash()` accessor (the narrow boundary seam). New credential kind = a versioned variant + arm in both `decode_stake_credential` decoders + every match site. **Grep-gated by `ci_check_credential_discriminant_closed.sh`** (the tuple-struct shape may not reappear; neither decoder may revert to a tag-discard form; no bare-`Hash28` `StakeCredential(<hash>)` coercion may reappear on the BLUE path — DC-LEDGER-10). **COMMITTEE-CRED-FIDELITY extended the gate's scope:** `ConwayGovState.committee` must stay `StakeCredential`-keyed and `GovActionState.committee_votes` must stay `Vec<(StakeCredential, Vote)>` (no reversion to `Hash28`). |
 | **Credential-decode chokepoints** *(closed grammar — NEW in OQ5)* | `ade_codec::{shelley,conway}::cert::decode_stake_credential` | 2 functions | Each reads the credential type tag → `0 → KeyHash`, `1 → ScriptHash`; an unknown tag rejects with `CodecError::InvalidCborStructure { detail: "unknown stake credential type" }`. No catch-all accept, no tag-erasing. Removal/renaming or a tag-discard regression is forbidden (DC-LEDGER-10, `ci_check_credential_discriminant_closed.sh`). |
 | **`ConwayCert`** *(closed CDDL grammar — refined in B3, owner-completed in B4)* | `ade_types::conway::cert` | **19 variants** over CDDL tags `0..18` (incl. the explicit `RemovedInConway { tag }` marker for tags 5/6) | The closed Conway-complete certificate domain type. **B4 — owner-complete:** each variant now retains its owner payloads (credentials, pool id, `PoolRegistration(PoolRegistrationCert)` at tag 3, DRep target), enriched additively without an open tail or `#[non_exhaustive]`. **No `#[non_exhaustive]`, no open-tail `Other`/`Unknown`** — `RemovedInConway` is an explicit closed marker. New cert tag = a new explicit variant + a `decode_conway_certs` decoder arm + a `conway_cert_action` arm + an `apply_conway_cert` arm + a `cert_classify::classify` arm, version-gated. Decoder rejects tags ≥19 with `CodecError::UnknownCertTag`; B3F also rejects trailing bytes (`TrailingBytes`) and bounds preallocation. **Closure grep-gated by `ci_check_conway_cert_classification_closed.sh`** (no `#[non_exhaustive]`/open-tail on the type; no catch-all `_ =>` accept arm in the decoder; exhaustive `classify`); the B4 enrichment kept all three gate properties. |
 | `GovAction` | `ade_types::conway::governance` | 7 variants | CIP-1694 fixed; new variant = CIP amendment + ratification chokepoint update. |
@@ -1438,8 +1525,8 @@ no new open extension point.
 | **`PraosNonces` / `NonceScanError`** *(B1)* | `ade_ledger::consensus_input_extract` | 1 struct (5 nonces) + 1 error | The consensus-input extraction shape. Exact-five-nonce requirement is a closure invariant. |
 | **`PraosChainDepState` / `ChainEvent` canonical encodings** *(N-B)* | `ade_core::consensus::encoding` | 4 chokepoints | Frozen CBOR; round-trip required (T-DET-01); field additions are version-gated. |
 | **`LedgerFingerprint` fold** *(B3-extended)* | `ade_ledger::fingerprint` | + `CONWAY_DEPOSIT_PARAMS_TAG` fold | The canonical `LedgerState` fingerprint; B3 added a deposit-param fold that is byte-identical for any non-Conway state (DC-LEDGER-01, enforced by `ci_check_ledger_determinism.sh`). |
-| **CI check set** | `ci/ci_check_*.sh` | 29 scripts | Existing checks may be tightened, never relaxed. New CI check is additive. Deleting a script requires recording the deprecation in the registry's `ci_scripts` arrays. (B3 added `ci_check_deposit_param_authority.sh`; B3F added `ci_check_conway_cert_classification_closed.sh`; B4 added none — DC-LEDGER-08 reuses `ci_check_forbidden_patterns.sh`; **B5 added `ci_check_gov_cert_accumulation_closed.sh`** for DC-LEDGER-09; **OQ5 added `ci_check_credential_discriminant_closed.sh`** for DC-LEDGER-10.) |
-| **Invariant registry families** | `docs/ade-invariant-registry.toml` | Families T / CN / DC / OP / RO; DC extended in N-A (`DC-PROTO-*`, `DC-CORE-01`), N-B (`DC-CONS-03..10`), B1 (`DC-VAL-01..06`), B2 (`DC-TXV-01..05`, `DC-MEM-01/02`), B3 (`DC-TXV-06`, `DC-TXV-07`), B4 (`DC-LEDGER-08`), and **B5 (`DC-LEDGER-09`, which strengthens `DC-LEDGER-08`)**, and **OQ5-CREDENTIAL-FIDELITY (`DC-LEDGER-10`, which strengthens `T-DET-01` / `T-ENC-03`)** | Append-only IDs; rules may be strengthened, never weakened; deprecation needs an explicit `deprecated_in`. |
+| **CI check set** | `ci/ci_check_*.sh` | 29 scripts | Existing checks may be tightened, never relaxed. New CI check is additive. Deleting a script requires recording the deprecation in the registry's `ci_scripts` arrays. (B3 added `ci_check_deposit_param_authority.sh`; B3F added `ci_check_conway_cert_classification_closed.sh`; B4 added none — DC-LEDGER-08 reuses `ci_check_forbidden_patterns.sh`; **B5 added `ci_check_gov_cert_accumulation_closed.sh`** for DC-LEDGER-09; **OQ5 added `ci_check_credential_discriminant_closed.sh`** for DC-LEDGER-10; **COMMITTEE-CRED-FIDELITY added no new file** — it EXTENDED that same gate to the committee surface, so the count stays 29.) |
+| **Invariant registry families** | `docs/ade-invariant-registry.toml` | Families T / CN / DC / OP / RO; DC extended in N-A (`DC-PROTO-*`, `DC-CORE-01`), N-B (`DC-CONS-03..10`), B1 (`DC-VAL-01..06`), B2 (`DC-TXV-01..05`, `DC-MEM-01/02`), B3 (`DC-TXV-06`, `DC-TXV-07`), B4 (`DC-LEDGER-08`), and **B5 (`DC-LEDGER-09`, which strengthens `DC-LEDGER-08`)**, and **OQ5-CREDENTIAL-FIDELITY (`DC-LEDGER-10`, which strengthens `T-DET-01` / `T-ENC-03`); COMMITTEE-CRED-FIDELITY further strengthens `DC-LEDGER-10` (committee credential surface — no new rule ID)** | Append-only IDs; rules may be strengthened, never weakened; deprecation needs an explicit `deprecated_in`. |
 
 ### Extensible (open within constraints)
 
@@ -1448,7 +1535,7 @@ no new open extension point.
 | `CostModels` map (Plutus V1/V2/V3 cost tables) | `ade_plutus::cost_model::CostModels` | New entries enter via the cost-model CBOR decoder when a protocol parameter update lands. Not runtime-pluggable; constrained by the closed `PlutusLanguage` set. |
 | `ProtocolParameters` / `ProtocolParameterUpdate` field set | `ade_ledger::pparams` | Fields are appended per era. Versioned-gated by era. **B3 note:** the Conway-only `ConwayOnlyDepositParams` (`drep_deposit`, `gov_action_deposit`) are a closed-shape addition; the deposit *view* combining them is `ConwayDepositParams`. **B5 note:** `ConwayOnlyDepositParams` gained `drep_activity`, sourced canonically and carried into `GovCertEnv`. |
 | Pool / DRep / Stake registrations | `ade_ledger::state::{DelegationState, CertState}` | Mutated at runtime by `ade_ledger::delegation::apply_cert` (Shelley..Babbage) and, **as of B4**, by `ade_ledger::delegation::apply_conway_cert` (Conway, owner-tagged). The **shape** of what can be registered is closed; the **set** of registrations is open and grows monotonically. **B3 note:** registration state is now the authoritative source for `CoinSource::RegistrationState` refunds (`cert_classify`). **B4 note:** `apply_pool_registration` now populates `PoolParams.owners` from the enriched cert; Conway delegation/pool certs mutate `CertState` here, while governance certs are owner-tagged out of scope (PHASE4-B5). |
-| Governance proposal / committee / DRep registration set | `ade_ledger::state::ConwayGovState` | Shape closed, instance set open, lifecycle managed by `evaluate_ratification` / `enact_proposals` / `expire_proposals`. **B5 note:** the owner-tagged governance-cert effects B4 produced are now APPLIED — `gov_cert::apply_conway_gov_cert` (called from `accumulate_tx_certs`) folds vote-delegation / committee / DRep entries into this state. The **shape** of what can be registered is closed and the **accumulation path** is a closed deterministic fold (DC-LEDGER-09); the **set** of registrations is open and grows as certs accumulate. `ConwayGovState` migrated from a frozen snapshot value to this fold (T-DET-01 fingerprint migration). **OQ5 note:** `vote_delegations` / `committee_hot_keys` / `drep_expiry` are now keyed on the discriminated `StakeCredential` (was bare `Hash28`); the **key shape** is the closed `StakeCredential` enum and the fingerprint emits the discriminant (DC-LEDGER-10). The `committee` member set and `committee_votes` set are still bare `Hash28` — a declared non-goal candidate seam (§1). |
+| Governance proposal / committee / DRep registration set | `ade_ledger::state::ConwayGovState` | Shape closed, instance set open, lifecycle managed by `evaluate_ratification` / `enact_proposals` / `expire_proposals`. **B5 note:** the owner-tagged governance-cert effects B4 produced are now APPLIED — `gov_cert::apply_conway_gov_cert` (called from `accumulate_tx_certs`) folds vote-delegation / committee / DRep entries into this state. The **shape** of what can be registered is closed and the **accumulation path** is a closed deterministic fold (DC-LEDGER-09); the **set** of registrations is open and grows as certs accumulate. `ConwayGovState` migrated from a frozen snapshot value to this fold (T-DET-01 fingerprint migration). **OQ5 note:** `vote_delegations` / `committee_hot_keys` / `drep_expiry` are now keyed on the discriminated `StakeCredential` (was bare `Hash28`); the **key shape** is the closed `StakeCredential` enum and the fingerprint emits the discriminant (DC-LEDGER-10). **COMMITTEE-CRED-FIDELITY note:** the `committee` member set (`BTreeMap<StakeCredential, u64>`) and the `GovActionState.committee_votes` set (`Vec<(StakeCredential, Vote)>`) are now `StakeCredential`-discriminated too, fingerprinted by `write_committee_vote_list` (DC-LEDGER-10 strengthened). The **set** of members/votes stays open; the **key/element shape** is the closed `StakeCredential` enum. The remaining bare-`Hash28` credential surfaces in this state (the `drep_votes` lookup_stake OR-fallback; `EnactmentEffects.committee_changes`) are declared non-goal candidate seams (§1). |
 | `OpCertCounterMap` *(N-B)* | `ade_core::consensus::praos_state` | BTreeMap keyed by `(Hash28, u64)`. Inserts strictly increasing per `(pool, kes_period)`. Shape closed; set open. |
 | `PoolDistrView` pool table *(B1)* | `ade_ledger::consensus_view::PoolDistrView::pools` | `BTreeMap<Hash28, PoolEntry>`. Shape closed; set of pools open (whatever the operating-epoch snapshot contains). Built once per epoch; not runtime-pluggable. |
 | Withdrawals map *(NEW in B3)* | decoded by `ade_codec::conway::withdrawals::decode_withdrawals` → `BTreeMap<RewardAccount, Coin>` | The **shape** is closed (deduplicated map; `DuplicateMapKey` rejects a repeat); the **set** of withdrawals is open and is whatever the tx body demands. Built deterministically per tx; not a registry — never last-wins. |
@@ -1474,7 +1561,8 @@ no new open extension point.
 | N-F | Query API method set | Tier 5 wire / Tier 1 semantics. Closed enum internally, mapped to gRPC/HTTP at the edge; shared with LSQ/LocalTxMonitor semantic dispatch. The LocalTxMonitor query set reads the `mempool::admit` accepted set. |
 | N-F | Prometheus metric names | Tier 5; append-only registry expected. |
 | GOVCERT-validity *(OQ-3, separable)* | Committee-membership precondition (whether a hot-key-auth / cold-resign cert references an elected member) | Tier 1 — a tx-validity gate, NOT a registry; declared separable in the B5 cluster doc. B5 accumulates committee certs unconditionally. Confirm shape (a `tx_validity` precondition vs. a `cert_classify` disposition) at cluster entry. |
-| credential-discriminant *(OQ-5, separable, security WARN/MEDIUM)* | Credential key/script discriminant in `ConwayGovState` keys (currently collapsed to bare `Hash28` by the codec) | Not an open registry — a closed credential key-type change threaded codec → `apply_conway_gov_cert` → gov-state key. Confirm whether the discriminant is preserved at the codec layer or the gov-state key shape. |
+| credential-discriminant *(OQ-5 + committee — WIRED + CLOSED in OQ5 / COMMITTEE-CRED-FIDELITY)* | Credential key/script discriminant in `ConwayGovState` keys + the committee member/vote sets | **DONE:** OQ5 closed `vote_delegations` / `committee_hot_keys` / `drep_expiry`; COMMITTEE-CRED-FIDELITY closed `committee` + `GovActionState.committee_votes` and the full-credential-equality committee ratification. A closed `StakeCredential` key-type threaded codec → gov-state key → fingerprint. Gated by the extended `ci_check_credential_discriminant_closed.sh` (DC-LEDGER-10). Not an open registry. |
+| DRep-vote discriminant *(separable, NOT an open seam now)* | DRep-vote key/script discriminant in `ade_ledger::governance` `drep_votes` (the `lookup_stake` key/script OR-fallback over a bare `Hash28`) | Not an open registry — a closed credential key-type change threaded into `drep_votes` + the `lookup_stake` closure. The recommended next discriminant cluster. Confirm whether the DRep vote credential is read discriminated rather than via the OR-fallback. |
 
 User confirmation needed for each at cluster entry: closed enum vs.
 trait-based registry; runtime-extensible vs. compile-time-fixed; CI
@@ -1777,6 +1865,19 @@ outside the `ci_check_consensus_closed_enums.sh` `TARGETS` array (the
   returned unchanged (DC-MEM-01). The Tier-5 `OrderPolicy` projection is a
   deterministic permutation of the admitted set that cannot change a
   verdict (DC-MEM-02).
+- **Closed credential discriminant contract** *(NEW in OQ5; committee surface NEW in COMMITTEE-CRED-FIDELITY)*:
+  `StakeCredential` is the closed 2-variant enum `{ KeyHash(Hash28),
+  ScriptHash(Hash28) }`; both per-era `decode_stake_credential` chokepoints
+  preserve the discriminant (unknown tag → `CodecError::InvalidCborStructure`),
+  and the gov-state keys + fingerprint are discriminant-faithful. OQ5 froze
+  `vote_delegations` / `committee_hot_keys` / `drep_expiry`;
+  **COMMITTEE-CRED-FIDELITY froze the committee surface** — `ConwayGovState.committee`
+  (`StakeCredential`-keyed), `GovActionState.committee_votes`
+  (`Vec<(StakeCredential, Vote)>`), the full-credential-equality committee
+  ratification (no `.hash()` collapse), and the `write_committee_vote_list`
+  discriminant-emitting fingerprint writer. Grep-defended by the extended
+  `ci_check_credential_discriminant_closed.sh` (DC-LEDGER-10). The DRep / SPO
+  vote lists stay `Hash28`-keyed (`write_vote_list`) — a declared non-goal.
 - **All canonical types**: shapes frozen at the era / version they
   entered. Adding fields requires a versioned gate; renaming forbidden.
 - **TCB color assignments**: per `.idd-config.json` `core_paths`.
@@ -1832,6 +1933,16 @@ outside the `ci_check_consensus_closed_enums.sh` `TARGETS` array (the
   (NOT open seams now): a new governance cert tag adds an `apply_conway_gov_cert`
   arm; OQ-3 (a committee-membership precondition tx-validity gate) and OQ-5
   (preserving the credential key/script discriminant) attach above this domain.
+- **Credential discriminant extension** *(OQ5 / COMMITTEE-CRED-FIDELITY follow-ups)*:
+  extending the closed `StakeCredential` discriminant into a surface that still
+  carries a bare `Hash28` — the DRep-vote `lookup_stake` key/script OR-fallback in
+  `ade_ledger::governance` (the recommended next discriminant cluster);
+  `EnactmentEffects.committee_changes` (a dormant bare-`Hash28` that must migrate
+  before committee enactment is wired); the withdrawal/required-signer/address
+  credentials; the `Hash28`-keyed stake-distribution snapshot; the Byron credential
+  surface. Each is a separable per-surface fidelity follow-up that extends
+  `ci_check_credential_discriminant_closed.sh`'s scope, not a change to
+  `decode_stake_credential`. Declared non-goal candidate seams (§1, §3).
 - **TPraos full-block validity** *(B1 extension point)*: extending
   `block_validity::decode_block` to build `HeaderVrf::Tpraos` for
   pre-Babbage eras.
@@ -1924,7 +2035,16 @@ sets; the Byron credential surface) extends the closed `StakeCredential`
 discriminant into that surface in place — it does NOT add a new credential type
 and does NOT change `decode_stake_credential`; and the read-only `cred.hash()`
 adapter is the only sanctioned discriminant-discarding move, used solely against
-declared non-goal surfaces.
+declared non-goal surfaces. **COMMITTEE-CRED-FIDELITY followed exactly that
+rule** — no new crate, no new module, no new ingress, no new composer, no net new
+canonical type, and **no new CI gate** (it EXTENDED
+`ci_check_credential_discriminant_closed.sh` to the committee surface). It
+re-keyed `ConwayGovState.committee` in place (`Hash28` → `StakeCredential`),
+re-typed `GovActionState.committee_votes` in place
+(`Vec<(Hash28, Vote)>` → `Vec<(StakeCredential, Vote)>`), tightened the committee
+ratification resolution to full-credential equality, and added the closed
+serializer `write_committee_vote_list`. DC-LEDGER-10 was strengthened, not
+re-issued.
 
 | Color | Naming convention | Build-config flags | May depend on | MUST NOT depend on |
 |-------|-------------------|--------------------|----------------|--------------------|
@@ -2161,21 +2281,28 @@ cluster entry.
   bare-`Hash28` `StakeCredential(<hash>)` coercion on the BLUE path (`ade_codec` /
   `ade_ledger` / `ade_types`) — that would re-collapse the discriminant
   (DC-LEDGER-10, `ci_check_credential_discriminant_closed.sh`).
-- **(OQ5 specific — discriminant-faithful gov-state + fingerprint)** No re-key
-  of `ConwayGovState.{vote_delegations, committee_hot_keys, drep_expiry}` back to
-  bare `Hash28` — they key on the discriminated `StakeCredential`.
-  `fingerprint::write_stake_credential` must emit the discriminant (`0`/`1`)
-  before the 28-byte hash; the gov-map fingerprint writers must call it, not
-  `write_hash28`, so two states differing only in a credential's key/script tag
-  fingerprint differently (T-DET-01 / strengthens T-ENC-03).
-- **(OQ5 specific — narrow boundary adapter)** `StakeCredential::hash()` is the
-  ONLY sanctioned discriminant-discarding move and is used ONLY against declared
-  non-goal surfaces (the `Hash28`-keyed stake-distribution snapshot in `epoch.rs`
-  / `governance` / `apply_epoch_boundary_with_registrations`; the bare-`Hash28`
-  committee member / committee-vote sets). It must never be used to re-key
-  authoritative `ConwayGovState` state.
+- **(OQ5 / COMMITTEE-CRED-FIDELITY — discriminant-faithful gov-state + fingerprint)** No re-key
+  of `ConwayGovState.{vote_delegations, committee_hot_keys, drep_expiry, committee}`
+  or re-type of `GovActionState.committee_votes` back to bare `Hash28` — they key/carry
+  the discriminated `StakeCredential`. `fingerprint::write_stake_credential` must emit
+  the discriminant (`0`/`1`) before the 28-byte hash; the gov-map fingerprint writers
+  must call it, not `write_hash28`. **`write_committee_vote_list` (COMMITTEE-CRED-FIDELITY)**
+  is the closed discriminant-emitting committee-vote writer — it must not collapse to
+  `write_hash28` / `write_vote_list`. Committee ratification must resolve
+  hot→cold→member by full-credential equality, never via `.hash()`. Two states
+  differing only in a (committee) credential's key/script tag fingerprint
+  differently (T-DET-01 / strengthens T-ENC-03; DC-LEDGER-10 strengthened,
+  EXTENDED gate, no new gate).
+- **(OQ5 / COMMITTEE-CRED-FIDELITY — narrow boundary adapter)** `StakeCredential::hash()` is the
+  ONLY sanctioned discriminant-discarding move and is used ONLY against the
+  remaining declared non-goal surface (the `Hash28`-keyed stake-distribution
+  snapshot in `epoch.rs` / `governance` / `apply_epoch_boundary_with_registrations`).
+  **COMMITTEE-CRED-FIDELITY removed the committee member / committee-vote sets from
+  this adapter's scope** — they are now discriminated and resolved by full-credential
+  equality. `cred.hash()` must never be used to re-key authoritative `ConwayGovState`
+  state.
 
-### GREEN (`ade_testkit` incl. `validity` / `tx_validity` + the B3 conservation corpora + the B4 cert-state corpus + the B5 gov-state corpus + the OQ5 credential-fidelity corpus, `ade_network::lib` / `mux::mod`, `ade_runtime::consensus::{candidate_fragment, chain_selector}`, `ade_ledger::mempool::policy`)
+### GREEN (`ade_testkit` incl. `validity` / `tx_validity` + the B3 conservation corpora + the B4 cert-state corpus + the B5 gov-state corpus + the OQ5 credential-fidelity corpus + the COMMITTEE-CRED-FIDELITY committee cross-resolve corpus, `ade_network::lib` / `mux::mod`, `ade_runtime::consensus::{candidate_fragment, chain_selector}`, `ade_ledger::mempool::policy`)
 
 - No nondeterminism that leaks into stored fixtures — fixtures must be
   byte-reproducible (the block-validity, tx-validity, B3 conservation,
@@ -2267,28 +2394,28 @@ cluster entry.
 
 - CODEMAP: `docs/ade-CODEMAP.md` — module-by-module authority table,
   upstream of this document. **Cross-reference check:** CODEMAP was
-  regenerated at HEAD (`a3ee2da`) and its narrative folds in
-  OQ5-CREDENTIAL-FIDELITY — the closed 2-variant
-  `ade_types::shelley::cert::StakeCredential` (was the tuple-struct), the
-  discriminant-preserving `decode_stake_credential` chokepoints
-  (`ade_codec::{shelley,conway}::cert`), the `ConwayGovState` re-key
-  (`vote_delegations` / `committee_hot_keys` / `drep_expiry`), the
-  discriminant-emitting `fingerprint::write_stake_credential`, and the
-  `cred.hash()` boundary adapter all appear in its entries; it records **376
-  canonical types** (unchanged — OQ5 re-shaped `StakeCredential` in place, no net
-  new type), **1310 tests** (+8 from OQ5), and **29 CI checks** (+1 —
-  `ci_check_credential_discriminant_closed.sh`). (Prior B5 close: HEAD `644eb03`,
-  376 types, 1302 tests, 28 CI checks — the new `ade_ledger::gov_cert` module,
-  `GovCertEnv` + `gov_cert_env()`, the `drep_activity` field, the
-  `MissingDRepActivityParam` / `DRepActivityOverflow` variants, and the
-  `Option<ConwayGovState>`-threading accumulators.)
-  Both docs agree that DC-LEDGER-10 adds the dedicated
-  `ci_check_credential_discriminant_closed.sh` (no tuple-struct shape, no
-  tag-discard decode, no bare-`Hash28` coercion on the BLUE path) and that the
-  prior DC-LEDGER-09 gate (`ci_check_gov_cert_accumulation_closed.sh`) stands,
-  and that the carried B4 narrow gap stands — the `ade_ledger::delegation` owner-tagged *types* are still NOT in
-  the `ci_check_consensus_closed_enums.sh` `TARGETS` array (the `gov_cert.rs`
-  dispatch is covered by its own gate). The two docs are consistent at this SHA.
+  regenerated at HEAD (`2aeea16`) and its narrative folds in
+  COMMITTEE-CRED-FIDELITY — the `ConwayGovState.committee` re-key
+  (`Hash28` → `StakeCredential`), the `GovActionState.committee_votes` re-type
+  (`Vec<(Hash28, Vote)>` → `Vec<(StakeCredential, Vote)>`), the full-credential-equality
+  committee ratification, and the new `fingerprint::write_committee_vote_list`
+  all appear in its entries; it records **376 canonical types** (unchanged —
+  COMMITTEE-CRED-FIDELITY made field-type changes on existing types, no net new
+  type), **1313 tests** (+3 from COMMITTEE-CRED-FIDELITY's committee cross-resolve
+  negatives + fingerprint-distinguishing tests), and **29 CI checks** (unchanged —
+  the existing `ci_check_credential_discriminant_closed.sh` was EXTENDED, no new
+  file). (Prior OQ5 close: HEAD `a3ee2da`, 376 types, 1310 tests, 29 CI checks —
+  the closed 2-variant `StakeCredential`, the discriminant-preserving
+  `decode_stake_credential` chokepoints, the OQ5 `ConwayGovState` re-key, the
+  discriminant-emitting `write_stake_credential`, the `cred.hash()` adapter, and
+  the new `ci_check_credential_discriminant_closed.sh`.)
+  Both docs agree that COMMITTEE-CRED-FIDELITY STRENGTHENS DC-LEDGER-10 (no new
+  rule) and EXTENDS the existing `ci_check_credential_discriminant_closed.sh`
+  (committee map keys + committee-vote discriminant) rather than adding a gate,
+  that the prior DC-LEDGER-09 gate (`ci_check_gov_cert_accumulation_closed.sh`)
+  stands, and that the carried B4 narrow gap stands — the `ade_ledger::delegation`
+  owner-tagged *types* are still NOT in the `ci_check_consensus_closed_enums.sh`
+  `TARGETS` array. The two docs are consistent at this SHA.
 - Invariant registry: `docs/ade-invariant-registry.toml` — rule families
   incl. `T`, `CN`, `DC` (with `DC-PROTO-*` + `DC-CORE-01` under N-A,
   `DC-CONS-03..10` under N-B, `DC-VAL-01..06` under B1,
@@ -2328,4 +2455,8 @@ cluster entry.
   discriminant, the `Hash28`-keyed stake-distribution snapshot, committee
   member/vote discrimination, and the Byron credential surface as separable
   non-goal follow-ups; OQ-3 stays separable).
+- Cluster COMMITTEE-CRED-FIDELITY (closed): the cluster doc + slices S1/S2
+  (WIRES AND CLOSES the committee member/vote discrimination — STRENGTHENS
+  DC-LEDGER-10, no new rule, no new CI gate; declares DRep-vote discrimination
+  and `EnactmentEffects.committee_changes` as separable non-goal follow-ups).
 - N-A live-interop evidence: `docs/active/CE-N-A-5_evidence.toml`.

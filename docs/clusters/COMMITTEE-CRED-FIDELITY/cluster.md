@@ -98,3 +98,17 @@
 ## Declared non-goals
 - `drep_votes` (DRep-voter) and `pool_votes` discrimination; the broader voting
   surface.
+
+## Follow-ups (per-cluster security review; bounded, NOT regressions)
+- **DRep-vote discrimination (WARN-LOW) — recommended next cluster.**
+  `governance.rs` `lookup_stake` still does a key/script OR-fallback over
+  identical bytes for `drep_votes` (DReps can be script-credentialed; pools are
+  always key-hash, no risk). The direct parallel of this cluster, for DRep voters.
+- **`EnactmentEffects.committee_changes` migration (informational) — latent
+  trap.** Still bare `Hash28`, but DORMANT: `UpdateCommittee` enactment is a no-op
+  (`let _ = raw`), so the field is never populated/written back. It MUST be
+  migrated to `StakeCredential` *before* committee enactment is implemented, or it
+  would re-collapse the committee map on write-back.
+- **GREEN loader unknown-tag (minor).** `mk_credential` defaults `tag != 1` to
+  `KeyHash`; contained to `ade_testkit` (cannot reach the node binary). Could
+  reject unknown tags instead.
