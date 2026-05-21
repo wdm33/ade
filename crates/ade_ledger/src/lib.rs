@@ -23,6 +23,7 @@ pub mod delegation;
 pub mod epoch;
 pub mod error;
 pub mod fingerprint;
+pub mod gov_cert;
 pub mod governance;
 pub mod hfc;
 pub mod late_era_validation;
