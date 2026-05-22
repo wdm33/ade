@@ -2509,13 +2509,21 @@ fn parse_cold_credential_set(
     let is_indef = alen == u64::MAX;
     let mut set = std::collections::BTreeSet::new();
     let mut count = 0u64;
+    let mut terminated = false;
     while co < data.len() {
-        if is_indef && data[co] == 0xff { co += 1; break; }
-        if !is_indef && count >= alen { break; }
+        if is_indef && data[co] == 0xff { co += 1; terminated = true; break; }
+        if !is_indef && count >= alen { terminated = true; break; }
         let (next, cred) = parse_cold_credential(data, co)?;
         set.insert(cred);
         co = next;
         count += 1;
+    }
+    // Fail-closed: a declared-but-under-length (truncated) set rejects on its own
+    // terms rather than relying on a downstream field to hit EOF.
+    if !terminated {
+        return Err(HarnessError::ParseError(format!(
+            "committee removed-set truncated: read {count} of {alen} declared members"
+        )));
     }
     Ok((co, set))
 }
@@ -2536,14 +2544,22 @@ fn parse_cold_credential_epoch_map(
     let is_indef = mlen == u64::MAX;
     let mut map = std::collections::BTreeMap::new();
     let mut count = 0u64;
+    let mut terminated = false;
     while co < data.len() {
-        if is_indef && data[co] == 0xff { co += 1; break; }
-        if !is_indef && count >= mlen { break; }
+        if is_indef && data[co] == 0xff { co += 1; terminated = true; break; }
+        if !is_indef && count >= mlen { terminated = true; break; }
         let (after_key, cred) = parse_cold_credential(data, co)?;
         let (_, epoch) = read_uint(data, after_key)?;
         co = skip_cbor(data, after_key)?;
         map.insert(cred, epoch);
         count += 1;
+    }
+    // Fail-closed: a declared-but-under-length (truncated) map rejects on its own
+    // terms rather than relying on a downstream field to hit EOF.
+    if !terminated {
+        return Err(HarnessError::ParseError(format!(
+            "committee added-map truncated: read {count} of {mlen} declared entries"
+        )));
     }
     Ok((co, map))
 }
@@ -3381,6 +3397,13 @@ mod tests {
         short.push(0xa0);
         short.extend_from_slice(&[0xd8, 0x1e, 0x82, 0x01, 0x02]);
         assert!(parse_gov_action(&short, 0).is_err(), "short hash must reject");
+
+        // Declared-but-under-length set: array(2) header but only one credential
+        // present. Must reject at the set on its own terms (fail-closed), not run
+        // into the following fields.
+        let mut underlen = vec![0x85, 0x04, 0xf6, 0x82]; // removed set declares 2
+        underlen.extend(cbor_cred(0, 0x01)); // ...but only one member follows
+        assert!(parse_gov_action(&underlen, 0).is_err(), "under-length set must reject");
     }
 
     #[test]

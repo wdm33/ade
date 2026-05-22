@@ -100,7 +100,34 @@ if [ -f "$GOVLOGIC" ] && ! grep -qE 'pub committee_changes:.*StakeCredential' "$
     FAIL=1
 fi
 
+# 7. UpdateCommittee enactment surface is structured + discriminated
+#    (ENACTMENT-COMMITTEE-WRITEBACK, strengthens DC-LEDGER-10 + DC-EPOCH-01): the
+#    GovAction::UpdateCommittee committee members are discriminated StakeCredential
+#    (a removed set + an added map), never opaque raw bytes or bare Hash28 — so
+#    the epoch-boundary committee write-back cannot re-collapse the committee map.
+if [ -f "$GOVTYPE" ]; then
+    if ! grep -qE 'removed:[[:space:]]*BTreeSet<StakeCredential>' "$GOVTYPE"; then
+        echo "FAIL: GovAction::UpdateCommittee.removed is not BTreeSet<StakeCredential> (committee-member discriminant lost)"
+        FAIL=1
+    fi
+    if ! grep -qE 'added:[[:space:]]*BTreeMap<StakeCredential' "$GOVTYPE"; then
+        echo "FAIL: GovAction::UpdateCommittee.added is not BTreeMap<StakeCredential,_> (committee-member discriminant lost)"
+        FAIL=1
+    fi
+fi
+#    and the apply site writes the committee back via the pure transition rather
+#    than cloning it unchanged (the enactment must be reachable).
+if [ -f "$GOVLOGIC" ] && ! grep -qE 'pub fn apply_committee_enactment' "$GOVLOGIC"; then
+    echo "FAIL: governance.rs missing apply_committee_enactment (committee write-back not wired)"
+    FAIL=1
+fi
+RULESLOGIC="$REPO_ROOT/crates/ade_ledger/src/rules.rs"
+if [ -f "$RULESLOGIC" ] && ! grep -qE 'apply_committee_enactment' "$RULESLOGIC"; then
+    echo "FAIL: rules.rs epoch boundary does not call apply_committee_enactment (committee write-back dropped)"
+    FAIL=1
+fi
+
 if [ "$FAIL" -eq 0 ]; then
-    echo "PASS: DC-LEDGER-10 credential discriminant is closed and faithful (committee + DRep-vote + enactment surfaces)"
+    echo "PASS: DC-LEDGER-10 credential discriminant is closed and faithful (committee + DRep-vote + enactment + committee-write-back surfaces)"
 fi
 exit "$FAIL"
