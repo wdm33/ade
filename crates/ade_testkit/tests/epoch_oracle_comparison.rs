@@ -4569,3 +4569,119 @@ fn verify_reward_params_from_cbor() {
     }
     eprintln!("=================================\n");
 }
+
+/// Real-chain committee oracle (ENACTMENT-COMMITTEE-WRITEBACK): the mainnet Conway
+/// epoch 575 -> 576 boundary, from cardano-node ledger-state snapshots
+/// (corpus/snapshots/snapshot_163036834 = epoch 575, snapshot_163468813 = 576;
+/// backed up in s3://ade-corpus-snapshots, gitignored locally).
+///
+/// What this pins against real cardano-node state:
+/// - PARSE fidelity: the mainnet interim Constitutional Committee is exactly 7
+///   members, ALL ScriptHash (native-script-credentialed), term-expiry epoch 580,
+///   quorum 2/3 -- our loader parses the discriminated cold credentials, never a
+///   defaulted KeyHash (DC-LEDGER-10 real-chain confirmation).
+/// - NO-OP write-back AGREEMENT: mainnet enacted no committee change across this
+///   boundary (epoch 576 carries 14 proposals, none committee-altering), so our
+///   ratification + enactment over the epoch-575 gov state must reproduce the
+///   epoch-576 committee + quorum exactly -- apply_committee_enactment must not
+///   fabricate a committee change (DC-EPOCH-01).
+///
+/// The positive committee-CHANGE case is reality-blocked (mainnet had no
+/// UpdateCommittee/NoConfidence enacted in this range), not environment-blocked.
+#[test]
+fn committee_oracle_mainnet_575_576_noop_agreement() {
+    use ade_types::shelley::cert::StakeCredential;
+    use ade_types::Hash28;
+
+    let pre_path = snapshots_dir().join("snapshot_163036834.tar.gz");  // epoch 575
+    let post_path = snapshots_dir().join("snapshot_163468813.tar.gz"); // epoch 576
+    if !pre_path.exists() || !post_path.exists() {
+        eprintln!("Skipping committee_oracle_mainnet_575_576: snapshots not available");
+        return;
+    }
+
+    let pre = LoadedSnapshot::from_tarball(&pre_path).unwrap().to_ledger_state();
+    let post = LoadedSnapshot::from_tarball(&post_path).unwrap().to_ledger_state();
+    let g575 = pre.gov_state.as_ref().expect("epoch 575 gov state");
+    let g576 = post.gov_state.as_ref().expect("epoch 576 gov state");
+
+    // --- PARSE fidelity vs cardano-node (the public mainnet interim committee) ---
+    fn h28(hex: &str) -> Hash28 {
+        let mut b = [0u8; 28];
+        for (i, byte) in b.iter_mut().enumerate() {
+            *byte = u8::from_str_radix(&hex[2 * i..2 * i + 2], 16).unwrap();
+        }
+        Hash28(b)
+    }
+    let expected: BTreeMap<StakeCredential, u64> = [
+        "349e55f83e9af24813e6cb368df6a80d38951b2a334dfcdf26815558",
+        "84aebcfd3e00d0f87af918fc4b5e00135f407e379893df7e7d392c6a",
+        "b6012034ba0a7e4afbbf2c7a1432f8824aee5299a48e38e41a952686",
+        "ce8b37a72b178a37bbd3236daa7b2c158c9d3604e7aa667e6c6004b7",
+        "df0e83bde65416dade5b1f97e7f115cc1ff999550ad968850783fe50",
+        "e8165b3328027ee0d74b1f07298cb092fd99aa7697a1436f5997f625",
+        "f0dc2c00d92a45521267be2d5de1c485f6f9d14466d7e16062897cf7",
+    ]
+    .iter()
+    .map(|h| (StakeCredential::ScriptHash(h28(h)), 580u64))
+    .collect();
+
+    assert_eq!(
+        g575.committee, expected,
+        "epoch 575 committee must match cardano-node: 7 ScriptHash members, expiry 580"
+    );
+    assert_eq!(g575.committee_quorum, (2, 3), "epoch 575 quorum is 2/3");
+    assert!(
+        g575.committee.keys().all(|c| matches!(c, StakeCredential::ScriptHash(_))),
+        "mainnet interim committee is script-credentialed; none must parse as KeyHash"
+    );
+
+    // --- No mainnet committee transition across the boundary ---
+    assert_eq!(
+        g575.committee, g576.committee,
+        "mainnet enacted no committee change across 575->576"
+    );
+    assert_eq!(g575.committee_quorum, g576.committee_quorum);
+
+    // --- Our ratification + enactment reproduces the oracle's epoch-576 committee ---
+    // The ending epoch for ratification at the 575->576 boundary is 575.
+    let quorum = ade_ledger::rational::Rational::new(
+        g575.committee_quorum.0 as i128,
+        g575.committee_quorum.1.max(1) as i128,
+    )
+    .unwrap();
+    let no_drep: ade_ledger::governance::DRepStakeDistribution = BTreeMap::new();
+    let no_pool: BTreeMap<ade_types::tx::PoolId, ade_types::tx::Coin> = BTreeMap::new();
+    let result = ade_ledger::governance::evaluate_ratification(
+        &g575.proposals,
+        &no_drep,
+        &no_pool,
+        &g575.committee,
+        &quorum,
+        &g575.pool_voting_thresholds,
+        &g575.drep_voting_thresholds,
+        575,
+        &g575.committee_hot_keys,
+        &g575.drep_expiry,
+    );
+    let effects = ade_ledger::governance::enact_proposals(&result.ratified);
+    let (next_committee, next_quorum) = ade_ledger::governance::apply_committee_enactment(
+        &g575.committee,
+        g575.committee_quorum,
+        &effects,
+    );
+    assert_eq!(
+        next_committee, g576.committee,
+        "committee write-back must reproduce cardano-node's epoch-576 committee (no spurious mutation)"
+    );
+    assert_eq!(
+        next_quorum, g576.committee_quorum,
+        "committee quorum write-back must match the oracle"
+    );
+
+    eprintln!(
+        "committee oracle 575->576: {} ScriptHash members, quorum {:?}, expiry 580 — parse + no-op write-back agree with cardano-node",
+        g576.committee.len(),
+        g576.committee_quorum
+    );
+}

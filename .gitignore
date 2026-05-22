@@ -17,3 +17,4 @@ corpus/tools/.env
 
 # Multi-GB ledger-state dumps belong in S3 (ade-corpus-snapshots), never in git
 corpus/ext_ledger_state_dumps/
+corpus/snapshots/
