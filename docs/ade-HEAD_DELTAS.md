@@ -5,8 +5,8 @@
 > `.idd-config.json` (`head_deltas_baseline`).
 
 > Baseline: `d509f02` (Phase 3 handoff snapshot, 2026-04-15)
-> HEAD: `a6b8de7` (feat(ledger): discriminate EnactmentEffects.committee_changes (ENACTMENT-COMMITTEE-FIDELITY-S1), 2026-05-22)
-> 123 commits, 11,272 files changed, +172,611 / −7,233,532 lines
+> HEAD: `3180e27` (feat(ledger): wire committee enactment write-back (ENACTMENT-COMMITTEE-WRITEBACK-S2), 2026-05-22)
+> 127 commits, 11,274 files changed, +173,783 / −7,233,545 lines
 
 Headline numbers note: the massive negative line count is dominated by
 the **corpus relayout** under `corpus/snapshots/` and the deletion of
@@ -25,7 +25,69 @@ far smaller — the per-crate breakdown in §3 is the representative view.
 > the B4 close `644eb03` (which committed the B4 grounding-doc refresh
 > on top of the B4-S5 implementation HEAD `ee35493`).
 
-> **ENACTMENT-COMMITTEE-FIDELITY cluster note (newest thread).** This
+> **ENACTMENT-COMMITTEE-WRITEBACK cluster note (newest thread).** This
+> regen is cut at committed HEAD `3180e27`. Since the
+> ENACTMENT-COMMITTEE-FIDELITY close `3706534` (the grounding-doc refresh
+> that committed the ENACTMENT-COMMITTEE-FIDELITY
+> CODEMAP/SEAMS/HEAD_DELTAS/TRACEABILITY ripple on top of the
+> ENACTMENT-COMMITTEE-FIDELITY-S1 implementation HEAD `a6b8de7`), the
+> **ENACTMENT-COMMITTEE-WRITEBACK arc** has landed as three commits:
+> `ea25dd9` (cluster plan + invariants, *wires* committee enactment),
+> `f2f15f9` (S1, structured `UpdateCommittee` gov action), and `3180e27`
+> (S2, wire committee enactment write-back). It turns the *dormant* type
+> pin that ENACTMENT-COMMITTEE-FIDELITY landed (the discriminated
+> `EnactmentEffects.committee_changes`) into a **live committee
+> write-back** — `UpdateCommittee` enactment is no longer a no-op and the
+> `ConwayGovState.committee` map is no longer cloned unchanged at the
+> epoch boundary. **No new module, no new rule, no new CI script** — the
+> existing gate is extended and `DC-EPOCH-01` / `DC-LEDGER-10` are both
+> strengthened. **S1** (`f2f15f9`) replaced the opaque
+> `GovAction::UpdateCommittee { prev_action, raw: Vec<u8> }` with a
+> **structured** `{ prev_action, removed: BTreeSet<StakeCredential>,
+> added: BTreeMap<StakeCredential, u64>, threshold: (u64, u64) }`
+> (`ade_types::conway::governance`); the fingerprint `write_gov_action`
+> emits the structured 5-field shape — `[5, prev, set<cred>, {cred=>epoch},
+> num, den]` — replacing the prior opaque `[4, prev, bytes]` (a deliberate
+> `T-DET-01` fingerprint migration); and the GREEN `ade_testkit`
+> `snapshot_loader` `parse_gov_action` tag-4 path now decodes the
+> set/map/`unit_interval` shape with **fail-closed** cold-credential
+> parsing (`parse_cold_credential` rejects an unknown credential tag —
+> stricter than the older `mk_credential` helper). **S2** (`3180e27`)
+> populated `EnactmentEffects.committee_changes` + the new
+> `committee_threshold` in `enact_proposals`, added the new **pure
+> transition** `apply_committee_enactment(committee, quorum, effects) ->
+> (committee, quorum)` (`ade_ledger::governance`) — `NoConfidence`
+> dissolves the committee, `UpdateCommittee` removes the removed cold
+> credentials, inserts the added with their term-expiry, and sets the new
+> quorum — and wired the epoch-boundary apply site in `rules.rs` to call
+> it (the committee is **written back**, no longer cloned unchanged).
+> **Cluster-close** **extended** `ci/ci_check_credential_discriminant_closed.sh`
+> to assert both the **structured discriminated `UpdateCommittee`
+> surface** (removed `BTreeSet<StakeCredential>` / added
+> `BTreeMap<StakeCredential, u64>` / `threshold`) and the
+> **`apply_committee_enactment` presence + call-site** — it stays the
+> **29th** script; **the CI count does not increment.** **`DC-EPOCH-01`
+> and `DC-LEDGER-10` are both STRENGTHENED** (`strengthened_in +=
+> ENACTMENT-COMMITTEE-WRITEBACK` on each; **+9 new tests** across the two
+> rules — `DC-LEDGER-10` reaches **19** tests) — same rules, not new ones;
+> the registry total **stays 173**. There **is** a fingerprint surface
+> change this cluster (the structured `UpdateCommittee` encoding replaces
+> the opaque-bytes form, `T-DET-01`); confirm `ci_check_ledger_determinism.sh`
+> / the fingerprint golden on the next determinism replay. Of the
+> ENACTMENT-COMMITTEE-FIDELITY carry-forward follow-ups, **(d) is now not
+> only RESOLVED but WIRED**; the remaining **(e)** GREEN loader
+> `mk_credential` `tag != 1` → `KeyHash` default is **narrowed** — the new
+> `UpdateCommittee` cold-credential decode (`parse_cold_credential`) **is**
+> fail-closed on unknown tags, so (e) now applies only to the older
+> `mk_credential` helper; the pre-OQ5 **(b)** Shelley unknown-cert
+> zero-hash placeholder remains a WARN LOW non-goal. **Real-chain
+> committee-transition oracle agreement is environment-blocked** (no local
+> snapshot exhibits a committee change), reclassified per tier doctrine —
+> the same posture as `DC-LEDGER-08`/`DC-LEDGER-09`/`DC-LEDGER-10`. All
+> three ENACTMENT-COMMITTEE-WRITEBACK commits carry the model-attribution
+> trailer.
+
+> **ENACTMENT-COMMITTEE-FIDELITY cluster note (prior thread).** This
 > regen is cut at committed HEAD `a6b8de7`. Since the DREP-VOTE-FIDELITY
 > close `06f517f` (the grounding-doc refresh that committed the
 > DREP-VOTE CODEMAP/SEAMS/HEAD_DELTAS/TRACEABILITY ripple on top of the
@@ -284,8 +346,10 @@ far smaller — the per-crate breakdown in §3 is the representative view.
 > `DC-TXV-06` disagreement) were resolved at that point. Both B3F
 > commits carry the model-attribution trailer.
 
-The delta covers twenty threads of work. The newest thread — the
-**ENACTMENT-COMMITTEE-FIDELITY arc** — landed on top of the
+The delta covers twenty-one threads of work. The newest thread — the
+**ENACTMENT-COMMITTEE-WRITEBACK arc** — landed on top of the
+ENACTMENT-COMMITTEE-FIDELITY close (`3706534`); below it the
+**ENACTMENT-COMMITTEE-FIDELITY arc** sat on the
 DREP-VOTE-FIDELITY close (`06f517f`); below it the **DREP-VOTE-FIDELITY
 arc** sat on the COMMITTEE-CRED-FIDELITY close (`a157c92`); below that the
 **COMMITTEE-CRED-FIDELITY arc** sat on the OQ5 close (`676af5a`); below that the **OQ5-CREDENTIAL-FIDELITY arc** sat on the
@@ -296,7 +360,56 @@ follow-up hardening (`193d2fc`), which itself sat on the **PHASE4-B3
 Conway value-conservation accounting arc** above the PHASE4-B2 close
 (`c1cba82`). In rough proportion of the substantive change budget:
 
-0. **ENACTMENT-COMMITTEE-FIDELITY (committee-enactment effect credential
+0. **ENACTMENT-COMMITTEE-WRITEBACK (wire committee enactment write-back)
+   — closed (`3180e27`).** A 2-slice arc (plus one grounding/plan commit)
+   that turns the dormant type pin ENACTMENT-COMMITTEE-FIDELITY landed
+   into a **live committee write-back**, without a new module, rule, or CI
+   script. **The cluster plan + invariants** (`ea25dd9`) opened
+   `docs/clusters/ENACTMENT-COMMITTEE-WRITEBACK/` and
+   `docs/active/ENACTMENT-COMMITTEE-WRITEBACK_invariants.md`. **S1**
+   (`f2f15f9`) made `GovAction::UpdateCommittee` **structured**: the opaque
+   `{ prev_action, raw: Vec<u8> }` is replaced by `{ prev_action, removed:
+   BTreeSet<StakeCredential>, added: BTreeMap<StakeCredential, u64>,
+   threshold: (u64, u64) }` (`ade_types::conway::governance`) — discriminated
+   cold credentials, no raw bytes; the fingerprint `write_gov_action` emits
+   the structured 5-field shape `[5, prev, set<cred>, {cred=>epoch}, num,
+   den]` replacing the prior opaque `[4, prev, bytes]` (`ade_ledger::fingerprint`,
+   a deliberate `T-DET-01` migration); and the GREEN `ade_testkit`
+   `snapshot_loader` `parse_gov_action` tag-4 path decodes the
+   set/map/`unit_interval` shape with **fail-closed** cold-credential
+   parsing (`parse_cold_credential` / `parse_cold_credential_set` /
+   `parse_cold_credential_epoch_map` / `parse_unit_interval`; an unknown
+   credential tag rejects). **S2** (`3180e27`) made committee enactment
+   **live**: `enact_proposals` now populates `committee_changes` and the new
+   `committee_threshold` from a ratified `UpdateCommittee` (and from
+   `NoConfidence`); the new pure transition `apply_committee_enactment(committee,
+   quorum, effects) -> (committee, quorum)` (`ade_ledger::governance`)
+   dissolves the committee on `NoConfidence`, removes/adds the discriminated
+   cold members and sets the new quorum on `UpdateCommittee`; and the
+   epoch-boundary apply site in `rules.rs` **calls it** — the committee map
+   is written back, no longer cloned unchanged. Inline tests
+   (`enact_noconfidence_dissolves_committee`,
+   `enact_update_committee_applies_changes`,
+   `enact_update_committee_keyhash_scripthash_distinct`,
+   `committee_enactment_replays_byte_identical`) plus the loader-decode and
+   structured-fingerprint tests cover it. **Cluster-close extended** the
+   existing `ci/ci_check_credential_discriminant_closed.sh` to assert the
+   structured discriminated `UpdateCommittee` surface and the
+   `apply_committee_enactment` presence/call-site. **`DC-EPOCH-01` and
+   `DC-LEDGER-10` are both STRENGTHENED** (`strengthened_in +=
+   ENACTMENT-COMMITTEE-WRITEBACK`; **+9 new tests** across the two rules,
+   `DC-LEDGER-10` reaching 19) — same rules, not new ones; registry total
+   **stays 173**, CI count **stays 29**. There **is** a fingerprint surface
+   change (the structured `UpdateCommittee` encoding, `T-DET-01`). The
+   real-chain committee-transition oracle is **environment-blocked** (no
+   local snapshot exhibits a committee change) and reclassified per tier
+   doctrine — same posture as `DC-LEDGER-08`/`DC-LEDGER-09`/`DC-LEDGER-10`.
+   FIDELITY follow-up **(d) is now WIRED, not just resolved**; the remaining
+   carry-forward **(e)** GREEN loader `mk_credential` `tag != 1` → `KeyHash`
+   default is **narrowed** (the new `parse_cold_credential` IS fail-closed),
+   plus the pre-OQ5 **(b)** Shelley unknown-cert zero-hash placeholder (WARN
+   LOW non-goal). All three commits carry the model-attribution trailer.
+1. **ENACTMENT-COMMITTEE-FIDELITY (committee-enactment effect credential
    discriminant fidelity) — closed (`a6b8de7`).** A 1-slice arc (plus one
    grounding/plan commit) that discharges the DREP-VOTE-FIDELITY
    security-review follow-up **(d)** without a new module, rule, or CI
@@ -330,7 +443,7 @@ Conway value-conservation accounting arc** above the PHASE4-B2 close
    `ade_testkit`), plus the pre-OQ5 **(b)** Shelley unknown-cert zero-hash
    placeholder (WARN LOW non-goal). Both commits carry the
    model-attribution trailer.
-1. **DREP-VOTE-FIDELITY (DRep-vote credential discriminant fidelity) —
+2. **DREP-VOTE-FIDELITY (DRep-vote credential discriminant fidelity) —
    closed (`62c9020`).** A 2-slice arc (plus one grounding commit) that
    discharges the COMMITTEE-CRED security-review follow-up **(c)**
    without a new module, rule, or CI script — credential identity is now
@@ -367,10 +480,10 @@ Conway value-conservation accounting arc** above the PHASE4-B2 close
    carry-forward follow-ups (out of scope at the time) were **(d)** the
    dormant bare-`Hash28` `EnactmentEffects.committee_changes` (must
    migrate before committee enactment — **subsequently RESOLVED by
-   ENACTMENT-COMMITTEE-FIDELITY, thread 0 above**) and **(e)** the GREEN
+   ENACTMENT-COMMITTEE-FIDELITY, thread 1 above; subsequently WIRED by ENACTMENT-COMMITTEE-WRITEBACK, thread 0 above**) and **(e)** the GREEN
    loader `mk_credential` `tag != 1` → `KeyHash` default (contained to
    `ade_testkit`).
-2. **COMMITTEE-CRED-FIDELITY (committee member + vote credential
+3. **COMMITTEE-CRED-FIDELITY (committee member + vote credential
    discriminant fidelity) — closed (`2aeea16`).** A 2-slice arc (plus
    one grounding commit) that discharges the OQ5 security-review
    follow-up **(a)** without a new module, rule, or CI script —
@@ -406,7 +519,7 @@ Conway value-conservation accounting arc** above the PHASE4-B2 close
    `EnactmentEffects.committee_changes` (must migrate before committee
    enactment), **(e)** the GREEN loader `mk_credential` `tag != 1` →
    `KeyHash` default (contained to `ade_testkit`).
-3. **OQ5-CREDENTIAL-FIDELITY (credential key/script discriminant
+4. **OQ5-CREDENTIAL-FIDELITY (credential key/script discriminant
    fidelity) — closed (`a3ee2da`).** A 2-slice arc (plus two grounding
    commits) that closes the B5-named **OQ-5** collapse: credential
    identity is now a closed sum, not a tag-erased `Hash28`. **OQ-5
@@ -447,7 +560,7 @@ Conway value-conservation accounting arc** above the PHASE4-B2 close
    unknown-cert zero-hash placeholder (WARN LOW); declared non-goals:
    withdrawal / required-signer / address credential, the
    stake-distribution snapshot, and Byron.
-4. **Phase 4 cluster B5 (Conway governance-cert accumulation) — closed
+5. **Phase 4 cluster B5 (Conway governance-cert accumulation) — closed
    (`651adc9`).** A 5-slice arc (plus a grounding commit) that closes
    the B4 observe-and-drop: governance-affecting Conway certs are now
    **applied** to `ConwayGovState`, not just owner-tagged and dropped.
@@ -491,7 +604,7 @@ Conway value-conservation accounting arc** above the PHASE4-B2 close
    separable follow-ups: **OQ-3** (GOVCERT committee-membership
    tx-validity gate) and **OQ-5** (the pre-existing `Hash28`
    credential-discriminant collapse, promoted to authority by B5).
-5. **Phase 4 cluster B4 (Conway cert-state accumulation, fail-closed) —
+6. **Phase 4 cluster B4 (Conway cert-state accumulation, fail-closed) —
    closed (`ee35493`).** A 5-slice arc that closes the cert-state
    accumulation fail-open. **B4 grounding** (`ae1300a`) opened the
    cluster (invariants, cluster plan, cluster doc, B4-S1 slice) and
@@ -538,7 +651,7 @@ Conway value-conservation accounting arc** above the PHASE4-B2 close
    (strengthens `DC-VAL-06`); the real epoch-576 cert-state oracle is
    **environment-blocked** (UMap snapshot absent) and reclassified per
    tier doctrine.
-6. **Phase 4 cluster B3F (follow-up hardening) — committed
+7. **Phase 4 cluster B3F (follow-up hardening) — committed
    (`193d2fc`).** A 2-slice follow-up that closes the two named B3
    carry-overs without a new module or crate. **B3F-S1** (`d6c1993`)
    adds the CI grep-gate `ci/ci_check_conway_cert_classification_closed.sh`
@@ -559,7 +672,7 @@ Conway value-conservation accounting arc** above the PHASE4-B2 close
    (`strengthened_in += PHASE4-B3F`); +2 tests
    (`trailing_bytes_after_cert_array_rejected`,
    `huge_array_count_rejects_without_overallocating`).
-7. **Phase 4 cluster B3 (Conway value-conservation accounting) —
+8. **Phase 4 cluster B3 (Conway value-conservation accounting) —
    closed (`d766eb0`).** Three implementation/planning commits plus the
    close: the planning commit `3aebbe5` (invariants, cluster/slice plan,
    registry rules `DC-TXV-06`/`DC-TXV-07`), the implementation `978c222`
@@ -584,7 +697,7 @@ Conway value-conservation accounting arc** above the PHASE4-B2 close
    (canonical deposit-parameter authority — `enforced` via the new
    `ci_check_deposit_param_authority.sh`). Strengthens
    `T-CONSERV-01`/`CN-LEDGER-07`, `DC-VAL-06`, and `DC-TXV-03`.
-8. **Phase 4 cluster B2 (tx validity agreement) — closed (`c1cba82`).**
+9. **Phase 4 cluster B2 (tx validity agreement) — closed (`c1cba82`).**
    A 5-slice arc (B2-S1 → B2-S5) shipped as `feat(tx-validity):`
    commits, opened by the planning trio `b79f632` (invariant sketch +
    `DC-TXV` family), `b32fef3` (cluster/slice plan), `7263699`
@@ -602,7 +715,7 @@ Conway value-conservation accounting arc** above the PHASE4-B2 close
    `enforced`, and — critically — **found and fixed a real
    value-conservation fail-open** (`617139f`, B2-S4) whose deferred
    deposit/withdrawal residual B3 has now closed (thread 1).
-9. **Conway value-conservation: the B2-S4 fail-open and its B3
+10. **Conway value-conservation: the B2-S4 fail-open and its B3
    completion.** B2-S4 (`617139f`) added
    `ade_ledger::conway::check_conway_coin_conservation`, but with a
    **deliberate early-out** — it returned before checking value for any
@@ -615,7 +728,7 @@ Conway value-conservation accounting arc** above the PHASE4-B2 close
    `ade_ledger::cert_classify::classify` over the closed `ConwayCert`
    grammar. The named tx-validity-completeness follow-up from the B2
    regen is therefore **discharged** for Conway cert/withdrawal txs.
-10. **Phase 4 cluster B1 (full block validity agreement) — closed
+11. **Phase 4 cluster B1 (full block validity agreement) — closed
    (`993f363`).** The 7-slice arc (B1-S1 → B1-S7) composes the N-A wire
    layer, the N-B consensus header authority, and the `ade_ledger` body
    authority into a single block verdict. Introduced the BLUE
@@ -628,7 +741,7 @@ Conway value-conservation accounting arc** above the PHASE4-B2 close
    added the new crate dependency edge `ade_ledger -> ade_core`. Closed
    by `993f363`; `3552bc2` synced `Cargo.lock` for the new edges and
    `e0af99d` gitignored the multi-GB ledger-state dumps.
-11. **Phase 4 cluster N-A (network mini-protocols) — closed.** 10
+12. **Phase 4 cluster N-A (network mini-protocols) — closed.** 10
    slices (S-A1 → S-A10, with S-A8b/S-A8c rework). Introduced the new
    BLUE workspace crate `ade_network` with 11 mini-protocol codecs, 8
    state machines, the Ouroboros mux frame codec, a RED `session`
@@ -638,7 +751,7 @@ Conway value-conservation accounting arc** above the PHASE4-B2 close
    flight, plus an LSQ Acquire/AcquireNoPoint split, a
    LocalTxSubmission/N2N TxSubmission2 inner-tx HFC envelope fix, and
    DoS-hardening on `Vec::with_capacity` in eight codecs.
-12. **Phase 4 cluster N-B (consensus runtime) — closed (`a0c73e1`).**
+13. **Phase 4 cluster N-B (consensus runtime) — closed (`a0c73e1`).**
    10 slices (S-B1 → S-B10), opened by `d9f0426` (invariant sketch v2 +
    8 `DC-CONS-*` rules). Built out the BLUE `ade_core::consensus` module
    (15+ source files: closed `PraosChainDepState`, `EraSchedule`,
@@ -647,24 +760,24 @@ Conway value-conservation accounting arc** above the PHASE4-B2 close
    GREEN `ade_runtime::consensus` shipped the chain-selector
    orchestrator, candidate-fragment builder, and a RED genesis parser.
    New replay corpora under `corpus/consensus/`. All 6 CEs closed.
-13. **CE-N-B-6 follow-mode bridge** — `807bcb6` retargeted the N-B
+14. **CE-N-B-6 follow-mode bridge** — `807bcb6` retargeted the N-B
    live-interop pin to cardano-node 11.0.1, then `e5f1f64` added the RED
    `ade_core_interop::follow` bridge plus live preprod tip-agreement
    evidence. Follow mode runs BLUE fork-choice + rollback only — it
    trusts the already-validated peer for header/VRF/leader/nonce/KES, so
    it carries no authoritative validation decision.
-14. **Phase 4 cluster N-D (ChainDB persistence) — closed (`436b1d7`).**
+15. **Phase 4 cluster N-D (ChainDB persistence) — closed (`436b1d7`).**
    Slices S-33 → S-37. CE-N-D-1 closure evidence (1000/1000 stress-kill
    iterations).
-15. **Phase 2C close-out / CE-73 reclassification** — single commit
+16. **Phase 2C close-out / CE-73 reclassification** — single commit
    (`9b15378`) splitting CE-73 into a Tier-2 semantic gate (enforced via
    `ci_check_hfc_translation.sh`) and an explicit Tier-4 bytes non-goal.
-16. **IDD canonicalization** — `chore(idd)` commits that make the repo
+17. **IDD canonicalization** — `chore(idd)` commits that make the repo
     legible to the global IDD slash commands: `.idd-config.json`,
     registry rename (`constitution_registry.toml` →
     `docs/ade-invariant-registry.toml`), cluster N-D moved into
     `docs/clusters/PHASE4-N-D/`, repo-local commit-msg trailer hook.
-17. **Grounding-doc generation + ripple** — `a87c3a3` produced the
+18. **Grounding-doc generation + ripple** — `a87c3a3` produced the
     first cuts of CODEMAP/SEAMS/HEAD_DELTAS/TRACEABILITY; `f0b0fd6`,
     `a2c7ac8`, `744ef34`, the B2-close refresh in `c1cba82`, and the
     B3-close refresh in `d766eb0` refreshed subsets after the
@@ -672,10 +785,10 @@ Conway value-conservation accounting arc** above the PHASE4-B2 close
     grounding-doc refresh commit landed for N-B, the follow-bridge, or
     B1**, and the CODEMAP/SEAMS/TRACEABILITY refresh for the B3F
     follow-up is the in-flight working tree (see Anomalies).
-18. **BLUE-list drift closure** — `5b70bee` extended six CI scripts to
+19. **BLUE-list drift closure** — `5b70bee` extended six CI scripts to
     the full 6-crate BLUE scope; `c8fa37f` refreshed CODEMAP and
     TRACEABILITY to remove 14 `_(scope gap)_` markers across 13 rules.
-19. **Corpus relayout** — `corpus/snapshots/*` and the
+20. **Corpus relayout** — `corpus/snapshots/*` and the
     `reward_provenance/*_registered_creds.txt` files were removed (they
     carried credential material that does not belong in a public repo);
     12 boundary-block sets were re-extracted at exact era-boundary
@@ -692,6 +805,10 @@ Conway value-conservation accounting arc** above the PHASE4-B2 close
 
 | Hash | Type | Summary |
 |------|------|---------|
+| `3180e27` | feat | feat(ledger): wire committee enactment write-back (ENACTMENT-COMMITTEE-WRITEBACK-S2) |
+| `f2f15f9` | feat | feat(ledger): structured UpdateCommittee gov action (ENACTMENT-COMMITTEE-WRITEBACK-S1) |
+| `ea25dd9` | docs | docs(ledger): ENACTMENT-COMMITTEE-WRITEBACK plan (wire committee enactment) |
+| `3706534` | docs | docs(grounding): refresh CODEMAP/SEAMS/HEAD_DELTAS/TRACEABILITY for ENACTMENT-COMMITTEE-FIDELITY close |
 | `a6b8de7` | feat | feat(ledger): discriminate EnactmentEffects.committee_changes (ENACTMENT-COMMITTEE-FIDELITY-S1) |
 | `5d64fee` | docs | docs(ledger): ENACTMENT-COMMITTEE-FIDELITY plan (strengthens DC-LEDGER-10) |
 | `62c9020` | test | test(ledger): DRep cross-resolve negative + CI gate, strengthen DC-LEDGER-10 (DREP-VOTE-FIDELITY-S2) |
@@ -983,7 +1100,7 @@ TRACEABILITY must add the new `DC-LEDGER-10` row (`enforced`, CI
 
 | Module | Scope | Key changes |
 |--------|-------|-------------|
-| `ade_ledger` | +57 source/test files over the full delta (of which **PHASE4-B5: +8 files touched, +864 / −~14 lines** — `gov_cert.rs` +366 new, `gov_state_corpus.rs` +207 new, `rules.rs` +161/−42, `state.rs` +56, `error.rs` +16, `fingerprint.rs` +14, `pparams.rs` +8; **PHASE4-B4: +3 files touched, +780 / −~30 lines** — `delegation.rs` +385, `rules.rs` +212, `cert_classify.rs` +100, `cert_state_corpus.rs` +183 new; **PHASE4-B3: +12 files, +1,558 / −12 lines**; PHASE4-B2: +24 files, +3,817 / −5; PHASE4-B1: +13 files, +1,755; CE-73: +73). **PHASE4-B3F: no source change** | **PHASE4-B3 (primary value-conservation thread):** the crate gained the closed cert-deposit classifier `cert_classify.rs` (`classify`, `CertState` bridge) and substantially reworked the value-conservation accounting. **`conway.rs`** (+130 / −): `check_conway_coin_conservation` rewritten to the **full equation** `Σ(inputs) + Σ(withdrawals) + refunded_deposits == Σ(outputs) + fee + donation + new_deposits` (i128) — **the cert/withdrawal early-out is REMOVED**; certs and withdrawals are now decoded and accounted, never skipped. **`error.rs`** (+86): new `LedgerError::EraInvalidCertificate(EraInvalidCertificateError)` and `LedgerError::UnsupportedStateDependentDeposit(UnsupportedStateDependentDepositAccounting)`, plus `ValidationEnvironmentError::MissingConwayDepositParams`. **`pparams.rs`** (+78): new `ConwayOnlyDepositParams` (Conway-only, structurally `None` for pre-Conway) and the resolved `ConwayDepositParams` view. **`state.rs`** (+28): `LedgerState.conway_deposit_params: Option<ConwayOnlyDepositParams>` field + `conway_deposit_view()` accessor. **`fingerprint.rs`** (+116): Conway deposit-param fold added to the state fingerprint; the pre-Conway fold is **byte-identical** (the new field folds to nothing when `None`). Small wiring touches in `rules.rs`, `phase.rs`, `tx_validity/phase1.rs`, `byron.rs`, `epoch.rs`, `hfc.rs`, `shelley.rs`, `lib.rs` + 3 conservation test suites (`conway_conservation_full.rs`, `conway_conservation_adversarial.rs`, `conway_conservation_positive_synthetic.rs`). **PHASE4-B2:** the `tx_validity/` (7 files) and `mempool/` (3 files) submodules + B2 integration tests; the B2-S4 `check_conway_coin_conservation` first cut (deposit-free form). **PHASE4-B1:** the `block_validity/` submodule, `consensus_view.rs`, `consensus_input_extract.rs`, the `ade_core` dep edge. **CE-73:** 10 unit tests for `decode_invalid_tx_indices`. **PHASE4-B3F:** no `ade_ledger` source change — the B3F-S1 grep-gate references `cert_classify.rs` from CI but does not edit it. **PHASE4-B4 (primary cert-state-accumulation thread):** **`delegation.rs`** (+385) gained the **native owner-tagged apply model** — `conway_cert_action` + `apply_conway_cert` returning `ConwayCertOutcome`, the `ConwayCertAction` taxonomy (`MutateCertState` / `Governance(effect)` / `CertStateAndGovernance(effect)` / `NotValidInEra`) total over the 18 Conway tags, the owner tags `GovernanceOwner` / `GovernanceCertEffect` / `OwnerTaggedEffect`, and `ConwayCertEnv`; governance certs (vote-deleg / committee auth+resign / DRep reg/unreg/update) are owner-tagged to `ConwayGovState` and routed out of B4 mutation scope (observed, not applied — deferred to PHASE4-B5), composite tags 10/12/13 carry both a cert-state mutation and a governance effect, and no Conway cert maps to `Neutral` for lack of an owner. **`rules.rs`** (+212): `process_block_certificates` now calls the new fail-closed `accumulate_tx_certs(era, cert_bytes, &cert_state, key_deposit) -> Result<CertState, LedgerError>` — the **`_era` discard is removed** (explicit `CardanoEra` dispatch: Conway via `ade_codec::conway::cert::decode_conway_certs` + `apply_conway_cert`, Shelley..Babbage via the Shelley path) and the **two "non-fatal during replay" swallows are removed**; decode/apply errors propagate as structured `LedgerError` and halt the block transition (with an inline test module exercising era-dispatch + fail-closed decode/apply/unknown-tag/removed-tag/governance-routing). **`cert_classify.rs`** (+100): re-pointed at the owner-complete `ConwayCert` shape (`PoolRegistration(cert)`, struct variants now `{ .., deposit }` / `{ refund, .. }`); classification dispositions unchanged, exhaustiveness preserved (still no `_ =>` wildcard). New test corpus `tests/cert_state_corpus.rs` (+183, synthetic positive accumulation + replay byte-identical + adversarial no-false-accept). **PHASE4-B5 (primary governance-cert-accumulation thread):** the crate gained the new BLUE module **`gov_cert.rs`** (+366) — `apply_conway_gov_cert`, a pure total dispatch over the owner-complete `ConwayCert` mutating only `ConwayGovState` (vote-delegation → `vote_delegations`, committee auth/resign → `committee_hot_keys`, DRep reg/update → env-driven `drep_expiry` via `checked_add`, DRep unreg → remove); it never touches the B4-owned `CertState`, so composite certs are not double-applied. **`state.rs`** (+56): new `GovCertEnv { current_epoch, drep_activity }` + fail-fast `LedgerState::gov_cert_env()` (the only `GovCertEnv` constructor; absent param → `MissingDRepActivityParam`, never defaulted). **`pparams.rs`** (+8): `ConwayOnlyDepositParams.drep_activity: u64` (Conway PParams field 31). **`error.rs`** (+16): two new `ValidationEnvironmentError` variants — `MissingDRepActivityParam` and `DRepActivityOverflow`. **`fingerprint.rs`** (+14): the Conway-deposit fingerprint tag's array extended **2→3** to fold `drep_activity` — a deliberate `T-DET-01` migration, golden regenerated (`b69422ef…71d9` → `d1803cb7…8827`), byte-identical for pre-Conway / param-absent states. **`rules.rs`** (+161/−42): `process_block_certificates` / `accumulate_tx_certs` now thread an `Option<ConwayGovState>` alongside the cert-state, **apply the governance half** via `apply_conway_gov_cert` (gov apply errors propagate and halt), the B4 "routed out of B4 mutation scope" observe-and-drop comment is **removed**, and `gov_state` is **carried forward through `apply_block`** (it was nulled to `None` at both classified/verdict apply sites before B5). New test corpus `tests/gov_state_corpus.rs` (+207, synthetic positive gov-state accumulation + replay byte-identical + adversarial: missing-env reject, expiry-overflow reject, decode-layer guard, double-resign determinism). **OQ5 (credential-discriminant fidelity, OQ5-S1 `4187330` / OQ5-S2 `a3ee2da`; +6 files touched):** **`state.rs`** (+11): `ConwayGovState` **re-keyed `Hash28` -> `StakeCredential`** across `vote_delegations` / `committee_hot_keys` / `drep_expiry`, so a key-hash and a script-hash sharing 28 bytes are distinct authoritative-state keys (matching cardano-node's `Credential`-keyed UMap/VState). **`fingerprint.rs`** (+78): new `write_stake_credential` emits **discriminant + hash**; the gov-map fingerprint writers route through it (a deliberate dual cert-state + gov-state migration, `T-DET-01`) while the `Hash28`-keyed stake-snapshot writer stays `write_hash28` -- **no golden drift** (the affected gov/cert surfaces are empty/credential-free in the committed states). **`gov_cert.rs`** (+/-38), **`governance.rs`** (+32), **`cert_classify.rs`** (+2), **`rules.rs`** (+17): follow the key-type change; `cred.hash()` is used only at the genuine bare-byte boundary (the stake-distribution snapshot). New test corpus `tests/credential_fidelity_corpus.rs` (+140: same-bytes-distinct cert-state / gov-state, discriminant-changes-fingerprint, replay byte-identical). **COMMITTEE-CRED-FIDELITY (committee member + vote credential fidelity, S1 `2303a60` / S2 `2aeea16`; +4 ledger files touched):** **`state.rs`** (+2): `ConwayGovState.committee` **re-keyed `Hash28` -> `StakeCredential`** (committee member map keys on the discriminated cold credential). **`governance.rs`** (+76): `evaluate_ratification` / `check_ratification` now take a `BTreeMap<StakeCredential, u64>` committee-member set, and committee-vote resolution (hot voter -> hot->cold mapping -> cold member) is **full-credential equality** -- the prior `hot.hash() == hot_cred` and `**c == *cold.hash()` comparisons are gone, so a key-hash hot key never cross-resolves to a script-hash member of equal bytes; an inline `committee_fidelity_tests` module adds the cross-resolve negative + positive control. **`fingerprint.rs`** (+18): new `write_committee_vote_list` (canonical, sorts committee votes by the discriminated credential's `Ord`) replaces `write_vote_list` for `committee_votes`, and the committee-member map writer routes through `write_stake_credential` (instead of `write_hash28`) -- a `T-DET-01` migration with **no golden drift** (committee states are empty in the committed fingerprint surfaces); `drep_votes` / `spo_votes` still use `write_vote_list` (`Hash28`). New corpus cases in `tests/credential_fidelity_corpus.rs` (+32): `committee_keyhash_scripthash_same_bytes_distinct`, `committee_discriminant_changes_fingerprint`. **DREP-VOTE-FIDELITY (DRep-vote credential fidelity, S1 `ba4ff37` / S2 `62c9020`; +3 ledger files touched):** **`governance.rs`** (+57): `check_ratification`'s `lookup_stake` closure re-typed `|cred: &Hash28|` -> `|cred: &StakeCredential|` and now resolves the voter to **exactly one** `DRep` stake key by its discriminant (`KeyHash` -> `DRep::KeyHash`, `ScriptHash` -> `DRep::ScriptHash`) -- the prior `drep_stake.get(&DRep::KeyHash(..)).or_else(|| drep_stake.get(&DRep::ScriptHash(..)))` OR-fallback over identical bytes is **gone**; an inline `committee_fidelity_tests` addition (`drep_keyhash_scripthash_do_not_cross_resolve` + a `ratifies_drep` helper) is the cross-resolve negative + positive control. **`fingerprint.rs`** (+6): `write_committee_vote_list` **renamed `write_credential_vote_list`** and now writes both `committee_votes` and `drep_votes` (`write_gov_action_state` routes `drep_votes` through it instead of `write_vote_list`); `spo_votes` stays `write_vote_list` over `Hash28` -- a `T-DET-01` migration with **no golden drift** (the gov-action-state vote surfaces are empty in the committed states). New corpus case in `tests/credential_fidelity_corpus.rs` (+38): `drep_vote_discriminant_changes_fingerprint`. **ENACTMENT-COMMITTEE-FIDELITY (committee-enactment effect credential fidelity, S1 `a6b8de7`; +1 ledger file touched):** **`governance.rs`** (+30): `EnactmentEffects.committee_changes` re-typed `Option<(Vec<Hash28>, Vec<(Hash28, u64)>)>` -> `Option<(Vec<StakeCredential>, Vec<(StakeCredential, u64)>)>` -- the (removed, added-with-expiry) committee-enactment effect now carries the discriminated cold committee credential, never bare `Hash28`. The field is **DORMANT** (always `None`; `UpdateCommittee` enactment is still a no-op), so this pins the type only -- it prevents committee enactment, once wired, from re-collapsing the discriminated `ConwayGovState.committee` map on write-back. An inline `committee_fidelity_tests` addition (`enactment_committee_changes_keyhash_scripthash_distinct`) builds an `EnactmentEffects` with key/script members of equal bytes and asserts they are distinct entries, plus that the default stays dormant `None`. **No golden drift** (the field is `None`; no fingerprint surface changes). |
+| `ade_ledger` | +57 source/test files over the full delta (of which **PHASE4-B5: +8 files touched, +864 / −~14 lines** — `gov_cert.rs` +366 new, `gov_state_corpus.rs` +207 new, `rules.rs` +161/−42, `state.rs` +56, `error.rs` +16, `fingerprint.rs` +14, `pparams.rs` +8; **PHASE4-B4: +3 files touched, +780 / −~30 lines** — `delegation.rs` +385, `rules.rs` +212, `cert_classify.rs` +100, `cert_state_corpus.rs` +183 new; **PHASE4-B3: +12 files, +1,558 / −12 lines**; PHASE4-B2: +24 files, +3,817 / −5; PHASE4-B1: +13 files, +1,755; CE-73: +73). **PHASE4-B3F: no source change** | **PHASE4-B3 (primary value-conservation thread):** the crate gained the closed cert-deposit classifier `cert_classify.rs` (`classify`, `CertState` bridge) and substantially reworked the value-conservation accounting. **`conway.rs`** (+130 / −): `check_conway_coin_conservation` rewritten to the **full equation** `Σ(inputs) + Σ(withdrawals) + refunded_deposits == Σ(outputs) + fee + donation + new_deposits` (i128) — **the cert/withdrawal early-out is REMOVED**; certs and withdrawals are now decoded and accounted, never skipped. **`error.rs`** (+86): new `LedgerError::EraInvalidCertificate(EraInvalidCertificateError)` and `LedgerError::UnsupportedStateDependentDeposit(UnsupportedStateDependentDepositAccounting)`, plus `ValidationEnvironmentError::MissingConwayDepositParams`. **`pparams.rs`** (+78): new `ConwayOnlyDepositParams` (Conway-only, structurally `None` for pre-Conway) and the resolved `ConwayDepositParams` view. **`state.rs`** (+28): `LedgerState.conway_deposit_params: Option<ConwayOnlyDepositParams>` field + `conway_deposit_view()` accessor. **`fingerprint.rs`** (+116): Conway deposit-param fold added to the state fingerprint; the pre-Conway fold is **byte-identical** (the new field folds to nothing when `None`). Small wiring touches in `rules.rs`, `phase.rs`, `tx_validity/phase1.rs`, `byron.rs`, `epoch.rs`, `hfc.rs`, `shelley.rs`, `lib.rs` + 3 conservation test suites (`conway_conservation_full.rs`, `conway_conservation_adversarial.rs`, `conway_conservation_positive_synthetic.rs`). **PHASE4-B2:** the `tx_validity/` (7 files) and `mempool/` (3 files) submodules + B2 integration tests; the B2-S4 `check_conway_coin_conservation` first cut (deposit-free form). **PHASE4-B1:** the `block_validity/` submodule, `consensus_view.rs`, `consensus_input_extract.rs`, the `ade_core` dep edge. **CE-73:** 10 unit tests for `decode_invalid_tx_indices`. **PHASE4-B3F:** no `ade_ledger` source change — the B3F-S1 grep-gate references `cert_classify.rs` from CI but does not edit it. **PHASE4-B4 (primary cert-state-accumulation thread):** **`delegation.rs`** (+385) gained the **native owner-tagged apply model** — `conway_cert_action` + `apply_conway_cert` returning `ConwayCertOutcome`, the `ConwayCertAction` taxonomy (`MutateCertState` / `Governance(effect)` / `CertStateAndGovernance(effect)` / `NotValidInEra`) total over the 18 Conway tags, the owner tags `GovernanceOwner` / `GovernanceCertEffect` / `OwnerTaggedEffect`, and `ConwayCertEnv`; governance certs (vote-deleg / committee auth+resign / DRep reg/unreg/update) are owner-tagged to `ConwayGovState` and routed out of B4 mutation scope (observed, not applied — deferred to PHASE4-B5), composite tags 10/12/13 carry both a cert-state mutation and a governance effect, and no Conway cert maps to `Neutral` for lack of an owner. **`rules.rs`** (+212): `process_block_certificates` now calls the new fail-closed `accumulate_tx_certs(era, cert_bytes, &cert_state, key_deposit) -> Result<CertState, LedgerError>` — the **`_era` discard is removed** (explicit `CardanoEra` dispatch: Conway via `ade_codec::conway::cert::decode_conway_certs` + `apply_conway_cert`, Shelley..Babbage via the Shelley path) and the **two "non-fatal during replay" swallows are removed**; decode/apply errors propagate as structured `LedgerError` and halt the block transition (with an inline test module exercising era-dispatch + fail-closed decode/apply/unknown-tag/removed-tag/governance-routing). **`cert_classify.rs`** (+100): re-pointed at the owner-complete `ConwayCert` shape (`PoolRegistration(cert)`, struct variants now `{ .., deposit }` / `{ refund, .. }`); classification dispositions unchanged, exhaustiveness preserved (still no `_ =>` wildcard). New test corpus `tests/cert_state_corpus.rs` (+183, synthetic positive accumulation + replay byte-identical + adversarial no-false-accept). **PHASE4-B5 (primary governance-cert-accumulation thread):** the crate gained the new BLUE module **`gov_cert.rs`** (+366) — `apply_conway_gov_cert`, a pure total dispatch over the owner-complete `ConwayCert` mutating only `ConwayGovState` (vote-delegation → `vote_delegations`, committee auth/resign → `committee_hot_keys`, DRep reg/update → env-driven `drep_expiry` via `checked_add`, DRep unreg → remove); it never touches the B4-owned `CertState`, so composite certs are not double-applied. **`state.rs`** (+56): new `GovCertEnv { current_epoch, drep_activity }` + fail-fast `LedgerState::gov_cert_env()` (the only `GovCertEnv` constructor; absent param → `MissingDRepActivityParam`, never defaulted). **`pparams.rs`** (+8): `ConwayOnlyDepositParams.drep_activity: u64` (Conway PParams field 31). **`error.rs`** (+16): two new `ValidationEnvironmentError` variants — `MissingDRepActivityParam` and `DRepActivityOverflow`. **`fingerprint.rs`** (+14): the Conway-deposit fingerprint tag's array extended **2→3** to fold `drep_activity` — a deliberate `T-DET-01` migration, golden regenerated (`b69422ef…71d9` → `d1803cb7…8827`), byte-identical for pre-Conway / param-absent states. **`rules.rs`** (+161/−42): `process_block_certificates` / `accumulate_tx_certs` now thread an `Option<ConwayGovState>` alongside the cert-state, **apply the governance half** via `apply_conway_gov_cert` (gov apply errors propagate and halt), the B4 "routed out of B4 mutation scope" observe-and-drop comment is **removed**, and `gov_state` is **carried forward through `apply_block`** (it was nulled to `None` at both classified/verdict apply sites before B5). New test corpus `tests/gov_state_corpus.rs` (+207, synthetic positive gov-state accumulation + replay byte-identical + adversarial: missing-env reject, expiry-overflow reject, decode-layer guard, double-resign determinism). **OQ5 (credential-discriminant fidelity, OQ5-S1 `4187330` / OQ5-S2 `a3ee2da`; +6 files touched):** **`state.rs`** (+11): `ConwayGovState` **re-keyed `Hash28` -> `StakeCredential`** across `vote_delegations` / `committee_hot_keys` / `drep_expiry`, so a key-hash and a script-hash sharing 28 bytes are distinct authoritative-state keys (matching cardano-node's `Credential`-keyed UMap/VState). **`fingerprint.rs`** (+78): new `write_stake_credential` emits **discriminant + hash**; the gov-map fingerprint writers route through it (a deliberate dual cert-state + gov-state migration, `T-DET-01`) while the `Hash28`-keyed stake-snapshot writer stays `write_hash28` -- **no golden drift** (the affected gov/cert surfaces are empty/credential-free in the committed states). **`gov_cert.rs`** (+/-38), **`governance.rs`** (+32), **`cert_classify.rs`** (+2), **`rules.rs`** (+17): follow the key-type change; `cred.hash()` is used only at the genuine bare-byte boundary (the stake-distribution snapshot). New test corpus `tests/credential_fidelity_corpus.rs` (+140: same-bytes-distinct cert-state / gov-state, discriminant-changes-fingerprint, replay byte-identical). **COMMITTEE-CRED-FIDELITY (committee member + vote credential fidelity, S1 `2303a60` / S2 `2aeea16`; +4 ledger files touched):** **`state.rs`** (+2): `ConwayGovState.committee` **re-keyed `Hash28` -> `StakeCredential`** (committee member map keys on the discriminated cold credential). **`governance.rs`** (+76): `evaluate_ratification` / `check_ratification` now take a `BTreeMap<StakeCredential, u64>` committee-member set, and committee-vote resolution (hot voter -> hot->cold mapping -> cold member) is **full-credential equality** -- the prior `hot.hash() == hot_cred` and `**c == *cold.hash()` comparisons are gone, so a key-hash hot key never cross-resolves to a script-hash member of equal bytes; an inline `committee_fidelity_tests` module adds the cross-resolve negative + positive control. **`fingerprint.rs`** (+18): new `write_committee_vote_list` (canonical, sorts committee votes by the discriminated credential's `Ord`) replaces `write_vote_list` for `committee_votes`, and the committee-member map writer routes through `write_stake_credential` (instead of `write_hash28`) -- a `T-DET-01` migration with **no golden drift** (committee states are empty in the committed fingerprint surfaces); `drep_votes` / `spo_votes` still use `write_vote_list` (`Hash28`). New corpus cases in `tests/credential_fidelity_corpus.rs` (+32): `committee_keyhash_scripthash_same_bytes_distinct`, `committee_discriminant_changes_fingerprint`. **DREP-VOTE-FIDELITY (DRep-vote credential fidelity, S1 `ba4ff37` / S2 `62c9020`; +3 ledger files touched):** **`governance.rs`** (+57): `check_ratification`'s `lookup_stake` closure re-typed `|cred: &Hash28|` -> `|cred: &StakeCredential|` and now resolves the voter to **exactly one** `DRep` stake key by its discriminant (`KeyHash` -> `DRep::KeyHash`, `ScriptHash` -> `DRep::ScriptHash`) -- the prior `drep_stake.get(&DRep::KeyHash(..)).or_else(|| drep_stake.get(&DRep::ScriptHash(..)))` OR-fallback over identical bytes is **gone**; an inline `committee_fidelity_tests` addition (`drep_keyhash_scripthash_do_not_cross_resolve` + a `ratifies_drep` helper) is the cross-resolve negative + positive control. **`fingerprint.rs`** (+6): `write_committee_vote_list` **renamed `write_credential_vote_list`** and now writes both `committee_votes` and `drep_votes` (`write_gov_action_state` routes `drep_votes` through it instead of `write_vote_list`); `spo_votes` stays `write_vote_list` over `Hash28` -- a `T-DET-01` migration with **no golden drift** (the gov-action-state vote surfaces are empty in the committed states). New corpus case in `tests/credential_fidelity_corpus.rs` (+38): `drep_vote_discriminant_changes_fingerprint`. **ENACTMENT-COMMITTEE-FIDELITY (committee-enactment effect credential fidelity, S1 `a6b8de7`; +1 ledger file touched):** **`governance.rs`** (+30): `EnactmentEffects.committee_changes` re-typed `Option<(Vec<Hash28>, Vec<(Hash28, u64)>)>` -> `Option<(Vec<StakeCredential>, Vec<(StakeCredential, u64)>)>` -- the (removed, added-with-expiry) committee-enactment effect now carries the discriminated cold committee credential, never bare `Hash28`. The field is **DORMANT** (always `None`; `UpdateCommittee` enactment is still a no-op), so this pins the type only -- it prevents committee enactment, once wired, from re-collapsing the discriminated `ConwayGovState.committee` map on write-back. An inline `committee_fidelity_tests` addition (`enactment_committee_changes_keyhash_scripthash_distinct`) builds an `EnactmentEffects` with key/script members of equal bytes and asserts they are distinct entries, plus that the default stays dormant `None`. **No golden drift** (the field is `None`; no fingerprint surface changes). **ENACTMENT-COMMITTEE-WRITEBACK (wire committee enactment write-back, S1 `f2f15f9` / S2 `3180e27`; +3 ledger files touched):** **`governance.rs`** (+~189): `enact_proposals` now populates `EnactmentEffects.committee_changes` + the new `committee_threshold` from a ratified `UpdateCommittee` (and dissolves on `NoConfidence`); the new pure transition `apply_committee_enactment(committee, quorum, effects) -> (committee, quorum)` applies the dissolve / remove-add-set-quorum to the discriminated committee map, with an inline test module (`enact_noconfidence_dissolves_committee`, `enact_update_committee_applies_changes`, `enact_update_committee_keyhash_scripthash_distinct`, `committee_enactment_replays_byte_identical`). **`rules.rs`** (+~53): the epoch-boundary apply site calls `apply_committee_enactment` -- the committee map is **written back** (no longer cloned unchanged). **`fingerprint.rs`** (+~88): `write_gov_action` emits the structured `UpdateCommittee` shape `[5, prev, set<cred>, {cred=>epoch}, num, den]` via `write_stake_credential`, replacing the prior opaque `[4, prev, bytes]` -- a deliberate `T-DET-01` fingerprint migration (there **is** a surface change here, unlike the prior credential clusters; the dormant-`None` invariant no longer holds once enactment is live). |
 | `ade_codec` | +11 source/test files (PHASE4-B3 + B3F + B4; B4: `conway/cert.rs` +147, `shelley/cert.rs` +108, `conway_cert_decode_complete.rs` +313 new, `conway_cert_classification.rs` +14) | **PHASE4-B3:** the new BLUE `conway::cert` decoder (`cert.rs`, closed grammar tags 0..18) and `conway::withdrawals` decoder (`withdrawals.rs`, `RewardAccount` map, i128 sum), wired through `conway/mod.rs`; `error.rs` (+13) added `CodecError::UnknownCertTag { tag, offset }` and `CodecError::DuplicateMapKey { offset }`. Two new test suites: `conway_cert_classification.rs` (decode total over tags 0..18, unknown-tag reject, removed-tag-5/6 reject, malformed-CBOR reject, replay-determinism), `conway_withdrawals.rs`. **PHASE4-B3F-S2 (`193d2fc`, +18 in `cert.rs`):** `decode_conway_certs` hardened — **trailing bytes after the cert array now reject** with `CodecError::TrailingBytes { consumed, total }` (parity with `decode_withdrawals`); the indefinite-array break byte is consumed; definite-array preallocation bounded by `(n).min(data.len())` (no over-allocation on a crafted huge count, no behavioral change for valid input). +2 tests in `conway_cert_classification.rs` (`trailing_bytes_after_cert_array_rejected`, `huge_array_count_rejects_without_overallocating`). `ade_codec` was untouched before B3. **PHASE4-B4-S1 (`228415b`, +147 in `conway/cert.rs`, +108 in `shelley/cert.rs`):** `decode_conway_certs` made **owner-complete** — it now reads and retains every owner payload for all 18 tags (credentials, pool id, full pool params incl. `pool_owners`, DRep delegation targets) where it previously kept only the deposit/refund projection; a new `decode_drep` reads the DRep target; the shared `read_pool_registration_cert` (`shelley/cert.rs`) now reads up to and including `pool_owners` (the caller consumes trailing relays/metadata) and returns them via the new `PoolRegistrationCert.owners`. Fields no owner stores (cert anchors, relays, metadata) remain structurally consumed; unknown-tag reject, removed-tag-5/6 → `RemovedInConway`, trailing-byte reject, and bounded preallocation are unchanged. New test suite `conway_cert_decode_complete.rs` (+313, per-tag owner-payload retention) + `conway_cert_classification.rs` (+14, updated to the new variant shapes). **OQ5-S1 (`4187330`, +14 in `conway/cert.rs`, +14 in `shelley/cert.rs`):** both era `decode_stake_credential` now **preserve the key/script tag** -- tag `0` -> `StakeCredential::KeyHash`, `1` -> `ScriptHash`, any other tag -> deterministic `CodecError::InvalidCborStructure` reject; the prior `let (_tag, _) = ...` / `let (_cred_type, _) = ...` tag-discard form is gone. OQ5-S2 extended `conway_cert_decode_complete.rs` (+71) with discriminant-preservation cases and added `tests/shelley_credential_discriminant.rs` (+65). |
 | `ade_types` | +3 files (B3) + 2 files (B4); B4: `conway/cert.rs` +92, `shelley/cert.rs` +4 | **PHASE4-B3:** `conway/cert.rs` (+84) gained the closed `ConwayCert` enum plus the classification value types `CertDisposition`, `DepositEffect`, `CoinSource` consumed by `ade_ledger::cert_classify`; `tx.rs` (+6) added `RewardAccount(pub [u8; 29])` for the withdrawals decoder; `lib.rs` re-export wiring. First delta since baseline. The B3F-S1 grep-gate references this file (closed-variant guard) but does not edit it. **PHASE4-B4-S1 (`228415b`, +92 in `conway/cert.rs`, +4 in `shelley/cert.rs`):** `ConwayCert` made **owner-complete** — formerly payload-free variants now carry their owner fields (`StakeDelegation { credential, pool_id }`, `PoolRegistration(PoolRegistrationCert)`, `PoolRetirement { pool_id, epoch }`, `VoteDelegation { credential, drep }`, the composite tags 10/12/13 with their full field sets, `AuthCommitteeHot { cold_credential, hot_credential }`, `ResignCommitteeCold`, `DRepRegistration`/`DRepUnregistration`/`DRepUpdate` with `drep_credential`); the deposit-bearing variants additionally retain `credential`/`deposit`/`refund`. New **`DRep` enum** added for the vote-delegation target. `shelley/cert.rs` (+4) added the **`PoolRegistrationCert.owners: Vec<Hash28>`** field (`pool_owners`, retained for cert-state accumulation; relays/metadata still dropped). The closed taxonomy stays closed (no `#[non_exhaustive]`, no open-tail variant) — the B3F grep-gate continues to guard it. **OQ5-S1 (`4187330`, +20 in `shelley/cert.rs`):** **`StakeCredential` changed from the tuple struct `StakeCredential(pub Hash28)` to a closed `enum { KeyHash(Hash28), ScriptHash(Hash28) }`** with a discriminant-erasing `hash()` accessor reserved (per its doc comment) for genuine bare-byte boundary adapters -- never to re-key authoritative cert/gov state. `Ord` derives lexicographically over (variant, hash) so the two same-byte credentials are distinct keys. A discriminant-less credential is now unrepresentable on the BLUE authority path. **COMMITTEE-CRED-FIDELITY-S1 (`2303a60`, +1 in `conway/governance.rs`):** `GovActionState.committee_votes` re-typed `Vec<(Hash28, Vote)>` -> `Vec<(StakeCredential, Vote)>` (the committee voter now carries its key/script discriminant); `drep_votes` / `spo_votes` stay `Vec<(Hash28, Vote)>` (out of scope -- DRep-vote discrimination is the declared next-cluster follow-up). **DREP-VOTE-FIDELITY-S1 (`ba4ff37`, +1 in `conway/governance.rs`):** `GovActionState.drep_votes` re-typed `Vec<(Hash28, Vote)>` -> `Vec<(StakeCredential, Vote)>` (the DRep voter now carries its key/script discriminant); `spo_votes` stays `Vec<(Hash28, Vote)>` (pools are always key-hash -- a permanent non-goal, the type-level expression of the spo/drep asymmetry). |
 | `ade_core` | +29 source files + tests (N-B, +8,076 lines); +828 / −86 across 16 files (B1) | **PHASE4-N-B:** stub `lib.rs` → substantive BLUE consensus module under `src/consensus/`. **PHASE4-B1:** added `consensus/kes_check.rs` (fail-closed `expect_size` + KES header guard); wired single-VRF + KES header validation across `header_validate.rs`, `vrf_cert.rs`, `leader_schedule.rs`, `fork_choice.rs`, etc. (14/14 real Conway headers validate). New dep `ade_codec` (B1). **No B2, B3, or B3F source change** — tx-validity and value-conservation compose only `ade_ledger` surfaces. |
@@ -991,7 +1108,7 @@ TRACEABILITY must add the new `DC-LEDGER-10` row (`enforced`, CI
 | `ade_core_interop` | +1,546 across 6 files (B1) | **CE-N-B-6 follow-bridge (`e5f1f64`) + pin retarget (`807bcb6`):** RED `follow.rs` (BLUE fork-choice + rollback only) + `follow_offline_replay.rs`; reworked `lib.rs`, the live-session binary and test. New deps `ade_codec`, `ade_crypto` for offline replay. |
 | `ade_network` (existing crate, refined) | 100 files, +17,861 lines (whole crate is new this delta — see §2; the post-N-A delta is the DoS hardening) | **DoS hardening of 6 codecs** (`744ef34`, post-N-A close): capped untrusted `Vec::with_capacity` hints. No transition-authority change since N-A closure; no change in N-B/B1/B2/B3/B3F. |
 | `ade_runtime` | +18 files, +3,440 lines (N-B `consensus/` + N-D `chaindb`/`recovery`; B1 one small touch) | **PHASE4-N-B:** new `consensus/` submodule (`candidate_fragment.rs`, `chain_selector.rs`, `genesis_parser.rs`) + corpus test. **PHASE4-B1:** one small touch. The N-D `chaindb`/`recovery` submodules + kill-target binary are §2 New Modules. No B2/B3/B3F change. |
-| `ade_testkit` | +28 files, +3,251 lines: `consensus/` (N-B); `validity/` (B1); `tx_validity/` (B2); **B3 conservation extensions** | **PHASE4-N-B:** `consensus/` harness. **PHASE4-B1:** `validity/` harness (M1–M6 mutators). **PHASE4-B2:** `tx_validity/` submodule (extractor, synthetic builders, W1–W4 / S1–S4 mutators + judge). **PHASE4-B3:** extended `harness/snapshot_loader.rs` (+20, intra-corpus input resolution), `tx_validity/{adversarial,valid_synthetic}.rs` for conservation cases, added the real epoch-576 positive-corpus suite `tests/conway_conservation_positive_corpus.rs` (10 non-Plutus cert/withdrawal txs Valid at `track_utxo=true`; Plutus carved out per CE-88), and three RED example bins that materialize the B3 corpora (`examples/{dump_b3_cert_tags,dump_b3_resolution_set,resolve_b3_intra_corpus}.rs`). New deps `ade_core`, `ade_runtime` (B1). **No B3F change.** **PHASE4-OQ5-S1 (`4187330`):** GREEN `harness/snapshot_loader.rs` (+75) -- the gov-map and DRep-registration parses now **preserve the key/script tag** when constructing `StakeCredential` keys (the loader is the boundary that materializes a snapshot into discriminated gov-state); `epoch_oracle_comparison.rs` (+36) follows the key-type change. **COMMITTEE-CRED-FIDELITY-S1 (`2303a60`):** the GREEN `harness/snapshot_loader.rs` committee parses (`parse_committee_state` / `parse_committee_vote_map`) now **preserve the key/script tag** when materializing committee members and committee votes as `StakeCredential` keys; `epoch_oracle_comparison.rs` follows the committee key-type change. (The GREEN loader's `mk_credential` defaults an unknown `tag != 1` to `KeyHash` -- a declared follow-up (e), contained to `ade_testkit`, cannot reach the node binary.) **DREP-VOTE-FIDELITY-S1 (`ba4ff37`):** the GREEN `harness/snapshot_loader.rs` (+20) committee-vote parser `parse_committee_vote_map` is **renamed `parse_credential_vote_map`** and now parses **both** the committee and the DRep vote maps tag-preserving (the `drep_votes` map previously read via the bare-`Hash28` `parse_vote_map`); `spo_votes` stays `parse_vote_map`. `epoch_oracle_comparison.rs` (+40) follows the DRep vote key-type change. |
+| `ade_testkit` | +28 files, +3,251 lines: `consensus/` (N-B); `validity/` (B1); `tx_validity/` (B2); **B3 conservation extensions** | **PHASE4-N-B:** `consensus/` harness. **PHASE4-B1:** `validity/` harness (M1–M6 mutators). **PHASE4-B2:** `tx_validity/` submodule (extractor, synthetic builders, W1–W4 / S1–S4 mutators + judge). **PHASE4-B3:** extended `harness/snapshot_loader.rs` (+20, intra-corpus input resolution), `tx_validity/{adversarial,valid_synthetic}.rs` for conservation cases, added the real epoch-576 positive-corpus suite `tests/conway_conservation_positive_corpus.rs` (10 non-Plutus cert/withdrawal txs Valid at `track_utxo=true`; Plutus carved out per CE-88), and three RED example bins that materialize the B3 corpora (`examples/{dump_b3_cert_tags,dump_b3_resolution_set,resolve_b3_intra_corpus}.rs`). New deps `ade_core`, `ade_runtime` (B1). **No B3F change.** **PHASE4-OQ5-S1 (`4187330`):** GREEN `harness/snapshot_loader.rs` (+75) -- the gov-map and DRep-registration parses now **preserve the key/script tag** when constructing `StakeCredential` keys (the loader is the boundary that materializes a snapshot into discriminated gov-state); `epoch_oracle_comparison.rs` (+36) follows the key-type change. **COMMITTEE-CRED-FIDELITY-S1 (`2303a60`):** the GREEN `harness/snapshot_loader.rs` committee parses (`parse_committee_state` / `parse_committee_vote_map`) now **preserve the key/script tag** when materializing committee members and committee votes as `StakeCredential` keys; `epoch_oracle_comparison.rs` follows the committee key-type change. (The GREEN loader's `mk_credential` defaults an unknown `tag != 1` to `KeyHash` -- a declared follow-up (e), contained to `ade_testkit`, cannot reach the node binary.) **DREP-VOTE-FIDELITY-S1 (`ba4ff37`):** the GREEN `harness/snapshot_loader.rs` (+20) committee-vote parser `parse_committee_vote_map` is **renamed `parse_credential_vote_map`** and now parses **both** the committee and the DRep vote maps tag-preserving (the `drep_votes` map previously read via the bare-`Hash28` `parse_vote_map`); `spo_votes` stays `parse_vote_map`. `epoch_oracle_comparison.rs` (+40) follows the DRep vote key-type change. **ENACTMENT-COMMITTEE-WRITEBACK-S1 (`f2f15f9`):** the GREEN `harness/snapshot_loader.rs` (+~256) `parse_gov_action` tag-4 path now decodes the **structured** `UpdateCommittee` (`set<cold-cred>`, `{cold-cred => epoch}` map, `unit_interval` threshold) via new fail-closed helpers `parse_cold_credential` / `parse_cold_credential_set` / `parse_cold_credential_epoch_map` / `parse_unit_interval` -- the cold-credential decode rejects an unknown credential tag (stricter than the older `mk_credential` helper, which still defaults `tag != 1` to `KeyHash`), replacing the prior opaque-bytes tag-4 read. |
 
 No other crate had non-trivial source changes since baseline.
 `ade_plutus` and `ade_node` were untouched by code commits. **OQ5
@@ -1024,6 +1141,20 @@ golden change (the field stays `None`). `ade_types`, `ade_codec`, and
 `ade_testkit` were untouched (the migration is internal to the BLUE
 enactment-effect type; no wire surface and no GREEN loader is involved
 while the field is dormant).
+**ENACTMENT-COMMITTEE-WRITEBACK touched `ade_types`
+(`conway::governance` -- structured `UpdateCommittee`), `ade_ledger`
+(`governance` -- `enact_proposals` populate + `apply_committee_enactment`;
+`rules` -- epoch-boundary apply call; `fingerprint` -- structured
+`write_gov_action`), and (GREEN) `ade_testkit`
+(`harness/snapshot_loader` -- fail-closed structured tag-4 decode)** --
+plus the *extension* of the same `ci_check_credential_discriminant_closed.sh`
+(structured-`UpdateCommittee` + `apply_committee_enactment`
+presence/call-site clauses); no new module, no new crate, no new CI
+script, no new rule. Unlike the four prior credential clusters this one
+**does** carry a fingerprint surface change (`T-DET-01`, the structured
+`UpdateCommittee` encoding) -- committee enactment is now live, so the
+dormant-`None` no-golden-drift invariant no longer applies; the surface
+is exercised by the new structured-fingerprint and replay tests.
 **PHASE4-B4 touched only `ade_codec`, `ade_types`, and `ade_ledger`**
 (plus the CI script and corpus). **PHASE4-B5 touched only `ade_ledger`** (the new
 `gov_cert.rs` module + the `state`/`pparams`/`error`/`fingerprint`/`rules`
@@ -1057,9 +1188,13 @@ over the full 6-crate BLUE set; the B3 surfaces
 `ade_ledger::delegation`/`::rules`, the B5 surface
 `ade_ledger::gov_cert`, and the OQ5 surfaces (`ade_types::shelley::cert`
 `StakeCredential`, `ade_codec::{shelley,conway}::cert`
-`decode_stake_credential`), and the COMMITTEE-CRED-FIDELITY surfaces
+`decode_stake_credential`), the COMMITTEE-CRED-FIDELITY surfaces
 (`ade_ledger::{state,governance,fingerprint}`,
-`ade_types::conway::governance`) are covered by their crate-level scope,
+`ade_types::conway::governance`), and the ENACTMENT-COMMITTEE-WRITEBACK
+surfaces (`ade_ledger::{governance,rules,fingerprint}` structured
+`UpdateCommittee` + `apply_committee_enactment`,
+`ade_types::conway::governance` structured `GovAction::UpdateCommittee`)
+are covered by their crate-level scope,
 as are the B2 `tx_validity`/`mempool` and B1 `block_validity` surfaces).
 
 No `#[cfg(feature = ...)]` gates appear at either ref. `cardano-crypto`
@@ -1093,6 +1228,11 @@ script** — it **extended the same
 `ci_check_credential_discriminant_closed.sh`** with one
 committee-enactment-effect clause (clause 6; see the
 ENACTMENT-COMMITTEE-FIDELITY subsection below); the count **stays 29**.
+**ENACTMENT-COMMITTEE-WRITEBACK likewise added no new CI script** — it
+**extended the same `ci_check_credential_discriminant_closed.sh`** with
+the structured-`UpdateCommittee` and `apply_committee_enactment`
+clauses (see the ENACTMENT-COMMITTEE-WRITEBACK subsection below); the
+count **stays 29**.
 **PHASE4-B1
 and PHASE4-B2 each added no new CI script** (both reused/extended the
 N-B closed-enums script). **PHASE4-B4 added no new CI script** — it
@@ -1213,6 +1353,12 @@ supersedes the prior "guarded by tests only" note).
 |-------|--------|----------------|
 | `ci/ci_check_credential_discriminant_closed.sh` | **Modified** (`a6b8de7`, ENACTMENT-COMMITTEE-FIDELITY-S1) | **Extends the `DC-LEDGER-10` gate to the (dormant) committee-enactment effect surface — no new script, the count stays 29.** One new grep clause (clause 6) on top of the three OQ5 + two committee + two DRep-vote clauses: `EnactmentEffects.committee_changes` carries `StakeCredential` — `pub committee_changes:.*StakeCredential` must be present in `ade_ledger::governance` (a bare-`Hash28` committee-changes field fails the gate). A regression that re-collapses the committee-enactment effect to a tag-erased `Hash28` — which would silently re-collapse the discriminated committee map on write-back once `UpdateCommittee` enactment is wired — is caught by the same standing CI invariant before the field is ever made live. |
 
+### ENACTMENT-COMMITTEE-WRITEBACK committee enactment write-back (`3180e27`)
+
+| Check | Status | What it checks |
+|-------|--------|----------------|
+| `ci/ci_check_credential_discriminant_closed.sh` | **Modified** (`3180e27`, ENACTMENT-COMMITTEE-WRITEBACK cluster-close) | **Extends the gate to the now-live committee-enactment write-back — no new script, the count stays 29.** Two new assertions on top of the OQ5 + committee + DRep-vote + enactment-effect clauses: (7a) the **structured discriminated `UpdateCommittee` surface** — `GovAction::UpdateCommittee` carries `removed: BTreeSet<StakeCredential>` / `added: BTreeMap<StakeCredential, u64>` / `threshold` (`ade_types::conway::governance`); a regression to the opaque `raw: Vec<u8>` form fails the gate; (7b) the **`apply_committee_enactment` pure transition is present and called** at the epoch-boundary apply site (`ade_ledger::{governance,rules}`) — a regression that drops the write-back (cloning the committee unchanged) fails the gate. The gate now guards both that the committee-enactment effect *type* is discriminated and that committee enactment is *wired* and *applied*. |
+
 TRACEABILITY cross-reference: the four N-B scripts map to the 8
 `DC-CONS-*` rules; the closed-enums script also enforces four
 `DC-VAL-*`, four `DC-TXV-*` (01/02/04/05), and both `DC-MEM-*` rules;
@@ -1244,15 +1390,20 @@ the extended `code_locus`) landed at the COMMITTEE-CRED close `a157c92`.
 The **DREP-VOTE-FIDELITY TRACEABILITY edit** (`DC-LEDGER-10`'s
 `strengthened_in += "DREP-VOTE-FIDELITY"`, the +2 DRep tests, the
 further-extended `code_locus`) landed at the DREP-VOTE close `06f517f`.
-The **ENACTMENT-COMMITTEE-FIDELITY TRACEABILITY edit** — `DC-LEDGER-10`'s
+The **ENACTMENT-COMMITTEE-FIDELITY TRACEABILITY edit** (`DC-LEDGER-10`'s
 `strengthened_in += "ENACTMENT-COMMITTEE-FIDELITY"`, the +1 enactment
-test (now **14** total), and the further-extended `code_locus` (all
-already in the *committed* registry at HEAD `a6b8de7`) — needs only a
-TRACEABILITY-row refresh; that grounding ripple is the in-flight working
-tree (this HEAD_DELTAS is current). COMMITTEE-CRED-FIDELITY,
-DREP-VOTE-FIDELITY, and ENACTMENT-COMMITTEE-FIDELITY all **extended the
-same `ci_check_credential_discriminant_closed.sh` for the same
-`DC-LEDGER-10`** — no new `ci_script`, the count stays 29.
+test → 14, the further-extended `code_locus`) landed at the
+ENACTMENT-COMMITTEE-FIDELITY close `3706534`. The
+**ENACTMENT-COMMITTEE-WRITEBACK TRACEABILITY edit** — `DC-EPOCH-01`'s and
+`DC-LEDGER-10`'s `strengthened_in += "ENACTMENT-COMMITTEE-WRITEBACK"`,
+the **+9 tests** across the two rules (`DC-LEDGER-10` → **19**), and the
+extended `code_locus`/`ci_scripts` (the registry edit is the *in-flight
+working tree* at this HEAD `3180e27`) — needs a TRACEABILITY-row refresh
+for both rules. COMMITTEE-CRED-FIDELITY, DREP-VOTE-FIDELITY,
+ENACTMENT-COMMITTEE-FIDELITY, and ENACTMENT-COMMITTEE-WRITEBACK all
+**extended the same `ci_check_credential_discriminant_closed.sh`** (the
+last for `DC-EPOCH-01` + `DC-LEDGER-10`) — no new `ci_script`, the count
+stays 29.
 
 ---
 
@@ -1283,7 +1434,13 @@ prose normative-doc rules; this section reports on it.
   `code_locus` extended; **ENACTMENT-COMMITTEE-FIDELITY: 0** — it added
   no rule either; it *strengthened* `DC-LEDGER-10` a THIRD time,
   `strengthened_in += "ENACTMENT-COMMITTEE-FIDELITY"`, +1 enactment test
-  (13 → 14), `code_locus` extended — the registry total **stays 173**). The two `DC-MEM-*` rules were
+  (13 → 14), `code_locus` extended; **ENACTMENT-COMMITTEE-WRITEBACK: 0**
+  — it added no rule either; it *strengthened* **two** existing rules in
+  place, `DC-EPOCH-01` and `DC-LEDGER-10`, each
+  `strengthened_in += "ENACTMENT-COMMITTEE-WRITEBACK"`, with **+9 tests**
+  total across the two (`DC-LEDGER-10` 14 → 19, `DC-EPOCH-01` gains the
+  committee-enactment write-back tests), `code_locus`/`ci_scripts`
+  extended — the registry total **stays 173**). The two `DC-MEM-*` rules were
   *introduced earlier* (`2047c42`, `status = "declared"`) and were
   flipped to `enforced` in B2, not counted as new.
   - PHASE4-N-A: `DC-CORE-01`, `DC-PROTO-06`.
@@ -1614,6 +1771,61 @@ structured registry is the authoritative source.
 
 ## Anomalies and Cross-Reference Warnings
 
+- **ENACTMENT-COMMITTEE-WRITEBACK closed (`3180e27`) — committee
+  enactment is now LIVE.** The dormant type pin
+  ENACTMENT-COMMITTEE-FIDELITY landed is now wired: `GovAction::UpdateCommittee`
+  is **structured** (`{ prev_action, removed: BTreeSet<StakeCredential>,
+  added: BTreeMap<StakeCredential, u64>, threshold: (u64, u64) }`,
+  `ade_types::conway::governance`), `enact_proposals` populates
+  `committee_changes` + `committee_threshold`, the new pure transition
+  `apply_committee_enactment` applies dissolve / remove-add-set-quorum, and
+  the epoch-boundary apply site in `rules.rs` **calls it** — the committee
+  map is written back, no longer cloned unchanged. **No new module, no new
+  crate, no new rule, no new CI script.** `DC-EPOCH-01` **and**
+  `DC-LEDGER-10` are both **STRENGTHENED** in place
+  (`strengthened_in += "ENACTMENT-COMMITTEE-WRITEBACK"`; **+9 tests**
+  across the two, `DC-LEDGER-10` → 19); the existing
+  `ci_check_credential_discriminant_closed.sh` was **extended** with the
+  structured-`UpdateCommittee` + `apply_committee_enactment` clauses —
+  **registry total stays 173, CI count stays 29.**
+- **ENACTMENT-COMMITTEE-WRITEBACK fingerprint change (T-DET-01, deliberate
+  — there IS a surface change this cluster).** Unlike the four prior
+  credential clusters (where the affected surfaces were dormant/empty and
+  no golden was regenerated), `write_gov_action` now emits the structured
+  `UpdateCommittee` shape `[5, prev, set<cred>, {cred=>epoch}, num, den]`
+  in place of the opaque `[4, prev, bytes]`. Committee enactment is live,
+  so the dormant-`None` no-golden-drift invariant no longer holds for the
+  `UpdateCommittee` path. **Confirm `ci_check_ledger_determinism.sh` / the
+  fingerprint golden test** reflect the structured encoding on the next
+  determinism replay (the structured-fingerprint and
+  `committee_enactment_replays_byte_identical` tests exercise it).
+- **ENACTMENT-COMMITTEE-WRITEBACK real-chain oracle environment-blocked
+  (reclassified, not a regression).** Committee-transition agreement vs
+  cardano-node is environment-blocked — no locally available snapshot
+  exhibits a committee change to compare against. Reclassified per tier
+  doctrine, the same posture as `DC-LEDGER-08`/`DC-LEDGER-09`/`DC-LEDGER-10`.
+  The transition is covered by synthetic positive + replay-byte-identical +
+  key/script-distinct tests; the real-chain agreement is a standing
+  open obligation, not a fail-open.
+- **ENACTMENT-COMMITTEE-WRITEBACK carry-forward follow-ups (narrowed).**
+  FIDELITY follow-up **(d)** is now not only resolved but WIRED. The
+  remaining **(e)** GREEN loader `mk_credential` `tag != 1` → `KeyHash`
+  default is **narrowed**: the new `UpdateCommittee` cold-credential decode
+  (`parse_cold_credential`) IS fail-closed on unknown tags, so (e) now
+  applies only to the older `mk_credential` helper (contained to
+  `ade_testkit`, cannot reach the node binary). The pre-OQ5 **(b)** Shelley
+  unknown-cert zero-hash placeholder remains a WARN LOW non-goal.
+- **In-flight grounding ripple at this HEAD (no anomaly — expected).**
+  This regen is cut at committed HEAD `3180e27`. The
+  ENACTMENT-COMMITTEE-WRITEBACK CODEMAP/registry/CI-extension ripple is in
+  the working tree (CODEMAP records `apply_committee_enactment` + the
+  structured `UpdateCommittee`; the registry records the `DC-EPOCH-01` /
+  `DC-LEDGER-10` strengthenings; `ci_check_credential_discriminant_closed.sh`
+  and `snapshot_loader.rs` carry the structured-decode/gate extensions; the
+  cluster doc is moved to `docs/clusters/completed/`). These match this
+  HEAD_DELTAS and are the normal cluster-close grounding-doc refresh. **The
+  branch is 3 commits ahead of `origin/main`** (`ea25dd9`, `f2f15f9`,
+  `3180e27`) — expected for an unpushed close.
 - **ENACTMENT-COMMITTEE-FIDELITY closed (`a6b8de7`) — DREP-VOTE
   carry-forward follow-up (d) CLOSED.** The last bare-`Hash28`
   committee-credential surface is now discriminated *preventively*:
@@ -1990,10 +2202,12 @@ cluster-close-level follow-up refresh, not a phase boundary, so the
 baseline is unchanged**). Update the baseline on the next phase boundary
 (Phase 4 close). Note the commit-hash rewrite caveat at the top —
 re-derive hashes from `git log` at each regen rather than carrying them
-forward. This regen was cut at committed HEAD `62c9020`
-(DREP-VOTE-FIDELITY-S2) with the DREP-VOTE-FIDELITY
-CODEMAP/SEAMS/TRACEABILITY ripple still in the working tree. The prior
-regen narrated HEAD `2aeea16` (COMMITTEE-CRED-FIDELITY-S2); its close
-commit `a157c92` (the COMMITTEE-CRED grounding-doc refresh) and the three
-DREP-VOTE-FIDELITY commits are the new span (`2aeea16..62c9020`, 4
-commits). The OQ5 ripple landed at the OQ5 close `676af5a`.
+forward. This regen was cut at committed HEAD `3180e27`
+(ENACTMENT-COMMITTEE-WRITEBACK-S2) with the ENACTMENT-COMMITTEE-WRITEBACK
+CODEMAP/registry/CI-extension ripple still in the working tree. The prior
+regen narrated HEAD `a6b8de7` (ENACTMENT-COMMITTEE-FIDELITY-S1); its close
+commit `3706534` (the ENACTMENT-COMMITTEE-FIDELITY grounding-doc refresh)
+and the three ENACTMENT-COMMITTEE-WRITEBACK commits (`ea25dd9`, `f2f15f9`,
+`3180e27`) are the new span (`a6b8de7..3180e27`, 4 commits). The branch is
+3 commits ahead of `origin/main`. The OQ5 ripple landed at the OQ5 close
+`676af5a`.
