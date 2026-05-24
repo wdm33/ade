@@ -12,6 +12,7 @@ edition = "2021"
 ade_core = { path = "../ade_core" }
 ade_codec = { path = "../ade_codec" }
 ade_crypto = { path = "../ade_crypto" }
+ade_ledger = { path = "../ade_ledger" }
 ade_runtime = { path = "../ade_runtime" }
 ade_network = { path = "../ade_network" }
 ade_testkit = { path = "../ade_testkit" }

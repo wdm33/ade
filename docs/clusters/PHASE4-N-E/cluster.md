@@ -133,9 +133,23 @@
 - **BLUE** — `ade_ledger::mempool::ingress` (new, S1);
   `ade_ledger::mempool::admit` (existing, untouched).
 - **GREEN** — `ade_ledger::mempool::canonicalize` (new, S3);
-  `ade_testkit::mempool::ingress_replay` (new, S2).
-- **RED** — `ade_runtime::tx_submission::n2n_session` (new, S4);
-  `ade_runtime::tx_submission::n2c_session` (new, S5).
+  `ade_testkit::mempool::ingress_replay` (new, S2);
+  `ade_core_interop::tx_submission` (new, S4 — InventoryEvent →
+  IngressEvent adapter + per-peer accumulator + ingest_n2n_events
+  orchestrator; pure / deterministic).
+- **RED** — operator-action live N2N session
+  (procedure: `docs/clusters/PHASE4-N-E/CE-N-E-6_PROCEDURE.md`;
+  evidence log: `CE-N-E-6_<date>.log`);
+  operator-action live N2C session (S5,
+  `CE-N-E-7_PROCEDURE.md` + `CE-N-E-7_<date>.log`).
+
+The S4 cluster doc previously placed the session driver under
+`ade_runtime::tx_submission::n2n_session`; the actual home is
+`ade_core_interop::tx_submission` (the project's established RED
+live-interop crate, which already houses the PHASE4-N-B CE-N-B-6
+follow-mode bridge). The GREEN bridge code in `ade_core_interop`
+is mechanically tested; the live socket loop that drives a real
+cardano-node peer is the operator-action half.
 
 ## Forbidden During This Cluster
 

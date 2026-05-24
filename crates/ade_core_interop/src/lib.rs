@@ -14,6 +14,7 @@
 #![deny(unsafe_code)]
 
 pub mod follow;
+pub mod tx_submission;
 
 use ade_core::consensus::candidate::{ChainSelectorState, TiebreakerView};
 use ade_core::consensus::events::{Point, SecurityParam};

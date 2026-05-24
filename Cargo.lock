@@ -31,6 +31,7 @@ dependencies = [
  "ade_codec",
  "ade_core",
  "ade_crypto",
+ "ade_ledger",
  "ade_network",
  "ade_runtime",
  "ade_testkit",
