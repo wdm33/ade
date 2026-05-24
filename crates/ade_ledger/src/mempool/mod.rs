@@ -20,7 +20,9 @@
 //! list, so no choice of policy can alter which txs `admit` accepts.
 
 pub mod admit;
+pub mod ingress;
 pub mod policy;
 
 pub use admit::{admit, AdmitOutcome, MempoolState};
+pub use ingress::{mempool_ingress, IngressEvent, IngressSource};
 pub use policy::{order, OrderPolicy};
