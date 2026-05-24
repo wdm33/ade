@@ -20,9 +20,11 @@
 //! list, so no choice of policy can alter which txs `admit` accepts.
 
 pub mod admit;
+pub mod canonicalize;
 pub mod ingress;
 pub mod policy;
 
 pub use admit::{admit, AdmitOutcome, MempoolState};
+pub use canonicalize::{canonicalize_peer_streams, PeerId, PeerSubmissionQueue};
 pub use ingress::{mempool_ingress, IngressEvent, IngressSource};
 pub use policy::{order, OrderPolicy};

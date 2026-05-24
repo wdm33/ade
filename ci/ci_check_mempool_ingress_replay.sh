@@ -92,7 +92,47 @@ if grep -qE '\b(chunks|chunks_exact|partition|par_iter|rayon|tokio::spawn)\b' "$
     FAIL=1
 fi
 
+# 5. (S3) canonicalize.rs exists and defines the three items; re-exported
+#    from mempool/mod.rs.
+CANON="$REPO_ROOT/crates/ade_ledger/src/mempool/canonicalize.rs"
+CMOD="$REPO_ROOT/crates/ade_ledger/src/mempool/mod.rs"
+if [ ! -f "$CANON" ]; then
+    echo "FAIL: missing $CANON"
+    FAIL=1
+fi
+if [ ! -f "$CMOD" ]; then
+    echo "FAIL: missing $CMOD"
+    FAIL=1
+fi
+if [ -f "$CANON" ]; then
+    for sym in 'pub fn canonicalize_peer_streams' 'pub struct PeerId' 'pub struct PeerSubmissionQueue'; do
+        if ! grep -qE "^${sym}" "$CANON"; then
+            echo "FAIL: $CANON missing required item: ${sym}"
+            FAIL=1
+        fi
+    done
+fi
+if [ -f "$CMOD" ] && ! grep -qE 'pub use canonicalize::.*canonicalize_peer_streams' "$CMOD"; then
+    echo "FAIL: $CMOD does not re-export canonicalize_peer_streams"
+    FAIL=1
+fi
+
+# 6. (S3) canonicalize.rs body contains no async / RNG / clock / Hash-set
+#    / async-runtime references — strictly sync + deterministic. Comment
+#    lines (// ...) are excluded so the file's documentation header can
+#    legitimately name what it forbids.
+if [ -f "$CANON" ]; then
+    FORBIDDEN_CANON=$(grep -vE '^[[:space:]]*//' "$CANON" \
+        | grep -nE '\b(HashMap|HashSet|tokio::|async[[:space:]]+fn|\.await|SystemTime|Instant|rand::|thread_rng|RwLock|Mutex)\b' \
+        || true)
+    if [ -n "$FORBIDDEN_CANON" ]; then
+        echo "FAIL: $CANON uses forbidden non-deterministic / async constructs:"
+        echo "$FORBIDDEN_CANON"
+        FAIL=1
+    fi
+fi
+
 if [ "$FAIL" -eq 0 ]; then
-    echo "PASS: DC-MEM-04 mempool ingress replay (harness exports + bridge usage + test surface + single-step fold)"
+    echo "PASS: DC-MEM-04 mempool ingress replay (harness + bridge + test surface + single-step fold + GREEN canonicalizer)"
 fi
 exit "$FAIL"
