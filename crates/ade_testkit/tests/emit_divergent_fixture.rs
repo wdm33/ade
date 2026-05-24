@@ -61,9 +61,32 @@ fn to_hex(bytes: &[u8]) -> String {
     out
 }
 
+/// Ensure the target/aiken_divergent_fixture/ placeholder files exist so the
+/// `ade_plutus::conway_validity_range_reproducer` test target compiles even
+/// when this generator finds nothing to emit (the "no current divergence"
+/// passing state). `include_str!` over there is compile-time, so the files
+/// must exist on disk; empty content is acceptable because the reproducer is
+/// `#[ignore]` and only runs on demand.
+fn ensure_fixture_placeholders() {
+    let out = output_root();
+    if std::fs::create_dir_all(&out).is_err() {
+        return;
+    }
+    for name in ["tx_body.hex", "inputs.hex", "outputs.hex", "cost_models.hex"] {
+        let p = out.join(name);
+        if !p.exists() {
+            let _ = std::fs::File::create(&p);
+        }
+    }
+}
+
 #[test]
 #[ignore = "generator — writes target/aiken_divergent_fixture/ for upstream reporting"]
 fn emit_first_conway_divergent_tx() {
+    // Make sure the reproducer's include_str! targets exist even if we early-
+    // return below (no divergence found / corpus absent). See helper doc.
+    ensure_fixture_placeholders();
+
     let snap_path = corpus_root()
         .join("snapshots")
         .join("snapshot_133660855.tar.gz");

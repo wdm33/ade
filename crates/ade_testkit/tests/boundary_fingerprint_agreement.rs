@@ -75,6 +75,14 @@ struct BoundaryHashes {
 ///   - a fresh snapshot set with different state
 /// In all three cases the fix is deliberate: investigate cause, update pins.
 ///
+/// Pins regenerated 2026-05-24 against the corpus produced by the
+/// reconstructed March recipe (db-truncater + cardano-node v1-in-mem,
+/// landing-slot capture). The `byron_pre_hfc` pin is unchanged — its state
+/// is the minimal post-HFC Shelley genesis state (43 KB, no UTxO/cert
+/// activity yet), deterministic across any capture mechanism that lands at
+/// the byron→shelley HFC. The other 11 pins reflect the new captures'
+/// landed-slot content.
+///
 /// Note: the `utxo` component is the same across all snapshots because
 /// `LoadedSnapshot::to_ledger_state` does not reconstruct the UTxO from
 /// the compact on-disk format (documented limitation of the bridge).
@@ -89,57 +97,57 @@ const SNAPSHOTS: &[(&str, &str, &str)] = &[
     (
         "shelley_pre_hfc",
         "snapshot_16588800.tar.gz",
-        "7d86f964e77db3e098c7d11be3c933c2f0a3ce5a30bd4967e8d518d0f0f84843",
+        "d12d02bc94557a16055c846fbe995c32b8d822aa1cd27a5323d9ce06cab0423c",
     ),
     (
         "allegra_pre_hfc",
         "snapshot_23068800.tar.gz",
-        "be36eaf718add815947894e8573060cee2b20a14dede102b8aba1573cf4bc06f",
+        "75fb8db94c9f00dfd594e568f4b1e44c047cde8b1846f891e37dff75500c2818",
     ),
     (
         "mary_pre_hfc",
         "snapshot_39916975.tar.gz",
-        "af5b4c546476b9dd9a25081372cdf5c3445f6b57982eec2da130b106545e715b",
+        "d5f4eedf08aca3baa1ed65fa48a6946992a9cd4fec953c09e86e677557c1c7b8",
     ),
     (
         "alonzo_pre_hfc",
         "snapshot_72316896.tar.gz",
-        "54f8258a593dc7fb4a4245ab21bdb5d31c0c7187e6a16174cd19e60cd04c7ef2",
+        "d93040a9f8f46a5b0f668c96e402f11ea1e82fc4dc395c43d9917f27a484035e",
     ),
     (
         "babbage_pre_hfc",
         "snapshot_133660855.tar.gz",
-        "e59152ed1460ccd7fe65400401fb98f66054717ebb3ba7bf92dd625d9714d22d",
+        "fae4e5ca7e01c96b87474d62fcc76cfd261f9526f8af0c54b3862966f7e315ee",
     ),
     (
         "shelley_epoch_209",
         "snapshot_4924880.tar.gz",
-        "cfb0358eafcea3ace170ce7d9f12ca740315de91f7867daa11999ef5a594528e",
+        "344afab3bcb226e451e9fb07c60e6ff2d0db735fa8cf0b033670af173416d014",
     ),
     (
         "allegra_epoch_237",
         "snapshot_17020848.tar.gz",
-        "098c36a298caf6b56be9893f75d9b2b9a9c5af8fe858fecef7debcfc8b4dd790",
+        "1ee30bd659a1c60d660d85e9e0a38416449a6c24a734c6c42dc1cd8e9e226beb",
     ),
     (
         "mary_epoch_252",
         "snapshot_23500962.tar.gz",
-        "d4c26baa9dd65928d065350e8dbd8dd59e08c3c577ce0ca989d019b155428f8c",
+        "ac2546496ffc10031a2548d18581180bc8c594466333fcc8e5d4e42a980f6012",
     ),
     (
         "alonzo_epoch_291",
         "snapshot_40348902.tar.gz",
-        "94a2f45b7131ec7cc3a4d257f05479b0194eb3eafd84cf9ea2f9c0520737d348",
+        "d2720aaae4135fcb244a1b7e81e7840ec24071e30763f619b1ebdbe3983e6dbb",
     ),
     (
         "babbage_epoch_366",
         "snapshot_72748820.tar.gz",
-        "61e7ce7f3a30bc10e467c447ff7df7d2cf3a32212fa4e8bcb5b0f4eb97f9f0c7",
+        "957e70c947ffb18eea6d6d2ccc4d6bff0829d5ca9ca37c75fee8d94e7131b4ae",
     ),
     (
         "conway_epoch_508",
         "snapshot_134092810.tar.gz",
-        "655e93a50777aa6e529aaabe36990ac31d8c7a711e71ca2b2b34911f671bb885",
+        "3e710076e6b5974d221aee1f11dd9e730e8e12644cf06f0b37a0ba29c834905a",
     ),
 ];
 

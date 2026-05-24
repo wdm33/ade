@@ -103,6 +103,13 @@ fn replay_contiguous(
 
     let limit = max_blocks.unwrap_or(blocks.len()).min(blocks.len());
     let mut tally = OutcomeTally::default();
+    // contiguous/blocks.json entries don't carry slot info, so we can't
+    // pre-filter by snapshot tip. Instead: tolerate apply errors UNTIL the
+    // first successful apply — those are pre-tip blocks whose effects are
+    // already in the loaded state (corpus-vs-snapshot alignment artifact).
+    // Once the chain starts applying, subsequent errors are real and break.
+    // Blocks are slot-ordered, so pre-tip blocks all come first.
+    let mut chain_started = false;
 
     for entry in blocks.iter().take(limit) {
         let filename = match entry["file"].as_str() {
@@ -124,6 +131,7 @@ fn replay_contiguous(
 
         match apply_block_with_verdicts(&state, env.era, inner) {
             Ok(result) => {
+                chain_started = true;
                 tally.blocks_applied += 1;
                 tally.total_tx_verdicts += result.tx_verdicts.len();
                 let invalid = &result.invalid_tx_indices;
@@ -164,8 +172,15 @@ fn replay_contiguous(
                 state = result.new_state;
             }
             Err(e) => {
-                tally.first_apply_error = Some(format!("block {filename}: {e}"));
-                break;
+                // Pre-chain errors are tolerated (pre-tip blocks); record
+                // first one for diagnostics but keep scanning. After the
+                // first apply succeeds, errors are real and we break.
+                if tally.first_apply_error.is_none() {
+                    tally.first_apply_error = Some(format!("block {filename}: {e}"));
+                }
+                if chain_started {
+                    break;
+                }
             }
         }
     }

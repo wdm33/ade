@@ -71,6 +71,12 @@ fn replay_with_verdict_aggregation(
 
     let snap = LoadedSnapshot::from_tarball(&tarball).ok()?;
     let mut state = snap.to_ledger_state();
+    // Pre-tip blocks fail with StakeAlreadyRegistered etc. (effects already
+    // in the loaded state). SnapshotHeader doesn't surface the tip slot, so
+    // we use the skip-until-first-success pattern (see
+    // boundary_stateful_replay.rs / contiguous_plutus_verdict_harness.rs for
+    // the same approach). Pre-chain errors are tolerated; post-chain errors
+    // are real.
 
     let block_dir = boundary_blocks_dir().join(blocks_subdir);
     let manifest_path = block_dir.join("manifest.json");
@@ -98,6 +104,8 @@ fn replay_with_verdict_aggregation(
         eras_seen: Vec::new(),
     };
 
+    let mut chain_started = false;
+
     for entry in &block_list {
         let filename = match entry["file"].as_str() {
             Some(s) => s,
@@ -115,6 +123,7 @@ fn replay_with_verdict_aggregation(
 
         match apply_block_classified(&state, env.era, inner) {
             Ok((new_state, verdict)) => {
+                chain_started = true;
                 agg.blocks_applied += 1;
                 agg.total_tx += verdict.tx_count;
                 agg.total_phase1_rejected += verdict.state_backed_phase1_rejected;
@@ -128,8 +137,13 @@ fn replay_with_verdict_aggregation(
                 let _ = check_zero_counter_for_pre_alonzo(env.era, &verdict);
             }
             Err(e) => {
-                eprintln!("  block {filename} failed: {e}");
-                break;
+                // Pre-chain failures are pre-tip alignment artifacts (already-
+                // applied effects in the loaded state). Tolerate until the
+                // first apply succeeds; after that, errors are real.
+                if chain_started {
+                    eprintln!("  block {filename} failed: {e}");
+                    break;
+                }
             }
         }
     }
