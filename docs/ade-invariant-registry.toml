@@ -818,12 +818,12 @@ id = "DC-MEM-01"
 tier = "derived"
 statement = "Mempool acceptance rules must not contradict block/ledger acceptance rules"
 source = "Project constitution §3, T-DET-01, T-CORE-01"
-cross_ref = ["DC-MEM-03"]
-code_locus = "crates/ade_ledger/src/mempool/admit.rs"
-tests = ["valid_tx_admitted_and_accumulates", "invalid_tx_rejected_no_false_accept", "admission_equals_tx_validity_verdict", "dependent_tx_admitted_against_accumulating_state"]
+cross_ref = ["DC-MEM-03", "DC-MEM-04"]
+code_locus = "crates/ade_ledger/src/mempool/admit.rs; crates/ade_ledger/src/mempool/ingress.rs; crates/ade_testkit/src/mempool/ingress_replay.rs"
+tests = ["valid_tx_admitted_and_accumulates", "invalid_tx_rejected_no_false_accept", "admission_equals_tx_validity_verdict", "dependent_tx_admitted_against_accumulating_state", "ingress_admit_equals_direct_admit_on_b_track_corpus", "b_track_adversarial_rejections_preserved_through_ingress", "dependent_pair_through_ingress_admits_b_after_a"]
 ci_script = "ci/ci_check_consensus_closed_enums.sh"
 status = "enforced"
-strengthened_in = ["PHASE4-B2"]
+strengthened_in = ["PHASE4-B2", "PHASE4-N-E"]
 
 [[rules]]
 id = "DC-MEM-02"
@@ -846,6 +846,19 @@ cross_ref = ["DC-MEM-01"]
 code_locus = "crates/ade_ledger/src/mempool/ingress.rs (IngressEvent, IngressSource, mempool_ingress)"
 tests = ["ingress_preserves_tx_bytes_verbatim", "ingress_source_is_closed_two_variants", "ingress_admits_valid_tx_via_n2n", "ingress_admits_valid_tx_via_n2c", "ingress_rejects_invalid_tx_no_false_accept", "ingress_source_does_not_change_verdict_valid", "ingress_source_does_not_change_verdict_adversarial", "ingress_equals_direct_admit_on_synthetic_corpus"]
 ci_script = "ci/ci_check_mempool_ingress_closure.sh"
+status = "enforced"
+introduced_in = "PHASE4-N-E"
+strengthened_in = []
+
+[[rules]]
+id = "DC-MEM-04"
+tier = "derived"
+statement = "Replaying the same ordered ingress trace against the same base ledger state produces a byte-identical sequence of (MempoolState, AdmitOutcome) pairs."
+source = "Project constitution §3, T-DET-01, DC-MEM-01"
+cross_ref = ["DC-MEM-01"]
+code_locus = "crates/ade_testkit/src/mempool/ingress_replay.rs; crates/ade_ledger/src/mempool/ingress.rs"
+tests = ["ingress_admit_equals_direct_admit_on_b_track_corpus", "b_track_adversarial_rejections_preserved_through_ingress", "ingress_trace_replay_byte_identical", "dependent_pair_through_ingress_admits_b_after_a", "ingress_trace_source_invariant_n2n_vs_n2c"]
+ci_script = "ci/ci_check_mempool_ingress_replay.sh"
 status = "enforced"
 introduced_in = "PHASE4-N-E"
 strengthened_in = []

@@ -9,5 +9,6 @@
 
 pub mod consensus;
 pub mod harness;
+pub mod mempool;
 pub mod tx_validity;
 pub mod validity;
