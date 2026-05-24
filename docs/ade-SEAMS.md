@@ -3,7 +3,7 @@
 > **Status:** Living architectural document. Regenerated; not hand-edited.
 > Per-project instance of `~/.claude/methodology/templates/seams.md`.
 
-> 11 crates, 29 CI checks at HEAD (`3180e27`).
+> 11 crates, 29 CI checks at HEAD (`168ac02`).
 > Reads CODEMAP for the module list and TCB colors; reads the invariant
 > registry (`docs/ade-invariant-registry.toml`) for rule IDs; reads the
 > Phase 4 cluster plan (`docs/active/phase_4_cluster_plan.md`), the
@@ -11,6 +11,80 @@
 > OQ5-CREDENTIAL-FIDELITY, COMMITTEE-CRED-FIDELITY, DREP-VOTE-FIDELITY,
 > ENACTMENT-COMMITTEE-FIDELITY, and ENACTMENT-COMMITTEE-WRITEBACK cluster
 > docs plus their slices.
+>
+> **This is a post-ENACTMENT-COMMITTEE-WRITEBACK GREEN-only refresh
+> (HEAD `168ac02`).** Six commits land between the prior SEAMS HEAD
+> (`3180e27`) and this HEAD; ALL six are GREEN-scope only and SHIP NO
+> NEW BLUE / RED MODULE, NO NEW CLOSED ENUM, NO NEW INGRESS SURFACE, NO
+> NEW COMPOSER, NO NEW CRATE EDGE, NO NEW CI SCRIPT, NO NET NEW
+> CANONICAL TYPE, AND NO MUST-NOT CHANGE. Inventory:
+> - `3d94c22` — prior grounding refresh (SEAMS, CODEMAP, HEAD_DELTAS,
+>   TRACEABILITY) for the ENACTMENT-COMMITTEE-WRITEBACK close. Docs
+>   only.
+> - `69e2d4b` — testkit harness alignment for the ENACTMENT-COMMITTEE-WRITEBACK
+>   close (already covered by the existing §2 governance / credential
+>   narrative; no SEAMS shape change).
+> - `b9cfaf9` — **new GREEN test** `committee_oracle_mainnet_575_576_noop_agreement`
+>   (in `crates/ade_testkit/tests/epoch_oracle_comparison.rs`). Replays the
+>   mainnet 575→576 epoch boundary against the real cardano-node snapshot
+>   and asserts noop agreement on the committee surface. **Strengthens
+>   DC-EPOCH-01 + DC-LEDGER-10** by extending real-chain oracle coverage
+>   to the live committee write-back path — a positive-oracle test, not
+>   a new seam.
+> - `396664a` — `ade_testkit` + `ade_plutus` test compile re-aligned
+>   against the regenerated corpus. No source-shape change in any
+>   library surface.
+> - `c78ec76` — new GREEN, `#[ignore]`-gated `emit_reward_provenance.rs`
+>   corpus generator (two tests `emit_alonzo310_registered_creds` /
+>   `emit_conway576_registered_creds`); only runs under `cargo test --
+>   --ignored`. A re-runnable corpus producer, not a new ingress.
+> - `168ac02` (THIS HEAD) — `harness/snapshot_loader.rs` (GREEN)
+>   snapshot-loader follow-ups. Three orthogonal hardenings; all sit
+>   in the GREEN snapshot-loader and align it with the BLUE schema
+>   migrations CODEMAP already records:
+>   (1) the live tip slot now flows from the `HeaderState`'s `WithOrigin
+>   (AnnTip …)` prefix via the new helper `parse_with_origin_slot`
+>   (`array(1) [array(N≥3) [slot, blockNo, hash, …]]`, falling back to
+>   `0` for the `Origin` case); `SnapshotHeader` gained a `slot: u64`
+>   field in place (GREEN; not in the BLUE canonical-type count);
+>   (2) `parse_registered_credentials` is now a **GREEN decoder closure
+>   aligned to the BLUE Conway schema migration** — it decodes BOTH the
+>   pre-Conway UMElem layout `array(4) [StrictMaybe RDPair, Set Ptr,
+>   StrictMaybe Pool, StrictMaybe DRep]` (registered iff RDPair is
+>   `SJust`) AND the Conway compact layout `array(4) [uint reward,
+>   uint deposit, nullable Pool, nullable DRep]` (registered iff
+>   `deposit > 0`); discrimination is by major type of UMElem[0]
+>   (`array(major=4)` = pre-Conway, `uint(major=0)` = Conway compact),
+>   so anything else flips `is_registered = false` without claiming the
+>   credential. This is a GREEN snapshot-loader closure that tracks the
+>   BLUE `ConwayGovState` shape change already documented in CODEMAP —
+>   it is **not a new SEAM** (no new ingress, no new BLUE chokepoint,
+>   no new canonical type), but it is a textbook example of "GREEN
+>   decoder closures aligned to BLUE schema migrations" worth naming
+>   so future drift refreshes know where to look;
+>   (3) `parse_cold_credential_set` and `parse_cold_credential_epoch_map`
+>   are now **fail-closed on truncation**: each tracks a `terminated`
+>   flag (flipped only by the indefinite `0xff` break or the definite
+>   `count >= declared_len` exit) and rejects with `HarnessError::ParseError`
+>   if a declared-but-under-length set/map exits the loop without
+>   consuming all declared members — replacing the prior silent advance
+>   that depended on a downstream field to hit EOF. The new regression
+>   `under-length set must reject` in the existing `parse_gov_action`
+>   test covers the structured reject. This tightens the same GREEN
+>   `update_committee` decode chokepoint the prior revision already
+>   surfaced under §2 "Governance ratification / enactment"; it does
+>   not move that chokepoint, add a new one, or change a BLUE rule.
+>
+> **No section below (§1 surfaces, §2 authoritative domains, §3 closed
+> + extensible registries, §4 frozen vs. version-gated contracts, §5
+> module-addition rules, §6 forbidden patterns) has its module list,
+> count, or rule list changed by this refresh.** The counts the body
+> reports (376 canonical types, 1325 tests, 29 CI checks) match
+> CODEMAP at this HEAD; the SEAMS narrative records 29 CI checks
+> because no CI script was added or removed since `3180e27`. The
+> ENACTMENT-COMMITTEE-WRITEBACK narrative block immediately below
+> remains the load-bearing context for §1 ENACTMENT-COMMITTEE-WRITEBACK
+> rows and §2 / §3 / §4 / §6 ENACTMENT-COMMITTEE-WRITEBACK references.
 >
 > **This is an ENACTMENT-COMMITTEE-WRITEBACK close refresh (HEAD `3180e27`).**
 > The body was fully regenerated at PHASE4-B3 close (`7784bf8`), folded in the
@@ -1415,7 +1489,7 @@ inside the quarantine.
 | **Data-only tooling** | `ade_types::conway` (governance types) | BLUE | Holds `GovAction`, `GovActionState`, `DRep`, `Anchor`, `VotingProcedures` shapes. |
 | **Authoritative enforcement** | `ade_ledger::governance::{evaluate_ratification, enact_proposals, expire_proposals}` | BLUE | The chokepoints that compute Conway ratification outcomes. **ENACTMENT-COMMITTEE-WRITEBACK:** `enact_proposals` now populates `EnactmentEffects.committee_changes` + `committee_threshold` for a ratified `UpdateCommittee` / `NoConfidence`. |
 | **Committee write-back** *(NEW in ENACTMENT-COMMITTEE-WRITEBACK)* | `ade_ledger::governance::apply_committee_enactment` | BLUE | The closed pure transition `fn(&committee, quorum, &EnactmentEffects) -> (new_committee, new_quorum)`. Removes the `removed` cold credentials, inserts the `added` ones with term-expiry epochs, applies `committee_threshold` to the quorum; `NoConfidence` dissolves the committee. Called at the `ade_ledger::rules` epoch-boundary apply site (`rules.rs:1224`); replays byte-identically. Never re-collapses the discriminated `ConwayGovState.committee` (`BTreeMap<StakeCredential, u64>`). |
-| **Snapshot decode (data-only)** *(NEW in ENACTMENT-COMMITTEE-WRITEBACK)* | `ade_testkit` snapshot loader: `parse_cold_credential` / `parse_cold_credential_set` / `parse_cold_credential_epoch_map` / `parse_unit_interval` | GREEN | Fail-closed decode of the `update_committee` gov-action structure (discriminated cold credentials + epoch map + unit-interval threshold) from snapshot bytes; malformed input rejects. Asserts nothing about ratification. |
+| **Snapshot decode (data-only)** *(NEW in ENACTMENT-COMMITTEE-WRITEBACK; tightened in 168ac02)* | `ade_testkit` snapshot loader: `parse_cold_credential` / `parse_cold_credential_set` / `parse_cold_credential_epoch_map` / `parse_unit_interval` (+ `parse_with_origin_slot` and dual-layout `parse_registered_credentials`) | GREEN | Fail-closed decode of the `update_committee` gov-action structure (discriminated cold credentials + epoch map + unit-interval threshold) from snapshot bytes; malformed input rejects. **168ac02 hardenings (GREEN decoder closure aligned to BLUE schema migrations):** `parse_cold_credential_set` / `parse_cold_credential_epoch_map` are now fail-closed on truncation (a `terminated` flag is flipped by the indefinite `0xff` break or the definite `count >= declared_len` exit; a declared-but-under-length set/map rejects deterministically — replacing the prior silent advance); `parse_registered_credentials` now decodes BOTH UMElem layouts the BLUE `ConwayGovState` migration spans (pre-Conway `array(4) [StrictMaybe RDPair, Set Ptr, StrictMaybe Pool, StrictMaybe DRep]` and Conway compact `array(4) [uint reward, uint deposit, …]`, discriminated by the major type of UMElem[0]), so the same loader covers both the discriminated `StakeCredential`-keyed Conway shape and the historical Shelley..Babbage shape without misclaiming a credential; and `parse_with_origin_slot` lifts the live tip slot from the `HeaderState`'s `WithOrigin (AnnTip …)` prefix (a new `slot: u64` field on the existing GREEN `SnapshotHeader`). **Still GREEN**, still a fixture-decode helper, still asserts nothing about ratification or about the BLUE `apply_committee_enactment` transition. **Not a new SEAM** — no new BLUE chokepoint, no new canonical type, no new ingress; surfaced here as the canonical example of GREEN decoder closures aligned to BLUE schema migrations. |
 
 **Rule.** A new governance action variant (CIP-1694 extension) adds a
 variant to `GovAction` (§3 closed registry — version-gated) **and**
@@ -1481,7 +1555,7 @@ open seam in this domain:** the declared non-goal `proposal_procedures` tx-body
 decode into `GovAction` — the wire codec keeps `proposal_procedures` opaque
 `Option<Vec<u8>>`, so a tx-submitted `UpdateCommittee` proposal is not yet
 reachable end-to-end; a candidate future seam (§1, §3), NOT an open extension
-point now. `spo_votes` is a **permanent non-goal** (pools key-hash only).
+point now. `spo_votes` is a **permanent non-goal** (pools key-hash only). **168ac02 added one new positive GREEN real-chain oracle test** — `committee_oracle_mainnet_575_576_noop_agreement` (in `crates/ade_testkit/tests/epoch_oracle_comparison.rs`) — that replays the mainnet 575→576 epoch boundary against the real cardano-node snapshot and asserts noop agreement on the committee surface, strengthening DC-EPOCH-01 + DC-LEDGER-10 by extending real-chain oracle coverage to the live `apply_committee_enactment` write-back. It is a positive-oracle test, not a new ingress and not a new seam — the BLUE write-back chokepoint already named above does not move.
 
 ### Mini-protocol wire conformance (N-A)
 
@@ -2751,7 +2825,12 @@ cluster entry.
 
 - CODEMAP: `docs/ade-CODEMAP.md` — module-by-module authority table,
   upstream of this document. **Cross-reference check:** CODEMAP was
-  regenerated at HEAD (`3180e27`) and its narrative folds in
+  regenerated at HEAD (`168ac02`) — same SHA this SEAMS reports. CODEMAP's
+  header explicitly records the six post-`3180e27` commits as
+  GREEN-scope only (testkit harness, snapshot-loader follow-ups, corpus
+  generators, real-chain committee oracle), with **376 canonical types,
+  1325 tests (+3 vs `3180e27`, all in `ade_testkit`), 29 CI checks** —
+  matching the counts this SEAMS reports. CODEMAP also folds in
   ENACTMENT-COMMITTEE-WRITEBACK — the `GovAction::UpdateCommittee` re-shaping
   (opaque `{ raw: Vec<u8> }` → structured `{ removed: BTreeSet<StakeCredential>,
   added: BTreeMap<StakeCredential, u64>, threshold }`, GovAction stays closed
