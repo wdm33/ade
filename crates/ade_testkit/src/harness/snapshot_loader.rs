@@ -87,7 +87,7 @@ impl LoadedSnapshot {
             utxo_state: UTxOState::new(),
             epoch_state: EpochState {
                 epoch: EpochNo(self.header.epoch),
-                slot: SlotNo(0),
+                slot: SlotNo(self.header.slot),
                 snapshots,
                 reserves: ade_types::tx::Coin(self.header.reserves),
                 treasury: ade_types::tx::Coin(self.header.treasury),
@@ -482,6 +482,14 @@ pub struct SnapshotHeader {
     pub telescope_length: u32,
     /// Era index of the current state (0-based position in telescope)
     pub current_era_index: u32,
+    /// Tip slot of the snapshot, extracted from the HeaderState's
+    /// `WithOrigin (AnnTip ...)` prefix. 0 if the WithOrigin is `Origin`
+    /// (i.e., a genesis state with no applied block yet). For real
+    /// post-Byron snapshots this is the slot of the most recently applied
+    /// block — typically a few hundred slots past the snapshot's *named*
+    /// slot, since captures land at the first block after the truncate
+    /// target (see corpus/snapshots/registry.toml for the naming convention).
+    pub slot: u64,
     /// Epoch number from the NewEpochState
     pub epoch: u64,
     /// Treasury in lovelace (from AccountState)
@@ -579,8 +587,9 @@ pub fn parse_snapshot_header(state_cbor: &[u8]) -> Result<SnapshotHeader, Harnes
 
     // Payload: array(3) [WithOrigin, NewEpochState, Transition]
     let (off, _) = read_array_header(state_cbor, off)?;
-    // Skip WithOrigin
-    let off = skip_cbor(state_cbor, off)?;
+    // Extract the tip slot from the WithOrigin (AnnTip ...) — see
+    // parse_with_origin_slot for the exact layout we expect.
+    let (off, slot) = parse_with_origin_slot(state_cbor, off)?;
 
     // NewEpochState: array(N) — first element is epoch uint
     let (off, _nes_len) = read_array_header(state_cbor, off)?;
@@ -611,12 +620,42 @@ pub fn parse_snapshot_header(state_cbor: &[u8]) -> Result<SnapshotHeader, Harnes
     Ok(SnapshotHeader {
         telescope_length,
         current_era_index: telescope_length - 1,
+        slot,
         epoch,
         treasury,
         reserves,
         epoch_fees,
         state_size,
     })
+}
+
+/// Parse the `WithOrigin (AnnTip ...)` prefix of the HeaderState payload and
+/// return `(offset_past_with_origin, tip_slot)`. `0` is returned for the
+/// `Origin` case (no block yet applied).
+///
+/// Encoding observed on cardano-node 10.6.2 / ouroboros-consensus 0.26:
+///   Origin       → array(0)  →  `0x80`
+///   At AnnTip    → array(1) [array(N≥3) [slot, blockNo, hash, ...]]
+///                  e.g. `81 83 1a <slot:u32> 1a <blk:u32> 58 20 <hash:32>`
+/// `AnnTip` may carry additional trailing fields in other consensus
+/// versions; we only read the first uint (slot) and rely on `skip_cbor` to
+/// advance correctly past whatever the actual envelope contains.
+fn parse_with_origin_slot(
+    state_cbor: &[u8],
+    off: usize,
+) -> Result<(usize, u64), HarnessError> {
+    let (after_outer, _maj, outer_len) = read_cbor_initial(state_cbor, off)?;
+    if outer_len == 0 {
+        // Origin — no slot.
+        return Ok((after_outer, 0));
+    }
+    // At AnnTip → inner array starting with the slot uint.
+    let (after_tip_hdr, _maj, _tip_len) = read_cbor_initial(state_cbor, after_outer)?;
+    let (_, slot) = read_uint(state_cbor, after_tip_hdr)?;
+    // Advance past the entire WithOrigin envelope by skip_cbor over the
+    // outer wrapper — robust against any extra trailing AnnTip fields.
+    let end = skip_cbor(state_cbor, off)?;
+    Ok((end, slot))
 }
 
 fn parse_epoch_fees(state_cbor: &[u8]) -> Result<u64, HarnessError> {
@@ -1818,9 +1857,16 @@ pub fn parse_registered_credentials(
     let umap_body = navigate_to_umap_elems(state_cbor)?;
 
     // umElems = map(credential → UMElem)
-    // UMElem = array(4) [StrictMaybe RDPair, Set Ptr, StrictMaybe PoolHash, StrictMaybe DRep]
-    // A credential is "account registered" only if UMElem[0] (RDPair) is non-null.
-    // StrictMaybe encoding: SNothing = array(0), SJust x = array(1, [x])
+    //
+    // The UMElem layout differs between pre-Conway and Conway:
+    //   Pre-Conway: array(4) [StrictMaybe RDPair, Set Ptr, StrictMaybe Pool, StrictMaybe DRep]
+    //               StrictMaybe RDPair encoding: SNothing = array(0), SJust = array(1, [r,d]).
+    //               Registered iff RDPair is SJust.
+    //   Conway:     array(4) [uint reward, uint deposit, nullable Pool, nullable DRep]
+    //               (compact: the StrictMaybe wrapper is removed; reward/deposit are direct
+    //               uints, and "registered" is encoded as deposit > 0.)
+    // We discriminate on the major type of UMElem[0]: array(major=4) = pre-Conway,
+    // uint(major=0) = Conway. Same outer shape (array(4)), different field encodings.
     let (mut co, _, _) = read_cbor_initial(state_cbor, umap_body)?;
     let mut creds = std::collections::BTreeSet::new();
     while co < state_cbor.len() && state_cbor[co] != 0xff {
@@ -1835,14 +1881,22 @@ pub fn parse_registered_credentials(
         }
         co = key_end;
 
-        // Value: UMElem = array(4) [rdpair, ptrs, pool, drep]
-        // Check if UMElem[0] (RDPair) is non-null (SJust = array(1+))
+        // Value: UMElem = array(4)
         let (elem_body, elem_maj, _) = read_cbor_initial(state_cbor, co)?;
         if elem_maj == 4 {
-            // UMElem is array(4). Read first field = StrictMaybe RDPair
-            let (_, rdp_maj, rdp_val) = read_cbor_initial(state_cbor, elem_body)?;
-            // SNothing = array(0), SJust = array(1, [...])
-            let is_registered = rdp_maj == 4 && rdp_val > 0;
+            let (_, f0_maj, f0_val) = read_cbor_initial(state_cbor, elem_body)?;
+            let is_registered = if f0_maj == 4 {
+                // Pre-Conway: field 0 = StrictMaybe RDPair. SJust = array(1+).
+                f0_val > 0
+            } else if f0_maj == 0 {
+                // Conway compact: field 0 = reward (uint), field 1 = deposit (uint).
+                // Registered iff deposit > 0.
+                let after_reward = skip_cbor(state_cbor, elem_body)?;
+                let (_, dep_maj, deposit) = read_cbor_initial(state_cbor, after_reward)?;
+                dep_maj == 0 && deposit > 0
+            } else {
+                false
+            };
             if is_registered && hash_len >= 28 {
                 creds.insert(ade_types::Hash28(h));
             }

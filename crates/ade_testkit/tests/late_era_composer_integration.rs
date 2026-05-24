@@ -71,12 +71,10 @@ fn replay_with_verdict_aggregation(
 
     let snap = LoadedSnapshot::from_tarball(&tarball).ok()?;
     let mut state = snap.to_ledger_state();
-    // Pre-tip blocks fail with StakeAlreadyRegistered etc. (effects already
-    // in the loaded state). SnapshotHeader doesn't surface the tip slot, so
-    // we use the skip-until-first-success pattern (see
-    // boundary_stateful_replay.rs / contiguous_plutus_verdict_harness.rs for
-    // the same approach). Pre-chain errors are tolerated; post-chain errors
-    // are real.
+    // Loader now surfaces snapshot tip slot (FU #1). Skip blocks at slot ≤
+    // tip explicitly; chain-started fallback handles any residual cert-
+    // reconstruction-past-tip (FU #2 territory).
+    let tip_slot = state.epoch_state.slot.0;
 
     let block_dir = boundary_blocks_dir().join(blocks_subdir);
     let manifest_path = block_dir.join("manifest.json");
@@ -111,6 +109,11 @@ fn replay_with_verdict_aggregation(
             Some(s) => s,
             None => continue,
         };
+        // Skip blocks at slot ≤ snapshot tip (already-applied effects).
+        let block_slot = entry["slot"].as_u64().unwrap_or(0);
+        if block_slot <= tip_slot {
+            continue;
+        }
         let raw = match std::fs::read(block_dir.join(filename)) {
             Ok(b) => b,
             Err(_) => continue,

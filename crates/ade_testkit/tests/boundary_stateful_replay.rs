@@ -40,13 +40,15 @@ fn stateful_boundary_replay(
     let snap = LoadedSnapshot::from_tarball(&tarball).unwrap();
     let mut state = snap.to_ledger_state();
     // track_utxo is true from snapshot — no placeholder needed.
-    // Pre-tip blocks (whose effects are already in the loaded state) fail
-    // with `StakeAlreadyRegistered` / missing-input — corpus-vs-snapshot
-    // alignment artifact, not a code defect. We can't pre-filter by slot
-    // because SnapshotHeader doesn't surface the tip slot and
-    // `to_ledger_state` leaves `epoch_state.slot.0 = 0`. Instead: tolerate
-    // leading apply errors UNTIL the first successful apply (the first
-    // post-tip block). After the chain starts, errors are real.
+    // The loader now surfaces the snapshot's tip slot via
+    // SnapshotHeader.slot (propagated into state.epoch_state.slot), so we
+    // can pre-filter pre-tip blocks: their effects are already in the
+    // loaded state and re-applying them would fail with
+    // `StakeAlreadyRegistered` / missing-input. Belt-and-suspenders: we
+    // also keep the chain-started fallback below in case the snapshot's
+    // cert reconstruction extends slightly past the reported tip
+    // (FU #2 territory — bound cert reconstruction at snapshot tip).
+    let tip_slot = state.epoch_state.slot.0;
 
     let block_dir = boundary_blocks_dir().join(blocks_dir);
     let manifest_path = block_dir.join("manifest.json");
@@ -71,6 +73,12 @@ fn stateful_boundary_replay(
 
     for entry in &block_list {
         let filename = entry["file"].as_str().unwrap();
+        // Primary defense: skip blocks at slot ≤ snapshot tip — their
+        // effects are already in the loaded state.
+        let block_slot = entry["slot"].as_u64().unwrap_or(0);
+        if block_slot <= tip_slot {
+            continue;
+        }
         let raw = std::fs::read(block_dir.join(filename)).unwrap();
         let env = decode_block_envelope(&raw).unwrap();
         let inner = &raw[env.block_start..env.block_end];
@@ -82,9 +90,10 @@ fn stateful_boundary_replay(
                 applied += 1;
             }
             Err(e) => {
-                // Pre-chain errors are pre-tip alignment artifacts — silently
-                // skip and keep scanning for the first applicable block.
-                // After the chain starts, errors are real and break.
+                // Pre-chain errors here mean the slot filter let a pre-tip-
+                // equivalent block through (FU #2: cert reconstruction past
+                // tip). Tolerate until the first apply succeeds; afterwards
+                // errors are real and break.
                 if chain_started {
                     eprintln!("  {blocks_dir}: block {filename} failed: {e}");
                     break;

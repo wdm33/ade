@@ -81,14 +81,15 @@ fn shelley_allegra_transition_proof_surface() {
     .unwrap();
 
     let all_blocks = manifest["blocks"].as_array().unwrap();
-    // Post-boundary blocks have filenames starting with "blk_".
-    // SnapshotHeader doesn't surface the tip slot (and to_ledger_state leaves
-    // epoch_state.slot.0 = 0), so we can't pre-filter by tip. Use the
-    // skip-until-first-success pattern: pre-tip blocks fail with
-    // StakeAlreadyRegistered / missing-input (already-applied effects);
-    // tolerate those, then once the chain starts, errors are real.
+    // Post-boundary blocks have filenames starting with "blk_". Filter to
+    // those at slot > the loaded snapshot's tip — blocks at slot ≤ tip have
+    // effects (cert regs / UTxO consumption) already in the loaded state
+    // and would spuriously fail to re-apply. The loader now surfaces the
+    // tip slot via SnapshotHeader.slot (FU #1).
+    let tip_slot = state.epoch_state.slot.0;
     let post_blocks: Vec<_> = all_blocks.iter()
         .filter(|e| e["file"].as_str().map(|f| f.starts_with("blk_")).unwrap_or(false))
+        .filter(|e| e["slot"].as_u64().unwrap_or(0) > tip_slot)
         .collect();
     let mut applied = 0;
     let mut total_txs = 0u64;
