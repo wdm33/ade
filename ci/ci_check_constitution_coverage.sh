@@ -109,9 +109,19 @@ for r in rules:
         for field in RELEASE_OP_REQUIRED:
             if field not in r:
                 fail(f"{rid}: missing required field '{field}' for {tier} entry")
-        for field in RELEASE_OP_FORBIDDEN:
-            if field in r:
-                fail(f"{rid}: {tier} entry must NOT have '{field}'")
+        # Release / operational entries carry no enforcement evidence by
+        # default — they reduce to a declared statement plus cross_refs.
+        # When status flips to `enforced` (e.g. a mechanical bridge slice
+        # like PHASE4-N-C S5 / CN-CONS-07), the enforcement-regression
+        # guard below requires non-empty code_locus + ci_script + tests
+        # OR ci_script — so the forbidden-fields constraint relaxes
+        # exactly when enforcement evidence is REQUIRED. Forbidden only
+        # when status is declared/partial/blocked.
+        status_now = r.get("status", "")
+        if status_now != "enforced":
+            for field in RELEASE_OP_FORBIDDEN:
+                if field in r:
+                    fail(f"{rid}: {tier} entry with status '{status_now}' must NOT have '{field}'")
     else:
         fail(f"{rid}: invalid tier '{tier}'")
 

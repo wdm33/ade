@@ -15,4 +15,7 @@
 //! Classification is unchanged: BLUE, deterministic, fail-closed.
 
 pub mod forge;
+pub mod self_accept;
 pub mod state;
+
+pub use self_accept::{self_accept, AcceptedBlock, SelfAcceptError};
