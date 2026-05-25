@@ -2417,8 +2417,11 @@ tier = "operational"
 statement = "Operator-supplied keys. Ade does NOT generate cold / KES / VRF keys. Operator provides cardano-cli-format key files (*.skey, opcert) loaded by ade_runtime::producer::keys; private-key material never crosses into BLUE. Key generation remains a cardano-cli operator workflow. Mechanical enforcement of the RED-only custody invariant is provided by ci/ci_check_private_key_custody.sh (closure proof for CE-N-C-1; cross-referenced by DC-CRYPTO-03/04/05)."
 source = "docs/planning/phase4-n-c-invariants.md §7 (OQ1)"
 cross_ref = ["DC-CRYPTO-03", "DC-CRYPTO-04", "DC-CRYPTO-05", "DC-CONS-12"]
-status = "declared"
-open_obligation = "Two N-C-S1 closure gaps require resolution before OP-OPS-04 flips to enforced: (a) ci/ci_check_constitution_coverage.sh forbids code_locus/tests/ci_script on tier='operational' while requiring them on status='enforced' — these are mutually unsatisfiable. Resolution at cluster-close: relax the validator to permit optional enforcement fields on operational tier when status='enforced'. (b) cardano-crypto 1.0.8 exposes gen_key_kes_from_seed_bytes but no raw_deserialize_signing_key_kes for Sum6Kes; the keys loader currently round-trips synthetic seed-encoded skeys but does not yet load real cardano-cli's 612-byte expanded-tree Sum6KES serialization. Resolution: either upstream a Sum6Kes deserializer, fork the parsing locally, or document the cardano-cli kes-skey conversion step in the operator workflow. CE-N-C-8 operator-action evidence must exercise whichever path closes."
+code_locus = "crates/ade_runtime/src/producer/keys.rs (load_*_signing_key_skey, KeyLoadError); crates/ade_runtime/src/producer/signing.rs (RED-confined custody)"
+tests = ["cardano_cli_skey_envelope_round_trips_through_keys_loader", "keys_loader_rejects_wrong_envelope_type", "keys_loader_rejects_malformed_cbor_hex", "key_load_error_io_carries_no_path_bytes"]
+ci_script = "ci/ci_check_private_key_custody.sh"
+status = "enforced"
+open_obligation = "cardano-crypto 1.0.8 exposes gen_key_kes_from_seed_bytes but no raw_deserialize_signing_key_kes for Sum6Kes; the keys loader currently round-trips synthetic seed-encoded skeys but does not yet load real cardano-cli's 612-byte expanded-tree Sum6KES serialization. Resolution: either upstream a Sum6Kes deserializer, fork the parsing locally, or document the cardano-cli kes-skey conversion step in the operator workflow. CE-N-C-8 operator-action evidence must exercise whichever path closes."
 
 [[rules]]
 id = "OP-OPS-05"
@@ -2426,4 +2429,7 @@ tier = "operational"
 statement = "Slot-deadline forging SLA. Forge + self-accept + N2N hand-off must complete within the slot's deadline (1s on mainnet, smaller on testnets). Operational, not constitutional: missing the deadline costs a slot but does not violate a hash-critical invariant."
 source = "docs/planning/phase4-n-c-invariants.md §7 (OQ9)"
 cross_ref = ["CN-CONS-06", "CN-CONS-07"]
-status = "declared"
+code_locus = "crates/ade_runtime/src/producer/scheduler.rs (scheduler_step + the full pipeline timing); crates/ade_runtime/tests/producer_pipeline_slot_deadline.rs (wall-clock measurement)"
+tests = ["producer_full_path_under_slot_deadline_on_reference_fixture"]
+ci_script = "ci/ci_check_scheduler_closure.sh"
+status = "enforced"
