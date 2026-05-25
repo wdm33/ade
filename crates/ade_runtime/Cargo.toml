@@ -9,6 +9,11 @@ ade_core = { path = "../ade_core" }
 ade_crypto = { path = "../ade_crypto" }
 ade_codec = { path = "../ade_codec" }
 ade_ledger = { path = "../ade_ledger" }
+# Producer-side server response paths (PHASE4-N-G). The GREEN
+# adapter + trait impls in `producer::broadcast_to_served` and
+# `producer::served_chain_lookups` host the BLUE reducer
+# interface bindings.
+ade_network = { path = "../ade_network" }
 # Persistent ChainDb backing store (S-34, Tier 5 choice).
 # See docs/clusters/PHASE4-N-D/S-34.md §O-34.1.
 # Pure Rust, ACID, single-file. MIT/Apache.

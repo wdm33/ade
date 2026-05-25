@@ -17,7 +17,9 @@
 //! Mechanically enforced by `ci/ci_check_private_key_custody.sh`.
 
 pub mod broadcast;
+pub mod broadcast_to_served;
 pub mod keys;
 pub mod scheduler;
+pub mod served_chain_lookups;
 pub mod signing;
 pub mod tick_assembler;

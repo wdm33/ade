@@ -2451,10 +2451,13 @@ tier = "derived"
 statement = "Block bytes delivered via producer-side block-fetch Block{bytes} are byte-identical to AcceptedBlock.as_bytes() for the AcceptedBlock that cleared self_accept. The producer-side server never re-encodes."
 source = "docs/planning/phase4-n-a-successor-invariants.md §1 (I-1)"
 cross_ref = ["T-ENC-01", "DC-CONS-16", "CN-CONS-07"]
-code_locus = ""
-tests = []
-ci_script = ""
-status = "declared"
+code_locus = "crates/ade_network/src/block_fetch/server.rs (producer_block_fetch_serve constructs Block{bytes} only from served.range_bytes outputs); crates/ade_runtime/src/producer/served_chain_lookups.rs (ServedRangeLookup impl forwards ServedChainSnapshot::range_bytes which yields AcceptedBlock-derived slices); crates/ade_ledger/src/producer/served_chain.rs (ServedChainSnapshot.block_bytes returns AcceptedBlock.as_bytes() verbatim)"
+tests = ["producer_block_fetch_serve_block_bytes_equal_accepted_block_as_bytes", "session_transcript_served_block_bytes_equal_admitted_accepted_block_bytes"]
+ci_script = "ci/ci_check_block_fetch_server_closure.sh, ci/ci_check_broadcast_to_served_purity.sh"
+status = "enforced"
+authority_surface = "producer-side block-fetch wire-byte transmission"
+cluster = "PHASE4-N-G"
+evidence = ["End-to-end transcript test session_transcript_served_block_bytes_equal_admitted_accepted_block_bytes asserts every Block{bytes} payload in a corpus-driven transcript equals the admitted AcceptedBlock.as_bytes() at its (slot,hash) key.", "CI gate ci_check_block_fetch_server_closure.sh enforces that producer_block_fetch_serve sources Block{bytes} only through served.range_bytes (positive grep)."]
 
 [[rules]]
 id = "DC-CONS-18"
@@ -2462,10 +2465,13 @@ tier = "derived"
 statement = "Header bytes announced via chain-sync RollForward{header,tip} are the header sub-segment of the AcceptedBlock whose body bytes are subsequently servable via block-fetch. block_body_hash applied to the served body MUST equal the body-hash field of the announced header."
 source = "docs/planning/phase4-n-a-successor-invariants.md §1 (I-2)"
 cross_ref = ["DC-CONS-16", "DC-CONS-17"]
-code_locus = ""
-tests = []
-ci_script = ""
-status = "declared"
+code_locus = "crates/ade_ledger/src/block_validity/header_input.rs (accepted_block_header_bytes — single canonical projection); crates/ade_runtime/src/producer/served_chain_lookups.rs (ServedHeaderLookup::next_after uses accepted_block_header_bytes); crates/ade_network/src/chain_sync/server.rs (producer_chain_sync_serve sources RollForward header from the trait lookup)"
+tests = ["producer_chain_sync_serve_roll_forward_header_equals_accepted_block_header_bytes", "session_transcript_announced_header_matches_served_body_recipe", "accepted_block_header_bytes_equals_validator_split_on_corpus"]
+ci_script = "ci/ci_check_no_parallel_header_splitter.sh, ci/ci_check_broadcast_to_served_purity.sh"
+status = "enforced"
+authority_surface = "producer-side chain-sync RollForward header projection"
+cluster = "PHASE4-N-G"
+evidence = ["End-to-end transcript test session_transcript_announced_header_matches_served_body_recipe asserts the rolled header bytes equal accepted_block_header_bytes over the same AcceptedBlock the matching block-fetch range subsequently serves.", "The single canonical header splitter is enforced by ci_check_no_parallel_header_splitter.sh; the GREEN adapter imports accepted_block_header_bytes (positive grep in ci_check_broadcast_to_served_purity.sh)."]
 
 [[rules]]
 id = "DC-PROTO-07"
@@ -2473,10 +2479,13 @@ tier = "derived"
 statement = "Given canonical inputs (negotiated_version, peer_message_sequence, broadcast_arrival_sequence, session_event_sequence), the producer-side chain-sync / block-fetch session orchestrator emits a byte-identical sequence of outgoing mini-protocol frames across replays. The per-session reducer is a pure deterministic transition."
 source = "docs/planning/phase4-n-a-successor-invariants.md §3"
 cross_ref = ["T-DET-01", "DC-PROTO-06"]
-code_locus = ""
-tests = []
-ci_script = ""
-status = "declared"
+code_locus = "crates/ade_network/src/chain_sync/server.rs (producer_chain_sync_serve + producer_chain_sync_advance_tip — pure, total, deterministic); crates/ade_network/src/block_fetch/server.rs (producer_block_fetch_serve — pure, total, deterministic); crates/ade_runtime/src/producer/broadcast_to_served.rs (GREEN drain_and_admit — pure, no I/O); crates/ade_runtime/src/producer/served_chain_lookups.rs (trait impls — pure projections)"
+tests = ["producer_chain_sync_serve_replays_byte_identical_over_corpus", "producer_block_fetch_serve_replays_byte_identical_over_corpus", "drain_and_admit_is_deterministic_over_arrival_sequence", "session_transcript_replay_byte_identical"]
+ci_script = "ci/ci_check_chain_sync_server_closure.sh, ci/ci_check_block_fetch_server_closure.sh, ci/ci_check_broadcast_to_served_purity.sh"
+status = "enforced"
+authority_surface = "producer-side server-role session transcript"
+cluster = "PHASE4-N-G"
+evidence = ["End-to-end test session_transcript_replay_byte_identical drives the full pipeline over identical canonical inputs twice and asserts byte-equal outgoing frame sequences.", "Per-reducer determinism tests in chain_sync::server and block_fetch::server cover each reducer in isolation; the GREEN adapter's determinism test covers admission ordering."]
 
 [[rules]]
 id = "DC-PROTO-08"

@@ -103,6 +103,24 @@ impl ServedChainSnapshot {
             .map(|((slot, hash), block)| (*slot, hash, block.as_bytes()))
     }
 
+    /// Iterate every admitted block in BTreeMap order, yielding
+    /// `(SlotNo, &Hash32, &AcceptedBlock)`. Used by the GREEN
+    /// adapter in `ade_runtime::producer::served_chain_lookups` to
+    /// call `accepted_block_header_bytes(&accepted)` — the canonical
+    /// header projection — without going through a parallel splitter.
+    pub fn iter_accepted(
+        &self,
+    ) -> impl Iterator<Item = (SlotNo, &'_ Hash32, &'_ AcceptedBlock)> + '_ {
+        self.blocks
+            .iter()
+            .map(|((slot, hash), block)| (*slot, hash, block))
+    }
+
+    /// Point lookup returning the underlying `AcceptedBlock` reference.
+    pub fn block_at(&self, slot: SlotNo, hash: &Hash32) -> Option<&AcceptedBlock> {
+        self.blocks.get(&(slot, hash.clone()))
+    }
+
     /// Deterministic fingerprint over the snapshot: blake2b_256 of
     /// the concatenated `(slot_be8 || hash || bytes)` triples in
     /// BTreeMap order. Two snapshots admitting the same blocks (in

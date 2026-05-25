@@ -103,6 +103,7 @@ dependencies = [
  "ade_core",
  "ade_crypto",
  "ade_ledger",
+ "ade_network",
  "ade_testkit",
  "ade_types",
  "cardano-crypto",
