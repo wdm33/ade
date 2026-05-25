@@ -7,6 +7,7 @@
 
 use crate::cbor::{self, ContainerEncoding, IntWidth};
 use crate::error::CodecError;
+use crate::shelley::opcert::{read_opcert_fields_from, write_opcert_fields_into};
 use crate::traits::{AdeEncode, CodecContext};
 use ade_types::shelley::block::*;
 
@@ -165,19 +166,13 @@ fn decode_header_body(data: &[u8], offset: &mut usize) -> Result<ShelleyHeaderBo
     let body_hash = crate::byron::read_hash32(data, offset)?;
 
     let operational_cert = if hdr_len == 15 {
-        // Inlined: 4 fields directly in the array
-        let (hot_vkey, _) = cbor::read_bytes(data, offset)?;
-        let (sequence_number, _) = cbor::read_uint(data, offset)?;
-        let (kes_period, _) = cbor::read_uint(data, offset)?;
-        let (sigma, _) = cbor::read_bytes(data, offset)?;
-        OperationalCert {
-            hot_vkey,
-            sequence_number,
-            kes_period,
-            sigma,
-        }
+        // Inlined: 4 fields directly in the array.
+        read_opcert_fields_from(data, offset).map_err(|_| CodecError::InvalidCborStructure {
+            offset: *offset,
+            detail: "operational cert fields (inline)",
+        })?
     } else {
-        // Nested: array(4) [hot_vkey, seq, kes_period, sigma]
+        // Nested: array(4) [hot_vkey, seq, kes_period, sigma].
         let oc_enc = cbor::read_array_header(data, offset)?;
         match oc_enc {
             ContainerEncoding::Definite(4, _) => {}
@@ -188,16 +183,10 @@ fn decode_header_body(data: &[u8], offset: &mut usize) -> Result<ShelleyHeaderBo
                 });
             }
         }
-        let (hot_vkey, _) = cbor::read_bytes(data, offset)?;
-        let (sequence_number, _) = cbor::read_uint(data, offset)?;
-        let (kes_period, _) = cbor::read_uint(data, offset)?;
-        let (sigma, _) = cbor::read_bytes(data, offset)?;
-        OperationalCert {
-            hot_vkey,
-            sequence_number,
-            kes_period,
-            sigma,
-        }
+        read_opcert_fields_from(data, offset).map_err(|_| CodecError::InvalidCborStructure {
+            offset: *offset,
+            detail: "operational cert fields (nested)",
+        })?
     };
 
     let protocol_version = if hdr_len == 15 {
@@ -265,21 +254,15 @@ impl AdeEncode for ShelleyHeaderBody {
         cbor::write_bytes_canonical(buf, &self.body_hash.0);
 
         if is_split {
-            // Inlined operational cert
-            cbor::write_bytes_canonical(buf, &self.operational_cert.hot_vkey);
-            cbor::write_uint_canonical(buf, self.operational_cert.sequence_number);
-            cbor::write_uint_canonical(buf, self.operational_cert.kes_period);
-            cbor::write_bytes_canonical(buf, &self.operational_cert.sigma);
+            // Inlined operational cert.
+            write_opcert_fields_into(buf, &self.operational_cert);
             // Inlined protocol version
             cbor::write_uint_canonical(buf, self.protocol_version.major);
             cbor::write_uint_canonical(buf, self.protocol_version.minor);
         } else {
-            // Nested operational cert: array(4)
+            // Nested operational cert: array(4).
             cbor::write_array_header(buf, ContainerEncoding::Definite(4, IntWidth::Inline));
-            cbor::write_bytes_canonical(buf, &self.operational_cert.hot_vkey);
-            cbor::write_uint_canonical(buf, self.operational_cert.sequence_number);
-            cbor::write_uint_canonical(buf, self.operational_cert.kes_period);
-            cbor::write_bytes_canonical(buf, &self.operational_cert.sigma);
+            write_opcert_fields_into(buf, &self.operational_cert);
             // Nested protocol version: array(2)
             cbor::write_array_header(buf, ContainerEncoding::Definite(2, IntWidth::Inline));
             cbor::write_uint_canonical(buf, self.protocol_version.major);

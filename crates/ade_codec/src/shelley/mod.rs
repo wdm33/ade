@@ -7,6 +7,7 @@
 
 pub mod block;
 pub mod cert;
+pub mod opcert;
 pub mod tx;
 
 use crate::error::CodecError;

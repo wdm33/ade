@@ -2300,10 +2300,10 @@ tier = "derived"
 statement = "OpCert kes_period field equals the KES period at the forged slot under an operator-supplied anchor. period_at_slot(slot, anchor) = (slot - anchor) / slots_per_kes_period (integer floor). BLUE rejects header/opcert combinations with mismatched periods at forge time. BLUE MUST NOT infer the anchor from wall-clock or filesystem state; the anchor is a pure input on the canonical ProducerTick."
 source = "docs/planning/phase4-n-c-invariants.md §1 (NC-KES-3/4); Praos / Shelley operational-certificate specification"
 cross_ref = ["DC-CRYPTO-04", "DC-CONS-12"]
-code_locus = ""
-tests = []
-ci_script = ""
-status = "declared"
+code_locus = "crates/ade_core/src/consensus/opcert_validate.rs (opcert_validate, OpCertError); crates/ade_codec/src/shelley/opcert.rs (encode_opcert, decode_opcert, OpCertCodecError)"
+tests = ["opcert_validate_accepts_canonical_fixture", "opcert_validate_rejects_period_mismatch", "opcert_validate_rejects_short_hot_vkey", "opcert_validate_first_opcert_no_prev_counter", "opcert_encoder_matches_cardano_cli_byte_identical", "opcert_round_trip_byte_identical"]
+ci_script = "ci/ci_check_opcert_closed.sh"
+status = "enforced"
 introduced_in = "PHASE4-N-C"
 strengthened_in = []
 
@@ -2313,10 +2313,10 @@ tier = "derived"
 statement = "OpCert serial counter is strictly monotonically increasing per (cold-key, node). BLUE rejects regression or repetition at the RED->BLUE boundary: opcert_validate fails when prev_counter is Some(c) and opcert.counter <= c. RED feeds the value from durable per-node state; BLUE never trusts an in-memory-only counter."
 source = "docs/planning/phase4-n-c-invariants.md §1 (NC-OC-2); Cardano operational-certificate counter discipline"
 cross_ref = ["DC-CONS-11", "OP-OPS-04"]
-code_locus = ""
-tests = []
-ci_script = ""
-status = "declared"
+code_locus = "crates/ade_core/src/consensus/opcert_validate.rs (opcert_validate, OpCertError::{CounterRepeat, CounterRegression, BadColdSignature})"
+tests = ["opcert_validate_rejects_counter_regression", "opcert_validate_rejects_counter_repeat", "opcert_validate_rejects_bad_signature_over_cold_key"]
+ci_script = "ci/ci_check_opcert_closed.sh"
+status = "enforced"
 introduced_in = "PHASE4-N-C"
 strengthened_in = []
 

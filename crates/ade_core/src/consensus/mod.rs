@@ -18,6 +18,7 @@ pub mod leader_schedule;
 pub mod ledger_view;
 pub mod nonce;
 pub mod op_cert;
+pub mod opcert_validate;
 pub mod praos_state;
 pub mod rollback;
 pub mod vrf_cert;
@@ -49,6 +50,7 @@ pub use leader_schedule::{
 pub use ledger_view::LedgerView;
 pub use nonce::{apply_nonce_input, NonceInput};
 pub use op_cert::{apply_op_cert, OpCertObservation};
+pub use opcert_validate::{opcert_validate, OpCertError};
 pub use praos_state::{Nonce, OpCertCounterMap, PraosChainDepState};
 pub use rollback::{apply_rollback, RollBackApplied, RollBackRequest};
 pub use vrf_cert::{
