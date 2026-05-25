@@ -26,3 +26,7 @@ path = "src/bin/live_consensus_session.rs"
 [[bin]]
 name = "live_tx_submission_session"
 path = "src/bin/live_tx_submission_session.rs"
+
+[[bin]]
+name = "live_block_production_session"
+path = "src/bin/live_block_production_session.rs"

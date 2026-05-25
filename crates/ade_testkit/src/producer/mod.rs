@@ -7,9 +7,10 @@
 
 //! GREEN test harness for the PHASE4-N-C producer surface.
 //!
-//! Currently exposes only `reference_vectors` (S1). Replay harness and
-//! cross-impl adapter follow in later slices (S3, S4, S7).
+//! Exposes `reference_vectors` (S1), `fixtures` + `replay` (S3, S4),
+//! and `cross_impl_adapter` (S7 — mechanical half of CN-CONS-06).
 
+pub mod cross_impl_adapter;
 pub mod fixtures;
 pub mod reference_vectors;
 pub mod replay;

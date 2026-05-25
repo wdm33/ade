@@ -2391,10 +2391,15 @@ tier = "release"
 statement = "Cross-impl acceptance: blocks forged by Ade are accepted by cardano-node when delivered via N2N block-fetch / chain-sync. Evidence is operator-action: a sustained-window live_block_production_session against a private cardano-node capturing CE-N-C-LIVE_<date>.log. Conditional on testnet stake / SPO registration; if unavailable at cluster close the live half is marked blocked_until_operator_stake_available, not deferred."
 source = "docs/planning/phase4-n-c-invariants.md §1 (NC-LIVE-1); bounty acceptance test (validation + block-production both required)"
 cross_ref = ["CN-CONS-07", "CN-WIRE-01", "OP-OPS-05"]
-status = "declared"
+code_locus = "crates/ade_testkit/src/producer/cross_impl_adapter.rs (mechanical half — structural cross-impl agreement: decode round-trip + body-hash binding + decoder/encoder structural field agreement); crates/ade_core_interop/src/bin/live_block_production_session.rs (live half — operator-action evidence binary)"
+tests = ["cross_impl_adapter_forged_block_decodes_through_ade_codec", "cross_impl_adapter_forged_block_structurally_agrees_with_decoder", "cross_impl_adapter_corpus_round_trips_byte_identical"]
+ci_script = "ci/ci_check_producer_corpus_present.sh"
+status = "enforced"
+introduced_in = "PHASE4-N-C"
 strengthened_in = []
+open_obligation = "Live half blocked_until_operator_stake_available: the mechanical half (structural cross-impl agreement — decode round-trip + S4 body-hash binding + decoder/encoder field agreement) is fully enforced via the cross_impl_adapter tests + ci/ci_check_producer_corpus_present.sh, satisfying the bytes-shape claim against the synthetic S3 corpus. The crypto-level cross-impl claim (real KES/VRF signatures accepted by cardano-node over N2N) is by-design out of reach of any CI gate against this corpus: synthetic fixtures carry all-zero KES/VRF artifacts so the BLUE forge can be replayed without invoking RED signing primitives. The crypto-level claim therefore lives in CE-N-C-8's operator-action live evidence: testnet (preview/preprod) SPO stake must be provisioned and the live_block_production_session binary run against a private cardano-node to capture docs/clusters/PHASE4-N-C/CE-N-C-LIVE_<date>.log. Reopen criteria: when stake is registered, run the binary per docs/clusters/PHASE4-N-C/CE-N-C-8_PROCEDURE.md and append the captured log path to this entry's evidence_notes. Follows the OP-OPS-04 precedent (enforced + open_obligation for a follow-on artifact)."
 attack_rationale = "Cardano-specific: cross-impl acceptance is the bounty's only proof that derived compatibility holds end-to-end."
-evidence_notes = "Release / interop evidence, not a universal law. CE-N-B-6 / CE-N-E-6 establish the operator-action live-evidence pattern this rule reuses."
+evidence_notes = "Release / interop evidence, not a universal law. CE-N-B-6 / CE-N-E-6 establish the operator-action live-evidence pattern this rule reuses. S7's mechanical half makes the structural cross-impl claim (decoder ⊕ encoder ≈ identity on captured forged bytes; body-hash binding through S4's authority). The crypto-level claim is operator-action only; the structural-vs-crypto split is documented in docs/clusters/PHASE4-N-C/N-C-S7.md §Notes on the structural-vs-crypto cross-impl split."
 
 [[rules]]
 id = "CN-CONS-07"
