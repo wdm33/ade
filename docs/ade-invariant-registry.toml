@@ -31,7 +31,7 @@ status = "enforced"
 authority_surface = "BLUE authoritative state transitions"
 cluster = "CL-LEDGER-VERDICT"
 evidence = ["crates/ade_testkit/tests/ledger_determinism.rs uses ade_ledger::fingerprint for byte-identical state comparison across all 7 eras", "crates/ade_testkit/tests/consensus_stream_replay.rs replays the canonical chain-selector stream twice and asserts byte-identical event lists and final orchestrator state — closes T-DET-01 for the consensus subset"]
-strengthened_in = ["PHASE4-N-B", "PHASE4-B1", "PHASE4-B2", "PHASE4-N-C"]
+strengthened_in = ["PHASE4-N-B", "PHASE4-B1", "PHASE4-B2", "PHASE4-N-C", "PHASE4-N-G"]
 
 [[rules]]
 id = "T-ENC-01"
@@ -43,7 +43,7 @@ code_locus = "crates/ade_codec/src/preserved.rs, crates/ade_ledger/src/block_val
 tests = ["preserved_wire_bytes_returned_exactly", "altered_body_rejected_by_hash_binding", "tx_id_uses_preserved_bytes"]
 ci_script = "ci/ci_check_hash_uses_wire_bytes.sh"
 status = "partial"
-strengthened_in = ["PHASE4-B1", "PHASE4-B2", "PHASE4-N-C"]
+strengthened_in = ["PHASE4-B1", "PHASE4-B2", "PHASE4-N-C", "PHASE4-N-G"]
 authority_surface = "hash-critical byte paths"
 cluster = "CL-CRYPTO-VERIFY"
 evidence = []
@@ -2365,12 +2365,12 @@ tier = "derived"
 statement = "Forged header.body_hash MUST equal blake2b_256(forged_body_wire_bytes), where forged_body_wire_bytes are produced by the single Cardano-compatible canonical block-body encoder used by the validator hash path. The producer and validator hash the same bytes through the same encoder. Strengthens T-ENC-01 for the producer surface; closes any potential producer/validator encoder bifurcation."
 source = "docs/planning/phase4-n-c-invariants.md §1 (NC-FORGE-5); Project constitution §2 (T-ENC-01, Byte Authority Model)"
 cross_ref = ["T-ENC-01", "DC-CONS-13", "CN-CONS-07"]
-code_locus = "crates/ade_ledger/src/block_body_hash.rs (block_body_hash, block_body_hash_from_buckets — single canonical authority); crates/ade_ledger/src/producer/forge.rs (forge_block — consumer); crates/ade_ledger/src/block_validity/header_input.rs (computed_body_hash — consumer)"
-tests = ["block_body_hash_pinned_recipe_byte_identical", "block_body_hash_from_block_equals_from_buckets", "block_body_hash_none_invalid_txs_equals_empty_bucket", "forged_body_hash_matches_validator_recomputation", "body_encoder_is_single_authority"]
-ci_script = "ci/ci_check_no_producer_body_encoder.sh"
+code_locus = "crates/ade_ledger/src/block_body_hash.rs (block_body_hash, block_body_hash_from_buckets — single canonical authority); crates/ade_ledger/src/producer/forge.rs (forge_block — consumer); crates/ade_ledger/src/block_validity/header_input.rs (computed_body_hash + accepted_block_header_bytes — consumer + N-G-strengthened single header-projection authority); crates/ade_runtime/src/producer/served_chain_lookups.rs (ServedHeaderLookup::next_after — third consumer; reuses accepted_block_header_bytes for producer-side server-pump header projection)"
+tests = ["block_body_hash_pinned_recipe_byte_identical", "block_body_hash_from_block_equals_from_buckets", "block_body_hash_none_invalid_txs_equals_empty_bucket", "forged_body_hash_matches_validator_recomputation", "body_encoder_is_single_authority", "accepted_block_header_bytes_equals_validator_split_on_corpus", "accepted_block_header_bytes_is_subslice_of_as_bytes", "session_transcript_announced_header_matches_served_body_recipe"]
+ci_script = "ci/ci_check_no_producer_body_encoder.sh, ci/ci_check_no_parallel_header_splitter.sh"
 status = "enforced"
 introduced_in = "PHASE4-N-C"
-strengthened_in = []
+strengthened_in = ["PHASE4-N-G"]
 
 [[rules]]
 id = "DC-LEDGER-12"
@@ -2523,7 +2523,7 @@ tier = "release"
 statement = "A Haskell cardano-node peer issuing RequestRange covering an Ade-forged block receives, via the producer-side block-fetch server, bytes that pass that peer's full header+body validation. Captured as an operator-action log against a private Haskell peer; the underlying semantic invariants are DC-CONS-17, DC-CONS-18, CN-PROTO-06, DC-PROTO-07, DC-PROTO-08, and the existing self-accept + body-hash recipe (DC-CONS-16)."
 source = "docs/planning/phase4-n-a-successor-invariants.md §8"
 cross_ref = ["DC-CONS-16", "DC-CONS-17", "DC-CONS-18", "CN-PROTO-06", "DC-PROTO-07", "DC-PROTO-08", "CN-CONS-06"]
-code_locus = "crates/ade_runtime/tests/cross_impl_server_pipeline.rs (mechanical adapter — CE-N-G-7); crates/ade_core_interop/src/bin/live_block_fetch_session.rs (operator-action binary — CE-N-G-8); docs/clusters/PHASE4-N-G/CE-N-G-8_PROCEDURE.md (operator procedure)"
+code_locus = "crates/ade_runtime/tests/cross_impl_server_pipeline.rs (mechanical adapter — CE-N-G-7); crates/ade_core_interop/src/bin/live_block_fetch_session.rs (operator-action binary — CE-N-G-8); docs/clusters/completed/PHASE4-N-G/CE-N-G-8_PROCEDURE.md (operator procedure)"
 tests = ["cross_impl_server_pipeline_request_range_returns_decodable_bytes", "cross_impl_server_pipeline_request_range_byte_identical_to_self_accept_input", "live_block_fetch_session_hermetic_default_prints_readiness"]
 ci_script = "ci/ci_check_server_paths_corpus_present.sh"
 status = "partial"
