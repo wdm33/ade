@@ -135,6 +135,7 @@ fn apply_event<W: ChainDbWrite>(
                 chain_write,
                 era_schedule,
                 ledger_view,
+                None,
             )
             .map_err(ReceiveDispatchError::Receive)?;
             Ok(Some(effect))

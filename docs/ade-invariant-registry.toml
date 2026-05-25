@@ -2594,14 +2594,17 @@ structural transition. A successful RollBackward rolls back all three
 to the same slot. No path leaves them out of sync; no partial
 admission; no partial rollback.
 """
-source = "docs/planning/receive-side-bridge-invariants.md §1 (I-3, I-4)"
-cross_ref = ["CN-CONS-08", "DC-CONS-13"]
-code_locus = ""
-tests = []
-ci_script = ""
-status = "declared"
-open_obligation = "rollback_side_blocked_until_ledger_snapshot_cluster"
-notes = "Path A scope split (decided 2026-05-25): the admit-side half (a successful receive admission updates ChainDb + LedgerState + PraosChainDepState atomically) is in scope for the receive-bridge cluster and will flip to enforced on close. The rollback-side half (a successful RollBackward rolls back all three) is OUT OF SCOPE for the receive-bridge cluster — ledger rollback infrastructure does not exist (no LedgerState encode/decode, no snapshot+replay-forward driver). A follow-on rollback cluster closes this half. Until then the receive bridge returns Err(ReceiveError::RollbackOutOfScope) on any peer RollBackward; receive state stays consistent. This rule's status stays at 'declared' through the receive cluster close; admit-side enforcement is recorded under CN-CONS-08 + DC-CONS-19 + DC-PROTO-09."
+source = "docs/planning/receive-side-bridge-invariants.md §1 (I-3, I-4); docs/planning/ledger-snapshot-rollback-invariants.md §1 (I-6)"
+cross_ref = ["CN-CONS-08", "DC-CONS-13", "CN-STORE-07", "DC-CONS-22"]
+code_locus = "crates/ade_ledger/src/receive/reducer.rs (admit-side: block_delivered branch atomically advances chain_write + state.ledger + state.chain_dep; rollback-side: roll_backward branch atomically calls materialize_rolled_back_state + commit_rollback); crates/ade_ledger/src/rollback/commit.rs (commit_rollback irreversible-step-first staged commit); crates/ade_ledger/src/rollback/materialize.rs (materialize_rolled_back_state via SnapshotReader + BlockSource); crates/ade_runtime/src/rollback/{cadence,in_memory_cache,chaindb_block_source,snapshot_writer}.rs (GREEN/RED rollback infrastructure)"
+tests = ["receive_apply_block_delivered_with_matching_header_admits", "commit_rollback_advances_chaindb_and_ledger_atomically", "commit_rollback_chain_write_failure_leaves_state_unchanged", "commit_rollback_resets_pending_headers", "rollback_branch_returns_rolled_back_on_in_memory_snapshot", "rollback_branch_returns_rollback_too_deep_when_no_snapshot", "rollback_branch_state_unchanged_on_materialize_failure", "rollback_then_continue_admit_equals_straight_line_admit"]
+ci_script = "ci/ci_check_receive_reducer_closure.sh, ci/ci_check_rollback_materialize_closure.sh"
+status = "enforced"
+authority_surface = "receive-side atomic admit + rollback over ChainDb + LedgerState + PraosChainDepState"
+cluster = "PHASE4-N-H + PHASE4-N-I"
+introduced_in = "PHASE4-N-H"
+strengthened_in = ["PHASE4-N-I"]
+evidence = ["Admit-side (N-H): block_delivered atomically advances chain_write -> ledger -> chain_dep with staged-then-committed shape; failure leaves state unchanged (test receive_apply_block_delivered_validity_invalid_rejects).", "Rollback-side (N-I): roll_backward calls materialize_rolled_back_state + commit_rollback; commit_rollback's irreversible-step-first shape leaves state unchanged on chain_write failure (commit_rollback_chain_write_failure_leaves_state_unchanged); pending headers reset on successful commit.", "End-to-end: rollback_then_continue_admit_equals_straight_line_admit proves snapshot+rollback yields the same ledger fingerprint as straight-line admit — snapshotting is a pure cache."]
 
 [[rules]]
 id = "DC-PROTO-09"

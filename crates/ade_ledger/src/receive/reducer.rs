@@ -56,6 +56,17 @@ impl ReceiveState {
     }
 }
 
+/// Read-only context for the RollBackward branch (PHASE4-N-I).
+/// When supplied (`Some`), the reducer's RollBackward arm
+/// materializes the rolled-back state via `materialize_rolled_back_state`
+/// + `commit_rollback`. When `None`, the arm returns the legacy
+/// `RollbackOutOfScope` error (pre-PHASE4-N-I behavior, retained
+/// for callers that haven't wired the rollback context yet).
+pub struct RollbackContext<'a> {
+    pub snapshot_reader: &'a dyn crate::rollback::SnapshotReader,
+    pub block_source: &'a dyn crate::rollback::BlockSource,
+}
+
 /// One step of the receive bridge. Pure, total, deterministic.
 ///
 /// On error, `state` and `chain_write` are unchanged (staged-then-
@@ -66,6 +77,7 @@ pub fn receive_apply<W: ChainDbWrite>(
     chain_write: &mut W,
     era_schedule: &EraSchedule,
     ledger_view: &dyn LedgerView,
+    rollback_ctx: Option<&RollbackContext>,
 ) -> Result<ReceiveEffect, ReceiveError> {
     match event {
         ReceiveEvent::RollForward {
@@ -83,9 +95,90 @@ pub fn receive_apply<W: ChainDbWrite>(
             ledger_view,
         ),
 
-        ReceiveEvent::RollBackward { target_point, .. } => {
-            Err(ReceiveError::RollbackOutOfScope { target_point })
+        ReceiveEvent::RollBackward { target_point, .. } => match rollback_ctx {
+            Some(ctx) => roll_backward(
+                state,
+                target_point,
+                chain_write,
+                era_schedule,
+                ledger_view,
+                ctx,
+            ),
+            None => Err(ReceiveError::RollbackOutOfScope { target_point }),
+        },
+    }
+}
+
+fn roll_backward<W: ChainDbWrite>(
+    state: &mut ReceiveState,
+    target_point: super::events::TargetPoint,
+    chain_write: &mut W,
+    era_schedule: &EraSchedule,
+    ledger_view: &dyn LedgerView,
+    ctx: &RollbackContext,
+) -> Result<ReceiveEffect, ReceiveError> {
+    // 1. Materialize the rolled-back (LedgerState, PraosChainDepState).
+    let mat_target = crate::rollback::TargetPoint {
+        slot: target_point.slot,
+        hash: target_point.hash.clone(),
+    };
+    let (new_ledger, new_chain_dep) = crate::rollback::materialize_rolled_back_state(
+        mat_target.clone(),
+        ctx.snapshot_reader,
+        ctx.block_source,
+        era_schedule,
+        ledger_view,
+    )
+    .map_err(map_materialize_err)?;
+
+    // 2. Atomic commit via the BLUE commit helper.
+    crate::rollback::commit_rollback(
+        state,
+        mat_target,
+        new_ledger,
+        new_chain_dep,
+        chain_write,
+    )
+    .map_err(map_commit_err)?;
+
+    Ok(ReceiveEffect::RolledBack {
+        to_slot: target_point.slot,
+    })
+}
+
+fn map_materialize_err(e: crate::rollback::MaterializeError) -> ReceiveError {
+    use crate::rollback::MaterializeError as ME;
+    match e {
+        ME::RollbackTooDeep { target_slot, .. } => {
+            // Preserve the receive-side error shape: surface as
+            // RollbackOutOfScope so callers don't need to handle a
+            // new variant. The materialize error context is logged
+            // at the orchestrator layer.
+            ReceiveError::RollbackOutOfScope {
+                target_point: super::events::TargetPoint {
+                    slot: target_slot,
+                    hash: ade_types::Hash32([0u8; 32]),
+                },
+            }
         }
+        ME::ReplayFailedAt { error, .. } => ReceiveError::Validity(error),
+        ME::EraNotSupported { slot, .. } => {
+            // EraNotSupported reaches the receive surface — surface
+            // as RollbackOutOfScope for now (Path A scope: pre-Conway
+            // out of scope). Future cluster extends ReceiveError.
+            ReceiveError::RollbackOutOfScope {
+                target_point: super::events::TargetPoint {
+                    slot,
+                    hash: ade_types::Hash32([0u8; 32]),
+                },
+            }
+        }
+    }
+}
+
+fn map_commit_err(e: crate::rollback::CommitRollbackError) -> ReceiveError {
+    match e {
+        crate::rollback::CommitRollbackError::ChainDb(w) => ReceiveError::ChainDb(w),
     }
 }
 
@@ -187,7 +280,7 @@ where
 {
     let mut effects = Vec::new();
     for event in events {
-        let effect = receive_apply(state, event, chain_write, era_schedule, ledger_view)?;
+        let effect = receive_apply(state, event, chain_write, era_schedule, ledger_view, None)?;
         effects.push(effect);
     }
     Ok(effects)
@@ -359,7 +452,7 @@ mod tests {
             header_bytes: bytes.clone(), // wire-form is opaque; use full envelope bytes as the cache entry
             tip: fake_tip(),
         };
-        let effect = receive_apply(&mut state, event, &mut chain_write, &schedule, &view)
+        let effect = receive_apply(&mut state, event, &mut chain_write, &schedule, &view, None)
             .expect("roll_forward");
         match effect {
             ReceiveEffect::Cached { .. } => {}
@@ -396,6 +489,7 @@ mod tests {
             &mut chain_write,
             &schedule,
             &view,
+    None,
         )
         .expect("cache");
         let ledger_after_cache = ledger_fingerprint_combined(&state.ledger);
@@ -407,6 +501,7 @@ mod tests {
             &mut chain_write,
             &schedule,
             &view,
+    None,
         )
         .expect("admit");
         match effect {
@@ -444,6 +539,7 @@ mod tests {
             &mut chain_write,
             &schedule,
             &view,
+    None,
         )
         .expect_err("must reject without cached header");
         match err {
@@ -480,6 +576,7 @@ mod tests {
             &mut chain_write,
             &schedule,
             &view,
+    None,
         )
         .expect_err("must reject on key mismatch");
         match err {
@@ -521,6 +618,7 @@ mod tests {
             &mut chain_write,
             &schedule,
             &view,
+    None,
         )
         .expect_err("must reject on validity invalid");
         match err {
@@ -560,6 +658,7 @@ mod tests {
             &mut chain_write,
             &schedule,
             &view,
+    None,
         )
         .expect_err("rollback must be out of scope");
         match err {
@@ -593,7 +692,7 @@ mod tests {
             let mut state = fresh_state(c.epoch_nonce);
             let mut chain_write = RecordingChainWrite::default();
             for e in events.clone() {
-                receive_apply(&mut state, e, &mut chain_write, &schedule, &view)
+                receive_apply(&mut state, e, &mut chain_write, &schedule, &view, None)
                     .expect("apply");
             }
             runs.push(ledger_fingerprint_combined(&state.ledger));
