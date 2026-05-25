@@ -28,7 +28,7 @@ pub mod pending_header_cache;
 pub mod reducer;
 
 pub use admitted::{admit_via_block_validity, AdmittedBlock, AdmittedOutcome};
-pub use chain_write::{ChainDbWrite, ChainWriteError};
+pub use chain_write::{ChainDbWrite, ChainWriteError, ChainWriteErrorKind};
 pub use events::{
     NoOpReason, ReceiveEffect, ReceiveError, ReceiveEvent, TargetPoint, TipPoint,
 };

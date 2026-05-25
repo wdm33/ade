@@ -11,4 +11,5 @@ pub mod chaindb;
 pub mod consensus;
 pub mod network;
 pub mod producer;
+pub mod receive;
 pub mod recovery;

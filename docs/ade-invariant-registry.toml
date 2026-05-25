@@ -2614,10 +2614,13 @@ byte-identical across replays. The reducer is a pure, total transition.
 """
 source = "docs/planning/receive-side-bridge-invariants.md §3, §4"
 cross_ref = ["T-DET-01", "DC-PROTO-07"]
-code_locus = ""
-tests = []
-ci_script = ""
-status = "declared"
+code_locus = "crates/ade_ledger/src/receive/reducer.rs (receive_apply + receive_apply_sequence pure transitions); crates/ade_runtime/src/receive/events_to_state.rs (GREEN adapter — pure, no I/O); crates/ade_runtime/src/receive/in_memory_chain_write.rs (GREEN ChainDb-write adapter — pure projection over an in-memory ChainDb)"
+tests = ["receive_apply_replay_byte_identical_over_corpus", "receive_session_transcript_replay_byte_identical"]
+ci_script = "ci/ci_check_receive_reducer_closure.sh, ci/ci_check_receive_replay_purity.sh"
+status = "enforced"
+authority_surface = "receive-side session transcript"
+cluster = "PHASE4-N-H"
+evidence = ["End-to-end integration test receive_session_transcript_replay_byte_identical drives a synthetic ForkChoiceSignal + BatchDeliveryEvent stream through the GREEN adapter + BLUE reducer + InMemoryChainDb twice and asserts identical (ledger fingerprint, ChainDb tip slot, ChainDb tip hash).", "Reducer-level determinism is covered by receive_apply_replay_byte_identical_over_corpus."]
 
 [[rules]]
 id = "CN-PROTO-07"
