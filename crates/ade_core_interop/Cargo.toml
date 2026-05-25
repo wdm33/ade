@@ -34,3 +34,7 @@ path = "src/bin/live_block_production_session.rs"
 [[bin]]
 name = "live_block_fetch_session"
 path = "src/bin/live_block_fetch_session.rs"
+
+[[bin]]
+name = "live_block_follow_session"
+path = "src/bin/live_block_follow_session.rs"
