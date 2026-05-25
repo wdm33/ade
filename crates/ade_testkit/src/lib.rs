@@ -11,5 +11,6 @@ pub mod consensus;
 pub mod governance;
 pub mod harness;
 pub mod mempool;
+pub mod producer;
 pub mod tx_validity;
 pub mod validity;

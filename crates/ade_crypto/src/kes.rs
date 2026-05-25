@@ -40,6 +40,44 @@ pub const SUM6_MAX_PERIOD: u32 = 63;
 /// Actually: computed from the recursive formula in the cardano-crypto crate.
 const SUM6_SIGNATURE_SIZE: usize = get_sum6_sig_size();
 
+/// Public Sum6KES signature length constant (BLUE-safe). Mirrors the
+/// internal `SUM6_SIGNATURE_SIZE`; exposed so callers can construct the
+/// closed `KesSignature` type without duplicating the size literal.
+pub const SUM6_KES_SIG_LEN: usize = SUM6_SIGNATURE_SIZE;
+
+/// Closed Sum6KES signature artifact (BLUE).
+///
+/// Contains the signature *bytes only* — never any private-key material.
+/// The producer's RED `kes_sign` returns this type so BLUE forge can
+/// consume it across the RED -> BLUE boundary as a captured artifact.
+#[derive(Clone, PartialEq, Eq)]
+pub struct KesSignature(pub [u8; SUM6_KES_SIG_LEN]);
+
+impl KesSignature {
+    /// Construct from a byte slice, validating length.
+    pub fn from_bytes(bytes: &[u8]) -> Result<Self, CryptoError> {
+        if bytes.len() != SUM6_KES_SIG_LEN {
+            return Err(CryptoError::MalformedSignature {
+                algorithm: "kes_sum6",
+                detail: "expected 448 bytes",
+            });
+        }
+        let mut arr = [0u8; SUM6_KES_SIG_LEN];
+        arr.copy_from_slice(bytes);
+        Ok(Self(arr))
+    }
+}
+
+// Hand-rolled Debug: do not leak signature bytes in logs by default.
+// Signatures are not secret, but keeping the verify path's surface
+// uniformly redact-on-format keeps the producer-output channel free of
+// noisy byte spew in error paths.
+impl core::fmt::Debug for KesSignature {
+    fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
+        write!(f, "KesSignature(<{} bytes>)", self.0.len())
+    }
+}
+
 /// Compute Sum6KES signature size at compile time.
 /// SingleKES sig = 64 (Ed25519)
 /// SumKES(d) sig = SumKES(d-1) sig + 2 * VK_SIZE(d-1)
@@ -116,6 +154,28 @@ pub fn verify_kes(
     match Sum6Kes::verify_kes(&(), &kes_vk, period.0 as u64, msg, &signature) {
         Ok(()) => Ok(true),
         Err(_) => Ok(false),
+    }
+}
+
+/// Verify a Sum6KES signature wrapped in the closed `KesSignature` artifact.
+///
+/// Delegates byte-for-byte to `verify_kes` (the existing entry); the wrapper
+/// exists so producer and validator paths share a single closed-type contract.
+/// Translates the standard verdict triple into `Result<(), CryptoError>`:
+///   `Ok(())`               — valid signature for the given period and message
+///   `Err(VerificationFailed)` — well-formed but invalid (Merkle / leaf mismatch)
+///   `Err(CryptoError)`     — malformed structurally
+pub fn verify_kes_signature(
+    vk: &KesVerificationKey,
+    period: KesPeriod,
+    msg: &[u8],
+    sig: &KesSignature,
+) -> Result<(), CryptoError> {
+    match verify_kes(vk, period, &sig.0, msg)? {
+        true => Ok(()),
+        false => Err(CryptoError::VerificationFailed {
+            algorithm: "kes_sum6",
+        }),
     }
 }
 
@@ -359,5 +419,67 @@ mod tests {
         use cardano_crypto::kes::KesAlgorithm;
         use cardano_crypto::kes::Sum6Kes;
         assert_eq!(Sum6Kes::SIGNATURE_SIZE, SUM6_SIGNATURE_SIZE);
+    }
+
+    #[test]
+    fn kes_signature_from_bytes_round_trips() {
+        let bytes = vec![0xABu8; SUM6_KES_SIG_LEN];
+        let sig = KesSignature::from_bytes(&bytes).unwrap();
+        assert_eq!(sig.0.len(), SUM6_KES_SIG_LEN);
+        assert_eq!(&sig.0[..], &bytes[..]);
+
+        let short = vec![0u8; SUM6_KES_SIG_LEN - 1];
+        assert_eq!(
+            KesSignature::from_bytes(&short),
+            Err(CryptoError::MalformedSignature {
+                algorithm: "kes_sum6",
+                detail: "expected 448 bytes",
+            })
+        );
+
+        let long = vec![0u8; SUM6_KES_SIG_LEN + 1];
+        assert_eq!(
+            KesSignature::from_bytes(&long),
+            Err(CryptoError::MalformedSignature {
+                algorithm: "kes_sum6",
+                detail: "expected 448 bytes",
+            })
+        );
+    }
+
+    #[test]
+    fn verify_kes_signature_agrees_with_existing_verify_kes() {
+        use cardano_crypto::kes::{KesAlgorithm, Sum6Kes};
+
+        let seed = [0x77u8; 32];
+        let signing_key = Sum6Kes::gen_key_kes_from_seed_bytes(&seed).unwrap();
+        let vk_bytes = Sum6Kes::raw_serialize_verification_key_kes(
+            &Sum6Kes::derive_verification_key(&signing_key).unwrap(),
+        );
+        let mut vk_arr = [0u8; 32];
+        vk_arr.copy_from_slice(&vk_bytes);
+        let vk = KesVerificationKey(vk_arr);
+
+        let msg = b"agreement test";
+        let sig_raw = Sum6Kes::sign_kes(&(), 0, msg, &signing_key).unwrap();
+        let sig_bytes = Sum6Kes::raw_serialize_signature_kes(&sig_raw);
+        let kes_sig = KesSignature::from_bytes(&sig_bytes).unwrap();
+        let period = KesPeriod::new(0).unwrap();
+
+        // Positive: both paths accept the same valid (vk, period, msg, sig).
+        let legacy_ok = verify_kes(&vk, period, &sig_bytes, msg).unwrap();
+        assert!(legacy_ok);
+        verify_kes_signature(&vk, period, msg, &kes_sig).unwrap();
+
+        // Negative on wrong message: legacy returns Ok(false), wrapper returns
+        // Err(VerificationFailed) — both classify the same outcome as invalid.
+        let legacy_bad = verify_kes(&vk, period, &sig_bytes, b"wrong msg").unwrap();
+        assert!(!legacy_bad);
+        assert_eq!(
+            verify_kes_signature(&vk, period, b"wrong msg", &kes_sig),
+            Err(CryptoError::VerificationFailed {
+                algorithm: "kes_sum6"
+            })
+        );
     }
 }

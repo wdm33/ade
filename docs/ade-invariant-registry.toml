@@ -23,7 +23,7 @@ id = "T-DET-01"
 tier = "true"
 statement = "Same canonical inputs -> same authoritative bytes (per Byte Authority Model)"
 source = "Project constitution §2, Byte Authority Model §3"
-cross_ref = ["CN-WIRE-01", "CN-WIRE-02", "CN-LEDGER-02", "CN-CONS-01", "DC-CONS-06", "DC-TXV-01", "DC-VAL-01", "DC-TXV-07", "DC-LEDGER-08", "DC-LEDGER-09", "DC-LEDGER-10"]
+cross_ref = ["CN-WIRE-01", "CN-WIRE-02", "CN-LEDGER-02", "CN-CONS-01", "DC-CONS-06", "DC-TXV-01", "DC-VAL-01", "DC-TXV-07", "DC-LEDGER-08", "DC-LEDGER-09", "DC-LEDGER-10", "DC-CRYPTO-03", "DC-CRYPTO-04", "DC-CONS-13", "DC-CONS-14"]
 code_locus = "crates/ade_ledger/src/rules.rs, crates/ade_core/src/consensus/encoding.rs, crates/ade_runtime/src/consensus/chain_selector.rs, crates/ade_testkit/src/consensus/stream_replay.rs, crates/ade_testkit/src/validity/replay.rs (block_validity verdict-surface replay over the Conway-576 positive corpus; PHASE4-B1-S6), crates/ade_testkit/src/tx_validity/ (tx-validity verdict-surface replay: replay_tx_validity drives the BLUE tx_validity over every extracted Conway-576 corpus tx twice and the surfaces are byte-identical; PHASE4-B2-S3)"
 tests = ["apply_block_deterministic", "byron_determinism", "shelley_determinism", "allegra_determinism", "mary_determinism", "alonzo_determinism", "babbage_determinism", "conway_determinism", "layout_is_stable", "roundtrip_empty_state", "roundtrip_genesis_state", "roundtrip_populated_state", "roundtrip_chain_event_all_variants", "roundtrip_chain_selection_reject_all_variants", "op_cert_counter_map_iteration_is_deterministic", "synthetic_session_replays_identically", "synthetic_session_event_kinds_match_corpus", "synthetic_session_final_state_matches_corpus", "op_cert_regression_header_rejected_mid_stream", "verdict_stream_replays_identically", "tx_verdict_stream_replays_identically"]
 ci_script = "ci/ci_check_forbidden_patterns.sh, ci/ci_check_ledger_determinism.sh, ci/ci_check_consensus_closed_enums.sh"
@@ -38,7 +38,7 @@ id = "T-ENC-01"
 tier = "true"
 statement = "All persisted/hashed/transmitted data uses canonical encoding"
 source = "Project constitution §2"
-cross_ref = ["CN-WIRE-01", "CN-WIRE-02", "DC-VAL-06"]
+cross_ref = ["CN-WIRE-01", "CN-WIRE-02", "DC-VAL-06", "DC-CONS-16"]
 code_locus = "crates/ade_codec/src/preserved.rs, crates/ade_ledger/src/block_validity/header_input.rs (block body hash computed over preserved CBOR segment bytes, never re-encoded; PHASE4-B1-S4); crates/ade_ledger/src/tx_validity/phase1.rs (decode_tx: tx_id = blake2b_256 of the body slice lifted byte-for-byte from the full tx CBOR, never a re-encode; PHASE4-B2-S2)"
 tests = ["preserved_wire_bytes_returned_exactly", "altered_body_rejected_by_hash_binding", "tx_id_uses_preserved_bytes"]
 ci_script = "ci/ci_check_hash_uses_wire_bytes.sh"
@@ -262,7 +262,7 @@ id = "T-KEY-01"
 tier = "true"
 statement = "Signing and private key operations confined to shell; verification in core"
 source = "Project constitution §2, audit #20"
-cross_ref = ["CN-CRYPTO-01"]
+cross_ref = ["CN-CRYPTO-01", "DC-CRYPTO-03", "DC-CRYPTO-04", "DC-CRYPTO-05"]
 code_locus = ""
 tests = []
 ci_script = ""
@@ -842,7 +842,7 @@ id = "DC-MEM-03"
 tier = "derived"
 statement = "Tx ingress reduces to a closed IngressEvent before BLUE mempool admission; the source variant is evidence/policy/replay metadata only and MUST NOT change the validity verdict."
 source = "Project constitution §3, T-CORE-01 (closed semantic surfaces), DC-MEM-01"
-cross_ref = ["DC-MEM-01"]
+cross_ref = ["DC-MEM-01", "DC-LEDGER-12"]
 code_locus = "crates/ade_ledger/src/mempool/ingress.rs (IngressEvent, IngressSource, mempool_ingress)"
 tests = ["ingress_preserves_tx_bytes_verbatim", "ingress_source_is_closed_two_variants", "ingress_admits_valid_tx_via_n2n", "ingress_admits_valid_tx_via_n2c", "ingress_rejects_invalid_tx_no_false_accept", "ingress_source_does_not_change_verdict_valid", "ingress_source_does_not_change_verdict_adversarial", "ingress_equals_direct_admit_on_synthetic_corpus"]
 ci_script = "ci/ci_check_mempool_ingress_closure.sh"
@@ -855,7 +855,7 @@ id = "DC-MEM-04"
 tier = "derived"
 statement = "Replaying the same ordered ingress trace against the same base ledger state produces a byte-identical sequence of (MempoolState, AdmitOutcome) pairs."
 source = "Project constitution §3, T-DET-01, DC-MEM-01"
-cross_ref = ["DC-MEM-01"]
+cross_ref = ["DC-MEM-01", "DC-LEDGER-12"]
 code_locus = "crates/ade_testkit/src/mempool/ingress_replay.rs; crates/ade_ledger/src/mempool/ingress.rs; crates/ade_ledger/src/mempool/canonicalize.rs"
 tests = ["ingress_admit_equals_direct_admit_on_b_track_corpus", "b_track_adversarial_rejections_preserved_through_ingress", "ingress_trace_replay_byte_identical", "dependent_pair_through_ingress_admits_b_after_a", "ingress_trace_source_invariant_n2n_vs_n2c", "multi_peer_round_robin_by_sorted_peer_id", "unsorted_input_canonicalizes_identically_to_sorted_input", "two_interleavings_replay_byte_identical"]
 ci_script = "ci/ci_check_mempool_ingress_replay.sh"
@@ -899,7 +899,7 @@ id = "CN-WIRE-01"
 tier = "true"
 statement = "Hash-critical original bytes must be preserved and used on all hash/signature-critical paths"
 source = "classification_table.md §A"
-cross_ref = ["T-DET-01", "T-ENC-01"]
+cross_ref = ["T-DET-01", "T-ENC-01", "CN-CONS-06"]
 code_locus = ""
 tests = []
 ci_script = ""
@@ -1182,7 +1182,7 @@ id = "CN-CONS-01"
 tier = "true"
 statement = "Chain selection must be deterministic for the same candidate chains and protocol observables"
 source = "classification_table.md §D"
-cross_ref = ["T-DET-01", "T-CONS-01", "DC-CONS-03", "DC-CONS-05", "DC-CONSENSUS-01"]
+cross_ref = ["T-DET-01", "T-CONS-01", "DC-CONS-03", "DC-CONS-05", "DC-CONSENSUS-01", "DC-CONS-15"]
 code_locus = "crates/ade_core/src/consensus/fork_choice.rs, crates/ade_core/src/consensus/candidate.rs"
 tests = ["replay_is_deterministic", "reject_reason_bytes_are_stable", "higher_block_no_wins", "equal_block_no_tiebreaker_decides"]
 ci_script = "ci/ci_check_no_density_in_fork_choice.sh"
@@ -1890,7 +1890,7 @@ id = "DC-CONS-03"
 tier = "derived"
 statement = "Praos chain selection ordering: block number first, then Praos TiebreakerView (slot, issuer, op-cert issue number, VRF output). Density-based ordering is reserved for Genesis/catch-up and must not be used for caught-up Praos fork-choice."
 source = "Project constitution §3, ouroboros-consensus (pin at code-lock); CN-CONS-01"
-cross_ref = ["DC-CONSENSUS-01", "CN-CONS-01"]
+cross_ref = ["DC-CONSENSUS-01", "CN-CONS-01", "DC-CONS-15"]
 code_locus = "crates/ade_core/src/consensus/fork_choice.rs, crates/ade_core/src/consensus/candidate.rs, crates/ade_runtime/src/consensus/candidate_fragment.rs"
 tests = ["consensus::fork_choice::tests::tiebreaker_prefer_lower_slot_wins", "consensus::fork_choice::tests::tiebreaker_prefer_higher_op_cert_wins_on_equal_slot_and_issuer", "consensus::fork_choice::tests::tiebreaker_prefer_lower_vrf_value_wins_on_full_tie", "consensus::fork_choice::tests::no_candidates_returns_no_candidates_error", "consensus::fork_choice::tests::equal_to_current_keeps_current_via_tiebreaker_loss", "consensus::candidate::tests::tiebreaker_view_eq_is_field_wise", "consensus::candidate::tests::candidate_fragment_carries_anchor_block_no", "higher_block_no_wins", "equal_block_no_tiebreaker_decides", "fork_before_immutable_tip_rejected", "exceeded_rollback_rejected", "tiebreaker_loss_keeps_current", "replay_is_deterministic", "reject_reason_bytes_are_stable", "no_candidates_returns_error"]
 ci_script = "ci/ci_check_no_density_in_fork_choice.sh, ci/ci_check_no_chaindb_in_consensus_blue.sh, ci/ci_check_no_float_in_consensus.sh, ci/ci_check_consensus_closed_enums.sh"
@@ -2240,3 +2240,185 @@ status = "enforced"
 introduced_in = "PROPOSAL-PROCEDURES-DECODE"
 strengthened_in = []
 open_obligation = "voting_procedures (tx body key 19) closure is the natural sibling cluster: same opaque-bytes shape, same pressure, deliberately deferred per OQ-1 — this rule does NOT cover it. ParameterChange.update and NewConstitution.raw nested opacities are likewise deferred per OQ-2/OQ-3; they are future strengthened_in candidates if/when those sub-grammars are closed. Typed RewardAccount for proposal_procedure.return_addr is a separate fidelity decision (OQ-4)."
+
+# =============================================================================
+# PHASE4-N-C Block Production Closure (declared 2026-05-25 from
+# docs/planning/phase4-n-c-invariants.md). N-C is the producer half of the
+# bounty Tier-1 requirement (validation + block-production both required);
+# validation closed across N-A, N-B, N-D, N-E and B1/B2/B3/B4/B5.
+#
+# Key boundary: private-key custody and signing operations live in RED/GREEN,
+# never BLUE. BLUE consumes signed artifacts (VrfProof, KesSignature, OpCert)
+# via canonical ProducerTick and proves consistency. Replay captures signed
+# artifacts; replay never invokes RED signing.
+#
+# status flips from "declared" -> "enforced" as slices land tests + ci_scripts.
+# =============================================================================
+
+[[rules]]
+id = "DC-CRYPTO-03"
+tier = "derived"
+statement = "VRF signing transcript equivalence and verification symmetry. For canonical inputs (slot, epoch_nonce, vrf_signing_key, vrf_role) the RED signer produces a VrfProof byte-identical to cardano-node's reference output, and the emitted VrfProof verifies under ade_crypto::vrf::verify_praos_vrf with the matching verification key. Private-key execution is RED-shell confined; BLUE consumes the VrfProof as a captured signed artifact."
+source = "docs/planning/phase4-n-c-invariants.md §1 (NC-VRF-1/2/3); IETF draft-irtf-cfrg-vrf-03 (Praos VRF)"
+cross_ref = ["T-DET-01", "T-KEY-01", "DC-CRYPTO-04", "OP-OPS-04"]
+code_locus = "crates/ade_runtime/src/producer/signing.rs (vrf_prove)"
+tests = ["vrf_prove_matches_reference_vectors", "vrf_prove_then_verify_round_trip"]
+ci_script = "ci/ci_check_private_key_custody.sh"
+status = "enforced"
+introduced_in = "PHASE4-N-C"
+strengthened_in = []
+
+[[rules]]
+id = "DC-CRYPTO-04"
+tier = "derived"
+statement = "KES signing transcript equivalence and verification symmetry. For canonical inputs (kes_secret, period, msg) the RED signer produces a KesSignature byte-identical to reference and verifying under ade_crypto::kes::verify_kes. Private-key execution is RED-shell confined; BLUE consumes the KesSignature as a captured signed artifact."
+source = "docs/planning/phase4-n-c-invariants.md §1 (NC-KES-1); Cardano Sum6KES specification (depth-6 sum composition over ed25519)"
+cross_ref = ["T-DET-01", "T-KEY-01", "DC-CRYPTO-03", "DC-CRYPTO-05", "DC-CONS-11", "OP-OPS-04"]
+code_locus = "crates/ade_runtime/src/producer/signing.rs (kes_sign); crates/ade_crypto/src/kes.rs (KesSignature, verify_kes_signature)"
+tests = ["kes_sign_matches_reference_vectors", "kes_sign_then_verify_round_trip", "kes_signature_from_bytes_round_trips", "verify_kes_signature_agrees_with_existing_verify_kes"]
+ci_script = "ci/ci_check_private_key_custody.sh"
+status = "enforced"
+introduced_in = "PHASE4-N-C"
+strengthened_in = []
+
+[[rules]]
+id = "DC-CRYPTO-05"
+tier = "derived"
+statement = "KES evolution discipline: evolve(k_i) -> k_{i+1} is one-way. The evolved key signs period i+1 and MUST NOT sign for period i. RED kes_sign is forbidden when the requested period > current_period + evolutions_remaining; kes_evolve is forbidden when to < from or to > from + evolutions_remaining. Forward secrecy is a RED-shell discipline; BLUE has no recovery path if RED violates it."
+source = "docs/planning/phase4-n-c-invariants.md §1 (NC-KES-2); Cardano Sum6KES specification"
+cross_ref = ["DC-CRYPTO-04", "T-KEY-01", "OP-OPS-04"]
+code_locus = "crates/ade_runtime/src/producer/signing.rs (kes_update, kes_sign)"
+tests = ["kes_update_chain_matches_reference", "kes_sign_rejects_period_past_evolutions_remaining", "kes_update_rejects_backwards_evolution"]
+ci_script = "ci/ci_check_private_key_custody.sh"
+status = "enforced"
+introduced_in = "PHASE4-N-C"
+strengthened_in = []
+
+[[rules]]
+id = "DC-CONS-11"
+tier = "derived"
+statement = "OpCert kes_period field equals the KES period at the forged slot under an operator-supplied anchor. period_at_slot(slot, anchor) = (slot - anchor) / slots_per_kes_period (integer floor). BLUE rejects header/opcert combinations with mismatched periods at forge time. BLUE MUST NOT infer the anchor from wall-clock or filesystem state; the anchor is a pure input on the canonical ProducerTick."
+source = "docs/planning/phase4-n-c-invariants.md §1 (NC-KES-3/4); Praos / Shelley operational-certificate specification"
+cross_ref = ["DC-CRYPTO-04", "DC-CONS-12"]
+code_locus = ""
+tests = []
+ci_script = ""
+status = "declared"
+introduced_in = "PHASE4-N-C"
+strengthened_in = []
+
+[[rules]]
+id = "DC-CONS-12"
+tier = "derived"
+statement = "OpCert serial counter is strictly monotonically increasing per (cold-key, node). BLUE rejects regression or repetition at the RED->BLUE boundary: opcert_validate fails when prev_counter is Some(c) and opcert.counter <= c. RED feeds the value from durable per-node state; BLUE never trusts an in-memory-only counter."
+source = "docs/planning/phase4-n-c-invariants.md §1 (NC-OC-2); Cardano operational-certificate counter discipline"
+cross_ref = ["DC-CONS-11", "OP-OPS-04"]
+code_locus = ""
+tests = []
+ci_script = ""
+status = "declared"
+introduced_in = "PHASE4-N-C"
+strengthened_in = []
+
+[[rules]]
+id = "DC-CONS-13"
+tier = "derived"
+statement = "Forge is pure given a canonical ProducerTick. forge_block has no wall-clock, no rand, no HashMap iteration, no I/O, no locale, and no ambient state. All inputs flow through the ProducerTick value (slot, ledger_state, mempool_snapshot, pparams, vrf_proof, kes_sig, opcert). Strengthens T-DET-01 for the producer authority surface."
+source = "docs/planning/phase4-n-c-invariants.md §1 (NC-FORGE-1); Project constitution §2 (T-DET-01, Functional Core / Imperative Shell)"
+cross_ref = ["T-DET-01", "DC-CONS-14", "DC-CONS-15", "DC-CONS-16", "DC-LEDGER-12", "CN-CONS-07"]
+code_locus = ""
+tests = []
+ci_script = ""
+status = "declared"
+introduced_in = "PHASE4-N-C"
+strengthened_in = []
+
+[[rules]]
+id = "DC-CONS-14"
+tier = "derived"
+statement = "Forge byte-equality across replays. For two replays of an identical canonical ProducerTick stream over the same initial LedgerState, forge_block produces a byte-identical Vec<ForgedBlockBytes>. Replay uses captured signed artifacts (vrf_proof, kes_sig, opcert) and MUST NOT invoke RED signing; private-key material does not appear in replay corpora."
+source = "docs/planning/phase4-n-c-invariants.md §1 (NC-FORGE-2), §4"
+cross_ref = ["T-DET-01", "DC-CONS-13"]
+code_locus = ""
+tests = []
+ci_script = ""
+status = "declared"
+introduced_in = "PHASE4-N-C"
+strengthened_in = []
+
+[[rules]]
+id = "DC-CONS-15"
+tier = "derived"
+statement = "Forge is invoked only when leader-check passes. forge_block is a forbidden transition for ticks where is_leader(state, vrf_output, sigma, asc) == false at tick.slot. The producer uses the same is_leader / check_leader_claim functions the validator uses; no producer-side fork of the leader-check formula is permitted."
+source = "docs/planning/phase4-n-c-invariants.md §1 (NC-FORGE-3, NC-VRF-3); Praos / ouroboros-consensus leader-check"
+cross_ref = ["CN-CONS-01", "DC-CONS-03", "DC-CONS-13"]
+code_locus = ""
+tests = []
+ci_script = ""
+status = "declared"
+introduced_in = "PHASE4-N-C"
+strengthened_in = []
+
+[[rules]]
+id = "DC-CONS-16"
+tier = "derived"
+statement = "Forged header.body_hash MUST equal blake2b_256(forged_body_wire_bytes), where forged_body_wire_bytes are produced by the single Cardano-compatible canonical block-body encoder used by the validator hash path. The producer and validator hash the same bytes through the same encoder. Strengthens T-ENC-01 for the producer surface; closes any potential producer/validator encoder bifurcation."
+source = "docs/planning/phase4-n-c-invariants.md §1 (NC-FORGE-5); Project constitution §2 (T-ENC-01, Byte Authority Model)"
+cross_ref = ["T-ENC-01", "DC-CONS-13", "CN-CONS-07"]
+code_locus = ""
+tests = []
+ci_script = ""
+status = "declared"
+introduced_in = "PHASE4-N-C"
+strengthened_in = []
+
+[[rules]]
+id = "DC-LEDGER-12"
+tier = "derived"
+statement = "Every tx in a forged block is admissible via ade_ledger::mempool::admit against the base ledger state, in the snapshot's canonical accumulating order. No tx in a forged block bypasses mempool validation. Forge MUST NOT permute, fabricate, or skip the snapshot's canonical accumulating order."
+source = "docs/planning/phase4-n-c-invariants.md §1 (NC-FORGE-4); PHASE4-N-E mempool admit closure"
+cross_ref = ["DC-MEM-03", "DC-MEM-04", "DC-CONS-13"]
+code_locus = ""
+tests = []
+ci_script = ""
+status = "declared"
+introduced_in = "PHASE4-N-C"
+strengthened_in = []
+
+[[rules]]
+id = "CN-CONS-06"
+tier = "release"
+statement = "Cross-impl acceptance: blocks forged by Ade are accepted by cardano-node when delivered via N2N block-fetch / chain-sync. Evidence is operator-action: a sustained-window live_block_production_session against a private cardano-node capturing CE-N-C-LIVE_<date>.log. Conditional on testnet stake / SPO registration; if unavailable at cluster close the live half is marked blocked_until_operator_stake_available, not deferred."
+source = "docs/planning/phase4-n-c-invariants.md §1 (NC-LIVE-1); bounty acceptance test (validation + block-production both required)"
+cross_ref = ["CN-CONS-07", "CN-WIRE-01", "OP-OPS-05"]
+status = "declared"
+strengthened_in = []
+attack_rationale = "Cardano-specific: cross-impl acceptance is the bounty's only proof that derived compatibility holds end-to-end."
+evidence_notes = "Release / interop evidence, not a universal law. CE-N-B-6 / CE-N-E-6 establish the operator-action live-evidence pattern this rule reuses."
+
+[[rules]]
+id = "CN-CONS-07"
+tier = "release"
+statement = "Self-acceptance bridge: a forged block is NOT eligible for RED broadcast unless Ade's own header validator (PHASE4-N-B path) and body validator (PHASE4-B1 path) accept it under the same slot, era, and context. Self-acceptance failure halts the producer deterministically. RED broadcast is gated on the BLUE self-accept verdict."
+source = "docs/planning/phase4-n-c-invariants.md §1 (NC-SELF-1)"
+cross_ref = ["CN-CONS-06", "DC-CONS-13", "DC-CONS-16", "OP-OPS-05"]
+status = "declared"
+strengthened_in = []
+attack_rationale = "Prevents Ade from broadcasting blocks its own validator would reject — eliminates producer/validator drift as a release failure mode."
+evidence_notes = "Cardano-specific only in that the validators it wraps are Ade's Cardano-block validators (PHASE4-N-B + PHASE4-B1). The bridge pattern is general: producer authority must agree with validator authority before bytes leave BLUE."
+
+[[rules]]
+id = "OP-OPS-04"
+tier = "operational"
+statement = "Operator-supplied keys. Ade does NOT generate cold / KES / VRF keys. Operator provides cardano-cli-format key files (*.skey, opcert) loaded by ade_runtime::producer::keys; private-key material never crosses into BLUE. Key generation remains a cardano-cli operator workflow. Mechanical enforcement of the RED-only custody invariant is provided by ci/ci_check_private_key_custody.sh (closure proof for CE-N-C-1; cross-referenced by DC-CRYPTO-03/04/05)."
+source = "docs/planning/phase4-n-c-invariants.md §7 (OQ1)"
+cross_ref = ["DC-CRYPTO-03", "DC-CRYPTO-04", "DC-CRYPTO-05", "DC-CONS-12"]
+status = "declared"
+
+[[rules]]
+id = "OP-OPS-05"
+tier = "operational"
+statement = "Slot-deadline forging SLA. Forge + self-accept + N2N hand-off must complete within the slot's deadline (1s on mainnet, smaller on testnets). Operational, not constitutional: missing the deadline costs a slot but does not violate a hash-critical invariant."
+source = "docs/planning/phase4-n-c-invariants.md §7 (OQ9)"
+cross_ref = ["CN-CONS-06", "CN-CONS-07"]
+status = "declared"

@@ -12,9 +12,15 @@ ade_codec = { path = "../ade_codec" }
 # See docs/clusters/PHASE4-N-D/S-34.md §O-34.1.
 # Pure Rust, ACID, single-file. MIT/Apache.
 redb = "2"
+serde = { version = "1", features = ["derive"] }
 serde_json = "1"
+# RED producer signing (PHASE4-N-C S1). Same feature set as ade_crypto:
+# no new VRF/KES algorithms are introduced via features in this crate.
+cardano-crypto = { version = "1.0", default-features = false, features = ["vrf-draft03", "kes-sum", "dsign"] }
+# Cold-key (Ed25519) derivation in RED producer/signing. Matches the
+# ed25519-dalek version already used by ade_crypto.
+ed25519-dalek = "2"
 
 [dev-dependencies]
 tempfile = "3"
 ade_testkit = { path = "../ade_testkit" }
-cardano-crypto = { version = "1.0", default-features = false, features = ["vrf-draft03"] }

@@ -26,6 +26,9 @@ pub use ed25519::{
     Ed25519VerificationKey,
 };
 pub use error::CryptoError;
-pub use kes::{verify_kes, verify_opcert, KesPeriod, KesVerificationKey, OperationalCertData};
+pub use kes::{
+    verify_kes, verify_kes_signature, verify_opcert, KesPeriod, KesSignature, KesVerificationKey,
+    OperationalCertData, SUM6_KES_SIG_LEN,
+};
 pub use traits::HashAlgorithm;
 pub use vrf::{verify_vrf, VrfOutput, VrfProof, VrfVerificationKey};

@@ -18,6 +18,6 @@ tar = "0.4"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 toml = "0.8"
-
-[dev-dependencies]
-cardano-crypto = { version = "1.0", default-features = false, features = ["vrf-draft03"] }
+# Same feature set as ade_crypto: producer reference vectors are
+# materialized from the deterministic cardano-crypto API.
+cardano-crypto = { version = "1.0", default-features = false, features = ["vrf-draft03", "kes-sum", "dsign"] }

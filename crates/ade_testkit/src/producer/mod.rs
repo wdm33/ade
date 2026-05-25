@@ -5,9 +5,9 @@
 // - Explicit state transitions only
 // - Canonical serialization for all persisted/hashed data
 
-#![deny(unsafe_code)]
+//! GREEN test harness for the PHASE4-N-C producer surface.
+//!
+//! Currently exposes only `reference_vectors` (S1). Replay harness and
+//! cross-impl adapter follow in later slices (S3, S4, S7).
 
-pub mod chaindb;
-pub mod consensus;
-pub mod producer;
-pub mod recovery;
+pub mod reference_vectors;
