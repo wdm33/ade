@@ -10,4 +10,6 @@
 //! Currently exposes only `reference_vectors` (S1). Replay harness and
 //! cross-impl adapter follow in later slices (S3, S4, S7).
 
+pub mod fixtures;
 pub mod reference_vectors;
+pub mod replay;

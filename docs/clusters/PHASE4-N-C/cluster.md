@@ -268,10 +268,16 @@ runs.
 For every module touched / created by this cluster:
 
 **BLUE (deterministic, authoritative):**
-- `ade_core::consensus::forge` (new — S3, S4)
-- `ade_core::consensus::opcert_validate` (new — S2)
-- `ade_core::consensus::self_accept` (new — S5)
-- `ade_core::consensus::producer_state` (new — S3)
+- `ade_ledger::producer::forge` (new — S3, S4)
+  *(originally planned at `ade_core::consensus::forge`; relocated to
+  `ade_ledger::producer` because `ade_ledger` already depends on
+  `ade_core` and the forge body needs `ade_ledger::{state::LedgerState,
+  mempool::admit::*}`. BLUE classification unchanged. Correction
+  recorded in `docs/clusters/PHASE4-N-C/N-C-S3.md` §Host-crate decision.)*
+- `ade_core::consensus::opcert_validate` (S2 — landed)
+- `ade_ledger::producer::self_accept` (new — S5; same host-crate
+  correction as forge)
+- `ade_ledger::producer::state` (new — S3; carries `ProducerTick`)
 - `ade_codec::shelley::block::encode_block_body` (existing, lifted
   to single-authority status — S4)
 - `ade_crypto::vrf::verify_*` / `ade_crypto::kes::verify_*` /

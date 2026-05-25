@@ -93,3 +93,35 @@ pub fn admit(mempool: &MempoolState, tx_cbor: &[u8]) -> (MempoolState, AdmitOutc
         }
     }
 }
+
+#[cfg(test)]
+#[allow(clippy::unwrap_used)]
+mod tests {
+    use super::*;
+    use crate::state::LedgerState;
+    use ade_types::CardanoEra;
+
+    /// Pin admit's prefix property as documentation-as-test:
+    /// admitting a malformed slice leaves the mempool's accepted list
+    /// untouched, so two sequential rejects compose with no permutation
+    /// of the (vacuous) accumulating order. Re-validation runs against
+    /// the CURRENT accumulating state — never a stale snapshot — which
+    /// is the prefix-respecting property the forge replay relies on
+    /// (DC-LEDGER-12).
+    #[test]
+    fn admit_prefix_property_documented() {
+        let base = LedgerState::new(CardanoEra::Conway);
+        let m0 = MempoolState::new(base);
+        let bad = vec![0x80u8];
+
+        let (m1, o1) = admit(&m0, &bad);
+        assert!(matches!(o1, AdmitOutcome::Rejected { .. }));
+        assert_eq!(m1.accepted(), m0.accepted());
+        assert_eq!(m1.accumulating(), m0.accumulating());
+
+        let (m2, o2) = admit(&m1, &bad);
+        assert!(matches!(o2, AdmitOutcome::Rejected { .. }));
+        assert_eq!(m2.accepted(), m0.accepted());
+        assert_eq!(m2.accumulating(), m0.accumulating());
+    }
+}

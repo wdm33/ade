@@ -9,6 +9,7 @@ pub mod block;
 pub mod cert;
 pub mod opcert;
 pub mod tx;
+pub mod tx_components;
 
 use crate::error::CodecError;
 use crate::preserved::PreservedCbor;

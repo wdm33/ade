@@ -32,6 +32,7 @@ pub mod mempool;
 pub mod phase;
 pub mod plutus_eval;
 pub mod pparams;
+pub mod producer;
 pub mod rational;
 pub mod rules;
 pub mod scripts;

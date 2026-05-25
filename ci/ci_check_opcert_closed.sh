@@ -149,6 +149,7 @@ fi
 SANCTIONED_VALIDATE_DIRS=(
     "$REPO_ROOT/crates/ade_core/src/consensus/"
     "$REPO_ROOT/crates/ade_runtime/src/producer/"
+    "$REPO_ROOT/crates/ade_ledger/src/producer/"
 )
 
 # Collect all callsites across the workspace, then filter.
