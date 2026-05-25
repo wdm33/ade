@@ -185,25 +185,34 @@ crate that already houses the PHASE4-N-B follow-mode bridge).
 
 ## Cluster status
 
-**Tier-1 authority closed; live N2N evidence binary complete; live N2C
-evidence deferred to node-binary cluster as CE-NODE-N2C-LTX.**
+**Tier-1 authority closed; CE-N-E-6 live N2N evidence captured; live
+N2C evidence deferred to node-binary cluster as CE-NODE-N2C-LTX.**
 
 Mechanical:
   - CE-N-E-1, CE-N-E-2, CE-N-E-3, CE-N-E-4, CE-N-E-5 — CI-green.
   - CE-N-E-6 — adapter mechanical evidence CI-green
     (`tx_submission_ingress`, `local_tx_submission_ingress`,
     `n2n_and_n2c_bridges_produce_identical_outcomes`); live-wire
-    evidence requires an operator `--connect` run of
-    `live_tx_submission_session` to capture
-    `CE-N-E-6_<date>.log`.
+    evidence captured at
+    `docs/clusters/PHASE4-N-E/CE-N-E-6_2026-05-25.log` via a
+    sustained-window run of `live_tx_submission_session` against the
+    preprod relay: N2N handshake accepted at v15, tx-submission2
+    mini-protocol opened, peer-originated `RequestTxIds` decoded and
+    drove the BLUE `tx_submission2_transition` (Idle → TxIds…)
+    without `IllegalTransition` / `MalformedMessage`, 97s active
+    session ending in peer-side connection reset (expected: we held
+    the peer's blocking request open without txs to offer).
+    `[bridge] tx_bytes=0` — bulk tx ingestion in this direction is
+    opportunistic per the honest-scope framing and joins
+    CE-NODE-N2C-LTX in the deferral.
 
 Deferred:
   - CE-N-E-7 — see cross-cluster obligation below. The cluster
     documents do NOT claim CE-N-E-7 as closed.
 
-Cluster directory stays in `docs/clusters/PHASE4-N-E/` (not yet
-archived to `completed/`) until the CE-N-E-6 evidence log is
-committed.
+Cluster directory **ready to archive** to `docs/clusters/completed/`
+in the next grounding-refresh commit (CE-N-E-6 evidence log
+committed; no further code work pending in this cluster).
 
 ## Deferred / cross-cluster obligation (CE-NODE-N2C-LTX)
 

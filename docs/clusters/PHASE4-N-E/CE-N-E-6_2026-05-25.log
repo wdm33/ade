@@ -1,0 +1,9 @@
+[live] tx-submission2 probe (RED, outbound client; protocol id=4) network=preprod magic=1 peer=<preprod-relay> max_seconds=600 max_frames=1000
+[live] handshake accepted at v15
+[live] sent Init -> local state Idle
+[live] read ended after 1 frame(s): Connection reset by peer (os error 104)
+[live] session window: 2026-05-25T01:21:38Z elapsed=97s
+[live] frames_received=1 requests_ids=1 requests_txs=0 replies_ids=0 replies_txs=0 tx_bytes_observed=0 total_tx_bytes_size=0
+[bridge] tx_bytes=0 (any tx delivery from the peer in this direction is opportunistic — see header)
+[agreement] bridge ≡ direct tx_validity for 0/0 txs (vacuously true when tx_bytes=0; see header for the deferral)
+[agreement] divergences: 0

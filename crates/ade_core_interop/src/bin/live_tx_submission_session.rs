@@ -198,7 +198,8 @@ async fn run_live(args: &[String]) -> io::Result<()> {
     let mut txs_replies: u64 = 0;
     let mut total_tx_bytes_observed: u64 = 0;
 
-    let deadline = Instant::now() + Duration::from_secs(cfg.max_seconds);
+    let session_start = Instant::now();
+    let deadline = session_start + Duration::from_secs(cfg.max_seconds);
 
     while frames_received < cfg.max_frames {
         let now = Instant::now();
@@ -218,6 +219,13 @@ async fn run_live(args: &[String]) -> io::Result<()> {
         let payload = match read {
             Ok(Ok(p)) => p,
             Ok(Err(e)) => {
+                if e.kind() == io::ErrorKind::TimedOut {
+                    // Inner read_frame timed out — peer is holding the
+                    // connection idle (typical: it accepted our Init
+                    // and hasn't decided to ask for txs yet). Continue
+                    // until the outer deadline expires.
+                    continue;
+                }
                 log(
                     &mut transcript,
                     format!("[live] read ended after {frames_received} frame(s): {e}"),
@@ -225,13 +233,10 @@ async fn run_live(args: &[String]) -> io::Result<()> {
                 break;
             }
             Err(_) => {
-                // Inner read timed out — peer is probably holding a
-                // blocking RequestTxIds open with us in TxIdsBlocking;
-                // poll again until the outer deadline expires. This
-                // matches cardano-node's mempool-gossip cadence.
+                // Outer timeout — same continue rationale as inner.
                 log(
                     &mut transcript,
-                    "[live] tx-submission2 idle (peer holding blocking request); continuing".to_string(),
+                    "[live] tx-submission2 idle (peer holding open); continuing".to_string(),
                 );
                 sleep(Duration::from_millis(200)).await;
                 continue;
@@ -325,9 +330,9 @@ async fn run_live(args: &[String]) -> io::Result<()> {
     log(
         &mut transcript,
         format!(
-            "[live] session window: {} duration_actual={}s",
+            "[live] session window: {} elapsed={}s",
             utc_stamp_full(),
-            deadline.saturating_duration_since(Instant::now()).as_secs()
+            session_start.elapsed().as_secs()
         ),
     );
     log(
