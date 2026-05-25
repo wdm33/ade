@@ -36,6 +36,7 @@ pub mod pparams;
 pub mod producer;
 pub mod rational;
 pub mod receive;
+pub mod rollback;
 pub mod rules;
 pub mod scripts;
 pub mod shelley;

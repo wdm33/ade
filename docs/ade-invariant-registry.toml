@@ -2662,3 +2662,92 @@ status = "partial"
 cluster = "PHASE4-N-H"
 open_obligation = "blocked_until_operator_peer_available"
 evidence = ["Mechanical pre-condition closed by receive_pipeline_corpus_drive: every Conway-576 corpus block admits through the full receive pipeline; ChainDb tip matches expected (slot, hash); stored bytes equal corpus bytes byte-identically; LedgerState fingerprint changes on admission.", "Binary live_block_follow_session builds + starts in hermetic mode; --connect mode requires a private cardano-node peer (open_obligation).", "Procedure to flip status to enforced (operator captures log + commits) documented at docs/clusters/completed/PHASE4-N-H/CE-N-H-6_PROCEDURE.md — mirrors PHASE4-N-C/CE-N-C-8 and PHASE4-N-G/CE-N-G-8 patterns."]
+
+# =============================================================================
+# Ledger snapshot + replay-forward rollback — invariants sketched, cluster TBD
+# Sketch: docs/planning/ledger-snapshot-rollback-invariants.md
+# Status: "declared" — enforcement debt to be closed by slices in the
+# rollback cluster (PHASE4-N-I candidate). Closes DC-CONS-20 rollback-
+# side `open_obligation` on cluster final-slice merge.
+# =============================================================================
+
+[[rules]]
+id = "DC-CONS-21"
+tier = "derived"
+statement = """
+Snapshot encode/decode round-trip equivalence: for any reachable
+(LedgerState, PraosChainDepState), decode(encode(state)) yields a
+state whose ade_ledger::fingerprint::fingerprint matches the
+original's. Encoder is canonical (BTreeMap iteration, no HashMap,
+no floats, no wall-clock); encoded bytes start with a closed
+version tag and embed the source state's fingerprint for decode-
+side cross-check.
+"""
+source = "docs/planning/ledger-snapshot-rollback-invariants.md §1 (I-1, I-2, I-9)"
+cross_ref = ["T-ENC-01", "T-DET-01", "DC-CONS-22"]
+code_locus = ""
+tests = []
+ci_script = ""
+status = "declared"
+open_obligation = "persistent_ledger_snapshot_encoding_follow_on_cluster"
+notes = "PHASE4-N-I scope decision (2026-05-26): N-I ships an in-memory SnapshotReader; persistent on-disk encoding is carved out to a follow-on cluster because the full canonical LedgerState encoder is ~1500-2000 LoC of field-walk code (mirrors ade_ledger::fingerprint's structure) and is too large to ship in one slice without risking partial-implementation bugs. The in-memory scope still closes CN-STORE-07, DC-CONS-22, DC-STORE-07, and DC-CONS-20 fully; persistence across restarts is the follow-on cluster's deliverable."
+
+[[rules]]
+id = "DC-CONS-22"
+tier = "derived"
+statement = """
+Replay-forward correctness: given state_at_slot_S and the ordered
+block sequence blocks(S+1..=T) from ChainDb, the replay-forward
+driver yields a state whose fingerprint matches the state that
+would result from applying those blocks via
+apply_block_with_verdicts in normal forward operation. Snapshot+
+replay-forward is a pure cache for direct-apply; never an
+authoritative side path. Replay-forward MUST honor the unique
+epoch-boundary authority for any range crossing one (¬P-9).
+"""
+source = "docs/planning/ledger-snapshot-rollback-invariants.md §1 (I-3, I-4)"
+cross_ref = ["T-DET-01", "DC-CONS-21", "CN-STORE-07"]
+code_locus = ""
+tests = []
+ci_script = ""
+status = "declared"
+
+[[rules]]
+id = "CN-STORE-07"
+tier = "release"
+statement = """
+Single materialize authority for rolled-back state: the function
+that materializes (LedgerState, PraosChainDepState) at a target
+point uses ONLY one SnapshotStore lookup + ChainDb::iter_from_slot
++ apply_block_with_verdicts (+ apply_epoch_boundary when crossing).
+No bypass; no parallel rolled-back-state computation path. Mirror
+of CN-CONS-08 (admission gate) for the rollback path. Single-
+public-function discipline; type-level + CI grep enforcement.
+"""
+source = "docs/planning/ledger-snapshot-rollback-invariants.md §1 (I-5)"
+cross_ref = ["CN-CONS-08", "DC-CONS-20", "DC-CONS-22"]
+code_locus = ""
+tests = []
+ci_script = ""
+status = "declared"
+attack_rationale = "A parallel materializer can produce a rolled-back state inconsistent with what block_validity would compute, allowing peer-controlled state divergence."
+evidence_notes = "Enforcement is type-level: materialize_rolled_back_state is the sole pub fn returning the rolled-back state tuple. The function takes narrow read-only traits (SnapshotReader, BlockSource), not concrete chain stores — test-side and production-side go through the same single composition."
+
+[[rules]]
+id = "DC-STORE-07"
+tier = "derived"
+statement = """
+Snapshot cadence determinism: the decision to take a snapshot at
+slot S is a pure function of (slot, block_no, cadence_params,
+last_snapshot). Same canonical input chain history produces the
+same set of snapshot slot keys. Cadence is BLUE-structural; not
+operator-tunable in this cluster (operator-tunable cadence is out
+of scope until represented as anchored, replay-derivable runtime
+data).
+"""
+source = "docs/planning/ledger-snapshot-rollback-invariants.md §1 (I-8)"
+cross_ref = ["T-DET-01", "DC-PROTO-09"]
+code_locus = ""
+tests = []
+ci_script = ""
+status = "declared"
