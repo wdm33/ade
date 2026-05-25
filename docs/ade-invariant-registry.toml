@@ -2414,6 +2414,7 @@ statement = "Operator-supplied keys. Ade does NOT generate cold / KES / VRF keys
 source = "docs/planning/phase4-n-c-invariants.md §7 (OQ1)"
 cross_ref = ["DC-CRYPTO-03", "DC-CRYPTO-04", "DC-CRYPTO-05", "DC-CONS-12"]
 status = "declared"
+open_obligation = "Two N-C-S1 closure gaps require resolution before OP-OPS-04 flips to enforced: (a) ci/ci_check_constitution_coverage.sh forbids code_locus/tests/ci_script on tier='operational' while requiring them on status='enforced' — these are mutually unsatisfiable. Resolution at cluster-close: relax the validator to permit optional enforcement fields on operational tier when status='enforced'. (b) cardano-crypto 1.0.8 exposes gen_key_kes_from_seed_bytes but no raw_deserialize_signing_key_kes for Sum6Kes; the keys loader currently round-trips synthetic seed-encoded skeys but does not yet load real cardano-cli's 612-byte expanded-tree Sum6KES serialization. Resolution: either upstream a Sum6Kes deserializer, fork the parsing locally, or document the cardano-cli kes-skey conversion step in the operator workflow. CE-N-C-8 operator-action evidence must exercise whichever path closes."
 
 [[rules]]
 id = "OP-OPS-05"
