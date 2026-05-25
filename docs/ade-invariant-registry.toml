@@ -2407,14 +2407,14 @@ tier = "release"
 statement = "Self-acceptance bridge: a forged block is NOT eligible for RED broadcast unless Ade's own header validator (PHASE4-N-B path) and body validator (PHASE4-B1 path) accept it under the same slot, era, and context. Self-acceptance failure halts the producer deterministically. RED broadcast is gated on the BLUE self-accept verdict."
 source = "docs/planning/phase4-n-c-invariants.md §1 (NC-SELF-1)"
 cross_ref = ["CN-CONS-06", "DC-CONS-13", "DC-CONS-16", "OP-OPS-05"]
-code_locus = "crates/ade_ledger/src/producer/self_accept.rs (self_accept, AcceptedBlock, SelfAcceptError); crates/ade_ledger/src/block_validity/transition.rs (block_validity — single closed validator authority self_accept wraps)"
-tests = ["self_accept_accepts_freshly_forged_block", "self_accept_rejects_corrupted_body_hash", "self_accept_rejects_invalid_kes_signature", "self_accept_rejects_unbalanced_tx_in_body", "broadcast_callable_only_with_accept_verdict"]
-ci_script = "ci/ci_check_self_accept_gate.sh"
+code_locus = "crates/ade_ledger/src/producer/self_accept.rs (self_accept, AcceptedBlock, SelfAcceptError); crates/ade_ledger/src/block_validity/transition.rs (block_validity — single closed validator authority self_accept wraps); crates/ade_ledger/src/producer/served_chain.rs (ServedChainSnapshot, served_chain_admit — only AcceptedBlock values may enter the served-chain index; PHASE4-N-G S2 strengthening preserves the broadcast gate across the network seam)"
+tests = ["self_accept_accepts_freshly_forged_block", "self_accept_rejects_corrupted_body_hash", "self_accept_rejects_invalid_kes_signature", "self_accept_rejects_unbalanced_tx_in_body", "broadcast_callable_only_with_accept_verdict", "served_chain_admit_admits_corpus_block", "served_chain_admit_idempotent_on_byte_identity", "served_chain_admit_independent_of_order", "served_chain_snapshot_iteration_is_btreemap_ordered", "served_chain_block_bytes_accessor_returns_accepted_block_slice", "served_chain_range_bytes_returns_inclusive_window", "served_chain_fingerprint_replay_byte_identical"]
+ci_script = "ci/ci_check_self_accept_gate.sh, ci/ci_check_served_chain_closure.sh"
 status = "enforced"
 introduced_in = "PHASE4-N-C"
-strengthened_in = []
-attack_rationale = "Prevents Ade from broadcasting blocks its own validator would reject — eliminates producer/validator drift as a release failure mode."
-evidence_notes = "Cardano-specific only in that the validators it wraps are Ade's Cardano-block validators (PHASE4-N-B + PHASE4-B1). The bridge pattern is general: producer authority must agree with validator authority before bytes leave BLUE."
+strengthened_in = ["PHASE4-N-G"]
+attack_rationale = "Prevents Ade from broadcasting blocks its own validator would reject — eliminates producer/validator drift as a release failure mode. PHASE4-N-G strengthening: prevents the network seam from being an end-run around the gate; bytes that reach the wire must trace through AcceptedBlock -> ServedChainSnapshot."
+evidence_notes = "Cardano-specific only in that the validators it wraps are Ade's Cardano-block validators (PHASE4-N-B + PHASE4-B1). The bridge pattern is general: producer authority must agree with validator authority before bytes leave BLUE. N-G S2 extends the bridge into the producer-side server pump's read path."
 
 [[rules]]
 id = "OP-OPS-04"

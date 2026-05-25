@@ -347,6 +347,152 @@ mod tests {
     // this module, so we host the tests where the legitimate
     // self-accept corpus already exists.
 
+    // -----------------------------------------------------------------
+    // PHASE4-N-G S2: ServedChainSnapshot + served_chain_admit tests
+    // -----------------------------------------------------------------
+
+    fn pick_n_lightest(c: &ConwayValidityCorpus, n: usize) -> Vec<Vec<u8>> {
+        let mut idxs: Vec<usize> = (0..c.blocks.len()).collect();
+        idxs.sort_by_key(|&i| {
+            let (s, e) = inner_span(&c.blocks[i]);
+            e - s
+        });
+        idxs.into_iter().take(n).map(|i| c.blocks[i].clone()).collect()
+    }
+
+    fn admit_corpus_block(
+        served: crate::producer::ServedChainSnapshot,
+        bytes: &[u8],
+    ) -> crate::producer::ServedChainSnapshot {
+        let view = view(&corpus());
+        let schedule = schedule();
+        let ledger = ledger_at_576();
+        let chain_dep = state_with_eta0(corpus().epoch_nonce);
+        let accepted = self_accept(bytes, &ledger, &chain_dep, &schedule, &view)
+            .expect("corpus block self-accepts");
+        crate::producer::served_chain_admit(served, accepted)
+            .expect("served_chain_admit accepts validator-cleared block")
+    }
+
+    #[test]
+    fn served_chain_admit_admits_corpus_block() {
+        let bytes = pick_lightest(&corpus()).to_vec();
+        let snap = crate::producer::ServedChainSnapshot::new();
+        let snap = admit_corpus_block(snap, &bytes);
+        assert_eq!(snap.len(), 1);
+        // Look up the admitted bytes by re-deriving the key the way
+        // admit derives it.
+        let decoded = crate::block_validity::decode_block(&bytes).expect("decode");
+        let got = snap
+            .block_bytes(decoded.header_input.slot, &decoded.block_hash)
+            .expect("block present at derived key");
+        assert_eq!(got, &bytes[..]);
+    }
+
+    #[test]
+    fn served_chain_admit_idempotent_on_byte_identity() {
+        let bytes = pick_lightest(&corpus()).to_vec();
+        let snap = crate::producer::ServedChainSnapshot::new();
+        let after_first = admit_corpus_block(snap.clone(), &bytes);
+        let after_second = admit_corpus_block(after_first.clone(), &bytes);
+        assert_eq!(after_first, after_second);
+        assert_eq!(after_first.fingerprint(), after_second.fingerprint());
+        assert_eq!(after_second.len(), 1);
+    }
+
+    #[test]
+    fn served_chain_admit_independent_of_order() {
+        let blocks = pick_n_lightest(&corpus(), 3);
+        if blocks.len() < 2 {
+            // Corpus too small for an ordering test; skip silently.
+            return;
+        }
+        let s_forward = blocks.iter().fold(
+            crate::producer::ServedChainSnapshot::new(),
+            |s, b| admit_corpus_block(s, b),
+        );
+        let s_reverse = blocks.iter().rev().fold(
+            crate::producer::ServedChainSnapshot::new(),
+            |s, b| admit_corpus_block(s, b),
+        );
+        assert_eq!(s_forward.fingerprint(), s_reverse.fingerprint());
+    }
+
+    #[test]
+    fn served_chain_snapshot_iteration_is_btreemap_ordered() {
+        let blocks = pick_n_lightest(&corpus(), 3);
+        let snap = blocks.iter().fold(
+            crate::producer::ServedChainSnapshot::new(),
+            |s, b| admit_corpus_block(s, b),
+        );
+        let mut prev: Option<(ade_types::SlotNo, ade_types::Hash32)> = None;
+        for (slot, hash, _bytes) in snap.iter() {
+            if let Some((prev_slot, prev_hash)) = prev.as_ref() {
+                let curr = (slot, hash.clone());
+                let prev_tuple = (*prev_slot, prev_hash.clone());
+                assert!(
+                    prev_tuple <= curr,
+                    "iteration order must be BTreeMap-sorted: prev={prev_tuple:?} curr={curr:?}"
+                );
+            }
+            prev = Some((slot, hash.clone()));
+        }
+    }
+
+    #[test]
+    fn served_chain_block_bytes_accessor_returns_accepted_block_slice() {
+        let bytes = pick_lightest(&corpus()).to_vec();
+        let snap = crate::producer::ServedChainSnapshot::new();
+        let snap = admit_corpus_block(snap, &bytes);
+        let decoded = crate::block_validity::decode_block(&bytes).expect("decode");
+        let got = snap
+            .block_bytes(decoded.header_input.slot, &decoded.block_hash)
+            .expect("present");
+        // Byte-identical, not just structurally equal.
+        assert_eq!(got, &bytes[..]);
+        assert_eq!(got.len(), bytes.len());
+    }
+
+    #[test]
+    fn served_chain_range_bytes_returns_inclusive_window() {
+        let blocks = pick_n_lightest(&corpus(), 3);
+        if blocks.len() < 2 {
+            return;
+        }
+        let snap = blocks.iter().fold(
+            crate::producer::ServedChainSnapshot::new(),
+            |s, b| admit_corpus_block(s, b),
+        );
+        // Build a closed range over the full key extent.
+        let mut entries: Vec<(ade_types::SlotNo, ade_types::Hash32)> = snap
+            .iter()
+            .map(|(s, h, _)| (s, h.clone()))
+            .collect();
+        entries.sort();
+        let from = entries.first().expect("non-empty").clone();
+        let to = entries.last().expect("non-empty").clone();
+        let in_range: Vec<_> = snap
+            .range_bytes(from.clone(), to.clone())
+            .map(|(s, h, _)| (s, h.clone()))
+            .collect();
+        assert_eq!(in_range.len(), entries.len());
+        assert_eq!(in_range, entries);
+    }
+
+    #[test]
+    fn served_chain_fingerprint_replay_byte_identical() {
+        let blocks = pick_n_lightest(&corpus(), 3);
+        let snap_a = blocks.iter().fold(
+            crate::producer::ServedChainSnapshot::new(),
+            |s, b| admit_corpus_block(s, b),
+        );
+        let snap_b = blocks.iter().fold(
+            crate::producer::ServedChainSnapshot::new(),
+            |s, b| admit_corpus_block(s, b),
+        );
+        assert_eq!(snap_a.fingerprint(), snap_b.fingerprint());
+    }
+
     #[test]
     fn accepted_block_header_bytes_equals_validator_split_on_corpus() {
         use ade_codec::cbor;

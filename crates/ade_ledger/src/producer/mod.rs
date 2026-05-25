@@ -16,6 +16,8 @@
 
 pub mod forge;
 pub mod self_accept;
+pub mod served_chain;
 pub mod state;
 
 pub use self_accept::{self_accept, AcceptedBlock, SelfAcceptError};
+pub use served_chain::{served_chain_admit, ServedChainAdmitError, ServedChainSnapshot};
