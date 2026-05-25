@@ -58,6 +58,25 @@ impl InMemorySnapshotCache {
         self.entries.keys().next().copied()
     }
 
+    /// Largest snapshot slot present, or None. Used by the
+    /// snapshot-write hook (S5) to seed the cadence policy's
+    /// `last_snapshot` argument.
+    pub fn most_recent(&self) -> Option<SlotNo> {
+        self.entries.keys().next_back().copied()
+    }
+
+    /// All slot keys in ascending order. Read-only.
+    pub fn slots(&self) -> Vec<SlotNo> {
+        self.entries.keys().copied().collect()
+    }
+
+    /// Iterate (slot, ()) pairs for test inspection. Avoids
+    /// exposing the inner state tuple read-only externally — most
+    /// tests just need the slot set.
+    pub fn iter_for_test(&self) -> Vec<(SlotNo, ())> {
+        self.entries.keys().map(|s| (*s, ())).collect()
+    }
+
     /// Convenience: capture the per-peer receive state's (ledger,
     /// chain_dep) into a snapshot at `slot`. Used by S5's
     /// orchestrator hook.
