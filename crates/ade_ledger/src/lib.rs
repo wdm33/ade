@@ -35,6 +35,7 @@ pub mod plutus_eval;
 pub mod pparams;
 pub mod producer;
 pub mod rational;
+pub mod receive;
 pub mod rules;
 pub mod scripts;
 pub mod shelley;

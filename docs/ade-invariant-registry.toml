@@ -2529,4 +2529,124 @@ ci_script = "ci/ci_check_server_paths_corpus_present.sh"
 status = "partial"
 cluster = "PHASE4-N-G"
 open_obligation = "blocked_until_operator_peer_available"
-evidence = ["Mechanical pre-condition closed by cross_impl_server_pipeline test: every served Block{bytes} decodes via Ade's envelope+block decoder and the recomputed body-hash matches the announced header's body_hash field.", "Binary live_block_fetch_session builds + starts in hermetic mode; --connect mode requires a private cardano-node peer (open_obligation).", "Procedure to flip status to enforced (operator captures log + commits) documented at docs/clusters/PHASE4-N-G/CE-N-G-8_PROCEDURE.md — mirrors PHASE4-N-C/CE-N-C-8_PROCEDURE.md pattern."]
+evidence = ["Mechanical pre-condition closed by cross_impl_server_pipeline test: every served Block{bytes} decodes via Ade's envelope+block decoder and the recomputed body-hash matches the announced header's body_hash field.", "Binary live_block_fetch_session builds + starts in hermetic mode; --connect mode requires a private cardano-node peer (open_obligation).", "Procedure to flip status to enforced (operator captures log + commits) documented at docs/clusters/completed/PHASE4-N-G/CE-N-G-8_PROCEDURE.md — mirrors PHASE4-N-C/CE-N-C-8_PROCEDURE.md pattern."]
+
+# =============================================================================
+# Receive-side header→body bridge — invariants sketched, cluster TBD
+# Sketch: docs/planning/receive-side-bridge-invariants.md
+# Status: "declared" — enforcement debt to be closed by slices in the
+# receive-bridge cluster. DC-CONS-20 carries a pre-cluster-plan
+# blocker (see sketch §7) — ledger rollback authority must be
+# mechanically demonstrated before DC-CONS-20 may flip to "enforced".
+# =============================================================================
+
+[[rules]]
+id = "CN-CONS-08"
+tier = "release"
+statement = """
+Receive-side single admission authority: every block that lands in
+ChainDb via the receive path passed block_validity with
+BlockValidityVerdict::Valid. No bypass, no header-only fast path, no
+trusted-prefix mode. Invalid verdicts leave receive state unchanged
+and halt the peer pipeline with a structured error; no silent skip,
+no partial application. Receive-side analog of CN-CONS-07 (broadcast
+gate).
+"""
+source = "docs/planning/receive-side-bridge-invariants.md §1 (I-1, folds I-7)"
+cross_ref = ["CN-CONS-07", "DC-CONS-13", "DC-CONS-19", "DC-CONS-20"]
+code_locus = ""
+tests = []
+ci_script = ""
+status = "declared"
+attack_rationale = "A peer that can sneak unvalidated bytes into our ChainDb pollutes the ledger downstream and forces divergence from the rest of the network."
+evidence_notes = "Enforcement is type-level: AdmittedBlock token has a private constructor reachable only from a block_validity::Valid branch; the ChainDb-write wrapper takes AdmittedBlock by value. AdmittedBlock is deliberately a distinct type from AcceptedBlock to keep producer/receive gates non-interfering."
+
+[[rules]]
+id = "DC-CONS-19"
+tier = "derived"
+statement = """
+Receive-side header-body sourcing coherence: when BlockDelivered
+{block_bytes} arrives at the receive bridge, the decoded header bytes
+of block_bytes equal the header_bytes cached from the most recent
+RollForward at the same (slot, hash). A peer cannot switch headers
+between announcement and body delivery.
+"""
+source = "docs/planning/receive-side-bridge-invariants.md §1 (I-2)"
+cross_ref = ["DC-CONS-18", "CN-CONS-08"]
+code_locus = ""
+tests = []
+ci_script = ""
+status = "declared"
+
+[[rules]]
+id = "DC-CONS-20"
+tier = "derived"
+statement = """
+ChainDb-ledger-chain_dep lockstep: a successful receive-side
+admission updates ChainDb, LedgerState, and PraosChainDepState as one
+structural transition. A successful RollBackward rolls back all three
+to the same slot. No path leaves them out of sync; no partial
+admission; no partial rollback.
+"""
+source = "docs/planning/receive-side-bridge-invariants.md §1 (I-3, I-4)"
+cross_ref = ["CN-CONS-08", "DC-CONS-13"]
+code_locus = ""
+tests = []
+ci_script = ""
+status = "declared"
+open_obligation = "rollback_side_blocked_until_ledger_snapshot_cluster"
+notes = "Path A scope split (decided 2026-05-25): the admit-side half (a successful receive admission updates ChainDb + LedgerState + PraosChainDepState atomically) is in scope for the receive-bridge cluster and will flip to enforced on close. The rollback-side half (a successful RollBackward rolls back all three) is OUT OF SCOPE for the receive-bridge cluster — ledger rollback infrastructure does not exist (no LedgerState encode/decode, no snapshot+replay-forward driver). A follow-on rollback cluster closes this half. Until then the receive bridge returns Err(ReceiveError::RollbackOutOfScope) on any peer RollBackward; receive state stays consistent. This rule's status stays at 'declared' through the receive cluster close; admit-side enforcement is recorded under CN-CONS-08 + DC-CONS-19 + DC-PROTO-09."
+
+[[rules]]
+id = "DC-PROTO-09"
+tier = "derived"
+statement = """
+Receive-side transcript determinism: given canonical inputs
+(initial_ledger, initial_chain_dep, initial_chaindb, event_sequence),
+the bridge reducer's output state (ledger', chain_dep', chaindb') is
+byte-identical across replays. The reducer is a pure, total transition.
+"""
+source = "docs/planning/receive-side-bridge-invariants.md §3, §4"
+cross_ref = ["T-DET-01", "DC-PROTO-07"]
+code_locus = ""
+tests = []
+ci_script = ""
+status = "declared"
+
+[[rules]]
+id = "CN-PROTO-07"
+tier = "derived"
+statement = """
+Receive-side agency closure: the receive bridge consumes only
+peer-originated ForkChoiceSignal and BatchDeliveryEvent values valid
+for the client-role N2N receive surface. Constructing or admitting
+locally-originated / client-output events into the receive reducer is
+unrepresentable in the public API.
+"""
+source = "docs/planning/receive-side-bridge-invariants.md §1 (closure)"
+cross_ref = ["CN-PROTO-06", "DC-PROTO-06"]
+code_locus = "crates/ade_ledger/src/receive/events.rs (ReceiveEvent closed sum: only RollForward, RollBackward, BlockDelivered variants — no constructor for RequestNext, RequestRange, ClientDone, FindIntersect)"
+tests = ["receive_event_round_trips_through_pattern_match", "receive_effect_round_trips_through_pattern_match", "receive_error_round_trips_through_pattern_match"]
+ci_script = "ci/ci_check_admitted_block_closure.sh"
+status = "enforced"
+authority_surface = "receive-side mini-protocol event surface"
+cluster = "PHASE4-N-H"
+evidence = ["ReceiveEvent enum has exactly 3 variants — all peer-originated. The exhaustive-match round-trip test will fail to compile if a fourth variant is added without explicit closure review.", "ci_check_admitted_block_closure.sh forbids any locally-originated chain-sync/block-fetch variant name (RequestNext, RequestRange, ClientDone, FindIntersect) in events.rs production code."]
+
+[[rules]]
+id = "RO-LIVE-02"
+tier = "release"
+statement = """
+A cardano-node peer's RollForward + BlockDelivered stream, consumed
+by the receive bridge, produces a ChainDb tip equal to the peer's
+announced tip at every step over a captured follow window. Live
+evidence captured against a private cardano-node peer; underlying
+invariants are CN-CONS-08, DC-CONS-19, DC-CONS-20, DC-PROTO-09, and
+the existing block_validity (B1) authority.
+"""
+source = "docs/planning/receive-side-bridge-invariants.md §8"
+cross_ref = ["RO-LIVE-01", "CN-CONS-08", "DC-CONS-19", "DC-CONS-20", "DC-PROTO-09"]
+code_locus = ""
+tests = []
+ci_script = ""
+status = "declared"
