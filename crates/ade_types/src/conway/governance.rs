@@ -75,3 +75,24 @@ pub struct VotingProcedures {
 pub struct Anchor {
     pub raw: Vec<u8>,
 }
+
+/// CIP-1694 proposal_procedure = `[deposit, return_addr, gov_action, anchor]`.
+///
+/// Closed struct: `proposal_procedures` is no longer an opaque byte field
+/// on the authoritative `ConwayTxBody` shape (DC-LEDGER-11). Construction
+/// outside the closed decoder (`ade_codec::conway::governance::decode_proposal_procedures`)
+/// is forbidden on the production path by CI; the testkit fixture
+/// builders are the only sanctioned synthesis site.
+///
+/// `return_addr` carries reward-account bytes verbatim (OQ-4 — typed
+/// `RewardAccount` is a separate fidelity decision; same shape as the
+/// existing `TreasuryWithdrawals.withdrawals` element type).
+/// `anchor` reuses the existing opaque `Anchor` struct (OQ-3-adjacent
+/// — nested anchor opacity is not in this cluster's scope).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ProposalProcedure {
+    pub deposit: Coin,
+    pub return_addr: Vec<u8>,
+    pub gov_action: GovAction,
+    pub anchor: Anchor,
+}

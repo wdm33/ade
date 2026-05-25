@@ -6,6 +6,7 @@
 // - Canonical serialization for all persisted/hashed data
 
 pub mod cert;
+pub mod governance;
 pub mod tx;
 pub mod withdrawals;
 

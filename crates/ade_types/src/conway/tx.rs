@@ -8,6 +8,7 @@
 use std::collections::BTreeSet;
 
 use crate::babbage::tx::BabbageTxOut;
+use crate::conway::governance::ProposalProcedure;
 use crate::tx::{Coin, TxIn};
 use crate::{Hash28, Hash32, SlotNo};
 
@@ -43,7 +44,7 @@ pub struct ConwayTxBody {
     pub reference_inputs: Option<BTreeSet<TxIn>>,
     // Conway additions
     pub voting_procedures: Option<Vec<u8>>,
-    pub proposal_procedures: Option<Vec<u8>>,
+    pub proposal_procedures: Option<Vec<ProposalProcedure>>,
     pub treasury_value: Option<Coin>,
     pub donation: Option<Coin>,
 }

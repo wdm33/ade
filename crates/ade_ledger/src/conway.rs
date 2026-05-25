@@ -339,9 +339,16 @@ mod tests {
 
     #[test]
     fn structural_ok_with_governance() {
+        // OQ-8 (PROPOSAL-PROCEDURES-DECODE): the old placeholder
+        // `Some(vec![0x80])` for proposal_procedures was a presence-marker
+        // only (not real proposal data); the field is now typed
+        // `Option<Vec<ProposalProcedure>>` and constructing one here
+        // would pull the closed decoder into a test that does not care
+        // about proposal content. The other governance fields exercise
+        // the "governance present" path.
         let mut body = minimal_body();
         body.voting_procedures = Some(vec![0x80]);
-        body.proposal_procedures = Some(vec![0x80]);
+        body.proposal_procedures = None;
         body.treasury_value = Some(Coin(1_000_000));
         body.donation = Some(Coin(500));
         assert!(validate_conway_structure(&body).is_ok());
@@ -516,7 +523,11 @@ mod tests {
         // must not reject a tx purely because those fields are set.
         let mut body = conway_body();
         body.voting_procedures = Some(vec![0x80]);
-        body.proposal_procedures = Some(vec![0x80]);
+        // OQ-8: proposal_procedures is now typed; this test does not load-bear
+        // on proposal content (it tests the UTXO composer accepts a body with
+        // governance fields). None is the honest substitute for the prior
+        // placeholder `Some(vec![0x80])`.
+        body.proposal_procedures = None;
         body.treasury_value = Some(CoinT(1_000_000));
         body.donation = Some(CoinT(500));
         // Balance: output(1_000_000) + fee(200_000) + donation(500). treasury_value

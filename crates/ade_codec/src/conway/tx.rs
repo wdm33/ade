@@ -66,7 +66,8 @@ pub fn decode_conway_tx_body(
     let mut total_collateral: Option<Coin> = None;
     let mut reference_inputs: Option<BTreeSet<TxIn>> = None;
     let mut voting_procedures: Option<Vec<u8>> = None;
-    let mut proposal_procedures: Option<Vec<u8>> = None;
+    let mut proposal_procedures: Option<Vec<ade_types::conway::governance::ProposalProcedure>> =
+        None;
     let mut treasury_value: Option<Coin> = None;
     let mut donation: Option<Coin> = None;
 
@@ -130,8 +131,12 @@ pub fn decode_conway_tx_body(
                 voting_procedures = Some(data[start..end].to_vec());
             }
             20 => {
+                // PP-S1 (DC-LEDGER-11): typed closed decode (no opaque-bytes
+                // pass-through on the BLUE authority path).
                 let (start, end) = cbor::skip_item(data, offset)?;
-                proposal_procedures = Some(data[start..end].to_vec());
+                proposal_procedures = Some(
+                    crate::conway::governance::decode_proposal_procedures(&data[start..end])?,
+                );
             }
             21 => {
                 let (v, _) = cbor::read_uint(data, offset)?;
@@ -346,9 +351,10 @@ pub fn encode_conway_tx_body(
         cbor::write_uint_canonical(buf, 19);
         buf.extend_from_slice(b);
     }
-    if let Some(ref b) = body.proposal_procedures {
+    if let Some(ref procs) = body.proposal_procedures {
         cbor::write_uint_canonical(buf, 20);
-        buf.extend_from_slice(b);
+        let bytes = crate::conway::governance::encode_proposal_procedures(procs);
+        buf.extend_from_slice(&bytes);
     }
     if let Some(Coin(v)) = body.treasury_value {
         cbor::write_uint_canonical(buf, 21);
