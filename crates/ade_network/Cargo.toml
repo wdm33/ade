@@ -44,3 +44,7 @@ name = "ade_tx_submission2_capture"
 path = "src/bin/capture_tx_submission2.rs"
 
 [dev-dependencies]
+ade_ledger = { path = "../ade_ledger" }
+ade_testkit = { path = "../ade_testkit" }
+ade_crypto = { path = "../ade_crypto" }
+ade_core = { path = "../ade_core" }

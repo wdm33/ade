@@ -2484,10 +2484,13 @@ tier = "derived"
 statement = "Once chain-sync enters a state where the server holds agency, the pure per-session reducer must return exactly one of: a legal RollForward, a legal RollBackward, a legal AwaitReply, or a structured deterministic session-close/error. It must not return an ambiguous wait state unless the wait condition is an explicit replay input."
 source = "docs/planning/phase4-n-a-successor-invariants.md §1 (I-8), §2 (¬P-4)"
 cross_ref = ["DC-PROTO-06", "DC-PROTO-07"]
-code_locus = ""
-tests = []
-ci_script = ""
-status = "declared"
+code_locus = "crates/ade_network/src/chain_sync/server.rs (producer_chain_sync_serve + producer_chain_sync_advance_tip, total over server-agency states; exhaustive match returns ServerStep::Reply or ServerStep::Done; no silent wait)"
+tests = ["producer_chain_sync_serve_request_next_idle_yields_roll_forward_when_served_has_block", "producer_chain_sync_serve_request_next_idle_yields_await_reply_when_served_empty", "producer_chain_sync_serve_find_intersect_known_point_yields_intersect_found", "producer_chain_sync_serve_find_intersect_unknown_point_yields_intersect_not_found", "producer_chain_sync_serve_done_terminates_session", "producer_chain_sync_serve_rejects_illegal_grammar_pair", "producer_chain_sync_advance_tip_idle_yields_none", "producer_chain_sync_advance_tip_can_await_yields_roll_forward_when_block_available", "producer_chain_sync_advance_tip_must_reply_yields_roll_forward_when_block_available", "producer_chain_sync_advance_tip_can_await_yields_none_when_cursor_at_head", "producer_chain_sync_serve_roll_forward_header_equals_accepted_block_header_bytes", "producer_chain_sync_serve_replays_byte_identical_over_corpus"]
+ci_script = "ci/ci_check_chain_sync_server_closure.sh"
+status = "enforced"
+authority_surface = "producer-side chain-sync server-agency reducer"
+cluster = "PHASE4-N-G"
+evidence = ["Reducer signature is total: every (state, in_msg) pair under client-agency returns Ok(ServerStep::Reply(_)) or Ok(ServerStep::Done) or Err(ProducerServerError::Grammar(_)). The match arm covering server-originated messages from client agency returns a Grammar error (defensive; the underlying BLUE state machine rejects these first).", "Server-agency states (CanAwait/MustReply) are exited via either ServerReply::roll_forward(_) (data available) or ServerReply::await_reply() (parks in MustReply for advance_tip). Intersect leg always returns IntersectFound or IntersectNotFound. Done leg always returns ServerStep::Done."]
 
 [[rules]]
 id = "CN-PROTO-06"
