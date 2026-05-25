@@ -3,7 +3,7 @@
 ## Slice Header
 **Slice Name:** Mechanical cross-impl adapter (CI) + operator-action live_block_production_session binary
 **Cluster:** PHASE4-N-C
-**Status:** Proposed
+**Status:** Merged
 **CEs addressed:** CE-N-C-7 (mechanical cross-impl adapter), CE-N-C-8 (operator-action live evidence — conditional)
 **Registry flips on merge:**
 - `CN-CONS-06` (cross-impl acceptance) — mechanical half → `enforced`; live half → `partial` if no testnet stake is provisioned at slice close, with the live half tracked via `open_obligation` and the recorded `blocked_until_operator_stake_available` status.

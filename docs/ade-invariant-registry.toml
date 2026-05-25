@@ -31,7 +31,7 @@ status = "enforced"
 authority_surface = "BLUE authoritative state transitions"
 cluster = "CL-LEDGER-VERDICT"
 evidence = ["crates/ade_testkit/tests/ledger_determinism.rs uses ade_ledger::fingerprint for byte-identical state comparison across all 7 eras", "crates/ade_testkit/tests/consensus_stream_replay.rs replays the canonical chain-selector stream twice and asserts byte-identical event lists and final orchestrator state — closes T-DET-01 for the consensus subset"]
-strengthened_in = ["PHASE4-N-B", "PHASE4-B1", "PHASE4-B2"]
+strengthened_in = ["PHASE4-N-B", "PHASE4-B1", "PHASE4-B2", "PHASE4-N-C"]
 
 [[rules]]
 id = "T-ENC-01"
@@ -43,7 +43,7 @@ code_locus = "crates/ade_codec/src/preserved.rs, crates/ade_ledger/src/block_val
 tests = ["preserved_wire_bytes_returned_exactly", "altered_body_rejected_by_hash_binding", "tx_id_uses_preserved_bytes"]
 ci_script = "ci/ci_check_hash_uses_wire_bytes.sh"
 status = "partial"
-strengthened_in = ["PHASE4-B1", "PHASE4-B2"]
+strengthened_in = ["PHASE4-B1", "PHASE4-B2", "PHASE4-N-C"]
 authority_surface = "hash-critical byte paths"
 cluster = "CL-CRYPTO-VERIFY"
 evidence = []

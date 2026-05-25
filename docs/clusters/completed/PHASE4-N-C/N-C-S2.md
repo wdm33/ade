@@ -3,7 +3,7 @@
 ## Slice Header
 **Slice Name:** BLUE `opcert_validate` + counter monotonicity + closed-grammar opcert encoder authority
 **Cluster:** PHASE4-N-C
-**Status:** Proposed
+**Status:** Merged
 **CEs addressed:** CE-N-C-2 (opcert validation + counter monotonicity + closed encoder)
 **Registry flips on merge:** `DC-CONS-11`, `DC-CONS-12` → `enforced`
 **Dependencies:** S1 merged (HEAD ≥ `ea9770e`). S1 ships nothing this slice consumes; the dependency is purely sequential per the cluster slice plan.

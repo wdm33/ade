@@ -3,7 +3,7 @@
 ## Slice Header
 **Slice Name:** RED signing primitives (`vrf_prove`, `kes_sign`, `kes_update`) + cardano-cli `*.skey` loader + private-key custody CI gate
 **Cluster:** PHASE4-N-C
-**Status:** Proposed
+**Status:** Merged
 **CEs addressed:** CE-N-C-1 (signing transcript equivalence + verify symmetry + evolution discipline + key-custody)
 **Registry flips on merge:** `DC-CRYPTO-03`, `DC-CRYPTO-04`, `DC-CRYPTO-05`, `OP-OPS-04` → `enforced`
 **Dependencies:** none (N-B / N-E validator stack is the only consumer of the artifacts this slice produces; consumption lands in S3/S5)

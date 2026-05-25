@@ -3,7 +3,7 @@
 ## Slice Header
 **Slice Name:** RED scheduler + GREEN tick-assembler + RED broadcast handoff; slot-deadline operational SLA
 **Cluster:** PHASE4-N-C
-**Status:** Proposed
+**Status:** Merged
 **CEs addressed:** CE-N-C-6 (deterministic slot loop; non-leader silence; self-accept halts clean; slot-deadline measurement)
 **Registry flips on merge:** `OP-OPS-05` → `enforced`
 **Dependencies:** S1, S2, S3, S4, S5 merged. S5 ships `AcceptedBlock` with private constructor; this slice consumes that token at the broadcast boundary and is the entire reason for the type-level gate.

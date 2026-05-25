@@ -3,7 +3,7 @@
 ## Slice Header
 **Slice Name:** BLUE `self_accept` bridge — type-level gate on RED broadcast
 **Cluster:** PHASE4-N-C
-**Status:** Proposed
+**Status:** Merged
 **CEs addressed:** CE-N-C-5 (self-acceptance bridge — no broadcast without validator agreement)
 **Registry flips on merge:** `CN-CONS-07` → `enforced`
 **Dependencies:** S1, S2, S3, S4 merged. S3 produces `ForgedBlock { bytes, block }`. S4 unified the body-hash recipe; the validator's `block_validity` recomputes `body_hash` over the same encoder forge wrote, so the parity property holds by construction.

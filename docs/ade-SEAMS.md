@@ -3,108 +3,147 @@
 > **Status:** Living architectural document. Regenerated; not hand-edited.
 > Per-project instance of `~/.claude/methodology/templates/seams.md`.
 
-> 11 crates, **32 CI checks** at HEAD (`928c2be`).
+> 11 crates, **40 CI checks** at HEAD (`694dd74`).
 > Reads CODEMAP for the module list and TCB colors; reads the invariant
 > registry (`docs/ade-invariant-registry.toml`) for rule IDs; reads the
 > Phase 4 cluster plan (`docs/active/phase_4_cluster_plan.md`), the
 > closed N-D / N-A / N-B / N-E / B1 / B2 / B3 / B4 / B5 cluster docs,
 > the OQ5-CREDENTIAL-FIDELITY, COMMITTEE-CRED-FIDELITY, DREP-VOTE-FIDELITY,
-> ENACTMENT-COMMITTEE-FIDELITY, ENACTMENT-COMMITTEE-WRITEBACK cluster
-> docs, and the **just-closed and archived PROPOSAL-PROCEDURES-DECODE
-> cluster doc** (`docs/clusters/completed/PROPOSAL-PROCEDURES-DECODE/cluster.md`
-> + `PP-S1.md` + `PP-S2.md`).
+> ENACTMENT-COMMITTEE-FIDELITY, ENACTMENT-COMMITTEE-WRITEBACK and
+> PROPOSAL-PROCEDURES-DECODE cluster docs, and the **just-closed and
+> staged PHASE4-N-C cluster doc + S1..S7 slice docs**
+> (`docs/clusters/PHASE4-N-C/cluster.md` + `N-C-S{1..7}.md` +
+> `CE-N-C-8_PROCEDURE.md`).
 >
-> **This is the PROPOSAL-PROCEDURES-DECODE FULL CLOSE refresh
-> (HEAD `928c2be`).** The previous SEAMS (HEAD `caa5ce8`) pinned the
-> PHASE4-N-E full-close state and recorded `proposal_procedures`
-> tx-body decode as the one declared-non-goal governance-domain seam
-> carried forward. **Two commits land between that revision and this
-> one** and close that seam:
+> **This is the PHASE4-N-C FULL CLOSE refresh (HEAD `694dd74`).** The
+> previous SEAMS (HEAD `928c2be`) pinned the PROPOSAL-PROCEDURES-DECODE
+> full-close state. Seven N-C slices have landed between that revision
+> and this one and close the producer half of the bounty:
 >
-> 1. **PP-S1 (commit `70bc85b`)** ships the BLUE closed-grammar
->    decoder `ade_codec::conway::governance::decode_proposal_procedures`,
->    the closed `ade_types::conway::governance::ProposalProcedure`
->    struct (4 fields — `deposit`, `return_addr`, `gov_action`,
->    `anchor`), the typed field at `ConwayTxBody.proposal_procedures:
->    Option<Vec<ProposalProcedure>>` (was `Option<Vec<u8>>`), the
->    typed encode/decode at body key 20, the new CI gate
->    `ci/ci_check_proposal_procedures_closed.sh` (5 mechanical
->    guards), and the new derived-Cardano registry rule `DC-LEDGER-11`
->    (`enforced`, `introduced_in = PROPOSAL-PROCEDURES-DECODE`). CI
->    script count `31 → 32`. Closes CE-PP-1, CE-PP-2, CE-PP-3, CE-PP-4,
->    CE-PP-5.
-> 2. **PP-S2 (commit `928c2be`)** ships the GREEN canonical synthetic
->    corpus + replay harness at
->    `crates/ade_testkit/src/governance/proposal_procedures_replay.rs`,
->    decoding + re-encoding every fixture byte-identically and covering
->    all 7 `GovAction` variants including the discriminated
->    `UpdateCommittee` case. Extends `DC-LEDGER-11.tests` with 4 harness
->    test names. Closes CE-PP-6.
+> 1. **N-C-S1 (commit `ea9770e`)** ships RED signing primitives
+>    (`ade_runtime::producer::signing::{vrf_prove, kes_sign,
+>    kes_update}`), the closed RED key types (`VrfSigningKey`,
+>    `KesSecret`, `ColdSigningKey` — `zeroize`-on-drop, no `pub`
+>    raw-byte accessors), the cardano-cli `*.skey` loader
+>    (`ade_runtime::producer::keys::{load_vrf_signing_key_skey,
+>    load_kes_signing_key_skey, load_cold_signing_key_skey}`), and the
+>    CI gate `ci/ci_check_private_key_custody.sh`. Registry rules
+>    `DC-CRYPTO-03/04/05` + `OP-OPS-04` introduced (status
+>    `enforced`).
+> 2. **N-C-S2 (commit `4cf4b65`)** ships the BLUE
+>    `ade_core::consensus::opcert_validate::opcert_validate` chokepoint
+>    (closed `OpCertError` sum: `CounterRegression`, `CounterRepeat`,
+>    `PeriodMismatch`, `BadColdSignature`, shape rejects) AND the
+>    new closed-grammar opcert encoder authority
+>    `ade_codec::shelley::opcert::{encode_opcert, decode_opcert}`
+>    (single sanctioned byte authority — both header CBOR
+>    (`shelley::block`) and standalone opcert CBOR delegate here;
+>    the prior inline header-path emit is forbidden). Registry rules
+>    `DC-CONS-11/12` introduced (`enforced`); CI gate
+>    `ci/ci_check_opcert_closed.sh` introduced.
+> 3. **N-C-S3 (commit `8312690`)** ships the BLUE producer core:
+>    the closed canonical input value `ade_ledger::producer::state::ProducerTick`
+>    (14 fields; no `#[non_exhaustive]`; no private-key fields by CI),
+>    the pure BLUE transition `ade_ledger::producer::forge::forge_block`
+>    with closed sums `ForgeError`, `ForgeEffects`, `ForgedBlock`, the
+>    leader-check delegation to the shared validator function
+>    `is_leader_for_vrf_output` (NC-VRF-3 — single source of leader
+>    truth), and the **tx-admissibility prefix gate** (re-`admit` over
+>    `base_state` in canonical accumulating order). CI gates
+>    `ci/ci_check_forge_purity.sh` + `ci/ci_check_no_private_keys_in_corpus.sh`.
+>    Registry rules `DC-CONS-13/14/15`, `DC-LEDGER-12` introduced
+>    (`enforced`).
+> 4. **N-C-S4 (commit `4fd714c`)** unifies the body-hash recipe into a
+>    **single canonical authority**:
+>    `ade_ledger::block_body_hash::block_body_hash_from_buckets`
+>    (4-bucket recipe over preserved CBOR — `blake2b_256` of
+>    `blake2b_256` per bucket, concatenated). Both
+>    `ade_ledger::block_validity::header_input` (validator
+>    recomputation) and `ade_ledger::producer::forge::forge_block`
+>    (producer emission) hash through this function — closing the
+>    producer/validator encoder bifurcation. Registry rule
+>    `DC-CONS-16` introduced (`enforced`); CI gate
+>    `ci/ci_check_no_producer_body_encoder.sh` introduced.
+> 5. **N-C-S5 (commit `aa7a7dd`)** ships the **type-level broadcast
+>    gate** `ade_ledger::producer::self_accept::{self_accept,
+>    AcceptedBlock, SelfAcceptError}`. `AcceptedBlock` is a newtype
+>    whose only field (`bytes: Vec<u8>`) is private and whose only
+>    constructor is the `Ok(...)` arm of `self_accept` — which calls
+>    the canonical BLUE validator chokepoint
+>    `ade_ledger::block_validity::transition::block_validity`. RED
+>    `broadcast::BroadcastQueue::enqueue(&mut self, AcceptedBlock)`
+>    consumes the token by value; the producer cannot broadcast bytes
+>    its own validator would reject. Registry rule `CN-CONS-07`
+>    introduced (`enforced`); CI gate `ci/ci_check_self_accept_gate.sh`
+>    introduced (6 mechanical guards).
+> 6. **N-C-S6 (commit `58678af`)** ships the RED scheduler core
+>    `ade_runtime::producer::scheduler::{scheduler_step, SchedulerInput,
+>    SchedulerEffect, SchedulerState, SchedulerHaltReason}` (closed
+>    sums; pure RED state transition mirroring N-B's `process_stream_input`
+>    shape — wall-clock and I/O live in the outer driver), the GREEN
+>    tick-assembler `ade_runtime::producer::tick_assembler::{assemble_tick,
+>    TickInputs, TickAssemblyError}` (pure function stitching signed
+>    artifacts + mempool snapshot into a canonical `ProducerTick`), and
+>    the RED `ade_runtime::producer::broadcast::{BroadcastQueue,
+>    BroadcastError}` FIFO queue (`enqueue` takes `AcceptedBlock` by
+>    value — type-level gate). Registry rule `OP-OPS-05` introduced
+>    (`enforced`); CI gate `ci/ci_check_scheduler_closure.sh` introduced.
+> 7. **N-C-S7 (commit `694dd74`)** ships the mechanical cross-impl
+>    adapter `ade_testkit::producer::cross_impl_adapter`
+>    (decode-round-trip + body-hash binding via S4's authority +
+>    structural field agreement; covers the bytes-shape claim) and
+>    the operator-action probe binary
+>    `ade_core_interop::bin::live_block_production_session` (third
+>    instance of the operator-action probe binary pattern; the
+>    crypto-level cross-impl claim — real KES/VRF over N2N — is
+>    captured live). Registry rule `CN-CONS-06` introduced
+>    (`enforced` with `open_obligation = blocked_until_operator_stake_available`
+>    — same precedent as OP-OPS-04); CI gate
+>    `ci/ci_check_producer_corpus_present.sh` introduced. CE-N-C-8
+>    procedure documented at
+>    `docs/clusters/PHASE4-N-C/CE-N-C-8_PROCEDURE.md`.
 >
-> **THE KEY FULL-CLOSE DELTA — the §1 candidates row for
-> `proposal_procedures` tx-body decode FLIPS from "candidate /
-> declared non-goal" to "wired & closed".** The decoder reuses the
-> existing closed 7-variant `GovAction` enum (preserving the
-> `UpdateCommittee` structured form added in
-> ENACTMENT-COMMITTEE-WRITEBACK) and the existing opaque `Anchor`
-> struct. The new rule `DC-LEDGER-11` cross-refs `DC-LEDGER-10`
-> bidirectionally — DC-LEDGER-10 (UpdateCommittee discriminant) is
-> CONSUMED here unchanged; DC-LEDGER-11 (proposal_procedures closure)
-> closes the authoritative entry path that surfaces UpdateCommittee
-> on the wire, and `DC-LEDGER-10.cross_ref` now includes `DC-LEDGER-11`.
+> **THE KEY FULL-CLOSE DELTAS.** Three §1 candidate rows from the
+> prior SEAMS flip from "candidate" to "wired & closed":
 >
-> **OQ scope locks (carried into SEAMS as new §1 candidates).** The
-> cluster's locked OQ resolutions name four deliberate future
-> strengthenings that this cluster does NOT close; they are recorded
-> in `DC-LEDGER-11.open_obligation` and surface in §1 as new
-> candidate seams:
+> - **Forge-block inputs (mempool + state + slot + KES + VRF)** →
+>   wired through canonical `ProducerTick` value (BLUE).
+> - **Operator block-production trigger** → wired through closed
+>   `SchedulerInput::SlotTick { slot, inputs: TickInputs }` (RED).
+> - **header→body bridge (forge/fetch-winning header triggers a
+>   full-block decision)** → wired via the producer's own
+>   `self_accept` (forge bytes -> validator decision before
+>   broadcast). The forge-from-receive-side header bridge for
+>   externally-arriving headers remains a candidate (see §1).
 >
-> - **`voting_procedures` (tx body key 19)** — same opaque-bytes
->   shape, same pressure, natural sibling cluster (OQ-1).
-> - **`ParameterChange.update`** — full pparams update sub-grammar;
->   separate large cluster (OQ-2).
-> - **`NewConstitution.raw`** — small but separable; bundleable with
->   the voting-procedures cluster or shipped alone (OQ-3).
-> - **Typed `RewardAccount` for `proposal_procedure.return_addr`** —
->   typed reward-account fidelity decision; would also retype
->   `TreasuryWithdrawals.withdrawals` in one move (OQ-4).
->
-> Counts at this refresh: **+1 closed BLUE struct** (`ProposalProcedure`),
-> **+1 closed BLUE entry point** (`decode_proposal_procedures` —
-> closed grammar, not a registry, but the single sanctioned production
-> decoder), **+1 frozen wire contract** (the closed
-> `proposal_procedures` grammar at Conway tx-body key 20), **+1 CI
-> script** (count `31 → 32`), **+1 derived-Cardano registry rule**
-> (`DC-LEDGER-11`), **+1 closed-grammar audit item** (PROPOSAL-PROCEDURES-DECODE
-> entry), **+4 candidate seams** (the OQ-1/2/3/4 deferrals as
-> separable future seams), **+1 archived cluster directory**
-> (`docs/clusters/completed/PROPOSAL-PROCEDURES-DECODE/`). **Zero
-> new operator-action probe binaries / live-evidence logs** — this
-> cluster's evidence is fully mechanical (the 17 PP-S1 tests + the
-> PP-S2 harness tests + the CI gate); there is no live-wire half.
->
-> **N-E summary (carried unchanged).** The PHASE4-N-E close shipped
-> the single BLUE chokepoint `mempool_ingress`, the closed 2-variant
-> `IngressSource { N2N, N2C }`, the closed `IngressEvent
-> { source, tx_bytes }` struct, the two GREEN bridges
-> (`ade_core_interop::tx_submission` / `local_tx_submission`), the
-> GREEN per-peer canonicalizer
-> (`ade_ledger::mempool::canonicalize::canonicalize_peer_streams`),
-> the GREEN replay harness, the operator-action probe binary
-> `live_tx_submission_session`, the captured CE-N-E-6 log, the two
-> N-E CI gates (`ci_check_mempool_ingress_closure.sh`,
-> `ci_check_mempool_ingress_replay.sh`), the cross-cluster obligation
-> pattern (`CE-NODE-N2C-LTX`), and `DC-MEM-03` / `DC-MEM-04` /
-> `DC-MEM-01.strengthened_in += PHASE4-N-E`. **None of this changes
-> at this HEAD.**
->
-> **Per-peer canonicalizer is the load-bearing GREEN fairness
-> contract** (round-robin by sorted `PeerId`, with single-byte source
-> tie-break N2N=0 / N2C=1 — stable across binary builds). Any future
-> change to this ordering — fairness policy, batching, parallelization,
-> or alternative tie-breaks — is a SEAMS-level change because the
-> GREEN replay-byte-identity property (DC-MEM-04) and the multi-peer
-> interleaving tests pivot on this exact rule.
+> Counts at this refresh: **+8 CI scripts** (32 → 40:
+> `ci_check_private_key_custody.sh`, `ci_check_opcert_closed.sh`,
+> `ci_check_forge_purity.sh`, `ci_check_no_private_keys_in_corpus.sh`,
+> `ci_check_no_producer_body_encoder.sh`, `ci_check_self_accept_gate.sh`,
+> `ci_check_scheduler_closure.sh`, `ci_check_producer_corpus_present.sh`);
+> **+14 registry rules** (`DC-CRYPTO-03/04/05`, `DC-CONS-11/12/13/14/15/16`,
+> `DC-LEDGER-12`, `CN-CONS-06`, `CN-CONS-07`, `OP-OPS-04`,
+> `OP-OPS-05`); **+1 new BLUE crate-internal authority surface**
+> (`ade_ledger::producer` — submodules `forge`, `self_accept`,
+> `state`); **+1 new BLUE chokepoint** (`opcert_validate` in
+> `ade_core::consensus`); **+1 new BLUE closed sub-grammar
+> encoder/decoder pair** (`ade_codec::shelley::opcert::{encode_opcert,
+> decode_opcert}`); **+1 unified BLUE body-hash authority**
+> (`block_body_hash::block_body_hash_from_buckets` — single
+> canonical recipe consumed by both producer and validator); **+1
+> new RED crate-internal authority surface** (`ade_runtime::producer`
+> — submodules `signing`, `keys`, `scheduler`, `broadcast`); **+1
+> new GREEN crate-internal authority surface**
+> (`ade_runtime::producer::tick_assembler`); **+1 new GREEN
+> harness** (`ade_testkit::producer::cross_impl_adapter`); **+1
+> new operator-action probe binary**
+> (`live_block_production_session` — third in the family alongside
+> `live_consensus_session` (N-B) and `live_tx_submission_session`
+> (N-E)); **+1 new live-evidence procedure doc**
+> (`CE-N-C-8_PROCEDURE.md`); **0 new operator-action live-evidence
+> log artifacts at this HEAD** — CE-N-C-8 is recorded
+> `blocked_until_operator_stake_available` per registry
+> `CN-CONS-06.open_obligation`.
 
 Ade is a Cardano block-producing node. Its closure surface is dominated
 by two facts:
@@ -118,49 +157,19 @@ by two facts:
 
 This document names where the system opens and where it stays closed.
 
-**PROPOSAL-PROCEDURES-DECODE is fully closed at this HEAD.** The prior
-revision (HEAD `caa5ce8`) carried `proposal_procedures` tx-body decode
-as the one declared-non-goal governance-domain seam. PP-S1 + PP-S2
-close it: typed `ConwayTxBody.proposal_procedures:
-Option<Vec<ProposalProcedure>>`, single sanctioned closed-grammar
-decoder, mechanical CI gate, byte-identical round-trip across all 7
-`GovAction` variants including discriminated `UpdateCommittee`. The
-four OQ-locked nested opacities (voting_procedures, ParameterChange.update,
-NewConstitution.raw, typed RewardAccount) are recorded as separable
-future seams.
+**PHASE4-N-C is fully closed at this HEAD.** Forge-block inputs,
+operator block-production trigger, body-hash authority unification,
+and the type-level self-accept gate are all wired and CI-defended.
+The crypto-level cross-impl claim (CE-N-C-8) is
+`blocked_until_operator_stake_available` per `CN-CONS-06.open_obligation`.
 
-**PHASE4-N-E (Tier 1 wire-level mempool ingress) remains fully closed.**
-Code + CE-N-E-6 live N2N evidence captured + cluster archived. CE-N-E-7
-+ bulk-tx halves deferred to CE-NODE-N2C-LTX.
+**PROPOSAL-PROCEDURES-DECODE remains fully closed** (carried).
 
-**PHASE4-B3 (Full Conway tx value-conservation accounting) is closed.**
-It added the closed Conway certificate CDDL grammar, the closed
-withdrawals map grammar, the closed `ConwayCert` / `CertDisposition` /
-`DepositEffect` / `CoinSource` sum types, the canonical-only
-deposit-parameter surface, the closed total cert classifier, and the
-full preservation-of-value equation with the frozen §9.1 reject
-precedence.
+**PHASE4-N-E (Tier 1 wire-level mempool ingress) remains fully closed**
+(carried).
 
-**PHASE4-B4 (Conway certificate-state accumulation, fail-closed) is
-closed.** Governance-affecting Conway certs are decoded fully and
-owner-tagged to `ConwayGovState` via `OwnerTaggedEffect`, routed OUT
-of B4's mutation scope.
-
-**PHASE4-B5 (Conway governance-certificate accumulation) is closed.**
-`ade_ledger::gov_cert::apply_conway_gov_cert` is a total,
-compiler-exhaustive dispatch over `ConwayCert` with no `_ =>` arm,
-that folds vote-delegation / committee / DRep effects into
-`ConwayGovState`.
-
-**OQ5-CREDENTIAL-FIDELITY → COMMITTEE-CRED-FIDELITY → DREP-VOTE-FIDELITY
-→ ENACTMENT-COMMITTEE-FIDELITY → ENACTMENT-COMMITTEE-WRITEBACK** closed
-the credential discriminant chain across the gov-state keys, the
-committee/DRep votes, the enactment effects, and the live
-`UpdateCommittee` write-back. **The PP cluster CONSUMES the
-DC-LEDGER-10 closed `StakeCredential` form** through the
-`UpdateCommittee` arm of the new `decode_gov_action` decoder — the
-bidirectional cross-ref `DC-LEDGER-10 ↔ DC-LEDGER-11` is now recorded
-in the registry.
+**PHASE4-B3..B5, OQ5 / COMMITTEE / DREP / ENACTMENT-COMMITTEE-WRITEBACK**
+all remain closed (carried).
 
 ---
 
@@ -170,25 +179,143 @@ in the registry.
 > pipelines. At HEAD there are **seven** fully-wired *external* ingress
 > surfaces (block bytes, Plutus script bytes, snapshot bytes, Ouroboros
 > mux frames, genesis JSON bundles, chain-selector stream inputs, and
-> the N-E wire-level mempool ingress), plus the three **internal
-> composition roots** (`block_validity` from B1, `tx_validity` from B2,
-> and the BLUE chokepoint `mempool_ingress` from N-E S1), the
-> **mempool admission gate** (`mempool::admit`, a Tier-1 surface over
-> `tx_validity`), the **consensus-input extraction surface** (snapshot
-> `state` CBOR tail-scan from B1), **and — newly closed at this HEAD —
-> the `proposal_procedures` sub-grammar entry point within the Conway
-> tx-body decode**.
->
-> **At this HEAD the `proposal_procedures` sub-grammar reader is
-> wired into the existing Conway-tx-body codec surface as a closed
-> entry point.** The §1 candidate row for `proposal_procedures`
-> tx-body decode flips from "candidate / declared non-goal" to
-> "wired & closed". The decoder is purely mechanical (no operator
-> action, no live-wire half) — the evidence is the 17 PP-S1 tests
-> + the PP-S2 canonical synthetic corpus harness + the
-> `ci_check_proposal_procedures_closed.sh` gate.
+> the N-E wire-level mempool ingress), plus the **internal composition
+> roots** (`block_validity` from B1, `tx_validity` from B2, the BLUE
+> chokepoint `mempool_ingress` from N-E S1, **and — newly closed at
+> this HEAD — the BLUE `forge_block` producer transition and the BLUE
+> `self_accept` broadcast gate**), the **mempool admission gate**
+> (`mempool::admit`), the **consensus-input extraction surface**
+> (snapshot `state` CBOR tail-scan from B1), the **`proposal_procedures`
+> sub-grammar entry point**, **and — newly closed at this HEAD — the
+> operator-action `SchedulerInput` ingress (slot ticks + chain
+> advances + signed-artifact tick inputs)**.
 
-### Surface: Mempool ingress (Tier-1 wire-level — wired in N-E)
+### Surface: Forge-block transition (NEW in N-C-S3/S4 — RED→BLUE seam)
+
+```
+Surface: A canonical ProducerTick value, assembled by GREEN
+         tick_assembler from RED signing-primitive outputs against
+         a base LedgerState + MempoolState
+Reduces to: (ForgedBlock, Vec<ForgeEffects>) | ForgeError
+            (closed sums; no String payloads — replay-byte-stable)
+Pipeline (fixed step ordering — no reorder, no shortcut):
+  1. Width check: mempool_tx_bytes.len() == mempool.accepted().len()
+  2. opcert_validate(opcert, cold_vk, kes_period, prev_opcert_counter)
+       (BLUE — shared chokepoint with header validation; closed
+        OpCertError sum)
+  3. KES signature length defense-in-depth
+  4. Leader check: is_leader_for_vrf_output(leader_answer, vrf_output)
+       (the same BLUE function the validator uses — NC-VRF-3)
+  5. Admit-prefix re-validation: replay mempool::admit from
+     MempoolState::new(base_state.clone()) over mempool_tx_bytes in
+     order; every step must Admitted; resulting accepted-id list
+     must byte-equal tick.mempool.accepted()
+  6. Per-tx component split (split_conway_tx_components)
+  7. Build the four body buckets (preserved bytes; never re-encoded)
+  8. Body hash via block_body_hash_from_buckets (single canonical
+     authority — same recipe the validator recomputes through)
+  9. Build ShelleyHeader + ShelleyBlock; encode via ade_encode
+  10. Return ForgedBlock + ForgeEffects::ReadyForSelfAccept
+Cross-surface state sharing: none — forge is pure; replay equivalence
+  is byte-identical over identical ProducerTick streams.
+```
+
+**Rule.** `forge_block` is the **single producer-side composition
+root**. The leader-check is delegated to the validator's
+`is_leader_for_vrf_output` (no producer-side fork — NC-VRF-3). The
+body-hash recipe lives in `block_body_hash::block_body_hash_from_buckets`
+(single canonical authority — DC-CONS-16). Forge is pure (no clock,
+no rand, no I/O, no `HashMap`, no `std::env`, no `std::fs` — defended
+by `ci/ci_check_forge_purity.sh`); replay corpora carry only signed
+artifacts (`VrfProof`, `KesSignature`, `OpCert`), never private keys
+(DC-CONS-14, defended by `ci/ci_check_no_private_keys_in_corpus.sh`).
+**New work** that wants to forge attaches by producing a canonical
+`ProducerTick` — not by calling into BLUE state, not by adding a
+parallel encode-block-body path. The ProducerTick struct is closed
+(no `#[non_exhaustive]`; private-key fields forbidden by CI).
+
+### Surface: Self-accept broadcast gate (NEW in N-C-S5 — BLUE→RED seam)
+
+```
+Surface: Forged block bytes (Vec<u8>) emitted by forge_block, paired
+         with the same (LedgerState, PraosChainDepState, EraSchedule,
+         LedgerView) context that drove the forge
+Reduces to: AcceptedBlock                          (BLUE token —
+            Result type: Result<AcceptedBlock,       constructor lives
+                                SelfAcceptError>)    only in self_accept)
+Pipeline (fixed step ordering — matches receive-side validator exactly):
+  1. block_validity(ledger, chain_dep, era_schedule, ledger_view,
+                    forged_bytes)
+       — runs the full validator chain: decode + header validate +
+         body-hash bind + body apply.
+  2. On Valid -> Ok(AcceptedBlock { bytes: forged_bytes.to_vec() })
+  3. On Invalid -> Err(SelfAcceptError::Rejected(error))
+Cross-surface state sharing: none — pure transition.
+```
+
+**Rule.** `self_accept` is the **single sanctioned production
+constructor of `AcceptedBlock`**. The newtype's only field is private,
+and there is **exactly one** `pub fn ... -> Result<AcceptedBlock, ...>`
+in the workspace (defended by `ci/ci_check_self_accept_gate.sh`
+guard 1b). `RED broadcast::BroadcastQueue::enqueue(&mut self,
+block: AcceptedBlock)` consumes the token **by value** — type-level
+gate: RED cannot construct a broadcastable value without passing
+through BLUE validation. `self_accept` MUST NOT re-implement any
+validator sub-step (`validate_and_apply_header`, `decode_block`,
+`block_body_hash` are forbidden in `self_accept.rs` production source
+by guard 5). `SelfAcceptError` is a closed sum (no `#[non_exhaustive]`,
+no `String`-bearing variant). **New work** that adds an authority
+gate above broadcast attaches by producing or consuming `AcceptedBlock`
+— not by constructing it elsewhere, not by adding a parallel
+broadcast-eligible token.
+
+### Surface: Scheduler input ingress (NEW in N-C-S6 — operator-side trigger)
+
+```
+Surface: An ordered stream of SchedulerInput events delivered by the
+         outer driver (binary layer reading wall-clock + chain-sync)
+Reduces to: SchedulerEffect (closed 4-variant sum)
+            { EnqueueBroadcast(AcceptedBlock) | SilentNonLeader{slot}
+            | HaltOnInvariant{slot, reason: SchedulerHaltReason}
+            | HaltOnAssembly{slot, reason: TickAssemblyError} }
+Pipeline (fixed step ordering — no reorder, no shortcut):
+  1. caller wraps each external trigger in a SchedulerInput variant:
+       - SlotTick { slot, inputs: TickInputs }     (RED→GREEN→BLUE→BLUE→RED)
+       - ChainAdvanced { ledger, chain_dep, mempool }
+                                                   (GREEN—pure mutation)
+  2. scheduler_step(state, input, ledger_view) -> (state', effects)
+       (RED, pure; SchedulerState carries last_seen_slot +
+        prev_opcert_counter + halted)
+  3. On SlotTick: assemble_tick (GREEN) -> ProducerTick;
+                  forge_block (BLUE) -> ForgedBlock;
+                  self_accept (BLUE) -> AcceptedBlock;
+                  EnqueueBroadcast(token) effect.
+  4. On forge / self-accept failure: HaltOnInvariant — scheduler
+     marks `halted = Some(reason)`; subsequent SlotTicks are ignored
+     and re-emit the original halt reason.
+Cross-surface state sharing: SchedulerState carries the baseline
+  (ledger, chain_dep, mempool, era_schedule); refreshed only by
+  ChainAdvanced. Once halted, deterministic re-emission.
+```
+
+**Rule.** `SchedulerInput` is a **closed 2-variant sum**:
+`SlotTick { slot, inputs }` and `ChainAdvanced { .. }`. Every
+external trigger that drives forging must reduce to one of these two
+variants. `SchedulerEffect` is a **closed 4-variant sum**. The
+scheduler is **pure RED state transition** (mirrors N-B's
+`process_stream_input` shape — wall-clock + I/O live in the outer
+driver, never inside `scheduler_step`). **New work** that adds an
+operator trigger attaches by producing a `SchedulerInput` — not by
+calling forge or self-accept directly, not by adding a parallel
+slot-loop. **GREEN seam**: `assemble_tick(slot, base_state, mempool,
+&TickInputs) -> Result<ProducerTick, TickAssemblyError>` is the only
+sanctioned path from RED signing-primitive outputs to the canonical
+BLUE `ProducerTick` value. The pure-function property is the
+load-bearing GREEN contract (identical `(slot, base_state, mempool,
+inputs)` MUST produce byte-identical ticks across replays —
+DC-CONS-13 / DC-CONS-14).
+
+### Surface: Mempool ingress (Tier-1 wire-level — wired in N-E; unchanged at N-C HEAD)
 
 ```
 Surface: A candidate transaction delivered by a real cardano-node N2N
@@ -197,347 +324,108 @@ Surface: A candidate transaction delivered by a real cardano-node N2N
          accumulating LedgerState
 Reduces to: (MempoolState, AdmitOutcome)
             { Admitted { tx_id } | Rejected { class, error } }
-            (AdmitOutcome from `ade_ledger::mempool::admit`)
 Pipeline (fixed step ordering — no reorder, no shortcut):
-  1. RED transport
-       ade_network::mux::transport (tokio TCP / UDS bearer; bytes in)
-       — moves bytes off the bearer; no parsing.
-  2. BLUE wire grammar (N-A)
-       N2N: ade_network::codec::tx_submission::decode_tx_submission2_message
-            + ade_network::tx_submission::transition::tx_submission2_transition
-            emits InventoryEvent { ServerOpened, IdsRequested, IdsDelivered,
-            TxsRequested, TxsDelivered { tx_bytes: Vec<Vec<u8>> } }
-       N2C: ade_network::n2c::local_tx_submission::codec::decode_local_tx_submission_message
-            + ade_network::n2c::local_tx_submission::transition::local_tx_submission_transition
-            emits LocalTxSubmissionEvent { TxSubmitted { tx_bytes },
-            TxAccepted, TxRejected { .. } }
-       — opaque tx bytes; the state machines do not interpret tx CBOR.
-  3. GREEN bridge (N-E S4 / S5; deterministic, no I/O)
-       N2N: ade_core_interop::tx_submission::ingest_n2n_events(
-             base: LedgerState,
-             per_peer: &[(PeerId, Vec<InventoryEvent>)]
-           ) -> (MempoolState, Vec<AdmitOutcome>)
-       N2C: ade_core_interop::local_tx_submission::ingest_n2c_events(
-             base, per_client: &[(PeerId, Vec<LocalTxSubmissionEvent>)]
-           ) -> (MempoolState, Vec<AdmitOutcome>)
-  4. GREEN canonicalizer (N-E S3; deterministic, no I/O)
-       ade_ledger::mempool::canonicalize::canonicalize_peer_streams(
-         &[PeerSubmissionQueue]
-       ) -> Vec<IngressEvent>
-         — round-robin by sorted `PeerId` byte-lex; tie-break by single-byte
-           source tag (N2N=0, N2C=1).
-  5. BLUE chokepoint (N-E S1)
-       ade_ledger::mempool::ingress::mempool_ingress(
-         &MempoolState, &IngressEvent
-       ) -> (MempoolState, AdmitOutcome)
-         — pure pass-through to `admit` over `event.tx_bytes()`. The
-           `event.source` is RECORDED for evidence/policy/replay but
-           MUST NOT affect the verdict (N-E-N7/N-E-8).
-  6. BLUE admission gate (B2 — unchanged)
-       admit(mempool, tx_cbor) -> (MempoolState, AdmitOutcome)
-         — verdict equals `tx_validity(accumulating, tx)`; no false
-           accept (DC-MEM-01).
-Cross-surface state sharing: the mempool's `accumulating` LedgerState
+  1. RED transport (ade_network::mux::transport)
+  2. BLUE wire grammar (N-A) — tx_submission / local_tx_submission
+  3. GREEN bridge (N-E S4 / S5) — ingest_n2n_events / ingest_n2c_events
+  4. GREEN canonicalizer (N-E S3) — canonicalize_peer_streams
+  5. BLUE chokepoint (N-E S1) — mempool_ingress (verbatim pass-through)
+  6. BLUE admission gate (B2) — admit (verdict equals tx_validity)
+Cross-surface state sharing: the mempool's accumulating LedgerState
   is the only state carried across consecutive `mempool_ingress` calls.
 ```
 
-**Rule.** Mempool ingress is the **Tier-1 wire-level seam**:
-every production tx-bytes path into `admit` MUST go through
-`mempool_ingress`. The single BLUE chokepoint, the closed
-2-variant `IngressSource`, and the verbatim flow of `tx_bytes` (no
-decode, no re-encode) are the load-bearing properties (DC-MEM-03).
-The `IngressSource` variant is **metadata only**: source-invariance
-(N-E-N7 / N-E-8) is CI-enforced. New ingress transports attach by
-**producing `IngressEvent`s and feeding them into `mempool_ingress`**.
-The replay contract (DC-MEM-04) is a **single-step fold** over
-`mempool_ingress`. **Operator action**: the live N2N tx-submission2
-wire evidence is captured into
-`docs/clusters/completed/PHASE4-N-E/CE-N-E-6_2026-05-25.log`
-(outbound-client probe; the bulk-tx half joins CE-NODE-N2C-LTX in
-the future node-binary cluster). The live N2C UDS evidence
-(CE-N-E-7) is **DEFERRED** to the same future cluster
-(CE-NODE-N2C-LTX) — see "Cross-cluster obligation pattern" in §5.
+**Rule.** Carried unchanged from the N-E revision. **N-C note:** the
+mempool snapshot consumed by `forge_block` is precisely the
+`MempoolState` produced by this pipeline — `tick.mempool.accepted()`
+is the canonical accumulating order forge respects (DC-LEDGER-12).
 
-### Surface: Conway tx-body `proposal_procedures` sub-grammar (closed entry point — NEW in PROPOSAL-PROCEDURES-DECODE)
+### Surface: Conway tx-body `proposal_procedures` sub-grammar (closed entry point — carried unchanged from PROPOSAL-PROCEDURES-DECODE)
 
-```
-Surface: The CBOR item bytes at Conway tx-body key 20 (proposal_procedures)
-         captured by the body decoder via skip_item, decoded into a typed
-         vector of ProposalProcedure
-Reduces to: Vec<ProposalProcedure>
-              where ProposalProcedure = {
-                deposit: Coin,
-                return_addr: Vec<u8>,        // raw reward-account bytes (OQ-4)
-                gov_action: GovAction,       // closed 7-variant enum (reused)
-                anchor: Anchor,              // opaque { raw: Vec<u8> } (reused)
-              }
-Pipeline (fixed step ordering — no reorder, no shortcut):
-  1. BLUE Conway tx-body decoder
-       ade_codec::conway::tx::decode_conway_tx_body
-       — captures the CBOR item bytes at key 20 via skip_item.
-  2. BLUE closed-grammar sub-decoder (single sanctioned entry point)
-       ade_codec::conway::governance::decode_proposal_procedures(
-         &[u8]
-       ) -> Result<Vec<ProposalProcedure>, CodecError>
-       — rejects unknown gov_action tag, empty set (CIP-1694 requires
-         non-empty), trailing garbage, truncated procedure, invalid
-         stake credential in UpdateCommittee. No silent-skip arm.
-  3. BLUE per-procedure decoder
-       decode_proposal_procedure → reads [deposit, return_addr, gov_action, anchor]
-       — gov_action via decode_gov_action (closed 7-variant dispatch
-         over GovAction; UpdateCommittee preserves DC-LEDGER-10
-         discriminated StakeCredential).
-  4. BLUE re-encoder (round-trip authority)
-       ade_codec::conway::governance::encode_proposal_procedures
-       — byte-identical PreservedCbor round-trip for every well-formed
-         Conway tx body (DC-LEDGER-11, CE-PP-2, CE-PP-6).
-Cross-surface state sharing: none — pure function over the captured
-  key-20 bytes; era-gate at pre-Conway still enforced by
-  ade_ledger::error::ProposalProceduresInPreConway (CE-PP-4).
-```
+Carried unchanged from the prior revision. The
+`decode_proposal_procedures` BLUE entry point + closed
+`ProposalProcedure` struct + `ci_check_proposal_procedures_closed.sh`
+gate + DC-LEDGER-11 rule remain. N-C did not touch this surface.
 
-**Rule.** `decode_proposal_procedures` is the **single sanctioned
-production decoder** for the Conway tx-body `proposal_procedures`
-sub-grammar. The body codec at key 20 calls the typed decoder +
-encoder; the prior `Option<Vec<u8>>` opaque pass-through is
-forbidden by `ci_check_proposal_procedures_closed.sh` guard 2.
-Construction of `ProposalProcedure` outside the decoder, the
-testkit fixture builders, and `crates/*/tests/` / `#[cfg(test)]`
-blocks is forbidden by guard 5. The closed grammar rejects unknown
-`gov_action` tags, empty sets, trailing garbage, truncated
-procedures, and invalid stake credentials in `UpdateCommittee`.
-The DC-LEDGER-10 discriminant is **preserved unchanged** through
-the `UpdateCommittee` arm (the test
-`update_committee_keeps_stake_credential_discriminant` certifies).
-**Frozen sub-shape** (see §4): `Anchor` stays opaque, `return_addr`
-stays `Vec<u8>` (typed `RewardAccount` is OQ-4 future fidelity),
-`gov_action` reuses the existing closed 7-variant `GovAction` enum
-unchanged. **New work** that extends governance-domain decoding
-attaches as a parallel closed entry point (e.g. a future
-`decode_voting_procedures` for tx-body key 19) — not by reopening
-this decoder, not by adding catch-all arms, not by adding nested
-opacity to `ProposalProcedure`.
-
-### Surface: Single-tx validity (composition root — wired in B2)
+### Surface: Single-tx validity (composition root — wired in B2; unchanged at N-C HEAD)
 
 ```
 Surface: A single Conway transaction (full tx CBOR
-         [body, witness_set, is_valid, aux_data]) decided against a
-         LedgerState (its track_utxo flag selects partial vs. full)
+         [body, witness_set, is_valid, aux_data]) decided against
+         a LedgerState
 Reduces to: TxValidityVerdict { Valid { tx_id, applied } |
                                 Invalid { class, error } }
-Pipeline (fixed step ordering — no reorder, no shortcut):
-  1. ade_ledger::tx_validity::phase1::decode_tx(tx_cbor) -> DecodedTx
-  2. ade_ledger::tx_validity::phase1::tx_phase_one(ledger, &decoded)
-  3. phase-2 (Plutus) via plutus_eval::try_evaluate_tx
-  4. Valid -> evolve via rules::apply_conway_tx_to_utxo;
-     Invalid -> input state returned UNCHANGED
-Cross-surface state sharing: none — pure function.
 ```
 
-**Rule.** `tx_validity` is the **single per-tx composition root** —
-DC-TXV-02. **N-E note:** the production entry from wire transports
-into `tx_validity` is `mempool_ingress` → `admit` → `tx_validity`;
-the composer itself is untouched. **PP note:** the typed
-`ConwayTxBody.proposal_procedures` field is now in scope for any
-future tx-validity precondition that needs to gate on proposal
-content (no such precondition is added in this cluster; the field
-is decoded but not consulted by `tx_validity` at this HEAD).
+**Rule.** Carried. **N-C note:** `tx_validity` is invoked transitively
+by `forge_block` only through `admit`'s prefix re-validation (step 4
+of the forge pipeline); the composer itself is untouched.
 
-### Surface: Mempool admission (Tier-1 gate — wired in B2; N-E added the BLUE bridge above it)
+### Surface: Mempool admission (Tier-1 gate — wired in B2; unchanged)
 
-```
-Surface: A candidate transaction offered to the mempool, against the
-         mempool's accumulating LedgerState
-Reduces to: AdmitOutcome + new MempoolState
-Pipeline:
-  1. ade_ledger::mempool::admit(mempool, tx_cbor) -> (MempoolState, AdmitOutcome)
-     - calls tx_validity(&mempool.accumulating, tx_cbor). NO FALSE ACCEPT (DC-MEM-01).
-  2. ade_ledger::mempool::policy::order(mempool, OrderPolicy)
-     (Tier-5, GREEN — deterministic PERMUTATION over admitted ids — DC-MEM-02)
-```
+**Rule.** Carried. **N-C note:** `admit` is **read-only** from the
+producer side. `forge_block` re-runs `admit` over `tick.mempool_tx_bytes`
+against a fresh `MempoolState::new(tick.base_state.clone())` (a
+side-effect-free re-validation), but **does not call `admit` against
+the running mempool** — the producer never mutates production mempool
+state. DC-LEDGER-12 is the rule.
 
-**Rule.** Admission is a **thin Tier-1 gate over `tx_validity`**. The
-Tier-1 / Tier-5 split is the key seam. **N-E added a second seam
-ABOVE `admit`** — `mempool_ingress` is now the only sanctioned
-production caller of `admit` outside its own `#[cfg(test)]` block.
-`admit` itself is unchanged.
+### Surface: Full block validity (composition root — wired in B1; consumed by N-C self_accept)
 
-### Surface: Full block validity (composition root — wired in B1)
+**Rule.** Carried. **N-C note:** `block_validity` is the single
+chokepoint `self_accept` wraps (CN-CONS-07). The unified body-hash
+recipe at `ade_ledger::block_body_hash::block_body_hash_from_buckets`
+is the **single canonical authority** consumed by both
+`block_validity::header_input` (validator recomputation) and
+`producer::forge::forge_block` (producer emission). DC-CONS-16
+defends the no-bifurcation property
+(`ci_check_no_producer_body_encoder.sh`).
 
-```
-Surface: A full block (era-tagged envelope CBOR) decided against
-         (LedgerState, PraosChainDepState, EraSchedule, LedgerView)
-Reduces to: BlockValidityVerdict
-Pipeline (fixed step ordering — no reorder, no shortcut):
-  1. ade_ledger::block_validity::decode_block(block_cbor) -> DecodedBlock
-  2. ade_core::consensus::validate_and_apply_header (BLUE, FAIL-FAST)
-  3. body-hash binding (CN-CONS-04)
-  4. ade_ledger::rules::apply_block_with_verdicts (BLUE)
-  5. Valid -> evolved (LedgerState', PraosChainDepState'); Invalid -> unchanged
-```
+### Surface: Block bytes, Plutus script bytes, Snapshot bytes, Consensus-input extraction, Ouroboros mux frames, Genesis JSON bundles, Chain-selector stream inputs (carried)
 
-**Rule.** `block_validity` is the **single block-level composition root**.
-**Remaining adjacent gap:** the Conway block-body vkey-witness closure
-(`project_conway_body_witness_gap`).
+All seven external ingress surfaces are unchanged at this HEAD. **N-C
+note (mux frames):** the producer's broadcast queue
+(`ade_runtime::producer::broadcast::BroadcastQueue`) is the upstream
+side of a future N-A handoff into the N2N block-fetch server / chain-sync
+extension. The handoff itself is N-A successor scope; the broadcast
+queue's `dequeue() -> Option<AcceptedBlock>` is the BLUE→RED→wire seam.
 
-### Surface: Block bytes (wired today)
+### Candidates — surfaces not yet wired (Phase 4 N-F, B+ residuals; N-C+ residuals; PP open obligations)
 
-```
-Surface: Block bytes (file/stream/network — caller-supplied)
-Reduces to: BlockEnvelope { era: CardanoEra, era_block: PreservedCbor<EraBlock> }
-Pipeline:
-  1. decode_block_envelope(&[u8]) -> BlockEnvelope
-  2. era-specific decode_<era>_block (closed set — 8 era-block decoders)
-  3. ade_ledger::rules::apply_block_with_verdicts(...) (BLUE)
-```
+The following surfaces are named in the Phase 4 plan / B+ planning /
+the PP open-obligation set but have no source today. They are listed
+so future slice docs can attach without reinventing the reduction
+step. **Each is a candidate seam pending confirmation at cluster
+entry.**
 
-**Rule.** `ade_network` is forbidden from decoding block CBOR.
-
-### Surface: Plutus script bytes (wired today)
-
-```
-Surface: Plutus script bytes (CBOR-wrapped Flat)
-Reduces to: PlutusScript { inner: aiken_uplc::ast::Program<DeBruijn> }
-Pipeline:
-  1. ade_plutus::evaluator::PlutusScript::from_cbor (named ingress chokepoint)
-  2. ade_plutus::tx_eval::eval_tx_phase_two(...) -> TxEvalResult (BLUE)
-```
-
-**Rule.** Distinct ingress surface from block CBOR. Allowlisted file-path
-exception in `ci_check_ingress_chokepoints.sh` Check 3.
-
-### Surface: Snapshot bytes (wired in N-D)
-
-```
-Surface: Snapshot bytes (disk — written and read by the node itself)
-Reduces to: Recoverable::decode_snapshot(&[u8]) -> R  (caller-supplied)
-Pipeline:
-  1. SnapshotStore::latest_snapshot()
-  2. Recoverable::decode_snapshot(bytes)
-  3. for block in ChainDb::iter_from_slot(slot+1): R::apply_block(&block.bytes)
-```
-
-**Rule.** The recovery primitive (`ade_runtime::recovery::recover`) is
-the single path from on-disk state to in-memory state.
-
-### Surface: Consensus-input extraction (snapshot `state` CBOR tail-scan — wired in B1)
-
-```
-Surface: A UTxO-HD `utxohd-mem` ExtLedgerState snapshot `state` CBOR
-Reduces to: PraosNonces { evolving, candidate, epoch, lab, last_epoch_block }
-Pipeline:
-  1. ade_ledger::consensus_input_extract::extract_praos_nonces(&[u8])
-     — fail-CLOSED on anything other than exactly five nonces.
-```
-
-**Rule.** Classified RED behavior; pure-over-bytes. Exact-five is a
-closure invariant.
-
-### Surface: Ouroboros mux frames (wired in N-A)
-
-```
-Surface: Raw bytes off a TCP / Unix-socket bearer (cardano-node peer)
-Reduces to: per-protocol message enums in `ade_network::codec::*` (11 closed enums)
-Pipeline:
-  1. ade_network::mux::transport::MuxTransport::read_raw (RED, async)
-  2. ade_network::mux::frame::decode_frame(&[u8]) (BLUE, sync, pure)
-  3. ade_network::codec::<protocol>::decode_<protocol>_message(payload) (BLUE)
-  4. ade_network::<protocol>::transition::<protocol>_transition(...) (BLUE, sync, pure)
-  5. Session composition / ade_core_interop bridge (RED)
-```
-
-**Rule.** The two chokepoints `mux::frame::{encode_frame, decode_frame}`
-never move. **N-E note:** the `tx-submission2` (N2N) and
-`local-tx-submission` (N2C) protocols' delivered tx bytes are WIRED
-into `mempool::admit` via the `mempool_ingress` chokepoint. The
-bridge is GREEN (`ade_core_interop::tx_submission` +
-`ade_core_interop::local_tx_submission`) + the operator-action live
-session (RED bearer + RED transport — the N-E S6 probe binary
-`live_tx_submission_session` is the executable instance of the N2N
-half).
-
-### Surface: Genesis JSON bundles (wired in N-B)
-
-```
-Surface: Four genesis JSON blobs (byron + shelley + alonzo + conway)
-Reduces to: EraSchedule { anchor, system_start_unix_ms, eras: [EraSummary; ≤7] }
-Pipeline:
-  1. GenesisBundle assembly (RED)
-  2. compute_anchor_hash (RED, pure)
-  3. parse_genesis (RED — serde_json)
-  4. BLUE consensus consumes EraSchedule by-reference
-```
-
-**Rule.** The v1 preimage is FROZEN. Any future schema change is hard
-version-gated.
-
-### Surface: Chain-selector stream inputs (wired in N-B)
-
-```
-Surface: Ordered stream of N-A events (header arrival, rollback request, epoch boundary)
-Reduces to: StreamInput (closed 3-variant enum)
-Pipeline:
-  1. caller wraps each external event in StreamInput
-  2. process_stream_input(...) (GREEN, sync, pure)
-  3. BLUE returns ChainEvent or ChainSelectionReject
-```
-
-**Rule.** Every external trigger that can advance Ade's chain state must
-reduce to one of these three variants.
-
-### Candidates — surfaces not yet wired (Phase 4 N-C, N-F, B+ residuals; PP open obligations)
-
-The following surfaces are named in the Phase 4 plan / B+ planning
-/ the PP cluster's open-obligation set but have no source today.
-They are listed so future slice docs can attach without reinventing
-the reduction step. **Each is a candidate seam pending confirmation
-at cluster entry.**
-
-- **B3 closed the prior revision's "deposit/refund preservation-of-value"
-  candidate** — removed.
-- **B5 WIRED AND CLOSED the prior revision's B4 confirmed extension
-  point** — the owner-tagged `ConwayGovState` effect channel.
-- **OQ5 / COMMITTEE / DREP / ENACTMENT-COMMITTEE-FIDELITY /
-  ENACTMENT-COMMITTEE-WRITEBACK** closed the credential discriminant
-  chain and the live `UpdateCommittee` write-back.
-- **N-E WIRED AND CLOSED the N2N/N2C tx-submission ingest** into
-  `mempool::admit`.
-- **PROPOSAL-PROCEDURES-DECODE WIRED AND CLOSED the prior revision's
-  one remaining governance-domain seam** — the `proposal_procedures`
-  tx-body decode. The four OQ-locked nested opacities (voting_procedures,
-  ParameterChange.update, NewConstitution.raw, typed RewardAccount)
-  are recorded as new separable candidate seams below.
+- **N-C-S3 WIRED AND CLOSED the prior revision's "Forge-block inputs"
+  candidate** — removed (now `ProducerTick` + `forge_block`).
+- **N-C-S6 WIRED AND CLOSED the prior revision's "Operator
+  block-production trigger" candidate** — removed (now `SchedulerInput`
+  + `scheduler_step`).
+- **N-C-S5 WIRED AND CLOSED the producer half of the
+  "header→body bridge" candidate** — the producer-side self-accept
+  bridge consumes `block_validity` directly. The remaining half —
+  routing an externally-arriving header through fork-choice to
+  trigger a full-block decision on the fetched body — remains a
+  candidate (B1+; see below).
+- **PROPOSAL-PROCEDURES-DECODE remains closed** (carried). The four
+  PP open obligations remain separable candidate seams (carried).
+- **PHASE4-N-E remains closed** (carried).
 
 | Cluster | Surface | Expected reduction target | Expected chokepoint | Confidence |
 |---------|---------|---------------------------|---------------------|------------|
-| **PROPOSAL-PROCEDURES-DECODE** *(FULLY CLOSED at this HEAD — mechanical close, no live-wire half)* | **Conway tx-body `proposal_procedures` (key 20) sub-grammar decode** — the RED-prior opaque-bytes field that carried governance proposal payloads as `Option<Vec<u8>>` | `Option<Vec<ProposalProcedure>>` on `ConwayTxBody`, populated by `decode_proposal_procedures` over the key-20 CBOR item bytes; re-encoded byte-identically by `encode_proposal_procedures` | **DONE:** `ade_codec::conway::governance::{decode_proposal_procedures, encode_proposal_procedures, decode_proposal_procedure, decode_gov_action, decode_anchor, decode_gov_action_id_opt, decode_stake_credential, decode_unit_interval, decode_cold_credential_set, decode_cold_credential_epoch_map, decode_hash28_opt}` + closed type `ade_types::conway::governance::ProposalProcedure` + body codec key-20 typed path in `ade_codec::conway::tx`. Gated by `ci_check_proposal_procedures_closed.sh` (DC-LEDGER-11, 5 mechanical guards). Tests: 17 in PP-S1 + 4 in PP-S2 (canonical synthetic corpus harness at `ade_testkit::governance::proposal_procedures_replay`). DC-LEDGER-10 discriminant preserved through the `UpdateCommittee` arm. | **wired & closed in PROPOSAL-PROCEDURES-DECODE** |
-| **PHASE4-N-E** *(FULLY CLOSED — code + live evidence at outbound-client depth; bulk-tx live half joins CE-NODE-N2C-LTX)* | **N2N/N2C tx-submission → mempool ingress (Tier-1 wire-level)** | `mempool_ingress(&MempoolState, &IngressEvent) -> (MempoolState, AdmitOutcome)`, where `IngressEvent { source: IngressSource::{N2N,N2C}, tx_bytes }` flows verbatim into `admit` | **DONE:** see N-E entry below; carried unchanged from the prior revision. | **fully closed in N-E** |
-| **PHASE4-B5** *(WIRED + CLOSED)* | Owner-tagged Conway governance-cert effects → `ConwayGovState` | An applied `ConwayGovState'` via a deterministic fold | **DONE:** `ade_ledger::gov_cert::apply_conway_gov_cert`. Gated by `ci_check_gov_cert_accumulation_closed.sh` (DC-LEDGER-09) | **wired & closed in B5** |
-| **OQ-5** *(WIRED + CLOSED in OQ5-CREDENTIAL-FIDELITY)* | Credential key/script discriminant | A discriminant-preserving credential representation | **DONE.** Gated by `ci_check_credential_discriminant_closed.sh` (DC-LEDGER-10) | **wired & closed in OQ5** |
-| **Committee member / committee-vote discrimination** *(WIRED + CLOSED in COMMITTEE-CRED-FIDELITY)* | `committee` + `committee_votes` were bare `Hash28` at OQ5 | discriminant-faithful committee | **DONE.** Gated by the EXTENDED `ci_check_credential_discriminant_closed.sh` | **wired & closed in COMMITTEE-CRED-FIDELITY** |
-| **DRep-vote discrimination** *(WIRED + CLOSED in DREP-VOTE-FIDELITY)* | `drep_votes` key/script OR-fallback | discriminant-faithful DRep tally | **DONE.** Gated by the EXTENDED gate | **wired & closed in DREP-VOTE-FIDELITY** |
-| **`EnactmentEffects.committee_changes`** *(WIRED + CLOSED in ENACTMENT-COMMITTEE-FIDELITY)* | Bare-`Hash28` committee-change set | discriminant-faithful committee-change set | **DONE.** Gated by check 6 | **wired & closed in ENACTMENT-COMMITTEE-FIDELITY** |
-| **`UpdateCommittee` / `NoConfidence` enactment LOGIC** *(WIRED + CLOSED in ENACTMENT-COMMITTEE-WRITEBACK)* | Prior `enact_proposals` was `let _ = raw;` | `ConwayGovState'` with committee + quorum updated | **DONE:** structured `GovAction::UpdateCommittee`, `apply_committee_enactment`, `rules.rs:1224`. Gated by EXTENDED checks 6 + 7 | **wired & closed in ENACTMENT-COMMITTEE-WRITEBACK** |
-| OQ-3 *(separable follow-up — NOT an open seam now)* | **GOVCERT committee-membership tx-validity gate** | A `TxValidityVerdict::Invalid` on a committee cert with no matching elected member | A new BLUE tx-validity precondition check | candidate (declared separable in B5 cluster doc) |
-| **PP OQ-1 (NEW separable seam — declared open obligation in `DC-LEDGER-11.open_obligation`)** | **`voting_procedures` (Conway tx-body key 19) closed decode** — same opaque-bytes shape as the now-closed key-20 field, deliberately deferred per OQ-1 | A typed `Option<BTreeMap<Voter, BTreeMap<GovActionId, VotingProcedure>>>` (or equivalent CIP-1694 shape) on `ConwayTxBody.voting_procedures` | A parallel BLUE closed-grammar entry point in `ade_codec::conway::governance::decode_voting_procedures` (sibling of `decode_proposal_procedures`); a new closed `VotingProcedure` struct in `ade_types::conway::governance`; a sibling CI gate or an extension of `ci_check_proposal_procedures_closed.sh`; a future `strengthened_in += <cluster>` on DC-LEDGER-11 OR a new DC-LEDGER-12 (registry's choice when planned) | candidate (natural sibling cluster to PROPOSAL-PROCEDURES-DECODE; declared `open_obligation` in DC-LEDGER-11) |
-| **PP OQ-2 (NEW separable seam — declared open obligation)** | **`ParameterChange.update` nested decode** — currently the inner `update` payload stays opaque `Vec<u8>` inside the now-typed `GovAction::ParameterChange` variant | A typed `ProtocolParameterUpdate` (full Conway pparams update sub-grammar) | A new BLUE closed-grammar decoder for the pparams update sub-grammar inside `ade_codec::conway::governance` (or a new module); a future `strengthened_in += <cluster>` on DC-LEDGER-11 if/when closed | candidate (separate large cluster; declared `open_obligation` in DC-LEDGER-11) |
-| **PP OQ-3 (NEW separable seam — declared open obligation)** | **`NewConstitution.raw` nested decode** — currently the inner constitution body stays opaque inside `GovAction::NewConstitution` | A typed `Constitution { anchor, script: Option<Hash28> }` (CIP-1694 shape) | A new BLUE closed-grammar decoder inside `ade_codec::conway::governance`; small but separable; bundleable with the voting-procedures cluster or shipped alone | candidate (declared `open_obligation` in DC-LEDGER-11) |
-| **PP OQ-4 (NEW separable seam — declared open obligation)** | **Typed `RewardAccount` for `proposal_procedure.return_addr`** — currently the `return_addr` field stays raw `Vec<u8>` to keep this cluster's proof obligation narrow | A typed `RewardAccount` (header byte + `StakeCredential` discriminant) | Lift `return_addr: Vec<u8>` → `return_addr: RewardAccount` on `ProposalProcedure`; would also strengthen `TreasuryWithdrawals.withdrawals` element type in one move; closes a shared fidelity decision across both surfaces | candidate (typed reward-account fidelity; declared `open_obligation` in DC-LEDGER-11; would also touch B3 withdrawals shape) |
-| OQ5+ *(declared non-goal — NOT an open seam now)* | **Withdrawal / required-signer / address credential discriminant** | A discriminant-faithful credential threaded through these surfaces | extend the closed `StakeCredential` discriminant | candidate |
-| OQ5+ *(declared non-goal — NOT an open seam now)* | **`Hash28`-keyed stake-distribution snapshot** | A discriminant-faithful snapshot key | re-key on `StakeCredential` | candidate |
-| OQ5+ *(declared non-goal — NOT an open seam now)* | **Byron credential surface** | discriminant-faithful Byron credentials (if ever required) | a SEPARABLE Byron-era follow-up | candidate |
-| **CE-NODE-N2C-LTX (cross-cluster obligation introduced in N-E S5; carried to the future node-binary cluster)** | **Live N2C UDS server + N2N bulk-tx inbound listener** | The deferred half of CE-N-E-7 + the deferred half of CE-N-E-6 — both reduce through the same BLUE `mempool_ingress` chokepoint that's already wired | The future node-binary cluster ships the live socket loops; the GREEN bridges + canonicalizer + chokepoint + CI gates are already in place at this HEAD; only the `_<date>.log` evidence file is owed | **deferred cross-cluster obligation (NOT an open seam in N-E)** |
-| **N-E+ (declared non-goal in the N-E cluster doc; separable future seam, NOT an open seam now)** | **Outbound tx propagation** — Ade serving txs to peers via tx-submission2 | An outbound `TxSubmission2Message` stream emitted from the mempool's admitted set | A separate authority surface — a new BLUE/GREEN outbound bridge in `ade_core_interop`; explicitly declared OUT-OF-SCOPE for N-E | candidate (declared non-goal in N-E) |
-| **N-E+ (declared non-goal in the N-E cluster doc; Tier-5)** | **Mempool bounds / shedding policy** — `CN-MEM-01`, `CN-MEM-03`, `DC-MEM-02` strengthening | A bounded mempool whose shedding rule never alters `admit`'s verdict | Tier-5 cluster extending `OrderPolicy`; would only escalate to N-E scope if a bound changed admission verdicts | candidate (declared non-goal in N-E) |
-| DREP-FIDELITY+ *(permanent non-goal — NOT a follow-up)* | **`spo_votes`** | n/a — SPO votes are pool key-hashes only | no change | **permanent non-goal** |
+| **PHASE4-N-C** *(FULLY CLOSED at this HEAD — mechanical close; live half blocked_until_operator_stake_available)* | **Producer pipeline: ProducerTick → ForgedBlock → AcceptedBlock → broadcast queue** | `(SchedulerState, Vec<SchedulerEffect>)` per slot tick; `AcceptedBlock` on success | **DONE:** `ade_ledger::producer::{forge::forge_block, self_accept::self_accept, state::ProducerTick}` (BLUE); `ade_runtime::producer::{signing, keys, scheduler, broadcast, tick_assembler}` (RED+GREEN); `ade_codec::shelley::opcert::{encode_opcert, decode_opcert}` (BLUE closed-grammar); `ade_core::consensus::opcert_validate::opcert_validate` (BLUE chokepoint); `ade_ledger::block_body_hash::block_body_hash_from_buckets` (single canonical body-hash authority); CI gates `ci_check_private_key_custody.sh`, `ci_check_opcert_closed.sh`, `ci_check_forge_purity.sh`, `ci_check_no_private_keys_in_corpus.sh`, `ci_check_no_producer_body_encoder.sh`, `ci_check_self_accept_gate.sh`, `ci_check_scheduler_closure.sh`, `ci_check_producer_corpus_present.sh`. Registry rules `DC-CRYPTO-03/04/05`, `DC-CONS-11/12/13/14/15/16`, `DC-LEDGER-12`, `CN-CONS-06/07`, `OP-OPS-04/05` (`enforced`). Tests: 17 named tests across S1..S7 plus replay corpus. | **wired & closed in PHASE4-N-C (mechanical half + structural cross-impl); crypto-level cross-impl awaiting operator stake** |
+| **CE-N-C-8 (cross-cluster obligation introduced in N-C S7; operator-action live evidence)** | **Live N2N block-fetch acceptance by a real cardano-node peer of an Ade-forged block** | The crypto-level cross-impl claim (real KES/VRF signatures observed over the wire) — same operator-action evidence pattern as CE-N-B-6 and CE-N-E-6 | The future evidence-capture pass via `live_block_production_session` against a real preprod / preview cardano-node; procedure at `docs/clusters/PHASE4-N-C/CE-N-C-8_PROCEDURE.md`; output `CE-N-C-LIVE_<date>.log`. | **deferred operator-action obligation — `blocked_until_operator_stake_available` per `CN-CONS-06.open_obligation`** |
+| **N-C+ (declared non-goal in N-C cluster doc; OQ-4 lock — separable future seam)** | **TPraos producer (Shelley..Alonzo full-block production)** | A TPraos-flavored `ProducerTick` arm + per-era body buckets | Extend `forge_block` to a closed `era` dispatch; today Conway/Praos only. | candidate (declared non-goal — explicit OQ-4 lock) |
+| **N-A+ (N-C handoff target)** | **N2N producer-side block-fetch server role + chain-sync extension** (delivery of broadcast-queued `AcceptedBlock` bytes to peers) | An outbound `BlockFetchMessage::Block(bytes)` stream emitted from the producer's `BroadcastQueue::dequeue()` output | A new BLUE / GREEN outbound bridge in `ade_network` consuming the queue; the producer side is already in place. | candidate (declared non-goal in N-C; binary layer + N-A successor) |
+| **CE-NODE-N2C-LTX (cross-cluster obligation carried from N-E)** | **Live N2C UDS server + N2N bulk-tx inbound listener** | The deferred halves of CE-N-E-7 + CE-N-E-6 | The future node-binary cluster ships the live socket loops. | **deferred cross-cluster obligation (NOT an open seam in N-E)** |
+| **PP OQ-1..OQ-4 (NEW separable seams — declared open obligations on DC-LEDGER-11)** | voting_procedures decode / ParameterChange.update nested / NewConstitution.raw nested / typed RewardAccount | per OQ | per OQ | candidate (carried) |
 | B+ (full tx UTxO scope) | Full-scope single-tx validity over real resolved UTxO | `TxValidityVerdict` at `track_utxo=true` | `tx_validity` (existing) | candidate |
 | B+ (Conway body witness depth) | **Conway block-body vkey-witness closure** — `project_conway_body_witness_gap` | `BlockValidityVerdict` whose body authority runs the same closure as `tx_phase_one` | wire `tx_phase_one` / `verify_required_witnesses` into the Conway block-body path in `rules.rs` | candidate (B2-carried) |
 | B+ (pre-Conway tx) | Pre-Conway single-tx validity | `TxValidityVerdict` via per-era body decode + per-era `SignerSource` | extend `decode_tx` + add the era arm to `required_signers` | candidate |
-| B1+ (header→body bridge) | Forge/fetch bridge: a fork-choice-winning header triggers a full-block decision on the fetched body | `block_validity(...)` over the fetched body | `ade_node` composition layer joining `process_stream_input` and `block_validity` | candidate |
+| B1+ (header→body bridge — receive-side) | Externally-arriving header triggering a full-block decision on the fetched body | `block_validity(...)` over the fetched body | `ade_node` composition layer joining `process_stream_input` and `block_validity` | candidate (B1-carried; N-C closed the **producer-side** half via self_accept) |
 | B1+ (pre-Babbage block) | TPraos full-block validity (Shelley..Alonzo) | `BlockValidityVerdict` via a TPraos `HeaderInput` projection | extend `block_validity::decode_block` to build `HeaderVrf::Tpraos` headers | candidate |
-| N-C | Forge-block inputs (mempool + state + slot + KES + VRF) | `BlockEnvelope` bytes (forged, then re-decoded for validation) | `ade_runtime::forge::forge_block` (proposed) | candidate |
-| N-C | Operator block-production trigger | `StreamInput::HeaderArrival(HeaderInput)` | `process_stream_input` (existing) | candidate |
 | N-F | LSQ semantic dispatch (LocalStateQuery payloads) | Internal Query enum (closed, not yet defined) | Single dispatch fn that consumes `LocalStateQueryMessage` opaque-bytes payloads | candidate |
 | N-F | LocalTxMonitor semantic dispatch | Mempool-snapshot Query/Reply enums | Single dispatch fn that consumes `LocalTxMonitorMessage` opaque-bytes payloads | candidate |
 | N-B+ | Live cardano-node session driver (for `ade_core_interop::live_consensus_session`) | `StreamInput` translated from `ChainSyncMessage` and `BlockFetchMessage` events | Composition layer in `ade_core_interop` | candidate |
@@ -548,483 +436,315 @@ The Ade workspace closes Tier-1 wire-level seams in two halves: a
 mechanical / GREEN half (code + harness + CI gates that the workspace
 itself can certify on every push) and a **live-wire operator-action
 half** (a real peer / client at the other end of a real socket
-producing bytes Ade has never seen). The latter is captured into
-evidence logs at canonical paths in the cluster directory.
+producing bytes Ade has never seen).
 
-**At this HEAD two live-evidence logs are committed**, and one
-cross-cluster obligation is named. **PROPOSAL-PROCEDURES-DECODE adds
-NO new operator-action entries** — its evidence is fully mechanical
-(decoder unit tests + canonical synthetic corpus harness + CI gate).
-A future cluster that strengthens this surface against real-chain
-corpora (declared as a possible PP-S2 extension per OQ-5) would
-fold its evidence into the existing cluster archive or its own
-successor cluster directory.
+**At this HEAD two live-evidence logs are committed**, one
+cross-cluster obligation is carried from N-E, and **N-C adds one
+new operator-action procedure that is `blocked_until_operator_stake_available`**.
 
 | Procedure | Evidence-log artifact | Status at HEAD | What it asserts | TCB |
 |-----------|----------------------|----------------|------------------|-----|
 | `docs/clusters/completed/PHASE4-N-B/CE-N-B-6_PROCEDURE.md` | `docs/clusters/completed/PHASE4-N-B/CE-N-B-6_<date>.log` | **CAPTURED** (carried from N-B close) | Real cardano-node N-B follow-mode tip agreement | RED operator action |
-| `docs/clusters/completed/PHASE4-N-E/CE-N-E-6_PROCEDURE.md` | `docs/clusters/completed/PHASE4-N-E/CE-N-E-6_2026-05-25.log` | **CAPTURED** (carried from N-E close) | Outbound-client probe against a real preprod N2N relay: handshake v15, tx-submission2 codec round-trip, BLUE `tx_submission2_transition` state-machine driven correctly under live traffic, accumulator records `frames_received=1 requests_ids=1 tx_bytes=0`. Bulk-tx half deferred to CE-NODE-N2C-LTX. | RED operator action |
-| `docs/clusters/completed/PHASE4-N-E/CE-N-E-7_PROCEDURE.md` | (deferred) `CE-NODE-N2C-LTX_<date>.log` in the future node-binary cluster | **DEFERRED to CE-NODE-N2C-LTX** | Real `cardano-cli transaction submit` to Ade over the N2C UDS; verdict matches N2N submission of the same bytes. **Adapter-mechanical half closed in N-E S5.** | RED operator action (deferred) |
+| `docs/clusters/completed/PHASE4-N-E/CE-N-E-6_PROCEDURE.md` | `docs/clusters/completed/PHASE4-N-E/CE-N-E-6_2026-05-25.log` | **CAPTURED** (carried from N-E close) | Outbound-client probe against a real preprod N2N relay | RED operator action |
+| `docs/clusters/completed/PHASE4-N-E/CE-N-E-7_PROCEDURE.md` | (deferred) `CE-NODE-N2C-LTX_<date>.log` in the future node-binary cluster | **DEFERRED to CE-NODE-N2C-LTX** | Real `cardano-cli transaction submit` to Ade over the N2C UDS | RED operator action (deferred) |
+| **`docs/clusters/PHASE4-N-C/CE-N-C-8_PROCEDURE.md` (NEW in N-C-S7)** | **(pending)** `docs/clusters/PHASE4-N-C/CE-N-C-LIVE_<date>.log` | **`blocked_until_operator_stake_available`** (per `CN-CONS-06.open_obligation`) | An Ade-forged block carrying real cardano-cli-skey-signed KES + VRF + opcert sigma is accepted by a real cardano-node peer when delivered via N2N. Crypto-level cross-impl claim (the bytes-shape claim is mechanically closed by `cross_impl_adapter`). | RED operator action |
 
 **Operator-action probe binaries (RED — `ade_core_interop::bin::*`).**
-The mechanical half of an operator-action evidence pattern is an
-`#[ignore]`-gated closure-gate test + a binary that the operator
-invokes to capture the live log. The binary is RED (uses `tokio`,
-real sockets) and lives in `crates/ade_core_interop/src/bin/`. At
-this HEAD there are **two** such binaries:
+At this HEAD there are **three** such binaries:
 
 | Binary | Slice | Live-evidence target | Status |
 |--------|-------|----------------------|--------|
 | `live_consensus_session` (PHASE4-N-B) | N-B | CE-N-B-6 (live chain-sync follow-mode tip agreement) | captured |
 | `live_tx_submission_session` (PHASE4-N-E S6) | N-E S6 | CE-N-E-6 (live N2N tx-submission2 outbound-client probe) | captured |
+| **`live_block_production_session` (PHASE4-N-C S7) — NEW** | N-C S7 | CE-N-C-8 (live N2N block-fetch acceptance by cardano-node) | **blocked_until_operator_stake_available** |
 
-**Pattern.** Hermetic default mode (codec loopback / readiness probe
-that runs in CI without network access — gated `#[ignore]`); plus a
-`--connect <peer>` live pass that the operator runs against a real
-cardano-node peer. The binary's evidence log is committed alongside
-the `_PROCEDURE.md` in the cluster directory.
+**Pattern.** Hermetic default mode (readiness probe that runs in CI
+without network access — gated `#[ignore]`); plus a `--connect <peer>`
+live pass that the operator runs against a real cardano-node peer.
+The binary's evidence log is committed alongside the `_PROCEDURE.md`
+in the cluster directory. **N-C strengthens the pattern with the
+"blocked_until_operator_stake_available" status**: a third closure
+mode (beyond captured / deferred) for live evidence whose blocker is
+not Ade-internal — testnet SPO stake registration is an external
+dependency the operator must provision. The pattern follows OP-OPS-04's
+precedent.
 
-**These are evidence-log patterns, not BLUE seams.** They do not move
-or wrap any chokepoint; they are the on-the-wire half of an existing
-mechanical surface. **PROPOSAL-PROCEDURES-DECODE does not add a new
-probe binary** — the cluster's evidence is fully mechanical.
+**These are evidence-log patterns, not BLUE seams.**
 
 User confirmation needed for each candidate at cluster entry. **The
-most load-bearing remaining candidates for the bounty** are the
-**Conway block-body vkey-witness closure** (the carried B2 gap), the
-**forge / header→body bridge**, **CE-NODE-N2C-LTX** (the deferred
-live N2C UDS server + N2N bulk-tx inbound listener), and the four
-**PROPOSAL-PROCEDURES-DECODE open obligations** (voting_procedures
-closure being the natural sibling).
+most load-bearing remaining candidates for the bounty** are
+**CE-N-C-8** (the live cardano-node acceptance), the **receive-side
+header→body bridge**, **CE-NODE-N2C-LTX** (the deferred live N2C UDS
+server + N2N bulk-tx inbound listener), and the four
+**PROPOSAL-PROCEDURES-DECODE open obligations**.
 
 ---
 
 ## 2. Data-Only vs. Authoritative Layers
 
-Ade has **fourteen** authoritative domains. For each, a single BLUE
-chokepoint holds enforcement authority; tooling layers (when they
-exist) live in GREEN (`ade_testkit`, `ade_core_interop` bridges) or
-RED (`ade_runtime`, `ade_network::mux::transport`,
-`ade_network::session`). **PROPOSAL-PROCEDURES-DECODE added one
-domain — the closed `proposal_procedures` sub-grammar authority — a
-new BLUE entry point `decode_proposal_procedures` sitting inside
-the existing Conway tx-body codec surface, with a closed
-`ProposalProcedure` struct as the typed reduction target and a
-GREEN canonical synthetic corpus + replay harness as the
-PreservedCbor round-trip witness.** N-E added the prior new domain
-(mempool ingress). Prior cluster narratives are preserved unchanged
-below.
+Ade has **fifteen** authoritative domains. **PHASE4-N-C added one new
+domain — block production authority** — a new BLUE composition root
+(`forge_block`) consuming a canonical input value (`ProducerTick`),
+gated above by a closed self-accept bridge (`self_accept` /
+`AcceptedBlock`), and assembled below by a closed RED / GREEN
+scheduler / tick-assembler stack. Prior cluster narratives are
+preserved unchanged below.
 
-### Conway tx-body `proposal_procedures` sub-grammar authority (NEW in PROPOSAL-PROCEDURES-DECODE)
+### Block production authority (NEW in PHASE4-N-C)
 
 | Layer | Module | Color | Role |
 |-------|--------|-------|------|
-| **Data-only — closed sub-grammar decoder** | `ade_codec::conway::governance::{decode_proposal_procedures, decode_proposal_procedure, decode_gov_action, decode_anchor, decode_gov_action_id_opt, decode_stake_credential, decode_unit_interval, decode_cold_credential_set, decode_cold_credential_epoch_map, decode_hash28_opt}` | BLUE | Closed CDDL sub-grammar over `proposal_procedure = [coin, reward_account, gov_action, anchor]`. No catch-all accept. Rejects unknown `gov_action` tag, empty set, trailing garbage, truncated procedure, invalid stake credential. |
-| **Data-only — closed sub-grammar re-encoder** | `ade_codec::conway::governance::{encode_proposal_procedures, encode_proposal_procedure, encode_gov_action, encode_anchor, ...}` | BLUE | Byte-identical round-trip authority. PreservedCbor for every well-formed Conway tx body (CE-PP-2, CE-PP-6). |
-| **Closed type** | `ade_types::conway::governance::ProposalProcedure` | BLUE | Closed 4-field struct `{ deposit: Coin, return_addr: Vec<u8>, gov_action: GovAction, anchor: Anchor }`. Construction outside `decode_proposal_procedures` and the testkit fixture builders is forbidden on production paths by CI guard 5. |
-| **Authoritative field shape** | `ade_types::conway::tx::ConwayTxBody.proposal_procedures` | BLUE | `Option<Vec<ProposalProcedure>>` (was `Option<Vec<u8>>` prior to PP-S1). The body codec at key 20 calls the typed decoder + encoder; the opaque-bytes form is CI-forbidden by guard 2. |
-| **Era-gate (carried — pre-Conway reject path)** | `ade_ledger::error::ProposalProceduresInPreConway` | BLUE | Pre-Conway era rejects key 20. Unchanged by PP-S1 (CE-PP-4). |
-| **GREEN canonical-synthetic corpus + replay harness (PP-S2)** | `ade_testkit::governance::proposal_procedures_replay` | GREEN | Synthesizes well-formed Conway tx-body fixtures covering all 7 `GovAction` variants + the DC-LEDGER-10 `UpdateCommittee` discriminant case; asserts decode + encode is byte-identical (CE-PP-6). Deterministic; no I/O; no clocks. |
-| **CI gate (PP-S1)** | `ci/ci_check_proposal_procedures_closed.sh` | CI | 5 mechanical guards: (1) `ProposalProcedure` struct defined with 4 fields; (2) `ConwayTxBody.proposal_procedures` is `Option<Vec<ProposalProcedure>>` (not opaque bytes); (3) `ade_codec::conway::governance` exports `decode_proposal_procedures` + `encode_proposal_procedures`; (4) body codec at key 20 calls the typed decoder + encoder; (5) no `ProposalProcedure { ... }` struct-literal construction outside sanctioned sites (the decoder file, `ade_testkit`, `crates/*/tests/`, inline `#[cfg(test)]` blocks). Wired into `DC-LEDGER-11` (`enforced`). |
+| **RED signing primitives (S1)** | `ade_runtime::producer::signing::{vrf_prove, kes_sign, kes_update, VrfSigningKey, KesSecret, ColdSigningKey, SigningError}` | RED | Holds in-memory private keys; `zeroize`-on-drop; no `pub` raw-byte accessors. Forbidden in BLUE / codec / types / ledger / crypto public APIs by `ci_check_private_key_custody.sh`. |
+| **RED key loader (S1)** | `ade_runtime::producer::keys::{load_vrf_signing_key_skey, load_kes_signing_key_skey, load_cold_signing_key_skey, KeyLoadError}` | RED | Disk reads of cardano-cli `*.skey` text envelopes; decoding into RED in-memory secrets. Operator-provided keys only (Ade does NOT generate — OP-OPS-04). |
+| **BLUE closed-grammar opcert authority (S2)** | `ade_codec::shelley::opcert::{encode_opcert, decode_opcert, OpCertCodecError}` | BLUE | Single producer-side opcert byte authority. Standalone 4-tuple `[hot_vkey:bstr32, sequence_number:uint, kes_period:uint, sigma:bstr64]`. Header CBOR delegates here. Closed `OpCertCodecError` sum. |
+| **BLUE opcert validation chokepoint (S2)** | `ade_core::consensus::opcert_validate::{opcert_validate, OpCertError}` | BLUE | Single RED→BLUE opcert acceptance chokepoint. Closed error sum: `CounterRegression`, `CounterRepeat`, `PeriodMismatch`, `BadColdSignature`, shape rejects. Defended by `ci_check_opcert_closed.sh`. |
+| **BLUE canonical input value (S3)** | `ade_ledger::producer::state::ProducerTick` | BLUE | Closed 14-field struct (no `#[non_exhaustive]`). Every input `forge_block` needs as an explicit value. Private-key fields forbidden by CI. |
+| **BLUE forge transition (S3)** | `ade_ledger::producer::forge::{forge_block, ForgeError, ForgeEffects, ForgedBlock}` | BLUE | Pure, total, deterministic. Closed error sum (no `String`-bearing variants; replay-byte-stable). Composes `is_leader_for_vrf_output` (validator-shared). Tx-admissibility prefix gate via `admit`. Body buckets assembled from preserved bytes via `split_conway_tx_components`. |
+| **BLUE single canonical body-hash authority (S4)** | `ade_ledger::block_body_hash::{block_body_hash_from_buckets, block_body_hash}` | BLUE | The **only** function in the workspace that computes the Cardano block body-hash recipe. Both `block_validity::header_input` (validator) and `producer::forge::forge_block` (producer) hash through this function. Closes the producer/validator encoder bifurcation (DC-CONS-16). Defended by `ci_check_no_producer_body_encoder.sh`. |
+| **BLUE self-accept bridge (S5)** | `ade_ledger::producer::self_accept::{self_accept, AcceptedBlock, SelfAcceptError}` | BLUE | Wraps `block_validity` (the single closed validator authority). `AcceptedBlock` newtype: private field, private constructor (only reachable via `Ok(...)` arm of `self_accept`). Closed `SelfAcceptError` sum. The type-level broadcast gate. Defended by `ci_check_self_accept_gate.sh` (6 guards). |
+| **GREEN tick assembler (S6)** | `ade_runtime::producer::tick_assembler::{assemble_tick, TickInputs, TickAssemblyError}` | GREEN | Pure function stitching RED signing-primitive outputs + mempool snapshot into a canonical `ProducerTick`. Observably deterministic (identical inputs → byte-identical `ProducerTick`). Never invokes signing primitives, never reads I/O. |
+| **RED scheduler core (S6)** | `ade_runtime::producer::scheduler::{scheduler_step, SchedulerInput, SchedulerEffect, SchedulerState, SchedulerHaltReason}` | RED | Pure RED state transition (mirrors N-B's `process_stream_input` shape). Wall-clock + I/O live in the outer driver. Closed `SchedulerInput` (2 variants) + `SchedulerEffect` (4 variants) + `SchedulerHaltReason` (2 variants). |
+| **RED broadcast queue (S6)** | `ade_runtime::producer::broadcast::{BroadcastQueue, BroadcastError}` | RED | FIFO `VecDeque<AcceptedBlock>`. `enqueue(&mut self, AcceptedBlock)` consumes the token by value — type-level gate. Closed `BroadcastError` sum. |
+| **GREEN mechanical cross-impl harness (S7)** | `ade_testkit::producer::{cross_impl_adapter, fixtures, reference_vectors, replay}` | GREEN | Decode-round-trip + body-hash binding (via S4's authority) + structural field agreement across forge ⊕ decoder. Closes the bytes-shape half of CN-CONS-06. Replay corpus carries signed artifacts only — never private keys (defended by `ci_check_no_private_keys_in_corpus.sh`). |
+| **RED operator-action probe binary (S7)** | `ade_core_interop::bin::live_block_production_session` | RED | Third instance of the operator-action probe binary pattern. Hermetic default + `--connect` live pass. Loads cardano-cli `*.skey` envelopes, runs RED scheduler → GREEN tick-assembler → BLUE forge → BLUE `self_accept` for each leader slot in the window, logs JSON-Lines per slot. Status `blocked_until_operator_stake_available`. |
+| **CI gates (S1..S7)** | `ci/ci_check_{private_key_custody, opcert_closed, forge_purity, no_private_keys_in_corpus, no_producer_body_encoder, self_accept_gate, scheduler_closure, producer_corpus_present}.sh` | CI | 8 mechanical gates defending the producer authority surface. Total CI count: 32 → 40. |
 
-**Rule.** This domain has **one BLUE closed sub-grammar decoder**
-(`decode_proposal_procedures`), **one BLUE re-encoder**
-(`encode_proposal_procedures` — the round-trip authority for
-PreservedCbor), **one closed 4-field domain type**
-(`ProposalProcedure`), and **one GREEN canonical synthetic corpus +
-replay harness** (`proposal_procedures_replay`). **THE KEY SEAMS:**
+**Rule.** This domain has **one BLUE forge transition** (`forge_block`),
+**one BLUE self-accept bridge** (`self_accept`), **one BLUE closed
+sub-grammar opcert authority** (`{encode,decode}_opcert`), **one BLUE
+opcert validation chokepoint** (`opcert_validate`), **one BLUE single
+canonical body-hash authority** (`block_body_hash_from_buckets`),
+**one BLUE canonical input value** (`ProducerTick`), **one GREEN tick
+assembler** (`assemble_tick`), **one RED scheduler** (`scheduler_step`),
+**one RED broadcast queue** (`BroadcastQueue`), **one GREEN
+mechanical cross-impl harness** (`cross_impl_adapter`), and **one RED
+operator-action probe binary** (`live_block_production_session`).
+**THE KEY SEAMS:**
 
-1. **`decode_proposal_procedures` is the single sanctioned
-   production decoder** for the Conway tx-body `proposal_procedures`
-   sub-grammar (CI-enforced — guards 3 + 4).
-2. **`ConwayTxBody.proposal_procedures` is typed end-to-end —
-   `Option<Vec<ProposalProcedure>>`** — reverting to the opaque
-   `Option<Vec<u8>>` form is CI-forbidden by guard 2.
-3. **The closed sub-grammar rejects** unknown `gov_action` tag,
-   empty set (CIP-1694 requires non-empty), trailing garbage,
-   truncated procedure, and invalid stake credential in
-   `UpdateCommittee`. No silent-skip arm.
-4. **DC-LEDGER-10 discriminant is preserved unchanged** through
-   the `UpdateCommittee` arm of `decode_gov_action` — the test
-   `update_committee_keeps_stake_credential_discriminant` is the
-   in-vivo certifier; `KeyHash(h)` and `ScriptHash(h)` of equal
-   28 bytes remain distinct through the round-trip.
-5. **PreservedCbor round-trip is byte-identical** for every
-   well-formed Conway tx body (CE-PP-2 — synthetic, CE-PP-6 —
-   canonical corpus harness).
+1. **RED→BLUE seam is `forge_block(&ProducerTick)`** — every input
+   forge needs is a value on `ProducerTick`. No ambient state, no
+   implicit ledger reads, no clock, no rand, no private-key bytes.
+2. **BLUE→RED seam is `AcceptedBlock`** — type-level broadcast gate.
+   `BroadcastQueue::enqueue(&mut self, AcceptedBlock)` consumes the
+   token by value; the only constructor of `AcceptedBlock` is the
+   `Ok(...)` arm of `self_accept`. CI-defended (6 guards).
+3. **Body-hash recipe is single-authority** —
+   `block_body_hash_from_buckets` is the only function in the
+   workspace that computes the recipe. Producer and validator hash
+   through the same function. CI-defended.
+4. **Opcert byte authority is single-authority** —
+   `ade_codec::shelley::opcert::{encode_opcert, decode_opcert}` is
+   the closed-grammar pair. The prior inline header-path emit is
+   forbidden. CI-defended.
+5. **Leader-check is shared with the validator** —
+   `is_leader_for_vrf_output` is the single source of leader truth
+   (NC-VRF-3, OQ-12). No producer-side fork.
+6. **Tx-admissibility prefix gate** — forge re-runs `admit` over
+   `tick.mempool_tx_bytes` against `MempoolState::new(tick.base_state.clone())`
+   in canonical accumulating order. Permutation / fabrication /
+   skipping = `ForgeError::MempoolAcceptedMismatch`. DC-LEDGER-12.
+7. **Private-key custody is RED-confined** —
+   `*SigningKey` / `KesSecret` / `ColdSigningKey` types are forbidden
+   in `ade_core` / `ade_codec` / `ade_types` / `ade_ledger` /
+   `ade_crypto` public APIs by `ci_check_private_key_custody.sh`.
+   Replay corpora carry signed artifacts only (no private keys) by
+   `ci_check_no_private_keys_in_corpus.sh`.
+8. **Scheduler is pure-RED state transition** — wall-clock + I/O live
+   in the outer driver. Once halted (forge or self-accept failure),
+   subsequent `SlotTick`s re-emit the original halt reason —
+   deterministic re-emission, not silent recovery.
 
-**New work** that adds a governance-domain decoder attaches as a
-**parallel closed entry point** (e.g. a future
-`decode_voting_procedures` for tx-body key 19) — not by reopening
-this decoder, not by adding catch-all arms, not by adding nested
-opacity to `ProposalProcedure`. Strengthening the four
-declared-non-goal nested opacities (voting_procedures,
-ParameterChange.update, NewConstitution.raw, typed RewardAccount)
-attaches by either: (a) appending the new cluster to
-`DC-LEDGER-11.strengthened_in` if the strengthening is in-place
-(typed RewardAccount qualifies), or (b) introducing a new
-DC-LEDGER-1X rule with bidirectional cross-ref to DC-LEDGER-11 if
-the strengthening is a parallel surface (voting_procedures
-qualifies).
+**New work** that adds a producer feature attaches by extending
+`ProducerTick` (canonical input value), the forge pipeline (closed
+steps), or the scheduler effect set (closed sum) — not by adding a
+parallel forge path, not by bypassing the self-accept gate, not by
+re-implementing the body-hash recipe.
 
-**Declared non-goals carried from the cluster doc (open obligations
-in DC-LEDGER-11):** `voting_procedures` decode (OQ-1),
-`ParameterChange.update` nested decode (OQ-2), `NewConstitution.raw`
-nested decode (OQ-3), typed `RewardAccount` for `return_addr` (OQ-4),
-GREEN snapshot-loader changes (different path), Plutus phase-2
-validation of proposal procedures, mempool / propagation effects of
-proposals, Tier-5 governance surfaces.
+**Declared non-goals carried from the cluster doc:** TPraos producer
+(OQ-4 lock — Conway/Praos only), Ade-side key generation (OQ-1
+lock — cardano-cli operator workflow), Ade-side opcert renewal
+(OQ-6 lock — cardano-cli minting), full N2N producer-side block-fetch
+server-side delivery (N-A successor scope; the broadcast queue is
+the upstream side of that handoff).
 
-### Mempool ingress — the Tier-1 wire-level / per-peer canonicalizer / `mempool_ingress` boundary (NEW in N-E)
+### Mempool ingress (carried unchanged from N-E)
 
-| Layer | Module | Color | Role |
-|-------|--------|-------|------|
-| **RED wire transport** | `ade_network::mux::transport` (existing) | RED | Bears bytes off a TCP / UDS socket; no parsing. Untouched by N-E. |
-| **BLUE wire grammar (N-A; carried)** | `ade_network::tx_submission::{codec, transition}` (N2N) + `ade_network::n2c::local_tx_submission::{codec, transition}` (N2C) | BLUE | Closed mini-protocol codecs + state machines; emit `InventoryEvent { TxsDelivered { tx_bytes: Vec<Vec<u8>> }, … }` (N2N) or `LocalTxSubmissionEvent { TxSubmitted { tx_bytes }, … }` (N2C). |
-| **GREEN bridge — N2N (N-E S4)** | `ade_core_interop::tx_submission::{event_to_ingress, PeerAccumulator, ingest_n2n_events}` | GREEN | Per-peer `InventoryEvent` accumulator. Pure; no I/O; no clocks. |
-| **GREEN bridge — N2C (N-E S5)** | `ade_core_interop::local_tx_submission::{local_event_to_ingress, ClientAccumulator, ingest_n2c_events}` | GREEN | Per-client `LocalTxSubmissionEvent` accumulator. Pure; no I/O; no clocks. |
-| **GREEN per-peer canonicalizer (N-E S3)** | `ade_ledger::mempool::canonicalize::{canonicalize_peer_streams, PeerId, PeerSubmissionQueue}` | GREEN | Deterministic round-robin canonicalization of multi-peer queues. The load-bearing GREEN fairness contract. |
-| **BLUE chokepoint (N-E S1)** | `ade_ledger::mempool::ingress::{IngressSource, IngressEvent, mempool_ingress}` | BLUE | The single sanctioned production path into `admit` from non-test code. DC-MEM-03 (`enforced`). |
-| **BLUE admission gate (B2 — carried; unchanged)** | `ade_ledger::mempool::admit::admit` | BLUE | A tx is admitted iff `tx_validity(accumulating, tx)` is `Valid`. No false accept (DC-MEM-01, `strengthened_in += PHASE4-N-E`). |
-| **GREEN replay harness (N-E S2)** | `ade_testkit::mempool::{ingress_replay::{wrap_as_ingress, b_track_corpus_as_ingress, replay_ingress_trace, BTrackCase, ExpectedOutcome}}` | GREEN | Single-step fold over `mempool_ingress` (CI-enforced). Byte-identical traces (DC-MEM-04). |
-| **CI gates (N-E)** | `ci/ci_check_mempool_ingress_closure.sh` + `ci/ci_check_mempool_ingress_replay.sh` | CI | DC-MEM-03 + DC-MEM-04. |
-| **Operator-action evidence (N-E)** | `docs/clusters/completed/PHASE4-N-E/{CE-N-E-6_PROCEDURE.md, CE-N-E-7_PROCEDURE.md, CE-N-E-6_2026-05-25.log}` + `live_tx_submission_session` (S6 probe binary) | RED operator action | CE-N-E-6 **captured**; CE-N-E-7 deferred to CE-NODE-N2C-LTX. |
+Carried. **N-C note:** the mempool snapshot consumed by `forge_block`
+is the canonical `MempoolState` produced by this pipeline.
 
-**Rule.** This domain has two GREEN bridge layers, one GREEN
-canonicalizer, and one BLUE chokepoint. Source-invariance
-(`IngressSource` is metadata only), verbatim tx-bytes flow, single
-sanctioned production caller of `admit`, and per-peer round-robin
-canonicalization are the load-bearing properties (see N-E close
-narrative for full detail; carried unchanged from the prior
-revision).
+### Conway tx-body `proposal_procedures` sub-grammar authority (carried unchanged from PROPOSAL-PROCEDURES-DECODE)
 
-**Declared non-goals carried from the cluster doc:** outbound tx
-propagation, mempool bounds / shedding policy, the
-`proposal_procedures` tx-body decode (**now closed in
-PROPOSAL-PROCEDURES-DECODE**).
+Carried.
 
-**Deferred cross-cluster obligation:** `CE-NODE-N2C-LTX` (live N2C
-UDS server + N2N bulk-tx inbound listener).
+### Conway value-conservation accounting / Conway certificate-state accumulation / Credential discriminant fidelity / Conway governance-cert accumulation / Single-tx validity / Mempool admission / Full block validity / Ledger application / Stake-snapshot projection for consensus / Plutus phase-2 evaluation / Governance ratification & enactment / Mini-protocol wire conformance / Praos consensus runtime
 
-### Conway value-conservation accounting — the deposit/refund/withdrawal authority (NEW in B3)
-
-| Layer | Module | Color | Role |
-|-------|--------|-------|------|
-| **Data-only — cert grammar** | `ade_codec::conway::cert::decode_conway_certs` | BLUE | Closed CDDL grammar over tags `0..18`. No catch-all accept. |
-| **Data-only — withdrawals grammar** | `ade_codec::conway::withdrawals::{decode_withdrawals, withdrawals_sum}` | BLUE | Closed map grammar. Never last-wins. |
-| **Closed cert domain types** | `ade_types::conway::cert::{ConwayCert, CertDisposition, DepositEffect, CoinSource}` | BLUE | Closed sum types. |
-| **Canonical deposit-param surface** | `ade_ledger::pparams::{ConwayOnlyDepositParams, ConwayDepositParams}` + `ade_ledger::state::{conway_deposit_params, conway_deposit_view}` | BLUE | Sole canonical authority (DC-TXV-07). |
-| **Closed cert classifier** | `ade_ledger::cert_classify::classify` | BLUE | Total, compiler-exhaustive map. |
-| **Authoritative enforcement** | `ade_ledger::conway::check_conway_coin_conservation` | BLUE | Frozen §9.1 reject precedence. |
-| **Determinism fold** | `ade_ledger::fingerprint::fingerprint_pparams` | BLUE | Byte-identical for non-Conway. |
-| **Allowlisted deposit-param loader** | `ade_testkit` snapshot loader | GREEN | One allowlisted non-canonical source. |
-| **Adversarial harness** | `ade_testkit` conservation adversarial corpus (CE-B3-6) | GREEN | No false accept. |
-
-**Rule.** Frozen §9.1 reject precedence: decode → era-validity →
-missing-environment → state-dependent-accounting → conservation.
-
-### Conway certificate-state accumulation — the owner-tagged apply authority (NEW in B4)
-
-| Layer | Module | Color | Role |
-|-------|--------|-------|------|
-| **Data-only — owner-complete cert grammar** | `ade_codec::conway::cert::decode_conway_certs` (+ `decode_drep`) | BLUE | Owner-complete closed CDDL grammar. |
-| **Data-only — single shared pool-params decoder** | `ade_codec::shelley::cert::read_pool_registration_cert` | BLUE | ONE pool_params decode site (DC-LEDGER-08). |
-| **Closed action classifier** | `ade_ledger::delegation::conway_cert_action` | BLUE | Total, compiler-exhaustive. No `Neutral` action. |
-| **Owner-tagged apply model** | `ade_ledger::delegation::apply_conway_cert` | BLUE | Governance-affecting certs owner-tagged out of B4 mutation scope. |
-| **Era-dispatch + fail-closed accumulation** | `ade_ledger::rules::accumulate_tx_certs` | BLUE | Fail-closed era dispatch. |
-
-**Rule.** The owner-tagging boundary is the key seam (consumed by B5).
-
-### Credential discriminant fidelity — the closed credential surface (NEW in OQ5; extended in COMMITTEE / DREP / ENACTMENT-COMMITTEE-FIDELITY / ENACTMENT-COMMITTEE-WRITEBACK; CONSUMED unchanged in PROPOSAL-PROCEDURES-DECODE)
-
-| Layer | Module | Color | Role |
-|-------|--------|-------|------|
-| **Closed credential domain type** | `ade_types::shelley::cert::StakeCredential` | BLUE | Closed 2-variant `{ KeyHash(Hash28), ScriptHash(Hash28) }`. |
-| **Data-only — closed credential-decode chokepoints** | `ade_codec::{shelley,conway}::cert::decode_stake_credential` | BLUE | Each maps `0 → KeyHash`, `1 → ScriptHash`; rejects unknown tag. **PP cluster adds a third use site** at `ade_codec::conway::governance::decode_stake_credential` (UpdateCommittee inner reads); preserves the same closed 2-variant mapping. |
-| **Authoritative enforcement — gov-state key surface** | `ade_ledger::state::ConwayGovState.{vote_delegations, committee_hot_keys, drep_expiry, committee}` + `ade_types::conway::governance::GovActionState.{committee_votes, drep_votes}` | BLUE | All discriminated `StakeCredential`. |
-| **Determinism — discriminant-faithful fingerprint** | `ade_ledger::fingerprint::{write_stake_credential, write_credential_vote_list}` | BLUE | Emits discriminant before hash. |
-| **Narrow read-only boundary adapter** | `StakeCredential::hash()` | BLUE | Sanctioned discriminant-discarding extraction; ONLY against declared non-goal surfaces. |
-
-**Rule.** Discriminant preserved end-to-end on the BLUE authoritative
-path (DC-LEDGER-10, strengthened across all five OQ5/COMMITTEE/DREP/
-ENACTMENT clusters). **DC-LEDGER-11 (PROPOSAL-PROCEDURES-DECODE)
-CONSUMES this rule unchanged** via the `UpdateCommittee` arm of
-`decode_gov_action`; bidirectional cross-ref recorded in the
-registry. `DC-LEDGER-10.cross_ref` now includes `DC-LEDGER-11`;
-`DC-LEDGER-11.cross_ref = [DC-LEDGER-10]`.
-
-### Conway governance-cert accumulation — the owner-tagged apply authority (NEW in B5)
-
-| Layer | Module | Color | Role |
-|-------|--------|-------|------|
-| **Data-only — owner-complete cert grammar (carried)** | `ade_codec::conway::cert::decode_conway_certs` | BLUE | B4 grammar carried unchanged. |
-| **Fail-fast gov-cert environment** | `ade_ledger::state::GovCertEnv` + `LedgerState::gov_cert_env()` | BLUE | Fail-fast `MissingDRepActivityParam`. |
-| **Closed total gov-cert dispatch** | `ade_ledger::gov_cert::apply_conway_gov_cert` | BLUE | Total compiler-exhaustive `match` with no `_ =>` wildcard. |
-| **Gov-state ingress (era-dispatch + fold)** | `ade_ledger::rules::accumulate_tx_certs` | BLUE | Threads `Option<ConwayGovState>`. |
-| **Determinism fold (T-DET-01 migration)** | `ade_ledger::fingerprint` | BLUE | `drep_activity` extension. |
-
-**Rule.** B5 closes the consuming half of B4's owner-tagging boundary
-(DC-LEDGER-09, strengthens DC-LEDGER-08).
-
-### Single-tx validity — the per-tx composition root (B2)
-
-| Layer | Module | Color | Role |
-|-------|--------|-------|------|
-| **Decode / projection** | `ade_ledger::tx_validity::phase1::decode_tx` | BLUE | Lifts the PRESERVED body slice. |
-| **Required-signer enumeration** | `ade_ledger::tx_validity::required_signers::*` | BLUE | Closed, era-versioned (DC-TXV-05). |
-| **Witness closure** | `ade_ledger::tx_validity::witness::verify_required_witnesses` | BLUE | Fail-closed coverage. |
-| **Shared per-tx phase-1** | `ade_ledger::tx_validity::phase1::tx_phase_one` | BLUE | The single per-tx phase-1 authority. |
-| **Phase-2 dispatch** | `crate::plutus_eval::try_evaluate_tx` → `ade_plutus::tx_eval::eval_tx_phase_two` | BLUE | Plutus phase-2. |
-| **Composition transition** | `ade_ledger::tx_validity::transition::tx_validity` | BLUE | Single chokepoint. |
-| **Comparison surface** | `ade_ledger::tx_validity::encoding::*` | BLUE | Canonical CBOR (coarse class). |
-
-**Rule.** Two phase authorities and one composer. The composer
-`tx_validity` introduces no rules of its own and never moves
-(DC-TXV-02). **N-E note:** the production path from wire transports
-into `tx_validity` is `mempool_ingress` → `admit` → `tx_validity`;
-the composer itself is untouched. **PP note:** the typed
-`ConwayTxBody.proposal_procedures` field is in scope for any future
-tx-validity precondition that needs to gate on proposal content;
-no such precondition is added in this cluster.
-
-### Mempool admission — the Tier-1 / Tier-5 boundary (B2; carried)
-
-| Layer | Module | Color | Role |
-|-------|--------|-------|------|
-| **Tier-1 admission gate** | `ade_ledger::mempool::admit::admit` | BLUE | Admitted iff `tx_validity(...)` is `Valid`. No false accept (DC-MEM-01). |
-| **Mempool state** | `ade_ledger::mempool::admit::MempoolState` | BLUE | `accepted: Vec<Hash32>` + `accumulating: LedgerState`. |
-| **Tier-5 ordering policy** | `ade_ledger::mempool::policy::order` | GREEN behavior | Deterministic permutation (DC-MEM-02). |
-
-**Rule.** The Tier-1 / Tier-5 split is load-bearing. **N-E added the
-new BLUE bridge `mempool_ingress` ABOVE `admit`** — see the new
-"Mempool ingress" domain above. `admit` itself is unchanged.
-
-### Full block validity — the block-level composition root (B1)
-
-| Layer | Module | Color | Role |
-|-------|--------|-------|------|
-| **Decode / projection** | `ade_ledger::block_validity::header_input::decode_block` | BLUE | Era-dispatched. |
-| **Consensus header authority** | `ade_core::consensus::validate_and_apply_header` | BLUE | Decided first, fail-fast. |
-| **Ledger body authority** | `ade_ledger::rules::apply_block_with_verdicts` | BLUE | Body half. |
-| **Composition transition** | `ade_ledger::block_validity::transition::block_validity` | BLUE | Single chokepoint. |
-| **Comparison surface** | `ade_ledger::block_validity::encoding::*` | BLUE | Canonical CBOR (coarse). |
-
-**Rule.** Two sub-authorities and one composer. `block_validity`
-never moves. **Known extension points:** the Conway block-body
-vkey-witness closure; pre-Babbage TPraos full blocks.
-
-### Ledger application
-
-| Layer | Module | Color | Role |
-|-------|--------|-------|------|
-| **Data-only tooling** | `ade_codec` | BLUE\* | Decodes block / tx / cert / withdrawal bytes; **PP: now also typed `proposal_procedures` sub-grammar via `ade_codec::conway::governance`**. |
-| **Authoritative enforcement** | `ade_ledger` | BLUE | `apply_block_with_verdicts` / `tx_validity` / `check_conway_coin_conservation` / `accumulate_tx_certs` + `delegation::apply_conway_cert` / `gov_cert::apply_conway_gov_cert` / `governance::apply_committee_enactment`. |
-| **Loader** | `ade_runtime::chaindb` + `ade_runtime::recovery` | RED | Reads block / snapshot bytes from disk. |
-
-\* `ade_codec` is BLUE-data-only.
-
-### Stake-snapshot projection for consensus (B1)
-
-| Layer | Module | Color | Role |
-|-------|--------|-------|------|
-| **Trait boundary** | `ade_core::consensus::ledger_view::LedgerView` | BLUE | Closed 4-method surface. |
-| **Production projection** | `ade_ledger::consensus_view::PoolDistrView` | BLUE | The leadership-relevant projection. |
-| **Test stub** | `ade_testkit::consensus::ledger_view_stub::LedgerViewStub` | GREEN | Pre-B1 stub. |
-
-**Rule.** `LedgerView` is a closed trait, not a plugin point.
-
-### Plutus phase-2 evaluation
-
-| Layer | Module | Color | Role |
-|-------|--------|-------|------|
-| **Data-only tooling** | `ade_plutus::cost_model`, `ade_plutus::script_context` | BLUE | |
-| **Script ingress** | `ade_plutus::evaluator::PlutusScript::from_cbor` | BLUE | Named ingress chokepoint. |
-| **Authoritative enforcement** | `ade_plutus::tx_eval::eval_tx_phase_two` | BLUE | Single entry. |
-| **Quarantine** | `aiken_uplc` git dep | external | Frozen at tag `v1.1.21` `42babe5d`. |
-
-**Rule.** No second public entry; aiken types do not leak.
-
-### Governance ratification / enactment (Conway)
-
-| Layer | Module | Color | Role |
-|-------|--------|-------|------|
-| **Data-only tooling — governance types** | `ade_types::conway::governance` (incl. **NEW `ProposalProcedure` from PP-S1**; existing `GovAction`, `Anchor`, `GovActionId`, etc.) | BLUE | Closed governance domain types. |
-| **Data-only tooling — closed sub-grammar decoder (NEW in PP)** | `ade_codec::conway::governance::{decode_proposal_procedures, encode_proposal_procedures, decode_gov_action, …}` | BLUE | Closed sub-grammar at Conway tx-body key 20; preserves DC-LEDGER-10 discriminant through `UpdateCommittee`. |
-| **Authoritative enforcement** | `ade_ledger::governance::{evaluate_ratification, enact_proposals, expire_proposals}` | BLUE | Chokepoints. |
-| **Committee write-back** *(ENACTMENT-COMMITTEE-WRITEBACK)* | `ade_ledger::governance::apply_committee_enactment` | BLUE | Closed pure transition called at the `rules.rs` epoch boundary. |
-| **Snapshot decode (data-only)** *(tightened in 168ac02; carried)* | `ade_testkit` snapshot loader | GREEN | Fail-closed decode of `update_committee`. |
-| **GREEN canonical synthetic corpus + replay harness (NEW in PP-S2)** | `ade_testkit::governance::proposal_procedures_replay` | GREEN | Round-trip harness for the `proposal_procedures` sub-grammar across all 7 `GovAction` variants. |
-
-**Rule.** A new governance action variant adds a variant to `GovAction`
-+ arms in all three enactment chokepoints **plus an arm in the new
-PP `decode_gov_action` / `encode_gov_action`**. **The
-`proposal_procedures` tx-body decode seam is CLOSED at this HEAD
-(PROPOSAL-PROCEDURES-DECODE).** The remaining open governance-domain
-seams are the four PP open obligations recorded in
-`DC-LEDGER-11.open_obligation`: `voting_procedures` decode (OQ-1),
-`ParameterChange.update` nested decode (OQ-2), `NewConstitution.raw`
-nested decode (OQ-3), typed `RewardAccount` for `return_addr` (OQ-4).
-
-### Mini-protocol wire conformance (N-A)
-
-| Layer | Module | Color | Role |
-|-------|--------|-------|------|
-| **Data-only tooling (frame)** | `ade_network::mux::frame` | BLUE | Pure encode/decode. |
-| **Data-only tooling (messages)** | `ade_network::codec::*` (11 modules) | BLUE | 11 closed wire grammars. |
-| **Authoritative enforcement (state)** | `ade_network::*::transition` + `n2c::local_*::transition` | BLUE | 8 closed pure transition functions. |
-| **Bearer (I/O)** | `ade_network::mux::transport` | RED | Tokio-based scaffold. |
-| **Session composition (placeholder)** | `ade_network::session::mod` | RED | S-A9 placeholder. |
-| **Live-interop capture tools** | `ade_network::bin::capture_*` | RED | Operator/dev tools. |
-| **Tx-submission bridges** *(N-E)* | `ade_core_interop::{tx_submission, local_tx_submission}` | GREEN | |
-| **Tx-submission probe binary** *(N-E S6)* | `ade_core_interop::bin::live_tx_submission_session` | RED | |
-
-**Rule.** The codec layer is opaque to higher semantics.
-
-### Praos consensus runtime (N-B)
-
-| Layer | Module | Color | Role |
-|-------|--------|-------|------|
-| **Data-only tooling (genesis)** | `ade_runtime::consensus::genesis_parser` | RED | Closed `GenesisParseError`. |
-| **Schedule authority** | `ade_core::consensus::era_schedule` | BLUE | `EraSchedule::new` validates. |
-| **Stake-snapshot boundary** | `LedgerView` ↔ `PoolDistrView` / `LedgerViewStub` | mixed | |
-| **Header admission** | `ade_core::consensus::header_validate::validate_and_apply_header` | BLUE | Single chokepoint. |
-| **Best-chain authority** | `ade_core::consensus::fork_choice::select_best_chain` | BLUE | Single chokepoint. |
-| **Rollback authority** | `ade_core::consensus::rollback::apply_rollback` | BLUE | Single chokepoint. |
-| **Candidate materialization** | `ade_runtime::consensus::candidate_fragment` | GREEN | Non-authoritative. |
-| **Orchestration** | `ade_runtime::consensus::chain_selector::process_stream_input` | GREEN | Threads `StreamInput`. |
-| **Live-interop driver (scaffold)** | `ade_core_interop::bin::live_consensus_session` | RED | The original operator-action probe binary; pattern reused by N-E S6. |
-| **Replay harness** | `ade_testkit::consensus::stream_replay::replay_stream` | GREEN | |
-
-**Rule.** Five rules: genesis-parser sole RED→BLUE materialization;
-`BootstrapAnchorHash` binds; `LedgerView` closed; authoritative
-chokepoints never move; selector and chain-dep advance in lockstep.
+All carried unchanged from the prior revision. **N-C-specific
+strengthening:** the body-hash recipe used by `block_validity` is now
+delegated to `block_body_hash::block_body_hash_from_buckets` (T-ENC-01
+`strengthened_in += PHASE4-N-C`); the leader-schedule function
+`is_leader_for_vrf_output` gained a second canonical caller (the
+producer-side `forge_block` — DC-CONS-15); the opcert byte path now
+goes through the closed-grammar pair `{encode,decode}_opcert`
+(DC-CONS-11).
 
 ### Where the boundary is enforced
 
-- `ci_check_dependency_boundary.sh` — no BLUE crate may depend on RED.
-  PP added no new crate edge.
+- `ci_check_dependency_boundary.sh` — no BLUE crate may depend on
+  RED. N-C added an `ade_runtime → ade_ledger` edge (RED → BLUE
+  via the `producer::AcceptedBlock` token import) — allowed.
 - `ci_check_no_async_in_blue.sh` — async forbidden in BLUE.
-- **`ci_check_proposal_procedures_closed.sh`** *(PP-S1 — DC-LEDGER-11,
-  `status=enforced`)* — see the §2 "Conway tx-body `proposal_procedures`
-  sub-grammar" entry above for the 5 guards.
-- `ci_check_mempool_ingress_closure.sh` *(N-E — DC-MEM-03,
-  `status=enforced`)*.
-- `ci_check_mempool_ingress_replay.sh` *(N-E — DC-MEM-04,
-  `status=enforced`)*.
-- `ci_check_credential_discriminant_closed.sh` — DC-LEDGER-10.
-- `ci_check_gov_cert_accumulation_closed.sh` *(B5 — DC-LEDGER-09)*.
-- `ci_check_deposit_param_authority.sh` *(B3 — DC-TXV-07)*.
-- `ci_check_conway_cert_classification_closed.sh` *(B3F — DC-TXV-06)*.
+- **`ci_check_private_key_custody.sh`** *(N-C-S1 — DC-CRYPTO-03/04/05,
+  OP-OPS-04)* — forbids any `*SigningKey` / `KesSecret` / cold-key
+  type from appearing in `ade_core` / `ade_codec` / `ade_types` /
+  `ade_ledger` / `ade_crypto` public APIs.
+- **`ci_check_opcert_closed.sh`** *(N-C-S2 — DC-CONS-11/12)* —
+  forbids parallel opcert encoders / decoders outside
+  `ade_codec::shelley::block` + `ade_codec::shelley::opcert` +
+  `ade_core::consensus::opcert_validate`.
+- **`ci_check_forge_purity.sh`** *(N-C-S3 — DC-CONS-13/14/15,
+  DC-LEDGER-12)* — forbids `std::time::SystemTime`, `rand`,
+  `HashMap` iteration, `std::env`, `std::fs`, `async`, `println!`
+  in `forge.rs` / `state.rs` / `tx_components.rs`. Forbids
+  `VrfDraft03::prove` / `Sum6Kes::sign_kes` calls inside
+  `ade_ledger/src/producer/` or `ade_core/src/`. Forbids
+  `#[non_exhaustive]` on the closed sums. Forbids `String`-bearing
+  variants on `ForgeError` / `ForgeEffects`.
+- **`ci_check_no_private_keys_in_corpus.sh`** *(N-C-S3 — DC-CONS-14)*
+  — forbids private-key bytes in producer replay corpora.
+- **`ci_check_no_producer_body_encoder.sh`** *(N-C-S4 — DC-CONS-16)*
+  — grep gate forbidding any new `pub fn .*encode_block_body` outside
+  the canonical authority.
+- **`ci_check_self_accept_gate.sh`** *(N-C-S5 — CN-CONS-07)* —
+  6 mechanical guards: (1) `AcceptedBlock` has no public constructor
+  outside `self_accept.rs` (struct-literal + return-type grep);
+  (2) `AcceptedBlock.bytes` field is private; (3) `SelfAcceptError`
+  is a closed sum (no `#[non_exhaustive]`, no `String`-bearing
+  variant); (4) `self_accept` calls the canonical `block_validity`;
+  (5) `self_accept` does NOT re-implement validator sub-steps
+  (`validate_and_apply_header`, `decode_block`, `block_body_hash`
+  forbidden in `self_accept.rs` production source);
+  (6) no `pub fn` returning raw `Vec<u8>` / `&[u8]` outside the
+  `as_bytes` / `into_bytes` accessors on the token.
+- **`ci_check_scheduler_closure.sh`** *(N-C-S6 — OP-OPS-05)* —
+  scheduler closure properties.
+- **`ci_check_producer_corpus_present.sh`** *(N-C-S7 — CN-CONS-06)*
+  — guards producer fixture corpus presence + non-empty
+  `expected_forged.cbor` outputs.
+- **`ci_check_constitution_coverage.sh`** *(modified at N-C close)*
+  — release/operational entries may carry `code_locus` / `ci_script`
+  / `tests` when `status = "enforced"`; forbidden only on
+  `declared` / `partial` / `blocked` statuses. Closes the enforcement-evidence
+  pinning for `CN-CONS-06/07` and `OP-OPS-04/05`.
+- `ci_check_proposal_procedures_closed.sh` *(PP — DC-LEDGER-11)* — carried.
+- `ci_check_mempool_ingress_closure.sh` / `ci_check_mempool_ingress_replay.sh`
+  *(N-E — DC-MEM-03/04)* — carried.
+- `ci_check_credential_discriminant_closed.sh` *(OQ5 / COMMITTEE /
+  DREP / ENACTMENT — DC-LEDGER-10)* — carried.
+- `ci_check_gov_cert_accumulation_closed.sh` *(B5 — DC-LEDGER-09)* —
+  carried.
+- `ci_check_deposit_param_authority.sh` *(B3 — DC-TXV-07)* — carried.
+- `ci_check_conway_cert_classification_closed.sh` *(B3F — DC-TXV-06)*
+  — carried.
 - `ci_check_no_chaindb_in_consensus_blue.sh` / `ci_check_no_float_in_consensus.sh`
-  / `ci_check_no_density_in_fork_choice.sh` / `ci_check_consensus_closed_enums.sh`.
+  / `ci_check_no_density_in_fork_choice.sh` / `ci_check_consensus_closed_enums.sh`
+  — carried.
 - `ci_check_pallas_quarantine.sh`, `ci_check_no_signing_in_blue.sh`,
-  `ci_check_ingress_chokepoints.sh`, `ci_check_ce_n_a_5_proof.sh`.
-
-**PP note on `ci_check_ingress_chokepoints.sh`:** the
-`decode_proposal_procedures` BLUE entry point is a **sub-grammar
-decoder** invoked from within an existing ingress chokepoint
-(`decode_conway_tx_body` at key 20); it operates on already-captured
-sub-bytes and is therefore outside this gate's scope (the existing
-body-decode chokepoint is the one that fits the chokepoints model).
-Its closure is instead defended mechanically by
-`ci_check_proposal_procedures_closed.sh`.
+  `ci_check_ingress_chokepoints.sh`, `ci_check_ce_n_a_5_proof.sh` —
+  carried.
 
 ---
 
 ## 3. Closed vs. Extensible Registries
 
-Ade's authority surface is **almost entirely closed.** **PP-S1 added
-two closed surfaces** — `ProposalProcedure` (closed 4-field struct)
-and `decode_proposal_procedures` (closed-grammar entry point) — plus
-**one CI gate** (`ci_check_proposal_procedures_closed.sh`), bringing
-CI count `31 → 32`. PP-S1 also typed the `ConwayTxBody.proposal_procedures`
-field from `Option<Vec<u8>>` to `Option<Vec<ProposalProcedure>>` (a
-shape change on an existing closed struct). PP added **no new wholly
-open extensible surface**; PP-S2 added the GREEN canonical-synthetic
-corpus harness as a tooling-only extensible surface
-(`ade_testkit::governance::proposal_procedures_replay`).
+Ade's authority surface is **almost entirely closed.** **PHASE4-N-C
+added eleven closed surfaces** — `ProducerTick` (closed 14-field
+struct), `ForgeError` / `ForgeEffects` / `ForgedBlock` (closed sums),
+`OpCertError` (closed validation-error sum), `OpCertCodecError`
+(closed codec-error sum), `SelfAcceptError` / `AcceptedBlock` (closed
+sum + closed newtype token), `SchedulerInput` / `SchedulerEffect` /
+`SchedulerHaltReason` (closed sums for the producer state machine),
+`TickAssemblyError` (closed GREEN assembler-error sum), `BroadcastError`
+(closed RED queue-error sum), the `signing::{VrfSigningKey, KesSecret,
+ColdSigningKey, SigningError}` closed key/error set, and the
+single-canonical body-hash chokepoint
+`block_body_hash::block_body_hash_from_buckets`. Plus **eight CI gates**
+(CI count 32 → 40) and **fourteen registry rules** (T total 176 → 190).
 
 ### Closed (frozen — version-gated changes only)
 
 | Registry | Location | Count | Change Rule |
 |----------|----------|-------|-------------|
 | `CardanoEra` | `ade_types::era` | 8 variants | New variant = new hard fork. |
-| `Certificate` | `ade_types::shelley::cert` | 7 variants | Shelley-era frozen. **B4:** `PoolRegistrationCert.owners` added. |
-| **`StakeCredential`** *(closed 2-variant — NEW shape in OQ5)* | `ade_types::shelley::cert` | 2 variants — `KeyHash(Hash28)`, `ScriptHash(Hash28)` | Grep-gated by `ci_check_credential_discriminant_closed.sh` (DC-LEDGER-10). |
-| **Credential-decode chokepoints** *(closed grammar — NEW in OQ5; THIRD use site added in PP)* | `ade_codec::{shelley,conway}::cert::decode_stake_credential` + **`ade_codec::conway::governance::decode_stake_credential` (NEW in PP-S1 — used by `UpdateCommittee` arm of `decode_gov_action`)** | 3 functions | All three preserve the closed 2-variant mapping. |
-| **`ConwayCert`** *(closed CDDL grammar — refined in B3, owner-completed in B4)* | `ade_types::conway::cert` | 19 variants over tags `0..18` | Grep-gated by `ci_check_conway_cert_classification_closed.sh`. |
-| `GovAction` *(UpdateCommittee re-shaped structured in ENACTMENT-COMMITTEE-WRITEBACK; **reused unchanged by PP-S1 `decode_gov_action`**)* | `ade_types::conway::governance` | 7 variants (cardinality unchanged) | Closed 7-variant. PP-S1 wires `decode_gov_action` / `encode_gov_action` over these 7 variants; new variant = simultaneous addition to all three enactment chokepoints + the PP decoder + the PP encoder. |
-| **`ProposalProcedure`** *(NEW in PP-S1 — DC-LEDGER-11)* | `ade_types::conway::governance` | closed struct `{ deposit: Coin, return_addr: Vec<u8>, gov_action: GovAction, anchor: Anchor }` | Closed 4-field domain type. **Construction outside `decode_proposal_procedures` + the testkit fixture builders + `crates/*/tests/` + inline `#[cfg(test)]` blocks is CI-forbidden** (`ci_check_proposal_procedures_closed.sh` guard 5). |
-| **`decode_proposal_procedures` chokepoint** *(NEW in PP-S1 — DC-LEDGER-11; closed-grammar entry point, not a registry)* | `ade_codec::conway::governance` | 1 function — `pub fn decode_proposal_procedures(&[u8]) -> Result<Vec<ProposalProcedure>, CodecError>` | The **single sanctioned production decoder** for the Conway tx-body `proposal_procedures` sub-grammar. Closed grammar: no silent-skip arm; rejects unknown `gov_action` tag, empty set, trailing garbage, truncated procedure, invalid stake credential. The body codec at key 20 is the only production caller (CI guard 4); the opaque `Option<Vec<u8>>` form on `ConwayTxBody.proposal_procedures` is CI-forbidden (guard 2). |
-| **`encode_proposal_procedures` chokepoint** *(NEW in PP-S1 — DC-LEDGER-11)* | `ade_codec::conway::governance` | 1 function | The **single re-encoder** — byte-identical round-trip authority for PreservedCbor (CE-PP-2, CE-PP-6). |
+| `Certificate` | `ade_types::shelley::cert` | 7 variants | Shelley-era frozen. |
+| `StakeCredential` *(OQ5)* | `ade_types::shelley::cert` | 2 variants | DC-LEDGER-10. |
+| Credential-decode chokepoints *(OQ5 + PP)* | `ade_codec::{shelley,conway}::cert::decode_stake_credential` + `ade_codec::conway::governance::decode_stake_credential` | 3 functions | Closed 2-variant mapping. |
+| `ConwayCert` *(B3/B4)* | `ade_types::conway::cert` | 19 variants | DC-LEDGER-08. |
+| `GovAction` *(PP/ENACTMENT)* | `ade_types::conway::governance` | 7 variants | DC-LEDGER-11. |
+| `ProposalProcedure` *(PP)* | `ade_types::conway::governance` | closed 4-field struct | DC-LEDGER-11. |
+| `decode_proposal_procedures` / `encode_proposal_procedures` *(PP)* | `ade_codec::conway::governance` | 2 functions | DC-LEDGER-11. |
 | `MIRPot` | `ade_types::shelley::cert` | 2 variants | Frozen. |
 | `DRep` | `ade_types::conway::cert` | 4 variants | CIP-1694 fixed. |
-| **`CertDisposition`** *(B3)* | `ade_types::conway::cert` | 3 variants | Era-grammar reject is NOT a `DepositEffect`. |
-| **`DepositEffect`** *(B3)* | `ade_types::conway::cert` | 2 variants | Closed. |
-| **`CoinSource`** *(B3)* | `ade_types::conway::cert` | 3 variants | Closed deposit-provenance set. |
-| **`ConwayCertAction`** *(B4)* | `ade_ledger::delegation` | closed — one variant per Conway cert kind | No `Neutral` variant. |
-| **`GovernanceCertEffect`** / **`GovernanceOwner`** / **`OwnerTaggedEffect`** / **`ConwayCertOutcome`** *(B4)* | `ade_ledger::delegation` | closed | The owner-tagged effect plumbing B5 consumes. |
-| **`GovCertEnv`** *(B5)* | `ade_ledger::state` | closed struct `{ current_epoch, drep_activity }` | Fail-fast `MissingDRepActivityParam`. |
-| **`apply_conway_gov_cert` dispatch** *(B5)* | `ade_ledger::gov_cert` | 1 function — total `match` over `ConwayCert` | No `_ =>` wildcard. Grep-gated by `ci_check_gov_cert_accumulation_closed.sh` (DC-LEDGER-09). |
-| **`apply_committee_enactment` write-back** *(ENACTMENT-COMMITTEE-WRITEBACK)* | `ade_ledger::governance` | 1 pure transition | Operates on discriminated `BTreeMap<StakeCredential, u64>`. Called at `rules.rs:1224`. |
-| **`EnactmentEffects` struct** | `ade_ledger::governance` | closed struct | Grep-gated by `ci_check_credential_discriminant_closed.sh` check 6. |
-| **`IngressSource`** *(N-E S1 — DC-MEM-03)* | `ade_ledger::mempool::ingress` | 2 variants — `N2N`, `N2C` | Closed source discriminant. Grep-defended. |
-| **`IngressEvent`** *(N-E S1 — DC-MEM-03)* | `ade_ledger::mempool::ingress` | closed struct `{ source: IngressSource, tx_bytes: Vec<u8> }` | Closed flat-data envelope. |
-| **`mempool_ingress` chokepoint** *(N-E S1 — DC-MEM-03)* | `ade_ledger::mempool::ingress` | 1 function | The single BLUE chokepoint from wire ingress into `admit`. |
-| **`MempoolState.accumulating` field-write closure** *(strengthened in N-E S1 — DC-MEM-03)* | `crates/ade_ledger/src/mempool/admit.rs` | 1 production write site | Grep-gated. |
-| `PlutusLanguage` | `ade_plutus::evaluator` | 3 variants (V1, V2, V3) | New variant = new Plutus version. |
-| **Named ingress chokepoints (block CBOR)** | `ade_codec::*` | 10 — `decode_block_envelope`, per-era block decoders, `decode_address` | Header comment of `ci_check_ingress_chokepoints.sh` enumerates. |
-| **Conway cert/withdrawals sub-grammar decoders** *(B3; cert decoder owner-completed in B4)* | `ade_codec::conway::{cert::{decode_conway_certs, decode_drep}, withdrawals::*}` + `ade_codec::shelley::cert::read_pool_registration_cert` | 5 functions | Closed sub-grammars. |
-| **Named ingress chokepoint (Plutus script CBOR)** | `ade_plutus::evaluator::PlutusScript::from_cbor` | 1 — file `crates/ade_plutus/src/evaluator.rs` | Allowlisted by exact file path. |
-| **`PreservedCbor::new` constructor** | `ade_codec::preserved` | 1 chokepoint, `pub(crate)` | Construction lives inside `ade_codec`. |
-| **`CodecError` variants** *(B3-extended)* | `ade_codec::error` | + `UnknownCertTag`, `DuplicateMapKey` | Flat-data, no `String`. |
-| **Mini-protocol message enums** | `ade_network::codec::*` | 11 closed enums | Closed wire grammar per protocol. |
-| **Mini-protocol encode/decode chokepoints** | `ade_network::codec::*::{encode_*, decode_*}` | 22 functions | Single chokepoint per direction per protocol. |
-| **Mux frame chokepoints** | `ade_network::mux::frame::{encode_frame, decode_frame}` | 2 free functions | The single byte↔frame translation. |
-| **Mini-protocol transition functions** | `ade_network::*::transition` + `n2c::local_*::transition` | 8 state-machine modules | Pure, sync, no ambient session influence. |
-| **Mini-protocol version enums** | `ade_network::codec::version::*` | 11 closed enums | Each pins the upper version audited. |
-| **`ChainDb` trait surface** | `ade_runtime::chaindb::mod` | 6 methods | |
-| **`SnapshotStore` trait surface** | `ade_runtime::chaindb::mod` | 5 methods | |
-| **`Recoverable` trait surface** | `ade_runtime::recovery` | 2 methods + 1 associated type | |
-| **`recover` entry point** | `ade_runtime::recovery::recover` | 1 free function | |
-| **Hash domain functions** | `ade_crypto::blake2b::*` | 4 named domains | Algorithm immutable per protocol version. |
-| **`ChainEvent`** *(N-B)* | `ade_core::consensus::events` | 5 variants | |
-| **`ChainSelectionReject`** *(N-B)* | `ade_core::consensus::events` | 4 variants | |
-| **Consensus error families** *(N-B)* | `ade_core::consensus::errors` | 8 closed error enums | |
-| **`StreamInput`** *(N-B)* | `ade_runtime::consensus::chain_selector` | 3 variants | |
-| **`OrchestratorError`** *(N-B)* | `ade_runtime::consensus::chain_selector` | 2 variants | |
-| **`DecodeError`** *(N-B)* | `ade_core::consensus::encoding` | 4 variants | |
-| **`GenesisParseError`** *(N-B)* | `ade_runtime::consensus::genesis_parser` | 5 variants | |
-| **`GenesisBlob`** *(N-B)* | `ade_runtime::consensus::genesis_parser` | 4 variants | |
-| **`NetworkMagic`** *(N-B)* | `ade_runtime::consensus::genesis_parser` | 3 const-named values | |
-| **`LedgerView` trait** *(N-B; B1-refined)* | `ade_core::consensus::ledger_view` | 4 methods | |
-| **`HeaderVrf`** *(N-B; surfaced at B1)* | `ade_core::consensus::header_summary` | 2 variants | |
-| **`BlockValidityVerdict`** *(B1)* | `ade_ledger::block_validity::verdict` | 2 variants | |
-| **`BlockValidityError` / `BlockRejectClass` / `FieldKind` / `FieldError` / `MissingInput`** *(B1)* | `ade_ledger::block_validity::verdict` | 5 / 5 / 9 / struct / 4 | |
-| **`VerdictSurface` / `SurfaceDecodeError`** *(B1)* | `ade_ledger::block_validity::encoding` | 2 / 3 variants | |
-| **`block_validity` chokepoint** *(B1)* | `ade_ledger::block_validity::transition` | 1 function | |
-| **`TxValidityVerdict`** *(B2)* | `ade_ledger::tx_validity::verdict` | 2 variants | |
-| **`TxRejectClass`** *(B2)* | `ade_ledger::tx_validity::verdict` | 5 variants — discriminants 0..4 fixed | |
-| **`TxValidityError`** *(B2)* | `ade_ledger::tx_validity::verdict` | 5 variants | |
-| **`SignerSource`** *(B2 — the DC-TXV-05 surface)* | `ade_ledger::tx_validity::required_signers` | 6 variants | |
-| **`RequiredSignerError` / `RequiredSignerField`** *(B2)* | 3 / 4 variants | | |
-| **`WitnessClosureError` / `WitnessField`** *(B2)* | 3 / 2 variants | | |
-| **`TxVerdictSurface` / `TxSurfaceDecodeError`** *(B2)* | 2 / 3 variants | | |
-| **`tx_validity` chokepoint** *(B2)* | 1 function | | |
-| **Tx-verdict-surface encode/decode chokepoints** *(B2)* | 2 functions | | |
-| **`AdmitOutcome`** *(B2)* | `ade_ledger::mempool::admit` | 2 variants | |
-| **`MempoolState`** *(B2; field-write grep-gated in N-E)* | `ade_ledger::mempool::admit` | struct `{ accepted, accumulating }` | Grep-gated. |
-| **`OrderPolicy`** *(B2)* | `ade_ledger::mempool::policy` | 2 variants — ArrivalOrder, TxIdAscending | |
-| **`ConwayOnlyDepositParams`** *(B3; B5-enriched)* | `ade_ledger::pparams` | struct + `drep_activity` | |
-| **`ConwayDepositParams`** *(B3)* | `ade_ledger::pparams` | struct (view) | |
-| **`ValidationEnvironmentError`** *(B3)* | `ade_ledger::error` | | |
-| **`UnsupportedStateDependentDepositAccounting`** *(B3)* | `ade_ledger::error` | | |
-| **`EraInvalidCertificateError`** *(B3)* | `ade_ledger::error` | | |
-| **`PraosNonces` / `NonceScanError`** *(B1)* | `ade_ledger::consensus_input_extract` | | |
-| **`PraosChainDepState` / `ChainEvent` canonical encodings** *(N-B)* | `ade_core::consensus::encoding` | 4 chokepoints | |
-| **`LedgerFingerprint` fold** *(B3-extended; B5-extended)* | `ade_ledger::fingerprint` | | |
-| **CI check set** | `ci/ci_check_*.sh` | **32 scripts (31 → 32 in PP-S1; PP-S2 added no new CI)** | Existing checks may be tightened, never relaxed. |
-| **Invariant registry families** | `docs/ade-invariant-registry.toml` | Families T / CN / DC / OP / RO; DC extended across all prior clusters; **PP-S1 added `DC-LEDGER-11`** (`enforced`, `introduced_in = PROPOSAL-PROCEDURES-DECODE`, bidirectional `cross_ref = [DC-LEDGER-10]`); `DC-LEDGER-10.cross_ref += "DC-LEDGER-11"` (bidirectional pairing); PP-S2 extended `DC-LEDGER-11.tests` with 4 harness test names. Total: **176 entries** (175 → 176). | Append-only IDs. |
+| `CertDisposition` / `DepositEffect` / `CoinSource` *(B3)* | `ade_types::conway::cert` | 3 / 2 / 3 variants | Closed. |
+| `ConwayCertAction` *(B4)* | `ade_ledger::delegation` | closed | No `Neutral`. |
+| `GovernanceCertEffect` / `OwnerTaggedEffect` / etc. *(B4)* | `ade_ledger::delegation` | closed | B4 plumbing. |
+| `GovCertEnv` *(B5)* | `ade_ledger::state` | closed struct | Fail-fast. |
+| `apply_conway_gov_cert` dispatch *(B5)* | `ade_ledger::gov_cert` | 1 function | DC-LEDGER-09. |
+| `apply_committee_enactment` *(ENACTMENT)* | `ade_ledger::governance` | 1 pure transition | Closed. |
+| `IngressSource` *(N-E)* | `ade_ledger::mempool::ingress` | 2 variants | Closed source discriminant. |
+| `IngressEvent` *(N-E)* | `ade_ledger::mempool::ingress` | closed struct | Closed flat-data envelope. |
+| `mempool_ingress` chokepoint *(N-E)* | `ade_ledger::mempool::ingress` | 1 function | DC-MEM-03. |
+| **`ProducerTick`** *(NEW in N-C-S3 — DC-CONS-13)* | `ade_ledger::producer::state` | **closed 14-field struct** — `{ slot, base_state, mempool, mempool_tx_bytes, pparams, leader_answer, vrf_proof, vrf_output, vrf_vkey, kes_period, kes_signature, opcert, cold_vk, prev_opcert_counter, block_number, prev_hash, protocol_version }` | The **canonical input value to `forge_block`**. No `#[non_exhaustive]`. Private-key fields forbidden by `ci_check_forge_purity.sh` guard 5 + `ci_check_no_private_keys_in_corpus.sh`. New field = strengthen DC-CONS-13. |
+| **`forge_block` chokepoint** *(NEW in N-C-S3 — DC-CONS-13/14/15, DC-LEDGER-12; closed-grammar entry point, not a registry)* | `ade_ledger::producer::forge` | 1 function — `pub fn forge_block(&ProducerTick) -> Result<(ForgedBlock, Vec<ForgeEffects>), ForgeError>` | The **single producer-side composition root**. Pure, total, deterministic. Defended by `ci_check_forge_purity.sh`. |
+| **`ForgeError`** *(NEW in N-C-S3 — DC-CONS-13)* | `ade_ledger::producer::forge` | 7 variants — `NotLeader`, `OpCertRejected`, `TxSetNotAdmissiblePrefix`, `MempoolWidthMismatch`, `MempoolAcceptedMismatch`, `BadKesSignatureLength`, `TxComponentSplit` | No `#[non_exhaustive]`. No `String`-bearing variants (replay-byte-stable). |
+| **`ForgeEffects`** *(NEW in N-C-S3)* | `ade_ledger::producer::forge` | 1 variant — `ReadyForSelfAccept { next_prev_opcert_counter: u64 }` | Closed effect sum. |
+| **`ForgedBlock`** *(NEW in N-C-S3)* | `ade_ledger::producer::forge` | closed struct `{ bytes: Vec<u8>, block: ShelleyBlock }` | Closed. |
+| **`encode_opcert` / `decode_opcert` chokepoint pair** *(NEW in N-C-S2 — DC-CONS-11; closed-grammar entry points)* | `ade_codec::shelley::opcert` | 2 functions | The **single producer-side opcert byte authority**. Standalone 4-tuple. Both header CBOR (`shelley::block`) and standalone opcert delegate here. Defended by `ci_check_opcert_closed.sh`. |
+| **`OpCertCodecError`** *(NEW in N-C-S2)* | `ade_codec::shelley::opcert` | 7 variants — `BadArrayHeader`, `BadFieldType`, `WrongHotVkeyLength`, `WrongSigmaLength`, `SequenceNumberOverflow`, `KesPeriodOverflow`, `TrailingBytes` | No `#[non_exhaustive]`. |
+| **`opcert_validate` chokepoint** *(NEW in N-C-S2 — DC-CONS-11/12; closed-grammar entry point)* | `ade_core::consensus::opcert_validate` | 1 function | The **single RED→BLUE opcert acceptance chokepoint**. Defended by `ci_check_opcert_closed.sh`. |
+| **`OpCertError`** *(NEW in N-C-S2 — DC-CONS-12)* | `ade_core::consensus::opcert_validate` | closed validation-error sum | No `#[non_exhaustive]`. |
+| **`block_body_hash_from_buckets` chokepoint** *(NEW in N-C-S4 — DC-CONS-16; single canonical authority, not a registry)* | `ade_ledger::block_body_hash` | 1 function — `pub fn block_body_hash_from_buckets(tx_bodies: &[u8], witness_sets: &[u8], metadata: &[u8], invalid_txs: Option<&[u8]>) -> Hash32` | The **only function** in the workspace that computes the Cardano block body-hash recipe. Both `block_validity::header_input` (validator) and `producer::forge::forge_block` (producer) hash through this function. Defended by `ci_check_no_producer_body_encoder.sh`. |
+| **`AcceptedBlock` token** *(NEW in N-C-S5 — CN-CONS-07; closed-grammar token, not a registry)* | `ade_ledger::producer::self_accept` | 1 newtype `{ bytes: Vec<u8> }` (private field) | The **type-level broadcast gate**. Only constructor is the `Ok(...)` arm of `self_accept`. `pub fn ... -> Result<AcceptedBlock, ...>` count must equal 1 across crates/ (CI guard 1b). |
+| **`self_accept` chokepoint** *(NEW in N-C-S5 — CN-CONS-07)* | `ade_ledger::producer::self_accept` | 1 function | The **single sanctioned production constructor of `AcceptedBlock`**. Calls `block_validity` (the canonical validator authority). MUST NOT re-implement validator sub-steps. Defended by `ci_check_self_accept_gate.sh` (6 guards). |
+| **`SelfAcceptError`** *(NEW in N-C-S5)* | `ade_ledger::producer::self_accept` | 1 variant — `Rejected(BlockValidityError)` | Closed sum. No `#[non_exhaustive]`. No `String`-bearing variant. |
+| **`SchedulerInput`** *(NEW in N-C-S6 — OP-OPS-05)* | `ade_runtime::producer::scheduler` | 2 variants — `SlotTick { slot, inputs: TickInputs }`, `ChainAdvanced { ledger, chain_dep, mempool }` | Closed state-machine boundary. New trigger = strengthening. |
+| **`SchedulerEffect`** *(NEW in N-C-S6 — OP-OPS-05)* | `ade_runtime::producer::scheduler` | 4 variants — `EnqueueBroadcast(AcceptedBlock)`, `SilentNonLeader{slot}`, `HaltOnInvariant{slot, reason}`, `HaltOnAssembly{slot, reason}` | Closed effect sum. |
+| **`SchedulerHaltReason`** *(NEW in N-C-S6 — OP-OPS-05)* | `ade_runtime::producer::scheduler` | 2 variants — `Forge(ForgeError)`, `SelfAccept(SelfAcceptError)` | Closed halt-reason sum. |
+| **`SchedulerState`** *(NEW in N-C-S6)* | `ade_runtime::producer::scheduler` | closed struct `{ ledger, chain_dep, mempool, era_schedule, last_seen_slot, prev_opcert_counter, halted }` | Closed. |
+| **`TickInputs`** *(NEW in N-C-S6)* | `ade_runtime::producer::tick_assembler` | closed 13-field struct | The closed RED-supplied input set to the GREEN tick assembler. Carries signed artifacts only; no private keys. |
+| **`TickAssemblyError`** *(NEW in N-C-S6)* | `ade_runtime::producer::tick_assembler` | 2 variants — `VrfProofMalformed{detail}`, `MempoolWidthMismatch{tx_bytes, accepted_ids}` | Closed sum. No `String`-bearing variants. |
+| **`assemble_tick` chokepoint** *(NEW in N-C-S6 — RED→GREEN seam)* | `ade_runtime::producer::tick_assembler` | 1 function — `pub fn assemble_tick(slot, &LedgerState, &MempoolState, &TickInputs) -> Result<ProducerTick, TickAssemblyError>` | The **single GREEN seam from RED signing-primitive outputs to the canonical BLUE `ProducerTick` value**. Pure; observably deterministic. |
+| **`BroadcastError`** *(NEW in N-C-S6)* | `ade_runtime::producer::broadcast` | 2 variants — `QueueFull`, `Shutdown` | Closed. No `#[non_exhaustive]`. |
+| **RED signing primitives + key types** *(NEW in N-C-S1 — DC-CRYPTO-03/04/05, OP-OPS-04)* | `ade_runtime::producer::signing::{vrf_prove, kes_sign, kes_update, VrfSigningKey, KesSecret, ColdSigningKey, SigningError}` | 3 functions + 3 closed key types + 1 closed error sum | The **only sanctioned RED signing surface**. Keys are `zeroize`-on-drop; no `pub` raw-byte accessors. Forbidden in BLUE / codec / types / ledger / crypto public APIs by `ci_check_private_key_custody.sh`. |
+| **RED key loader** *(NEW in N-C-S1 — OP-OPS-04)* | `ade_runtime::producer::keys::{load_vrf_signing_key_skey, load_kes_signing_key_skey, load_cold_signing_key_skey, KeyLoadError}` | 3 loader functions + 1 closed error sum | The **single sanctioned RED disk-to-secret path**. Cardano-cli `*.skey` text envelopes only. |
+| `PlutusLanguage` | `ade_plutus::evaluator` | 3 variants | |
+| Named ingress chokepoints (block CBOR) | `ade_codec::*` | 10 | |
+| Conway cert/withdrawals sub-grammar decoders *(B3 / B4)* | `ade_codec::conway::{cert, withdrawals}` + `ade_codec::shelley::cert::read_pool_registration_cert` | 5 functions | Closed. |
+| Named ingress chokepoint (Plutus script CBOR) | `ade_plutus::evaluator::PlutusScript::from_cbor` | 1 | |
+| `PreservedCbor::new` constructor | `ade_codec::preserved` | 1 chokepoint, `pub(crate)` | |
+| `CodecError` variants *(B3-extended)* | `ade_codec::error` | + `UnknownCertTag`, `DuplicateMapKey` | |
+| Mini-protocol message enums | `ade_network::codec::*` | 11 closed enums | |
+| Mini-protocol encode/decode chokepoints | `ade_network::codec::*::{encode_*, decode_*}` | 22 functions | |
+| Mux frame chokepoints | `ade_network::mux::frame::{encode_frame, decode_frame}` | 2 free functions | |
+| Mini-protocol transition functions | `ade_network::*::transition` + `n2c::local_*::transition` | 8 modules | |
+| Mini-protocol version enums | `ade_network::codec::version::*` | 11 closed enums | |
+| `ChainDb` / `SnapshotStore` / `Recoverable` trait surfaces | `ade_runtime::chaindb` + `ade_runtime::recovery` | closed | |
+| Hash domain functions | `ade_crypto::blake2b::*` | 4 named domains | |
+| `ChainEvent` / `ChainSelectionReject` *(N-B)* | `ade_core::consensus::events` | 5 / 4 variants | |
+| Consensus error families *(N-B)* | `ade_core::consensus::errors` | 8 closed error enums | |
+| `StreamInput` / `OrchestratorError` / `DecodeError` / `GenesisParseError` / `GenesisBlob` / `NetworkMagic` *(N-B)* | various | closed | |
+| `LedgerView` trait *(N-B; B1-refined)* | `ade_core::consensus::ledger_view` | 4 methods | |
+| `HeaderVrf` *(N-B; B1)* | `ade_core::consensus::header_summary` | 2 variants | |
+| `BlockValidityVerdict` / `BlockValidityError` etc. *(B1)* | `ade_ledger::block_validity::verdict` | closed | |
+| `block_validity` chokepoint *(B1)* | `ade_ledger::block_validity::transition` | 1 function | Single chokepoint `self_accept` (N-C-S5) wraps. |
+| `TxValidityVerdict` / `TxRejectClass` / `TxValidityError` / `SignerSource` / `WitnessClosureError` etc. *(B2)* | `ade_ledger::tx_validity::*` | closed | |
+| `AdmitOutcome` / `MempoolState` / `OrderPolicy` *(B2)* | `ade_ledger::mempool::*` | closed | |
+| `LeaderScheduleAnswer` *(N-B; consumed unchanged by N-C)* | `ade_core::consensus::leader_schedule` | closed struct | Shared between validator and producer (NC-VRF-3 — single source of leader truth). |
+| `is_leader_for_vrf_output` *(N-B; consumed unchanged by N-C)* | `ade_core::consensus::leader_schedule` | 1 function | The **single leader-truth function**. CI gate (`ci_check_forge_purity.sh` guard 2) asserts this is the only `fn .*is_leader.*` definition reachable from `ade_core` / `ade_ledger`. |
+| `PraosNonces` / `NonceScanError` *(B1)* | `ade_ledger::consensus_input_extract` | | |
+| `PraosChainDepState` / `ChainEvent` canonical encodings *(N-B)* | `ade_core::consensus::encoding` | 4 chokepoints | |
+| `LedgerFingerprint` fold *(B3/B5)* | `ade_ledger::fingerprint` | | |
+| **CI check set** | `ci/ci_check_*.sh` | **40 scripts (32 → 40 in PHASE4-N-C)** | Existing checks may be tightened, never relaxed. |
+| **Invariant registry families** | `docs/ade-invariant-registry.toml` | Families T / CN / DC / OP / RO; **N-C added 14 rules** (`DC-CRYPTO-03/04/05`, `DC-CONS-11/12/13/14/15/16`, `DC-LEDGER-12`, `CN-CONS-06`, `CN-CONS-07`, `OP-OPS-04`, `OP-OPS-05`); `T-DET-01.strengthened_in += PHASE4-N-C`; `T-ENC-01.strengthened_in += PHASE4-N-C`. Total: **190 entries** (176 → 190). | Append-only IDs. |
 
 ### Extensible (open within constraints)
 
@@ -1033,118 +753,94 @@ corpus harness as a tooling-only extensible surface
 | `CostModels` map (Plutus V1/V2/V3 cost tables) | `ade_plutus::cost_model::CostModels` | Decoder-driven; constrained by closed `PlutusLanguage`. |
 | `ProtocolParameters` / `ProtocolParameterUpdate` field set | `ade_ledger::pparams` | Era-versioned. |
 | Pool / DRep / Stake registrations | `ade_ledger::state::{DelegationState, CertState}` | Shape closed; set open. |
-| Governance proposal / committee / DRep registration set | `ade_ledger::state::ConwayGovState` | Shape closed; instance set open. **ENACTMENT-COMMITTEE-WRITEBACK**: also written back at the epoch boundary by `apply_committee_enactment`. |
-| **Tx-body `proposal_procedures` instance set** *(PP-S1; instance-open within closed shape)* | `ade_types::conway::tx::ConwayTxBody.proposal_procedures` | `Option<Vec<ProposalProcedure>>`. **Shape closed** (`ProposalProcedure` struct closed; populated only by `decode_proposal_procedures`); **set instance-open** (number / contents of `ProposalProcedure` entries per Conway tx body is wire-driven). Non-empty by CIP-1694 (the closed decoder rejects empty sets). |
+| Governance proposal / committee / DRep registration set | `ade_ledger::state::ConwayGovState` | Shape closed; instance set open. |
+| Tx-body `proposal_procedures` instance set *(PP)* | `ade_types::conway::tx::ConwayTxBody.proposal_procedures` | `Option<Vec<ProposalProcedure>>`. Shape closed; instance set open. |
 | `OpCertCounterMap` *(N-B)* | `ade_core::consensus::praos_state` | BTreeMap; inserts strictly increasing per `(pool, kes_period)`. |
 | `PoolDistrView` pool table *(B1)* | `ade_ledger::consensus_view::PoolDistrView::pools` | `BTreeMap<Hash28, PoolEntry>`. |
-| Withdrawals map *(B3)* | decoded by `ade_codec::conway::withdrawals::decode_withdrawals` → `BTreeMap<RewardAccount, Coin>` | Shape closed; never last-wins. |
-| Mempool admitted set *(B2; ingress-fed in N-E)* | `ade_ledger::mempool::admit::MempoolState::accepted` | `Vec<Hash32>` of admitted tx ids. Shape closed; set open; grows monotonically. |
-| `SignerSource` provenance set *(B2)* | `ade_ledger::tx_validity::required_signers::RequiredSigners::{keys, provenance}` | Per-tx open; `SignerSource` *enum* closed. |
-| `RollbackSnapshot` ring *(N-B)* | `ade_runtime::consensus::chain_selector::OrchestratorState::recent_snapshots` | Bounded ≤ `DEFAULT_SNAPSHOT_LIMIT = 2160`. |
+| Withdrawals map *(B3)* | `ade_codec::conway::withdrawals::decode_withdrawals` → `BTreeMap<RewardAccount, Coin>` | Never last-wins. |
+| Mempool admitted set *(B2; ingress-fed in N-E)* | `ade_ledger::mempool::admit::MempoolState::accepted` | `Vec<Hash32>`; shape closed; set open; monotonic. |
+| `SignerSource` provenance set *(B2)* | `ade_ledger::tx_validity::required_signers::RequiredSigners::{keys, provenance}` | Per-tx open; closed enum. |
+| `RollbackSnapshot` ring *(N-B)* | `ade_runtime::consensus::chain_selector::OrchestratorState::recent_snapshots` | Bounded ≤ 2160. |
 | Oracle reference snapshots / regression corpus | `ade_testkit::harness::*` | Tooling-only. |
-| Network corpus | `corpus/network/{n2n,n2c}/*` | Tooling-only. |
-| Consensus corpus | `corpus/consensus/*` | Tooling-only. |
-| Block-validity corpus *(B1)* | `corpus/validity/*` | Tooling-only. |
-| Tx-validity corpus *(B2; B3-extended)* | `ade_testkit::tx_validity::*` + B3 conservation corpora | Tooling-only. |
-| **Mempool ingress corpus** *(N-E; tooling-only)* | `ade_testkit::mempool::ingress_replay` + the B-track corpus wrapped via `b_track_corpus_as_ingress` | Tooling-only. Single-step fold; append-only by convention; GREEN. |
-| **`proposal_procedures` canonical synthetic corpus + replay harness** *(NEW in PP-S2; tooling-only)* | `ade_testkit::governance::proposal_procedures_replay` | Tooling-only. GREEN. Synthesizes well-formed Conway tx-body fixtures covering all 7 `GovAction` variants + the DC-LEDGER-10 `UpdateCommittee` discriminant case; asserts byte-identical decode + encode round-trip. Append-only by convention. Future strengthening: real-chain corpus extraction (per OQ-5 — declared as a possible future PP-S3 or successor cluster). |
-| **Operator-action probe binaries** *(N-B + N-E S6)* | `ade_core_interop::bin::{live_consensus_session, live_tx_submission_session}` | RED operator-action; `#[ignore]`-gated by closure-gate tests. |
+| Network corpus / Consensus corpus / Block-validity corpus / Tx-validity corpus / Mempool ingress corpus / PP canonical corpus | various | Tooling-only. |
+| **Producer replay corpus** *(NEW in N-C-S3/S4 — tooling-only; signed-artifact-only by DC-CONS-14)* | `crates/ade_testkit/fixtures/producer/` + `ade_testkit::producer::{fixtures, replay, reference_vectors}` | Tooling-only. GREEN. Ordered `Vec<ProducerTick>` plus expected `Vec<ForgedBlockBytes>`. **Forbidden:** private-key bytes in any corpus fixture (defended by `ci_check_no_private_keys_in_corpus.sh`). Append-only by convention. |
+| **Producer mechanical cross-impl corpus** *(NEW in N-C-S7 — tooling-only)* | `ade_testkit::producer::cross_impl_adapter` | Tooling-only. GREEN. Decode-round-trip + body-hash binding + structural field agreement. Append-only by convention. |
+| **Operator-action probe binaries** *(N-B + N-E S6 + N-C S7)* | `ade_core_interop::bin::{live_consensus_session, live_tx_submission_session, live_block_production_session}` | RED operator-action; `#[ignore]`-gated by closure-gate tests. **N-C added `live_block_production_session`** — status `blocked_until_operator_stake_available`. |
 | `KillStrategy<D>` trait impls | `ade_runtime::chaindb::crash_safety` | RED-only test infrastructure. |
 | Recovery state types | callers of `Recoverable` | Open: any state with canonical encode + apply-block step. |
-| Pinned external crates | `crates/*/Cargo.toml` | Tier-5 rationale doc required. |
+| Pinned external crates | `crates/*/Cargo.toml` | Tier-5 rationale doc required. **N-C consumed:** `cardano-crypto = "1.0.8"` features `["vrf-draft03", "kes-sum", "dsign"]` (already pinned at HEAD `96d043c`). |
 
 ### Candidates — extensible surfaces not yet wired
 
 | Cluster | Candidate registry | Rationale |
 |---------|-------------------|-----------|
-| **PP OQ-1 (separable future seam — declared open obligation)** | **`voting_procedures` (Conway tx-body key 19) typed instance set** | Mirror of the now-closed `proposal_procedures` shape. Same opaque-bytes pressure; natural sibling cluster. Would extend `ade_codec::conway::governance` with `decode_voting_procedures` + a new closed `VotingProcedure` struct + a future `strengthened_in += <cluster>` on DC-LEDGER-11 OR a new DC-LEDGER-12. |
-| **PP OQ-2 (separable future seam — declared open obligation)** | **`ParameterChange.update` typed nested instance** | Currently opaque `Vec<u8>` inside the typed `GovAction::ParameterChange` variant. Full Conway pparams update sub-grammar. Separate large cluster. |
-| **PP OQ-3 (separable future seam — declared open obligation)** | **`NewConstitution.raw` typed nested instance** | Currently opaque `Vec<u8>` inside the typed `GovAction::NewConstitution` variant. Bundleable with the voting-procedures cluster. |
-| **PP OQ-4 (separable future seam — declared open obligation)** | **Typed `RewardAccount` for `proposal_procedure.return_addr`** | Currently raw `Vec<u8>`. Would also strengthen `TreasuryWithdrawals.withdrawals` element type in one move. |
-| **N-E+ Tier-5** | **Mempool eviction / prioritization policy (bounded mempool, shedding policy)** beyond the `OrderPolicy` stub | Tier-5 — operator-tunable. Declared OUT-OF-SCOPE in the N-E cluster doc. |
-| **N-E+ Tier-1** | **Outbound tx propagation (Ade as a tx source — `tx-submission2` server side)** | Separate authority surface from N-E's ingress half. Declared OUT-OF-SCOPE in the N-E cluster doc. |
-| **CE-NODE-N2C-LTX (cross-cluster obligation)** | **Live N2C UDS server + N2N bulk-tx inbound listener** | The deferred halves of CE-N-E-7 + CE-N-E-6. |
+| **CE-N-C-8 (operator-action live evidence — `blocked_until_operator_stake_available`)** | **Live N2N block-fetch acceptance log** | The crypto-level cross-impl claim. Requires testnet SPO registration. Re-opens on operator availability. |
+| **N-A+ (N-C handoff target)** | **N2N producer-side block-fetch server role + chain-sync extension** | Outbound delivery of broadcast-queued `AcceptedBlock` bytes. Declared OUT-OF-SCOPE in N-C cluster doc. |
+| **N-C+ Tier-5** | **Operator-tunable producer policy** (slot-deadline budget, opcert renewal cadence, broadcast retry policy) | Tier-5 — operator-tunable. Declared OUT-OF-SCOPE in N-C cluster doc. |
+| **CE-NODE-N2C-LTX (cross-cluster obligation carried from N-E)** | **Live N2C UDS server + N2N bulk-tx inbound listener** | Carried. |
+| **PP OQ-1..OQ-4** | various | Carried. |
 | N-A (deferred) | Peer address book | Operator-supplied; runtime mutable. |
-| N-C | Block-production policy (forge cadence, KES rotation, slot election) | Tier 1 semantics, Tier 5 operator triggers. |
 | N-F | Query API method set | Tier 5 wire / Tier 1 semantics. |
 | N-F | Prometheus metric names | Tier 5; append-only registry expected. |
-| GOVCERT-validity *(OQ-3, separable)* | Committee-membership precondition | Tier 1 — a tx-validity gate, NOT a registry. |
-| credential-discriminant *(WIRED + CLOSED)* | DONE — see closed surfaces above. | |
-| proposal-decode *(WIRED + CLOSED in PROPOSAL-PROCEDURES-DECODE)* | DONE — see closed surfaces above. | |
 
-User confirmation needed for each at cluster entry.
+### Closed-grammar audit (PHASE4-N-C full close)
 
-### Closed-grammar audit (PROPOSAL-PROCEDURES-DECODE full close)
+This sweep was performed after PHASE4-N-C full close (S1..S7).
 
-This sweep was performed after PROPOSAL-PROCEDURES-DECODE full close
-(PP-S1 + PP-S2).
+1. **`opcert_validate` chokepoint** — **closed by intent and
+   CI-defended.** Closed `OpCertError` sum. Defended by
+   `ci_check_opcert_closed.sh`.
+2. **`encode_opcert` / `decode_opcert` chokepoint pair** — **closed
+   by intent and CI-defended.** Single producer-side opcert byte
+   authority. Header CBOR delegates here. Closed `OpCertCodecError`
+   sum.
+3. **`ProducerTick` canonical input value** — **closed by intent and
+   CI-defended.** Closed 14-field struct. No `#[non_exhaustive]`.
+   Private-key fields forbidden by CI.
+4. **`forge_block` chokepoint** — **closed by intent and CI-defended.**
+   Pure, total, deterministic. Closed `ForgeError` sum (7 variants).
+   Closed `ForgeEffects` sum (1 variant). Closed `ForgedBlock` struct.
+   Defended by `ci_check_forge_purity.sh` (7 mechanical guards).
+5. **`block_body_hash_from_buckets` single canonical authority** —
+   **closed by intent and CI-defended.** The only function in the
+   workspace that computes the Cardano block body-hash recipe. Both
+   producer and validator hash through this function. Defended by
+   `ci_check_no_producer_body_encoder.sh`.
+6. **`self_accept` chokepoint + `AcceptedBlock` token** — **closed
+   by intent and CI-defended.** Single sanctioned production
+   constructor of `AcceptedBlock`. `pub fn ... -> Result<AcceptedBlock,
+   ...>` count = 1 across crates/. `AcceptedBlock.bytes` field is
+   private. Closed `SelfAcceptError` sum. Defended by
+   `ci_check_self_accept_gate.sh` (6 guards).
+7. **`SchedulerInput` / `SchedulerEffect` closed sums** — **closed
+   by intent.** 2-variant / 4-variant. Pure RED state transition;
+   wall-clock + I/O live in the outer driver.
+8. **`TickInputs` + `assemble_tick` GREEN seam** — **closed by intent.**
+   Single GREEN seam from RED signing-primitive outputs to the
+   canonical BLUE `ProducerTick` value. Pure; observably deterministic.
+9. **Private-key custody** — **closed by intent and CI-defended.**
+   `*SigningKey` / `KesSecret` / `ColdSigningKey` types forbidden in
+   `ade_core` / `ade_codec` / `ade_types` / `ade_ledger` / `ade_crypto`
+   public APIs by `ci_check_private_key_custody.sh`. Replay corpora
+   carry signed artifacts only by `ci_check_no_private_keys_in_corpus.sh`.
+10. **`live_block_production_session` operator-action probe binary**
+    — **closed by intent on the harness pattern.** Third instance of
+    the family (after `live_consensus_session` / `live_tx_submission_session`).
+    Hermetic-default-plus-`--connect`-live. Status
+    `blocked_until_operator_stake_available` — third closure mode
+    introduced by N-C (beyond captured / deferred).
 
-1. **`decode_proposal_procedures` entry point** — **closed by intent
-   and CI-defended.** Closed-grammar BLUE sub-decoder. No silent-skip
-   arm. Rejects unknown `gov_action` tag (5 grammar guards in unit
-   tests), empty set (CIP-1694 requires non-empty), trailing garbage,
-   truncated procedure, invalid stake credential in `UpdateCommittee`
-   (DC-LEDGER-10 preserved via structured `UpdateCommittee` arm). The
-   body codec at key 20 is the only production caller (CI guard 4);
-   `ProposalProcedure` construction outside the decoder + the testkit
-   fixture builders + `crates/*/tests/` + `#[cfg(test)]` blocks is
-   CI-forbidden (guard 5). The opaque `Option<Vec<u8>>` form on
-   `ConwayTxBody.proposal_procedures` is CI-forbidden (guard 2).
-2. **`encode_proposal_procedures` re-encoder** — **closed by intent.**
-   Byte-identical round-trip authority for PreservedCbor (CE-PP-2,
-   CE-PP-6 — canonical synthetic corpus harness covering all 7
-   `GovAction` variants + the DC-LEDGER-10 `UpdateCommittee`
-   discriminant case).
-3. **`ProposalProcedure` struct** — **closed by intent and CI-defended.**
-   Closed 4-field struct; construction sites CI-allowlisted (guard 5).
-4. **`ConwayTxBody.proposal_procedures` field** — **typed and
-   CI-defended.** `Option<Vec<ProposalProcedure>>`; reverting to
-   opaque bytes is CI-forbidden (guard 2).
-5. **`decode_gov_action` arm closure** — **closed by intent.** Closed
-   7-variant dispatch over the existing `GovAction` enum; preserves
-   DC-LEDGER-10 discriminant through the `UpdateCommittee` arm
-   (in-vivo certified by
-   `update_committee_keeps_stake_credential_discriminant`); inner
-   `ParameterChange.update` + `NewConstitution.raw` stay opaque
-   `Vec<u8>` by OQ-2 / OQ-3 (deliberate scope locks).
-6. **PP-S2 GREEN canonical synthetic corpus harness** — **closed by
-   intent on the round-trip property.** Deterministic; no I/O; no
-   clocks. Single-step `decode → encode` fold per fixture; asserts
-   byte-identical. Covers all 7 `GovAction` variants + the
-   DC-LEDGER-10 `UpdateCommittee` case.
+**Gap note — N-C (CE-N-C-8).** The crypto-level cross-impl claim is
+the only N-C obligation that depends on an external resource
+(testnet SPO stake). Per `CN-CONS-06.open_obligation` it is
+`blocked_until_operator_stake_available` — not deferred to a future
+cluster, not silently accepted. Reopens when stake is provisioned;
+mechanical half (structural cross-impl) is already enforced via
+`cross_impl_adapter` + `ci_check_producer_corpus_present.sh`.
 
-**Gap note — PP (narrow).** The PP cluster's nested opacities
-(voting_procedures key 19, `ParameterChange.update` inner payload,
-`NewConstitution.raw` inner payload, raw `return_addr` bytes) are
-deliberate OQ-locked scope decisions — they are declared
-`open_obligation` in `DC-LEDGER-11` and recorded as separable
-future seams in §1 above. They are NOT load-bearing on the
-PROPOSAL-PROCEDURES-DECODE cluster's invariant (which is the closed
-shape of `proposal_procedures` itself at the tx-body boundary).
+### Closed-grammar audit (carried — PROPOSAL-PROCEDURES-DECODE / PHASE4-N-E / B3 / B4 / B5)
 
-### Closed-grammar audit (carried — PHASE4-N-E full close)
-
-Carried unchanged from the prior revision: `IngressSource` /
-`IngressEvent` / `mempool_ingress` chokepoint /
-`MempoolState.accumulating` field-write closure / per-peer
-canonicalizer / GREEN single-step replay harness / N2N+N2C GREEN
-bridges / `live_tx_submission_session` probe binary.
-
-### Closed-grammar audit (carried — PHASE4-B3 / B4 / B5)
-
-Carried unchanged from the prior revision: `ConwayCert` /
-`CertDisposition` / `DepositEffect` / `CoinSource` / withdrawals
-grammar / deposit-param authority / §9.1 reject precedence (B3);
-owner-complete `ConwayCert` / `decode_drep` / shared
-`read_pool_registration_cert` / owner-tagged apply types /
-owner-tagging boundary to `ConwayGovState` (B4); `apply_conway_gov_cert`
-dispatch / `GovCertEnv` + `gov_cert_env()` / DRep expiry arithmetic /
-`ConwayGovState` accumulation path (B5).
-
-**Carried gap — B4 (narrow).** The `ade_ledger::delegation`
-owner-tagged apply types live in `crates/ade_ledger/src/delegation.rs`,
-which is NOT in the `TARGETS` array of
-`ci_check_consensus_closed_enums.sh`. Unchanged at this HEAD.
+All carried unchanged from prior revision.
 
 ---
 
@@ -1153,94 +849,129 @@ which is NOT in the `TARGETS` array of
 ### Frozen (immutable at current version — change = new major version)
 
 - **Cardano-canonical CBOR wire format**.
-- **Block envelope shape**: `[era_tag:u8, era_block:CBOR]`; era tags
-  0..=7 (closed).
+- **Block envelope shape**: `[era_tag:u8, era_block:CBOR]`; era tags 0..=7.
 - **`PreservedCbor<T>` invariant**.
 - **Hash algorithms**: Blake2b-224 / 256, Ed25519, Byron-bootstrap,
   KES-sum, VRF-draft-03.
-- **Era-correct block body hash** *(B1)*: preserved-CBOR-segment bytes (T-ENC-01).
+- **Era-correct block body hash** *(B1; strengthened in N-C)*:
+  preserved-CBOR-segment bytes (T-ENC-01,
+  `strengthened_in += PHASE4-N-C`).
+- **Single canonical body-hash authority** *(NEW in N-C-S4 —
+  DC-CONS-16)*: `ade_ledger::block_body_hash::block_body_hash_from_buckets`
+  is the **only** function in the workspace that computes the
+  4-bucket Cardano body-hash recipe. Both producer (`forge_block`)
+  and validator (`block_validity::header_input`) hash through this
+  function. The producer/validator encoder bifurcation is closed by
+  construction. Defended by `ci_check_no_producer_body_encoder.sh`.
 - **Tx id over preserved body bytes** *(B2)*.
-- **Conway certificate CDDL grammar** *(B3; hardened in B3F; owner-completed in B4)*.
-- **Conway `DRep` decode grammar** *(B4)*: closed (no catch-all).
+- **Conway certificate CDDL grammar** *(B3/B3F/B4)*.
+- **Conway `DRep` decode grammar** *(B4)*.
 - **Owner-tagged Conway cert-state apply contract** *(B4)*: DC-LEDGER-08.
 - **Closed total gov-cert dispatch contract** *(B5)*: DC-LEDGER-09.
-- **Fail-fast gov-cert environment** *(B5)*: `GovCertEnv` via `gov_cert_env()` only.
-- **Checked DRep-expiry arithmetic** *(B5)*: `checked_add`; `DRepActivityOverflow`.
+- **Fail-fast gov-cert environment** *(B5)*.
+- **Checked DRep-expiry arithmetic** *(B5)*.
 - **`ConwayGovState` deterministic-fold accumulation** *(B5)*.
 - **Conway withdrawals map grammar** *(B3)*: never last-wins.
 - **Closed deposit-effect sum types** *(B3)*.
 - **Canonical deposit-param authority** *(B3)*: DC-TXV-07.
-- **Full Conway value-conservation equation** *(B3)*: frozen §9.1 reject precedence.
-- **`LedgerFingerprint` Conway deposit-param fold** *(B3)*: byte-identical for non-Conway.
-- **Closed `proposal_procedures` wire grammar at the Conway tx-body
-  key 20 boundary** *(NEW in PROPOSAL-PROCEDURES-DECODE PP-S1 —
-  DC-LEDGER-11)*: the closed grammar
-  `proposal_procedure = [coin, reward_account, gov_action, anchor]`
-  (CIP-1694) is decoded via `decode_proposal_procedures` and
-  re-encoded via `encode_proposal_procedures` byte-identically
-  (PreservedCbor). **`ProposalProcedure` shape is frozen**:
-  `Anchor` stays opaque (`{ raw: Vec<u8> }`), `return_addr` stays
-  raw `Vec<u8>` (typed `RewardAccount` is OQ-4 future fidelity),
-  `gov_action` reuses the existing closed 7-variant `GovAction`
-  enum unchanged. Closed grammar rejects unknown `gov_action` tag,
-  empty set, trailing garbage, truncated procedure, invalid stake
-  credential. **DC-LEDGER-10 discriminant preserved** through the
-  `UpdateCommittee` arm. Defended by
-  `ci_check_proposal_procedures_closed.sh` (5 guards).
+- **Full Conway value-conservation equation** *(B3)*: frozen §9.1
+  reject precedence.
+- **`LedgerFingerprint` Conway deposit-param fold** *(B3)*.
+- **Closed `proposal_procedures` wire grammar at Conway tx-body
+  key 20** *(PP — DC-LEDGER-11)*.
 - **Plutus script ingress chokepoint**: `PlutusScript::from_cbor`.
 - **Plutus language set**: V1, V2, V3.
 - **Aiken UPLC quarantine pin**: `aiken_uplc` at tag `v1.1.21`.
-- **Ouroboros mux frame layout**: 8-byte big-endian header, payload ≤ 65535.
-- **11 closed mini-protocol message enums** + **8 closed state graphs** (N-A).
+- **Ouroboros mux frame layout**: 8-byte big-endian header.
+- **11 closed mini-protocol message enums** + **8 closed state graphs**.
 - **`BootstrapAnchorHash` v1 preimage** *(N-B)*.
 - **`EraSchedule` invariants** *(N-B)*.
 - **`PraosChainDepState` / `ChainEvent` CBOR encodings** *(N-B)*.
 - **Consensus error taxonomies** *(N-B)*.
 - **`StreamInput` 3-variant taxonomy** *(N-B)*. **`HeaderVrf` era model**.
-- **`block_validity` composition contract** *(B1)*.
+- **`block_validity` composition contract** *(B1; consumed unchanged
+  by N-C `self_accept`)*.
 - **`VerdictSurface` CBOR encoding** *(B1)*.
 - **`LedgerView` trait shape** *(N-B; B1-refined)*.
-- **`tx_validity` composition contract** *(B2)*.
+- **`tx_validity` composition contract** *(B2; consumed transitively
+  via `admit` by N-C `forge_block`)*.
 - **`SignerSource` enumeration** *(B2)*.
 - **Witness-closure contract** *(B2)*.
 - **`TxVerdictSurface` CBOR encoding** *(B2)*.
 - **Mempool admission contract** *(B2)*: `admit`'s verdict equals
   `tx_validity`'s verdict; no false accept (DC-MEM-01).
-- **`mempool_ingress` chokepoint contract** *(N-E S1)*: the
-  **single sanctioned production path into `admit` from wire ingress**.
-- **`IngressSource` source-invariance contract** *(N-E S1 — N-E-N7 / N-E-8)*.
+- **`mempool_ingress` chokepoint contract** *(N-E)*.
+- **`IngressSource` source-invariance contract** *(N-E)*.
 - **Verbatim tx-bytes flow through ingress** *(N-E)*.
-- **GREEN single-step replay fold contract** *(N-E S2 — DC-MEM-04)*.
-- **Cross-cluster obligation pattern** *(introduced in N-E
-  full close)*: frozen project-level closure contract.
-- **Operator-action evidence pattern** *(strengthened in N-E full close)*.
-- **Closed credential discriminant contract** *(OQ5 / COMMITTEE / DREP /
-  ENACTMENT-COMMITTEE-FIDELITY / ENACTMENT-COMMITTEE-WRITEBACK; CONSUMED
-  unchanged in PROPOSAL-PROCEDURES-DECODE)*. The bidirectional
-  cross-ref `DC-LEDGER-10 ↔ DC-LEDGER-11` is now recorded in the
-  registry — PP's `UpdateCommittee` decode arm CONSUMES the closed
-  `StakeCredential` form unchanged.
-- **Committee-enactment write-back contract** *(ENACTMENT-COMMITTEE-WRITEBACK)*:
-  `apply_committee_enactment` at `rules.rs:1224`; `NoConfidence`
-  dissolves the committee (DC-EPOCH-01 / DC-LEDGER-10).
+- **GREEN single-step replay fold contract** *(N-E — DC-MEM-04)*.
+- **Cross-cluster obligation pattern** *(N-E)*.
+- **Operator-action evidence pattern** *(N-B / N-E / N-C —
+  strengthened in N-C with the third closure mode
+  `blocked_until_operator_stake_available`)*.
+- **Closed credential discriminant contract** *(OQ5 / COMMITTEE /
+  DREP / ENACTMENT / PP)*.
+- **Committee-enactment write-back contract** *(ENACTMENT)*.
 - **All canonical types**: shapes frozen at the era / version they
   entered.
 - **TCB color assignments**: per `.idd-config.json` `core_paths`.
-  `ade_core::consensus`, `ade_ledger::{block_validity, tx_validity,
-  mempool::admit, mempool::ingress, consensus_view, cert_classify,
-  delegation, gov_cert}`, `ade_codec::conway::{cert, withdrawals,
-  governance}` *(governance new in PP-S1)*, `ade_codec::shelley::cert`,
-  and `ade_types::conway::{cert, governance}` are BLUE;
-  `ade_ledger::mempool::policy` and `ade_ledger::mempool::canonicalize`
-  are GREEN behavior inside the BLUE crate;
+  `ade_core::consensus` (incl. `opcert_validate` — N-C),
+  `ade_ledger::{block_validity, tx_validity, mempool::admit,
+  mempool::ingress, consensus_view, cert_classify, delegation,
+  gov_cert, block_body_hash, producer::{forge, self_accept, state}}`
+  *(producer new in N-C)*, `ade_codec::shelley::opcert` *(new in N-C)*,
+  `ade_codec::conway::{cert, withdrawals, governance}`,
+  `ade_codec::shelley::cert`, `ade_types::conway::{cert, governance}`
+  are BLUE; `ade_ledger::mempool::{policy, canonicalize}` are GREEN
+  behavior inside the BLUE crate;
   `ade_ledger::consensus_input_extract` is RED-behavior-inside-BLUE;
-  `ade_runtime::consensus` is RED;
-  `ade_testkit::{consensus, validity, tx_validity, mempool, governance}`
-  *(governance new in PP-S2)* is GREEN;
+  `ade_runtime::consensus` + `ade_runtime::producer::{signing, keys,
+  scheduler, broadcast}` *(producer new in N-C)* are RED;
+  `ade_runtime::producer::tick_assembler` *(new in N-C)* is GREEN
+  inside the RED crate;
+  `ade_testkit::{consensus, validity, tx_validity, mempool, governance,
+  producer}` *(producer new in N-C)* is GREEN;
   `ade_core_interop` is RED-crate / GREEN-pure-functions /
-  RED-operator-action-binaries.
-- **`ChainDb` / `SnapshotStore` / `Recoverable` trait shapes** (N-D
-  closed): trait method sets frozen.
+  RED-operator-action-binaries (third probe binary added in N-C-S7).
+- **`ChainDb` / `SnapshotStore` / `Recoverable` trait shapes** (N-D).
+- **`AcceptedBlock` type-level broadcast gate** *(NEW in N-C-S5 —
+  CN-CONS-07)*: `AcceptedBlock` is a newtype `{ bytes: Vec<u8> }`
+  whose only field is private and whose only constructor is the
+  `Ok(...)` arm of `ade_ledger::producer::self_accept::self_accept`.
+  RED `BroadcastQueue::enqueue(&mut self, AcceptedBlock)` consumes
+  the token by value. **Producer/validator agreement at the type
+  level**: a forged block whose body-hash, KES signature, leader
+  claim, or body validity disagrees with Ade's own validator halts
+  the producer deterministically before any bytes leave the host.
+  Defended by `ci_check_self_accept_gate.sh` (6 mechanical guards).
+- **`forge_block` pure-transition contract** *(NEW in N-C-S3 —
+  DC-CONS-13)*: no clock, no rand, no I/O, no `HashMap`, no
+  `std::env`, no `std::fs`. Replay byte-equivalence over identical
+  `ProducerTick` streams (DC-CONS-14). T-DET-01
+  `strengthened_in += PHASE4-N-C`. Defended by
+  `ci_check_forge_purity.sh`.
+- **Single source of leader truth** *(NEW in N-C-S3 — DC-CONS-15)*:
+  `is_leader_for_vrf_output` is the **only** `fn .*is_leader.*`
+  definition reachable from `ade_core` / `ade_ledger`. Producer and
+  validator share it. No producer-side fork permitted.
+- **Tx-admissibility prefix property** *(NEW in N-C-S3 — DC-LEDGER-12)*:
+  every tx in a forged block is admissible via `mempool::admit`
+  against the base ledger state, in the snapshot's canonical
+  accumulating order. No permute, no fabricate, no skip.
+- **Private-key custody RED-confinement** *(NEW in N-C-S1 —
+  OP-OPS-04, DC-CRYPTO-03/04/05)*: `*SigningKey` / `KesSecret` /
+  `ColdSigningKey` types are forbidden in BLUE / codec / types /
+  ledger / crypto public APIs. Replay corpora carry signed artifacts
+  only. KES evolution is one-way; the evolved key signs period
+  `i+1` and MUST NOT sign for period `i`.
+- **Closed-grammar opcert byte authority** *(NEW in N-C-S2 —
+  DC-CONS-11)*: `ade_codec::shelley::opcert::{encode_opcert,
+  decode_opcert}` is the single producer-side opcert byte authority.
+  Standalone 4-tuple `[hot_vkey:bstr32, sequence_number:uint,
+  kes_period:uint, sigma:bstr64]`. The prior inline header-path emit
+  is forbidden.
+- **OpCert serial counter strict monotonicity** *(NEW in N-C-S2 —
+  DC-CONS-12)*: `opcert_validate` rejects regression or repetition
+  at the RED→BLUE boundary.
 
 ### Version-gated (can evolve across major versions)
 
@@ -1249,208 +980,224 @@ which is NOT in the `TARGETS` array of
 - **New `CoinSource` deposit-provenance** *(B3)*.
 - **Pre-Conway single-tx validity** *(B2 extension point)*.
 - **Full-scope `track_utxo=true` tx corpus** *(B2 extension point)*.
-- **Conway block-body vkey-witness closure** *(B2-carried, post-B3/B4/B5/N-E/PP)*.
-- **Conway governance certificate accumulation authority** *(B5, WIRED + CLOSED)*.
-- **Credential discriminant extension** *(declared non-goal carried)*.
-- **Committee-enactment write-back** *(ENACTMENT-COMMITTEE-WRITEBACK, WIRED + CLOSED)*.
-- **Conway tx-body `proposal_procedures` decode** *(WIRED + CLOSED in
-  PROPOSAL-PROCEDURES-DECODE)*: the closed sub-grammar +
-  `ProposalProcedure` struct + `decode_proposal_procedures` /
-  `encode_proposal_procedures` are the canonical wiring.
-  **Remaining separable version-gated follow-ups** (NOT open seams
-  now; declared `open_obligation` in `DC-LEDGER-11`):
-  - **`voting_procedures` (key 19) opaque-bytes** remains
-    version-gated for future closure (OQ-1) — natural sibling
-    cluster, same shape pressure.
-  - **`ParameterChange.update` nested opacity** remains opaque
-    `Vec<u8>` inside the typed `GovAction::ParameterChange` variant
-    (OQ-2) — future `strengthened_in` candidate on DC-LEDGER-11 if
-    closed in-place, or a new DC-LEDGER-1X if closed as a parallel
-    surface.
-  - **`NewConstitution.raw` nested opacity** remains opaque
-    `Vec<u8>` inside the typed `GovAction::NewConstitution` variant
-    (OQ-3) — bundleable with the voting-procedures cluster.
-  - **Typed `RewardAccount` for `proposal_procedure.return_addr`**
-    (OQ-4) — future strengthening that would also retype
-    `TreasuryWithdrawals.withdrawals` element type in one move.
+- **Conway block-body vkey-witness closure** *(B2-carried)*.
+- **Conway governance certificate accumulation** *(B5)*.
+- **Credential discriminant extension** *(declared non-goal)*.
+- **Committee-enactment write-back** *(ENACTMENT)*.
+- **Conway tx-body `proposal_procedures` decode** *(PP — wired)*.
 - **TPraos full-block validity** *(B1 extension point)*.
-- **New `GovAction` / Plutus version variant**: a new `GovAction`
-  variant now requires simultaneous arm additions to all three
-  enactment chokepoints **PLUS** the PP `decode_gov_action` /
-  `encode_gov_action` (compiler-exhaustive `match`).
-- **New `SignerSource` variant** *(B2)*.
-- **New `TxRejectClass` / `BlockRejectClass` / `FieldKind` /
-  `MissingInput` variant**.
-- **New `OrderPolicy` variant** *(B2)*.
+- **TPraos producer** *(N-C declared non-goal — OQ-4 lock)*: a
+  future TPraos producer would add a closed `era` dispatch arm to
+  `forge_block` + per-era body buckets. Today Conway/Praos only.
+- **New `GovAction` / Plutus version variant**.
+- **New `SignerSource` / `TxRejectClass` / `BlockRejectClass` /
+  `OrderPolicy` variant**.
 - **New protocol parameter field**.
-- **New CI check**: additive. (PP added one — `ci_check_proposal_procedures_closed.sh`.)
+- **New `ProducerTick` field** *(N-C extension point — DC-CONS-13
+  strengthening)*: shape changes to the canonical input value are
+  version-gated; new fields preserved by replay corpora; CI guards
+  preserved (no `#[non_exhaustive]`, no private-key fields).
+- **New `ForgeError` / `SchedulerInput` / `SchedulerEffect` variant**:
+  closed sums; variant additions are version-gated; no
+  `#[non_exhaustive]`, no `String`-bearing variants permitted.
+- **New `SelfAcceptError` variant** *(N-C extension point —
+  CN-CONS-07 strengthening)*: closed sum; variant additions are
+  version-gated; today the sum is the single `Rejected(BlockValidityError)`
+  arm — broadening would require both a normative slice and updated
+  guards in `ci_check_self_accept_gate.sh`.
+- **New CI check**: additive. (N-C added eight —
+  `ci_check_private_key_custody.sh`, `ci_check_opcert_closed.sh`,
+  `ci_check_forge_purity.sh`, `ci_check_no_private_keys_in_corpus.sh`,
+  `ci_check_no_producer_body_encoder.sh`, `ci_check_self_accept_gate.sh`,
+  `ci_check_scheduler_closure.sh`, `ci_check_producer_corpus_present.sh`.)
+  N-C also modified `ci_check_constitution_coverage.sh` to allow
+  enforcement evidence on release/operational entries when status
+  is `enforced`.
 - **Pinned external crate bump**: Tier-5 rationale doc required.
-- **New mini-protocol**.
-- **Mini-protocol version-table bump**.
-- **New `ChainEvent` / `ChainSelectionReject` / `StreamInput` variant** *(N-B)*.
+  **N-C consumed:** `cardano-crypto = "1.0.8"` (already pinned).
+- **New mini-protocol** / **Mini-protocol version-table bump**.
+- **New `ChainEvent` / `ChainSelectionReject` / `StreamInput` variant**.
 - **New `NetworkMagic`** *(N-B)*.
 - **New `LedgerView` impl / LedgerState-backed `PoolDistrView` constructor**.
 - **`BootstrapAnchorHash` preimage v2** *(N-B)*: hard version-gated.
-- **N2N/N2C tx-submission → `mempool_ingress` ingress** *(WIRED + CLOSED in N-E)*.
-- **Phase-4 cluster surface additions** (N-C, N-F): each cluster's
-  wire surface gates additions via its own cluster doc.
+- **N2N/N2C tx-submission → `mempool_ingress` ingress** *(N-E)*.
+- **Live cardano-node N2N block-fetch acceptance** *(N-C —
+  `blocked_until_operator_stake_available` per `CN-CONS-06.open_obligation`)*:
+  reopens when testnet SPO stake is provisioned; the live half is
+  not a Tier-1 hash-critical invariant (the bytes-shape claim is
+  mechanically closed via `cross_impl_adapter`).
+- **Phase-4 cluster surface additions** (N-F): each cluster's wire
+  surface gates additions via its own cluster doc.
 
 ---
 
 ## 5. Module Addition Rules
 
-Ade's workspace is small and color-disciplined. **PP-S1 added one
-new BLUE submodule** (`ade_codec::conway::governance`, ~580 LOC,
-exporting `decode_proposal_procedures` + `encode_proposal_procedures`
-+ per-component decoders/encoders + helpers) inside the existing
-BLUE `ade_codec` crate; **PP-S1 added one new closed type**
-(`ade_types::conway::governance::ProposalProcedure`) inside the
-existing BLUE `ade_types` crate; **PP-S1 typed one existing field**
-(`ConwayTxBody.proposal_procedures` from `Option<Vec<u8>>` to
-`Option<Vec<ProposalProcedure>>`); **PP-S1 added one new CI gate**
-(`ci/ci_check_proposal_procedures_closed.sh`); **PP-S1 added one
-new BLUE entry point** at the body codec key-20 path. **PP-S2 added
-one new GREEN submodule** (`ade_testkit::governance::proposal_procedures_replay`,
-canonical synthetic corpus + replay harness) inside the existing
-GREEN `ade_testkit` crate. PP added **no new crate, no new external
-ingress wire-format frozen contract beyond the closed
-`proposal_procedures` sub-grammar, no new public composer, no new
-operator-action probe binary, no new live-evidence log artifact**.
+Ade's workspace is small and color-disciplined. **PHASE4-N-C added
+five new BLUE submodules** (`ade_codec::shelley::opcert`,
+`ade_core::consensus::opcert_validate`, `ade_ledger::block_body_hash`,
+`ade_ledger::producer::{forge, self_accept, state}`,
+`ade_ledger::producer` mod root), **five new RED submodules**
+(`ade_runtime::producer::{signing, keys, scheduler, broadcast}` +
+the producer mod root), **one new GREEN submodule**
+(`ade_runtime::producer::tick_assembler`), **one new GREEN testkit
+submodule** (`ade_testkit::producer` with `fixtures`, `replay`,
+`reference_vectors`, `cross_impl_adapter`), **one new operator-action
+probe binary** (`ade_core_interop::bin::live_block_production_session`),
+**eight new CI gates**, **fourteen new registry rules**, **one
+strengthening of two carried rules** (`T-DET-01.strengthened_in +=
+PHASE4-N-C`, `T-ENC-01.strengthened_in += PHASE4-N-C`), and **one
+modification of a carried CI gate** (`ci_check_constitution_coverage.sh`
+to allow enforcement evidence on release/operational entries when
+status is `enforced`). N-C added **no new crate**, **no new external
+ingress wire-format frozen contract beyond the closed standalone
+opcert grammar**, **no new public composer outside the producer
+authority surface**.
 
-**The module-addition rule PP sets for future governance-domain
-sub-grammar decoders:**
+**N-C also added one new cross-color dependency edge**:
+`ade_runtime → ade_ledger` (RED → BLUE), required because the
+producer's RED scheduler and broadcast queue consume the BLUE
+`AcceptedBlock` token from `ade_ledger::producer::self_accept`. The
+edge passes `ci_check_dependency_boundary.sh` — RED depending on
+BLUE is the intended direction (BLUE → RED would close a Cargo cycle
+and is forbidden).
 
-1. **A new governance-domain sub-grammar decoder attaches as a
-   parallel closed entry point** in `ade_codec::conway::governance`
-   (sibling of `decode_proposal_procedures`) — e.g. a future
-   `decode_voting_procedures`. The decoder MUST be a closed BLUE
-   function returning `Result<T, CodecError>` with no silent-skip
-   arm, deterministic rejects on unknown discriminants, empty sets,
-   trailing garbage, and structural failures.
-2. **A new typed sub-grammar field on `ConwayTxBody` attaches as a
-   typed shape replacement** (e.g. `voting_procedures:
-   Option<Vec<VotingProcedure>>`) — not as a parallel opaque-bytes
-   sibling field. The body codec at the relevant key calls the
-   typed decoder + encoder; the opaque pass-through form is
-   CI-forbidden.
-3. **A new closed governance-domain struct attaches as a closed
-   N-field struct** in `ade_types::conway::governance` (sibling of
-   `ProposalProcedure`). Construction outside the closed decoder +
-   the testkit fixture builders MUST be CI-forbidden by a guard
-   modeled on `ci_check_proposal_procedures_closed.sh` guard 5.
-4. **A new closed sub-grammar requires its own CI gate** (or an
-   extension of an existing one) covering the 5-guard shape:
-   (a) struct defined with the expected fields; (b) typed field
-   on the parent struct (not opaque bytes); (c) decoder + encoder
-   exported by the codec module; (d) body codec at the relevant
-   key calls the typed decoder + encoder; (e) struct-literal
-   construction outside sanctioned sites is forbidden.
-5. **A new closed sub-grammar requires a new derived-Cardano
-   registry rule** OR extends `DC-LEDGER-11.strengthened_in` (the
-   registry's choice when planned). Bidirectional `cross_ref`
-   recording is mandatory when the new rule consumes an existing
-   discriminant rule (e.g. DC-LEDGER-10 ↔ DC-LEDGER-11).
-6. **A new closed sub-grammar requires both unit tests
-   (rejection-grammar + per-variant round-trip) and a GREEN
-   canonical synthetic corpus harness** modeled on PP-S2
-   (`proposal_procedures_replay`) — byte-identical decode → encode
-   round-trip across all closed-enum variants + any discriminant
-   preservation cases.
+**The host-crate decision for the producer authority surface**
+(recorded in `docs/clusters/PHASE4-N-C/N-C-S3.md` §Host-crate decision):
+the producer's BLUE core was originally planned at
+`ade_core::consensus::forge` but relocated to `ade_ledger::producer`
+because `ade_ledger` already depends on `ade_core` and the forge body
+needs `ade_ledger::{state::LedgerState, mempool::admit::*,
+block_body_hash::*}` — the inverse import would close a Cargo cycle.
+BLUE classification is unchanged.
 
-### Cross-cluster obligation pattern (carried — introduced in N-E full close)
+**The module-addition rule N-C sets for future producer-domain work:**
 
-PHASE4-N-E full close introduced the cross-cluster obligation
-pattern. **PROPOSAL-PROCEDURES-DECODE does NOT invoke this pattern**
-— the cluster's evidence is fully mechanical (no deferred live-wire
-half). The four PP open obligations are recorded as separable
-**candidate seams** (per §1), not as cross-cluster obligations
-under the pattern's binding rules. See N-E full-close narrative for
-the pattern's frozen rules and the CE-NODE-N2C-LTX instance.
+1. **A new producer authority sub-module attaches inside
+   `ade_ledger::producer`** (sibling of `forge`, `self_accept`,
+   `state`). The module MUST be BLUE: no clock, no rand, no I/O, no
+   `HashMap`, no `std::env`, no `std::fs`. Defended by
+   `ci_check_forge_purity.sh`.
+2. **A new RED producer-runtime sub-module attaches inside
+   `ade_runtime::producer`** (sibling of `signing`, `keys`,
+   `scheduler`, `broadcast`). The module MAY use clocks / I/O /
+   async / `tokio` — but MUST NOT export private-key types into
+   non-`producer/` paths.
+3. **A new GREEN producer glue module attaches inside
+   `ade_runtime::producer`** (sibling of `tick_assembler`). The
+   module MUST be a pure function over its inputs; MUST NOT invoke
+   signing primitives; MUST NOT read I/O; MUST produce byte-identical
+   outputs across replays.
+4. **A new producer state-machine input variant attaches to
+   `SchedulerInput`** — not as a parallel state machine, not as a
+   side-channel. New trigger = closed-sum extension.
+5. **A new producer effect variant attaches to `SchedulerEffect`**
+   — closed-sum extension; no `#[non_exhaustive]`.
+6. **A new producer authority registry rule attaches as a derived
+   `DC-*` family entry** with `code_locus`, `ci_script`, `tests`,
+   `cross_ref`. Bidirectional cross-refs to consumed rules
+   (e.g. DC-CONS-15 cross-refs DC-CONS-03 — the validator-shared
+   leader function — bidirectionally).
+7. **A new operator-action probe binary attaches inside
+   `crates/ade_core_interop/src/bin/`** following the
+   `live_<surface>_session` naming + hermetic-default-plus-`--connect`-live
+   shape. The binary MUST stub its live socket halt when stake /
+   external dependency is unavailable; capture status via the
+   `blocked_until_operator_stake_available` mode if the live evidence
+   cannot complete.
 
-### Operator-action evidence pattern (carried — strengthened in N-E full close)
+### Cross-cluster obligation pattern (carried — strengthened in N-C close)
 
-This pattern was established by PHASE4-N-B (CE-N-B-6 live tip
-agreement) and reinforced by PHASE4-N-E (CE-N-E-6 live N2N
-tx-submission2 outbound-client probe + the
-`live_tx_submission_session` probe binary).
-**PROPOSAL-PROCEDURES-DECODE does NOT add a new operator-action
-entry** — the cluster's evidence is fully mechanical (decoder unit
-tests + canonical synthetic corpus harness + CI gate). The pattern
-remains exactly as documented in the N-E full-close revision.
+**N-C strengthens the cross-cluster obligation pattern with a third
+closure mode**: `blocked_until_operator_stake_available`. The mode
+applies when an obligation's blocker is not Ade-internal — e.g.
+testnet SPO stake registration must be provisioned by the operator
+before live evidence can be captured. The mode follows OP-OPS-04's
+precedent (`enforced` + `open_obligation` for a follow-on artifact).
+The mechanical half MUST be closed on the same HEAD (e.g. N-C's
+mechanical cross-impl adapter closes CN-CONS-06's bytes-shape claim).
+**Re-opens on operator availability** — the procedure doc names the
+specific blocker and the re-open criteria.
 
-**OQ5/COMMITTEE/DREP/ENACTMENT-COMMITTEE-FIDELITY/WRITEBACK** all
-followed the in-place-tightening model. **N-E** added two
-crate-internal submodules + the cross-cluster obligation pattern +
-the second probe binary. **B5** added one new crate-internal BLUE
-module + one new CI gate. **B4** added the owner-tagged apply
-model in place. **B3** added four BLUE submodules inside existing
-BLUE crates. **B2** added the `tx_validity::*` and
-`mempool::{admit, policy}` submodule trees. **PP-S1 follows the
-B3 / B5 pattern** (one new BLUE submodule inside `ade_codec` + one
-new closed type inside `ade_types` + one new CI gate); **PP-S2
-adds one new GREEN submodule inside `ade_testkit`** following the
-B5 GREEN-harness pattern. PP adds no new closure pattern of its own
-beyond what N-E established.
+### Operator-action evidence pattern (carried — strengthened in N-C close)
+
+N-C adds the **third instance** of the operator-action probe binary
+family: `live_block_production_session`. The pattern is now
+established across three Tier-1 wire-level seams (chain-sync, tx
+ingress, block production) — each with a hermetic default that runs
+in CI without network access, a `--connect <peer>` live pass that
+the operator runs against a real cardano-node peer, and a captured
+evidence log committed alongside the procedure doc. **N-C also
+introduces the third closure mode** (`blocked_until_operator_stake_available`)
+into the pattern's frozen rules.
 
 | Color | Naming convention | Build-config flags | May depend on | MUST NOT depend on |
 |-------|-------------------|--------------------|----------------|--------------------|
-| **BLUE** | `ade_*` | First line of every `.rs` is the contract banner. `lib.rs` carries `#![deny(unsafe_code, clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::float_arithmetic)]`. No `#[cfg(feature = ...)]`. No async. No `ChainDb`/`f32`/`f64`/density inside `ade_core::consensus`. No `#[non_exhaustive]`/open-tail/`String`/`Box<dyn>` in `ade_core::consensus`, `ade_ledger::block_validity`, `ade_ledger::tx_validity`, `ade_ledger::mempool`. **N-E:** `IngressSource` closed 2-variant; `IngressEvent` closed flat-data struct; `mempool_ingress` body must not reference `source` (DC-MEM-03). **PP:** `ProposalProcedure` closed 4-field struct; `ConwayTxBody.proposal_procedures` typed `Option<Vec<ProposalProcedure>>` (not opaque bytes); `decode_proposal_procedures` body has no silent-skip arm; no struct-literal construction of `ProposalProcedure` outside sanctioned sites (DC-LEDGER-11). | Other BLUE crates / submodules only | Any RED submodule or crate; GREEN in non-dev deps; `pallas_*` (except `ade_plutus`); async runtime; `HashMap`/`HashSet`/`IndexMap`; clock/rand/float/env/I/O. |
-| **GREEN** | `ade_*` | Banner + deny attrs are project convention but not currently enforced for `ade_testkit` / `ade_network::mux::mod` / `ade_ledger::mempool::policy` / `ade_ledger::mempool::canonicalize` / `ade_testkit::mempool::ingress_replay` / **`ade_testkit::governance::proposal_procedures_replay`** / the two `ade_core_interop` N-E bridges. **N-E:** canonicalizer body is grep-gated NO async / RNG / clock / `HashMap` / `HashSet` / `RwLock` / `Mutex`. **PP-S2:** the harness is a pure deterministic single-step `decode → encode` fold per fixture; no I/O, no clocks. | BLUE crates + standard library + ecosystem crates | `ade_runtime` (for `ade_testkit`); RED submodules in non-test paths. Results must never feed back into a BLUE authoritative decision. |
-| **RED** | `ade_*` | No special header. Free to use clocks, I/O, async, `HashMap`, signing keys. The operator-action probe binaries in `crates/ade_core_interop/src/bin/` (currently `live_consensus_session`, `live_tx_submission_session`) follow the hermetic-default / `--connect`-live pattern and are `#[ignore]`-gated by closure-gate tests. **PP added no new probe binary.** | Any BLUE / GREEN crate or submodule (one-way) | Cannot be depended on by BLUE. |
+| **BLUE** | `ade_*` | First line of every `.rs` is the contract banner. `lib.rs` carries `#![deny(unsafe_code, clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::float_arithmetic)]`. No `#[cfg(feature = ...)]`. No async. **N-C:** `ProducerTick` closed 14-field struct; `forge_block` body has no clock / rand / `HashMap` / `std::env` / `std::fs` / async / `println!`; no `String`-bearing variant on `ForgeError` / `ForgeEffects`; no `#[non_exhaustive]` on closed sums (DC-CONS-13). `AcceptedBlock.bytes` private; `pub fn ... -> Result<AcceptedBlock, ...>` count = 1 across crates/ (CN-CONS-07). `opcert_validate` is the sole RED→BLUE opcert acceptance chokepoint (DC-CONS-11/12). `block_body_hash_from_buckets` is the single canonical body-hash recipe (DC-CONS-16). | Other BLUE crates / submodules only | Any RED submodule or crate; GREEN in non-dev deps; `pallas_*` (except `ade_plutus`); async runtime; `HashMap`/`HashSet`/`IndexMap`; clock/rand/float/env/I/O. **N-C:** no `*SigningKey` / `KesSecret` / `ColdSigningKey` types (defended by `ci_check_private_key_custody.sh`). |
+| **GREEN** | `ade_*` | Banner + deny attrs are project convention. **N-C:** `tick_assembler` is a pure function — no I/O, no clocks, no signing-primitive calls. Identical `(slot, base_state, mempool, inputs)` → byte-identical `ProducerTick` (DC-CONS-14). `cross_impl_adapter` is a structural-agreement harness — decode round-trip + body-hash binding via S4's authority + field agreement. | BLUE crates + standard library + ecosystem crates | `ade_runtime` (for `ade_testkit`); RED submodules in non-test paths. Results must never feed back into a BLUE authoritative decision. |
+| **RED** | `ade_*` | No special header. Free to use clocks, I/O, async, `HashMap`, signing keys. The operator-action probe binaries in `crates/ade_core_interop/src/bin/` (now `live_consensus_session`, `live_tx_submission_session`, `live_block_production_session`) follow the hermetic-default / `--connect`-live pattern. **N-C:** `ade_runtime::producer::{signing, keys, scheduler, broadcast}` are RED; `signing` holds `*SigningKey` / `KesSecret` / `ColdSigningKey` with `zeroize`-on-drop and no `pub` raw-byte accessors; `scheduler_step` is a pure RED state transition (wall-clock + I/O live in the outer driver); `BroadcastQueue::enqueue` consumes `AcceptedBlock` by value. | Any BLUE / GREEN crate or submodule (one-way). **N-C added the `ade_runtime → ade_ledger` edge** (RED → BLUE via the `AcceptedBlock` token). | Cannot be depended on by BLUE. |
 
 ### New module checklist
 
 1. **Add to `Cargo.toml` workspace members** (if a new crate).
 2. **Declare TCB color** by editing `.idd-config.json` `core_paths` if BLUE.
 3. **CI script update obligations** — extend the relevant BLUE-scoped
-   scripts; for governance-domain sub-grammar decoders, model the new
-   CI gate on `ci_check_proposal_procedures_closed.sh` (5-guard shape).
+   scripts; for producer-domain sub-modules, model the new CI gate
+   on `ci_check_forge_purity.sh` / `ci_check_self_accept_gate.sh`
+   shape (closure proof + private-field proof + closed-sum proof +
+   no-re-implementation proof).
 4. **Add contract banner** (BLUE) to every `.rs` file.
 5. **Add deny attributes** to `lib.rs` (BLUE).
 6. **New canonical types:** add a `[[rules]]` block under family `T`
    in the invariant registry, plus a round-trip test. For new
-   derived-Cardano sub-grammar closures, append `DC-LEDGER-1X` with
-   bidirectional cross-ref to consumed discriminant rules.
+   producer-domain authority rules, append `DC-CONS-1X` /
+   `DC-CRYPTO-0X` / `OP-OPS-0X` with bidirectional cross-ref to
+   consumed rules. T-DET-01 / T-ENC-01 may receive a `strengthened_in`
+   entry when the new module participates in their byte-deterministic
+   / byte-authoritative properties.
 7. **New operator-action probe binary:** add to
    `crates/ade_core_interop/src/bin/<name>.rs` following the
    `live_<surface>_session` naming + hermetic-default-plus-`--connect`-live
    shape; document in `<cluster>/CE-<id>_PROCEDURE.md`; capture
-   evidence to `<cluster>/CE-<id>_<date>.log`.
-8. **Cross-cluster obligation:** if a CE is split, follow the 5
-   binding rules from the N-E full-close narrative.
+   evidence to `<cluster>/CE-<id>_<date>.log` OR mark
+   `blocked_until_operator_stake_available` if the live evidence
+   depends on an external dependency the operator must provision.
+8. **Cross-cluster obligation:** follow the binding rules from the
+   N-E full-close narrative; N-C strengthens the rules with the
+   third closure mode (`blocked_until_operator_stake_available`).
 9. **Run `cargo test --workspace` and the full CI script suite.**
 
 ### Phase 4 anticipated additions
 
-- **PROPOSAL-PROCEDURES-DECODE — FULLY CLOSED at this HEAD**: code
-  + CI gate + DC-LEDGER-11 registry rule + 17 PP-S1 tests + 4 PP-S2
-  harness tests + cluster archived to
-  `docs/clusters/completed/PROPOSAL-PROCEDURES-DECODE/`. Four
-  declared `open_obligation` strengthenings carried as separable
-  future seams: voting_procedures decode (OQ-1), ParameterChange.update
-  nested decode (OQ-2), NewConstitution.raw nested decode (OQ-3),
-  typed RewardAccount (OQ-4).
-- **PHASE4-N-E — FULLY CLOSED**: code + CE-N-E-6 live N2N evidence
-  + cluster archived. CE-N-E-7 + bulk-tx halves deferred to
-  CE-NODE-N2C-LTX.
+- **PHASE4-N-C — FULLY CLOSED at this HEAD** (mechanical half +
+  structural cross-impl): code + CI gates + DC-CRYPTO-03/04/05 +
+  DC-CONS-11/12/13/14/15/16 + DC-LEDGER-12 + CN-CONS-06/07 +
+  OP-OPS-04/05 + 8 new CI scripts. CE-N-C-8 live-evidence is
+  `blocked_until_operator_stake_available` per `CN-CONS-06.open_obligation`
+  — re-opens on operator availability.
+- **PROPOSAL-PROCEDURES-DECODE — FULLY CLOSED** (carried).
+- **PHASE4-N-E — FULLY CLOSED** (carried).
+- **Future node-binary cluster (`CE-NODE-N2C-LTX`)**: live N2C UDS
+  server + N2N bulk-tx inbound listener (carried).
+- **Future cluster: live cardano-node block-fetch acceptance of
+  Ade-forged blocks (CE-N-C-8 re-open trigger)**: reopens when
+  testnet SPO stake is provisioned; the procedure is documented at
+  `docs/clusters/PHASE4-N-C/CE-N-C-8_PROCEDURE.md`.
+- **N-A successor: N2N producer-side block-fetch server role +
+  chain-sync extension**: outbound delivery of broadcast-queued
+  `AcceptedBlock` bytes. Declared OUT-OF-SCOPE in N-C; the broadcast
+  queue is the upstream side of the handoff.
 - **Tx-validity completeness follow-ups**: full `track_utxo=true`
   corpus; pre-Conway eras; the Conway block-body vkey-witness
   closure (carried).
-- **Future node-binary cluster (`CE-NODE-N2C-LTX`)**: live N2C UDS
-  server + N2N bulk-tx inbound listener.
-- **Outbound tx propagation (post-N-E)**: declared non-goal in N-E.
-- **Mempool bounds / shedding policy (Tier-5)**: declared non-goal in N-E.
-- **`voting_procedures` (key 19) closed decode (PP OQ-1 follow-up)**:
-  natural sibling cluster to PROPOSAL-PROCEDURES-DECODE.
-- **`ParameterChange.update` nested decode (PP OQ-2 follow-up)**.
-- **`NewConstitution.raw` nested decode (PP OQ-3 follow-up)**.
-- **Typed `RewardAccount` (PP OQ-4 follow-up)**.
-- **B4 / sync — LedgerState-backed `PoolDistrView`**.
-- **header→body bridge**: `ade_node` composition layer joining
-  `process_stream_input` and `block_validity`.
-- **N-C (forge)**: forge-block path in `ade_runtime` (RED).
-- **N-F (operator API)**: thin RED layer mapping a closed Query enum
-  to gRPC/HTTP.
+- **PP OQ-1..OQ-4 follow-ups**: voting_procedures decode /
+  ParameterChange.update nested / NewConstitution.raw nested /
+  typed RewardAccount (carried).
+- **header→body bridge (receive-side)**: `ade_node` composition
+  layer joining `process_stream_input` and `block_validity` for
+  externally-arriving headers (carried).
+- **N-F (operator API)**: thin RED layer mapping a closed Query
+  enum to gRPC/HTTP.
 
 **These placements are candidates** — user confirmation needed at
 cluster entry.
@@ -1475,163 +1222,183 @@ cluster entry.
 - No raw CBOR decoding in any BLUE crate except `ade_codec` and the
   single allowlisted file `crates/ade_plutus/src/evaluator.rs`.
 - No `pallas_*` reference outside `ade_plutus`.
-- **(N-A specific)** No `Box<dyn Codec>` / `Box<dyn Protocol>` on
-  mini-protocol enums. No reading "selected protocol version" from a
-  session global. No decoding block/tx/address CBOR inside `ade_network`.
-- **(N-B specific)** No `ChainDb` in `ade_core::consensus`. No density
-  in fork choice. No `#[non_exhaustive]`/open-tail/`String`/`Box<dyn>`
-  in `ade_core::consensus`.
-- **(B1 specific)** No `Valid` block verdict that skips either authority.
-  No partial mutation on the invalid path. No fail-open length/size guard.
-- **(B2 specific)** No `#[non_exhaustive]`, no open-tail, no owned
-  `String`, no `Box<dyn>` in `ade_ledger::tx_validity` or
-  `ade_ledger::mempool`. No `Valid` tx verdict that skips either
-  phase. No reading `track_utxo=false` as "full validity".
-- **(B2 specific — `mempool::admit`)** No false accept (DC-MEM-01).
-- **(B3 specific)** No catch-all accept in `decode_conway_certs`. No
-  last-wins withdrawals. No deposit/refund literal next to a deposit
-  field. No guessed state-dependent deposit/refund. No accept of a
-  cert/withdrawal-bearing tx without the full value check.
-- **(B4 specific)** No reduction of `ConwayCert` into Shelley
-  `Certificate`. No flattening to neutral. No dropping of owner
-  payloads. No swallowing of decode or apply errors. No second
-  pool-params decoder.
-- **(B5 specific)** No `_ =>` wildcard in `apply_conway_gov_cert`.
-  No reintroduction of the B4 observe-and-drop. No fabricated
-  `GovCertEnv`. No unchecked DRep-expiry arithmetic.
-- **(OQ5 / COMMITTEE / DREP)** No tuple-struct `StakeCredential(Hash28)`.
-  No tag-erasing decode. No bare-`Hash28` `StakeCredential(<hash>)`
-  coercion on BLUE. No re-key of `ConwayGovState`'s discriminated
-  maps. No DRep OR-fallback. `cred.hash()` only against declared
-  non-goal surfaces.
-- **(ENACTMENT-COMMITTEE-WRITEBACK)** No opaque-bytes
-  `UpdateCommittee`. No committee write-back outside
-  `apply_committee_enactment`. No re-collapse of the discriminant.
-  `rules.rs` MUST call `apply_committee_enactment` at the epoch
-  boundary.
-- **(N-E specific — closed BLUE chokepoint `mempool_ingress`)** No
-  reference to `event.source` (`\bsource\b` token) inside the
-  `mempool_ingress` function body. The body must remain a pure
-  pass-through to `admit(mempool, event.tx_bytes())`. No `String`,
-  no `Box<dyn>`, no `#[non_exhaustive]` on `IngressSource` or
-  `IngressEvent`. No second public production path into `admit`
-  outside this chokepoint. No mutation of `MempoolState.accumulating`
-  from outside `mempool/admit.rs`. No decode / re-encode of tx body
-  bytes at this layer — verbatim flow into `admit`.
-- **(PP specific — closed BLUE sub-grammar
-  `decode_proposal_procedures` + closed type `ProposalProcedure`)**
-  No reversion of `ConwayTxBody.proposal_procedures` back to
-  `Option<Vec<u8>>` (CI guard 2). No silent-skip arm or catch-all
-  accept in `decode_proposal_procedures` / `decode_proposal_procedure`
-  / `decode_gov_action` / `decode_anchor`. No accept of an empty
-  `proposal_procedures` set (CIP-1694 requires non-empty). No accept
-  of trailing garbage / truncated procedure / invalid stake
-  credential in `UpdateCommittee`. No struct-literal construction of
-  `ProposalProcedure` outside `decode_proposal_procedure` (and its
-  inline `#[cfg(test)]` builders), the testkit fixture builders
-  (`crates/ade_testkit/...`), and integration tests
-  (`crates/*/tests/`). No re-collapse of the DC-LEDGER-10
-  `StakeCredential` discriminant inside the `UpdateCommittee` arm.
-  No second public production decoder for the `proposal_procedures`
-  sub-grammar (CI guard 3). No opaque pass-through at body codec
-  key 20 (CI guard 4). No nested decoding of `voting_procedures`
-  (key 19), `ParameterChange.update`, or `NewConstitution.raw` in
-  this cluster's decoder — OQ-1/2/3 are scope locks. No typing of
-  `proposal_procedure.return_addr` beyond `Vec<u8>` (OQ-4).
+- **(N-A specific)** Carried.
+- **(N-B specific)** Carried.
+- **(B1 specific)** Carried.
+- **(B2 specific)** Carried.
+- **(B3 / B4 / B5 specific)** Carried.
+- **(OQ5 / COMMITTEE / DREP / ENACTMENT-COMMITTEE-WRITEBACK)** Carried.
+- **(N-E specific — closed BLUE chokepoint `mempool_ingress`)** Carried.
+- **(PP specific — closed BLUE sub-grammar `decode_proposal_procedures`)** Carried.
+- **(N-C-S1 specific — RED-confined private-key custody)** No
+  `pub struct .*SigningKey` outside `ade_runtime::producer::*`. No
+  `*SigningKey` / `KesSecret` / `ColdSigningKey` type in `ade_core` /
+  `ade_codec` / `ade_types` / `ade_ledger` / `ade_crypto` public
+  APIs. No `pub fn` in `ade_runtime::producer::signing` returning a
+  raw `[u8; N]` / `Vec<u8>`; every `pub fn` returns a typed wrapper
+  or `Result<typed, _>`. No `Default` impl for `*SigningKey`,
+  `KesSecret`, `ColdSigningKey`. Defended by
+  `ci_check_private_key_custody.sh`.
+- **(N-C-S2 specific — closed BLUE opcert byte authority)** No
+  parallel opcert encoders / decoders outside
+  `ade_codec::shelley::block` + `ade_codec::shelley::opcert` +
+  `ade_core::consensus::opcert_validate`. No catch-all accept in
+  `decode_opcert`. No bypass of `opcert_validate` for the RED→BLUE
+  opcert acceptance step. No `String`-bearing variant on
+  `OpCertCodecError` / `OpCertError`. Defended by
+  `ci_check_opcert_closed.sh`.
+- **(N-C-S3 specific — closed BLUE producer transition `forge_block`
+  + canonical input value `ProducerTick`)** No clock / rand /
+  `HashMap` iteration / `std::env` / `std::fs` / async / `println!`
+  in `forge.rs` / `state.rs` / `tx_components.rs`. No
+  `VrfDraft03::prove` / `Sum6Kes::sign_kes` / `KesAlgorithm::sign_kes`
+  / `update_kes` call inside `ade_ledger/src/producer/` or
+  `ade_core/src/`. No `#[non_exhaustive]` on `ProducerTick` /
+  `ForgeError` / `ForgeEffects` / `ForgedBlock`. No `String`-bearing
+  variant on `ForgeError` / `ForgeEffects`. No private-key field on
+  `ProducerTick`. No second public producer-side leader-check
+  function — `is_leader_for_vrf_output` is the only sanctioned source
+  of leader truth. No tx in a forged block that bypasses the
+  mempool-admit prefix replay. No private-key bytes in producer
+  replay corpora. Defended by `ci_check_forge_purity.sh` +
+  `ci_check_no_private_keys_in_corpus.sh`.
+- **(N-C-S4 specific — single canonical body-hash authority)** No
+  new `pub fn .*encode_block_body` outside the canonical authority
+  in `ade_codec::shelley::block`. No parallel body-hash recipe —
+  `block_body_hash::block_body_hash_from_buckets` is the only
+  function in the workspace that computes the recipe. Both producer
+  and validator hash through it. Defended by
+  `ci_check_no_producer_body_encoder.sh`.
+- **(N-C-S5 specific — closed BLUE self-accept bridge + closed
+  type-level broadcast token `AcceptedBlock`)** No `pub fn ... ->
+  AcceptedBlock` / `... -> Result<AcceptedBlock, _>` outside the
+  `self_accept` function in `self_accept.rs` (CI guard 1b: exactly
+  one such return-type match across crates/). No `pub bytes:` on
+  `AcceptedBlock`. No `#[non_exhaustive]` on `SelfAcceptError`. No
+  `String`-bearing variant on `SelfAcceptError`. No `impl Default
+  for AcceptedBlock` / `impl From<.*> for AcceptedBlock` /
+  `impl TryFrom<.*> for AcceptedBlock`. No call to
+  `validate_and_apply_header(` / `decode_block(` /
+  `block_body_hash(` from `self_accept.rs` production source —
+  `self_accept` MUST delegate to the canonical `block_validity`
+  chokepoint, never re-implement validator sub-steps. No `pub fn`
+  in `self_accept.rs` returning raw `Vec<u8>` / `&[u8]` outside the
+  `as_bytes` / `into_bytes` accessors on the token. Defended by
+  `ci_check_self_accept_gate.sh` (6 guards).
 
-### GREEN (`ade_testkit` incl. `validity` / `tx_validity` / `mempool` + B3/B4/B5/OQ5/COMMITTEE/DREP corpora + **PP-S2 `governance` corpus**; `ade_network::lib` / `mux::mod`; `ade_runtime::consensus::{candidate_fragment, chain_selector}`; `ade_ledger::mempool::{policy, canonicalize}`; the two `ade_core_interop` N-E bridges)
+### GREEN (`ade_testkit` incl. `producer` corpus + carried sub-trees; `ade_runtime::consensus::{candidate_fragment, chain_selector}`; `ade_ledger::mempool::{policy, canonicalize}`; the two `ade_core_interop` N-E bridges; **`ade_runtime::producer::tick_assembler` — NEW in N-C-S6**)
 
 - No nondeterminism that leaks into stored fixtures — fixtures must
   be byte-reproducible.
 - No participation in authoritative outputs.
 - No `HashMap` even in test helpers — `BTreeMap` only.
 - No import of `ade_runtime` from `ade_testkit`.
-- (`ade_runtime::consensus::chain_selector`) No comparison decision.
-- (`ade_ledger::mempool::policy`) No call to `tx_validity`; no read
-  of the accumulating state; no add/remove of a tx id (DC-MEM-02).
-- (`ade_ledger::mempool::canonicalize`, N-E) No async / RNG / clock /
-  `HashMap` / `HashSet` / `RwLock` / `Mutex`. The per-peer ordering
-  rule is the load-bearing GREEN fairness contract.
-- (`ade_testkit::mempool::ingress_replay`, N-E) Single-step fold
-  only; no batching / parallel / out-of-order helpers.
-- (`ade_core_interop::tx_submission` / `local_tx_submission`, N-E)
-  Pure deterministic functions over their inputs; no I/O, no clocks.
-- **(`ade_testkit::governance::proposal_procedures_replay`, PP-S2)**
-  No I/O; no clocks; no nondeterminism in the synthetic corpus
-  generator (fixtures must be byte-reproducible across builds). The
-  round-trip property is single-step `decode → encode` per fixture;
-  no batching or parallel asserts. Coverage MUST include all 7
-  `GovAction` variants AND the DC-LEDGER-10 `UpdateCommittee`
-  discriminant case (separate `KeyHash(h)` vs `ScriptHash(h)` fixtures
-  with equal 28 bytes — distinct round-trip outputs are the
-  certifier). Future strengthening: real-chain corpus extraction
-  (per OQ-5 — declared as a possible future PP-S3 or successor
-  cluster); when added, the harness MUST remain GREEN (no live
-  network calls inside the harness — the corpus extractor runs
-  offline against pre-staged chain data).
+- (carried bullets per prior revision)
+- **(`ade_runtime::producer::tick_assembler`, NEW in N-C-S6)** No I/O;
+  no clocks; no nondeterminism. The function MUST be observably
+  deterministic: identical `(slot, base_state, mempool, inputs)`
+  MUST produce byte-identical `ProducerTick` outputs across replays
+  (DC-CONS-14). MUST NOT invoke signing primitives (RED-only). MUST
+  NOT branch on wall-clock or environment state. MUST NOT mutate the
+  base ledger or mempool. The closed `TickInputs` struct carries
+  signed artifacts only — no private-key types.
+- **(`ade_testkit::producer::{fixtures, replay, reference_vectors,
+  cross_impl_adapter}`, NEW in N-C-S1..S7)** No private-key bytes in
+  any corpus fixture (defended by `ci_check_no_private_keys_in_corpus.sh`).
+  Fixtures carry signed artifacts (`VrfProof`, `KesSignature`,
+  `OpCert`) only. `cross_impl_adapter` covers the bytes-shape claim
+  only (decode round-trip + body-hash binding + structural field
+  agreement); the crypto-level cross-impl claim is operator-action.
 
-### RED (`ade_runtime`, `ade_node`, `ade_network::mux::transport`, `ade_network::session`, `ade_network::bin::capture_*`, `ade_runtime::consensus::genesis_parser`, `ade_core_interop` (incl. N-E S6 probe binary `live_tx_submission_session`), and the RED-behavior `ade_ledger::consensus_input_extract` scan)
+### RED (`ade_runtime`, `ade_node`, `ade_network::mux::transport`, `ade_network::session`, `ade_network::bin::capture_*`, `ade_runtime::consensus::genesis_parser`, `ade_core_interop` (incl. N-C S7 probe binary `live_block_production_session`), and the RED-behavior `ade_ledger::consensus_input_extract` scan; **`ade_runtime::producer::{signing, keys, scheduler, broadcast}` — NEW in N-C-S1/S6**)
 
 - No direct mutation of `ade_ledger` state — all transitions go
-  through `ade_ledger::rules::*`, the `block_validity` /
-  `tx_validity` composers, or `mempool::ingress::mempool_ingress`
-  (the Tier-1 wire-level chokepoint; direct `mempool::admit` calls
-  from production source are CI-forbidden in N-E).
+  through `ade_ledger::rules::*`, the `block_validity` / `tx_validity`
+  composers, `mempool::ingress::mempool_ingress`, or **the new
+  producer authority chokepoints `producer::forge::forge_block` +
+  `producer::self_accept::self_accept`** (the BLUE composers that
+  RED dispatches through).
 - No bypassing `ade_codec` to construct semantic types from raw bytes.
   **(PP-strengthened)** Constructing `ProposalProcedure` from raw
-  bytes outside `decode_proposal_procedures` on the production path
-  is CI-forbidden (guard 5).
-- (`ade_runtime` specifically) No dep on `ade_ledger`. No leakage of
-  `redb` types. No second public `chaindb` path.
+  bytes outside `decode_proposal_procedures` is CI-forbidden.
+  **(N-C-strengthened)** Constructing `AcceptedBlock` outside
+  `self_accept` is CI-forbidden (`ci_check_self_accept_gate.sh`
+  guard 1).
+- (`ade_runtime` specifically) No dep on `ade_ledger` was permitted
+  prior to N-C; **N-C added the `ade_runtime → ade_ledger` edge**
+  (required to consume the BLUE `AcceptedBlock` token + the BLUE
+  `forge_block` / `self_accept` chokepoints from RED scheduler +
+  broadcast). The edge passes `ci_check_dependency_boundary.sh`
+  (RED → BLUE is the intended direction). No leakage of `redb`
+  types. No second public `chaindb` path.
 - (`ade_network::mux::transport`) No protocol logic.
 - (`ade_network::session`) Composition glue only.
 - (`ade_network::bin::capture_*`) Live-interop tools only.
 - (`ade_runtime::consensus::genesis_parser`) No re-derivation of the
   bootstrap anchor outside `compute_anchor_hash`.
 - (`ade_ledger::consensus_input_extract`) Pure-over-bytes.
-- (N-E live N2N operator-action session — the RED probe binary
-  `live_tx_submission_session` + the RED half of CE-N-E-6) The live
-  socket loop MUST funnel its delivered tx-byte events through the
-  GREEN `ade_core_interop::tx_submission` bridge — MUST NOT carry a
-  parallel admission path, MUST NOT call `admit` directly from
-  production source, MUST NOT bypass `mempool_ingress`, MUST NOT
-  branch the verdict on whether the bytes arrived over N2N or N2C.
-- (Deferred RED operator-action surfaces — CE-NODE-N2C-LTX) The
-  live N2C UDS server + N2N bulk-tx inbound listener belong to the
-  future node-binary cluster.
+- (N-E live N2N operator-action session) Carried.
+- (Deferred RED operator-action surfaces — CE-NODE-N2C-LTX) Carried.
 - (`ade_core_interop`) Live-interop driver only; library tests
   `#[ignore]`-gated. The N-E GREEN bridges in this crate are
   deterministic pure functions; the live socket loops are
-  operator-action.
+  operator-action. **N-C added `live_block_production_session`** —
+  third operator-action probe binary in the family. The binary's
+  default mode prints readiness and exits (hermetic, runs in CI
+  without network access); `--connect` performs the live pass against
+  a real cardano-node peer.
+- **(N-C-S1 specific — `ade_runtime::producer::signing` + `::keys`)**
+  No `pub` raw-byte accessor on `VrfSigningKey` / `KesSecret` /
+  `ColdSigningKey`. `zeroize`-on-drop. No `Default` impl. No
+  `Display` / `Debug` that emits key bytes. The key loader reads
+  cardano-cli `*.skey` text envelopes only — no key generation, no
+  network fetch (OP-OPS-04, OQ-1 lock).
+- **(N-C-S6 specific — `ade_runtime::producer::scheduler`)** The
+  scheduler core MUST be pure RED state transition: wall-clock + I/O
+  live in the outer driver, not inside `scheduler_step`. No silent
+  recovery from a halt — once `halted = Some(reason)`, subsequent
+  `SlotTick` inputs are ignored and re-emit the original halt
+  reason. No `#[non_exhaustive]` on `SchedulerInput` /
+  `SchedulerEffect` / `SchedulerHaltReason`. No `String`-bearing
+  variant.
+- **(N-C-S6 specific — `ade_runtime::producer::broadcast`)** `enqueue`
+  MUST take `AcceptedBlock` by value (move semantics — type-level
+  gate). No `enqueue` overload taking `&[u8]` / `&AcceptedBlock` /
+  `Vec<u8>`. No FIFO ordering bypass.
+- **(N-C-S7 specific — `live_block_production_session`)** The live
+  socket loop MUST drive the RED scheduler → GREEN tick-assembler →
+  BLUE forge → BLUE `self_accept` pipeline through the canonical
+  chokepoints — no parallel admission path, no direct construction
+  of `AcceptedBlock`, no bypass of `self_accept`. The live evidence
+  log committed alongside the procedure doc redacts hostnames per
+  `feedback_no_credential_leaks`.
 
 ### Project-specific additions
 
 - **No commits of credentials, hostnames, IPs, private keys** —
-  enforced by `ci_check_no_secrets.sh`.
+  enforced by `ci_check_no_secrets.sh`. **N-C-strengthened:** no
+  private-key bytes in producer replay corpora
+  (`ci_check_no_private_keys_in_corpus.sh`).
 - **No `Phase 4 internal-mode mock network`** — Tier 1 surfaces must
-  be exercised against real cardano-node peers.
+  be exercised against real cardano-node peers. **N-C:** the
+  mechanical cross-impl harness `cross_impl_adapter` is a
+  structural-agreement harness over a synthetic corpus (bytes-shape
+  claim only); the crypto-level cross-impl claim requires
+  operator-action live evidence per CE-N-C-8.
 - **No collapsing wire and canonical bytes** — dual-authority rule.
-- **No Tier 5 surface without a stated rationale** — the GREEN
-  per-peer canonicalizer is Tier-5 within `ade_ledger::mempool`; the
-  Tier-5 rationale is "deterministic per-peer fairness for replay
-  byte-identity" (DC-MEM-04).
+- **No Tier 5 surface without a stated rationale**.
 - **No "we'll match it later" stubs on Tier 1 surfaces** — Tier 1
-  closure is hard-gated. The B1 block verdict, the B2 tx verdict,
-  the B2 mempool admission gate, the B3 full value-conservation
-  accounting, the B4 Conway cert-state accumulation, the B5 Conway
-  governance-cert accumulation, the ENACTMENT-COMMITTEE-WRITEBACK
-  committee write-back, the N-E Tier-1 wire-level mempool ingress,
-  and the **PROPOSAL-PROCEDURES-DECODE closed `proposal_procedures`
-  sub-grammar at the Conway tx-body key 20 boundary (DC-LEDGER-11)**
-  are all Tier-1 surfaces. **Cross-cluster obligation deferrals
-  (CE-NODE-N2C-LTX) are NOT "we'll match it later" stubs**. **The
-  four PROPOSAL-PROCEDURES-DECODE OQ-locked open obligations
-  (voting_procedures, ParameterChange.update, NewConstitution.raw,
-  typed RewardAccount) are NOT "we'll match it later" stubs either**
-  — they are explicitly OQ-locked scope decisions recorded in
-  `DC-LEDGER-11.open_obligation`, declared as separable future seams
-  in this SEAMS §1, and tied to specific successor-cluster
-  expectations in §5.
+  closure is hard-gated. The producer authority surface (forge +
+  self-accept + opcert + body-hash) is now Tier 1; the eight new CI
+  gates enforce mechanical closure. **Cross-cluster obligation
+  deferrals (CE-NODE-N2C-LTX) are NOT "we'll match it later"
+  stubs**. **The N-C `blocked_until_operator_stake_available` status
+  is NOT a "we'll match it later" stub either** — the mechanical
+  half is fully enforced at this HEAD; the live half is recorded as
+  an `open_obligation` on `CN-CONS-06`, tied to a specific
+  operator-action procedure (`CE-N-C-8_PROCEDURE.md`), and reopens
+  on a named external dependency (testnet SPO stake registration).
+  Follows OP-OPS-04's precedent.
 
 ---
 
@@ -1640,75 +1407,70 @@ cluster entry.
 - CODEMAP: `docs/ade-CODEMAP.md` — module-by-module authority table,
   upstream of this document. **Cross-reference check at this HEAD:**
   CODEMAP is being regenerated in parallel; pending the regen,
-  CODEMAP may pin pre-PP HEAD. The new BLUE module
-  `ade_codec::conway::governance` at exact path
-  `crates/ade_codec/src/conway/governance.rs` exports the new
-  closed entry points; the new closed type
-  `ade_types::conway::governance::ProposalProcedure` at exact path
-  `crates/ade_types/src/conway/governance.rs:93` is the new BLUE
-  domain type; the new GREEN harness at
-  `crates/ade_testkit/src/governance/proposal_procedures_replay.rs`
-  is the new GREEN sibling. The next CODEMAP regen picks these up
-  mechanically. CI count moves from 31 → 32 (`ci_check_proposal_procedures_closed.sh`).
+  CODEMAP may pin pre-N-C HEAD. The new BLUE submodules
+  (`ade_codec::shelley::opcert`, `ade_core::consensus::opcert_validate`,
+  `ade_ledger::block_body_hash`, `ade_ledger::producer::{forge,
+  self_accept, state}`), the new RED submodules
+  (`ade_runtime::producer::{signing, keys, scheduler, broadcast}`),
+  the new GREEN submodules (`ade_runtime::producer::tick_assembler`,
+  `ade_testkit::producer::*`), and the new operator-action probe
+  binary (`ade_core_interop::bin::live_block_production_session`)
+  are not yet in the prior CODEMAP. The next CODEMAP regen picks
+  these up mechanically. CI count moves from 32 → 40.
 - Invariant registry: `docs/ade-invariant-registry.toml` — rule
-  families incl. T / CN / DC / OP / RO. **PP added:** `DC-LEDGER-11`
-  (`enforced`, `ci_script = ci/ci_check_proposal_procedures_closed.sh`,
-  `introduced_in = PROPOSAL-PROCEDURES-DECODE`, bidirectional
-  `cross_ref = [DC-LEDGER-10]`); appended `DC-LEDGER-11` to
-  `DC-LEDGER-10.cross_ref`; PP-S2 extended `DC-LEDGER-11.tests`
-  with 4 harness test names. Total: 175 → 176 entries.
+  families incl. T / CN / DC / OP / RO. **N-C added:**
+  `DC-CRYPTO-03/04/05` (`enforced`, `ci_script =
+  ci/ci_check_private_key_custody.sh`,
+  `introduced_in = PHASE4-N-C`); `DC-CONS-11/12` (`enforced`,
+  `ci_script = ci/ci_check_opcert_closed.sh`); `DC-CONS-13/14/15`
+  (`enforced`, `ci_script = ci/ci_check_forge_purity.sh` +
+  `ci/ci_check_no_private_keys_in_corpus.sh`); `DC-CONS-16`
+  (`enforced`, `ci_script = ci/ci_check_no_producer_body_encoder.sh`);
+  `DC-LEDGER-12` (`enforced`, `ci_script = ci/ci_check_forge_purity.sh`);
+  `CN-CONS-06` (`enforced` + `open_obligation =
+  blocked_until_operator_stake_available`, `ci_script =
+  ci/ci_check_producer_corpus_present.sh`); `CN-CONS-07`
+  (`enforced`, `ci_script = ci/ci_check_self_accept_gate.sh`);
+  `OP-OPS-04` (`enforced` + `open_obligation =
+  cardano-cli Sum6KES skey path`, `ci_script =
+  ci/ci_check_private_key_custody.sh`); `OP-OPS-05` (`enforced`,
+  `ci_script = ci/ci_check_scheduler_closure.sh`); appended
+  `PHASE4-N-C` to `T-DET-01.strengthened_in` +
+  `T-ENC-01.strengthened_in`. Total: 176 → 190 entries.
 - Phase 4 cluster plan: `docs/active/phase_4_cluster_plan.md`.
 - Tier doctrine: `docs/active/CE-79_gate_statement.md` and
   `docs/active/CE-79_tier5_addendum.md`.
-- Cluster N-D slices (closed): `docs/clusters/completed/PHASE4-N-D/S-{33..37}.md`.
-- Cluster N-A (closed): `docs/clusters/completed/PHASE4-N-A/cluster.md`
-  + `S-A{1..10}.md`.
-- Cluster N-B (closed): `docs/clusters/completed/PHASE4-N-B/cluster.md` +
-  `S-B{1..10}.md` + `CE-N-B-6_PROCEDURE.md` + the captured
-  `CE-N-B-6_<date>.log`.
-- Cluster B1 (closed): `docs/clusters/completed/PHASE4-B1/cluster.md` +
-  `B1-S{1..7}.md`.
-- Cluster B2 (closed): `docs/clusters/completed/PHASE4-B2/cluster.md` +
-  `B2-S{1..5}.md`.
-- Cluster B3 (closed): `docs/clusters/completed/PHASE4-B3/cluster.md` +
-  `B3-S{1..6}.md`.
-- Cluster B4 (closed): `docs/clusters/completed/PHASE4-B4/cluster.md` +
-  `B4-S1.md` (declares PHASE4-B5).
-- Cluster B5 (closed): `docs/clusters/completed/PHASE4-B5/cluster.md` +
-  `B5-S{2..5}.md` (declares OQ-3 / OQ-5).
-- Cluster OQ5-CREDENTIAL-FIDELITY (closed).
-- Cluster COMMITTEE-CRED-FIDELITY (closed).
-- Cluster DREP-VOTE-FIDELITY (closed).
-- Cluster ENACTMENT-COMMITTEE-FIDELITY (closed).
-- Cluster ENACTMENT-COMMITTEE-WRITEBACK (closed).
-- Cluster PHASE4-N-E (closed; archived at
-  `docs/clusters/completed/PHASE4-N-E/`).
-- **Cluster PROPOSAL-PROCEDURES-DECODE (CLOSED at this HEAD;
-  archived to `docs/clusters/completed/PROPOSAL-PROCEDURES-DECODE/`)**:
-  the cluster doc + slices `cluster.md, PP-S1.md, PP-S2.md`. WIRES
-  AND CLOSES the Conway tx-body `proposal_procedures` (key 20)
-  sub-grammar — typed `ConwayTxBody.proposal_procedures:
-  Option<Vec<ProposalProcedure>>` + closed `ProposalProcedure`
-  4-field struct + the single sanctioned BLUE decoder
-  `decode_proposal_procedures` (closed grammar over CIP-1694
-  `proposal_procedure = [coin, reward_account, gov_action, anchor]`)
-  + the matching re-encoder `encode_proposal_procedures` (PreservedCbor
-  round-trip authority) + the PP-S2 canonical synthetic corpus +
-  replay harness covering all 7 `GovAction` variants and the
-  DC-LEDGER-10 `UpdateCommittee` discriminant case. CONSUMES
-  DC-LEDGER-10 unchanged through the `UpdateCommittee` arm;
-  bidirectional `cross_ref` recorded in registry. Added one CI
-  script (`ci_check_proposal_procedures_closed.sh` — 5 mechanical
-  guards; count `31 → 32`). Added one derived-Cardano registry
-  rule (`DC-LEDGER-11`; registry total `175 → 176`). **Declared
-  non-goals carried to future clusters as `open_obligation` on
-  DC-LEDGER-11**: `voting_procedures` (key 19) decode (OQ-1 —
-  natural sibling cluster), `ParameterChange.update` nested decode
-  (OQ-2), `NewConstitution.raw` nested decode (OQ-3), typed
-  `RewardAccount` for `proposal_procedure.return_addr` (OQ-4 —
-  would also retype `TreasuryWithdrawals.withdrawals` element type).
-  No new operator-action probe binary, no new live-evidence log,
-  no new cross-cluster obligation.
+- Cluster N-D / N-A / N-B / B1 / B2 / B3 / B4 / B5 / OQ5-CREDENTIAL-FIDELITY
+  / COMMITTEE-CRED-FIDELITY / DREP-VOTE-FIDELITY /
+  ENACTMENT-COMMITTEE-FIDELITY / ENACTMENT-COMMITTEE-WRITEBACK /
+  PHASE4-N-E / PROPOSAL-PROCEDURES-DECODE: all closed; cluster docs
+  carried.
+- **Cluster PHASE4-N-C (CLOSED at this HEAD; mechanical half + structural
+  cross-impl)**: the cluster doc + slices `cluster.md, N-C-S{1..7}.md`
+  + `CE-N-C-8_PROCEDURE.md` at `docs/clusters/PHASE4-N-C/`. WIRES AND
+  CLOSES block production end-to-end: RED signing primitives + key
+  loader (S1), BLUE `opcert_validate` chokepoint + closed-grammar
+  opcert encoder authority (S2), BLUE `forge_block` core +
+  `ProducerTick` canonical input value + tx-admissibility prefix (S3),
+  unified BLUE body-hash recipe authority (S4), BLUE `self_accept`
+  bridge + `AcceptedBlock` type-level broadcast gate (S5), RED
+  scheduler + GREEN tick-assembler + RED broadcast queue (S6),
+  mechanical cross-impl adapter + `live_block_production_session`
+  operator-action probe binary (S7). Added eight CI scripts (count
+  32 → 40); added fourteen derived-Cardano / consensus / release /
+  operational registry rules (total 176 → 190); strengthened two
+  carried universal rules (T-DET-01, T-ENC-01); modified
+  `ci_check_constitution_coverage.sh` to allow enforcement evidence
+  on release/operational entries when status is `enforced`.
+  **CE-N-C-8 live-evidence `blocked_until_operator_stake_available`**
+  per `CN-CONS-06.open_obligation`; mechanical bytes-shape claim is
+  closed by `cross_impl_adapter`. Three operator-action probe
+  binaries now in the family: `live_consensus_session` (N-B),
+  `live_tx_submission_session` (N-E S6), `live_block_production_session`
+  (N-C S7).
+- **Future obligation: `CE-N-C-8`** — operator-action live evidence
+  for crypto-level cross-impl; reopens on testnet SPO stake
+  registration availability.
 - **Future obligation: `CE-NODE-N2C-LTX`** — the node-binary
   cluster's live N2C UDS server + N2N bulk-tx inbound listener;
   carried from N-E.

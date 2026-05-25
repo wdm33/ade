@@ -3,7 +3,7 @@
 ## Slice Header
 **Slice Name:** BLUE `forge_block` + `ProducerTick` canonical type + leader-check gate + tx-admissibility prefix + purity
 **Cluster:** PHASE4-N-C
-**Status:** Proposed (v2 — host crate corrected to `ade_ledger::producer`)
+**Status:** Merged
 **CEs addressed:** CE-N-C-3 (forge purity + replay byte-equality + leader-check + tx-admissibility)
 **Registry flips on merge:** `DC-CONS-13`, `DC-CONS-14`, `DC-CONS-15`, `DC-LEDGER-12` → `enforced`
 **Dependencies:** S1 merged (RED signing primitives — provides `VrfProof`, `KesSignature` artifact types). S2 merged (BLUE `opcert_validate` in `ade_core::consensus` — consumed here).

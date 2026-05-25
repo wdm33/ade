@@ -3,7 +3,7 @@
 ## Slice Header
 **Slice Name:** BLUE body-hash parity via single Cardano-compatible canonical body-hash authority
 **Cluster:** PHASE4-N-C
-**Status:** Proposed
+**Status:** Merged
 **CEs addressed:** CE-N-C-4 (body-hash parity via validator-shared encoder)
 **Registry flips on merge:** `DC-CONS-16` → `enforced`
 **Dependencies:** S1, S2, S3 merged. S3 produces forged blocks whose `body_hash` already byte-equals the validator's recomputation by construction (every `roundtrip_*` and `*_determinism` test stayed green at S3 close). S4 makes the equality mechanically *locked* rather than incidentally true.
