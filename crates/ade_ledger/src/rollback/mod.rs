@@ -21,7 +21,9 @@
 //! cluster.
 
 pub mod error;
+pub mod materialize;
 pub mod traits;
 
 pub use error::{CommitRollbackError, MaterializeError};
+pub use materialize::{materialize_rolled_back_state, TargetPoint};
 pub use traits::{BlockSource, SnapshotReader};

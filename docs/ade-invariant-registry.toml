@@ -2707,10 +2707,13 @@ epoch-boundary authority for any range crossing one (¬P-9).
 """
 source = "docs/planning/ledger-snapshot-rollback-invariants.md §1 (I-3, I-4)"
 cross_ref = ["T-DET-01", "DC-CONS-21", "CN-STORE-07"]
-code_locus = ""
-tests = []
-ci_script = ""
-status = "declared"
+code_locus = "crates/ade_ledger/src/rollback/materialize.rs (materialize_rolled_back_state: pure replay-forward fold over block_validity; epoch boundaries handled implicitly by apply_block_with_verdicts per rules.rs:244-250)"
+tests = ["materialize_with_snapshot_at_target_returns_snapshot_state", "materialize_with_snapshot_below_target_replays_forward", "materialize_replay_forward_equals_direct_apply", "materialize_fails_closed_on_invalid_block"]
+ci_script = "ci/ci_check_rollback_materialize_closure.sh"
+status = "enforced"
+authority_surface = "rollback materialization replay-forward fold"
+cluster = "PHASE4-N-I"
+evidence = ["The core test materialize_replay_forward_equals_direct_apply proves DC-CONS-22: direct-apply state at T and snapshot@S + replay-forward to T have byte-identical ade_ledger fingerprints. Snapshotting is a pure cache.", "Epoch boundary handling is inherited from apply_block_with_verdicts (rules.rs:244-250) which calls detect_epoch_transition + apply_epoch_boundary_full before block application. No duplicate epoch-transition path in materialize."]
 
 [[rules]]
 id = "CN-STORE-07"
@@ -2726,10 +2729,13 @@ public-function discipline; type-level + CI grep enforcement.
 """
 source = "docs/planning/ledger-snapshot-rollback-invariants.md §1 (I-5)"
 cross_ref = ["CN-CONS-08", "DC-CONS-20", "DC-CONS-22"]
-code_locus = ""
-tests = []
-ci_script = ""
-status = "declared"
+code_locus = "crates/ade_ledger/src/rollback/materialize.rs (materialize_rolled_back_state — the sole pub fn returning (LedgerState, PraosChainDepState) in the rollback module tree); crates/ade_ledger/src/rollback/traits.rs (SnapshotReader + BlockSource narrow read-only traits — production impls in ade_runtime go through the same single composition)"
+tests = ["materialize_returns_rollback_too_deep_when_no_snapshot", "materialize_with_snapshot_at_target_returns_snapshot_state", "materialize_with_snapshot_below_target_replays_forward", "materialize_fails_closed_on_invalid_block", "materialize_replay_forward_equals_direct_apply"]
+ci_script = "ci/ci_check_rollback_materialize_closure.sh"
+status = "enforced"
+authority_surface = "rollback materialization"
+cluster = "PHASE4-N-I"
+evidence = ["ci_check_rollback_materialize_closure.sh enforces single-authority via grep: no other pub fn in rollback/* returns (LedgerState, PraosChainDepState). The driver composes one SnapshotReader::nearest_le + BlockSource::blocks_in_range + per-block block_validity (positive grep for block_validity call site).", "The function takes narrow read-only traits (SnapshotReader, BlockSource), not concrete chain stores — production impls in ade_runtime (S4) go through the same single composition path."]
 attack_rationale = "A parallel materializer can produce a rolled-back state inconsistent with what block_validity would compute, allowing peer-controlled state divergence."
 evidence_notes = "Enforcement is type-level: materialize_rolled_back_state is the sole pub fn returning the rolled-back state tuple. The function takes narrow read-only traits (SnapshotReader, BlockSource), not concrete chain stores — test-side and production-side go through the same single composition."
 
