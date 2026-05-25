@@ -2554,10 +2554,13 @@ gate).
 """
 source = "docs/planning/receive-side-bridge-invariants.md §1 (I-1, folds I-7)"
 cross_ref = ["CN-CONS-07", "DC-CONS-13", "DC-CONS-19", "DC-CONS-20"]
-code_locus = ""
-tests = []
-ci_script = ""
-status = "declared"
+code_locus = "crates/ade_ledger/src/receive/admitted.rs (AdmittedBlock + admit_via_block_validity — the single admission authority); crates/ade_ledger/src/receive/reducer.rs (block_delivered helper composes admit_via_block_validity then commits state atomically; failure leaves state unchanged); crates/ade_ledger/src/receive/chain_write.rs (ChainDbWrite::write_admitted takes AdmittedBlock by value)"
+tests = ["admit_via_block_validity_accepts_corpus_block", "admit_via_block_validity_rejects_corrupted_body", "receive_apply_block_delivered_with_matching_header_admits", "receive_apply_block_delivered_validity_invalid_rejects", "receive_apply_rollback_returns_out_of_scope", "receive_apply_replay_byte_identical_over_corpus"]
+ci_script = "ci/ci_check_admitted_block_closure.sh, ci/ci_check_receive_reducer_closure.sh"
+status = "enforced"
+authority_surface = "receive-side block admission gate"
+cluster = "PHASE4-N-H"
+evidence = ["AdmittedBlock has a private constructor reachable only from admit_via_block_validity. The reducer's BlockDelivered branch runs admit_via_block_validity, persists through ChainDbWrite, and only then commits state. Failure on validity invalid leaves state unchanged (test receive_apply_block_delivered_validity_invalid_rejects).", "RollBackward returns RollbackOutOfScope per Path A scope; receive state stays consistent (test receive_apply_rollback_returns_out_of_scope).", "ChainDbWrite trait takes AdmittedBlock by value; no path persists raw bytes."]
 attack_rationale = "A peer that can sneak unvalidated bytes into our ChainDb pollutes the ledger downstream and forces divergence from the rest of the network."
 evidence_notes = "Enforcement is type-level: AdmittedBlock token has a private constructor reachable only from a block_validity::Valid branch; the ChainDb-write wrapper takes AdmittedBlock by value. AdmittedBlock is deliberately a distinct type from AcceptedBlock to keep producer/receive gates non-interfering."
 
@@ -2573,10 +2576,13 @@ between announcement and body delivery.
 """
 source = "docs/planning/receive-side-bridge-invariants.md §1 (I-2)"
 cross_ref = ["DC-CONS-18", "CN-CONS-08"]
-code_locus = ""
-tests = []
-ci_script = ""
-status = "declared"
+code_locus = "crates/ade_ledger/src/receive/reducer.rs (block_delivered helper: decodes the body, looks up cache at (slot, block_hash); HeaderBodyMismatch if absent)"
+tests = ["receive_apply_block_delivered_with_no_cached_header_rejects", "receive_apply_block_delivered_with_mismatched_cached_header_rejects", "receive_apply_block_delivered_with_matching_header_admits"]
+ci_script = "ci/ci_check_receive_reducer_closure.sh"
+status = "enforced"
+authority_surface = "receive-side header-body cross-check"
+cluster = "PHASE4-N-H"
+evidence = ["The reducer's BlockDelivered branch derives (slot, block_hash) from decode_block then looks up the cache at that key. Absent or key-mismatched → HeaderBodyMismatch. block_hash = blake2b_256(header_sub_slice) binds header content to the key; a cached entry at a matching key has bytes that hash to the same block_hash by construction."]
 
 [[rules]]
 id = "DC-CONS-20"

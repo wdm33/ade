@@ -81,6 +81,13 @@ impl PendingHeaderCache {
         self.entries.contains_key(&(slot, hash.clone()))
     }
 
+    /// Remove a single `(slot, hash)` entry. Returns the bytes if
+    /// present. Used by the reducer (S2) to evict a consumed header
+    /// after successful admission.
+    pub fn remove(&mut self, slot: SlotNo, hash: &Hash32) -> Option<Vec<u8>> {
+        self.entries.remove(&(slot, hash.clone()))
+    }
+
     /// Drop entries whose slot is strictly less than `slot`.
     /// Deterministic; used by the orchestrator (S4) as canonical
     /// eviction input.

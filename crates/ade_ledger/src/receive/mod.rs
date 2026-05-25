@@ -25,10 +25,12 @@ pub mod admitted;
 pub mod chain_write;
 pub mod events;
 pub mod pending_header_cache;
+pub mod reducer;
 
-pub use admitted::{admit_via_block_validity, AdmittedBlock};
+pub use admitted::{admit_via_block_validity, AdmittedBlock, AdmittedOutcome};
 pub use chain_write::{ChainDbWrite, ChainWriteError};
 pub use events::{
-    ReceiveEffect, ReceiveError, ReceiveEvent, TargetPoint, TipPoint,
+    NoOpReason, ReceiveEffect, ReceiveError, ReceiveEvent, TargetPoint, TipPoint,
 };
 pub use pending_header_cache::PendingHeaderCache;
+pub use reducer::{receive_apply, receive_apply_sequence, ReceiveState};
