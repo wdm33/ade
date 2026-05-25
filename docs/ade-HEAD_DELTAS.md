@@ -5,8 +5,8 @@
 > `.idd-config.json` (`head_deltas_baseline`).
 
 > Baseline: `d509f02` (Phase 3 handoff snapshot, 2026-04-15)
-> HEAD: `43fcc31` (feat(interop): N2C local-tx-submission -> mempool_ingress bridge (PHASE4-N-E S5), 2026-05-25)
-> 139 commits, 11,304 files changed, +177,095 / −7,233,590 lines
+> HEAD: `caa5ce8` (fix(interop): retry-on-timeout + elapsed-time logging; CE-N-E-6 live evidence (PHASE4-N-E), 2026-05-25)
+> 142 commits, 11,308 files changed, +176,736 / −7,233,590 lines
 
 Headline numbers note: the massive negative line count is dominated by
 the **corpus relayout** under `corpus/snapshots/` and the deletion of
@@ -19,54 +19,53 @@ far smaller — the per-crate breakdown in §3 is the representative view.
 > history that has since been rewritten; all hashes below are verbatim
 > from `git log d509f02..HEAD` at this HEAD.
 
-> **PHASE4-N-E cluster note (newest thread).** This regen is cut at
-> committed HEAD `43fcc31`. Since the prior grounding-doc refresh
-> commit `52642e5` (which committed the post-WRITEBACK
-> CODEMAP/SEAMS/HEAD_DELTAS/TRACEABILITY ripple at HEAD `168ac02`,
-> archived 7 closed cluster dirs under `docs/clusters/completed/`, and
-> reclassified two §B-prose paragraphs in TRACEABILITY as CLOSED for
-> the deposit/refund and Conway body-witness gaps), **five new commits
-> have landed** — the full **PHASE4-N-E Tier-1 wire-level mempool
-> ingress arc**: `32c1ee6` (S1, `IngressEvent` + `mempool_ingress`
-> closed BLUE chokepoint), `2d0c918` (S2, GREEN ingress-replay harness
-> + B-track corpus reuse + `DC-MEM-04`), `509d714` (S3, per-peer
-> GREEN canonicalizer), `ca3f23a` (S4, N2N tx-submission2 →
-> `mempool_ingress` GREEN bridge under `IngressSource::N2N`), and
-> `43fcc31` (S5, N2C local-tx-submission → `mempool_ingress` GREEN
-> bridge under `IngressSource::N2C`). **2 new BLUE/GREEN modules under
-> `ade_ledger::mempool` (`ingress`, `canonicalize`), 1 new GREEN
-> module under `ade_testkit::mempool` (`ingress_replay`), and 2 new
-> GREEN modules under `ade_core_interop` (`tx_submission`,
-> `local_tx_submission`).** Two new CI scripts
-> (`ci_check_mempool_ingress_closure.sh` for `DC-MEM-03`,
-> `ci_check_mempool_ingress_replay.sh` for `DC-MEM-04`). Two new
-> registry rules (`DC-MEM-03` closure, `DC-MEM-04` replay); registry
-> total 175 (was 173). `DC-MEM-01` strengthened by `PHASE4-N-E`.
-> One new Cargo dep edge: `ade_core_interop -> ade_ledger` (was
-> transitive only). 39 new tests across the 5 slices. **Cluster status:
-> code + harness complete, live evidence pending.** `CE-N-E-6` and
-> `CE-N-E-7` close in two halves — the mechanical adapter half is
-> green in S4/S5, the live-log half is operator-action per the
-> documented procedures (`docs/clusters/PHASE4-N-E/CE-N-E-6_PROCEDURE.md`
-> and `CE-N-E-7_PROCEDURE.md`). Cluster dir
-> `docs/clusters/PHASE4-N-E/` is in-flight — **NOT yet archived to
-> `docs/clusters/completed/`** (closure pending the two live-evidence
-> log artifacts). The parallel `docs(grounding)` refresh of CODEMAP /
-> SEAMS / TRACEABILITY is in progress in the same regeneration round
-> as this HEAD_DELTAS rewrite.
+> **PHASE4-N-E cluster close note (newest thread).** This regen is cut
+> at working HEAD `caa5ce8`. Since the prior grounding-doc refresh
+> commit `350130e` (which committed the post-N-E-S5 CODEMAP/SEAMS/
+> HEAD_DELTAS/TRACEABILITY ripple at HEAD `43fcc31`), **two new
+> commits have landed** — the **PHASE4-N-E S6 live-evidence binary
+> and its retry-on-timeout fix**: `d1068b3` (S6, new RED binary
+> `live_tx_submission_session` + `#[ignore]`-gated closure-gate test
+> + cluster doc updates marking CE-N-E-7 deferred) and `caa5ce8`
+> (S6 hardening: retry on `io::ErrorKind::TimedOut` so the read loop
+> doesn't break on the first 20s inner timeout; elapsed-time logging
+> fix; committed CE-N-E-6 live-evidence log
+> `CE-N-E-6_2026-05-25.log`). **No new BLUE/GREEN source change, no
+> new registry rule, no new CI script.** **One new RED binary
+> (`live_tx_submission_session`, ~552 LOC) + one new `#[ignore]`-gated
+> closure-gate test (~80 LOC) + one new `[[bin]]` manifest entry.**
+> **Cluster status at HEAD: Tier-1 authority closed; CE-N-E-6 live
+> N2N evidence captured; CE-N-E-7 deferred to the future node-binary
+> cluster as cross-cluster obligation `CE-NODE-N2C-LTX`.** Cluster
+> directory **archived** to `docs/clusters/completed/PHASE4-N-E/`
+> (10 files: `cluster.md` + 6 slice docs + 2 procedure docs + 1
+> evidence log). The grounding-doc refresh commit
+> (in flight in this regen round — CODEMAP / SEAMS / TRACEABILITY
+> are being regenerated in parallel) will carry the archive moves +
+> the doc updates as a single grounding ripple.
+
+> **Pre-S6 PHASE4-N-E note (carried forward).** The five
+> implementation slices `32c1ee6` (S1), `2d0c918` (S2), `509d714`
+> (S3), `ca3f23a` (S4), `43fcc31` (S5) shipped the BLUE
+> `mempool::ingress` chokepoint, the GREEN `mempool::canonicalize`
+> ordering function, the GREEN `testkit::mempool::ingress_replay`
+> harness, and the two GREEN bridges
+> (`ade_core_interop::tx_submission`, `ade_core_interop::local_tx_submission`).
+> Two new registry rules (`DC-MEM-03`, `DC-MEM-04`); two new CI scripts
+> (`ci_check_mempool_ingress_closure.sh`, `ci_check_mempool_ingress_replay.sh`);
+> `DC-MEM-01` strengthened in-place; one new Cargo dep edge
+> (`ade_core_interop -> ade_ledger`). 39 new tests across S1–S5.
+> **All of this is unchanged at HEAD; S6 adds only the RED live-evidence
+> binary on top.**
 
 > **Testkit follow-up note (prior thread, carried forward).** Between
-> the prior grounding-doc commit `3d94c22` and the post-WRITEBACK
+> the WRITEBACK grounding refresh `3d94c22` and the post-WRITEBACK
 > refresh `52642e5`, four GREEN-scope commits landed
 > (`b9cfaf9`/`396664a`/`c78ec76`/`168ac02`) — bounded to `ade_testkit`
 > / corpus tooling, no BLUE source change, no new rule, no new CI
-> script. They wired the real-chain committee oracle at mainnet
-> 575→576, aligned 11 previously-blocked tests with the regenerated
-> corpus, added the `#[ignore]`-gated `reward_provenance` generator,
-> and closed three snapshot-loader follow-ups (tip slot + Conway
-> UMElem layout). `DC-EPOCH-01` and `DC-LEDGER-10` each gained one
-> oracle test (`committee_oracle_mainnet_575_576_noop_agreement`);
-> the committee-CHANGE `open_obligation` was reclassified
+> script. `DC-EPOCH-01` and `DC-LEDGER-10` each gained one oracle test
+> (`committee_oracle_mainnet_575_576_noop_agreement`); the
+> committee-CHANGE `open_obligation` was reclassified
 > environment-blocked → reality-blocked.
 
 > **ENACTMENT-COMMITTEE-WRITEBACK cluster note (prior thread, carried
@@ -87,149 +86,137 @@ far smaller — the per-crate breakdown in §3 is the representative view.
 > (carried forward).** All closed and archived at
 > `docs/clusters/completed/<NAME>/`.
 
-The delta now covers twenty-three threads of work. The newest thread
-— the **PHASE4-N-E wire-level mempool ingress arc** (`32c1ee6`,
-`2d0c918`, `509d714`, `ca3f23a`, `43fcc31`) — sits on the post-WRITEBACK
-grounding refresh `52642e5`, which itself sat on the testkit
-follow-ups `168ac02`, which sat on the WRITEBACK grounding refresh
-`3d94c22`, and so on down the established stack. In rough proportion
-of the substantive change budget:
+The delta now covers twenty-four threads of work. The newest thread —
+the **PHASE4-N-E S6 live-evidence binary** (`d1068b3`, `caa5ce8`) —
+sits on the post-N-E-S5 grounding refresh `350130e`, which itself sat
+on the five PHASE4-N-E implementation slices `32c1ee6 → 43fcc31`,
+which sat on the post-WRITEBACK grounding refresh `52642e5`, and so on
+down the established stack. In rough proportion of the substantive
+change budget:
 
-0. **PHASE4-N-E (wire-level mempool ingress, Tier 1) — code +
-   harness complete, live evidence pending.** Five implementation
-   commits closing the wire-level ingress closure for the bounty's
-   no-false-accept tx-submission slice. The cluster's load-bearing
-   move is a **single closed BLUE chokepoint**: every wire-arriving
-   transaction (N2N tx-submission2 deliveries; N2C local-tx-submission
-   submissions) reduces to a closed `IngressEvent { source:
-   IngressSource, tx_bytes }` before reaching `mempool::admit`, and
-   the `source` variant is metadata only — it cannot leak into the
-   verdict. **S1** (`32c1ee6`, BLUE) added
-   `crates/ade_ledger/src/mempool/ingress.rs` with the closed
-   2-variant `IngressSource::{N2N, N2C}` enum, the `IngressEvent`
-   record, and the `mempool_ingress(state, event) -> (state',
-   AdmitOutcome)` pure pass-through to `admit`, plus a 5-clause CI
-   gate (`ci_check_mempool_ingress_closure.sh`) that enforces the
-   closure (no `#[non_exhaustive]`, no `event.source` reference in
-   the verdict path, `admit()` callable only from the chokepoint and
-   its co-located tests, `MempoolState.accumulating` field-write
-   localized to `admit.rs`). New rule `DC-MEM-03` (enforced) and
-   bidirectional `cross_ref` between `DC-MEM-01` and `DC-MEM-03`.
-   8 new tests (2 inline + 6 integration). **S2** (`2d0c918`, GREEN)
-   added the `ade_testkit::mempool::ingress_replay` harness — a
-   single-step replay fold over `mempool_ingress` (per OQ-6, no
-   batching, no out-of-order interleaving) plus reuse of the
-   PHASE4-B2 B-track adversarial corpus via `wrap_as_ingress` /
-   `b_track_corpus_as_ingress`; the harness never calls `admit`
-   directly. New rule `DC-MEM-04` (enforced) with its own CI gate
-   `ci_check_mempool_ingress_replay.sh` (harness-shape + no-batching
-   guards). `DC-MEM-01` strengthened in-place (`strengthened_in +=
-   PHASE4-N-E`; +3 ingress-replay tests; bidirectional
-   `cross_ref += DC-MEM-04`). 5 new integration tests (CE-N-E-2,
-   CE-N-E-5, single-peer CE-N-E-4, dependent-pair N-E-6,
-   source-invariance N-E-8). **S3** (`509d714`, GREEN) added
-   `crates/ade_ledger/src/mempool/canonicalize.rs` — a deterministic
-   per-peer round-robin canonicalizer (peers visited in byte-lex
-   `PeerId` order, source-byte tie-break; pure, sync, no I/O). Two
-   distinct concurrent interleavings of the same per-peer queues
-   produce byte-identical `IngressEvent` sequences, closing the
-   multi-peer half of CE-N-E-4. The S2 CI gate was extended with two
-   new clauses (canonicalize.rs presence + no-`HashMap`/-`tokio`/-RNG
-   body scan). `DC-MEM-04` extended in-place (`code_locus`/`tests`
-   appended). 9 new unit tests + 2 new integration tests. **S4**
-   (`ca3f23a`, GREEN) added
-   `crates/ade_core_interop/src/tx_submission.rs` — a GREEN bridge
-   from N-A `InventoryEvent` (tx-submission2 state-machine output)
-   into N-E `mempool_ingress` under `IngressSource::N2N`, with
-   per-peer accumulation (`PeerAccumulator`) and the
-   `ingest_n2n_events(base, per_peer)` orchestrator. The bridge
-   calls `mempool_ingress` (never `admit` directly), preserving the
-   chokepoint contract. **Cargo edge added**: `ade_core_interop` now
-   depends directly on `ade_ledger` (was transitive). 7 new
-   integration tests (CE-N-E-6 adapter-layer agreement +
-   multi-peer canonicalization + source-carry-through). The
-   load-bearing CE-N-E-6 mechanical half is closed; the live-log
-   half is operator-action per
-   `docs/clusters/PHASE4-N-E/CE-N-E-6_PROCEDURE.md`. **S5**
-   (`43fcc31`, GREEN) added
-   `crates/ade_core_interop/src/local_tx_submission.rs` — the N2C
-   mirror of S4's N2N shape, over the cardano-cli IPC transport
-   under `IngressSource::N2C`. The load-bearing CE-N-E-7 mechanical
-   evidence is the cross-bridge agreement test
-   `n2n_and_n2c_bridges_produce_identical_outcomes`: the same tx
-   bytes routed via `ingest_n2n_events` vs `ingest_n2c_events`
-   produce byte-identical `(MempoolState, Vec<AdmitOutcome>)`,
-   closing the source-invariance property (N-E-N7) at the
-   wire-event layer. 8 new integration tests. CE-N-E-7 mechanical
-   half closed; live-log half operator-action per
-   `docs/clusters/PHASE4-N-E/CE-N-E-7_PROCEDURE.md`. **No new BLUE
-   crate, no new RED crate.** **Registry: 175 entries at HEAD (was
-   173); +2 new rules (`DC-MEM-03`, `DC-MEM-04`); 0 removed.**
-   **CI: 31 scripts at HEAD (was 29); +2 new scripts.** Cluster
-   status: code + harness complete, live evidence pending; cluster
-   dir at `docs/clusters/PHASE4-N-E/` (NOT yet archived).
-1. **Post-WRITEBACK testkit follow-ups (four commits, GREEN-scope) —
+0. **PHASE4-N-E S6 (live N2N tx-submission2 evidence binary) — cluster
+   close.** Two commits closing the live-wire half of CE-N-E-6 with a
+   sustained-window RED probe binary modeled on the existing
+   `live_consensus_session` shape. **S6** (`d1068b3`, RED) added
+   `crates/ade_core_interop/src/bin/live_tx_submission_session.rs`
+   (~552 LOC; `main()` hermetic default prints a readiness banner;
+   `--connect` dispatches to `run_live` which connects to a real
+   preprod relay, negotiates the N2N handshake, opens tx-submission2
+   id 4, sends `Init`, and drives the BLUE `tx_submission2_transition`
+   state machine against every peer-originated message until the
+   deadline or `max_frames`); a new `[[bin]]` entry in
+   `crates/ade_core_interop/Cargo.toml` mirroring `live_consensus_session`;
+   and a new closure-gate test
+   `crates/ade_core_interop/tests/live_tx_submission_session.rs`
+   (~80 LOC) — `#[test] #[ignore = "needs network egress…"]
+   cardano_node_tx_submission2_sustained_window`, hermetic body asserts
+   the binary builds and prints the readiness banner without opening
+   a socket. **S6 hardening** (`caa5ce8`, RED) folded a retry-on-
+   `io::ErrorKind::TimedOut` fix into the read loop (the prior version
+   broke out on the first 20s inner timeout, ending the session
+   prematurely) and corrected the elapsed-time logging; same commit
+   committed the live-evidence log
+   `docs/clusters/PHASE4-N-E/CE-N-E-6_2026-05-25.log` produced by
+   `cargo run -p ade_core_interop --bin live_tx_submission_session --
+   --connect --network preprod --max-seconds 600 --max-frames 1000`.
+   The log evidences a 97s active session at v15 against the preprod
+   relay, 1 frame received (peer `RequestTxIds`), state machine drove
+   correctly without `IllegalTransition` / `MalformedMessage`, ended
+   in peer-side connection reset (expected: outbound client held the
+   peer's blocking request open with no txs to offer). `[bridge]
+   tx_bytes=0` — per the honest-scope framing, bulk tx ingestion in
+   this direction is opportunistic. **CE-N-E-7 deferred** to the
+   future node-binary cluster as cross-cluster obligation
+   `CE-NODE-N2C-LTX`; no temporary N2C UDS server scaffolding was
+   built in this cluster. The CE-N-E-7 procedure spec is retained as
+   the canonical spec for the future closure. **No new module, no
+   new BLUE/GREEN crate, no new dependency edge, no new registry
+   rule, no new CI script, no new corpus.** The S6 `#[ignore]`-gated
+   test counts mechanically (raising the test total by 1 to ~1365)
+   but doesn't run by default. Cluster directory **archived** to
+   `docs/clusters/completed/PHASE4-N-E/` (10 files: `cluster.md` +
+   `N-E-S1..S6.md` + `CE-N-E-{6,7}_PROCEDURE.md` +
+   `CE-N-E-6_2026-05-25.log`).
+1. **PHASE4-N-E S1–S5 (wire-level mempool ingress, Tier 1) — code +
+   harness landed pre-S6, carried forward.** The single closed BLUE
+   chokepoint `mempool_ingress(state, IngressEvent { source, tx_bytes })
+   -> (state', AdmitOutcome)` reduces every wire-arriving transaction
+   to a closed event before reaching `admit`; `IngressSource::{N2N,
+   N2C}` is metadata only — it cannot leak into the verdict.
+   `crates/ade_ledger/src/mempool/ingress.rs` (S1, BLUE),
+   `crates/ade_ledger/src/mempool/canonicalize.rs` (S3, GREEN),
+   `crates/ade_testkit/src/mempool/ingress_replay.rs` (S2, GREEN),
+   `crates/ade_core_interop/src/tx_submission.rs` (S4, GREEN N2N
+   bridge), `crates/ade_core_interop/src/local_tx_submission.rs`
+   (S5, GREEN N2C bridge). Registry: `DC-MEM-03` + `DC-MEM-04`
+   introduced + `enforced`; `DC-MEM-01` strengthened. CI:
+   `ci_check_mempool_ingress_closure.sh` (S1, 5 mechanical guards),
+   `ci_check_mempool_ingress_replay.sh` (S2, extended in S3; 6
+   guards). New Cargo edge: `ade_core_interop -> ade_ledger` (was
+   transitive). 39 new tests across S1–S5.
+2. **Post-WRITEBACK testkit follow-ups (four commits, GREEN-scope) —
    carried forward.** `b9cfaf9` real-chain committee oracle at
    mainnet 575→576; `396664a` corpus-alignment; `c78ec76`
    `reward_provenance` generator; `168ac02` snapshot-loader
    follow-ups (tip slot + Conway UMElem). `DC-EPOCH-01` /
    `DC-LEDGER-10` each gained one oracle test; committee-CHANGE
    reclassified reality-blocked. No new module/rule/CI script.
-2. **ENACTMENT-COMMITTEE-WRITEBACK — closed.** Wires committee
+3. **ENACTMENT-COMMITTEE-WRITEBACK — closed.** Wires committee
    enactment write-back; structured `UpdateCommittee` replaces the
    opaque `{ prev_action, raw: Vec<u8> }`. `DC-EPOCH-01` and
    `DC-LEDGER-10` both STRENGTHENED. No new module/rule/CI script;
    the existing OQ5 gate was extended (section 7).
-3. **ENACTMENT-COMMITTEE-FIDELITY — closed.** `EnactmentEffects.
+4. **ENACTMENT-COMMITTEE-FIDELITY — closed.** `EnactmentEffects.
    committee_changes` re-typed `Hash28` → `StakeCredential`. Dormant
    at the FIDELITY close; LIVE after WRITEBACK.
-4. **DREP-VOTE-FIDELITY — closed.** `GovActionState.drep_votes`
+5. **DREP-VOTE-FIDELITY — closed.** `GovActionState.drep_votes`
    re-typed; exact-variant DRep resolution (no OR-fallback).
-5. **COMMITTEE-CRED-FIDELITY — closed.** `ConwayGovState.committee`
+6. **COMMITTEE-CRED-FIDELITY — closed.** `ConwayGovState.committee`
    re-keyed `Hash28` → `StakeCredential`; `GovActionState.
    committee_votes` re-typed.
-6. **OQ5-CREDENTIAL-FIDELITY — closed.** `StakeCredential` tuple
+7. **OQ5-CREDENTIAL-FIDELITY — closed.** `StakeCredential` tuple
    struct → closed enum `{ KeyHash, ScriptHash }`; both era decoders
    preserve the tag. `DC-LEDGER-10` introduced + `enforced` via
    the new CI gate.
-7. **Phase 4 cluster B5 (Conway gov-cert accumulation) — closed.**
+8. **Phase 4 cluster B5 (Conway gov-cert accumulation) — closed.**
    New BLUE module `ade_ledger::gov_cert`; `DC-LEDGER-09` introduced
    + `enforced`.
-8. **Phase 4 cluster B4 (Conway cert-state accumulation,
+9. **Phase 4 cluster B4 (Conway cert-state accumulation,
    fail-closed) — closed.** Owner-complete Conway cert decoder;
    `DC-LEDGER-08` introduced + `enforced`.
-9. **Phase 4 cluster B3F (follow-up hardening) — committed.** Flips
-   `DC-TXV-06` `partial` → `enforced`; hardens `decode_conway_certs`.
-10. **Phase 4 cluster B3 (Conway value-conservation accounting) —
+10. **Phase 4 cluster B3F (follow-up hardening) — committed.** Flips
+    `DC-TXV-06` `partial` → `enforced`; hardens `decode_conway_certs`.
+11. **Phase 4 cluster B3 (Conway value-conservation accounting) —
     closed.** Full Conway preservation-of-value equation enforced;
     B2-S4 early-out removed. New BLUE surfaces
     `ade_codec::conway::cert`, `ade_codec::conway::withdrawals`,
     `ade_ledger::cert_classify`. Rules `DC-TXV-06` (flipped) and
     `DC-TXV-07`.
-11. **Phase 4 cluster B2 (tx validity agreement) — closed.** New
+12. **Phase 4 cluster B2 (tx validity agreement) — closed.** New
     BLUE `ade_ledger::tx_validity` submodule + BLUE/GREEN
     `ade_ledger::mempool` admission gate. Added 5 `DC-TXV-*` rules;
     flipped the two `DC-MEM-*` to `enforced`.
-12. **Phase 4 cluster B1 (full block validity agreement) — closed.**
+13. **Phase 4 cluster B1 (full block validity agreement) — closed.**
     Composes N-A wire + N-B consensus header authority + ledger
     body authority into a single block verdict. New BLUE
     `ade_ledger::block_validity` submodule.
-13. **Phase 4 cluster N-A (network mini-protocols) — closed.** 10
+14. **Phase 4 cluster N-A (network mini-protocols) — closed.** 10
     slices. New BLUE crate `ade_network`.
-14. **Phase 4 cluster N-B (consensus runtime) — closed.** 10
+15. **Phase 4 cluster N-B (consensus runtime) — closed.** 10
     slices. New BLUE `ade_core::consensus` module.
-15. **CE-N-B-6 follow-mode bridge.** RED `ade_core_interop::follow`
+16. **CE-N-B-6 follow-mode bridge.** RED `ade_core_interop::follow`
     + live preprod tip-agreement evidence.
-16. **Phase 4 cluster N-D (ChainDB persistence) — closed.**
+17. **Phase 4 cluster N-D (ChainDB persistence) — closed.**
     Slices S-33 → S-37.
-17. **Phase 2C close-out / CE-73 reclassification.** CE-73 split
+18. **Phase 2C close-out / CE-73 reclassification.** CE-73 split
     Tier-2 / Tier-4.
-18. **IDD canonicalization.** `chore(idd)` commits.
-19. **Grounding-doc generation + ripple.** Successive refreshes,
-    including `52642e5` (which archived 7 closed cluster dirs).
-20. **BLUE-list drift closure.** Six CI scripts extended to full
+19. **IDD canonicalization.** `chore(idd)` commits.
+20. **Grounding-doc generation + ripple.** Successive refreshes,
+    including `52642e5` (which archived 7 closed cluster dirs) and
+    `350130e` (which committed the post-N-E-S5 grounding ripple).
+21. **BLUE-list drift closure.** Six CI scripts extended to full
     BLUE scope.
-21. **Corpus relayout.** Credentialed `*_registered_creds.txt`
+22. **Corpus relayout.** Credentialed `*_registered_creds.txt`
     removed (~7M-line negative); `corpus/snapshots/` now
     `.gitignore`-d (canonical home `s3://ade-corpus-snapshots`);
     `emit_reward_provenance` generator committed.
@@ -240,6 +227,9 @@ of the substantive change budget:
 
 | Hash | Type | Summary |
 |------|------|---------|
+| `caa5ce8` | fix | fix(interop): retry-on-timeout + elapsed-time logging; CE-N-E-6 live evidence (PHASE4-N-E) |
+| `d1068b3` | feat | feat(interop): live N2N tx-submission2 session binary (PHASE4-N-E S6) |
+| `350130e` | docs | docs(grounding): refresh CODEMAP/SEAMS/HEAD_DELTAS/TRACEABILITY for PHASE4-N-E (partial close) |
 | `43fcc31` | feat | feat(interop): N2C local-tx-submission -> mempool_ingress bridge (PHASE4-N-E S5) |
 | `ca3f23a` | feat | feat(interop): N2N tx-submission2 -> mempool_ingress bridge (PHASE4-N-E S4) |
 | `509d714` | feat | feat(ledger): per-peer ingress canonicalizer (PHASE4-N-E S3) |
@@ -389,11 +379,12 @@ linear, no merge commits in range). Aggregation is in §3 and §5.
 
 | Module | Color | Purpose | Key sub-paths | Added in (cluster/slice) |
 |--------|-------|---------|---------------|--------------------------|
+| `ade_core_interop` bin `live_tx_submission_session` (new RED binary in an existing RED crate) | RED | **Sustained-window N2N tx-submission2 live-evidence probe.** Modeled on the existing `live_consensus_session` binary. `main()` hermetic default prints a readiness banner and exits 0 (so the `#[ignore]`-gated closure-gate test stays offline). `--connect --network <net> --max-seconds N --max-frames M` dispatches to `run_live`, which connects to a real cardano-node peer, negotiates the N2N handshake, opens tx-submission2 (id 4), sends `Init`, and drives the BLUE `tx_submission2_transition` state machine against every peer-originated message until the deadline or `max_frames`. Replies empty for non-blocking `RequestTxIds`/`RequestTxs`; holds open on blocking `RequestTxIds` (loop continues reading; mempool-gossip cadence). Funnels any opportunistic `InventoryEvent::TxsDelivered` bytes through the S4 `event_to_ingress` / `PeerAccumulator` bridge. Writes `docs/clusters/PHASE4-N-E/CE-N-E-6_<date>.log` per the schema in `CE-N-E-6_PROCEDURE.md`. Hardening (`caa5ce8`): retries on `io::ErrorKind::TimedOut` so the read loop survives inner socket timeouts. **Honest scope: evidences handshake + mux + codec + state-machine grammar conformance on real wire bytes; bulk tx_bytes delivery in the outbound-client direction is opportunistic — full N2C tx-delivery evidence is the cross-cluster `CE-NODE-N2C-LTX` deferral.** | `src/bin/live_tx_submission_session.rs` (~552 LOC); `tests/live_tx_submission_session.rs` (~80 LOC, `#[ignore]`-gated closure-gate test); `[[bin]]` entry in `crates/ade_core_interop/Cargo.toml`; operator procedure at `docs/clusters/completed/PHASE4-N-E/CE-N-E-6_PROCEDURE.md`; live-evidence log at `docs/clusters/completed/PHASE4-N-E/CE-N-E-6_2026-05-25.log` | PHASE4-N-E / S6 (`d1068b3` + `caa5ce8`) |
 | `ade_ledger::mempool::ingress` (new file in an existing BLUE crate) | BLUE | **Single closed wire-level ingress chokepoint.** `IngressEvent { source: IngressSource, tx_bytes: Vec<u8> }` is the canonical entry; `IngressSource::{N2N, N2C}` is a closed 2-variant sum (no `#[non_exhaustive]`). `mempool_ingress(state, event) -> (state', AdmitOutcome)` is a pure, sync pass-through to `admit` over `event.tx_bytes` — the `source` variant is metadata only and MUST NOT change the verdict. Enforced by `ci_check_mempool_ingress_closure.sh` (5 mechanical guards) and `DC-MEM-03`. | `mempool/ingress.rs` | PHASE4-N-E / S1 (`32c1ee6`) |
 | `ade_ledger::mempool::canonicalize` (new file in an existing BLUE crate) | GREEN | **Deterministic per-peer ingress canonicalizer.** Takes per-peer FIFO submission queues and produces a single canonical `Vec<IngressEvent>` stream; round-robin by sorted `PeerId` (byte-lex), source-byte tie-break; pure, sync, no I/O. Two distinct concurrent interleavings of the same per-peer queues canonicalize to byte-identical sequences (CE-N-E-4 multi-peer half). | `mempool/canonicalize.rs` (`PeerId`, `PeerSubmissionQueue`, `canonicalize_peer_streams`, `source_byte`) | PHASE4-N-E / S3 (`509d714`) |
 | `ade_testkit::mempool::ingress_replay` (new submodule of an existing crate) | GREEN | **Single-step ingress-replay harness** over the existing B-track adversarial corpus. `replay_ingress_trace(base, &[IngressEvent]) -> (MempoolState, Vec<AdmitOutcome>)` folds `mempool_ingress` step-by-step (per OQ-6 — no batching, no out-of-order interleaving) and never calls `admit` directly. Exports `ExpectedOutcome`, `BTrackCase`, `wrap_as_ingress`, `b_track_corpus_as_ingress`. Enforced by `ci_check_mempool_ingress_replay.sh` (4 mechanical guards) and `DC-MEM-04`. | `mempool/mod.rs`, `mempool/ingress_replay.rs` | PHASE4-N-E / S2 (`2d0c918`) |
-| `ade_core_interop::tx_submission` (new file in an existing RED crate) | GREEN | **N2N tx-submission2 → `mempool_ingress` bridge.** `event_to_ingress(&InventoryEvent, IngressSource)` maps `TxsDelivered.tx_bytes → Vec<IngressEvent>` (all other inventory events yield empty); `PeerAccumulator` accumulates per-peer; `ingest_n2n_events(base, per_peer)` orchestrates over `replay_ingress_trace` (calls the chokepoint, never `admit` directly). Pure, no I/O. | `src/tx_submission.rs`; `tests/tx_submission_ingress.rs` (7 integration tests); operator procedure at `docs/clusters/PHASE4-N-E/CE-N-E-6_PROCEDURE.md` | PHASE4-N-E / S4 (`ca3f23a`) |
-| `ade_core_interop::local_tx_submission` (new file in an existing RED crate) | GREEN | **N2C local-tx-submission → `mempool_ingress` bridge.** N2C mirror of S4 over the cardano-cli IPC transport. `local_event_to_ingress(&LocalTxSubmissionEvent)` maps `TxSubmitted → N2C IngressEvent` (other events empty); `ClientAccumulator` accumulates per-client; `ingest_n2c_events(base, per_client)` orchestrates. Cross-bridge agreement at the wire-event layer is the load-bearing CE-N-E-7 evidence (`n2n_and_n2c_bridges_produce_identical_outcomes`). | `src/local_tx_submission.rs`; `tests/local_tx_submission_ingress.rs` (8 integration tests); operator procedure at `docs/clusters/PHASE4-N-E/CE-N-E-7_PROCEDURE.md` | PHASE4-N-E / S5 (`43fcc31`) |
+| `ade_core_interop::tx_submission` (new file in an existing RED crate) | GREEN | **N2N tx-submission2 → `mempool_ingress` bridge.** `event_to_ingress(&InventoryEvent, IngressSource)` maps `TxsDelivered.tx_bytes → Vec<IngressEvent>` (all other inventory events yield empty); `PeerAccumulator` accumulates per-peer; `ingest_n2n_events(base, per_peer)` orchestrates over `replay_ingress_trace` (calls the chokepoint, never `admit` directly). Pure, no I/O. | `src/tx_submission.rs`; `tests/tx_submission_ingress.rs` (7 integration tests); operator procedure at `docs/clusters/completed/PHASE4-N-E/CE-N-E-6_PROCEDURE.md` | PHASE4-N-E / S4 (`ca3f23a`) |
+| `ade_core_interop::local_tx_submission` (new file in an existing RED crate) | GREEN | **N2C local-tx-submission → `mempool_ingress` bridge.** N2C mirror of S4 over the cardano-cli IPC transport. `local_event_to_ingress(&LocalTxSubmissionEvent)` maps `TxSubmitted → N2C IngressEvent` (other events empty); `ClientAccumulator` accumulates per-client; `ingest_n2c_events(base, per_client)` orchestrates. Cross-bridge agreement at the wire-event layer is the load-bearing CE-N-E-7 mechanical evidence (`n2n_and_n2c_bridges_produce_identical_outcomes`); the live-log half is **deferred** to `CE-NODE-N2C-LTX`. | `src/local_tx_submission.rs`; `tests/local_tx_submission_ingress.rs` (8 integration tests); operator procedure at `docs/clusters/completed/PHASE4-N-E/CE-N-E-7_PROCEDURE.md` (retained as canonical spec for the deferred cluster) | PHASE4-N-E / S5 (`43fcc31`) |
 | `ade_codec::conway::cert` (new file in an existing BLUE crate) | BLUE | **Conway-complete certificate decoder** with a *closed* wire grammar. `decode_conway_certs` decodes the full Conway certificate array over tags `0..18`; tags `5`/`6` are not valid; unrecognized tag → deterministic `CodecError::UnknownCertTag { tag, offset }` reject. **B3F-S2 hardened it**: trailing-byte reject (`CodecError::TrailingBytes`), bounded preallocation. | `conway/cert.rs` | PHASE4-B3 / B3-S1, B3-S2; strictness PHASE4-B3F / B3F-S2 |
 | `ade_codec::conway::withdrawals` (new file in an existing BLUE crate) | BLUE | Conway withdrawals-map decoder. Decodes `{ RewardAccount => Coin }` into a canonical ordered form, summing to an `i128` consumed-side term; duplicate key → `CodecError::DuplicateMapKey { offset }`. | `conway/withdrawals.rs` | PHASE4-B3 / B3-S3 |
 | `ade_ledger::cert_classify` (new file in an existing BLUE crate) | BLUE | **Closed cert-deposit classification** — `classify(state, cert)` is total, era-versioned, resolves every cert variant to exactly one `CertDisposition` over `DepositEffect` with coin sourced via a closed `CoinSource`. **B3F-S1** added the CI grep-gate guarding `classify`'s exhaustiveness. | `cert_classify.rs` | PHASE4-B3 / B3-S2; closure gate B3F / B3F-S1 |
@@ -410,7 +401,7 @@ linear, no merge commits in range). Aggregation is in §3 and §5.
 | `ade_network` (new workspace crate) | BLUE-majority (per-submodule scoped) | Ouroboros mini-protocol authority: 11 closed-grammar codecs, 8 transition state machines, mux frame codec, RED session/transport substrate. | `codec/`, `handshake/`, `chain_sync/`, `block_fetch/`, `tx_submission/`, `keep_alive/`, `peer_sharing/`, `n2c/`, `mux/frame.rs` (BLUE), `mux/transport.rs` (RED), `session/` (RED) | PHASE4-N-A / S-A1 → S-A10 |
 | `ade_core::consensus` (new submodule of an existing BLUE crate) | BLUE | Praos consensus authority: closed `PraosChainDepState`, era-aware translation, header validation, nonce evolution, op-cert monotonicity, leader schedule, fork choice, rollback. | `mod.rs`, `era_schedule.rs`, `header_validate.rs`, `vrf_cert.rs`, `nonce.rs`, `op_cert.rs`, `leader_schedule.rs`, `fork_choice.rs`, `rollback.rs`, `kes_check.rs` (B1), `praos_state.rs`, `candidate.rs`, `events.rs`, `errors.rs`, `encoding.rs`, `ledger_view.rs`, `header_summary.rs` | PHASE4-N-B / S-B1 → S-B9 |
 | `ade_runtime::consensus` (new submodule of an existing RED crate) | GREEN/RED mix | Imperative-shell composition: stream-driven orchestrator (GREEN), candidate-fragment builder, RED genesis parser. | `mod.rs`, `candidate_fragment.rs`, `chain_selector.rs`, `genesis_parser.rs` | PHASE4-N-B / S-B8, S-B10 |
-| `ade_core_interop` (new workspace crate) | RED | Live cardano-node interop driver for CE-N-B-6 + N-E S4/S5 wire-event bridges; no authoritative decisions. | `src/lib.rs`, `src/follow.rs`, `src/tx_submission.rs` (N-E S4), `src/local_tx_submission.rs` (N-E S5), `src/bin/live_consensus_session.rs`, `tests/` | PHASE4-N-B / S-B10; follow-bridge `e5f1f64`; PHASE4-N-E / S4, S5 |
+| `ade_core_interop` (new workspace crate) | RED | Live cardano-node interop driver for CE-N-B-6 + N-E S4/S5 wire-event bridges + N-E S6 live tx-submission2 probe; no authoritative decisions. | `src/lib.rs`, `src/follow.rs`, `src/tx_submission.rs` (N-E S4), `src/local_tx_submission.rs` (N-E S5), `src/bin/live_consensus_session.rs`, `src/bin/live_tx_submission_session.rs` (N-E S6), `tests/` | PHASE4-N-B / S-B10; follow-bridge `e5f1f64`; PHASE4-N-E / S4, S5, S6 |
 | `ade_testkit::consensus` (new submodule of an existing crate) | GREEN | Test-only harness for consensus replay corpora. | `consensus/mod.rs`, `consensus/corpus.rs`, `consensus/ledger_view_stub.rs`, `consensus/stream_replay.rs` | PHASE4-N-B / S-B1, S-B6, S-B8 → S-B10 |
 | `ade_runtime::chaindb` | RED | Block-store abstraction and impls. Trait surface Tier 1; backing-store choice Tier 5. | `mod.rs`, `types.rs`, `error.rs`, `in_memory.rs`, `persistent.rs` (redb), `contract.rs`, `snapshot_contract.rs`, `crash_safety.rs` | PHASE4-N-D / S-33 → S-35 |
 | `ade_runtime::recovery` | RED | Composes ChainDb + SnapshotStore into a generic recovery primitive. | `recovery.rs` | PHASE4-N-D / S-36 |
@@ -418,36 +409,47 @@ linear, no merge commits in range). Aggregation is in §3 and §5.
 
 Workspace-level membership grew by **two crates** across the full
 delta: `ade_network` (PHASE4-N-A) and `ade_core_interop` (PHASE4-N-B).
-Both are RED-or-mixed. **PHASE4-N-E added no new crate** — it landed
-two new BLUE/GREEN modules under `ade_ledger::mempool`
-(`ingress` BLUE, `canonicalize` GREEN), one new GREEN submodule under
-`ade_testkit` (`mempool::ingress_replay`), and two new GREEN modules
-under the existing `ade_core_interop` crate (`tx_submission`,
+Both are RED-or-mixed. **PHASE4-N-E S6 added no new crate** — it
+added one new RED binary (`live_tx_submission_session`) inside the
+existing `ade_core_interop` crate, plus a `[[bin]]` manifest entry
+and an `#[ignore]`-gated closure-gate test. **PHASE4-N-E S1–S5
+collectively added no new crate either** — two new BLUE/GREEN modules
+under `ade_ledger::mempool` (`ingress` BLUE, `canonicalize` GREEN),
+one new GREEN submodule under `ade_testkit` (`mempool::ingress_replay`),
+and two new GREEN modules under `ade_core_interop` (`tx_submission`,
 `local_tx_submission`). **None of B3, B3F, B4, B5, OQ5, FIDELITY,
 WRITEBACK, or the testkit follow-up thread added a new crate either.**
 
-Crate dependency shape at HEAD: **PHASE4-N-E added one new dep edge**
-— `ade_core_interop` now depends directly on `ade_ledger` (was
-transitive only). `ade_network`, `ade_runtime`, `ade_testkit` edges
-are unchanged. No edge from a BLUE crate to a RED crate was introduced
-(the new bridges live in the RED-crate `ade_core_interop`, and they
-*call into* BLUE — that direction is allowed by `ci_check_dependency_boundary.sh`).
+Crate dependency shape at HEAD: **PHASE4-N-E S4 added one new dep edge
+(carried forward from the prior regen)** — `ade_core_interop` now
+depends directly on `ade_ledger` (was transitive only). **PHASE4-N-E
+S6 added no new dep edge** — the new binary uses `ade_network`,
+`ade_codec`, and `tokio` already in `ade_core_interop`'s manifest.
+`ade_network`, `ade_runtime`, `ade_testkit` edges are unchanged. No
+edge from a BLUE crate to a RED crate was introduced (the bridges and
+the live binary live in the RED-crate `ade_core_interop`, and they
+*call into* BLUE — that direction is allowed by
+`ci_check_dependency_boundary.sh`).
 
 Corpora at HEAD: N-A capture corpus, N-B replay corpus, B1 validity
 corpus, B3 conservation corpora, B4/B5 README-only synthetic notes,
 the credential-fidelity corpus from OQ5-S2, and `corpus/snapshots/`
 under `.gitignore` (canonical home `s3://ade-corpus-snapshots`).
-**PHASE4-N-E added no new corpus files** — it reuses the existing
-PHASE4-B2 B-track adversarial corpus verbatim (per OQ-3), only the
-`IngressEvent` envelope is new.
+**PHASE4-N-E S6 added no new corpus** — the only new external-data
+artifact is the live-evidence log `CE-N-E-6_2026-05-25.log` (9 lines,
+inline in `docs/clusters/completed/PHASE4-N-E/`). **PHASE4-N-E S1–S5
+also added no new corpus files** — they reuse the existing PHASE4-B2
+B-track adversarial corpus verbatim (per OQ-3), only the `IngressEvent`
+envelope is new.
 
 Cross-reference: **The `ade-CODEMAP.md` regenerated in parallel with
-this HEAD_DELTAS will record the new mempool ingress chokepoint,
-canonicalizer, ingress-replay harness, and the two `ade_core_interop`
-bridges; the prior CODEMAP at `52642e5` does NOT yet contain them.**
-SEAMS will similarly grow a mempool-ingress-surface row. TRACEABILITY
-will record `DC-MEM-03` and `DC-MEM-04` and the
-`DC-MEM-01.strengthened_in += "PHASE4-N-E"` strengthening.
+this HEAD_DELTAS will record the new RED binary `live_tx_submission_session`
+as a row under the `ade_core_interop` crate's RED-binary listing**;
+the prior CODEMAP at `350130e` does NOT yet contain it. SEAMS and
+TRACEABILITY pick up no new structural rows from S6 (no new module
+surface, no new rule, no new CI script) — they only carry the doc-text
+updates for the cluster archive + the CE-NODE-N2C-LTX cross-cluster
+obligation framing.
 
 ---
 
@@ -455,25 +457,25 @@ will record `DC-MEM-03` and `DC-MEM-04` and the
 
 | Module | Scope | Key changes |
 |--------|-------|-------------|
-| `ade_ledger` | +57 source/test files over the full delta to `168ac02`; **PHASE4-N-E adds 4 files** (`mempool/ingress.rs` +94 / `mempool/canonicalize.rs` +210 / `mempool/mod.rs` +4 re-exports / `tests/mempool_ingress.rs` +178). | **PHASE4-N-E:** new BLUE `mempool::ingress` chokepoint + closed `IngressSource::{N2N, N2C}` + `IngressEvent` + `mempool_ingress` pass-through; new GREEN `mempool::canonicalize` (`PeerId`, `PeerSubmissionQueue`, `canonicalize_peer_streams`, `source_byte`); re-exports from `mempool/mod.rs`. **B3:** the closed cert-deposit classifier `cert_classify.rs` and the full Conway value-conservation accounting in `conway.rs` (cert/withdrawal early-out **REMOVED**); new error variants; `ConwayOnlyDepositParams` + `conway_deposit_view()` in `pparams.rs`/`state.rs`. **B2:** `tx_validity/` + `mempool/` submodules + B2 integration tests; B2-S4 first cut of `check_conway_coin_conservation`. **B1:** `block_validity/`, `consensus_view.rs`, `consensus_input_extract.rs`, the `ade_core` dep edge. **B3F:** no source change (CI grep-gate added). **B4:** `delegation.rs` (+385) native owner-tagged apply model; `rules.rs` (+212) fail-closed `accumulate_tx_certs`; `cert_classify.rs` (+100) re-pointed at owner-complete `ConwayCert`. **B5:** new BLUE module `gov_cert.rs` (+366); `state.rs` (+56) `GovCertEnv` + `gov_cert_env()`; `pparams.rs` (+8) `drep_activity`; `error.rs` (+16) two new variants; `fingerprint.rs` (+14) tag 2→3 array; `rules.rs` (+161/−42). **OQ5:** `state.rs` re-key `Hash28` → `StakeCredential`; `fingerprint.rs` (+78) `write_stake_credential`; ripples across `gov_cert.rs`/`governance.rs`/`cert_classify.rs`/`rules.rs`. **COMMITTEE-CRED-FIDELITY:** re-key committee; `governance.rs` (+76) full-credential-equality ratification. **DREP-VOTE-FIDELITY:** `governance.rs` (+57) exact-variant DRep resolution. **ENACTMENT-COMMITTEE-FIDELITY:** `governance.rs` (+30) `EnactmentEffects.committee_changes` re-typed. **ENACTMENT-COMMITTEE-WRITEBACK:** `governance.rs` (+~189) live `enact_proposals` + `apply_committee_enactment`; `rules.rs` (+~53) epoch-boundary call site; `fingerprint.rs` (+~88) structured `write_gov_action`. |
+| `ade_core_interop` | +1,546 across 6 files (B1/CE-N-B-6) + 4 files for N-E S4/S5 + **3 files for N-E S6** (`Cargo.toml` +4 / `src/bin/live_tx_submission_session.rs` +552 / `tests/live_tx_submission_session.rs` +80). | **CE-N-B-6:** follow-bridge (`e5f1f64`) + pin retarget (`807bcb6`). **PHASE4-N-E S4 (`ca3f23a`):** N2N `tx_submission` bridge module — `event_to_ingress`, `PeerAccumulator { new/observe/drain/len/is_empty }`, `ingest_n2n_events(base, per_peer)`; 7 integration tests. **PHASE4-N-E S5 (`43fcc31`):** N2C `local_tx_submission` bridge module mirroring S4; 8 integration tests including the load-bearing CE-N-E-7 `n2n_and_n2c_bridges_produce_identical_outcomes` cross-bridge agreement. Both bridges call `mempool_ingress` (via `replay_ingress_trace`), never `admit` directly. Cargo edge added (`ade_core_interop -> ade_ledger`, was transitive only). **PHASE4-N-E S6 (`d1068b3` + `caa5ce8`):** new RED binary `live_tx_submission_session` (~552 LOC) modeled on `live_consensus_session` — connects to a real cardano-node N2N peer, negotiates the handshake, opens tx-submission2 (id 4), sends `Init`, drives the BLUE `tx_submission2_transition` state machine against every peer-originated message for the sustained window, replies empty for non-blocking requests, holds open blocking `RequestTxIds`, funnels any opportunistic tx delivery through `event_to_ingress` / `PeerAccumulator`; writes `CE-N-E-6_<date>.log`. Hardening (`caa5ce8`) folded a retry-on-`io::ErrorKind::TimedOut` fix into the read loop and corrected the elapsed-time logging. New `[[bin]]` manifest entry mirroring `live_consensus_session`; new closure-gate test `cardano_node_tx_submission2_sustained_window` (`#[ignore]`-gated; hermetic body asserts the binary builds and prints its readiness banner without opening a socket). |
+| `ade_ledger` | +57 source/test files over the prior delta; **PHASE4-N-E S1–S5 added 4 files; S6 added 0 files** (no `ade_ledger` change for S6). | **PHASE4-N-E:** new BLUE `mempool::ingress` chokepoint + closed `IngressSource::{N2N, N2C}` + `IngressEvent` + `mempool_ingress` pass-through; new GREEN `mempool::canonicalize` (`PeerId`, `PeerSubmissionQueue`, `canonicalize_peer_streams`, `source_byte`); re-exports from `mempool/mod.rs`. **B3:** the closed cert-deposit classifier `cert_classify.rs` and the full Conway value-conservation accounting in `conway.rs` (cert/withdrawal early-out **REMOVED**); new error variants; `ConwayOnlyDepositParams` + `conway_deposit_view()` in `pparams.rs`/`state.rs`. **B2:** `tx_validity/` + `mempool/` submodules + B2 integration tests; B2-S4 first cut of `check_conway_coin_conservation`. **B1:** `block_validity/`, `consensus_view.rs`, `consensus_input_extract.rs`, the `ade_core` dep edge. **B3F:** no source change (CI grep-gate added). **B4:** `delegation.rs` (+385) native owner-tagged apply model; `rules.rs` (+212) fail-closed `accumulate_tx_certs`; `cert_classify.rs` (+100) re-pointed at owner-complete `ConwayCert`. **B5:** new BLUE module `gov_cert.rs` (+366); `state.rs` (+56) `GovCertEnv` + `gov_cert_env()`; `pparams.rs` (+8) `drep_activity`; `error.rs` (+16) two new variants; `fingerprint.rs` (+14) tag 2→3 array; `rules.rs` (+161/−42). **OQ5:** `state.rs` re-key `Hash28` → `StakeCredential`; `fingerprint.rs` (+78) `write_stake_credential`; ripples across `gov_cert.rs`/`governance.rs`/`cert_classify.rs`/`rules.rs`. **COMMITTEE-CRED-FIDELITY:** re-key committee; `governance.rs` (+76) full-credential-equality ratification. **DREP-VOTE-FIDELITY:** `governance.rs` (+57) exact-variant DRep resolution. **ENACTMENT-COMMITTEE-FIDELITY:** `governance.rs` (+30) `EnactmentEffects.committee_changes` re-typed. **ENACTMENT-COMMITTEE-WRITEBACK:** `governance.rs` (+~189) live `enact_proposals` + `apply_committee_enactment`; `rules.rs` (+~53) epoch-boundary call site; `fingerprint.rs` (+~88) structured `write_gov_action`. |
 | `ade_codec` | +11 source/test files (B3 + B3F + B4 + OQ5). **No PHASE4-N-E change.** | **B3:** new `conway::cert` decoder + `conway::withdrawals` decoder; `error.rs` `UnknownCertTag` / `DuplicateMapKey`. **B3F-S2:** trailing-byte reject + bounded preallocation. **B4-S1:** owner-complete `decode_conway_certs`; new `decode_drep`. **OQ5-S1:** both era `decode_stake_credential` preserve the tag. |
 | `ade_types` | +3 files (B3) + 2 files (B4) + governance ripples through the FIDELITY clusters. **No PHASE4-N-E change.** | **B3:** closed `ConwayCert` enum + classification types; `RewardAccount`. **B4-S1:** owner-complete `ConwayCert`; new `DRep` enum; `PoolRegistrationCert.owners`. **OQ5-S1:** `StakeCredential` tuple struct → closed enum + `hash()`. **COMMITTEE-CRED / DREP-VOTE / WRITEBACK:** governance-type ripples (committee_votes, drep_votes, structured `UpdateCommittee`). |
 | `ade_core` | +29 source files + tests (N-B); +828 / −86 across 16 files (B1). **No post-B1 change.** | **N-B:** substantive BLUE consensus module under `src/consensus/`. **B1:** `consensus/kes_check.rs` + single-VRF + KES wiring. |
 | `ade_crypto` | 1 file, +24 / −81 lines (B1). | `kes.rs` (`500589b`): `build_opcert_signable` fixed as part of B1-S5. |
-| `ade_core_interop` | +1,546 across 6 files (B1/CE-N-B-6); **PHASE4-N-E adds 4 files** (`src/lib.rs` +2 module registrations; `src/tx_submission.rs` +107; `src/local_tx_submission.rs` +97; `tests/tx_submission_ingress.rs` +192; `tests/local_tx_submission_ingress.rs` +204) plus `Cargo.toml` +1 line (direct `ade_ledger` dep). | **CE-N-B-6:** follow-bridge (`e5f1f64`) + pin retarget (`807bcb6`). **PHASE4-N-E S4 (`ca3f23a`):** N2N `tx_submission` bridge module — `event_to_ingress`, `PeerAccumulator { new/observe/drain/len/is_empty }`, `ingest_n2n_events(base, per_peer)`; 7 integration tests (CE-N-E-6 adapter-layer agreement + multi-peer canonicalization + outcome carry-through). **PHASE4-N-E S5 (`43fcc31`):** N2C `local_tx_submission` bridge module mirroring S4 over cardano-cli IPC — `local_event_to_ingress`, `ClientAccumulator`, `ingest_n2c_events(base, per_client)`; 8 integration tests including the load-bearing CE-N-E-7 `n2n_and_n2c_bridges_produce_identical_outcomes` cross-bridge agreement. Both bridges call `mempool_ingress` (via `replay_ingress_trace`), never `admit` directly. Cargo edge added (`ade_core_interop -> ade_ledger`, was transitive only). |
-| `ade_network` | 100 files, +17,861 lines (full N-A). **No PHASE4-N-E change.** | DoS hardening of 6 codecs (`744ef34`, post-N-A close). The N-E bridges live in `ade_core_interop`, not in `ade_network`. |
-| `ade_runtime` | +18 files, +3,440 lines (N-B `consensus/` + N-D `chaindb`/`recovery`; B1 one small touch). **No PHASE4-N-E change.** The cluster doc's initial placement of the N2N session loop under `ade_runtime` was inaccurate and is corrected by the S4 commit message: the GREEN bridge lives in `ade_core_interop`; the live socket loop is operator-action per the CE-N-E-6 / CE-N-E-7 procedures. | **N-B:** new `consensus/` submodule. **B1:** one small touch. N-D `chaindb`/`recovery` are §2 New Modules. |
-| `ade_testkit` | +28 files across the full delta to `52642e5`; **PHASE4-N-E adds 4 files** (`src/lib.rs` +1 `pub mod mempool;`; `src/mempool/mod.rs` +13; `src/mempool/ingress_replay.rs` +88; `tests/mempool_ingress_replay.rs` +171; `tests/mempool_ingress_canonicalize.rs` +72). | **N-B:** `consensus/` harness. **B1:** `validity/` harness. **B2:** `tx_validity/` submodule. **B3:** extended `harness/snapshot_loader.rs` (intra-corpus resolution), `tx_validity` extensions. **OQ5 → WRITEBACK:** progressive snapshot-loader extensions (key/script tag preservation, fail-closed cold-credential parsing, structured `UpdateCommittee` decode). **Post-3d94c22 thread:** real-chain committee oracle, corpus alignment, `reward_provenance` generator, snapshot-loader follow-ups (tip slot + Conway UMElem). **PHASE4-N-E S2 (`2d0c918`):** new GREEN `mempool::ingress_replay` harness — `ExpectedOutcome`, `BTrackCase`, `wrap_as_ingress`, `b_track_corpus_as_ingress`, `replay_ingress_trace`; 5 integration tests (CE-N-E-2 ingress=direct equivalence over the B-track corpus; CE-N-E-5 adversarial-rejection preservation through the chokepoint; CE-N-E-4 single-peer byte-identical replay; N-E-6 dependent-pair through the chokepoint; N-E-8 N2N vs N2C source-invariance). **PHASE4-N-E S3 (`509d714`):** 2 integration tests in `tests/mempool_ingress_canonicalize.rs` cross-checking canonicalization + replay (`two_interleavings_replay_byte_identical` CE-N-E-4 multi-peer; `empty_pool_canonicalizes_and_replays_to_initial_state`). |
+| `ade_network` | 100 files, +17,861 lines (full N-A). **No PHASE4-N-E change.** | DoS hardening of 6 codecs (`744ef34`, post-N-A close). The N-E bridges live in `ade_core_interop`, not in `ade_network`; the N-E S6 live binary *uses* `ade_network`'s tx-submission2 state machine + handshake codec + mux frame codec via the existing crate edge. |
+| `ade_runtime` | +18 files, +3,440 lines (N-B `consensus/` + N-D `chaindb`/`recovery`; B1 one small touch). **No PHASE4-N-E change.** The cluster doc's initial placement of the N2N session loop under `ade_runtime` was inaccurate and is corrected by the S4 commit message and the S6 binary's home: the GREEN bridges live in `ade_core_interop`; the live N2N probe binary lives in `ade_core_interop::bin::live_tx_submission_session`. | **N-B:** new `consensus/` submodule. **B1:** one small touch. N-D `chaindb`/`recovery` are §2 New Modules. |
+| `ade_testkit` | +28 files across the prior delta; **PHASE4-N-E S2/S3 added 5 files; S6 added 0 files** (no `ade_testkit` change for S6). | **N-B:** `consensus/` harness. **B1:** `validity/` harness. **B2:** `tx_validity/` submodule. **B3:** extended `harness/snapshot_loader.rs` (intra-corpus resolution), `tx_validity` extensions. **OQ5 → WRITEBACK:** progressive snapshot-loader extensions (key/script tag preservation, fail-closed cold-credential parsing, structured `UpdateCommittee` decode). **Post-3d94c22 thread:** real-chain committee oracle, corpus alignment, `reward_provenance` generator, snapshot-loader follow-ups (tip slot + Conway UMElem). **PHASE4-N-E S2 (`2d0c918`):** new GREEN `mempool::ingress_replay` harness — `ExpectedOutcome`, `BTrackCase`, `wrap_as_ingress`, `b_track_corpus_as_ingress`, `replay_ingress_trace`; 5 integration tests (CE-N-E-2 ingress=direct equivalence over the B-track corpus; CE-N-E-5 adversarial-rejection preservation through the chokepoint; CE-N-E-4 single-peer byte-identical replay; N-E-6 dependent-pair through the chokepoint; N-E-8 N2N vs N2C source-invariance). **PHASE4-N-E S3 (`509d714`):** 2 integration tests in `tests/mempool_ingress_canonicalize.rs` cross-checking canonicalization + replay. |
 
 No other crate had non-trivial source changes since baseline.
 `ade_plutus` and `ade_node` were untouched by code commits.
-**PHASE4-N-E touched `ade_ledger` (4 files), `ade_testkit` (4
-files), `ade_core_interop` (4 files + `Cargo.toml`), `Cargo.lock`,
-the registry, the two new CI scripts, and the new
-`docs/clusters/PHASE4-N-E/` cluster + planning docs.** No
-`.idd-config.json` change. No `ade_codec` / `ade_types` /
-`ade_crypto` / `ade_core` / `ade_network` / `ade_runtime` /
-`ade_node` / `ade_plutus` change.
+**PHASE4-N-E S6 touched `ade_core_interop` only (3 files:
+`Cargo.toml` + the new RED binary + the new closure-gate test),
+plus the cluster + procedure + planning docs and the live-evidence
+log file. No `ade_ledger` / `ade_testkit` / `ade_codec` / `ade_types`
+/ `ade_crypto` / `ade_core` / `ade_network` / `ade_runtime` /
+`ade_node` / `ade_plutus` change.** No `.idd-config.json` change.
+No registry change. No CI-script change.
 
 ---
 
@@ -502,10 +504,10 @@ The CI surface is the shell-script set under `ci/` (no
 At HEAD there are **31 scripts plus one git hook**
 (`ci/git-hooks/commit-msg`): CE-73 added one, N-D added three, N-A
 added two, N-B added four, B3 added one, B3F added one, B5 added one,
-OQ5 added one (the 29th), and **PHASE4-N-E added two — the 30th and
-31st**: `ci_check_mempool_ingress_closure.sh` (S1, `DC-MEM-03`) and
-`ci_check_mempool_ingress_replay.sh` (S2, extended in S3,
-`DC-MEM-04`). **B1, B2, B4, COMMITTEE-CRED-FIDELITY,
+OQ5 added one (the 29th), and **PHASE4-N-E S1/S2 added two — the
+30th and 31st**: `ci_check_mempool_ingress_closure.sh` (S1,
+`DC-MEM-03`) and `ci_check_mempool_ingress_replay.sh` (S2, extended
+in S3, `DC-MEM-04`). **PHASE4-N-E S6, B1, B2, B4, COMMITTEE-CRED-FIDELITY,
 DREP-VOTE-FIDELITY, ENACTMENT-COMMITTEE-FIDELITY,
 ENACTMENT-COMMITTEE-WRITEBACK, and the post-3d94c22 testkit thread
 added no new CI script.** Grouped by cluster.
@@ -591,7 +593,7 @@ added no new CI script.** Grouped by cluster.
 | same | **Modified** (`62c9020`, DREP-VOTE-FIDELITY-S2) | +2 DRep clauses. |
 | same | **Modified** (`a6b8de7`, ENACTMENT-COMMITTEE-FIDELITY-S1) | +1 enactment-effect clause (clause 6). |
 | same | **Modified** (`69e2d4b`, ENACTMENT-COMMITTEE-WRITEBACK close) | +section 7: structured `UpdateCommittee` surface + `apply_committee_enactment` presence/call-site. |
-| same | **Unmodified post-3d94c22 and unmodified by PHASE4-N-E** | The credential-discriminant gate stays the **29th** script. |
+| same | **Unmodified post-3d94c22 / unmodified by PHASE4-N-E S1–S6** | The credential-discriminant gate stays the **29th** script. |
 
 ### PHASE4-N-E wire-level mempool ingress closure (`32c1ee6`, `2d0c918`, `509d714`)
 
@@ -600,13 +602,33 @@ added no new CI script.** Grouped by cluster.
 | `ci/ci_check_mempool_ingress_closure.sh` | **New** (`32c1ee6`, S1) — the **30th** script | Enforces `DC-MEM-03` via 5 mechanical guards: (1) `mempool/ingress.rs` defines `IngressEvent`/`IngressSource`/`mempool_ingress` and is re-exported from `mempool/mod.rs`; (2) `IngressSource` is a closed 2-variant enum with no `#[non_exhaustive]` and exactly one `pub enum` in the file; (3) `MempoolState.accumulating` is field-written only inside `mempool/admit.rs`; (4) `admit()` is called only from `mempool/admit.rs` (definition + co-located tests) and `mempool/ingress.rs` (the new bridge) — all other production `src/` callers are forbidden, `crates/*/tests/` exempt; (5) `mempool_ingress` body must not reference `source` — the verdict is a function of `(state, tx_bytes)` alone. |
 | `ci/ci_check_mempool_ingress_replay.sh` | **New** (`2d0c918`, S2); **Modified** (`509d714`, S3, +2 clauses) — the **31st** script | Enforces `DC-MEM-04` via 6 mechanical guards: (1) `mempool/ingress_replay.rs` exists, is registered in `testkit/src/lib.rs`, and exports `ExpectedOutcome`/`BTrackCase`/`wrap_as_ingress`/`b_track_corpus_as_ingress`/`replay_ingress_trace`; (2) `replay_ingress_trace` body calls `mempool_ingress`, not `admit`; (3) the 5 registry-pinned test functions exist in the test file; (4) no batching helpers (`chunks`/`partition`/`rayon`/`tokio::spawn`) — single-step per OQ-6; (5, S3) `canonicalize.rs` exists, defines the three items, re-exported; (6, S3) `canonicalize.rs` body contains no `HashMap`/`HashSet`/`tokio`/`async fn`/`.await`/`SystemTime`/`Instant`/`rand`/`thread_rng`/`RwLock`/`Mutex` — strictly sync + deterministic. |
 
+### PHASE4-N-E S6 live-evidence binary
+
+**No new CI script.** The S6 deliverables are (1) a RED binary
+`live_tx_submission_session` whose live-evidence pass is operator
+action per `CE-N-E-6_PROCEDURE.md` (committed log at
+`docs/clusters/completed/PHASE4-N-E/CE-N-E-6_2026-05-25.log`), and
+(2) an `#[ignore]`-gated closure-gate test
+`cardano_node_tx_submission2_sustained_window` that runs the binary
+without `--connect` to assert it builds and prints its readiness
+banner. The deterministic mechanical CI for the cluster is the
+synthetic-event adapter test surface from S4/S5
+(`tests/tx_submission_ingress.rs` +
+`tests/local_tx_submission_ingress.rs`) plus the two ingress CI
+scripts from S1/S2/S3. CI does not run the S6 network test.
+
 TRACEABILITY cross-reference: every script listed above appears as a
 `ci_script` for at least one rule in `docs/ade-invariant-registry.toml`,
-re-traced via `ci/ci_check_constitution_coverage.sh`. **PHASE4-N-E**
-added two new `ci_script` ↔ rule edges: `ci_check_mempool_ingress_closure.sh
-→ DC-MEM-03` and `ci_check_mempool_ingress_replay.sh → DC-MEM-04`.
-The parallel TRACEABILITY regeneration will add the two new rules
-and the `DC-MEM-01.strengthened_in += "PHASE4-N-E"` strengthening.
+re-traced via `ci/ci_check_constitution_coverage.sh`. **PHASE4-N-E S1/S2**
+added two `ci_script` ↔ rule edges (carried forward):
+`ci_check_mempool_ingress_closure.sh → DC-MEM-03` and
+`ci_check_mempool_ingress_replay.sh → DC-MEM-04`. **PHASE4-N-E S6
+added no new edge** — the live-evidence binary's invariant is
+already covered by `DC-MEM-01` (`tx_submission2_transition` driving
+the protocol grammar) and `DC-MEM-03` (no leakage of the source
+discriminant); the S6 evidence is operator-captured rather than
+CI-mechanical and that's the correct discipline placement (parallel
+to the CE-N-B-6 live-tip-agreement pattern).
 
 ---
 
@@ -615,10 +637,11 @@ and the `DC-MEM-01.strengthened_in += "PHASE4-N-E"` strengthening.
 n/a — `.idd-config.json` `canonical_type_registry` is null. Canonical-type
 rules live inline in the invariant registry under family `T`.
 
-The new PHASE4-N-E closed enums (`IngressSource`) and closed structs
-(`IngressEvent`) are canonical-type additions if CODEMAP's
-canonical-type count is to stay in sync; the current TRACEABILITY
-regeneration round is the right place to reflect that.
+Per the parent-supplied count for this regen, **canonical types at HEAD
+= 380 (unchanged from prior refresh; PHASE4-N-E S6 added no new
+canonical type)**. The PHASE4-N-E S1 closed enum `IngressSource` and
+the closed struct `IngressEvent` were already accounted for at the
+prior refresh `350130e`.
 
 ---
 
@@ -628,54 +651,32 @@ The project's invariant registry tracks structured rules (TOML), not
 prose normative-doc rules; this section reports on it.
 
 - Rules at baseline (`d509f02:constitution_registry.toml`): **147**
-- Rules at prior refresh (`168ac02:docs/ade-invariant-registry.toml`): **173**
-- Rules at HEAD (`43fcc31:docs/ade-invariant-registry.toml`): **175**
+- Rules at prior refresh (`350130e:docs/ade-invariant-registry.toml`): **175**
+- Rules at HEAD (`caa5ce8:docs/ade-invariant-registry.toml`): **175**
 - Net additions vs baseline: **+28** (PHASE4-N-A: 2; PHASE4-N-B: 8;
   PHASE4-B1: 6; PHASE4-B2: 5; PHASE4-B3: 2; PHASE4-B3F: 0; PHASE4-B4: 1
   (`DC-LEDGER-08`); PHASE4-B5: 1 (`DC-LEDGER-09`); OQ5: 1
   (`DC-LEDGER-10`); COMMITTEE-CRED-FIDELITY / DREP-VOTE-FIDELITY /
   ENACTMENT-COMMITTEE-FIDELITY / ENACTMENT-COMMITTEE-WRITEBACK /
   post-3d94c22 testkit thread: 0 each — all in-place strengthenings;
-  **PHASE4-N-E: 2** (`DC-MEM-03`, `DC-MEM-04`). The two `DC-MEM-*`
-  rules introduced earlier (`DC-MEM-01`, `DC-MEM-02`) were flipped to
-  `enforced` in B2 and are not counted as new.
-- Net additions vs prior refresh: **+2** (`DC-MEM-03`, `DC-MEM-04`).
+  PHASE4-N-E S1–S5: 2 (`DC-MEM-03`, `DC-MEM-04`); **PHASE4-N-E S6: 0**
+  — S6 ships a binary + a procedure, the invariants it evidences are
+  already in `DC-MEM-01` / `DC-MEM-03` / `DC-MEM-04` per the slice
+  doc's "Hard Prohibitions" section.
+- Net additions vs prior refresh: **0** (S6 adds no rule).
 - Removals: **0** (expected under append-only discipline; clean).
 
-- New rules at HEAD (since the prior refresh):
-  - **`DC-MEM-03`** (derived, `enforced`, `introduced_in =
-    PHASE4-N-E`): "Tx ingress reduces to a closed `IngressEvent`
-    before BLUE mempool admission; the source variant is
-    evidence/policy/replay metadata only and MUST NOT change the
-    validity verdict." `code_locus` =
-    `crates/ade_ledger/src/mempool/ingress.rs` (`IngressEvent`,
-    `IngressSource`, `mempool_ingress`). `tests` = 8 (2 inline + 6
-    integration covering both `IngressSource` variants, the verdict
-    invariance under N2N vs N2C, and ingress=direct equivalence on
-    the synthetic corpus). `ci_script` =
-    `ci/ci_check_mempool_ingress_closure.sh`. `cross_ref` =
-    `[DC-MEM-01]` (bidirectional).
-  - **`DC-MEM-04`** (derived, `enforced`, `introduced_in =
-    PHASE4-N-E`): "Replaying the same ordered ingress trace against
-    the same base ledger state produces a byte-identical sequence of
-    `(MempoolState, AdmitOutcome)` pairs." `code_locus` =
-    `crates/ade_testkit/src/mempool/ingress_replay.rs;
-    crates/ade_ledger/src/mempool/ingress.rs;
-    crates/ade_ledger/src/mempool/canonicalize.rs`. `tests` = 8 (5
-    from S2 + 3 added in-place by S3 covering the canonicalizer).
-    `ci_script` = `ci/ci_check_mempool_ingress_replay.sh`. `cross_ref`
-    = `[DC-MEM-01]` (bidirectional).
-
 - Strengthenings at HEAD:
-  - **`DC-MEM-01`** (PHASE4-N-E, `2d0c918`/`509d714`): strengthened —
-    `strengthened_in += "PHASE4-N-E"`; `code_locus +=
-    "; mempool/ingress.rs; mempool/ingress_replay.rs"`; `tests += 3`
-    (the new ingress-replay test names from S2 + the
-    canonicalize-replay names from S3); `cross_ref += "DC-MEM-04"`
-    (bidirectional pairing with the new replay rule). The mempool
-    admission chokepoint contract is now mechanically enforced from
-    the wire-event boundary inward through the chokepoint to admit,
-    not just at admit.
+  - **No new strengthening from PHASE4-N-E S6.** S6 does not append
+    to `DC-MEM-01.strengthened_in`, `DC-MEM-03.strengthened_in`, or
+    `DC-MEM-04.strengthened_in`; the live-evidence log is operator
+    evidence in `docs/clusters/completed/PHASE4-N-E/`, not a
+    structural strengthening of the rule.
+  - **`DC-MEM-01`** (PHASE4-N-E S2/S3, `2d0c918`/`509d714`, carried
+    forward): strengthened — `strengthened_in += "PHASE4-N-E"`;
+    `code_locus += "; mempool/ingress.rs; mempool/ingress_replay.rs"`;
+    `tests += 3`; `cross_ref += "DC-MEM-04"` (bidirectional pairing
+    with the new replay rule).
   - **`DC-MEM-02`** (carried forward from B2): `enforced`.
   - **All earlier strengthenings carried forward unchanged**:
     `DC-EPOCH-01` (WRITEBACK + post-3d94c22 oracle); `DC-LEDGER-10`
@@ -688,10 +689,10 @@ prose normative-doc rules; this section reports on it.
     (CE-73 reclassification); the N-D bundle; the N-A real-capture
     bundle; `T-CORE-02` (S-B1).
 
-Family counts at HEAD: CN: 69, DC: 64 (added `DC-MEM-03`, `DC-MEM-04`
-this regen), OP: 7, RO: 6, T: 29 — total 175. Per the constitution
-coverage gate verification in `43fcc31`'s commit message,
-`ci_check_constitution_coverage.sh` PASS.
+Family counts at HEAD: CN: 69, DC: 64, OP: 7, RO: 6, T: 29 —
+**total 175 (unchanged from prior refresh)**. Per the constitution
+coverage gate verification in `350130e`'s commit message and the S6
+slice doc's AC-6, `ci_check_constitution_coverage.sh` PASS.
 
 Normative-doc rule extraction (the `normative_docs` list in
 `.idd-config.json`) is approximate and not regenerated here — the
@@ -701,75 +702,122 @@ structured registry is the authoritative source.
 
 ## Anomalies and Cross-Reference Warnings
 
-- **PHASE4-N-E cluster status: code + harness complete, live evidence
-  pending — cluster dir NOT yet archived.** `docs/clusters/PHASE4-N-E/`
-  contains the cluster doc + 5 slice docs + the two operator-procedure
-  docs (`CE-N-E-6_PROCEDURE.md`, `CE-N-E-7_PROCEDURE.md`); planning
-  artifacts at `docs/planning/phase4-n-e-tier1-invariants.md` and
-  `docs/planning/phase4-n-e-tier1-cluster-slice-plan.md`. CE-N-E-1
-  through CE-N-E-5 are mechanically green; CE-N-E-6 and CE-N-E-7
-  close in two halves — the mechanical adapter half is green in
-  S4/S5, the live-log half is operator-action per the documented
-  procedures. **Cluster closure (`/cluster-close`) lands once the
-  two `CE-N-E-{6,7}_<YYYY-MM-DD>.log` artifacts are committed under
-  `docs/clusters/PHASE4-N-E/`.**
+- **`CE-NODE-N2C-LTX` cross-cluster obligation framing (PHASE4-N-E
+  S6, `d1068b3`/`caa5ce8`) — DELIBERATE DEFERRAL, NOT A DISCIPLINE
+  GAP.** PHASE4-N-E originally scoped CE-N-E-7 (live N2C
+  local-tx-submission evidence) inside the cluster. The S6 slice
+  deliberately splits CE-N-E-7 into two halves: the **adapter
+  mechanical half** is closed in S5 by the cross-bridge agreement
+  test `n2n_and_n2c_bridges_produce_identical_outcomes`; the **live
+  N2C UDS server half** is **deferred** to the future node-binary
+  cluster as cross-cluster obligation `CE-NODE-N2C-LTX`. The
+  rationale (recorded in `cluster.md`'s "Deferred / cross-cluster
+  obligation" section and `CE-N-E-7_PROCEDURE.md`'s deferral
+  banner): an N2C local-tx-submission UDS server requires real
+  server ownership by `ade_node`, not an operator-only interop
+  binary; building one here would create parallel mini-node
+  scaffolding before `ade_node` owns that authority surface, and
+  would drift-risk a future architecture pass. **The deferral is
+  NOT a semantic waiver** — bounty / N2C certification remains
+  blocked on the future cluster's discharge of `CE-NODE-N2C-LTX`;
+  the CE-N-E-7 procedure spec is retained in place as the canonical
+  spec for the future closure. Cluster docs do NOT claim CE-N-E-7
+  as closed; the cluster status reads "Tier-1 authority closed;
+  live N2N evidence captured; live N2C evidence deferred to
+  node-binary cluster as CE-NODE-N2C-LTX." **This is the first use
+  of the cross-cluster-obligation pattern in the project** and is
+  surfaced here so future grounding-doc regens can pattern-match on
+  the framing.
+- **PHASE4-N-E cluster directory archived in this regen round.**
+  `docs/clusters/PHASE4-N-E/` was moved via `git mv` (10 renames)
+  to `docs/clusters/completed/PHASE4-N-E/` as part of the
+  grounding-refresh commit that this HEAD_DELTAS is part of:
+  `cluster.md`, `N-E-S1.md`, `N-E-S2.md`, `N-E-S3.md`, `N-E-S4.md`,
+  `N-E-S5.md`, `N-E-S6.md`, `CE-N-E-6_PROCEDURE.md`,
+  `CE-N-E-7_PROCEDURE.md`, `CE-N-E-6_2026-05-25.log`. Active
+  `docs/clusters/` at HEAD contains only `completed/` and a
+  carried-forward `PHASE4-N-B/` stray directory (a non-IDD log
+  directory holding `CE-N-B-6_2026-05-20.log`; unchanged across
+  this regen).
 - **CODEMAP / SEAMS / TRACEABILITY are being regenerated in
   parallel with this HEAD_DELTAS rewrite — expected drift at the
-  exact moment of this regen.** Prior CODEMAP (`52642e5`) does NOT
-  yet contain rows for `ade_ledger::mempool::ingress`,
-  `ade_ledger::mempool::canonicalize`,
-  `ade_testkit::mempool::ingress_replay`,
-  `ade_core_interop::tx_submission`, or
-  `ade_core_interop::local_tx_submission`. Prior SEAMS does NOT yet
-  contain a mempool-ingress-surface row. Prior TRACEABILITY does
-  NOT yet contain `DC-MEM-03` / `DC-MEM-04` / the new CI scripts /
-  the `DC-MEM-01.strengthened_in += "PHASE4-N-E"` strengthening.
-  All three rewrites are in flight in the same regen round; the
-  three docs will be self-consistent at the next grounding-doc
-  commit (the parallel `docs(grounding)` ripple from the cluster
-  close).
+  exact moment of this regen.** Prior CODEMAP (`350130e`) does NOT
+  yet contain a row for the new RED binary
+  `live_tx_submission_session`. Prior SEAMS picks up no new surface
+  row (S6 adds no new seam). Prior TRACEABILITY picks up no new
+  rule (S6 adds none). All three rewrites are in flight in the same
+  regen round; the three docs will be self-consistent at the next
+  grounding-doc commit.
 - **PHASE4-N-E source-invariance is the load-bearing wire-level
-  no-false-accept property.** `IngressSource` is metadata only —
-  the verdict path is a function of `(state, tx_bytes)` alone.
-  Mechanically enforced by CI guard #5 of
-  `ci_check_mempool_ingress_closure.sh` (no `source` reference in
-  the `mempool_ingress` body), by the S1 inline test
+  no-false-accept property — carried forward, reinforced by S6.**
+  `IngressSource` is metadata only — the verdict path is a function
+  of `(state, tx_bytes)` alone. Mechanically enforced by CI guard
+  #5 of `ci_check_mempool_ingress_closure.sh` (no `source`
+  reference in the `mempool_ingress` body), by the S1 inline test
   `ingress_source_does_not_change_verdict_*`, by the S2 integration
   test `ingress_trace_source_invariant_n2n_vs_n2c`, and by the S5
   cross-bridge agreement test
-  `n2n_and_n2c_bridges_produce_identical_outcomes`. Any divergence
-  under cross-bridge replay is **release-blocking source-leak**.
-- **CE-N-E-6 / CE-N-E-7 live-log half is operator-action — not
-  CI.** Mirrors the established CE-N-B-6 pattern. The committed
-  procedures (`CE-N-E-6_PROCEDURE.md`, `CE-N-E-7_PROCEDURE.md`)
-  describe handshake, capture window, cross-check against direct
-  `tx_validity`, and the `CE-N-E-{6,7}_<YYYY-MM-DD>.log` artifact
-  format. Until those logs are committed, the cluster status reads
-  "code + harness complete, live evidence pending" — **not** "fully
-  closed".
+  `n2n_and_n2c_bridges_produce_identical_outcomes`. The S6 live
+  binary additionally exercises the BLUE state machine against real
+  wire bytes from a real peer, narrowing the codec-divergence
+  attack surface. Any divergence under cross-bridge replay is
+  **release-blocking source-leak**.
+- **CE-N-E-6 live-log half is operator-action — not CI.** Mirrors
+  the established CE-N-B-6 pattern. The committed procedure
+  (`CE-N-E-6_PROCEDURE.md`) now references the concrete command
+  `cargo run -p ade_core_interop --bin live_tx_submission_session
+  -- --connect …`. The live-evidence log
+  `CE-N-E-6_2026-05-25.log` is committed under
+  `docs/clusters/completed/PHASE4-N-E/`.
+- **Honest-scope framing on CE-N-E-6 (S6, `d1068b3`).** The outbound
+  client direction does not naturally pull txs from the peer's
+  mempool, so the load-bearing live evidence is **handshake + mux +
+  codec + BLUE state-machine grammar conformance against real wire
+  bytes**, not bulk tx delivery. The 2026-05-25 evidence log
+  records `[bridge] tx_bytes=0` and that is expected per the
+  honest-scope framing. The bulk tx-delivery half joins
+  `CE-NODE-N2C-LTX` in the deferral.
+- **S6 hardening (`caa5ce8`).** The initial S6 binary (`d1068b3`)
+  broke its read loop on the first `io::ErrorKind::TimedOut` from
+  the 20s inner socket timeout, ending sessions prematurely.
+  `caa5ce8` folded a retry-on-timeout into the read loop so the
+  session window completes; same commit corrected elapsed-time
+  logging and committed the working evidence log. This is the
+  shape of "fold the live-evidence hardening into the same closing
+  commit, not a separate follow-up cluster" — narrow fix, no rule
+  change, no CI change.
 - **`ade_core_interop -> ade_ledger` new dependency edge
-  (PHASE4-N-E S4, `ca3f23a`).** `ade_core_interop` (RED) now
-  depends directly on `ade_ledger` (BLUE). The edge direction
+  (PHASE4-N-E S4, `ca3f23a`) — carried forward.** `ade_core_interop`
+  (RED) depends directly on `ade_ledger` (BLUE). The edge direction
   (RED → BLUE) is allowed by `ci_check_dependency_boundary.sh`
   (BLUE crates must not depend on RED crates; the converse is the
-  Functional-Core/Imperative-Shell shape). Was a transitive dep
-  via the `ade_core` edge prior to S4; now direct so the new
-  bridges can `use ade_ledger::mempool::{mempool_ingress,
-  IngressEvent, IngressSource}`.
-- **The cluster doc's initial S4 placement under `ade_runtime` was
-  inaccurate and is corrected by `ca3f23a`'s TCB Color Map
-  update.** S4's home is `ade_core_interop`, not
-  `ade_runtime::tx_submission::n2n_session` — `ade_core_interop` is
-  the project's established RED live-interop crate (already houses
-  the PHASE4-N-B follow-mode bridge). The cluster doc footnote
-  records the move.
-- **B-track corpus reuse is verbatim per OQ-3 (PHASE4-N-E S2).**
-  The B-track adversarial corpus is the existing PHASE4-B2 corpus;
-  only the `IngressEvent` envelope is new (`wrap_as_ingress` /
-  `b_track_corpus_as_ingress`). No new adversarial corpus content
-  for N-E. The replay fold is a literal pass over `mempool_ingress`
-  (no batching, no out-of-order interleaving — per OQ-6, enforced
-  by CI guard #4 of `ci_check_mempool_ingress_replay.sh`).
+  Functional-Core/Imperative-Shell shape). **PHASE4-N-E S6 added
+  no new dep edge.**
+- **The cluster doc's initial S4/S5 placement under `ade_runtime`
+  was inaccurate and is corrected by the S6 cluster.md rewrite +
+  TCB Color Map** (`d1068b3`). S4/S5 GREEN bridges and the S6 RED
+  live binary all live in `ade_core_interop` — the project's
+  established RED live-interop crate (already houses the PHASE4-N-B
+  follow-mode bridge + the `live_consensus_session` binary).
+- **B-track corpus reuse is verbatim per OQ-3 (PHASE4-N-E S2,
+  carried forward).** The B-track adversarial corpus is the
+  existing PHASE4-B2 corpus; only the `IngressEvent` envelope is
+  new (`wrap_as_ingress` / `b_track_corpus_as_ingress`). The replay
+  fold is a literal pass over `mempool_ingress` (no batching, no
+  out-of-order interleaving — per OQ-6).
+- **`ade_core_interop` live-session binaries are `#[ignore]`-gated
+  by design (carried forward + extended).** `live_consensus_session`
+  + its closure-gate test (CE-N-B-6) and now `live_tx_submission_session`
+  + its closure-gate test
+  `cardano_node_tx_submission2_sustained_window` (CE-N-E-6) both
+  follow this shape: the binary's `main` is hermetic + prints a
+  readiness banner; the closure-gate test asserts that without
+  opening a socket; live evidence is operator action via
+  `--connect`. CI does not run the network tests. The new
+  PHASE4-N-E `tx_submission_ingress` and `local_tx_submission_ingress`
+  integration tests run *non-ignored* in CI because they operate
+  on synthetic / B-track corpus bytes, not against a live
+  cardano-node socket.
 - **Post-3d94c22 testkit thread (`b9cfaf9` / `396664a` / `c78ec76`
   / `168ac02`) — carried forward unchanged.** Four GREEN-scope
   commits with one registry-level effect: in-place strengthening
@@ -784,16 +832,15 @@ structured registry is the authoritative source.
   the non-committee discriminated keys (`vote_delegations` /
   `drep_expiry`) remain environment-blocked pending those
   extractions. Not a regression, not a fail-open.
-- **Cluster docs archived in `52642e5` (committed at this HEAD).**
-  Seven cluster directories moved via `git mv` from
-  `docs/clusters/<NAME>/` to `docs/clusters/completed/<NAME>/`:
+- **Cluster docs archived as of this HEAD.** Fifteen cluster
+  directories archived under `docs/clusters/completed/`:
   COMMITTEE-CRED-FIDELITY, DREP-VOTE-FIDELITY,
-  ENACTMENT-COMMITTEE-FIDELITY, OQ5-CREDENTIAL-FIDELITY, PHASE4-B3F,
-  PHASE4-B4, PHASE4-B5. Plus the previously-committed archives
-  (B1, B2, B3, N-A, N-B, N-D, ENACTMENT-COMMITTEE-WRITEBACK).
-  `docs/clusters/` at HEAD contains only `PHASE4-N-B/` (a non-IDD
-  log directory) and the in-flight **`PHASE4-N-E/`** (NOT yet
-  archived per the cluster-status anomaly above).
+  ENACTMENT-COMMITTEE-FIDELITY, ENACTMENT-COMMITTEE-WRITEBACK,
+  OQ5-CREDENTIAL-FIDELITY, PHASE4-B1, PHASE4-B2, PHASE4-B3,
+  PHASE4-B3F, PHASE4-B4, PHASE4-B5, PHASE4-N-A, PHASE4-N-B,
+  PHASE4-N-D, **PHASE4-N-E (newly archived in this regen round)**.
+  `docs/clusters/` at HEAD contains only `completed/` and the
+  carried-forward `PHASE4-N-B/` stray log directory.
 - **ENACTMENT-COMMITTEE-WRITEBACK fingerprint change (T-DET-01,
   deliberate; carried forward).** `write_gov_action` emits the
   structured `UpdateCommittee` shape `[5, prev, set<cred>,
@@ -820,12 +867,12 @@ structured registry is the authoritative source.
 - **`strengthened_in` records the introducing cluster on
   freshly-created rules (carried forward).** Each `DC-VAL-*`
   records `["PHASE4-B1"]`, each `DC-TXV-01..05` records
-  `["PHASE4-B2"]`, the two new `DC-MEM-03`/`DC-MEM-04` records
+  `["PHASE4-B2"]`, the two `DC-MEM-03`/`DC-MEM-04` records
   `strengthened_in = []` (no strengthenings yet) but
   `introduced_in = "PHASE4-N-E"`. Harmless.
 - **`ade_ledger -> ade_core` dependency edge (B1, carried forward)
-  + new `ade_core_interop -> ade_ledger` edge (PHASE4-N-E S4).**
-  All in compliance with `ci_check_dependency_boundary.sh`.
+  + `ade_core_interop -> ade_ledger` edge (PHASE4-N-E S4, carried
+  forward).** All in compliance with `ci_check_dependency_boundary.sh`.
 - **B3 positive corpus carves out Plutus per CE-88 (carried
   forward).**
 - **Adversarial corpora are derived, not committed (carried
@@ -834,23 +881,16 @@ structured registry is the authoritative source.
 - **Corpus relayout: credentialed snapshots removed, then
   regenerated off-repo (carried forward).** `corpus/snapshots/`
   `.gitignore`-d; canonical home `s3://ade-corpus-snapshots`.
-- **`ade_core_interop` tests `#[ignore]`-gated / offline-replay
-  by design (carried forward).** Live tip-agreement is not run in
-  CI; the new PHASE4-N-E `tx_submission_ingress` and
-  `local_tx_submission_ingress` integration tests run *non-ignored*
-  in CI because they operate on synthetic / B-track corpus bytes,
-  not against a live cardano-node socket.
-- No removed canonical types (n/a — no separate registry).
-- No removed registry rules (expected: 0; actual: 0). PHASE4-N-E
-  added `DC-MEM-03` and `DC-MEM-04`; registry total stays **175**
-  at HEAD.
+- No removed canonical types (n/a — no separate registry; canonical
+  types at HEAD = 380, unchanged).
+- No removed registry rules (expected: 0; actual: 0). **PHASE4-N-E
+  S6 added no registry rule;** registry total stays **175** at HEAD.
 - **All commit subjects in this regen carry a conventional-commits
-  prefix.** The 5 PHASE4-N-E commits are `feat(ledger)` /
-  `test(testkit)` / `feat(ledger)` / `feat(interop)` /
-  `feat(interop)`; `52642e5` is `docs(grounding)`. **All 5 N-E
-  commits + `52642e5` carry the repo-required `Co-Authored-By`
-  model-attribution trailer** (per the CLAUDE.md project override
-  for the bounty trailer ratio).
+  prefix.** The 2 PHASE4-N-E S6 commits are `feat(interop)` and
+  `fix(interop)`; `350130e` is `docs(grounding)`. **All 3 commits
+  in the `350130e..caa5ce8` span carry the repo-required
+  `Co-Authored-By` model-attribution trailer** (per the CLAUDE.md
+  project override for the bounty trailer ratio).
 
 ---
 
@@ -859,13 +899,13 @@ structured registry is the authoritative source.
 Regenerate via `/head-deltas <baseline>` or by re-running the
 `head-deltas-generator` agent with the same baseline. Baseline lives
 in `.idd-config.json` `head_deltas_baseline` (still `d509f02` —
-**this is a cluster-level refresh after a code-complete cluster, not
-a phase boundary, so the baseline is unchanged**). Update the
-baseline on the next phase boundary (Phase 4 close). Note the
-commit-hash rewrite caveat at the top — re-derive hashes from
-`git log` at each regen rather than carrying them forward. This
-regen is cut at committed HEAD `43fcc31` (PHASE4-N-E S5). The prior
-regen narrated HEAD `168ac02` (snapshot-loader follow-ups); the new
-span is `168ac02..43fcc31` — 6 commits (`52642e5` post-WRITEBACK
-grounding refresh + archive moves, `32c1ee6` N-E S1, `2d0c918` N-E
-S2, `509d714` N-E S3, `ca3f23a` N-E S4, `43fcc31` N-E S5).
+**this is a cluster-close grounding refresh, not a phase boundary,
+so the baseline is unchanged**). Update the baseline on the next
+phase boundary (Phase 4 close). Note the commit-hash rewrite caveat
+at the top — re-derive hashes from `git log` at each regen rather
+than carrying them forward. This regen is cut at working HEAD
+`caa5ce8` (PHASE4-N-E S6 hardening). The prior regen narrated HEAD
+`43fcc31` (PHASE4-N-E S5); the new span is `43fcc31..caa5ce8` — 3
+commits (`350130e` post-N-E-S5 grounding refresh, `d1068b3` N-E S6
+live binary, `caa5ce8` N-E S6 retry-on-timeout + elapsed-time
+logging fix + CE-N-E-6 live-evidence log).
