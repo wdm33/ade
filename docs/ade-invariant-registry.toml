@@ -31,7 +31,7 @@ status = "enforced"
 authority_surface = "BLUE authoritative state transitions"
 cluster = "CL-LEDGER-VERDICT"
 evidence = ["crates/ade_testkit/tests/ledger_determinism.rs uses ade_ledger::fingerprint for byte-identical state comparison across all 7 eras", "crates/ade_testkit/tests/consensus_stream_replay.rs replays the canonical chain-selector stream twice and asserts byte-identical event lists and final orchestrator state — closes T-DET-01 for the consensus subset"]
-strengthened_in = ["PHASE4-N-B", "PHASE4-B1", "PHASE4-B2", "PHASE4-N-C", "PHASE4-N-G", "PHASE4-N-H"]
+strengthened_in = ["PHASE4-N-B", "PHASE4-B1", "PHASE4-B2", "PHASE4-N-C", "PHASE4-N-G", "PHASE4-N-H", "PHASE4-N-I"]
 
 [[rules]]
 id = "T-ENC-01"
@@ -2560,7 +2560,8 @@ ci_script = "ci/ci_check_admitted_block_closure.sh, ci/ci_check_receive_reducer_
 status = "enforced"
 authority_surface = "receive-side block admission gate"
 cluster = "PHASE4-N-H"
-evidence = ["AdmittedBlock has a private constructor reachable only from admit_via_block_validity. The reducer's BlockDelivered branch runs admit_via_block_validity, persists through ChainDbWrite, and only then commits state. Failure on validity invalid leaves state unchanged (test receive_apply_block_delivered_validity_invalid_rejects).", "RollBackward returns RollbackOutOfScope per Path A scope; receive state stays consistent (test receive_apply_rollback_returns_out_of_scope).", "ChainDbWrite trait takes AdmittedBlock by value; no path persists raw bytes."]
+strengthened_in = ["PHASE4-N-I"]
+evidence = ["AdmittedBlock has a private constructor reachable only from admit_via_block_validity. The reducer's BlockDelivered branch runs admit_via_block_validity, persists through ChainDbWrite, and only then commits state. Failure on validity invalid leaves state unchanged (test receive_apply_block_delivered_validity_invalid_rejects).", "RollBackward returns RollbackOutOfScope per Path A scope; receive state stays consistent (test receive_apply_rollback_returns_out_of_scope).", "ChainDbWrite trait takes AdmittedBlock by value; no path persists raw bytes.", "PHASE4-N-I strengthening: admit + rollback symmetry — every rollback materializes via the same block_validity authority (replay-forward fold composes block_validity per block). materialize_rolled_back_state is the SOLE pub fn returning (LedgerState, PraosChainDepState) — CN-STORE-07 mirrors this admission gate for the rollback path."]
 attack_rationale = "A peer that can sneak unvalidated bytes into our ChainDb pollutes the ledger downstream and forces divergence from the rest of the network."
 evidence_notes = "Enforcement is type-level: AdmittedBlock token has a private constructor reachable only from a block_validity::Valid branch; the ChainDb-write wrapper takes AdmittedBlock by value. AdmittedBlock is deliberately a distinct type from AcceptedBlock to keep producer/receive gates non-interfering."
 
@@ -2623,7 +2624,8 @@ ci_script = "ci/ci_check_receive_reducer_closure.sh, ci/ci_check_receive_replay_
 status = "enforced"
 authority_surface = "receive-side session transcript"
 cluster = "PHASE4-N-H"
-evidence = ["End-to-end integration test receive_session_transcript_replay_byte_identical drives a synthetic ForkChoiceSignal + BatchDeliveryEvent stream through the GREEN adapter + BLUE reducer + InMemoryChainDb twice and asserts identical (ledger fingerprint, ChainDb tip slot, ChainDb tip hash).", "Reducer-level determinism is covered by receive_apply_replay_byte_identical_over_corpus."]
+strengthened_in = ["PHASE4-N-I"]
+evidence = ["End-to-end integration test receive_session_transcript_replay_byte_identical drives a synthetic ForkChoiceSignal + BatchDeliveryEvent stream through the GREEN adapter + BLUE reducer + InMemoryChainDb twice and asserts identical (ledger fingerprint, ChainDb tip slot, ChainDb tip hash).", "Reducer-level determinism is covered by receive_apply_replay_byte_identical_over_corpus.", "PHASE4-N-I strengthening: the receive transcript now includes the rollback transition. The RollBackward branch is deterministic over (target_point, snapshot_reader, block_source); test rollback_then_continue_admit_equals_straight_line_admit proves snapshot+rollback yields the same fingerprint as straight-line admit."]
 
 [[rules]]
 id = "CN-PROTO-07"

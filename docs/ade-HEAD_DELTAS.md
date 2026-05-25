@@ -5,8 +5,8 @@
 > `.idd-config.json` (`head_deltas_baseline`).
 
 > Baseline: `d509f02` (Phase 3 handoff snapshot, 2026-04-15)
-> HEAD: `efe1fb9` (feat(interop): live_block_follow_session + CE-N-H-6 procedure (PHASE4-N-H S6), 2026-05-26)
-> 170 commits, 11,425 files changed, +203,505 / −7,233,633 lines
+> HEAD: `75f75da` (feat(ledger): wire RollBackward → close DC-CONS-20 (PHASE4-N-I S6), 2026-05-26)
+> 177 commits, 11,447 files changed, +207,847 / −7,233,633 lines
 
 Headline numbers note: the massive negative line count is dominated by
 the **corpus relayout** under `corpus/snapshots/` and the deletion of
@@ -19,152 +19,170 @@ far smaller — the per-crate breakdown in §3 is the representative view.
 > history that has since been rewritten; all hashes below are verbatim
 > from `git log d509f02..HEAD` at this HEAD.
 
-> **PHASE4-N-H cluster close note (newest thread).** This regen is cut
-> at HEAD `efe1fb9`. Since the prior grounding-doc refresh `2adfb45`
-> (which closed PHASE4-N-G — archive cluster + refresh
+> **PHASE4-N-I cluster close note (newest thread).** This regen is cut
+> at HEAD `75f75da`. Since the prior grounding-doc refresh `f143984`
+> (which closed PHASE4-N-H — archive cluster + refresh
 > CODEMAP/SEAMS/HEAD_DELTAS/TRACEABILITY), **six new commits have
-> landed** — the **PHASE4-N-H cluster** (S1 → S6) closing the
-> receive-side header→body bridge under the Path A scope split
-> (admit-only; rollback deferred to a follow-on ledger-snapshot
-> cluster). N-H is the symmetric receive-side counterpart to N-C
-> (producer) + N-G (producer-side server response paths): bytes flow
-> from a peer's `RollForward` (announced header) + `BlockDelivered`
-> (body) through the BLUE receive reducer → `block_validity` (B1
-> authority) → `AdmittedBlock` token → ChainDb. Sequence: `b019ee3`
-> (S1, **BLUE foundation** — new submodule `ade_ledger::receive` with
-> three new files: `admitted.rs` (`AdmittedBlock` type-level admission
-> gate, ~257 LOC — private constructor reachable only from
-> `admit_via_block_validity`, the wrapper around `block_validity` that
-> returns `Ok(AdmittedBlock)` iff `BlockValidityVerdict::Valid`; a
-> deliberately distinct token from N-C's `AcceptedBlock` so
-> producer/receive gates are mechanically non-interfering),
-> `chain_write.rs` (narrow `ChainDbWrite` trait taking `AdmittedBlock`
-> by value, ~96 LOC; closed `ChainWriteError::{SlotConflict, Underlying}`
-> + `ChainWriteErrorKind` static-tag taxonomy — keeps the trait BLUE
-> without leaking `ade_runtime` error types), `events.rs` (closed
-> sums `ReceiveEvent::{RollForward, RollBackward, BlockDelivered}` +
-> `ReceiveEffect` + `ReceiveError` + `NoOpReason` + `TipPoint` +
-> `TargetPoint`, ~220 LOC — receive-relevant subset of N-A
-> signals/events; locally-originated chain-sync/block-fetch outputs
-> are NOT constructible, the CN-PROTO-07 closure), and
-> `pending_header_cache.rs` (~169 LOC, BTreeMap-indexed header-bytes
-> cache keyed `(slot, block_hash)` for the announce-then-deliver
-> sequence). New CI gate `ci_check_admitted_block_closure.sh` (~107
-> LOC); **6 new registry rules appended at `declared`** —
-> `CN-CONS-08`, `DC-CONS-19`, `DC-CONS-20`, `DC-PROTO-09`,
-> `CN-PROTO-07`, `RO-LIVE-02` (196 → 202); `CN-PROTO-07` flipped to
-> `enforced` at S1). `0ecf22f` (S2, **BLUE** — new file
-> `ade_ledger::receive::reducer` (~628 LOC): pure total transition
-> `receive_apply(state, event, deps, chain_write) -> Result<ReceiveEffect, ReceiveError>`
-> + `receive_apply_sequence` driver. `RollForward` mutates only
-> `state.pending_headers` (Invariant I-6 — never touches
-> `ledger`/`chain_dep`/`chain_write`); `BlockDelivered` decodes the
-> body, looks up cached header at `(slot, block_hash)`,
-> `admit_via_block_validity` composes `block_validity`, persists
-> through `ChainDbWrite`, commits new `(ledger, chain_dep)` atomically
-> on `Valid`, evicts the consumed header; failure leaves state
-> unchanged. `RollBackward` returns `Err(ReceiveError::RollbackOutOfScope)`
-> per the Path A scope edge — the rollback half is blocked on a
-> separate ledger-snapshot cluster. New CI gate
-> `ci_check_receive_reducer_closure.sh`; **`CN-CONS-08` +
-> `DC-CONS-19` flipped to `enforced`**). `c584691` (S3, **GREEN** —
-> two new GREEN files in `ade_runtime::receive`:
-> `events_to_state.rs` (~209 LOC) lifts N-A `ForkChoiceSignal` +
-> `BatchDeliveryEvent` values into the BLUE `ReceiveEvent` stream
-> (variants that aren't state-changing — `BatchStarted`, `NoBlocks`,
-> `BatchCompleted`, `Intersected`, `NoIntersection` — return `None`;
-> `header_bytes`/`block_bytes` are NEVER decoded here — pass-through
-> discipline preserves the BLUE reducer's `BlockDelivered` branch as
-> the canonical decode site); `in_memory_chain_write.rs` (~199 LOC)
-> wraps a borrowed `&dyn ChainDb` and exposes `ChainDbWrite::write_admitted`,
-> decoding the `AdmittedBlock` bytes once via `decode_block` to
-> extract `(slot, hash)` for the `StoredBlock` key, then calling
-> `ChainDb::put_block`; maps `ChainDbError` → BLUE `ChainWriteError`.
-> Transcript replay test
-> `crates/ade_runtime/tests/receive_session_transcript_replay.rs`
-> (~175 LOC) drives a synthetic `ForkChoiceSignal` + `BatchDeliveryEvent`
-> stream through GREEN adapter + BLUE reducer + InMemoryChainDb twice
-> and asserts identical `(ledger fingerprint, ChainDb tip slot,
-> ChainDb tip hash)`. New CI gate
-> `ci_check_receive_replay_purity.sh`; **`DC-PROTO-09` flipped to
-> `enforced`**). `1d06089` (S4, **RED** — new file
-> `ade_runtime::receive::orchestrator` (~432 LOC): per-peer N2N
-> receive orchestrator — pure state-driver, no socket I/O. Decodes
-> inbound chain-sync (client role) + block-fetch (client role) wire
-> frames via existing PHASE4-N-A codecs, lifts via S3's GREEN
-> adapter, calls BLUE `receive_apply`. Multi-peer: per-peer state is
-> independent; single shared `&dyn ChainDb` is the only cross-peer
-> coordination point (two peers receiving the same block both
-> succeed — `InMemoryChainDb` / `PersistentChainDb` are idempotent on
-> byte-identity). Key-boundary doctrine: orchestrator MUST NOT
-> import from `crate::producer::signing` / `producer::broadcast` /
-> `producer::scheduler` — receive and producer pipelines stay
-> independent. Integration test
-> `crates/ade_runtime/tests/receive_two_peer_independence.rs`
-> (~205 LOC). New CI gate
-> `ci_check_receive_orchestrator_no_producer_dep.sh`;
-> **`DC-PROTO-06.strengthened_in += "PHASE4-N-H"`** — receive-side
-> client-role transitions extend the rule's session-replay-equivalence
-> scope alongside N-A's client transitions and N-G's server
-> transitions). `3973261` (S5, **mechanical cross-impl evidence** —
-> new `crates/ade_runtime/tests/receive_pipeline_corpus_drive.rs`
-> (~228 LOC, CE-N-H-5 mechanical adapter) drives the full S4
-> pipeline over the Conway-576 corpus block sequence: asserts every
-> block admits through the full receive pipeline; ChainDb tip equals
-> the expected `(slot, hash)` after each admission; stored bytes equal
-> corpus bytes byte-identically; LedgerState fingerprint changes on
-> admission. This is the mechanical pre-condition closing RO-LIVE-02's
-> bytes-shape claim against a real Cardano corpus, independent of any
-> external Haskell peer). `efe1fb9` (S6, **operator-action evidence**
-> — new **RED** binary `ade_core_interop::live_block_follow_session`
-> (~136 LOC, CE-N-H-6 operator-action evidence) modeled on
-> `live_block_fetch_session` (N-G) and `live_block_production_session`
-> (N-C): hermetic-default + `--connect` stub for the tokio socket
-> bridge wiring; build-and-start test
-> `crates/ade_core_interop/tests/live_block_follow_session.rs`
-> (~61 LOC); operator procedure
-> `docs/clusters/completed/PHASE4-N-H/CE-N-H-6_PROCEDURE.md`; new CI
-> gate `ci_check_receive_paths_corpus_present.sh`; **`RO-LIVE-02` set
-> to `partial`** with `open_obligation =
-> "blocked_until_operator_peer_available"` — mechanical
-> pre-condition closed by S5's `receive_pipeline_corpus_drive`; the
-> live half is blocked on a private Haskell peer per the documented
-> conditional-closure pattern (mirrors N-C `CN-CONS-06`, N-G
-> `RO-LIVE-01`, N-E `CE-NODE-N2C-LTX`)). **One new BLUE submodule**
-> (`ade_ledger::receive` with `admitted` + `events` + `chain_write` +
-> `pending_header_cache` + `reducer`), **one new GREEN+RED submodule**
-> (`ade_runtime::receive` with `events_to_state` (GREEN) +
-> `in_memory_chain_write` (GREEN) + `orchestrator` (RED)), **one new
-> RED binary** (`live_block_follow_session`), **6 new registry rules**
-> (all `cluster = "PHASE4-N-H"`: `CN-CONS-08` `enforced`,
-> `DC-CONS-19` `enforced`, `DC-CONS-20` `declared` with
-> `open_obligation = "rollback_side_blocked_until_ledger_snapshot_cluster"`,
-> `DC-PROTO-09` `enforced`, `CN-PROTO-07` `enforced`, `RO-LIVE-02`
-> `partial` with `open_obligation = "blocked_until_operator_peer_available"`),
-> **1 strengthening** (`DC-PROTO-06`), **5 new CI scripts** (the 48th
-> → 52nd: `ci_check_admitted_block_closure.sh`,
-> `ci_check_receive_reducer_closure.sh`,
-> `ci_check_receive_replay_purity.sh`,
-> `ci_check_receive_orchestrator_no_producer_dep.sh`,
-> `ci_check_receive_paths_corpus_present.sh`), **no new cross-crate
-> dep edges** — the N-G `ade_runtime → ade_network` production edge
-> is reused (the orchestrator dispatches existing N-A codecs); the
-> N-C `ade_runtime → ade_ledger` edge carries the new BLUE
-> `receive::*` types. **Two `open_obligation` entries recorded**:
-> `DC-CONS-20` (rollback-side ledger-snapshot dependency) and
-> `RO-LIVE-02` (Haskell peer live evidence). **Cluster status at
-> HEAD: closed mechanically; CE-N-H-6 live half open as a registry
-> obligation; DC-CONS-20 rollback half deferred to a follow-on
-> cluster per the Path A scope split**, mirroring the N-C / N-G / N-E
-> conditional-closure patterns. **Cluster directory is already
-> archived to `docs/clusters/completed/PHASE4-N-H/`** (8 files:
-> `cluster.md` + `N-H-S1.md` through `N-H-S6.md` +
-> `CE-N-H-6_PROCEDURE.md`; planning spillovers
-> `docs/planning/phase4-n-h-cluster-slice-plan.md` +
-> `docs/planning/receive-side-bridge-invariants.md`). **No
-> CODEMAP/SEAMS/TRACEABILITY refresh yet** for the N-H cluster —
+> landed** — the **PHASE4-N-I cluster** (S1 → S6) shipping the
+> in-memory snapshot + replay-forward rollback infrastructure that
+> closes the rollback-side `open_obligation` left dangling by N-H. N-I
+> is the rollback half of N-H: where N-H's receive reducer returned
+> `Err(ReceiveError::RollbackOutOfScope)` on every peer `RollBackward`
+> per the Path A scope split, N-I introduces the BLUE rollback module
+> tree (`ade_ledger::rollback` with `traits`, `error`, `materialize`,
+> `commit`), the GREEN/RED runtime support
+> (`ade_runtime::rollback` with `cadence`, `in_memory_cache`,
+> `chaindb_block_source`, `snapshot_writer`), and the S6 wiring that
+> flips `DC-CONS-20` from `declared` (admit-side only) to `enforced`
+> (atomic admit-side + rollback-side over ChainDb + LedgerState +
+> PraosChainDepState). Sequence: `0e7e9ee` (S1, **BLUE foundation** —
+> new submodule `ade_ledger::rollback` with two new files:
+> `traits.rs` (~88 LOC) declaring the narrow read-only `SnapshotReader`
+> + `BlockSource` traits the materialization driver depends on
+> (production impls live in `ade_runtime::rollback`; tests pass
+> in-memory fakes through the same single composition);
+> `error.rs` (~98 LOC) declaring closed sums `MaterializeError`
+> (`RollbackTooDeep`, `BlockNotInRange`, `BlockValidityFailed`) +
+> `CommitRollbackError` (`Materialize`, `ChainWriteFailed`). Module
+> registered in `lib.rs`. No CI gate yet — the closure CI gates are
+> introduced when the bodies land in S2/S4). `0efdce3` (S2, **BLUE
+> materialization driver** — new file
+> `ade_ledger::rollback::materialize` (~402 LOC) declaring the SOLE
+> `pub fn` in the project returning the rolled-back
+> `(LedgerState, PraosChainDepState)` tuple:
+> `materialize_rolled_back_state(snapshot_reader, block_source, target,
+> era_schedule, ledger_view) -> Result<(LedgerState, PraosChainDepState),
+> MaterializeError>`. Single-authority discipline (CN-STORE-07):
+> looks up nearest-LE snapshot via `SnapshotReader::nearest_le`,
+> reads blocks in `(snapshot_slot, target_slot]` via
+> `BlockSource::blocks_in_range`, replays via the existing
+> `block_validity` authority (the same authority N-H's admit branch
+> uses) wrapped in `apply_block_with_verdicts` (which inherits the
+> unique epoch-boundary authority per `rules.rs:244-250` — no parallel
+> epoch path). Pure replay-forward fold; no I/O. New CI gate
+> `ci_check_rollback_materialize_closure.sh` (~80 LOC). **Registry**:
+> `DC-CONS-22` (replay-forward correctness) + `CN-STORE-07` (single
+> materialize authority) flipped to `enforced` at S2). `02b5e31`
+> (S3, **BLUE atomic commit helper + ChainDbWrite trait extension** —
+> new file `ade_ledger::rollback::commit` (~200 LOC):
+> `commit_rollback<W: ChainDbWrite>(state, target_slot, new_ledger,
+> new_chain_dep, chain_write) -> Result<(), CommitRollbackError>` —
+> irreversible-step-first staged commit shape: calls
+> `chain_write.rollback_to_slot(target_slot)` first (the only
+> non-reversible step); if it fails, `state` is unchanged and the
+> error is returned; if it succeeds, swaps in `(new_ledger,
+> new_chain_dep)` and resets `state.pending_headers`. The
+> `ChainDbWrite` trait (N-H S1) is extended with a second method
+> `rollback_to_slot(slot) -> Result<(), ChainWriteError>` that
+> discards all blocks at slots strictly greater than `slot` (rolling
+> beyond the empty tip is `Ok(())` per the ChainDb contract). All
+> existing GREEN `in_memory_chain_write` + test fakes updated. No new
+> CI gate; closure is folded into the S2 gate + the existing
+> N-H `ci_check_receive_reducer_closure.sh` after S6). `3a9bab8` (S4,
+> **GREEN snapshot cadence + InMemorySnapshotCache + ChainDbBlockSource**
+> — new submodule `ade_runtime::rollback` with four new files:
+> `cadence.rs` (~143 LOC, GREEN — pure `SnapshotCadence` struct with a
+> single BLUE-structural field `every_n_blocks: u32` + pure decision
+> `should_snapshot_after_block(slot, block_no, params, last_snapshot)
+> -> bool`; operator-tunable cadence is explicitly out of scope per
+> DC-STORE-07), `in_memory_cache.rs` (~165 LOC, GREEN — BTreeMap-keyed
+> `InMemorySnapshotCache` implementing `SnapshotReader` with
+> `nearest_le` returning the largest key ≤ target; deterministic
+> iteration; no HashMap), `chaindb_block_source.rs` (~113 LOC, GREEN —
+> borrow-wrapper around `&dyn ChainDb` implementing the BLUE
+> `BlockSource` trait via `ChainDb::iter_from_slot`; pure projection,
+> no I/O), `snapshot_writer.rs` (~146 LOC, **placeholder for S5**).
+> Module registered in `lib.rs`. New CI gate
+> `ci_check_snapshot_cadence_purity.sh` (~77 LOC). **Registry**:
+> `DC-STORE-07` (snapshot cadence determinism) flipped to `enforced`
+> at S4). `e7add4d` (S5, **GREEN snapshot-write hook** —
+> `ade_runtime::rollback::snapshot_writer::maybe_capture_snapshot`
+> wires the cadence decision (S4) to the InMemorySnapshotCache (S4),
+> giving the scheduler / receive orchestrator a single point at which
+> to capture a snapshot of post-block-admit state. Pure: takes
+> `(cache, cadence, slot, block_no, state)` and conditionally calls
+> `cache.capture_from(slot, state)`. No new file beyond the S4
+> placeholder; no new CI gate; closure covered by the S4 cadence-purity
+> gate). `75f75da` (S6, **BLUE wiring — DC-CONS-20 closure** —
+> `ade_ledger::receive::reducer` extended with a new public type
+> `RollbackContext<'a>` (carrying `&'a dyn SnapshotReader` +
+> `&'a dyn BlockSource`) + a new `Option<&RollbackContext>` parameter
+> on `receive_apply`. When `Some`, the `RollBackward` arm calls the new
+> private function `roll_backward(state, target_point, chain_write,
+> era_schedule, ledger_view, ctx)`, which composes
+> `materialize_rolled_back_state` + `commit_rollback` atomically:
+> failure leaves state unchanged; success swaps ledger + chain_dep +
+> ChainDb tip atomically + resets pending headers. When `None`, the
+> arm retains the legacy `Err(RollbackOutOfScope)` behavior for
+> callers that haven't wired the rollback context yet. New integration
+> test `crates/ade_runtime/tests/receive_rollback_integration.rs`
+> (~445 LOC) drives the full pipeline: admit blocks → snapshot →
+> peer RollBackward → materialize + commit → continue admitting →
+> assert resulting ledger fingerprint equals the straight-line admit
+> fingerprint (`rollback_then_continue_admit_equals_straight_line_admit`
+> — the canonical DC-CONS-22 evidence). `ade_runtime::receive::orchestrator`
+> + `in_memory_chain_write` updated for the new trait method. **No new
+> CI gate**; the existing `ci_check_receive_reducer_closure.sh` +
+> `ci_check_rollback_materialize_closure.sh` cover the new wiring.
+> **Registry**: `DC-CONS-20` flipped from `declared` (admit-side only)
+> to `enforced` (admit-side + rollback-side, lockstep over ChainDb +
+> LedgerState + PraosChainDepState); `cluster = "PHASE4-N-H + PHASE4-N-I"`;
+> `strengthened_in = ["PHASE4-N-I"]`; `open_obligation` removed.
+> **DC-CONS-21** (persistent snapshot encode/decode round-trip) remains
+> `declared` with `open_obligation = "persistent_ledger_snapshot_encoding_follow_on_cluster"`
+> per the explicit cluster scope decision: N-I ships an **in-memory**
+> SnapshotReader; persistent on-disk encoding is carved out to a
+> follow-on cluster because the full canonical LedgerState encoder
+> (~1500-2000 LoC of field-walk code mirroring `ade_ledger::fingerprint`)
+> is too large to ship in one slice. **One new BLUE submodule**
+> (`ade_ledger::rollback` with `traits` + `error` + `materialize` +
+> `commit`), **one new GREEN+RED submodule** (`ade_runtime::rollback`
+> with `cadence` (GREEN) + `in_memory_cache` (GREEN) +
+> `chaindb_block_source` (GREEN) + `snapshot_writer` (GREEN)), **one
+> ChainDbWrite trait extension** (`rollback_to_slot` method added in
+> S3 to the N-H BLUE trait), **4 new registry rules appended at
+> sketch close, with effects on cluster close** (`DC-CONS-21`
+> `declared` with persistent-encoding `open_obligation`; `DC-CONS-22`
+> `enforced` at S2; `CN-STORE-07` `enforced` at S2; `DC-STORE-07`
+> `enforced` at S4) + **1 N-H rule status flip** (`DC-CONS-20`
+> `declared` → `enforced` at S6, removing its
+> `open_obligation`), **2 new CI scripts** (the 53rd → 54th:
+> `ci_check_rollback_materialize_closure.sh`,
+> `ci_check_snapshot_cadence_purity.sh`), **no new cross-crate dep
+> edges** — the N-C `ade_runtime → ade_ledger` production edge
+> carries the new BLUE `rollback::*` types; the N-D ChainDb traits
+> are reused by `ChainDbBlockSource`. **One `open_obligation` retained**:
+> `DC-CONS-21` (persistent ledger snapshot encoding, blocked on
+> follow-on cluster). **Cluster status at HEAD: closed mechanically;
+> DC-CONS-21 persistent-encoding half deferred to a follow-on cluster
+> per the explicit scope decision**, mirroring the N-H Path A scope
+> split pattern. **Cluster directory NOT YET archived** to
+> `docs/clusters/completed/PHASE4-N-I/` — still at active
+> `docs/clusters/PHASE4-N-I/` (8 files: `cluster.md` + `N-I-S1.md`
+> through `N-I-S6.md`; planning spillovers
+> `docs/planning/phase4-n-i-cluster-slice-plan.md` +
+> `docs/planning/ledger-snapshot-rollback-invariants.md`). **No
+> CODEMAP/SEAMS/TRACEABILITY refresh yet** for the N-I cluster —
 > those three docs are stale relative to this HEAD_DELTAS regen and
 > must be regenerated in the grounding ripple immediately following.
+
+> **PHASE4-N-H cluster close note (prior thread, carried forward).**
+> Closed at HEAD `efe1fb9` and archived to
+> `docs/clusters/completed/PHASE4-N-H/` (8 files) by `f143984`.
+> Six slices S1 → S6 shipped the receive-side header→body bridge
+> under the Path A scope split (admit-only; rollback deferred to N-I).
+> One new BLUE submodule `ade_ledger::receive` (with `admitted` +
+> `chain_write` + `events` + `pending_header_cache` + `reducer`), one
+> new GREEN+RED submodule `ade_runtime::receive` (with `events_to_state`
+> + `in_memory_chain_write` + `orchestrator`), one new RED binary
+> `live_block_follow_session`. 6 new registry rules (`CN-CONS-08`,
+> `DC-CONS-19`, `DC-CONS-20`, `DC-PROTO-09`, `CN-PROTO-07`,
+> `RO-LIVE-02`); 1 strengthening (`DC-PROTO-06`); 5 new CI scripts;
+> no new cross-crate dep edges. Two `open_obligation` entries
+> recorded at N-H close: `DC-CONS-20`
+> (`rollback_side_blocked_until_ledger_snapshot_cluster`) — **closed
+> by PHASE4-N-I S6** — and `RO-LIVE-02`
+> (`blocked_until_operator_peer_available`).
 
 > **PHASE4-N-G cluster close note (prior thread, carried forward).**
 > Closed at HEAD `a280954` and archived to
@@ -244,168 +262,130 @@ far smaller — the per-crate breakdown in §3 is the representative view.
 > at this HEAD.
 
 > **B5 / B4 / B3F / B3 / B2 / B1 / N-D / N-B / N-A / PHASE4-N-E /
-> PROPOSAL-PROCEDURES-DECODE / PHASE4-N-C / PHASE4-N-G cluster notes
-> (carried forward).** All closed and archived at
+> PROPOSAL-PROCEDURES-DECODE / PHASE4-N-C / PHASE4-N-G / PHASE4-N-H
+> cluster notes (carried forward).** All closed and archived at
 > `docs/clusters/completed/<NAME>/`.
 
-The delta now covers twenty-eight threads of work. The newest thread —
-the **PHASE4-N-H cluster** (`b019ee3` → `efe1fb9`, 6 commits) — sits
-on the post-N-G grounding refresh `2adfb45`, which closed +
-archived PHASE4-N-G. In rough proportion of the substantive change
+The delta now covers twenty-nine threads of work. The newest thread —
+the **PHASE4-N-I cluster** (`0e7e9ee` → `75f75da`, 6 commits) — sits
+on the post-N-H grounding refresh `f143984`, which closed +
+archived PHASE4-N-H. In rough proportion of the substantive change
 budget:
 
-0. **PHASE4-N-H (receive-side header→body bridge — the symmetric
-   receive-side counterpart to N-C producer + N-G producer-side
-   server response paths; admit-only under the Path A scope split,
-   rollback deferred to a follow-on ledger-snapshot cluster) — closed
-   in 6 slices.** S1 (`b019ee3`, **BLUE foundation**) introduces the
-   new submodule `ade_ledger::receive` with four new files:
-   `admitted.rs` (`AdmittedBlock` type-level admission gate —
-   private constructor reachable only from `admit_via_block_validity`,
-   which composes the existing B1 `block_validity` authority and
-   returns `Ok(AdmittedBlock)` iff `BlockValidityVerdict::Valid`;
-   deliberately distinct from N-C's `AcceptedBlock` so producer/receive
-   gates are mechanically non-interfering — cross-use is a type
-   error), `chain_write.rs` (narrow `ChainDbWrite` trait taking
-   `AdmittedBlock` by value; closed `ChainWriteError::{SlotConflict,
-   Underlying}` with a static `ChainWriteErrorKind` tag taxonomy that
-   keeps the trait BLUE without leaking `ade_runtime` error types),
-   `events.rs` (closed sums `ReceiveEvent::{RollForward,
-   RollBackward, BlockDelivered}` + `ReceiveEffect` + `ReceiveError`
-   + `NoOpReason` + `TipPoint` + `TargetPoint` — receive-relevant
-   subset of N-A signals/events; locally-originated
-   chain-sync/block-fetch outputs RequestNext/RequestRange/
-   ClientDone/FindIntersect/Done are NOT constructible — the
-   CN-PROTO-07 closure), and `pending_header_cache.rs`
-   (BTreeMap-indexed header-bytes cache keyed `(slot, block_hash)`
-   for the chain-sync announce-then-deliver sequence — RollForward
-   carries header_bytes, BlockDelivered later carries body_bytes for
-   the matching `(slot, block_hash)`). New CI gate
-   `ci_check_admitted_block_closure.sh`. **Registry**: 6 rules
-   appended at `declared` — `CN-CONS-08`, `DC-CONS-19`, `DC-CONS-20`,
-   `DC-PROTO-09`, `CN-PROTO-07`, `RO-LIVE-02` (196 → 202);
-   `CN-PROTO-07` flipped to `enforced` (closure-gated by the
-   admitted-block check + exhaustive-match round-trip tests on each
-   closed sum).
-   S2 (`0ecf22f`, **BLUE**) introduces the receive bridge's pure
-   total transition in new file `ade_ledger::receive::reducer`
-   (~628 LOC): `receive_apply(state, event, deps, chain_write) ->
-   Result<ReceiveEffect, ReceiveError>` + `receive_apply_sequence`
-   driver consuming one `ReceiveEvent` per call. `RollForward`
-   mutates only `state.pending_headers` (Invariant I-6 — never
-   touches `state.ledger`, `state.chain_dep`, or `chain_write`);
-   `BlockDelivered` decodes the body via `decode_block`, looks up
-   the cached header at `(slot, block_hash)`, runs
-   `admit_via_block_validity` (which composes `block_validity`),
-   persists the resulting `AdmittedBlock` through `ChainDbWrite::write_admitted`,
-   commits the new `(ledger, chain_dep)` atomically on `Valid`,
-   evicts the consumed header; on `HeaderBodyMismatch` (cache miss
-   or mismatched cached header) or `BlockValidityError::Invalid` the
-   state is unchanged. `RollBackward` returns
-   `Err(ReceiveError::RollbackOutOfScope)` per the Path A scope
-   edge — the rollback half requires ledger rollback infrastructure
-   (LedgerState encode/decode + snapshot+replay-forward driver) that
-   does not yet exist; a follow-on rollback cluster closes that
-   half. New CI gate `ci_check_receive_reducer_closure.sh`.
-   Registry: `CN-CONS-08` + `DC-CONS-19` flipped to `enforced`.
-   S3 (`c584691`, **GREEN**) introduces two pure GREEN adapter files
-   in new submodule `ade_runtime::receive`: `events_to_state.rs`
-   (~209 LOC) lifts N-A `ForkChoiceSignal` (chain-sync) +
-   `BatchDeliveryEvent` (block-fetch) values into the BLUE
-   `ReceiveEvent` stream — variants that aren't state-changing for
-   the receive bridge (`BatchStarted`, `NoBlocks`, `BatchCompleted`,
-   `Intersected`, `NoIntersection`) return `None`; the orchestrator
-   (S4) filters these out before calling `receive_apply`.
-   Pass-through discipline: `header_bytes` and `block_bytes` are
-   NEVER decoded in the adapter — the BLUE reducer's `BlockDelivered`
-   branch is the canonical decode site. `in_memory_chain_write.rs`
-   (~199 LOC) wraps a borrowed `&dyn ChainDb` and exposes the BLUE
-   `ChainDbWrite::write_admitted` interface, decoding the
-   `AdmittedBlock` bytes once via `decode_block` to extract
-   `(slot, hash)` for the `StoredBlock` key, then calling
-   `ChainDb::put_block`; maps `ChainDbError` → BLUE `ChainWriteError`
-   shape. End-to-end test
-   `crates/ade_runtime/tests/receive_session_transcript_replay.rs`
-   (~175 LOC) drives a synthetic `ForkChoiceSignal` +
-   `BatchDeliveryEvent` stream through GREEN adapter + BLUE reducer
-   + InMemoryChainDb twice and asserts identical
-   `(ledger fingerprint, ChainDb tip slot, ChainDb tip hash)`. New
-   CI gate `ci_check_receive_replay_purity.sh`. Registry:
-   `DC-PROTO-09` flipped to `enforced`.
-   S4 (`1d06089`, **RED**) introduces the per-peer N2N receive
-   orchestrator in new file `ade_runtime::receive::orchestrator`
-   (~432 LOC): pure state-driver, no socket I/O (the tokio bridge
-   is operator-action work per S6). Decodes inbound chain-sync
-   (client role) + block-fetch (client role) wire frames via the
-   existing PHASE4-N-A codecs (`decode_chain_sync_message`,
-   `decode_block_fetch_message`), lifts via S3's GREEN adapter,
-   calls BLUE `receive_apply`. Multi-peer: per-peer state is
-   independent — `PerPeerReceiveState` holds the per-session
-   reducer state + handshake-negotiated versions; the only
-   cross-peer coordination point is the single shared `&dyn ChainDb`
-   (two peers receiving the same block both succeed —
-   `InMemoryChainDb` / `PersistentChainDb` are idempotent on
-   byte-identity, proven by
-   `crates/ade_runtime/tests/receive_two_peer_independence.rs`,
-   ~205 LOC). Key-boundary doctrine: the receive orchestrator MUST
-   NOT import from `crate::producer::signing` /
-   `crate::producer::broadcast` / `crate::producer::scheduler` —
-   receive and producer pipelines stay independent so receive
-   admission cannot accidentally observe producer secret-key custody.
-   New CI gate `ci_check_receive_orchestrator_no_producer_dep.sh`.
-   Registry: `DC-PROTO-06.strengthened_in += "PHASE4-N-H"` (receive-side
-   client-role transitions extend the rule's session-replay-equivalence
-   scope alongside N-A's client transitions and N-G's server transitions).
-   S5 (`3973261`, **mechanical cross-impl evidence**) ships the
-   cluster's bounty-facing surface independent of any external
-   Haskell peer. New
-   `crates/ade_runtime/tests/receive_pipeline_corpus_drive.rs`
-   (~228 LOC, CE-N-H-5 mechanical adapter) drives the full S4
-   pipeline over the Conway-576 corpus block sequence:
-   `receive_pipeline_corpus_drive_admits_every_block` asserts every
-   corpus block admits through the full receive pipeline;
-   `receive_pipeline_corpus_drive_chaindb_tip_matches_expected`
-   asserts ChainDb tip equals the expected `(slot, hash)` after
-   each admission; `receive_pipeline_corpus_drive_admitted_bytes_equal_corpus_bytes`
-   asserts stored bytes equal corpus bytes byte-identically;
-   `receive_pipeline_corpus_drive_ledger_fingerprint_changes_on_admit`
-   asserts LedgerState fingerprint changes on each admission. This
-   is the mechanical pre-condition closing RO-LIVE-02's bytes-shape
-   claim against a real Cardano corpus.
-   S6 (`efe1fb9`, **operator-action evidence**) ships the cluster's
-   live-half harness. New **RED** binary
-   `ade_core_interop::live_block_follow_session` (~136 LOC,
-   CE-N-H-6 operator-action evidence) modeled on
-   `live_block_fetch_session` (N-G S7) and
-   `live_block_production_session` (N-C S7): hermetic default mode
-   prints a readiness banner and exits 0 (no sockets, no operator
-   material read); `--connect` mode prints the wiring stub for the
-   tokio socket bridge driving the receive orchestrator (S4) against
-   a real peer. Args: `--network`, `--magic`, `--target`. Captures
-   `docs/clusters/PHASE4-N-H/CE-N-H-LIVE_<date>.log`
-   (operator-recorded). Build-and-start test
-   `crates/ade_core_interop/tests/live_block_follow_session.rs`
-   (~61 LOC). Operator procedure
-   `docs/clusters/completed/PHASE4-N-H/CE-N-H-6_PROCEDURE.md` mirrors
-   N-G's `CE-N-G-8_PROCEDURE.md` and N-C's `CE-N-C-8_PROCEDURE.md`.
-   New CI gate `ci_check_receive_paths_corpus_present.sh`. Registry:
-   **`RO-LIVE-02` set to `partial`** with `open_obligation =
-   "blocked_until_operator_peer_available"` — the mechanical
-   pre-condition is closed by S5's `receive_pipeline_corpus_drive`;
-   the live half is blocked on a private Haskell peer per the
-   documented conditional-closure pattern. **No new dep edge from
-   S6** — `ade_core_interop` already had its `ade_ledger` /
-   `ade_network` edges from N-E S4, N-G S7, and the workspace.
-1. **PHASE4-N-G (producer-side block-fetch + chain-sync server
-   response paths — the engineering bridge between N-C's
-   broadcast-queue output and a real Haskell cardano-node peer's
-   RequestRange / RequestNext) — closed at HEAD `a280954`, archived
-   at `2adfb45`.** Three new BLUE submodules
-   (`ade_ledger::producer::served_chain`, `ade_network::chain_sync::server`,
-   `ade_network::block_fetch::server`), two new GREEN files, two new
-   RED files, one new RED binary, 6 new registry rules, 7 new CI
-   scripts; one new non-dev dep edge (`ade_runtime → ade_network`).
-2. **PHASE4-N-C (last Tier-1 bounty deliverable — block-production
+0. **PHASE4-N-I (in-memory snapshot + replay-forward rollback — the
+   rollback half of PHASE4-N-H, closing the
+   `DC-CONS-20.open_obligation = "rollback_side_blocked_until_ledger_snapshot_cluster"`
+   that N-H carried; in-memory scope only, persistent on-disk encoding
+   deferred to a follow-on cluster per the explicit scope decision) —
+   closed in 6 slices.** S1 (`0e7e9ee`, **BLUE foundation**)
+   introduces the new submodule `ade_ledger::rollback` with two new
+   files: `traits.rs` (narrow read-only `SnapshotReader` +
+   `BlockSource` traits — production impls live in
+   `ade_runtime::rollback` per S4; tests pass in-memory fakes through
+   the same single composition) and `error.rs` (closed sums
+   `MaterializeError::{RollbackTooDeep, BlockNotInRange,
+   BlockValidityFailed}` + `CommitRollbackError::{Materialize,
+   ChainWriteFailed}` — no `Other`/`Misc` catchalls). Module
+   registered in `lib.rs`. No new CI gate yet; closure gates land
+   when the bodies do in S2/S4. **Registry**: 4 rules appended at
+   `declared` — `DC-CONS-21`, `DC-CONS-22`, `CN-STORE-07`,
+   `DC-STORE-07` (202 → 206 entries at HEAD).
+   S2 (`0efdce3`, **BLUE materialization driver**) declares the SOLE
+   `pub fn` in the project returning the rolled-back
+   `(LedgerState, PraosChainDepState)` tuple in new file
+   `ade_ledger::rollback::materialize`:
+   `materialize_rolled_back_state(snapshot_reader, block_source,
+   target, era_schedule, ledger_view) -> Result<(LedgerState,
+   PraosChainDepState), MaterializeError>`. Single-authority discipline
+   (CN-STORE-07): one `SnapshotReader::nearest_le` lookup; one
+   `BlockSource::blocks_in_range` read for the slot range
+   `(snapshot_slot, target_slot]`; per-block replay via the existing
+   `block_validity` authority (the same authority N-H's admit branch
+   uses) wrapped in `apply_block_with_verdicts`, which inherits the
+   unique epoch-boundary authority per `rules.rs:244-250` — no
+   parallel epoch path. Pure replay-forward fold. New CI gate
+   `ci_check_rollback_materialize_closure.sh`. Registry:
+   `CN-STORE-07` + `DC-CONS-22` flipped to `enforced`.
+   S3 (`02b5e31`, **BLUE atomic commit helper + ChainDbWrite trait
+   extension**) introduces new file `ade_ledger::rollback::commit`:
+   `commit_rollback<W: ChainDbWrite>(state, target_slot, new_ledger,
+   new_chain_dep, chain_write) -> Result<(), CommitRollbackError>` —
+   irreversible-step-first staged commit shape. The
+   `ChainDbWrite::rollback_to_slot(slot)` call is the only
+   non-reversible step; on failure, `state` is unchanged and the
+   error returns; on success, ledger + chain_dep swap atomically and
+   `state.pending_headers` resets. The narrow N-H BLUE `ChainDbWrite`
+   trait is extended with a second method `rollback_to_slot(slot) ->
+   Result<(), ChainWriteError>` discarding all blocks at slots
+   strictly greater than `slot` (rolling beyond empty tip is `Ok(())`
+   per the ChainDb contract). All existing GREEN
+   `in_memory_chain_write` + test fakes updated for the new method.
+   No new CI gate; closure folds into S2's gate + N-H's
+   `ci_check_receive_reducer_closure.sh` after S6.
+   S4 (`3a9bab8`, **GREEN snapshot cadence + InMemorySnapshotCache +
+   ChainDbBlockSource**) introduces the new submodule
+   `ade_runtime::rollback` with four new files: `cadence.rs`
+   (`SnapshotCadence` struct — single BLUE-structural field
+   `every_n_blocks: u32`; pure decision `should_snapshot_after_block`;
+   operator-tunable cadence explicitly out of scope per DC-STORE-07
+   until represented as anchored, replay-derivable runtime data),
+   `in_memory_cache.rs` (BTreeMap-keyed `InMemorySnapshotCache`
+   implementing the BLUE `SnapshotReader` trait via `nearest_le`
+   returning the largest key ≤ target; deterministic iteration; no
+   HashMap), `chaindb_block_source.rs` (borrow-wrapper around
+   `&dyn ChainDb` implementing `BlockSource` via
+   `ChainDb::iter_from_slot`; pure projection, no I/O),
+   `snapshot_writer.rs` (placeholder filled in S5). Module registered
+   in `lib.rs`. New CI gate `ci_check_snapshot_cadence_purity.sh`.
+   Registry: `DC-STORE-07` flipped to `enforced`.
+   S5 (`e7add4d`, **GREEN snapshot-write hook**) fills
+   `ade_runtime::rollback::snapshot_writer` with
+   `maybe_capture_snapshot(cache, cadence, slot, block_no, state)` —
+   pure, conditionally calls `cache.capture_from(slot, state)` when
+   the cadence decision returns true. Gives the scheduler / receive
+   orchestrator a single point at which to capture a snapshot of
+   post-block-admit state. No new file beyond the S4 placeholder; no
+   new CI gate.
+   S6 (`75f75da`, **BLUE wiring — DC-CONS-20 closure**) extends
+   `ade_ledger::receive::reducer` with a new public type
+   `RollbackContext<'a>` (carrying `&'a dyn SnapshotReader` +
+   `&'a dyn BlockSource`) + a new `Option<&RollbackContext>` parameter
+   on `receive_apply`. When `Some`, the `RollBackward` arm calls the
+   new private function `roll_backward(state, target_point,
+   chain_write, era_schedule, ledger_view, ctx)`, which composes
+   `materialize_rolled_back_state` + `commit_rollback` atomically:
+   failure leaves state unchanged; success swaps ledger + chain_dep +
+   ChainDb tip + resets pending headers in one structural transition.
+   When `None`, the arm retains the legacy `Err(RollbackOutOfScope)`
+   behavior for callers that haven't wired the rollback context yet.
+   New integration test
+   `crates/ade_runtime/tests/receive_rollback_integration.rs`
+   (~445 LOC) covers the rollback paths end-to-end:
+   `rollback_branch_returns_rolled_back_on_in_memory_snapshot`,
+   `rollback_branch_returns_rollback_too_deep_when_no_snapshot`,
+   `rollback_branch_state_unchanged_on_materialize_failure`,
+   `rollback_then_continue_admit_equals_straight_line_admit` (the
+   canonical DC-CONS-22 evidence — admit → snapshot → rollback →
+   continue admit yields a ledger fingerprint byte-identical to a
+   straight-line admit). `ade_runtime::receive::orchestrator` +
+   `in_memory_chain_write` updated for the new trait method. **No new
+   CI gate**; existing N-H + N-I S2 gates cover the wiring.
+   Registry: **`DC-CONS-20` flipped from `declared` to `enforced`**;
+   `cluster = "PHASE4-N-H + PHASE4-N-I"`;
+   `strengthened_in = ["PHASE4-N-I"]`; `open_obligation` removed.
+1. **PHASE4-N-H (receive-side header→body bridge — admit-only under
+   the Path A scope split; the rollback half is now closed by N-I) —
+   closed at HEAD `efe1fb9`, archived at `f143984`.** One new BLUE
+   submodule `ade_ledger::receive`, one new GREEN+RED submodule
+   `ade_runtime::receive`, one new RED binary
+   `live_block_follow_session`. 6 new registry rules; 1 strengthening
+   (`DC-PROTO-06`); 5 new CI scripts; no new cross-crate dep edges.
+2. **PHASE4-N-G (producer-side block-fetch + chain-sync server
+   response paths) — closed at HEAD `a280954`, archived at
+   `2adfb45`.** Three new BLUE submodules, two new GREEN files, two
+   new RED files, one new RED binary, 6 new registry rules, 7 new CI
+   scripts; one new non-dev dep edge.
+3. **PHASE4-N-C (last Tier-1 bounty deliverable — block-production
    authority) — closed at HEAD `694dd74`, archived at `df56e2d`.**
    New BLUE submodule `ade_ledger::producer`, new BLUE module
    `ade_ledger::block_body_hash`, new BLUE module pair
@@ -414,37 +394,37 @@ budget:
    `ade_runtime::producer` + GREEN `tick_assembler`, new RED binary
    `live_block_production_session`. 14 new rules; 8 new CI scripts;
    one new dep edge (`ade_runtime → ade_ledger`).
-3. **PROPOSAL-PROCEDURES-DECODE (last open governance-domain decode
+4. **PROPOSAL-PROCEDURES-DECODE (last open governance-domain decode
    seam) — closed in 2 slices.**
-4. **PHASE4-N-E S6 (live N2N tx-submission2 evidence binary) —
+5. **PHASE4-N-E S6 (live N2N tx-submission2 evidence binary) —
    cluster close.**
-5. **PHASE4-N-E S1–S5 (wire-level mempool ingress, Tier 1).**
-6. **Post-WRITEBACK testkit follow-ups (four commits, GREEN-scope).**
-7. **ENACTMENT-COMMITTEE-WRITEBACK — closed.**
-8. **ENACTMENT-COMMITTEE-FIDELITY — closed.**
-9. **DREP-VOTE-FIDELITY — closed.**
-10. **COMMITTEE-CRED-FIDELITY — closed.**
-11. **OQ5-CREDENTIAL-FIDELITY — closed.**
-12. **Phase 4 cluster B5 (Conway gov-cert accumulation) — closed.**
-13. **Phase 4 cluster B4 (Conway cert-state accumulation,
+6. **PHASE4-N-E S1–S5 (wire-level mempool ingress, Tier 1).**
+7. **Post-WRITEBACK testkit follow-ups (four commits, GREEN-scope).**
+8. **ENACTMENT-COMMITTEE-WRITEBACK — closed.**
+9. **ENACTMENT-COMMITTEE-FIDELITY — closed.**
+10. **DREP-VOTE-FIDELITY — closed.**
+11. **COMMITTEE-CRED-FIDELITY — closed.**
+12. **OQ5-CREDENTIAL-FIDELITY — closed.**
+13. **Phase 4 cluster B5 (Conway gov-cert accumulation) — closed.**
+14. **Phase 4 cluster B4 (Conway cert-state accumulation,
     fail-closed) — closed.**
-14. **Phase 4 cluster B3F (follow-up hardening) — committed.**
-15. **Phase 4 cluster B3 (Conway value-conservation accounting) —
+15. **Phase 4 cluster B3F (follow-up hardening) — committed.**
+16. **Phase 4 cluster B3 (Conway value-conservation accounting) —
     closed.**
-16. **Phase 4 cluster B2 (tx validity agreement) — closed.**
-17. **Phase 4 cluster B1 (full block validity agreement) — closed.**
-18. **Phase 4 cluster N-A (network mini-protocols) — closed.**
-19. **Phase 4 cluster N-B (consensus runtime) — closed.**
-20. **CE-N-B-6 follow-mode bridge.**
-21. **Phase 4 cluster N-D (ChainDB persistence) — closed.**
-22. **Phase 2C close-out / CE-73 reclassification.**
-23. **IDD canonicalization.**
-24. **Grounding-doc generation + ripple.** Successive refreshes,
+17. **Phase 4 cluster B2 (tx validity agreement) — closed.**
+18. **Phase 4 cluster B1 (full block validity agreement) — closed.**
+19. **Phase 4 cluster N-A (network mini-protocols) — closed.**
+20. **Phase 4 cluster N-B (consensus runtime) — closed.**
+21. **CE-N-B-6 follow-mode bridge.**
+22. **Phase 4 cluster N-D (ChainDB persistence) — closed.**
+23. **Phase 2C close-out / CE-73 reclassification.**
+24. **IDD canonicalization.**
+25. **Grounding-doc generation + ripple.** Successive refreshes,
     including `52642e5`, `350130e`, `3af9e2b`, `96d043c`, `df56e2d`,
-    `2adfb45`.
-25. **BLUE-list drift closure.** Six CI scripts extended to full
+    `2adfb45`, `f143984`.
+26. **BLUE-list drift closure.** Six CI scripts extended to full
     BLUE scope.
-26. **Corpus relayout.** Credentialed `*_registered_creds.txt`
+27. **Corpus relayout.** Credentialed `*_registered_creds.txt`
     removed (~7M-line negative); `corpus/snapshots/` now
     `.gitignore`-d.
 
@@ -454,6 +434,13 @@ budget:
 
 | Hash | Type | Summary |
 |------|------|---------|
+| `75f75da` | feat | feat(ledger): wire RollBackward → close DC-CONS-20 (PHASE4-N-I S6) |
+| `e7add4d` | feat | feat(runtime): snapshot-write hook maybe_capture_snapshot (PHASE4-N-I S5) |
+| `3a9bab8` | feat | feat(runtime): GREEN snapshot cadence + InMemorySnapshotCache + ChainDbBlockSource (PHASE4-N-I S4) |
+| `02b5e31` | feat | feat(ledger): commit_rollback atomic helper + ChainDbWrite trait extension (PHASE4-N-I S3) |
+| `0efdce3` | feat | feat(ledger): materialize_rolled_back_state driver (PHASE4-N-I S2) |
+| `0e7e9ee` | feat | feat(ledger): rollback traits + closed error sums (PHASE4-N-I S1) |
+| `f143984` | docs | docs(grounding): close PHASE4-N-H — archive cluster + refresh CODEMAP/SEAMS/HEAD_DELTAS/TRACEABILITY |
 | `efe1fb9` | feat | feat(interop): live_block_follow_session + CE-N-H-6 procedure (PHASE4-N-H S6) |
 | `3973261` | test | test(runtime): mechanical cross-impl receive pipeline drive (PHASE4-N-H S5) |
 | `1d06089` | feat | feat(runtime): RED N2N receive orchestrator (PHASE4-N-H S4) |
@@ -634,8 +621,10 @@ linear, no merge commits in range). Aggregation is in §3 and §5.
 
 | Module | Color | Purpose | Key sub-paths | Added in (cluster/slice) |
 |--------|-------|---------|---------------|--------------------------|
-| `ade_ledger::receive` (new submodule of an existing BLUE crate) | BLUE | **Receive-side header→body bridge.** Pure total transition consuming peer-originated `ReceiveEvent` values (`RollForward`, `RollBackward`, `BlockDelivered`), composing the existing B1 `block_validity` authority through the new type-level admission gate `AdmittedBlock` (private constructor reachable only from `admit_via_block_validity`), and persisting through the narrow BLUE `ChainDbWrite` trait. Locally-originated chain-sync/block-fetch outputs (RequestNext, RequestRange, ClientDone, FindIntersect, Done) are NOT constructible — the CN-PROTO-07 closure. `RollBackward` returns `Err(ReceiveError::RollbackOutOfScope)` per the Path A scope edge — the rollback half awaits a follow-on ledger-snapshot cluster. **Symmetric receive-side counterpart to N-C's `ade_ledger::producer` (producer authority) + N-G's `ade_ledger::producer::served_chain` (producer-side served chain).** Enforced by `ci_check_admitted_block_closure.sh` + `ci_check_receive_reducer_closure.sh`. | `receive/mod.rs`, `receive/admitted.rs` (~257 LOC), `receive/chain_write.rs` (~96 LOC), `receive/events.rs` (~220 LOC), `receive/pending_header_cache.rs` (~169 LOC), `receive/reducer.rs` (~628 LOC) | PHASE4-N-H / S1 (`b019ee3`); S2 reducer (`0ecf22f`) |
-| `ade_runtime::receive` (new submodule of an existing RED crate) | GREEN+RED mix | **Imperative-shell composition for the N2N receive bridge.** GREEN: `events_to_state.rs` lifts N-A `ForkChoiceSignal` + `BatchDeliveryEvent` values into the BLUE `ReceiveEvent` stream (pass-through discipline — bytes are NEVER decoded here; the BLUE reducer's `BlockDelivered` branch is the canonical decode site); `in_memory_chain_write.rs` wraps a borrowed `&dyn ChainDb` and exposes `ChainDbWrite::write_admitted`. RED: `orchestrator.rs` is the per-peer N2N receive orchestrator — pure state-driver decoding inbound chain-sync (client role) + block-fetch (client role) wire frames via the existing PHASE4-N-A codecs, lifting via S3 GREEN, calling BLUE `receive_apply`. Multi-peer determinism: per-peer state is independent; the only cross-peer coordination point is the single shared `&dyn ChainDb`. **Key-boundary doctrine**: `orchestrator.rs` MUST NOT import from `crate::producer::signing` / `producer::broadcast` / `producer::scheduler`. Enforced by `ci_check_receive_replay_purity.sh` + `ci_check_receive_orchestrator_no_producer_dep.sh`. | `receive/mod.rs`, `receive/events_to_state.rs` (~209 LOC, GREEN), `receive/in_memory_chain_write.rs` (~199 LOC, GREEN), `receive/orchestrator.rs` (~432 LOC, RED) | PHASE4-N-H / S3 (`c584691`); S4 orchestrator (`1d06089`) |
+| `ade_ledger::rollback` (new submodule of an existing BLUE crate) | BLUE | **In-memory snapshot + replay-forward rollback authority.** The rollback half of PHASE4-N-H's receive bridge — closes N-H's `DC-CONS-20.open_obligation = "rollback_side_blocked_until_ledger_snapshot_cluster"`. `traits.rs` declares the narrow read-only `SnapshotReader` (`nearest_le`) + `BlockSource` (`blocks_in_range`) traits the materialization driver depends on (production impls live in `ade_runtime::rollback`; in-memory test fakes pass through the same single composition — CN-STORE-07 single-authority discipline). `error.rs` declares closed sums `MaterializeError::{RollbackTooDeep, BlockNotInRange, BlockValidityFailed}` + `CommitRollbackError::{Materialize, ChainWriteFailed}` — no catchalls. `materialize.rs` declares the SOLE `pub fn` in the project returning the rolled-back `(LedgerState, PraosChainDepState)` tuple: `materialize_rolled_back_state(snapshot_reader, block_source, target, era_schedule, ledger_view)` — single SnapshotReader lookup + BlockSource read + per-block `block_validity` (the same authority N-H's admit branch uses) wrapped in `apply_block_with_verdicts` (inherits the unique epoch-boundary authority per `rules.rs:244-250`; no parallel epoch path). `commit.rs` declares `commit_rollback<W: ChainDbWrite>(state, target_slot, new_ledger, new_chain_dep, chain_write)` — irreversible-step-first staged commit shape: `ChainDbWrite::rollback_to_slot` is the only non-reversible step; on failure, state is unchanged; on success, ledger + chain_dep swap atomically and `state.pending_headers` resets. **Symmetric to N-H's `ade_ledger::receive::admit_via_block_validity`** — both compose `block_validity` as the sole authority. Enforced by `ci_check_rollback_materialize_closure.sh`. | `rollback/mod.rs`, `rollback/traits.rs` (~88 LOC), `rollback/error.rs` (~98 LOC), `rollback/materialize.rs` (~402 LOC), `rollback/commit.rs` (~200 LOC) | PHASE4-N-I / S1 (`0e7e9ee`); S2 driver (`0efdce3`); S3 commit + ChainDbWrite extension (`02b5e31`) |
+| `ade_runtime::rollback` (new submodule of an existing RED crate) | GREEN | **Imperative-shell composition for the in-memory rollback infrastructure.** `cadence.rs` defines `SnapshotCadence` (single BLUE-structural field `every_n_blocks: u32`) + pure decision `should_snapshot_after_block(slot, block_no, params, last_snapshot) -> bool`; operator-tunable cadence is explicitly out of scope per DC-STORE-07 until represented as anchored, replay-derivable runtime data. `in_memory_cache.rs` defines `InMemorySnapshotCache` (BTreeMap-keyed, deterministic iteration, no HashMap) implementing the BLUE `SnapshotReader` trait via `nearest_le` returning the largest key ≤ target. `chaindb_block_source.rs` defines `ChainDbBlockSource<'a, D: ChainDb>` (borrow-wrapper around `&dyn ChainDb` implementing the BLUE `BlockSource` trait via `ChainDb::iter_from_slot`; pure projection, no I/O). `snapshot_writer.rs` defines `maybe_capture_snapshot(cache, cadence, slot, block_no, state)` — single point at which the scheduler / receive orchestrator captures a post-block-admit snapshot. All four files are GREEN: pure, no I/O, no async, no wall-clock, no rand, no HashMap. Enforced by `ci_check_snapshot_cadence_purity.sh`. | `rollback/mod.rs`, `rollback/cadence.rs` (~143 LOC), `rollback/in_memory_cache.rs` (~165 LOC), `rollback/chaindb_block_source.rs` (~113 LOC), `rollback/snapshot_writer.rs` (~146 LOC) | PHASE4-N-I / S4 (`3a9bab8`); S5 snapshot-writer hook (`e7add4d`) |
+| `ade_ledger::receive` (new submodule of an existing BLUE crate) | BLUE | **Receive-side header→body bridge.** Pure total transition consuming peer-originated `ReceiveEvent` values (`RollForward`, `RollBackward`, `BlockDelivered`), composing the existing B1 `block_validity` authority through the new type-level admission gate `AdmittedBlock` (private constructor reachable only from `admit_via_block_validity`), and persisting through the narrow BLUE `ChainDbWrite` trait. Locally-originated chain-sync/block-fetch outputs (RequestNext, RequestRange, ClientDone, FindIntersect, Done) are NOT constructible — the CN-PROTO-07 closure. **PHASE4-N-I S6 wired the rollback half**: `receive_apply` gained an `Option<&RollbackContext>` parameter; when `Some`, the `RollBackward` arm composes `materialize_rolled_back_state` + `commit_rollback` atomically; when `None`, retains the legacy `Err(RollbackOutOfScope)` for callers not yet wired. The `ChainDbWrite` trait gained a second method `rollback_to_slot(slot) -> Result<(), ChainWriteError>` (PHASE4-N-I S3) for the rollback path. **Symmetric receive-side counterpart to N-C's `ade_ledger::producer` (producer authority) + N-G's `ade_ledger::producer::served_chain` (producer-side served chain).** Enforced by `ci_check_admitted_block_closure.sh` + `ci_check_receive_reducer_closure.sh`. | `receive/mod.rs`, `receive/admitted.rs` (~257 LOC), `receive/chain_write.rs` (~104 LOC, +rollback_to_slot), `receive/events.rs` (~220 LOC), `receive/pending_header_cache.rs` (~169 LOC), `receive/reducer.rs` (~743 LOC, +RollbackContext + roll_backward) | PHASE4-N-H / S1 (`b019ee3`); S2 reducer (`0ecf22f`); PHASE4-N-I / S3 trait extension (`02b5e31`); S6 RollbackContext wiring (`75f75da`) |
+| `ade_runtime::receive` (new submodule of an existing RED crate) | GREEN+RED mix | **Imperative-shell composition for the N2N receive bridge.** GREEN: `events_to_state.rs` lifts N-A `ForkChoiceSignal` + `BatchDeliveryEvent` values into the BLUE `ReceiveEvent` stream (pass-through discipline — bytes are NEVER decoded here; the BLUE reducer's `BlockDelivered` branch is the canonical decode site); `in_memory_chain_write.rs` wraps a borrowed `&dyn ChainDb` and exposes `ChainDbWrite::write_admitted` **+ (PHASE4-N-I S3) `ChainDbWrite::rollback_to_slot`**. RED: `orchestrator.rs` is the per-peer N2N receive orchestrator — pure state-driver decoding inbound chain-sync (client role) + block-fetch (client role) wire frames via the existing PHASE4-N-A codecs, lifting via S3 GREEN, calling BLUE `receive_apply`. Multi-peer determinism: per-peer state is independent; the only cross-peer coordination point is the single shared `&dyn ChainDb`. **Key-boundary doctrine**: `orchestrator.rs` MUST NOT import from `crate::producer::signing` / `producer::broadcast` / `producer::scheduler`. Enforced by `ci_check_receive_replay_purity.sh` + `ci_check_receive_orchestrator_no_producer_dep.sh`. | `receive/mod.rs`, `receive/events_to_state.rs` (~209 LOC, GREEN), `receive/in_memory_chain_write.rs` (~209 LOC, GREEN, +rollback_to_slot), `receive/orchestrator.rs` (~433 LOC, RED) | PHASE4-N-H / S3 (`c584691`); S4 orchestrator (`1d06089`); PHASE4-N-I / S3 + S6 (in_memory_chain_write + orchestrator updates) |
 | `ade_core_interop` bin `live_block_follow_session` (new RED binary in an existing RED crate) | RED | **Operator-action live-evidence probe for CE-N-H-6 / RO-LIVE-02.** Modeled on `live_block_fetch_session` (N-G S7) and `live_block_production_session` (N-C S7). Hermetic default mode prints a readiness banner and exits 0 (no sockets, no operator material read); `--connect` mode prints the wiring stub for the tokio socket bridge driving the receive orchestrator (S4) against a real peer. Args: `--network`, `--magic`, `--target`. Captures `docs/clusters/PHASE4-N-H/CE-N-H-LIVE_<date>.log` (operator-recorded). **Conditional on private Haskell peer availability**: at HEAD, `RO-LIVE-02.status = "partial"` with `open_obligation = "blocked_until_operator_peer_available"`. Build-and-start test asserts hermetic-mode banner; the byte-shape claim is closed by S5's mechanical `receive_pipeline_corpus_drive` test against the Conway-576 corpus. | `src/bin/live_block_follow_session.rs` (~136 LOC); `[[bin]]` entry in `crates/ade_core_interop/Cargo.toml`; operator procedure at `docs/clusters/completed/PHASE4-N-H/CE-N-H-6_PROCEDURE.md` | PHASE4-N-H / S6 (`efe1fb9`) |
 | `ade_ledger::producer::served_chain` (new file in an existing BLUE crate) | BLUE | **Single canonical append-only chain index** from which N-G's server reducers source wire bytes. `ServedChainSnapshot` (BTreeMap-backed, deterministic) + `served_chain_admit(snapshot, AcceptedBlock) -> Result<(ServedChainSnapshot, ServedAdmitOutcome), ServedChainError>` — key `(slot, blake2b_256(header))` is derived from the bytes via `decode_block`; there is no caller-supplied "asserted hash" parameter. The broadcast gate (CN-CONS-07) is preserved across the network seam: the only path bytes enter the served chain is via an `AcceptedBlock` token, which only `self_accept` returning `Ok` produces. Accessors: `block_bytes(slot, &hash)` (point lookup; DC-CONS-17 foundation), `range_bytes(from, to)` (inclusive BTreeMap range; S4's RequestRange source), `iter()` (BTreeMap order), `iter_accepted` / `block_at` (S5 extensions — expose `&AcceptedBlock` so the GREEN adapter can call `accepted_block_header_bytes` directly), `fingerprint()` (blake2b_256 over `(slot_be8 \|\| hash \|\| bytes_len \|\| bytes)` triples in BTreeMap order — admission-order-independent replay anchor). Closed `ServedChainError::{Decode, KeyByteConflict}`. Enforced by `ci_check_served_chain_closure.sh`. | `producer/served_chain.rs` (~171 LOC) | PHASE4-N-G / S2 (`dc069cf`); S5 extension (`1a1b8e0`) |
 | `ade_network::chain_sync::server` (new file in an existing BLUE-scoped network submodule) | BLUE | **Pure chain-sync server-pump reducers.** `producer_chain_sync_serve(state, in_msg, &served, version)` processes one client-originated message; `producer_chain_sync_advance_tip(state, &served)` is polled by the orchestrator after broadcast-queue admission. Composes the PHASE4-N-A `chain_sync_transition` for grammar validation (no parallel state machine). Header bytes in any RollForward come from the canonical `accepted_block_header_bytes` (DC-CONS-18) via the `ServedHeaderLookup` trait. Deterministic-resolution discipline (DC-PROTO-08): every server-agency state returns one of legal RollForward / RollBackward / AwaitReply / structured close-or-error — no ambiguous silent wait. Closed `ServerReply<ChainSyncMessage>` whose private inner enum carries only server-agency variants (RollForward / RollBackward / AwaitReply / IntersectFound / IntersectNotFound). Closed `ProducerServerError`. Trait-bound seam keeps `ade_network → ade_ledger` out of production deps. Enforced by `ci_check_chain_sync_server_closure.sh` + `ci_check_no_parallel_header_splitter.sh`. | `chain_sync/server.rs` (~804 LOC); registered in `chain_sync/mod.rs` | PHASE4-N-G / S1 (`8cd17c9`, ServerReply wrapper); S3 (`cc49b1d`, reducer) |
@@ -676,7 +665,7 @@ linear, no merge commits in range). Aggregation is in §3 and §5.
 | `ade_core::consensus::kes_check` (new file in an existing BLUE crate) | BLUE | Fail-closed wiring of `ade_crypto::kes` into Praos header validation. | `kes_check.rs` | PHASE4-B1 / B1-S5 |
 | `ade_testkit::validity` (new submodule of an existing crate) | GREEN | Test-only block-validity harness. | `validity/mod.rs`, etc. | PHASE4-B1 |
 | `ade_core_interop::follow` (new file in an existing RED crate) | RED | Follow-mode bridge. | `follow.rs` | CE-N-B-6 (`e5f1f64`) |
-| `ade_network` (new workspace crate) | BLUE-majority (per-submodule scoped) | Ouroboros mini-protocol authority. **N-G S1 / S3 / S4 added the new server-side files** `chain_sync/server.rs` + `block_fetch/server.rs` + their ServerReply wrappers; the rest is unchanged. **N-H added no new file in this crate** — the new receive orchestrator (`ade_runtime::receive::orchestrator`) dispatches the existing PHASE4-N-A codecs. | `codec/`, `handshake/`, `chain_sync/`, `block_fetch/`, `tx_submission/`, `keep_alive/`, `peer_sharing/`, `n2c/`, `mux/frame.rs` (BLUE), `mux/transport.rs` (RED), `session/` (RED), `chain_sync/server.rs` (**N-G S1/S3**), `block_fetch/server.rs` (**N-G S1/S4**) | PHASE4-N-A; PHASE4-N-G |
+| `ade_network` (new workspace crate) | BLUE-majority (per-submodule scoped) | Ouroboros mini-protocol authority. **N-G S1 / S3 / S4 added the new server-side files** `chain_sync/server.rs` + `block_fetch/server.rs` + their ServerReply wrappers; the rest is unchanged. **N-H + N-I added no new file in this crate** — the receive orchestrator dispatches the existing PHASE4-N-A codecs. | `codec/`, `handshake/`, `chain_sync/`, `block_fetch/`, `tx_submission/`, `keep_alive/`, `peer_sharing/`, `n2c/`, `mux/frame.rs` (BLUE), `mux/transport.rs` (RED), `session/` (RED), `chain_sync/server.rs` (**N-G S1/S3**), `block_fetch/server.rs` (**N-G S1/S4**) | PHASE4-N-A; PHASE4-N-G |
 | `ade_core::consensus` (new submodule of an existing BLUE crate) | BLUE | Praos consensus authority. | `mod.rs`, `era_schedule.rs`, `header_validate.rs`, `vrf_cert.rs`, `nonce.rs`, `op_cert.rs`, `leader_schedule.rs`, `fork_choice.rs`, `rollback.rs`, `kes_check.rs` (B1), `praos_state.rs`, `candidate.rs`, `events.rs`, `errors.rs`, `encoding.rs`, `ledger_view.rs`, `header_summary.rs`, `opcert_validate.rs` (N-C S2) | PHASE4-N-B; PHASE4-N-C / S2 |
 | `ade_runtime::consensus` (new submodule of an existing RED crate) | GREEN/RED mix | Imperative-shell composition for consensus runtime. | `mod.rs`, `candidate_fragment.rs`, `chain_selector.rs`, `genesis_parser.rs` | PHASE4-N-B / S-B8, S-B10 |
 | `ade_runtime::producer` (new submodule of an existing RED crate) | RED + GREEN mix | Imperative-shell composition for producer runtime. **N-G S5 added `broadcast_to_served.rs` + `served_chain_lookups.rs` as new GREEN files.** | `mod.rs`, `signing.rs`, `keys.rs`, `scheduler.rs`, `broadcast.rs`, `tick_assembler.rs`, `broadcast_to_served.rs` (**N-G S5**), `served_chain_lookups.rs` (**N-G S5**) | PHASE4-N-C; PHASE4-N-G / S5 |
@@ -689,28 +678,25 @@ linear, no merge commits in range). Aggregation is in §3 and §5.
 
 Workspace-level membership grew by **two crates** across the full
 delta: `ade_network` (PHASE4-N-A) and `ade_core_interop` (PHASE4-N-B).
-Both are RED-or-mixed. **PHASE4-N-H added no new crate** — S1's
-BLUE `ade_ledger::receive` submodule, S3/S4's GREEN+RED
-`ade_runtime::receive` submodule, and S6's RED binary all live as
-new files / submodules under the existing 8 workspace crates.
-**PHASE4-N-G added no new crate** either (server reducers, served
-chain, GREEN adapter, RED driver, and live-fetch binary all live as
-new files under existing crates).
+Both are RED-or-mixed. **PHASE4-N-I added no new crate** — S1/S2/S3's
+BLUE `ade_ledger::rollback` submodule and S4/S5's GREEN
+`ade_runtime::rollback` submodule both live as new files / submodules
+under the existing 8 workspace crates. **PHASE4-N-H added no new
+crate** either. **PHASE4-N-G added no new crate** either.
 
-Crate dependency shape at HEAD: **PHASE4-N-H added no new cross-crate
-dep edges.** The PHASE4-N-G S6 production edge `ade_runtime →
-ade_network` is reused (the receive orchestrator dispatches the
-existing PHASE4-N-A codecs `decode_chain_sync_message` +
-`decode_block_fetch_message`); the PHASE4-N-C S6 production edge
-`ade_runtime → ade_ledger` carries the new BLUE `receive::*` types
-(`receive_apply`, `ChainDbWrite`, `ReceiveEffect`, `ReceiveError`,
-`ReceiveState`). **PHASE4-N-G S6** added one new non-dev dep edge
-(`ade_runtime → ade_network`) and four new dev-dep edges on
-`ade_network` (`ade_ledger`, `ade_testkit`, `ade_core`, `ade_crypto`,
-S3). Carried forward: the **PHASE4-N-C S6** edge `ade_runtime →
-ade_ledger` and the **PHASE4-N-E S4** edge `ade_core_interop →
-ade_ledger`. No edge from a BLUE crate to a RED crate was
-introduced. Dependency direction RED → BLUE is permitted by
+Crate dependency shape at HEAD: **PHASE4-N-I added no new cross-crate
+dep edges.** The PHASE4-N-C S6 production edge `ade_runtime →
+ade_ledger` carries the new BLUE `rollback::*` types (`SnapshotReader`,
+`BlockSource`, `MaterializeError`, `CommitRollbackError`,
+`materialize_rolled_back_state`, `commit_rollback`); the N-D `ChainDb`
+trait is reused by `ChainDbBlockSource` through the existing
+`ade_runtime → ade_runtime::chaindb` internal path. **PHASE4-N-H added
+no new cross-crate dep edge** either. **PHASE4-N-G S6** added one new
+non-dev dep edge (`ade_runtime → ade_network`) and four new dev-dep
+edges on `ade_network`. Carried forward: the **PHASE4-N-C S6** edge
+`ade_runtime → ade_ledger` and the **PHASE4-N-E S4** edge
+`ade_core_interop → ade_ledger`. No edge from a BLUE crate to a RED
+crate was introduced. Dependency direction RED → BLUE is permitted by
 `ci_check_dependency_boundary.sh`.
 
 Corpora at HEAD: N-A capture corpus, N-B replay corpus, B1 validity
@@ -718,37 +704,36 @@ corpus, B3 conservation corpora, B4/B5 README-only synthetic notes,
 the credential-fidelity corpus from OQ5-S2, the PPD in-code
 synthetic-canonical corpus, the N-C in-code synthetic producer
 corpus, and `corpus/snapshots/` under `.gitignore` (canonical home
-`s3://ade-corpus-snapshots`). **PHASE4-N-H added no external
-corpus** — the receive transcript replay test
-(`tests/receive_session_transcript_replay.rs`) drives against
-synthetic events; the receive pipeline corpus drive
-(`tests/receive_pipeline_corpus_drive.rs`) and the live-follow
-binary build-and-start test both drive against **the existing
-Conway-576 corpus** consumed by N-C S3/S7, N-G S5/S7, and B1.
-The CE-N-H-6 operator-action evidence is a live log captured against
-a private Haskell peer, not a committed corpus. PHASE4-N-G likewise
+`s3://ade-corpus-snapshots`). **PHASE4-N-I added no external corpus**
+— the receive-rollback integration test
+(`tests/receive_rollback_integration.rs`) drives against synthetic
+admit-then-rollback sequences built in-test; the corpus-grounded
+DC-CONS-22 evidence comes from the existing N-H
+`receive_pipeline_corpus_drive` test against the Conway-576 corpus.
+PHASE4-N-H likewise added no new on-disk corpus. PHASE4-N-G likewise
 added no new on-disk corpus.
 
 Cross-reference: **The `ade-CODEMAP.md` regenerated in parallel with
 this HEAD_DELTAS will record the new BLUE submodule
-`ade_ledger::receive` (with `admitted`, `chain_write`, `events`,
-`pending_header_cache`, `reducer`), the new GREEN+RED submodule
-`ade_runtime::receive` (with `events_to_state`, `in_memory_chain_write`,
-`orchestrator`), and the new RED binary `ade_core_interop::live_block_follow_session`**
-as rows under their respective crates' BLUE/GREEN/RED listings; the
-prior CODEMAP at `2adfb45` does NOT yet contain any of those. SEAMS
-will pick up `AdmittedBlock` as the single canonical receive-side
-admission gate seam (symmetric to N-C's `AcceptedBlock` broadcast
-gate), the BLUE `ChainDbWrite` trait as the receive-bridge persistence
-seam, and the `PendingHeaderCache` `(slot, block_hash)` BTreeMap as
-the chain-sync announce-then-deliver coordination seam. TRACEABILITY
-will pick up the 6 new registry rules (`CN-CONS-08`, `DC-CONS-19`,
-`DC-CONS-20`, `DC-PROTO-09`, `CN-PROTO-07`, `RO-LIVE-02`) with their
-5 new `ci_script ↔ rule` edges plus the strengthening
-(`DC-PROTO-06`); the prior TRACEABILITY at `2adfb45` does NOT
-contain any of them. All three rewrites are in flight in the
-grounding ripple immediately following this HEAD_DELTAS regen; the
-four docs will be self-consistent at the next grounding-doc commit.
+`ade_ledger::rollback` (with `traits`, `error`, `materialize`,
+`commit`) and the new GREEN submodule `ade_runtime::rollback` (with
+`cadence`, `in_memory_cache`, `chaindb_block_source`,
+`snapshot_writer`)** as rows under their respective crates' BLUE/GREEN
+listings; the prior CODEMAP at `f143984` does NOT yet contain either.
+SEAMS will pick up `materialize_rolled_back_state` as the single
+canonical rollback-materialization seam (CN-STORE-07, symmetric to
+N-H's `admit_via_block_validity` admission gate), `commit_rollback`
+as the rollback atomic-commit seam, the narrow `SnapshotReader` +
+`BlockSource` traits as the rollback-driver dependency seams, and the
+extended `ChainDbWrite::rollback_to_slot` method as the rollback-side
+persistence seam. TRACEABILITY will pick up the 4 new registry rules
+(`DC-CONS-21`, `DC-CONS-22`, `CN-STORE-07`, `DC-STORE-07`) + the
+`DC-CONS-20` status flip + the `DC-CONS-20.strengthened_in` update
+with their 2 new `ci_script ↔ rule` edges; the prior TRACEABILITY at
+`f143984` does NOT contain any of them. All three rewrites are in
+flight in the grounding ripple immediately following this HEAD_DELTAS
+regen; the four docs will be self-consistent at the next grounding-doc
+commit.
 
 ---
 
@@ -756,28 +741,32 @@ four docs will be self-consistent at the next grounding-doc commit.
 
 | Module | Scope | Key changes |
 |--------|-------|-------------|
-| `ade_ledger` | +75 source/test files over the full delta; **PHASE4-N-H touched 6 files**: `receive/mod.rs` (new, ~36 LOC: register submodule), `receive/admitted.rs` (new, ~257 LOC), `receive/chain_write.rs` (new, ~96 LOC), `receive/events.rs` (new, ~220 LOC), `receive/pending_header_cache.rs` (new, ~169 LOC), `receive/reducer.rs` (new, ~628 LOC), `lib.rs` (+1: register `receive`). **PHASE4-N-G touched 5 files** (carried forward). | **PHASE4-N-H (S1 + S2):** new BLUE submodule `ade_ledger::receive` — the receive-side header→body bridge. `AdmittedBlock` type-level admission gate with private constructor reachable only from `admit_via_block_validity` (which composes the existing B1 `block_validity` authority); narrow `ChainDbWrite` trait taking `AdmittedBlock` by value; closed sums `ReceiveEvent` / `ReceiveEffect` / `ReceiveError` / `NoOpReason` (CN-PROTO-07 closure forbids locally-originated chain-sync/block-fetch outputs in the receive surface); BTreeMap-indexed `PendingHeaderCache` keyed `(slot, block_hash)`; pure total reducer `receive_apply` mutating only `state.pending_headers` on `RollForward` (I-6), atomically committing `(ledger, chain_dep)` on `Valid` from `block_validity`, returning `Err(RollbackOutOfScope)` on `RollBackward` per the Path A scope edge. **`DC-PROTO-06.strengthened_in += "PHASE4-N-H"`** (receive-side client-role transitions extend the rule's session-replay-equivalence scope). **PHASE4-N-G (S1 + S2 + S5, carried forward):** new BLUE `producer::served_chain`; lifted `accepted_block_header_bytes` as the single canonical header projection; `self_accept.rs` extension accessors. **Carried forward:** PHASE4-N-C producer submodule + `block_body_hash`; PHASE4-N-E mempool ingress chokepoint; B-series; OQ5/FIDELITY/WRITEBACK; PROPOSAL-PROCEDURES-DECODE. |
-| `ade_runtime` | +24 files, +5,840 lines from prior threads; **PHASE4-N-H added 4 source files + 3 integration tests / +1,041 LOC**: `receive/mod.rs` (~26 LOC, S3+S4: register `events_to_state`, `in_memory_chain_write`, `orchestrator`), `receive/events_to_state.rs` (~209 LOC, S3 GREEN), `receive/in_memory_chain_write.rs` (~199 LOC, S3 GREEN), `receive/orchestrator.rs` (~432 LOC, S4 RED), `lib.rs` (+1: register `receive`); + tests `receive_session_transcript_replay.rs` (~175 LOC, S3), `receive_two_peer_independence.rs` (~205 LOC, S4), `receive_pipeline_corpus_drive.rs` (~228 LOC, S5). **PHASE4-N-G added 6 source files + 3 integration tests / +1,214 LOC** (carried forward). | **PHASE4-N-H (S3 + S4 + S5):** new GREEN+RED submodule `ade_runtime::receive`. GREEN `events_to_state` lifts N-A `ForkChoiceSignal` + `BatchDeliveryEvent` into BLUE `ReceiveEvent` with pass-through discipline (bytes never decoded in the adapter — BLUE reducer is the canonical decode site); GREEN `in_memory_chain_write` wraps `&dyn ChainDb` and exposes `ChainDbWrite::write_admitted`, decoding the AdmittedBlock once for the StoredBlock key and mapping `ChainDbError` → BLUE `ChainWriteError`. RED `orchestrator` is the pure per-peer N2N receive state-driver — decodes inbound chain-sync (client) + block-fetch (client) frames via PHASE4-N-A codecs, lifts via S3 GREEN, calls BLUE `receive_apply`. Multi-peer determinism: per-peer state is independent; only cross-peer coordination is the single shared `&dyn ChainDb` (idempotent on byte-identity; proven by `receive_two_peer_independence`). Key-boundary doctrine: `receive::orchestrator` MUST NOT import from `crate::producer::signing` / `broadcast` / `scheduler`. Three integration tests cover DC-PROTO-09 transcript determinism, two-peer independence, and CE-N-H-5 mechanical cross-impl over Conway-576. **No new dep edge** — reuses the N-G `ade_runtime → ade_network` production edge for the codec imports and the N-C `ade_runtime → ade_ledger` edge for the new BLUE `receive::*` types. **Carried forward:** N-G `producer::broadcast_to_served` + `producer::served_chain_lookups` + `network::n2n_server`; N-C producer submodule; N-B consensus runtime; N-D chaindb/recovery. |
-| `ade_core_interop` | +1,793 across 9 files from prior threads; **PHASE4-N-H added 2 files / +197 LOC**: `src/bin/live_block_follow_session.rs` (~136 LOC, S6 RED binary), `tests/live_block_follow_session.rs` (~61 LOC, S6 build-and-start test). `Cargo.toml` (+4) adds the new `[[bin]]` entry. **PHASE4-N-G added 2 files / +202 LOC** (carried forward). | **PHASE4-N-H (S6):** new RED operator-action evidence binary modeled on `live_block_fetch_session` (N-G S7) and `live_block_production_session` (N-C S7); hermetic-default + `--connect` stub for the tokio socket bridge. **Carried forward:** N-G S7 live-fetch binary; N-C S7 producer-side live binary; N-E S4/S5/S6 tx-submission bridges; CE-N-B-6 follow-bridge. |
-| `ade_network` | 100 files, +17,861 lines (full N-A); **PHASE4-N-G added 4 files / +1,402 LOC** (carried forward); **no PHASE4-N-H change** — the receive orchestrator (`ade_runtime::receive::orchestrator`) dispatches the existing PHASE4-N-A codecs unchanged. | **Unchanged in PHASE4-N-H.** **Carried forward:** N-G server reducers + ServerReply wrappers; N-A wire-grammar work + DoS hardening. |
-| `ade_ledger` (block_validity sub-area) | (counted above) | **No PHASE4-N-H change** — the N-H reducer composes `block_validity` unchanged through `admit_via_block_validity`. **Carried forward:** N-G S1 `accepted_block_header_bytes` lift. |
-| `ade_core` | +30 source files + tests (N-B); +828 / −86 across 16 files (B1); +1 new file (N-C S2). **No PHASE4-N-H source change** — the N-H reducer depends only on existing `ade_core::consensus::{era_schedule, ledger_view, praos_state}` types. **No PHASE4-N-G source change** either. | **Unchanged in PHASE4-N-H.** **Carried forward:** N-B consensus authority + N-C S2 opcert validator. |
-| `ade_codec` | +14 source/test files over the full delta; **no PHASE4-N-H change** — the receive reducer composes existing `block_validity::decode_block` for the body decode and `pending_header_cache` for the announced-header storage; no new codec authority. | **Unchanged in PHASE4-N-H.** **Carried forward:** PPD PP-S1 `conway::governance`; N-C S2 `shelley::opcert`; N-C S3 `shelley::tx_components` producer assembly path; B3 / B4 / OQ5 era decoder work. |
-| `ade_crypto` | 2 files: `kes.rs` (+122 / −81), `lib.rs` (+5). **No PHASE4-N-H change.** | **Unchanged in PHASE4-N-H.** **Carried forward:** N-C S1 `KesSignature` + `verify_kes_signature`. |
-| `ade_testkit` | +33 files across the full delta; **no PHASE4-N-H change** — N-H's tests live as integration tests under `ade_runtime/tests/` and `ade_core_interop/tests/`, not under the testkit crate (same pattern as N-G). | **Unchanged in PHASE4-N-H.** **Carried forward:** N-C `producer/` harness; PPD PP-S2 `governance/proposal_procedures_replay`; N-E `mempool/ingress_replay`. |
+| `ade_ledger` | +81 source/test files over the full delta; **PHASE4-N-I touched 7 files**: `rollback/mod.rs` (new, ~31 LOC: register submodule), `rollback/traits.rs` (new, ~88 LOC, S1), `rollback/error.rs` (new, ~98 LOC, S1), `rollback/materialize.rs` (new, ~402 LOC, S2), `rollback/commit.rs` (new, ~200 LOC, S3), `receive/chain_write.rs` (+8 net LOC: trait extension `rollback_to_slot`, S3), `receive/reducer.rs` (+115 net LOC: `RollbackContext` + `roll_backward` private fn, S6), `lib.rs` (+1: register `rollback`). **PHASE4-N-H touched 6 files** (carried forward). | **PHASE4-N-I (S1 + S2 + S3 + S6):** new BLUE submodule `ade_ledger::rollback` — the in-memory snapshot + replay-forward rollback authority. Narrow read-only `SnapshotReader` + `BlockSource` traits (production impls in `ade_runtime::rollback`; in-memory test fakes pass through the same single composition — CN-STORE-07); closed sums `MaterializeError` (`RollbackTooDeep`, `BlockNotInRange`, `BlockValidityFailed`) + `CommitRollbackError` (`Materialize`, `ChainWriteFailed`); SOLE `pub fn` returning rolled-back `(LedgerState, PraosChainDepState)` is `materialize_rolled_back_state` — composes one `SnapshotReader::nearest_le` + one `BlockSource::blocks_in_range` + per-block `block_validity` (same authority N-H's admit branch uses) wrapped in `apply_block_with_verdicts` (inherits unique epoch-boundary authority per `rules.rs:244-250`); `commit_rollback` irreversible-step-first staged commit (calls `ChainDbWrite::rollback_to_slot` first; on failure state unchanged; on success ledger + chain_dep swap atomically + `pending_headers` resets). N-H `ChainDbWrite` trait extended with `rollback_to_slot(slot) -> Result<(), ChainWriteError>` (S3). S6 wires `receive_apply` with new `Option<&RollbackContext>` parameter — `RollBackward` arm composes `materialize_rolled_back_state` + `commit_rollback` when `Some`, retains legacy `Err(RollbackOutOfScope)` when `None`. **`DC-CONS-20` flipped to `enforced`** with `cluster = "PHASE4-N-H + PHASE4-N-I"` + `strengthened_in = ["PHASE4-N-I"]` + `open_obligation` removed (rollback-side now mechanically enforced lockstep with admit-side). **PHASE4-N-H (S1 + S2, carried forward):** new BLUE submodule `ade_ledger::receive`. **Carried forward:** PHASE4-N-G producer::served_chain; PHASE4-N-C producer submodule + `block_body_hash`; PHASE4-N-E mempool ingress chokepoint; B-series; OQ5/FIDELITY/WRITEBACK; PROPOSAL-PROCEDURES-DECODE. |
+| `ade_runtime` | +28 files, +6,400+ lines from prior threads; **PHASE4-N-I added 5 source files + 1 integration test / +1,038 LOC**: `rollback/mod.rs` (~26 LOC, S4: register `cadence`, `chaindb_block_source`, `in_memory_cache`, `snapshot_writer`), `rollback/cadence.rs` (~143 LOC, S4 GREEN), `rollback/in_memory_cache.rs` (~165 LOC, S4 GREEN), `rollback/chaindb_block_source.rs` (~113 LOC, S4 GREEN), `rollback/snapshot_writer.rs` (~146 LOC, S5 GREEN), `lib.rs` (+1: register `rollback`); `receive/in_memory_chain_write.rs` (+10 LOC: impl new trait method `rollback_to_slot`, S3), `receive/orchestrator.rs` (+1 LOC: pass `None` for rollback_ctx in legacy call site, S6); + test `receive_rollback_integration.rs` (~445 LOC, S6 — the canonical DC-CONS-22 evidence). **PHASE4-N-H added 4 source files + 3 integration tests / +1,041 LOC** (carried forward). | **PHASE4-N-I (S4 + S5 + S3 + S6):** new GREEN submodule `ade_runtime::rollback` — pure imperative-shell composition for the in-memory rollback infrastructure. `cadence` defines `SnapshotCadence` (single BLUE-structural field `every_n_blocks: u32`) + pure decision `should_snapshot_after_block` (operator-tunable cadence explicitly out of scope per DC-STORE-07). `in_memory_cache` defines `InMemorySnapshotCache` (BTreeMap-keyed, deterministic, no HashMap) implementing the BLUE `SnapshotReader` trait. `chaindb_block_source` defines `ChainDbBlockSource` (borrow-wrapper around `&dyn ChainDb` implementing BLUE `BlockSource` via `ChainDb::iter_from_slot`; pure projection, no I/O). `snapshot_writer::maybe_capture_snapshot` is the single point at which the scheduler / receive orchestrator captures a snapshot of post-block-admit state. `receive::in_memory_chain_write` extended to impl the new `ChainDbWrite::rollback_to_slot` method (S3); `receive::orchestrator` updated to pass `None` for the new `Option<&RollbackContext>` parameter at the legacy call site (S6). The new integration test `receive_rollback_integration` covers all rollback paths end-to-end: in-memory snapshot rollback, no-snapshot `RollbackTooDeep`, state-unchanged on materialize failure, and the canonical DC-CONS-22 evidence `rollback_then_continue_admit_equals_straight_line_admit` (admit → snapshot → rollback → continue admit yields a ledger fingerprint byte-identical to a straight-line admit). **No new dep edge** — reuses the N-C `ade_runtime → ade_ledger` production edge for the BLUE `rollback::*` types; the N-D ChainDb trait is reused by `ChainDbBlockSource` through the internal `ade_runtime::chaindb` path. **Carried forward:** N-H `receive` submodule; N-G `producer::broadcast_to_served` + `producer::served_chain_lookups` + `network::n2n_server`; N-C producer submodule; N-B consensus runtime; N-D chaindb/recovery. |
+| `ade_core_interop` | +1,990 across 11 files from prior threads; **no PHASE4-N-I change** — N-I's evidence is mechanical (the in-tree integration test); no new binary or live-evidence harness. | **Unchanged in PHASE4-N-I.** **Carried forward:** N-H S6 live-follow binary; N-G S7 live-fetch binary; N-C S7 producer-side live binary; N-E S4/S5/S6 tx-submission bridges; CE-N-B-6 follow-bridge. |
+| `ade_network` | 100 files, +17,861 lines (full N-A); **PHASE4-N-G added 4 files / +1,402 LOC** (carried forward); **no PHASE4-N-I change**; **no PHASE4-N-H change** — the receive orchestrator dispatches the existing PHASE4-N-A codecs unchanged. | **Unchanged in PHASE4-N-I + PHASE4-N-H.** **Carried forward:** N-G server reducers + ServerReply wrappers; N-A wire-grammar work + DoS hardening. |
+| `ade_ledger` (block_validity sub-area) | (counted above) | **No PHASE4-N-I change** — the N-I `materialize_rolled_back_state` driver composes `block_validity` unchanged via `apply_block_with_verdicts`. **Carried forward:** N-H admit branch composing `block_validity` via `admit_via_block_validity`; N-G S1 `accepted_block_header_bytes` lift. |
+| `ade_core` | +30 source files + tests (N-B); +828 / −86 across 16 files (B1); +1 new file (N-C S2). **No PHASE4-N-I source change** — the N-I driver depends only on existing `ade_core::consensus::{era_schedule, ledger_view, praos_state}` types. **No PHASE4-N-H source change** either. | **Unchanged in PHASE4-N-I + PHASE4-N-H.** **Carried forward:** N-B consensus authority + N-C S2 opcert validator. |
+| `ade_codec` | +14 source/test files over the full delta; **no PHASE4-N-I change**. | **Unchanged in PHASE4-N-I + PHASE4-N-H.** **Carried forward:** PPD PP-S1 `conway::governance`; N-C S2 `shelley::opcert`; N-C S3 `shelley::tx_components` producer assembly path; B3 / B4 / OQ5 era decoder work. |
+| `ade_crypto` | 2 files: `kes.rs` (+122 / −81), `lib.rs` (+5). **No PHASE4-N-I change.** | **Unchanged in PHASE4-N-I + PHASE4-N-H.** **Carried forward:** N-C S1 `KesSignature` + `verify_kes_signature`. |
+| `ade_testkit` | +33 files across the full delta; **no PHASE4-N-I change** — N-I's tests live as an integration test under `ade_runtime/tests/`, not under the testkit crate (same pattern as N-G + N-H). | **Unchanged in PHASE4-N-I + PHASE4-N-H.** **Carried forward:** N-C `producer/` harness; PPD PP-S2 `governance/proposal_procedures_replay`; N-E `mempool/ingress_replay`. |
 
 No other crate had non-trivial source changes since baseline.
 `ade_plutus` and `ade_node` were untouched by code commits.
-**PHASE4-N-H touched 3 of 8 workspace crates** (`ade_ledger`,
-`ade_runtime`, `ade_core_interop`). **No `.idd-config.json` change.**
-**No BLUE authority-path semantics changed apart from the new
-receive surfaces** — the prior validator authorities
+**PHASE4-N-I touched 2 of 8 workspace crates** (`ade_ledger`,
+`ade_runtime`). **No `.idd-config.json` change.** **No BLUE
+authority-path semantics changed apart from the new rollback
+surfaces** — the prior validator authorities
 (`ade_core::consensus::*`, `ade_ledger::block_validity::*`,
-`ade_ledger::block_body_hash`) and producer authorities
-(`ade_ledger::producer::*`) were re-used unchanged by the receive
-reducer. The receive reducer composes `block_validity` through
-`admit_via_block_validity` without changing what `block_validity`
-computes.
+`ade_ledger::block_body_hash`), producer authorities
+(`ade_ledger::producer::*`), and N-H receive authorities
+(`ade_ledger::receive::{admitted, reducer admit-side}`) were re-used
+unchanged by the rollback driver. The materialize driver composes
+`block_validity` through `apply_block_with_verdicts` without changing
+what `block_validity` computes. The S6 wiring of the rollback context
+into `receive_apply` adds a new code path (the `Some(ctx)` arm of
+`RollBackward`) but does not change the admit-side `RollForward` /
+`BlockDelivered` arms.
 
 ---
 
@@ -789,11 +778,12 @@ as a semantic surface — closed semantic surfaces are encoded in the
 type system per the IDD core principles, and conditional compilation
 is checked out of BLUE code via `ci/ci_check_no_semantic_cfg.sh`
 (scoped over the full 6-crate BLUE set, covering all surfaces
-introduced through the PHASE4-N-H receive submodule, the PHASE4-N-G
-server reducers, served-chain index, and header-projection seam).
+introduced through the PHASE4-N-I rollback submodule, the PHASE4-N-H
+receive submodule, the PHASE4-N-G server reducers, the served-chain
+index, and the header-projection seam).
 
 No `#[cfg(feature = ...)]` gates appear at either ref.
-**PHASE4-N-H introduced no new Ade-side feature flag and no new
+**PHASE4-N-I introduced no new Ade-side feature flag and no new
 upstream-crate feature selection.**
 
 **Status: unchanged — zero Ade feature flags at baseline, zero at HEAD.**
@@ -804,18 +794,16 @@ upstream-crate feature selection.**
 
 The CI surface is the shell-script set under `ci/` (no
 `.github/workflows` in this repo). At baseline there were 15 scripts.
-At HEAD there are **52 scripts plus one git hook**
+At HEAD there are **54 scripts plus one git hook**
 (`ci/git-hooks/commit-msg`). Across the full delta: CE-73 added one,
 N-D added three, N-A added two, N-B added four, B3 added one, B3F
 added one, B5 added one, OQ5 added one, PHASE4-N-E S1/S2 added two,
 PROPOSAL-PROCEDURES-DECODE PP-S1 added one, PHASE4-N-C added eight
-(the 33rd → 40th), PHASE4-N-G added seven (the 41st → 47th), and
-**PHASE4-N-H added five (the 48th → 52nd)**:
-`ci_check_admitted_block_closure.sh` (S1),
-`ci_check_receive_reducer_closure.sh` (S2),
-`ci_check_receive_replay_purity.sh` (S3),
-`ci_check_receive_orchestrator_no_producer_dep.sh` (S4),
-`ci_check_receive_paths_corpus_present.sh` (S6).
+(the 33rd → 40th), PHASE4-N-G added seven (the 41st → 47th),
+PHASE4-N-H added five (the 48th → 52nd), and **PHASE4-N-I added two
+(the 53rd → 54th)**:
+`ci_check_rollback_materialize_closure.sh` (S2),
+`ci_check_snapshot_cadence_purity.sh` (S4).
 Grouped by cluster.
 
 ### CE-73 reclassification (Phase 2C close-out)
@@ -828,19 +816,19 @@ Grouped by cluster.
 
 | Check | Status | What it checks |
 |-------|--------|----------------|
-| `ci/ci_check_constitution_coverage.sh` | Modified (`39865f6`, `aa7a7dd`) | Path-only edit (`39865f6`): registry path now `docs/ade-invariant-registry.toml`. **Extended** (`aa7a7dd`, N-C S5) to recognize new closed types under `producer/`. |
+| `ci/ci_check_constitution_coverage.sh` | Modified (`39865f6`, `aa7a7dd`) | Path-only edit (`39865f6`): registry path now `docs/ade-invariant-registry.toml`. **Extended** (`aa7a7dd`, N-C S5) to recognize new closed types under `producer/`. Continues to PASS at HEAD with the 4 new N-I rules' `ci_script` + `tests` arrays populated (`DC-CONS-22`, `CN-STORE-07`, `DC-STORE-07` populated; `DC-CONS-21` carries `ci_script = ""` + `open_obligation` per the follow-on-cluster scope decision). |
 | `ci/git-hooks/commit-msg` | **New** (`2047c42`) | Local git hook: rejects commit messages lacking a `Co-Authored-By: Claude ...` trailer. |
 
 ### BLUE-list drift closure (`5b70bee`)
 
 | Check | Status | What it checks |
 |-------|--------|----------------|
-| `ci/ci_check_module_headers.sh` | Modified — BLUE-scope (`5b70bee`) | `// Core Contract:` header on every `.rs` in BLUE crates. Continues to PASS at HEAD: the new N-H BLUE files (`receive/admitted.rs`, `receive/reducer.rs`, etc.) all carry the canonical Core Contract header. |
+| `ci/ci_check_module_headers.sh` | Modified — BLUE-scope (`5b70bee`) | `// Core Contract:` header on every `.rs` in BLUE crates. Continues to PASS at HEAD: the new N-I BLUE files (`rollback/traits.rs`, `rollback/materialize.rs`, etc.) all carry the canonical Core Contract header. |
 | `ci/ci_check_no_semantic_cfg.sh` | Modified — BLUE-scope (`5b70bee`) | No semantic `#[cfg(...)]` in BLUE `src/`. |
 | `ci/ci_check_no_signing_in_blue.sh` | Modified — BLUE-scope (`5b70bee`) | No signing primitives in BLUE crates. |
 | `ci/ci_check_hash_uses_wire_bytes.sh` | Modified — BLUE-scope (`5b70bee`) | All BLUE hashing via wire-byte fingerprint surfaces. |
 | `ci/ci_check_ingress_chokepoints.sh` | Modified — BLUE-scope + registry growth (`5b70bee`) | No raw CBOR decoding outside named chokepoints in BLUE. |
-| `ci/ci_check_dependency_boundary.sh` | Modified — BLUE-scope (`5b70bee`) | BLUE crates must not depend on RED crates. Continues to PASS at HEAD: the N-G S6 new edge is RED → BLUE (`ade_runtime → ade_network`), permitted; **N-H added no new dep edge.** |
+| `ci/ci_check_dependency_boundary.sh` | Modified — BLUE-scope (`5b70bee`) | BLUE crates must not depend on RED crates. Continues to PASS at HEAD: **N-I added no new dep edge**; the N-G S6 edge is RED → BLUE (`ade_runtime → ade_network`), permitted. |
 
 ### Phase 4 N-D CI gap closure (`78da6c9`)
 
@@ -854,14 +842,14 @@ Grouped by cluster.
 
 | Check | Status | What it checks |
 |-------|--------|----------------|
-| `ci/ci_check_no_async_in_blue.sh` | **New** (`4fde3a7`, S-A1) | Enforces `DC-CORE-01` — BLUE code is sync-only. Continues to PASS at HEAD over the new N-H BLUE `receive/` files (no async). |
+| `ci/ci_check_no_async_in_blue.sh` | **New** (`4fde3a7`, S-A1) | Enforces `DC-CORE-01` — BLUE code is sync-only. Continues to PASS at HEAD over the new N-I BLUE `rollback/` files (no async). |
 | `ci/ci_check_ce_n_a_5_proof.sh` | **New** (`56bfa7b`, S-A10) | CE-N-A-5 closure-gate evidence over the real-cardano-node corpus. |
 
-### Phase 4 N-B consensus authority enforcement — extended by B1, B2, N-C, N-G, and N-H
+### Phase 4 N-B consensus authority enforcement — extended by B1, B2, N-C, N-G, N-H, N-I
 
 | Check | Status | What it checks |
 |-------|--------|----------------|
-| `ci/ci_check_consensus_closed_enums.sh` | **New** (N-B); **Modified** (B1, `7b95ccd`); **Modified** (B2); **Modified** (N-C); **Modified** (N-G); **Modified** (N-H, implicit via new closed enums in `receive/events.rs` — `ReceiveEvent`, `ReceiveEffect`, `ReceiveError`, `NoOpReason`, and the structural records `TipPoint`, `TargetPoint`) | Closed-enum scan over `ade_core/src/consensus/`, `ade_ledger/src/block_validity/`, `ade_ledger/src/tx_validity/`, `ade_ledger/src/mempool/`, `ade_ledger/src/producer/`, `ade_network/src/chain_sync/server.rs` + `ade_network/src/block_fetch/server.rs`, and (now) `ade_ledger/src/receive/events.rs`. |
+| `ci/ci_check_consensus_closed_enums.sh` | **New** (N-B); **Modified** (B1, B2, N-C, N-G, N-H); **Modified** (N-I, implicit via new closed enums in `rollback/error.rs` — `MaterializeError`, `CommitRollbackError`) | Closed-enum scan over `ade_core/src/consensus/`, `ade_ledger/src/block_validity/`, `ade_ledger/src/tx_validity/`, `ade_ledger/src/mempool/`, `ade_ledger/src/producer/`, `ade_network/src/chain_sync/server.rs` + `ade_network/src/block_fetch/server.rs`, `ade_ledger/src/receive/events.rs`, and (now) `ade_ledger/src/rollback/error.rs`. |
 | `ci/ci_check_no_chaindb_in_consensus_blue.sh` | **New** (N-B / S-B1) | No `ChainDb`/`chain_db` token in `consensus/`. |
 | `ci/ci_check_no_density_in_fork_choice.sh` | **New** (N-B / S-B8) | No `density` token in `fork_choice.rs` / `candidate.rs`. |
 | `ci/ci_check_no_float_in_consensus.sh` | **New** (N-B / S-B1) | No `f32`/`f64` in `consensus/`. |
@@ -879,7 +867,7 @@ Grouped by cluster.
 
 | Check | Status | What it checks |
 |-------|--------|----------------|
-| `ci/ci_check_credential_discriminant_closed.sh` | **New** (`a3ee2da`, OQ5-S2) | Enforces `DC-LEDGER-10`. **Unmodified by PHASE4-N-H.** |
+| `ci/ci_check_credential_discriminant_closed.sh` | **New** (`a3ee2da`, OQ5-S2) | Enforces `DC-LEDGER-10`. **Unmodified by PHASE4-N-I.** |
 
 ### PHASE4-N-E wire-level mempool ingress closure (carried forward)
 
@@ -911,28 +899,37 @@ Grouped by cluster.
 
 | Check | Status | What it checks |
 |-------|--------|----------------|
-| `ci/ci_check_no_parallel_header_splitter.sh` | **New** (`8cd17c9`, S1) — the **41st** script | Single-authority header projection (foundation for `DC-CONS-16` strengthening + `DC-CONS-18` + `CN-PROTO-06`). |
-| `ci/ci_check_served_chain_closure.sh` | **New** (`dc069cf`, S2) — the **42nd** script | Closure of the BLUE served-chain index (BTreeMap-only, no caller-supplied asserted hash). |
+| `ci/ci_check_no_parallel_header_splitter.sh` | **New** (`8cd17c9`, S1) — the **41st** script | Single-authority header projection. |
+| `ci/ci_check_served_chain_closure.sh` | **New** (`dc069cf`, S2) — the **42nd** script | Closure of the BLUE served-chain index. |
 | `ci/ci_check_chain_sync_server_closure.sh` | **New** (`cc49b1d`, S3) — the **43rd** script | Enforces `DC-PROTO-08` + `DC-PROTO-07` partial. |
 | `ci/ci_check_block_fetch_server_closure.sh` | **New** (`03d120f`, S4) — the **44th** script | Enforces `DC-PROTO-07` + `DC-CONS-17` foundation. |
 | `ci/ci_check_broadcast_to_served_purity.sh` | **New** (`1a1b8e0`, S5) — the **45th** script | Enforces `DC-CONS-17` + `DC-CONS-18` + `DC-PROTO-07` GREEN-glue closure. |
 | `ci/ci_check_n2n_server_no_signing_dep.sh` | **New** (`f773b1c`, S6) — the **46th** script | Key-boundary doctrine: `ade_runtime/src/network/` MUST NOT import from `producer::signing`. |
-| `ci/ci_check_server_paths_corpus_present.sh` | **New** (`a280954`, S7) — the **47th** script | Enforces `RO-LIVE-01` mechanical half (CE-N-G-7 + CE-N-G-8 binary presence). |
+| `ci/ci_check_server_paths_corpus_present.sh` | **New** (`a280954`, S7) — the **47th** script | Enforces `RO-LIVE-01` mechanical half. |
 
 ### PHASE4-N-H receive-side header→body bridge closure (`b019ee3` → `efe1fb9`) — 5 new scripts (the 48th → 52nd)
 
 | Check | Status | What it checks |
 |-------|--------|----------------|
-| `ci/ci_check_admitted_block_closure.sh` | **New** (`b019ee3`, S1) — the **48th** script | Enforces `CN-CONS-08` + `CN-PROTO-07` via multiple mechanical guards: (1) `AdmittedBlock` has a private inner field — only `admit_via_block_validity` constructs it; no struct-literal back-door; (2) `admit_via_block_validity` is the only public path from raw bytes to `AdmittedBlock` and composes `block_validity`; (3) no production code in `ade_ledger/src/receive/events.rs` may reference any locally-originated chain-sync/block-fetch variant name (RequestNext, RequestRange, ClientDone, FindIntersect, Done) — the CN-PROTO-07 closure positively asserts only `RollForward` / `RollBackward` / `BlockDelivered` are constructible; (4) `AdmittedBlock` is deliberately distinct from `AcceptedBlock` (cross-use is a type error). |
-| `ci/ci_check_receive_reducer_closure.sh` | **New** (`0ecf22f`, S2) — the **49th** script | Enforces `CN-CONS-08` + `DC-CONS-19` + `DC-PROTO-09` via multiple mechanical guards: (1) `reducer.rs` may not import wall-clock / randomness / async runtime / `HashMap`; (2) `RollForward` branch mutates only `state.pending_headers` (Invariant I-6 — no path mutates `state.ledger` / `state.chain_dep` / `chain_write` in the RollForward arm); (3) `BlockDelivered` branch composes `admit_via_block_validity` before any state commit (positive presence + ordering check); (4) `RollBackward` branch returns `Err(ReceiveError::RollbackOutOfScope)` (positive presence; the Path A scope edge). |
-| `ci/ci_check_receive_replay_purity.sh` | **New** (`c584691`, S3) — the **50th** script | Enforces `DC-PROTO-09` via 3+ mechanical guards: (1) `ade_runtime/src/receive/events_to_state.rs` and `in_memory_chain_write.rs` may not import wall-clock / randomness / async runtime / `HashMap`; (2) `events_to_state.rs` never decodes bytes (pass-through discipline — `header_bytes`/`block_bytes` flow through verbatim; the BLUE reducer is the canonical decode site); (3) the transcript-replay integration test `receive_session_transcript_replay_byte_identical` is present and asserts byte-identical replay state. |
-| `ci/ci_check_receive_orchestrator_no_producer_dep.sh` | **New** (`1d06089`, S4) — the **51st** script | Key-boundary doctrine for the receive orchestrator: `crates/ade_runtime/src/receive/` MUST NOT import from `crate::producer::signing` / `crate::producer::broadcast` / `crate::producer::scheduler`. Receive and producer pipelines stay independent — the receive orchestrator cannot accidentally observe producer secret-key custody. Single mechanical grep over the receive module tree. |
-| `ci/ci_check_receive_paths_corpus_present.sh` | **New** (`efe1fb9`, S6) — the **52nd** script | Enforces `RO-LIVE-02` mechanical half (CE-N-H-5 + CE-N-H-6 binary presence) via 4 mechanical guards: (1) the mechanical cross-impl integration test `crates/ade_runtime/tests/receive_pipeline_corpus_drive.rs` exists with the expected test names; (2) the transcript replay test `crates/ade_runtime/tests/receive_session_transcript_replay.rs` exists; (3) the `live_block_follow_session` binary source file + `[[bin]]` entry are present; (4) the CE-N-H-6 procedure doc `docs/clusters/completed/PHASE4-N-H/CE-N-H-6_PROCEDURE.md` exists. |
+| `ci/ci_check_admitted_block_closure.sh` | **New** (`b019ee3`, S1) — the **48th** script | Enforces `CN-CONS-08` + `CN-PROTO-07`: `AdmittedBlock` private inner field; sole construction site `admit_via_block_validity` composes `block_validity`; receive events closed sums; `AdmittedBlock` distinct from `AcceptedBlock`. |
+| `ci/ci_check_receive_reducer_closure.sh` | **New** (`0ecf22f`, S2) — the **49th** script | Enforces `CN-CONS-08` + `DC-CONS-19` + `DC-PROTO-09` + (post-N-I) `DC-CONS-20` rollback-side: reducer purity; `RollForward` mutates only `state.pending_headers` (I-6); `BlockDelivered` composes `admit_via_block_validity` before commit; **post-N-I**: the `RollBackward` arm composes `materialize_rolled_back_state` + `commit_rollback` when `RollbackContext` is provided. |
+| `ci/ci_check_receive_replay_purity.sh` | **New** (`c584691`, S3) — the **50th** script | Enforces `DC-PROTO-09` purity of the GREEN adapter + transcript replay. |
+| `ci/ci_check_receive_orchestrator_no_producer_dep.sh` | **New** (`1d06089`, S4) — the **51st** script | Key-boundary doctrine: `crates/ade_runtime/src/receive/` MUST NOT import from `crate::producer::signing` / `broadcast` / `scheduler`. |
+| `ci/ci_check_receive_paths_corpus_present.sh` | **New** (`efe1fb9`, S6) — the **52nd** script | Enforces `RO-LIVE-02` mechanical half. |
+
+### PHASE4-N-I in-memory snapshot + replay-forward rollback closure (`0e7e9ee` → `75f75da`) — 2 new scripts (the 53rd → 54th)
+
+| Check | Status | What it checks |
+|-------|--------|----------------|
+| `ci/ci_check_rollback_materialize_closure.sh` | **New** (`0efdce3`, S2) — the **53rd** script | Enforces `CN-STORE-07` + `DC-CONS-22` + `DC-CONS-20` rollback-side via 3 mechanical guards: (1) production code in `crates/ade_ledger/src/rollback/materialize.rs` may not import wall-clock, randomness, async runtime, or HashMap; (2) the SOLE `pub fn` in the `crates/ade_ledger/src/rollback/*` module tree returning `(LedgerState, PraosChainDepState)` is `materialize_rolled_back_state` (single-authority discipline — no parallel rolled-back-state computation path); (3) positive grep: the driver calls `block_validity` (the same authority N-H's receive admit branch uses) — no parallel validation path. |
+| `ci/ci_check_snapshot_cadence_purity.sh` | **New** (`3a9bab8`, S4) — the **54th** script | Enforces `DC-STORE-07` snapshot cadence determinism via 3 mechanical guards: (1) `crates/ade_runtime/src/rollback/cadence.rs` production code has no `HashMap` / wall-clock / `tokio` / `rand`; (2) `SnapshotCadence` has exactly one field (`every_n_blocks`) — no operator-tunable runtime input; (3) `in_memory_cache.rs` and `chaindb_block_source.rs` are pure (no I/O, no async, no HashMap; BTreeMap only). |
 
 TRACEABILITY cross-reference: every script listed above appears as a
 `ci_script` for at least one rule in `docs/ade-invariant-registry.toml`,
-re-traced via `ci/ci_check_constitution_coverage.sh`. **PHASE4-N-H
-added 5 new `ci_script ↔ rule` edges** (one per new script; see §7).
+re-traced via `ci/ci_check_constitution_coverage.sh`. **PHASE4-N-I
+added 2 new `ci_script ↔ rule` edges** (`ci_check_rollback_materialize_closure.sh`
+appears on `DC-CONS-22`, `CN-STORE-07`, and `DC-CONS-20`;
+`ci_check_snapshot_cadence_purity.sh` appears on `DC-STORE-07`).
 The constitution-coverage gate continues to PASS at HEAD.
 
 ---
@@ -943,20 +940,24 @@ n/a — `.idd-config.json` `canonical_type_registry` is null.
 Canonical-type rules live inline in the invariant registry under
 family `T`.
 
-**PHASE4-N-H introduced ~12 new closed types** in support of the
-receive-side header→body bridge: `AdmittedBlock`, `AdmittedOutcome`,
-`ChainDbWrite` (trait), `ChainWriteError`, `ChainWriteErrorKind`,
-`ReceiveEvent`, `ReceiveEffect`, `ReceiveError`, `NoOpReason`,
-`TipPoint`, `TargetPoint`, `PendingHeaderCache`, `ReceiveState`. The
-`AdmittedBlock` token is the load-bearing type-level admission gate
-(CN-CONS-08): private inner field, single construction site
-`admit_via_block_validity` reachable only when `block_validity` returns
-`BlockValidityVerdict::Valid`; the `ChainDbWrite::write_admitted`
-trait takes `AdmittedBlock` by value, preserving the gate across the
-trait surface. `AdmittedBlock` is deliberately distinct from N-C's
-`AcceptedBlock` (cross-use is a type error). The rest are closed
-event/effect/error taxonomies + capability records. Exact
-whole-project recount belongs to the TRACEABILITY regen that follows.
+**PHASE4-N-I introduced ~12 new closed types** in support of the
+in-memory snapshot + replay-forward rollback infrastructure (BLUE +
+GREEN combined): `SnapshotReader` (trait), `BlockSource` (trait),
+`MaterializeError`, `CommitRollbackError`, `TargetPoint` (rollback's),
+`SnapshotCadence`, `InMemorySnapshotCache`, `ChainDbBlockSource`,
+`RollbackContext`, plus the extended `ChainDbWrite::rollback_to_slot`
+trait method. The `materialize_rolled_back_state` function is the
+load-bearing single-authority surface (CN-STORE-07): SOLE `pub fn` in
+the rollback module tree returning the rolled-back `(LedgerState,
+PraosChainDepState)` tuple; composes one `SnapshotReader::nearest_le`
++ one `BlockSource::blocks_in_range` + per-block `block_validity`
+(the same authority N-H's admit branch uses). The `commit_rollback`
+function is the rollback's atomic-commit surface: irreversible-step-
+first staged commit shape; on failure state unchanged; on success
+ledger + chain_dep swap atomically and `pending_headers` resets. The
+rest are closed event/effect/error taxonomies + capability records.
+Exact whole-project recount belongs to the TRACEABILITY regen that
+follows.
 
 **Removals: 0** (expected under append-only discipline).
 
@@ -968,37 +969,40 @@ The project's invariant registry tracks structured rules (TOML), not
 prose normative-doc rules; this section reports on it.
 
 - Rules at baseline (`d509f02:constitution_registry.toml`): **147**
-- Rules at prior refresh (`2adfb45:docs/ade-invariant-registry.toml`): **196**
-- Rules at HEAD (`efe1fb9:docs/ade-invariant-registry.toml`): **202**
-- Net additions vs baseline: **+55** (PHASE4-N-A: 2; PHASE4-N-B: 8;
+- Rules at prior refresh (`f143984:docs/ade-invariant-registry.toml`): **202**
+- Rules at HEAD (`75f75da:docs/ade-invariant-registry.toml`): **206**
+- Net additions vs baseline: **+59** (PHASE4-N-A: 2; PHASE4-N-B: 8;
   PHASE4-B1: 6; PHASE4-B2: 5; PHASE4-B3: 2; PHASE4-B3F: 0; PHASE4-B4: 1;
   PHASE4-B5: 1; OQ5: 1; COMMITTEE-CRED / DREP-VOTE / FIDELITY /
   WRITEBACK / post-3d94c22 testkit: 0 each; PHASE4-N-E S1–S5: 2;
   PHASE4-N-E S6: 0; PROPOSAL-PROCEDURES-DECODE: 1; PHASE4-N-C: 14;
-  PHASE4-N-G: 6; **PHASE4-N-H: 6** — `CN-CONS-08`, `DC-CONS-19`,
-  `DC-CONS-20`, `DC-PROTO-09`, `CN-PROTO-07`, `RO-LIVE-02`, all
-  introduced at `declared` in S1 (`b019ee3`); `CN-PROTO-07` flipped
-  to `enforced` at S1; `CN-CONS-08` + `DC-CONS-19` flipped to
-  `enforced` at S2 (`0ecf22f`); `DC-PROTO-09` flipped to `enforced`
-  at S3 (`c584691`); `RO-LIVE-02` set to `partial` at S6 (`efe1fb9`);
-  `DC-CONS-20` remains at `declared` with `open_obligation =
-  "rollback_side_blocked_until_ledger_snapshot_cluster"` per the
-  Path A scope split).
-- Net additions vs prior refresh: **+6** — the full N-H 6-rule family.
+  PHASE4-N-G: 6; PHASE4-N-H: 6; **PHASE4-N-I: 4** — `DC-CONS-21`,
+  `DC-CONS-22`, `CN-STORE-07`, `DC-STORE-07`, all introduced at
+  `declared` in S1 (`0e7e9ee`); `CN-STORE-07` + `DC-CONS-22` flipped
+  to `enforced` at S2 (`0efdce3`); `DC-STORE-07` flipped to
+  `enforced` at S4 (`3a9bab8`); `DC-CONS-21` remains `declared` with
+  `open_obligation = "persistent_ledger_snapshot_encoding_follow_on_cluster"`
+  per the explicit scope split; **plus the `DC-CONS-20` admit-only →
+  enforced flip at S6 (`75f75da`)**, with
+  `cluster = "PHASE4-N-H + PHASE4-N-I"` +
+  `strengthened_in = ["PHASE4-N-I"]` + `open_obligation` removed).
+- Net additions vs prior refresh: **+4** — the full N-I 4-rule
+  family. Plus 1 status flip on a carried-forward rule:
+  `DC-CONS-20` `declared` → `enforced`.
 - Removals: **0** (expected under append-only discipline; clean).
 
-- **Strengthenings recorded by PHASE4-N-H:**
-  - **`DC-PROTO-06.strengthened_in += "PHASE4-N-H"`** — the
-    mini-protocol session-replay-equivalence rule is strengthened
-    by the receive-side client-role transitions (the new receive
-    orchestrator drives chain-sync (client) + block-fetch (client)
-    per-peer sessions whose transcripts replay byte-identically by
-    DC-PROTO-09). `strengthened_in` at HEAD reads
-    `["PHASE4-N-A", "PHASE4-N-G", "PHASE4-N-H"]` — N-A introduced
-    the client-role transitions, N-G added the symmetric server-role
-    transitions, N-H extends to the receive-side client-role session
-    composing those transitions through the BLUE reducer.
-- **Strengthenings carried forward unchanged**: `CN-CONS-07`
+- **Strengthenings recorded by PHASE4-N-I:**
+  - **`DC-CONS-20.strengthened_in += "PHASE4-N-I"`** — the
+    ChainDb-ledger-chain_dep lockstep rule was admit-side only at
+    N-H close (with `open_obligation =
+    "rollback_side_blocked_until_ledger_snapshot_cluster"`); N-I
+    closes the rollback-side half (via `materialize_rolled_back_state`
+    + `commit_rollback` atomically), flipping the rule from
+    `declared` to `enforced` and updating `cluster =
+    "PHASE4-N-H + PHASE4-N-I"`. The `open_obligation` is removed.
+- **Strengthenings carried forward unchanged**: `DC-PROTO-06`
+  (PHASE4-N-A + PHASE4-N-G + PHASE4-N-H — session-replay-equivalence
+  across client + server + receive-client transitions); `CN-CONS-07`
   (PHASE4-N-G — broadcast gate preserved across the network seam);
   `DC-MEM-01` (PHASE4-N-E); `DC-MEM-02` (B2); `DC-EPOCH-01`
   (WRITEBACK + oracle); `DC-LEDGER-10` (OQ5 → COMMITTEE-CRED →
@@ -1009,43 +1013,41 @@ prose normative-doc rules; this section reports on it.
   `DC-EPOCH-02` (CE-73); the N-D bundle; the N-A real-capture
   bundle; `T-CORE-02` (S-B1); `T-ENC-01` (N-C `block_body_hash`).
 
-- **Open obligations recorded by PHASE4-N-H:**
-  - **`DC-CONS-20.open_obligation = "rollback_side_blocked_until_ledger_snapshot_cluster"`**
-    — the rollback-side half of the ChainDb-ledger-chain_dep lockstep
-    rule is out of scope for the receive-bridge cluster per the
-    Path A scope split. Ledger rollback infrastructure does not yet
-    exist (no LedgerState encode/decode, no snapshot+replay-forward
-    driver). A follow-on rollback cluster closes the half. Until
-    then, the receive bridge returns
-    `Err(ReceiveError::RollbackOutOfScope)` on any peer
-    `RollBackward`; receive state stays consistent. The rule stays
-    at `declared`; admit-side enforcement is recorded under
-    `CN-CONS-08` + `DC-CONS-19` + `DC-PROTO-09`.
+- **Open obligations status at HEAD:**
+  - **`DC-CONS-20.open_obligation` REMOVED** by PHASE4-N-I S6 — the
+    rollback-side half is now mechanically enforced (atomic
+    `materialize_rolled_back_state` + `commit_rollback` over
+    ChainDb + LedgerState + PraosChainDepState; covered by
+    `ci_check_rollback_materialize_closure.sh` + the canonical
+    `rollback_then_continue_admit_equals_straight_line_admit` test).
+  - **`DC-CONS-21.open_obligation = "persistent_ledger_snapshot_encoding_follow_on_cluster"`**
+    — the snapshot encode/decode round-trip rule is `declared`
+    pending a follow-on cluster that ships the full canonical
+    LedgerState encoder (~1500-2000 LoC of field-walk code mirroring
+    `ade_ledger::fingerprint`'s structure; too large for a single
+    slice per the explicit PHASE4-N-I scope decision). N-I ships an
+    **in-memory** SnapshotReader (the `InMemorySnapshotCache`),
+    which fully closes `CN-STORE-07`, `DC-CONS-22`, `DC-STORE-07`,
+    and `DC-CONS-20`; persistence across restarts is the follow-on
+    cluster's deliverable.
   - **`RO-LIVE-02.open_obligation = "blocked_until_operator_peer_available"`**
-    — the live half of CE-N-H-6 (a cardano-node peer's
-    `RollForward` + `BlockDelivered` stream produces a ChainDb tip
-    equal to the peer's announced tip at every step over a captured
-    follow window) is blocked on a private Haskell peer being
-    provisioned. Mechanical pre-condition closed by S5's
-    `receive_pipeline_corpus_drive` test (every Conway-576 corpus
-    block admits through the full receive pipeline; ChainDb tip
-    matches expected `(slot, hash)`; stored bytes equal corpus
-    bytes byte-identically; LedgerState fingerprint changes on
-    admission). The binary `live_block_follow_session` builds +
-    starts in hermetic mode; `--connect` mode requires the private
-    Haskell peer. Reopen procedure documented at
-    `docs/clusters/completed/PHASE4-N-H/CE-N-H-6_PROCEDURE.md` —
-    mirrors the PHASE4-N-C / CE-N-C-8 + PHASE4-N-G / CE-N-G-8 +
-    PHASE4-N-E / CE-NODE-N2C-LTX patterns.
+    — carried forward from PHASE4-N-H. Unchanged.
+  - **`RO-LIVE-01.open_obligation = "blocked_until_operator_peer_available"`**
+    — carried forward from PHASE4-N-G. Unchanged.
+  - **`CN-CONS-06.open_obligation = "blocked_until_operator_stake_available"`**
+    — carried forward from PHASE4-N-C. Unchanged.
+  - **`OP-OPS-04.open_obligation`** (Sum6KES skey loader) — carried
+    forward from PHASE4-N-C. Unchanged.
 
-Family counts at HEAD: registry total **202** (= 196 + 6 from the
-N-H family). The `DC` family grew by 2 (1 CONS + 1 PROTO); the `CN`
-family grew by 2 (CONS-08 + PROTO-07); the `RO` family grew by 1
-(LIVE-02). Per the constitution coverage gate,
-`ci_check_constitution_coverage.sh` PASSES at HEAD with the 6 new
-rules' `ci_script` and `tests` arrays populated; rule status at HEAD
-breaks down to **74 enforced, 17 partial, 111 declared** across the
-202-entry registry.
+Family counts at HEAD: registry total **206** (= 202 + 4 from the
+N-I family). The `DC` family grew by 3 (1 CONS-21 + 1 CONS-22 +
+1 STORE-07); the `CN` family grew by 1 (STORE-07). Per the
+constitution coverage gate, `ci_check_constitution_coverage.sh`
+PASSES at HEAD with the 4 new rules' `ci_script` and `tests` arrays
+populated (except `DC-CONS-21`, which carries `ci_script = ""` +
+`open_obligation` per the follow-on-cluster scope decision); rule
+status at HEAD breaks down to **78 enforced, 17 partial, 111
+declared** across the 206-entry registry.
 
 Normative-doc rule extraction (the `normative_docs` list in
 `.idd-config.json`) is approximate and not regenerated here — the
@@ -1055,98 +1057,90 @@ structured registry is the authoritative source.
 
 ## Anomalies and Cross-Reference Warnings
 
-- **PHASE4-N-H cluster mechanically closed; CE-N-H-6 live half is a
-  registry `open_obligation`, and DC-CONS-20 rollback half is a
-  Path-A-scope `open_obligation` — neither is a regression.** All 6
-  implementing slices (S1 → S6) land their CE — every CE-N-H-1..5 is
-  mechanically enforced by a named CI script + named tests. CE-N-H-6
-  follows the cluster doc's explicit conditional-closure pattern:
-  `RO-LIVE-02.open_obligation = "blocked_until_operator_peer_available"`
-  + named blocker (private Haskell peer unavailable at HEAD
-  `efe1fb9`) + re-open criteria documented in
-  `CE-N-H-6_PROCEDURE.md`. The DC-CONS-20 rollback half is the
-  documented Path A scope split: a follow-on ledger-snapshot cluster
-  ships ledger rollback infrastructure (encode/decode +
-  snapshot+replay-forward driver), at which point the rollback half
-  flips to `enforced`. Both follow the documented conditional-closure
-  doctrine, not discipline gaps.
+- **PHASE4-N-I cluster mechanically closed; one `open_obligation`
+  retained (`DC-CONS-21` persistent-encoding), one closed
+  (`DC-CONS-20` rollback-side).** All 6 implementing slices (S1 →
+  S6) land their CE — every CE-N-I-1..6 is mechanically enforced by
+  a named CI script + named tests. The `DC-CONS-21` open obligation
+  follows the explicit cluster-scope split: N-I deliberately scopes
+  to an **in-memory** SnapshotReader; the persistent on-disk
+  encoder (~1500-2000 LoC of field-walk code mirroring
+  `ade_ledger::fingerprint`) is too large for a single slice and is
+  carved out to a follow-on cluster. The in-memory scope fully
+  closes `CN-STORE-07`, `DC-CONS-22`, `DC-STORE-07`, and (via the S6
+  wiring) `DC-CONS-20`. This is the documented scope-decision
+  pattern, not a discipline gap.
 - **CODEMAP / SEAMS / TRACEABILITY are stale at this HEAD — expected
   drift between cluster close and grounding ripple.** This regen
-  refreshes HEAD_DELTAS only. Prior CODEMAP (`2adfb45`) does NOT
-  contain the N-H new submodules (`ade_ledger::receive`,
-  `ade_runtime::receive`) or the N-H new binary; prior SEAMS does
-  NOT contain the `AdmittedBlock` receive-admission gate seam, the
-  BLUE `ChainDbWrite` trait persistence seam, or the
-  `PendingHeaderCache` `(slot, block_hash)` coordination seam; prior
-  TRACEABILITY does NOT contain the 6 new rules + 5 new
-  `ci_script ↔ rule` edges. The grounding ripple immediately
-  following this HEAD_DELTAS regen will bring all four docs to
-  self-consistency.
-- **No new cross-crate dep edge in PHASE4-N-H.** Both new edges
-  introduced by PHASE4-N-G (`ade_runtime → ade_network` non-dev, plus
-  the four dev-dep edges on `ade_network`) are reused: the receive
-  orchestrator dispatches the existing PHASE4-N-A codecs via the N-G
-  production edge; the BLUE `receive::*` types are consumed via the
-  N-C production edge `ade_runtime → ade_ledger`. No BLUE → RED edge
-  was introduced; the cluster's CI gate
-  `ci_check_receive_orchestrator_no_producer_dep.sh` explicitly
-  forbids the orchestrator from importing `producer::signing` /
-  `broadcast` / `scheduler`, preserving receive/producer pipeline
-  independence at the key-custody boundary.
-- **N-H corpus is the existing Conway-576 corpus** consumed by N-C
-  S3/S7, N-G S5/S7, and B1. No new on-disk corpus was added. The
-  receive-pipeline corpus drive test drives against the same
-  AcceptedBlock arrivals as the N-G server-paths transcript replay.
-  The CE-N-H-6 operator-action evidence (a live log against a
-  private Haskell peer) is by design out of CI reach and is captured
-  as an operator-recorded artifact, mirroring CE-N-C-8, CE-N-G-8,
-  and CE-N-E-6.
-- **PHASE4-N-H cluster directory IS archived.** Already moved to
-  `docs/clusters/completed/PHASE4-N-H/` (8 files: `cluster.md` +
-  `N-H-S1.md` through `N-H-S6.md` + `CE-N-H-6_PROCEDURE.md`).
-  Planning spillovers live at
-  `docs/planning/phase4-n-h-cluster-slice-plan.md` +
-  `docs/planning/receive-side-bridge-invariants.md`. Active
-  `docs/clusters/` at HEAD now contains only `completed/` and
-  `PHASE4-N-B/` (carried-forward stray log directory). This is a
-  cleaner end-state than the N-G regen, which surfaced an unarchived
-  cluster directory.
-- **`strengthened_in` records one strengthening for N-H.**
-  `DC-PROTO-06.strengthened_in = ["PHASE4-N-A", "PHASE4-N-G", "PHASE4-N-H"]`
-  (receive-side client-role transitions extend the rule's
-  session-replay-equivalence scope alongside N-A's client transitions
-  and N-G's server transitions). Recorded as a proper
-  `strengthened_in` entry, not a cross-ref — continuing the
+  refreshes HEAD_DELTAS only. Prior CODEMAP (`f143984`) does NOT
+  contain the N-I new submodules (`ade_ledger::rollback`,
+  `ade_runtime::rollback`); prior SEAMS does NOT contain the
+  `materialize_rolled_back_state` single-rollback-authority seam,
+  the `commit_rollback` atomic-commit seam, the narrow
+  `SnapshotReader` + `BlockSource` trait seams, or the
+  `ChainDbWrite::rollback_to_slot` extended persistence seam; prior
+  TRACEABILITY does NOT contain the 4 new rules + 2 new
+  `ci_script ↔ rule` edges + the `DC-CONS-20` status flip + the
+  `DC-CONS-20.strengthened_in` update. The grounding ripple
+  immediately following this HEAD_DELTAS regen will bring all four
+  docs to self-consistency.
+- **No new cross-crate dep edge in PHASE4-N-I.** The new BLUE
+  `rollback::*` types are consumed via the existing PHASE4-N-C
+  production edge `ade_runtime → ade_ledger`; the N-D `ChainDb`
+  trait is reused by `ChainDbBlockSource` through the internal
+  `ade_runtime → ade_runtime::chaindb` path (no new edge). No BLUE
+  → RED edge was introduced; the BLUE rollback module tree depends
+  only on existing BLUE consensus types and the `ChainDbWrite` +
+  `SnapshotReader` + `BlockSource` traits.
+- **N-I corpus is the existing Conway-576 corpus** (via the N-H
+  `receive_pipeline_corpus_drive` test) plus the new synthetic
+  admit-then-rollback sequences in `receive_rollback_integration.rs`.
+  No new on-disk corpus was added.
+- **PHASE4-N-I cluster directory NOT YET archived.** Still at
+  active `docs/clusters/PHASE4-N-I/` (8 files: `cluster.md` +
+  `N-I-S1.md` through `N-I-S6.md`). Planning spillovers live at
+  `docs/planning/phase4-n-i-cluster-slice-plan.md` +
+  `docs/planning/ledger-snapshot-rollback-invariants.md`. The
+  cluster-close grounding ripple immediately following this
+  HEAD_DELTAS regen will archive the cluster directory to
+  `docs/clusters/completed/PHASE4-N-I/`.
+- **`strengthened_in` records one strengthening for N-I.**
+  `DC-CONS-20.strengthened_in = ["PHASE4-N-I"]` — the
+  ChainDb-ledger-chain_dep lockstep rule was admit-side only at
+  N-H close; N-I closes the rollback-side half. Recorded as a
+  proper `strengthened_in` entry, not a cross-ref — continuing the
   canonical pattern N-G normalized.
 - **No removed canonical types** (n/a — no separate registry;
-  canonical types at HEAD grew by ~12 from the N-H cluster on top
-  of N-G's ~10 + N-C's 22 + PPD's 1 since the prior baseline-snapshot
-  count).
-- **No removed registry rules** (expected: 0; actual: 0). **PHASE4-N-H
-  added 6 new rules.** Registry total: **202** at HEAD (was 196 at
-  prior refresh).
+  canonical types at HEAD grew by ~12 from the N-I cluster on top
+  of N-H's ~12 + N-G's ~10 + N-C's 22 + PPD's 1 since the prior
+  baseline-snapshot count).
+- **No removed registry rules** (expected: 0; actual: 0). **PHASE4-N-I
+  added 4 new rules + flipped 1 carried-forward rule
+  (`DC-CONS-20`) from `declared` to `enforced`.** Registry total:
+  **206** at HEAD (was 202 at prior refresh).
 - **All commit subjects in this regen carry a conventional-commits
-  prefix.** The 6 PHASE4-N-H commits are `feat(ledger)` ×2,
-  `feat(runtime)` ×2, `test(runtime)` ×1, `feat(interop)` ×1. **All
-  6 commits in the `2adfb45..efe1fb9` span carry the repo-required
-  `Co-Authored-By: Claude Opus 4.7 (1M context)` model-attribution
-  trailer** (per the CLAUDE.md project override for the bounty
-  trailer ratio). The project hook `ci/git-hooks/commit-msg` is
-  active in this clone and enforces the trailer mechanically.
-- **Cluster docs archived as of this HEAD.** Seventeen cluster
+  prefix.** The 6 PHASE4-N-I commits are `feat(ledger)` ×3,
+  `feat(runtime)` ×3. **All 6 commits in the `f143984..75f75da`
+  span carry the repo-required `Co-Authored-By: Claude Opus 4.7
+  (1M context)` model-attribution trailer** (per the CLAUDE.md
+  project override for the bounty trailer ratio). The project hook
+  `ci/git-hooks/commit-msg` is active in this clone and enforces
+  the trailer mechanically.
+- **Cluster docs archived as of this HEAD.** Eighteen cluster
   directories archived under `docs/clusters/completed/`:
   COMMITTEE-CRED-FIDELITY, DREP-VOTE-FIDELITY,
   ENACTMENT-COMMITTEE-FIDELITY, ENACTMENT-COMMITTEE-WRITEBACK,
   OQ5-CREDENTIAL-FIDELITY, PHASE4-B1, PHASE4-B2, PHASE4-B3,
   PHASE4-B3F, PHASE4-B4, PHASE4-B5, PHASE4-N-A, PHASE4-N-B,
   PHASE4-N-C, PHASE4-N-D, PHASE4-N-E, PHASE4-N-G, PHASE4-N-H,
-  PROPOSAL-PROCEDURES-DECODE.
+  PROPOSAL-PROCEDURES-DECODE. PHASE4-N-I cluster directory is
+  pending archive (immediately following grounding ripple).
 - **B5 / B4 / B3F / B3 / B2 / B1 / N-D / N-B / N-A / PHASE4-N-E /
-  PROPOSAL-PROCEDURES-DECODE / PHASE4-N-C / PHASE4-N-G closures —
-  carried forward unchanged.**
+  PROPOSAL-PROCEDURES-DECODE / PHASE4-N-C / PHASE4-N-G / PHASE4-N-H
+  closures — carried forward unchanged.**
 - **Pre-existing `boundary_fingerprint_matches_pins` failure on
   `byron_pre_hfc` predates this cluster.** Out-of-scope for
-  PHASE4-N-H; not introduced by any N-H slice. Tracked under a
+  PHASE4-N-I; not introduced by any N-I slice. Tracked under a
   separate future cluster.
 - **DC-VAL status mismatch vs. closure claim (B1, carried forward).**
   Only `DC-VAL-01` is `enforced`; `DC-VAL-02` → `DC-VAL-05` remain
@@ -1155,8 +1149,8 @@ structured registry is the authoritative source.
 - **Adversarial corpora are derived, not committed (carried forward).**
   N-E reuses the B2 B-track corpus verbatim; PPD PP-S2 ships its
   corpus in code; PHASE4-N-C ships its corpus in code; PHASE4-N-G
-  + **PHASE4-N-H** both reuse the existing Conway-576 corpus
-  (no new corpus). The corpus pattern continues the
+  + PHASE4-N-H + **PHASE4-N-I** all reuse the existing Conway-576
+  corpus (no new corpus). The corpus pattern continues the
   no-new-on-disk-artifacts trend.
 - **Corpus relayout: credentialed snapshots removed, then regenerated
   off-repo (carried forward).** `corpus/snapshots/` `.gitignore`-d;
@@ -1171,21 +1165,21 @@ Regenerate via `/head-deltas <baseline>` or by re-running the
 in `.idd-config.json` `head_deltas_baseline` (still `d509f02` —
 **this is a cluster-close grounding refresh, not a phase boundary,
 so the baseline is unchanged**). Update the baseline on the next
-phase boundary (Phase 4 close, which PHASE4-N-H brings further into
-reach: the symmetric receive-side bridge is mechanically closed
-admit-only; the remaining Phase-4 closure work is operator-action
-live evidence for CE-N-C-8 / CE-N-G-8 / CE-N-H-6 / CE-NODE-N2C-LTX,
-the rollback half of DC-CONS-20 via a follow-on ledger-snapshot
-cluster, the N-F operator surface, and the OP-OPS-04 Sum6KES skey
-loader gap). Note the commit-hash rewrite caveat at the top —
-re-derive hashes from `git log` at each regen rather than carrying
-them forward. This regen is cut at HEAD `efe1fb9` (PHASE4-N-H S6).
-The prior regen narrated HEAD `a280954` (PHASE4-N-G S7, archived at
-`2adfb45`); the new span is `2adfb45..efe1fb9` — 6 commits:
-`b019ee3` (S1 BLUE AdmittedBlock token + receive closed sums +
-PendingHeaderCache + ChainDbWrite), `0ecf22f` (S2 BLUE receive_apply
-reducer composing block_validity), `c584691` (S3 GREEN
-events_to_state + in_memory_chain_write + transcript replay),
-`1d06089` (S4 RED N2N receive orchestrator), `3973261` (S5
-mechanical cross-impl receive pipeline drive), `efe1fb9` (S6
-live_block_follow_session + CE-N-H-6 procedure).
+phase boundary (Phase 4 close, which PHASE4-N-I brings further into
+reach: the symmetric receive-side bridge is now mechanically closed
+admit + rollback; the remaining Phase-4 closure work is operator-
+action live evidence for CE-N-C-8 / CE-N-G-8 / CE-N-H-6 /
+CE-NODE-N2C-LTX, the persistent on-disk ledger-snapshot encoder
+cluster that closes `DC-CONS-21`, the N-F operator surface, and the
+OP-OPS-04 Sum6KES skey loader gap). Note the commit-hash rewrite
+caveat at the top — re-derive hashes from `git log` at each regen
+rather than carrying them forward. This regen is cut at HEAD
+`75f75da` (PHASE4-N-I S6). The prior regen narrated HEAD `efe1fb9`
+(PHASE4-N-H S6, archived at `f143984`); the new span is
+`f143984..75f75da` — 6 commits: `0e7e9ee` (S1 BLUE rollback traits +
+closed error sums), `0efdce3` (S2 BLUE materialize_rolled_back_state
+driver), `02b5e31` (S3 BLUE commit_rollback atomic helper +
+ChainDbWrite trait extension), `3a9bab8` (S4 GREEN snapshot cadence
++ InMemorySnapshotCache + ChainDbBlockSource), `e7add4d` (S5 GREEN
+maybe_capture_snapshot hook), `75f75da` (S6 wire RollBackward →
+close DC-CONS-20).
