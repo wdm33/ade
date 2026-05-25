@@ -44,6 +44,35 @@ pub struct DecodedBlock {
     pub inner_end: usize,
 }
 
+/// Return the header CBOR sub-slice of an `AcceptedBlock` envelope —
+/// the same bytes the validator's body-hash recipe hashes via
+/// `header_cbor_slice`. Reuses the existing canonical walker; this is
+/// the single header-projection authority for the producer-side server
+/// pump (PHASE4-N-G, `DC-CONS-18`). No parallel splitter.
+///
+/// The returned slice is a contiguous subslice of `accepted.as_bytes()`
+/// projected into envelope coordinates; for a Babbage/Conway envelope
+/// `[era, inner_block]`, the header is the first element of
+/// `inner_block`'s outer `array(N)`.
+pub fn accepted_block_header_bytes(
+    accepted: &crate::producer::AcceptedBlock,
+) -> Result<&[u8], BlockValidityError> {
+    let bytes = accepted.as_bytes();
+    let env = decode_block_envelope(bytes).map_err(codec)?;
+    let inner_start = env.block_start;
+    let inner = &bytes[inner_start..env.block_end];
+    let header = header_cbor_slice(inner)?;
+    // Project `header` (a slice of `inner`) back into `bytes` coordinates
+    // via slice arithmetic on the parent slice positions. The walker
+    // returns `&inner[start..end]`, and `inner` is `&bytes[inner_start..]`,
+    // so `header` lives at `bytes[inner_start + (header.start - inner.start)]`.
+    // We use `as_ptr()` arithmetic on the contiguous parent slice — both
+    // pointers come from `bytes`, so the subtraction is safe.
+    let header_start_in_inner = (header.as_ptr() as usize) - (inner.as_ptr() as usize);
+    let header_start_in_bytes = inner_start + header_start_in_inner;
+    Ok(&bytes[header_start_in_bytes..header_start_in_bytes + header.len()])
+}
+
 /// Decode an era-tagged block envelope and project it.
 ///
 /// Conway/Babbage produce a Praos `HeaderInput`; the combined VRF cert carries

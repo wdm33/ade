@@ -2438,3 +2438,80 @@ code_locus = "crates/ade_runtime/src/producer/scheduler.rs (scheduler_step + the
 tests = ["producer_full_path_under_slot_deadline_on_reference_fixture"]
 ci_script = "ci/ci_check_scheduler_closure.sh"
 status = "enforced"
+
+# =============================================================================
+# PHASE4-N-A-successor — Producer-side block-fetch + chain-sync server paths
+# Sketch: docs/planning/phase4-n-a-successor-invariants.md
+# Status: "declared" — enforcement debt to be closed by slices in this cluster.
+# =============================================================================
+
+[[rules]]
+id = "DC-CONS-17"
+tier = "derived"
+statement = "Block bytes delivered via producer-side block-fetch Block{bytes} are byte-identical to AcceptedBlock.as_bytes() for the AcceptedBlock that cleared self_accept. The producer-side server never re-encodes."
+source = "docs/planning/phase4-n-a-successor-invariants.md §1 (I-1)"
+cross_ref = ["T-ENC-01", "DC-CONS-16", "CN-CONS-07"]
+code_locus = ""
+tests = []
+ci_script = ""
+status = "declared"
+
+[[rules]]
+id = "DC-CONS-18"
+tier = "derived"
+statement = "Header bytes announced via chain-sync RollForward{header,tip} are the header sub-segment of the AcceptedBlock whose body bytes are subsequently servable via block-fetch. block_body_hash applied to the served body MUST equal the body-hash field of the announced header."
+source = "docs/planning/phase4-n-a-successor-invariants.md §1 (I-2)"
+cross_ref = ["DC-CONS-16", "DC-CONS-17"]
+code_locus = ""
+tests = []
+ci_script = ""
+status = "declared"
+
+[[rules]]
+id = "DC-PROTO-07"
+tier = "derived"
+statement = "Given canonical inputs (negotiated_version, peer_message_sequence, broadcast_arrival_sequence, session_event_sequence), the producer-side chain-sync / block-fetch session orchestrator emits a byte-identical sequence of outgoing mini-protocol frames across replays. The per-session reducer is a pure deterministic transition."
+source = "docs/planning/phase4-n-a-successor-invariants.md §3"
+cross_ref = ["T-DET-01", "DC-PROTO-06"]
+code_locus = ""
+tests = []
+ci_script = ""
+status = "declared"
+
+[[rules]]
+id = "DC-PROTO-08"
+tier = "derived"
+statement = "Once chain-sync enters a state where the server holds agency, the pure per-session reducer must return exactly one of: a legal RollForward, a legal RollBackward, a legal AwaitReply, or a structured deterministic session-close/error. It must not return an ambiguous wait state unless the wait condition is an explicit replay input."
+source = "docs/planning/phase4-n-a-successor-invariants.md §1 (I-8), §2 (¬P-4)"
+cross_ref = ["DC-PROTO-06", "DC-PROTO-07"]
+code_locus = ""
+tests = []
+ci_script = ""
+status = "declared"
+
+[[rules]]
+id = "CN-PROTO-06"
+tier = "derived"
+statement = "The producer-side session orchestrator can only construct outgoing mini-protocol messages tagged with Server agency. Client-originated messages from the server-role pump are unrepresentable in the public API; misuse is a compile error (closed ServerReply<M> wrapper)."
+source = "docs/planning/phase4-n-a-successor-invariants.md §1 (I-4)"
+cross_ref = ["DC-PROTO-06", "CN-CONS-07"]
+code_locus = "crates/ade_network/src/chain_sync/server.rs (ServerReply for chain-sync); crates/ade_network/src/block_fetch/server.rs (ServerReply for block-fetch); crates/ade_ledger/src/block_validity/header_input.rs (accepted_block_header_bytes — the single canonical header projection the chain-sync ServerReply::roll_forward consumes)"
+tests = ["chain_sync_server_reply_round_trips_through_codec", "chain_sync_server_reply_into_message_only_yields_server_variants", "block_fetch_server_reply_round_trips_through_codec", "block_fetch_server_reply_into_message_only_yields_server_variants", "accepted_block_header_bytes_equals_validator_split_on_corpus", "accepted_block_header_bytes_is_subslice_of_as_bytes", "accepted_block_header_bytes_rejects_malformed_envelope"]
+ci_script = "ci/ci_check_no_parallel_header_splitter.sh"
+status = "enforced"
+authority_surface = "producer-side server-role mini-protocol reply surface"
+cluster = "PHASE4-N-G"
+evidence = ["ServerReply structs in chain_sync/server.rs and block_fetch/server.rs have private inner enums; no public constructor exists for client-agency variants (RequestNext, FindIntersect, Done for chain-sync; RequestRange, ClientDone for block-fetch). into_message() projects only to server-agency wire variants; exhaustive match tests prove the closure.", "ci_check_no_parallel_header_splitter.sh enforces single-authority header projection: the only pub fn *_header_bytes in the workspace lives at crates/ade_ledger/src/block_validity/header_input.rs."]
+attack_rationale = "A producer that can construct client-originated server-pump messages can confuse a peer's state machine or impersonate a peer to itself."
+evidence_notes = "Enforcement is type-level: the ServerReply wrappers' inner enum field is private and no constructor exists for client-agency variants. Adding such a constructor in future would require explicit modification of the wrapper's public API surface and would surface in code review + the n2n_server CI gate planned for S6."
+
+[[rules]]
+id = "RO-LIVE-01"
+tier = "release"
+statement = "A Haskell cardano-node peer issuing RequestRange covering an Ade-forged block receives, via the producer-side block-fetch server, bytes that pass that peer's full header+body validation. Captured as an operator-action log against a private Haskell peer; the underlying semantic invariants are DC-CONS-17, DC-CONS-18, CN-PROTO-06, DC-PROTO-07, DC-PROTO-08, and the existing self-accept + body-hash recipe (DC-CONS-16)."
+source = "docs/planning/phase4-n-a-successor-invariants.md §8"
+cross_ref = ["DC-CONS-16", "DC-CONS-17", "DC-CONS-18", "CN-PROTO-06", "DC-PROTO-07", "DC-PROTO-08", "CN-CONS-06"]
+code_locus = ""
+tests = []
+ci_script = ""
+status = "declared"

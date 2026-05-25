@@ -21,6 +21,7 @@
 // (DC-PROTO-06).
 
 pub mod agency;
+pub mod server;
 pub mod signal;
 pub mod state;
 pub mod transition;

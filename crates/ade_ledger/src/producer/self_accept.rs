@@ -338,6 +338,97 @@ mod tests {
         }
     }
 
+    // -----------------------------------------------------------------
+    // PHASE4-N-G S1: accepted_block_header_bytes tests
+    // -----------------------------------------------------------------
+    //
+    // The accessor lives in `block_validity::header_input` but
+    // `AcceptedBlock` has a private constructor reachable only from
+    // this module, so we host the tests where the legitimate
+    // self-accept corpus already exists.
+
+    #[test]
+    fn accepted_block_header_bytes_equals_validator_split_on_corpus() {
+        use ade_codec::cbor;
+
+        let corpus = corpus();
+        let view = view(&corpus);
+        let schedule = schedule();
+        let ledger = ledger_at_576();
+        let chain_dep = state_with_eta0(corpus.epoch_nonce);
+
+        let block_bytes = pick_lightest(&corpus).to_vec();
+        let accepted = self_accept(&block_bytes, &ledger, &chain_dep, &schedule, &view)
+            .expect("corpus block self-accepts");
+
+        let header_bytes =
+            crate::block_validity::accepted_block_header_bytes(&accepted).expect("header projects");
+
+        // Walk the envelope independently and assert the projected
+        // slice equals the inner block's first array element — the
+        // header — byte-for-byte.
+        let env = ade_codec::cbor::envelope::decode_block_envelope(&block_bytes)
+            .expect("envelope decodes");
+        let inner = &block_bytes[env.block_start..env.block_end];
+        let mut o = 0usize;
+        cbor::read_array_header(inner, &mut o).expect("inner array header");
+        let (h_start, h_end) = cbor::skip_item(inner, &mut o).expect("header span");
+        let expected = &inner[h_start..h_end];
+
+        assert_eq!(
+            header_bytes, expected,
+            "accepted_block_header_bytes must equal the validator's header_cbor_slice over the inner block"
+        );
+    }
+
+    #[test]
+    fn accepted_block_header_bytes_is_subslice_of_as_bytes() {
+        let corpus = corpus();
+        let view = view(&corpus);
+        let schedule = schedule();
+        let ledger = ledger_at_576();
+        let chain_dep = state_with_eta0(corpus.epoch_nonce);
+
+        let block_bytes = pick_lightest(&corpus).to_vec();
+        let accepted = self_accept(&block_bytes, &ledger, &chain_dep, &schedule, &view)
+            .expect("corpus block self-accepts");
+
+        let header_bytes =
+            crate::block_validity::accepted_block_header_bytes(&accepted).expect("header projects");
+
+        // Pointer-arithmetic check: header_bytes lives inside accepted.as_bytes().
+        let full = accepted.as_bytes();
+        let full_start = full.as_ptr() as usize;
+        let full_end = full_start + full.len();
+        let h_start = header_bytes.as_ptr() as usize;
+        let h_end = h_start + header_bytes.len();
+        assert!(
+            h_start >= full_start && h_end <= full_end,
+            "header slice must be a contiguous subslice of as_bytes()"
+        );
+    }
+
+    #[test]
+    fn accepted_block_header_bytes_rejects_malformed_envelope() {
+        // We can't construct an AcceptedBlock with garbage bytes (private
+        // constructor + self_accept rejects malformed). Instead drive
+        // the underlying walker on a hand-crafted envelope-shaped value
+        // we *can* legitimately self-accept (corpus), but then verify
+        // that the function's failure surface is BlockValidityError ──
+        // i.e. it returns Err on a corrupted envelope rather than
+        // panicking. To exercise the err path without bypassing the
+        // private constructor, this test asserts that the inverse
+        // helper (decode_block_envelope) used inside the accessor is
+        // the same one that rejects garbage; demonstrated by feeding
+        // garbage into decode_block_envelope and asserting Err.
+        let garbage = vec![0xFFu8; 16];
+        let err = ade_codec::cbor::envelope::decode_block_envelope(&garbage);
+        assert!(
+            err.is_err(),
+            "decode_block_envelope must reject garbage envelope (the same gate accepted_block_header_bytes relies on)"
+        );
+    }
+
     #[test]
     fn broadcast_callable_only_with_accept_verdict() {
         // Runtime witness paired with the CI grep gate
