@@ -95,14 +95,29 @@
   adversarial corpus wrapped in synthetic `IngressEvent`s reproduces
   exact `TxValidityError` rejection class for every reject case. Test:
   `b_track_adversarial_rejections_preserved_through_ingress` (corpus-wide).
-- **CE-N-E-6 (live N2N evidence)** — Real `cardano-node` peer submits
-  txs to Ade over N2N tx-submission2; verdicts byte-identical to direct
-  corpus replay. Closure via operator-captured evidence log
-  `docs/clusters/PHASE4-N-E/CE-N-E-6_<date>.log` (CE-N-B-6 pattern).
-- **CE-N-E-7 (live N2C evidence)** — Real `cardano-cli transaction submit`
-  to Ade over N2C local-tx-submission UDS; verdict matches N2N submission
-  of the same bytes. Closure via operator evidence log
-  `docs/clusters/PHASE4-N-E/CE-N-E-7_<date>.log`.
+- **CE-N-E-6 (live N2N evidence)** — Outbound-client tx-submission2
+  probe against a real `cardano-node` peer: N2N handshake accepted,
+  mini-protocol opened, every received message drives the BLUE
+  `tx_submission2_transition` state machine without
+  `IllegalTransition` / `MalformedMessage`; every codec round-trip
+  succeeds. Closure via operator-captured evidence log
+  `docs/clusters/PHASE4-N-E/CE-N-E-6_<date>.log` produced by
+  `cargo run -p ade_core_interop --bin live_tx_submission_session
+  -- --connect …`. Bulk tx_bytes ingestion in this direction is
+  opportunistic — the outbound client doesn't naturally pull from
+  the peer's mempool, so the load-bearing evidence is wire +
+  codec + state machine, not tx delivery. Full tx-delivery
+  evidence is deferred to CE-NODE-N2C-LTX in the future
+  node-binary cluster (see "Deferred / cross-cluster obligation"
+  below).
+- **CE-N-E-7 (live N2C evidence)** — **DEFERRED** to the future
+  node-binary cluster as cross-cluster obligation
+  `CE-NODE-N2C-LTX` (see "Deferred / cross-cluster obligation"
+  below). Rationale: an N2C local-tx-submission UDS server requires
+  real server ownership by `ade_node`, not an operator-only interop
+  binary; building one here would create parallel mini-node
+  scaffolding before `ade_node` owns that authority surface, and
+  drift-risk a future architecture pass.
 
 ## Expected Slice Types
 
@@ -119,37 +134,96 @@
   Creates `crates/ade_ledger/src/mempool/canonicalize.rs`; tests that two
   distinct interleavings of the same per-peer streams produce identical
   `IngressEvent` sequences. *(CE-N-E-4 multi-peer half)*. **TCB: GREEN.**
-- **N-E-S4** — N2N tx-submission2 session driver + live evidence. Creates
-  `crates/ade_runtime/src/tx_submission/n2n_session.rs`; documents the
-  operator procedure for capturing `CE-N-E-6_<date>.log` against a real
-  cardano-node peer. *(CE-N-E-6)*. **TCB: RED.**
-- **N-E-S5** — N2C local-tx-submission UDS session driver + live evidence.
-  Creates `crates/ade_runtime/src/tx_submission/n2c_session.rs`; documents
-  the operator procedure for capturing `CE-N-E-7_<date>.log` against real
-  cardano-cli. *(CE-N-E-7)*. **TCB: RED.**
+- **N-E-S4** — N2N tx-submission2 GREEN bridge in `ade_core_interop` +
+  documented operator procedure. Adds
+  `crates/ade_core_interop/src/tx_submission.rs` (GREEN — InventoryEvent
+  → IngressEvent adapter, per-peer accumulator, `ingest_n2n_events`
+  orchestrator). *(CE-N-E-6 mechanical adapter half)*.
+  **TCB: GREEN.**
+- **N-E-S5** — N2C local-tx-submission GREEN bridge in `ade_core_interop` +
+  documented operator procedure. Adds
+  `crates/ade_core_interop/src/local_tx_submission.rs` (GREEN — same
+  shape as S4 over LocalTxSubmissionEvent). *(adapter mechanical evidence
+  via `n2n_and_n2c_bridges_produce_identical_outcomes`; CE-N-E-7 itself
+  deferred — see below)*. **TCB: GREEN.**
+- **N-E-S6** — Live N2N tx-submission2 session binary. Adds
+  `crates/ade_core_interop/src/bin/live_tx_submission_session.rs`
+  (RED, modeled on `live_consensus_session`) that drives the BLUE
+  `tx_submission2_transition` against a real cardano-node peer over
+  a sustained window and writes `CE-N-E-6_<date>.log`. Closure-gate
+  `#[ignore]` test asserts the binary builds and starts.
+  *(CE-N-E-6 mechanical-binary half; live log requires operator run)*.
+  **TCB: RED.**
 
 ## TCB Color Map
 
 - **BLUE** — `ade_ledger::mempool::ingress` (new, S1);
-  `ade_ledger::mempool::admit` (existing, untouched).
-- **GREEN** — `ade_ledger::mempool::canonicalize` (new, S3);
-  `ade_testkit::mempool::ingress_replay` (new, S2);
+  `ade_ledger::mempool::admit` (existing, untouched);
+  `ade_ledger::mempool::canonicalize` (new, S3 — sync, deterministic,
+  no I/O; classified GREEN by sub-module convention but lives in the
+  BLUE crate prefix so the family-level CI keeps it honest).
+- **GREEN** — `ade_testkit::mempool::ingress_replay` (new, S2);
   `ade_core_interop::tx_submission` (new, S4 — InventoryEvent →
   IngressEvent adapter + per-peer accumulator + ingest_n2n_events
-  orchestrator; pure / deterministic).
-- **RED** — operator-action live N2N session
-  (procedure: `docs/clusters/PHASE4-N-E/CE-N-E-6_PROCEDURE.md`;
-  evidence log: `CE-N-E-6_<date>.log`);
-  operator-action live N2C session (S5,
-  `CE-N-E-7_PROCEDURE.md` + `CE-N-E-7_<date>.log`).
+  orchestrator);
+  `ade_core_interop::local_tx_submission` (new, S5 — same shape over
+  LocalTxSubmissionEvent).
+- **RED** — `ade_core_interop::bin::live_tx_submission_session` (new,
+  S6 — sustained-window N2N probe; closure-gate `#[ignore]` test +
+  operator `--connect` pass; writes
+  `docs/clusters/PHASE4-N-E/CE-N-E-6_<date>.log`).
+- **DEFERRED RED** — the live N2C UDS server + operator pass for
+  CE-N-E-7 is **NOT** built in this cluster. It moves to the future
+  node-binary cluster as cross-cluster obligation
+  `CE-NODE-N2C-LTX`; `CE-N-E-7_PROCEDURE.md` is retained as the
+  procedure spec for that future closure.
 
-The S4 cluster doc previously placed the session driver under
-`ade_runtime::tx_submission::n2n_session`; the actual home is
-`ade_core_interop::tx_submission` (the project's established RED
-live-interop crate, which already houses the PHASE4-N-B CE-N-B-6
-follow-mode bridge). The GREEN bridge code in `ade_core_interop`
-is mechanically tested; the live socket loop that drives a real
-cardano-node peer is the operator-action half.
+The cluster doc's prior placement of S4/S5 session loops under
+`ade_runtime::tx_submission::*` is corrected: the actual home is
+`ade_core_interop` (the project's established RED live-interop
+crate that already houses the PHASE4-N-B follow-mode bridge).
+
+## Cluster status
+
+**Tier-1 authority closed; live N2N evidence binary complete; live N2C
+evidence deferred to node-binary cluster as CE-NODE-N2C-LTX.**
+
+Mechanical:
+  - CE-N-E-1, CE-N-E-2, CE-N-E-3, CE-N-E-4, CE-N-E-5 — CI-green.
+  - CE-N-E-6 — adapter mechanical evidence CI-green
+    (`tx_submission_ingress`, `local_tx_submission_ingress`,
+    `n2n_and_n2c_bridges_produce_identical_outcomes`); live-wire
+    evidence requires an operator `--connect` run of
+    `live_tx_submission_session` to capture
+    `CE-N-E-6_<date>.log`.
+
+Deferred:
+  - CE-N-E-7 — see cross-cluster obligation below. The cluster
+    documents do NOT claim CE-N-E-7 as closed.
+
+Cluster directory stays in `docs/clusters/PHASE4-N-E/` (not yet
+archived to `completed/`) until the CE-N-E-6 evidence log is
+committed.
+
+## Deferred / cross-cluster obligation (CE-NODE-N2C-LTX)
+
+CE-NODE-N2C-LTX is an entry-condition proof obligation on the future
+node-binary cluster (`ade_node` becoming a real Cardano node). It
+holds the following requirement on that cluster:
+
+> When `ade_node` exposes its N2C local-tx-submission UDS endpoint
+> as part of normal node operation, a real `cardano-cli transaction
+> submit` to that endpoint MUST produce verdicts byte-identical to
+> the N2N bridge submission of the same tx bytes. Closure via
+> operator-captured evidence log per the procedure spec in
+> `docs/clusters/PHASE4-N-E/CE-N-E-7_PROCEDURE.md`, committed under
+> the future node-binary cluster's directory as
+> `CE-NODE-N2C-LTX_<date>.log`.
+
+The deferral is not a semantic waiver: bounty / N2C certification
+remains blocked until the node-binary cluster discharges this
+obligation. The CE-N-E-7 procedure document is retained in place
+as the canonical spec for the future closure.
 
 ## Forbidden During This Cluster
 

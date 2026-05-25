@@ -1,10 +1,21 @@
 # CE-N-E-7 — operator procedure for live N2C evidence capture
 
-> **Status:** Operator procedure (non-normative). Closure of CE-N-E-7
-> requires running this procedure against a real `cardano-cli` over
-> Ade's N2C local-tx-submission UDS and committing the resulting log
-> to `docs/clusters/PHASE4-N-E/CE-N-E-7_<YYYY-MM-DD>.log`. Mirrors the
-> CE-N-E-6 procedure for the N2N transport.
+> **Status: DEFERRED to the future node-binary cluster as cross-cluster
+> obligation `CE-NODE-N2C-LTX`.** This procedure spec is retained in
+> place because the operator workflow it describes is the canonical
+> spec for the future closure. PHASE4-N-E deliberately does NOT
+> build an N2C UDS server — that scaffolding belongs to `ade_node`
+> when it becomes a real Cardano node. See the "Deferred /
+> cross-cluster obligation" section of `cluster.md` for the framing
+> and the requirement on the future node-binary cluster.
+>
+> Until that cluster lands, CE-N-E-7 is open. The procedure below
+> describes what closure will look like; do NOT attempt to satisfy
+> it by building temporary UDS scaffolding inside PHASE4-N-E.
+> When the future node-binary cluster discharges this obligation,
+> the evidence log lands at
+> `docs/clusters/<future-cluster>/CE-NODE-N2C-LTX_<YYYY-MM-DD>.log`
+> (not under PHASE4-N-E).
 
 ## What CE-N-E-7 asserts
 

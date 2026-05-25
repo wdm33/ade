@@ -22,3 +22,7 @@ tokio = { version = "1", features = ["net", "rt", "io-util", "macros", "time", "
 [[bin]]
 name = "live_consensus_session"
 path = "src/bin/live_consensus_session.rs"
+
+[[bin]]
+name = "live_tx_submission_session"
+path = "src/bin/live_tx_submission_session.rs"

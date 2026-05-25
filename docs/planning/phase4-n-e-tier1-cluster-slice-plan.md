@@ -75,8 +75,14 @@ a deterministic GREEN canonicalizer into that one BLUE bridge.
 | **N-E-S1** | IngressEvent + mempool_ingress + closure CI | Tx ingress reduces to a closed `IngressEvent` before BLUE admission; the source variant is metadata only. | CE-N-E-1, CE-N-E-3 (type-level half) | BLUE + CI |
 | **N-E-S2** | Adversarial corpus reuse + ingress-replay harness | Replaying the B-track adversarial corpus through `mempool_ingress` reproduces byte-identical results to direct `admit`. | CE-N-E-2, CE-N-E-3 (corpus half), CE-N-E-5 | GREEN harness over BLUE |
 | **N-E-S3** | Per-peer canonicalizer | Two distinct interleavings of the same per-peer tx streams produce the same `IngressEvent` sequence. | CE-N-E-4 (multi-peer half) | GREEN |
-| **N-E-S4** | N2N tx-submission2 session driver + live evidence | Real cardano-node peer→Ade submission reaches `mempool_ingress` with byte-identical tx bytes. | CE-N-E-6 | RED |
-| **N-E-S5** | N2C local-tx-submission UDS session driver + live evidence | Real cardano-cli→Ade submission reaches `mempool_ingress` and produces verdicts matching N2N submission of the same bytes. | CE-N-E-7 | RED |
+| **N-E-S4** | N2N InventoryEvent → mempool_ingress GREEN bridge | InventoryEvent::TxsDelivered streams reduce to deterministic IngressEvent streams + replay. | CE-N-E-6 (adapter mechanical half) | GREEN |
+| **N-E-S5** | N2C LocalTxSubmissionEvent → mempool_ingress GREEN bridge + cross-bridge agreement | Same tx bytes under N2N vs N2C bridges produce byte-identical outcomes. | CE-N-E-7 adapter mechanical half (CE itself **deferred**, see below) | GREEN |
+| **N-E-S6** | Live N2N tx-submission2 binary | BLUE state machine drives correctly over real wire + handshake + mux + codec; protocol grammar respected for sustained window. | CE-N-E-6 (live-wire half) | RED + `#[ignore]` test |
+
+**Deferred from N-E:** CE-N-E-7's live N2C UDS server + operator pass.
+Moved to the future node-binary cluster as cross-cluster obligation
+`CE-NODE-N2C-LTX`. No temporary UDS scaffolding is built in this
+cluster. Procedure spec retained at `docs/clusters/PHASE4-N-E/CE-N-E-7_PROCEDURE.md`.
 
 ### Replay obligations
 

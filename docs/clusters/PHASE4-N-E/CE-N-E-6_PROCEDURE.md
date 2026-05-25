@@ -27,18 +27,28 @@ the live-wire half: real bytes coming off a real socket.
 
 ## Procedure
 
-1. **Handshake + tx-submission2 session.** Connect to the relay via the
-   PHASE4-N-A handshake codec, negotiate tx-submission2 v15+, and run a
-   client session that collects every `InventoryEvent::TxsDelivered`
-   for a sustained window:
-   - duration ≥ 10 minutes,
-   - ≥ 50 distinct `tx_bytes` observed (collected via
-     `event_to_ingress` and accumulated by `PeerAccumulator`).
+1. **Run the sustained-window probe.** PHASE4-N-E S6 ships the binary:
 
-   The session loop mirrors the `live_consensus_session` binary
-   pattern in `crates/ade_core_interop/src/bin/`. A dedicated
-   `live_tx_submission_session` binary is the natural future home;
-   in this slice the procedure references it as the planned executable.
+   ```
+   cargo run -p ade_core_interop --bin live_tx_submission_session -- \
+       --connect --network preprod --max-seconds 600 --max-frames 1000
+   ```
+
+   This connects to a real cardano-node N2N relay, negotiates the
+   handshake, opens tx-submission2 (mini-protocol id 4), and drives
+   the BLUE `tx_submission2_transition` state machine against every
+   peer message for the configured window (default: 10 min, 1000
+   frames). Honest scope:
+
+   - **Always evidenced:** N2N handshake, mux frame I/O, codec
+     round-trips, BLUE state machine driving the protocol grammar
+     without `IllegalTransition` / `MalformedMessage` errors.
+   - **Opportunistically evidenced:** any `ReplyTxs` the peer
+     happens to send flows through `event_to_ingress` and
+     `PeerAccumulator` into the bridge. Bulk tx delivery in this
+     direction is NOT the binary's primary purpose — see the
+     "Honest scope" section of `N-E-S6.md` and the `CE-NODE-N2C-LTX`
+     deferral framing in `cluster.md`.
 
 2. **Bridge to mempool.** Feed the captured per-peer InventoryEvent
    stream through `ade_core_interop::tx_submission::ingest_n2n_events`:
