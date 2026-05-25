@@ -16,6 +16,11 @@
 
 pub mod events_to_state;
 pub mod in_memory_chain_write;
+pub mod orchestrator;
 
 pub use events_to_state::{lift_block_fetch_event, lift_chain_sync_signal};
 pub use in_memory_chain_write::ChainDbWriter;
+pub use orchestrator::{
+    dispatch_block_fetch_inbound, dispatch_chain_sync_inbound, PerPeerReceiveState,
+    ReceiveDispatchError,
+};
