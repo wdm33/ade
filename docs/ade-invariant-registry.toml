@@ -2365,10 +2365,10 @@ tier = "derived"
 statement = "Forged header.body_hash MUST equal blake2b_256(forged_body_wire_bytes), where forged_body_wire_bytes are produced by the single Cardano-compatible canonical block-body encoder used by the validator hash path. The producer and validator hash the same bytes through the same encoder. Strengthens T-ENC-01 for the producer surface; closes any potential producer/validator encoder bifurcation."
 source = "docs/planning/phase4-n-c-invariants.md §1 (NC-FORGE-5); Project constitution §2 (T-ENC-01, Byte Authority Model)"
 cross_ref = ["T-ENC-01", "DC-CONS-13", "CN-CONS-07"]
-code_locus = ""
-tests = []
-ci_script = ""
-status = "declared"
+code_locus = "crates/ade_ledger/src/block_body_hash.rs (block_body_hash, block_body_hash_from_buckets — single canonical authority); crates/ade_ledger/src/producer/forge.rs (forge_block — consumer); crates/ade_ledger/src/block_validity/header_input.rs (computed_body_hash — consumer)"
+tests = ["block_body_hash_pinned_recipe_byte_identical", "block_body_hash_from_block_equals_from_buckets", "block_body_hash_none_invalid_txs_equals_empty_bucket", "forged_body_hash_matches_validator_recomputation", "body_encoder_is_single_authority"]
+ci_script = "ci/ci_check_no_producer_body_encoder.sh"
+status = "enforced"
 introduced_in = "PHASE4-N-C"
 strengthened_in = []
 

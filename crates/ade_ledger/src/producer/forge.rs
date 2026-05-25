@@ -29,12 +29,11 @@ use ade_codec::shelley::tx_components::split_conway_tx_components;
 use ade_codec::traits::{AdeEncode, CodecContext};
 use ade_core::consensus::leader_schedule::is_leader_for_vrf_output;
 use ade_core::consensus::opcert_validate::{opcert_validate, OpCertError};
-use ade_crypto::blake2b_256;
 use ade_crypto::kes::SUM6_KES_SIG_LEN;
 use ade_types::shelley::block::{
     ShelleyBlock, ShelleyHeader, ShelleyHeaderBody, VrfData,
 };
-use ade_types::{CardanoEra, Hash32};
+use ade_types::CardanoEra;
 
 use crate::mempool::admit::{admit, AdmitOutcome, MempoolState};
 use crate::producer::state::ProducerTick;
@@ -264,8 +263,14 @@ pub fn forge_block(
         cbor::write_uint_canonical(&mut invalid_txs, *idx);
     }
 
-    // 7. Body hash via the validator-shared recipe.
-    let body_hash = compute_body_hash(&tx_bodies, &witness_sets, &metadata, &invalid_txs);
+    // 7. Body hash via the validator-shared recipe (single canonical
+    //    authority in `ade_ledger::block_body_hash`).
+    let body_hash = crate::block_body_hash::block_body_hash_from_buckets(
+        &tx_bodies,
+        &witness_sets,
+        &metadata,
+        Some(&invalid_txs),
+    );
 
     // 8. Header body. `body_size` is the encoded body byte length —
     // the four buckets concatenated in the encoded block.
@@ -333,24 +338,6 @@ pub fn forge_block(
             next_prev_opcert_counter,
         }],
     ))
-}
-
-fn compute_body_hash(
-    tx_bodies: &[u8],
-    witness_sets: &[u8],
-    metadata: &[u8],
-    invalid_txs: &[u8],
-) -> Hash32 {
-    let h_tx = blake2b_256(tx_bodies).0;
-    let h_ws = blake2b_256(witness_sets).0;
-    let h_md = blake2b_256(metadata).0;
-    let h_iv = blake2b_256(invalid_txs).0;
-    let mut concat = [0u8; 128];
-    concat[0..32].copy_from_slice(&h_tx);
-    concat[32..64].copy_from_slice(&h_ws);
-    concat[64..96].copy_from_slice(&h_md);
-    concat[96..128].copy_from_slice(&h_iv);
-    Hash32(blake2b_256(&concat).0)
 }
 
 // Compile-time pin: the producer's leader-decision call site MUST be

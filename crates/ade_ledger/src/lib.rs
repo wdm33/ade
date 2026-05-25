@@ -13,6 +13,7 @@
 
 pub mod alonzo;
 pub mod babbage;
+pub mod block_body_hash;
 pub mod block_validity;
 pub mod byron;
 pub mod cert_classify;

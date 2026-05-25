@@ -59,7 +59,7 @@ pub fn decode_block(block_cbor: &[u8]) -> Result<DecodedBlock, BlockValidityErro
 
     let header_cbor = header_cbor_slice(inner)?;
     let block_hash = Hash32(blake2b_256(header_cbor).0);
-    let computed_body_hash = Hash32(block_body_hash(block).0);
+    let computed_body_hash = crate::block_body_hash::block_body_hash(block);
 
     let header_input = match env.era {
         CardanoEra::Babbage | CardanoEra::Conway => praos_header_input(inner, hb)?,
@@ -143,23 +143,6 @@ fn praos_header_input(
         },
         kes: Some(kes),
     })
-}
-
-/// The era-correct block body hash. For Alonzo+ (segwit) the body hash is
-/// `blake2b_256( H(tx_bodies) ‖ H(witness_sets) ‖ H(aux_data) ‖ H(invalid_txs) )`
-/// over the preserved CBOR segment bytes (never re-encoded — `T-ENC-01`).
-fn block_body_hash(block: &ade_types::shelley::block::ShelleyBlock) -> Hash32 {
-    let h_tx = blake2b_256(&block.tx_bodies).0;
-    let h_ws = blake2b_256(&block.witness_sets).0;
-    let h_md = blake2b_256(&block.metadata).0;
-    let h_iv = blake2b_256(block.invalid_txs.as_deref().unwrap_or(&[])).0;
-
-    let mut concat = [0u8; 128];
-    concat[0..32].copy_from_slice(&h_tx);
-    concat[32..64].copy_from_slice(&h_ws);
-    concat[64..96].copy_from_slice(&h_md);
-    concat[96..128].copy_from_slice(&h_iv);
-    Hash32(blake2b_256(&concat).0)
 }
 
 /// The Babbage/Conway combined VRF cert is `array(2)[bytes(64), bytes(80)]`.

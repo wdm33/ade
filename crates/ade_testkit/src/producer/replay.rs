@@ -62,7 +62,10 @@ pub fn producer_replay_fixtures() -> Vec<ProducerReplayFixture> {
 #[allow(clippy::unwrap_used)]
 mod tests {
     use super::*;
+    use ade_codec::conway::decode_conway_block;
+    use ade_ledger::block_body_hash::{block_body_hash, block_body_hash_from_buckets};
     use ade_ledger::producer::forge::forge_block;
+    use ade_types::Hash32;
 
     fn err_tag(err: &ade_ledger::producer::forge::ForgeError) -> ExpectedErr {
         match err {
@@ -161,5 +164,53 @@ mod tests {
                 }
             }
         }
+    }
+
+    #[test]
+    fn forged_body_hash_matches_validator_recomputation() {
+        for fixture in producer_replay_fixtures() {
+            for (i, tick) in fixture.ticks.iter().enumerate() {
+                let expected_bytes = &fixture.expected_forged[i];
+                if expected_bytes.is_empty() {
+                    continue;
+                }
+                let (forged, _effects) = forge_block(tick).unwrap();
+
+                let decoded = decode_conway_block(&forged.bytes).unwrap();
+                let block = decoded.decoded();
+
+                let recomputed = block_body_hash(block);
+                assert_eq!(
+                    recomputed, block.header.body.body_hash,
+                    "fixture {} tick {}: validator recomputation diverges from emitted header.body_hash",
+                    fixture.label, i,
+                );
+                assert_eq!(
+                    recomputed, forged.block.header.body.body_hash,
+                    "fixture {} tick {}: forged in-memory header.body_hash diverges from validator recomputation",
+                    fixture.label, i,
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn body_encoder_is_single_authority() {
+        const _A: fn(&[u8], &[u8], &[u8], Option<&[u8]>) -> Hash32 = block_body_hash_from_buckets;
+        const _B: fn(&ade_types::shelley::block::ShelleyBlock) -> Hash32 = block_body_hash;
+
+        let fixture = &producer_replay_fixtures()[0];
+        let tick = &fixture.ticks[0];
+        let (forged, _) = forge_block(tick).unwrap();
+        let block = &forged.block;
+        assert_eq!(
+            block_body_hash(block),
+            block_body_hash_from_buckets(
+                &block.tx_bodies,
+                &block.witness_sets,
+                &block.metadata,
+                block.invalid_txs.as_deref(),
+            ),
+        );
     }
 }
