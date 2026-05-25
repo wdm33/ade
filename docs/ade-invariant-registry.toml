@@ -31,7 +31,7 @@ status = "enforced"
 authority_surface = "BLUE authoritative state transitions"
 cluster = "CL-LEDGER-VERDICT"
 evidence = ["crates/ade_testkit/tests/ledger_determinism.rs uses ade_ledger::fingerprint for byte-identical state comparison across all 7 eras", "crates/ade_testkit/tests/consensus_stream_replay.rs replays the canonical chain-selector stream twice and asserts byte-identical event lists and final orchestrator state — closes T-DET-01 for the consensus subset"]
-strengthened_in = ["PHASE4-N-B", "PHASE4-B1", "PHASE4-B2", "PHASE4-N-C", "PHASE4-N-G"]
+strengthened_in = ["PHASE4-N-B", "PHASE4-B1", "PHASE4-B2", "PHASE4-N-C", "PHASE4-N-G", "PHASE4-N-H"]
 
 [[rules]]
 id = "T-ENC-01"
@@ -43,7 +43,7 @@ code_locus = "crates/ade_codec/src/preserved.rs, crates/ade_ledger/src/block_val
 tests = ["preserved_wire_bytes_returned_exactly", "altered_body_rejected_by_hash_binding", "tx_id_uses_preserved_bytes"]
 ci_script = "ci/ci_check_hash_uses_wire_bytes.sh"
 status = "partial"
-strengthened_in = ["PHASE4-B1", "PHASE4-B2", "PHASE4-N-C", "PHASE4-N-G"]
+strengthened_in = ["PHASE4-B1", "PHASE4-B2", "PHASE4-N-C", "PHASE4-N-G", "PHASE4-N-H"]
 authority_surface = "hash-critical byte paths"
 cluster = "CL-CRYPTO-VERIFY"
 evidence = []
@@ -2326,12 +2326,12 @@ tier = "derived"
 statement = "Forge is pure given a canonical ProducerTick. forge_block has no wall-clock, no rand, no HashMap iteration, no I/O, no locale, and no ambient state. All inputs flow through the ProducerTick value (slot, ledger_state, mempool_snapshot, pparams, vrf_proof, kes_sig, opcert). Strengthens T-DET-01 for the producer authority surface."
 source = "docs/planning/phase4-n-c-invariants.md §1 (NC-FORGE-1); Project constitution §2 (T-DET-01, Functional Core / Imperative Shell)"
 cross_ref = ["T-DET-01", "DC-CONS-14", "DC-CONS-15", "DC-CONS-16", "DC-LEDGER-12", "CN-CONS-07"]
-code_locus = "crates/ade_ledger/src/producer/forge.rs (forge_block); crates/ade_ledger/src/producer/state.rs (ProducerTick)"
-tests = ["forge_block_pure_no_io", "forge_block_replay_byte_identical"]
-ci_script = "ci/ci_check_forge_purity.sh"
+code_locus = "crates/ade_ledger/src/producer/forge.rs (forge_block); crates/ade_ledger/src/producer/state.rs (ProducerTick); crates/ade_ledger/src/receive/reducer.rs (PHASE4-N-H strengthening: symmetric receive-side closure — admit = block_validity::Valid only, never a parallel path)"
+tests = ["forge_block_pure_no_io", "forge_block_replay_byte_identical", "receive_apply_block_delivered_with_matching_header_admits"]
+ci_script = "ci/ci_check_forge_purity.sh, ci/ci_check_receive_reducer_closure.sh"
 status = "enforced"
 introduced_in = "PHASE4-N-C"
-strengthened_in = []
+strengthened_in = ["PHASE4-N-H"]
 
 [[rules]]
 id = "DC-CONS-14"
@@ -2365,12 +2365,12 @@ tier = "derived"
 statement = "Forged header.body_hash MUST equal blake2b_256(forged_body_wire_bytes), where forged_body_wire_bytes are produced by the single Cardano-compatible canonical block-body encoder used by the validator hash path. The producer and validator hash the same bytes through the same encoder. Strengthens T-ENC-01 for the producer surface; closes any potential producer/validator encoder bifurcation."
 source = "docs/planning/phase4-n-c-invariants.md §1 (NC-FORGE-5); Project constitution §2 (T-ENC-01, Byte Authority Model)"
 cross_ref = ["T-ENC-01", "DC-CONS-13", "CN-CONS-07"]
-code_locus = "crates/ade_ledger/src/block_body_hash.rs (block_body_hash, block_body_hash_from_buckets — single canonical authority); crates/ade_ledger/src/producer/forge.rs (forge_block — consumer); crates/ade_ledger/src/block_validity/header_input.rs (computed_body_hash + accepted_block_header_bytes — consumer + N-G-strengthened single header-projection authority); crates/ade_runtime/src/producer/served_chain_lookups.rs (ServedHeaderLookup::next_after — third consumer; reuses accepted_block_header_bytes for producer-side server-pump header projection)"
-tests = ["block_body_hash_pinned_recipe_byte_identical", "block_body_hash_from_block_equals_from_buckets", "block_body_hash_none_invalid_txs_equals_empty_bucket", "forged_body_hash_matches_validator_recomputation", "body_encoder_is_single_authority", "accepted_block_header_bytes_equals_validator_split_on_corpus", "accepted_block_header_bytes_is_subslice_of_as_bytes", "session_transcript_announced_header_matches_served_body_recipe"]
-ci_script = "ci/ci_check_no_producer_body_encoder.sh, ci/ci_check_no_parallel_header_splitter.sh"
+code_locus = "crates/ade_ledger/src/block_body_hash.rs (block_body_hash, block_body_hash_from_buckets — single canonical authority); crates/ade_ledger/src/producer/forge.rs (forge_block — consumer); crates/ade_ledger/src/block_validity/header_input.rs (computed_body_hash + accepted_block_header_bytes — consumer + N-G-strengthened single header-projection authority); crates/ade_runtime/src/producer/served_chain_lookups.rs (ServedHeaderLookup::next_after — third consumer; reuses accepted_block_header_bytes for producer-side server-pump header projection); crates/ade_ledger/src/receive/reducer.rs (PHASE4-N-H strengthening: receive-side BlockDelivered branch decodes block via the same block_validity recipe; header cross-check via decoded.block_hash binds header content to the (slot, hash) cache key)"
+tests = ["block_body_hash_pinned_recipe_byte_identical", "block_body_hash_from_block_equals_from_buckets", "block_body_hash_none_invalid_txs_equals_empty_bucket", "forged_body_hash_matches_validator_recomputation", "body_encoder_is_single_authority", "accepted_block_header_bytes_equals_validator_split_on_corpus", "accepted_block_header_bytes_is_subslice_of_as_bytes", "session_transcript_announced_header_matches_served_body_recipe", "receive_apply_block_delivered_with_matching_header_admits", "receive_pipeline_corpus_drive_admitted_bytes_equal_corpus_bytes"]
+ci_script = "ci/ci_check_no_producer_body_encoder.sh, ci/ci_check_no_parallel_header_splitter.sh, ci/ci_check_receive_reducer_closure.sh"
 status = "enforced"
 introduced_in = "PHASE4-N-C"
-strengthened_in = ["PHASE4-N-G"]
+strengthened_in = ["PHASE4-N-G", "PHASE4-N-H"]
 
 [[rules]]
 id = "DC-LEDGER-12"
@@ -2407,14 +2407,14 @@ tier = "release"
 statement = "Self-acceptance bridge: a forged block is NOT eligible for RED broadcast unless Ade's own header validator (PHASE4-N-B path) and body validator (PHASE4-B1 path) accept it under the same slot, era, and context. Self-acceptance failure halts the producer deterministically. RED broadcast is gated on the BLUE self-accept verdict."
 source = "docs/planning/phase4-n-c-invariants.md §1 (NC-SELF-1)"
 cross_ref = ["CN-CONS-06", "DC-CONS-13", "DC-CONS-16", "OP-OPS-05"]
-code_locus = "crates/ade_ledger/src/producer/self_accept.rs (self_accept, AcceptedBlock, SelfAcceptError); crates/ade_ledger/src/block_validity/transition.rs (block_validity — single closed validator authority self_accept wraps); crates/ade_ledger/src/producer/served_chain.rs (ServedChainSnapshot, served_chain_admit — only AcceptedBlock values may enter the served-chain index; PHASE4-N-G S2 strengthening preserves the broadcast gate across the network seam)"
-tests = ["self_accept_accepts_freshly_forged_block", "self_accept_rejects_corrupted_body_hash", "self_accept_rejects_invalid_kes_signature", "self_accept_rejects_unbalanced_tx_in_body", "broadcast_callable_only_with_accept_verdict", "served_chain_admit_admits_corpus_block", "served_chain_admit_idempotent_on_byte_identity", "served_chain_admit_independent_of_order", "served_chain_snapshot_iteration_is_btreemap_ordered", "served_chain_block_bytes_accessor_returns_accepted_block_slice", "served_chain_range_bytes_returns_inclusive_window", "served_chain_fingerprint_replay_byte_identical"]
-ci_script = "ci/ci_check_self_accept_gate.sh, ci/ci_check_served_chain_closure.sh"
+code_locus = "crates/ade_ledger/src/producer/self_accept.rs (self_accept, AcceptedBlock, SelfAcceptError); crates/ade_ledger/src/block_validity/transition.rs (block_validity — single closed validator authority self_accept wraps); crates/ade_ledger/src/producer/served_chain.rs (ServedChainSnapshot, served_chain_admit — only AcceptedBlock values may enter the served-chain index; PHASE4-N-G S2 strengthening preserves the broadcast gate across the network seam); crates/ade_ledger/src/receive/admitted.rs (AdmittedBlock, admit_via_block_validity — PHASE4-N-H mirror: receive-side admission gate via the same block_validity authority; symmetric to AcceptedBlock); crates/ade_ledger/src/receive/chain_write.rs (ChainDbWrite trait takes AdmittedBlock by value)"
+tests = ["self_accept_accepts_freshly_forged_block", "self_accept_rejects_corrupted_body_hash", "self_accept_rejects_invalid_kes_signature", "self_accept_rejects_unbalanced_tx_in_body", "broadcast_callable_only_with_accept_verdict", "served_chain_admit_admits_corpus_block", "served_chain_admit_idempotent_on_byte_identity", "served_chain_admit_independent_of_order", "served_chain_snapshot_iteration_is_btreemap_ordered", "served_chain_block_bytes_accessor_returns_accepted_block_slice", "served_chain_range_bytes_returns_inclusive_window", "served_chain_fingerprint_replay_byte_identical", "admit_via_block_validity_accepts_corpus_block", "admit_via_block_validity_rejects_corrupted_body", "receive_apply_block_delivered_with_matching_header_admits"]
+ci_script = "ci/ci_check_self_accept_gate.sh, ci/ci_check_served_chain_closure.sh, ci/ci_check_admitted_block_closure.sh, ci/ci_check_receive_reducer_closure.sh"
 status = "enforced"
 introduced_in = "PHASE4-N-C"
-strengthened_in = ["PHASE4-N-G"]
-attack_rationale = "Prevents Ade from broadcasting blocks its own validator would reject — eliminates producer/validator drift as a release failure mode. PHASE4-N-G strengthening: prevents the network seam from being an end-run around the gate; bytes that reach the wire must trace through AcceptedBlock -> ServedChainSnapshot."
-evidence_notes = "Cardano-specific only in that the validators it wraps are Ade's Cardano-block validators (PHASE4-N-B + PHASE4-B1). The bridge pattern is general: producer authority must agree with validator authority before bytes leave BLUE. N-G S2 extends the bridge into the producer-side server pump's read path."
+strengthened_in = ["PHASE4-N-G", "PHASE4-N-H"]
+attack_rationale = "Prevents Ade from broadcasting blocks its own validator would reject — eliminates producer/validator drift as a release failure mode. PHASE4-N-G strengthening: prevents the network seam from being an end-run around the gate; bytes that reach the wire must trace through AcceptedBlock -> ServedChainSnapshot. PHASE4-N-H strengthening: prevents the receive seam from being an end-run; bytes that reach ChainDb via the receive path must trace through AdmittedBlock (the mirror token) — same block_validity authority, two separate gate tokens (AcceptedBlock for broadcast, AdmittedBlock for admission)."
+evidence_notes = "Cardano-specific only in that the validators it wraps are Ade's Cardano-block validators (PHASE4-N-B + PHASE4-B1). The bridge pattern is general: producer authority must agree with validator authority before bytes leave BLUE. N-G S2 extends the bridge into the producer-side server pump's read path. N-H S1/S2 establishes the receive-side mirror: AdmittedBlock private-constructor token consumed by ChainDbWrite. The producer + receive gates are deliberately separate types so cross-use is mechanically impossible (¬P-6)."
 
 [[rules]]
 id = "OP-OPS-04"

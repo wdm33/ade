@@ -3,142 +3,133 @@
 > **Status:** Living architectural document. Regenerated; not hand-edited.
 > Per-project instance of `~/.claude/methodology/templates/seams.md`.
 
-> 11 crates, **47 CI checks** at HEAD (`a280954`).
+> 11 crates, **52 CI checks** at HEAD (`efe1fb9`).
 > Reads CODEMAP for the module list and TCB colors; reads the invariant
-> registry (`docs/ade-invariant-registry.toml`) for rule IDs; reads the
-> Phase 4 cluster plan (`docs/active/phase_4_cluster_plan.md`), the
-> closed N-D / N-A / N-B / N-E / N-C / B1 / B2 / B3 / B4 / B5 cluster
-> docs, the OQ5-CREDENTIAL-FIDELITY, COMMITTEE-CRED-FIDELITY,
-> DREP-VOTE-FIDELITY, ENACTMENT-COMMITTEE-FIDELITY,
-> ENACTMENT-COMMITTEE-WRITEBACK and PROPOSAL-PROCEDURES-DECODE cluster
-> docs, and the **just-closed and archived PHASE4-N-G cluster doc +
-> S1..S7 slice docs**
-> (`docs/clusters/completed/PHASE4-N-G/cluster.md` + `N-G-S{1..7}.md` +
-> `CE-N-G-8_PROCEDURE.md`).
+> registry (`docs/ade-invariant-registry.toml` — **202 entries**) for
+> rule IDs; reads the Phase 4 cluster plan
+> (`docs/active/phase_4_cluster_plan.md`), the closed N-D / N-A / N-B /
+> N-E / N-C / N-G / B1 / B2 / B3 / B4 / B5 cluster docs, the OQ5 /
+> COMMITTEE / DREP / ENACTMENT-COMMITTEE-FIDELITY /
+> ENACTMENT-COMMITTEE-WRITEBACK / PROPOSAL-PROCEDURES-DECODE cluster
+> docs, and the **just-closed PHASE4-N-H cluster doc + S1..S6 slice
+> docs** (`docs/clusters/completed/PHASE4-N-H/cluster.md` +
+> `N-H-S{1..6}.md` + `CE-N-H-6_PROCEDURE.md`).
 >
-> **This is the PHASE4-N-G FULL CLOSE refresh (HEAD `a280954`).** The
-> previous SEAMS (HEAD `694dd74`) pinned the PHASE4-N-C full-close
-> state. Seven N-G slices have landed between that revision and this
-> one and close the producer-side **server response paths** for
-> chain-sync and block-fetch:
+> **This is the PHASE4-N-H FULL CLOSE refresh (HEAD `efe1fb9`).** The
+> previous SEAMS (HEAD `a280954`) pinned the PHASE4-N-G full-close
+> state. Six N-H slices have landed between that revision and this one
+> and close the **receive-side header→body bridge** (admit-only,
+> Path A scope) — the seam previously flagged as the most load-bearing
+> candidate at N-G close ("the natural counterpart to N-G's
+> send-direction closure"):
 >
-> 1. **N-G-S1 (commit `8cd17c9`)** ships the BLUE header projection
->    authority `ade_ledger::block_validity::accepted_block_header_bytes`
->    (single canonical header/body splitter, lifted from the existing
->    body-hash recipe — no parallel splitter), plus the **closed
->    `ServerReply<M>` type wrappers** in
->    `ade_network::chain_sync::server` and
->    `ade_network::block_fetch::server`: inner enum private; only
->    Server-agency variants have public constructors; exit via
->    `into_message()`. Compile-time enforcement that the server pump
->    cannot emit client-agency messages. Registry rules `CN-PROTO-06`
->    + `DC-CONS-18` introduced; CI gate
->    `ci/ci_check_no_parallel_header_splitter.sh` introduced.
-> 2. **N-G-S2 (commit `dc069cf`)** ships the BLUE canonical served-chain
->    index `ade_ledger::producer::served_chain::{ServedChainSnapshot,
->    served_chain_admit, ServedChainAdmitError}`. `ServedChainSnapshot`
->    is `BTreeMap`-backed (no `HashMap` — DC-PROTO-07 foundation);
->    `served_chain_admit` derives `(slot, hash)` from the bytes via
->    `decode_block` (no caller-asserted hash); the only entry path is
->    via an `AcceptedBlock` token (CN-CONS-07 preserved across the
->    network seam). CI gate `ci/ci_check_served_chain_closure.sh`
->    introduced; `CN-CONS-07.strengthened_in += PHASE4-N-G`.
-> 3. **N-G-S3 (commit `cc49b1d`)** ships the BLUE chain-sync server
->    reducers `ade_network::chain_sync::server::{producer_chain_sync_serve,
->    producer_chain_sync_advance_tip}` plus the closed
->    **`ServedHeaderLookup` trait** (read-side seam over the producer's
->    served chain; `next_after(cursor)` / `intersect(points)` /
->    `tip()`), the closed `ProducerChainSyncServerState`,
->    `ProducerServerError`, and `ServerStep` sums. Deterministic
->    resolution per DC-PROTO-08 — no ambiguous wait. Registry rule
->    `DC-PROTO-08` introduced; CI gate
->    `ci/ci_check_chain_sync_server_closure.sh` introduced.
-> 4. **N-G-S4 (commit `03d120f`)** ships the BLUE block-fetch server
->    reducer `ade_network::block_fetch::server::producer_block_fetch_serve`
->    plus the closed **`ServedRangeLookup` trait**
->    (`range_bytes(from, to)` over the served chain), the closed
->    `ProducerBlockFetchServerState`, `ProducerBlockFetchServerError`,
->    and `BlockFetchServerStep` sums. Served `Block { bytes }` payloads
->    are `AcceptedBlock` slices verbatim (DC-CONS-17 enforcement
->    foundation). Registry rule `DC-CONS-17` introduced; CI gate
->    `ci/ci_check_block_fetch_server_closure.sh` introduced.
-> 5. **N-G-S5 (commit `1a1b8e0`)** ships the GREEN broadcast→served
->    adapter `ade_runtime::producer::broadcast_to_served::drain_and_admit`
->    plus the GREEN trait-impl bridge
->    `ade_runtime::producer::served_chain_lookups::ServedChainLookups`
->    (single production impl of `ServedHeaderLookup` + `ServedRangeLookup`).
->    Replay corpus driver lives in
->    `crates/ade_runtime/tests/server_paths_transcript_replay.rs`.
->    Registry rules `DC-CONS-17`, `DC-CONS-18`, `DC-PROTO-07` flip to
->    `enforced` at this slice; CI gate
->    `ci/ci_check_broadcast_to_served_purity.sh` introduced.
-> 6. **N-G-S6 (commit `f773b1c`)** ships the RED per-peer N2N server
->    session driver `ade_runtime::network::n2n_server::{PerPeerN2nServerState,
->    DispatchError, dispatch_chain_sync_frame, dispatch_block_fetch_frame,
->    poll_chain_sync_advance}`. Pure state-machine driver — no socket
->    I/O; key-boundary preserved (cannot import from
->    `ade_runtime::producer::signing`, defended by
->    `ci/ci_check_n2n_server_no_signing_dep.sh`). Multi-peer
->    determinism test in `crates/ade_runtime/tests/n2n_server_two_peer_determinism.rs`.
->    `DC-PROTO-06.strengthened_in += PHASE4-N-G`.
-> 7. **N-G-S7 (commit `a280954`)** ships the mechanical cross-impl
->    adapter in `crates/ade_runtime/tests/cross_impl_server_pipeline.rs`
->    (every served `Block { bytes }` decodes via Ade's own
->    envelope+block decoder and the recomputed body-hash matches the
->    announced header's body-hash field) plus the **fourth**
->    operator-action probe binary `ade_core_interop::bin::live_block_fetch_session`.
->    Registry rule `RO-LIVE-01` introduced at `status = "partial"` with
->    `open_obligation = blocked_until_operator_peer_available`; CI gate
->    `ci/ci_check_server_paths_corpus_present.sh` introduced. CE-N-G-8
->    procedure documented at
->    `docs/clusters/completed/PHASE4-N-G/CE-N-G-8_PROCEDURE.md`.
+> 1. **N-H-S1 (commit `b019ee3`)** ships the BLUE receive-side
+>    admission primitives in a new sub-tree
+>    `ade_ledger::receive::{admitted, chain_write, events,
+>    pending_header_cache}`: the **`AdmittedBlock` private-constructor
+>    token** (sole constructor `admit_via_block_validity`; distinct
+>    from `AcceptedBlock`), the closed `ReceiveEvent` (3 variants) /
+>    `ReceiveEffect` (4 variants) / `ReceiveError` (4 variants) sums,
+>    `PendingHeaderCache` (`BTreeMap`-backed), and the narrow
+>    `ChainDbWrite` trait (single-method, takes `AdmittedBlock` by
+>    value). Registry rule `CN-PROTO-07` introduced (closed receive
+>    event taxonomy; no constructor for locally-originated chain-sync
+>    / block-fetch outputs). CI gate
+>    `ci/ci_check_admitted_block_closure.sh` introduced.
+> 2. **N-H-S2 (commit `0ecf22f`)** ships the BLUE
+>    **`receive_apply` reducer** + `receive_apply_sequence` driver in
+>    `ade_ledger::receive::reducer`. Pure, total, deterministic; one
+>    `ReceiveEvent` per call; staged-then-committed shape (on error,
+>    state is unchanged). `RollForward` caches only;
+>    `BlockDelivered` decodes + cross-checks the cached header + runs
+>    `admit_via_block_validity` + persists via `ChainDbWrite`;
+>    `RollBackward` returns `Err(ReceiveError::RollbackOutOfScope)`
+>    (Path A scope edge). Registry rules `CN-CONS-08` and
+>    `DC-CONS-19` introduced. CI gate
+>    `ci/ci_check_receive_reducer_closure.sh` introduced.
+> 3. **N-H-S3 (commit `c584691`)** ships the GREEN adapters
+>    `ade_runtime::receive::{events_to_state, in_memory_chain_write}`:
+>    `lift_chain_sync_signal` / `lift_block_fetch_event` (pure
+>    pass-through translators from N-A signals/events into
+>    `ReceiveEvent`), plus the production `ChainDbWriter<'a, D>`
+>    impl (GREEN adapter over any `ChainDb`; the wrapper decodes once
+>    via `decode_block` to extract `(slot, hash)` then calls
+>    `ChainDb::put_block`). Replay corpus driver lives in
+>    `crates/ade_runtime/tests/receive_session_transcript_replay.rs`.
+>    Registry rule `DC-PROTO-09` introduced. CI gate
+>    `ci/ci_check_receive_replay_purity.sh` introduced;
+>    `ci/ci_check_no_private_keys_in_corpus.sh` extended to the new
+>    `receive_paths` fixture root.
+> 4. **N-H-S4 (commit `1d06089`)** ships the RED per-peer N2N receive
+>    orchestrator `ade_runtime::receive::orchestrator::{PerPeerReceiveState,
+>    ReceiveDispatchError, dispatch_chain_sync_inbound,
+>    dispatch_block_fetch_inbound}`. Pure state-machine driver — no
+>    socket I/O; per-peer state fully independent; shared `ChainDb` is
+>    the only cross-peer coordination point. Key-boundary preserved
+>    (cannot import from `ade_runtime::producer::{signing, broadcast,
+>    scheduler}`, defended by
+>    `ci/ci_check_receive_orchestrator_no_producer_dep.sh`).
+>    Multi-peer determinism test in
+>    `crates/ade_runtime/tests/receive_two_peer_independence.rs`.
+>    `DC-PROTO-06.strengthened_in += PHASE4-N-H`.
+> 5. **N-H-S5 (commit `3973261`)** ships the mechanical cross-impl
+>    adapter in `crates/ade_runtime/tests/receive_pipeline_corpus_drive.rs`
+>    (every Conway-576 corpus block drives RollForward + BlockDelivered
+>    through the full receive pipeline; ChainDb tip + admitted bytes +
+>    ledger fingerprint must agree with the corpus reference).
+> 6. **N-H-S6 (commit `efe1fb9`)** ships the **fifth**
+>    operator-action probe binary `ade_core_interop::bin::live_block_follow_session`,
+>    plus the procedure doc
+>    `docs/clusters/completed/PHASE4-N-H/CE-N-H-6_PROCEDURE.md`.
+>    Registry rule `RO-LIVE-02` introduced at `status = "partial"`
+>    with `open_obligation = blocked_until_operator_peer_available`.
+>    CI gate `ci/ci_check_receive_paths_corpus_present.sh` introduced.
 >
 > **THE KEY FULL-CLOSE DELTAS.** The prior SEAMS revision flagged the
-> producer-side block-fetch server response path as the **N-A successor
-> gap** (option A in the N-C handoff). PHASE4-N-G closes that gap end
-> to end. Two §1 surface rows flip from "candidate" to "wired & closed":
+> receive-side header→body bridge as the most load-bearing remaining
+> candidate seam. PHASE4-N-H closes it end to end, in **admit-only
+> Path A scope**. Two §1 surface rows flip from "candidate" to
+> "wired & closed":
 >
-> - **N2N producer-side block-fetch server role** → wired via
->   `producer_block_fetch_serve` consuming `ServedRangeLookup`,
->   producing closed `ServerReply<BlockFetchMessage>` wrappers.
-> - **N2N producer-side chain-sync extension** → wired via
->   `producer_chain_sync_serve` + `producer_chain_sync_advance_tip`
->   consuming `ServedHeaderLookup`, producing closed
->   `ServerReply<ChainSyncMessage>` wrappers.
+> - **Receive-side header→body bridge: peer-originated header +
+>   body bytes → `AdmittedBlock` → `ChainDb`** → wired via
+>   `receive_apply` consuming `ReceiveEvent` from `events_to_state`,
+>   producing `AdmittedBlock` via `admit_via_block_validity`,
+>   persisting via `ChainDbWrite`.
+> - **Per-peer N2N receive orchestrator** → wired via
+>   `PerPeerReceiveState` + `dispatch_*_inbound` consuming N-A wire
+>   frames and driving the BLUE reducer through the GREEN adapters.
 >
-> Counts at this refresh: **+7 CI scripts** (40 → 47:
-> `ci_check_no_parallel_header_splitter.sh`,
-> `ci_check_served_chain_closure.sh`,
-> `ci_check_chain_sync_server_closure.sh`,
-> `ci_check_block_fetch_server_closure.sh`,
-> `ci_check_broadcast_to_served_purity.sh`,
-> `ci_check_n2n_server_no_signing_dep.sh`,
-> `ci_check_server_paths_corpus_present.sh`); **+6 registry rules**
-> introduced (`DC-CONS-17`, `DC-CONS-18`, `DC-PROTO-07`, `DC-PROTO-08`,
-> `CN-PROTO-06`, `RO-LIVE-01`); **3 carried rules strengthened**
-> (`CN-CONS-07.strengthened_in += PHASE4-N-G`,
-> `DC-PROTO-06.strengthened_in += PHASE4-N-G`,
-> `OP-OPS-04.strengthened_in += PHASE4-N-G`); **+1 carried universal
-> rule strengthened** by transitive byte-determinism
-> (`T-DET-01.strengthened_in += PHASE4-N-G`,
-> `T-ENC-01.strengthened_in += PHASE4-N-G`,
-> `DC-CONS-16.strengthened_in += PHASE4-N-G`); **+2 new BLUE submodules**
-> (`ade_network::chain_sync::server`, `ade_network::block_fetch::server`);
-> **+1 new BLUE submodule** (`ade_ledger::producer::served_chain`);
-> **+1 new BLUE public accessor** (`accepted_block_header_bytes` in
-> `ade_ledger::block_validity`); **+2 new GREEN submodules**
-> (`ade_runtime::producer::broadcast_to_served`,
-> `ade_runtime::producer::served_chain_lookups`); **+1 new RED
-> submodule** (`ade_runtime::network::n2n_server`); **+1 new
-> operator-action probe binary** (`live_block_fetch_session` — fourth
-> in the family alongside `live_consensus_session` (N-B),
-> `live_tx_submission_session` (N-E), and `live_block_production_session`
-> (N-C)); **+1 new live-evidence procedure doc**
-> (`CE-N-G-8_PROCEDURE.md`); **0 new operator-action live-evidence
-> log artifacts at this HEAD** — CE-N-G-8 is recorded
-> `blocked_until_operator_peer_available` per `RO-LIVE-01`
-> `open_obligation`. Total invariant registry: **196 entries** (190 →
-> 196).
+> Counts at this refresh: **+5 CI scripts** (47 → 52:
+> `ci_check_admitted_block_closure.sh`,
+> `ci_check_receive_reducer_closure.sh`,
+> `ci_check_receive_replay_purity.sh`,
+> `ci_check_receive_orchestrator_no_producer_dep.sh`,
+> `ci_check_receive_paths_corpus_present.sh`); **+6 registry rules**
+> introduced (`CN-CONS-08`, `DC-CONS-19`, `DC-CONS-20`, `DC-PROTO-09`,
+> `CN-PROTO-07`, `RO-LIVE-02`); **6 carried rules strengthened**
+> (`T-DET-01`, `T-ENC-01`, `DC-CONS-13`, `DC-CONS-16`, `CN-CONS-07`,
+> `DC-PROTO-06` all gain `strengthened_in += PHASE4-N-H`); **+5 new
+> BLUE submodules** (`ade_ledger::receive::{admitted, chain_write,
+> events, pending_header_cache, reducer}` under a new
+> `ade_ledger::receive` barrel); **+3 new GREEN/RED submodules**
+> (`ade_runtime::receive::{events_to_state, in_memory_chain_write,
+> orchestrator}` under a new `ade_runtime::receive` barrel —
+> `events_to_state` and `in_memory_chain_write` GREEN; `orchestrator`
+> RED); **+1 new operator-action probe binary**
+> (`live_block_follow_session` — fifth in the family alongside
+> `live_consensus_session` (N-B), `live_tx_submission_session` (N-E),
+> `live_block_production_session` (N-C), and `live_block_fetch_session`
+> (N-G)); **+1 new live-evidence procedure doc**
+> (`CE-N-H-6_PROCEDURE.md`); **0 new operator-action live-evidence
+> log artifacts at this HEAD** — CE-N-H-6 is recorded
+> `blocked_until_operator_peer_available` per `RO-LIVE-02`
+> `open_obligation`. Total invariant registry: **202 entries**
+> (196 → 202). `DC-CONS-20` (Path A scope edge — rollback authority)
+> ships `status = "declared"` with
+> `open_obligation = rollback_side_blocked_until_ledger_snapshot_cluster`:
+> the closure of its rollback half is **the** explicit candidate seam
+> for the next planner.
 
 Ade is a Cardano block-producing node. Its closure surface is dominated
 by two facts:
@@ -152,185 +143,166 @@ by two facts:
 
 This document names where the system opens and where it stays closed.
 
-**PHASE4-N-G is fully closed at this HEAD.** The producer-side
-chain-sync + block-fetch server response paths — i.e. the only path
-by which an externally-issued `RequestNext` / `FindIntersect` /
-`RequestRange` is answered with bytes the producer has forged — are
-all wired and CI-defended. The crypto-level live-peer claim (CE-N-G-8)
-is `blocked_until_operator_peer_available` per `RO-LIVE-01`
+**PHASE4-N-H is fully closed at this HEAD.** The receive-side
+header→body bridge — i.e. the path by which an externally-arriving
+header + body, delivered through N-A chain-sync RollForward and
+block-fetch BlockDelivered events, is admitted into Ade's ChainDb +
+LedgerState + PraosChainDepState via `block_validity` — is wired and
+CI-defended end to end. Scope is **Path A: admit-only**. `RollBackward`
+is a structured `Err(ReceiveError::RollbackOutOfScope)`; the rollback
+half of `DC-CONS-20` is explicitly carried as the next planner's
+candidate seam. The live cross-impl claim (CE-N-H-6) is
+`blocked_until_operator_peer_available` per `RO-LIVE-02`
 `open_obligation`.
 
-**PHASE4-N-C remains fully closed** (carried). **PHASE4-N-E
-(Tier 1 wire-level mempool ingress) remains fully closed** (carried).
-**PROPOSAL-PROCEDURES-DECODE remains fully closed** (carried).
-**PHASE4-B3..B5, OQ5 / COMMITTEE / DREP / ENACTMENT-COMMITTEE-WRITEBACK**
-all remain closed (carried).
+**PHASE4-N-G remains fully closed** (carried). **PHASE4-N-C remains
+fully closed** (carried). **PHASE4-N-E remains fully closed**
+(carried). **PROPOSAL-PROCEDURES-DECODE remains fully closed**
+(carried). **PHASE4-B3..B5, OQ5 / COMMITTEE / DREP /
+ENACTMENT-COMMITTEE-WRITEBACK** all remain closed (carried).
 
 ---
 
 ## 1. Surface Reduction Rules
 
 > External inputs reduce to canonical form before entering authoritative
-> pipelines. At HEAD there are **seven** fully-wired *external* ingress
+> pipelines. At HEAD there are **eight** fully-wired *external* ingress
 > surfaces (block bytes, Plutus script bytes, snapshot bytes, Ouroboros
-> mux frames, genesis JSON bundles, chain-selector stream inputs, and
-> the N-E wire-level mempool ingress), plus — **newly closed at this
-> HEAD** — the **producer-side server-role ingress** (peer-originated
-> chain-sync + block-fetch frames reduced through closed
-> `ServerReply<M>` wrappers back onto the wire). All internal
-> composition roots are unchanged from N-C close (`block_validity` /
-> `tx_validity` / `mempool_ingress` / `forge_block` / `self_accept`).
+> mux frames, genesis JSON bundles, chain-selector stream inputs, the
+> N-E wire-level mempool ingress, **and — newly closed at this HEAD —
+> the receive-side N2N peer ingress** for chain-sync RollForward +
+> block-fetch BlockDelivered), plus the producer-side server-role
+> ingress closed at N-G. All internal composition roots are unchanged
+> from N-G close (`block_validity` / `tx_validity` / `mempool_ingress`
+> / `forge_block` / `self_accept` / `served_chain_admit`).
 
-### Surface: Producer-side chain-sync server-role ingress (NEW in N-G-S1/S3/S5/S6 — peer→BLUE→wire seam)
+### Surface: Receive-side N2N peer ingress (NEW in N-H-S1..S6 — peer→BLUE→ChainDb seam)
 
 ```
-Surface: A peer-originated ChainSyncMessage frame
-         (RequestNext | FindIntersect{points} | Done)
-         delivered by a real cardano-node peer over N2N mux,
-         against the producer's ServedChainSnapshot
-Reduces to: ServerReply (closed wrapper; inner enum private) projected
-            via into_message() onto exactly one of five
-            server-agency ChainSyncMessage variants
-            { RollForward{header,tip} | RollBackward{point,tip}
-            | AwaitReply | IntersectFound{point,tip}
-            | IntersectNotFound{tip} }
-            — OR ServerStep::Done on Client `Done`
-            — OR ProducerServerError::Grammar(_) on illegal pairing
+Surface: A peer-originated chain-sync ForkChoiceSignal
+         (RollForward { header_bytes, tip }
+         | RollBackward { point, tip }
+         | Intersected | NoIntersection)
+         OR a peer-originated block-fetch BatchDeliveryEvent
+         (BatchStarted | BlockDelivered { block_bytes }
+         | NoBlocks | BatchCompleted)
+         delivered by a real cardano-node peer over N2N mux
+Reduces to: ReceiveEffect — closed 4-variant sum
+            { Admitted { slot, hash } | Cached { slot, hash }
+            | RolledBack { to_slot }  (* unreachable in Path A *)
+            | NoOp { reason: HeaderAlreadyCached } }
+            — OR ReceiveError — closed 4-variant sum
+            { HeaderBodyMismatch | Validity(BlockValidityError)
+            | RollbackOutOfScope { target_point }
+            | ChainDb(ChainWriteError) }
 Pipeline (fixed step ordering — no reorder, no shortcut):
   1. RED transport (ade_network::mux::transport) decodes mux frame
-  2. BLUE chain-sync codec (N-A) — decode_chain_sync_message
-  3. RED dispatcher (ade_runtime::network::n2n_server) wraps state
-  4. BLUE grammar gate — chain_sync_transition(state, Client, version, msg)
-       (N-A; total state graph; rejects client-from-server agency)
-  5. BLUE producer logic — producer_chain_sync_serve dispatches on msg:
-       - RequestNext: check served.next_after(cursor) -> RollForward
-                       or park MustReply -> AwaitReply
-       - FindIntersect: served.intersect(&points) -> IntersectFound
-                        or IntersectNotFound
-       - Done: ServerStep::Done
-  6. BLUE projection — ServerReply::into_message() yields wire-grammar
-       ChainSyncMessage; CN-PROTO-06 holds by construction
-       (no public constructor for client variants exists)
-  7. BLUE chain-sync codec (N-A) — encode_chain_sync_message
-  8. RED transport — mux frame back to peer
-Deferred RollForward: producer_chain_sync_advance_tip is polled by the
-  orchestrator after each drain_and_admit; in CanAwait/MustReply with
-  a new served block past the cursor, returns a fresh RollForward;
-  otherwise None.
+  2. BLUE chain-sync / block-fetch codec (N-A) — decode_*_message
+  3. RED dispatcher
+     (ade_runtime::receive::orchestrator::dispatch_*_inbound)
+     wraps PerPeerReceiveState
+  4. RED-internal translation: peer-agency message →
+     ForkChoiceSignal / BatchDeliveryEvent (N-A signal/event types)
+  5. GREEN lift (ade_runtime::receive::events_to_state) — pure
+     pass-through translator into ReceiveEvent. Non-state-changing
+     variants (BatchStarted / BatchCompleted / NoBlocks / Intersected
+     / NoIntersection) return None and are filtered before the BLUE
+     call.
+  6. BLUE reducer — receive_apply(state, event, chain_write,
+     era_schedule, ledger_view):
+       - RollForward: pending_header_cache.insert((slot,hash) ->
+         header_bytes); MUTATES ONLY state.pending_headers
+         (Invariant I-6 — ledger / chain_dep / chain_write untouched).
+       - BlockDelivered: decode_block(block_bytes) -> (slot,
+         block_hash); pending_headers.get((slot, block_hash))
+         cross-check; admit_via_block_validity(...) -> AdmittedBlock
+         + new (ledger, chain_dep); chain_write.write_admitted(...);
+         on success commit new sub-states + evict consumed header.
+         Staged-then-committed shape: any failure leaves state
+         unchanged.
+       - RollBackward: Err(ReceiveError::RollbackOutOfScope { ... })
+         (Path A scope edge).
+  7. GREEN ChainDb write (ade_runtime::receive::in_memory_chain_write
+     — ChainDbWriter<'a, D>): decode_block once to extract (slot,
+     hash) -> ChainDb::put_block(StoredBlock { slot, hash, bytes }).
+     Maps ChainDbError into ChainWriteError variants.
 Cross-surface state sharing: per-peer state is fully independent
-  (one PerPeerN2nServerState per session). The ONLY cross-peer shared
-  state is the read-only &ServedChainSnapshot (a single index of
-  AcceptedBlocks); the orchestrator hands every reducer call this
-  shared reference. Determinism property: per-session transcript is
-  invariant under interleaving of other peers' frames (N-G S6
-  two-peer determinism test).
+  (one PerPeerReceiveState per session: ReceiveState (ledger,
+  chain_dep, pending_headers) + chain_sync_version +
+  block_fetch_version). The ONLY cross-peer shared state is the
+  single shared ChainDb that the orchestrator writes through; both
+  InMemoryChainDb and PersistentChainDb are idempotent on byte-
+  identity at the same (slot, hash) key, so two peers receiving the
+  same block both succeed. Determinism property: per-session
+  ReceiveEvent transcript is invariant under interleaving of other
+  peers' events (N-H S4 two-peer independence test).
 ```
 
-**Rule.** `producer_chain_sync_serve` + `producer_chain_sync_advance_tip`
-are the **single producer-side chain-sync server composition root**.
-The `ServedHeaderLookup` trait is the **closed read-side seam** —
-fixed at this cluster close; **no plug-in extension at runtime**. New
-impls would be a deliberate registry-tracked addition. Today there is
-**one production impl** (`ade_runtime::producer::served_chain_lookups::ServedChainLookups`)
-and one test impl (in `chain_sync/server.rs`'s test module). The
-`ServerReply` wrapper is a **closed type-level closure** —
-client-agency message constructors are unrepresentable in the public
-API (CN-PROTO-06 by construction; CI-defended by
-`ci_check_chain_sync_server_closure.sh` + the compile-time match
-exhaustiveness proof in tests). **New work** that adds a server-role
-chain-sync feature attaches by extending the `ServerStep` arms inside
-the reducer — not by exposing raw `ChainSyncMessage` returns from
-`chain_sync::server`, not by adding a parallel header splitter.
-**Deterministic-resolution discipline (DC-PROTO-08)**: in `MustReply`
-the reducer never returns `Ok((MustReply, silent-wait))` without an
-explicit wait condition. New trigger conditions for deferred
-RollForwards must come via `advance_tip` polled by the orchestrator,
-not via side-channel.
+**Rule.** `receive_apply` (with `receive_apply_sequence` as its
+deterministic driver) is the **single receive-side composition root**
+into `LedgerState` + `PraosChainDepState` + `ChainDb` over peer-
+supplied bytes. The `ReceiveEvent` taxonomy is the **closed canonical
+input** — three variants only (`RollForward`, `RollBackward`,
+`BlockDelivered`); **no constructor exists for locally-originated
+chain-sync or block-fetch messages** the orchestrator might send
+(client requests like `RequestNext`, `RequestRange`, `FindIntersect`,
+`Done`, `ClientDone`). That impossibility is the `CN-PROTO-07`
+closure — the receive side admits *peer-originated* signals only;
+locally-originated outputs are the orchestrator's concern, not the
+reducer's. **New work** that adds a receive-side feature attaches by
+extending the `ReceiveEffect` / `ReceiveError` arms inside the
+reducer or by adding a closed `ReceiveEvent` variant (closed-sum
+extension; version-gated; surface ratified at cluster entry) — not by
+exposing a parallel admission path, not by bypassing
+`admit_via_block_validity`, not by passing raw bytes through
+`ChainDbWrite`. **Path A scope edge (DC-CONS-20):**
+`ReceiveEvent::RollBackward` returns
+`Err(ReceiveError::RollbackOutOfScope { target_point })` —
+deliberately fail-closed. The follow-on rollback cluster (ledger
+snapshot encode/decode + replay-forward driver) closes the rollback
+half; it is **a candidate seam surfaced for the next planner** (see
+below).
 
-### Surface: Producer-side block-fetch server-role ingress (NEW in N-G-S1/S4/S5/S6 — peer→BLUE→wire seam)
+### Surface: Producer-side chain-sync server-role ingress (wired in N-G; carried unchanged)
 
-```
-Surface: A peer-originated BlockFetchMessage frame
-         (RequestRange{from,to} | ClientDone)
-         delivered by a real cardano-node peer over N2N mux,
-         against the producer's ServedChainSnapshot
-Reduces to: BlockFetchServerStep::Replies(Vec<ServerReply>) projected
-            via into_message() onto a sequence of four possible
-            server-agency BlockFetchMessage variants
-            { StartBatch | NoBlocks | Block{bytes} | BatchDone }
-            — OR BlockFetchServerStep::Done on ClientDone
-            — OR ProducerBlockFetchServerError::Grammar(_) on
-              illegal pairing
-Pipeline (fixed step ordering — no reorder, no shortcut):
-  1. RED transport (ade_network::mux::transport) decodes mux frame
-  2. BLUE block-fetch codec (N-A) — decode_block_fetch_message
-  3. RED dispatcher (ade_runtime::network::n2n_server) wraps state
-  4. BLUE grammar gate — block_fetch_transition(state, Client,
-       version, msg) (N-A; total state graph)
-  5. BLUE producer logic — producer_block_fetch_serve dispatches:
-       - RequestRange with Origin endpoints: [NoBlocks]
-       - RequestRange (from, to) -> served.range_bytes(from, to)
-         (BTreeMap inclusive range over admitted blocks)
-         -> empty: [NoBlocks]
-         -> non-empty: [StartBatch, Block{bytes}*, BatchDone]
-       - ClientDone: BlockFetchServerStep::Done
-  6. BLUE projection — ServerReply::into_message() per reply; bytes
-       are sourced verbatim from the ServedRangeLookup output, which
-       is itself sourced from AcceptedBlock.as_bytes() (DC-CONS-17 by
-       construction)
-  7. BLUE block-fetch codec (N-A) — encode_block_fetch_message
-  8. RED transport — mux frames back to peer
-Cross-surface state sharing: same as chain-sync — per-peer state is
-  independent; only the read-only &ServedChainSnapshot is shared.
-```
+Carried. **N-H note:** the producer-side server-role and the
+receive-side admission are deliberately **two separate composition
+roots**, joined only by the upstream `block_validity` chokepoint they
+both compose. There is no cross-call between `producer_chain_sync_serve`
+and `receive_apply`; the producer serves `AcceptedBlock`-derived
+bytes, the receive bridge admits peer-originated bytes via
+`AdmittedBlock`. The two admission tokens are mechanically distinct
+(no constructor on either side accepts the other's bytes — Invariant
+¬P-6 from the receive-side sketch).
 
-**Rule.** `producer_block_fetch_serve` is the **single producer-side
-block-fetch server composition root**. The `ServedRangeLookup` trait
-is the **closed read-side seam** — fixed at this cluster close; **no
-plug-in extension at runtime**. New impls would be a deliberate
-registry-tracked addition. Today there is **one production impl**
-(`ServedChainLookups`) and one test impl. The `ServerReply` wrapper
-is again the closed type-level closure (CN-PROTO-06); the reducer
-itself never re-encodes block bytes — every `Block { bytes }` payload
-it constructs is a verbatim `AcceptedBlock` slice from
-`ServedRangeLookup::range_bytes()` (DC-CONS-17, defended by
-`ci_check_block_fetch_server_closure.sh`). **New work** that adds a
-server-role block-fetch feature attaches by extending the served-chain
-index or the lookup trait impls — not by introducing a parallel block
-source, not by re-encoding wire bytes from parsed pieces.
+### Surface: Producer-side block-fetch server-role ingress (wired in N-G; carried unchanged)
+
+Carried.
 
 ### Surface: Forge-block transition (carried unchanged from N-C)
 
-Carried. The producer's forge transition is upstream of N-G's server
-paths: forged bytes → `AcceptedBlock` (via `self_accept`) →
-`BroadcastQueue::enqueue` → `BroadcastQueue::dequeue` → GREEN
-`drain_and_admit` (N-G S5) → `ServedChainSnapshot` →
-`producer_*_serve` consumes. N-G adds no new step to the forge path
-itself; the seam is the GREEN drain.
+Carried.
 
-### Surface: Self-accept broadcast gate (carried unchanged from N-C; strengthened across the network seam)
+### Surface: Self-accept broadcast gate (carried unchanged from N-C; CN-CONS-07 strengthened in N-H across the receive seam)
 
-Carried. **N-G strengthening:** `AcceptedBlock` is now also the
-**single gate keeping non-self-accepted bytes out of the served
-chain**. The only public path into `ServedChainSnapshot` is
-`served_chain_admit(snap, AcceptedBlock)` — and the only
-`AcceptedBlock` constructor remains the `Ok(...)` arm of
-`self_accept`. `CN-CONS-07` now reads end-to-end: a forged block
-whose body-hash, KES signature, leader claim, or body validity
-disagrees with Ade's own validator can neither broadcast (N-C-S5) nor
-**be served to any peer** (N-G-S2). Registry rule
-`CN-CONS-07.strengthened_in += PHASE4-N-G`.
+Carried. **N-H strengthening:** `AcceptedBlock` remains the gate for
+producer-side broadcast + serve admission, but it now has a **mirror**
+on the receive side: `AdmittedBlock` is the gate for ChainDb + ledger
+admission of peer-originated bytes. Both tokens have private
+constructors that return only when their respective authoritative
+chokepoint returns `Valid`. End-to-end (producer + receive):
+`AcceptedBlock` gates everything broadcast/served outbound;
+`AdmittedBlock` gates everything stored/applied inbound. `CN-CONS-07`
+strengthening (the broadcast gate's mirror via `AdmittedBlock`)
+recorded in `CN-CONS-07.strengthened_in += PHASE4-N-H`.
 
 ### Surface: Scheduler input ingress (carried unchanged from N-C)
 
-Carried. **N-G note:** the scheduler is the producer-side trigger
-into `BroadcastQueue`; N-G's `drain_and_admit` is the GREEN bridge
-from there to the served chain. Scheduler state and `SchedulerInput`
-are unchanged.
+Carried.
 
 ### Surface: Mempool ingress (Tier-1 wire-level — wired in N-E; unchanged)
 
-Carried. N-G does not touch this surface.
+Carried.
 
 ### Surface: Conway tx-body `proposal_procedures` sub-grammar (carried unchanged from PROPOSAL-PROCEDURES-DECODE)
 
@@ -344,80 +316,106 @@ Carried.
 
 Carried.
 
-### Surface: Full block validity (composition root — wired in B1; strengthened across the network seam at N-G)
+### Surface: Full block validity (composition root — wired in B1; consumed unchanged by N-H `admit_via_block_validity`)
 
-Carried. **N-G strengthening:** the validator-shared body-hash recipe
-in `ade_ledger::block_validity::header_input` now has a **second
-public consumer** beyond the validator and producer: the GREEN
-`ServedChainLookups` adapter calls `accepted_block_header_bytes` to
-project a header for `RollForward { header, tip }`. The validator,
-the producer (via `forge_block`), and the served-chain adapter all
-hash through the same recipe — there is **one** header/body splitter
-in the entire workspace (defended by
-`ci_check_no_parallel_header_splitter.sh`). `DC-CONS-16` strengthened
-in N-G.
+Carried. **N-H usage:** the receive-side admission token
+(`AdmittedBlock`) constructor (`admit_via_block_validity`) is a thin
+wrapper around `block_validity` that returns
+`Ok(AdmittedOutcome { admitted, ledger, chain_dep })` exactly when
+the verdict is `BlockValidityVerdict::Valid`. The single block-
+admission gate is unchanged; `AdmittedBlock` is its receive-side
+symmetry to `AcceptedBlock`'s producer-side. The B1 composition
+contract gains a second public consumer beyond `self_accept` (N-C)
+and the validator's direct callers — `DC-CONS-13.strengthened_in +=
+PHASE4-N-H` (symmetric receive closure: admit = `Valid` only).
 
 ### Surface: Block bytes, Plutus script bytes, Snapshot bytes, Consensus-input extraction, Ouroboros mux frames, Genesis JSON bundles, Chain-selector stream inputs (carried)
 
 All seven external ingress surfaces are unchanged at this HEAD.
-**N-G note (mux frames):** N-G closes the producer-side
-**send-direction** for two mini-protocols (chain-sync server-role
-replies, block-fetch server-role replies). The receive-side (an
-externally-arriving block's header triggering a full-block decision)
-is **still** a candidate surface — see below.
+**N-H note (mux frames):** with both halves of the N2N mini-protocols
+now wired — receive-side (N-H) and send-side (N-G) — the producer +
+follower duality is structurally complete for chain-sync + block-fetch.
+The only remaining N2N mini-protocol halves that are unwired today
+are tx-submission2 inbound (N-E's mechanical half captured CE-N-E-6
+on the outbound-client probe; full inbound bulk-tx listener is the
+deferred `CE-NODE-N2C-LTX`) and the operator-facing protocols (LSQ,
+LocalTxMonitor) which remain N-F candidate seams.
 
-### Candidates — surfaces not yet wired (Phase 4 N-F, B+ residuals; receive-side header→body bridge; PP open obligations)
+### Candidates — surfaces not yet wired (rollback authority, full fork choice, N2C surfaces, B+ residuals, PP open obligations)
 
 The following surfaces are named in the Phase 4 plan / B+ planning /
-the PP open-obligation set but have no source today. They are listed
-so future slice docs can attach without reinventing the reduction
-step. **Each is a candidate seam pending confirmation at cluster
-entry.**
+the N-H Path A scope edge / the PP open-obligation set but have no
+source today. They are listed so future slice docs can attach without
+reinventing the reduction step. **Each is a candidate seam pending
+confirmation at cluster entry.**
 
-- **N-G-S3/S4 WIRED AND CLOSED the prior revision's "N-A successor
-  block-fetch server role + chain-sync extension" candidate** —
-  removed (now `producer_block_fetch_serve` +
-  `producer_chain_sync_serve` + `producer_chain_sync_advance_tip`).
-- **N-G-S6 WIRED AND CLOSED the per-peer N2N server orchestrator
-  gap** — removed (now `dispatch_chain_sync_frame` /
-  `dispatch_block_fetch_frame` / `poll_chain_sync_advance` in
-  `ade_runtime::network::n2n_server`). The actual socket → driver
-  binding remains an out-of-band operator step (one layer up — the
-  driver is a pure state machine).
-- **NEW CANDIDATE (flagged by N-G close — original sketch
-  "§Open questions" and the N-C handoff option B): the receive-side
-  header→body bridge.** With send-direction server response paths
-  closed by N-G, the natural next seam is the receive-side: an
-  externally-arriving header (delivered through `process_stream_input`)
-  triggering a `block_validity` decision on the subsequently-fetched
-  body. Today the validator can decide a full block end-to-end
-  (`block_validity`) and the chain-selector can ingest a candidate
-  header (`process_stream_input`); what is missing is the composition
-  layer in `ade_node` that joins them — receive header → request body
-  via the existing N-A block-fetch client → run `block_validity` →
-  fork-choice. **This is a candidate seam for the next cluster
-  planner** — surface it; do not invent invariants for it here.
+- **N-H-S1..S6 WIRED AND CLOSED the prior revision's "receive-side
+  header→body bridge" candidate** — removed (now `receive_apply` +
+  `events_to_state` + `dispatch_*_inbound` + `ChainDbWriter`).
+- **NEW CANDIDATE (flagged by N-H close — `DC-CONS-20` rollback half
+  + N-H OQ-1 Path A scope edge): full rollback authority.** With
+  receive-side **admission** closed, the natural next seam is the
+  receive-side **rollback** — a ledger-state snapshot system (encode
+  + decode + restore) plus a replay-forward driver, both gated by the
+  same `block_validity` chokepoint the admit half goes through. The
+  cluster would convert `ReceiveEvent::RollBackward` from
+  `Err(RollbackOutOfScope)` to a real transition that:
+  (a) selects a snapshot at-or-before `target_point`,
+  (b) restores `(LedgerState, PraosChainDepState, ChainDb tip)`,
+  (c) replays forward across the kept blocks, and
+  (d) re-emits a `ReceiveEffect::RolledBack { to_slot }`.
+  `RollbackSnapshot` ring already exists in
+  `ade_runtime::consensus::chain_selector` (bounded ≤ 2160) and could
+  seed the snapshot store. **`DC-CONS-20.open_obligation =
+  rollback_side_blocked_until_ledger_snapshot_cluster`.** **This is
+  the highest-priority candidate seam for the next cluster planner**
+  — surface it; do not invent invariants for it here.
+- **NEW CANDIDATE (flagged by N-H close — OQ-4 lock): multi-peer
+  fork choice (Praos longest-chain selection across competing peers).**
+  Today the receive bridge is single-source follow: each peer is
+  applied independently against a shared ChainDb; whichever block
+  arrives first under a `(slot, hash)` key wins by ChainDb's
+  byte-identity idempotency. Praos longest-chain across competing
+  forks is a separate authority — it requires a fork-choice rule
+  consumer of `(PerPeerReceiveState[])` that materializes a candidate
+  set, runs `chain_selector::select_best_chain`, and either commits
+  the chosen fork (re-using the rollback cluster's snapshot/replay)
+  or rejects. Surface for the next planner.
+- **NEW CANDIDATE (flagged by N-H close): N2C local-chain-sync
+  receive surface.** N-H closes N2N receive; the local-N2C
+  counterpart — operator clients (`db-sync`, wallets, explorers)
+  consuming a chain-sync stream from Ade rather than from cardano-node
+  — is a separate seam. The N2C codec already exists
+  (`ade_network::n2c::local_chain_sync`); what is missing is the
+  server-side reducer (closed `LocalChainSyncServerStep`, an N2C-flavor
+  `ServerReply<LocalChainSyncMessage>`, and the lookup trait over
+  the persisted ChainDb tip). Surface for the next planner.
+- **N-G receive-side counterpart fully closed (N-H)** — removed.
+- **CE-N-G-8 / CE-N-C-8 live-evidence — still
+  `blocked_until_operator_*_available`** (carried).
 - **PROPOSAL-PROCEDURES-DECODE remains closed** (carried). The four
   PP open obligations remain separable candidate seams (carried).
 - **PHASE4-N-E remains closed** (carried).
-- **PHASE4-N-C remains closed** (carried). CE-N-C-8 still
-  `blocked_until_operator_stake_available`.
 
 | Cluster | Surface | Expected reduction target | Expected chokepoint | Confidence |
 |---------|---------|---------------------------|---------------------|------------|
-| **PHASE4-N-G** *(FULLY CLOSED at this HEAD — mechanical close; live half blocked_until_operator_peer_available)* | **Producer-side server-role ingress: peer chain-sync + block-fetch frames → ServerReply<M> → wire frames** | per-peer `(PerPeerN2nServerState, Vec<Vec<u8>>)`; closed `ServerReply<_>` wrappers with private inner enums; `ServedChainSnapshot` as the single bytes source | **DONE:** `ade_network::chain_sync::server::{ServerReply, ProducerChainSyncServerState, ProducerServerError, ServerStep, ServedHeaderLookup, HeaderProjection, producer_chain_sync_serve, producer_chain_sync_advance_tip}` (BLUE); `ade_network::block_fetch::server::{ServerReply, ProducerBlockFetchServerState, ProducerBlockFetchServerError, BlockFetchServerStep, ServedRangeLookup, producer_block_fetch_serve}` (BLUE); `ade_ledger::producer::served_chain::{ServedChainSnapshot, served_chain_admit, ServedChainAdmitError}` (BLUE); `ade_ledger::block_validity::accepted_block_header_bytes` (BLUE public accessor); `ade_runtime::producer::{broadcast_to_served::drain_and_admit, served_chain_lookups::ServedChainLookups}` (GREEN); `ade_runtime::network::n2n_server::{PerPeerN2nServerState, DispatchError, dispatch_chain_sync_frame, dispatch_block_fetch_frame, poll_chain_sync_advance}` (RED). CI gates `ci_check_no_parallel_header_splitter.sh`, `ci_check_served_chain_closure.sh`, `ci_check_chain_sync_server_closure.sh`, `ci_check_block_fetch_server_closure.sh`, `ci_check_broadcast_to_served_purity.sh`, `ci_check_n2n_server_no_signing_dep.sh`, `ci_check_server_paths_corpus_present.sh`. Registry rules `DC-CONS-17`, `DC-CONS-18`, `DC-PROTO-07`, `DC-PROTO-08`, `CN-PROTO-06` (`enforced`); `RO-LIVE-01` (`partial` with `open_obligation`); strengthens `CN-CONS-07`, `DC-PROTO-06`, `OP-OPS-04`, `DC-CONS-16`, `T-DET-01`, `T-ENC-01`. Tests: named tests across S1..S7 plus replay corpus + multi-peer determinism + cross-impl pipeline harness. | **wired & closed in PHASE4-N-G (mechanical half + structural cross-impl); live-peer cross-impl awaiting operator-supplied Haskell peer** |
-| **CE-N-G-8 (cross-cluster obligation introduced in N-G S7; operator-action live evidence)** | **Live N2N block-fetch acceptance: a real cardano-node peer issues `RequestRange` covering an Ade-served block and accepts the served bytes under its own header+body validation** | The live cross-impl claim — same operator-action evidence pattern as CE-N-B-6 / CE-N-E-6 / CE-N-C-8 | The future evidence-capture pass via `live_block_fetch_session --connect` against a private cardano-node peer; procedure at `docs/clusters/completed/PHASE4-N-G/CE-N-G-8_PROCEDURE.md`; output `CE-N-G-LIVE_<date>.log`. | **deferred operator-action obligation — `blocked_until_operator_peer_available` per `RO-LIVE-01.open_obligation`** |
-| **NEW CANDIDATE — Receive-side header→body bridge** *(flagged by the N-G close — original sketch §"Open questions" + N-C handoff option B)* | **Externally-arriving header triggering a full-block decision on the fetched body** | `block_validity(...)` over the fetched body after `process_stream_input` ingests a candidate header | `ade_node` composition layer joining `process_stream_input` (N-B; existing) + N-A block-fetch **client** (existing) + `block_validity` (B1; existing). No new BLUE chokepoint is implied — it's a composition layer. | **candidate (next-cluster seam; surface; do not invent invariants here)** |
-| **N-C+ (declared non-goal in N-C cluster doc; OQ-4 lock — separable future seam)** | **TPraos producer (Shelley..Alonzo full-block production)** | A TPraos-flavored `ProducerTick` arm + per-era body buckets | Extend `forge_block` to a closed `era` dispatch; today Conway/Praos only. | candidate (declared non-goal — explicit OQ-4 lock) |
-| **CE-NODE-N2C-LTX (cross-cluster obligation carried from N-E)** | **Live N2C UDS server + N2N bulk-tx inbound listener** | The deferred halves of CE-N-E-7 + CE-N-E-6 | The future node-binary cluster ships the live socket loops. | **deferred cross-cluster obligation (NOT an open seam in N-E)** |
-| **PP OQ-1..OQ-4 (NEW separable seams — declared open obligations on DC-LEDGER-11)** | voting_procedures decode / ParameterChange.update nested / NewConstitution.raw nested / typed RewardAccount | per OQ | per OQ | candidate (carried) |
-| B+ (full tx UTxO scope) | Full-scope single-tx validity over real resolved UTxO | `TxValidityVerdict` at `track_utxo=true` | `tx_validity` (existing) | candidate |
-| B+ (Conway body witness depth) | **Conway block-body vkey-witness closure** — `project_conway_body_witness_gap` | `BlockValidityVerdict` whose body authority runs the same closure as `tx_phase_one` | wire `tx_phase_one` / `verify_required_witnesses` into the Conway block-body path in `rules.rs` | candidate (B2-carried) |
-| B+ (pre-Conway tx) | Pre-Conway single-tx validity | `TxValidityVerdict` via per-era body decode + per-era `SignerSource` | extend `decode_tx` + add the era arm to `required_signers` | candidate |
-| B1+ (pre-Babbage block) | TPraos full-block validity (Shelley..Alonzo) | `BlockValidityVerdict` via a TPraos `HeaderInput` projection | extend `block_validity::decode_block` to build `HeaderVrf::Tpraos` headers | candidate |
-| N-F | LSQ semantic dispatch (LocalStateQuery payloads) | Internal Query enum (closed, not yet defined) | Single dispatch fn that consumes `LocalStateQueryMessage` opaque-bytes payloads | candidate |
-| N-F | LocalTxMonitor semantic dispatch | Mempool-snapshot Query/Reply enums | Single dispatch fn that consumes `LocalTxMonitorMessage` opaque-bytes payloads | candidate |
-| N-B+ | Live cardano-node session driver (for `ade_core_interop::live_consensus_session`) | `StreamInput` translated from `ChainSyncMessage` and `BlockFetchMessage` events | Composition layer in `ade_core_interop` | candidate |
+| **PHASE4-N-H** *(FULLY CLOSED at this HEAD — mechanical close; live half blocked_until_operator_peer_available)* | **Receive-side N2N peer ingress: peer chain-sync + block-fetch events → `AdmittedBlock` → ChainDb + LedgerState + PraosChainDepState** | per-peer `(PerPeerReceiveState, shared ChainDb)`; closed `ReceiveEvent` / `ReceiveEffect` / `ReceiveError` sums; `AdmittedBlock` as the single admission token | **DONE:** `ade_ledger::receive::{admitted::{AdmittedBlock, AdmittedOutcome, admit_via_block_validity}, chain_write::{ChainDbWrite, ChainWriteError, ChainWriteErrorKind}, events::{ReceiveEvent, ReceiveEffect, ReceiveError, NoOpReason, TargetPoint, TipPoint}, pending_header_cache::{PendingHeaderCache, PendingHeaderCacheError}, reducer::{ReceiveState, receive_apply, receive_apply_sequence}}` (BLUE); `ade_runtime::receive::{events_to_state::{lift_chain_sync_signal, lift_block_fetch_event}, in_memory_chain_write::ChainDbWriter, orchestrator::{PerPeerReceiveState, ReceiveDispatchError, dispatch_chain_sync_inbound, dispatch_block_fetch_inbound}}` (GREEN + RED). CI gates `ci_check_admitted_block_closure.sh`, `ci_check_receive_reducer_closure.sh`, `ci_check_receive_replay_purity.sh`, `ci_check_receive_orchestrator_no_producer_dep.sh`, `ci_check_receive_paths_corpus_present.sh`. Registry rules `CN-PROTO-07`, `CN-CONS-08`, `DC-CONS-19`, `DC-PROTO-09` (`enforced`); `DC-CONS-20` (`declared` with `rollback_side_blocked_until_ledger_snapshot_cluster`); `RO-LIVE-02` (`partial` with `blocked_until_operator_peer_available`); strengthens `T-DET-01`, `T-ENC-01`, `DC-CONS-13`, `DC-CONS-16`, `CN-CONS-07`, `DC-PROTO-06`. Tests: named tests across S1..S6 plus replay corpus + multi-peer independence + cross-impl pipeline drive. | **wired & closed in PHASE4-N-H (mechanical half + structural cross-impl); live-peer cross-impl awaiting operator-supplied Haskell peer; rollback half deliberately Path A out-of-scope (DC-CONS-20)** |
+| **CE-N-H-6 (cross-cluster obligation introduced in N-H S6; operator-action live evidence)** | **Live N2N follow-mode admission: a real cardano-node peer streams RollForward + BlockDelivered across a follow window; Ade ChainDb tip matches the peer's announced tip at every step** | The live cross-impl claim — same operator-action evidence pattern as CE-N-B-6 / CE-N-E-6 / CE-N-C-8 / CE-N-G-8 | The future evidence-capture pass via `live_block_follow_session --connect` against a private cardano-node peer; procedure at `docs/clusters/completed/PHASE4-N-H/CE-N-H-6_PROCEDURE.md`; output `CE-N-H-LIVE_<date>.log`. | **deferred operator-action obligation — `blocked_until_operator_peer_available` per `RO-LIVE-02.open_obligation`** |
+| **NEW CANDIDATE — Full rollback authority** *(flagged by the N-H close — N-H OQ-1 Path A scope edge; `DC-CONS-20.open_obligation = rollback_side_blocked_until_ledger_snapshot_cluster`)* | **`ReceiveEvent::RollBackward` returning `Ok(ReceiveEffect::RolledBack { to_slot })` instead of `Err(RollbackOutOfScope)`** | A ledger-state snapshot store (encode + decode of `LedgerState` + `PraosChainDepState`) plus a replay-forward driver consuming `ChainDb::iter_from_slot` and re-running `block_validity` across the kept blocks | Extend `ade_ledger::receive::reducer` to dispatch `RollBackward` into a new BLUE chokepoint `rollback_apply(state, target_point, snapshots, chain_db) -> Result<(ReceiveState, ReceiveEffect), ReceiveError>`. No new external surface — the candidate seam is purely internal authority. | **candidate (next-cluster seam — HIGHEST PRIORITY for next planner; surface; do not invent invariants here)** |
+| **NEW CANDIDATE — Multi-peer fork choice (Praos longest-chain across competing peers)** *(flagged by the N-H close — N-H OQ-4 lock)* | **Per-peer `ReceiveState[]` resolution to a single canonical chain** | A fork-choice consumer of `(PerPeerReceiveState[])` returning the canonical-chain `BlockHash` | `ade_runtime::consensus::chain_selector::select_best_chain` (existing GREEN) consumed by a new RED multi-peer coordinator. Requires the rollback cluster first (commits to the chosen fork mean rolling back from the loser). | **candidate (next-cluster seam; surface; sequenced after rollback cluster)** |
+| **NEW CANDIDATE — N2C local-chain-sync receive surface** *(flagged by the N-H close)* | **Operator-side N2C clients consume Ade's chain via `LocalChainSyncMessage` requests** | per-client `(PerClientLocalChainSyncState, shared ChainDb)`; closed `ServerReply<LocalChainSyncMessage>` wrapper | Sibling of `producer_chain_sync_serve` (N-G) over the local-chain-sync N2C codec. Reuses `ServedHeaderLookup`-style trait, this time over the persisted ChainDb tip. | **candidate (next-cluster seam; surface)** |
+| **CE-N-G-8 (cross-cluster obligation carried)** | **Live N2N block-fetch acceptance (Ade serving, cardano-node consuming)** | The live cross-impl claim — carried from N-G | Carried. | **carried (`blocked_until_operator_peer_available`)** |
+| **CE-N-C-8 (cross-cluster obligation carried)** | **Live N2N block-fetch acceptance (Ade forging, cardano-node consuming as next chain head)** | Carried. | Carried. | **carried (`blocked_until_operator_stake_available`)** |
+| **N-C+ (declared non-goal in N-C cluster doc; OQ-4 lock)** | **TPraos producer (Shelley..Alonzo full-block production)** | Carried. | Carried. | candidate (declared non-goal) |
+| **CE-NODE-N2C-LTX (cross-cluster obligation carried from N-E)** | **Live N2C UDS server + N2N bulk-tx inbound listener** | Carried. | Carried. | **deferred cross-cluster obligation (NOT an open seam in N-E)** |
+| **PP OQ-1..OQ-4 (separable seams)** | various | Carried. | Carried. | candidate (carried) |
+| B+ (full tx UTxO scope) | Full-scope single-tx validity over real resolved UTxO | Carried. | Carried. | candidate |
+| B+ (Conway body witness depth) | Conway block-body vkey-witness closure | Carried. | Carried. | candidate (B2-carried) |
+| B+ (pre-Conway tx) | Pre-Conway single-tx validity | Carried. | Carried. | candidate |
+| B1+ (pre-Babbage block) | TPraos full-block validity (Shelley..Alonzo) | Carried. | Carried. | candidate |
+| N-F | LSQ semantic dispatch (LocalStateQuery payloads) | Internal Query enum | Single dispatch fn over opaque-bytes payloads | candidate |
+| N-F | LocalTxMonitor semantic dispatch | Mempool-snapshot Query/Reply enums | Single dispatch fn over opaque-bytes payloads | candidate |
+| N-B+ | Live cardano-node session driver | `StreamInput` translated from `ChainSyncMessage` + `BlockFetchMessage` | Composition layer in `ade_core_interop` | candidate |
 
 ### Operator-action evidence (live-wire artifacts — not BLUE seams)
 
@@ -427,7 +425,7 @@ itself can certify on every push) and a **live-wire operator-action
 half** (a real peer / client at the other end of a real socket
 producing bytes Ade has never seen).
 
-**At this HEAD two live-evidence logs are committed**, two
+**At this HEAD two live-evidence logs are committed**, three
 cross-cluster obligations remain `blocked_until_operator_*_available`,
 and one cross-cluster obligation is carried from N-E.
 
@@ -436,47 +434,42 @@ and one cross-cluster obligation is carried from N-E.
 | `docs/clusters/completed/PHASE4-N-B/CE-N-B-6_PROCEDURE.md` | `docs/clusters/completed/PHASE4-N-B/CE-N-B-6_<date>.log` | **CAPTURED** (carried from N-B close) | Real cardano-node N-B follow-mode tip agreement | RED operator action |
 | `docs/clusters/completed/PHASE4-N-E/CE-N-E-6_PROCEDURE.md` | `docs/clusters/completed/PHASE4-N-E/CE-N-E-6_2026-05-25.log` | **CAPTURED** (carried from N-E close) | Outbound-client probe against a real preprod N2N relay | RED operator action |
 | `docs/clusters/completed/PHASE4-N-E/CE-N-E-7_PROCEDURE.md` | (deferred) `CE-NODE-N2C-LTX_<date>.log` in the future node-binary cluster | **DEFERRED to CE-NODE-N2C-LTX** | Real `cardano-cli transaction submit` to Ade over the N2C UDS | RED operator action (deferred) |
-| `docs/clusters/completed/PHASE4-N-C/CE-N-C-8_PROCEDURE.md` | (pending) `CE-N-C-LIVE_<date>.log` | **`blocked_until_operator_stake_available`** (carried from N-C close) | Cardano-node accepts an Ade-forged block as the next chain head | RED operator action |
-| **`docs/clusters/completed/PHASE4-N-G/CE-N-G-8_PROCEDURE.md` (NEW in N-G-S7)** | **(pending)** `docs/clusters/completed/PHASE4-N-G/CE-N-G-LIVE_<date>.log` | **`blocked_until_operator_peer_available`** (per `RO-LIVE-01.open_obligation`) | A real cardano-node peer issuing `RequestRange` over an Ade-served block via the Ade producer's N2N block-fetch server accepts the served bytes under its own header+body validation. Live cross-impl claim (the bytes-shape claim is mechanically closed by `cross_impl_server_pipeline`). | RED operator action |
+| `docs/clusters/completed/PHASE4-N-C/CE-N-C-8_PROCEDURE.md` | (pending) `CE-N-C-LIVE_<date>.log` | **`blocked_until_operator_stake_available`** (carried) | Cardano-node accepts an Ade-forged block as the next chain head | RED operator action |
+| `docs/clusters/completed/PHASE4-N-G/CE-N-G-8_PROCEDURE.md` | (pending) `CE-N-G-LIVE_<date>.log` | **`blocked_until_operator_peer_available`** (carried) | A real cardano-node peer issuing `RequestRange` accepts Ade-served bytes | RED operator action |
+| **`docs/clusters/completed/PHASE4-N-H/CE-N-H-6_PROCEDURE.md` (NEW in N-H-S6)** | **(pending)** `docs/clusters/completed/PHASE4-N-H/CE-N-H-LIVE_<date>.log` | **`blocked_until_operator_peer_available`** (per `RO-LIVE-02.open_obligation`) | An Ade follower fed RollForward + BlockDelivered from a real cardano-node peer over a captured follow window produces a ChainDb tip equal to the peer's announced tip at every step. Live cross-impl claim (the bytes-shape claim is mechanically closed by `receive_pipeline_corpus_drive`). | RED operator action |
 
 **Operator-action probe binaries (RED — `ade_core_interop::bin::*`).**
-At this HEAD there are **four** such binaries:
+At this HEAD there are **five** such binaries:
 
 | Binary | Slice | Live-evidence target | Status |
 |--------|-------|----------------------|--------|
 | `live_consensus_session` (PHASE4-N-B) | N-B | CE-N-B-6 (live chain-sync follow-mode tip agreement) | captured |
 | `live_tx_submission_session` (PHASE4-N-E S6) | N-E S6 | CE-N-E-6 (live N2N tx-submission2 outbound-client probe) | captured |
-| `live_block_production_session` (PHASE4-N-C S7) | N-C S7 | CE-N-C-8 (live N2N block-fetch acceptance by cardano-node — **producer-side forge**) | blocked_until_operator_stake_available |
-| **`live_block_fetch_session` (PHASE4-N-G S7) — NEW** | N-G S7 | CE-N-G-8 (live N2N **server-role** block-fetch served by Ade to cardano-node) | **blocked_until_operator_peer_available** |
+| `live_block_production_session` (PHASE4-N-C S7) | N-C S7 | CE-N-C-8 (live N2N block-fetch acceptance by cardano-node — producer-side forge) | blocked_until_operator_stake_available |
+| `live_block_fetch_session` (PHASE4-N-G S7) | N-G S7 | CE-N-G-8 (live N2N server-role block-fetch served by Ade to cardano-node) | blocked_until_operator_peer_available |
+| **`live_block_follow_session` (PHASE4-N-H S6) — NEW** | N-H S6 | CE-N-H-6 (live N2N receive-side follow-mode admission of cardano-node-served blocks into Ade's ChainDb) | **blocked_until_operator_peer_available** |
 
 **Pattern.** Hermetic default mode (readiness probe that runs in CI
 without network access — gated `#[ignore]`); plus a `--connect <peer>`
 live pass that the operator runs against a real cardano-node peer.
 The binary's evidence log is committed alongside the `_PROCEDURE.md`
-in the cluster directory. **N-G adds a second closure-mode variant**
-(`blocked_until_operator_peer_available`) to the family. The two
-modes are conceptually distinct:
-
-- `blocked_until_operator_stake_available` (N-C / CE-N-C-8) — the
-  blocker is **testnet SPO stake registration** the operator must
-  provision before Ade can ever forge a block under a real opcert.
-- `blocked_until_operator_peer_available` (N-G / CE-N-G-8) — the
-  blocker is a **private Haskell cardano-node peer** the operator
-  must spin up; no stake registration is required because the test is
-  receive-side (the peer fetches an Ade-served block under its own
-  validation; Ade does not need to be on-chain).
-
-Both follow the OP-OPS-04 precedent (`enforced` core + structured
-`open_obligation` naming the external dependency and the re-open
-criteria).
+in the cluster directory. **N-H is the fifth instance of the family
+and the second receive-direction binary** (N-B was follow-mode read
+but stopped at chain-sync; N-H follows through to block-fetch +
+admit into ChainDb). It uses the **same `blocked_until_operator_peer_available`
+closure-mode variant** as N-G (peer-blocker, not stake-blocker — no
+SPO stake is required; the test is receive-side, Ade consumes bytes
+the peer serves).
 
 **These are evidence-log patterns, not BLUE seams.**
 
 User confirmation needed for each candidate at cluster entry. **The
 most load-bearing remaining candidates for the bounty** are
-**CE-N-C-8** (the live cardano-node forge acceptance), **CE-N-G-8**
-(the live cardano-node block-fetch acceptance — the receive-side
-counterpart of N-C), the **receive-side header→body bridge**,
+**CE-N-C-8** (live cardano-node forge acceptance), **CE-N-G-8** (live
+cardano-node block-fetch acceptance — Ade-serving counterpart),
+**CE-N-H-6** (live cardano-node follow-mode admission — Ade-receiving
+counterpart), **full rollback authority** (closure of the
+`DC-CONS-20` rollback half — Path A scope edge resolution),
 **CE-NODE-N2C-LTX** (the deferred live N2C UDS server + N2N bulk-tx
 inbound listener), and the four **PROPOSAL-PROCEDURES-DECODE open
 obligations**.
@@ -485,117 +478,126 @@ obligations**.
 
 ## 2. Data-Only vs. Authoritative Layers
 
-Ade has **sixteen** authoritative domains. **PHASE4-N-G added one new
-domain — producer-side server response authority** — a new BLUE
-composition root pair (`producer_chain_sync_serve` +
-`producer_block_fetch_serve`) consuming a closed BLUE index
-(`ServedChainSnapshot`) via closed read-side trait seams
-(`ServedHeaderLookup` + `ServedRangeLookup`), gated upstream by the
-`AcceptedBlock` broadcast token (carried from N-C) and bridged by a
-GREEN adapter (`drain_and_admit` + `ServedChainLookups`) plus a RED
-per-peer session driver (`n2n_server`). Prior cluster narratives are
-preserved unchanged below.
+Ade has **seventeen** authoritative domains. **PHASE4-N-H added one
+new domain — receive-side admission authority** — a new BLUE
+composition root (`receive_apply`) producing a closed BLUE token
+(`AdmittedBlock`) via the existing B1 chokepoint
+(`admit_via_block_validity` wraps `block_validity`), with a narrow
+BLUE write-trait (`ChainDbWrite`) consumed through a GREEN adapter
+(`ChainDbWriter`), driven by a RED per-peer session driver
+(`orchestrator`) over GREEN signal-lift adapters (`events_to_state`).
+Prior cluster narratives are preserved unchanged below.
 
-### Producer-side server response authority (NEW in PHASE4-N-G)
+### Receive-side admission authority (NEW in PHASE4-N-H)
 
 | Layer | Module | Color | Role |
 |-------|--------|-------|------|
-| **BLUE header projection authority (S1)** | `ade_ledger::block_validity::accepted_block_header_bytes` | BLUE | The **single canonical** Cardano block-envelope header/body byte splitter. Lifted as a public accessor over the existing validator body-hash recipe (`header_cbor_slice` was already private here). The validator (B1), the producer (N-C `forge_block` via `block_body_hash_from_buckets`), and the served-chain adapter (N-G `ServedChainLookups`) all hash / project through this single site. Defended by `ci_check_no_parallel_header_splitter.sh`. |
-| **BLUE closed type wrapper — chain-sync (S1)** | `ade_network::chain_sync::server::ServerReply` | BLUE | Closed wrapper with private inner enum; only Server-agency-legal `ChainSyncMessage` variants have public constructors (`roll_forward`, `roll_backward`, `await_reply`, `intersect_found`, `intersect_not_found`). The single exit is `into_message()`. CN-PROTO-06 by construction. |
-| **BLUE closed type wrapper — block-fetch (S1)** | `ade_network::block_fetch::server::ServerReply` | BLUE | Same pattern; constructors `start_batch`, `no_blocks`, `block(bytes)`, `batch_done`. |
-| **BLUE served-chain index (S2)** | `ade_ledger::producer::served_chain::{ServedChainSnapshot, served_chain_admit, ServedChainAdmitError}` | BLUE | Closed canonical index. `BTreeMap<(SlotNo, Hash32), AcceptedBlock>`-backed (no `HashMap`). The only entry path is `served_chain_admit(snap, AcceptedBlock)` — and the only `AcceptedBlock` constructor remains `self_accept`'s `Ok(...)` arm. Closed `ServedChainAdmitError` sum (`Decode`, `KeyByteConflict`). Defended by `ci_check_served_chain_closure.sh`. |
-| **BLUE closed read-side trait — chain-sync (S3)** | `ade_network::chain_sync::server::ServedHeaderLookup` | BLUE | **Closed seam** — fixed at this cluster close; no plug-in extension. Methods: `next_after(cursor: Option<(SlotNo, Hash32)>) -> Option<HeaderProjection>`, `intersect(points: &[Point]) -> Option<(SlotNo, Hash32)>`, `tip() -> Option<(SlotNo, Hash32, u64)>`. Production impl: `ServedChainLookups` (GREEN, ade_runtime). New impls = deliberate registry-tracked addition. |
-| **BLUE closed read-side trait — block-fetch (S4)** | `ade_network::block_fetch::server::ServedRangeLookup` | BLUE | **Closed seam.** Method: `range_bytes(from: (SlotNo, Hash32), to: (SlotNo, Hash32)) -> Vec<(SlotNo, Hash32, Vec<u8>)>`. Production impl: `ServedChainLookups`. |
-| **BLUE chain-sync server reducers (S3)** | `ade_network::chain_sync::server::{producer_chain_sync_serve, producer_chain_sync_advance_tip, ProducerChainSyncServerState, ProducerServerError, ServerStep}` | BLUE | Pure, total, deterministic. Closed `ProducerChainSyncServerState`, `ProducerServerError` (1 variant: `Grammar(ChainSyncError)`), `ServerStep` (2 variants: `Done`, `Reply(ServerReply)`). Composes `chain_sync_transition` (N-A grammar gate) — does not re-implement the state graph. Defended by `ci_check_chain_sync_server_closure.sh`. |
-| **BLUE block-fetch server reducer (S4)** | `ade_network::block_fetch::server::{producer_block_fetch_serve, ProducerBlockFetchServerState, ProducerBlockFetchServerError, BlockFetchServerStep}` | BLUE | Pure, total, deterministic. Closed `ProducerBlockFetchServerState`, `ProducerBlockFetchServerError` (1 variant: `Grammar(BlockFetchError)`), `BlockFetchServerStep` (2 variants: `Done`, `Replies(Vec<ServerReply>)`). Composes `block_fetch_transition` (N-A grammar gate). Defended by `ci_check_block_fetch_server_closure.sh`. |
-| **GREEN broadcast→served adapter (S5)** | `ade_runtime::producer::broadcast_to_served::drain_and_admit` | GREEN | Pure function: drains `BroadcastQueue` and admits every `AcceptedBlock` into `ServedChainSnapshot` via the BLUE `served_chain_admit` chokepoint. Returns the updated snapshot, the drained queue, and the dequeue-ordered admitted blocks. Observably deterministic over captured arrival sequences. Defended by `ci_check_broadcast_to_served_purity.sh`. |
-| **GREEN trait-impl bridge (S5)** | `ade_runtime::producer::served_chain_lookups::ServedChainLookups<'a>` | GREEN | Single production impl of both `ServedHeaderLookup` and `ServedRangeLookup` over `&'a ServedChainSnapshot`. Header projection delegates to `accepted_block_header_bytes` — no parallel splitter. Pure; no I/O. Lives in `ade_runtime` because the orphan rule prevents it from living in either `ade_ledger` or `ade_network` alone (the impl spans both crates' types). |
-| **RED per-peer N2N server session driver (S6)** | `ade_runtime::network::n2n_server::{PerPeerN2nServerState, DispatchError, dispatch_chain_sync_frame, dispatch_block_fetch_frame, poll_chain_sync_advance}` | RED | Pure state-machine driver — **no socket I/O** (sockets live one layer up in `ade_network::session`). Decodes inbound mini-protocol frames, calls the BLUE reducers via the GREEN `ServedChainLookups`, encodes outgoing frames. Per-peer state independent; cross-peer coordination only via `&ServedChainSnapshot`. **Key boundary: MUST NOT import from `ade_runtime::producer::signing`** — defended by `ci_check_n2n_server_no_signing_dep.sh`. |
-| **GREEN session-transcript replay corpus (S5/S7)** | `crates/ade_runtime/tests/server_paths_transcript_replay.rs`, `crates/ade_runtime/tests/n2n_server_two_peer_determinism.rs`, `crates/ade_runtime/tests/cross_impl_server_pipeline.rs` | GREEN | Replay scaffolding lives as integration tests in `ade_runtime/tests/`. Drives `(version, peer_message_sequence, broadcast_arrival_sequence, session_event_sequence)` through the full pipeline twice; outgoing frame sequences must be byte-identical (DC-PROTO-07). Cross-impl pipeline verifies every served `Block { bytes }` decodes via Ade's own decoder and the recomputed body-hash matches the announced header (DC-CONS-17 + DC-CONS-18). |
-| **RED operator-action probe binary (S7)** | `ade_core_interop::bin::live_block_fetch_session` | RED | Fourth instance of the operator-action probe binary pattern. Hermetic default + `--connect` live pass. Drives the full producer-side server pipeline against a private cardano-node peer; logs JSON-Lines per RequestRange. Status `blocked_until_operator_peer_available`. |
-| **CI gates (S1..S7)** | `ci/ci_check_{no_parallel_header_splitter, served_chain_closure, chain_sync_server_closure, block_fetch_server_closure, broadcast_to_served_purity, n2n_server_no_signing_dep, server_paths_corpus_present}.sh` | CI | 7 mechanical gates defending the producer-side server response authority surface. Total CI count: 40 → 47. |
+| **BLUE admission-token authority (S1)** | `ade_ledger::receive::admitted::{AdmittedBlock, AdmittedOutcome, admit_via_block_validity}` | BLUE | The **single canonical** receive-side admission token. Sole public constructor: `admit_via_block_validity(block_bytes, &ledger, &chain_dep, &era_schedule, &dyn LedgerView) -> Result<AdmittedOutcome, BlockValidityError>` — returns `Ok` only when `block_validity` yields `BlockValidityVerdict::Valid`. The inner `bytes: Vec<u8>` field is private; the tuple-struct constructor is module-private; no public path exists from raw bytes to an `AdmittedBlock` outside this site. Distinct from `AcceptedBlock` (producer-side broadcast token) — both private-constructor tokens but **mechanically incompatible**: producer broadcast takes `AcceptedBlock` not `AdmittedBlock`; receive admission takes `AdmittedBlock` not `AcceptedBlock`. Defended by `ci_check_admitted_block_closure.sh`. |
+| **BLUE closed event taxonomy (S1)** | `ade_ledger::receive::events::{ReceiveEvent, ReceiveEffect, ReceiveError, NoOpReason, TargetPoint, TipPoint}` | BLUE | Closed canonical input/output sums. `ReceiveEvent` has exactly **3 variants** (`RollForward { slot, hash, header_bytes, tip }`, `RollBackward { target_point, tip }`, `BlockDelivered { block_bytes }`) — **no constructor for locally-originated chain-sync / block-fetch messages** the orchestrator might send. That impossibility is the `CN-PROTO-07` closure: the receive side admits peer-originated signals only. `ReceiveEffect` has 4 variants (`Admitted`, `Cached`, `RolledBack`, `NoOp`); `ReceiveError` has 4 variants (`HeaderBodyMismatch`, `Validity(BlockValidityError)`, `RollbackOutOfScope { target_point }`, `ChainDb(ChainWriteError)`). All closed; no `#[non_exhaustive]`; no `String`-bearing variant. |
+| **BLUE pending-header cache (S1)** | `ade_ledger::receive::pending_header_cache::{PendingHeaderCache, PendingHeaderCacheError}` | BLUE | Closed `BTreeMap<(SlotNo, Hash32), Vec<u8>>`-backed cache (canonical iteration; no `HashMap`). Insert/get/contains/remove/evict_below/iter surface. Insertion is idempotent on byte-identity at the same key; byte-divergence at the same key is `PendingHeaderCacheError::ByteConflict` (cryptographically unreachable under blake2b_256 header hashing, but the invariant is explicit). Eviction is NOT a concern of this BLUE type — the orchestrator (S4) decides policy as canonical input. |
+| **BLUE narrow write trait (S1)** | `ade_ledger::receive::chain_write::{ChainDbWrite, ChainWriteError, ChainWriteErrorKind}` | BLUE | **Closed seam** — single method `write_admitted(&mut self, block: AdmittedBlock) -> Result<(), ChainWriteError>`. Takes `AdmittedBlock` **by value** — the trait surface preserves the admission gate: a caller cannot persist raw bytes; the only way to obtain an `AdmittedBlock` is `admit_via_block_validity`. `ChainWriteError` is a closed 2-variant sum (`SlotConflict { slot, hash }`, `Underlying(ChainWriteErrorKind)`); `ChainWriteErrorKind` is a closed 3-variant `Copy` enum (`Io`, `InvalidOperation`, `Other`) — no `String`. Production impl: `ChainDbWriter` (GREEN, ade_runtime). **Closed seam — one production impl, no plug-in extension.** |
+| **BLUE pure transition (S2)** | `ade_ledger::receive::reducer::{ReceiveState, receive_apply, receive_apply_sequence}` | BLUE | Pure, total, deterministic. `ReceiveState { ledger, chain_dep, pending_headers }` is the bundled receive sub-state. `receive_apply(&mut state, event, &mut chain_write, &era_schedule, &dyn LedgerView) -> Result<ReceiveEffect, ReceiveError>` — one event per call; staged-then-committed shape (on error, `state` AND `chain_write` are unchanged). `RollForward`: caches header bytes; **mutates only `state.pending_headers`** (Invariant I-6 — ledger / chain_dep / chain_write all untouched). `BlockDelivered`: decodes body, cross-checks cached header at `(slot, block_hash)`, runs `admit_via_block_validity`, persists via `ChainDbWrite::write_admitted`, commits new `(ledger, chain_dep)` atomically, evicts consumed header. `RollBackward`: returns `Err(ReceiveError::RollbackOutOfScope)` (Path A scope edge — DC-CONS-20). `receive_apply_sequence` is the byte-identical deterministic driver over an event slice. Defended by `ci_check_receive_reducer_closure.sh`. |
+| **GREEN signal-lift adapter (S3)** | `ade_runtime::receive::events_to_state::{lift_chain_sync_signal, lift_block_fetch_event}` | GREEN | Pure pass-through translators from N-A `ForkChoiceSignal` / `BatchDeliveryEvent` into `ReceiveEvent`. Non-state-changing variants (`BatchStarted`, `NoBlocks`, `BatchCompleted`, `Intersected`, `NoIntersection`) return `None` and are filtered out by the orchestrator before the BLUE call. **Pass-through discipline: `header_bytes` and `block_bytes` are NEVER decoded here** — the BLUE reducer's `BlockDelivered` branch is the canonical decode site. Pure; no I/O; observably deterministic. Defended by `ci_check_receive_replay_purity.sh`. |
+| **GREEN chain-db write adapter (S3)** | `ade_runtime::receive::in_memory_chain_write::ChainDbWriter<'a, D>` | GREEN | Single production impl of the BLUE `ChainDbWrite` trait, over any `ChainDb` implementor (orphan rule reason — lives in the only crate that depends on both `ade_ledger` and the `ChainDb` trait). `write_admitted` decodes the `AdmittedBlock` bytes once via `decode_block` to extract `(slot, hash)`, then calls `ChainDb::put_block(StoredBlock { slot, hash, bytes })`. Maps `ChainDbError` variants into `ChainWriteError`. Pure; no I/O of its own (the I/O is the wrapped `ChainDb`). |
+| **GREEN session-transcript replay corpus (S3/S5)** | `crates/ade_runtime/tests/receive_session_transcript_replay.rs`, `crates/ade_runtime/tests/receive_two_peer_independence.rs`, `crates/ade_runtime/tests/receive_pipeline_corpus_drive.rs` | GREEN | Replay scaffolding lives as integration tests in `ade_runtime/tests/`. Drives `(initial_state, ReceiveEvent_sequence)` through the full pipeline twice; resulting `(ReceiveState, ChainDb fingerprint)` must be byte-identical (DC-PROTO-09). Multi-peer independence test (`receive_two_peer_independence.rs`) drives two synthetic peer streams against a shared ChainDb and asserts per-session transcripts are unaffected by interleaving. Cross-impl pipeline drive (`receive_pipeline_corpus_drive.rs`) replays the Conway-576 corpus through the receive path and verifies ChainDb tip + admitted bytes + ledger fingerprint match expected. |
+| **RED per-peer N2N receive orchestrator (S4)** | `ade_runtime::receive::orchestrator::{PerPeerReceiveState, ReceiveDispatchError, dispatch_chain_sync_inbound, dispatch_block_fetch_inbound}` | RED | Pure state-machine driver — **no socket I/O** (sockets live one layer up in `ade_network::session` / the binary). Decodes inbound mini-protocol frames via N-A codecs, translates to N-A signals/events, lifts to `ReceiveEvent` via the GREEN adapter, calls the BLUE reducer. Per-peer state independent (one `PerPeerReceiveState` per session, holding the per-peer `ReceiveState` + handshake-negotiated chain-sync + block-fetch versions); cross-peer coordination only via the shared `ChainDb` (which is idempotent on byte-identity, so two peers receiving the same block both succeed). **Key boundary: MUST NOT import from `ade_runtime::producer::{signing, broadcast, scheduler}`** — defended by `ci_check_receive_orchestrator_no_producer_dep.sh`. Closed `ReceiveDispatchError` (3 variants: `ChainSyncDecode(CodecError)`, `BlockFetchDecode(CodecError)`, `Receive(ReceiveError)`). |
+| **RED operator-action probe binary (S6)** | `ade_core_interop::bin::live_block_follow_session` | RED | Fifth instance of the operator-action probe binary pattern (second receive-direction binary). Hermetic default + `--connect` live pass. Drives the full receive pipeline against a private cardano-node peer; captures admitted-block bytes + ChainDb tip per block. Status `blocked_until_operator_peer_available`. |
+| **CI gates (S1..S6)** | `ci/ci_check_{admitted_block_closure, receive_reducer_closure, receive_replay_purity, receive_orchestrator_no_producer_dep, receive_paths_corpus_present}.sh` | CI | 5 mechanical gates defending the receive-side admission authority surface. Total CI count: 47 → 52. |
 
-**Rule.** This domain has **one BLUE header projection authority**
-(`accepted_block_header_bytes`), **two BLUE closed type wrappers**
-(`ServerReply` for chain-sync + block-fetch; private inner enums),
-**one BLUE served-chain index** (`ServedChainSnapshot`), **two BLUE
-closed read-side trait seams** (`ServedHeaderLookup`,
-`ServedRangeLookup`), **three BLUE server reducers**
-(`producer_chain_sync_serve`, `producer_chain_sync_advance_tip`,
-`producer_block_fetch_serve`), **one GREEN broadcast→served adapter**
-(`drain_and_admit`), **one GREEN trait-impl bridge**
-(`ServedChainLookups`), **one RED per-peer session driver**
-(`n2n_server` with three dispatch functions), **a session-transcript
-replay corpus + multi-peer determinism + cross-impl pipeline harness**
-(integration tests under `ade_runtime/tests/`), and **one RED
-operator-action probe binary** (`live_block_fetch_session`).
+**Rule.** This domain has **one BLUE admission token** (`AdmittedBlock`
+— gated by the `admit_via_block_validity` chokepoint, which composes
+the existing `block_validity` authority), **one BLUE closed event
+taxonomy** (`ReceiveEvent` / `ReceiveEffect` / `ReceiveError` — three
+event variants only; **no constructor for locally-originated outputs**
+— CN-PROTO-07), **one BLUE pending-header cache**
+(`PendingHeaderCache` — BTreeMap-backed; eviction is orchestrator
+policy, not cache concern), **one BLUE narrow write trait**
+(`ChainDbWrite` — single method; takes `AdmittedBlock` by value;
+closed admission gate preserved across the trait surface), **one BLUE
+pure transition** (`receive_apply` + `receive_apply_sequence`; one
+event per call; staged-then-committed; `RollBackward` returns
+`Err(RollbackOutOfScope)` — Path A scope edge), **two GREEN adapters**
+(`events_to_state` + `ChainDbWriter`), **one RED per-peer session
+driver** (`orchestrator` with two dispatch functions), **a
+session-transcript replay corpus + multi-peer independence +
+cross-impl pipeline drive harness** (integration tests under
+`ade_runtime/tests/`), and **one RED operator-action probe binary**
+(`live_block_follow_session`).
 
 **THE KEY SEAMS:**
 
-1. **The `ServedHeaderLookup` + `ServedRangeLookup` traits are CLOSED
-   seams** — fixed at this cluster close. **No plug-in extension at
-   runtime.** Today there is exactly one production impl
-   (`ServedChainLookups`) and one test impl. **New impls would be a
-   deliberate registry-tracked addition**, not a runtime extension
-   point. Documented in §3 below as Closed registries, not Extensible
-   ones.
-2. **`ServerReply<M>` is a CLOSED type-level closure** — inner enum
-   private; no public constructor exists for client-agency variants;
-   the only exit is `into_message()`. CN-PROTO-06 by construction.
-   Defended by `ci_check_chain_sync_server_closure.sh` +
-   `ci_check_block_fetch_server_closure.sh` (no `pub fn` returning
-   raw `ChainSyncMessage` / `BlockFetchMessage` outside
-   `into_message`).
-3. **`ServedChainSnapshot` is the single source of served bytes** —
-   only `served_chain_admit(snap, AcceptedBlock)` enters bytes;
-   `AcceptedBlock` only via `self_accept`. End-to-end: a block whose
-   validator-side decision would reject can never be served to a
-   peer. CN-CONS-07 strengthened.
-4. **`accepted_block_header_bytes` is the single header/body
-   splitter** — validator, producer, and server all hash / project
-   through the same site. No parallel splitter anywhere in the
-   workspace. DC-CONS-16 strengthened.
-5. **Per-peer state is independent** — multi-peer determinism is by
-   construction (each `PerPeerN2nServerState` is independent;
-   cross-peer coordination is only via the read-only
-   `&ServedChainSnapshot`). The two-peer determinism test confirms
-   per-session transcripts are invariant under interleaving.
-6. **The RED orchestrator never sees private keys** — `n2n_server`
-   has no path to `ade_runtime::producer::signing` (defended by
-   `ci_check_n2n_server_no_signing_dep.sh`). Server response paths
-   read served bytes; they do not sign anything. (Producer-side
-   signing happens upstream, in N-C's `forge_block` chain.)
-7. **Deterministic-resolution discipline (DC-PROTO-08)** — chain-sync
-   server-agency reducers never return ambiguous `Ok((MustReply,
-   silent-wait))` without an explicit replay-input wait condition.
-   New trigger conditions for deferred RollForwards come via
-   `advance_tip`, polled by the orchestrator after each
-   `drain_and_admit`.
+1. **`AdmittedBlock` is a CLOSED type-level admission token** —
+   private inner field; sole public constructor
+   `admit_via_block_validity`; mechanically distinct from
+   `AcceptedBlock` (producer-side broadcast token). End-to-end:
+   peer-originated bytes can reach ChainDb only after passing
+   `block_validity` — there is no public path that lets a caller
+   persist raw bytes through `ChainDbWrite`. Defended by
+   `ci_check_admitted_block_closure.sh`.
+2. **`ReceiveEvent` is a CLOSED taxonomy of peer-originated
+   signals** — three variants only; **no constructor exists for
+   locally-originated chain-sync or block-fetch outputs** (the
+   client requests the orchestrator might send). CN-PROTO-07 by
+   construction (the public API surface IS the closure proof).
+3. **`ChainDbWrite` is a CLOSED narrow seam** — single method; takes
+   `AdmittedBlock` by value; one production impl (`ChainDbWriter`)
+   and no plug-in extension. Documented in §3 below as Closed
+   registry, not Extensible.
+4. **`receive_apply` is the single receive-side composition root** —
+   the BLUE chokepoint into `LedgerState` + `PraosChainDepState` +
+   `ChainDb` over peer-supplied bytes. Pure, total, deterministic;
+   staged-then-committed; the only public path that calls
+   `admit_via_block_validity`.
+5. **Per-peer state is independent** — multi-peer independence is by
+   construction (each `PerPeerReceiveState` is independent;
+   cross-peer coordination is only via the shared `ChainDb`, which
+   is idempotent on byte-identity). The two-peer independence test
+   confirms per-session transcripts are invariant under interleaving.
+6. **The RED orchestrator never sees private keys and never crosses
+   to the producer surface** — `orchestrator` has no path to
+   `ade_runtime::producer::{signing, broadcast, scheduler}`
+   (defended by `ci_check_receive_orchestrator_no_producer_dep.sh`).
+   Receive paths admit peer bytes; they do not sign anything and
+   they do not feed the producer.
+7. **Path A scope edge is explicit and structural (DC-CONS-20)** —
+   `ReceiveEvent::RollBackward` returns
+   `Err(ReceiveError::RollbackOutOfScope { target_point })`. The
+   error variant exists; the closure is not "we forgot rollback";
+   the rollback half of `DC-CONS-20` is a deliberately separable
+   follow-on cluster's deliverable
+   (`open_obligation = rollback_side_blocked_until_ledger_snapshot_cluster`).
 
-**New work** that adds a producer-side server-role feature attaches by
-extending the closed `ServerStep` / `BlockFetchServerStep` arms inside
-the existing reducers, by extending the closed `ServerReply`
-constructor set, or by adding a new lookup trait method (closed-sum
-extension, version-gated) — not by adding a parallel server path, not
-by exposing raw `ChainSyncMessage` / `BlockFetchMessage` from
-server-side `pub fn`s, not by introducing a second served-chain
-index.
+**New work** that adds a receive-side feature attaches by extending
+the closed `ReceiveEffect` / `ReceiveError` arms inside the reducer
+or by adding a closed `ReceiveEvent` variant (closed-sum extension,
+version-gated, surface ratified at cluster entry) — not by exposing
+a parallel admission path, not by bypassing
+`admit_via_block_validity`, not by passing raw bytes through
+`ChainDbWrite`, not by widening `AdmittedBlock`'s constructors, not
+by introducing a second per-peer state struct that shares the
+admission token.
 
-**Declared non-goals carried from the cluster doc:** broader serving
-from a co-located N-D ChainDB (OQ-1 lock — reserved for a future
-N-D-bridge / served-chain-index cluster), eviction of served entries
-within this cluster (OQ-5 lock — narrow scope; memory bound is
-session lifetime), N2C local-chain-sync / local-tx-submission server
-response paths (OQ-8 lock — N2N only), the actual `tokio` socket loop
-(one layer up — the driver is a pure state machine the operator binds
-to a real socket in `ade_network::session::*`).
+**Declared non-goals carried from the cluster doc:** full rollback
+authority (OQ-1 Path A scope edge; `DC-CONS-20.open_obligation`),
+multi-peer fork choice / Praos longest-chain selection (OQ-4 lock —
+single-source follow only), N2C local-chain-sync receive surface
+(out of scope — separate cluster).
 
-### Block production authority (carried unchanged from N-C; CN-CONS-07 strengthened in N-G)
+### Producer-side server response authority (carried unchanged from N-G; OP-OPS-04 strengthened in N-H via receive-side key-boundary mirror)
 
-Carried. **N-G strengthening:** the `AcceptedBlock` token now gates a
-second authoritative output — admission into the served chain — in
-addition to admission into the broadcast queue. The
-`CN-CONS-07.strengthened_in` array gains `PHASE4-N-G`.
+Carried. **N-H strengthening:** the producer-side server pump
+(`n2n_server`) and the receive-side orchestrator (`receive::orchestrator`)
+are **two independent RED drivers** that share the upstream BLUE
+authorities (`block_validity`, ChainDb trait) but cannot reach each
+other and cannot reach private keys. Both have a CI-defended
+key-boundary; the receive-side adds the symmetric guard against
+crossing INTO the producer surface (no `crate::producer::signing /
+broadcast / scheduler` imports). `OP-OPS-04` already covered the
+producer-side; the principle now applies symmetrically.
+
+### Block production authority (carried unchanged from N-C)
+
+Carried.
 
 ### Mempool ingress (carried unchanged from N-E)
 
@@ -607,74 +609,92 @@ Carried.
 
 ### Conway value-conservation accounting / Conway certificate-state accumulation / Credential discriminant fidelity / Conway governance-cert accumulation / Single-tx validity / Mempool admission / Full block validity / Ledger application / Stake-snapshot projection for consensus / Plutus phase-2 evaluation / Governance ratification & enactment / Mini-protocol wire conformance / Praos consensus runtime
 
-All carried unchanged from the prior revision. **N-G-specific
-strengthening:** the body-hash recipe authority (`block_body_hash`)
-now has its header/body splitter (`accepted_block_header_bytes`)
-consumed by a third client (the GREEN `ServedChainLookups` adapter,
-beyond the validator and producer) — `DC-CONS-16.strengthened_in +=
-PHASE4-N-G`. The handshake-negotiated version threading now extends
-through the new server-role surface (`DC-PROTO-06.strengthened_in +=
-PHASE4-N-G`).
+All carried unchanged from the prior revision. **N-H-specific
+strengthening:** the full block validity composition contract
+(`block_validity`) now has a **fourth public consumer** beyond the
+validator's direct callers, `self_accept` (N-C), and (transitively)
+the producer's forge path: `admit_via_block_validity` (N-H) wraps it
+for the receive side. `DC-CONS-13.strengthened_in += PHASE4-N-H`
+(symmetric receive closure: admit = `Valid` only). The single header
+projection authority (`accepted_block_header_bytes` and its
+underlying body-hash recipe site) gains a fourth consumer in the
+receive reducer via the inline header-walker private helper that
+reuses the same `decode_block_envelope` + cbor::skip_item recipe —
+not a parallel splitter (the public splitter remains the one in
+`block_validity/header_input.rs`); `DC-CONS-16.strengthened_in +=
+PHASE4-N-H`.
 
 ### Where the boundary is enforced
 
 - `ci_check_dependency_boundary.sh` — no BLUE crate may depend on
-  RED. N-G added an `ade_runtime → ade_network` edge (RED → BLUE
-  via the `n2n_server` module importing `chain_sync::server` +
-  `block_fetch::server` reducers) — allowed.
-- `ci_check_no_async_in_blue.sh` — async forbidden in BLUE.
-- **`ci_check_no_parallel_header_splitter.sh`** *(N-G-S1 — DC-CONS-16
-  strengthening, DC-CONS-18)* — forbids any new `pub fn .*header_bytes`,
-  `pub fn .*split_header`, or `pub fn .*split_block_envelope` outside
-  the canonical site `crates/ade_ledger/src/block_validity/header_input.rs`.
-  Positive presence check: `accepted_block_header_bytes` must exist
-  at the canonical site.
-- **`ci_check_served_chain_closure.sh`** *(N-G-S2 — CN-CONS-07
-  strengthening)* — forbids `HashMap`/`HashSet` in
-  `ade_ledger::producer::served_chain`; positive presence checks for
-  the canonical `ServedChainSnapshot` + `served_chain_admit` +
-  `ServedChainAdmitError` types.
-- **`ci_check_chain_sync_server_closure.sh`** *(N-G-S3 — DC-PROTO-08,
-  CN-PROTO-06)* — forbids `HashMap`/`HashSet`/`tokio`/`rand`/wall-clock
-  in `chain_sync/server.rs` production code; forbids `pub fn`
-  returning raw `ChainSyncMessage` (exit must be via
-  `ServerReply::into_message`); positive presence checks for
-  `producer_chain_sync_serve`, `producer_chain_sync_advance_tip`,
-  `ServedHeaderLookup`.
-- **`ci_check_block_fetch_server_closure.sh`** *(N-G-S4 — DC-CONS-17,
-  CN-PROTO-06)* — same shape for block-fetch; positive presence checks
-  for `producer_block_fetch_serve` + `ServedRangeLookup`.
-- **`ci_check_broadcast_to_served_purity.sh`** *(N-G-S5 — DC-PROTO-07)*
-  — forbids `tokio`/wall-clock/`rand` in `broadcast_to_served.rs`
-  production code; the GREEN adapter must be observably deterministic.
-- **`ci_check_n2n_server_no_signing_dep.sh`** *(N-G-S6 — CN-PROTO-06,
-  OP-OPS-04 strengthening)* — forbids any import path from
-  `ade_runtime::network::n2n_server` into
-  `ade_runtime::producer::signing`. The server response paths cannot
-  sign anything; they only read served bytes.
-- **`ci_check_server_paths_corpus_present.sh`** *(N-G-S7 — RO-LIVE-01)*
-  — guards server-paths fixture corpus presence + expected transcript
-  artifacts.
+  RED. N-H added an `ade_runtime → ade_ledger` strengthening (RED →
+  BLUE via the `receive::orchestrator` module importing the
+  `ade_ledger::receive::*` BLUE chokepoints) — same direction as
+  existing N-C / N-G edges; allowed.
+- `ci_check_no_async_in_blue.sh` — async forbidden in BLUE. The new
+  `ade_ledger::receive::*` modules are BLUE; no async.
+- **`ci_check_admitted_block_closure.sh`** *(N-H-S1 — CN-PROTO-07,
+  CN-CONS-07 strengthening)* — forbids any `pub fn .* -> *AdmittedBlock`
+  outside the canonical site
+  `crates/ade_ledger/src/receive/admitted.rs`. Positive presence:
+  the `admit_via_block_validity` site itself MUST exist there.
+- **`ci_check_receive_reducer_closure.sh`** *(N-H-S2 — CN-CONS-08,
+  DC-CONS-19)* — forbids `HashMap`/`HashSet`/`tokio`/`rand`/wall-clock
+  in `crates/ade_ledger/src/receive/reducer.rs` production code;
+  forbids any `RollForward` arm path mutating `state.ledger` /
+  `state.chain_dep` / calling `chain_write.*` (Invariant I-6);
+  forbids any `RollBackward` arm path returning `Ok` (Path A scope
+  edge — must be `Err(RollbackOutOfScope)`); positive presence
+  checks for `receive_apply`, `receive_apply_sequence`,
+  `ReceiveState`.
+- **`ci_check_receive_replay_purity.sh`** *(N-H-S3 — DC-PROTO-09)* —
+  forbids `tokio`/wall-clock/`rand` in
+  `crates/ade_runtime/src/receive/{events_to_state,
+  in_memory_chain_write}.rs` production code; the GREEN adapters
+  must be observably deterministic. Forbids any decode of
+  `header_bytes` or `block_bytes` in `events_to_state` (pass-through
+  discipline — the BLUE reducer is the canonical decode site).
+- **`ci_check_receive_orchestrator_no_producer_dep.sh`** *(N-H-S4 —
+  key-boundary doctrine; OP-OPS-04 mirror)* — forbids any import
+  path from `crates/ade_runtime/src/receive/` into
+  `crate::producer::signing` / `crate::producer::broadcast` /
+  `crate::producer::scheduler`. The receive paths cannot sign
+  anything, cannot enqueue broadcasts, and cannot drive the
+  producer scheduler; they only admit peer bytes and write through
+  `ChainDbWrite`.
+- **`ci_check_receive_paths_corpus_present.sh`** *(N-H-S6 —
+  RO-LIVE-02)* — guards receive-paths fixture corpus presence,
+  the named integration test functions, the binary src + Cargo.toml
+  `[[bin]]` entry, and the procedure doc
+  `docs/clusters/PHASE4-N-H/CE-N-H-6_PROCEDURE.md`.
+- `ci_check_no_private_keys_in_corpus.sh` *(extended in N-H-S3)* —
+  scope widened to cover the new
+  `crates/ade_testkit/fixtures/receive_paths/` corpus root.
+- *N-G carried CI gates:* `ci_check_no_parallel_header_splitter.sh`,
+  `ci_check_served_chain_closure.sh`,
+  `ci_check_chain_sync_server_closure.sh`,
+  `ci_check_block_fetch_server_closure.sh`,
+  `ci_check_broadcast_to_served_purity.sh`,
+  `ci_check_n2n_server_no_signing_dep.sh`,
+  `ci_check_server_paths_corpus_present.sh`.
 - *N-C carried CI gates:* `ci_check_private_key_custody.sh`,
   `ci_check_opcert_closed.sh`, `ci_check_forge_purity.sh`,
-  `ci_check_no_private_keys_in_corpus.sh`,
-  `ci_check_no_producer_body_encoder.sh`, `ci_check_self_accept_gate.sh`,
-  `ci_check_scheduler_closure.sh`, `ci_check_producer_corpus_present.sh`.
-- `ci_check_constitution_coverage.sh` — carried (allows enforcement
-  evidence on release/operational entries when status is `enforced`).
+  `ci_check_no_producer_body_encoder.sh`,
+  `ci_check_self_accept_gate.sh`, `ci_check_scheduler_closure.sh`,
+  `ci_check_producer_corpus_present.sh`.
+- `ci_check_constitution_coverage.sh` — carried.
 - `ci_check_proposal_procedures_closed.sh` *(PP — DC-LEDGER-11)* — carried.
-- `ci_check_mempool_ingress_closure.sh` / `ci_check_mempool_ingress_replay.sh`
-  *(N-E — DC-MEM-03/04)* — carried.
+- `ci_check_mempool_ingress_closure.sh` /
+  `ci_check_mempool_ingress_replay.sh` *(N-E)* — carried.
 - `ci_check_credential_discriminant_closed.sh` *(OQ5 / COMMITTEE /
-  DREP / ENACTMENT — DC-LEDGER-10)* — carried.
-- `ci_check_gov_cert_accumulation_closed.sh` *(B5 — DC-LEDGER-09)* —
-  carried.
-- `ci_check_deposit_param_authority.sh` *(B3 — DC-TXV-07)* — carried.
-- `ci_check_conway_cert_classification_closed.sh` *(B3F — DC-TXV-06)*
-  — carried.
-- `ci_check_no_chaindb_in_consensus_blue.sh` / `ci_check_no_float_in_consensus.sh`
-  / `ci_check_no_density_in_fork_choice.sh` / `ci_check_consensus_closed_enums.sh`
-  — carried.
+  DREP / ENACTMENT)* — carried.
+- `ci_check_gov_cert_accumulation_closed.sh` *(B5)* — carried.
+- `ci_check_deposit_param_authority.sh` *(B3)* — carried.
+- `ci_check_conway_cert_classification_closed.sh` *(B3F)* — carried.
+- `ci_check_no_chaindb_in_consensus_blue.sh` /
+  `ci_check_no_float_in_consensus.sh` /
+  `ci_check_no_density_in_fork_choice.sh` /
+  `ci_check_consensus_closed_enums.sh` — carried.
 - `ci_check_pallas_quarantine.sh`, `ci_check_no_signing_in_blue.sh`,
   `ci_check_ingress_chokepoints.sh`, `ci_check_ce_n_a_5_proof.sh` —
   carried.
@@ -683,22 +703,20 @@ PHASE4-N-G`).
 
 ## 3. Closed vs. Extensible Registries
 
-Ade's authority surface is **almost entirely closed.** **PHASE4-N-G
-added thirteen closed surfaces** — `ServerReply` (chain-sync, closed
-wrapper over a private 5-variant inner enum), `ServerReply`
-(block-fetch, closed wrapper over a private 4-variant inner enum),
-`HeaderProjection` (closed struct), `ProducerChainSyncServerState`
-(closed struct), `ProducerServerError` (closed 1-variant sum),
-`ServerStep` (closed 2-variant sum), `ProducerBlockFetchServerState`
-(closed struct), `ProducerBlockFetchServerError` (closed 1-variant
-sum), `BlockFetchServerStep` (closed 2-variant sum),
-`ServedChainSnapshot` (closed BLUE index type), `ServedChainAdmitError`
-(closed 2-variant sum), `PerPeerN2nServerState` (closed RED struct),
-`DispatchError` (closed 4-variant RED sum), **plus two closed trait
-seams** (`ServedHeaderLookup`, `ServedRangeLookup`) and **the
-canonical accessor** `accepted_block_header_bytes`. Plus **seven CI
-gates** (CI count 40 → 47) and **six newly-introduced registry
-rules + four strengthenings** (registry total 190 → 196).
+Ade's authority surface is **almost entirely closed.** **PHASE4-N-H
+added thirteen closed surfaces** — `AdmittedBlock` (closed BLUE
+token), `AdmittedOutcome` (closed struct), `ReceiveEvent` (closed
+3-variant sum), `ReceiveEffect` (closed 4-variant sum), `ReceiveError`
+(closed 4-variant sum), `NoOpReason` (closed 1-variant Copy enum),
+`TargetPoint` + `TipPoint` (closed structs), `PendingHeaderCache`
+(closed BLUE index type), `PendingHeaderCacheError` (closed 1-variant
+sum), `ChainWriteError` (closed 2-variant sum), `ChainWriteErrorKind`
+(closed 3-variant Copy enum), `ReceiveState` (closed struct),
+**plus one closed trait seam** (`ChainDbWrite`), **the canonical
+admission chokepoint** (`admit_via_block_validity`), and **the canonical
+reducer chokepoint pair** (`receive_apply` + `receive_apply_sequence`).
+Plus **five CI gates** (CI count 47 → 52) and **six newly-introduced
+registry rules + six strengthenings** (registry total 196 → 202).
 
 ### Closed (frozen — version-gated changes only)
 
@@ -723,45 +741,49 @@ rules + four strengthenings** (registry total 190 → 196).
 | `IngressSource` *(N-E)* | `ade_ledger::mempool::ingress` | 2 variants | Closed source discriminant. |
 | `IngressEvent` *(N-E)* | `ade_ledger::mempool::ingress` | closed struct | Closed flat-data envelope. |
 | `mempool_ingress` chokepoint *(N-E)* | `ade_ledger::mempool::ingress` | 1 function | DC-MEM-03. |
-| `ProducerTick` *(N-C-S3 — DC-CONS-13)* | `ade_ledger::producer::state` | closed 14-field struct | Carried; canonical input value to `forge_block`. |
+| `ProducerTick` *(N-C-S3 — DC-CONS-13; **N-H strengthened**)* | `ade_ledger::producer::state` | closed 14-field struct | Carried; `DC-CONS-13.strengthened_in += PHASE4-N-H` (symmetric receive closure). |
 | `forge_block` chokepoint *(N-C-S3)* | `ade_ledger::producer::forge` | 1 function | Carried. |
 | `ForgeError` / `ForgeEffects` / `ForgedBlock` *(N-C-S3)* | `ade_ledger::producer::forge` | 7 / 1 / closed struct | Carried. |
 | `encode_opcert` / `decode_opcert` chokepoint pair *(N-C-S2)* | `ade_codec::shelley::opcert` | 2 functions | Carried. |
 | `OpCertCodecError` *(N-C-S2)* | `ade_codec::shelley::opcert` | 7 variants | Carried. |
 | `opcert_validate` chokepoint *(N-C-S2)* | `ade_core::consensus::opcert_validate` | 1 function | Carried. |
 | `OpCertError` *(N-C-S2)* | `ade_core::consensus::opcert_validate` | closed validation-error sum | Carried. |
-| `block_body_hash_from_buckets` chokepoint *(N-C-S4 — DC-CONS-16; **N-G strengthened**)* | `ade_ledger::block_body_hash` | 1 function | The **only** function in the workspace that computes the Cardano block body-hash recipe. **N-G strengthening**: the header sub-slice consumed by this recipe is now also lifted as the public `accepted_block_header_bytes` accessor — three consumers (validator, producer, served-chain adapter) all hash / project through the same single site. `DC-CONS-16.strengthened_in += PHASE4-N-G`. |
-| `AcceptedBlock` token *(N-C-S5 — CN-CONS-07; **N-G strengthened across the network seam**)* | `ade_ledger::producer::self_accept` | 1 newtype `{ bytes: Vec<u8> }` (private field) | Carried. **N-G strengthening**: gates **both** broadcast queue admission (carried) **and** served-chain admission. `served_chain_admit` accepts only `AcceptedBlock`. End-to-end: a block whose validator-side decision would reject can neither broadcast nor be served. `CN-CONS-07.strengthened_in += PHASE4-N-G`. |
+| `block_body_hash_from_buckets` chokepoint *(N-C-S4 — DC-CONS-16; **N-H strengthened**)* | `ade_ledger::block_body_hash` | 1 function | Carried. **N-H strengthening**: the header sub-slice walker recipe gains a fourth consumer via the receive reducer's inline private helper (same recipe; no parallel public splitter). `DC-CONS-16.strengthened_in += PHASE4-N-H`. |
+| `AcceptedBlock` token *(N-C-S5 — CN-CONS-07; **N-H strengthened via the receive-side mirror**)* | `ade_ledger::producer::self_accept` | 1 newtype (private field) | Carried. **N-H strengthening**: `AcceptedBlock` remains the producer-side broadcast/serve gate; **`AdmittedBlock` is its receive-side symmetric mirror**. End-to-end (producer + receive): `AcceptedBlock` gates outbound; `AdmittedBlock` gates inbound. The tokens are mechanically incompatible (no constructor accepts the other's bytes). `CN-CONS-07.strengthened_in += PHASE4-N-H`. |
 | `self_accept` chokepoint *(N-C-S5 — CN-CONS-07)* | `ade_ledger::producer::self_accept` | 1 function | Carried. |
 | `SelfAcceptError` *(N-C-S5)* | `ade_ledger::producer::self_accept` | 1 variant — `Rejected(BlockValidityError)` | Carried. |
-| `SchedulerInput` *(N-C-S6 — OP-OPS-05)* | `ade_runtime::producer::scheduler` | 2 variants | Carried. |
-| `SchedulerEffect` *(N-C-S6)* | `ade_runtime::producer::scheduler` | 4 variants | Carried. |
-| `SchedulerHaltReason` / `SchedulerState` *(N-C-S6)* | `ade_runtime::producer::scheduler` | 2 variants / closed struct | Carried. |
-| `TickInputs` / `TickAssemblyError` *(N-C-S6)* | `ade_runtime::producer::tick_assembler` | closed 13-field struct / 2 variants | Carried. |
-| `assemble_tick` chokepoint *(N-C-S6)* | `ade_runtime::producer::tick_assembler` | 1 function | Carried. |
+| `SchedulerInput` / `SchedulerEffect` / `SchedulerHaltReason` / `SchedulerState` *(N-C-S6)* | `ade_runtime::producer::scheduler` | closed sums | Carried. |
+| `TickInputs` / `TickAssemblyError` / `assemble_tick` *(N-C-S6)* | `ade_runtime::producer::tick_assembler` | closed | Carried. |
 | `BroadcastError` *(N-C-S6)* | `ade_runtime::producer::broadcast` | 2 variants | Carried. |
-| RED signing primitives + key types *(N-C-S1 — DC-CRYPTO-03/04/05, OP-OPS-04; **N-G strengthened**)* | `ade_runtime::producer::signing::{vrf_prove, kes_sign, kes_update, VrfSigningKey, KesSecret, ColdSigningKey, SigningError}` | 3 functions + 3 closed key types + 1 closed error sum | Carried. **N-G strengthening**: `OP-OPS-04.strengthened_in += PHASE4-N-G` — the RED server response driver (`n2n_server`) MUST NOT link against `producer::signing` (defended by `ci_check_n2n_server_no_signing_dep.sh`). Private-key custody now constrains the server-role surface in addition to the producer surface. |
-| RED key loader *(N-C-S1)* | `ade_runtime::producer::keys` | 3 loader functions + 1 closed error sum | Carried. |
-| **`accepted_block_header_bytes` canonical accessor** *(NEW in N-G-S1 — DC-CONS-16 strengthening, DC-CONS-18; closed-grammar accessor, not a registry)* | `ade_ledger::block_validity::header_input` | 1 function | The **single canonical header/body byte splitter** in the workspace. Lifted public accessor over the existing validator body-hash recipe's `header_cbor_slice`. Defended by `ci_check_no_parallel_header_splitter.sh`. |
-| **`ServerReply` (chain-sync)** *(NEW in N-G-S1 — CN-PROTO-06; closed-grammar token, not a registry)* | `ade_network::chain_sync::server` | 1 struct with private 5-variant inner enum (`RollForward`, `RollBackward`, `AwaitReply`, `IntersectFound`, `IntersectNotFound`) | The **only** server-agency chain-sync reply wrapper. No public constructor for client-agency variants (`RequestNext`, `FindIntersect`, `Done`). Exit via `into_message()` only. CN-PROTO-06 by construction. New constructor = strengthening (closed-sum extension; closed-grammar discipline). |
-| **`ServerReply` (block-fetch)** *(NEW in N-G-S1 — CN-PROTO-06)* | `ade_network::block_fetch::server` | 1 struct with private 4-variant inner enum (`StartBatch`, `NoBlocks`, `Block{bytes}`, `BatchDone`) | The **only** server-agency block-fetch reply wrapper. No public constructor for client-agency variants (`RequestRange`, `ClientDone`). Exit via `into_message()` only. |
-| **`HeaderProjection`** *(NEW in N-G-S3)* | `ade_network::chain_sync::server` | closed struct `{ slot, hash, block_no, header_bytes }` | The closed projection value `ServedHeaderLookup::next_after` returns. `header_bytes` is the canonical header sub-slice per `accepted_block_header_bytes`. |
-| **`ServedHeaderLookup` trait** *(NEW in N-G-S3 — DC-PROTO-08; closed read-side seam, not a registry)* | `ade_network::chain_sync::server` | 1 trait with 3 methods — `next_after(cursor) -> Option<HeaderProjection>`, `intersect(points: &[Point]) -> Option<(SlotNo, Hash32)>`, `tip() -> Option<(SlotNo, Hash32, u64)>` | **Closed seam** — fixed at this cluster close. **No plug-in extension at runtime.** Today there is exactly one production impl (`ade_runtime::producer::served_chain_lookups::ServedChainLookups`). **New impls would be a deliberate registry-tracked addition**, not a runtime extension point. New trait method = strengthening (closed extension, version-gated). |
-| **`ServedRangeLookup` trait** *(NEW in N-G-S4 — DC-CONS-17; closed read-side seam, not a registry)* | `ade_network::block_fetch::server` | 1 trait with 1 method — `range_bytes(from, to) -> Vec<(SlotNo, Hash32, Vec<u8>)>` | **Closed seam.** Production impl: `ServedChainLookups`. |
-| **`producer_chain_sync_serve` chokepoint** *(NEW in N-G-S3 — DC-PROTO-08)* | `ade_network::chain_sync::server` | 1 function — `pub fn producer_chain_sync_serve(state, in_msg, served: &dyn ServedHeaderLookup, version) -> Result<(ProducerChainSyncServerState, ServerStep), ProducerServerError>` | The **single producer-side chain-sync server composition root**. Pure, total, deterministic. Defended by `ci_check_chain_sync_server_closure.sh`. |
-| **`producer_chain_sync_advance_tip` chokepoint** *(NEW in N-G-S3)* | `ade_network::chain_sync::server` | 1 function | The **single deferred-reply emitter** for server-agency waits. |
-| **`ProducerChainSyncServerState`** *(NEW in N-G-S3)* | `ade_network::chain_sync::server` | closed struct `{ state: ChainSyncState, last_announced: Option<(SlotNo, Hash32)> }` | Closed. |
-| **`ProducerServerError`** *(NEW in N-G-S3)* | `ade_network::chain_sync::server` | 1 variant — `Grammar(ChainSyncError)` | Closed sum. No `#[non_exhaustive]`. No `String`-bearing variant. |
-| **`ServerStep`** *(NEW in N-G-S3)* | `ade_network::chain_sync::server` | 2 variants — `Done`, `Reply(ServerReply)` | Closed sum. |
-| **`producer_block_fetch_serve` chokepoint** *(NEW in N-G-S4 — DC-CONS-17)* | `ade_network::block_fetch::server` | 1 function | The **single producer-side block-fetch server composition root**. Pure, total, deterministic. Defended by `ci_check_block_fetch_server_closure.sh`. |
-| **`ProducerBlockFetchServerState`** *(NEW in N-G-S4)* | `ade_network::block_fetch::server` | closed struct | Closed. |
-| **`ProducerBlockFetchServerError`** *(NEW in N-G-S4)* | `ade_network::block_fetch::server` | 1 variant — `Grammar(BlockFetchError)` | Closed sum. |
-| **`BlockFetchServerStep`** *(NEW in N-G-S4)* | `ade_network::block_fetch::server` | 2 variants — `Done`, `Replies(Vec<ServerReply>)` | Closed sum. |
-| **`ServedChainSnapshot`** *(NEW in N-G-S2 — CN-CONS-07 strengthening)* | `ade_ledger::producer::served_chain` | closed struct `{ blocks: BTreeMap<(SlotNo, Hash32), AcceptedBlock> }` | The **single served-chain index**. BTreeMap-backed (no HashMap — DC-PROTO-07 foundation). Defended by `ci_check_served_chain_closure.sh`. |
-| **`served_chain_admit` chokepoint** *(NEW in N-G-S2)* | `ade_ledger::producer::served_chain` | 1 function — `pub fn served_chain_admit(snap, AcceptedBlock) -> Result<ServedChainSnapshot, ServedChainAdmitError>` | The **only** entry path into `ServedChainSnapshot`. Derives `(slot, hash)` from the bytes via `decode_block` — no caller-asserted hash. |
-| **`ServedChainAdmitError`** *(NEW in N-G-S2)* | `ade_ledger::producer::served_chain` | 2 variants — `Decode(BlockValidityError)`, `KeyByteConflict { slot, hash }` | Closed sum. No `#[non_exhaustive]`. No `String`-bearing variant. |
-| **`PerPeerN2nServerState`** *(NEW in N-G-S6)* | `ade_runtime::network::n2n_server` | closed RED struct `{ chain_sync, block_fetch, chain_sync_version, block_fetch_version }` | Closed. Per-peer state independent; cross-peer coordination only via shared `&ServedChainSnapshot`. |
-| **`DispatchError`** *(NEW in N-G-S6)* | `ade_runtime::network::n2n_server` | 4 variants — `ChainSyncDecode(CodecError)`, `BlockFetchDecode(CodecError)`, `ChainSync(ProducerServerError)`, `BlockFetch(ProducerBlockFetchServerError)` | Closed RED dispatch-error sum. |
+| RED signing primitives + key types *(N-C-S1 — DC-CRYPTO-03/04/05, OP-OPS-04)* | `ade_runtime::producer::signing::*` | closed | Carried. |
+| RED key loader *(N-C-S1)* | `ade_runtime::producer::keys` | closed | Carried. |
+| `accepted_block_header_bytes` canonical accessor *(N-G-S1 — DC-CONS-16 / DC-CONS-18)* | `ade_ledger::block_validity::header_input` | 1 function | Carried. |
+| `ServerReply` (chain-sync + block-fetch) *(N-G-S1 — CN-PROTO-06)* | `ade_network::{chain_sync, block_fetch}::server` | 2 closed wrappers over private inner enums | Carried. |
+| `HeaderProjection` *(N-G-S3)* | `ade_network::chain_sync::server` | closed struct | Carried. |
+| `ServedHeaderLookup` / `ServedRangeLookup` traits *(N-G-S3/S4 — DC-PROTO-08 / DC-CONS-17)* | `ade_network::{chain_sync, block_fetch}::server` | 2 closed traits | Carried. |
+| `producer_chain_sync_serve` / `producer_chain_sync_advance_tip` *(N-G-S3)* | `ade_network::chain_sync::server` | 2 functions | Carried. |
+| `producer_block_fetch_serve` *(N-G-S4)* | `ade_network::block_fetch::server` | 1 function | Carried. |
+| `Producer*ServerState` / `ProducerServerError` / `ProducerBlockFetchServerError` / `ServerStep` / `BlockFetchServerStep` *(N-G-S3/S4)* | `ade_network::{chain_sync, block_fetch}::server` | closed | Carried. |
+| `ServedChainSnapshot` / `served_chain_admit` / `ServedChainAdmitError` *(N-G-S2)* | `ade_ledger::producer::served_chain` | closed | Carried. |
+| `PerPeerN2nServerState` / `DispatchError` *(N-G-S6)* | `ade_runtime::network::n2n_server` | closed | Carried. |
+| **`AdmittedBlock` token** *(NEW in N-H-S1 — CN-PROTO-07 + CN-CONS-07 mirror; closed-grammar token)* | `ade_ledger::receive::admitted` | 1 struct with private `bytes: Vec<u8>` field | The **only** receive-side admission token. Sole public constructor `admit_via_block_validity`. Mechanically distinct from `AcceptedBlock` — no constructor on either side accepts the other's bytes (Invariant ¬P-6). New constructor = strengthening; the single-site invariant is CI-defended by `ci_check_admitted_block_closure.sh`. |
+| **`AdmittedOutcome`** *(NEW in N-H-S1)* | `ade_ledger::receive::admitted` | closed struct `{ admitted: AdmittedBlock, ledger: LedgerState, chain_dep: PraosChainDepState }` | The return shape of `admit_via_block_validity`. Closed. |
+| **`admit_via_block_validity` chokepoint** *(NEW in N-H-S1 — CN-PROTO-07)* | `ade_ledger::receive::admitted` | 1 function — `pub fn admit_via_block_validity(block_bytes, &LedgerState, &PraosChainDepState, &EraSchedule, &dyn LedgerView) -> Result<AdmittedOutcome, BlockValidityError>` | The **single canonical** receive-side admission chokepoint. Composes `block_validity` (B1) — does not re-implement it. Returns `Ok` only on `BlockValidityVerdict::Valid`. |
+| **`ReceiveEvent`** *(NEW in N-H-S1 — CN-PROTO-07; closed canonical input)* | `ade_ledger::receive::events` | 3 variants — `RollForward { slot, hash, header_bytes, tip }`, `RollBackward { target_point, tip }`, `BlockDelivered { block_bytes }` | **The closed receive-event taxonomy.** **No constructor for locally-originated chain-sync / block-fetch messages** (the client requests the orchestrator might send) — that impossibility is the CN-PROTO-07 closure. No `#[non_exhaustive]`; no `String`-bearing variant. New variant = closed-sum extension; version-gated. |
+| **`ReceiveEffect`** *(NEW in N-H-S1 — CN-CONS-08)* | `ade_ledger::receive::events` | 4 variants — `Admitted { slot, hash }`, `Cached { slot, hash }`, `RolledBack { to_slot }`, `NoOp { reason: NoOpReason }` | Closed sum. `RolledBack` is unreachable in Path A (reserved for the follow-on rollback cluster). |
+| **`NoOpReason`** *(NEW in N-H-S1)* | `ade_ledger::receive::events` | 1 variant — `HeaderAlreadyCached` (Copy enum) | Closed sum; reason-tag for `ReceiveEffect::NoOp`. No `String`. |
+| **`ReceiveError`** *(NEW in N-H-S1 — DC-CONS-19, DC-CONS-20)* | `ade_ledger::receive::events` | 4 variants — `HeaderBodyMismatch { decoded_slot, decoded_hash }`, `Validity(BlockValidityError)`, `RollbackOutOfScope { target_point }`, `ChainDb(ChainWriteError)` | Closed sum. `RollbackOutOfScope` is the explicit Path A scope-edge variant — surfaces the rollback half of DC-CONS-20 as a structured failure rather than silent acceptance or panic. |
+| **`TargetPoint` / `TipPoint`** *(NEW in N-H-S1)* | `ade_ledger::receive::events` | 2 closed structs | Closed. |
+| **`PendingHeaderCache`** *(NEW in N-H-S1 — Invariant I-6 support; closed BLUE index)* | `ade_ledger::receive::pending_header_cache` | closed struct `{ entries: BTreeMap<(SlotNo, Hash32), Vec<u8>> }` | The **single pending-header cache** for the receive bridge. BTreeMap-backed (canonical iteration; no `HashMap`). Insertion idempotent on byte-identity; byte-divergence at the same key is `PendingHeaderCacheError::ByteConflict` (cryptographically unreachable under blake2b_256 header hashing). Surface: insert / get / contains / remove / evict_below / iter / len / is_empty. Eviction policy is orchestrator concern, NOT cache concern. |
+| **`PendingHeaderCacheError`** *(NEW in N-H-S1)* | `ade_ledger::receive::pending_header_cache` | 1 variant — `ByteConflict { slot, hash }` | Closed sum. |
+| **`ChainDbWrite` trait** *(NEW in N-H-S1 — Invariant I-12 support; closed seam, not a registry)* | `ade_ledger::receive::chain_write` | 1 trait with 1 method — `write_admitted(&mut self, block: AdmittedBlock) -> Result<(), ChainWriteError>` | **Closed seam** — single production impl (`ade_runtime::receive::in_memory_chain_write::ChainDbWriter`, GREEN). **No plug-in extension at runtime.** Takes `AdmittedBlock` BY VALUE — the trait surface preserves the admission gate (a caller cannot persist raw bytes; the only path to `AdmittedBlock` is `admit_via_block_validity`). New impls would be a deliberate registry-tracked addition (e.g. a future `PersistentChainDbWriter` once a persistent ChainDb is wired) — not a runtime plug-in. New trait method = strengthening (closed extension, version-gated). |
+| **`ChainWriteError`** *(NEW in N-H-S1)* | `ade_ledger::receive::chain_write` | 2 variants — `SlotConflict { slot, hash }`, `Underlying(ChainWriteErrorKind)` | Closed sum. No `String`. |
+| **`ChainWriteErrorKind`** *(NEW in N-H-S1)* | `ade_ledger::receive::chain_write` | 3 variants — `Io`, `InvalidOperation`, `Other` (Copy enum) | Closed sum. |
+| **`ReceiveState`** *(NEW in N-H-S2)* | `ade_ledger::receive::reducer` | closed struct `{ ledger: LedgerState, chain_dep: PraosChainDepState, pending_headers: PendingHeaderCache }` | The bundled receive sub-state. Closed. |
+| **`receive_apply` chokepoint** *(NEW in N-H-S2 — DC-CONS-19; CN-CONS-08)* | `ade_ledger::receive::reducer` | 1 function — `pub fn receive_apply<W: ChainDbWrite>(state, event, chain_write, era_schedule, ledger_view) -> Result<ReceiveEffect, ReceiveError>` | The **single receive-side composition root**. Pure, total, deterministic. Staged-then-committed shape. RollForward mutates only `state.pending_headers`. RollBackward returns `Err(RollbackOutOfScope)`. Defended by `ci_check_receive_reducer_closure.sh`. |
+| **`receive_apply_sequence` driver** *(NEW in N-H-S2)* | `ade_ledger::receive::reducer` | 1 function | The deterministic event-slice driver. Pure. |
+| **`PerPeerReceiveState`** *(NEW in N-H-S4)* | `ade_runtime::receive::orchestrator` | closed RED struct `{ receive_state, chain_sync_version, block_fetch_version }` | Closed. Per-peer state independent; cross-peer coordination only via the shared `ChainDb`. |
+| **`ReceiveDispatchError`** *(NEW in N-H-S4)* | `ade_runtime::receive::orchestrator` | 3 variants — `ChainSyncDecode(CodecError)`, `BlockFetchDecode(CodecError)`, `Receive(ReceiveError)` | Closed RED dispatch-error sum. |
 | `PlutusLanguage` | `ade_plutus::evaluator` | 3 variants | |
 | Named ingress chokepoints (block CBOR) | `ade_codec::*` | 10 | |
 | Conway cert/withdrawals sub-grammar decoders *(B3 / B4)* | `ade_codec::conway::{cert, withdrawals}` + `ade_codec::shelley::cert::read_pool_registration_cert` | 5 functions | Closed. |
@@ -781,16 +803,15 @@ rules + four strengthenings** (registry total 190 → 196).
 | `LedgerView` trait *(N-B; B1-refined)* | `ade_core::consensus::ledger_view` | 4 methods | |
 | `HeaderVrf` *(N-B; B1)* | `ade_core::consensus::header_summary` | 2 variants | |
 | `BlockValidityVerdict` / `BlockValidityError` etc. *(B1)* | `ade_ledger::block_validity::verdict` | closed | |
-| `block_validity` chokepoint *(B1)* | `ade_ledger::block_validity::transition` | 1 function | Single chokepoint `self_accept` (N-C-S5) wraps. |
+| `block_validity` chokepoint *(B1; **N-H strengthened**)* | `ade_ledger::block_validity::transition` | 1 function | Single chokepoint. `self_accept` (N-C-S5) and **`admit_via_block_validity` (N-H-S1)** are its two BLUE wrappers. `DC-CONS-13.strengthened_in += PHASE4-N-H`. |
 | `TxValidityVerdict` / `TxRejectClass` / `TxValidityError` / `SignerSource` / `WitnessClosureError` etc. *(B2)* | `ade_ledger::tx_validity::*` | closed | |
 | `AdmitOutcome` / `MempoolState` / `OrderPolicy` *(B2)* | `ade_ledger::mempool::*` | closed | |
-| `LeaderScheduleAnswer` *(N-B; consumed unchanged by N-C)* | `ade_core::consensus::leader_schedule` | closed struct | Shared between validator and producer (NC-VRF-3 — single source of leader truth). |
-| `is_leader_for_vrf_output` *(N-B; consumed unchanged by N-C)* | `ade_core::consensus::leader_schedule` | 1 function | |
+| `LeaderScheduleAnswer` / `is_leader_for_vrf_output` *(N-B; consumed unchanged by N-C)* | `ade_core::consensus::leader_schedule` | closed | |
 | `PraosNonces` / `NonceScanError` *(B1)* | `ade_ledger::consensus_input_extract` | | |
 | `PraosChainDepState` / `ChainEvent` canonical encodings *(N-B)* | `ade_core::consensus::encoding` | 4 chokepoints | |
 | `LedgerFingerprint` fold *(B3/B5)* | `ade_ledger::fingerprint` | | |
-| **CI check set** | `ci/ci_check_*.sh` | **47 scripts (40 → 47 in PHASE4-N-G)** | Existing checks may be tightened, never relaxed. |
-| **Invariant registry families** | `docs/ade-invariant-registry.toml` | Families T / CN / DC / OP / RO; **N-G added 6 rules** (`DC-CONS-17`, `DC-CONS-18`, `DC-PROTO-07`, `DC-PROTO-08`, `CN-PROTO-06`, `RO-LIVE-01`); strengthened `CN-CONS-07`, `DC-PROTO-06`, `OP-OPS-04`, `DC-CONS-16`, `T-DET-01`, `T-ENC-01`. Total: **196 entries** (190 → 196). | Append-only IDs. |
+| **CI check set** | `ci/ci_check_*.sh` | **52 scripts (47 → 52 in PHASE4-N-H)** | Existing checks may be tightened, never relaxed. |
+| **Invariant registry families** | `docs/ade-invariant-registry.toml` | Families T / CN / DC / OP / RO; **N-H added 6 rules** (`CN-CONS-08`, `DC-CONS-19`, `DC-CONS-20`, `DC-PROTO-09`, `CN-PROTO-07`, `RO-LIVE-02`); strengthened `T-DET-01`, `T-ENC-01`, `DC-CONS-13`, `DC-CONS-16`, `CN-CONS-07`, `DC-PROTO-06`. Total: **202 entries** (196 → 202). | Append-only IDs. |
 
 ### Extensible (open within constraints)
 
@@ -806,15 +827,15 @@ rules + four strengthenings** (registry total 190 → 196).
 | Withdrawals map *(B3)* | `ade_codec::conway::withdrawals::decode_withdrawals` → `BTreeMap<RewardAccount, Coin>` | Never last-wins. |
 | Mempool admitted set *(B2; ingress-fed in N-E)* | `ade_ledger::mempool::admit::MempoolState::accepted` | `Vec<Hash32>`; shape closed; set open; monotonic. |
 | `SignerSource` provenance set *(B2)* | `ade_ledger::tx_validity::required_signers::RequiredSigners::{keys, provenance}` | Per-tx open; closed enum. |
-| `RollbackSnapshot` ring *(N-B)* | `ade_runtime::consensus::chain_selector::OrchestratorState::recent_snapshots` | Bounded ≤ 2160. |
-| **`ServedChainSnapshot.blocks` admitted set** *(NEW in N-G-S2 — runtime-extensible **content**, but extension via the **closed** `served_chain_admit` chokepoint only)* | `ade_ledger::producer::served_chain::ServedChainSnapshot` | `BTreeMap<(SlotNo, Hash32), AcceptedBlock>`. Shape closed; instance set open. The set grows monotonically during a session; OQ-5 lock — no eviction within this cluster. |
-| **`PerPeerN2nServerState` instance set** *(NEW in N-G-S6 — runtime-extensible per session, but each instance is itself a closed struct)* | `ade_runtime::network::n2n_server` | One instance per connected peer. The orchestrator (one layer up, in `ade_network::session::*`) constructs / drops instances as peers connect / disconnect. Per-peer state independent. |
+| `RollbackSnapshot` ring *(N-B; **load-bearing for the future rollback cluster**)* | `ade_runtime::consensus::chain_selector::OrchestratorState::recent_snapshots` | Bounded ≤ 2160. **NEXT-CLUSTER consumer (DC-CONS-20 closure):** seeds the receive-side rollback authority. |
+| `ServedChainSnapshot.blocks` admitted set *(N-G-S2 — extension via the closed `served_chain_admit` chokepoint only)* | `ade_ledger::producer::served_chain::ServedChainSnapshot` | Shape closed; instance set open. |
+| `PerPeerN2nServerState` instance set *(N-G-S6 — extension per session)* | `ade_runtime::network::n2n_server` | One instance per connected peer (producer-side server pump). |
+| **`PendingHeaderCache.entries`** *(NEW in N-H-S1 — runtime-extensible **content**, but extension via the **closed** `PendingHeaderCache::insert` chokepoint only)* | `ade_ledger::receive::pending_header_cache::PendingHeaderCache` | `BTreeMap<(SlotNo, Hash32), Vec<u8>>`. Shape closed; instance set open. The set grows during a follow session and is bounded structurally by `evict_below(slot)` (orchestrator policy as canonical input — not cache concern). |
+| **`PerPeerReceiveState` instance set** *(NEW in N-H-S4 — runtime-extensible per session, but each instance is itself a closed struct)* | `ade_runtime::receive::orchestrator` | One instance per connected upstream peer (receive-side counterpart of N-G's `PerPeerN2nServerState`). The orchestrator (one layer up, the binary or `ade_network::session::*`) constructs / drops instances as peers connect / disconnect. Per-peer state independent. |
 | Oracle reference snapshots / regression corpus | `ade_testkit::harness::*` | Tooling-only. |
-| Network corpus / Consensus corpus / Block-validity corpus / Tx-validity corpus / Mempool ingress corpus / PP canonical corpus | various | Tooling-only. |
-| Producer replay corpus *(N-C-S3/S4)* | `crates/ade_testkit/fixtures/producer/` + `ade_testkit::producer::{fixtures, replay, reference_vectors}` | Tooling-only. GREEN. Signed-artifact-only by DC-CONS-14. |
-| Producer mechanical cross-impl corpus *(N-C-S7)* | `ade_testkit::producer::cross_impl_adapter` | Tooling-only. GREEN. |
-| **Server-paths session-transcript replay corpus** *(NEW in N-G-S5/S7 — tooling-only)* | `crates/ade_runtime/tests/server_paths_transcript_replay.rs`, `crates/ade_runtime/tests/n2n_server_two_peer_determinism.rs`, `crates/ade_runtime/tests/cross_impl_server_pipeline.rs` | Tooling-only. GREEN. Drives `(version, peer_message_sequence, broadcast_arrival_sequence, session_event_sequence)` tuples through the full pipeline; outgoing frame sequences must be byte-identical (DC-PROTO-07). Append-only by convention. Defended by `ci_check_server_paths_corpus_present.sh`. |
-| **Operator-action probe binaries** *(N-B + N-E S6 + N-C S7 + **N-G S7**)* | `ade_core_interop::bin::{live_consensus_session, live_tx_submission_session, live_block_production_session, live_block_fetch_session}` | RED operator-action; `#[ignore]`-gated by closure-gate tests. **N-G added `live_block_fetch_session`** — status `blocked_until_operator_peer_available`. |
+| Network corpus / Consensus corpus / Block-validity corpus / Tx-validity corpus / Mempool ingress corpus / PP canonical corpus / Producer corpus / Server-paths corpus | various | Tooling-only. |
+| **Receive-paths session-transcript replay corpus** *(NEW in N-H-S3/S5 — tooling-only)* | `crates/ade_testkit/fixtures/receive_paths/` + `crates/ade_runtime/tests/receive_session_transcript_replay.rs` + `crates/ade_runtime/tests/receive_two_peer_independence.rs` + `crates/ade_runtime/tests/receive_pipeline_corpus_drive.rs` | Tooling-only. GREEN. Drives `(initial_state, ReceiveEvent_sequence)` tuples through the full pipeline; resulting `(ReceiveState, ChainDb fingerprint)` must be byte-identical (DC-PROTO-09). Append-only by convention. Defended by `ci_check_receive_paths_corpus_present.sh`. |
+| **Operator-action probe binaries** *(N-B + N-E S6 + N-C S7 + N-G S7 + **N-H S6**)* | `ade_core_interop::bin::{live_consensus_session, live_tx_submission_session, live_block_production_session, live_block_fetch_session, live_block_follow_session}` | RED operator-action; `#[ignore]`-gated by closure-gate tests. **N-H added `live_block_follow_session`** — status `blocked_until_operator_peer_available`. |
 | `KillStrategy<D>` trait impls | `ade_runtime::chaindb::crash_safety` | RED-only test infrastructure. |
 | Recovery state types | callers of `Recoverable` | Open: any state with canonical encode + apply-block step. |
 | Pinned external crates | `crates/*/Cargo.toml` | Tier-5 rationale doc required. |
@@ -823,11 +844,14 @@ rules + four strengthenings** (registry total 190 → 196).
 
 | Cluster | Candidate registry | Rationale |
 |---------|-------------------|-----------|
-| **CE-N-G-8 (operator-action live evidence — `blocked_until_operator_peer_available`)** | **Live N2N block-fetch acceptance log (Ade serving, cardano-node consuming)** | The live cross-impl claim. Requires a private cardano-node peer. Re-opens on operator availability. |
-| **CE-N-C-8 (operator-action live evidence — `blocked_until_operator_stake_available`)** | **Live N2N block-fetch acceptance log (Ade forging, cardano-node consuming as next chain head)** | Carried. |
-| **Receive-side header→body bridge** *(NEW candidate flagged by N-G close)* | **`ade_node` composition layer joining `process_stream_input` + N-A block-fetch client + `block_validity`** | The natural counterpart to N-G's send-direction closure. Surface; do not invent invariants here. |
-| **N-D-bridge / served-chain-index cluster (carried from N-G OQ-1 lock)** | **Broader served-chain population from a co-located N-D ChainDB** | N-G's narrow scope serves only blocks admitted from this session's `AcceptedBlock` path. Reading from a persisted ChainDB is reserved. |
-| **N-G+ Tier-5** | **Operator-tunable server policy** (per-peer back-pressure, peer connection limits, served-chain memory bound) | Tier-5 — operator-tunable. Declared OUT-OF-SCOPE in N-G cluster doc. |
+| **CE-N-H-6 (operator-action live evidence — `blocked_until_operator_peer_available`)** | **Live N2N follow-mode admission log (Ade consuming, cardano-node serving)** | The live cross-impl claim for the receive-side. Requires a private cardano-node peer. Re-opens on operator availability. |
+| **Full rollback authority cluster** *(NEW HIGHEST-PRIORITY candidate flagged by N-H close — DC-CONS-20 rollback half; OQ-1 Path A scope edge)* | **`rollback_apply` chokepoint + ledger-state snapshot store (encode/decode) + replay-forward driver** | The natural counterpart to N-H's admit-only Path A scope. Closure converts `ReceiveEvent::RollBackward` from `Err(RollbackOutOfScope)` to a real transition. Consumes the existing `RollbackSnapshot` ring + `ChainDb::iter_from_slot` + `block_validity`. Surface; do not invent invariants here. |
+| **Multi-peer fork choice cluster** *(NEW candidate flagged by N-H close — OQ-4 lock)* | **Praos longest-chain selection across competing `PerPeerReceiveState[]`** | Sequenced after the rollback cluster (commits to the chosen fork mean rolling back from the loser). Consumes existing `ade_runtime::consensus::chain_selector`. Surface; do not invent invariants here. |
+| **N2C local-chain-sync receive surface cluster** *(NEW candidate flagged by N-H close)* | **Operator-side N2C clients consume Ade's chain via `LocalChainSyncMessage`** | Sibling of `producer_chain_sync_serve` (N-G) over the local-chain-sync N2C codec; reuses `ServedHeaderLookup`-style trait, this time over the persisted ChainDb tip. Surface; do not invent invariants here. |
+| **CE-N-G-8 (operator-action live evidence — `blocked_until_operator_peer_available`)** | **Live N2N block-fetch acceptance log (Ade serving)** | Carried. |
+| **CE-N-C-8 (operator-action live evidence — `blocked_until_operator_stake_available`)** | **Live N2N block-fetch acceptance log (Ade forging)** | Carried. |
+| **N-H+ Tier-5** | **Operator-tunable receive policy** (pending-header eviction window, per-peer back-pressure, max in-flight cached headers per peer) | Tier-5 — operator-tunable. Declared OUT-OF-SCOPE in N-H cluster doc. |
+| **N-G+ Tier-5** | **Operator-tunable server policy** | Carried. |
 | **N-C+ Tier-5** | **Operator-tunable producer policy** | Carried. |
 | **CE-NODE-N2C-LTX (cross-cluster obligation carried from N-E)** | **Live N2C UDS server + N2N bulk-tx inbound listener** | Carried. |
 | **PP OQ-1..OQ-4** | various | Carried. |
@@ -835,70 +859,81 @@ rules + four strengthenings** (registry total 190 → 196).
 | N-F | Query API method set | Tier 5 wire / Tier 1 semantics. |
 | N-F | Prometheus metric names | Tier 5; append-only registry expected. |
 
-### Closed-grammar audit (PHASE4-N-G full close)
+### Closed-grammar audit (PHASE4-N-H full close)
 
-This sweep was performed after PHASE4-N-G full close (S1..S7).
+This sweep was performed after PHASE4-N-H full close (S1..S6).
 
-1. **`accepted_block_header_bytes` canonical accessor** — **closed by
-   intent and CI-defended.** Single canonical header/body byte
-   splitter in the workspace; three consumers (validator, producer,
-   served-chain adapter). Defended by
-   `ci_check_no_parallel_header_splitter.sh`.
-2. **`ServerReply` (chain-sync) closed wrapper** — **closed by intent
-   and CI-defended.** Private 5-variant inner enum; no public
-   constructor for client variants; exit via `into_message()` only.
-   Defended by `ci_check_chain_sync_server_closure.sh` + compile-time
-   match exhaustiveness in tests.
-3. **`ServerReply` (block-fetch) closed wrapper** — **closed by intent
-   and CI-defended.** Private 4-variant inner enum. Defended by
-   `ci_check_block_fetch_server_closure.sh`.
-4. **`ServedHeaderLookup` + `ServedRangeLookup` closed trait seams** —
-   **closed by intent.** Fixed at this cluster close. No plug-in
-   extension at runtime. One production impl
-   (`ServedChainLookups`); new impls = deliberate registry-tracked
-   addition.
-5. **`ServedChainSnapshot` + `served_chain_admit` chokepoint** —
-   **closed by intent and CI-defended.** BTreeMap-backed (no
-   HashMap); only entry path is via `AcceptedBlock`; closed
-   `ServedChainAdmitError` sum. Defended by
-   `ci_check_served_chain_closure.sh`.
-6. **`producer_chain_sync_serve` + `producer_chain_sync_advance_tip`
-   chokepoints** — **closed by intent and CI-defended.** Pure, total,
-   deterministic. Closed `ProducerServerError` (1-variant) + `ServerStep`
-   (2-variant) sums. Defended by `ci_check_chain_sync_server_closure.sh`.
-7. **`producer_block_fetch_serve` chokepoint** — **closed by intent
-   and CI-defended.** Closed `ProducerBlockFetchServerError`
-   (1-variant) + `BlockFetchServerStep` (2-variant) sums. Defended
-   by `ci_check_block_fetch_server_closure.sh`.
-8. **GREEN `drain_and_admit` adapter** — **closed by intent and
-   CI-defended.** Pure; no I/O; observably deterministic. Defended
-   by `ci_check_broadcast_to_served_purity.sh`.
-9. **GREEN `ServedChainLookups` trait-impl bridge** — **closed by
-   intent.** Single production impl of both lookup traits over
-   `&ServedChainSnapshot`. Header projection via canonical
-   `accepted_block_header_bytes` — no parallel splitter.
-10. **RED `n2n_server` driver — key-boundary preserved.** **CI-defended.**
-    Cannot import from `ade_runtime::producer::signing`. Defended by
-    `ci_check_n2n_server_no_signing_dep.sh`. Closed `PerPeerN2nServerState`
-    + `DispatchError` (4-variant) sums.
-11. **`live_block_fetch_session` operator-action probe binary** —
-    **closed by intent on the harness pattern.** Fourth instance of
-    the family (after `live_consensus_session` /
-    `live_tx_submission_session` / `live_block_production_session`).
+1. **`AdmittedBlock` closed admission token** — **closed by intent
+   and CI-defended.** Private inner field; sole public constructor
+   `admit_via_block_validity`; mechanically distinct from
+   `AcceptedBlock` (no constructor accepts the other's bytes).
+   Defended by `ci_check_admitted_block_closure.sh`.
+2. **`admit_via_block_validity` chokepoint** — **closed by intent.**
+   Composes `block_validity` (B1) — does not re-implement it.
+   Returns `Ok` only on `BlockValidityVerdict::Valid`.
+3. **`ReceiveEvent` closed taxonomy** — **closed by intent and
+   compile-time-defended.** Three variants only; **no constructor for
+   locally-originated chain-sync / block-fetch outputs** (CN-PROTO-07
+   by construction). Exhaustive-match round-trip test confirms a
+   fourth variant addition fails to compile.
+4. **`ReceiveEffect` / `ReceiveError` closed sums** — **closed by
+   intent.** 4 / 4 variants; no `#[non_exhaustive]`; no `String`.
+   `ReceiveError::RollbackOutOfScope` is the structured Path A
+   scope-edge variant.
+5. **`PendingHeaderCache` BLUE index** — **closed by intent.**
+   BTreeMap-backed (no HashMap); insert/get/contains/remove/
+   evict_below/iter surface; insertion idempotent on byte-identity;
+   `PendingHeaderCacheError::ByteConflict` for byte-divergence at
+   the same key.
+6. **`ChainDbWrite` closed narrow trait seam** — **closed by intent.**
+   Single method; takes `AdmittedBlock` by value (gate preserved);
+   single production impl (`ChainDbWriter`); new impls = deliberate
+   registry-tracked addition.
+7. **`receive_apply` + `receive_apply_sequence` chokepoints** —
+   **closed by intent and CI-defended.** Pure, total, deterministic;
+   staged-then-committed; RollForward mutates only
+   `state.pending_headers`; RollBackward returns
+   `Err(RollbackOutOfScope)`. Defended by
+   `ci_check_receive_reducer_closure.sh`.
+8. **GREEN `events_to_state` adapter** — **closed by intent and
+   CI-defended.** Pure pass-through; `header_bytes` / `block_bytes`
+   NEVER decoded (the BLUE reducer is the canonical decode site).
+   Defended by `ci_check_receive_replay_purity.sh`.
+9. **GREEN `ChainDbWriter` adapter** — **closed by intent.** Single
+   production impl of `ChainDbWrite` over any `ChainDb`; decodes
+   once for the `(slot, hash)` key; maps `ChainDbError` → `ChainWriteError`.
+10. **RED `orchestrator` driver — key-boundary preserved.**
+    **CI-defended.** Cannot import from
+    `ade_runtime::producer::{signing, broadcast, scheduler}`.
+    Defended by `ci_check_receive_orchestrator_no_producer_dep.sh`.
+    Closed `PerPeerReceiveState` + `ReceiveDispatchError`
+    (3-variant) sums.
+11. **`live_block_follow_session` operator-action probe binary** —
+    **closed by intent on the harness pattern.** Fifth instance of
+    the family (second receive-direction binary).
     Hermetic-default-plus-`--connect`-live. Status
-    `blocked_until_operator_peer_available` — second variant of the
-    `blocked_*` closure mode (peer vs. stake).
+    `blocked_until_operator_peer_available` — same closure-mode
+    variant as N-G (peer-blocker).
 
-**Gap note — N-G (CE-N-G-8).** The live cross-impl claim is the only
-N-G obligation that depends on an external resource (a private
-cardano-node peer). Per `RO-LIVE-01.open_obligation` it is
+**Gap note — N-H (CE-N-H-6).** The live cross-impl claim is the only
+N-H obligation that depends on an external resource (a private
+cardano-node peer). Per `RO-LIVE-02.open_obligation` it is
 `blocked_until_operator_peer_available` — not deferred to a future
 cluster, not silently accepted. Reopens when a peer is provisioned;
 mechanical half (structural cross-impl pipeline) is already enforced
-via `crates/ade_runtime/tests/cross_impl_server_pipeline.rs` +
-`ci_check_server_paths_corpus_present.sh`.
+via `crates/ade_runtime/tests/receive_pipeline_corpus_drive.rs` +
+`ci_check_receive_paths_corpus_present.sh`.
 
-### Closed-grammar audit (carried — PHASE4-N-C / PROPOSAL-PROCEDURES-DECODE / PHASE4-N-E / B3 / B4 / B5)
+**Gap note — DC-CONS-20 rollback half.** The Path A scope edge is
+NOT a "we'll match it later" stub — it is a structured
+`ReceiveError::RollbackOutOfScope { target_point }` variant that
+surfaces deterministically on every `RollBackward` event. The
+registry rule ships `status = "declared"` with
+`open_obligation = rollback_side_blocked_until_ledger_snapshot_cluster`,
+naming the follow-on cluster's deliverable. **This is the explicit
+candidate seam for the next planner.**
+
+### Closed-grammar audit (carried — PHASE4-N-G / PHASE4-N-C / PROPOSAL-PROCEDURES-DECODE / PHASE4-N-E / B3 / B4 / B5)
 
 All carried unchanged from prior revision.
 
@@ -913,60 +948,89 @@ All carried unchanged from prior revision.
 - **`PreservedCbor<T>` invariant**.
 - **Hash algorithms**: Blake2b-224 / 256, Ed25519, Byron-bootstrap,
   KES-sum, VRF-draft-03.
-- **Era-correct block body hash** *(B1; strengthened in N-C, N-G)*:
-  preserved-CBOR-segment bytes (T-ENC-01,
-  `strengthened_in += PHASE4-N-G`).
+- **Era-correct block body hash** *(B1; strengthened in N-C, N-G,
+  **N-H**)*: preserved-CBOR-segment bytes
+  (`T-ENC-01.strengthened_in += PHASE4-N-H` — peer-supplied wire
+  bytes flow into ChainDb verbatim via `AdmittedBlock.bytes`).
 - **Single canonical body-hash authority** *(N-C-S4 — DC-CONS-16;
-  strengthened in N-G)*:
-  `ade_ledger::block_body_hash::block_body_hash_from_buckets` is the
-  **only** function computing the recipe. **N-G strengthening**: the
-  header sub-slice consumed by this recipe is now also lifted as
-  `accepted_block_header_bytes` — three consumers (validator,
-  producer, served-chain adapter) all hash / project through the
-  same single site. `DC-CONS-16.strengthened_in += PHASE4-N-G`.
-- **Single canonical header/body splitter** *(NEW in N-G-S1 —
-  DC-CONS-18)*: `accepted_block_header_bytes` is the **only** public
-  header-bytes accessor in the workspace. Defended by
-  `ci_check_no_parallel_header_splitter.sh`.
+  strengthened in N-G, **N-H**)*: `block_body_hash_from_buckets` is
+  the **only** function computing the recipe. **N-H strengthening**:
+  the receive reducer's inline header-walker reuses the same
+  `decode_block_envelope` + cbor::skip_item recipe — same canonical
+  site; no parallel public splitter.
+  `DC-CONS-16.strengthened_in += PHASE4-N-H`.
+- **Single canonical header/body splitter** *(N-G-S1 — DC-CONS-18)*:
+  `accepted_block_header_bytes` is the **only** public header-bytes
+  accessor. Carried.
 - **Server-agency closure for outgoing mini-protocol messages**
-  *(NEW in N-G-S1 — CN-PROTO-06)*: the `ServerReply<M>` wrappers in
-  `ade_network::chain_sync::server` and `ade_network::block_fetch::server`
-  have private inner enums; no public constructor exists for
-  client-agency variants. The producer-side server pump cannot
-  construct or emit a client-originated message. Compile-time
-  enforcement; the public API surface IS the closure proof.
-- **Served-bytes parity** *(NEW in N-G-S4 — DC-CONS-17)*: every
-  `Block { bytes }` payload the producer-side block-fetch server
-  emits is byte-identical to the `AcceptedBlock.as_bytes()` of the
-  AcceptedBlock admitted at that `(slot, hash)` key. The server never
-  re-encodes. Bytes flow `AcceptedBlock` →
-  `ServedChainSnapshot.blocks` → `ServedRangeLookup::range_bytes` →
-  `ServerReply::block(bytes)` → `into_message()` → codec.
-- **Header-body wire coherence** *(NEW in N-G-S5 — DC-CONS-18
-  enforcement)*: for every `RollForward { header, tip }` the server
-  emits, `block_body_hash(served_body_segment)` equals the body-hash
-  field inside `header` — verified by replay over the captured
-  session transcripts.
-- **Producer-side server-role transcript determinism** *(NEW in
-  N-G-S5 — DC-PROTO-07)*: given canonical inputs
-  `(negotiated_version, peer_message_sequence,
-  broadcast_arrival_sequence, session_event_sequence)`, the
-  producer-side chain-sync / block-fetch session orchestrator emits a
-  byte-identical sequence of outgoing mini-protocol frames across
-  replays. The per-session reducer is a pure deterministic
-  transition. `T-DET-01.strengthened_in += PHASE4-N-G`.
+  *(N-G-S1 — CN-PROTO-06)*: carried.
+- **Receive-event closure for incoming peer signals** *(NEW in
+  N-H-S1 — CN-PROTO-07)*: the `ReceiveEvent` taxonomy has **no
+  constructor for locally-originated chain-sync / block-fetch
+  outputs** (`RequestNext`, `RequestRange`, `FindIntersect`, `Done`,
+  `ClientDone`). The receive reducer cannot be fed the orchestrator's
+  own outbound client requests. Compile-time enforcement; the public
+  API surface IS the closure proof.
+- **Type-level receive admission gate** *(NEW in N-H-S1 — CN-CONS-07
+  strengthening)*: `AdmittedBlock` is the **only** token persisted
+  via `ChainDbWrite::write_admitted`. The trait method takes the
+  token by value; raw bytes have no public path into ChainDb. End-to-
+  end: peer-originated bytes can reach ChainDb only after passing
+  `block_validity`. **The producer-side `AcceptedBlock` gate
+  (N-C-S5) and the receive-side `AdmittedBlock` gate (N-H-S1) are
+  the matched pair** — outbound gate + inbound gate, both private-
+  constructor, both mechanically distinct from each other.
+  `CN-CONS-07.strengthened_in += PHASE4-N-H`.
+- **Receive-side admission state-isolation discipline (Invariant
+  I-6)** *(NEW in N-H-S2 — CN-CONS-08 / DC-CONS-19)*: the
+  `receive_apply` reducer's `RollForward` arm mutates only
+  `state.pending_headers` — never `state.ledger`, never
+  `state.chain_dep`, never `chain_write`. The `BlockDelivered` arm
+  is staged-then-committed: any failure (header cross-check,
+  `block_validity::Invalid`, `ChainDbWrite::write_admitted` failure)
+  leaves `state` AND `chain_write` unchanged. Defended by
+  `ci_check_receive_reducer_closure.sh`.
+- **Path A scope-edge structural failure** *(NEW in N-H-S2 —
+  DC-CONS-20 admit half + structured Path A scope edge)*: the
+  `receive_apply` reducer's `RollBackward` arm returns
+  `Err(ReceiveError::RollbackOutOfScope { target_point })`
+  deterministically. Receive state is unchanged. The error variant
+  exists; the closure is explicit; the rollback half of `DC-CONS-20`
+  is a deliberately separable follow-on cluster's deliverable
+  (`open_obligation = rollback_side_blocked_until_ledger_snapshot_cluster`).
+- **Receive-side replay determinism** *(NEW in N-H-S3 — DC-PROTO-09)*:
+  given canonical inputs `(initial ReceiveState, ChainDb,
+  ReceiveEvent_sequence)`, the receive pipeline (events_to_state →
+  receive_apply → ChainDbWriter) produces a byte-identical
+  `(ReceiveState, ChainDb fingerprint)` across replays. The per-
+  session reducer is a pure deterministic transition.
+  `T-DET-01.strengthened_in += PHASE4-N-H`.
+- **Per-peer receive-state independence across peers** *(NEW in
+  N-H-S4)*: the RED orchestrator constructs an independent
+  `PerPeerReceiveState` per peer; cross-peer coordination is only
+  via the shared `ChainDb` (which is idempotent on byte-identity).
+  Multi-peer independence (two-peer test) confirms per-session
+  transcripts are unaffected by interleaving.
+- **Key-boundary for receive paths** *(NEW in N-H-S4 — OP-OPS-04
+  mirror)*: the RED `orchestrator` has no path to
+  `ade_runtime::producer::{signing, broadcast, scheduler}`. Receive
+  paths admit peer bytes; they do not sign anything, do not enqueue
+  broadcasts, and do not drive the producer scheduler. Defended by
+  `ci_check_receive_orchestrator_no_producer_dep.sh`.
+- **Handshake-negotiated version threading through the receive
+  reducer call site** *(NEW in N-H-S4 — DC-PROTO-06 strengthening)*:
+  the orchestrator passes the handshake-negotiated chain-sync +
+  block-fetch versions on every reducer call; never reads from a
+  session global. `DC-PROTO-06.strengthened_in += PHASE4-N-H`.
+- **Served-bytes parity** *(N-G-S4 — DC-CONS-17)*: carried.
+- **Header-body wire coherence** *(N-G-S5 — DC-CONS-18)*: carried.
+- **Producer-side server-role transcript determinism** *(N-G-S5 —
+  DC-PROTO-07)*: carried.
 - **Deterministic-resolution discipline for server-agency waits**
-  *(NEW in N-G-S3 — DC-PROTO-08)*: once chain-sync enters a state
-  where the server holds agency, the reducer must return exactly one
-  of a legal `RollForward`, `RollBackward`, `AwaitReply`, or a
-  structured deterministic session-close/error. No ambiguous wait
-  state unless the wait condition is an explicit replay input.
+  *(N-G-S3 — DC-PROTO-08)*: carried.
 - **Type-level broadcast and serve gate** *(N-C-S5 — CN-CONS-07;
-  strengthened in N-G across the network seam)*: `AcceptedBlock` is
-  the **only** token admitted into both `BroadcastQueue` (N-C) and
-  `ServedChainSnapshot` (N-G). End-to-end: a block whose
-  validator-side decision would reject can neither broadcast nor be
-  served. `CN-CONS-07.strengthened_in += PHASE4-N-G`.
+  N-G + N-H strengthened)*: carried; see also the new receive-side
+  mirror above.
 - **Tx id over preserved body bytes** *(B2)*.
 - **Conway certificate CDDL grammar** *(B3/B3F/B4)*.
 - **Conway `DRep` decode grammar** *(B4)*.
@@ -994,7 +1058,10 @@ All carried unchanged from prior revision.
 - **Consensus error taxonomies** *(N-B)*.
 - **`StreamInput` 3-variant taxonomy** *(N-B)*. **`HeaderVrf` era model**.
 - **`block_validity` composition contract** *(B1; consumed unchanged
-  by N-C `self_accept` and N-G `served_chain_admit`)*.
+  by N-C `self_accept`, N-G `served_chain_admit`, and **N-H
+  `admit_via_block_validity`**)*.
+  `DC-CONS-13.strengthened_in += PHASE4-N-H` (symmetric receive
+  closure: admit = `Valid` only).
 - **`VerdictSurface` CBOR encoding** *(B1)*.
 - **`LedgerView` trait shape** *(N-B; B1-refined)*.
 - **`tx_validity` composition contract** *(B2)*.
@@ -1004,51 +1071,49 @@ All carried unchanged from prior revision.
 - **Mempool admission contract** *(B2)*.
 - **`mempool_ingress` chokepoint contract** *(N-E)*.
 - **`IngressSource` source-invariance contract** *(N-E)*.
-- **Verbatim tx-bytes flow through ingress** *(N-E)*.
+- **Verbatim tx-bytes flow through ingress** *(N-E; **N-H mirror**:
+  verbatim block-bytes flow through receive admission into ChainDb
+  — `T-ENC-01.strengthened_in += PHASE4-N-H`)*.
 - **GREEN single-step replay fold contract** *(N-E — DC-MEM-04)*.
-- **Cross-cluster obligation pattern** *(N-E)*.
-- **Operator-action evidence pattern** *(N-B / N-E / N-C / **N-G**)*:
-  N-G adds the **fourth instance** (`live_block_fetch_session`) and
-  the **second `blocked_*` closure-mode variant**
-  (`blocked_until_operator_peer_available`) alongside N-C's
-  `blocked_until_operator_stake_available`.
+- **Cross-cluster obligation pattern** *(N-E; carried)*.
+- **Operator-action evidence pattern** *(N-B / N-E / N-C / N-G /
+  **N-H**)*: N-H adds the **fifth instance**
+  (`live_block_follow_session`) and is the **second instance using
+  the `blocked_until_operator_peer_available` closure-mode variant**
+  (carrying N-G's precedent; same blocker shape — a private
+  cardano-node peer, no SPO stake required).
 - **Closed credential discriminant contract** *(OQ5 / COMMITTEE /
   DREP / ENACTMENT / PP)*.
 - **Committee-enactment write-back contract** *(ENACTMENT)*.
 - **All canonical types**: shapes frozen at the era / version they
   entered.
 - **Handshake-negotiated version threading** *(N-A; strengthened in
-  N-G — DC-PROTO-06)*: every server reducer call from the
-  orchestrator carries the version returned by the handshake; never
-  reads it from a session global. `DC-PROTO-06.strengthened_in +=
-  PHASE4-N-G`.
-- **Per-session-state independence across peers** *(NEW in N-G-S6)*:
-  the RED orchestrator constructs an independent `PerPeerN2nServerState`
-  per peer; cross-peer coordination is only via the read-only
-  `&ServedChainSnapshot`. Multi-peer determinism (two-peer test)
-  confirms per-session transcripts are invariant under interleaving.
-- **Key-boundary for server response paths** *(NEW in N-G-S6 —
-  CN-PROTO-06 / OP-OPS-04 strengthening)*: the RED `n2n_server` module
-  has no path to `ade_runtime::producer::signing`. Server response
-  paths read served bytes; they do not sign anything. Defended by
-  `ci_check_n2n_server_no_signing_dep.sh`.
+  N-G and **N-H** — DC-PROTO-06)*: every reducer call from the
+  orchestrator (both producer-side server and receive-side admit)
+  carries the version returned by the handshake; never reads it
+  from a session global. `DC-PROTO-06.strengthened_in += PHASE4-N-H`.
 - **TCB color assignments**: per `.idd-config.json` `core_paths`.
-  **N-G additions:** `ade_network::chain_sync::server` and
-  `ade_network::block_fetch::server` are BLUE (under the already-BLUE
-  `ade_network` submodule prefix); `ade_ledger::producer::served_chain`
-  is BLUE; `ade_runtime::producer::broadcast_to_served` and
-  `ade_runtime::producer::served_chain_lookups` are GREEN-inside-RED-crate;
-  `ade_runtime::network::n2n_server` is RED;
-  `ade_core_interop::bin::live_block_fetch_session` is RED.
+  **N-H additions:** `ade_ledger::receive::{admitted, chain_write,
+  events, pending_header_cache, reducer}` are BLUE (under the
+  already-BLUE `ade_ledger` crate prefix);
+  `ade_runtime::receive::{events_to_state, in_memory_chain_write}`
+  are GREEN-inside-RED-crate; `ade_runtime::receive::orchestrator`
+  is RED; `ade_core_interop::bin::live_block_follow_session` is RED.
 - **`ChainDb` / `SnapshotStore` / `Recoverable` trait shapes** (N-D).
 - **`AcceptedBlock` type-level broadcast gate** *(N-C-S5; strengthened
-  in N-G — see above)*.
-- **`forge_block` pure-transition contract** *(N-C-S3 — DC-CONS-13)*: carried.
+  in N-G and **N-H** — see above)*.
+- **`AdmittedBlock` type-level admission gate** *(NEW in N-H-S1 —
+  CN-PROTO-07; CN-CONS-07 receive-side mirror)*: the producer-side
+  outbound counterpart of the inbound gate. End-to-end (producer +
+  receive): outbound bytes gated by `AcceptedBlock`; inbound bytes
+  gated by `AdmittedBlock`. Both private-constructor; both
+  mechanically distinct.
+- **`forge_block` pure-transition contract** *(N-C-S3 — DC-CONS-13;
+  carried + N-H strengthening)*: `DC-CONS-13.strengthened_in +=
+  PHASE4-N-H` (symmetric receive closure).
 - **Single source of leader truth** *(N-C-S3 — DC-CONS-15)*: carried.
 - **Tx-admissibility prefix property** *(N-C-S3 — DC-LEDGER-12)*: carried.
-- **Private-key custody RED-confinement** *(N-C-S1; strengthened in
-  N-G to constrain `n2n_server` too — OP-OPS-04
-  `strengthened_in += PHASE4-N-G`)*.
+- **Private-key custody RED-confinement** *(N-C-S1; carried)*.
 - **Closed-grammar opcert byte authority** *(N-C-S2 — DC-CONS-11)*: carried.
 - **OpCert serial counter strict monotonicity** *(N-C-S2 — DC-CONS-12)*: carried.
 
@@ -1073,42 +1138,46 @@ All carried unchanged from prior revision.
 - **New `ProducerTick` field** *(N-C extension point)*.
 - **New `ForgeError` / `SchedulerInput` / `SchedulerEffect` variant**.
 - **New `SelfAcceptError` variant** *(N-C extension point)*.
-- **New `ServerStep` variant** *(N-G extension point — DC-PROTO-08
-  strengthening)*: closed sum; today 2 variants (`Done`, `Reply`);
-  broadening (e.g. a third reply-shape) is version-gated and must
-  update `ci_check_chain_sync_server_closure.sh` guards.
-- **New `BlockFetchServerStep` variant** *(N-G extension point —
-  DC-CONS-17 strengthening)*: closed sum; today 2 variants (`Done`,
-  `Replies`); same rules.
-- **New `ServerReply` constructor** *(N-G extension point —
-  CN-PROTO-06 strengthening)*: closed inner enum; new server-agency
-  variant requires both a new constructor + a new arm in
-  `into_message()` + a new match arm in the wire `ChainSyncMessage` /
-  `BlockFetchMessage` enum. Version-gated.
-- **New `ServedHeaderLookup` / `ServedRangeLookup` trait method**
-  *(N-G extension point)*: closed read-side seam; new methods are
-  closed-trait extensions and require an updated production impl
-  (`ServedChainLookups`) plus extended reducer logic. Version-gated.
-- **New `ServedHeaderLookup` / `ServedRangeLookup` impl** *(N-G
-  extension point — deliberate registry-tracked addition)*: the
-  traits are closed seams, but a future cluster MAY register a second
-  impl (e.g. an N-D-bridge impl reading from a persisted ChainDB).
-  Such an addition is **deliberate** — a registry-tracked closed
-  extension, not a runtime plug-in.
-- **New `ServedChainAdmitError` variant** *(N-G extension point —
-  CN-CONS-07 strengthening)*: closed sum; today 2 variants
-  (`Decode`, `KeyByteConflict`); broadening requires updated
-  `ci_check_served_chain_closure.sh`.
-- **New `DispatchError` variant** *(N-G extension point)*: closed sum;
-  today 4 variants.
-- **New CI check**: additive. (N-G added seven —
-  `ci_check_no_parallel_header_splitter.sh`,
-  `ci_check_served_chain_closure.sh`,
-  `ci_check_chain_sync_server_closure.sh`,
-  `ci_check_block_fetch_server_closure.sh`,
-  `ci_check_broadcast_to_served_purity.sh`,
-  `ci_check_n2n_server_no_signing_dep.sh`,
-  `ci_check_server_paths_corpus_present.sh`.)
+- **New `ServerStep` / `BlockFetchServerStep` / `ServerReply` /
+  `ServedHeaderLookup` method / `ServedRangeLookup` method /
+  `ServedHeaderLookup` impl / `ServedRangeLookup` impl /
+  `ServedChainAdmitError` variant / `DispatchError` variant**
+  *(N-G extension points)*: carried.
+- **New `ReceiveEvent` variant** *(NEW in N-H — CN-PROTO-07
+  extension point)*: closed sum; today 3 variants (`RollForward`,
+  `RollBackward`, `BlockDelivered`); a new variant (e.g. a future
+  `EvictHeader` triggered by a peer-originated cache eviction
+  signal) is closed-sum extension; version-gated; must update
+  `ci_check_receive_reducer_closure.sh` guards. New variants must
+  remain peer-originated (CN-PROTO-07 — no locally-originated
+  constructors).
+- **New `ReceiveEffect` variant** *(NEW in N-H — CN-CONS-08
+  extension point)*: closed sum; today 4 variants. The
+  `RolledBack { to_slot }` arm becomes reachable when the rollback
+  cluster ships.
+- **New `ReceiveError` variant** *(NEW in N-H — DC-CONS-19 /
+  DC-CONS-20 extension point)*: closed sum; today 4 variants. The
+  `RollbackOutOfScope` variant goes away when the rollback cluster
+  ships (replaced by `Ok(ReceiveEffect::RolledBack)`); the variant
+  removal is the rollback cluster's surface signal.
+- **New `ChainDbWrite` impl** *(NEW in N-H — deliberate registry-
+  tracked addition)*: the trait is a closed seam, but a future
+  cluster MAY register a second impl (e.g. a `PersistentChainDbWriter`
+  once a persistent ChainDb is wired). Such an addition is
+  **deliberate** — a registry-tracked closed extension, not a
+  runtime plug-in.
+- **New `ChainDbWrite` trait method** *(NEW in N-H — extension
+  point)*: closed seam; new methods are closed-trait extensions and
+  require an updated production impl (`ChainDbWriter`) plus
+  extended reducer logic. Version-gated.
+- **New `ReceiveDispatchError` variant** *(NEW in N-H — extension
+  point)*: closed sum; today 3 variants.
+- **New CI check**: additive. (N-H added five —
+  `ci_check_admitted_block_closure.sh`,
+  `ci_check_receive_reducer_closure.sh`,
+  `ci_check_receive_replay_purity.sh`,
+  `ci_check_receive_orchestrator_no_producer_dep.sh`,
+  `ci_check_receive_paths_corpus_present.sh`.)
 - **Pinned external crate bump**: Tier-5 rationale doc required.
 - **New mini-protocol** / **Mini-protocol version-table bump**.
 - **New `ChainEvent` / `ChainSelectionReject` / `StreamInput` variant**.
@@ -1116,188 +1185,232 @@ All carried unchanged from prior revision.
 - **New `LedgerView` impl / LedgerState-backed `PoolDistrView` constructor**.
 - **`BootstrapAnchorHash` preimage v2** *(N-B)*: hard version-gated.
 - **N2N/N2C tx-submission → `mempool_ingress` ingress** *(N-E)*.
-- **Live cardano-node N2N block-fetch acceptance** *(N-C —
-  `blocked_until_operator_stake_available`; **N-G** —
-  `blocked_until_operator_peer_available`)*: both reopen on operator
+- **Live cardano-node N2N block-fetch acceptance / live N2N follow-
+  mode admission** *(N-C / N-G / **N-H**)*: each reopens on operator
   availability.
 - **Phase-4 cluster surface additions** (N-F): each cluster's wire
   surface gates additions via its own cluster doc.
+- **Rollback authority — `RollBackward` reduction**
+  *(NEW in N-H — DC-CONS-20 rollback-half extension point)*: today
+  Path A returns `Err(RollbackOutOfScope)`; the follow-on rollback
+  cluster wires `Ok(ReceiveEffect::RolledBack { to_slot })` via a
+  new BLUE `rollback_apply` chokepoint + a ledger-state snapshot
+  store. Closed-sum (`ReceiveError::RollbackOutOfScope`) removal +
+  closed-sum (`ReceiveEffect::RolledBack`) reachability is the
+  surface signal of that cluster's close.
 
 ---
 
 ## 5. Module Addition Rules
 
-Ade's workspace is small and color-disciplined. **PHASE4-N-G added
-three new BLUE submodules** (`ade_network::chain_sync::server`,
-`ade_network::block_fetch::server`, `ade_ledger::producer::served_chain`),
-**one new BLUE public accessor** (`accepted_block_header_bytes` in
-`ade_ledger::block_validity::header_input`), **two new GREEN submodules
-inside `ade_runtime`** (`producer::broadcast_to_served`,
-`producer::served_chain_lookups`), **one new RED submodule inside
-`ade_runtime`** (`network::n2n_server`), **one new operator-action
-probe binary** (`ade_core_interop::bin::live_block_fetch_session`),
-**seven new CI gates**, **six new registry rules**, and **strengthened
-four carried rules** (`CN-CONS-07`, `DC-PROTO-06`, `OP-OPS-04`,
-`DC-CONS-16`) plus **two universal rules** (`T-DET-01`, `T-ENC-01`).
-N-G added **no new crate**, **no new external ingress wire-format
-frozen contract beyond the closed `ServerReply` wrappers** (the
-underlying `ChainSyncMessage` / `BlockFetchMessage` enums were
-already frozen in PHASE4-N-A), **no new public composer outside the
-producer-side server authority surface**.
+Ade's workspace is small and color-disciplined. **PHASE4-N-H added
+five new BLUE submodules** (`ade_ledger::receive::{admitted,
+chain_write, events, pending_header_cache, reducer}` under a new
+`ade_ledger::receive` barrel), **two new GREEN submodules inside
+`ade_runtime`** (`receive::events_to_state`, `receive::in_memory_chain_write`),
+**one new RED submodule inside `ade_runtime`** (`receive::orchestrator`,
+under a new `ade_runtime::receive` barrel), **one new operator-action
+probe binary** (`ade_core_interop::bin::live_block_follow_session`),
+**five new CI gates**, **six new registry rules**, and **strengthened
+four carried domain-specific rules** (`DC-CONS-13`, `DC-CONS-16`,
+`CN-CONS-07`, `DC-PROTO-06`) plus **two universal rules** (`T-DET-01`,
+`T-ENC-01`). N-H added **no new crate**, **no new external ingress
+wire-format frozen contract beyond the closed `ReceiveEvent` sum**
+(the underlying `ChainSyncMessage` / `BlockFetchMessage` enums + the
+N-A `ForkChoiceSignal` / `BatchDeliveryEvent` taxonomies were already
+frozen), **no new public composer outside the receive-side admission
+authority surface**.
 
-**N-G also added two new cross-color dependency edges**:
+**N-H also strengthened one cross-color dependency edge**:
 
-1. `ade_runtime → ade_network` (RED → BLUE) — the `n2n_server` driver
-   imports the BLUE server reducers from `chain_sync::server` and
-   `block_fetch::server`. Passes `ci_check_dependency_boundary.sh`.
-2. `ade_runtime → ade_ledger` (already added in N-C; **strengthened
-   in N-G**) — the GREEN `broadcast_to_served` adapter imports
-   `served_chain_admit` and `ServedChainSnapshot`; the GREEN
-   `served_chain_lookups` adapter imports `accepted_block_header_bytes`.
-   Same direction (RED/GREEN → BLUE); allowed.
+1. `ade_runtime → ade_ledger` (already added in N-C; strengthened
+   in N-G; **further strengthened in N-H**) — the RED
+   `receive::orchestrator` and the GREEN `receive::in_memory_chain_write`
+   adapters import the new `ade_ledger::receive::*` BLUE
+   chokepoints. Same direction (RED/GREEN → BLUE); allowed. Passes
+   `ci_check_dependency_boundary.sh`.
 
-**The orphan-rule placement decision for the GREEN trait-impl
-bridge** (recorded in `docs/clusters/completed/PHASE4-N-G/N-G-S5.md`):
-`ServedChainLookups` impls live in `ade_runtime` because the orphan
-rule prevents them from living in either `ade_ledger` or
-`ade_network` alone (the impl spans both crates' types).
+**The orphan-rule placement decision for the GREEN `ChainDbWriter`
+impl** (recorded in `docs/clusters/completed/PHASE4-N-H/N-H-S3.md`):
+the `ChainDbWriter<'a, D>` impl of `ChainDbWrite` lives in
+`ade_runtime::receive::in_memory_chain_write` because the orphan rule
+prevents it from living in either `ade_ledger` (which doesn't
+depend on `ChainDb`) or somewhere else (the `ChainDb` trait is in
+`ade_runtime::chaindb`). The pattern mirrors N-G's
+`ServedChainLookups` placement.
 
-**The module-addition rule N-G sets for future producer-side
-server-domain work:**
+**The module-addition rule N-H sets for future receive-side work:**
 
-1. **A new producer-side BLUE server reducer attaches inside
-   `ade_network::<protocol>::server`** (sibling of `chain_sync::server`
-   and `block_fetch::server`). The module MUST be BLUE: no clock, no
-   rand, no I/O, no `HashMap`, no `tokio`, no `async`. The reducer
-   MUST consume a closed read-side trait seam (no direct dependency
-   on `ade_ledger::producer` types — orphan-rule preserved). The
-   reducer MUST return a closed `ServerReply<M>` wrapper, never a
-   raw wire message type.
-2. **A new closed read-side trait seam attaches inside the same BLUE
-   server module.** Methods are closed; new methods = strengthening.
-   New impls = deliberate registry-tracked addition (not runtime
-   plug-in).
-3. **A new closed `ServerReply<M>` constructor attaches inside the
-   `ServerReply` impl block** for that protocol's wrapper. New
-   constructor = closed-sum extension; no `#[non_exhaustive]`;
-   version-gated.
-4. **A new served-chain index attaches inside
-   `ade_ledger::producer`** (sibling of `served_chain`). The module
-   MUST be BLUE: BTreeMap-backed (no HashMap — DC-PROTO-07);
-   entry-path single chokepoint; closed admit-error sum.
-5. **A new GREEN bridge / lookup-trait-impl attaches inside
-   `ade_runtime::producer`** (sibling of `broadcast_to_served`,
-   `served_chain_lookups`). The module MUST be a pure function over
-   its inputs; MUST NOT invoke signing primitives; MUST NOT read I/O;
-   MUST produce byte-identical outputs across replays.
-6. **A new RED per-peer session driver attaches inside
-   `ade_runtime::network`** (sibling of `n2n_server`). The module
-   MAY use clocks / async / `tokio` (in the layer above —
-   the dispatch functions themselves are pure). The module MUST NOT
-   import from `ade_runtime::producer::signing` — defended by
-   `ci_check_n2n_server_no_signing_dep.sh`-style gates.
-7. **A new server-paths registry rule attaches as a derived `DC-*` /
-   `CN-*` family entry** with `code_locus`, `ci_script`, `tests`,
+1. **A new receive-side BLUE primitive attaches inside
+   `ade_ledger::receive::*`** (sibling of `admitted`, `events`,
+   `pending_header_cache`, `chain_write`, `reducer`). The module
+   MUST be BLUE: no clock, no rand, no I/O, no `HashMap`, no
+   `tokio`, no `async`. New canonical types MUST be closed sums or
+   closed structs; no `#[non_exhaustive]`; no `String`-bearing
+   variants.
+2. **A new receive-side authority chokepoint attaches inside the
+   same BLUE module.** Pure, total, deterministic. Composes existing
+   BLUE chokepoints (`block_validity`, `mempool_ingress`, etc.)
+   rather than re-implementing.
+3. **A new closed `ReceiveEvent` variant attaches inside the
+   `ReceiveEvent` enum body.** New variant = closed-sum extension;
+   no `#[non_exhaustive]`; version-gated; MUST remain peer-
+   originated (CN-PROTO-07).
+4. **A new closed `ReceiveEffect` / `ReceiveError` variant attaches
+   inside their respective enum bodies.** `RollbackOutOfScope`
+   removal is the rollback cluster's surface signal.
+5. **A new `ChainDbWrite` impl attaches inside `ade_runtime::receive`**
+   (sibling of `in_memory_chain_write`). The module MUST be a pure
+   function over its inputs; MUST NOT invoke signing primitives;
+   MUST produce byte-identical outputs across replays. Single
+   production impl per ChainDb backend.
+6. **A new GREEN signal-lift adapter attaches inside
+   `ade_runtime::receive`** (sibling of `events_to_state`). MUST be
+   a pure pass-through; MUST NOT decode `header_bytes` or
+   `block_bytes` (the BLUE reducer is the canonical decode site).
+7. **A new RED per-peer session driver attaches inside
+   `ade_runtime::receive`** (sibling of `orchestrator`). The module
+   MAY use clocks / async / `tokio` (in the layer above — the
+   dispatch functions themselves are pure). The module MUST NOT
+   import from `ade_runtime::producer::{signing, broadcast,
+   scheduler}` — defended by
+   `ci_check_receive_orchestrator_no_producer_dep.sh`-style gates.
+8. **A new receive-paths registry rule attaches as a derived `DC-*`
+   / `CN-*` family entry** with `code_locus`, `ci_script`, `tests`,
    `cross_ref`. Bidirectional cross-refs to consumed rules.
-8. **A new operator-action probe binary attaches inside
+9. **A new operator-action probe binary attaches inside
    `crates/ade_core_interop/src/bin/`** following the
    `live_<surface>_session` naming + hermetic-default-plus-`--connect`-live
    shape. The binary MUST stub its live socket halt when an external
    dependency is unavailable; capture status via
    `blocked_until_operator_peer_available` (peer-blocker variant —
-   N-G precedent) or `blocked_until_operator_stake_available`
+   N-G + N-H precedent) or `blocked_until_operator_stake_available`
    (stake-blocker variant — N-C precedent) as appropriate.
 
-### Cross-cluster obligation pattern (carried — strengthened in N-G close)
+### Cross-cluster obligation pattern (carried — strengthened in N-H close)
 
-**N-G strengthens the cross-cluster obligation pattern with a
-**second** variant of the `blocked_*` closure mode**:
-`blocked_until_operator_peer_available`. The mode applies when an
-obligation's blocker is a peer / external service the operator must
-provision — distinct from N-C's `blocked_until_operator_stake_available`
-(stake-registration blocker). Both variants follow OP-OPS-04's
-precedent (`enforced` core + structured `open_obligation` naming the
-blocker and the re-open criteria). The mechanical half MUST be closed
-on the same HEAD (e.g. N-G's `cross_impl_server_pipeline` integration
-test closes the bytes-shape claim before the live half ships).
-**Re-opens on operator availability** — the procedure doc names the
-specific blocker and the re-open criteria.
+**N-H carries the `blocked_until_operator_peer_available` variant
+(introduced by N-G) into a second instance** (`RO-LIVE-02`,
+CE-N-H-6). The pattern is now established across five Tier-1
+wire-level seams (chain-sync follow, tx-submission2 outbound, block
+forge, block-fetch serve, follow-mode admission). The mechanical
+half MUST be closed on the same HEAD (e.g. N-H's
+`receive_pipeline_corpus_drive` integration test closes the bytes-
+shape claim before the live half ships). **Re-opens on operator
+availability** — the procedure doc names the specific blocker and
+the re-open criteria.
 
-### Operator-action evidence pattern (carried — strengthened in N-G close)
+### Operator-action evidence pattern (carried — strengthened in N-H close)
 
-N-G adds the **fourth instance** of the operator-action probe binary
-family: `live_block_fetch_session`. The pattern is now established
-across four Tier-1 wire-level seams (chain-sync follow,
-tx-submission2 outbound, block forge, block-fetch serve) — each with
-a hermetic default that runs in CI without network access, a
-`--connect <peer>` live pass that the operator runs against a real
-cardano-node peer, and a captured evidence log committed alongside
-the procedure doc. **N-G introduces the second `blocked_*` variant**
-(`blocked_until_operator_peer_available`) into the pattern's frozen
-rules.
+N-H adds the **fifth instance** of the operator-action probe binary
+family: `live_block_follow_session`. The pattern is now established
+across five Tier-1 wire-level seams. N-H is the **second
+receive-direction binary** (N-B was follow-mode read but stopped at
+chain-sync; N-H follows through to block-fetch + admit into ChainDb).
+
+### Cluster scope-edge pattern (NEW in N-H close — DC-CONS-20 Path A)
+
+**N-H introduces a new scope-edge pattern**: a cluster may
+deliberately scope down a derived constraint
+(`DC-CONS-20` admit-half + scope-edge) and ship a **structured
+failure variant** (`ReceiveError::RollbackOutOfScope { target_point }`)
+plus an explicit registry-recorded
+`open_obligation = <follow-on-cluster-handle>` rather than silently
+accepting or panicking. The pattern is binding:
+
+- The scope edge MUST be a deterministic structured error variant
+  reachable on every event that crosses it (not a panic, not a log
+  + skip, not silent acceptance).
+- The registry rule MUST ship `status = "declared"` (or `"partial"`)
+  with an `open_obligation` field naming the follow-on cluster
+  deliverable.
+- The cluster doc MUST name the candidate seam in its handoff
+  section for the next planner.
+- The CI gate (here: `ci_check_receive_reducer_closure.sh`) MUST
+  defend the structural-failure property (forbids any `Ok` return
+  from the scoped-out arm).
 
 | Color | Naming convention | Build-config flags | May depend on | MUST NOT depend on |
 |-------|-------------------|--------------------|----------------|--------------------|
-| **BLUE** | `ade_*` | First line of every `.rs` is the contract banner. `lib.rs` carries `#![deny(unsafe_code, clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::float_arithmetic)]`. No `#[cfg(feature = ...)]`. No async. **N-G:** `chain_sync/server.rs` + `block_fetch/server.rs` production code has no `HashMap`/`HashSet`/`tokio`/`rand`/wall-clock (CI-defended); `ServerReply` inner enums are private; `pub fn` cannot return raw wire message types. `served_chain.rs` has no `HashMap`/`HashSet` (BTreeMap-only). Single canonical header/body splitter (`accepted_block_header_bytes`). | Other BLUE crates / submodules only. **N-G:** server reducers consume BLUE state via closed trait seams (`ServedHeaderLookup`, `ServedRangeLookup`) — no direct dep on `ade_ledger::producer` from `ade_network`. | Any RED submodule or crate; GREEN in non-dev deps; `pallas_*` (except `ade_plutus`); async runtime; `HashMap`/`HashSet`/`IndexMap`; clock/rand/float/env/I/O. **N-G:** no `*SigningKey` / `KesSecret` / `ColdSigningKey` types (carried). |
-| **GREEN** | `ade_*` | Banner + deny attrs are project convention. **N-G:** `broadcast_to_served::drain_and_admit` is a pure function over its inputs — no I/O, no clocks. `served_chain_lookups::ServedChainLookups` is the single production impl of `ServedHeaderLookup` + `ServedRangeLookup`; header projection delegates to `accepted_block_header_bytes` (no parallel splitter). | BLUE crates + standard library + ecosystem crates. **N-G:** the GREEN adapters live inside `ade_runtime` (RED crate) — color is per-module per the cluster TCB Color Map. | `ade_runtime` for `ade_testkit`; RED submodules in non-test paths. Results must never feed back into a BLUE authoritative decision. |
-| **RED** | `ade_*` | No special header. Free to use clocks, I/O, async, `HashMap`, signing keys. **N-G:** `ade_runtime::network::n2n_server` is the per-peer session driver — pure state-machine dispatch; socket I/O lives one layer up; **MUST NOT import from `ade_runtime::producer::signing`** (CI-defended). | Any BLUE / GREEN crate or submodule (one-way). **N-G added the `ade_runtime → ade_network` edge** (RED → BLUE via the server reducers). | Cannot be depended on by BLUE. Server response paths additionally cannot link against `producer::signing`. |
+| **BLUE** | `ade_*` | First line of every `.rs` is the contract banner. `lib.rs` carries `#![deny(unsafe_code, clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::float_arithmetic)]`. No `#[cfg(feature = ...)]`. No async. **N-H:** `ade_ledger::receive::*` modules have no `HashMap`/`HashSet`/`tokio`/`rand`/wall-clock (CI-defended); `ReceiveEvent` taxonomy has no constructor for locally-originated outputs; `receive_apply` is staged-then-committed; `RollBackward` arm returns `Err(RollbackOutOfScope)`; `RollForward` arm mutates only `state.pending_headers`. | Other BLUE crates / submodules only. **N-H:** receive reducer composes `block_validity` (B1) via `admit_via_block_validity` — no direct dep on `ade_runtime`. The `ChainDbWrite` trait surface is the only consumer-facing seam (impls live in RED/GREEN crates). | Any RED submodule or crate; GREEN in non-dev deps; `pallas_*` (except `ade_plutus`); async runtime; `HashMap`/`HashSet`/`IndexMap`; clock/rand/float/env/I/O. **N-H:** no `*SigningKey` / `KesSecret` / `ColdSigningKey` types (carried). |
+| **GREEN** | `ade_*` | Banner + deny attrs are project convention. **N-H:** `events_to_state::{lift_chain_sync_signal, lift_block_fetch_event}` are pure pass-through translators — MUST NOT decode `header_bytes` / `block_bytes` (CI-defended); `in_memory_chain_write::ChainDbWriter` is the single production impl of `ChainDbWrite` over any `ChainDb`. | BLUE crates + standard library + ecosystem crates. **N-H:** the GREEN adapters live inside `ade_runtime` (RED crate) — color is per-module per the cluster TCB Color Map. | `ade_runtime` for `ade_testkit`; RED submodules in non-test paths. Results must never feed back into a BLUE authoritative decision. |
+| **RED** | `ade_*` | No special header. Free to use clocks, I/O, async, `HashMap`, signing keys. **N-H:** `ade_runtime::receive::orchestrator` is the per-peer receive session driver — pure state-machine dispatch; socket I/O lives one layer up; **MUST NOT import from `ade_runtime::producer::{signing, broadcast, scheduler}`** (CI-defended). | Any BLUE / GREEN crate or submodule (one-way). **N-H strengthened the `ade_runtime → ade_ledger` edge** (RED → BLUE via the receive chokepoints + AdmittedBlock token + ChainDbWrite trait). | Cannot be depended on by BLUE. Receive paths additionally cannot link against `producer::{signing, broadcast, scheduler}`. |
 
 ### New module checklist
 
 1. **Add to `Cargo.toml` workspace members** (if a new crate).
 2. **Declare TCB color** by editing `.idd-config.json` `core_paths` if BLUE.
 3. **CI script update obligations** — extend the relevant BLUE-scoped
-   scripts; for server-paths-domain sub-modules, model the new CI
-   gate on `ci_check_chain_sync_server_closure.sh` /
-   `ci_check_block_fetch_server_closure.sh` /
-   `ci_check_served_chain_closure.sh` shape (closure proof + no-raw-wire-return
-   proof + closed-sum proof + BTreeMap-only proof).
+   scripts; for receive-paths-domain sub-modules, model the new CI
+   gate on `ci_check_receive_reducer_closure.sh` /
+   `ci_check_admitted_block_closure.sh` /
+   `ci_check_receive_orchestrator_no_producer_dep.sh` shape (closure
+   proof + admission-token closure + reducer state-isolation proof
+   + scope-edge structural-failure proof + key-boundary proof +
+   BTreeMap-only proof).
 4. **Add contract banner** (BLUE) to every `.rs` file.
 5. **Add deny attributes** to `lib.rs` (BLUE).
 6. **New canonical types:** add a `[[rules]]` block under family `T`
    in the invariant registry, plus a round-trip test. For new
-   server-paths-domain authority rules, append `DC-PROTO-0X` /
-   `DC-CONS-1X` / `CN-PROTO-0X` with bidirectional cross-ref to
-   consumed rules. T-DET-01 / T-ENC-01 may receive a `strengthened_in`
-   entry when the new module participates in their byte-deterministic
-   / byte-authoritative properties.
+   receive-paths-domain authority rules, append `DC-CONS-1X` /
+   `CN-CONS-0X` / `CN-PROTO-0X` / `DC-PROTO-0X` with bidirectional
+   cross-ref to consumed rules. `T-DET-01` / `T-ENC-01` may receive a
+   `strengthened_in` entry when the new module participates in their
+   byte-deterministic / byte-authoritative properties.
 7. **New operator-action probe binary:** add to
    `crates/ade_core_interop/src/bin/<name>.rs` following the
    `live_<surface>_session` naming + hermetic-default-plus-`--connect`-live
    shape; document in `<cluster>/CE-<id>_PROCEDURE.md`; capture
    evidence to `<cluster>/CE-<id>_<date>.log` OR mark
-   `blocked_until_operator_peer_available` / `blocked_until_operator_stake_available`
-   as appropriate.
+   `blocked_until_operator_peer_available` /
+   `blocked_until_operator_stake_available` as appropriate.
 8. **Cross-cluster obligation:** follow the binding rules from the
-   N-E full-close narrative; N-G strengthens the rules with the
-   second `blocked_*` variant.
-9. **Run `cargo test --workspace` and the full CI script suite.**
+   N-E full-close narrative; N-G strengthened the rules with the
+   second `blocked_*` variant; N-H carries the variant into a
+   second instance.
+9. **Cluster scope-edge:** if the cluster deliberately scopes down a
+   derived constraint, ship the structured-failure variant +
+   registry `open_obligation` + cluster-doc handoff per the N-H
+   precedent.
+10. **Run `cargo test --workspace` and the full CI script suite.**
 
 ### Phase 4 anticipated additions
 
-- **PHASE4-N-G — FULLY CLOSED at this HEAD** (mechanical half +
-  structural cross-impl): code + CI gates + DC-CONS-17/18 +
-  DC-PROTO-07/08 + CN-PROTO-06 + RO-LIVE-01 (partial) + 7 new CI
-  scripts. CE-N-G-8 live-evidence is
-  `blocked_until_operator_peer_available` per
-  `RO-LIVE-01.open_obligation` — re-opens on operator availability.
-- **PHASE4-N-C — FULLY CLOSED** (carried). CE-N-C-8 live-evidence is
-  `blocked_until_operator_stake_available`.
+- **PHASE4-N-H — FULLY CLOSED at this HEAD** (mechanical half +
+  structural cross-impl; Path A admit-only scope): code + CI gates
+  + CN-PROTO-07 + CN-CONS-08 + DC-CONS-19 + DC-PROTO-09 + DC-CONS-20
+  (declared with `rollback_side_blocked_until_ledger_snapshot_cluster`)
+  + RO-LIVE-02 (partial) + 5 new CI scripts. CE-N-H-6 live-evidence
+  is `blocked_until_operator_peer_available` per
+  `RO-LIVE-02.open_obligation` — re-opens on operator availability.
+- **PHASE4-N-G — FULLY CLOSED** (carried). CE-N-G-8 live-evidence
+  is `blocked_until_operator_peer_available`.
+- **PHASE4-N-C — FULLY CLOSED** (carried). CE-N-C-8 live-evidence
+  is `blocked_until_operator_stake_available`.
 - **PROPOSAL-PROCEDURES-DECODE — FULLY CLOSED** (carried).
 - **PHASE4-N-E — FULLY CLOSED** (carried).
-- **Future cluster — receive-side header→body bridge** *(NEW
-  candidate flagged by N-G close — original sketch §"Open questions"
-  and the N-C handoff option B)*: `ade_node` composition layer
-  joining `process_stream_input` (N-B) + N-A block-fetch **client**
-  (existing) + `block_validity` (B1). The natural counterpart to
-  N-G's send-direction closure. Surface for the next cluster
+- **NEW PRIORITY-1 future cluster — Full rollback authority** *(NEW
+  HIGHEST-PRIORITY candidate flagged by N-H close — DC-CONS-20
+  rollback half closure)*: BLUE `rollback_apply` chokepoint + a
+  ledger-state snapshot store (encode/decode of `LedgerState` +
+  `PraosChainDepState`) + replay-forward driver. Wires
+  `ReceiveEvent::RollBackward` from `Err(RollbackOutOfScope)` to
+  `Ok(ReceiveEffect::RolledBack { to_slot })`. Surface for the next
   planner; do not invent invariants here.
-- **Future cluster — `CE-N-G-8` live evidence re-open trigger**:
+- **NEW future cluster — Multi-peer fork choice** *(NEW candidate
+  flagged by N-H close — OQ-4 lock; sequenced after rollback)*:
+  Praos longest-chain across competing `PerPeerReceiveState[]`.
+- **NEW future cluster — N2C local-chain-sync receive surface**
+  *(NEW candidate flagged by N-H close)*: operator-side N2C clients
+  consume Ade's chain via `LocalChainSyncMessage`.
+- **Future cluster — `CE-N-H-6` live evidence re-open trigger**:
   reopens when a private cardano-node peer is provisioned; the
   procedure is documented at
-  `docs/clusters/completed/PHASE4-N-G/CE-N-G-8_PROCEDURE.md`.
+  `docs/clusters/completed/PHASE4-N-H/CE-N-H-6_PROCEDURE.md`.
+- **Future cluster — `CE-N-G-8` live evidence re-open trigger**:
+  reopens when a private cardano-node peer is provisioned (carried).
 - **Future cluster — `CE-N-C-8` live evidence re-open trigger**:
-  reopens when testnet SPO stake is provisioned (carried from N-C).
+  reopens when testnet SPO stake is provisioned (carried).
 - **Future node-binary cluster (`CE-NODE-N2C-LTX`)**: live N2C UDS
   server + N2N bulk-tx inbound listener (carried).
 - **Tx-validity completeness follow-ups**: full `track_utxo=true`
@@ -1339,43 +1452,33 @@ cluster entry.
 - **(N-E specific — closed BLUE chokepoint `mempool_ingress`)** Carried.
 - **(PP specific — closed BLUE sub-grammar `decode_proposal_procedures`)** Carried.
 - **(N-C-S1 / S2 / S3 / S4 / S5 / S6 / S7 specific)** All carried.
-- **(N-G-S1 specific — single canonical header/body splitter +
-  closed `ServerReply<M>` wrappers)** No new `pub fn .*header_bytes`,
-  `pub fn .*split_header`, or `pub fn .*split_block_envelope` outside
-  `crates/ade_ledger/src/block_validity/header_input.rs`. The
-  canonical accessor `accepted_block_header_bytes` MUST exist at that
-  site. `ServerReply` inner enum MUST be private; no public
-  constructor for client-agency variants (`RequestNext`,
-  `FindIntersect`, `Done` for chain-sync; `RequestRange`, `ClientDone`
-  for block-fetch). The only exit is `into_message()`. Defended by
-  `ci_check_no_parallel_header_splitter.sh`.
-- **(N-G-S2 specific — closed BLUE served-chain index `ServedChainSnapshot`)**
-  No `HashMap` / `HashSet` in `ade_ledger::producer::served_chain`.
-  No second entry path into `ServedChainSnapshot` — `served_chain_admit`
-  is the only constructor reachable from outside the module. No
-  caller-asserted `(slot, hash)` key — the admit chokepoint derives
-  the key from the bytes via `decode_block`. No `String`-bearing
-  variant on `ServedChainAdmitError`. No `#[non_exhaustive]` on the
-  closed sums or the canonical index struct. Defended by
-  `ci_check_served_chain_closure.sh`.
-- **(N-G-S3 specific — closed BLUE chain-sync server reducers)** No
+- **(N-G-S1 / S2 / S3 / S4 specific)** All carried.
+- **(N-H-S1 specific — `AdmittedBlock` private-constructor token +
+  closed `ReceiveEvent`/`ReceiveEffect`/`ReceiveError` sums +
+  `PendingHeaderCache` + `ChainDbWrite` narrow trait)** No `pub fn`
+  with return type `AdmittedBlock` outside
+  `crates/ade_ledger/src/receive/admitted.rs`'s
+  `admit_via_block_validity` (CI-defended by
+  `ci_check_admitted_block_closure.sh`). `AdmittedBlock.bytes` MUST
+  be private. `ReceiveEvent` MUST have no constructor for
+  locally-originated chain-sync / block-fetch outputs (CN-PROTO-07
+  by construction — exhaustive match round-trip test fails to
+  compile if a non-peer-originated variant is added). No
+  `#[non_exhaustive]` on any of the closed sums. No `String`-bearing
+  variant. No `HashMap`/`HashSet` in
+  `crates/ade_ledger/src/receive/pending_header_cache.rs`
+  (BTreeMap-only).
+- **(N-H-S2 specific — closed BLUE receive reducer)** No
   `HashMap`/`HashSet`/`tokio`/`rand`/`std::time` in
-  `chain_sync/server.rs` production code. No `pub fn` returning raw
-  `ChainSyncMessage` — outgoing replies MUST go through
-  `ServerReply::into_message()`. No `pub fn` returning
-  `Result<.., ChainSyncMessage>`. Positive presence:
-  `producer_chain_sync_serve`, `producer_chain_sync_advance_tip`,
-  `ServedHeaderLookup` MUST exist. No ambiguous `Ok((MustReply,
-  silent-wait))` without an explicit replay-input wait condition
-  (DC-PROTO-08). Defended by `ci_check_chain_sync_server_closure.sh`.
-- **(N-G-S4 specific — closed BLUE block-fetch server reducer)** Same
-  shape for `block_fetch/server.rs`. No `pub fn` returning raw
-  `BlockFetchMessage`. No construction of `ServerReply::block(bytes)`
-  whose `bytes` is anything other than a `ServedRangeLookup` output
-  (the reducer is the enforcement point — DC-CONS-17). Defended by
-  `ci_check_block_fetch_server_closure.sh`.
+  `crates/ade_ledger/src/receive/reducer.rs` production code. No
+  `RollForward` arm path may mutate `state.ledger`,
+  `state.chain_dep`, or call `chain_write.*` (Invariant I-6,
+  CI-defended). No `RollBackward` arm path may return `Ok` (Path A
+  scope edge — CI-defended). Positive presence: `receive_apply`,
+  `receive_apply_sequence`, `ReceiveState` MUST exist. Defended by
+  `ci_check_receive_reducer_closure.sh`.
 
-### GREEN (`ade_testkit` incl. `producer` corpus; `ade_runtime::consensus::{candidate_fragment, chain_selector}`; `ade_ledger::mempool::{policy, canonicalize}`; the two `ade_core_interop` N-E bridges; `ade_runtime::producer::tick_assembler` (N-C-S6); **`ade_runtime::producer::{broadcast_to_served, served_chain_lookups}` — NEW in N-G-S5**)
+### GREEN (`ade_testkit` incl. `producer` + `receive_paths` corpora; `ade_runtime::consensus::{candidate_fragment, chain_selector}`; `ade_ledger::mempool::{policy, canonicalize}`; the two `ade_core_interop` N-E bridges; `ade_runtime::producer::{tick_assembler, broadcast_to_served, served_chain_lookups}`; **`ade_runtime::receive::{events_to_state, in_memory_chain_write}` — NEW in N-H-S3**)
 
 - No nondeterminism that leaks into stored fixtures — fixtures must
   be byte-reproducible.
@@ -1383,40 +1486,48 @@ cluster entry.
 - No `HashMap` even in test helpers — `BTreeMap` only.
 - No import of `ade_runtime` from `ade_testkit`.
 - (carried bullets per prior revision)
-- **(`ade_runtime::producer::broadcast_to_served`, NEW in N-G-S5 —
-  DC-PROTO-07)** No I/O; no clocks; no nondeterminism. The function
-  MUST be observably deterministic: identical
-  `(ServedChainSnapshot, BroadcastQueue)` MUST produce byte-identical
-  outputs across replays. Defended by
-  `ci_check_broadcast_to_served_purity.sh`.
-- **(`ade_runtime::producer::served_chain_lookups`, NEW in N-G-S5 —
-  DC-CONS-16 strengthening)** The single production impl of
-  `ServedHeaderLookup` + `ServedRangeLookup`. Header projection MUST
-  delegate to `accepted_block_header_bytes` — no parallel splitter.
-  Pure; no I/O.
+- **(`ade_runtime::producer::{broadcast_to_served, served_chain_lookups}`,
+  N-G-S5)** Carried.
+- **(`ade_runtime::receive::events_to_state`, NEW in N-H-S3 —
+  DC-PROTO-09)** Pure pass-through; no I/O; no clocks; no
+  nondeterminism. MUST NOT decode `header_bytes` or `block_bytes`
+  (the BLUE reducer is the canonical decode site). Non-state-changing
+  N-A variants return `None`. Defended by
+  `ci_check_receive_replay_purity.sh`.
+- **(`ade_runtime::receive::in_memory_chain_write`, NEW in N-H-S3)**
+  Single production impl of `ChainDbWrite` over any `ChainDb`.
+  Pure (the I/O is the wrapped `ChainDb`). The `decode_block` call
+  is reachable safely under the `AdmittedBlock` invariant
+  (`block_validity` already validated the bytes).
 
-### RED (`ade_runtime`, `ade_node`, `ade_network::mux::transport`, `ade_network::session`, `ade_network::bin::capture_*`, `ade_runtime::consensus::genesis_parser`, `ade_core_interop` (incl. N-C S7 probe binary `live_block_production_session` and **N-G S7 probe binary `live_block_fetch_session` — NEW**), and the RED-behavior `ade_ledger::consensus_input_extract` scan; `ade_runtime::producer::{signing, keys, scheduler, broadcast}` (N-C-S1/S6); **`ade_runtime::network::n2n_server` — NEW in N-G-S6**)
+### RED (`ade_runtime`, `ade_node`, `ade_network::mux::transport`, `ade_network::session`, `ade_network::bin::capture_*`, `ade_runtime::consensus::genesis_parser`, `ade_core_interop` (incl. N-C S7 probe binary `live_block_production_session`, N-G S7 probe binary `live_block_fetch_session`, and **N-H S6 probe binary `live_block_follow_session` — NEW**), and the RED-behavior `ade_ledger::consensus_input_extract` scan; `ade_runtime::producer::{signing, keys, scheduler, broadcast}` (N-C-S1/S6); `ade_runtime::network::n2n_server` (N-G-S6); **`ade_runtime::receive::orchestrator` — NEW in N-H-S4**)
 
 - No direct mutation of `ade_ledger` state — all transitions go
   through `ade_ledger::rules::*`, the `block_validity` / `tx_validity`
   composers, `mempool::ingress::mempool_ingress`, **the producer
   authority chokepoints `producer::forge::forge_block` +
-  `producer::self_accept::self_accept`** (N-C), or **the served-chain
+  `producer::self_accept::self_accept`** (N-C), **the served-chain
   authority chokepoint `producer::served_chain::served_chain_admit`**
-  (N-G).
+  (N-G), or **the receive authority chokepoint
+  `receive::reducer::receive_apply` + `receive::admitted::admit_via_block_validity`**
+  (N-H).
 - No bypassing `ade_codec` to construct semantic types from raw bytes.
   **(N-C-strengthened)** Constructing `AcceptedBlock` outside
   `self_accept` is CI-forbidden. **(N-G-strengthened)** Constructing
   `ServedChainSnapshot` populated entries outside `served_chain_admit`
   is CI-forbidden; constructing `ServerReply` variants for
   client-agency wire messages is unrepresentable in the public API
-  (CN-PROTO-06).
+  (CN-PROTO-06). **(N-H-strengthened)** Constructing `AdmittedBlock`
+  outside `admit_via_block_validity` is CI-forbidden (the inner
+  `bytes` field is private; the tuple-struct constructor is
+  module-private; defended by `ci_check_admitted_block_closure.sh`).
+  Constructing `ReceiveEvent` for locally-originated chain-sync /
+  block-fetch outputs (the orchestrator's own client requests) is
+  unrepresentable in the public API (CN-PROTO-07).
 - (`ade_runtime` specifically) Existing `ade_runtime → ade_ledger`
-  edge (added N-C) is now also consumed by N-G's
-  `broadcast_to_served` (via `served_chain_admit`) and
-  `served_chain_lookups` (via `accepted_block_header_bytes`).
-  **NEW N-G edge: `ade_runtime → ade_network`** (RED/GREEN → BLUE via
-  the server reducers + ServerReply wrappers). Both pass
+  edge (added N-C; strengthened N-G) is **further strengthened in
+  N-H** — the receive orchestrator + GREEN adapters consume the new
+  `ade_ledger::receive::*` BLUE chokepoints. Pass
   `ci_check_dependency_boundary.sh`.
 - (`ade_network::mux::transport`) No protocol logic.
 - (`ade_network::session`) Composition glue only.
@@ -1427,64 +1538,69 @@ cluster entry.
 - (N-E live N2N operator-action session) Carried.
 - (Deferred RED operator-action surfaces — CE-NODE-N2C-LTX) Carried.
 - (`ade_core_interop`) Live-interop driver only; library tests
-  `#[ignore]`-gated. **N-G added `live_block_fetch_session`** —
-  fourth operator-action probe binary. The binary's default mode
+  `#[ignore]`-gated. **N-H added `live_block_follow_session`** —
+  fifth operator-action probe binary. The binary's default mode
   prints readiness and exits; `--connect` performs the live pass
   against a real cardano-node peer.
 - **(N-C-S1 / S6 specific — `ade_runtime::producer::{signing, keys,
   scheduler, broadcast}`)** All carried.
-- **(N-G-S6 specific — `ade_runtime::network::n2n_server`)** Pure
+- **(N-G-S6 specific — `ade_runtime::network::n2n_server`)** Carried.
+  Key-boundary forbids imports from
+  `ade_runtime::producer::signing`.
+- **(N-H-S4 specific — `ade_runtime::receive::orchestrator`)** Pure
   state-machine driver — NO socket I/O at this layer (sockets live
-  one layer up in `ade_network::session::*`). MUST NOT import from
-  `ade_runtime::producer::signing` — defended by
-  `ci_check_n2n_server_no_signing_dep.sh`. Per-peer state independent;
-  cross-peer coordination only via shared `&ServedChainSnapshot`.
-  Decoded inbound frames MUST go through the BLUE reducers (no
-  inline grammar). Encoded outbound frames MUST come from
-  `ServerReply::into_message()` outputs only (no direct
-  `encode_chain_sync_message` / `encode_block_fetch_message` calls
-  on raw wire messages).
-- **(N-G-S7 specific — `live_block_fetch_session`)** The live socket
-  loop MUST drive the RED N2N server driver →
-  `dispatch_chain_sync_frame` / `dispatch_block_fetch_frame` /
-  `poll_chain_sync_advance` pipeline through the canonical
-  chokepoints — no parallel server path, no direct construction of
-  `ServerReply` outside the BLUE reducers, no bypass of
-  `accepted_block_header_bytes`. The live evidence log committed
+  one layer up). MUST NOT import from
+  `ade_runtime::producer::{signing, broadcast, scheduler}` —
+  defended by `ci_check_receive_orchestrator_no_producer_dep.sh`.
+  Per-peer state independent; cross-peer coordination only via the
+  shared `ChainDb`. Decoded inbound frames MUST go through the BLUE
+  reducer (no inline grammar). Lifted events MUST go through the
+  GREEN `events_to_state` adapter (no inline N-A-signal → ReceiveEvent
+  translation).
+- **(N-H-S6 specific — `live_block_follow_session`)** The live
+  socket loop MUST drive the RED receive orchestrator →
+  `dispatch_chain_sync_inbound` / `dispatch_block_fetch_inbound`
+  pipeline through the canonical chokepoints — no parallel
+  admission path, no direct construction of `AdmittedBlock` outside
+  the BLUE reducer's call to `admit_via_block_validity`, no bypass
+  of `ChainDbWrite::write_admitted`. The live evidence log committed
   alongside the procedure doc redacts hostnames per
   `feedback_no_credential_leaks`.
 
 ### Project-specific additions
 
 - **No commits of credentials, hostnames, IPs, private keys** —
-  enforced by `ci_check_no_secrets.sh`. **N-G-strengthened:** no
-  private-key bytes in server-paths fixture corpora (defended by
+  enforced by `ci_check_no_secrets.sh`. **N-H-strengthened:** no
+  private-key bytes in receive-paths fixture corpora (defended by
   `ci_check_no_private_keys_in_corpus.sh` extended to cover the new
-  fixture root).
+  `receive_paths` fixture root).
 - **No `Phase 4 internal-mode mock network`** — Tier 1 surfaces must
-  be exercised against real cardano-node peers. **N-G:** the
+  be exercised against real cardano-node peers. **N-H:** the
   mechanical cross-impl harness in
-  `crates/ade_runtime/tests/cross_impl_server_pipeline.rs` is a
-  structural-agreement harness (every served `Block { bytes }`
-  decodes via Ade's own decoder; recomputed body-hash matches the
-  announced header); the live cross-impl claim requires
-  operator-action live evidence per CE-N-G-8.
+  `crates/ade_runtime/tests/receive_pipeline_corpus_drive.rs` is a
+  structural-agreement harness (every Conway-576 corpus block
+  admits; ChainDb tip + admitted bytes + ledger fingerprint agree);
+  the live cross-impl claim requires operator-action live evidence
+  per CE-N-H-6.
 - **No collapsing wire and canonical bytes** — dual-authority rule.
 - **No Tier 5 surface without a stated rationale**.
 - **No "we'll match it later" stubs on Tier 1 surfaces** — Tier 1
-  closure is hard-gated. The producer-side server response authority
-  surface (chain-sync serve + block-fetch serve + served-chain index +
-  header projection) is now Tier 1; the seven new CI gates enforce
-  mechanical closure. **The N-G
-  `blocked_until_operator_peer_available` status is NOT a "we'll
-  match it later" stub** — the mechanical half is fully enforced at
-  this HEAD; the live half is recorded as an `open_obligation` on
-  `RO-LIVE-01`, tied to a specific operator-action procedure
-  (`CE-N-G-8_PROCEDURE.md`), and reopens on a named external
-  dependency (private cardano-node peer provisioned by the operator).
-  Follows OP-OPS-04's precedent and is the second `blocked_*` variant
-  in the family alongside N-C's
-  `blocked_until_operator_stake_available`.
+  closure is hard-gated. The receive-side admission authority
+  surface (admit-only Path A; admit chokepoint + reducer +
+  pending-header cache + chain-write trait + GREEN adapters + RED
+  orchestrator) is Tier 1; the five new CI gates enforce mechanical
+  closure. **The N-H `blocked_until_operator_peer_available` status
+  is NOT a "we'll match it later" stub** — the mechanical half is
+  fully enforced at this HEAD; the live half is recorded as an
+  `open_obligation` on `RO-LIVE-02`, tied to a specific
+  operator-action procedure (`CE-N-H-6_PROCEDURE.md`), and reopens
+  on a named external dependency (private cardano-node peer
+  provisioned by the operator). Same closure-mode variant as N-G.
+  **Likewise the `DC-CONS-20` Path A scope-edge declaration is NOT
+  a stub** — it is a structured `ReceiveError::RollbackOutOfScope`
+  variant reachable on every `RollBackward` event, plus a registry
+  `open_obligation = rollback_side_blocked_until_ledger_snapshot_cluster`
+  naming the follow-on cluster.
 
 ---
 
@@ -1493,73 +1609,85 @@ cluster entry.
 - CODEMAP: `docs/ade-CODEMAP.md` — module-by-module authority table,
   upstream of this document. **Cross-reference check at this HEAD:**
   CODEMAP is being regenerated in parallel; pending the regen,
-  CODEMAP may pin pre-N-G HEAD. The new BLUE submodules
-  (`ade_network::chain_sync::server`, `ade_network::block_fetch::server`,
-  `ade_ledger::producer::served_chain`), the new BLUE public
-  accessor (`accepted_block_header_bytes`), the new GREEN submodules
-  (`ade_runtime::producer::{broadcast_to_served, served_chain_lookups}`),
-  the new RED submodule (`ade_runtime::network::n2n_server`), and the
-  new operator-action probe binary
-  (`ade_core_interop::bin::live_block_fetch_session`) are not yet in
-  the prior CODEMAP. The next CODEMAP regen picks these up
-  mechanically. CI count moves from 40 → 47.
+  CODEMAP may pin pre-N-H HEAD `a280954`. The new BLUE submodules
+  (`ade_ledger::receive::{admitted, chain_write, events,
+  pending_header_cache, reducer}`), the new GREEN submodules
+  (`ade_runtime::receive::{events_to_state, in_memory_chain_write}`),
+  the new RED submodule (`ade_runtime::receive::orchestrator`), and
+  the new operator-action probe binary
+  (`ade_core_interop::bin::live_block_follow_session`) are not yet
+  in the prior CODEMAP. The next CODEMAP regen picks these up
+  mechanically. CI count moves from 47 → 52.
 - Invariant registry: `docs/ade-invariant-registry.toml` — rule
-  families incl. T / CN / DC / OP / RO. **N-G added:**
-  `DC-CONS-17` (`enforced`, `ci_script =
-  ci/ci_check_block_fetch_server_closure.sh`,
-  `introduced_in = PHASE4-N-G`); `DC-CONS-18` (`enforced`,
-  `ci_script = ci/ci_check_no_parallel_header_splitter.sh`);
-  `DC-PROTO-07` (`enforced`, `ci_script =
-  ci/ci_check_broadcast_to_served_purity.sh`); `DC-PROTO-08`
-  (`enforced`, `ci_script = ci/ci_check_chain_sync_server_closure.sh`);
-  `CN-PROTO-06` (`enforced`, `ci_script =
-  ci/ci_check_chain_sync_server_closure.sh +
-  ci/ci_check_block_fetch_server_closure.sh`); `RO-LIVE-01`
+  families incl. T / CN / DC / OP / RO. **N-H added:**
+  `CN-PROTO-07` (`enforced`, `ci_script =
+  ci/ci_check_admitted_block_closure.sh`,
+  `introduced_in = PHASE4-N-H`); `CN-CONS-08` (`enforced`,
+  `ci_script = ci/ci_check_receive_reducer_closure.sh`);
+  `DC-CONS-19` (`enforced`, `ci_script =
+  ci/ci_check_receive_reducer_closure.sh`); `DC-CONS-20`
+  (`declared` + `open_obligation =
+  rollback_side_blocked_until_ledger_snapshot_cluster`, `ci_script =
+  ci/ci_check_receive_reducer_closure.sh` (admit half only));
+  `DC-PROTO-09` (`enforced`, `ci_script =
+  ci/ci_check_receive_replay_purity.sh`); `RO-LIVE-02`
   (`partial` + `open_obligation =
   blocked_until_operator_peer_available`, `ci_script =
-  ci/ci_check_server_paths_corpus_present.sh`); appended `PHASE4-N-G`
-  to `CN-CONS-07.strengthened_in`, `DC-PROTO-06.strengthened_in`,
-  `OP-OPS-04.strengthened_in`, `DC-CONS-16.strengthened_in`,
-  `T-DET-01.strengthened_in`, `T-ENC-01.strengthened_in`. Total:
-  190 → 196 entries.
+  ci/ci_check_receive_paths_corpus_present.sh`); appended
+  `PHASE4-N-H` to `T-DET-01.strengthened_in`,
+  `T-ENC-01.strengthened_in`, `DC-CONS-13.strengthened_in`,
+  `DC-CONS-16.strengthened_in`, `CN-CONS-07.strengthened_in`,
+  `DC-PROTO-06.strengthened_in`. Total: 196 → 202 entries.
 - Phase 4 cluster plan: `docs/active/phase_4_cluster_plan.md`.
 - Tier doctrine: `docs/active/CE-79_gate_statement.md` and
   `docs/active/CE-79_tier5_addendum.md`.
-- Cluster N-D / N-A / N-B / B1 / B2 / B3 / B4 / B5 / OQ5-CREDENTIAL-FIDELITY
-  / COMMITTEE-CRED-FIDELITY / DREP-VOTE-FIDELITY /
-  ENACTMENT-COMMITTEE-FIDELITY / ENACTMENT-COMMITTEE-WRITEBACK /
-  PHASE4-N-E / PROPOSAL-PROCEDURES-DECODE / PHASE4-N-C: all closed;
+- Receive-side bridge invariants sketch:
+  `docs/planning/receive-side-bridge-invariants.md` (the upstream
+  sketch the cluster doc derives from; Invariants I-1..I-12 +
+  Anti-invariants ¬P-1..¬P-7).
+- Cluster N-D / N-A / N-B / B1 / B2 / B3 / B4 / B5 /
+  OQ5-CREDENTIAL-FIDELITY / COMMITTEE-CRED-FIDELITY /
+  DREP-VOTE-FIDELITY / ENACTMENT-COMMITTEE-FIDELITY /
+  ENACTMENT-COMMITTEE-WRITEBACK / PHASE4-N-E /
+  PROPOSAL-PROCEDURES-DECODE / PHASE4-N-C / PHASE4-N-G: all closed;
   cluster docs carried.
-- **Cluster PHASE4-N-G (CLOSED + archived at this HEAD; mechanical
-  half + structural cross-impl)**: the cluster doc + slices
-  `cluster.md, N-G-S{1..7}.md` + `CE-N-G-8_PROCEDURE.md` at
-  `docs/clusters/completed/PHASE4-N-G/`. WIRES AND CLOSES the
-  producer-side server response paths end-to-end: BLUE header
-  projection authority + closed `ServerReply<M>` wrappers (S1),
-  BLUE `ServedChainSnapshot` + `served_chain_admit` (S2), BLUE
-  chain-sync server reducers (S3), BLUE block-fetch server reducer
-  (S4), GREEN broadcast→served adapter + transcript replay (S5),
-  RED per-peer N2N server session driver + multi-peer determinism
-  (S6), mechanical cross-impl pipeline + `live_block_fetch_session`
-  operator-action probe binary (S7). Added seven CI scripts (count
-  40 → 47); added six derived / release registry rules (total 190 →
-  196); strengthened four carried rules + two universal rules.
-  **CE-N-G-8 live-evidence `blocked_until_operator_peer_available`**
-  per `RO-LIVE-01.open_obligation`; mechanical bytes-shape claim is
-  closed by the cross-impl pipeline. Four operator-action probe
-  binaries now in the family: `live_consensus_session` (N-B),
-  `live_tx_submission_session` (N-E S6), `live_block_production_session`
-  (N-C S7), `live_block_fetch_session` (N-G S7).
-- **Future obligation: `CE-N-G-8`** — operator-action live evidence
-  for live cross-impl block-fetch acceptance by a real cardano-node
-  peer; reopens on private peer availability.
-- **Future obligation: `CE-N-C-8`** — operator-action live evidence
-  for crypto-level cross-impl block forging; reopens on testnet SPO
-  stake registration availability.
-- **Future obligation: `CE-NODE-N2C-LTX`** — the node-binary
-  cluster's live N2C UDS server + N2N bulk-tx inbound listener;
-  carried from N-E.
-- **Future seam candidate (flagged by N-G close): receive-side
-  header→body bridge** — `ade_node` composition layer joining
-  `process_stream_input` (N-B) + N-A block-fetch **client** + B1
-  `block_validity`. Surface for the next cluster planner.
+- **Cluster PHASE4-N-H (CLOSED + archived at this HEAD; mechanical
+  half + structural cross-impl; Path A admit-only scope)**: the
+  cluster doc + slices `cluster.md, N-H-S{1..6}.md` +
+  `CE-N-H-6_PROCEDURE.md` at
+  `docs/clusters/completed/PHASE4-N-H/`. WIRES AND CLOSES the
+  receive-side header→body bridge end-to-end (admit-only Path A
+  scope): BLUE `AdmittedBlock` token + receive closed sums +
+  `PendingHeaderCache` + `ChainDbWrite` trait (S1), BLUE
+  `receive_apply` reducer composing `block_validity` (S2), GREEN
+  `events_to_state` + `in_memory_chain_write` + session-transcript
+  replay (S3), RED per-peer receive orchestrator + multi-peer
+  independence (S4), mechanical cross-impl pipeline drive (S5),
+  operator-action `live_block_follow_session` probe binary +
+  CE-N-H-6 procedure (S6). Added five CI scripts (count 47 → 52);
+  added six derived / release registry rules (total 196 → 202);
+  strengthened four carried rules + two universal rules.
+  **CE-N-H-6 live-evidence `blocked_until_operator_peer_available`**
+  per `RO-LIVE-02.open_obligation`; mechanical bytes-shape claim is
+  closed by the cross-impl pipeline drive.
+  **`DC-CONS-20` rollback half `declared` with
+  `rollback_side_blocked_until_ledger_snapshot_cluster`** —
+  candidate seam surfaced for the next planner. Five operator-
+  action probe binaries now in the family: `live_consensus_session`
+  (N-B), `live_tx_submission_session` (N-E S6),
+  `live_block_production_session` (N-C S7), `live_block_fetch_session`
+  (N-G S7), `live_block_follow_session` (N-H S6).
+- **Future obligation: `CE-N-H-6`** — operator-action live evidence
+  for live cross-impl follow-mode admission by Ade of cardano-node-
+  served blocks; reopens on private peer availability.
+- **Future obligation: `DC-CONS-20` rollback-half closure** — full
+  rollback authority cluster: BLUE `rollback_apply` chokepoint +
+  ledger-state snapshot store (encode/decode) + replay-forward
+  driver. **Highest-priority next-cluster candidate seam.**
+- **Future obligation: `CE-N-G-8`** — carried.
+- **Future obligation: `CE-N-C-8`** — carried.
+- **Future obligation: `CE-NODE-N2C-LTX`** — carried from N-E.
+- **Future seam candidates (flagged by N-H close)**: full rollback
+  authority cluster (highest priority — DC-CONS-20 rollback half);
+  multi-peer fork choice cluster (sequenced after rollback);
+  N2C local-chain-sync receive surface cluster.
