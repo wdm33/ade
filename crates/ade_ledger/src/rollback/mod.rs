@@ -20,10 +20,12 @@
 //! `open_obligation` naming the follow-on persistent-encoder
 //! cluster.
 
+pub mod commit;
 pub mod error;
 pub mod materialize;
 pub mod traits;
 
+pub use commit::commit_rollback;
 pub use error::{CommitRollbackError, MaterializeError};
 pub use materialize::{materialize_rolled_back_state, TargetPoint};
 pub use traits::{BlockSource, SnapshotReader};

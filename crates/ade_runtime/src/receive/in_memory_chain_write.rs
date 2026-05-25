@@ -48,6 +48,16 @@ impl<'a, D: ChainDb> ChainDbWrite for ChainDbWriter<'a, D> {
             .put_block(&stored)
             .map_err(|e| map_chaindb_err(e, stored.slot, stored.hash))
     }
+
+    fn rollback_to_slot(
+        &mut self,
+        slot: ade_types::SlotNo,
+    ) -> Result<(), ChainWriteError> {
+        self.db.rollback_to_slot(slot).map_err(|e| match e {
+            ChainDbError::Io(_) => ChainWriteError::Underlying(ChainWriteErrorKind::Io),
+            _ => ChainWriteError::Underlying(ChainWriteErrorKind::Other),
+        })
+    }
 }
 
 fn map_chaindb_err(

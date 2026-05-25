@@ -45,12 +45,20 @@ pub enum ChainWriteErrorKind {
 }
 
 /// Narrow trait the receive reducer calls to persist an admitted
-/// block. Single method; the trait is intentionally minimal.
+/// block. Two methods: write (forward admission) + rollback (the
+/// PHASE4-N-I addition; used by the rollback commit helper).
 pub trait ChainDbWrite {
     /// Persist `block` into the underlying chain store. After this
     /// returns `Ok`, the store observes the block at its
     /// `(slot, hash)` key.
     fn write_admitted(&mut self, block: AdmittedBlock) -> Result<(), ChainWriteError>;
+
+    /// Roll the underlying chain store back to `slot`, discarding
+    /// all blocks at slots strictly greater than `slot`. After this
+    /// returns `Ok`, no read operation observes such a block.
+    /// Rolling back beyond the empty tip is `Ok(())` per the
+    /// ChainDb contract. PHASE4-N-I S3 addition.
+    fn rollback_to_slot(&mut self, slot: ade_types::SlotNo) -> Result<(), ChainWriteError>;
 }
 
 #[cfg(test)]
@@ -73,6 +81,12 @@ mod tests {
         fn write_admitted(&mut self, block: AdmittedBlock) -> Result<(), ChainWriteError> {
             self.written.insert(self.next_idx, block.into_bytes());
             self.next_idx += 1;
+            Ok(())
+        }
+        fn rollback_to_slot(
+            &mut self,
+            _slot: ade_types::SlotNo,
+        ) -> Result<(), ChainWriteError> {
             Ok(())
         }
     }

@@ -325,6 +325,12 @@ mod tests {
             self.admitted.push(block.into_bytes());
             Ok(())
         }
+        fn rollback_to_slot(
+            &mut self,
+            _slot: ade_types::SlotNo,
+        ) -> Result<(), ChainWriteError> {
+            Ok(())
+        }
     }
 
     fn fake_tip() -> TipPoint {
