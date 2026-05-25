@@ -2753,7 +2753,10 @@ data).
 """
 source = "docs/planning/ledger-snapshot-rollback-invariants.md §1 (I-8)"
 cross_ref = ["T-DET-01", "DC-PROTO-09"]
-code_locus = ""
-tests = []
-ci_script = ""
-status = "declared"
+code_locus = "crates/ade_runtime/src/rollback/cadence.rs (should_snapshot_after_block pure decision; SnapshotCadence has only the every_n_blocks BLUE-structural field); crates/ade_runtime/src/rollback/in_memory_cache.rs (InMemorySnapshotCache impl SnapshotReader); crates/ade_runtime/src/rollback/chaindb_block_source.rs (ChainDbBlockSource impl BlockSource)"
+tests = ["should_snapshot_after_block_every_n_returns_true_at_cadence", "should_snapshot_after_block_returns_false_off_cadence", "should_snapshot_after_block_returns_false_when_already_at_or_after_slot", "should_snapshot_after_block_is_pure", "snapshot_cadence_default_is_100_blocks", "in_memory_snapshot_cache_nearest_le_returns_largest_key", "in_memory_snapshot_cache_iteration_is_btreemap_ordered"]
+ci_script = "ci/ci_check_snapshot_cadence_purity.sh"
+status = "enforced"
+authority_surface = "snapshot cadence decision + in-memory cache"
+cluster = "PHASE4-N-I"
+evidence = ["should_snapshot_after_block_is_pure replays inputs and asserts identical outputs across two runs.", "CI gate ci_check_snapshot_cadence_purity.sh enforces that SnapshotCadence has exactly one field (every_n_blocks) — no operator-tunable runtime input.", "InMemorySnapshotCache uses BTreeMap iteration only (no HashMap); iteration test pins ordering."]
