@@ -2827,6 +2827,8 @@ tests = [
 ]
 ci_script = "ci/ci_check_snapshot_encoder_closure.sh"
 status = "enforced"
+open_obligation = "snapshot_schema_migration_follow_on_cluster"
+notes = "Schema-version migration tool is the snapshot-format lifecycle home for the v1->v2 (and onward) upgrade path. The current rule already pins the fail-closed posture on unknown versions; the open_obligation captures the missing operator-facing migration tooling. NOT a node-binary concern (PHASE4-N-K DC-NODE-04 deliberately does not carry this)."
 
 [[rules]]
 id = "CN-STORE-08"
@@ -2847,3 +2849,122 @@ ci_script = "ci/ci_check_snapshot_encoder_closure.sh"
 status = "enforced"
 attack_rationale = "A parallel encoder may produce bytes that don't satisfy round-trip equivalence — a corruption attack vector if the wrong encoder is invoked."
 evidence_notes = "Enforcement is type-level (single module hosts the encoder/decoder pair) + CI grep (no other pub fn returning Vec<u8> from &LedgerState or &PraosChainDepState across the workspace)."
+
+# =============================================================================
+# PHASE4-N-K — Orchestrator + ade_node binary
+# =============================================================================
+#
+# New families introduced by this cluster:
+#   * DC-NODE — derived constraints on the node binary / orchestrator surface
+#               (per-peer isolation, clock injection, cadence fidelity, halt
+#               discipline, shutdown-resume identity).
+#   * CN-NODE — single-authority closures on the node binary surface
+#               (bootstrap).
+#
+# All entries below: status = "declared" at append time; flipped to
+# "enforced" + populated code_locus/tests/ci_script by the implementing
+# slices.
+
+[[rules]]
+id = "CN-NODE-01"
+tier = "release"
+statement = """
+Single bootstrap authority: exactly one pub fn in
+ade_runtime::bootstrap returns the initial
+(LedgerState, PraosChainDepState, ChainDb tip) at node startup.
+Cold-start (genesis-only) and warm-start (snapshot-resume +
+replay-forward) are two branches of the same function — never
+parallel paths. Type-level + CI grep enforcement, mirroring
+CN-STORE-07 / CN-STORE-08.
+"""
+source = "docs/planning/phase4-n-k-orchestrator-binary-invariants.md §1 (I-2)"
+cross_ref = ["CN-STORE-07", "CN-STORE-08", "DC-CONS-21"]
+code_locus = ""
+tests = []
+ci_script = ""
+status = "declared"
+attack_rationale = "A parallel bootstrap path can produce an initial state that disagrees with the canonical materialize+decode authority chain — opening a startup-time chain-divergence vector."
+evidence_notes = "Enforcement will mirror CN-STORE-07's pattern: single pub fn in ade_runtime::bootstrap, type-level + ci/ci_check_bootstrap_closure.sh grep gate."
+
+[[rules]]
+id = "DC-NODE-01"
+tier = "derived"
+statement = """
+Per-peer session isolation: one peer session's failure (decode
+error, validity reject, rollback-too-deep, protocol violation)
+halts only that peer's session. The orchestrator continues
+serving other peers and producing blocks. No cross-peer state
+sharing; each peer session owns its own working memory.
+"""
+source = "docs/planning/phase4-n-k-orchestrator-binary-invariants.md §1 (I-3)"
+cross_ref = ["CN-CONS-08", "DC-CONS-20"]
+code_locus = ""
+tests = []
+ci_script = ""
+status = "declared"
+
+[[rules]]
+id = "DC-NODE-02"
+tier = "derived"
+statement = """
+Persistent-writer cadence fidelity: the orchestrator's
+persistent-snapshot writer calls PersistentSnapshotCache::capture
+only on the schedule emitted by the N-I SnapshotCadence policy.
+No orchestrator-side cadence override; no parallel cadence policy
+in the binary. Snapshot eviction is explicitly out of scope and
+is NOT an obligation of this rule (eviction is a storage concern,
+not node cadence fidelity).
+"""
+source = "docs/planning/phase4-n-k-orchestrator-binary-invariants.md §1 (I-4)"
+cross_ref = ["DC-CONS-21", "DC-STORE-08"]
+code_locus = ""
+tests = []
+ci_script = ""
+status = "declared"
+
+[[rules]]
+id = "DC-NODE-03"
+tier = "derived"
+statement = """
+Clock-injection seam + replay equivalence: the orchestrator
+depends on a Clock trait yielding now() and tick_stream(). No
+SystemTime::now() or tokio::time::Instant::now() reachable from
+the orchestrator core. Replaying the orchestrator core with a
+deterministic Clock and a recorded OrchestratorEvent stream
+against a frozen snapshot store + chaindb produces byte-identical
+final (LedgerState fingerprint, PraosChainDepState, ChainDb tip)
+across runs.
+"""
+source = "docs/planning/phase4-n-k-orchestrator-binary-invariants.md §1 (I-5)"
+cross_ref = ["T-DET-01"]
+code_locus = ""
+tests = []
+ci_script = ""
+status = "declared"
+
+[[rules]]
+id = "DC-NODE-04"
+tier = "derived"
+statement = """
+Authority-fatal halt + shutdown-resume identity: authoritative
+errors (chain_write failure on a committed rollback,
+SnapshotDecodeError::UnknownVersion or FingerprintMismatch during
+bootstrap) halt the binary deterministically with a non-zero
+exit code — no silent retry, no fallback decode. Clean shutdown
+drains the admit/write/snapshot pipeline to a quiescent point
+(bounded — no waiting indefinitely for peer sessions) and writes
+a final snapshot via the persistent writer; restarting against
+the same (chaindb, snapshot store) produces a byte-identical
+initial (LedgerState, PraosChainDepState, ChainDb tip).
+
+Schema-version migration (snapshot v1 -> v2 upgrade tooling) is
+the snapshot-format lifecycle concern of DC-STORE-09, NOT a
+shutdown-semantics concern of this rule. This rule does NOT carry
+that open_obligation.
+"""
+source = "docs/planning/phase4-n-k-orchestrator-binary-invariants.md §1 (I-6, I-7)"
+cross_ref = ["DC-CONS-20", "DC-CONS-21", "DC-STORE-09"]
+code_locus = ""
+tests = []
+ci_script = ""
+status = "declared"
