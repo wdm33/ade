@@ -5,18 +5,8 @@
 // - Explicit state transitions only
 // - Canonical serialization for all persisted/hashed data
 
-#![deny(unsafe_code)]
+//! GREEN file-backed Ade-native WAL (PHASE4-N-M-A S3).
 
-pub mod bootstrap;
-pub mod bootstrap_anchor;
-pub mod chaindb;
-pub mod clock;
-pub mod consensus;
-pub mod network;
-pub mod orchestrator;
-pub mod producer;
-pub mod receive;
-pub mod recovery;
-pub mod rollback;
-pub mod seed_import;
-pub mod wal;
+pub mod file_wal_store;
+
+pub use file_wal_store::FileWalStore;

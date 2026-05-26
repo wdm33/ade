@@ -31,7 +31,7 @@ status = "enforced"
 authority_surface = "BLUE authoritative state transitions"
 cluster = "CL-LEDGER-VERDICT"
 evidence = ["crates/ade_testkit/tests/ledger_determinism.rs uses ade_ledger::fingerprint for byte-identical state comparison across all 7 eras", "crates/ade_testkit/tests/consensus_stream_replay.rs replays the canonical chain-selector stream twice and asserts byte-identical event lists and final orchestrator state — closes T-DET-01 for the consensus subset"]
-strengthened_in = ["PHASE4-N-B", "PHASE4-B1", "PHASE4-B2", "PHASE4-N-C", "PHASE4-N-G", "PHASE4-N-H", "PHASE4-N-I", "PHASE4-N-J", "PHASE4-N-K", "PHASE4-N-L"]
+strengthened_in = ["PHASE4-N-B", "PHASE4-B1", "PHASE4-B2", "PHASE4-N-C", "PHASE4-N-G", "PHASE4-N-H", "PHASE4-N-I", "PHASE4-N-J", "PHASE4-N-K", "PHASE4-N-L", "PHASE4-N-M-A"]
 
 [[rules]]
 id = "T-ENC-01"
@@ -2560,7 +2560,7 @@ ci_script = "ci/ci_check_admitted_block_closure.sh, ci/ci_check_receive_reducer_
 status = "enforced"
 authority_surface = "receive-side block admission gate"
 cluster = "PHASE4-N-H"
-strengthened_in = ["PHASE4-N-I", "PHASE4-N-K", "PHASE4-N-L"]
+strengthened_in = ["PHASE4-N-I", "PHASE4-N-K", "PHASE4-N-L", "PHASE4-N-M-A"]
 evidence = ["AdmittedBlock has a private constructor reachable only from admit_via_block_validity. The reducer's BlockDelivered branch runs admit_via_block_validity, persists through ChainDbWrite, and only then commits state. Failure on validity invalid leaves state unchanged (test receive_apply_block_delivered_validity_invalid_rejects).", "RollBackward returns RollbackOutOfScope per Path A scope; receive state stays consistent (test receive_apply_rollback_returns_out_of_scope).", "ChainDbWrite trait takes AdmittedBlock by value; no path persists raw bytes.", "PHASE4-N-I strengthening: admit + rollback symmetry — every rollback materializes via the same block_validity authority (replay-forward fold composes block_validity per block). materialize_rolled_back_state is the SOLE pub fn returning (LedgerState, PraosChainDepState) — CN-STORE-07 mirrors this admission gate for the rollback path.", "PHASE4-N-K strengthening: admit path now driven end-to-end by the production orchestrator (orchestrator::core::step) via the GREEN dispatch_*_inbound wrappers. The orchestrator never reconstructs AdmittedBlock and never bypasses receive_apply; per-peer dispatch errors halt only that peer (DC-NODE-01)."]
 attack_rationale = "A peer that can sneak unvalidated bytes into our ChainDb pollutes the ledger downstream and forces divergence from the rest of the network."
 evidence_notes = "Enforcement is type-level: AdmittedBlock token has a private constructor reachable only from a block_validity::Valid branch; the ChainDb-write wrapper takes AdmittedBlock by value. AdmittedBlock is deliberately a distinct type from AcceptedBlock to keep producer/receive gates non-interfering."
@@ -3333,10 +3333,22 @@ no per-call fallback; no silent partial seed.
 """
 source = "docs/planning/phase4-n-m-ledger-seed-invariants.md §1 (I-A1)"
 cross_ref = ["CN-NODE-01", "CN-STORE-07", "CN-STORE-08"]
-code_locus = ""
-tests = []
-ci_script = ""
-status = "declared"
+code_locus = "crates/ade_runtime/src/seed_import/importer.rs, crates/ade_runtime/src/seed_import/json.rs"
+tests = [
+    "crates/ade_runtime/src/seed_import/importer.rs::tests::utxo_seed_parses_minimal_two_entry_fixture",
+    "crates/ade_runtime/src/seed_import/importer.rs::tests::utxo_seed_two_imports_byte_identical",
+    "crates/ade_runtime/src/seed_import/importer.rs::tests::utxo_seed_btree_order_independent_of_json_order",
+    "crates/ade_runtime/src/seed_import/importer.rs::tests::utxo_seed_rejects_unparseable_json",
+    "crates/ade_runtime/src/seed_import/importer.rs::tests::utxo_seed_rejects_bad_txin_key",
+    "crates/ade_runtime/src/seed_import/importer.rs::tests::utxo_seed_rejects_bad_address",
+    "crates/ade_runtime/src/seed_import/importer.rs::tests::utxo_seed_inline_datum_entry_round_trips",
+    "crates/ade_runtime/src/seed_import/importer.rs::tests::utxo_seed_reference_script_fails_fast",
+    "crates/ade_runtime/src/seed_import/importer.rs::tests::utxo_seed_canonical_txout_address_extracted",
+]
+ci_script = "ci/ci_check_seed_import_closure.sh"
+status = "enforced"
+strengthened_in = ["PHASE4-N-M-A"]
+evidence_notes = "PHASE4-N-M-A S1 (2026-05-26) shipped `ade_runtime::seed_import::import_cardano_cli_json_utxo` as the SOLE pub fn converting cardano-cli `query utxo --whole-utxo` output → Ade canonical (UTxOState, UtxoFingerprint). Smoke against real preprod docker UTxO dump: 128/129 entries parse cleanly (1 reference-script entry fail-fast per honest scope). ci/ci_check_seed_import_closure.sh enforces workspace-wide single-pub-fn discipline."
 
 [[rules]]
 id = "DC-SEED-01"
@@ -3350,10 +3362,16 @@ UtxoFingerprint byte-identically across runs.
 """
 source = "docs/planning/phase4-n-m-ledger-seed-invariants.md §1 (I-A2)"
 cross_ref = ["T-DET-01", "CN-SEED-01"]
-code_locus = ""
-tests = []
-ci_script = ""
-status = "declared"
+code_locus = "crates/ade_runtime/src/seed_import/importer.rs"
+tests = [
+    "crates/ade_runtime/src/seed_import/importer.rs::tests::utxo_seed_two_imports_byte_identical",
+    "crates/ade_runtime/src/seed_import/importer.rs::tests::utxo_seed_btree_order_independent_of_json_order",
+    "crates/ade_runtime/src/seed_import/importer.rs::tests::utxo_seed_inline_datum_entry_round_trips",
+]
+ci_script = "ci/ci_check_seed_import_closure.sh"
+status = "enforced"
+strengthened_in = ["PHASE4-N-M-A"]
+evidence_notes = "PHASE4-N-M-A S1 (2026-05-26): UtxoFingerprint = Blake2b-256 over canonical CBOR map(N) [TxIn → TxOut_raw] in BTreeMap iteration order. Source-order independence verified on real preprod data: shuffled JSON keys produce byte-identical fingerprints."
 
 [[rules]]
 id = "CN-ANCHOR-01"
@@ -3369,10 +3387,18 @@ field is a compile error.
 """
 source = "docs/planning/phase4-n-m-ledger-seed-invariants.md §1 (I-A3)"
 cross_ref = ["CN-SEED-01", "CN-NODE-01"]
-code_locus = ""
-tests = []
-ci_script = ""
-status = "declared"
+code_locus = "crates/ade_runtime/src/bootstrap_anchor.rs, crates/ade_ledger/src/bootstrap_anchor/anchor.rs"
+tests = [
+    "crates/ade_runtime/src/bootstrap_anchor.rs::tests::mint_composes_inputs_byte_identically",
+    "crates/ade_runtime/src/bootstrap_anchor.rs::tests::mint_then_round_trip_via_canonical_cbor",
+    "crates/ade_runtime/src/bootstrap_anchor.rs::tests::mint_carries_seed_point_correctly",
+    "crates/ade_runtime/src/bootstrap_anchor.rs::tests::mint_propagates_utxo_fingerprint_into_anchor",
+    "crates/ade_ledger/src/bootstrap_anchor/anchor.rs::tests::bootstrap_anchor_match_is_exhaustive",
+]
+ci_script = "ci/ci_check_bootstrap_anchor_closure.sh"
+status = "enforced"
+strengthened_in = ["PHASE4-N-M-A"]
+evidence_notes = "PHASE4-N-M-A S2 (2026-05-26): mint is the SOLE pub fn producing a BootstrapAnchor; type-system enforces all 6 fields at construction (no Default impl, no #[non_exhaustive]). ci/ci_check_bootstrap_anchor_closure.sh enforces single-mint + single-codec authority + no-Default + no-non_exhaustive."
 
 [[rules]]
 id = "DC-ANCHOR-01"
@@ -3384,10 +3410,20 @@ the encoded bytes; unknown version on decode is fail-fast.
 """
 source = "docs/planning/phase4-n-m-ledger-seed-invariants.md §7 (#5)"
 cross_ref = ["CN-ANCHOR-01", "DC-CONS-21"]
-code_locus = ""
-tests = []
-ci_script = ""
-status = "declared"
+code_locus = "crates/ade_ledger/src/bootstrap_anchor/anchor.rs"
+tests = [
+    "crates/ade_ledger/src/bootstrap_anchor/anchor.rs::tests::bootstrap_anchor_round_trips_via_canonical_cbor",
+    "crates/ade_ledger/src/bootstrap_anchor/anchor.rs::tests::bootstrap_anchor_encode_two_runs_byte_identical",
+    "crates/ade_ledger/src/bootstrap_anchor/anchor.rs::tests::bootstrap_anchor_decode_rejects_unknown_version",
+    "crates/ade_ledger/src/bootstrap_anchor/anchor.rs::tests::bootstrap_anchor_decode_rejects_trailing_bytes",
+    "crates/ade_ledger/src/bootstrap_anchor/anchor.rs::tests::bootstrap_anchor_decode_rejects_short_buffer",
+    "crates/ade_ledger/src/bootstrap_anchor/anchor.rs::tests::bootstrap_anchor_decode_rejects_wrong_outer_array_length",
+    "crates/ade_ledger/src/bootstrap_anchor/anchor.rs::tests::bootstrap_anchor_decode_rejects_short_hash",
+]
+ci_script = "ci/ci_check_bootstrap_anchor_closure.sh"
+status = "enforced"
+strengthened_in = ["PHASE4-N-M-A"]
+evidence_notes = "PHASE4-N-M-A S2 (2026-05-26): canonical CBOR with SCHEMA_VERSION=1; encode/decode is the SOLE pub pair; fail-fast on unknown version, wrong array length, short hash, trailing bytes."
 
 [[rules]]
 id = "CN-WAL-01"
@@ -3400,10 +3436,16 @@ by convention.
 """
 source = "docs/planning/phase4-n-m-ledger-seed-invariants.md §1 (I-A4)"
 cross_ref = ["CN-CONS-08", "CN-STORE-07"]
-code_locus = ""
-tests = []
-ci_script = ""
-status = "declared"
+code_locus = "crates/ade_ledger/src/wal/store_trait.rs, crates/ade_runtime/src/wal/file_wal_store.rs"
+tests = [
+    "crates/ade_runtime/src/wal/file_wal_store.rs::tests::file_wal_store_append_then_read_all_round_trips",
+    "crates/ade_runtime/src/wal/file_wal_store.rs::tests::file_wal_store_reopens_existing_directory_and_preserves_entries",
+    "crates/ade_runtime/src/wal/file_wal_store.rs::tests::file_wal_store_rotates_at_max_bytes_when_forced",
+]
+ci_script = "ci/ci_check_wal_append_only.sh"
+status = "enforced"
+strengthened_in = ["PHASE4-N-M-A"]
+evidence_notes = "PHASE4-N-M-A S3 (2026-05-26): WalStore trait declares only `append` + `read_all` + `verify_chain`. FileWalStore impl adds no extra mutation methods. ci/ci_check_wal_append_only.sh enforces workspace-wide."
 
 [[rules]]
 id = "DC-WAL-01"
@@ -3416,10 +3458,12 @@ out-of-trait).
 """
 source = "docs/planning/phase4-n-m-ledger-seed-invariants.md §1 (I-A4)"
 cross_ref = ["CN-WAL-01"]
-code_locus = ""
+code_locus = "crates/ade_ledger/src/wal/store_trait.rs"
 tests = []
-ci_script = ""
-status = "declared"
+ci_script = "ci/ci_check_wal_append_only.sh"
+status = "enforced"
+strengthened_in = ["PHASE4-N-M-A"]
+evidence_notes = "PHASE4-N-M-A S3 (2026-05-26): CI greps every wal/*.rs file for `fn truncate|rewrite|replace|delete|clear`; trait surface explicitly enumerated. The append-only property is a type-level fact, not a runtime convention."
 
 [[rules]]
 id = "DC-WAL-02"
@@ -3433,10 +3477,16 @@ Verify failure is authority-fatal at the binary boundary.
 """
 source = "docs/planning/phase4-n-m-ledger-seed-invariants.md §1 (I-A5)"
 cross_ref = ["CN-WAL-01", "T-DET-01"]
-code_locus = ""
-tests = []
+code_locus = "crates/ade_ledger/src/wal/store_trait.rs, crates/ade_ledger/src/wal/replay.rs"
+tests = [
+    "crates/ade_runtime/src/wal/file_wal_store.rs::tests::file_wal_store_verify_chain_passes_then_catches_break",
+    "crates/ade_ledger/src/wal/replay.rs::tests::replay_from_anchor_catches_chain_break",
+    "crates/ade_runtime/tests/wal_replay_from_anchor.rs::wal_replay_from_anchor_rejects_chain_break",
+]
 ci_script = ""
-status = "declared"
+status = "enforced"
+strengthened_in = ["PHASE4-N-M-A"]
+evidence_notes = "PHASE4-N-M-A S3+S4 (2026-05-26): WalStore::verify_chain walks every entry asserting prior_fp == previous post_fp (anchor's initial_ledger_fingerprint for the first entry). ChainBreak is authority-fatal; tests prove the verifier catches injected corruption."
 
 [[rules]]
 id = "DC-WAL-03"
@@ -3452,10 +3502,18 @@ test.
 """
 source = "docs/planning/phase4-n-m-ledger-seed-invariants.md §1 (I-A6)"
 cross_ref = ["T-DET-01", "CN-WAL-01", "CN-CONS-08"]
-code_locus = ""
-tests = []
+code_locus = "crates/ade_ledger/src/wal/replay.rs, crates/ade_runtime/tests/wal_replay_from_anchor.rs"
+tests = [
+    "crates/ade_runtime/tests/wal_replay_from_anchor.rs::wal_replay_from_anchor_two_runs_byte_identical",
+    "crates/ade_runtime/tests/wal_replay_from_anchor.rs::wal_replay_from_anchor_post_fp_matches_wal_tail",
+    "crates/ade_runtime/tests/wal_replay_from_anchor.rs::wal_replay_from_anchor_persists_across_reopen",
+    "crates/ade_ledger/src/wal/replay.rs::tests::replay_from_anchor_three_entry_chain_ok",
+    "crates/ade_ledger/src/wal/replay.rs::tests::replay_from_anchor_two_runs_byte_identical",
+]
 ci_script = ""
-status = "declared"
+status = "enforced"
+strengthened_in = ["PHASE4-N-M-A"]
+evidence_notes = "PHASE4-N-M-A S4 (2026-05-26): integration test wal_replay_from_anchor_two_runs_byte_identical proves the runtime contract `same anchor + same inputs + same WAL → byte-identical outputs`. Final ledger fingerprint equals WAL[N].post_fp; persists across FileWalStore reopen."
 
 [[rules]]
 id = "RO-GENESIS-REPLAY-01"
