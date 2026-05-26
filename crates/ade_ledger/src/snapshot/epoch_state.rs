@@ -26,15 +26,14 @@
 use std::collections::BTreeMap;
 
 use ade_codec::cbor::{
-    read_any_int, read_array_header, read_bytes, read_map_header, write_array_header,
-    write_bytes_canonical, write_map_header, write_uint_canonical, ContainerEncoding, IntWidth,
+    canonical_width, read_any_int, read_array_header, read_bytes, read_map_header,
+    write_array_header, write_bytes_canonical, write_map_header, write_uint_canonical,
+    ContainerEncoding, IntWidth,
 };
 use ade_types::tx::{Coin, PoolId};
 use ade_types::{EpochNo, Hash28, SlotNo};
 
-use crate::epoch::{
-    GoSnapshot, MarkSnapshot, SetSnapshot, SnapshotState, StakeSnapshot,
-};
+use crate::epoch::{GoSnapshot, MarkSnapshot, SetSnapshot, SnapshotState, StakeSnapshot};
 use crate::state::EpochState;
 
 use super::error::{SnapshotDecodeError, StructuralReason};
@@ -43,7 +42,10 @@ const FIELDS: u64 = 7;
 
 pub fn encode_epoch_state(state: &EpochState) -> Vec<u8> {
     let mut buf = Vec::new();
-    write_array_header(&mut buf, ContainerEncoding::Definite(FIELDS, IntWidth::Inline));
+    write_array_header(
+        &mut buf,
+        ContainerEncoding::Definite(FIELDS, IntWidth::Inline),
+    );
     write_uint_canonical(&mut buf, state.epoch.0);
     write_uint_canonical(&mut buf, state.slot.0);
     write_snapshot_state(&mut buf, &state.snapshots);
@@ -51,7 +53,10 @@ pub fn encode_epoch_state(state: &EpochState) -> Vec<u8> {
     write_uint_canonical(&mut buf, state.treasury.0);
     write_map_header(
         &mut buf,
-        ContainerEncoding::Definite(state.block_production.len() as u64, IntWidth::Inline),
+        ContainerEncoding::Definite(
+            state.block_production.len() as u64,
+            canonical_width(state.block_production.len() as u64),
+        ),
     );
     for (pool, count) in &state.block_production {
         write_bytes_canonical(&mut buf, &pool.0 .0);
@@ -119,7 +124,10 @@ fn write_stake_snapshot(buf: &mut Vec<u8>, s: &StakeSnapshot) {
     // delegations: map Hash28 -> array(2)[PoolId, Coin]
     write_map_header(
         buf,
-        ContainerEncoding::Definite(s.delegations.len() as u64, IntWidth::Inline),
+        ContainerEncoding::Definite(
+            s.delegations.len() as u64,
+            canonical_width(s.delegations.len() as u64),
+        ),
     );
     for (cred, (pool, coin)) in &s.delegations {
         write_bytes_canonical(buf, &cred.0);
@@ -130,7 +138,10 @@ fn write_stake_snapshot(buf: &mut Vec<u8>, s: &StakeSnapshot) {
     // pool_stakes: map PoolId -> Coin
     write_map_header(
         buf,
-        ContainerEncoding::Definite(s.pool_stakes.len() as u64, IntWidth::Inline),
+        ContainerEncoding::Definite(
+            s.pool_stakes.len() as u64,
+            canonical_width(s.pool_stakes.len() as u64),
+        ),
     );
     for (pool, coin) in &s.pool_stakes {
         write_bytes_canonical(buf, &pool.0 .0);
@@ -138,10 +149,7 @@ fn write_stake_snapshot(buf: &mut Vec<u8>, s: &StakeSnapshot) {
     }
 }
 
-fn read_stake_snapshot(
-    bytes: &[u8],
-    o: &mut usize,
-) -> Result<StakeSnapshot, SnapshotDecodeError> {
+fn read_stake_snapshot(bytes: &[u8], o: &mut usize) -> Result<StakeSnapshot, SnapshotDecodeError> {
     expect_array(bytes, o, 2)?;
     let delegations_n = match read_map_header(bytes, o).map_err(SnapshotDecodeError::Cbor)? {
         ContainerEncoding::Definite(n, _) => n,
@@ -198,11 +206,7 @@ fn read_pool_id(bytes: &[u8], o: &mut usize) -> Result<PoolId, SnapshotDecodeErr
     Ok(PoolId(Hash28(arr)))
 }
 
-fn expect_array(
-    bytes: &[u8],
-    o: &mut usize,
-    expected_len: u64,
-) -> Result<(), SnapshotDecodeError> {
+fn expect_array(bytes: &[u8], o: &mut usize, expected_len: u64) -> Result<(), SnapshotDecodeError> {
     let enc = read_array_header(bytes, o).map_err(SnapshotDecodeError::Cbor)?;
     match enc {
         ContainerEncoding::Definite(n, _) if n == expected_len => Ok(()),
@@ -225,8 +229,10 @@ mod tests {
 
     fn make_stake_snapshot(seed: u8) -> StakeSnapshot {
         let mut s = StakeSnapshot::new();
-        s.delegations.insert(Hash28([seed; 28]), (pool(seed + 1), Coin(1_000)));
-        s.delegations.insert(Hash28([seed + 1; 28]), (pool(seed + 2), Coin(2_000)));
+        s.delegations
+            .insert(Hash28([seed; 28]), (pool(seed + 1), Coin(1_000)));
+        s.delegations
+            .insert(Hash28([seed + 1; 28]), (pool(seed + 2), Coin(2_000)));
         s.pool_stakes.insert(pool(seed + 1), Coin(1_000));
         s.pool_stakes.insert(pool(seed + 2), Coin(2_000));
         s

@@ -25,8 +25,8 @@
 //! All containers definite-length; BTreeMap iteration only.
 
 use ade_codec::cbor::{
-    read_any_int, read_array_header, read_bytes, write_array_header, write_bytes_canonical,
-    write_null, write_uint_canonical, ContainerEncoding, IntWidth,
+    canonical_width, read_any_int, read_array_header, read_bytes, write_array_header,
+    write_bytes_canonical, write_null, write_uint_canonical, ContainerEncoding, IntWidth,
 };
 use ade_codec::CodecError;
 use ade_core::consensus::praos_state::{Nonce, OpCertCounterMap, PraosChainDepState};
@@ -36,9 +36,7 @@ use super::error::{SnapshotDecodeError, SnapshotEncodeError, StructuralReason};
 
 const FIELDS: u64 = 9;
 
-pub fn encode_chain_dep(
-    cd: &PraosChainDepState,
-) -> Result<Vec<u8>, SnapshotEncodeError> {
+pub fn encode_chain_dep(cd: &PraosChainDepState) -> Result<Vec<u8>, SnapshotEncodeError> {
     let mut buf = Vec::new();
     write_array_header(
         &mut buf,
@@ -127,7 +125,7 @@ fn read_opt_u64(bytes: &[u8], o: &mut usize) -> Result<Option<u64>, SnapshotDeco
 fn write_op_cert_counters(buf: &mut Vec<u8>, m: &OpCertCounterMap) {
     write_array_header(
         buf,
-        ContainerEncoding::Definite(m.len() as u64, IntWidth::Inline),
+        ContainerEncoding::Definite(m.len() as u64, canonical_width(m.len() as u64)),
     );
     for ((pool, kes_period), counter) in m.iter() {
         // Inner: array(3) [bytes(28) pool, uint kes_period, uint counter].
@@ -162,21 +160,15 @@ fn read_op_cert_counters(
         }
         let mut pool = [0u8; 28];
         pool.copy_from_slice(&pool_bytes);
-        let (kes_period, _isn, _w) =
-            read_any_int(bytes, o).map_err(SnapshotDecodeError::Cbor)?;
-        let (counter, _isn2, _w2) =
-            read_any_int(bytes, o).map_err(SnapshotDecodeError::Cbor)?;
+        let (kes_period, _isn, _w) = read_any_int(bytes, o).map_err(SnapshotDecodeError::Cbor)?;
+        let (counter, _isn2, _w2) = read_any_int(bytes, o).map_err(SnapshotDecodeError::Cbor)?;
         // upsert_strict is fine for fresh decode (each key unique).
         let _ = map.upsert_strict(Hash28(pool), kes_period, counter);
     }
     Ok(map)
 }
 
-fn expect_array(
-    bytes: &[u8],
-    o: &mut usize,
-    expected_len: u64,
-) -> Result<(), SnapshotDecodeError> {
+fn expect_array(bytes: &[u8], o: &mut usize, expected_len: u64) -> Result<(), SnapshotDecodeError> {
     let enc = read_array_header(bytes, o).map_err(SnapshotDecodeError::Cbor)?;
     match enc {
         ContainerEncoding::Definite(n, _) if n == expected_len => Ok(()),
@@ -207,15 +199,9 @@ mod tests {
         s.last_epoch_block = Some(EpochNo(576));
         s.last_slot = Some(SlotNo(163_900_801));
         s.last_block_no = Some(BlockNo(9876));
-        let _ = s
-            .op_cert_counters
-            .upsert_strict(Hash28([0xAA; 28]), 5, 100);
-        let _ = s
-            .op_cert_counters
-            .upsert_strict(Hash28([0xAA; 28]), 6, 101);
-        let _ = s
-            .op_cert_counters
-            .upsert_strict(Hash28([0xBB; 28]), 5, 50);
+        let _ = s.op_cert_counters.upsert_strict(Hash28([0xAA; 28]), 5, 100);
+        let _ = s.op_cert_counters.upsert_strict(Hash28([0xAA; 28]), 6, 101);
+        let _ = s.op_cert_counters.upsert_strict(Hash28([0xBB; 28]), 5, 50);
         s
     }
 
@@ -251,8 +237,7 @@ mod tests {
         let truncated = &bytes[..bytes.len() - 1];
         let err = decode_chain_dep(truncated).expect_err("must reject truncated");
         match err {
-            SnapshotDecodeError::Cbor(_)
-            | SnapshotDecodeError::Structural { .. } => {}
+            SnapshotDecodeError::Cbor(_) | SnapshotDecodeError::Structural { .. } => {}
             other => panic!("expected Cbor or Structural, got {other:?}"),
         }
     }
@@ -261,10 +246,7 @@ mod tests {
     fn chain_dep_decode_rejects_wrong_array_length() {
         // Build an array(8) instead of array(9).
         let mut bytes = Vec::new();
-        write_array_header(
-            &mut bytes,
-            ContainerEncoding::Definite(8, IntWidth::Inline),
-        );
+        write_array_header(&mut bytes, ContainerEncoding::Definite(8, IntWidth::Inline));
         for _ in 0..8 {
             write_null(&mut bytes);
         }

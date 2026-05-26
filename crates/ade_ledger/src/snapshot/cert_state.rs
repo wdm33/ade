@@ -25,8 +25,9 @@
 use std::collections::BTreeMap;
 
 use ade_codec::cbor::{
-    read_any_int, read_array_header, read_bytes, read_map_header, write_array_header,
-    write_bytes_canonical, write_map_header, write_uint_canonical, ContainerEncoding, IntWidth,
+    canonical_width, read_any_int, read_array_header, read_bytes, read_map_header,
+    write_array_header, write_bytes_canonical, write_map_header, write_uint_canonical,
+    ContainerEncoding, IntWidth,
 };
 use ade_types::shelley::cert::StakeCredential;
 use ade_types::tx::{Coin, PoolId};
@@ -40,11 +41,17 @@ const FIELDS: u64 = 5;
 
 pub fn encode_cert_state(state: &CertState) -> Vec<u8> {
     let mut buf = Vec::new();
-    write_array_header(&mut buf, ContainerEncoding::Definite(FIELDS, IntWidth::Inline));
+    write_array_header(
+        &mut buf,
+        ContainerEncoding::Definite(FIELDS, IntWidth::Inline),
+    );
     // 1. registrations
     write_map_header(
         &mut buf,
-        ContainerEncoding::Definite(state.delegation.registrations.len() as u64, IntWidth::Inline),
+        ContainerEncoding::Definite(
+            state.delegation.registrations.len() as u64,
+            canonical_width(state.delegation.registrations.len() as u64),
+        ),
     );
     for (cred, coin) in &state.delegation.registrations {
         write_stake_credential(&mut buf, cred);
@@ -53,7 +60,10 @@ pub fn encode_cert_state(state: &CertState) -> Vec<u8> {
     // 2. delegations
     write_map_header(
         &mut buf,
-        ContainerEncoding::Definite(state.delegation.delegations.len() as u64, IntWidth::Inline),
+        ContainerEncoding::Definite(
+            state.delegation.delegations.len() as u64,
+            canonical_width(state.delegation.delegations.len() as u64),
+        ),
     );
     for (cred, pool) in &state.delegation.delegations {
         write_stake_credential(&mut buf, cred);
@@ -62,7 +72,10 @@ pub fn encode_cert_state(state: &CertState) -> Vec<u8> {
     // 3. rewards
     write_map_header(
         &mut buf,
-        ContainerEncoding::Definite(state.delegation.rewards.len() as u64, IntWidth::Inline),
+        ContainerEncoding::Definite(
+            state.delegation.rewards.len() as u64,
+            canonical_width(state.delegation.rewards.len() as u64),
+        ),
     );
     for (cred, coin) in &state.delegation.rewards {
         write_stake_credential(&mut buf, cred);
@@ -71,7 +84,10 @@ pub fn encode_cert_state(state: &CertState) -> Vec<u8> {
     // 4. pools
     write_map_header(
         &mut buf,
-        ContainerEncoding::Definite(state.pool.pools.len() as u64, IntWidth::Inline),
+        ContainerEncoding::Definite(
+            state.pool.pools.len() as u64,
+            canonical_width(state.pool.pools.len() as u64),
+        ),
     );
     for (pool, params) in &state.pool.pools {
         write_pool_id(&mut buf, pool);
@@ -80,7 +96,10 @@ pub fn encode_cert_state(state: &CertState) -> Vec<u8> {
     // 5. retiring
     write_map_header(
         &mut buf,
-        ContainerEncoding::Definite(state.pool.retiring.len() as u64, IntWidth::Inline),
+        ContainerEncoding::Definite(
+            state.pool.retiring.len() as u64,
+            canonical_width(state.pool.retiring.len() as u64),
+        ),
     );
     for (pool, epoch) in &state.pool.retiring {
         write_pool_id(&mut buf, pool);
@@ -216,7 +235,10 @@ fn write_pool_params(buf: &mut Vec<u8>, p: &PoolParams) {
     // owners: array(N) of bytes(28)
     write_array_header(
         buf,
-        ContainerEncoding::Definite(p.owners.len() as u64, IntWidth::Inline),
+        ContainerEncoding::Definite(
+            p.owners.len() as u64,
+            canonical_width(p.owners.len() as u64),
+        ),
     );
     for owner in &p.owners {
         write_bytes_canonical(buf, &owner.0);
@@ -271,11 +293,7 @@ fn read_pool_params(bytes: &[u8], o: &mut usize) -> Result<PoolParams, SnapshotD
     })
 }
 
-fn expect_array(
-    bytes: &[u8],
-    o: &mut usize,
-    expected_len: u64,
-) -> Result<(), SnapshotDecodeError> {
+fn expect_array(bytes: &[u8], o: &mut usize, expected_len: u64) -> Result<(), SnapshotDecodeError> {
     let enc = read_array_header(bytes, o).map_err(SnapshotDecodeError::Cbor)?;
     match enc {
         ContainerEncoding::Definite(n, _) if n == expected_len => Ok(()),
@@ -318,8 +336,12 @@ mod tests {
 
     fn make_state() -> CertState {
         let mut s = CertState::new();
-        s.delegation.registrations.insert(cred_key(0x10), Coin(2_000_000));
-        s.delegation.registrations.insert(cred_script(0x11), Coin(2_000_000));
+        s.delegation
+            .registrations
+            .insert(cred_key(0x10), Coin(2_000_000));
+        s.delegation
+            .registrations
+            .insert(cred_script(0x11), Coin(2_000_000));
         s.delegation.delegations.insert(cred_key(0x10), pool(0x20));
         s.delegation.rewards.insert(cred_key(0x10), Coin(500_000));
         s.pool.pools.insert(pool(0x20), params(0x20));

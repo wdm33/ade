@@ -29,14 +29,14 @@
 use std::collections::BTreeMap;
 
 use ade_codec::cbor::{
-    read_any_int, read_array_header, read_bytes, read_map_header, write_array_header,
-    write_bytes_canonical, write_map_header, write_uint_canonical, ContainerEncoding, IntWidth,
-    MAJOR_NEGATIVE,
+    canonical_width, read_any_int, read_array_header, read_bytes, read_map_header,
+    write_array_header, write_bytes_canonical, write_map_header, write_uint_canonical,
+    ContainerEncoding, IntWidth, MAJOR_NEGATIVE,
 };
 use ade_codec::CodecError;
+use ade_types::address::Address;
 use ade_types::tx::{Coin, TxIn};
 use ade_types::{Hash28, Hash32};
-use ade_types::address::Address;
 
 use crate::utxo::{TxOut, UTxOState};
 use crate::value::{AssetName, MultiAsset, Value};
@@ -47,7 +47,10 @@ pub fn encode_utxo_state(state: &UTxOState) -> Vec<u8> {
     let mut buf = Vec::new();
     write_map_header(
         &mut buf,
-        ContainerEncoding::Definite(state.utxos.len() as u64, IntWidth::Inline),
+        ContainerEncoding::Definite(
+            state.utxos.len() as u64,
+            canonical_width(state.utxos.len() as u64),
+        ),
     );
     for (tx_in, tx_out) in &state.utxos {
         write_tx_in(&mut buf, tx_in);
@@ -213,13 +216,13 @@ fn read_address(bytes: &[u8], o: &mut usize) -> Result<Address, SnapshotDecodeEr
 fn write_multi_asset(buf: &mut Vec<u8>, ma: &MultiAsset) {
     write_map_header(
         buf,
-        ContainerEncoding::Definite(ma.0.len() as u64, IntWidth::Inline),
+        ContainerEncoding::Definite(ma.0.len() as u64, canonical_width(ma.0.len() as u64)),
     );
     for (policy, assets) in &ma.0 {
         write_bytes_canonical(buf, &policy.0);
         write_map_header(
             buf,
-            ContainerEncoding::Definite(assets.len() as u64, IntWidth::Inline),
+            ContainerEncoding::Definite(assets.len() as u64, canonical_width(assets.len() as u64)),
         );
         for (asset_name, qty) in assets {
             write_bytes_canonical(buf, &asset_name.0);
@@ -293,11 +296,7 @@ fn read_int_i64(bytes: &[u8], o: &mut usize) -> Result<i64, SnapshotDecodeError>
 // Common helpers
 // ---------------------------------------------------------------------------
 
-fn expect_array(
-    bytes: &[u8],
-    o: &mut usize,
-    expected_len: u64,
-) -> Result<(), SnapshotDecodeError> {
+fn expect_array(bytes: &[u8], o: &mut usize, expected_len: u64) -> Result<(), SnapshotDecodeError> {
     let enc = read_array_header(bytes, o).map_err(SnapshotDecodeError::Cbor)?;
     match enc {
         ContainerEncoding::Definite(n, _) if n == expected_len => Ok(()),
@@ -436,6 +435,9 @@ mod tests {
         };
         let a = encode_utxo_state(&make_a());
         let b = encode_utxo_state(&make_b());
-        assert_eq!(a, b, "encoder must depend only on BTreeMap content, not insert order");
+        assert_eq!(
+            a, b,
+            "encoder must depend only on BTreeMap content, not insert order"
+        );
     }
 }
