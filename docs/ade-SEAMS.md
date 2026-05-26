@@ -3,106 +3,103 @@
 > **Status:** Living architectural document. Regenerated; not hand-edited.
 > Per-project instance of `~/.claude/methodology/templates/seams.md`.
 
-> 11 crates, **61 CI checks** at HEAD (`1946573`).
+> 11 crates, **66 CI checks** at HEAD (`d62c2bc`).
 > Reads CODEMAP for the module list and TCB colors; reads the invariant
-> registry (`docs/ade-invariant-registry.toml` — **214 entries**) for
+> registry (`docs/ade-invariant-registry.toml` — **223 entries**) for
 > rule IDs; reads the Phase 4 cluster plan
 > (`docs/active/phase_4_cluster_plan.md`), the closed N-D / N-A / N-B /
-> N-E / N-C / N-G / N-H / N-I / N-J / B1 / B2 / B3 / B4 / B5 cluster
-> docs, the OQ5 / COMMITTEE / DREP / ENACTMENT-COMMITTEE-FIDELITY /
+> N-E / N-C / N-G / N-H / N-I / N-J / N-K / B1 / B2 / B3 / B4 / B5
+> cluster docs, the OQ5 / COMMITTEE / DREP / ENACTMENT-COMMITTEE-FIDELITY /
 > ENACTMENT-COMMITTEE-WRITEBACK / PROPOSAL-PROCEDURES-DECODE cluster
-> docs, and the **just-closed PHASE4-N-K cluster doc + CLOSURE
-> record** (`docs/clusters/completed/PHASE4-N-K/{cluster,CLOSURE}.md`).
+> docs, and the **just-closed PHASE4-N-L cluster doc + CLOSURE
+> record** (`docs/clusters/completed/PHASE4-N-L/{cluster,CLOSURE}.md`).
 >
-> **This is the PHASE4-N-K FULL CLOSE refresh (HEAD `1946573`).** The
-> previous SEAMS (HEAD `f15102f`) pinned the PHASE4-N-J full-close
-> state and surfaced "orchestrator-side persistent-capture wiring" as
-> a Tier-5 candidate. PHASE4-N-K supersedes that candidate by shipping
-> the entire orchestrator + node binary: `ade_runtime::bootstrap`,
-> `ade_runtime::clock`, `ade_runtime::orchestrator::{event, state,
-> core}`, `ade_runtime::rollback::persistent_writer`, the RED
-> tokio-runner trio (`peer_session`, `leadership_session`,
-> `n2n_server_pump`), and the `ade_node` binary
-> (`cli`, `lib`, `node`, `main`).
+> **This is the PHASE4-N-L FULL CLOSE refresh (HEAD `d62c2bc`).** The
+> previous SEAMS (HEAD `1946573`) pinned the PHASE4-N-K full-close
+> state and surfaced "live Ouroboros mux + handshake driver above
+> `MuxTransport`" as the highest-priority operator-action follow-on
+> (`RO-LIVE-01`/`RO-LIVE-02`). **PHASE4-N-L mechanically closes the
+> wire-layer half of that candidate** by shipping the session reducer
+> + handshake driver + mux pump + n2n dialer + keep-alive session,
+> and demotes the live-pass half to a single one-slice follow-on
+> cluster tracked on `RO-LIVE-03` (renamed from -01/-02; both
+> previous ids subsumed by the new live-pass obligation).
 >
-> **THE KEY FULL-CLOSE DELTAS.** PHASE4-N-K introduces **five new
-> seams** — all non-BLUE — that bind the existing BLUE authority
-> surface into a runnable node:
+> **THE KEY FULL-CLOSE DELTAS.** PHASE4-N-L introduces **five new
+> seams** — all non-BLUE — that bind the existing closed-grammar
+> wire codecs into a running session over a real TCP socket:
 >
-> 1. **Clock seam (DC-NODE-03).** `ade_runtime::clock::Clock` trait at
->    `crates/ade_runtime/src/clock.rs`. Production impl `SystemClock`
->    is the SOLE wall-clock-reading site in `ade_runtime`;
->    test/replay impl `DeterministicClock` drives the replay harness.
->    CI gate `ci/ci_check_clock_seam.sh` greps the orchestrator core
->    forbidding `SystemTime::now()`/`Instant::now()`/`tokio::time::*`.
-> 2. **Orchestrator event/effect seam (DC-NODE-01, DC-NODE-03).**
->    `ade_runtime::orchestrator::event::{OrchestratorEvent,
->    OrchestratorEffect, OrchestratorError, PeerHaltReason,
->    AuthorityFatalKind, PeerId, PeerRole}` are closed sum types —
->    trait-less, data-only. The seam IS the closed event vocabulary;
->    new event variants require a code change.
-> 3. **Bootstrap seam (CN-NODE-01).**
->    `ade_runtime::bootstrap::bootstrap_initial_state` — single
->    `pub fn` returning `(LedgerState, PraosChainDepState,
->    Option<ChainTip>)`. Cold-start (genesis-only) and warm-start
->    (snapshot-resume + replay-forward) are TWO BRANCHES OF THE SAME
->    FUNCTION, never a parallel entry point. CI gate
->    `ci/ci_check_bootstrap_closure.sh`.
-> 4. **Persistent writer cadence seam (DC-NODE-02).**
->    `ade_runtime::rollback::persistent_writer::PersistentSnapshotWriter`
->    (`on_admitted` + `force_capture`) is the SOLE caller of
->    `PersistentSnapshotCache::capture` from cadence-driven decisions;
->    the cadence policy itself remains in
->    `ade_runtime::rollback::cadence::should_snapshot_after_block`
->    (single source). CI gate
->    `ci/ci_check_persistent_writer_no_parallel_cadence.sh`.
-> 5. **Authority-fatal exit code seam (DC-NODE-04).**
->    `ade_node::node::{EXIT_AUTHORITY_FATAL_IO = 10,
->    EXIT_AUTHORITY_FATAL_DECODE = 12, EXIT_GENERIC_STARTUP = 1}` is
->    the closed exit-code surface. New fatal kinds slot in via
->    additions to `AuthorityFatalKind` (closed sum) + mapping in
->    `NodeRunError::exit_code`. CI gate
->    `ci/ci_check_node_binary_uses_single_bootstrap.sh`.
+> 1. **Mux session reducer seam (CN-SESS-03).**
+>    `ade_network::session::core::step` is the **SOLE pub fn reducing
+>    `(SessionState, ByteChunkIn) -> Result<Vec<SessionEffect>,
+>    SessionError>`** in the workspace. `ByteChunkIn`, `SessionEffect`,
+>    `SessionError` are closed sum types — no runtime extension; no
+>    `#[non_exhaustive]`. Enforced by
+>    `ci/ci_check_session_core_closure.sh`.
+> 2. **Mini-protocol id registry seam (DC-SESS-02).**
+>    `ade_network::session::event::AcceptedMiniProtocol` is a closed
+>    enum with `from_id` that closes with `_ => None`. Adding a
+>    mini-protocol is a SINGLE-variant addition + a SINGLE match-arm
+>    addition at the dispatch site. Enforced by
+>    `ci/ci_check_mini_protocol_id_registry_closed.sh`.
+> 3. **Transport seam (CN-SESS-02).**
+>    `ade_network::session::handshake_driver::Transport` is a **sync**
+>    trait. Test impl: in-memory `Pipe` pair. Production impl:
+>    `BlockingTransport` bridging from the tokio duplex mpsc channels
+>    (runs inside `tokio::task::spawn_blocking`). The trait keeps the
+>    handshake driver async-free.
+> 4. **`MuxTransportHandle` full-duplex seam (DC-SESS-04).**
+>    `ade_network::mux::transport::MuxTransportHandle` carries a
+>    bounded `mpsc::Receiver<Vec<u8>>` (inbound) + a bounded
+>    `mpsc::Sender<Vec<u8>>` (outbound) + reader/writer
+>    `JoinHandle`s. Overflow → `TransportError::BackpressureExceeded`
+>    (fail-fast — no silent drop). `DuplexCapacity::DEFAULT { 1024,
+>    256, 16384 }` is pinned at compile time.
+> 5. **Keep-alive cadence seam (DC-SESS-05).**
+>    `KeepAliveCadence::DEFAULT { interval_ms: 60_000 }` is pinned at
+>    compile time; operator-tunable cadence is **forbidden** in this
+>    cluster (mirrors `SnapshotCadence::DEFAULT` discipline). The
+>    session is driven by `ade_runtime::clock::Clock` — reuses and
+>    extends the PHASE4-N-K Clock seam end-to-end into the wire
+>    layer.
 >
-> **No new BLUE seams. No new registry extension points beyond the
-> closed sums above. The cluster does NOT introduce any "plugin"-style
-> registry — all orchestrator routing is closed-sum dispatch.** The
-> previous SEAMS revision's highest-priority candidate
-> ("orchestrator-side persistent-capture wiring") is **subsumed and
-> closed** by N-K: `PersistentSnapshotWriter` is the production
-> cadence-driven persistent-capture caller; the older
-> `maybe_capture_snapshot`/`InMemorySnapshotCache` hook still exists
-> in `snapshot_writer.rs` for the receive-side hot path, and the
-> persistent path now runs in parallel inside the orchestrator core
-> via `PersistentSnapshotWriter::on_admitted`.
+> **A new live-evidence seam (operator-action) is also opened:**
+> `ade_node --peer ADDR --listen ADDR` now functionally connects to
+> a real cardano-node peer. This **closes the operator-facing "binary
+> that idles" gap from N-K** and opens **`RO-LIVE-03`** (live
+> tip-following pass) as the new
+> `blocked_until_operator_peer_available` obligation, subsuming the
+> N-K-flagged `RO-LIVE-01`/`RO-LIVE-02`.
 >
-> Counts at this refresh: **+6 CI scripts** (55 → 61:
-> `ci_check_bootstrap_closure.sh`, `ci_check_clock_seam.sh`,
-> `ci_check_orchestrator_core_purity.sh`,
-> `ci_check_persistent_writer_no_parallel_cadence.sh`,
-> `ci_check_peer_session_isolation.sh`,
-> `ci_check_node_binary_uses_single_bootstrap.sh`); **+5 registry
-> rules** introduced (`CN-NODE-01`, `DC-NODE-01`, `DC-NODE-02`,
-> `DC-NODE-03`, `DC-NODE-04` — all `enforced`); **6 carried rules
-> strengthened** (`T-DET-01`, `CN-CONS-08`, `CN-STORE-07`,
-> `CN-STORE-08`, `DC-CONS-21`, `DC-STORE-08` each gain
-> `strengthened_in += PHASE4-N-K`); **1 carried rule gains a new
-> open_obligation** (`DC-STORE-09 +=
-> "snapshot_schema_migration_follow_on_cluster"`); **+8 new GREEN
-> files** (`bootstrap.rs`, `clock.rs`, `orchestrator/{mod, event,
-> state, core}.rs`, `rollback/persistent_writer.rs`,
-> `ade_node/{cli, lib, node}.rs`); **+3 new RED files**
-> (`orchestrator/{peer_session, leadership_session,
-> n2n_server_pump}.rs`); **+4 new integration test files / 7 tests**
-> (`orchestrator_peer_isolation.rs`,
-> `orchestrator_replay_equivalence.rs`,
-> `shutdown_resume_identity.rs`, `authority_fatal_decode.rs`);
-> **0 new operator-action probe binaries**; **0 new BLUE
-> chokepoints**. Total invariant registry: **214 entries** (209 →
-> 214). **One new explicit carried-forward open obligation surfaced
-> by N-K** — `snapshot_schema_migration_follow_on_cluster` on
-> `DC-STORE-09` (snapshot v1→v2 migration tooling; out of node-binary
-> scope).
+> **No new BLUE seams.** The existing closed-grammar wire codecs
+> (mux frame, handshake, chain-sync, block-fetch, keep-alive) are
+> reused unchanged. The session reducer composes them; it does not
+> reinterpret them.
+>
+> Counts at this refresh: **+5 CI scripts** (61 → 66:
+> `ci_check_mux_frame_closure.sh`, `ci_check_handshake_closure.sh`,
+> `ci_check_session_core_closure.sh`,
+> `ci_check_mini_protocol_id_registry_closed.sh`,
+> `ci_check_session_no_unbounded.sh`) + **1 CI script extended**
+> (`ci_check_clock_seam.sh` now covers `ade_network::session/`);
+> **+9 registry rules** flipped or introduced (`CN-SESS-01`,
+> `CN-SESS-02`, `CN-SESS-03`, `DC-SESS-01..05` all `enforced`;
+> `RO-LIVE-03` declared with
+> `open_obligation = "blocked_until_operator_peer_available"`);
+> **4 carried rules strengthened** (`T-DET-01`, `CN-CONS-08`,
+> `DC-NODE-01`, `DC-NODE-03` each gain
+> `strengthened_in += PHASE4-N-L`); **+5 new GREEN files**
+> (`session/{event, state, demux, core, handshake_driver}.rs`);
+> **+1 RED file extended + 3 new RED files**
+> (`mux/transport.rs` extended; `ade_runtime::network::{mux_pump,
+> n2n_dialer}.rs`; `ade_runtime::orchestrator::keep_alive_session.rs`);
+> **+1 new integration test file**
+> (`session_replay_equivalence.rs`); **0 new operator-action probe
+> binaries**; **0 new BLUE chokepoints**. Total invariant registry:
+> **223 entries** (214 → 223 — the `RO-LIVE-01`/`RO-LIVE-02`
+> placeholders are subsumed by `RO-LIVE-03`'s named live-pass
+> obligation rather than retired; deprecation requires major
+> version bump per IDD discipline).
 
 Ade is a Cardano block-producing node. Its closure surface is dominated
 by two facts:
@@ -116,25 +113,23 @@ by two facts:
 
 This document names where the system opens and where it stays closed.
 
-**PHASE4-N-K is fully closed at this HEAD.** The Ade workspace can
-now compose itself into a running node: `bootstrap_initial_state`
-opens persistent storage and returns a byte-identical initial
-`(LedgerState, PraosChainDepState, Option<ChainTip>)` triple from
-either genesis or a persisted snapshot; the pure orchestrator core
-`step(state, event)` dispatches `OrchestratorEvent`s to closed-sum
-effects with per-peer isolation; the RED tokio runner trio drives
-the chain-sync / block-fetch / leadership pumps; `ade_node::main`
-ties it all together with signal handling, shutdown drain, and
-authority-fatal exit-code mapping. The cluster **does not** add new
-BLUE; it composes the BLUE shipped by N-A..N-J.
+**PHASE4-N-L is fully closed at this HEAD.** The Ade workspace can
+now drive a real Ouroboros session: `ade_node` opens a TCP socket
+against a real cardano-node peer, the n2n_dialer drives the
+handshake to a negotiated version, the mux_pump bridges the duplex
+`MuxTransportHandle` into the closed-sum `OrchestratorEvent`
+stream, the session reducer demuxes mini-protocol frames, and the
+keep-alive session emits clock-driven liveness pings. The cluster
+**does not** add new BLUE; it composes the BLUE shipped by N-A..N-K
+and the closed-grammar wire codecs.
 
-**PHASE4-N-J remains fully closed** (carried). **PHASE4-N-I remains
-fully closed** (carried). **PHASE4-N-H remains fully closed**
-(carried). **PHASE4-N-G remains fully closed** (carried).
-**PHASE4-N-C remains fully closed** (carried).
-**PHASE4-N-E remains fully closed** (carried).
-**PROPOSAL-PROCEDURES-DECODE remains fully closed** (carried).
-**PHASE4-B3..B5, OQ5 / COMMITTEE / DREP /
+**PHASE4-N-K remains fully closed** (carried). **PHASE4-N-J remains
+fully closed** (carried). **PHASE4-N-I remains fully closed**
+(carried). **PHASE4-N-H remains fully closed** (carried).
+**PHASE4-N-G remains fully closed** (carried). **PHASE4-N-C remains
+fully closed** (carried). **PHASE4-N-E remains fully closed**
+(carried). **PROPOSAL-PROCEDURES-DECODE remains fully closed**
+(carried). **PHASE4-B3..B5, OQ5 / COMMITTEE / DREP /
 ENACTMENT-COMMITTEE-WRITEBACK** all remain closed (carried).
 
 ---
@@ -146,104 +141,115 @@ ENACTMENT-COMMITTEE-WRITEBACK** all remain closed (carried).
 > ingress surfaces (block bytes, Plutus script bytes, snapshot bytes,
 > Ouroboros mux frames, genesis JSON bundles, chain-selector stream
 > inputs, the N-E wire-level mempool ingress, and the N-H receive-side
-> N2N peer ingress). **PHASE4-N-K adds no new external ingress
-> surface in the wire-format sense** — its surfaces are
-> **process-boundary internal**: the OS signal stream (SIGINT/SIGTERM),
-> the CLI argv vector, and the `OrchestratorEvent` stream consumed by
-> the pure orchestrator core. The chain-sync / block-fetch mux pumps
-> are runner glue that defers to the N-G / N-H BLUE chokepoints
-> shipped earlier.
+> N2N peer ingress). **PHASE4-N-L adds one *new external-surface
+> driver* — the live N2N TCP socket attached via `--peer ADDR`** —
+> but does NOT add a new wire-format ingress; the bytes still reduce
+> through `mux::frame::decode_frame` (carried, unchanged) into
+> closed mini-protocol message enums.
 >
-> **N-K, however, formalises THE INTERNAL EVENT SEAM** between the RED
-> tokio runner and the GREEN orchestrator core. The seam is the closed
-> sum type `OrchestratorEvent` (variants include peer-source RX
-> events, slot-tick from `Clock`, server-pump events, persistent
-> writer notifications, and shutdown signal). The runner translates
-> RED-side asynchrony into events; the core reduces events
-> deterministically. Replay equivalence under `DeterministicClock`
-> is the binding contract (DC-NODE-03).
+> **N-L formalises THE WIRE-LAYER SESSION SEAM** between raw socket
+> bytes and the closed-sum `OrchestratorEvent` stream consumed by
+> the GREEN orchestrator core. The seam is the closed sum trio
+> `ByteChunkIn` / `SessionEffect` / `SessionError` plus the closed
+> reducer `session::core::step`. The mux_pump translates RED-side
+> tokio async into `ByteChunkIn`; the reducer demuxes
+> mini-protocol frames deterministically; the result is dispatched
+> back through the existing N-K `OrchestratorEvent` stream. Replay
+> equivalence under a recorded `ByteChunkIn` corpus is the binding
+> contract (DC-SESS-03).
 
-### Surface: Process-boundary node entry (NEW in PHASE4-N-K — CN-NODE-01 + DC-NODE-04)
+### Surface: Live N2N TCP peer ingress (NEW in PHASE4-N-L — CN-SESS-01..03 + DC-SESS-01..05)
 
 ```
-Surface: argv + ENV + on-disk genesis bundle + on-disk ChainDb +
-         on-disk SnapshotStore + OS signal stream
-Reduces to: bootstrap_initial_state(...) →
-            (LedgerState, PraosChainDepState, Option<ChainTip>)
-         followed by run_node_until_shutdown(...) → Result<(), NodeRunError>
-         where NodeRunError::exit_code() maps deterministically to
-         EXIT_AUTHORITY_FATAL_IO (10) | EXIT_AUTHORITY_FATAL_DECODE (12)
-         | EXIT_GENERIC_STARTUP (1)
+Surface: a TCP socket connected to a real cardano-node peer
+         (initiator: --peer ADDR; responder: --listen ADDR)
+Reduces to: ByteChunkIn { mini_protocol: AcceptedMiniProtocol, bytes: Vec<u8> }
+         (after Handshaking → Connected transition)
+         then: closed mini-protocol message via existing decode_* chokepoint
+         then: existing OrchestratorEvent::PeerRx* variant (carried from N-K)
 Pipeline (fixed step ordering — no reorder, no shortcut):
-  1. RED ade_node::cli — parse argv (clap-style), load config bundle.
-  2. RED ade_node::main — install signal handlers (Ctrl-C / SIGTERM),
-     init tokio runtime.
-  3. GREEN bootstrap_initial_state — single-authority init.
-     Cold-start: parse genesis, derive initial LedgerState +
-                 PraosChainDepState, ChainTip = None.
-     Warm-start: open SnapshotStore, find nearest snapshot via
-                 PersistentSnapshotCache, decode bytes via
-                 framing::decode_snapshot, ChainTip from ChainDb
-                 head. Restart-safety: re-running bootstrap against
-                 the same (chaindb, snapshot store) returns a
-                 byte-identical triple.
-  4. RED tokio_runner::* — spawn per-peer session + leadership
-     session + n2n_server_pump tasks; wire each to a shared
-     OrchestratorEvent mpsc channel.
-  5. GREEN orchestrator::core::step — pure (state, event) →
-     (state', Vec<OrchestratorEffect>).
-  6. RED runner dispatches OrchestratorEffects (socket writes,
-     ChainDb commits, PersistentSnapshotWriter::on_admitted,
-     PeerSessionHalted task cancellation).
-  7. RED shutdown drain — on signal, drive the admit/write/snapshot
-     pipeline to a quiescent state, then force_capture a final
-     snapshot, then close peer sockets.
-  8. GREEN exit-code mapping — NodeRunError::exit_code maps
-     authority-fatal categories to the closed exit-code surface;
-     SnapshotDecodeError::UnknownVersion / FingerprintMismatch at
-     bootstrap exits non-zero deterministically.
-Cross-surface state sharing: per-peer state stays fully independent
-  (PeerSessionHalted closed reason discriminant; sibling peers
-  + producer continue). Bootstrap and writer share the persistent
-  SnapshotStore via PersistentSnapshotCache (single production
-  consumer; the in-memory cache is the receive-side hot path
-  carried from N-I unchanged).
+  1. RED ade_runtime::network::n2n_dialer — open TCP socket; spawn
+     reader + writer tasks into a bounded duplex
+     (DuplexCapacity::DEFAULT { 1024, 256, 16384 }) returning a
+     MuxTransportHandle.
+  2. RED handshake_driver (via BlockingTransport bridge over the
+     duplex mpsc channels, in tokio::task::spawn_blocking) — drives
+     the closed-grammar N2N handshake_transition to a negotiated
+     version. Reuses ade_network::handshake unchanged.
+  3. On handshake success → emit OrchestratorEvent::PeerConnected
+     {peer_id, role, negotiated_version}.
+  4. RED ade_runtime::network::mux_pump — per-connection tokio
+     task. Reads inbound Vec<u8> chunks from MuxTransportHandle.rx
+     and feeds them as ByteChunkIn into session::core::step.
+  5. GREEN session::core::step — demuxes via FrameBuffer; routes
+     by AcceptedMiniProtocol; emits SessionEffect::*. Pure; sync;
+     wall-clock-free.
+  6. RED mux_pump dispatches SessionEffect to OrchestratorEvent
+     translation + writes outbound bytes via the bounded outbound
+     mpsc::Sender. Overflow → TransportError::BackpressureExceeded
+     (fail-fast; closes the peer's task; sibling peers continue).
+  7. RED keep_alive_session — Clock-driven (Clock::tick_stream;
+     DC-NODE-03 reused) cadence pump emitting
+     OrchestratorEvent::OutboundKeepAlive {peer_id} at
+     KeepAliveCadence::DEFAULT { interval_ms: 60_000 }.
+Cross-surface state sharing: per-peer state is fully independent
+  — each peer owns its own MuxTransportHandle, FrameBuffer,
+  SessionState, and orchestrator per-peer entry. A peer-session
+  failure halts that peer's pump task only; sibling peers + the
+  producer + the server pump continue (DC-NODE-01 strengthened).
 ```
 
-**Rule (NEW in N-K).** The node binary surface has a SINGLE
-composition root — `bootstrap_initial_state` for init and
-`run_node_until_shutdown` for the drive loop. No parallel entry
-point. New runtime features attach by:
+**Rule (NEW in N-L).** The live-wire surface has a SINGLE session
+reducer — `session::core::step` — and a SINGLE handshake authority —
+`handshake::n2n_transition` / `n2c_transition` — and a SINGLE mux
+frame authority — `mux::frame::{encode,decode}_frame`. Wire-layer
+extension attaches by:
 
-- Adding a new `OrchestratorEvent` variant + matching reducer arm
-  in `orchestrator::core::step` (closed-sum extension — version-gated).
-- Adding a new `OrchestratorEffect` variant + matching runner
-  dispatch arm (closed-sum extension).
-- Adding a new `PeerHaltReason` / `AuthorityFatalKind` variant for
-  newly-discriminated failure modes (closed-sum extension).
-- Adding a new `Clock` impl (today: `DeterministicClock`,
-  `SystemClock`; new impls remain deliberate registry-tracked
-  closed additions — not runtime plug-ins).
+- Adding a new `AcceptedMiniProtocol` variant (closed enum;
+  `from_id` closes with `_ => None`) + a matching `from_id` arm +
+  a matching dispatch arm in `session::core::step` (closed-sum
+  extension; CI-defended by
+  `ci_check_mini_protocol_id_registry_closed.sh`).
+- Adding a new `ByteChunkIn` / `SessionEffect` / `SessionError`
+  variant + matching reducer arm (closed-sum extension; CI-defended
+  by `ci_check_session_core_closure.sh`).
+- Adding a new `Transport` impl alongside `Pipe` /
+  `BlockingTransport` (closed registry-tracked addition; the
+  handshake driver remains sync).
+- Adding a new `KeepAliveCadence` instance is **forbidden in this
+  cluster** — `DEFAULT { interval_ms: 60_000 }` is pinned at
+  compile time per DC-SESS-05.
 
-— **not** by adding a parallel `pub fn` returning the initial
-state triple anywhere outside `bootstrap.rs`, **not** by adding a
-second wall-clock-reading site outside `SystemClock`, **not** by
-adding a parallel cadence consultation that bypasses
-`should_snapshot_after_block`, **not** by emitting authority-fatal
-exits with new ad-hoc exit codes outside the closed `EXIT_*`
-constants.
+— **not** by adding a parallel `pub fn` reducing `(SessionState,
+ByteChunkIn)` anywhere outside `session::core`, **not** by adding
+a parallel `encode_frame`/`decode_frame` pair, **not** by allowing
+mini-protocol frames to be delivered while `SessionState ==
+Handshaking` (DC-SESS-01 type-state gate), **not** by introducing
+unbounded mpsc anywhere in the session/mux path (DC-SESS-04;
+CI-defended by `ci_check_session_no_unbounded.sh`), **not** by
+reading the wall clock from any session-layer or keep-alive file
+(DC-SESS-05; CI-defended by `ci_check_clock_seam.sh` extension).
 
-### Surface: Receive-side N2N peer ingress (carried from N-H + N-I + N-J; **per-peer isolation now mechanically tested in N-K**)
+### Surface: Process-boundary node entry (carried from N-K; **now drives a real session in N-L**)
 
-Carried structurally. **N-K effect on this arm:** per-peer dispatch
-is now wrapped by the RED `orchestrator::tokio_runner::peer_session`
-task. Decode/validity errors emit `OrchestratorEffect::PeerSessionHalted
-{ peer_id, reason: PeerHaltReason }` and remove only that peer's
-state from `OrchestratorState::per_peer_{receive,server}`; sibling
-peers and the producer continue. The reducer arm is unchanged at
-the BLUE level — N-K wraps it, never bypasses it. CI gate
-`ci_check_peer_session_isolation.sh` + integration test
-`peer_session_isolation_holds_under_failure` defend DC-NODE-01.
+Carried structurally. **N-L effect:** the `ade_node` binary now
+accepts `--peer ADDR` and `--listen ADDR`; when supplied, the
+production runner spawns `n2n_dialer` (initiator) and/or the
+server pump's listener (responder) which spawn `mux_pump` tasks
+per connected peer. The bootstrap + orchestrator core + persistent
+writer chokepoints are unchanged. Authority-fatal exit codes
+(`EXIT_AUTHORITY_FATAL_IO = 10`, `EXIT_AUTHORITY_FATAL_DECODE = 12`,
+`EXIT_GENERIC_STARTUP = 1`) are unchanged.
+
+### Surface: Receive-side N2N peer ingress (carried from N-H + N-I + N-J + N-K; **N-L wires real bytes end-to-end**)
+
+Carried. **N-L effect:** the receive-side admit path
+(`admit_via_block_validity`) is now driven by **real socket
+bytes** end-to-end via the new session + mux-pump pipeline.
+`CN-CONS-08.strengthened_in += PHASE4-N-L`. Per-peer task
+isolation now extends to the wire layer — each pump task owns its
+own `MuxTransportHandle` + `SessionState`; no shared mutable state.
+`DC-NODE-01.strengthened_in += PHASE4-N-L`.
 
 ### Surfaces carried unchanged from prior revisions
 
@@ -251,71 +257,66 @@ the BLUE level — N-K wraps it, never bypasses it. CI gate
 - **Producer-side block-fetch server-role ingress** (N-G): carried.
 - **Forge-block transition** (N-C): carried.
 - **Self-accept broadcast gate** (N-C): carried.
-- **Scheduler input ingress** (N-C): carried. **N-K note:** now
-  driven by the `orchestrator::tokio_runner::leadership_session`
-  RED pump via `Clock::tick_stream()`; the scheduler chokepoint
-  is unchanged.
+- **Scheduler input ingress** (N-C): carried. Now driven by
+  `leadership_session` via `Clock::tick_stream()` (carried from
+  N-K).
 - **Mempool ingress** (Tier-1 wire-level — N-E): carried.
 - **Conway tx-body `proposal_procedures` sub-grammar** (PP): carried.
 - **Single-tx validity** (B2): carried.
 - **Mempool admission** (Tier-1 gate — B2): carried.
 - **Full block validity** (B1): carried.
-- **Persistent ledger snapshot encoding** (N-J): carried. **N-K
-  effect:** `PersistentSnapshotWriter` is now the production
-  cadence-driven caller of `PersistentSnapshotCache::capture`;
-  `force_capture` is called once during shutdown drain.
-- **Block bytes, Plutus script bytes, Snapshot bytes (N-D layer
-  unchanged), Consensus-input extraction, Ouroboros mux frames,
-  Genesis JSON bundles, Chain-selector stream inputs**: all carried.
+- **Persistent ledger snapshot encoding** (N-J): carried.
+  `PersistentSnapshotWriter` from N-K is the production
+  cadence-driven caller; unchanged.
+- **Block bytes, Plutus script bytes, Snapshot bytes, Consensus-input
+  extraction, Ouroboros mux frames, Genesis JSON bundles,
+  Chain-selector stream inputs**: all carried.
 
-### Receive-side rollback authority (carried from N-I; persistent reader from N-J; **now driven by warm-start bootstrap branch in N-K**)
+### Receive-side rollback authority (carried from N-I + N-J + N-K)
 
-The BLUE chokepoint set (`materialize_rolled_back_state`,
-`commit_rollback`, `RollbackContext`, `ChainDbWrite::rollback_to_slot`)
-is structurally unchanged. **N-K effect:** the warm-start branch of
-`bootstrap_initial_state` is now a production caller of
-`materialize_rolled_back_state` (via the persistent
-`SnapshotReader` impl from N-J); this strengthens `CN-STORE-07`
-without changing the chokepoint.
+The BLUE chokepoint set
+(`materialize_rolled_back_state`, `commit_rollback`,
+`RollbackContext`, `ChainDbWrite::rollback_to_slot`) is structurally
+unchanged. **N-L effect:** the receive-side rollback path is now
+exercised end-to-end against real peer bytes once a live N2N
+session is established. `T-DET-01.strengthened_in += PHASE4-N-L`
+— byte-stream → orchestrator-event determinism now proven
+end-to-end via the session reducer.
 
 ### Candidates — surfaces not yet wired
 
-- **N-K SUBSUMED AND CLOSED the prior revision's
-  "orchestrator-side persistent-capture wiring" candidate** —
-  `PersistentSnapshotWriter` is the production cadence-driven
-  capture caller; `force_capture` runs on shutdown drain.
-- **NEW CANDIDATE (flagged by N-K close): snapshot schema migration
-  v1 → v2** *(promoted from N-J seam-only flag to a `DC-STORE-09`
-  `open_obligation` at N-K close)* — `framing::SCHEMA_VERSION:
-  u32 = 1` is the explicit anchor; first new field appended bumps
-  to 2. Operator-facing migration tooling (read v1 + emit v2; or
-  on-restart auto-upgrade) is the named follow-on cluster's
-  deliverable. Out of node-binary scope; tracked on `DC-STORE-09`.
-- **NEW CANDIDATE (flagged by N-K close): live Ouroboros mux +
-  handshake driver above `ade_network::mux::MuxTransport`.** N-K
-  ships honest-scope RED runner files (`peer_session.rs`,
-  `leadership_session.rs`, `n2n_server_pump.rs`) plus the
-  `ade_node` binary that bootstraps + prints a readiness line; the
-  actual chain-sync / block-fetch socket pump above
-  `MuxTransport` is the follow-on cluster's deliverable. Tracked
-  by `RO-LIVE-01` / `RO-LIVE-02` (live-evidence halves;
-  `blocked_until_operator_peer_available`).
-- **NEW CANDIDATE (flagged by N-K close): metrics + observability
-  surface.** The orchestrator core consumes `OrchestratorEvent`
-  and produces `OrchestratorEffect`; a future cluster threads a
-  closed `MetricEffect` arm + a RED Prometheus exporter through
-  the runner. Tier-5; no BLUE invariants change.
-- **CANDIDATE (carried): snapshot eviction policy** — Tier-5
-  operational concern; carried unchanged from N-J.
-- **CANDIDATE (carried from N-I; now restart-safe via N-J): multi-peer
-  fork choice.** Praos longest-chain across competing
-  `PerPeerReceiveState[]`; now further enabled by N-K's stable
-  per-peer task model.
-- **CANDIDATE (carried): N2C local-chain-sync receive surface.** Unchanged.
-- **CANDIDATE (carried): pre-Conway snapshot encoder.** Carried; no
-  current operational need.
+- **N-L SUBSUMED the prior revision's `RO-LIVE-01`/`RO-LIVE-02`
+  "live mux + handshake driver above `MuxTransport`" candidate
+  pair** — the mechanical wire layer is now shipped. The
+  operator-action live-pass half is **the new
+  `RO-LIVE-03`** (`blocked_until_operator_peer_available`) — a
+  separate one-slice follow-on cluster (`PHASE4-N-L-LIVE`).
+- **CANDIDATE (NEW at N-L close): TLS / authenticated transport.**
+  Declared `¬P-8` in the N-L invariants sketch. Cardano N2N is plain
+  TCP on testnets; the curve25519 auth layer is a future cluster.
+  Out of N-L scope.
+- **CANDIDATE (NEW at N-L close): N2C local protocols.** The session
+  reducer is N2N-scoped; the N2C local-chain-sync / local-tx-submission
+  / local-state-query family are tracked under
+  `CE-NODE-N2C-LTX` (carried) and a future N2C session cluster.
+- **CANDIDATE (NEW at N-L close): peer-sharing + tx-submission live
+  half.** Tx-submission's live half requires mempool integration
+  (PHASE4-N-E) as a precondition; tracked.
+- **CANDIDATE (carried from N-K): snapshot schema migration v1 → v2
+  tooling** (`DC-STORE-09.open_obligation`).
+- **CANDIDATE (carried from N-K): metrics + observability surface.**
+  The orchestrator core consumes `OrchestratorEvent` and produces
+  `OrchestratorEffect`; a future cluster threads a closed
+  `MetricEffect` arm + a RED Prometheus exporter through the
+  runner. Tier-5; no BLUE invariants change.
+- **CANDIDATE (carried): snapshot eviction policy.**
+- **CANDIDATE (carried, now further enabled by N-L live wire):
+  multi-peer fork choice.**
+- **CANDIDATE (carried): pre-Conway snapshot encoder.**
 - **CE-N-H-6 live-evidence — still
-  `blocked_until_operator_peer_available`** (carried).
+  `blocked_until_operator_peer_available`** (carried; **subsumed by
+  `RO-LIVE-03`** in scope — the live pass capturing `RO-LIVE-03`
+  evidence will also capture CE-N-H-6 evidence).
 - **CE-N-G-8 / CE-N-C-8 live-evidence — still
   `blocked_until_operator_*_available`** (carried).
 - **PROPOSAL-PROCEDURES-DECODE remains closed** (carried).
@@ -323,27 +324,29 @@ without changing the chokepoint.
 
 | Cluster | Surface | Expected reduction target | Expected chokepoint | Confidence |
 |---------|---------|---------------------------|---------------------|------------|
-| **PHASE4-N-K** *(FULLY CLOSED at this HEAD — mechanical close; honest-scope RED runner — the mux/handshake driver above `MuxTransport` is RO-LIVE-01/02)* | **Process-boundary node entry: argv + ENV + genesis + ChainDb + SnapshotStore + signals → running node** | `(LedgerState, PraosChainDepState, Option<ChainTip>)` (bootstrap); `Vec<OrchestratorEffect>` per step (orchestrator core); `i32` exit code (process exit) | **DONE:** `ade_runtime::bootstrap::bootstrap_initial_state` (SOLE init `pub fn` — CN-NODE-01); `ade_runtime::clock::{Clock, DeterministicClock, SystemClock}` (DC-NODE-03 seam); `ade_runtime::orchestrator::{event, state, core, mod}` (closed-sum dispatch); `ade_runtime::rollback::persistent_writer::PersistentSnapshotWriter` (DC-NODE-02 single cadence-driven persistent-capture caller); `ade_node::{cli, lib, node, main}` (DC-NODE-04 closed exit-code surface). 6 CI scripts. 5 registry rules `enforced`. 6 carried rules `strengthened_in += PHASE4-N-K`. | **wired & closed in PHASE4-N-K (mechanical half; the live mux driver above `MuxTransport` is RO-LIVE-01/02 — `blocked_until_operator_peer_available`)** |
-| **NEW CANDIDATE — Live Ouroboros mux + handshake driver above `MuxTransport`** *(flagged by N-K close — honest-scope follow-on)* | **Real cardano-node peer drives `ade_node` via N2N socket** | Live `OrchestratorEvent::PeerRx*` events fed by a tokio mux pump bound to `MuxTransport` | Likely a new RED submodule `ade_runtime::network::mux_pump` plus integration with `peer_session`/`n2n_server_pump`. Tracked on `RO-LIVE-01`/`RO-LIVE-02`. | **candidate (operator-action follow-on; `blocked_until_operator_peer_available`)** |
-| **NEW CANDIDATE — Snapshot schema migration v1 → v2 tooling** *(NEW `DC-STORE-09` `open_obligation` at N-K close)* | **Operator-facing upgrade of persisted snapshot bytes** | A separate tool/binary that reads v1 bytes via `framing::decode_snapshot` and re-emits v2 bytes (when v2 lands); or auto-upgrade on restart | Tier-5 operator tooling; closed-version-gated. Out of node-binary scope. | **candidate (next-cluster seam; tracked on `DC-STORE-09`)** |
-| **NEW CANDIDATE — Metrics + observability surface** *(flagged by N-K close)* | **Prometheus-style counters / gauges / histograms emitted from the running node** | Closed `MetricEffect` arm added to `OrchestratorEffect`; RED exporter mapped from runner | Tier-5 wire / Tier-5 semantics; closed-sum extension on the effect type. | **candidate (next-cluster seam; surface)** |
-| **CANDIDATE — Snapshot eviction policy** *(carried from N-J)* | Carried. | Carried. | **candidate (next-cluster seam; surface)** |
-| **CANDIDATE — Multi-peer fork choice (Praos longest-chain across competing peers)** *(carried; now further enabled by N-K stable per-peer task model)* | Carried. | Carried. | **candidate (next-cluster seam; surface)** |
-| **CANDIDATE — N2C local-chain-sync receive surface** *(carried)* | Carried. | Carried. | **candidate (next-cluster seam; surface)** |
-| **CANDIDATE — Pre-Conway snapshot encoder** *(carried from N-J)* | Carried. | Carried. | **candidate (low-priority next-cluster seam; surface)** |
-| **CE-N-H-6 (cross-cluster obligation carried)** | **Live N2N follow-mode admission** | Carried. | Carried. | **carried (`blocked_until_operator_peer_available`)** |
+| **PHASE4-N-L** *(FULLY CLOSED at this HEAD — mechanical close; live operator pass tracked on `RO-LIVE-03`)* | **Live N2N TCP peer ingress: socket bytes → session reducer → orchestrator** | `ByteChunkIn` (mux pump → session reducer); `SessionEffect` (session reducer → mux pump); `OrchestratorEvent::PeerRx*` (mux pump → orchestrator core) | **DONE:** `ade_network::session::core::step` (CN-SESS-03 — SOLE session reducer `pub fn`); `ade_network::session::event::{AcceptedMiniProtocol, ByteChunkIn, SessionEffect, SessionError, HandshakeRole}` (closed sums); `ade_network::session::state::SessionState` (closed type-state); `ade_network::session::demux::FrameBuffer`; `ade_network::session::handshake_driver::Transport` (sync trait — CN-SESS-02); `ade_network::mux::transport::{MuxTransportHandle, TransportError, DuplexCapacity::DEFAULT}` (DC-SESS-04 — bounded fail-fast); `ade_runtime::network::{mux_pump, n2n_dialer}`; `ade_runtime::orchestrator::keep_alive_session` (DC-SESS-05 — `KeepAliveCadence::DEFAULT { interval_ms: 60_000 }`). 5 new CI scripts + 1 extended. 8 registry rules flipped to `enforced`. 4 carried rules `strengthened_in += PHASE4-N-L`. | **wired & closed in PHASE4-N-L (mechanical half; live operator pass is `RO-LIVE-03` — `blocked_until_operator_peer_available`)** |
+| **NEW CANDIDATE — `RO-LIVE-03` live operator pass** *(NEW obligation declared at N-L close; subsumes N-K-flagged `RO-LIVE-01`/`RO-LIVE-02`)* | **Real cardano-node peer drives `ade_node` via N2N socket; capture JSONL evidence log** | Live `OrchestratorEvent::PeerRx*` stream fed by `mux_pump` over real bytes | `ade_node --peer ADDR --listen ADDR` + the `RO-LIVE-03` procedure doc. Tracked on `RO-LIVE-03.open_obligation = "blocked_until_operator_peer_available"`. One-slice follow-on cluster `PHASE4-N-L-LIVE`. | **candidate (operator-action follow-on; `blocked_until_operator_peer_available`)** |
+| **NEW CANDIDATE — TLS / authenticated transport (curve25519 auth layer)** *(declared `¬P-8` in N-L invariants sketch; flagged by N-L close)* | **Authenticated N2N session** | A new `Transport` impl alongside `Pipe`/`BlockingTransport` plus a session-level auth gate | Future cluster; out of N-L scope. | **candidate (next-cluster seam)** |
+| **NEW CANDIDATE — N2C local protocols session driver** *(flagged by N-L close)* | **Local-chain-sync / local-tx-submission / local-state-query over a Unix domain socket** | Similar shape to N2N — a `local_*::transition` family + an N2C-scoped `AcceptedMiniProtocol` parallel | Future cluster; out of N-L scope. Tracked alongside `CE-NODE-N2C-LTX`. | **candidate (next-cluster seam)** |
+| **NEW CANDIDATE — Peer-sharing + tx-submission live half** *(flagged by N-L close)* | **Live tx submission + peer-sharing protocols over an established N-L session** | Existing closed mini-protocol surfaces (peer-sharing, tx-submission) become real over a live session | Future cluster; tx-submission's live half requires mempool integration (PHASE4-N-E) as precondition. | **candidate (next-cluster seam)** |
+| **NEW CANDIDATE — Snapshot schema migration v1 → v2 tooling** *(carried from N-K — `DC-STORE-09` `open_obligation`)* | Carried. | Carried. | **candidate (carried from N-K)** |
+| **NEW CANDIDATE — Metrics + observability surface** *(carried from N-K)* | Carried. | Carried. | **candidate (carried from N-K)** |
+| **CANDIDATE — Snapshot eviction policy** *(carried)* | Carried. | Carried. | **candidate (carried)** |
+| **CANDIDATE — Multi-peer fork choice (Praos longest-chain across competing peers)** *(carried; now further enabled by N-L live wire layer)* | Carried. | Carried. | **candidate (carried)** |
+| **CANDIDATE — Pre-Conway snapshot encoder** *(carried)* | Carried. | Carried. | **candidate (carried)** |
+| **CE-N-H-6 (cross-cluster obligation carried — subsumed by `RO-LIVE-03` in capture scope)** | **Live N2N follow-mode admission** | Carried. | Carried. | **carried (`blocked_until_operator_peer_available`)** |
 | **CE-N-G-8 (cross-cluster obligation carried)** | **Live N2N block-fetch acceptance (Ade serving)** | Carried. | Carried. | **carried (`blocked_until_operator_peer_available`)** |
 | **CE-N-C-8 (cross-cluster obligation carried)** | **Live N2N block-fetch acceptance (Ade forging)** | Carried. | Carried. | **carried (`blocked_until_operator_stake_available`)** |
-| **N-C+ (declared non-goal in N-C cluster doc; OQ-4 lock)** | **TPraos producer (Shelley..Alonzo full-block production)** | Carried. | Carried. | candidate (declared non-goal) |
-| **CE-NODE-N2C-LTX (cross-cluster obligation carried from N-E)** | **Live N2C UDS server + N2N bulk-tx inbound listener** | Carried. | Carried. | **deferred cross-cluster obligation** |
-| **PP OQ-1..OQ-4 (separable seams)** | various | Carried. | Carried. | candidate (carried) |
-| B+ (full tx UTxO scope) | Full-scope single-tx validity over real resolved UTxO | Carried. | Carried. | candidate |
-| B+ (Conway body witness depth) | Conway block-body vkey-witness closure | Carried. | Carried. | candidate (B2-carried) |
-| B+ (pre-Conway tx) | Pre-Conway single-tx validity | Carried. | Carried. | candidate |
-| B1+ (pre-Babbage block) | TPraos full-block validity (Shelley..Alonzo) | Carried. | Carried. | candidate |
+| **N-C+ (declared non-goal in N-C cluster doc; OQ-4 lock)** | Carried. | Carried. | Carried. | candidate (declared non-goal) |
+| **CE-NODE-N2C-LTX (cross-cluster obligation carried from N-E)** | Carried. | Carried. | Carried. | **deferred cross-cluster obligation** |
+| **PP OQ-1..OQ-4 (separable seams)** | Carried. | Carried. | Carried. | candidate (carried) |
+| B+ (full tx UTxO scope) | Carried. | Carried. | Carried. | candidate |
+| B+ (Conway body witness depth) | Carried. | Carried. | Carried. | candidate (B2-carried) |
+| B+ (pre-Conway tx) | Carried. | Carried. | Carried. | candidate |
+| B1+ (pre-Babbage block) | Carried. | Carried. | Carried. | candidate |
 | N-F | LSQ semantic dispatch (LocalStateQuery payloads) | Internal Query enum | Single dispatch fn over opaque-bytes payloads | candidate |
 | N-F | LocalTxMonitor semantic dispatch | Mempool-snapshot Query/Reply enums | Single dispatch fn over opaque-bytes payloads | candidate |
-| N-B+ | Live cardano-node session driver | `StreamInput` translated from `ChainSyncMessage` + `BlockFetchMessage` | Composition layer in `ade_core_interop` | candidate |
+| N-B+ | Live cardano-node session driver (now mechanically closed; live pass is `RO-LIVE-03`) | `StreamInput` translated from `ChainSyncMessage` + `BlockFetchMessage` | Composition layer in `ade_core_interop` | **subsumed by N-L mechanical close** |
 
 ### Operator-action evidence (live-wire artifacts — not BLUE seams)
 
@@ -353,14 +356,15 @@ itself can certify on every push) and a **live-wire operator-action
 half** (a real peer / client at the other end of a real socket
 producing bytes Ade has never seen).
 
-**At this HEAD two live-evidence logs remain committed**, three
-cross-cluster obligations remain `blocked_until_operator_*_available`,
-and one cross-cluster obligation is carried from N-E. **N-K added
-no new operator-action obligation in the wire-format sense** — the
-node binary's external surfaces (genesis bundle, ChainDb, snapshot
-store, signals) are operator-controlled but not peer-driven; the
-peer-driven live cluster is tracked by `RO-LIVE-01`/`RO-LIVE-02`
-(the live mux pump above `MuxTransport`).
+**At this HEAD two live-evidence logs remain committed**, four
+cross-cluster obligations remain `blocked_until_operator_*_available`
+(CE-N-H-6, CE-N-G-8, CE-N-C-8, **and the NEW `RO-LIVE-03`**), and
+one cross-cluster obligation is carried from N-E. **N-L closes the
+mechanical half of the live-wire story** by shipping the session
+reducer + handshake driver + mux pump + n2n dialer + keep-alive
+session and exposing them via `ade_node --peer ADDR --listen ADDR`.
+`RO-LIVE-03` is the operator-action follow-on (one-slice cluster
+`PHASE4-N-L-LIVE`).
 
 | Procedure | Evidence-log artifact | Status at HEAD | What it asserts | TCB |
 |-----------|----------------------|----------------|------------------|-----|
@@ -369,10 +373,12 @@ peer-driven live cluster is tracked by `RO-LIVE-01`/`RO-LIVE-02`
 | `docs/clusters/completed/PHASE4-N-E/CE-N-E-7_PROCEDURE.md` | (deferred) `CE-NODE-N2C-LTX_<date>.log` | **DEFERRED to CE-NODE-N2C-LTX** | Real `cardano-cli transaction submit` to Ade over the N2C UDS | RED operator action (deferred) |
 | `docs/clusters/completed/PHASE4-N-C/CE-N-C-8_PROCEDURE.md` | (pending) `CE-N-C-LIVE_<date>.log` | **`blocked_until_operator_stake_available`** (carried) | Cardano-node accepts an Ade-forged block as the next chain head | RED operator action |
 | `docs/clusters/completed/PHASE4-N-G/CE-N-G-8_PROCEDURE.md` | (pending) `CE-N-G-LIVE_<date>.log` | **`blocked_until_operator_peer_available`** (carried) | A real cardano-node peer issuing `RequestRange` accepts Ade-served bytes | RED operator action |
-| `docs/clusters/completed/PHASE4-N-H/CE-N-H-6_PROCEDURE.md` | (pending) `CE-N-H-LIVE_<date>.log` | **`blocked_until_operator_peer_available`** (carried) | Ade follower fed RollForward + BlockDelivered from a real cardano-node peer produces a matching ChainDb tip | RED operator action |
+| `docs/clusters/completed/PHASE4-N-H/CE-N-H-6_PROCEDURE.md` | (pending) `CE-N-H-LIVE_<date>.log` | **`blocked_until_operator_peer_available`** (carried; subsumed by `RO-LIVE-03` capture scope) | Ade follower fed RollForward + BlockDelivered from a real cardano-node peer produces a matching ChainDb tip | RED operator action |
+| **(NEW in N-L)** `docs/clusters/completed/PHASE4-N-L/RO-LIVE-03_PROCEDURE.md` *(to be written by `PHASE4-N-L-LIVE`)* | (pending) `RO-LIVE-03_<date>.log` | **`blocked_until_operator_peer_available`** | `ade_node --peer ADDR` connects to a real cardano-node peer, drives N2N handshake to a negotiated version, follows tip end-to-end via the session reducer | RED operator action |
 
 **Operator-action probe binaries (RED — `ade_core_interop::bin::*`).**
-At this HEAD there are still **five** such binaries (no N-K addition):
+At this HEAD there are still **five** such binaries (no N-L
+addition):
 
 | Binary | Slice | Live-evidence target | Status |
 |--------|-------|----------------------|--------|
@@ -383,217 +389,222 @@ At this HEAD there are still **five** such binaries (no N-K addition):
 | `live_block_follow_session` (PHASE4-N-H S6) | N-H S6 | CE-N-H-6 | blocked_until_operator_peer_available |
 
 **Pattern carried.** Hermetic default + `--connect <peer>` live pass.
-**N-K has no new entry in this family** — the `ade_node` binary itself
-is not a probe binary; it is the production node entry. The
-peer-driven follow-on (live mux pump) is tracked on
-`RO-LIVE-01`/`RO-LIVE-02`.
+**N-L has no new entry in this family** — the live operator pass
+runs the `ade_node` production binary directly with
+`--peer ADDR --listen ADDR`, not a separate probe binary.
 
 **These are evidence-log patterns, not BLUE seams.**
 
 User confirmation needed for each candidate at cluster entry. **The
 most load-bearing remaining candidates for the bounty** are now
-**RO-LIVE-01/02** (the live mux pump above `MuxTransport` — the
-next post-N-K cluster to write), **CE-N-C-8** (live cardano-node
-forge acceptance), **CE-N-G-8** (live cardano-node block-fetch
-acceptance), **CE-N-H-6** (live cardano-node follow-mode admission),
-**multi-peer fork choice** (now further enabled by N-K stable
-per-peer tasks), **CE-NODE-N2C-LTX**, and the four
-**PROPOSAL-PROCEDURES-DECODE open obligations**.
+**`RO-LIVE-03`** (the live operator pass — the next post-N-L
+cluster to write), **CE-N-C-8** (live cardano-node forge
+acceptance), **CE-N-G-8** (live cardano-node block-fetch
+acceptance), **CE-N-H-6** (live cardano-node follow-mode admission —
+subsumed by `RO-LIVE-03` capture scope), **multi-peer fork choice**
+(now further enabled by N-L live wire), **CE-NODE-N2C-LTX**, and
+the four **PROPOSAL-PROCEDURES-DECODE open obligations**.
 
 ---
 
 ## 2. Data-Only vs. Authoritative Layers
 
-Ade has **twenty** authoritative domains. **PHASE4-N-K added one
-new compositional domain — node orchestration authority** — at the
-GREEN+RED level. No new BLUE chokepoint is introduced; the
-orchestrator composes the BLUE shipped by N-A..N-J. Prior cluster
-narratives are preserved unchanged below.
+Ade has **twenty-one** authoritative domains. **PHASE4-N-L added one
+new compositional domain — wire-layer session authority** — at the
+GREEN+RED level. No new BLUE chokepoint is introduced; the session
+reducer composes the closed mini-protocol codecs + handshake + mux
+frame chokepoints shipped earlier. Prior cluster narratives are
+preserved unchanged.
 
-### Node orchestration authority (NEW in PHASE4-N-K)
+### Wire-layer session authority (NEW in PHASE4-N-L)
 
 | Layer | Module | Color | Role |
 |-------|--------|-------|------|
-| **GREEN bootstrap chokepoint** | `ade_runtime::bootstrap::bootstrap_initial_state` | GREEN | The **SOLE `pub fn` returning the initial `(LedgerState, PraosChainDepState, Option<ChainTip>)` triple** (CN-NODE-01 — CI-defended). Cold-start (genesis-only) and warm-start (snapshot-resume via `PersistentSnapshotCache::nearest_le` → `materialize_rolled_back_state`) are TWO BRANCHES OF THE SAME FUNCTION. Restart-safety contract: re-running against the same `(chaindb, snapshot store)` produces a byte-identical triple. No `HashMap`/wall-clock/`tokio`/`rand` in this file. |
-| **GREEN `Clock` trait + `DeterministicClock` impl** | `ade_runtime::clock::{Clock, DeterministicClock}` | GREEN | The `Clock` seam (DC-NODE-03). Orchestrator core consumes time **only** via `Clock` outputs — never `SystemTime::now()` / `Instant::now()` / `tokio::time::*` directly. `DeterministicClock` drives the replay-equivalence harness; given the same tick vector, two runs produce byte-identical orchestrator outcomes. |
-| **RED `SystemClock` impl** | `ade_runtime::clock::SystemClock` | RED (sub-classified in a GREEN file) | The **SOLE wall-clock-reading site in `ade_runtime`** (DC-NODE-03 — CI-defended). Production-only; reads `SystemTime::now()` once per tick. `ci_check_clock_seam.sh` greps for any other `SystemTime`/`Instant`/`tokio::time` site in `ade_runtime` and fails. |
-| **GREEN closed orchestrator event vocabulary** | `ade_runtime::orchestrator::event::{OrchestratorEvent, OrchestratorEffect, OrchestratorError, PeerHaltReason, AuthorityFatalKind, PeerId, PeerRole}` | GREEN | Closed sum types. Trait-less; data-only. The seam IS the closed vocabulary; new event variants require a code change (no plug-in registry). `PeerHaltReason` is a closed reason-tag (no `String`) — every peer-fatal failure maps to a discriminant. `AuthorityFatalKind` is a closed sum naming exactly the categories that halt the binary (`ChainWriteIo`, `SnapshotDecodeUnknownVersion`, `SnapshotDecodeFingerprintMismatch`, ...). |
-| **GREEN `OrchestratorState` + per-peer collections** | `ade_runtime::orchestrator::state::{OrchestratorState, PerPeerReceiveVersions}` | GREEN | Per-peer state in BTreeMaps keyed by `PeerId` (`per_peer_receive`, `per_peer_server`). Each peer's state is isolated; decode/validity errors emit `OrchestratorEffect::PeerSessionHalted { peer_id, reason }` and remove only that peer's entry. |
-| **GREEN pure reducer** | `ade_runtime::orchestrator::core::step` | GREEN | Pure `(state, event) → (state', Vec<OrchestratorEffect>)`. No `tokio`, no clock reads, no I/O. Replay-equivalent under `DeterministicClock`. |
-| **GREEN persistent writer cadence glue** | `ade_runtime::rollback::persistent_writer::PersistentSnapshotWriter` | GREEN | The **SOLE production caller of `PersistentSnapshotCache::capture` from cadence-driven decisions** (DC-NODE-02 — CI-defended). `on_admitted(slot, &ledger, &chain_dep)` consults `should_snapshot_after_block` exclusively; `force_capture(slot, &ledger, &chain_dep)` runs during shutdown drain. No parallel cadence policy. |
-| **RED tokio runner — per-peer task** | `ade_runtime::orchestrator::peer_session` | RED | Per-peer tokio task wrapping `dispatch_chain_sync_inbound` / `dispatch_block_fetch_inbound` (N-H S4). One task per peer; failure halts that task only. Structural mirror of DC-NODE-01. |
-| **RED tokio runner — leadership session** | `ade_runtime::orchestrator::leadership_session` | RED | Slot-tick pump driven by `Clock::tick_stream()`. Feeds `OrchestratorEvent::SlotTick` events into the orchestrator core. |
-| **RED tokio runner — N2N server pump** | `ade_runtime::orchestrator::n2n_server_pump` | RED | Listening-socket per-connection spawner. Spawns a per-connection tokio task that wraps `dispatch_chain_sync_frame` / `dispatch_block_fetch_frame` (N-G S6). |
-| **RED node binary** | `ade_node::{cli, lib, node, main}` | RED | `cli` parses argv; `node::run_node_until_shutdown` is the SOLE main loop (CN-NODE-01 + DC-NODE-04 — CI-defended); `main` installs signal handlers and drives `run_node_until_shutdown`. Authority-fatal exit codes: `EXIT_AUTHORITY_FATAL_IO = 10`, `EXIT_AUTHORITY_FATAL_DECODE = 12`, `EXIT_GENERIC_STARTUP = 1` (closed surface). `NodeRunError::exit_code` maps each error category deterministically. Shutdown drain force-captures a final snapshot via `PersistentSnapshotWriter::force_capture`. |
-| **CI gates (6 new)** | `ci/ci_check_{bootstrap_closure,clock_seam,orchestrator_core_purity,persistent_writer_no_parallel_cadence,peer_session_isolation,node_binary_uses_single_bootstrap}.sh` | CI | Mechanical defence of the orchestration authority surface. (1) `bootstrap_closure` — exactly one `pub fn` returning the initial triple in `bootstrap.rs`; forbids `HashMap`/wall-clock/`tokio`/`rand` in that file. (2) `clock_seam` — no `SystemTime`/`Instant`/`tokio::time` in orchestrator core; `SystemClock` is the sole wall-clock site. (3) `orchestrator_core_purity` — no `tokio::*` in GREEN orchestrator files. (4) `persistent_writer_no_parallel_cadence` — the only cadence consult in `ade_runtime` is via `should_snapshot_after_block`. (5) `peer_session_isolation` — per-peer halt routes to `PeerSessionHalted` (closed reason discriminant), not a panic. (6) `node_binary_uses_single_bootstrap` — `ade_node` calls `bootstrap_initial_state`, not a parallel init. Total CI count: 55 → 61. |
+| **GREEN session reducer chokepoint** | `ade_network::session::core::step` | GREEN | The **SOLE `pub fn` reducing `(SessionState, ByteChunkIn) -> Result<Vec<SessionEffect>, SessionError>`** (CN-SESS-03 — CI-defended). Pure; sync; wall-clock-free. Demuxes mini-protocol frames via `FrameBuffer`; dispatches by `AcceptedMiniProtocol`; emits closed `SessionEffect`s. Type-state gates handshake-before-traffic (DC-SESS-01) — `SessionState::Handshaking` cannot deliver mini-protocol frames. |
+| **GREEN closed session event vocabulary** | `ade_network::session::event::{AcceptedMiniProtocol, ByteChunkIn, SessionEffect, SessionError, HandshakeRole}` | GREEN | Closed sum types. `AcceptedMiniProtocol::from_id` closes with `_ => None` (DC-SESS-02 — CI-defended). `ByteChunkIn`/`SessionEffect`/`SessionError` carry no `String`; no `#[non_exhaustive]`; no plug-in registry. |
+| **GREEN closed type-state** | `ade_network::session::state::SessionState` | GREEN | Closed enum `{ Handshaking, Connected }`. Type-state encodes the handshake-before-traffic gate; mini-protocol frames are rejected at `Handshaking` (DC-SESS-01). |
+| **GREEN frame demuxer** | `ade_network::session::demux::FrameBuffer` | GREEN | Partial-frame accumulator. Buffers inbound bytes until a complete `mux::frame` boundary is available, then yields a `(mini_protocol_id, payload_bytes)` pair into `step`. Pure; deterministic. |
+| **GREEN handshake driver** | `ade_network::session::handshake_driver::{Transport, run_n2n_handshake_initiator, run_n2n_handshake_responder}` | GREEN | Drives the closed-grammar N2N handshake to a negotiated version. `Transport` is a **sync** trait (CN-SESS-02); test impl: in-memory `Pipe` pair; production impl: `BlockingTransport` bridging the tokio duplex mpsc channels via `tokio::task::spawn_blocking`. Reuses `ade_network::handshake::transition` unchanged. |
+| **RED `MuxTransportHandle` + `spawn_duplex`** | `ade_network::mux::transport::{MuxTransportHandle, TransportError, DuplexCapacity}` | RED | Carries bounded `mpsc::Receiver<Vec<u8>>` (inbound) + bounded `mpsc::Sender<Vec<u8>>` (outbound) + reader/writer `JoinHandle`s. Overflow → `TransportError::BackpressureExceeded` (fail-fast — no silent drop). `DuplexCapacity::DEFAULT { 1024, 256, 16384 }` pinned at compile time (DC-SESS-04). |
+| **RED mux pump** | `ade_runtime::network::mux_pump` | RED | Per-connection tokio task. Reads inbound chunks from `MuxTransportHandle.rx` → calls `session::core::step` → dispatches `SessionEffect`s + writes outbound bytes via the bounded outbound `mpsc::Sender`. Translates RED-side asynchrony into the GREEN session reducer's events; never mutates orchestrator state directly. |
+| **RED n2n dialer** | `ade_runtime::network::n2n_dialer` | RED | Opens outbound TCP, calls `spawn_duplex`, drives the handshake driver via `BlockingTransport`, emits `OrchestratorEvent::PeerConnected` on success, then hands off to `mux_pump`. |
+| **RED keep-alive session** | `ade_runtime::orchestrator::keep_alive_session` | RED | Clock-driven cadence pump emitting `OrchestratorEvent::OutboundKeepAlive { peer_id }` at `KeepAliveCadence::DEFAULT { interval_ms: 60_000 }` (DC-SESS-05). Reuses the N-K `Clock` seam end-to-end into the wire layer. |
+| **CI gates (5 new + 1 extended)** | `ci/ci_check_{mux_frame_closure,handshake_closure,session_core_closure,mini_protocol_id_registry_closed,session_no_unbounded}.sh` + `ci_check_clock_seam.sh` (extended) | CI | (1) `mux_frame_closure` — sole pub `encode_frame`/`decode_frame` pair in `ade_network::mux::frame` (CN-SESS-01). (2) `handshake_closure` — sole pub `n2n_transition`/`n2c_transition` in `ade_network::handshake::transition` (CN-SESS-02). (3) `session_core_closure` — sole pub `step` in `ade_network::session::core`; no `tokio::*` imports in session core files; type-state gate present (CN-SESS-03 + DC-SESS-01 + DC-SESS-05 session-side). (4) `mini_protocol_id_registry_closed` — `AcceptedMiniProtocol::from_id` closes with `_ => None`; no wildcard accept at dispatch (DC-SESS-02). (5) `session_no_unbounded` — no `mpsc::unbounded_*`, no `Vec` growth without bound in mux/session paths (DC-SESS-04). (Extended) `clock_seam` — now also covers `ade_network::session/` for wire-side wall-clock-free guarantee (DC-SESS-05). Total CI count: 61 → 66. |
 
 **Rule.** This domain has:
-- **One GREEN bootstrap chokepoint** (`bootstrap_initial_state` —
-  CN-NODE-01 single-authority).
-- **One Clock seam** (`Clock` trait + `DeterministicClock` GREEN
-  impl + `SystemClock` RED-sub-classified impl — DC-NODE-03).
-- **One closed orchestrator event/effect vocabulary** (closed sums —
+- **One GREEN session reducer** (`session::core::step` — CN-SESS-03
+  single-authority).
+- **One GREEN closed event/effect vocabulary** (`ByteChunkIn` /
+  `SessionEffect` / `SessionError` / `AcceptedMiniProtocol` —
   trait-less, data-only).
-- **One pure reducer** (`orchestrator::core::step`).
-- **One persistent-writer cadence chokepoint**
-  (`PersistentSnapshotWriter` — DC-NODE-02 single-authority).
-- **Three RED tokio runner files** (`peer_session`,
-  `leadership_session`, `n2n_server_pump`).
-- **One RED node binary** with a closed exit-code surface
-  (DC-NODE-04).
-- **Six CI gates** defending the above.
+- **One closed type-state** (`SessionState` — handshake-before-traffic
+  type-state gate; DC-SESS-01).
+- **One GREEN handshake driver** with a sync `Transport` trait + two
+  impls (`Pipe`, `BlockingTransport`).
+- **One RED `MuxTransportHandle`** with pinned `DuplexCapacity::DEFAULT`
+  and fail-fast `TransportError::BackpressureExceeded` (DC-SESS-04).
+- **One RED mux pump** + **one RED n2n dialer** + **one RED keep-alive
+  session**.
+- **Five new CI gates + one extended** defending the above.
 
 **THE KEY SEAMS:**
 
-1. **`bootstrap_initial_state` is the SOLE `pub fn` returning the
-   initial `(LedgerState, PraosChainDepState, Option<ChainTip>)`
-   triple** (CN-NODE-01). CI-defended via repo-wide grep. Cold-start
-   and warm-start are two branches of one function.
-2. **The `Clock` trait is the SOLE time seam in `ade_runtime`**
-   (DC-NODE-03). All time-dependent code (orchestrator core,
-   leadership session, persistent writer cadence) consumes `Clock`
-   outputs; only `SystemClock` reads the wall clock. CI-defended.
-3. **`OrchestratorEvent` / `OrchestratorEffect` is a closed sum
-   pair** (no extension via trait, no plug-in registry). New
-   variants are closed-sum extensions requiring a code change.
-4. **Per-peer state is isolated by `PeerId` in BTreeMaps**
-   (DC-NODE-01). Decode/validity errors map to closed
-   `PeerHaltReason` discriminants and remove only the halted peer.
-   Sibling peers + producer continue. CI-defended.
-5. **`PersistentSnapshotWriter` is the SOLE cadence-driven caller of
-   `PersistentSnapshotCache::capture`** (DC-NODE-02). Cadence
-   policy itself remains in `should_snapshot_after_block` (single
-   source). CI-defended.
-6. **Authority-fatal exit codes are closed**: `EXIT_AUTHORITY_FATAL_IO
-   = 10`, `EXIT_AUTHORITY_FATAL_DECODE = 12`,
-   `EXIT_GENERIC_STARTUP = 1`. `AuthorityFatalKind` is the closed
-   sum of fatal categories; `NodeRunError::exit_code` is the closed
-   mapping. New fatal kinds slot in via additions to the sum (no
-   ad-hoc exit codes).
-7. **Replay-equivalence holds under `DeterministicClock`**
-   (DC-NODE-03). Given a recorded `OrchestratorEvent` corpus, two
-   replays produce byte-identical
-   `(LedgerFingerprint.combined, PraosChainDepState, ChainDb tip)`.
-8. **Shutdown-then-resume is byte-identical** (DC-NODE-04). After
-   `shutdown_drain` force-captures a final snapshot, the next
-   `bootstrap_initial_state` against the same `(chaindb, snapshot
-   store)` returns the same triple.
+1. **`session::core::step` is the SOLE session reducer `pub fn`**
+   (CN-SESS-03). CI-defended via workspace-wide grep. Pure; sync;
+   wall-clock-free.
+2. **`AcceptedMiniProtocol::from_id` closes with `_ => None`**
+   (DC-SESS-02). Adding a mini-protocol is a single-variant addition
+   + a single match-arm addition at the dispatch site. CI-defended.
+3. **`Transport` is a sync trait** (CN-SESS-02). Test impl: in-memory
+   `Pipe` pair. Production impl: `BlockingTransport` bridging the
+   tokio duplex mpsc channels (runs inside
+   `tokio::task::spawn_blocking`). Keeps the handshake driver
+   async-free.
+4. **`MuxTransportHandle` is bounded both ways** (DC-SESS-04).
+   `DuplexCapacity::DEFAULT { 1024, 256, 16384 }` pinned at compile
+   time. Overflow → `TransportError::BackpressureExceeded`
+   (fail-fast — no silent drop). CI-defended by
+   `ci_check_session_no_unbounded.sh`.
+5. **`KeepAliveCadence::DEFAULT { interval_ms: 60_000 }` is pinned at
+   compile time** (DC-SESS-05). Operator-tunable cadence is forbidden
+   in this cluster (mirrors `SnapshotCadence::DEFAULT` discipline).
+   The keep-alive session is driven by the N-K `Clock` seam.
+6. **Type-state gates handshake-before-traffic** (DC-SESS-01).
+   `SessionState::Handshaking` cannot deliver mini-protocol frames;
+   `Connected` is the only state in which the dispatch arms accept
+   payloads.
+7. **Replay equivalence holds under recorded `ByteChunkIn`**
+   (DC-SESS-03). Two replays produce byte-identical
+   `Vec<SessionEffect>` sequences. Proven by
+   `tests/session_replay_equivalence.rs`.
+8. **Per-peer task isolation extends to the wire layer**
+   (DC-NODE-01 strengthening). Each pump task owns its own
+   `MuxTransportHandle` + `FrameBuffer` + `SessionState` + per-peer
+   orchestrator entry; failure halts only that task.
 
-**New work** that adds a node-orchestration feature attaches by:
-- Adding an `OrchestratorEvent`/`OrchestratorEffect` variant +
-  matching reducer arm (closed-sum extension).
-- Adding a `PeerHaltReason`/`AuthorityFatalKind` discriminant
-  (closed-sum extension; if a new `AuthorityFatalKind` warrants a
-  new exit code, append a new `EXIT_*` constant and extend
-  `NodeRunError::exit_code`).
-- Adding a new `Clock` impl (deliberate registry-tracked closed
-  addition — not a runtime plug-in).
-- Adding a new RED runner file under `ade_runtime::orchestrator::*`
-  (e.g. a future `mux_pump.rs` for the live mux driver — see
-  candidate above).
+**New work** that adds a wire-layer feature attaches by:
+- Adding an `AcceptedMiniProtocol` variant + `from_id` arm +
+  dispatch arm in `session::core::step` (closed-sum extension).
+- Adding a `ByteChunkIn` / `SessionEffect` / `SessionError` variant
+  + matching reducer arm (closed-sum extension).
+- Adding a new `Transport` impl alongside `Pipe` / `BlockingTransport`
+  (deliberate registry-tracked closed addition; the handshake driver
+  remains sync).
+- Adding a new RED runner file under `ade_runtime::network::*` (e.g.
+  a future N2C dialer; or a future TLS dialer) following the
+  `n2n_dialer` shape.
 
-— **not** by adding a parallel `pub fn` returning the initial state
-triple outside `bootstrap.rs`, **not** by adding a second wall-clock
-site outside `SystemClock`, **not** by adding a parallel cadence
-consultation that bypasses `should_snapshot_after_block`, **not** by
-bypassing `admit_via_block_validity` / `commit_rollback` /
-`framing::{encode,decode}_snapshot` in the orchestrator, **not** by
-emitting authority-fatal exits with new ad-hoc exit codes, **not** by
-mutating cross-peer state from a peer-session task.
+— **not** by adding a parallel `pub fn` reducing `(SessionState,
+ByteChunkIn)` outside `session::core`, **not** by adding a parallel
+`encode_frame`/`decode_frame` pair, **not** by delivering
+mini-protocol frames in `SessionState::Handshaking`, **not** by
+introducing unbounded mpsc, **not** by reading the wall clock from
+any session-layer or keep-alive file, **not** by adding an
+operator-tunable keep-alive cadence in this cluster.
 
 **Declared non-goals carried from the cluster doc:**
-- Snapshot schema migration v1 → v2 tooling — tracked on
-  `DC-STORE-09.open_obligation =
-  "snapshot_schema_migration_follow_on_cluster"`.
-- Live Ouroboros mux + handshake driver above `MuxTransport` —
-  honest-scope follow-on (`RO-LIVE-01`/`RO-LIVE-02`).
-- Snapshot eviction policy — Tier-5 follow-on, carried from N-J.
-- Metrics/observability surface — Tier-5 follow-on, flagged.
+- TLS / authenticated transport — out of scope (declared `¬P-8` in
+  invariants sketch). Future cluster.
+- N2C local protocols — out of scope. Future cluster (alongside
+  `CE-NODE-N2C-LTX`).
+- Peer-sharing + tx-submission live half — out of scope.
+  Tx-submission's live half requires mempool integration as
+  precondition.
+- Live operator pass (`RO-LIVE-03`) — the mechanical wire layer is
+  ready; running `ade_node` against a private cardano-node peer +
+  capturing the JSONL log is the follow-on cluster's deliverable.
 
-### Persistent ledger snapshot encoding authority (carried unchanged from PHASE4-N-J)
+### Node orchestration authority (carried from PHASE4-N-K)
 
-Carried. **N-K usage:** `bootstrap_initial_state` warm-start branch
-is now a production caller of `framing::decode_snapshot` (via
-`PersistentSnapshotCache::nearest_le`); `PersistentSnapshotWriter`
-is a production caller of `framing::encode_snapshot` (via
-`PersistentSnapshotCache::capture`). `CN-STORE-08`,
-`DC-STORE-08`, `DC-CONS-21` each gain
-`strengthened_in += PHASE4-N-K`.
+Carried. **N-L usage:** the orchestrator core's `OrchestratorEvent`
+stream now receives real peer events end-to-end from the
+`mux_pump` + `n2n_dialer` + `keep_alive_session` RED runners. The
+new `OrchestratorEvent::OutboundKeepAlive { peer_id }` variant is
+added by N-L; the orchestrator core records it (no immediate
+effect — session-layer keep-alive frame encoding is a future
+cluster).
 
-### Receive-side rollback authority (carried unchanged from PHASE4-N-I; N-J persistent reader carried; **bootstrap warm-start branch now drives it**)
+### Persistent ledger snapshot encoding authority (carried from PHASE4-N-J + N-K)
 
-Carried. **N-K note:** `materialize_rolled_back_state` is now a
-production caller from the bootstrap warm-start branch (in addition
-to the existing receive-side caller). `CN-STORE-07` gains
-`strengthened_in += PHASE4-N-K`.
+Carried unchanged.
 
-### Receive-side admission authority (carried unchanged from PHASE4-N-H)
+### Receive-side rollback authority (carried from N-I + N-J + N-K)
 
-Carried. **N-K note:** the admit path is now driven end-to-end by
-the production orchestrator core via `OrchestratorEvent::PeerRx*`
-→ `step` → `OrchestratorEffect::Admit*`. `CN-CONS-08` gains
-`strengthened_in += PHASE4-N-K`.
+Carried. **N-L note:** `T-DET-01.strengthened_in += PHASE4-N-L` —
+byte-stream → orchestrator-event determinism now proven end-to-end
+via the session reducer.
 
-### Producer-side server response authority (carried unchanged from N-G)
+### Receive-side admission authority (carried from PHASE4-N-H + N-K)
 
-Carried.
+Carried. **N-L note:** the admit path is now driven by **real
+socket bytes** end-to-end via the session reducer + mux pump.
+`CN-CONS-08.strengthened_in += PHASE4-N-L`.
 
-### Block production authority (carried unchanged from N-C)
-
-Carried. **N-K note:** the producer scheduler is now driven by
-the `orchestrator::tokio_runner::leadership_session` RED pump
-via `Clock::tick_stream()`. Scheduler chokepoint unchanged.
-
-### Mempool ingress (carried unchanged from N-E)
+### Producer-side server response authority (carried from N-G)
 
 Carried.
 
-### Conway tx-body `proposal_procedures` sub-grammar authority (carried unchanged from PROPOSAL-PROCEDURES-DECODE)
+### Block production authority (carried from N-C + N-K)
+
+Carried.
+
+### Mempool ingress (carried from N-E)
+
+Carried.
+
+### Conway tx-body `proposal_procedures` sub-grammar authority (carried from PROPOSAL-PROCEDURES-DECODE)
 
 Carried.
 
 ### Conway value-conservation accounting / Conway certificate-state accumulation / Credential discriminant fidelity / Conway governance-cert accumulation / Single-tx validity / Mempool admission / Full block validity / Ledger application / Stake-snapshot projection for consensus / Plutus phase-2 evaluation / Governance ratification & enactment / Mini-protocol wire conformance / Praos consensus runtime
 
-All carried unchanged from the prior revision. **N-K-specific
-strengthening:** `T-DET-01` (replay equivalence) now extends across
-the orchestrator core under clock injection.
+All carried unchanged. **N-L-specific strengthening:** `T-DET-01`
+(replay equivalence) now extends through the session reducer
+end-to-end; `CN-CONS-08` (receive admit-path closure) now driven
+by real socket bytes; `DC-NODE-01` (per-peer isolation) now extends
+to the wire layer; `DC-NODE-03` (clock-injection seam) now covers
+keep-alive end-to-end.
 
 ### Where the boundary is enforced
 
 - `ci_check_dependency_boundary.sh` — no BLUE crate may depend on
-  RED. N-K added new edges within `ade_runtime` (a RED crate with
-  per-file color carve-outs): the GREEN orchestrator-core /
-  bootstrap / clock / persistent-writer files import BLUE
-  (`ade_ledger::*`, `ade_core::*`, `ade_codec::*`) but never
-  RED siblings; the RED runner files import the GREEN orchestrator
-  surface but never bypass it. Same direction (RED/GREEN → BLUE)
-  as existing N-C / N-G / N-H / N-I / N-J edges; allowed.
-- `ci_check_no_async_in_blue.sh` — async forbidden in BLUE. N-K
-  added no new BLUE; the orchestrator core + bootstrap are GREEN
-  and explicitly non-async (no `tokio::*`, no `async fn`).
-- **`ci_check_bootstrap_closure.sh`** *(N-K — CN-NODE-01 enforcement)* —
-  asserts exactly one `pub fn bootstrap_initial_state` in
-  `crates/ade_runtime/src/bootstrap.rs` returning the initial
-  triple (or a newtype wrapper). Forbids
-  `HashMap` / wall-clock / `tokio` / `rand` in the bootstrap source.
-- **`ci_check_clock_seam.sh`** *(N-K — DC-NODE-03 enforcement)* —
-  greps that `ade_runtime::orchestrator::core::*` contains no
-  `SystemTime::now()`, `Instant::now()`, `tokio::time::*`, or raw
-  `std::time::*` reads; `SystemClock` is the SOLE wall-clock site.
-- **`ci_check_orchestrator_core_purity.sh`** *(N-K — DC-NODE-03 + general purity)* —
-  greps that GREEN orchestrator files (`core.rs`, `event.rs`,
-  `state.rs`, `mod.rs`) contain no `tokio::*` imports.
-- **`ci_check_persistent_writer_no_parallel_cadence.sh`** *(N-K — DC-NODE-02)* —
-  greps that the only consult of cadence in `ade_runtime` is via
-  `should_snapshot_after_block`.
-- **`ci_check_peer_session_isolation.sh`** *(N-K — DC-NODE-01)* —
-  greps that per-peer halts route to
-  `OrchestratorEffect::PeerSessionHalted` (closed reason
-  discriminant); no `panic!` / `unwrap` in peer-session paths.
-- **`ci_check_node_binary_uses_single_bootstrap.sh`** *(N-K — CN-NODE-01 + DC-NODE-04)* —
-  greps that `ade_node` calls `bootstrap_initial_state` (single
-  init authority) and maps fatal errors via
-  `NodeRunError::exit_code` to the closed exit-code surface.
+  RED. N-L added new edges within `ade_network` (a BLUE-with-per-file-RED-carve-out
+  crate): the GREEN session files import the BLUE mux-frame + handshake
+  + mini-protocol codecs but never the RED `mux::transport` or
+  `bin::capture_*` siblings; the RED `mux::transport` is the only
+  tokio-importing file in `ade_network`. New edge:
+  `ade_runtime::network::{mux_pump, n2n_dialer}` + `ade_runtime::orchestrator::keep_alive_session`
+  depend on `ade_network::{session, mux::transport, handshake}`
+  (GREEN/RED → GREEN/RED within `ade_network`, never reaching into
+  RED siblings inappropriately). Same direction; allowed.
+- `ci_check_no_async_in_blue.sh` — async forbidden in BLUE. N-L
+  added no new BLUE; the session core + event + state + demux +
+  handshake_driver are GREEN and explicitly non-async (no `tokio::*`,
+  no `async fn`).
+- **`ci_check_mux_frame_closure.sh`** *(N-L — CN-SESS-01 enforcement)* —
+  asserts the sole pub `encode_frame`/`decode_frame` pair in
+  `ade_network::mux::frame`.
+- **`ci_check_handshake_closure.sh`** *(N-L — CN-SESS-02 enforcement)* —
+  asserts the sole pub `n2n_transition`/`n2c_transition` in
+  `ade_network::handshake::transition`.
+- **`ci_check_session_core_closure.sh`** *(N-L — CN-SESS-03 +
+  DC-SESS-01 + DC-SESS-05 session-side enforcement)* — asserts sole
+  pub `step` in `ade_network::session::core`; no `tokio::*` imports
+  in session core files; type-state gate present.
+- **`ci_check_mini_protocol_id_registry_closed.sh`** *(N-L —
+  DC-SESS-02 enforcement)* — asserts `AcceptedMiniProtocol::from_id`
+  closes with `_ => None`; no wildcard accept at dispatch site.
+- **`ci_check_session_no_unbounded.sh`** *(N-L — DC-SESS-04
+  enforcement)* — asserts no `mpsc::unbounded_*` and no unbounded
+  `Vec` growth in mux/session paths.
+- **`ci_check_clock_seam.sh`** *(extended in N-L — DC-SESS-05
+  enforcement)* — now also covers `ade_network::session/` to enforce
+  the wire-side wall-clock-free guarantee.
+- *N-K carried CI gates:* `ci_check_bootstrap_closure.sh`,
+  `ci_check_orchestrator_core_purity.sh`,
+  `ci_check_persistent_writer_no_parallel_cadence.sh`,
+  `ci_check_peer_session_isolation.sh`,
+  `ci_check_node_binary_uses_single_bootstrap.sh`.
 - *N-J carried CI gates:* `ci_check_snapshot_encoder_closure.sh`.
 - *N-I carried CI gates:* `ci_check_rollback_materialize_closure.sh`,
   `ci_check_snapshot_cadence_purity.sh`.
@@ -635,22 +646,18 @@ the orchestrator core under clock injection.
 
 ## 3. Closed vs. Extensible Registries
 
-Ade's authority surface is **almost entirely closed.** **PHASE4-N-K
-added seven closed surfaces** at the orchestration layer — the
-`Clock` trait (with closed impl set: `DeterministicClock`,
-`SystemClock`); the closed `OrchestratorEvent` /
-`OrchestratorEffect` / `OrchestratorError` / `PeerHaltReason` /
-`AuthorityFatalKind` sum quintet (with closed supporting types
-`PeerId`, `PeerRole`); the `OrchestratorState` struct (closed field
-set, BTreeMap-keyed per-peer collections); the `bootstrap_initial_state`
-chokepoint (SOLE init `pub fn`); the `PersistentSnapshotWriter`
-chokepoint (SOLE cadence-driven persistent-capture caller); the
-`NodeRunError` closed sum + the closed `EXIT_*` constant trio; and
-the closed per-file TCB color carve-out for `ade_runtime` (GREEN
-orchestrator files explicitly forbid `tokio::*`). Plus **six new
-CI gates** (CI count 55 → 61) and **five newly-introduced + six
-strengthened + one new open_obligation** registry rules (registry
-total 209 → 214).
+Ade's authority surface is **almost entirely closed.** **PHASE4-N-L
+added six closed surfaces** at the wire-layer session — the
+`AcceptedMiniProtocol` closed enum + `from_id` registry; the
+`ByteChunkIn` / `SessionEffect` / `SessionError` closed sum trio;
+the `SessionState` closed type-state; the `Transport` sync trait
+with closed impl set (`Pipe`, `BlockingTransport`); the
+`MuxTransportHandle` + `TransportError` + `DuplexCapacity::DEFAULT`
+closed bounded-duplex surface; and the `KeepAliveCadence::DEFAULT`
+compile-time-pinned cadence. Plus **five new CI gates + one
+extended** (CI count 61 → 66) and **eight newly-flipped + one
+newly-declared + four strengthened** registry rules (registry
+total 214 → 223).
 
 ### Closed (frozen — version-gated changes only)
 
@@ -686,7 +693,7 @@ total 209 → 214).
 | `AcceptedBlock` token *(N-C-S5)* | `ade_ledger::producer::self_accept` | 1 newtype | Carried. |
 | `self_accept` chokepoint *(N-C-S5)* | `ade_ledger::producer::self_accept` | 1 function | Carried. |
 | `SelfAcceptError` *(N-C-S5)* | `ade_ledger::producer::self_accept` | 1 variant | Carried. |
-| `SchedulerInput` / `SchedulerEffect` / `SchedulerHaltReason` / `SchedulerState` *(N-C-S6)* | `ade_runtime::producer::scheduler` | closed sums | Carried. **N-K note:** scheduler is now driven by `leadership_session` RED pump via `Clock::tick_stream()`; types unchanged. |
+| `SchedulerInput` / `SchedulerEffect` / `SchedulerHaltReason` / `SchedulerState` *(N-C-S6)* | `ade_runtime::producer::scheduler` | closed sums | Carried. |
 | `TickInputs` / `TickAssemblyError` / `assemble_tick` *(N-C-S6)* | `ade_runtime::producer::tick_assembler` | closed | Carried. |
 | `BroadcastError` *(N-C-S6)* | `ade_runtime::producer::broadcast` | 2 variants | Carried. |
 | RED signing primitives + key types *(N-C-S1)* | `ade_runtime::producer::signing::*` | closed | Carried. |
@@ -699,10 +706,10 @@ total 209 → 214).
 | `producer_block_fetch_serve` *(N-G-S4)* | `ade_network::block_fetch::server` | 1 function | Carried. |
 | `Producer*ServerState` / `ProducerServerError` / `ServerStep` / etc. *(N-G-S3/S4)* | `ade_network::{chain_sync, block_fetch}::server` | closed | Carried. |
 | `ServedChainSnapshot` / `served_chain_admit` *(N-G-S2)* | `ade_ledger::producer::served_chain` | closed | Carried. |
-| `PerPeerN2nServerState` / `DispatchError` *(N-G-S6)* | `ade_runtime::network::n2n_server` | closed | Carried. **N-K note:** consumed by `n2n_server_pump` RED runner. |
+| `PerPeerN2nServerState` / `DispatchError` *(N-G-S6)* | `ade_runtime::network::n2n_server` | closed | Carried. |
 | `AdmittedBlock` token *(N-H-S1)* | `ade_ledger::receive::admitted` | closed struct | Carried. |
 | `AdmittedOutcome` *(N-H-S1)* | `ade_ledger::receive::admitted` | closed struct | Carried. |
-| `admit_via_block_validity` chokepoint *(N-H-S1)* | `ade_ledger::receive::admitted` | 1 function | Carried. **N-K note:** now driven end-to-end by the production orchestrator core; `CN-CONS-08.strengthened_in += PHASE4-N-K`. |
+| `admit_via_block_validity` chokepoint *(N-H-S1)* | `ade_ledger::receive::admitted` | 1 function | Carried. **N-L note:** now driven by real socket bytes end-to-end via the session reducer + mux pump; `CN-CONS-08.strengthened_in += PHASE4-N-L`. |
 | `ReceiveEvent` *(N-H-S1)* | `ade_ledger::receive::events` | 3 variants | Carried. |
 | `ReceiveEffect` *(N-H-S1)* | `ade_ledger::receive::events` | 4 variants | Carried. |
 | `NoOpReason` *(N-H-S1)* | `ade_ledger::receive::events` | 1 variant | Carried. |
@@ -715,41 +722,50 @@ total 209 → 214).
 | `ReceiveState` *(N-H-S2)* | `ade_ledger::receive::reducer` | closed struct | Carried. |
 | `receive_apply` chokepoint *(N-H-S2; N-I-S6 extended)* | `ade_ledger::receive::reducer` | 1 function | Carried. |
 | `receive_apply_sequence` driver *(N-H-S2)* | `ade_ledger::receive::reducer` | 1 function | Carried. |
-| `PerPeerReceiveState` *(N-H-S4)* | `ade_runtime::receive::orchestrator` | closed RED struct | Carried. **N-K note:** held by `OrchestratorState::per_peer_receive` (BTreeMap keyed by `PeerId`); per-peer isolation per DC-NODE-01. |
+| `PerPeerReceiveState` *(N-H-S4)* | `ade_runtime::receive::orchestrator` | closed RED struct | Carried. **N-L note:** held by `OrchestratorState::per_peer_receive` (BTreeMap keyed by `PeerId`); per-peer wire-layer isolation now also enforced via per-pump `MuxTransportHandle` + `FrameBuffer` + `SessionState`; `DC-NODE-01.strengthened_in += PHASE4-N-L`. |
 | `ReceiveDispatchError` *(N-H-S4)* | `ade_runtime::receive::orchestrator` | 3 variants | Carried. |
-| `SnapshotReader` trait *(N-I-S1; N-J extended)* | `ade_ledger::rollback::traits` | 1 trait with 1 method | Carried. Two production impls (`InMemorySnapshotCache`, `PersistentSnapshotCache`); N-K adds no third. |
+| `SnapshotReader` trait *(N-I-S1; N-J extended)* | `ade_ledger::rollback::traits` | 1 trait with 1 method | Carried. |
 | `BlockSource` trait *(N-I-S1)* | `ade_ledger::rollback::traits` | 1 trait with 1 method | Carried. |
 | `MaterializeError` *(N-I-S1)* | `ade_ledger::rollback::error` | 3 variants | Carried. |
 | `CommitRollbackError` *(N-I-S1)* | `ade_ledger::rollback::error` | 1 variant | Carried. |
 | `TargetPoint` *(N-I-S2 — rollback flavor)* | `ade_ledger::rollback::materialize` | closed struct | Carried. |
-| `materialize_rolled_back_state` chokepoint *(N-I-S2 — CN-STORE-07)* | `ade_ledger::rollback::materialize` | 1 function | Carried. **N-K note:** now a production caller from the bootstrap warm-start branch; `CN-STORE-07.strengthened_in += PHASE4-N-K`. |
+| `materialize_rolled_back_state` chokepoint *(N-I-S2 — CN-STORE-07)* | `ade_ledger::rollback::materialize` | 1 function | Carried. |
 | `commit_rollback` chokepoint *(N-I-S3)* | `ade_ledger::rollback::commit` | 1 function | Carried. |
 | `ChainDbWrite::rollback_to_slot` trait method *(N-I-S3)* | `ade_ledger::receive::chain_write` | 1 method | Carried. |
 | `RollbackContext<'a>` *(N-I-S6)* | `ade_ledger::receive::reducer` | closed BLUE struct | Carried. |
-| `SnapshotCadence` *(N-I-S4 — DC-STORE-07)* | `ade_runtime::rollback::cadence` | closed BLUE-structural struct (exactly 1 field) | Carried. **N-K note:** consulted by `PersistentSnapshotWriter::on_admitted` via `should_snapshot_after_block` (DC-NODE-02 single-source). |
+| `SnapshotCadence` *(N-I-S4 — DC-STORE-07)* | `ade_runtime::rollback::cadence` | closed BLUE-structural struct (exactly 1 field) | Carried. |
 | `SnapshotEncodeError` *(N-J-S1)* | `ade_ledger::snapshot::error` | 1 variant | Carried. |
-| `SnapshotDecodeError` *(N-J-S1)* | `ade_ledger::snapshot::error` | 5 variants | Carried. **N-K note:** `UnknownVersion` / `FingerprintMismatch` at bootstrap map to `AuthorityFatalKind::SnapshotDecode*` → `EXIT_AUTHORITY_FATAL_DECODE = 12`. |
+| `SnapshotDecodeError` *(N-J-S1)* | `ade_ledger::snapshot::error` | 5 variants | Carried. |
 | `StructuralReason` *(N-J-S1)* | `ade_ledger::snapshot::error` | 9 variants | Carried. |
-| `encode_chain_dep` / `decode_chain_dep` chokepoint pair *(N-J-S1 — CN-STORE-08)* | `ade_ledger::snapshot::chain_dep` | 2 functions | Carried. `CN-STORE-08.strengthened_in += PHASE4-N-K`. |
-| `encode_utxo_state` / `decode_utxo_state` / `encode_cert_state` / `decode_cert_state` / `encode_epoch_state` / `decode_epoch_state` / `encode_pparams` / `decode_pparams` / `encode_gov_state` / `decode_gov_state` / `encode_conway_deposit_params` / `decode_conway_deposit_params` chokepoint pairs *(N-J-S2..S5)* | `ade_ledger::snapshot::{utxo_state, cert_state, epoch_state, gov_state}` | 12 functions | Carried. |
+| `encode_chain_dep` / `decode_chain_dep` chokepoint pair *(N-J-S1 — CN-STORE-08)* | `ade_ledger::snapshot::chain_dep` | 2 functions | Carried. |
+| snapshot sub-state encoder/decoder chokepoint pairs *(N-J-S2..S5)* | `ade_ledger::snapshot::{utxo_state, cert_state, epoch_state, gov_state}` | 12 functions | Carried. |
 | `encode_ledger_state` / `decode_ledger_state` chokepoint pair *(N-J-S6 — CN-STORE-08)* | `ade_ledger::snapshot::ledger` | 2 functions | Carried. |
-| `encode_snapshot` / `decode_snapshot` chokepoint pair *(N-J-S7 — CN-STORE-08)* | `ade_ledger::snapshot::framing` | 2 functions | Carried. **N-K note:** `decode_snapshot` is now a production caller from `bootstrap_initial_state` warm-start; `encode_snapshot` from `PersistentSnapshotWriter::{on_admitted, force_capture}`. |
-| `SCHEMA_VERSION: u32 = 1` *(N-J-S7 — DC-STORE-09)* | `ade_ledger::snapshot::framing` | 1 `pub const` | Carried. **N-K note:** `DC-STORE-09` now carries `open_obligation = "snapshot_schema_migration_follow_on_cluster"` — the v1→v2 migration tooling is operator-facing and out of node-binary scope. |
-| `PersistentSnapshotCache<'a, S: SnapshotStore + ?Sized>` *(N-J-S8)* | `ade_runtime::rollback::persistent_cache` | closed GREEN struct | Carried. **N-K note:** consumed by both `bootstrap_initial_state` (warm-start read) and `PersistentSnapshotWriter` (cadence-driven writes); two production consumer paths. |
-| `PersistentCacheError` *(N-J-S8)* | `ade_runtime::rollback::persistent_cache` | 3 variants | Carried. **N-K note:** `Encode`/`Decode` arms surfaced through `NodeRunError::PersistentWriterIo`/`Bootstrap` → exit-code mapping. |
+| `encode_snapshot` / `decode_snapshot` chokepoint pair *(N-J-S7 — CN-STORE-08)* | `ade_ledger::snapshot::framing` | 2 functions | Carried. |
+| `SCHEMA_VERSION: u32 = 1` *(N-J-S7 — DC-STORE-09)* | `ade_ledger::snapshot::framing` | 1 `pub const` | Carried. |
+| `PersistentSnapshotCache<'a, S: SnapshotStore + ?Sized>` *(N-J-S8)* | `ade_runtime::rollback::persistent_cache` | closed GREEN struct | Carried. |
+| `PersistentCacheError` *(N-J-S8)* | `ade_runtime::rollback::persistent_cache` | 3 variants | Carried. |
 | `PERSISTENT_CACHE_SCHEMA_VERSION: u32` *(N-J-S8)* | `ade_runtime::rollback::persistent_cache` | 1 `pub const` | Carried. |
-| **`bootstrap_initial_state` chokepoint** *(NEW in N-K — CN-NODE-01)* | `ade_runtime::bootstrap` | 1 function — **THE SOLE `pub fn` returning the initial `(LedgerState, PraosChainDepState, Option<ChainTip>)` triple in the workspace** | Single-authority init. Cold-start + warm-start = two branches of one function. CI-defended via `ci_check_bootstrap_closure.sh` (workspace-wide grep + forbidden-patterns check). New init shape = strengthening (CI fail). |
-| **`BootstrapInputs<'a, D, S>` / `BootstrapError`** *(NEW in N-K)* | `ade_runtime::bootstrap` | closed struct + closed sum | Inputs are borrowed (lifetime `'a`); generic over `D: ChainDb` + `S: SnapshotStore`. `BootstrapError` carries `Materialize(MaterializeError)`, `ChainDb(ChainDbError)`, `GenesisRequiredButAbsent`, `PersistentCacheDecode(SnapshotDecodeError)`. Closed sums. |
-| **`Clock` trait + `DeterministicClock` + `SystemClock`** *(NEW in N-K — DC-NODE-03)* | `ade_runtime::clock` | 1 trait + 2 impls — **THE SOLE wall-clock seam in `ade_runtime`** | Closed seam. New impls remain deliberate registry-tracked closed additions — not runtime plug-ins. CI-defended: `SystemClock` is the only file in `ade_runtime` that may read `SystemTime`/`Instant`/`tokio::time`. |
-| **`OrchestratorEvent`** *(NEW in N-K — DC-NODE-01 + DC-NODE-03)* | `ade_runtime::orchestrator::event` | closed sum | The closed event vocabulary. Variants cover peer RX events, slot ticks, server-pump events, persistent-writer notifications, shutdown signals. No `#[non_exhaustive]`; no plug-in registry. |
-| **`OrchestratorEffect`** *(NEW in N-K — DC-NODE-01 + DC-NODE-04)* | `ade_runtime::orchestrator::event` | closed sum | The closed effect vocabulary. Variants include `PeerSessionHalted { peer_id, reason: PeerHaltReason }`, `AuthorityFatal(AuthorityFatalKind)`, admit/write/snapshot dispatch. No `#[non_exhaustive]`. |
-| **`OrchestratorError` / `PeerHaltReason` / `AuthorityFatalKind`** *(NEW in N-K — DC-NODE-01 + DC-NODE-04)* | `ade_runtime::orchestrator::event` | 3 closed sums | `PeerHaltReason` is the closed reason-tag for `PeerSessionHalted` (no `String`). `AuthorityFatalKind` is the closed sum naming exactly the categories that halt the binary (`ChainWriteIo`, `SnapshotDecodeUnknownVersion`, `SnapshotDecodeFingerprintMismatch`, ...). New variant = closed-sum extension; if it warrants a new exit code, append a new `EXIT_*` constant + extend `NodeRunError::exit_code`. |
-| **`PeerId` / `PeerRole`** *(NEW in N-K)* | `ade_runtime::orchestrator::event` | 1 newtype + 1 closed enum | `PeerId` keys per-peer BTreeMaps in `OrchestratorState`. `PeerRole` discriminates inbound vs outbound peer / server-side connection. |
-| **`OrchestratorState` + `PerPeerReceiveVersions`** *(NEW in N-K)* | `ade_runtime::orchestrator::state` | closed structs | Field set closed. `per_peer_receive` + `per_peer_server` are `BTreeMap<PeerId, _>` (no `HashMap`). |
-| **`orchestrator::core::step` reducer** *(NEW in N-K)* | `ade_runtime::orchestrator::core` | 1 function | Pure `(state, event) → (state', Vec<OrchestratorEffect>)`. No `tokio`; no clock; no I/O. CI-defended via `ci_check_orchestrator_core_purity.sh` + `ci_check_clock_seam.sh`. |
-| **`PersistentSnapshotWriter` + `on_admitted` + `force_capture`** *(NEW in N-K — DC-NODE-02)* | `ade_runtime::rollback::persistent_writer` | closed struct + 2 methods — **THE SOLE production cadence-driven caller of `PersistentSnapshotCache::capture` in the workspace** | Single-authority. `on_admitted` consults `should_snapshot_after_block` exclusively; `force_capture` runs unconditionally during shutdown drain. CI-defended via `ci_check_persistent_writer_no_parallel_cadence.sh`. |
-| **`NodeRunError`** *(NEW in N-K — DC-NODE-04)* | `ade_node::node` | closed sum | Variants include `Bootstrap(BootstrapError)`, `PersistentWriterIo(...)`. `exit_code(&self) -> i32` is the closed deterministic mapping. |
-| **`EXIT_AUTHORITY_FATAL_IO = 10` / `EXIT_AUTHORITY_FATAL_DECODE = 12` / `EXIT_GENERIC_STARTUP = 1`** *(NEW in N-K — DC-NODE-04)* | `ade_node::node` | 3 `pub const i32` — **THE closed exit-code surface for `ade_node`** | Closed constants. New fatal kind = append new `EXIT_*` constant + extend `AuthorityFatalKind` + extend `NodeRunError::exit_code`. No ad-hoc exit codes. |
+| `bootstrap_initial_state` chokepoint *(N-K — CN-NODE-01)* | `ade_runtime::bootstrap` | 1 function | Carried. |
+| `BootstrapInputs<'a, D, S>` / `BootstrapError` *(N-K)* | `ade_runtime::bootstrap` | closed struct + closed sum | Carried. |
+| `Clock` trait + `DeterministicClock` + `SystemClock` *(N-K — DC-NODE-03)* | `ade_runtime::clock` | 1 trait + 2 impls | Carried. **N-L note:** clock-injection seam now covers keep-alive end-to-end via `keep_alive_session` (`DC-NODE-03.strengthened_in += PHASE4-N-L`). |
+| `OrchestratorEvent` *(N-K — DC-NODE-01 + DC-NODE-03)* | `ade_runtime::orchestrator::event` | closed sum | Carried. **N-L note:** **NEW variant `OrchestratorEvent::OutboundKeepAlive { peer_id }`** emitted by `keep_alive_session`; closed-sum extension per the N-K rules. |
+| `OrchestratorEffect` *(N-K)* | `ade_runtime::orchestrator::event` | closed sum | Carried. |
+| `OrchestratorError` / `PeerHaltReason` / `AuthorityFatalKind` *(N-K)* | `ade_runtime::orchestrator::event` | 3 closed sums | Carried. |
+| `PeerId` / `PeerRole` *(N-K)* | `ade_runtime::orchestrator::event` | 1 newtype + 1 closed enum | Carried. |
+| `OrchestratorState` + `PerPeerReceiveVersions` *(N-K)* | `ade_runtime::orchestrator::state` | closed structs | Carried. |
+| `orchestrator::core::step` reducer *(N-K)* | `ade_runtime::orchestrator::core` | 1 function | Carried. |
+| `PersistentSnapshotWriter` + `on_admitted` + `force_capture` *(N-K — DC-NODE-02)* | `ade_runtime::rollback::persistent_writer` | closed struct + 2 methods | Carried. |
+| `NodeRunError` *(N-K — DC-NODE-04)* | `ade_node::node` | closed sum | Carried. |
+| `EXIT_AUTHORITY_FATAL_IO = 10` / `EXIT_AUTHORITY_FATAL_DECODE = 12` / `EXIT_GENERIC_STARTUP = 1` *(N-K — DC-NODE-04)* | `ade_node::node` | 3 `pub const i32` | Carried. |
+| **`session::core::step` reducer** *(NEW in N-L — CN-SESS-03)* | `ade_network::session::core` | 1 function — **THE SOLE `pub fn` reducing `(SessionState, ByteChunkIn) -> Result<Vec<SessionEffect>, SessionError>` in the workspace** | Single-authority. Pure; sync; wall-clock-free. CI-defended via `ci_check_session_core_closure.sh` (workspace-wide grep + no-tokio + type-state-gate check). New session-reducer shape = strengthening (CI fail). |
+| **`AcceptedMiniProtocol` + `from_id` closed registry** *(NEW in N-L — DC-SESS-02)* | `ade_network::session::event::AcceptedMiniProtocol` | closed enum + closed `from_id` mapping | The mini-protocol id registry. `from_id` closes with `_ => None`; dispatch site has no wildcard accept. New mini-protocol = single variant + single `from_id` arm + single dispatch arm. CI-defended via `ci_check_mini_protocol_id_registry_closed.sh`. |
+| **`ByteChunkIn` / `SessionEffect` / `SessionError` / `HandshakeRole`** *(NEW in N-L)* | `ade_network::session::event` | 4 closed sums | Closed event/effect/error vocabulary. No `String`; no `#[non_exhaustive]`. |
+| **`SessionState`** *(NEW in N-L — DC-SESS-01)* | `ade_network::session::state` | closed enum `{ Handshaking, Connected }` | Closed type-state. Encodes the handshake-before-traffic gate at the type level; mini-protocol frames rejected in `Handshaking`. CI-defended via `ci_check_session_core_closure.sh` (type-state gate check). |
+| **`FrameBuffer`** *(NEW in N-L)* | `ade_network::session::demux` | closed struct | Partial-frame accumulator. Pure; deterministic. |
+| **`Transport` sync trait + closed impl set (`Pipe`, `BlockingTransport`)** *(NEW in N-L — CN-SESS-02)* | `ade_network::session::handshake_driver` + `ade_runtime::network::*` (production impl) | 1 trait + 2 impls — **THE handshake transport seam** | Sync trait. Test impl: in-memory `Pipe`. Production impl: `BlockingTransport` over duplex mpsc via `tokio::task::spawn_blocking`. New impls remain deliberate registry-tracked closed additions. |
+| **`MuxTransportHandle` + `TransportError` + `DuplexCapacity::DEFAULT { 1024, 256, 16384 }`** *(NEW in N-L — DC-SESS-04)* | `ade_network::mux::transport` | closed struct + closed sum + 1 `pub const` | Bounded full-duplex transport. Overflow → `TransportError::BackpressureExceeded` (fail-fast; no silent drop). `DuplexCapacity::DEFAULT` pinned at compile time. CI-defended via `ci_check_session_no_unbounded.sh`. |
+| **`KeepAliveCadence::DEFAULT { interval_ms: 60_000 }`** *(NEW in N-L — DC-SESS-05)* | `ade_runtime::orchestrator::keep_alive_session` | 1 `pub const` — **THE compile-time-pinned keep-alive cadence** | Operator-tunable cadence forbidden in this cluster (mirrors `SnapshotCadence::DEFAULT` discipline). Driven by `ade_runtime::clock::Clock`. CI-defended via `ci_check_clock_seam.sh` (extended). |
+| **`OrchestratorEvent::OutboundKeepAlive { peer_id }`** *(NEW variant in N-L on the N-K closed sum)* | `ade_runtime::orchestrator::event::OrchestratorEvent` | 1 new variant | Closed-sum extension per the N-K rules. Emitted by `keep_alive_session`; recorded by the orchestrator core (no immediate effect — session-layer keep-alive frame encoding is a future cluster). |
 | `PlutusLanguage` | `ade_plutus::evaluator` | 3 variants | |
 | Named ingress chokepoints (block CBOR) | `ade_codec::*` | 10 | |
 | Conway cert/withdrawals sub-grammar decoders *(B3 / B4)* | `ade_codec::conway::{cert, withdrawals}` + `ade_codec::shelley::cert::read_pool_registration_cert` | 5 functions | Closed. |
@@ -758,26 +774,27 @@ total 209 → 214).
 | `CodecError` variants *(B3-extended)* | `ade_codec::error` | + `UnknownCertTag`, `DuplicateMapKey` | |
 | Mini-protocol message enums | `ade_network::codec::*` | 11 closed enums | |
 | Mini-protocol encode/decode chokepoints | `ade_network::codec::*::{encode_*, decode_*}` | 22 functions | |
-| Mux frame chokepoints | `ade_network::mux::frame::{encode_frame, decode_frame}` | 2 free functions | |
+| **Mux frame chokepoints** *(now also CN-SESS-01-enforced)* | `ade_network::mux::frame::{encode_frame, decode_frame}` | 2 free functions | CI-defended by `ci_check_mux_frame_closure.sh` (NEW in N-L). |
+| **Handshake transition chokepoints** *(now also CN-SESS-02-enforced)* | `ade_network::handshake::transition::{n2n_transition, n2c_transition}` | 2 free functions | CI-defended by `ci_check_handshake_closure.sh` (NEW in N-L). |
 | Mini-protocol transition functions | `ade_network::*::transition` + `n2c::local_*::transition` | 8 modules | |
 | Mini-protocol version enums | `ade_network::codec::version::*` | 11 closed enums | |
-| `ChainDb` / `SnapshotStore` / `Recoverable` trait surfaces | `ade_runtime::chaindb` + `ade_runtime::recovery` | closed | **N-K note:** `ChainDb` + `SnapshotStore` are now opened by `bootstrap_initial_state` (production single-authority opener). Trait surfaces unchanged. |
+| `ChainDb` / `SnapshotStore` / `Recoverable` trait surfaces | `ade_runtime::chaindb` + `ade_runtime::recovery` | closed | Carried. |
 | Hash domain functions | `ade_crypto::blake2b::*` | 4 named domains | |
 | `ChainEvent` / `ChainSelectionReject` *(N-B)* | `ade_core::consensus::events` | 5 / 4 variants | |
 | Consensus error families *(N-B)* | `ade_core::consensus::errors` | 8 closed error enums | |
-| `StreamInput` / `OrchestratorError` (N-B) / `DecodeError` / `GenesisParseError` / `GenesisBlob` / `NetworkMagic` *(N-B)* | various | closed | **Naming note:** the N-K `OrchestratorError` is in `ade_runtime::orchestrator::event` and is structurally distinct from N-B's `ade_core::consensus::orchestrator::OrchestratorError` (different namespace, different domain). |
+| `StreamInput` / `OrchestratorError` (N-B) / `DecodeError` / `GenesisParseError` / `GenesisBlob` / `NetworkMagic` *(N-B)* | various | closed | |
 | `LedgerView` trait *(N-B; B1-refined)* | `ade_core::consensus::ledger_view` | 4 methods | |
 | `HeaderVrf` *(N-B; B1)* | `ade_core::consensus::header_summary` | 2 variants | |
 | `BlockValidityVerdict` / `BlockValidityError` etc. *(B1)* | `ade_ledger::block_validity::verdict` | closed | |
-| `block_validity` chokepoint *(B1)* | `ade_ledger::block_validity::transition` | 1 function | Single chokepoint. Five public consumers: B1 validator, `self_accept` (N-C), `served_chain_admit` (N-G), `admit_via_block_validity` (N-H), `materialize_rolled_back_state` (N-I/N-K-driven). N-K adds no new consumer. |
+| `block_validity` chokepoint *(B1)* | `ade_ledger::block_validity::transition` | 1 function | Carried. |
 | `TxValidityVerdict` / `TxRejectClass` / `TxValidityError` / `SignerSource` / `WitnessClosureError` etc. *(B2)* | `ade_ledger::tx_validity::*` | closed | |
 | `AdmitOutcome` / `MempoolState` / `OrderPolicy` *(B2)* | `ade_ledger::mempool::*` | closed | |
 | `LeaderScheduleAnswer` / `is_leader_for_vrf_output` *(N-B)* | `ade_core::consensus::leader_schedule` | closed | |
 | `PraosNonces` / `NonceScanError` *(B1)* | `ade_ledger::consensus_input_extract` | | |
 | `PraosChainDepState` / `ChainEvent` canonical encodings *(N-B)* | `ade_core::consensus::encoding` | 4 chokepoints | |
-| `LedgerFingerprint` fold *(B3/B5)* | `ade_ledger::fingerprint` | | **N-K note:** used by the replay-equivalence test to compare two runs' `combined` fingerprints byte-identically. |
-| **CI check set** | `ci/ci_check_*.sh` | **61 scripts (55 → 61 in PHASE4-N-K)** | Existing checks may be tightened, never relaxed. |
-| **Invariant registry families** | `docs/ade-invariant-registry.toml` | Families T / CN / DC / OP / RO; **N-K added 5 rules** (`CN-NODE-01`, `DC-NODE-01..04` all `enforced`); strengthened 6 carried rules (`T-DET-01`, `CN-CONS-08`, `CN-STORE-07`, `CN-STORE-08`, `DC-CONS-21`, `DC-STORE-08`); added 1 new `open_obligation` (`DC-STORE-09`). Total: **214 entries** (209 → 214). | Append-only IDs. |
+| `LedgerFingerprint` fold *(B3/B5)* | `ade_ledger::fingerprint` | | |
+| **CI check set** | `ci/ci_check_*.sh` | **66 scripts (61 → 66 in PHASE4-N-L)** | Existing checks may be tightened, never relaxed. |
+| **Invariant registry families** | `docs/ade-invariant-registry.toml` | Families T / CN / DC / OP / RO; **N-L flipped 8 rules to `enforced`** (`CN-SESS-01..03`, `DC-SESS-01..05`); declared 1 new (`RO-LIVE-03`); strengthened 4 carried (`T-DET-01`, `CN-CONS-08`, `DC-NODE-01`, `DC-NODE-03`). Total: **223 entries** (214 → 223). | Append-only IDs. |
 
 ### Extensible (open within constraints)
 
@@ -793,38 +810,43 @@ total 209 → 214).
 | Withdrawals map *(B3)* | `ade_codec::conway::withdrawals::decode_withdrawals` → `BTreeMap<RewardAccount, Coin>` | Never last-wins. |
 | Mempool admitted set *(B2)* | `ade_ledger::mempool::admit::MempoolState::accepted` | `Vec<Hash32>`; shape closed; monotonic. |
 | `SignerSource` provenance set *(B2)* | `ade_ledger::tx_validity::required_signers::RequiredSigners::{keys, provenance}` | Per-tx open. |
-| `RollbackSnapshot` ring *(N-B)* | `ade_runtime::consensus::chain_selector::OrchestratorState::recent_snapshots` | Bounded ≤ 2160. Distinct from N-I `InMemorySnapshotCache` + N-J `PersistentSnapshotCache`. |
+| `RollbackSnapshot` ring *(N-B)* | `ade_runtime::consensus::chain_selector::OrchestratorState::recent_snapshots` | Bounded ≤ 2160. |
 | `ServedChainSnapshot.blocks` admitted set *(N-G-S2)* | `ade_ledger::producer::served_chain::ServedChainSnapshot` | Shape closed; instance set open. |
 | `PerPeerN2nServerState` instance set *(N-G-S6)* | `ade_runtime::network::n2n_server` | One instance per connected peer. |
 | `PendingHeaderCache.entries` *(N-H-S1)* | `ade_ledger::receive::pending_header_cache::PendingHeaderCache` | `BTreeMap<(SlotNo, Hash32), Vec<u8>>`. |
 | `PerPeerReceiveState` instance set *(N-H-S4)* | `ade_runtime::receive::orchestrator` | One instance per upstream peer. |
-| `InMemorySnapshotCache.entries` *(N-I-S4)* | `ade_runtime::rollback::in_memory_cache::InMemorySnapshotCache` | `BTreeMap<SlotNo, (LedgerState, PraosChainDepState)>`. Shape closed; instance set open. No eviction (carried OQ-5). |
-| Persistent snapshot store contents *(N-J-S8)* | the `SnapshotStore` instance backing `PersistentSnapshotCache` | `BTreeSet<SlotNo>` per `list_snapshot_slots`. Shape closed; instance set open. **N-K note:** the set now grows from TWO production write callers — `PersistentSnapshotWriter::on_admitted` (cadence-driven) + `PersistentSnapshotWriter::force_capture` (shutdown drain); each routes through `PersistentSnapshotCache::capture` (single cache-level entry). |
-| **Per-peer collections in `OrchestratorState`** *(NEW in N-K)* | `ade_runtime::orchestrator::state::OrchestratorState::{per_peer_receive, per_peer_server}` | `BTreeMap<PeerId, _>` (no `HashMap`). One entry per connected peer. Set grows on `OrchestratorEvent::PeerConnected`; shrinks on `OrchestratorEffect::PeerSessionHalted`. Shape closed; instance set open. |
-| **Orchestrator-event corpus** *(NEW in N-K — tooling-only)* | `corpus/orchestrator/` | Test corpus for the replay-equivalence harness. Read by `replay_equivalence_under_deterministic_clock_holds`. Tooling-only. |
+| `InMemorySnapshotCache.entries` *(N-I-S4)* | `ade_runtime::rollback::in_memory_cache::InMemorySnapshotCache` | `BTreeMap<SlotNo, (LedgerState, PraosChainDepState)>`. Shape closed; instance set open. |
+| Persistent snapshot store contents *(N-J-S8)* | the `SnapshotStore` instance backing `PersistentSnapshotCache` | `BTreeSet<SlotNo>` per `list_snapshot_slots`. |
+| Per-peer collections in `OrchestratorState` *(N-K)* | `ade_runtime::orchestrator::state::OrchestratorState::{per_peer_receive, per_peer_server}` | `BTreeMap<PeerId, _>`. **N-L note:** the wire-layer per-pump state (`MuxTransportHandle`, `FrameBuffer`, `SessionState`) is held outside `OrchestratorState` — one set per mux pump task; lifetime managed by `n2n_dialer`/`n2n_server_pump`. Shape closed; instance set open. |
+| Orchestrator-event corpus *(N-K — tooling-only)* | `corpus/orchestrator/` | Tooling-only. |
+| **Session-replay corpus** *(NEW in N-L — tooling-only)* | `crates/ade_network/tests/session_replay_equivalence.rs` (inline) | Recorded `ByteChunkIn` sequences for replay-equivalence proof (DC-SESS-03). Tooling-only. |
 | Oracle reference snapshots / regression corpus | `ade_testkit::harness::*` | Tooling-only. |
 | Network corpus / Consensus corpus / Block-validity corpus / Tx-validity corpus / Mempool ingress corpus / PP canonical corpus / Producer corpus / Server-paths corpus / Receive-paths corpus | various | Tooling-only. |
 | Receive-rollback integration test *(N-I-S6)* | `crates/ade_runtime/tests/receive_rollback_integration.rs` | Tooling-only. |
 | Persistent-cache inline test set *(N-J-S8)* | `crates/ade_runtime/src/rollback/persistent_cache.rs` (inline) | Tooling-only. |
-| **Orchestrator integration tests** *(NEW in N-K — tooling-only)* | `crates/ade_runtime/tests/orchestrator_{peer_isolation,replay_equivalence}.rs` + `crates/ade_node/tests/{shutdown_resume_identity,authority_fatal_decode}.rs` | Tooling-only. 4 files / 7 tests. Defend DC-NODE-01, DC-NODE-03, DC-NODE-04. |
-| Operator-action probe binaries *(N-B + N-E S6 + N-C S7 + N-G S7 + N-H S6)* | `ade_core_interop::bin::*` | RED operator-action; `#[ignore]`-gated. **N-K added no new binary.** |
+| Orchestrator integration tests *(N-K — tooling-only)* | `crates/ade_runtime/tests/orchestrator_{peer_isolation,replay_equivalence}.rs` + `crates/ade_node/tests/{shutdown_resume_identity,authority_fatal_decode}.rs` | Tooling-only. |
+| **Session integration test** *(NEW in N-L — tooling-only)* | `crates/ade_network/tests/session_replay_equivalence.rs` | Tooling-only. 2 tests. Defends DC-SESS-03. |
+| Operator-action probe binaries *(N-B + N-E S6 + N-C S7 + N-G S7 + N-H S6)* | `ade_core_interop::bin::*` | RED operator-action; `#[ignore]`-gated. **N-L added no new binary.** |
 | `KillStrategy<D>` trait impls | `ade_runtime::chaindb::crash_safety` | RED-only test infrastructure. |
 | Recovery state types | callers of `Recoverable` | Open: any state with canonical encode + apply-block step. |
-| Pinned external crates | `crates/*/Cargo.toml` | Tier-5 rationale doc required. **N-K added:** `tokio` is now an explicit `ade_runtime` dep (was already in scope for `ade_runtime::receive::orchestrator` via the wider RED surface; now gated per-file by `ci_check_orchestrator_core_purity.sh` + `ci_check_clock_seam.sh`). |
+| Pinned external crates | `crates/*/Cargo.toml` | Tier-5 rationale doc required. **N-L cargo dep change:** `ade_network/Cargo.toml` gained `sync` + `rt-multi-thread` features on its existing tokio dep (for `mpsc` bounded queues + `tokio::spawn` in `mux::transport`). The session core files MUST NOT import tokio — `ci_check_session_core_closure.sh` enforces. |
 
 ### Candidates — extensible surfaces not yet wired
 
 | Cluster | Candidate registry | Rationale |
 |---------|-------------------|-----------|
-| **N-K SUBSUMED the prior revision's "orchestrator-side persistent-capture wiring"** — `PersistentSnapshotWriter` is the production cadence-driven persistent-capture caller. (Removed.) | | |
-| **NEW candidate — Live mux + handshake driver cluster** *(NEW candidate flagged by N-K close — `RO-LIVE-01`/`RO-LIVE-02`)* | **A RED submodule `ade_runtime::network::mux_pump` (or similar) bound to `MuxTransport` driving real Ouroboros frames into `peer_session` / `n2n_server_pump`** | Operator-action follow-on; honest-scope half of N-K. Tracked on `RO-LIVE-01`/`RO-LIVE-02`. |
-| **NEW candidate — Snapshot schema migration v1 → v2 tooling cluster** *(NEW `DC-STORE-09` `open_obligation` at N-K close)* | **Operator-facing tool reading v1 bytes via `framing::decode_snapshot` and emitting v2 bytes** | Tier-5 operator tooling; out of node-binary scope; named follow-on. |
-| **NEW candidate — Metrics + observability cluster** *(NEW candidate flagged by N-K close)* | **Closed `MetricEffect` arm on `OrchestratorEffect` + RED Prometheus exporter** | Tier-5; closed-sum extension on the effect type. |
-| **Snapshot eviction policy cluster** *(carried from N-J)* | **Bounded ring + persistent retention policy** | Tier-5 operational concern. Applies to both `InMemorySnapshotCache` and the persistent `SnapshotStore`. |
-| **Pre-Conway snapshot encoder cluster** *(carried from N-J)* | **Widen encoders to Babbage and earlier eras** | No current operational need; rollback target windows are bounded. |
-| **Multi-peer fork choice cluster** *(carried; now further enabled by N-K stable per-peer task model)* | **Praos longest-chain across competing peers** | Re-uses N-I `RollbackContext`; now restart-safe via N-J; now isolated per-peer via N-K. |
+| **N-L SUBSUMED the prior revision's `RO-LIVE-01`/`RO-LIVE-02` "live mux + handshake driver" candidate pair** — the mechanical wire layer is now shipped. The operator-action live-pass half is `RO-LIVE-03`. | | |
+| **NEW candidate — `PHASE4-N-L-LIVE` cluster (`RO-LIVE-03`)** *(NEW obligation at N-L close)* | **Operator-driven live pass capturing `RO-LIVE-03_<date>.log`** | One-slice follow-on cluster. `ade_node --peer ADDR` runs against a private cardano-node peer; tip-following pass captured to JSONL. Tracked on `RO-LIVE-03.open_obligation = "blocked_until_operator_peer_available"`. |
+| **NEW candidate — TLS / authenticated transport cluster** *(declared `¬P-8` in N-L invariants sketch)* | **A new `Transport` impl + session-level auth gate** | Future cluster; curve25519 auth layer. Out of N-L scope. |
+| **NEW candidate — N2C local protocols session driver cluster** *(flagged by N-L close)* | **Local-chain-sync / local-tx-submission / local-state-query family over UDS** | Future cluster; tracked alongside `CE-NODE-N2C-LTX`. |
+| **NEW candidate — Peer-sharing + tx-submission live half cluster** *(flagged by N-L close)* | **Live tx submission + peer-sharing over an established N-L session** | Future cluster; tx-submission's live half requires mempool integration (PHASE4-N-E) as precondition. |
+| **Snapshot schema migration v1 → v2 tooling cluster** *(carried from N-K — `DC-STORE-09.open_obligation`)* | Carried. | |
+| **Metrics + observability cluster** *(carried from N-K)* | Carried. | |
+| **Snapshot eviction policy cluster** *(carried from N-J)* | Carried. | |
+| **Pre-Conway snapshot encoder cluster** *(carried from N-J)* | Carried. | |
+| **Multi-peer fork choice cluster** *(carried; now further enabled by N-L live wire)* | Carried. | |
 | **N2C local-chain-sync receive surface cluster** *(carried)* | Carried. | |
-| **CE-N-H-6 / CE-N-G-8 / CE-N-C-8 operator-action live evidence** *(carried)* | Carried. | |
+| **CE-N-H-6 / CE-N-G-8 / CE-N-C-8 operator-action live evidence** *(carried; CE-N-H-6 subsumed by `RO-LIVE-03` capture scope)* | Carried. | |
 | **N-I+ Tier-5 — operator-tunable rollback policy** *(carried)* | Carried. | |
 | **N-G+ Tier-5 — operator-tunable server policy** *(carried)* | Carried. | |
 | **N-C+ Tier-5 — operator-tunable producer policy** *(carried)* | Carried. | |
@@ -832,51 +854,61 @@ total 209 → 214).
 | **PP OQ-1..OQ-4** *(carried)* | Carried. | |
 | N-A (deferred) | Peer address book | Runtime mutable. |
 | N-F | Query API method set | Tier 5 wire / Tier 1 semantics. |
-| N-F | Prometheus metric names | Tier 5; append-only registry expected (links to metrics cluster). |
+| N-F | Prometheus metric names | Tier 5; append-only registry expected. |
 
-### Closed-grammar audit (PHASE4-N-K full close)
+### Closed-grammar audit (PHASE4-N-L full close)
 
-This sweep was performed after PHASE4-N-K full close.
+This sweep was performed after PHASE4-N-L full close.
 
-1. **`OrchestratorEvent` / `OrchestratorEffect` / `OrchestratorError` /
-   `PeerHaltReason` / `AuthorityFatalKind` closed sums** — **closed
-   by intent.** Trait-less; data-only; no `#[non_exhaustive]`; no
-   `String`. New variant = closed-sum extension.
-2. **`bootstrap_initial_state` chokepoint** — **closed by intent and
-   CI-defended.** Sole `pub fn` returning the initial triple in the
-   workspace (CN-NODE-01 grep + forbidden-patterns check).
-3. **`Clock` trait + closed impl set** — **closed by intent and
-   CI-defended.** `DeterministicClock` + `SystemClock`; new impl = a
-   deliberate registry-tracked closed addition. `SystemClock` is the
-   SOLE wall-clock-reading site in `ade_runtime` (DC-NODE-03 grep).
-4. **`PersistentSnapshotWriter` cadence chokepoint** — **closed by
-   intent and CI-defended.** Sole production cadence-driven caller
-   of `PersistentSnapshotCache::capture` (DC-NODE-02 grep against
-   `should_snapshot_after_block`).
-5. **`OrchestratorState` per-peer collections** — **closed by
-   intent.** `BTreeMap<PeerId, _>` shape; no `HashMap`. Per-peer
-   isolation enforced by `PeerSessionHalted` discriminant
-   (DC-NODE-01 grep).
-6. **`NodeRunError::exit_code` + closed `EXIT_*` constants** —
-   **closed by intent and CI-defended.** `EXIT_AUTHORITY_FATAL_IO =
-   10`, `EXIT_AUTHORITY_FATAL_DECODE = 12`, `EXIT_GENERIC_STARTUP =
-   1`. New fatal kind = append `EXIT_*` + extend
-   `AuthorityFatalKind` + extend mapping. CI-defended via
-   `ci_check_node_binary_uses_single_bootstrap.sh`.
+1. **`session::core::step` chokepoint** — **closed by intent and
+   CI-defended.** Sole `pub fn` reducing `(SessionState,
+   ByteChunkIn)` in the workspace (CN-SESS-03 grep +
+   forbidden-patterns check via `ci_check_session_core_closure.sh`).
+2. **`AcceptedMiniProtocol` + `from_id` closed registry** — **closed
+   by intent and CI-defended.** `from_id` closes with `_ => None`;
+   dispatch site has no wildcard accept (DC-SESS-02 grep).
+3. **`ByteChunkIn` / `SessionEffect` / `SessionError` /
+   `HandshakeRole` closed sums** — **closed by intent.** Trait-less;
+   data-only; no `#[non_exhaustive]`; no `String`.
+4. **`SessionState` closed type-state** — **closed by intent and
+   CI-defended.** `{ Handshaking, Connected }`. Mini-protocol frames
+   rejected in `Handshaking` (DC-SESS-01 type-state-gate check).
+5. **`Transport` sync trait + closed impl set** — **closed by
+   intent.** `Pipe` (test) + `BlockingTransport` (production); new
+   impl = deliberate registry-tracked closed addition. CN-SESS-02.
+6. **`MuxTransportHandle` + `DuplexCapacity::DEFAULT` + fail-fast
+   `TransportError::BackpressureExceeded`** — **closed by intent and
+   CI-defended.** No unbounded mpsc anywhere in mux/session path
+   (DC-SESS-04 grep via `ci_check_session_no_unbounded.sh`).
+7. **`KeepAliveCadence::DEFAULT { interval_ms: 60_000 }`** —
+   **closed by intent and CI-defended.** Compile-time-pinned; no
+   operator-tunable cadence in this cluster (DC-SESS-05 — mirrors
+   `SnapshotCadence::DEFAULT` discipline). Wire layer is
+   wall-clock-free (`ci_check_clock_seam.sh` extension covers
+   `ade_network::session/`).
+8. **Mux frame chokepoint** — **now also CN-SESS-01-enforced.** Sole
+   pub `encode_frame`/`decode_frame` pair via
+   `ci_check_mux_frame_closure.sh`.
+9. **Handshake transition chokepoint** — **now also
+   CN-SESS-02-enforced.** Sole pub `n2n_transition`/`n2c_transition`
+   pair via `ci_check_handshake_closure.sh`.
 
-**Gap note — live mux pump above `MuxTransport`.** The honest-scope
-RED runner files in this cluster (`peer_session.rs`,
-`leadership_session.rs`, `n2n_server_pump.rs`, `ade_node::main`)
-defer the actual Ouroboros mux + handshake driver to the
-operator-action follow-on tracked by `RO-LIVE-01` / `RO-LIVE-02`.
-The binary at this HEAD bootstraps + prints a readiness line.
+**Gap note — `RO-LIVE-03` live operator pass.** The mechanical wire
+layer at this HEAD is ready and verified. Running `ade_node --peer
+ADDR` against a private cardano-node peer + capturing the JSONL
+log is the operator-action follow-on (`PHASE4-N-L-LIVE`). Tracked
+on `RO-LIVE-03.open_obligation =
+"blocked_until_operator_peer_available"`.
 
-**Gap note — snapshot schema migration v1 → v2 tooling.** Promoted
-from "no current cluster" (N-J) to an explicit `DC-STORE-09`
-`open_obligation` at N-K close. `SCHEMA_VERSION = 1`; v1→v2 tooling
-is the named follow-on cluster's deliverable.
+**Gap note — TLS / authenticated transport.** Declared `¬P-8` in
+the N-L invariants sketch. Cardano N2N is plain TCP on testnets;
+the curve25519 auth layer is a future cluster.
 
-### Closed-grammar audit (carried — PHASE4-N-J / N-I / N-H / N-G / N-C / PROPOSAL-PROCEDURES-DECODE / N-E / B3 / B4 / B5)
+**Gap note — N2C local protocols.** Out of N-L scope. The session
+reducer is N2N-scoped; the N2C family is tracked alongside
+`CE-NODE-N2C-LTX` and a future N2C session cluster.
+
+### Closed-grammar audit (carried — PHASE4-N-K / N-J / N-I / N-H / N-G / N-C / PROPOSAL-PROCEDURES-DECODE / N-E / B3 / B4 / B5)
 
 All carried unchanged from prior revision.
 
@@ -897,22 +929,27 @@ All carried unchanged from prior revision.
 - **Server-agency closure for outgoing mini-protocol messages** *(N-G-S1 — CN-PROTO-06)*: carried.
 - **Receive-event closure for incoming peer signals** *(N-H-S1 — CN-PROTO-07)*: carried.
 - **Type-level receive admission gate** *(N-H-S1 — CN-CONS-07 strengthening)*: carried.
-- **Receive-side admission state-isolation discipline (Invariant I-6)** *(N-H-S2 — CN-CONS-08 / DC-CONS-19)*: carried. **N-K note:** `CN-CONS-08.strengthened_in += PHASE4-N-K` — admit path now driven by the production orchestrator.
-- **Single canonical receive-side rollback materialization authority** *(N-I-S2 — CN-STORE-07)*: carried. `CN-STORE-07.strengthened_in += PHASE4-N-K` — materialize now driven by the bootstrap warm-start branch.
+- **Receive-side admission state-isolation discipline** *(N-H-S2 — CN-CONS-08 / DC-CONS-19)*: carried. **N-L note:** `CN-CONS-08.strengthened_in += PHASE4-N-L` — admit path now driven by real socket bytes end-to-end via the session reducer + mux pump.
+- **Single canonical receive-side rollback materialization authority** *(N-I-S2 — CN-STORE-07)*: carried.
 - **Replay-forward correctness** *(N-I-S2 — DC-CONS-22)*: carried.
 - **Atomic rollback commit discipline** *(N-I-S3)*: carried.
 - **Receive-side atomic admit + rollback over ChainDb + LedgerState + PraosChainDepState** *(N-H-S2 + N-I-S6 — DC-CONS-20)*: carried.
 - **Receive-reducer rollback-context discipline** *(N-I-S6)*: carried.
-- **Snapshot cadence determinism** *(N-I-S4 — DC-STORE-07)*: carried. **N-K note:** consulted by `PersistentSnapshotWriter::on_admitted` as the single source.
+- **Snapshot cadence determinism** *(N-I-S4 — DC-STORE-07)*: carried.
 - **`ChainDbWrite::rollback_to_slot` trait method semantics** *(N-I-S3)*: carried.
-- **Single canonical snapshot encoder authority** *(N-J-S7 — CN-STORE-08)*: carried. `CN-STORE-08.strengthened_in += PHASE4-N-K` — encode/decode now driven end-to-end by the production orchestrator.
-- **Snapshot encoder canonicality** *(N-J — DC-STORE-08)*: carried. `DC-STORE-08.strengthened_in += PHASE4-N-K` — encoder canonicality exercised by persistent writer + shutdown drain.
-- **Snapshot bytes version-tag + fingerprint discipline** *(N-J — DC-STORE-09)*: carried. **N-K note:** `DC-STORE-09` gains
-  `open_obligation = "snapshot_schema_migration_follow_on_cluster"` — the v1→v2 migration tooling is the named follow-on.
+- **Single canonical snapshot encoder authority** *(N-J-S7 — CN-STORE-08)*: carried.
+- **Snapshot encoder canonicality** *(N-J — DC-STORE-08)*: carried.
+- **Snapshot bytes version-tag + fingerprint discipline** *(N-J — DC-STORE-09)*: carried.
 - **Snapshot encoder Conway-only scope** *(N-J)*: carried.
-- **Persistent snapshot reader contract** *(N-J-S8)*: carried. `DC-CONS-21.strengthened_in += PHASE4-N-K` — round-trip equivalence now exercised end-to-end at bootstrap warm-start + shutdown-resume.
+- **Persistent snapshot reader contract** *(N-J-S8)*: carried.
+- **Single bootstrap composition root** *(N-K — CN-NODE-01)*: carried.
+- **Per-peer task isolation discipline** *(N-K — DC-NODE-01)*: carried. **N-L note:** `DC-NODE-01.strengthened_in += PHASE4-N-L` — per-peer isolation now extends to the wire layer (each pump task owns its own `MuxTransportHandle` + `FrameBuffer` + `SessionState`; no shared mutable state).
+- **Single cadence-driven persistent-capture authority** *(N-K — DC-NODE-02)*: carried.
+- **Single wall-clock-reading site discipline** *(N-K — DC-NODE-03)*: carried. **N-L note:** `DC-NODE-03.strengthened_in += PHASE4-N-L` — clock-injection seam now covers keep-alive end-to-end; `ci_check_clock_seam.sh` now also covers `ade_network::session/`.
+- **Closed authority-fatal exit-code surface** *(N-K — DC-NODE-04)*: carried.
+- **Shutdown-then-resume byte-identical state contract** *(N-K — DC-NODE-04)*: carried.
 - **Receive-side replay determinism** *(N-H-S3 — DC-PROTO-09)*: carried.
-- **Per-peer receive-state independence across peers** *(N-H-S4)*: carried. **N-K note:** further strengthened — per-peer isolation now extends to the tokio task layer (DC-NODE-01); a peer-session task failure halts only that task.
+- **Per-peer receive-state independence across peers** *(N-H-S4)*: carried.
 - **Key-boundary for receive paths** *(N-H-S4)*: carried.
 - **Handshake-negotiated version threading through the receive reducer call site** *(N-H-S4 — DC-PROTO-06 strengthening)*: carried.
 - **Served-bytes parity** *(N-G-S4 — DC-CONS-17)*: carried.
@@ -937,7 +974,7 @@ All carried unchanged from prior revision.
 - **Plutus script ingress chokepoint**: `PlutusScript::from_cbor`.
 - **Plutus language set**: V1, V2, V3.
 - **Aiken UPLC quarantine pin**: `aiken_uplc` at tag `v1.1.21`.
-- **Ouroboros mux frame layout**: 8-byte big-endian header.
+- **Ouroboros mux frame layout**: 8-byte big-endian header. **N-L note:** now also CN-SESS-01-enforced (sole pub `encode_frame`/`decode_frame` pair).
 - **11 closed mini-protocol message enums** + **8 closed state graphs**.
 - **`BootstrapAnchorHash` v1 preimage** *(N-B)*.
 - **`EraSchedule` invariants** *(N-B)*.
@@ -957,13 +994,13 @@ All carried unchanged from prior revision.
 - **Verbatim tx-bytes flow through ingress** *(N-E; N-H mirror)*: carried.
 - **GREEN single-step replay fold contract** *(N-E — DC-MEM-04)*.
 - **Cross-cluster obligation pattern** *(N-E; carried)*.
-- **Operator-action evidence pattern** *(N-B / N-E / N-C / N-G / N-H)*: carried. **N-K adds no new instance** in the probe-binary family; the live mux pump is the follow-on (`RO-LIVE-01`/`RO-LIVE-02`).
+- **Operator-action evidence pattern** *(N-B / N-E / N-C / N-G / N-H)*: carried. **N-L adds one new live-evidence obligation (`RO-LIVE-03`)** but no new probe binary — the live pass runs the `ade_node` production binary directly.
 - **Closed credential discriminant contract** *(OQ5 / COMMITTEE / DREP / ENACTMENT / PP)*.
 - **Committee-enactment write-back contract** *(ENACTMENT)*.
 - **All canonical types**: shapes frozen at the era / version they entered.
-- **Handshake-negotiated version threading** *(N-A; strengthened in N-G + N-H)*: carried.
-- **TCB color assignments**: per `.idd-config.json` `core_paths`. **N-K additions:** `ade_runtime::bootstrap`, `ade_runtime::clock` (trait + `DeterministicClock`), `ade_runtime::orchestrator::{mod, event, state, core}`, `ade_runtime::rollback::persistent_writer`, `ade_node::{cli, lib, node}` are GREEN-inside-RED-crate (single-file GREEN classification — pure, no `tokio::*`, no clock-read). `ade_runtime::clock::SystemClock` and `ade_runtime::orchestrator::{peer_session, leadership_session, n2n_server_pump}` and `ade_node::main` are RED.
-- **`ChainDb` / `SnapshotStore` / `Recoverable` trait shapes** (N-D). **N-K note:** `ChainDb` + `SnapshotStore` are now opened by `bootstrap_initial_state` as the production single-authority opener; trait surfaces unchanged.
+- **Handshake-negotiated version threading** *(N-A; strengthened in N-G + N-H)*: carried. **N-L note:** the wire-layer session driver now negotiates the version end-to-end against a real peer via `n2n_dialer` + `BlockingTransport`.
+- **TCB color assignments**: per `.idd-config.json` `core_paths`. **N-L additions:** `ade_network::session::{event, state, demux, core, handshake_driver}` are GREEN (no `tokio::*`, no clock-read). `ade_network::mux::transport` (extended), `ade_runtime::network::{mux_pump, n2n_dialer}`, and `ade_runtime::orchestrator::keep_alive_session` are RED.
+- **`ChainDb` / `SnapshotStore` / `Recoverable` trait shapes** (N-D): carried.
 - **`AcceptedBlock` type-level broadcast gate** *(N-C-S5)*: carried.
 - **`AdmittedBlock` type-level admission gate** *(N-H-S1)*: carried.
 - **`RollbackContext` BLUE struct seam** *(N-I-S6)*: carried.
@@ -974,12 +1011,14 @@ All carried unchanged from prior revision.
 - **Private-key custody RED-confinement** *(N-C-S1)*: carried.
 - **Closed-grammar opcert byte authority** *(N-C-S2)*: carried.
 - **OpCert serial counter strict monotonicity** *(N-C-S2)*: carried.
-- **Single bootstrap composition root** *(NEW in N-K — CN-NODE-01)*: `bootstrap_initial_state` is the SOLE `pub fn` returning the initial `(LedgerState, PraosChainDepState, Option<ChainTip>)` triple in the workspace. Cold-start and warm-start are two branches of one function. CI-defended.
-- **Per-peer task isolation discipline** *(NEW in N-K — DC-NODE-01)*: each peer session owns its own `PerPeerReceiveState` / `PerPeerN2nServerState`; the shared `LedgerState` view is read-only at the peer task boundary; the single mutating consumer is the orchestrator core under the single authority chain. Decode/validity errors emit `OrchestratorEffect::PeerSessionHalted { peer_id, reason: PeerHaltReason }` (closed reason discriminant) and remove only that peer's entry from the per-peer BTreeMaps.
-- **Single cadence-driven persistent-capture authority** *(NEW in N-K — DC-NODE-02)*: `PersistentSnapshotWriter::on_admitted` consults `should_snapshot_after_block` exclusively; the orchestrator core also routes through it. No parallel cadence consultation.
-- **Single wall-clock-reading site discipline** *(NEW in N-K — DC-NODE-03)*: `ade_runtime::clock::SystemClock` is the SOLE wall-clock-reading site in `ade_runtime`. All other code consumes `Clock` outputs. Replay equivalence holds under `DeterministicClock`. CI-defended.
-- **Closed authority-fatal exit-code surface** *(NEW in N-K — DC-NODE-04)*: `EXIT_AUTHORITY_FATAL_IO = 10`, `EXIT_AUTHORITY_FATAL_DECODE = 12`, `EXIT_GENERIC_STARTUP = 1` are the closed `pub const i32` surface for `ade_node`. `AuthorityFatalKind` is the closed sum of fatal categories; `NodeRunError::exit_code` is the closed mapping. New fatal kind = closed-sum extension + new `EXIT_*` constant + new mapping arm.
-- **Shutdown-then-resume byte-identical state contract** *(NEW in N-K — DC-NODE-04)*: after `shutdown_drain` force-captures a final snapshot, the next `bootstrap_initial_state` against the same `(chaindb, snapshot store)` returns a byte-identical triple. Defended by `shutdown_then_resume_produces_byte_identical_state` integration test.
+- **Single mux frame authority** *(NEW in N-L — CN-SESS-01)*: `ade_network::mux::frame::{encode_frame, decode_frame}` is the SOLE pub pair in the workspace. CI-defended via `ci_check_mux_frame_closure.sh`.
+- **Single handshake authority** *(NEW in N-L — CN-SESS-02)*: `ade_network::handshake::transition::{n2n_transition, n2c_transition}` is the SOLE pub pair. CI-defended via `ci_check_handshake_closure.sh`.
+- **Single session reducer authority** *(NEW in N-L — CN-SESS-03)*: `ade_network::session::core::step` is the SOLE pub fn reducing `(SessionState, ByteChunkIn)` in the workspace. CI-defended via `ci_check_session_core_closure.sh`.
+- **Handshake-before-traffic type-state gate** *(NEW in N-L — DC-SESS-01)*: `SessionState::Handshaking` cannot deliver mini-protocol frames; encoded at the type level. CI-defended via `ci_check_session_core_closure.sh`.
+- **Closed mini-protocol id registry** *(NEW in N-L — DC-SESS-02)*: `AcceptedMiniProtocol::from_id` closes with `_ => None`; dispatch site has no wildcard accept. Adding a mini-protocol is a single-variant + single match-arm addition. CI-defended via `ci_check_mini_protocol_id_registry_closed.sh`.
+- **Session replay equivalence** *(NEW in N-L — DC-SESS-03)*: two-run byte-identity over recorded `ByteChunkIn` sequences. Proven by `tests/session_replay_equivalence.rs`.
+- **Backpressure discipline** *(NEW in N-L — DC-SESS-04)*: bounded `MuxTransportHandle` mpsc + `DuplexCapacity::DEFAULT { 1024, 256, 16384 }` + fail-fast `TransportError::BackpressureExceeded`. CI-defended via `ci_check_session_no_unbounded.sh`.
+- **Wire-layer clock injection** *(NEW in N-L — DC-SESS-05)*: session core wall-clock-free; keep-alive routes via `Clock`; `KeepAliveCadence::DEFAULT { interval_ms: 60_000 }` compile-time-pinned. CI-defended via `ci_check_clock_seam.sh` (extended).
 
 ### Version-gated (can evolve across major versions)
 
@@ -1008,212 +1047,230 @@ All carried unchanged from prior revision.
 - **New `ChainDbWrite` impl** *(N-H; N-I extended to 2 methods)*: carried.
 - **New `ChainDbWrite` trait method** *(N-H extension point)*: carried.
 - **New `ReceiveDispatchError` variant** *(N-H)*: carried.
-- **New `SnapshotReader` impl** *(N-I; N-J extended)*: carried. At this HEAD there are two production impls (`InMemorySnapshotCache`, `PersistentSnapshotCache`); N-K adds none.
+- **New `SnapshotReader` impl** *(N-I; N-J extended)*: carried.
 - **New `BlockSource` impl** *(N-I)*: carried.
 - **New `MaterializeError` / `CommitRollbackError` variant** *(N-I)*: carried.
 - **New `RollbackContext` field** *(N-I)*: carried.
 - **New `SnapshotCadence` field** *(N-I — WITH MANDATORY CLUSTER RATIFICATION)*: carried.
 - **New `SnapshotEncodeError` / `SnapshotDecodeError` / `StructuralReason` variant** *(N-J — extension point)*: carried.
 - **New snapshot sub-state encoder/decoder pair** *(N-J — extension point)*: carried.
-- **`SCHEMA_VERSION` bump (v1 → v2)** *(N-J — extension point; tracked on `DC-STORE-09` `open_obligation` at N-K)*: closed versioned-schema seam. First field appended to the framing wire format triggers the bump; the named follow-on cluster ratifies the v2 layout + decoder dispatch table + operator-facing migration tooling.
+- **`SCHEMA_VERSION` bump (v1 → v2)** *(N-J — extension point; carried `DC-STORE-09` open_obligation)*: carried.
 - **New `PersistentSnapshotCache` field** *(N-J — extension point)*: carried.
 - **New `PersistentCacheError` variant** *(N-J — extension point)*: carried.
-- **New CI check**: additive. (N-K added six —
-  `ci_check_bootstrap_closure.sh`, `ci_check_clock_seam.sh`,
-  `ci_check_orchestrator_core_purity.sh`,
-  `ci_check_persistent_writer_no_parallel_cadence.sh`,
-  `ci_check_peer_session_isolation.sh`,
-  `ci_check_node_binary_uses_single_bootstrap.sh`.)
+- **New `OrchestratorEvent` variant** *(N-K — extension point)*: closed sum extension. **N-L exercised** by adding `OrchestratorEvent::OutboundKeepAlive { peer_id }` per the discipline (new variant + new reducer arm in `step` + new translation site in the runner).
+- **New `OrchestratorEffect` variant** *(N-K — extension point)*: carried.
+- **New `PeerHaltReason` discriminant** *(N-K — extension point)*: carried.
+- **New `AuthorityFatalKind` discriminant** *(N-K — extension point)*: carried.
+- **New `Clock` impl** *(N-K — extension point)*: carried.
+- **New `BootstrapError` variant** *(N-K — extension point)*: carried.
+- **New CI check**: additive. (N-L added five —
+  `ci_check_mux_frame_closure.sh`, `ci_check_handshake_closure.sh`,
+  `ci_check_session_core_closure.sh`,
+  `ci_check_mini_protocol_id_registry_closed.sh`,
+  `ci_check_session_no_unbounded.sh`; extended one —
+  `ci_check_clock_seam.sh`.)
 - **Pinned external crate bump**: Tier-5 rationale doc required.
-- **New mini-protocol** / **Mini-protocol version-table bump**.
+  **N-L:** `ade_network/Cargo.toml` gained `sync` + `rt-multi-thread`
+  features on its existing tokio dep — additive feature flags, not
+  a version bump.
+- **New mini-protocol** / **Mini-protocol version-table bump**:
+  **N-L closed the extension shape** — new mini-protocol = new
+  `AcceptedMiniProtocol` variant + new `from_id` arm + new dispatch
+  arm in `session::core::step`.
 - **New `ChainEvent` / `ChainSelectionReject` / `StreamInput` variant**.
 - **New `NetworkMagic`** *(N-B)*.
 - **New `LedgerView` impl / LedgerState-backed `PoolDistrView` constructor**.
 - **`BootstrapAnchorHash` preimage v2** *(N-B)*: hard version-gated.
 - **N2N/N2C tx-submission → `mempool_ingress` ingress** *(N-E)*.
-- **Live cardano-node N2N block-fetch acceptance / live N2N follow-mode admission** *(N-C / N-G / N-H)*: each reopens on operator availability.
+- **Live cardano-node N2N block-fetch acceptance / live N2N follow-mode admission** *(N-C / N-G / N-H / **N-L `RO-LIVE-03`**)*: each reopens on operator availability.
 - **Phase-4 cluster surface additions** (N-F): each cluster's wire surface gates additions via its own cluster doc.
-- **New `OrchestratorEvent` variant** *(NEW in N-K — extension point)*: closed sum extension. New variant + new reducer arm in `step` + new translation site in the runner.
-- **New `OrchestratorEffect` variant** *(NEW in N-K — extension point)*: closed sum extension. New variant + new dispatch arm in the runner.
-- **New `PeerHaltReason` discriminant** *(NEW in N-K — extension point)*: closed sum extension. New discriminant when a new peer-fatal failure category emerges.
-- **New `AuthorityFatalKind` discriminant** *(NEW in N-K — extension point)*: closed sum extension. If a new fatal kind warrants a distinct exit code, append a new `EXIT_*` constant + extend `NodeRunError::exit_code`.
-- **New `Clock` impl** *(NEW in N-K — extension point)*: deliberate registry-tracked closed addition. New impl ≠ runtime plug-in.
-- **New `BootstrapError` variant** *(NEW in N-K — extension point)*: closed sum extension.
+- **New `AcceptedMiniProtocol` variant** *(NEW in N-L — extension point)*: closed-sum extension. Single variant + single `from_id` arm + single dispatch arm in `session::core::step`. CI-defended.
+- **New `ByteChunkIn` / `SessionEffect` / `SessionError` variant** *(NEW in N-L — extension point)*: closed-sum extension. New variant + matching reducer arm. CI-defended.
+- **New `Transport` impl** *(NEW in N-L — extension point)*: deliberate registry-tracked closed addition alongside `Pipe` / `BlockingTransport`. Sync trait; new impls remain sync.
+- **`KeepAliveCadence` operator-tunability** *(NEW in N-L — extension point; FORBIDDEN in this cluster)*: future cluster may relax to operator-tunable cadence with explicit Tier-5 rationale; currently pinned at compile time per DC-SESS-05.
 
 ---
 
 ## 5. Module Addition Rules
 
-Ade's workspace is small and color-disciplined. **PHASE4-N-K added
-eight new GREEN files** (`ade_runtime::bootstrap`,
-`ade_runtime::clock` [Clock trait + DeterministicClock],
-`ade_runtime::orchestrator::{mod, event, state, core}`,
-`ade_runtime::rollback::persistent_writer`,
-`ade_node::{cli, lib, node}`) **and three new RED files**
-(`ade_runtime::orchestrator::{peer_session, leadership_session,
-n2n_server_pump}` plus `ade_node::main` which co-lives with `lib`
-and `node`). **Six new CI gates**. **Five new registry rules** (all
-`enforced`). **Six carried rules strengthened**
-(`strengthened_in += PHASE4-N-K`). **One new `open_obligation`**
-on `DC-STORE-09`. N-K added **no new BLUE**, **no new external
-ingress wire-format frozen contract**, **no new operator-action
-probe binary**.
+Ade's workspace is small and color-disciplined. **PHASE4-N-L added
+five new GREEN files** (`ade_network::session::{event, state, demux,
+core, handshake_driver}`) **and three new RED files + one extended**
+(`ade_runtime::network::{mux_pump, n2n_dialer}`,
+`ade_runtime::orchestrator::keep_alive_session`,
+`ade_network::mux::transport` extended). **Five new CI gates + one
+extended**. **Eight new registry rules flipped to `enforced`** plus
+**one new `RO-LIVE-03` declared**. **Four carried rules
+strengthened** (`strengthened_in += PHASE4-N-L`). N-L added **no
+new BLUE**, **no new external ingress wire-format frozen contract**
+(reuses the closed mux frame + handshake + mini-protocol codec
+chokepoints), **no new operator-action probe binary**.
 
-**N-K also strengthened the `ade_runtime → ade_ledger` and
-`ade_node → ade_runtime` cross-color dependency edges**:
+**N-L also strengthened the `ade_runtime → ade_network` cross-color
+dependency edge**:
 
-1. `ade_runtime → ade_ledger` (already established;
-   **further strengthened in N-K**) — the GREEN
-   `bootstrap` reads `ade_ledger::state::LedgerState` +
-   `ade_ledger::rollback::{materialize_rolled_back_state, RollbackContext}`;
-   the GREEN `persistent_writer` reads
-   `ade_ledger::state::LedgerState` + calls
-   `PersistentSnapshotCache::capture`; the GREEN `orchestrator::core`
-   composes the receive + producer + server BLUE chokepoints. Same
-   direction (GREEN → BLUE); allowed.
-2. `ade_node → ade_runtime` (NEW edge in N-K) — the RED node binary
-   composes the GREEN orchestrator + bootstrap + writer surface.
-   Same direction (RED → GREEN → BLUE); allowed.
+1. `ade_runtime → ade_network` (already established; **further
+   strengthened in N-L**) — the RED `mux_pump` / `n2n_dialer` /
+   `keep_alive_session` files import GREEN session module surfaces
+   (`session::core::step`, `session::event::*`, `session::state::*`,
+   `handshake_driver::*`) and the RED `mux::transport` surface.
+   Direction unchanged.
+2. The GREEN session files in `ade_network` import the existing BLUE
+   `mux::frame` + `handshake::transition` + mini-protocol codecs;
+   they never reach into RED siblings (`mux::transport`,
+   `bin::capture_*`).
 
-**The module-addition rule N-K sets for future node-binary-side
+**The module-addition rule N-L sets for future wire-layer-side
 work:**
 
-1. **A new orchestration-side GREEN primitive attaches inside
-   `ade_runtime::orchestrator::*` or `ade_runtime::rollback::*`** as
-   a pure function over closed-sum events/effects. No `tokio::*`,
-   no clock, no `HashMap`/`HashSet`/`rand`/float. New canonical
-   types MUST be closed sums or closed structs; no
-   `#[non_exhaustive]`; no `String`-bearing variants.
-2. **A new orchestrator event/effect variant attaches as a closed-sum
-   extension on `OrchestratorEvent` / `OrchestratorEffect`** plus
-   matching reducer/dispatch arm. Code change required; no plug-in
-   registry.
-3. **A new RED runner attaches inside `ade_runtime::orchestrator::*`**
-   (sibling to `peer_session`, `leadership_session`,
-   `n2n_server_pump`). The runner translates RED-side asynchrony
-   into `OrchestratorEvent`s and dispatches `OrchestratorEffect`s;
-   it never bypasses the GREEN core.
-4. **A new `Clock` impl attaches inside `ade_runtime::clock`** as a
-   deliberate registry-tracked closed addition. New impls extend
-   the closed impl set; the single wall-clock-reading site
-   discipline (DC-NODE-03) MUST be preserved.
-5. **A new `AuthorityFatalKind` discriminant + matching exit code**
-   attaches by: append `EXIT_*` constant in `ade_node::node` +
-   extend `AuthorityFatalKind` sum in `ade_runtime::orchestrator::event` +
-   extend `NodeRunError::exit_code` mapping. No ad-hoc exit codes.
-6. **A new node-binary registry rule attaches as a derived `DC-NODE-*` /
-   `CN-NODE-*` family entry** with `code_locus`, `ci_script`,
-   `tests`, `cross_ref`. Bidirectional cross-refs to consumed rules
-   (`CN-CONS-08`, `CN-STORE-07`, `CN-STORE-08`, `DC-STORE-07`,
-   `DC-CONS-20`, `DC-CONS-21`, `T-DET-01`).
+1. **A new session-side GREEN primitive attaches inside
+   `ade_network::session::*`** as a pure sync function over
+   closed-sum events/effects. No `tokio::*`, no clock, no
+   `HashMap`/`HashSet`/`rand`/float. New canonical types MUST be
+   closed sums or closed structs; no `#[non_exhaustive]`; no
+   `String`-bearing variants.
+2. **A new mini-protocol attaches as a single-variant addition on
+   `AcceptedMiniProtocol`** + a single `from_id` arm + a single
+   dispatch arm in `session::core::step`. CI-defended; the
+   `_ => None` close MUST be preserved.
+3. **A new session event/effect/error variant attaches as a
+   closed-sum extension** on `ByteChunkIn` / `SessionEffect` /
+   `SessionError` plus matching reducer arm. Code change required;
+   no plug-in registry.
+4. **A new `Transport` impl attaches in the file declaring its
+   composition site** (test impls under
+   `ade_network::session::handshake_driver`; production impls under
+   `ade_runtime::network::*`). The trait remains sync; new impls
+   remain sync; async lives behind `tokio::task::spawn_blocking`.
+5. **A new wire-layer RED runner attaches inside
+   `ade_runtime::network::*`** (sibling to `mux_pump`, `n2n_dialer`)
+   or `ade_runtime::orchestrator::*` (sibling to `keep_alive_session`).
+   It translates RED-side asynchrony into closed-sum
+   `OrchestratorEvent`s; it never bypasses the GREEN session
+   reducer.
+6. **`MuxTransportHandle` MUST remain bounded both ways**
+   (DC-SESS-04). Any new transport variant MUST honour the bounded
+   `mpsc` discipline and the fail-fast
+   `TransportError::BackpressureExceeded` route. No
+   `mpsc::unbounded_*` anywhere in the mux/session paths.
+7. **`KeepAliveCadence::DEFAULT` MUST remain compile-time-pinned in
+   this cluster** (DC-SESS-05). Operator-tunable cadence requires a
+   future cluster with explicit Tier-5 rationale.
+8. **A new wire-layer registry rule attaches as a derived
+   `DC-SESS-*` / `CN-SESS-*` family entry** with `code_locus`,
+   `ci_script`, `tests`, `cross_ref`. Bidirectional cross-refs to
+   consumed rules (`T-DET-01`, `CN-CONS-08`, `DC-NODE-01`,
+   `DC-NODE-03`).
 
-### Cross-cluster obligation pattern (carried — `RO-LIVE-01`/`RO-LIVE-02` flagged by N-K close)
+### Cross-cluster obligation pattern (carried — `RO-LIVE-03` flagged by N-L close)
 
-**N-K adds no new cross-cluster obligation in the wire-format
-sense** but ships the honest-scope half of the live-evidence story:
-`peer_session.rs`, `leadership_session.rs`, `n2n_server_pump.rs`,
-and `ade_node::main` are real and mechanically evidenced; the
-actual Ouroboros mux + handshake driver above `MuxTransport` is
-the operator-action follow-on tracked by `RO-LIVE-01` /
-`RO-LIVE-02` (live-evidence halves; still
-`blocked_until_operator_peer_available`).
+**N-L adds one new cross-cluster obligation in the live-evidence
+sense** — `RO-LIVE-03` (`blocked_until_operator_peer_available`).
+The mechanical wire layer is real and mechanically evidenced; the
+operator-action follow-on is the one-slice cluster
+`PHASE4-N-L-LIVE`. CE-N-H-6 is subsumed by `RO-LIVE-03` capture
+scope (the live pass that captures `RO-LIVE-03` evidence will also
+capture CE-N-H-6 evidence).
 
-### Operator-action evidence pattern (carried — no N-K addition to the probe-binary family)
+### Operator-action evidence pattern (carried — no N-L addition to the probe-binary family)
 
-**N-K adds no new operator-action probe binary** — the family
-remains at five. The `ade_node` binary is the production node
-entry, not a probe binary. Live evidence will come from running
-`ade_node` against a private cardano-node peer in the follow-on
-operator-action cluster.
+**N-L adds no new operator-action probe binary** — the family
+remains at five. The live operator pass runs the `ade_node`
+production binary directly with `--peer ADDR --listen ADDR`.
 
-### Cluster scope-edge pattern (carried — strengthened in N-K close)
+### Cluster scope-edge pattern (carried — strengthened in N-L close)
 
-**N-K applies the scope-edge pattern to the honest-scope split**:
-the cluster ships the orchestrator core, bootstrap, persistent
-writer, and the binary; the live mux pump is the deliberate
-out-of-scope follow-on tracked by `RO-LIVE-01`/`RO-LIVE-02`. The
-scope edge is documented in the cluster doc's "Honest-scope note"
-section + here.
+**N-L applies the scope-edge pattern to the wire-layer / live-pass
+split**: the cluster ships the session reducer, handshake driver,
+mux pump, n2n dialer, keep-alive session, and exposes them via the
+binary; the live operator pass is the deliberate out-of-scope
+follow-on tracked by `RO-LIVE-03`. The scope edge is documented in
+the cluster doc's "Honest-scope carry-forwards" section and the
+closure record.
 
 | Color | Naming convention | Build-config flags | May depend on | MUST NOT depend on |
 |-------|-------------------|--------------------|----------------|--------------------|
-| **BLUE** | `ade_*` | First line of every `.rs` is the contract banner. `lib.rs` carries `#![deny(unsafe_code, clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::float_arithmetic)]`. No `#[cfg(feature = ...)]`. No async. **N-K:** no BLUE additions. | Other BLUE crates / submodules only. | Any RED submodule or crate; GREEN in non-dev deps; `pallas_*` (except `ade_plutus`); async runtime; `HashMap`/`HashSet`/`IndexMap`; clock/rand/float/env/I/O. |
-| **GREEN** | `ade_*` | Banner + deny attrs are project convention. **N-K:** GREEN orchestrator files (`bootstrap.rs`, `clock.rs` [trait + `DeterministicClock`], `orchestrator/{mod,event,state,core}.rs`, `rollback/persistent_writer.rs`, `ade_node/{cli,lib,node}.rs`) are pure: no `tokio::*`, no `SystemTime`/`Instant`, no `HashMap` (CI-defended by `ci_check_orchestrator_core_purity.sh` + `ci_check_clock_seam.sh` + `ci_check_bootstrap_closure.sh`). | BLUE crates + standard library + ecosystem crates. **N-K:** the GREEN orchestrator + bootstrap + writer live inside `ade_runtime` (RED crate) — color is per-module per the cluster TCB Color Map. | `ade_runtime` for `ade_testkit`; RED submodules in non-test paths. Results must never feed back into a BLUE authoritative decision. |
-| **RED** | `ade_*` | No special header. Free to use clocks, I/O, async, `HashMap`, signing keys. **N-K:** `SystemClock` + the tokio runner trio + `ade_node::main` are RED. | Any BLUE / GREEN crate or submodule (one-way). **N-K strengthened the `ade_node → ade_runtime` edge** (new) and the `ade_runtime → ade_ledger` edge (carried, further strengthened). | Cannot be depended on by BLUE. |
+| **BLUE** | `ade_*` | First line of every `.rs` is the contract banner. `lib.rs` carries `#![deny(unsafe_code, clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::float_arithmetic)]`. No `#[cfg(feature = ...)]`. No async. **N-L:** no BLUE additions. | Other BLUE crates / submodules only. | Any RED submodule or crate; GREEN in non-dev deps; `pallas_*` (except `ade_plutus`); async runtime; `HashMap`/`HashSet`/`IndexMap`; clock/rand/float/env/I/O. |
+| **GREEN** | `ade_*` | Banner + deny attrs are project convention. **N-L:** GREEN session files (`session/{event, state, demux, core, handshake_driver}.rs`) are pure sync: no `tokio::*`, no `SystemTime`/`Instant`, no `HashMap` (CI-defended by `ci_check_session_core_closure.sh` + `ci_check_clock_seam.sh` extension). | BLUE crates + standard library + ecosystem crates. **N-L:** the GREEN session files live inside `ade_network` (BLUE-with-per-file-RED-carve-out crate); per-file color is per the cluster TCB Color Map. | RED submodules in non-test paths. Results must never feed back into a BLUE authoritative decision. |
+| **RED** | `ade_*` | No special header. Free to use clocks, I/O, async, `HashMap`, signing keys. **N-L:** `mux::transport` (extended), `ade_runtime::network::{mux_pump, n2n_dialer}`, and `ade_runtime::orchestrator::keep_alive_session` are RED. | Any BLUE / GREEN crate or submodule (one-way). **N-L:** new edge `ade_runtime::network::* → ade_network::{session, mux::transport, handshake}`. | Cannot be depended on by BLUE. |
 
 ### New module checklist
 
 1. **Add to `Cargo.toml` workspace members** (if a new crate).
 2. **Declare TCB color** by editing `.idd-config.json` `core_paths` if BLUE.
 3. **CI script update obligations** — extend the relevant BLUE-scoped
-   scripts; for node-binary-side sub-modules, model the new CI gate
-   on `ci_check_bootstrap_closure.sh` / `ci_check_clock_seam.sh`
-   shape (workspace-wide single-authority grep + forbidden-patterns
-   check).
+   scripts; for wire-layer-side sub-modules, model the new CI gate
+   on `ci_check_session_core_closure.sh` /
+   `ci_check_mini_protocol_id_registry_closed.sh` shape
+   (workspace-wide single-authority grep + forbidden-patterns
+   check + closed-registry close-with-`_ => None` check).
 4. **Add contract banner** (BLUE) to every `.rs` file.
 5. **Add deny attributes** to `lib.rs` (BLUE).
 6. **New canonical types:** add a `[[rules]]` block under family `T`
    in the invariant registry, plus a round-trip test. For new
-   node-binary authority rules, append `DC-NODE-0X` / `CN-NODE-0X`
+   wire-layer authority rules, append `DC-SESS-0X` / `CN-SESS-0X`
    with bidirectional cross-ref to consumed rules.
 7. **New operator-action probe binary:** (not applicable for the
-   node-binary domain — `ade_node` is the production entry; live
-   evidence comes from running it against a real peer).
-8. **Cross-cluster obligation:** (the live mux pump is the named
-   follow-on; tracked on `RO-LIVE-01`/`RO-LIVE-02`).
+   wire-layer domain — `ade_node` is the production entry; live
+   evidence comes from running it against a real peer with
+   `--peer ADDR`).
+8. **Cross-cluster obligation:** the live operator pass is the named
+   follow-on; tracked on `RO-LIVE-03`.
 9. **Cluster scope-edge:** if the cluster deliberately scopes down a
    derived constraint, document the carve-out in CODEMAP + the
-   cluster doc. N-K's "honest-scope RED runner" is the canonical
-   example.
+   cluster doc. N-L's "live pass deferred to `PHASE4-N-L-LIVE`" is
+   the canonical example.
 10. **Run `cargo test --workspace` and the full CI script suite.**
 
 ### Phase 4 anticipated additions
 
-- **PHASE4-N-K — FULLY CLOSED at this HEAD** (mechanical close;
-  honest-scope RED runner): orchestrator core + bootstrap + clock
-  seam + persistent writer + RED tokio runner + `ade_node` binary +
-  5 new registry rules (`enforced`) + 6 new CI scripts + 6 carried
-  rules strengthened + 1 new open_obligation on DC-STORE-09. Live
-  mux pump is the operator-action follow-on (`RO-LIVE-01`/`RO-LIVE-02`).
+- **PHASE4-N-L — FULLY CLOSED at this HEAD** (mechanical close;
+  honest-scope wire layer): session reducer + handshake driver +
+  mux pump + n2n dialer + keep-alive session + `ade_node`
+  `--peer ADDR --listen ADDR` CLI + 8 new registry rules
+  (`enforced`) + 5 new CI scripts + 1 extended + 4 carried rules
+  strengthened + 1 new `RO-LIVE-03` declared. Live operator pass
+  is the one-slice follow-on cluster `PHASE4-N-L-LIVE`.
+- **PHASE4-N-K — FULLY CLOSED** (carried).
 - **PHASE4-N-J — FULLY CLOSED** (carried).
 - **PHASE4-N-I — FULLY CLOSED** (carried).
-- **PHASE4-N-H — FULLY CLOSED** (carried). CE-N-H-6 live-evidence is
-  `blocked_until_operator_peer_available`.
-- **PHASE4-N-G — FULLY CLOSED** (carried). CE-N-G-8 live-evidence
-  is `blocked_until_operator_peer_available`.
-- **PHASE4-N-C — FULLY CLOSED** (carried). CE-N-C-8 live-evidence
-  is `blocked_until_operator_stake_available`.
+- **PHASE4-N-H — FULLY CLOSED** (carried).
+- **PHASE4-N-G — FULLY CLOSED** (carried).
+- **PHASE4-N-C — FULLY CLOSED** (carried).
 - **PROPOSAL-PROCEDURES-DECODE — FULLY CLOSED** (carried).
 - **PHASE4-N-E — FULLY CLOSED** (carried).
-- **NEW future cluster — Live mux + handshake driver above `MuxTransport`**
-  *(NEW candidate flagged by N-K close — `RO-LIVE-01`/`RO-LIVE-02`)*:
-  RED submodule binding the closed `MuxTransport` to the per-peer +
-  server-pump tokio tasks. Operator-action evidence at the other end.
-  Surface for the next planner.
+- **NEW future cluster — `PHASE4-N-L-LIVE` (`RO-LIVE-03`)**
+  *(NEW obligation at N-L close)*: one-slice operator-action
+  cluster running `ade_node --peer ADDR` against a private
+  cardano-node peer; captures `RO-LIVE-03_<date>.log`. Highest
+  priority post-N-L cluster for the bounty.
+- **NEW future cluster — TLS / authenticated transport** *(declared
+  `¬P-8` in N-L invariants sketch)*: curve25519 auth layer; future.
+- **NEW future cluster — N2C local protocols session driver**
+  *(flagged by N-L close)*: local-chain-sync / local-tx-submission /
+  local-state-query family over UDS.
+- **NEW future cluster — Peer-sharing + tx-submission live half**
+  *(flagged by N-L close)*: requires mempool integration as
+  precondition.
 - **NEW future cluster — Snapshot schema migration v1 → v2 tooling**
-  *(NEW `DC-STORE-09` `open_obligation` at N-K close)*: operator-facing
-  v1→v2 upgrade tooling. Out of node-binary scope; the seam is set by
-  `SCHEMA_VERSION = 1`.
-- **NEW future cluster — Metrics + observability** *(NEW candidate
-  flagged by N-K close)*: closed `MetricEffect` arm + Prometheus
-  exporter. Tier-5.
-- **NEW future cluster — Snapshot eviction policy** *(carried from
-  N-J)*: Tier-5 operational concern applying to both caches.
+  *(carried from N-K — `DC-STORE-09.open_obligation`)*.
+- **NEW future cluster — Metrics + observability** *(carried from
+  N-K)*: closed `MetricEffect` arm + Prometheus exporter. Tier-5.
+- **NEW future cluster — Snapshot eviction policy** *(carried)*.
 - **NEW future cluster — Multi-peer fork choice** *(carried; now
-  further enabled by N-K stable per-peer tasks)*.
+  further enabled by N-L live wire)*.
 - **NEW future cluster — N2C local-chain-sync receive surface**
   *(carried)*.
 - **NEW low-priority future cluster — Pre-Conway snapshot encoder**
   *(carried)*.
 - **Future cluster — `CE-N-H-6` / `CE-N-G-8` / `CE-N-C-8` live
-  evidence re-open triggers** (carried).
+  evidence re-open triggers** (carried; CE-N-H-6 subsumed by
+  `RO-LIVE-03` capture scope).
 - **Future node-binary cluster (`CE-NODE-N2C-LTX`)** (carried).
 - **Tx-validity completeness follow-ups** (carried).
 - **PP OQ-1..OQ-4 follow-ups** (carried).
 - **N-F (operator API)**: thin RED layer mapping a closed Query
-  enum to gRPC/HTTP. **N-K note:** the orchestrator's closed
-  event/effect vocabulary is the natural target for a future
-  N-F effect arm.
+  enum to gRPC/HTTP.
 
 **These placements are candidates** — user confirmation needed at
 cluster entry.
@@ -1236,10 +1293,7 @@ cluster entry.
 - No re-hashing of `canonical_bytes` or re-encoded bytes — wire bytes only.
 - No construction of `PreservedCbor` outside `ade_codec`.
 - No raw CBOR decoding in any BLUE crate except `ade_codec` and the
-  single allowlisted file `crates/ade_plutus/src/evaluator.rs`. **N-J
-  carve-out (carried):** `ade_ledger::snapshot::*` uses
-  `ade_codec::cbor::*` read/write primitives directly — structured
-  composition over the BLUE codec layer.
+  single allowlisted file `crates/ade_plutus/src/evaluator.rs`.
 - No `pallas_*` reference outside `ade_plutus`.
 - **(N-A specific)** Carried.
 - **(N-B specific)** Carried.
@@ -1254,9 +1308,10 @@ cluster entry.
 - **(N-H-S1..S6 specific)** All carried.
 - **(N-I-S1..S6 specific)** All carried.
 - **(N-J-S1..S8 specific)** All carried.
-- **(N-K specific)** No new BLUE in this cluster.
+- **(N-K specific)** No new BLUE.
+- **(N-L specific)** No new BLUE in this cluster.
 
-### GREEN (`ade_testkit` incl. all corpora; `ade_runtime::consensus::{candidate_fragment, chain_selector}`; `ade_ledger::mempool::{policy, canonicalize}`; the two `ade_core_interop` N-E bridges; `ade_runtime::producer::{tick_assembler, broadcast_to_served, served_chain_lookups}`; `ade_runtime::receive::{events_to_state, in_memory_chain_write}`; `ade_runtime::rollback::{cadence, in_memory_cache, chaindb_block_source, persistent_cache}`; **`ade_runtime::bootstrap` — NEW in N-K**; **`ade_runtime::clock` [trait + `DeterministicClock`] — NEW in N-K**; **`ade_runtime::orchestrator::{mod, event, state, core}` — NEW in N-K**; **`ade_runtime::rollback::persistent_writer` — NEW in N-K**; **`ade_node::{cli, lib, node}` — NEW in N-K**)
+### GREEN (`ade_testkit` incl. all corpora; `ade_runtime::consensus::{candidate_fragment, chain_selector}`; `ade_ledger::mempool::{policy, canonicalize}`; the two `ade_core_interop` N-E bridges; `ade_runtime::producer::{tick_assembler, broadcast_to_served, served_chain_lookups}`; `ade_runtime::receive::{events_to_state, in_memory_chain_write}`; `ade_runtime::rollback::{cadence, in_memory_cache, chaindb_block_source, persistent_cache}`; `ade_runtime::bootstrap`; `ade_runtime::clock` [trait + `DeterministicClock`]; `ade_runtime::orchestrator::{mod, event, state, core}`; `ade_runtime::rollback::persistent_writer`; `ade_node::{cli, lib, node}`; **`ade_network::session::{event, state, demux, core, handshake_driver}` — NEW in N-L**)
 
 - No nondeterminism that leaks into stored fixtures — fixtures must
   be byte-reproducible.
@@ -1264,121 +1319,101 @@ cluster entry.
 - No `HashMap` even in test helpers — `BTreeMap` only.
 - No import of `ade_runtime` from `ade_testkit`.
 - (carried bullets per prior revision)
-- **(`ade_runtime::bootstrap`, NEW in N-K)** Single `pub fn`
-  returning `(LedgerState, PraosChainDepState, Option<ChainTip>)`
-  (CN-NODE-01). Cold-start and warm-start are TWO BRANCHES OF ONE
-  FUNCTION; no parallel entry point. MUST NOT use `HashMap`/
-  `HashSet`/`tokio::*`/`rand`/wall-clock (CI-defended by
-  `ci_check_bootstrap_closure.sh`). Re-running against the same
-  `(chaindb, snapshot store)` MUST produce a byte-identical triple
-  (defended by `shutdown_then_resume_produces_byte_identical_state`).
-- **(`ade_runtime::clock`, NEW in N-K — trait + `DeterministicClock`
-  GREEN side)** `Clock` trait is the SOLE time seam in
-  `ade_runtime`. GREEN side MUST NOT use `SystemTime::now()` /
-  `Instant::now()` / `tokio::time::*`. `DeterministicClock` MUST be
-  pure (given the same tick vector, two clocks produce the same
-  outputs).
-- **(`ade_runtime::orchestrator::{mod, event, state, core}`, NEW in
-  N-K)** Closed-sum event/effect vocabulary; closed `OrchestratorState`
-  with `BTreeMap<PeerId, _>` per-peer collections; pure `step`
-  reducer. MUST NOT import `tokio::*` (CI-defended by
-  `ci_check_orchestrator_core_purity.sh`). MUST NOT read wall clock
-  (CI-defended by `ci_check_clock_seam.sh`). Per-peer halts MUST
-  emit `OrchestratorEffect::PeerSessionHalted` (closed reason
-  discriminant), never `panic!` (CI-defended by
-  `ci_check_peer_session_isolation.sh`).
-- **(`ade_runtime::rollback::persistent_writer`, NEW in N-K)**
-  `PersistentSnapshotWriter` is the SOLE production cadence-driven
-  caller of `PersistentSnapshotCache::capture` (DC-NODE-02).
-  `on_admitted` MUST consult `should_snapshot_after_block`
-  exclusively; `force_capture` is shutdown-only. MUST NOT introduce
-  a parallel cadence policy (CI-defended by
-  `ci_check_persistent_writer_no_parallel_cadence.sh`).
-- **(`ade_node::{cli, lib, node}`, NEW in N-K — GREEN side)** `node`
-  hosts the closed `EXIT_*` constant trio and `NodeRunError::exit_code`
-  mapping. MUST map authority-fatal kinds deterministically; new
-  fatal kinds slot in via additions to `AuthorityFatalKind` +
-  mapping arm + new `EXIT_*` constant if warranted (no ad-hoc exit
-  codes). `cli` is closed argv parsing.
+- (N-K GREEN bullets per prior revision: `bootstrap`, `clock`,
+  `orchestrator/*`, `persistent_writer`, `ade_node` — all carried.)
+- **(`ade_network::session::core`, NEW in N-L)** Single `pub fn step`
+  reducing `(SessionState, ByteChunkIn) -> Result<Vec<SessionEffect>,
+  SessionError>` (CN-SESS-03). MUST NOT use `tokio::*`,
+  `SystemTime::now()` / `Instant::now()`, `HashMap`, `rand`, float
+  (CI-defended by `ci_check_session_core_closure.sh` +
+  `ci_check_clock_seam.sh` extension). The handshake-before-traffic
+  type-state gate MUST be preserved (DC-SESS-01).
+- **(`ade_network::session::event`, NEW in N-L)** Closed event/effect/
+  error vocabulary. `AcceptedMiniProtocol::from_id` MUST close with
+  `_ => None` (DC-SESS-02). No `String`-bearing variants; no
+  `#[non_exhaustive]`.
+- **(`ade_network::session::state`, NEW in N-L)** Closed type-state
+  `{ Handshaking, Connected }`. MUST NOT add a third state without a
+  cluster ratification (DC-SESS-01 extension point).
+- **(`ade_network::session::demux`, NEW in N-L)** `FrameBuffer` is a
+  pure partial-frame accumulator. MUST NOT call into the BLUE
+  `mux::frame::decode_frame` outside its boundary-detection use; MUST
+  NOT mutate session state directly.
+- **(`ade_network::session::handshake_driver`, NEW in N-L)** `Transport`
+  is a **sync** trait (CN-SESS-02). New impls MUST remain sync; async
+  lives behind `tokio::task::spawn_blocking` at the call site (the
+  production `BlockingTransport` is the canonical example).
 
-### RED (`ade_runtime`, `ade_node`, `ade_network::mux::transport`, `ade_network::session`, `ade_network::bin::capture_*`, `ade_runtime::consensus::genesis_parser`, `ade_core_interop` (incl. five live-session probe binaries), the RED-behavior `ade_ledger::consensus_input_extract` scan; `ade_runtime::producer::{signing, keys, scheduler, broadcast}` (N-C); `ade_runtime::network::n2n_server` (N-G-S6); `ade_runtime::receive::orchestrator` (N-H-S4); `ade_runtime::rollback::snapshot_writer` (N-I-S5); **`ade_runtime::clock::SystemClock` — NEW in N-K (RED sub-classified)**; **`ade_runtime::orchestrator::{peer_session, leadership_session, n2n_server_pump}` — NEW in N-K**; **`ade_node::main` — NEW in N-K**)
+### RED (`ade_runtime`, `ade_node`, `ade_network::mux::transport`, `ade_network::session::*` non-driver siblings as applicable, `ade_network::bin::capture_*`, `ade_runtime::consensus::genesis_parser`, `ade_core_interop` (incl. five live-session probe binaries), the RED-behavior `ade_ledger::consensus_input_extract` scan; `ade_runtime::producer::{signing, keys, scheduler, broadcast}` (N-C); `ade_runtime::network::n2n_server` (N-G-S6); `ade_runtime::receive::orchestrator` (N-H-S4); `ade_runtime::rollback::snapshot_writer` (N-I-S5); `ade_runtime::clock::SystemClock`; `ade_runtime::orchestrator::{peer_session, leadership_session, n2n_server_pump}`; `ade_node::main`; **`ade_network::mux::transport` (extended) — NEW in N-L (further RED extension)**; **`ade_runtime::network::{mux_pump, n2n_dialer}` — NEW in N-L**; **`ade_runtime::orchestrator::keep_alive_session` — NEW in N-L**)
 
 - No direct mutation of `ade_ledger` state — all transitions go
-  through the established BLUE chokepoints. **(N-K carve-out)** The
-  RED runner trio (`peer_session`, `leadership_session`,
-  `n2n_server_pump`) translates RED-side asynchrony into
-  `OrchestratorEvent`s and dispatches `OrchestratorEffect`s; the
-  GREEN core is the SOLE mutator of `OrchestratorState`. The runner
-  never bypasses the core; the core never bypasses the BLUE
-  chokepoints (`admit_via_block_validity`, `materialize_rolled_back_state`,
-  `framing::{encode,decode}_snapshot`).
+  through the established BLUE chokepoints. **(N-L carve-out)** The
+  RED wire-layer trio (`mux_pump`, `n2n_dialer`,
+  `keep_alive_session`) translates RED-side asynchrony into
+  `OrchestratorEvent`s / `ByteChunkIn`s and dispatches
+  `SessionEffect`s; the GREEN session reducer is the SOLE mutator
+  of `SessionState`. The runner never bypasses the reducer; the
+  reducer never bypasses the BLUE chokepoints
+  (`mux::frame::decode_frame`, `handshake::transition`, mini-protocol
+  decoders).
 - No bypassing `ade_codec` to construct semantic types from raw bytes.
-- (`ade_runtime` specifically) Existing `ade_runtime → ade_ledger`
-  edge is **further strengthened in N-K** — the bootstrap +
-  persistent writer + orchestrator core consume the BLUE chokepoint
-  surface end-to-end. New edge: `ade_node → ade_runtime` (also
-  GREEN → BLUE direction at the transitive level). Passes
+- (`ade_runtime` specifically) New edge: `ade_runtime::network::* →
+  ade_network::{session, mux::transport, handshake}` (also GREEN →
+  BLUE direction at the transitive level). Passes
   `ci_check_dependency_boundary.sh`.
-- (`ade_runtime::clock::SystemClock`, NEW in N-K — RED sub-classified)
-  SOLE wall-clock-reading site in `ade_runtime` (DC-NODE-03 grep).
-  No other file in `ade_runtime` may read `SystemTime`/`Instant`/
-  `tokio::time`. Production-only; replaced by `DeterministicClock`
-  in tests + the replay harness.
-- (`ade_runtime::orchestrator::{peer_session, leadership_session,
-  n2n_server_pump}`, NEW in N-K) RED tokio runner trio. May use
-  `tokio::*`, `tokio::time::*`, and OS I/O. MUST translate
-  RED-side asynchrony into closed-sum `OrchestratorEvent`s; MUST
-  dispatch `OrchestratorEffect`s via the runner's dispatch table.
-  MUST NOT mutate `OrchestratorState` directly — only the GREEN
-  `step` reducer mutates state. Per-peer failure MUST halt only
-  the failing peer's task (DC-NODE-01).
-- (`ade_node::main`, NEW in N-K) `tokio::main` entry. Installs
-  signal handlers (Ctrl-C / SIGTERM). Drives
-  `run_node_until_shutdown`. Maps `NodeRunError` to process exit
-  code via `NodeRunError::exit_code`. Shutdown drain force-captures
-  a final snapshot via `PersistentSnapshotWriter::force_capture`
-  before peer sockets close.
-- (`ade_network::mux::transport`) No protocol logic.
-- (`ade_network::session`) Composition glue only.
-- (`ade_network::bin::capture_*`) Live-interop tools only.
-- (`ade_runtime::consensus::genesis_parser`) No re-derivation of the
-  bootstrap anchor outside `compute_anchor_hash`.
-- (`ade_ledger::consensus_input_extract`) Pure-over-bytes.
-- (N-E live N2N operator-action session) Carried.
-- (Deferred RED operator-action surfaces — CE-NODE-N2C-LTX) Carried.
-- (`ade_core_interop`) Live-interop driver only; library tests
-  `#[ignore]`-gated. **N-K added no new binary.**
-- **(N-C-S1 / S6 specific — `ade_runtime::producer::*`)** All carried.
-  **N-K note:** scheduler is now driven by `leadership_session` via
-  `Clock::tick_stream()`; behaviour unchanged.
-- **(N-G-S6 specific — `ade_runtime::network::n2n_server`)** Carried.
-  **N-K note:** now driven by `n2n_server_pump` RED runner.
-- **(N-H-S4 specific — `ade_runtime::receive::orchestrator`)** Carried.
-  **N-K note:** now driven per-peer by `peer_session` RED tasks
-  under DC-NODE-01 isolation.
-- **(N-I-S5 specific — `ade_runtime::rollback::snapshot_writer`)**
-  Carried. **N-K note:** still the receive-side in-memory hot path;
-  the persistent path now runs in parallel via `PersistentSnapshotWriter`
-  in the orchestrator core (DC-NODE-02).
+- (carried RED bullets per prior revision: `SystemClock`, orchestrator
+  runner trio, `ade_node::main`, `mux::transport`, `session::*`,
+  capture binaries, genesis parser, consensus_input_extract,
+  N-E live N2N, deferred N2C, `ade_core_interop`, N-C producer,
+  N-G n2n_server, N-H receive orchestrator, N-I snapshot_writer —
+  all carried.)
+- **(`ade_network::mux::transport`, extended in N-L)** Now hosts
+  `spawn_duplex` + `MuxTransportHandle` + `TransportError` +
+  `DuplexCapacity::DEFAULT { 1024, 256, 16384 }`. MUST keep both
+  inbound and outbound mpsc bounded (DC-SESS-04). MUST route
+  overflow through `TransportError::BackpressureExceeded`
+  (fail-fast; no silent drop). CI-defended by
+  `ci_check_session_no_unbounded.sh`. Still no protocol logic — the
+  mux frame parsing remains in `ade_network::mux::frame` (BLUE).
+- **(`ade_runtime::network::mux_pump`, NEW in N-L)** Per-connection
+  tokio task. May use `tokio::*`, `tokio::time::*`, and OS I/O.
+  MUST translate inbound `MuxTransportHandle.rx` chunks into
+  `ByteChunkIn` for `session::core::step`; MUST dispatch
+  `SessionEffect`s via the outbound mpsc; MUST emit per-peer
+  `OrchestratorEvent`s upstream. MUST NOT mutate `SessionState`
+  directly — only the GREEN `step` reducer mutates state. Per-peer
+  failure MUST halt only the failing pump task (DC-NODE-01
+  strengthened).
+- **(`ade_runtime::network::n2n_dialer`, NEW in N-L)** Outbound TCP +
+  `spawn_duplex` + handshake driver via `BlockingTransport`. Emits
+  `OrchestratorEvent::PeerConnected` on handshake success.
+- **(`ade_runtime::orchestrator::keep_alive_session`, NEW in N-L)**
+  Clock-driven (`ade_runtime::clock::Clock`) cadence pump emitting
+  `OrchestratorEvent::OutboundKeepAlive { peer_id }` at
+  `KeepAliveCadence::DEFAULT { interval_ms: 60_000 }` (DC-SESS-05).
+  MUST NOT add operator-tunable cadence in this cluster. MUST NOT
+  read the wall clock directly; consumes `Clock` outputs only.
 
 ### Project-specific additions
 
 - **No commits of credentials, hostnames, IPs, private keys** —
-  enforced by `ci_check_no_secrets.sh`. **N-K:** the node binary's
-  CLI accepts paths to operator-supplied genesis + key files; it
-  never embeds keys in source.
+  enforced by `ci_check_no_secrets.sh`. **N-L:** the node binary's
+  CLI accepts `--peer ADDR --listen ADDR` as operator-supplied
+  values; no defaults; no hostnames embedded in source.
 - **No `Phase 4 internal-mode mock network`** — Tier 1 surfaces must
-  be exercised against real cardano-node peers. **N-K:** the binary
-  bootstraps + prints a readiness line; live evidence comes from
-  the operator-action follow-on (`RO-LIVE-01`/`RO-LIVE-02`) running
-  `ade_node` against a private cardano-node peer.
+  be exercised against real cardano-node peers. **N-L:** the
+  mechanical wire layer is exercised by `Pipe`-pair tests and
+  recorded `ByteChunkIn` replay corpora; live evidence comes from
+  the operator-action follow-on (`RO-LIVE-03`) running `ade_node`
+  against a private cardano-node peer.
 - **No collapsing wire and canonical bytes** — dual-authority rule.
 - **No Tier 5 surface without a stated rationale**.
 - **No "we'll match it later" stubs on Tier 1 surfaces** — Tier 1
-  closure is hard-gated. **N-K:** the honest-scope split (orchestrator
-  core + bootstrap + writer + binary shipped; live mux pump deferred)
-  is documented in the cluster doc's "Honest-scope note" and tracked
-  by `RO-LIVE-01`/`RO-LIVE-02` — not a Tier-1 stub.
+  closure is hard-gated. **N-L:** the wire-layer / live-pass split
+  (session reducer + handshake driver + mux pump + n2n dialer +
+  keep-alive session shipped; live operator pass deferred to
+  `PHASE4-N-L-LIVE`) is documented in the cluster doc + here and
+  tracked by `RO-LIVE-03` — not a Tier-1 stub.
 
 ---
 
@@ -1386,67 +1421,73 @@ cluster entry.
 
 - CODEMAP: `docs/ade-CODEMAP.md` — module-by-module authority table,
   upstream of this document. **Cross-reference check at this HEAD:**
-  CODEMAP is being regenerated in parallel; pending the regen,
-  CODEMAP may pin pre-N-K HEAD `f15102f`. The new GREEN files
-  (`bootstrap.rs`, `clock.rs`, `orchestrator/{mod,event,state,core}.rs`,
-  `rollback/persistent_writer.rs`, `ade_node/{cli,lib,node}.rs`)
-  and the new RED files (`orchestrator/{peer_session,
-  leadership_session, n2n_server_pump}.rs`, `ade_node/main.rs`) are
-  not yet in the prior CODEMAP. The next CODEMAP regen picks these
-  up mechanically. CI count moves from 55 → 61.
+  CODEMAP is being regenerated in parallel; the next CODEMAP regen
+  picks up the new GREEN files (`session/{event, state, demux, core,
+  handshake_driver}.rs`) and the new RED files
+  (`mux_pump.rs`, `n2n_dialer.rs`, `keep_alive_session.rs`) and the
+  extended `mux/transport.rs`. CI count moves from 61 → 66.
 - Invariant registry: `docs/ade-invariant-registry.toml` — rule
-  families incl. T / CN / DC / OP / RO. **N-K added:**
-  `CN-NODE-01` (`enforced`, `ci_script =
-  ci/ci_check_bootstrap_closure.sh`); `DC-NODE-01` (`enforced`,
-  `ci_script = ci/ci_check_peer_session_isolation.sh`);
-  `DC-NODE-02` (`enforced`, `ci_script =
-  ci/ci_check_persistent_writer_no_parallel_cadence.sh`);
-  `DC-NODE-03` (`enforced`, `ci_script =
-  ci/ci_check_clock_seam.sh`); `DC-NODE-04` (`enforced`, `ci_script =
-  ci/ci_check_node_binary_uses_single_bootstrap.sh`). **Strengthened:**
-  `T-DET-01`, `CN-CONS-08`, `CN-STORE-07`, `CN-STORE-08`,
-  `DC-CONS-21`, `DC-STORE-08` each gain `strengthened_in +=
-  PHASE4-N-K`. **New open_obligation:** `DC-STORE-09 +=
-  "snapshot_schema_migration_follow_on_cluster"`. Total: 209 → 214
-  entries.
+  families incl. T / CN / DC / OP / RO. **N-L flipped to `enforced`:**
+  `CN-SESS-01` (`ci_script = ci/ci_check_mux_frame_closure.sh`);
+  `CN-SESS-02` (`ci_script = ci/ci_check_handshake_closure.sh`);
+  `CN-SESS-03` (`ci_script = ci/ci_check_session_core_closure.sh`);
+  `DC-SESS-01` (`ci_script = ci/ci_check_session_core_closure.sh`);
+  `DC-SESS-02` (`ci_script =
+  ci/ci_check_mini_protocol_id_registry_closed.sh`);
+  `DC-SESS-03` (test: `tests/session_replay_equivalence.rs`);
+  `DC-SESS-04` (`ci_script = ci/ci_check_session_no_unbounded.sh`);
+  `DC-SESS-05` (`ci_script = ci/ci_check_clock_seam.sh` extended).
+  **Declared:** `RO-LIVE-03`
+  (`open_obligation = "blocked_until_operator_peer_available"`).
+  **Strengthened:** `T-DET-01`, `CN-CONS-08`, `DC-NODE-01`,
+  `DC-NODE-03` each gain `strengthened_in += PHASE4-N-L`. Total:
+  214 → 223 entries.
 - Phase 4 cluster plan: `docs/active/phase_4_cluster_plan.md`.
 - Tier doctrine: `docs/active/CE-79_gate_statement.md` and
   `docs/active/CE-79_tier5_addendum.md`.
-- Cluster N-D / N-A / N-B / N-H / N-I / N-J / B1 / B2 / B3 / B4 / B5 /
-  OQ5-CREDENTIAL-FIDELITY / COMMITTEE-CRED-FIDELITY /
+- Cluster N-D / N-A / N-B / N-H / N-I / N-J / N-K / B1 / B2 / B3 /
+  B4 / B5 / OQ5-CREDENTIAL-FIDELITY / COMMITTEE-CRED-FIDELITY /
   DREP-VOTE-FIDELITY / ENACTMENT-COMMITTEE-FIDELITY /
   ENACTMENT-COMMITTEE-WRITEBACK / PHASE4-N-E /
   PROPOSAL-PROCEDURES-DECODE / PHASE4-N-C / PHASE4-N-G: all closed;
   cluster docs carried.
-- **Cluster PHASE4-N-K (CLOSED at this HEAD; mechanical half;
-  honest-scope RED runner)**: the cluster doc + closure record at
-  `docs/clusters/completed/PHASE4-N-K/{cluster,CLOSURE}.md`.
-  SHIPS the orchestrator core + bootstrap + clock seam + persistent
-  writer + RED tokio runner trio + `ade_node` binary; closes
-  CN-NODE-01 + DC-NODE-01..04 (all `enforced`); strengthens 6
-  carried rules; adds `open_obligation =
-  "snapshot_schema_migration_follow_on_cluster"` to DC-STORE-09;
-  added six CI scripts (count 55 → 61); added five derived registry
-  rules (total 209 → 214). Five operator-action probe binaries
-  remain in the family (no N-K addition); the live mux pump is the
-  follow-on tracked on `RO-LIVE-01`/`RO-LIVE-02`.
-- **Future obligation: live mux + handshake driver above `MuxTransport`**
-  (`RO-LIVE-01`/`RO-LIVE-02`) — operator-action follow-on.
+- **Cluster PHASE4-N-L (CLOSED at this HEAD; mechanical wire layer
+  closure; live operator pass deferred to `PHASE4-N-L-LIVE`)**: the
+  cluster doc + closure record at
+  `docs/clusters/completed/PHASE4-N-L/{cluster,CLOSURE}.md`. SHIPS
+  the session reducer + handshake driver + mux pump + n2n dialer +
+  keep-alive session + `ade_node --peer ADDR --listen ADDR` CLI;
+  closes CN-SESS-01..03 + DC-SESS-01..05 (all `enforced`);
+  strengthens 4 carried rules; declares `RO-LIVE-03`
+  (`blocked_until_operator_peer_available`); adds five CI scripts
+  + extends one (count 61 → 66); flips eight derived registry
+  rules + declares one new (total 214 → 223). Five operator-action
+  probe binaries remain in the family (no N-L addition); the live
+  operator pass is the follow-on tracked on `RO-LIVE-03`.
+- **Future obligation: `PHASE4-N-L-LIVE` (`RO-LIVE-03`)** —
+  highest-priority operator-action follow-on.
+- **Future obligation: TLS / authenticated transport** — declared
+  `¬P-8` in N-L invariants sketch; future cluster.
+- **Future obligation: N2C local protocols session driver** —
+  flagged by N-L close.
+- **Future obligation: peer-sharing + tx-submission live half** —
+  flagged by N-L close.
 - **Future obligation: snapshot schema migration v1 → v2 tooling**
-  (`DC-STORE-09.open_obligation`) — Tier-5 operator tooling.
-- **Future obligation: snapshot eviction policy cluster** — carried
-  from N-J.
-- **Future obligation: metrics + observability cluster** — NEW
-  candidate flagged by N-K close.
-- **Future obligation: `CE-N-H-6`** — carried.
+  (`DC-STORE-09.open_obligation`) — carried from N-K.
+- **Future obligation: metrics + observability cluster** — carried
+  from N-K.
+- **Future obligation: snapshot eviction policy cluster** — carried.
+- **Future obligation: `CE-N-H-6`** — carried (subsumed by
+  `RO-LIVE-03` capture scope).
 - **Future obligation: `CE-N-G-8`** — carried.
 - **Future obligation: `CE-N-C-8`** — carried.
 - **Future obligation: `CE-NODE-N2C-LTX`** — carried from N-E.
-- **Future seam candidates (flagged by N-K close)**: live mux pump
-  (highest-priority operator-action follow-on); snapshot schema
+- **Future seam candidates (flagged by N-L close)**: live operator
+  pass `RO-LIVE-03` (highest-priority operator-action follow-on);
+  TLS / authenticated transport; N2C local protocols session
+  driver; peer-sharing + tx-submission live half; snapshot schema
   migration v1 → v2 tooling (`DC-STORE-09` open_obligation);
   metrics + observability cluster; snapshot eviction policy cluster
-  (carried from N-J); pre-Conway snapshot encoder (low-priority,
-  carried); multi-peer fork choice cluster (now further enabled by
-  N-K stable per-peer tasks); N2C local-chain-sync receive surface
-  cluster.
+  (carried); pre-Conway snapshot encoder (low-priority, carried);
+  multi-peer fork choice cluster (now further enabled by N-L live
+  wire); N2C local-chain-sync receive surface cluster.

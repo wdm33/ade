@@ -15,6 +15,7 @@
 
 pub mod core;
 pub mod event;
+pub mod keep_alive_session;
 pub mod leadership_session;
 pub mod n2n_server_pump;
 pub mod peer_session;

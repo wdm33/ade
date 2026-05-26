@@ -142,6 +142,14 @@ pub fn step<W: ChainDbWrite>(
             state.shutdown_requested = true;
             Ok(vec![OrchestratorEffect::ShutdownAcknowledged])
         }
+
+        OrchestratorEvent::OutboundKeepAlive { peer_id: _ } => {
+            // Recorded as a no-op effect set at the orchestrator core;
+            // the session-side keep-alive frame encoding lives at the
+            // session layer (future cluster). The Clock seam end-to-end
+            // exercise (DC-SESS-05) is what this event proves.
+            Ok(Vec::new())
+        }
     }
 }
 

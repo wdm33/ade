@@ -34,8 +34,8 @@
   "_planning_doc_doc": "Active phase plan. /cluster-doc reads this when seeding new cluster docs (N-A, N-B, N-C, N-E, N-F).",
   "grounding_docs_dir": "docs",
   "_grounding_docs_dir_doc": "Where the four grounding docs live: ade-CODEMAP.md, ade-SEAMS.md, ade-HEAD_DELTAS.md, ade-TRACEABILITY.md.",
-  "head_deltas_baseline": "1946573",
-  "_head_deltas_baseline_doc": "PHASE4-N-K handoff ('docs(planning): PHASE4-N-K invariants sketch + register DC-NODE/CN-NODE families', 2026-05-26). HEAD_DELTAS narrates the PHASE4-N-K cluster (orchestrator + ade_node binary closure). Bump on each cluster close to keep HEAD_DELTAS per-cluster and reviewable.",
+  "head_deltas_baseline": "d62c2bc",
+  "_head_deltas_baseline_doc": "PHASE4-N-L baseline (commit `d62c2bc`, PHASE4-N-K close — orchestrator + ade_node binary, 2026-05-26). HEAD_DELTAS narrates the PHASE4-N-L cluster (mux session driver + handshake wire layer). Bump on each cluster close to keep HEAD_DELTAS per-cluster and reviewable.",
   "normative_docs": [
     "docs/active/CE-79_gate_statement.md",
     "docs/active/CE-79_tier5_addendum.md",

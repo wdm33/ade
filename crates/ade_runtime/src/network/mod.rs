@@ -17,4 +17,9 @@
 //! `crate::producer::signing`. Enforced by
 //! `ci/ci_check_n2n_server_no_signing_dep.sh`.
 
+pub mod mux_pump;
+pub mod n2n_dialer;
 pub mod n2n_server;
+
+pub use mux_pump::MuxPump;
+pub use n2n_dialer::{DialError, N2nDialer};

@@ -9,7 +9,9 @@ ade_codec = { path = "../ade_codec" }
 # tokio is confined to ade_network::mux::transport (RED).
 # DC-CORE-01 prohibits tokio in any BLUE submodule; enforced by
 # ci/ci_check_no_async_in_blue.sh.
-tokio = { version = "1", features = ["net", "rt", "io-util", "macros", "time"] }
+# PHASE4-N-L S5 added `sync` (for mpsc bounded queues) +
+# `rt-multi-thread` (for spawn).
+tokio = { version = "1", features = ["net", "rt", "rt-multi-thread", "io-util", "macros", "time", "sync"] }
 
 [[bin]]
 name = "ade_handshake_capture"

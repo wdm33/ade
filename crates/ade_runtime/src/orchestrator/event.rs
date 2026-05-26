@@ -56,6 +56,14 @@ pub enum OrchestratorEvent {
     /// drains the admit/write/snapshot pipeline and emits
     /// `ShutdownAcknowledged`.
     Shutdown,
+
+    /// Periodic keep-alive tick from `KeepAliveSession`
+    /// (PHASE4-N-L S8). The orchestrator core does NOT emit a
+    /// SendToPeer effect for these yet — keep-alive frame encoding
+    /// belongs to a future session-side rule. For now the event is
+    /// recorded into state so the keep-alive Clock seam is end-to-end
+    /// exercisable (DC-SESS-05).
+    OutboundKeepAlive { peer_id: PeerId },
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
