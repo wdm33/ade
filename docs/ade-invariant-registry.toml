@@ -31,7 +31,7 @@ status = "enforced"
 authority_surface = "BLUE authoritative state transitions"
 cluster = "CL-LEDGER-VERDICT"
 evidence = ["crates/ade_testkit/tests/ledger_determinism.rs uses ade_ledger::fingerprint for byte-identical state comparison across all 7 eras", "crates/ade_testkit/tests/consensus_stream_replay.rs replays the canonical chain-selector stream twice and asserts byte-identical event lists and final orchestrator state — closes T-DET-01 for the consensus subset"]
-strengthened_in = ["PHASE4-N-B", "PHASE4-B1", "PHASE4-B2", "PHASE4-N-C", "PHASE4-N-G", "PHASE4-N-H", "PHASE4-N-I"]
+strengthened_in = ["PHASE4-N-B", "PHASE4-B1", "PHASE4-B2", "PHASE4-N-C", "PHASE4-N-G", "PHASE4-N-H", "PHASE4-N-I", "PHASE4-N-J"]
 
 [[rules]]
 id = "T-ENC-01"
@@ -43,7 +43,7 @@ code_locus = "crates/ade_codec/src/preserved.rs, crates/ade_ledger/src/block_val
 tests = ["preserved_wire_bytes_returned_exactly", "altered_body_rejected_by_hash_binding", "tx_id_uses_preserved_bytes"]
 ci_script = "ci/ci_check_hash_uses_wire_bytes.sh"
 status = "partial"
-strengthened_in = ["PHASE4-B1", "PHASE4-B2", "PHASE4-N-C", "PHASE4-N-G", "PHASE4-N-H"]
+strengthened_in = ["PHASE4-B1", "PHASE4-B2", "PHASE4-N-C", "PHASE4-N-G", "PHASE4-N-H", "PHASE4-N-J"]
 authority_surface = "hash-critical byte paths"
 cluster = "CL-CRYPTO-VERIFY"
 evidence = []
@@ -2604,8 +2604,8 @@ status = "enforced"
 authority_surface = "receive-side atomic admit + rollback over ChainDb + LedgerState + PraosChainDepState"
 cluster = "PHASE4-N-H + PHASE4-N-I"
 introduced_in = "PHASE4-N-H"
-strengthened_in = ["PHASE4-N-I"]
-evidence = ["Admit-side (N-H): block_delivered atomically advances chain_write -> ledger -> chain_dep with staged-then-committed shape; failure leaves state unchanged (test receive_apply_block_delivered_validity_invalid_rejects).", "Rollback-side (N-I): roll_backward calls materialize_rolled_back_state + commit_rollback; commit_rollback's irreversible-step-first shape leaves state unchanged on chain_write failure (commit_rollback_chain_write_failure_leaves_state_unchanged); pending headers reset on successful commit.", "End-to-end: rollback_then_continue_admit_equals_straight_line_admit proves snapshot+rollback yields the same ledger fingerprint as straight-line admit — snapshotting is a pure cache."]
+strengthened_in = ["PHASE4-N-I", "PHASE4-N-J"]
+evidence = ["Admit-side (N-H): block_delivered atomically advances chain_write -> ledger -> chain_dep with staged-then-committed shape; failure leaves state unchanged (test receive_apply_block_delivered_validity_invalid_rejects).", "Rollback-side (N-I): roll_backward calls materialize_rolled_back_state + commit_rollback; commit_rollback's irreversible-step-first shape leaves state unchanged on chain_write failure (commit_rollback_chain_write_failure_leaves_state_unchanged); pending headers reset on successful commit.", "End-to-end: rollback_then_continue_admit_equals_straight_line_admit proves snapshot+rollback yields the same ledger fingerprint as straight-line admit — snapshotting is a pure cache.", "Restart-safe rollback (N-J): PersistentSnapshotCache bridges framing::{encode,decode}_snapshot to SnapshotStore; cross-impl equivalence with InMemorySnapshotCache proven via persistent_cache_matches_in_memory_cache_semantics — restart-safe rollback now possible without weakening lockstep."]
 
 [[rules]]
 id = "DC-PROTO-09"
@@ -2724,7 +2724,8 @@ ci_script = "ci/ci_check_rollback_materialize_closure.sh"
 status = "enforced"
 authority_surface = "rollback materialization replay-forward fold"
 cluster = "PHASE4-N-I"
-evidence = ["The core test materialize_replay_forward_equals_direct_apply proves DC-CONS-22: direct-apply state at T and snapshot@S + replay-forward to T have byte-identical ade_ledger fingerprints. Snapshotting is a pure cache.", "Epoch boundary handling is inherited from apply_block_with_verdicts (rules.rs:244-250) which calls detect_epoch_transition + apply_epoch_boundary_full before block application. No duplicate epoch-transition path in materialize."]
+strengthened_in = ["PHASE4-N-J"]
+evidence = ["The core test materialize_replay_forward_equals_direct_apply proves DC-CONS-22: direct-apply state at T and snapshot@S + replay-forward to T have byte-identical ade_ledger fingerprints. Snapshotting is a pure cache.", "Epoch boundary handling is inherited from apply_block_with_verdicts (rules.rs:244-250) which calls detect_epoch_transition + apply_epoch_boundary_full before block application. No duplicate epoch-transition path in materialize.", "N-J restart-safety: PersistentSnapshotCache lets replay-forward bootstrap from a persisted snapshot after restart while preserving DC-CONS-22's byte-identical-fingerprint contract (cross-impl test persistent_cache_matches_in_memory_cache_semantics)."]
 
 [[rules]]
 id = "CN-STORE-07"
@@ -2746,7 +2747,8 @@ ci_script = "ci/ci_check_rollback_materialize_closure.sh"
 status = "enforced"
 authority_surface = "rollback materialization"
 cluster = "PHASE4-N-I"
-evidence = ["ci_check_rollback_materialize_closure.sh enforces single-authority via grep: no other pub fn in rollback/* returns (LedgerState, PraosChainDepState). The driver composes one SnapshotReader::nearest_le + BlockSource::blocks_in_range + per-block block_validity (positive grep for block_validity call site).", "The function takes narrow read-only traits (SnapshotReader, BlockSource), not concrete chain stores — production impls in ade_runtime (S4) go through the same single composition path."]
+strengthened_in = ["PHASE4-N-J"]
+evidence = ["ci_check_rollback_materialize_closure.sh enforces single-authority via grep: no other pub fn in rollback/* returns (LedgerState, PraosChainDepState). The driver composes one SnapshotReader::nearest_le + BlockSource::blocks_in_range + per-block block_validity (positive grep for block_validity call site).", "The function takes narrow read-only traits (SnapshotReader, BlockSource), not concrete chain stores — production impls in ade_runtime (S4) go through the same single composition path.", "N-J: the second production SnapshotReader impl (PersistentSnapshotCache) goes through the SAME single materialize composition — cross-impl equivalence with InMemorySnapshotCache proven via persistent_cache_matches_in_memory_cache_semantics. CN-STORE-08 (the snapshot-encoder counterpart to CN-STORE-07) also lands."]
 attack_rationale = "A parallel materializer can produce a rolled-back state inconsistent with what block_validity would compute, allowing peer-controlled state divergence."
 evidence_notes = "Enforcement is type-level: materialize_rolled_back_state is the sole pub fn returning the rolled-back state tuple. The function takes narrow read-only traits (SnapshotReader, BlockSource), not concrete chain stores — test-side and production-side go through the same single composition."
 
