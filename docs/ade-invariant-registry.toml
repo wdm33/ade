@@ -3296,3 +3296,206 @@ tests = []
 ci_script = ""
 status = "declared"
 open_obligation = "blocked_until_ledger_seed_cluster"
+
+# =============================================================================
+# PHASE4-N-M-A — Oracle-seed bootstrap + BootstrapAnchor + Ade-native WAL
+# =============================================================================
+#
+# Sub-cluster A of the N-M family. Ships the Ade-native storage architecture
+# the live admission cluster (B) + operator pass (C) sit on top of.
+#
+# Doctrine: see memory [[feedback-oracle-seed-then-ade-owns]] —
+# cardano-node is the oracle at bootstrap point P, NOT the runtime
+# authority. After import, Ade owns ledger/WAL/checkpoints/snapshots.
+#
+# Families introduced (this sub-cluster):
+#   * CN-SEED   — single JSON seed-import authority.
+#   * DC-SEED   — canonical UtxoFingerprint determinism.
+#   * CN-ANCHOR — single BootstrapAnchor mint authority.
+#   * DC-ANCHOR — BootstrapAnchor closed record + round-trip.
+#   * CN-WAL    — single WalStore::append authority.
+#   * DC-WAL    — WAL append-only / fingerprint-chain / replay-equivalence.
+#
+# Also declares two honest-scope open obligations that this cluster
+# does NOT close:
+#   * RO-GENESIS-REPLAY-01
+#   * RO-MITHRIL-IMPORT-01
+
+[[rules]]
+id = "CN-SEED-01"
+tier = "release"
+statement = """
+Single JSON seed-importer authority: exactly one pub fn in
+ade_runtime::seed_import::import_cardano_cli_json_utxo converts
+a cardano-cli `query utxo --whole-utxo` JSON dump into the Ade
+canonical (UTxOState, UtxoFingerprint) pair. No second importer;
+no per-call fallback; no silent partial seed.
+"""
+source = "docs/planning/phase4-n-m-ledger-seed-invariants.md §1 (I-A1)"
+cross_ref = ["CN-NODE-01", "CN-STORE-07", "CN-STORE-08"]
+code_locus = ""
+tests = []
+ci_script = ""
+status = "declared"
+
+[[rules]]
+id = "DC-SEED-01"
+tier = "derived"
+statement = """
+Canonical UtxoFingerprint determinism: the imported UTxOState
+uses BTreeMap<TxIn, TxOut> iteration order; UtxoFingerprint is
+Blake2b-256 over canonical CBOR map(N) [TxIn → TxOut] in that
+order. Re-importing the same JSON seed yields the same
+UtxoFingerprint byte-identically across runs.
+"""
+source = "docs/planning/phase4-n-m-ledger-seed-invariants.md §1 (I-A2)"
+cross_ref = ["T-DET-01", "CN-SEED-01"]
+code_locus = ""
+tests = []
+ci_script = ""
+status = "declared"
+
+[[rules]]
+id = "CN-ANCHOR-01"
+tier = "release"
+statement = """
+Single BootstrapAnchor mint authority: exactly one pub fn in
+ade_runtime::bootstrap_anchor::mint produces a BootstrapAnchor
+with all 6 fields populated (network_magic, genesis_hash,
+seed_point: {slot, block_hash}, seed_artifact_hash,
+imported_utxo_fingerprint, initial_ledger_fingerprint). The
+struct has no default impl and no #[non_exhaustive]; any missing
+field is a compile error.
+"""
+source = "docs/planning/phase4-n-m-ledger-seed-invariants.md §1 (I-A3)"
+cross_ref = ["CN-SEED-01", "CN-NODE-01"]
+code_locus = ""
+tests = []
+ci_script = ""
+status = "declared"
+
+[[rules]]
+id = "DC-ANCHOR-01"
+tier = "derived"
+statement = """
+BootstrapAnchor canonical CBOR round-trip: encode + decode
+preserves all 6 fields byte-identically. SCHEMA_VERSION = 1 in
+the encoded bytes; unknown version on decode is fail-fast.
+"""
+source = "docs/planning/phase4-n-m-ledger-seed-invariants.md §7 (#5)"
+cross_ref = ["CN-ANCHOR-01", "DC-CONS-21"]
+code_locus = ""
+tests = []
+ci_script = ""
+status = "declared"
+
+[[rules]]
+id = "CN-WAL-01"
+tier = "release"
+statement = """
+Single WAL append authority: WalStore::append is the SOLE
+mutation method on any WalStore impl. No truncate/rewrite/replace
+method exists on the trait or any impl. Append-only by type, not
+by convention.
+"""
+source = "docs/planning/phase4-n-m-ledger-seed-invariants.md §1 (I-A4)"
+cross_ref = ["CN-CONS-08", "CN-STORE-07"]
+code_locus = ""
+tests = []
+ci_script = ""
+status = "declared"
+
+[[rules]]
+id = "DC-WAL-01"
+tier = "derived"
+statement = """
+WAL is append-only by type: the WalStore trait carries no method
+named truncate / rewrite / replace / delete / clear. CI grep
+enforces across the workspace (no impl adds such methods
+out-of-trait).
+"""
+source = "docs/planning/phase4-n-m-ledger-seed-invariants.md §1 (I-A4)"
+cross_ref = ["CN-WAL-01"]
+code_locus = ""
+tests = []
+ci_script = ""
+status = "declared"
+
+[[rules]]
+id = "DC-WAL-02"
+tier = "derived"
+statement = """
+WAL fingerprint-chain integrity: every WalEntry::AdmitBlock has
+prior_fp == previous entry's post_fp (or anchor's
+initial_ledger_fingerprint for the first entry).
+WalStore::verify_chain walks the WAL + asserts the chain holds.
+Verify failure is authority-fatal at the binary boundary.
+"""
+source = "docs/planning/phase4-n-m-ledger-seed-invariants.md §1 (I-A5)"
+cross_ref = ["CN-WAL-01", "T-DET-01"]
+code_locus = ""
+tests = []
+ci_script = ""
+status = "declared"
+
+[[rules]]
+id = "DC-WAL-03"
+tier = "derived"
+statement = """
+Anchor + WAL replay-equivalence: replaying (BootstrapAnchor + WAL
+entries 1..N) against (initial_ledger from import + per-entry
+block bytes) produces a final ledger whose fingerprint equals
+WAL[N].post_fp byte-identically across two runs. The
+runtime contract "same anchor + same inputs + same WAL →
+byte-identical outputs" is mechanically proven by integration
+test.
+"""
+source = "docs/planning/phase4-n-m-ledger-seed-invariants.md §1 (I-A6)"
+cross_ref = ["T-DET-01", "CN-WAL-01", "CN-CONS-08"]
+code_locus = ""
+tests = []
+ci_script = ""
+status = "declared"
+
+[[rules]]
+id = "RO-GENESIS-REPLAY-01"
+tier = "release"
+statement = """
+Ade independently replays the chain from byron genesis through
+the bootstrap point P, producing the same UTxOState the oracle
+seed provides. Closes the "Ade has independently replayed
+genesis → P" honest-scope claim left open at PHASE4-N-M-A close.
+
+Carried as an open obligation because the era-transition
+sequence (byron → shelley → allegra → mary → alonzo → babbage →
+conway) requires multi-month work that is NOT bounty-critical.
+Mithril-authenticated import (RO-MITHRIL-IMPORT-01) is a partial
+alternative.
+"""
+source = "docs/planning/phase4-n-m-ledger-seed-invariants.md §0 honest-scope table"
+cross_ref = ["CN-SEED-01", "RO-MITHRIL-IMPORT-01"]
+code_locus = ""
+tests = []
+ci_script = ""
+status = "declared"
+open_obligation = "blocked_until_genesis_replay_cluster"
+
+[[rules]]
+id = "RO-MITHRIL-IMPORT-01"
+tier = "release"
+statement = """
+Ade imports a Mithril-authenticated snapshot as an alternative to
+the cardano-cli JSON seed. Provides cryptographic provenance for
+the seed artifact (over and above the Blake2b-256
+seed_artifact_hash that CN-ANCHOR-01 records).
+
+Lower priority than RO-LIVE-05; resolves after PHASE4-N-M-C
+closes.
+"""
+source = "docs/planning/phase4-n-m-ledger-seed-invariants.md §10 carry-forward"
+cross_ref = ["CN-SEED-01", "CN-ANCHOR-01"]
+code_locus = ""
+tests = []
+ci_script = ""
+status = "declared"
+open_obligation = "blocked_until_mithril_import_cluster"

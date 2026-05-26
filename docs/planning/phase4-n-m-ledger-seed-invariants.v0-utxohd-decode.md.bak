@@ -1,0 +1,334 @@
+# PHASE4-N-M family — Ledger seed + live admission — invariants sketch
+
+## Framing
+
+PHASE4-N-L-LIVE closed the wire-only half of RO-LIVE-03
+(RO-LIVE-04: handshake + tip read + JSONL exit). The remaining
+half — RO-LIVE-05 (live admission + per-block agreement_verdict
+against a real cardano-node peer) — is what this cluster family
+closes. The wide RO-LIVE-03 flips to enforced when N-M completes.
+
+Per
+[[feedback-shell-must-not-overstate-semantic-truth]] the
+admission claim is exactly the layer this cluster evidences.
+The mechanical work decomposes into two sub-clusters:
+
+- **PHASE4-N-M-UTXO-DECODE** (predecessor) — implement the
+  cardano-node compact UTxO decoder in the snapshot loader.
+  Mechanical-evidence only; no live pass.
+- **PHASE4-N-M-LEDGER-SEED** (this cluster) — assumes
+  UTXO-DECODE is done; ships admission-mode binary wiring +
+  snapshot import + per-block agreement_verdict JSONL +
+  operator pass.
+
+Both are required to close RO-LIVE-05. The honest sketch below
+covers both as one family because they're tightly coupled —
+splitting the operator into two cluster docs only doubles the
+ceremony.
+
+## 0. The prerequisite gap (UTxO decode)
+
+`ade_testkit::harness::snapshot_loader::LoadedSnapshot::to_ledger_state`
+currently returns a `LedgerState` with an **empty `UTxOState`**
+(see `snapshot_loader.rs:45` — *"The UTxO set is empty (compact
+format impedance)"*). Reward accounts + delegation + pools +
+governance are parsed; UTxO is intentionally skipped because
+cardano-node uses a "compact UTxO" CBOR representation that the
+loader's CBOR navigator currently `skip`s.
+
+Without the UTxO seed, `admit_via_block_validity` would fail on
+the very first incoming live block (every tx input it consumes
+would be a UTxO-set miss → `Validity(InputNotFound)`). The first
+agreement_verdict would be `Diverged` and the binary would halt.
+
+**Therefore PHASE4-N-M-UTXO-DECODE is the hard predecessor.**
+There is no clean shortcut:
+- Replay-from-genesis is not viable (preprod = ~10M slots; days
+  of wall-clock; mainnet = decades).
+- Per-block on-demand UTxO via cardano-cli `LocalStateQuery
+  --tx-in` is operationally a different system (RPC per input
+  instead of local state) and breaks `bootstrap_initial_state`'s
+  closed-input contract.
+- A hand-crafted toy UTxO would close zero real blocks and
+  could give false-divergence signals.
+
+So sub-cluster A ships the compact UTxO codec; sub-cluster B
+ships the live-pass binary on top.
+
+## 1. What must always be true
+
+- **I-1 Snapshot import is transactional and authority-fatal.**
+  `--ledger-snapshot-import PATH` either imports the snapshot
+  successfully into the persistent `SnapshotStore` (and the
+  binary proceeds to admission) or fails closed with a
+  structured error and exits non-zero. No partial seed; no
+  silent fallback to empty UTxO.
+- **I-2 Import authority is single-sited.** Exactly one `pub fn`
+  in `ade_runtime::snapshot_import` converts a cardano-node
+  snapshot tarball/CBOR into an Ade `(LedgerState,
+  PraosChainDepState)` pair. Mirrors CN-STORE-07 / CN-NODE-01
+  single-authority discipline.
+- **I-3 Compact UTxO decode is canonical.** The decoder reads
+  every TxIn → TxOut entry in the cardano-node compact format,
+  builds an Ade `UTxOState`, and re-encoding produces a UTxO map
+  with byte-identical `fingerprint` to the source's UTxO
+  fingerprint (within the known Rational-precision residual —
+  see I-7).
+- **I-4 Admission mode never bypasses CN-CONS-08.** Every live
+  block from the peer's chain-sync / block-fetch goes through
+  `admit_via_block_validity`. No "trusted prefix", no
+  "header-only fast path", no "skip validation flag".
+- **I-5 Per-block agreement_verdict is emitted exactly once per
+  admit.** The closed `AgreementVerdict` sum has four variants:
+  `Agreed | Lagging | Diverged | InputNotFound`. The verdict is
+  derived deterministically from the admit outcome + the peer's
+  announced tip in the same chain-sync message.
+- **I-6 Diverged is authority-fatal.** A `Diverged` verdict halts
+  the binary with the authority-fatal-decode exit code (mirrors
+  PHASE4-N-K DC-NODE-04). Diverged means our admit succeeded
+  but produced a different `block_hash` than the peer's
+  announced block hash at the same slot — that's a real chain
+  disagreement, not a transient lag.
+- **I-7 Known precision residual is recorded, not hidden.** The
+  CE-71 reserves residual (949 ADA from `Rational` precision)
+  carries into the imported ledger state. The cluster's tier-5
+  classification records this explicitly: bit-exact-reserves
+  parity with cardano-node is NOT a goal; per-block UTxO admit
+  agreement IS the goal. A test asserts the residual stays
+  within the documented bound (≤ 1 ADA/snapshot).
+- **I-8 JSONL admission vocabulary is closed.** Admission mode
+  emits a separate closed `AdmissionLogEvent` enum (NOT the
+  wire-only `LiveLogEvent`). Admission events include
+  `admission_started`, `snapshot_imported`, `bootstrap_complete`,
+  `block_received`, `block_admitted`, `agreement_verdict`,
+  `admission_halted`, `admission_shutdown`. Wire-only events
+  (`handshake_ok`, `peer_tip_read`, ...) are EMITTED TOO in
+  admission mode (the wire layer is the same), via a unified
+  event-sum trait.
+
+## 2. What must never be possible
+
+- **¬P-1** Calling `bootstrap_initial_state` with
+  `genesis_initial: None` in admission mode if no snapshot
+  exists in the `snapshot_store`. The binary fails closed.
+- **¬P-2** Producing a non-empty `UTxOState` from a source
+  whose UTxO CBOR was not actually decoded (e.g., a stub that
+  returns `BTreeMap::new()` on parse error). The decoder fails
+  loud or returns the real map; never silently empty.
+- **¬P-3** Emitting `agreement_verdict { Agreed }` if the
+  admitted block's hash differs from the peer's announced hash
+  at that slot. Agreement is byte-equality, not "we accepted
+  some block".
+- **¬P-4** Emitting `agreement_verdict` for a block that was
+  NOT admitted via `admit_via_block_validity`. The verdict is
+  scoped to the admit-authority's actual output.
+- **¬P-5** Silently retrying a `Diverged` verdict. Diverged is
+  authority-fatal.
+- **¬P-6** Wire-only mode emitting admission events. The
+  separation discipline shipped at PHASE4-N-L-LIVE stays
+  intact; admission-mode-only events live in a separate enum
+  with its own CI grep gate.
+- **¬P-7** Bypassing the snapshot importer with hand-crafted
+  ledger state in production code. Tests may construct minimal
+  `LedgerState`s; production code goes through the importer.
+
+## 3. What must remain identical across executions
+
+- Snapshot import determinism: same `(snapshot bytes)` → same
+  `(LedgerState, PraosChainDepState)` byte-identical across two
+  runs.
+- UTxO decode determinism: same compact UTxO bytes → same
+  `BTreeMap<TxIn, TxOut>` (byte-identical via `fingerprint`).
+- Agreement verdict determinism: given the same
+  `(admit_outcome, peer_announced_tip)` pair, the verdict is
+  the same. The verdict reducer is pure.
+- Admission JSONL determinism: with a `DeterministicClock` +
+  recorded event vector, the JSONL output is byte-identical
+  across two replays.
+
+## 4. What must be replay-equivalent
+
+- The admission reducer (admit + verdict derivation) replayed
+  against a recorded `(block, peer_tip)` corpus produces the
+  same `(LedgerState fingerprint, AgreementVerdict)` sequence.
+
+## 5. State transitions in scope
+
+```text
+snapshot_import::import_cardano_node_snapshot(path)
+  -> Result<(LedgerState, PraosChainDepState, SlotNo), SnapshotImportError>
+  // SOLE pub fn returning a real-cardano-node-derived initial state.
+  // Composes compact_utxo_decode + the existing snapshot_loader
+  // (DState, PState, VState, EpochState, ProtoParams).
+
+ade_node::admission::run_admission(cli)
+  -> ExitCode
+  // 1. If --ledger-snapshot-import PATH supplied: import → encode
+  //    via framing::encode_snapshot → write via
+  //    PersistentSnapshotCache::capture at snapshot's slot.
+  // 2. Call bootstrap_initial_state (warm-start branch).
+  // 3. Spawn N2nDialer for each --peer.
+  // 4. Run run_node_until_shutdown.
+  // 5. Per AdmittedBlock effect: derive AgreementVerdict from
+  //    peer's announced tip; emit admission JSONL event.
+  // 6. Diverged verdict → halt fatal.
+  // 7. SIGINT/SIGTERM → drain + shutdown.
+
+verdict::derive(admit_outcome, peer_announced_tip)
+  -> AgreementVerdict
+  // pure; closed sum
+```
+
+## 6. TCB color hypothesis
+
+- **BLUE (new in N-M-UTXO-DECODE):**
+  - `ade_codec::shelley::compact_utxo` — pure compact-UTxO
+    CBOR decoder.
+- **GREEN (new in N-M-LEDGER-SEED):**
+  - `ade_runtime::snapshot_import` — single-authority importer
+    composing the BLUE compact_utxo decoder + existing
+    snapshot_loader sub-parsers.
+  - `ade_node::admission::verdict` — pure verdict derivation
+    over `(admit_outcome, peer_tip)`.
+  - `ade_node::admission_log::{event, writer}` — closed
+    `AdmissionLogEvent` enum + writer.
+- **RED (new in N-M-LEDGER-SEED):**
+  - `ade_node::admission` — tokio-driven admission-mode entry
+    point.
+  - `ade_node::main` — extended with admission routing.
+
+## 7. Decisions on framing questions
+
+| # | Question | Recommendation |
+|---|----------|----------------|
+| 1 | Where does the compact UTxO decoder live? | `ade_codec::shelley::compact_utxo` (BLUE). Per-era variants under one module. Promoted via single pub fn `decode_compact_utxo_state(bytes, era) -> Result<UTxOState, _>`. |
+| 2 | Snapshot source format | Cardano-node 11.0.1 LedgerDB tarball, as the existing testkit `LoadedSnapshot::from_tarball` accepts. The user has these via the `.cardano-node-preprod/db/ledger/` directory. |
+| 3 | Snapshot slot ↔ peer tip alignment | The imported snapshot's `last_applied_slot` becomes the chain-sync intersection point. The dialer issues `FindIntersect([snapshot_slot])` to anchor. |
+| 4 | What about a stale snapshot? | If `peer_tip - snapshot_slot > K_security` (3 * 2160 = 6480 blocks), the peer's chain-sync responds with `IntersectNotFound`. We treat this as authority-fatal `SnapshotTooStale` → operator must re-export a fresher snapshot. |
+| 5 | Block admission rate | We admit blocks as fast as they arrive on chain-sync + block-fetch. No throttle. The 1-tx-1-thread test-set works; live should saturate at the wire's bandwidth × per-block validity cost. |
+| 6 | When does the cluster close? | When the operator captures a 30-minute JSONL log against the local docker preprod showing `agreement_verdict { Agreed }` for ≥ 90% of admitted blocks (the others may be `Lagging` if our admit lags the peer's tip momentarily — `Lagging` is OK; `Diverged` is not). |
+| 7 | Genesis cold-start path | Out of scope. Cold-start from genesis requires byron→shelley→…→conway era transitions in `bootstrap`, which is a separate clusterhead. Snapshot-import covers every operational use case. |
+| 8 | Tier classification | Tier 1 (semantic): admit-correctness against a real peer is the bounty's core claim. The Rational-precision residual (I-7) is Tier 5 — operator-evidence-only, recorded but not gating. |
+| 9 | TLS / auth | Still out of scope (¬P-8 carried from PHASE4-N-L). Local docker doesn't need it. |
+
+## 8. Registry deltas (planned at /cluster-plan)
+
+### New families
+- **DC-IMPORT** — derived constraints on snapshot import + UTxO decode.
+- **CN-IMPORT** — single-authority closure on the importer.
+- **DC-ADMIT** — derived constraints on admission mode.
+
+### New rules (declared at append; flipped per slice)
+
+- `CN-IMPORT-01` — Single snapshot-import authority
+  (`ade_runtime::snapshot_import::import_cardano_node_snapshot`).
+- `DC-IMPORT-01` — Compact UTxO decode is canonical:
+  re-encode produces byte-identical UTxO fingerprint.
+- `DC-IMPORT-02` — Snapshot import is transactional + authority-
+  fatal on failure.
+- `DC-IMPORT-03` — Known Rational-precision residual is bounded
+  (≤ 1 ADA / snapshot); recorded, not hidden.
+- `CN-ADMIT-01` — Single admission-mode entry
+  (`ade_node::admission::run_admission`).
+- `DC-ADMIT-01` — Closed `AgreementVerdict` sum:
+  `Agreed | Lagging | Diverged | InputNotFound`.
+- `DC-ADMIT-02` — `agreement_verdict` emitted exactly once per
+  admit; never without a prior `admit_via_block_validity` call.
+- `DC-ADMIT-03` — Diverged is authority-fatal; binary halts.
+- `DC-ADMIT-04` — Closed admission JSONL vocabulary
+  (`AdmissionLogEvent` enum + CI grep on disallowed strings
+  outside this enum).
+
+### Strengthenings (recorded at cluster close)
+
+- `T-DET-01.strengthened_in += "PHASE4-N-M-LEDGER-SEED"` —
+  determinism extends to imported initial state + admission
+  verdict.
+- `CN-CONS-08.strengthened_in += "PHASE4-N-M-LEDGER-SEED"` —
+  admit path now driven by real-peer chain-sync + block-fetch
+  end-to-end.
+- `CN-STORE-07.strengthened_in += "PHASE4-N-M-LEDGER-SEED"` —
+  materialize path now driven by snapshot-import warm-start.
+- `CN-STORE-08.strengthened_in += "PHASE4-N-M-LEDGER-SEED"` —
+  encode/decode driven by snapshot-import write + bootstrap
+  warm-start read.
+- `RO-LIVE-05` → `enforced` (cluster closes the rule).
+- `RO-LIVE-03` → `enforced` (wide rule flips when both halves
+  close).
+
+## 9. Slice shape (proposed; refine at /cluster-plan)
+
+### Sub-cluster A — PHASE4-N-M-UTXO-DECODE
+
+| Slice | Scope | TCB | Effort |
+|-------|-------|-----|--------|
+| A1 | BLUE `ade_codec::shelley::compact_utxo::decode_alonzo_plus` — Conway-era TxOut decoder. | BLUE | medium |
+| A2 | BLUE per-era compact-UTxO variants (Babbage / Conway differ in TxOut tagging). | BLUE | medium |
+| A3 | Promote `snapshot_loader::to_ledger_state` to populate UTxO; round-trip vs source UTxO fingerprint (CI test). | GREEN | small |
+| A4 | Performance: 1.5M+ entry UTxO decode in < 10s on commodity hardware. Profiling slice. | GREEN | small |
+
+### Sub-cluster B — PHASE4-N-M-LEDGER-SEED
+
+| Slice | Scope | TCB | Effort |
+|-------|-------|-----|--------|
+| B1 | GREEN `ade_runtime::snapshot_import::import_cardano_node_snapshot` — single-authority importer. CN-IMPORT-01 + DC-IMPORT-01/02/03. | GREEN | small |
+| B2 | GREEN `ade_node::admission::verdict` — closed `AgreementVerdict` sum + pure derivation reducer. DC-ADMIT-01. | GREEN | small |
+| B3 | GREEN `ade_node::admission_log::{event, writer}` — closed admission JSONL vocabulary (8 variants). DC-ADMIT-04. | GREEN + CI | small |
+| B4 | RED `ade_node::admission` — admission-mode tokio runner. Snapshot import → write to store → bootstrap → N2nDialer → admit loop → verdict emit. CN-ADMIT-01, DC-ADMIT-02/03. | RED | medium |
+| B5 | RED `ade_node::main` — extend `--mode` dispatch with `admission` arm. `--ledger-snapshot-import PATH` flag. CLI parsing. | RED | small |
+| B6 | Hermetic loopback admission test — in-process responder pumps a corpus block; assert `agreement_verdict { Agreed }`. | RED + test | medium |
+| B7 | Operator pass: 30-min run against local docker preprod; capture admission JSONL log under `docs/clusters/completed/PHASE4-N-M-LEDGER-SEED/`. Closes RO-LIVE-05. | operator-action | small |
+
+Total estimate: A is the bulk (compact UTxO decoder for two eras
+= multi-week work). B is roughly a copy of PHASE4-N-L-LIVE's
+shape (~3-day cluster) but assumes A is done.
+
+## 10. Honest-scope carry-forward
+
+- **Genesis cold-start** — still out of scope. Cold-start from
+  byron genesis is a separate effort (would need era-transition
+  replay through `bootstrap`).
+- **Block production** — separate cluster (CN-CONS-06 live half;
+  requires KES/VRF/opcert wiring + actually broadcasting a
+  forged block + the peer accepting it).
+- **Mempool integration** — separate cluster (PHASE4-N-E live
+  half; tx-submission via live peer).
+- **Peer-sharing / tx-submission protocols** — out of scope.
+- **TLS / authenticated transport** — still ¬P-8.
+
+## 11. Why this is the next cluster (after consideration)
+
+It's the largest remaining bounty-relevance gap. Tip-following
+(RO-LIVE-04) is closed — the binary can talk to a real peer.
+Validation-against-live-blocks (RO-LIVE-05) is what the bounty
+actually wants for "validation agreement"; this cluster ships
+it.
+
+The cluster's first 50–70% of cost is the compact UTxO decoder
+(PHASE4-N-M-UTXO-DECODE). That work is gated by no other cluster
+and pure-BLUE — it's the right next mechanical investment.
+
+## 12. Open scoping question for the user
+
+This sketch separates A (UTxO-decode, multi-week) from B (live
+admission, ~3 days). Two viable cluster orderings:
+
+- **A then B** — sketch both now; ship A first (closes CI-only
+  mechanical evidence); ship B once A lands (closes RO-LIVE-05
+  live evidence). Honest sequencing.
+- **B-first stub-mode** — ship B against a hermetic test
+  responder + a tiny hand-crafted snapshot (10 UTxO entries
+  matching a curated block) to prove the admission machinery
+  wires correctly. RO-LIVE-05 stays open until A lands. Adds
+  a temporary `--admission-mode-stub-snapshot` flag that we
+  later remove. Risk: introduces a fake path that violates
+  [[feedback-shell-must-not-overstate-semantic-truth]]
+  unless the hermetic test is clearly scoped as "machinery
+  test, not live evidence."
+
+Recommendation: **A then B**. Honest sequencing matches the
+project's prior cluster discipline. The temporary stub path is
+the kind of fake-path that erodes the invariant story.
+
+Decide at `/cluster-plan` time — for now this sketch covers
+both as one family doc so the full cost is visible.

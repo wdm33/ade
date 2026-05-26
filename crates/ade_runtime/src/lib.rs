@@ -17,3 +17,4 @@ pub mod producer;
 pub mod receive;
 pub mod recovery;
 pub mod rollback;
+pub mod seed_import;
