@@ -244,3 +244,94 @@ snapshots, or any binary in the `ade_*` workspace.
 
 Doctrine reference: memory
 `[[feedback-mithril-is-peer-infra-not-ade-authority]]`.
+
+---
+
+## §8 — 2026-05-27: surfaced wire-pump reassembly gap (new C5 blocker)
+
+The docker peer reached 100% sync over the day (epoch 291, slot
+124,134,280, hash `cdd081a3…`). The C5 operator pass was re-run
+against the live tip with the freshly-extracted UTxO dump (4 GB,
+4,098,066 entries — imports cleanly via the A1.1-strengthened
+seed importer, fingerprint
+`5c75c2b17099f4cf43cb59ea3bdaf56d8939c38998144dc084f7877ef7077a1f`).
+
+Observed:
+
+- `admission_started` and `bootstrap_complete` emit with the
+  canonical `consensus_inputs_fingerprint_hex` and
+  `initial_ledger_fp_hex` (committed bootstrap transcript at
+  `docs/evidence/phase4-n-m-a1.1-admission-bootstrap-transcript.jsonl`
+  is the load-bearing artifact for the BOOTSTRAP half).
+- ~1 second after the N2N handshake completes, the admission
+  wire pump exits with `BlockFetchDecode`. The peer log:
+  ```
+  TrHandshakeSuccess NodeToNodeV_15 ...
+  TrMuxErrored ... BearerClosed
+      "<socket: 30> closed when reading data, waiting on next header True"
+  ```
+- Sequence inside the pump:
+  1. Send `ChainSyncMessage::FindIntersect[(slot, hash)]`.
+  2. Receive `IntersectFound` (decodes cleanly).
+  3. Send `BlockFetchMessage::RequestRange(point..=point)`.
+  4. Receive first mux frame of the response — but the
+     response is a Conway block exceeding the mux payload
+     limit (65535 bytes), split across multiple mux frames.
+  5. The session reducer
+     (`ade_network::session::core::drain_connected_frames`)
+     emits a `DeliverPeerFrame` for the FIRST mux frame's
+     payload only — a truncated CBOR item.
+  6. `decode_block_fetch_message` fails →
+     `AdmissionWirePumpError::BlockFetchDecode` → pump exits.
+  7. `finalize` emits `Disconnected`; runner emits
+     `admission_shutdown { reason: "upstream_dropped" }`.
+
+### What's missing
+
+Per-mini-protocol payload reassembly across consecutive mux
+frames in the session reducer. The capture binary
+`crates/ade_network/src/bin/capture_block_fetch.rs::read_for_protocol`
+already implements the correct pattern — per-protocol byte
+buffer + `try_decode(buf) -> Ok(consumed) | Err(truncated) |
+Err(malformed)` predicate. The same logic needs to be ported
+into the session reducer's closed-sum drain path
+(`drain_connected_frames`), with one accumulating buffer per
+`AcceptedMiniProtocol` and a closed `try_decode` per protocol.
+
+### Why this is NOT an A1.1 / C5 issue
+
+- A1.1 + A1.2: closed (seed importer handles the full preprod
+  UTxO; 4M entries import cleanly with deterministic fingerprint).
+- C5 prerequisites (bundle, UTxO dump, seed point matching a
+  block on the peer's main chain, peer fully synced): all
+  satisfied this turn.
+- The blocker is a structural gap in the session reducer's
+  payload-reassembly layer — a wire-protocol slice scope
+  (provisional name `PHASE4-N-M-FRAG` or `PHASE4-N-L-FRAG`).
+
+### Diagnostic aid
+
+`wire_pump::finalize` prints `admission_wire_pump: peer=<addr>
+exit=<AdmissionWirePumpResult>` to stderr when the pump ends —
+small RED operator-facing diagnostic. Operator can capture
+stderr to a file to see the exact exit cause without needing
+to attach a debugger.
+
+### Next slice (recommended)
+
+Scope: extend `ade_network::session::core::drain_connected_frames`
+to accumulate per-mini-protocol payload bytes across
+consecutive mux frames; emit `DeliverPeerFrame` ONLY when a
+complete CBOR item is buffered for that mini-protocol.
+Closed-sum per-protocol predicates mirroring the capture
+binary's pattern. New unit tests: fragmented chain-sync +
+block-fetch sequences over loopback.
+
+After that slice closes, re-run the C5 operator pass against
+the same (peer, bundle, dump, seed point) triple and flip
+DC-EVIDENCE-01 + RO-LIVE-05 to `enforced` once the
+mandatory-asserts switch succeeds.
+
+The registry's `open_obligation` for both rules is
+re-tagged accordingly:
+`blocked_until_session_reducer_per_protocol_reassembly`.

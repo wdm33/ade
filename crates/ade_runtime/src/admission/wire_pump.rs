@@ -513,6 +513,12 @@ async fn finalize(
     result: AdmissionWirePumpResult,
     events_out: &mpsc::Sender<AdmissionPeerEvent>,
 ) -> AdmissionWirePumpResult {
+    // Diagnostic: tag the pump exit cause on stderr so an
+    // operator running with stderr captured can see WHY the pump
+    // ended (PHASE4-N-M-C / A1.1 follow-up debugging). The
+    // session's AdmissionPeerEvent vocabulary doesn't carry an
+    // error tag; this is the smallest-footprint diagnostic.
+    eprintln!("admission_wire_pump: peer={peer_addr} exit={result:?}");
     // Best-effort Disconnected emit. If the channel is gone, the
     // runner has already noticed; nothing else to do.
     let _ = events_out
