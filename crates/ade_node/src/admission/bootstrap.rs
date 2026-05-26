@@ -164,11 +164,16 @@ async fn run_admission_inner(
     });
 
     // 6. Build the post-import ledger + chain_dep used by the
-    //    runner (mirror the same construction seed_to_snapshot
-    //    did).
+    //    runner. The ledger inherits the imported UTxO; the
+    //    chain_dep state's `epoch_nonce` MUST be set to the
+    //    imported bundle's epoch nonce (Eta0 of the current
+    //    epoch) so the BLUE header validity check verifies VRF
+    //    proofs against the correct nonce. (PHASE4-N-M-FRAG
+    //    surfaced this: before FRAG + tag-24 unwrap landed, no
+    //    block ever reached header validity, so the ZERO-nonce
+    //    chain_dep was masked.)
     let mut ledger = ade_ledger::state::LedgerState::new(CardanoEra::Conway);
     ledger.utxo_state = utxo;
-    let chain_dep = chain_dep_seed;
 
     // 7. Open file WAL + verify the chain head from the anchor.
     let wal_store = FileWalStore::open(&acli.wal_dir)
@@ -192,6 +197,14 @@ async fn run_admission_inner(
     let consensus_inputs_epoch = canonical.epoch_no;
     let consensus_inputs_epoch_start_slot = canonical.epoch_start_slot;
     let consensus_inputs_epoch_end_slot = canonical.epoch_end_slot;
+
+    // Build the runner's chain_dep with the imported epoch nonce
+    // (Eta0 of the current epoch). The genesis seed used by
+    // `seed_to_snapshot` is intentionally Nonce::ZERO (the
+    // BootstrapAnchor binds the imported UTxO + the
+    // initial_ledger_fp; the chain_dep nonce is a separate axis
+    // supplied by the operator-imported consensus_inputs bundle).
+    let chain_dep = PraosChainDepState::genesis(canonical.epoch_nonce.clone());
 
     // 9. Spawn one wire pump per peer; each pump produces
     //    `AdmissionPeerEvent`s into a shared channel that the

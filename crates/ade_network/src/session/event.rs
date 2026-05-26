@@ -175,6 +175,16 @@ pub enum SessionError {
     Handshake(HandshakeError),
     /// Outbound payload exceeded the 16-bit mux length field.
     OutboundPayloadTooLarge { len: usize },
+    /// A mini-protocol's reassembled payload bytes failed to
+    /// parse as a complete CBOR item at an item boundary
+    /// (`ade_codec::cbor::skip_item` returned a non-EOF error
+    /// after at least one byte had been consumed). The session
+    /// reducer treats this as peer-fatal — the payload-reassembly
+    /// layer never partial-accepts. PHASE4-N-M-FRAG (DC-SESS-06).
+    ProtocolPayloadMalformed {
+        protocol: u16,
+        detail: &'static str,
+    },
 }
 
 /// `HandshakeRole` — initiator (we dial) vs responder (we accept).

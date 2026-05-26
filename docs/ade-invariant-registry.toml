@@ -31,7 +31,7 @@ status = "enforced"
 authority_surface = "BLUE authoritative state transitions"
 cluster = "CL-LEDGER-VERDICT"
 evidence = ["crates/ade_testkit/tests/ledger_determinism.rs uses ade_ledger::fingerprint for byte-identical state comparison across all 7 eras", "crates/ade_testkit/tests/consensus_stream_replay.rs replays the canonical chain-selector stream twice and asserts byte-identical event lists and final orchestrator state — closes T-DET-01 for the consensus subset"]
-strengthened_in = ["PHASE4-N-B", "PHASE4-B1", "PHASE4-B2", "PHASE4-N-C", "PHASE4-N-G", "PHASE4-N-H", "PHASE4-N-I", "PHASE4-N-J", "PHASE4-N-K", "PHASE4-N-L", "PHASE4-N-M-A", "PHASE4-N-M-B"]
+strengthened_in = ["PHASE4-N-B", "PHASE4-B1", "PHASE4-B2", "PHASE4-N-C", "PHASE4-N-G", "PHASE4-N-H", "PHASE4-N-I", "PHASE4-N-J", "PHASE4-N-K", "PHASE4-N-L", "PHASE4-N-M-A", "PHASE4-N-M-B", "PHASE4-N-M-FRAG"]
 
 [[rules]]
 id = "T-ENC-01"
@@ -3213,6 +3213,68 @@ status = "enforced"
 strengthened_in = ["PHASE4-N-L"]
 evidence_notes = "PHASE4-N-L S2+S8 (2026-05-26): session/*.rs contain no SystemTime/Instant/tokio::time reads (ci/ci_check_session_core_closure.sh + ci/ci_check_clock_seam.sh extended). KeepAliveSession drives via Clock trait — DeterministicClock test proves replay equivalence on the keep-alive side."
 
+# =============================================================================
+# PHASE4-N-M-FRAG — Session-reducer per-mini-protocol payload reassembly
+# =============================================================================
+
+[[rules]]
+id = "CN-SESS-04"
+tier = "release"
+statement = """
+Session reducer per-mini-protocol payload reassembly: the GREEN
+session reducer maintains one accumulating Vec<u8> buffer per
+AcceptedMiniProtocol variant inside `ConnectedState`, and emits
+exactly one `SessionEffect::DeliverPeerFrame` per COMPLETE CBOR
+item observed in the wire stream — never per mux frame. Same
+canonical inbound byte stream → byte-identical `DeliverPeerFrame`
+sequence across runs. The per-protocol buffer is a CLOSED-sum-
+indexed struct (no HashMap), so iteration / membership / lookup
+are deterministic.
+"""
+source = "docs/clusters/PHASE4-N-M-FRAG/cluster.md §1"
+cross_ref = ["CN-SESS-01", "CN-SESS-02", "CN-SESS-03", "T-DET-01"]
+code_locus = "crates/ade_network/src/session/state.rs (ProtoBuffers + ConnectedState.proto_buffers field), crates/ade_network/src/session/core.rs (drain_connected_frames + drain_protocol_items)"
+tests = [
+    "crates/ade_network/src/session/core.rs::tests::fragmented_chain_sync_message_assembles_one_deliver",
+    "crates/ade_network/src/session/core.rs::tests::fragmented_block_fetch_block_assembles_one_deliver",
+    "crates/ade_network/src/session/core.rs::tests::interleaved_chain_sync_and_block_fetch_fragments_stay_isolated",
+    "crates/ade_network/src/session/core.rs::tests::pipelined_two_chain_sync_messages_in_one_mux_frame_emit_two_delivers",
+    "crates/ade_network/src/session/core.rs::tests::truncated_then_complete_two_step_drain",
+    "crates/ade_network/src/session/core.rs::tests::proto_buffers_isolation_across_accepted_protocols",
+]
+ci_script = "ci/ci_check_session_proto_reassembly.sh"
+status = "enforced"
+authority_surface = "wire-layer reassembly across mux frame boundaries"
+cluster = "CL-WIRE-PROTOCOL"
+evidence_notes = "PHASE4-N-M-FRAG (2026-05-27) surfaced + closed the missing per-mini-protocol reassembly in the session reducer. cardano-node fragments large block-fetch responses (Conway blocks exceeding the 65535-byte mux payload limit) across multiple mux frames bearing the same protocol id. Before FRAG, `drain_connected_frames` emitted one `DeliverPeerFrame` per mux frame; the block-fetch codec received a truncated CBOR item and failed → wire pump exited with `BlockFetchDecode`. After FRAG, the reducer accumulates per-protocol bytes and drains COMPLETE CBOR items via `ade_codec::cbor::skip_item`. Live operator pass against fully-synced docker preprod (epoch 291, slot ~124M) now decodes block-fetch responses successfully (committed bootstrap transcript records `block_received` events with the canonical block hash matching the peer's announced tip)."
+
+[[rules]]
+id = "DC-SESS-06"
+tier = "derived"
+statement = """
+Replay equivalence under fragmented inbound streams: two reducer
+runs over the same byte-chunk sequence (including inputs where
+single CBOR items span multiple mux frames) produce
+byte-identical `DeliverPeerFrame` lists. Truncated tails are
+preserved across `step()` calls until completion; malformed CBOR
+at an item boundary surfaces as
+`SessionError::ProtocolPayloadMalformed { protocol, detail }` —
+NEVER a silent drop, NEVER a partial accept.
+"""
+source = "docs/clusters/PHASE4-N-M-FRAG/cluster.md §1"
+cross_ref = ["T-DET-01", "CN-SESS-04"]
+code_locus = "crates/ade_network/src/session/core.rs (drain_protocol_items + codec_error_detail)"
+tests = [
+    "crates/ade_network/src/session/core.rs::tests::fragmented_replay_equivalence_two_runs_byte_identical",
+    "crates/ade_network/src/session/core.rs::tests::malformed_cbor_at_item_boundary_returns_session_error",
+    "crates/ade_network/src/session/core.rs::tests::truncated_then_complete_two_step_drain",
+]
+ci_script = "ci/ci_check_session_proto_reassembly.sh"
+status = "enforced"
+strengthens = ["T-DET-01"]
+cluster = "CL-WIRE-PROTOCOL"
+evidence_notes = "PHASE4-N-M-FRAG (2026-05-27): the per-protocol buffer + closed-sum item-completeness predicate together preserve replay-equivalence across fragmented streams. `SessionError::ProtocolPayloadMalformed` exists as a closed-sum variant on the reducer's error path, with a closed `&'static str` detail discriminator (`unexpected_eof` / `unknown_era_tag` / ... / `duplicate_map_key`)."
+
 [[rules]]
 id = "RO-LIVE-03"
 tier = "release"
@@ -3290,8 +3352,8 @@ code_locus = "crates/ade_node/src/admission/ (full admission stack), crates/ade_
 tests = ["live_operator_pass_against_docker_preprod", "live_bundle_imports_with_conway_era_and_deterministic_fingerprint", "cross_epoch_block_triggers_halt_without_admit", "adversarial_corpus_rejects_all_four_mutation_classes"]
 ci_script = "ci/ci_check_live_operator_pass_scaffold.sh"
 status = "enforced_scaffolding"
-open_obligation = "blocked_until_session_reducer_per_protocol_reassembly"
-strengthened_in = ["PHASE4-N-M-A1.1"]
+open_obligation = "blocked_until_consensus_inputs_eta0_extraction"
+strengthened_in = ["PHASE4-N-M-A1.1", "PHASE4-N-M-FRAG"]
 evidence_notes = """
 PHASE4-N-M-C (2026-05-26) CLOSED RO-LIVE-05 on the bounded statement: (1) live wire integration end-to-end against docker preprod is proven (committed wire-only transcript at slot 76910188 with handshake_ok v15 + peer_tip_read); (2) the closed LiveConsensusInputs import authority + canonical Blake2b-256 fingerprint shipped (CN-CONS-IN-01, DC-CONS-IN-02), exercised against a live preprod bundle (epoch 179, 384 pools); (3) the GREEN LiveLedgerView + epoch-window guard (DC-VIEW-01, DC-ADMIT-11) + closed AdmissionPeerEvent emission contract from the RED wire pump (CN-PUMP-01, DC-PUMP-01, DC-PUMP-02) + Undecodable-tightening (DC-ADMIT-12) shipped; (4) adversarial false-accept corpus across 4 mandatory mutation classes (DC-EVIDENCE-02) proven fail-closed.
 
@@ -4141,8 +4203,8 @@ code_locus = "crates/ade_node/tests/admission_live_operator_pass.rs (env-gated i
 tests = ["live_operator_pass_against_docker_preprod", "live_bundle_imports_with_conway_era_and_deterministic_fingerprint"]
 ci_scripts = ["ci/ci_check_live_operator_pass_scaffold.sh"]
 status = "enforced_scaffolding"
-open_obligation = "blocked_until_session_reducer_per_protocol_reassembly"
-strengthened_in = ["PHASE4-N-M-A1.1"]
+open_obligation = "blocked_until_consensus_inputs_eta0_extraction"
+strengthened_in = ["PHASE4-N-M-A1.1", "PHASE4-N-M-FRAG"]
 evidence_notes = """
 PHASE4-N-M-C S5 (2026-05-26) shipped the C5 deliverable in two tiers: (a) live wire-integration is PROVEN end-to-end against the docker preprod peer (committed `phase4-n-m-c-wire-only-transcript.jsonl` carries peer_dial_started + handshake_ok + peer_tip_read + wire_smoke_complete at slot 76910188); (b) the live consensus-inputs bundle imports cleanly through `import_live_consensus_inputs` and produces a deterministic fingerprint (committed `phase4-n-m-c-consensus-inputs.json`, epoch 179, 384 pools).
 

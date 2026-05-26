@@ -21,6 +21,9 @@
 //! `Done`, the state transitions to `Connected` and mini-protocol
 //! dispatch becomes live.
 
+use ade_codec::cbor::skip_item;
+use ade_codec::error::CodecError;
+
 use crate::codec::handshake::{decode_handshake_message, encode_handshake_message, HandshakeMessage};
 use crate::handshake::agency::HandshakeAgency;
 use crate::handshake::state::{HandshakeState, N2nHandshakeOutput};
@@ -217,14 +220,77 @@ fn drain_connected_frames(
             | AcceptedMiniProtocol::KeepAlive
             | AcceptedMiniProtocol::LocalTxMonitor
             | AcceptedMiniProtocol::PeerSharing => {
-                effects.push(SessionEffect::DeliverPeerFrame {
-                    mini_protocol: proto,
-                    payload: frame.payload,
-                });
+                // PHASE4-N-M-FRAG: per-mini-protocol payload
+                // reassembly. Append this mux frame's payload to
+                // the per-protocol buffer; then drain every
+                // COMPLETE CBOR item from the buffer head. The
+                // peer's block-fetch server splits one MsgBlock
+                // CBOR item across multiple mux frames bearing
+                // the same protocol id; the consumer must see one
+                // DeliverPeerFrame per item, not per frame.
+                let buf = connected.proto_buffers.get_mut(proto);
+                buf.extend_from_slice(&frame.payload);
+                drain_protocol_items(proto, buf, &mut effects)?;
             }
         }
     }
     Ok(effects)
+}
+
+/// Drain every COMPLETE CBOR item from the head of `buf`,
+/// pushing one `DeliverPeerFrame` effect per item. Stops at the
+/// first truncated tail (caller buffers it for the next mux
+/// frame). Fails closed if `skip_item` reports a non-EOF
+/// `CodecError` — that's a malformed item at a boundary, which
+/// is peer-fatal (DC-SESS-06).
+fn drain_protocol_items(
+    proto: AcceptedMiniProtocol,
+    buf: &mut Vec<u8>,
+    effects: &mut Vec<SessionEffect>,
+) -> Result<(), SessionError> {
+    loop {
+        if buf.is_empty() {
+            return Ok(());
+        }
+        let mut offset = 0usize;
+        match skip_item(buf, &mut offset) {
+            Ok(_) => {
+                // One complete item at [0..offset).
+                let payload: Vec<u8> = buf.drain(..offset).collect();
+                effects.push(SessionEffect::DeliverPeerFrame {
+                    mini_protocol: proto,
+                    payload,
+                });
+                // Loop to drain any further pipelined items.
+            }
+            Err(CodecError::UnexpectedEof { .. }) => {
+                // Truncated tail — wait for the next mux frame.
+                return Ok(());
+            }
+            Err(e) => {
+                return Err(SessionError::ProtocolPayloadMalformed {
+                    protocol: proto.id(),
+                    detail: codec_error_detail(&e),
+                });
+            }
+        }
+    }
+}
+
+/// Closed `&'static str` label for a non-EOF `CodecError` at an
+/// item boundary. Keeps `SessionError` `&'static str` carrying
+/// (no heap strings on the reducer's error path).
+fn codec_error_detail(err: &CodecError) -> &'static str {
+    match err {
+        CodecError::UnexpectedEof { .. } => "unexpected_eof",
+        CodecError::UnknownEraTag { .. } => "unknown_era_tag",
+        CodecError::UnknownCertTag { .. } => "unknown_cert_tag",
+        CodecError::InvalidCborStructure { .. } => "invalid_cbor_structure",
+        CodecError::TrailingBytes { .. } => "trailing_bytes",
+        CodecError::UnexpectedCborType { .. } => "unexpected_cbor_type",
+        CodecError::InvalidLength { .. } => "invalid_length",
+        CodecError::DuplicateMapKey { .. } => "duplicate_map_key",
+    }
 }
 
 fn handle_outbound(
@@ -488,6 +554,285 @@ mod tests {
         assert!(matches!(err, SessionError::PostHandshakeHandshakeFrame));
     }
 
+    // -------------------------------------------------------------
+    // PHASE4-N-M-FRAG: per-mini-protocol payload reassembly tests.
+    // -------------------------------------------------------------
+
+    /// Build a raw mux frame (any protocol id) carrying `payload`.
+    /// Used by the FRAG tests to construct fragmented byte streams.
+    fn wrap_frame(proto_id: u16, payload: Vec<u8>, mode: MuxMode) -> Vec<u8> {
+        let f = MuxFrame {
+            header: MuxHeader {
+                timestamp: 0,
+                mode,
+                mini_protocol_id: MiniProtocolId::new(proto_id).expect("id"),
+                length: payload.len() as u16,
+            },
+            payload,
+        };
+        encode_frame(&f).expect("encode")
+    }
+
+    /// Construct a `ConnectedState`-anchored `SessionState` with
+    /// stock VersionData (mainnet magic, no peer-sharing).
+    fn fresh_connected_state() -> SessionState {
+        SessionState::Connected(ConnectedState::new(
+            14,
+            VersionData {
+                network_magic: MAINNET_NETWORK_MAGIC,
+                initiator_only_diffusion: false,
+                peer_sharing: PeerSharingFlag::NoPeerSharing,
+                query: false,
+                peras_support: false,
+            },
+        ))
+    }
+
+    /// A canonical large CBOR `bytes(...)` value used to stand in
+    /// for a Conway block-fetch body that exceeds the mux payload
+    /// limit (65535). Returns one complete CBOR item with a
+    /// 4-byte length header (CBOR major 2, additional info 26 =
+    /// `0x5A`, followed by a big-endian u32 length).
+    fn big_cbor_bytes(n: usize) -> Vec<u8> {
+        assert!(n > u16::MAX as usize, "test fixture must exceed mux frame");
+        assert!(n <= u32::MAX as usize, "test fixture fits in CBOR u32 length");
+        let mut buf = Vec::with_capacity(n + 5);
+        // major 2 (bytes) with 4-byte length argument.
+        buf.push(0x5A);
+        buf.extend_from_slice(&(n as u32).to_be_bytes());
+        buf.extend(std::iter::repeat(0xAB).take(n));
+        buf
+    }
+
+    #[test]
+    fn fragmented_chain_sync_message_assembles_one_deliver() {
+        let mut state = fresh_connected_state();
+        // Chain-sync RequestNext = `0x81 0x00` (array(1)[uint(0)]).
+        let cs_msg: Vec<u8> = vec![0x81, 0x00];
+        // Split the item across two mux frames: first frame has
+        // byte [0], second has byte [1]. Both bear protocol id 2.
+        let frame_a = wrap_frame(2, vec![cs_msg[0]], MuxMode::Responder);
+        let frame_b = wrap_frame(2, vec![cs_msg[1]], MuxMode::Responder);
+
+        let effects_a = step(&mut state, ByteChunkIn::Inbound(frame_a)).expect("step a");
+        assert!(
+            effects_a.is_empty(),
+            "first half-fragment must NOT emit a DeliverPeerFrame"
+        );
+        let effects_b = step(&mut state, ByteChunkIn::Inbound(frame_b)).expect("step b");
+        match effects_b.as_slice() {
+            [SessionEffect::DeliverPeerFrame {
+                mini_protocol: AcceptedMiniProtocol::ChainSync,
+                payload,
+            }] => assert_eq!(payload, &cs_msg),
+            other => panic!("expected exactly one DeliverPeerFrame, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn fragmented_block_fetch_block_assembles_one_deliver() {
+        let mut state = fresh_connected_state();
+        // Build `[4, <70KB bytes>]` outer array. Outer header is
+        // `0x82 0x04` (array(2)[uint(4)]); then the 70KB bytes item.
+        let bytes_item = big_cbor_bytes(70_000);
+        let mut full_msg: Vec<u8> = Vec::with_capacity(2 + bytes_item.len());
+        full_msg.push(0x82);
+        full_msg.push(0x04);
+        full_msg.extend_from_slice(&bytes_item);
+
+        // Split into three mux frames. Each frame must be <= 65535
+        // bytes per the mux header's u16 length. Use 25k, 25k, rest.
+        let len = full_msg.len();
+        assert!(len > u16::MAX as usize);
+        let chunks: [&[u8]; 3] = [
+            &full_msg[0..25_000],
+            &full_msg[25_000..50_000],
+            &full_msg[50_000..len],
+        ];
+        let f1 = wrap_frame(3, chunks[0].to_vec(), MuxMode::Responder);
+        let f2 = wrap_frame(3, chunks[1].to_vec(), MuxMode::Responder);
+        let f3 = wrap_frame(3, chunks[2].to_vec(), MuxMode::Responder);
+
+        let e1 = step(&mut state, ByteChunkIn::Inbound(f1)).expect("f1");
+        assert!(e1.is_empty(), "fragment 1 must not deliver");
+        let e2 = step(&mut state, ByteChunkIn::Inbound(f2)).expect("f2");
+        assert!(e2.is_empty(), "fragment 2 must not deliver");
+        let e3 = step(&mut state, ByteChunkIn::Inbound(f3)).expect("f3");
+        match e3.as_slice() {
+            [SessionEffect::DeliverPeerFrame {
+                mini_protocol: AcceptedMiniProtocol::BlockFetch,
+                payload,
+            }] => {
+                assert_eq!(payload.len(), full_msg.len());
+                assert_eq!(payload, &full_msg);
+            }
+            other => panic!("expected one DeliverPeerFrame on f3, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn interleaved_chain_sync_and_block_fetch_fragments_stay_isolated() {
+        let mut state = fresh_connected_state();
+        // CS fragment (first byte of `0x81 0x00`)
+        let cs_frame_a = wrap_frame(2, vec![0x81], MuxMode::Responder);
+        // BF fragment (first byte of `0x82 0x03` = array(2)[uint(3)]
+        // for MsgNoBlocks shape; here we'll do `0x81 0x03` = a
+        // 1-element array[uint(3)] = MsgNoBlocks itself).
+        // To make the test exercise BOTH protocols' buffers under
+        // fragmentation, we deliver each in two halves and
+        // interleave.
+        let bf_frame_a = wrap_frame(3, vec![0x81], MuxMode::Responder);
+        let cs_frame_b = wrap_frame(2, vec![0x00], MuxMode::Responder);
+        let bf_frame_b = wrap_frame(3, vec![0x03], MuxMode::Responder);
+
+        let e1 = step(&mut state, ByteChunkIn::Inbound(cs_frame_a)).expect("cs a");
+        assert!(e1.is_empty(), "cs fragment a must not deliver");
+        let e2 = step(&mut state, ByteChunkIn::Inbound(bf_frame_a)).expect("bf a");
+        assert!(e2.is_empty(), "bf fragment a must not deliver");
+        let e3 = step(&mut state, ByteChunkIn::Inbound(cs_frame_b)).expect("cs b");
+        match e3.as_slice() {
+            [SessionEffect::DeliverPeerFrame {
+                mini_protocol: AcceptedMiniProtocol::ChainSync,
+                payload,
+            }] => assert_eq!(payload, &vec![0x81, 0x00]),
+            other => panic!("expected one CS DeliverPeerFrame, got {other:?}"),
+        }
+        let e4 = step(&mut state, ByteChunkIn::Inbound(bf_frame_b)).expect("bf b");
+        match e4.as_slice() {
+            [SessionEffect::DeliverPeerFrame {
+                mini_protocol: AcceptedMiniProtocol::BlockFetch,
+                payload,
+            }] => assert_eq!(payload, &vec![0x81, 0x03]),
+            other => panic!("expected one BF DeliverPeerFrame, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn pipelined_two_chain_sync_messages_in_one_mux_frame_emit_two_delivers() {
+        let mut state = fresh_connected_state();
+        // Concatenate two CBOR items inside one mux frame's payload.
+        // First = RequestNext (`0x81 0x00`), second = AwaitReply
+        // (`0x81 0x01`).
+        let payload = vec![0x81, 0x00, 0x81, 0x01];
+        let frame_bytes = wrap_frame(2, payload, MuxMode::Responder);
+        let effects = step(&mut state, ByteChunkIn::Inbound(frame_bytes)).expect("step");
+        match effects.as_slice() {
+            [SessionEffect::DeliverPeerFrame {
+                mini_protocol: AcceptedMiniProtocol::ChainSync,
+                payload: p1,
+            }, SessionEffect::DeliverPeerFrame {
+                mini_protocol: AcceptedMiniProtocol::ChainSync,
+                payload: p2,
+            }] => {
+                assert_eq!(p1, &vec![0x81, 0x00]);
+                assert_eq!(p2, &vec![0x81, 0x01]);
+            }
+            other => panic!("expected two CS DeliverPeerFrames, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn malformed_cbor_at_item_boundary_returns_session_error() {
+        let mut state = fresh_connected_state();
+        // 0x1F = major type 0 (uint) with reserved additional-info
+        // value 31, which `skip_item` rejects as
+        // InvalidCborStructure rather than UnexpectedEof — i.e.,
+        // truly malformed at the boundary.
+        let bad_payload = vec![0x1F];
+        let frame_bytes = wrap_frame(2, bad_payload, MuxMode::Responder);
+        let err = step(&mut state, ByteChunkIn::Inbound(frame_bytes)).expect_err("must err");
+        match err {
+            SessionError::ProtocolPayloadMalformed { protocol, .. } => {
+                assert_eq!(protocol, 2);
+            }
+            other => panic!("expected ProtocolPayloadMalformed, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn truncated_then_complete_two_step_drain() {
+        let mut state = fresh_connected_state();
+        // Item = `0x82 0x18 0x2A 0x18 0x2B` = array(2)[uint(42),
+        // uint(43)] = 5 bytes. Deliver bytes [0..3] in frame 1
+        // (truncated), then [3..5] in frame 2 (completes).
+        let item = vec![0x82, 0x18, 0x2A, 0x18, 0x2B];
+        let f1 = wrap_frame(2, item[..3].to_vec(), MuxMode::Responder);
+        let f2 = wrap_frame(2, item[3..].to_vec(), MuxMode::Responder);
+
+        let e1 = step(&mut state, ByteChunkIn::Inbound(f1)).expect("f1");
+        assert!(e1.is_empty(), "truncated item must NOT deliver");
+        let e2 = step(&mut state, ByteChunkIn::Inbound(f2)).expect("f2");
+        match e2.as_slice() {
+            [SessionEffect::DeliverPeerFrame { payload, .. }] => {
+                assert_eq!(payload, &item);
+            }
+            other => panic!("expected one DeliverPeerFrame on f2, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn proto_buffers_isolation_across_accepted_protocols() {
+        // Send one fragmented item to each non-handshake protocol.
+        // First half is a 1-byte truncation; second half completes.
+        let item: Vec<u8> = vec![0x81, 0x00];
+        // Closed list of non-handshake protocols (id != 0).
+        let protos: [(AcceptedMiniProtocol, u16); 9] = [
+            (AcceptedMiniProtocol::ChainSync, 2),
+            (AcceptedMiniProtocol::BlockFetch, 3),
+            (AcceptedMiniProtocol::TxSubmission, 4),
+            (AcceptedMiniProtocol::LocalChainSync, 5),
+            (AcceptedMiniProtocol::LocalTxSubmission, 6),
+            (AcceptedMiniProtocol::LocalStateQuery, 7),
+            (AcceptedMiniProtocol::KeepAlive, 8),
+            (AcceptedMiniProtocol::LocalTxMonitor, 9),
+            (AcceptedMiniProtocol::PeerSharing, 10),
+        ];
+        for (variant, id) in protos.iter() {
+            let mut state = fresh_connected_state();
+            let f1 = wrap_frame(*id, item[..1].to_vec(), MuxMode::Responder);
+            let f2 = wrap_frame(*id, item[1..].to_vec(), MuxMode::Responder);
+            let e1 = step(&mut state, ByteChunkIn::Inbound(f1)).expect("f1");
+            assert!(
+                e1.is_empty(),
+                "{variant:?}: truncated half MUST not deliver"
+            );
+            let e2 = step(&mut state, ByteChunkIn::Inbound(f2)).expect("f2");
+            match e2.as_slice() {
+                [SessionEffect::DeliverPeerFrame {
+                    mini_protocol,
+                    payload,
+                }] => {
+                    assert_eq!(mini_protocol, variant);
+                    assert_eq!(payload, &item);
+                }
+                other => panic!(
+                    "{variant:?}: expected one DeliverPeerFrame after reassembly, got {other:?}"
+                ),
+            }
+        }
+    }
+
+    #[test]
+    fn fragmented_replay_equivalence_two_runs_byte_identical() {
+        // T-DET-01 strengthening: identical fragmented input chunks
+        // produce byte-identical DeliverPeerFrame sequences across
+        // two reducer runs.
+        let item = vec![0x82, 0x18, 0x2A, 0x18, 0x2B];
+        let f1_bytes = wrap_frame(2, item[..2].to_vec(), MuxMode::Responder);
+        let f2_bytes = wrap_frame(2, item[2..].to_vec(), MuxMode::Responder);
+
+        fn drive(f1: Vec<u8>, f2: Vec<u8>) -> Vec<SessionEffect> {
+            let mut state = fresh_connected_state();
+            let mut out = Vec::new();
+            out.extend(step(&mut state, ByteChunkIn::Inbound(f1)).expect("f1"));
+            out.extend(step(&mut state, ByteChunkIn::Inbound(f2)).expect("f2"));
+            out
+        }
+        let a = drive(f1_bytes.clone(), f2_bytes.clone());
+        let b = drive(f1_bytes, f2_bytes);
+        assert_eq!(a, b, "fragmented inbound → DeliverPeerFrame sequence must be byte-identical across runs");
+    }
+
     #[test]
     fn session_connected_delivers_chain_sync_frame_as_effect() {
         let mut state = SessionState::Connected(ConnectedState::new(
@@ -500,7 +845,11 @@ mod tests {
                 peras_support: false,
             },
         ));
-        let payload = vec![0xDE, 0xAD, 0xBE, 0xEF];
+        // PHASE4-N-M-FRAG: the reducer now requires the
+        // mini-protocol payload to be valid CBOR (one complete
+        // item per DeliverPeerFrame). `0x81 0x00` = `array(1)
+        // [uint(0)]` = `ChainSyncMessage::RequestNext` wire bytes.
+        let payload = vec![0x81u8, 0x00];
         let frame_bytes = wrap_chain_sync_frame(payload.clone(), MuxMode::Responder);
         let effects = step(&mut state, ByteChunkIn::Inbound(frame_bytes))
             .expect("step");

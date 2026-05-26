@@ -184,6 +184,9 @@ fn session_err_to_halt(err: &SessionError) -> PeerHaltReason {
         SessionError::OutboundPayloadTooLarge { .. } => {
             PeerHaltReason::ChainSyncDecodeError
         }
+        SessionError::ProtocolPayloadMalformed { .. } => {
+            PeerHaltReason::ChainSyncDecodeError
+        }
     }
 }
 

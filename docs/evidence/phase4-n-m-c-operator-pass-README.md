@@ -335,3 +335,103 @@ mandatory-asserts switch succeeds.
 The registry's `open_obligation` for both rules is
 re-tagged accordingly:
 `blocked_until_session_reducer_per_protocol_reassembly`.
+
+---
+
+## §9 — 2026-05-27: FRAG closed + adjacent fixes; new gate is consensus_inputs eta0
+
+PHASE4-N-M-FRAG closed (HEAD on commit) — per-mini-protocol
+payload reassembly + closed-sum `ProtocolPayloadMalformed`
+error path are now in the session reducer (CN-SESS-04 +
+DC-SESS-06 registered as `enforced`). Re-running the C5
+operator pass against the fully-synced peer now produces the
+events we couldn't see before:
+
+```
+admission_started        — consensus_inputs_fingerprint bound
+bootstrap_complete       — initial_ledger_fp + chain_tip_slot bound
+block_received           — slot 124137xxx, hash matches peer's tip
+agreement_verdict        — kind: "diverged"
+admission_halted         — reason: "diverged"
+```
+
+`block_received` proves the wire-layer + block-fetch +
+tag-24-unwrap path now end-to-end works. But the verdict is
+**diverged** because `admit_via_block_validity` rejects the
+block with `Header(VrfCert(VerificationFailed))`.
+
+### What FRAG also fixed inline (adjacent unblockers)
+
+While unblocking the wire pump, two latent bugs that had been
+masked by the earlier `BlockFetchDecode` exit surfaced:
+
+1. **Missing tag-24 unwrap before `decode_block`.** The
+   `BlockFetchMessage::Block { bytes }` payload is the FULL
+   wrapped `tag(24, bytes(.cbor [era_tag, era_block]))` CBOR
+   item. `decode_block` consumes the inner `[era_tag,
+   era_block]`. The admission runner now strips the tag-24
+   envelope via `unwrap_block_fetch_envelope` in `process_block`.
+
+2. **`chain_dep.epoch_nonce` was hard-coded to `Nonce::ZERO`
+   in admission bootstrap.** The runner's
+   `chain_dep` (the Praos chain-dep state passed to
+   `admit_via_block_validity`) was initialized from
+   `PraosChainDepState::genesis(Nonce::ZERO)` and never
+   updated with the operator-imported
+   `consensus_inputs.epoch_nonce`. Fixed by re-constructing
+   `chain_dep` after `import_live_consensus_inputs` returns
+   the bundle.
+
+### Remaining gate (post-FRAG)
+
+`Header(VrfCert(VerificationFailed))` still fires. After
+wiring `chain_dep.epoch_nonce` from `canonical.epoch_nonce`,
+the failure shape is unchanged — which suggests the bundle's
+`epoch_nonce_hex` value itself (sourced from
+`cardano-cli query protocol-state`'s `epochNonce` field by
+`ci/build_consensus_inputs_bundle.sh`) is NOT the Eta0 used
+for the slot's leader-election VRF check, or there is another
+data shape mismatch downstream.
+
+The existing positive Conway corpus
+(`crates/ade_testkit/tests/conway_conservation_positive_corpus.rs`)
+exercises the SAME `verify_praos_vrf` impl successfully on
+corpus blocks, so the BLUE VRF code is not at fault — it's an
+input-data discrepancy. The corpus harness sources `eta0` from
+the ledger-snapshot's `NewEpochState.ticknState`; cardano-cli's
+`query protocol-state` returns a different nonce.
+
+### Next slice (provisional `PHASE4-N-M-NONCE`)
+
+Scope:
+- Identify the correct cardano-cli (or `cardano-cli debug`)
+  invocation that surfaces the current epoch's Eta0
+  (leader-election nonce). Candidates:
+  `cardano-cli query ledger-state`, `cardano-cli debug ...`,
+  or extracting from a ledger snapshot via the existing test
+  harness.
+- Update `ci/build_consensus_inputs_bundle.sh` to write that
+  Eta0 to `epoch_nonce_hex`.
+- Add a unit/integration test that verifies a real Conway
+  block (from the corpus) VRF-verifies under the
+  `LiveLedgerView` path with the corresponding bundle.
+- Re-run C5 with the corrected bundle. Expected:
+  ≥ 1 `block_admitted`, ≥ 1
+  `agreement_verdict { kind: "agreed" }`, 0 `diverged`.
+
+The registry's `open_obligation` for DC-EVIDENCE-01 +
+RO-LIVE-05 is re-tagged again:
+`blocked_until_consensus_inputs_eta0_extraction`.
+
+### Diagnostic aids already in place
+
+- `wire_pump::finalize` prints
+  `admission_wire_pump: peer=<addr> exit=<result>` (FRAG-era).
+- `admission/runner.rs::process_block` prints
+  `admission_decode_block_failed: prefix=… error=…` on
+  decode failures (post-FRAG).
+- `admission/runner.rs::process_block` prints
+  `admission_admit_rejected: slot=… error=…` on validity
+  rejections (post-FRAG). Captures the typed
+  `BlockValidityError`, which makes the VRF / KES / body
+  failure mode visible to the operator without a debugger.
