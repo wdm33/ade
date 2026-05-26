@@ -18,9 +18,13 @@
 pub mod cadence;
 pub mod chaindb_block_source;
 pub mod in_memory_cache;
+pub mod persistent_cache;
 pub mod snapshot_writer;
 
 pub use cadence::{should_snapshot_after_block, SnapshotCadence};
 pub use chaindb_block_source::ChainDbBlockSource;
 pub use in_memory_cache::InMemorySnapshotCache;
+pub use persistent_cache::{
+    PersistentCacheError, PersistentSnapshotCache, PERSISTENT_CACHE_SCHEMA_VERSION,
+};
 pub use snapshot_writer::maybe_capture_snapshot;

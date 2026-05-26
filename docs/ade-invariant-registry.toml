@@ -2689,13 +2689,19 @@ version tag and embed the source state's fingerprint for decode-
 side cross-check.
 """
 source = "docs/planning/ledger-snapshot-rollback-invariants.md §1 (I-1, I-2, I-9)"
-cross_ref = ["T-ENC-01", "T-DET-01", "DC-CONS-22"]
-code_locus = ""
-tests = []
-ci_script = ""
-status = "declared"
-open_obligation = "persistent_ledger_snapshot_encoding_follow_on_cluster"
-notes = "PHASE4-N-I scope decision (2026-05-26): N-I ships an in-memory SnapshotReader; persistent on-disk encoding is carved out to a follow-on cluster because the full canonical LedgerState encoder is ~1500-2000 LoC of field-walk code (mirrors ade_ledger::fingerprint's structure) and is too large to ship in one slice without risking partial-implementation bugs. The in-memory scope still closes CN-STORE-07, DC-CONS-22, DC-STORE-07, and DC-CONS-20 fully; persistence across restarts is the follow-on cluster's deliverable."
+cross_ref = ["T-ENC-01", "T-DET-01", "DC-CONS-22", "DC-STORE-08", "DC-STORE-09", "CN-STORE-08"]
+code_locus = "crates/ade_ledger/src/snapshot/{framing,ledger,chain_dep,utxo_state,cert_state,epoch_state,gov_state}.rs + crates/ade_runtime/src/rollback/persistent_cache.rs"
+tests = [
+    "snapshot::framing::tests::snapshot_round_trip",
+    "snapshot::framing::tests::round_trip_via_fingerprint_combined",
+    "snapshot::ledger::tests::encode_then_decode_roundtrips_via_fingerprint",
+    "rollback::persistent_cache::tests::persistent_cache_capture_then_nearest_le_round_trips",
+    "rollback::persistent_cache::tests::persistent_cache_matches_in_memory_cache_semantics",
+]
+ci_script = "ci/ci_check_snapshot_encoder_closure.sh"
+status = "enforced"
+strengthened_in = ["PHASE4-N-J"]
+notes = "PHASE4-N-J (2026-05-26) closed the open_obligation: snapshot::framing::{encode_snapshot,decode_snapshot} is the canonical pair (single-authority via CN-STORE-08); the embedded fingerprint cross-check (DC-STORE-08) and version-tag check (DC-STORE-09) gate every decode; ade_runtime::rollback::PersistentSnapshotCache bridges the framing layer to SnapshotStore so restart-safe rollback now works. Cross-impl equivalence proven via persistent_cache_matches_in_memory_cache_semantics."
 
 [[rules]]
 id = "DC-CONS-22"
