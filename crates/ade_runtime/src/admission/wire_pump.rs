@@ -356,10 +356,19 @@ async fn handle_chain_sync(
         ChainSyncMessage::IntersectFound { point: _, tip } => {
             emit(events_out, peer_addr, tip_update(peer_addr, tip.clone())).await?;
             *chain_sync_in_flight = false;
-            // Issue a block-fetch RequestRange[tip,tip] to pull
-            // the tip block bytes for admission.
-            queue_block_fetch_request(outbox, &tip.point);
-            *block_fetch_in_flight = true;
+            // PHASE4-N-M-FOLLOW: do NOT block-fetch the peer's
+            // tip here. Chain-sync starts walking forward FROM
+            // the intersect point; block-fetching the tip would
+            // jump ahead and cause subsequent RollForward
+            // points (which start at intersect+1) to be
+            // rejected as `SlotBeforeLastApplied`. Instead,
+            // request the next chain-sync message — each
+            // `RollForward` will block-fetch its own point.
+            queue_chain_sync_request_next(outbox);
+            *chain_sync_in_flight = true;
+            // Suppress unused-variable warning on block_fetch_in_flight
+            // when this arm fires before any block-fetch round.
+            let _ = block_fetch_in_flight;
             Ok(())
         }
         ChainSyncMessage::IntersectNotFound { tip } => {
@@ -372,20 +381,43 @@ async fn handle_chain_sync(
             *chain_sync_in_flight = true;
             Ok(())
         }
-        ChainSyncMessage::RollForward { header: _, tip } => {
+        ChainSyncMessage::RollForward { header, tip } => {
             emit(events_out, peer_addr, tip_update(peer_addr, tip)).await?;
             *chain_sync_in_flight = false;
-            // Block-fetch of the rolled-forward header point is
-            // a future strengthening (would need a header-point
-            // extractor). For C3, keep chain-sync alive so the
-            // pump continues to surface fresh tips.
-            queue_chain_sync_request_next(outbox);
-            *chain_sync_in_flight = true;
-            Ok(())
+            // PHASE4-N-M-FOLLOW: extract the rolled-forward
+            // block's point from the header envelope, then
+            // block-fetch it. Sequencing: do NOT queue another
+            // chain-sync RequestNext here — the block-fetch
+            // BatchDone handler will queue it once we've
+            // received the block. This sequences chain-sync
+            // and block-fetch so we never pipeline two
+            // chain-sync requests while a fetch is outstanding.
+            match extract_chain_sync_header_point(&header) {
+                Ok(point) => {
+                    queue_block_fetch_request(outbox, &point);
+                    *block_fetch_in_flight = true;
+                    Ok(())
+                }
+                Err(_) => {
+                    // Header-envelope malformed → fail-closed.
+                    // (Per `[[feedback-shell-must-not-overstate-semantic-truth]]`:
+                    // a peer sending an undecodable header is a
+                    // wire-layer violation; we exit rather than
+                    // silently skip the block and break chain
+                    // continuity.)
+                    Err(AdmissionWirePumpResult::Error(
+                        AdmissionWirePumpError::ChainSyncDecode,
+                    ))
+                }
+            }
         }
         ChainSyncMessage::RollBackward { point: _, tip } => {
             emit(events_out, peer_addr, tip_update(peer_addr, tip)).await?;
             *chain_sync_in_flight = false;
+            // Rollback: don't block-fetch; just request the
+            // next chain-sync message so we can pick up where
+            // the peer is going. (Replaying rollbacks against
+            // already-admitted blocks is a future cluster.)
             queue_chain_sync_request_next(outbox);
             *chain_sync_in_flight = true;
             Ok(())
@@ -455,6 +487,72 @@ async fn handle_block_fetch(
             ))
         }
     }
+}
+
+/// Extract the `Point` of the block referenced by a chain-sync
+/// `RollForward` header envelope. PHASE4-N-M-FOLLOW.
+///
+/// Wire shape (cardano-node, all Praos eras):
+/// ```text
+/// header = [serialisationInfo: uint, encodedHeader: tag(24, bytes(header_cbor))]
+/// header_cbor = [header_body, body_signature]
+/// header_body = [block_no, slot, prev_hash, issuer_vkey, vrf_vkey,
+///                vrf_cert, body_size, body_hash, op_cert, protocol_version]
+/// ```
+///
+/// Returns `Point::Block { slot, hash }` where:
+/// - `slot` is the header_body's 2nd uint field.
+/// - `hash` is `blake2b_256(header_cbor)` — the canonical
+///   block hash.
+///
+/// Returns `Err(())` on any structural decode failure. Honest
+/// scope: this slice supports Babbage/Conway Praos headers
+/// only (`array(2)[header_body, signature]` outer). Pre-Babbage
+/// TPraos headers (where `header_body` is the SECOND element,
+/// not the first) would parse incorrectly here — the operator
+/// pass is Conway-only by design (`¬P-C5`).
+fn extract_chain_sync_header_point(envelope_bytes: &[u8]) -> Result<Point, ()> {
+    use ade_codec::cbor::{read_array_header, read_bytes, read_tag, read_uint, ContainerEncoding};
+    use ade_types::{Hash32, SlotNo};
+
+    let mut offset = 0usize;
+    // Outer envelope: array(2) [serialisationInfo, tag(24, bytes)]
+    let outer = read_array_header(envelope_bytes, &mut offset).map_err(|_| ())?;
+    if !matches!(outer, ContainerEncoding::Definite(2, _)) {
+        return Err(());
+    }
+    // Skip serialisationInfo (era discriminator uint).
+    let _ = read_uint(envelope_bytes, &mut offset).map_err(|_| ())?;
+    // Read tag(24).
+    let tag = read_tag(envelope_bytes, &mut offset).map_err(|_| ())?;
+    if tag.0 != 24 {
+        return Err(());
+    }
+    // Read the wrapped header_cbor bytes.
+    let header_cbor = read_bytes(envelope_bytes, &mut offset).map_err(|_| ())?.0;
+
+    // block_hash = blake2b_256(header_cbor)
+    let block_hash = Hash32(ade_crypto::blake2b::blake2b_256(&header_cbor).0);
+
+    // Parse the header to extract the slot.
+    let mut h_off = 0usize;
+    // array(2): [header_body, body_signature]
+    let h_outer = read_array_header(&header_cbor, &mut h_off).map_err(|_| ())?;
+    if !matches!(h_outer, ContainerEncoding::Definite(2, _)) {
+        return Err(());
+    }
+    // header_body: array(N) — N varies by era (e.g. Conway = 10),
+    // but the first two fields are always [block_no, slot, ...].
+    let _hb = read_array_header(&header_cbor, &mut h_off).map_err(|_| ())?;
+    // block_no (skip)
+    let _ = read_uint(&header_cbor, &mut h_off).map_err(|_| ())?;
+    // slot
+    let (slot, _) = read_uint(&header_cbor, &mut h_off).map_err(|_| ())?;
+
+    Ok(Point::Block {
+        slot: SlotNo(slot),
+        hash: block_hash,
+    })
 }
 
 fn queue_chain_sync_request_next(outbox: &mut VecDeque<ByteChunkIn>) {
@@ -696,9 +794,84 @@ mod tests {
         }
     }
 
+    /// Synthesize a Praos-shaped chain-sync RollForward header
+    /// envelope with a given slot. Used by PHASE4-N-M-FOLLOW
+    /// tests.
+    ///
+    /// Layout:
+    ///   envelope = `82 01 D8 18 4F <inner_cbor>`
+    ///   inner_cbor (15 bytes) =
+    ///     `82 8A 01 19 SS SS 00 00 00 00 00 00 00 00 00`
+    ///   = array(2)[array(10)[uint(1), uint(slot_u16), 8x uint(0)], uint(0)]
+    fn synth_rollforward_header(slot_u16: u16) -> Vec<u8> {
+        let mut inner = Vec::with_capacity(15);
+        inner.push(0x82); // array(2)
+        inner.push(0x8A); // array(10)
+        inner.push(0x01); // block_no = 1
+        inner.push(0x19); // uint(u16) follows
+        inner.extend_from_slice(&slot_u16.to_be_bytes()); // slot
+        // 8 placeholder fields for header_body, each a single
+        // uint(0) byte.
+        inner.extend(std::iter::repeat(0x00).take(8));
+        // body_signature: uint(0).
+        inner.push(0x00);
+        assert_eq!(inner.len(), 15);
+
+        let mut env = Vec::with_capacity(4 + 1 + inner.len());
+        env.push(0x82); // array(2)
+        env.push(0x01); // serialisationInfo uint(1)
+        env.push(0xD8); // tag(24) prefix
+        env.push(0x18); // tag(24) suffix
+        env.push(0x4F); // bytes(15) header
+        env.extend_from_slice(&inner);
+        env
+    }
+
+    #[test]
+    fn extract_chain_sync_header_point_returns_slot_and_hash() {
+        let envelope = synth_rollforward_header(0x1234);
+        let point = extract_chain_sync_header_point(&envelope).expect("extract");
+        match point {
+            Point::Block { slot, hash } => {
+                assert_eq!(slot.0, 0x1234);
+                // The hash is blake2b_256 of the inner CBOR
+                // (envelope bytes 5..end). Recompute the
+                // expected hash from the test fixture so we
+                // pin the canonical formula, not a magic
+                // value.
+                let inner = &envelope[5..];
+                let expected = ade_crypto::blake2b::blake2b_256(inner).0;
+                assert_eq!(hash.0, expected);
+            }
+            Point::Origin => panic!("expected Block point, got Origin"),
+        }
+    }
+
+    #[test]
+    fn extract_chain_sync_header_point_rejects_malformed_envelope() {
+        // Outer is not array(2).
+        assert!(extract_chain_sync_header_point(&[0x83, 0x01, 0x02, 0x03]).is_err());
+        // Wrong tag (not 24).
+        let bad_tag = vec![0x82, 0x01, 0xD8, 0x42, 0x41, 0x00];
+        assert!(extract_chain_sync_header_point(&bad_tag).is_err());
+        // Empty input.
+        assert!(extract_chain_sync_header_point(&[]).is_err());
+        // Header inner not array(2).
+        let mut inner = Vec::new();
+        inner.push(0x81); // array(1) — wrong (must be 2)
+        inner.push(0x00);
+        let mut env = vec![0x82, 0x01, 0xD8, 0x18, 0x42];
+        env.extend_from_slice(&inner);
+        assert!(extract_chain_sync_header_point(&env).is_err());
+    }
+
     #[tokio::test]
-    async fn pump_emits_tip_update_and_block_on_initial_intersect_and_block_fetch() {
-        // Wire two TCP halves and wrap each in a mux transport.
+    async fn pump_emits_tip_update_and_request_next_on_intersect_found_no_block_fetch() {
+        // PHASE4-N-M-FOLLOW: under in-order admission, an
+        // IntersectFound MUST NOT trigger an immediate
+        // block-fetch — it must only emit TipUpdate and
+        // request the next chain-sync message. Block-fetch
+        // happens on each subsequent RollForward.
         let (client_stream, server_stream) = loopback_pair().await;
         let client_transport = spawn_duplex(client_stream, DuplexCapacity::DEFAULT);
         let mut server_transport = spawn_duplex(server_stream, DuplexCapacity::DEFAULT);
@@ -717,110 +890,58 @@ mod tests {
             .await
         });
 
-        // Wait for the client's outbound FindIntersect to land on
-        // the server side.
-        let _first_in: Vec<u8> = server_transport
+        // Drain the initial outbound FindIntersect.
+        let _ = server_transport
             .inbound
             .recv()
             .await
             .expect("client sent FindIntersect");
 
-        // Server replies IntersectFound { point: Origin, tip:
-        // (slot=42, hash=11..) }.
+        // Server replies IntersectFound at tip slot=42.
         let tip = fake_tip(42);
-        let intersect_found = ChainSyncMessage::IntersectFound {
-            point: Point::Origin,
-            tip: tip.clone(),
-        };
-        let intersect_bytes = encode_chain_sync_message(&intersect_found);
-        let intersect_frame = responder_frame(
+        let if_frame = responder_frame(
             AcceptedMiniProtocol::CHAIN_SYNC_ID,
-            intersect_bytes,
+            encode_chain_sync_message(&ChainSyncMessage::IntersectFound {
+                point: Point::Origin,
+                tip: tip.clone(),
+            }),
         );
-        server_transport
-            .outbound
-            .send(intersect_frame)
-            .await
-            .expect("send IntersectFound");
+        server_transport.outbound.send(if_frame).await.expect("send IF");
 
-        // First emitted event must be a TipUpdate that matches.
+        // Pump emits TipUpdate.
         let evt = tokio::time::timeout(
             std::time::Duration::from_millis(2000),
             events_rx.recv(),
         )
         .await
-        .expect("tip update arrives")
+        .expect("tip update")
         .expect("event");
         match evt {
-            AdmissionPeerEvent::TipUpdate { tip: got_tip, .. } => {
-                assert_eq!(got_tip, tip);
-            }
-            other => panic!("expected TipUpdate, got {:?}", other),
+            AdmissionPeerEvent::TipUpdate { tip: got, .. } => assert_eq!(got, tip),
+            other => panic!("expected TipUpdate, got {other:?}"),
         }
 
-        // Wait for the pump's BlockFetch RequestRange.
-        let _bf_req: Vec<u8> = server_transport
-            .inbound
-            .recv()
-            .await
-            .expect("client sent RequestRange");
-
-        // Server replies with the block-fetch happy path:
-        // StartBatch → Block { bytes } → BatchDone. The bytes
-        // field must be a single valid CBOR item (matching the
-        // cardano-node N2N wrapped-block shape:
-        // `[serialisationInfo, tag(24, bytes(inner))]`).
-        let block_bytes = {
-            let mut buf = Vec::new();
-            // array(2)
-            buf.push(0x82);
-            // serialisationInfo: uint = 1
-            buf.push(0x01);
-            // tag(24) bytes(4) [DE AD BE EF]
-            buf.push(0xd8);
-            buf.push(0x18);
-            buf.push(0x44);
-            buf.extend_from_slice(&[0xDE, 0xAD, 0xBE, 0xEF]);
-            buf
-        };
-        for msg in [
-            BlockFetchMessage::StartBatch,
-            BlockFetchMessage::Block {
-                bytes: block_bytes.clone(),
-            },
-            BlockFetchMessage::BatchDone,
-        ] {
-            let bytes = encode_block_fetch_message(&msg);
-            let frame = responder_frame(AcceptedMiniProtocol::BLOCK_FETCH_ID, bytes);
-            server_transport
-                .outbound
-                .send(frame)
-                .await
-                .expect("send block-fetch msg");
-        }
-
-        // The pump must emit AdmissionPeerEvent::Block with
-        // exactly those bytes (DC-PUMP-01 + admission delivery).
-        let evt = tokio::time::timeout(
+        // Pump's next outbound MUST be a chain-sync
+        // RequestNext (NOT a block-fetch). Block-fetch only
+        // fires on each subsequent RollForward.
+        let next_outbound = tokio::time::timeout(
             std::time::Duration::from_millis(2000),
-            events_rx.recv(),
+            server_transport.inbound.recv(),
         )
         .await
-        .expect("block event")
-        .expect("event");
-        match evt {
-            AdmissionPeerEvent::Block {
-                block_bytes: got, ..
-            } => {
-                assert_eq!(got, block_bytes);
-            }
-            other => panic!("expected Block, got {:?}", other),
-        }
+        .expect("client sent next outbound")
+        .expect("frame bytes");
+        let (frame, _) = ade_network::mux::frame::decode_frame(&next_outbound)
+            .expect("frame decodes");
+        assert_eq!(
+            frame.header.mini_protocol_id.get(),
+            AcceptedMiniProtocol::CHAIN_SYNC_ID,
+            "post-IntersectFound outbound must be chain-sync RequestNext, not block-fetch"
+        );
+        let cs_msg = decode_chain_sync_message(&frame.payload).expect("decode cs");
+        assert!(matches!(cs_msg, ChainSyncMessage::RequestNext));
 
-        // Drop the server side to trigger EOF on the client.
         drop(server_transport);
-
-        // The pump must emit a final Disconnected.
         loop {
             let evt = tokio::time::timeout(
                 std::time::Duration::from_millis(2000),
@@ -833,7 +954,6 @@ mod tests {
                 break;
             }
         }
-
         let _ = pump_handle.await;
     }
 
@@ -903,6 +1023,189 @@ mod tests {
             }
         }
 
+        let _ = pump_handle.await;
+    }
+
+    /// PHASE4-N-M-FOLLOW: after the initial IntersectFound +
+    /// block-fetch round, a chain-sync `RollForward` MUST cause
+    /// the pump to block-fetch the rolled-forward block AND
+    /// hold off on chain-sync RequestNext until the
+    /// block-fetch BatchDone arrives.
+    #[tokio::test]
+    async fn rollforward_drives_block_fetch_then_request_next() {
+        let (client_stream, server_stream) = loopback_pair().await;
+        let client_transport = spawn_duplex(client_stream, DuplexCapacity::DEFAULT);
+        let mut server_transport = spawn_duplex(server_stream, DuplexCapacity::DEFAULT);
+
+        let (events_tx, mut events_rx) = mpsc::channel::<AdmissionPeerEvent>(64);
+
+        let pump_handle = tokio::spawn(async move {
+            run_admission_wire_pump(
+                client_transport,
+                "127.0.0.1:0".into(),
+                Point::Origin,
+                14,
+                MAINNET_NETWORK_MAGIC,
+                events_tx,
+            )
+            .await
+        });
+
+        // 1. Drain the initial FindIntersect frame.
+        let _ = server_transport
+            .inbound
+            .recv()
+            .await
+            .expect("client sent FindIntersect");
+
+        // 2. Server replies IntersectFound + Tip(slot=42).
+        let tip0 = fake_tip(42);
+        let if_frame = responder_frame(
+            AcceptedMiniProtocol::CHAIN_SYNC_ID,
+            encode_chain_sync_message(&ChainSyncMessage::IntersectFound {
+                point: Point::Origin,
+                tip: tip0.clone(),
+            }),
+        );
+        server_transport.outbound.send(if_frame).await.expect("send IF");
+
+        // Pump emits TipUpdate(tip0).
+        let _ = tokio::time::timeout(
+            std::time::Duration::from_millis(2000),
+            events_rx.recv(),
+        )
+        .await
+        .expect("tip0")
+        .expect("event");
+
+        // 3. Drain the initial block-fetch RequestRange.
+        let _ = server_transport
+            .inbound
+            .recv()
+            .await
+            .expect("client sent initial BF RequestRange");
+
+        // 4. Server replies StartBatch + Block(B0) + BatchDone.
+        let block0_bytes = {
+            // Minimal valid CBOR for the runner-side decoder:
+            // tag(24, bytes(4))[DE AD BE EF]. The runner's
+            // process_block fails to decode but the WIRE PUMP
+            // only forwards bytes; pump tests don't assert
+            // runner behavior.
+            let mut b = Vec::new();
+            b.push(0xD8);
+            b.push(0x18);
+            b.push(0x44);
+            b.extend_from_slice(&[0xDE, 0xAD, 0xBE, 0xEF]);
+            b
+        };
+        for msg in [
+            BlockFetchMessage::StartBatch,
+            BlockFetchMessage::Block {
+                bytes: block0_bytes.clone(),
+            },
+            BlockFetchMessage::BatchDone,
+        ] {
+            let f = responder_frame(
+                AcceptedMiniProtocol::BLOCK_FETCH_ID,
+                encode_block_fetch_message(&msg),
+            );
+            server_transport.outbound.send(f).await.expect("send BF");
+        }
+
+        // Pump emits Block(B0).
+        let evt = tokio::time::timeout(
+            std::time::Duration::from_millis(2000),
+            events_rx.recv(),
+        )
+        .await
+        .expect("block0")
+        .expect("event");
+        assert!(matches!(evt, AdmissionPeerEvent::Block { .. }));
+
+        // 5. After BatchDone, pump issues chain-sync RequestNext.
+        let _ = server_transport
+            .inbound
+            .recv()
+            .await
+            .expect("client sent RequestNext post-BatchDone");
+
+        // 6. Server replies RollForward { header_with_slot=4660, tip1 }.
+        let header_env = synth_rollforward_header(0x1234);
+        let tip1 = fake_tip(4660);
+        let rf_frame = responder_frame(
+            AcceptedMiniProtocol::CHAIN_SYNC_ID,
+            encode_chain_sync_message(&ChainSyncMessage::RollForward {
+                header: header_env,
+                tip: tip1.clone(),
+            }),
+        );
+        server_transport.outbound.send(rf_frame).await.expect("send RF");
+
+        // Pump emits TipUpdate(tip1).
+        let evt = tokio::time::timeout(
+            std::time::Duration::from_millis(2000),
+            events_rx.recv(),
+        )
+        .await
+        .expect("tip1")
+        .expect("event");
+        match evt {
+            AdmissionPeerEvent::TipUpdate { tip: got, .. } => {
+                assert_eq!(got, tip1);
+            }
+            other => panic!("expected TipUpdate, got {other:?}"),
+        }
+
+        // 7. KEY ASSERTION: pump must send block-fetch
+        // RequestRange for the rolled-forward block — NOT a
+        // chain-sync RequestNext.
+        let next_outbound = tokio::time::timeout(
+            std::time::Duration::from_millis(2000),
+            server_transport.inbound.recv(),
+        )
+        .await
+        .expect("client sent next outbound")
+        .expect("frame bytes");
+        // Decode the mux frame to learn which protocol the
+        // pump used.
+        let (frame, _) = ade_network::mux::frame::decode_frame(&next_outbound)
+            .expect("frame parses");
+        assert_eq!(
+            frame.header.mini_protocol_id.get(),
+            AcceptedMiniProtocol::BLOCK_FETCH_ID,
+            "after RollForward, pump must block-fetch the rolled-forward block, not RequestNext"
+        );
+        // Decode the payload to confirm it's RequestRange.
+        let bf_msg = decode_block_fetch_message(&frame.payload).expect("decode bf");
+        match bf_msg {
+            BlockFetchMessage::RequestRange(Range { from, to }) => {
+                // The point must match the header's extracted
+                // (slot=4660, hash=blake2b256(inner_cbor)).
+                match (from, to) {
+                    (BfPoint::Block { slot: from_slot, .. }, BfPoint::Block { slot: to_slot, .. }) => {
+                        assert_eq!(from_slot.0, 4660);
+                        assert_eq!(to_slot.0, 4660);
+                    }
+                    other => panic!("expected Block points, got {other:?}"),
+                }
+            }
+            other => panic!("expected RequestRange, got {other:?}"),
+        }
+
+        drop(server_transport);
+        loop {
+            let evt = tokio::time::timeout(
+                std::time::Duration::from_millis(2000),
+                events_rx.recv(),
+            )
+            .await
+            .expect("disconnected")
+            .expect("event");
+            if let AdmissionPeerEvent::Disconnected { .. } = evt {
+                break;
+            }
+        }
         let _ = pump_handle.await;
     }
 }

@@ -3352,7 +3352,7 @@ code_locus = "crates/ade_node/src/admission/ (full admission stack), crates/ade_
 tests = ["live_operator_pass_against_docker_preprod", "live_bundle_imports_with_conway_era_and_deterministic_fingerprint", "cross_epoch_block_triggers_halt_without_admit", "adversarial_corpus_rejects_all_four_mutation_classes"]
 ci_script = "ci/ci_check_live_operator_pass_scaffold.sh"
 status = "enforced"
-strengthened_in = ["PHASE4-N-M-A1.1", "PHASE4-N-M-FRAG", "PHASE4-N-M-SCHED"]
+strengthened_in = ["PHASE4-N-M-A1.1", "PHASE4-N-M-FRAG", "PHASE4-N-M-SCHED", "PHASE4-N-M-FOLLOW"]
 evidence_notes = """
 PHASE4-N-M-C (2026-05-26) CLOSED RO-LIVE-05 on the bounded statement: (1) live wire integration end-to-end against docker preprod is proven (committed wire-only transcript at slot 76910188 with handshake_ok v15 + peer_tip_read); (2) the closed LiveConsensusInputs import authority + canonical Blake2b-256 fingerprint shipped (CN-CONS-IN-01, DC-CONS-IN-02), exercised against a live preprod bundle (epoch 179, 384 pools); (3) the GREEN LiveLedgerView + epoch-window guard (DC-VIEW-01, DC-ADMIT-11) + closed AdmissionPeerEvent emission contract from the RED wire pump (CN-PUMP-01, DC-PUMP-01, DC-PUMP-02) + Undecodable-tightening (DC-ADMIT-12) shipped; (4) adversarial false-accept corpus across 4 mandatory mutation classes (DC-EVIDENCE-02) proven fail-closed.
 
@@ -3377,6 +3377,8 @@ Committed live transcript at `docs/evidence/phase4-n-m-c-operator-pass-transcrip
 - 0 `agreement_verdict { kind: "diverged" }`
 - 0 `block_admitted` with mismatched hash
 - clean `admission_shutdown { reason: "signal_received" }`
+
+PHASE4-N-M-FOLLOW (2026-05-27) strengthens by demonstrating sustained admission across the natural chain-sync stream. Committed transcript at `docs/evidence/phase4-n-m-follow-sustained-transcript.jsonl` records 34 consecutive `block_admitted` events from real chain-sync follow + block-fetch (slots 124137045..124137868), 0 `diverged`, 0 mismatched-hash, 0 `input_not_found`. The pump now walks the peer's chain in order from intersect: each `RollForward` extracts a Point from the header envelope and triggers a block-fetch; `block-fetch BatchDone` gates the next chain-sync RequestNext. The op-cert counter rule was fixed inline — equal counter is now no-op (same op-cert re-used across blocks within a KES period, normal pool operation per the Cardano protocol). Previous strict-`<=` semantics over-rejected legitimate repeated op-certs and was masked by the corpus's one-block-per-pool design.
 """
 
 # =============================================================================
@@ -4060,10 +4062,18 @@ per-call fallback.
 """
 source = "docs/planning/phase4-n-m-c-operator-pass-invariants.md §1 (I-C5)"
 cross_ref = ["CN-ADMIT-01", "CN-SESS-01", "CN-SESS-02", "CN-SESS-03"]
-code_locus = "crates/ade_runtime/src/admission/wire_pump.rs (run_admission_wire_pump sole authority + closed AdmissionPeerEvent / AdmissionWirePumpError sums)"
-tests = ["admission::wire_pump::tests::pump_emits_tip_update_and_block_on_initial_intersect_and_block_fetch", "admission::wire_pump::tests::pump_emits_tip_update_on_intersect_not_found"]
+code_locus = "crates/ade_runtime/src/admission/wire_pump.rs (run_admission_wire_pump sole authority + closed AdmissionPeerEvent / AdmissionWirePumpError sums + extract_chain_sync_header_point header-point extractor)"
+tests = [
+    "admission::wire_pump::tests::pump_emits_tip_update_and_request_next_on_intersect_found_no_block_fetch",
+    "admission::wire_pump::tests::pump_emits_tip_update_on_intersect_not_found",
+    "admission::wire_pump::tests::rollforward_drives_block_fetch_then_request_next",
+    "admission::wire_pump::tests::extract_chain_sync_header_point_returns_slot_and_hash",
+    "admission::wire_pump::tests::extract_chain_sync_header_point_rejects_malformed_envelope",
+]
 ci_scripts = ["ci/ci_check_admission_wire_pump_closure.sh"]
 status = "enforced"
+strengthened_in = ["PHASE4-N-M-FOLLOW"]
+evidence_notes = "PHASE4-N-M-FOLLOW (2026-05-27) strengthens by making the pump *follow* the peer's chain in order: IntersectFound emits TipUpdate + RequestNext (no tip-jump block-fetch); each RollForward extracts a Point from the header envelope and block-fetches it; chain-sync RequestNext gates on block-fetch BatchDone. Live sustained pass against docker preprod admits 34 consecutive blocks (slot range 124137045..124137868) with 0 divergence — committed transcript at `docs/evidence/phase4-n-m-follow-sustained-transcript.jsonl`."
 
 [[rules]]
 id = "DC-PUMP-01"
@@ -4079,9 +4089,14 @@ reducer's sole output (memory
 source = "docs/planning/phase4-n-m-c-operator-pass-invariants.md §1 (I-C6) + §2 (¬P-C3)"
 cross_ref = ["CN-PUMP-01", "DC-ADMIT-01"]
 code_locus = "crates/ade_runtime/src/admission/wire_pump.rs (closed AdmissionPeerEvent emit-only; no AgreementVerdict reference in code; emit helper exhaustive over the 3 variants)"
-tests = ["admission::wire_pump::tests::pump_emits_tip_update_and_block_on_initial_intersect_and_block_fetch", "admission::wire_pump::tests::pump_emits_tip_update_on_intersect_not_found"]
+tests = [
+    "admission::wire_pump::tests::pump_emits_tip_update_and_request_next_on_intersect_found_no_block_fetch",
+    "admission::wire_pump::tests::pump_emits_tip_update_on_intersect_not_found",
+    "admission::wire_pump::tests::rollforward_drives_block_fetch_then_request_next",
+]
 ci_scripts = ["ci/ci_check_admission_wire_pump_closure.sh", "ci/ci_check_admission_no_red_verdicts.sh"]
 status = "enforced"
+strengthened_in = ["PHASE4-N-M-FOLLOW"]
 
 [[rules]]
 id = "DC-PUMP-02"
@@ -4095,9 +4110,14 @@ comparison input.
 source = "docs/planning/phase4-n-m-c-operator-pass-invariants.md §1 (I-C7)"
 cross_ref = ["CN-PUMP-01", "DC-PUMP-01"]
 code_locus = "crates/ade_runtime/src/admission/wire_pump.rs (handle_chain_sync IntersectFound / IntersectNotFound / RollForward / RollBackward arms all call tip_update before any other action)"
-tests = ["admission::wire_pump::tests::pump_emits_tip_update_and_block_on_initial_intersect_and_block_fetch", "admission::wire_pump::tests::pump_emits_tip_update_on_intersect_not_found"]
+tests = [
+    "admission::wire_pump::tests::pump_emits_tip_update_and_request_next_on_intersect_found_no_block_fetch",
+    "admission::wire_pump::tests::pump_emits_tip_update_on_intersect_not_found",
+    "admission::wire_pump::tests::rollforward_drives_block_fetch_then_request_next",
+]
 ci_scripts = ["ci/ci_check_admission_wire_pump_closure.sh"]
 status = "enforced"
+strengthened_in = ["PHASE4-N-M-FOLLOW"]
 
 [[rules]]
 id = "DC-ADMIT-10"
@@ -4191,6 +4211,8 @@ tests = ["adversarial_corpus_rejects_all_four_mutation_classes"]
 ci_scripts = ["ci/ci_check_adversarial_false_accept_corpus.sh"]
 status = "enforced"
 strengthens = ["CN-CONS-08", "DC-ADMIT-12"]
+strengthened_in = ["PHASE4-N-M-FOLLOW"]
+evidence_notes = "PHASE4-N-M-FOLLOW (2026-05-27) widens the natural-stream complement of the 4-mutation adversarial corpus: committed transcript at `docs/evidence/phase4-n-m-follow-sustained-transcript.jsonl` records 34 consecutive `block_admitted` events from real chain-sync stream + block-fetch with 0 `diverged`, 0 mismatched-hash, 0 `input_not_found`. Each admitted block's hash matches the peer's chain-sync-announced hash for that slot by construction (no false-accept across the 34-block sample)."
 
 [[rules]]
 id = "DC-EVIDENCE-01"
@@ -4219,7 +4241,7 @@ code_locus = "crates/ade_node/tests/admission_live_operator_pass.rs (env-gated i
 tests = ["live_operator_pass_against_docker_preprod", "live_bundle_imports_with_conway_era_and_deterministic_fingerprint"]
 ci_scripts = ["ci/ci_check_live_operator_pass_scaffold.sh"]
 status = "enforced"
-strengthened_in = ["PHASE4-N-M-A1.1", "PHASE4-N-M-FRAG", "PHASE4-N-M-SCHED"]
+strengthened_in = ["PHASE4-N-M-A1.1", "PHASE4-N-M-FRAG", "PHASE4-N-M-SCHED", "PHASE4-N-M-FOLLOW"]
 evidence_notes = """
 PHASE4-N-M-C S5 (2026-05-26) shipped the C5 deliverable in two tiers: (a) live wire-integration is PROVEN end-to-end against the docker preprod peer (committed `phase4-n-m-c-wire-only-transcript.jsonl` carries peer_dial_started + handshake_ok + peer_tip_read + wire_smoke_complete at slot 76910188); (b) the live consensus-inputs bundle imports cleanly through `import_live_consensus_inputs` and produces a deterministic fingerprint (committed `phase4-n-m-c-consensus-inputs.json`, epoch 179, 384 pools).
 
@@ -4238,4 +4260,6 @@ Committed live transcript at `docs/evidence/phase4-n-m-c-operator-pass-transcrip
 - 0 `agreement_verdict { kind: "diverged" }`
 - 0 mismatched-hash `block_admitted`
 - clean `admission_shutdown { reason: "signal_received" }`
+
+PHASE4-N-M-FOLLOW (2026-05-27) strengthens by adding a sustained-admission complement: committed transcript at `docs/evidence/phase4-n-m-follow-sustained-transcript.jsonl` records 34 consecutive `block_admitted` events across slots 124137045..124137868 (~14 minutes of mainnet chain time) with 0 `diverged`, 0 mismatched-hash, 0 `input_not_found`. All 34 verdicts are `lagging` (by design — the GREEN reducer emits `agreed` only when our admit slot equals the peer's tip slot exactly, which requires catching up to live for ~150 minutes given preprod block rate). The literal "≥1 Agreed" requirement stays satisfied by the SCHED transcript above; FOLLOW widens the no-divergence surface from a single tip-admit to a 34-block sequential walk.
 """

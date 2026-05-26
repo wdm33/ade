@@ -267,8 +267,12 @@ mod tests {
         };
         let pump_handle = tokio::spawn(pump.run());
 
-        // Send a chain-sync frame from b → a.
-        let payload = vec![0xDE, 0xAD, 0xBE, 0xEF];
+        // Send a chain-sync frame from b → a. Under FRAG (CN-SESS-04
+        // / DC-SESS-06), the session reducer now requires the
+        // mini-protocol payload to be a valid CBOR item; deliver
+        // bytes that decode as a complete chain-sync RequestNext
+        // (`0x81 0x00` = `array(1)[uint(0)]`).
+        let payload = vec![0x81u8, 0x00];
         handle_b
             .outbound
             .send(chain_sync_frame(payload.clone()))

@@ -495,3 +495,87 @@ Meeting the literal DC-EVIDENCE-01 statement:
   mismatched-hash BlockAdmitted ✓
 
 DC-EVIDENCE-01 + RO-LIVE-05 are now `enforced`.
+
+---
+
+## §11 — 2026-05-27: PHASE4-N-M-FOLLOW sustained admission
+
+The SCHED transcript proved the literal DC-EVIDENCE-01
+statement on a single block-at-the-tip. PHASE4-N-M-FOLLOW
+strengthens by making the admission wire pump *follow* the
+peer's chain in order from the intersect point:
+
+- `IntersectFound`: emit TipUpdate + chain-sync RequestNext.
+  No tip-jump block-fetch (the pre-FOLLOW shortcut caused
+  `SlotBeforeLastApplied` rejections on subsequent in-order
+  RollForwards).
+- `RollForward`: extract the rolled-forward block's Point
+  from the header envelope (`extract_chain_sync_header_point`
+  — Babbage/Conway Praos shape only); queue block-fetch
+  RequestRange for that point. Don't queue chain-sync
+  RequestNext here.
+- `BlockFetch BatchDone`: queue chain-sync RequestNext — the
+  sequencing anchor.
+
+Surfaced + fixed inline: the op-cert counter rule
+(`OpCertCounterMap::upsert_strict` + `header_validate` Step 4)
+was rejecting equal counters as regression. Per the Cardano
+protocol, the op-cert counter is monotonically NON-decreasing
+within a KES period — equal is the same op-cert re-used
+across blocks (normal pool operation). Strictly-less is the
+only regression. The bug was masked pre-FOLLOW because the
+positive Conway corpus covers 14 different pools each
+appearing once; sustained live admission triggers the
+equal-counter case on the third admitted block.
+
+### Sustained transcript
+
+`docs/evidence/phase4-n-m-follow-sustained-transcript.jsonl`
+records 34 consecutive `block_admitted` events across slots
+**124137045 → 124137868** (823 slots ≈ 14 minutes of mainnet
+chain time):
+
+```
+admission_started      consensus_inputs_fingerprint_hex=8166ba41…
+bootstrap_complete     initial_ledger_fp_hex=65461b64…
+                       chain_tip_slot=124136968
+[34× block_received → block_admitted → agreement_verdict{lagging}]
+admission_shutdown     reason=signal_received
+```
+
+| Count | Event |
+|---|---|
+| 1 | `admission_started` |
+| 1 | `bootstrap_complete` |
+| 34 | `block_received` |
+| 34 | `block_admitted` (all with matching peer hashes) |
+| 34 | `agreement_verdict { kind: "lagging" }` |
+| **0** | `agreement_verdict { kind: "diverged" }` |
+| **0** | mismatched-hash `block_admitted` |
+| **0** | `agreement_verdict { kind: "input_not_found" }` |
+| 1 | `admission_shutdown { reason: "signal_received" }` |
+
+### Why all 34 verdicts are `lagging`, not `agreed`
+
+The GREEN verdict reducer
+(`ade_node::admission::verdict::derive`) emits
+`Agreed { slot, hash }` only when our admit's slot equals the
+peer's TIP slot and the hashes match. Under chain-sync-driven
+sequential admission, we walk from the intersect point
+forward; the peer's tip is far ahead (~600 blocks for
+preprod's ~20s block time). For this slice's bounded ~3-min
+transcript we stay in lagging territory.
+
+`Lagging` is evidence-state, not failure — per
+[[feedback-evidence-reducers-are-green-not-authority]]. The
+blocks we admit DO come from the peer's chain-sync stream;
+implicit agreement is by construction. The reducer's
+"agreed-only-at-tip" semantics are a design choice; enriching
+the reducer is a future cluster.
+
+The literal "≥1 Agreed" requirement of DC-EVIDENCE-01 stays
+satisfied by the SCHED transcript (§10 above). FOLLOW's
+sustained transcript adds:
+- 34× block-by-block no-divergence (DC-EVIDENCE-02
+  natural-stream complement)
+- Real op-cert counter rule honored across repeated pools.

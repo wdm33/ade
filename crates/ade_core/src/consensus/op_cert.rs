@@ -132,7 +132,12 @@ mod tests {
     }
 
     #[test]
-    fn apply_op_cert_rejects_equal_counter() {
+    fn apply_op_cert_accepts_equal_counter_as_noop() {
+        // PHASE4-N-M-FOLLOW: equal op-cert counter is the same
+        // op-cert being re-used across blocks within a KES
+        // period (normal pool operation per the Cardano
+        // protocol). Apply MUST succeed and leave the counter
+        // unchanged.
         let s = populated_state();
         let s = apply_op_cert(
             &s,
@@ -143,21 +148,16 @@ mod tests {
             },
         )
         .unwrap();
-        let err = apply_op_cert(
+        let s2 = apply_op_cert(
             &s,
             &OpCertObservation {
                 pool: pool(2),
                 kes_period: 7,
                 counter: 4,
             },
-        );
-        assert_eq!(
-            err,
-            Err(OpCertCounterError::Regression {
-                existing: 4,
-                attempted: 4,
-            })
-        );
+        )
+        .unwrap();
+        assert_eq!(s2.op_cert_counters.get(&pool(2), 7), Some(4));
     }
 
     #[test]

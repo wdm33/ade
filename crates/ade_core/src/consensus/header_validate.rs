@@ -100,12 +100,16 @@ pub fn validate_and_apply_header(
     }
 
     // Step 4: op-cert counter pre-check. Detects regression before any
-    // VRF work so the cheap rejection happens first.
+    // VRF work so the cheap rejection happens first. Per the Cardano
+    // protocol, the op-cert counter is monotonically NON-DECREASING
+    // across blocks signed by the same pool within a KES period —
+    // strictly-less is a regression; equal is the SAME op-cert being
+    // re-used (normal pool operation). PHASE4-N-M-FOLLOW.
     if let Some(existing) = state
         .op_cert_counters
         .get(&header.issuer_pool, header.op_cert_kes_period)
     {
-        if header.op_cert_counter <= existing {
+        if header.op_cert_counter < existing {
             return Err(HeaderValidationError::OpCertCounter(
                 crate::consensus::errors::OpCertCounterError::Regression {
                     existing,

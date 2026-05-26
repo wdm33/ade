@@ -43,9 +43,21 @@ impl OpCertCounterMap {
         self.counters.get(&(pool.clone(), kes_period)).copied()
     }
 
-    /// Insert `(pool, kes_period, counter)`. Strictly increasing — an
-    /// attempt to insert a counter `<=` the existing counter returns
-    /// `OpCertCounterError::Regression`.
+    /// Insert `(pool, kes_period, counter)`. Monotonically non-
+    /// decreasing — an attempt to insert a counter STRICTLY LESS
+    /// than the existing counter returns
+    /// `OpCertCounterError::Regression`. Equal counter is OK and
+    /// no-op (the same op-cert is re-used across blocks within a
+    /// KES period — normal pool operation per the Cardano
+    /// protocol).
+    ///
+    /// PHASE4-N-M-FOLLOW (2026-05-27): the previous semantics
+    /// (strict-`<` accept, `<=` reject) over-rejected legitimate
+    /// repeated op-certs. The pre-FOLLOW positive Conway corpus
+    /// covered 14 different pools each appearing once, so the
+    /// bug was masked; sustained live admission against a real
+    /// peer surfaced it on the third block (same pool, same KES
+    /// period, same counter).
     pub fn upsert_strict(
         &mut self,
         pool: Hash28,
@@ -53,11 +65,16 @@ impl OpCertCounterMap {
         counter: u64,
     ) -> Result<(), OpCertCounterError> {
         if let Some(existing) = self.counters.get(&(pool.clone(), kes_period)).copied() {
-            if counter <= existing {
+            if counter < existing {
                 return Err(OpCertCounterError::Regression {
                     existing,
                     attempted: counter,
                 });
+            }
+            // counter == existing → same op-cert re-used; no-op.
+            // counter > existing → new op-cert rotation; update below.
+            if counter == existing {
+                return Ok(());
             }
         }
         self.counters.insert((pool, kes_period), counter);
@@ -169,23 +186,23 @@ mod tests {
     }
 
     #[test]
-    fn op_cert_upsert_rejects_equal_counter() {
+    fn op_cert_upsert_accepts_equal_counter_as_noop() {
+        // PHASE4-N-M-FOLLOW: the same op-cert is legitimately
+        // re-used across multiple blocks within a KES period
+        // (normal pool operation per the Cardano protocol).
         let mut map = OpCertCounterMap::new();
         map.upsert_strict(pool(2), 7, 4).unwrap();
-        let err = map.upsert_strict(pool(2), 7, 4);
-        assert_eq!(
-            err,
-            Err(OpCertCounterError::Regression {
-                existing: 4,
-                attempted: 4,
-            })
-        );
+        assert!(map.upsert_strict(pool(2), 7, 4).is_ok());
+        // Counter unchanged after the no-op upsert.
+        assert_eq!(map.get(&pool(2), 7), Some(4));
     }
 
     #[test]
-    fn op_cert_upsert_accepts_strictly_increasing() {
+    fn op_cert_upsert_accepts_monotonic_increasing() {
         let mut map = OpCertCounterMap::new();
         assert!(map.upsert_strict(pool(3), 1, 1).is_ok());
+        assert!(map.upsert_strict(pool(3), 1, 2).is_ok());
+        // Equal counter is OK (re-used op-cert).
         assert!(map.upsert_strict(pool(3), 1, 2).is_ok());
         assert!(map.upsert_strict(pool(3), 1, 100).is_ok());
         assert_eq!(map.get(&pool(3), 1), Some(100));
