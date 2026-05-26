@@ -75,13 +75,13 @@ struct BoundaryHashes {
 ///   - a fresh snapshot set with different state
 /// In all three cases the fix is deliberate: investigate cause, update pins.
 ///
-/// Pins regenerated 2026-05-24 against the corpus produced by the
-/// reconstructed March recipe (db-truncater + cardano-node v1-in-mem,
-/// landing-slot capture). The `byron_pre_hfc` pin is unchanged — its state
-/// is the minimal post-HFC Shelley genesis state (43 KB, no UTxO/cert
-/// activity yet), deterministic across any capture mechanism that lands at
-/// the byron→shelley HFC. The other 11 pins reflect the new captures'
-/// landed-slot content.
+/// Pins regenerated 2026-05-26 after `168ac02` — the snapshot loader
+/// now propagates `state.epoch_state.slot` from the snapshot header
+/// instead of leaving it at 0. The `epoch` component encodes `slot`, so
+/// every snapshot's combined hash shifted (including `byron_pre_hfc`,
+/// whose header carries slot 4492800 — the immutable-boundary slot of
+/// the byron→shelley HFC capture). Source for this regen run: corpus
+/// described in `corpus/snapshots/registry.toml`.
 ///
 /// Note: the `utxo` component is the same across all snapshots because
 /// `LoadedSnapshot::to_ledger_state` does not reconstruct the UTxO from
@@ -92,62 +92,62 @@ const SNAPSHOTS: &[(&str, &str, &str)] = &[
     (
         "byron_pre_hfc",
         "snapshot_4492800.tar.gz",
-        "2b3562ab1d80b6468e4ffaf09355593f41324b56e97c9200e3d6fe193d822cfa",
+        "dc6b3f749fd93aae50b2bb5168b2cff5de1327c664eee270ef6a7b3316f28fcd",
     ),
     (
         "shelley_pre_hfc",
         "snapshot_16588800.tar.gz",
-        "d12d02bc94557a16055c846fbe995c32b8d822aa1cd27a5323d9ce06cab0423c",
+        "6be624078c9e68693b378d1d431b1e13ef8e4ead1c9d1008f1e6d18b158f9509",
     ),
     (
         "allegra_pre_hfc",
         "snapshot_23068800.tar.gz",
-        "75fb8db94c9f00dfd594e568f4b1e44c047cde8b1846f891e37dff75500c2818",
+        "24244dbc8567cabc7bd60cdb0bc519db23446654fae44216b1cb7cd6c9e952d9",
     ),
     (
         "mary_pre_hfc",
         "snapshot_39916975.tar.gz",
-        "d5f4eedf08aca3baa1ed65fa48a6946992a9cd4fec953c09e86e677557c1c7b8",
+        "0a4a65ad1d92996cc4cb446b75a2c1c098a45aebbf197a8f17e5aaf3dbe0bfcc",
     ),
     (
         "alonzo_pre_hfc",
         "snapshot_72316896.tar.gz",
-        "d93040a9f8f46a5b0f668c96e402f11ea1e82fc4dc395c43d9917f27a484035e",
+        "207c688a0137873ee93b71868c0fc1b6a49e9574089d8e627e643c3b9b125127",
     ),
     (
         "babbage_pre_hfc",
         "snapshot_133660855.tar.gz",
-        "fae4e5ca7e01c96b87474d62fcc76cfd261f9526f8af0c54b3862966f7e315ee",
+        "3a761e47a8963284b74383db934c31e3334d7fe34ef9d359b4138d763fac9e15",
     ),
     (
         "shelley_epoch_209",
         "snapshot_4924880.tar.gz",
-        "344afab3bcb226e451e9fb07c60e6ff2d0db735fa8cf0b033670af173416d014",
+        "663844b3b4848721ac72db4dfc07fb40a85408c2572066a1c9bd3aa9e8f8c8bf",
     ),
     (
         "allegra_epoch_237",
         "snapshot_17020848.tar.gz",
-        "1ee30bd659a1c60d660d85e9e0a38416449a6c24a734c6c42dc1cd8e9e226beb",
+        "6b5a101946bbf566a4d43025ef8fd446b0acbe89da54416c102f9800e8b5db0c",
     ),
     (
         "mary_epoch_252",
         "snapshot_23500962.tar.gz",
-        "ac2546496ffc10031a2548d18581180bc8c594466333fcc8e5d4e42a980f6012",
+        "505d3be518c191e1d93387d8d35cef08b897a648ed18e3cb5fa5064678e669ab",
     ),
     (
         "alonzo_epoch_291",
         "snapshot_40348902.tar.gz",
-        "d2720aaae4135fcb244a1b7e81e7840ec24071e30763f619b1ebdbe3983e6dbb",
+        "031b367d6dcf2fcd52950d4f1cae7198b2147541723c8abdd0c777ef2b598cdf",
     ),
     (
         "babbage_epoch_366",
         "snapshot_72748820.tar.gz",
-        "957e70c947ffb18eea6d6d2ccc4d6bff0829d5ca9ca37c75fee8d94e7131b4ae",
+        "ac675fbbb0a09abb20ddacc34e8be42f22c4370689e425d8c43ff13d0a320280",
     ),
     (
         "conway_epoch_508",
         "snapshot_134092810.tar.gz",
-        "3e710076e6b5974d221aee1f11dd9e730e8e12644cf06f0b37a0ba29c834905a",
+        "e49c176c3f5a6e9b79f48b9c3b190de56dc1948a369a7ae5637f89c200266dfb",
     ),
 ];
 
