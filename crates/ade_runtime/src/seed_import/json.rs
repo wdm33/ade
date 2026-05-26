@@ -24,13 +24,27 @@ pub type RawUtxoMap = BTreeMap<String, RawUtxoEntry>;
 /// deliberately does NOT declare:
 ///
 /// - `datum` and `inlineDatum` carry the PARSED form of the
-///   datum. Plutus integers can exceed `f64` precision and the
-///   parsed JSON form is unusable for canonical encoding (and
-///   `serde_json` cannot deserialize such numbers into any
-///   numeric type). We consume only the raw CBOR hex via
-///   `inline_datum_raw` and the on-chain `datumhash`. Per
-///   serde's default behavior these unknown keys are silently
-///   skipped without parsing their values.
+///   datum (Plutus-data as JSON). Plutus integers can exceed
+///   `f64` precision (preprod has datum trees with literals
+///   like `1.79…e308`), and `serde_json` cannot deserialize
+///   such numbers into any numeric type. We consume only the
+///   raw CBOR hex via `inline_datum_raw` and the on-chain
+///   `datumhash`. Per serde's default behavior these unknown
+///   keys are silently skipped without parsing their values.
+///
+///   **Hard contract — PHASE4-N-M-A1.1.** These fields are
+///   ignored ONLY because the authoritative seed-import path
+///   does not consume them. If a future slice ever needs
+///   `datum` / `inlineDatum` semantics (e.g. for ledger
+///   replay that requires datum content, or a CLI/UX surface
+///   that displays Plutus data), it MUST be added through a
+///   non-floating, lossless Plutus-data decoder consuming the
+///   `inline_datum_raw` (CBOR) bytes — NEVER by re-adding
+///   `Option<serde_json::Value>` here. Reintroducing the
+///   JSON-parsed shape would silently accept f64-truncated
+///   Plutus integers and convert a strict tolerance into a
+///   hidden semantic bypass.
+///
 /// - `inlineDatumhash` is operator-side metadata; the canonical
 ///   datum hash is recomputed from `inline_datum_raw` bytes.
 ///

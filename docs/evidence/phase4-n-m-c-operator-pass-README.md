@@ -190,3 +190,57 @@ transcript to
 `docs/evidence/phase4-n-m-c-operator-pass-transcript.jsonl` and
 flip both `DC-EVIDENCE-01` and `RO-LIVE-05` in the registry
 from `enforced_scaffolding` to `enforced`.
+
+---
+
+## §7 — Accelerating peer sync with Mithril (allowed scope only)
+
+Mithril is a certified snapshot mechanism that lets a fresh
+Cardano node restore its database from a community-signed
+snapshot instead of syncing the whole chain from genesis. It
+is appropriate to use Mithril here as an **operator/infra
+accelerator for the docker `cardano-node-preprod` peer** when
+the peer is stuck at sub-99% sync and the C5 run is blocked on
+peer chain coverage.
+
+The path is:
+
+1. `mithril-client snapshot download` into the bind-mounted
+   peer DB dir.
+2. cardano-node-preprod catches up to current tip.
+3. Ade connects to the local peer.
+4. Ade runs the admission operator pass per §4 above.
+
+### What Mithril MAY do here (allowed)
+
+- Restore the docker preprod peer's ImmutableDB / LedgerDB
+  state from a certified snapshot so the peer reaches current
+  tip in minutes rather than hours.
+- Be the operator's choice for any peer-side acceleration.
+
+### What Mithril MUST NOT do here (forbidden)
+
+- Become a BLUE trust root for Ade.
+- Substitute for the operator-extracted `--json-seed` (the
+  cardano-cli JSON UTxO dump remains Ade's bootstrap oracle
+  at point P).
+- Substitute for the operator-extracted
+  `--consensus-inputs-json` bundle.
+- Substitute for `admit_via_block_validity` — every admitted
+  block still flows through Ade's BLUE block-validity path
+  unchanged.
+- Be claimed as evidence that "Ade supports Mithril import"
+  or "Ade can sync from Mithril". Ade-side Mithril import,
+  verification, and anchor-binding is a separate dedicated
+  slice (`RO-MITHRIL-IMPORT-01` open obligation), NOT
+  unblocked by using Mithril to bootstrap the Haskell peer.
+
+The operator runbook script
+`ci/mithril_restore_preprod_peer.sh` enforces this boundary by
+restricting itself to: stop docker peer → run `mithril-client`
+against the bind-mounted DB dir → restart docker peer. It does
+NOT touch Ade's seed file, consensus-inputs bundle, WAL,
+snapshots, or any binary in the `ade_*` workspace.
+
+Doctrine reference: memory
+`[[feedback-mithril-is-peer-infra-not-ade-authority]]`.
