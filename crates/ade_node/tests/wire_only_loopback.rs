@@ -211,6 +211,13 @@ fn make_cli(peer_addr: std::net::SocketAddr, log_path: PathBuf, mode: Mode) -> C
         mode,
         log_path,
         tip_read_timeout_secs: 5,
+        json_seed_path: None,
+        seed_point_slot: None,
+        seed_block_hash_hex: None,
+        wal_dir: None,
+        snapshot_dir: None,
+        network_magic: None,
+        genesis_hash_hex: None,
     }
 }
 

@@ -10,6 +10,7 @@ path = "src/main.rs"
 [dependencies]
 ade_types = { path = "../ade_types" }
 ade_core = { path = "../ade_core" }
+ade_crypto = { path = "../ade_crypto" }
 ade_ledger = { path = "../ade_ledger" }
 ade_runtime = { path = "../ade_runtime" }
 ade_network = { path = "../ade_network" }

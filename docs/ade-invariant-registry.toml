@@ -31,7 +31,7 @@ status = "enforced"
 authority_surface = "BLUE authoritative state transitions"
 cluster = "CL-LEDGER-VERDICT"
 evidence = ["crates/ade_testkit/tests/ledger_determinism.rs uses ade_ledger::fingerprint for byte-identical state comparison across all 7 eras", "crates/ade_testkit/tests/consensus_stream_replay.rs replays the canonical chain-selector stream twice and asserts byte-identical event lists and final orchestrator state — closes T-DET-01 for the consensus subset"]
-strengthened_in = ["PHASE4-N-B", "PHASE4-B1", "PHASE4-B2", "PHASE4-N-C", "PHASE4-N-G", "PHASE4-N-H", "PHASE4-N-I", "PHASE4-N-J", "PHASE4-N-K", "PHASE4-N-L", "PHASE4-N-M-A"]
+strengthened_in = ["PHASE4-N-B", "PHASE4-B1", "PHASE4-B2", "PHASE4-N-C", "PHASE4-N-G", "PHASE4-N-H", "PHASE4-N-I", "PHASE4-N-J", "PHASE4-N-K", "PHASE4-N-L", "PHASE4-N-M-A", "PHASE4-N-M-B"]
 
 [[rules]]
 id = "T-ENC-01"
@@ -1496,6 +1496,7 @@ ci_script = "ci/ci_check_chaindb_crash_safety.sh"
 status = "enforced"
 attack_rationale = "Core replay-first safety property."
 evidence_notes = "Direct restatement of T-REC-01. Evidence: ChainDB recovery in ouroboros-consensus loads snapshot + replays forward."
+strengthened_in = ["PHASE4-N-M-B"]
 
 [[rules]]
 id = "CN-STORE-04"
@@ -2893,9 +2894,9 @@ tests = [
 ]
 ci_script = "ci/ci_check_bootstrap_closure.sh"
 status = "enforced"
-strengthened_in = ["PHASE4-N-K"]
+strengthened_in = ["PHASE4-N-K", "PHASE4-N-M-B"]
 attack_rationale = "A parallel bootstrap path can produce an initial state that disagrees with the canonical materialize+decode authority chain — opening a startup-time chain-divergence vector."
-evidence_notes = "PHASE4-N-K S1 (2026-05-26) shipped ade_runtime::bootstrap::bootstrap_initial_state as the SOLE pub fn returning the initial (LedgerState, PraosChainDepState, Option<ChainTip>) triple. Cold-start vs warm-start is a single in-function branch. ci/ci_check_bootstrap_closure.sh enforces the single-pub-fn + materialize-authority-call positive grep. ade_node binary (S7) calls the function exactly once (ci/ci_check_node_binary_uses_single_bootstrap.sh)."
+evidence_notes = "PHASE4-N-K S1 (2026-05-26) shipped ade_runtime::bootstrap::bootstrap_initial_state as the SOLE pub fn returning the initial (LedgerState, PraosChainDepState, Option<ChainTip>) triple. Cold-start vs warm-start is a single in-function branch. ci/ci_check_bootstrap_closure.sh enforces the single-pub-fn + materialize-authority-call positive grep. ade_node binary (S7) calls the function exactly once (ci/ci_check_node_binary_uses_single_bootstrap.sh). PHASE4-N-M-B (2026-05-26) strengthened by adding admission-mode dispatch closure: ci/ci_check_node_mode_closure.sh enforces Mode is closed {WireOnly, Admission}, main.rs match has no wildcard arm, and dispatch_admission is the sole admission-mode entry."
 
 [[rules]]
 id = "DC-NODE-01"
@@ -3512,8 +3513,8 @@ tests = [
 ]
 ci_script = ""
 status = "enforced"
-strengthened_in = ["PHASE4-N-M-A"]
-evidence_notes = "PHASE4-N-M-A S4 (2026-05-26): integration test wal_replay_from_anchor_two_runs_byte_identical proves the runtime contract `same anchor + same inputs + same WAL → byte-identical outputs`. Final ledger fingerprint equals WAL[N].post_fp; persists across FileWalStore reopen."
+strengthened_in = ["PHASE4-N-M-A", "PHASE4-N-M-B"]
+evidence_notes = "PHASE4-N-M-A S4 (2026-05-26): integration test wal_replay_from_anchor_two_runs_byte_identical proves the runtime contract `same anchor + same inputs + same WAL → byte-identical outputs`. Final ledger fingerprint equals WAL[N].post_fp; persists across FileWalStore reopen. PHASE4-N-M-B (2026-05-26): strengthened by admission_replay_equivalence_byte_identical_wal_after_two_runs — same property holds when the WAL is driven by the live admission runner (run_admission) over an identical peer-event stream."
 
 [[rules]]
 id = "RO-GENESIS-REPLAY-01"
@@ -3557,3 +3558,294 @@ tests = []
 ci_script = ""
 status = "declared"
 open_obligation = "blocked_until_mithril_import_cluster"
+
+# =============================================================================
+# PHASE4-N-M-B — Admission orchestrator + AgreementVerdict + admission JSONL
+# =============================================================================
+#
+# Sub-cluster B of the PHASE4-N-M family. Sits on top of N-M-A (seed +
+# anchor + WAL) and N-L (wire), composes CN-CONS-08 admit into the
+# admission mode of `ade_node`. Mostly wiring; no new BLUE authority.
+#
+# Doctrine: see memory [[feedback-evidence-reducers-are-green-not-authority]]
+# — `AgreementVerdict` is GREEN evidence, NOT consensus / storage /
+# ledger authority. Verdict reducer compares already-authoritative
+# outputs; never decides authority.
+#
+# Families introduced (this sub-cluster):
+#   * CN-ADMIT — single-authority closures on the admission surface.
+#   * DC-ADMIT — derived constraints on verdict shape, vocabulary
+#                isolation, per-admit WAL + replay-equivalence,
+#                Lagging-not-success, no-refscript-skip.
+
+[[rules]]
+id = "CN-ADMIT-01"
+tier = "release"
+statement = """
+Single admission-mode entry authority: exactly one pub fn in
+ade_node::admission::runner::run_admission enters the admission
+tokio runner. No second entry point; no per-call fallback. The
+runner composes N-M-A seed-import + bootstrap_anchor::mint +
+seed_to_snapshot + bootstrap_initial_state warm-start + N-L
+n2n_dialer + per-AdmittedBlock loop + WalStore::append +
+verdict::derive + admission_log emit.
+"""
+source = "docs/planning/phase4-n-m-b-admission-invariants.md §1 (I-B5)"
+cross_ref = ["CN-NODE-01", "CN-CONS-08", "CN-WAL-01", "CN-SEED-01", "CN-ANCHOR-01"]
+code_locus = "crates/ade_node/src/admission/runner.rs::run_admission + crates/ade_node/src/admission/bootstrap.rs::dispatch_admission"
+tests = [
+    "ade_node::admission::runner::tests::run_admission_emits_shutdown_on_signal",
+    "ade_node::admission::runner::tests::run_admission_emits_shutdown_on_channel_close",
+    "ade_node::admission::runner::tests::run_admission_disconnect_to_zero_peers_clean_exit",
+]
+ci_scripts = ["ci/ci_check_admission_runner_closure.sh"]
+status = "enforced"
+
+[[rules]]
+id = "CN-ADMIT-02"
+tier = "release"
+statement = """
+Single seed-to-snapshot bridge authority: exactly one pub fn in
+ade_node::admission::seed_to_snapshot converts the imported
+(UTxOState, ledger_fingerprint, seed_point) into a persisted
+snapshot via PersistentSnapshotCache::capture. The bridge does
+NOT bypass bootstrap_initial_state — it persists a snapshot at
+seed_point.slot so the warm-start branch picks it up.
+CN-NODE-01 preserved.
+"""
+source = "docs/planning/phase4-n-m-b-admission-invariants.md §1 (I-B6)"
+cross_ref = ["CN-NODE-01", "CN-STORE-08", "CN-SEED-01"]
+code_locus = "crates/ade_node/src/admission/seed_to_snapshot.rs::seed_to_snapshot"
+tests = [
+    "ade_node::admission::seed_to_snapshot::tests::seed_to_snapshot_writes_via_persistent_cache",
+    "ade_node::admission::seed_to_snapshot::tests::seed_to_snapshot_returns_initial_ledger_fingerprint",
+    "ade_node::admission::seed_to_snapshot::tests::seed_to_snapshot_two_runs_byte_identical",
+    "ade_node::admission::seed_to_snapshot::tests::seed_to_snapshot_propagates_pre_conway_encode_error_as_authority_fatal",
+]
+ci_scripts = ["ci/ci_check_admission_no_refscript_skip.sh"]
+status = "enforced"
+
+[[rules]]
+id = "DC-ADMIT-01"
+tier = "derived"
+statement = """
+Closed AgreementVerdict sum (GREEN evidence, not authority):
+exactly four variants — Agreed{our_hash,peer_hash},
+Lagging{our_slot,peer_slot}, Diverged{our_hash,peer_hash,slot},
+InputNotFound{tx_in}. Each variant has narrow comparison
+semantics per the cluster invariants sketch §1 (I-B1). The
+reducer compares already-authoritative outputs (CN-CONS-08
+admit verdict + peer's announced tip); it never decides
+validity, chain selection, or canonical state.
+
+See memory [[feedback-evidence-reducers-are-green-not-authority]]
+for the classification doctrine this rule embodies.
+"""
+source = "docs/planning/phase4-n-m-b-admission-invariants.md §1 (I-B1) + §6 table"
+cross_ref = ["CN-CONS-08", "CN-WAL-01"]
+code_locus = "crates/ade_node/src/admission/verdict.rs::{AgreementVerdict, BlockAdmitOutcome, derive}"
+tests = [
+    "ade_node::admission::verdict::tests::verdict_agreed_when_hashes_match",
+    "ade_node::admission::verdict::tests::verdict_diverged_when_our_admit_differs_from_peer_hash",
+    "ade_node::admission::verdict::tests::verdict_diverged_when_admit_invalid_at_same_slot",
+    "ade_node::admission::verdict::tests::verdict_lagging_when_peer_ahead_of_our_slot",
+    "ade_node::admission::verdict::tests::verdict_input_not_found_when_admit_missing_input",
+    "ade_node::admission::verdict::tests::verdict_lagging_when_peer_tip_is_origin",
+    "ade_node::admission::verdict::tests::verdict_derive_is_pure_two_runs_byte_identical",
+    "ade_node::admission::verdict::tests::verdict_kind_discriminator_round_trips_each_variant",
+]
+ci_scripts = ["ci/ci_check_lagging_is_evidence_only.sh"]
+status = "enforced"
+
+[[rules]]
+id = "DC-ADMIT-02"
+tier = "derived"
+statement = """
+Verdict emitted exactly once per admit-attempt: every successful
+admit path produces exactly one agreement_verdict JSONL event.
+Never twice for the same block_hash; never zero for a successful
+admit. Test pins the property via DeterministicClock replay of a
+recorded admission run.
+"""
+source = "docs/planning/phase4-n-m-b-admission-invariants.md §1 (I-B3)"
+cross_ref = ["DC-ADMIT-01", "CN-CONS-08"]
+code_locus = "crates/ade_node/src/admission/runner.rs::run_admission (per-Block branch)"
+tests = [
+    "ade_node::admission::runner::tests::run_admission_emits_shutdown_on_signal",
+    "admission_replay_equivalence::admission_tip_update_does_not_emit_wal_entry",
+]
+ci_scripts = ["ci/ci_check_admission_runner_closure.sh"]
+status = "enforced"
+
+[[rules]]
+id = "DC-ADMIT-03"
+tier = "derived"
+statement = """
+Diverged + InputNotFound are authority-fatal at the binary
+boundary. Distinct exit codes: EXIT_LIVE_AGREEMENT_DIVERGED=30,
+EXIT_LIVE_INPUT_NOT_FOUND=31. Mirrors PHASE4-N-K DC-NODE-04
+fail-fast discipline. The fatality is the binary's response to
+the evidence — the verdict reducer itself stays pure / no exit.
+"""
+source = "docs/planning/phase4-n-m-b-admission-invariants.md §1 (I-B2)"
+cross_ref = ["DC-ADMIT-01", "DC-NODE-04"]
+code_locus = "crates/ade_node/src/admission/runner.rs::{EXIT_LIVE_AGREEMENT_DIVERGED, EXIT_LIVE_INPUT_NOT_FOUND, halt_for_verdict, halt_to_exit}"
+tests = [
+    "ade_node::admission::runner::tests::exit_code_constants_round_trip_to_i32",
+    "ade_node::admission::runner::tests::halt_for_verdict_only_diverged_or_input_not_found_halts",
+    "admission_replay_equivalence::admission_exit_codes_match_registered_values",
+]
+ci_scripts = ["ci/ci_check_admission_runner_closure.sh"]
+status = "enforced"
+
+[[rules]]
+id = "DC-ADMIT-04"
+tier = "derived"
+statement = """
+Closed AdmissionLogEvent vocabulary (8 variants:
+admission_started, snapshot_imported, bootstrap_complete,
+block_received, block_admitted, agreement_verdict,
+admission_halted, admission_shutdown). Physically isolated from
+wire-only's LiveLogEvent — separate files; CI grep enforces
+BOTH DIRECTIONS:
+  - wire-only-mode files do not emit AdmissionLogEvent literals;
+  - admission-mode files do not emit wire-only-only
+    LiveLogEvent literals.
+Per memory [[feedback-shell-must-not-overstate-semantic-truth]]
+the per-mode-isolation discipline shipped at PHASE4-N-L-LIVE
+carries forward.
+"""
+source = "docs/planning/phase4-n-m-b-admission-invariants.md §1 (I-B4) + §2 (¬P-B10)"
+cross_ref = ["RO-LIVE-04"]
+code_locus = "crates/ade_node/src/admission_log/{event.rs, writer.rs}"
+tests = [
+    "ade_node::admission_log::event::tests::admission_log_event_discriminator_round_trips_for_each_variant",
+    "ade_node::admission_log::event::tests::admission_log_event_match_is_exhaustive",
+    "ade_node::admission_log::event::tests::admission_log_event_agreement_verdict_carries_kind_discriminator",
+    "ade_node::admission_log::writer::tests::admission_log_writer_emits_one_object_per_line",
+    "ade_node::admission_log::writer::tests::admission_log_writer_serializes_admission_started_canonically",
+    "ade_node::admission_log::writer::tests::admission_log_writer_two_runs_are_byte_identical",
+    "ade_node::admission_log::writer::tests::admission_log_writer_emits_agreement_verdict_with_kind_field",
+    "ade_node::admission_log::writer::tests::admission_log_writer_omits_optional_fields_when_none",
+    "ade_node::admission_log::writer::tests::admission_log_writer_lines_are_parseable_as_one_json_object_per_line",
+]
+ci_scripts = ["ci/ci_check_admission_log_vocabulary_closed.sh"]
+status = "enforced"
+
+[[rules]]
+id = "DC-ADMIT-05"
+tier = "derived"
+statement = """
+Per-admit WAL append: every successful admit appends exactly
+one WalEntry::AdmitBlock to the configured WalStore. The
+entry's prior_fp chains to the previous entry's post_fp (or
+the anchor's initial_ledger_fingerprint for the first entry).
+Failure to append is authority-fatal. CN-WAL-01 single-authority
+preserved.
+"""
+source = "docs/planning/phase4-n-m-b-admission-invariants.md §1 (I-B7)"
+cross_ref = ["CN-WAL-01", "DC-WAL-02"]
+code_locus = "crates/ade_node/src/admission/runner.rs::run_admission (per-AdmittedBlock branch → wal_store.append)"
+tests = [
+    "admission_replay_equivalence::admission_replay_equivalence_byte_identical_wal_after_two_runs",
+    "admission_replay_equivalence::admission_tip_update_does_not_emit_wal_entry",
+]
+ci_scripts = ["ci/ci_check_admission_runner_closure.sh", "ci/ci_check_wal_append_only.sh"]
+status = "enforced"
+
+[[rules]]
+id = "DC-ADMIT-06"
+tier = "derived"
+statement = """
+Verdict reducer is pure: verdict::derive(admit_outcome, peer_tip)
+is a pure function over closed input enums → closed output enum.
+No I/O, no clock, no state. The reducer is the GREEN-evidence
+boundary per [[feedback-evidence-reducers-are-green-not-authority]] —
+it compares authoritative outputs; it never decides authority.
+"""
+source = "docs/planning/phase4-n-m-b-admission-invariants.md §1 (I-B8)"
+cross_ref = ["DC-ADMIT-01", "T-DET-01"]
+code_locus = "crates/ade_node/src/admission/verdict.rs::derive"
+tests = [
+    "ade_node::admission::verdict::tests::verdict_derive_is_pure_two_runs_byte_identical",
+]
+ci_scripts = ["ci/ci_check_lagging_is_evidence_only.sh"]
+status = "enforced"
+
+[[rules]]
+id = "DC-ADMIT-07"
+tier = "true"
+statement = """
+Admit-replay-equivalence (true-tier): for every successful
+WalEntry::AdmitBlock transition, replay from the prior
+checkpoint plus WAL produces (a) the same post-admit LedgerState
+fingerprint AND (b) the same emitted AgreementVerdict from a
+re-run of verdict::derive over the replayed
+(admit_outcome, peer_tip) pair.
+
+This is a true-tier property strengthening CN-STORE-03
+(replay-equivalent recovery), not merely a logging property.
+The integration test asserts both halves.
+"""
+source = "docs/planning/phase4-n-m-b-admission-invariants.md §1 (I-B7)"
+cross_ref = ["CN-STORE-03", "T-REC-01", "T-DET-01", "DC-WAL-03", "DC-ADMIT-01"]
+code_locus = "crates/ade_node/tests/admission_replay_equivalence.rs"
+tests = [
+    "admission_replay_equivalence::admission_replay_equivalence_byte_identical_wal_after_two_runs",
+    "admission_replay_equivalence::admission_signal_shutdown_returns_clean_exit",
+    "admission_replay_equivalence::admission_disconnect_to_zero_peers_exits_clean",
+    "admission_replay_equivalence::admission_tip_update_does_not_emit_wal_entry",
+]
+ci_scripts = ["ci/ci_check_admit_replay_equivalence.sh"]
+status = "enforced"
+
+[[rules]]
+id = "DC-ADMIT-08"
+tier = "derived"
+statement = """
+Lagging is evidence-state only: AgreementVerdict::Lagging means
+the local admitted chain is a prefix of the comparison target
+(peer's announced chain) up to the peer's announced slot. It
+MUST NOT be treated as success / healthy / live-ready /
+consensus-equivalent by any caller. CI grep
+(ci_check_lagging_is_evidence_only.sh) forbids:
+  - Lagging matched as part of a success-result pattern
+    (Ok(Lagging), Lagging=>true, etc.) outside the verdict
+    reducer and its tests;
+  - Any caller passing a Lagging verdict into a "ready" /
+    "healthy" / "live" predicate.
+"""
+source = "docs/planning/phase4-n-m-b-admission-invariants.md §1 (I-B1) + §2 (¬P-B8)"
+cross_ref = ["DC-ADMIT-01"]
+code_locus = "crates/ade_node/src/admission/verdict.rs::AgreementVerdict::Lagging"
+tests = [
+    "ade_node::admission::verdict::tests::verdict_lagging_when_peer_ahead_of_our_slot",
+    "ade_node::admission::verdict::tests::verdict_lagging_when_peer_tip_is_origin",
+]
+ci_scripts = ["ci/ci_check_lagging_is_evidence_only.sh"]
+status = "enforced"
+
+[[rules]]
+id = "DC-ADMIT-09"
+tier = "derived"
+statement = """
+Admission code paths do not add partial reference-script
+support, permissive ref-script skipping, or any seed-import
+fallback. N-M-A's fail-fast on
+JsonSeedError::UnsupportedTxOutFeature stays exactly as-is.
+Real preprod seed import remains blocked until a future A1.1
+slice closes. CI grep
+(ci_check_admission_no_refscript_skip.sh) verifies admission
+code paths do not match UnsupportedTxOutFeature with a
+permissive arm.
+
+Rationale: prevents B from inheriting a known-invalid importer
+and rests sub-cluster C operator-pass evidence on a clean
+A1.1 closure.
+"""
+source = "docs/planning/phase4-n-m-b-admission-invariants.md §0 + §2 (¬P-B9)"
+cross_ref = ["CN-SEED-01"]
+code_locus = "crates/ade_runtime/src/seed_import/importer.rs::build_canonical_tx_out (fail-fast guard)"
+tests = []
+ci_scripts = ["ci/ci_check_admission_no_refscript_skip.sh"]
+status = "enforced"

@@ -84,7 +84,20 @@ async fn main() -> ExitCode {
 
     match cli.mode {
         Mode::WireOnly => ade_node::run_wire_only(&cli, writer, shutdown_rx).await,
-        Mode::Admission => ade_node::wire_only::run_admission_unavailable(writer).await,
+        Mode::Admission => {
+            // Drop the wire-only writer immediately — admission mode
+            // opens its own AdmissionLogWriter (bidirectional vocabulary
+            // isolation per DC-ADMIT-04).
+            drop(writer);
+            let acli = match cli.extract_admission_cli() {
+                Ok(a) => a,
+                Err(e) => {
+                    print_cli_error(&e);
+                    return ExitCode::from(ade_node::EXIT_GENERIC_STARTUP as u8);
+                }
+            };
+            ade_node::admission::dispatch_admission(acli, shutdown_rx).await
+        }
     }
 }
 
@@ -110,6 +123,18 @@ fn print_cli_error(e: &CliError) {
                 "ade_node: --tip-read-timeout-secs {} is not a valid u32",
                 s
             );
+        }
+        CliError::InvalidSeedPointSlot(s) => {
+            eprintln!("ade_node: --seed-point-slot {} is not a valid u64", s);
+        }
+        CliError::InvalidNetworkMagic(s) => {
+            eprintln!("ade_node: --network-magic {} is not a valid u32", s);
+        }
+        CliError::AdmissionMissingFlag(name) => {
+            eprintln!("ade_node: --mode admission requires {}", name);
+        }
+        CliError::AdmissionEmptyPeerList => {
+            eprintln!("ade_node: --mode admission requires at least one --peer");
         }
     }
 }

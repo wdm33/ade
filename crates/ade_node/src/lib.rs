@@ -13,6 +13,8 @@
 
 #![deny(unsafe_code)]
 
+pub mod admission;
+pub mod admission_log;
 pub mod cli;
 pub mod live_log;
 pub mod node;
