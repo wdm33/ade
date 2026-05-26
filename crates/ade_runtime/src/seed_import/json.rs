@@ -55,7 +55,65 @@ pub enum RawValueEntry {
     /// Lovelace amount: a bare unsigned int.
     Lovelace(u64),
     /// Multi-asset map: policy hex → { asset name hex → amount }.
-    Assets(BTreeMap<String, u64>),
+    /// Amounts are deserialized via the lossy
+    /// [`amount_from_number`] helper because cardano-cli emits
+    /// f64 literals (e.g. `1.49999999999999e19`) when the value
+    /// exceeds the JSON-precise integer range.
+    Assets(BTreeMap<String, AssetAmount>),
+}
+
+/// Asset amount as serialized by cardano-cli. Accepts both
+/// integer and f64 literals; f64 is parsed via `as u64` saturate
+/// (cardano-cli emits f64 only for amounts above `u64::MAX as f64`
+/// precision, so the conversion is lossy ONLY at the JSON
+/// boundary, not in any BLUE / authority path).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct AssetAmount(pub u64);
+
+impl<'de> serde::Deserialize<'de> for AssetAmount {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        use serde::de::Error;
+        let v = serde_json::Value::deserialize(deserializer)?;
+        match v {
+            serde_json::Value::Number(n) => {
+                if let Some(u) = n.as_u64() {
+                    Ok(AssetAmount(u))
+                } else if let Some(f) = n.as_f64() {
+                    if !f.is_finite() || f < 0.0 {
+                        return Err(D::Error::custom("asset amount must be finite and non-negative"));
+                    }
+                    // Saturate at u64::MAX. Any amount this large
+                    // is beyond Cardano's protocol-meaningful
+                    // range; cardano-cli emits f64 because the
+                    // JSON spec doesn't promise integer precision
+                    // past 2^53.
+                    Ok(AssetAmount(f.min(u64::MAX as f64) as u64))
+                } else {
+                    Err(D::Error::custom("asset amount is not representable as u64"))
+                }
+            }
+            other => Err(D::Error::custom(format!(
+                "asset amount must be a JSON number, got {}",
+                match other {
+                    serde_json::Value::Null => "null",
+                    serde_json::Value::Bool(_) => "bool",
+                    serde_json::Value::String(_) => "string",
+                    serde_json::Value::Array(_) => "array",
+                    serde_json::Value::Object(_) => "object",
+                    serde_json::Value::Number(_) => unreachable!(),
+                }
+            ))),
+        }
+    }
+}
+
+impl AssetAmount {
+    pub fn get(self) -> u64 {
+        self.0
+    }
 }
 
 pub type RawValue = BTreeMap<String, RawValueEntry>;

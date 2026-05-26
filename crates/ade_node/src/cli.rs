@@ -61,6 +61,10 @@ pub struct Cli {
     pub snapshot_dir: Option<PathBuf>,
     pub network_magic: Option<u32>,
     pub genesis_hash_hex: Option<String>,
+    /// Path to the cardano-cli operator consensus-inputs JSON
+    /// bundle imported by the admission runner (PHASE4-N-M-C
+    /// CN-CONS-IN-01). Required when `--mode admission` is set.
+    pub consensus_inputs_path: Option<PathBuf>,
 }
 
 /// Closed admission-mode CLI bundle (B5).
@@ -80,6 +84,10 @@ pub struct AdmissionCli {
     pub log_path: PathBuf,
     pub network_magic: u32,
     pub genesis_hash_hex: String,
+    /// Operator consensus-inputs JSON bundle path
+    /// (PHASE4-N-M-C). Imported via `import_live_consensus_inputs`
+    /// before the runner starts.
+    pub consensus_inputs_path: PathBuf,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -120,6 +128,7 @@ impl Cli {
         let mut snapshot_dir: Option<PathBuf> = None;
         let mut network_magic: Option<u32> = None;
         let mut genesis_hash_hex: Option<String> = None;
+        let mut consensus_inputs_path: Option<PathBuf> = None;
 
         while let Some(arg) = iter.next() {
             match arg.as_str() {
@@ -226,6 +235,12 @@ impl Cli {
                     })?;
                     genesis_hash_hex = Some(v);
                 }
+                "--consensus-inputs-path" => {
+                    let v = iter.next().ok_or_else(|| {
+                        CliError::FlagMissingValue("--consensus-inputs-path".to_string())
+                    })?;
+                    consensus_inputs_path = Some(PathBuf::from(v));
+                }
                 other => return Err(CliError::UnknownFlag(other.to_string())),
             }
         }
@@ -254,6 +269,7 @@ impl Cli {
             snapshot_dir,
             network_magic,
             genesis_hash_hex,
+            consensus_inputs_path,
         })
     }
 
@@ -287,6 +303,10 @@ impl Cli {
             .genesis_hash_hex
             .clone()
             .ok_or(CliError::AdmissionMissingFlag("--genesis-hash"))?;
+        let consensus_inputs_path = self
+            .consensus_inputs_path
+            .clone()
+            .ok_or(CliError::AdmissionMissingFlag("--consensus-inputs-path"))?;
         if self.peer_addrs.is_empty() {
             return Err(CliError::AdmissionEmptyPeerList);
         }
@@ -300,6 +320,7 @@ impl Cli {
             log_path: self.log_path.clone(),
             network_magic,
             genesis_hash_hex,
+            consensus_inputs_path,
         })
     }
 }
@@ -393,6 +414,8 @@ mod tests {
             "bb".repeat(32),
             "--peer".to_string(),
             "127.0.0.1:3001".to_string(),
+            "--consensus-inputs-path".to_string(),
+            "/cinputs.json".to_string(),
         ];
         for s in extra {
             args.push(s.to_string());
@@ -480,6 +503,8 @@ mod tests {
             "1",
             "--genesis-hash",
             "bb",
+            "--consensus-inputs-path",
+            "/cinputs.json",
             // no --peer at all
         ];
         let cli = parse(&args).expect("base parse");

@@ -31,13 +31,22 @@ use std::path::PathBuf;
 use std::process::ExitCode;
 
 use ade_core::consensus::era_schedule::EraSchedule;
-use ade_core::consensus::ledger_view::LedgerView;
 use ade_core::consensus::praos_state::{Nonce, PraosChainDepState};
 use ade_ledger::fingerprint::fingerprint;
 use ade_ledger::wal::WalStore;
+use ade_network::codec::handshake::{VersionParams, VersionTable};
+use ade_network::codec::version::N2NVersion;
+use ade_network::handshake::version_table::N2N_SUPPORTED;
+use ade_runtime::admission::{
+    dial_for_admission, run_admission_wire_pump,
+    AdmissionPeerEvent as RuntimeAdmissionPeerEvent,
+};
 use ade_runtime::bootstrap_anchor::{mint, MintInputs};
 use ade_runtime::chaindb::{
     InMemoryChainDb, PersistentChainDb, PersistentChainDbOptions, SnapshotStore,
+};
+use ade_runtime::consensus_inputs::{
+    import_live_consensus_inputs, LiveConsensusInputsImportError, LiveLedgerView,
 };
 use ade_runtime::seed_import::import_cardano_cli_json_utxo;
 use ade_runtime::wal::FileWalStore;
@@ -67,6 +76,9 @@ pub enum AdmissionBootstrapError {
     BootstrapInitialState(String),
     FileWalStoreOpen(String),
     WalChainBreak(String),
+    /// LiveConsensusInputs bundle import failed (PHASE4-N-M-C
+    /// CN-CONS-IN-01 / DC-CONS-IN-01).
+    ConsensusInputsImport(LiveConsensusInputsImportError),
 }
 
 /// SOLE admission-dispatch entry point. Performs the closed
@@ -165,14 +177,33 @@ async fn run_admission_inner(
         .verify_chain(&initial_fp)
         .map_err(|e| AdmissionBootstrapError::WalChainBreak(format!("{:?}", e)))?;
 
-    // 8. Build a minimal era schedule + noop ledger view. C
-    //    replaces these with the real ConwayValidityCorpus-backed
-    //    objects; B5 only proves dispatch + run_admission entry.
-    let era_schedule = make_minimal_schedule();
-    let ledger_view = NoopLedgerView;
+    // 8. Build the era schedule + the LiveLedgerView from the
+    //    operator-imported consensus-inputs bundle
+    //    (PHASE4-N-M-C CN-CONS-IN-01 / DC-VIEW-01). The minimal
+    //    schedule is consistent with the imported epoch window:
+    //    the Conway entry's start slot is the imported epoch
+    //    start, so the BLUE consensus path can resolve epochs
+    //    within that window from a single era summary.
+    let canonical = import_live_consensus_inputs(&acli.consensus_inputs_path)
+        .map_err(AdmissionBootstrapError::ConsensusInputsImport)?;
+    let era_schedule = make_schedule_for_imported_window(&canonical.epoch_start_slot);
+    let ledger_view = LiveLedgerView::new(canonical.clone());
+    let consensus_inputs_fingerprint = canonical.fingerprint.clone();
+    let consensus_inputs_epoch = canonical.epoch_no;
+    let consensus_inputs_epoch_start_slot = canonical.epoch_start_slot;
+    let consensus_inputs_epoch_end_slot = canonical.epoch_end_slot;
 
-    // 9. Empty peer-events channel (C wires the dialer here).
-    let (_tx, peer_events) = mpsc::channel::<AdmissionPeerEvent>(64);
+    // 9. Spawn one wire pump per peer; each pump produces
+    //    `AdmissionPeerEvent`s into a shared channel that the
+    //    runner consumes (PHASE4-N-M-C C3 — CN-PUMP-01).
+    let (peer_tx, peer_events) = mpsc::channel::<AdmissionPeerEvent>(64);
+    spawn_wire_pumps_for_admission(
+        &acli.peer_addrs,
+        acli.network_magic,
+        &canonical.source_tip_hash,
+        canonical.source_tip_slot,
+        peer_tx,
+    );
 
     let inputs = AdmissionInputs {
         writer,
@@ -191,6 +222,10 @@ async fn run_admission_inner(
             .to_string(),
         wal_dir: acli.wal_dir.to_string_lossy().to_string(),
         initial_chain_tip_slot: acli.seed_point_slot,
+        consensus_inputs_fingerprint,
+        consensus_inputs_epoch,
+        consensus_inputs_epoch_start_slot,
+        consensus_inputs_epoch_end_slot,
     };
     let _ = fingerprint(&ade_ledger::state::LedgerState::new(CardanoEra::Conway));
     // ^ touch fingerprint to ensure it stays in scope; the
@@ -216,47 +251,140 @@ fn blake2b_256_of_file(path: &PathBuf) -> Option<Hash32> {
     Some(ade_crypto::blake2b::blake2b_256(&bytes))
 }
 
-fn make_minimal_schedule() -> EraSchedule {
+/// Spawn one [`run_admission_wire_pump`] per configured peer
+/// address. Each pump dials its peer, completes the N2N
+/// handshake, and forwards `AdmissionPeerEvent`s into the
+/// shared channel. Dial failures are reported to stderr and
+/// drop the corresponding sender clone, which the runner
+/// observes via its connected-peer counter (clean shutdown when
+/// all peers disconnect).
+///
+/// Honest-scope (C3): peer-address parse failures are logged
+/// and skipped. C5's live-pass operator runbook is responsible
+/// for the address syntax + the docker preprod target.
+fn spawn_wire_pumps_for_admission(
+    peer_addrs: &[String],
+    network_magic: u32,
+    source_tip_hash: &Hash32,
+    source_tip_slot: SlotNo,
+    peer_tx: tokio::sync::mpsc::Sender<AdmissionPeerEvent>,
+) {
+    let our_versions: VersionTable = build_n2n_version_table(network_magic);
+    let start_point = ade_network::codec::chain_sync::Point::Block {
+        slot: source_tip_slot,
+        hash: source_tip_hash.clone(),
+    };
+    for raw_addr in peer_addrs {
+        let addr: std::net::SocketAddr = match raw_addr.parse() {
+            Ok(a) => a,
+            Err(_) => {
+                eprintln!("ade_node admission: skipping unparseable peer addr {raw_addr}");
+                continue;
+            }
+        };
+        let _ = network_magic; // routed via the version_data inside the pump
+        let pump_versions = our_versions.clone();
+        let pump_tx = peer_tx.clone();
+        let start = start_point.clone();
+        let label = raw_addr.clone();
+        tokio::spawn(async move {
+            let (transport, version) = match dial_for_admission(addr, pump_versions).await {
+                Ok(pair) => pair,
+                Err(e) => {
+                    eprintln!(
+                        "ade_node admission: dial-for-admission failed for {label}: {:?}",
+                        e
+                    );
+                    return;
+                }
+            };
+            let runtime_tx =
+                tokio::sync::mpsc::channel::<RuntimeAdmissionPeerEvent>(64);
+            let (rt_tx, mut rt_rx) = runtime_tx;
+            // Bridge runtime AdmissionPeerEvent -> ade_node AdmissionPeerEvent
+            // (parallel-shape closed sums; the bridge converts each variant
+            // exhaustively).
+            let label_for_bridge = label.clone();
+            let bridge = tokio::spawn(async move {
+                while let Some(evt) = rt_rx.recv().await {
+                    let translated = match evt {
+                        RuntimeAdmissionPeerEvent::Block { peer, block_bytes } => {
+                            AdmissionPeerEvent::Block { peer, block_bytes }
+                        }
+                        RuntimeAdmissionPeerEvent::TipUpdate { peer, tip } => {
+                            AdmissionPeerEvent::TipUpdate { peer, tip }
+                        }
+                        RuntimeAdmissionPeerEvent::Disconnected { peer } => {
+                            AdmissionPeerEvent::Disconnected { peer }
+                        }
+                    };
+                    if pump_tx.send(translated).await.is_err() {
+                        // Runner has dropped its receiver — exit
+                        // the bridge cleanly.
+                        return;
+                    }
+                }
+                let _ = label_for_bridge;
+            });
+            let _ = run_admission_wire_pump(
+                transport,
+                label.clone(),
+                start,
+                version,
+                network_magic,
+                rt_tx,
+            )
+            .await;
+            let _ = bridge.await;
+        });
+    }
+}
+
+/// Build a per-version `VersionTable` for the operator-supplied
+/// network magic. Mirrors `wire_only::our_n2n_versions` — V11..V15
+/// emit a 4-field NodeToNodeVersionData; V16+ emits the 5-field
+/// shape adding `perasSupport`.
+fn build_n2n_version_table(network_magic: u32) -> VersionTable {
+    use ade_network::codec::primitives::{encode_array_header, encode_bool, encode_u64};
+    VersionTable(
+        N2N_SUPPORTED
+            .iter()
+            .map(|(v, _)| {
+                let mut buf = Vec::new();
+                let field_count: u64 = if *v >= 16 { 5 } else { 4 };
+                encode_array_header(&mut buf, field_count);
+                encode_u64(&mut buf, network_magic as u64);
+                encode_bool(&mut buf, true); // initiatorOnlyDiffusionMode
+                encode_u64(&mut buf, 0); // peerSharing = NoPeerSharing
+                encode_bool(&mut buf, false); // query
+                if *v >= 16 {
+                    encode_bool(&mut buf, false); // perasSupport
+                }
+                (N2NVersion::new(*v), VersionParams(buf))
+            })
+            .collect(),
+    )
+}
+
+/// Build an era schedule whose single Conway entry starts at the
+/// imported epoch's start slot. C2 honest-scope: admission is
+/// single-epoch, so a single-entry schedule with safe-zone equal
+/// to the epoch length is enough — multi-epoch admission is a
+/// future cluster (¬P-C5 / ¬P-C6).
+fn make_schedule_for_imported_window(epoch_start_slot: &SlotNo) -> EraSchedule {
     EraSchedule::new(
         ade_core::consensus::BootstrapAnchorHash(Hash32([0u8; 32])),
-        0,
+        epoch_start_slot.0,
         vec![ade_core::consensus::EraSummary {
             era: CardanoEra::Conway,
-            start_slot: SlotNo(0),
+            start_slot: *epoch_start_slot,
             start_epoch: ade_types::EpochNo(0),
             slot_length_ms: 1_000,
             epoch_length_slots: 432_000,
             safe_zone_slots: 432_000,
         }],
     )
-    .expect("minimal schedule")
-}
-
-struct NoopLedgerView;
-impl LedgerView for NoopLedgerView {
-    fn total_active_stake(&self, _epoch: ade_types::EpochNo) -> Option<u64> {
-        None
-    }
-    fn pool_active_stake(
-        &self,
-        _epoch: ade_types::EpochNo,
-        _pool: &ade_types::Hash28,
-    ) -> Option<u64> {
-        None
-    }
-    fn pool_vrf_keyhash(
-        &self,
-        _epoch: ade_types::EpochNo,
-        _pool: &ade_types::Hash28,
-    ) -> Option<Hash32> {
-        None
-    }
-    fn active_slots_coeff(
-        &self,
-        _epoch: ade_types::EpochNo,
-    ) -> Option<ade_core::consensus::vrf_cert::ActiveSlotsCoeff> {
-        None
-    }
+    .expect("era schedule for imported window")
 }
 
 // Silence unused-import lint when no callsite uses InMemoryChainDb

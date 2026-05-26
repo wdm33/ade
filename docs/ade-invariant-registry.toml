@@ -3283,20 +3283,15 @@ peer's chain, admits blocks via the single admit authority
 (CN-CONS-08), and emits a JSONL log of (peer_tip, ade_tip,
 agreement_verdict) per admitted block over a 30-minute window.
 Closes the admission/agreement half of RO-LIVE-03.
-
-Blocked on a ledger-seed cluster (PHASE4-N-M-LEDGER-SEED or
-equivalent) that ships either a genesis-JSON → initial-LedgerState
-builder or a cardano-node ledger-snapshot importer. Without
-either, `bootstrap_initial_state` returns GenesisRequiredButAbsent
-and the binary cannot enter the admission loop.
 """
 source = "docs/planning/phase4-n-l-live-wire-smoke-invariants.md §1"
-cross_ref = ["RO-LIVE-03", "CN-CONS-08", "CN-STORE-07", "CN-NODE-01"]
-code_locus = ""
-tests = []
-ci_script = ""
-status = "declared"
-open_obligation = "blocked_until_ledger_seed_cluster"
+cross_ref = ["RO-LIVE-03", "CN-CONS-08", "CN-STORE-07", "CN-NODE-01", "DC-EVIDENCE-01", "CN-PUMP-01", "CN-CONS-IN-01"]
+code_locus = "crates/ade_node/src/admission/ (full admission stack), crates/ade_runtime/src/admission/wire_pump.rs (live wire pump), crates/ade_runtime/src/consensus_inputs/ (operator-supplied LiveConsensusInputs import authority + canonical fingerprint), docs/evidence/phase4-n-m-c-* (live transcripts + bundles + runbook)"
+tests = ["live_operator_pass_against_docker_preprod", "live_bundle_imports_with_conway_era_and_deterministic_fingerprint", "cross_epoch_block_triggers_halt_without_admit", "adversarial_corpus_rejects_all_four_mutation_classes"]
+ci_script = "ci/ci_check_live_operator_pass_scaffold.sh"
+status = "enforced_scaffolding"
+open_obligation = "blocked_until_A1_1_reference_script_seed_import"
+evidence_notes = "PHASE4-N-M-C (2026-05-26) CLOSED RO-LIVE-05 on the bounded statement: (1) live wire integration end-to-end against docker preprod is proven (committed wire-only transcript at slot 76910188 with handshake_ok v15 + peer_tip_read); (2) the closed LiveConsensusInputs import authority + canonical Blake2b-256 fingerprint shipped (CN-CONS-IN-01, DC-CONS-IN-02), exercised against a live preprod bundle (epoch 179, 384 pools); (3) the GREEN LiveLedgerView + epoch-window guard (DC-VIEW-01, DC-ADMIT-11) + closed AdmissionPeerEvent emission contract from the RED wire pump (CN-PUMP-01, DC-PUMP-01, DC-PUMP-02) + Undecodable-tightening (DC-ADMIT-12) shipped; (4) adversarial false-accept corpus across 4 mandatory mutation classes (DC-EVIDENCE-02) proven fail-closed. Full BlockAdmitted transcript on a current-tip preprod snapshot is gated on A1.1 (reference-script seed-import support) — an explicit N-M-C non-goal, deferred to a future N-M-A strengthening. See `docs/evidence/phase4-n-m-c-operator-pass-README.md` §5 for the bounded-closure statement and `[[feedback-shell-must-not-overstate-semantic-truth]]` doctrine load."
 
 # =============================================================================
 # PHASE4-N-M-A — Oracle-seed bootstrap + BootstrapAnchor + Ade-native WAL
@@ -3883,10 +3878,11 @@ source_tip_hash, source_tip_slot, fingerprint.
 """
 source = "docs/planning/phase4-n-m-c-operator-pass-invariants.md §1 (I-C1)"
 cross_ref = ["CN-CONS-08", "CN-SEED-01", "CN-ANCHOR-01"]
-code_locus = ""
-tests = []
-ci_scripts = []
-status = "declared"
+code_locus = "crates/ade_runtime/src/consensus_inputs/importer.rs (import_live_consensus_inputs_raw / _from_bytes, raw typed form + closed error sum), crates/ade_runtime/src/consensus_inputs/canonical.rs (import_live_consensus_inputs / _from_bytes — SOLE Canonical-returning authority + canonical_from_raw lift), crates/ade_runtime/src/consensus_inputs/json.rs (parse_consensus_inputs_json structural decode)"
+tests = ["consensus_inputs::importer::tests::minimal_round_trip_imports_to_typed", "consensus_inputs::importer::tests::unsupported_era_fails_fast", "consensus_inputs::importer::tests::import_is_deterministic_across_repeated_calls", "consensus_inputs::canonical::tests::import_round_trip_yields_canonical_form_with_fingerprint", "consensus_inputs::canonical::tests::fingerprint_is_deterministic_across_repeated_imports"]
+ci_scripts = ["ci/ci_check_live_consensus_inputs_closure.sh", "ci/ci_check_live_consensus_inputs_fingerprint.sh"]
+status = "enforced"
+evidence = ["PHASE4-N-M-C S1a (2026-05-26) shipped the typed-validated raw form + closed error sum + sole-authority gate. PHASE4-N-M-C S1b (2026-05-26) added the Canonical form with the canonical-CBOR Blake2b-256 fingerprint — `import_live_consensus_inputs` is the SOLE Canonical-returning authority. ade_runtime::consensus_inputs::importer::import_live_consensus_inputs the rule statement names is the C1b file-variant; the C1a raw importer is the lower-tier authority that C1b composes."]
 
 [[rules]]
 id = "DC-CONS-IN-01"
@@ -3901,10 +3897,10 @@ schedule, or any hash field is fatal at import time
 """
 source = "docs/planning/phase4-n-m-c-operator-pass-invariants.md §1 (I-C2)"
 cross_ref = ["CN-CONS-IN-01"]
-code_locus = ""
-tests = []
-ci_scripts = []
-status = "declared"
+code_locus = "crates/ade_runtime/src/consensus_inputs/importer.rs (LiveConsensusInputsImportError closed enum + validate_and_lift)"
+tests = ["consensus_inputs::importer::tests::unsupported_era_fails_fast", "consensus_inputs::importer::tests::empty_era_string_fails_fast", "consensus_inputs::importer::tests::epoch_end_before_start_is_bad_window", "consensus_inputs::importer::tests::tip_outside_window_is_bad_window", "consensus_inputs::importer::tests::zero_asc_denom_is_bad_field", "consensus_inputs::importer::tests::short_genesis_hash_is_bad_hash_hex", "consensus_inputs::importer::tests::non_hex_in_hash_is_bad_hash_hex", "consensus_inputs::importer::tests::pool_in_distribution_missing_from_vrf_map_is_bad_pool", "consensus_inputs::importer::tests::pool_id_wrong_width_is_bad_hash_hex", "consensus_inputs::importer::tests::bad_json_surface_is_json_variant", "consensus_inputs::json::tests::missing_required_field_is_error", "consensus_inputs::json::tests::unknown_field_is_rejected"]
+ci_scripts = ["ci/ci_check_live_consensus_inputs_closure.sh"]
+status = "enforced"
 
 [[rules]]
 id = "DC-CONS-IN-02"
@@ -3919,10 +3915,11 @@ JSONL block-event (DC-ADMIT-10).
 """
 source = "docs/planning/phase4-n-m-c-operator-pass-invariants.md §1 (I-C3)"
 cross_ref = ["CN-CONS-IN-01", "T-DET-01", "DC-ADMIT-10"]
-code_locus = ""
-tests = []
-ci_scripts = []
-status = "declared"
+code_locus = "crates/ade_runtime/src/consensus_inputs/canonical.rs (LiveConsensusInputsCanonical struct, encode_canonical_cbor private fn, canonical_from_raw lift, import_live_consensus_inputs sole authority)"
+tests = ["consensus_inputs::canonical::tests::import_round_trip_yields_canonical_form_with_fingerprint", "consensus_inputs::canonical::tests::fingerprint_is_deterministic_across_repeated_imports", "consensus_inputs::canonical::tests::fingerprint_changes_when_any_canonical_input_changes", "consensus_inputs::canonical::tests::canonical_field_count_is_fifteen", "consensus_inputs::canonical::tests::fingerprint_is_blake2b_256_of_encode_canonical_cbor"]
+ci_scripts = ["ci/ci_check_live_consensus_inputs_fingerprint.sh"]
+status = "enforced"
+strengthens = ["CN-CONS-IN-01", "T-DET-01"]
 
 [[rules]]
 id = "DC-VIEW-01"
@@ -3942,10 +3939,10 @@ No ambient default view; no cross-epoch silent use.
 """
 source = "docs/planning/phase4-n-m-c-operator-pass-invariants.md §1 (I-C4)"
 cross_ref = ["CN-CONS-IN-01", "DC-CONS-IN-02", "DC-ADMIT-11"]
-code_locus = ""
-tests = []
-ci_scripts = []
-status = "declared"
+code_locus = "crates/ade_runtime/src/consensus_inputs/view.rs (LiveLedgerView LedgerView impl — 4 epoch-window guards), crates/ade_node/src/admission/runner.rs (pre-admit slot guard before process_block, returns AdmissionExitCode::CrossEpochUse)"
+tests = ["consensus_inputs::view::tests::out_of_window_epoch_returns_none", "consensus_inputs::view::tests::in_window_epoch_answers_total_active_stake", "consensus_inputs::view::tests::in_window_per_pool_lookups_return_imported_values", "consensus_inputs::view::tests::in_window_unknown_pool_returns_none"]
+ci_scripts = ["ci/ci_check_live_ledger_view_epoch_window.sh"]
+status = "enforced"
 
 [[rules]]
 id = "CN-PUMP-01"
@@ -3961,10 +3958,10 @@ per-call fallback.
 """
 source = "docs/planning/phase4-n-m-c-operator-pass-invariants.md §1 (I-C5)"
 cross_ref = ["CN-ADMIT-01", "CN-SESS-01", "CN-SESS-02", "CN-SESS-03"]
-code_locus = ""
-tests = []
-ci_scripts = []
-status = "declared"
+code_locus = "crates/ade_runtime/src/admission/wire_pump.rs (run_admission_wire_pump sole authority + closed AdmissionPeerEvent / AdmissionWirePumpError sums)"
+tests = ["admission::wire_pump::tests::pump_emits_tip_update_and_block_on_initial_intersect_and_block_fetch", "admission::wire_pump::tests::pump_emits_tip_update_on_intersect_not_found"]
+ci_scripts = ["ci/ci_check_admission_wire_pump_closure.sh"]
+status = "enforced"
 
 [[rules]]
 id = "DC-PUMP-01"
@@ -3979,10 +3976,10 @@ reducer's sole output (memory
 """
 source = "docs/planning/phase4-n-m-c-operator-pass-invariants.md §1 (I-C6) + §2 (¬P-C3)"
 cross_ref = ["CN-PUMP-01", "DC-ADMIT-01"]
-code_locus = ""
-tests = []
-ci_scripts = []
-status = "declared"
+code_locus = "crates/ade_runtime/src/admission/wire_pump.rs (closed AdmissionPeerEvent emit-only; no AgreementVerdict reference in code; emit helper exhaustive over the 3 variants)"
+tests = ["admission::wire_pump::tests::pump_emits_tip_update_and_block_on_initial_intersect_and_block_fetch", "admission::wire_pump::tests::pump_emits_tip_update_on_intersect_not_found"]
+ci_scripts = ["ci/ci_check_admission_wire_pump_closure.sh", "ci/ci_check_admission_no_red_verdicts.sh"]
+status = "enforced"
 
 [[rules]]
 id = "DC-PUMP-02"
@@ -3995,10 +3992,10 @@ comparison input.
 """
 source = "docs/planning/phase4-n-m-c-operator-pass-invariants.md §1 (I-C7)"
 cross_ref = ["CN-PUMP-01", "DC-PUMP-01"]
-code_locus = ""
-tests = []
-ci_scripts = []
-status = "declared"
+code_locus = "crates/ade_runtime/src/admission/wire_pump.rs (handle_chain_sync IntersectFound / IntersectNotFound / RollForward / RollBackward arms all call tip_update before any other action)"
+tests = ["admission::wire_pump::tests::pump_emits_tip_update_and_block_on_initial_intersect_and_block_fetch", "admission::wire_pump::tests::pump_emits_tip_update_on_intersect_not_found"]
+ci_scripts = ["ci/ci_check_admission_wire_pump_closure.sh"]
+status = "enforced"
 
 [[rules]]
 id = "DC-ADMIT-10"
@@ -4006,19 +4003,21 @@ tier = "derived"
 statement = """
 Every admission JSONL block-event carries
 consensus_inputs_fingerprint. BlockAdmitted, AgreementVerdict,
-and BootstrapComplete events emit the fingerprint field. The
-admission JSONL vocabulary stays CLOSED — the field is added to
-existing variants, NOT a new variant. The fingerprint is the
+BootstrapComplete, and AdmissionStarted events emit the
+consensus_inputs_fingerprint_hex field. The admission JSONL
+vocabulary stays CLOSED — the field is added to existing
+variants, NOT a new variant. The fingerprint is the
 load-bearing binding between the operator-supplied oracle
 (LiveConsensusInputs) and every BLUE-authority claim the
 transcript makes.
 """
 source = "docs/planning/phase4-n-m-c-operator-pass-invariants.md §1 (I-C8)"
 cross_ref = ["DC-ADMIT-04", "DC-CONS-IN-02"]
-code_locus = ""
-tests = []
-ci_scripts = []
-status = "declared"
+code_locus = "crates/ade_node/src/admission_log/event.rs (AdmissionLogEvent — 4 binding variants carry consensus_inputs_fingerprint_hex), crates/ade_node/src/admission_log/writer.rs (JSONL emit of the new field), crates/ade_node/src/admission/runner.rs (fingerprint threaded through all 4 emits via consensus_fp_hex)"
+tests = ["admission_log::writer::tests::admission_log_writer_emits_one_object_per_line", "admission_log::writer::tests::admission_log_writer_serializes_admission_started_canonically", "admission_log::writer::tests::admission_log_writer_emits_agreement_verdict_with_kind_field"]
+ci_scripts = ["ci/ci_check_live_ledger_view_epoch_window.sh", "ci/ci_check_admission_log_vocabulary_closed.sh"]
+status = "enforced"
+strengthens = ["DC-ADMIT-04"]
 
 [[rules]]
 id = "DC-ADMIT-11"
@@ -4033,10 +4032,10 @@ silent "skip and continue" path
 """
 source = "docs/planning/phase4-n-m-c-operator-pass-invariants.md §1 (I-C9) + §2 (¬P-C2)"
 cross_ref = ["DC-VIEW-01", "DC-ADMIT-01"]
-code_locus = ""
-tests = []
-ci_scripts = []
-status = "declared"
+code_locus = "crates/ade_node/src/admission/runner.rs (pre-admit peek_block_slot + slot-window guard + AdmissionHaltReason::CrossEpochUse emit + EXIT_LIVE_CROSS_EPOCH_USE=32)"
+tests = ["cross_epoch_block_triggers_halt_without_admit"]
+ci_scripts = ["ci/ci_check_live_ledger_view_epoch_window.sh"]
+status = "enforced"
 
 [[rules]]
 id = "DC-ADMIT-12"
@@ -4056,10 +4055,11 @@ slot)
 """
 source = "docs/planning/phase4-n-m-c-operator-pass-invariants.md §1 (I-C10) + §2 (¬P-C7, ¬P-C9)"
 cross_ref = ["DC-ADMIT-01", "DC-ADMIT-03", "DC-ADMIT-06"]
-code_locus = ""
-tests = []
-ci_scripts = []
-status = "declared"
+code_locus = "crates/ade_node/src/admission/runner.rs (ProcessedBlock::Undecodable arm routes to Diverged when peer tip exists at a Point::Block, else PeerSentUndecodableBytes — exit codes 30 / 34)"
+tests = ["admission_log::event::tests::admission_log_event_discriminator_round_trips_for_each_variant"]
+ci_scripts = ["ci/ci_check_admission_wire_pump_closure.sh"]
+status = "enforced"
+strengthens = ["DC-ADMIT-03", "DC-ADMIT-06"]
 
 [[rules]]
 id = "DC-EVIDENCE-02"
@@ -4084,10 +4084,11 @@ Agreed, or InputNotFound. False-accept is release-blocking
 """
 source = "docs/planning/phase4-n-m-c-operator-pass-invariants.md §1 (I-C11)"
 cross_ref = ["DC-ADMIT-03", "DC-ADMIT-12", "CN-CONS-08"]
-code_locus = ""
-tests = []
-ci_scripts = []
-status = "declared"
+code_locus = "crates/ade_node/tests/admission_adversarial_corpus.rs (4 mandatory MutationClass variants applied to a real Conway block; each asserts exit in {Diverged(30), PeerSentUndecodableBytes(34)})"
+tests = ["adversarial_corpus_rejects_all_four_mutation_classes"]
+ci_scripts = ["ci/ci_check_adversarial_false_accept_corpus.sh"]
+status = "enforced"
+strengthens = ["CN-CONS-08", "DC-ADMIT-12"]
 
 [[rules]]
 id = "DC-EVIDENCE-01"
@@ -4112,7 +4113,9 @@ DC-ADMIT-08).
 """
 source = "docs/planning/phase4-n-m-c-operator-pass-invariants.md §1 (I-C12)"
 cross_ref = ["DC-ADMIT-01", "DC-ADMIT-10", "DC-EVIDENCE-02", "RO-LIVE-05"]
-code_locus = ""
-tests = []
-ci_scripts = []
-status = "declared"
+code_locus = "crates/ade_node/tests/admission_live_operator_pass.rs (env-gated integration test with the closed transcript-shape asserts), ci/build_consensus_inputs_bundle.sh (operator-side bundle generator), docs/evidence/phase4-n-m-c-consensus-inputs.json (committed bundle from epoch 179 docker preprod), docs/evidence/phase4-n-m-c-wire-only-transcript.jsonl (wire-integration anchor), docs/evidence/phase4-n-m-c-operator-pass-README.md (runbook + RO-LIVE-05 bounded statement)"
+tests = ["live_operator_pass_against_docker_preprod", "live_bundle_imports_with_conway_era_and_deterministic_fingerprint"]
+ci_scripts = ["ci/ci_check_live_operator_pass_scaffold.sh"]
+status = "enforced_scaffolding"
+open_obligation = "blocked_until_A1_1_reference_script_seed_import"
+evidence_notes = "PHASE4-N-M-C S5 (2026-05-26) shipped the C5 deliverable in two tiers: (a) live wire-integration is PROVEN end-to-end against the docker preprod peer (committed `phase4-n-m-c-wire-only-transcript.jsonl` carries peer_dial_started + handshake_ok + peer_tip_read + wire_smoke_complete at slot 76910188); (b) the live consensus-inputs bundle imports cleanly through `import_live_consensus_inputs` and produces a deterministic fingerprint (committed `phase4-n-m-c-consensus-inputs.json`, epoch 179, 384 pools). Full admission-mode BlockAdmitted transcript is gated on A1.1 (reference-script seed-import support), an explicit N-M-C non-goal — see `docs/evidence/phase4-n-m-c-operator-pass-README.md` §3. The integration test ships with a `ADE_LIVE_REQUIRE_BLOCK_ADMITTED=1` switch that flips the BlockAdmitted/Agreed asserts to mandatory once A1.1 lands."

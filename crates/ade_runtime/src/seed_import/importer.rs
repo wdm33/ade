@@ -222,7 +222,7 @@ fn encode_value(value: &RawValue) -> Result<(Coin, Option<Vec<u8>>), JsonSeedErr
             let asset_bytes = decode_hex_string(asset_hex).ok_or(
                 JsonSeedError::BadAssetNameHex { hex: asset_hex.clone() },
             )?;
-            asset_map.insert(asset_bytes, *amount);
+            asset_map.insert(asset_bytes, amount.get());
         }
         policies.insert(policy_bytes, asset_map);
     }

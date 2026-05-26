@@ -57,6 +57,7 @@ fn encode_event(event: &AdmissionLogEvent, out: &mut String) {
             peer_count,
             json_seed_path,
             wal_dir,
+            consensus_inputs_fingerprint_hex,
         } => {
             out.push(',');
             push_key_u64(out, "peer_count", *peer_count as u64);
@@ -64,6 +65,12 @@ fn encode_event(event: &AdmissionLogEvent, out: &mut String) {
             push_key_str(out, "json_seed_path", json_seed_path);
             out.push(',');
             push_key_str(out, "wal_dir", wal_dir);
+            out.push(',');
+            push_key_str(
+                out,
+                "consensus_inputs_fingerprint_hex",
+                consensus_inputs_fingerprint_hex,
+            );
         }
         AdmissionLogEvent::SnapshotImported {
             seed_point_slot,
@@ -80,11 +87,18 @@ fn encode_event(event: &AdmissionLogEvent, out: &mut String) {
         AdmissionLogEvent::BootstrapComplete {
             initial_ledger_fp_hex,
             chain_tip_slot,
+            consensus_inputs_fingerprint_hex,
         } => {
             out.push(',');
             push_key_str(out, "initial_ledger_fp_hex", initial_ledger_fp_hex);
             out.push(',');
             push_key_u64(out, "chain_tip_slot", *chain_tip_slot);
+            out.push(',');
+            push_key_str(
+                out,
+                "consensus_inputs_fingerprint_hex",
+                consensus_inputs_fingerprint_hex,
+            );
         }
         AdmissionLogEvent::BlockReceived {
             peer,
@@ -102,6 +116,7 @@ fn encode_event(event: &AdmissionLogEvent, out: &mut String) {
             slot,
             block_hash_hex,
             post_fp_hex,
+            consensus_inputs_fingerprint_hex,
         } => {
             out.push(',');
             push_key_u64(out, "slot", *slot);
@@ -109,6 +124,12 @@ fn encode_event(event: &AdmissionLogEvent, out: &mut String) {
             push_key_str(out, "block_hash_hex", block_hash_hex);
             out.push(',');
             push_key_str(out, "post_fp_hex", post_fp_hex);
+            out.push(',');
+            push_key_str(
+                out,
+                "consensus_inputs_fingerprint_hex",
+                consensus_inputs_fingerprint_hex,
+            );
         }
         AdmissionLogEvent::AgreementVerdict {
             kind,
@@ -117,6 +138,7 @@ fn encode_event(event: &AdmissionLogEvent, out: &mut String) {
             peer_hash_hex,
             peer_slot,
             tx_in_hex,
+            consensus_inputs_fingerprint_hex,
         } => {
             out.push(',');
             push_key_str(out, "kind", kind);
@@ -138,6 +160,12 @@ fn encode_event(event: &AdmissionLogEvent, out: &mut String) {
                 out.push(',');
                 push_key_str(out, "tx_in_hex", t);
             }
+            out.push(',');
+            push_key_str(
+                out,
+                "consensus_inputs_fingerprint_hex",
+                consensus_inputs_fingerprint_hex,
+            );
         }
         AdmissionLogEvent::AdmissionHalted { reason } => {
             out.push(',');
@@ -216,11 +244,13 @@ mod tests {
 
     #[test]
     fn admission_log_writer_emits_one_object_per_line() {
+        let fp = "ff".repeat(32);
         let events = vec![
             AdmissionLogEvent::AdmissionStarted {
                 peer_count: 2,
                 json_seed_path: "/tmp/seed.json".into(),
                 wal_dir: "/tmp/wal".into(),
+                consensus_inputs_fingerprint_hex: fp.clone(),
             },
             AdmissionLogEvent::SnapshotImported {
                 seed_point_slot: 12345,
@@ -230,6 +260,7 @@ mod tests {
             AdmissionLogEvent::BootstrapComplete {
                 initial_ledger_fp_hex: "aa".repeat(32),
                 chain_tip_slot: 12345,
+                consensus_inputs_fingerprint_hex: fp.clone(),
             },
             AdmissionLogEvent::BlockReceived {
                 peer: "127.0.0.1:3001".into(),
@@ -240,6 +271,7 @@ mod tests {
                 slot: 12346,
                 block_hash_hex: "bb".repeat(32),
                 post_fp_hex: "cc".repeat(32),
+                consensus_inputs_fingerprint_hex: fp.clone(),
             },
             AdmissionLogEvent::AgreementVerdict {
                 kind: "agreed",
@@ -248,6 +280,7 @@ mod tests {
                 peer_hash_hex: Some("bb".repeat(32)),
                 peer_slot: None,
                 tx_in_hex: None,
+                consensus_inputs_fingerprint_hex: fp.clone(),
             },
             AdmissionLogEvent::AdmissionShutdown {
                 reason: AdmissionShutdownReason::SignalReceived,
@@ -272,11 +305,12 @@ mod tests {
             peer_count: 1,
             json_seed_path: "/seed.json".into(),
             wal_dir: "/wal".into(),
+            consensus_inputs_fingerprint_hex: "00".repeat(32),
         }]);
         let s = std::str::from_utf8(&bytes).expect("utf8");
         assert_eq!(
             s,
-            "{\"event\":\"admission_started\",\"peer_count\":1,\"json_seed_path\":\"/seed.json\",\"wal_dir\":\"/wal\"}\n"
+            "{\"event\":\"admission_started\",\"peer_count\":1,\"json_seed_path\":\"/seed.json\",\"wal_dir\":\"/wal\",\"consensus_inputs_fingerprint_hex\":\"0000000000000000000000000000000000000000000000000000000000000000\"}\n"
         );
     }
 
@@ -287,6 +321,7 @@ mod tests {
                 peer_count: 3,
                 json_seed_path: "p".into(),
                 wal_dir: "w".into(),
+                consensus_inputs_fingerprint_hex: "ab".repeat(32),
             },
             AdmissionLogEvent::AdmissionHalted {
                 reason: AdmissionHaltReason::Diverged,
@@ -306,6 +341,7 @@ mod tests {
             peer_hash_hex: Some("b2".repeat(32)),
             peer_slot: None,
             tx_in_hex: None,
+            consensus_inputs_fingerprint_hex: "cd".repeat(32),
         }]);
         let s = std::str::from_utf8(&bytes).expect("utf8");
         assert!(s.contains("\"event\":\"agreement_verdict\""), "got: {s}");
@@ -322,6 +358,7 @@ mod tests {
             peer_hash_hex: None,
             peer_slot: None,
             tx_in_hex: Some("deadbeef#0".into()),
+            consensus_inputs_fingerprint_hex: "ef".repeat(32),
         }]);
         let s = std::str::from_utf8(&bytes).expect("utf8");
         assert!(!s.contains("our_hash_hex"), "got: {s}");
@@ -337,6 +374,7 @@ mod tests {
                 peer_count: 1,
                 json_seed_path: "p".into(),
                 wal_dir: "w".into(),
+                consensus_inputs_fingerprint_hex: "12".repeat(32),
             },
             AdmissionLogEvent::AdmissionShutdown {
                 reason: AdmissionShutdownReason::UpstreamDropped,

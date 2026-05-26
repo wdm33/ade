@@ -32,7 +32,8 @@ pub mod verdict;
 pub use bootstrap::{dispatch_admission, AdmissionBootstrapError};
 pub use runner::{
     run_admission, AdmissionExitCode, AdmissionInputs, AdmissionPeerEvent,
-    EXIT_LIVE_AGREEMENT_DIVERGED, EXIT_LIVE_INPUT_NOT_FOUND, EXIT_LIVE_WAL_APPEND_IO,
+    EXIT_LIVE_AGREEMENT_DIVERGED, EXIT_LIVE_CROSS_EPOCH_USE, EXIT_LIVE_INPUT_NOT_FOUND,
+    EXIT_LIVE_PEER_SENT_UNDECODABLE, EXIT_LIVE_WAL_APPEND_IO,
 };
 pub use seed_to_snapshot::{seed_to_snapshot, SeedToSnapshotError};
 pub use verdict::{

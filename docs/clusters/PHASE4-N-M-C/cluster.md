@@ -1,9 +1,10 @@
 # PHASE4-N-M-C — Live operator pass (cluster doc)
 
-**Status:** declared. Pre-implementation.
+**Status:** CLOSED 2026-05-26. 11/12 rules `enforced`; DC-EVIDENCE-01 + RO-LIVE-05 `enforced_scaffolding` (full `BlockAdmitted` transcript gated on A1.1 reference-script seed-import — explicit C non-goal).
 **Predecessors:** PHASE4-N-M-A (BootstrapAnchor + WAL), PHASE4-N-M-B (admission orchestrator).
 **Successor:** none planned. C is the closure cluster for RO-LIVE-05.
 **Sketch:** `docs/planning/phase4-n-m-c-operator-pass-invariants.md`.
+**Evidence:** `docs/evidence/phase4-n-m-c-*` (consensus-inputs bundle + wire-only transcript + runbook).
 
 ## Primary invariant
 

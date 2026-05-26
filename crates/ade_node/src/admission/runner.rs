@@ -43,7 +43,7 @@ use ade_ledger::receive::admit_via_block_validity;
 use ade_ledger::state::LedgerState;
 use ade_ledger::wal::{BlockVerdictTag, WalEntry, WalStore};
 use ade_network::codec::chain_sync::Tip;
-use ade_types::{Hash32, SlotNo};
+use ade_types::{EpochNo, Hash32, SlotNo};
 use tokio::sync::{mpsc, watch, Mutex};
 
 use super::verdict::{
@@ -58,8 +58,15 @@ use crate::admission_log::{
 pub const EXIT_LIVE_AGREEMENT_DIVERGED: i32 = 30;
 /// Comparison-input not found exit code (evidence source gap).
 pub const EXIT_LIVE_INPUT_NOT_FOUND: i32 = 31;
+/// Peer block slot outside the imported consensus-inputs epoch
+/// window — DC-ADMIT-11 / ¬P-C2.
+pub const EXIT_LIVE_CROSS_EPOCH_USE: i32 = 32;
 /// WAL append I/O fatal exit code.
 pub const EXIT_LIVE_WAL_APPEND_IO: i32 = 33;
+/// Peer sent bytes the BLUE decoder rejected with no peer tip at
+/// the same slot — DC-ADMIT-12 / ¬P-C9. Reserved for C3; the C2
+/// runner does not yet emit this exit code.
+pub const EXIT_LIVE_PEER_SENT_UNDECODABLE: i32 = 34;
 
 /// Closed exit-code sum. Maps to the binary's exit-code constants
 /// (mirroring `wire_only::EXIT_LIVE_PASS_PEER_FAILURE`).
@@ -71,8 +78,13 @@ pub enum AdmissionExitCode {
     Diverged,
     /// `AgreementVerdict::InputNotFound` observed.
     InputNotFound,
+    /// Peer block slot outside the imported consensus-inputs
+    /// epoch window (DC-ADMIT-11).
+    CrossEpochUse,
     /// `WalStore::append` returned a fatal I/O error.
     WalAppendIo,
+    /// Peer sent undecodable bytes (DC-ADMIT-12, C3-wired).
+    PeerSentUndecodableBytes,
 }
 
 impl AdmissionExitCode {
@@ -82,7 +94,9 @@ impl AdmissionExitCode {
             Self::Ok => 0,
             Self::Diverged => EXIT_LIVE_AGREEMENT_DIVERGED,
             Self::InputNotFound => EXIT_LIVE_INPUT_NOT_FOUND,
+            Self::CrossEpochUse => EXIT_LIVE_CROSS_EPOCH_USE,
             Self::WalAppendIo => EXIT_LIVE_WAL_APPEND_IO,
+            Self::PeerSentUndecodableBytes => EXIT_LIVE_PEER_SENT_UNDECODABLE,
         }
     }
 }
@@ -123,6 +137,24 @@ where
     pub json_seed_path: String,
     pub wal_dir: String,
     pub initial_chain_tip_slot: u64,
+    /// Canonical fingerprint of the imported LiveConsensusInputs
+    /// (DC-CONS-IN-02). Bound into every BlockAdmitted /
+    /// AgreementVerdict / BootstrapComplete / AdmissionStarted
+    /// emit (DC-ADMIT-10) so the JSONL transcript is closed over
+    /// the operator oracle.
+    pub consensus_inputs_fingerprint: Hash32,
+    /// Epoch the imported consensus-inputs pertain to. Used to
+    /// label the cross-epoch guard's halt and is the only epoch
+    /// the underlying [`LedgerView`] answers for (DC-VIEW-01).
+    pub consensus_inputs_epoch: EpochNo,
+    /// First slot of the imported epoch (inclusive). Peer blocks
+    /// with slot `< this` are rejected pre-admit with
+    /// [`AdmissionExitCode::CrossEpochUse`] (DC-ADMIT-11).
+    pub consensus_inputs_epoch_start_slot: SlotNo,
+    /// Last slot of the imported epoch (inclusive). Peer blocks
+    /// with slot `> this` are rejected pre-admit with
+    /// [`AdmissionExitCode::CrossEpochUse`] (DC-ADMIT-11).
+    pub consensus_inputs_epoch_end_slot: SlotNo,
 }
 
 /// SOLE admission entry point (CN-ADMIT-01).
@@ -140,6 +172,7 @@ where
     S: WalStore,
 {
     let writer = Arc::new(Mutex::new(inputs.writer));
+    let consensus_fp_hex = hex_lowercase(&inputs.consensus_inputs_fingerprint.0);
 
     emit(
         &writer,
@@ -147,6 +180,7 @@ where
             peer_count: inputs.peer_count,
             json_seed_path: inputs.json_seed_path.clone(),
             wal_dir: inputs.wal_dir.clone(),
+            consensus_inputs_fingerprint_hex: consensus_fp_hex.clone(),
         },
     )
     .await;
@@ -156,6 +190,7 @@ where
         AdmissionLogEvent::BootstrapComplete {
             initial_ledger_fp_hex: format!("{}", inputs.anchor_initial_ledger_fp),
             chain_tip_slot: inputs.initial_chain_tip_slot,
+            consensus_inputs_fingerprint_hex: consensus_fp_hex.clone(),
         },
     )
     .await;
@@ -223,6 +258,28 @@ where
                         }
                     }
                     Some(AdmissionPeerEvent::Block { peer, block_bytes }) => {
+                        // C2 pre-admit epoch-window guard
+                        // (DC-ADMIT-11). Decode just enough to
+                        // recover the block slot; if it is
+                        // outside the imported epoch window, halt
+                        // immediately WITHOUT calling
+                        // admit_via_block_validity (¬P-C2).
+                        if let Ok(slot) = peek_block_slot(&block_bytes) {
+                            if slot < inputs.consensus_inputs_epoch_start_slot
+                                || slot > inputs.consensus_inputs_epoch_end_slot
+                            {
+                                let _ = peer;
+                                emit(
+                                    &writer,
+                                    AdmissionLogEvent::AdmissionHalted {
+                                        reason: AdmissionHaltReason::CrossEpochUse,
+                                    },
+                                )
+                                .await;
+                                return AdmissionExitCode::CrossEpochUse;
+                            }
+                        }
+
                         let outcome = process_block(
                             &block_bytes,
                             &ledger,
@@ -279,6 +336,8 @@ where
                                         slot: slot.0,
                                         block_hash_hex: hex_lowercase(&block_hash.0),
                                         post_fp_hex: format!("{}", post_fp),
+                                        consensus_inputs_fingerprint_hex: consensus_fp_hex
+                                            .clone(),
                                     },
                                 )
                                 .await;
@@ -289,7 +348,7 @@ where
                                     post_fp,
                                 };
                                 let verdict = derive_verdict(&block_admit, &latest_peer_tip);
-                                emit_verdict(&writer, &verdict).await;
+                                emit_verdict(&writer, &verdict, &consensus_fp_hex).await;
                                 if let Some(halt) = halt_for_verdict(&verdict) {
                                     emit(
                                         &writer,
@@ -319,7 +378,7 @@ where
                                     reason,
                                 };
                                 let verdict = derive_verdict(&block_admit, &latest_peer_tip);
-                                emit_verdict(&writer, &verdict).await;
+                                emit_verdict(&writer, &verdict, &consensus_fp_hex).await;
                                 if let Some(halt) = halt_for_verdict(&verdict) {
                                     emit(
                                         &writer,
@@ -330,22 +389,59 @@ where
                                 }
                             }
                             ProcessedBlock::Undecodable => {
-                                // Decoding failed before slot/hash
-                                // could be extracted. Emit a halt
-                                // through BootstrapFatal — this
-                                // means the peer fed us bytes we
-                                // could not interpret as a Conway
-                                // block, which is a transport-vs-
-                                // semantic mismatch, not an
-                                // agreement comparison.
-                                emit(
-                                    &writer,
-                                    AdmissionLogEvent::AdmissionHalted {
-                                        reason: AdmissionHaltReason::BootstrapFatal,
-                                    },
-                                )
-                                .await;
-                                return AdmissionExitCode::Ok; // not fatal exit; treat as clean drain. (see B6 test invariants)
+                                // C3 strengthening of N-M-B's
+                                // silent-clean-exit path
+                                // (DC-ADMIT-12 / ¬P-C9). The peer
+                                // fed us bytes the Conway BLUE
+                                // decoder rejected. Adversarial by
+                                // default:
+                                //   - If a peer tip exists at any
+                                //     slot, emit Diverged at that
+                                //     slot (we couldn't decode, so
+                                //     hashes can't be compared —
+                                //     surface as Diverged with our
+                                //     hash = zero-hash sentinel +
+                                //     peer hash from tip).
+                                //   - If no peer tip exists yet,
+                                //     emit
+                                //     AdmissionHalted {
+                                //       reason: PeerSentUndecodableBytes
+                                //     }.
+                                // In NO case do we return Ok or
+                                // emit InputNotFound (¬P-C7).
+                                match &latest_peer_tip.point {
+                                    ade_network::codec::chain_sync::Point::Block {
+                                        slot: peer_slot,
+                                        hash: peer_hash,
+                                    } => {
+                                        let verdict = AgreementVerdict::Diverged {
+                                            slot: *peer_slot,
+                                            our_hash: Hash32([0u8; 32]),
+                                            peer_hash: peer_hash.clone(),
+                                        };
+                                        emit_verdict(&writer, &verdict, &consensus_fp_hex)
+                                            .await;
+                                        emit(
+                                            &writer,
+                                            AdmissionLogEvent::AdmissionHalted {
+                                                reason: AdmissionHaltReason::Diverged,
+                                            },
+                                        )
+                                        .await;
+                                        return AdmissionExitCode::Diverged;
+                                    }
+                                    ade_network::codec::chain_sync::Point::Origin => {
+                                        emit(
+                                            &writer,
+                                            AdmissionLogEvent::AdmissionHalted {
+                                                reason:
+                                                    AdmissionHaltReason::PeerSentUndecodableBytes,
+                                            },
+                                        )
+                                        .await;
+                                        return AdmissionExitCode::PeerSentUndecodableBytes;
+                                    }
+                                }
                             }
                         }
                     }
@@ -423,12 +519,17 @@ fn halt_to_exit(reason: AdmissionHaltReason) -> AdmissionExitCode {
         AdmissionHaltReason::InputNotFound => AdmissionExitCode::InputNotFound,
         AdmissionHaltReason::WalAppendIo => AdmissionExitCode::WalAppendIo,
         AdmissionHaltReason::BootstrapFatal => AdmissionExitCode::Ok,
+        AdmissionHaltReason::CrossEpochUse => AdmissionExitCode::CrossEpochUse,
+        AdmissionHaltReason::PeerSentUndecodableBytes => {
+            AdmissionExitCode::PeerSentUndecodableBytes
+        }
     }
 }
 
 async fn emit_verdict<W: Write + Send + 'static>(
     writer: &Arc<Mutex<AdmissionLogWriter<W>>>,
     v: &AgreementVerdict,
+    consensus_fp_hex: &str,
 ) {
     let kind = verdict_kind(v);
     let (slot, our_h, peer_h, peer_slot, tx_in) = match v {
@@ -464,9 +565,22 @@ async fn emit_verdict<W: Write + Send + 'static>(
             peer_hash_hex: peer_h,
             peer_slot,
             tx_in_hex: tx_in,
+            consensus_inputs_fingerprint_hex: consensus_fp_hex.to_string(),
         },
     )
     .await;
+}
+
+/// Decode just enough of a peer's block CBOR to recover the slot
+/// number, for the C2 pre-admit epoch-window guard
+/// (DC-ADMIT-11). Returns the slot on success; returns an empty
+/// error on any decode failure (the runner does not branch on the
+/// decode-error class — undecodable bytes fall through to the
+/// normal `process_block` path, where C3 tightens the handling).
+fn peek_block_slot(block_bytes: &[u8]) -> Result<SlotNo, ()> {
+    decode_block(block_bytes)
+        .map(|d| d.header_input.slot)
+        .map_err(|_| ())
 }
 
 async fn emit<W: Write + Send + 'static>(
@@ -579,6 +693,10 @@ mod tests {
             json_seed_path: "/seed.json".into(),
             wal_dir: "/wal".into(),
             initial_chain_tip_slot: 0,
+            consensus_inputs_fingerprint: Hash32([0xCC; 32]),
+            consensus_inputs_epoch: EpochNo(0),
+            consensus_inputs_epoch_start_slot: SlotNo(0),
+            consensus_inputs_epoch_end_slot: SlotNo(u64::MAX),
         }
     }
 

@@ -18,3 +18,8 @@ corpus/tools/.env
 # Multi-GB ledger-state dumps belong in S3 (ade-corpus-snapshots), never in git
 corpus/ext_ledger_state_dumps/
 corpus/snapshots/
+
+# Operator-extracted live evidence — large UTxO seed must stay out
+# of git. The transcript + consensus-inputs bundle are committed.
+docs/evidence/phase4-n-m-c-utxo-seed.json
+docs/evidence/*-utxo-seed.json
