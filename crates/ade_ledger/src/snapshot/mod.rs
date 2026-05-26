@@ -24,6 +24,7 @@ pub mod cert_state;
 pub mod chain_dep;
 pub mod epoch_state;
 pub mod error;
+pub mod framing;
 pub mod gov_state;
 pub mod ledger;
 pub mod utxo_state;
@@ -32,6 +33,7 @@ pub use cert_state::{decode_cert_state, encode_cert_state};
 pub use chain_dep::{decode_chain_dep, encode_chain_dep};
 pub use epoch_state::{decode_epoch_state, encode_epoch_state};
 pub use error::{SnapshotDecodeError, SnapshotEncodeError, StructuralReason};
+pub use framing::{decode_snapshot, encode_snapshot, SCHEMA_VERSION};
 pub use gov_state::{
     decode_conway_deposit_params, decode_gov_state, decode_pparams, encode_conway_deposit_params,
     encode_gov_state, encode_pparams,

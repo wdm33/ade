@@ -2784,10 +2784,20 @@ wall-clock, no floats, no rand. Definite-length CBOR containers.
 """
 source = "docs/planning/persistent-snapshot-encoder-invariants.md §1 (I-2)"
 cross_ref = ["T-DET-01", "T-ENC-01", "DC-CONS-21"]
-code_locus = ""
-tests = []
-ci_script = ""
-status = "declared"
+code_locus = "crates/ade_ledger/src/snapshot/{chain_dep,utxo_state,cert_state,epoch_state,gov_state,ledger,framing}.rs"
+tests = [
+    "snapshot::chain_dep::tests::chain_dep_encode_deterministic_across_runs",
+    "snapshot::utxo_state::tests::utxo_state_encode_deterministic_across_runs",
+    "snapshot::cert_state::tests::cert_state_encode_deterministic_across_runs",
+    "snapshot::epoch_state::tests::epoch_state_encode_deterministic_across_runs",
+    "snapshot::gov_state::tests::pparams_encode_deterministic_across_runs",
+    "snapshot::gov_state::tests::gov_state_encode_deterministic_across_runs",
+    "snapshot::ledger::tests::ledger_state_encode_deterministic_across_runs",
+    "snapshot::framing::tests::snapshot_encode_deterministic_across_runs",
+    "snapshot::framing::tests::round_trip_via_fingerprint_combined",
+]
+ci_script = "ci/ci_check_snapshot_encoder_closure.sh"
+status = "enforced"
 
 [[rules]]
 id = "DC-STORE-09"
@@ -2801,10 +2811,14 @@ the decoded state and rejects on mismatch.
 """
 source = "docs/planning/persistent-snapshot-encoder-invariants.md §1 (I-3, I-4)"
 cross_ref = ["DC-CONS-21", "DC-STORE-08"]
-code_locus = ""
-tests = []
-ci_script = ""
-status = "declared"
+code_locus = "crates/ade_ledger/src/snapshot/framing.rs"
+tests = [
+    "snapshot::framing::tests::snapshot_round_trip",
+    "snapshot::framing::tests::decode_rejects_unknown_version",
+    "snapshot::framing::tests::decode_rejects_fingerprint_mismatch",
+]
+ci_script = "ci/ci_check_snapshot_encoder_closure.sh"
+status = "enforced"
 
 [[rules]]
 id = "CN-STORE-08"
@@ -2819,9 +2833,9 @@ Type-level + CI grep enforcement, mirroring CN-STORE-07.
 """
 source = "docs/planning/persistent-snapshot-encoder-invariants.md §1 (I-5)"
 cross_ref = ["CN-STORE-07", "DC-CONS-21", "DC-STORE-08"]
-code_locus = ""
+code_locus = "crates/ade_ledger/src/snapshot/{ledger,chain_dep,framing}.rs"
 tests = []
-ci_script = ""
-status = "declared"
+ci_script = "ci/ci_check_snapshot_encoder_closure.sh"
+status = "enforced"
 attack_rationale = "A parallel encoder may produce bytes that don't satisfy round-trip equivalence — a corruption attack vector if the wrong encoder is invoked."
 evidence_notes = "Enforcement is type-level (single module hosts the encoder/decoder pair) + CI grep (no other pub fn returning Vec<u8> from &LedgerState or &PraosChainDepState across the workspace)."
