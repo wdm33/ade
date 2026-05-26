@@ -2765,3 +2765,63 @@ status = "enforced"
 authority_surface = "snapshot cadence decision + in-memory cache"
 cluster = "PHASE4-N-I"
 evidence = ["should_snapshot_after_block_is_pure replays inputs and asserts identical outputs across two runs.", "CI gate ci_check_snapshot_cadence_purity.sh enforces that SnapshotCadence has exactly one field (every_n_blocks) — no operator-tunable runtime input.", "InMemorySnapshotCache uses BTreeMap iteration only (no HashMap); iteration test pins ordering."]
+
+# =============================================================================
+# Persistent ledger snapshot encoder — invariants sketched, cluster TBD
+# Sketch: docs/planning/persistent-snapshot-encoder-invariants.md
+# Status: "declared" — enforcement debt to be closed by slices in the
+# persistent-encoder cluster (PHASE4-N-J candidate). Closes DC-CONS-21
+# open_obligation on cluster final-slice (S8) merge.
+# =============================================================================
+
+[[rules]]
+id = "DC-STORE-08"
+tier = "derived"
+statement = """
+Snapshot encoder canonicality: encode_snapshot(s) is byte-identical
+across runs. Encoder uses BTreeMap iteration only; no HashMap, no
+wall-clock, no floats, no rand. Definite-length CBOR containers.
+"""
+source = "docs/planning/persistent-snapshot-encoder-invariants.md §1 (I-2)"
+cross_ref = ["T-DET-01", "T-ENC-01", "DC-CONS-21"]
+code_locus = ""
+tests = []
+ci_script = ""
+status = "declared"
+
+[[rules]]
+id = "DC-STORE-09"
+tier = "derived"
+statement = """
+Snapshot bytes carry a closed u32 version tag (initial == 1) and
+the source state's blake2b-256 fingerprint. Decoder reads the
+version tag first and rejects unknown versions before decoding the
+ledger or chain-dep payload; decoder recomputes the fingerprint on
+the decoded state and rejects on mismatch.
+"""
+source = "docs/planning/persistent-snapshot-encoder-invariants.md §1 (I-3, I-4)"
+cross_ref = ["DC-CONS-21", "DC-STORE-08"]
+code_locus = ""
+tests = []
+ci_script = ""
+status = "declared"
+
+[[rules]]
+id = "CN-STORE-08"
+tier = "release"
+statement = """
+Single encoder authority: encode_ledger_state + decode_ledger_state
++ encode_chain_dep + decode_chain_dep + encode_snapshot +
+decode_snapshot are the SOLE pub fn pairs in the project encoding
+or decoding LedgerState / PraosChainDepState / (LedgerState,
+PraosChainDepState) to/from bytes. No parallel canonical encoders.
+Type-level + CI grep enforcement, mirroring CN-STORE-07.
+"""
+source = "docs/planning/persistent-snapshot-encoder-invariants.md §1 (I-5)"
+cross_ref = ["CN-STORE-07", "DC-CONS-21", "DC-STORE-08"]
+code_locus = ""
+tests = []
+ci_script = ""
+status = "declared"
+attack_rationale = "A parallel encoder may produce bytes that don't satisfy round-trip equivalence — a corruption attack vector if the wrong encoder is invoked."
+evidence_notes = "Enforcement is type-level (single module hosts the encoder/decoder pair) + CI grep (no other pub fn returning Vec<u8> from &LedgerState or &PraosChainDepState across the workspace)."

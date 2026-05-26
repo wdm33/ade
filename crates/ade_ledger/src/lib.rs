@@ -40,6 +40,7 @@ pub mod rollback;
 pub mod rules;
 pub mod scripts;
 pub mod shelley;
+pub mod snapshot;
 pub mod state;
 pub mod tx_validity;
 pub mod utxo;
