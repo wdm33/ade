@@ -3224,10 +3224,75 @@ cardano-node's chain and Ade's chain agree under real-wire
 conditions.
 """
 source = "docs/planning/phase4-n-l-wire-protocol-invariants.md §8"
-cross_ref = ["RO-LIVE-01", "RO-LIVE-02"]
+cross_ref = ["RO-LIVE-01", "RO-LIVE-02", "RO-LIVE-04", "RO-LIVE-05"]
 code_locus = ""
 tests = []
 ci_script = ""
 status = "declared"
-open_obligation = "blocked_until_operator_peer_available"
-evidence_notes = "PHASE4-N-L (2026-05-26) shipped the mechanical wire layer that makes this pass runnable (n2n_dialer + mux_pump + session reducer). The actual live operator pass remains operator-action work — a one-slice follow-on cluster (PHASE4-N-L-LIVE) closes it."
+open_obligation = "blocked_until_RO-LIVE-05_close"
+evidence_notes = "PHASE4-N-L (2026-05-26) shipped the mechanical wire layer that makes the wire half of this pass runnable. At PHASE4-N-L-LIVE planning (2026-05-26) the rule was split along the layer boundary per [[feedback-shell-must-not-overstate-semantic-truth]]: the literal statement bundles two distinct claims (wire liveness + ledger agreement) that must be evidenced separately. RO-LIVE-04 carries the wire-only smoke claim; RO-LIVE-05 carries the admission/agreement claim. PHASE4-N-L-LIVE (2026-05-26) CLOSED RO-LIVE-04 (operator pass against the local docker cardano-node-preprod produced handshake_ok at v15 + peer_tip_read at slot 23013663). RO-LIVE-05 remains blocked on a ledger-seed cluster (PHASE4-N-M-LEDGER-SEED or equivalent). RO-LIVE-03 flips to enforced when RO-LIVE-05 also closes."
+
+[[rules]]
+id = "RO-LIVE-04"
+tier = "release"
+statement = """
+Live wire-smoke pass: operator runs `ade_node --mode wire_only
+--peer ADDR --network NAME` against a private cardano-node peer.
+The binary opens TCP, completes the N2N handshake, issues one
+chain-sync FindIntersect(Origin), reads the peer's announced tip,
+emits a closed-vocabulary JSONL log of the exchange, and exits
+cleanly. The JSONL event vocabulary is closed: only
+node_started / peer_dial_started / handshake_ok / peer_tip_read /
+peer_dial_failed / wire_smoke_complete / node_shutdown variants
+are emitted. The wire-only mode MUST NOT emit
+agreement_verdict / admitted_block / ledger_applied /
+projection_updated (CI grep enforces). The pass closes the
+wire-liveness half of RO-LIVE-03.
+"""
+source = "docs/planning/phase4-n-l-live-wire-smoke-invariants.md §1"
+cross_ref = ["RO-LIVE-03", "CN-SESS-01", "CN-SESS-02", "CN-SESS-03"]
+code_locus = "crates/ade_node/src/wire_only.rs, crates/ade_node/src/live_log/event.rs, crates/ade_node/src/live_log/writer.rs, crates/ade_node/src/main.rs"
+tests = [
+    "crates/ade_node/tests/wire_only_loopback.rs::main_wire_only_exits_zero_after_tip_read",
+    "crates/ade_node/tests/wire_only_loopback.rs::main_wire_only_emits_peer_tip_read_with_responder_tip",
+    "crates/ade_node/tests/wire_only_loopback.rs::main_wire_only_never_emits_agreement_verdict",
+    "crates/ade_node/tests/wire_only_loopback.rs::main_without_genesis_does_not_attempt_admission",
+    "crates/ade_node/tests/wire_only_loopback.rs::peer_dial_failure_exits_nonzero_with_error_event",
+    "crates/ade_node/tests/wire_only_loopback.rs::admission_mode_fails_closed_with_ledger_seed_unavailable",
+    "crates/ade_node/tests/wire_only_loopback.rs::jsonl_events_are_valid_one_object_per_line",
+    "crates/ade_node/src/live_log/writer.rs::tests::live_log_writer_emits_one_object_per_line",
+    "crates/ade_node/src/live_log/writer.rs::tests::live_log_writer_serializes_node_started_canonically",
+    "crates/ade_node/src/live_log/writer.rs::tests::live_log_writer_two_runs_are_byte_identical",
+    "crates/ade_node/src/live_log/event.rs::tests::live_log_event_match_is_exhaustive",
+]
+ci_script = "ci/ci_check_wire_only_event_vocabulary_closed.sh, ci/ci_check_wire_only_no_bootstrap.sh"
+status = "enforced"
+strengthened_in = ["PHASE4-N-L-LIVE"]
+evidence_notes = "PHASE4-N-L-LIVE (2026-05-26) operator pass against the local docker cardano-node-preprod (ghcr.io/intersectmbo/cardano-node:11.0.1, 127.0.0.1:3001, preprod magic=1): handshake_ok at negotiated_version=15, peer_tip_read at slot=23013663 block_no=720328 hash=2a2fd42f8f1a3f9fc4faf3d448c5b3d84a8c5d0b1039aa90b5c022e11cb4704f, wire_smoke_complete with admission_enabled=false, exit 0. Captured JSONL at docs/clusters/completed/PHASE4-N-L-LIVE/CE-N-L-LIVE-LIVE.log. The cluster's mechanical half (7 integration tests + 13 lib tests + 2 CI gates) shipped first; the operator pass is the live-evidence half."
+
+[[rules]]
+id = "RO-LIVE-05"
+tier = "release"
+statement = """
+Live admission-agreement pass: operator runs `ade_node` against
+a private cardano-node peer with admission enabled (bootstrap
+loads a real initial ledger state from either a genesis-bundle
+seed or an imported cardano-node ledger snapshot), follows the
+peer's chain, admits blocks via the single admit authority
+(CN-CONS-08), and emits a JSONL log of (peer_tip, ade_tip,
+agreement_verdict) per admitted block over a 30-minute window.
+Closes the admission/agreement half of RO-LIVE-03.
+
+Blocked on a ledger-seed cluster (PHASE4-N-M-LEDGER-SEED or
+equivalent) that ships either a genesis-JSON → initial-LedgerState
+builder or a cardano-node ledger-snapshot importer. Without
+either, `bootstrap_initial_state` returns GenesisRequiredButAbsent
+and the binary cannot enter the admission loop.
+"""
+source = "docs/planning/phase4-n-l-live-wire-smoke-invariants.md §1"
+cross_ref = ["RO-LIVE-03", "CN-CONS-08", "CN-STORE-07", "CN-NODE-01"]
+code_locus = ""
+tests = []
+ci_script = ""
+status = "declared"
+open_obligation = "blocked_until_ledger_seed_cluster"

@@ -1,0 +1,6 @@
+{"event":"node_started","mode":"wire_only","peer_count":1}
+{"event":"peer_dial_started","peer":"127.0.0.1:3001"}
+{"event":"handshake_ok","peer":"127.0.0.1:3001","negotiated_version":15}
+{"event":"peer_tip_read","peer":"127.0.0.1:3001","slot":23013663,"hash_hex":"2a2fd42f8f1a3f9fc4faf3d448c5b3d84a8c5d0b1039aa90b5c022e11cb4704f","block_no":720328}
+{"event":"wire_smoke_complete","admission_enabled":false,"peer_count_ok":1,"peer_count_failed":0}
+{"event":"node_shutdown","reason":"tip_read_complete"}

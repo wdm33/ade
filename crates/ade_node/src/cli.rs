@@ -18,6 +18,27 @@
 
 use std::path::PathBuf;
 
+/// Closed mode discriminator. `WireOnly` is the only mode this
+/// cluster (PHASE4-N-L-LIVE) ships. `Admission` is the
+/// placeholder for `RO-LIVE-05` / `PHASE4-N-M-LEDGER-SEED`; the
+/// binary fail-closed-exits when invoked in admission mode
+/// without a ledger seed prerequisite.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Mode {
+    WireOnly,
+    Admission,
+}
+
+impl Mode {
+    pub fn parse(s: &str) -> Option<Self> {
+        match s {
+            "wire_only" => Some(Self::WireOnly),
+            "admission" => Some(Self::Admission),
+            _ => None,
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Cli {
     pub genesis_path: PathBuf,
@@ -26,6 +47,9 @@ pub struct Cli {
     pub snapshot_store_path: Option<PathBuf>,
     pub listen_addr: Option<String>,
     pub peer_addrs: Vec<String>,
+    pub mode: Mode,
+    pub log_path: PathBuf,
+    pub tip_read_timeout_secs: u32,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -33,6 +57,8 @@ pub enum CliError {
     MissingGenesisPath,
     UnknownFlag(String),
     FlagMissingValue(String),
+    UnknownMode(String),
+    InvalidTipReadTimeout(String),
 }
 
 impl Cli {
@@ -50,6 +76,9 @@ impl Cli {
         let mut snapshot_store_path: Option<PathBuf> = None;
         let mut listen_addr: Option<String> = None;
         let mut peer_addrs: Vec<String> = Vec::new();
+        let mut mode = Mode::WireOnly;
+        let mut log_path = PathBuf::from("./wire_smoke.jsonl");
+        let mut tip_read_timeout_secs: u32 = 30;
 
         while let Some(arg) = iter.next() {
             match arg.as_str() {
@@ -88,10 +117,36 @@ impl Cli {
                         .ok_or_else(|| CliError::FlagMissingValue("--peer".to_string()))?;
                     peer_addrs.push(v);
                 }
+                "--mode" => {
+                    let v = iter
+                        .next()
+                        .ok_or_else(|| CliError::FlagMissingValue("--mode".to_string()))?;
+                    mode = Mode::parse(&v).ok_or(CliError::UnknownMode(v))?;
+                }
+                "--log" => {
+                    let v = iter
+                        .next()
+                        .ok_or_else(|| CliError::FlagMissingValue("--log".to_string()))?;
+                    log_path = PathBuf::from(v);
+                }
+                "--tip-read-timeout-secs" => {
+                    let v = iter.next().ok_or_else(|| {
+                        CliError::FlagMissingValue("--tip-read-timeout-secs".to_string())
+                    })?;
+                    tip_read_timeout_secs = v
+                        .parse::<u32>()
+                        .map_err(|_| CliError::InvalidTipReadTimeout(v))?;
+                }
                 other => return Err(CliError::UnknownFlag(other.to_string())),
             }
         }
 
+        // genesis-path is required in admission mode; in wire-only
+        // mode it remains required at CLI parse time (the operator
+        // explicitly opts into "no admission" via --mode wire_only,
+        // but the flag itself is still parsed for the future
+        // admission cluster). Honest-scope: the wire-only path
+        // does not actually consume genesis_path.
         let genesis_path = genesis_path.ok_or(CliError::MissingGenesisPath)?;
         Ok(Self {
             genesis_path,
@@ -100,6 +155,9 @@ impl Cli {
             snapshot_store_path,
             listen_addr,
             peer_addrs,
+            mode,
+            log_path,
+            tip_read_timeout_secs,
         })
     }
 }

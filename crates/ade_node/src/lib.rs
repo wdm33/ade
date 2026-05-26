@@ -14,10 +14,18 @@
 #![deny(unsafe_code)]
 
 pub mod cli;
+pub mod live_log;
 pub mod node;
+pub mod wire_only;
 
-pub use cli::{Cli, CliError};
+pub use cli::{Cli, CliError, Mode};
+pub use live_log::{
+    LiveLogEvent, LiveLogWriter, ModeTag, PeerDialFailureKind, WireOnlyShutdownReason,
+};
 pub use node::{
     NodeRunError, NodeShutdownEvidence, NodeStartupInputs, run_node_until_shutdown,
     EXIT_AUTHORITY_FATAL_DECODE, EXIT_AUTHORITY_FATAL_IO, EXIT_GENERIC_STARTUP,
+};
+pub use wire_only::{
+    run_wire_only, PeerOutcome, EXIT_LIVE_PASS_PEER_FAILURE,
 };
