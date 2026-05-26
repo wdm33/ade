@@ -22,6 +22,8 @@
 
 pub mod chain_dep;
 pub mod error;
+pub mod utxo_state;
 
 pub use chain_dep::{decode_chain_dep, encode_chain_dep};
-pub use error::{SnapshotDecodeError, SnapshotEncodeError};
+pub use error::{SnapshotDecodeError, SnapshotEncodeError, StructuralReason};
+pub use utxo_state::{decode_utxo_state, encode_utxo_state};
