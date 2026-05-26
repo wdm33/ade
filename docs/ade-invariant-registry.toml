@@ -3351,9 +3351,8 @@ cross_ref = ["RO-LIVE-03", "CN-CONS-08", "CN-STORE-07", "CN-NODE-01", "DC-EVIDEN
 code_locus = "crates/ade_node/src/admission/ (full admission stack), crates/ade_runtime/src/admission/wire_pump.rs (live wire pump), crates/ade_runtime/src/consensus_inputs/ (operator-supplied LiveConsensusInputs import authority + canonical fingerprint), crates/ade_runtime/src/seed_import/ (full preprod UTxO importer; PHASE4-N-M-A1.1 closure includes reference-script + Byron Base58 + Plutus-integer-tolerant field skipping), docs/evidence/phase4-n-m-* (live transcripts + bundles + runbook)"
 tests = ["live_operator_pass_against_docker_preprod", "live_bundle_imports_with_conway_era_and_deterministic_fingerprint", "cross_epoch_block_triggers_halt_without_admit", "adversarial_corpus_rejects_all_four_mutation_classes"]
 ci_script = "ci/ci_check_live_operator_pass_scaffold.sh"
-status = "enforced_scaffolding"
-open_obligation = "blocked_until_consensus_inputs_eta0_extraction"
-strengthened_in = ["PHASE4-N-M-A1.1", "PHASE4-N-M-FRAG"]
+status = "enforced"
+strengthened_in = ["PHASE4-N-M-A1.1", "PHASE4-N-M-FRAG", "PHASE4-N-M-SCHED"]
 evidence_notes = """
 PHASE4-N-M-C (2026-05-26) CLOSED RO-LIVE-05 on the bounded statement: (1) live wire integration end-to-end against docker preprod is proven (committed wire-only transcript at slot 76910188 with handshake_ok v15 + peer_tip_read); (2) the closed LiveConsensusInputs import authority + canonical Blake2b-256 fingerprint shipped (CN-CONS-IN-01, DC-CONS-IN-02), exercised against a live preprod bundle (epoch 179, 384 pools); (3) the GREEN LiveLedgerView + epoch-window guard (DC-VIEW-01, DC-ADMIT-11) + closed AdmissionPeerEvent emission contract from the RED wire pump (CN-PUMP-01, DC-PUMP-01, DC-PUMP-02) + Undecodable-tightening (DC-ADMIT-12) shipped; (4) adversarial false-accept corpus across 4 mandatory mutation classes (DC-EVIDENCE-02) proven fail-closed.
 
@@ -3364,6 +3363,20 @@ PHASE4-N-M-A1.1 (2026-05-26) CLOSED the original A1.1 reference-script gate AND 
 This is a session-reducer slice (PHASE4-N-L or PHASE4-N-M-FRAG scope), NOT an A1.1 / C5 strengthening. A1.1 stands closed; the open obligation re-tags to reflect the newly-surfaced gate.
 
 See `docs/evidence/phase4-n-m-c-operator-pass-README.md` §8 for the diagnosis runbook + the captured `BlockFetchDecode` evidence; `[[feedback-shell-must-not-overstate-semantic-truth]]` doctrine load.
+
+PHASE4-N-M-FRAG (2026-05-27) CLOSED at HEAD `4d3dc98` shipped the session-reducer reassembly + tag-24 unwrap + chain_dep epoch_nonce wiring. Live pass against fully-synced peer then surfaced `Header(VrfCert(VerificationFailed))` at the `pool_active_stake_missing` stage with `epoch=0` — pointing at the era-schedule's epoch-number plumbing, NOT VRF / nonce / pool data.
+
+PHASE4-N-M-SCHED (2026-05-27) CLOSED RO-LIVE-05 outright. Root cause: `ade_node::admission::bootstrap::make_schedule_for_imported_window` hardcoded `start_epoch: EpochNo(0)` instead of `canonical.epoch_no`. With the schedule treating all imported-window slots as epoch 0, `LiveLedgerView` (which gates lookups by `epoch == self.inputs.epoch_no`) refused every per-pool lookup → header_validate short-circuited at the `pool_active_stake.ok_or(VerificationFailed)` line. Fix: thread `canonical.epoch_no` into `make_schedule_for_imported_window`.
+
+Committed live transcript at `docs/evidence/phase4-n-m-c-operator-pass-transcript.jsonl` records the full DC-EVIDENCE-01 statement:
+- 1 `admission_started` with `consensus_inputs_fingerprint_hex=8166ba41…`
+- 1 `bootstrap_complete` with `initial_ledger_fp_hex=65461b64…` and `chain_tip_slot=124136968`
+- 1 `block_received` at slot 124140368, peer hash `d111e613…`
+- **1 `block_admitted`** at slot 124140368, our hash `d111e613…` matches peer hash, post_fp `9528023e…`
+- **1 `agreement_verdict { kind: "agreed" }`** at slot 124140368, our_hash == peer_hash == `d111e613…`
+- 0 `agreement_verdict { kind: "diverged" }`
+- 0 `block_admitted` with mismatched hash
+- clean `admission_shutdown { reason: "signal_received" }`
 """
 
 # =============================================================================
@@ -3968,7 +3981,8 @@ code_locus = "crates/ade_runtime/src/consensus_inputs/importer.rs (import_live_c
 tests = ["consensus_inputs::importer::tests::minimal_round_trip_imports_to_typed", "consensus_inputs::importer::tests::unsupported_era_fails_fast", "consensus_inputs::importer::tests::import_is_deterministic_across_repeated_calls", "consensus_inputs::canonical::tests::import_round_trip_yields_canonical_form_with_fingerprint", "consensus_inputs::canonical::tests::fingerprint_is_deterministic_across_repeated_imports"]
 ci_scripts = ["ci/ci_check_live_consensus_inputs_closure.sh", "ci/ci_check_live_consensus_inputs_fingerprint.sh"]
 status = "enforced"
-evidence = ["PHASE4-N-M-C S1a (2026-05-26) shipped the typed-validated raw form + closed error sum + sole-authority gate. PHASE4-N-M-C S1b (2026-05-26) added the Canonical form with the canonical-CBOR Blake2b-256 fingerprint — `import_live_consensus_inputs` is the SOLE Canonical-returning authority. ade_runtime::consensus_inputs::importer::import_live_consensus_inputs the rule statement names is the C1b file-variant; the C1a raw importer is the lower-tier authority that C1b composes."]
+strengthened_in = ["PHASE4-N-M-SCHED"]
+evidence = ["PHASE4-N-M-C S1a (2026-05-26) shipped the typed-validated raw form + closed error sum + sole-authority gate. PHASE4-N-M-C S1b (2026-05-26) added the Canonical form with the canonical-CBOR Blake2b-256 fingerprint — `import_live_consensus_inputs` is the SOLE Canonical-returning authority. ade_runtime::consensus_inputs::importer::import_live_consensus_inputs the rule statement names is the C1b file-variant; the C1a raw importer is the lower-tier authority that C1b composes. PHASE4-N-M-SCHED (2026-05-27) strengthens by wiring `canonical.epoch_no` through to the admission bootstrap's `make_schedule_for_imported_window`, so the era schedule reports the correct epoch for every imported-window slot — the load-bearing fix that unblocked C5 BlockAdmitted (committed transcript at `docs/evidence/phase4-n-m-c-operator-pass-transcript.jsonl`)."]
 
 [[rules]]
 id = "DC-CONS-IN-01"
@@ -4026,9 +4040,11 @@ No ambient default view; no cross-epoch silent use.
 source = "docs/planning/phase4-n-m-c-operator-pass-invariants.md §1 (I-C4)"
 cross_ref = ["CN-CONS-IN-01", "DC-CONS-IN-02", "DC-ADMIT-11"]
 code_locus = "crates/ade_runtime/src/consensus_inputs/view.rs (LiveLedgerView LedgerView impl — 4 epoch-window guards), crates/ade_node/src/admission/runner.rs (pre-admit slot guard before process_block, returns AdmissionExitCode::CrossEpochUse)"
-tests = ["consensus_inputs::view::tests::out_of_window_epoch_returns_none", "consensus_inputs::view::tests::in_window_epoch_answers_total_active_stake", "consensus_inputs::view::tests::in_window_per_pool_lookups_return_imported_values", "consensus_inputs::view::tests::in_window_unknown_pool_returns_none"]
+tests = ["consensus_inputs::view::tests::out_of_window_epoch_returns_none", "consensus_inputs::view::tests::in_window_epoch_answers_total_active_stake", "consensus_inputs::view::tests::in_window_per_pool_lookups_return_imported_values", "consensus_inputs::view::tests::in_window_unknown_pool_returns_none", "admission::bootstrap::tests::imported_window_schedule_uses_bundle_epoch"]
 ci_scripts = ["ci/ci_check_live_ledger_view_epoch_window.sh"]
 status = "enforced"
+strengthened_in = ["PHASE4-N-M-SCHED"]
+evidence = ["PHASE4-N-M-SCHED (2026-05-27) strengthens this guard by ensuring the era-schedule reports the bundle's actual epoch_no — without this, `LiveLedgerView`'s correct epoch-window guard would return None for every block in the imported window (because the schedule reported epoch=0 for all slots, never matching `inputs.epoch_no`). Fix: `make_schedule_for_imported_window(epoch_start_slot, epoch_no)` now takes the bundle's epoch as a parameter and wires it into `EraSummary::start_epoch`. Regression test asserts `schedule.locate(slot_in_window).epoch == bundle_epoch` for non-zero epoch_no."]
 
 [[rules]]
 id = "CN-PUMP-01"
@@ -4202,13 +4218,24 @@ cross_ref = ["DC-ADMIT-01", "DC-ADMIT-10", "DC-EVIDENCE-02", "RO-LIVE-05"]
 code_locus = "crates/ade_node/tests/admission_live_operator_pass.rs (env-gated integration test with the closed transcript-shape asserts), ci/build_consensus_inputs_bundle.sh (operator-side bundle generator), crates/ade_runtime/src/seed_import/ (full preprod UTxO importer; PHASE4-N-M-A1.1 closes the prior A1.1 reference-script gate AND the A1.2 Byron-address gate), docs/evidence/phase4-n-m-c-consensus-inputs.json (committed bundle from epoch 179 docker preprod), docs/evidence/phase4-n-m-c-wire-only-transcript.jsonl (wire-integration anchor), docs/evidence/phase4-n-m-a1.1-admission-bootstrap-transcript.jsonl (1.9M-entry full preprod bootstrap transcript), docs/evidence/phase4-n-m-c-operator-pass-README.md (runbook + RO-LIVE-05 bounded statement)"
 tests = ["live_operator_pass_against_docker_preprod", "live_bundle_imports_with_conway_era_and_deterministic_fingerprint"]
 ci_scripts = ["ci/ci_check_live_operator_pass_scaffold.sh"]
-status = "enforced_scaffolding"
-open_obligation = "blocked_until_consensus_inputs_eta0_extraction"
-strengthened_in = ["PHASE4-N-M-A1.1", "PHASE4-N-M-FRAG"]
+status = "enforced"
+strengthened_in = ["PHASE4-N-M-A1.1", "PHASE4-N-M-FRAG", "PHASE4-N-M-SCHED"]
 evidence_notes = """
 PHASE4-N-M-C S5 (2026-05-26) shipped the C5 deliverable in two tiers: (a) live wire-integration is PROVEN end-to-end against the docker preprod peer (committed `phase4-n-m-c-wire-only-transcript.jsonl` carries peer_dial_started + handshake_ok + peer_tip_read + wire_smoke_complete at slot 76910188); (b) the live consensus-inputs bundle imports cleanly through `import_live_consensus_inputs` and produces a deterministic fingerprint (committed `phase4-n-m-c-consensus-inputs.json`, epoch 179, 384 pools).
 
 PHASE4-N-M-A1.1 (2026-05-26) CLOSED the original A1.1 reference-script gate by adding canonical Babbage `script_ref` (`tag(24, bytes(.cbor script))`) emission for all four cardano-node-supported script variants (SimpleScript, PlutusScriptV1/V2/V3). Concurrently surfaced and closed the A1.2 Byron-address gate (Base58-encoded Byron-era addresses, ~0.7% of preprod entries) and the Plutus-integer JSON-field tolerance (parsed-form `datum`/`inlineDatum` fields stripped from `RawUtxoEntry` because cardano-cli emits Plutus integers exceeding f64 precision). The full ~2.2 GB preprod UTxO dump now imports cleanly: 1,909,985 entries with deterministic fingerprint across runs. Committed bootstrap transcript `docs/evidence/phase4-n-m-a1.1-admission-bootstrap-transcript.jsonl` records admission_started + bootstrap_complete events with the canonical `consensus_inputs_fingerprint_hex` (4cc62d3bdbf18f1c0d98188da5e1a85090e03379068e87267384f9873cf4e920) + `initial_ledger_fp_hex` (50a4542bdc8c51016025e29d70d9f683d5d3be1f0be960649647bda68abed8eb) at chain_tip_slot 89727988 (epoch 211).
 
-2026-05-27 follow-up against a FULLY-SYNCED peer (epoch 291, slot 124134280, 100% syncProgress): bootstrap completes cleanly (4,098,066 UTxO entries imported from the live ~4 GB dump, fingerprint `5c75c2b17099f4cf43cb59ea3bdaf56d8939c38998144dc084f7877ef7077a1f`), AdmissionStarted + BootstrapComplete emit with canonical fingerprints, but the admission wire pump exits with `BlockFetchDecode` immediately after issuing the first block-fetch RequestRange. The peer log confirms: `TrHandshakeSuccess NodeToNodeV_15` → 1 sec later → `TrMuxErrored ... BearerClosed "closed when reading data, waiting on next header"`. Root cause (diagnosed via `eprintln` in `wire_pump::finalize`): the session reducer's `drain_connected_frames` emits one `DeliverPeerFrame` per mux frame, but cardano-node fragments large block-fetch responses across multiple mux frames (mux payload max = 65535 bytes; Conway preprod blocks routinely exceed this). Per-mini-protocol payload reassembly across consecutive mux frames is MISSING in the session reducer. The capture binary `crates/ade_network/src/bin/capture_block_fetch.rs::read_for_protocol` already implements the correct pattern (per-protocol byte buffer + `try_decode` predicate); the session reducer needs the same logic ported into its closed-sum drain path. This is a session-reducer slice (PHASE4-N-L or PHASE4-N-M-FRAG scope), NOT an A1.1 / C5 strengthening.
+PHASE4-N-M-FRAG (2026-05-27) CLOSED at HEAD `4d3dc98` shipped the session-reducer reassembly + tag-24 unwrap + chain_dep epoch_nonce wiring. The live pass then surfaced `Header(VrfCert(VerificationFailed))` at the `pool_active_stake_missing` stage with `epoch=0` — pointing at the era-schedule's epoch-number plumbing, NOT VRF / nonce / pool data.
+
+PHASE4-N-M-SCHED (2026-05-27) CLOSED DC-EVIDENCE-01 outright. Root cause: `ade_node::admission::bootstrap::make_schedule_for_imported_window` hardcoded `start_epoch: EpochNo(0)` instead of `canonical.epoch_no`. With the schedule treating all imported-window slots as epoch 0, `LiveLedgerView` (which gates lookups by `epoch == self.inputs.epoch_no`) refused every per-pool lookup → header_validate short-circuited at the `pool_active_stake.ok_or(VerificationFailed)` line. Fix: thread `canonical.epoch_no` into `make_schedule_for_imported_window`.
+
+Committed live transcript at `docs/evidence/phase4-n-m-c-operator-pass-transcript.jsonl` records the full DC-EVIDENCE-01 statement against a fully-synced docker preprod peer:
+- 1 `admission_started` with `consensus_inputs_fingerprint_hex=8166ba41…`
+- 1 `bootstrap_complete` with `initial_ledger_fp_hex=65461b64…` and `chain_tip_slot=124136968` (epoch 291)
+- 1 `block_received` at slot 124140368, peer hash `d111e613…`
+- **1 `block_admitted`** at slot 124140368, our hash `d111e613…` matches peer hash, `post_fp_hex=9528023e…`
+- **1 `agreement_verdict { kind: "agreed" }`** at slot 124140368, our_hash == peer_hash == `d111e613…`
+- 0 `agreement_verdict { kind: "diverged" }`
+- 0 mismatched-hash `block_admitted`
+- clean `admission_shutdown { reason: "signal_received" }`
 """

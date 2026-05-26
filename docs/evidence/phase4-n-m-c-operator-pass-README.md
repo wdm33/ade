@@ -435,3 +435,63 @@ RO-LIVE-05 is re-tagged again:
   rejections (post-FRAG). Captures the typed
   `BlockValidityError`, which makes the VRF / KES / body
   failure mode visible to the operator without a debugger.
+
+---
+
+## §10 — 2026-05-27: PHASE4-N-M-SCHED closes DC-EVIDENCE-01 + RO-LIVE-05
+
+Root cause of the residual `Header(VrfCert(VerificationFailed))`
+was NOT consensus_inputs Eta0 extraction — cardano-cli's
+`epochNonce` IS Eta0, same shape the corpus harness uses. The
+actual bug was `make_schedule_for_imported_window` hardcoding
+`start_epoch: EpochNo(0)` instead of using `canonical.epoch_no`.
+
+Surfaced via a transient BLUE-side per-stage diagnostic chain
+`praos_vrf_verify_failed: stage=...` (reverted after diagnosis
+— BLUE must not do I/O). The smoking gun was:
+
+```
+admission_admit_rejected: slot=124137791 ...
+                          error=Header(VrfCert(VerificationFailed))
+praos_vrf_verify_failed: stage=pool_active_stake_missing
+                         epoch=0
+                         issuer_pool=9772d8814b1fdf3d...
+```
+
+`epoch=0` is the signature — `LiveLedgerView` would only ever
+serve data for the bundle's actual epoch (291).
+
+The fix is one parameter on `make_schedule_for_imported_window`
+plus a regression test
+(`imported_window_schedule_uses_bundle_epoch`).
+
+### Final operator-pass transcript
+
+The full DC-EVIDENCE-01 transcript shape was captured against
+the local docker `cardano-node-preprod` peer (epoch 291, fully
+synced) and committed at
+`docs/evidence/phase4-n-m-c-operator-pass-transcript.jsonl`:
+
+```
+admission_started     consensus_inputs_fingerprint_hex=8166ba41...
+bootstrap_complete    initial_ledger_fp_hex=65461b64...
+                      chain_tip_slot=124136968
+block_received        slot=124140368 block_hash=d111e613...
+block_admitted        slot=124140368
+                      block_hash_hex=d111e613...
+                      post_fp_hex=9528023e...
+                      consensus_inputs_fingerprint_hex=8166ba41...
+agreement_verdict     kind=agreed
+                      slot=124140368
+                      our_hash_hex=peer_hash_hex=d111e613...
+                      consensus_inputs_fingerprint_hex=8166ba41...
+admission_shutdown    reason=signal_received
+```
+
+Meeting the literal DC-EVIDENCE-01 statement:
+- AT LEAST: 1 AdmissionStarted ✓, 1 BootstrapComplete ✓, ≥ 1
+  BlockAdmitted ✓, ≥ 1 AgreementVerdict { kind: "agreed" } ✓
+- AT MOST: 0 AgreementVerdict { kind: "diverged" } ✓, 0
+  mismatched-hash BlockAdmitted ✓
+
+DC-EVIDENCE-01 + RO-LIVE-05 are now `enforced`.

@@ -1,0 +1,6 @@
+{"event":"admission_started","peer_count":1,"json_seed_path":"/tmp/utxo-final.json","wal_dir":"/tmp/ade-live-test/wal-final","consensus_inputs_fingerprint_hex":"8166ba41034e96288e56b4d301746408e321d832ba7308a605fbbb8dba6adaee"}
+{"event":"bootstrap_complete","initial_ledger_fp_hex":"65461b6479aa136a0d29e5270e16619ac50a283b6349d5bc507d76ab4a9d006c","chain_tip_slot":124136968,"consensus_inputs_fingerprint_hex":"8166ba41034e96288e56b4d301746408e321d832ba7308a605fbbb8dba6adaee"}
+{"event":"block_received","peer":"127.0.0.1:3001","slot":124140368,"block_hash_hex":"d111e61337d257eeeab95de61beaf06e8bde6aa04a2de1c57955b7ce1d886ae8"}
+{"event":"block_admitted","slot":124140368,"block_hash_hex":"d111e61337d257eeeab95de61beaf06e8bde6aa04a2de1c57955b7ce1d886ae8","post_fp_hex":"9528023ed84ea368d45e67f595924ac7f4f9fcf5aa0e061f0c5292533a103e09","consensus_inputs_fingerprint_hex":"8166ba41034e96288e56b4d301746408e321d832ba7308a605fbbb8dba6adaee"}
+{"event":"agreement_verdict","kind":"agreed","slot":124140368,"our_hash_hex":"d111e61337d257eeeab95de61beaf06e8bde6aa04a2de1c57955b7ce1d886ae8","peer_hash_hex":"d111e61337d257eeeab95de61beaf06e8bde6aa04a2de1c57955b7ce1d886ae8","consensus_inputs_fingerprint_hex":"8166ba41034e96288e56b4d301746408e321d832ba7308a605fbbb8dba6adaee"}
+{"event":"admission_shutdown","reason":"signal_received"}

@@ -50,7 +50,7 @@ use ade_runtime::consensus_inputs::{
 };
 use ade_runtime::seed_import::import_cardano_cli_json_utxo;
 use ade_runtime::wal::FileWalStore;
-use ade_types::{CardanoEra, Hash32, SlotNo};
+use ade_types::{CardanoEra, EpochNo, Hash32, SlotNo};
 use tokio::sync::{mpsc, watch};
 
 use super::runner::{
@@ -191,7 +191,7 @@ async fn run_admission_inner(
     //    within that window from a single era summary.
     let canonical = import_live_consensus_inputs(&acli.consensus_inputs_path)
         .map_err(AdmissionBootstrapError::ConsensusInputsImport)?;
-    let era_schedule = make_schedule_for_imported_window(&canonical.epoch_start_slot);
+    let era_schedule = make_schedule_for_imported_window(&canonical.epoch_start_slot, canonical.epoch_no);
     let ledger_view = LiveLedgerView::new(canonical.clone());
     let consensus_inputs_fingerprint = canonical.fingerprint.clone();
     let consensus_inputs_epoch = canonical.epoch_no;
@@ -384,14 +384,25 @@ fn build_n2n_version_table(network_magic: u32) -> VersionTable {
 /// single-epoch, so a single-entry schedule with safe-zone equal
 /// to the epoch length is enough — multi-epoch admission is a
 /// future cluster (¬P-C5 / ¬P-C6).
-fn make_schedule_for_imported_window(epoch_start_slot: &SlotNo) -> EraSchedule {
+fn make_schedule_for_imported_window(
+    epoch_start_slot: &SlotNo,
+    epoch_no: EpochNo,
+) -> EraSchedule {
     EraSchedule::new(
         ade_core::consensus::BootstrapAnchorHash(Hash32([0u8; 32])),
         epoch_start_slot.0,
         vec![ade_core::consensus::EraSummary {
             era: CardanoEra::Conway,
             start_slot: *epoch_start_slot,
-            start_epoch: ade_types::EpochNo(0),
+            // PHASE4-N-M-NONCE: the imported window starts at
+            // the bundle's epoch number, NOT epoch 0. Without
+            // this `era_schedule.locate(slot).epoch` returns 0
+            // for every slot in the window, which causes
+            // `LiveLedgerView` to refuse every lookup (it gates
+            // by `epoch == inputs.epoch_no`) — surfacing as
+            // `Header(VrfCert(VerificationFailed))` at the
+            // `pool_active_stake_missing` stage.
+            start_epoch: epoch_no,
             slot_length_ms: 1_000,
             epoch_length_slots: 432_000,
             safe_zone_slots: 432_000,
@@ -410,3 +421,42 @@ fn _in_memory_chaindb_marker(_: InMemoryChainDb) {}
 // transitively through PersistentChainDb.
 #[allow(dead_code)]
 fn _snapshot_store_marker(_s: &dyn SnapshotStore) {}
+
+#[cfg(test)]
+#[allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
+mod tests {
+    use super::*;
+
+    /// PHASE4-N-M-SCHED S1 regression: the imported-window era
+    /// schedule MUST use the bundle's epoch_no as `start_epoch`,
+    /// NOT a hardcoded `EpochNo(0)`. Before this fix,
+    /// `era_schedule.locate(slot_in_window).epoch` returned 0,
+    /// which caused `LiveLedgerView` (gated by
+    /// `epoch == inputs.epoch_no`) to refuse every per-pool
+    /// lookup → cascade `Header(VrfCert(VerificationFailed))`.
+    #[test]
+    fn imported_window_schedule_uses_bundle_epoch() {
+        let epoch_start_slot = SlotNo(124_070_400);
+        let bundle_epoch = EpochNo(291);
+        let schedule = make_schedule_for_imported_window(&epoch_start_slot, bundle_epoch);
+
+        // A slot well inside the window must resolve to the
+        // bundle's epoch, not 0.
+        let inside_slot = SlotNo(124_140_000);
+        let location = schedule
+            .locate(inside_slot)
+            .expect("imported window must resolve a slot in its declared range");
+        assert_eq!(
+            location.epoch, bundle_epoch,
+            "imported window must resolve slot {} to epoch {}, got {:?}",
+            inside_slot.0, bundle_epoch.0, location.epoch
+        );
+
+        // The first slot of the window also belongs to the
+        // bundle's epoch.
+        let first_loc = schedule
+            .locate(epoch_start_slot)
+            .expect("start of window must resolve");
+        assert_eq!(first_loc.epoch, bundle_epoch);
+    }
+}
