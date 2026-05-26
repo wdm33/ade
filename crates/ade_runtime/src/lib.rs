@@ -7,9 +7,12 @@
 
 #![deny(unsafe_code)]
 
+pub mod bootstrap;
 pub mod chaindb;
+pub mod clock;
 pub mod consensus;
 pub mod network;
+pub mod orchestrator;
 pub mod producer;
 pub mod receive;
 pub mod recovery;

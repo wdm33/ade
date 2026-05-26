@@ -1,6 +1,5 @@
 {
-  "_comment": "Ade — IDD opt-in. Per ~/.claude/methodology/idd-config.example.json.",
-
+  "_comment": "Ade \u2014 IDD opt-in. Per ~/.claude/methodology/idd-config.example.json.",
   "core_paths": [
     "crates/ade_ledger/",
     "crates/ade_codec/",
@@ -19,34 +18,24 @@
     "crates/ade_network/src/n2c/"
   ],
   "_core_paths_doc": "BLUE crates per CLAUDE.md. ade_runtime is RED (shell); ade_testkit and ade_node are neither. ade_network has per-submodule BLUE scoping: mux::frame is BLUE; mux::transport and session are RED. ade_core::consensus (S-B1 onward) is BLUE under the already-listed crate prefix. Substring matches against absolute file paths.",
-
   "test_cmd": "cargo test --workspace",
   "replay_cmd": "cargo test -p ade_testkit",
   "_replay_cmd_doc": "ade_testkit hosts boundary_replay, differential_*_replay, ledger_determinism, and stateful_replay test suites.",
-
   "replay_on_stop": false,
   "_replay_on_stop_doc": "Disabled by default. Phase 4 test runtime is acceptable but full replay across all eras is not sub-second; flip to true once selective replay is introduced.",
-
   "templates_dir": null,
-
   "clusters_dir": "docs/clusters",
   "_clusters_dir_doc": "Canonical IDD location. Currently contains PHASE4-N-D (in-flight). Closed Phase 0A/0B/1/2A/2C clusters remain at docs/completed/phase_*/ as historical anchors.",
-
   "cluster_id_format": "named",
   "_cluster_id_format_doc": "Cluster IDs use the PHASE<N>-<LETTER> convention (e.g., PHASE4-N-A, PHASE4-N-D). Slash commands pass the cluster id as the literal directory name under docs/clusters/.",
-
   "clusters_archive_dir": "docs/clusters/completed",
   "_clusters_archive_dir_doc": "Where /cluster-close moves cluster docs upon closure. Created on demand.",
-
   "planning_doc": "docs/active/phase_4_cluster_plan.md",
   "_planning_doc_doc": "Active phase plan. /cluster-doc reads this when seeding new cluster docs (N-A, N-B, N-C, N-E, N-F).",
-
   "grounding_docs_dir": "docs",
   "_grounding_docs_dir_doc": "Where the four grounding docs live: ade-CODEMAP.md, ade-SEAMS.md, ade-HEAD_DELTAS.md, ade-TRACEABILITY.md.",
-
-  "head_deltas_baseline": "d509f02",
-  "_head_deltas_baseline_doc": "Phase 3 handoff snapshot ('docs(phase-3): handoff snapshot — 6/9 CEs closed, CE-88 strong partial'). HEAD_DELTAS narrates Phase 4 cluster N-D work plus the IDD-canonical scaffolding shipped after this point. Update on next phase boundary.",
-
+  "head_deltas_baseline": "1946573",
+  "_head_deltas_baseline_doc": "PHASE4-N-K handoff ('docs(planning): PHASE4-N-K invariants sketch + register DC-NODE/CN-NODE families', 2026-05-26). HEAD_DELTAS narrates the PHASE4-N-K cluster (orchestrator + ade_node binary closure). Bump on each cluster close to keep HEAD_DELTAS per-cluster and reviewable.",
   "normative_docs": [
     "docs/active/CE-79_gate_statement.md",
     "docs/active/CE-79_tier5_addendum.md",
@@ -56,15 +45,12 @@
     "CLAUDE.md"
   ],
   "_normative_docs_doc": "Files /traceability reads to extract rules. Tier-gate statement and its Tier 5 addendum carry the most enforced rules; the contract docs anchor cross-surface invariants; CLAUDE.md carries the commit-attribution policy.",
-
   "canonical_type_registry": null,
   "_canonical_type_registry_doc": "No separate canonical-type registry file yet; canonical-type rules live inline in the invariant registry under family T.",
-
   "invariant_registry": "docs/ade-invariant-registry.toml",
   "_invariant_registry_doc": "Canonical, append-only invariant registry. Schema follows ziranity-v3's constitution_rule_registry.toml (base fields identical), additively compatible with the IDD template. 147 entries at HEAD across families T (true), CN (constraint network), DC (derived constraint), OP (operational), RO (release obligation).",
-
   "ci_dirs": [
     "ci"
   ],
-  "_ci_dirs_doc": "No .github/workflows in this repo yet — CI scripts live as `ci/ci_check_*.sh`. Add '.github/workflows' here when workflows are added."
+  "_ci_dirs_doc": "No .github/workflows in this repo yet \u2014 CI scripts live as `ci/ci_check_*.sh`. Add '.github/workflows' here when workflows are added."
 }

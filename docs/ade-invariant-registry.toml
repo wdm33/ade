@@ -31,7 +31,7 @@ status = "enforced"
 authority_surface = "BLUE authoritative state transitions"
 cluster = "CL-LEDGER-VERDICT"
 evidence = ["crates/ade_testkit/tests/ledger_determinism.rs uses ade_ledger::fingerprint for byte-identical state comparison across all 7 eras", "crates/ade_testkit/tests/consensus_stream_replay.rs replays the canonical chain-selector stream twice and asserts byte-identical event lists and final orchestrator state — closes T-DET-01 for the consensus subset"]
-strengthened_in = ["PHASE4-N-B", "PHASE4-B1", "PHASE4-B2", "PHASE4-N-C", "PHASE4-N-G", "PHASE4-N-H", "PHASE4-N-I", "PHASE4-N-J"]
+strengthened_in = ["PHASE4-N-B", "PHASE4-B1", "PHASE4-B2", "PHASE4-N-C", "PHASE4-N-G", "PHASE4-N-H", "PHASE4-N-I", "PHASE4-N-J", "PHASE4-N-K"]
 
 [[rules]]
 id = "T-ENC-01"
@@ -2560,8 +2560,8 @@ ci_script = "ci/ci_check_admitted_block_closure.sh, ci/ci_check_receive_reducer_
 status = "enforced"
 authority_surface = "receive-side block admission gate"
 cluster = "PHASE4-N-H"
-strengthened_in = ["PHASE4-N-I"]
-evidence = ["AdmittedBlock has a private constructor reachable only from admit_via_block_validity. The reducer's BlockDelivered branch runs admit_via_block_validity, persists through ChainDbWrite, and only then commits state. Failure on validity invalid leaves state unchanged (test receive_apply_block_delivered_validity_invalid_rejects).", "RollBackward returns RollbackOutOfScope per Path A scope; receive state stays consistent (test receive_apply_rollback_returns_out_of_scope).", "ChainDbWrite trait takes AdmittedBlock by value; no path persists raw bytes.", "PHASE4-N-I strengthening: admit + rollback symmetry — every rollback materializes via the same block_validity authority (replay-forward fold composes block_validity per block). materialize_rolled_back_state is the SOLE pub fn returning (LedgerState, PraosChainDepState) — CN-STORE-07 mirrors this admission gate for the rollback path."]
+strengthened_in = ["PHASE4-N-I", "PHASE4-N-K"]
+evidence = ["AdmittedBlock has a private constructor reachable only from admit_via_block_validity. The reducer's BlockDelivered branch runs admit_via_block_validity, persists through ChainDbWrite, and only then commits state. Failure on validity invalid leaves state unchanged (test receive_apply_block_delivered_validity_invalid_rejects).", "RollBackward returns RollbackOutOfScope per Path A scope; receive state stays consistent (test receive_apply_rollback_returns_out_of_scope).", "ChainDbWrite trait takes AdmittedBlock by value; no path persists raw bytes.", "PHASE4-N-I strengthening: admit + rollback symmetry — every rollback materializes via the same block_validity authority (replay-forward fold composes block_validity per block). materialize_rolled_back_state is the SOLE pub fn returning (LedgerState, PraosChainDepState) — CN-STORE-07 mirrors this admission gate for the rollback path.", "PHASE4-N-K strengthening: admit path now driven end-to-end by the production orchestrator (orchestrator::core::step) via the GREEN dispatch_*_inbound wrappers. The orchestrator never reconstructs AdmittedBlock and never bypasses receive_apply; per-peer dispatch errors halt only that peer (DC-NODE-01)."]
 attack_rationale = "A peer that can sneak unvalidated bytes into our ChainDb pollutes the ledger downstream and forces divergence from the rest of the network."
 evidence_notes = "Enforcement is type-level: AdmittedBlock token has a private constructor reachable only from a block_validity::Valid branch; the ChainDb-write wrapper takes AdmittedBlock by value. AdmittedBlock is deliberately a distinct type from AcceptedBlock to keep producer/receive gates non-interfering."
 
@@ -2700,8 +2700,8 @@ tests = [
 ]
 ci_script = "ci/ci_check_snapshot_encoder_closure.sh"
 status = "enforced"
-strengthened_in = ["PHASE4-N-J"]
-notes = "PHASE4-N-J (2026-05-26) closed the open_obligation: snapshot::framing::{encode_snapshot,decode_snapshot} is the canonical pair (single-authority via CN-STORE-08); the embedded fingerprint cross-check (DC-STORE-08) and version-tag check (DC-STORE-09) gate every decode; ade_runtime::rollback::PersistentSnapshotCache bridges the framing layer to SnapshotStore so restart-safe rollback now works. Cross-impl equivalence proven via persistent_cache_matches_in_memory_cache_semantics."
+strengthened_in = ["PHASE4-N-J", "PHASE4-N-K"]
+notes = "PHASE4-N-J (2026-05-26) closed the open_obligation: snapshot::framing::{encode_snapshot,decode_snapshot} is the canonical pair (single-authority via CN-STORE-08); the embedded fingerprint cross-check (DC-STORE-08) and version-tag check (DC-STORE-09) gate every decode; ade_runtime::rollback::PersistentSnapshotCache bridges the framing layer to SnapshotStore so restart-safe rollback now works. Cross-impl equivalence proven via persistent_cache_matches_in_memory_cache_semantics. PHASE4-N-K (2026-05-26) strengthening: round-trip equivalence now exercised end-to-end at bootstrap warm-start (bootstrap_warm_start_materializes_from_persistent_snapshot, bootstrap_warm_start_equals_direct_materialize) and at shutdown-resume (shutdown_then_resume_produces_byte_identical_state)."
 
 [[rules]]
 id = "DC-CONS-22"
@@ -2747,8 +2747,8 @@ ci_script = "ci/ci_check_rollback_materialize_closure.sh"
 status = "enforced"
 authority_surface = "rollback materialization"
 cluster = "PHASE4-N-I"
-strengthened_in = ["PHASE4-N-J"]
-evidence = ["ci_check_rollback_materialize_closure.sh enforces single-authority via grep: no other pub fn in rollback/* returns (LedgerState, PraosChainDepState). The driver composes one SnapshotReader::nearest_le + BlockSource::blocks_in_range + per-block block_validity (positive grep for block_validity call site).", "The function takes narrow read-only traits (SnapshotReader, BlockSource), not concrete chain stores — production impls in ade_runtime (S4) go through the same single composition path.", "N-J: the second production SnapshotReader impl (PersistentSnapshotCache) goes through the SAME single materialize composition — cross-impl equivalence with InMemorySnapshotCache proven via persistent_cache_matches_in_memory_cache_semantics. CN-STORE-08 (the snapshot-encoder counterpart to CN-STORE-07) also lands."]
+strengthened_in = ["PHASE4-N-J", "PHASE4-N-K"]
+evidence = ["ci_check_rollback_materialize_closure.sh enforces single-authority via grep: no other pub fn in rollback/* returns (LedgerState, PraosChainDepState). The driver composes one SnapshotReader::nearest_le + BlockSource::blocks_in_range + per-block block_validity (positive grep for block_validity call site).", "The function takes narrow read-only traits (SnapshotReader, BlockSource), not concrete chain stores — production impls in ade_runtime (S4) go through the same single composition path.", "N-J: the second production SnapshotReader impl (PersistentSnapshotCache) goes through the SAME single materialize composition — cross-impl equivalence with InMemorySnapshotCache proven via persistent_cache_matches_in_memory_cache_semantics. CN-STORE-08 (the snapshot-encoder counterpart to CN-STORE-07) also lands.", "PHASE4-N-K strengthening: bootstrap warm-start branch routes directly through materialize_rolled_back_state (see ade_runtime::bootstrap), and ade_node binary calls bootstrap_initial_state exactly once (ci/ci_check_node_binary_uses_single_bootstrap.sh). bootstrap_warm_start_equals_direct_materialize proves bootstrap-warm-start = direct-materialize equivalence."]
 attack_rationale = "A parallel materializer can produce a rolled-back state inconsistent with what block_validity would compute, allowing peer-controlled state divergence."
 evidence_notes = "Enforcement is type-level: materialize_rolled_back_state is the sole pub fn returning the rolled-back state tuple. The function takes narrow read-only traits (SnapshotReader, BlockSource), not concrete chain stores — test-side and production-side go through the same single composition."
 
@@ -2806,6 +2806,8 @@ tests = [
 ]
 ci_script = "ci/ci_check_snapshot_encoder_closure.sh"
 status = "enforced"
+strengthened_in = ["PHASE4-N-K"]
+evidence_notes = "PHASE4-N-K (2026-05-26) strengthening: encoder canonicality now exercised by the persistent writer (PersistentSnapshotWriter::on_admitted / force_capture) and by the shutdown drain (ade_node::node::run_node_until_shutdown). Round-trip determinism asserted end-to-end in shutdown_then_resume_produces_byte_identical_state."
 
 [[rules]]
 id = "DC-STORE-09"
@@ -2827,8 +2829,9 @@ tests = [
 ]
 ci_script = "ci/ci_check_snapshot_encoder_closure.sh"
 status = "enforced"
+strengthened_in = ["PHASE4-N-K"]
 open_obligation = "snapshot_schema_migration_follow_on_cluster"
-notes = "Schema-version migration tool is the snapshot-format lifecycle home for the v1->v2 (and onward) upgrade path. The current rule already pins the fail-closed posture on unknown versions; the open_obligation captures the missing operator-facing migration tooling. NOT a node-binary concern (PHASE4-N-K DC-NODE-04 deliberately does not carry this)."
+notes = "Schema-version migration tool is the snapshot-format lifecycle home for the v1->v2 (and onward) upgrade path. The current rule already pins the fail-closed posture on unknown versions; the open_obligation captures the missing operator-facing migration tooling. NOT a node-binary concern (PHASE4-N-K DC-NODE-04 deliberately does not carry this). PHASE4-N-K (2026-05-26) restated this scoping: ade_node's authority-fatal-decode exit path (DC-NODE-04) handles unknown-version + fingerprint-mismatch at bootstrap by halting deterministically (binary_halts_on_authority_fatal_decode_error). Schema-migration tooling remains the open obligation on this rule."
 
 [[rules]]
 id = "CN-STORE-08"
@@ -2847,8 +2850,9 @@ code_locus = "crates/ade_ledger/src/snapshot/{ledger,chain_dep,framing}.rs"
 tests = []
 ci_script = "ci/ci_check_snapshot_encoder_closure.sh"
 status = "enforced"
+strengthened_in = ["PHASE4-N-K"]
 attack_rationale = "A parallel encoder may produce bytes that don't satisfy round-trip equivalence — a corruption attack vector if the wrong encoder is invoked."
-evidence_notes = "Enforcement is type-level (single module hosts the encoder/decoder pair) + CI grep (no other pub fn returning Vec<u8> from &LedgerState or &PraosChainDepState across the workspace)."
+evidence_notes = "Enforcement is type-level (single module hosts the encoder/decoder pair) + CI grep (no other pub fn returning Vec<u8> from &LedgerState or &PraosChainDepState across the workspace). PHASE4-N-K (2026-05-26) strengthening: encode/decode now driven end-to-end by the production orchestrator (bootstrap warm-start, PersistentSnapshotWriter, ade_node shutdown drain). All callers route through the single framing module — no node-binary-side reimplementation."
 
 # =============================================================================
 # PHASE4-N-K — Orchestrator + ade_node binary
@@ -2879,12 +2883,19 @@ CN-STORE-07 / CN-STORE-08.
 """
 source = "docs/planning/phase4-n-k-orchestrator-binary-invariants.md §1 (I-2)"
 cross_ref = ["CN-STORE-07", "CN-STORE-08", "DC-CONS-21"]
-code_locus = ""
-tests = []
-ci_script = ""
-status = "declared"
+code_locus = "crates/ade_runtime/src/bootstrap.rs"
+tests = [
+    "crates/ade_runtime/src/bootstrap.rs::tests::bootstrap_cold_start_returns_genesis_when_empty",
+    "crates/ade_runtime/src/bootstrap.rs::tests::bootstrap_cold_start_without_genesis_errors",
+    "crates/ade_runtime/src/bootstrap.rs::tests::bootstrap_warm_start_materializes_from_persistent_snapshot",
+    "crates/ade_runtime/src/bootstrap.rs::tests::bootstrap_warm_start_equals_direct_materialize",
+    "crates/ade_runtime/src/bootstrap.rs::tests::bootstrap_two_runs_produce_byte_identical_state",
+]
+ci_script = "ci/ci_check_bootstrap_closure.sh"
+status = "enforced"
+strengthened_in = ["PHASE4-N-K"]
 attack_rationale = "A parallel bootstrap path can produce an initial state that disagrees with the canonical materialize+decode authority chain — opening a startup-time chain-divergence vector."
-evidence_notes = "Enforcement will mirror CN-STORE-07's pattern: single pub fn in ade_runtime::bootstrap, type-level + ci/ci_check_bootstrap_closure.sh grep gate."
+evidence_notes = "PHASE4-N-K S1 (2026-05-26) shipped ade_runtime::bootstrap::bootstrap_initial_state as the SOLE pub fn returning the initial (LedgerState, PraosChainDepState, Option<ChainTip>) triple. Cold-start vs warm-start is a single in-function branch. ci/ci_check_bootstrap_closure.sh enforces the single-pub-fn + materialize-authority-call positive grep. ade_node binary (S7) calls the function exactly once (ci/ci_check_node_binary_uses_single_bootstrap.sh)."
 
 [[rules]]
 id = "DC-NODE-01"
@@ -2898,10 +2909,18 @@ sharing; each peer session owns its own working memory.
 """
 source = "docs/planning/phase4-n-k-orchestrator-binary-invariants.md §1 (I-3)"
 cross_ref = ["CN-CONS-08", "DC-CONS-20"]
-code_locus = ""
-tests = []
-ci_script = ""
-status = "declared"
+code_locus = "crates/ade_runtime/src/orchestrator/peer_session.rs, crates/ade_runtime/src/orchestrator/core.rs"
+tests = [
+    "crates/ade_runtime/tests/orchestrator_peer_isolation.rs::peer_session_isolation_holds_under_failure",
+    "crates/ade_runtime/tests/orchestrator_peer_isolation.rs::peer_session_per_peer_state_does_not_cross",
+    "crates/ade_runtime/tests/orchestrator_peer_isolation.rs::peer_disconnect_removes_only_that_peer",
+    "crates/ade_runtime/src/orchestrator/peer_session.rs::tests::peer_session_isolation_across_two_concurrent_tasks",
+    "crates/ade_runtime/src/orchestrator/core.rs::tests::step_per_peer_decode_error_isolates",
+]
+ci_script = "ci/ci_check_peer_session_isolation.sh"
+status = "enforced"
+strengthened_in = ["PHASE4-N-K"]
+evidence_notes = "PHASE4-N-K S2+S4 (2026-05-26) routed per-peer state through OrchestratorState::per_peer_receive / per_peer_server (BTreeMap keyed by PeerId). Decode/validity errors emit PeerSessionHalted (closed reason discriminant) and remove only that peer's entry; other peers + producer continue. RED tokio task in peer_session.rs owns its own mpsc::Receiver; no shared mutable state across tasks (enforced by ci/ci_check_peer_session_isolation.sh)."
 
 [[rules]]
 id = "DC-NODE-02"
@@ -2917,10 +2936,18 @@ not node cadence fidelity).
 """
 source = "docs/planning/phase4-n-k-orchestrator-binary-invariants.md §1 (I-4)"
 cross_ref = ["DC-CONS-21", "DC-STORE-08"]
-code_locus = ""
-tests = []
-ci_script = ""
-status = "declared"
+code_locus = "crates/ade_runtime/src/rollback/persistent_writer.rs, crates/ade_runtime/src/orchestrator/core.rs"
+tests = [
+    "crates/ade_runtime/src/rollback/persistent_writer.rs::tests::persistent_writer_on_admitted_captures_only_on_cadence",
+    "crates/ade_runtime/src/rollback/persistent_writer.rs::tests::persistent_writer_round_trips_via_framing",
+    "crates/ade_runtime/src/rollback/persistent_writer.rs::tests::persistent_writer_force_capture_skips_cadence_but_updates_state",
+    "crates/ade_runtime/src/rollback/persistent_writer.rs::tests::persistent_writer_two_runs_are_deterministic",
+    "crates/ade_runtime/src/orchestrator/core.rs::tests::step_admit_triggers_capture_snapshot_at_cadence",
+]
+ci_script = "ci/ci_check_persistent_writer_no_parallel_cadence.sh"
+status = "enforced"
+strengthened_in = ["PHASE4-N-K"]
+evidence_notes = "PHASE4-N-K S3 (2026-05-26) shipped PersistentSnapshotWriter that delegates every capture decision to should_snapshot_after_block (the SOLE cadence policy). The orchestrator core consults the same policy on Admitted (S2) and emits CaptureSnapshot effects only when the policy returns true. ci/ci_check_persistent_writer_no_parallel_cadence.sh greps for parallel cadence definitions across the workspace and for orchestrator-core inline modulo. Eviction is explicitly out of scope (no open_obligation carried)."
 
 [[rules]]
 id = "DC-NODE-03"
@@ -2937,10 +2964,18 @@ across runs.
 """
 source = "docs/planning/phase4-n-k-orchestrator-binary-invariants.md §1 (I-5)"
 cross_ref = ["T-DET-01"]
-code_locus = ""
-tests = []
-ci_script = ""
-status = "declared"
+code_locus = "crates/ade_runtime/src/clock.rs, crates/ade_runtime/src/orchestrator/core.rs"
+tests = [
+    "crates/ade_runtime/tests/orchestrator_replay_equivalence.rs::replay_equivalence_under_deterministic_clock_holds",
+    "crates/ade_runtime/tests/orchestrator_replay_equivalence.rs::replay_corpus_is_present_and_decodable",
+    "crates/ade_runtime/src/orchestrator/core.rs::tests::step_two_runs_produce_byte_identical_effects",
+    "crates/ade_runtime/src/clock.rs::tests::deterministic_clock_is_pure",
+    "crates/ade_runtime/src/orchestrator/leadership_session.rs::tests::leadership_session_slot_arithmetic_is_pure",
+]
+ci_script = "ci/ci_check_clock_seam.sh"
+status = "enforced"
+strengthened_in = ["PHASE4-N-K"]
+evidence_notes = "PHASE4-N-K S1+S2+S5+S8 (2026-05-26) shipped the Clock trait (with DeterministicClock + SystemClock), pinned the orchestrator core as the SOLE wall-clock-free consumer, and proved replay equivalence end-to-end via tests/orchestrator_replay_equivalence.rs. ci/ci_check_clock_seam.sh enforces that crates/ade_runtime/src/clock.rs is the sole site of SystemTime::now() / Instant::now() within ade_runtime, and that orchestrator/{core,event,state,mod}.rs contain none of tokio::time, rand, HashMap/HashSet, or f32/f64."
 
 [[rules]]
 id = "DC-NODE-04"
@@ -2964,7 +2999,14 @@ that open_obligation.
 """
 source = "docs/planning/phase4-n-k-orchestrator-binary-invariants.md §1 (I-6, I-7)"
 cross_ref = ["DC-CONS-20", "DC-CONS-21", "DC-STORE-09"]
-code_locus = ""
-tests = []
-ci_script = ""
-status = "declared"
+code_locus = "crates/ade_node/src/node.rs, crates/ade_node/src/main.rs"
+tests = [
+    "crates/ade_node/tests/shutdown_resume_identity.rs::shutdown_then_resume_produces_byte_identical_state",
+    "crates/ade_node/tests/shutdown_resume_identity.rs::shutdown_clean_exits_with_evidence",
+    "crates/ade_node/tests/shutdown_resume_identity.rs::cold_start_without_genesis_fails_with_generic_startup_code",
+    "crates/ade_node/tests/authority_fatal_decode.rs::binary_halts_on_authority_fatal_decode_error",
+]
+ci_script = "ci/ci_check_node_binary_uses_single_bootstrap.sh"
+status = "enforced"
+strengthened_in = ["PHASE4-N-K"]
+evidence_notes = "PHASE4-N-K S7 (2026-05-26) shipped ade_node::node::run_node_until_shutdown with closed authority-fatal exit-code mapping (EXIT_AUTHORITY_FATAL_IO=10, EXIT_AUTHORITY_FATAL_DECODE=12, EXIT_GENERIC_STARTUP=1) and PersistentSnapshotWriter::force_capture in the shutdown drain. shutdown_then_resume_produces_byte_identical_state proves DC-NODE-04 end-to-end on a Conway 576 corpus block. binary_halts_on_authority_fatal_decode_error proves the no-silent-retry property. Schema-migration tooling is the open_obligation on DC-STORE-09, not on this rule."

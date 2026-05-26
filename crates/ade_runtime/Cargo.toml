@@ -26,6 +26,14 @@ cardano-crypto = { version = "1.0", default-features = false, features = ["vrf-d
 # Cold-key (Ed25519) derivation in RED producer/signing. Matches the
 # ed25519-dalek version already used by ade_crypto.
 ed25519-dalek = "2"
+# Tokio is confined to the RED orchestrator runner files
+# (`orchestrator/peer_session.rs`, `orchestrator/leadership_session.rs`,
+# `orchestrator/n2n_server_pump.rs`). The GREEN orchestrator core
+# (`orchestrator/core.rs`, `orchestrator/event.rs`,
+# `orchestrator/state.rs`, `orchestrator/mod.rs`) MUST NOT import
+# tokio — enforced by `ci/ci_check_orchestrator_core_purity.sh` and
+# `ci/ci_check_clock_seam.sh`.
+tokio = { version = "1", features = ["net", "rt", "rt-multi-thread", "io-util", "macros", "time", "sync", "signal"] }
 
 [dev-dependencies]
 tempfile = "3"

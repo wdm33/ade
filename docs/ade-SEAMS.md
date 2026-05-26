@@ -3,129 +3,106 @@
 > **Status:** Living architectural document. Regenerated; not hand-edited.
 > Per-project instance of `~/.claude/methodology/templates/seams.md`.
 
-> 11 crates, **55 CI checks** at HEAD (`f15102f`).
+> 11 crates, **61 CI checks** at HEAD (`1946573`).
 > Reads CODEMAP for the module list and TCB colors; reads the invariant
-> registry (`docs/ade-invariant-registry.toml` — **209 entries**) for
+> registry (`docs/ade-invariant-registry.toml` — **214 entries**) for
 > rule IDs; reads the Phase 4 cluster plan
 > (`docs/active/phase_4_cluster_plan.md`), the closed N-D / N-A / N-B /
-> N-E / N-C / N-G / N-H / N-I / B1 / B2 / B3 / B4 / B5 cluster docs,
-> the OQ5 / COMMITTEE / DREP / ENACTMENT-COMMITTEE-FIDELITY /
+> N-E / N-C / N-G / N-H / N-I / N-J / B1 / B2 / B3 / B4 / B5 cluster
+> docs, the OQ5 / COMMITTEE / DREP / ENACTMENT-COMMITTEE-FIDELITY /
 > ENACTMENT-COMMITTEE-WRITEBACK / PROPOSAL-PROCEDURES-DECODE cluster
-> docs, and the **just-closed PHASE4-N-J cluster doc + S1..S8 slice
-> docs** (`docs/clusters/PHASE4-N-J/cluster.md` + `N-J-S{1..8}.md`).
+> docs, and the **just-closed PHASE4-N-K cluster doc + CLOSURE
+> record** (`docs/clusters/completed/PHASE4-N-K/{cluster,CLOSURE}.md`).
 >
-> **This is the PHASE4-N-J FULL CLOSE refresh (HEAD `f15102f`).** The
-> previous SEAMS (HEAD `75f75da`) pinned the PHASE4-N-I full-close
-> state and surfaced **persistent ledger snapshot encoding** as the
-> highest-priority candidate seam (`DC-CONS-21` declared,
-> `open_obligation = persistent_ledger_snapshot_encoding_follow_on_cluster`).
-> Eight N-J slices have landed between that revision and this one and
-> close that obligation:
+> **This is the PHASE4-N-K FULL CLOSE refresh (HEAD `1946573`).** The
+> previous SEAMS (HEAD `f15102f`) pinned the PHASE4-N-J full-close
+> state and surfaced "orchestrator-side persistent-capture wiring" as
+> a Tier-5 candidate. PHASE4-N-K supersedes that candidate by shipping
+> the entire orchestrator + node binary: `ade_runtime::bootstrap`,
+> `ade_runtime::clock`, `ade_runtime::orchestrator::{event, state,
+> core}`, `ade_runtime::rollback::persistent_writer`, the RED
+> tokio-runner trio (`peer_session`, `leadership_session`,
+> `n2n_server_pump`), and the `ade_node` binary
+> (`cli`, `lib`, `node`, `main`).
 >
-> 1. **N-J-S1** ships the BLUE `PraosChainDepState` encoder/decoder
->    `ade_ledger::snapshot::chain_dep::{encode_chain_dep,
->    decode_chain_dep}` + closed `SnapshotEncodeError` /
->    `SnapshotDecodeError` / `StructuralReason` sums in
->    `ade_ledger::snapshot::error`. Canonical CBOR; BTreeMap
->    iteration only; definite-length containers.
-> 2. **N-J-S2** ships the BLUE `UTxOState` encoder/decoder
->    `ade_ledger::snapshot::utxo_state::{encode_utxo_state,
->    decode_utxo_state}` — `BTreeMap<TxIn, TxOut>` traversal.
-> 3. **N-J-S3** ships the BLUE `CertState` encoder/decoder
->    `ade_ledger::snapshot::cert_state::{encode_cert_state,
->    decode_cert_state}`.
-> 4. **N-J-S4** ships the BLUE `EpochState` (+ `SnapshotState`)
->    encoder/decoder
->    `ade_ledger::snapshot::epoch_state::{encode_epoch_state,
->    decode_epoch_state}`.
-> 5. **N-J-S5** ships the BLUE `ConwayGovState` +
->    `ProtocolParameters` + `ConwayOnlyDepositParams`
->    encoder/decoder triple in
->    `ade_ledger::snapshot::gov_state::{encode_gov_state,
->    decode_gov_state, encode_pparams, decode_pparams,
->    encode_conway_deposit_params, decode_conway_deposit_params}`.
-> 6. **N-J-S6** ships the BLUE composite `LedgerState`
->    encoder/decoder
->    `ade_ledger::snapshot::ledger::{encode_ledger_state,
->    decode_ledger_state}` — assembles S2–S5 sub-state encoders in
->    canonical field order matching `ade_ledger::fingerprint`'s
->    deterministic field walk.
-> 7. **N-J-S7** ships the BLUE combined-snapshot framing layer
->    `ade_ledger::snapshot::framing::{encode_snapshot,
->    decode_snapshot, SCHEMA_VERSION}` plus CI gate
->    `ci/ci_check_snapshot_encoder_closure.sh`. Wire layout:
->    `array(4)[u32 version (== 1), bytes(32) source_fingerprint,
->    bytes ledger_state_bytes, bytes chain_dep_bytes]`. Decoder
->    verifies the version tag BEFORE any payload work (DC-STORE-09)
->    and recomputes + verifies the fingerprint AFTER decode
->    (DC-STORE-08). Registry rules `DC-STORE-08`, `DC-STORE-09`,
->    `CN-STORE-08` flip to `enforced`.
-> 8. **N-J-S8** ships the GREEN
->    `ade_runtime::rollback::persistent_cache::PersistentSnapshotCache<'a,
->    S: SnapshotStore + ?Sized>` — a pure adapter that implements
->    the BLUE `SnapshotReader` trait (from N-I-S1) over the existing
->    `SnapshotStore` trait (from N-D). Provides:
->     - `capture(slot, &ledger, &chain_dep)` — encodes via
->       `framing::encode_snapshot` and `put_snapshot`s the bytes;
->     - `impl SnapshotReader::nearest_le(target_slot)` — walks
->       `SnapshotStore::list_snapshot_slots()`, picks the largest
->       ≤ target, decodes via `framing::decode_snapshot`, surfaces
->       `None` on decode failure (decode error is treated as "no
->       usable snapshot here", not as a panic);
->     - `PERSISTENT_CACHE_SCHEMA_VERSION` re-export of
->       `framing::SCHEMA_VERSION` so out-of-crate consumers can
->       assert the wire version without depending on
->       `ade_ledger::snapshot::framing`;
->     - closed `PersistentCacheError { Encode | Decode | Store }`
->       sum.
->    Cross-impl equivalence proven via
->    `persistent_cache_matches_in_memory_cache_semantics` — for the
->    same admit sequence, persistent and in-memory caches return
->    identical `(slot, LedgerState, PraosChainDepState)` triples
->    across every probe. Registry rule `DC-CONS-21` **flips from
->    `declared` to `enforced`** with the `open_obligation` removed;
->    `strengthened_in` gains `PHASE4-N-J`.
+> **THE KEY FULL-CLOSE DELTAS.** PHASE4-N-K introduces **five new
+> seams** — all non-BLUE — that bind the existing BLUE authority
+> surface into a runnable node:
 >
-> **THE KEY FULL-CLOSE DELTAS.** The prior SEAMS revision flagged
-> "Persistent ledger snapshot encoding" as **the highest-priority
-> remaining candidate seam** (closure of `DC-CONS-21` open obligation
-> on the persistent-encoder follow-on cluster). PHASE4-N-J closes it.
-> One §1 / §3 candidate row flips from "next-cluster seam (HIGHEST
-> PRIORITY)" to "wired & closed":
+> 1. **Clock seam (DC-NODE-03).** `ade_runtime::clock::Clock` trait at
+>    `crates/ade_runtime/src/clock.rs`. Production impl `SystemClock`
+>    is the SOLE wall-clock-reading site in `ade_runtime`;
+>    test/replay impl `DeterministicClock` drives the replay harness.
+>    CI gate `ci/ci_check_clock_seam.sh` greps the orchestrator core
+>    forbidding `SystemTime::now()`/`Instant::now()`/`tokio::time::*`.
+> 2. **Orchestrator event/effect seam (DC-NODE-01, DC-NODE-03).**
+>    `ade_runtime::orchestrator::event::{OrchestratorEvent,
+>    OrchestratorEffect, OrchestratorError, PeerHaltReason,
+>    AuthorityFatalKind, PeerId, PeerRole}` are closed sum types —
+>    trait-less, data-only. The seam IS the closed event vocabulary;
+>    new event variants require a code change.
+> 3. **Bootstrap seam (CN-NODE-01).**
+>    `ade_runtime::bootstrap::bootstrap_initial_state` — single
+>    `pub fn` returning `(LedgerState, PraosChainDepState,
+>    Option<ChainTip>)`. Cold-start (genesis-only) and warm-start
+>    (snapshot-resume + replay-forward) are TWO BRANCHES OF THE SAME
+>    FUNCTION, never a parallel entry point. CI gate
+>    `ci/ci_check_bootstrap_closure.sh`.
+> 4. **Persistent writer cadence seam (DC-NODE-02).**
+>    `ade_runtime::rollback::persistent_writer::PersistentSnapshotWriter`
+>    (`on_admitted` + `force_capture`) is the SOLE caller of
+>    `PersistentSnapshotCache::capture` from cadence-driven decisions;
+>    the cadence policy itself remains in
+>    `ade_runtime::rollback::cadence::should_snapshot_after_block`
+>    (single source). CI gate
+>    `ci/ci_check_persistent_writer_no_parallel_cadence.sh`.
+> 5. **Authority-fatal exit code seam (DC-NODE-04).**
+>    `ade_node::node::{EXIT_AUTHORITY_FATAL_IO = 10,
+>    EXIT_AUTHORITY_FATAL_DECODE = 12, EXIT_GENERIC_STARTUP = 1}` is
+>    the closed exit-code surface. New fatal kinds slot in via
+>    additions to `AuthorityFatalKind` (closed sum) + mapping in
+>    `NodeRunError::exit_code`. CI gate
+>    `ci/ci_check_node_binary_uses_single_bootstrap.sh`.
 >
-> - **Persistent ledger snapshot encoding —
->   `(LedgerState, PraosChainDepState) <-> bytes`** → wired via
->   `ade_ledger::snapshot::framing::{encode_snapshot,
->   decode_snapshot}` (BLUE single-authority chokepoint pair) +
->   `ade_runtime::rollback::PersistentSnapshotCache` (GREEN
->   `SnapshotReader` impl over `SnapshotStore`), defended by
->   `ci_check_snapshot_encoder_closure.sh`. `materialize_rolled_back_state`
->   is unchanged — `PersistentSnapshotCache` drops in alongside
->   `InMemorySnapshotCache` as the second production
->   `SnapshotReader` impl.
+> **No new BLUE seams. No new registry extension points beyond the
+> closed sums above. The cluster does NOT introduce any "plugin"-style
+> registry — all orchestrator routing is closed-sum dispatch.** The
+> previous SEAMS revision's highest-priority candidate
+> ("orchestrator-side persistent-capture wiring") is **subsumed and
+> closed** by N-K: `PersistentSnapshotWriter` is the production
+> cadence-driven persistent-capture caller; the older
+> `maybe_capture_snapshot`/`InMemorySnapshotCache` hook still exists
+> in `snapshot_writer.rs` for the receive-side hot path, and the
+> persistent path now runs in parallel inside the orchestrator core
+> via `PersistentSnapshotWriter::on_admitted`.
 >
-> Counts at this refresh: **+1 CI script** (54 → 55:
-> `ci_check_snapshot_encoder_closure.sh`); **+3 registry rules**
-> introduced (`DC-STORE-08` `enforced`, `DC-STORE-09` `enforced`,
-> `CN-STORE-08` `enforced`); **1 carried rule strengthened + closed**
-> (`DC-CONS-21` gains `strengthened_in += PHASE4-N-J` and
-> `open_obligation` removed — status flips from `declared` to
-> `enforced`); **+1 new BLUE submodule tree** under
-> `ade_ledger::snapshot::{chain_dep, utxo_state, cert_state,
-> epoch_state, gov_state, ledger, framing, error}` (8 files), with
-> `framing.rs` hosting the SOLE `pub fn` pair for combined-snapshot
-> bytes (CN-STORE-08); **+1 new GREEN submodule** in
-> `ade_runtime::rollback::persistent_cache`
-> (`PersistentSnapshotCache`); **+1 new versioned schema seam**
-> (`framing::SCHEMA_VERSION: u32 = 1` — the future-migration anchor
-> for snapshot wire-format evolution); **0 new operator-action probe
-> binaries** at this HEAD — snapshot encoding is wholly internal
-> authority with no Tier-1 wire-format counterpart. Total invariant
-> registry: **209 entries** (206 → 209). **No new explicit
-> carried-forward open obligation surfaced by N-J** — snapshot
-> eviction (OQ-5 from N-I) and the carried operator-action live
-> obligations (CE-N-C-8 / CE-N-G-8 / CE-N-H-6) remain the named
-> follow-on candidates.
+> Counts at this refresh: **+6 CI scripts** (55 → 61:
+> `ci_check_bootstrap_closure.sh`, `ci_check_clock_seam.sh`,
+> `ci_check_orchestrator_core_purity.sh`,
+> `ci_check_persistent_writer_no_parallel_cadence.sh`,
+> `ci_check_peer_session_isolation.sh`,
+> `ci_check_node_binary_uses_single_bootstrap.sh`); **+5 registry
+> rules** introduced (`CN-NODE-01`, `DC-NODE-01`, `DC-NODE-02`,
+> `DC-NODE-03`, `DC-NODE-04` — all `enforced`); **6 carried rules
+> strengthened** (`T-DET-01`, `CN-CONS-08`, `CN-STORE-07`,
+> `CN-STORE-08`, `DC-CONS-21`, `DC-STORE-08` each gain
+> `strengthened_in += PHASE4-N-K`); **1 carried rule gains a new
+> open_obligation** (`DC-STORE-09 +=
+> "snapshot_schema_migration_follow_on_cluster"`); **+8 new GREEN
+> files** (`bootstrap.rs`, `clock.rs`, `orchestrator/{mod, event,
+> state, core}.rs`, `rollback/persistent_writer.rs`,
+> `ade_node/{cli, lib, node}.rs`); **+3 new RED files**
+> (`orchestrator/{peer_session, leadership_session,
+> n2n_server_pump}.rs`); **+4 new integration test files / 7 tests**
+> (`orchestrator_peer_isolation.rs`,
+> `orchestrator_replay_equivalence.rs`,
+> `shutdown_resume_identity.rs`, `authority_fatal_decode.rs`);
+> **0 new operator-action probe binaries**; **0 new BLUE
+> chokepoints**. Total invariant registry: **214 entries** (209 →
+> 214). **One new explicit carried-forward open obligation surfaced
+> by N-K** — `snapshot_schema_migration_follow_on_cluster` on
+> `DC-STORE-09` (snapshot v1→v2 migration tooling; out of node-binary
+> scope).
 
 Ade is a Cardano block-producing node. Its closure surface is dominated
 by two facts:
@@ -139,20 +116,20 @@ by two facts:
 
 This document names where the system opens and where it stays closed.
 
-**PHASE4-N-J is fully closed at this HEAD.** Restart-safe rollback is
-now possible: the BLUE encoder/decoder pair
-`ade_ledger::snapshot::framing::{encode_snapshot, decode_snapshot}` is
-the single canonical authority for `(LedgerState,
-PraosChainDepState) <-> bytes`, version-tagged + fingerprint-embedded,
-and the GREEN `PersistentSnapshotCache` bridges it to the existing
-`SnapshotStore` trait (N-D). `materialize_rolled_back_state` (N-I) now
-has two production `SnapshotReader` impls — in-memory (warm cache)
-and persistent (restart-safe). Scope: **Conway-only** at the encoder
-boundary; pre-Conway → `SnapshotEncodeError::EraNotSupported` /
-`SnapshotDecodeError::EraNotSupported` (same Path A discipline as N-I).
+**PHASE4-N-K is fully closed at this HEAD.** The Ade workspace can
+now compose itself into a running node: `bootstrap_initial_state`
+opens persistent storage and returns a byte-identical initial
+`(LedgerState, PraosChainDepState, Option<ChainTip>)` triple from
+either genesis or a persisted snapshot; the pure orchestrator core
+`step(state, event)` dispatches `OrchestratorEvent`s to closed-sum
+effects with per-peer isolation; the RED tokio runner trio drives
+the chain-sync / block-fetch / leadership pumps; `ade_node::main`
+ties it all together with signal handling, shutdown drain, and
+authority-fatal exit-code mapping. The cluster **does not** add new
+BLUE; it composes the BLUE shipped by N-A..N-J.
 
-**PHASE4-N-I remains fully closed** (carried; `DC-CONS-21`
-`open_obligation` now removed). **PHASE4-N-H remains fully closed**
+**PHASE4-N-J remains fully closed** (carried). **PHASE4-N-I remains
+fully closed** (carried). **PHASE4-N-H remains fully closed**
 (carried). **PHASE4-N-G remains fully closed** (carried).
 **PHASE4-N-C remains fully closed** (carried).
 **PHASE4-N-E remains fully closed** (carried).
@@ -169,194 +146,196 @@ ENACTMENT-COMMITTEE-WRITEBACK** all remain closed (carried).
 > ingress surfaces (block bytes, Plutus script bytes, snapshot bytes,
 > Ouroboros mux frames, genesis JSON bundles, chain-selector stream
 > inputs, the N-E wire-level mempool ingress, and the N-H receive-side
-> N2N peer ingress). **PHASE4-N-J adds no new external ingress
-> surface** — persistent snapshot encoding is wholly internal: it
-> reduces the in-memory pair `(LedgerState, PraosChainDepState)` to
-> canonical bytes for the existing `SnapshotStore` trait and reads
-> back from it. The bytes never leave the local node; no peer or
-> client produces or consumes them.
+> N2N peer ingress). **PHASE4-N-K adds no new external ingress
+> surface in the wire-format sense** — its surfaces are
+> **process-boundary internal**: the OS signal stream (SIGINT/SIGTERM),
+> the CLI argv vector, and the `OrchestratorEvent` stream consumed by
+> the pure orchestrator core. The chain-sync / block-fetch mux pumps
+> are runner glue that defers to the N-G / N-H BLUE chokepoints
+> shipped earlier.
 >
-> **N-J does, however, formalize an INTERNAL canonical-byte surface**:
-> `[u32 version][bytes(32) fingerprint][bytes ledger][bytes chain_dep]`
-> per `ade_ledger::snapshot::framing`. This is the project's first
-> persisted non-Cardano-wire canonical byte format, gated by a
-> versioned schema (`SCHEMA_VERSION: u32 = 1`) and the
-> single-authority CI check `ci_check_snapshot_encoder_closure.sh`.
+> **N-K, however, formalises THE INTERNAL EVENT SEAM** between the RED
+> tokio runner and the GREEN orchestrator core. The seam is the closed
+> sum type `OrchestratorEvent` (variants include peer-source RX
+> events, slot-tick from `Clock`, server-pump events, persistent
+> writer notifications, and shutdown signal). The runner translates
+> RED-side asynchrony into events; the core reduces events
+> deterministically. Replay equivalence under `DeterministicClock`
+> is the binding contract (DC-NODE-03).
 
-### Surface: Receive-side N2N peer ingress (carried from N-H + N-I; **rollback half now restart-safe via N-J's persistent encoder**)
+### Surface: Process-boundary node entry (NEW in PHASE4-N-K — CN-NODE-01 + DC-NODE-04)
 
 ```
-Surface: A peer-originated chain-sync ForkChoiceSignal
-         (RollForward { header_bytes, tip }
-         | RollBackward { target_point, tip }
-         | Intersected | NoIntersection)
-         OR a peer-originated block-fetch BatchDeliveryEvent
-         (BatchStarted | BlockDelivered { block_bytes }
-         | NoBlocks | BatchCompleted)
-         delivered by a real cardano-node peer over N2N mux
-Reduces to: ReceiveEffect — closed 4-variant sum
-            { Admitted { slot, hash } | Cached { slot, hash }
-            | RolledBack { to_slot } | NoOp { ... } }
-            — OR ReceiveError — closed 4-variant sum
-            { HeaderBodyMismatch | Validity(BlockValidityError)
-            | RollbackOutOfScope { target_point }
-            | ChainDb(ChainWriteError) }
+Surface: argv + ENV + on-disk genesis bundle + on-disk ChainDb +
+         on-disk SnapshotStore + OS signal stream
+Reduces to: bootstrap_initial_state(...) →
+            (LedgerState, PraosChainDepState, Option<ChainTip>)
+         followed by run_node_until_shutdown(...) → Result<(), NodeRunError>
+         where NodeRunError::exit_code() maps deterministically to
+         EXIT_AUTHORITY_FATAL_IO (10) | EXIT_AUTHORITY_FATAL_DECODE (12)
+         | EXIT_GENERIC_STARTUP (1)
 Pipeline (fixed step ordering — no reorder, no shortcut):
-  1. RED transport (ade_network::mux::transport) decodes mux frame
-  2. BLUE chain-sync / block-fetch codec (N-A) — decode_*_message
-  3. RED dispatcher (ade_runtime::receive::orchestrator)
-  4. RED-internal translation: peer-agency message →
-     ForkChoiceSignal / BatchDeliveryEvent
-  5. GREEN lift (ade_runtime::receive::events_to_state) → ReceiveEvent
-  6. BLUE reducer — receive_apply(state, event, chain_write,
-     era_schedule, ledger_view, rollback_ctx: Option<&RollbackContext>)
-       - RollBackward + Some(ctx): roll_backward composes
-         materialize_rolled_back_state(target, ctx.snapshot_reader,
-         ctx.block_source, ...) → commit_rollback.
-         **N-J effect on this arm:** `ctx.snapshot_reader` may now be
-         backed by `PersistentSnapshotCache` (decoding bytes via
-         `framing::decode_snapshot`) instead of (or in addition to)
-         `InMemorySnapshotCache`. The reducer is agnostic — it sees
-         `&dyn SnapshotReader`; the choice of backing impl is the
-         orchestrator's. Restart-safe rollback is now possible: a
-         process restart loses the in-memory cache but the persistent
-         cache survives.
-  7. GREEN ChainDb write — ChainDbWriter::write_admitted /
-     rollback_to_slot.
-  8. RED snapshot-write hook (ade_runtime::rollback::snapshot_writer
-     — maybe_capture_snapshot): on each ReceiveEffect::Admitted
-     consults cadence policy + captures (ledger, chain_dep) into
-     InMemorySnapshotCache when due. **N-J note:** the analogous
-     persistent-capture call site is NOT wired into the
-     orchestrator at this HEAD — the persistent capture is exposed
-     as `PersistentSnapshotCache::capture(slot, ledger, chain_dep)`
-     and is called explicitly by tests; the orchestrator-side
-     persistent-capture wiring is a forward-looking thin RED call
-     site (see candidate below).
+  1. RED ade_node::cli — parse argv (clap-style), load config bundle.
+  2. RED ade_node::main — install signal handlers (Ctrl-C / SIGTERM),
+     init tokio runtime.
+  3. GREEN bootstrap_initial_state — single-authority init.
+     Cold-start: parse genesis, derive initial LedgerState +
+                 PraosChainDepState, ChainTip = None.
+     Warm-start: open SnapshotStore, find nearest snapshot via
+                 PersistentSnapshotCache, decode bytes via
+                 framing::decode_snapshot, ChainTip from ChainDb
+                 head. Restart-safety: re-running bootstrap against
+                 the same (chaindb, snapshot store) returns a
+                 byte-identical triple.
+  4. RED tokio_runner::* — spawn per-peer session + leadership
+     session + n2n_server_pump tasks; wire each to a shared
+     OrchestratorEvent mpsc channel.
+  5. GREEN orchestrator::core::step — pure (state, event) →
+     (state', Vec<OrchestratorEffect>).
+  6. RED runner dispatches OrchestratorEffects (socket writes,
+     ChainDb commits, PersistentSnapshotWriter::on_admitted,
+     PeerSessionHalted task cancellation).
+  7. RED shutdown drain — on signal, drive the admit/write/snapshot
+     pipeline to a quiescent state, then force_capture a final
+     snapshot, then close peer sockets.
+  8. GREEN exit-code mapping — NodeRunError::exit_code maps
+     authority-fatal categories to the closed exit-code surface;
+     SnapshotDecodeError::UnknownVersion / FingerprintMismatch at
+     bootstrap exits non-zero deterministically.
 Cross-surface state sharing: per-peer state stays fully independent
-  (N-H invariant carried). N-J introduces the persistent
-  `SnapshotStore` as a NEW shared resource alongside the shared
-  ChainDb — but the persistent store's bytes are written/read
-  exclusively through `PersistentSnapshotCache` (no parallel path).
+  (PeerSessionHalted closed reason discriminant; sibling peers
+  + producer continue). Bootstrap and writer share the persistent
+  SnapshotStore via PersistentSnapshotCache (single production
+  consumer; the in-memory cache is the receive-side hot path
+  carried from N-I unchanged).
 ```
 
-**Rule (carried + extended in N-J).** `receive_apply` (with
-`receive_apply_sequence` as its deterministic driver) remains the
-**single receive-side composition root**. `RollbackContext` (N-I) is
-the **single receive-side rollback entry point** and its
-`snapshot_reader: &'a dyn SnapshotReader` field is **the seam through
-which N-J's persistent reader attaches** — without changing the
-reducer, the materialize chokepoint, or the commit chokepoint. New
-rollback features attach by implementing `SnapshotReader` (e.g. the
-N-J `PersistentSnapshotCache`); the chokepoint **never moves**:
-`materialize_rolled_back_state` is the SOLE `pub fn` returning
-`(LedgerState, PraosChainDepState)` in the rollback module tree
-(CN-STORE-07 — CI-defended), and `encode_snapshot` /
-`decode_snapshot` is the SOLE `pub fn` pair encoding/decoding that
-tuple to/from bytes (CN-STORE-08 — CI-defended, NEW in N-J).
+**Rule (NEW in N-K).** The node binary surface has a SINGLE
+composition root — `bootstrap_initial_state` for init and
+`run_node_until_shutdown` for the drive loop. No parallel entry
+point. New runtime features attach by:
+
+- Adding a new `OrchestratorEvent` variant + matching reducer arm
+  in `orchestrator::core::step` (closed-sum extension — version-gated).
+- Adding a new `OrchestratorEffect` variant + matching runner
+  dispatch arm (closed-sum extension).
+- Adding a new `PeerHaltReason` / `AuthorityFatalKind` variant for
+  newly-discriminated failure modes (closed-sum extension).
+- Adding a new `Clock` impl (today: `DeterministicClock`,
+  `SystemClock`; new impls remain deliberate registry-tracked
+  closed additions — not runtime plug-ins).
+
+— **not** by adding a parallel `pub fn` returning the initial
+state triple anywhere outside `bootstrap.rs`, **not** by adding a
+second wall-clock-reading site outside `SystemClock`, **not** by
+adding a parallel cadence consultation that bypasses
+`should_snapshot_after_block`, **not** by emitting authority-fatal
+exits with new ad-hoc exit codes outside the closed `EXIT_*`
+constants.
+
+### Surface: Receive-side N2N peer ingress (carried from N-H + N-I + N-J; **per-peer isolation now mechanically tested in N-K**)
+
+Carried structurally. **N-K effect on this arm:** per-peer dispatch
+is now wrapped by the RED `orchestrator::tokio_runner::peer_session`
+task. Decode/validity errors emit `OrchestratorEffect::PeerSessionHalted
+{ peer_id, reason: PeerHaltReason }` and remove only that peer's
+state from `OrchestratorState::per_peer_{receive,server}`; sibling
+peers and the producer continue. The reducer arm is unchanged at
+the BLUE level — N-K wraps it, never bypasses it. CI gate
+`ci_check_peer_session_isolation.sh` + integration test
+`peer_session_isolation_holds_under_failure` defend DC-NODE-01.
 
 ### Surfaces carried unchanged from prior revisions
 
 - **Producer-side chain-sync server-role ingress** (N-G): carried.
 - **Producer-side block-fetch server-role ingress** (N-G): carried.
 - **Forge-block transition** (N-C): carried.
-- **Self-accept broadcast gate** (N-C): carried. `AcceptedBlock` /
-  `AdmittedBlock` matched pair unchanged in N-J.
-- **Scheduler input ingress** (N-C): carried.
+- **Self-accept broadcast gate** (N-C): carried.
+- **Scheduler input ingress** (N-C): carried. **N-K note:** now
+  driven by the `orchestrator::tokio_runner::leadership_session`
+  RED pump via `Clock::tick_stream()`; the scheduler chokepoint
+  is unchanged.
 - **Mempool ingress** (Tier-1 wire-level — N-E): carried.
 - **Conway tx-body `proposal_procedures` sub-grammar** (PP): carried.
 - **Single-tx validity** (B2): carried.
 - **Mempool admission** (Tier-1 gate — B2): carried.
-- **Full block validity** (B1): carried. **N-J usage:** unchanged
-  from N-I (`materialize_rolled_back_state` composes `block_validity`
-  as the per-block step in the replay-forward fold; the
-  fold-input snapshot may now come from the persistent reader).
+- **Full block validity** (B1): carried.
+- **Persistent ledger snapshot encoding** (N-J): carried. **N-K
+  effect:** `PersistentSnapshotWriter` is now the production
+  cadence-driven caller of `PersistentSnapshotCache::capture`;
+  `force_capture` is called once during shutdown drain.
 - **Block bytes, Plutus script bytes, Snapshot bytes (N-D layer
   unchanged), Consensus-input extraction, Ouroboros mux frames,
   Genesis JSON bundles, Chain-selector stream inputs**: all carried.
 
-### Receive-side rollback authority (carried from N-I; **persistent reader added in N-J**)
+### Receive-side rollback authority (carried from N-I; persistent reader from N-J; **now driven by warm-start bootstrap branch in N-K**)
 
-The receive-side rollback authority surface from N-I is unchanged at
-the chokepoint level: `materialize_rolled_back_state` +
-`commit_rollback` + `RollbackContext` + `ChainDbWrite::rollback_to_slot`.
-**What N-J adds is a second production `SnapshotReader` impl**
-(`PersistentSnapshotCache`), making rollback restart-safe. The
-trait was deliberately written in N-I as `&dyn SnapshotReader` so the
-persistent impl drops in without touching BLUE code — that
-extension point is now exercised.
+The BLUE chokepoint set (`materialize_rolled_back_state`,
+`commit_rollback`, `RollbackContext`, `ChainDbWrite::rollback_to_slot`)
+is structurally unchanged. **N-K effect:** the warm-start branch of
+`bootstrap_initial_state` is now a production caller of
+`materialize_rolled_back_state` (via the persistent
+`SnapshotReader` impl from N-J); this strengthens `CN-STORE-07`
+without changing the chokepoint.
 
 ### Candidates — surfaces not yet wired
 
-- **N-J-S1..S8 WIRED AND CLOSED the prior revision's "Persistent
-  ledger snapshot encoding" candidate** — removed (now
-  `encode_snapshot` + `decode_snapshot` + `PersistentSnapshotCache`
-  + 3 registry rules + 1 CI gate).
-- **NEW CANDIDATE (flagged by N-J close): orchestrator-side
-  persistent-capture wiring.** N-J exposes
-  `PersistentSnapshotCache::capture(slot, ledger, chain_dep)` but
-  does NOT wire it into the per-peer post-admission hook
-  (`maybe_capture_snapshot` still talks only to
-  `InMemorySnapshotCache`). The next cluster wires the persistent
-  capture path — either by extending `maybe_capture_snapshot` to
-  accept a `&PersistentSnapshotCache` alongside the in-memory cache,
-  or by introducing a sibling RED hook (`maybe_capture_persistent_snapshot`).
-  Tier-5; the BLUE invariants do not change.
-- **NEW CANDIDATE (flagged by N-J close): N-J followup — snapshot
-  eviction policy.** Carried from N-I (OQ-5). With persistent
-  snapshots now landed, the eviction concern doubles: the
-  in-memory cache and the persistent `SnapshotStore` both grow
-  monotonically at this HEAD. The persistent store already has a
-  `SnapshotStore::delete_snapshot(slot)` method (N-D), but no
-  policy decides when to call it. Tier-5 operational concern.
-- **NEW CANDIDATE (flagged by N-J close): pre-Conway snapshot
-  encoder.** N-J ships Conway-only at the encoder boundary
-  (pre-Conway → `EraNotSupported` structurally). A future cluster
-  could widen this to Babbage and earlier eras; today the carve-out
-  is documented at the type level (no `open_obligation` registry
-  entry because the operational use case for pre-Conway snapshots
-  is unclear — rollback target windows are bounded and Conway is
-  the live era).
-- **NEW CANDIDATE (flagged by N-J close): snapshot schema migration
-  v1 → v2.** `framing::SCHEMA_VERSION: u32 = 1` is the explicit
-  future-migration anchor. The first new field appended to the
-  framing wire format (e.g. an explicit schema-version field for
-  the inner `ledger_state_bytes` payload, or a snapshot-of-snapshot
-  pointer for incremental diffs) will bump this to 2; existing v1
-  bytes remain readable until a future cluster ratifies dropping
-  legacy support. Today there is no v2 — the candidate exists only
-  to name the seam.
-- **CANDIDATE (carried from N-I — OQ-4 lock; now further enabled by
-  N-J's restart-safe rollback): multi-peer fork choice.** Now
-  doubly-unblocked: N-I gave us rollback within a session; N-J
-  gives us rollback across restarts. The Praos longest-chain
-  selection across competing `PerPeerReceiveState[]` follows the
-  same shape sketched in the N-I revision; no new attachment
-  surface specifically introduced by N-J.
-- **CANDIDATE (carried from N-H/N-I): N2C local-chain-sync receive
-  surface.** Unchanged at N-J.
+- **N-K SUBSUMED AND CLOSED the prior revision's
+  "orchestrator-side persistent-capture wiring" candidate** —
+  `PersistentSnapshotWriter` is the production cadence-driven
+  capture caller; `force_capture` runs on shutdown drain.
+- **NEW CANDIDATE (flagged by N-K close): snapshot schema migration
+  v1 → v2** *(promoted from N-J seam-only flag to a `DC-STORE-09`
+  `open_obligation` at N-K close)* — `framing::SCHEMA_VERSION:
+  u32 = 1` is the explicit anchor; first new field appended bumps
+  to 2. Operator-facing migration tooling (read v1 + emit v2; or
+  on-restart auto-upgrade) is the named follow-on cluster's
+  deliverable. Out of node-binary scope; tracked on `DC-STORE-09`.
+- **NEW CANDIDATE (flagged by N-K close): live Ouroboros mux +
+  handshake driver above `ade_network::mux::MuxTransport`.** N-K
+  ships honest-scope RED runner files (`peer_session.rs`,
+  `leadership_session.rs`, `n2n_server_pump.rs`) plus the
+  `ade_node` binary that bootstraps + prints a readiness line; the
+  actual chain-sync / block-fetch socket pump above
+  `MuxTransport` is the follow-on cluster's deliverable. Tracked
+  by `RO-LIVE-01` / `RO-LIVE-02` (live-evidence halves;
+  `blocked_until_operator_peer_available`).
+- **NEW CANDIDATE (flagged by N-K close): metrics + observability
+  surface.** The orchestrator core consumes `OrchestratorEvent`
+  and produces `OrchestratorEffect`; a future cluster threads a
+  closed `MetricEffect` arm + a RED Prometheus exporter through
+  the runner. Tier-5; no BLUE invariants change.
+- **CANDIDATE (carried): snapshot eviction policy** — Tier-5
+  operational concern; carried unchanged from N-J.
+- **CANDIDATE (carried from N-I; now restart-safe via N-J): multi-peer
+  fork choice.** Praos longest-chain across competing
+  `PerPeerReceiveState[]`; now further enabled by N-K's stable
+  per-peer task model.
+- **CANDIDATE (carried): N2C local-chain-sync receive surface.** Unchanged.
+- **CANDIDATE (carried): pre-Conway snapshot encoder.** Carried; no
+  current operational need.
 - **CE-N-H-6 live-evidence — still
   `blocked_until_operator_peer_available`** (carried).
 - **CE-N-G-8 / CE-N-C-8 live-evidence — still
   `blocked_until_operator_*_available`** (carried).
-- **PROPOSAL-PROCEDURES-DECODE remains closed** (carried). The four
-  PP open obligations remain separable candidate seams (carried).
+- **PROPOSAL-PROCEDURES-DECODE remains closed** (carried).
 - **PHASE4-N-E remains closed** (carried).
 
 | Cluster | Surface | Expected reduction target | Expected chokepoint | Confidence |
 |---------|---------|---------------------------|---------------------|------------|
-| **PHASE4-N-J** *(FULLY CLOSED at this HEAD — mechanical close; Conway-only encoder scope; pre-Conway → `EraNotSupported` structurally)* | **Persistent ledger snapshot encoding: `(LedgerState, PraosChainDepState) <-> bytes` via the canonical `encode_snapshot` / `decode_snapshot` pair + a `PersistentSnapshotCache` impl of `SnapshotReader` over `SnapshotStore`** | `(LedgerState, PraosChainDepState)` → `Vec<u8>` (encoder); `&[u8]` → `(LedgerState, PraosChainDepState)` (decoder); `(SlotNo, &dyn SnapshotStore)` → `Option<(SlotNo, LedgerState, PraosChainDepState)>` (persistent reader) | **DONE:** `ade_ledger::snapshot::{chain_dep, utxo_state, cert_state, epoch_state, gov_state, ledger, framing, error}` (BLUE; 8 files); `ade_ledger::snapshot::framing::{encode_snapshot, decode_snapshot, SCHEMA_VERSION}` (the SOLE `pub fn` pair encoding/decoding `(LedgerState, PraosChainDepState)` bytes per CN-STORE-08); `ade_runtime::rollback::persistent_cache::PersistentSnapshotCache<'a, S: SnapshotStore + ?Sized>` (GREEN single production impl of the second `SnapshotReader` backend); `PersistentCacheError` (closed `Encode | Decode | Store` sum); `PERSISTENT_CACHE_SCHEMA_VERSION` (re-export). CI gate `ci_check_snapshot_encoder_closure.sh`. Registry rules `DC-STORE-08`, `DC-STORE-09`, `CN-STORE-08` (`enforced`); `DC-CONS-21` flipped from `declared` to `enforced` with `strengthened_in += PHASE4-N-J` and `open_obligation` removed. Cross-impl equivalence test `persistent_cache_matches_in_memory_cache_semantics`. | **wired & closed in PHASE4-N-J (mechanical half — wholly internal authority, no Tier-1 wire-format counterpart; the bytes are local-only persisted state, gated by version tag + fingerprint cross-check)** |
-| **NEW CANDIDATE — Orchestrator-side persistent-capture wiring** *(flagged by N-J close)* | **Per-peer post-admission hook that also writes to `PersistentSnapshotCache`** | Extension of `maybe_capture_snapshot` to accept `&PersistentSnapshotCache` alongside `&mut InMemorySnapshotCache`, or sibling hook `maybe_capture_persistent_snapshot` | Likely a Tier-5 operational/RED layer change in `ade_runtime::rollback::snapshot_writer`. No BLUE chokepoint moves. | **candidate (next-cluster seam; surface; sequenced naturally before any restart-mode test scenario)** |
-| **NEW CANDIDATE — Snapshot eviction policy** *(carried from N-I; **now doubled by N-J — applies to both caches**)* | **Bounded cache size for in-memory + bounded retention for persistent `SnapshotStore`** | `evict_older_than(slot)` on both `InMemorySnapshotCache` and `PersistentSnapshotCache` (latter forwards to `SnapshotStore::delete_snapshot`) | Tier-5 operator-tunable; must remain replay-deterministic. | **candidate (next-cluster seam; surface)** |
-| **NEW CANDIDATE — Pre-Conway snapshot encoder** *(flagged by N-J close — explicit Conway-only scope at N-J)* | **Widen encoder/decoder to Babbage and earlier eras** | Same canonical layout, era-tagged dispatch in `encode_ledger_state` / `decode_ledger_state` | Tier-5; no current operational need; flagged as a follow-on if rollback target windows ever exceed era boundaries. | **candidate (low-priority next-cluster seam; surface)** |
-| **NEW CANDIDATE — Snapshot schema migration v1 → v2** *(flagged by N-J close — `framing::SCHEMA_VERSION` is the explicit anchor)* | **Future evolution of the snapshot wire format** | New `SCHEMA_VERSION: u32 = 2`; decoder dispatches on tag; v1 readers remain valid until a future cluster ratifies drop | Tier-5; closed-version-gated. No present need; the seam is documented to set the migration discipline now. | **candidate (no current cluster; the seam is documented so future evolution does not improvise)** |
-| **CANDIDATE — Multi-peer fork choice (Praos longest-chain across competing peers)** *(carried from N-I; now doubly-enabled by N-J — rollback is restart-safe)* | Carried. | Carried. | **candidate (next-cluster seam; surface)** |
-| **CANDIDATE — N2C local-chain-sync receive surface** *(carried from N-I)* | Carried. | Carried. | **candidate (next-cluster seam; surface)** |
+| **PHASE4-N-K** *(FULLY CLOSED at this HEAD — mechanical close; honest-scope RED runner — the mux/handshake driver above `MuxTransport` is RO-LIVE-01/02)* | **Process-boundary node entry: argv + ENV + genesis + ChainDb + SnapshotStore + signals → running node** | `(LedgerState, PraosChainDepState, Option<ChainTip>)` (bootstrap); `Vec<OrchestratorEffect>` per step (orchestrator core); `i32` exit code (process exit) | **DONE:** `ade_runtime::bootstrap::bootstrap_initial_state` (SOLE init `pub fn` — CN-NODE-01); `ade_runtime::clock::{Clock, DeterministicClock, SystemClock}` (DC-NODE-03 seam); `ade_runtime::orchestrator::{event, state, core, mod}` (closed-sum dispatch); `ade_runtime::rollback::persistent_writer::PersistentSnapshotWriter` (DC-NODE-02 single cadence-driven persistent-capture caller); `ade_node::{cli, lib, node, main}` (DC-NODE-04 closed exit-code surface). 6 CI scripts. 5 registry rules `enforced`. 6 carried rules `strengthened_in += PHASE4-N-K`. | **wired & closed in PHASE4-N-K (mechanical half; the live mux driver above `MuxTransport` is RO-LIVE-01/02 — `blocked_until_operator_peer_available`)** |
+| **NEW CANDIDATE — Live Ouroboros mux + handshake driver above `MuxTransport`** *(flagged by N-K close — honest-scope follow-on)* | **Real cardano-node peer drives `ade_node` via N2N socket** | Live `OrchestratorEvent::PeerRx*` events fed by a tokio mux pump bound to `MuxTransport` | Likely a new RED submodule `ade_runtime::network::mux_pump` plus integration with `peer_session`/`n2n_server_pump`. Tracked on `RO-LIVE-01`/`RO-LIVE-02`. | **candidate (operator-action follow-on; `blocked_until_operator_peer_available`)** |
+| **NEW CANDIDATE — Snapshot schema migration v1 → v2 tooling** *(NEW `DC-STORE-09` `open_obligation` at N-K close)* | **Operator-facing upgrade of persisted snapshot bytes** | A separate tool/binary that reads v1 bytes via `framing::decode_snapshot` and re-emits v2 bytes (when v2 lands); or auto-upgrade on restart | Tier-5 operator tooling; closed-version-gated. Out of node-binary scope. | **candidate (next-cluster seam; tracked on `DC-STORE-09`)** |
+| **NEW CANDIDATE — Metrics + observability surface** *(flagged by N-K close)* | **Prometheus-style counters / gauges / histograms emitted from the running node** | Closed `MetricEffect` arm added to `OrchestratorEffect`; RED exporter mapped from runner | Tier-5 wire / Tier-5 semantics; closed-sum extension on the effect type. | **candidate (next-cluster seam; surface)** |
+| **CANDIDATE — Snapshot eviction policy** *(carried from N-J)* | Carried. | Carried. | **candidate (next-cluster seam; surface)** |
+| **CANDIDATE — Multi-peer fork choice (Praos longest-chain across competing peers)** *(carried; now further enabled by N-K stable per-peer task model)* | Carried. | Carried. | **candidate (next-cluster seam; surface)** |
+| **CANDIDATE — N2C local-chain-sync receive surface** *(carried)* | Carried. | Carried. | **candidate (next-cluster seam; surface)** |
+| **CANDIDATE — Pre-Conway snapshot encoder** *(carried from N-J)* | Carried. | Carried. | **candidate (low-priority next-cluster seam; surface)** |
 | **CE-N-H-6 (cross-cluster obligation carried)** | **Live N2N follow-mode admission** | Carried. | Carried. | **carried (`blocked_until_operator_peer_available`)** |
 | **CE-N-G-8 (cross-cluster obligation carried)** | **Live N2N block-fetch acceptance (Ade serving)** | Carried. | Carried. | **carried (`blocked_until_operator_peer_available`)** |
 | **CE-N-C-8 (cross-cluster obligation carried)** | **Live N2N block-fetch acceptance (Ade forging)** | Carried. | Carried. | **carried (`blocked_until_operator_stake_available`)** |
 | **N-C+ (declared non-goal in N-C cluster doc; OQ-4 lock)** | **TPraos producer (Shelley..Alonzo full-block production)** | Carried. | Carried. | candidate (declared non-goal) |
-| **CE-NODE-N2C-LTX (cross-cluster obligation carried from N-E)** | **Live N2C UDS server + N2N bulk-tx inbound listener** | Carried. | Carried. | **deferred cross-cluster obligation (NOT an open seam in N-E)** |
+| **CE-NODE-N2C-LTX (cross-cluster obligation carried from N-E)** | **Live N2C UDS server + N2N bulk-tx inbound listener** | Carried. | Carried. | **deferred cross-cluster obligation** |
 | **PP OQ-1..OQ-4 (separable seams)** | various | Carried. | Carried. | candidate (carried) |
 | B+ (full tx UTxO scope) | Full-scope single-tx validity over real resolved UTxO | Carried. | Carried. | candidate |
 | B+ (Conway body witness depth) | Conway block-body vkey-witness closure | Carried. | Carried. | candidate (B2-carried) |
@@ -376,10 +355,12 @@ producing bytes Ade has never seen).
 
 **At this HEAD two live-evidence logs remain committed**, three
 cross-cluster obligations remain `blocked_until_operator_*_available`,
-and one cross-cluster obligation is carried from N-E. **N-J added
-no new operator-action obligation** — persistent snapshot encoding is
-wholly internal (no Tier-1 wire-format counterpart that requires a
-real peer to certify).
+and one cross-cluster obligation is carried from N-E. **N-K added
+no new operator-action obligation in the wire-format sense** — the
+node binary's external surfaces (genesis bundle, ChainDb, snapshot
+store, signals) are operator-controlled but not peer-driven; the
+peer-driven live cluster is tracked by `RO-LIVE-01`/`RO-LIVE-02`
+(the live mux pump above `MuxTransport`).
 
 | Procedure | Evidence-log artifact | Status at HEAD | What it asserts | TCB |
 |-----------|----------------------|----------------|------------------|-----|
@@ -391,7 +372,7 @@ real peer to certify).
 | `docs/clusters/completed/PHASE4-N-H/CE-N-H-6_PROCEDURE.md` | (pending) `CE-N-H-LIVE_<date>.log` | **`blocked_until_operator_peer_available`** (carried) | Ade follower fed RollForward + BlockDelivered from a real cardano-node peer produces a matching ChainDb tip | RED operator action |
 
 **Operator-action probe binaries (RED — `ade_core_interop::bin::*`).**
-At this HEAD there are still **five** such binaries (no N-J addition):
+At this HEAD there are still **five** such binaries (no N-K addition):
 
 | Binary | Slice | Live-evidence target | Status |
 |--------|-------|----------------------|--------|
@@ -402,173 +383,156 @@ At this HEAD there are still **five** such binaries (no N-J addition):
 | `live_block_follow_session` (PHASE4-N-H S6) | N-H S6 | CE-N-H-6 | blocked_until_operator_peer_available |
 
 **Pattern carried.** Hermetic default + `--connect <peer>` live pass.
-**N-J has no new entry in this family** — persistent snapshot encoding
-is exercised by the inline test set in `ade_ledger::snapshot::*` plus
-the cross-impl equivalence test
-`persistent_cache_matches_in_memory_cache_semantics` in
-`ade_runtime::rollback::persistent_cache`. Restart-mode evidence
-would require either an operator-action procedure (kill-and-restart
-on a real node) or a stress harness (`KillStrategy<D>`-style); both
-are forward-looking and not surfaced by N-J as new obligations.
+**N-K has no new entry in this family** — the `ade_node` binary itself
+is not a probe binary; it is the production node entry. The
+peer-driven follow-on (live mux pump) is tracked on
+`RO-LIVE-01`/`RO-LIVE-02`.
 
 **These are evidence-log patterns, not BLUE seams.**
 
 User confirmation needed for each candidate at cluster entry. **The
-most load-bearing remaining candidates for the bounty** are
-**CE-N-C-8** (live cardano-node forge acceptance), **CE-N-G-8** (live
-cardano-node block-fetch acceptance — Ade-serving counterpart),
-**CE-N-H-6** (live cardano-node follow-mode admission — Ade-receiving
-counterpart), **multi-peer fork choice** (now doubly-enabled by N-I
-+ N-J's restart-safe rollback), **CE-NODE-N2C-LTX** (the deferred
-live N2C UDS server + N2N bulk-tx inbound listener), and the four
+most load-bearing remaining candidates for the bounty** are now
+**RO-LIVE-01/02** (the live mux pump above `MuxTransport` — the
+next post-N-K cluster to write), **CE-N-C-8** (live cardano-node
+forge acceptance), **CE-N-G-8** (live cardano-node block-fetch
+acceptance), **CE-N-H-6** (live cardano-node follow-mode admission),
+**multi-peer fork choice** (now further enabled by N-K stable
+per-peer tasks), **CE-NODE-N2C-LTX**, and the four
 **PROPOSAL-PROCEDURES-DECODE open obligations**.
 
 ---
 
 ## 2. Data-Only vs. Authoritative Layers
 
-Ade has **nineteen** authoritative domains. **PHASE4-N-J added one
-new domain — persistent ledger snapshot encoding authority** — a new
-BLUE encoder/decoder chokepoint pair
-(`encode_snapshot`/`decode_snapshot`) producing canonical bytes from
-`(LedgerState, PraosChainDepState)` and back, plus a GREEN
-`SnapshotReader` impl (`PersistentSnapshotCache`) that bridges the
-BLUE chokepoint to the existing `SnapshotStore` trait. Prior cluster
+Ade has **twenty** authoritative domains. **PHASE4-N-K added one
+new compositional domain — node orchestration authority** — at the
+GREEN+RED level. No new BLUE chokepoint is introduced; the
+orchestrator composes the BLUE shipped by N-A..N-J. Prior cluster
 narratives are preserved unchanged below.
 
-### Persistent ledger snapshot encoding authority (NEW in PHASE4-N-J)
+### Node orchestration authority (NEW in PHASE4-N-K)
 
 | Layer | Module | Color | Role |
 |-------|--------|-------|------|
-| **BLUE sub-state encoder/decoder pairs (S1–S5)** | `ade_ledger::snapshot::{chain_dep, utxo_state, cert_state, epoch_state, gov_state}` | BLUE | One encoder/decoder pair per sub-state, each the SOLE `pub fn` pair for its sub-state's bytes (in-module single-authority). Canonical CBOR (BTreeMap iteration only, definite-length containers, no `HashMap`/`HashSet`/wall-clock/`tokio`/`rand`/float). Each sub-state's `decode(encode(s))` is byte-identical and fingerprint-equal to the source. |
-| **BLUE composite LedgerState encoder/decoder (S6)** | `ade_ledger::snapshot::ledger::{encode_ledger_state, decode_ledger_state}` | BLUE | The **SOLE `pub fn` pair encoding/decoding `LedgerState` bytes in the workspace** (CN-STORE-08 — CI-defended). Assembles S2–S5 sub-state encoders in canonical field order matching `ade_ledger::fingerprint`'s deterministic field walk. |
-| **BLUE composite chain-dep encoder/decoder (S1)** | `ade_ledger::snapshot::chain_dep::{encode_chain_dep, decode_chain_dep}` | BLUE | The **SOLE `pub fn` pair encoding/decoding `PraosChainDepState` bytes in the workspace** (CN-STORE-08 — CI-defended). Canonical 9-field array (5 nonces + 3 optional uints + op-cert-counter array). |
-| **BLUE combined-snapshot framing (S7)** | `ade_ledger::snapshot::framing::{encode_snapshot, decode_snapshot, SCHEMA_VERSION}` | BLUE | The **SOLE `pub fn` pair encoding/decoding the combined `(LedgerState, PraosChainDepState)` snapshot bytes** (CN-STORE-08 — CI-defended). Wire shape: `array(4)[u32 version (== SCHEMA_VERSION), bytes(32) source_fingerprint, bytes ledger_state_bytes, bytes chain_dep_bytes]`. Decoder verifies version BEFORE payload (DC-STORE-09) and recomputes + verifies fingerprint AFTER decode (DC-STORE-08). Conway-only at encoder; pre-Conway → `EraNotSupported`. |
-| **BLUE closed snapshot error sums (S1)** | `ade_ledger::snapshot::error::{SnapshotEncodeError, SnapshotDecodeError, StructuralReason}` | BLUE | `SnapshotEncodeError` has 1 variant (`EraNotSupported { era }`). `SnapshotDecodeError` has 5 variants (`Cbor(CodecError)`, `UnknownVersion { expected, found }`, `FingerprintMismatch { expected, actual }`, `EraNotSupported { era }`, `Structural { reason }`). `StructuralReason` has 9 variants (`ArrayLengthMismatch`, `MapLengthExceeded`, `UnexpectedNull`, `UnexpectedNonNull`, `NonceLengthMismatch`, `PoolIdLengthMismatch`, `Hash32LengthMismatch`, `Hash28LengthMismatch`, `EraTagOutOfRange`). All closed; no `#[non_exhaustive]`; no `String`. |
-| **BLUE versioned schema seam (S7)** | `ade_ledger::snapshot::framing::SCHEMA_VERSION: u32 = 1` | BLUE | The **future-migration anchor** for snapshot wire-format evolution. Today `== 1`; a future cluster ratifying a v2 layout bumps to `2`. CI gate enforces this is the SOLE `pub const SCHEMA_VERSION` in `crates/`. |
-| **GREEN persistent snapshot cache (S8)** | `ade_runtime::rollback::persistent_cache::PersistentSnapshotCache<'a, S: SnapshotStore + ?Sized>` | GREEN | **The single production persistent impl of `SnapshotReader`.** Pure adapter over any `SnapshotStore`. Borrows the store (lifetime `'a`); holds no in-memory state. Methods: `new(store)`, `capture(slot, &ledger, &chain_dep)` (encode + put), `impl SnapshotReader::nearest_le` (list slots, pick largest ≤ target, get bytes, decode). Decode failures map to `None` (treats corrupt persisted bytes as "no usable snapshot here" — the reader is monotonic-best-effort, not crash-and-burn). |
-| **GREEN closed persistent-cache error sum (S8)** | `ade_runtime::rollback::persistent_cache::PersistentCacheError` | GREEN | Closed `Encode(SnapshotEncodeError) | Decode(SnapshotDecodeError) | Store(ChainDbError)` sum. No `String`. Carries upstream errors verbatim so the caller (orchestrator) decides whether to halt or skip. |
-| **GREEN persistent schema re-export (S8)** | `ade_runtime::rollback::persistent_cache::PERSISTENT_CACHE_SCHEMA_VERSION: u32` | GREEN | Re-exports `framing::SCHEMA_VERSION` so out-of-crate consumers can assert the cache's wire version without depending on `ade_ledger::snapshot::framing`. Test `persistent_cache_schema_version_mirrors_framing` pins the equality. |
-| **CI gate (S7)** | `ci/ci_check_snapshot_encoder_closure.sh` | CI | 1 mechanical gate defending the snapshot encoder authority surface. Enforces: (1) the only `pub fn encode_snapshot` / `decode_snapshot` pair lives at `framing.rs` (CN-STORE-08); (2) the only `pub fn encode_ledger_state` / `decode_ledger_state` pair lives at `ledger.rs` (CN-STORE-08); (3) the only `pub fn encode_chain_dep` / `decode_chain_dep` pair lives at `chain_dep.rs` (CN-STORE-08); (4) the only `pub const SCHEMA_VERSION` lives at `framing.rs` (DC-STORE-09); (5) framing.rs references `FingerprintMismatch` (DC-STORE-08) and `UnknownVersion` (DC-STORE-09) — positive presence of the cross-check paths. Total CI count: 54 → 55. |
+| **GREEN bootstrap chokepoint** | `ade_runtime::bootstrap::bootstrap_initial_state` | GREEN | The **SOLE `pub fn` returning the initial `(LedgerState, PraosChainDepState, Option<ChainTip>)` triple** (CN-NODE-01 — CI-defended). Cold-start (genesis-only) and warm-start (snapshot-resume via `PersistentSnapshotCache::nearest_le` → `materialize_rolled_back_state`) are TWO BRANCHES OF THE SAME FUNCTION. Restart-safety contract: re-running against the same `(chaindb, snapshot store)` produces a byte-identical triple. No `HashMap`/wall-clock/`tokio`/`rand` in this file. |
+| **GREEN `Clock` trait + `DeterministicClock` impl** | `ade_runtime::clock::{Clock, DeterministicClock}` | GREEN | The `Clock` seam (DC-NODE-03). Orchestrator core consumes time **only** via `Clock` outputs — never `SystemTime::now()` / `Instant::now()` / `tokio::time::*` directly. `DeterministicClock` drives the replay-equivalence harness; given the same tick vector, two runs produce byte-identical orchestrator outcomes. |
+| **RED `SystemClock` impl** | `ade_runtime::clock::SystemClock` | RED (sub-classified in a GREEN file) | The **SOLE wall-clock-reading site in `ade_runtime`** (DC-NODE-03 — CI-defended). Production-only; reads `SystemTime::now()` once per tick. `ci_check_clock_seam.sh` greps for any other `SystemTime`/`Instant`/`tokio::time` site in `ade_runtime` and fails. |
+| **GREEN closed orchestrator event vocabulary** | `ade_runtime::orchestrator::event::{OrchestratorEvent, OrchestratorEffect, OrchestratorError, PeerHaltReason, AuthorityFatalKind, PeerId, PeerRole}` | GREEN | Closed sum types. Trait-less; data-only. The seam IS the closed vocabulary; new event variants require a code change (no plug-in registry). `PeerHaltReason` is a closed reason-tag (no `String`) — every peer-fatal failure maps to a discriminant. `AuthorityFatalKind` is a closed sum naming exactly the categories that halt the binary (`ChainWriteIo`, `SnapshotDecodeUnknownVersion`, `SnapshotDecodeFingerprintMismatch`, ...). |
+| **GREEN `OrchestratorState` + per-peer collections** | `ade_runtime::orchestrator::state::{OrchestratorState, PerPeerReceiveVersions}` | GREEN | Per-peer state in BTreeMaps keyed by `PeerId` (`per_peer_receive`, `per_peer_server`). Each peer's state is isolated; decode/validity errors emit `OrchestratorEffect::PeerSessionHalted { peer_id, reason }` and remove only that peer's entry. |
+| **GREEN pure reducer** | `ade_runtime::orchestrator::core::step` | GREEN | Pure `(state, event) → (state', Vec<OrchestratorEffect>)`. No `tokio`, no clock reads, no I/O. Replay-equivalent under `DeterministicClock`. |
+| **GREEN persistent writer cadence glue** | `ade_runtime::rollback::persistent_writer::PersistentSnapshotWriter` | GREEN | The **SOLE production caller of `PersistentSnapshotCache::capture` from cadence-driven decisions** (DC-NODE-02 — CI-defended). `on_admitted(slot, &ledger, &chain_dep)` consults `should_snapshot_after_block` exclusively; `force_capture(slot, &ledger, &chain_dep)` runs during shutdown drain. No parallel cadence policy. |
+| **RED tokio runner — per-peer task** | `ade_runtime::orchestrator::peer_session` | RED | Per-peer tokio task wrapping `dispatch_chain_sync_inbound` / `dispatch_block_fetch_inbound` (N-H S4). One task per peer; failure halts that task only. Structural mirror of DC-NODE-01. |
+| **RED tokio runner — leadership session** | `ade_runtime::orchestrator::leadership_session` | RED | Slot-tick pump driven by `Clock::tick_stream()`. Feeds `OrchestratorEvent::SlotTick` events into the orchestrator core. |
+| **RED tokio runner — N2N server pump** | `ade_runtime::orchestrator::n2n_server_pump` | RED | Listening-socket per-connection spawner. Spawns a per-connection tokio task that wraps `dispatch_chain_sync_frame` / `dispatch_block_fetch_frame` (N-G S6). |
+| **RED node binary** | `ade_node::{cli, lib, node, main}` | RED | `cli` parses argv; `node::run_node_until_shutdown` is the SOLE main loop (CN-NODE-01 + DC-NODE-04 — CI-defended); `main` installs signal handlers and drives `run_node_until_shutdown`. Authority-fatal exit codes: `EXIT_AUTHORITY_FATAL_IO = 10`, `EXIT_AUTHORITY_FATAL_DECODE = 12`, `EXIT_GENERIC_STARTUP = 1` (closed surface). `NodeRunError::exit_code` maps each error category deterministically. Shutdown drain force-captures a final snapshot via `PersistentSnapshotWriter::force_capture`. |
+| **CI gates (6 new)** | `ci/ci_check_{bootstrap_closure,clock_seam,orchestrator_core_purity,persistent_writer_no_parallel_cadence,peer_session_isolation,node_binary_uses_single_bootstrap}.sh` | CI | Mechanical defence of the orchestration authority surface. (1) `bootstrap_closure` — exactly one `pub fn` returning the initial triple in `bootstrap.rs`; forbids `HashMap`/wall-clock/`tokio`/`rand` in that file. (2) `clock_seam` — no `SystemTime`/`Instant`/`tokio::time` in orchestrator core; `SystemClock` is the sole wall-clock site. (3) `orchestrator_core_purity` — no `tokio::*` in GREEN orchestrator files. (4) `persistent_writer_no_parallel_cadence` — the only cadence consult in `ade_runtime` is via `should_snapshot_after_block`. (5) `peer_session_isolation` — per-peer halt routes to `PeerSessionHalted` (closed reason discriminant), not a panic. (6) `node_binary_uses_single_bootstrap` — `ade_node` calls `bootstrap_initial_state`, not a parallel init. Total CI count: 55 → 61. |
 
 **Rule.** This domain has:
-- **One BLUE combined-snapshot encoder/decoder chokepoint pair**
-  (`encode_snapshot`/`decode_snapshot` — CN-STORE-08 single-authority;
-  the SOLE `pub fn` pair encoding/decoding the combined tuple bytes).
-- **Two BLUE composite encoder/decoder chokepoint pairs**
-  (`encode_ledger_state`/`decode_ledger_state`,
-  `encode_chain_dep`/`decode_chain_dep` — each the SOLE `pub fn` pair
-  for its half of the tuple).
-- **Five BLUE sub-state encoder/decoder pairs** (one per S1–S5
-  sub-state — each the SOLE pair for its sub-state).
-- **Three BLUE closed error sums** (`SnapshotEncodeError`,
-  `SnapshotDecodeError`, `StructuralReason`).
-- **One BLUE versioned schema anchor** (`SCHEMA_VERSION: u32 = 1`).
-- **One GREEN production persistent reader** (`PersistentSnapshotCache`)
-  — single production impl of `SnapshotReader` over `SnapshotStore`.
-- **One GREEN closed cache error sum** (`PersistentCacheError`).
-- **One GREEN schema re-export** (`PERSISTENT_CACHE_SCHEMA_VERSION`).
-- **One CI gate** (`ci_check_snapshot_encoder_closure.sh`).
+- **One GREEN bootstrap chokepoint** (`bootstrap_initial_state` —
+  CN-NODE-01 single-authority).
+- **One Clock seam** (`Clock` trait + `DeterministicClock` GREEN
+  impl + `SystemClock` RED-sub-classified impl — DC-NODE-03).
+- **One closed orchestrator event/effect vocabulary** (closed sums —
+  trait-less, data-only).
+- **One pure reducer** (`orchestrator::core::step`).
+- **One persistent-writer cadence chokepoint**
+  (`PersistentSnapshotWriter` — DC-NODE-02 single-authority).
+- **Three RED tokio runner files** (`peer_session`,
+  `leadership_session`, `n2n_server_pump`).
+- **One RED node binary** with a closed exit-code surface
+  (DC-NODE-04).
+- **Six CI gates** defending the above.
 
 **THE KEY SEAMS:**
 
-1. **`encode_snapshot` / `decode_snapshot` is the SOLE `pub fn` pair
-   encoding/decoding the combined `(LedgerState, PraosChainDepState)`
-   tuple bytes** in the workspace (CN-STORE-08). Mirrors
-   `materialize_rolled_back_state`'s single-authority discipline
-   (CN-STORE-07) at the bytes layer. CI-defended via repo-wide grep
-   in `ci_check_snapshot_encoder_closure.sh`.
-2. **`encode_ledger_state` / `decode_ledger_state` is the SOLE pair
-   for the half-tuple `LedgerState` bytes** in the workspace
-   (CN-STORE-08). Composed by `encode_snapshot` /
-   `decode_snapshot`. Field order matches `ade_ledger::fingerprint`'s
-   deterministic walk.
-3. **`encode_chain_dep` / `decode_chain_dep` is the SOLE pair for
-   the half-tuple `PraosChainDepState` bytes** in the workspace
-   (CN-STORE-08). Composed by `encode_snapshot` /
-   `decode_snapshot`.
-4. **`SCHEMA_VERSION: u32 = 1` is the SOLE schema-version anchor**
-   in the workspace (DC-STORE-09). Decoder rejects unknown versions
-   BEFORE payload work — bytes from a future v2 layout fail closed
-   on a v1 reader.
-5. **Fingerprint cross-check is structurally enforced.** Encoder
-   embeds `fingerprint(ledger).combined`; decoder recomputes after
-   decode and rejects on mismatch (`SnapshotDecodeError::FingerprintMismatch`).
-   Corruption / schema drift / tampering all fail closed
-   (DC-STORE-08).
-6. **`PersistentSnapshotCache` is a CLOSED extension point** — single
-   production impl of the BLUE `SnapshotReader` trait for the
-   persistent backend. Pure adapter; borrows the `SnapshotStore`;
-   no in-memory state. New persistent backends attach by
-   implementing `SnapshotStore` (not by re-implementing
-   `SnapshotReader`).
-7. **Decode failure maps to `None` at the reader.** Corrupt persisted
-   bytes do not panic the rollback path; the reader returns `None`
-   (treated by `materialize_rolled_back_state` as "no snapshot
-   available" → `RollbackTooDeep`). The decoder still surfaces the
-   structured error to direct callers (`PersistentSnapshotCache::capture`
-   propagates `PersistentCacheError::Decode` to the operator
-   surface).
-8. **Conway-only at the encoder boundary** (matches N-I's
-   `MaterializeError::EraNotSupported` scope edge). Pre-Conway →
-   `EraNotSupported` structurally on both encode and decode. Today
-   the live era is Conway; a future cluster widens this if rollback
-   target windows ever exceed era boundaries.
+1. **`bootstrap_initial_state` is the SOLE `pub fn` returning the
+   initial `(LedgerState, PraosChainDepState, Option<ChainTip>)`
+   triple** (CN-NODE-01). CI-defended via repo-wide grep. Cold-start
+   and warm-start are two branches of one function.
+2. **The `Clock` trait is the SOLE time seam in `ade_runtime`**
+   (DC-NODE-03). All time-dependent code (orchestrator core,
+   leadership session, persistent writer cadence) consumes `Clock`
+   outputs; only `SystemClock` reads the wall clock. CI-defended.
+3. **`OrchestratorEvent` / `OrchestratorEffect` is a closed sum
+   pair** (no extension via trait, no plug-in registry). New
+   variants are closed-sum extensions requiring a code change.
+4. **Per-peer state is isolated by `PeerId` in BTreeMaps**
+   (DC-NODE-01). Decode/validity errors map to closed
+   `PeerHaltReason` discriminants and remove only the halted peer.
+   Sibling peers + producer continue. CI-defended.
+5. **`PersistentSnapshotWriter` is the SOLE cadence-driven caller of
+   `PersistentSnapshotCache::capture`** (DC-NODE-02). Cadence
+   policy itself remains in `should_snapshot_after_block` (single
+   source). CI-defended.
+6. **Authority-fatal exit codes are closed**: `EXIT_AUTHORITY_FATAL_IO
+   = 10`, `EXIT_AUTHORITY_FATAL_DECODE = 12`,
+   `EXIT_GENERIC_STARTUP = 1`. `AuthorityFatalKind` is the closed
+   sum of fatal categories; `NodeRunError::exit_code` is the closed
+   mapping. New fatal kinds slot in via additions to the sum (no
+   ad-hoc exit codes).
+7. **Replay-equivalence holds under `DeterministicClock`**
+   (DC-NODE-03). Given a recorded `OrchestratorEvent` corpus, two
+   replays produce byte-identical
+   `(LedgerFingerprint.combined, PraosChainDepState, ChainDb tip)`.
+8. **Shutdown-then-resume is byte-identical** (DC-NODE-04). After
+   `shutdown_drain` force-captures a final snapshot, the next
+   `bootstrap_initial_state` against the same `(chaindb, snapshot
+   store)` returns the same triple.
 
-**New work** that adds a snapshot encoding feature attaches by:
-- Adding a new `SnapshotStore` impl (e.g. a different on-disk
-  backend) — `PersistentSnapshotCache` is generic over `S:
-  SnapshotStore + ?Sized` and works unchanged.
-- Extending the closed `SnapshotEncodeError` / `SnapshotDecodeError`
-  / `StructuralReason` arms inside their enum bodies (closed-sum
-  extension, version-gated).
-- Bumping `SCHEMA_VERSION` to introduce a v2 layout (decoder
-  dispatches on tag; v1 readers reject v2 cleanly until they
-  upgrade).
-- Adding a sibling encoder/decoder for a different state type
-  (e.g. mempool snapshot, peer-table snapshot) inside
-  `ade_ledger::snapshot::*` — each sibling carries its own
-  single-authority CI gate.
+**New work** that adds a node-orchestration feature attaches by:
+- Adding an `OrchestratorEvent`/`OrchestratorEffect` variant +
+  matching reducer arm (closed-sum extension).
+- Adding a `PeerHaltReason`/`AuthorityFatalKind` discriminant
+  (closed-sum extension; if a new `AuthorityFatalKind` warrants a
+  new exit code, append a new `EXIT_*` constant and extend
+  `NodeRunError::exit_code`).
+- Adding a new `Clock` impl (deliberate registry-tracked closed
+  addition — not a runtime plug-in).
+- Adding a new RED runner file under `ade_runtime::orchestrator::*`
+  (e.g. a future `mux_pump.rs` for the live mux driver — see
+  candidate above).
 
-— **not** by adding a parallel `(LedgerState, PraosChainDepState)
-<-> bytes` encoder anywhere outside `framing.rs`, **not** by
-adding a parallel `LedgerState <-> bytes` encoder outside
-`ledger.rs`, **not** by adding a parallel `PraosChainDepState <->
-bytes` encoder outside `chain_dep.rs`, **not** by declaring a
-parallel `SCHEMA_VERSION` constant, **not** by skipping the
-version check or fingerprint check in any new decoder.
+— **not** by adding a parallel `pub fn` returning the initial state
+triple outside `bootstrap.rs`, **not** by adding a second wall-clock
+site outside `SystemClock`, **not** by adding a parallel cadence
+consultation that bypasses `should_snapshot_after_block`, **not** by
+bypassing `admit_via_block_validity` / `commit_rollback` /
+`framing::{encode,decode}_snapshot` in the orchestrator, **not** by
+emitting authority-fatal exits with new ad-hoc exit codes, **not** by
+mutating cross-peer state from a peer-session task.
 
 **Declared non-goals carried from the cluster doc:**
-- Pre-Conway snapshot encoding (S7 scope — surfaces structurally
-  as `EraNotSupported`; flagged as a low-priority candidate seam).
-- Snapshot eviction (OQ-5 from N-I — out of scope; both the
-  in-memory cache and the persistent store grow monotonically at
-  this HEAD; eviction is the named follow-on candidate).
-- Orchestrator-side persistent-capture wiring — the persistent
-  cache's `capture` method is exposed and tested but the
-  post-admission hook still talks only to `InMemorySnapshotCache`;
-  wiring is flagged as a Tier-5 follow-on.
-- Schema migration v1 → v2 — `SCHEMA_VERSION = 1` today; the seam
-  is documented to set the migration discipline now, but no v2
-  bump is planned at this HEAD.
+- Snapshot schema migration v1 → v2 tooling — tracked on
+  `DC-STORE-09.open_obligation =
+  "snapshot_schema_migration_follow_on_cluster"`.
+- Live Ouroboros mux + handshake driver above `MuxTransport` —
+  honest-scope follow-on (`RO-LIVE-01`/`RO-LIVE-02`).
+- Snapshot eviction policy — Tier-5 follow-on, carried from N-J.
+- Metrics/observability surface — Tier-5 follow-on, flagged.
 
-### Receive-side rollback authority (carried unchanged from PHASE4-N-I; **persistent reader impl added in N-J**)
+### Persistent ledger snapshot encoding authority (carried unchanged from PHASE4-N-J)
 
-Carried. **N-J note:** the BLUE chokepoint set
-(`materialize_rolled_back_state`, `commit_rollback`,
-`RollbackContext`, `ChainDbWrite::rollback_to_slot`) is structurally
-unchanged at this HEAD. What N-J adds is a **second production
-`SnapshotReader` impl** (`PersistentSnapshotCache`) that fits the
-existing `&dyn SnapshotReader` extension point in `RollbackContext`.
-The N-I in-memory impl (`InMemorySnapshotCache`) and the N-J
-persistent impl (`PersistentSnapshotCache`) are observationally
-equivalent for the same admit sequence (proven by
-`persistent_cache_matches_in_memory_cache_semantics`).
+Carried. **N-K usage:** `bootstrap_initial_state` warm-start branch
+is now a production caller of `framing::decode_snapshot` (via
+`PersistentSnapshotCache::nearest_le`); `PersistentSnapshotWriter`
+is a production caller of `framing::encode_snapshot` (via
+`PersistentSnapshotCache::capture`). `CN-STORE-08`,
+`DC-STORE-08`, `DC-CONS-21` each gain
+`strengthened_in += PHASE4-N-K`.
+
+### Receive-side rollback authority (carried unchanged from PHASE4-N-I; N-J persistent reader carried; **bootstrap warm-start branch now drives it**)
+
+Carried. **N-K note:** `materialize_rolled_back_state` is now a
+production caller from the bootstrap warm-start branch (in addition
+to the existing receive-side caller). `CN-STORE-07` gains
+`strengthened_in += PHASE4-N-K`.
 
 ### Receive-side admission authority (carried unchanged from PHASE4-N-H)
 
-Carried. **N-J note:** unchanged; the admit-side reducer arm is
-not touched by N-J.
+Carried. **N-K note:** the admit path is now driven end-to-end by
+the production orchestrator core via `OrchestratorEvent::PeerRx*`
+→ `step` → `OrchestratorEffect::Admit*`. `CN-CONS-08` gains
+`strengthened_in += PHASE4-N-K`.
 
 ### Producer-side server response authority (carried unchanged from N-G)
 
@@ -576,7 +540,9 @@ Carried.
 
 ### Block production authority (carried unchanged from N-C)
 
-Carried.
+Carried. **N-K note:** the producer scheduler is now driven by
+the `orchestrator::tokio_runner::leadership_session` RED pump
+via `Clock::tick_stream()`. Scheduler chokepoint unchanged.
 
 ### Mempool ingress (carried unchanged from N-E)
 
@@ -588,37 +554,47 @@ Carried.
 
 ### Conway value-conservation accounting / Conway certificate-state accumulation / Credential discriminant fidelity / Conway governance-cert accumulation / Single-tx validity / Mempool admission / Full block validity / Ledger application / Stake-snapshot projection for consensus / Plutus phase-2 evaluation / Governance ratification & enactment / Mini-protocol wire conformance / Praos consensus runtime
 
-All carried unchanged from the prior revision. **N-J-specific
-strengthening:** the `LedgerFingerprint` fold authority (B3/B5) is
-now also the **input to the framing layer's fingerprint cross-check**
-— `encode_snapshot` reads `fingerprint(ledger).combined` and embeds
-it; `decode_snapshot` recomputes the same and rejects mismatches.
-Snapshot bytes carry no semantic authority beyond what the
-fingerprint already authorizes. `DC-CONS-21.strengthened_in +=
-PHASE4-N-J`.
+All carried unchanged from the prior revision. **N-K-specific
+strengthening:** `T-DET-01` (replay equivalence) now extends across
+the orchestrator core under clock injection.
 
 ### Where the boundary is enforced
 
 - `ci_check_dependency_boundary.sh` — no BLUE crate may depend on
-  RED. N-J added one new edge — `ade_runtime::rollback::persistent_cache`
-  imports `ade_ledger::snapshot::framing::{encode_snapshot,
-  decode_snapshot, SCHEMA_VERSION}` + `ade_ledger::snapshot::{SnapshotDecodeError,
-  SnapshotEncodeError}` + `ade_ledger::rollback::SnapshotReader` +
-  `ade_ledger::state::LedgerState`. Same direction (RED/GREEN →
-  BLUE) as existing N-C / N-G / N-H / N-I edges; allowed.
-- `ci_check_no_async_in_blue.sh` — async forbidden in BLUE. The new
-  `ade_ledger::snapshot::*` modules are BLUE; no async.
-- **`ci_check_snapshot_encoder_closure.sh`** *(N-J-S7 — CN-STORE-08,
-  DC-STORE-08, DC-STORE-09 enforcement)* — repo-wide grep gates:
-  (1) `pub fn encode_snapshot` / `decode_snapshot` outside
-  `crates/ade_ledger/src/snapshot/framing.rs` → FAIL;
-  (2) `pub fn encode_ledger_state` / `decode_ledger_state` outside
-  `crates/ade_ledger/src/snapshot/ledger.rs` → FAIL;
-  (3) `pub fn encode_chain_dep` / `decode_chain_dep` outside
-  `crates/ade_ledger/src/snapshot/chain_dep.rs` → FAIL;
-  (4) `pub const SCHEMA_VERSION` outside `framing.rs` → FAIL;
-  (5) framing.rs must reference `FingerprintMismatch` and
-  `UnknownVersion` — positive presence of the cross-check paths.
+  RED. N-K added new edges within `ade_runtime` (a RED crate with
+  per-file color carve-outs): the GREEN orchestrator-core /
+  bootstrap / clock / persistent-writer files import BLUE
+  (`ade_ledger::*`, `ade_core::*`, `ade_codec::*`) but never
+  RED siblings; the RED runner files import the GREEN orchestrator
+  surface but never bypass it. Same direction (RED/GREEN → BLUE)
+  as existing N-C / N-G / N-H / N-I / N-J edges; allowed.
+- `ci_check_no_async_in_blue.sh` — async forbidden in BLUE. N-K
+  added no new BLUE; the orchestrator core + bootstrap are GREEN
+  and explicitly non-async (no `tokio::*`, no `async fn`).
+- **`ci_check_bootstrap_closure.sh`** *(N-K — CN-NODE-01 enforcement)* —
+  asserts exactly one `pub fn bootstrap_initial_state` in
+  `crates/ade_runtime/src/bootstrap.rs` returning the initial
+  triple (or a newtype wrapper). Forbids
+  `HashMap` / wall-clock / `tokio` / `rand` in the bootstrap source.
+- **`ci_check_clock_seam.sh`** *(N-K — DC-NODE-03 enforcement)* —
+  greps that `ade_runtime::orchestrator::core::*` contains no
+  `SystemTime::now()`, `Instant::now()`, `tokio::time::*`, or raw
+  `std::time::*` reads; `SystemClock` is the SOLE wall-clock site.
+- **`ci_check_orchestrator_core_purity.sh`** *(N-K — DC-NODE-03 + general purity)* —
+  greps that GREEN orchestrator files (`core.rs`, `event.rs`,
+  `state.rs`, `mod.rs`) contain no `tokio::*` imports.
+- **`ci_check_persistent_writer_no_parallel_cadence.sh`** *(N-K — DC-NODE-02)* —
+  greps that the only consult of cadence in `ade_runtime` is via
+  `should_snapshot_after_block`.
+- **`ci_check_peer_session_isolation.sh`** *(N-K — DC-NODE-01)* —
+  greps that per-peer halts route to
+  `OrchestratorEffect::PeerSessionHalted` (closed reason
+  discriminant); no `panic!` / `unwrap` in peer-session paths.
+- **`ci_check_node_binary_uses_single_bootstrap.sh`** *(N-K — CN-NODE-01 + DC-NODE-04)* —
+  greps that `ade_node` calls `bootstrap_initial_state` (single
+  init authority) and maps fatal errors via
+  `NodeRunError::exit_code` to the closed exit-code surface.
+- *N-J carried CI gates:* `ci_check_snapshot_encoder_closure.sh`.
 - *N-I carried CI gates:* `ci_check_rollback_materialize_closure.sh`,
   `ci_check_snapshot_cadence_purity.sh`.
 - *N-H carried CI gates:* `ci_check_admitted_block_closure.sh`,
@@ -659,23 +635,22 @@ PHASE4-N-J`.
 
 ## 3. Closed vs. Extensible Registries
 
-Ade's authority surface is **almost entirely closed.** **PHASE4-N-J
-added eleven closed surfaces** — the snapshot module tree itself
-(`ade_ledger::snapshot::{chain_dep, utxo_state, cert_state,
-epoch_state, gov_state, ledger, framing, error}`); the combined
-encoder/decoder pair (`encode_snapshot` / `decode_snapshot` — SOLE
-`pub fn` pair for combined-snapshot bytes per CN-STORE-08); the
-composite encoder/decoder pairs (`encode_ledger_state` /
-`decode_ledger_state`, `encode_chain_dep` / `decode_chain_dep`); the
-versioned schema seam (`SCHEMA_VERSION: u32 = 1`); the closed error
-sums (`SnapshotEncodeError` 1 variant, `SnapshotDecodeError` 5
-variants, `StructuralReason` 9 variants); and the persistent reader
-type (`PersistentSnapshotCache`, single production impl of
-`SnapshotReader`) with its closed error sum
-(`PersistentCacheError`). Plus **one CI gate** (CI count 54 → 55)
-and **three newly-introduced + one strengthening + closure** registry
-rules (`DC-CONS-21` flipped from `declared` to `enforced`,
-`open_obligation` removed; registry total 206 → 209).
+Ade's authority surface is **almost entirely closed.** **PHASE4-N-K
+added seven closed surfaces** at the orchestration layer — the
+`Clock` trait (with closed impl set: `DeterministicClock`,
+`SystemClock`); the closed `OrchestratorEvent` /
+`OrchestratorEffect` / `OrchestratorError` / `PeerHaltReason` /
+`AuthorityFatalKind` sum quintet (with closed supporting types
+`PeerId`, `PeerRole`); the `OrchestratorState` struct (closed field
+set, BTreeMap-keyed per-peer collections); the `bootstrap_initial_state`
+chokepoint (SOLE init `pub fn`); the `PersistentSnapshotWriter`
+chokepoint (SOLE cadence-driven persistent-capture caller); the
+`NodeRunError` closed sum + the closed `EXIT_*` constant trio; and
+the closed per-file TCB color carve-out for `ade_runtime` (GREEN
+orchestrator files explicitly forbid `tokio::*`). Plus **six new
+CI gates** (CI count 55 → 61) and **five newly-introduced + six
+strengthened + one new open_obligation** registry rules (registry
+total 209 → 214).
 
 ### Closed (frozen — version-gated changes only)
 
@@ -711,7 +686,7 @@ rules (`DC-CONS-21` flipped from `declared` to `enforced`,
 | `AcceptedBlock` token *(N-C-S5)* | `ade_ledger::producer::self_accept` | 1 newtype | Carried. |
 | `self_accept` chokepoint *(N-C-S5)* | `ade_ledger::producer::self_accept` | 1 function | Carried. |
 | `SelfAcceptError` *(N-C-S5)* | `ade_ledger::producer::self_accept` | 1 variant | Carried. |
-| `SchedulerInput` / `SchedulerEffect` / `SchedulerHaltReason` / `SchedulerState` *(N-C-S6)* | `ade_runtime::producer::scheduler` | closed sums | Carried. |
+| `SchedulerInput` / `SchedulerEffect` / `SchedulerHaltReason` / `SchedulerState` *(N-C-S6)* | `ade_runtime::producer::scheduler` | closed sums | Carried. **N-K note:** scheduler is now driven by `leadership_session` RED pump via `Clock::tick_stream()`; types unchanged. |
 | `TickInputs` / `TickAssemblyError` / `assemble_tick` *(N-C-S6)* | `ade_runtime::producer::tick_assembler` | closed | Carried. |
 | `BroadcastError` *(N-C-S6)* | `ade_runtime::producer::broadcast` | 2 variants | Carried. |
 | RED signing primitives + key types *(N-C-S1)* | `ade_runtime::producer::signing::*` | closed | Carried. |
@@ -724,10 +699,10 @@ rules (`DC-CONS-21` flipped from `declared` to `enforced`,
 | `producer_block_fetch_serve` *(N-G-S4)* | `ade_network::block_fetch::server` | 1 function | Carried. |
 | `Producer*ServerState` / `ProducerServerError` / `ServerStep` / etc. *(N-G-S3/S4)* | `ade_network::{chain_sync, block_fetch}::server` | closed | Carried. |
 | `ServedChainSnapshot` / `served_chain_admit` *(N-G-S2)* | `ade_ledger::producer::served_chain` | closed | Carried. |
-| `PerPeerN2nServerState` / `DispatchError` *(N-G-S6)* | `ade_runtime::network::n2n_server` | closed | Carried. |
+| `PerPeerN2nServerState` / `DispatchError` *(N-G-S6)* | `ade_runtime::network::n2n_server` | closed | Carried. **N-K note:** consumed by `n2n_server_pump` RED runner. |
 | `AdmittedBlock` token *(N-H-S1)* | `ade_ledger::receive::admitted` | closed struct | Carried. |
 | `AdmittedOutcome` *(N-H-S1)* | `ade_ledger::receive::admitted` | closed struct | Carried. |
-| `admit_via_block_validity` chokepoint *(N-H-S1)* | `ade_ledger::receive::admitted` | 1 function | Carried. |
+| `admit_via_block_validity` chokepoint *(N-H-S1)* | `ade_ledger::receive::admitted` | 1 function | Carried. **N-K note:** now driven end-to-end by the production orchestrator core; `CN-CONS-08.strengthened_in += PHASE4-N-K`. |
 | `ReceiveEvent` *(N-H-S1)* | `ade_ledger::receive::events` | 3 variants | Carried. |
 | `ReceiveEffect` *(N-H-S1)* | `ade_ledger::receive::events` | 4 variants | Carried. |
 | `NoOpReason` *(N-H-S1)* | `ade_ledger::receive::events` | 1 variant | Carried. |
@@ -740,32 +715,41 @@ rules (`DC-CONS-21` flipped from `declared` to `enforced`,
 | `ReceiveState` *(N-H-S2)* | `ade_ledger::receive::reducer` | closed struct | Carried. |
 | `receive_apply` chokepoint *(N-H-S2; N-I-S6 extended)* | `ade_ledger::receive::reducer` | 1 function | Carried. |
 | `receive_apply_sequence` driver *(N-H-S2)* | `ade_ledger::receive::reducer` | 1 function | Carried. |
-| `PerPeerReceiveState` *(N-H-S4)* | `ade_runtime::receive::orchestrator` | closed RED struct | Carried. |
+| `PerPeerReceiveState` *(N-H-S4)* | `ade_runtime::receive::orchestrator` | closed RED struct | Carried. **N-K note:** held by `OrchestratorState::per_peer_receive` (BTreeMap keyed by `PeerId`); per-peer isolation per DC-NODE-01. |
 | `ReceiveDispatchError` *(N-H-S4)* | `ade_runtime::receive::orchestrator` | 3 variants | Carried. |
-| `SnapshotReader` trait *(N-I-S1; **N-J extended**)* | `ade_ledger::rollback::traits` | 1 trait with 1 method | Closed seam. **N-J note:** now has **two production impls** (`InMemorySnapshotCache` from N-I, `PersistentSnapshotCache` from N-J). Trait surface unchanged. |
+| `SnapshotReader` trait *(N-I-S1; N-J extended)* | `ade_ledger::rollback::traits` | 1 trait with 1 method | Carried. Two production impls (`InMemorySnapshotCache`, `PersistentSnapshotCache`); N-K adds no third. |
 | `BlockSource` trait *(N-I-S1)* | `ade_ledger::rollback::traits` | 1 trait with 1 method | Carried. |
 | `MaterializeError` *(N-I-S1)* | `ade_ledger::rollback::error` | 3 variants | Carried. |
 | `CommitRollbackError` *(N-I-S1)* | `ade_ledger::rollback::error` | 1 variant | Carried. |
 | `TargetPoint` *(N-I-S2 — rollback flavor)* | `ade_ledger::rollback::materialize` | closed struct | Carried. |
-| `materialize_rolled_back_state` chokepoint *(N-I-S2 — CN-STORE-07)* | `ade_ledger::rollback::materialize` | 1 function | Carried. **N-J note:** unchanged; the persistent reader fits the existing `&dyn SnapshotReader` extension point. |
+| `materialize_rolled_back_state` chokepoint *(N-I-S2 — CN-STORE-07)* | `ade_ledger::rollback::materialize` | 1 function | Carried. **N-K note:** now a production caller from the bootstrap warm-start branch; `CN-STORE-07.strengthened_in += PHASE4-N-K`. |
 | `commit_rollback` chokepoint *(N-I-S3)* | `ade_ledger::rollback::commit` | 1 function | Carried. |
 | `ChainDbWrite::rollback_to_slot` trait method *(N-I-S3)* | `ade_ledger::receive::chain_write` | 1 method | Carried. |
 | `RollbackContext<'a>` *(N-I-S6)* | `ade_ledger::receive::reducer` | closed BLUE struct | Carried. |
-| `SnapshotCadence` *(N-I-S4 — DC-STORE-07)* | `ade_runtime::rollback::cadence` | closed BLUE-structural struct (exactly 1 field) | Carried. |
-| **`SnapshotEncodeError`** *(NEW in N-J-S1)* | `ade_ledger::snapshot::error` | 1 variant — `EraNotSupported { era: CardanoEra }` | Closed sum. No `#[non_exhaustive]`; no `String`. New variant = closed-sum extension (e.g. future `IndexCorrupt` for a sibling encoder). |
-| **`SnapshotDecodeError`** *(NEW in N-J-S1)* | `ade_ledger::snapshot::error` | 5 variants — `Cbor(CodecError)`, `UnknownVersion { expected, found }`, `FingerprintMismatch { expected, actual }`, `EraNotSupported { era }`, `Structural { reason }` | Closed sum. No `#[non_exhaustive]`; no `String`. Round-trip-through-pattern-match test confirms a sixth variant fails to compile. |
-| **`StructuralReason`** *(NEW in N-J-S1)* | `ade_ledger::snapshot::error` | 9 variants (`ArrayLengthMismatch`, `MapLengthExceeded`, `UnexpectedNull`, `UnexpectedNonNull`, `NonceLengthMismatch`, `PoolIdLengthMismatch`, `Hash32LengthMismatch`, `Hash28LengthMismatch`, `EraTagOutOfRange`) | Closed sum. `Copy`. Static tag rather than `String` so the sum stays closed. |
-| **`encode_chain_dep` / `decode_chain_dep` chokepoint pair** *(NEW in N-J-S1 — CN-STORE-08)* | `ade_ledger::snapshot::chain_dep` | 2 functions — **THE SOLE `pub fn` pair encoding/decoding `PraosChainDepState` bytes in the workspace** | Single-authority pair. Composed by the framing layer. New chokepoint at this signature = strengthening (CI fail). |
-| **`encode_utxo_state` / `decode_utxo_state` chokepoint pair** *(NEW in N-J-S2)* | `ade_ledger::snapshot::utxo_state` | 2 functions — sole pair for `UTxOState` bytes in-module | Sub-state encoder. BTreeMap-only traversal. |
-| **`encode_cert_state` / `decode_cert_state` chokepoint pair** *(NEW in N-J-S3)* | `ade_ledger::snapshot::cert_state` | 2 functions — sole pair for `CertState` bytes in-module | Sub-state encoder. |
-| **`encode_epoch_state` / `decode_epoch_state` chokepoint pair** *(NEW in N-J-S4)* | `ade_ledger::snapshot::epoch_state` | 2 functions — sole pair for `EpochState` (+ `SnapshotState`) bytes in-module | Sub-state encoder. |
-| **`encode_pparams` / `decode_pparams` / `encode_gov_state` / `decode_gov_state` / `encode_conway_deposit_params` / `decode_conway_deposit_params`** *(NEW in N-J-S5)* | `ade_ledger::snapshot::gov_state` | 6 functions | Sub-state encoder triple. |
-| **`encode_ledger_state` / `decode_ledger_state` chokepoint pair** *(NEW in N-J-S6 — CN-STORE-08)* | `ade_ledger::snapshot::ledger` | 2 functions — **THE SOLE `pub fn` pair encoding/decoding `LedgerState` bytes in the workspace** | Composite encoder. Assembles S2–S5 sub-state pairs in canonical field order matching `ade_ledger::fingerprint`. Single-authority via CI grep. |
-| **`encode_snapshot` / `decode_snapshot` chokepoint pair** *(NEW in N-J-S7 — CN-STORE-08)* | `ade_ledger::snapshot::framing` | 2 functions — **THE SOLE `pub fn` pair encoding/decoding `(LedgerState, PraosChainDepState)` combined snapshot bytes in the workspace** | Combined-snapshot encoder. Wire layout: `array(4)[u32 version, bytes(32) fingerprint, bytes ledger, bytes chain_dep]`. Version verified BEFORE payload (DC-STORE-09). Fingerprint recomputed + verified AFTER decode (DC-STORE-08). Conway-only at encoder; pre-Conway → `EraNotSupported`. Single-authority via CI grep. |
-| **`SCHEMA_VERSION: u32 = 1`** *(NEW in N-J-S7 — DC-STORE-09)* | `ade_ledger::snapshot::framing` | 1 `pub const` — **THE SOLE schema-version anchor in `crates/`** | Closed versioned-schema seam. Future v2 layout = bump to 2; decoder dispatches on tag; v1 readers fail-closed on v2 bytes. CI-defended: no other `pub const SCHEMA_VERSION` allowed across `crates/`. |
-| **`PersistentSnapshotCache<'a, S: SnapshotStore + ?Sized>`** *(NEW in N-J-S8)* | `ade_runtime::rollback::persistent_cache` | closed GREEN struct `{ store: &'a S }` — **THE single production persistent impl of `SnapshotReader`** | Closed extension point. New persistent backends attach via the `SnapshotStore` trait, not by re-implementing `SnapshotReader`. Field set closed (1 field). |
-| **`PersistentCacheError`** *(NEW in N-J-S8)* | `ade_runtime::rollback::persistent_cache` | 3 variants — `Encode(SnapshotEncodeError)`, `Decode(SnapshotDecodeError)`, `Store(ChainDbError)` | Closed sum. Carries upstream errors verbatim. No `String`. |
-| **`PERSISTENT_CACHE_SCHEMA_VERSION: u32`** *(NEW in N-J-S8)* | `ade_runtime::rollback::persistent_cache` | 1 `pub const` — re-export of `framing::SCHEMA_VERSION` | Closed re-export. Test pins equality with framing's anchor. |
+| `SnapshotCadence` *(N-I-S4 — DC-STORE-07)* | `ade_runtime::rollback::cadence` | closed BLUE-structural struct (exactly 1 field) | Carried. **N-K note:** consulted by `PersistentSnapshotWriter::on_admitted` via `should_snapshot_after_block` (DC-NODE-02 single-source). |
+| `SnapshotEncodeError` *(N-J-S1)* | `ade_ledger::snapshot::error` | 1 variant | Carried. |
+| `SnapshotDecodeError` *(N-J-S1)* | `ade_ledger::snapshot::error` | 5 variants | Carried. **N-K note:** `UnknownVersion` / `FingerprintMismatch` at bootstrap map to `AuthorityFatalKind::SnapshotDecode*` → `EXIT_AUTHORITY_FATAL_DECODE = 12`. |
+| `StructuralReason` *(N-J-S1)* | `ade_ledger::snapshot::error` | 9 variants | Carried. |
+| `encode_chain_dep` / `decode_chain_dep` chokepoint pair *(N-J-S1 — CN-STORE-08)* | `ade_ledger::snapshot::chain_dep` | 2 functions | Carried. `CN-STORE-08.strengthened_in += PHASE4-N-K`. |
+| `encode_utxo_state` / `decode_utxo_state` / `encode_cert_state` / `decode_cert_state` / `encode_epoch_state` / `decode_epoch_state` / `encode_pparams` / `decode_pparams` / `encode_gov_state` / `decode_gov_state` / `encode_conway_deposit_params` / `decode_conway_deposit_params` chokepoint pairs *(N-J-S2..S5)* | `ade_ledger::snapshot::{utxo_state, cert_state, epoch_state, gov_state}` | 12 functions | Carried. |
+| `encode_ledger_state` / `decode_ledger_state` chokepoint pair *(N-J-S6 — CN-STORE-08)* | `ade_ledger::snapshot::ledger` | 2 functions | Carried. |
+| `encode_snapshot` / `decode_snapshot` chokepoint pair *(N-J-S7 — CN-STORE-08)* | `ade_ledger::snapshot::framing` | 2 functions | Carried. **N-K note:** `decode_snapshot` is now a production caller from `bootstrap_initial_state` warm-start; `encode_snapshot` from `PersistentSnapshotWriter::{on_admitted, force_capture}`. |
+| `SCHEMA_VERSION: u32 = 1` *(N-J-S7 — DC-STORE-09)* | `ade_ledger::snapshot::framing` | 1 `pub const` | Carried. **N-K note:** `DC-STORE-09` now carries `open_obligation = "snapshot_schema_migration_follow_on_cluster"` — the v1→v2 migration tooling is operator-facing and out of node-binary scope. |
+| `PersistentSnapshotCache<'a, S: SnapshotStore + ?Sized>` *(N-J-S8)* | `ade_runtime::rollback::persistent_cache` | closed GREEN struct | Carried. **N-K note:** consumed by both `bootstrap_initial_state` (warm-start read) and `PersistentSnapshotWriter` (cadence-driven writes); two production consumer paths. |
+| `PersistentCacheError` *(N-J-S8)* | `ade_runtime::rollback::persistent_cache` | 3 variants | Carried. **N-K note:** `Encode`/`Decode` arms surfaced through `NodeRunError::PersistentWriterIo`/`Bootstrap` → exit-code mapping. |
+| `PERSISTENT_CACHE_SCHEMA_VERSION: u32` *(N-J-S8)* | `ade_runtime::rollback::persistent_cache` | 1 `pub const` | Carried. |
+| **`bootstrap_initial_state` chokepoint** *(NEW in N-K — CN-NODE-01)* | `ade_runtime::bootstrap` | 1 function — **THE SOLE `pub fn` returning the initial `(LedgerState, PraosChainDepState, Option<ChainTip>)` triple in the workspace** | Single-authority init. Cold-start + warm-start = two branches of one function. CI-defended via `ci_check_bootstrap_closure.sh` (workspace-wide grep + forbidden-patterns check). New init shape = strengthening (CI fail). |
+| **`BootstrapInputs<'a, D, S>` / `BootstrapError`** *(NEW in N-K)* | `ade_runtime::bootstrap` | closed struct + closed sum | Inputs are borrowed (lifetime `'a`); generic over `D: ChainDb` + `S: SnapshotStore`. `BootstrapError` carries `Materialize(MaterializeError)`, `ChainDb(ChainDbError)`, `GenesisRequiredButAbsent`, `PersistentCacheDecode(SnapshotDecodeError)`. Closed sums. |
+| **`Clock` trait + `DeterministicClock` + `SystemClock`** *(NEW in N-K — DC-NODE-03)* | `ade_runtime::clock` | 1 trait + 2 impls — **THE SOLE wall-clock seam in `ade_runtime`** | Closed seam. New impls remain deliberate registry-tracked closed additions — not runtime plug-ins. CI-defended: `SystemClock` is the only file in `ade_runtime` that may read `SystemTime`/`Instant`/`tokio::time`. |
+| **`OrchestratorEvent`** *(NEW in N-K — DC-NODE-01 + DC-NODE-03)* | `ade_runtime::orchestrator::event` | closed sum | The closed event vocabulary. Variants cover peer RX events, slot ticks, server-pump events, persistent-writer notifications, shutdown signals. No `#[non_exhaustive]`; no plug-in registry. |
+| **`OrchestratorEffect`** *(NEW in N-K — DC-NODE-01 + DC-NODE-04)* | `ade_runtime::orchestrator::event` | closed sum | The closed effect vocabulary. Variants include `PeerSessionHalted { peer_id, reason: PeerHaltReason }`, `AuthorityFatal(AuthorityFatalKind)`, admit/write/snapshot dispatch. No `#[non_exhaustive]`. |
+| **`OrchestratorError` / `PeerHaltReason` / `AuthorityFatalKind`** *(NEW in N-K — DC-NODE-01 + DC-NODE-04)* | `ade_runtime::orchestrator::event` | 3 closed sums | `PeerHaltReason` is the closed reason-tag for `PeerSessionHalted` (no `String`). `AuthorityFatalKind` is the closed sum naming exactly the categories that halt the binary (`ChainWriteIo`, `SnapshotDecodeUnknownVersion`, `SnapshotDecodeFingerprintMismatch`, ...). New variant = closed-sum extension; if it warrants a new exit code, append a new `EXIT_*` constant + extend `NodeRunError::exit_code`. |
+| **`PeerId` / `PeerRole`** *(NEW in N-K)* | `ade_runtime::orchestrator::event` | 1 newtype + 1 closed enum | `PeerId` keys per-peer BTreeMaps in `OrchestratorState`. `PeerRole` discriminates inbound vs outbound peer / server-side connection. |
+| **`OrchestratorState` + `PerPeerReceiveVersions`** *(NEW in N-K)* | `ade_runtime::orchestrator::state` | closed structs | Field set closed. `per_peer_receive` + `per_peer_server` are `BTreeMap<PeerId, _>` (no `HashMap`). |
+| **`orchestrator::core::step` reducer** *(NEW in N-K)* | `ade_runtime::orchestrator::core` | 1 function | Pure `(state, event) → (state', Vec<OrchestratorEffect>)`. No `tokio`; no clock; no I/O. CI-defended via `ci_check_orchestrator_core_purity.sh` + `ci_check_clock_seam.sh`. |
+| **`PersistentSnapshotWriter` + `on_admitted` + `force_capture`** *(NEW in N-K — DC-NODE-02)* | `ade_runtime::rollback::persistent_writer` | closed struct + 2 methods — **THE SOLE production cadence-driven caller of `PersistentSnapshotCache::capture` in the workspace** | Single-authority. `on_admitted` consults `should_snapshot_after_block` exclusively; `force_capture` runs unconditionally during shutdown drain. CI-defended via `ci_check_persistent_writer_no_parallel_cadence.sh`. |
+| **`NodeRunError`** *(NEW in N-K — DC-NODE-04)* | `ade_node::node` | closed sum | Variants include `Bootstrap(BootstrapError)`, `PersistentWriterIo(...)`. `exit_code(&self) -> i32` is the closed deterministic mapping. |
+| **`EXIT_AUTHORITY_FATAL_IO = 10` / `EXIT_AUTHORITY_FATAL_DECODE = 12` / `EXIT_GENERIC_STARTUP = 1`** *(NEW in N-K — DC-NODE-04)* | `ade_node::node` | 3 `pub const i32` — **THE closed exit-code surface for `ade_node`** | Closed constants. New fatal kind = append new `EXIT_*` constant + extend `AuthorityFatalKind` + extend `NodeRunError::exit_code`. No ad-hoc exit codes. |
 | `PlutusLanguage` | `ade_plutus::evaluator` | 3 variants | |
 | Named ingress chokepoints (block CBOR) | `ade_codec::*` | 10 | |
 | Conway cert/withdrawals sub-grammar decoders *(B3 / B4)* | `ade_codec::conway::{cert, withdrawals}` + `ade_codec::shelley::cert::read_pool_registration_cert` | 5 functions | Closed. |
@@ -777,23 +761,23 @@ rules (`DC-CONS-21` flipped from `declared` to `enforced`,
 | Mux frame chokepoints | `ade_network::mux::frame::{encode_frame, decode_frame}` | 2 free functions | |
 | Mini-protocol transition functions | `ade_network::*::transition` + `n2c::local_*::transition` | 8 modules | |
 | Mini-protocol version enums | `ade_network::codec::version::*` | 11 closed enums | |
-| `ChainDb` / `SnapshotStore` / `Recoverable` trait surfaces | `ade_runtime::chaindb` + `ade_runtime::recovery` | closed | **N-J note:** `SnapshotStore` (3 methods — `put_snapshot`, `get_snapshot`, `list_snapshot_slots`) is now consumed at production scale by `PersistentSnapshotCache` (single production consumer); trait surface unchanged. |
+| `ChainDb` / `SnapshotStore` / `Recoverable` trait surfaces | `ade_runtime::chaindb` + `ade_runtime::recovery` | closed | **N-K note:** `ChainDb` + `SnapshotStore` are now opened by `bootstrap_initial_state` (production single-authority opener). Trait surfaces unchanged. |
 | Hash domain functions | `ade_crypto::blake2b::*` | 4 named domains | |
 | `ChainEvent` / `ChainSelectionReject` *(N-B)* | `ade_core::consensus::events` | 5 / 4 variants | |
 | Consensus error families *(N-B)* | `ade_core::consensus::errors` | 8 closed error enums | |
-| `StreamInput` / `OrchestratorError` / `DecodeError` / `GenesisParseError` / `GenesisBlob` / `NetworkMagic` *(N-B)* | various | closed | |
+| `StreamInput` / `OrchestratorError` (N-B) / `DecodeError` / `GenesisParseError` / `GenesisBlob` / `NetworkMagic` *(N-B)* | various | closed | **Naming note:** the N-K `OrchestratorError` is in `ade_runtime::orchestrator::event` and is structurally distinct from N-B's `ade_core::consensus::orchestrator::OrchestratorError` (different namespace, different domain). |
 | `LedgerView` trait *(N-B; B1-refined)* | `ade_core::consensus::ledger_view` | 4 methods | |
 | `HeaderVrf` *(N-B; B1)* | `ade_core::consensus::header_summary` | 2 variants | |
 | `BlockValidityVerdict` / `BlockValidityError` etc. *(B1)* | `ade_ledger::block_validity::verdict` | closed | |
-| `block_validity` chokepoint *(B1)* | `ade_ledger::block_validity::transition` | 1 function | Single chokepoint. Five public consumers: B1 validator, `self_accept` (N-C), `served_chain_admit` (N-G), `admit_via_block_validity` (N-H), `materialize_rolled_back_state` (N-I). N-J adds no new consumer. |
+| `block_validity` chokepoint *(B1)* | `ade_ledger::block_validity::transition` | 1 function | Single chokepoint. Five public consumers: B1 validator, `self_accept` (N-C), `served_chain_admit` (N-G), `admit_via_block_validity` (N-H), `materialize_rolled_back_state` (N-I/N-K-driven). N-K adds no new consumer. |
 | `TxValidityVerdict` / `TxRejectClass` / `TxValidityError` / `SignerSource` / `WitnessClosureError` etc. *(B2)* | `ade_ledger::tx_validity::*` | closed | |
 | `AdmitOutcome` / `MempoolState` / `OrderPolicy` *(B2)* | `ade_ledger::mempool::*` | closed | |
 | `LeaderScheduleAnswer` / `is_leader_for_vrf_output` *(N-B)* | `ade_core::consensus::leader_schedule` | closed | |
 | `PraosNonces` / `NonceScanError` *(B1)* | `ade_ledger::consensus_input_extract` | | |
-| `PraosChainDepState` / `ChainEvent` canonical encodings *(N-B)* | `ade_core::consensus::encoding` | 4 chokepoints | **N-J note:** N-B's `encode_chain_dep_state` (`ade_core::consensus::encoding::encode_chain_dep_state`) is the consensus-internal canonical encoding; N-J's `encode_chain_dep` (`ade_ledger::snapshot::chain_dep::encode_chain_dep`) is the snapshot-layer encoding. **These are deliberately separate**: the snapshot layer adds restart-safety metadata (version, fingerprint) and uses snapshot-specific wire shape. CN-STORE-08's grep is scoped to the **N-J function names** (`encode_chain_dep` / `decode_chain_dep` / `encode_ledger_state` / `decode_ledger_state` / `encode_snapshot` / `decode_snapshot`); the N-B `encode_chain_dep_state` is not in scope. |
-| `LedgerFingerprint` fold *(B3/B5)* | `ade_ledger::fingerprint` | | **N-J note:** consumed by `encode_snapshot` and `decode_snapshot` as the cross-check authority (embedded on encode; recomputed + verified on decode). `DC-STORE-08` cites `fingerprint(ledger).combined` as the canonical pre-image. |
-| **CI check set** | `ci/ci_check_*.sh` | **55 scripts (54 → 55 in PHASE4-N-J)** | Existing checks may be tightened, never relaxed. |
-| **Invariant registry families** | `docs/ade-invariant-registry.toml` | Families T / CN / DC / OP / RO; **N-J added 3 rules** (`DC-STORE-08` `enforced`, `DC-STORE-09` `enforced`, `CN-STORE-08` `enforced`); strengthened + closed `DC-CONS-21` (`open_obligation` removed). Total: **209 entries** (206 → 209). | Append-only IDs. |
+| `PraosChainDepState` / `ChainEvent` canonical encodings *(N-B)* | `ade_core::consensus::encoding` | 4 chokepoints | |
+| `LedgerFingerprint` fold *(B3/B5)* | `ade_ledger::fingerprint` | | **N-K note:** used by the replay-equivalence test to compare two runs' `combined` fingerprints byte-identically. |
+| **CI check set** | `ci/ci_check_*.sh` | **61 scripts (55 → 61 in PHASE4-N-K)** | Existing checks may be tightened, never relaxed. |
+| **Invariant registry families** | `docs/ade-invariant-registry.toml` | Families T / CN / DC / OP / RO; **N-K added 5 rules** (`CN-NODE-01`, `DC-NODE-01..04` all `enforced`); strengthened 6 carried rules (`T-DET-01`, `CN-CONS-08`, `CN-STORE-07`, `CN-STORE-08`, `DC-CONS-21`, `DC-STORE-08`); added 1 new `open_obligation` (`DC-STORE-09`). Total: **214 entries** (209 → 214). | Append-only IDs. |
 
 ### Extensible (open within constraints)
 
@@ -815,25 +799,30 @@ rules (`DC-CONS-21` flipped from `declared` to `enforced`,
 | `PendingHeaderCache.entries` *(N-H-S1)* | `ade_ledger::receive::pending_header_cache::PendingHeaderCache` | `BTreeMap<(SlotNo, Hash32), Vec<u8>>`. |
 | `PerPeerReceiveState` instance set *(N-H-S4)* | `ade_runtime::receive::orchestrator` | One instance per upstream peer. |
 | `InMemorySnapshotCache.entries` *(N-I-S4)* | `ade_runtime::rollback::in_memory_cache::InMemorySnapshotCache` | `BTreeMap<SlotNo, (LedgerState, PraosChainDepState)>`. Shape closed; instance set open. No eviction (carried OQ-5). |
-| **Persistent snapshot store contents** *(NEW in N-J-S8 — runtime-extensible **content** via the closed `PersistentSnapshotCache::capture` chokepoint + the underlying `SnapshotStore::put_snapshot` trait method)* | the `SnapshotStore` instance backing `PersistentSnapshotCache` | `BTreeSet<SlotNo>` per `list_snapshot_slots`. Shape closed; instance set open. The set grows via `PersistentSnapshotCache::capture` (single production write entry); shrinks via `SnapshotStore::delete_snapshot` (no production caller wired at this HEAD — eviction is the named follow-on candidate). |
+| Persistent snapshot store contents *(N-J-S8)* | the `SnapshotStore` instance backing `PersistentSnapshotCache` | `BTreeSet<SlotNo>` per `list_snapshot_slots`. Shape closed; instance set open. **N-K note:** the set now grows from TWO production write callers — `PersistentSnapshotWriter::on_admitted` (cadence-driven) + `PersistentSnapshotWriter::force_capture` (shutdown drain); each routes through `PersistentSnapshotCache::capture` (single cache-level entry). |
+| **Per-peer collections in `OrchestratorState`** *(NEW in N-K)* | `ade_runtime::orchestrator::state::OrchestratorState::{per_peer_receive, per_peer_server}` | `BTreeMap<PeerId, _>` (no `HashMap`). One entry per connected peer. Set grows on `OrchestratorEvent::PeerConnected`; shrinks on `OrchestratorEffect::PeerSessionHalted`. Shape closed; instance set open. |
+| **Orchestrator-event corpus** *(NEW in N-K — tooling-only)* | `corpus/orchestrator/` | Test corpus for the replay-equivalence harness. Read by `replay_equivalence_under_deterministic_clock_holds`. Tooling-only. |
 | Oracle reference snapshots / regression corpus | `ade_testkit::harness::*` | Tooling-only. |
 | Network corpus / Consensus corpus / Block-validity corpus / Tx-validity corpus / Mempool ingress corpus / PP canonical corpus / Producer corpus / Server-paths corpus / Receive-paths corpus | various | Tooling-only. |
 | Receive-rollback integration test *(N-I-S6)* | `crates/ade_runtime/tests/receive_rollback_integration.rs` | Tooling-only. |
-| **Persistent-cache inline test set** *(NEW in N-J-S8 — tooling-only)* | `crates/ade_runtime/src/rollback/persistent_cache.rs` (inline `#[cfg(test)] mod tests`) | Tooling-only. Inline tests prove: round-trip via `nearest_le`; cross-impl equivalence with `InMemorySnapshotCache` over a multi-probe sweep; empty-store returns `None`; pre-Conway capture surfaces `Encode/EraNotSupported`; corrupt persisted bytes yield `None` (no panic); `PERSISTENT_CACHE_SCHEMA_VERSION` equals `framing::SCHEMA_VERSION`. |
-| Operator-action probe binaries *(N-B + N-E S6 + N-C S7 + N-G S7 + N-H S6)* | `ade_core_interop::bin::*` | RED operator-action; `#[ignore]`-gated. **N-J added no new binary.** |
+| Persistent-cache inline test set *(N-J-S8)* | `crates/ade_runtime/src/rollback/persistent_cache.rs` (inline) | Tooling-only. |
+| **Orchestrator integration tests** *(NEW in N-K — tooling-only)* | `crates/ade_runtime/tests/orchestrator_{peer_isolation,replay_equivalence}.rs` + `crates/ade_node/tests/{shutdown_resume_identity,authority_fatal_decode}.rs` | Tooling-only. 4 files / 7 tests. Defend DC-NODE-01, DC-NODE-03, DC-NODE-04. |
+| Operator-action probe binaries *(N-B + N-E S6 + N-C S7 + N-G S7 + N-H S6)* | `ade_core_interop::bin::*` | RED operator-action; `#[ignore]`-gated. **N-K added no new binary.** |
 | `KillStrategy<D>` trait impls | `ade_runtime::chaindb::crash_safety` | RED-only test infrastructure. |
 | Recovery state types | callers of `Recoverable` | Open: any state with canonical encode + apply-block step. |
-| Pinned external crates | `crates/*/Cargo.toml` | Tier-5 rationale doc required. |
+| Pinned external crates | `crates/*/Cargo.toml` | Tier-5 rationale doc required. **N-K added:** `tokio` is now an explicit `ade_runtime` dep (was already in scope for `ade_runtime::receive::orchestrator` via the wider RED surface; now gated per-file by `ci_check_orchestrator_core_purity.sh` + `ci_check_clock_seam.sh`). |
 
 ### Candidates — extensible surfaces not yet wired
 
 | Cluster | Candidate registry | Rationale |
 |---------|-------------------|-----------|
-| **Orchestrator-side persistent-capture wiring cluster** *(NEW candidate flagged by N-J close)* | **A post-admission hook that writes to `PersistentSnapshotCache` alongside `InMemorySnapshotCache`** | The persistent cache's `capture` method is wired only at the test layer today; production capture still goes via `maybe_capture_snapshot` to in-memory only. Tier-5 operational concern; no BLUE invariants change. |
-| **Snapshot eviction policy cluster** *(carried from N-I; **now doubled by N-J — applies to both caches**)* | **Bounded ring + persistent retention policy** | Tier-5 operational concern. Both `InMemorySnapshotCache` and the persistent `SnapshotStore` grow monotonically at this HEAD. Must remain replay-deterministic. |
-| **Pre-Conway snapshot encoder cluster** *(NEW low-priority candidate flagged by N-J close)* | **Widen `encode_ledger_state` + `decode_ledger_state` to Babbage and earlier eras** | No current operational need; rollback target windows are bounded. |
-| **Snapshot schema migration v1 → v2 cluster** *(NEW candidate flagged by N-J close)* | **Future evolution of the framing wire format** | `SCHEMA_VERSION: u32 = 1` is the explicit anchor; first new field appended bumps to 2. No present cluster planned. |
-| **Multi-peer fork choice cluster** *(carried; now doubly-enabled by N-J)* | **Praos longest-chain across competing peers** | Re-uses N-I `RollbackContext` to roll back losing forks. Now restart-safe via N-J. |
+| **N-K SUBSUMED the prior revision's "orchestrator-side persistent-capture wiring"** — `PersistentSnapshotWriter` is the production cadence-driven persistent-capture caller. (Removed.) | | |
+| **NEW candidate — Live mux + handshake driver cluster** *(NEW candidate flagged by N-K close — `RO-LIVE-01`/`RO-LIVE-02`)* | **A RED submodule `ade_runtime::network::mux_pump` (or similar) bound to `MuxTransport` driving real Ouroboros frames into `peer_session` / `n2n_server_pump`** | Operator-action follow-on; honest-scope half of N-K. Tracked on `RO-LIVE-01`/`RO-LIVE-02`. |
+| **NEW candidate — Snapshot schema migration v1 → v2 tooling cluster** *(NEW `DC-STORE-09` `open_obligation` at N-K close)* | **Operator-facing tool reading v1 bytes via `framing::decode_snapshot` and emitting v2 bytes** | Tier-5 operator tooling; out of node-binary scope; named follow-on. |
+| **NEW candidate — Metrics + observability cluster** *(NEW candidate flagged by N-K close)* | **Closed `MetricEffect` arm on `OrchestratorEffect` + RED Prometheus exporter** | Tier-5; closed-sum extension on the effect type. |
+| **Snapshot eviction policy cluster** *(carried from N-J)* | **Bounded ring + persistent retention policy** | Tier-5 operational concern. Applies to both `InMemorySnapshotCache` and the persistent `SnapshotStore`. |
+| **Pre-Conway snapshot encoder cluster** *(carried from N-J)* | **Widen encoders to Babbage and earlier eras** | No current operational need; rollback target windows are bounded. |
+| **Multi-peer fork choice cluster** *(carried; now further enabled by N-K stable per-peer task model)* | **Praos longest-chain across competing peers** | Re-uses N-I `RollbackContext`; now restart-safe via N-J; now isolated per-peer via N-K. |
 | **N2C local-chain-sync receive surface cluster** *(carried)* | Carried. | |
 | **CE-N-H-6 / CE-N-G-8 / CE-N-C-8 operator-action live evidence** *(carried)* | Carried. | |
 | **N-I+ Tier-5 — operator-tunable rollback policy** *(carried)* | Carried. | |
@@ -843,62 +832,51 @@ rules (`DC-CONS-21` flipped from `declared` to `enforced`,
 | **PP OQ-1..OQ-4** *(carried)* | Carried. | |
 | N-A (deferred) | Peer address book | Runtime mutable. |
 | N-F | Query API method set | Tier 5 wire / Tier 1 semantics. |
-| N-F | Prometheus metric names | Tier 5; append-only registry expected. |
+| N-F | Prometheus metric names | Tier 5; append-only registry expected (links to metrics cluster). |
 
-### Closed-grammar audit (PHASE4-N-J full close)
+### Closed-grammar audit (PHASE4-N-K full close)
 
-This sweep was performed after PHASE4-N-J full close (S1..S8).
+This sweep was performed after PHASE4-N-K full close.
 
-1. **`SnapshotEncodeError` / `SnapshotDecodeError` / `StructuralReason`
-   closed sums** — **closed by intent.** 1 / 5 / 9 variants; no
-   `#[non_exhaustive]`; no `String`. Round-trip-through-pattern-match
-   tests confirm sixth/sixth/tenth variant additions fail to compile.
-2. **`encode_chain_dep` / `decode_chain_dep` chokepoint pair** —
-   **closed by intent and CI-defended.** Sole pair for
-   `PraosChainDepState` bytes in the workspace (CN-STORE-08 grep).
-3. **`encode_utxo_state` / `encode_cert_state` / `encode_epoch_state`
-   / `encode_pparams` / `encode_gov_state` /
-   `encode_conway_deposit_params` (+ decoders)** — **closed by intent.**
-   Each is the sole pair for its sub-state. Sub-state CI scope is
-   in-module (the framing closure check enforces the composite
-   layer's authority).
-4. **`encode_ledger_state` / `decode_ledger_state` chokepoint pair**
-   — **closed by intent and CI-defended.** Sole pair for `LedgerState`
-   bytes in the workspace. Composes S2–S5 sub-state pairs in field
-   order matching `ade_ledger::fingerprint`.
-5. **`encode_snapshot` / `decode_snapshot` chokepoint pair** —
-   **closed by intent and CI-defended.** Sole pair for combined
-   `(LedgerState, PraosChainDepState)` snapshot bytes in the
-   workspace. Wire layout closed; decoder verifies version BEFORE
-   payload + fingerprint AFTER decode.
-6. **`SCHEMA_VERSION: u32 = 1` schema anchor** — **closed by intent
-   and CI-defended.** Sole `pub const SCHEMA_VERSION` in `crates/`.
-   Future v2 bump = closed extension; decoder fails-closed on
-   unknown versions.
-7. **`PersistentSnapshotCache<'a, S: SnapshotStore + ?Sized>` GREEN
-   reader** — **closed by intent.** Single production persistent
-   impl of `SnapshotReader`. Borrows the store (lifetime `'a`); holds
-   no in-memory state. New persistent backends attach via
-   `SnapshotStore`, not via re-implementing `SnapshotReader`.
-8. **`PersistentCacheError` closed sum** — **closed by intent.** 3
-   variants (`Encode | Decode | Store`); carries upstream errors
-   verbatim.
-9. **`PERSISTENT_CACHE_SCHEMA_VERSION` re-export** — **closed by
-   intent.** Test pins equality with `framing::SCHEMA_VERSION`.
+1. **`OrchestratorEvent` / `OrchestratorEffect` / `OrchestratorError` /
+   `PeerHaltReason` / `AuthorityFatalKind` closed sums** — **closed
+   by intent.** Trait-less; data-only; no `#[non_exhaustive]`; no
+   `String`. New variant = closed-sum extension.
+2. **`bootstrap_initial_state` chokepoint** — **closed by intent and
+   CI-defended.** Sole `pub fn` returning the initial triple in the
+   workspace (CN-NODE-01 grep + forbidden-patterns check).
+3. **`Clock` trait + closed impl set** — **closed by intent and
+   CI-defended.** `DeterministicClock` + `SystemClock`; new impl = a
+   deliberate registry-tracked closed addition. `SystemClock` is the
+   SOLE wall-clock-reading site in `ade_runtime` (DC-NODE-03 grep).
+4. **`PersistentSnapshotWriter` cadence chokepoint** — **closed by
+   intent and CI-defended.** Sole production cadence-driven caller
+   of `PersistentSnapshotCache::capture` (DC-NODE-02 grep against
+   `should_snapshot_after_block`).
+5. **`OrchestratorState` per-peer collections** — **closed by
+   intent.** `BTreeMap<PeerId, _>` shape; no `HashMap`. Per-peer
+   isolation enforced by `PeerSessionHalted` discriminant
+   (DC-NODE-01 grep).
+6. **`NodeRunError::exit_code` + closed `EXIT_*` constants** —
+   **closed by intent and CI-defended.** `EXIT_AUTHORITY_FATAL_IO =
+   10`, `EXIT_AUTHORITY_FATAL_DECODE = 12`, `EXIT_GENERIC_STARTUP =
+   1`. New fatal kind = append `EXIT_*` + extend
+   `AuthorityFatalKind` + extend mapping. CI-defended via
+   `ci_check_node_binary_uses_single_bootstrap.sh`.
 
-**Gap note — orchestrator-side persistent-capture wiring.** The
-persistent capture path is exposed at the BLUE + GREEN layers but is
-not yet wired into the per-peer post-admission hook
-(`maybe_capture_snapshot` still talks only to `InMemorySnapshotCache`).
-Surfaced as the highest-priority post-N-J Tier-5 candidate seam.
+**Gap note — live mux pump above `MuxTransport`.** The honest-scope
+RED runner files in this cluster (`peer_session.rs`,
+`leadership_session.rs`, `n2n_server_pump.rs`, `ade_node::main`)
+defer the actual Ouroboros mux + handshake driver to the
+operator-action follow-on tracked by `RO-LIVE-01` / `RO-LIVE-02`.
+The binary at this HEAD bootstraps + prints a readiness line.
 
-**Gap note — snapshot eviction (carried, now doubled).** Both the
-in-memory cache and the persistent `SnapshotStore` grow monotonically
-at this HEAD. The persistent store already has a
-`SnapshotStore::delete_snapshot(slot)` method (N-D); no policy
-decides when to call it. Carried as a Tier-5 follow-on.
+**Gap note — snapshot schema migration v1 → v2 tooling.** Promoted
+from "no current cluster" (N-J) to an explicit `DC-STORE-09`
+`open_obligation` at N-K close. `SCHEMA_VERSION = 1`; v1→v2 tooling
+is the named follow-on cluster's deliverable.
 
-### Closed-grammar audit (carried — PHASE4-N-I / N-H / N-G / N-C / PROPOSAL-PROCEDURES-DECODE / N-E / B3 / B4 / B5)
+### Closed-grammar audit (carried — PHASE4-N-J / N-I / N-H / N-G / N-C / PROPOSAL-PROCEDURES-DECODE / N-E / B3 / B4 / B5)
 
 All carried unchanged from prior revision.
 
@@ -913,28 +891,28 @@ All carried unchanged from prior revision.
 - **`PreservedCbor<T>` invariant**.
 - **Hash algorithms**: Blake2b-224 / 256, Ed25519, Byron-bootstrap,
   KES-sum, VRF-draft-03.
-- **Era-correct block body hash** *(B1; strengthened in N-C, N-G, N-H)*:
-  preserved-CBOR-segment bytes.
+- **Era-correct block body hash** *(B1; strengthened in N-C, N-G, N-H)*.
 - **Single canonical body-hash authority** *(N-C-S4 — DC-CONS-16)*: carried.
 - **Single canonical header/body splitter** *(N-G-S1 — DC-CONS-18)*: carried.
 - **Server-agency closure for outgoing mini-protocol messages** *(N-G-S1 — CN-PROTO-06)*: carried.
 - **Receive-event closure for incoming peer signals** *(N-H-S1 — CN-PROTO-07)*: carried.
 - **Type-level receive admission gate** *(N-H-S1 — CN-CONS-07 strengthening)*: carried.
-- **Receive-side admission state-isolation discipline (Invariant I-6)** *(N-H-S2 — CN-CONS-08 / DC-CONS-19)*: carried.
-- **Single canonical receive-side rollback materialization authority** *(N-I-S2 — CN-STORE-07)*: carried.
-- **Replay-forward correctness** *(N-I-S2 — DC-CONS-22)*: carried. `DC-CONS-22.strengthened_in += PHASE4-N-J` (replay-forward over persistent snapshots equals direct-apply — proven via `persistent_cache_matches_in_memory_cache_semantics`).
-- **Atomic rollback commit discipline** *(N-I-S3)*: carried. `DC-CONS-20.strengthened_in += PHASE4-N-J` (rollback atomicity now restart-safe).
-- **Receive-side atomic admit + rollback over ChainDb + LedgerState + PraosChainDepState** *(N-H-S2 + N-I-S6 — DC-CONS-20)*: carried; now restart-safe.
+- **Receive-side admission state-isolation discipline (Invariant I-6)** *(N-H-S2 — CN-CONS-08 / DC-CONS-19)*: carried. **N-K note:** `CN-CONS-08.strengthened_in += PHASE4-N-K` — admit path now driven by the production orchestrator.
+- **Single canonical receive-side rollback materialization authority** *(N-I-S2 — CN-STORE-07)*: carried. `CN-STORE-07.strengthened_in += PHASE4-N-K` — materialize now driven by the bootstrap warm-start branch.
+- **Replay-forward correctness** *(N-I-S2 — DC-CONS-22)*: carried.
+- **Atomic rollback commit discipline** *(N-I-S3)*: carried.
+- **Receive-side atomic admit + rollback over ChainDb + LedgerState + PraosChainDepState** *(N-H-S2 + N-I-S6 — DC-CONS-20)*: carried.
 - **Receive-reducer rollback-context discipline** *(N-I-S6)*: carried.
-- **Snapshot cadence determinism** *(N-I-S4 — DC-STORE-07)*: carried.
+- **Snapshot cadence determinism** *(N-I-S4 — DC-STORE-07)*: carried. **N-K note:** consulted by `PersistentSnapshotWriter::on_admitted` as the single source.
 - **`ChainDbWrite::rollback_to_slot` trait method semantics** *(N-I-S3)*: carried.
-- **Single canonical snapshot encoder authority** *(NEW in N-J-S7 — CN-STORE-08)*: `encode_snapshot` / `decode_snapshot` is the SOLE `pub fn` pair encoding/decoding the combined `(LedgerState, PraosChainDepState)` tuple bytes in the workspace; `encode_ledger_state` / `decode_ledger_state` is the SOLE pair for `LedgerState` bytes; `encode_chain_dep` / `decode_chain_dep` is the SOLE pair for `PraosChainDepState` bytes. CI enforcement via repo-wide grep in `ci_check_snapshot_encoder_closure.sh`.
-- **Snapshot encoder canonicality** *(NEW in N-J — DC-STORE-08)*: `encode_snapshot(s)` is byte-identical across runs. Encoder uses BTreeMap iteration only; no HashMap; no wall-clock; no floats; no rand. Definite-length CBOR containers throughout. Fingerprint embedded on encode + recomputed + verified on decode. Snapshot bytes are byte-identical across runs for the same source state; corruption / schema drift fails closed.
-- **Snapshot bytes version-tag + fingerprint discipline** *(NEW in N-J — DC-STORE-09)*: snapshot bytes carry a closed `u32` version tag (initial `== SCHEMA_VERSION == 1`) and the source state's blake2b-256 fingerprint. Decoder reads the version tag FIRST and rejects unknown versions BEFORE decoding the ledger or chain-dep payload; decoder recomputes the fingerprint on the decoded state and rejects on mismatch.
-- **Snapshot encoder Conway-only scope** *(NEW in N-J)*: pre-Conway → `SnapshotEncodeError::EraNotSupported` / `SnapshotDecodeError::EraNotSupported` structurally. Mirrors N-I's `MaterializeError::EraNotSupported` discipline.
-- **Persistent snapshot reader contract** *(NEW in N-J-S8)*: `PersistentSnapshotCache::nearest_le` walks the `SnapshotStore`'s ascending slot list, picks the largest ≤ target, decodes via `framing::decode_snapshot`, and surfaces `None` on decode failure (treats corruption as "no usable snapshot" rather than panic). The reader is observationally equivalent to `InMemorySnapshotCache` for the same admit sequence (proven by `persistent_cache_matches_in_memory_cache_semantics`).
+- **Single canonical snapshot encoder authority** *(N-J-S7 — CN-STORE-08)*: carried. `CN-STORE-08.strengthened_in += PHASE4-N-K` — encode/decode now driven end-to-end by the production orchestrator.
+- **Snapshot encoder canonicality** *(N-J — DC-STORE-08)*: carried. `DC-STORE-08.strengthened_in += PHASE4-N-K` — encoder canonicality exercised by persistent writer + shutdown drain.
+- **Snapshot bytes version-tag + fingerprint discipline** *(N-J — DC-STORE-09)*: carried. **N-K note:** `DC-STORE-09` gains
+  `open_obligation = "snapshot_schema_migration_follow_on_cluster"` — the v1→v2 migration tooling is the named follow-on.
+- **Snapshot encoder Conway-only scope** *(N-J)*: carried.
+- **Persistent snapshot reader contract** *(N-J-S8)*: carried. `DC-CONS-21.strengthened_in += PHASE4-N-K` — round-trip equivalence now exercised end-to-end at bootstrap warm-start + shutdown-resume.
 - **Receive-side replay determinism** *(N-H-S3 — DC-PROTO-09)*: carried.
-- **Per-peer receive-state independence across peers** *(N-H-S4)*: carried.
+- **Per-peer receive-state independence across peers** *(N-H-S4)*: carried. **N-K note:** further strengthened — per-peer isolation now extends to the tokio task layer (DC-NODE-01); a peer-session task failure halts only that task.
 - **Key-boundary for receive paths** *(N-H-S4)*: carried.
 - **Handshake-negotiated version threading through the receive reducer call site** *(N-H-S4 — DC-PROTO-06 strengthening)*: carried.
 - **Served-bytes parity** *(N-G-S4 — DC-CONS-17)*: carried.
@@ -949,12 +927,12 @@ All carried unchanged from prior revision.
 - **Closed total gov-cert dispatch contract** *(B5)*: DC-LEDGER-09.
 - **Fail-fast gov-cert environment** *(B5)*.
 - **Checked DRep-expiry arithmetic** *(B5)*.
-- **`ConwayGovState` deterministic-fold accumulation** *(B5)*. **N-J note:** `ConwayGovState` is now also one of the encoded sub-states (S5); the encoder reads its fields via `ade_ledger::fingerprint`'s field walk — same field set, same iteration order.
+- **`ConwayGovState` deterministic-fold accumulation** *(B5)*.
 - **Conway withdrawals map grammar** *(B3)*: never last-wins.
 - **Closed deposit-effect sum types** *(B3)*.
 - **Canonical deposit-param authority** *(B3)*: DC-TXV-07.
 - **Full Conway value-conservation equation** *(B3)*.
-- **`LedgerFingerprint` Conway deposit-param fold** *(B3)*. **N-J note:** `LedgerFingerprint.combined` is the canonical pre-image of the snapshot fingerprint cross-check (DC-STORE-08).
+- **`LedgerFingerprint` Conway deposit-param fold** *(B3)*.
 - **Closed `proposal_procedures` wire grammar at Conway tx-body key 20** *(PP — DC-LEDGER-11)*.
 - **Plutus script ingress chokepoint**: `PlutusScript::from_cbor`.
 - **Plutus language set**: V1, V2, V3.
@@ -963,7 +941,7 @@ All carried unchanged from prior revision.
 - **11 closed mini-protocol message enums** + **8 closed state graphs**.
 - **`BootstrapAnchorHash` v1 preimage** *(N-B)*.
 - **`EraSchedule` invariants** *(N-B)*.
-- **`PraosChainDepState` / `ChainEvent` CBOR encodings** *(N-B)*. **N-J note:** the N-B `ade_core::consensus::encoding::encode_chain_dep_state` is the consensus-internal canonical encoding; the N-J `ade_ledger::snapshot::chain_dep::encode_chain_dep` is the snapshot-layer encoding with restart-safety metadata. Both frozen at their respective wire shapes; CN-STORE-08's single-authority grep targets the N-J names.
+- **`PraosChainDepState` / `ChainEvent` CBOR encodings** *(N-B)*.
 - **Consensus error taxonomies** *(N-B)*.
 - **`StreamInput` 3-variant taxonomy** *(N-B)*. **`HeaderVrf` era model**.
 - **`block_validity` composition contract** *(B1; N-I strengthened)*: carried.
@@ -979,16 +957,16 @@ All carried unchanged from prior revision.
 - **Verbatim tx-bytes flow through ingress** *(N-E; N-H mirror)*: carried.
 - **GREEN single-step replay fold contract** *(N-E — DC-MEM-04)*.
 - **Cross-cluster obligation pattern** *(N-E; carried)*.
-- **Operator-action evidence pattern** *(N-B / N-E / N-C / N-G / N-H)*: carried. **N-J adds no new instance** — persistent snapshot encoding is wholly internal authority.
+- **Operator-action evidence pattern** *(N-B / N-E / N-C / N-G / N-H)*: carried. **N-K adds no new instance** in the probe-binary family; the live mux pump is the follow-on (`RO-LIVE-01`/`RO-LIVE-02`).
 - **Closed credential discriminant contract** *(OQ5 / COMMITTEE / DREP / ENACTMENT / PP)*.
 - **Committee-enactment write-back contract** *(ENACTMENT)*.
 - **All canonical types**: shapes frozen at the era / version they entered.
 - **Handshake-negotiated version threading** *(N-A; strengthened in N-G + N-H)*: carried.
-- **TCB color assignments**: per `.idd-config.json` `core_paths`. **N-J additions:** `ade_ledger::snapshot::*` (8 files) are BLUE (under the already-BLUE `ade_ledger` crate prefix); `ade_runtime::rollback::persistent_cache` is GREEN-inside-RED-crate (single-file GREEN classification — pure adapter; no clock, no async, BTreeMap-only).
-- **`ChainDb` / `SnapshotStore` / `Recoverable` trait shapes** (N-D). **N-J note:** `SnapshotStore`'s 3-method shape is now consumed at production scale by `PersistentSnapshotCache`; trait surface unchanged.
+- **TCB color assignments**: per `.idd-config.json` `core_paths`. **N-K additions:** `ade_runtime::bootstrap`, `ade_runtime::clock` (trait + `DeterministicClock`), `ade_runtime::orchestrator::{mod, event, state, core}`, `ade_runtime::rollback::persistent_writer`, `ade_node::{cli, lib, node}` are GREEN-inside-RED-crate (single-file GREEN classification — pure, no `tokio::*`, no clock-read). `ade_runtime::clock::SystemClock` and `ade_runtime::orchestrator::{peer_session, leadership_session, n2n_server_pump}` and `ade_node::main` are RED.
+- **`ChainDb` / `SnapshotStore` / `Recoverable` trait shapes** (N-D). **N-K note:** `ChainDb` + `SnapshotStore` are now opened by `bootstrap_initial_state` as the production single-authority opener; trait surfaces unchanged.
 - **`AcceptedBlock` type-level broadcast gate** *(N-C-S5)*: carried.
 - **`AdmittedBlock` type-level admission gate** *(N-H-S1)*: carried.
-- **`RollbackContext` BLUE struct seam** *(N-I-S6)*: carried. **N-J note:** unchanged at the struct level; the `&dyn SnapshotReader` field now accepts the new persistent impl as a drop-in alternative to the in-memory impl.
+- **`RollbackContext` BLUE struct seam** *(N-I-S6)*: carried.
 - **`SnapshotCadence` BLUE-structural single-field discipline** *(N-I-S4 — DC-STORE-07)*: carried.
 - **`forge_block` pure-transition contract** *(N-C-S3)*: carried.
 - **Single source of leader truth** *(N-C-S3)*: carried.
@@ -996,6 +974,12 @@ All carried unchanged from prior revision.
 - **Private-key custody RED-confinement** *(N-C-S1)*: carried.
 - **Closed-grammar opcert byte authority** *(N-C-S2)*: carried.
 - **OpCert serial counter strict monotonicity** *(N-C-S2)*: carried.
+- **Single bootstrap composition root** *(NEW in N-K — CN-NODE-01)*: `bootstrap_initial_state` is the SOLE `pub fn` returning the initial `(LedgerState, PraosChainDepState, Option<ChainTip>)` triple in the workspace. Cold-start and warm-start are two branches of one function. CI-defended.
+- **Per-peer task isolation discipline** *(NEW in N-K — DC-NODE-01)*: each peer session owns its own `PerPeerReceiveState` / `PerPeerN2nServerState`; the shared `LedgerState` view is read-only at the peer task boundary; the single mutating consumer is the orchestrator core under the single authority chain. Decode/validity errors emit `OrchestratorEffect::PeerSessionHalted { peer_id, reason: PeerHaltReason }` (closed reason discriminant) and remove only that peer's entry from the per-peer BTreeMaps.
+- **Single cadence-driven persistent-capture authority** *(NEW in N-K — DC-NODE-02)*: `PersistentSnapshotWriter::on_admitted` consults `should_snapshot_after_block` exclusively; the orchestrator core also routes through it. No parallel cadence consultation.
+- **Single wall-clock-reading site discipline** *(NEW in N-K — DC-NODE-03)*: `ade_runtime::clock::SystemClock` is the SOLE wall-clock-reading site in `ade_runtime`. All other code consumes `Clock` outputs. Replay equivalence holds under `DeterministicClock`. CI-defended.
+- **Closed authority-fatal exit-code surface** *(NEW in N-K — DC-NODE-04)*: `EXIT_AUTHORITY_FATAL_IO = 10`, `EXIT_AUTHORITY_FATAL_DECODE = 12`, `EXIT_GENERIC_STARTUP = 1` are the closed `pub const i32` surface for `ade_node`. `AuthorityFatalKind` is the closed sum of fatal categories; `NodeRunError::exit_code` is the closed mapping. New fatal kind = closed-sum extension + new `EXIT_*` constant + new mapping arm.
+- **Shutdown-then-resume byte-identical state contract** *(NEW in N-K — DC-NODE-04)*: after `shutdown_drain` force-captures a final snapshot, the next `bootstrap_initial_state` against the same `(chaindb, snapshot store)` returns a byte-identical triple. Defended by `shutdown_then_resume_produces_byte_identical_state` integration test.
 
 ### Version-gated (can evolve across major versions)
 
@@ -1013,7 +997,7 @@ All carried unchanged from prior revision.
 - **TPraos producer** *(N-C declared non-goal — OQ-4 lock)*.
 - **New `GovAction` / Plutus version variant**.
 - **New `SignerSource` / `TxRejectClass` / `BlockRejectClass` / `OrderPolicy` variant**.
-- **New protocol parameter field**. **N-J note:** new pparams field also means new wire field in `encode_pparams` — version-gated at the snapshot layer (today layout is implicit, anchored by `SCHEMA_VERSION = 1`; a future cluster ratifies the migration path).
+- **New protocol parameter field**.
 - **New `ProducerTick` field** *(N-C extension point)*.
 - **New `ForgeError` / `SchedulerInput` / `SchedulerEffect` variant**.
 - **New `SelfAcceptError` variant** *(N-C extension point)*.
@@ -1024,17 +1008,22 @@ All carried unchanged from prior revision.
 - **New `ChainDbWrite` impl** *(N-H; N-I extended to 2 methods)*: carried.
 - **New `ChainDbWrite` trait method** *(N-H extension point)*: carried.
 - **New `ReceiveDispatchError` variant** *(N-H)*: carried.
-- **New `SnapshotReader` impl** *(N-I; **N-J used it once — added `PersistentSnapshotCache`**)*: closed seam. At this HEAD there are **two production impls** (`InMemorySnapshotCache`, `PersistentSnapshotCache`). New impls remain deliberate registry-tracked closed additions — not runtime plug-ins.
-- **New `BlockSource` impl** *(N-I)*: carried; no second impl introduced by N-J.
+- **New `SnapshotReader` impl** *(N-I; N-J extended)*: carried. At this HEAD there are two production impls (`InMemorySnapshotCache`, `PersistentSnapshotCache`); N-K adds none.
+- **New `BlockSource` impl** *(N-I)*: carried.
 - **New `MaterializeError` / `CommitRollbackError` variant** *(N-I)*: carried.
 - **New `RollbackContext` field** *(N-I)*: carried.
 - **New `SnapshotCadence` field** *(N-I — WITH MANDATORY CLUSTER RATIFICATION)*: carried.
-- **New `SnapshotEncodeError` / `SnapshotDecodeError` / `StructuralReason` variant** *(NEW in N-J — extension point)*: closed sums; today 1 / 5 / 9 variants. New variant = closed-sum extension; version-gated.
-- **New snapshot sub-state encoder/decoder pair** *(NEW in N-J — extension point — inside `ade_ledger::snapshot::*`)*: e.g. a future cluster adds a mempool snapshot or peer-table snapshot encoder as a sibling module. Each new sibling carries its own single-authority CI gate; CN-STORE-08's existing grep covers the workspace-wide tuple-bytes authority but new sibling sub-states need new grep entries.
-- **`SCHEMA_VERSION` bump (v1 → v2)** *(NEW in N-J — extension point)*: closed versioned-schema seam. First field appended to the framing wire format triggers the bump. v1 readers fail-closed on v2 bytes (`SnapshotDecodeError::UnknownVersion`); a future cluster ratifies the v2 layout + decoder dispatch table.
-- **New `PersistentSnapshotCache` field** *(NEW in N-J — extension point)*: closed struct; today 1 field (`store: &'a S`). Extension would be a deliberate cluster ratification (e.g. an in-memory hot-cache layer in front of the store).
-- **New `PersistentCacheError` variant** *(NEW in N-J — extension point)*: closed sum; today 3 variants. Extension would map to a new upstream error category.
-- **New CI check**: additive. (N-J added one — `ci_check_snapshot_encoder_closure.sh`.)
+- **New `SnapshotEncodeError` / `SnapshotDecodeError` / `StructuralReason` variant** *(N-J — extension point)*: carried.
+- **New snapshot sub-state encoder/decoder pair** *(N-J — extension point)*: carried.
+- **`SCHEMA_VERSION` bump (v1 → v2)** *(N-J — extension point; tracked on `DC-STORE-09` `open_obligation` at N-K)*: closed versioned-schema seam. First field appended to the framing wire format triggers the bump; the named follow-on cluster ratifies the v2 layout + decoder dispatch table + operator-facing migration tooling.
+- **New `PersistentSnapshotCache` field** *(N-J — extension point)*: carried.
+- **New `PersistentCacheError` variant** *(N-J — extension point)*: carried.
+- **New CI check**: additive. (N-K added six —
+  `ci_check_bootstrap_closure.sh`, `ci_check_clock_seam.sh`,
+  `ci_check_orchestrator_core_purity.sh`,
+  `ci_check_persistent_writer_no_parallel_cadence.sh`,
+  `ci_check_peer_session_isolation.sh`,
+  `ci_check_node_binary_uses_single_bootstrap.sh`.)
 - **Pinned external crate bump**: Tier-5 rationale doc required.
 - **New mini-protocol** / **Mini-protocol version-table bump**.
 - **New `ChainEvent` / `ChainSelectionReject` / `StreamInput` variant**.
@@ -1044,167 +1033,150 @@ All carried unchanged from prior revision.
 - **N2N/N2C tx-submission → `mempool_ingress` ingress** *(N-E)*.
 - **Live cardano-node N2N block-fetch acceptance / live N2N follow-mode admission** *(N-C / N-G / N-H)*: each reopens on operator availability.
 - **Phase-4 cluster surface additions** (N-F): each cluster's wire surface gates additions via its own cluster doc.
-- **Orchestrator-side persistent-capture wiring** *(NEW in N-J — extension point flagged by N-J close)*: Tier-5 wiring; today `maybe_capture_snapshot` writes only to `InMemorySnapshotCache`. A follow-on cluster extends the hook to also `PersistentSnapshotCache::capture(slot, &ledger, &chain_dep)`.
+- **New `OrchestratorEvent` variant** *(NEW in N-K — extension point)*: closed sum extension. New variant + new reducer arm in `step` + new translation site in the runner.
+- **New `OrchestratorEffect` variant** *(NEW in N-K — extension point)*: closed sum extension. New variant + new dispatch arm in the runner.
+- **New `PeerHaltReason` discriminant** *(NEW in N-K — extension point)*: closed sum extension. New discriminant when a new peer-fatal failure category emerges.
+- **New `AuthorityFatalKind` discriminant** *(NEW in N-K — extension point)*: closed sum extension. If a new fatal kind warrants a distinct exit code, append a new `EXIT_*` constant + extend `NodeRunError::exit_code`.
+- **New `Clock` impl** *(NEW in N-K — extension point)*: deliberate registry-tracked closed addition. New impl ≠ runtime plug-in.
+- **New `BootstrapError` variant** *(NEW in N-K — extension point)*: closed sum extension.
 
 ---
 
 ## 5. Module Addition Rules
 
-Ade's workspace is small and color-disciplined. **PHASE4-N-J added
-eight new BLUE submodules** (`ade_ledger::snapshot::{chain_dep,
-utxo_state, cert_state, epoch_state, gov_state, ledger, framing,
-error}` under a new `ade_ledger::snapshot` barrel), **one new GREEN
-submodule inside `ade_runtime`** (`rollback::persistent_cache`,
-inside the already-extant `ade_runtime::rollback` barrel from N-I),
-**one new CI gate** (`ci_check_snapshot_encoder_closure.sh`), **three
-new registry rules** (all `enforced`), and **flipped `DC-CONS-21`
-from `declared` to `enforced` with `strengthened_in += PHASE4-N-J`
-and `open_obligation` removed**. N-J added **no new crate**, **no
-new external ingress wire-format frozen contract** (snapshot bytes
-are internal-only persisted state), **no new operator-action probe
-binary** (snapshot encoding has no Tier-1 wire-format counterpart).
+Ade's workspace is small and color-disciplined. **PHASE4-N-K added
+eight new GREEN files** (`ade_runtime::bootstrap`,
+`ade_runtime::clock` [Clock trait + DeterministicClock],
+`ade_runtime::orchestrator::{mod, event, state, core}`,
+`ade_runtime::rollback::persistent_writer`,
+`ade_node::{cli, lib, node}`) **and three new RED files**
+(`ade_runtime::orchestrator::{peer_session, leadership_session,
+n2n_server_pump}` plus `ade_node::main` which co-lives with `lib`
+and `node`). **Six new CI gates**. **Five new registry rules** (all
+`enforced`). **Six carried rules strengthened**
+(`strengthened_in += PHASE4-N-K`). **One new `open_obligation`**
+on `DC-STORE-09`. N-K added **no new BLUE**, **no new external
+ingress wire-format frozen contract**, **no new operator-action
+probe binary**.
 
-**N-J also strengthened one cross-color dependency edge**:
+**N-K also strengthened the `ade_runtime → ade_ledger` and
+`ade_node → ade_runtime` cross-color dependency edges**:
 
-1. `ade_runtime → ade_ledger` (already added in N-C; strengthened
-   in N-G + N-H + N-I; **further strengthened in N-J**) — the GREEN
-   `rollback::persistent_cache` adapter imports the new
-   `ade_ledger::snapshot::framing::{encode_snapshot, decode_snapshot,
-   SCHEMA_VERSION}` BLUE chokepoints + the `ade_ledger::snapshot::{SnapshotEncodeError,
-   SnapshotDecodeError}` BLUE error sums + the existing
-   `ade_ledger::rollback::SnapshotReader` trait + `ade_ledger::state::LedgerState`.
-   Same direction (RED/GREEN → BLUE); allowed. Passes
-   `ci_check_dependency_boundary.sh`.
+1. `ade_runtime → ade_ledger` (already established;
+   **further strengthened in N-K**) — the GREEN
+   `bootstrap` reads `ade_ledger::state::LedgerState` +
+   `ade_ledger::rollback::{materialize_rolled_back_state, RollbackContext}`;
+   the GREEN `persistent_writer` reads
+   `ade_ledger::state::LedgerState` + calls
+   `PersistentSnapshotCache::capture`; the GREEN `orchestrator::core`
+   composes the receive + producer + server BLUE chokepoints. Same
+   direction (GREEN → BLUE); allowed.
+2. `ade_node → ade_runtime` (NEW edge in N-K) — the RED node binary
+   composes the GREEN orchestrator + bootstrap + writer surface.
+   Same direction (RED → GREEN → BLUE); allowed.
 
-**The module-addition rule N-J sets for future snapshot-side work:**
+**The module-addition rule N-K sets for future node-binary-side
+work:**
 
-1. **A new snapshot-side BLUE primitive attaches inside
-   `ade_ledger::snapshot::*`** (sibling of `chain_dep`,
-   `utxo_state`, `cert_state`, `epoch_state`, `gov_state`, `ledger`,
-   `framing`, `error`). The module MUST be BLUE: no clock, no rand,
-   no I/O, no `HashMap`, no `tokio`, no `async`. New canonical types
-   MUST be closed sums or closed structs; no `#[non_exhaustive]`;
-   no `String`-bearing variants. Sub-state encoder/decoder pairs
-   MUST be the SOLE pair for their sub-state's bytes (in-module
-   single-authority); composite encoder/decoder pairs MUST be the
-   SOLE pair for their composite shape (workspace-wide
-   single-authority via CN-STORE-08 grep).
-2. **A new snapshot encoder for a different state type attaches as
-   a sibling module** under `ade_ledger::snapshot::*` (e.g. a future
-   `ade_ledger::snapshot::mempool_state` or
-   `ade_ledger::snapshot::peer_table`). Each sibling carries its own
-   single-authority CI scope (extend `ci_check_snapshot_encoder_closure.sh`
-   with the new pair).
-3. **A new `SnapshotReader` impl attaches inside the appropriate
-   runtime crate** (e.g. a hypothetical `ade_runtime::rollback::clustered_snapshot_store`
-   for a multi-process backend). The module MUST be a pure function
-   over its inputs (the decode side may consult I/O via the
-   `SnapshotStore` trait but the result MUST be deterministic).
-   Single production impl per snapshot backend; new backends attach
-   via the `SnapshotStore` trait, not via re-implementing
-   `SnapshotReader`.
-4. **A new `SnapshotStore` impl** (the underlying byte store, e.g.
-   a sharded redb backend or an S3-backed store) attaches inside
-   `ade_runtime::chaindb` and is consumed by `PersistentSnapshotCache`
-   unchanged (the cache is generic over `S: SnapshotStore + ?Sized`).
-5. **A new closed snapshot error variant attaches inside
-   `SnapshotEncodeError` / `SnapshotDecodeError` / `StructuralReason` /
-   `PersistentCacheError`.** Closed-sum extension; version-gated; no
-   `#[non_exhaustive]`.
-6. **A `SCHEMA_VERSION` bump (v1 → v2)** is a deliberate cluster
-   ratification — the decoder gains a v2 dispatch arm; v1 readers
-   fail-closed on v2 bytes (`SnapshotDecodeError::UnknownVersion`);
-   the migration discipline is set by N-J's `DC-STORE-09` enforcement.
-7. **A new snapshot-paths registry rule attaches as a derived `DC-*` /
-   `CN-*` family entry** with `code_locus`, `ci_script`, `tests`,
-   `cross_ref`. Bidirectional cross-refs to consumed rules
-   (`DC-CONS-21`, `DC-STORE-08`, `DC-STORE-09`, `CN-STORE-08`,
-   `T-ENC-01`, `T-DET-01`, `CN-STORE-07`).
+1. **A new orchestration-side GREEN primitive attaches inside
+   `ade_runtime::orchestrator::*` or `ade_runtime::rollback::*`** as
+   a pure function over closed-sum events/effects. No `tokio::*`,
+   no clock, no `HashMap`/`HashSet`/`rand`/float. New canonical
+   types MUST be closed sums or closed structs; no
+   `#[non_exhaustive]`; no `String`-bearing variants.
+2. **A new orchestrator event/effect variant attaches as a closed-sum
+   extension on `OrchestratorEvent` / `OrchestratorEffect`** plus
+   matching reducer/dispatch arm. Code change required; no plug-in
+   registry.
+3. **A new RED runner attaches inside `ade_runtime::orchestrator::*`**
+   (sibling to `peer_session`, `leadership_session`,
+   `n2n_server_pump`). The runner translates RED-side asynchrony
+   into `OrchestratorEvent`s and dispatches `OrchestratorEffect`s;
+   it never bypasses the GREEN core.
+4. **A new `Clock` impl attaches inside `ade_runtime::clock`** as a
+   deliberate registry-tracked closed addition. New impls extend
+   the closed impl set; the single wall-clock-reading site
+   discipline (DC-NODE-03) MUST be preserved.
+5. **A new `AuthorityFatalKind` discriminant + matching exit code**
+   attaches by: append `EXIT_*` constant in `ade_node::node` +
+   extend `AuthorityFatalKind` sum in `ade_runtime::orchestrator::event` +
+   extend `NodeRunError::exit_code` mapping. No ad-hoc exit codes.
+6. **A new node-binary registry rule attaches as a derived `DC-NODE-*` /
+   `CN-NODE-*` family entry** with `code_locus`, `ci_script`,
+   `tests`, `cross_ref`. Bidirectional cross-refs to consumed rules
+   (`CN-CONS-08`, `CN-STORE-07`, `CN-STORE-08`, `DC-STORE-07`,
+   `DC-CONS-20`, `DC-CONS-21`, `T-DET-01`).
 
-### Cross-cluster obligation pattern (carried — no N-J addition)
+### Cross-cluster obligation pattern (carried — `RO-LIVE-01`/`RO-LIVE-02` flagged by N-K close)
 
-**N-J adds no new cross-cluster obligation** — snapshot encoding is
-wholly internal and has no Tier-1 wire-format counterpart that
-requires a live cross-impl probe. The N-H / N-G / N-C /
-`blocked_until_operator_*_available` precedents stand unchanged.
+**N-K adds no new cross-cluster obligation in the wire-format
+sense** but ships the honest-scope half of the live-evidence story:
+`peer_session.rs`, `leadership_session.rs`, `n2n_server_pump.rs`,
+and `ade_node::main` are real and mechanically evidenced; the
+actual Ouroboros mux + handshake driver above `MuxTransport` is
+the operator-action follow-on tracked by `RO-LIVE-01` /
+`RO-LIVE-02` (live-evidence halves; still
+`blocked_until_operator_peer_available`).
 
-### Operator-action evidence pattern (carried — no N-J addition)
+### Operator-action evidence pattern (carried — no N-K addition to the probe-binary family)
 
-**N-J adds no new operator-action probe binary** — the family
-remains at five. Snapshot encoding is exercised by the inline test
-set in `ade_ledger::snapshot::*` (deterministic round-trip,
-fingerprint-equivalence, version-rejection, fingerprint-mismatch
-rejection, pre-Conway rejection) plus the cross-impl equivalence
-test `persistent_cache_matches_in_memory_cache_semantics` in
-`ade_runtime::rollback::persistent_cache`.
+**N-K adds no new operator-action probe binary** — the family
+remains at five. The `ade_node` binary is the production node
+entry, not a probe binary. Live evidence will come from running
+`ade_node` against a private cardano-node peer in the follow-on
+operator-action cluster.
 
-### Cluster scope-edge pattern (carried — strengthened in N-J close)
+### Cluster scope-edge pattern (carried — strengthened in N-K close)
 
-**N-J carries the scope-edge pattern introduced by N-H + N-I** and
-applies it to the **encoder era boundary**:
-
-- The N-J scope edge (Conway-only encoder) is NOT a structured
-  failure variant on every event — it is a deliberate cluster
-  carve-out surfaced structurally as
-  `SnapshotEncodeError::EraNotSupported` /
-  `SnapshotDecodeError::EraNotSupported`. Pre-Conway is a low-
-  priority future cluster (no current operational need; rollback
-  target windows are bounded and Conway is the live era).
-- **Unlike N-I's `DC-CONS-21` carve-out, N-J does NOT introduce a
-  new registry rule with `open_obligation`** for pre-Conway —
-  because there is no current operational need that the carve-out
-  blocks. The discipline still holds: cluster carve-outs MUST be
-  documented (here, in CODEMAP, and in the cluster doc); if a
-  future operational need emerges, a registry rule is added at
-  that point.
+**N-K applies the scope-edge pattern to the honest-scope split**:
+the cluster ships the orchestrator core, bootstrap, persistent
+writer, and the binary; the live mux pump is the deliberate
+out-of-scope follow-on tracked by `RO-LIVE-01`/`RO-LIVE-02`. The
+scope edge is documented in the cluster doc's "Honest-scope note"
+section + here.
 
 | Color | Naming convention | Build-config flags | May depend on | MUST NOT depend on |
 |-------|-------------------|--------------------|----------------|--------------------|
-| **BLUE** | `ade_*` | First line of every `.rs` is the contract banner. `lib.rs` carries `#![deny(unsafe_code, clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::float_arithmetic)]`. No `#[cfg(feature = ...)]`. No async. **N-J:** `ade_ledger::snapshot::*` modules have no `HashMap`/`HashSet`/`tokio`/`rand`/wall-clock (CI-defended by `ci_check_forbidden_patterns.sh` + `ci_check_snapshot_encoder_closure.sh`); `encode_snapshot` / `decode_snapshot` is the SOLE `pub fn` pair encoding/decoding the combined tuple bytes (CI grep); `SCHEMA_VERSION` is the SOLE `pub const` schema-version anchor (CI grep). | Other BLUE crates / submodules only. **N-J:** snapshot encoder composes `ade_ledger::fingerprint` (B3/B5) for the canonical pre-image of the fingerprint cross-check; reads `ade_ledger::state::LedgerState` + `ade_core::consensus::praos_state::PraosChainDepState` field-by-field; uses `ade_codec::cbor::*` primitives (`write_uint_canonical`, `write_bytes_canonical`, etc.); no direct dep on `ade_runtime`. | Any RED submodule or crate; GREEN in non-dev deps; `pallas_*` (except `ade_plutus`); async runtime; `HashMap`/`HashSet`/`IndexMap`; clock/rand/float/env/I/O. |
-| **GREEN** | `ade_*` | Banner + deny attrs are project convention. **N-J:** `persistent_cache::PersistentSnapshotCache` is a pure adapter (no clock, no async, no `HashMap` — borrows the `SnapshotStore` and encodes/decodes via the BLUE framing layer); `PersistentCacheError` is a closed sum carrying upstream errors verbatim. | BLUE crates + standard library + ecosystem crates. **N-J:** the GREEN persistent-cache adapter lives inside `ade_runtime` (RED crate) — color is per-module per the cluster TCB Color Map. | `ade_runtime` for `ade_testkit`; RED submodules in non-test paths. Results must never feed back into a BLUE authoritative decision. |
-| **RED** | `ade_*` | No special header. Free to use clocks, I/O, async, `HashMap`, signing keys. | Any BLUE / GREEN crate or submodule (one-way). **N-J strengthened the `ade_runtime → ade_ledger` edge** (RED/GREEN → BLUE via the new snapshot chokepoint pair + error sums + the existing `SnapshotReader` trait). | Cannot be depended on by BLUE. |
+| **BLUE** | `ade_*` | First line of every `.rs` is the contract banner. `lib.rs` carries `#![deny(unsafe_code, clippy::unwrap_used, clippy::expect_used, clippy::panic, clippy::float_arithmetic)]`. No `#[cfg(feature = ...)]`. No async. **N-K:** no BLUE additions. | Other BLUE crates / submodules only. | Any RED submodule or crate; GREEN in non-dev deps; `pallas_*` (except `ade_plutus`); async runtime; `HashMap`/`HashSet`/`IndexMap`; clock/rand/float/env/I/O. |
+| **GREEN** | `ade_*` | Banner + deny attrs are project convention. **N-K:** GREEN orchestrator files (`bootstrap.rs`, `clock.rs` [trait + `DeterministicClock`], `orchestrator/{mod,event,state,core}.rs`, `rollback/persistent_writer.rs`, `ade_node/{cli,lib,node}.rs`) are pure: no `tokio::*`, no `SystemTime`/`Instant`, no `HashMap` (CI-defended by `ci_check_orchestrator_core_purity.sh` + `ci_check_clock_seam.sh` + `ci_check_bootstrap_closure.sh`). | BLUE crates + standard library + ecosystem crates. **N-K:** the GREEN orchestrator + bootstrap + writer live inside `ade_runtime` (RED crate) — color is per-module per the cluster TCB Color Map. | `ade_runtime` for `ade_testkit`; RED submodules in non-test paths. Results must never feed back into a BLUE authoritative decision. |
+| **RED** | `ade_*` | No special header. Free to use clocks, I/O, async, `HashMap`, signing keys. **N-K:** `SystemClock` + the tokio runner trio + `ade_node::main` are RED. | Any BLUE / GREEN crate or submodule (one-way). **N-K strengthened the `ade_node → ade_runtime` edge** (new) and the `ade_runtime → ade_ledger` edge (carried, further strengthened). | Cannot be depended on by BLUE. |
 
 ### New module checklist
 
 1. **Add to `Cargo.toml` workspace members** (if a new crate).
 2. **Declare TCB color** by editing `.idd-config.json` `core_paths` if BLUE.
 3. **CI script update obligations** — extend the relevant BLUE-scoped
-   scripts; for snapshot-domain sub-modules, model the new CI gate
-   on `ci_check_snapshot_encoder_closure.sh` shape (workspace-wide
-   single-authority grep + single-schema-version-const grep +
-   positive presence of fingerprint + version cross-check paths).
+   scripts; for node-binary-side sub-modules, model the new CI gate
+   on `ci_check_bootstrap_closure.sh` / `ci_check_clock_seam.sh`
+   shape (workspace-wide single-authority grep + forbidden-patterns
+   check).
 4. **Add contract banner** (BLUE) to every `.rs` file.
 5. **Add deny attributes** to `lib.rs` (BLUE).
 6. **New canonical types:** add a `[[rules]]` block under family `T`
    in the invariant registry, plus a round-trip test. For new
-   snapshot-domain authority rules, append `DC-STORE-0X` / `CN-STORE-0X`
+   node-binary authority rules, append `DC-NODE-0X` / `CN-NODE-0X`
    with bidirectional cross-ref to consumed rules.
 7. **New operator-action probe binary:** (not applicable for the
-   snapshot domain — internal authority).
-8. **Cross-cluster obligation:** (not applicable for the snapshot
-   domain at this cluster).
+   node-binary domain — `ade_node` is the production entry; live
+   evidence comes from running it against a real peer).
+8. **Cross-cluster obligation:** (the live mux pump is the named
+   follow-on; tracked on `RO-LIVE-01`/`RO-LIVE-02`).
 9. **Cluster scope-edge:** if the cluster deliberately scopes down a
-   derived constraint, ship a separable registry rule with explicit
-   `open_obligation` naming the follow-on cluster's deliverable —
-   OR (if no current operational need blocks) document the carve-out
-   in CODEMAP + the cluster doc without a registry entry. N-J's
-   Conway-only encoder is the latter shape; N-I's `DC-CONS-21`
-   `persistent_ledger_snapshot_encoding_follow_on_cluster` was the
-   former shape (now closed by N-J itself).
+   derived constraint, document the carve-out in CODEMAP + the
+   cluster doc. N-K's "honest-scope RED runner" is the canonical
+   example.
 10. **Run `cargo test --workspace` and the full CI script suite.**
 
 ### Phase 4 anticipated additions
 
-- **PHASE4-N-J — FULLY CLOSED at this HEAD** (mechanical close;
-  Conway-only encoder scope; pre-Conway → `EraNotSupported`
-  structurally): code + CI gate + DC-STORE-08 + DC-STORE-09 +
-  CN-STORE-08 (`enforced`) + DC-CONS-21 flipped to `enforced`
-  (`open_obligation` removed) + 1 new CI script. No live-evidence
-  obligation (internal authority).
-- **PHASE4-N-I — FULLY CLOSED** (carried; `DC-CONS-21` `open_obligation`
-  now removed by N-J). No carry-forward open obligation from N-I
-  remains at this HEAD beyond OQ-5 snapshot eviction (Tier-5
-  follow-on, no registry entry).
+- **PHASE4-N-K — FULLY CLOSED at this HEAD** (mechanical close;
+  honest-scope RED runner): orchestrator core + bootstrap + clock
+  seam + persistent writer + RED tokio runner + `ade_node` binary +
+  5 new registry rules (`enforced`) + 6 new CI scripts + 6 carried
+  rules strengthened + 1 new open_obligation on DC-STORE-09. Live
+  mux pump is the operator-action follow-on (`RO-LIVE-01`/`RO-LIVE-02`).
+- **PHASE4-N-J — FULLY CLOSED** (carried).
+- **PHASE4-N-I — FULLY CLOSED** (carried).
 - **PHASE4-N-H — FULLY CLOSED** (carried). CE-N-H-6 live-evidence is
   `blocked_until_operator_peer_available`.
 - **PHASE4-N-G — FULLY CLOSED** (carried). CE-N-G-8 live-evidence
@@ -1213,39 +1185,35 @@ applies it to the **encoder era boundary**:
   is `blocked_until_operator_stake_available`.
 - **PROPOSAL-PROCEDURES-DECODE — FULLY CLOSED** (carried).
 - **PHASE4-N-E — FULLY CLOSED** (carried).
-- **NEW future cluster — Orchestrator-side persistent-capture wiring**
-  *(NEW candidate flagged by N-J close)*: thin RED extension of
-  `maybe_capture_snapshot` to also write through
-  `PersistentSnapshotCache::capture`. Tier-5; no BLUE invariants
-  change. Surface for the next planner; do not invent invariants
-  here.
+- **NEW future cluster — Live mux + handshake driver above `MuxTransport`**
+  *(NEW candidate flagged by N-K close — `RO-LIVE-01`/`RO-LIVE-02`)*:
+  RED submodule binding the closed `MuxTransport` to the per-peer +
+  server-pump tokio tasks. Operator-action evidence at the other end.
+  Surface for the next planner.
+- **NEW future cluster — Snapshot schema migration v1 → v2 tooling**
+  *(NEW `DC-STORE-09` `open_obligation` at N-K close)*: operator-facing
+  v1→v2 upgrade tooling. Out of node-binary scope; the seam is set by
+  `SCHEMA_VERSION = 1`.
+- **NEW future cluster — Metrics + observability** *(NEW candidate
+  flagged by N-K close)*: closed `MetricEffect` arm + Prometheus
+  exporter. Tier-5.
 - **NEW future cluster — Snapshot eviction policy** *(carried from
-  N-I; now doubled by N-J)*: Tier-5 operational concern applying to
-  both the in-memory cache and the persistent store. Must remain
-  replay-deterministic.
+  N-J)*: Tier-5 operational concern applying to both caches.
 - **NEW future cluster — Multi-peer fork choice** *(carried; now
-  doubly-enabled by N-I + N-J)*: Praos longest-chain across competing
-  `PerPeerReceiveState[]`. Re-uses `RollbackContext` to roll back
-  losing forks; now restart-safe via N-J's persistent snapshots.
+  further enabled by N-K stable per-peer tasks)*.
 - **NEW future cluster — N2C local-chain-sync receive surface**
-  *(carried)*: operator-side N2C clients consume Ade's chain via
-  `LocalChainSyncMessage`.
+  *(carried)*.
 - **NEW low-priority future cluster — Pre-Conway snapshot encoder**
-  *(NEW candidate flagged by N-J close)*: widen
-  `encode_ledger_state` / `decode_ledger_state` to Babbage and
-  earlier eras. No current operational need; rollback target windows
-  are bounded.
-- **NEW future-evolution seam — Snapshot schema migration v1 → v2**
-  *(NEW candidate flagged by N-J close)*: `SCHEMA_VERSION: u32 = 1`
-  is the explicit anchor; first field appended bumps to 2. No
-  present cluster; discipline set by `DC-STORE-09`.
+  *(carried)*.
 - **Future cluster — `CE-N-H-6` / `CE-N-G-8` / `CE-N-C-8` live
   evidence re-open triggers** (carried).
 - **Future node-binary cluster (`CE-NODE-N2C-LTX`)** (carried).
 - **Tx-validity completeness follow-ups** (carried).
 - **PP OQ-1..OQ-4 follow-ups** (carried).
 - **N-F (operator API)**: thin RED layer mapping a closed Query
-  enum to gRPC/HTTP.
+  enum to gRPC/HTTP. **N-K note:** the orchestrator's closed
+  event/effect vocabulary is the natural target for a future
+  N-F effect arm.
 
 **These placements are candidates** — user confirmation needed at
 cluster entry.
@@ -1269,13 +1237,9 @@ cluster entry.
 - No construction of `PreservedCbor` outside `ade_codec`.
 - No raw CBOR decoding in any BLUE crate except `ade_codec` and the
   single allowlisted file `crates/ade_plutus/src/evaluator.rs`. **N-J
-  carve-out:** `ade_ledger::snapshot::*` uses `ade_codec::cbor::*`
-  read/write primitives directly (`write_uint_canonical`,
-  `write_bytes_canonical`, `write_array_header`, `read_any_int`,
-  `read_array_header`, `read_bytes`, etc.) — this is a structured
-  composition over the BLUE codec layer, not raw CBOR decoding. The
-  decoder produces `LedgerState` / `PraosChainDepState` field by
-  field via codec primitives.
+  carve-out (carried):** `ade_ledger::snapshot::*` uses
+  `ade_codec::cbor::*` read/write primitives directly — structured
+  composition over the BLUE codec layer.
 - No `pallas_*` reference outside `ade_plutus`.
 - **(N-A specific)** Carried.
 - **(N-B specific)** Carried.
@@ -1289,44 +1253,10 @@ cluster entry.
 - **(N-G-S1..S4 specific)** All carried.
 - **(N-H-S1..S6 specific)** All carried.
 - **(N-I-S1..S6 specific)** All carried.
-- **(N-J-S1 specific — closed BLUE snapshot error sums)**
-  `SnapshotEncodeError` / `SnapshotDecodeError` / `StructuralReason`
-  MUST be closed sums; no `#[non_exhaustive]`; no `String` (use
-  `StructuralReason` for tag-rather-than-text rejection). Round-trip-
-  through-pattern-match tests confirm sixth-variant additions fail
-  to compile.
-- **(N-J-S2..S5 specific — sub-state encoder/decoder discipline)**
-  Each sub-state encoder/decoder pair (`encode_utxo_state`,
-  `encode_cert_state`, `encode_epoch_state`, `encode_pparams`,
-  `encode_gov_state`, `encode_conway_deposit_params`) MUST be the
-  SOLE `pub fn` pair for its sub-state's bytes IN-MODULE. Each pair
-  MUST use BTreeMap iteration only (canonical ordering); definite-
-  length CBOR containers throughout; no `HashMap`/`HashSet`/`tokio`/
-  `rand`/wall-clock/float.
-- **(N-J-S6 specific — composite LedgerState encoder/decoder)**
-  `encode_ledger_state` / `decode_ledger_state` MUST be the SOLE
-  `pub fn` pair encoding/decoding `LedgerState` bytes in the
-  workspace (CI grep CN-STORE-08). Field order MUST match
-  `ade_ledger::fingerprint`'s deterministic field walk — adding a
-  new field to `LedgerState` requires extending both
-  `fingerprint` and `encode_ledger_state` / `decode_ledger_state` in
-  the same cluster.
-- **(N-J-S7 specific — combined-snapshot framing + CN-STORE-08 +
-  DC-STORE-08 + DC-STORE-09)** `encode_snapshot` / `decode_snapshot`
-  MUST be the SOLE `pub fn` pair encoding/decoding `(LedgerState,
-  PraosChainDepState)` combined snapshot bytes in the workspace (CI
-  grep CN-STORE-08). `encode_chain_dep` / `decode_chain_dep` MUST be
-  the SOLE pair for `PraosChainDepState` bytes (CI grep). The decoder
-  MUST verify the version tag BEFORE any payload work (DC-STORE-09 —
-  unknown versions reject before decode of ledger or chain-dep) AND
-  MUST recompute + verify the fingerprint AFTER decode (DC-STORE-08
-  — fingerprint mismatch rejects). The encoder MUST embed the source
-  state's `fingerprint(ledger).combined`. `SCHEMA_VERSION: u32 = 1`
-  MUST be the SOLE `pub const SCHEMA_VERSION` in `crates/` (CI grep
-  DC-STORE-09). Pre-Conway → `EraNotSupported` structurally on both
-  encode and decode.
+- **(N-J-S1..S8 specific)** All carried.
+- **(N-K specific)** No new BLUE in this cluster.
 
-### GREEN (`ade_testkit` incl. all corpora; `ade_runtime::consensus::{candidate_fragment, chain_selector}`; `ade_ledger::mempool::{policy, canonicalize}`; the two `ade_core_interop` N-E bridges; `ade_runtime::producer::{tick_assembler, broadcast_to_served, served_chain_lookups}`; `ade_runtime::receive::{events_to_state, in_memory_chain_write}`; `ade_runtime::rollback::{cadence, in_memory_cache, chaindb_block_source}` (N-I-S4); **`ade_runtime::rollback::persistent_cache` — NEW in N-J-S8**)
+### GREEN (`ade_testkit` incl. all corpora; `ade_runtime::consensus::{candidate_fragment, chain_selector}`; `ade_ledger::mempool::{policy, canonicalize}`; the two `ade_core_interop` N-E bridges; `ade_runtime::producer::{tick_assembler, broadcast_to_served, served_chain_lookups}`; `ade_runtime::receive::{events_to_state, in_memory_chain_write}`; `ade_runtime::rollback::{cadence, in_memory_cache, chaindb_block_source, persistent_cache}`; **`ade_runtime::bootstrap` — NEW in N-K**; **`ade_runtime::clock` [trait + `DeterministicClock`] — NEW in N-K**; **`ade_runtime::orchestrator::{mod, event, state, core}` — NEW in N-K**; **`ade_runtime::rollback::persistent_writer` — NEW in N-K**; **`ade_node::{cli, lib, node}` — NEW in N-K**)
 
 - No nondeterminism that leaks into stored fixtures — fixtures must
   be byte-reproducible.
@@ -1334,38 +1264,80 @@ cluster entry.
 - No `HashMap` even in test helpers — `BTreeMap` only.
 - No import of `ade_runtime` from `ade_testkit`.
 - (carried bullets per prior revision)
-- **(`ade_runtime::rollback::persistent_cache`, NEW in N-J-S8)**
-  Single production persistent impl of `SnapshotReader`. Pure
-  adapter over any `SnapshotStore`; borrows the store (lifetime
-  `'a`); holds no in-memory state. MUST NOT use `HashMap`/`HashSet`/
-  wall-clock/`tokio`/`rand`. `nearest_le` MUST treat decode failure
-  as `None` (treats corrupt persisted bytes as "no usable snapshot
-  here" — never panics). `PERSISTENT_CACHE_SCHEMA_VERSION` MUST
-  equal `ade_ledger::snapshot::framing::SCHEMA_VERSION` (test pins
-  the equality). MUST NOT introduce a second `pub fn` returning
-  `Vec<u8>` from `&LedgerState` or `&PraosChainDepState` — the
-  framing layer is the sole authority (CN-STORE-08 grep).
+- **(`ade_runtime::bootstrap`, NEW in N-K)** Single `pub fn`
+  returning `(LedgerState, PraosChainDepState, Option<ChainTip>)`
+  (CN-NODE-01). Cold-start and warm-start are TWO BRANCHES OF ONE
+  FUNCTION; no parallel entry point. MUST NOT use `HashMap`/
+  `HashSet`/`tokio::*`/`rand`/wall-clock (CI-defended by
+  `ci_check_bootstrap_closure.sh`). Re-running against the same
+  `(chaindb, snapshot store)` MUST produce a byte-identical triple
+  (defended by `shutdown_then_resume_produces_byte_identical_state`).
+- **(`ade_runtime::clock`, NEW in N-K — trait + `DeterministicClock`
+  GREEN side)** `Clock` trait is the SOLE time seam in
+  `ade_runtime`. GREEN side MUST NOT use `SystemTime::now()` /
+  `Instant::now()` / `tokio::time::*`. `DeterministicClock` MUST be
+  pure (given the same tick vector, two clocks produce the same
+  outputs).
+- **(`ade_runtime::orchestrator::{mod, event, state, core}`, NEW in
+  N-K)** Closed-sum event/effect vocabulary; closed `OrchestratorState`
+  with `BTreeMap<PeerId, _>` per-peer collections; pure `step`
+  reducer. MUST NOT import `tokio::*` (CI-defended by
+  `ci_check_orchestrator_core_purity.sh`). MUST NOT read wall clock
+  (CI-defended by `ci_check_clock_seam.sh`). Per-peer halts MUST
+  emit `OrchestratorEffect::PeerSessionHalted` (closed reason
+  discriminant), never `panic!` (CI-defended by
+  `ci_check_peer_session_isolation.sh`).
+- **(`ade_runtime::rollback::persistent_writer`, NEW in N-K)**
+  `PersistentSnapshotWriter` is the SOLE production cadence-driven
+  caller of `PersistentSnapshotCache::capture` (DC-NODE-02).
+  `on_admitted` MUST consult `should_snapshot_after_block`
+  exclusively; `force_capture` is shutdown-only. MUST NOT introduce
+  a parallel cadence policy (CI-defended by
+  `ci_check_persistent_writer_no_parallel_cadence.sh`).
+- **(`ade_node::{cli, lib, node}`, NEW in N-K — GREEN side)** `node`
+  hosts the closed `EXIT_*` constant trio and `NodeRunError::exit_code`
+  mapping. MUST map authority-fatal kinds deterministically; new
+  fatal kinds slot in via additions to `AuthorityFatalKind` +
+  mapping arm + new `EXIT_*` constant if warranted (no ad-hoc exit
+  codes). `cli` is closed argv parsing.
 
-### RED (`ade_runtime`, `ade_node`, `ade_network::mux::transport`, `ade_network::session`, `ade_network::bin::capture_*`, `ade_runtime::consensus::genesis_parser`, `ade_core_interop` (incl. five live-session probe binaries), the RED-behavior `ade_ledger::consensus_input_extract` scan; `ade_runtime::producer::{signing, keys, scheduler, broadcast}` (N-C); `ade_runtime::network::n2n_server` (N-G-S6); `ade_runtime::receive::orchestrator` (N-H-S4); `ade_runtime::rollback::snapshot_writer` (N-I-S5))
+### RED (`ade_runtime`, `ade_node`, `ade_network::mux::transport`, `ade_network::session`, `ade_network::bin::capture_*`, `ade_runtime::consensus::genesis_parser`, `ade_core_interop` (incl. five live-session probe binaries), the RED-behavior `ade_ledger::consensus_input_extract` scan; `ade_runtime::producer::{signing, keys, scheduler, broadcast}` (N-C); `ade_runtime::network::n2n_server` (N-G-S6); `ade_runtime::receive::orchestrator` (N-H-S4); `ade_runtime::rollback::snapshot_writer` (N-I-S5); **`ade_runtime::clock::SystemClock` — NEW in N-K (RED sub-classified)**; **`ade_runtime::orchestrator::{peer_session, leadership_session, n2n_server_pump}` — NEW in N-K**; **`ade_node::main` — NEW in N-K**)
 
 - No direct mutation of `ade_ledger` state — all transitions go
-  through the established BLUE chokepoints. **(N-J carve-out)**
-  `PersistentSnapshotCache::capture` does not mutate `LedgerState` or
-  `PraosChainDepState` — it reads from them by reference and writes
-  encoded bytes to the underlying `SnapshotStore`. The cache itself
-  holds no state; reading via `nearest_le` returns owned clones
-  (decoded from bytes).
+  through the established BLUE chokepoints. **(N-K carve-out)** The
+  RED runner trio (`peer_session`, `leadership_session`,
+  `n2n_server_pump`) translates RED-side asynchrony into
+  `OrchestratorEvent`s and dispatches `OrchestratorEffect`s; the
+  GREEN core is the SOLE mutator of `OrchestratorState`. The runner
+  never bypasses the core; the core never bypasses the BLUE
+  chokepoints (`admit_via_block_validity`, `materialize_rolled_back_state`,
+  `framing::{encode,decode}_snapshot`).
 - No bypassing `ade_codec` to construct semantic types from raw bytes.
-  **(N-J-strengthened)** Returning `Vec<u8>` from `&LedgerState` or
-  `&PraosChainDepState` from any `pub fn` other than the canonical
-  encoders in `ade_ledger::snapshot::*` is CI-forbidden (CN-STORE-08
-  workspace-wide grep).
 - (`ade_runtime` specifically) Existing `ade_runtime → ade_ledger`
-  edge is **further strengthened in N-J** — the persistent-cache
-  adapter consumes the new `ade_ledger::snapshot::framing::*` BLUE
-  chokepoints + `ade_ledger::snapshot::{SnapshotEncodeError,
-  SnapshotDecodeError}` error sums. Passes
+  edge is **further strengthened in N-K** — the bootstrap +
+  persistent writer + orchestrator core consume the BLUE chokepoint
+  surface end-to-end. New edge: `ade_node → ade_runtime` (also
+  GREEN → BLUE direction at the transitive level). Passes
   `ci_check_dependency_boundary.sh`.
+- (`ade_runtime::clock::SystemClock`, NEW in N-K — RED sub-classified)
+  SOLE wall-clock-reading site in `ade_runtime` (DC-NODE-03 grep).
+  No other file in `ade_runtime` may read `SystemTime`/`Instant`/
+  `tokio::time`. Production-only; replaced by `DeterministicClock`
+  in tests + the replay harness.
+- (`ade_runtime::orchestrator::{peer_session, leadership_session,
+  n2n_server_pump}`, NEW in N-K) RED tokio runner trio. May use
+  `tokio::*`, `tokio::time::*`, and OS I/O. MUST translate
+  RED-side asynchrony into closed-sum `OrchestratorEvent`s; MUST
+  dispatch `OrchestratorEffect`s via the runner's dispatch table.
+  MUST NOT mutate `OrchestratorState` directly — only the GREEN
+  `step` reducer mutates state. Per-peer failure MUST halt only
+  the failing peer's task (DC-NODE-01).
+- (`ade_node::main`, NEW in N-K) `tokio::main` entry. Installs
+  signal handlers (Ctrl-C / SIGTERM). Drives
+  `run_node_until_shutdown`. Maps `NodeRunError` to process exit
+  code via `NodeRunError::exit_code`. Shutdown drain force-captures
+  a final snapshot via `PersistentSnapshotWriter::force_capture`
+  before peer sockets close.
 - (`ade_network::mux::transport`) No protocol logic.
 - (`ade_network::session`) Composition glue only.
 - (`ade_network::bin::capture_*`) Live-interop tools only.
@@ -1375,50 +1347,38 @@ cluster entry.
 - (N-E live N2N operator-action session) Carried.
 - (Deferred RED operator-action surfaces — CE-NODE-N2C-LTX) Carried.
 - (`ade_core_interop`) Live-interop driver only; library tests
-  `#[ignore]`-gated. **N-J added no new binary.**
+  `#[ignore]`-gated. **N-K added no new binary.**
 - **(N-C-S1 / S6 specific — `ade_runtime::producer::*`)** All carried.
+  **N-K note:** scheduler is now driven by `leadership_session` via
+  `Clock::tick_stream()`; behaviour unchanged.
 - **(N-G-S6 specific — `ade_runtime::network::n2n_server`)** Carried.
+  **N-K note:** now driven by `n2n_server_pump` RED runner.
 - **(N-H-S4 specific — `ade_runtime::receive::orchestrator`)** Carried.
+  **N-K note:** now driven per-peer by `peer_session` RED tasks
+  under DC-NODE-01 isolation.
 - **(N-I-S5 specific — `ade_runtime::rollback::snapshot_writer`)**
-  Carried. **N-J note:** the hook still talks only to
-  `InMemorySnapshotCache`; the persistent-capture call site is the
-  flagged Tier-5 follow-on (orchestrator-side persistent-capture
-  wiring cluster).
+  Carried. **N-K note:** still the receive-side in-memory hot path;
+  the persistent path now runs in parallel via `PersistentSnapshotWriter`
+  in the orchestrator core (DC-NODE-02).
 
 ### Project-specific additions
 
 - **No commits of credentials, hostnames, IPs, private keys** —
-  enforced by `ci_check_no_secrets.sh`. **N-J:** the snapshot
-  encoder writes byte payloads derived from `LedgerState` /
-  `PraosChainDepState` — these contain pool / DRep / stake-credential
-  HASHES (no private keys; never has). Snapshot bytes are
-  byte-safe under existing redaction posture; no new redaction
-  obligation introduced.
+  enforced by `ci_check_no_secrets.sh`. **N-K:** the node binary's
+  CLI accepts paths to operator-supplied genesis + key files; it
+  never embeds keys in source.
 - **No `Phase 4 internal-mode mock network`** — Tier 1 surfaces must
-  be exercised against real cardano-node peers. **N-J:** snapshot
-  encoding is internal authority (no Tier-1 wire-format counterpart);
-  the cross-impl equivalence test
-  `persistent_cache_matches_in_memory_cache_semantics` is a
-  structural-agreement harness within the workspace (two production
-  impls of the same trait produce identical lookups). The "real
-  peer" rule does not apply.
+  be exercised against real cardano-node peers. **N-K:** the binary
+  bootstraps + prints a readiness line; live evidence comes from
+  the operator-action follow-on (`RO-LIVE-01`/`RO-LIVE-02`) running
+  `ade_node` against a private cardano-node peer.
 - **No collapsing wire and canonical bytes** — dual-authority rule.
-  **N-J:** snapshot bytes are CANONICAL bytes (single-authority,
-  version-tagged, fingerprint-embedded); they are NOT wire bytes
-  (never leave the local node). The two-authority rule is
-  preserved: Cardano wire bytes stay frozen at the protocol spec;
-  snapshot bytes stay frozen at the project-internal canonical
-  schema. The framing layer's `SCHEMA_VERSION` is the version
-  anchor; `fingerprint` is the cross-check.
 - **No Tier 5 surface without a stated rationale**.
 - **No "we'll match it later" stubs on Tier 1 surfaces** — Tier 1
-  closure is hard-gated. **N-J:** the Conway-only encoder scope is
-  NOT a Tier 1 stub — snapshot encoding is wholly internal authority
-  (no Tier 1 counterpart). Pre-Conway encoding is a low-priority
-  candidate seam with no current operational need; the carve-out
-  surfaces structurally as `EraNotSupported` and is documented here
-  + in CODEMAP. Same discipline as N-I's `RollbackOutOfScope`
-  treatment of unreachable rollback ranges.
+  closure is hard-gated. **N-K:** the honest-scope split (orchestrator
+  core + bootstrap + writer + binary shipped; live mux pump deferred)
+  is documented in the cluster doc's "Honest-scope note" and tracked
+  by `RO-LIVE-01`/`RO-LIVE-02` — not a Tier-1 stub.
 
 ---
 
@@ -1427,70 +1387,66 @@ cluster entry.
 - CODEMAP: `docs/ade-CODEMAP.md` — module-by-module authority table,
   upstream of this document. **Cross-reference check at this HEAD:**
   CODEMAP is being regenerated in parallel; pending the regen,
-  CODEMAP may pin pre-N-J HEAD `75f75da`. The new BLUE submodule
-  tree (`ade_ledger::snapshot::{chain_dep, utxo_state, cert_state,
-  epoch_state, gov_state, ledger, framing, error}`) and the new
-  GREEN submodule (`ade_runtime::rollback::persistent_cache`) are
+  CODEMAP may pin pre-N-K HEAD `f15102f`. The new GREEN files
+  (`bootstrap.rs`, `clock.rs`, `orchestrator/{mod,event,state,core}.rs`,
+  `rollback/persistent_writer.rs`, `ade_node/{cli,lib,node}.rs`)
+  and the new RED files (`orchestrator/{peer_session,
+  leadership_session, n2n_server_pump}.rs`, `ade_node/main.rs`) are
   not yet in the prior CODEMAP. The next CODEMAP regen picks these
-  up mechanically. CI count moves from 54 → 55.
+  up mechanically. CI count moves from 55 → 61.
 - Invariant registry: `docs/ade-invariant-registry.toml` — rule
-  families incl. T / CN / DC / OP / RO. **N-J added:**
-  `DC-STORE-08` (`enforced`, `ci_script =
-  ci/ci_check_snapshot_encoder_closure.sh`); `DC-STORE-09`
-  (`enforced`, same CI script); `CN-STORE-08` (`enforced`, same CI
-  script); flipped `DC-CONS-21` from `declared` to `enforced` with
-  `strengthened_in += PHASE4-N-J` and `open_obligation` removed.
-  Total: 206 → 209 entries.
+  families incl. T / CN / DC / OP / RO. **N-K added:**
+  `CN-NODE-01` (`enforced`, `ci_script =
+  ci/ci_check_bootstrap_closure.sh`); `DC-NODE-01` (`enforced`,
+  `ci_script = ci/ci_check_peer_session_isolation.sh`);
+  `DC-NODE-02` (`enforced`, `ci_script =
+  ci/ci_check_persistent_writer_no_parallel_cadence.sh`);
+  `DC-NODE-03` (`enforced`, `ci_script =
+  ci/ci_check_clock_seam.sh`); `DC-NODE-04` (`enforced`, `ci_script =
+  ci/ci_check_node_binary_uses_single_bootstrap.sh`). **Strengthened:**
+  `T-DET-01`, `CN-CONS-08`, `CN-STORE-07`, `CN-STORE-08`,
+  `DC-CONS-21`, `DC-STORE-08` each gain `strengthened_in +=
+  PHASE4-N-K`. **New open_obligation:** `DC-STORE-09 +=
+  "snapshot_schema_migration_follow_on_cluster"`. Total: 209 → 214
+  entries.
 - Phase 4 cluster plan: `docs/active/phase_4_cluster_plan.md`.
 - Tier doctrine: `docs/active/CE-79_gate_statement.md` and
   `docs/active/CE-79_tier5_addendum.md`.
-- Persistent snapshot encoder invariants sketch:
-  `docs/planning/persistent-snapshot-encoder-invariants.md` (the
-  upstream sketch the cluster doc derives from).
-- Ledger snapshot + rollback invariants sketch (N-I upstream):
-  `docs/planning/ledger-snapshot-rollback-invariants.md`.
-- Receive-side bridge invariants sketch (N-H upstream):
-  `docs/planning/receive-side-bridge-invariants.md`.
-- Cluster N-D / N-A / N-B / N-H / N-I / B1 / B2 / B3 / B4 / B5 /
+- Cluster N-D / N-A / N-B / N-H / N-I / N-J / B1 / B2 / B3 / B4 / B5 /
   OQ5-CREDENTIAL-FIDELITY / COMMITTEE-CRED-FIDELITY /
   DREP-VOTE-FIDELITY / ENACTMENT-COMMITTEE-FIDELITY /
   ENACTMENT-COMMITTEE-WRITEBACK / PHASE4-N-E /
   PROPOSAL-PROCEDURES-DECODE / PHASE4-N-C / PHASE4-N-G: all closed;
   cluster docs carried.
-- **Cluster PHASE4-N-J (CLOSED at this HEAD; mechanical half;
-  Conway-only encoder scope)**: the cluster doc + slices
-  `cluster.md, N-J-S{1..8}.md` at `docs/clusters/PHASE4-N-J/`
-  (pending archive to `completed/`). WIRES AND CLOSES the
-  persistent ledger snapshot encoder: BLUE `PraosChainDepState`
-  encoder/decoder + closed error sums (S1); BLUE `UTxOState` encoder/
-  decoder (S2); BLUE `CertState` encoder/decoder (S3); BLUE
-  `EpochState` (+ `SnapshotState`) encoder/decoder (S4); BLUE
-  `ConwayGovState` + `ProtocolParameters` + `ConwayOnlyDepositParams`
-  encoder/decoder triple (S5); BLUE composite `encode_ledger_state` /
-  `decode_ledger_state` assemble (S6); BLUE combined-snapshot
-  framing + `SCHEMA_VERSION` + CI gate (S7 — closes DC-STORE-08 +
-  DC-STORE-09 + CN-STORE-08); GREEN `PersistentSnapshotCache` +
-  cross-impl equivalence test (S8 — closes DC-CONS-21). Added one
-  CI script (count 54 → 55); added three derived registry rules
-  (total 206 → 209); flipped DC-CONS-21 to `enforced` with
-  `strengthened_in += PHASE4-N-J` and `open_obligation` removed.
-  Five operator-action probe binaries remain in the family (no N-J
-  addition).
-- **Future obligation: orchestrator-side persistent-capture wiring**
-  — `maybe_capture_snapshot` extension to call
-  `PersistentSnapshotCache::capture` alongside in-memory capture.
-  Tier-5 operational follow-on.
-- **Future obligation: snapshot eviction policy cluster** — Tier-5
-  operational concern; now applies to BOTH in-memory cache AND
-  persistent store; named candidate seam.
+- **Cluster PHASE4-N-K (CLOSED at this HEAD; mechanical half;
+  honest-scope RED runner)**: the cluster doc + closure record at
+  `docs/clusters/completed/PHASE4-N-K/{cluster,CLOSURE}.md`.
+  SHIPS the orchestrator core + bootstrap + clock seam + persistent
+  writer + RED tokio runner trio + `ade_node` binary; closes
+  CN-NODE-01 + DC-NODE-01..04 (all `enforced`); strengthens 6
+  carried rules; adds `open_obligation =
+  "snapshot_schema_migration_follow_on_cluster"` to DC-STORE-09;
+  added six CI scripts (count 55 → 61); added five derived registry
+  rules (total 209 → 214). Five operator-action probe binaries
+  remain in the family (no N-K addition); the live mux pump is the
+  follow-on tracked on `RO-LIVE-01`/`RO-LIVE-02`.
+- **Future obligation: live mux + handshake driver above `MuxTransport`**
+  (`RO-LIVE-01`/`RO-LIVE-02`) — operator-action follow-on.
+- **Future obligation: snapshot schema migration v1 → v2 tooling**
+  (`DC-STORE-09.open_obligation`) — Tier-5 operator tooling.
+- **Future obligation: snapshot eviction policy cluster** — carried
+  from N-J.
+- **Future obligation: metrics + observability cluster** — NEW
+  candidate flagged by N-K close.
 - **Future obligation: `CE-N-H-6`** — carried.
 - **Future obligation: `CE-N-G-8`** — carried.
 - **Future obligation: `CE-N-C-8`** — carried.
 - **Future obligation: `CE-NODE-N2C-LTX`** — carried from N-E.
-- **Future seam candidates (flagged by N-J close)**: orchestrator-side
-  persistent-capture wiring (highest-priority Tier-5 follow-on);
-  snapshot eviction policy cluster (doubled scope); pre-Conway
-  snapshot encoder (low-priority); snapshot schema migration v1 → v2
-  (no present cluster; discipline anchored); multi-peer fork choice
-  cluster (now doubly-enabled by N-I + N-J restart-safe rollback);
-  N2C local-chain-sync receive surface cluster.
+- **Future seam candidates (flagged by N-K close)**: live mux pump
+  (highest-priority operator-action follow-on); snapshot schema
+  migration v1 → v2 tooling (`DC-STORE-09` open_obligation);
+  metrics + observability cluster; snapshot eviction policy cluster
+  (carried from N-J); pre-Conway snapshot encoder (low-priority,
+  carried); multi-peer fork choice cluster (now further enabled by
+  N-K stable per-peer tasks); N2C local-chain-sync receive surface
+  cluster.
