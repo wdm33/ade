@@ -3849,3 +3849,270 @@ code_locus = "crates/ade_runtime/src/seed_import/importer.rs::build_canonical_tx
 tests = []
 ci_scripts = ["ci/ci_check_admission_no_refscript_skip.sh"]
 status = "enforced"
+
+# -----------------------------------------------------------
+# PHASE4-N-M-C — Live operator pass (declared, pre-implementation).
+# Sketch: docs/planning/phase4-n-m-c-operator-pass-invariants.md
+# Cluster doc: docs/clusters/PHASE4-N-M-C/cluster.md
+# Family letters:
+#   * CN-CONS-IN  — release-tier consensus-inputs importer authority
+#   * DC-CONS-IN  — derived constraints on importer / canonical / fingerprint
+#   * DC-VIEW     — derived constraint on LiveLedgerView determinism + epoch-window
+#   * CN-PUMP     — release-tier wire-pump entry authority
+#   * DC-PUMP     — derived constraints on wire-pump output shape
+#   * DC-ADMIT-10..12 — strengthening N-M-B's closed admission contract
+#   * DC-EVIDENCE  — derived constraints on operator-pass evidence + adversarial corpus
+
+[[rules]]
+id = "CN-CONS-IN-01"
+tier = "release"
+statement = """
+Single LiveConsensusInputs importer authority: exactly one
+pub fn ade_runtime::consensus_inputs::importer::import_live_consensus_inputs
+converts a cardano-cli JSON bundle into a typed, validated
+LiveConsensusInputsCanonical. The BLUE admission path consumes
+only the canonicalized form. The raw JSON is RED / operational
+evidence; it never enters BLUE.
+
+Required canonical fields: network_magic, genesis_hash, era,
+epoch_no, epoch_start_slot, epoch_end_slot,
+active_slots_coeff, epoch_nonce, pool_distribution,
+pool_vrf_keyhashes, protocol_params_hash,
+source_cardano_node_version, source_query_command,
+source_tip_hash, source_tip_slot, fingerprint.
+"""
+source = "docs/planning/phase4-n-m-c-operator-pass-invariants.md §1 (I-C1)"
+cross_ref = ["CN-CONS-08", "CN-SEED-01", "CN-ANCHOR-01"]
+code_locus = ""
+tests = []
+ci_scripts = []
+status = "declared"
+
+[[rules]]
+id = "DC-CONS-IN-01"
+tier = "derived"
+statement = """
+Closed importer error sum: Io | Json | BadField | MissingField
+| BadHashHex | BadEpochWindow | BadPoolDistribution
+| EraNotSupported. No Option field receives a runtime default.
+Missing pool distribution, nonce, ASC, VRF keyhash, era
+schedule, or any hash field is fatal at import time
+(¬P-C4 no partial importer fallback).
+"""
+source = "docs/planning/phase4-n-m-c-operator-pass-invariants.md §1 (I-C2)"
+cross_ref = ["CN-CONS-IN-01"]
+code_locus = ""
+tests = []
+ci_scripts = []
+status = "declared"
+
+[[rules]]
+id = "DC-CONS-IN-02"
+tier = "derived"
+statement = """
+Canonical fingerprint: LiveConsensusInputsCanonical.fingerprint
+is Blake2b-256 over a canonical CBOR encoding of every field in
+declared order. Same JSON bytes → same canonical form → same
+fingerprint, byte-identical across two import runs. The
+fingerprint is the load-bearing handle for every admission
+JSONL block-event (DC-ADMIT-10).
+"""
+source = "docs/planning/phase4-n-m-c-operator-pass-invariants.md §1 (I-C3)"
+cross_ref = ["CN-CONS-IN-01", "T-DET-01", "DC-ADMIT-10"]
+code_locus = ""
+tests = []
+ci_scripts = []
+status = "declared"
+
+[[rules]]
+id = "DC-VIEW-01"
+tier = "derived"
+statement = """
+LiveLedgerView determinism + epoch-window guard. The view is
+constructed deterministically from LiveConsensusInputsCanonical.
+
+Two guards on every LedgerView query:
+  (a) Queried epoch != canonical.epoch_no → return None
+      (BLUE then fails closed via MissingConsensusInput).
+  (b) Block slot outside [epoch_start_slot, epoch_end_slot] →
+      runner intercepts before admit and emits
+      AdmissionHalted { reason: CrossEpochUse } (DC-ADMIT-11).
+
+No ambient default view; no cross-epoch silent use.
+"""
+source = "docs/planning/phase4-n-m-c-operator-pass-invariants.md §1 (I-C4)"
+cross_ref = ["CN-CONS-IN-01", "DC-CONS-IN-02", "DC-ADMIT-11"]
+code_locus = ""
+tests = []
+ci_scripts = []
+status = "declared"
+
+[[rules]]
+id = "CN-PUMP-01"
+tier = "release"
+statement = """
+Single admission wire-pump entry per peer: exactly one
+pub async fn ade_runtime::admission::wire_pump::run_admission_wire_pump
+drives the per-peer pump that produces AdmissionPeerEvents.
+The pump owns the MuxTransportHandle and runs the chain-sync +
+block-fetch state machine. The pump is the SOLE producer on the
+runner's peer_events channel. No second pump path; no
+per-call fallback.
+"""
+source = "docs/planning/phase4-n-m-c-operator-pass-invariants.md §1 (I-C5)"
+cross_ref = ["CN-ADMIT-01", "CN-SESS-01", "CN-SESS-02", "CN-SESS-03"]
+code_locus = ""
+tests = []
+ci_scripts = []
+status = "declared"
+
+[[rules]]
+id = "DC-PUMP-01"
+tier = "derived"
+statement = """
+Wire pump emits AdmissionPeerEvent::{Block, TipUpdate,
+Disconnected} only. It MUST NOT synthesize AgreementVerdict
+values or any validity claim. The verdict remains the GREEN
+reducer's sole output (memory
+[[feedback-evidence-reducers-are-green-not-authority]] +
+¬P-C3 no RED-derived verdicts).
+"""
+source = "docs/planning/phase4-n-m-c-operator-pass-invariants.md §1 (I-C6) + §2 (¬P-C3)"
+cross_ref = ["CN-PUMP-01", "DC-ADMIT-01"]
+code_locus = ""
+tests = []
+ci_scripts = []
+status = "declared"
+
+[[rules]]
+id = "DC-PUMP-02"
+tier = "derived"
+statement = """
+TipUpdate emitted on every chain-sync reply carrying a Tip
+(IntersectFound, IntersectNotFound, RollForward, RollBackward).
+The runner's next verdict::derive call sees the freshest peer
+comparison input.
+"""
+source = "docs/planning/phase4-n-m-c-operator-pass-invariants.md §1 (I-C7)"
+cross_ref = ["CN-PUMP-01", "DC-PUMP-01"]
+code_locus = ""
+tests = []
+ci_scripts = []
+status = "declared"
+
+[[rules]]
+id = "DC-ADMIT-10"
+tier = "derived"
+statement = """
+Every admission JSONL block-event carries
+consensus_inputs_fingerprint. BlockAdmitted, AgreementVerdict,
+and BootstrapComplete events emit the fingerprint field. The
+admission JSONL vocabulary stays CLOSED — the field is added to
+existing variants, NOT a new variant. The fingerprint is the
+load-bearing binding between the operator-supplied oracle
+(LiveConsensusInputs) and every BLUE-authority claim the
+transcript makes.
+"""
+source = "docs/planning/phase4-n-m-c-operator-pass-invariants.md §1 (I-C8)"
+cross_ref = ["DC-ADMIT-04", "DC-CONS-IN-02"]
+code_locus = ""
+tests = []
+ci_scripts = []
+status = "declared"
+
+[[rules]]
+id = "DC-ADMIT-11"
+tier = "derived"
+statement = """
+Cross-epoch silent use forbidden. If a peer sends a block whose
+slot is outside [epoch_start_slot, epoch_end_slot], the runner
+MUST emit AdmissionHalted { reason: CrossEpochUse } and exit
+non-zero WITHOUT calling admit_via_block_validity. There is no
+silent "skip and continue" path
+(¬P-C2 no cross-epoch silent use).
+"""
+source = "docs/planning/phase4-n-m-c-operator-pass-invariants.md §1 (I-C9) + §2 (¬P-C2)"
+cross_ref = ["DC-VIEW-01", "DC-ADMIT-01"]
+code_locus = ""
+tests = []
+ci_scripts = []
+status = "declared"
+
+[[rules]]
+id = "DC-ADMIT-12"
+tier = "derived"
+statement = """
+Undecodable peer bytes are Diverged (or
+PeerSentUndecodableBytes); never InputNotFound; never silent
+clean exit. C strengthens N-M-B's
+ProcessedBlock::Undecodable → AdmissionExitCode::Ok path:
+undecodable peer bytes are adversarial by default. They map
+to AgreementVerdict::Diverged (when a peer tip exists at the
+same slot) or AdmissionHalted { reason:
+PeerSentUndecodableBytes } (when no peer tip exists at that
+slot)
+(¬P-C7 no InputNotFound for adversarial input,
+¬P-C9 no silent clean-exit on adversarial bytes).
+"""
+source = "docs/planning/phase4-n-m-c-operator-pass-invariants.md §1 (I-C10) + §2 (¬P-C7, ¬P-C9)"
+cross_ref = ["DC-ADMIT-01", "DC-ADMIT-03", "DC-ADMIT-06"]
+code_locus = ""
+tests = []
+ci_scripts = []
+status = "declared"
+
+[[rules]]
+id = "DC-EVIDENCE-02"
+tier = "derived"
+statement = """
+Adversarial false-accept rejection across 4 mandatory mutation
+classes:
+  1. Body byte flip preserving envelope shape
+  2. Header body-hash mismatch
+  3. KES / signature corruption
+  4. VRF proof or output tamper
+
+Each mutation produces either:
+  (a) BlockAdmitted NOT emitted + AgreementVerdict::Diverged +
+      exit code 30, OR
+  (b) AdmissionHalted { reason: PeerSentUndecodableBytes } when
+      corruption breaks decode before admit-attempt.
+
+In NO case may a mutation produce BlockAdmitted (false accept),
+Agreed, or InputNotFound. False-accept is release-blocking
+(memory [[feedback-fail-closed-validation]]).
+"""
+source = "docs/planning/phase4-n-m-c-operator-pass-invariants.md §1 (I-C11)"
+cross_ref = ["DC-ADMIT-03", "DC-ADMIT-12", "CN-CONS-08"]
+code_locus = ""
+tests = []
+ci_scripts = []
+status = "declared"
+
+[[rules]]
+id = "DC-EVIDENCE-01"
+tier = "derived"
+statement = """
+Operator-pass live evidence: the C5 live operator pass against
+the local docker cardano-node-preprod peer produces a JSONL
+transcript containing AT LEAST:
+  - 1 AdmissionStarted with consensus_inputs_fingerprint,
+  - 1 BootstrapComplete with the fingerprint,
+  - >= 1 BlockAdmitted with the fingerprint,
+  - >= 1 AgreementVerdict { kind: "agreed" }.
+
+And AT MOST:
+  - 0 AgreementVerdict { kind: "diverged" } (would mean
+    divergence vs. live preprod — release-blocking),
+  - 0 BlockAdmitted for any block whose hash differs from
+    a block the live peer announces at the same slot.
+
+The Lagging count is unconstrained (Lagging is evidence-only;
+DC-ADMIT-08).
+"""
+source = "docs/planning/phase4-n-m-c-operator-pass-invariants.md §1 (I-C12)"
+cross_ref = ["DC-ADMIT-01", "DC-ADMIT-10", "DC-EVIDENCE-02", "RO-LIVE-05"]
+code_locus = ""
+tests = []
+ci_scripts = []
+status = "declared"
