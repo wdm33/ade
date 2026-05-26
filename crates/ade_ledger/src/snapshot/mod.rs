@@ -25,6 +25,7 @@ pub mod chain_dep;
 pub mod epoch_state;
 pub mod error;
 pub mod gov_state;
+pub mod ledger;
 pub mod utxo_state;
 
 pub use cert_state::{decode_cert_state, encode_cert_state};
@@ -35,4 +36,5 @@ pub use gov_state::{
     decode_conway_deposit_params, decode_gov_state, decode_pparams, encode_conway_deposit_params,
     encode_gov_state, encode_pparams,
 };
+pub use ledger::{decode_ledger_state, encode_ledger_state};
 pub use utxo_state::{decode_utxo_state, encode_utxo_state};
