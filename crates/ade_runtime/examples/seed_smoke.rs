@@ -15,8 +15,13 @@ fn main() {
     match import_cardano_cli_json_utxo(path) {
         Ok((state, fp)) => {
             println!("OK — parsed {} entries", state.utxos.len());
-            println!("fingerprint (Blake2b-256): {}",
-                fp.0.0.iter().map(|b| format!("{:02x}", b)).collect::<String>());
+            println!(
+                "fingerprint (Blake2b-256): {}",
+                fp.0 .0
+                    .iter()
+                    .map(|b| format!("{:02x}", b))
+                    .collect::<String>()
+            );
         }
         Err(e) => {
             eprintln!("seed import failed: {:?}", e);

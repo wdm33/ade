@@ -18,31 +18,73 @@ use std::collections::BTreeMap;
 /// Top-level: a map of "tx_hash_hex#index" → per-UTxO record.
 pub type RawUtxoMap = BTreeMap<String, RawUtxoEntry>;
 
-/// Per-UTxO record as cardano-cli emits it.
+/// Per-UTxO record as cardano-cli emits it. The shape consumed
+/// by the seed importer. cardano-cli emits additional fields
+/// (`datum`, `inlineDatum`, `inlineDatumhash`) that this struct
+/// deliberately does NOT declare:
 ///
-/// All fields are `Option<...>` so the deserializer accepts
-/// `null` values (the cli writes `null` rather than omitting
-/// fields). `value` is required.
+/// - `datum` and `inlineDatum` carry the PARSED form of the
+///   datum. Plutus integers can exceed `f64` precision and the
+///   parsed JSON form is unusable for canonical encoding (and
+///   `serde_json` cannot deserialize such numbers into any
+///   numeric type). We consume only the raw CBOR hex via
+///   `inline_datum_raw` and the on-chain `datumhash`. Per
+///   serde's default behavior these unknown keys are silently
+///   skipped without parsing their values.
+/// - `inlineDatumhash` is operator-side metadata; the canonical
+///   datum hash is recomputed from `inline_datum_raw` bytes.
+///
+/// Declared fields with `#[serde(default)]` accept `null` values
+/// (cardano-cli writes `null` rather than omitting fields).
+/// `value` is required.
 #[derive(Debug, Clone, Deserialize, PartialEq, Eq)]
 pub struct RawUtxoEntry {
     pub address: String,
     #[serde(default)]
-    pub datum: Option<serde_json::Value>,
-    #[serde(default)]
     pub datumhash: Option<String>,
-    #[serde(default)]
-    #[serde(rename = "inlineDatum")]
-    pub inline_datum: Option<serde_json::Value>,
     #[serde(default)]
     #[serde(rename = "inlineDatumRaw")]
     pub inline_datum_raw: Option<String>,
     #[serde(default)]
-    #[serde(rename = "inlineDatumhash")]
-    pub inline_datum_hash: Option<String>,
-    #[serde(default)]
     #[serde(rename = "referenceScript")]
-    pub reference_script: Option<serde_json::Value>,
+    pub reference_script: Option<RawReferenceScript>,
     pub value: RawValue,
+}
+
+/// `referenceScript` field shape as cardano-cli emits it
+/// (cardano-node 11.0.x). PHASE4-N-M-A1.1.
+///
+/// JSON:
+/// ```text
+/// "referenceScript": {
+///   "script": { "cborHex": "<hex>", "description": "<...>", "type": "<...>" },
+///   "scriptLanguage": "<...>"
+/// }
+/// ```
+///
+/// `scriptLanguage` and `description` are accepted-and-ignored
+/// metadata fields. The canonical bytes are derived from `script.type`
+/// + `script.cborHex` alone (see `importer::encode_script_ref`).
+#[derive(Debug, Clone, Deserialize, PartialEq, Eq)]
+pub struct RawReferenceScript {
+    pub script: RawScriptEnvelope,
+    #[serde(default)]
+    #[serde(rename = "scriptLanguage")]
+    pub script_language: Option<String>,
+}
+
+/// Inner `script` object: `cborHex` is the canonical CBOR payload
+/// (CBOR-encoded `bytes(plutus_binary)` for Plutus variants;
+/// CBOR-encoded `native_script` array for SimpleScript). `type`
+/// is the closed-vocabulary script variant name.
+#[derive(Debug, Clone, Deserialize, PartialEq, Eq)]
+pub struct RawScriptEnvelope {
+    #[serde(rename = "cborHex")]
+    pub cbor_hex: String,
+    #[serde(default)]
+    pub description: Option<String>,
+    #[serde(rename = "type")]
+    pub ty: String,
 }
 
 /// `value` field: `{"lovelace": N, "<policy_hex>": {"<asset_name_hex>": N}}`.
@@ -83,7 +125,9 @@ impl<'de> serde::Deserialize<'de> for AssetAmount {
                     Ok(AssetAmount(u))
                 } else if let Some(f) = n.as_f64() {
                     if !f.is_finite() || f < 0.0 {
-                        return Err(D::Error::custom("asset amount must be finite and non-negative"));
+                        return Err(D::Error::custom(
+                            "asset amount must be finite and non-negative",
+                        ));
                     }
                     // Saturate at u64::MAX. Any amount this large
                     // is beyond Cardano's protocol-meaningful
@@ -178,7 +222,7 @@ mod tests {
             first.address,
             "addr_test1vq0ast4z2dypfrl9kg2c0garrcy085w78dls8xsx954x34cmgvp2u"
         );
-        assert!(first.datum.is_none());
+        assert!(first.datumhash.is_none());
         assert_eq!(first.value.len(), 1);
         match first.value.get("lovelace").expect("lovelace") {
             RawValueEntry::Lovelace(n) => assert_eq!(*n, 1_000_000),
@@ -190,7 +234,8 @@ mod tests {
     fn parse_utxo_seed_json_inline_datum_entry() {
         let parsed = parse_utxo_seed_json(INLINE_DATUM_ENTRY.as_bytes()).expect("parse");
         let only = parsed.values().next().expect("entry");
-        assert!(only.inline_datum.is_some());
+        // The struct silently skips the parsed-form `inlineDatum`
+        // (per PHASE4-N-M-A1.1 §3); we only consume the raw hex.
         assert_eq!(
             only.inline_datum_raw.as_deref(),
             Some("581c7f5055adc0fddd13ee66d565d1a2ae552be4a9fcdd6835613fbb872f")
@@ -201,6 +246,36 @@ mod tests {
     fn parse_utxo_seed_json_rejects_garbage() {
         let result = parse_utxo_seed_json(b"not json");
         assert!(result.is_err());
+    }
+
+    const REFERENCE_SCRIPT_ENTRY: &str = r#"{
+        "0000000000000000000000000000000000000000000000000000000000000004#0": {
+            "address": "addr_test1wp97ley0p7xqksmh6tq3c6v8depl9jpfvnkk68d29fwznmcmlpuqk",
+            "inlineDatum": null,
+            "inlineDatumRaw": null,
+            "referenceScript": {
+                "script": {
+                    "cborHex": "590a5b0100003323232323232",
+                    "description": "",
+                    "type": "PlutusScriptV2"
+                },
+                "scriptLanguage": "PlutusScriptLanguage PlutusScriptV2"
+            },
+            "value": { "lovelace": 12345678 }
+        }
+    }"#;
+
+    #[test]
+    fn parse_utxo_seed_json_reference_script_entry() {
+        let parsed = parse_utxo_seed_json(REFERENCE_SCRIPT_ENTRY.as_bytes()).expect("parse");
+        let only = parsed.values().next().expect("entry");
+        let rs = only.reference_script.as_ref().expect("ref script present");
+        assert_eq!(rs.script.ty, "PlutusScriptV2");
+        assert_eq!(rs.script.cbor_hex, "590a5b0100003323232323232");
+        assert_eq!(
+            rs.script_language.as_deref(),
+            Some("PlutusScriptLanguage PlutusScriptV2")
+        );
     }
 
     #[test]

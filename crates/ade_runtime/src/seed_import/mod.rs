@@ -20,13 +20,14 @@
 //! - Conway-era post-Mary outputs supported (Babbage map form).
 //! - Lovelace-only + multi-asset values supported.
 //! - Inline datum (`inlineDatumRaw`) + datum hash supported.
-//! - Reference scripts → fail-fast `UnsupportedTxOutFeature`
-//!   (Phase-2 of this slice; documented as known-narrow scope).
+//! - Reference scripts (`SimpleScript` / `PlutusScriptV1` /
+//!   `PlutusScriptV2` / `PlutusScriptV3`) supported — canonical
+//!   Babbage `script_ref` bytes emitted (PHASE4-N-M-A1.1).
 //! - Byron / Shelley / Allegra / Mary legacy outputs →
 //!   fail-fast (out of scope; preprod has none from the current
 //!   tip).
 
-pub mod json;
 pub mod importer;
+pub mod json;
 
 pub use importer::{import_cardano_cli_json_utxo, JsonSeedError, UtxoFingerprint};

@@ -24,6 +24,10 @@ serde_json = "1"
 # (PHASE4-N-M-A S1). Used ONLY by the GREEN seed importer; BLUE
 # files do not depend on this.
 bech32 = "0.11"
+# Base58 decoder for Byron-era addresses emitted by cardano-cli
+# (PHASE4-N-M-A1.1 slice A1.2). Same scoping discipline as bech32:
+# GREEN-only, imported only by `seed_import`.
+base58 = "0.2"
 # RED producer signing (PHASE4-N-C S1). Same feature set as ade_crypto:
 # no new VRF/KES algorithms are introduced via features in this crate.
 cardano-crypto = { version = "1.0", default-features = false, features = ["vrf-draft03", "kes-sum", "dsign"] }

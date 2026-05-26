@@ -1,8 +1,8 @@
 # PHASE4-N-M-C — Live operator pass (cluster doc)
 
-**Status:** CLOSED 2026-05-26. 11/12 rules `enforced`; DC-EVIDENCE-01 + RO-LIVE-05 `enforced_scaffolding` (full `BlockAdmitted` transcript gated on A1.1 reference-script seed-import — explicit C non-goal).
+**Status:** CLOSED 2026-05-26. 11/12 rules `enforced`; DC-EVIDENCE-01 + RO-LIVE-05 `enforced_scaffolding`.
 **Predecessors:** PHASE4-N-M-A (BootstrapAnchor + WAL), PHASE4-N-M-B (admission orchestrator).
-**Successor:** none planned. C is the closure cluster for RO-LIVE-05.
+**Successor:** PHASE4-N-M-A1.1 (closed 2026-05-26) — closed the A1.1 reference-script gate AND the freshly-surfaced A1.2 Byron-address gate; the remaining BlockAdmitted obligation moved from "A1.1 code-gate" to "operator pass against a fully-synced peer".
 **Sketch:** `docs/planning/phase4-n-m-c-operator-pass-invariants.md`.
 **Evidence:** `docs/evidence/phase4-n-m-c-*` (consensus-inputs bundle + wire-only transcript + runbook).
 
@@ -132,7 +132,8 @@ or full live consensus (see §4 of the sketch).
 - RO-LIVE-04 (wide): still open.
 - RO-GENESIS-REPLAY-01: still open, `blocked_until_genesis_replay_cluster`.
 - RO-MITHRIL-IMPORT-01: still open.
-- A1.1 (reference-script TxOut decode): still open.
+- A1.1 (reference-script TxOut decode): **CLOSED 2026-05-26** by `PHASE4-N-M-A1.1`.
+- A1.2 (Byron Base58 address decode): **CLOSED 2026-05-26** by `PHASE4-N-M-A1.1` (surfaced + closed in the same cluster).
 - Multi-epoch admission: future cluster.
 - ChainDb persistence of admitted blocks: future strengthening.
 - Block production live pass: future cluster.

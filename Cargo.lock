@@ -118,6 +118,7 @@ dependencies = [
  "ade_network",
  "ade_testkit",
  "ade_types",
+ "base58",
  "bech32 0.11.1",
  "cardano-crypto",
  "ed25519-dalek",

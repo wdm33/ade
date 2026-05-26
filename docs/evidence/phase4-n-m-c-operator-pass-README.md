@@ -2,9 +2,13 @@
 
 **Status (2026-05-26):** scaffolding shipped + live wire-integration
 proven against local docker `cardano-node-preprod`. Full
-admission-mode `BlockAdmitted` transcript pending A1.1
-(reference-script seed-import support, an explicit N-M-C non-goal
-deferred to a future N-M-A strengthening).
+admission-mode `BlockAdmitted` transcript was originally gated
+on A1.1 (reference-script seed-import support); A1.1 closed on
+2026-05-26 via `PHASE4-N-M-A1.1`, which also closed the
+freshly-surfaced A1.2 Byron-address gate. The remaining
+obligation is now operator action against a FULLY-SYNCED peer
+— the docker peer is currently mid-sync (~72%), and intersects
+at the bundle's tip race the peer's still-advancing chain.
 
 This document is the operator runbook for the PHASE4-N-M-C live
 operator pass and the index of evidence artifacts captured for
@@ -51,37 +55,21 @@ admission path only consumes the canonical form derived from it.
 
 ---
 
-## §3 — Known limitation: A1.1 reference-script TxOut decode
+## §3 — A1.1 closure note (2026-05-26)
 
-The current preprod UTxO snapshot contains TxOuts with
-`referenceScript: ...` fields (Babbage-onwards script anchoring).
-The N-M-A seed importer enforces a fail-fast on any
-`UnsupportedTxOutFeature` to preserve the closed admission
-contract (DC-ADMIT-09 + ¬P-C8) — these UTxOs would otherwise be
-silently dropped, producing a partial seed that does not
-fingerprint to the same `UtxoFingerprint` an operator could
-verify against a re-extracted dump.
+**A1.1 closed.** PHASE4-N-M-A1.1 added canonical Babbage
+`script_ref` (`tag(24, bytes(.cbor script))`) emission for all
+four cardano-node-supported script variants (SimpleScript,
+PlutusScriptV1/V2/V3), Byron Base58 address decode, and
+Plutus-integer-tolerant JSON field stripping. The full 2.2 GB
+preprod UTxO dump now imports cleanly (1,909,985 entries,
+deterministic fingerprint), and the live admission run reaches
+`admission_started` + `bootstrap_complete` against a freshly
+extracted bundle (see
+`docs/evidence/phase4-n-m-a1.1-admission-bootstrap-transcript.jsonl`).
 
-Concretely, the live admission run halts at bootstrap with:
-
-```
-ade_node admission bootstrap fatal: JsonSeedImport(
-    "UnsupportedTxOutFeature { feature: \"referenceScript\" }"
-)
-```
-
-This is **expected** at this cluster boundary — extending the
-importer is an explicit N-M-C non-goal (A1.1 remains open per
-the cluster doc's "Open obligations after C closes" section).
-The work is captured for a future N-M-A strengthening:
-
-> **A1.1 (reference-script seed-import):** extend
-> `ade_runtime::seed_import::{json, importer}` to encode the
-> Babbage `script_ref` field into the canonical TxOut bytes
-> while preserving the fail-fast on any unrecognised
-> referenceScript shape. Required before the live operator
-> pass can produce a non-empty admission transcript on a
-> current-tip preprod snapshot.
+The remaining gate is the trailing `admission_shutdown` with
+`reason: "upstream_dropped"` — see §6 below.
 
 ---
 
@@ -136,8 +124,69 @@ or not — a divergence vs. live preprod is release-blocking
 > test + operator runbook ship with this cluster.
 
 **Unsafe closures explicitly NOT made:**
-- "Ade admitted real preprod blocks." (gated on A1.1)
+- "Ade admitted real preprod blocks." (post-A1.1, still gated on a fully-synced peer for end-to-end BlockAdmitted; see §6)
 - "Ade fully syncs preprod." (¬P-C5)
 - "Ade implements live consensus." (¬P-C5)
 - "Ade has full preprod compatibility." (¬P-C5)
 - "Ade can replace cardano-node in production." (¬P-C5)
+
+---
+
+## §6 — Post-A1.1 remaining gate: fully-synced peer
+
+After A1.1 + A1.2 closed, the live admission run reliably
+reaches `bootstrap_complete` against the full preprod UTxO.
+The next step — `BlockAdmitted` events — requires the docker
+preprod peer to be fully synced so that:
+
+1. The bundle's `source_tip_slot` corresponds to a block the
+   peer has already committed to its main chain (not still
+   in flight).
+2. Chain-sync `FindIntersect` at that slot+hash succeeds
+   (peer has the block on its current immutable chain).
+3. The peer's still-advancing tip does not roll over the
+   bundle's tip mid-run.
+
+The docker peer's `syncProgress` is observable via
+`docker exec cardano-node-preprod cardano-cli query tip
+--testnet-magic 1 --socket-path /opt/cardano/ipc/node.socket`.
+When it reads ≥ ~99% with a stable tip, regenerate the bundle:
+
+```
+ci/build_consensus_inputs_bundle.sh docs/evidence/phase4-n-m-c-consensus-inputs.json
+```
+
+Re-extract the UTxO dump at the same tip:
+
+```
+docker exec cardano-node-preprod sh -c \
+    "cardano-cli query utxo --whole-utxo --out-file /tmp/utxo-fresh.json \
+     --testnet-magic 1 --socket-path /opt/cardano/ipc/node.socket"
+docker cp cardano-node-preprod:/tmp/utxo-fresh.json \
+    docs/evidence/phase4-n-m-c-utxo-seed.json
+```
+
+Then run the live pass with the mandatory-asserts switch:
+
+```
+ADE_LIVE_OPERATOR_TEST=1 \
+ADE_LIVE_REQUIRE_BLOCK_ADMITTED=1 \
+ADE_LIVE_NODE_BINARY=./target/release/ade_node \
+ADE_LIVE_PEER_ADDR=127.0.0.1:3001 \
+ADE_LIVE_GENESIS_PATH=.cardano-node-preprod/config \
+ADE_LIVE_JSON_SEED=docs/evidence/phase4-n-m-c-utxo-seed.json \
+ADE_LIVE_SEED_POINT_SLOT=<bundle source_tip_slot> \
+ADE_LIVE_SEED_BLOCK_HASH=<bundle source_tip_hash_hex> \
+ADE_LIVE_NETWORK_MAGIC=1 \
+ADE_LIVE_GENESIS_HASH=162d29c4e1cf6b8a84f2d692e67a3ac6bc7851bc3e6e4afe64d15778bed8bd86 \
+ADE_LIVE_CONSENSUS_INPUTS=docs/evidence/phase4-n-m-c-consensus-inputs.json \
+ADE_LIVE_RUN_DURATION_SECS=300 \
+cargo test -p ade_node --test admission_live_operator_pass -- --nocapture
+```
+
+When this run produces ≥ 1 `block_admitted` + ≥ 1
+`agreement_verdict { kind: "agreed" }` + 0 `diverged`, copy the
+transcript to
+`docs/evidence/phase4-n-m-c-operator-pass-transcript.jsonl` and
+flip both `DC-EVIDENCE-01` and `RO-LIVE-05` in the registry
+from `enforced_scaffolding` to `enforced`.
