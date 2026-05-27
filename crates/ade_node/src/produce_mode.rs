@@ -527,24 +527,43 @@ pub fn run_real_forge(
         } => (vrf_output, leader_proof),
     };
 
-    // RED step 3 — KES-sign the signing payload. A3 honest scope:
-    // the payload is `expected_vrf_input` (placeholder). Real Praos
-    // KES-signs-unsigned-header recipe is a future cluster.
-    let kes_signature = match shell.kes_sign_at(kes_period, &expected) {
-        Ok(s) => s,
-        Err(_) => {
-            return CoordinatorEvent::ForgeFailed {
-                slot,
-                reason: ForgeFailureReason::KesPeriodMismatch,
-            };
-        }
-    };
+    // PHASE4-N-S-A A3: real KES-signs-unsigned-header bridge.
+    //
+    // Two-pass forge: the first pass uses a placeholder KES
+    // signature to compute body_hash + body_size + all the
+    // header_body fields; the second pass uses the real KES
+    // signature over the canonical UnsignedHeaderPreImage.
+    //
+    // Body_hash + body_size are deterministic in (base_state,
+    // mempool, mempool_tx_bytes) and INDEPENDENT of
+    // kes_signature, so the body bytes are byte-identical
+    // across passes; only the header's KES signature changes.
+    //
+    // The duplicate forge is intentional honest scope (saves
+    // refactoring forge_block's signature). Real-load
+    // optimizations land in a future cluster.
 
-    // GREEN step 4 — assemble tick.
-    let inputs = TickInputs {
-        vrf_proof,
+    use ade_crypto::kes::SUM6_KES_SIG_LEN;
+    use ade_ledger::block_validity::header_input::decode_block as decode_for_preimage;
+    use ade_ledger::block_validity::unsigned_header_pre_image::unsigned_header_pre_image;
+
+    // Pre-flight period check: fail fast with KesPeriodMismatch
+    // BEFORE the placeholder-signature first pass, so an
+    // out-of-window kes_period doesn't surface as the
+    // forge_block opcert error.
+    if !shell.kes_period_in_window(kes_period) {
+        return CoordinatorEvent::ForgeFailed {
+            slot,
+            reason: ForgeFailureReason::KesPeriodMismatch,
+        };
+    }
+
+    // First pass — placeholder signature.
+    let placeholder_sig = ade_crypto::kes::KesSignature([0u8; SUM6_KES_SIG_LEN]);
+    let inputs_placeholder = TickInputs {
+        vrf_proof: vrf_proof.clone(),
         kes_period: KesPeriod(kes_period),
-        kes_signature,
+        kes_signature: placeholder_sig,
         opcert: shell.opcert().clone(),
         cold_vk: shell.cold_vk(),
         vrf_vkey: ctx.vrf_vk.0.to_vec(),
@@ -557,6 +576,117 @@ pub fn run_real_forge(
         protocol_version: ctx.protocol_version,
     };
     let mempool = MempoolState::new(ctx.base_state.clone());
+    let tick_placeholder =
+        match assemble_tick(slot, ctx.base_state, &mempool, &inputs_placeholder) {
+            Ok(t) => t,
+            Err(_) => {
+                return CoordinatorEvent::ForgeFailed {
+                    slot,
+                    reason: ForgeFailureReason::Other,
+                };
+            }
+        };
+    let forged_placeholder = match forge_block(&tick_placeholder) {
+        Ok((forged, _)) => forged,
+        Err(err) => {
+            let reason = map_forge_error(&err);
+            return CoordinatorEvent::ForgeFailed { slot, reason };
+        }
+    };
+
+    // Extract canonical header_body fields via decode_block +
+    // re-decode of inner block (matches A2's byte-match test
+    // shape).
+    let decoded_placeholder = match decode_for_preimage(&forged_placeholder.bytes) {
+        Ok(d) => d,
+        Err(_) => {
+            return CoordinatorEvent::ForgeFailed {
+                slot,
+                reason: ForgeFailureReason::Other,
+            };
+        }
+    };
+    let inner_placeholder =
+        &forged_placeholder.bytes[decoded_placeholder.inner_start..decoded_placeholder.inner_end];
+    let preserved_placeholder = match ade_codec::conway::decode_conway_block(inner_placeholder) {
+        Ok(p) => p,
+        Err(_) => {
+            return CoordinatorEvent::ForgeFailed {
+                slot,
+                reason: ForgeFailureReason::Other,
+            };
+        }
+    };
+    let header_body_decoded = preserved_placeholder.decoded().header.body.clone();
+    let canonical_body_hash = header_body_decoded.body_hash.clone();
+    let canonical_body_size = header_body_decoded.body_size;
+
+    // Build the vrf_result CBOR field the recipe expects
+    // (mirrors forge.rs:282-288).
+    let vrf_result = {
+        use ade_codec::cbor::{
+            write_array_header, write_bytes_canonical, ContainerEncoding, IntWidth,
+        };
+        let mut buf = Vec::with_capacity(2 + 64 + 80);
+        write_array_header(
+            &mut buf,
+            ContainerEncoding::Definite(2, IntWidth::Inline),
+        );
+        write_bytes_canonical(&mut buf, &verified_vrf_output.0);
+        write_bytes_canonical(&mut buf, &vrf_proof.0);
+        buf
+    };
+
+    let preimage = match unsigned_header_pre_image(
+        slot,
+        ctx.block_number.0,
+        ctx.prev_hash.clone(),
+        shell.cold_vk().0.to_vec(),
+        ctx.vrf_vk.0.to_vec(),
+        vrf_result,
+        canonical_body_size,
+        canonical_body_hash,
+        shell.opcert().clone(),
+        ctx.protocol_version,
+    ) {
+        Ok(p) => p,
+        Err(_) => {
+            return CoordinatorEvent::ForgeFailed {
+                slot,
+                reason: ForgeFailureReason::Other,
+            };
+        }
+    };
+
+    // RED step 3 (real) — KES-sign the canonical unsigned-header
+    // pre-image via the branded type. Arbitrary-byte signing is
+    // structurally unrepresentable.
+    let real_kes_signature = match shell.kes_sign_header(kes_period, &preimage) {
+        Ok(s) => s,
+        Err(_) => {
+            return CoordinatorEvent::ForgeFailed {
+                slot,
+                reason: ForgeFailureReason::KesPeriodMismatch,
+            };
+        }
+    };
+
+    // GREEN step 4 — assemble tick with REAL signature.
+    let inputs = TickInputs {
+        vrf_proof,
+        kes_period: KesPeriod(kes_period),
+        kes_signature: real_kes_signature,
+        opcert: shell.opcert().clone(),
+        cold_vk: shell.cold_vk(),
+        vrf_vkey: ctx.vrf_vk.0.to_vec(),
+        leader_answer: ctx.leader_schedule_answer.clone(),
+        pparams: ctx.pparams.clone(),
+        mempool_tx_bytes: Vec::new(),
+        prev_opcert_counter: ctx.prev_opcert_counter,
+        block_number: ctx.block_number,
+        prev_hash: ctx.prev_hash.clone(),
+        protocol_version: ctx.protocol_version,
+    };
     let tick = match assemble_tick(slot, ctx.base_state, &mempool, &inputs) {
         Ok(t) => t,
         Err(_) => {
@@ -567,7 +697,7 @@ pub fn run_real_forge(
         }
     };
 
-    // BLUE step 5 — forge.
+    // BLUE step 5 — final forge with the real signature.
     let forged = match forge_block(&tick) {
         Ok((forged, _effects)) => forged,
         Err(err) => {

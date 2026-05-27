@@ -245,6 +245,36 @@ impl ProducerShell {
         self.vrf.verification_key()
     }
 
+    /// **PHASE4-N-S-A A3** — pre-check that a KES `period` is
+    /// within the shell's signing window (current_period ..=
+    /// opcert_start + SUM6_MAX_PERIOD). Used by the two-pass
+    /// forge to fail fast with `ForgeFailureReason::KesPeriodMismatch`
+    /// before issuing the placeholder-signature first pass.
+    pub fn kes_period_in_window(&self, period: u32) -> bool {
+        let current = self.kes.current_period().0;
+        let opcert_start = match u32::try_from(self.opcert.kes_period) {
+            Ok(s) => s,
+            Err(_) => return false,
+        };
+        let opcert_last = opcert_start.saturating_add(ade_crypto::kes::SUM6_MAX_PERIOD);
+        period >= current && period <= opcert_last
+    }
+
+    /// **PHASE4-N-S-A A3** — KES sign over the canonical unsigned-
+    /// header pre-image. Accepts only `&UnsignedHeaderPreImage`
+    /// (branded type from `ade_ledger::block_validity::unsigned_header_pre_image`);
+    /// arbitrary-byte signing is structurally unrepresentable.
+    /// The branded type's only constructor is the canonical
+    /// recipe + (this) signing API forwards the inner bytes
+    /// verbatim to `kes_sign`.
+    pub fn kes_sign_header(
+        &self,
+        period: u32,
+        preimage: &ade_ledger::block_validity::unsigned_header_pre_image::UnsignedHeaderPreImage,
+    ) -> Result<KesSignature, ShellSignError> {
+        self.kes_sign_at(period, preimage.as_bytes())
+    }
+
     /// Current KES period.
     pub fn kes_current_period(&self) -> KesPeriod {
         self.kes.current_period()
