@@ -29,6 +29,7 @@ use core::marker::PhantomData;
 use super::hash::{expand_seed, hash_concat_vk};
 use super::KesAlgorithm;
 use super::KesError;
+use super::KesParseError;
 
 // =========================================================================
 // SumKes<D> — generic recursive Sum_n type
@@ -153,6 +154,7 @@ where
     type SigningKey = SumSigningKey<D>;
     type Signature = SumSignature<D>;
 
+    const LEVEL: u32 = D::LEVEL + 1;
     const ALGORITHM_NAME: &'static str = "SumKES";
 
     const SEED_SIZE: usize = D::SEED_SIZE;
@@ -349,6 +351,116 @@ where
                 })),
                 None => Ok(None),
             }
+        }
+    }
+
+    // -----------------------------------------------------------------
+    // PHASE4-N-P S3 — raw-byte serde + period inference.
+    // -----------------------------------------------------------------
+
+    fn raw_serialize_signing_key_kes(sk: &Self::SigningKey) -> Vec<u8> {
+        let mut out = Vec::with_capacity(Self::SIGNING_KEY_SIZE);
+        out.extend_from_slice(&D::raw_serialize_signing_key_kes(&sk.sk_child));
+        match &sk.r1_seed {
+            Some(seed) => out.extend_from_slice(&seed.0),
+            None => out.extend_from_slice(&[0u8; 32]),
+        }
+        out.extend_from_slice(&sk.vk0);
+        out.extend_from_slice(&sk.vk1);
+        debug_assert_eq!(out.len(), Self::SIGNING_KEY_SIZE);
+        out
+    }
+
+    fn raw_deserialize_signing_key_kes(bytes: &[u8]) -> Result<Self::SigningKey, KesParseError> {
+        if bytes.len() != Self::SIGNING_KEY_SIZE {
+            return Err(KesParseError::WrongPayloadSize { actual: bytes.len() });
+        }
+        // Child sub-tree occupies the leftmost D::SIGNING_KEY_SIZE bytes.
+        let child_end = D::SIGNING_KEY_SIZE;
+        let sk_child = D::raw_deserialize_signing_key_kes(&bytes[..child_end])?;
+
+        // Read the level-n trailer (seed_n, vk_left, vk_right).
+        let mut seed_n = [0u8; 32];
+        seed_n.copy_from_slice(&bytes[child_end..child_end + 32]);
+        let mut vk_left_bytes = [0u8; 32];
+        vk_left_bytes.copy_from_slice(&bytes[child_end + 32..child_end + 64]);
+        let mut vk_right_bytes = [0u8; 32];
+        vk_right_bytes.copy_from_slice(&bytes[child_end + 64..child_end + 96]);
+
+        // vk-consistency walk per S1 proof obligation §7.
+        let computed_vk_of_child = D::derive_verification_key(&sk_child);
+        let is_left_active = seed_n.iter().any(|&b| b != 0);
+
+        if is_left_active {
+            // Left sub-tree active: child IS the left sub-tree. Its
+            // vk must match vk_left_bytes.
+            if computed_vk_of_child != vk_left_bytes {
+                return Err(KesParseError::InconsistentSubtreeVkLeft { level: Self::LEVEL });
+            }
+            // Right sub-tree: derive from seed_n; its vk must match
+            // vk_right_bytes.
+            let sk_right_check = D::gen_key_kes_from_seed_bytes(&seed_n).map_err(|_| {
+                KesParseError::InconsistentSubtreeVkRight { level: Self::LEVEL }
+            })?;
+            let computed_vk_right = D::derive_verification_key(&sk_right_check);
+            drop(sk_right_check);
+            if computed_vk_right != vk_right_bytes {
+                return Err(KesParseError::InconsistentSubtreeVkRight { level: Self::LEVEL });
+            }
+            Ok(SumSigningKey {
+                sk_child,
+                r1_seed: Some(ZeroizingSeed(seed_n)),
+                vk0: vk_left_bytes,
+                vk1: vk_right_bytes,
+            })
+        } else {
+            // Right sub-tree active: child IS the right sub-tree. Its
+            // vk must match vk_right_bytes. vk_left_bytes is opaque
+            // (original left sub-tree is forward-secrecy-gone); trust
+            // as given.
+            if computed_vk_of_child != vk_right_bytes {
+                return Err(KesParseError::InconsistentSubtreeVkRight { level: Self::LEVEL });
+            }
+            Ok(SumSigningKey {
+                sk_child,
+                r1_seed: None,
+                vk0: vk_left_bytes,
+                vk1: vk_right_bytes,
+            })
+        }
+    }
+
+    fn raw_serialize_signature_kes(sig: &Self::Signature) -> Vec<u8> {
+        let mut out = Vec::with_capacity(Self::SIGNATURE_SIZE);
+        out.extend_from_slice(&D::raw_serialize_signature_kes(&sig.sigma));
+        out.extend_from_slice(&sig.vk0);
+        out.extend_from_slice(&sig.vk1);
+        debug_assert_eq!(out.len(), Self::SIGNATURE_SIZE);
+        out
+    }
+
+    fn raw_deserialize_signature_kes(bytes: &[u8]) -> Result<Self::Signature, KesParseError> {
+        if bytes.len() != Self::SIGNATURE_SIZE {
+            return Err(KesParseError::WrongPayloadSize { actual: bytes.len() });
+        }
+        let sigma_end = D::SIGNATURE_SIZE;
+        let sigma = D::raw_deserialize_signature_kes(&bytes[..sigma_end])?;
+        let mut vk0 = [0u8; 32];
+        vk0.copy_from_slice(&bytes[sigma_end..sigma_end + 32]);
+        let mut vk1 = [0u8; 32];
+        vk1.copy_from_slice(&bytes[sigma_end + 32..sigma_end + 64]);
+        Ok(SumSignature { sigma, vk0, vk1 })
+    }
+
+    fn current_period_of_signing_key(sk: &Self::SigningKey) -> u32 {
+        let child_period = D::current_period_of_signing_key(&sk.sk_child);
+        match &sk.r1_seed {
+            // Left sub-tree active — period contribution at level n
+            // is 0; recurse into child.
+            Some(_) => child_period,
+            // Right sub-tree active — contribution is t_half =
+            // D::total_periods().
+            None => D::total_periods() + child_period,
         }
     }
 }

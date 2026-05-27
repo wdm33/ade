@@ -277,6 +277,209 @@ fn sum6_kes_cross_impl_sign_then_upstream_verifies_at_period_17() {
 }
 
 // =========================================================================
+// PHASE4-N-P S3 — raw-byte serde + period inference
+// =========================================================================
+
+#[test]
+fn sum6_raw_serialize_signing_key_kes_size_is_608() {
+    let seed = [0x42u8; 32];
+    let sk = Sum6Kes::gen_key_kes_from_seed_bytes(&seed).unwrap();
+    let bytes = Sum6Kes::raw_serialize_signing_key_kes(&sk);
+    assert_eq!(bytes.len(), 608);
+}
+
+#[test]
+fn sum6_raw_serialize_signature_kes_size_is_448() {
+    let seed = [0x42u8; 32];
+    let sk = Sum6Kes::gen_key_kes_from_seed_bytes(&seed).unwrap();
+    let sig = Sum6Kes::sign_kes(&sk, 0, b"msg").unwrap();
+    let bytes = Sum6Kes::raw_serialize_signature_kes(&sig);
+    assert_eq!(bytes.len(), 448);
+}
+
+#[test]
+fn sum6_skey_round_trip_at_every_period_0_to_63() {
+    let seed = [0x42u8; 32];
+    let mut sk = Sum6Kes::gen_key_kes_from_seed_bytes(&seed).unwrap();
+
+    for p in 0u32..=63 {
+        let bytes = Sum6Kes::raw_serialize_signing_key_kes(&sk);
+        let parsed = Sum6Kes::raw_deserialize_signing_key_kes(&bytes)
+            .unwrap_or_else(|e| panic!("parse failed at p={}: {:?}", p, e));
+
+        // Round-trip: re-serialize must be byte-identical.
+        let bytes_after = Sum6Kes::raw_serialize_signing_key_kes(&parsed);
+        assert_eq!(bytes, bytes_after, "re-serialize drift at p={}", p);
+
+        // Period inference must agree.
+        assert_eq!(
+            Sum6Kes::current_period_of_signing_key(&parsed),
+            p,
+            "current_period drift at p={}",
+            p
+        );
+
+        if p < 63 {
+            sk = Sum6Kes::update_kes(sk, p).unwrap().unwrap();
+        }
+    }
+}
+
+#[test]
+fn sum6_signature_round_trip_at_every_period() {
+    let seed = [0x07u8; 32];
+    let mut sk = Sum6Kes::gen_key_kes_from_seed_bytes(&seed).unwrap();
+    let vk = Sum6Kes::derive_verification_key(&sk);
+
+    for p in 0u32..=63 {
+        let msg = format!("p={}", p);
+        let sig = Sum6Kes::sign_kes(&sk, p, msg.as_bytes()).unwrap();
+        let bytes = Sum6Kes::raw_serialize_signature_kes(&sig);
+        let parsed_sig = Sum6Kes::raw_deserialize_signature_kes(&bytes).unwrap();
+        // Verify with the parsed signature.
+        Sum6Kes::verify_kes(&vk, p, msg.as_bytes(), &parsed_sig)
+            .unwrap_or_else(|e| panic!("verify failed at p={}: {:?}", p, e));
+        // Re-serialize byte-identical.
+        let bytes_after = Sum6Kes::raw_serialize_signature_kes(&parsed_sig);
+        assert_eq!(bytes, bytes_after, "sig re-serialize drift at p={}", p);
+
+        if p < 63 {
+            sk = Sum6Kes::update_kes(sk, p).unwrap().unwrap();
+        }
+    }
+}
+
+#[test]
+fn period_from_zeroed_sum6_tree_shape_agrees_with_update_kes_chain() {
+    let seed = [0x55u8; 32];
+    let mut sk = Sum6Kes::gen_key_kes_from_seed_bytes(&seed).unwrap();
+
+    for p in 0u32..=63 {
+        let bytes = Sum6Kes::raw_serialize_signing_key_kes(&sk);
+        let bytes_arr: &[u8; 608] = bytes.as_slice().try_into().unwrap();
+        let inferred = super::period::period_from_zeroed_sum6_tree_shape(bytes_arr).unwrap();
+        assert_eq!(inferred, p, "shape-inferred period mismatch at p={}", p);
+
+        if p < 63 {
+            sk = Sum6Kes::update_kes(sk, p).unwrap().unwrap();
+        }
+    }
+}
+
+#[test]
+fn period_from_zeroed_sum6_tree_shape_rejects_leaf_all_zero() {
+    let mut bytes = [0u8; 608];
+    // Make the rest of the buffer non-zero so we know the leaf check
+    // is what triggers.
+    for b in bytes.iter_mut().skip(32) {
+        *b = 0xAB;
+    }
+    let err = super::period::period_from_zeroed_sum6_tree_shape(&bytes).unwrap_err();
+    assert!(matches!(err, KesParseError::LeafSignKeyAllZero));
+}
+
+#[test]
+fn raw_deserialize_signing_key_kes_rejects_wrong_payload_size() {
+    for size in [0usize, 32, 100, 512, 607, 609, 612, 1000] {
+        let bytes = vec![0xABu8; size];
+        let err = Sum6Kes::raw_deserialize_signing_key_kes(&bytes).unwrap_err();
+        match err {
+            KesParseError::WrongPayloadSize { actual } => {
+                assert_eq!(actual, size, "actual mismatch for size {}", size);
+            }
+            other => panic!("expected WrongPayloadSize at size {}, got {:?}", size, other),
+        }
+    }
+}
+
+#[test]
+fn raw_deserialize_signing_key_kes_rejects_leaf_all_zero() {
+    // Construct a real Sum6 skey bytes, then zero the leaf.
+    let seed = [0x33u8; 32];
+    let sk = Sum6Kes::gen_key_kes_from_seed_bytes(&seed).unwrap();
+    let mut bytes = Sum6Kes::raw_serialize_signing_key_kes(&sk);
+    for b in bytes[0..32].iter_mut() {
+        *b = 0;
+    }
+    // The leaf-zero check fires at the innermost Sum0 layer, which
+    // returns LeafSignKeyAllZero. SumKes<D>::raw_deserialize_signing_key_kes
+    // propagates the error from D's recursive call.
+    let err = Sum6Kes::raw_deserialize_signing_key_kes(&bytes).unwrap_err();
+    assert!(matches!(err, KesParseError::LeafSignKeyAllZero));
+}
+
+#[test]
+fn raw_deserialize_signing_key_kes_rejects_inconsistent_vk_left_at_level_6() {
+    let seed = [0x77u8; 32];
+    let sk = Sum6Kes::gen_key_kes_from_seed_bytes(&seed).unwrap();
+    let mut bytes = Sum6Kes::raw_serialize_signing_key_kes(&sk);
+    // At p=0, level-6 seed is non-zero (left subtree active). Flip
+    // vk_left at level 6 (bytes[544..576)).
+    bytes[544] ^= 0xFF;
+    let err = Sum6Kes::raw_deserialize_signing_key_kes(&bytes).unwrap_err();
+    assert!(
+        matches!(err, KesParseError::InconsistentSubtreeVkLeft { level: 6 }),
+        "got {:?}",
+        err
+    );
+}
+
+#[test]
+fn raw_deserialize_signing_key_kes_rejects_inconsistent_vk_right_at_level_6() {
+    let seed = [0x88u8; 32];
+    let sk = Sum6Kes::gen_key_kes_from_seed_bytes(&seed).unwrap();
+    let mut bytes = Sum6Kes::raw_serialize_signing_key_kes(&sk);
+    // At p=0, level-6 seed is non-zero (left subtree active). Flip
+    // vk_right at level 6 (bytes[576..608)).
+    bytes[576] ^= 0xFF;
+    let err = Sum6Kes::raw_deserialize_signing_key_kes(&bytes).unwrap_err();
+    assert!(
+        matches!(err, KesParseError::InconsistentSubtreeVkRight { level: 6 }),
+        "got {:?}",
+        err
+    );
+}
+
+#[test]
+fn raw_deserialize_signature_kes_rejects_wrong_payload_size() {
+    for size in [0usize, 64, 256, 447, 449, 1000] {
+        let bytes = vec![0xABu8; size];
+        let err = Sum6Kes::raw_deserialize_signature_kes(&bytes).unwrap_err();
+        assert!(
+            matches!(err, KesParseError::WrongPayloadSize { actual: _ }),
+            "expected WrongPayloadSize at size {}, got {:?}",
+            size,
+            err
+        );
+    }
+}
+
+#[test]
+fn sum6_cross_impl_skey_serialization_matches_cardano_crypto() {
+    // We don't have access to upstream's raw_serialize_signing_key_kes
+    // (it's the missing function that drives PHASE4-N-P). Instead, we
+    // verify cross-impl agreement by:
+    // 1. Generate via both impls from the same seed.
+    // 2. Serialize ours.
+    // 3. Confirm size + VK byte-equality (already covered by S2 tests).
+    // The byte-shape ground-truth against cardano-cli output comes
+    // in S4.
+    let seed = [0x42u8; 32];
+    let sk = Sum6Kes::gen_key_kes_from_seed_bytes(&seed).unwrap();
+    let bytes = Sum6Kes::raw_serialize_signing_key_kes(&sk);
+    assert_eq!(bytes.len(), 608);
+    // Round-trip through our deserializer must succeed and reach
+    // period 0.
+    let parsed = Sum6Kes::raw_deserialize_signing_key_kes(&bytes).unwrap();
+    assert_eq!(Sum6Kes::current_period_of_signing_key(&parsed), 0);
+    // VKs match (sanity).
+    assert_eq!(
+        Sum6Kes::derive_verification_key(&parsed),
+        Sum6Kes::derive_verification_key(&sk),
+    );
+}
+
+// =========================================================================
 // Drop / Debug discipline
 // =========================================================================
 

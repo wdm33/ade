@@ -14,6 +14,7 @@
 
 use super::KesAlgorithm;
 use super::KesError;
+use super::KesParseError;
 
 // =========================================================================
 // Sum0Kes — single-period KES wrapping Ed25519
@@ -103,6 +104,7 @@ impl KesAlgorithm for Sum0Kes {
     type SigningKey = Sum0SigningKey;
     type Signature = Sum0Signature;
 
+    const LEVEL: u32 = 0;
     const ALGORITHM_NAME: &'static str = "Sum0KES_Ed25519DSIGN";
     const SEED_SIZE: usize = 32;
     const SIGNING_KEY_SIZE: usize = 32;
@@ -177,5 +179,44 @@ impl KesAlgorithm for Sum0Kes {
         // `sk` is moved in and dropped here, which zeroizes the seed.
         drop(sk);
         Ok(None)
+    }
+
+    // -----------------------------------------------------------------
+    // PHASE4-N-P S3 — raw-byte serde at the leaf.
+    // -----------------------------------------------------------------
+
+    fn raw_serialize_signing_key_kes(sk: &Self::SigningKey) -> Vec<u8> {
+        sk.seed.to_vec()
+    }
+
+    fn raw_deserialize_signing_key_kes(bytes: &[u8]) -> Result<Self::SigningKey, KesParseError> {
+        if bytes.len() != Self::SIGNING_KEY_SIZE {
+            return Err(KesParseError::WrongPayloadSize { actual: bytes.len() });
+        }
+        // Leaf-zero check per S1 proof obligation §5 (LeafSignKeyAllZero).
+        if bytes.iter().all(|&b| b == 0) {
+            return Err(KesParseError::LeafSignKeyAllZero);
+        }
+        let mut seed = [0u8; 32];
+        seed.copy_from_slice(bytes);
+        Ok(Sum0SigningKey { seed })
+    }
+
+    fn raw_serialize_signature_kes(sig: &Self::Signature) -> Vec<u8> {
+        sig.bytes.to_vec()
+    }
+
+    fn raw_deserialize_signature_kes(bytes: &[u8]) -> Result<Self::Signature, KesParseError> {
+        if bytes.len() != Self::SIGNATURE_SIZE {
+            return Err(KesParseError::InvalidEd25519SignatureLength { actual: bytes.len() });
+        }
+        let mut arr = [0u8; 64];
+        arr.copy_from_slice(bytes);
+        Ok(Sum0Signature { bytes: arr })
+    }
+
+    fn current_period_of_signing_key(_sk: &Self::SigningKey) -> u32 {
+        // Sum0 has only period 0.
+        0
     }
 }

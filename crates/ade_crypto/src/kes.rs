@@ -133,7 +133,10 @@ pub fn verify_kes(
     sig_bytes: &[u8],
     msg: &[u8],
 ) -> Result<bool, CryptoError> {
-    use cardano_crypto::kes::{KesAlgorithm, Sum6Kes};
+    // PHASE4-N-P S3 migration: use the Ade-owned `kes_sum::Sum6Kes`
+    // BLUE algorithm. `cardano-crypto` is now `#[cfg(test)]` only in
+    // ade_crypto.
+    use crate::kes_sum::{KesAlgorithm, Sum6Kes};
 
     if sig_bytes.len() != SUM6_SIGNATURE_SIZE {
         return Err(CryptoError::MalformedSignature {
@@ -142,16 +145,14 @@ pub fn verify_kes(
         });
     }
 
-    let signature = Sum6Kes::raw_deserialize_signature_kes(sig_bytes).ok_or(
+    let signature = Sum6Kes::raw_deserialize_signature_kes(sig_bytes).map_err(|_| {
         CryptoError::MalformedSignature {
             algorithm: "kes_sum6",
             detail: "failed to deserialize KES signature",
-        },
-    )?;
+        }
+    })?;
 
-    let kes_vk = vk.0.to_vec();
-
-    match Sum6Kes::verify_kes(&(), &kes_vk, period.0 as u64, msg, &signature) {
+    match Sum6Kes::verify_kes(&vk.0, period.0, msg, &signature) {
         Ok(()) => Ok(true),
         Err(_) => Ok(false),
     }

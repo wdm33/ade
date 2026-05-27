@@ -35,13 +35,17 @@
 //! future Sum_n with a different hash width is ever needed (out of
 //! scope for N-P), this is the place to generalize.
 
+mod errors;
 mod hash;
+mod period;
 mod single;
 mod sum;
 
 #[cfg(test)]
 mod tests;
 
+pub use errors::KesParseError;
+pub use period::period_from_zeroed_sum6_tree_shape;
 pub use single::{Sum0Kes, Sum0Signature, Sum0SigningKey};
 pub use sum::{SumKes, SumSignature, SumSigningKey};
 
@@ -77,9 +81,15 @@ pub trait KesAlgorithm: 'static {
     /// MUST hand-roll `Drop` for best-effort zeroize.
     type SigningKey;
 
-    /// Signature type. Structured (not raw bytes) at this BLUE
-    /// layer; raw-byte serde is the PHASE4-N-P S3 deliverable.
+    /// Signature type. Structured at the BLUE layer; raw-byte serde
+    /// lives behind `raw_serialize_signature_kes` /
+    /// `raw_deserialize_signature_kes`.
     type Signature: Clone + Eq + core::fmt::Debug;
+
+    /// Recursion depth in the Sum_n tree (PHASE4-N-P S3). Sum0 = 0;
+    /// SumKes<D> = D::LEVEL + 1. Used by the recursive deserializer
+    /// to surface the level inside `KesParseError` variants.
+    const LEVEL: u32;
 
     /// Human-readable name (debug only; never used as a wire
     /// discriminator).
@@ -146,6 +156,38 @@ pub trait KesAlgorithm: 'static {
         msg: &[u8],
         sig: &Self::Signature,
     ) -> Result<(), KesError>;
+
+    // ---------------------------------------------------------------
+    // PHASE4-N-P S3 — raw-byte serde + period inference.
+    // ---------------------------------------------------------------
+
+    /// Serialize the signing-key tree into the canonical Haskell
+    /// `rawSerialiseSignKeyKES` byte layout. Output size is
+    /// `SIGNING_KEY_SIZE` exactly (608 bytes for Sum6).
+    fn raw_serialize_signing_key_kes(sk: &Self::SigningKey) -> Vec<u8>;
+
+    /// Deserialize a `SIGNING_KEY_SIZE`-byte buffer into the typed
+    /// signing key. Walks the recursive vk-consistency check
+    /// described in
+    /// `period-from-zeroed-sum6-tree-shape-proof.md` §7; returns a
+    /// closed `KesParseError` variant on any mismatch.
+    fn raw_deserialize_signing_key_kes(bytes: &[u8])
+        -> Result<Self::SigningKey, KesParseError>;
+
+    /// Serialize the signature into the canonical
+    /// `rawSerialiseSigKES` byte layout. Output size is
+    /// `SIGNATURE_SIZE` exactly (448 bytes for Sum6).
+    fn raw_serialize_signature_kes(sig: &Self::Signature) -> Vec<u8>;
+
+    /// Deserialize a `SIGNATURE_SIZE`-byte buffer into the typed
+    /// signature. Size-checked at entry.
+    fn raw_deserialize_signature_kes(bytes: &[u8])
+        -> Result<Self::Signature, KesParseError>;
+
+    /// Compute the current period of a signing key by walking the
+    /// tree shape. At each level, contributes `2^(level-1)` when
+    /// `r1_seed` is `None` (right sub-tree active).
+    fn current_period_of_signing_key(sk: &Self::SigningKey) -> u32;
 }
 
 // =========================================================================
