@@ -406,7 +406,103 @@ agree with their derivations.
   `decode_cbor_byte_string` (PHASE4-N-O `keys.rs`). The
   CBOR-shape rejection lives at the envelope layer, not here.
 
-## 9. References
+## 10. `Drop`-vs-destructure tradeoff in `SumSigningKey<D>`
+
+> **Status:** Codified after the PHASE4-N-P S5 IDD review surfaced
+> the asymmetry as an "open question." Documents the discipline so
+> future contributors don't reach for an explicit `Drop` impl on
+> `SumSigningKey<D>` and break `update_kes`.
+
+The signing-key types in `crates/ade_crypto/src/kes_sum/` split their
+zeroize discipline two ways:
+
+| Type | `Drop` impl? | Zeroize path |
+|---|---|---|
+| `Sum0SigningKey` | **Yes** (`single.rs::65..72`) | Hand-rolled `Drop` overwrites `self.seed: [u8; 32]` byte-by-byte + `core::hint::black_box`. |
+| `SumSigningKey<D>` (any `n ≥ 1`) | **No** (intentional) | Per-field zeroize via `r1_seed: Option<ZeroizingSeed>` (each `ZeroizingSeed` has its own `Drop`) + `sk_child: D::SigningKey` recursively zeroizes via *its* `Drop`. |
+
+### Why `SumSigningKey<D>` cannot have `Drop`
+
+`SumKes<D>::update_kes(sk, period)` destructures the input key to move
+`sk_child` into the recursive call (either as-is when staying in the
+same sub-tree, or replaced via `D::gen_key_kes_from_seed_bytes` at the
+boundary transition):
+
+```rust
+let SumSigningKey {
+    sk_child,
+    mut r1_seed,
+    vk0,
+    vk1,
+} = sk;     // <-- partial move out of `sk`
+...
+match D::update_kes(sk_child, period)? { ... }
+```
+
+Rust forbids destructuring a value of a type that implements `Drop`
+(the partial move would leave the rest in an inconsistent state for
+the `Drop` glue to run). If we added `impl<D> Drop for SumSigningKey<D>`,
+the `let SumSigningKey { sk_child, ... } = sk` line would fail
+compilation (E0509: "cannot move out of type … which implements
+the `Drop` trait").
+
+### Why the per-field zeroize is equivalent
+
+`SumSigningKey<D>` has four fields:
+
+- `sk_child: D::SigningKey` — recursively `Drop`-zeroized at *its*
+  level. At the leaf, `Sum0SigningKey::drop` overwrites the 32-byte
+  Ed25519 seed.
+- `r1_seed: Option<ZeroizingSeed>` — `ZeroizingSeed::drop` overwrites
+  its inner `[u8; 32]`. `Option::None` carries no secret.
+- `vk0: [u8; 32]`, `vk1: [u8; 32]` — public verification keys (non-
+  secret); no zeroize needed.
+
+When a `SumSigningKey<D>` goes out of scope (e.g., the outer
+`KesSecret` is dropped, or `update_kes` discards an intermediate key
+via `drop(sk_child)`), Rust invokes the implicit drop glue, which
+recursively drops each field. The `Drop` impls on `Sum0SigningKey`
+and `ZeroizingSeed` then fire — the same zeroize behavior an explicit
+`impl Drop for SumSigningKey<D>` would have provided.
+
+The discipline is mechanically equivalent; the only thing missing is
+a *single* `Drop::drop` body to inspect. The per-field approach is
+strictly more granular because each secret-bearing field carries
+its own zeroize responsibility next to its declaration.
+
+### When this discipline could quietly break
+
+A future contributor could undermine the guarantee by:
+
+1. **Adding a new secret-bearing field to `SumSigningKey<D>` without
+   wrapping it in a zeroizing newtype.** Mitigation: every new field
+   gets either `Drop` on its type (preferred) or an explicit
+   `Drop`-on-`SumSigningKey<D>` impl IF the destructure constraint
+   above is also resolved (e.g., via `ManuallyDrop` — but that
+   requires `unsafe`, which is forbidden by `#![deny(unsafe_code)]`).
+2. **Removing the `Drop` impl from `Sum0SigningKey` or
+   `ZeroizingSeed`.** Mitigation: `ci/ci_check_private_key_custody.sh`
+   Guard 5 requires hand-rolled `Debug` on these types; a similar
+   guard for hand-rolled `Drop` on secret-bearing types would close
+   this gap. *Currently not enforced mechanically* — the discipline
+   relies on code review.
+3. **Adding `Copy` or `Clone` to `Sum0SigningKey` or
+   `SumSigningKey<D>`.** Mitigation: neither type has these traits;
+   any future PR adding them would have to confront the boundary
+   explicitly.
+
+### Summary
+
+The asymmetry between `Sum0SigningKey` (explicit `Drop`) and
+`SumSigningKey<D>` (per-field `Drop`) is **not** an inconsistency
+in the zeroize discipline. It is a deliberate response to Rust's
+restriction on destructuring `Drop` types, chosen so that
+`update_kes` can move `sk_child` into the recursive call without
+allocating an intermediate copy or reaching for `unsafe`. The
+zeroize guarantee is preserved by every secret-bearing field
+carrying its own `Drop`.
+
+## 11. References
 
 - Haskell: `cardano-base/cardano-crypto-class/src/Cardano/Crypto/KES/Sum.hs`
   (`SignKeySumKES`, `rawSerialiseSignKeyKES`, `updateKES`).
@@ -415,5 +511,7 @@ agree with their derivations.
 - Rust: `cardano-crypto-1.0.8/src/kes/sum/basic.rs` (`SumSigningKey<D, H>`,
   the in-memory layout that mirrors the Haskell shape).
 - Rust: `cardano-crypto-1.0.8/src/kes/single/mod.rs` (`SingleKes<D>`).
-- Invariants: [`phase4-n-p-invariants.md`](../../planning/phase4-n-p-invariants.md)
+- Invariants: [`phase4-n-p-invariants.md`](../../../planning/phase4-n-p-invariants.md)
   §1 (I3, I5), §2 (N2, N3, N4, N6).
+- Ade impl (post-S5): `crates/ade_crypto/src/kes_sum/{sum.rs, single.rs}`
+  (`ZeroizingSeed`, the per-field zeroize discipline codified in §10).

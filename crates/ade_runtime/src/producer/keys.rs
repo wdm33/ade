@@ -85,20 +85,50 @@ pub fn load_kes_signing_key_skey(path: &Path) -> Result<KesSecret, KeyLoadError>
     let inner = Sum6Kes::raw_deserialize_signing_key_kes(&payload)
         .map_err(KeyLoadError::KesParse)?;
     let current_period = Sum6Kes::current_period_of_signing_key(&inner);
-    Ok(KesSecret::from_blue_signing_key(
+    let kes_sk = KesSecret::from_blue_signing_key(
         inner,
         ade_crypto::kes::KesPeriod(current_period),
-    ))
+    );
+    eprint_kes_vk_reminder(
+        kes_sk.verification_key_fingerprint(),
+        "cardano-cli kes.skey",
+    );
+    Ok(kes_sk)
+}
+
+/// One-line operator reminder emitted on every successful KES skey
+/// load. Goes to stderr; stdout's closed vocabulary (PHASE4-N-O
+/// key-gen success lines) is unaffected. The fingerprint is non-secret
+/// (Blake2b-256 of the root VK).
+fn eprint_kes_vk_reminder(vk_fingerprint: String, envelope_label: &'static str) {
+    eprintln!(
+        "ade_node: {} loaded; KES VK fingerprint = {} — verify this matches your opcert before block production.",
+        envelope_label, vk_fingerprint
+    );
 }
 
 /// Load an Ade-native KES signing key from an `ade.kes.seed.v1` envelope
 /// file. Returns a [`KesSecret`] advanced to the envelope's embedded
 /// `period_idx`.
+///
+/// Emits a one-line operator reminder to stderr (VK mismatch against the
+/// on-chain opcert is the canonical block-production failure mode after
+/// a stale-envelope load). The reminder is best-effort — it cannot
+/// detect "staleness" structurally (the envelope format hasn't
+/// changed); it surfaces the failure mode so the operator can
+/// cross-check the printed VK fingerprint against their opcert before
+/// the first forge attempt. PHASE4-N-P S4 changed the `expand_seed`
+/// prefix bytes from cardano-crypto Rust 1.0.8's (0x00 / 0x01) to
+/// Haskell `cardano-base`'s (0x01 / 0x02), so any `kes.ade.skey` file
+/// generated before HEAD `6973318` will derive a different VK after
+/// S5 close.
 pub fn load_ade_kes_signing_key(path: &Path) -> Result<KesSecret, KeyLoadError> {
     let buf = read_file_bytes(path)?;
     let env = ade_kes_envelope::parse(&buf).map_err(KeyLoadError::AdeEnvelope)?;
-    KesSecret::from_seed_at_period(&env.seed_32, env.period_idx)
-        .map_err(KeyLoadError::Crypto)
+    let kes_sk = KesSecret::from_seed_at_period(&env.seed_32, env.period_idx)
+        .map_err(KeyLoadError::Crypto)?;
+    eprint_kes_vk_reminder(kes_sk.verification_key_fingerprint(), "ade.kes.seed.v1");
+    Ok(kes_sk)
 }
 
 /// Load an Ed25519 cold signing key from a cardano-cli text-envelope
