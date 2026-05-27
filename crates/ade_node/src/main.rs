@@ -114,6 +114,21 @@ async fn main() -> ExitCode {
             };
             ade_node::run_key_gen_kes(kgc).await
         }
+        Mode::Produce => {
+            // Produce mode opens its own JSONL evidence writer
+            // (ProducerLogEvent vocabulary); drop the wire-only
+            // writer to avoid a stray empty file.
+            drop(writer);
+            let _ = std::fs::remove_file(&cli.log_path);
+            let pcli = match cli.extract_produce_cli() {
+                Ok(p) => p,
+                Err(e) => {
+                    print_cli_error(&e);
+                    return ExitCode::from(ade_node::EXIT_GENERIC_STARTUP as u8);
+                }
+            };
+            ade_node::produce_mode::run_produce_mode(pcli, shutdown_rx).await
+        }
     }
 }
 
@@ -157,6 +172,12 @@ fn print_cli_error(e: &CliError) {
         }
         CliError::InvalidPeriodIdx(s) => {
             eprintln!("ade_node: --period-idx {} is not a valid u32", s);
+        }
+        CliError::ProduceMissingFlag(name) => {
+            eprintln!("ade_node: --mode produce requires {}", name);
+        }
+        CliError::InvalidMaxSlots(s) => {
+            eprintln!("ade_node: --max-slots {} is not a valid u64", s);
         }
     }
 }

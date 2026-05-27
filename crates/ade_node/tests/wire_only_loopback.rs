@@ -222,6 +222,13 @@ fn make_cli(peer_addr: std::net::SocketAddr, log_path: PathBuf, mode: Mode) -> C
         out_file: None,
         period_idx: None,
         seed_file: None,
+        cold_skey: None,
+        kes_skey: None,
+        vrf_skey: None,
+        opcert: None,
+        genesis_file: None,
+        evidence_log: None,
+        max_slots: None,
     }
 }
 

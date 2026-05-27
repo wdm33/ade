@@ -31,6 +31,12 @@ pub enum Mode {
     /// `ade.kes.seed.v1` envelope at `--out-file PATH`. Does not
     /// require `--genesis-path` or any peer/admission flag.
     KeyGenKes,
+    /// PHASE4-N-Q: live producer-mode. Loads operator keys + opcert
+    /// + Conway genesis; opens a TCP listener; runs the slot loop;
+    /// serves forged blocks to peers via the N-G server reducers.
+    /// Required flags: `--listen`, `--cold-skey`, `--kes-skey`,
+    /// `--vrf-skey`, `--opcert`, `--genesis-file`.
+    Produce,
 }
 
 impl Mode {
@@ -39,6 +45,7 @@ impl Mode {
             "wire_only" => Some(Self::WireOnly),
             "admission" => Some(Self::Admission),
             "key_gen_kes" => Some(Self::KeyGenKes),
+            "produce" => Some(Self::Produce),
             _ => None,
         }
     }
@@ -84,6 +91,22 @@ pub struct Cli {
     /// file instead of `/dev/urandom`. Honest-scope: production use
     /// MUST omit this flag.
     pub seed_file: Option<PathBuf>,
+    // -------------------------------------------------------------------
+    // PHASE4-N-Q — Produce-mode flags. Validated only when `--mode produce`
+    // is set (via [`Cli::extract_produce_cli`]).
+    // -------------------------------------------------------------------
+    pub cold_skey: Option<PathBuf>,
+    pub kes_skey: Option<PathBuf>,
+    pub vrf_skey: Option<PathBuf>,
+    pub opcert: Option<PathBuf>,
+    pub genesis_file: Option<PathBuf>,
+    /// Path to the JSONL evidence log (default `./produce_evidence.jsonl`).
+    pub evidence_log: Option<PathBuf>,
+    /// Optional cap for the smoke-test slot loop. When set, the
+    /// produce-mode driver exits gracefully after this many slot
+    /// ticks. Honest-scope: production omits this; the operator
+    /// drives shutdown via SIGINT/SIGTERM.
+    pub max_slots: Option<u64>,
 }
 
 /// Closed admission-mode CLI bundle (B5).
@@ -123,6 +146,22 @@ pub enum CliError {
     // PHASE4-N-O — KeyGenKes-mode errors.
     KeyGenMissingOutFile,
     InvalidPeriodIdx(String),
+    // PHASE4-N-Q — Produce-mode errors.
+    ProduceMissingFlag(&'static str),
+    InvalidMaxSlots(String),
+}
+
+/// Closed PHASE4-N-Q `produce` CLI bundle.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ProduceCli {
+    pub listen_addr: String,
+    pub cold_skey: PathBuf,
+    pub kes_skey: PathBuf,
+    pub vrf_skey: PathBuf,
+    pub opcert: PathBuf,
+    pub genesis_file: PathBuf,
+    pub evidence_log: PathBuf,
+    pub max_slots: Option<u64>,
 }
 
 /// Closed PHASE4-N-O `key_gen_kes` CLI bundle. Constructed via
@@ -164,6 +203,13 @@ impl Cli {
         let mut out_file: Option<PathBuf> = None;
         let mut period_idx: Option<u32> = None;
         let mut seed_file: Option<PathBuf> = None;
+        let mut cold_skey: Option<PathBuf> = None;
+        let mut kes_skey: Option<PathBuf> = None;
+        let mut vrf_skey: Option<PathBuf> = None;
+        let mut opcert: Option<PathBuf> = None;
+        let mut genesis_file: Option<PathBuf> = None;
+        let mut evidence_log: Option<PathBuf> = None;
+        let mut max_slots: Option<u64> = None;
 
         while let Some(arg) = iter.next() {
             match arg.as_str() {
@@ -297,6 +343,49 @@ impl Cli {
                     })?;
                     seed_file = Some(PathBuf::from(v));
                 }
+                "--cold-skey" => {
+                    let v = iter
+                        .next()
+                        .ok_or_else(|| CliError::FlagMissingValue("--cold-skey".to_string()))?;
+                    cold_skey = Some(PathBuf::from(v));
+                }
+                "--kes-skey" => {
+                    let v = iter
+                        .next()
+                        .ok_or_else(|| CliError::FlagMissingValue("--kes-skey".to_string()))?;
+                    kes_skey = Some(PathBuf::from(v));
+                }
+                "--vrf-skey" => {
+                    let v = iter
+                        .next()
+                        .ok_or_else(|| CliError::FlagMissingValue("--vrf-skey".to_string()))?;
+                    vrf_skey = Some(PathBuf::from(v));
+                }
+                "--opcert" => {
+                    let v = iter
+                        .next()
+                        .ok_or_else(|| CliError::FlagMissingValue("--opcert".to_string()))?;
+                    opcert = Some(PathBuf::from(v));
+                }
+                "--genesis-file" => {
+                    let v = iter
+                        .next()
+                        .ok_or_else(|| CliError::FlagMissingValue("--genesis-file".to_string()))?;
+                    genesis_file = Some(PathBuf::from(v));
+                }
+                "--evidence-log" => {
+                    let v = iter.next().ok_or_else(|| {
+                        CliError::FlagMissingValue("--evidence-log".to_string())
+                    })?;
+                    evidence_log = Some(PathBuf::from(v));
+                }
+                "--max-slots" => {
+                    let v = iter
+                        .next()
+                        .ok_or_else(|| CliError::FlagMissingValue("--max-slots".to_string()))?;
+                    max_slots =
+                        Some(v.parse::<u64>().map_err(|_| CliError::InvalidMaxSlots(v))?);
+                }
                 other => return Err(CliError::UnknownFlag(other.to_string())),
             }
         }
@@ -306,7 +395,10 @@ impl Cli {
         // context; --genesis-path is not relevant. We synthesize a
         // sentinel placeholder so the field stays non-optional for
         // downstream consumers.
-        let genesis_path = if mode == Mode::KeyGenKes {
+        let genesis_path = if mode == Mode::KeyGenKes || mode == Mode::Produce {
+            // KeyGenKes: no chain context needed.
+            // Produce: --genesis-file is the produce-mode-specific
+            //          genesis path; --genesis-path stays optional.
             genesis_path.unwrap_or_else(PathBuf::new)
         } else {
             genesis_path.ok_or(CliError::MissingGenesisPath)?
@@ -332,6 +424,57 @@ impl Cli {
             out_file,
             period_idx,
             seed_file,
+            cold_skey,
+            kes_skey,
+            vrf_skey,
+            opcert,
+            genesis_file,
+            evidence_log,
+            max_slots,
+        })
+    }
+
+    /// Validate produce-mode requirements + return a closed
+    /// [`ProduceCli`]. Missing required flags surface as
+    /// `CliError::ProduceMissingFlag`.
+    pub fn extract_produce_cli(&self) -> Result<ProduceCli, CliError> {
+        let listen_addr = self
+            .listen_addr
+            .clone()
+            .ok_or(CliError::ProduceMissingFlag("--listen"))?;
+        let cold_skey = self
+            .cold_skey
+            .clone()
+            .ok_or(CliError::ProduceMissingFlag("--cold-skey"))?;
+        let kes_skey = self
+            .kes_skey
+            .clone()
+            .ok_or(CliError::ProduceMissingFlag("--kes-skey"))?;
+        let vrf_skey = self
+            .vrf_skey
+            .clone()
+            .ok_or(CliError::ProduceMissingFlag("--vrf-skey"))?;
+        let opcert = self
+            .opcert
+            .clone()
+            .ok_or(CliError::ProduceMissingFlag("--opcert"))?;
+        let genesis_file = self
+            .genesis_file
+            .clone()
+            .ok_or(CliError::ProduceMissingFlag("--genesis-file"))?;
+        let evidence_log = self
+            .evidence_log
+            .clone()
+            .unwrap_or_else(|| PathBuf::from("./produce_evidence.jsonl"));
+        Ok(ProduceCli {
+            listen_addr,
+            cold_skey,
+            kes_skey,
+            vrf_skey,
+            opcert,
+            genesis_file,
+            evidence_log,
+            max_slots: self.max_slots,
         })
     }
 

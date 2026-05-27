@@ -19,10 +19,12 @@ pub mod cli;
 pub mod key_gen;
 pub mod live_log;
 pub mod node;
+pub mod produce_mode;
 pub mod wire_only;
 
-pub use cli::{Cli, CliError, KeyGenKesCli, Mode};
+pub use cli::{Cli, CliError, KeyGenKesCli, Mode, ProduceCli};
 pub use key_gen::{run_key_gen_kes, EXIT_KEY_GEN_FAILURE};
+pub use produce_mode::{run_produce_mode, EXIT_PRODUCE_FAILURE};
 pub use live_log::{
     LiveLogEvent, LiveLogWriter, ModeTag, PeerDialFailureKind, WireOnlyShutdownReason,
 };
