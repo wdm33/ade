@@ -58,10 +58,15 @@ for v in "${ADE_ENV_VARIANTS[@]}"; do
     fi
 done
 
-# ---- 2. cardano-cli loader fail-closed ---------------------------------
+# ---- 2. cardano-cli loader policy (S5: accept-608-valid, reject-rest) -----
 # Extract the body of load_kes_signing_key_skey via a coarse range cut and
-# assert (a) UnsupportedExpandedKesKeyFormat appears, (b) no KesSecret
-# constructor call appears.
+# assert:
+#   (a) UnsupportedExpandedKesKeyFormat appears (size-mismatch path).
+#   (b) `raw_deserialize_signing_key_kes` is called (the BLUE structural
+#       validator drives every valid-payload accept).
+#   (c) No `KesSecret::from_bytes_zeroizing` / `from_seed_at_period`
+#       calls (these would bypass the structural validator and silently
+#       accept malformed 608-byte payloads as fresh-from-seed keys).
 LOADER_BODY="$(awk '
     /pub fn load_kes_signing_key_skey/ { in_fn = 1; depth = 0 }
     in_fn {
@@ -83,12 +88,17 @@ if [ -z "$LOADER_BODY" ]; then
 fi
 
 if ! grep -q "UnsupportedExpandedKesKeyFormat" <<<"$LOADER_BODY"; then
-    echo "[ci_check_kes_envelope_closed] FAIL: load_kes_signing_key_skey must return UnsupportedExpandedKesKeyFormat"
+    echo "[ci_check_kes_envelope_closed] FAIL: load_kes_signing_key_skey must reject wrong-size payloads via UnsupportedExpandedKesKeyFormat"
+    exit 1
+fi
+
+if ! grep -q "raw_deserialize_signing_key_kes" <<<"$LOADER_BODY"; then
+    echo "[ci_check_kes_envelope_closed] FAIL: load_kes_signing_key_skey must call raw_deserialize_signing_key_kes for the accept path (PHASE4-N-P S5)"
     exit 1
 fi
 
 if grep -q "KesSecret::from_bytes_zeroizing\|KesSecret::from_seed_at_period" <<<"$LOADER_BODY"; then
-    echo "[ci_check_kes_envelope_closed] FAIL: load_kes_signing_key_skey must not construct a KesSecret (the cardano-cli envelope is the fail-closed path)"
+    echo "[ci_check_kes_envelope_closed] FAIL: load_kes_signing_key_skey must not construct a KesSecret via from_bytes_zeroizing / from_seed_at_period (would bypass the BLUE structural validator)"
     exit 1
 fi
 

@@ -58,20 +58,37 @@ pub fn load_vrf_signing_key_skey(path: &Path) -> Result<VrfSigningKey, KeyLoadEr
     VrfSigningKey::from_bytes_zeroizing(&payload).map_err(KeyLoadError::Crypto)
 }
 
-/// Recognize a cardano-cli `KesSigningKey_ed25519_kes_2^6` envelope only
-/// to fail-close it.
+/// Load a cardano-cli `KesSigningKey_ed25519_kes_2^6` envelope into an
+/// Ade `KesSecret`.
 ///
-/// PHASE4-N-O policy: Ade does NOT import cardano-cli's expanded Sum6KES
-/// signing-key file. Any payload — 32-byte synthetic seed, 608-byte
-/// expanded tree (the canonical cardano-cli output), 612-byte malformed,
-/// or any other shape — maps to
-/// [`KeyLoadError::UnsupportedExpandedKesKeyFormat`]. The cardano-cli
-/// import path is the PHASE4-N-P deliverable; until then operators must
-/// use `ade_node key-gen-KES` to produce an `ade.kes.seed.v1` envelope
-/// and load via [`load_ade_kes_signing_key`].
+/// PHASE4-N-P policy (replaces PHASE4-N-O's unconditional fail-close):
+/// the 608-byte structurally-valid expanded `Sum6KES` payload is
+/// accepted via the Ade-owned BLUE deserializer (`ade_crypto::kes_sum::Sum6Kes::raw_deserialize_signing_key_kes`).
+/// Any other payload shape — 32 bytes, 612 bytes, malformed sub-tree,
+/// inconsistent vk hash, leaf-all-zero — fail-closes via the closed
+/// `KeyLoadError` variants. No fallback parser; the deserializer is
+/// the structural validator (see
+/// `docs/clusters/PHASE4-N-P/period-from-zeroed-sum6-tree-shape-proof.md`
+/// §5 for the closed `KesParseError` surface).
 pub fn load_kes_signing_key_skey(path: &Path) -> Result<KesSecret, KeyLoadError> {
-    let _ = read_envelope_payload(path, KES_SIGNING_KEY_TYPE)?;
-    Err(KeyLoadError::UnsupportedExpandedKesKeyFormat)
+    use ade_crypto::kes_sum::{KesAlgorithm as AdeKesAlgorithm, Sum6Kes};
+
+    let payload = read_envelope_payload(path, KES_SIGNING_KEY_TYPE)?;
+    // Any payload size != 608 is fail-closed via UnsupportedExpandedKesKeyFormat;
+    // the new BLUE deserializer would also reject these with
+    // KesParseError::WrongPayloadSize, but emitting the narrower
+    // variant preserves the N-O closed surface for the size-mismatch
+    // case.
+    if payload.len() != Sum6Kes::SIGNING_KEY_SIZE {
+        return Err(KeyLoadError::UnsupportedExpandedKesKeyFormat);
+    }
+    let inner = Sum6Kes::raw_deserialize_signing_key_kes(&payload)
+        .map_err(KeyLoadError::KesParse)?;
+    let current_period = Sum6Kes::current_period_of_signing_key(&inner);
+    Ok(KesSecret::from_blue_signing_key(
+        inner,
+        ade_crypto::kes::KesPeriod(current_period),
+    ))
 }
 
 /// Load an Ade-native KES signing key from an `ade.kes.seed.v1` envelope
@@ -151,11 +168,19 @@ pub enum KeyLoadError {
     /// Underlying RED crypto wrapper rejected the decoded bytes
     /// (wrong length, malformed seed, etc.).
     Crypto(SigningError),
-    /// PHASE4-N-O policy: cardano-cli's expanded Sum6KES skey is not
-    /// importable in this release. PHASE4-N-P will close this path.
+    /// cardano-cli expanded Sum6KES envelope had a payload size other
+    /// than the canonical 608 bytes (PHASE4-N-O introduced; PHASE4-N-P
+    /// narrowed to the size-mismatch case only — structurally-valid
+    /// 608-byte payloads are now imported via [`KesParse`]).
     UnsupportedExpandedKesKeyFormat,
     /// Ade-native KES envelope parse error.
     AdeEnvelope(AdeKesEnvelopeError),
+    /// cardano-cli expanded Sum6KES payload was 608 bytes but
+    /// structurally invalid (truncated sub-tree, inconsistent vk
+    /// hash, leaf-all-zero, etc.). Closed surface from the Ade-owned
+    /// `ade_crypto::kes_sum::raw_deserialize_signing_key_kes` path
+    /// (PHASE4-N-P S5).
+    KesParse(ade_crypto::kes_sum::KesParseError),
 }
 
 // =========================================================================
@@ -339,8 +364,14 @@ mod tests {
     use super::*;
     use ade_crypto::kes::{verify_kes_signature, KesPeriod, KesVerificationKey};
     use ade_crypto::vrf::{verify_vrf, VrfVerificationKey};
-    use cardano_crypto::kes::{KesAlgorithm, Sum6Kes};
     use cardano_crypto::vrf::VrfDraft03;
+
+    // S5: KES test paths use the Ade-owned BLUE algorithm. The kes
+    // module alias removes cardano-crypto from the KES test surface;
+    // VRF tests above continue using `cardano_crypto::vrf` (which is
+    // out of N-P scope).
+    use ade_crypto::kes_sum as ade_blue;
+    use ade_blue::KesAlgorithm as _AdeKesAlgorithm;
     use std::io::Write;
     use std::os::unix::fs::MetadataExt;
 
@@ -403,12 +434,10 @@ mod tests {
         let msg = b"S1 round-trip msg";
         let sig = super::super::signing::kes_sign(&kes_sk, KesPeriod(0), msg).unwrap();
 
-        let raw = Sum6Kes::gen_key_kes_from_seed_bytes(&seed).unwrap();
-        let vk_bytes = Sum6Kes::raw_serialize_verification_key_kes(
-            &Sum6Kes::derive_verification_key(&raw).unwrap(),
-        );
-        let mut vk_arr = [0u8; 32];
-        vk_arr.copy_from_slice(&vk_bytes);
+        // PHASE4-N-P S5: VK derived via the Ade-owned BLUE algorithm
+        // (matches what KesSecret produced internally).
+        let raw_ade = ade_blue::Sum6Kes::gen_key_kes_from_seed_bytes(&seed).unwrap();
+        let vk_arr = ade_blue::Sum6Kes::derive_verification_key(&raw_ade);
         verify_kes_signature(&KesVerificationKey(vk_arr), KesPeriod(0), msg, &sig).unwrap();
     }
 
@@ -425,12 +454,8 @@ mod tests {
             let msg = b"loaded-period probe";
             let sig =
                 super::super::signing::kes_sign(&kes_sk, KesPeriod(period_idx), msg).unwrap();
-            let raw = Sum6Kes::gen_key_kes_from_seed_bytes(&seed).unwrap();
-            let vk_bytes = Sum6Kes::raw_serialize_verification_key_kes(
-                &Sum6Kes::derive_verification_key(&raw).unwrap(),
-            );
-            let mut vk_arr = [0u8; 32];
-            vk_arr.copy_from_slice(&vk_bytes);
+            let raw_ade = ade_blue::Sum6Kes::gen_key_kes_from_seed_bytes(&seed).unwrap();
+            let vk_arr = ade_blue::Sum6Kes::derive_verification_key(&raw_ade);
             verify_kes_signature(
                 &KesVerificationKey(vk_arr),
                 KesPeriod(period_idx),
@@ -462,6 +487,13 @@ mod tests {
     // PHASE4-N-O — cardano-cli expanded path fail-closed
     // =====================================================================
 
+    // -----------------------------------------------------------------
+    // PHASE4-N-P S5: cardano-cli loader now accepts structurally-valid
+    // 608-byte payloads. Wrong-size payloads stay fail-closed via
+    // `UnsupportedExpandedKesKeyFormat`; 608-byte payloads with
+    // structural defects fail-close via the new `KesParse` variant.
+    // -----------------------------------------------------------------
+
     #[test]
     fn cardano_cli_kes_envelope_rejects_32_byte_payload() {
         let dir = tempfile::tempdir().unwrap();
@@ -471,11 +503,44 @@ mod tests {
     }
 
     #[test]
-    fn cardano_cli_kes_envelope_rejects_608_byte_payload() {
+    fn cardano_cli_kes_envelope_rejects_synthetic_608_byte_payload() {
+        // 608 bytes of repeated 0xAB has the right SIZE but is not a
+        // structurally-valid Sum6KES tree. After PHASE4-N-P S5, the
+        // loader runs the BLUE deserializer; it fails with a
+        // structured `KesParseError` (leaf-zero-check passes since
+        // 0xAB != 0, then vk-consistency walk fails at level 1).
         let dir = tempfile::tempdir().unwrap();
         let path = write_envelope(dir.path(), "kes.skey", KES_SIGNING_KEY_TYPE, &[0xABu8; 608]);
         let err = load_kes_signing_key_skey(&path).unwrap_err();
-        assert!(matches!(err, KeyLoadError::UnsupportedExpandedKesKeyFormat));
+        assert!(
+            matches!(err, KeyLoadError::KesParse(_)),
+            "expected KesParse for synthetic 608-byte payload, got {:?}",
+            err
+        );
+    }
+
+    #[test]
+    fn cardano_cli_kes_envelope_accepts_real_608_byte_payload() {
+        // PHASE4-N-P S5: a 608-byte payload that IS a valid Sum6KES
+        // tree (produced by our own serializer from a real seed) now
+        // round-trips through the loader. Construct one via our BLUE
+        // gen_key+serialize, write it into a cardano-cli envelope,
+        // and load.
+        let dir = tempfile::tempdir().unwrap();
+        let seed = [0x42u8; 32];
+        let sk = ade_blue::Sum6Kes::gen_key_kes_from_seed_bytes(&seed).unwrap();
+        let payload = ade_blue::Sum6Kes::raw_serialize_signing_key_kes(&sk);
+        assert_eq!(payload.len(), 608);
+        let path = write_envelope(dir.path(), "kes.skey", KES_SIGNING_KEY_TYPE, &payload);
+
+        let kes_sk = load_kes_signing_key_skey(&path).expect("608-byte valid payload accepted");
+        assert_eq!(kes_sk.current_period().0, 0);
+
+        // Sign + verify round-trip.
+        let msg = b"S5 cardano-cli load round-trip";
+        let sig = super::super::signing::kes_sign(&kes_sk, KesPeriod(0), msg).unwrap();
+        let vk = ade_blue::Sum6Kes::derive_verification_key(&sk);
+        verify_kes_signature(&KesVerificationKey(vk), KesPeriod(0), msg, &sig).unwrap();
     }
 
     #[test]
@@ -484,6 +549,29 @@ mod tests {
         let path = write_envelope(dir.path(), "kes.skey", KES_SIGNING_KEY_TYPE, &[0xCDu8; 612]);
         let err = load_kes_signing_key_skey(&path).unwrap_err();
         assert!(matches!(err, KeyLoadError::UnsupportedExpandedKesKeyFormat));
+    }
+
+    #[test]
+    fn cardano_cli_kes_envelope_rejects_608_byte_leaf_zero_payload() {
+        // Construct a real Sum6KES skey then zero its leaf (bytes
+        // [0..32)). The deserializer must reject via LeafSignKeyAllZero.
+        let dir = tempfile::tempdir().unwrap();
+        let seed = [0x77u8; 32];
+        let sk = ade_blue::Sum6Kes::gen_key_kes_from_seed_bytes(&seed).unwrap();
+        let mut payload = ade_blue::Sum6Kes::raw_serialize_signing_key_kes(&sk);
+        for b in payload[0..32].iter_mut() {
+            *b = 0;
+        }
+        let path = write_envelope(dir.path(), "kes.skey", KES_SIGNING_KEY_TYPE, &payload);
+        let err = load_kes_signing_key_skey(&path).unwrap_err();
+        assert!(
+            matches!(
+                err,
+                KeyLoadError::KesParse(ade_crypto::kes_sum::KesParseError::LeafSignKeyAllZero)
+            ),
+            "got {:?}",
+            err
+        );
     }
 
     // =====================================================================

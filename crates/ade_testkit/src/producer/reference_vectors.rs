@@ -5,16 +5,27 @@
 // - Explicit state transitions only
 // - Canonical serialization for all persisted/hashed data
 
-//! Reference vectors for the PHASE4-N-C S1 RED signing primitives.
+//! Reference vectors for the PHASE4-N-C S1 RED signing primitives
+//! (PHASE4-N-P S5 migrated to the Ade-owned BLUE KES algorithm).
 //!
 //! Each vector pins a `(seed, …, expected_*)` triple. The expected bytes
-//! are computed at materialization time from cardano-crypto's
-//! deterministic generation / signing path, then frozen by the calling
-//! test. The test in `ade_runtime::producer::signing` re-derives the
-//! same bytes through the RED wrapper and asserts byte equality — any
-//! drift between the wrapper and the underlying crate (mis-padded
-//! buffers, accidentally re-derived seeds, parameter-order mistakes)
-//! shows up as a vector mismatch.
+//! are computed at materialization time from the Ade-owned
+//! `ade_crypto::kes_sum::Sum6Kes` algorithm (VRF still uses upstream
+//! `cardano-crypto`), then frozen by the calling test. The test in
+//! `ade_runtime::producer::signing` re-derives the same bytes through
+//! the RED wrapper and asserts byte equality — any drift between the
+//! wrapper and the underlying algorithm (mis-padded buffers,
+//! accidentally re-derived seeds, parameter-order mistakes) shows up
+//! as a vector mismatch.
+//!
+//! **PHASE4-N-P S5 migration**: KES vectors were previously
+//! materialized via `cardano_crypto::kes::Sum6Kes`. After S5 they use
+//! our BLUE impl; because our impl uses the Haskell-correct
+//! `expand_seed` prefix bytes (0x01 / 0x02) while cardano-crypto Rust
+//! 1.0.8 uses (0x00 / 0x01), the reference signatures HAVE CHANGED at
+//! the byte level vs the N-C-era reference set. That is intentional
+//! and load-bearing: our impl now matches cardano-cli ground truth
+//! (see `crates/ade_crypto/src/kes_sum/cardano_cli_corpus.rs`).
 //!
 //! The reference set deliberately exercises:
 //! - VRF: distinct seeds + alphas (period-irrelevant for VRF).
@@ -25,8 +36,8 @@
 //!   representative periods.
 
 use ade_crypto::blake2b_256;
+use ade_crypto::kes_sum::{KesAlgorithm, Sum6Kes};
 
-use cardano_crypto::kes::{KesAlgorithm, Sum6Kes};
 use cardano_crypto::vrf::VrfDraft03;
 
 pub struct VrfReferenceVector {
@@ -78,15 +89,14 @@ pub fn kes_reference_set() -> Vec<KesReferenceVector> {
         .iter()
         .map(|(seed, period, msg)| {
             let mut sk = Sum6Kes::gen_key_kes_from_seed_bytes(seed).expect("kes gen must succeed");
-            let mut current = 0u64;
-            while current < *period as u64 {
-                sk = Sum6Kes::update_kes(&(), sk, current)
+            let mut current = 0u32;
+            while current < *period {
+                sk = Sum6Kes::update_kes(sk, current)
                     .expect("kes update must succeed")
                     .expect("kes key must not expire during reference materialization");
                 current += 1;
             }
-            let raw =
-                Sum6Kes::sign_kes(&(), *period as u64, msg, &sk).expect("kes sign must succeed");
+            let raw = Sum6Kes::sign_kes(&sk, *period, msg).expect("kes sign must succeed");
             let bytes = Sum6Kes::raw_serialize_signature_kes(&raw);
             let mut arr = [0u8; 448];
             arr.copy_from_slice(&bytes);
@@ -113,15 +123,14 @@ pub fn kes_update_reference_chain() -> Vec<([u8; 32], u32, [u8; 32])> {
         .iter()
         .map(|(seed, target_period)| {
             let mut sk = Sum6Kes::gen_key_kes_from_seed_bytes(seed).expect("kes gen must succeed");
-            let mut current = 0u64;
-            while current < *target_period as u64 {
-                sk = Sum6Kes::update_kes(&(), sk, current)
+            let mut current = 0u32;
+            while current < *target_period {
+                sk = Sum6Kes::update_kes(sk, current)
                     .expect("kes update must succeed")
                     .expect("kes key must not expire during reference materialization");
                 current += 1;
             }
-            let raw = Sum6Kes::sign_kes(&(), *target_period as u64, probe, &sk)
-                .expect("kes sign must succeed");
+            let raw = Sum6Kes::sign_kes(&sk, *target_period, probe).expect("kes sign must succeed");
             let sig_bytes = Sum6Kes::raw_serialize_signature_kes(&raw);
             let fp = blake2b_256(&sig_bytes).0;
             (*seed, *target_period, fp)

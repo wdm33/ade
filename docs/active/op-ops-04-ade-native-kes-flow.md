@@ -1,11 +1,14 @@
-# OP-OPS-04 — Ade-native KES operator flow (challenge build)
+# OP-OPS-04 — KES operator flow (Ade-native + cardano-cli expanded)
 
 > **Audience:** challenge operators / bounty judges.
 > **Status:** Normative for the current Ade release. Closes
-> OP-OPS-04 for the Ade-native KES flow under PHASE4-N-O. The
-> cardano-cli expanded `Sum6KES` skey import path is deferred to
-> PHASE4-N-P.
-> **Source:** verbatim from the user-provided operator spec.
+> OP-OPS-04 under PHASE4-N-O (Ade-native flow) + PHASE4-N-P
+> (cardano-cli expanded `Sum6KES` import — now supported via the
+> Ade-owned BLUE algorithm).
+> **Source:** §"Scope" through §"Logging and evidence rules"
+> verbatim from the original user-provided operator spec; the
+> "Unsupported key flow" section has been retired and the
+> bounty-facing claim boundary updated per PHASE4-N-P S5 close.
 
 ---
 
@@ -56,9 +59,10 @@ block-production runbook.)
 
 ---
 
-## Unsupported key flow
+## Alternative: cardano-cli expanded KES skey (also supported, since PHASE4-N-P)
 
-**Do not** use this for the current challenge build:
+After PHASE4-N-P S5, Ade additionally imports cardano-cli's
+expanded `Sum6KES` signing-key file directly:
 
 ```sh
 cardano-cli node key-gen-KES \
@@ -66,25 +70,45 @@ cardano-cli node key-gen-KES \
   --signing-key-file kes.skey
 ```
 
-Ade rejects that expanded cardano-cli KES signing-key file with
-a structured error:
+The resulting `kes.skey` (a 608-byte `KesSigningKey_ed25519_kes_2^6`
+text-envelope) is now loadable via:
 
-```
-KeyLoadError::UnsupportedExpandedKesKeyFormat
-```
-
-This is intentional. The observed cardano-cli expanded KES
-payload is **608 bytes**, matching:
-
-```
-32 + 6 * (32 + 2 * 32) = 32 + 576 = 608
+```sh
+ade_node \
+  --mode admission \
+  --kes-key kes.skey \
+  ...
 ```
 
-for `rawSerialiseSignKeyKES (Sum6KES Ed25519DSIGN)`. The upstream
-`cardano-crypto` Rust crate does not expose a public constructor
-for rehydrating `SumSigningKey<D, H>` from those expanded bytes.
-**Ade will not use private-field hacks, unsafe transmute,
-heuristic parsing, or fallback deserialization.**
+Internally, Ade's loader runs the BLUE-owned Sum6KES
+deserializer (`ade_crypto::kes_sum::Sum6Kes::raw_deserialize_signing_key_kes`)
+which matches Haskell `cardano-base`'s `rawDeserialiseSignKeyKES`
+byte-for-byte over the canonical 608-byte expanded layout. Any
+payload of any other size, or a 608-byte payload with structural
+defects (truncated sub-tree, inconsistent vk hash, leaf-all-zero,
+period > 63 tree shape), fail-closes via a closed
+`KeyLoadError::UnsupportedExpandedKesKeyFormat` or
+`KeyLoadError::KesParse(KesParseError::*)` variant. No fallback
+parser; the deserializer is the structural validator.
+
+### Why this changed in PHASE4-N-P
+
+PHASE4-N-O fail-closed the cardano-cli expanded import path
+because `cardano-crypto` Rust 1.0.8 exposes no public constructor
+for rehydrating `SumSigningKey<D, H>` from expanded bytes.
+PHASE4-N-P resolved the gap by reimplementing Sum6KES from
+scratch in `ade_crypto::kes_sum` (BLUE-owned), matching Haskell
+`cardano-base` byte-for-byte (including the `expand_seed` prefix
+bytes 0x01 / 0x02 that `cardano-crypto` Rust 1.0.8 happens to get
+wrong — see [`docs/clusters/PHASE4-N-P/S4.md`](../../docs/clusters/PHASE4-N-P/S4.md)
+for the discovery). Cross-impl agreement is mechanically enforced
+via the cardano-cli ground-truth corpus at
+`crates/ade_crypto/src/kes_sum/cardano_cli_corpus.rs`.
+
+The N9 hard prohibition (no upstream-shim hack via `unsafe`,
+`transmute`, vendored `pub(crate)` access, or fork-only
+constructors) is mechanically enforced by
+`ci/ci_check_kes_sum_compatibility.sh`.
 
 ---
 
@@ -192,70 +216,70 @@ expanded signing key bytes: ...
 
 > **KES key format note**
 >
-> For this challenge build, Ade uses its own KES key-generation
-> command:
+> For the challenge build, Ade supports both KES key flows:
 >
-> ```
-> ade_node --mode key_gen_kes --out-file kes.ade.skey
-> ```
+> - `ade_node --mode key_gen_kes --out-file kes.ade.skey` —
+>   Ade-native flow (recommended for fresh setups).
+> - `cardano-cli node key-gen-KES --signing-key-file kes.skey
+>   --verification-key-file kes.vkey` — cardano-cli expanded
+>   flow (useful for operators with existing keys).
 >
-> Ade does not currently import cardano-cli's expanded KES
-> signing-key file. This is an operator file-format limitation
-> only. It does not change Cardano block format, header format,
-> KES verification semantics, or block acceptance by Haskell /
-> Cardano nodes.
->
-> Please generate the KES key with `ade_node` for the
-> block-production test. cardano-cli expanded KES skey import is
-> not claimed in this release.
+> Either flow produces a key Ade can load via its admission
+> mode. Block-production semantics are identical; the difference
+> is purely the on-disk envelope format.
 
 ---
 
 ## Registry / planning language
 
-OP-OPS-04 is closed for the **Ade-native KES operator flow**.
-
-Ade supports:
+OP-OPS-04 is **fully closed** as of PHASE4-N-P S5 (`open_obligation
+= null`). Ade supports both KES key flows:
 
 ```
 ade_node --mode key_gen_kes
   -> AdeKesEnvelope (ade.kes.seed.v1)
-  -> Ade RED signing shell
-```
+  -> Ade RED signing shell (BLUE-owned ade_crypto::kes_sum::Sum6Kes)
 
-Ade does not yet support:
-
-```
 cardano-cli node key-gen-KES
-  -> expanded 608-byte kes.skey
-  -> Ade loader
+  -> KesSigningKey_ed25519_kes_2^6 (608-byte expanded)
+  -> Ade loader (BLUE-owned ade_crypto::kes_sum::Sum6Kes deserializer)
 ```
 
-The expanded cardano-cli `Sum6KES` compatibility path is deferred
-to **PHASE4-N-P** and must include a full `ade_crypto::kes_sum`
-implementation, cross-implementation vectors, negative tests, and
-CI enforcement.
+The expanded cardano-cli `Sum6KES` compatibility path is implemented
+by `ade_crypto::kes_sum::Sum6Kes::raw_deserialize_signing_key_kes`,
+backed by cross-implementation vectors from the cardano-cli
+ground-truth corpus (`crates/ade_crypto/src/kes_sum/cardano_cli_corpus.rs`),
+negative tests for every malformed-tree shape, and CI enforcement
+via `ci/ci_check_kes_sum_compatibility.sh`.
 
-**Do not claim:** Ade supports cardano-cli KES skey import.
-
-**Do claim:** Ade can generate and use Ade-native KES keys to
-produce Cardano-valid blocks.
+**Claim:** Ade can generate and use Ade-native KES keys AND
+import cardano-cli-generated KES keys to produce Cardano-valid
+blocks. Both flows route through the same BLUE-owned signing
+algorithm; cardano-node accepts blocks signed by either flow.
 
 ---
 
 ## Claim boundary
 
-This closure of OP-OPS-04 covers **only** the Ade-native KES
-operator flow.
+This closure of OP-OPS-04 covers both KES key flows after
+PHASE4-N-P S5. Specifically:
 
-It does **not** claim:
-
-> Ade supports cardano-cli KES skey import.
-
-It does claim:
+It claims:
 
 > Ade can generate and use Ade-native KES keys for challenge
 > block production.
 
-This avoids judge confusion while keeping the long-term
-compatibility path open under PHASE4-N-P.
+It also claims:
+
+> Ade can import cardano-cli-generated `KesSigningKey_ed25519_kes_2^6`
+> envelopes (608-byte expanded `Sum6KES`) and use them for
+> challenge block production. The import path is mechanically
+> validated against a cardano-cli ground-truth corpus.
+
+It does **not** claim:
+
+> Ade matches `cardano-crypto` Rust 1.0.8 byte-for-byte.
+
+(`cardano-crypto` Rust 1.0.8 uses different `expand_seed` prefix
+bytes than Haskell `cardano-base`; Ade matches Haskell — see the
+PHASE4-N-P S4 closure record for the discovery.)

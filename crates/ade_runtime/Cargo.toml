@@ -28,9 +28,12 @@ bech32 = "0.11"
 # (PHASE4-N-M-A1.1 slice A1.2). Same scoping discipline as bech32:
 # GREEN-only, imported only by `seed_import`.
 base58 = "0.2"
-# RED producer signing (PHASE4-N-C S1). Same feature set as ade_crypto:
-# no new VRF/KES algorithms are introduced via features in this crate.
-cardano-crypto = { version = "1.0", default-features = false, features = ["vrf-draft03", "kes-sum", "dsign"] }
+# RED producer signing. After PHASE4-N-P S5, ade_runtime no longer
+# imports `cardano_crypto::kes::*` — the BLUE-owned algorithm in
+# `ade_crypto::kes_sum` is the production signer. The `kes-sum`
+# feature has been dropped; VRF + DSIGN paths continue to use
+# cardano-crypto upstream (separate future-cluster concerns).
+cardano-crypto = { version = "1.0", default-features = false, features = ["vrf-draft03", "dsign"] }
 # Cold-key (Ed25519) derivation in RED producer/signing. Matches the
 # ed25519-dalek version already used by ade_crypto.
 ed25519-dalek = "2"

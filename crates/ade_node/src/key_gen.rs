@@ -147,6 +147,7 @@ fn classify_err(err: &KeyLoadError) -> &'static str {
         KeyLoadError::Crypto(_) => "crypto error",
         KeyLoadError::UnsupportedExpandedKesKeyFormat => "unsupported expanded KES skey format",
         KeyLoadError::AdeEnvelope(_) => "Ade envelope error",
+        KeyLoadError::KesParse(_) => "cardano-cli expanded KES skey parse error",
     }
 }
 

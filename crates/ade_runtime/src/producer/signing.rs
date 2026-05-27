@@ -5,13 +5,23 @@
 // - Explicit state transitions only
 // - Canonical serialization for all persisted/hashed data
 
-//! RED producer signing primitives (PHASE4-N-C S1).
+//! RED producer signing primitives (PHASE4-N-C S1; PHASE4-N-P S5
+//! migrated to Ade-owned BLUE KES algorithm).
 //!
-//! Wraps `cardano-crypto`'s `VrfDraft03` + `Sum6Kes` (+ Ed25519 cold key)
-//! with a closed surface: private-key bytes never cross the module
-//! boundary, KES evolution is one-way, and `Debug` impls redact secret
-//! material. The only exports are the artifact types (`VrfProof`,
-//! `VrfOutput`, `KesSignature`) plus opaque secret wrappers.
+//! Wraps `cardano-crypto`'s `VrfDraft03` + the Ade-owned
+//! `ade_crypto::kes_sum::Sum6Kes` (+ Ed25519 cold key) with a closed
+//! surface: private-key bytes never cross the module boundary, KES
+//! evolution is one-way, and `Debug` impls redact secret material.
+//! The only exports are the artifact types (`VrfProof`, `VrfOutput`,
+//! `KesSignature`) plus opaque secret wrappers.
+//!
+//! **PHASE4-N-P S5 migration:** `KesSecret.inner` was previously
+//! `<cardano_crypto::kes::Sum6Kes as KesAlgorithm>::SigningKey`.
+//! After S5 it is `<ade_crypto::kes_sum::Sum6Kes as KesAlgorithm>::SigningKey`.
+//! `cardano-crypto` is no longer a production KES dependency of
+//! `ade_runtime`; the `kes-sum` feature has been dropped from
+//! `Cargo.toml`. VRF + cold (Ed25519) paths continue to use
+//! `cardano-crypto` unchanged.
 //!
 //! Constraints enforced mechanically by
 //! `ci/ci_check_private_key_custody.sh`:
@@ -25,9 +35,9 @@
 
 use ade_crypto::error::CryptoError;
 use ade_crypto::kes::{KesPeriod, KesSignature, SUM6_KES_SIG_LEN};
+use ade_crypto::kes_sum::{KesAlgorithm, KesError, Sum6Kes};
 use ade_crypto::vrf::{VrfOutput, VrfProof};
 
-use cardano_crypto::kes::{KesAlgorithm, Sum6Kes};
 use cardano_crypto::vrf::VrfDraft03;
 
 // =========================================================================
@@ -118,7 +128,7 @@ impl KesSecret {
         let mut seed = [0u8; 32];
         seed.copy_from_slice(b);
         let inner =
-            Sum6Kes::gen_key_kes_from_seed_bytes(&seed).map_err(SigningError::CardanoCrypto)?;
+            Sum6Kes::gen_key_kes_from_seed_bytes(&seed).map_err(SigningError::AdeKesSum)?;
         zeroize_bytes(&mut seed);
         Ok(Self {
             inner,
@@ -154,15 +164,31 @@ impl KesSecret {
     /// left/right subtree VKs). Non-secret; safe to print on the
     /// `key-gen-KES` success line.
     pub fn verification_key_fingerprint(&self) -> String {
-        let vk_bytes = Sum6Kes::raw_serialize_verification_key_kes(
-            &Sum6Kes::derive_verification_key(&self.inner)
-                .expect("derive_verification_key is total for a constructed KesSecret"),
-        );
+        let vk_bytes: [u8; 32] = Sum6Kes::derive_verification_key(&self.inner);
         let mut out = String::with_capacity(vk_bytes.len() * 2);
         for b in &vk_bytes {
             out.push_str(&format!("{:02x}", b));
         }
         out
+    }
+
+    /// Construct a `KesSecret` directly from an
+    /// `ade_crypto::kes_sum::Sum6Kes::SigningKey` already at the
+    /// given period. Used by the cardano-cli expanded-skey loader
+    /// (PHASE4-N-P S5): the loader deserializes the 608-byte payload
+    /// into our BLUE signing key and hands ownership here without
+    /// re-running `gen_key_kes_from_seed_bytes`.
+    pub(super) fn from_blue_signing_key(
+        inner: <Sum6Kes as KesAlgorithm>::SigningKey,
+        current_period: KesPeriod,
+    ) -> Self {
+        let evolutions_remaining = ade_crypto::kes::SUM6_MAX_PERIOD
+            .saturating_sub(current_period.0);
+        Self {
+            inner,
+            current_period,
+            evolutions_remaining,
+        }
     }
 
     pub fn current_period(&self) -> KesPeriod {
@@ -174,14 +200,13 @@ impl KesSecret {
     }
 }
 
-// Note: KesSecret does NOT implement `Drop` explicitly. The inner
-// `Sum6Kes::SigningKey` is itself a `cardano-crypto` type that the
-// crate hand-rolls to zeroize its allocated buffers on drop (the crate
-// uses the `zeroize` family internally). Adding our own `Drop` here
-// would block destructuring the wrapper in `kes_update` (the field
-// move is what enables the borrow-checker-friendly update); the
-// type-level discipline (no public byte accessors, redacted Debug,
-// RED-only) carries the load.
+// Note: KesSecret does NOT implement `Drop` explicitly. Per PHASE4-N-P
+// S2, the inner `ade_crypto::kes_sum::Sum6Kes::SigningKey` zeroizes its
+// own seed buffers on drop (via `ZeroizingSeed` per-field + Sum0's
+// hand-rolled `Drop`); the type-level discipline (no public byte
+// accessors, redacted `Debug`, RED-only) carries the rest. Adding our
+// own `Drop` here would block destructuring the wrapper in `kes_update`
+// (the field move is what enables the borrow-checker-friendly update).
 
 impl core::fmt::Debug for KesSecret {
     fn fmt(&self, f: &mut core::fmt::Formatter<'_>) -> core::fmt::Result {
@@ -219,8 +244,7 @@ pub fn kes_sign(
         });
     }
 
-    let sig_raw = Sum6Kes::sign_kes(&(), period.0 as u64, msg, &sk.inner)
-        .map_err(SigningError::CardanoCrypto)?;
+    let sig_raw = Sum6Kes::sign_kes(&sk.inner, period.0, msg).map_err(SigningError::AdeKesSum)?;
     let sig_bytes = Sum6Kes::raw_serialize_signature_kes(&sig_raw);
     debug_assert_eq!(sig_bytes.len(), SUM6_KES_SIG_LEN);
     let mut arr = [0u8; SUM6_KES_SIG_LEN];
@@ -254,8 +278,8 @@ pub fn kes_update(sk: KesSecret, to: KesPeriod) -> Result<KesSecret, SigningErro
     } = sk;
 
     while current_period.0 < to.0 {
-        let next = Sum6Kes::update_kes(&(), inner, current_period.0 as u64)
-            .map_err(SigningError::CardanoCrypto)?;
+        let next =
+            Sum6Kes::update_kes(inner, current_period.0).map_err(SigningError::AdeKesSum)?;
         match next {
             Some(updated) => {
                 inner = updated;
@@ -363,7 +387,14 @@ pub enum SigningError {
         algorithm: &'static str,
         detail: &'static str,
     },
-    /// Wrapper-internal error originating from `cardano-crypto`. The
+    /// Wrapper-internal error originating from the Ade-owned BLUE KES
+    /// algorithm (`ade_crypto::kes_sum`). The inner enum carries only
+    /// non-secret metadata (period numbers, expected/actual lengths,
+    /// static algorithm-name strings); no key bytes.
+    AdeKesSum(KesError),
+    /// Wrapper-internal error originating from `cardano-crypto`'s VRF
+    /// path (`VrfDraft03`). PHASE4-N-P does NOT migrate VRF — VRF
+    /// remains on upstream until a future cluster picks it up. The
     /// inner `Error` type is the crate's own enum, which does not
     /// embed key bytes.
     CardanoCrypto(cardano_crypto::common::CryptoError),
@@ -428,12 +459,10 @@ mod tests {
 
     fn make_kes_secret(seed: [u8; 32]) -> (KesSecret, KesVerificationKey) {
         let sk = KesSecret::from_bytes_zeroizing(&seed).unwrap();
+        // Derive the VK via our BLUE algorithm — matches what
+        // `KesSecret` internally produced (S5 migration).
         let raw = Sum6Kes::gen_key_kes_from_seed_bytes(&seed).unwrap();
-        let vk_bytes = Sum6Kes::raw_serialize_verification_key_kes(
-            &Sum6Kes::derive_verification_key(&raw).unwrap(),
-        );
-        let mut vk_arr = [0u8; 32];
-        vk_arr.copy_from_slice(&vk_bytes);
+        let vk_arr = Sum6Kes::derive_verification_key(&raw);
         (sk, KesVerificationKey(vk_arr))
     }
 
