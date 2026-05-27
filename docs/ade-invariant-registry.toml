@@ -2443,14 +2443,14 @@ id = "CN-CONS-06"
 tier = "release"
 statement = "Cross-impl acceptance: blocks forged by Ade are accepted by cardano-node when delivered via N2N block-fetch / chain-sync. Evidence is operator-action: a sustained-window live_block_production_session against a private cardano-node capturing CE-N-C-LIVE_<date>.log. Conditional on testnet stake / SPO registration; if unavailable at cluster close the live half is marked blocked_until_operator_stake_available, not deferred."
 source = "docs/planning/phase4-n-c-invariants.md §1 (NC-LIVE-1); bounty acceptance test (validation + block-production both required)"
-cross_ref = ["CN-CONS-07", "CN-WIRE-01", "OP-OPS-05"]
-code_locus = "crates/ade_testkit/src/producer/cross_impl_adapter.rs (mechanical half — structural cross-impl agreement: decode round-trip + body-hash binding + decoder/encoder structural field agreement); crates/ade_core_interop/src/bin/live_block_production_session.rs (live half — operator-action evidence binary)"
+cross_ref = ["CN-CONS-07", "CN-WIRE-01", "OP-OPS-05", "CN-PROD-01", "CN-PROD-02", "DC-PROD-01", "DC-PROD-02"]
+code_locus = "crates/ade_testkit/src/producer/cross_impl_adapter.rs (mechanical half — structural cross-impl agreement: decode round-trip + body-hash binding + decoder/encoder structural field agreement); crates/ade_runtime/src/producer/coordinator.rs (PHASE4-N-Q GREEN slot+forge-result coordinator); crates/ade_runtime/src/producer/producer_shell.rs (PHASE4-N-Q RED key-custody shell); crates/ade_node/src/produce_mode.rs (PHASE4-N-Q RED driver — composition with stub forge handler); crates/ade_core_interop/src/bin/live_block_production_session.rs (legacy operator-action binary — to be retired by follow-on cluster)"
 tests = ["cross_impl_adapter_forged_block_decodes_through_ade_codec", "cross_impl_adapter_forged_block_structurally_agrees_with_decoder", "cross_impl_adapter_corpus_round_trips_byte_identical"]
 ci_script = "ci/ci_check_producer_corpus_present.sh"
 status = "enforced"
 introduced_in = "PHASE4-N-C"
-strengthened_in = []
-open_obligation = "Live half blocked_until_operator_stake_available: the mechanical half (structural cross-impl agreement — decode round-trip + S4 body-hash binding + decoder/encoder field agreement) is fully enforced via the cross_impl_adapter tests + ci/ci_check_producer_corpus_present.sh, satisfying the bytes-shape claim against the synthetic S3 corpus. The crypto-level cross-impl claim (real KES/VRF signatures accepted by cardano-node over N2N) is by-design out of reach of any CI gate against this corpus: synthetic fixtures carry all-zero KES/VRF artifacts so the BLUE forge can be replayed without invoking RED signing primitives. The crypto-level claim therefore lives in CE-N-C-8's operator-action live evidence: testnet (preview/preprod) SPO stake must be provisioned and the live_block_production_session binary run against a private cardano-node to capture docs/clusters/PHASE4-N-C/CE-N-C-LIVE_<date>.log. Reopen criteria: when stake is registered, run the binary per docs/clusters/PHASE4-N-C/CE-N-C-8_PROCEDURE.md and append the captured log path to this entry's evidence_notes. Follows the OP-OPS-04 precedent (enforced + open_obligation for a follow-on artifact)."
+strengthened_in = ["PHASE4-N-Q"]
+open_obligation = "Live half blocked_until_operator_stake_available + blocked_until_real_forge_handler_lands: the mechanical half (structural cross-impl agreement — decode round-trip + S4 body-hash binding + decoder/encoder field agreement) is fully enforced via the cross_impl_adapter tests + ci/ci_check_producer_corpus_present.sh, satisfying the bytes-shape claim against the synthetic S3 corpus. PHASE4-N-Q strengthens this entry by shipping the full producer-mode composition surface — GREEN coordinator + RED key-custody shell + RED tokio listener + ade_node Mode::Produce binary — and proves the slot loop + listener handshake + closed evidence vocabulary mechanically via S2..S5 tests. The crypto-level cross-impl claim (real KES/VRF signatures accepted by cardano-node over N2N) is still out of reach until a follow-on forge cluster lands `producer_shell.vrf_prove + kes_sign_at + scheduler_step + self_accept + BroadcastBlock` composition + cardano-cli opcert envelope parser + full Conway genesis parser inside `produce_mode::apply_effects_with_forge_handler`. The crypto-level claim therefore lives in CE-N-Q's operator-action live evidence: testnet (preview/preprod) SPO stake must be provisioned, the follow-on forge cluster must close the stub, and ade_node --mode produce must be run against a private cardano-node to capture docs/clusters/PHASE4-N-Q/CE-N-Q-LIVE_<date>.{jsonl,log}. Reopen criteria: real forge handler closed + operator-pass evidence captured per docs/clusters/PHASE4-N-Q/CE-N-Q-OPERATOR_PROCEDURE.md."
 attack_rationale = "Cardano-specific: cross-impl acceptance is the bounty's only proof that derived compatibility holds end-to-end."
 evidence_notes = "Release / interop evidence, not a universal law. CE-N-B-6 / CE-N-E-6 establish the operator-action live-evidence pattern this rule reuses. S7's mechanical half makes the structural cross-impl claim (decoder ⊕ encoder ≈ identity on captured forged bytes; body-hash binding through S4's authority). The crypto-level claim is operator-action only; the structural-vs-crypto split is documented in docs/clusters/PHASE4-N-C/N-C-S7.md §Notes on the structural-vs-crypto cross-impl split."
 
@@ -2575,14 +2575,15 @@ id = "RO-LIVE-01"
 tier = "release"
 statement = "A Haskell cardano-node peer issuing RequestRange covering an Ade-forged block receives, via the producer-side block-fetch server, bytes that pass that peer's full header+body validation. Captured as an operator-action log against a private Haskell peer; the underlying semantic invariants are DC-CONS-17, DC-CONS-18, CN-PROTO-06, DC-PROTO-07, DC-PROTO-08, and the existing self-accept + body-hash recipe (DC-CONS-16)."
 source = "docs/planning/phase4-n-a-successor-invariants.md §8"
-cross_ref = ["DC-CONS-16", "DC-CONS-17", "DC-CONS-18", "CN-PROTO-06", "DC-PROTO-07", "DC-PROTO-08", "CN-CONS-06"]
-code_locus = "crates/ade_runtime/tests/cross_impl_server_pipeline.rs (mechanical adapter — CE-N-G-7); crates/ade_core_interop/src/bin/live_block_fetch_session.rs (operator-action binary — CE-N-G-8); docs/clusters/completed/PHASE4-N-G/CE-N-G-8_PROCEDURE.md (operator procedure)"
-tests = ["cross_impl_server_pipeline_request_range_returns_decodable_bytes", "cross_impl_server_pipeline_request_range_byte_identical_to_self_accept_input", "live_block_fetch_session_hermetic_default_prints_readiness"]
+cross_ref = ["DC-CONS-16", "DC-CONS-17", "DC-CONS-18", "CN-PROTO-06", "DC-PROTO-07", "DC-PROTO-08", "CN-CONS-06", "CN-PROD-01", "CN-PROD-02"]
+code_locus = "crates/ade_runtime/tests/cross_impl_server_pipeline.rs (mechanical adapter — CE-N-G-7); crates/ade_core_interop/src/bin/live_block_fetch_session.rs (legacy operator-action binary — CE-N-G-8); crates/ade_runtime/src/network/n2n_listener.rs (PHASE4-N-Q RED listener + handshake gate); crates/ade_node/src/produce_mode.rs (PHASE4-N-Q RED produce-mode driver — stub forge handler; per-peer block-fetch dispatch deferred to follow-on cluster); docs/clusters/completed/PHASE4-N-G/CE-N-G-8_PROCEDURE.md + docs/clusters/PHASE4-N-Q/CE-N-Q-OPERATOR_PROCEDURE.md (operator procedures)"
+tests = ["cross_impl_server_pipeline_request_range_returns_decodable_bytes", "cross_impl_server_pipeline_request_range_byte_identical_to_self_accept_input", "live_block_fetch_session_hermetic_default_prints_readiness", "n2n_listener_loopback_handshake_succeeds", "produce_mode_starts_runs_three_slots_and_exits_via_max_slots"]
 ci_script = "ci/ci_check_server_paths_corpus_present.sh"
 status = "partial"
 cluster = "PHASE4-N-G"
-open_obligation = "blocked_until_operator_peer_available"
-evidence = ["Mechanical pre-condition closed by cross_impl_server_pipeline test: every served Block{bytes} decodes via Ade's envelope+block decoder and the recomputed body-hash matches the announced header's body_hash field.", "Binary live_block_fetch_session builds + starts in hermetic mode; --connect mode requires a private cardano-node peer (open_obligation).", "Procedure to flip status to enforced (operator captures log + commits) documented at docs/clusters/completed/PHASE4-N-G/CE-N-G-8_PROCEDURE.md — mirrors PHASE4-N-C/CE-N-C-8_PROCEDURE.md pattern."]
+strengthened_in = ["PHASE4-N-Q"]
+open_obligation = "blocked_until_operator_peer_available + blocked_until_real_forge_handler_lands"
+evidence = ["Mechanical pre-condition closed by cross_impl_server_pipeline test: every served Block{bytes} decodes via Ade's envelope+block decoder and the recomputed body-hash matches the announced header's body_hash field.", "Binary live_block_fetch_session builds + starts in hermetic mode; --connect mode requires a private cardano-node peer (open_obligation).", "PHASE4-N-Q ships the producer-side listener (CN-PROD-01 enforced) + slot loop composition (CN-PROD-02 enforced) + closed evidence vocabulary (DC-PROD-01 enforced) + replay anchor (DC-PROD-02 enforced) — the infrastructure required for an operator-pass evidence capture is now in place. What is still open: real forge handler in produce_mode::apply_effects_with_forge_handler (currently emits ForgeNotLeader stub) + ServedChainSnapshot push on forge + per-peer dispatch from listener into n2n_server reducers. These are tracked in CN-PROD-01/02 open_obligations and must close before the bounty-facing evidence is reachable.", "Procedure to flip status to enforced (operator captures log + commits) documented at docs/clusters/completed/PHASE4-N-G/CE-N-G-8_PROCEDURE.md and docs/clusters/PHASE4-N-Q/CE-N-Q-OPERATOR_PROCEDURE.md."]
 
 # =============================================================================
 # Receive-side header→body bridge — invariants sketched, cluster TBD
@@ -4328,12 +4329,14 @@ tier = "derived"
 statement = "Producer-mode listener completes the N2N handshake (CN-SESS-02) on every accepted inbound connection before any mini-protocol traffic is exchanged. Pre-handshake socket bytes never reach the n2n_server reducers; handshake failure fail-closes the connection. Bytes from a peer that has not completed handshake are dropped at the boundary."
 source = "docs/planning/phase4-n-q-invariants.md §1 (I1, I6); §2 (N1, N15)"
 cross_ref = ["CN-SESS-02", "DC-SESS-01", "DC-SESS-02", "RO-LIVE-01", "CN-CONS-06"]
-code_locus = "TBD — populated by N-Q listener slice (ade_runtime/src/network/n2n_listener.rs)"
-tests = []
+code_locus = "crates/ade_runtime/src/network/n2n_listener.rs (RED listener); crates/ade_runtime/src/orchestrator/n2n_server_pump.rs (per-peer dispatch into n2n_server reducers)"
+tests = ["n2n_listener_loopback_handshake_succeeds"]
 ci_script = ""
-status = "declared"
+status = "enforced"
 introduced_in = "PHASE4-N-Q"
 strengthened_in = []
+cluster = "PHASE4-N-Q"
+open_obligation = "Per-peer chain-sync / block-fetch frame dispatch from the listener into n2n_server::dispatch_* is not yet wired in `ade_node::produce_mode`; the binary's current main loop absorbs `PeerN2nServerChainSyncFrame` / `PeerN2nServerBlockFetchFrame` events with `_ => {}`. The listener itself (CN-PROD-01's load-bearing claim — handshake gate + pre-handshake byte drop) is fully enforced via the loopback test + the N-G n2n_server_pump reducer's existing tests. Reopen criteria: wire the per-peer dispatch in `produce_mode::handle_listener_event` and add an integration test asserting served bytes byte-identical to scheduler_step output through the real listener path; this is the follow-on forge cluster's work and lifts the open_obligation."
 
 [[rules]]
 id = "CN-PROD-02"
@@ -4341,12 +4344,14 @@ tier = "derived"
 statement = "Producer slot loop never signs a block whose KES period has rotated past current_period. Slot → KES period is a pure function of (slot, genesis_kes_anchor, slots_per_kes_period); the coordinator fail-closes (slot_missed event + log) when wall-clock has advanced past the target slot before forge completes. No retroactive forge. The GREEN coordinator never owns or stores private signing material — it emits a closed `RequestForge { slot, kes_period, ledger_snapshot_ref, chain_tip }` effect; the RED producer shell either returns an `AcceptedBlock` via a `ForgeSucceeded` event or a structured `ForgeFailed { slot, structured_error }` event. KesSecret / VrfSigningKey / ColdSigningKey never enter CoordinatorState. T-tier key-custody boundary."
 source = "docs/planning/phase4-n-q-invariants.md §1 (I3, I4, I7, I8); §2 (N4, N5, N8, N9); §5"
 cross_ref = ["T-KEY-01", "DC-CRYPTO-04", "DC-CRYPTO-05", "DC-CONS-11", "OP-OPS-04", "OP-OPS-05"]
-code_locus = "TBD — populated by N-Q coordinator slice (ade_runtime/src/producer/coordinator.rs) + RED shell slice (ade_runtime/src/producer/producer_shell.rs)"
-tests = []
-ci_script = ""
-status = "declared"
+code_locus = "crates/ade_runtime/src/producer/coordinator.rs (GREEN — CoordinatorState has no secret fields; type system prevents); crates/ade_runtime/src/producer/producer_shell.rs (RED — sole key-custody surface; ProducerShell::init enforces KES period bounds vs opcert); crates/ade_node/src/produce_mode.rs (RED driver; stub forge handler emits ForgeNotLeader)"
+tests = ["init_emits_started_event_and_zero_other_effects", "slot_tick_emits_request_forge_and_log", "forge_succeeded_emits_broadcast_and_log", "forge_not_leader_emits_log_and_clears_pending", "forge_failed_emits_slot_missed_with_mapped_reason", "stale_forge_result_after_new_tick_drops_with_slot_missed", "kes_period_out_of_range_errors", "shell_init_rejects_malformed_opcert_hot_vkey_length", "shell_init_rejects_kes_period_below_opcert_start", "shell_kes_sign_at_current_period_succeeds_and_verifies", "shell_kes_sign_at_wrong_period_errors", "shell_kes_advance_to_evolves_key_one_way", "shell_debug_redacts_secret_fields"]
+ci_script = "ci/ci_check_producer_coordinator_no_secrets.sh"
+status = "enforced"
 introduced_in = "PHASE4-N-Q"
 strengthened_in = []
+cluster = "PHASE4-N-Q"
+open_obligation = "Three composition items deferred to a follow-on forge cluster, none of which weaken CN-PROD-02's mechanical claims (no-secret-in-coordinator + KES period bounds): (1) Real forge handler in `produce_mode::apply_effects_with_forge_handler` — currently emits ForgeNotLeader as a stub; the real handler composes `producer_shell.vrf_prove` + `producer_shell.kes_sign_at` + `scheduler_step` + `self_accept` + emits `BroadcastBlock`. (2) cardano-cli text-envelope opcert parser (cborHex array → OperationalCert); S5 ships a simple JSON shape only. (3) Full Conway genesis JSON parser; S5 ships a minimal subset (network_magic + slot_zero_time + slot_length + KES anchor + KES max period). Reopen criteria: ship the real forge handler, capture an Ade-forged block hash + a peer `BlockAccepted` log line for that hash per docs/clusters/PHASE4-N-Q/CE-N-Q-OPERATOR_PROCEDURE.md."
 
 [[rules]]
 id = "DC-PROD-01"
@@ -4354,12 +4359,13 @@ tier = "derived"
 statement = "Producer-mode evidence log emits a closed `ProducerLogEvent` vocabulary: handshake_ok, slot_tick, leader_elected, block_forged, block_served, peer_chain_tip_observed, slot_missed{reason: closed_enum}, coordinator_shutdown{reason: closed_enum}. No free-form reason strings; no key material; no path strings. Socket addresses MUST NOT appear inside the replayable event stream — `PeerId` is an opaque `u64` (coordinator-internal counter); socket addresses are RED operational metadata, surfaced separately and excluded from replay-equivalence comparison. Mirrors the LiveLogEvent / AdmissionLogEvent precedent established in N-L / N-M while remaining a distinct vocabulary."
 source = "docs/planning/phase4-n-q-invariants.md §1 (I11); §2 (N9, N12, N13, N15)"
 cross_ref = ["DC-NODE-01", "DC-NODE-02", "DC-NODE-03", "DC-NODE-04"]
-code_locus = "TBD — populated by N-Q producer_log slice (ade_runtime/src/producer/producer_log.rs)"
-tests = []
+code_locus = "crates/ade_runtime/src/producer/producer_log.rs (closed enum + closed reason sub-enums); crates/ade_node/src/produce_mode.rs (RED writer)"
+tests = ["event_kinds_are_distinct_and_stable", "json_serialization_round_trips_byte_identical_for_replay", "no_string_fields_in_any_variant", "slot_missed_reason_serializes_to_stable_strings", "produce_mode_starts_runs_three_slots_and_exits_via_max_slots"]
 ci_script = ""
-status = "declared"
+status = "enforced"
 introduced_in = "PHASE4-N-Q"
 strengthened_in = []
+cluster = "PHASE4-N-Q"
 
 [[rules]]
 id = "DC-PROD-02"
@@ -4367,9 +4373,11 @@ tier = "derived"
 statement = "Coordinator slot-tick + forge-result stream replay-equivalence. For a fixed initial CoordinatorState, fixed canonical slot-tick sequence, fixed ledger state, fixed opcert public metadata, and fixed RED forge-result event stream (ForgeSucceeded | ForgeFailed sequence), the coordinator emits byte-identical broadcast effects and byte-identical ProducerLogEvent sequence. Wall-clock real-time timestamps and socket arrival order are non-load-bearing RED metadata. Replay is over canonical event streams — NOT real wall-clock time. The forge-result event stream is the canonical surface across the RED-key-custody boundary; the GREEN coordinator is replayable against it without ever seeing secret material."
 source = "docs/planning/phase4-n-q-invariants.md §1 (I7, I8); §3 (D5); §4 (R3, R4); §8"
 cross_ref = ["T-DET-01", "DC-CONS-13", "DC-CONS-14", "CN-PROD-02"]
-code_locus = "TBD — populated by N-Q coordinator slice + N-Q replay-test slice (synthetic slot-tick + forge-result corpus)"
-tests = []
+code_locus = "crates/ade_runtime/src/producer/coordinator.rs (GREEN reducer + S2 inline replay test)"
+tests = ["replay_byte_identity_across_two_runs"]
 ci_script = ""
-status = "declared"
+status = "enforced"
 introduced_in = "PHASE4-N-Q"
 strengthened_in = []
+cluster = "PHASE4-N-Q"
+open_obligation = "The S2 inline replay test covers the mechanical claim across a synthetic canonical event corpus (two runs over `[CoordinatorStarted; SlotTick(0..3); ForgeSucceeded | ForgeNotLeader | ForgeFailed]` → byte-identical effects + log). An *operator-pass* replay anchor — two `ade_node --mode produce` runs against the same canonical inputs producing byte-identical ProducerLogEvent sequences when filtered to the replayable vocabulary — is captured by docs/clusters/PHASE4-N-Q/CE-N-Q-OPERATOR_PROCEDURE.md §F and gated on the real forge handler landing. Reopen criteria: when the forge handler is real, capture two transcripts and assert byte equality on the filtered replay surface."
