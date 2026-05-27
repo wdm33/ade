@@ -78,6 +78,13 @@ pub struct N2nListenerConfig {
     pub our_supported: &'static [(u16, VersionData)],
     pub peer_id_generator: Arc<PeerIdGenerator>,
     pub events_out: mpsc::Sender<OrchestratorEvent>,
+    /// PHASE4-N-S-B B3: shared per-peer outbound channel map.
+    /// `None` preserves N-Q/N-R listener behavior (no outbound
+    /// relay; dispatch responses computed but not transmitted).
+    /// `Some` enables produce_mode to send `OutboundCommand`
+    /// instances through the per-peer mpsc::Sender for the
+    /// corresponding `PeerId`.
+    pub peer_outbound: Option<crate::network::outbound_command::PerPeerOutbound>,
 }
 
 /// Bind a TCP listener at `bind_addr` and run the accept loop until
@@ -114,6 +121,7 @@ pub async fn run_n2n_listener(
                     our_supported: cfg.our_supported,
                     peer_id_generator: cfg.peer_id_generator.clone(),
                     events_out: cfg.events_out.clone(),
+                    peer_outbound: cfg.peer_outbound.clone(),
                 };
                 tokio::spawn(run_per_peer_session(session_cfg));
             }
@@ -127,6 +135,9 @@ pub struct PerPeerSessionConfig {
     pub our_supported: &'static [(u16, VersionData)],
     pub peer_id_generator: Arc<PeerIdGenerator>,
     pub events_out: mpsc::Sender<OrchestratorEvent>,
+    /// PHASE4-N-S-B B3: per-peer outbound map (see
+    /// `N2nListenerConfig::peer_outbound`).
+    pub peer_outbound: Option<crate::network::outbound_command::PerPeerOutbound>,
 }
 
 /// Drive a single accepted peer connection: handshake → mux pump.
@@ -296,6 +307,7 @@ mod tests {
             our_supported: N2N_SUPPORTED,
             peer_id_generator: Arc::new(PeerIdGenerator::new()),
             events_out: events_tx.clone(),
+            peer_outbound: None,
         };
 
         let (shutdown_tx, shutdown_rx) = watch::channel(false);

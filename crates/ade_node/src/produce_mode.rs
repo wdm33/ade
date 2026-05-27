@@ -183,6 +183,8 @@ pub async fn run_produce_mode(cli: ProduceCli, shutdown_rx: watch::Receiver<bool
         our_supported: ade_network::handshake::version_table::N2N_SUPPORTED,
         peer_id_generator: Arc::new(PeerIdGenerator::new()),
         events_out: events_tx,
+        peer_outbound: None, // N-S-B B3 wires this; produce_mode's
+                              // dispatch path will populate the map.
     };
     let listener_shutdown_rx = shutdown_rx.clone();
     let _listener_handle =

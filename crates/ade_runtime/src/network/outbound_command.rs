@@ -18,10 +18,34 @@
 //! typed-commands-only outbound traversal makes
 //! arbitrary-byte tunneling structurally unrepresentable.
 
+use std::collections::BTreeMap;
+use std::sync::Arc;
+
 use ade_network::block_fetch::server::ServerReply as BlockFetchServerReply;
 use ade_network::chain_sync::server::ServerReply as ChainSyncServerReply;
+use tokio::sync::{mpsc, RwLock};
 
 use crate::orchestrator::event::PeerId;
+
+/// **PHASE4-N-S-B B3** — Shared per-peer outbound channel map.
+///
+/// Owned by `produce_mode`; cloned into the listener config.
+/// `run_per_peer_session` writes the sender side on
+/// PeerConnected; MuxPump removes the entry on session
+/// termination. `produce_mode::dispatch_server_frame_event`
+/// looks up the sender by PeerId and enqueues
+/// `OutboundCommand` instances.
+///
+/// `BTreeMap` (not `HashMap`) for deterministic iteration
+/// order. Lookup failure is structured (`DispatchError::
+/// {UnknownPeer, PeerOutboundMissing}`).
+pub type PerPeerOutbound =
+    Arc<RwLock<BTreeMap<PeerId, mpsc::Sender<OutboundCommand>>>>;
+
+/// Construct a fresh empty PerPeerOutbound map.
+pub fn new_per_peer_outbound() -> PerPeerOutbound {
+    Arc::new(RwLock::new(BTreeMap::new()))
+}
 
 /// Closed outbound-command surface. Each variant carries
 /// the target `PeerId` so MuxPump can verify the command is
