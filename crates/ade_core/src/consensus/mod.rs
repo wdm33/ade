@@ -14,6 +14,7 @@ pub mod fork_choice;
 pub mod header_summary;
 pub mod header_validate;
 pub mod kes_check;
+pub mod leader_check;
 pub mod leader_schedule;
 pub mod ledger_view;
 pub mod nonce;
@@ -44,9 +45,11 @@ pub use events::{
 pub use header_summary::{HeaderInput, HeaderKes, HeaderVrf, ValidatedHeaderSummary};
 pub use header_validate::{validate_and_apply_header, HeaderApplied};
 pub use kes_check::{expect_size, verify_header_kes, SLOTS_PER_KES_PERIOD};
-pub use leader_schedule::{
-    is_leader_for_vrf_output, query_leader_schedule, LeaderScheduleAnswer, LeaderScheduleQuery,
+pub use leader_check::{
+    is_leader_for_vrf_output, verify_and_evaluate_leader, LeaderCheckError, LeaderCheckVerdict,
+    LeaderProofFingerprint, VrfOutputFingerprint,
 };
+pub use leader_schedule::{query_leader_schedule, LeaderScheduleAnswer, LeaderScheduleQuery};
 pub use ledger_view::LedgerView;
 pub use nonce::{apply_nonce_input, NonceInput};
 pub use op_cert::{apply_op_cert, OpCertObservation};

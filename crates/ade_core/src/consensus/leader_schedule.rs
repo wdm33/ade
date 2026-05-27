@@ -17,16 +17,13 @@
 //! the caller can call `is_leader_for_vrf_output` once it has a VRF
 //! output in hand and get a deterministic decision.
 
-use ade_crypto::vrf::VrfOutput;
 use ade_types::{EpochNo, Hash28, SlotNo};
 
 use crate::consensus::era_schedule::EraSchedule;
 use crate::consensus::errors::LeaderScheduleError;
 use crate::consensus::ledger_view::LedgerView;
 use crate::consensus::praos_state::PraosChainDepState;
-use crate::consensus::vrf_cert::{
-    is_leader, vrf_input, ActiveSlotsCoeff, StakeFraction, VrfRole, VRF_INPUT_LEN,
-};
+use crate::consensus::vrf_cert::{vrf_input, ActiveSlotsCoeff, VrfRole, VRF_INPUT_LEN};
 
 /// Query: "for this `slot`, can `pool` lead?"
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -120,17 +117,14 @@ pub fn query_leader_schedule(
     })
 }
 
-/// Compose the final per-VRF-output leadership decision.
-///
-/// Delegates to `vrf_cert::is_leader` using the threshold context that
-/// `query_leader_schedule` produced. Pure — no I/O, no allocation.
-pub fn is_leader_for_vrf_output(answer: &LeaderScheduleAnswer, output: &VrfOutput) -> bool {
-    let sigma = StakeFraction {
-        numer: answer.stake_fraction.0,
-        denom: answer.stake_fraction.1,
-    };
-    is_leader(output, sigma, answer.asc)
-}
+// PHASE4-N-R-A S2: `is_leader_for_vrf_output` was relocated to
+// `crate::consensus::leader_check`. The function is re-exported by
+// `crate::consensus::mod` for backward compat with the
+// `ade_ledger::producer::forge` defense-in-depth pin, but the
+// canonical authority is now `verify_and_evaluate_leader` (closed
+// two-variant `LeaderCheckVerdict`). New external callers MUST use
+// `verify_and_evaluate_leader`; the CI gate
+// `ci/ci_check_leader_check_authority.sh` enforces the allow-list.
 
 #[cfg(test)]
 #[allow(clippy::unwrap_used)]
@@ -295,35 +289,7 @@ mod tests {
         assert_eq!(state, snapshot);
     }
 
-    #[test]
-    fn is_leader_for_vrf_output_delegates_to_vrf_cert() {
-        // asc.numer == asc.denom: vrf_cert::is_leader returns true
-        // regardless of output (every slot eligible). This proves the
-        // helper threads asc + sigma through to the underlying function.
-        let answer = LeaderScheduleAnswer {
-            slot: SlotNo(0),
-            pool: pool(),
-            epoch: EpochNo(0),
-            expected_vrf_input: [0u8; VRF_INPUT_LEN],
-            stake_fraction: (1, 2),
-            asc: ActiveSlotsCoeff { numer: 1, denom: 1 },
-        };
-        let any_output = VrfOutput([0xFF; 64]);
-        assert!(is_leader_for_vrf_output(&answer, &any_output));
-
-        // asc.numer == 0: never leads.
-        let zero = LeaderScheduleAnswer {
-            asc: ActiveSlotsCoeff { numer: 0, denom: 1 },
-            ..answer.clone()
-        };
-        assert!(!is_leader_for_vrf_output(&zero, &any_output));
-
-        // sigma.numer == 0: never leads regardless of output.
-        let no_stake = LeaderScheduleAnswer {
-            stake_fraction: (0, 1),
-            asc: ActiveSlotsCoeff { numer: 1, denom: 2 },
-            ..answer
-        };
-        assert!(!is_leader_for_vrf_output(&no_stake, &any_output));
-    }
+    // `is_leader_for_vrf_output_delegates_to_vrf_cert` test relocated
+    // to `crate::consensus::leader_check::tests` together with the
+    // function itself (PHASE4-N-R-A S2).
 }

@@ -27,7 +27,7 @@
 use ade_codec::cbor::{self, ContainerEncoding, IntWidth};
 use ade_codec::shelley::tx_components::split_conway_tx_components;
 use ade_codec::traits::{AdeEncode, CodecContext};
-use ade_core::consensus::leader_schedule::is_leader_for_vrf_output;
+use ade_core::consensus::leader_check::is_leader_for_vrf_output;
 use ade_core::consensus::opcert_validate::{opcert_validate, OpCertError};
 use ade_crypto::kes::SUM6_KES_SIG_LEN;
 use ade_types::shelley::block::{
@@ -341,9 +341,10 @@ pub fn forge_block(
 }
 
 // Compile-time pin: the producer's leader-decision call site MUST be
-// `is_leader_for_vrf_output` re-exported from
-// `ade_core::consensus::leader_schedule`. Any divergence (a producer
-// fork of the leader-check formula) would be rejected at compile time.
+// `is_leader_for_vrf_output` from `ade_core::consensus::leader_check`
+// (relocated in PHASE4-N-R-A S2; defense-in-depth pin survives the
+// move). Any divergence (a producer fork of the leader-check formula)
+// would be rejected at compile time.
 const _PRODUCER_LEADER_CHECK_IS_VALIDATOR_FN: fn(
     &ade_core::consensus::leader_schedule::LeaderScheduleAnswer,
     &ade_crypto::vrf::VrfOutput,
