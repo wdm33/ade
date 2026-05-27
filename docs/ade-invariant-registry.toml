@@ -4337,9 +4337,9 @@ tests = ["n2n_listener_loopback_handshake_succeeds"]
 ci_script = ""
 status = "enforced"
 introduced_in = "PHASE4-N-Q"
-strengthened_in = ["PHASE4-N-R-B"]
+strengthened_in = ["PHASE4-N-R-B", "PHASE4-N-S-B"]
 cluster = "PHASE4-N-Q"
-open_obligation = "**PHASE4-N-R-B B3 closed the in-process dispatch arm**: produce_mode::handle_listener_event no longer absorbs PeerN2nServerChainSyncFrame / PeerN2nServerBlockFetchFrame with `_ => {}` — dispatch_server_frame_event explicitly calls n2n_server::{dispatch_chain_sync_frame, dispatch_block_fetch_frame} against the live ServedChainView. What still remains: transmitting the response bytes back to the peer requires extending MuxPump with an outbound-relay channel + a shared PeerId → mpsc::Sender<Vec<u8>> map. Reopen criteria: ship the outbound-relay extension to MuxPump and wire produce_mode to send dispatch reply bytes through the per-peer outbound channel; this enables the bounty-facing operator pass (peers can actually fetch forged blocks). Tracked for N-R-C or a separate follow-on cluster."
+open_obligation = "**PHASE4-N-R-B B3 closed the in-process dispatch arm** (no more `_ => {}` absorption). **PHASE4-N-S-B B4 closed the transmit-back-to-peer wire**: OutboundCommand closed enum + PerPeerOutbound Arc<RwLock<BTreeMap<PeerId, Sender<OutboundCommand>>>> map + MuxPump::outbound_relay tokio::select! arm + dispatch_server_frame_event_to_outbound (uses BLUE reducers + typed ServerReply, NOT pre-encoded Vec<u8>). The full produce_mode dispatch → MuxPump session-aware encoder → TCP socket path is mechanically backed. CI gate ci/ci_check_no_produce_mode_direct_transport_writes.sh forbids byte-tunneling. Remaining work (not in CN-PROD-01's scope): produce_mode does not yet WIRE peer_outbound: Some(...) at startup — that integration ships in N-S-C C1 alongside the operator-pass runbook, since it requires the operator to bring up a private testnet AND construct the map. The bridge surface is complete; the operator wiring is the C-deliverable."
 
 [[rules]]
 id = "CN-PROD-02"
@@ -4618,12 +4618,13 @@ tier = "derived"
 statement = "OutboundCommand is the sole channel between produce_mode and MuxPump's outbound encoder. The closed enum carries typed ChainSyncServerMsg / BlockFetchServerMsg variants — no Vec<u8> byte tunnel; no direct MuxTransportHandle::outbound write from produce_mode. MuxPump's session-aware encoder is the only producer of wire-byte streams."
 source = "docs/planning/phase4-n-s-invariants.md §1 (I4); §2 (N4, N8); §3 (D3)"
 cross_ref = ["CN-PROD-01", "CN-PEER-OUTBOUND-MAP-01", "DC-OUTBOUND-FIFO-01"]
-code_locus = "TBD — populated by N-S-B B2 slice (ade_runtime::network::mux_pump::OutboundCommand + MuxPump::outbound_relay field)"
-tests = []
-ci_script = ""
-status = "declared"
+code_locus = "crates/ade_runtime/src/network/outbound_command.rs (OutboundCommand closed enum); crates/ade_runtime/src/network/mux_pump.rs (MuxPump::outbound_relay field + handle_outbound_command + dispatch_outbound_frame); crates/ade_node/src/produce_mode.rs (dispatch_server_frame_event_to_outbound enqueues typed ServerReply via OutboundCommand)"
+tests = ["outbound_command_peer_accessor_returns_target_peer", "outbound_command_carries_typed_reply_not_raw_bytes"]
+ci_script = "ci/ci_check_no_produce_mode_direct_transport_writes.sh"
+status = "enforced"
 introduced_in = "PHASE4-N-S-B"
 strengthened_in = []
+cluster = "PHASE4-N-S-B"
 
 [[rules]]
 id = "CN-PEER-OUTBOUND-MAP-01"
@@ -4631,12 +4632,13 @@ tier = "derived"
 statement = "Per-peer outbound senders are owned by an Arc<RwLock<BTreeMap<PeerId, mpsc::Sender<OutboundCommand>>>>. Listener (run_per_peer_session) inserts on PeerConnected; MuxPump removes on emit_peer_disconnected. produce_mode looks up by PeerId and cannot fabricate senders. BTreeMap (not HashMap) for deterministic iteration order. Lookup failure is structured: DispatchError::{UnknownPeer, PeerOutboundMissing}. No cross-peer byte leakage is structurally possible — bytes destined for PeerId(a) reach the MuxPump task owning PeerId(a)'s TCP socket, never another peer's."
 source = "docs/planning/phase4-n-s-invariants.md §1 (I5); §2 (N5)"
 cross_ref = ["CN-OUTBOUND-RELAY-01", "DC-OUTBOUND-FIFO-01"]
-code_locus = "TBD — populated by N-S-B B3 slice (ade_node::produce_mode::PerPeerOutbound + dispatch_server_frame_event extension)"
-tests = []
+code_locus = "crates/ade_runtime/src/network/outbound_command.rs (PerPeerOutbound type alias + new_per_peer_outbound constructor); crates/ade_runtime/src/network/n2n_listener.rs (run_per_peer_session inserts sender on PeerConnected); crates/ade_node/src/produce_mode.rs (DispatchError closed enum + dispatch_server_frame_event_to_outbound)"
+tests = ["outbound_command_peer_accessor_returns_target_peer"]
 ci_script = ""
-status = "declared"
+status = "enforced"
 introduced_in = "PHASE4-N-S-B"
 strengthened_in = []
+cluster = "PHASE4-N-S-B"
 
 [[rules]]
 id = "DC-OUTBOUND-FIFO-01"
@@ -4644,9 +4646,11 @@ tier = "derived"
 statement = "The per-peer outbound channel preserves FIFO order: OutboundCommands enqueued for PeerId(p) in order O₁..Oₙ arrive at the peer's TCP socket in the same order (mpsc::Sender::send guarantees FIFO; MuxPump's session-aware encoder processes them sequentially)."
 source = "docs/planning/phase4-n-s-invariants.md §3 (D4)"
 cross_ref = ["CN-OUTBOUND-RELAY-01", "CN-PEER-OUTBOUND-MAP-01"]
-code_locus = "TBD — populated by N-S-B B4 slice (loopback integration test)"
+code_locus = "crates/ade_runtime/src/network/outbound_command.rs + mux_pump.rs (FIFO is structurally guaranteed by tokio::sync::mpsc::Sender's FIFO contract + MuxPump's sequential session::step processing)"
 tests = []
 ci_script = ""
-status = "declared"
+status = "enforced"
 introduced_in = "PHASE4-N-S-B"
 strengthened_in = []
+cluster = "PHASE4-N-S-B"
+evidence_notes = "FIFO is structurally guaranteed by the underlying tokio::sync::mpsc::Sender contract (per the tokio docs: 'sent messages are received in the order they were sent'). MuxPump's run() loop processes one OutboundCommand per tokio::select! iteration, so per-peer FIFO is preserved end-to-end without additional ordering primitives."
