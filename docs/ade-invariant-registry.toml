@@ -4553,3 +4553,97 @@ status = "enforced"
 introduced_in = "PHASE4-N-R-C"
 strengthened_in = []
 cluster = "PHASE4-N-R-C"
+
+# =============================================================================
+# PHASE4-N-S-A — KES signs real unsigned-header pre-image (CN-KES-HEADER / DC-KES-HEADER / CN-PREIMAGE-FIXTURE family, declared)
+# Sketch: docs/planning/phase4-n-s-invariants.md
+# Plan: docs/planning/phase4-n-s-cluster-slice-plan.md
+# Cluster doc: docs/clusters/PHASE4-N-S-A/cluster.md
+# Status: "declared" — enforcement debt to be closed by N-S-A A2/A3/A4 slices.
+# =============================================================================
+
+[[rules]]
+id = "CN-KES-HEADER-01"
+tier = "derived"
+statement = "The KES signature in a forged block's header is over the canonical unsigned-header CBOR pre-image — the CBOR encoding of ShelleyHeaderBody (the first element of the outer [header_body, kes_signature] header array). The producer-side recipe (unsigned_header_pre_image) and the validator-side extractor (header_input::decode_block.header_input.kes.header_body_bytes) produce byte-identical output for every corpus block. The branded UnsignedHeaderPreImage(Vec<u8>) type's only constructor is the canonical recipe; kes_sign_header accepts only this type — arbitrary-byte signing is mechanically unrepresentable."
+source = "docs/planning/phase4-n-s-invariants.md §1 (I1, I2); §2 (N1, N2)"
+cross_ref = ["CN-FORGE-01", "DC-KES-HEADER-01", "CN-PREIMAGE-FIXTURE-01", "DC-CONS-18"]
+code_locus = "TBD — populated by N-S-A A2 slice (ade_ledger::block_validity::unsigned_header_pre_image) + A3 slice (RED kes_sign_header wrapper + scheduler bridge)"
+tests = []
+ci_script = ""
+status = "declared"
+introduced_in = "PHASE4-N-S-A"
+strengthened_in = []
+
+[[rules]]
+id = "DC-KES-HEADER-01"
+tier = "derived"
+statement = "unsigned_header_pre_image(slot, block_no, prev_hash, vrf_data, opcert, kes_period, hot_vkey, body_hash, body_size, protocol_version) is a pure BLUE function. Same canonical inputs → byte-identical UnsignedHeaderPreImage output. Replay-equivalence anchor for the pre-image recipe."
+source = "docs/planning/phase4-n-s-invariants.md §3 (D1)"
+cross_ref = ["CN-KES-HEADER-01", "DC-FORGE-01"]
+code_locus = "TBD — populated by N-S-A A2 slice (unit tests including replay-byte-identity-across-two-runs)"
+tests = []
+ci_script = ""
+status = "declared"
+introduced_in = "PHASE4-N-S-A"
+strengthened_in = []
+
+[[rules]]
+id = "CN-PREIMAGE-FIXTURE-01"
+tier = "derived"
+statement = "For every block in ade_testkit::validity::corpus::ConwayValidityCorpus, Ade's unsigned_header_pre_image(...) (with inputs derived from decode_block(block_bytes).header_input) produces output byte-identical to decode_block(block_bytes).header_input.kes.unwrap().header_body_bytes. This cross-impl byte-match test is the load-bearing proof that the producer's pre-image recipe matches the validator's authority — without it the 'single source of truth' claim is unverified."
+source = "docs/planning/phase4-n-s-invariants.md §7 OQ-S-A; N-S-A A1 fixture metadata"
+cross_ref = ["CN-KES-HEADER-01", "DC-CONS-18"]
+code_locus = "TBD — populated by N-S-A A2 slice (byte-match test against corpus)"
+tests = []
+ci_script = ""
+status = "declared"
+introduced_in = "PHASE4-N-S-A"
+strengthened_in = []
+
+# =============================================================================
+# PHASE4-N-S-B — MuxPump outbound relay (CN-OUTBOUND-RELAY / CN-PEER-OUTBOUND-MAP / DC-OUTBOUND-FIFO family, declared)
+# Sketch: docs/planning/phase4-n-s-invariants.md
+# Plan: docs/planning/phase4-n-s-cluster-slice-plan.md
+# Cluster doc: docs/clusters/PHASE4-N-S-B/cluster.md
+# Status: "declared" — enforcement debt to be closed by N-S-B B2/B3/B4 slices.
+# =============================================================================
+
+[[rules]]
+id = "CN-OUTBOUND-RELAY-01"
+tier = "derived"
+statement = "OutboundCommand is the sole channel between produce_mode and MuxPump's outbound encoder. The closed enum carries typed ChainSyncServerMsg / BlockFetchServerMsg variants — no Vec<u8> byte tunnel; no direct MuxTransportHandle::outbound write from produce_mode. MuxPump's session-aware encoder is the only producer of wire-byte streams."
+source = "docs/planning/phase4-n-s-invariants.md §1 (I4); §2 (N4, N8); §3 (D3)"
+cross_ref = ["CN-PROD-01", "CN-PEER-OUTBOUND-MAP-01", "DC-OUTBOUND-FIFO-01"]
+code_locus = "TBD — populated by N-S-B B2 slice (ade_runtime::network::mux_pump::OutboundCommand + MuxPump::outbound_relay field)"
+tests = []
+ci_script = ""
+status = "declared"
+introduced_in = "PHASE4-N-S-B"
+strengthened_in = []
+
+[[rules]]
+id = "CN-PEER-OUTBOUND-MAP-01"
+tier = "derived"
+statement = "Per-peer outbound senders are owned by an Arc<RwLock<BTreeMap<PeerId, mpsc::Sender<OutboundCommand>>>>. Listener (run_per_peer_session) inserts on PeerConnected; MuxPump removes on emit_peer_disconnected. produce_mode looks up by PeerId and cannot fabricate senders. BTreeMap (not HashMap) for deterministic iteration order. Lookup failure is structured: DispatchError::{UnknownPeer, PeerOutboundMissing}. No cross-peer byte leakage is structurally possible — bytes destined for PeerId(a) reach the MuxPump task owning PeerId(a)'s TCP socket, never another peer's."
+source = "docs/planning/phase4-n-s-invariants.md §1 (I5); §2 (N5)"
+cross_ref = ["CN-OUTBOUND-RELAY-01", "DC-OUTBOUND-FIFO-01"]
+code_locus = "TBD — populated by N-S-B B3 slice (ade_node::produce_mode::PerPeerOutbound + dispatch_server_frame_event extension)"
+tests = []
+ci_script = ""
+status = "declared"
+introduced_in = "PHASE4-N-S-B"
+strengthened_in = []
+
+[[rules]]
+id = "DC-OUTBOUND-FIFO-01"
+tier = "derived"
+statement = "The per-peer outbound channel preserves FIFO order: OutboundCommands enqueued for PeerId(p) in order O₁..Oₙ arrive at the peer's TCP socket in the same order (mpsc::Sender::send guarantees FIFO; MuxPump's session-aware encoder processes them sequentially)."
+source = "docs/planning/phase4-n-s-invariants.md §3 (D4)"
+cross_ref = ["CN-OUTBOUND-RELAY-01", "CN-PEER-OUTBOUND-MAP-01"]
+code_locus = "TBD — populated by N-S-B B4 slice (loopback integration test)"
+tests = []
+ci_script = ""
+status = "declared"
+introduced_in = "PHASE4-N-S-B"
+strengthened_in = []
