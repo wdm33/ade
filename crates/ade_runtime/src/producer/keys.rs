@@ -6,25 +6,36 @@
 // - Canonical serialization for all persisted/hashed data
 
 //! RED disk-side key loader for cardano-cli text-envelope `*.skey`
-//! files (PHASE4-N-C S1).
+//! files (PHASE4-N-C S1) **and** the Ade-native KES envelope
+//! `ade.kes.seed.v1` (PHASE4-N-O S1).
 //!
-//! Parses the JSON envelope (`type`, `description`, `cborHex`), decodes
-//! the CBOR byte string, validates the `type` field against the
-//! expected algorithm string, and constructs the matching RED secret
-//! wrapper. Path strings never appear in `KeyLoadError`; the surface
-//! returns `std::io::ErrorKind` rather than the path so filesystem
-//! layout cannot leak into logs.
+//! Loaders parse the JSON envelope (`type`, `description`, `cborHex`
+//! for cardano-cli; `format`, `role`, `crypto`, `seed_32`, `period_idx`,
+//! `format_version` for Ade-native), decode the payload, and construct
+//! the matching RED secret wrapper. Path strings never appear in
+//! `KeyLoadError`; the surface returns `std::io::ErrorKind` rather than
+//! the path so filesystem layout cannot leak into logs.
 //!
-//! Synthetic test fixtures store the *seed* (32 bytes for KES + cold,
-//! 64 bytes for VRF libsodium-secret form) inside the CBOR byte string.
-//! Genuine cardano-cli `.skey` interop with the full Sum6KES signing-key
-//! serialization is OQ-1 future work and not part of this slice's
-//! mechanical scope; the synthetic round-trip proves the envelope +
-//! cborHex + type-validation pathway end-to-end.
+//! ### KES envelope policy (PHASE4-N-O)
+//!
+//! The cardano-cli `KesSigningKey_ed25519_kes_2^6` envelope is recognized
+//! only to be fail-closed via `KeyLoadError::UnsupportedExpandedKesKeyFormat`.
+//! cardano-cli emits the 608-byte Sum6KES expanded-tree serialization, for
+//! which `cardano-crypto` 1.0.8 exposes no public constructor; rehydrating
+//! it requires a full `ade_crypto::kes_sum` reimplementation (deferred to
+//! PHASE4-N-P). For the challenge build the operator generates Ade-native
+//! envelopes via `ade_node key-gen-KES`; that envelope is the sole shape
+//! accepted by `load_ade_kes_signing_key`.
+//!
+//! VRF and cold (Ed25519) loaders continue to consume the cardano-cli
+//! text-envelope shape unchanged — neither is affected by the Sum6KES
+//! expanded-format gap.
 
 use std::io::Read;
+use std::os::unix::fs::OpenOptionsExt;
 use std::path::Path;
 
+use super::ade_kes_envelope::{self, AdeKesEnvelope, AdeKesEnvelopeError};
 use super::signing::{ColdSigningKey, KesSecret, SigningError, VrfSigningKey};
 
 // =========================================================================
@@ -47,12 +58,30 @@ pub fn load_vrf_signing_key_skey(path: &Path) -> Result<VrfSigningKey, KeyLoadEr
     VrfSigningKey::from_bytes_zeroizing(&payload).map_err(KeyLoadError::Crypto)
 }
 
-/// Load a Sum6KES signing key from a cardano-cli text-envelope `.skey`
-/// file. Returns a `KesSecret` initialized at period 0 with the full
-/// `SUM6_MAX_PERIOD` evolutions remaining.
+/// Recognize a cardano-cli `KesSigningKey_ed25519_kes_2^6` envelope only
+/// to fail-close it.
+///
+/// PHASE4-N-O policy: Ade does NOT import cardano-cli's expanded Sum6KES
+/// signing-key file. Any payload — 32-byte synthetic seed, 608-byte
+/// expanded tree (the canonical cardano-cli output), 612-byte malformed,
+/// or any other shape — maps to
+/// [`KeyLoadError::UnsupportedExpandedKesKeyFormat`]. The cardano-cli
+/// import path is the PHASE4-N-P deliverable; until then operators must
+/// use `ade_node key-gen-KES` to produce an `ade.kes.seed.v1` envelope
+/// and load via [`load_ade_kes_signing_key`].
 pub fn load_kes_signing_key_skey(path: &Path) -> Result<KesSecret, KeyLoadError> {
-    let payload = read_envelope_payload(path, KES_SIGNING_KEY_TYPE)?;
-    KesSecret::from_bytes_zeroizing(&payload).map_err(KeyLoadError::Crypto)
+    let _ = read_envelope_payload(path, KES_SIGNING_KEY_TYPE)?;
+    Err(KeyLoadError::UnsupportedExpandedKesKeyFormat)
+}
+
+/// Load an Ade-native KES signing key from an `ade.kes.seed.v1` envelope
+/// file. Returns a [`KesSecret`] advanced to the envelope's embedded
+/// `period_idx`.
+pub fn load_ade_kes_signing_key(path: &Path) -> Result<KesSecret, KeyLoadError> {
+    let buf = read_file_bytes(path)?;
+    let env = ade_kes_envelope::parse(&buf).map_err(KeyLoadError::AdeEnvelope)?;
+    KesSecret::from_seed_at_period(&env.seed_32, env.period_idx)
+        .map_err(KeyLoadError::Crypto)
 }
 
 /// Load an Ed25519 cold signing key from a cardano-cli text-envelope
@@ -60,6 +89,38 @@ pub fn load_kes_signing_key_skey(path: &Path) -> Result<KesSecret, KeyLoadError>
 pub fn load_cold_signing_key_skey(path: &Path) -> Result<ColdSigningKey, KeyLoadError> {
     let payload = read_envelope_payload(path, POOL_SIGNING_KEY_TYPE)?;
     ColdSigningKey::from_bytes_zeroizing(&payload).map_err(KeyLoadError::Crypto)
+}
+
+// =========================================================================
+// Writer
+// =========================================================================
+
+/// Write an Ade-native KES envelope (`ade.kes.seed.v1`) to `path` with
+/// permissions `0o600`. Used by `ade_node key-gen-KES`. The file is
+/// truncated if it exists. Errors collapse to
+/// `KeyLoadError::Io(ErrorKind)` so the path / contents never appear in
+/// logs.
+pub fn write_ade_kes_envelope(
+    path: &Path,
+    seed: &[u8; 32],
+    period_idx: u32,
+) -> Result<(), KeyLoadError> {
+    use std::io::Write;
+    let envelope = AdeKesEnvelope {
+        seed_32: *seed,
+        period_idx,
+    };
+    let bytes = ade_kes_envelope::serialize(&envelope);
+    let mut f = std::fs::OpenOptions::new()
+        .create(true)
+        .write(true)
+        .truncate(true)
+        .mode(0o600)
+        .open(path)
+        .map_err(|e| KeyLoadError::Io(e.kind()))?;
+    f.write_all(&bytes).map_err(|e| KeyLoadError::Io(e.kind()))?;
+    f.sync_all().map_err(|e| KeyLoadError::Io(e.kind()))?;
+    Ok(())
 }
 
 // =========================================================================
@@ -90,10 +151,15 @@ pub enum KeyLoadError {
     /// Underlying RED crypto wrapper rejected the decoded bytes
     /// (wrong length, malformed seed, etc.).
     Crypto(SigningError),
+    /// PHASE4-N-O policy: cardano-cli's expanded Sum6KES skey is not
+    /// importable in this release. PHASE4-N-P will close this path.
+    UnsupportedExpandedKesKeyFormat,
+    /// Ade-native KES envelope parse error.
+    AdeEnvelope(AdeKesEnvelopeError),
 }
 
 // =========================================================================
-// Envelope reader
+// Envelope reader (cardano-cli text-envelope shape)
 // =========================================================================
 
 fn read_envelope_payload(
@@ -122,6 +188,14 @@ fn read_envelope_payload(
     // major-type 2 (0b010 | additional-info length-encoding).
     let raw = hex_decode(&env.cbor_hex).map_err(|d| KeyLoadError::CborHexDecode { detail: d })?;
     decode_cbor_byte_string(&raw).map_err(|d| KeyLoadError::CborHexDecode { detail: d })
+}
+
+fn read_file_bytes(path: &Path) -> Result<Vec<u8>, KeyLoadError> {
+    let mut file = std::fs::File::open(path).map_err(|e| KeyLoadError::Io(e.kind()))?;
+    let mut buf = Vec::new();
+    file.read_to_end(&mut buf)
+        .map_err(|e| KeyLoadError::Io(e.kind()))?;
+    Ok(buf)
 }
 
 #[derive(serde::Deserialize)]
@@ -263,7 +337,12 @@ fn hex_encode(bytes: &[u8]) -> String {
 #[allow(clippy::unwrap_used)]
 mod tests {
     use super::*;
+    use ade_crypto::kes::{verify_kes_signature, KesPeriod, KesVerificationKey};
+    use ade_crypto::vrf::{verify_vrf, VrfVerificationKey};
+    use cardano_crypto::kes::{KesAlgorithm, Sum6Kes};
+    use cardano_crypto::vrf::VrfDraft03;
     use std::io::Write;
+    use std::os::unix::fs::MetadataExt;
 
     fn write_envelope(
         dir: &std::path::Path,
@@ -283,12 +362,7 @@ mod tests {
     }
 
     #[test]
-    fn cardano_cli_skey_envelope_round_trips_through_keys_loader() {
-        use ade_crypto::kes::{verify_kes_signature, KesPeriod, KesVerificationKey};
-        use ade_crypto::vrf::{verify_vrf, VrfVerificationKey};
-        use cardano_crypto::kes::{KesAlgorithm, Sum6Kes};
-        use cardano_crypto::vrf::VrfDraft03;
-
+    fn vrf_and_cold_cardano_cli_skey_envelopes_round_trip() {
         let dir = tempfile::tempdir().unwrap();
 
         // ---- VRF: full 64-byte libsodium secret in cborHex ----
@@ -299,20 +373,6 @@ mod tests {
         let alpha = b"S1 round-trip alpha";
         let (proof, _output) = super::super::signing::vrf_prove(&vrf_sk, alpha).unwrap();
         verify_vrf(&VrfVerificationKey(vrf_vk_raw), &proof, alpha).unwrap();
-
-        // ---- KES: 32-byte seed in cborHex ----
-        let kes_seed = [0x42u8; 32];
-        let kes_path = write_envelope(dir.path(), "kes.skey", KES_SIGNING_KEY_TYPE, &kes_seed);
-        let kes_sk = load_kes_signing_key_skey(&kes_path).unwrap();
-        let msg = b"S1 round-trip msg";
-        let sig = super::super::signing::kes_sign(&kes_sk, KesPeriod(0), msg).unwrap();
-        let raw = Sum6Kes::gen_key_kes_from_seed_bytes(&kes_seed).unwrap();
-        let vk_bytes = Sum6Kes::raw_serialize_verification_key_kes(
-            &Sum6Kes::derive_verification_key(&raw).unwrap(),
-        );
-        let mut vk_arr = [0u8; 32];
-        vk_arr.copy_from_slice(&vk_bytes);
-        verify_kes_signature(&KesVerificationKey(vk_arr), KesPeriod(0), msg, &sig).unwrap();
 
         // ---- Cold: 32-byte seed in cborHex ----
         let cold_seed = [0x42u8; 32];
@@ -327,10 +387,222 @@ mod tests {
         assert_eq!(cold_sk.derive_verification_key_bytes(), vk_expected);
     }
 
+    // =====================================================================
+    // PHASE4-N-O — Ade-native KES envelope round-trip + signature interop
+    // =====================================================================
+
+    #[test]
+    fn ade_envelope_round_trips_through_loader_at_period_0() {
+        let dir = tempfile::tempdir().unwrap();
+        let seed = [0x42u8; 32];
+        let path = dir.path().join("kes.ade.skey");
+        write_ade_kes_envelope(&path, &seed, 0).unwrap();
+        let kes_sk = load_ade_kes_signing_key(&path).unwrap();
+        assert_eq!(kes_sk.current_period().0, 0);
+
+        let msg = b"S1 round-trip msg";
+        let sig = super::super::signing::kes_sign(&kes_sk, KesPeriod(0), msg).unwrap();
+
+        let raw = Sum6Kes::gen_key_kes_from_seed_bytes(&seed).unwrap();
+        let vk_bytes = Sum6Kes::raw_serialize_verification_key_kes(
+            &Sum6Kes::derive_verification_key(&raw).unwrap(),
+        );
+        let mut vk_arr = [0u8; 32];
+        vk_arr.copy_from_slice(&vk_bytes);
+        verify_kes_signature(&KesVerificationKey(vk_arr), KesPeriod(0), msg, &sig).unwrap();
+    }
+
+    #[test]
+    fn ade_envelope_loader_returns_kes_at_loaded_period() {
+        for period_idx in [0u32, 5, 17, 63] {
+            let dir = tempfile::tempdir().unwrap();
+            let seed = [0x11u8; 32];
+            let path = dir.path().join("kes.ade.skey");
+            write_ade_kes_envelope(&path, &seed, period_idx).unwrap();
+            let kes_sk = load_ade_kes_signing_key(&path).unwrap();
+            assert_eq!(kes_sk.current_period().0, period_idx);
+            // Signing at the loaded period must round-trip through verify.
+            let msg = b"loaded-period probe";
+            let sig =
+                super::super::signing::kes_sign(&kes_sk, KesPeriod(period_idx), msg).unwrap();
+            let raw = Sum6Kes::gen_key_kes_from_seed_bytes(&seed).unwrap();
+            let vk_bytes = Sum6Kes::raw_serialize_verification_key_kes(
+                &Sum6Kes::derive_verification_key(&raw).unwrap(),
+            );
+            let mut vk_arr = [0u8; 32];
+            vk_arr.copy_from_slice(&vk_bytes);
+            verify_kes_signature(
+                &KesVerificationKey(vk_arr),
+                KesPeriod(period_idx),
+                msg,
+                &sig,
+            )
+            .unwrap();
+        }
+    }
+
+    #[test]
+    fn ade_envelope_loader_rejects_signing_at_past_period() {
+        let dir = tempfile::tempdir().unwrap();
+        let seed = [0x22u8; 32];
+        let path = dir.path().join("kes.ade.skey");
+        write_ade_kes_envelope(&path, &seed, 5).unwrap();
+        let kes_sk = load_ade_kes_signing_key(&path).unwrap();
+        // After load at period 5, signing at period 0..=4 is fail-closed
+        // via SigningError::PeriodBackwards.
+        let err =
+            super::super::signing::kes_sign(&kes_sk, KesPeriod(0), b"past").unwrap_err();
+        match err {
+            SigningError::PeriodBackwards { .. } => (),
+            other => panic!("expected PeriodBackwards, got {:?}", other),
+        }
+    }
+
+    // =====================================================================
+    // PHASE4-N-O — cardano-cli expanded path fail-closed
+    // =====================================================================
+
+    #[test]
+    fn cardano_cli_kes_envelope_rejects_32_byte_payload() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = write_envelope(dir.path(), "kes.skey", KES_SIGNING_KEY_TYPE, &[0x42u8; 32]);
+        let err = load_kes_signing_key_skey(&path).unwrap_err();
+        assert!(matches!(err, KeyLoadError::UnsupportedExpandedKesKeyFormat));
+    }
+
+    #[test]
+    fn cardano_cli_kes_envelope_rejects_608_byte_payload() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = write_envelope(dir.path(), "kes.skey", KES_SIGNING_KEY_TYPE, &[0xABu8; 608]);
+        let err = load_kes_signing_key_skey(&path).unwrap_err();
+        assert!(matches!(err, KeyLoadError::UnsupportedExpandedKesKeyFormat));
+    }
+
+    #[test]
+    fn cardano_cli_kes_envelope_rejects_612_byte_payload() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = write_envelope(dir.path(), "kes.skey", KES_SIGNING_KEY_TYPE, &[0xCDu8; 612]);
+        let err = load_kes_signing_key_skey(&path).unwrap_err();
+        assert!(matches!(err, KeyLoadError::UnsupportedExpandedKesKeyFormat));
+    }
+
+    // =====================================================================
+    // PHASE4-N-O — closed Ade envelope error surfaces
+    // =====================================================================
+
+    #[test]
+    fn ade_envelope_loader_returns_unknown_format() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("kes.ade.skey");
+        let json = r#"{"format":"other.format.v1","role":"kes_hot_signing_key","crypto":"Sum6KES-Ed25519DSIGN","seed_32":"4242424242424242424242424242424242424242424242424242424242424242","period_idx":0,"format_version":1}"#;
+        std::fs::File::create(&path)
+            .unwrap()
+            .write_all(json.as_bytes())
+            .unwrap();
+        let err = load_ade_kes_signing_key(&path).unwrap_err();
+        assert!(matches!(
+            err,
+            KeyLoadError::AdeEnvelope(AdeKesEnvelopeError::UnknownEnvelopeFormat)
+        ));
+    }
+
+    #[test]
+    fn ade_envelope_loader_returns_wrong_role() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("kes.ade.skey");
+        let json = r#"{"format":"ade.kes.seed.v1","role":"vrf_signing_key","crypto":"Sum6KES-Ed25519DSIGN","seed_32":"4242424242424242424242424242424242424242424242424242424242424242","period_idx":0,"format_version":1}"#;
+        std::fs::File::create(&path)
+            .unwrap()
+            .write_all(json.as_bytes())
+            .unwrap();
+        let err = load_ade_kes_signing_key(&path).unwrap_err();
+        assert!(matches!(
+            err,
+            KeyLoadError::AdeEnvelope(AdeKesEnvelopeError::WrongKeyRole)
+        ));
+    }
+
+    #[test]
+    fn ade_envelope_loader_returns_unsupported_crypto() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("kes.ade.skey");
+        let json = r#"{"format":"ade.kes.seed.v1","role":"kes_hot_signing_key","crypto":"Sum7KES-Ed25519DSIGN","seed_32":"4242424242424242424242424242424242424242424242424242424242424242","period_idx":0,"format_version":1}"#;
+        std::fs::File::create(&path)
+            .unwrap()
+            .write_all(json.as_bytes())
+            .unwrap();
+        let err = load_ade_kes_signing_key(&path).unwrap_err();
+        assert!(matches!(
+            err,
+            KeyLoadError::AdeEnvelope(AdeKesEnvelopeError::UnsupportedCryptoTag)
+        ));
+    }
+
+    #[test]
+    fn ade_envelope_loader_returns_missing_seed_32() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("kes.ade.skey");
+        let json = r#"{"format":"ade.kes.seed.v1","role":"kes_hot_signing_key","crypto":"Sum6KES-Ed25519DSIGN","period_idx":0,"format_version":1}"#;
+        std::fs::File::create(&path)
+            .unwrap()
+            .write_all(json.as_bytes())
+            .unwrap();
+        let err = load_ade_kes_signing_key(&path).unwrap_err();
+        assert!(matches!(
+            err,
+            KeyLoadError::AdeEnvelope(AdeKesEnvelopeError::MissingSeed32)
+        ));
+    }
+
+    #[test]
+    fn ade_envelope_loader_returns_period_idx_overflow() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("kes.ade.skey");
+        let json = r#"{"format":"ade.kes.seed.v1","role":"kes_hot_signing_key","crypto":"Sum6KES-Ed25519DSIGN","seed_32":"4242424242424242424242424242424242424242424242424242424242424242","period_idx":65,"format_version":1}"#;
+        std::fs::File::create(&path)
+            .unwrap()
+            .write_all(json.as_bytes())
+            .unwrap();
+        let err = load_ade_kes_signing_key(&path).unwrap_err();
+        assert!(matches!(
+            err,
+            KeyLoadError::AdeEnvelope(AdeKesEnvelopeError::PeriodIdxOutOfRange)
+        ));
+    }
+
+    #[test]
+    fn ade_envelope_loader_returns_malformed_json() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("kes.ade.skey");
+        std::fs::File::create(&path)
+            .unwrap()
+            .write_all(b"{ not json at all }")
+            .unwrap();
+        let err = load_ade_kes_signing_key(&path).unwrap_err();
+        assert!(matches!(
+            err,
+            KeyLoadError::AdeEnvelope(AdeKesEnvelopeError::MalformedJson { .. })
+        ));
+    }
+
+    #[test]
+    fn write_ade_kes_envelope_sets_0600_permissions() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("kes.ade.skey");
+        let seed = [0x33u8; 32];
+        write_ade_kes_envelope(&path, &seed, 0).unwrap();
+        let meta = std::fs::metadata(&path).unwrap();
+        let mode = meta.mode() & 0o777;
+        assert_eq!(mode, 0o600, "expected 0o600, got {:o}", mode);
+    }
+
+    // =====================================================================
+    // VRF / cold negative paths (unchanged from N-C S1)
+    // =====================================================================
+
     #[test]
     fn keys_loader_rejects_wrong_envelope_type() {
         let dir = tempfile::tempdir().unwrap();
-        // Build a KES envelope and ask the VRF loader to consume it.
         let kes_seed = [0x11u8; 32];
         let path = write_envelope(dir.path(), "wrong.skey", KES_SIGNING_KEY_TYPE, &kes_seed);
         let err = load_vrf_signing_key_skey(&path).unwrap_err();
@@ -347,7 +619,6 @@ mod tests {
     fn keys_loader_rejects_malformed_cbor_hex() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("bad.skey");
-        // Garbled cborHex: odd-length hex, then non-hex characters.
         let json = format!(
             "{{\"type\":\"{}\",\"description\":\"bad\",\"cborHex\":\"5820zzzzz\"}}",
             VRF_SIGNING_KEY_TYPE
@@ -362,15 +633,21 @@ mod tests {
 
     #[test]
     fn key_load_error_io_carries_no_path_bytes() {
-        // Construct a path that contains a recognizable byte sequence
-        // and confirm the error formatting omits it. The path is
-        // intentionally unreachable: the loader's I/O error returns
-        // only `ErrorKind`, never the path.
-        let exotic_path = std::path::PathBuf::from("/tmp/__N_C_S1_DOES_NOT_EXIST_SECRET_42__");
+        let exotic_path = std::path::PathBuf::from("/tmp/__N_O_S1_DOES_NOT_EXIST_SECRET_42__");
         let err = load_vrf_signing_key_skey(&exotic_path).unwrap_err();
         let s = format!("{:?}", err);
         assert!(matches!(err, KeyLoadError::Io(_)));
-        assert!(!s.contains("__N_C_S1_DOES_NOT_EXIST_SECRET_42__"));
+        assert!(!s.contains("__N_O_S1_DOES_NOT_EXIST_SECRET_42__"));
+        assert!(!s.contains("/tmp/"));
+    }
+
+    #[test]
+    fn ade_envelope_load_error_io_carries_no_path_bytes() {
+        let exotic_path = std::path::PathBuf::from("/tmp/__N_O_S1_ADE_SECRET_88__");
+        let err = load_ade_kes_signing_key(&exotic_path).unwrap_err();
+        let s = format!("{:?}", err);
+        assert!(matches!(err, KeyLoadError::Io(_)));
+        assert!(!s.contains("__N_O_S1_ADE_SECRET_88__"));
         assert!(!s.contains("/tmp/"));
     }
 }

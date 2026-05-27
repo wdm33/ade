@@ -27,6 +27,10 @@ use std::path::PathBuf;
 pub enum Mode {
     WireOnly,
     Admission,
+    /// PHASE4-N-O: one-shot Ade-native KES key generation. Emits an
+    /// `ade.kes.seed.v1` envelope at `--out-file PATH`. Does not
+    /// require `--genesis-path` or any peer/admission flag.
+    KeyGenKes,
 }
 
 impl Mode {
@@ -34,6 +38,7 @@ impl Mode {
         match s {
             "wire_only" => Some(Self::WireOnly),
             "admission" => Some(Self::Admission),
+            "key_gen_kes" => Some(Self::KeyGenKes),
             _ => None,
         }
     }
@@ -65,6 +70,20 @@ pub struct Cli {
     /// bundle imported by the admission runner (PHASE4-N-M-C
     /// CN-CONS-IN-01). Required when `--mode admission` is set.
     pub consensus_inputs_path: Option<PathBuf>,
+    // -------------------------------------------------------------------
+    // PHASE4-N-O — KeyGenKes-mode flags. Each is parsed unconditionally
+    // and validated only when `--mode key_gen_kes` is set (via
+    // [`Cli::extract_key_gen_kes_cli`]).
+    // -------------------------------------------------------------------
+    /// Target path for the emitted `ade.kes.seed.v1` envelope. Required
+    /// when `--mode key_gen_kes` is set.
+    pub out_file: Option<PathBuf>,
+    /// KES period index to encode into the envelope (default 0).
+    pub period_idx: Option<u32>,
+    /// Optional test seam: 32 bytes of seed material read from this
+    /// file instead of `/dev/urandom`. Honest-scope: production use
+    /// MUST omit this flag.
+    pub seed_file: Option<PathBuf>,
 }
 
 /// Closed admission-mode CLI bundle (B5).
@@ -101,6 +120,19 @@ pub enum CliError {
     InvalidNetworkMagic(String),
     AdmissionMissingFlag(&'static str),
     AdmissionEmptyPeerList,
+    // PHASE4-N-O — KeyGenKes-mode errors.
+    KeyGenMissingOutFile,
+    InvalidPeriodIdx(String),
+}
+
+/// Closed PHASE4-N-O `key_gen_kes` CLI bundle. Constructed via
+/// [`Cli::extract_key_gen_kes_cli`] which validates that the
+/// load-bearing flags are present.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct KeyGenKesCli {
+    pub out_file: PathBuf,
+    pub period_idx: u32,
+    pub seed_file: Option<PathBuf>,
 }
 
 impl Cli {
@@ -129,6 +161,9 @@ impl Cli {
         let mut network_magic: Option<u32> = None;
         let mut genesis_hash_hex: Option<String> = None;
         let mut consensus_inputs_path: Option<PathBuf> = None;
+        let mut out_file: Option<PathBuf> = None;
+        let mut period_idx: Option<u32> = None;
+        let mut seed_file: Option<PathBuf> = None;
 
         while let Some(arg) = iter.next() {
             match arg.as_str() {
@@ -241,17 +276,41 @@ impl Cli {
                     })?;
                     consensus_inputs_path = Some(PathBuf::from(v));
                 }
+                "--out-file" => {
+                    let v = iter.next().ok_or_else(|| {
+                        CliError::FlagMissingValue("--out-file".to_string())
+                    })?;
+                    out_file = Some(PathBuf::from(v));
+                }
+                "--period-idx" => {
+                    let v = iter.next().ok_or_else(|| {
+                        CliError::FlagMissingValue("--period-idx".to_string())
+                    })?;
+                    period_idx = Some(
+                        v.parse::<u32>()
+                            .map_err(|_| CliError::InvalidPeriodIdx(v))?,
+                    );
+                }
+                "--seed-file" => {
+                    let v = iter.next().ok_or_else(|| {
+                        CliError::FlagMissingValue("--seed-file".to_string())
+                    })?;
+                    seed_file = Some(PathBuf::from(v));
+                }
                 other => return Err(CliError::UnknownFlag(other.to_string())),
             }
         }
 
-        // genesis-path is required in admission mode; in wire-only
-        // mode it remains required at CLI parse time (the operator
-        // explicitly opts into "no admission" via --mode wire_only,
-        // but the flag itself is still parsed for the future
-        // admission cluster). Honest-scope: the wire-only path
-        // does not actually consume genesis_path.
-        let genesis_path = genesis_path.ok_or(CliError::MissingGenesisPath)?;
+        // genesis-path is required in admission and wire-only modes.
+        // KeyGenKes is a one-shot operator command with no chain
+        // context; --genesis-path is not relevant. We synthesize a
+        // sentinel placeholder so the field stays non-optional for
+        // downstream consumers.
+        let genesis_path = if mode == Mode::KeyGenKes {
+            genesis_path.unwrap_or_else(PathBuf::new)
+        } else {
+            genesis_path.ok_or(CliError::MissingGenesisPath)?
+        };
         Ok(Self {
             genesis_path,
             network,
@@ -270,6 +329,24 @@ impl Cli {
             network_magic,
             genesis_hash_hex,
             consensus_inputs_path,
+            out_file,
+            period_idx,
+            seed_file,
+        })
+    }
+
+    /// Validate `key_gen_kes`-mode requirements + return a closed
+    /// [`KeyGenKesCli`]. Missing `--out-file` surfaces as
+    /// `CliError::KeyGenMissingOutFile`.
+    pub fn extract_key_gen_kes_cli(&self) -> Result<KeyGenKesCli, CliError> {
+        let out_file = self
+            .out_file
+            .clone()
+            .ok_or(CliError::KeyGenMissingOutFile)?;
+        Ok(KeyGenKesCli {
+            out_file,
+            period_idx: self.period_idx.unwrap_or(0),
+            seed_file: self.seed_file.clone(),
         })
     }
 
@@ -527,5 +604,92 @@ mod tests {
             err,
             CliError::InvalidSeedPointSlot("not-a-number".to_string())
         );
+    }
+
+    // =====================================================================
+    // PHASE4-N-O — key_gen_kes mode
+    // =====================================================================
+
+    #[test]
+    fn cli_parses_key_gen_kes_mode_with_out_file() {
+        let cli = parse(&[
+            "--mode",
+            "key_gen_kes",
+            "--out-file",
+            "/tmp/kes.ade.skey",
+        ])
+        .expect("parse");
+        assert_eq!(cli.mode, Mode::KeyGenKes);
+        let kgc = cli.extract_key_gen_kes_cli().expect("extract");
+        assert_eq!(kgc.out_file, PathBuf::from("/tmp/kes.ade.skey"));
+        assert_eq!(kgc.period_idx, 0);
+        assert!(kgc.seed_file.is_none());
+    }
+
+    #[test]
+    fn cli_parses_key_gen_kes_with_period_idx() {
+        let cli = parse(&[
+            "--mode",
+            "key_gen_kes",
+            "--out-file",
+            "/tmp/kes.ade.skey",
+            "--period-idx",
+            "17",
+        ])
+        .expect("parse");
+        let kgc = cli.extract_key_gen_kes_cli().expect("extract");
+        assert_eq!(kgc.period_idx, 17);
+    }
+
+    #[test]
+    fn cli_parses_key_gen_kes_with_seed_file() {
+        let cli = parse(&[
+            "--mode",
+            "key_gen_kes",
+            "--out-file",
+            "/tmp/kes.ade.skey",
+            "--seed-file",
+            "/tmp/seed.bin",
+        ])
+        .expect("parse");
+        let kgc = cli.extract_key_gen_kes_cli().expect("extract");
+        assert_eq!(kgc.seed_file, Some(PathBuf::from("/tmp/seed.bin")));
+    }
+
+    #[test]
+    fn cli_rejects_key_gen_kes_without_out_file() {
+        let cli = parse(&["--mode", "key_gen_kes"]).expect("base parse");
+        let err = cli.extract_key_gen_kes_cli().expect_err("must reject");
+        assert_eq!(err, CliError::KeyGenMissingOutFile);
+    }
+
+    #[test]
+    fn cli_rejects_key_gen_kes_with_bad_period_idx() {
+        let err = parse(&[
+            "--mode",
+            "key_gen_kes",
+            "--out-file",
+            "/tmp/kes.ade.skey",
+            "--period-idx",
+            "not-a-number",
+        ])
+        .expect_err("must reject");
+        assert_eq!(
+            err,
+            CliError::InvalidPeriodIdx("not-a-number".to_string())
+        );
+    }
+
+    #[test]
+    fn cli_key_gen_kes_does_not_require_genesis_path() {
+        // key_gen_kes is a one-shot operator command; --genesis-path is
+        // not relevant. CLI parse must succeed without it.
+        let _cli = parse(&[
+            "--mode",
+            "key_gen_kes",
+            "--out-file",
+            "/tmp/kes.ade.skey",
+        ])
+        .expect("parse without --genesis-path");
     }
 }

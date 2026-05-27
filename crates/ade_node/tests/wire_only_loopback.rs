@@ -219,6 +219,9 @@ fn make_cli(peer_addr: std::net::SocketAddr, log_path: PathBuf, mode: Mode) -> C
         network_magic: None,
         genesis_hash_hex: None,
         consensus_inputs_path: None,
+        out_file: None,
+        period_idx: None,
+        seed_file: None,
     }
 }
 

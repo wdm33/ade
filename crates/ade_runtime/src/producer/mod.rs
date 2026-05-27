@@ -16,6 +16,7 @@
 //! `docs/clusters/PHASE4-N-C/N-C-S1.md` for the full key-boundary contract.
 //! Mechanically enforced by `ci/ci_check_private_key_custody.sh`.
 
+pub mod ade_kes_envelope;
 pub mod broadcast;
 pub mod broadcast_to_served;
 pub mod keys;

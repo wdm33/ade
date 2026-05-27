@@ -172,7 +172,11 @@ fn run_live(cfg: &SessionConfig) -> io::Result<()> {
     );
     let _cold = ade_runtime::producer::keys::load_cold_signing_key_skey(&cfg.cold_skey)
         .map_err(|e| io::Error::other(format!("cold_skey load: {e:?}")))?;
-    let _kes = ade_runtime::producer::keys::load_kes_signing_key_skey(&cfg.kes_skey)
+    // PHASE4-N-O: KES keys are loaded from the Ade-native
+    // `ade.kes.seed.v1` envelope produced by `ade_node key-gen-KES`. The
+    // cardano-cli `KesSigningKey_ed25519_kes_2^6` envelope is
+    // fail-closed in this release (PHASE4-N-P deliverable).
+    let _kes = ade_runtime::producer::keys::load_ade_kes_signing_key(&cfg.kes_skey)
         .map_err(|e| io::Error::other(format!("kes_skey load: {e:?}")))?;
     let _vrf = ade_runtime::producer::keys::load_vrf_signing_key_skey(&cfg.vrf_skey)
         .map_err(|e| io::Error::other(format!("vrf_skey load: {e:?}")))?;

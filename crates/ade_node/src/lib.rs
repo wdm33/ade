@@ -16,11 +16,13 @@
 pub mod admission;
 pub mod admission_log;
 pub mod cli;
+pub mod key_gen;
 pub mod live_log;
 pub mod node;
 pub mod wire_only;
 
-pub use cli::{Cli, CliError, Mode};
+pub use cli::{Cli, CliError, KeyGenKesCli, Mode};
+pub use key_gen::{run_key_gen_kes, EXIT_KEY_GEN_FAILURE};
 pub use live_log::{
     LiveLogEvent, LiveLogWriter, ModeTag, PeerDialFailureKind, WireOnlyShutdownReason,
 };

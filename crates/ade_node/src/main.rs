@@ -98,6 +98,22 @@ async fn main() -> ExitCode {
             };
             ade_node::admission::dispatch_admission(acli, shutdown_rx).await
         }
+        Mode::KeyGenKes => {
+            // key-gen-KES is a one-shot command. The wire-only writer
+            // opened at startup is not used (key-gen emits its closed
+            // four-line CLI vocabulary directly to stdout); we drop it
+            // so no empty JSONL file lingers.
+            drop(writer);
+            let _ = std::fs::remove_file(&cli.log_path);
+            let kgc = match cli.extract_key_gen_kes_cli() {
+                Ok(k) => k,
+                Err(e) => {
+                    print_cli_error(&e);
+                    return ExitCode::from(ade_node::EXIT_GENERIC_STARTUP as u8);
+                }
+            };
+            ade_node::run_key_gen_kes(kgc).await
+        }
     }
 }
 
@@ -114,7 +130,7 @@ fn print_cli_error(e: &CliError) {
         }
         CliError::UnknownMode(m) => {
             eprintln!(
-                "ade_node: --mode {} is not a known mode (expected wire_only | admission)",
+                "ade_node: --mode {} is not a known mode (expected wire_only | admission | key_gen_kes)",
                 m
             );
         }
@@ -135,6 +151,12 @@ fn print_cli_error(e: &CliError) {
         }
         CliError::AdmissionEmptyPeerList => {
             eprintln!("ade_node: --mode admission requires at least one --peer");
+        }
+        CliError::KeyGenMissingOutFile => {
+            eprintln!("ade_node: --mode key_gen_kes requires --out-file");
+        }
+        CliError::InvalidPeriodIdx(s) => {
+            eprintln!("ade_node: --period-idx {} is not a valid u32", s);
         }
     }
 }

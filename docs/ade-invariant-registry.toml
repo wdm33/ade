@@ -2296,6 +2296,33 @@ introduced_in = "PHASE4-N-C"
 strengthened_in = []
 
 [[rules]]
+id = "DC-CRYPTO-06"
+tier = "derived"
+statement = "Ade-native KES envelope is the sole accepted hot-signing-key envelope format. Closed grammar `ade.kes.seed.v1`: load-bearing fields {`format`, `role`, `crypto`, `seed_32`, `period_idx`, `format_version`} are validated with `#[serde(deny_unknown_fields)]`; optional metadata {`genesis_hash`, `network_magic`, `created_at_slot`, `created_by`} is ignored but does not break load. The loader returns closed `AdeKesEnvelopeError` variants for every unsupported shape (UnknownEnvelopeFormat, WrongKeyRole, UnsupportedCryptoTag, MissingSeed32, MalformedSeed32, MalformedPeriodIdx, PeriodIdxOutOfRange, UnsupportedFormatVersion, MalformedJson). No fallback parser. No heuristic guess. Private-key bytes never appear in any error/log surface."
+source = "docs/clusters/PHASE4-N-O/S1.md §1; docs/active/op-ops-04-ade-native-kes-flow.md (operator spec verbatim)"
+cross_ref = ["OP-OPS-04", "DC-CRYPTO-03", "DC-CRYPTO-04", "DC-CRYPTO-05", "T-KEY-01"]
+code_locus = "crates/ade_runtime/src/producer/ade_kes_envelope.rs (parse, serialize, AdeKesEnvelopeError); crates/ade_runtime/src/producer/keys.rs (load_ade_kes_signing_key, write_ade_kes_envelope, KeyLoadError::AdeEnvelope)"
+tests = ["parse_round_trips_serialize", "parse_round_trips_at_nonzero_period", "parse_rejects_unknown_format", "parse_rejects_wrong_role", "parse_rejects_unsupported_crypto", "parse_rejects_unsupported_format_version", "parse_rejects_missing_seed_32", "parse_rejects_malformed_seed_32_length", "parse_rejects_uppercase_seed_hex", "parse_rejects_period_idx_overflow", "parse_accepts_period_idx_boundary", "parse_rejects_unknown_load_bearing_field", "parse_accepts_optional_metadata_fields", "parse_rejects_malformed_json", "serialize_does_not_leak_extra_fields", "envelope_error_carries_no_seed_bytes"]
+ci_script = "ci/ci_check_kes_envelope_closed.sh"
+status = "enforced"
+introduced_in = "PHASE4-N-O"
+strengthened_in = []
+
+[[rules]]
+id = "DC-CRYPTO-07"
+tier = "derived"
+statement = "cardano-cli's `KesSigningKey_ed25519_kes_2^6` envelope (the upstream `Sum6KES` expanded-tree serialization, 608 bytes for a fresh key) is fail-closed via `KeyLoadError::UnsupportedExpandedKesKeyFormat`. Any payload size (32, 608, 612, anything else) carried under that envelope type maps to the same closed error variant; no fallback parser is invoked. The expanded-import path is the PHASE4-N-P deliverable (full `ade_crypto::kes_sum` reimplementation + cross-impl vectors + CI gate); until that lands, operators MUST use `ade_node --mode key_gen_kes` to produce an `ade.kes.seed.v1` envelope."
+source = "docs/clusters/PHASE4-N-O/S1.md §1; docs/active/op-ops-04-ade-native-kes-flow.md §Format boundary"
+cross_ref = ["OP-OPS-04", "DC-CRYPTO-06"]
+code_locus = "crates/ade_runtime/src/producer/keys.rs (load_kes_signing_key_skey returns Err(UnsupportedExpandedKesKeyFormat) for every payload)"
+tests = ["cardano_cli_kes_envelope_rejects_32_byte_payload", "cardano_cli_kes_envelope_rejects_608_byte_payload", "cardano_cli_kes_envelope_rejects_612_byte_payload"]
+ci_script = "ci/ci_check_kes_envelope_closed.sh"
+status = "enforced"
+introduced_in = "PHASE4-N-O"
+strengthened_in = []
+open_obligation = "PHASE4-N-P deferral: cardano-cli expanded `Sum6KES` import becomes supported when `ade_crypto::kes_sum` ships. On PHASE4-N-P close, this rule strengthens from `fail-closed always` to `accept 608-byte expanded payloads with cross-impl verification`; the `UnsupportedExpandedKesKeyFormat` variant remains as the rejector for the 612-byte / malformed / unknown-shape cases."
+
+[[rules]]
 id = "DC-CONS-11"
 tier = "derived"
 statement = "OpCert kes_period field equals the KES period at the forged slot under an operator-supplied anchor. period_at_slot(slot, anchor) = (slot - anchor) / slots_per_kes_period (integer floor). BLUE rejects header/opcert combinations with mismatched periods at forge time. BLUE MUST NOT infer the anchor from wall-clock or filesystem state; the anchor is a pure input on the canonical ProducerTick."
@@ -2420,14 +2447,15 @@ evidence_notes = "Cardano-specific only in that the validators it wraps are Ade'
 [[rules]]
 id = "OP-OPS-04"
 tier = "operational"
-statement = "Operator-supplied keys. Ade does NOT generate cold / KES / VRF keys. Operator provides cardano-cli-format key files (*.skey, opcert) loaded by ade_runtime::producer::keys; private-key material never crosses into BLUE. Key generation remains a cardano-cli operator workflow. Mechanical enforcement of the RED-only custody invariant is provided by ci/ci_check_private_key_custody.sh (closure proof for CE-N-C-1; cross-referenced by DC-CRYPTO-03/04/05)."
-source = "docs/planning/phase4-n-c-invariants.md §7 (OQ1)"
-cross_ref = ["DC-CRYPTO-03", "DC-CRYPTO-04", "DC-CRYPTO-05", "DC-CONS-12"]
-code_locus = "crates/ade_runtime/src/producer/keys.rs (load_*_signing_key_skey, KeyLoadError); crates/ade_runtime/src/producer/signing.rs (RED-confined custody)"
-tests = ["cardano_cli_skey_envelope_round_trips_through_keys_loader", "keys_loader_rejects_wrong_envelope_type", "keys_loader_rejects_malformed_cbor_hex", "key_load_error_io_carries_no_path_bytes"]
-ci_script = "ci/ci_check_private_key_custody.sh"
+statement = "Operator-supplied keys. For the challenge build, Ade supports the Ade-native KES key-generation flow: `ade_node --mode key_gen_kes --out-file PATH` emits a closed `ade.kes.seed.v1` envelope, loaded back via `ade_runtime::producer::keys::load_ade_kes_signing_key`. VRF and cold (Ed25519) keys continue to be operator-supplied via cardano-cli text-envelope `.skey` files. Private-key material never crosses into BLUE — the entire RED custody surface lives under `crates/ade_runtime/src/producer/{keys,signing,ade_kes_envelope}.rs`. The cardano-cli expanded `KesSigningKey_ed25519_kes_2^6` envelope is fail-closed via `KeyLoadError::UnsupportedExpandedKesKeyFormat` until PHASE4-N-P lands. Mechanical enforcement: ci/ci_check_private_key_custody.sh + ci/ci_check_kes_envelope_closed.sh."
+source = "docs/planning/phase4-n-c-invariants.md §7 (OQ1); docs/active/op-ops-04-ade-native-kes-flow.md (PHASE4-N-O verbatim spec)"
+cross_ref = ["DC-CRYPTO-03", "DC-CRYPTO-04", "DC-CRYPTO-05", "DC-CRYPTO-06", "DC-CRYPTO-07", "DC-CONS-12"]
+code_locus = "crates/ade_runtime/src/producer/keys.rs (load_*_signing_key_skey, load_ade_kes_signing_key, write_ade_kes_envelope, KeyLoadError); crates/ade_runtime/src/producer/ade_kes_envelope.rs (closed envelope grammar); crates/ade_runtime/src/producer/signing.rs (RED-confined custody, KesSecret::from_seed_at_period); crates/ade_node/src/key_gen.rs (one-shot key-gen-KES surface)"
+tests = ["ade_envelope_round_trips_through_loader_at_period_0", "ade_envelope_loader_returns_kes_at_loaded_period", "ade_envelope_loader_rejects_signing_at_past_period", "cardano_cli_kes_envelope_rejects_32_byte_payload", "cardano_cli_kes_envelope_rejects_608_byte_payload", "cardano_cli_kes_envelope_rejects_612_byte_payload", "ade_envelope_loader_returns_unknown_format", "ade_envelope_loader_returns_wrong_role", "ade_envelope_loader_returns_unsupported_crypto", "ade_envelope_loader_returns_missing_seed_32", "ade_envelope_loader_returns_period_idx_overflow", "ade_envelope_loader_returns_malformed_json", "write_ade_kes_envelope_sets_0600_permissions", "vrf_and_cold_cardano_cli_skey_envelopes_round_trip", "keys_loader_rejects_wrong_envelope_type", "keys_loader_rejects_malformed_cbor_hex", "key_load_error_io_carries_no_path_bytes", "ade_envelope_load_error_io_carries_no_path_bytes", "run_key_gen_kes_writes_loadable_envelope", "run_key_gen_kes_writes_at_loaded_period", "run_key_gen_kes_rejects_short_seed_file"]
+ci_script = "ci/ci_check_private_key_custody.sh, ci/ci_check_kes_envelope_closed.sh"
 status = "enforced"
-open_obligation = "cardano-crypto 1.0.8 exposes gen_key_kes_from_seed_bytes but no raw_deserialize_signing_key_kes for Sum6Kes; the keys loader currently round-trips synthetic seed-encoded skeys but does not yet load real cardano-cli's 612-byte expanded-tree Sum6KES serialization. Resolution: either upstream a Sum6Kes deserializer, fork the parsing locally, or document the cardano-cli kes-skey conversion step in the operator workflow. CE-N-C-8 operator-action evidence must exercise whichever path closes."
+strengthened_in = ["PHASE4-N-O"]
+open_obligation = "PHASE4-N-P deferral only: cardano-cli's 608-byte expanded `KesSigningKey_ed25519_kes_2^6` payload is not yet importable. cardano-crypto 1.0.8 exposes only `gen_key_kes_from_seed_bytes` (seed-based reconstruction) and has no public constructor for rehydrating `SumSigningKey<D, H>` from the expanded bytes. PHASE4-N-O fail-closes the cardano-cli envelope via `KeyLoadError::UnsupportedExpandedKesKeyFormat` and ships the Ade-native flow (`ade_node --mode key_gen_kes` emitting `ade.kes.seed.v1`). PHASE4-N-P will implement `ade_crypto::kes_sum` from scratch with the recursive Blake2b-256 layout + cross-impl vectors + CI gate; on close, the cardano-cli expanded import path is restored and this obligation clears in full."
 
 [[rules]]
 id = "OP-OPS-05"

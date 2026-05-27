@@ -130,6 +130,41 @@ impl KesSecret {
         })
     }
 
+    /// Construct a `KesSecret` from a 32-byte seed advanced to
+    /// `period_idx`. Calls `Sum6Kes::gen_key_kes_from_seed_bytes(seed)`
+    /// to materialize the period-0 tree, then steps forward via
+    /// `kes_update` exactly `period_idx` times.
+    ///
+    /// Returns `SigningError::EvolutionExhausted` if `period_idx`
+    /// exceeds `SUM6_MAX_PERIOD` (63). The Sum6KES tree has 64 periods
+    /// (0..=63); period_idx > 63 has no representable state.
+    pub fn from_seed_at_period(
+        seed: &[u8; 32],
+        period_idx: u32,
+    ) -> Result<Self, SigningError> {
+        let sk = Self::from_bytes_zeroizing(seed)?;
+        if period_idx == 0 {
+            return Ok(sk);
+        }
+        kes_update(sk, KesPeriod(period_idx))
+    }
+
+    /// Verification-key fingerprint: 64-char lowercase hex of the
+    /// Sum6KES root verification key (Blake2b-256 hash of the
+    /// left/right subtree VKs). Non-secret; safe to print on the
+    /// `key-gen-KES` success line.
+    pub fn verification_key_fingerprint(&self) -> String {
+        let vk_bytes = Sum6Kes::raw_serialize_verification_key_kes(
+            &Sum6Kes::derive_verification_key(&self.inner)
+                .expect("derive_verification_key is total for a constructed KesSecret"),
+        );
+        let mut out = String::with_capacity(vk_bytes.len() * 2);
+        for b in &vk_bytes {
+            out.push_str(&format!("{:02x}", b));
+        }
+        out
+    }
+
     pub fn current_period(&self) -> KesPeriod {
         self.current_period
     }
