@@ -4438,3 +4438,50 @@ status = "enforced"
 introduced_in = "PHASE4-N-R-A"
 strengthened_in = []
 cluster = "PHASE4-N-R-A"
+
+# =============================================================================
+# PHASE4-N-R-B — Served snapshot + per-peer dispatch (CN-SNAPSHOT / DC-SNAPSHOT family, declared)
+# Sketch: docs/planning/phase4-n-r-invariants.md
+# Plan: docs/planning/phase4-n-r-cluster-slice-plan.md
+# Cluster doc: docs/clusters/PHASE4-N-R-B/cluster.md
+# Status: "declared" — enforcement debt to be closed by N-R-B B3/B4 slices.
+# =============================================================================
+
+[[rules]]
+id = "CN-SNAPSHOT-01"
+tier = "derived"
+statement = "A forged block becomes visible to peers only AFTER ServedChainHandle::push_atomic succeeds. The push_atomic call covers the full served_chain_admit call inside a watch::Sender::send_modify closure — no observer can read a torn snapshot mid-insertion. Coordinator emits BroadcastBlock; RED effect handler calls push_atomic; only on Ok(ServedTip) may per-peer reducers serve the block. Fail-closed shutdown on PushError."
+source = "docs/planning/phase4-n-r-invariants.md §1 (I4); §2 (N11); §3 (D6)"
+cross_ref = ["CN-FORGE-01", "DC-SNAPSHOT-01", "DC-CONS-17"]
+code_locus = "TBD — populated by N-R-B B2 slice (ade_runtime::producer::served_chain_handle::ServedChainHandle::push_atomic) + B3 slice (produce_mode BroadcastBlock arm wiring)"
+tests = ["handle_construction_yields_empty_snapshot", "view_subscribe_creates_independent_receiver", "served_tip_is_closed_value_type"]
+ci_script = ""
+status = "declared"
+introduced_in = "PHASE4-N-R-B"
+strengthened_in = []
+
+[[rules]]
+id = "CN-SNAPSHOT-02"
+tier = "derived"
+statement = "A RequestRange covering a slot range that is not entirely present in ServedChainSnapshot MUST return NoBlocks per the Cardano block-fetch protocol's failure semantics — no partial ad-hoc response, no silent truncation, no serving of a strict prefix. Both endpoints + every block between MUST be present in the snapshot for the server to issue StartBatch + Block* + BatchDone."
+source = "docs/planning/phase4-n-r-invariants.md §2 (N4); N-R-A A1 OQ8 audit"
+cross_ref = ["CN-PROTO-06", "DC-PROTO-07", "DC-PROTO-08", "CN-SNAPSHOT-01"]
+code_locus = "TBD — populated by N-R-B B4 slice (ade_network::block_fetch::server::producer_block_fetch_serve — partial-overlap fix)"
+tests = []
+ci_script = ""
+status = "declared"
+introduced_in = "PHASE4-N-R-B"
+strengthened_in = []
+
+[[rules]]
+id = "DC-SNAPSHOT-01"
+tier = "derived"
+statement = "ServedChainHandle::push_atomic is deterministic in its argument order: the same sequence of push_atomic(a₀), push_atomic(a₁), ..., push_atomic(aₙ) produces a byte-identical ServedChainView (fingerprint equals over BTreeMap insertion order). Replay-equivalence anchor for the broadcast → serve path."
+source = "docs/planning/phase4-n-r-invariants.md §3 (D6); §4 (R2)"
+cross_ref = ["DC-CONS-17", "CN-SNAPSHOT-01"]
+code_locus = "TBD — populated by N-R-B B2 slice + B4 integration tests over push_atomic byte-identity"
+tests = []
+ci_script = ""
+status = "declared"
+introduced_in = "PHASE4-N-R-B"
+strengthened_in = []

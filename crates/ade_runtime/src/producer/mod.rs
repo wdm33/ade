@@ -24,6 +24,7 @@ pub mod keys;
 pub mod producer_log;
 pub mod producer_shell;
 pub mod scheduler;
+pub mod served_chain_handle;
 pub mod served_chain_lookups;
 pub mod signing;
 pub mod tick_assembler;
