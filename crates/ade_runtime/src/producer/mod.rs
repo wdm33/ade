@@ -22,6 +22,7 @@ pub mod broadcast_to_served;
 pub mod coordinator;
 pub mod keys;
 pub mod producer_log;
+pub mod producer_shell;
 pub mod scheduler;
 pub mod served_chain_lookups;
 pub mod signing;
