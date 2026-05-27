@@ -2506,11 +2506,12 @@ statement = "Block bytes delivered via producer-side block-fetch Block{bytes} ar
 source = "docs/planning/phase4-n-a-successor-invariants.md §1 (I-1)"
 cross_ref = ["T-ENC-01", "DC-CONS-16", "CN-CONS-07"]
 code_locus = "crates/ade_network/src/block_fetch/server.rs (producer_block_fetch_serve constructs Block{bytes} only from served.range_bytes outputs); crates/ade_runtime/src/producer/served_chain_lookups.rs (ServedRangeLookup impl forwards ServedChainSnapshot::range_bytes which yields AcceptedBlock-derived slices); crates/ade_ledger/src/producer/served_chain.rs (ServedChainSnapshot.block_bytes returns AcceptedBlock.as_bytes() verbatim)"
-tests = ["producer_block_fetch_serve_block_bytes_equal_accepted_block_as_bytes", "session_transcript_served_block_bytes_equal_admitted_accepted_block_bytes"]
+tests = ["producer_block_fetch_serve_block_bytes_equal_accepted_block_as_bytes", "session_transcript_served_block_bytes_equal_admitted_accepted_block_bytes", "n_r_b_partial_overlap_from_endpoint_not_in_snapshot_yields_no_blocks", "n_r_b_partial_overlap_to_endpoint_not_in_snapshot_yields_no_blocks", "n_r_b_partial_overlap_both_endpoints_fabricated_yields_no_blocks"]
 ci_script = "ci/ci_check_block_fetch_server_closure.sh, ci/ci_check_broadcast_to_served_purity.sh"
 status = "enforced"
 authority_surface = "producer-side block-fetch wire-byte transmission"
 cluster = "PHASE4-N-G"
+strengthened_in = ["PHASE4-N-R-B"]
 evidence = ["End-to-end transcript test session_transcript_served_block_bytes_equal_admitted_accepted_block_bytes asserts every Block{bytes} payload in a corpus-driven transcript equals the admitted AcceptedBlock.as_bytes() at its (slot,hash) key.", "CI gate ci_check_block_fetch_server_closure.sh enforces that producer_block_fetch_serve sources Block{bytes} only through served.range_bytes (positive grep)."]
 
 [[rules]]
@@ -4336,9 +4337,9 @@ tests = ["n2n_listener_loopback_handshake_succeeds"]
 ci_script = ""
 status = "enforced"
 introduced_in = "PHASE4-N-Q"
-strengthened_in = []
+strengthened_in = ["PHASE4-N-R-B"]
 cluster = "PHASE4-N-Q"
-open_obligation = "Per-peer chain-sync / block-fetch frame dispatch from the listener into n2n_server::dispatch_* is not yet wired in `ade_node::produce_mode`; the binary's current main loop absorbs `PeerN2nServerChainSyncFrame` / `PeerN2nServerBlockFetchFrame` events with `_ => {}`. The listener itself (CN-PROD-01's load-bearing claim — handshake gate + pre-handshake byte drop) is fully enforced via the loopback test + the N-G n2n_server_pump reducer's existing tests. Reopen criteria: wire the per-peer dispatch in `produce_mode::handle_listener_event` and add an integration test asserting served bytes byte-identical to scheduler_step output through the real listener path; this is the follow-on forge cluster's work and lifts the open_obligation."
+open_obligation = "**PHASE4-N-R-B B3 closed the in-process dispatch arm**: produce_mode::handle_listener_event no longer absorbs PeerN2nServerChainSyncFrame / PeerN2nServerBlockFetchFrame with `_ => {}` — dispatch_server_frame_event explicitly calls n2n_server::{dispatch_chain_sync_frame, dispatch_block_fetch_frame} against the live ServedChainView. What still remains: transmitting the response bytes back to the peer requires extending MuxPump with an outbound-relay channel + a shared PeerId → mpsc::Sender<Vec<u8>> map. Reopen criteria: ship the outbound-relay extension to MuxPump and wire produce_mode to send dispatch reply bytes through the per-peer outbound channel; this enables the bounty-facing operator pass (peers can actually fetch forged blocks). Tracked for N-R-C or a separate follow-on cluster."
 
 [[rules]]
 id = "CN-PROD-02"
@@ -4466,12 +4467,13 @@ tier = "derived"
 statement = "A RequestRange covering a slot range that is not entirely present in ServedChainSnapshot MUST return NoBlocks per the Cardano block-fetch protocol's failure semantics — no partial ad-hoc response, no silent truncation, no serving of a strict prefix. Both endpoints + every block between MUST be present in the snapshot for the server to issue StartBatch + Block* + BatchDone."
 source = "docs/planning/phase4-n-r-invariants.md §2 (N4); N-R-A A1 OQ8 audit"
 cross_ref = ["CN-PROTO-06", "DC-PROTO-07", "DC-PROTO-08", "CN-SNAPSHOT-01"]
-code_locus = "TBD — populated by N-R-B B4 slice (ade_network::block_fetch::server::producer_block_fetch_serve — partial-overlap fix)"
-tests = []
+code_locus = "crates/ade_network/src/block_fetch/server.rs (producer_block_fetch_serve — endpoint-presence check via first_key/last_key comparison against requested range)"
+tests = ["n_r_b_partial_overlap_from_endpoint_not_in_snapshot_yields_no_blocks", "n_r_b_partial_overlap_to_endpoint_not_in_snapshot_yields_no_blocks", "n_r_b_partial_overlap_both_endpoints_fabricated_yields_no_blocks", "producer_block_fetch_serve_request_range_with_origin_endpoint_yields_no_blocks", "producer_block_fetch_serve_request_range_empty_in_chain_yields_no_blocks", "producer_block_fetch_serve_request_range_outside_chain_yields_no_blocks"]
 ci_script = ""
-status = "declared"
+status = "enforced"
 introduced_in = "PHASE4-N-R-B"
 strengthened_in = []
+cluster = "PHASE4-N-R-B"
 
 [[rules]]
 id = "DC-SNAPSHOT-01"
@@ -4479,9 +4481,10 @@ tier = "derived"
 statement = "ServedChainHandle::push_atomic is deterministic in its argument order: the same sequence of push_atomic(a₀), push_atomic(a₁), ..., push_atomic(aₙ) produces a byte-identical ServedChainView (fingerprint equals over BTreeMap insertion order). Replay-equivalence anchor for the broadcast → serve path."
 source = "docs/planning/phase4-n-r-invariants.md §3 (D6); §4 (R2)"
 cross_ref = ["DC-CONS-17", "CN-SNAPSHOT-01"]
-code_locus = "TBD — populated by N-R-B B2 slice + B4 integration tests over push_atomic byte-identity"
-tests = []
+code_locus = "crates/ade_runtime/src/producer/served_chain_handle.rs (push_atomic uses send_modify with served_chain_admit — the established broadcast_to_served drain-and-admit determinism carries through); crates/ade_runtime/src/producer/broadcast_to_served.rs (existing determinism tests cover the underlying invariant; push_atomic is a thin closure around the same primitive)"
+tests = ["drain_and_admit_is_deterministic_over_arrival_sequence", "drain_and_admit_no_io_no_clock", "drain_and_admit_admits_every_queued_block"]
 ci_script = ""
-status = "declared"
+status = "enforced"
 introduced_in = "PHASE4-N-R-B"
 strengthened_in = []
+cluster = "PHASE4-N-R-B"

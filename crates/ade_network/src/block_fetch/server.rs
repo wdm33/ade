@@ -163,12 +163,31 @@ pub fn producer_block_fetch_serve(
                 }
                 Point::Block { slot, hash } => (slot, hash),
             };
-            let entries = served.range_bytes(from, to);
+            let entries = served.range_bytes(from.clone(), to.clone());
             if entries.is_empty() {
                 state.state = BlockFetchState::Idle;
                 return Ok((state, BlockFetchServerStep::Replies(vec![ServerReply::no_blocks()])));
             }
-            // Non-empty range: [StartBatch, Block(b)*, BatchDone].
+            // PHASE4-N-R-B B4 / CN-SNAPSHOT-02 / N4 fix: enforce
+            // protocol-defined block-fetch failure semantics for
+            // partial-overlap RequestRange. Both endpoints MUST be
+            // present in the served snapshot; if either endpoint is
+            // missing, reply NoBlocks (matches Haskell
+            // ouroboros-network reference for unknown / partially-
+            // unavailable ranges). The previous implementation
+            // returned "whatever was in the BTreeMap range" — a
+            // permissive ad-hoc partial response that diverged from
+            // the canonical cardano-node behavior.
+            let first_key = (entries.first().map(|(s, h, _)| (*s, h.clone())))
+                .expect("entries is non-empty");
+            let last_key = (entries.last().map(|(s, h, _)| (*s, h.clone())))
+                .expect("entries is non-empty");
+            if first_key != from || last_key != to {
+                state.state = BlockFetchState::Idle;
+                return Ok((state, BlockFetchServerStep::Replies(vec![ServerReply::no_blocks()])));
+            }
+            // Non-empty range with both endpoints present:
+            // [StartBatch, Block(b)*, BatchDone].
             // After the orchestrator transmits all of these, the BLUE
             // state machine walks Busy -> Streaming -> ... -> Idle;
             // we set the final state directly since the reducer's
@@ -554,6 +573,127 @@ mod tests {
         let a = run(&inputs);
         let b = run(&inputs);
         assert_eq!(a, b, "replay must be byte-identical");
+    }
+
+    // ==========================================================
+    // PHASE4-N-R-B B4 / OQ8 / CN-SNAPSHOT-02 / N4
+    // ==========================================================
+    //
+    // Partial-overlap RequestRange MUST return NoBlocks per the
+    // Cardano block-fetch protocol's failure semantics. Both
+    // endpoints + every block between MUST be present.
+
+    #[test]
+    fn n_r_b_partial_overlap_from_endpoint_not_in_snapshot_yields_no_blocks() {
+        let (snap, _blocks) = build_served_with_first_n_lightest(2);
+        let look = SnapshotRangeLookup { snap: &snap };
+        // Real `to` from the snapshot; `from` is a fabricated key
+        // not present (slot=0, all-zero hash).
+        let mut keys: Vec<(SlotNo, Hash32)> = snap
+            .iter()
+            .map(|(s, h, _)| (s, h.clone()))
+            .collect();
+        keys.sort();
+        let to_key = keys.last().expect("non-empty").clone();
+        let range = Range {
+            from: block_point(0, [0u8; 32]),
+            to: Point::Block {
+                slot: to_key.0,
+                hash: to_key.1,
+            },
+        };
+        let state = ProducerBlockFetchServerState::new();
+        let (state2, step) = producer_block_fetch_serve(
+            state,
+            BlockFetchMessage::RequestRange(range),
+            &look,
+            v(),
+        )
+        .unwrap();
+        assert_eq!(state2.state, BlockFetchState::Idle);
+        match step {
+            BlockFetchServerStep::Replies(replies) => {
+                let msgs: Vec<BlockFetchMessage> =
+                    replies.into_iter().map(|r| r.into_message()).collect();
+                assert_eq!(msgs, vec![BlockFetchMessage::NoBlocks]);
+            }
+            BlockFetchServerStep::Done => panic!("expected NoBlocks reply"),
+        }
+    }
+
+    #[test]
+    fn n_r_b_partial_overlap_to_endpoint_not_in_snapshot_yields_no_blocks() {
+        let (snap, _blocks) = build_served_with_first_n_lightest(2);
+        let look = SnapshotRangeLookup { snap: &snap };
+        let mut keys: Vec<(SlotNo, Hash32)> = snap
+            .iter()
+            .map(|(s, h, _)| (s, h.clone()))
+            .collect();
+        keys.sort();
+        let from_key = keys.first().expect("non-empty").clone();
+        // Real `from`; `to` is a fabricated key (very high slot).
+        let range = Range {
+            from: Point::Block {
+                slot: from_key.0,
+                hash: from_key.1,
+            },
+            to: block_point(u64::MAX - 1, [0xFFu8; 32]),
+        };
+        let state = ProducerBlockFetchServerState::new();
+        let (state2, step) = producer_block_fetch_serve(
+            state,
+            BlockFetchMessage::RequestRange(range),
+            &look,
+            v(),
+        )
+        .unwrap();
+        assert_eq!(state2.state, BlockFetchState::Idle);
+        match step {
+            BlockFetchServerStep::Replies(replies) => {
+                let msgs: Vec<BlockFetchMessage> =
+                    replies.into_iter().map(|r| r.into_message()).collect();
+                assert_eq!(msgs, vec![BlockFetchMessage::NoBlocks]);
+            }
+            BlockFetchServerStep::Done => panic!("expected NoBlocks reply"),
+        }
+    }
+
+    #[test]
+    fn n_r_b_partial_overlap_both_endpoints_fabricated_yields_no_blocks() {
+        let (snap, _blocks) = build_served_with_first_n_lightest(2);
+        let look = SnapshotRangeLookup { snap: &snap };
+        // Both endpoints fabricated and bracketing the real entries:
+        // BTreeMap range_bytes may still return non-empty if the
+        // fabricated range straddles real keys; the endpoint-presence
+        // check rejects the partial overlap.
+        let mut keys: Vec<(SlotNo, Hash32)> = snap
+            .iter()
+            .map(|(s, h, _)| (s, h.clone()))
+            .collect();
+        keys.sort();
+        let real_min_slot = keys.first().expect("non-empty").0;
+        let real_max_slot = keys.last().expect("non-empty").0;
+        let range = Range {
+            from: block_point(real_min_slot.0.saturating_sub(1), [0u8; 32]),
+            to: block_point(real_max_slot.0 + 1, [0xFFu8; 32]),
+        };
+        let state = ProducerBlockFetchServerState::new();
+        let (state2, step) = producer_block_fetch_serve(
+            state,
+            BlockFetchMessage::RequestRange(range),
+            &look,
+            v(),
+        )
+        .unwrap();
+        assert_eq!(state2.state, BlockFetchState::Idle);
+        match step {
+            BlockFetchServerStep::Replies(replies) => {
+                let msgs: Vec<BlockFetchMessage> =
+                    replies.into_iter().map(|r| r.into_message()).collect();
+                assert_eq!(msgs, vec![BlockFetchMessage::NoBlocks]);
+            }
+            BlockFetchServerStep::Done => panic!("expected NoBlocks reply"),
+        }
     }
 
     #[test]
