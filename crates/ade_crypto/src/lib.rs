@@ -15,6 +15,7 @@ pub mod blake2b;
 pub mod ed25519;
 pub mod error;
 pub mod kes;
+pub mod kes_sum;
 pub mod traits;
 pub mod vrf;
 

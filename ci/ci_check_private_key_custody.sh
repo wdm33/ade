@@ -52,6 +52,12 @@ emit_production_lines() {
 # ---------------------------------------------------------------------------
 # Guard 1 — No private-key types defined outside RED.
 # Allowed BLUE: `*VerificationKey` types and signed-artifact wrappers.
+#
+# PHASE4-N-P exception: ade_crypto::kes_sum legitimately owns the Sum_n
+# signing-key types (Sum0SigningKey, SumSigningKey<D>) — that is the whole
+# point of N-P (BLUE owns the algorithm; RED owns custody). The N9 hard
+# prohibition (no upstream-shim in production) is enforced by the
+# separate ci_check_kes_sum_compatibility.sh gate (S4 deliverable).
 # ---------------------------------------------------------------------------
 GUARD1_PATTERNS=(
     'pub struct [A-Za-z_]*SigningKey'
@@ -59,10 +65,18 @@ GUARD1_PATTERNS=(
     'struct ColdSigningKey'
 )
 
+KES_SUM_DIR="$REPO_ROOT/crates/ade_crypto/src/kes_sum"
+
 for pattern in "${GUARD1_PATTERNS[@]}"; do
     for src in "${BLUE_CRATE_SRC[@]}"; do
         if [ -d "$src" ]; then
             while IFS= read -r -d '' rs; do
+                # N-P whitelist: ade_crypto::kes_sum is the BLUE-owned
+                # algorithm module that hosts Sum0SigningKey /
+                # SumSigningKey<D> by design.
+                case "$rs" in
+                    "$KES_SUM_DIR"/*) continue ;;
+                esac
                 matches=$(emit_production_lines "$rs" | grep -E "$pattern" || true)
                 if [ -n "$matches" ]; then
                     print_fail "Guard 1 (private-key type defined in BLUE): $pattern"
@@ -78,6 +92,15 @@ done
 # Guard 2 — No cardano-crypto signing API calls outside producer/.
 # Test self-consistency lives in `#[cfg(test)] mod tests`; the
 # production-only filter above excludes those.
+#
+# PHASE4-N-P exception: ade_crypto::kes_sum is the BLUE-owned algorithm
+# module. (a) Its production code (single.rs / sum.rs) defines our OWN
+# `sign_kes` / `update_kes` and recursively calls them — patterns like
+# `Sum6Kes::sign_kes` matching our impl are legitimate. (b) Its tests.rs
+# imports `cardano_crypto` for cross-impl validation; that is permitted
+# only because the import lives under `#[cfg(test)]`. The hard
+# prohibition on cardano-crypto in production is enforced by the
+# separate ci_check_kes_sum_compatibility.sh gate (S4 deliverable).
 # ---------------------------------------------------------------------------
 GUARD2_PATTERNS=(
     'VrfDraft03::prove'
@@ -91,6 +114,13 @@ for pattern in "${GUARD2_PATTERNS[@]}"; do
     for src in "${BLUE_CRATE_SRC[@]}"; do
         if [ -d "$src" ]; then
             while IFS= read -r -d '' rs; do
+                # N-P whitelist: ade_crypto::kes_sum owns the algorithm
+                # surface; the calls it makes to its own Sum_n functions
+                # (and the cross-impl tests under #[cfg(test)]) are the
+                # legitimate use sites.
+                case "$rs" in
+                    "$KES_SUM_DIR"/*) continue ;;
+                esac
                 matches=$(emit_production_lines "$rs" | grep -E "$pattern" || true)
                 if [ -n "$matches" ]; then
                     print_fail "Guard 2 (cardano-crypto signing API call in BLUE production): $pattern"
