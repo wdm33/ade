@@ -4347,14 +4347,14 @@ tier = "derived"
 statement = "Producer slot loop never signs a block whose KES period has rotated past current_period. Slot → KES period is a pure function of (slot, genesis_kes_anchor, slots_per_kes_period); the coordinator fail-closes (slot_missed event + log) when wall-clock has advanced past the target slot before forge completes. No retroactive forge. The GREEN coordinator never owns or stores private signing material — it emits a closed `RequestForge { slot, kes_period, ledger_snapshot_ref, chain_tip }` effect; the RED producer shell either returns an `AcceptedBlock` via a `ForgeSucceeded` event or a structured `ForgeFailed { slot, structured_error }` event. KesSecret / VrfSigningKey / ColdSigningKey never enter CoordinatorState. T-tier key-custody boundary."
 source = "docs/planning/phase4-n-q-invariants.md §1 (I3, I4, I7, I8); §2 (N4, N5, N8, N9); §5"
 cross_ref = ["T-KEY-01", "DC-CRYPTO-04", "DC-CRYPTO-05", "DC-CONS-11", "OP-OPS-04", "OP-OPS-05"]
-code_locus = "crates/ade_runtime/src/producer/coordinator.rs (GREEN — CoordinatorState has no secret fields; type system prevents); crates/ade_runtime/src/producer/producer_shell.rs (RED — sole key-custody surface; ProducerShell::init enforces KES period bounds vs opcert); crates/ade_node/src/produce_mode.rs (RED driver; PHASE4-N-R-A A3 wired the real run_real_forge composition; stub replaced)"
+code_locus = "crates/ade_runtime/src/producer/coordinator.rs (GREEN — CoordinatorState has no secret fields; type system prevents); crates/ade_runtime/src/producer/producer_shell.rs (RED — sole key-custody surface; ProducerShell::init enforces KES period bounds vs opcert); crates/ade_node/src/produce_mode.rs (RED driver; PHASE4-N-R-A A3 wired the real run_real_forge composition; stub replaced); crates/ade_runtime/src/producer/opcert_envelope.rs (PHASE4-N-R-C C1 opcert parser); crates/ade_runtime/src/producer/genesis_parser.rs (PHASE4-N-R-C C2 genesis parser)"
 tests = ["init_emits_started_event_and_zero_other_effects", "slot_tick_emits_request_forge_and_log", "forge_succeeded_emits_broadcast_and_log", "forge_not_leader_emits_log_and_clears_pending", "forge_failed_emits_slot_missed_with_mapped_reason", "stale_forge_result_after_new_tick_drops_with_slot_missed", "kes_period_out_of_range_errors", "shell_init_rejects_malformed_opcert_hot_vkey_length", "shell_init_rejects_kes_period_below_opcert_start", "shell_kes_sign_at_current_period_succeeds_and_verifies", "shell_kes_sign_at_wrong_period_errors", "shell_kes_advance_to_evolves_key_one_way", "shell_debug_redacts_secret_fields", "zero_stake_answer_emits_forge_not_leader", "kes_period_outside_window_emits_forge_failed_kes_period_mismatch", "full_stake_answer_reaches_self_accept_and_rejects"]
 ci_script = "ci/ci_check_producer_coordinator_no_secrets.sh"
 status = "enforced"
 introduced_in = "PHASE4-N-Q"
-strengthened_in = ["PHASE4-N-R-A"]
+strengthened_in = ["PHASE4-N-R-A", "PHASE4-N-R-C"]
 cluster = "PHASE4-N-Q"
-open_obligation = "Remaining composition items deferred to N-R-C, none of which weaken CN-PROD-02's mechanical claims (no-secret-in-coordinator + KES period bounds). **PHASE4-N-R-A A3 closed item (1):** the real forge handler in produce_mode::apply_effects_with_forge_handler is now wired (run_real_forge: RED vrf_prove → BLUE verify_and_evaluate_leader → RED kes_sign_at → GREEN assemble_tick → BLUE forge_block → BLUE self_accept). What still remains: (a) cardano-cli text-envelope opcert parser (cborHex array → OperationalCert); A1 captured fixtures, N-R-C C1 ships parser. (b) Full Shelley + Conway genesis closed-contract parser; A1 captured fixtures, N-R-C C2 ships parser. (c) End-to-end ForgeSucceeded path against the docker peer — requires the KES-signs-real-unsigned-header bridge plus N-R-B's ServedChainSnapshot push + per-peer dispatch wiring. Reopen criteria: close N-R-C and capture the bounty-facing paired evidence per docs/clusters/PHASE4-N-R/CE-N-R-C-LIVE_<date>.{jsonl,log}."
+open_obligation = "**PHASE4-N-R-A A3 closed item (1)**: real forge handler in produce_mode::apply_effects_with_forge_handler is wired (run_real_forge: RED vrf_prove → BLUE verify_and_evaluate_leader → RED kes_sign_at → GREEN assemble_tick → BLUE forge_block → BLUE self_accept). **PHASE4-N-R-C C1+C2 closed items (a)+(b)**: cardano-cli opcert envelope parser (CN-OPCERT-01) + Shelley genesis closed-contract parser (CN-GENESIS-01) both shipped. **Remaining (c)**: end-to-end ForgeSucceeded path against the docker peer requires (i) the KES-signs-real-unsigned-header bridge — currently run_real_forge step 3 KES-signs a placeholder (expected_vrf_input bytes), and (ii) the MuxPump outbound-relay extension so dispatch response bytes transmit back to peers. Both are deferred to a future post-N-R cluster. strengthened_in tracks these closures. Reopen criteria: ship the two bridges + capture bounty-facing paired evidence per docs/clusters/PHASE4-N-R/CE-N-R-C-LIVE_<date>.{jsonl,log}."
 
 [[rules]]
 id = "DC-PROD-01"
@@ -4488,3 +4488,68 @@ status = "enforced"
 introduced_in = "PHASE4-N-R-B"
 strengthened_in = []
 cluster = "PHASE4-N-R-B"
+
+# =============================================================================
+# PHASE4-N-R-C — Bounty artifact run path (CN-OPCERT / CN-GENESIS / DC-OPCERT / DC-GENESIS family)
+# Sketch: docs/planning/phase4-n-r-invariants.md
+# Plan: docs/planning/phase4-n-r-cluster-slice-plan.md
+# Cluster doc: docs/clusters/PHASE4-N-R-C/cluster.md
+# Status: "enforced" — parsers + shim landed; operator-pass evidence gated on
+# KES-signs-real-unsigned-header bridge + MuxPump outbound-relay extension.
+# =============================================================================
+
+[[rules]]
+id = "CN-OPCERT-01"
+tier = "derived"
+statement = "The opcert envelope parser accepts a real cardano-cli `node.opcert` text envelope (closed type check `NodeOperationalCertificate` + CBOR array(2) shape locked by N-R-A A1 OQ4 fixtures against cardano-cli 11.0.0.0 / cardano-node 11.0.1). Element 0 is an array(4) of [hot_vkey(bytes(32)), sequence_number(uint), kes_period(uint), sigma(bytes(64))] mapping to the canonical `OperationalCert`. Element 1 is bytes(32) cold_vk. Any shape mismatch (wrong type field, malformed cborHex, wrong outer/inner arity, wrong field types or lengths) fail-closes with a structured `OpCertParseError` variant. No `String` payloads in load-bearing error variants."
+source = "docs/planning/phase4-n-r-invariants.md §1 (I6); §2 (N6); §3 (D4); N-R-A A1 OQ4 fixtures"
+cross_ref = ["CN-FORGE-01", "CN-PROD-02", "DC-OPCERT-01"]
+code_locus = "crates/ade_runtime/src/producer/opcert_envelope.rs (parse_opcert_envelope + closed OpCertParseError enum)"
+tests = ["accepted_envelope_decodes_to_expected_opcert", "malformed_type_envelope_emits_wrong_envelope_type", "malformed_cbor_hex_envelope_emits_malformed_cbor_hex", "wrong_arity_envelope_emits_malformed_cbor", "parser_is_byte_identical_across_two_runs"]
+ci_script = ""
+status = "enforced"
+introduced_in = "PHASE4-N-R-C"
+strengthened_in = []
+cluster = "PHASE4-N-R-C"
+
+[[rules]]
+id = "DC-OPCERT-01"
+tier = "derived"
+statement = "Given the same canonical envelope bytes, parse_opcert_envelope produces a byte-identical DecodedOpCertEnvelope across runs. Replay-equivalence anchor for the opcert envelope decode."
+source = "docs/planning/phase4-n-r-invariants.md §3 (D4)"
+cross_ref = ["CN-OPCERT-01"]
+code_locus = "crates/ade_runtime/src/producer/opcert_envelope.rs (parser_is_byte_identical_across_two_runs unit test)"
+tests = ["parser_is_byte_identical_across_two_runs"]
+ci_script = ""
+status = "enforced"
+introduced_in = "PHASE4-N-R-C"
+strengthened_in = []
+cluster = "PHASE4-N-R-C"
+
+[[rules]]
+id = "CN-GENESIS-01"
+tier = "derived"
+statement = "The Shelley genesis closed-contract parser accepts a real cardano-cli `shelley-genesis.json` and produces a canonical `GenesisAnchor`. Required fields (networkMagic, systemStart, slotLength, slotsPerKESPeriod, maxKESEvolutions) fail-closed on missing / malformed / wrong-type input. No implicit defaults (e.g., 'if missing, assume preprod' rejected). No stringly fallback (e.g., `\"1\"` rejected for u32 fields). Extra unknown keys accepted-and-ignored for forward compatibility, iff they do not alter interpretation — the `GenesisAnchor` produced from an extra-key fixture MUST byte-equal the canonical fixture's `GenesisAnchor`. The kes_anchor_slot is operator-supplied (not in genesis) and passed to the parser as a separate argument. systemStart parsing uses a deterministic ISO 8601 → Unix epoch milliseconds conversion (Howard Hinnant proleptic Gregorian)."
+source = "docs/planning/phase4-n-r-invariants.md §1 (I7); §2 (N7); §3 (D5); N-R-A A1 OQ7 fixtures"
+cross_ref = ["CN-PROD-02", "DC-GENESIS-01"]
+code_locus = "crates/ade_runtime/src/producer/genesis_parser.rs (parse_shelley_genesis + closed GenesisParseError enum + parse_iso8601_to_unix_ms + days_since_unix_epoch)"
+tests = ["accepted_shelley_genesis_parses_to_expected_anchor", "missing_required_field_emits_structured_error", "stringly_int_emits_malformed_field_type", "extra_inert_keys_produce_byte_identical_anchor", "malformed_numeric_negative_slot_length_rejected", "iso8601_parse_anchors_to_known_unix_ms_values"]
+ci_script = ""
+status = "enforced"
+introduced_in = "PHASE4-N-R-C"
+strengthened_in = []
+cluster = "PHASE4-N-R-C"
+
+[[rules]]
+id = "DC-GENESIS-01"
+tier = "derived"
+statement = "Given the same canonical Shelley genesis JSON bytes + the same operator-supplied kes_anchor_slot, parse_shelley_genesis produces a byte-identical GenesisAnchor across runs. Replay-equivalence anchor for the genesis closed-contract parser. The ISO 8601 → Unix epoch milliseconds conversion (parse_iso8601_to_unix_ms) is deterministic without any chrono/time crate dependency."
+source = "docs/planning/phase4-n-r-invariants.md §3 (D5)"
+cross_ref = ["CN-GENESIS-01"]
+code_locus = "crates/ade_runtime/src/producer/genesis_parser.rs (parser_is_byte_identical_across_two_runs unit test)"
+tests = ["parser_is_byte_identical_across_two_runs"]
+ci_script = ""
+status = "enforced"
+introduced_in = "PHASE4-N-R-C"
+strengthened_in = []
+cluster = "PHASE4-N-R-C"
