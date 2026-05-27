@@ -4,64 +4,79 @@
 > Regenerate via `/head-deltas <baseline>`. Baseline is declared in
 > `.idd-config.json` (`head_deltas_baseline`).
 
-> Baseline: `d62c2bc` (PHASE4-N-K close — orchestrator + `ade_node` binary; CN-NODE-01 + DC-NODE-01..04 enforced, 2026-05-26 11:47 +0700)
-> HEAD: working tree on top of `d62c2bc` (PHASE4-N-L cluster-close staged, 2026-05-26)
-> 1 cluster-close commit (pending), 35 files changed (28 new + 7 modified), +4,159 / −12 lines
+> Baseline: `6eb4fbd` (PHASE4-N-O close — Ade-native KES key-gen + cardano-cli expanded skey fail-closed, 2026-05-27 11:39 +0700)
+> HEAD: `d6f3399` (PHASE4-N-P close — archive + CLOSURE.md + head_deltas_baseline bump, 2026-05-27 13:19 +0700)
+> 6 commits, 32 files changed, +4,850 / −289 lines
 
 > **Baseline shift note.** This regen narrows the baseline from the
-> prior `1946573` (PHASE4-N-K handoff) used by the N-K narrative to
-> `d62c2bc` (PHASE4-N-K close — the prior cluster's final commit).
-> HEAD_DELTAS now narrates **only** the PHASE4-N-L cluster: the
-> wire-protocol layer (mux session driver + handshake driver +
-> RED tokio pumps + replay-equivalence harness) over 9 slices
-> (S1 → S9). The prior cluster-by-cluster narratives (Phase 4 N-A
-> through N-K) are preserved in the archived cluster docs under
-> `docs/clusters/completed/` and in the SEAMS / CODEMAP / TRACEABILITY
-> companions. `.idd-config.json` `head_deltas_baseline` was bumped
-> from `1946573` to `d62c2bc` as part of this regen.
+> prior `d62c2bc` (PHASE4-N-K close, drove the N-L narrative) to
+> `6eb4fbd` (PHASE4-N-O close — the previous cluster's final commit).
+> HEAD_DELTAS now narrates **only** the PHASE4-N-P cluster: the
+> Ade-owned BLUE `Sum6KES Ed25519DSIGN` algorithm + cardano-cli
+> expanded `KesSigningKey_ed25519_kes_2^6` import path, shipped
+> across 5 slices (S1 → S5). The intermediate clusters
+> N-L-LIVE / N-M-A / N-M-A1.1 / N-M-B / N-M-C / N-M-FRAG /
+> N-M-SCHED / N-M-FOLLOW / N-O each had their own HEAD_DELTAS
+> regen at their respective closes; their narratives are preserved
+> in the archived cluster docs under `docs/clusters/completed/`
+> and in the SEAMS / CODEMAP / TRACEABILITY companions.
+> `.idd-config.json` `head_deltas_baseline` was bumped from
+> `d62c2bc` to `6973318` (the PHASE4-N-P S5 close, which is the
+> last load-bearing commit of N-P; `d6f3399` is the chore-only
+> archive + bump commit). Per existing convention each regen
+> baselines at the **previous** cluster's close, so this doc
+> baselines at `6eb4fbd` (N-O close) — the config baseline marks
+> where the **next** cluster's narrative will start.
 
-> **Cluster summary.** PHASE4-N-L ships the wire-protocol layer
-> that turns the PHASE4-N-K binary from "boots + idles" into "drives
-> a real cardano-node peer end-to-end" over 9 slices, registering
-> and enforcing 8 new registry rules (`CN-SESS-01/02/03`,
-> `DC-SESS-01..05`) plus 1 declared-with-open-obligation
-> (`RO-LIVE-03`, `blocked_until_operator_peer_available`). The new
-> rules use the `CN-SESS` / `DC-SESS` families because `CN-NET-*`
-> and `DC-NET-01` were already in use (operator-topology rules).
-> 4 carried-forward rules gain `strengthened_in` updates
-> (`T-DET-01`, `CN-CONS-08`, `DC-NODE-01`, `DC-NODE-03`). 5 new
-> CI scripts gate the cluster (`ci_check_*` script count moves
-> from 61 → 66) and 1 existing script (`ci_check_clock_seam.sh`)
-> is extended to cover the wire-side wall-clock-free guarantee.
-> 4 open obligations remain unchanged: `RO-LIVE-01`, `RO-LIVE-02`,
-> `CN-CONS-06`, `DC-STORE-09`. The cluster is purely additive to
-> the existing module graph; no removals; one `OrchestratorEvent`
-> variant added (`OutboundKeepAlive { peer_id }`, additive).
+> **Cluster summary.** PHASE4-N-P ships the Ade-owned BLUE
+> `Sum6KES Ed25519DSIGN` algorithm + cardano-cli expanded skey
+> import, closing the open obligation that PHASE4-N-O explicitly
+> deferred. 5 slices, 5 feature commits + 1 chore-archive commit.
+> 1 new BLUE module added (`ade_crypto::kes_sum`, 8 source files),
+> 5 RED files modified (loader + signer + producer Cargo.toml +
+> node binary + testkit), 1 new CI gate added
+> (`ci_check_kes_sum_compatibility.sh`) + 2 existing scripts
+> updated (`ci_check_kes_envelope_closed.sh`,
+> `ci_check_private_key_custody.sh`). 2 new registry rules
+> introduced + enforced (`DC-CRYPTO-08`, `DC-CRYPTO-09`); 4
+> existing rules strengthened (`DC-CRYPTO-04`, `DC-CRYPTO-05`,
+> `DC-CRYPTO-07`, `OP-OPS-04`); 2 open obligations cleared
+> (`OP-OPS-04.open_obligation` and `DC-CRYPTO-07.open_obligation`
+> were both the same "PHASE4-N-P deferral" carry-forward). 1 new
+> closed sum type added (`KesParseError` with 6 variants); 1 new
+> KES algorithm error sum (`ade_crypto::kes_sum::KesError`,
+> 5 variants). `cardano-crypto` is demoted to a `#[cfg(test)]`
+> oracle for KES in `ade_crypto`, and the `kes-sum` Cargo feature
+> is dropped from `ade_runtime`'s `cardano-crypto` declaration —
+> VRF + DSIGN paths continue to use upstream unchanged (out of
+> N-P scope). Key discovery during S4: `cardano-crypto` Rust
+> 1.0.8 uses `0x00`/`0x01` `expand_seed` prefix bytes; Ade matches
+> Haskell `cardano-base` (`0x01`/`0x02`) — Ade matches cardano-cli
+> ground-truth byte-for-byte. No removals; the cluster is purely
+> additive to the existing module graph aside from the
+> `cardano-crypto` import-set narrowing.
 
 ---
 
 ## 1. Commit Log
 
-Verbatim from `git log --oneline --no-merges d62c2bc..HEAD` (HEAD is
-the staged cluster-close commit — slice-by-slice commits are
-collapsed into a single cluster-close commit per the project's
-cluster-close discipline).
+Verbatim from `git log --oneline --no-merges 6eb4fbd..HEAD`. The
+PHASE4-N-P slices are committed one-per-slice (not collapsed into
+a single cluster-close commit, unlike the N-L convention) so each
+slice ID is recoverable from the commit log directly.
 
 | Hash | Type | Summary |
 |------|------|---------|
-| (pending) | feat | feat(network+runtime): PHASE4-N-L close — wire-protocol session driver (S1..S9), flip CN-SESS-01/02/03 + DC-SESS-01..05 to enforced |
+| `d6f3399` | chore | chore(cluster-close): PHASE4-N-P close — archive + CLOSURE.md + head_deltas_baseline bump |
+| `6973318` | feat | feat(crypto+runtime): PHASE4-N-P S5 — KesSecret BLUE migration + cardano-cli loader accept + cluster close |
+| `bfbf8a1` | feat | feat(crypto+ci): PHASE4-N-P S4 — cardano-cli corpus + Haskell-prefix fix + CI gate |
+| `a64de4f` | feat | feat(crypto): PHASE4-N-P S3 — Sum6KES expanded skey + signature serde + period inference |
+| `80966f6` | feat | feat(crypto): PHASE4-N-P S2 — Ade-owned BLUE Sum6KES algorithm |
+| `c04dc0b` | docs | docs(planning+cluster): PHASE4-N-P planning artifacts + S1 proof obligation |
 
-All cluster work (S1 CI gates for mux frame + handshake closure +
-closed mini-protocol id enum, S2 GREEN `session::core::step` +
-`SessionState` type-state, S3 GREEN `session::demux` frame buffer,
-S4 GREEN `session::handshake_driver` over opaque `Transport`,
-S5 RED full-duplex bounded-queue `MuxTransportHandle`, S6 RED
-`mux_pump` per-connection tokio task, S7 RED `n2n_dialer` outbound
-TCP + handshake driver call, S8 RED `keep_alive_session` Clock-driven
-ping pump, S9 `session_replay_equivalence` integration test) is
-contained in a single cluster-close commit; per-slice context lives
-under `docs/clusters/completed/PHASE4-N-L/N-L-S{1..9}.md`. No fix /
-docs / chore / refactor commits in this window — the cluster is a
+6 commits total: 1 `docs` (S1 planning + proof obligation), 4
+`feat` (S2..S5), 1 `chore` (cluster archive). No `fix` /
+`refactor` / `test` commits in this window — the cluster is a
 single linear feature stream.
 
 ---
@@ -70,22 +85,19 @@ single linear feature stream.
 
 | Module | Color | Purpose | Key sub-paths | Added in (cluster/slice) |
 |--------|-------|---------|---------------|--------------------------|
-| `ade_network::session` | **GREEN** | Wire-session reducer + supporting state, event, demux, and handshake-driver sub-modules. `session::core::step` is the SOLE pub reducer over `(SessionState, ByteChunkIn) -> (SessionState, Vec<SessionEffect>)` (CN-SESS-03). Pure — no `tokio`, no `SystemTime`/`Instant`, no `rand`. Drives handshake-before-traffic (DC-SESS-01), closed mini-protocol id dispatch (DC-SESS-02), per-protocol ordering (DC-SESS-03), and wire-layer clock-injection seam on the GREEN side (DC-SESS-05). | `event.rs` (`AcceptedMiniProtocol` closed registry, `ByteChunkIn`, `SessionEffect`, `SessionError`, `HandshakeRole`), `state.rs` (`SessionState` Handshaking/Connected type-state), `demux.rs` (`FrameBuffer` partial-frame accumulator + per-protocol fanout), `core.rs` (`step` reducer), `handshake_driver.rs` (`Transport` trait + `run_n2n_handshake_initiator` / `run_n2n_handshake_responder`), `mod.rs` (barrel re-exports — was a 5-line placeholder at baseline, now the package barrel) | PHASE4-N-L / S1 + S2 + S3 + S4 |
-| `ade_runtime::network::mux_pump` | **RED** | Per-connection tokio task bridging a `MuxTransportHandle` (full-duplex bounded-queue RED transport from `ade_network::mux::transport`) to the GREEN `session::core::step` reducer. Forwards `SessionEffect`s to the orchestrator inbox (bounded `mpsc::Sender<OrchestratorEvent>`); enforces backpressure via `try_send` → `TransportError::BackpressureExceeded` (DC-SESS-04). Single async run-loop; exits on transport close or orchestrator drop. | `mux_pump.rs` (`MuxPump`, `MuxPumpError`, `spawn_mux_pump`) | PHASE4-N-L / S6 |
-| `ade_runtime::network::n2n_dialer` | **RED** | Outbound TCP dialer: opens a `TcpStream`, wraps it in `MuxTransportHandle::spawn_duplex`, runs the handshake driver, and on success emits an `OrchestratorEvent::PeerConnected` and spawns a `MuxPump`. Closed `DialError` sum maps TCP / handshake / transport failures. | `n2n_dialer.rs` (`N2nDialer`, `DialError`, `dial_outbound`) | PHASE4-N-L / S7 |
-| `ade_runtime::orchestrator::keep_alive_session` | **RED** | Clock-driven keep-alive ping pump. Each tick from `Clock::tick_stream` emits an `OrchestratorEvent::OutboundKeepAlive { peer_id }` into the orchestrator inbox. SOLE driver of keep-alive cadence; the GREEN session core never reads wall-clock. Drives DC-SESS-05 end-to-end via the PHASE4-N-K `Clock` seam. Cadence pinned at `KeepAliveCadence::DEFAULT = 60_000ms`. Exits when the orchestrator inbox is dropped. | `keep_alive_session.rs` (`KeepAliveSession`, `KeepAliveCadence`) | PHASE4-N-L / S8 |
+| `ade_crypto::kes_sum` | **BLUE** | Ade-owned, from-first-principles reimplementation of the Cardano `Sum6KES Ed25519DSIGN` algorithm. Closed `KesAlgorithm` trait over the recursive `Sum_n` chain (`Sum0 = SingleKes<Ed25519>`, `Sum_n = SumKes<Sum_{n-1}>` for n = 1..6). Pure: no I/O, no wall clock, no `HashMap`, no floats, no RNG; every function is total or returns a closed `KesError` / `KesParseError` variant. Byte-identical to Haskell `cardano-base`'s `Sum6KES Ed25519DSIGN` for `derive_verification_key`, `gen_key_kes_from_seed_bytes`, `update_kes` (all 64 periods), `sign_kes`, `raw_serialize_signing_key_kes`, `raw_serialize_signature_kes`, and their `raw_deserialize_*` inverses; matches cardano-cli ground-truth corpus byte-for-byte. `VerificationKey` pinned to `[u8; 32]` (Ed25519 leaf pk + Blake2b256 sub-tree hashes); `SigningKey` carries hot secret material with hand-rolled `Drop` (via `ZeroizingSeed` per-field on every Sum level + Sum0's leaf seed). Period is uniquely inferable from which sub-seeds are zeroed in the deserialized tree (closed `period_from_zeroed_sum6_tree_shape` per the S1 proof obligation). `cardano-crypto` is `#[cfg(test)]` only inside `kes_sum/` (cross-impl divergence-documenting tests + nothing else). | `mod.rs` (`KesAlgorithm` trait, `Sum1Kes..Sum6Kes` aliases, `KesError`), `single.rs` (`Sum0Kes`, `Sum0SigningKey`, `Sum0Signature` — Ed25519 leaf), `sum.rs` (`SumKes<D>`, `SumSigningKey<D>` w/ `ZeroizingSeed` per-field Drop, `SumSignature<D>` `(sigma_d, vk0, vk1)` tuple, `raw_serialize/raw_deserialize_signing_key_kes`, `raw_serialize/raw_deserialize_signature_kes`, `current_period_of_signing_key`), `hash.rs` (`expand_seed` w/ Haskell-prefix `0x01`/`0x02`, `hash_pair` Blake2b256 vk concatenation), `period.rs` (`period_from_zeroed_sum6_tree_shape` — the closed period-inference fn), `errors.rs` (`KesParseError` closed 6-variant sum: `WrongPayloadSize`, `LeafSignKeyAllZero`, `InconsistentSubtreeVkLeft { level }`, `InconsistentSubtreeVkRight { level }`, `LevelOutOfRange { level }`, `InvalidEd25519SignatureLength`), `cardano_cli_corpus.rs` (`#[cfg(test)]` — 3 throwaway 608-byte SKEY + VKEY fixtures generated by `cardano-cli 11.0.0.0`), `tests.rs` (`#[cfg(test)]` — 35 unit tests covering recurrence sizes, 64-period chain, round-trips, negative shapes, ground-truth corpus, two divergence-documenting tests vs `cardano-crypto` Rust 1.0.8) | PHASE4-N-P / S2 (algorithm) + S3 (skey/sig serde + period inference) + S4 (corpus + Haskell-prefix fix) |
 
 No new workspace crates. Workspace member count unchanged.
-`ade_network::session` existed at baseline as a 5-line `mod.rs`
-placeholder; PHASE4-N-L S2..S4 elevate it to a populated GREEN
-sub-tree with 5 source files.
+`ade_crypto::kes_sum` is added under the existing BLUE `ade_crypto`
+crate; it sits alongside `ade_crypto::kes` (the upstream-wrapper
+verification API — already BLUE) and is wired into `ade_crypto::kes::verify_kes`
+in S3 (PHASE4-N-P S3 migrated the public `verify_kes` entry to
+the BLUE algorithm).
 
-Cross-reference: the new modules must be reflected in CODEMAP §GREEN
-(`ade_network::session::{event, state, demux, core, handshake_driver}`)
-and §RED (`ade_runtime::network::{mux_pump, n2n_dialer}`,
-`ade_runtime::orchestrator::keep_alive_session`, plus the
-`ade_network::mux::transport` RED-extension noted in §3). If absent
-at the next read, CODEMAP is stale — regenerate via `/codemap`.
+Cross-reference: the new module must be reflected in CODEMAP
+under §BLUE (`ade_crypto::kes_sum`). The current
+`docs/ade-CODEMAP.md` predates N-P and does not mention `kes_sum`
+— regenerate via `/codemap`.
 
 ---
 
@@ -93,80 +105,92 @@ at the next read, CODEMAP is stale — regenerate via `/codemap`.
 
 | Module | Scope | Key changes |
 |--------|-------|-------------|
-| `ade_network::mux::transport` | +198 / −3 lines | RED full-duplex extension. Original `MuxTransport` / `open_tcp` API retained byte-identically for existing N-G consumers. New: `spawn_duplex` returning `MuxTransportHandle` (paired bounded `mpsc::Receiver<MuxFrame>` for inbound + `mpsc::Sender<MuxFrame>` for outbound), `TransportError` closed sum with `BackpressureExceeded`, `DuplexCapacity::DEFAULT`, `JoinHandle` ownership of the spawned reader/writer tasks. Bounded-queue overflow surfaces as `TransportError::BackpressureExceeded` (no silent drop) — DC-SESS-04 evidence. Re-classified in core_paths note as RED (already RED at baseline; the extension keeps it RED). |
-| `ade_network::session::mod.rs` | +37 / −4 lines | Rewritten from a 5-line module placeholder into the package barrel: `pub mod {core, event, state, demux, handshake_driver};` + public re-exports. Module-level doc comment now anchors the cluster scope (CN-SESS-01..03 + DC-SESS-01..05). |
-| `ade_network/Cargo.toml` | +3 / −1 lines | tokio features extended: `sync` (for bounded `mpsc` channels in `mux::transport`'s duplex extension) and `rt-multi-thread` (for `tokio::spawn` in the duplex reader/writer task pair). Confined to RED files by `ci/ci_check_session_core_closure.sh` and `ci/ci_check_clock_seam.sh` extension — the GREEN `session/*.rs` files MUST NOT import `tokio::*`. |
-| `ade_runtime::network::mod.rs` | +5 lines | Adds `pub mod mux_pump; pub mod n2n_dialer;` declarations wiring the two new RED runner files. |
-| `ade_runtime::orchestrator::mod.rs` | +1 line | Adds `pub mod keep_alive_session;` declaration wiring the new RED keep-alive pump. |
-| `ade_runtime::orchestrator::core.rs` | +8 lines | One new branch in the reducer: `OrchestratorEvent::OutboundKeepAlive { peer_id }` is recorded into state (no immediate `OrchestratorEffect` emission — keep-alive frame encoding is deliberately deferred to a future session-side rule). Purely additive, no existing branch modified. |
-| `ade_runtime::orchestrator::event.rs` | +8 lines | New `OrchestratorEvent::OutboundKeepAlive { peer_id: PeerId }` variant on the closed inbound-event sum. Additive — the existing variants are byte-identical at HEAD. Variant doc comment references `DC-NET-05`; the registered rule is `DC-SESS-05` (see Anomalies §). |
-| `docs/ade-invariant-registry.toml` | +221 / −0 lines | 9 new PHASE4-N-L rules appended (`CN-SESS-01/02/03`, `DC-SESS-01/02/03/04/05`, `RO-LIVE-03`); 8 of the 9 land at `status = "enforced"` with `code_locus` + `tests` + `ci_script` + `evidence_notes` populated; `RO-LIVE-03` lands at `status = "declared"` with `open_obligation = "blocked_until_operator_peer_available"`. Each new rule carries `strengthened_in = ["PHASE4-N-L"]`. **Gap**: the closure record promises that 4 existing rules (`T-DET-01`, `CN-CONS-08`, `DC-NODE-01`, `DC-NODE-03`) gain `strengthened_in += "PHASE4-N-L"`; at HEAD these 4 rules' `strengthened_in` arrays terminate at `"PHASE4-N-K"` and do **not** include `"PHASE4-N-L"`. See Anomalies §. |
+| `ade_crypto::lib` | +1 line | Adds `pub mod kes_sum;` declaration. Pure module-graph addition. |
+| `ade_crypto::kes` | +6 / −9 lines | S3 migration: `verify_kes` and `verify_kes_signature` now route through the BLUE `ade_crypto::kes_sum::Sum6Kes` instead of `cardano_crypto::kes::Sum6Kes`. Signature parsing surface tightened: `raw_deserialize_signature_kes` returns a `Result` in our impl (vs. `Option` upstream) — error mapped to the existing `CryptoError::MalformedSignature`. Function bodies untouched; no public surface change observable to callers. |
+| `ade_runtime::producer::signing` | +43 / −20 lines | S5 migration: `KesSecret.inner` type changed from `<cardano_crypto::kes::Sum6Kes as KesAlgorithm>::SigningKey` to `<ade_crypto::kes_sum::Sum6Kes as KesAlgorithm>::SigningKey`. New constructor `KesSecret::from_blue_signing_key(inner, current_period)` (`pub(super)`, used by the cardano-cli loader). `verification_key_fingerprint` simplified — our BLUE algorithm returns `[u8; 32]` directly (no `raw_serialize_verification_key_kes` intermediate copy). `kes_sign` / `kes_update` call signatures simplified (BLUE algorithm takes `&SigningKey`/`SigningKey` without the unit context, `period: u32` rather than `u64`). `SigningError::CardanoCrypto` variant retained for VRF (still upstream); new `SigningError::AdeKesSum(KesError)` variant added for the migrated KES path. `Drop` policy comment updated — per-field `ZeroizingSeed` Drop carries the load now. |
+| `ade_runtime::producer::keys` | +44 / −15 lines | S5: `load_kes_signing_key_skey` policy flip. PHASE4-N-O fail-closed every cardano-cli expanded payload via `KeyLoadError::UnsupportedExpandedKesKeyFormat`; PHASE4-N-P S5 narrows that variant to wrong-size-only and routes structurally-valid 608-byte payloads through `ade_crypto::kes_sum::Sum6Kes::raw_deserialize_signing_key_kes`, constructing a `KesSecret` via the new `from_blue_signing_key` constructor with `current_period_of_signing_key`. New `KeyLoadError::KesParse(KesParseError)` variant for the structurally-invalid-but-right-size case. 3 new tests (`cardano_cli_kes_envelope_accepts_real_608_byte_payload`, `cardano_cli_kes_envelope_rejects_synthetic_608_byte_payload`, `cardano_cli_kes_envelope_rejects_608_byte_leaf_zero_payload`); 1 renamed (`..._rejects_608_byte_payload` → `..._rejects_synthetic_608_byte_payload`). |
+| `ade_runtime::Cargo.toml` | +6 / −3 lines | S5: dropped `"kes-sum"` from the `cardano-crypto` feature list. After N-P, `ade_runtime` declares `cardano-crypto = { features = ["vrf-draft03", "dsign"] }` — KES is fully BLUE-owned via `ade_crypto::kes_sum` (a workspace path dependency, already declared). VRF + DSIGN remain upstream out-of-scope concerns. |
+| `ade_node::key_gen` | +1 line | One new branch in `classify_err`: `KeyLoadError::KesParse(_) => "cardano-cli expanded KES skey parse error"`. Additive; no other change. |
+| `ade_testkit::producer::reference_vectors` | +30 / −17 lines | KES reference-set materialization migrated to the BLUE algorithm. Function signatures adjusted to N-P's `u32`-period + no-unit-context API. The `cardano_crypto::kes::Sum6Kes` import is removed; `cardano_crypto::vrf::VrfDraft03` remains (VRF is out of N-P scope). Module doc spells out the load-bearing implication: the reference signatures **have changed at the byte level vs the N-C-era frozen set** because Ade's `expand_seed` prefix now matches Haskell (0x01/0x02) rather than `cardano-crypto` Rust 1.0.8 (0x00/0x01); the new frozen set matches cardano-cli ground truth. |
+| `docs/ade-invariant-registry.toml` | +60 / −24 lines | 2 new rules appended (`DC-CRYPTO-08`, `DC-CRYPTO-09`, both `enforced`); 4 existing rules rewritten + `strengthened_in += "PHASE4-N-P"` applied (`DC-CRYPTO-04`, `DC-CRYPTO-05`, `DC-CRYPTO-07`, `OP-OPS-04`); 2 `open_obligation` fields cleared (the carry-forwards on `DC-CRYPTO-07` and `OP-OPS-04`, both of which read "PHASE4-N-P deferral" at baseline). Closure record fully reflected at HEAD. |
+| `docs/active/op-ops-04-ade-native-kes-flow.md` | +110 / −68 lines | Operator-facing README rewrite. Title generalized ("KES operator flow (Ade-native + cardano-cli expanded)"); the "Unsupported key flow" section retired and replaced with "Alternative: cardano-cli expanded KES skey (also supported, since PHASE4-N-P)" + a "Why this changed in PHASE4-N-P" rationale block. Audience and source attribution updated; the bounty-facing claim boundary is now "both flows supported and mechanically validated against cardano-cli ground truth". |
+| `.idd-config.json` | +1 / −1 lines | `head_deltas_baseline` bumped from `d62c2bc` to `6973318` (PHASE4-N-P S5 close). The `_head_deltas_baseline_doc` companion key was **not** updated in this bump and still describes the N-L narrative — see Anomalies §. |
 
-No other source modules were touched. The cluster is **purely
-additive** to the existing module graph — one new GREEN sub-tree
-(`ade_network::session`), three new RED runner files, one extended
-RED transport file, five new CI scripts, one new integration test,
-one registry append. No refactors, no API breakage, no removals
-from any existing module.
+No other source modules were touched in the `crates/` tree. The
+cluster is **almost purely additive** to the existing module graph:
+one new BLUE sub-tree (`ade_crypto::kes_sum`, 8 files), 7 modified
+RED/BLUE files (loader + signer + lib.rs + kes.rs + reference
+vectors + key_gen + Cargo.toml), one CI script added + 2 modified.
+The single non-additive change is the `kes-sum` Cargo feature drop
+on `ade_runtime`'s `cardano-crypto` dependency — a deliberate
+demotion (cardano-crypto KES is no longer in `ade_runtime`'s
+production graph; it remains under `#[cfg(test)]` in `ade_crypto`
+for cross-impl validation only).
+
+The deleted `docs/clusters/PHASE4-N-P/cluster.md` (and the 7
+sibling slice/proof docs that moved with it to
+`docs/clusters/completed/PHASE4-N-P/`) appear as rename pairs in
+`git diff --name-status`. These are routine cluster-close archival
+moves, not deletions of new content.
 
 ---
 
 ## 4. Feature Flags
 
-No Cargo `[features]` table is declared in `ade_network`,
+No Cargo `[features]` table is declared in `ade_crypto`,
 `ade_runtime`, or any other workspace crate at baseline or at HEAD.
-No new feature flags introduced; no existing feature flags
-modified or removed.
+No new Ade-side feature flags introduced; no existing flags
+modified.
 
-The cluster adds two new closed constants that are **not** Cargo
-features but are referenced here for completeness — they pin
-deterministic behaviour at the RED-runner boundary:
+**The single Cargo-feature change in this cluster is on an
+upstream dependency**, not on an Ade workspace crate:
+
+| Crate dep | Feature | Module | Status |
+|-----------|---------|--------|--------|
+| `cardano-crypto` | `kes-sum` | `ade_runtime/Cargo.toml` | **Removed** (S5). `ade_runtime`'s `cardano-crypto` features narrow from `["vrf-draft03", "kes-sum", "dsign"]` to `["vrf-draft03", "dsign"]`. The deliberate intent: cardano-crypto's KES surface is no longer compiled into the `ade_runtime` production graph. KES routing is now via `ade_crypto::kes_sum` (BLUE, in-workspace). |
+| `cardano-crypto` | `kes-sum` | `ade_crypto` (test-only oracle) | **Test-only retention**. cardano-crypto is gated `#[cfg(test)]` inside `ade_crypto::kes_sum/` (via `cardano_cli_corpus.rs` and `tests.rs`); the production code path in `ade_crypto/src/kes.rs` no longer imports `cardano_crypto::kes::*`. CI gate `ci/ci_check_kes_sum_compatibility.sh` Guard 3 mechanically asserts the `#[cfg(test)]` confinement. |
+
+No coupling between the two: the `ade_runtime` drop is a pure
+build-graph narrowing; the `ade_crypto` `#[cfg(test)]` confinement
+is a CI-enforced structural discipline.
+
+The cluster also adds three closed BLUE constants that pin
+deterministic algorithm sizes (referenced here for completeness;
+they are not Cargo features):
 
 | Constant | Module | Purpose | Status |
 |----------|--------|---------|--------|
-| `DuplexCapacity::DEFAULT` | `ade_network::mux::transport` | Closed default bounded-queue capacity for the `MuxTransportHandle` inbound + outbound channel pair. Overflow → `TransportError::BackpressureExceeded` (DC-SESS-04). | **New** since baseline |
-| `KeepAliveCadence::DEFAULT.interval_ms = 60_000` | `ade_runtime::orchestrator::keep_alive_session` | Closed default keep-alive ping cadence (60 s). Drives `Clock::tick_stream` cadence in `KeepAliveSession::run`. | **New** since baseline |
-
-No coupling between the two: each is a stand-alone struct constant.
-Both are exercised by deterministic tests (`mux_transport_duplex_*`
-+ `keep_alive_*`).
-
-The two new tokio features (`sync`, `rt-multi-thread`) on the
-`ade_network` crate are **not** gated by a Cargo feature — they
-are structurally confined by CI:
-`ci/ci_check_session_core_closure.sh` greps `crates/ade_network/src/session/`
-for any `tokio::` import and fails the build if one appears.
-`ci/ci_check_clock_seam.sh` (extended in this cluster) greps the
-same paths for `SystemTime`, `Instant`, `tokio::time`, `tokio::spawn`,
-and `rand::*` and fails otherwise. The structural confinement is
-mechanical (CI-enforced), not Cargo-feature-enforced.
+| `Sum6Kes::SIGNING_KEY_SIZE = 608` | `ade_crypto::kes_sum` | Canonical Sum6KES expanded signing-key payload size (Haskell `rawSerialiseSignKeyKES (Sum6KES Ed25519DSIGN)`). Cross-checked against cardano-cli ground-truth corpus. | **New** since baseline |
+| `Sum6Kes::SIGNATURE_SIZE = 448` | `ade_crypto::kes_sum` | Canonical Sum6KES signature payload size (`SUM6_KES_SIG_LEN` in `ade_crypto::kes`; same value). | **New** since baseline |
+| `Sum6Kes::TOTAL_PERIODS = 64` | `ade_crypto::kes_sum` | Canonical period count for the depth-6 Sum chain (`2^6`). | **New** since baseline |
 
 ---
 
 ## 5. CI Checks
 
-### PHASE4-N-L wire-protocol closure — 5 new scripts + 1 extended (`ci_check_*.sh` 62nd – 66th)
+### PHASE4-N-P Sum6KES compatibility — 1 new script + 2 extended (`ci/ci_check_*.sh` 89th)
 
 | Check | Status | What it checks |
 |-------|--------|----------------|
-| `ci/ci_check_mux_frame_closure.sh` | **New** (S1) — script 62 | Enforces `CN-SESS-01`: greps every `.rs` under `crates/` for `pub fn encode_frame` and `pub fn decode_frame`; asserts the SOLE site for both is `crates/ade_network/src/mux/frame.rs`. Mirrors `ci_check_admitted_block_closure.sh` shape (single-pub-fn-site closure). |
-| `ci/ci_check_handshake_closure.sh` | **New** (S1) — script 63 | Enforces `CN-SESS-02`: greps every `.rs` under `crates/` for `pub fn n2n_transition` and `pub fn n2c_transition`; asserts the SOLE site for both is `crates/ade_network/src/handshake/transition.rs`. |
-| `ci/ci_check_session_core_closure.sh` | **New** (S2) — script 64 | Enforces `CN-SESS-03` + `DC-SESS-01` (type-state half) + `DC-SESS-05` (session-side wall-clock-free): asserts `session::core::step` is the SOLE pub reducer fn under `crates/ade_network/src/session/`; asserts `SessionState::{Handshaking, Connected}` type-state present; negative grep on `tokio::`, `SystemTime`, `Instant`, `tokio::time`, `rand::*` across all `session/*.rs`. |
-| `ci/ci_check_mini_protocol_id_registry_closed.sh` | **New** (S1) — script 65 | Enforces `DC-SESS-02`: asserts the `AcceptedMiniProtocol::from_id` body closes with `_ => None`; asserts the dispatch site in `session::core` has no wildcard accept arm; positive grep that every variant of `AcceptedMiniProtocol` is named in the from_id match. |
-| `ci/ci_check_session_no_unbounded.sh` | **New** (S5+S6+S7+S8) — script 66 | Enforces `DC-SESS-04`: negative grep for `mpsc::unbounded_channel` across the wire-session file set (`crates/ade_network/src/session/`, `crates/ade_network/src/mux/transport.rs`, `crates/ade_runtime/src/network/mux_pump.rs`, `crates/ade_runtime/src/network/n2n_dialer.rs`, `crates/ade_runtime/src/orchestrator/keep_alive_session.rs`); positive grep that `MuxTransportHandle`'s constructor takes a bounded `DuplexCapacity`. |
-| `ci/ci_check_clock_seam.sh` | **Modified** (S2 + S8) | Extended for `DC-SESS-05`: in addition to its existing `DC-NODE-03` body (orchestrator core wall-clock-free; `clock.rs` sole `SystemTime::now`/`Instant::now` site in `ade_runtime`), Rule 3 adds a negative grep over `crates/ade_network/src/session/*.rs` for any of `SystemTime`, `Instant`, `tokio::time`, `tokio::spawn`, `rand::*`, `rand_core`. Script header references the new rule as `DC-NET-05`; the registered rule is `DC-SESS-05` (see Anomalies §). |
+| `ci/ci_check_kes_sum_compatibility.sh` | **New** (S4) — script 89 | Enforces `DC-CRYPTO-08` + `DC-CRYPTO-09`. **Guard 1**: cardano-cli ground-truth corpus exists at `crates/ade_crypto/src/kes_sum/cardano_cli_corpus.rs` with ≥ 3 `pub(super) const SKEY{N}: &[u8; 608]` fixtures, each preceded by a `"TEST ONLY: throwaway deterministic fixture generated for Sum6KES"` comment. **Guard 2**: no `.skey` envelope files committed under `crates/ade_crypto/`. **Guard 3 (N9)**: `cardano_crypto` is imported in `crates/ade_crypto/src/**` only inside `#[cfg(test)]` blocks — no production-code path may re-introduce the upstream KES surface in `ade_crypto`. **Guard 4**: the `expand_seed` prefix bytes in `kes_sum/hash.rs` are `0x01` / `0x02` (Haskell convention), NOT `0x00` / `0x01` (`cardano-crypto` Rust 1.0.8). A literal-byte check surfaces drift faster than the cardano-cli corpus test would. |
+| `ci/ci_check_kes_envelope_closed.sh` | **Modified** (S5) | Original PHASE4-N-O body asserted the cardano-cli loader return `UnsupportedExpandedKesKeyFormat` for every payload and **not** construct a `KesSecret`. PHASE4-N-P S5 narrows: (a) `UnsupportedExpandedKesKeyFormat` is still asserted (for the size-mismatch path); (b) **new**: `raw_deserialize_signing_key_kes` must be called inside the loader body (the BLUE structural validator drives every accept); (c) `KesSecret::from_bytes_zeroizing` / `from_seed_at_period` are still forbidden in the loader body (those would bypass the structural validator). |
+| `ci/ci_check_private_key_custody.sh` | **Modified** (S2) | Original PHASE4-N-C body asserts no `*SigningKey` types are defined in BLUE and no `cardano-crypto` signing API is called in BLUE production code. PHASE4-N-P extends both guards with an explicit `KES_SUM_DIR` whitelist: files under `crates/ade_crypto/src/kes_sum/` are exempt because that directory legitimately hosts the Ade-owned `Sum0SigningKey` / `SumSigningKey<D>` types and recursively calls our own `Sum_n::sign_kes`. The N9 hard prohibition (no upstream-shim in production) is enforced by `ci_check_kes_sum_compatibility.sh` Guard 3 — the two scripts compose. |
 
-Total CI script count: **61 → 66** (`ci/ci_check_*.sh`). 5 new
-scripts; 1 modified script; no removals — the cluster strictly
-appends + extends.
+Total CI script count: **88 → 89** (`ci/ci_check_*.sh`). 1 new
+script; 2 modified scripts; no removals — the cluster strictly
+appends + extends. (Other files under `ci/` such as
+`build_consensus_inputs_bundle.sh`, `mithril_restore_preprod_peer.sh`,
+and `git-hooks/` are unchanged.)
 
-TRACEABILITY cross-reference: each of the 5 new scripts appears as
-a `ci_script` on at least one rule in
-`docs/ade-invariant-registry.toml` (8 new `ci_script ↔ rule`
-edges across the 8 newly-enforced PHASE4-N-L rules; the extended
-`ci_check_clock_seam.sh` adds a 9th edge to `DC-SESS-05`).
-Re-traced via `ci/ci_check_constitution_coverage.sh` — expected to
-pass at HEAD.
+TRACEABILITY cross-reference: the new script
+`ci_check_kes_sum_compatibility.sh` appears as a `ci_script` on 4
+distinct rules at HEAD (`DC-CRYPTO-04`, `DC-CRYPTO-05`,
+`DC-CRYPTO-07`, `DC-CRYPTO-08`, `DC-CRYPTO-09`, `OP-OPS-04`); the
+modified `ci_check_kes_envelope_closed.sh` retains its edge to
+`DC-CRYPTO-07` + `OP-OPS-04`; the modified
+`ci_check_private_key_custody.sh` retains its broader custody
+edges (`DC-CRYPTO-03..05`, `OP-OPS-04`, `T-KEY-01`). Re-traced via
+`ci/ci_check_constitution_coverage.sh` — expected to pass at HEAD.
 
 ---
 
@@ -176,48 +200,57 @@ n/a — `.idd-config.json` `canonical_type_registry` is null.
 Canonical-type rules live inline in the invariant registry under
 family `T`.
 
-**PHASE4-N-L introduced new closed sum types** in support of the
-session reducer (GREEN) and the RED runners:
+**PHASE4-N-P introduced new closed sum types** in support of the
+BLUE Sum_n algorithm + the loader's structural-validation path:
 
-- `ade_network::session::event::AcceptedMiniProtocol` — closed
-  registry of accepted mini-protocol ids (chain-sync, block-fetch,
-  keep-alive, ...); `from_id` closes with `_ => None` (DC-SESS-02).
-- `ade_network::session::event::ByteChunkIn` — inbound byte-chunk
-  variant (per-peer raw bytes from the transport).
-- `ade_network::session::event::SessionEffect` — closed outbound
-  effect sum (`SendOutboundFrame`, `DeliverPeerFrame`,
-  `HandshakeCompleted`, ...).
-- `ade_network::session::event::SessionError` — closed reducer-
-  failure sum (`PreHandshakeMiniProtocolFrame`,
-  `PostHandshakeHandshakeFrame`, `UnknownMiniProtocolId { id }`, ...);
-  every variant is peer-fatal.
-- `ade_network::session::event::HandshakeRole` — closed
-  `Initiator`/`Responder` discriminant.
-- `ade_network::session::state::SessionState` — `Handshaking` /
-  `Connected` type-state (DC-SESS-01 compile-time guarantee).
-- `ade_network::mux::transport::TransportError` — closed RED-side
-  failure sum, including `BackpressureExceeded` (DC-SESS-04).
-- `ade_runtime::network::mux_pump::MuxPumpError` — closed pump-task
-  failure sum.
-- `ade_runtime::network::n2n_dialer::DialError` — closed outbound-
-  dial failure sum (TCP / handshake / transport).
+- `ade_crypto::kes_sum::KesError` — closed BLUE algorithm error
+  surface (5 variants: `InvalidSeedLength { expected, actual }`,
+  `PeriodOutOfRange { period, max_period }`, `VerificationFailed`,
+  `KeyExpired`, `Ed25519(&'static str)`). No raw key bytes in any
+  variant; `Ed25519` carries only a static-string detail.
+- `ade_crypto::kes_sum::KesParseError` — closed BLUE parse-time
+  error surface (6 variants: `WrongPayloadSize { actual }`,
+  `LeafSignKeyAllZero`, `InconsistentSubtreeVkLeft { level }`,
+  `InconsistentSubtreeVkRight { level }`, `LevelOutOfRange { level }`,
+  `InvalidEd25519SignatureLength { actual }`). Per the S1 proof
+  obligation §5, every variant carries only `u32`/`usize`
+  primitives — no hex, no seed material.
+- `ade_crypto::kes_sum::Sum0SigningKey` — BLUE Ed25519 leaf
+  signing key, hand-rolled `Drop` zeroes the 32-byte seed.
+- `ade_crypto::kes_sum::Sum0Signature` — 64-byte Ed25519 signature
+  newtype (closed leaf signature shape).
+- `ade_crypto::kes_sum::SumSigningKey<D>` — recursive Sum-level
+  signing-key generic, per-field `ZeroizingSeed` Drop on each of
+  the 6 levels' `r1_seed` field.
+- `ade_crypto::kes_sum::SumSignature<D>` — closed
+  `(sigma_d, vk0, vk1)` tuple at every Sum level.
 
-Plus the canonical authority sites that are now SOLE-authority
-(CN-SESS-01 / CN-SESS-02 / CN-SESS-03):
+Plus one additive variant on each of two previously-closed
+RED-shell sums:
 
-- `ade_network::mux::frame::{encode_frame, decode_frame}` — SOLE
-  mux-frame codec pair (CN-SESS-01).
-- `ade_network::handshake::{n2n_transition, n2c_transition}` —
-  SOLE handshake reducers (CN-SESS-02).
-- `ade_network::session::core::step` — SOLE session reducer
-  (CN-SESS-03).
+- `ade_runtime::producer::keys::KeyLoadError::KesParse(KesParseError)`
+  — additive extension. All existing match sites updated
+  (`ade_node::key_gen::classify_err`). Existing variants
+  byte-identical.
+- `ade_runtime::producer::signing::SigningError::AdeKesSum(KesError)`
+  — additive extension. Existing `CardanoCrypto` variant retained
+  for VRF (still upstream). All call-sites in `kes_sign`,
+  `kes_update`, `KesSecret::from_bytes_zeroizing` re-pointed to
+  the new variant; no surface broken.
+
+Plus the canonical authority sites that are now SOLE-authority for
+KES:
+
+- `ade_crypto::kes_sum::Sum6Kes` — SOLE BLUE Sum6KES algorithm in
+  the workspace (CN-CRYPTO authority moves from upstream wrapper
+  into our BLUE).
+- `ade_crypto::kes::verify_kes` (existing) — SOLE KES-signature
+  verification entry point; now routes through the BLUE algorithm.
+- `ade_runtime::producer::keys::load_kes_signing_key_skey`
+  (existing) — SOLE cardano-cli expanded-skey loader; now routes
+  608-byte payloads through the BLUE deserializer.
 
 **Removals: 0** (expected under append-only discipline).
-
-One additive variant on a previously-closed sum:
-- `ade_runtime::orchestrator::event::OrchestratorEvent::OutboundKeepAlive { peer_id: PeerId }`
-  — additive extension of the closed inbound-event sum; no existing
-  variant modified; all match sites in the orchestrator handled.
 
 Exact whole-project type recount belongs to the TRACEABILITY regen
 that follows this HEAD_DELTAS.
@@ -229,76 +262,94 @@ that follows this HEAD_DELTAS.
 The project's invariant registry tracks structured rules (TOML),
 not prose normative-doc rules; this section reports on it.
 
-- Rules at baseline (`d62c2bc:docs/ade-invariant-registry.toml`): **214**
-- Rules at HEAD (`HEAD:docs/ade-invariant-registry.toml`): **223**
-- Net additions: **9** (`CN-SESS-01/02/03`, `DC-SESS-01..05`, `RO-LIVE-03`).
+- Rules at baseline (`6eb4fbd:docs/ade-invariant-registry.toml`): **262**
+- Rules at HEAD (`HEAD:docs/ade-invariant-registry.toml`): **264**
+- Net additions: **2** (`DC-CRYPTO-08`, `DC-CRYPTO-09`).
 - Removals: **0** (expected under append-only discipline; clean).
 
-- **New rules (9) at HEAD:**
-  - **`CN-SESS-01` `enforced`** — single mux-frame authority
-    (`encode_frame`/`decode_frame` SOLE pair in
-    `ade_network::mux::frame`). `ci/ci_check_mux_frame_closure.sh`.
-  - **`CN-SESS-02` `enforced`** — single handshake authority
-    (`n2n_transition` / `n2c_transition` SOLE in
-    `ade_network::handshake::transition`). `ci/ci_check_handshake_closure.sh`.
-  - **`CN-SESS-03` `enforced`** — single session reducer authority
-    (`session::core::step` SOLE pub reducer).
-    `ci/ci_check_session_core_closure.sh`.
-  - **`DC-SESS-01` `enforced`** — handshake-before-traffic
-    (Handshaking/Connected type-state forbids pre-handshake
-    mini-protocol frames; peer-fatal on violation).
-    `ci/ci_check_session_core_closure.sh`.
-  - **`DC-SESS-02` `enforced`** — closed mini-protocol id registry
-    (`AcceptedMiniProtocol::from_id` closes with `_ => None`;
-    dispatch has no wildcard accept). `ci/ci_check_mini_protocol_id_registry_closed.sh`.
-  - **`DC-SESS-03` `enforced`** — session replay equivalence + per-
-    (peer, mini_protocol_id) ordering (`tests/session_replay_equivalence.rs`).
-    `ci/ci_check_session_core_closure.sh`.
-  - **`DC-SESS-04` `enforced`** — backpressure discipline (bounded
-    `mpsc` + `TransportError::BackpressureExceeded`; no unbounded
-    channels in the wire-session file set).
-    `ci/ci_check_session_no_unbounded.sh`.
-  - **`DC-SESS-05` `enforced`** — wire-layer clock-injection seam
-    (`session/*.rs` wall-clock-free; `KeepAliveSession` routes via
-    `Clock` trait). `ci/ci_check_clock_seam.sh` (extended).
-  - **`RO-LIVE-03` `declared`** — live tip-following pass (operator
-    runs `ade_node --peer ADDR` against a private cardano-node
-    peer + captures a 30-minute JSONL log). `open_obligation =
-    "blocked_until_operator_peer_available"`. The mechanical wire
-    layer is ready; live operator pass is a one-slice follow-on
-    cluster (`PHASE4-N-L-LIVE`).
+- **New rules (2) at HEAD:**
+  - **`DC-CRYPTO-08` `enforced`** — Ade-owned Sum6KES algorithm is
+    Haskell-equivalent. `ade_crypto::kes_sum::Sum6Kes` is byte-
+    identical to Haskell `cardano-base`'s `Sum6KES Ed25519DSIGN`
+    for `derive_verification_key`, `gen_key_kes_from_seed_bytes`,
+    `update_kes` (all 64 periods), `sign_kes`. Cross-impl
+    validation against the cardano-cli ground-truth corpus is
+    mechanically enforced under `#[cfg(test)]`. The N9 hard
+    prohibition (no upstream-shim in production via unsafe /
+    transmute / vendored pub(crate) access / fork-only
+    constructors) is enforced by
+    `ci/ci_check_kes_sum_compatibility.sh` Guard 3. 18 tests
+    listed. `ci_check_kes_sum_compatibility.sh` + `ci_check_private_key_custody.sh`.
+  - **`DC-CRYPTO-09` `enforced`** — Sum6KES expanded signing-key
+    serde and period inference. `raw_serialize_signing_key_kes` /
+    `raw_deserialize_signing_key_kes` byte-identical to Haskell's
+    `rawSerialiseSignKeyKES` / `rawDeserialiseSignKeyKES`. Closed
+    608-byte on-disk format; any other size → `WrongPayloadSize`.
+    Period uniquely inferable from zeroed sub-seeds (no heuristic;
+    closed-error otherwise). Round-trip preserves period for every
+    period 0..=63. Malformed sub-trees → closed `KesParseError`
+    variant; no best-effort guesswork. 15 tests listed.
+    `ci_check_kes_sum_compatibility.sh`.
 
-- **Strengthenings recorded at HEAD by PHASE4-N-L (8 of the 9 new
-  rules carry `strengthened_in = ["PHASE4-N-L"]`):**
-  - All 8 newly-enforced rules above carry the marker.
-  - `RO-LIVE-03` does not (it remains `declared`; strengthening
-    semantics are reserved for enforced rules).
-
-- **Strengthenings PROMISED by the closure record but NOT applied
-  at HEAD (gap — see Anomalies §):**
-  - `T-DET-01.strengthened_in += "PHASE4-N-L"` — promised; at HEAD
-    the array terminates at `"PHASE4-N-K"`.
-  - `CN-CONS-08.strengthened_in += "PHASE4-N-L"` — promised; at
-    HEAD the array terminates at `"PHASE4-N-K"`.
-  - `DC-NODE-01.strengthened_in += "PHASE4-N-L"` — promised; at
-    HEAD the array contains only `["PHASE4-N-K"]`.
-  - `DC-NODE-03.strengthened_in += "PHASE4-N-L"` — promised; at
-    HEAD the array contains only `["PHASE4-N-K"]`.
+- **Strengthenings recorded at HEAD by PHASE4-N-P:**
+  - **`DC-CRYPTO-04.strengthened_in += "PHASE4-N-P"`** — KES
+    signing transcript equivalence statement extended: "byte-
+    identical to **Haskell cardano-base's Sum6KES reference**"
+    (was previously implicit "reference"), and "after PHASE4-N-P
+    S5 the algorithm is BLUE-owned". Cross-impl agreement now
+    mechanically validated against cardano-cli ground truth via
+    `DC-CRYPTO-08`. New test `cardano_cli_corpus_sign_then_upstream_verifies`
+    added to the rule's `tests` array. `ci_script` extended with
+    `ci_check_kes_sum_compatibility.sh`.
+  - **`DC-CRYPTO-05.strengthened_in += "PHASE4-N-P"`** — KES
+    evolution discipline statement extended: "after PHASE4-N-P
+    S5 the underlying algorithm (`update_kes`) is BLUE-owned;
+    per-field zeroize on Drop of consumed sub-seeds is implemented
+    via `ZeroizingSeed` (DC-CRYPTO-08)". New test
+    `zeroizing_seed_drop_overwrites_bytes`. `code_locus` extended
+    with `crates/ade_crypto/src/kes_sum/sum.rs (SumKes::update_kes + ZeroizingSeed Drop)`.
+    `ci_script` extended with `ci_check_kes_sum_compatibility.sh`.
+  - **`DC-CRYPTO-07.strengthened_in = ["PHASE4-N-P"]`** —
+    cardano-cli envelope rule fully restated: from "fail-closed
+    always" (PHASE4-N-O) to "accept structurally-valid 608-byte
+    payloads via BLUE deserializer; fail-close all other shapes
+    via closed `KesParseError` variants". `open_obligation`
+    cleared (was the "PHASE4-N-P deferral" carry-forward).
+    `tests` array expanded to 6 entries; `ci_script` extended
+    with `ci_check_kes_sum_compatibility.sh`.
+  - **`OP-OPS-04.strengthened_in += "PHASE4-N-P"`** (now
+    `["PHASE4-N-O", "PHASE4-N-P"]`) — operator-supplied keys rule
+    extended to declare both KES key flows (Ade-native +
+    cardano-cli expanded) supported and routing the cardano-cli
+    path through the Ade-owned BLUE deserializer. `open_obligation`
+    cleared (was the "PHASE4-N-P deferral" carry-forward; matches
+    the `DC-CRYPTO-07` clearance — the same deferral text was
+    duplicated in both rules at baseline). `tests` and
+    `ci_script` arrays grew to reflect the new cardano-cli
+    loader tests + the new compatibility CI script.
 
 - **Open obligations status at HEAD:**
-  - **`RO-LIVE-03.open_obligation = "blocked_until_operator_peer_available"`**
-    — **NEW** since baseline. Operator-action work; the cluster
-    ships the mechanical layer that makes the pass runnable.
-  - **`RO-LIVE-02.open_obligation = "blocked_until_operator_peer_available"`**
-    — carried forward from PHASE4-N-H. Unchanged.
-  - **`RO-LIVE-01.open_obligation = "blocked_until_operator_peer_available"`**
+  - **`OP-OPS-04.open_obligation`** — **CLEARED**. Was: "PHASE4-N-P
+    deferral only: cardano-cli's 608-byte expanded
+    `KesSigningKey_ed25519_kes_2^6` payload is not yet importable".
+    Now the rule statement directly enumerates both supported flows.
+  - **`DC-CRYPTO-07.open_obligation`** — **CLEARED**. Was: "PHASE4-N-P
+    deferral: cardano-cli expanded `Sum6KES` import becomes
+    supported when `ade_crypto::kes_sum` ships". Now the rule
+    statement directly describes the accept-608-valid policy.
+  - **`RO-LIVE-01.open_obligation`** = `blocked_until_operator_peer_available`
     — carried forward from PHASE4-N-G. Unchanged.
-  - **`CN-CONS-06.open_obligation = "blocked_until_operator_stake_available"`**
+  - **`RO-LIVE-02.open_obligation`** = `blocked_until_operator_peer_available`
+    — carried forward from PHASE4-N-H. Unchanged.
+  - **`RO-LIVE-03.open_obligation`** = `blocked_until_operator_peer_available`
+    — carried forward from PHASE4-N-L. Unchanged.
+  - **`CN-CONS-06.open_obligation`** = `blocked_until_operator_stake_available`
     — carried forward from PHASE4-N-C. Unchanged.
-  - **`DC-STORE-09.open_obligation = "snapshot_schema_migration_follow_on_cluster"`**
+  - **`DC-STORE-09.open_obligation`** = `snapshot_schema_migration_follow_on_cluster`
     — carried forward from PHASE4-N-K. Unchanged.
-  - **`OP-OPS-04.open_obligation`** (Sum6KES skey loader) — carried
-    forward; unchanged.
+  - (`DC-EVIDENCE-01` and `RO-LIVE-05` were flipped to `enforced`
+    earlier in PHASE4-N-M-SCHED + N-M-FOLLOW; not relevant to this
+    cluster.)
 
 ---
 
@@ -306,97 +357,102 @@ not prose normative-doc rules; this section reports on it.
 
 - **No canonical-type or invariant-rule removals.** Append-only
   discipline preserved across the cluster.
-- **No conventional-commits violations.** The pending cluster-close
-  commit follows the `feat(network+runtime): PHASE4-N-L close —
-  ...` scope+suffix pattern.
-- **Gap (registry strengthening discipline)**: the closure record
-  at `docs/clusters/completed/PHASE4-N-L/CLOSURE.md` §
-  "Existing rules strengthened" promises that
-  `T-DET-01`, `CN-CONS-08`, `DC-NODE-01`, and `DC-NODE-03` each
-  gain `PHASE4-N-L` in their `strengthened_in` arrays. At HEAD,
-  none of the four arrays include `"PHASE4-N-L"` — they still
-  terminate at `"PHASE4-N-K"` (or earlier for rules that were
-  not strengthened by N-K). The registry rule-counts are correct
-  and consistent (9 new rules, 0 removals); only the
-  `strengthened_in` cross-references on the four existing rules
-  are missing. Apply the 4 array appends before flipping the
-  registry-coverage CI gate to enforced on these rules' next
-  read.
-- **Anomaly (in-source ID mismatch)**: three sites in source +
-  one CI script header reference the wire-layer clock-injection
-  rule as `DC-NET-05`, but the registered rule id is `DC-SESS-05`
-  (the cluster deliberately used the `*-SESS-*` family to avoid
-  collision with the operator-topology `DC-NET-01`). Affected
-  sites:
-    - `crates/ade_runtime/src/orchestrator/event.rs:65` doc comment.
-    - `crates/ade_runtime/src/orchestrator/core.rs:150` doc comment.
-    - `crates/ade_runtime/src/orchestrator/keep_alive_session.rs:11` module doc.
-    - `ci/ci_check_clock_seam.sh` header + 4 echo strings.
-  None of these is a CI-gating string match (the script's rule-3
-  body checks code patterns, not the rule id literal), so this
-  does not break enforcement. Cosmetic / traceability hygiene —
-  reconcile to `DC-SESS-05` to avoid registry-grep confusion.
-- **CODEMAP cross-reference**: the four new modules (§2) must
-  appear in CODEMAP. If absent at the next read, CODEMAP is stale
-  — regen via `/codemap`. Specifically: GREEN entries for
-  `ade_network::session::{event, state, demux, core, handshake_driver}`;
-  RED entries for `ade_runtime::network::{mux_pump, n2n_dialer}`,
-  `ade_runtime::orchestrator::keep_alive_session`, plus the
-  RED-extension annotation on `ade_network::mux::transport` (now
-  full-duplex bounded-queue).
-- **SEAMS cross-reference**: the new session-event surface
-  (`AcceptedMiniProtocol` closed registry + `SessionEffect` /
-  `SessionError` / `HandshakeRole` closed sums) is a closed-
-  registry attachment surface; SEAMS should classify it under
-  closed registries. The additive `OrchestratorEvent::OutboundKeepAlive`
-  variant is an inbound-event surface extension — SEAMS should
-  note the closed sum grew by 1 variant. Regen via `/seams` if
+- **No conventional-commits violations.** All 6 commits follow
+  `<type>(<scope>): <subject>` shape — 1 `docs(planning+cluster)`,
+  4 `feat(<scope>)`, 1 `chore(cluster-close)`.
+- **Stale config doc comment.** `.idd-config.json`'s
+  `_head_deltas_baseline_doc` companion comment was **not**
+  updated when `head_deltas_baseline` was bumped from `d62c2bc`
+  to `6973318`. The comment still reads "PHASE4-N-L baseline …
+  HEAD_DELTAS narrates the PHASE4-N-L cluster". Cosmetic; no
+  mechanical effect. Reconcile at the next regen-touch of the
+  config file. The closure commit `d6f3399` introduced this
+  staleness — the bump touched the keyed value but not the
+  adjacent `_*_doc` companion.
+- **Pre-S5 Ade-native KES keys are byte-incompatible with
+  post-S5 signing.** The S4 cardano-cli ground-truth discovery
+  forced the `expand_seed` prefix correction from
+  `0x00`/`0x01` (cardano-crypto Rust 1.0.8) to `0x01`/`0x02`
+  (Haskell `cardano-base`). Any `kes.ade.skey` envelope generated
+  by `ade_node --mode key_gen_kes` **before** S5 close used the
+  wrong prefix (because `KesSecret.inner` was still
+  `cardano_crypto::kes::Sum6Kes::SigningKey` at that point); the
+  same seed will now derive a **different** VK. Mitigation: no
+  real deployments existed at S5 close; the bounty test is
+  pre-launch. Documented in
+  `docs/clusters/completed/PHASE4-N-P/S5.md` and
+  `docs/clusters/completed/PHASE4-N-P/CLOSURE.md` § "Key
+  discovery during S4".
+- **Retired S2 cross-impl-vs-upstream tests.** S2 originally
+  shipped tests asserting our impl agreed with `cardano-crypto`
+  Rust 1.0.8 byte-for-byte. S4 disproved that premise (the
+  upstream Rust crate uses the wrong prefix). The S2 tests were
+  retired; replacement is the cardano-cli ground-truth corpus
+  + two **divergence-documenting** tests
+  (`sum6_kes_seed_expansion_diverges_from_cardano_crypto_rust_1_0_8`,
+  `sum6_kes_vk_diverges_from_cardano_crypto_rust_for_same_seed`).
+  This is a deliberate inversion: we now mechanically assert the
+  divergence rather than the agreement. Not a discipline gap;
+  load-bearing for keeping the prefix correct.
+- **CODEMAP cross-reference**: the new `ade_crypto::kes_sum`
+  BLUE module must appear in CODEMAP §BLUE. The current
+  `docs/ade-CODEMAP.md` contains no mention of `kes_sum`
+  — regen via `/codemap`. Likely also stale on the N-L / N-M
+  surface (the existing doc references the PHASE4-N-H S1 era
+  closure-script entries); a full regen is in order.
+- **SEAMS cross-reference**: `KesError` and `KesParseError` are
+  new closed BLUE error sums (closed registries); `KesAlgorithm`
+  is a closed trait surface for the Sum_n chain (2 associated types + 6
+  associated consts + 11 methods). SEAMS should classify them
+  under closed registries / closed traits. Regen via `/seams` if
   absent.
-- **TRACEABILITY cross-reference**: the 5 new CI scripts + 1
-  extended script (§5) and the 9 new rules (§7) must appear in
-  TRACEABILITY. If absent at the next read, regen via
-  `/traceability`.
-- **Honest-scope note (RED runner)**: the three new RED tokio
-  runner files (`mux_pump.rs`, `n2n_dialer.rs`,
-  `keep_alive_session.rs`) and the RED `ade_network::mux::transport`
-  extension are the mechanical-layer plumbing that makes the
-  live pass runnable. The actual operator pass against a private
-  cardano-node peer + JSONL log capture is `RO-LIVE-03`'s
-  `open_obligation = "blocked_until_operator_peer_available"`,
-  closed by the one-slice follow-on cluster `PHASE4-N-L-LIVE`.
-  Block production over a real peer is enabled by the same mux
-  fabric via the existing PHASE4-N-G server pump path (no new
-  block-production code in this cluster).
+- **TRACEABILITY cross-reference**: the 1 new CI script + 2
+  modified scripts (§5) and the 2 new rules + 4 strengthenings
+  (§7) must appear in TRACEABILITY. If absent at the next read,
+  regen via `/traceability`.
+- **Honest-scope note (BLUE algorithm).** `ade_crypto::kes_sum`
+  ships only what cardano-base's `Sum6KES Ed25519DSIGN` ships:
+  the algorithm + serde + period inference + cross-impl
+  validation. VRF (`VrfDraft03`) and cold-key signing (Ed25519
+  DSIGN) remain on upstream `cardano-crypto` until a separate
+  future cluster picks them up. This is a deliberate scope cap,
+  not a discipline gap — the cluster-doc and
+  `docs/active/op-ops-04-ade-native-kes-flow.md` both flag it.
+- **Honest-scope note (Cargo demotion).** `cardano-crypto` is
+  demoted to `#[cfg(test)]` only **inside `ade_crypto`** and
+  feature-narrowed (no `kes-sum` feature) **inside `ade_runtime`**.
+  It is still a compile-time dependency of `ade_runtime`'s
+  production graph (for VRF + DSIGN) and of `ade_testkit`. A
+  full removal of cardano-crypto from production is out of
+  scope for N-P and is a separate future cluster.
 
 ---
 
 ## Generation Notes
 
-This regen was produced by `/head-deltas d62c2bc` against the
-staged PHASE4-N-L cluster-close working tree (uncommitted at regen
-time — `git add -N` applied to surface new files in `git diff`).
-The baseline was shifted from the prior N-K handoff (`1946573`) to
-the PHASE4-N-K close (`d62c2bc`) per the cluster-close cadence —
-each grounding regen baselines at the previous cluster's close so
-the narrative stays narrow and reviewable per-cluster.
-`.idd-config.json` `head_deltas_baseline` was bumped from `1946573`
-to `d62c2bc` as part of this regen. Future regens should continue
-to baseline at the **previous** cluster's close.
+This regen was produced by `/head-deltas 6eb4fbd` against the
+PHASE4-N-P close working tree at `HEAD = d6f3399`. The baseline
+was set to `6eb4fbd` (PHASE4-N-O close) per the established
+per-cluster cadence — each grounding regen baselines at the
+previous cluster's close so the narrative stays narrow and
+reviewable per-cluster. `.idd-config.json` `head_deltas_baseline`
+itself was bumped earlier in `d6f3399` from `d62c2bc` to
+`6973318` (the PHASE4-N-P S5 close — i.e. where the **next**
+cluster's narrative will start); that bump is intentional and
+distinct from this doc's baseline choice. Future regens should
+continue to baseline at the previous cluster's close.
 
 Mechanical inputs:
-- `git log --oneline --no-merges d62c2bc..HEAD` (cluster-close
-  commit pending) → §1.
-- `git diff --name-status d62c2bc -- crates/ ci/ docs/` (with
-  `git add -N` on new files) → §2 + §3.
-- `git diff --numstat d62c2bc -- crates/<crate>/` → §3 scope column.
-- `crates/ade_network/Cargo.toml` diff → §4 (no Cargo features
-  changed; tokio `sync` + `rt-multi-thread` features added,
-  structural CI confinement noted).
-- `ls ci/ci_check_*.sh` vs `git ls-tree -r --name-only d62c2bc ci/`
-  → §5 (61 → 66; 1 modified).
-- `git diff d62c2bc -- docs/ade-invariant-registry.toml` + entry
-  count (`grep -c '^\[\[rules\]\]'`) → §7 (214 → 223; 9 new
-  rules, 4 missing strengthening markers — surfaced as a gap).
-- `docs/clusters/completed/PHASE4-N-L/CLOSURE.md` →
-  cluster-summary header, Modules Modified narrative, registry-
-  delta promises (cross-checked against the registry).
+- `git log --oneline --no-merges 6eb4fbd..HEAD` → §1 (6 commits).
+- `git diff --name-status 6eb4fbd..HEAD` → §2 + §3.
+- `git diff --numstat 6eb4fbd..HEAD -- crates/<crate>/` → §3 scope column.
+- `crates/ade_runtime/Cargo.toml` diff → §4 (no Ade-side Cargo
+  features changed; cardano-crypto `kes-sum` feature dropped).
+- `ls ci/ci_check_*.sh` vs `git ls-tree -r --name-only 6eb4fbd ci/`
+  → §5 (88 → 89; 2 modified, 1 new).
+- `git diff 6eb4fbd -- docs/ade-invariant-registry.toml` + entry
+  count (`grep -c '^\[\[rules\]\]'`) → §7 (262 → 264; 2 new rules,
+  4 strengthenings, 0 removals, 2 open obligations cleared).
+- `docs/clusters/completed/PHASE4-N-P/{cluster,CLOSURE,S1..S5}.md`
+  → cluster-summary header, Modules Modified narrative,
+  registry-delta cross-checks, S4 prefix-discovery anomaly.
