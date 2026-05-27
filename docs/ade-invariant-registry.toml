@@ -4381,3 +4381,54 @@ introduced_in = "PHASE4-N-Q"
 strengthened_in = []
 cluster = "PHASE4-N-Q"
 open_obligation = "The S2 inline replay test covers the mechanical claim across a synthetic canonical event corpus (two runs over `[CoordinatorStarted; SlotTick(0..3); ForgeSucceeded | ForgeNotLeader | ForgeFailed]` → byte-identical effects + log). An *operator-pass* replay anchor — two `ade_node --mode produce` runs against the same canonical inputs producing byte-identical ProducerLogEvent sequences when filtered to the replayable vocabulary — is captured by docs/clusters/PHASE4-N-Q/CE-N-Q-OPERATOR_PROCEDURE.md §F and gated on the real forge handler landing. Reopen criteria: when the forge handler is real, capture two transcripts and assert byte equality on the filtered replay surface."
+
+# =============================================================================
+# PHASE4-N-R-A — Real forge composition (CN-FORGE / DC-FORGE family, declared)
+# Sketch: docs/planning/phase4-n-r-invariants.md
+# Plan: docs/planning/phase4-n-r-cluster-slice-plan.md
+# Cluster doc: docs/clusters/PHASE4-N-R-A/cluster.md
+# Status: "declared" — enforcement debt to be closed by N-R-A A2/A3/A4 slices.
+# =============================================================================
+
+[[rules]]
+id = "CN-FORGE-01"
+tier = "derived"
+statement = "The producer-mode forge handler is a closed transition from CoordinatorEvent::RequestForge { slot, kes_period, ledger_snapshot_ref, chain_tip } to exactly one of three ForgeResult variants: ForgeSucceeded { slot, artifact } where artifact.bytes decodes via Ade's BLUE block decoder AND self_accept(artifact, chain_tip, ledger_snapshot) returns Accepted; ForgeNotLeader { slot, vrf_output_fingerprint }; or ForgeFailed { slot, structured_error }. No other outcome is permitted. ForgeSucceeded MUST NOT be emitted if self_accept rejects the artifact — the handler emits ForgeFailed { SelfAcceptRejected } instead. Empty-block forging is the explicit scope; mempool integration is out of scope for the rule's enforcement evidence."
+source = "docs/planning/phase4-n-r-invariants.md §1 (I1, I9); §2 (N1); §5 (state transitions)"
+cross_ref = ["CN-CONS-07", "CN-PROD-02", "DC-CONS-18", "T-KEY-01"]
+code_locus = "TBD — populated by N-R-A A3 slice (ade_node::produce_mode::apply_effects_with_forge_handler) + A4 integration tests (crates/ade_node/tests/produce_mode_forge_*.rs)"
+tests = []
+ci_script = ""
+status = "declared"
+introduced_in = "PHASE4-N-R-A"
+strengthened_in = []
+attack_rationale = "Cardano-specific: forging a block that fails self-accept and broadcasting it would propagate an invalid block to peers, breaking the chain. Forging without a self-accept gate is a forged-by-error attack vector."
+evidence_notes = "S5 ships a stub forge handler that emits ForgeNotLeader only. N-R-A's enforcement gate is A4's 4-variant integration test (NotLeader, Succeeded, KesPeriodOutOfRange, SelfAcceptRejected) against a synthetic stake-distribution + Eta0 corpus."
+
+[[rules]]
+id = "CN-FORGE-02"
+tier = "derived"
+statement = "Leader-check splits across the RED/BLUE color boundary: RED produces a VRF proof/output for the slot using the operator's VRF signing key; BLUE verifies the proof and evaluates leader eligibility from canonical inputs only (slot, eta0, stake_distribution, leader_threshold, vrf_vk, vrf_proof_or_output, LeaderScheduleAnswer). BLUE never sees the VRF / KES / cold signing keys. The BLUE evaluator (`verify_and_evaluate_leader`) lives at `ade_core::consensus::leader_check` and has no dependency on LedgerView, EraSchedule, ChainDepState, wall-clock, storage, or RED crates. Caller derives LeaderScheduleAnswer via the authority path (query_leader_schedule) and passes it in. The closed two-variant LeaderCheckVerdict (Eligible carries forge-capable material; NotEligible carries only bounded vrf_output_fingerprint evidence) makes illegal observation of forge-capable material structurally impossible."
+source = "docs/planning/phase4-n-r-invariants.md §1 (I2); §2 (N12); §3 (D1); §4 (R3)"
+cross_ref = ["T-KEY-01", "CN-FORGE-01", "DC-FORGE-01", "DC-CRYPTO-04", "DC-CRYPTO-05"]
+code_locus = "TBD — populated by N-R-A A2 slice (ade_core::consensus::leader_check::verify_and_evaluate_leader + LeaderCheckVerdict enum) + A3 slice (RED forge handler in produce_mode that calls vrf_prove then verify_and_evaluate_leader)"
+tests = []
+ci_script = ""
+status = "declared"
+introduced_in = "PHASE4-N-R-A"
+strengthened_in = []
+attack_rationale = "Cardano-specific: a BLUE component that owns or reads VRF signing keys could forge proofs for non-leader slots — the foundation of the eligibility security model. The RED/BLUE split makes BLUE structurally incapable of producing forge-capable material, even in the presence of bugs."
+evidence_notes = "Enforcement combines (a) the closed enum shape of LeaderCheckVerdict making NotEligible -> vrf_output access structurally impossible, (b) the grep gate that verify_and_evaluate_leader does not import KesSecret / VrfSigningKey / ColdSigningKey, and (c) the grep gate that is_leader_for_vrf_output is private to leader_check (or deleted) — no external caller may bypass LeaderCheckVerdict."
+
+[[rules]]
+id = "DC-FORGE-01"
+tier = "derived"
+statement = "Given the same canonical input set (slot, eta0, vrf_vk, vrf_proof_or_output, LeaderScheduleAnswer), verify_and_evaluate_leader produces a byte-identical LeaderCheckVerdict across runs. Replay-equivalence anchor for the BLUE leader-check evaluator. Strengthens the existing leader-check determinism (DC-CONS-13 family) by exposing leader eligibility as a callable, replay-anchored function — not just an internal step in forge_block."
+source = "docs/planning/phase4-n-r-invariants.md §3 (D1); §4 (R3)"
+cross_ref = ["DC-CONS-13", "DC-CONS-14", "DC-PROD-02", "CN-FORGE-02"]
+code_locus = "TBD — populated by N-R-A A2 slice (ade_core::consensus::leader_check unit tests including replay-byte-identity-across-two-runs)"
+tests = []
+ci_script = ""
+status = "declared"
+introduced_in = "PHASE4-N-R-A"
+strengthened_in = []

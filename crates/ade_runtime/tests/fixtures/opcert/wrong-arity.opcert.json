@@ -1,0 +1,5 @@
+{
+    "type": "NodeOperationalCertificate",
+    "description": "Wrong arity: inner array has 5 elements instead of 4",
+    "cborHex": "828558200c6ea1d8de23bf345996c6b26e0699f81a8e3fe79021b764ba3727c0eeb6231400005840ca267e71ec582af8cbfb15b6856d0098febefbdeb55b7fc813b312ba3625766dc9a32324ced476d31b26e61f3250ac8fe410cf603b39dec92b7c0ee27e480d0a005820180537b7910f1dcb35bed2bcbc2d374f0f8a68f4f63cd0662afa38d3c4499d93"
+}

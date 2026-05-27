@@ -1,0 +1,11 @@
+{
+    "activeSlotsCoeff": 0.05,
+    "epochLength": 432000,
+    "maxKESEvolutions": 62,
+    "networkMagic": 1,
+    "slotLength": 1,
+    "slotsPerKESPeriod": 129600,
+    "systemStart": "2022-06-01T00:00:00Z",
+    "futureExtensionField": "this should be accepted-and-ignored",
+    "unknownNestedObject": {"foo": "bar"}
+}
