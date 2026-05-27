@@ -24,12 +24,16 @@
 //! Per-peer isolation: each pump owns its own `MuxTransportHandle`
 //! + `SessionState`; no shared mutable state across pumps.
 
+use ade_network::codec::block_fetch::encode_block_fetch_message;
+use ade_network::codec::chain_sync::encode_chain_sync_message;
+use ade_network::mux::frame::MuxMode;
 use ade_network::mux::transport::{MuxTransportHandle, TransportError};
 use ade_network::session::{
     step, AcceptedMiniProtocol, ByteChunkIn, SessionEffect, SessionError, SessionState,
 };
 use tokio::sync::mpsc;
 
+use crate::network::outbound_command::{CloseReason, OutboundCommand};
 use crate::orchestrator::event::{
     OrchestratorEvent, PeerHaltReason, PeerId, PeerRole,
 };
@@ -41,6 +45,12 @@ pub struct MuxPump {
     pub session_state: SessionState,
     pub events_out: mpsc::Sender<OrchestratorEvent>,
     pub peer_role: PeerRole,
+    /// PHASE4-N-S-B: per-peer outbound command receiver.
+    /// `None` in dialer mode (existing behavior preserved).
+    /// `Some` in server mode after the listener creates a
+    /// per-peer mpsc::channel and registers the sender side
+    /// in `PerPeerOutbound`.
+    pub outbound_relay: Option<mpsc::Receiver<OutboundCommand>>,
 }
 
 impl MuxPump {
@@ -48,41 +58,140 @@ impl MuxPump {
     /// orchestrator drop.
     pub async fn run(mut self) {
         loop {
-            let chunk = match self.transport.inbound.recv().await {
-                Some(c) => c,
-                None => {
-                    // Inbound channel closed → reader task exited.
-                    // Take ownership of the reader handle before awaiting
-                    // it so we don't partially move out of self.
-                    let reader_handle =
-                        std::mem::replace(&mut self.transport.reader_handle, tokio::spawn(async { Ok(()) }));
-                    let reason = match reader_handle.await {
-                        Ok(Ok(())) | Ok(Err(TransportError::Eof)) => None,
-                        Ok(Err(TransportError::BackpressureExceeded)) => {
-                            Some(PeerHaltReason::ChainSyncDecodeError)
+            tokio::select! {
+                chunk = self.transport.inbound.recv() => {
+                    match chunk {
+                        Some(c) => {
+                            let effects = match step(&mut self.session_state, ByteChunkIn::Inbound(c)) {
+                                Ok(e) => e,
+                                Err(err) => {
+                                    let _ = self
+                                        .emit_peer_disconnected(Some(session_err_to_halt(&err)))
+                                        .await;
+                                    return;
+                                }
+                            };
+                            for effect in effects {
+                                if !self.route_effect(effect).await {
+                                    return;
+                                }
+                            }
                         }
-                        Ok(Err(TransportError::Io(_))) => Some(PeerHaltReason::ChainSyncDecodeError),
-                        Err(_) => Some(PeerHaltReason::ChainSyncDecodeError),
-                    };
-                    let _ = self.emit_peer_disconnected(reason).await;
-                    return;
+                        None => {
+                            // Inbound channel closed → reader task exited.
+                            let reader_handle = std::mem::replace(
+                                &mut self.transport.reader_handle,
+                                tokio::spawn(async { Ok(()) }),
+                            );
+                            let reason = match reader_handle.await {
+                                Ok(Ok(())) | Ok(Err(TransportError::Eof)) => None,
+                                Ok(Err(TransportError::BackpressureExceeded)) => {
+                                    Some(PeerHaltReason::ChainSyncDecodeError)
+                                }
+                                Ok(Err(TransportError::Io(_))) => Some(PeerHaltReason::ChainSyncDecodeError),
+                                Err(_) => Some(PeerHaltReason::ChainSyncDecodeError),
+                            };
+                            let _ = self.emit_peer_disconnected(reason).await;
+                            return;
+                        }
+                    }
                 }
-            };
-            let effects = match step(&mut self.session_state, ByteChunkIn::Inbound(chunk)) {
-                Ok(e) => e,
-                Err(err) => {
-                    let _ = self
-                        .emit_peer_disconnected(Some(session_err_to_halt(&err)))
-                        .await;
-                    return;
-                }
-            };
-            for effect in effects {
-                if !self.route_effect(effect).await {
-                    return;
+                cmd = async {
+                    match self.outbound_relay.as_mut() {
+                        Some(rx) => rx.recv().await,
+                        None => std::future::pending().await,
+                    }
+                } => {
+                    match cmd {
+                        Some(c) => {
+                            if !self.handle_outbound_command(c).await {
+                                return;
+                            }
+                        }
+                        None => {
+                            // outbound_relay sender side dropped — treat
+                            // as orchestrator-driven shutdown signal.
+                            let _ = self.emit_peer_disconnected(None).await;
+                            return;
+                        }
+                    }
                 }
             }
         }
+    }
+
+    /// PHASE4-N-S-B: handle one OutboundCommand by encoding the
+    /// typed reply via the existing codec, driving session::step
+    /// with `ByteChunkIn::OutboundFrame` (which wraps the mux
+    /// frame), then routing the resulting `SendBytes` via
+    /// `route_effect`. The session-aware encoder is the sole
+    /// producer of wire-byte streams — `produce_mode` cannot
+    /// bypass this path.
+    ///
+    /// Returns `false` if the pump should exit (graceful close
+    /// or unrecoverable failure).
+    async fn handle_outbound_command(&mut self, cmd: OutboundCommand) -> bool {
+        // Cross-peer leakage gate (CN-PEER-OUTBOUND-MAP-01).
+        if cmd.peer() != self.peer_id {
+            // Reject silently — the sender targeted a different
+            // peer. Should be unreachable if PerPeerOutbound is
+            // consistent.
+            return true;
+        }
+        match cmd {
+            OutboundCommand::ChainSync { reply, .. } => {
+                let msg = reply.into_message();
+                let payload = encode_chain_sync_message(&msg);
+                self.dispatch_outbound_frame(AcceptedMiniProtocol::ChainSync, payload).await
+            }
+            OutboundCommand::BlockFetch { reply, .. } => {
+                let msg = reply.into_message();
+                let payload = encode_block_fetch_message(&msg);
+                self.dispatch_outbound_frame(AcceptedMiniProtocol::BlockFetch, payload).await
+            }
+            OutboundCommand::ClosePeer { reason, .. } => {
+                let halt = match reason {
+                    CloseReason::Graceful => None,
+                    CloseReason::ProtocolViolation => Some(PeerHaltReason::ChainSyncDecodeError),
+                };
+                let _ = self.emit_peer_disconnected(halt).await;
+                false
+            }
+        }
+    }
+
+    async fn dispatch_outbound_frame(
+        &mut self,
+        mini_protocol: AcceptedMiniProtocol,
+        payload: Vec<u8>,
+    ) -> bool {
+        let mode = match self.peer_role {
+            PeerRole::UpstreamClient => MuxMode::Initiator,
+            PeerRole::DownstreamServer => MuxMode::Responder,
+        };
+        let effects = match step(
+            &mut self.session_state,
+            ByteChunkIn::OutboundFrame {
+                mini_protocol,
+                payload,
+                mode,
+                timestamp: 0,
+            },
+        ) {
+            Ok(e) => e,
+            Err(err) => {
+                let _ = self
+                    .emit_peer_disconnected(Some(session_err_to_halt(&err)))
+                    .await;
+                return false;
+            }
+        };
+        for effect in effects {
+            if !self.route_effect(effect).await {
+                return false;
+            }
+        }
+        true
     }
 
     async fn route_effect(&mut self, effect: SessionEffect) -> bool {
@@ -264,6 +373,7 @@ mod tests {
             session_state: fake_connected_state(),
             events_out: events_tx,
             peer_role: PeerRole::UpstreamClient,
+            outbound_relay: None,
         };
         let pump_handle = tokio::spawn(pump.run());
 

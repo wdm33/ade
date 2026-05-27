@@ -4,6 +4,7 @@
 pub mod encoding;
 pub mod header_input;
 pub mod transition;
+pub mod unsigned_header_pre_image;
 pub mod verdict;
 
 pub use encoding::{

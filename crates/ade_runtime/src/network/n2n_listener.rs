@@ -196,6 +196,7 @@ pub async fn run_per_peer_session(cfg: PerPeerSessionConfig) -> Result<(), PeerS
         session_state,
         events_out: cfg.events_out,
         peer_role: PeerRole::DownstreamServer,
+        outbound_relay: None, // B3 wires per-peer outbound channel
     };
     tokio::spawn(pump.run());
 

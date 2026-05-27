@@ -127,6 +127,7 @@ impl N2nDialer {
             session_state,
             events_out: self.events_out,
             peer_role: PeerRole::UpstreamClient,
+            outbound_relay: None,
         };
         tokio::spawn(pump.run());
 
