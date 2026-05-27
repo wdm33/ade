@@ -4315,3 +4315,61 @@ Committed live transcript at `docs/evidence/phase4-n-m-c-operator-pass-transcrip
 
 PHASE4-N-M-FOLLOW (2026-05-27) strengthens by adding a sustained-admission complement: committed transcript at `docs/evidence/phase4-n-m-follow-sustained-transcript.jsonl` records 34 consecutive `block_admitted` events across slots 124137045..124137868 (~14 minutes of mainnet chain time) with 0 `diverged`, 0 mismatched-hash, 0 `input_not_found`. All 34 verdicts are `lagging` (by design — the GREEN reducer emits `agreed` only when our admit slot equals the peer's tip slot exactly, which requires catching up to live for ~150 minutes given preprod block rate). The literal "≥1 Agreed" requirement stays satisfied by the SCHED transcript above; FOLLOW widens the no-divergence surface from a single tip-admit to a 34-block sequential walk.
 """
+
+# =============================================================================
+# PHASE4-N-Q — Live producer-mode (CN-PROD / DC-PROD family, declared)
+# Sketch: docs/planning/phase4-n-q-invariants.md
+# Status: "declared" — enforcement debt to be closed by N-Q slices.
+# =============================================================================
+
+[[rules]]
+id = "CN-PROD-01"
+tier = "derived"
+statement = "Producer-mode listener completes the N2N handshake (CN-SESS-02) on every accepted inbound connection before any mini-protocol traffic is exchanged. Pre-handshake socket bytes never reach the n2n_server reducers; handshake failure fail-closes the connection. Bytes from a peer that has not completed handshake are dropped at the boundary."
+source = "docs/planning/phase4-n-q-invariants.md §1 (I1, I6); §2 (N1, N15)"
+cross_ref = ["CN-SESS-02", "DC-SESS-01", "DC-SESS-02", "RO-LIVE-01", "CN-CONS-06"]
+code_locus = "TBD — populated by N-Q listener slice (ade_runtime/src/network/n2n_listener.rs)"
+tests = []
+ci_script = ""
+status = "declared"
+introduced_in = "PHASE4-N-Q"
+strengthened_in = []
+
+[[rules]]
+id = "CN-PROD-02"
+tier = "derived"
+statement = "Producer slot loop never signs a block whose KES period has rotated past current_period. Slot → KES period is a pure function of (slot, genesis_kes_anchor, slots_per_kes_period); the coordinator fail-closes (slot_missed event + log) when wall-clock has advanced past the target slot before forge completes. No retroactive forge. The GREEN coordinator never owns or stores private signing material — it emits a closed `RequestForge { slot, kes_period, ledger_snapshot_ref, chain_tip }` effect; the RED producer shell either returns an `AcceptedBlock` via a `ForgeSucceeded` event or a structured `ForgeFailed { slot, structured_error }` event. KesSecret / VrfSigningKey / ColdSigningKey never enter CoordinatorState. T-tier key-custody boundary."
+source = "docs/planning/phase4-n-q-invariants.md §1 (I3, I4, I7, I8); §2 (N4, N5, N8, N9); §5"
+cross_ref = ["T-KEY-01", "DC-CRYPTO-04", "DC-CRYPTO-05", "DC-CONS-11", "OP-OPS-04", "OP-OPS-05"]
+code_locus = "TBD — populated by N-Q coordinator slice (ade_runtime/src/producer/coordinator.rs) + RED shell slice (ade_runtime/src/producer/producer_shell.rs)"
+tests = []
+ci_script = ""
+status = "declared"
+introduced_in = "PHASE4-N-Q"
+strengthened_in = []
+
+[[rules]]
+id = "DC-PROD-01"
+tier = "derived"
+statement = "Producer-mode evidence log emits a closed `ProducerLogEvent` vocabulary: handshake_ok, slot_tick, leader_elected, block_forged, block_served, peer_chain_tip_observed, slot_missed{reason: closed_enum}, coordinator_shutdown{reason: closed_enum}. No free-form reason strings; no key material; no path strings. Socket addresses MUST NOT appear inside the replayable event stream — `PeerId` is an opaque `u64` (coordinator-internal counter); socket addresses are RED operational metadata, surfaced separately and excluded from replay-equivalence comparison. Mirrors the LiveLogEvent / AdmissionLogEvent precedent established in N-L / N-M while remaining a distinct vocabulary."
+source = "docs/planning/phase4-n-q-invariants.md §1 (I11); §2 (N9, N12, N13, N15)"
+cross_ref = ["DC-NODE-01", "DC-NODE-02", "DC-NODE-03", "DC-NODE-04"]
+code_locus = "TBD — populated by N-Q producer_log slice (ade_runtime/src/producer/producer_log.rs)"
+tests = []
+ci_script = ""
+status = "declared"
+introduced_in = "PHASE4-N-Q"
+strengthened_in = []
+
+[[rules]]
+id = "DC-PROD-02"
+tier = "derived"
+statement = "Coordinator slot-tick + forge-result stream replay-equivalence. For a fixed initial CoordinatorState, fixed canonical slot-tick sequence, fixed ledger state, fixed opcert public metadata, and fixed RED forge-result event stream (ForgeSucceeded | ForgeFailed sequence), the coordinator emits byte-identical broadcast effects and byte-identical ProducerLogEvent sequence. Wall-clock real-time timestamps and socket arrival order are non-load-bearing RED metadata. Replay is over canonical event streams — NOT real wall-clock time. The forge-result event stream is the canonical surface across the RED-key-custody boundary; the GREEN coordinator is replayable against it without ever seeing secret material."
+source = "docs/planning/phase4-n-q-invariants.md §1 (I7, I8); §3 (D5); §4 (R3, R4); §8"
+cross_ref = ["T-DET-01", "DC-CONS-13", "DC-CONS-14", "CN-PROD-02"]
+code_locus = "TBD — populated by N-Q coordinator slice + N-Q replay-test slice (synthetic slot-tick + forge-result corpus)"
+tests = []
+ci_script = ""
+status = "declared"
+introduced_in = "PHASE4-N-Q"
+strengthened_in = []
