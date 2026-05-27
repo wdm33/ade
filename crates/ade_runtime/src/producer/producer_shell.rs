@@ -238,6 +238,13 @@ impl ProducerShell {
         vrf_prove(&self.vrf, msg).map_err(ShellSignError::Signing)
     }
 
+    /// VRF verification key (public). Derived from the shell's VRF
+    /// signing key. Non-secret; returned by value. Used by the BLUE
+    /// leader-check evaluator to verify VRF proofs the shell emits.
+    pub fn vrf_verification_key(&self) -> ade_crypto::vrf::VrfVerificationKey {
+        self.vrf.verification_key()
+    }
+
     /// Current KES period.
     pub fn kes_current_period(&self) -> KesPeriod {
         self.kes.current_period()

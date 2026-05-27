@@ -69,6 +69,15 @@ impl VrfSigningKey {
         arr.copy_from_slice(b);
         Ok(Self(arr))
     }
+
+    /// Derive the VRF verification key (public). The libsodium VRF
+    /// expanded secret key carries the VK as bytes 32..64. Non-secret;
+    /// returned by value.
+    pub fn verification_key(&self) -> ade_crypto::vrf::VrfVerificationKey {
+        let mut vk = [0u8; 32];
+        vk.copy_from_slice(&self.0[32..64]);
+        ade_crypto::vrf::VrfVerificationKey(vk)
+    }
 }
 
 impl Drop for VrfSigningKey {

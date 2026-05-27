@@ -505,6 +505,39 @@ mod tests {
         }
     }
 
+    /// **PHASE4-N-R-A A3 entry gate (DQ-A2).**
+    ///
+    /// Proves `forge_block` accepts an empty `MempoolState` + empty
+    /// `mempool_tx_bytes` vector with the documented assertions:
+    /// no `MempoolWidthMismatch`, no `MempoolAcceptedMismatch`,
+    /// forged body `tx_count = 0`, body_hash structurally bound
+    /// by the recipe in forge_block step 7.
+    ///
+    /// **Discipline:** if this test fails, halt A3 and revise the
+    /// `ProducerTick` contract — do NOT patch around it inside
+    /// `produce_mode`. Failure here means the producer tick
+    /// contract is under-specified.
+    ///
+    /// Companion test `forge_block_empty_mempool_produces_empty_body`
+    /// (below) covers the body-bucket byte assertions; this test is
+    /// the named A3 gate per DQ-A2 wording.
+    #[test]
+    fn forge_block_accepts_empty_mempool() {
+        let tick = base_tick();
+        assert_eq!(tick.mempool_tx_bytes.len(), 0, "tick.mempool_tx_bytes must be empty");
+        assert_eq!(tick.mempool.accepted().len(), 0, "tick.mempool.accepted() must be empty");
+
+        let (forged, effects) = forge_block(&tick).expect("forge_block must accept empty mempool");
+
+        assert_eq!(forged.block.tx_count, 0, "tx_count must be 0 for empty mempool");
+        assert_eq!(effects.len(), 1, "exactly one ForgeEffects emitted");
+        match effects[0] {
+            ForgeEffects::ReadyForSelfAccept { next_prev_opcert_counter } => {
+                assert_eq!(next_prev_opcert_counter, 7);
+            }
+        }
+    }
+
     #[test]
     fn forge_block_empty_mempool_produces_empty_body() {
         let tick = base_tick();
