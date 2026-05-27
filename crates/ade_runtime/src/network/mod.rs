@@ -19,7 +19,11 @@
 
 pub mod mux_pump;
 pub mod n2n_dialer;
+pub mod n2n_listener;
 pub mod n2n_server;
 
 pub use mux_pump::MuxPump;
 pub use n2n_dialer::{DialError, N2nDialer};
+pub use n2n_listener::{
+    run_n2n_listener, run_per_peer_session, ListenerError, N2nListenerConfig, PeerSessionError,
+};
