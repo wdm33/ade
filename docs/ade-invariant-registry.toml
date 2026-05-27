@@ -4654,3 +4654,26 @@ introduced_in = "PHASE4-N-S-B"
 strengthened_in = []
 cluster = "PHASE4-N-S-B"
 evidence_notes = "FIFO is structurally guaranteed by the underlying tokio::sync::mpsc::Sender contract (per the tokio docs: 'sent messages are received in the order they were sent'). MuxPump's run() loop processes one OutboundCommand per tokio::select! iteration, so per-peer FIFO is preserved end-to-end without additional ordering primitives."
+
+# =============================================================================
+# PHASE4-N-S-C — Paired acceptance evidence (CN-OPERATOR-EVIDENCE family, declared)
+# Sketch: docs/planning/phase4-n-s-invariants.md
+# Plan: docs/planning/phase4-n-s-cluster-slice-plan.md
+# Cluster doc: docs/clusters/PHASE4-N-S-C/cluster.md
+# Status: "enforced" at schema level; operator-pass execution gated.
+# =============================================================================
+
+[[rules]]
+id = "CN-OPERATOR-EVIDENCE-01"
+tier = "release"
+statement = "Every PHASE4-N-S-C operator-pass evidence manifest (docs/clusters/PHASE4-N-S-C/CE-N-S-LIVE_YYYYMMDD-<short_commit>.toml) carries the closed schema: schema_version, ade_commit, cardano_node_version, cardano_cli_version, network, block_hash, slot, opcert_fingerprint, genesis_fingerprint, ade_evidence_file, peer_log_file, peer_log_capture_command, peer_log_filter, peer_log_file_sha256, acceptance_keyword_match. The peer_log_file_sha256 cross-checks the committed peer.log file's actual hash. grep filter is documentation, not authority — the committed peer_log_file is the raw docker logs output."
+source = "docs/planning/phase4-n-s-invariants.md §1 (I6); §2 (N6, N7); user-direction correction 6"
+cross_ref = ["CN-CONS-06", "RO-LIVE-01"]
+code_locus = "docs/clusters/PHASE4-N-S-C/cluster.md + S1.md + S2.md (runbook + manifest schema); ci/ci_check_operator_evidence_manifest_schema.sh (schema enforcement when a manifest is committed)"
+tests = []
+ci_script = "ci/ci_check_operator_evidence_manifest_schema.sh"
+status = "enforced"
+introduced_in = "PHASE4-N-S-C"
+strengthened_in = []
+cluster = "PHASE4-N-S-C"
+open_obligation = "**Schema is enforced**: any committed CE-N-S-LIVE_*.toml file MUST conform to the documented schema (the CI gate runs only when such a file is present). **C1/C2 execution is blocked_until_operator_pass_executed**: until the operator brings up a private testnet (C1) or preprod stake is provisioned (C2) and the binary is run + paired evidence committed, no CE-N-S-LIVE_*.toml exists and the CI gate is vacuously satisfied. Reopen criteria: operator commits at least one CE-N-S-LIVE_*.toml; the gate then verifies schema + sha256 match."
