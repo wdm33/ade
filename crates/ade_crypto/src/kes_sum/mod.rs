@@ -42,6 +42,8 @@ mod single;
 mod sum;
 
 #[cfg(test)]
+mod cardano_cli_corpus;
+#[cfg(test)]
 mod tests;
 
 pub use errors::KesParseError;
