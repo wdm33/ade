@@ -178,13 +178,13 @@ pub async fn run_produce_mode(cli: ProduceCli, shutdown_rx: watch::Receiver<bool
 
     // 6. Spawn listener.
     let (events_tx, mut events_rx) = mpsc::channel::<OrchestratorEvent>(64);
+    let peer_outbound = ade_runtime::network::outbound_command::new_per_peer_outbound();
     let listener_cfg = N2nListenerConfig {
         bind_addr: listen_addr,
         our_supported: ade_network::handshake::version_table::N2N_SUPPORTED,
         peer_id_generator: Arc::new(PeerIdGenerator::new()),
         events_out: events_tx,
-        peer_outbound: None, // N-S-B B3 wires this; produce_mode's
-                              // dispatch path will populate the map.
+        peer_outbound: Some(peer_outbound.clone()),
     };
     let listener_shutdown_rx = shutdown_rx.clone();
     let _listener_handle =
@@ -203,8 +203,8 @@ pub async fn run_produce_mode(cli: ProduceCli, shutdown_rx: watch::Receiver<bool
     let mut connected_peers: BTreeMap<PeerId, ()> = BTreeMap::new();
     // PHASE4-N-R-B B2/B3: per-peer n2n_server state map + served-chain
     // handle/view pair. The handle stays in produce_mode; the view is
-    // borrowed by `dispatch_server_frame_event` to read the current
-    // snapshot atomically.
+    // borrowed by `dispatch_server_frame_event_to_outbound` to read
+    // the current snapshot atomically.
     let mut peers_state: ServerPeerStates = BTreeMap::new();
     let (_served_chain_handle, served_chain_view) =
         ade_runtime::producer::served_chain_handle::ServedChainHandle::new();
@@ -284,7 +284,10 @@ pub async fn run_produce_mode(cli: ProduceCli, shutdown_rx: watch::Receiver<bool
                     &mut connected_peers,
                     &mut peers_state,
                     &served_chain_view,
-                ) {
+                    &peer_outbound,
+                )
+                .await
+                {
                     eprintln!("ade_node produce: listener event: {}", detail);
                 }
             }
@@ -953,13 +956,14 @@ fn apply_effects_with_forge_handler(
 /// dispatch.
 type ServerPeerStates = BTreeMap<PeerId, ade_runtime::network::n2n_server::PerPeerN2nServerState>;
 
-fn handle_listener_event(
+async fn handle_listener_event(
     evt: OrchestratorEvent,
     coord_state: &mut ade_runtime::producer::coordinator::CoordinatorState,
     evidence_writer: &mut std::fs::File,
     connected_peers: &mut BTreeMap<PeerId, ()>,
     peers_state: &mut ServerPeerStates,
     served_chain_view: &ade_runtime::producer::served_chain_handle::ServedChainView,
+    peer_outbound: &ade_runtime::network::outbound_command::PerPeerOutbound,
 ) -> Result<(), &'static str> {
     match evt {
         OrchestratorEvent::PeerConnected {
@@ -999,6 +1003,10 @@ fn handle_listener_event(
         OrchestratorEvent::PeerDisconnected { peer_id, .. } => {
             let coord_peer_id = PeerId(peer_id.0);
             peers_state.remove(&coord_peer_id);
+            peer_outbound
+                .write()
+                .await
+                .remove(&ade_runtime::orchestrator::event::PeerId(peer_id.0));
             if connected_peers.remove(&coord_peer_id).is_some() {
                 let prev_state = coord_state.clone();
                 let (new_state, effects) = coordinator_step(
@@ -1017,70 +1025,21 @@ fn handle_listener_event(
                 }
             }
         }
-        // PHASE4-N-R-B B3: explicit dispatch into n2n_server reducers.
-        // Receive-side variants (PeerChainSyncFrame, PeerBlockFetchFrame)
-        // are not relevant in produce mode (we are the server) — they
-        // remain absorbed.
-        //
-        // Server-side variants (PeerN2nServerChainSyncFrame,
-        // PeerN2nServerBlockFetchFrame): explicit dispatch is wired in
-        // the dedicated `handle_server_frame_*` helpers below.
-        // **Honest scope (B3):** dispatch runs and the response bytes
-        // are constructed; the transmit-back-to-peer wire requires
-        // extending MuxPump (deferred to N-R-C / a future cluster).
-        // For now, B3 advances per-peer state correctly and proves the
-        // reducers run; B4 closes via integration tests.
-        // PHASE4-N-R-B B3: explicit dispatch for server-side frame
-        // events. Replaces the previous `_ => {}` absorption.
         OrchestratorEvent::PeerN2nServerChainSyncFrame { .. }
         | OrchestratorEvent::PeerN2nServerBlockFetchFrame { .. } => {
-            // dispatch_server_frame_event advances per-peer state +
-            // computes response bytes. The response-byte length is
-            // returned for logging; transmitting bytes back to the
-            // peer requires extending MuxPump with an outbound-relay
-            // channel (deferred to N-R-C / a future cluster).
-            let _reply_byte_count =
-                dispatch_server_frame_event(&evt, peers_state, served_chain_view)?;
+            let _replies =
+                dispatch_server_frame_event_to_outbound(
+                    &evt,
+                    peers_state,
+                    served_chain_view,
+                    peer_outbound,
+                )
+                .await
+                .map_err(|_| "server frame dispatch")?;
         }
         _ => {}
     }
     Ok(())
-}
-
-/// PHASE4-N-R-B B3: dispatch a server-side frame event through the
-/// n2n_server reducer. The reducer outputs are LOGGED (length +
-/// fingerprint) into the evidence stream; transmitting bytes back
-/// to the peer requires extending MuxPump with an outbound-relay
-/// channel — a documented N-R-C / future-cluster deliverable.
-fn dispatch_server_frame_event(
-    event: &OrchestratorEvent,
-    peers_state: &mut ServerPeerStates,
-    served_chain_view: &ade_runtime::producer::served_chain_handle::ServedChainView,
-) -> Result<usize, &'static str> {
-    use ade_runtime::network::n2n_server::{
-        dispatch_block_fetch_frame, dispatch_chain_sync_frame,
-    };
-    match event {
-        OrchestratorEvent::PeerN2nServerChainSyncFrame { peer_id, bytes } => {
-            let key = PeerId(peer_id.0);
-            let state = peers_state.get(&key).cloned().ok_or("peer not connected")?;
-            let snap_ref = served_chain_view.borrow();
-            let (new_state, maybe_reply, _done) =
-                dispatch_chain_sync_frame(state, bytes, &*snap_ref).map_err(|_| "chain-sync dispatch")?;
-            peers_state.insert(key, new_state);
-            Ok(maybe_reply.map(|b| b.len()).unwrap_or(0))
-        }
-        OrchestratorEvent::PeerN2nServerBlockFetchFrame { peer_id, bytes } => {
-            let key = PeerId(peer_id.0);
-            let state = peers_state.get(&key).cloned().ok_or("peer not connected")?;
-            let snap_ref = served_chain_view.borrow();
-            let (new_state, replies, _done) =
-                dispatch_block_fetch_frame(state, bytes, &*snap_ref).map_err(|_| "block-fetch dispatch")?;
-            peers_state.insert(key, new_state);
-            Ok(replies.iter().map(Vec::len).sum())
-        }
-        _ => Ok(0),
-    }
 }
 
 /// **PHASE4-N-S-B B4** — closed dispatch-error surface for the

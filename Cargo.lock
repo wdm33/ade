@@ -93,6 +93,7 @@ dependencies = [
  "ade_testkit",
  "ade_types",
  "cardano-crypto",
+ "ed25519-dalek",
  "serde",
  "serde_json",
  "tempfile",

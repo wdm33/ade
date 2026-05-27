@@ -177,6 +177,21 @@ pub async fn run_per_peer_session(cfg: PerPeerSessionConfig) -> Result<(), PeerS
     };
 
     let peer_id = cfg.peer_id_generator.next();
+
+    // PHASE4-N-S-B B3 wiring: if produce_mode supplied a
+    // `PerPeerOutbound` map, create a per-peer command channel
+    // and register the sender side under this `PeerId` BEFORE
+    // emitting PeerConnected. The invariant produce_mode's
+    // dispatch path depends on is "any peer visible through
+    // PeerConnected has an outbound sender registered."
+    let outbound_relay_rx = if let Some(map) = cfg.peer_outbound.as_ref() {
+        let (tx, rx) = mpsc::channel::<crate::network::outbound_command::OutboundCommand>(64);
+        map.write().await.insert(peer_id, tx);
+        Some(rx)
+    } else {
+        None
+    };
+
     let event = OrchestratorEvent::PeerConnected {
         peer_id,
         chain_sync_version: ChainSyncVersion::new(negotiated.version),
@@ -188,10 +203,6 @@ pub async fn run_per_peer_session(cfg: PerPeerSessionConfig) -> Result<(), PeerS
         .await
         .map_err(|_| PeerSessionError::OrchestratorDropped)?;
 
-    // Hand the post-handshake session to a MuxPump task. The pump
-    // dispatches `OrchestratorEvent::PeerN2nServerChainSyncFrame` /
-    // `PeerN2nServerBlockFetchFrame` events as the peer sends
-    // mini-protocol frames.
     let session_state = SessionState::Connected(ConnectedState::new(
         negotiated.version,
         negotiated.params,
@@ -207,7 +218,7 @@ pub async fn run_per_peer_session(cfg: PerPeerSessionConfig) -> Result<(), PeerS
         session_state,
         events_out: cfg.events_out,
         peer_role: PeerRole::DownstreamServer,
-        outbound_relay: None, // B3 wires per-peer outbound channel
+        outbound_relay: outbound_relay_rx,
     };
     tokio::spawn(pump.run());
 
