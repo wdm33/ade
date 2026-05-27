@@ -434,6 +434,65 @@ mod tests {
         verify_kes_signature(&KesVerificationKey(vk_bytes), KesPeriod(0), msg, &sig).unwrap();
     }
 
+    /// **PHASE4-N-S-A A4** — kes_sign_header signs the branded
+    /// UnsignedHeaderPreImage; the resulting signature verifies
+    /// against the same pre-image bytes via the validator's
+    /// verify_kes_signature primitive. End-to-end shell-API
+    /// contract proof.
+    #[test]
+    fn shell_kes_sign_header_produces_verifiable_signature() {
+        use ade_codec::cbor::{
+            write_array_header, write_bytes_canonical, ContainerEncoding, IntWidth,
+        };
+        use ade_crypto::kes_sum::KesAlgorithm;
+        use ade_ledger::block_validity::unsigned_header_pre_image::unsigned_header_pre_image;
+        use ade_types::shelley::block::ProtocolVersion;
+        use ade_types::Hash32;
+
+        let shell = make_shell(0);
+
+        // Build a synthetic vrf_result CBOR (mirrors forge.rs).
+        let vrf_result = {
+            let mut buf = Vec::new();
+            write_array_header(
+                &mut buf,
+                ContainerEncoding::Definite(2, IntWidth::Inline),
+            );
+            write_bytes_canonical(&mut buf, &[0xAA; 64]);
+            write_bytes_canonical(&mut buf, &[0xBB; 80]);
+            buf
+        };
+
+        let preimage = unsigned_header_pre_image(
+            100,
+            1,
+            Hash32([0u8; 32]),
+            vec![0x01; 32],
+            vec![0x02; 32],
+            vrf_result,
+            128,
+            Hash32([0x05; 32]),
+            shell.opcert().clone(),
+            ProtocolVersion { major: 9, minor: 0 },
+        )
+        .expect("recipe encode");
+
+        let sig = shell.kes_sign_header(0, &preimage).expect("sign");
+
+        // Verify via the standalone primitive (the same path
+        // verify_header_kes uses).
+        let kes_sk =
+            ade_crypto::kes_sum::Sum6Kes::gen_key_kes_from_seed_bytes(&[0x10; 32]).unwrap();
+        let vk_bytes = ade_crypto::kes_sum::Sum6Kes::derive_verification_key(&kes_sk);
+        verify_kes_signature(
+            &KesVerificationKey(vk_bytes),
+            KesPeriod(0),
+            preimage.as_bytes(),
+            &sig,
+        )
+        .expect("KES signature must verify against the canonical pre-image");
+    }
+
     #[test]
     fn shell_kes_sign_at_wrong_period_errors() {
         let shell = make_shell(0);

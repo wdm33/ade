@@ -2521,12 +2521,12 @@ statement = "Header bytes announced via chain-sync RollForward{header,tip} are t
 source = "docs/planning/phase4-n-a-successor-invariants.md §1 (I-2)"
 cross_ref = ["DC-CONS-16", "DC-CONS-17"]
 code_locus = "crates/ade_ledger/src/block_validity/header_input.rs (accepted_block_header_bytes — single canonical projection); crates/ade_runtime/src/producer/served_chain_lookups.rs (ServedHeaderLookup::next_after uses accepted_block_header_bytes); crates/ade_network/src/chain_sync/server.rs (producer_chain_sync_serve sources RollForward header from the trait lookup)"
-tests = ["producer_chain_sync_serve_roll_forward_header_equals_accepted_block_header_bytes", "session_transcript_announced_header_matches_served_body_recipe", "accepted_block_header_bytes_equals_validator_split_on_corpus", "forge_block_accepts_empty_mempool"]
-ci_script = "ci/ci_check_no_parallel_header_splitter.sh, ci/ci_check_broadcast_to_served_purity.sh"
+tests = ["producer_chain_sync_serve_roll_forward_header_equals_accepted_block_header_bytes", "session_transcript_announced_header_matches_served_body_recipe", "accepted_block_header_bytes_equals_validator_split_on_corpus", "forge_block_accepts_empty_mempool", "unsigned_header_preimage_matches_decode_block_extraction_for_corpus"]
+ci_script = "ci/ci_check_no_parallel_header_splitter.sh, ci/ci_check_broadcast_to_served_purity.sh, ci/ci_check_unsigned_header_preimage_single_source.sh"
 status = "enforced"
 authority_surface = "producer-side chain-sync RollForward header projection"
 cluster = "PHASE4-N-G"
-strengthened_in = ["PHASE4-N-R-A"]
+strengthened_in = ["PHASE4-N-R-A", "PHASE4-N-S-A"]
 evidence = ["End-to-end transcript test session_transcript_announced_header_matches_served_body_recipe asserts the rolled header bytes equal accepted_block_header_bytes over the same AcceptedBlock the matching block-fetch range subsequently serves.", "The single canonical header splitter is enforced by ci_check_no_parallel_header_splitter.sh; the GREEN adapter imports accepted_block_header_bytes (positive grep in ci_check_broadcast_to_served_purity.sh)."]
 
 [[rules]]
@@ -4404,7 +4404,7 @@ tests = ["zero_stake_answer_emits_forge_not_leader", "kes_period_outside_window_
 ci_script = "ci/ci_check_producer_coordinator_no_secrets.sh"
 status = "enforced"
 introduced_in = "PHASE4-N-R-A"
-strengthened_in = []
+strengthened_in = ["PHASE4-N-S-A"]
 cluster = "PHASE4-N-R-A"
 attack_rationale = "Cardano-specific: forging a block that fails self-accept and broadcasting it would propagate an invalid block to peers, breaking the chain. Forging without a self-accept gate is a forged-by-error attack vector."
 evidence_notes = "N-R-A's A4 integration tests cover 3 of the 4 ForgeResult branches (NotLeader, KesPeriodMismatch, SelfAcceptRejected). The 4th (ForgeSucceeded) is structurally guaranteed by the closed pipeline (the only path to Succeeded is past the self_accept = Accepted gate at step 6); asserting end-to-end ForgeSucceeded requires the KES-signs-real-unsigned-header bridge — a future-cluster deliverable explicitly out of N-R-A scope. The replay-byte-identity test (run_real_forge_is_byte_identical_across_two_runs) anchors DC-FORGE-01 against the full pipeline."
@@ -4568,12 +4568,13 @@ tier = "derived"
 statement = "The KES signature in a forged block's header is over the canonical unsigned-header CBOR pre-image — the CBOR encoding of ShelleyHeaderBody (the first element of the outer [header_body, kes_signature] header array). The producer-side recipe (unsigned_header_pre_image) and the validator-side extractor (header_input::decode_block.header_input.kes.header_body_bytes) produce byte-identical output for every corpus block. The branded UnsignedHeaderPreImage(Vec<u8>) type's only constructor is the canonical recipe; kes_sign_header accepts only this type — arbitrary-byte signing is mechanically unrepresentable."
 source = "docs/planning/phase4-n-s-invariants.md §1 (I1, I2); §2 (N1, N2)"
 cross_ref = ["CN-FORGE-01", "DC-KES-HEADER-01", "CN-PREIMAGE-FIXTURE-01", "DC-CONS-18"]
-code_locus = "TBD — populated by N-S-A A2 slice (ade_ledger::block_validity::unsigned_header_pre_image) + A3 slice (RED kes_sign_header wrapper + scheduler bridge)"
-tests = []
-ci_script = ""
-status = "declared"
+code_locus = "crates/ade_ledger/src/block_validity/unsigned_header_pre_image.rs (UnsignedHeaderPreImage branded type + canonical recipe); crates/ade_runtime/src/producer/producer_shell.rs (ProducerShell::kes_sign_header accepts only the branded type); crates/ade_node/src/produce_mode.rs (run_real_forge two-pass bridge replaces the placeholder)"
+tests = ["unsigned_header_preimage_matches_decode_block_extraction_for_corpus", "recipe_output_is_byte_identical_across_two_runs", "shell_kes_sign_header_produces_verifiable_signature"]
+ci_script = "ci/ci_check_unsigned_header_preimage_single_source.sh"
+status = "enforced"
 introduced_in = "PHASE4-N-S-A"
 strengthened_in = []
+cluster = "PHASE4-N-S-A"
 
 [[rules]]
 id = "DC-KES-HEADER-01"
@@ -4581,12 +4582,13 @@ tier = "derived"
 statement = "unsigned_header_pre_image(slot, block_no, prev_hash, vrf_data, opcert, kes_period, hot_vkey, body_hash, body_size, protocol_version) is a pure BLUE function. Same canonical inputs → byte-identical UnsignedHeaderPreImage output. Replay-equivalence anchor for the pre-image recipe."
 source = "docs/planning/phase4-n-s-invariants.md §3 (D1)"
 cross_ref = ["CN-KES-HEADER-01", "DC-FORGE-01"]
-code_locus = "TBD — populated by N-S-A A2 slice (unit tests including replay-byte-identity-across-two-runs)"
-tests = []
+code_locus = "crates/ade_ledger/src/block_validity/unsigned_header_pre_image.rs (recipe_output_is_byte_identical_across_two_runs unit test)"
+tests = ["recipe_output_is_byte_identical_across_two_runs"]
 ci_script = ""
-status = "declared"
+status = "enforced"
 introduced_in = "PHASE4-N-S-A"
 strengthened_in = []
+cluster = "PHASE4-N-S-A"
 
 [[rules]]
 id = "CN-PREIMAGE-FIXTURE-01"
@@ -4594,12 +4596,13 @@ tier = "derived"
 statement = "For every block in ade_testkit::validity::corpus::ConwayValidityCorpus, Ade's unsigned_header_pre_image(...) (with inputs derived from decode_block(block_bytes).header_input) produces output byte-identical to decode_block(block_bytes).header_input.kes.unwrap().header_body_bytes. This cross-impl byte-match test is the load-bearing proof that the producer's pre-image recipe matches the validator's authority — without it the 'single source of truth' claim is unverified."
 source = "docs/planning/phase4-n-s-invariants.md §7 OQ-S-A; N-S-A A1 fixture metadata"
 cross_ref = ["CN-KES-HEADER-01", "DC-CONS-18"]
-code_locus = "TBD — populated by N-S-A A2 slice (byte-match test against corpus)"
-tests = []
+code_locus = "crates/ade_ledger/src/block_validity/unsigned_header_pre_image.rs (unsigned_header_preimage_matches_decode_block_extraction_for_corpus test)"
+tests = ["unsigned_header_preimage_matches_decode_block_extraction_for_corpus"]
 ci_script = ""
-status = "declared"
+status = "enforced"
 introduced_in = "PHASE4-N-S-A"
 strengthened_in = []
+cluster = "PHASE4-N-S-A"
 
 # =============================================================================
 # PHASE4-N-S-B — MuxPump outbound relay (CN-OUTBOUND-RELAY / CN-PEER-OUTBOUND-MAP / DC-OUTBOUND-FIFO family, declared)
