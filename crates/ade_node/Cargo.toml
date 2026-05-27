@@ -23,3 +23,4 @@ serde_json = "1"
 ade_testkit = { path = "../ade_testkit" }
 tempfile = "3"
 cardano-crypto = { version = "1.0", default-features = false, features = ["vrf-draft03", "kes-sum", "dsign"] }
+ed25519-dalek = "2"

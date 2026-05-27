@@ -262,11 +262,12 @@ id = "T-KEY-01"
 tier = "true"
 statement = "Signing and private key operations confined to shell; verification in core"
 source = "Project constitution §2, audit #20"
-cross_ref = ["CN-CRYPTO-01", "DC-CRYPTO-03", "DC-CRYPTO-04", "DC-CRYPTO-05"]
+cross_ref = ["CN-CRYPTO-01", "DC-CRYPTO-03", "DC-CRYPTO-04", "DC-CRYPTO-05", "CN-FORGE-02"]
 code_locus = ""
 tests = []
 ci_script = ""
 status = "declared"
+strengthened_in = ["PHASE4-N-R-A"]
 
 [[rules]]
 id = "T-CONS-01"
@@ -2519,11 +2520,12 @@ statement = "Header bytes announced via chain-sync RollForward{header,tip} are t
 source = "docs/planning/phase4-n-a-successor-invariants.md §1 (I-2)"
 cross_ref = ["DC-CONS-16", "DC-CONS-17"]
 code_locus = "crates/ade_ledger/src/block_validity/header_input.rs (accepted_block_header_bytes — single canonical projection); crates/ade_runtime/src/producer/served_chain_lookups.rs (ServedHeaderLookup::next_after uses accepted_block_header_bytes); crates/ade_network/src/chain_sync/server.rs (producer_chain_sync_serve sources RollForward header from the trait lookup)"
-tests = ["producer_chain_sync_serve_roll_forward_header_equals_accepted_block_header_bytes", "session_transcript_announced_header_matches_served_body_recipe", "accepted_block_header_bytes_equals_validator_split_on_corpus"]
+tests = ["producer_chain_sync_serve_roll_forward_header_equals_accepted_block_header_bytes", "session_transcript_announced_header_matches_served_body_recipe", "accepted_block_header_bytes_equals_validator_split_on_corpus", "forge_block_accepts_empty_mempool"]
 ci_script = "ci/ci_check_no_parallel_header_splitter.sh, ci/ci_check_broadcast_to_served_purity.sh"
 status = "enforced"
 authority_surface = "producer-side chain-sync RollForward header projection"
 cluster = "PHASE4-N-G"
+strengthened_in = ["PHASE4-N-R-A"]
 evidence = ["End-to-end transcript test session_transcript_announced_header_matches_served_body_recipe asserts the rolled header bytes equal accepted_block_header_bytes over the same AcceptedBlock the matching block-fetch range subsequently serves.", "The single canonical header splitter is enforced by ci_check_no_parallel_header_splitter.sh; the GREEN adapter imports accepted_block_header_bytes (positive grep in ci_check_broadcast_to_served_purity.sh)."]
 
 [[rules]]
@@ -4344,14 +4346,14 @@ tier = "derived"
 statement = "Producer slot loop never signs a block whose KES period has rotated past current_period. Slot → KES period is a pure function of (slot, genesis_kes_anchor, slots_per_kes_period); the coordinator fail-closes (slot_missed event + log) when wall-clock has advanced past the target slot before forge completes. No retroactive forge. The GREEN coordinator never owns or stores private signing material — it emits a closed `RequestForge { slot, kes_period, ledger_snapshot_ref, chain_tip }` effect; the RED producer shell either returns an `AcceptedBlock` via a `ForgeSucceeded` event or a structured `ForgeFailed { slot, structured_error }` event. KesSecret / VrfSigningKey / ColdSigningKey never enter CoordinatorState. T-tier key-custody boundary."
 source = "docs/planning/phase4-n-q-invariants.md §1 (I3, I4, I7, I8); §2 (N4, N5, N8, N9); §5"
 cross_ref = ["T-KEY-01", "DC-CRYPTO-04", "DC-CRYPTO-05", "DC-CONS-11", "OP-OPS-04", "OP-OPS-05"]
-code_locus = "crates/ade_runtime/src/producer/coordinator.rs (GREEN — CoordinatorState has no secret fields; type system prevents); crates/ade_runtime/src/producer/producer_shell.rs (RED — sole key-custody surface; ProducerShell::init enforces KES period bounds vs opcert); crates/ade_node/src/produce_mode.rs (RED driver; stub forge handler emits ForgeNotLeader)"
-tests = ["init_emits_started_event_and_zero_other_effects", "slot_tick_emits_request_forge_and_log", "forge_succeeded_emits_broadcast_and_log", "forge_not_leader_emits_log_and_clears_pending", "forge_failed_emits_slot_missed_with_mapped_reason", "stale_forge_result_after_new_tick_drops_with_slot_missed", "kes_period_out_of_range_errors", "shell_init_rejects_malformed_opcert_hot_vkey_length", "shell_init_rejects_kes_period_below_opcert_start", "shell_kes_sign_at_current_period_succeeds_and_verifies", "shell_kes_sign_at_wrong_period_errors", "shell_kes_advance_to_evolves_key_one_way", "shell_debug_redacts_secret_fields"]
+code_locus = "crates/ade_runtime/src/producer/coordinator.rs (GREEN — CoordinatorState has no secret fields; type system prevents); crates/ade_runtime/src/producer/producer_shell.rs (RED — sole key-custody surface; ProducerShell::init enforces KES period bounds vs opcert); crates/ade_node/src/produce_mode.rs (RED driver; PHASE4-N-R-A A3 wired the real run_real_forge composition; stub replaced)"
+tests = ["init_emits_started_event_and_zero_other_effects", "slot_tick_emits_request_forge_and_log", "forge_succeeded_emits_broadcast_and_log", "forge_not_leader_emits_log_and_clears_pending", "forge_failed_emits_slot_missed_with_mapped_reason", "stale_forge_result_after_new_tick_drops_with_slot_missed", "kes_period_out_of_range_errors", "shell_init_rejects_malformed_opcert_hot_vkey_length", "shell_init_rejects_kes_period_below_opcert_start", "shell_kes_sign_at_current_period_succeeds_and_verifies", "shell_kes_sign_at_wrong_period_errors", "shell_kes_advance_to_evolves_key_one_way", "shell_debug_redacts_secret_fields", "zero_stake_answer_emits_forge_not_leader", "kes_period_outside_window_emits_forge_failed_kes_period_mismatch", "full_stake_answer_reaches_self_accept_and_rejects"]
 ci_script = "ci/ci_check_producer_coordinator_no_secrets.sh"
 status = "enforced"
 introduced_in = "PHASE4-N-Q"
-strengthened_in = []
+strengthened_in = ["PHASE4-N-R-A"]
 cluster = "PHASE4-N-Q"
-open_obligation = "Three composition items deferred to a follow-on forge cluster, none of which weaken CN-PROD-02's mechanical claims (no-secret-in-coordinator + KES period bounds): (1) Real forge handler in `produce_mode::apply_effects_with_forge_handler` — currently emits ForgeNotLeader as a stub; the real handler composes `producer_shell.vrf_prove` + `producer_shell.kes_sign_at` + `scheduler_step` + `self_accept` + emits `BroadcastBlock`. (2) cardano-cli text-envelope opcert parser (cborHex array → OperationalCert); S5 ships a simple JSON shape only. (3) Full Conway genesis JSON parser; S5 ships a minimal subset (network_magic + slot_zero_time + slot_length + KES anchor + KES max period). Reopen criteria: ship the real forge handler, capture an Ade-forged block hash + a peer `BlockAccepted` log line for that hash per docs/clusters/PHASE4-N-Q/CE-N-Q-OPERATOR_PROCEDURE.md."
+open_obligation = "Remaining composition items deferred to N-R-C, none of which weaken CN-PROD-02's mechanical claims (no-secret-in-coordinator + KES period bounds). **PHASE4-N-R-A A3 closed item (1):** the real forge handler in produce_mode::apply_effects_with_forge_handler is now wired (run_real_forge: RED vrf_prove → BLUE verify_and_evaluate_leader → RED kes_sign_at → GREEN assemble_tick → BLUE forge_block → BLUE self_accept). What still remains: (a) cardano-cli text-envelope opcert parser (cborHex array → OperationalCert); A1 captured fixtures, N-R-C C1 ships parser. (b) Full Shelley + Conway genesis closed-contract parser; A1 captured fixtures, N-R-C C2 ships parser. (c) End-to-end ForgeSucceeded path against the docker peer — requires the KES-signs-real-unsigned-header bridge plus N-R-B's ServedChainSnapshot push + per-peer dispatch wiring. Reopen criteria: close N-R-C and capture the bounty-facing paired evidence per docs/clusters/PHASE4-N-R/CE-N-R-C-LIVE_<date>.{jsonl,log}."
 
 [[rules]]
 id = "DC-PROD-01"
@@ -4396,14 +4398,16 @@ tier = "derived"
 statement = "The producer-mode forge handler is a closed transition from CoordinatorEvent::RequestForge { slot, kes_period, ledger_snapshot_ref, chain_tip } to exactly one of three ForgeResult variants: ForgeSucceeded { slot, artifact } where artifact.bytes decodes via Ade's BLUE block decoder AND self_accept(artifact, chain_tip, ledger_snapshot) returns Accepted; ForgeNotLeader { slot, vrf_output_fingerprint }; or ForgeFailed { slot, structured_error }. No other outcome is permitted. ForgeSucceeded MUST NOT be emitted if self_accept rejects the artifact — the handler emits ForgeFailed { SelfAcceptRejected } instead. Empty-block forging is the explicit scope; mempool integration is out of scope for the rule's enforcement evidence."
 source = "docs/planning/phase4-n-r-invariants.md §1 (I1, I9); §2 (N1); §5 (state transitions)"
 cross_ref = ["CN-CONS-07", "CN-PROD-02", "DC-CONS-18", "T-KEY-01"]
-code_locus = "TBD — populated by N-R-A A3 slice (ade_node::produce_mode::apply_effects_with_forge_handler) + A4 integration tests (crates/ade_node/tests/produce_mode_forge_*.rs)"
-tests = []
-ci_script = ""
-status = "declared"
+code_locus = "crates/ade_node/src/produce_mode.rs (run_real_forge BLUE-then-RED-then-BLUE pipeline; apply_effects_with_forge_handler call site); crates/ade_ledger/src/producer/forge.rs (forge_block BLUE step 5); crates/ade_ledger/src/producer/self_accept.rs (self_accept BLUE step 6 gate)"
+tests = ["zero_stake_answer_emits_forge_not_leader", "kes_period_outside_window_emits_forge_failed_kes_period_mismatch", "full_stake_answer_reaches_self_accept_and_rejects", "run_real_forge_is_byte_identical_across_two_runs", "forge_block_accepts_empty_mempool", "forge_block_empty_mempool_produces_empty_body", "produce_mode_starts_runs_three_slots_and_exits_via_max_slots"]
+ci_script = "ci/ci_check_producer_coordinator_no_secrets.sh"
+status = "enforced"
 introduced_in = "PHASE4-N-R-A"
 strengthened_in = []
+cluster = "PHASE4-N-R-A"
 attack_rationale = "Cardano-specific: forging a block that fails self-accept and broadcasting it would propagate an invalid block to peers, breaking the chain. Forging without a self-accept gate is a forged-by-error attack vector."
-evidence_notes = "S5 ships a stub forge handler that emits ForgeNotLeader only. N-R-A's enforcement gate is A4's 4-variant integration test (NotLeader, Succeeded, KesPeriodOutOfRange, SelfAcceptRejected) against a synthetic stake-distribution + Eta0 corpus."
+evidence_notes = "N-R-A's A4 integration tests cover 3 of the 4 ForgeResult branches (NotLeader, KesPeriodMismatch, SelfAcceptRejected). The 4th (ForgeSucceeded) is structurally guaranteed by the closed pipeline (the only path to Succeeded is past the self_accept = Accepted gate at step 6); asserting end-to-end ForgeSucceeded requires the KES-signs-real-unsigned-header bridge — a future-cluster deliverable explicitly out of N-R-A scope. The replay-byte-identity test (run_real_forge_is_byte_identical_across_two_runs) anchors DC-FORGE-01 against the full pipeline."
+open_obligation = "End-to-end ForgeSucceeded path requires the KES-signs-real-unsigned-header bridge (currently the placeholder KES signing payload is the VRF input bytes). Tracked for a future post-N-R cluster; the structural property (no ForgeSucceeded without self_accept Accepted) is enforced today by the closed pipeline shape."
 
 [[rules]]
 id = "CN-FORGE-02"
@@ -4411,14 +4415,15 @@ tier = "derived"
 statement = "Leader-check splits across the RED/BLUE color boundary: RED produces a VRF proof/output for the slot using the operator's VRF signing key; BLUE verifies the proof and evaluates leader eligibility from canonical inputs only (slot, eta0, stake_distribution, leader_threshold, vrf_vk, vrf_proof_or_output, LeaderScheduleAnswer). BLUE never sees the VRF / KES / cold signing keys. The BLUE evaluator (`verify_and_evaluate_leader`) lives at `ade_core::consensus::leader_check` and has no dependency on LedgerView, EraSchedule, ChainDepState, wall-clock, storage, or RED crates. Caller derives LeaderScheduleAnswer via the authority path (query_leader_schedule) and passes it in. The closed two-variant LeaderCheckVerdict (Eligible carries forge-capable material; NotEligible carries only bounded vrf_output_fingerprint evidence) makes illegal observation of forge-capable material structurally impossible."
 source = "docs/planning/phase4-n-r-invariants.md §1 (I2); §2 (N12); §3 (D1); §4 (R3)"
 cross_ref = ["T-KEY-01", "CN-FORGE-01", "DC-FORGE-01", "DC-CRYPTO-04", "DC-CRYPTO-05"]
-code_locus = "TBD — populated by N-R-A A2 slice (ade_core::consensus::leader_check::verify_and_evaluate_leader + LeaderCheckVerdict enum) + A3 slice (RED forge handler in produce_mode that calls vrf_prove then verify_and_evaluate_leader)"
-tests = []
-ci_script = ""
-status = "declared"
+code_locus = "crates/ade_core/src/consensus/leader_check.rs (verify_and_evaluate_leader + LeaderCheckVerdict + LeaderCheckError); crates/ade_node/src/produce_mode.rs (run_real_forge composition — RED vrf_prove → BLUE verify_and_evaluate_leader → RED kes_sign_at)"
+tests = ["eligible_on_threshold_with_high_stake_emits_eligible_verdict", "not_eligible_with_zero_stake_emits_not_eligible_verdict", "malformed_proof_emits_verification_failed", "wrong_vk_emits_verification_failed", "answer_slot_mismatch_emits_structured_error", "vrf_input_mismatch_emits_structured_error", "zero_stake_denominator_emits_structured_error", "verdict_is_byte_identical_across_two_runs", "vrf_output_fingerprint_is_first_8_bytes_of_output", "zero_stake_answer_emits_forge_not_leader"]
+ci_script = "ci/ci_check_leader_check_authority.sh"
+status = "enforced"
 introduced_in = "PHASE4-N-R-A"
 strengthened_in = []
+cluster = "PHASE4-N-R-A"
 attack_rationale = "Cardano-specific: a BLUE component that owns or reads VRF signing keys could forge proofs for non-leader slots — the foundation of the eligibility security model. The RED/BLUE split makes BLUE structurally incapable of producing forge-capable material, even in the presence of bugs."
-evidence_notes = "Enforcement combines (a) the closed enum shape of LeaderCheckVerdict making NotEligible -> vrf_output access structurally impossible, (b) the grep gate that verify_and_evaluate_leader does not import KesSecret / VrfSigningKey / ColdSigningKey, and (c) the grep gate that is_leader_for_vrf_output is private to leader_check (or deleted) — no external caller may bypass LeaderCheckVerdict."
+evidence_notes = "Enforcement combines (a) the closed enum shape of LeaderCheckVerdict making NotEligible -> vrf_output access structurally impossible (type-level), (b) ci/ci_check_leader_check_authority.sh enforcing the allow-list for is_leader_for_vrf_output callers — no external caller may bypass LeaderCheckVerdict, and (c) ci/ci_check_producer_coordinator_no_secrets.sh enforcing the GREEN coordinator never imports signing-key types. The new BLUE module has NO dependency on LedgerView / EraSchedule / PraosChainDepState / wall-clock / storage / RED crates — verified by direct import inspection (CE-A-6b)."
 
 [[rules]]
 id = "DC-FORGE-01"
@@ -4426,9 +4431,10 @@ tier = "derived"
 statement = "Given the same canonical input set (slot, eta0, vrf_vk, vrf_proof_or_output, LeaderScheduleAnswer), verify_and_evaluate_leader produces a byte-identical LeaderCheckVerdict across runs. Replay-equivalence anchor for the BLUE leader-check evaluator. Strengthens the existing leader-check determinism (DC-CONS-13 family) by exposing leader eligibility as a callable, replay-anchored function — not just an internal step in forge_block."
 source = "docs/planning/phase4-n-r-invariants.md §3 (D1); §4 (R3)"
 cross_ref = ["DC-CONS-13", "DC-CONS-14", "DC-PROD-02", "CN-FORGE-02"]
-code_locus = "TBD — populated by N-R-A A2 slice (ade_core::consensus::leader_check unit tests including replay-byte-identity-across-two-runs)"
-tests = []
+code_locus = "crates/ade_core/src/consensus/leader_check.rs (verdict_is_byte_identical_across_two_runs unit test); crates/ade_node/tests/forge_handler_variants.rs (run_real_forge_is_byte_identical_across_two_runs end-to-end pipeline anchor)"
+tests = ["verdict_is_byte_identical_across_two_runs", "run_real_forge_is_byte_identical_across_two_runs"]
 ci_script = ""
-status = "declared"
+status = "enforced"
 introduced_in = "PHASE4-N-R-A"
 strengthened_in = []
+cluster = "PHASE4-N-R-A"
