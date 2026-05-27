@@ -2323,6 +2323,32 @@ strengthened_in = []
 open_obligation = "PHASE4-N-P deferral: cardano-cli expanded `Sum6KES` import becomes supported when `ade_crypto::kes_sum` ships. On PHASE4-N-P close, this rule strengthens from `fail-closed always` to `accept 608-byte expanded payloads with cross-impl verification`; the `UnsupportedExpandedKesKeyFormat` variant remains as the rejector for the 612-byte / malformed / unknown-shape cases."
 
 [[rules]]
+id = "DC-CRYPTO-08"
+tier = "derived"
+statement = "Ade-owned Sum6KES algorithm is Haskell-equivalent. `ade_crypto::kes_sum::Sum6Kes` is byte-identical to Haskell `cardano-base`'s `Sum6KES Ed25519DSIGN`: `derive_verification_key`, `gen_key_kes_from_seed_bytes`, `update_kes` (chain across all 64 periods), and `sign_kes` produce the same bytes as the Haskell reference for every (seed, period, msg) triple. Cross-impl agreement with `cardano-crypto` 1.0.8 is mechanically enforced under `#[cfg(test)]` only: ade-signed signatures verify under `cardano-crypto::Sum6Kes::verify_kes` and vice versa. After PHASE4-N-P, `KesSecret.inner` is the Ade-owned signing key; `cardano-crypto` becomes a test oracle, never a production signer. No compatibility shim may construct an upstream `SumSigningKey` through unsafe layout assumptions, transmute, vendored pub(crate) access, or fork-only constructors (N9)."
+source = "docs/clusters/PHASE4-N-P/cluster.md; docs/planning/phase4-n-p-invariants.md §1 (I1, I2, I4, I6); §2 (N1, N9)"
+cross_ref = ["OP-OPS-04", "T-DET-01", "DC-CRYPTO-03", "DC-CRYPTO-04", "DC-CRYPTO-05", "DC-CRYPTO-06", "DC-CRYPTO-07"]
+code_locus = "TBD — populated by N-P algorithm slice (Ade-owned ade_crypto::kes_sum::Sum6Kes)"
+tests = []
+ci_script = ""
+status = "declared"
+introduced_in = "PHASE4-N-P"
+strengthened_in = []
+
+[[rules]]
+id = "DC-CRYPTO-09"
+tier = "derived"
+statement = "Sum6KES expanded signing-key serde and period inference. `raw_serialize_signing_key_kes` / `raw_deserialize_signing_key_kes` are byte-identical to Haskell's `rawSerialiseSignKeyKES` / `rawDeserialiseSignKeyKES` for `Sum6KES Ed25519DSIGN`. The on-disk format is exactly 608 bytes; any other payload size fails closed via `KesParseError::WrongPayloadSize`. `current_period` is uniquely inferable from which sub-seeds are zeroed in the tree (no heuristic; exactly one valid period or a closed parse error). Round-trip preserves period; serialize → deserialize → serialize yields byte-identical output for every period 0..=63. Malformed sub-trees (truncated child skey, wrong VK length at any recursion level, indefinite-length CBOR, inconsistent vk0/vk1 hashes) → closed `KesParseError` variant; no best-effort guesswork."
+source = "docs/clusters/PHASE4-N-P/cluster.md; docs/planning/phase4-n-p-invariants.md §1 (I3, I5); §2 (N2, N3, N4, N5)"
+cross_ref = ["OP-OPS-04", "T-ENC-01", "DC-CRYPTO-07", "DC-CRYPTO-08"]
+code_locus = "TBD — populated by N-P serde slice (raw_serialize/raw_deserialize_signing_key_kes) and N-P S1 (period_from_zeroed_sum6_tree_shape proof obligation)"
+tests = []
+ci_script = ""
+status = "declared"
+introduced_in = "PHASE4-N-P"
+strengthened_in = []
+
+[[rules]]
 id = "DC-CONS-11"
 tier = "derived"
 statement = "OpCert kes_period field equals the KES period at the forged slot under an operator-supplied anchor. period_at_slot(slot, anchor) = (slot - anchor) / slots_per_kes_period (integer floor). BLUE rejects header/opcert combinations with mismatched periods at forge time. BLUE MUST NOT infer the anchor from wall-clock or filesystem state; the anchor is a pure input on the canonical ProducerTick."
