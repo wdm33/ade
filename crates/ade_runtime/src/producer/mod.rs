@@ -19,7 +19,9 @@
 pub mod ade_kes_envelope;
 pub mod broadcast;
 pub mod broadcast_to_served;
+pub mod coordinator;
 pub mod keys;
+pub mod producer_log;
 pub mod scheduler;
 pub mod served_chain_lookups;
 pub mod signing;
