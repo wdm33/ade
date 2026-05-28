@@ -66,7 +66,7 @@ statement = "Round-trip identity: encode(decode(bytes)) == bytes for valid encod
 source = "Project constitution §2, D-3"
 cross_ref = ["DC-LEDGER-10"]
 code_locus = "crates/ade_codec/src/preserved.rs, crates/ade_network/src/codec/handshake.rs, crates/ade_network/src/codec/n2c_handshake.rs, crates/ade_network/src/codec/chain_sync.rs, crates/ade_network/src/codec/block_fetch.rs, crates/ade_network/src/codec/tx_submission.rs, crates/ade_network/src/codec/keep_alive.rs, crates/ade_network/src/codec/peer_sharing.rs, crates/ade_network/src/codec/local_chain_sync.rs, crates/ade_network/src/codec/local_tx_submission.rs, crates/ade_network/src/codec/local_state_query.rs, crates/ade_network/src/codec/local_tx_monitor.rs"
-tests = ["full_corpus_round_trip", "codec::handshake::tests::roundtrip_every_variant", "codec::n2c_handshake::tests::roundtrip_every_variant", "codec::chain_sync::tests::roundtrip_every_variant", "codec::block_fetch::tests::roundtrip_every_variant", "codec::tx_submission::tests::roundtrip_every_variant", "codec::keep_alive::tests::roundtrip_every_variant", "codec::peer_sharing::tests::roundtrip_every_variant", "codec::local_chain_sync::tests::roundtrip_every_variant", "codec::local_tx_submission::tests::roundtrip_every_variant", "codec::local_state_query::tests::roundtrip_every_variant", "codec::local_tx_monitor::tests::roundtrip_every_variant", "handshake_real_capture_corpus::real_capture_round_trips_byte_identical", "chain_sync_real_capture_corpus::real_capture_round_trips_byte_identical", "block_fetch_real_capture_corpus::real_capture_round_trips_byte_identical", "keep_alive_real_capture_corpus::real_capture_round_trips_byte_identical", "peer_sharing_real_capture_corpus::real_capture_round_trips_byte_identical", "n2c_handshake_real_capture_corpus::real_capture_round_trips_byte_identical"]
+tests = ["full_corpus_round_trip::all_42_blocks_round_trip_byte_identical", "full_corpus_round_trip::all_42_blocks_fields_match_reference", "codec::handshake::tests::roundtrip_every_variant", "codec::n2c_handshake::tests::roundtrip_every_variant", "codec::chain_sync::tests::roundtrip_every_variant", "codec::block_fetch::tests::roundtrip_every_variant", "codec::tx_submission::tests::roundtrip_every_variant", "codec::keep_alive::tests::roundtrip_every_variant", "codec::peer_sharing::tests::roundtrip_every_variant", "codec::local_chain_sync::tests::roundtrip_every_variant", "codec::local_tx_submission::tests::roundtrip_every_variant", "codec::local_state_query::tests::roundtrip_every_variant", "codec::local_tx_monitor::tests::roundtrip_every_variant", "handshake_real_capture_corpus::real_capture_round_trips_byte_identical", "chain_sync_real_capture_corpus::real_capture_round_trips_byte_identical", "block_fetch_real_capture_corpus::real_capture_round_trips_byte_identical", "keep_alive_real_capture_corpus::real_capture_round_trips_byte_identical", "peer_sharing_real_capture_corpus::real_capture_round_trips_byte_identical", "n2c_handshake_real_capture_corpus::real_capture_round_trips_byte_identical"]
 ci_script = "ci/ci_check_cbor_round_trip.sh"
 status = "enforced"
 authority_surface = "CBOR wire-byte encode/decode on 10,500 contiguous blocks across 7 eras; per-variant round-trip across all 11 Ouroboros mini-protocol message taxonomies (S-A2); plus real-capture corpora from cardano-node 11.0.1 across N2N handshake (mainnet), chain-sync, block-fetch, keep-alive, peer-sharing (preprod local) and N2C handshake (preprod local Unix socket)"
@@ -81,7 +81,7 @@ statement = "Authoritative logic is pure, side-effect-free, and replayable"
 source = "Project constitution §2"
 cross_ref = ["CN-LEDGER-01"]
 code_locus = "crates/ade_ledger/src/rules.rs"
-tests = ["apply_block_deterministic", "apply_block_never_returns_ok"]
+tests = ["apply_block_deterministic", "apply_block_byron_ebb_passes_through"]
 ci_script = "ci/ci_check_forbidden_patterns.sh, ci/ci_check_dependency_boundary.sh"
 status = "enforced"
 authority_surface = "BLUE authoritative state transitions"
@@ -240,7 +240,7 @@ source = "Project constitution §2, audit #21"
 cross_ref = []
 code_locus = ""
 tests = []
-ci_script = ""
+ci_script = "ci/ci_check_ingress_chokepoints.sh"
 status = "declared"
 
 [[rules]]
@@ -406,7 +406,7 @@ statement = "Crypto verification is pure and matches Haskell node on all test ve
 source = "Project constitution §3, T-CORE-01, T-DET-01"
 cross_ref = ["DC-VAL-06"]
 code_locus = "crates/ade_crypto/src/, crates/ade_core/src/consensus/vrf_cert.rs (Praos single-VRF input + leader/nonce range extension; PHASE4-B1-S5), crates/ade_core/src/consensus/kes_check.rs (KES + op-cert wiring; PHASE4-B1-S5)"
-tests = ["blake2b_256_rfc_test_vectors", "ed25519_rfc_8032_test_1", "vrf_ietf_draft03_section_a3", "verify_vrf_cert_accepts_valid_proof", "verify_vrf_cert_rejects_wrong_alpha", "verify_vrf_cert_rejects_malformed_proof", "conway_corpus_headers_all_pass_leader_check", "conway_corpus_nonce_contribution_is_deterministic", "praos_malformed_vrf_proof_rejected", "opcert_signable_format"]
+tests = ["blake2b_256_empty", "blake2b_256_abc", "blake2b_256_single_byte", "blake2b_256_multi_block", "blake2b_256_large", "libsodium_vector_empty_message", "libsodium_vector_single_byte", "libsodium_vector_two_byte", "libsodium_vector_longer_message", "libsodium_vector_hash_size_message", "verify_and_proof_to_hash_match", "generate_and_verify", "verify_vrf_cert_accepts_valid_proof", "verify_vrf_cert_rejects_wrong_alpha", "verify_vrf_cert_rejects_malformed_proof", "conway_corpus_headers_all_pass_leader_check", "conway_corpus_nonce_contribution_is_deterministic", "praos_malformed_vrf_proof_rejected", "opcert_signable_format"]
 ci_script = "ci/ci_check_crypto_vectors.sh"
 status = "enforced"
 authority_surface = "crypto verification outcomes"
@@ -527,7 +527,7 @@ statement = "Leadership verification is pure"
 source = "Project constitution §3, T-CORE-01"
 cross_ref = ["DC-CONS-04"]
 code_locus = "crates/ade_core/src/consensus/leader_schedule.rs, crates/ade_core/src/consensus/ledger_view.rs, crates/ade_core/src/consensus/vrf_cert.rs, crates/ade_ledger/src/consensus_view.rs"
-tests = ["consensus::leader_schedule::tests::query_uses_state_epoch_nonce_for_vrf_input", "consensus::leader_schedule::tests::query_returns_unknown_pool_when_no_vrf_key", "consensus::leader_schedule::tests::query_returns_outside_forecast_range_for_far_future", "consensus::leader_schedule::tests::query_does_not_mutate_state", "consensus::leader_schedule::tests::is_leader_for_vrf_output_delegates_to_vrf_cert", "corpus_returns_canonical_answer_for_known_pools", "corpus_rejects_unknown_pool", "corpus_rejects_out_of_forecast_horizon", "corpus_is_leader_helper_matches_pinned_probe", "corpus_is_deterministic_across_runs", "view_returns_corpus_pool_stake_and_vrf_keyhash", "view_unknown_pool_returns_none", "view_unknown_epoch_returns_none", "view_is_pure", "consensus_view::tests::pool_distr_view_no_hashmap"]
+tests = ["consensus::leader_schedule::tests::query_uses_state_epoch_nonce_for_vrf_input", "consensus::leader_schedule::tests::query_returns_unknown_pool_when_no_vrf_key", "consensus::leader_schedule::tests::query_returns_outside_forecast_range_for_far_future", "consensus::leader_schedule::tests::query_does_not_mutate_state", "consensus::leader_check::tests::eligible_on_threshold_with_high_stake_emits_eligible_verdict", "consensus::leader_check::tests::not_eligible_with_zero_stake_emits_not_eligible_verdict", "corpus_returns_canonical_answer_for_known_pools", "corpus_rejects_unknown_pool", "corpus_rejects_out_of_forecast_horizon", "corpus_is_leader_helper_matches_pinned_probe", "corpus_is_deterministic_across_runs", "view_returns_corpus_pool_stake_and_vrf_keyhash", "view_unknown_pool_returns_none", "view_unknown_epoch_returns_none", "view_is_pure", "consensus_view::tests::pool_distr_view_no_hashmap"]
 ci_script = ""
 status = "partial"
 strengthened_in = ["PHASE4-N-B", "PHASE4-B1"]
@@ -597,7 +597,7 @@ source = "Project constitution §3, T-INGRESS-01"
 cross_ref = []
 code_locus = ""
 tests = []
-ci_script = ""
+ci_script = "ci/ci_check_ingress_chokepoints.sh"
 status = "declared"
 
 [[rules]]
@@ -618,7 +618,7 @@ statement = "Every claimed equivalence check must identify its reference source,
 source = "Project constitution §3, T-DET-01, T-CI-01"
 cross_ref = ["CN-META-03", "DC-DIFF-01"]
 code_locus = "crates/ade_testkit/src/harness/provenance.rs"
-tests = ["provenance_validation", "self_comparison_block_fields"]
+tests = ["validate_complete_manifest_no_violations", "validate_empty_manifest_no_violations", "validate_detects_empty_field", "self_comparison_zero_divergences_byron", "self_comparison_zero_divergences_shelley", "self_comparison_zero_divergences_allegra", "self_comparison_zero_divergences_mary", "self_comparison_zero_divergences_alonzo", "self_comparison_zero_divergences_babbage", "self_comparison_zero_divergences_conway"]
 ci_script = "ci/ci_check_ref_provenance.sh"
 status = "partial"
 authority_surface = "reference artifact provenance"
@@ -657,7 +657,7 @@ source = "Project constitution §3, T-ENC-02, T-CORE-03"
 cross_ref = ["DC-PROTO-06"]
 code_locus = "crates/ade_network/src/handshake/mod.rs, crates/ade_network/src/handshake/state.rs, crates/ade_network/src/handshake/agency.rs, crates/ade_network/src/handshake/selection.rs, crates/ade_network/src/handshake/transition.rs, crates/ade_network/src/handshake/version_table.rs"
 tests = ["handshake::transition::tests::n2n_happy_path_each_supported_version", "handshake::transition::tests::n2c_happy_path_each_supported_version", "handshake::transition::tests::version_mismatch_refused", "handshake::transition::tests::illegal_message_in_idle_returns_error", "handshake::transition::tests::wrong_agency_returns_error", "handshake::transition::tests::overlap_picks_highest_common", "handshake::transition::tests::empty_intersection_refuses_deterministically", "handshake::transition::tests::version_data_passed_through_byte_identical", "handshake::transition::tests::n2n_v15_happy_path", "handshake::transition::tests::n2n_v16_happy_path_with_peras_support_field", "handshake::transition::tests::n2c_v21_happy_path", "handshake::transition::tests::n2c_v22_happy_path", "handshake::transition::tests::n2c_v23_happy_path", "handshake::transition::tests::n2c_v15_no_longer_advertised", "handshake::transition::tests::n2n_overlap_picks_v16_when_both_offer_v14_to_v16", "version_negotiation_across_supported_table", "handshake_real_capture_corpus::real_capture_round_trips_byte_identical", "handshake_real_capture_corpus::iog_capture_accepted_at_known_version", "handshake_real_capture_corpus::refuse_capture_carries_supported_set", "n2c_handshake_real_capture_corpus::real_capture_round_trips_byte_identical", "n2c_handshake_real_capture_corpus::accept_version_decodes_to_semantic_version_range"]
-ci_script = ""
+ci_script = "ci/ci_check_ce_n_a_5_proof.sh"
 status = "declared"
 strengthened_in = ["PHASE4-N-A"]
 
@@ -683,7 +683,7 @@ statement = "Hard fork transitions triggered at deterministic slot/epoch boundar
 source = "Project constitution §3, T-DET-01, T-CORE-03"
 cross_ref = ["DC-CONS-07", "DC-CONS-09"]
 code_locus = "crates/ade_ledger/src/hfc.rs, crates/ade_core/src/consensus/era_schedule.rs"
-tests = ["translation_summary_proof", "translation_comparison_surface", "transition_proof_surface", "consensus::era_schedule::tests::locate_first_slot_of_each_era", "consensus::era_schedule::tests::locate_last_slot_of_each_era", "consensus::era_schedule::tests::forecast_horizon_boundary", "mainnet_corpus_translation_matches_oracle", "preprod_corpus_translation_matches_oracle"]
+tests = ["translation_summary_proof::shelley_allegra_summary_matches_oracle", "translation_comparison_surface::all_non_byron_translations_preserve_sub_state", "transition_proof_surface::shelley_allegra_transition_proof_surface", "transition_proof_surface::all_transitions_proof_surface_summary", "consensus::era_schedule::tests::locate_first_slot_of_each_era", "consensus::era_schedule::tests::locate_last_slot_of_each_era", "consensus::era_schedule::tests::forecast_horizon_boundary", "mainnet_corpus_translation_matches_oracle", "preprod_corpus_translation_matches_oracle"]
 ci_script = "ci/ci_check_hfc_translation.sh"
 status = "enforced"
 authority_surface = "ledger-side HFC translation enforced: all 6 transitions implemented, 22/22 encoding-independent fields match oracle (CE-73-semantic, Tier 2 closed). Byte-parity with Haskell on-disk ExtLedgerState CBOR is explicit non-goal (CE-73-bytes, Tier 4 per docs/active/CE-79_gate_statement.md and docs/active/CE-73_reclassification.md). Consensus-side HFC scheduling enforced under PHASE4-N-B via typed EraSchedule + slot/era/time translation (S-B1)."
@@ -1907,7 +1907,7 @@ statement = "Praos chain-dep state (evolving/candidate/epoch/previous_epoch/lab/
 source = "Project constitution §3, ouroboros-consensus PraosChainDepState"
 cross_ref = ["DC-CONSENSUS-02", "DC-CONS-10", "DC-VAL-02"]
 code_locus = "crates/ade_core/src/consensus/praos_state.rs, crates/ade_core/src/consensus/events.rs, crates/ade_core/src/consensus/errors.rs, crates/ade_core/src/consensus/encoding.rs, crates/ade_core/src/consensus/nonce.rs, crates/ade_core/src/consensus/op_cert.rs, crates/ade_core/src/consensus/header_validate.rs, crates/ade_core/src/consensus/header_summary.rs"
-tests = ["consensus::praos_state::tests::op_cert_upsert_rejects_regression", "consensus::praos_state::tests::op_cert_upsert_rejects_equal_counter", "consensus::praos_state::tests::op_cert_upsert_accepts_strictly_increasing", "consensus::praos_state::tests::genesis_state_is_well_formed", "consensus::praos_state::tests::nonce_zero_constant_is_zero_bytes", "consensus::encoding::tests::op_cert_counter_map_iteration_is_deterministic", "layout_is_stable", "roundtrip_empty_state", "roundtrip_genesis_state", "roundtrip_populated_state", "roundtrip_chain_event_all_variants", "roundtrip_chain_selection_reject_all_variants", "decode_rejects_unknown_discriminant", "decode_rejects_short_array", "op_cert_counter_map_iteration_is_deterministic", "consensus::nonce::tests::header_contribution_rejects_non_monotonic_slot", "consensus::nonce::tests::header_contribution_advances_evolving_nonce_deterministically", "consensus::nonce::tests::header_contribution_does_not_touch_epoch_nonce", "consensus::nonce::tests::candidate_freeze_copies_evolving_to_candidate", "consensus::nonce::tests::candidate_freeze_does_not_advance_slot", "consensus::nonce::tests::epoch_boundary_promotes_candidate_to_epoch_nonce", "consensus::nonce::tests::epoch_boundary_rotates_previous_epoch_nonce", "consensus::nonce::tests::epoch_boundary_rejects_uninitialised_candidate", "consensus::nonce::tests::epoch_boundary_preserves_op_cert_counters", "consensus::nonce::tests::epoch_boundary_preserves_lab_nonce", "consensus::nonce::tests::blake2b_input_order_is_evolving_then_vrf_output_first_32", "within_epoch_evolving_nonce_matches_corpus", "epoch_boundary_freezes_and_rotates_correctly", "nonce_evolution_replay_is_deterministic", "consensus::op_cert::tests::apply_op_cert_inserts_first_observation", "consensus::op_cert::tests::apply_op_cert_advances_existing_strictly", "consensus::op_cert::tests::apply_op_cert_rejects_equal_counter", "consensus::op_cert::tests::apply_op_cert_rejects_lower_counter", "consensus::op_cert::tests::apply_op_cert_independent_kes_periods_dont_collide", "consensus::op_cert::tests::apply_op_cert_independent_pools_dont_collide", "consensus::op_cert::tests::apply_op_cert_does_not_touch_nonces", "consensus::op_cert::tests::apply_op_cert_does_not_touch_last_slot_or_block_no", "normal_progression_records_highest_counter_per_window", "regression_after_progression_rejected_with_typed_error", "op_cert_replay_is_deterministic", "consensus::header_validate::tests::pipeline_short_circuits_on_first_failure", "consensus::header_validate::tests::nonce_contribution_uses_nonce_role_vrf_output_not_leader_role", "valid_header_accepted_advances_state", "header_with_slot_regression_rejected", "header_with_block_no_regression_rejected", "header_with_op_cert_regression_rejected", "header_with_invalid_vrf_proof_rejected", "header_beyond_forecast_horizon_rejected", "validate_replay_is_deterministic"]
+tests = ["consensus::praos_state::tests::op_cert_upsert_rejects_regression", "consensus::praos_state::tests::op_cert_upsert_accepts_equal_counter_as_noop", "consensus::praos_state::tests::op_cert_upsert_accepts_monotonic_increasing", "consensus::praos_state::tests::genesis_state_is_well_formed", "consensus::praos_state::tests::nonce_zero_constant_is_zero_bytes", "consensus::encoding::tests::op_cert_counter_map_iteration_is_deterministic", "layout_is_stable", "roundtrip_empty_state", "roundtrip_genesis_state", "roundtrip_populated_state", "roundtrip_chain_event_all_variants", "roundtrip_chain_selection_reject_all_variants", "decode_rejects_unknown_discriminant", "decode_rejects_short_array", "op_cert_counter_map_iteration_is_deterministic", "consensus::nonce::tests::header_contribution_rejects_non_monotonic_slot", "consensus::nonce::tests::header_contribution_advances_evolving_nonce_deterministically", "consensus::nonce::tests::header_contribution_does_not_touch_epoch_nonce", "consensus::nonce::tests::candidate_freeze_copies_evolving_to_candidate", "consensus::nonce::tests::candidate_freeze_does_not_advance_slot", "consensus::nonce::tests::epoch_boundary_promotes_candidate_to_epoch_nonce", "consensus::nonce::tests::epoch_boundary_rotates_previous_epoch_nonce", "consensus::nonce::tests::epoch_boundary_rejects_uninitialised_candidate", "consensus::nonce::tests::epoch_boundary_preserves_op_cert_counters", "consensus::nonce::tests::epoch_boundary_preserves_lab_nonce", "consensus::nonce::tests::blake2b_input_order_is_evolving_then_vrf_output_first_32", "within_epoch_evolving_nonce_matches_corpus", "epoch_boundary_freezes_and_rotates_correctly", "nonce_evolution_replay_is_deterministic", "consensus::op_cert::tests::apply_op_cert_inserts_first_observation", "consensus::op_cert::tests::apply_op_cert_advances_existing_strictly", "consensus::op_cert::tests::apply_op_cert_accepts_equal_counter_as_noop", "consensus::op_cert::tests::apply_op_cert_rejects_lower_counter", "consensus::op_cert::tests::apply_op_cert_independent_kes_periods_dont_collide", "consensus::op_cert::tests::apply_op_cert_independent_pools_dont_collide", "consensus::op_cert::tests::apply_op_cert_does_not_touch_nonces", "consensus::op_cert::tests::apply_op_cert_does_not_touch_last_slot_or_block_no", "normal_progression_records_highest_counter_per_window", "regression_after_progression_rejected_with_typed_error", "op_cert_replay_is_deterministic", "consensus::header_validate::tests::pipeline_short_circuits_on_first_failure", "consensus::header_validate::tests::nonce_contribution_uses_nonce_role_vrf_output_not_leader_role", "valid_header_accepted_advances_state", "header_with_slot_regression_rejected", "header_with_block_no_regression_rejected", "header_with_op_cert_regression_rejected", "header_with_invalid_vrf_proof_rejected", "header_beyond_forecast_horizon_rejected", "validate_replay_is_deterministic"]
 ci_script = "ci/ci_check_consensus_closed_enums.sh"
 status = "enforced"
 strengthened_in = ["PHASE4-N-B"]
@@ -1979,7 +1979,7 @@ statement = "A header's op-cert issue counter must be >= the highest observed co
 source = "Project constitution §3, ouroboros-consensus OperationalCertificate"
 cross_ref = ["DC-CONS-04"]
 code_locus = "crates/ade_core/src/consensus/op_cert.rs, crates/ade_core/src/consensus/praos_state.rs, crates/ade_core/src/consensus/errors.rs, crates/ade_core/src/consensus/header_validate.rs"
-tests = ["consensus::op_cert::tests::apply_op_cert_inserts_first_observation", "consensus::op_cert::tests::apply_op_cert_advances_existing_strictly", "consensus::op_cert::tests::apply_op_cert_rejects_equal_counter", "consensus::op_cert::tests::apply_op_cert_rejects_lower_counter", "consensus::op_cert::tests::apply_op_cert_independent_kes_periods_dont_collide", "consensus::op_cert::tests::apply_op_cert_independent_pools_dont_collide", "consensus::op_cert::tests::apply_op_cert_does_not_touch_nonces", "consensus::op_cert::tests::apply_op_cert_does_not_touch_last_slot_or_block_no", "consensus::praos_state::tests::op_cert_upsert_rejects_regression", "consensus::praos_state::tests::op_cert_upsert_rejects_equal_counter", "consensus::praos_state::tests::op_cert_upsert_accepts_strictly_increasing", "normal_progression_records_highest_counter_per_window", "regression_after_progression_rejected_with_typed_error", "op_cert_replay_is_deterministic", "header_with_op_cert_regression_rejected", "valid_header_accepted_advances_state"]
+tests = ["consensus::op_cert::tests::apply_op_cert_inserts_first_observation", "consensus::op_cert::tests::apply_op_cert_advances_existing_strictly", "consensus::op_cert::tests::apply_op_cert_accepts_equal_counter_as_noop", "consensus::op_cert::tests::apply_op_cert_rejects_lower_counter", "consensus::op_cert::tests::apply_op_cert_independent_kes_periods_dont_collide", "consensus::op_cert::tests::apply_op_cert_independent_pools_dont_collide", "consensus::op_cert::tests::apply_op_cert_does_not_touch_nonces", "consensus::op_cert::tests::apply_op_cert_does_not_touch_last_slot_or_block_no", "consensus::praos_state::tests::op_cert_upsert_rejects_regression", "consensus::praos_state::tests::op_cert_upsert_accepts_equal_counter_as_noop", "consensus::praos_state::tests::op_cert_upsert_accepts_monotonic_increasing", "normal_progression_records_highest_counter_per_window", "regression_after_progression_rejected_with_typed_error", "op_cert_replay_is_deterministic", "header_with_op_cert_regression_rejected", "valid_header_accepted_advances_state"]
 ci_script = "ci/ci_check_consensus_closed_enums.sh"
 status = "enforced"
 strengthened_in = ["PHASE4-N-B"]
@@ -2656,7 +2656,7 @@ source = "docs/planning/receive-side-bridge-invariants.md §1 (I-3, I-4); docs/p
 cross_ref = ["CN-CONS-08", "DC-CONS-13", "CN-STORE-07", "DC-CONS-22"]
 code_locus = "crates/ade_ledger/src/receive/reducer.rs (admit-side: block_delivered branch atomically advances chain_write + state.ledger + state.chain_dep; rollback-side: roll_backward branch atomically calls materialize_rolled_back_state + commit_rollback); crates/ade_ledger/src/rollback/commit.rs (commit_rollback irreversible-step-first staged commit); crates/ade_ledger/src/rollback/materialize.rs (materialize_rolled_back_state via SnapshotReader + BlockSource); crates/ade_runtime/src/rollback/{cadence,in_memory_cache,chaindb_block_source,snapshot_writer}.rs (GREEN/RED rollback infrastructure)"
 tests = ["receive_apply_block_delivered_with_matching_header_admits", "commit_rollback_advances_chaindb_and_ledger_atomically", "commit_rollback_chain_write_failure_leaves_state_unchanged", "commit_rollback_resets_pending_headers", "rollback_branch_returns_rolled_back_on_in_memory_snapshot", "rollback_branch_returns_rollback_too_deep_when_no_snapshot", "rollback_branch_state_unchanged_on_materialize_failure", "rollback_then_continue_admit_equals_straight_line_admit"]
-ci_script = "ci/ci_check_receive_reducer_closure.sh, ci/ci_check_rollback_materialize_closure.sh"
+ci_script = "ci/ci_check_receive_reducer_closure.sh, ci/ci_check_rollback_materialize_closure.sh, ci/ci_check_receive_orchestrator_no_producer_dep.sh"
 status = "enforced"
 authority_surface = "receive-side atomic admit + rollback over ChainDb + LedgerState + PraosChainDepState"
 cluster = "PHASE4-N-H + PHASE4-N-I"
@@ -2948,7 +2948,7 @@ tests = [
     "crates/ade_runtime/src/bootstrap.rs::tests::bootstrap_warm_start_equals_direct_materialize",
     "crates/ade_runtime/src/bootstrap.rs::tests::bootstrap_two_runs_produce_byte_identical_state",
 ]
-ci_script = "ci/ci_check_bootstrap_closure.sh, ci/ci_check_produce_mode_uses_bootstrap_initial_state.sh"
+ci_script = "ci/ci_check_bootstrap_closure.sh, ci/ci_check_produce_mode_uses_bootstrap_initial_state.sh, ci/ci_check_node_mode_closure.sh"
 status = "enforced"
 strengthened_in = ["PHASE4-N-K", "PHASE4-N-M-B", "PHASE4-N-T"]
 attack_rationale = "A parallel bootstrap path can produce an initial state that disagrees with the canonical materialize+decode authority chain — opening a startup-time chain-divergence vector."
@@ -3029,7 +3029,7 @@ tests = [
     "crates/ade_runtime/src/clock.rs::tests::deterministic_clock_is_pure",
     "crates/ade_runtime/src/orchestrator/leadership_session.rs::tests::leadership_session_slot_arithmetic_is_pure",
 ]
-ci_script = "ci/ci_check_clock_seam.sh"
+ci_script = "ci/ci_check_clock_seam.sh, ci/ci_check_orchestrator_core_purity.sh"
 status = "enforced"
 strengthened_in = ["PHASE4-N-K", "PHASE4-N-L"]
 evidence_notes = "PHASE4-N-K S1+S2+S5+S8 (2026-05-26) shipped the Clock trait (with DeterministicClock + SystemClock), pinned the orchestrator core as the SOLE wall-clock-free consumer, and proved replay equivalence end-to-end via tests/orchestrator_replay_equivalence.rs. ci/ci_check_clock_seam.sh enforces that crates/ade_runtime/src/clock.rs is the sole site of SystemTime::now() / Instant::now() within ade_runtime, and that orchestrator/{core,event,state,mod}.rs contain none of tokio::time, rand, HashMap/HashSet, or f32/f64."
@@ -3103,7 +3103,7 @@ source = "docs/planning/phase4-n-l-wire-protocol-invariants.md §1 (I-7)"
 cross_ref = ["CN-STORE-08"]
 code_locus = "crates/ade_network/src/mux/frame.rs"
 tests = [
-    "crates/ade_network/src/mux/frame.rs::tests::round_trip_canonical_frames",
+    "crates/ade_network/src/mux/frame.rs::tests::frame_roundtrip_byte_identical",
 ]
 ci_script = "ci/ci_check_mux_frame_closure.sh"
 status = "enforced"
@@ -3687,7 +3687,7 @@ source = "docs/planning/phase4-n-m-ledger-seed-invariants.md §0 honest-scope ta
 cross_ref = ["CN-SEED-01", "RO-MITHRIL-IMPORT-01"]
 code_locus = ""
 tests = []
-ci_script = ""
+ci_script = "ci/ci_check_genesis_replay_open_obligation.sh"
 status = "declared"
 open_obligation = "blocked_until_genesis_replay_cluster"
 
@@ -4334,7 +4334,7 @@ source = "docs/planning/phase4-n-q-invariants.md §1 (I1, I6); §2 (N1, N15)"
 cross_ref = ["CN-SESS-02", "DC-SESS-01", "DC-SESS-02", "RO-LIVE-01", "CN-CONS-06"]
 code_locus = "crates/ade_runtime/src/network/n2n_listener.rs (RED listener); crates/ade_runtime/src/orchestrator/n2n_server_pump.rs (per-peer dispatch into n2n_server reducers)"
 tests = ["n2n_listener_loopback_handshake_succeeds"]
-ci_script = ""
+ci_script = "ci/ci_check_n2n_server_no_signing_dep.sh"
 status = "enforced"
 introduced_in = "PHASE4-N-Q"
 strengthened_in = ["PHASE4-N-R-B", "PHASE4-N-S-B"]
@@ -4401,7 +4401,7 @@ source = "docs/planning/phase4-n-r-invariants.md §1 (I1, I9); §2 (N1); §5 (st
 cross_ref = ["CN-CONS-07", "CN-PROD-02", "DC-CONS-18", "T-KEY-01"]
 code_locus = "crates/ade_node/src/produce_mode.rs (run_real_forge BLUE-then-RED-then-BLUE pipeline; apply_effects_with_forge_handler call site); crates/ade_ledger/src/producer/forge.rs (forge_block BLUE step 5); crates/ade_ledger/src/producer/self_accept.rs (self_accept BLUE step 6 gate)"
 tests = ["zero_stake_answer_emits_forge_not_leader", "kes_period_outside_window_emits_forge_failed_kes_period_mismatch", "full_stake_answer_reaches_self_accept_and_rejects", "run_real_forge_is_byte_identical_across_two_runs", "forge_block_accepts_empty_mempool", "forge_block_empty_mempool_produces_empty_body", "produce_mode_starts_runs_three_slots_and_exits_via_max_slots"]
-ci_script = "ci/ci_check_producer_coordinator_no_secrets.sh"
+ci_script = "ci/ci_check_producer_coordinator_no_secrets.sh, ci/ci_check_no_independent_forge_codepath.sh"
 status = "enforced"
 introduced_in = "PHASE4-N-R-A"
 strengthened_in = ["PHASE4-N-S-A", "PHASE4-N-T"]
