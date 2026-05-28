@@ -176,7 +176,13 @@ mod tests {
                 }
                 let (forged, _effects) = forge_block(tick).unwrap();
 
-                let decoded = decode_conway_block(&forged.bytes).unwrap();
+                // PHASE4-N-V: forge_block output is now the era-tagged
+                // envelope `[era, block]`; strip it before decoding the inner
+                // Conway block (decode_conway_block expects the bare block).
+                let env =
+                    ade_codec::cbor::envelope::decode_block_envelope(&forged.bytes).unwrap();
+                let inner = &forged.bytes[env.block_start..env.block_end];
+                let decoded = decode_conway_block(inner).unwrap();
                 let block = decoded.decoded();
 
                 let recomputed = block_body_hash(block);

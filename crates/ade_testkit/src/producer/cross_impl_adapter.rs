@@ -45,22 +45,27 @@ mod tests {
                 if expected.is_empty() {
                     continue;
                 }
+                // PHASE4-N-V: expected_forged is now the era-tagged envelope
+                // `[era, block]`; strip it before decoding the bare inner block.
+                let env =
+                    ade_codec::cbor::envelope::decode_block_envelope(expected).unwrap();
+                let inner = &expected[env.block_start..env.block_end];
                 let mut offset = 0usize;
-                let decoded = decode_shelley_block_inner(expected, &mut offset).unwrap_or_else(|e| {
+                let decoded = decode_shelley_block_inner(inner, &mut offset).unwrap_or_else(|e| {
                     panic!(
                         "fixture {} tick {}: decode_shelley_block_inner rejected captured \
-                         expected_forged bytes: {:?}",
+                         expected_forged inner bytes: {:?}",
                         fixture.label, i, e
                     )
                 });
                 assert_eq!(
                     offset,
-                    expected.len(),
+                    inner.len(),
                     "fixture {} tick {}: decoder left trailing bytes ({} of {} consumed)",
                     fixture.label,
                     i,
                     offset,
-                    expected.len(),
+                    inner.len(),
                 );
                 // Force the decoded value to be used so the compiler
                 // cannot elide the decode call entirely.
@@ -85,22 +90,27 @@ mod tests {
 
                 // (1) Decode round-trip on the captured expected_forged
                 // bytes.
+                // PHASE4-N-V: expected_forged is now the era-tagged envelope
+                // `[era, block]`; strip it before decoding the bare inner block.
+                let env =
+                    ade_codec::cbor::envelope::decode_block_envelope(expected).unwrap();
+                let inner = &expected[env.block_start..env.block_end];
                 let mut offset = 0usize;
-                let decoded = decode_shelley_block_inner(expected, &mut offset).unwrap_or_else(|e| {
+                let decoded = decode_shelley_block_inner(inner, &mut offset).unwrap_or_else(|e| {
                     panic!(
                         "fixture {} tick {}: decode_shelley_block_inner rejected captured \
-                         expected_forged bytes: {:?}",
+                         expected_forged inner bytes: {:?}",
                         fixture.label, i, e
                     )
                 });
                 assert_eq!(
                     offset,
-                    expected.len(),
+                    inner.len(),
                     "fixture {} tick {}: decoder left trailing bytes ({} of {} consumed)",
                     fixture.label,
                     i,
                     offset,
-                    expected.len(),
+                    inner.len(),
                 );
 
                 // (2) Body-hash binding via S4's canonical recipe — the
