@@ -23,7 +23,7 @@ use ade_types::{Hash32, SlotNo};
 use crate::block_fetch::agency::BlockFetchAgency;
 use crate::block_fetch::state::{BlockFetchError, BlockFetchState};
 use crate::block_fetch::transition::block_fetch_transition;
-use crate::codec::block_fetch::{BlockFetchMessage, Point};
+use crate::codec::block_fetch::{compose_blockfetch_block, BlockFetchMessage, Point};
 use crate::codec::version::BlockFetchVersion;
 
 /// Closed wrapper for server-agency-legal block-fetch replies.
@@ -127,10 +127,12 @@ pub enum BlockFetchServerStep {
 }
 
 /// Process one client-originated block-fetch message. Pure, total,
-/// deterministic. The reducer never re-encodes block bytes; every
-/// `Block { bytes }` payload it constructs is sourced verbatim from
-/// `served.range_bytes` (which itself returns
-/// `AcceptedBlock.as_bytes()` slices).
+/// deterministic. The reducer never re-encodes the block itself; every
+/// `Block { bytes }` payload it constructs is the bare
+/// `AcceptedBlock.as_bytes()` (`[era, block]`) sourced from
+/// `served.range_bytes`, tag-24-wrapped verbatim via the single
+/// `compose_blockfetch_block` authority (`CN-WIRE-08`) — the inner block
+/// bytes pass through untouched, only the CBOR-in-CBOR envelope is added.
 pub fn producer_block_fetch_serve(
     mut state: ProducerBlockFetchServerState,
     in_msg: BlockFetchMessage,
@@ -196,7 +198,12 @@ pub fn producer_block_fetch_serve(
             let mut replies = Vec::with_capacity(entries.len() + 2);
             replies.push(ServerReply::start_batch());
             for (_slot, _hash, bytes) in entries {
-                replies.push(ServerReply::block(bytes));
+                // CN-WIRE-08: the served snapshot holds the bare
+                // `[era, block]` storage form (AcceptedBlock.as_bytes());
+                // the wire MsgBlock payload is its tag-24 CBOR-in-CBOR
+                // wrap. Compose via the single tag-24 authority so no
+                // bare `[era, block]` reaches a peer.
+                replies.push(ServerReply::block(compose_blockfetch_block(&bytes)));
             }
             replies.push(ServerReply::batch_done());
             state.state = BlockFetchState::Idle;
@@ -478,9 +485,56 @@ mod tests {
                 _ => None,
             })
             .expect("Block in replies");
-        // DC-CONS-17 surface: served bytes equal admitted
-        // AcceptedBlock.as_bytes() which equals the corpus block.
-        assert_eq!(block_msg, blocks[0]);
+        // DC-CONS-17 surface, strengthened by CN-WIRE-08 (PHASE4-N-X):
+        // the served wire payload is the tag-24 wrap of the admitted
+        // AcceptedBlock.as_bytes(); UNWRAPPED it equals the corpus block
+        // byte-for-byte (block fidelity survives the envelope). The bare
+        // `[era, block]` is never placed on the wire.
+        assert_ne!(block_msg, blocks[0], "must NOT serve the bare [era,block]");
+        let inner = crate::codec::block_fetch::decompose_blockfetch_block(&block_msg)
+            .expect("served payload is tag24-wrapped");
+        assert_eq!(inner, &blocks[0][..]);
+    }
+
+    #[test]
+    fn producer_block_fetch_serve_block_payload_is_tag24_wrapped_and_decodes() {
+        // CE-X-3: the served MsgBlock payload is `tag24(bytes([era,block]))`
+        // (starts with the tag-24 marker 0xd8 0x18), and its inner bytes
+        // round-trip through the SAME decode_block_envelope authority that
+        // validates received blocks — block-arm wrap<->decode symmetry.
+        let (snap, blocks) = build_served_with_first_n_lightest(1);
+        let look = SnapshotRangeLookup { snap: &snap };
+        let (slot, hash, _) = snap.iter().next().expect("non-empty");
+        let range = Range {
+            from: Point::Block { slot, hash: hash.clone() },
+            to: Point::Block { slot, hash: hash.clone() },
+        };
+        let (_s, step) = producer_block_fetch_serve(
+            ProducerBlockFetchServerState::new(),
+            BlockFetchMessage::RequestRange(range),
+            &look,
+            v(),
+        )
+        .unwrap();
+        let payload = match step {
+            BlockFetchServerStep::Replies(r) => r
+                .into_iter()
+                .find_map(|x| match x.into_message() {
+                    BlockFetchMessage::Block { bytes } => Some(bytes),
+                    _ => None,
+                })
+                .expect("Block in replies"),
+            other => panic!("expected Replies, got {other:?}"),
+        };
+        // Real cardano-node MsgBlock payload framing: bare tag-24.
+        assert_eq!(&payload[0..2], &[0xd8, 0x18], "payload must start with tag(24)");
+        let inner = crate::codec::block_fetch::decompose_blockfetch_block(&payload)
+            .expect("tag24 unwrap");
+        // The inner is exactly the [era, block] storage form and decodes
+        // via the canonical block-envelope authority.
+        let env = decode_block_envelope(inner).expect("inner decodes as [era,block]");
+        assert_eq!(env.era, CardanoEra::Conway);
+        assert_eq!(inner, &blocks[0][..]);
     }
 
     #[test]

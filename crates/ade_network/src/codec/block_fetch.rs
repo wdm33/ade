@@ -98,11 +98,17 @@ pub fn encode_block_fetch_message(msg: &BlockFetchMessage) -> Vec<u8> {
             encode_u64(&mut buf, 3);
         }
         BlockFetchMessage::Block { bytes } => {
-            // The block body is wrapped per the cardano-node hard-fork-
-            // combinator era discriminator: [serialisationInfo, tag24(bytes)]
-            // or similar nested shape varying by era. We carry the FULL
-            // wrapped CBOR item as opaque bytes for byte-identical
-            // round-trip; the decoder slices the same range.
+            // The block body is the cardano-node hard-fork-combinator
+            // CBOR-in-CBOR payload: tag24(bytes([era, block])) — a bare
+            // tag-24 wrap of the era-tagged storage block, with NO
+            // serialisationInfo word. Verified against the real
+            // cardano-node 11.0.1 preprod capture (the full MsgBlock is
+            // `82 04 d8 18 59 03 ee 82 <era> ...`). `bytes` already holds
+            // that full wrapped item — the serve path composes it via
+            // `compose_blockfetch_block` (the CN-WIRE-08 tag-24
+            // authority); the codec carries it verbatim for
+            // byte-identical round-trip and the decoder slices the same
+            // range.
             encode_array_header(&mut buf, 2);
             encode_u64(&mut buf, 4);
             buf.extend_from_slice(bytes);
@@ -179,6 +185,34 @@ pub fn decode_block_fetch_message(bytes: &[u8]) -> Result<BlockFetchMessage, Cod
     Ok(msg)
 }
 
+// ---------------------------------------------------------------------
+// Per-protocol tag-24 composition (CN-WIRE-08)
+// ---------------------------------------------------------------------
+//
+// BlockFetch's HFC framing wraps the WHOLE era-tagged block as one
+// CBOR-in-CBOR item: the era discriminant lives INSIDE the tag-24 bytes
+// (`tag24(bytes([era, block]))`). This module owns that protocol
+// composition; the tag-24 byte wrap/unwrap itself is the single
+// `ade_codec` authority.
+
+/// Compose a BlockFetch `MsgBlock` payload from the canonical
+/// `[era, block]` storage form produced by `ade_codec::encode_block_envelope`:
+/// `tag24(bytes([era, block]))`. Single tag-24 authority — delegates the
+/// wrap to `ade_codec::wrap_tag24` (`CN-WIRE-08`). The serve path calls
+/// this so no bare `[era, block]` is ever placed on the wire.
+pub fn compose_blockfetch_block(storage_block: &[u8]) -> Vec<u8> {
+    ade_codec::wrap_tag24(storage_block)
+}
+
+/// Inverse of [`compose_blockfetch_block`]: strip the tag-24 envelope and
+/// return the inner `[era, block]` storage bytes as a zero-copy borrow.
+/// Fails closed on any non-`tag24(bytes(..))` payload.
+pub fn decompose_blockfetch_block(
+    payload: &[u8],
+) -> Result<&[u8], ade_codec::TagEnvelopeError> {
+    ade_codec::unwrap_tag24(payload)
+}
+
 #[cfg(test)]
 #[allow(clippy::unwrap_used)]
 #[allow(clippy::expect_used)]
@@ -186,16 +220,13 @@ pub fn decode_block_fetch_message(bytes: &[u8]) -> Result<BlockFetchMessage, Cod
 mod tests {
     use super::*;
 
-    /// Build a synthetic wrapped block matching the N2N wire shape:
-    /// `[serialisationInfo, tag(24, bytes(inner))]`.
-    fn wrapped_block(info_word: u64, inner: &[u8]) -> Vec<u8> {
-        let mut buf = Vec::new();
-        encode_array_header(&mut buf, 2);
-        encode_u64(&mut buf, info_word);
-        buf.push(0xd8);
-        buf.push(0x18);
-        encode_bytes(&mut buf, inner);
-        buf
+    /// Build a synthetic MsgBlock payload matching the REAL N2N wire
+    /// shape: `tag(24, bytes(inner))` — a bare tag-24 wrap, NO
+    /// serialisationInfo word (verified against the captured
+    /// cardano-node 11.0.1 oracle). Goes through the CN-WIRE-08
+    /// authority so the fixture cannot drift from the real shape.
+    fn wrapped_block(inner: &[u8]) -> Vec<u8> {
+        compose_blockfetch_block(inner)
     }
 
     fn sample_messages() -> Vec<BlockFetchMessage> {
@@ -207,7 +238,7 @@ mod tests {
             BlockFetchMessage::ClientDone,
             BlockFetchMessage::StartBatch,
             BlockFetchMessage::NoBlocks,
-            BlockFetchMessage::Block { bytes: wrapped_block(1, &[0xDE, 0xAD, 0xBE, 0xEF]) },
+            BlockFetchMessage::Block { bytes: wrapped_block(&[0xDE, 0xAD, 0xBE, 0xEF]) },
             BlockFetchMessage::BatchDone,
         ]
     }

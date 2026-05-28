@@ -159,7 +159,12 @@ fn cross_impl_server_pipeline_request_range_returns_decodable_bytes() {
     let snap = build_snapshot(&arrivals);
     let served = drive_full_range_served(&snap);
     assert!(!served.is_empty(), "non-empty snapshot must produce non-empty served bytes");
-    for bytes in &served {
+    for payload in &served {
+        // CN-WIRE-08: the served wire payload is tag-24 wrapped; strip
+        // it via the shared authority before the envelope/block decode.
+        assert_eq!(&payload[0..2], &[0xd8, 0x18], "served payload must be tag-24 wrapped");
+        let bytes = ade_network::codec::block_fetch::decompose_blockfetch_block(payload)
+            .expect("tag-24 unwrap");
         let env = decode_block_envelope(bytes).expect("envelope decodes");
         assert!(env.block_end > env.block_start);
         let decoded = decode_block(bytes).expect("block decodes");
@@ -189,5 +194,18 @@ fn cross_impl_server_pipeline_request_range_byte_identical_to_self_accept_input(
     // served is in BTreeMap order (admitted-key order); by_key is too.
     let mut expected_in_order: Vec<Vec<u8>> = by_key.into_values().collect();
     expected_in_order.truncate(served.len());
-    assert_eq!(served, expected_in_order, "served bytes must equal corpus bytes byte-identically");
+    // CN-WIRE-08: served payloads are tag-24 wrapped; unwrap each before
+    // comparing to the corpus bytes the operator fed into self_accept.
+    let served_inner: Vec<Vec<u8>> = served
+        .iter()
+        .map(|p| {
+            ade_network::codec::block_fetch::decompose_blockfetch_block(p)
+                .expect("tag-24 unwrap")
+                .to_vec()
+        })
+        .collect();
+    assert_eq!(
+        served_inner, expected_in_order,
+        "served bytes (tag-24 unwrapped) must equal corpus bytes byte-identically"
+    );
 }

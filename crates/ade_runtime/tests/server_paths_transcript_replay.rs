@@ -247,9 +247,22 @@ fn session_transcript_served_block_bytes_equal_admitted_accepted_block_bytes() {
             .map(|(_, _, bytes)| bytes.to_vec())
             .collect()
     };
+    // DC-CONS-17 strengthened by CN-WIRE-08 (PHASE4-N-X): the served
+    // wire payload is the tag-24 CBOR-in-CBOR wrap of the admitted
+    // AcceptedBlock.as_bytes(); UNWRAPPING each via the shared authority
+    // recovers the admitted bytes byte-for-byte. The bare [era,block] is
+    // never served.
+    use ade_network::codec::block_fetch::decompose_blockfetch_block;
+    let served_inner: Vec<Vec<u8>> = block_payloads
+        .iter()
+        .map(|p| {
+            assert_eq!(&p[0..2], &[0xd8, 0x18], "served payload must be tag-24 wrapped");
+            decompose_blockfetch_block(p).expect("tag24 unwrap").to_vec()
+        })
+        .collect();
     assert_eq!(
-        block_payloads, admitted_bytes_in_order,
-        "every served Block{{bytes}} must equal the admitted AcceptedBlock.as_bytes() at the same key"
+        served_inner, admitted_bytes_in_order,
+        "every served Block{{bytes}}, once tag-24 unwrapped, must equal the admitted AcceptedBlock.as_bytes() at the same key"
     );
 }
 
@@ -293,7 +306,8 @@ fn session_transcript_announced_header_matches_served_body_recipe() {
         "RollForward header must equal accepted_block_header_bytes (DC-CONS-18)"
     );
 
-    // The served Block bytes MUST equal the AcceptedBlock bytes.
+    // The served Block bytes, once tag-24 unwrapped (CN-WIRE-08),
+    // MUST equal the AcceptedBlock bytes (DC-CONS-17 through the wrap).
     let served_body: Vec<u8> = frames
         .iter()
         .filter_map(|f| decode_block_fetch_message(f).ok())
@@ -302,9 +316,12 @@ fn session_transcript_announced_header_matches_served_body_recipe() {
             _ => None,
         })
         .expect("Block in transcript");
+    let served_inner =
+        ade_network::codec::block_fetch::decompose_blockfetch_block(&served_body)
+            .expect("served payload is tag-24 wrapped");
     assert_eq!(
-        served_body,
+        served_inner,
         arrivals[0].as_bytes(),
-        "Block bytes must equal AcceptedBlock.as_bytes() (DC-CONS-17)"
+        "Block bytes, tag-24 unwrapped, must equal AcceptedBlock.as_bytes() (DC-CONS-17)"
     );
 }
