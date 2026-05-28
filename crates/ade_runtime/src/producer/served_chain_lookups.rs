@@ -50,6 +50,7 @@ impl<'a> ServedHeaderLookup for ServedChainLookups<'a> {
             slot: next.0,
             hash: next.1.clone(),
             block_no: decoded.header_input.block_no.0,
+            era: decoded.era,
             header_bytes,
         })
     }

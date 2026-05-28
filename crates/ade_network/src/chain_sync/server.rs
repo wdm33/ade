@@ -19,12 +19,12 @@
 // pump are unrepresentable in the public API; misuse is a compile
 // error.
 
-use ade_types::{Hash32, SlotNo};
+use ade_types::{CardanoEra, Hash32, SlotNo};
 
 use crate::chain_sync::agency::ChainSyncAgency;
 use crate::chain_sync::state::{ChainSyncOutput, ChainSyncState};
 use crate::chain_sync::transition::chain_sync_transition;
-use crate::codec::chain_sync::{ChainSyncMessage, Point, Tip};
+use crate::codec::chain_sync::{compose_rollforward_header, ChainSyncMessage, Point, Tip};
 use crate::codec::version::ChainSyncVersion;
 
 /// Closed wrapper for server-agency-legal chain-sync replies.
@@ -132,6 +132,10 @@ pub struct HeaderProjection {
     pub slot: SlotNo,
     pub hash: Hash32,
     pub block_no: u64,
+    /// The era of the block this header projects from. Drives the
+    /// ChainSync consensus era index in the RollForward header wrap
+    /// (CN-WIRE-08); `header_bytes` stays the BARE era-specific header.
+    pub era: CardanoEra,
     pub header_bytes: Vec<u8>,
 }
 
@@ -219,7 +223,11 @@ pub fn producer_chain_sync_serve(
                 let tip = tip_from_lookup(served);
                 state.last_announced = Some((proj.slot, proj.hash.clone()));
                 state.state = ChainSyncState::Idle;
-                Ok((state, ServerStep::Reply(ServerReply::roll_forward(proj.header_bytes, tip))))
+                // CN-WIRE-08: wrap the bare header projection into the
+                // ChainSync wire shape `[era_idx, tag24(header_cbor)]` via
+                // the single tag-24 authority — no bare header on the wire.
+                let header = compose_rollforward_header(proj.era, &proj.header_bytes);
+                Ok((state, ServerStep::Reply(ServerReply::roll_forward(header, tip))))
             } else {
                 // No fresh block. Park in MustReply; the orchestrator
                 // will later call advance_tip when a block arrives.
@@ -284,7 +292,8 @@ pub fn producer_chain_sync_advance_tip(
                 let tip = tip_from_lookup(served);
                 state.last_announced = Some((proj.slot, proj.hash.clone()));
                 state.state = ChainSyncState::Idle;
-                Ok((state, Some(ServerReply::roll_forward(proj.header_bytes, tip))))
+                let header = compose_rollforward_header(proj.era, &proj.header_bytes);
+                Ok((state, Some(ServerReply::roll_forward(header, tip))))
             } else {
                 Ok((state, None))
             }
@@ -464,6 +473,7 @@ mod tests {
                 slot: next.0,
                 hash: next.1,
                 block_no: decoded.header_input.block_no.0,
+                era: decoded.era,
                 header_bytes: proj,
             })
         }
@@ -701,10 +711,15 @@ mod tests {
 
     #[test]
     fn producer_chain_sync_serve_roll_forward_header_equals_accepted_block_header_bytes() {
-        // The RollForward bytes the reducer emits MUST equal the
-        // canonical header projection of the served block — the only
-        // way to construct them is via the snapshot lookup that runs
-        // accepted_block_header_bytes (DC-CONS-18).
+        // DC-CONS-18 surface, strengthened by CN-WIRE-08 (PHASE4-N-X):
+        // the RollForward bytes the reducer emits are the ChainSync wire
+        // wrap `[era_idx, tag24(header_cbor)]` of the canonical header
+        // projection. The inner, once decomposed, MUST equal
+        // accepted_block_header_bytes byte-for-byte; the bare header is
+        // never served, and the era index is the CONSENSUS index (Conway
+        // = 6, i.e. storage discriminant 7 minus one).
+        use crate::codec::chain_sync::decompose_rollforward_header;
+
         let (snap, blocks) = build_served_with_first_n_lightest(1);
         let look = SnapshotLookup { snap: &snap };
         let state = ProducerChainSyncServerState::new();
@@ -717,8 +732,13 @@ mod tests {
             },
             other => panic!("expected Reply, got {other:?}"),
         };
-        let expected = self_proj_header_via_canonical(&blocks[0]);
-        assert_eq!(header_in_reply, expected, "RollForward header must equal accepted_block_header_bytes");
+        let bare = self_proj_header_via_canonical(&blocks[0]);
+        assert_ne!(header_in_reply, bare, "must NOT serve the bare header");
+        let (era_idx, inner) =
+            decompose_rollforward_header(&header_in_reply).expect("wire header decomposes");
+        // The served corpus block is Conway (storage 7) → consensus 6.
+        assert_eq!(era_idx, 6, "Conway ChainSync header era index must be 6");
+        assert_eq!(inner, &bare[..], "decomposed header must equal accepted_block_header_bytes");
     }
 
     #[test]

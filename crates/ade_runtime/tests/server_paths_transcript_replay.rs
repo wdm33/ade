@@ -296,14 +296,21 @@ fn session_transcript_announced_header_matches_served_body_recipe() {
         })
         .expect("RollForward in transcript");
 
-    // The canonical header projection over the same AcceptedBlock
-    // MUST equal the rolled bytes.
+    // DC-CONS-18 strengthened by CN-WIRE-08 (PHASE4-N-X): the rolled
+    // header is the ChainSync wire wrap `[era_idx, tag24(header_cbor)]`;
+    // decomposed, its inner MUST equal the canonical header projection
+    // over the same AcceptedBlock. The bare header is never served.
     let canonical = accepted_block_header_bytes(&arrivals[0])
         .expect("project")
         .to_vec();
+    assert_ne!(rolled_header, canonical, "must NOT serve the bare header");
+    let (era_idx, rolled_inner) =
+        ade_network::codec::chain_sync::decompose_rollforward_header(&rolled_header)
+            .expect("rolled header decomposes");
+    assert_eq!(era_idx, 6, "Conway ChainSync header era index must be 6 (consensus)");
     assert_eq!(
-        rolled_header, canonical,
-        "RollForward header must equal accepted_block_header_bytes (DC-CONS-18)"
+        rolled_inner, &canonical[..],
+        "RollForward header inner must equal accepted_block_header_bytes (DC-CONS-18)"
     );
 
     // The served Block bytes, once tag-24 unwrapped (CN-WIRE-08),

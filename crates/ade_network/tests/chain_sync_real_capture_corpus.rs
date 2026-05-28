@@ -130,3 +130,41 @@ fn rollforward_header_opaque_pass_through() {
         }
     }
 }
+
+#[test]
+fn conway_rollforward_header_served_shape_matches_oracle() {
+    // CE-X-4 (CN-WIRE-08): pin the SERVED ChainSync RollForward header
+    // shape against the real captured Conway frame from the docker
+    // preprod cardano-node 11.0.1
+    // (preprod_conway_rollforward_frame_01_recv.cbor). The header MUST be
+    // `[era_idx, tag24(bytes(header_cbor))]` with era_idx == 6 (the
+    // CONSENSUS index for Conway — NOT the EBB-aware storage 7), and
+    // ade's own `compose_rollforward_header(Conway, inner)` MUST
+    // reproduce the captured wire bytes BYTE-IDENTICALLY.
+    use ade_network::codec::chain_sync::{
+        compose_rollforward_header, decompose_rollforward_header,
+    };
+    use ade_types::CardanoEra;
+
+    let path = corpus_dir().join("preprod_conway_rollforward_frame_01_recv.cbor");
+    let payload = load_chain_sync_payload(&path);
+    let ChainSyncMessage::RollForward { header, .. } =
+        decode_chain_sync_message(&payload).expect("decode")
+    else {
+        panic!("frame_01 is not a RollForward");
+    };
+
+    // Real wire shape: era_idx then a tag-24 wrapped header_cbor.
+    let (era_idx, inner) =
+        decompose_rollforward_header(&header).expect("real header decomposes");
+    assert_eq!(era_idx, 6, "Conway ChainSync header era index must be 6 (consensus)");
+    // The tag-24 inner is the bare era-specific header: [header_body, kes_sig].
+    assert_eq!(&inner[0..2], &[0x82, 0x8a], "inner is [header_body(array 10), kes_sig]");
+
+    // ade's serve composition reproduces the EXACT captured wire bytes.
+    let recomposed = compose_rollforward_header(CardanoEra::Conway, inner);
+    assert_eq!(
+        recomposed, header,
+        "compose_rollforward_header(Conway, inner) must equal the real cardano-node wire header byte-for-byte"
+    );
+}

@@ -121,6 +121,17 @@ async fn main() -> io::Result<()> {
         .as_deref()
         .and_then(|s| s.parse().ok())
         .unwrap_or(5);
+    // Optional intersect point: when both are supplied we FindIntersect
+    // at this concrete (slot, hash) instead of Origin, so the captured
+    // RollForward frames carry the era at that chain position (e.g. a
+    // recent Conway point) rather than the Byron blocks at Origin.
+    let intersect_point: Option<(u64, [u8; 32])> = match (
+        arg_value(&args, "--intersect-slot").as_deref().and_then(|s| s.parse::<u64>().ok()),
+        arg_value(&args, "--intersect-hash").as_deref().and_then(parse_hash32),
+    ) {
+        (Some(slot), Some(hash)) => Some((slot, hash)),
+        _ => None,
+    };
 
     fs::create_dir_all(&out_dir)?;
 
@@ -161,11 +172,23 @@ async fn main() -> io::Result<()> {
     };
     eprintln!("[cs] handshake accepted at v{negotiated_version}");
 
-    // ---- CHAIN-SYNC: FindIntersect [Origin] ----
-    // Origin is the pseudo-point before any block; every chain has it,
-    // so IntersectFound is guaranteed.
+    // ---- CHAIN-SYNC: FindIntersect ----
+    // Default: Origin (the pseudo-point before any block; every chain
+    // has it, so IntersectFound is guaranteed → Byron blocks). When an
+    // explicit --intersect-slot/--intersect-hash is supplied, intersect
+    // there so RequestNext rolls forward from that chain position.
+    let intersect_pt = match intersect_point {
+        Some((slot, hash)) => {
+            eprintln!("[cs] intersecting at slot {slot}");
+            Point::Block {
+                slot: ade_types::SlotNo(slot),
+                hash: ade_types::Hash32(hash),
+            }
+        }
+        None => Point::Origin,
+    };
     let find_intersect = ChainSyncMessage::FindIntersect {
-        points: vec![Point::Origin],
+        points: vec![intersect_pt],
     };
     let payload = encode_chain_sync_message(&find_intersect);
     let frame = wrap_in_mux_frame(payload, CHAIN_SYNC_PROTOCOL_ID, MuxMode::Initiator);
@@ -312,6 +335,18 @@ mini_protocol_id = {protocol_id}
     );
 
     Ok(())
+}
+
+fn parse_hash32(s: &str) -> Option<[u8; 32]> {
+    let s = s.trim();
+    if s.len() != 64 {
+        return None;
+    }
+    let mut out = [0u8; 32];
+    for (i, b) in out.iter_mut().enumerate() {
+        *b = u8::from_str_radix(&s[i * 2..i * 2 + 2], 16).ok()?;
+    }
+    Some(out)
 }
 
 fn arg_value(args: &[String], flag: &str) -> Option<String> {

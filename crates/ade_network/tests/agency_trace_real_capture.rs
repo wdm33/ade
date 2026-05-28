@@ -75,8 +75,21 @@ fn chain_sync_real_capture_drives_state_machine_through_expected_agency_path() {
     // mux-frame stripping (we keep the mux header in those captures;
     // strip it here).
     let dir = corpus_root().join("n2n/chain_sync");
-    let mut files = sorted_files(&dir, "_recv.cbor");
-    assert!(!files.is_empty(), "no chain-sync captures in {dir:?}");
+    // Scope to a single capture scenario: this test replays ONE
+    // origin-rooted agency progression (FindIntersect[Origin] → rollback
+    // → rollforwards). The preprod_conway_rollforward_* fixtures
+    // (PHASE4-N-X) are a separate scenario with their own intersect +
+    // rollback and must not be interleaved into this sequence.
+    let mut files: Vec<_> = sorted_files(&dir, "_recv.cbor")
+        .into_iter()
+        .filter(|p| {
+            p.file_name()
+                .and_then(|n| n.to_str())
+                .map(|n| n.contains("preprod_origin_5_frames"))
+                .unwrap_or(false)
+        })
+        .collect();
+    assert!(!files.is_empty(), "no origin-scenario chain-sync captures in {dir:?}");
     // The IntersectFound capture must be processed first; sort puts
     // `frame_NN` ahead of `intersect` alphabetically so we re-order.
     files.sort_by_key(|p| {

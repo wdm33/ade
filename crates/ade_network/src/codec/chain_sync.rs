@@ -26,7 +26,7 @@
 // ade_codec's era decoders; chain-sync only needs to preserve the
 // wire-bytes for forwarding to the ledger.
 
-use ade_types::{Hash32, SlotNo};
+use ade_types::{CardanoEra, Hash32, SlotNo};
 
 use crate::codec::error::{CodecError, ProtocolKind};
 use crate::codec::primitives::{
@@ -96,11 +96,18 @@ pub fn encode_chain_sync_message(msg: &ChainSyncMessage) -> Vec<u8> {
             encode_u64(&mut buf, 1);
         }
         ChainSyncMessage::RollForward { header, tip } => {
-            // N2N RollForward wraps the era-specific header in
-            //   [serialisationInfo: word, encodedHeader: tag(24, bytes)]
-            // We carry `header` as the BYTES OF THE ENTIRE WRAPPED ITEM
-            // (starting with the array(2) header) so round-trip is
-            // byte-identical. Decoder slices the same range out.
+            // N2N RollForward carries the era-specific header wrapped as
+            //   [era_idx, tag24(bytes(header_cbor))]   (Shelley-based eras)
+            // where era_idx is the cardano-node CONSENSUS era index
+            // (Byron=0, Shelley=1, ... Conway=6) — NOT the EBB-aware
+            // BlockFetch/storage discriminant (Conway=7). Verified against
+            // the real preprod Conway capture
+            // (corpus/network/n2n/chain_sync/preprod_conway_rollforward_*).
+            // `header` holds the ENTIRE wrapped item (starting with the
+            // array(2) header) — the serve path composes it via
+            // `compose_rollforward_header` (the CN-WIRE-08 tag-24
+            // authority). The codec carries it verbatim for byte-identical
+            // round-trip; the decoder slices the same range out.
             encode_array_header(&mut buf, 3);
             encode_u64(&mut buf, 2);
             buf.extend_from_slice(header);
@@ -239,6 +246,68 @@ pub fn decode_chain_sync_message(bytes: &[u8]) -> Result<ChainSyncMessage, Codec
     Ok(msg)
 }
 
+// ---------------------------------------------------------------------
+// Per-protocol tag-24 composition (CN-WIRE-08)
+// ---------------------------------------------------------------------
+//
+// ChainSync's RollForward header wrap is `[era_idx, tag24(header_cbor)]`
+// — the era index sits OUTSIDE the tag-24, and uses the cardano-node
+// CONSENSUS era index, distinct from the BlockFetch (EBB-aware) scheme.
+// This module owns that protocol composition; the tag-24 byte
+// wrap/unwrap is the single `ade_codec` authority.
+
+/// Map an ade storage `CardanoEra` to the cardano-node N2N ChainSync
+/// header era index: the CONSENSUS 0-based index (Byron=0, Shelley=1,
+/// Allegra=2, Mary=3, Alonzo=4, Babbage=5, Conway=6) = ade's storage
+/// discriminant MINUS ONE (both Byron variants collapse to 0).
+///
+/// This is deliberately NOT the BlockFetch era index, which is the
+/// EBB-aware storage discriminant (Conway=7). The two N2N surfaces use
+/// different era-index schemes — verified against the real preprod
+/// captures.
+pub fn chain_sync_wire_era_index(era: CardanoEra) -> u8 {
+    era.as_u8().saturating_sub(1)
+}
+
+/// Compose a ChainSync RollForward header payload from the bare
+/// era-specific `header_cbor` (the `[header_body, kes_signature]` array
+/// projected by `accepted_block_header_bytes`):
+/// `[era_idx, tag24(bytes(header_cbor))]`, where `era_idx` is the
+/// consensus era index. Single tag-24 authority — delegates the wrap to
+/// `ade_codec::wrap_tag24` (`CN-WIRE-08`). The serve path calls this so
+/// no bare header reaches a peer.
+pub fn compose_rollforward_header(era: CardanoEra, header_cbor: &[u8]) -> Vec<u8> {
+    let mut buf = Vec::with_capacity(header_cbor.len() + 8);
+    encode_array_header(&mut buf, 2);
+    encode_u64(&mut buf, chain_sync_wire_era_index(era) as u64);
+    buf.extend_from_slice(&ade_codec::wrap_tag24(header_cbor));
+    buf
+}
+
+/// Inverse of [`compose_rollforward_header`]: strip the
+/// `[era_idx, tag24(...)]` wrap, returning the consensus era index and a
+/// zero-copy borrow of the inner `header_cbor`. Fails closed on a
+/// non-array(2) outer, a non-tag-24 inner (e.g. a Byron era-0 header,
+/// which is not tag-24-wrapped), or trailing bytes.
+pub fn decompose_rollforward_header(payload: &[u8]) -> Result<(u8, &[u8]), CodecError> {
+    let mut off = 0usize;
+    let arr = decode_array_header(PROTOCOL, payload, &mut off)?;
+    if arr != 2 {
+        return Err(CodecError::InvalidProtocolMessage {
+            protocol: PROTOCOL,
+            reason: "rollforward header must be a 2-element [era_idx, tag24] array",
+        });
+    }
+    let era_idx = decode_u64(PROTOCOL, payload, &mut off)?;
+    let inner = ade_codec::unwrap_tag24(&payload[off..]).map_err(|_| {
+        CodecError::InvalidProtocolMessage {
+            protocol: PROTOCOL,
+            reason: "rollforward header inner is not tag24(bytes(..))",
+        }
+    })?;
+    Ok((era_idx as u8, inner))
+}
+
 #[cfg(test)]
 #[allow(clippy::unwrap_used)]
 #[allow(clippy::expect_used)]
@@ -253,12 +322,14 @@ mod tests {
         }
     }
 
-    /// Build a synthetic wrapped header matching the N2N wire format:
-    /// `[serialisationInfo, tag(24, bytes(inner))]`.
-    fn wrapped_header(info_word: u64, inner: &[u8]) -> Vec<u8> {
+    /// Build a synthetic wrapped header matching the real N2N wire
+    /// format: `[era_idx, tag(24, bytes(inner))]` — the first element is
+    /// the consensus era index (verified against the captured Conway
+    /// frame), NOT a serialisationInfo word.
+    fn wrapped_header(era_idx: u64, inner: &[u8]) -> Vec<u8> {
         let mut buf = Vec::new();
         encode_array_header(&mut buf, 2);
-        encode_u64(&mut buf, info_word);
+        encode_u64(&mut buf, era_idx);
         buf.push(0xd8);
         buf.push(0x18);
         encode_bytes(&mut buf, inner);
@@ -328,5 +399,46 @@ mod tests {
                 other => panic!("expected truncation-class error, got {other:?}"),
             }
         }
+    }
+
+    #[test]
+    fn chain_sync_wire_era_index_is_consensus_index() {
+        // Consensus index = ade storage discriminant minus one; both
+        // Byron variants collapse to 0. Conway (storage 7) → 6.
+        assert_eq!(chain_sync_wire_era_index(CardanoEra::ByronEbb), 0);
+        assert_eq!(chain_sync_wire_era_index(CardanoEra::ByronRegular), 0);
+        assert_eq!(chain_sync_wire_era_index(CardanoEra::Shelley), 1);
+        assert_eq!(chain_sync_wire_era_index(CardanoEra::Allegra), 2);
+        assert_eq!(chain_sync_wire_era_index(CardanoEra::Mary), 3);
+        assert_eq!(chain_sync_wire_era_index(CardanoEra::Alonzo), 4);
+        assert_eq!(chain_sync_wire_era_index(CardanoEra::Babbage), 5);
+        assert_eq!(chain_sync_wire_era_index(CardanoEra::Conway), 6);
+    }
+
+    #[test]
+    fn compose_decompose_rollforward_header_round_trips() {
+        let inner = [0x82u8, 0x8a, 0x01, 0x02, 0x03];
+        let wire = compose_rollforward_header(CardanoEra::Conway, &inner);
+        // Shape: [6, tag24(bytes(inner))]
+        assert_eq!(wire[0], 0x82, "array(2)");
+        assert_eq!(wire[1], 0x06, "Conway consensus era index");
+        assert_eq!(&wire[2..4], &[0xd8, 0x18], "tag(24)");
+        let (era_idx, back) = decompose_rollforward_header(&wire).expect("decompose");
+        assert_eq!(era_idx, 6);
+        assert_eq!(back, &inner[..]);
+    }
+
+    #[test]
+    fn decompose_rollforward_header_rejects_non_tag24_inner() {
+        // A Byron-style `[0, byron_header]` (no tag-24) must fail closed.
+        let mut buf = Vec::new();
+        encode_array_header(&mut buf, 2);
+        encode_u64(&mut buf, 0);
+        encode_array_header(&mut buf, 1); // bare array, not tag-24 bytes
+        encode_u64(&mut buf, 7);
+        assert!(matches!(
+            decompose_rollforward_header(&buf),
+            Err(CodecError::InvalidProtocolMessage { .. })
+        ));
     }
 }

@@ -1,0 +1,34 @@
+# Captured Conway chain-sync RollForward corpus (PHASE4-N-X / CN-WIRE-08
+# golden served-shape fixture for the ChainSync header tag-24 wrap).
+#
+# Captured from the local docker preprod cardano-node 11.0.1 by
+# FindIntersect at a recent Conway point (slot 124137045) then
+# RequestNext, so the RollForward frames carry CONWAY headers (unlike
+# the preprod_origin_5_frames_* fixtures, which are Byron blocks from
+# Origin and therefore unwrapped — era 0).
+#
+# Verified wire shape of a Conway RollForward header
+# (frame_01, payload after the 8-byte mux header):
+#   [2, [era_idx, tag24(bytes(header_cbor))], tip]
+# where era_idx = 6 — the cardano-node CONSENSUS era index for Conway
+# (Byron=0, Shelley=1, Allegra=2, Mary=3, Alonzo=4, Babbage=5, Conway=6),
+# which is ade's storage discriminant (Conway=7) MINUS ONE. This differs
+# from the BlockFetch MsgBlock era index (EBB-aware, Conway=7); the two
+# N2N surfaces use different era-index schemes, so the chain-sync header
+# wrap MUST map the era through the consensus index.
+#
+# The tag-24 inner is the bare era-specific header_cbor = the array(2)
+# [header_body(array 10, Praos), kes_signature] — byte-identical to
+# ade_ledger::block_validity::accepted_block_header_bytes over the same
+# block.
+peer = "127.0.0.1:3001"
+network_magic = 1
+negotiated_n2n_version = 15
+frames_captured = 4
+protocol = "ChainSync"
+mini_protocol_id = 2
+intersect_slot = 124137045
+intersect_hash = "ca000dd800f7dddfad3fc7e131be4649d1012d138af23122faf4bad265489651"
+# Each *_frame_NN_recv.cbor contains the full mux frame (8-byte header
+# + ChainSync CBOR payload). Strip the first 8 bytes to feed the
+# payload through decode_chain_sync_message.
