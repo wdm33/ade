@@ -162,6 +162,13 @@ pub struct ProduceCli {
     pub genesis_file: PathBuf,
     pub evidence_log: PathBuf,
     pub max_slots: Option<u64>,
+    /// PHASE4-N-T: operator JSON UTxO seed (`import_cardano_cli_json_utxo`)
+    /// for the real cold-start bootstrap state.
+    pub json_seed_path: PathBuf,
+    /// PHASE4-N-T: operator consensus-inputs bundle
+    /// (`import_live_consensus_inputs`) for the real
+    /// `EraSchedule` + `PoolDistrView` + epoch nonce.
+    pub consensus_inputs_path: PathBuf,
 }
 
 /// Closed PHASE4-N-O `key_gen_kes` CLI bundle. Constructed via
@@ -466,6 +473,14 @@ impl Cli {
             .evidence_log
             .clone()
             .unwrap_or_else(|| PathBuf::from("./produce_evidence.jsonl"));
+        let json_seed_path = self
+            .json_seed_path
+            .clone()
+            .ok_or(CliError::ProduceMissingFlag("--json-seed"))?;
+        let consensus_inputs_path = self
+            .consensus_inputs_path
+            .clone()
+            .ok_or(CliError::ProduceMissingFlag("--consensus-inputs-path"))?;
         Ok(ProduceCli {
             listen_addr,
             cold_skey,
@@ -475,6 +490,8 @@ impl Cli {
             genesis_file,
             evidence_log,
             max_slots: self.max_slots,
+            json_seed_path,
+            consensus_inputs_path,
         })
     }
 
@@ -820,6 +837,65 @@ mod tests {
         assert_eq!(
             err,
             CliError::InvalidPeriodIdx("not-a-number".to_string())
+        );
+    }
+
+    // =====================================================================
+    // PHASE4-N-T — produce mode requires --json-seed + --consensus-inputs-path
+    // =====================================================================
+
+    #[test]
+    fn produce_cli_requires_seed_and_consensus_inputs() {
+        // A complete produce argv parses Ok.
+        let full = [
+            "--mode",
+            "produce",
+            "--listen",
+            "127.0.0.1:3001",
+            "--cold-skey",
+            "/cold.skey",
+            "--kes-skey",
+            "/kes.skey",
+            "--vrf-skey",
+            "/vrf.skey",
+            "--opcert",
+            "/op.json",
+            "--genesis-file",
+            "/genesis.json",
+            "--json-seed",
+            "/seed.json",
+            "--consensus-inputs-path",
+            "/cinputs.json",
+        ];
+        let cli = parse(&full).expect("base parse");
+        let pcli = cli.extract_produce_cli().expect("complete produce argv");
+        assert_eq!(pcli.json_seed_path, PathBuf::from("/seed.json"));
+        assert_eq!(
+            pcli.consensus_inputs_path,
+            PathBuf::from("/cinputs.json")
+        );
+
+        // Missing --json-seed → ProduceMissingFlag("--json-seed").
+        let no_seed: Vec<&str> = full
+            .iter()
+            .copied()
+            .filter(|a| *a != "--json-seed" && *a != "/seed.json")
+            .collect();
+        let cli = parse(&no_seed).expect("base parse");
+        let err = cli.extract_produce_cli().expect_err("must reject");
+        assert_eq!(err, CliError::ProduceMissingFlag("--json-seed"));
+
+        // Missing --consensus-inputs-path → ProduceMissingFlag("--consensus-inputs-path").
+        let no_cinputs: Vec<&str> = full
+            .iter()
+            .copied()
+            .filter(|a| *a != "--consensus-inputs-path" && *a != "/cinputs.json")
+            .collect();
+        let cli = parse(&no_cinputs).expect("base parse");
+        let err = cli.extract_produce_cli().expect_err("must reject");
+        assert_eq!(
+            err,
+            CliError::ProduceMissingFlag("--consensus-inputs-path")
         );
     }
 

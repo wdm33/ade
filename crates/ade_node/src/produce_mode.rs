@@ -50,10 +50,12 @@ use ade_ledger::pparams::ProtocolParameters;
 use ade_ledger::producer::forge::{forge_block, ForgeError};
 use ade_ledger::producer::self_accept::self_accept;
 use ade_ledger::state::LedgerState;
+use ade_runtime::consensus_inputs::{import_live_consensus_inputs, LiveConsensusInputsCanonical};
 use ade_runtime::network::n2n_listener::{run_n2n_listener, N2nListenerConfig};
 use ade_runtime::producer::tick_assembler::{assemble_tick, TickInputs};
+use ade_runtime::seed_import::import_cardano_cli_json_utxo;
 use ade_types::shelley::block::ProtocolVersion;
-use ade_types::{BlockNo, Hash32};
+use ade_types::{BlockNo, EpochNo, Hash28, Hash32, SlotNo};
 use ade_runtime::orchestrator::event::{OrchestratorEvent, PeerRole};
 use ade_runtime::orchestrator::n2n_server_pump::PeerIdGenerator;
 use ade_runtime::producer::coordinator::{
@@ -163,18 +165,54 @@ pub async fn run_produce_mode(cli: ProduceCli, shutdown_rx: watch::Receiver<bool
         eprintln!("ade_node produce: init effects: {}", detail);
         return ExitCode::from(EXIT_PRODUCE_FAILURE as u8);
     }
-    let synthetic_forge = build_synthetic_forge_context(&{
-        // Re-borrow genesis for the synthetic context. The
-        // genesis_anchor moved into CoordinatorConfig; copy by value.
-        ade_runtime::producer::coordinator::GenesisAnchor {
-            network_magic: coord_state.genesis_anchor.network_magic,
-            slot_zero_time_unix_ms: coord_state.genesis_anchor.slot_zero_time_unix_ms,
-            slot_length_ms: coord_state.genesis_anchor.slot_length_ms,
-            slots_per_kes_period: coord_state.genesis_anchor.slots_per_kes_period,
-            kes_anchor_slot: coord_state.genesis_anchor.kes_anchor_slot,
-            kes_max_period: coord_state.genesis_anchor.kes_max_period,
-        }
-    });
+
+    // 5b. Real bootstrap state (cold-start from the operator seed).
+    //
+    // A fresh `InMemoryChainDb` is empty as both ChainDb and
+    // SnapshotStore, so `bootstrap_initial_state` takes the
+    // cold-start branch and returns the seeded `genesis_initial`
+    // unchanged with `tip = None`. The single bootstrap authority
+    // is the only path to initial state (CN-NODE-01). The forge
+    // path remains the synthetic zero-stake never-leader until S3;
+    // this slice only makes the real base state + real
+    // PoolDistrView + real EraSchedule available and threads them
+    // into the forge context's base.
+    let (utxo, _utxo_fp) = match import_cardano_cli_json_utxo(&cli.json_seed_path) {
+        Ok(p) => p,
+        Err(e) => return startup_fail_detail("json_seed", &format!("{e:?}")),
+    };
+    let consensus = match import_live_consensus_inputs(&cli.consensus_inputs_path) {
+        Ok(c) => c,
+        Err(e) => return startup_fail_detail("consensus_inputs", &format!("{e:?}")),
+    };
+    let mut seed_ledger = LedgerState::new(ade_types::CardanoEra::Conway);
+    seed_ledger.utxo_state = utxo;
+    let seed_chain_dep = PraosChainDepState::genesis(consensus.epoch_nonce.clone());
+    let real_era_schedule =
+        make_schedule_for_imported_window(&consensus.epoch_start_slot, consensus.epoch_no);
+    let real_pool_distr = pool_distr_view_from_consensus_inputs(&consensus);
+    let cold_db = ade_runtime::chaindb::InMemoryChainDb::new();
+    let (boot_ledger, boot_chain_dep, boot_tip) =
+        match ade_runtime::bootstrap::bootstrap_initial_state(
+            ade_runtime::bootstrap::BootstrapInputs {
+                chaindb: &cold_db,
+                snapshot_store: &cold_db,
+                era_schedule: &real_era_schedule,
+                ledger_view: &real_pool_distr,
+                genesis_initial: Some((seed_ledger, seed_chain_dep)),
+            },
+        ) {
+            Ok(t) => t,
+            Err(e) => return startup_fail_detail("bootstrap", &format!("{e:?}")),
+        };
+
+    let synthetic_forge = build_synthetic_forge_context(
+        boot_ledger,
+        boot_chain_dep,
+        real_era_schedule,
+        real_pool_distr,
+        boot_tip,
+    );
 
     // 6. Spawn listener.
     let (events_tx, mut events_rx) = mpsc::channel::<OrchestratorEvent>(64);
@@ -302,6 +340,70 @@ pub async fn run_produce_mode(cli: ProduceCli, shutdown_rx: watch::Receiver<bool
 fn startup_fail(label: &'static str, err: &KeyLoadError) -> ExitCode {
     eprintln!("ade_node produce: load {} failed: {:?}", label, err);
     ExitCode::from(EXIT_PRODUCE_FAILURE as u8)
+}
+
+/// PHASE4-N-T: startup failure with a free-form detail string (the
+/// seed-import / consensus-inputs / bootstrap path does not produce a
+/// `KeyLoadError`).
+fn startup_fail_detail(field: &'static str, detail: &str) -> ExitCode {
+    eprintln!("ade_node produce: {} failed: {}", field, detail);
+    ExitCode::from(EXIT_PRODUCE_FAILURE as u8)
+}
+
+/// Project the operator consensus-inputs bundle into the leadership
+/// `PoolDistrView`. `total_active_stake` = sum of pool active stakes;
+/// per-pool `vrf_keyhash` from the bundle's `pool_vrf_keyhashes` map.
+/// `PoolDistrView` impls `LedgerView`, so it doubles as the
+/// `&dyn LedgerView` for `block_validity` / `self_accept` (OI-T.3).
+fn pool_distr_view_from_consensus_inputs(
+    c: &LiveConsensusInputsCanonical,
+) -> PoolDistrView {
+    use ade_ledger::consensus_view::PoolEntry;
+    let mut pools: BTreeMap<Hash28, PoolEntry> = BTreeMap::new();
+    let mut total: u64 = 0;
+    for (pool, entry) in &c.pool_distribution {
+        total = total.saturating_add(entry.active_stake);
+        // A pool absent from the keyhash map cannot be a forge leader
+        // anyway; the zero-hash fallback keeps the projection total.
+        let vrf_keyhash = c
+            .pool_vrf_keyhashes
+            .get(pool)
+            .cloned()
+            .unwrap_or(Hash32([0u8; 32]));
+        pools.insert(
+            pool.clone(),
+            PoolEntry {
+                active_stake: entry.active_stake,
+                vrf_keyhash,
+            },
+        );
+    }
+    PoolDistrView::new(c.epoch_no, total, c.active_slots_coeff, pools)
+}
+
+/// Build an era schedule whose single Conway entry starts at the
+/// imported epoch's start slot. Mirrors
+/// `crate::admission::bootstrap::make_schedule_for_imported_window`:
+/// admission is single-epoch, so a single-entry schedule with a
+/// safe-zone equal to the epoch length resolves every slot in the
+/// window to the bundle's epoch (not epoch 0).
+fn make_schedule_for_imported_window(
+    epoch_start_slot: &SlotNo,
+    epoch_no: EpochNo,
+) -> EraSchedule {
+    EraSchedule::new(
+        ade_core::consensus::BootstrapAnchorHash(Hash32([0u8; 32])),
+        epoch_start_slot.0,
+        vec![ade_core::consensus::EraSummary {
+            era: ade_types::CardanoEra::Conway,
+            start_slot: *epoch_start_slot,
+            start_epoch: epoch_no,
+            slot_length_ms: 1_000,
+            epoch_length_slots: 432_000,
+            safe_zone_slots: 432_000,
+        }],
+    )
+    .expect("era schedule for imported window")
 }
 
 /// Try the cardano-cli envelope loader first; if the envelope JSON
@@ -778,18 +880,30 @@ fn artifact_from_accepted(
     ForgedBlockArtifact { slot, hash, bytes }
 }
 
-/// Build the synthetic ForgeRequestContext used by the main loop.
+/// Build the forge-request context used by the main loop from the
+/// **real** bootstrap state.
 ///
-/// **A3 honest scope:** every field is a placeholder. The
-/// `leader_schedule_answer` carries zero stake → the real forge
-/// composition always reaches step 2 and returns `NotLeader`,
-/// preserving the smoke test's expected 3 `LeaderCheckOutcome`
-/// events. Promoting these to realer values is A4 + N-R-B/C work.
-fn build_synthetic_forge_context(genesis: &GenesisAnchor) -> SyntheticForgeInputs {
+/// **PHASE4-N-T S1 (behavior-preserving):** the forge *base* —
+/// `base_state`, `chain_dep_state`, `era_schedule`, `pool_distr_view`,
+/// `block_number`, `prev_hash` — is the cold-start
+/// `bootstrap_initial_state` result threaded from the operator seed.
+/// The `leader_schedule_answer` is **deliberately retained** as a
+/// zero-stake answer (`stake_fraction = (0, 1)`) so the real forge
+/// composition always reaches step 2 and returns `NotLeader`: the
+/// node stays a never-leader, preserving the smoke test's 3
+/// `LeaderCheckOutcome` events. S3 swaps this for a real
+/// `query_leader_schedule` answer and introduces `ChainEvolution`,
+/// deleting this scaffolding.
+fn build_synthetic_forge_context(
+    base_state: LedgerState,
+    chain_dep_state: PraosChainDepState,
+    era_schedule: EraSchedule,
+    pool_distr_view: PoolDistrView,
+    boot_tip: Option<ade_runtime::chaindb::ChainTip>,
+) -> SyntheticForgeInputs {
     use ade_core::consensus::vrf_cert::ActiveSlotsCoeff;
-    use ade_types::{CardanoEra, EpochNo, Hash28};
+    use ade_types::{EpochNo, Hash28};
 
-    let _ = genesis;
     let eta0 = Nonce(Hash32([0u8; 32]));
     let leader_answer = LeaderScheduleAnswer {
         slot: ade_types::SlotNo(0),
@@ -800,27 +914,12 @@ fn build_synthetic_forge_context(genesis: &GenesisAnchor) -> SyntheticForgeInput
         asc: ActiveSlotsCoeff { numer: 1, denom: 20 },
     };
     let pparams = ProtocolParameters::default();
-    let base_state = LedgerState::new(CardanoEra::Conway);
-    let chain_dep_state = PraosChainDepState::empty();
-    let era_schedule = EraSchedule::new(
-        ade_core::consensus::BootstrapAnchorHash(Hash32([0u8; 32])),
-        0,
-        vec![ade_core::consensus::EraSummary {
-            era: CardanoEra::Conway,
-            start_slot: ade_types::SlotNo(0),
-            start_epoch: EpochNo(0),
-            slot_length_ms: 1_000,
-            epoch_length_slots: 432_000,
-            safe_zone_slots: 129_600,
-        }],
-    )
-    .expect("synthetic era schedule");
-    let pool_distr_view = PoolDistrView::new(
-        EpochNo(0),
-        0,
-        ActiveSlotsCoeff { numer: 1, denom: 20 },
-        std::collections::BTreeMap::new(),
-    );
+    // Cold-start has no prior block: tip is None ⇒ block 1, zero
+    // prev-hash. When a tip is present its hash is the prev-hash.
+    let prev_hash = boot_tip
+        .as_ref()
+        .map(|t| t.hash.clone())
+        .unwrap_or(Hash32([0u8; 32]));
 
     SyntheticForgeInputs {
         eta0,
@@ -831,7 +930,7 @@ fn build_synthetic_forge_context(genesis: &GenesisAnchor) -> SyntheticForgeInput
         era_schedule,
         pool_distr_view,
         block_number: BlockNo(1),
-        prev_hash: Hash32([0u8; 32]),
+        prev_hash,
         protocol_version: ProtocolVersion { major: 9, minor: 0 },
         prev_opcert_counter: None,
     }
@@ -1273,6 +1372,14 @@ mod tests {
         );
         std::fs::write(&opcert_path, opcert_json).unwrap();
 
+        // PHASE4-N-T: produce mode now cold-starts from an operator
+        // seed. Write the synthetic JSON-UTxO seed + consensus-inputs
+        // fixtures so the smoke test exercises the real bootstrap path.
+        let seed_path = dir.join("seed.json");
+        std::fs::write(&seed_path, TEST_JSON_SEED).unwrap();
+        let cinputs_path = dir.join("cinputs.json");
+        std::fs::write(&cinputs_path, TEST_CONSENSUS_INPUTS).unwrap();
+
         let evidence_log = dir.join("evidence.jsonl");
         let cli = ProduceCli {
             listen_addr: "127.0.0.1:0".to_string(),
@@ -1283,6 +1390,8 @@ mod tests {
             genesis_file: genesis_path,
             evidence_log: evidence_log.clone(),
             max_slots: Some(3),
+            json_seed_path: seed_path,
+            consensus_inputs_path: cinputs_path,
         };
         (cli, evidence_log)
     }
@@ -1369,5 +1478,96 @@ mod tests {
         assert!(!content.contains("42424242"), "seed leak: kes");
         assert!(!content.contains("07070707"), "seed leak: vrf");
         assert!(!content.contains("33333333"), "seed leak: cold");
+    }
+
+    // Synthetic 2-UTxO JSON seed fixture. Self-evidently a test
+    // fixture (zero/aa/01 placeholder tx ids + a single preprod-shaped
+    // address), NOT captured on-chain data.
+    const TEST_JSON_SEED: &str = r#"{
+        "0000000000000000000000000000000000000000000000000000000000000001#0": {
+            "address": "addr_test1vq0ast4z2dypfrl9kg2c0garrcy085w78dls8xsx954x34cmgvp2u",
+            "value": { "lovelace": 1000000 }
+        },
+        "0000000000000000000000000000000000000000000000000000000000000002#3": {
+            "address": "addr_test1vq0ast4z2dypfrl9kg2c0garrcy085w78dls8xsx954x34cmgvp2u",
+            "value": { "lovelace": 2000000 }
+        }
+    }"#;
+
+    // Synthetic 1-pool consensus-inputs fixture (all-zero/placeholder
+    // hashes). NOT captured on-chain data.
+    const TEST_CONSENSUS_INPUTS: &str = r#"{
+        "network_magic": 1,
+        "genesis_hash_hex": "00000000000000000000000000000000000000000000000000000000000000aa",
+        "era": "conway",
+        "epoch_no": 200,
+        "epoch_start_slot": 86400000,
+        "epoch_end_slot": 86832000,
+        "active_slots_coeff": {"numer": 1, "denom": 20},
+        "epoch_nonce_hex": "00000000000000000000000000000000000000000000000000000000000000bb",
+        "pool_distribution": {
+            "00000000000000000000000000000000000000000000000000000001": {"active_stake": 123}
+        },
+        "pool_vrf_keyhashes": {
+            "00000000000000000000000000000000000000000000000000000001": "00000000000000000000000000000000000000000000000000000000000000cc"
+        },
+        "protocol_params_hash_hex": "00000000000000000000000000000000000000000000000000000000000000dd",
+        "source_cardano_node_version": "cardano-node 11.0.1",
+        "source_query_command": "cardano-cli conway query stake-distribution --testnet-magic 1",
+        "source_tip_hash_hex": "00000000000000000000000000000000000000000000000000000000000000ee",
+        "source_tip_slot": 86400500
+    }"#;
+
+    /// CE-T-4: the cold-start bootstrap path seeds the **real** ledger
+    /// from the operator JSON-UTxO seed. The returned ledger's
+    /// fingerprint MUST equal the imported-UTxO ledger's fingerprint,
+    /// and the tip MUST be absent (cold-start has no tip).
+    #[test]
+    fn produce_mode_bootstrap_cold_start_seeds_real_ledger() {
+        use ade_ledger::fingerprint::fingerprint;
+
+        let dir = tempfile::tempdir().unwrap();
+        let seed_path = dir.path().join("seed.json");
+        let cinputs_path = dir.path().join("cinputs.json");
+        std::fs::write(&seed_path, TEST_JSON_SEED).unwrap();
+        std::fs::write(&cinputs_path, TEST_CONSENSUS_INPUTS).unwrap();
+
+        let (utxo, _fp) = import_cardano_cli_json_utxo(&seed_path).expect("seed import");
+        let consensus = import_live_consensus_inputs(&cinputs_path).expect("consensus import");
+
+        // The imported-UTxO ledger fingerprint = the expected target.
+        let mut expected_ledger = LedgerState::new(ade_types::CardanoEra::Conway);
+        expected_ledger.utxo_state = utxo.clone();
+        let expected_fp = fingerprint(&expected_ledger).combined.clone();
+
+        // Seed exactly as run_produce_mode does, then route through the
+        // sole bootstrap authority (cold-start branch).
+        let mut seed_ledger = LedgerState::new(ade_types::CardanoEra::Conway);
+        seed_ledger.utxo_state = utxo;
+        let seed_chain_dep = PraosChainDepState::genesis(consensus.epoch_nonce.clone());
+        let real_era_schedule = make_schedule_for_imported_window(
+            &consensus.epoch_start_slot,
+            consensus.epoch_no,
+        );
+        let real_pool_distr = pool_distr_view_from_consensus_inputs(&consensus);
+        let cold_db = ade_runtime::chaindb::InMemoryChainDb::new();
+        let (boot_ledger, _boot_chain_dep, boot_tip) =
+            ade_runtime::bootstrap::bootstrap_initial_state(
+                ade_runtime::bootstrap::BootstrapInputs {
+                    chaindb: &cold_db,
+                    snapshot_store: &cold_db,
+                    era_schedule: &real_era_schedule,
+                    ledger_view: &real_pool_distr,
+                    genesis_initial: Some((seed_ledger, seed_chain_dep)),
+                },
+            )
+            .expect("cold-start bootstrap");
+
+        assert_eq!(
+            fingerprint(&boot_ledger).combined,
+            expected_fp,
+            "cold-start ledger fingerprint must equal imported-UTxO ledger fingerprint"
+        );
+        assert!(boot_tip.is_none(), "cold-start must have no tip");
     }
 }
