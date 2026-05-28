@@ -4753,3 +4753,20 @@ cluster = "PHASE4-N-V"
 attack_rationale = "Cardano-specific: a producer whose forged blocks its own validator cannot decode can never self-accept, serve, or have a peer accept a block — it silently produces nothing, or (worse, if decode were lenient) propagates a block the rest of the network rejects. Binding forge output to the single decode_block envelope grammar makes producer/validator codec divergence structurally impossible."
 evidence_notes = "S1 round-trip + corpus-pin tests (encode_decode_block_envelope_round_trips, conway_envelope_head_matches_corpus). S2 forge<->decode round-trip test (forge_block_output_decodes_via_decode_block) — fails on the pre-N-V tree, locking the regression — plus ci/ci_check_forge_decode_round_trip.sh. S3 forge_to_self_accept_succeeds (first in-process ForgeSucceeded). The bug was latent since N-C because no test ever round-tripped forge_block output through decode_block; self_accept tests used real enveloped corpus blocks."
 open_obligation = "Serve-side tag-24 wire-wrap ([serialisationInfo, tag24([era,block])]) so a live cardano-node peer accepts the served block over block-fetch is a NAMED FOLLOW-ON, not N-V. N-V closes the storage-form [era,block] self-decode round-trip only."
+
+[[rules]]
+id = "CN-FORGE-04"
+tier = "derived"
+statement = "Producer-side Praos VRF construction must match the Conway/Praos validator authority: the leader VRF proof alpha, the leader-schedule evidence, the LeaderScheduleAnswer.expected_vrf_input contract, and the self_accept header verification must all use ONE era-correct Praos construction. For Conway/Praos the producer alpha MUST equal the validator alpha (praos_vrf_input(slot, eta0) = blake2b256(slot||eta0) + vrfLeaderValue range-extension), NOT the TPraos role-tagged alpha (slot||eta0||0x4C). No verification/construction fallback may accept both TPraos and Praos VRF inputs — for a given era/protocol version there is exactly one VRF transcript authority."
+source = "docs/planning/phase4-n-w-praos-vrf-migration.md; docs/clusters/completed/PHASE4-N-V/CLOSURE.md"
+cross_ref = ["CN-FORGE-01", "CN-FORGE-02", "CN-FORGE-03", "DC-CONS-18"]
+code_locus = "crates/ade_node/src/produce_mode.rs (run_real_forge VRF prove); crates/ade_core/src/consensus/leader_check.rs (verify_and_evaluate_leader); crates/ade_core/src/consensus/leader_schedule.rs (query_leader_schedule, LeaderScheduleAnswer.expected_vrf_input); validator verify_praos_vrf / praos_vrf_input"
+tests = []
+ci_script = ""
+status = "declared"
+introduced_in = "PHASE4-N-W"
+strengthened_in = []
+cluster = "PHASE4-N-W"
+attack_rationale = "A producer that builds leader VRF proofs with the wrong era's alpha forges blocks the network rejects (block-production silently fails). Worse, a both-alphas verification/construction fallback would be a dual-semantic VRF surface — two valid interpretations of the same transcript — a consensus-split vector. Exactly one era-correct Praos VRF authority is required."
+evidence_notes = "Pinned by crates/ade_node/tests/forge_succeeds.rs::forge_to_self_accept_blocked_on_praos_vrf_construction, which currently asserts the BLOCKED state (ForgeFailed{SelfAcceptRejected} via Header(VrfCert(VerificationFailed))). When N-W lands, that test is promoted to assert ForgeSucceeded and CN-FORGE-04 flips to enforced; CN-FORGE-01 gains its deferred 'ForgeSucceeded reachable' strengthening at the same time."
+open_obligation = "PHASE4-N-W not yet scoped (/invariants). Migrate the producer-side leader-eligibility VRF construction TPraos->Praos across the four named authorities + retype/rename expected_vrf_input so it cannot silently mean TPraos alpha in a Praos context. May reveal further producer<->validator mismatches (KES payload, body) behind it."
