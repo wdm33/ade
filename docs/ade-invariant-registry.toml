@@ -4770,3 +4770,18 @@ cluster = "PHASE4-N-W"
 attack_rationale = "A producer that builds leader VRF proofs with the wrong era's alpha forges blocks the network rejects (block-production silently fails). Worse, a both-alphas verification/construction fallback would be a dual-semantic VRF surface — two valid interpretations of the same transcript — a consensus-split vector. Exactly one era-correct Praos VRF authority is required."
 evidence_notes = "Pinned by crates/ade_node/tests/forge_succeeds.rs::forge_to_self_accept_blocked_on_praos_vrf_construction, which currently asserts the BLOCKED state (ForgeFailed{SelfAcceptRejected} via Header(VrfCert(VerificationFailed))). When N-W lands, that test is promoted to assert ForgeSucceeded and CN-FORGE-04 flips to enforced; CN-FORGE-01 gains its deferred 'ForgeSucceeded reachable' strengthening at the same time."
 open_obligation = "PHASE4-N-W not yet scoped (/invariants). Migrate the producer-side leader-eligibility VRF construction TPraos->Praos across the four named authorities + retype/rename expected_vrf_input so it cannot silently mean TPraos alpha in a Praos context. May reveal further producer<->validator mismatches (KES payload, body) behind it."
+
+[[rules]]
+id = "RO-CLOSE-01"
+tier = "release"
+statement = "Unmasked close-gate discipline. Any slice that changes canonical bytes, encoded forms, decoder inputs, or golden fixtures MUST run an UNMASKED full close gate (cargo test --workspace) and use cargo's REAL exit status / result line as the sole pass/fail authority for cluster closure. Piped output (| tail, | grep) may be used for display only, NEVER as the pass/fail authority — a pipeline's exit code is the last stage's, not cargo's. Before closure, ALL consumers of the changed canonical output (every golden fixture, decoder, re-encode, and byte-identity test, across all crates — not just the edited crate) MUST be grepped/audited. A cluster is not closed until the unmasked close gate exits successfully."
+source = "docs/clusters/completed/PHASE4-N-V/CLOSURE.md; user-direction (PHASE4-N-V close correction)"
+cross_ref = ["CN-FORGE-03", "DC-CONS-18"]
+code_locus = "process/release discipline — no BLUE code locus; binds /cluster-close and any slice touching canonical output"
+tests = []
+ci_script = ""
+status = "enforced"
+introduced_in = "PHASE4-N-V"
+strengthened_in = []
+cluster = "PHASE4-N-V"
+open_obligation = "Procedurally enforced (no CI meta-gate checks that the operator ran the close gate unmasked). Promoted to hard release discipline after PHASE4-N-V was prematurely marked closed on a tail-masked exit code: the forge-envelope change had broken 3 ade_testkit::producer golden/decoder tests that the masked run hid. A future meta-check could grep cluster-close transcripts for masked gate invocations."
