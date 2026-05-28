@@ -193,17 +193,17 @@ pub fn project_header_from_n2n_rollforward(
             detail: "Byron (era 0) headers are not supported by follow mode",
         }));
     }
-    let tag = cbor::read_tag(rollforward_header, &mut off).map_err(FollowError::HeaderDecode)?;
-    if tag.0 != 24 {
-        return Err(FollowError::HeaderDecode(CodecError::InvalidCborStructure {
+    // CN-WIRE-08: strip the tag-24 CBOR-in-CBOR wrap via the single
+    // shared ade_codec authority — no hand-rolled tag-24 parse here. The
+    // remaining bytes after the era index are exactly `tag24(header_cbor)`.
+    let header_cbor = ade_codec::unwrap_tag24(&rollforward_header[off..]).map_err(|_| {
+        FollowError::HeaderDecode(CodecError::InvalidCborStructure {
             offset: off,
-            detail: "expected CBOR tag 24 (encoded-CBOR) around the header",
-        }));
-    }
-    let (header_cbor, _) =
-        cbor::read_bytes(rollforward_header, &mut off).map_err(FollowError::HeaderDecode)?;
+            detail: "expected tag(24, bytes(header_cbor)) around the header",
+        })
+    })?;
 
-    project_header_from_header_cbor(&header_cbor)
+    project_header_from_header_cbor(header_cbor)
 }
 
 /// Project from the inner block bytes plus the already-isolated header

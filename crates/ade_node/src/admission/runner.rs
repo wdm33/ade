@@ -482,17 +482,21 @@ fn process_block(
     // surfaced this: prior to the FRAG fix the wire pump exited
     // before any block reached `decode_block`, so the missing
     // unwrap was masked.)
-    let inner = match unwrap_block_fetch_envelope(block_bytes) {
+    // CN-WIRE-08: strip the BlockFetch tag-24 CBOR-in-CBOR envelope via
+    // the single shared ade_codec authority (no hand-rolled tag-24 parse
+    // in RED). `unwrap_tag24` returns a zero-copy borrow of the inner
+    // `[era, block]` storage bytes that `decode_block` consumes.
+    let inner = match ade_codec::unwrap_tag24(block_bytes) {
         Ok(b) => b,
         Err(_) => return ProcessedBlock::Undecodable,
     };
-    let decoded = match decode_block(&inner) {
+    let decoded = match decode_block(inner) {
         Ok(d) => d,
         Err(_) => return ProcessedBlock::Undecodable,
     };
     let slot = decoded.header_input.slot;
     let block_hash = decoded.block_hash.clone();
-    match admit_via_block_validity(&inner, ledger, chain_dep, era_schedule, ledger_view) {
+    match admit_via_block_validity(inner, ledger, chain_dep, era_schedule, ledger_view) {
         Ok(out) => ProcessedBlock::Admitted {
             slot,
             block_hash,
@@ -516,30 +520,6 @@ fn process_block(
             }
         }
     }
-}
-
-/// Strip the BlockFetch `tag(24, bytes(.cbor era_block))` envelope
-/// and return the inner era-block bytes. The cardano-node block-fetch
-/// server wraps each block payload in CBOR tag-24 + a bytes-string
-/// holding the actual `[era_tag, era_block]` array. Our BLUE
-/// `decode_block` consumes the unwrapped inner bytes.
-///
-/// Returns `Err(())` if the bytes are not a `tag(24, bytes(...))`
-/// envelope or carry trailing data — both surface as
-/// `ProcessedBlock::Undecodable` upstream.
-fn unwrap_block_fetch_envelope(bytes: &[u8]) -> Result<Vec<u8>, ()> {
-    // tag(24) is encoded as `0xd8 0x18`. The next item must be a
-    // CBOR byte string. Manually parse to avoid pulling another
-    // CBOR helper crate into the RED runner.
-    if bytes.len() < 2 || bytes[0] != 0xd8 || bytes[1] != 0x18 {
-        return Err(());
-    }
-    let mut offset = 2usize;
-    let inner = ade_codec::cbor::read_bytes(bytes, &mut offset).map_err(|_| ())?;
-    if offset != bytes.len() {
-        return Err(());
-    }
-    Ok(inner.0)
 }
 
 fn classify_validity_error(e: &BlockValidityError) -> InvalidAdmitReason {
