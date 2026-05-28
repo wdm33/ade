@@ -4736,3 +4736,20 @@ status = "enforced"
 introduced_in = "PHASE4-N-T"
 strengthened_in = []
 cluster = "PHASE4-N-T"
+
+[[rules]]
+id = "CN-FORGE-03"
+tier = "derived"
+statement = "Producer/validator codec symmetry: forge_block emits the era-tagged [era, block] envelope (era = Conway discriminant 7) via the single canonical ade_codec::encode_block_envelope (symmetric to decode_block_envelope), so forge_block output round-trips through the SAME decode_block authority that validates received blocks. decode_block(forge_block(tick).bytes) is Ok and yields a DecodedBlock whose header-body fields and four preserved body-bucket bytes equal what was forged. A bare-block (no-envelope) forge output, or any forge<->decode asymmetry, is CI-gated impossible. Root cause (PHASE4-N-T): forge_block emitted a bare array(5) block, so decode_block_envelope rejected EVERY forged block at offset 0 (BlockValidityError::Body(Decoding(InvalidStructure))) before any header/KES/leader/self_accept logic."
+source = "docs/planning/phase4-n-v-invariants.md; docs/clusters/PHASE4-N-V/cluster.md §1"
+cross_ref = ["CN-FORGE-01", "DC-CONS-18", "DC-CONS-16", "CN-PROD-04"]
+code_locus = "crates/ade_codec/src/cbor/envelope.rs (encode_block_envelope, NEW); crates/ade_ledger/src/producer/forge.rs (forge_block wraps output via the encoder)"
+tests = []
+ci_script = "ci/ci_check_forge_decode_round_trip.sh"
+status = "declared"
+introduced_in = "PHASE4-N-V"
+strengthened_in = []
+cluster = "PHASE4-N-V"
+attack_rationale = "Cardano-specific: a producer whose forged blocks its own validator cannot decode can never self-accept, serve, or have a peer accept a block — it silently produces nothing, or (worse, if decode were lenient) propagates a block the rest of the network rejects. Binding forge output to the single decode_block envelope grammar makes producer/validator codec divergence structurally impossible."
+evidence_notes = "S1 round-trip + corpus-pin tests (encode_decode_block_envelope_round_trips, conway_envelope_head_matches_corpus). S2 forge<->decode round-trip test (forge_block_output_decodes_via_decode_block) — fails on the pre-N-V tree, locking the regression — plus ci/ci_check_forge_decode_round_trip.sh. S3 forge_to_self_accept_succeeds (first in-process ForgeSucceeded). The bug was latent since N-C because no test ever round-tripped forge_block output through decode_block; self_accept tests used real enveloped corpus blocks."
+open_obligation = "Serve-side tag-24 wire-wrap ([serialisationInfo, tag24([era,block])]) so a live cardano-node peer accepts the served block over block-fetch is a NAMED FOLLOW-ON, not N-V. N-V closes the storage-form [era,block] self-decode round-trip only."
