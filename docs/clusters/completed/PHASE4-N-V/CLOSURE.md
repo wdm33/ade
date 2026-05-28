@@ -80,6 +80,25 @@ findings are the in-house analogue of [[feedback-real-interop-finds-codec-bugs]]
 synthetic round-trips (corpus blocks decode; forge_block returns Ok) masked the
 fact that forge output had never been fed to the validator.
 
+## Post-close correction (CE-V-8 + RO-CLOSE-01)
+
+The initial close commit claimed CE-V-8 ("`cargo test --workspace` clean") on a
+run piped through `tail` — the background "exit 0" was `tail`'s, not cargo's.
+cargo had actually FAILED: the S2 forge-envelope change broke 3
+`ade_testkit::producer` golden/decoder tests (forge-output consumers not audited
+at close). Fixed in `e93d936` (regenerated the `EXPECTED_FORGED_*` golden to the
+enveloped form; envelope-stripped the `decode_conway_block` /
+`decode_shelley_block_inner` sites), then **CE-V-8 re-confirmed via an UNMASKED
+`cargo test --workspace` → exit 0, zero failures**. This miss is why
+`RO-CLOSE-01` (unmasked close-gate release discipline) was added. N-V is settled
+only after the unmasked pass.
+
+## Follow-on declared
+- `CN-FORGE-04` (declared) + `docs/planning/phase4-n-w-praos-vrf-migration.md` —
+  producer-side TPraos→Praos VRF migration (next blocker, pinned by
+  `forge_to_self_accept_blocked_on_praos_vrf_construction`).
+- `RO-CLOSE-01` (release) — unmasked close-gate + audit-all-consumers discipline.
+
 ## Open obligations carried after closure
 
 - `CN-CONS-06` / `RO-LIVE-01` — bounty block-production leg, now gated by the
