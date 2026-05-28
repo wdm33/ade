@@ -2526,7 +2526,7 @@ ci_script = "ci/ci_check_no_parallel_header_splitter.sh, ci/ci_check_broadcast_t
 status = "enforced"
 authority_surface = "producer-side chain-sync RollForward header projection"
 cluster = "PHASE4-N-G"
-strengthened_in = ["PHASE4-N-R-A", "PHASE4-N-S-A", "PHASE4-N-T"]
+strengthened_in = ["PHASE4-N-R-A", "PHASE4-N-S-A", "PHASE4-N-T", "PHASE4-N-V"]
 evidence = ["End-to-end transcript test session_transcript_announced_header_matches_served_body_recipe asserts the rolled header bytes equal accepted_block_header_bytes over the same AcceptedBlock the matching block-fetch range subsequently serves.", "The single canonical header splitter is enforced by ci_check_no_parallel_header_splitter.sh; the GREEN adapter imports accepted_block_header_bytes (positive grep in ci_check_broadcast_to_served_purity.sh)."]
 
 [[rules]]
@@ -4744,9 +4744,9 @@ statement = "Producer/validator codec symmetry: forge_block emits the era-tagged
 source = "docs/planning/phase4-n-v-invariants.md; docs/clusters/PHASE4-N-V/cluster.md §1"
 cross_ref = ["CN-FORGE-01", "DC-CONS-18", "DC-CONS-16", "CN-PROD-04"]
 code_locus = "crates/ade_codec/src/cbor/envelope.rs (encode_block_envelope, NEW); crates/ade_ledger/src/producer/forge.rs (forge_block wraps output via the encoder)"
-tests = []
+tests = ["encode_decode_block_envelope_round_trips", "conway_envelope_head_is_82_07", "encode_block_envelope_reencodes_corpus_block_identically", "forge_block_output_decodes_via_decode_block"]
 ci_script = "ci/ci_check_forge_decode_round_trip.sh"
-status = "declared"
+status = "enforced"
 introduced_in = "PHASE4-N-V"
 strengthened_in = []
 cluster = "PHASE4-N-V"
