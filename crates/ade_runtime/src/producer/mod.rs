@@ -19,6 +19,7 @@
 pub mod ade_kes_envelope;
 pub mod broadcast;
 pub mod broadcast_to_served;
+pub mod chain_evolution;
 pub mod coordinator;
 pub mod genesis_parser;
 pub mod keys;
