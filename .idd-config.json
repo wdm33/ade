@@ -34,8 +34,8 @@
   "_planning_doc_doc": "Active phase plan. /cluster-doc reads this when seeding new cluster docs (N-A, N-B, N-C, N-E, N-F).",
   "grounding_docs_dir": "docs",
   "_grounding_docs_dir_doc": "Where the four grounding docs live: ade-CODEMAP.md, ade-SEAMS.md, ade-HEAD_DELTAS.md, ade-TRACEABILITY.md.",
-  "head_deltas_baseline": "6973318",
-  "_head_deltas_baseline_doc": "PHASE4-N-L baseline (commit `d62c2bc`, PHASE4-N-K close — orchestrator + ade_node binary, 2026-05-26). HEAD_DELTAS narrates the PHASE4-N-L cluster (mux session driver + handshake wire layer). Bump on each cluster close to keep HEAD_DELTAS per-cluster and reviewable.",
+  "head_deltas_baseline": "22eef90",
+  "_head_deltas_baseline_doc": "PHASE4-N-V close baseline (commit `22eef90`, PHASE4-N-V CLOSURE post-close correction, 2026-05-28). HEAD_DELTAS at this baseline last narrated the dbee4d5 → 22eef90 span (PHASE4-N-T + PHASE4-N-V; 16 commits / 33 files / +4172 / -192). Bump on each cluster close to keep HEAD_DELTAS per-cluster and reviewable.",
   "normative_docs": [
     "docs/active/CE-79_gate_statement.md",
     "docs/active/CE-79_tier5_addendum.md",
@@ -48,7 +48,7 @@
   "canonical_type_registry": null,
   "_canonical_type_registry_doc": "No separate canonical-type registry file yet; canonical-type rules live inline in the invariant registry under family T.",
   "invariant_registry": "docs/ade-invariant-registry.toml",
-  "_invariant_registry_doc": "Canonical, append-only invariant registry. Schema follows ziranity-v3's constitution_rule_registry.toml (base fields identical), additively compatible with the IDD template. 147 entries at HEAD across families T (true), CN (constraint network), DC (derived constraint), OP (operational), RO (release obligation).",
+  "_invariant_registry_doc": "Canonical, append-only invariant registry. Schema follows ziranity-v3's constitution_rule_registry.toml (base fields identical), additively compatible with the IDD template. 291 entries at HEAD across families T (true), CN (constraint network), DC (derived constraint), OP (operational), RO (release obligation).",
   "ci_dirs": [
     "ci"
   ],
