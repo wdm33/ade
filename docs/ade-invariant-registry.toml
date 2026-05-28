@@ -4677,3 +4677,62 @@ introduced_in = "PHASE4-N-S-C"
 strengthened_in = []
 cluster = "PHASE4-N-S-C"
 open_obligation = "**Schema is enforced**: any committed CE-N-S-LIVE_*.toml file MUST conform to the documented schema (the CI gate runs only when such a file is present). **C1/C2 execution is blocked_until_operator_pass_executed**: until the operator brings up a private testnet (C1) or preprod stake is provisioned (C2) and the binary is run + paired evidence committed, no CE-N-S-LIVE_*.toml exists and the CI gate is vacuously satisfied. Reopen criteria: operator commits at least one CE-N-S-LIVE_*.toml; the gate then verifies schema + sha256 match."
+
+# =============================================================================
+# PHASE4-N-T — produce_mode real-bootstrap composition (CN-PROD / DC-PROD family, declared)
+# Sketch: docs/planning/phase4-n-t-invariants.md
+# Plan: docs/planning/phase4-n-t-cluster-slice-plan.md
+# Cluster doc: docs/clusters/PHASE4-N-T/cluster.md
+# Scope-locked to Problem 1 (real in-memory production state). Durable
+# restart (WAL/ChainDB/snapshot/warm-start) deferred to N-U — NO
+# DC-WAL-* / DC-STORE-* / CN-WAL-* / CN-STORE-* / CN-ANCHOR-* / CN-SEED-*
+# strengthening in this cluster.
+# Status: "declared" — enforcement debt closed by N-T S2..S5 slices.
+# =============================================================================
+
+[[rules]]
+id = "CN-PROD-03"
+tier = "derived"
+statement = "produce_mode's forge base state is derived from bootstrap_initial_state (cold-start, fed the operator-seeded ledger from --json-seed + --consensus-inputs) plus the bundle-projected PoolDistrView, epoch nonce (eta0), and absolute slot from the bootstrap tip. SyntheticForgeInputs / build_synthetic_forge_context are deleted; no zero-stake / LedgerState::new / constant-prev-hash forge base remains. The sole path to produce_mode's initial state is the single bootstrap_initial_state authority (no parallel synthetic path). Cold-start branch only; warm-start recovery is Problem 2, deferred to N-U."
+source = "docs/planning/phase4-n-t-invariants.md §1 (A1, A2, A6); docs/clusters/PHASE4-N-T/cluster.md §1"
+cross_ref = ["CN-NODE-01", "CN-PROD-02", "CN-FORGE-02", "DC-NODE-03"]
+code_locus = "crates/ade_node/src/produce_mode.rs (bootstrap cold-start wiring; SyntheticForgeInputs deleted); crates/ade_runtime/src/producer/chain_evolution.rs (derive_forge_context); crates/ade_node/src/cli.rs (ProduceCli --json-seed + --consensus-inputs)"
+tests = []
+ci_script = "ci/ci_check_produce_mode_uses_bootstrap_initial_state.sh"
+status = "declared"
+introduced_in = "PHASE4-N-T"
+strengthened_in = []
+cluster = "PHASE4-N-T"
+attack_rationale = "Cardano-specific: forging against synthetic zero-stake / empty-ledger state produces blocks that are never leader-eligible and never extend the real chain — a producer that silently forges off fake state would either never win a slot or fork off a non-canonical base. Binding the forge base to the single bootstrap authority makes a synthetic-state producer structurally impossible."
+evidence_notes = "S5 CI gate ci_check_produce_mode_uses_bootstrap_initial_state.sh: positive grep (bootstrap_initial_state( call present in produce_mode) + negative grep (no SyntheticForgeInputs / build_synthetic_forge_context / inline LedgerState::new( forge-base). Cold-start branch only; warm-start is test-only until N-U."
+open_obligation = "Warm-start recovery of a forged chain (crash -> bootstrap warm-start) is Problem 2, deferred to N-U. N-T exercises only the cold-start branch."
+
+[[rules]]
+id = "CN-PROD-04"
+tier = "derived"
+statement = "Every CoordinatorEffect::BroadcastBlock reconstructs the AcceptedBlock from artifact.bytes through the BLUE self_accept authority against the pre-forge base, then admits it to the served ServedChainSnapshot via the single ServedChainHandle::push_atomic authority before the next slot tick. If the self_accept replay rejects, push_atomic is NOT called and the loop emits structured BroadcastPushError::SelfAcceptReplayRejected. ProducerLogEvent::BlockServed is emitted only for blocks present in the served snapshot. No silently-dropped (no-op) broadcast; only self-accepted forged blocks are served."
+source = "docs/planning/phase4-n-t-invariants.md §1 (A4, A5); docs/clusters/PHASE4-N-T/cluster.md §1"
+cross_ref = ["CN-SNAPSHOT-01", "DC-PROD-01"]
+code_locus = "crates/ade_node/src/produce_mode.rs (BroadcastBlock arm -> push_atomic; BroadcastPushError); crates/ade_runtime/src/producer/served_chain_handle.rs (push_atomic, reused); crates/ade_ledger/src/producer/self_accept.rs (token reconstruction, reused)"
+tests = []
+ci_script = ""
+status = "declared"
+introduced_in = "PHASE4-N-T"
+strengthened_in = []
+cluster = "PHASE4-N-T"
+attack_rationale = "Cardano-specific: serving a block that failed self-accept (or silently dropping a forged block) would either propagate an invalid block to peers or advertise a chain the producer cannot actually serve. Gating push_atomic behind the self_accept replay and fail-closing on rejection makes 'served but not self-accepted' unrepresentable."
+evidence_notes = "S4 test broadcast_rejects_non_self_accepted_block (rejection -> no push, BroadcastPushError::SelfAcceptReplayRejected); S5 loopback test produce_forge_to_served_block_fetch_roundtrip (served block readable byte-identically via block-fetch). BlockServed is the existing closed ProducerLogEvent variant (producer_log.rs:154), emitted only for present blocks."
+
+[[rules]]
+id = "DC-PROD-03"
+tier = "derived"
+statement = "Producer chain-forward continuity + replay. The GREEN ChainEvolution linear typestate threads each forge's post-state (post-ledger, post-chain_dep, new tip) into the next forge's base; forging against a stale base is structurally unrepresentable (advance consumes self). advance obtains the post-state from BLUE block_validity and the AcceptedBlock token from BLUE self_accept against identical inputs (same pre-forge base, forged bytes, era_schedule, ledger_view); if the two authorities disagree it returns ChainEvolutionError::AuthorityMismatch and does not advance. ChainEvolution never constructs AcceptedBlock directly. For a fixed (bootstrap seed, canonical slot-sequence, KES/VRF/cold keys) the chain-evolution series (block_number, prev_hash, post-ledger fingerprint, post-chain_dep) and the forged block bytes are byte-identical across runs (in-memory two-run; no on-disk replay corpus — durability deferred to N-U)."
+source = "docs/planning/phase4-n-t-invariants.md §3, §4 (R1, R3); docs/clusters/PHASE4-N-T/cluster.md §1.5, §7"
+cross_ref = ["T-DET-01", "DC-CONS-18", "DC-PROD-02", "CN-FORGE-01"]
+code_locus = "crates/ade_runtime/src/producer/chain_evolution.rs (ChainEvolution seed/derive_forge_context/advance + ChainEvolutionError incl. AuthorityMismatch)"
+tests = []
+ci_script = ""
+status = "declared"
+introduced_in = "PHASE4-N-T"
+strengthened_in = []
+cluster = "PHASE4-N-T"
