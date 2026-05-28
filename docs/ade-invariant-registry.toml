@@ -2526,7 +2526,7 @@ ci_script = "ci/ci_check_no_parallel_header_splitter.sh, ci/ci_check_broadcast_t
 status = "enforced"
 authority_surface = "producer-side chain-sync RollForward header projection"
 cluster = "PHASE4-N-G"
-strengthened_in = ["PHASE4-N-R-A", "PHASE4-N-S-A"]
+strengthened_in = ["PHASE4-N-R-A", "PHASE4-N-S-A", "PHASE4-N-T"]
 evidence = ["End-to-end transcript test session_transcript_announced_header_matches_served_body_recipe asserts the rolled header bytes equal accepted_block_header_bytes over the same AcceptedBlock the matching block-fetch range subsequently serves.", "The single canonical header splitter is enforced by ci_check_no_parallel_header_splitter.sh; the GREEN adapter imports accepted_block_header_bytes (positive grep in ci_check_broadcast_to_served_purity.sh)."]
 
 [[rules]]
@@ -2948,9 +2948,9 @@ tests = [
     "crates/ade_runtime/src/bootstrap.rs::tests::bootstrap_warm_start_equals_direct_materialize",
     "crates/ade_runtime/src/bootstrap.rs::tests::bootstrap_two_runs_produce_byte_identical_state",
 ]
-ci_script = "ci/ci_check_bootstrap_closure.sh"
+ci_script = "ci/ci_check_bootstrap_closure.sh, ci/ci_check_produce_mode_uses_bootstrap_initial_state.sh"
 status = "enforced"
-strengthened_in = ["PHASE4-N-K", "PHASE4-N-M-B"]
+strengthened_in = ["PHASE4-N-K", "PHASE4-N-M-B", "PHASE4-N-T"]
 attack_rationale = "A parallel bootstrap path can produce an initial state that disagrees with the canonical materialize+decode authority chain — opening a startup-time chain-divergence vector."
 evidence_notes = "PHASE4-N-K S1 (2026-05-26) shipped ade_runtime::bootstrap::bootstrap_initial_state as the SOLE pub fn returning the initial (LedgerState, PraosChainDepState, Option<ChainTip>) triple. Cold-start vs warm-start is a single in-function branch. ci/ci_check_bootstrap_closure.sh enforces the single-pub-fn + materialize-authority-call positive grep. ade_node binary (S7) calls the function exactly once (ci/ci_check_node_binary_uses_single_bootstrap.sh). PHASE4-N-M-B (2026-05-26) strengthened by adding admission-mode dispatch closure: ci/ci_check_node_mode_closure.sh enforces Mode is closed {WireOnly, Admission}, main.rs match has no wildcard arm, and dispatch_admission is the sole admission-mode entry."
 
@@ -4349,10 +4349,10 @@ source = "docs/planning/phase4-n-q-invariants.md §1 (I3, I4, I7, I8); §2 (N4, 
 cross_ref = ["T-KEY-01", "DC-CRYPTO-04", "DC-CRYPTO-05", "DC-CONS-11", "OP-OPS-04", "OP-OPS-05"]
 code_locus = "crates/ade_runtime/src/producer/coordinator.rs (GREEN — CoordinatorState has no secret fields; type system prevents); crates/ade_runtime/src/producer/producer_shell.rs (RED — sole key-custody surface; ProducerShell::init enforces KES period bounds vs opcert); crates/ade_node/src/produce_mode.rs (RED driver; PHASE4-N-R-A A3 wired the real run_real_forge composition; stub replaced); crates/ade_runtime/src/producer/opcert_envelope.rs (PHASE4-N-R-C C1 opcert parser); crates/ade_runtime/src/producer/genesis_parser.rs (PHASE4-N-R-C C2 genesis parser)"
 tests = ["init_emits_started_event_and_zero_other_effects", "slot_tick_emits_request_forge_and_log", "forge_succeeded_emits_broadcast_and_log", "forge_not_leader_emits_log_and_clears_pending", "forge_failed_emits_slot_missed_with_mapped_reason", "stale_forge_result_after_new_tick_drops_with_slot_missed", "kes_period_out_of_range_errors", "shell_init_rejects_malformed_opcert_hot_vkey_length", "shell_init_rejects_kes_period_below_opcert_start", "shell_kes_sign_at_current_period_succeeds_and_verifies", "shell_kes_sign_at_wrong_period_errors", "shell_kes_advance_to_evolves_key_one_way", "shell_debug_redacts_secret_fields", "zero_stake_answer_emits_forge_not_leader", "kes_period_outside_window_emits_forge_failed_kes_period_mismatch", "full_stake_answer_reaches_self_accept_and_rejects"]
-ci_script = "ci/ci_check_producer_coordinator_no_secrets.sh"
+ci_script = "ci/ci_check_producer_coordinator_no_secrets.sh, ci/ci_check_produce_mode_uses_bootstrap_initial_state.sh"
 status = "enforced"
 introduced_in = "PHASE4-N-Q"
-strengthened_in = ["PHASE4-N-R-A", "PHASE4-N-R-C"]
+strengthened_in = ["PHASE4-N-R-A", "PHASE4-N-R-C", "PHASE4-N-T"]
 cluster = "PHASE4-N-Q"
 open_obligation = "**PHASE4-N-R-A A3 closed item (1)**: real forge handler in produce_mode::apply_effects_with_forge_handler is wired (run_real_forge: RED vrf_prove → BLUE verify_and_evaluate_leader → RED kes_sign_at → GREEN assemble_tick → BLUE forge_block → BLUE self_accept). **PHASE4-N-R-C C1+C2 closed items (a)+(b)**: cardano-cli opcert envelope parser (CN-OPCERT-01) + Shelley genesis closed-contract parser (CN-GENESIS-01) both shipped. **Remaining (c)**: end-to-end ForgeSucceeded path against the docker peer requires (i) the KES-signs-real-unsigned-header bridge — currently run_real_forge step 3 KES-signs a placeholder (expected_vrf_input bytes), and (ii) the MuxPump outbound-relay extension so dispatch response bytes transmit back to peers. Both are deferred to a future post-N-R cluster. strengthened_in tracks these closures. Reopen criteria: ship the two bridges + capture bounty-facing paired evidence per docs/clusters/PHASE4-N-R/CE-N-R-C-LIVE_<date>.{jsonl,log}."
 
@@ -4404,7 +4404,7 @@ tests = ["zero_stake_answer_emits_forge_not_leader", "kes_period_outside_window_
 ci_script = "ci/ci_check_producer_coordinator_no_secrets.sh"
 status = "enforced"
 introduced_in = "PHASE4-N-R-A"
-strengthened_in = ["PHASE4-N-S-A"]
+strengthened_in = ["PHASE4-N-S-A", "PHASE4-N-T"]
 cluster = "PHASE4-N-R-A"
 attack_rationale = "Cardano-specific: forging a block that fails self-accept and broadcasting it would propagate an invalid block to peers, breaking the chain. Forging without a self-accept gate is a forged-by-error attack vector."
 evidence_notes = "N-R-A's A4 integration tests cover 3 of the 4 ForgeResult branches (NotLeader, KesPeriodMismatch, SelfAcceptRejected). The 4th (ForgeSucceeded) is structurally guaranteed by the closed pipeline (the only path to Succeeded is past the self_accept = Accepted gate at step 6); asserting end-to-end ForgeSucceeded requires the KES-signs-real-unsigned-header bridge — a future-cluster deliverable explicitly out of N-R-A scope. The replay-byte-identity test (run_real_forge_is_byte_identical_across_two_runs) anchors DC-FORGE-01 against the full pipeline."
@@ -4459,7 +4459,7 @@ tests = ["handle_construction_yields_empty_snapshot", "view_subscribe_creates_in
 ci_script = ""
 status = "declared"
 introduced_in = "PHASE4-N-R-B"
-strengthened_in = []
+strengthened_in = ["PHASE4-N-T"]
 
 [[rules]]
 id = "CN-SNAPSHOT-02"
@@ -4697,9 +4697,9 @@ statement = "produce_mode's forge base state is derived from bootstrap_initial_s
 source = "docs/planning/phase4-n-t-invariants.md §1 (A1, A2, A6); docs/clusters/PHASE4-N-T/cluster.md §1"
 cross_ref = ["CN-NODE-01", "CN-PROD-02", "CN-FORGE-02", "DC-NODE-03"]
 code_locus = "crates/ade_node/src/produce_mode.rs (bootstrap cold-start wiring; SyntheticForgeInputs deleted); crates/ade_runtime/src/producer/chain_evolution.rs (derive_forge_context); crates/ade_node/src/cli.rs (ProduceCli --json-seed + --consensus-inputs)"
-tests = []
+tests = ["produce_cli_requires_seed_and_consensus_inputs", "produce_mode_bootstrap_cold_start_seeds_real_ledger"]
 ci_script = "ci/ci_check_produce_mode_uses_bootstrap_initial_state.sh"
-status = "declared"
+status = "enforced"
 introduced_in = "PHASE4-N-T"
 strengthened_in = []
 cluster = "PHASE4-N-T"
@@ -4714,9 +4714,9 @@ statement = "Every CoordinatorEffect::BroadcastBlock reconstructs the AcceptedBl
 source = "docs/planning/phase4-n-t-invariants.md §1 (A4, A5); docs/clusters/PHASE4-N-T/cluster.md §1"
 cross_ref = ["CN-SNAPSHOT-01", "DC-PROD-01"]
 code_locus = "crates/ade_node/src/produce_mode.rs (BroadcastBlock arm -> push_atomic; BroadcastPushError); crates/ade_runtime/src/producer/served_chain_handle.rs (push_atomic, reused); crates/ade_ledger/src/producer/self_accept.rs (token reconstruction, reused)"
-tests = []
+tests = ["broadcast_pushes_self_accepted_block_to_served", "broadcast_rejects_non_self_accepted_block", "forge_to_served_block_fetch_roundtrip"]
 ci_script = ""
-status = "declared"
+status = "enforced"
 introduced_in = "PHASE4-N-T"
 strengthened_in = []
 cluster = "PHASE4-N-T"
@@ -4730,9 +4730,9 @@ statement = "Producer chain-forward continuity + replay. The GREEN ChainEvolutio
 source = "docs/planning/phase4-n-t-invariants.md §3, §4 (R1, R3); docs/clusters/PHASE4-N-T/cluster.md §1.5, §7"
 cross_ref = ["T-DET-01", "DC-CONS-18", "DC-PROD-02", "CN-FORGE-01"]
 code_locus = "crates/ade_runtime/src/producer/chain_evolution.rs (ChainEvolution seed/derive_forge_context/advance + ChainEvolutionError incl. AuthorityMismatch)"
-tests = []
+tests = ["advance_threads_post_state_forward", "advance_two_runs_byte_identical", "advance_rejects_invalid_bytes", "reconcile_verdicts_both_valid_ok", "reconcile_verdicts_both_invalid_ok", "reconcile_verdicts_valid_vs_reject_mismatches", "reconcile_verdicts_reject_vs_valid_mismatches", "served_snapshot_two_run_replay_byte_identical"]
 ci_script = ""
-status = "declared"
+status = "enforced"
 introduced_in = "PHASE4-N-T"
 strengthened_in = []
 cluster = "PHASE4-N-T"
