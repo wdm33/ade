@@ -281,7 +281,7 @@ pub async fn run_produce_mode(cli: ProduceCli, shutdown_rx: watch::Receiver<bool
     // borrowed by `dispatch_server_frame_event_to_outbound` to read
     // the current snapshot atomically.
     let mut peers_state: ServerPeerStates = BTreeMap::new();
-    let (_served_chain_handle, served_chain_view) =
+    let (served_chain_handle, served_chain_view) =
         ade_runtime::producer::served_chain_handle::ServedChainHandle::new();
 
     loop {
@@ -344,6 +344,7 @@ pub async fn run_produce_mode(cli: ProduceCli, shutdown_rx: watch::Receiver<bool
                     &mut chain_evo,
                     &pool_id,
                     &pparams,
+                    &served_chain_handle,
                 ) {
                     eprintln!("ade_node produce: slot effects: {}", detail);
                     return ExitCode::from(EXIT_PRODUCE_FAILURE as u8);
@@ -921,6 +922,18 @@ fn artifact_from_accepted(
     ForgedBlockArtifact { slot, hash, bytes }
 }
 
+/// **PHASE4-N-T S4** — closed broadcast-push failure surface. No
+/// `String` payloads.
+#[derive(Debug, Clone, PartialEq)]
+pub enum BroadcastPushError {
+    /// The `self_accept` replay (inside `ChainEvolution::advance`)
+    /// rejected the forged bytes — `push_atomic` is NOT called and the
+    /// chain does not advance.
+    SelfAcceptReplayRejected,
+    /// `ServedChainHandle::push_atomic` itself failed.
+    Push(ade_runtime::producer::served_chain_handle::PushError),
+}
+
 /// Apply effects with the real forge handler.
 ///
 /// **PHASE4-N-T S3:** the forge inputs are derived from the linear
@@ -936,12 +949,17 @@ fn artifact_from_accepted(
 ///    nonce `query_leader_schedule` used for the VRF input.
 /// 3. Runs the BLUE-then-RED-then-BLUE forge via [`run_real_forge`].
 /// 4. On `ForgeSucceeded`, advances the chain via the sole
-///    `ChainEvolution::advance` path (the `AcceptedBlock` token is
-///    dropped in S3; S4 routes it to `push_atomic`). An advance
-///    rejection fails closed: the chain does not advance and the slot
-///    is recorded as a forge failure.
+///    `ChainEvolution::advance` path and captures the BLUE-minted
+///    `AcceptedBlock` token. An advance rejection fails closed: the
+///    chain does not advance, `push_atomic` is NOT called, the slot is
+///    recorded as a forge failure, and `BroadcastPushError::SelfAccept`-
+///    `ReplayRejected` is logged.
 ///
-/// `BroadcastBlock` stays a no-op until S4.
+/// **PHASE4-N-T S4:** the `BroadcastBlock` effect (emitted by the
+/// `ForgeSucceeded` `coordinator_step` into `more_effects`) routes the
+/// captured `AcceptedBlock` to `ServedChainHandle::push_atomic` so the
+/// forged block becomes servable. A `push_atomic` failure logs
+/// `BroadcastPushError::Push`.
 #[allow(clippy::too_many_arguments)]
 fn apply_effects_with_forge_handler(
     effects: &[CoordinatorEffect],
@@ -951,6 +969,7 @@ fn apply_effects_with_forge_handler(
     chain_evo: &mut Option<ChainEvolution>,
     pool_id: &Hash28,
     pparams: &ProtocolParameters,
+    served_chain_handle: &ade_runtime::producer::served_chain_handle::ServedChainHandle,
 ) -> Result<(), &'static str> {
     for e in effects {
         match e {
@@ -1008,18 +1027,29 @@ fn apply_effects_with_forge_handler(
                 // before `event` is consumed by `coordinator_step`. On
                 // advance rejection, fail closed: do not advance, and
                 // surface this slot as a forge failure instead of success.
+                //
+                // The BLUE-minted `AcceptedBlock` token produced by
+                // `advance` is captured into `pending_accepted` and routed
+                // to `push_atomic` in the `BroadcastBlock` arm of
+                // `more_effects` below (S4) — never minted here.
+                let mut pending_accepted: Option<ade_ledger::producer::AcceptedBlock> = None;
                 let event = match &event {
                     CoordinatorEvent::ForgeSucceeded { slot, artifact } => {
                         let forged_bytes = artifact.bytes.clone();
                         let evo = chain_evo.take().ok_or("chain_evo consumed")?;
                         match evo.advance(&forged_bytes) {
-                            Ok((next_evo, _accepted)) => {
+                            Ok((next_evo, accepted)) => {
                                 *chain_evo = Some(next_evo);
+                                pending_accepted = Some(accepted);
                                 event
                             }
                             Err(e) => {
+                                // The advance-`Err` arm is the `self_accept`
+                                // replay-rejection path: no broadcast, no
+                                // push, keep feeding `ForgeFailed`.
                                 eprintln!(
-                                    "ade_node produce: chain advance rejected: {e:?}"
+                                    "ade_node produce: chain advance rejected: {e:?} ({:?})",
+                                    BroadcastPushError::SelfAcceptReplayRejected
                                 );
                                 CoordinatorEvent::ForgeFailed {
                                     slot: *slot,
@@ -1036,8 +1066,26 @@ fn apply_effects_with_forge_handler(
                     coordinator_step(prev_state, event).map_err(|_| "forge handler step")?;
                 *coord_state = new_state;
                 for me in &more_effects {
-                    if let CoordinatorEffect::LogEvidence { event } = me {
-                        write_evidence_event(evidence_writer, event)?;
+                    match me {
+                        CoordinatorEffect::LogEvidence { event } => {
+                            write_evidence_event(evidence_writer, event)?;
+                        }
+                        CoordinatorEffect::BroadcastBlock { artifact: _ } => {
+                            // Route the self-accepted token to the sole
+                            // `push_atomic` authority so the forged block
+                            // becomes servable. A `BroadcastBlock` without a
+                            // pending token (no preceding self-accepted
+                            // advance) is unreachable — a defensive no-op.
+                            if let Some(accepted) = pending_accepted.take() {
+                                if let Err(e) = served_chain_handle.push_atomic(accepted) {
+                                    eprintln!(
+                                        "ade_node produce: served push failed: {:?}",
+                                        BroadcastPushError::Push(e)
+                                    );
+                                }
+                            }
+                        }
+                        CoordinatorEffect::RequestForge { .. } => {}
                     }
                 }
             }
@@ -1126,7 +1174,7 @@ async fn handle_listener_event(
         }
         OrchestratorEvent::PeerN2nServerChainSyncFrame { .. }
         | OrchestratorEvent::PeerN2nServerBlockFetchFrame { .. } => {
-            let _replies =
+            let (_replies, served_evidence) =
                 dispatch_server_frame_event_to_outbound(
                     &evt,
                     peers_state,
@@ -1135,6 +1183,21 @@ async fn handle_listener_event(
                 )
                 .await
                 .map_err(|_| "server frame dispatch")?;
+            // Emit one BlockServed per block observed present in the served
+            // snapshot for this block-fetch range. The Vec was collected
+            // before any await (no watch::Ref held across await); evidence
+            // is emitted here where the writer lives.
+            for ev in &served_evidence {
+                write_evidence_event(
+                    evidence_writer,
+                    &ProducerLogEvent::BlockServed {
+                        peer_id: ev.peer_id,
+                        slot: ev.slot,
+                        hash: ev.hash,
+                        bytes_len: ev.bytes_len,
+                    },
+                )?;
+            }
         }
         _ => {}
     }
@@ -1160,6 +1223,21 @@ pub enum DispatchError {
     ReducerError,
 }
 
+/// **PHASE4-N-T S4** — GREEN evidence observation of a block actually
+/// present in the served snapshot for a block-fetch request range.
+/// Collected into an owned `Vec` BEFORE any `.await` (never holds the
+/// `watch::Ref` across an await) and emitted as
+/// `ProducerLogEvent::BlockServed` by `handle_listener_event`. This
+/// OBSERVES the served snapshot; it does not re-decide what the BLUE
+/// serve reducer (`producer_block_fetch_serve`) serves, and is never
+/// fabricated — `(slot, hash, bytes_len)` are read from the snapshot.
+struct ServedBlockEvidence {
+    peer_id: PeerId,
+    slot: u64,
+    hash: [u8; 32],
+    bytes_len: u32,
+}
+
 /// **PHASE4-N-S-B B4** — outbound-relay-aware dispatch.
 ///
 /// Uses the lower-level BLUE reducers (`producer_chain_sync_serve` /
@@ -1170,15 +1248,15 @@ pub enum DispatchError {
 ///
 /// On lookup or send failure, returns the closed
 /// `DispatchError` variant; never panics.
-pub async fn dispatch_server_frame_event_to_outbound(
+async fn dispatch_server_frame_event_to_outbound(
     event: &OrchestratorEvent,
     peers_state: &mut ServerPeerStates,
     served_chain_view: &ade_runtime::producer::served_chain_handle::ServedChainView,
     peer_outbound: &ade_runtime::network::outbound_command::PerPeerOutbound,
-) -> Result<usize, DispatchError> {
+) -> Result<(usize, Vec<ServedBlockEvidence>), DispatchError> {
     use ade_network::block_fetch::server::producer_block_fetch_serve;
     use ade_network::chain_sync::server::producer_chain_sync_serve;
-    use ade_network::codec::block_fetch::decode_block_fetch_message;
+    use ade_network::codec::block_fetch::{decode_block_fetch_message, BlockFetchMessage, Point};
     use ade_network::codec::chain_sync::decode_chain_sync_message;
     use ade_runtime::network::outbound_command::OutboundCommand;
     use ade_runtime::producer::served_chain_lookups::ServedChainLookups;
@@ -1225,7 +1303,7 @@ pub async fn dispatch_server_frame_event_to_outbound(
                 block_fetch_version,
             };
             peers_state.insert(key, updated_state);
-            Ok(sent)
+            Ok((sent, Vec::new()))
         }
         OrchestratorEvent::PeerN2nServerBlockFetchFrame { peer_id, bytes } => {
             let key = PeerId(peer_id.0);
@@ -1236,6 +1314,21 @@ pub async fn dispatch_server_frame_event_to_outbound(
             let snap_ref = served_chain_view.borrow();
             let msg = decode_block_fetch_message(bytes)
                 .map_err(|_| DispatchError::ReducerError)?;
+            // Capture the requested point range before `msg` is consumed
+            // by the reducer; a closed-end RequestRange carries `(slot,
+            // hash)` for both endpoints (Origin has no key in the
+            // snapshot's BTreeMap, so a range touching Origin observes no
+            // present block — never over-claims).
+            let requested_range = match &msg {
+                BlockFetchMessage::RequestRange(r) => match (&r.from, &r.to) {
+                    (
+                        Point::Block { slot: fs, hash: fh },
+                        Point::Block { slot: ts, hash: th },
+                    ) => Some(((*fs, fh.clone()), (*ts, th.clone()))),
+                    _ => None,
+                },
+                _ => None,
+            };
             let lookups = ServedChainLookups { snap: &*snap_ref };
             let chain_sync_version = state.chain_sync_version;
             let block_fetch_version = state.block_fetch_version;
@@ -1247,6 +1340,24 @@ pub async fn dispatch_server_frame_event_to_outbound(
                 block_fetch_version,
             )
             .map_err(|_| DispatchError::ReducerError)?;
+            // GREEN evidence: observe which requested blocks are PRESENT in
+            // the served snapshot, reading real `(slot, hash, bytes_len)`.
+            // Collect into an owned `Vec` while the `watch::Ref` is held,
+            // then drop the ref BEFORE the outbound `.await` (no Ref held
+            // across await). Only present blocks within the requested
+            // range are observed — never a fabricated/zeroed BlockServed.
+            let mut served_evidence: Vec<ServedBlockEvidence> = Vec::new();
+            if let Some((from, to)) = requested_range {
+                for (s, h, b) in snap_ref.range_bytes(from, to) {
+                    served_evidence.push(ServedBlockEvidence {
+                        peer_id: PeerId(peer_id.0),
+                        slot: s.0,
+                        hash: h.0,
+                        bytes_len: b.len() as u32,
+                    });
+                }
+            }
+            drop(snap_ref);
             let mut sent = 0usize;
             if let ade_network::block_fetch::server::BlockFetchServerStep::Replies(replies) = step {
                 let map = peer_outbound.read().await;
@@ -1270,9 +1381,9 @@ pub async fn dispatch_server_frame_event_to_outbound(
                 block_fetch_version,
             };
             peers_state.insert(key, updated_state);
-            Ok(sent)
+            Ok((sent, served_evidence))
         }
-        _ => Ok(0),
+        _ => Ok((0, Vec::new())),
     }
 }
 
@@ -1577,5 +1688,239 @@ mod tests {
             "cold-start ledger fingerprint must equal imported-UTxO ledger fingerprint"
         );
         assert!(boot_tip.is_none(), "cold-start must have no tip");
+    }
+
+    // =====================================================================
+    // PHASE4-N-T S4 — BroadcastBlock → push_atomic (CE-T-10)
+    // =====================================================================
+    //
+    // A synthetic forge cannot reach a self-accepting `ForgeSucceeded`
+    // in-process (`forge_handler_variants.rs` proves self_accept rejects
+    // the synthetic block), so per the slice doc these tests drive the
+    // broadcast push path directly with a corpus-derived `AcceptedBlock`
+    // and exercise the rejection path via a flipped-body block through the
+    // sole `ChainEvolution::advance` authority — mirroring exactly what
+    // `apply_effects_with_forge_handler`'s `ForgeSucceeded` arm runs.
+
+    use ade_codec::cbor::envelope::decode_block_envelope;
+    use ade_core::consensus::{BootstrapAnchorHash, EraSummary, Nonce as CoreNonce};
+    use ade_core::consensus::vrf_cert::ActiveSlotsCoeff;
+    use ade_ledger::block_validity::decode_block as bv_decode_block;
+    use ade_ledger::consensus_view::{PoolDistrView, PoolEntry};
+    use ade_ledger::producer::self_accept::self_accept as ledger_self_accept;
+    use ade_runtime::producer::served_chain_handle::ServedChainHandle as SChainHandle;
+    use ade_runtime::producer::chain_evolution::{ChainEvolution as CE, ChainEvolutionError};
+    use ade_testkit::validity::ConwayValidityCorpus;
+    use std::collections::BTreeMap;
+
+    const T4_EPOCH_576: EpochNo = EpochNo(576);
+    const T4_EPOCH_577_START: u64 = 163_900_800;
+    const T4_MAINNET_EPOCH_LENGTH: u64 = 432_000;
+
+    fn t4_schedule() -> EraSchedule {
+        let start_576 = T4_EPOCH_577_START - T4_MAINNET_EPOCH_LENGTH;
+        EraSchedule::new(
+            BootstrapAnchorHash(Hash32([0u8; 32])),
+            0,
+            vec![EraSummary {
+                era: ade_types::CardanoEra::Conway,
+                start_slot: SlotNo(start_576),
+                start_epoch: T4_EPOCH_576,
+                slot_length_ms: 1_000,
+                epoch_length_slots: T4_MAINNET_EPOCH_LENGTH as u32,
+                safe_zone_slots: T4_MAINNET_EPOCH_LENGTH as u32,
+            }],
+        )
+        .expect("schedule is well-formed")
+    }
+
+    fn t4_view(c: &ConwayValidityCorpus) -> PoolDistrView {
+        let total = c.pd_total_active_stake;
+        let asc = ActiveSlotsCoeff {
+            numer: c.asc.numer as u32,
+            denom: c.asc.denom as u32,
+        };
+        let mut pools: BTreeMap<Hash28, PoolEntry> = BTreeMap::new();
+        for (pool_id, p) in &c.pools {
+            let scale = total / p.sigma.denom;
+            pools.insert(
+                Hash28(*pool_id),
+                PoolEntry {
+                    active_stake: p.sigma.numer * scale,
+                    vrf_keyhash: Hash32(p.vrf_keyhash),
+                },
+            );
+        }
+        PoolDistrView::new(T4_EPOCH_576, total, asc, pools)
+    }
+
+    fn t4_ledger() -> LedgerState {
+        let mut l = LedgerState::new(ade_types::CardanoEra::Conway);
+        l.epoch_state.epoch = T4_EPOCH_576;
+        l
+    }
+
+    fn t4_chain_dep(eta0: [u8; 32]) -> PraosChainDepState {
+        let mut s = PraosChainDepState::empty();
+        s.epoch_nonce = CoreNonce(Hash32(eta0));
+        s.evolving_nonce = CoreNonce(Hash32(eta0));
+        s
+    }
+
+    fn t4_inner_span(env_bytes: &[u8]) -> (usize, usize) {
+        let env = decode_block_envelope(env_bytes).expect("envelope decodes");
+        (env.block_start, env.block_end)
+    }
+
+    fn t4_pick_lightest(c: &ConwayValidityCorpus) -> &[u8] {
+        let idx = (0..c.blocks.len())
+            .min_by_key(|&i| {
+                let (s, e) = t4_inner_span(&c.blocks[i]);
+                e - s
+            })
+            .expect("corpus is non-empty");
+        &c.blocks[idx]
+    }
+
+    fn t4_pick_heaviest(c: &ConwayValidityCorpus) -> &[u8] {
+        let idx = (0..c.blocks.len())
+            .max_by_key(|&i| {
+                let (s, e) = t4_inner_span(&c.blocks[i]);
+                e - s
+            })
+            .expect("corpus is non-empty");
+        &c.blocks[idx]
+    }
+
+    /// Flip one body byte so the header is untouched but the recomputed
+    /// body hash changes — mirrors `chain_evolution.rs::flip_body_byte`.
+    fn t4_flip_body_byte(env_bytes: &[u8]) -> Vec<u8> {
+        let (start, end) = t4_inner_span(env_bytes);
+        let base = bv_decode_block(env_bytes).expect("base block decodes");
+        for idx in (start..end).rev() {
+            let mut bad = env_bytes.to_vec();
+            bad[idx] ^= 0x01;
+            if let Ok(d) = bv_decode_block(&bad) {
+                if d.computed_body_hash != base.computed_body_hash {
+                    return bad;
+                }
+            }
+        }
+        panic!("no structure-preserving body flip found");
+    }
+
+    fn t4_seed(c: &ConwayValidityCorpus) -> CE {
+        CE::seed(
+            t4_ledger(),
+            t4_chain_dep(c.epoch_nonce),
+            None,
+            t4_schedule(),
+            t4_view(c),
+            CoreNonce(Hash32(c.epoch_nonce)),
+        )
+    }
+
+    /// CE-T-10 (negative): a `ForgeSucceeded` artifact whose bytes fail
+    /// `ChainEvolution::advance`'s self_accept (flipped body byte) is the
+    /// `BroadcastPushError::SelfAcceptReplayRejected` path: `advance`
+    /// returns `Err`, so `push_atomic` is NEVER called (the served
+    /// snapshot stays empty) and the handler surfaces the slot as
+    /// `ForgeFailed`.
+    #[test]
+    fn broadcast_rejects_non_self_accepted_block() {
+        let corpus = ConwayValidityCorpus::load().expect("corpus loads");
+        // Heaviest block: a non-empty body so a structure-preserving
+        // content flip exists.
+        let block = t4_pick_heaviest(&corpus).to_vec();
+        let altered = t4_flip_body_byte(&block);
+
+        let (handle, view) = SChainHandle::new();
+        assert!(view.borrow().is_empty(), "served snapshot starts empty");
+
+        // Mirror `apply_effects_with_forge_handler`'s ForgeSucceeded arm:
+        // `advance` is the gate before any push.
+        let evo = t4_seed(&corpus);
+        let surfaced_event = match evo.advance(&altered) {
+            Ok((_next, accepted)) => {
+                // Would push on success — assert we never reach here.
+                handle.push_atomic(accepted).expect("unexpected push");
+                CoordinatorEvent::ForgeSucceeded {
+                    slot: 0,
+                    artifact: ade_runtime::producer::coordinator::ForgedBlockArtifact {
+                        slot: 0,
+                        hash: [0u8; 32],
+                        bytes: altered.clone(),
+                    },
+                }
+            }
+            Err(e) => {
+                // The advance-`Err` arm: no push, keep feeding ForgeFailed.
+                assert!(
+                    matches!(e, ChainEvolutionError::SelfAcceptRejected(_)),
+                    "flipped body must be a self_accept rejection, got {e:?}"
+                );
+                CoordinatorEvent::ForgeFailed {
+                    slot: 0,
+                    reason: ForgeFailureReason::Other,
+                }
+            }
+        };
+
+        // push_atomic was NOT called: the served snapshot is still empty.
+        assert!(
+            view.borrow().is_empty(),
+            "rejected block must not be pushed to the served snapshot"
+        );
+        // The slot is surfaced as a forge failure, not a success.
+        assert!(
+            matches!(surfaced_event, CoordinatorEvent::ForgeFailed { .. }),
+            "rejected forge must surface as ForgeFailed"
+        );
+    }
+
+    /// CE-T-10 (positive): a valid forged (corpus) block self-accepts via
+    /// `ChainEvolution::advance`; the resulting BLUE-minted
+    /// `AcceptedBlock` is routed to `ServedChainHandle::push_atomic` (the
+    /// `BroadcastBlock` path) and the served snapshot then contains it.
+    #[test]
+    fn broadcast_pushes_self_accepted_block_to_served() {
+        let corpus = ConwayValidityCorpus::load().expect("corpus loads");
+        let block = t4_pick_lightest(&corpus).to_vec();
+
+        let (handle, view) = SChainHandle::new();
+        assert!(view.borrow().is_empty(), "served snapshot starts empty");
+
+        // Obtain the BLUE-minted token via `advance` (the sole authority;
+        // GREEN never mints) — same as the handler's ForgeSucceeded arm.
+        let evo = t4_seed(&corpus);
+        let (_next, accepted) = evo
+            .advance(&block)
+            .expect("lightest corpus block self-accepts");
+
+        // Cross-check the token equals a direct self_accept (the same
+        // authority the handler relies on for the broadcast token).
+        let direct = ledger_self_accept(
+            &block,
+            &t4_ledger(),
+            &t4_chain_dep(corpus.epoch_nonce),
+            &t4_schedule(),
+            &t4_view(&corpus),
+        )
+        .expect("direct self_accept");
+        assert_eq!(
+            accepted.as_bytes(),
+            direct.as_bytes(),
+            "advance token must equal direct self_accept token bytes"
+        );
+
+        // BroadcastBlock → push_atomic.
+        let tip = handle.push_atomic(accepted).expect("push_atomic admits");
+
+        let snap = view.borrow();
+        assert_eq!(snap.len(), 1, "served snapshot must contain the pushed block");
+        assert!(
+            snap.block_at(tip.slot, &tip.hash).is_some(),
+            "pushed block must be present by (slot, hash) key"
+        );
     }
 }
