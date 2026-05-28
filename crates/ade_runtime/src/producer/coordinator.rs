@@ -560,6 +560,7 @@ fn handle_forge_failed(
         ForgeFailureReason::KeyExhausted => SlotMissedReason::ForgeKeyExhausted,
         ForgeFailureReason::SelfAcceptRejected
         | ForgeFailureReason::EmptyMempool
+        | ForgeFailureReason::UnsupportedProducerEra
         | ForgeFailureReason::Other => SlotMissedReason::ForgeFailedRejected,
     };
     let last_tick = state.last_slot_tick.unwrap_or(slot);

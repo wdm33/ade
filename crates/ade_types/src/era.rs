@@ -59,6 +59,15 @@ impl CardanoEra {
     pub fn is_byron(self) -> bool {
         matches!(self, CardanoEra::ByronEbb | CardanoEra::ByronRegular)
     }
+
+    /// Returns true if this era runs the Praos consensus protocol
+    /// (Babbage, Conway) — a single combined VRF proof with the
+    /// `vrfLeaderValue` / `vrfNonceValue` range-extension. The earlier
+    /// Shelley..Alonzo eras run TPraos (two role-tagged VRF proofs); Byron
+    /// is pre-Shelley and runs neither.
+    pub fn is_praos(self) -> bool {
+        matches!(self, CardanoEra::Babbage | CardanoEra::Conway)
+    }
 }
 
 /// Error returned when an unknown era tag is encountered.
@@ -141,6 +150,20 @@ mod tests {
         assert!(CardanoEra::ByronRegular.is_byron());
         assert!(!CardanoEra::Shelley.is_byron());
         assert!(!CardanoEra::Conway.is_byron());
+    }
+
+    #[test]
+    fn is_praos_only_babbage_and_conway() {
+        assert!(CardanoEra::Babbage.is_praos());
+        assert!(CardanoEra::Conway.is_praos());
+        // Byron: pre-Shelley, neither protocol.
+        assert!(!CardanoEra::ByronEbb.is_praos());
+        assert!(!CardanoEra::ByronRegular.is_praos());
+        // Shelley..Alonzo: TPraos, not Praos.
+        assert!(!CardanoEra::Shelley.is_praos());
+        assert!(!CardanoEra::Allegra.is_praos());
+        assert!(!CardanoEra::Mary.is_praos());
+        assert!(!CardanoEra::Alonzo.is_praos());
     }
 
     #[test]

@@ -627,6 +627,27 @@ pub fn run_real_forge(
     ctx: &ForgeRequestContext<'_>,
     shell: &mut ProducerShell,
 ) -> CoordinatorEvent {
+    // PHASE4-N-W S1 — producer-era policy: the producer forges Praos-era
+    // (Babbage/Conway) blocks only. A non-Praos era fail-closes here
+    // (the sketch's `UnsupportedEra::ProducerForge`; I6 / N5), before any
+    // VRF/KES key use on the rejected path. TPraos *validation* is
+    // unaffected. A locate failure is not era policy — it maps to `Other`.
+    let era = match ctx.era_schedule.locate(ade_types::SlotNo(slot)) {
+        Ok(loc) => loc.era,
+        Err(_) => {
+            return CoordinatorEvent::ForgeFailed {
+                slot,
+                reason: ForgeFailureReason::Other,
+            };
+        }
+    };
+    if !era.is_praos() {
+        return CoordinatorEvent::ForgeFailed {
+            slot,
+            reason: ForgeFailureReason::UnsupportedProducerEra,
+        };
+    }
+
     // RED step 1 — VRF prove over the canonical leader input.
     let expected = vrf_input(
         ade_types::SlotNo(slot),

@@ -98,6 +98,13 @@ pub enum ForgeFailureReason {
     SelfAcceptRejected,
     /// Mempool / tx admission produced an empty body unexpectedly.
     EmptyMempool,
+    /// Producer-forge requested for a non-Praos era (PHASE4-N-W S1).
+    /// The producer forges Praos-era (Babbage/Conway) blocks only;
+    /// TPraos-era producer forging is an explicit non-goal and
+    /// fail-closes here. Closed realization of the invariant-sketch
+    /// `UnsupportedEra::ProducerForge` policy (I6 / N5). TPraos
+    /// *validation* is unaffected.
+    UnsupportedProducerEra,
     /// Catch-all for other ForgeError variants we don't surface
     /// individually. Closed at the type level (this variant carries
     /// no inner data); the RED shell logs the full BLUE error

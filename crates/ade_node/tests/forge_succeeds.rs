@@ -267,3 +267,66 @@ fn forge_to_self_accept_blocked_on_praos_vrf_construction() {
         other => panic!("expected ForgeFailed {{ SelfAcceptRejected }}, got {:?}", other),
     }
 }
+
+// =========================================================================
+// CE-W-6 (PHASE4-N-W S1) — TPraos producer-forge fail-closed
+// =========================================================================
+
+/// A producer-forge request whose era schedule locates a non-Praos era
+/// (Shelley = TPraos) must fail closed with the structured
+/// `ForgeFailureReason::UnsupportedProducerEra` — the sketch's
+/// `UnsupportedEra::ProducerForge` policy (I6 / N5). The guard fires before
+/// any VRF/KES key use. TPraos *validation* is unaffected (this slice does
+/// not touch `vrf_input` / `VrfRole`).
+#[test]
+fn tpraos_producer_forge_fails_closed_with_unsupported_era() {
+    let epoch = EpochNo(0);
+    let slot = 1u64;
+
+    let mut shell = synth_shell(0x77, 0x88, 0x99);
+    let fixture = EligibleFixture::build(&shell, slot, epoch);
+
+    // A Shelley (TPraos) era schedule located at the forge slot.
+    let shelley_schedule = EraSchedule::new(
+        BootstrapAnchorHash(Hash32([0u8; 32])),
+        0,
+        vec![EraSummary {
+            era: CardanoEra::Shelley,
+            start_slot: ade_types::SlotNo(0),
+            start_epoch: epoch,
+            slot_length_ms: 1_000,
+            epoch_length_slots: 432_000,
+            safe_zone_slots: 129_600,
+        }],
+    )
+    .expect("shelley era schedule");
+
+    let ctx = ForgeRequestContext {
+        eta0: &fixture.eta0_holder.epoch_nonce,
+        vrf_vk: &fixture.vrf_vk,
+        leader_schedule_answer: &fixture.leader_answer,
+        pparams: &fixture.pparams,
+        base_state: &fixture.base_state,
+        chain_dep_state: &fixture.eta0_holder,
+        era_schedule: &shelley_schedule,
+        pool_distr_view: &fixture.pool_distr_view,
+        block_number: BlockNo(0),
+        prev_hash: Hash32([0u8; 32]),
+        protocol_version: ProtocolVersion { major: 9, minor: 0 },
+        prev_opcert_counter: None,
+    };
+
+    let event = run_real_forge(slot, /* kes_period = */ 0, &ctx, &mut shell);
+    match event {
+        CoordinatorEvent::ForgeFailed { slot: s, reason } => {
+            assert_eq!(s, slot, "ForgeFailed must preserve the slot");
+            assert_eq!(
+                reason,
+                ForgeFailureReason::UnsupportedProducerEra,
+                "a non-Praos (Shelley) producer-forge request must fail closed \
+                 with UnsupportedProducerEra, not attempt a forge",
+            );
+        }
+        other => panic!("expected ForgeFailed {{ UnsupportedProducerEra }}, got {:?}", other),
+    }
+}
