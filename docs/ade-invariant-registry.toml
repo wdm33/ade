@@ -4400,15 +4400,15 @@ statement = "The producer-mode forge handler is a closed transition from Coordin
 source = "docs/planning/phase4-n-r-invariants.md §1 (I1, I9); §2 (N1); §5 (state transitions)"
 cross_ref = ["CN-CONS-07", "CN-PROD-02", "DC-CONS-18", "T-KEY-01"]
 code_locus = "crates/ade_node/src/produce_mode.rs (run_real_forge BLUE-then-RED-then-BLUE pipeline; apply_effects_with_forge_handler call site); crates/ade_ledger/src/producer/forge.rs (forge_block BLUE step 5); crates/ade_ledger/src/producer/self_accept.rs (self_accept BLUE step 6 gate)"
-tests = ["zero_stake_answer_emits_forge_not_leader", "kes_period_outside_window_emits_forge_failed_kes_period_mismatch", "full_stake_answer_reaches_self_accept_and_rejects", "run_real_forge_is_byte_identical_across_two_runs", "forge_block_accepts_empty_mempool", "forge_block_empty_mempool_produces_empty_body", "produce_mode_starts_runs_three_slots_and_exits_via_max_slots"]
+tests = ["zero_stake_answer_emits_forge_not_leader", "kes_period_outside_window_emits_forge_failed_kes_period_mismatch", "full_stake_answer_reaches_self_accept_and_rejects", "run_real_forge_is_byte_identical_across_two_runs", "forge_block_accepts_empty_mempool", "forge_block_empty_mempool_produces_empty_body", "produce_mode_starts_runs_three_slots_and_exits_via_max_slots", "forge_to_self_accept_succeeds"]
 ci_script = "ci/ci_check_producer_coordinator_no_secrets.sh, ci/ci_check_no_independent_forge_codepath.sh"
 status = "enforced"
 introduced_in = "PHASE4-N-R-A"
-strengthened_in = ["PHASE4-N-S-A", "PHASE4-N-T"]
+strengthened_in = ["PHASE4-N-S-A", "PHASE4-N-T", "PHASE4-N-W"]
 cluster = "PHASE4-N-R-A"
 attack_rationale = "Cardano-specific: forging a block that fails self-accept and broadcasting it would propagate an invalid block to peers, breaking the chain. Forging without a self-accept gate is a forged-by-error attack vector."
-evidence_notes = "N-R-A's A4 integration tests cover 3 of the 4 ForgeResult branches (NotLeader, KesPeriodMismatch, SelfAcceptRejected). The 4th (ForgeSucceeded) is structurally guaranteed by the closed pipeline (the only path to Succeeded is past the self_accept = Accepted gate at step 6); asserting end-to-end ForgeSucceeded requires the KES-signs-real-unsigned-header bridge — a future-cluster deliverable explicitly out of N-R-A scope. The replay-byte-identity test (run_real_forge_is_byte_identical_across_two_runs) anchors DC-FORGE-01 against the full pipeline."
-open_obligation = "End-to-end ForgeSucceeded path requires the KES-signs-real-unsigned-header bridge (currently the placeholder KES signing payload is the VRF input bytes). Tracked for a future post-N-R cluster; the structural property (no ForgeSucceeded without self_accept Accepted) is enforced today by the closed pipeline shape."
+evidence_notes = "N-R-A's A4 integration tests cover 3 of the 4 ForgeResult branches (NotLeader, KesPeriodMismatch, SelfAcceptRejected). The 4th (ForgeSucceeded) is structurally guaranteed by the closed pipeline (the only path to Succeeded is past the self_accept = Accepted gate at step 6); asserting end-to-end ForgeSucceeded requires the KES-signs-real-unsigned-header bridge — a future-cluster deliverable explicitly out of N-R-A scope. The replay-byte-identity test (run_real_forge_is_byte_identical_across_two_runs) anchors DC-FORGE-01 against the full pipeline. PHASE4-N-W discharged the open obligation: with the KES-signs-real-unsigned-header bridge (N-S-A) and the producer Praos VRF migration (N-W) both landed, forge_to_self_accept_succeeds asserts end-to-end ForgeSucceeded — the producer forges a Conway block its own validator accepts via verify_praos_vrf."
+open_obligation = ""
 
 [[rules]]
 id = "CN-FORGE-02"
@@ -4734,7 +4734,7 @@ tests = ["advance_threads_post_state_forward", "advance_two_runs_byte_identical"
 ci_script = ""
 status = "enforced"
 introduced_in = "PHASE4-N-T"
-strengthened_in = []
+strengthened_in = ["PHASE4-N-W"]
 cluster = "PHASE4-N-T"
 
 [[rules]]
@@ -4760,10 +4760,10 @@ tier = "derived"
 statement = "Producer-side Praos VRF construction must match the Conway/Praos validator authority: the leader VRF proof alpha, the leader-schedule evidence, the LeaderScheduleAnswer.expected_vrf_input contract, and the self_accept header verification must all use ONE era-correct Praos construction. For Conway/Praos the producer alpha MUST equal the validator alpha (praos_vrf_input(slot, eta0) = blake2b256(slot||eta0) + vrfLeaderValue range-extension), NOT the TPraos role-tagged alpha (slot||eta0||0x4C). No verification/construction fallback may accept both TPraos and Praos VRF inputs — for a given era/protocol version there is exactly one VRF transcript authority."
 source = "docs/planning/phase4-n-w-praos-vrf-migration.md; docs/clusters/completed/PHASE4-N-V/CLOSURE.md"
 cross_ref = ["CN-FORGE-01", "CN-FORGE-02", "CN-FORGE-03", "DC-CONS-18"]
-code_locus = "crates/ade_node/src/produce_mode.rs (run_real_forge VRF prove); crates/ade_core/src/consensus/leader_check.rs (verify_and_evaluate_leader); crates/ade_core/src/consensus/leader_schedule.rs (query_leader_schedule, LeaderScheduleAnswer.expected_vrf_input); validator verify_praos_vrf / praos_vrf_input"
-tests = []
-ci_script = ""
-status = "declared"
+code_locus = "crates/ade_core/src/consensus/vrf_cert.rs (ExpectedVrfInput + leader_vrf_input single authority + leader_value_for); crates/ade_node/src/produce_mode.rs (run_real_forge proves over the answer's alpha_bytes); crates/ade_core/src/consensus/leader_check.rs (verify_and_evaluate_leader era arg + era-correct threshold); crates/ade_core/src/consensus/leader_schedule.rs (query_leader_schedule builds via leader_vrf_input; LeaderScheduleAnswer.expected_vrf_input: ExpectedVrfInput); validator verify_praos_vrf / praos_vrf_input"
+tests = ["forge_to_self_accept_succeeds", "praos_call_with_tpraos_answer_emits_vrf_input_mismatch", "tpraos_producer_forge_fails_closed_with_unsupported_era", "is_praos_only_babbage_and_conway", "query_uses_state_epoch_nonce_for_vrf_input"]
+ci_script = "ci/ci_check_producer_praos_vrf.sh"
+status = "enforced"
 introduced_in = "PHASE4-N-W"
 strengthened_in = []
 cluster = "PHASE4-N-W"
