@@ -38,7 +38,7 @@ use std::collections::BTreeMap;
 use ade_core::consensus::era_schedule::EraSchedule;
 use ade_core::consensus::leader_schedule::LeaderScheduleAnswer;
 use ade_core::consensus::praos_state::{Nonce, PraosChainDepState};
-use ade_core::consensus::vrf_cert::{vrf_input, ActiveSlotsCoeff, VrfRole};
+use ade_core::consensus::vrf_cert::{leader_vrf_input, ActiveSlotsCoeff};
 use ade_core::consensus::{BootstrapAnchorHash, EraSummary};
 use ade_crypto::vrf::VrfVerificationKey;
 use ade_ledger::consensus_view::PoolDistrView;
@@ -128,10 +128,10 @@ fn answer_for_slot(
         slot: ade_types::SlotNo(slot),
         pool: Hash28([0xAA; 28]),
         epoch: EpochNo(0),
-        expected_vrf_input: vrf_input(
+        expected_vrf_input: leader_vrf_input(
+            ade_types::CardanoEra::Conway,
             ade_types::SlotNo(slot),
             eta0,
-            VrfRole::LeaderEligibility,
         ),
         stake_fraction: (stake_numer, stake_denom),
         asc: ActiveSlotsCoeff {
@@ -254,10 +254,14 @@ fn full_stake_answer_reaches_self_accept_and_rejects() {
     let vrf_vk = shell.vrf_verification_key();
 
     // Full stake (numer/denom = 1/1) + asc 1/1 → Eligible. The pipeline
-    // proceeds through KES sign + assemble_tick + forge_block + self_accept.
-    // Self-accept rejects because the synthetic KES signing payload
-    // (A3 honest scope) doesn't match the real unsigned-header bytes —
-    // the documented A3 path.
+    // proceeds through VRF prove + leader-check + KES sign + assemble_tick +
+    // forge_block + self_accept. With the Praos VRF migration (PHASE4-N-W) the
+    // VRF proof is no longer the rejection cause; this fixture's pool /
+    // VRF-keyhash are not bound to the validator's issuer-pool recipe (unlike
+    // forge_succeeds.rs's EligibleFixture), so self_accept rejects at that
+    // binding. The assertion here is the gate (no premature ForgeSucceeded,
+    // slot preserved); the canonical forge → self-accept SUCCESS path is
+    // forge_succeeds.rs::forge_to_self_accept_succeeds.
     let answer = answer_for_slot(13, &fixture.eta0, 1, 1, 1, 1);
     let ctx = fixture.ctx(&answer, &vrf_vk);
 
@@ -281,14 +285,14 @@ fn full_stake_answer_reaches_self_accept_and_rejects() {
             );
         }
         CoordinatorEvent::ForgeSucceeded { .. } => {
-            // The 4th branch — structurally guaranteed not to occur in
-            // A3 honest scope (placeholder KES signing payload). If
-            // this panic ever triggers, the KES-signs-real-unsigned-
-            // header bridge has landed and A4 should be expanded with
-            // explicit ForgeSucceeded assertions.
+            // This fixture's pool / VRF-keyhash are not validator-bound, so
+            // self_accept is expected to reject. If this fires, the fixture
+            // has become aligned — fold it into the canonical success test
+            // forge_succeeds.rs::forge_to_self_accept_succeeds rather than
+            // asserting success in two places.
             panic!(
-                "ForgeSucceeded reached in A3 honest scope — bridge landed; \
-                 expand A4 with explicit Succeeded assertions"
+                "unexpected ForgeSucceeded for the unaligned-fixture case; \
+                 see forge_succeeds.rs::forge_to_self_accept_succeeds"
             );
         }
         CoordinatorEvent::ForgeNotLeader { .. } => {

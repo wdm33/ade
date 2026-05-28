@@ -108,7 +108,7 @@ pub fn assemble_tick(
 mod tests {
     use super::*;
 
-    use ade_core::consensus::vrf_cert::{ActiveSlotsCoeff, VRF_INPUT_LEN};
+    use ade_core::consensus::vrf_cert::{ActiveSlotsCoeff, ExpectedVrfInput};
     use ade_crypto::kes::SUM6_KES_SIG_LEN;
     use ade_types::{CardanoEra, EpochNo, Hash28};
     use cardano_crypto::vrf::VrfDraft03;
@@ -127,7 +127,7 @@ mod tests {
             slot: SlotNo(100),
             pool: Hash28([0xAA; 28]),
             epoch: EpochNo(0),
-            expected_vrf_input: [0u8; VRF_INPUT_LEN],
+            expected_vrf_input: ExpectedVrfInput::Praos([0u8; 32]),
             stake_fraction: (1, 2),
             asc: ActiveSlotsCoeff { numer: 1, denom: 1 },
         }

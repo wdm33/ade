@@ -17,36 +17,24 @@
 //! and validation. S2's envelope wrap means the forged bytes now decode,
 //! so the tick reaches `self_accept`'s header validation.
 //!
-//! ## OQ4 honest fallback (HARD RULE invoked)
+//! ## PHASE4-N-W S2: producer Praos VRF now matches the validator
 //!
-//! With the setup fully aligned, the forge does NOT yet reach
-//! `ForgeSucceeded`. `self_accept` rejects with
-//! `BlockValidityError::Header(VrfCert(VerificationFailed))` at header
-//! validation step 6 (the VRF proof check). The cause is a producer-side
-//! BLUE protocol mismatch, NOT a test-setup error:
+//! With the producer-side leader-eligibility VRF migrated to Praos
+//! (CN-FORGE-04), the aligned tick now reaches `ForgeSucceeded`. The
+//! producer builds its leader VRF proof over the **Praos** input
+//! `praos_vrf_input(slot, eta0) = blake2b256(slot_be8 ‖ eta0_32)` (sourced
+//! from `LeaderScheduleAnswer.expected_vrf_input`, the single
+//! `leader_vrf_input` authority) and evaluates eligibility from
+//! `praos_leader_value(output)`. `validate_and_apply_header` then verifies
+//! the single combined proof over the **same** `praos_vrf_input` via
+//! `verify_praos_vrf` (`header_validate.rs` `HeaderVrf::Praos` branch), so
+//! `self_accept` accepts the forged Conway block — producer self-accept ≡
+//! receive-path verification (R2). This is the first in-process forge →
+//! self-accept success.
 //!
-//! - The forge / leader-check / leader-schedule authorities build the VRF
-//!   proof over the **TPraos role-tagged** input
-//!   `vrf_input(slot, eta0, LeaderEligibility)` =
-//!   `slot_be8 ‖ eta0_32 ‖ 0x4C` (see `run_real_forge` step 1,
-//!   `verify_and_evaluate_leader`, `query_leader_schedule`,
-//!   `LeaderScheduleAnswer.expected_vrf_input`).
-//! - Conway is **Praos**: `validate_and_apply_header` verifies the single
-//!   combined proof over `praos_vrf_input(slot, eta0)` =
-//!   `blake2b256(slot_be8 ‖ eta0_32)` and derives the leader value via the
-//!   `vrfLeaderValue` range-extension (`header_validate.rs` step 6,
-//!   `verify_praos_vrf`).
-//!
-//! The two alphas differ, so `VrfDraft03::verify` rejects the proof. No
-//! value the test controls can reconcile them — the producer's VRF
-//! construction for a Conway block is TPraos-shaped where the validator's
-//! is Praos-shaped. Fixing it is coordinated surgery across the
-//! producer-side leader-eligibility authorities (forge VRF prove,
-//! `verify_and_evaluate_leader`, `query_leader_schedule`, and the
-//! `LeaderScheduleAnswer.expected_vrf_input` contract) — real forge
-//! authority work beyond an in-slice correction. Per the S3 HARD RULE the
-//! success is NOT faked and the assertion is NOT loosened: the test pins
-//! the honest current outcome and the blocker is reported for re-scope.
+//! Before N-W the producer built the **TPraos** role-tagged input
+//! `slot ‖ eta0 ‖ 0x4C`, which the Praos validator rejected at the VRF
+//! proof step; N-W removed that producer/validator asymmetry.
 
 #![allow(clippy::unwrap_used)]
 #![allow(clippy::expect_used)]
@@ -57,7 +45,7 @@ use std::collections::BTreeMap;
 use ade_core::consensus::era_schedule::EraSchedule;
 use ade_core::consensus::leader_schedule::LeaderScheduleAnswer;
 use ade_core::consensus::praos_state::{Nonce, PraosChainDepState};
-use ade_core::consensus::vrf_cert::{vrf_input, ActiveSlotsCoeff, VrfRole};
+use ade_core::consensus::vrf_cert::{leader_vrf_input, ActiveSlotsCoeff};
 use ade_core::consensus::{BootstrapAnchorHash, EraSummary};
 use ade_crypto::vrf::VrfVerificationKey;
 use ade_ledger::consensus_view::{PoolDistrView, PoolEntry};
@@ -171,10 +159,10 @@ impl EligibleFixture {
             slot: ade_types::SlotNo(slot),
             pool: pool_id,
             epoch,
-            expected_vrf_input: vrf_input(
+            expected_vrf_input: leader_vrf_input(
+                CardanoEra::Conway,
                 ade_types::SlotNo(slot),
                 &eta0,
-                VrfRole::LeaderEligibility,
             ),
             stake_fraction: (1, 1),
             asc: ActiveSlotsCoeff { numer: 1, denom: 1 },
@@ -220,16 +208,15 @@ impl EligibleFixture {
 // CE-V-6 — OQ4 honest fallback: ForgeFailed with the next blocker pinned
 // =========================================================================
 
-/// HONEST-FALLBACK NAME: this is NOT yet a `ForgeSucceeded`. The
-/// consistent eligible-leader tick reaches header validation step 6 and is
-/// rejected at the VRF proof check because the producer builds a TPraos
-/// role-tagged VRF proof while Conway header validation verifies a Praos
-/// combined proof. See the module doc for the full root cause. When the
-/// producer-side leader-eligibility VRF construction is migrated to Praos
-/// (a follow-on cluster), this test must be promoted to assert
-/// `ForgeSucceeded` (the `forge_to_self_accept_succeeds` shape).
+/// PHASE4-N-W S2: the producer-side Praos VRF construction now matches the
+/// validator (CN-FORGE-04). The consistent eligible-leader tick forges a
+/// Conway/Praos block whose single combined VRF certificate the SAME
+/// receive-path `verify_praos_vrf` accepts, so `self_accept` reaches
+/// `ForgeSucceeded` — the first in-process forge → self-accept success
+/// (CE-W-3, CE-W-4, CE-W-5; closes the deferred CN-FORGE-01 "ForgeSucceeded
+/// reachable" strengthening).
 #[test]
-fn forge_to_self_accept_blocked_on_praos_vrf_construction() {
+fn forge_to_self_accept_succeeds() {
     let epoch = EpochNo(0);
     let slot = 1u64;
 
@@ -239,32 +226,22 @@ fn forge_to_self_accept_blocked_on_praos_vrf_construction() {
 
     let event = run_real_forge(slot, /* kes_period = */ 0, &ctx, &mut shell);
     match event {
-        CoordinatorEvent::ForgeFailed { slot: s, reason } => {
-            assert_eq!(s, slot, "ForgeFailed must preserve the slot");
-            // The block decodes (S2 envelope), the leader claim is
-            // eligible, the KES sig is real (N-S-A), and self_accept is
-            // reached — it rejects at the VRF proof step. `run_real_forge`
-            // maps a self_accept rejection to `SelfAcceptRejected`.
-            assert_eq!(
-                reason,
-                ForgeFailureReason::SelfAcceptRejected,
-                "expected the self_accept rejection path (VRF-proof mismatch), \
-                 not an earlier-pipeline failure",
-            );
+        CoordinatorEvent::ForgeSucceeded { slot: s, .. } => {
+            assert_eq!(s, slot, "ForgeSucceeded must preserve the slot");
         }
-        CoordinatorEvent::ForgeSucceeded { .. } => {
-            // If this fires, the producer-side Praos VRF construction has
-            // landed: promote this test to assert ForgeSucceeded and flip
-            // CN-FORGE-01 / CE-V-6 to the success outcome.
+        CoordinatorEvent::ForgeFailed { slot: _, reason } => {
             panic!(
-                "ForgeSucceeded reached — producer-side Praos VRF construction \
-                 has landed; promote this test to the success assertion (CE-V-6)"
+                "expected ForgeSucceeded — the producer Praos VRF now matches the \
+                 validator's verify_praos_vrf; got ForgeFailed {{ {:?} }}. If a \
+                 deeper producer/validator asymmetry has surfaced, pin it as a \
+                 follow-on cluster (N-X) per the CE-W-5 contingency.",
+                reason
             );
         }
         CoordinatorEvent::ForgeNotLeader { .. } => {
             panic!("expected the eligible path; got ForgeNotLeader (setup bug)");
         }
-        other => panic!("expected ForgeFailed {{ SelfAcceptRejected }}, got {:?}", other),
+        other => panic!("expected ForgeSucceeded, got {:?}", other),
     }
 }
 

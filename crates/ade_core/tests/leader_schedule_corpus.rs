@@ -210,7 +210,8 @@ fn corpus_returns_canonical_answer_for_known_pools() {
         assert_eq!(answer.pool, pool);
         assert_eq!(answer.epoch, expected_epoch);
         assert_eq!(answer.stake_fraction, (expected_numer, expected_denom));
-        assert_eq!(&answer.expected_vrf_input[..], &expected_input[..]);
+        // Shelley corpus → TPraos role-tagged 41-byte input.
+        assert_eq!(answer.expected_vrf_input.alpha_bytes(), &expected_input[..]);
     }
 }
 

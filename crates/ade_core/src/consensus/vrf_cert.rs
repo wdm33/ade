@@ -26,7 +26,7 @@
 use ade_crypto::blake2b::blake2b_256;
 use ade_crypto::vrf::{verify_vrf as crypto_verify_vrf, VrfOutput, VrfProof, VrfVerificationKey};
 use ade_crypto::CryptoError;
-use ade_types::SlotNo;
+use ade_types::{CardanoEra, SlotNo};
 
 use crate::consensus::errors::VrfCertError;
 use crate::consensus::praos_state::Nonce;
@@ -180,6 +180,62 @@ pub fn praos_nonce_value(output: &VrfOutput) -> Nonce {
     pre[1..65].copy_from_slice(&output.0);
     let inner = blake2b_256(&pre).0;
     Nonce(blake2b_256(&inner))
+}
+
+// ---------------------------------------------------------------------------
+// Era-correct leader-eligibility VRF input authority (PHASE4-N-W).
+//
+// The leader-VRF construction differs by protocol family: Praos
+// (Babbage/Conway) takes a single proof over `praos_vrf_input`; TPraos
+// (Shelley..Alonzo) takes a role-tagged proof over `vrf_input(...,
+// LeaderEligibility)`. `leader_vrf_input` is the SINGLE authority that selects
+// the construction by era — both the producer leader-schedule (building the
+// answer) and the leader-check evaluator (verifying it) call it, so there is
+// no duplicated era dispatch (CN-FORGE-04 / N3).
+// ---------------------------------------------------------------------------
+
+/// The era-correct leader-eligibility VRF input. Era-discriminated so a Praos
+/// alpha and a TPraos alpha can never be confused: the variant IS the
+/// protocol-family tag (CN-FORGE-04 / N4). Built only via [`leader_vrf_input`].
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ExpectedVrfInput {
+    /// Praos (Babbage, Conway): `mkInputVRF` = `blake2b256(slot_be8 ‖ eta0_32)`.
+    Praos([u8; 32]),
+    /// TPraos (Shelley..Alonzo): role-tagged `slot_be8 ‖ eta0_32 ‖ 0x4C`.
+    Tpraos([u8; VRF_INPUT_LEN]),
+}
+
+impl ExpectedVrfInput {
+    /// The alpha bytes the VRF proof is taken / verified over.
+    pub fn alpha_bytes(&self) -> &[u8] {
+        match self {
+            ExpectedVrfInput::Praos(a) => a.as_slice(),
+            ExpectedVrfInput::Tpraos(a) => a.as_slice(),
+        }
+    }
+}
+
+/// The single era → leader-VRF-input authority. Praos eras take the single
+/// combined input; TPraos eras take the role-tagged input. No fallback accepts
+/// both for one era (CN-FORGE-04 / N1, N3).
+pub fn leader_vrf_input(era: CardanoEra, slot: SlotNo, epoch_nonce: &Nonce) -> ExpectedVrfInput {
+    if era.is_praos() {
+        ExpectedVrfInput::Praos(praos_vrf_input(slot, epoch_nonce))
+    } else {
+        ExpectedVrfInput::Tpraos(vrf_input(slot, epoch_nonce, VrfRole::LeaderEligibility))
+    }
+}
+
+/// Era-correct leader value for the threshold check. Praos range-extends the
+/// certified output (`vrfLeaderValue`, `"L"` tag); TPraos uses the raw
+/// role-tagged output. The era family is read from the `ExpectedVrfInput`
+/// variant, so the threshold can never use the wrong derivation (CN-FORGE-04 /
+/// I2).
+pub fn leader_value_for(input: &ExpectedVrfInput, output: &VrfOutput) -> VrfOutput {
+    match input {
+        ExpectedVrfInput::Praos(_) => praos_leader_value(output),
+        ExpectedVrfInput::Tpraos(_) => output.clone(),
+    }
 }
 
 /// Pool stake fraction `(active_stake_for_pool, total_active_stake)`,

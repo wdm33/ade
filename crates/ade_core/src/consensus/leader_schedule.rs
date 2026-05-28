@@ -23,7 +23,7 @@ use crate::consensus::era_schedule::EraSchedule;
 use crate::consensus::errors::LeaderScheduleError;
 use crate::consensus::ledger_view::LedgerView;
 use crate::consensus::praos_state::PraosChainDepState;
-use crate::consensus::vrf_cert::{vrf_input, ActiveSlotsCoeff, VrfRole, VRF_INPUT_LEN};
+use crate::consensus::vrf_cert::{leader_vrf_input, ActiveSlotsCoeff, ExpectedVrfInput};
 
 /// Query: "for this `slot`, can `pool` lead?"
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -43,9 +43,12 @@ pub struct LeaderScheduleAnswer {
     pub slot: SlotNo,
     pub pool: Hash28,
     pub epoch: EpochNo,
-    /// The 41-byte VRF input `[slot_be (8) ‖ epoch_nonce (32) ‖ tag=LEADER (1)]`
-    /// the pool's VRF key must produce a proof over to be valid.
-    pub expected_vrf_input: [u8; VRF_INPUT_LEN],
+    /// The era-correct leader-eligibility VRF input the pool's VRF key must
+    /// produce a proof over to be valid. Era-discriminated (`ExpectedVrfInput`):
+    /// Praos eras carry the 32-byte `praos_vrf_input`; TPraos eras carry the
+    /// role-tagged 41-byte input. Built via the single `leader_vrf_input`
+    /// authority — a TPraos alpha can never appear in a Praos answer.
+    pub expected_vrf_input: ExpectedVrfInput,
     /// Pool active stake / total active stake, as canonical lovelace
     /// numerator and denominator. Caller guarantees denom > 0.
     pub stake_fraction: (u64, u64),
@@ -65,8 +68,10 @@ pub struct LeaderScheduleAnswer {
 /// 3. The ledger view is consulted for `(pool_vrf_keyhash, pool_active_stake,
 ///    total_active_stake, active_slots_coeff)`. Any missing piece is a
 ///    typed `UnknownPool` failure — N-B never guesses.
-/// 4. The canonical 41-byte VRF input is built via
-///    `vrf_cert::vrf_input(slot, epoch_nonce, LeaderEligibility)`.
+/// 4. The era-correct leader VRF input is built via the single
+///    `vrf_cert::leader_vrf_input(era, slot, epoch_nonce)` authority
+///    (Praos eras: the 32-byte `praos_vrf_input`; TPraos: the role-tagged
+///    41-byte input).
 ///
 /// No mutation: `state` is borrowed immutably and the function returns
 /// a fresh `LeaderScheduleAnswer`. Replay equivalence is guaranteed by
@@ -105,7 +110,9 @@ pub fn query_leader_schedule(
         .active_slots_coeff(epoch)
         .ok_or(LeaderScheduleError::UnknownPool)?;
 
-    let alpha = vrf_input(query.slot, &state.epoch_nonce, VrfRole::LeaderEligibility);
+    // Single era→construction authority: the located era selects Praos vs
+    // TPraos, so the answer's alpha is always era-correct (CN-FORGE-04 / N3).
+    let alpha = leader_vrf_input(location.era, query.slot, &state.epoch_nonce);
 
     Ok(LeaderScheduleAnswer {
         slot: query.slot,
@@ -216,14 +223,16 @@ mod tests {
             &state,
         )
         .unwrap();
+        // Shelley is TPraos, so the answer carries the role-tagged input.
         // Bytes 8..40 must mirror the epoch_nonce that lives in `state`;
         // anything else would mean we re-derived the nonce from another
         // source (forbidden by DC-CONS-04 / DC-CONSENSUS-02).
-        assert_eq!(&answer.expected_vrf_input[8..40], &[0xCD; 32]);
+        let alpha = answer.expected_vrf_input.alpha_bytes();
+        assert_eq!(&alpha[8..40], &[0xCD; 32]);
         // Slot prefix is big-endian.
-        assert_eq!(&answer.expected_vrf_input[0..8], &42u64.to_be_bytes());
+        assert_eq!(&alpha[0..8], &42u64.to_be_bytes());
         // LEADER tag.
-        assert_eq!(answer.expected_vrf_input[40], 0x4C);
+        assert_eq!(alpha[40], 0x4C);
     }
 
     #[test]

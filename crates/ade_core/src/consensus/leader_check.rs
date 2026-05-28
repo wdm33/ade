@@ -36,11 +36,11 @@
 //! a non-forge-capable fingerprint.
 
 use ade_crypto::vrf::{verify_vrf, VrfOutput, VrfProof, VrfVerificationKey};
-use ade_types::SlotNo;
+use ade_types::{CardanoEra, SlotNo};
 
 use crate::consensus::leader_schedule::LeaderScheduleAnswer;
 use crate::consensus::praos_state::Nonce;
-use crate::consensus::vrf_cert::{is_leader, vrf_input, StakeFraction, VrfRole, VRF_INPUT_LEN};
+use crate::consensus::vrf_cert::{is_leader, leader_value_for, leader_vrf_input, StakeFraction};
 
 /// Compose the final per-VRF-output leadership decision from a
 /// `LeaderScheduleAnswer`'s threshold context.
@@ -63,7 +63,12 @@ pub fn is_leader_for_vrf_output(answer: &LeaderScheduleAnswer, output: &VrfOutpu
         numer: answer.stake_fraction.0,
         denom: answer.stake_fraction.1,
     };
-    is_leader(output, sigma, answer.asc)
+    // Era-correct leader value: Praos range-extends the certified output
+    // (`vrfLeaderValue`, "L" tag); TPraos uses the raw role-tagged output. The
+    // era family is read from the answer's `ExpectedVrfInput` variant
+    // (CN-FORGE-04 / I2) — the threshold can never use the wrong derivation.
+    let leader_value = leader_value_for(&answer.expected_vrf_input, output);
+    is_leader(&leader_value, sigma, answer.asc)
 }
 
 /// First-8-bytes fingerprint of a VRF output. Non-forge-capable:
@@ -159,19 +164,22 @@ pub enum LeaderCheckError {
 /// Pipeline (every step total and deterministic):
 ///
 /// 1. **Coherence check.** `answer.slot == slot` and
-///    `answer.expected_vrf_input == vrf_input(slot, eta0, LeaderEligibility)`.
-///    Fail-closed with structured errors on mismatch.
+///    `answer.expected_vrf_input == leader_vrf_input(era, slot, eta0)` (the
+///    single era→construction authority). Full-enum equality catches both a
+///    wrong-era answer and wrong alpha bytes. Fail-closed with structured
+///    errors on mismatch.
 /// 2. **Zero-denominator guard.** `answer.stake_fraction.1 > 0`.
 /// 3. **VRF proof verification.** `verify_vrf(vrf_vk, vrf_proof,
-///    answer.expected_vrf_input)` returns the verified
-///    `VrfOutput` or `VrfVerificationFailed`.
-/// 4. **Threshold evaluation.**
-///    `is_leader_for_vrf_output(answer, &vrf_output)` returns
-///    the boolean.
+///    expected.alpha_bytes())` returns the verified `VrfOutput` or
+///    `VrfVerificationFailed`.
+/// 4. **Threshold evaluation.** `is_leader_for_vrf_output(answer,
+///    &vrf_output)` applies the era-correct leader value (`praos_leader_value`
+///    for Praos) and returns the boolean.
 /// 5. **Verdict construction.** `Eligible { vrf_output,
 ///    leader_proof }` on true; `NotEligible {
 ///    vrf_output_fingerprint }` on false.
 pub fn verify_and_evaluate_leader(
+    era: CardanoEra,
     slot: SlotNo,
     eta0: &Nonce,
     vrf_vk: &VrfVerificationKey,
@@ -185,12 +193,15 @@ pub fn verify_and_evaluate_leader(
         });
     }
 
-    let expected: [u8; VRF_INPUT_LEN] = vrf_input(slot, eta0, VrfRole::LeaderEligibility);
+    // Single era→construction authority. Full-enum equality catches both a
+    // wrong-era answer (Praos variant vs TPraos variant) and wrong alpha bytes
+    // — a TPraos alpha can never satisfy a Praos call (CN-FORGE-04 / N3, N4).
+    let expected = leader_vrf_input(era, slot, eta0);
     if expected != answer.expected_vrf_input {
         let mut expected_first_8 = [0u8; 8];
-        expected_first_8.copy_from_slice(&expected[..8]);
+        expected_first_8.copy_from_slice(&expected.alpha_bytes()[..8]);
         let mut answer_first_8 = [0u8; 8];
-        answer_first_8.copy_from_slice(&answer.expected_vrf_input[..8]);
+        answer_first_8.copy_from_slice(&answer.expected_vrf_input.alpha_bytes()[..8]);
         return Err(LeaderCheckError::VrfInputMismatch {
             expected_first_8,
             answer_first_8,
@@ -201,7 +212,7 @@ pub fn verify_and_evaluate_leader(
         return Err(LeaderCheckError::ZeroStakeDenominator);
     }
 
-    let vrf_output = verify_vrf(vrf_vk, vrf_proof, &expected)
+    let vrf_output = verify_vrf(vrf_vk, vrf_proof, expected.alpha_bytes())
         .map_err(|_| LeaderCheckError::VrfVerificationFailed)?;
 
     let fingerprint = VrfOutputFingerprint::of(&vrf_output);
@@ -231,7 +242,7 @@ mod tests {
     use ade_types::{EpochNo, Hash28, Hash32};
     use cardano_crypto::vrf::VrfDraft03;
 
-    use crate::consensus::vrf_cert::ActiveSlotsCoeff;
+    use crate::consensus::vrf_cert::{ActiveSlotsCoeff, ExpectedVrfInput, VRF_INPUT_LEN};
 
     fn build_answer(
         slot: SlotNo,
@@ -245,7 +256,7 @@ mod tests {
             slot,
             pool: Hash28([0xAA; 28]),
             epoch: EpochNo(0),
-            expected_vrf_input: vrf_input(slot, eta0, VrfRole::LeaderEligibility),
+            expected_vrf_input: leader_vrf_input(CardanoEra::Conway, slot, eta0),
             stake_fraction: (stake_numer, stake_denom),
             asc: ActiveSlotsCoeff {
                 numer: asc_numer,
@@ -254,23 +265,25 @@ mod tests {
         }
     }
 
-    fn make_keypair(seed_byte: u8) -> (VrfProof, VrfVerificationKey, [u8; VRF_INPUT_LEN]) {
+    fn make_keypair(seed_byte: u8) -> (VrfProof, VrfVerificationKey) {
         let seed = [seed_byte; 32];
         let (sk, vk_bytes) = VrfDraft03::keypair_from_seed(&seed);
         let eta0 = Nonce(Hash32([0xCD; 32]));
-        let alpha = vrf_input(SlotNo(42), &eta0, VrfRole::LeaderEligibility);
-        let proof_bytes = VrfDraft03::prove(&sk, &alpha).unwrap();
-        (VrfProof(proof_bytes), VrfVerificationKey(vk_bytes), alpha)
+        // Prove over the Praos (Conway) alpha — the same construction the
+        // answer carries and the evaluator verifies.
+        let alpha = leader_vrf_input(CardanoEra::Conway, SlotNo(42), &eta0);
+        let proof_bytes = VrfDraft03::prove(&sk, alpha.alpha_bytes()).unwrap();
+        (VrfProof(proof_bytes), VrfVerificationKey(vk_bytes))
     }
 
     #[test]
     fn eligible_on_threshold_with_high_stake_emits_eligible_verdict() {
         let eta0 = Nonce(Hash32([0xCD; 32]));
-        let (proof, vk, _alpha) = make_keypair(0x11);
+        let (proof, vk) = make_keypair(0x11);
         // 100% stake, ASC = 100% → every slot is a leader slot.
         let answer = build_answer(SlotNo(42), &eta0, 1, 1, 1, 1);
         let verdict =
-            verify_and_evaluate_leader(SlotNo(42), &eta0, &vk, &proof, &answer).unwrap();
+            verify_and_evaluate_leader(CardanoEra::Conway, SlotNo(42), &eta0, &vk, &proof, &answer).unwrap();
         match verdict {
             LeaderCheckVerdict::Eligible {
                 slot,
@@ -286,11 +299,11 @@ mod tests {
     #[test]
     fn not_eligible_with_zero_stake_emits_not_eligible_verdict() {
         let eta0 = Nonce(Hash32([0xCD; 32]));
-        let (proof, vk, _alpha) = make_keypair(0x22);
+        let (proof, vk) = make_keypair(0x22);
         // 0% stake → impossible to be a leader.
         let answer = build_answer(SlotNo(42), &eta0, 0, 1, 1, 1);
         let verdict =
-            verify_and_evaluate_leader(SlotNo(42), &eta0, &vk, &proof, &answer).unwrap();
+            verify_and_evaluate_leader(CardanoEra::Conway, SlotNo(42), &eta0, &vk, &proof, &answer).unwrap();
         match verdict {
             LeaderCheckVerdict::NotEligible {
                 slot,
@@ -305,11 +318,11 @@ mod tests {
     #[test]
     fn malformed_proof_emits_verification_failed() {
         let eta0 = Nonce(Hash32([0xCD; 32]));
-        let (_real_proof, vk, _alpha) = make_keypair(0x33);
+        let (_real_proof, vk) = make_keypair(0x33);
         // Replace the proof with all-zero bytes — verification must fail.
         let bad_proof = VrfProof([0u8; 80]);
         let answer = build_answer(SlotNo(42), &eta0, 1, 1, 1, 1);
-        let err = verify_and_evaluate_leader(SlotNo(42), &eta0, &vk, &bad_proof, &answer)
+        let err = verify_and_evaluate_leader(CardanoEra::Conway, SlotNo(42), &eta0, &vk, &bad_proof, &answer)
             .unwrap_err();
         assert_eq!(err, LeaderCheckError::VrfVerificationFailed);
     }
@@ -317,11 +330,11 @@ mod tests {
     #[test]
     fn wrong_vk_emits_verification_failed() {
         let eta0 = Nonce(Hash32([0xCD; 32]));
-        let (proof, _vk, _alpha) = make_keypair(0x44);
+        let (proof, _vk) = make_keypair(0x44);
         // Use a different VK — verification must fail.
         let wrong_vk = VrfVerificationKey([0xEE; 32]);
         let answer = build_answer(SlotNo(42), &eta0, 1, 1, 1, 1);
-        let err = verify_and_evaluate_leader(SlotNo(42), &eta0, &wrong_vk, &proof, &answer)
+        let err = verify_and_evaluate_leader(CardanoEra::Conway, SlotNo(42), &eta0, &wrong_vk, &proof, &answer)
             .unwrap_err();
         assert_eq!(err, LeaderCheckError::VrfVerificationFailed);
     }
@@ -329,9 +342,9 @@ mod tests {
     #[test]
     fn answer_slot_mismatch_emits_structured_error() {
         let eta0 = Nonce(Hash32([0xCD; 32]));
-        let (proof, vk, _alpha) = make_keypair(0x55);
+        let (proof, vk) = make_keypair(0x55);
         let answer = build_answer(SlotNo(99), &eta0, 1, 1, 1, 1); // wrong slot in answer
-        let err = verify_and_evaluate_leader(SlotNo(42), &eta0, &vk, &proof, &answer)
+        let err = verify_and_evaluate_leader(CardanoEra::Conway, SlotNo(42), &eta0, &vk, &proof, &answer)
             .unwrap_err();
         assert_eq!(
             err,
@@ -346,10 +359,10 @@ mod tests {
     fn vrf_input_mismatch_emits_structured_error() {
         let eta0 = Nonce(Hash32([0xCD; 32]));
         let other_eta0 = Nonce(Hash32([0xAB; 32]));
-        let (proof, vk, _alpha) = make_keypair(0x66);
+        let (proof, vk) = make_keypair(0x66);
         // answer derived for other_eta0; call argument is eta0.
         let answer = build_answer(SlotNo(42), &other_eta0, 1, 1, 1, 1);
-        let err = verify_and_evaluate_leader(SlotNo(42), &eta0, &vk, &proof, &answer)
+        let err = verify_and_evaluate_leader(CardanoEra::Conway, SlotNo(42), &eta0, &vk, &proof, &answer)
             .unwrap_err();
         // The first 8 bytes of expected_vrf_input encode the slot, so
         // they're equal in this fixture (same slot, different eta0).
@@ -360,11 +373,27 @@ mod tests {
     }
 
     #[test]
+    fn praos_call_with_tpraos_answer_emits_vrf_input_mismatch() {
+        // CN-FORGE-04 / N4: a TPraos-variant answer can never satisfy a Praos
+        // (Conway) call — the era discriminant catches it as VrfInputMismatch,
+        // so `expected_vrf_input` has no silent dual meaning across eras.
+        let eta0 = Nonce(Hash32([0xCD; 32]));
+        let (proof, vk) = make_keypair(0x99);
+        let mut answer = build_answer(SlotNo(42), &eta0, 1, 1, 1, 1);
+        // Substitute a TPraos-shaped alpha into an otherwise-Conway call.
+        answer.expected_vrf_input = ExpectedVrfInput::Tpraos([0u8; VRF_INPUT_LEN]);
+        let err =
+            verify_and_evaluate_leader(CardanoEra::Conway, SlotNo(42), &eta0, &vk, &proof, &answer)
+                .unwrap_err();
+        assert!(matches!(err, LeaderCheckError::VrfInputMismatch { .. }));
+    }
+
+    #[test]
     fn zero_stake_denominator_emits_structured_error() {
         let eta0 = Nonce(Hash32([0xCD; 32]));
-        let (proof, vk, _alpha) = make_keypair(0x77);
+        let (proof, vk) = make_keypair(0x77);
         let answer = build_answer(SlotNo(42), &eta0, 1, 0, 1, 1); // denom = 0
-        let err = verify_and_evaluate_leader(SlotNo(42), &eta0, &vk, &proof, &answer)
+        let err = verify_and_evaluate_leader(CardanoEra::Conway, SlotNo(42), &eta0, &vk, &proof, &answer)
             .unwrap_err();
         assert_eq!(err, LeaderCheckError::ZeroStakeDenominator);
     }
@@ -372,10 +401,10 @@ mod tests {
     #[test]
     fn verdict_is_byte_identical_across_two_runs() {
         let eta0 = Nonce(Hash32([0xCD; 32]));
-        let (proof, vk, _alpha) = make_keypair(0x88);
+        let (proof, vk) = make_keypair(0x88);
         let answer = build_answer(SlotNo(42), &eta0, 1, 1, 1, 1);
-        let v1 = verify_and_evaluate_leader(SlotNo(42), &eta0, &vk, &proof, &answer).unwrap();
-        let v2 = verify_and_evaluate_leader(SlotNo(42), &eta0, &vk, &proof, &answer).unwrap();
+        let v1 = verify_and_evaluate_leader(CardanoEra::Conway, SlotNo(42), &eta0, &vk, &proof, &answer).unwrap();
+        let v2 = verify_and_evaluate_leader(CardanoEra::Conway, SlotNo(42), &eta0, &vk, &proof, &answer).unwrap();
         assert_eq!(v1, v2);
     }
 

@@ -42,7 +42,6 @@ use ade_core::consensus::leader_schedule::{
     query_leader_schedule, LeaderScheduleAnswer, LeaderScheduleQuery,
 };
 use ade_core::consensus::praos_state::{Nonce, PraosChainDepState};
-use ade_core::consensus::vrf_cert::{vrf_input, VrfRole};
 use ade_core::consensus::era_schedule::EraSchedule;
 use ade_crypto::kes::KesPeriod;
 use ade_crypto::vrf::VrfVerificationKey;
@@ -648,13 +647,12 @@ pub fn run_real_forge(
         };
     }
 
-    // RED step 1 — VRF prove over the canonical leader input.
-    let expected = vrf_input(
-        ade_types::SlotNo(slot),
-        ctx.eta0,
-        VrfRole::LeaderEligibility,
-    );
-    let (vrf_proof, _vrf_output_red) = match shell.vrf_prove(&expected) {
+    // RED step 1 — VRF prove over the era-correct leader input. The single
+    // authority (query_leader_schedule via leader_vrf_input) already built it
+    // into the answer; we prove over exactly those bytes — no independent
+    // re-derivation in the RED shell (CN-FORGE-04 / N3).
+    let alpha = ctx.leader_schedule_answer.expected_vrf_input.alpha_bytes();
+    let (vrf_proof, _vrf_output_red) = match shell.vrf_prove(alpha) {
         Ok(v) => v,
         Err(_) => {
             return CoordinatorEvent::ForgeFailed {
@@ -664,8 +662,11 @@ pub fn run_real_forge(
         }
     };
 
-    // BLUE step 2 — leader-check evaluator (verify proof + threshold).
+    // BLUE step 2 — leader-check evaluator (verify proof + threshold). The
+    // era (located above) selects the Praos construction; the evaluator
+    // cross-checks the answer's alpha against the single authority.
     let verdict = match verify_and_evaluate_leader(
+        era,
         ade_types::SlotNo(slot),
         ctx.eta0,
         ctx.vrf_vk,

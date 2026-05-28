@@ -57,7 +57,7 @@ pub use opcert_validate::{opcert_validate, OpCertError};
 pub use praos_state::{Nonce, OpCertCounterMap, PraosChainDepState};
 pub use rollback::{apply_rollback, RollBackApplied, RollBackRequest};
 pub use vrf_cert::{
-    check_leader_claim, is_leader, leader_value_bytes, praos_leader_value, praos_nonce_value,
-    praos_vrf_input, verify_praos_vrf, verify_vrf_cert, ActiveSlotsCoeff, StakeFraction,
-    VerifiedVrf, VrfRole, VRF_INPUT_LEN,
+    check_leader_claim, is_leader, leader_value_bytes, leader_value_for, leader_vrf_input,
+    praos_leader_value, praos_nonce_value, praos_vrf_input, verify_praos_vrf, verify_vrf_cert,
+    ActiveSlotsCoeff, ExpectedVrfInput, StakeFraction, VerifiedVrf, VrfRole, VRF_INPUT_LEN,
 };

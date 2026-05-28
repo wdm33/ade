@@ -29,7 +29,7 @@
 //!   trivially-valid Conway txs (S4 / S7 fixture-set expansion).
 
 use ade_core::consensus::leader_schedule::LeaderScheduleAnswer;
-use ade_core::consensus::vrf_cert::{ActiveSlotsCoeff, VRF_INPUT_LEN};
+use ade_core::consensus::vrf_cert::{ActiveSlotsCoeff, ExpectedVrfInput};
 use ade_crypto::ed25519::Ed25519VerificationKey;
 use ade_crypto::kes::{KesPeriod, KesSignature};
 use ade_crypto::vrf::{VrfOutput, VrfProof};
@@ -189,7 +189,7 @@ fn leader_always() -> LeaderScheduleAnswer {
         slot: SlotNo(100),
         pool: Hash28([0xAA; 28]),
         epoch: EpochNo(0),
-        expected_vrf_input: [0u8; VRF_INPUT_LEN],
+        expected_vrf_input: ExpectedVrfInput::Praos([0u8; 32]),
         stake_fraction: (1, 2),
         asc: ActiveSlotsCoeff { numer: 1, denom: 1 },
     }
@@ -200,7 +200,7 @@ fn leader_never() -> LeaderScheduleAnswer {
         slot: SlotNo(100),
         pool: Hash28([0xAA; 28]),
         epoch: EpochNo(0),
-        expected_vrf_input: [0u8; VRF_INPUT_LEN],
+        expected_vrf_input: ExpectedVrfInput::Praos([0u8; 32]),
         stake_fraction: (0, 1),
         asc: ActiveSlotsCoeff { numer: 1, denom: 2 },
     }
