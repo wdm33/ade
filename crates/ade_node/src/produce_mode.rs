@@ -38,7 +38,9 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use ade_core::consensus::leader_check::{verify_and_evaluate_leader, LeaderCheckVerdict};
-use ade_core::consensus::leader_schedule::LeaderScheduleAnswer;
+use ade_core::consensus::leader_schedule::{
+    query_leader_schedule, LeaderScheduleAnswer, LeaderScheduleQuery,
+};
 use ade_core::consensus::praos_state::{Nonce, PraosChainDepState};
 use ade_core::consensus::vrf_cert::{vrf_input, VrfRole};
 use ade_core::consensus::era_schedule::EraSchedule;
@@ -58,6 +60,7 @@ use ade_types::shelley::block::ProtocolVersion;
 use ade_types::{BlockNo, EpochNo, Hash28, Hash32, SlotNo};
 use ade_runtime::orchestrator::event::{OrchestratorEvent, PeerRole};
 use ade_runtime::orchestrator::n2n_server_pump::PeerIdGenerator;
+use ade_runtime::producer::chain_evolution::ChainEvolution;
 use ade_runtime::producer::coordinator::{
     coordinator_init, coordinator_step, ChainTip, CoordinatorConfig, CoordinatorEffect,
     CoordinatorError, CoordinatorEvent, GenesisAnchor, LedgerSnapshotRef,
@@ -206,13 +209,35 @@ pub async fn run_produce_mode(cli: ProduceCli, shutdown_rx: watch::Receiver<bool
             Err(e) => return startup_fail_detail("bootstrap", &format!("{e:?}")),
         };
 
-    let synthetic_forge = build_synthetic_forge_context(
+    // PHASE4-N-T S3: seed the linear `ChainEvolution` typestate from the
+    // real cold-start bootstrap triple. `eta0` is the consensus-inputs
+    // epoch nonce — the SAME nonce `boot_chain_dep` carries (S1 built
+    // `boot_chain_dep` from `PraosChainDepState::genesis(epoch_nonce)`),
+    // so the per-slot `query_leader_schedule` (which reads
+    // `state.epoch_nonce`) and `run_real_forge` (which reads `ctx.eta0`)
+    // share one nonce — required for the leader-check vrf-input
+    // cross-check. The coordinator `ChainTip` carries `block_number`,
+    // which the chaindb tip does not; cold-start has no tip, so the map
+    // resolves to `None` (warm-start is test-only until N-U).
+    let coord_boot_tip: Option<ChainTip> = boot_tip.as_ref().map(|t| ChainTip {
+        slot: t.slot.0,
+        block_hash: t.hash.0,
+        block_number: 0,
+    });
+    let mut chain_evo: Option<ChainEvolution> = Some(ChainEvolution::seed(
         boot_ledger,
         boot_chain_dep,
+        coord_boot_tip,
         real_era_schedule,
         real_pool_distr,
-        boot_tip,
-    );
+        consensus.epoch_nonce.clone(),
+    ));
+
+    // Operator pool id (mirrors producer_shell.rs:174). Real pparams
+    // fidelity is out of N-T scope — keep default, as the synthetic path
+    // did.
+    let pool_id = ade_types::Hash28(ade_crypto::blake2b_224(&shell.cold_vk().0).0);
+    let pparams = ProtocolParameters::default();
 
     // 6. Spawn listener.
     let (events_tx, mut events_rx) = mpsc::channel::<OrchestratorEvent>(64);
@@ -236,7 +261,19 @@ pub async fn run_produce_mode(cli: ProduceCli, shutdown_rx: watch::Receiver<bool
     // on SIGINT.
     let slot_interval = Duration::from_millis(genesis.slot_length_ms.max(1));
     let mut ticker = interval(slot_interval);
-    let mut current_slot: u64 = 0;
+    // PHASE4-N-T S3 (CE-T-9): absolute start slot from the bootstrap tip,
+    // not 0. Cold-start has no tip ⇒ the first slot of the imported
+    // window (`consensus.epoch_start_slot`). Per-tick `+= 1` increment +
+    // `--max-slots` cap semantics are unchanged.
+    let mut current_slot: u64 = boot_tip
+        .as_ref()
+        .map(|t| t.slot.0 + 1)
+        .unwrap_or(consensus.epoch_start_slot.0);
+    // `--max-slots` caps the number of ticks the loop processes, not the
+    // absolute slot value (which now starts from the bootstrap tip, not
+    // 0). Track the tick count separately so the cap keeps its
+    // count-of-slots semantics.
+    let mut ticks_elapsed: u64 = 0;
     let mut shutdown_rx_mut = shutdown_rx.clone();
     let mut connected_peers: BTreeMap<PeerId, ()> = BTreeMap::new();
     // PHASE4-N-R-B B2/B3: per-peer n2n_server state map + served-chain
@@ -270,7 +307,7 @@ pub async fn run_produce_mode(cli: ProduceCli, shutdown_rx: watch::Receiver<bool
             }
             _ = ticker.tick() => {
                 if let Some(max) = cli.max_slots {
-                    if current_slot >= max {
+                    if ticks_elapsed >= max {
                         let (_new_state, effects) = coordinator_step(
                             coord_state.clone(),
                             CoordinatorEvent::Shutdown {
@@ -290,6 +327,7 @@ pub async fn run_produce_mode(cli: ProduceCli, shutdown_rx: watch::Receiver<bool
                     Ok(p) => p,
                     Err(CoordinatorError::SlotDrift { .. }) => {
                         current_slot += 1;
+                        ticks_elapsed += 1;
                         continue;
                     }
                     Err(e) => {
@@ -303,12 +341,15 @@ pub async fn run_produce_mode(cli: ProduceCli, shutdown_rx: watch::Receiver<bool
                     &mut evidence_writer,
                     &mut coord_state,
                     &mut shell,
-                    &synthetic_forge,
+                    &mut chain_evo,
+                    &pool_id,
+                    &pparams,
                 ) {
                     eprintln!("ade_node produce: slot effects: {}", detail);
                     return ExitCode::from(EXIT_PRODUCE_FAILURE as u8);
                 }
                 current_slot += 1;
+                ticks_elapsed += 1;
             }
             evt = events_rx.recv() => {
                 let evt = match evt {
@@ -880,133 +921,36 @@ fn artifact_from_accepted(
     ForgedBlockArtifact { slot, hash, bytes }
 }
 
-/// Build the forge-request context used by the main loop from the
-/// **real** bootstrap state.
+/// Apply effects with the real forge handler.
 ///
-/// **PHASE4-N-T S1 (behavior-preserving):** the forge *base* —
-/// `base_state`, `chain_dep_state`, `era_schedule`, `pool_distr_view`,
-/// `block_number`, `prev_hash` — is the cold-start
-/// `bootstrap_initial_state` result threaded from the operator seed.
-/// The `leader_schedule_answer` is **deliberately retained** as a
-/// zero-stake answer (`stake_fraction = (0, 1)`) so the real forge
-/// composition always reaches step 2 and returns `NotLeader`: the
-/// node stays a never-leader, preserving the smoke test's 3
-/// `LeaderCheckOutcome` events. S3 swaps this for a real
-/// `query_leader_schedule` answer and introduces `ChainEvolution`,
-/// deleting this scaffolding.
-fn build_synthetic_forge_context(
-    base_state: LedgerState,
-    chain_dep_state: PraosChainDepState,
-    era_schedule: EraSchedule,
-    pool_distr_view: PoolDistrView,
-    boot_tip: Option<ade_runtime::chaindb::ChainTip>,
-) -> SyntheticForgeInputs {
-    use ade_core::consensus::vrf_cert::ActiveSlotsCoeff;
-    use ade_types::{EpochNo, Hash28};
-
-    let eta0 = Nonce(Hash32([0u8; 32]));
-    let leader_answer = LeaderScheduleAnswer {
-        slot: ade_types::SlotNo(0),
-        pool: Hash28([0u8; 28]),
-        epoch: EpochNo(0),
-        expected_vrf_input: [0u8; ade_core::consensus::vrf_cert::VRF_INPUT_LEN],
-        stake_fraction: (0, 1),
-        asc: ActiveSlotsCoeff { numer: 1, denom: 20 },
-    };
-    let pparams = ProtocolParameters::default();
-    // Cold-start has no prior block: tip is None ⇒ block 1, zero
-    // prev-hash. When a tip is present its hash is the prev-hash.
-    let prev_hash = boot_tip
-        .as_ref()
-        .map(|t| t.hash.clone())
-        .unwrap_or(Hash32([0u8; 32]));
-
-    SyntheticForgeInputs {
-        eta0,
-        leader_schedule_answer: leader_answer,
-        pparams,
-        base_state,
-        chain_dep_state,
-        era_schedule,
-        pool_distr_view,
-        block_number: BlockNo(1),
-        prev_hash,
-        protocol_version: ProtocolVersion { major: 9, minor: 0 },
-        prev_opcert_counter: None,
-    }
-}
-
-struct SyntheticForgeInputs {
-    eta0: Nonce,
-    leader_schedule_answer: LeaderScheduleAnswer,
-    pparams: ProtocolParameters,
-    base_state: LedgerState,
-    chain_dep_state: PraosChainDepState,
-    era_schedule: EraSchedule,
-    pool_distr_view: PoolDistrView,
-    block_number: BlockNo,
-    prev_hash: Hash32,
-    protocol_version: ProtocolVersion,
-    prev_opcert_counter: Option<u64>,
-}
-
-impl SyntheticForgeInputs {
-    /// Build a per-slot `LeaderScheduleAnswer` whose
-    /// `expected_vrf_input` matches `vrf_input(slot, eta0, LEADER)` —
-    /// so `verify_and_evaluate_leader` passes the coherence check and
-    /// reaches the threshold step (where zero stake yields
-    /// `NotEligible`).
-    fn leader_schedule_answer_for_slot(&self, slot: u64) -> LeaderScheduleAnswer {
-        LeaderScheduleAnswer {
-            slot: ade_types::SlotNo(slot),
-            pool: self.leader_schedule_answer.pool.clone(),
-            epoch: self.leader_schedule_answer.epoch,
-            expected_vrf_input: vrf_input(
-                ade_types::SlotNo(slot),
-                &self.eta0,
-                VrfRole::LeaderEligibility,
-            ),
-            stake_fraction: self.leader_schedule_answer.stake_fraction,
-            asc: self.leader_schedule_answer.asc,
-        }
-    }
-
-    fn as_context_with_answer_and_vk<'a>(
-        &'a self,
-        answer: &'a LeaderScheduleAnswer,
-        vrf_vk: &'a VrfVerificationKey,
-    ) -> ForgeRequestContext<'a> {
-        ForgeRequestContext {
-            eta0: &self.eta0,
-            vrf_vk,
-            leader_schedule_answer: answer,
-            pparams: &self.pparams,
-            base_state: &self.base_state,
-            chain_dep_state: &self.chain_dep_state,
-            era_schedule: &self.era_schedule,
-            pool_distr_view: &self.pool_distr_view,
-            block_number: self.block_number,
-            prev_hash: self.prev_hash.clone(),
-            protocol_version: self.protocol_version,
-            prev_opcert_counter: self.prev_opcert_counter,
-        }
-    }
-}
-
-/// Apply effects with the real forge handler (A3): replaces the S5
-/// `ForgeNotLeader`-only stub with the full BLUE-then-RED-then-BLUE
-/// composition via [`run_real_forge`]. The synthetic context built by
-/// [`build_synthetic_forge_context`] carries zero stake, so the
-/// composition always returns `NotLeader` at step 2 for the current
-/// smoke-test inputs. A4 integration tests exercise the full path
-/// with realer fixtures; N-R-B/C promote the main-loop inputs to
-/// real ledger state.
+/// **PHASE4-N-T S3:** the forge inputs are derived from the linear
+/// `ChainEvolution` typestate seeded from the real cold-start bootstrap
+/// state — no synthetic scaffolding. Each `RequestForge`:
+///
+/// 1. Queries the real `LeaderScheduleAnswer` for the operator's pool
+///    via BLUE `query_leader_schedule` against the chain's current
+///    base state. `UnknownPool` / outside-horizon ⇒ we are not a
+///    leader this slot (`ForgeNotLeader`).
+/// 2. Builds the `ForgeRequestContext` from the chain's evolving base —
+///    `eta0` is `chain_evo.base_chain_dep().epoch_nonce`, the SAME
+///    nonce `query_leader_schedule` used for the VRF input.
+/// 3. Runs the BLUE-then-RED-then-BLUE forge via [`run_real_forge`].
+/// 4. On `ForgeSucceeded`, advances the chain via the sole
+///    `ChainEvolution::advance` path (the `AcceptedBlock` token is
+///    dropped in S3; S4 routes it to `push_atomic`). An advance
+///    rejection fails closed: the chain does not advance and the slot
+///    is recorded as a forge failure.
+///
+/// `BroadcastBlock` stays a no-op until S4.
+#[allow(clippy::too_many_arguments)]
 fn apply_effects_with_forge_handler(
     effects: &[CoordinatorEffect],
     evidence_writer: &mut std::fs::File,
     coord_state: &mut ade_runtime::producer::coordinator::CoordinatorState,
     shell: &mut ProducerShell,
-    synthetic: &SyntheticForgeInputs,
+    chain_evo: &mut Option<ChainEvolution>,
+    pool_id: &Hash28,
+    pparams: &ProtocolParameters,
 ) -> Result<(), &'static str> {
     for e in effects {
         match e {
@@ -1019,18 +963,74 @@ fn apply_effects_with_forge_handler(
                 ledger_snapshot_ref: _,
                 chain_tip: _,
             } => {
-                // Build per-slot LeaderScheduleAnswer so its
-                // expected_vrf_input matches the canonical input
-                // verify_and_evaluate_leader computes from (slot,
-                // eta0). The synthetic context provides the stake +
-                // ASC + pool ID; the per-slot wrapper computes the
-                // VRF input recipe.
-                let answer = synthetic.leader_schedule_answer_for_slot(*slot);
-                // Use the shell's real VRF VK so verify_vrf accepts the
-                // proof shell.vrf_prove produces.
-                let real_vrf_vk = shell.vrf_verification_key();
-                let ctx = synthetic.as_context_with_answer_and_vk(&answer, &real_vrf_vk);
-                let event = run_real_forge(*slot, *kes_period, &ctx, shell);
+                let evo = chain_evo.as_ref().ok_or("chain_evo consumed")?;
+                let answer = match query_leader_schedule(
+                    &LeaderScheduleQuery {
+                        slot: ade_types::SlotNo(*slot),
+                        pool: pool_id.clone(),
+                    },
+                    evo.pool_distr_view(),
+                    evo.era_schedule(),
+                    evo.base_chain_dep(),
+                ) {
+                    Ok(a) => Some(a),
+                    // Unknown pool / outside horizon ⇒ not a leader.
+                    Err(_) => None,
+                };
+
+                let event = match answer {
+                    None => CoordinatorEvent::ForgeNotLeader {
+                        slot: *slot,
+                        vrf_output_fingerprint: [0u8; 8],
+                    },
+                    Some(answer) => {
+                        let vrf_vk = shell.vrf_verification_key();
+                        let ctx = ForgeRequestContext {
+                            eta0: &evo.base_chain_dep().epoch_nonce,
+                            vrf_vk: &vrf_vk,
+                            leader_schedule_answer: &answer,
+                            pparams,
+                            base_state: evo.base_ledger(),
+                            chain_dep_state: evo.base_chain_dep(),
+                            era_schedule: evo.era_schedule(),
+                            pool_distr_view: evo.pool_distr_view(),
+                            block_number: ade_types::BlockNo(evo.next_block_number()),
+                            prev_hash: evo.prev_hash(),
+                            protocol_version: ProtocolVersion { major: 9, minor: 0 },
+                            prev_opcert_counter: None,
+                        };
+                        run_real_forge(*slot, *kes_period, &ctx, shell)
+                    }
+                };
+
+                // Advance the chain on a self-accepted forge via the sole
+                // `ChainEvolution::advance` path. Clone the artifact bytes
+                // before `event` is consumed by `coordinator_step`. On
+                // advance rejection, fail closed: do not advance, and
+                // surface this slot as a forge failure instead of success.
+                let event = match &event {
+                    CoordinatorEvent::ForgeSucceeded { slot, artifact } => {
+                        let forged_bytes = artifact.bytes.clone();
+                        let evo = chain_evo.take().ok_or("chain_evo consumed")?;
+                        match evo.advance(&forged_bytes) {
+                            Ok((next_evo, _accepted)) => {
+                                *chain_evo = Some(next_evo);
+                                event
+                            }
+                            Err(e) => {
+                                eprintln!(
+                                    "ade_node produce: chain advance rejected: {e:?}"
+                                );
+                                CoordinatorEvent::ForgeFailed {
+                                    slot: *slot,
+                                    reason: ForgeFailureReason::Other,
+                                }
+                            }
+                        }
+                    }
+                    _ => event,
+                };
+
                 let prev_state = coord_state.clone();
                 let (new_state, more_effects) =
                     coordinator_step(prev_state, event).map_err(|_| "forge handler step")?;
@@ -1042,7 +1042,7 @@ fn apply_effects_with_forge_handler(
                 }
             }
             CoordinatorEffect::BroadcastBlock { artifact: _ } => {
-                // N-R-B (B2) wires push_atomic here.
+                // S4 wires push_atomic here.
             }
         }
     }
@@ -1318,6 +1318,11 @@ mod tests {
     fn write_test_files(dir: &Path) -> (ProduceCli, std::path::PathBuf) {
         // Genesis fixture
         let genesis_path = dir.join("genesis.json");
+        // PHASE4-N-T S3: the produce loop now ticks from the absolute
+        // bootstrap slot (the consensus-inputs `epoch_start_slot` =
+        // 86_400_000 for the cold-start fixture). Anchor the KES window
+        // there so those absolute slots map to KES period 0 (an
+        // anchor of 0 would put slot 86.4M at period 666 > kes_max_period).
         std::fs::write(
             &genesis_path,
             br#"{
@@ -1325,7 +1330,7 @@ mod tests {
                 "slot_zero_time_unix_ms": 1000,
                 "slot_length_ms": 10,
                 "slots_per_kes_period": 129600,
-                "kes_anchor_slot": 0,
+                "kes_anchor_slot": 86400000,
                 "kes_max_period": 63
             }"#,
         )
@@ -1446,8 +1451,11 @@ mod tests {
             .count();
         assert_eq!(slot_ticks, 3, "expected 3 SlotTick events, got {}", slot_ticks);
 
-        // Must have ≥ 3 LeaderCheckOutcome events (stub emits
-        // is_leader: false for each slot).
+        // Must have 3 LeaderCheckOutcome events. The fixture's
+        // pool_distribution does not contain this shell's operator pool,
+        // so the real `query_leader_schedule` returns `UnknownPool` each
+        // slot ⇒ `ForgeNotLeader` ⇒ `LeaderCheckOutcome { is_leader:
+        // false }`. A correct, never-forging run.
         let leader_checks = lines
             .iter()
             .filter(|l| l.contains("\"kind\":\"LeaderCheckOutcome\""))
