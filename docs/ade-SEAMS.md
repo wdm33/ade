@@ -3,22 +3,28 @@
 > **Status:** Living architectural document. Regenerated; not hand-edited.
 > Per-project instance of `~/.claude/methodology/templates/seams.md`.
 
-> 11 crates, **444 canonical types**, **97 CI checks** at HEAD (`22eef90`, post-PHASE4-N-V).
+> 11 crates, **445 canonical types**, **98 CI checks** at HEAD (`01e7e08`, PHASE4-N-W closing).
 > Reads CODEMAP (`docs/ade-CODEMAP.md`, regenerated at the same HEAD) for the module
 > list + TCB colors, and the invariant registry (`docs/ade-invariant-registry.toml` —
 > **291 entries**) for the rule IDs that gate each closed surface.
 >
 > **This regeneration is a FULL seams map at HEAD, not a delta refresh.** It supersedes
-> the stale PHASE4-N-P SEAMS (HEAD `d6f3399`); the prior doc's "N-P-scope-narrow" caveat
-> is **retired** — every producer/network/node surface shipped since is classified below.
-> The six clusters closed since the prior anchor are folded in:
-> **N-Q** (live producer-mode composition surface), **N-R-A/B/C** (real forge composition
-> + served snapshot + per-peer dispatch + bounty-artifact parsers), **N-S-A/B/C**
-> (KES-signs-real-unsigned-header pre-image + typed outbound relay + operator-evidence
-> schema), **N-T** (`ChainEvolution` linear typestate + real-bootstrap forge base), and
-> **N-V** (canonical block-envelope **encoder** — forge output round-trips through
-> `decode_block`). The N-Q/N-R/N-S cluster docs remain under `docs/clusters/`; N-T and
-> N-V are archived under `docs/clusters/completed/`.
+> the post-PHASE4-N-V SEAMS (HEAD `22eef90`). The one cluster closed since that anchor is
+> folded in: **PHASE4-N-W** — the producer-side TPraos→Praos VRF authority migration. N-W
+> introduces the closed `ExpectedVrfInput` enum + the single era→VRF-construction authority
+> `leader_vrf_input(era, slot, eta0)` in `ade_core::consensus::vrf_cert`, retypes
+> `LeaderScheduleAnswer.expected_vrf_input` from a bare `[u8; 41]` to `ExpectedVrfInput`,
+> adds an era-correct threshold arg to `leader_check::verify_and_evaluate_leader`, adds
+> `CardanoEra::is_praos()`, fail-closes the RED producer forge on a non-Praos era
+> (`ForgeFailureReason::UnsupportedProducerEra`), flips registry rule **CN-FORGE-04**
+> declared→**enforced**, and ships one new CI gate (`ci_check_producer_praos_vrf.sh`).
+>
+> **Cluster-doc location (corrected).** Every closed cluster doc is archived under
+> `docs/clusters/completed/`, including the entire **N-Q / N-R-A/B/C / N-S-A/B/C** set,
+> the **N-M-\*** (admission/seed/WAL/anchor) sub-trees, **N-O**, **N-P**, **N-T**, and
+> **N-V**. The **only** cluster directory outside `completed/` is the now-closing
+> **PHASE4-N-W**. (The prior SEAMS claimed the N-Q/N-R/N-S docs "remain under
+> `docs/clusters/`" — that note was stale and is corrected here.)
 
 ---
 
@@ -54,8 +60,9 @@ Surface: --mode produce slot loop (RED ade_node::produce_mode + GREEN producer::
 Reduces to: ForgedBlock → AcceptedBlock (BLUE self_accept) → ServedChainSnapshot
 Pipeline (fixed; the BLUE-then-RED-then-BLUE composition of run_real_forge):
   1. bootstrap_initial_state                        (RED/GREEN — sole forge-state source; N-T)
-  2. RED vrf_prove                                  (operator VRF key; RED-confined)
-  3. BLUE verify_and_evaluate_leader → LeaderCheckVerdict  (ade_core::consensus::leader_check; N-R-A)
+  1a. era guard (NEW, N-W)                           (RED — non-Praos era fail-closes to ForgeFailureReason::UnsupportedProducerEra before any forge)
+  2. RED vrf_prove over expected_vrf_input.alpha_bytes()  (operator VRF key; alpha comes from the BLUE LeaderScheduleAnswer — no RED-side era dispatch; N-W)
+  3. BLUE verify_and_evaluate_leader(era, …) → LeaderCheckVerdict  (ade_core::consensus::leader_check; era-correct Praos construction via the single authority; N-R-A + N-W)
   4. RED kes_sign_header(UnsignedHeaderPreImage)    (signs ONLY the branded pre-image; N-S-A)
   5. GREEN assemble_tick
   6. BLUE forge_block → encode_block_envelope       (single canonical block encoder; N-V)
@@ -66,6 +73,8 @@ Pipeline (fixed; the BLUE-then-RED-then-BLUE composition of run_real_forge):
 Cross-surface state sharing: ChainEvolution threads each forge's post-state into the next
   forge's base (advance consumes self — a stale base is unrepresentable); ServedChainSnapshot
   is shared with the N2N serve path; the per-peer outbound map is shared with the listener.
+  The leader VRF alpha flows from LeaderScheduleAnswer.expected_vrf_input (ExpectedVrfInput) —
+  the RED prove-step never independently re-derives it (CN-FORGE-04).
 ```
 
 ### Surface: operator file ingress (KES skey / opcert / Shelley genesis / UTxO seed dump)
@@ -95,8 +104,8 @@ the **same** pipeline. A new mini-protocol attaches through `session::core::step
 `*_transition` reducer + a closed `AcceptedMiniProtocol` registry entry — never by a back
 door into the core. A new operator file type attaches as a RED parser feeding a BLUE
 structural validator. New ingress **may not** introduce a second `PreservedCbor`
-construction site, a second block-envelope encoder, or a direct-transport write that
-bypasses `OutboundCommand`.
+construction site, a second block-envelope encoder, a second era→leader-VRF-input
+construction (CN-FORGE-04), or a direct-transport write that bypasses `OutboundCommand`.
 
 ---
 
@@ -107,7 +116,7 @@ bypasses `OutboundCommand`.
 | Layer | Module | Color | Role |
 |-------|--------|-------|------|
 | **Authoritative ingress** | `ade_codec::cbor::envelope::decode_block_envelope` + the per-era `decode_*_block` | BLUE | Sole `PreservedCbor` construction site; the only place raw bytes become typed semantic values. |
-| **Authoritative egress (NEW, N-V)** | `ade_codec::cbor::envelope::encode_block_envelope` | BLUE | The **single** block-envelope **encoder**, inverse-symmetric to the decoder. Emits the era-tagged `[era, block]` form (Conway = discriminant 7, head `82 07`). |
+| **Authoritative egress (N-V)** | `ade_codec::cbor::envelope::encode_block_envelope` | BLUE | The **single** block-envelope **encoder**, inverse-symmetric to the decoder. Emits the era-tagged `[era, block]` form (Conway = discriminant 7, head `82 07`). |
 | **Producer consumer** | `ade_ledger::producer::forge::forge_block` | BLUE | Wraps forged output via `encode_block_envelope` so `decode_block(forge_block(tick).bytes)` is `Ok`. |
 
 **Rule (CN-FORGE-03):** the workspace has **one** block-envelope grammar in both directions.
@@ -116,6 +125,27 @@ the same `decode_block` authority that validates received blocks. A second/paral
 serializer is CI-gated impossible (`ci_check_no_independent_forge_codepath.sh`,
 `ci_check_forge_decode_round_trip.sh`). New era support adds a `decode_*_block` arm + an
 `encode_block_envelope` discriminant; **the encode/decode chokepoint pair never moves.**
+
+### Domain: leader-eligibility VRF input (NEW, N-W)
+
+| Layer | Module | Color | Role |
+|-------|--------|-------|------|
+| **Sole era→construction authority** | `ade_core::consensus::vrf_cert::leader_vrf_input(era, slot, eta0)` | BLUE | The **single** place that selects a Praos vs TPraos leader-eligibility VRF construction. Returns the closed `ExpectedVrfInput`. Defined exactly once (`ci_check_producer_praos_vrf.sh` Guard 1). |
+| **Era-correct range-extension** | `ade_core::consensus::vrf_cert::leader_value_for(&ExpectedVrfInput, &VrfOutput)` | BLUE | Applies the Praos `praos_leader_value` range-extension vs the TPraos identity, dispatched on the `ExpectedVrfInput` variant. |
+| **Leader-schedule producer** | `ade_core::consensus::leader_schedule::query_leader_schedule` | BLUE | Builds `LeaderScheduleAnswer.expected_vrf_input` via `leader_vrf_input`; no bare `vrf_input(` on the producer path (Guard 2). |
+| **RED prove-step consumer** | `ade_node::produce_mode::run_real_forge` | RED | Proves over `answer.expected_vrf_input.alpha_bytes()` only — no RED-side era dispatch; a non-Praos era fail-closes to `ForgeFailureReason::UnsupportedProducerEra`. |
+
+**Rule (CN-FORGE-04):** for a given era/protocol version there is **exactly one** VRF
+transcript authority. For Praos eras (Babbage/Conway, per `CardanoEra::is_praos()`) the
+producer alpha **MUST** equal the validator alpha — `praos_vrf_input(slot, eta0) =
+blake2b256(slot‖eta0)` + the `praos_leader_value` range-extension — **NOT** the TPraos
+role-tagged alpha (`slot‖eta0‖0x4C`). **No verification/construction fallback may accept
+both a TPraos and a Praos VRF input for one era** — the `ExpectedVrfInput` variant *is* the
+protocol-family tag, so a Praos and a TPraos alpha can never be confused. The dual
+construction lives only inside `leader_vrf_input`; no other file may contain both
+`praos_vrf_input(` and a bare `vrf_input(` (`ci_check_producer_praos_vrf.sh` Guard 5). New
+era support adds an `ExpectedVrfInput` variant + a `leader_vrf_input` arm; **the era→VRF
+construction chokepoint never moves**, and a new variant strengthens CN-FORGE-04.
 
 ### Domain: KES signing-key custody
 
@@ -135,15 +165,16 @@ serializer is CI-gated impossible (`ci_check_no_independent_forge_codepath.sh`,
 
 | Layer | Module | Color | Role |
 |-------|--------|-------|------|
-| **VRF proof producer** | `ade_node::produce_mode` (`run_real_forge` step 2) | RED | Produces the VRF proof/output for the slot using the operator's VRF key. |
-| **Authoritative evaluator** | `ade_core::consensus::leader_check::verify_and_evaluate_leader` | BLUE | Verifies the proof + evaluates eligibility from canonical inputs only; emits the closed `LeaderCheckVerdict`. |
+| **VRF proof producer** | `ade_node::produce_mode` (`run_real_forge` prove-step) | RED | Produces the VRF proof/output for the slot using the operator's VRF key, over the BLUE answer's `expected_vrf_input.alpha_bytes()`. |
+| **Authoritative evaluator** | `ade_core::consensus::leader_check::verify_and_evaluate_leader(era, …)` | BLUE | Verifies the proof + evaluates eligibility from canonical inputs only, with an era-correct threshold (N-W); emits the closed `LeaderCheckVerdict`. |
 
 **Rule (CN-FORGE-02):** BLUE **never** sees the VRF/KES/cold signing keys. The BLUE
 evaluator has **no** dependency on `LedgerView`, `EraSchedule`, `ChainDepState`, wall-clock,
 storage, or any RED crate. The caller derives `LeaderScheduleAnswer` via the authority path
-(`query_leader_schedule`) and passes it in. `ci_check_leader_check_authority.sh` enforces the
-import allow-list. New leader-eligibility logic adds to the BLUE evaluator; the RED/BLUE split
-never moves.
+(`query_leader_schedule`) and passes it in; the evaluator fail-closes on a full-enum
+`ExpectedVrfInput` mismatch (wrong era *or* wrong alpha). `ci_check_leader_check_authority.sh`
+enforces the import allow-list. New leader-eligibility logic adds to the BLUE evaluator; the
+RED/BLUE split never moves.
 
 ### Domain: forged-block serving (data-only serve vs. authoritative admit)
 
@@ -165,19 +196,21 @@ snapshot; it never admits.
 
 | Registry | Location | Count | Change Rule |
 |----------|----------|-------|-------------|
-| `LeaderCheckVerdict` *(NEW, N-R-A)* | `ade_core::consensus::leader_check` (BLUE) | 2 (`Eligible` / `NotEligible`) | New variant = strengthening of **CN-FORGE-02** + a registry amendment. The 2-variant shape is load-bearing: `NotEligible` carries only a bounded `vrf_output_fingerprint`, never forge-capable material — illegal observation is structurally impossible. Do **not** add a third variant without re-proving the no-forge-material property. |
-| `OutboundCommand` *(NEW, N-S-B)* | `ade_runtime::network::outbound_command` (RED) | typed `ChainSyncServerMsg` / `BlockFetchServerMsg` variants | New variant = a new typed mini-protocol reply. **No `Vec<u8>` byte tunnel may be added** — the typed-only contract is enforced by `ci_check_no_produce_mode_direct_transport_writes.sh` (CN-OUTBOUND-RELAY-01). |
-| `DispatchError` *(NEW, N-S-B)* | `ade_node::produce_mode` + `ade_runtime::network::n2n_server` (RED) | closed sum (incl. `UnknownPeer`, `PeerOutboundMissing`) | Lookup failure must stay structured; no `String`-bearing or catch-all variant (CN-PEER-OUTBOUND-MAP-01). |
-| `ChainEvolutionError` *(NEW, N-T)* | `ade_runtime::producer::chain_evolution` (GREEN-by-content) | closed sum (incl. `AuthorityMismatch`, `SelfAcceptRejected`) | New variant requires a strengthening of **DC-PROD-03**. `AuthorityMismatch` fail-closes when BLUE `block_validity` and BLUE `self_accept` disagree. |
-| `BroadcastPushError` *(NEW, N-T)* | `ade_node::produce_mode` (RED) | closed sum (incl. `SelfAcceptReplayRejected`) | New variant requires a strengthening of **CN-PROD-04**. |
+| `ExpectedVrfInput` *(NEW, N-W)* | `ade_core::consensus::vrf_cert` (BLUE) | 2 (`Praos([u8;32])` / `Tpraos([u8;41])`) | The 2-variant enum **is** the protocol-family tag for the leader-eligibility VRF input. Built only via `leader_vrf_input(era, slot, eta0)` (the single era→construction authority). A new variant (new protocol family) = a `leader_vrf_input` arm + a **strengthening of CN-FORGE-04**. **No both-alphas fallback** — no caller may accept a Praos and a TPraos alpha for one era. |
+| `LeaderCheckVerdict` *(N-R-A)* | `ade_core::consensus::leader_check` (BLUE) | 2 (`Eligible` / `NotEligible`) | New variant = strengthening of **CN-FORGE-02** + a registry amendment. The 2-variant shape is load-bearing: `NotEligible` carries only a bounded `vrf_output_fingerprint`, never forge-capable material — illegal observation is structurally impossible. Do **not** add a third variant without re-proving the no-forge-material property. |
+| `ForgeFailureReason` *(extended N-W)* | `ade_runtime::producer::producer_log` (GREEN-by-content) | closed sum incl. **NEW** `UnsupportedProducerEra` | A non-Praos producer forge attempt fail-closes to `UnsupportedProducerEra` (never silently forges with a TPraos alpha). New variant = strengthening of **CN-FORGE-04 / DC-PROD-01**. No free-form reason strings. |
+| `OutboundCommand` *(N-S-B)* | `ade_runtime::network::outbound_command` (RED) | typed `ChainSyncServerMsg` / `BlockFetchServerMsg` variants | New variant = a new typed mini-protocol reply. **No `Vec<u8>` byte tunnel may be added** — the typed-only contract is enforced by `ci_check_no_produce_mode_direct_transport_writes.sh` (CN-OUTBOUND-RELAY-01). |
+| `DispatchError` *(N-S-B)* | `ade_node::produce_mode` + `ade_runtime::network::n2n_server` (RED) | closed sum (incl. `UnknownPeer`, `PeerOutboundMissing`) | Lookup failure must stay structured; no `String`-bearing or catch-all variant (CN-PEER-OUTBOUND-MAP-01). |
+| `ChainEvolutionError` *(N-T)* | `ade_runtime::producer::chain_evolution` (GREEN-by-content) | closed sum (incl. `AuthorityMismatch`, `SelfAcceptRejected`) | New variant requires a strengthening of **DC-PROD-03**. `AuthorityMismatch` fail-closes when BLUE `block_validity` and BLUE `self_accept` disagree. |
+| `BroadcastPushError` *(N-T)* | `ade_node::produce_mode` (RED) | closed sum (incl. `SelfAcceptReplayRejected`) | New variant requires a strengthening of **CN-PROD-04**. |
 | `ProducerLogEvent` *(N-Q)* | `ade_runtime::producer::producer_log` (GREEN-by-content) | closed JSONL vocab (`handshake_ok`, `slot_tick`, `leader_elected`, `block_forged`, `block_served`, `peer_chain_tip_observed`, `slot_missed{reason}`, `coordinator_shutdown{reason}`) | New variant = strengthening of **DC-PROD-01**. No free-form reason strings, no key material, no path strings; socket addresses excluded from the replay surface (PeerId is an opaque `u64`). |
 | `GenesisParseError` *(N-R-C)* | `ade_runtime::producer::genesis_parser` (RED) | closed sum | New variant = strengthening of **CN-GENESIS-01**. No `String` in load-bearing variants; no implicit defaults / stringly fallback. |
 | `OpCertParseError` *(N-R-C)* | `ade_runtime::producer::opcert_envelope` (RED) | closed sum | New variant = strengthening of **CN-OPCERT-01**. No `String` payloads in load-bearing variants. |
 | `UnsignedHeaderPreImageError` *(N-S-A)* | `ade_ledger::block_validity::unsigned_header_pre_image` (BLUE) | closed sum | New variant = strengthening of **DC-KES-HEADER-01**. |
 | `AcceptedMiniProtocol` *(N-L)* | `ade_network::session` (GREEN) | closed registry | New mini-protocol = registry entry + a `match` arm with **no wildcard accept**. |
 | `KesError` / `KesParseError` *(N-P)* | `ade_crypto::kes_sum::errors` (BLUE) | 5 / 6 variants | New variant = strengthening of **DC-CRYPTO-08/09**; carries only non-secret primitives. |
-| Operator-evidence manifest TOML schema *(N-S-C)* | `ci_check_operator_evidence_manifest_schema.sh` + `docs/clusters/PHASE4-N-S-C/cluster.md` | closed key set (`schema_version`, `ade_commit`, `cardano_node_version`, `cardano_cli_version`, `network`, `block_hash`, `slot`, `opcert_fingerprint`, `genesis_fingerprint`, `ade_evidence_file`, `peer_log_file`, `peer_log_capture_command`, `peer_log_filter`, `peer_log_file_sha256`, `acceptance_keyword_match`) | Any committed `CE-N-S-LIVE_*.toml` MUST conform; `peer_log_file_sha256` cross-checks the committed peer-log file's actual hash (CN-OPERATOR-EVIDENCE-01). |
-| `CardanoEra` + Conway cert / governance / withdrawal enums | `ade_types::{era, conway::*}` + `ade_codec::conway::*` | closed | New era / cert / gov-action = a versioned gate; no unknown-tag swallow, no silent skip, no catch-all (DC-LEDGER-08/09/10/11). |
+| Operator-evidence manifest TOML schema *(N-S-C)* | `ci_check_operator_evidence_manifest_schema.sh` + `docs/clusters/completed/PHASE4-N-S-C/cluster.md` | closed key set (`schema_version`, `ade_commit`, `cardano_node_version`, `cardano_cli_version`, `network`, `block_hash`, `slot`, `opcert_fingerprint`, `genesis_fingerprint`, `ade_evidence_file`, `peer_log_file`, `peer_log_capture_command`, `peer_log_filter`, `peer_log_file_sha256`, `acceptance_keyword_match`) | Any committed `CE-N-S-LIVE_*.toml` MUST conform; `peer_log_file_sha256` cross-checks the committed peer-log file's actual hash (CN-OPERATOR-EVIDENCE-01). |
+| `CardanoEra` + Conway cert / governance / withdrawal enums | `ade_types::{era, conway::*}` + `ade_codec::conway::*` | closed | New era / cert / gov-action = a versioned gate; no unknown-tag swallow, no silent skip, no catch-all (DC-LEDGER-08/09/10/11). `CardanoEra::is_praos()` (N-W) MUST classify exactly {Babbage, Conway} — never widen silently. |
 | Consensus message + verdict enums | `ade_core::consensus`, `ade_ledger::block_validity` / `tx_validity` | closed | `ci_check_consensus_closed_enums.sh` — closed consensus enums; `match` with no wildcard. |
 | JSONL event vocabularies (admission / wire-only / live-log) | `ade_node::{admission_log, live_log}`, `ade_runtime::admission` | closed | New event = strengthening of the owning DC rule; allow-list + negative tests; wire success ≠ admission ≠ agreement. |
 
@@ -199,12 +232,18 @@ snapshot; it never admits.
 
 ### Frozen (immutable at current version — change = new major version)
 
-- **Block-envelope grammar (NEW, N-V)** — `[era, block]`, Conway = discriminant 7
+- **Leader-eligibility VRF transcript (NEW, N-W)** — for Praos eras (Babbage/Conway) the
+  leader alpha is `praos_vrf_input(slot, eta0) = blake2b256(slot‖eta0)` + the
+  `praos_leader_value` range-extension; for TPraos it is the role-tagged `slot‖eta0‖0x4C`.
+  One era→construction authority (`leader_vrf_input`); the `ExpectedVrfInput` variant is the
+  protocol-family tag. Changing the transcript breaks every forged-block leader proof AND
+  the validator's `verify_praos_vrf`. (CN-FORGE-04.)
+- **Block-envelope grammar (N-V)** — `[era, block]`, Conway = discriminant 7
   (head `82 07`). One encoder (`encode_block_envelope`), one decoder
   (`decode_block_envelope`); inverse-symmetric; `encode` must re-encode a corpus block
   byte-identically. Changing the envelope shape breaks every forged block AND every
   received-block decode. (CN-FORGE-03.)
-- **Unsigned-header KES pre-image recipe (NEW, N-S-A)** — the canonical CBOR encoding of
+- **Unsigned-header KES pre-image recipe (N-S-A)** — the canonical CBOR encoding of
   `ShelleyHeaderBody`. The branded `UnsignedHeaderPreImage(Vec<u8>)`'s **only** constructor
   is `unsigned_header_pre_image(...)`; `kes_sign_header` accepts only this type — arbitrary
   byte signing is mechanically unrepresentable. Output is byte-identical to the validator
@@ -216,24 +255,22 @@ snapshot; it never admits.
 - **Wire encoding** — `minicbor` / canonical CBOR; field order = wire order; `PreservedCbor`
   aliases the input bytes (no re-encode for hashing — `ci_check_hash_uses_wire_bytes.sh`).
 - **Hash algorithms** — Blake2b-224 / Blake2b-256; the single `block_body_hash` recipe; the
-  `praos_vrf_input` transcript per era. Algorithm immutable per version.
+  per-era VRF input transcript. Algorithm immutable per version.
 - **Mux frame format** — single `encode_frame` / `decode_frame` pair workspace-wide.
-- **All 444 canonical types** — existing wire formats frozen; new types may be added.
+- **All 445 canonical types** — existing wire formats frozen; new types may be added.
 
 ### Version-gated (can evolve across major versions)
 
 - New era support: a `decode_*_block` arm + an `encode_block_envelope` discriminant + a
-  `CardanoEra` variant (versioned gate).
+  `CardanoEra` variant + (for the leader path) an `ExpectedVrfInput` variant and a
+  `leader_vrf_input` arm (versioned gate).
 - New mini-protocol: an `AcceptedMiniProtocol` registry entry + a BLUE `*_transition`
   reducer + (for serving) an `OutboundCommand` variant.
-- New closed-enum variant (`LeaderCheckVerdict`, `OutboundCommand`, `ProducerLogEvent`,
-  the parse-error sums, the JSONL vocabularies): a `[[rules]]` registry entry + a
-  strengthening of the owning rule.
+- New closed-enum variant (`ExpectedVrfInput`, `LeaderCheckVerdict`, `OutboundCommand`,
+  `ProducerLogEvent`, `ForgeFailureReason`, the parse-error sums, the JSONL vocabularies):
+  a `[[rules]]` registry entry + a strengthening of the owning rule.
 - New canonical-type fields (sort/dedup invariants preserved).
 - New CI checks (existing checks may be tightened, **never** relaxed — RO-CLOSE-01).
-- **Producer VRF transcript (DECLARED, N-W)** — the producer-side TPraos→Praos VRF
-  migration (CN-FORGE-04). For a given era/protocol version there must be exactly one
-  VRF transcript authority; this is a **declared, not-yet-enforced** evolution (see §7).
 
 ---
 
@@ -262,10 +299,11 @@ Derived from CODEMAP's Cross-Module Rules + the shared BLUE header.
 6. New closed surface: add a `[[rules]]` entry and a CI gate; reference it by ID in the
    cluster/slice docs.
 
-### CI gates that enforce the boundary (97 total; the producer/network/node set)
+### CI gates that enforce the boundary (98 total; the producer/network/node set)
 
 | Script | Enforces | Cluster |
 |---|---|---|
+| `ci_check_producer_praos_vrf.sh` *(NEW)* | CN-FORGE-04 / N-W — single era→leader-VRF-input authority (`leader_vrf_input` defined once); no bare `vrf_input(` on the producer leader path; no both-alphas fallback outside `vrf_cert.rs`; Praos eligibility threshold via `leader_value_for`. | N-W |
 | `ci_check_produce_mode_uses_bootstrap_initial_state.sh` | CN-PROD-03 / N-T — `produce_mode` obtains initial state only via `bootstrap_initial_state`; no `SyntheticForgeInputs` / inline `LedgerState::new` forge base. | N-T |
 | `ci_check_forge_decode_round_trip.sh` | CN-FORGE-03 — `decode_block(forge_block(tick).bytes)` is `Ok`; forge output is the enveloped `[era, block]` form. | N-V |
 | `ci_check_no_independent_forge_codepath.sh` | CN-FORGE-03 — single forge codepath; no parallel block serializer. | N-V |
@@ -278,7 +316,7 @@ Derived from CODEMAP's Cross-Module Rules + the shared BLUE header.
 | `ci_check_served_chain_closure.sh`, `ci_check_snapshot_encoder_closure.sh` | served-chain + snapshot-encoder closure (carry-forward, exercised by per-peer dispatch). | N-R-B |
 
 > Earlier-cluster gates (N-A..N-P, the N-M-* admission/seed/WAL/anchor set, the N-L
-> wire-session set) are present in the 97 total; per-script detail is in the registry's
+> wire-session set) are present in the 98 total; per-script detail is in the registry's
 > `ci_script` fields. The full list is `ls ci/ci_check_*.sh`.
 
 ---
@@ -289,19 +327,24 @@ Derived from CODEMAP's Cross-Module Rules + the shared BLUE header.
   network/filesystem, async runtime, locale-dependent ops, OS-dependent ordering. No
   signing operations (`ci_check_no_signing_in_blue.sh`). No `#[cfg(feature = …)]` semantic
   gating. No `PreservedCbor` construction outside `ade_codec`. No re-encode of wire bytes
-  when hashing.
+  when hashing. **No second era→leader-VRF-input construction (CN-FORGE-04)** —
+  `leader_vrf_input` is the single authority; no both-alphas fallback.
 - **GREEN:** no nondeterminism; no participation in authoritative outputs. The
   `producer::coordinator` MUST NOT own/store private signing material. **`ChainEvolution`
   (N-T) MUST NEVER mint `AcceptedBlock`** — it obtains the token solely from BLUE
   `self_accept`; `advance` consumes `self` (linear typestate — a stale base is
-  unrepresentable). Evidence/admission reducers compare already-authoritative outputs;
-  `lagging` ≠ success; wire success ≠ admission ≠ agreement.
+  unrepresentable). `ProducerLogEvent` / `ForgeFailureReason` are closed vocabularies — no
+  open/wildcard variant, no free-form reason strings. Evidence/admission reducers compare
+  already-authoritative outputs; `lagging` ≠ success; wire success ≠ admission ≠ agreement.
 - **RED:** no direct mutation of BLUE state; no construction of semantic types from raw
   bytes (must go through the canonical decoders / BLUE structural validators); no bypassing
   canonical validation. `produce_mode` MUST emit outbound bytes only via `OutboundCommand`
   (no direct `MuxTransportHandle::outbound` write, no `Vec<u8>` byte tunnel). The per-peer
   outbound map is `BTreeMap` (deterministic), keyed by `PeerId` (no cross-peer leakage).
-  Key custody is confined to `producer::signing` / `producer_shell`.
+  Key custody is confined to `producer::signing` / `producer_shell`. **`run_real_forge`
+  (N-W) MUST NOT perform RED-side era dispatch for the leader-VRF alpha** — it proves over
+  the BLUE answer's `expected_vrf_input.alpha_bytes()`, and a non-Praos era fail-closes to
+  `ForgeFailureReason::UnsupportedProducerEra` (never silently forges with a TPraos alpha).
 
 ### Project-specific additions (Ade)
 
@@ -323,6 +366,12 @@ Derived from CODEMAP's Cross-Module Rules + the shared BLUE header.
 
 > Surfaced honestly per IDD: these are **declared** future attach points, not closed
 > surfaces. Each is named in a registry rule or a cluster CLOSURE record.
+>
+> **N-W is no longer here.** CN-FORGE-04 (producer-side TPraos→Praos VRF migration) closed
+> in PHASE4-N-W and is now **enforced** (`status = "enforced"`, `introduced_in =
+> "PHASE4-N-W"`, `ci_script = ci/ci_check_producer_praos_vrf.sh`); it is documented as a
+> closed surface in §2 / §3 / §4 above. The remaining producer→real-peer follow-ons stay
+> open below.
 
 1. **Serve-side tag-24 wire-wrap** *(deferred from N-V — `open_obligation` on CN-FORGE-03).*
    Wrapping the storage-form `[era, block]` into `[serialisationInfo, tag24([era, block])]`
@@ -332,34 +381,33 @@ Derived from CODEMAP's Cross-Module Rules + the shared BLUE header.
 2. **N-U — forged-block durability.** WAL / ChainDB / snapshot / warm-start for forged blocks
    (crash → bootstrap warm-start). Explicitly out of N-T scope (`open_obligation` on
    CN-PROD-03 / DC-PROD-03); N-T exercises only the cold-start branch.
-3. **N-W — producer-side TPraos→Praos VRF migration (CN-FORGE-04, status `declared`).**
-   The next block-production blocker: the producer leader-VRF alpha currently mismatches the
-   validator's Praos alpha (`praos_vrf_input(slot, eta0) = blake2b256(slot||eta0)` +
-   `vrfLeaderValue` range-extension, **not** the TPraos role-tagged `slot||eta0||0x4C`). One
-   era-correct Praos VRF authority is required across the four named sites (`run_real_forge`
-   VRF prove, `verify_and_evaluate_leader`, `query_leader_schedule`'s
-   `LeaderScheduleAnswer.expected_vrf_input`, the validator `verify_praos_vrf`). Pinned by
-   `forge_succeeds.rs::forge_to_self_accept_blocked_on_praos_vrf_construction`, which today
-   asserts the **BLOCKED** state; when N-W lands the test flips to `ForgeSucceeded` and
-   CN-FORGE-04 flips to `enforced`. **CN-FORGE-01 carries a deferred "ForgeSucceeded
-   reachable" strengthening gated on this.**
 
 ### Operator-pass execution gates (schema enforced, execution blocked)
 
 - **CN-OPERATOR-EVIDENCE-01 / CN-CONS-06 / RO-LIVE-01** — the manifest schema is enforced,
   but C1 (private testnet) / C2 (preprod) operator-pass execution is
   `blocked_until_operator_pass_executed`. Until an operator commits a `CE-N-S-LIVE_*.toml`,
-  the CI gate is vacuously satisfied. This is an execution gate, not a code seam.
+  the CI gate is vacuously satisfied. This is an execution gate, not a code seam. With
+  CN-FORGE-04 now enforced, the producer forge composition is mechanically complete through
+  the leader-VRF authority; the remaining blocker to a real-peer block-acceptance pass is
+  the serve-side tag-24 wire-wrap (item 1).
 
 ---
 
 ## Generation notes
 
-- Regenerated full at HEAD `22eef90` (`git rev-parse --short HEAD`), downstream of the
-  CODEMAP at the same HEAD. The prior PHASE4-N-P "N-P-scope-narrow" caveat is **retired** —
-  every producer/network/node surface is classified above.
-- Every closed surface was verified against the on-disk code (encoder, `ChainEvolution`,
-  `UnsignedHeaderPreImage`, `OutboundCommand`, the parse-error sums) and the registry
-  (`docs/ade-invariant-registry.toml`, 291 rules). All 11 named producer/network/node CI
-  scripts were confirmed present (97 total).
+- Regenerated full at HEAD `01e7e08` (`git rev-parse --short HEAD`), downstream of the
+  CODEMAP at the same HEAD. PHASE4-N-W is the active cluster, closing now.
+- Every closed surface was verified against the on-disk code: `ExpectedVrfInput` (2-variant
+  enum at `vrf_cert.rs:201`), `leader_vrf_input` / `leader_value_for` / `alpha_bytes`
+  authorities, `ForgeFailureReason::UnsupportedProducerEra` (`producer_log.rs:107`),
+  `LeaderScheduleAnswer.expected_vrf_input: ExpectedVrfInput` (`leader_schedule.rs:51`),
+  `CardanoEra::is_praos()` (`era.rs:68`), plus the carry-forward encoder /
+  `ChainEvolution` / `UnsignedHeaderPreImage` / `OutboundCommand` / parse-error sums. The
+  new CI gate `ci_check_producer_praos_vrf.sh` was confirmed present (98 total via
+  `ls ci/ci_check_*.sh | wc -l`). CN-FORGE-04 confirmed `status = "enforced"` in the
+  registry (`docs/ade-invariant-registry.toml`, 291 rules).
+- Cluster-doc location verified on disk: only `docs/clusters/PHASE4-N-W/` lives outside
+  `docs/clusters/completed/`. The prior SEAMS's "N-Q/N-R/N-S docs remain under
+  `docs/clusters/`" note was stale and is corrected.
 - The doc is regenerated, not edited. If a value drifts, fix the source, not the doc.
