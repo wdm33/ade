@@ -319,16 +319,25 @@ pub fn forge_block(
         invalid_txs: Some(invalid_txs),
     };
 
-    let mut bytes = Vec::new();
+    let mut inner_bytes = Vec::new();
     let ctx = CodecContext {
         era: CardanoEra::Conway,
     };
     block
-        .ade_encode(&mut bytes, &ctx)
+        .ade_encode(&mut inner_bytes, &ctx)
         .map_err(|_| ForgeError::TxComponentSplit {
             failed_at: 0,
             detail: "ShelleyBlock::ade_encode rejected forged block",
         })?;
+
+    // PHASE4-N-V: wrap the bare inner block in the canonical era envelope
+    // `[era, block]` so forge output round-trips through the SAME
+    // decode_block authority that validates received blocks (CN-FORGE-03).
+    // `ade_encode` emits only the inner Conway block (`array(5)`); the
+    // validator's decode_block -> decode_block_envelope requires the
+    // `[era, block]` (`array(2)`) wrapper.
+    let bytes =
+        ade_codec::cbor::envelope::encode_block_envelope(CardanoEra::Conway, &inner_bytes);
 
     let next_prev_opcert_counter = tick.opcert.sequence_number;
 
@@ -536,6 +545,28 @@ mod tests {
                 assert_eq!(next_prev_opcert_counter, 7);
             }
         }
+    }
+
+    /// PHASE4-N-V regression lock (CE-V-4): `forge_block` output MUST decode
+    /// via the SAME `decode_block` authority that validates received blocks.
+    /// This failed on the pre-N-V tree (forge emitted a bare `array(5)` block
+    /// with no era envelope → `decode_block_envelope` rejected it at offset 0).
+    #[test]
+    fn forge_block_output_decodes_via_decode_block() {
+        let tick = base_tick();
+        let (forged, _) = forge_block(&tick).expect("forge");
+        let decoded = crate::block_validity::header_input::decode_block(&forged.bytes)
+            .expect("forged block must decode via decode_block");
+        assert_eq!(decoded.era, CardanoEra::Conway);
+        // Body-hash binding survives the envelope round-trip (DC-CONS-18).
+        assert_eq!(decoded.computed_body_hash, forged.block.header.body.body_hash);
+        // Header round-trips: re-decode the inner block and compare key fields.
+        let inner = &forged.bytes[decoded.inner_start..decoded.inner_end];
+        let reparsed = ade_codec::conway::decode_conway_block(inner).expect("inner decodes");
+        let inner_body = &reparsed.decoded().header.body;
+        assert_eq!(inner_body.slot, tick.slot.0);
+        assert_eq!(inner_body.block_number, tick.block_number.0);
+        assert_eq!(inner_body.body_hash, forged.block.header.body.body_hash);
     }
 
     #[test]
