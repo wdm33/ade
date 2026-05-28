@@ -995,10 +995,10 @@ N2N tag-24 CBOR-in-CBOR payload envelopes are constructed and stripped through O
 """
 source = "docs/planning/phase4-n-x-invariants.md"
 cross_ref = ["CN-FORGE-03", "T-ENC-01", "DC-CONS-18", "CN-WIRE-06", "CN-WIRE-07", "RO-LIVE-01"]
-code_locus = "crates/ade_codec/src/cbor/ (wrap_tag24/unwrap_tag24, NEW); crates/ade_network/src/codec/block_fetch.rs + chain_sync.rs (per-protocol composition); crates/ade_network/src/block_fetch/server.rs + chain_sync/server.rs (serve emits composed bytes); migrates crates/ade_node/src/admission/runner.rs::unwrap_block_fetch_envelope + crates/ade_core_interop/src/follow.rs::project_header_from_n2n_rollforward onto the shared authority"
-tests = []
-ci_script = ""
-status = "declared"
+code_locus = "crates/ade_codec/src/cbor/tag24.rs (wrap_tag24/unwrap_tag24 + TagEnvelopeError); crates/ade_codec/src/cbor/mod.rs (read_bytes/read_text/skip_item length-arg overflow guard — fail-closed, no panic); crates/ade_network/src/codec/block_fetch.rs + chain_sync.rs (per-protocol compose/decompose); crates/ade_network/src/block_fetch/server.rs + chain_sync/server.rs (serve emits composed bytes); crates/ade_node/src/admission/runner.rs + crates/ade_core_interop/src/follow.rs (RED unwraps migrated onto the shared authority)"
+tests = ["wrap_then_unwrap_is_identity_across_length_classes", "wrap_emits_canonical_tag24_marker_and_length", "unwrap_returns_zero_copy_borrow_of_input", "unwrap_rejects_missing_tag24_marker", "unwrap_rejects_non_byte_string_payload", "unwrap_rejects_truncated_inner", "unwrap_rejects_trailing_bytes", "inner_bytes_are_verbatim_not_reencoded", "unwrap_rejects_huge_declared_length_without_panic", "read_bytes_rejects_overflowing_declared_length", "read_text_rejects_overflowing_declared_length", "producer_block_fetch_serve_block_payload_is_tag24_wrapped_and_decodes", "producer_block_fetch_serve_block_bytes_equal_accepted_block_as_bytes", "block_body_is_wrapped_cbor_item", "captured_block_era_index_matches_ade_storage_scheme", "chain_sync_wire_era_index_is_consensus_index", "compose_decompose_rollforward_header_round_trips", "decompose_rollforward_header_rejects_non_tag24_inner", "conway_rollforward_header_served_shape_matches_oracle", "producer_chain_sync_serve_roll_forward_header_equals_accepted_block_header_bytes", "session_transcript_served_block_bytes_equal_admitted_accepted_block_bytes", "session_transcript_announced_header_matches_served_body_recipe", "cross_impl_server_pipeline_request_range_returns_decodable_bytes", "cross_impl_server_pipeline_request_range_byte_identical_to_self_accept_input"]
+ci_script = "ci/ci_check_tag24_wire_authority.sh"
+status = "enforced"
 introduced_in = "PHASE4-N-X"
 strengthened_in = []
 cluster = "PHASE4-N-X"
@@ -2530,7 +2530,7 @@ ci_script = "ci/ci_check_block_fetch_server_closure.sh, ci/ci_check_broadcast_to
 status = "enforced"
 authority_surface = "producer-side block-fetch wire-byte transmission"
 cluster = "PHASE4-N-G"
-strengthened_in = ["PHASE4-N-R-B"]
+strengthened_in = ["PHASE4-N-R-B", "PHASE4-N-X"]
 evidence = ["End-to-end transcript test session_transcript_served_block_bytes_equal_admitted_accepted_block_bytes asserts every Block{bytes} payload in a corpus-driven transcript equals the admitted AcceptedBlock.as_bytes() at its (slot,hash) key.", "CI gate ci_check_block_fetch_server_closure.sh enforces that producer_block_fetch_serve sources Block{bytes} only through served.range_bytes (positive grep)."]
 
 [[rules]]
@@ -2545,7 +2545,7 @@ ci_script = "ci/ci_check_no_parallel_header_splitter.sh, ci/ci_check_broadcast_t
 status = "enforced"
 authority_surface = "producer-side chain-sync RollForward header projection"
 cluster = "PHASE4-N-G"
-strengthened_in = ["PHASE4-N-R-A", "PHASE4-N-S-A", "PHASE4-N-T", "PHASE4-N-V"]
+strengthened_in = ["PHASE4-N-R-A", "PHASE4-N-S-A", "PHASE4-N-T", "PHASE4-N-V", "PHASE4-N-X"]
 evidence = ["End-to-end transcript test session_transcript_announced_header_matches_served_body_recipe asserts the rolled header bytes equal accepted_block_header_bytes over the same AcceptedBlock the matching block-fetch range subsequently serves.", "The single canonical header splitter is enforced by ci_check_no_parallel_header_splitter.sh; the GREEN adapter imports accepted_block_header_bytes (positive grep in ci_check_broadcast_to_served_purity.sh)."]
 
 [[rules]]
@@ -4767,11 +4767,11 @@ tests = ["encode_decode_block_envelope_round_trips", "conway_envelope_head_is_82
 ci_script = "ci/ci_check_forge_decode_round_trip.sh"
 status = "enforced"
 introduced_in = "PHASE4-N-V"
-strengthened_in = []
+strengthened_in = ["PHASE4-N-X"]
 cluster = "PHASE4-N-V"
 attack_rationale = "Cardano-specific: a producer whose forged blocks its own validator cannot decode can never self-accept, serve, or have a peer accept a block — it silently produces nothing, or (worse, if decode were lenient) propagates a block the rest of the network rejects. Binding forge output to the single decode_block envelope grammar makes producer/validator codec divergence structurally impossible."
-evidence_notes = "S1 round-trip + corpus-pin tests (encode_decode_block_envelope_round_trips, conway_envelope_head_matches_corpus). S2 forge<->decode round-trip test (forge_block_output_decodes_via_decode_block) — fails on the pre-N-V tree, locking the regression — plus ci/ci_check_forge_decode_round_trip.sh. S3 forge_to_self_accept_succeeds (first in-process ForgeSucceeded). The bug was latent since N-C because no test ever round-tripped forge_block output through decode_block; self_accept tests used real enveloped corpus blocks."
-open_obligation = "Serve-side tag-24 wire-wrap ([serialisationInfo, tag24([era,block])]) so a live cardano-node peer accepts the served block over block-fetch is a NAMED FOLLOW-ON, not N-V. N-V closes the storage-form [era,block] self-decode round-trip only."
+evidence_notes = "S1 round-trip + corpus-pin tests (encode_decode_block_envelope_round_trips, conway_envelope_head_matches_corpus). S2 forge<->decode round-trip test (forge_block_output_decodes_via_decode_block) — fails on the pre-N-V tree, locking the regression — plus ci/ci_check_forge_decode_round_trip.sh. S3 forge_to_self_accept_succeeds (first in-process ForgeSucceeded). The bug was latent since N-C because no test ever round-tripped forge_block output through decode_block; self_accept tests used real enveloped corpus blocks. PHASE4-N-X: the serve-side tag-24 wire-wrap landed under CN-WIRE-08 — producer_block_fetch_serve now emits tag24(bytes([era,block])) (verified byte-identical to the real cardano-node 11.0.1 capture); the planning-doc's '[serialisationInfo, tag24(...)]' guess was wrong (bare tag-24, no serialisationInfo word)."
+open_obligation = "Serve-side tag-24 wire-wrap is SHIPPED in PHASE4-N-X / CN-WIRE-08 (in-process: serve emits tag24([era,block]); a real-capture oracle pins the shape; wrap<->unwrap symmetry proven). The remaining obligation is the OPERATOR-PASS live leg — a real cardano-node accepting the served block over block-fetch — which stays RO-LIVE-01 / CN-CONS-06 gated (blocked_until_operator_pass_executed), NOT a codec gap."
 
 [[rules]]
 id = "CN-FORGE-04"
