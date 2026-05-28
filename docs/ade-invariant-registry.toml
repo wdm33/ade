@@ -987,6 +987,25 @@ attack_rationale = "Prevents ambiguous dispatch and version confusion in minipro
 evidence_notes = "Cardano-specific: addresses Cardano's protocol message versioning (N2N/N2C version negotiation, per-version message sets). S-A2 lands closed message taxonomy + CBOR codecs for all 11 protocols. Byte-identicality against real cardano-node 11.0.1 wire bytes proven for 6 of 11 protocols via *_real_capture_corpus tests (S-A9 partial): N2N handshake, chain-sync, block-fetch, keep-alive, peer-sharing, N2C handshake. Three codec wire-form bugs were uncovered + fixed by this real interop: chain-sync RollForward header era-wrap, block-fetch flat RequestRange triple, N2C version 0x8000 wire flag. Remaining 5 (tx-submission2, local-chain-sync, local-tx-submission, local-state-query, local-tx-monitor) pending."
 strengthened_in = ["PHASE4-N-A"]
 
+[[rules]]
+id = "CN-WIRE-08"
+tier = "derived"
+statement = """
+N2N tag-24 CBOR-in-CBOR payload envelopes are constructed and stripped through ONE shared BLUE byte authority in ade_codec (wrap_tag24/unwrap_tag24). Protocol-specific composition lives in ade_network BLUE codecs: a served BlockFetch MsgBlock payload is tag24(bytes([era,block])) (era inside the wrap); a served ChainSync RollForward header is [era_tag, tag24(bytes(header_cbor))] (era_tag outside the wrap). Both compositions are pinned byte-identically against captured cardano-node 11.0.1 wire fixtures, not codec comments. No bare [era,block] may be served over BlockFetch and no bare header over ChainSync RollForward. No hand-rolled tag-24 parse may exist in RED — admission and interop call the shared authority. unwrap_tag24 fails closed (typed error) on non-(0xd8 0x18), wrong inner length, or trailing bytes. The inner bytes are copied verbatim (no re-encode).
+"""
+source = "docs/planning/phase4-n-x-invariants.md"
+cross_ref = ["CN-FORGE-03", "T-ENC-01", "DC-CONS-18", "CN-WIRE-06", "CN-WIRE-07", "RO-LIVE-01"]
+code_locus = "crates/ade_codec/src/cbor/ (wrap_tag24/unwrap_tag24, NEW); crates/ade_network/src/codec/block_fetch.rs + chain_sync.rs (per-protocol composition); crates/ade_network/src/block_fetch/server.rs + chain_sync/server.rs (serve emits composed bytes); migrates crates/ade_node/src/admission/runner.rs::unwrap_block_fetch_envelope + crates/ade_core_interop/src/follow.rs::project_header_from_n2n_rollforward onto the shared authority"
+tests = []
+ci_script = ""
+status = "declared"
+introduced_in = "PHASE4-N-X"
+strengthened_in = []
+cluster = "PHASE4-N-X"
+attack_rationale = "Cardano-specific: a producer that serves bare [era,block] or bare headers is rejected by every real peer — block-fetch payloads and chain-sync headers are CBOR-in-CBOR on the wire. Worse, opaque-byte round-trip tests give false confidence (encode(decode(x))==x while the envelope shape is wrong). Binding both surfaces to one fixture-pinned authority makes a wrong-shape serve and a divergent second parser structurally impossible."
+evidence_notes = "BlockFetch oracle committed: corpus/network/n2n/block_fetch/local_preprod_tip_msg_01_block.cbor = 82 04 d8 18 59 03 ee 82 03 ... (= [4, tag24(bytes([era,block]))]), captured against docker preprod cardano-node 11.0.1, negotiated N2N v15. ChainSync header shape verified in ade_core_interop/src/follow.rs against a real preprod RollForward frame ([era_tag, tag24(header_cbor)], single wrapper); a committed golden header fixture pinning the SERVED shape is a slice-entry obligation for S3 (Q-1)."
+open_obligation = "Live cardano-node peer acceptance of the served block over block-fetch (after chain-sync header acceptance) remains RO-LIVE-01 / CN-CONS-06 operator-pass gated (blocked_until_operator_pass_executed). This cluster proves in-process wrap<->unwrap symmetry + oracle-shape match only."
+
 # --- B. Ledger Validity and State Transition Safety ---
 
 [[rules]]
