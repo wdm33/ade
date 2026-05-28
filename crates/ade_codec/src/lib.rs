@@ -25,6 +25,7 @@ pub mod primitives;
 pub mod shelley;
 pub mod traits;
 
+pub use cbor::tag24::{unwrap_tag24, wrap_tag24, TagEnvelopeError};
 pub use error::CodecError;
 pub use preserved::{PreservedCbor, RawCbor};
 pub use traits::{AdeDecode, AdeEncode, CodecContext};

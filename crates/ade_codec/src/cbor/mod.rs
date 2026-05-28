@@ -6,6 +6,7 @@
 // - Canonical serialization for all persisted/hashed data
 
 pub mod envelope;
+pub mod tag24;
 
 use crate::error::CodecError;
 
