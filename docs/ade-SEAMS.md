@@ -3,28 +3,44 @@
 > **Status:** Living architectural document. Regenerated; not hand-edited.
 > Per-project instance of `~/.claude/methodology/templates/seams.md`.
 
-> 11 crates, **445 canonical types**, **98 CI checks** at HEAD (`01e7e08`, PHASE4-N-W closing).
+> 11 crates, **446 canonical types**, **99 CI checks** at HEAD (`273c887`, PHASE4-N-X closing).
 > Reads CODEMAP (`docs/ade-CODEMAP.md`, regenerated at the same HEAD) for the module
 > list + TCB colors, and the invariant registry (`docs/ade-invariant-registry.toml` —
-> **291 entries**) for the rule IDs that gate each closed surface.
+> **292 entries**) for the rule IDs that gate each closed surface.
 >
 > **This regeneration is a FULL seams map at HEAD, not a delta refresh.** It supersedes
-> the post-PHASE4-N-V SEAMS (HEAD `22eef90`). The one cluster closed since that anchor is
-> folded in: **PHASE4-N-W** — the producer-side TPraos→Praos VRF authority migration. N-W
-> introduces the closed `ExpectedVrfInput` enum + the single era→VRF-construction authority
-> `leader_vrf_input(era, slot, eta0)` in `ade_core::consensus::vrf_cert`, retypes
-> `LeaderScheduleAnswer.expected_vrf_input` from a bare `[u8; 41]` to `ExpectedVrfInput`,
-> adds an era-correct threshold arg to `leader_check::verify_and_evaluate_leader`, adds
-> `CardanoEra::is_praos()`, fail-closes the RED producer forge on a non-Praos era
-> (`ForgeFailureReason::UnsupportedProducerEra`), flips registry rule **CN-FORGE-04**
-> declared→**enforced**, and ships one new CI gate (`ci_check_producer_praos_vrf.sh`).
+> the post-PHASE4-N-W SEAMS (HEAD `01e7e08`). The one cluster closed since that anchor is
+> folded in: **PHASE4-N-X** — the N2N tag-24 CBOR-in-CBOR wire-envelope authority. N-X
+> introduces the NEW BLUE module `ade_codec::cbor::tag24` —
+> `wrap_tag24(inner) -> Vec<u8>`, `unwrap_tag24(wire) -> Result<&[u8], TagEnvelopeError>`,
+> and the closed `TagEnvelopeError` enum (`NotTag24` / `NotByteString` / `Truncated` /
+> `TrailingBytes`) — the single workspace authority for the tag-24 (`0xd8 0x18`) byte
+> wrap/unwrap, re-exported at the `ade_codec` crate root. Per-protocol composition lives in
+> the `ade_network` BLUE codecs: a served **BlockFetch** `MsgBlock` payload is
+> `tag24(bytes([era, block]))` (era **inside** the wrap; EBB-aware era index, Conway = 7)
+> via `compose_blockfetch_block` / `decompose_blockfetch_block`; a served **ChainSync**
+> `RollForward` header is `[era_tag, tag24(bytes(header_cbor))]` (era_tag **outside** the
+> wrap; CONSENSUS era index, Conway = 6 = storage − 1) via `compose_rollforward_header` /
+> `decompose_rollforward_header` + `chain_sync_wire_era_index`. The two N2N surfaces use
+> **different era-index schemes** — a load-bearing distinction, pinned against real
+> cardano-node 11.0.1 captures. The RED hand-rolled tag-24 parses were deleted and migrated
+> onto the shared authority (`ade_node::admission::runner` + `ade_core_interop::follow` now
+> call `ade_codec::unwrap_tag24`). N-X flips/adds registry rule **CN-WIRE-08** (introduced
+> **enforced**), ships one new CI gate (`ci_check_tag24_wire_authority.sh`, 99 total), and
+> carries an N-X **strengthening** of **CN-FORGE-03 / DC-CONS-17 / DC-CONS-18**.
 >
-> **Cluster-doc location (corrected).** Every closed cluster doc is archived under
+> **The serve-side tag-24 wire-wrap is no longer a candidate.** It was item 1 in the prior
+> SEAMS §7 (deferred from N-V / `open_obligation` on CN-FORGE-03). It **closed** in
+> PHASE4-N-X and is now an **enforced** surface, documented in §2 / §3 / §4 below. The
+> remaining producer→real-peer follow-ons (the OPERATOR-PASS live leg + N-U durability)
+> stay open in §7.
+>
+> **Cluster-doc location.** Every closed cluster doc is archived under
 > `docs/clusters/completed/`, including the entire **N-Q / N-R-A/B/C / N-S-A/B/C** set,
-> the **N-M-\*** (admission/seed/WAL/anchor) sub-trees, **N-O**, **N-P**, **N-T**, and
-> **N-V**. The **only** cluster directory outside `completed/` is the now-closing
-> **PHASE4-N-W**. (The prior SEAMS claimed the N-Q/N-R/N-S docs "remain under
-> `docs/clusters/`" — that note was stale and is corrected here.)
+> the **N-M-\*** (admission/seed/WAL/anchor) sub-trees, **N-O**, **N-P**, **N-T**, **N-V**,
+> and **N-W**. The **only** cluster directory outside `completed/` is the now-closing
+> **PHASE4-N-X** (`cluster.md` + `CLOSURE.md`; archived right after the grounding docs
+> regenerate).
 
 ---
 
@@ -41,40 +57,46 @@
 
 ```
 Surface: N2N mini-protocol traffic over TCP+mux (RED ade_runtime::network::{n2n_listener, mux_pump, n2n_dialer})
-Reduces to: decoded mini-protocol messages → PreservedCbor<T> → DecodedBlock (BLUE ade_codec)
+Reduces to: decoded mini-protocol messages → tag-24-stripped inner bytes → PreservedCbor<T> → DecodedBlock (BLUE ade_codec)
 Pipeline (fixed; steps may not be reordered or shortcut):
-  1. mux::frame::decode_frame                      (BLUE — single frame-decode authority)
-  2. session::core::step                           (GREEN — partial-frame buffer + payload reassembly + closed AcceptedMiniProtocol registry)
-  3. per-mini-protocol *_transition reducer        (BLUE — chain_sync / block_fetch / etc.)
-  4. ade_codec decode_block_envelope / decode_*    (BLUE — sole PreservedCbor construction site)
+  1. mux::frame::decode_frame                       (BLUE — single frame-decode authority)
+  2. session::core::step                            (GREEN — partial-frame buffer + payload reassembly + closed AcceptedMiniProtocol registry)
+  3. per-mini-protocol *_transition reducer         (BLUE — chain_sync / block_fetch / etc.)
+  3a. tag-24 strip (NEW, N-X)                        (BLUE — decompose_blockfetch_block / decompose_rollforward_header delegate to ade_codec::unwrap_tag24; RED admission::runner / follow call ade_codec::unwrap_tag24 directly — no hand-rolled parse)
+  4. ade_codec decode_block_envelope / decode_*     (BLUE — sole PreservedCbor construction site, over the verbatim tag-24-stripped inner bytes)
   5. ade_ledger::receive::reducer / mempool_ingress (BLUE — header→body bridge / wire-ingress chokepoint)
-  6. block_validity / tx_validity / admission       (BLUE verdict; GREEN admission compares already-authoritative outputs)
+  6. block_validity / tx_validity / admission        (BLUE verdict; GREEN admission compares already-authoritative outputs)
 Cross-surface state sharing: the served ServedChainSnapshot (read by both serve and broadcast paths);
   the per-peer outbound map (PerPeerOutbound) is keyed by PeerId — no cross-peer byte leakage.
+  The tag-24 unwrap step (N-X) is the SAME shared ade_codec authority used by the serve path's wrap step —
+  receive and serve share one CBOR-in-CBOR envelope authority (CN-WIRE-08).
 ```
 
 ### Surface: producer-mode forge → serve → broadcast (the live producer half)
 
 ```
 Surface: --mode produce slot loop (RED ade_node::produce_mode + GREEN producer::coordinator)
-Reduces to: ForgedBlock → AcceptedBlock (BLUE self_accept) → ServedChainSnapshot
+Reduces to: ForgedBlock → AcceptedBlock (BLUE self_accept) → ServedChainSnapshot → tag-24-wrapped wire bytes
 Pipeline (fixed; the BLUE-then-RED-then-BLUE composition of run_real_forge):
   1. bootstrap_initial_state                        (RED/GREEN — sole forge-state source; N-T)
-  1a. era guard (NEW, N-W)                           (RED — non-Praos era fail-closes to ForgeFailureReason::UnsupportedProducerEra before any forge)
+  1a. era guard (N-W)                                (RED — non-Praos era fail-closes to ForgeFailureReason::UnsupportedProducerEra before any forge)
   2. RED vrf_prove over expected_vrf_input.alpha_bytes()  (operator VRF key; alpha comes from the BLUE LeaderScheduleAnswer — no RED-side era dispatch; N-W)
   3. BLUE verify_and_evaluate_leader(era, …) → LeaderCheckVerdict  (ade_core::consensus::leader_check; era-correct Praos construction via the single authority; N-R-A + N-W)
   4. RED kes_sign_header(UnsignedHeaderPreImage)    (signs ONLY the branded pre-image; N-S-A)
   5. GREEN assemble_tick
-  6. BLUE forge_block → encode_block_envelope       (single canonical block encoder; N-V)
+  6. BLUE forge_block → encode_block_envelope       (single canonical block encoder, storage-form [era, block]; N-V)
   7. BLUE self_accept                               (gate — no ForgeSucceeded without Accepted)
   8. ChainEvolution::advance(self)                  (GREEN linear typestate; token only via self_accept; N-T)
   9. ServedChainHandle::push_atomic                 (single served-admit authority; N-R-B/N-T)
- 10. OutboundCommand → MuxPump                      (typed relay; no byte tunnel; N-S-B)
+ 10. BLUE serve composition (NEW, N-X)              (block_fetch::server emits compose_blockfetch_block(storage [era, block]) = tag24(bytes([era, block]));
+                                                     chain_sync::server emits compose_rollforward_header(era, header_cbor) = [era_tag, tag24(bytes(header_cbor))] — bytes are tag-24-wrapped before reaching a peer)
+ 11. OutboundCommand → MuxPump                      (typed relay; no byte tunnel; N-S-B)
 Cross-surface state sharing: ChainEvolution threads each forge's post-state into the next
   forge's base (advance consumes self — a stale base is unrepresentable); ServedChainSnapshot
   is shared with the N2N serve path; the per-peer outbound map is shared with the listener.
   The leader VRF alpha flows from LeaderScheduleAnswer.expected_vrf_input (ExpectedVrfInput) —
-  the RED prove-step never independently re-derives it (CN-FORGE-04).
+  the RED prove-step never independently re-derives it (CN-FORGE-04). The serve step's tag-24 wrap
+  is the SAME ade_codec authority the receive path uses to unwrap (CN-WIRE-08).
 ```
 
 ### Surface: operator file ingress (KES skey / opcert / Shelley genesis / UTxO seed dump)
@@ -105,28 +127,56 @@ the **same** pipeline. A new mini-protocol attaches through `session::core::step
 door into the core. A new operator file type attaches as a RED parser feeding a BLUE
 structural validator. New ingress **may not** introduce a second `PreservedCbor`
 construction site, a second block-envelope encoder, a second era→leader-VRF-input
-construction (CN-FORGE-04), or a direct-transport write that bypasses `OutboundCommand`.
+construction (CN-FORGE-04), a second `wrap_tag24` / `unwrap_tag24` definition or a
+hand-rolled tag-24 parse in RED (CN-WIRE-08), or a direct-transport write that bypasses
+`OutboundCommand`.
 
 ---
 
 ## 2. Data-Only vs. Authoritative Layers
 
+### Domain: N2N tag-24 wire envelope (NEW, N-X)
+
+| Layer | Module | Color | Role |
+|-------|--------|-------|------|
+| **Sole byte wrap/unwrap authority** | `ade_codec::cbor::tag24::{wrap_tag24, unwrap_tag24}` | BLUE | The **single** workspace authority that wraps inner bytes in a tag-24 (`0xd8 0x18`) CBOR byte-string envelope and strips it. `unwrap_tag24` returns a **zero-copy borrow** of the verbatim inner bytes (no re-encode) and fails closed with a typed `TagEnvelopeError`. Each defined **exactly once** (`ci_check_tag24_wire_authority.sh`). Owns ONLY the byte wrap/unwrap — never per-protocol layout. |
+| **BlockFetch composition** | `ade_network::codec::block_fetch::{compose_blockfetch_block, decompose_blockfetch_block}` | BLUE | A served `MsgBlock` payload = `tag24(bytes([era, block]))` — era **inside** the wrap; EBB-aware era index, **Conway = storage index 7**. Delegates the byte wrap/strip to the `ade_codec` authority. |
+| **ChainSync composition** | `ade_network::codec::chain_sync::{compose_rollforward_header, decompose_rollforward_header, chain_sync_wire_era_index}` | BLUE | A served `RollForward` header = `[era_tag, tag24(bytes(header_cbor))]` — era_tag **outside** the wrap; **CONSENSUS era index, Conway = 6 = storage − 1** (deliberately different from block-fetch). `HeaderProjection` gained an `era` field; `header_bytes` stays the BARE era-specific header. |
+| **Serve emitters** | `ade_network::block_fetch::server` / `chain_sync::server` | BLUE | Emit composed (tag-24-wrapped) bytes — never a bare `[era, block]` over BlockFetch, never a bare header over ChainSync RollForward. |
+| **RED consumers (migrated)** | `ade_node::admission::runner` + `ade_core_interop::follow` | RED | Strip a peer's tag-24 envelope via `ade_codec::unwrap_tag24` (the deleted hand-rolled parses); no local tag-24 parse. |
+
+**Rule (CN-WIRE-08):** the workspace has **one** tag-24 byte authority (`wrap_tag24` /
+`unwrap_tag24`, each defined exactly once) and per-protocol composition layered over it in
+`ade_network`. **The two N2N surfaces use different era-index schemes** — BlockFetch puts
+the era **inside** the wrap (storage index, Conway = 7); ChainSync puts the era_tag
+**outside** the wrap (consensus index, Conway = 6 = storage − 1). Both compositions are
+pinned **byte-identically** against captured cardano-node 11.0.1 wire fixtures (the real
+Conway `RollForward` golden under `corpus/network/n2n/chain_sync/preprod_conway_rollforward_*`),
+not codec comments. No bare `[era, block]` may be served over BlockFetch; no bare header
+over ChainSync RollForward. **No hand-rolled tag-24 parse may exist in RED** — admission and
+interop call the shared authority. New protocol support adds a `compose_*` / `decompose_*`
+pair delegating to the one `ade_codec` authority; **the wrap/unwrap chokepoint never moves.**
+
 ### Domain: block codec (decode + encode)
 
 | Layer | Module | Color | Role |
 |-------|--------|-------|------|
-| **Authoritative ingress** | `ade_codec::cbor::envelope::decode_block_envelope` + the per-era `decode_*_block` | BLUE | Sole `PreservedCbor` construction site; the only place raw bytes become typed semantic values. |
-| **Authoritative egress (N-V)** | `ade_codec::cbor::envelope::encode_block_envelope` | BLUE | The **single** block-envelope **encoder**, inverse-symmetric to the decoder. Emits the era-tagged `[era, block]` form (Conway = discriminant 7, head `82 07`). |
+| **Authoritative ingress** | `ade_codec::cbor::envelope::decode_block_envelope` + the per-era `decode_*_block` | BLUE | Sole `PreservedCbor` construction site; the only place raw bytes become typed semantic values. Operates over the verbatim tag-24-stripped inner bytes on the wire path (N-X). |
+| **Authoritative egress (N-V)** | `ade_codec::cbor::envelope::encode_block_envelope` | BLUE | The **single** block-envelope **encoder**, inverse-symmetric to the decoder. Emits the storage-form era-tagged `[era, block]` (Conway = discriminant 7, head `82 07`); the on-wire tag-24 wrap is the N-X composition layer above it. |
 | **Producer consumer** | `ade_ledger::producer::forge::forge_block` | BLUE | Wraps forged output via `encode_block_envelope` so `decode_block(forge_block(tick).bytes)` is `Ok`. |
 
-**Rule (CN-FORGE-03):** the workspace has **one** block-envelope grammar in both directions.
-The producer (forge) and the validator (receive) share it: forge output round-trips through
-the same `decode_block` authority that validates received blocks. A second/parallel block
-serializer is CI-gated impossible (`ci_check_no_independent_forge_codepath.sh`,
-`ci_check_forge_decode_round_trip.sh`). New era support adds a `decode_*_block` arm + an
-`encode_block_envelope` discriminant; **the encode/decode chokepoint pair never moves.**
+**Rule (CN-FORGE-03, strengthened N-X):** the workspace has **one** block-envelope grammar
+in both directions. The producer (forge) and the validator (receive) share it: forge output
+round-trips through the same `decode_block` authority that validates received blocks. A
+second/parallel block serializer is CI-gated impossible
+(`ci_check_no_independent_forge_codepath.sh`, `ci_check_forge_decode_round_trip.sh`). The
+N-X strengthening: the on-wire serve form is the tag-24 composition over this storage-form
+`[era, block]` — `served bytes == compose_blockfetch_block(forge_block(...).bytes)`, and the
+inner decodes byte-identically to the self-accept input. New era support adds a
+`decode_*_block` arm + an `encode_block_envelope` discriminant; **the encode/decode
+chokepoint pair never moves.**
 
-### Domain: leader-eligibility VRF input (NEW, N-W)
+### Domain: leader-eligibility VRF input (N-W)
 
 | Layer | Module | Color | Role |
 |-------|--------|-------|------|
@@ -182,11 +232,12 @@ RED/BLUE split never moves.
 |-------|--------|-------|------|
 | **Authoritative admit** | `ade_ledger::producer::served_chain::served_chain_admit` | BLUE | The sole entry path into the served index; only self-accepted blocks may be admitted (CN-PROD-04). |
 | **Atomic publisher** | `ade_runtime::producer::served_chain_handle::push_atomic` | RED (GREEN-by-content glue) | Wraps `served_chain_admit` inside a `watch::Sender::send_modify` closure — no torn snapshot (CN-SNAPSHOT-01). |
-| **Read-side serve** | `ade_network::block_fetch::server::producer_block_fetch_serve` | BLUE | Serves a `RequestRange` only if both endpoints + every block between are present, else `NoBlocks` (CN-SNAPSHOT-02). |
+| **Read-side serve** | `ade_network::block_fetch::server::producer_block_fetch_serve` | BLUE | Serves a `RequestRange` only if both endpoints + every block between are present, else `NoBlocks` (CN-SNAPSHOT-02). On the wire it emits the tag-24 composition (N-X). |
 
 **Rule:** a forged block is visible to peers only **after** `push_atomic` succeeds; the
 read-side serve is data-only over the BLUE `ServedChainSnapshot`. New serve logic reads the
-snapshot; it never admits.
+snapshot; it never admits. The serve emitter wraps via the single tag-24 authority before
+bytes reach a peer (CN-WIRE-08).
 
 ---
 
@@ -196,9 +247,10 @@ snapshot; it never admits.
 
 | Registry | Location | Count | Change Rule |
 |----------|----------|-------|-------------|
-| `ExpectedVrfInput` *(NEW, N-W)* | `ade_core::consensus::vrf_cert` (BLUE) | 2 (`Praos([u8;32])` / `Tpraos([u8;41])`) | The 2-variant enum **is** the protocol-family tag for the leader-eligibility VRF input. Built only via `leader_vrf_input(era, slot, eta0)` (the single era→construction authority). A new variant (new protocol family) = a `leader_vrf_input` arm + a **strengthening of CN-FORGE-04**. **No both-alphas fallback** — no caller may accept a Praos and a TPraos alpha for one era. |
+| `TagEnvelopeError` *(NEW, N-X)* | `ade_codec::cbor::tag24` (BLUE) | 4 (`NotTag24 { first_byte }` / `NotByteString { offset }` / `Truncated { offset, needed }` / `TrailingBytes { consumed, total }`) | The closed tag-24 unwrap error. `unwrap_tag24` fails closed on a wrong marker, non-byte-string payload, truncated inner, or trailing bytes (never panics). New variant = strengthening of **CN-WIRE-08** + a registry amendment; variants carry only non-secret offset/length primitives. |
+| `ExpectedVrfInput` *(N-W)* | `ade_core::consensus::vrf_cert` (BLUE) | 2 (`Praos([u8;32])` / `Tpraos([u8;41])`) | The 2-variant enum **is** the protocol-family tag for the leader-eligibility VRF input. Built only via `leader_vrf_input(era, slot, eta0)` (the single era→construction authority). A new variant (new protocol family) = a `leader_vrf_input` arm + a **strengthening of CN-FORGE-04**. **No both-alphas fallback** — no caller may accept a Praos and a TPraos alpha for one era. |
 | `LeaderCheckVerdict` *(N-R-A)* | `ade_core::consensus::leader_check` (BLUE) | 2 (`Eligible` / `NotEligible`) | New variant = strengthening of **CN-FORGE-02** + a registry amendment. The 2-variant shape is load-bearing: `NotEligible` carries only a bounded `vrf_output_fingerprint`, never forge-capable material — illegal observation is structurally impossible. Do **not** add a third variant without re-proving the no-forge-material property. |
-| `ForgeFailureReason` *(extended N-W)* | `ade_runtime::producer::producer_log` (GREEN-by-content) | closed sum incl. **NEW** `UnsupportedProducerEra` | A non-Praos producer forge attempt fail-closes to `UnsupportedProducerEra` (never silently forges with a TPraos alpha). New variant = strengthening of **CN-FORGE-04 / DC-PROD-01**. No free-form reason strings. |
+| `ForgeFailureReason` *(extended N-W)* | `ade_runtime::producer::producer_log` (GREEN-by-content) | closed sum incl. `UnsupportedProducerEra` | A non-Praos producer forge attempt fail-closes to `UnsupportedProducerEra` (never silently forges with a TPraos alpha). New variant = strengthening of **CN-FORGE-04 / DC-PROD-01**. No free-form reason strings. |
 | `OutboundCommand` *(N-S-B)* | `ade_runtime::network::outbound_command` (RED) | typed `ChainSyncServerMsg` / `BlockFetchServerMsg` variants | New variant = a new typed mini-protocol reply. **No `Vec<u8>` byte tunnel may be added** — the typed-only contract is enforced by `ci_check_no_produce_mode_direct_transport_writes.sh` (CN-OUTBOUND-RELAY-01). |
 | `DispatchError` *(N-S-B)* | `ade_node::produce_mode` + `ade_runtime::network::n2n_server` (RED) | closed sum (incl. `UnknownPeer`, `PeerOutboundMissing`) | Lookup failure must stay structured; no `String`-bearing or catch-all variant (CN-PEER-OUTBOUND-MAP-01). |
 | `ChainEvolutionError` *(N-T)* | `ade_runtime::producer::chain_evolution` (GREEN-by-content) | closed sum (incl. `AuthorityMismatch`, `SelfAcceptRejected`) | New variant requires a strengthening of **DC-PROD-03**. `AuthorityMismatch` fail-closes when BLUE `block_validity` and BLUE `self_accept` disagree. |
@@ -210,7 +262,7 @@ snapshot; it never admits.
 | `AcceptedMiniProtocol` *(N-L)* | `ade_network::session` (GREEN) | closed registry | New mini-protocol = registry entry + a `match` arm with **no wildcard accept**. |
 | `KesError` / `KesParseError` *(N-P)* | `ade_crypto::kes_sum::errors` (BLUE) | 5 / 6 variants | New variant = strengthening of **DC-CRYPTO-08/09**; carries only non-secret primitives. |
 | Operator-evidence manifest TOML schema *(N-S-C)* | `ci_check_operator_evidence_manifest_schema.sh` + `docs/clusters/completed/PHASE4-N-S-C/cluster.md` | closed key set (`schema_version`, `ade_commit`, `cardano_node_version`, `cardano_cli_version`, `network`, `block_hash`, `slot`, `opcert_fingerprint`, `genesis_fingerprint`, `ade_evidence_file`, `peer_log_file`, `peer_log_capture_command`, `peer_log_filter`, `peer_log_file_sha256`, `acceptance_keyword_match`) | Any committed `CE-N-S-LIVE_*.toml` MUST conform; `peer_log_file_sha256` cross-checks the committed peer-log file's actual hash (CN-OPERATOR-EVIDENCE-01). |
-| `CardanoEra` + Conway cert / governance / withdrawal enums | `ade_types::{era, conway::*}` + `ade_codec::conway::*` | closed | New era / cert / gov-action = a versioned gate; no unknown-tag swallow, no silent skip, no catch-all (DC-LEDGER-08/09/10/11). `CardanoEra::is_praos()` (N-W) MUST classify exactly {Babbage, Conway} — never widen silently. |
+| `CardanoEra` + Conway cert / governance / withdrawal enums | `ade_types::{era, conway::*}` + `ade_codec::conway::*` | closed | New era / cert / gov-action = a versioned gate; no unknown-tag swallow, no silent skip, no catch-all (DC-LEDGER-08/09/10/11). `CardanoEra::is_praos()` (N-W) MUST classify exactly {Babbage, Conway}; the per-protocol tag-24 era index schemes (block-fetch storage Conway = 7; chain-sync consensus Conway = 6) are pinned (CN-WIRE-08). |
 | Consensus message + verdict enums | `ade_core::consensus`, `ade_ledger::block_validity` / `tx_validity` | closed | `ci_check_consensus_closed_enums.sh` — closed consensus enums; `match` with no wildcard. |
 | JSONL event vocabularies (admission / wire-only / live-log) | `ade_node::{admission_log, live_log}`, `ade_runtime::admission` | closed | New event = strengthening of the owning DC rule; allow-list + negative tests; wire success ≠ admission ≠ agreement. |
 
@@ -225,6 +277,7 @@ snapshot; it never admits.
 | Seed entries (imported UTxO) | `ade_runtime::seed_import` (GREEN-by-content) | Grows at import time from a cardano-cli UTxO dump; canonical decoders only, no bypass. |
 | Ade-native WAL (append-only) | `ade_runtime::wal` (GREEN-by-content) | Append-only; committed entries are never mutated/rewritten (`ci_check_wal_append_only.sh`). |
 | Sum_n KES family | `ade_crypto::kes_sum` (BLUE) | A new `Sum_n` attaches as an internal type-alias step (`Sum1Kes..Sum6Kes`); the `KesAlgorithm` trait surface does not change. |
+| Per-protocol tag-24 compositions *(N-X)* | `ade_network::codec::{block_fetch, chain_sync}` | A new mini-protocol's CBOR-in-CBOR composition attaches as a `compose_*` / `decompose_*` pair **delegating** the byte wrap/strip to the single `ade_codec::{wrap_tag24, unwrap_tag24}` authority — never a new wrap/unwrap definition, never a hand-rolled parse (CN-WIRE-08). |
 
 ---
 
@@ -232,17 +285,27 @@ snapshot; it never admits.
 
 ### Frozen (immutable at current version — change = new major version)
 
-- **Leader-eligibility VRF transcript (NEW, N-W)** — for Praos eras (Babbage/Conway) the
+- **N2N tag-24 wire envelope (NEW, N-X)** — the CBOR-in-CBOR `0xd8 0x18` byte-string
+  envelope, wrapped/stripped through the single `ade_codec::{wrap_tag24, unwrap_tag24}`
+  authority. Per-protocol composition is pinned byte-identically against cardano-node 11.0.1
+  captures: a served **BlockFetch** `MsgBlock` is `tag24(bytes([era, block]))` (era
+  **inside** the wrap, storage index, Conway = 7); a served **ChainSync** `RollForward`
+  header is `[era_tag, tag24(bytes(header_cbor))]` (era_tag **outside** the wrap, consensus
+  index, Conway = 6 = storage − 1). The two era-index schemes differ — changing either
+  breaks block-fetch/chain-sync interop with a real peer. The inner bytes are copied
+  verbatim (no re-encode). (CN-WIRE-08.)
+- **Leader-eligibility VRF transcript (N-W)** — for Praos eras (Babbage/Conway) the
   leader alpha is `praos_vrf_input(slot, eta0) = blake2b256(slot‖eta0)` + the
   `praos_leader_value` range-extension; for TPraos it is the role-tagged `slot‖eta0‖0x4C`.
   One era→construction authority (`leader_vrf_input`); the `ExpectedVrfInput` variant is the
   protocol-family tag. Changing the transcript breaks every forged-block leader proof AND
   the validator's `verify_praos_vrf`. (CN-FORGE-04.)
-- **Block-envelope grammar (N-V)** — `[era, block]`, Conway = discriminant 7
+- **Block-envelope grammar (N-V)** — storage-form `[era, block]`, Conway = discriminant 7
   (head `82 07`). One encoder (`encode_block_envelope`), one decoder
   (`decode_block_envelope`); inverse-symmetric; `encode` must re-encode a corpus block
-  byte-identically. Changing the envelope shape breaks every forged block AND every
-  received-block decode. (CN-FORGE-03.)
+  byte-identically. The on-wire serve form is the N-X tag-24 composition over this
+  storage-form. Changing the envelope shape breaks every forged block AND every
+  received-block decode. (CN-FORGE-03, strengthened N-X.)
 - **Unsigned-header KES pre-image recipe (N-S-A)** — the canonical CBOR encoding of
   `ShelleyHeaderBody`. The branded `UnsignedHeaderPreImage(Vec<u8>)`'s **only** constructor
   is `unsigned_header_pre_image(...)`; `kes_sign_header` accepts only this type — arbitrary
@@ -257,18 +320,20 @@ snapshot; it never admits.
 - **Hash algorithms** — Blake2b-224 / Blake2b-256; the single `block_body_hash` recipe; the
   per-era VRF input transcript. Algorithm immutable per version.
 - **Mux frame format** — single `encode_frame` / `decode_frame` pair workspace-wide.
-- **All 445 canonical types** — existing wire formats frozen; new types may be added.
+- **All 446 canonical types** — existing wire formats frozen; new types may be added.
 
 ### Version-gated (can evolve across major versions)
 
 - New era support: a `decode_*_block` arm + an `encode_block_envelope` discriminant + a
   `CardanoEra` variant + (for the leader path) an `ExpectedVrfInput` variant and a
-  `leader_vrf_input` arm (versioned gate).
+  `leader_vrf_input` arm + (for the wire path) the per-protocol tag-24 era-index entries
+  (versioned gate).
 - New mini-protocol: an `AcceptedMiniProtocol` registry entry + a BLUE `*_transition`
-  reducer + (for serving) an `OutboundCommand` variant.
-- New closed-enum variant (`ExpectedVrfInput`, `LeaderCheckVerdict`, `OutboundCommand`,
-  `ProducerLogEvent`, `ForgeFailureReason`, the parse-error sums, the JSONL vocabularies):
-  a `[[rules]]` registry entry + a strengthening of the owning rule.
+  reducer + (for serving) an `OutboundCommand` variant + (for CBOR-in-CBOR payloads) a
+  `compose_*` / `decompose_*` pair delegating to the single tag-24 authority.
+- New closed-enum variant (`TagEnvelopeError`, `ExpectedVrfInput`, `LeaderCheckVerdict`,
+  `OutboundCommand`, `ProducerLogEvent`, `ForgeFailureReason`, the parse-error sums, the
+  JSONL vocabularies): a `[[rules]]` registry entry + a strengthening of the owning rule.
 - New canonical-type fields (sort/dedup invariants preserved).
 - New CI checks (existing checks may be tightened, **never** relaxed — RO-CLOSE-01).
 
@@ -299,14 +364,15 @@ Derived from CODEMAP's Cross-Module Rules + the shared BLUE header.
 6. New closed surface: add a `[[rules]]` entry and a CI gate; reference it by ID in the
    cluster/slice docs.
 
-### CI gates that enforce the boundary (98 total; the producer/network/node set)
+### CI gates that enforce the boundary (99 total; the producer/network/node set)
 
 | Script | Enforces | Cluster |
 |---|---|---|
-| `ci_check_producer_praos_vrf.sh` *(NEW)* | CN-FORGE-04 / N-W — single era→leader-VRF-input authority (`leader_vrf_input` defined once); no bare `vrf_input(` on the producer leader path; no both-alphas fallback outside `vrf_cert.rs`; Praos eligibility threshold via `leader_value_for`. | N-W |
+| `ci_check_tag24_wire_authority.sh` *(NEW)* | CN-WIRE-08 / N-X — single tag-24 wrap/unwrap authority (`wrap_tag24`/`unwrap_tag24` each defined exactly once); no hand-rolled tag-24 parse in RED (`admission::runner` / `follow` call the shared authority); serve paths compose via `compose_blockfetch_block` / `compose_rollforward_header` (no bare `[era, block]` / bare header); both compositions pinned byte-identically against captured cardano-node 11.0.1 fixtures; `read_bytes`/`read_text`/`skip_item` overflow guard. | N-X |
+| `ci_check_producer_praos_vrf.sh` | CN-FORGE-04 / N-W — single era→leader-VRF-input authority (`leader_vrf_input` defined once); no bare `vrf_input(` on the producer leader path; no both-alphas fallback outside `vrf_cert.rs`; Praos eligibility threshold via `leader_value_for`. | N-W |
 | `ci_check_produce_mode_uses_bootstrap_initial_state.sh` | CN-PROD-03 / N-T — `produce_mode` obtains initial state only via `bootstrap_initial_state`; no `SyntheticForgeInputs` / inline `LedgerState::new` forge base. | N-T |
-| `ci_check_forge_decode_round_trip.sh` | CN-FORGE-03 — `decode_block(forge_block(tick).bytes)` is `Ok`; forge output is the enveloped `[era, block]` form. | N-V |
-| `ci_check_no_independent_forge_codepath.sh` | CN-FORGE-03 — single forge codepath; no parallel block serializer. | N-V |
+| `ci_check_forge_decode_round_trip.sh` | CN-FORGE-03 (strengthened N-X) — `decode_block(forge_block(tick).bytes)` is `Ok`; forge output is the enveloped `[era, block]` form. | N-V |
+| `ci_check_no_independent_forge_codepath.sh` | CN-FORGE-03 (strengthened N-X) — single forge codepath; no parallel block serializer. | N-V |
 | `ci_check_leader_check_authority.sh` | CN-FORGE-02 — BLUE leader-check has no LedgerView/EraSchedule/RED dep; never sees private keys; closed `LeaderCheckVerdict`. | N-R-A |
 | `ci_check_unsigned_header_preimage_single_source.sh` | CN-KES-HEADER-01 / DC-KES-HEADER-01 — single canonical pre-image recipe; branded `UnsignedHeaderPreImage`; pure. | N-S-A |
 | `ci_check_no_produce_mode_direct_transport_writes.sh` | CN-OUTBOUND-RELAY-01 — bytes only via `OutboundCommand` → `MuxPump`; no direct transport write; no byte tunnel. | N-S-B |
@@ -316,7 +382,7 @@ Derived from CODEMAP's Cross-Module Rules + the shared BLUE header.
 | `ci_check_served_chain_closure.sh`, `ci_check_snapshot_encoder_closure.sh` | served-chain + snapshot-encoder closure (carry-forward, exercised by per-peer dispatch). | N-R-B |
 
 > Earlier-cluster gates (N-A..N-P, the N-M-* admission/seed/WAL/anchor set, the N-L
-> wire-session set) are present in the 98 total; per-script detail is in the registry's
+> wire-session set) are present in the 99 total; per-script detail is in the registry's
 > `ci_script` fields. The full list is `ls ci/ci_check_*.sh`.
 
 ---
@@ -327,11 +393,15 @@ Derived from CODEMAP's Cross-Module Rules + the shared BLUE header.
   network/filesystem, async runtime, locale-dependent ops, OS-dependent ordering. No
   signing operations (`ci_check_no_signing_in_blue.sh`). No `#[cfg(feature = …)]` semantic
   gating. No `PreservedCbor` construction outside `ade_codec`. No re-encode of wire bytes
-  when hashing. **No second era→leader-VRF-input construction (CN-FORGE-04)** —
-  `leader_vrf_input` is the single authority; no both-alphas fallback.
+  when hashing. No second era→leader-VRF-input construction (CN-FORGE-04) —
+  `leader_vrf_input` is the single authority; no both-alphas fallback. **No second
+  `wrap_tag24` / `unwrap_tag24` definition (CN-WIRE-08)** — the single tag-24 byte
+  authority lives in `ade_codec::cbor::tag24`; per-protocol composers delegate to it and
+  never re-encode the inner bytes; serve emitters never produce a bare `[era, block]` /
+  bare header.
 - **GREEN:** no nondeterminism; no participation in authoritative outputs. The
-  `producer::coordinator` MUST NOT own/store private signing material. **`ChainEvolution`
-  (N-T) MUST NEVER mint `AcceptedBlock`** — it obtains the token solely from BLUE
+  `producer::coordinator` MUST NOT own/store private signing material. `ChainEvolution`
+  (N-T) MUST NEVER mint `AcceptedBlock` — it obtains the token solely from BLUE
   `self_accept`; `advance` consumes `self` (linear typestate — a stale base is
   unrepresentable). `ProducerLogEvent` / `ForgeFailureReason` are closed vocabularies — no
   open/wildcard variant, no free-form reason strings. Evidence/admission reducers compare
@@ -341,10 +411,13 @@ Derived from CODEMAP's Cross-Module Rules + the shared BLUE header.
   canonical validation. `produce_mode` MUST emit outbound bytes only via `OutboundCommand`
   (no direct `MuxTransportHandle::outbound` write, no `Vec<u8>` byte tunnel). The per-peer
   outbound map is `BTreeMap` (deterministic), keyed by `PeerId` (no cross-peer leakage).
-  Key custody is confined to `producer::signing` / `producer_shell`. **`run_real_forge`
-  (N-W) MUST NOT perform RED-side era dispatch for the leader-VRF alpha** — it proves over
+  Key custody is confined to `producer::signing` / `producer_shell`. `run_real_forge`
+  (N-W) MUST NOT perform RED-side era dispatch for the leader-VRF alpha — it proves over
   the BLUE answer's `expected_vrf_input.alpha_bytes()`, and a non-Praos era fail-closes to
   `ForgeFailureReason::UnsupportedProducerEra` (never silently forges with a TPraos alpha).
+  **No hand-rolled tag-24 parse (CN-WIRE-08, N-X)** — `ade_node::admission::runner` and
+  `ade_core_interop::follow` strip a peer's CBOR-in-CBOR envelope via the single
+  `ade_codec::unwrap_tag24` authority; no local tag-24 parse.
 
 ### Project-specific additions (Ade)
 
@@ -367,18 +440,13 @@ Derived from CODEMAP's Cross-Module Rules + the shared BLUE header.
 > Surfaced honestly per IDD: these are **declared** future attach points, not closed
 > surfaces. Each is named in a registry rule or a cluster CLOSURE record.
 >
-> **N-W is no longer here.** CN-FORGE-04 (producer-side TPraos→Praos VRF migration) closed
-> in PHASE4-N-W and is now **enforced** (`status = "enforced"`, `introduced_in =
-> "PHASE4-N-W"`, `ci_script = ci/ci_check_producer_praos_vrf.sh`); it is documented as a
-> closed surface in §2 / §3 / §4 above. The remaining producer→real-peer follow-ons stay
-> open below.
+> **N-X is no longer here.** The serve-side tag-24 wire-wrap (formerly item 1, deferred
+> from N-V / `open_obligation` on CN-FORGE-03) **closed** in PHASE4-N-X and is now
+> **enforced** (`CN-WIRE-08`, `status = "enforced"`, `introduced_in = "PHASE4-N-X"`,
+> `ci_script = ci/ci_check_tag24_wire_authority.sh`); it is documented as a closed surface
+> in §2 / §3 / §4 above. The remaining producer→real-peer follow-ons stay open below.
 
-1. **Serve-side tag-24 wire-wrap** *(deferred from N-V — `open_obligation` on CN-FORGE-03).*
-   Wrapping the storage-form `[era, block]` into `[serialisationInfo, tag24([era, block])]`
-   so a **live cardano-node peer** accepts the served block over block-fetch. N-V closed only
-   the storage-form self-decode round-trip; the on-wire wrap for a real peer is a named
-   follow-on.
-2. **N-U — forged-block durability.** WAL / ChainDB / snapshot / warm-start for forged blocks
+1. **N-U — forged-block durability.** WAL / ChainDB / snapshot / warm-start for forged blocks
    (crash → bootstrap warm-start). Explicitly out of N-T scope (`open_obligation` on
    CN-PROD-03 / DC-PROD-03); N-T exercises only the cold-start branch.
 
@@ -387,27 +455,34 @@ Derived from CODEMAP's Cross-Module Rules + the shared BLUE header.
 - **CN-OPERATOR-EVIDENCE-01 / CN-CONS-06 / RO-LIVE-01** — the manifest schema is enforced,
   but C1 (private testnet) / C2 (preprod) operator-pass execution is
   `blocked_until_operator_pass_executed`. Until an operator commits a `CE-N-S-LIVE_*.toml`,
-  the CI gate is vacuously satisfied. This is an execution gate, not a code seam. With
-  CN-FORGE-04 now enforced, the producer forge composition is mechanically complete through
-  the leader-VRF authority; the remaining blocker to a real-peer block-acceptance pass is
-  the serve-side tag-24 wire-wrap (item 1).
+  the CI gate is vacuously satisfied. This is an execution gate, not a code seam. With both
+  CN-FORGE-04 (N-W, leader-VRF authority) and CN-WIRE-08 (N-X, on-wire tag-24 serve/receive
+  authority) now enforced, the producer forge composition is mechanically complete through
+  the serve step — the served block reaches a peer in the correct tag-24-wrapped form. The
+  remaining blocker to a real-peer block-acceptance pass is the OPERATOR-PASS live leg
+  itself (executing C1/C2 against a real cardano-node peer).
 
 ---
 
 ## Generation notes
 
-- Regenerated full at HEAD `01e7e08` (`git rev-parse --short HEAD`), downstream of the
-  CODEMAP at the same HEAD. PHASE4-N-W is the active cluster, closing now.
-- Every closed surface was verified against the on-disk code: `ExpectedVrfInput` (2-variant
-  enum at `vrf_cert.rs:201`), `leader_vrf_input` / `leader_value_for` / `alpha_bytes`
-  authorities, `ForgeFailureReason::UnsupportedProducerEra` (`producer_log.rs:107`),
-  `LeaderScheduleAnswer.expected_vrf_input: ExpectedVrfInput` (`leader_schedule.rs:51`),
-  `CardanoEra::is_praos()` (`era.rs:68`), plus the carry-forward encoder /
-  `ChainEvolution` / `UnsignedHeaderPreImage` / `OutboundCommand` / parse-error sums. The
-  new CI gate `ci_check_producer_praos_vrf.sh` was confirmed present (98 total via
-  `ls ci/ci_check_*.sh | wc -l`). CN-FORGE-04 confirmed `status = "enforced"` in the
-  registry (`docs/ade-invariant-registry.toml`, 291 rules).
-- Cluster-doc location verified on disk: only `docs/clusters/PHASE4-N-W/` lives outside
-  `docs/clusters/completed/`. The prior SEAMS's "N-Q/N-R/N-S docs remain under
-  `docs/clusters/`" note was stale and is corrected.
+- Regenerated full at HEAD `273c887` (`git rev-parse --short HEAD`), downstream of the
+  CODEMAP at the same HEAD. PHASE4-N-X is the active cluster, closing now.
+- Every closed surface was verified against the on-disk code: `wrap_tag24` / `unwrap_tag24`
+  / `TagEnvelopeError` (`crates/ade_codec/src/cbor/tag24.rs:39,61,79`), the per-protocol
+  composers `compose_blockfetch_block` / `decompose_blockfetch_block`
+  (`crates/ade_network/src/codec/block_fetch.rs:203,210`), `chain_sync_wire_era_index` /
+  `compose_rollforward_header` / `decompose_rollforward_header`
+  (`crates/ade_network/src/codec/chain_sync.rs:268,279,292`), and the RED unwrap migration
+  (`crates/ade_node/src/admission/runner.rs:489`, `crates/ade_core_interop/src/follow.rs:199`),
+  plus the carry-forward `ExpectedVrfInput` / `leader_vrf_input` / encoder / `ChainEvolution`
+  / `UnsignedHeaderPreImage` / `OutboundCommand` / parse-error sums. The new CI gate
+  `ci_check_tag24_wire_authority.sh` was confirmed present (99 total via
+  `ls ci/ci_check_*.sh | wc -l`). CN-WIRE-08 confirmed `status = "enforced"` /
+  `introduced_in = "PHASE4-N-X"` in the registry (`docs/ade-invariant-registry.toml`, 292
+  rules); CN-FORGE-03 / DC-CONS-17 / DC-CONS-18 carry the N-X strengthening.
+- Cluster-doc location verified on disk: only `docs/clusters/PHASE4-N-X/` lives outside
+  `docs/clusters/completed/` (archived right after the grounding docs regenerate).
+- Counts: 446 canonical types (+1 from the closed `TagEnvelopeError` enum in `ade_codec`),
+  99 CI checks (+`ci_check_tag24_wire_authority.sh`), 292 registry rules (+1: CN-WIRE-08).
 - The doc is regenerated, not edited. If a value drifts, fix the source, not the doc.
