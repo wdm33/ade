@@ -339,7 +339,9 @@ mini_protocol_id = {protocol_id}
 
 fn parse_hash32(s: &str) -> Option<[u8; 32]> {
     let s = s.trim();
-    if s.len() != 64 {
+    // ASCII guard: keeps the `s[i*2..i*2+2]` slicing on char boundaries
+    // (a 64-byte non-ASCII string would otherwise panic).
+    if s.len() != 64 || !s.is_ascii() {
         return None;
     }
     let mut out = [0u8; 32];

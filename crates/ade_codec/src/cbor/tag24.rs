@@ -202,6 +202,27 @@ mod tests {
     }
 
     #[test]
+    fn unwrap_rejects_huge_declared_length_without_panic() {
+        // Adversarial wire input: a tag-24 byte string whose LENGTH
+        // ARGUMENT (not inline) declares a gigantic size with no content.
+        // Every CBOR length class must fail closed with a typed error —
+        // never an integer-overflow / slice-bounds panic (a remote DoS
+        // on untrusted peer input). Covers the 2-/4-/8-byte length args.
+        let adversarial: &[&[u8]] = &[
+            &[0xd8, 0x18, 0x59, 0xff, 0xff], // 0x59 = 2-byte len = 65535
+            &[0xd8, 0x18, 0x5a, 0xff, 0xff, 0xff, 0xff], // 0x5a = 4-byte len = u32::MAX
+            &[0xd8, 0x18, 0x5b, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff], // 0x5b = 8-byte len = u64::MAX
+        ];
+        for bytes in adversarial {
+            assert!(
+                matches!(unwrap_tag24(bytes), Err(TagEnvelopeError::Truncated { .. })),
+                "must fail closed (no panic) on declared length {:02x?}",
+                &bytes[2..3]
+            );
+        }
+    }
+
+    #[test]
     fn unwrap_rejects_trailing_bytes() {
         let inner = sample(3);
         let mut wire = wrap_tag24(&inner);

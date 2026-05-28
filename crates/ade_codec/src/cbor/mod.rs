@@ -191,7 +191,7 @@ pub fn read_bytes(data: &[u8], offset: &mut usize) -> Result<(Vec<u8>, IntWidth)
     }
     let (len, width) = decode_argument(data, offset, ai, start)?;
     let len = len as usize;
-    if *offset + len > data.len() {
+    if (*offset).checked_add(len).map_or(true, |end| end > data.len()) {
         return Err(CodecError::UnexpectedEof {
             offset: *offset,
             needed: len,
@@ -223,7 +223,7 @@ pub fn read_text(data: &[u8], offset: &mut usize) -> Result<(String, IntWidth), 
     }
     let (len, width) = decode_argument(data, offset, ai, start)?;
     let len = len as usize;
-    if *offset + len > data.len() {
+    if (*offset).checked_add(len).map_or(true, |end| end > data.len()) {
         return Err(CodecError::UnexpectedEof {
             offset: *offset,
             needed: len,
@@ -368,7 +368,7 @@ pub fn skip_item(data: &[u8], offset: &mut usize) -> Result<(usize, usize), Code
             } else {
                 let (len, _) = decode_argument(data, offset, ai, start)?;
                 let len = len as usize;
-                if *offset + len > data.len() {
+                if (*offset).checked_add(len).map_or(true, |end| end > data.len()) {
                     return Err(CodecError::UnexpectedEof {
                         offset: *offset,
                         needed: len,
@@ -783,6 +783,31 @@ mod tests {
         assert_eq!(canonical_width(65536), IntWidth::I32);
         assert_eq!(canonical_width(0xffff_ffff), IntWidth::I32);
         assert_eq!(canonical_width(0x1_0000_0000), IntWidth::I64);
+    }
+
+    #[test]
+    fn read_bytes_rejects_overflowing_declared_length() {
+        // A byte string whose 8-byte length argument is u64::MAX must
+        // fail closed with a typed error — never an integer-overflow /
+        // slice-bounds panic. (`*offset + len` would wrap usize; the
+        // checked_add guard rejects it.)
+        let data = [0x5b, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff];
+        let mut offset = 0;
+        assert!(matches!(
+            read_bytes(&data, &mut offset),
+            Err(CodecError::UnexpectedEof { .. })
+        ));
+    }
+
+    #[test]
+    fn read_text_rejects_overflowing_declared_length() {
+        // Same overflow guard for text strings (major type 3).
+        let data = [0x7b, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff];
+        let mut offset = 0;
+        assert!(matches!(
+            read_text(&data, &mut offset),
+            Err(CodecError::UnexpectedEof { .. })
+        ));
     }
 
     #[test]
