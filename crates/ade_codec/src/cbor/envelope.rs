@@ -7,7 +7,7 @@
 
 use ade_types::CardanoEra;
 
-use crate::cbor::{self, ContainerEncoding};
+use crate::cbor::{self, ContainerEncoding, IntWidth};
 use crate::error::CodecError;
 
 /// Decoded HardForkCombinator block envelope.
@@ -93,10 +93,49 @@ pub fn decode_block_envelope(data: &[u8]) -> Result<BlockEnvelope, CodecError> {
     })
 }
 
+/// Encode the HardForkCombinator block envelope `[era, block]` — the
+/// inverse of [`decode_block_envelope`]. `block_bytes` is the
+/// era-specific inner block (already canonically encoded). Produces
+/// `array(2) || uint(era) || block_bytes`.
+///
+/// This is the single canonical envelope **encoder**: the producer
+/// (`forge_block`) and the validator (`decode_block_envelope`) share
+/// one envelope grammar, so a forged block round-trips through the same
+/// decode path that validates received blocks (CN-FORGE-03).
+pub fn encode_block_envelope(era: CardanoEra, block_bytes: &[u8]) -> Vec<u8> {
+    let mut out = Vec::with_capacity(2 + block_bytes.len());
+    cbor::write_array_header(&mut out, ContainerEncoding::Definite(2, IntWidth::Inline));
+    cbor::write_uint_canonical(&mut out, era.as_u8() as u64);
+    out.extend_from_slice(block_bytes);
+    out
+}
+
 #[cfg(test)]
 #[allow(clippy::unwrap_used)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn encode_decode_block_envelope_round_trips() {
+        let inner = [0x83u8, 0x01, 0x02, 0x03];
+        for era in [
+            CardanoEra::ByronEbb,
+            CardanoEra::Shelley,
+            CardanoEra::Babbage,
+            CardanoEra::Conway,
+        ] {
+            let e = encode_block_envelope(era, &inner);
+            let env = decode_block_envelope(&e).unwrap();
+            assert_eq!(env.era, era);
+            assert_eq!(&e[env.block_start..env.block_end], &inner[..]);
+        }
+    }
+
+    #[test]
+    fn conway_envelope_head_is_82_07() {
+        let e = encode_block_envelope(CardanoEra::Conway, &[0x80]);
+        assert_eq!(&e[..2], &[0x82, 0x07]);
+    }
 
     #[test]
     fn decode_simple_envelope() {
