@@ -35,6 +35,10 @@ struct Inner {
     by_slot: BTreeMap<SlotNo, StoredBlock>,
     by_hash: BTreeMap<Hash32, SlotNo>,
     snapshots: BTreeMap<SlotNo, Vec<u8>>,
+    // Anchor-fp-keyed seed-epoch consensus-inputs sidecar (A2). A map
+    // disjoint from `snapshots` above, keyed by the 32-byte anchor
+    // fingerprint — never a reserved sentinel slot.
+    seed_consensus_inputs: BTreeMap<Hash32, Vec<u8>>,
 }
 
 impl InMemoryChainDb {
@@ -168,5 +172,33 @@ impl SnapshotStore for InMemoryChainDb {
         let mut inner = self.inner.lock().map_err(lock_poisoned)?;
         inner.snapshots.remove(&slot);
         Ok(())
+    }
+
+    fn put_seed_epoch_consensus_inputs(
+        &self,
+        anchor_fp: &Hash32,
+        bytes: &[u8],
+    ) -> Result<(), ChainDbError> {
+        let mut inner = self.inner.lock().map_err(lock_poisoned)?;
+        if let Some(existing) = inner.seed_consensus_inputs.get(anchor_fp) {
+            if existing.as_slice() != bytes {
+                return Err(ChainDbError::InvalidOperation(format!(
+                    "seed-epoch consensus inputs for anchor_fp {anchor_fp} already occupied by different bytes",
+                )));
+            }
+            return Ok(());
+        }
+        inner
+            .seed_consensus_inputs
+            .insert(anchor_fp.clone(), bytes.to_vec());
+        Ok(())
+    }
+
+    fn get_seed_epoch_consensus_inputs(
+        &self,
+        anchor_fp: &Hash32,
+    ) -> Result<Option<Vec<u8>>, ChainDbError> {
+        let inner = self.inner.lock().map_err(lock_poisoned)?;
+        Ok(inner.seed_consensus_inputs.get(anchor_fp).cloned())
     }
 }

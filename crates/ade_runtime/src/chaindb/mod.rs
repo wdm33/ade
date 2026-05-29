@@ -114,4 +114,26 @@ pub trait SnapshotStore: Send + Sync {
 
     /// Remove a snapshot at `slot`. `Ok(())` whether present or not.
     fn delete_snapshot(&self, slot: SlotNo) -> Result<(), ChainDbError>;
+
+    /// Persist the seed-epoch consensus-inputs sidecar, keyed by the
+    /// anchor fingerprint (`anchor_fp`). This is a surface **disjoint**
+    /// from the slot-keyed snapshot namespace above — it lives in its
+    /// own anchor-fp-keyed space, never a reserved sentinel slot, so a
+    /// `put_seed_epoch_consensus_inputs(fp, …)` can never collide with
+    /// or overwrite any `put_snapshot(slot, …)`. Idempotent if the same
+    /// bytes were already stored for the same `anchor_fp`; conflicting
+    /// bytes for the same `anchor_fp` return `InvalidOperation`
+    /// (mirrors `put_snapshot`). PHASE4-N-F-A A2.
+    fn put_seed_epoch_consensus_inputs(
+        &self,
+        anchor_fp: &Hash32,
+        bytes: &[u8],
+    ) -> Result<(), ChainDbError>;
+
+    /// Look up the seed-epoch consensus-inputs sidecar by `anchor_fp`.
+    /// `Ok(None)` if absent. Disjoint from the slot-keyed namespace.
+    fn get_seed_epoch_consensus_inputs(
+        &self,
+        anchor_fp: &Hash32,
+    ) -> Result<Option<Vec<u8>>, ChainDbError>;
 }

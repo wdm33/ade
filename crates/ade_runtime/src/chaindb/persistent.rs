@@ -28,13 +28,21 @@ const SLOT_BY_HASH: TableDefinition<&[u8; 32], u64> =
     TableDefinition::new("slot_by_hash");
 const SNAPSHOTS_BY_SLOT: TableDefinition<u64, &[u8]> =
     TableDefinition::new("snapshots_by_slot");
+/// Anchor-fp-keyed seed-epoch consensus-inputs sidecar table (A2).
+/// Keyed by the 32-byte anchor fingerprint; disjoint from the slot-keyed
+/// `snapshots_by_slot` namespace (no reserved sentinel slot). Added in
+/// S-36; opening an older file without this table succeeds (the table is
+/// created lazily on first write / read like every other table here).
+const SEED_CINPUTS_BY_ANCHOR_FP: TableDefinition<&[u8; 32], &[u8]> =
+    TableDefinition::new("seed_cinputs_by_anchor_fp");
 const META: TableDefinition<&str, &[u8]> = TableDefinition::new("meta");
 
 /// Schema version. Bumped from 1 to 2 in S-35 to add the
-/// `snapshots_by_slot` table. Forward-compatible with v1 files —
-/// opening a v1 file succeeds; the schema_version is bumped to 2 on
-/// the first write.
-const SCHEMA_VERSION: u32 = 2;
+/// `snapshots_by_slot` table, and from 2 to 3 in PHASE4-N-F-A A2 to add
+/// the anchor-fp-keyed `seed_cinputs_by_anchor_fp` sidecar table.
+/// Forward-compatible with older files — opening a v1/v2 file succeeds;
+/// the schema_version is bumped to current on the first write.
+const SCHEMA_VERSION: u32 = 3;
 const MAGIC_BYTES: &[u8] = b"ADE\0CHAINDB\0";
 const META_KEY_MAGIC: &str = "magic";
 const META_KEY_SCHEMA: &str = "schema_version";
@@ -552,6 +560,65 @@ impl SnapshotStore for PersistentChainDb {
         }
         txn.commit().map_err(map_commit_err)?;
         Ok(())
+    }
+
+    fn put_seed_epoch_consensus_inputs(
+        &self,
+        anchor_fp: &Hash32,
+        bytes: &[u8],
+    ) -> Result<(), ChainDbError> {
+        let _guard = self.write_lock.lock().map_err(lock_poisoned)?;
+        let txn = self.begin_write()?;
+
+        // Conflict / idempotency check, mirroring put_snapshot.
+        let conflict = {
+            let table = txn
+                .open_table(SEED_CINPUTS_BY_ANCHOR_FP)
+                .map_err(map_table_err)?;
+            let existing = table
+                .get(&anchor_fp.0)
+                .map_err(map_storage_err)?
+                .map(|v| v.value().to_vec());
+            existing
+        };
+
+        match conflict {
+            Some(existing_bytes) if existing_bytes == bytes => {
+                txn.commit().map_err(map_commit_err)?;
+                return Ok(());
+            }
+            Some(_) => {
+                return Err(ChainDbError::InvalidOperation(format!(
+                    "seed-epoch consensus inputs for anchor_fp {anchor_fp} already occupied by different bytes",
+                )));
+            }
+            None => {}
+        }
+
+        {
+            let mut table = txn
+                .open_table(SEED_CINPUTS_BY_ANCHOR_FP)
+                .map_err(map_table_err)?;
+            table
+                .insert(&anchor_fp.0, bytes)
+                .map_err(map_storage_err)?;
+        }
+        txn.commit().map_err(map_commit_err)?;
+        Ok(())
+    }
+
+    fn get_seed_epoch_consensus_inputs(
+        &self,
+        anchor_fp: &Hash32,
+    ) -> Result<Option<Vec<u8>>, ChainDbError> {
+        let txn = self.db.begin_read().map_err(map_txn_err)?;
+        let table = match txn.open_table(SEED_CINPUTS_BY_ANCHOR_FP) {
+            Ok(t) => t,
+            Err(redb::TableError::TableDoesNotExist(_)) => return Ok(None),
+            Err(e) => return Err(map_table_err(e)),
+        };
+        let bytes = table.get(&anchor_fp.0).map_err(map_storage_err)?;
+        Ok(bytes.map(|v| v.value().to_vec()))
     }
 }
 

@@ -102,9 +102,68 @@ fn not_found_is_ok_none<S: SnapshotStore>(s: &S) {
 mod tests {
     use super::*;
     use crate::chaindb::InMemoryChainDb;
+    use ade_types::primitives::Hash32;
 
     #[test]
     fn in_memory_passes_snapshot_contract() {
         run_snapshot_contract_tests(InMemoryChainDb::new);
+    }
+
+    #[test]
+    fn snapshot_store_keyed_sidecar_is_disjoint_from_slot_snapshots() {
+        // The anchor-fp-keyed seed-consensus sidecar must live in a
+        // namespace disjoint from the slot-keyed snapshot space: a
+        // `put_snapshot(slot)` and a `put_seed_epoch_consensus_inputs(fp)`
+        // must not collide or overwrite each other — even when the
+        // fingerprint's leading bytes numerically equal an occupied slot
+        // (there is no reserved sentinel slot bridging the two).
+        let s = InMemoryChainDb::new();
+
+        let slot = SlotNo(7);
+        let slot_bytes = vec![0xAA, 0xBB, 0xCC];
+        // A fingerprint whose first 8 bytes encode the integer 7 — if the
+        // sidecar were secretly keyed by a slot derived from the fp, this
+        // is where a collision would surface.
+        let mut fp_arr = [0u8; 32];
+        fp_arr[7] = 7;
+        let anchor_fp = Hash32(fp_arr);
+        let sidecar_bytes = vec![0x11, 0x22, 0x33, 0x44];
+
+        s.put_snapshot(slot, &slot_bytes).expect("put snapshot");
+        s.put_seed_epoch_consensus_inputs(&anchor_fp, &sidecar_bytes)
+            .expect("put sidecar");
+
+        // Each namespace returns its own bytes, unmodified by the other.
+        assert_eq!(
+            s.get_snapshot(slot).expect("get snapshot"),
+            Some(slot_bytes.clone())
+        );
+        assert_eq!(
+            s.get_seed_epoch_consensus_inputs(&anchor_fp)
+                .expect("get sidecar"),
+            Some(sidecar_bytes.clone())
+        );
+
+        // The sidecar write did not create a slot-keyed snapshot.
+        assert_eq!(s.list_snapshot_slots().expect("list"), vec![slot]);
+
+        // A slot lookup at the fp's numeric value sees nothing; a sidecar
+        // lookup at an arbitrary fp sees nothing. The two spaces don't
+        // bleed into each other.
+        assert!(s.get_snapshot(SlotNo(0)).expect("get").is_none());
+        assert!(s
+            .get_seed_epoch_consensus_inputs(&Hash32([0u8; 32]))
+            .expect("get")
+            .is_none());
+
+        // Idempotent re-put of identical sidecar bytes; conflicting bytes
+        // for the same fp fail closed (mirrors put_snapshot).
+        s.put_seed_epoch_consensus_inputs(&anchor_fp, &sidecar_bytes)
+            .expect("idempotent re-put");
+        let conflict = s.put_seed_epoch_consensus_inputs(&anchor_fp, &[0xFF]);
+        assert!(matches!(
+            conflict,
+            Err(crate::chaindb::ChainDbError::InvalidOperation(_))
+        ));
     }
 }

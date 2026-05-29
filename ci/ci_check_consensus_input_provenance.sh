@@ -1,0 +1,133 @@
+#!/usr/bin/env bash
+set -uo pipefail
+
+# PHASE4-N-F-A A2 — seed-epoch consensus-input provenance containment
+# (candidate CN-CINPUT-02).
+#
+# The persisted `SeedEpochConsensusInputs` sidecar may be populated ONLY
+# on the verified-bootstrap composition path, through the anchor-keyed
+# `SnapshotStore` surface. The bounty-primary forge-time path
+# (`produce_mode`, `import_live_consensus_inputs*`,
+# `pool_distr_view_from_consensus_inputs`, `--consensus-inputs-path`)
+# must not build or `put` the sidecar.
+#
+# Mechanical, data-flow-resistant guards (N-Z
+# `ci_check_mithril_seed_point_independence.sh` style — containment, not
+# a bypassable RHS grep):
+#   (a) POSITIVE: each verified-bootstrap composition site
+#       (`genesis_bootstrap.rs`, `mithril_bootstrap.rs`) calls
+#       `.put_seed_epoch_consensus_inputs(` — the populator lives where it
+#       must.
+#   (b) NEGATIVE forge-time fence: the forge-time composer
+#       `produce_mode.rs` (which owns `import_live_consensus_inputs`,
+#       `pool_distr_view_from_consensus_inputs`, and the
+#       `--consensus-inputs-path` flag) names NONE of the sidecar
+#       build/put/encode tokens.
+#   (c) GLOBAL containment: across all production (test-stripped) Rust,
+#       any *call* to `.put_seed_epoch_consensus_inputs(` or
+#       `merge_seed_epoch_consensus_inputs(` outside the allowed
+#       composition set is a FAIL — closing the "hidden second populator
+#       anywhere in the tree" class.
+#
+# `#[cfg(test)]` modules and line comments are stripped before grepping.
+
+REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
+CRATES="$REPO_ROOT/crates"
+
+GENESIS_COMP="$CRATES/ade_runtime/src/genesis_bootstrap.rs"
+MITHRIL_COMP="$CRATES/ade_runtime/src/mithril_bootstrap.rs"
+MERGE_MOD="$CRATES/ade_runtime/src/seed_consensus_merge.rs"
+PRODUCE_MODE="$CRATES/ade_node/src/produce_mode.rs"
+
+FAILED=0
+print_fail() { echo "FAIL: $1"; FAILED=1; }
+
+# Strip the #[cfg(test)] module (everything from the test attribute to
+# EOF) and line comments, so guards only see production code.
+strip_for_grep() {
+    awk '
+        /^#\[cfg\(test\)\]/ { in_test=1 }
+        in_test { next }
+        { line=$0; sub(/\/\/.*$/, "", line); print line }
+    ' "$1"
+}
+
+for f in "$GENESIS_COMP" "$MITHRIL_COMP" "$MERGE_MOD" "$PRODUCE_MODE"; do
+    if [[ ! -f "$f" ]]; then
+        print_fail "missing expected source $f"
+    fi
+done
+if (( FAILED != 0 )); then
+    echo "FAIL: ci_check_consensus_input_provenance"
+    exit 1
+fi
+
+# --- Guard (a): POSITIVE — the populator lives at each composition site.
+for comp in "$GENESIS_COMP" "$MITHRIL_COMP"; do
+    body="$(strip_for_grep "$comp")"
+    if ! echo "$body" | grep -qE '\.put_seed_epoch_consensus_inputs\('; then
+        print_fail "composition site $(basename "$comp") does not call .put_seed_epoch_consensus_inputs( — the sidecar populator must live at the verified-bootstrap composition site"
+    fi
+    # And it must build the record via the A1 sole encoder + the GREEN merge.
+    if ! echo "$body" | grep -qE '\bmerge_seed_epoch_consensus_inputs\('; then
+        print_fail "composition site $(basename "$comp") does not build via merge_seed_epoch_consensus_inputs("
+    fi
+    if ! echo "$body" | grep -qE '\bencode_seed_epoch_consensus_inputs\('; then
+        print_fail "composition site $(basename "$comp") does not encode via the A1 sole encoder encode_seed_epoch_consensus_inputs("
+    fi
+done
+
+# --- Guard (b): NEGATIVE forge-time fence — produce_mode names none of
+# the sidecar build/put/encode tokens. produce_mode owns the forge-time
+# consensus-input path (import_live_consensus_inputs +
+# pool_distr_view_from_consensus_inputs + --consensus-inputs-path), so
+# fencing this file fences that whole path.
+FORGE_BODY="$(strip_for_grep "$PRODUCE_MODE")"
+FORGE_FENCED_RE='(put_seed_epoch_consensus_inputs|merge_seed_epoch_consensus_inputs|encode_seed_epoch_consensus_inputs|SeedEpochConsensusInputs)'
+if echo "$FORGE_BODY" | grep -qE "$FORGE_FENCED_RE"; then
+    print_fail "forge-time produce_mode.rs references a seed-epoch sidecar token (CN-CINPUT-02): the forge-time consensus-inputs path must not build or put the sidecar — $(echo "$FORGE_BODY" | grep -nE "$FORGE_FENCED_RE" | head -n1)"
+fi
+
+# --- Guard (c): GLOBAL containment (data-flow-resistant). Scan every
+# production (test-stripped) Rust file. Any *call* to the populator or
+# the builder outside the allowed composition set means a second
+# populate path could exist somewhere in the tree.
+#   Allowed call sites:
+#     - genesis_bootstrap.rs / mithril_bootstrap.rs (the two composers)
+#     - seed_consensus_merge.rs (defines + may self-reference the builder)
+# A `fn put_seed_epoch_consensus_inputs(` *definition* (the trait decl +
+# the two SnapshotStore impls) is NOT a populate call — match only method
+# *calls* (`.put_seed_epoch_consensus_inputs(`) for the put token.
+ALLOWED_RE='/(genesis_bootstrap|mithril_bootstrap|seed_consensus_merge)\.rs$'
+
+while IFS= read -r -d '' rsfile; do
+    case "$rsfile" in
+        *"/genesis_bootstrap.rs"|*"/mithril_bootstrap.rs"|*"/seed_consensus_merge.rs")
+            continue
+            ;;
+    esac
+    body="$(strip_for_grep "$rsfile")"
+    # Method-call to the populator (leading dot) outside the allowed set.
+    if echo "$body" | grep -qE '\.put_seed_epoch_consensus_inputs\('; then
+        print_fail "production file $rsfile calls .put_seed_epoch_consensus_inputs( outside the verified-bootstrap composition sites (CN-CINPUT-02)"
+    fi
+    # Any reference to the GREEN builder outside the allowed set.
+    if echo "$body" | grep -qE '\bmerge_seed_epoch_consensus_inputs\('; then
+        print_fail "production file $rsfile references merge_seed_epoch_consensus_inputs( outside the verified-bootstrap composition sites (CN-CINPUT-02)"
+    fi
+done < <(find "$CRATES" -name '*.rs' -type f -print0)
+
+# Sanity floor for guard (c): the allow-list regex must actually match
+# the two composers (guards against an accidental path-typo that would
+# make the global scan vacuously pass).
+if ! echo "$GENESIS_COMP" | grep -qE "$ALLOWED_RE"; then
+    print_fail "internal: ALLOWED_RE no longer matches genesis_bootstrap.rs"
+fi
+if ! echo "$MITHRIL_COMP" | grep -qE "$ALLOWED_RE"; then
+    print_fail "internal: ALLOWED_RE no longer matches mithril_bootstrap.rs"
+fi
+
+if (( FAILED == 0 )); then
+    echo "OK: SeedEpochConsensusInputs sidecar populated only at the verified-bootstrap composition sites; forge-time path fenced (CN-CINPUT-02)"
+fi
+exit $FAILED

@@ -30,12 +30,15 @@ use ade_ledger::fingerprint::fingerprint;
 use ade_ledger::genesis_source::{
     genesis_initial_state, ConwayGenesisConfig, GenesisSourceError,
 };
+use ade_ledger::seed_consensus_inputs::encode_seed_epoch_consensus_inputs;
 use ade_ledger::state::LedgerState;
-use ade_types::{Hash32, SlotNo};
+use ade_types::{EpochNo, Hash32, SlotNo};
 
 use crate::bootstrap::{bootstrap_initial_state, BootstrapError, BootstrapInputs};
 use crate::bootstrap_anchor::{mint, MintInputs};
-use crate::chaindb::{ChainDb, ChainTip, SnapshotStore};
+use crate::chaindb::{ChainDb, ChainDbError, ChainTip, SnapshotStore};
+use crate::consensus_inputs::LiveConsensusInputsCanonical;
+use crate::seed_consensus_merge::{merge_seed_epoch_consensus_inputs, SeedConsensusMergeError};
 use crate::seed_import::UtxoFingerprint;
 
 /// Closed error sum for the genesis-bootstrap entry. RED-side
@@ -48,6 +51,14 @@ pub enum GenesisBootstrapError {
     GenesisSource(GenesisSourceError),
     /// The single closed bootstrap authority returned an error.
     Bootstrap(BootstrapError),
+    /// The seed-epoch consensus-inputs merge fail-closed (a pool present
+    /// in exactly one of the stake / VRF-keyhash maps). A2: no provenance
+    /// gap is tolerated, so the bootstrap fails.
+    SeedConsensusMerge(SeedConsensusMergeError),
+    /// Persisting the seed-epoch consensus-inputs sidecar failed. A2: a
+    /// bootstrap that cannot record its consensus-input provenance fails
+    /// rather than silently proceed.
+    SeedConsensusPersist(ChainDbError),
 }
 
 /// The genesis-bootstrap entry's typed output: the cold-start state
@@ -78,6 +89,7 @@ pub fn bootstrap_from_conway_genesis<D, S>(
     network_magic: u32,
     genesis_hash: Hash32,
     genesis_artifact_hash: Hash32,
+    seed_consensus_inputs: &LiveConsensusInputsCanonical,
     chaindb: &D,
     snapshot_store: &S,
     era_schedule: &EraSchedule,
@@ -113,12 +125,43 @@ where
     })
     .map_err(GenesisBootstrapError::Bootstrap)?;
 
+    persist_seed_epoch_consensus_inputs(
+        snapshot_store,
+        &anchor,
+        seed_consensus_inputs,
+    )?;
+
     Ok(GenesisBootstrapOutput {
         ledger,
         chain_dep,
         tip,
         anchor,
     })
+}
+
+/// Build the anchor-bound seed-epoch consensus-inputs sidecar from the
+/// verified-bootstrap canonical inputs and persist it through the
+/// dedicated anchor-fp-keyed `SnapshotStore` surface (A2). `anchor_fp`
+/// is the anchor's `initial_ledger_fingerprint`; `epoch_no` is the
+/// canonical inputs' seed epoch. Fail-closed on a merge gap or a store
+/// write failure — a bootstrap without recorded consensus-input
+/// provenance is not allowed to proceed.
+fn persist_seed_epoch_consensus_inputs<S>(
+    snapshot_store: &S,
+    anchor: &BootstrapAnchor,
+    seed_consensus_inputs: &LiveConsensusInputsCanonical,
+) -> Result<(), GenesisBootstrapError>
+where
+    S: SnapshotStore + ?Sized,
+{
+    let anchor_fp = anchor.initial_ledger_fingerprint.clone();
+    let epoch_no: EpochNo = seed_consensus_inputs.epoch_no;
+    let record = merge_seed_epoch_consensus_inputs(anchor_fp.clone(), epoch_no, seed_consensus_inputs)
+        .map_err(GenesisBootstrapError::SeedConsensusMerge)?;
+    let bytes = encode_seed_epoch_consensus_inputs(&record);
+    snapshot_store
+        .put_seed_epoch_consensus_inputs(&anchor_fp, &bytes)
+        .map_err(GenesisBootstrapError::SeedConsensusPersist)
 }
 
 #[cfg(test)]
@@ -185,18 +228,30 @@ mod tests {
         }
     }
 
+    fn seed_inputs() -> LiveConsensusInputsCanonical {
+        let mut stake = BTreeMap::new();
+        stake.insert(Hash28([0x01; 28]), 1_000u64);
+        stake.insert(Hash28([0x05; 28]), 2_500u64);
+        let mut vrfs = BTreeMap::new();
+        vrfs.insert(Hash28([0x01; 28]), Hash32([0x07; 32]));
+        vrfs.insert(Hash28([0x05; 28]), Hash32([0x08; 32]));
+        crate::seed_consensus_merge::test_canonical_inputs(EPOCH_576, stake, vrfs)
+    }
+
     #[test]
     fn conway_genesis_bootstrap_through_single_authority() {
         let db = InMemoryChainDb::new();
         let sched = schedule();
         let view = empty_view();
         let cfg = conway_config();
+        let inputs = seed_inputs();
 
         let out = bootstrap_from_conway_genesis(
             &cfg,
             /*network_magic=*/ 1,
             /*genesis_hash=*/ Hash32([0x11; 32]),
             /*genesis_artifact_hash=*/ Hash32([0x22; 32]),
+            &inputs,
             &db,
             &db,
             &sched,
@@ -233,6 +288,7 @@ mod tests {
         let db = InMemoryChainDb::new();
         let sched = schedule();
         let view = empty_view();
+        let inputs = seed_inputs();
         let mut cfg = conway_config();
         cfg.era = CardanoEra::Babbage;
 
@@ -241,6 +297,7 @@ mod tests {
             1,
             Hash32([0x11; 32]),
             Hash32([0x22; 32]),
+            &inputs,
             &db,
             &db,
             &sched,
@@ -254,6 +311,73 @@ mod tests {
             })
         ));
         // No storage initialized on the fail-closed path.
+        assert!(db.list_snapshot_slots().expect("list").is_empty());
+    }
+
+    #[test]
+    fn bootstrap_persists_anchor_keyed_seed_consensus_inputs() {
+        use ade_ledger::consensus_view::PoolEntry as BluePoolEntry;
+        use ade_ledger::seed_consensus_inputs::{
+            decode_seed_epoch_consensus_inputs, SeedEpochConsensusInputs,
+        };
+
+        let db = InMemoryChainDb::new();
+        let sched = schedule();
+        let view = empty_view();
+        let cfg = conway_config();
+        let inputs = seed_inputs();
+
+        let out = bootstrap_from_conway_genesis(
+            &cfg,
+            1,
+            Hash32([0x11; 32]),
+            Hash32([0x22; 32]),
+            &inputs,
+            &db,
+            &db,
+            &sched,
+            &view,
+        )
+        .expect("genesis bootstrap");
+
+        // The sidecar is keyed by the anchor's initial_ledger_fingerprint.
+        let anchor_fp = out.anchor.initial_ledger_fingerprint.clone();
+        let stored = db
+            .get_seed_epoch_consensus_inputs(&anchor_fp)
+            .expect("get sidecar")
+            .expect("sidecar present after bootstrap");
+
+        // It decodes via the A1 sole codec to the expected merged record:
+        // the two RED maps (stake, vrf) zipped into the single BLUE map,
+        // total_active_stake = the saturating sum.
+        let decoded = decode_seed_epoch_consensus_inputs(&stored).expect("decode via A1");
+        let mut expected_pools = BTreeMap::new();
+        expected_pools.insert(
+            Hash28([0x01; 28]),
+            BluePoolEntry {
+                active_stake: 1_000,
+                vrf_keyhash: Hash32([0x07; 32]),
+            },
+        );
+        expected_pools.insert(
+            Hash28([0x05; 28]),
+            BluePoolEntry {
+                active_stake: 2_500,
+                vrf_keyhash: Hash32([0x08; 32]),
+            },
+        );
+        let expected = SeedEpochConsensusInputs {
+            anchor_fp: anchor_fp.clone(),
+            epoch_no: EPOCH_576,
+            active_slots_coeff: inputs.active_slots_coeff,
+            total_active_stake: 3_500,
+            pool_distribution: expected_pools,
+        };
+        assert_eq!(decoded, expected);
+        assert_eq!(decoded.anchor_fp, out.anchor.initial_ledger_fingerprint);
+
+        // The sidecar lives in its own namespace — it created no
+        // slot-keyed snapshot.
         assert!(db.list_snapshot_slots().expect("list").is_empty());
     }
 }

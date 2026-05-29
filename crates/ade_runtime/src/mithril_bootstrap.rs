@@ -29,13 +29,16 @@ use ade_core::consensus::era_schedule::EraSchedule;
 use ade_core::consensus::ledger_view::LedgerView;
 use ade_core::consensus::praos_state::PraosChainDepState;
 use ade_ledger::bootstrap_anchor::{verify_mithril_binding, BootstrapAnchor, MithrilImportError};
+use ade_ledger::seed_consensus_inputs::encode_seed_epoch_consensus_inputs;
 use ade_ledger::state::LedgerState;
-use ade_types::{Hash32, SlotNo};
+use ade_types::{EpochNo, Hash32, SlotNo};
 
 use crate::bootstrap::{bootstrap_initial_state, BootstrapError, BootstrapInputs};
 use crate::bootstrap_anchor::{mint, MintInputs};
-use crate::chaindb::{ChainDb, ChainTip, SnapshotStore};
+use crate::chaindb::{ChainDb, ChainDbError, ChainTip, SnapshotStore};
+use crate::consensus_inputs::LiveConsensusInputsCanonical;
 use crate::mithril_import::{import_mithril_manifest_from_bytes, MithrilManifestError};
+use crate::seed_consensus_merge::{merge_seed_epoch_consensus_inputs, SeedConsensusMergeError};
 use crate::seed_import::UtxoFingerprint;
 
 /// Operator-provided seed-point extraction inputs — the origin that is
@@ -69,6 +72,14 @@ pub enum MithrilBootstrapError {
     Binding(MithrilImportError),
     /// The single closed bootstrap authority returned an error.
     Bootstrap(BootstrapError),
+    /// The seed-epoch consensus-inputs merge fail-closed (a pool present
+    /// in exactly one of the stake / VRF-keyhash maps). A2: no provenance
+    /// gap is tolerated, so the bootstrap fails.
+    SeedConsensusMerge(SeedConsensusMergeError),
+    /// Persisting the seed-epoch consensus-inputs sidecar failed. A2: a
+    /// bootstrap that cannot record its consensus-input provenance fails
+    /// rather than silently proceed.
+    SeedConsensusPersist(ChainDbError),
 }
 
 /// The Mithril-bootstrap entry's typed output: the cold-start state
@@ -98,6 +109,7 @@ pub fn bootstrap_from_mithril_snapshot<D, S>(
     seed_ledger: LedgerState,
     seed_chain_dep: PraosChainDepState,
     manifest_bytes: &[u8],
+    seed_consensus_inputs: &LiveConsensusInputsCanonical,
     chaindb: &D,
     snapshot_store: &S,
     era_schedule: &EraSchedule,
@@ -132,12 +144,44 @@ where
     })
     .map_err(MithrilBootstrapError::Bootstrap)?;
 
+    persist_seed_epoch_consensus_inputs(
+        snapshot_store,
+        &anchor,
+        seed_consensus_inputs,
+    )?;
+
     Ok(MithrilBootstrapOutput {
         ledger,
         chain_dep,
         tip,
         anchor,
     })
+}
+
+/// Build the anchor-bound seed-epoch consensus-inputs sidecar from the
+/// verified-bootstrap canonical inputs and persist it through the
+/// dedicated anchor-fp-keyed `SnapshotStore` surface (A2). Runs only
+/// after `verify_mithril_binding` has passed (this helper is called from
+/// the success tail of `bootstrap_from_mithril_snapshot`). `anchor_fp`
+/// is the anchor's `initial_ledger_fingerprint`; `epoch_no` is the
+/// canonical inputs' seed epoch. Fail-closed on a merge gap or a store
+/// write failure.
+fn persist_seed_epoch_consensus_inputs<S>(
+    snapshot_store: &S,
+    anchor: &BootstrapAnchor,
+    seed_consensus_inputs: &LiveConsensusInputsCanonical,
+) -> Result<(), MithrilBootstrapError>
+where
+    S: SnapshotStore + ?Sized,
+{
+    let anchor_fp = anchor.initial_ledger_fingerprint.clone();
+    let epoch_no: EpochNo = seed_consensus_inputs.epoch_no;
+    let record = merge_seed_epoch_consensus_inputs(anchor_fp.clone(), epoch_no, seed_consensus_inputs)
+        .map_err(MithrilBootstrapError::SeedConsensusMerge)?;
+    let bytes = encode_seed_epoch_consensus_inputs(&record);
+    snapshot_store
+        .put_seed_epoch_consensus_inputs(&anchor_fp, &bytes)
+        .map_err(MithrilBootstrapError::SeedConsensusPersist)
 }
 
 #[cfg(test)]
@@ -214,6 +258,16 @@ mod tests {
         (ledger, chain_dep)
     }
 
+    fn seed_inputs() -> LiveConsensusInputsCanonical {
+        let mut stake = BTreeMap::new();
+        stake.insert(Hash28([0x01; 28]), 1_000u64);
+        stake.insert(Hash28([0x05; 28]), 2_500u64);
+        let mut vrfs = BTreeMap::new();
+        vrfs.insert(Hash28([0x01; 28]), Hash32([0x07; 32]));
+        vrfs.insert(Hash28([0x05; 28]), Hash32([0x08; 32]));
+        crate::seed_consensus_merge::test_canonical_inputs(EPOCH_576, stake, vrfs)
+    }
+
     /// Operator seed-point inputs whose `seed_slot` / `seed_block_hash`
     /// equal the manifest's attested certified_point (the agreeing
     /// case). Independent origin — these fields are typed in by the
@@ -244,12 +298,14 @@ mod tests {
         let mut inputs = matching_seed_point_inputs();
         inputs.seed_slot = SlotNo(99_999_999);
         inputs.seed_block_hash = Hash32([0xAB; 32]);
+        let cinputs = seed_inputs();
 
         let err = bootstrap_from_mithril_snapshot(
             &inputs,
             ledger,
             chain_dep,
             MANIFEST.as_bytes(),
+            &cinputs,
             &db,
             &db,
             &sched,
@@ -278,6 +334,7 @@ mod tests {
         let mut inputs = matching_seed_point_inputs();
         inputs.seed_slot = SlotNo(99_999_999);
         inputs.seed_block_hash = Hash32([0xAB; 32]);
+        let cinputs = seed_inputs();
         // The operator's independent point is genuinely different from
         // what the manifest attests.
         assert_ne!(inputs.seed_slot, SlotNo(MANIFEST_SLOT));
@@ -287,6 +344,7 @@ mod tests {
             ledger,
             chain_dep,
             MANIFEST.as_bytes(),
+            &cinputs,
             &db,
             &db,
             &sched,
@@ -312,12 +370,14 @@ mod tests {
         let view = empty_view();
         let (ledger, chain_dep) = seed_state();
         let inputs = matching_seed_point_inputs();
+        let cinputs = seed_inputs();
 
         let out = bootstrap_from_mithril_snapshot(
             &inputs,
             ledger,
             chain_dep,
             MANIFEST.as_bytes(),
+            &cinputs,
             &db,
             &db,
             &sched,
@@ -334,5 +394,71 @@ mod tests {
         assert_eq!(out.anchor.seed_point.slot, SlotNo(MANIFEST_SLOT));
         assert_eq!(out.anchor.network_magic, MANIFEST_NETWORK_MAGIC);
         assert_eq!(MANIFEST_CERT_HASH, [0x66; 32]);
+    }
+
+    #[test]
+    fn bootstrap_persists_anchor_keyed_seed_consensus_inputs() {
+        use ade_ledger::consensus_view::PoolEntry as BluePoolEntry;
+        use ade_ledger::seed_consensus_inputs::{
+            decode_seed_epoch_consensus_inputs, SeedEpochConsensusInputs,
+        };
+
+        // After a verified Mithril binding, the sidecar is persisted
+        // anchor-keyed and decodes via the A1 sole codec to the merged
+        // record.
+        let db = InMemoryChainDb::new();
+        let sched = schedule();
+        let view = empty_view();
+        let (ledger, chain_dep) = seed_state();
+        let inputs = matching_seed_point_inputs();
+        let cinputs = seed_inputs();
+
+        let out = bootstrap_from_mithril_snapshot(
+            &inputs,
+            ledger,
+            chain_dep,
+            MANIFEST.as_bytes(),
+            &cinputs,
+            &db,
+            &db,
+            &sched,
+            &view,
+        )
+        .expect("matching seed-point binds and bootstraps");
+
+        let anchor_fp = out.anchor.initial_ledger_fingerprint.clone();
+        let stored = db
+            .get_seed_epoch_consensus_inputs(&anchor_fp)
+            .expect("get sidecar")
+            .expect("sidecar present after Mithril bootstrap");
+
+        let decoded = decode_seed_epoch_consensus_inputs(&stored).expect("decode via A1");
+        let mut expected_pools = BTreeMap::new();
+        expected_pools.insert(
+            Hash28([0x01; 28]),
+            BluePoolEntry {
+                active_stake: 1_000,
+                vrf_keyhash: Hash32([0x07; 32]),
+            },
+        );
+        expected_pools.insert(
+            Hash28([0x05; 28]),
+            BluePoolEntry {
+                active_stake: 2_500,
+                vrf_keyhash: Hash32([0x08; 32]),
+            },
+        );
+        let expected = SeedEpochConsensusInputs {
+            anchor_fp: anchor_fp.clone(),
+            epoch_no: EPOCH_576,
+            active_slots_coeff: cinputs.active_slots_coeff,
+            total_active_stake: 3_500,
+            pool_distribution: expected_pools,
+        };
+        assert_eq!(decoded, expected);
+        assert_eq!(decoded.anchor_fp, out.anchor.initial_ledger_fingerprint);
+
+        // The sidecar created no slot-keyed snapshot — disjoint namespace.
+        assert!(db.list_snapshot_slots().expect("list").is_empty());
     }
 }
