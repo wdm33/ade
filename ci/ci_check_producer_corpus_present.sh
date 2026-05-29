@@ -12,10 +12,14 @@ set -uo pipefail
 #   2. At least one fixture in fixtures.rs holds a non-empty
 #      `expected_forged` (byte literal of a captured forged block).
 #      Guarantees the positive byte-equality case is covered.
-#   3. `live_block_production_session.rs` exists and parses CLI args for
-#      every required input: --cold-skey, --kes-skey, --vrf-skey,
-#      --opcert, --target.
-#   4. `CE-N-C-8_PROCEDURE.md` exists.
+#   3. The operator-production entrypoint `ade_node --mode produce`
+#      (cli.rs) parses its required inputs: the `produce` mode token +
+#      the ProduceMissingFlag-validated flags (--listen / --cold-skey /
+#      --kes-skey / --vrf-skey / --opcert / --genesis-file / --json-seed /
+#      --consensus-inputs-path). Repointed from the superseded
+#      live_block_production_session binary.
+#   4. The operator runbook (docs/active/cn-cons-06-operator-runbook.md)
+#      documents `ade_node --mode produce` + CN-CONS-06 / RO-LIVE-01.
 #   5. `CN-CONS-06` registry entry has either status="enforced" AND a
 #      `tests` array containing the three named cross_impl_adapter tests,
 #      OR status="partial" AND an `open_obligation` field mentioning
@@ -26,8 +30,8 @@ REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 FIXTURES_RS="$REPO_ROOT/crates/ade_testkit/src/producer/fixtures.rs"
 REPLAY_RS="$REPO_ROOT/crates/ade_testkit/src/producer/replay.rs"
 ADAPTER_RS="$REPO_ROOT/crates/ade_testkit/src/producer/cross_impl_adapter.rs"
-LIVE_BIN_RS="$REPO_ROOT/crates/ade_core_interop/src/bin/live_block_production_session.rs"
-PROCEDURE_MD="$REPO_ROOT/docs/clusters/completed/PHASE4-N-C/CE-N-C-8_PROCEDURE.md"
+CLI_RS="$REPO_ROOT/crates/ade_node/src/cli.rs"
+RUNBOOK_MD="$REPO_ROOT/docs/active/cn-cons-06-operator-runbook.md"
 REGISTRY="$REPO_ROOT/docs/ade-invariant-registry.toml"
 
 FAIL=0
@@ -37,7 +41,7 @@ print_fail() {
     FAIL=1
 }
 
-for f in "$FIXTURES_RS" "$REPLAY_RS" "$ADAPTER_RS" "$LIVE_BIN_RS" "$PROCEDURE_MD" "$REGISTRY"; do
+for f in "$FIXTURES_RS" "$REPLAY_RS" "$ADAPTER_RS" "$CLI_RS" "$RUNBOOK_MD" "$REGISTRY"; do
     [ -f "$f" ] || { print_fail "expected file missing: $f"; }
 done
 [ "$FAIL" -eq 0 ] || exit 1
@@ -98,30 +102,41 @@ for t in "${REQUIRED_TESTS[@]}"; do
 done
 
 # ---------------------------------------------------------------------------
-# Guard 3 — live binary parses the required CLI args.
+# Guard 3 — the operator-production entrypoint (`ade_node --mode produce`)
+# parses its required CLI inputs. Repointed at the live surface in cli.rs
+# (was: the superseded live_block_production_session binary): the `produce`
+# mode token + the ProduceMissingFlag-validated required flags.
 # ---------------------------------------------------------------------------
-REQUIRED_ARGS=(
-    '"--cold-skey"'
-    '"--kes-skey"'
-    '"--vrf-skey"'
-    '"--opcert"'
-    '"--target"'
+if ! grep -qE '"produce"[[:space:]]*=>' "$CLI_RS"; then
+    print_fail "Guard 3 (cli.rs does not recognize the \"produce\" mode token)"
+fi
+REQUIRED_PRODUCE_FLAGS=(
+    "--listen"
+    "--cold-skey"
+    "--kes-skey"
+    "--vrf-skey"
+    "--opcert"
+    "--genesis-file"
+    "--json-seed"
+    "--consensus-inputs-path"
 )
-for arg in "${REQUIRED_ARGS[@]}"; do
-    if ! grep -qF "$arg" "$LIVE_BIN_RS"; then
-        print_fail "Guard 3 (live_block_production_session does not parse $arg)"
+for flag in "${REQUIRED_PRODUCE_FLAGS[@]}"; do
+    if ! grep -qF "ProduceMissingFlag(\"$flag\")" "$CLI_RS"; then
+        print_fail "Guard 3 (ade_node --mode produce does not require $flag via ProduceMissingFlag in cli.rs)"
     fi
 done
 
 # ---------------------------------------------------------------------------
-# Guard 4 — procedure doc exists (file presence already checked above).
-# Sanity check: it names the binary and the CN-CONS-06 rule.
+# Guard 4 — the current operator runbook (file presence checked above)
+# documents the live entrypoint. Repointed at
+# docs/active/cn-cons-06-operator-runbook.md (was: the historical
+# CE-N-C-8_PROCEDURE.md for the superseded binary).
 # ---------------------------------------------------------------------------
-if ! grep -qF "live_block_production_session" "$PROCEDURE_MD"; then
-    print_fail "Guard 4 (CE-N-C-8_PROCEDURE.md does not reference live_block_production_session)"
+if ! grep -qF "ade_node --mode produce" "$RUNBOOK_MD"; then
+    print_fail "Guard 4 (operator runbook does not reference 'ade_node --mode produce')"
 fi
-if ! grep -qE 'CN-CONS-06|CE-N-C-8' "$PROCEDURE_MD"; then
-    print_fail "Guard 4 (CE-N-C-8_PROCEDURE.md does not reference CE-N-C-8 / CN-CONS-06)"
+if ! grep -qE 'CN-CONS-06|RO-LIVE-01' "$RUNBOOK_MD"; then
+    print_fail "Guard 4 (operator runbook does not reference CN-CONS-06 / RO-LIVE-01)"
 fi
 
 # ---------------------------------------------------------------------------
@@ -170,7 +185,7 @@ if [ $G5_RC -ne 0 ]; then
 fi
 
 if [ "$FAIL" -eq 0 ]; then
-    echo "PASS: producer corpus + cross-impl adapter + live-evidence binary + procedure + registry green (5/5)"
+    echo "PASS: producer corpus + cross-impl adapter + produce-mode CLI + operator runbook + registry green (5/5)"
     exit 0
 else
     exit 1
