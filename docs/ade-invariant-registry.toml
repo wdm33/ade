@@ -3727,13 +3727,13 @@ Lower priority than RO-LIVE-05; resolves after PHASE4-N-M-C
 closes.
 """
 source = "docs/planning/phase4-n-m-ledger-seed-invariants.md §10 carry-forward; PHASE4-N-Y S1/S7"
-cross_ref = ["CN-SEED-01", "CN-ANCHOR-01", "CN-MITHRIL-01", "DC-MITHRIL-01"]
-code_locus = "crates/ade_ledger/src/bootstrap_anchor/binding.rs (verify_mithril_binding + MithrilManifestReport); crates/ade_runtime/src/mithril_import/ (manifest importer)"
-tests = ["mithril_binding_rejects_certified_point_other_than_seed_point", "mithril_anchor_rejects_field_mismatch", "mithril_import_fail_closed_blocks_storage_init"]
-ci_script = "ci/ci_check_mithril_uses_bootstrap_initial_state.sh"
+cross_ref = ["CN-SEED-01", "CN-ANCHOR-01", "CN-MITHRIL-01", "DC-MITHRIL-01", "DC-MITHRIL-02"]
+code_locus = "crates/ade_ledger/src/bootstrap_anchor/binding.rs (verify_mithril_binding + MithrilManifestReport); crates/ade_runtime/src/mithril_import/ (manifest importer); crates/ade_runtime/src/mithril_bootstrap.rs (PHASE4-N-Z production composition)"
+tests = ["mithril_binding_rejects_certified_point_other_than_seed_point", "mithril_anchor_rejects_field_mismatch", "mithril_import_fail_closed_blocks_storage_init", "mithril_bootstrap_fails_closed_on_seed_point_mismatch"]
+ci_script = "ci/ci_check_mithril_uses_bootstrap_initial_state.sh, ci/ci_check_mithril_seed_point_independence.sh"
 status = "partial"
-strengthened_in = ["PHASE4-N-Y"]
-open_obligation = "PHASE4-N-Y (S1 provenance-binding + S7 non-tautological cross-check) introduced the Ade-side Mithril provenance binding (CN-MITHRIL-01/DC-MITHRIL-01): a Mithril manifest's attested {network_magic, genesis_hash, certified_point, certificate_hash} is cross-checked against the independently --json-seed-minted BootstrapAnchor and fails closed on mismatch. status=partial: this is PROVENANCE binding (OI-S1.1 scope A), NOT seed-bytes-from-Mithril. Remaining for enforced: (a) seed-bytes-from-Mithril decode (option B) — needs a Mithril artifact-type spike + forward-replay; (b) a wired production composition site with a CI gate asserting the bound anchor's seed_point originates from the --json-seed UTxO extraction, NOT the Mithril manifest (re-tautologization hazard flagged in the S7 security re-review); (c) a committed reproducible Mithril fixture + CI/release evidence. blocked_until_mithril_import_wiring_slice."
+strengthened_in = ["PHASE4-N-Y", "PHASE4-N-Z"]
+open_obligation = "PHASE4-N-Y introduced the Ade-side Mithril provenance binding (CN-MITHRIL-01/DC-MITHRIL-01). PHASE4-N-Z CLOSED item (b): bootstrap_from_mithril_snapshot is the wired production composition (verify-before-bootstrap, fail-closed) + DC-MITHRIL-02 + the data-flow-resistant containment gate ci_check_mithril_seed_point_independence.sh (the anchor seed_point originates from the operator's independent seed-point inputs, never the manifest; re-tautologization is structurally CI-blocked). status stays partial: (a) seed-bytes-from-Mithril decode (option B) — needs a Mithril artifact-type spike + forward-replay; (c) a committed reproducible Mithril fixture + CI/release evidence. blocked_until_mithril_seed_bytes_and_fixture."
 
 # =============================================================================
 # PHASE4-N-M-B — Admission orchestrator + AgreementVerdict + admission JSONL
@@ -4833,16 +4833,16 @@ multisig is verified by the RED mithril-client (acquisition infra) and is NEVER 
 BLUE trust root; no mithril/STM crate is imported under any BLUE crate path.
 """
 source = "docs/clusters/PHASE4-N-Y/S1-mithril-import-authority.md; S7-real-mithril-binding.md"
-cross_ref = ["CN-ANCHOR-01", "CN-SEED-01", "DC-MITHRIL-01", "RO-MITHRIL-IMPORT-01"]
-code_locus = "crates/ade_ledger/src/bootstrap_anchor/binding.rs (verify_mithril_binding + MithrilManifestReport + closed MithrilImportError); crates/ade_runtime/src/mithril_import/ (RED manifest importer)"
-tests = ["mithril_binding_rejects_certified_point_other_than_seed_point", "mithril_anchor_rejects_field_mismatch", "mithril_import_fail_closed_blocks_storage_init"]
-ci_script = "ci/ci_check_mithril_uses_bootstrap_initial_state.sh"
+cross_ref = ["CN-ANCHOR-01", "CN-SEED-01", "DC-MITHRIL-01", "DC-MITHRIL-02", "RO-MITHRIL-IMPORT-01"]
+code_locus = "crates/ade_ledger/src/bootstrap_anchor/binding.rs (verify_mithril_binding + MithrilManifestReport + closed MithrilImportError); crates/ade_runtime/src/mithril_import/ (RED manifest importer); crates/ade_runtime/src/mithril_bootstrap.rs (PHASE4-N-Z production composition — verify-before-bootstrap, fail-closed)"
+tests = ["mithril_binding_rejects_certified_point_other_than_seed_point", "mithril_anchor_rejects_field_mismatch", "mithril_import_fail_closed_blocks_storage_init", "mithril_bootstrap_verifies_before_storage_init", "mithril_bootstrap_fails_closed_on_seed_point_mismatch"]
+ci_script = "ci/ci_check_mithril_uses_bootstrap_initial_state.sh, ci/ci_check_mithril_seed_point_independence.sh"
 status = "enforced"
 introduced_in = "PHASE4-N-Y"
-strengthened_in = []
+strengthened_in = ["PHASE4-N-Z"]
 cluster = "PHASE4-N-Y"
-attack_rationale = "If Mithril provenance were a BLUE trust root, a forged/wrong-point snapshot would seed an attacker-chosen ledger. If the binding compared a value to itself (the S1 tautology, fixed in S7), a snapshot certified at a different chain point than the seed dump would bind successfully. The cross-check against the independently-minted anchor closes both."
-open_obligation = "Provenance-binding (OI-S1.1 scope A). Seed-bytes-from-Mithril (option B) + a production wiring site with an independence gate are RO-MITHRIL-IMPORT-01."
+attack_rationale = "If Mithril provenance were a BLUE trust root, a forged/wrong-point snapshot would seed an attacker-chosen ledger. If the binding compared a value to itself (the S1 tautology, fixed in S7), a snapshot certified at a different chain point than the seed dump would bind successfully. The cross-check against the independently-minted anchor closes both. PHASE4-N-Z wires the production composition (bootstrap_from_mithril_snapshot) so the binding runs verify-before-bootstrap end-to-end, with a containment gate (DC-MITHRIL-02) preventing the seed_point origin from being laundered back to the manifest."
+open_obligation = "Provenance-binding (OI-S1.1 scope A). The production wiring site + seed-point-independence gate shipped in PHASE4-N-Z (DC-MITHRIL-02). Seed-bytes-from-Mithril (option B) + a committed reproducible fixture / live evidence remain (RO-MITHRIL-IMPORT-01)."
 
 [[rules]]
 id = "DC-MITHRIL-01"
@@ -4959,3 +4959,39 @@ introduced_in = "PHASE4-N-Y"
 strengthened_in = []
 cluster = "PHASE4-N-Y"
 open_obligation = "Schema + sha256 gate enforced (vacuous until a manifest is committed). The two-Haskell-node private-testnet + snapshot->tip live capture is operator-witnessed: blocked_until_operator_pass_executed (CE-Y-16). Reopen: operator commits a CE-Y-16 manifest; the gate then verifies schema + sha256."
+
+# =============================================================================
+# PHASE4-N-Z — Mithril production-bootstrap wiring + seed-point independence
+# =============================================================================
+# Single-slice cluster (S1). Closes RO-MITHRIL-IMPORT-01 open-obligation item
+# (b): a production composition (bootstrap_from_mithril_snapshot) that mints the
+# anchor seed_point from operator-provided independent seed-point inputs, never
+# the Mithril manifest, and binds fail-closed before storage init. The S1
+# IDD-review BLOCK (gate bypassable by a one-hop local) was remediated by
+# hardening the gate to a data-flow-resistant containment check.
+
+[[rules]]
+id = "DC-MITHRIL-02"
+tier = "derived"
+statement = """
+For Mithril bootstrap, the BootstrapAnchor seed_point MUST be derived from the
+operator-provided independent seed-point extraction inputs, not from the Mithril
+manifest. The Mithril manifest may populate provenance and attestation fields
+(SeedProvenance::Mithril), but the binding check (verify_mithril_binding) MUST
+compare two structurally independent origins and fail closed on mismatch. In the
+production composition the manifest import may be referenced only as whole values
+(import.provenance -> seed_provenance; &import.report -> the verify call); the
+import's point-bearing fields must never be drilled into or laundered (via a
+local binding or a mutate-before-mint) into the anchor's seed_point.
+"""
+source = "docs/clusters/PHASE4-N-Z/cluster.md; S1-mithril-production-bootstrap.md"
+cross_ref = ["CN-MITHRIL-01", "DC-MITHRIL-01", "RO-MITHRIL-IMPORT-01"]
+code_locus = "crates/ade_runtime/src/mithril_bootstrap.rs (bootstrap_from_mithril_snapshot — seed_point from operator inputs, verify-before-bootstrap, closed MithrilBootstrapError); ci/ci_check_mithril_seed_point_independence.sh (containment gate)"
+tests = ["mithril_bootstrap_fails_closed_on_seed_point_mismatch", "mithril_bootstrap_verifies_before_storage_init", "mithril_bootstrap_succeeds_when_seed_point_matches"]
+ci_script = "ci/ci_check_mithril_seed_point_independence.sh"
+status = "enforced"
+introduced_in = "PHASE4-N-Z"
+strengthened_in = []
+cluster = "PHASE4-N-Z"
+attack_rationale = "Mithril proves a chain point; it must not be allowed to define both sides of the binding comparison. If the anchor's seed_point were sourced from the manifest (directly, via a local, or by mutating the operator inputs), verify_mithril_binding would compare a value to itself and could never fail — a forged/wrong-point snapshot would bind successfully and seed an attacker-chosen ledger. The two origins must stay structurally independent; the containment gate blocks the laundering class mechanically."
+open_obligation = ""
