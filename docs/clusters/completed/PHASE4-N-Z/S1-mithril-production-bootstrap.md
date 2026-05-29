@@ -7,7 +7,7 @@
 
 - **Slice Name:** `bootstrap_from_mithril_snapshot` — production composition that binds a Mithril manifest against an anchor minted from operator-provided independent seed-point inputs, fail-closed before storage init.
 - **Cluster:** PHASE4-N-Z.
-- **Status:** Proposed.
+- **Status:** Merged.
 - **Cluster Exit Criteria Addressed (verbatim):** CE-Z-2, CE-Z-3, CE-Z-4, CE-Z-5, CE-Z-6, CE-Z-7 (S1 portion), CE-Z-8.
 - **Slice Dependencies:** PHASE4-N-Y S1+S7 (merged) — `verify_mithril_binding`, `MithrilManifestReport`, `import_mithril_manifest`, the `mint` authority.
 
