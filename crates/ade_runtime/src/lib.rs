@@ -15,6 +15,7 @@ pub mod clock;
 pub mod consensus;
 pub mod consensus_inputs;
 pub mod forward_sync;
+pub mod genesis_bootstrap;
 pub mod mithril_import;
 pub mod network;
 pub mod orchestrator;

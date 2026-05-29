@@ -25,6 +25,7 @@ pub mod delegation;
 pub mod epoch;
 pub mod error;
 pub mod fingerprint;
+pub mod genesis_source;
 pub mod gov_cert;
 pub mod governance;
 pub mod hfc;
