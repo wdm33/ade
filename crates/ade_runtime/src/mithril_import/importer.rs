@@ -30,7 +30,7 @@ use std::fs;
 use std::io;
 use std::path::Path;
 
-use ade_ledger::bootstrap_anchor::{MithrilAnchorFields, SeedPoint, SeedProvenance};
+use ade_ledger::bootstrap_anchor::{MithrilManifestReport, SeedPoint, SeedProvenance};
 use ade_types::{Hash32, SlotNo};
 
 use super::json::{parse_mithril_manifest_json, RawMithrilManifest};
@@ -66,12 +66,13 @@ impl From<serde_json::Error> for MithrilManifestError {
 }
 
 /// The shell's output: the closed `SeedProvenance::Mithril` to record
-/// in the anchor, plus the `MithrilAnchorFields` the BLUE predicate
-/// checks the provenance binds to. No semantic decision is made here.
+/// in the anchor, plus the `MithrilManifestReport` (the Mithril cert's
+/// attested side) the BLUE predicate cross-checks against the
+/// independently-minted anchor. No semantic decision is made here.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct MithrilProvenanceImport {
     pub provenance: SeedProvenance,
-    pub anchor_fields: MithrilAnchorFields,
+    pub report: MithrilManifestReport,
 }
 
 /// Read + parse a mithril-client manifest file into the provenance
@@ -112,22 +113,15 @@ pub fn import_mithril_manifest_from_bytes(
         certified_point: certified_point.clone(),
         immutable_range,
     };
-    let anchor_fields = MithrilAnchorFields {
+    let report = MithrilManifestReport {
         network_magic: raw.network_magic,
-        genesis_hash: genesis_hash.clone(),
-        certified_point: certified_point.clone(),
+        genesis_hash,
+        certificate_hash,
+        certified_point,
         immutable_range,
-        reported_certificate_hash: certificate_hash,
-        reported_network_magic: raw.network_magic,
-        reported_genesis_hash: genesis_hash,
-        reported_certified_point: certified_point,
-        reported_immutable_range: immutable_range,
     };
 
-    Ok(MithrilProvenanceImport {
-        provenance,
-        anchor_fields,
-    })
+    Ok(MithrilProvenanceImport { provenance, report })
 }
 
 fn parse_hash32(hex: &str, field: &'static str) -> Result<Hash32, MithrilManifestError> {
@@ -179,9 +173,9 @@ mod tests {
             }
             other => panic!("expected Mithril provenance, got {other:?}"),
         }
-        assert_eq!(out.anchor_fields.network_magic, 1);
-        assert_eq!(out.anchor_fields.genesis_hash, Hash32([0x11; 32]));
-        assert_eq!(out.anchor_fields.reported_certificate_hash, Hash32([0x66; 32]));
+        assert_eq!(out.report.network_magic, 1);
+        assert_eq!(out.report.genesis_hash, Hash32([0x11; 32]));
+        assert_eq!(out.report.certificate_hash, Hash32([0x66; 32]));
     }
 
     #[test]
@@ -220,25 +214,39 @@ mod tests {
 
     #[test]
     fn mithril_import_fail_closed_blocks_storage_init() {
-        use ade_ledger::bootstrap_anchor::{verify_mithril_binding, MithrilImportError};
+        use ade_ledger::bootstrap_anchor::{
+            verify_mithril_binding, BootstrapAnchor, MithrilImportError,
+        };
         use crate::chaindb::InMemoryChainDb;
         use crate::chaindb::SnapshotStore;
 
         let import = import_mithril_manifest_from_bytes(MINIMAL.as_bytes()).expect("import");
 
-        // The anchor's recorded seed_artifact_hash; BLUE recomputes
-        // its own digest. Here the recompute DISAGREES with the
-        // anchor — a mismatched binding.
-        let anchor_seed_artifact_hash = Hash32([0x33; 32]);
-        let recomputed_disagreeing = Hash32([0x99; 32]);
+        // The independently-minted anchor (from the operator's
+        // --json-seed extraction) carries its OWN seed_point and
+        // Mithril provenance. Here it was certified at a DIFFERENT
+        // point than the manifest report attests — a mismatched
+        // binding from two genuinely independent origins.
+        let mismatched_point = SeedPoint {
+            slot: SlotNo(99999999),
+            block_hash: Hash32([0xAB; 32]),
+        };
+        let anchor_mismatch = BootstrapAnchor {
+            network_magic: 1,
+            genesis_hash: Hash32([0x11; 32]),
+            seed_point: mismatched_point.clone(),
+            seed_artifact_hash: Hash32([0x33; 32]),
+            imported_utxo_fingerprint: Hash32([0x44; 32]),
+            initial_ledger_fingerprint: Hash32([0x55; 32]),
+            seed_provenance: SeedProvenance::Mithril {
+                certificate_hash: Hash32([0x66; 32]),
+                certified_point: mismatched_point,
+                immutable_range: (0, 4242),
+            },
+        };
 
-        let verdict = verify_mithril_binding(
-            &import.provenance,
-            &import.anchor_fields,
-            &anchor_seed_artifact_hash,
-            &recomputed_disagreeing,
-        );
-        assert_eq!(verdict, Err(MithrilImportError::SeedArtifactHashMismatch));
+        let verdict = verify_mithril_binding(&import.report, &anchor_mismatch);
+        assert_eq!(verdict, Err(MithrilImportError::CertifiedPointMismatch));
 
         // Storage must NOT initialize on a failed binding. We model
         // "storage init" as a put_snapshot; the gate only runs it on
@@ -253,15 +261,19 @@ mod tests {
             "storage must not initialize on a mismatched Mithril binding"
         );
 
-        // The positive control: a matching recompute lets the gate
-        // run, and only then does storage initialize.
-        let recomputed_matching = anchor_seed_artifact_hash.clone();
-        let ok_verdict = verify_mithril_binding(
-            &import.provenance,
-            &import.anchor_fields,
-            &anchor_seed_artifact_hash,
-            &recomputed_matching,
-        );
+        // The positive control: an anchor minted at the same point
+        // the manifest attests (still an independent origin) binds,
+        // and only then does storage initialize.
+        let anchor_match = BootstrapAnchor {
+            seed_point: import.report.certified_point.clone(),
+            seed_provenance: SeedProvenance::Mithril {
+                certificate_hash: import.report.certificate_hash.clone(),
+                certified_point: import.report.certified_point.clone(),
+                immutable_range: import.report.immutable_range,
+            },
+            ..anchor_mismatch
+        };
+        let ok_verdict = verify_mithril_binding(&import.report, &anchor_match);
         assert_eq!(ok_verdict, Ok(()));
         let store_ok = InMemoryChainDb::new();
         if ok_verdict.is_ok() {

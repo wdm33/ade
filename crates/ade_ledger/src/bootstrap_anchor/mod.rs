@@ -16,5 +16,5 @@ pub use anchor::{
     decode_bootstrap_anchor, encode_bootstrap_anchor, BootstrapAnchor, SeedPoint, SeedProvenance,
     ANCHOR_SCHEMA_VERSION,
 };
-pub use binding::{verify_mithril_binding, MithrilAnchorFields, MithrilImportError};
+pub use binding::{verify_mithril_binding, MithrilImportError, MithrilManifestReport};
 pub use error::BootstrapAnchorError;
