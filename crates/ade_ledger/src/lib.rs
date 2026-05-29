@@ -41,6 +41,7 @@ pub mod receive;
 pub mod rollback;
 pub mod rules;
 pub mod scripts;
+pub mod seed_consensus_inputs;
 pub mod shelley;
 pub mod snapshot;
 pub mod state;
