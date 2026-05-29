@@ -5,22 +5,24 @@
 > Regenerate with `/head-deltas <baseline>` after every cluster close. Baseline is recorded in `.idd-config.json` `head_deltas_baseline`.
 
 > Baseline: `273c887` (no tag, 2026-05-29 04:20:00 +0700)
-> HEAD: `3b78008` (Close PHASE4-N-Y — Mithril-anchored bootstrap, network forward-sync & WAL recovery, 2026-05-29 14:59:36 +0700)
-> 13 commits, 47 files changed, +6273 / -257 lines
+> HEAD: `5db9aae` (fix(registry): repair recovery.rs code_locus drift + add code-locus existence gate, 2026-05-29 16:18:32 +0700)
+> 15 commits, 9 files changed (cluster body) + 3 files (post-close tail), +6273 / -257 lines (cluster body) + +101 / -3 lines (post-close tail)
 
-This window is three pieces:
+This window is the **PHASE4-N-Y cluster** (`273c887` → `3b78008`) plus a short **post-close housekeeping tail** (`3b78008` → `5db9aae`). The cluster body (§§1–7) is unchanged from the N-Y close pass; the tail is narrated in **§8** and is *not* a new cluster — a CI notify workflow + a registry drift-guard.
+
+The cluster body is three pieces:
 
 1. The **PHASE4-N-X tail** (`86ddc4d` + `c83f2ba`) — **no code or behavior change.** `86ddc4d` is the N-X *close*-pass grounding-doc refresh (CODEMAP / SEAMS / HEAD_DELTAS / TRACEABILITY regenerated at the N-X HEAD, cluster docs archived). `c83f2ba` seeded the operator-pass live-leg C1 scoping follow-on as a planning note. These two account for several of the `docs/` rows in `git diff --stat`.
 2. The **PHASE4-N-Y scope** (`461c912`) — the cluster spec + slice plan + cluster/slice docs (planning only).
 3. The **PHASE4-N-Y implementation** — the only code change in the window: S1 Mithril import authority + seed provenance (`9a97d34`); the DC-STORE-09 anchor-constant disambiguation fix (`51b6c4f`); S2 durable network forward-sync (`a42bfe2`); S3 end-to-end crash-recovery wiring (`09a49ed`); S4 Conway-genesis bootstrap source (`bb0d1fe`); S5 observable-surface compatibility evidence (`4b747cb`); the two security-HIGH remediations caught at cluster-close — S6 recovery↔WAL-tail reconciliation (`cb7da89`) and S7 real (non-tautological) Mithril binding (`dc8fc8c`); the registry close (`fb2c312`); and the cluster close (`3b78008`).
 
-> **Baseline bump (this close):** on the PHASE4-N-Y close, `.idd-config.json` `head_deltas_baseline` should be bumped from `273c887` to **`3b78008`** so the next cluster narrates from this point. (That config edit is made separately, outside this regeneration.)
+> **Baseline bump:** the PHASE4-N-Y close already bumped `.idd-config.json` `head_deltas_baseline` from `273c887` to **`3b78008`**. The post-close tail (§8) is **not** a cluster close and does **not** warrant a further bump — it is appended to keep this doc current at the working HEAD `5db9aae`. The baseline stays `3b78008`; the next cluster close re-bumps from there.
 
 ---
 
 ## 1. Commit Log
 
-Verbatim from `git log --oneline --no-merges 273c887..HEAD`, newest-first. Type is the conventional-commits prefix on the subject; no editorial.
+Verbatim from `git log --oneline --no-merges 273c887..3b78008` (cluster body), newest-first. Type is the conventional-commits prefix on the subject; no editorial. The post-close tail commits (`f0d0bf9`, `5db9aae`) are listed separately in §8.
 
 | Hash | Type | Summary |
 |------|------|---------|
@@ -56,7 +58,7 @@ Eight new modules this window, all PHASE4-N-Y. Three BLUE (authoritative core), 
 | `ade_runtime::recovery::restart` | RED | Node-binary restart recovery wiring (S3): composes the existing authorities (`WalStore::read_all` → BLUE `replay_from_anchor` → warm-start `bootstrap_initial_state`) into a single end-to-end crash-recovery entry — no second recovery engine. S6 extended it to reconcile the ChainDB to the WAL tail so a torn `put_block`/wal-append crash cannot incorporate an un-WAL'd orphan. | `recovery/restart.rs`; `recovery/mod.rs` (the pre-existing snapshot+forward-replay primitive, `recovery.rs` → `recovery/mod.rs` directory promotion) | PHASE4-N-Y / `09a49ed` (S3), extended `cb7da89` (S6) |
 | `ade_testkit::harness::sync_diff` | GREEN | Observable-surface differential harness for the snapshot→tip sync window (DC-COMPAT-01): compares Ade's per-block verdict, selected tip hash, block hash, and `query utxo`-style UTxO set against committed oracle fixtures. **Never** compares Ade's internal ledger `fingerprint` to a Haskell/serialized-state hash; deterministic over committed fixtures. | `harness/sync_diff.rs` (`BlockVerdict`, observable-surface diff types) | PHASE4-N-Y / `4b747cb` (S5) |
 
-**Module promotion (not a new module):** `crates/ade_runtime/src/recovery.rs` → `crates/ade_runtime/src/recovery/mod.rs` (a directory promotion, `git` rename score `R099` — content preserved) to make room for the new `recovery/restart.rs` sibling.
+**Module promotion (not a new module):** `crates/ade_runtime/src/recovery.rs` → `crates/ade_runtime/src/recovery/mod.rs` (a directory promotion, `git` rename score `R099` — content preserved) to make room for the new `recovery/restart.rs` sibling. *(This rename left three registry `code_locus` pointers stale — repaired in the post-close tail; see §8.)*
 
 **New non-source artifacts (corpus):** `corpus/sync/preprod_snapshot_to_tip_synthetic/` (the synthetic snapshot→tip oracle: `README.md` + `oracle_observable.toml`) and `corpus/sync/regressions/` (`README.md` — the per-mismatch regression-fixture home named by RO-SYNC-EVIDENCE-01). These back the S5 `sync_diff` harness and the evidence-manifest schema gate.
 
@@ -91,13 +93,13 @@ Not new rules — fourteen cross-cutting invariant strengthenings PHASE4-N-Y car
 
 ## 4. Feature Flags
 
-No feature-flag deltas this window. **No `Cargo.toml`** (workspace root or any member) was modified between `273c887` and `3b78008`, so no `[features]` table, `optionalDependencies`, build tag, or `extras_require` changed. No `compile_error!`-coupled flag was introduced or removed.
+No feature-flag deltas this window. **No `Cargo.toml`** (workspace root or any member) was modified between `273c887` and `5db9aae`, so no `[features]` table, `optionalDependencies`, build tag, or `extras_require` changed. No `compile_error!`-coupled flag was introduced or removed.
 
 ---
 
 ## 5. CI Checks
 
-Every CI check added or materially modified since baseline. CI scripts live as `ci/ci_check_*.sh` (no `.github/workflows` in this repo yet, per `.idd-config.json` `ci_dirs`). Count: **99 → 103** (+4 new, 0 modified, 0 removed).
+Every CI check added or materially modified since baseline. CI scripts live as `ci/ci_check_*.sh`; with the post-close tail, `.github/workflows/notify-atlas.yml` is now the **first** `.github/workflows` entry in the repo (see §8). Count of `ci/ci_check_*.sh`: **99 → 104** (+5 new across the full `273c887..5db9aae` window — 4 in N-Y, 1 in the tail; 0 modified, 0 removed). The four N-Y gates are below; the fifth (`ci_check_registry_code_locus_exists.sh`) is in §8.
 
 ### PHASE4-N-Y checks
 
@@ -116,7 +118,7 @@ Every CI check added or materially modified since baseline. CI scripts live as `
 
 n/a — `.idd-config.json` `canonical_type_registry` is `null`. Canonical-type rules live inline in the invariant registry under family **T**; no family-T entries were added or removed this window.
 
-For reference, the structural canonical-type count rose **446 → 452** (+6, all in `ade_ledger`) per the CODEMAP grep inventory — the new BLUE types `GenesisInitialFund`, `ConwayGenesisConfig`, `GenesisSourceError` (`genesis_source`), `MithrilManifestReport`, `MithrilImportError` (`bootstrap_anchor::binding`), and the `SeedProvenance` enum. This is a count delta, not a registry delta (there is no canonical-type registry file).
+For reference, the structural canonical-type count rose **446 → 452** (+6, all in `ade_ledger`) per the CODEMAP grep inventory — the new BLUE types `GenesisInitialFund`, `ConwayGenesisConfig`, `GenesisSourceError` (`genesis_source`), `MithrilManifestReport`, `MithrilImportError` (`bootstrap_anchor::binding`), and the `SeedProvenance` enum. This is a count delta, not a registry delta (there is no canonical-type registry file). The post-close tail added no canonical types.
 
 ---
 
@@ -125,8 +127,8 @@ For reference, the structural canonical-type count rose **446 → 452** (+6, all
 Source: `docs/ade-invariant-registry.toml` (the project's canonical append-only invariant registry; `invariant_registry` in `.idd-config.json`). Counts by `^[[rules]]` entries.
 
 - Rules at baseline (`273c887`): **292**
-- Rules at HEAD (`3b78008`): **298**
-- Net additions: **6** (all introduced and enforced inside this window)
+- Rules at HEAD (`5db9aae`): **298** (unchanged from the N-Y close at `3b78008`; the post-close tail added **0** rules — it only repaired three `code_locus` pointers, see §8)
+- Net additions: **6** (all introduced and enforced inside the N-Y cluster body)
 - Removals: **0** (append-only discipline upheld).
 
 ### New rules
@@ -162,3 +164,35 @@ Both were surfaced by the per-cluster security review against the full N-Y diff 
 ### Honest residual
 
 N-Y proves, in-process and over committed fixtures: the Mithril provenance binding cross-check, the Conway-genesis cold-start through the single authority, the durable-before-tip forward-sync ordering, the crash-recovery↔WAL-tail reconciliation, and observable-surface (never internal-hash) compatibility. It does **not** prove a live snapshot→tip pass against real Haskell peers, nor seed-bytes-from-Mithril. The snapshot→tip live capture (`RO-SYNC-EVIDENCE-01`, CE-Y-16) is operator-witnessed and `blocked_until_operator_pass_executed`; full Mithril import (`RO-MITHRIL-IMPORT-01`) is `partial` and `blocked_until_mithril_import_wiring_slice`. Neither is a code gap in this cluster's shipped scope.
+
+---
+
+## 8. Post-Close Tail (`3b78008` → `5db9aae`)
+
+**Not a cluster.** Two housekeeping commits after the PHASE4-N-Y close — a CI notify workflow and a registry drift-guard. No source-code (`crates/**/*.rs`) change, no behavioral change, no new invariant rule. `git diff --stat 3b78008..5db9aae`: **3 files changed, +101 / -3 lines** (the `docs/ade-HEAD_DELTAS.md` row in the raw `git diff --stat` for the full window is this same regeneration). The baseline is **not** bumped for this tail (see the header note).
+
+| Hash | Type | Summary |
+|------|------|---------|
+| `5db9aae` | fix | `fix(registry):` repair recovery.rs code_locus drift + add code-locus existence gate |
+| `f0d0bf9` | ci | `ci:` notify ade-atlas to rebuild on grounding-doc changes |
+
+### `f0d0bf9` — CI notify workflow (first `.github/workflows` in the repo)
+
+Adds `.github/workflows/notify-atlas.yml` (+42 lines) — the **first** GitHub Actions workflow in this repo, which until now had only `ci/ci_check_*.sh` scripts (`.idd-config.json` `ci_dirs` is still `["ci"]`; this workflow is outside that list). On a push to `main` that touches any of the five grounding artifacts (`ade-{CODEMAP,SEAMS,HEAD_DELTAS,TRACEABILITY}.md` + `ade-invariant-registry.toml`), or on `workflow_dispatch`, it `repository_dispatch`-es an `ade-docs-updated` event to `wdm33/ade-atlas` so the dashboard rebuilds. It is a **clean no-op** until the `ATLAS_DISPATCH_TOKEN` secret (a fine-grained PAT with Contents:write on `ade-atlas`) is set; `ade-atlas` also has a daily cron fallback. Permissions are `contents: read`; it gates nothing in this repo (it is a notify, not a check).
+
+> **§5 cross-reference note:** this workflow is *not* an invariant gate and is *not* referenced by any TRACEABILITY rule — by design (it enforces nothing). When `.github/workflows` is added to `.idd-config.json` `ci_dirs`, the CI-check inventory tooling should continue to classify `notify-atlas.yml` as a non-gating workflow, not an enforcement script.
+
+### `5db9aae` — registry code_locus drift repair + existence gate
+
+Two coupled changes, **0 new rules** (registry stays **298**):
+
+1. **Repaired three stale `code_locus` pointers** in `docs/ade-invariant-registry.toml` (+6 / -3 net within the file) left behind by the N-Y S3 `recovery.rs → recovery/mod.rs` directory promotion (§2). All three pointed at the now-nonexistent `crates/ade_runtime/src/recovery.rs`:
+   - **`T-REC-01`** (true; recovery replay-equivalence) → now `recovery/mod.rs, recovery/restart.rs, chaindb/crash_safety.rs`.
+   - **`T-REC-02`** (true; all authoritative state derivable by replay) → now `recovery/mod.rs, recovery/restart.rs`.
+   - **`DC-STORE-05`** (derived; recovery is snapshot + forward replay, not full genesis replay) → now `recovery/mod.rs, recovery/restart.rs`.
+
+   This is a pointer repair, **not** a rule statement change, `tests`/`ci_script`/`status` change, or strengthening — append-only discipline is untouched. (All three rules were already `strengthened_in += PHASE4-N-Y`; the N-Y close updated their statements/tests but the file-path token lagged, a SOFT drift the schema validator did not catch.)
+
+2. **New CI gate `ci/ci_check_registry_code_locus_exists.sh`** (+56 lines) — the drift-guard that would have caught the above. It loads the registry with `python3` + `tomllib`, extracts every `crates/**.rs` and `ci/**.sh` token from each rule's `code_locus`, skips glob-containing tokens and `docs/` paths (those use globs / are archived on close), and fails closed if any cited code/gate path does not exist on disk. This raises the `ci/ci_check_*.sh` count **103 → 104**.
+
+> **Anomaly check:** removals — 0 (registry rule count unchanged; no `code_locus`/`tests`/`ci_script` array element removed, only a path token rewritten in place). No discipline violation.
