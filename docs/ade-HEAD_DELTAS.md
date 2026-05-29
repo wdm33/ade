@@ -4,113 +4,99 @@
 >
 > Regenerate with `/head-deltas <baseline>` after every cluster close. Baseline is recorded in `.idd-config.json` `head_deltas_baseline`.
 
-> Baseline: `273c887` (no tag, 2026-05-29 04:20:00 +0700)
-> HEAD: `5db9aae` (fix(registry): repair recovery.rs code_locus drift + add code-locus existence gate, 2026-05-29 16:18:32 +0700)
-> 15 commits, 9 files changed (cluster body) + 3 files (post-close tail), +6273 / -257 lines (cluster body) + +101 / -3 lines (post-close tail)
+> Baseline: `3b78008` (no tag, 2026-05-29 14:59:36 +0700)
+> HEAD: `67d1ccc` (Close PHASE4-N-Z — Mithril production-bootstrap wiring + seed-point independence, 2026-05-29 16:57:41 +0700)
+> 9 commits, 13 files changed, +1692 / -560 lines
 
-This window is the **PHASE4-N-Y cluster** (`273c887` → `3b78008`) plus a short **post-close housekeeping tail** (`3b78008` → `5db9aae`). The cluster body (§§1–7) is unchanged from the N-Y close pass; the tail is narrated in **§8** and is *not* a new cluster — a CI notify workflow + a registry drift-guard.
+This window is a short **PHASE4-N-Y post-close housekeeping tail** (`3b78008` → `5db9aae`) followed by the **PHASE4-N-Z cluster** (`5db9aae` → `67d1ccc`). The prior baseline (`3b78008`) was the PHASE4-N-Y close; per the per-cluster bump model the N-Y cluster body is now archived in git history + its cluster docs, and this doc narrates only the post-N-Y span.
 
-The cluster body is three pieces:
+The window is two pieces:
 
-1. The **PHASE4-N-X tail** (`86ddc4d` + `c83f2ba`) — **no code or behavior change.** `86ddc4d` is the N-X *close*-pass grounding-doc refresh (CODEMAP / SEAMS / HEAD_DELTAS / TRACEABILITY regenerated at the N-X HEAD, cluster docs archived). `c83f2ba` seeded the operator-pass live-leg C1 scoping follow-on as a planning note. These two account for several of the `docs/` rows in `git diff --stat`.
-2. The **PHASE4-N-Y scope** (`461c912`) — the cluster spec + slice plan + cluster/slice docs (planning only).
-3. The **PHASE4-N-Y implementation** — the only code change in the window: S1 Mithril import authority + seed provenance (`9a97d34`); the DC-STORE-09 anchor-constant disambiguation fix (`51b6c4f`); S2 durable network forward-sync (`a42bfe2`); S3 end-to-end crash-recovery wiring (`09a49ed`); S4 Conway-genesis bootstrap source (`bb0d1fe`); S5 observable-surface compatibility evidence (`4b747cb`); the two security-HIGH remediations caught at cluster-close — S6 recovery↔WAL-tail reconciliation (`cb7da89`) and S7 real (non-tautological) Mithril binding (`dc8fc8c`); the registry close (`fb2c312`); and the cluster close (`3b78008`).
+1. The **N-Y post-close tail** (`f0d0bf9`, `5db9aae`, `588a554`) — **no source-code behavior change** beyond a registry pointer repair + a new drift-guard gate. `f0d0bf9` adds the first `.github/workflows` entry (an ade-atlas notify); `5db9aae` repairs three stale `code_locus` pointers left by the N-Y `recovery.rs → recovery/mod.rs` promotion and adds `ci_check_registry_code_locus_exists.sh`; `588a554` re-reproduced the four grounding docs at `5db9aae`. This tail is narrated in **§8**.
+2. The **PHASE4-N-Z cluster** (`9b4177f` scope, `f2b1562` S1, `bccec39` gate-hardening, `c876022` registry, `67d1ccc` close) — Mithril production-bootstrap wiring + seed-point independence. One new RED module, one new BLUE-call-order CI gate, one new derived rule, narrated in §§2–7.
 
-> **Baseline bump:** the PHASE4-N-Y close already bumped `.idd-config.json` `head_deltas_baseline` from `273c887` to **`3b78008`**. The post-close tail (§8) is **not** a cluster close and does **not** warrant a further bump — it is appended to keep this doc current at the working HEAD `5db9aae`. The baseline stays `3b78008`; the next cluster close re-bumps from there.
+> **Baseline bump:** the PHASE4-N-Z close is a cluster close and **does** warrant a bump of `.idd-config.json` `head_deltas_baseline` from `3b78008` to **`67d1ccc`**. The next cluster close re-bumps from there.
+
+> **Grounding-doc coherence:** all four docs (CODEMAP, SEAMS, TRACEABILITY, HEAD_DELTAS) were regenerated together in the PHASE4-N-Z close pass at HEAD `67d1ccc` — they all reflect `ade_runtime::mithril_bootstrap`, `DC-MITHRIL-02`, and `ci_check_mithril_seed_point_independence.sh` (CI 105, registry 299). No cross-doc staleness this window. *(They were generated concurrently; an interim draft of this note flagged the other three as stale because they had not yet been written when this doc was drafted — corrected here.)*
 
 ---
 
 ## 1. Commit Log
 
-Verbatim from `git log --oneline --no-merges 273c887..3b78008` (cluster body), newest-first. Type is the conventional-commits prefix on the subject; no editorial. The post-close tail commits (`f0d0bf9`, `5db9aae`) are listed separately in §8.
+Verbatim from `git log --oneline --no-merges 3b78008..67d1ccc`, newest-first. Type is the conventional-commits prefix on the subject; no editorial.
 
 | Hash | Type | Summary |
 |------|------|---------|
-| `3b78008` | — | Close PHASE4-N-Y — Mithril-anchored bootstrap, network forward-sync & WAL recovery |
-| `fb2c312` | docs | PHASE4-N-Y close — 6 new rules enforced + strengthenings |
-| `dc8fc8c` | fix | PHASE4-N-Y S7 — real (non-tautological) Mithril binding (HIGH) |
-| `cb7da89` | fix | PHASE4-N-Y S6 — recovery reconciles chaindb to the WAL tail (HIGH) |
-| `4b747cb` | feat | PHASE4-N-Y S5 — observable-surface compatibility evidence |
-| `bb0d1fe` | feat | PHASE4-N-Y S4 — Conway-genesis bootstrap source |
-| `51b6c4f` | fix | disambiguate anchor schema-version constant (DC-STORE-09) |
-| `09a49ed` | feat | PHASE4-N-Y S3 — end-to-end crash recovery wiring |
-| `a42bfe2` | feat | PHASE4-N-Y S2 — durable network forward-sync lifecycle |
-| `9a97d34` | feat | PHASE4-N-Y S1 — Ade-side Mithril import authority + seed provenance |
-| `461c912` | docs | scope PHASE4-N-Y Mithril-anchored bootstrap + forward-sync + WAL recovery |
-| `c83f2ba` | docs | seed the operator-pass live-leg C1 scoping follow-on |
-| `86ddc4d` | docs | refresh CODEMAP/SEAMS/HEAD_DELTAS/TRACEABILITY for PHASE4-N-X |
+| `67d1ccc` | — | Close PHASE4-N-Z — Mithril production-bootstrap wiring + seed-point independence |
+| `c876022` | docs | PHASE4-N-Z close — DC-MITHRIL-02 enforced + RO-MITHRIL-IMPORT-01 item (b) closed |
+| `bccec39` | fix | harden Mithril seed-point independence gate against laundering (N-Z review BLOCK) |
+| `f2b1562` | feat | PHASE4-N-Z S1 — Mithril production bootstrap + seed-point independence gate |
+| `9b4177f` | docs | scope PHASE4-N-Z Mithril production-bootstrap + seed-point independence |
+| `588a554` | docs | re-reproduce CODEMAP/TRACEABILITY/SEAMS/HEAD_DELTAS at 5db9aae |
+| `5db9aae` | fix | repair recovery.rs code_locus drift + add code-locus existence gate |
+| `f0d0bf9` | ci | notify ade-atlas to rebuild on grounding-doc changes |
+| `3ddbc9a` | docs | refresh CODEMAP/TRACEABILITY/SEAMS/HEAD_DELTAS for PHASE4-N-Y |
 
-Type histogram: feat ×4, fix ×3, docs ×5. Unclassified by prefix: 1 — `3b78008` ("Close PHASE4-N-Y …") carries no conventional-commits prefix; its diff is the cluster-close pass (registry/grounding-doc refresh + cluster-doc archive), so it is `docs`-by-scope. (`51b6c4f` and the two `fix(...)` HIGH commits all carry a `fix:` prefix.)
+Type histogram: docs ×4, fix ×2, feat ×1, ci ×1. Unclassified by prefix: 1 — `67d1ccc` ("Close PHASE4-N-Z …") carries no conventional-commits prefix; its diff is the cluster-close pass (registry + grounding-doc refresh + cluster-doc archive), so it is `docs`-by-scope.
+
+(`3ddbc9a` is the N-Y close-pass grounding refresh — it sits at the very start of this window because the prior baseline `3b78008` is its predecessor; it touched only `docs/` and carries no N-Z content.)
 
 ---
 
 ## 2. New Modules
 
-Eight new modules this window, all PHASE4-N-Y. Three BLUE (authoritative core), four RED (shell), one GREEN (evidence). Colors follow `.idd-config.json` `core_paths`: `ade_ledger` is BLUE; `ade_runtime` is RED; `ade_testkit` is neither core nor shell (GREEN test-evidence).
+One new module this window, all PHASE4-N-Z.
 
 | Module | Color | Purpose | Key sub-paths | Added in (cluster/slice) |
 |--------|-------|---------|---------------|--------------------------|
-| `ade_ledger::bootstrap_anchor::binding` | BLUE | The pure `verify_mithril_binding` predicate (CN-MITHRIL-01 / DC-MITHRIL-01): cross-checks a Mithril manifest's attested `{network_magic, genesis_hash, certified_point, certificate_hash}` against the independently-minted `BootstrapAnchor`; fails closed (typed `MithrilImportError`) on any field mismatch before storage init. Never re-verifies the STM multisig. | `binding.rs` (`verify_mithril_binding`, `MithrilManifestReport`, closed `MithrilImportError`) | PHASE4-N-Y / `9a97d34` (S1), hardened `dc8fc8c` (S7) |
-| `ade_ledger::genesis_source` | BLUE | The pure Conway-genesis → canonical-initial-state transform (DC-GENESIS-SRC-01): turns a controlled `ConwayGenesisConfig` into the `(LedgerState, PraosChainDepState)` cold-start pair the single bootstrap authority feeds into its `genesis_initial` branch. Conway-only — non-Conway fails closed. | `genesis_source.rs` (`genesis_initial_state`, `ConwayGenesisConfig`, `GenesisInitialFund`, `GenesisSourceError`) | PHASE4-N-Y / `bb0d1fe` (S4) |
-| `ade_runtime::mithril_import` | RED | The mithril-client import shell (S1): consumes a mithril-client-verified snapshot manifest and maps it to `SeedProvenance::Mithril` + the observed anchor field-set. Makes no semantic decision (the BLUE predicate decides) and never re-verifies the STM multisig. | `mithril_import/mod.rs`, `importer.rs` (`import_mithril_manifest`, `MithrilManifestError`, `MithrilProvenanceImport`), `json.rs` | PHASE4-N-Y / `9a97d34` (S1) |
-| `ade_runtime::forward_sync` | RED+GREEN | Durable network forward-sync lifecycle (DC-SYNC-01), two-driver split mirroring `session`/`mux_pump`. The GREEN `reducer` composes the BLUE admit chokepoint and emits a closed `SyncEffect` plan whose `AdvanceTip` is unreachable until `StoreBlockBytes` + `AppendWal` precede it; the RED `pump` applies the plan in order against `ChainDb` + WAL and fail-closes (`TipBeforeDurable`) on any out-of-order apply. | `forward_sync/mod.rs`, `reducer.rs` (GREEN — `forward_sync_step`, `SyncEffect`, `AdmitPlan`, `ForwardSyncState`), `pump.rs` (RED — `pump_block`, `PumpError`, `PumpTip`, `SnapshotSink`) | PHASE4-N-Y / `a42bfe2` (S2) |
-| `ade_runtime::genesis_bootstrap` | RED | The Conway-genesis bootstrap entry (S4): composes the RED `genesis_parser` (file read), the BLUE `genesis_source` transform, and the single closed `bootstrap_initial_state` authority; mints the `BootstrapAnchor` with `SeedProvenance::CardanoCliJson`. Introduces no parallel storage-init path and no `*Anchor` trait/plugin seam. | `genesis_bootstrap.rs` | PHASE4-N-Y / `bb0d1fe` (S4) |
-| `ade_runtime::recovery::restart` | RED | Node-binary restart recovery wiring (S3): composes the existing authorities (`WalStore::read_all` → BLUE `replay_from_anchor` → warm-start `bootstrap_initial_state`) into a single end-to-end crash-recovery entry — no second recovery engine. S6 extended it to reconcile the ChainDB to the WAL tail so a torn `put_block`/wal-append crash cannot incorporate an un-WAL'd orphan. | `recovery/restart.rs`; `recovery/mod.rs` (the pre-existing snapshot+forward-replay primitive, `recovery.rs` → `recovery/mod.rs` directory promotion) | PHASE4-N-Y / `09a49ed` (S3), extended `cb7da89` (S6) |
-| `ade_testkit::harness::sync_diff` | GREEN | Observable-surface differential harness for the snapshot→tip sync window (DC-COMPAT-01): compares Ade's per-block verdict, selected tip hash, block hash, and `query utxo`-style UTxO set against committed oracle fixtures. **Never** compares Ade's internal ledger `fingerprint` to a Haskell/serialized-state hash; deterministic over committed fixtures. | `harness/sync_diff.rs` (`BlockVerdict`, observable-surface diff types) | PHASE4-N-Y / `4b747cb` (S5) |
+| `ade_runtime::mithril_bootstrap` | RED | The wired **production** Mithril-snapshot bootstrap entry (S1) — closes RO-MITHRIL-IMPORT-01 item (b). A composition-only RED shell that routes a Mithril-sourced seed through the **same** single closed bootstrap authority `bootstrap_initial_state` (CN-NODE-01), never a parallel storage-init path; mirrors `genesis_bootstrap` in shape. The load-bearing discipline (DC-MITHRIL-02): the anchor's `seed_point` is minted from the **operator-provided** `MithrilSeedPointInputs`, an origin structurally independent of the manifest; the manifest import only populates `SeedProvenance::Mithril`. `verify_mithril_binding` then cross-checks the manifest's attested `certified_point` against the independently-supplied `anchor.seed_point` and fails closed **before** any `bootstrap_initial_state` call. | `mithril_bootstrap.rs` (`bootstrap_from_mithril_snapshot`, `MithrilSeedPointInputs`, closed `MithrilBootstrapError` { `Import` / `Binding` / bootstrap-authority variants }) | PHASE4-N-Z / `f2b1562` (S1), gate hardened `bccec39` |
 
-**Module promotion (not a new module):** `crates/ade_runtime/src/recovery.rs` → `crates/ade_runtime/src/recovery/mod.rs` (a directory promotion, `git` rename score `R099` — content preserved) to make room for the new `recovery/restart.rs` sibling. *(This rename left three registry `code_locus` pointers stale — repaired in the post-close tail; see §8.)*
+**Cross-reference (CODEMAP @ `67d1ccc`): STALE.** CODEMAP was last regenerated at `5db9aae` (N-Y tail) and does **not** yet catalogue `ade_runtime::mithril_bootstrap`. Run `/codemap` to add it to the RED authority table alongside the sibling `genesis_bootstrap` / `mithril_import` rows.
 
-**New non-source artifacts (corpus):** `corpus/sync/preprod_snapshot_to_tip_synthetic/` (the synthetic snapshot→tip oracle: `README.md` + `oracle_observable.toml`) and `corpus/sync/regressions/` (`README.md` — the per-mismatch regression-fixture home named by RO-SYNC-EVIDENCE-01). These back the S5 `sync_diff` harness and the evidence-manifest schema gate.
-
-**Cross-reference (CODEMAP @ `3b78008`):** CODEMAP was regenerated at this same HEAD (`3b78008`, PHASE4-N-Y close) and **does** catalogue these modules — `ade_ledger::bootstrap_anchor::binding`, `genesis_source`, `forward_sync`, `mithril_import`, `genesis_bootstrap`, `recovery::restart`, and the GREEN `sync_diff` harness all appear in the BLUE/RED/GREEN tables and the `ade_ledger` / `ade_runtime` authority rows. No CODEMAP staleness on §2 this window.
+No new corpus / non-source artifacts this window.
 
 ---
 
 ## 3. Modules Modified
 
-Modules that existed at baseline with non-trivial changes. The N-X tail (piece 1) and the N-Y scoping (piece 2) touched no code, so they produce no §3 entry. Every entry below is PHASE4-N-Y.
+Modules that existed at baseline with non-trivial changes. The N-Y tail repaired registry pointers and added a docs-notify workflow but touched no `crates/**/*.rs` behavior; the N-Z scope (`9b4177f`) is planning-only. The only source change is the new-module declaration.
 
 | Module | Scope | Key changes |
 |--------|-------|-------------|
-| `ade_ledger::bootstrap_anchor` (`anchor.rs`, `error.rs`, `mod.rs`) | +180 / -27 lines across 3 files | **N-Y (S1 + DC-STORE-09 fix + S7):** the anchor record is extended with the closed `SeedProvenance` enum (`CardanoCliJson` / `Mithril { certificate_hash, certified_point, immutable_range }`) carried in the canonical CBOR framing. The wire schema constant is both **renamed and bumped: `SCHEMA_VERSION` → `ANCHOR_SCHEMA_VERSION`, value `1 → 2`** (additive, version-gated — `decode_bootstrap_anchor` still rejects an unknown version fail-fast; the unknown-version negative test now splices a fresh v2 encoding). The rename (`51b6c4f`) disambiguates from the snapshot-framing `SCHEMA_VERSION` that `ci_check_snapshot_encoder_closure.sh` (DC-STORE-09) requires to live only in `snapshot/framing.rs` — the gate's generic-name grep was flagging the anchor's distinct, legitimate constant. The new `binding` and `error` surfaces are declared in `mod.rs`. |
-| `ade_runtime::bootstrap_anchor` (RED) | +10 / -2 lines | **N-Y (S1):** the RED anchor-minting shell records the new `SeedProvenance` variant for a Mithril-sourced seed (the observed anchor field-set fed to the BLUE binding predicate). |
-| `ade_runtime::recovery` (`recovery/mod.rs`) | +4 lines | **N-Y (S3):** the pre-existing snapshot+forward-replay primitive gains the `restart` submodule declaration (the new end-to-end restart wiring lives in the sibling `restart.rs`, §2). |
-| `ade_node::admission::bootstrap` | +2 lines | **N-Y (S1/S4):** the admission bootstrap path threads the extended provenance/anchor surface (the storage-init chokepoint is unchanged — Mithril and genesis routes both enter the single `bootstrap_initial_state` authority). |
-| `ade_ledger` / `ade_runtime` `lib.rs` | +4 lines total | Module declarations for the new submodules: `ade_ledger` exposes `pub mod genesis_source`; `ade_runtime` exposes `pub mod forward_sync`, `pub mod genesis_bootstrap`, `pub mod mithril_import`. |
-| `ade_testkit::harness` (`mod.rs`) | +1 line | **N-Y (S5):** declares the new `sync_diff` GREEN harness submodule (§2). |
+| `ade_runtime` `lib.rs` | +1 line | **N-Z (S1):** declares the new RED submodule — `pub mod mithril_bootstrap;` (the entry itself is the new module in §2). No other `crates/**/*.rs` file changed in the window. |
 
 ### Strengthenings recorded this window (registry `strengthened_in`)
 
-Not new rules — fourteen cross-cutting invariant strengthenings PHASE4-N-Y carried forward (see §7), grouped by sub-system:
+Not new rules — two cross-cutting invariant strengthenings PHASE4-N-Z carried forward (see §7):
 
-- **Durability / determinism core** — `T-DET-01`, `DC-STORE-01`, `DC-STORE-02`, `DC-STORE-03`, `DC-STORE-05`, `DC-CONS-20` (the durable-before-tip ordering and replay-equivalence now extend to the network forward-sync path + recovery↔WAL-tail reconciliation).
-- **Bootstrap / anchor / seed authority** — `CN-NODE-01`, `CN-SEED-01`, `CN-ANCHOR-01`, `DC-ANCHOR-01`, `CN-GENESIS-01` (Mithril and Conway-genesis routes both enter the single closed bootstrap authority; the anchor schema is version-gated at v2).
-- **WAL replay** — `DC-WAL-01`, `DC-WAL-02`, `DC-WAL-03` (the recovery wiring exercises the BLUE WAL replay integrity gates end-to-end).
-
-(`RO-MITHRIL-IMPORT-01` also gained `PHASE4-N-Y` in `strengthened_in`, but its headline change is a **status flip** `declared → partial`; it is narrated as such in §7 rather than counted among the fourteen strengthenings.)
+- **`CN-MITHRIL-01`** — the verify-before-bootstrap call-order is now mechanically enforced on the wired production composition (the new gate asserts `verify_mithril_binding(` precedes `bootstrap_initial_state(`).
+- **`RO-MITHRIL-IMPORT-01`** — item (b) (a wired production composition site with a CI gate asserting seed-point independence) is **closed**; the rule stays `partial` pending items (a) seed-bytes-from-Mithril decode and (c) a committed reproducible fixture + live evidence.
 
 ---
 
 ## 4. Feature Flags
 
-No feature-flag deltas this window. **No `Cargo.toml`** (workspace root or any member) was modified between `273c887` and `5db9aae`, so no `[features]` table, `optionalDependencies`, build tag, or `extras_require` changed. No `compile_error!`-coupled flag was introduced or removed.
+No feature-flag deltas this window. **No `Cargo.toml`** (workspace root or any member) was modified between `3b78008` and `67d1ccc`, so no `[features]` table, `optionalDependencies`, build tag, or `extras_require` changed. No `compile_error!`-coupled flag was introduced or removed.
 
 ---
 
 ## 5. CI Checks
 
-Every CI check added or materially modified since baseline. CI scripts live as `ci/ci_check_*.sh`; with the post-close tail, `.github/workflows/notify-atlas.yml` is now the **first** `.github/workflows` entry in the repo (see §8). Count of `ci/ci_check_*.sh`: **99 → 104** (+5 new across the full `273c887..5db9aae` window — 4 in N-Y, 1 in the tail; 0 modified, 0 removed). The four N-Y gates are below; the fifth (`ci_check_registry_code_locus_exists.sh`) is in §8.
+Every CI check added or materially modified since baseline. Enforcement gates live as `ci/ci_check_*.sh`. Count of `ci/ci_check_*.sh`: **103 → 105** (+2 new — 1 in the N-Y tail, 1 in N-Z; 0 modified, 0 removed). A non-gating `.github/workflows/notify-atlas.yml` was also added in the tail (§8).
 
-### PHASE4-N-Y checks
+### PHASE4-N-Z checks
 
 | Check | Status | What it checks |
 |-------|--------|----------------|
-| `ci_check_mithril_uses_bootstrap_initial_state.sh` | New (`9a97d34`, S1) | Mithril import enters the single closed bootstrap authority only (CN-MITHRIL-01) and never re-verifies the STM multisig in BLUE (DC-MITHRIL-01). Positive: the workspace references `bootstrap_initial_state(`. Negatives: no `trait *Anchor` plugin seam (`BootstrapAnchor` stays a struct); no second `pub fn bootstrap_initial_state` outside the one authority module; no `mithril`/STM-verify crate import under any BLUE crate path. Also gates `genesis_source` routing (DC-GENESIS-SRC-01). |
-| `ci_check_forward_sync_chokepoint_only.sh` | New (`a42bfe2`, S2) | Forward-sync chokepoint-only + GREEN reducer purity (DC-SYNC-01). The GREEN reducer holds no I/O state (no tokio/redb/SystemTime/rand/HashMap/float); admits blocks only through the BLUE chokepoint (transitively via `receive_apply`); redb writes + WAL appends live in the RED pump, never the reducer; `AdvanceTip` is emitted only from the durable `AdmitPlan` constructor. |
-| `ci_check_no_haskell_fingerprint_equality.sh` | New (`4b747cb`, S5) | Cardano compatibility proven only on observable surfaces (DC-COMPAT-01). A negative grep over the test tree: fails if any line is an equality assertion that pairs Ade's `fingerprint` with a Haskell/oracle serialized-state-hash token. Precise enough to allow the legitimate Ade-vs-Ade internal cross-path fingerprint equality (S4's `genesis_path_fp_equals_snapshot_path_fp`). |
-| `ci_check_sync_evidence_manifest_schema.sh` | New (`4b747cb`, S5) | The committed snapshot→tip sync-evidence manifest schema (RO-SYNC-EVIDENCE-01, mirroring CN-OPERATOR-EVIDENCE-01). When a `docs/clusters/PHASE4-N-Y/CE-Y-SYNC-LIVE_*.toml` manifest exists, verify every required field is present and the referenced fixture's sha256 matches `fixture_file_sha256`. **Vacuously satisfied** until the operator-witnessed two-Haskell-node live pass commits a manifest — the live capture is operator action, never executed or fabricated in CI. |
+| `ci_check_mithril_seed_point_independence.sh` | New (`f2b1562`, S1; hardened `bccec39`) | Mithril bootstrap seed-point independence (DC-MITHRIL-02) + verify-before-bootstrap call-order (CN-MITHRIL-01, strengthened), on the production composition `bootstrap_from_mithril_snapshot`. **(a)** Positive call-order: `verify_mithril_binding(` appears before `bootstrap_initial_state(` in source. **(b)** Negative source-origin: the `MintInputs` `seed_slot:` / `seed_block_hash:` RHS does not mention a manifest-origin token (`report`, `.certified_point`, `provenance`, `SeedProvenance::Mithril`, `import.`). **(c)** Containment (added in `bccec39`): the production body must reference the import only as whole values — any `import.report.<field>` drill, any `import.provenance.<field>` drill, or any mention of `certified_point` fails closed, so a one-hop local or mutate-before-mint cannot launder a manifest point into the seed_point path. Strips the `#[cfg(test)]` module + line comments before grepping. |
 
-**Cross-reference (all four grounding docs @ `3b78008`):** CODEMAP, TRACEABILITY, and SEAMS were all regenerated in the same PHASE4-N-Y close pass as this HEAD_DELTAS, at HEAD `3b78008`. TRACEABILITY binds the four new gates (`ci_check_mithril_uses_bootstrap_initial_state` / `ci_check_forward_sync_chokepoint_only` / `ci_check_no_haskell_fingerprint_equality` / `ci_check_sync_evidence_manifest_schema`) and the six new rule IDs (CN-MITHRIL-01, DC-MITHRIL-01, DC-SYNC-01, DC-GENESIS-SRC-01, DC-COMPAT-01, RO-SYNC-EVIDENCE-01) to their registry `ci_script`/`tests` entries; SEAMS records the new closed surfaces (`SeedProvenance`, `SyncEffect`, etc.). No cross-doc staleness this window. *(The four were generated concurrently; an interim draft of this note flagged TRACEABILITY/SEAMS as stale because they had not yet been written when this doc was drafted — corrected here.)*
+### PHASE4-N-Y tail check
+
+| Check | Status | What it checks |
+|-------|--------|----------------|
+| `ci_check_registry_code_locus_exists.sh` | New (`5db9aae`) | Registry `code_locus` drift-guard (see §8). Loads the registry with `python3` + `tomllib`, extracts every `crates/**.rs` and `ci/**.sh` token from each rule's `code_locus`, skips glob-containing tokens and `docs/` paths, and fails closed if any cited code/gate path does not exist on disk. |
+
+**Cross-reference (TRACEABILITY @ `67d1ccc`): STALE for the N-Z gate.** TRACEABILITY was last regenerated at `5db9aae` and binds `ci_check_registry_code_locus_exists.sh` only via the N-Y-tail refresh; it does **not** yet bind `ci_check_mithril_seed_point_independence.sh` to DC-MITHRIL-02 / CN-MITHRIL-01. Run `/traceability` to add the binding. The `.github/workflows/notify-atlas.yml` workflow is *not* an invariant gate and is correctly absent from TRACEABILITY (it enforces nothing); see §8.
 
 ---
 
@@ -118,7 +104,7 @@ Every CI check added or materially modified since baseline. CI scripts live as `
 
 n/a — `.idd-config.json` `canonical_type_registry` is `null`. Canonical-type rules live inline in the invariant registry under family **T**; no family-T entries were added or removed this window.
 
-For reference, the structural canonical-type count rose **446 → 452** (+6, all in `ade_ledger`) per the CODEMAP grep inventory — the new BLUE types `GenesisInitialFund`, `ConwayGenesisConfig`, `GenesisSourceError` (`genesis_source`), `MithrilManifestReport`, `MithrilImportError` (`bootstrap_anchor::binding`), and the `SeedProvenance` enum. This is a count delta, not a registry delta (there is no canonical-type registry file). The post-close tail added no canonical types.
+For reference, the N-Z module introduces the RED composition types `MithrilSeedPointInputs` (the operator-side independent seed-point struct) and the closed `MithrilBootstrapError` sum. These are RED-shell composition types, not BLUE canonical types, and there is no canonical-type registry file to delta against.
 
 ---
 
@@ -126,73 +112,68 @@ For reference, the structural canonical-type count rose **446 → 452** (+6, all
 
 Source: `docs/ade-invariant-registry.toml` (the project's canonical append-only invariant registry; `invariant_registry` in `.idd-config.json`). Counts by `^[[rules]]` entries.
 
-- Rules at baseline (`273c887`): **292**
-- Rules at HEAD (`5db9aae`): **298** (unchanged from the N-Y close at `3b78008`; the post-close tail added **0** rules — it only repaired three `code_locus` pointers, see §8)
-- Net additions: **6** (all introduced and enforced inside the N-Y cluster body)
+- Rules at baseline (`3b78008`): **298**
+- Rules at HEAD (`67d1ccc`): **299**
+- Net additions: **1** (`DC-MITHRIL-02`, introduced and enforced inside the N-Z cluster body)
 - Removals: **0** (append-only discipline upheld).
 
-### New rules
+### New rule
 
 | ID | Tier | Cluster | One-line summary |
 |----|------|---------|------------------|
-| `CN-MITHRIL-01` | constraint | N-Y | A Mithril-sourced seed may bootstrap only after a verified binding cross-checks the manifest's attested `{network_magic, genesis_hash, certified_point, certificate_hash}` against the **independently** `--json-seed`-minted `BootstrapAnchor`, failing closed before storage init; the STM multisig is the RED mithril-client's job, never a BLUE trust root, and no mithril/STM crate is imported under any BLUE path. Status `enforced` (S1 + S7). |
-| `DC-MITHRIL-01` | derived | N-Y | `verify_mithril_binding` is a pure, total, deterministic BLUE predicate (no I/O, clock, HashMap, float, or String errors); each field divergence maps to a distinct closed `MithrilImportError` variant; the compared sides come from two independent origins — never a value vs itself. Status `enforced`. |
-| `DC-SYNC-01` | derived | N-Y | During network forward-sync a block's preserved wire bytes + WAL entry MUST be durable before the tip advances; admission is chokepoint-only; `AdvanceTip` is constructible only after `StoreBlockBytes` + `AppendWal` (single durable() emit site) and the RED pump fail-closes (`TipBeforeDurable`) out of order; recovery reconciles the chaindb to the WAL tail so a torn crash cannot incorporate an un-WAL'd orphan (S6). Status `enforced`. |
-| `DC-GENESIS-SRC-01` | derived | N-Y | A controlled genesis enters initial state only through the single `bootstrap_initial_state` authority; the genesis→initial-state transform is a pure deterministic BLUE function; a non-Conway genesis fails closed (`GenesisSourceError::NonConwayEra`) — no Byron→Conway historical replay path; no `*Anchor` trait/plugin seam. Status `enforced`. |
-| `DC-COMPAT-01` | derived | N-Y | Cardano compatibility is proven only on observable surfaces (per-block verdict, tip/block hashes, `query utxo`, transcripts) with version-pinned fixtures; asserting Ade's internal `fingerprint` == a Haskell serialized-state hash is FORBIDDEN and CI-blocked; the only valid fingerprint equality is internal Ade-vs-Ade (genesis-path == snapshot-path). Status `enforced`. |
-| `RO-SYNC-EVIDENCE-01` | release | N-Y | A committed snapshot→tip sync-evidence manifest carries the closed schema (oracle versions, chain point, fixture refs, sha256, result) and its sha256 cross-checks the committed fixture (vacuous until a manifest is committed, mirroring CN-OPERATOR-EVIDENCE-01); each discovered Haskell mismatch becomes a named regression fixture under `corpus/sync/regressions/`; the two-Haskell-node private-Conway-testnet live leg is operator-witnessed. Status `partial`. |
+| `DC-MITHRIL-02` | derived | N-Z | For Mithril bootstrap, the `BootstrapAnchor` `seed_point` MUST be derived from the operator-provided independent seed-point extraction inputs, **not** from the Mithril manifest. The manifest may populate provenance/attestation fields (`SeedProvenance::Mithril`), but `verify_mithril_binding` MUST compare two structurally independent origins and fail closed on mismatch. In the production composition the manifest import may be referenced only as whole values (`import.provenance` → `seed_provenance`; `&import.report` → the verify call); the import's point-bearing fields must never be drilled into or laundered (via a local binding or a mutate-before-mint) into the anchor's `seed_point`. Status `enforced` (S1, gate hardened by the review BLOCK remediation). |
 
-### Status flip (release obligation)
+### Status flips / closures (release obligation)
 
-- **RO-MITHRIL-IMPORT-01** — `status: declared → partial`; `open_obligation: "blocked_until_mithril_import_cluster" → "blocked_until_mithril_import_wiring_slice"` (rewritten to record that N-Y S1/S7 introduced the Ade-side **provenance** binding — OI-S1.1 scope A — but NOT seed-bytes-from-Mithril); `strengthened_in: [] → ["PHASE4-N-Y"]`. Remaining for `enforced`: (a) seed-bytes-from-Mithril decode (option B), (b) a wired production composition site with a CI gate asserting the bound anchor's `seed_point` originates from the `--json-seed` UTxO extraction (a re-tautologization hazard flagged in the S7 security re-review), (c) a committed reproducible Mithril fixture + CI/release evidence.
+- **RO-MITHRIL-IMPORT-01** — stays `status: partial`; `strengthened_in: ["PHASE4-N-Y"] → ["PHASE4-N-Y", "PHASE4-N-Z"]`. Item **(b)** (a wired production composition site with a CI gate asserting seed-point independence) is now **CLOSED** by `bootstrap_from_mithril_snapshot` + DC-MITHRIL-02 + the data-flow-resistant containment gate. `open_obligation` rewritten to `blocked_until_mithril_seed_bytes_and_fixture`; remaining for `enforced`: (a) seed-bytes-from-Mithril decode (option B) — needs a Mithril artifact-type spike + forward-replay; (c) a committed reproducible Mithril fixture + CI/release evidence.
 
-### Modified rules (strengthenings)
+### Modified rule (strengthening)
 
-Fourteen rules had `PHASE4-N-Y` appended to `strengthened_in`; no statement was weakened. Grouped by sub-system (full list — see §3):
+- **`CN-MITHRIL-01`** — `strengthened_in: [] → ["PHASE4-N-Z"]`; no statement weakened. The verify-before-bootstrap call-order it requires is now mechanically asserted on the wired production composition by `ci_check_mithril_seed_point_independence.sh` guard (a). (`DC-MITHRIL-01` is also cross-referenced by the new rule but its own statement/strengthened_in is unchanged this window.)
 
-- **Durability / determinism:** `T-DET-01`, `DC-STORE-01`, `DC-STORE-02`, `DC-STORE-03`, `DC-STORE-05`, `DC-CONS-20`.
-- **Bootstrap / anchor / seed:** `CN-NODE-01`, `CN-SEED-01`, `CN-ANCHOR-01`, `DC-ANCHOR-01`, `CN-GENESIS-01`.
-- **WAL replay:** `DC-WAL-01`, `DC-WAL-02`, `DC-WAL-03`.
+### Security-HIGH finding caught at cluster-close and remediated (anomaly worth recording)
 
-### Two security-HIGH findings caught at cluster-close and remediated
+Surfaced by the per-cluster (per-slice) security review against the S1 diff and fixed before close:
 
-Both were surfaced by the per-cluster security review against the full N-Y diff and fixed before close — they are recorded here because they materially shaped two of the new rules:
-
-- **S6 (`cb7da89`) — torn-write recovery reconciliation (HIGH).** The original S2/S3 wiring could, on a power-loss crash between `put_block` and the WAL append, leave the chaindb tip ahead of the WAL; warm-start recovery (which derives tip from stored blocks) would silently incorporate the un-admitted orphan and break replay-equivalence. Fix: recovery reconciles the ChainDB to the WAL tail, dropping any block past the durable WAL frontier. This is now the second clause of **DC-SYNC-01** (`recovery_torn_put_block_before_wal_append_drops_orphan`).
-- **S7 (`dc8fc8c`) — tautological Mithril binding (HIGH).** The S1 binding compared a value to itself, so a snapshot certified at a different chain point than the seed dump would bind successfully. Fix: the binding now cross-checks the Mithril manifest report against the **independently** `--json-seed`-minted anchor — two genuinely different origins. This is the `attack_rationale` of **CN-MITHRIL-01** and the "never a value vs itself" clause of **DC-MITHRIL-01** (`mithril_binding_rejects_certified_point_other_than_seed_point`).
+- **`bccec39` — laundering-bypassable independence gate (IDD-review BLOCK).** The first cut of `ci_check_mithril_seed_point_independence.sh` (guard (b)) only inspected the literal RHS of the `seed_slot` / `seed_block_hash` assignment lines. A one-hop local (`let q = import.report.certified_point.slot; … seed_slot: q,`) or a mutate-before-mint would re-collapse the two origins into a value-vs-itself comparison while guard (b) stayed green — re-introducing exactly the tautological-binding class that the N-Y S7 HIGH remediation had closed at the code level. The remediation hardened the gate with guard (c) **containment**: in the production composition the manifest import may be referenced *only* as whole values; any `import.report.<field>` drill, `import.provenance.<field>` drill, or mention of `certified_point` fails the gate. The laundering class is now structurally CI-blocked, not merely line-local. This is the `attack_rationale` of DC-MITHRIL-02.
 
 ### Honest residual
 
-N-Y proves, in-process and over committed fixtures: the Mithril provenance binding cross-check, the Conway-genesis cold-start through the single authority, the durable-before-tip forward-sync ordering, the crash-recovery↔WAL-tail reconciliation, and observable-surface (never internal-hash) compatibility. It does **not** prove a live snapshot→tip pass against real Haskell peers, nor seed-bytes-from-Mithril. The snapshot→tip live capture (`RO-SYNC-EVIDENCE-01`, CE-Y-16) is operator-witnessed and `blocked_until_operator_pass_executed`; full Mithril import (`RO-MITHRIL-IMPORT-01`) is `partial` and `blocked_until_mithril_import_wiring_slice`. Neither is a code gap in this cluster's shipped scope.
+N-Z proves, in-process and mechanically: the Mithril-sourced seed enters the single closed bootstrap authority, the anchor's seed_point originates from an operator-independent origin (not the manifest), the binding verifies before storage init, and the laundering class is gated. It does **not** prove seed-bytes-from-Mithril decode (option B) nor commit a reproducible Mithril fixture / live evidence — both remain in `RO-MITHRIL-IMPORT-01` (`partial`, `blocked_until_mithril_seed_bytes_and_fixture`). Neither is a code gap in this cluster's shipped scope.
 
 ---
 
 ## 8. Post-Close Tail (`3b78008` → `5db9aae`)
 
-**Not a cluster.** Two housekeeping commits after the PHASE4-N-Y close — a CI notify workflow and a registry drift-guard. No source-code (`crates/**/*.rs`) change, no behavioral change, no new invariant rule. `git diff --stat 3b78008..5db9aae`: **3 files changed, +101 / -3 lines** (the `docs/ade-HEAD_DELTAS.md` row in the raw `git diff --stat` for the full window is this same regeneration). The baseline is **not** bumped for this tail (see the header note).
+**Not a cluster.** Three housekeeping commits after the PHASE4-N-Y close — a CI notify workflow, a registry drift-guard, and a grounding-doc re-reproduce. No source-code (`crates/**/*.rs`) behavior change, no new invariant rule.
 
 | Hash | Type | Summary |
 |------|------|---------|
+| `588a554` | docs | `docs(grounding):` re-reproduce CODEMAP/TRACEABILITY/SEAMS/HEAD_DELTAS at 5db9aae |
 | `5db9aae` | fix | `fix(registry):` repair recovery.rs code_locus drift + add code-locus existence gate |
 | `f0d0bf9` | ci | `ci:` notify ade-atlas to rebuild on grounding-doc changes |
 
 ### `f0d0bf9` — CI notify workflow (first `.github/workflows` in the repo)
 
-Adds `.github/workflows/notify-atlas.yml` (+42 lines) — the **first** GitHub Actions workflow in this repo, which until now had only `ci/ci_check_*.sh` scripts (`.idd-config.json` `ci_dirs` is still `["ci"]`; this workflow is outside that list). On a push to `main` that touches any of the five grounding artifacts (`ade-{CODEMAP,SEAMS,HEAD_DELTAS,TRACEABILITY}.md` + `ade-invariant-registry.toml`), or on `workflow_dispatch`, it `repository_dispatch`-es an `ade-docs-updated` event to `wdm33/ade-atlas` so the dashboard rebuilds. It is a **clean no-op** until the `ATLAS_DISPATCH_TOKEN` secret (a fine-grained PAT with Contents:write on `ade-atlas`) is set; `ade-atlas` also has a daily cron fallback. Permissions are `contents: read`; it gates nothing in this repo (it is a notify, not a check).
+Adds `.github/workflows/notify-atlas.yml` (+42 lines) — the **first** GitHub Actions workflow in this repo, which until now had only `ci/ci_check_*.sh` scripts (`.idd-config.json` `ci_dirs` is still `["ci"]`; this workflow is outside that list). On a push to `main` that touches any of the five grounding artifacts (`ade-{CODEMAP,SEAMS,HEAD_DELTAS,TRACEABILITY}.md` + `ade-invariant-registry.toml`), or on `workflow_dispatch`, it `repository_dispatch`-es an `ade-docs-updated` event to `wdm33/ade-atlas` so the dashboard rebuilds. A **clean no-op** until the `ATLAS_DISPATCH_TOKEN` secret is set; `ade-atlas` also has a daily cron fallback. Permissions are `contents: read`; it gates nothing in this repo (it is a notify, not a check).
 
 > **§5 cross-reference note:** this workflow is *not* an invariant gate and is *not* referenced by any TRACEABILITY rule — by design (it enforces nothing). When `.github/workflows` is added to `.idd-config.json` `ci_dirs`, the CI-check inventory tooling should continue to classify `notify-atlas.yml` as a non-gating workflow, not an enforcement script.
 
 ### `5db9aae` — registry code_locus drift repair + existence gate
 
-Two coupled changes, **0 new rules** (registry stays **298**):
+Two coupled changes, **0 new rules** (registry stays **298** at this point in the window):
 
-1. **Repaired three stale `code_locus` pointers** in `docs/ade-invariant-registry.toml` (+6 / -3 net within the file) left behind by the N-Y S3 `recovery.rs → recovery/mod.rs` directory promotion (§2). All three pointed at the now-nonexistent `crates/ade_runtime/src/recovery.rs`:
+1. **Repaired three stale `code_locus` pointers** in `docs/ade-invariant-registry.toml` left behind by the N-Y S3 `recovery.rs → recovery/mod.rs` directory promotion. All three pointed at the now-nonexistent `crates/ade_runtime/src/recovery.rs`:
    - **`T-REC-01`** (true; recovery replay-equivalence) → now `recovery/mod.rs, recovery/restart.rs, chaindb/crash_safety.rs`.
    - **`T-REC-02`** (true; all authoritative state derivable by replay) → now `recovery/mod.rs, recovery/restart.rs`.
    - **`DC-STORE-05`** (derived; recovery is snapshot + forward replay, not full genesis replay) → now `recovery/mod.rs, recovery/restart.rs`.
 
-   This is a pointer repair, **not** a rule statement change, `tests`/`ci_script`/`status` change, or strengthening — append-only discipline is untouched. (All three rules were already `strengthened_in += PHASE4-N-Y`; the N-Y close updated their statements/tests but the file-path token lagged, a SOFT drift the schema validator did not catch.)
+   This is a pointer repair, **not** a rule statement / `tests` / `ci_script` / `status` change or strengthening — append-only discipline is untouched.
 
-2. **New CI gate `ci/ci_check_registry_code_locus_exists.sh`** (+56 lines) — the drift-guard that would have caught the above. It loads the registry with `python3` + `tomllib`, extracts every `crates/**.rs` and `ci/**.sh` token from each rule's `code_locus`, skips glob-containing tokens and `docs/` paths (those use globs / are archived on close), and fails closed if any cited code/gate path does not exist on disk. This raises the `ci/ci_check_*.sh` count **103 → 104**.
+2. **New CI gate `ci/ci_check_registry_code_locus_exists.sh`** — the drift-guard that would have caught the above (see §5). Raises the `ci/ci_check_*.sh` count to 104 at this point in the window.
 
-> **Anomaly check:** removals — 0 (registry rule count unchanged; no `code_locus`/`tests`/`ci_script` array element removed, only a path token rewritten in place). No discipline violation.
+### `588a554` — grounding-doc re-reproduce at `5db9aae`
+
+Re-reproduced CODEMAP / TRACEABILITY / SEAMS / HEAD_DELTAS at `5db9aae` (a pure regeneration; the prior HEAD_DELTAS window narrated `273c887 → 5db9aae`). All four were subsequently regenerated again at the N-Z close (`67d1ccc`) — see the grounding-doc coherence note in the header; there is no cross-doc staleness at this HEAD.
+
+> **Anomaly check:** removals — 0 (registry rule count unchanged across the tail; no `code_locus` / `tests` / `ci_script` array element removed, only a path token rewritten in place). No discipline violation.
