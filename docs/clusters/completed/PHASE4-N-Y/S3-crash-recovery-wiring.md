@@ -4,7 +4,7 @@
 
 - **Slice Name:** Node-binary crash recovery — restart reconstructs byte-identical state from {anchor + preserved bytes + WAL + latest checkpoint + forward replay}, no operator repair.
 - **Cluster:** PHASE4-N-Y.
-- **Status:** Proposed.
+- **Status:** Merged.
 - **Cluster Exit Criteria Addressed** (verbatim):
   - [ ] **CE-Y-8.** Crash at any phase (import/sync/admit/checkpoint) recovers to byte-identical state, no operator step; tests `recovery_crash_at_phase_{import,sync,admit,checkpoint}_byte_identical` pass.
   - [ ] **CE-Y-9.** `replay_from_anchor_two_runs_byte_identical` + `bootstrap_warm_start_equals_direct_materialize` still pass (carry-forward).

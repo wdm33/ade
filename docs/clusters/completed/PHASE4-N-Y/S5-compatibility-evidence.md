@@ -4,7 +4,7 @@
 
 - **Slice Name:** Observable-surface compatibility evidence — snapshot→tip differential vs Haskell, no fingerprint-equality, named fixtures, regression-per-mismatch; two-Haskell-node testnet (operator-witnessed).
 - **Cluster:** PHASE4-N-Y.
-- **Status:** Proposed.
+- **Status:** Merged.
 - **Cluster Exit Criteria Addressed** (verbatim):
   - [ ] **CE-Y-12.** Differential harness `sync_differential_snapshot_to_tip` passes vs the Haskell oracle on selected tip hash + per-block verdict + `query utxo`, fixture pinning oracle versions + reproducible inputs.
   - [ ] **CE-Y-13.** Gate `ci_check_no_haskell_fingerprint_equality.sh` — no test asserts Ade-ledger-fingerprint == a Haskell/cardano-node serialized state hash.

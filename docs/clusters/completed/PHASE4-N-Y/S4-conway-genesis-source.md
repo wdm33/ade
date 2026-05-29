@@ -4,7 +4,7 @@
 
 - **Slice Name:** Conway genesis as a second bootstrap source — through the same closed `bootstrap_initial_state` authority; non-Conway fails closed; genesis→initial-state deterministic.
 - **Cluster:** PHASE4-N-Y.
-- **Status:** Proposed.
+- **Status:** Merged.
 - **Cluster Exit Criteria Addressed** (verbatim):
   - [ ] **CE-Y-10.** Conway genesis enters the same authority; test `conway_genesis_bootstrap_through_single_authority`; non-Conway → `genesis_non_conway_fail_closed`; `genesis_to_initial_state_deterministic` (two runs byte-identical).
   - [ ] **CE-Y-11.** Internal cross-path determinism (private Conway net): test `genesis_path_fp_equals_snapshot_path_fp` — bootstrap from genesis+blocks, snapshot it, re-bootstrap from the snapshot, fingerprints equal.

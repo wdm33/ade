@@ -11,7 +11,7 @@
 
 - **Slice Name:** Durable network forward-sync — anchor→tip through chokepoints, with preserved-bytes + WAL committed before every tip advance, replay-equivalent.
 - **Cluster:** PHASE4-N-Y.
-- **Status:** Proposed.
+- **Status:** Merged.
 - **Cluster Exit Criteria Addressed** (verbatim):
   - [ ] **CE-Y-5.** Forward-sync admits blocks only through `decode_block`→`validate_and_apply_header`→`block_validity`→fork-choice; gate `ci_check_forward_sync_chokepoint_only.sh` (negative: no block reaches the store without passing the validators).
   - [ ] **CE-Y-6.** Each admitted block is preserved-byte-stored **and** WAL-committed before tip advance; test `forward_sync_wal_and_bytes_precede_tip_advance` passes.

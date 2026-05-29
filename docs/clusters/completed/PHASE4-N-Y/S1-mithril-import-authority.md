@@ -16,7 +16,7 @@
 
 - **Slice Name:** Mithril import authority — Ade-side snapshot consumption, verification, and seed-provenance binding into `BootstrapAnchor`.
 - **Cluster:** PHASE4-N-Y — Mithril-Anchored Bootstrap, Network Forward-Sync & WAL Recovery.
-- **Status:** Proposed.
+- **Status:** Merged.
 - **Cluster Exit Criteria Addressed** (verbatim from `cluster.md` §5):
   - [ ] **CE-Y-2.** Mithril binding is a pure deterministic predicate over the closed field-set; tests `mithril_anchor_binding_is_deterministic` + `mithril_anchor_rejects_field_mismatch` (each field flipped → fail-closed) pass.
   - [ ] **CE-Y-3.** Mithril-sourced state enters **only** via `bootstrap_initial_state`; grep gate `ci_check_mithril_uses_bootstrap_initial_state.sh` (positive `bootstrap_initial_state(`; negative: no second storage-init path; no `trait *Anchor`).
