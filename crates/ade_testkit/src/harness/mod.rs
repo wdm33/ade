@@ -11,6 +11,7 @@ pub mod provenance;
 pub mod regression_corpus;
 pub mod shelley_loader;
 pub mod snapshot_loader;
+pub mod sync_diff;
 pub mod transcript;
 
 use serde::{Deserialize, Serialize};

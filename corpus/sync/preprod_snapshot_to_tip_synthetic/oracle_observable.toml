@@ -1,0 +1,51 @@
+# Observable-surface oracle fixture for the snapshot→tip differential
+# harness (PHASE4-N-Y S5, CE-Y-12 / DC-COMPAT-01).
+#
+# These are OBSERVABLE surfaces only — per-block verdict, block hash,
+# selected tip hash, and a `query utxo`-style post-window UTxO set. They are
+# the surfaces a cardano-node peer exposes and an operator can witness. This
+# fixture deliberately carries NO Ade-internal ledger fingerprint and NO
+# Haskell serialized-state hash; compatibility is proven only on observable
+# surfaces, never by fingerprint equality.
+#
+# The surfaces here are synthetic / representative (fixture_kind = "synthetic").
+# Oracle versions are pinned per CE-Y-12; the live, real-capture leg is the
+# operator-witnessed CE-Y-16 manifest, not this in-tree fixture.
+
+cardano_node_version = "11.0.1"
+cardano_cli_version = "10.1.1.0"
+network = "preprod"
+fixture_kind = "synthetic"
+start_point = "slot:124140000,hash:00000000000000000000000000000000000000000000000000000000000000a0"
+end_point = "slot:124140002,hash:000000000000000000000000000000000000000000000000000000000000ee03"
+
+[[blocks]]
+slot = 124140000
+block_number = 3140000
+block_hash = "1111111111111111111111111111111111111111111111111111111111111111"
+selected_tip_hash = "1111111111111111111111111111111111111111111111111111111111111111"
+verdict = "admitted"
+
+[[blocks]]
+slot = 124140001
+block_number = 3140001
+block_hash = "2222222222222222222222222222222222222222222222222222222222222222"
+selected_tip_hash = "2222222222222222222222222222222222222222222222222222222222222222"
+verdict = "admitted"
+
+[[blocks]]
+slot = 124140002
+block_number = 3140002
+block_hash = "000000000000000000000000000000000000000000000000000000000000ee03"
+selected_tip_hash = "000000000000000000000000000000000000000000000000000000000000ee03"
+verdict = "admitted"
+
+[[post_window_utxo]]
+tx_in = "9c5e7b2a1d3f4c6e8a0b2d4f6e8c0a2b4d6f8e0c2a4b6d8f0e2c4a6b8d0f2e40#0"
+address = "addr_test1vqfeq8r4d3a2e7q9w0x5c6v7b8n0m1k2j3h4g5f6d7s8a9p0q1r2s3"
+lovelace = 1000000000
+
+[[post_window_utxo]]
+tx_in = "9c5e7b2a1d3f4c6e8a0b2d4f6e8c0a2b4d6f8e0c2a4b6d8f0e2c4a6b8d0f2e40#1"
+address = "addr_test1vq0w9x8c7v6b5n4m3k2j1h0g9f8d7s6a5p4q3r2s1t0u9w8x7c6v5b4"
+lovelace = 4500000000
