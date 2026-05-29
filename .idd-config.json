@@ -52,5 +52,5 @@
   "ci_dirs": [
     "ci"
   ],
-  "_ci_dirs_doc": "No .github/workflows in this repo yet \u2014 CI scripts live as `ci/ci_check_*.sh`. Add '.github/workflows' here when workflows are added."
+  "_ci_dirs_doc": "CI scripts live as `ci/ci_check_*.sh` (ci_dirs = [\"ci\"]). A non-gating .github/workflows/notify-atlas.yml dispatch workflow also exists (grounding-doc -> ade-atlas rebuild trigger), but it is not an Ade invariant gate; add '.github/workflows' to ci_dirs only if/when an actual invariant gate is added there."
 }

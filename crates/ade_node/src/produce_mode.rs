@@ -18,15 +18,17 @@
 //! Produces a JSONL evidence log at `--evidence-log PATH` whose
 //! every line is a serialized `ProducerLogEvent` (closed
 //! vocabulary; no socket addresses; no key material). The full
-//! per-peer block-fetch loop closure is the S6 operator-runbook
-//! deliverable; S5 ships the composition + slot loop + listener
-//! integration with a stub forge handler (returns ForgeNotLeader).
+//! per-peer block-fetch loop closure is the operator-runbook
+//! deliverable; the slot loop + listener integration drive the
+//! real forge handler `run_real_forge` (N-R-A/N-S/N-W/N-X — no
+//! stub).
 //!
-//! Honest scope (S5): the slot-loop drives the coordinator
-//! deterministically over slot ticks; forge integration is
-//! stubbed for the smoke test (real forge requires Conway-era
-//! ledger state + mempool + era schedule — operator-action
-//! work tracked under CN-CONS-06's live half).
+//! Honest scope: the slot-loop drives the coordinator
+//! deterministically over slot ticks, and `run_real_forge` performs
+//! the real VRF / leader-check / KES-sign / forge / self-accept
+//! composition. What remains for a live operator pass is tracked
+//! under CN-CONS-06's / RO-LIVE-01's live half (the produce-mode
+//! wiring cluster + operator stake + the witnessed pass).
 
 use std::collections::BTreeMap;
 use std::io::Write;
@@ -175,10 +177,10 @@ pub async fn run_produce_mode(cli: ProduceCli, shutdown_rx: watch::Receiver<bool
     // cold-start branch and returns the seeded `genesis_initial`
     // unchanged with `tip = None`. The single bootstrap authority
     // is the only path to initial state (CN-NODE-01). The forge
-    // path remains the synthetic zero-stake never-leader until S3;
-    // this slice only makes the real base state + real
-    // PoolDistrView + real EraSchedule available and threads them
-    // into the forge context's base.
+    // path consumes these real values: `run_real_forge` builds its
+    // `ForgeRequestContext` from the real base state + PoolDistrView
+    // + EraSchedule threaded here, so leadership is driven by the
+    // operator's consensus-inputs bundle, not a synthetic placeholder.
     let (utxo, _utxo_fp) = match import_cardano_cli_json_utxo(&cli.json_seed_path) {
         Ok(p) => p,
         Err(e) => return startup_fail_detail("json_seed", &format!("{e:?}")),
@@ -576,11 +578,13 @@ fn apply_effects(
 /// loaded ledger snapshot / chain tip / era schedule / chain dep
 /// state.
 ///
-/// **A3 honest scope:** the main loop currently passes synthesized
-/// "never-leader" placeholders (`stake_fraction = (0, 1)`,
-/// `LedgerState::new(Conway)`, default `ProtocolParameters`). The
-/// composition function is complete; promoting the inputs to real
-/// values is A4 (integration tests) + N-R-B/C (main-loop wiring).
+/// The leadership-driving inputs are real: the main loop builds
+/// `leader_schedule_answer`, `eta0` (base chain-dep epoch_nonce),
+/// `base_state`, and `vrf_vk` from the ChainEvolution state + the
+/// operator consensus-inputs bundle (see the `RequestForge` arm).
+/// Honest scope: `protocol_version`, `pparams`, and
+/// `prev_opcert_counter` are still defaults — deriving them from the
+/// loaded genesis/opcert is the produce-mode wiring cluster (G4).
 pub struct ForgeRequestContext<'a> {
     pub eta0: &'a Nonce,
     pub vrf_vk: &'a VrfVerificationKey,
@@ -605,13 +609,10 @@ pub struct ForgeRequestContext<'a> {
 /// 2. **BLUE** — `verify_and_evaluate_leader` returns
 ///    `LeaderCheckVerdict`. `NotEligible` → return `ForgeNotLeader`.
 ///    `Eligible` → continue.
-/// 3. **RED** — `kes_sign_at(kes_period, signing_payload)` produces
-///    the KES signature. **A3 honest scope:** the signing payload
-///    is currently the `expected_vrf_input` bytes (a placeholder).
-///    The real Praos KES-signs-unsigned-header recipe lives in a
-///    future cluster; for A3 the placeholder is sufficient because
-///    `self_accept` will reject the synthetic block anyway, exercising
-///    the `ForgeFailed { SelfAcceptRejected }` path.
+/// 3. **RED** — KES-signs the real header (N-S-A, two-pass): a
+///    placeholder-signed first pass computes body_hash/body_size and
+///    the header_body fields; the second pass KES-signs the canonical
+///    `UnsignedHeaderPreImage` over those fields (CN-KES-HEADER-01).
 /// 4. **GREEN** — `assemble_tick` stitches signed artifacts into a
 ///    canonical `ProducerTick`.
 /// 5. **BLUE** — `forge_block` constructs the block from the tick.
@@ -1424,9 +1425,9 @@ fn write_evidence_event(
     Ok(())
 }
 
-// Suppress unused warning: ForgeFailureReason is part of the closed
-// surface but the S5 stub forge handler emits ForgeNotLeader only.
-// S6's real forge handler will exercise the failure path.
+// `ForgeFailureReason` is now constructed directly by `run_real_forge`
+// (Other / UnsupportedProducerEra), so this dead-code shim is redundant;
+// removal is deferred to the produce-mode wiring cluster's hygiene slice.
 #[allow(dead_code)]
 fn _force_use_forge_failure_reason() -> ForgeFailureReason {
     ForgeFailureReason::Other

@@ -27,7 +27,7 @@ FIXTURES_RS="$REPO_ROOT/crates/ade_testkit/src/producer/fixtures.rs"
 REPLAY_RS="$REPO_ROOT/crates/ade_testkit/src/producer/replay.rs"
 ADAPTER_RS="$REPO_ROOT/crates/ade_testkit/src/producer/cross_impl_adapter.rs"
 LIVE_BIN_RS="$REPO_ROOT/crates/ade_core_interop/src/bin/live_block_production_session.rs"
-PROCEDURE_MD="$REPO_ROOT/docs/clusters/PHASE4-N-C/CE-N-C-8_PROCEDURE.md"
+PROCEDURE_MD="$REPO_ROOT/docs/clusters/completed/PHASE4-N-C/CE-N-C-8_PROCEDURE.md"
 REGISTRY="$REPO_ROOT/docs/ade-invariant-registry.toml"
 
 FAIL=0
