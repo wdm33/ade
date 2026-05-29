@@ -47,7 +47,9 @@ A full anchor schema bump (2 → 3, the record as a 9th outer field) is **allowe
 Either shape uses a single sole codec, version-gated decode (rejects unknown version fail-fast), and a byte-canonical round-trip — and is bound to *this* anchor (so a record cannot be silently paired with a different anchor).
 
 ## 5. Recovery contract
-Recovery restores `SeedEpochConsensusInputs` from the anchor-bound persisted surface **byte-identically**, replacing the external `ledger_view: &dyn LedgerView` parameter on the **bounty-primary** path of `recover_node_state` / `bootstrap_initial_state` with the recovered record (the external `LedgerView` parameter remains only for the diagnostic path, fenced). Extends `T-REC-01`/`T-REC-02`: the recovered consensus inputs are part of the replay-equivalent recovered state. Fail-fast (typed error) on version mismatch, anchor-fingerprint mismatch, or decode divergence — never a silent fallback to a bundle.
+Recovery is **production-path-real**: node startup runs `bootstrap_initial_state` (`ade_node::node.rs:145`), whose **warm-start** branch is the real restart path (reads persisted state via `SnapshotStore`). N-F-A persists the `SeedEpochConsensusInputs` sidecar through a **dedicated keyed `SnapshotStore` method** (`put_/get_seed_epoch_consensus_inputs(anchor_fp, …)`, keyed by `anchor_fp` / the anchor fingerprint type — **NOT** a reserved sentinel slot; the sidecar is anchor-bound metadata, not a block/slot snapshot) and makes `bootstrap_initial_state` warm-start **restore it byte-identically**, replacing the external `ledger_view: &dyn LedgerView` parameter on the bounty-primary warm-start path with the restored record (the external `LedgerView` remains only for the diagnostic path, fenced). Extends `T-REC-01`/`T-REC-02`. Fail-fast (typed error) on version mismatch, anchor-fingerprint mismatch, or decode divergence — never a silent fallback to a bundle.
+
+> **`recover_node_state` (the WAL-replay recovery helper) is currently test/capability-only — not wired into `ade_node` startup (all callers are `#[cfg(test)]`), so it is NOT the production proof path.** It may carry optional *secondary* coverage only; CE-A-3 is proven on the production warm-start path, not on this helper. Wiring `recover_node_state` into startup is a separate concern (a later cluster), out of N-F-A scope.
 
 ## 6. Projection API → PoolDistrView / ExpectedVrfInput
 A BLUE projection `SeedEpochConsensusInputs → PoolDistrView` via `PoolDistrView::new(epoch_no, total_active_stake, asc, pool_distribution)` (supplying the full `LedgerView` surface: `total_active_stake`, `pool_active_stake`, `pool_vrf_keyhash`, `active_slots_coeff`), and eta0 (from recovered `chain_dep`) → `ExpectedVrfInput` via `leader_vrf_input(era, slot, epoch_nonce)`. This projection is what the bounty-primary path calls, **replacing** `pool_distr_view_from_consensus_inputs` (`produce_mode.rs:401`) which sourced it from the operator bundle.
@@ -56,7 +58,7 @@ A BLUE projection `SeedEpochConsensusInputs → PoolDistrView` via `PoolDistrVie
 A data-flow-resistant containment gate (N-Z `ci_check_mithril_seed_point_independence.sh` style), candidate `ci_check_consensus_input_provenance.sh`: the persisted `SeedEpochConsensusInputs` surface may be populated **only** on the bootstrap path; the bounty-primary leader/forge/recovery path may reference the recovered surface, never `--consensus-inputs-path` / `import_live_consensus_inputs` / `pool_distr_view_from_consensus_inputs` at forge time; and the projection consumes the *recovered* record, not a freshly-imported bundle. Enforces the KEY REVIEW POINT: **no hidden second operator import path.**
 
 ## 8. Replay fixtures
-- `corpus/.../seed_epoch_consensus_inputs/bootstrap_persist_recover.{...}` — a `bootstrap + persist + recover` fixture proving byte-identity (CE-A-3).
+- `corpus/.../seed_epoch_consensus_inputs/bootstrap_persist_warmstart.{...}` — a `bootstrap + keyed-SnapshotStore persist + bootstrap_initial_state warm-start` fixture proving production byte-identity (CE-A-3).
 - A pinning fixture: the projected `PoolDistrView`/`ExpectedVrfInput` from the recovered surface equals the seed-epoch peer-equivalent (the slice-entry proof obligation).
 
 ## 9. Failure modes (all fail-closed, typed)
@@ -68,19 +70,19 @@ No forge (that is N-F-B). No stake **computation** or epoch-boundary **rotation*
 ## Exit criteria (mechanical)
 - **CE-A-1** — `SeedEpochConsensusInputs` closed type + sole codec; round-trip test `seed_epoch_consensus_inputs_round_trips_byte_identical` + version-gated `decode_rejects_unknown_version` pass.
 - **CE-A-2** — bootstrap populates it; `ci_check_consensus_input_provenance.sh` passes (bootstrap-only population + forge-time bundle fenced + anchor-bound).
-- **CE-A-3** — recovery byte-identity: test `recover_seed_epoch_consensus_inputs_byte_identical` proves `bootstrap + persist + recover = same eta0/PoolDistr/ASC/pool_vrf_keyhashes` (extends the `ade_testkit` recovery/replay suite).
+- **CE-A-3** — **production warm-start** byte-identity: test `warm_start_restores_seed_epoch_consensus_inputs_byte_identical` proves `production bootstrap + keyed-SnapshotStore sidecar persist + bootstrap_initial_state warm-start = the same eta0/PoolDistr/ASC/pool_vrf_keyhashes` — NOT a test-only `recover_node_state` capability. (recover_node_state may carry optional secondary coverage only.)
 - **CE-A-4** — projection test `recovered_surface_projects_pooldistrview_and_expected_vrf_input` shows the projection equals the prior `pool_distr_view_from_consensus_inputs` output for the seed epoch, and the bounty-primary call site consumes the recovered surface.
 
 ## Expected slice types
 - **A1** — define `SeedEpochConsensusInputs` + sole codec + **decide the anchor-binding storage shape** (prefer a fingerprint-bound sidecar keyed by `anchor_fp`; a schema bump 2→3 only if A1 proves the serialized record bounded) — BLUE.
 - **A2** — bootstrap-time population + `ci_check_consensus_input_provenance.sh` containment — RED/GREEN + CI.
-- **A3** — recovery restore + byte-identity replay test — RED restore + BLUE replay.
+- **A3** — `bootstrap_initial_state` warm-start restores the sidecar (dedicated keyed `SnapshotStore` get, by `anchor_fp`) byte-identically + production-path replay test; replaces the external `ledger_view` on the bounty-primary warm-start; `recover_node_state` optional secondary coverage only — RED restore + BLUE replay.
 - **A4** — projection API → `PoolDistrView`/`ExpectedVrfInput`, replacing `pool_distr_view_from_consensus_inputs` on the bounty-primary path — BLUE.
 
 ## TCB color map
 - **BLUE** — `SeedEpochConsensusInputs` + codec + anchor-binding (in `ade_ledger::bootstrap_anchor`), the projection (in `ade_ledger::consensus_view`). *(Anchor codec discipline already BLUE.)*
 - **GREEN** — the recovery carry/restore reducer glue (`ade_runtime` GREEN-by-content).
-- **RED** — persist write + recovery read (`ade_runtime::recovery`, `bootstrap`), bootstrap-time population shell.
+- **RED** — the dedicated keyed `SnapshotStore` put/get (`ade_runtime::chaindb` trait + impls) + `bootstrap_initial_state` warm-start restore wiring (`ade_runtime::bootstrap`) + the bootstrap-time population shell. (`recover_node_state` read = optional secondary only.)
 - **Open color** — whether the persisted record's *population from the canonical bootstrap extraction* is BLUE (deterministic transform) vs GREEN; A1/A2 resolve (lean BLUE for the transform, RED for the file/store I/O — the established loader→deserializer split).
 
 ## Forbidden during this cluster
@@ -91,4 +93,4 @@ No forge / leader-check / KES / VRF signing. No second anchor codec or storage-i
 - **Strengthenings:** `CN-ANCHOR-01`/`DC-ANCHOR-01` (binding the new record; schema bump only if A1 proves bounded), `CN-NODE-01`, `T-REC-01`/`T-REC-02`, `DC-MITHRIL-02` (containment lineage).
 
 ## Replay obligations
-New persisted authoritative surface → recovery restores it byte-identically (CE-A-3, the core safety line). New BLUE canonical type (version-gated, anchor-bound) → extends the canonical-type count. New corpus: `bootstrap_persist_recover` + the projection pinning fixture.
+New persisted authoritative surface → the **production warm-start** (`bootstrap_initial_state`) restores it byte-identically (CE-A-3, the core safety line). New BLUE canonical type (version-gated, anchor-bound) → extends the canonical-type count. New keyed `SnapshotStore` method (put/get by `anchor_fp`). New corpus: `bootstrap_persist_warmstart` + the projection pinning fixture.
