@@ -20,6 +20,10 @@ use ade_types::primitives::SlotNo;
 
 use crate::chaindb::{ChainDb, ChainDbError, SnapshotStore};
 
+pub mod restart;
+
+pub use restart::{recover_node_state, NodeRecoveryError, RecoveredNode};
+
 /// A state that can be recovered: decode-from-snapshot + apply-block.
 ///
 /// Implemented by callers — typically `ade_node` or test code — for
