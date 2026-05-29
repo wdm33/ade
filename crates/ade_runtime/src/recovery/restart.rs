@@ -38,6 +38,7 @@ use ade_core::consensus::praos_state::PraosChainDepState;
 use ade_ledger::fingerprint::fingerprint;
 use ade_ledger::state::LedgerState;
 use ade_ledger::wal::{replay_from_anchor, WalEntry, WalError, WalStore};
+use ade_types::SlotNo;
 use ade_types::Hash32;
 
 use crate::bootstrap::{bootstrap_initial_state, BootstrapError, BootstrapInputs};
@@ -71,6 +72,12 @@ pub enum NodeRecoveryError {
     /// The snapshot + forward-replay authority rejected recovery
     /// (replay re-validation failed, snapshot missing, etc.).
     Bootstrap(BootstrapError),
+    /// After reconciling the chaindb to the WAL tail and re-running
+    /// warm-start, the recovered ledger fingerprint did not equal the
+    /// WAL-tail post-fp that the BLUE integrity gate computed. The WAL
+    /// is the admission authority; a residual mismatch is a
+    /// deterministic fail-fast halt, never a silent divergence.
+    WalTailFingerprintMismatch { expected: Hash32, actual: Hash32 },
 }
 
 impl std::fmt::Display for NodeRecoveryError {
@@ -79,6 +86,10 @@ impl std::fmt::Display for NodeRecoveryError {
             NodeRecoveryError::Wal(e) => write!(f, "wal recovery: {e:?}"),
             NodeRecoveryError::ChainDb(e) => write!(f, "chaindb recovery: {e}"),
             NodeRecoveryError::Bootstrap(e) => write!(f, "bootstrap recovery: {e:?}"),
+            NodeRecoveryError::WalTailFingerprintMismatch { expected, actual } => write!(
+                f,
+                "wal-tail fingerprint mismatch after reconciliation: expected {expected:?}, got {actual:?}"
+            ),
         }
     }
 }
@@ -128,10 +139,28 @@ where
             block_bytes.insert(block_hash.clone(), stored.bytes);
         }
     }
-    replay_from_anchor(anchor_fp, &entries, &block_bytes)
+    let wal_tail_fp = replay_from_anchor(anchor_fp, &entries, &block_bytes)
         .map_err(NodeRecoveryError::Wal)?;
 
-    // 3. The snapshot + forward-replay recovery authority (warm-start
+    // 3. Reconcile the chaindb to the WAL tail BEFORE warm-start. The
+    //    WAL — not `chaindb.tip()` — is the admission authority. S2's
+    //    pump applies `StoreBlockBytes` before `AppendWal`, so a crash
+    //    between them leaves an orphan block durable in the chaindb but
+    //    absent from the WAL; warm-start materializes from the highest
+    //    stored slot, so the orphan would otherwise be incorporated.
+    //    Dropping every block at a slot strictly greater than the
+    //    WAL-tail slot is deterministic and idempotent. An empty WAL has
+    //    no admitted blocks: every stored block is an orphan, so we roll
+    //    back to slot 0.
+    let wal_tail_slot = entries
+        .last()
+        .map(|WalEntry::AdmitBlock { slot, .. }| *slot)
+        .unwrap_or(SlotNo(0));
+    chaindb
+        .rollback_to_slot(wal_tail_slot)
+        .map_err(NodeRecoveryError::ChainDb)?;
+
+    // 4. The snapshot + forward-replay recovery authority (warm-start
     //    branch). A partially-written checkpoint decodes as absent
     //    (DC-STORE-03) and the authority falls back to the prior valid
     //    snapshot, replaying forward over preserved bytes.
@@ -145,6 +174,23 @@ where
     .map_err(NodeRecoveryError::Bootstrap)?;
 
     let recovered_fp = fingerprint(&ledger).combined;
+
+    // 5. The recovered state MUST equal the WAL-tail post-fp the BLUE
+    //    integrity gate computed. After reconciliation this is expected
+    //    to hold; a residual mismatch is a deterministic fail-fast halt,
+    //    never a silent divergence (the WAL is the authority). Each WAL
+    //    `post_fp` is a genuine `fingerprint(ledger).combined` (the
+    //    admit reducer computes it that way), so the tail post-fp is
+    //    directly comparable to the materialized recovered fingerprint.
+    //    The empty-WAL case is exempt: there `wal_tail_fp` is the
+    //    anchor seed fingerprint, whose comparability is the anchor
+    //    materialization's own concern (CN-ANCHOR-01), not this guard.
+    if !entries.is_empty() && recovered_fp != wal_tail_fp {
+        return Err(NodeRecoveryError::WalTailFingerprintMismatch {
+            expected: wal_tail_fp,
+            actual: recovered_fp,
+        });
+    }
 
     Ok(RecoveredNode {
         ledger,
@@ -176,7 +222,7 @@ mod tests {
     use ade_types::{CardanoEra, EpochNo, Hash28, SlotNo};
     use tempfile::TempDir;
 
-    use crate::chaindb::{PersistentChainDb, PersistentChainDbOptions};
+    use crate::chaindb::{PersistentChainDb, PersistentChainDbOptions, StoredBlock};
     use crate::forward_sync::{pump_block, ForwardSyncState, SnapshotSink};
     use crate::rollback::cadence::SnapshotCadence;
     use crate::rollback::persistent_cache::PersistentSnapshotCache;
@@ -508,5 +554,89 @@ mod tests {
             NodeRecoveryError::Wal(WalError::BlockBytesMissing { .. }) => {}
             other => panic!("expected BlockBytesMissing, got {other:?}"),
         }
+    }
+
+    #[test]
+    fn recovery_torn_put_block_before_wal_append_drops_orphan() {
+        // S2's pump applies `StoreBlockBytes` before `AppendWal`. A
+        // crash between them leaves an orphan block durable in the
+        // chaindb but absent from the WAL. Recovery must reconcile the
+        // chaindb to the WAL tail — the orphan is dropped, the recovered
+        // state equals the WAL-tail state, byte-identical to a clean run
+        // that never stored the orphan.
+        let (c, _v) = corpus_view();
+        let block = pick_lightest(&c);
+        let decoded = decode_block(&block).expect("decode");
+        let admitted_slot = decoded.header_input.slot;
+
+        // Clean reference: import + admit ONE block (the orphan was
+        // never stored).
+        let clean_dir = TempDir::new().expect("tmp");
+        let clean_fp = run_clean(clean_dir.path(), c.epoch_nonce, &block);
+
+        // Torn run: same clean import + admit, then store ONE more
+        // block's bytes via `put_block` (advancing the chaindb tip)
+        // WITHOUT appending its WAL entry — exactly the torn-crash
+        // window between `StoreBlockBytes` and `AppendWal`.
+        let torn_dir = TempDir::new().expect("tmp");
+        {
+            let (_c, view) = corpus_view();
+            let sched = schedule();
+            let db = open_chaindb(torn_dir.path());
+            let mut wal = FileWalStore::open(torn_dir.path().join("wal"))
+                .expect("open wal");
+            let mut state = fresh_sync_state(c.epoch_nonce);
+
+            let import_slot = SlotNo(admitted_slot.0 - 1);
+            capture_checkpoint(&db, &state, import_slot);
+            let sink = NoSink;
+            pump_block(&mut state, &db, &mut wal, &sink, &block, &sched, &view)
+                .expect("pump");
+            capture_checkpoint(&db, &state, admitted_slot);
+
+            // Orphan: bytes durable at a slot strictly beyond the WAL
+            // tail, no WAL entry. Bytes are never decoded by recovery
+            // (no WAL entry references the hash), so synthetic content
+            // suffices to exercise the reconciliation.
+            let orphan = StoredBlock {
+                hash: Hash32([0xEE; 32]),
+                slot: SlotNo(admitted_slot.0 + 1),
+                bytes: vec![0xDE, 0xAD, 0xBE, 0xEF],
+            };
+            db.put_block(&orphan).expect("store orphan bytes");
+            assert_eq!(
+                db.tip().expect("tip").map(|t| t.slot),
+                Some(orphan.slot),
+                "orphan advanced the chaindb tip beyond the WAL tail",
+            );
+            // handles dropped → simulated crash
+        }
+
+        let db = open_chaindb(torn_dir.path());
+        let wal = FileWalStore::open(torn_dir.path().join("wal"))
+            .expect("reopen wal");
+        let recovered =
+            recover_node_state(&db, &db, &wal, &ANCHOR_FP, &schedule(), &corpus_view().1, None)
+                .expect("recover drops orphan");
+
+        // (a) Recovered fp == WAL-tail fp == clean-run fp: the orphan
+        //     beyond the WAL tail was NOT incorporated.
+        assert_eq!(
+            recovered.recovered_fp, clean_fp,
+            "orphan beyond WAL tail not incorporated; recovered == clean",
+        );
+        // (b) The orphan is gone; the chaindb tip is the Nth (admitted)
+        //     block.
+        assert_eq!(
+            recovered.tip.as_ref().map(|t| t.slot),
+            Some(admitted_slot),
+            "chaindb reconciled to the WAL tail (admitted block is the tip)",
+        );
+        assert!(
+            db.get_block_by_hash(&Hash32([0xEE; 32]))
+                .expect("get orphan")
+                .is_none(),
+            "orphan block bytes dropped by reconciliation",
+        );
     }
 }
