@@ -34,8 +34,8 @@
   "_planning_doc_doc": "Active phase plan. /cluster-doc reads this when seeding new cluster docs (N-A, N-B, N-C, N-E, N-F).",
   "grounding_docs_dir": "docs",
   "_grounding_docs_dir_doc": "Where the four grounding docs live: ade-CODEMAP.md, ade-SEAMS.md, ade-HEAD_DELTAS.md, ade-TRACEABILITY.md.",
-  "head_deltas_baseline": "273c887",
-  "_head_deltas_baseline_doc": "PHASE4-N-X close baseline (commit `273c887`, PHASE4-N-X registry close, 2026-05-29). HEAD_DELTAS at this baseline last narrated the 01e7e08 → 273c887 span (N-W close tail + PHASE4-N-X N2N tag-24 wire-envelope authority; 9 commits / 36 files / +1664 / -313). Bump on each cluster close to keep HEAD_DELTAS per-cluster and reviewable.",
+  "head_deltas_baseline": "3b78008",
+  "_head_deltas_baseline_doc": "PHASE4-N-Y close baseline (commit `3b78008`, PHASE4-N-Y close, 2026-05-29). HEAD_DELTAS at this baseline last narrated the 273c887 → 3b78008 span (PHASE4-N-Y Mithril-anchored bootstrap + network forward-sync + WAL recovery, incl. the S6/S7 HIGH security remediations; 13 commits / 47 files / +6273 / -257). Bump on each cluster close to keep HEAD_DELTAS per-cluster and reviewable.",
   "normative_docs": [
     "docs/active/CE-79_gate_statement.md",
     "docs/active/CE-79_tier5_addendum.md",
@@ -48,7 +48,7 @@
   "canonical_type_registry": null,
   "_canonical_type_registry_doc": "No separate canonical-type registry file yet; canonical-type rules live inline in the invariant registry under family T.",
   "invariant_registry": "docs/ade-invariant-registry.toml",
-  "_invariant_registry_doc": "Canonical, append-only invariant registry. Schema follows ziranity-v3's constitution_rule_registry.toml (base fields identical), additively compatible with the IDD template. 291 entries at HEAD across families T (true), CN (constraint network), DC (derived constraint), OP (operational), RO (release obligation).",
+  "_invariant_registry_doc": "Canonical, append-only invariant registry. Schema follows ziranity-v3's constitution_rule_registry.toml (base fields identical), additively compatible with the IDD template. 298 entries at HEAD across families T (true), CN (constraint network), DC (derived constraint), OP (operational), RO (release obligation).",
   "ci_dirs": [
     "ci"
   ],

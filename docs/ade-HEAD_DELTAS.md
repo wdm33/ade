@@ -4,104 +4,111 @@
 >
 > Regenerate with `/head-deltas <baseline>` after every cluster close. Baseline is recorded in `.idd-config.json` `head_deltas_baseline`.
 
-> Baseline: `01e7e08` (no tag, 2026-05-29 00:54:20 +0700)
-> HEAD: `273c887` (docs(registry): PHASE4-N-X close — CN-WIRE-08 enforced + strengthenings, 2026-05-29 04:20:00 +0700)
-> 9 commits, 36 files changed, +1664 / -313 lines
+> Baseline: `273c887` (no tag, 2026-05-29 04:20:00 +0700)
+> HEAD: `3b78008` (Close PHASE4-N-Y — Mithril-anchored bootstrap, network forward-sync & WAL recovery, 2026-05-29 14:59:36 +0700)
+> 13 commits, 47 files changed, +6273 / -257 lines
 
-This window is exactly two pieces:
+This window is three pieces:
 
-1. The **PHASE4-N-W tail** (`fea32c0` close + `97faf6d` seed note) — **no code or behavior change**. `fea32c0` is the N-W cluster *close* commit: it refreshed the four grounding docs (CODEMAP / SEAMS / HEAD_DELTAS / TRACEABILITY) for the producer-Praos-VRF state, archived the completed `PHASE4-N-W` cluster doc + slice docs from `docs/clusters/` into `docs/clusters/completed/`, and bumped `.idd-config.json` `head_deltas_baseline` `22eef90 → 01e7e08` (the previous regeneration's recommendation, applied). `97faf6d` seeded the serve-side tag-24 wire-wrap follow-on as a planning note. Together these are the source of the four-grounding-doc rows and the cluster-doc rename rows in `git diff --stat` — content of the renamed N-W docs is unchanged.
-2. The **PHASE4-N-X** cluster — *N2N Tag-24 Wire Envelope Authority* (`b932fd6` cluster doc + invariants + plan + `CN-WIRE-08` declaration; `15c1e40` S1 BLUE authority; `84a60a7` S2 block-fetch serve composition; `129eeef` S3 chain-sync header serve composition; `86312f0` S4 RED-unwrap migration + CI gate; `6fb366b` the per-cluster security HIGH fix; `273c887` close). This is the only code change in the window.
+1. The **PHASE4-N-X tail** (`86ddc4d` + `c83f2ba`) — **no code or behavior change.** `86ddc4d` is the N-X *close*-pass grounding-doc refresh (CODEMAP / SEAMS / HEAD_DELTAS / TRACEABILITY regenerated at the N-X HEAD, cluster docs archived). `c83f2ba` seeded the operator-pass live-leg C1 scoping follow-on as a planning note. These two account for several of the `docs/` rows in `git diff --stat`.
+2. The **PHASE4-N-Y scope** (`461c912`) — the cluster spec + slice plan + cluster/slice docs (planning only).
+3. The **PHASE4-N-Y implementation** — the only code change in the window: S1 Mithril import authority + seed provenance (`9a97d34`); the DC-STORE-09 anchor-constant disambiguation fix (`51b6c4f`); S2 durable network forward-sync (`a42bfe2`); S3 end-to-end crash-recovery wiring (`09a49ed`); S4 Conway-genesis bootstrap source (`bb0d1fe`); S5 observable-surface compatibility evidence (`4b747cb`); the two security-HIGH remediations caught at cluster-close — S6 recovery↔WAL-tail reconciliation (`cb7da89`) and S7 real (non-tautological) Mithril binding (`dc8fc8c`); the registry close (`fb2c312`); and the cluster close (`3b78008`).
 
-> **Baseline bump (this close):** on the PHASE4-N-X close, `.idd-config.json` `head_deltas_baseline` should be bumped from `01e7e08` to **`273c887`** so the next cluster narrates from this point. (That config edit is made separately, outside this regeneration.)
+> **Baseline bump (this close):** on the PHASE4-N-Y close, `.idd-config.json` `head_deltas_baseline` should be bumped from `273c887` to **`3b78008`** so the next cluster narrates from this point. (That config edit is made separately, outside this regeneration.)
 
 ---
 
 ## 1. Commit Log
 
-Verbatim from `git log --oneline --no-merges 01e7e08..HEAD`, newest-first. Type is the conventional-commits prefix on the subject; no editorial.
+Verbatim from `git log --oneline --no-merges 273c887..HEAD`, newest-first. Type is the conventional-commits prefix on the subject; no editorial.
 
 | Hash | Type | Summary |
 |------|------|---------|
-| `273c887` | docs | PHASE4-N-X close — CN-WIRE-08 enforced + strengthenings |
-| `6fb366b` | fix | PHASE4-N-X — fail-closed CBOR length-arg overflow (CN-WIRE-08 N-7) |
-| `86312f0` | feat | PHASE4-N-X S4 — migrate RED unwraps to the tag-24 authority + gate |
-| `129eeef` | feat | PHASE4-N-X S3 — chain-sync header tag-24 serve composition |
-| `84a60a7` | feat | PHASE4-N-X S2 — block-fetch tag-24 serve composition |
-| `15c1e40` | feat | PHASE4-N-X S1 — BLUE tag-24 wire-envelope authority |
-| `b932fd6` | docs | PHASE4-N-X cluster doc + invariants + plan + CN-WIRE-08 |
-| `97faf6d` | docs | seed the serve-side tag-24 wire-wrap follow-on |
-| `fea32c0` | docs | Close PHASE4-N-W — producer Praos VRF authority matches the validator |
+| `3b78008` | — | Close PHASE4-N-Y — Mithril-anchored bootstrap, network forward-sync & WAL recovery |
+| `fb2c312` | docs | PHASE4-N-Y close — 6 new rules enforced + strengthenings |
+| `dc8fc8c` | fix | PHASE4-N-Y S7 — real (non-tautological) Mithril binding (HIGH) |
+| `cb7da89` | fix | PHASE4-N-Y S6 — recovery reconciles chaindb to the WAL tail (HIGH) |
+| `4b747cb` | feat | PHASE4-N-Y S5 — observable-surface compatibility evidence |
+| `bb0d1fe` | feat | PHASE4-N-Y S4 — Conway-genesis bootstrap source |
+| `51b6c4f` | fix | disambiguate anchor schema-version constant (DC-STORE-09) |
+| `09a49ed` | feat | PHASE4-N-Y S3 — end-to-end crash recovery wiring |
+| `a42bfe2` | feat | PHASE4-N-Y S2 — durable network forward-sync lifecycle |
+| `9a97d34` | feat | PHASE4-N-Y S1 — Ade-side Mithril import authority + seed provenance |
+| `461c912` | docs | scope PHASE4-N-Y Mithril-anchored bootstrap + forward-sync + WAL recovery |
+| `c83f2ba` | docs | seed the operator-pass live-leg C1 scoping follow-on |
+| `86ddc4d` | docs | refresh CODEMAP/SEAMS/HEAD_DELTAS/TRACEABILITY for PHASE4-N-X |
 
-Type histogram: feat ×4, docs ×4, fix ×1. Unclassified by prefix: 1 — `fea32c0` ("Close PHASE4-N-W …") carries no conventional-commits prefix; its diff is docs-only (grounding-doc refresh + cluster-doc archive + `.idd-config.json` baseline bump), so it is classified `docs` by scope.
+Type histogram: feat ×4, fix ×3, docs ×5. Unclassified by prefix: 1 — `3b78008` ("Close PHASE4-N-Y …") carries no conventional-commits prefix; its diff is the cluster-close pass (registry/grounding-doc refresh + cluster-doc archive), so it is `docs`-by-scope. (`51b6c4f` and the two `fix(...)` HIGH commits all carry a `fix:` prefix.)
 
 ---
 
 ## 2. New Modules
 
-One new module this window.
+Eight new modules this window, all PHASE4-N-Y. Three BLUE (authoritative core), four RED (shell), one GREEN (evidence). Colors follow `.idd-config.json` `core_paths`: `ade_ledger` is BLUE; `ade_runtime` is RED; `ade_testkit` is neither core nor shell (GREEN test-evidence).
 
-### `ade_codec::cbor::tag24` — BLUE
+| Module | Color | Purpose | Key sub-paths | Added in (cluster/slice) |
+|--------|-------|---------|---------------|--------------------------|
+| `ade_ledger::bootstrap_anchor::binding` | BLUE | The pure `verify_mithril_binding` predicate (CN-MITHRIL-01 / DC-MITHRIL-01): cross-checks a Mithril manifest's attested `{network_magic, genesis_hash, certified_point, certificate_hash}` against the independently-minted `BootstrapAnchor`; fails closed (typed `MithrilImportError`) on any field mismatch before storage init. Never re-verifies the STM multisig. | `binding.rs` (`verify_mithril_binding`, `MithrilManifestReport`, closed `MithrilImportError`) | PHASE4-N-Y / `9a97d34` (S1), hardened `dc8fc8c` (S7) |
+| `ade_ledger::genesis_source` | BLUE | The pure Conway-genesis → canonical-initial-state transform (DC-GENESIS-SRC-01): turns a controlled `ConwayGenesisConfig` into the `(LedgerState, PraosChainDepState)` cold-start pair the single bootstrap authority feeds into its `genesis_initial` branch. Conway-only — non-Conway fails closed. | `genesis_source.rs` (`genesis_initial_state`, `ConwayGenesisConfig`, `GenesisInitialFund`, `GenesisSourceError`) | PHASE4-N-Y / `bb0d1fe` (S4) |
+| `ade_runtime::mithril_import` | RED | The mithril-client import shell (S1): consumes a mithril-client-verified snapshot manifest and maps it to `SeedProvenance::Mithril` + the observed anchor field-set. Makes no semantic decision (the BLUE predicate decides) and never re-verifies the STM multisig. | `mithril_import/mod.rs`, `importer.rs` (`import_mithril_manifest`, `MithrilManifestError`, `MithrilProvenanceImport`), `json.rs` | PHASE4-N-Y / `9a97d34` (S1) |
+| `ade_runtime::forward_sync` | RED+GREEN | Durable network forward-sync lifecycle (DC-SYNC-01), two-driver split mirroring `session`/`mux_pump`. The GREEN `reducer` composes the BLUE admit chokepoint and emits a closed `SyncEffect` plan whose `AdvanceTip` is unreachable until `StoreBlockBytes` + `AppendWal` precede it; the RED `pump` applies the plan in order against `ChainDb` + WAL and fail-closes (`TipBeforeDurable`) on any out-of-order apply. | `forward_sync/mod.rs`, `reducer.rs` (GREEN — `forward_sync_step`, `SyncEffect`, `AdmitPlan`, `ForwardSyncState`), `pump.rs` (RED — `pump_block`, `PumpError`, `PumpTip`, `SnapshotSink`) | PHASE4-N-Y / `a42bfe2` (S2) |
+| `ade_runtime::genesis_bootstrap` | RED | The Conway-genesis bootstrap entry (S4): composes the RED `genesis_parser` (file read), the BLUE `genesis_source` transform, and the single closed `bootstrap_initial_state` authority; mints the `BootstrapAnchor` with `SeedProvenance::CardanoCliJson`. Introduces no parallel storage-init path and no `*Anchor` trait/plugin seam. | `genesis_bootstrap.rs` | PHASE4-N-Y / `bb0d1fe` (S4) |
+| `ade_runtime::recovery::restart` | RED | Node-binary restart recovery wiring (S3): composes the existing authorities (`WalStore::read_all` → BLUE `replay_from_anchor` → warm-start `bootstrap_initial_state`) into a single end-to-end crash-recovery entry — no second recovery engine. S6 extended it to reconcile the ChainDB to the WAL tail so a torn `put_block`/wal-append crash cannot incorporate an un-WAL'd orphan. | `recovery/restart.rs`; `recovery/mod.rs` (the pre-existing snapshot+forward-replay primitive, `recovery.rs` → `recovery/mod.rs` directory promotion) | PHASE4-N-Y / `09a49ed` (S3), extended `cb7da89` (S6) |
+| `ade_testkit::harness::sync_diff` | GREEN | Observable-surface differential harness for the snapshot→tip sync window (DC-COMPAT-01): compares Ade's per-block verdict, selected tip hash, block hash, and `query utxo`-style UTxO set against committed oracle fixtures. **Never** compares Ade's internal ledger `fingerprint` to a Haskell/serialized-state hash; deterministic over committed fixtures. | `harness/sync_diff.rs` (`BlockVerdict`, observable-surface diff types) | PHASE4-N-Y / `4b747cb` (S5) |
 
-- **Color:** BLUE — pure, deterministic byte wrap/unwrap; no protocol knowledge, no I/O, no allocation beyond the wrap output.
-- **Purpose:** The single workspace authority for the N2N **tag-24 CBOR-in-CBOR byte envelope** (`CN-WIRE-08`). Cardano's Ouroboros N2N protocols carry serialised blocks and headers as CBOR-in-CBOR: the inner CBOR item is serialised, then wrapped in a CBOR tag-24 (`#6.24`, "encoded CBOR data item") byte string — the two marker bytes `0xd8 0x18`. This module owns the wrap/unwrap of that envelope and **nothing else** — per-protocol composition (where the era tag sits relative to the wrap) lives in the `ade_network` codecs.
-- **Key items:**
-  - `wrap_tag24(inner: &[u8]) -> Vec<u8>` — emits the canonical tag-24 marker + definite-length byte-string header + verbatim inner bytes.
-  - `unwrap_tag24(bytes: &[u8]) -> Result<&[u8], TagEnvelopeError>` — zero-copy borrow of the inner bytes; fails closed (typed error, no panic, no lenient path) on a missing/wrong `0xd8 0x18` marker, a non-byte-string payload, a truncated inner, or trailing bytes.
-  - `TagEnvelopeError` — closed failure sum carrying only non-secret wire primitives.
-- **Added in:** PHASE4-N-X / `15c1e40` (S1). The security fix `6fb366b` later added the `unwrap_rejects_huge_declared_length_without_panic` regression test alongside the shared-primitive overflow fix (see §3 / §5).
+**Module promotion (not a new module):** `crates/ade_runtime/src/recovery.rs` → `crates/ade_runtime/src/recovery/mod.rs` (a directory promotion, `git` rename score `R099` — content preserved) to make room for the new `recovery/restart.rs` sibling.
 
-**Cross-reference (CODEMAP @ `273c887`):** **WARNING — CODEMAP is stale on this module.** The four grounding docs were last regenerated at `fea32c0` (the N-W *close*, the first commit in this span), which predates `tag24.rs` (`15c1e40`). `grep tag24 docs/ade-CODEMAP.md` returns 0 hits. `ade_codec::cbor::tag24` must be added to the CODEMAP BLUE module table on its next regeneration — run `/codemap`.
+**New non-source artifacts (corpus):** `corpus/sync/preprod_snapshot_to_tip_synthetic/` (the synthetic snapshot→tip oracle: `README.md` + `oracle_observable.toml`) and `corpus/sync/regressions/` (`README.md` — the per-mismatch regression-fixture home named by RO-SYNC-EVIDENCE-01). These back the S5 `sync_diff` harness and the evidence-manifest schema gate.
+
+**Cross-reference (CODEMAP @ `3b78008`):** CODEMAP was regenerated at this same HEAD (`3b78008`, PHASE4-N-Y close) and **does** catalogue these modules — `ade_ledger::bootstrap_anchor::binding`, `genesis_source`, `forward_sync`, `mithril_import`, `genesis_bootstrap`, `recovery::restart`, and the GREEN `sync_diff` harness all appear in the BLUE/RED/GREEN tables and the `ade_ledger` / `ade_runtime` authority rows. No CODEMAP staleness on §2 this window.
 
 ---
 
 ## 3. Modules Modified
 
-Modules that existed at baseline with non-trivial changes. The N-W tail (piece 1) touched no code, so it produces no §3 entry. Every entry below is PHASE4-N-X.
+Modules that existed at baseline with non-trivial changes. The N-X tail (piece 1) and the N-Y scoping (piece 2) touched no code, so they produce no §3 entry. Every entry below is PHASE4-N-Y.
 
 | Module | Scope | Key changes |
 |--------|-------|-------------|
-| `ade_codec::cbor` (`mod.rs`) | +29 / -3 lines | **N-X (S1 + security fix):** the new `tag24` submodule is declared here. The **security HIGH fix** (`6fb366b`) hardens the three shared length-bounded readers — `read_bytes`, `read_text`, and `skip_item`'s definite-length arm — replacing the overflow-prone `*offset + len > data.len()` bounds check with an overflow-proof `(*offset).checked_add(len).map_or(true, |end| end > data.len())`. Adversarial wire bytes declaring a near-`u64::MAX` length previously panicked (debug arithmetic overflow / release slice-bounds), reachable from untrusted peer input via the BlockFetch admission path and ChainSync RollForward header path — a remote DoS on the exact authority `CN-WIRE-08` hardens. Valid inputs are unaffected; only malformed huge-length inputs change from panic to a typed `UnexpectedEof`/`Truncated`. |
-| `ade_network::codec::block_fetch` | +47 / -16 lines | **N-X (S2):** adds the per-protocol BlockFetch composition `compose_blockfetch_block` / decompose, which calls the shared `wrap_tag24` authority. A served `MsgBlock` payload is `tag24(bytes([era, block]))` — **era inside the wrap**. The composition is pinned byte-identically against the committed real-capture oracle `corpus/network/n2n/block_fetch/local_preprod_tip_msg_01_block.cbor` (`82 04 d8 18 …` = `[4, tag24(bytes([era,block]))]`, captured against docker preprod cardano-node 11.0.1, negotiated N2N v15). No bare `[era, block]` may be served. |
-| `ade_network::codec::chain_sync` | +118 / -14 lines | **N-X (S3):** adds the per-protocol ChainSync RollForward composition `compose_rollforward_header` / decompose, calling the shared `wrap_tag24` authority. A served RollForward header is `[era_tag, tag24(bytes(header_cbor))]` — **era tag outside the wrap**, single wrapper. The chain-sync wire era index is the cardano-node **consensus** index (Conway = 6 = ade storage discriminant 7 − 1), distinct from the EBB-aware BlockFetch MsgBlock index (Conway = 7); the codec maps the era through the consensus index. Decompose rejects a non-tag-24 inner. |
-| `ade_network::block_fetch::server` / `chain_sync::server` | +93 / -19 lines across 2 files | **N-X (S2 + S3):** the serve paths now emit the composed bytes through the per-protocol authorities (`compose_blockfetch_block` / `compose_rollforward_header`) rather than placing bare `[era, block]` / bare header on the wire. |
-| `ade_node::admission::runner` | +7 / -27 lines | **N-X (S4):** the hand-rolled tag-24 parsing in the RED admission path is deleted and replaced by a call to the shared `unwrap_tag24` authority — a net deletion (the deleted `unwrap_block_fetch_envelope` is CI-guarded against reappearing). |
-| `ade_core_interop::follow` | +9 / -9 lines | **N-X (S4):** the RED chain-following path's hand-rolled tag-24 unwrap is migrated onto the shared `unwrap_tag24` authority; the served ChainSync header shape (`[era_tag, tag24(header_cbor)]`, single wrapper) was verified here against a real preprod RollForward frame. |
-| `ade_network::bin::capture_chain_sync` | +43 / -2 lines | **N-X (S3 + security fix):** the capture tool that produced the new Conway RollForward corpus fixtures; the security fix also added a `parse_hash32` `s.is_ascii()` guard (a review LOW) so a 64-byte non-ASCII `--intersect-hash` cannot panic on a non-char-boundary slice. |
-
-### New corpus fixtures
-
-`84a60a7` (S2) reuses the pre-existing BlockFetch oracle. `129eeef` / the capture tool add the **ChainSync RollForward golden** under `corpus/network/n2n/chain_sync/`:
-
-- `preprod_conway_rollforward_frame_00_recv.cbor` (96 B), `…_frame_01_recv.cbor` (922 B, the Conway header frame), `…_intersect_recv.cbor` (96 B), and `…_meta.toml` — captured from docker preprod cardano-node 11.0.1 by FindIntersect at Conway slot 124137045 then RequestNext (negotiated N2N v15). The fixtures pin the served RollForward header wire shape `[2, [era_idx=6, tag24(bytes(header_cbor))], tip]`, with the tag-24 inner byte-identical to `ade_ledger::block_validity::accepted_block_header_bytes` over the same block.
+| `ade_ledger::bootstrap_anchor` (`anchor.rs`, `error.rs`, `mod.rs`) | +180 / -27 lines across 3 files | **N-Y (S1 + DC-STORE-09 fix + S7):** the anchor record is extended with the closed `SeedProvenance` enum (`CardanoCliJson` / `Mithril { certificate_hash, certified_point, immutable_range }`) carried in the canonical CBOR framing. The wire schema constant is both **renamed and bumped: `SCHEMA_VERSION` → `ANCHOR_SCHEMA_VERSION`, value `1 → 2`** (additive, version-gated — `decode_bootstrap_anchor` still rejects an unknown version fail-fast; the unknown-version negative test now splices a fresh v2 encoding). The rename (`51b6c4f`) disambiguates from the snapshot-framing `SCHEMA_VERSION` that `ci_check_snapshot_encoder_closure.sh` (DC-STORE-09) requires to live only in `snapshot/framing.rs` — the gate's generic-name grep was flagging the anchor's distinct, legitimate constant. The new `binding` and `error` surfaces are declared in `mod.rs`. |
+| `ade_runtime::bootstrap_anchor` (RED) | +10 / -2 lines | **N-Y (S1):** the RED anchor-minting shell records the new `SeedProvenance` variant for a Mithril-sourced seed (the observed anchor field-set fed to the BLUE binding predicate). |
+| `ade_runtime::recovery` (`recovery/mod.rs`) | +4 lines | **N-Y (S3):** the pre-existing snapshot+forward-replay primitive gains the `restart` submodule declaration (the new end-to-end restart wiring lives in the sibling `restart.rs`, §2). |
+| `ade_node::admission::bootstrap` | +2 lines | **N-Y (S1/S4):** the admission bootstrap path threads the extended provenance/anchor surface (the storage-init chokepoint is unchanged — Mithril and genesis routes both enter the single `bootstrap_initial_state` authority). |
+| `ade_ledger` / `ade_runtime` `lib.rs` | +4 lines total | Module declarations for the new submodules: `ade_ledger` exposes `pub mod genesis_source`; `ade_runtime` exposes `pub mod forward_sync`, `pub mod genesis_bootstrap`, `pub mod mithril_import`. |
+| `ade_testkit::harness` (`mod.rs`) | +1 line | **N-Y (S5):** declares the new `sync_diff` GREEN harness submodule (§2). |
 
 ### Strengthenings recorded this window (registry `strengthened_in`)
 
-Not new rules — cross-cutting invariant strengthenings PHASE4-N-X carried forward (see §7):
+Not new rules — fourteen cross-cutting invariant strengthenings PHASE4-N-Y carried forward (see §7), grouped by sub-system:
 
-- **DC-CONS-17** — `strengthened_in += ["PHASE4-N-X"]` (producer-side block-fetch wire-byte transmission now routes through the tag-24 authority).
-- **DC-CONS-18** — `strengthened_in += ["PHASE4-N-X"]` (producer-side chain-sync RollForward header projection now routes through the tag-24 authority).
-- **CN-FORGE-03** — `strengthened_in += ["PHASE4-N-X"]` (the serve-side tag-24 wire-wrap — left as a NAMED FOLLOW-ON at the N-V close — is now shipped; the forge↔decode envelope authority extends to the served wire shape).
+- **Durability / determinism core** — `T-DET-01`, `DC-STORE-01`, `DC-STORE-02`, `DC-STORE-03`, `DC-STORE-05`, `DC-CONS-20` (the durable-before-tip ordering and replay-equivalence now extend to the network forward-sync path + recovery↔WAL-tail reconciliation).
+- **Bootstrap / anchor / seed authority** — `CN-NODE-01`, `CN-SEED-01`, `CN-ANCHOR-01`, `DC-ANCHOR-01`, `CN-GENESIS-01` (Mithril and Conway-genesis routes both enter the single closed bootstrap authority; the anchor schema is version-gated at v2).
+- **WAL replay** — `DC-WAL-01`, `DC-WAL-02`, `DC-WAL-03` (the recovery wiring exercises the BLUE WAL replay integrity gates end-to-end).
+
+(`RO-MITHRIL-IMPORT-01` also gained `PHASE4-N-Y` in `strengthened_in`, but its headline change is a **status flip** `declared → partial`; it is narrated as such in §7 rather than counted among the fourteen strengthenings.)
 
 ---
 
 ## 4. Feature Flags
 
-No feature-flag deltas this window. No `Cargo.toml` (workspace root or any member) was modified between `01e7e08` and `273c887`, so no `[features]` table, `optionalDependencies`, build tag, or `extras_require` changed. No `compile_error!`-coupled flag was introduced or removed.
+No feature-flag deltas this window. **No `Cargo.toml`** (workspace root or any member) was modified between `273c887` and `3b78008`, so no `[features]` table, `optionalDependencies`, build tag, or `extras_require` changed. No `compile_error!`-coupled flag was introduced or removed.
 
 ---
 
 ## 5. CI Checks
 
-Every CI check added or materially modified since baseline. CI scripts live as `ci/ci_check_*.sh` (no `.github/workflows` in this repo yet, per `.idd-config.json` `ci_dirs`). Count: **98 → 99** (+1 new, 0 modified, 0 removed).
+Every CI check added or materially modified since baseline. CI scripts live as `ci/ci_check_*.sh` (no `.github/workflows` in this repo yet, per `.idd-config.json` `ci_dirs`). Count: **99 → 103** (+4 new, 0 modified, 0 removed).
 
-### PHASE4-N-X checks
+### PHASE4-N-Y checks
 
 | Check | Status | What it checks |
 |-------|--------|----------------|
-| `ci_check_tag24_wire_authority.sh` | New (`86312f0`) | The single N2N tag-24 wire-envelope authority: (1) `wrap_tag24` and `unwrap_tag24` are each defined **exactly once**, in the BLUE authority `crates/ade_codec/src/cbor/tag24.rs`; (2) no hand-rolled tag-24 parse (`0xd8`/`0x18` byte-literal sniffing, or a `read_tag(..)==24` + `read_bytes` pair) survives in the RED serve/admission/interop consumer paths — they call the authority; (3) the serve paths compose via the per-protocol authorities (`compose_blockfetch_block` / `compose_rollforward_header`), so no bare `[era, block]` / bare header is placed on the wire; (4) the deleted hand-rolled `unwrap_block_fetch_envelope` does not reappear anywhere under `crates/`. Enforces CN-WIRE-08. |
+| `ci_check_mithril_uses_bootstrap_initial_state.sh` | New (`9a97d34`, S1) | Mithril import enters the single closed bootstrap authority only (CN-MITHRIL-01) and never re-verifies the STM multisig in BLUE (DC-MITHRIL-01). Positive: the workspace references `bootstrap_initial_state(`. Negatives: no `trait *Anchor` plugin seam (`BootstrapAnchor` stays a struct); no second `pub fn bootstrap_initial_state` outside the one authority module; no `mithril`/STM-verify crate import under any BLUE crate path. Also gates `genesis_source` routing (DC-GENESIS-SRC-01). |
+| `ci_check_forward_sync_chokepoint_only.sh` | New (`a42bfe2`, S2) | Forward-sync chokepoint-only + GREEN reducer purity (DC-SYNC-01). The GREEN reducer holds no I/O state (no tokio/redb/SystemTime/rand/HashMap/float); admits blocks only through the BLUE chokepoint (transitively via `receive_apply`); redb writes + WAL appends live in the RED pump, never the reducer; `AdvanceTip` is emitted only from the durable `AdmitPlan` constructor. |
+| `ci_check_no_haskell_fingerprint_equality.sh` | New (`4b747cb`, S5) | Cardano compatibility proven only on observable surfaces (DC-COMPAT-01). A negative grep over the test tree: fails if any line is an equality assertion that pairs Ade's `fingerprint` with a Haskell/oracle serialized-state-hash token. Precise enough to allow the legitimate Ade-vs-Ade internal cross-path fingerprint equality (S4's `genesis_path_fp_equals_snapshot_path_fp`). |
+| `ci_check_sync_evidence_manifest_schema.sh` | New (`4b747cb`, S5) | The committed snapshot→tip sync-evidence manifest schema (RO-SYNC-EVIDENCE-01, mirroring CN-OPERATOR-EVIDENCE-01). When a `docs/clusters/PHASE4-N-Y/CE-Y-SYNC-LIVE_*.toml` manifest exists, verify every required field is present and the referenced fixture's sha256 matches `fixture_file_sha256`. **Vacuously satisfied** until the operator-witnessed two-Haskell-node live pass commits a manifest — the live capture is operator action, never executed or fabricated in CI. |
 
-**Cross-reference (CODEMAP @ `273c887` / TRACEABILITY):** **WARNING — CODEMAP and TRACEABILITY are stale on this gate.** `ci_check_tag24_wire_authority.sh` is bound to `CN-WIRE-08` in `docs/ade-invariant-registry.toml` (`ci_script` field), but `grep ci_check_tag24_wire_authority docs/ade-CODEMAP.md docs/ade-TRACEABILITY.md` returns 0 hits — those docs were last regenerated at `fea32c0`, which predates the gate. Confirm the gate appears in the CODEMAP CI table and in TRACEABILITY mapped to CN-WIRE-08 on their next regeneration — run `/codemap` and `/traceability`.
+**Cross-reference (all four grounding docs @ `3b78008`):** CODEMAP, TRACEABILITY, and SEAMS were all regenerated in the same PHASE4-N-Y close pass as this HEAD_DELTAS, at HEAD `3b78008`. TRACEABILITY binds the four new gates (`ci_check_mithril_uses_bootstrap_initial_state` / `ci_check_forward_sync_chokepoint_only` / `ci_check_no_haskell_fingerprint_equality` / `ci_check_sync_evidence_manifest_schema`) and the six new rule IDs (CN-MITHRIL-01, DC-MITHRIL-01, DC-SYNC-01, DC-GENESIS-SRC-01, DC-COMPAT-01, RO-SYNC-EVIDENCE-01) to their registry `ci_script`/`tests` entries; SEAMS records the new closed surfaces (`SeedProvenance`, `SyncEffect`, etc.). No cross-doc staleness this window. *(The four were generated concurrently; an interim draft of this note flagged TRACEABILITY/SEAMS as stale because they had not yet been written when this doc was drafted — corrected here.)*
 
 ---
 
@@ -109,31 +116,49 @@ Every CI check added or materially modified since baseline. CI scripts live as `
 
 n/a — `.idd-config.json` `canonical_type_registry` is `null`. Canonical-type rules live inline in the invariant registry under family **T**; no family-T entries were added or removed this window.
 
+For reference, the structural canonical-type count rose **446 → 452** (+6, all in `ade_ledger`) per the CODEMAP grep inventory — the new BLUE types `GenesisInitialFund`, `ConwayGenesisConfig`, `GenesisSourceError` (`genesis_source`), `MithrilManifestReport`, `MithrilImportError` (`bootstrap_anchor::binding`), and the `SeedProvenance` enum. This is a count delta, not a registry delta (there is no canonical-type registry file).
+
 ---
 
 ## 7. Normative / Invariant Rule Delta
 
 Source: `docs/ade-invariant-registry.toml` (the project's canonical append-only invariant registry; `invariant_registry` in `.idd-config.json`). Counts by `^[[rules]]` entries.
 
-- Rules at baseline (`01e7e08`): **291**
-- Rules at HEAD (`273c887`): **292**
-- Net additions: **1** (`CN-WIRE-08`, declared at `b932fd6` and enforced at `273c887`, both inside this window — so it is a new ID relative to baseline)
+- Rules at baseline (`273c887`): **292**
+- Rules at HEAD (`3b78008`): **298**
+- Net additions: **6** (all introduced and enforced inside this window)
 - Removals: **0** (append-only discipline upheld).
 
-### New rule
+### New rules
 
 | ID | Tier | Cluster | One-line summary |
 |----|------|---------|------------------|
-| `CN-WIRE-08` | derived | N-X | N2N tag-24 CBOR-in-CBOR payload envelopes are constructed and stripped through ONE shared BLUE byte authority in `ade_codec` (`wrap_tag24`/`unwrap_tag24`). Protocol-specific composition lives in `ade_network` BLUE codecs: a served BlockFetch `MsgBlock` payload is `tag24(bytes([era,block]))` (era inside the wrap); a served ChainSync RollForward header is `[era_tag, tag24(bytes(header_cbor))]` (era_tag outside the wrap). Both pinned byte-identically against captured cardano-node 11.0.1 wire fixtures. No bare `[era,block]` over BlockFetch, no bare header over ChainSync RollForward, no hand-rolled tag-24 parse in RED. `unwrap_tag24` fails closed on non-`(0xd8 0x18)`, wrong inner length, or trailing bytes; inner bytes copied verbatim. Status `declared → enforced` within this window; enforced by `ci_check_tag24_wire_authority.sh`. |
+| `CN-MITHRIL-01` | constraint | N-Y | A Mithril-sourced seed may bootstrap only after a verified binding cross-checks the manifest's attested `{network_magic, genesis_hash, certified_point, certificate_hash}` against the **independently** `--json-seed`-minted `BootstrapAnchor`, failing closed before storage init; the STM multisig is the RED mithril-client's job, never a BLUE trust root, and no mithril/STM crate is imported under any BLUE path. Status `enforced` (S1 + S7). |
+| `DC-MITHRIL-01` | derived | N-Y | `verify_mithril_binding` is a pure, total, deterministic BLUE predicate (no I/O, clock, HashMap, float, or String errors); each field divergence maps to a distinct closed `MithrilImportError` variant; the compared sides come from two independent origins — never a value vs itself. Status `enforced`. |
+| `DC-SYNC-01` | derived | N-Y | During network forward-sync a block's preserved wire bytes + WAL entry MUST be durable before the tip advances; admission is chokepoint-only; `AdvanceTip` is constructible only after `StoreBlockBytes` + `AppendWal` (single durable() emit site) and the RED pump fail-closes (`TipBeforeDurable`) out of order; recovery reconciles the chaindb to the WAL tail so a torn crash cannot incorporate an un-WAL'd orphan (S6). Status `enforced`. |
+| `DC-GENESIS-SRC-01` | derived | N-Y | A controlled genesis enters initial state only through the single `bootstrap_initial_state` authority; the genesis→initial-state transform is a pure deterministic BLUE function; a non-Conway genesis fails closed (`GenesisSourceError::NonConwayEra`) — no Byron→Conway historical replay path; no `*Anchor` trait/plugin seam. Status `enforced`. |
+| `DC-COMPAT-01` | derived | N-Y | Cardano compatibility is proven only on observable surfaces (per-block verdict, tip/block hashes, `query utxo`, transcripts) with version-pinned fixtures; asserting Ade's internal `fingerprint` == a Haskell serialized-state hash is FORBIDDEN and CI-blocked; the only valid fingerprint equality is internal Ade-vs-Ade (genesis-path == snapshot-path). Status `enforced`. |
+| `RO-SYNC-EVIDENCE-01` | release | N-Y | A committed snapshot→tip sync-evidence manifest carries the closed schema (oracle versions, chain point, fixture refs, sha256, result) and its sha256 cross-checks the committed fixture (vacuous until a manifest is committed, mirroring CN-OPERATOR-EVIDENCE-01); each discovered Haskell mismatch becomes a named regression fixture under `corpus/sync/regressions/`; the two-Haskell-node private-Conway-testnet live leg is operator-witnessed. Status `partial`. |
+
+### Status flip (release obligation)
+
+- **RO-MITHRIL-IMPORT-01** — `status: declared → partial`; `open_obligation: "blocked_until_mithril_import_cluster" → "blocked_until_mithril_import_wiring_slice"` (rewritten to record that N-Y S1/S7 introduced the Ade-side **provenance** binding — OI-S1.1 scope A — but NOT seed-bytes-from-Mithril); `strengthened_in: [] → ["PHASE4-N-Y"]`. Remaining for `enforced`: (a) seed-bytes-from-Mithril decode (option B), (b) a wired production composition site with a CI gate asserting the bound anchor's `seed_point` originates from the `--json-seed` UTxO extraction (a re-tautologization hazard flagged in the S7 security re-review), (c) a committed reproducible Mithril fixture + CI/release evidence.
 
 ### Modified rules (strengthenings)
 
-The three strengthenings listed in §3 had `PHASE4-N-X` appended to `strengthened_in`; no statement was weakened:
+Fourteen rules had `PHASE4-N-Y` appended to `strengthened_in`; no statement was weakened. Grouped by sub-system (full list — see §3):
 
-- **DC-CONS-17** — `strengthened_in: ["PHASE4-N-R-B"] → ["PHASE4-N-R-B", "PHASE4-N-X"]`.
-- **DC-CONS-18** — `strengthened_in: ["PHASE4-N-R-A", "PHASE4-N-S-A", "PHASE4-N-T", "PHASE4-N-V"] → [… , "PHASE4-N-X"]`.
-- **CN-FORGE-03** — `strengthened_in: [] → ["PHASE4-N-X"]`; its `open_obligation` was rewritten from "serve-side tag-24 wire-wrap is a NAMED FOLLOW-ON" to "SHIPPED in PHASE4-N-X / CN-WIRE-08 (in-process); the remaining obligation is the OPERATOR-PASS live leg" (RO-LIVE-01 / CN-CONS-06 gated).
+- **Durability / determinism:** `T-DET-01`, `DC-STORE-01`, `DC-STORE-02`, `DC-STORE-03`, `DC-STORE-05`, `DC-CONS-20`.
+- **Bootstrap / anchor / seed:** `CN-NODE-01`, `CN-SEED-01`, `CN-ANCHOR-01`, `DC-ANCHOR-01`, `CN-GENESIS-01`.
+- **WAL replay:** `DC-WAL-01`, `DC-WAL-02`, `DC-WAL-03`.
+
+### Two security-HIGH findings caught at cluster-close and remediated
+
+Both were surfaced by the per-cluster security review against the full N-Y diff and fixed before close — they are recorded here because they materially shaped two of the new rules:
+
+- **S6 (`cb7da89`) — torn-write recovery reconciliation (HIGH).** The original S2/S3 wiring could, on a power-loss crash between `put_block` and the WAL append, leave the chaindb tip ahead of the WAL; warm-start recovery (which derives tip from stored blocks) would silently incorporate the un-admitted orphan and break replay-equivalence. Fix: recovery reconciles the ChainDB to the WAL tail, dropping any block past the durable WAL frontier. This is now the second clause of **DC-SYNC-01** (`recovery_torn_put_block_before_wal_append_drops_orphan`).
+- **S7 (`dc8fc8c`) — tautological Mithril binding (HIGH).** The S1 binding compared a value to itself, so a snapshot certified at a different chain point than the seed dump would bind successfully. Fix: the binding now cross-checks the Mithril manifest report against the **independently** `--json-seed`-minted anchor — two genuinely different origins. This is the `attack_rationale` of **CN-MITHRIL-01** and the "never a value vs itself" clause of **DC-MITHRIL-01** (`mithril_binding_rejects_certified_point_other_than_seed_point`).
 
 ### Honest residual
 
-`CN-WIRE-08` proves the in-process tag-24 wrap↔unwrap symmetry, the single-authority + no-second-parser discipline, and oracle-shape match against real cardano-node 11.0.1 captures (BlockFetch block, ChainSync Conway header). It does **not** prove a live peer accepts the served bytes. Live cardano-node peer acceptance of the served block over block-fetch (after chain-sync header acceptance) remains **RO-LIVE-01 / CN-CONS-06 operator-pass gated** (`blocked_until_operator_pass_executed`) — that is an operator-action leg, not a codec gap. The serve-side tag-24 follow-on left open at the N-V close is now mechanically backed; the planning-doc's `[serialisationInfo, tag24(...)]` guess was disproven (the wire form is a bare tag-24, no `serialisationInfo` word).
+N-Y proves, in-process and over committed fixtures: the Mithril provenance binding cross-check, the Conway-genesis cold-start through the single authority, the durable-before-tip forward-sync ordering, the crash-recovery↔WAL-tail reconciliation, and observable-surface (never internal-hash) compatibility. It does **not** prove a live snapshot→tip pass against real Haskell peers, nor seed-bytes-from-Mithril. The snapshot→tip live capture (`RO-SYNC-EVIDENCE-01`, CE-Y-16) is operator-witnessed and `blocked_until_operator_pass_executed`; full Mithril import (`RO-MITHRIL-IMPORT-01`) is `partial` and `blocked_until_mithril_import_wiring_slice`. Neither is a code gap in this cluster's shipped scope.
