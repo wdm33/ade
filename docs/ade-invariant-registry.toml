@@ -31,7 +31,7 @@ status = "enforced"
 authority_surface = "BLUE authoritative state transitions"
 cluster = "CL-LEDGER-VERDICT"
 evidence = ["crates/ade_testkit/tests/ledger_determinism.rs uses ade_ledger::fingerprint for byte-identical state comparison across all 7 eras", "crates/ade_testkit/tests/consensus_stream_replay.rs replays the canonical chain-selector stream twice and asserts byte-identical event lists and final orchestrator state — closes T-DET-01 for the consensus subset"]
-strengthened_in = ["PHASE4-N-B", "PHASE4-B1", "PHASE4-B2", "PHASE4-N-C", "PHASE4-N-G", "PHASE4-N-H", "PHASE4-N-I", "PHASE4-N-J", "PHASE4-N-K", "PHASE4-N-L", "PHASE4-N-M-A", "PHASE4-N-M-B", "PHASE4-N-M-FRAG"]
+strengthened_in = ["PHASE4-N-B", "PHASE4-B1", "PHASE4-B2", "PHASE4-N-C", "PHASE4-N-G", "PHASE4-N-H", "PHASE4-N-I", "PHASE4-N-J", "PHASE4-N-K", "PHASE4-N-L", "PHASE4-N-M-A", "PHASE4-N-M-B", "PHASE4-N-M-FRAG", "PHASE4-N-Y"]
 
 [[rules]]
 id = "T-ENC-01"
@@ -566,6 +566,7 @@ code_locus = "crates/ade_runtime/src/chaindb/crash_safety.rs, crates/ade_runtime
 tests = ["stress_kill_smoke", "stress_kill_1000", "snapshot_table_intact_after_kill_loop", "persistent_passes_crash_safety_with_no_kill"]
 ci_script = "ci/ci_check_chaindb_crash_safety.sh"
 status = "enforced"
+strengthened_in = ["PHASE4-N-Y"]
 
 [[rules]]
 id = "DC-STORE-02"
@@ -577,6 +578,7 @@ code_locus = "crates/ade_runtime/src/chaindb/persistent.rs, crates/ade_runtime/s
 tests = ["persistent_passes_contract", "in_memory_passes_contract", "reopen_observes_committed_block"]
 ci_script = "ci/ci_check_chaindb_contract.sh"
 status = "enforced"
+strengthened_in = ["PHASE4-N-Y"]
 
 [[rules]]
 id = "DC-STORE-03"
@@ -588,6 +590,7 @@ code_locus = "crates/ade_runtime/src/chaindb/snapshot_contract.rs, crates/ade_ru
 tests = ["persistent_passes_snapshot_contract", "in_memory_passes_snapshot_contract", "snapshots_persist_across_reopen", "corrupted_magic_returns_corruption_error"]
 ci_script = "ci/ci_check_chaindb_contract.sh"
 status = "enforced"
+strengthened_in = ["PHASE4-N-Y"]
 
 [[rules]]
 id = "DC-INGRESS-01"
@@ -729,6 +732,7 @@ code_locus = "crates/ade_runtime/src/recovery.rs"
 tests = ["recover_from_snapshot_and_replay_forward", "recover_from_genesis_when_no_snapshot", "no_starting_point_error", "snapshot_with_no_post_blocks_is_ok"]
 ci_script = "ci/ci_check_recovery_contract.sh"
 status = "enforced"
+strengthened_in = ["PHASE4-N-Y"]
 
 [[rules]]
 id = "DC-STORE-06"
@@ -2680,7 +2684,7 @@ status = "enforced"
 authority_surface = "receive-side atomic admit + rollback over ChainDb + LedgerState + PraosChainDepState"
 cluster = "PHASE4-N-H + PHASE4-N-I"
 introduced_in = "PHASE4-N-H"
-strengthened_in = ["PHASE4-N-I", "PHASE4-N-J"]
+strengthened_in = ["PHASE4-N-I", "PHASE4-N-J", "PHASE4-N-Y"]
 evidence = ["Admit-side (N-H): block_delivered atomically advances chain_write -> ledger -> chain_dep with staged-then-committed shape; failure leaves state unchanged (test receive_apply_block_delivered_validity_invalid_rejects).", "Rollback-side (N-I): roll_backward calls materialize_rolled_back_state + commit_rollback; commit_rollback's irreversible-step-first shape leaves state unchanged on chain_write failure (commit_rollback_chain_write_failure_leaves_state_unchanged); pending headers reset on successful commit.", "End-to-end: rollback_then_continue_admit_equals_straight_line_admit proves snapshot+rollback yields the same ledger fingerprint as straight-line admit — snapshotting is a pure cache.", "Restart-safe rollback (N-J): PersistentSnapshotCache bridges framing::{encode,decode}_snapshot to SnapshotStore; cross-impl equivalence with InMemorySnapshotCache proven via persistent_cache_matches_in_memory_cache_semantics — restart-safe rollback now possible without weakening lockstep."]
 
 [[rules]]
@@ -2969,7 +2973,7 @@ tests = [
 ]
 ci_script = "ci/ci_check_bootstrap_closure.sh, ci/ci_check_produce_mode_uses_bootstrap_initial_state.sh, ci/ci_check_node_mode_closure.sh"
 status = "enforced"
-strengthened_in = ["PHASE4-N-K", "PHASE4-N-M-B", "PHASE4-N-T"]
+strengthened_in = ["PHASE4-N-K", "PHASE4-N-M-B", "PHASE4-N-T", "PHASE4-N-Y"]
 attack_rationale = "A parallel bootstrap path can produce an initial state that disagrees with the canonical materialize+decode authority chain — opening a startup-time chain-divergence vector."
 evidence_notes = "PHASE4-N-K S1 (2026-05-26) shipped ade_runtime::bootstrap::bootstrap_initial_state as the SOLE pub fn returning the initial (LedgerState, PraosChainDepState, Option<ChainTip>) triple. Cold-start vs warm-start is a single in-function branch. ci/ci_check_bootstrap_closure.sh enforces the single-pub-fn + materialize-authority-call positive grep. ade_node binary (S7) calls the function exactly once (ci/ci_check_node_binary_uses_single_bootstrap.sh). PHASE4-N-M-B (2026-05-26) strengthened by adding admission-mode dispatch closure: ci/ci_check_node_mode_closure.sh enforces Mode is closed {WireOnly, Admission}, main.rs match has no wildcard arm, and dispatch_admission is the sole admission-mode entry."
 
@@ -3516,7 +3520,7 @@ tests = [
 ]
 ci_script = "ci/ci_check_seed_import_closure.sh, ci/ci_check_seed_import_full_preprod_support.sh"
 status = "enforced"
-strengthened_in = ["PHASE4-N-M-A", "PHASE4-N-M-A1.1"]
+strengthened_in = ["PHASE4-N-M-A", "PHASE4-N-M-A1.1", "PHASE4-N-Y"]
 evidence_notes = "PHASE4-N-M-A S1 (2026-05-26) shipped `ade_runtime::seed_import::import_cardano_cli_json_utxo` as the SOLE pub fn converting cardano-cli `query utxo --whole-utxo` output → Ade canonical (UTxOState, UtxoFingerprint). PHASE4-N-M-A1.1 (2026-05-26) strengthened: reference-script support added for all four cardano-node-supported variants (SimpleScript, PlutusScriptV1/V2/V3) via canonical Babbage script_ref `tag(24, bytes(.cbor [variant_tag, raw_cborHex_bytes]))`. Smoke against the committed 129-entry preprod mini sample now imports 129/129 cleanly with fingerprint `13280fc1e11bbe6d908c91deff0c4cb3731f7b7e88b13c1d716e0211bc176378`. ci/ci_check_seed_import_closure.sh enforces workspace-wide single-pub-fn discipline."
 
 [[rules]]
@@ -3569,7 +3573,7 @@ tests = [
 ]
 ci_script = "ci/ci_check_bootstrap_anchor_closure.sh"
 status = "enforced"
-strengthened_in = ["PHASE4-N-M-A"]
+strengthened_in = ["PHASE4-N-M-A", "PHASE4-N-Y"]
 evidence_notes = "PHASE4-N-M-A S2 (2026-05-26): mint is the SOLE pub fn producing a BootstrapAnchor; type-system enforces all 6 fields at construction (no Default impl, no #[non_exhaustive]). ci/ci_check_bootstrap_anchor_closure.sh enforces single-mint + single-codec authority + no-Default + no-non_exhaustive."
 
 [[rules]]
@@ -3594,7 +3598,7 @@ tests = [
 ]
 ci_script = "ci/ci_check_bootstrap_anchor_closure.sh"
 status = "enforced"
-strengthened_in = ["PHASE4-N-M-A"]
+strengthened_in = ["PHASE4-N-M-A", "PHASE4-N-Y"]
 evidence_notes = "PHASE4-N-M-A S2 (2026-05-26): canonical CBOR with SCHEMA_VERSION=1; encode/decode is the SOLE pub pair; fail-fast on unknown version, wrong array length, short hash, trailing bytes."
 
 [[rules]]
@@ -3634,7 +3638,7 @@ code_locus = "crates/ade_ledger/src/wal/store_trait.rs"
 tests = []
 ci_script = "ci/ci_check_wal_append_only.sh"
 status = "enforced"
-strengthened_in = ["PHASE4-N-M-A"]
+strengthened_in = ["PHASE4-N-M-A", "PHASE4-N-Y"]
 evidence_notes = "PHASE4-N-M-A S3 (2026-05-26): CI greps every wal/*.rs file for `fn truncate|rewrite|replace|delete|clear`; trait surface explicitly enumerated. The append-only property is a type-level fact, not a runtime convention."
 
 [[rules]]
@@ -3657,7 +3661,7 @@ tests = [
 ]
 ci_script = ""
 status = "enforced"
-strengthened_in = ["PHASE4-N-M-A"]
+strengthened_in = ["PHASE4-N-M-A", "PHASE4-N-Y"]
 evidence_notes = "PHASE4-N-M-A S3+S4 (2026-05-26): WalStore::verify_chain walks every entry asserting prior_fp == previous post_fp (anchor's initial_ledger_fingerprint for the first entry). ChainBreak is authority-fatal; tests prove the verifier catches injected corruption."
 
 [[rules]]
@@ -3684,7 +3688,7 @@ tests = [
 ]
 ci_script = ""
 status = "enforced"
-strengthened_in = ["PHASE4-N-M-A", "PHASE4-N-M-B"]
+strengthened_in = ["PHASE4-N-M-A", "PHASE4-N-M-B", "PHASE4-N-Y"]
 evidence_notes = "PHASE4-N-M-A S4 (2026-05-26): integration test wal_replay_from_anchor_two_runs_byte_identical proves the runtime contract `same anchor + same inputs + same WAL → byte-identical outputs`. Final ledger fingerprint equals WAL[N].post_fp; persists across FileWalStore reopen. PHASE4-N-M-B (2026-05-26): strengthened by admission_replay_equivalence_byte_identical_wal_after_two_runs — same property holds when the WAL is driven by the live admission runner (run_admission) over an identical peer-event stream."
 
 [[rules]]
@@ -3722,13 +3726,14 @@ seed_artifact_hash that CN-ANCHOR-01 records).
 Lower priority than RO-LIVE-05; resolves after PHASE4-N-M-C
 closes.
 """
-source = "docs/planning/phase4-n-m-ledger-seed-invariants.md §10 carry-forward"
-cross_ref = ["CN-SEED-01", "CN-ANCHOR-01"]
-code_locus = ""
-tests = []
-ci_script = ""
-status = "declared"
-open_obligation = "blocked_until_mithril_import_cluster"
+source = "docs/planning/phase4-n-m-ledger-seed-invariants.md §10 carry-forward; PHASE4-N-Y S1/S7"
+cross_ref = ["CN-SEED-01", "CN-ANCHOR-01", "CN-MITHRIL-01", "DC-MITHRIL-01"]
+code_locus = "crates/ade_ledger/src/bootstrap_anchor/binding.rs (verify_mithril_binding + MithrilManifestReport); crates/ade_runtime/src/mithril_import/ (manifest importer)"
+tests = ["mithril_binding_rejects_certified_point_other_than_seed_point", "mithril_anchor_rejects_field_mismatch", "mithril_import_fail_closed_blocks_storage_init"]
+ci_script = "ci/ci_check_mithril_uses_bootstrap_initial_state.sh"
+status = "partial"
+strengthened_in = ["PHASE4-N-Y"]
+open_obligation = "PHASE4-N-Y (S1 provenance-binding + S7 non-tautological cross-check) introduced the Ade-side Mithril provenance binding (CN-MITHRIL-01/DC-MITHRIL-01): a Mithril manifest's attested {network_magic, genesis_hash, certified_point, certificate_hash} is cross-checked against the independently --json-seed-minted BootstrapAnchor and fails closed on mismatch. status=partial: this is PROVENANCE binding (OI-S1.1 scope A), NOT seed-bytes-from-Mithril. Remaining for enforced: (a) seed-bytes-from-Mithril decode (option B) — needs a Mithril artifact-type spike + forward-replay; (b) a wired production composition site with a CI gate asserting the bound anchor's seed_point originates from the --json-seed UTxO extraction, NOT the Mithril manifest (re-tautologization hazard flagged in the S7 security re-review); (c) a committed reproducible Mithril fixture + CI/release evidence. blocked_until_mithril_import_wiring_slice."
 
 # =============================================================================
 # PHASE4-N-M-B — Admission orchestrator + AgreementVerdict + admission JSONL
@@ -4556,7 +4561,7 @@ tests = ["accepted_shelley_genesis_parses_to_expected_anchor", "missing_required
 ci_script = ""
 status = "enforced"
 introduced_in = "PHASE4-N-R-C"
-strengthened_in = []
+strengthened_in = ["PHASE4-N-Y"]
 cluster = "PHASE4-N-R-C"
 
 [[rules]]
@@ -4804,3 +4809,153 @@ introduced_in = "PHASE4-N-V"
 strengthened_in = []
 cluster = "PHASE4-N-V"
 open_obligation = "Procedurally enforced (no CI meta-gate checks that the operator ran the close gate unmasked). Promoted to hard release discipline after PHASE4-N-V was prematurely marked closed on a tail-masked exit code: the forge-envelope change had broken 3 ade_testkit::producer golden/decoder tests that the masked run hid. A future meta-check could grep cluster-close transcripts for masked gate invocations."
+
+# =============================================================================
+# PHASE4-N-Y — Mithril-Anchored Bootstrap, Network Forward-Sync & WAL Recovery
+# =============================================================================
+# Closed 2026-05-29. 5 slices (S1..S5) + 2 HIGH security remediations (S6, S7).
+# New rules below; strengthenings recorded on CN-ANCHOR-01, DC-ANCHOR-01,
+# CN-SEED-01, DC-CONS-20, DC-STORE-01/02/03/05, DC-WAL-01/02/03, CN-GENESIS-01,
+# CN-NODE-01, T-DET-01, RO-MITHRIL-IMPORT-01 (declared->partial).
+# bootstrap_initial_state seam, the two-driver split, and the WalEntry shape are
+# acceptance criteria, NOT registry law (governance decision, not promoted).
+
+[[rules]]
+id = "CN-MITHRIL-01"
+tier = "constraint"
+statement = """
+A Mithril-sourced seed may bootstrap only after a verified binding: the Mithril
+manifest's attested {network_magic, genesis_hash, certified_point, certificate_hash}
+is cross-checked against the INDEPENDENTLY-minted BootstrapAnchor (minted from the
+operator's --json-seed UTxO + genesis, a different origin than the Mithril cert),
+and fails closed on any field mismatch BEFORE storage initializes. The Mithril STM
+multisig is verified by the RED mithril-client (acquisition infra) and is NEVER a
+BLUE trust root; no mithril/STM crate is imported under any BLUE crate path.
+"""
+source = "docs/clusters/PHASE4-N-Y/S1-mithril-import-authority.md; S7-real-mithril-binding.md"
+cross_ref = ["CN-ANCHOR-01", "CN-SEED-01", "DC-MITHRIL-01", "RO-MITHRIL-IMPORT-01"]
+code_locus = "crates/ade_ledger/src/bootstrap_anchor/binding.rs (verify_mithril_binding + MithrilManifestReport + closed MithrilImportError); crates/ade_runtime/src/mithril_import/ (RED manifest importer)"
+tests = ["mithril_binding_rejects_certified_point_other_than_seed_point", "mithril_anchor_rejects_field_mismatch", "mithril_import_fail_closed_blocks_storage_init"]
+ci_script = "ci/ci_check_mithril_uses_bootstrap_initial_state.sh"
+status = "enforced"
+introduced_in = "PHASE4-N-Y"
+strengthened_in = []
+cluster = "PHASE4-N-Y"
+attack_rationale = "If Mithril provenance were a BLUE trust root, a forged/wrong-point snapshot would seed an attacker-chosen ledger. If the binding compared a value to itself (the S1 tautology, fixed in S7), a snapshot certified at a different chain point than the seed dump would bind successfully. The cross-check against the independently-minted anchor closes both."
+open_obligation = "Provenance-binding (OI-S1.1 scope A). Seed-bytes-from-Mithril (option B) + a production wiring site with an independence gate are RO-MITHRIL-IMPORT-01."
+
+[[rules]]
+id = "DC-MITHRIL-01"
+tier = "derived"
+statement = """
+verify_mithril_binding is a pure deterministic BLUE predicate over its inputs (the
+manifest report + the anchor) — no I/O, no clock, no HashMap, no float, no String
+errors. Each field divergence maps to a distinct closed MithrilImportError variant
+(NetworkMagicMismatch, GenesisHashMismatch, CertifiedPointMismatch,
+CertificateHashMismatch, UnsupportedArtifactType); the compared sides come from two
+independent origins (Mithril manifest vs --json-seed-minted anchor), never a value
+vs itself.
+"""
+source = "docs/clusters/PHASE4-N-Y/S7-real-mithril-binding.md"
+cross_ref = ["CN-MITHRIL-01", "T-DET-01"]
+code_locus = "crates/ade_ledger/src/bootstrap_anchor/binding.rs"
+tests = ["mithril_anchor_binding_is_deterministic", "mithril_anchor_rejects_field_mismatch", "mithril_binding_rejects_certified_point_other_than_seed_point"]
+ci_script = "ci/ci_check_mithril_uses_bootstrap_initial_state.sh"
+status = "enforced"
+introduced_in = "PHASE4-N-Y"
+strengthened_in = []
+cluster = "PHASE4-N-Y"
+open_obligation = ""
+
+[[rules]]
+id = "DC-SYNC-01"
+tier = "derived"
+statement = """
+During network forward-sync, a block's preserved wire bytes and its WAL entry MUST
+be durable before the chain tip advances to it, and admission is chokepoint-only
+(decode -> validate_and_apply_header -> block_validity -> fork-choice). The GREEN
+forward-sync lifecycle reducer emits a closed SyncEffect set; AdvanceTip is
+constructible only after StoreBlockBytes+AppendWal (private AdmitPlan, single
+durable() emit site), and the RED pump fail-closes (TipBeforeDurable) on any
+out-of-order apply. Because tip is derived from stored blocks, recovery reconciles
+the chaindb to the WAL tail so a torn put_block/wal-append crash cannot incorporate
+an un-WAL'd orphan (S6).
+"""
+source = "docs/clusters/PHASE4-N-Y/S2-network-forward-sync.md; S6-torn-write-recovery-reconciliation.md"
+cross_ref = ["DC-CONS-20", "DC-STORE-01", "DC-STORE-02", "DC-STORE-05", "T-DET-01"]
+code_locus = "crates/ade_runtime/src/forward_sync/{reducer,pump}.rs; crates/ade_runtime/src/recovery/restart.rs (WAL-tail reconciliation)"
+tests = ["forward_sync_wal_and_bytes_precede_tip_advance", "forward_sync_replay_two_runs_byte_identical", "forward_sync_admission_through_chokepoints", "recovery_torn_put_block_before_wal_append_drops_orphan"]
+ci_script = "ci/ci_check_forward_sync_chokepoint_only.sh"
+status = "enforced"
+introduced_in = "PHASE4-N-Y"
+strengthened_in = []
+cluster = "PHASE4-N-Y"
+attack_rationale = "If the tip advanced before the WAL recorded a block, a power-loss crash would leave the chaindb tip ahead of the WAL; recovery (warm-start from chaindb.tip) would silently incorporate the un-admitted orphan, diverging from a clean run and breaking replay-equivalence. The type-encoded ordering + WAL-tail recovery reconciliation close it."
+open_obligation = ""
+
+[[rules]]
+id = "DC-GENESIS-SRC-01"
+tier = "derived"
+statement = """
+A controlled genesis enters initial state ONLY through the single closed
+bootstrap_initial_state authority (genesis_initial); the genesis->initial-state
+transform is a pure deterministic BLUE function; a non-Conway genesis fails closed
+(GenesisSourceError::NonConwayEra) in this cluster — no Byron->Conway historical
+replay path is invoked. No GenesisAnchor/MithrilAnchor trait or plugin seam.
+"""
+source = "docs/clusters/PHASE4-N-Y/S4-conway-genesis-source.md"
+cross_ref = ["CN-GENESIS-01", "CN-ANCHOR-01", "CN-NODE-01", "T-DET-01"]
+code_locus = "crates/ade_ledger/src/genesis_source.rs (genesis_initial_state + closed GenesisSourceError); crates/ade_runtime/src/genesis_bootstrap.rs"
+tests = ["conway_genesis_bootstrap_through_single_authority", "genesis_non_conway_fail_closed", "genesis_to_initial_state_deterministic", "genesis_path_fp_equals_snapshot_path_fp"]
+ci_script = "ci/ci_check_mithril_uses_bootstrap_initial_state.sh"
+status = "enforced"
+introduced_in = "PHASE4-N-Y"
+strengthened_in = []
+cluster = "PHASE4-N-Y"
+open_obligation = "Mainnet Byron->Conway historical genesis replay is RO-GENESIS-REPLAY-01 (its own era-by-era cluster), deliberately out of scope here."
+
+[[rules]]
+id = "DC-COMPAT-01"
+tier = "derived"
+statement = """
+Cardano compatibility is proven ONLY on observable surfaces — per-block accept/reject
+verdict, selected tip hash, block hashes, cardano-cli query-utxo result, protocol
+transcripts — with named fixtures pinning oracle versions (cardano_node_version,
+cardano_cli_version) and reproducible inputs. Asserting Ade's internal ledger
+fingerprint == a Haskell/cardano-node serialized-state hash is FORBIDDEN and
+CI-blocked. The only valid fingerprint-equality is internal Ade-vs-Ade
+(genesis-path == snapshot-path).
+"""
+source = "docs/clusters/PHASE4-N-Y/S5-compatibility-evidence.md"
+cross_ref = ["T-DET-01", "CN-OPERATOR-EVIDENCE-01", "RO-SYNC-EVIDENCE-01"]
+code_locus = "crates/ade_testkit/src/harness/sync_diff.rs; ci/ci_check_no_haskell_fingerprint_equality.sh"
+tests = ["sync_differential_snapshot_to_tip"]
+ci_script = "ci/ci_check_no_haskell_fingerprint_equality.sh"
+status = "enforced"
+introduced_in = "PHASE4-N-Y"
+strengthened_in = []
+cluster = "PHASE4-N-Y"
+attack_rationale = "Comparing Ade's Ade-canonical fingerprint to a Haskell serialized-state hash would either always fail (different serialization) or, if forced to pass, would smuggle a false equivalence claim. Compatibility must be proven on the surfaces both implementations actually expose."
+open_obligation = ""
+
+[[rules]]
+id = "RO-SYNC-EVIDENCE-01"
+tier = "release"
+statement = """
+A committed snapshot->tip sync-evidence manifest carries the closed schema (oracle
+versions, chain point, fixture refs, sha256, diff/acceptance result) and its sha256
+cross-checks the committed fixture; the gate is vacuously satisfied until a manifest
+is committed (mirrors CN-OPERATOR-EVIDENCE-01). Each discovered Haskell mismatch
+becomes a named regression fixture under corpus/sync/regressions/. The two-Haskell-
+node private-Conway-testnet live leg is operator-witnessed.
+"""
+source = "docs/clusters/PHASE4-N-Y/S5-compatibility-evidence.md"
+cross_ref = ["DC-COMPAT-01", "CN-OPERATOR-EVIDENCE-01"]
+code_locus = "ci/ci_check_sync_evidence_manifest_schema.sh; corpus/sync/regressions/; crates/ade_testkit/src/harness/sync_diff.rs"
+tests = ["regression_fixture_per_mismatch"]
+ci_script = "ci/ci_check_sync_evidence_manifest_schema.sh"
+status = "partial"
+introduced_in = "PHASE4-N-Y"
+strengthened_in = []
+cluster = "PHASE4-N-Y"
+open_obligation = "Schema + sha256 gate enforced (vacuous until a manifest is committed). The two-Haskell-node private-testnet + snapshot->tip live capture is operator-witnessed: blocked_until_operator_pass_executed (CE-Y-16). Reopen: operator commits a CE-Y-16 manifest; the gate then verifies schema + sha256."
