@@ -14,7 +14,7 @@ use ade_codec::CodecError;
 pub enum BootstrapAnchorError {
     /// CBOR primitive read/write error.
     Cbor(CodecError),
-    /// Decoded schema version did not match `SCHEMA_VERSION`.
+    /// Decoded schema version did not match `ANCHOR_SCHEMA_VERSION`.
     UnknownVersion { expected: u32, found: u32 },
     /// Decoded buffer did not match the expected closed CBOR
     /// shape (wrong array length, wrong hash byte width, etc.).

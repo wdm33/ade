@@ -14,7 +14,7 @@ pub mod error;
 
 pub use anchor::{
     decode_bootstrap_anchor, encode_bootstrap_anchor, BootstrapAnchor, SeedPoint, SeedProvenance,
-    SCHEMA_VERSION,
+    ANCHOR_SCHEMA_VERSION,
 };
 pub use binding::{verify_mithril_binding, MithrilAnchorFields, MithrilImportError};
 pub use error::BootstrapAnchorError;

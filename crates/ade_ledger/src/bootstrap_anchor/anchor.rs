@@ -20,7 +20,7 @@
 //! fields at construction (¬P-A3).
 //!
 //! DC-ANCHOR-01: canonical CBOR round-trip preserves byte-identity.
-//! `SCHEMA_VERSION = 2` is written into the encoded form; decode
+//! `ANCHOR_SCHEMA_VERSION = 2` is written into the encoded form; decode
 //! rejects unknown versions fail-fast.
 //!
 //! CN-MITHRIL-01 / DC-MITHRIL-01 (PHASE4-N-Y S1): the anchor records
@@ -41,7 +41,7 @@ use ade_types::{Hash32, SlotNo};
 use super::error::BootstrapAnchorError;
 
 /// Pinned wire schema version. Decode rejects any other.
-pub const SCHEMA_VERSION: u32 = 2;
+pub const ANCHOR_SCHEMA_VERSION: u32 = 2;
 
 const FIELDS_OUTER: u64 = 8;
 const SEED_POINT_FIELDS: u64 = 2;
@@ -100,7 +100,7 @@ pub enum SeedProvenance {
 /// Wire shape:
 /// ```text
 /// array(8) [
-///   uint   SCHEMA_VERSION (= 2),
+///   uint   ANCHOR_SCHEMA_VERSION (= 2),
 ///   uint   network_magic,
 ///   bytes(32) genesis_hash,
 ///   array(2) [ uint seed_point.slot, bytes(32) block_hash ],
@@ -120,7 +120,7 @@ pub fn encode_bootstrap_anchor(anchor: &BootstrapAnchor) -> Vec<u8> {
         &mut buf,
         ContainerEncoding::Definite(FIELDS_OUTER, canonical_width(FIELDS_OUTER)),
     );
-    write_uint_canonical(&mut buf, SCHEMA_VERSION as u64);
+    write_uint_canonical(&mut buf, ANCHOR_SCHEMA_VERSION as u64);
     write_uint_canonical(&mut buf, anchor.network_magic as u64);
     write_bytes_canonical(&mut buf, &anchor.genesis_hash.0);
 
@@ -174,9 +174,9 @@ pub fn decode_bootstrap_anchor(
     expect_definite_array(bytes, &mut o, FIELDS_OUTER, "outer")?;
 
     let version = read_u32_field(bytes, &mut o)?;
-    if version != SCHEMA_VERSION {
+    if version != ANCHOR_SCHEMA_VERSION {
         return Err(BootstrapAnchorError::UnknownVersion {
-            expected: SCHEMA_VERSION,
+            expected: ANCHOR_SCHEMA_VERSION,
             found: version,
         });
     }
@@ -458,7 +458,7 @@ mod tests {
             &mut buf,
             ContainerEncoding::Definite(FIELDS_OUTER, canonical_width(FIELDS_OUTER)),
         );
-        write_uint_canonical(&mut buf, SCHEMA_VERSION as u64); // version
+        write_uint_canonical(&mut buf, ANCHOR_SCHEMA_VERSION as u64); // version
         write_uint_canonical(&mut buf, 1); // network_magic
         write_bytes_canonical(&mut buf, &[0u8; 31]); // genesis_hash (short)
         // We don't need to fill the rest; decode will hit Structural first.
