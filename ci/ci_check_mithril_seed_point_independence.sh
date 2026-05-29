@@ -78,6 +78,26 @@ check_field_origin() {
 check_field_origin "seed_slot"
 check_field_origin "seed_block_hash"
 
+# Guard (c): CONTAINMENT (data-flow-resistant). Guard (b) only inspects
+# the literal RHS of the seed_slot/seed_block_hash lines, so a one-hop
+# local (`let q = import.report.certified_point.slot; ... seed_slot: q,`)
+# or a mutate-before-mint would re-collapse the two origins while (b)
+# stays green. Close that class: in the production composition the
+# manifest import may be referenced ONLY as whole values —
+# `import.provenance` (-> seed_provenance) and `&import.report` (-> the
+# verify call). Any field-drill into the import, or any mention of
+# `certified_point`, means a manifest point could be laundered into the
+# anchor's seed_point.
+if echo "$BODY" | grep -qE 'import\.report\.[A-Za-z_]'; then
+    print_fail "production composition drills into import.report.<field> (DC-MITHRIL-02): pass &import.report whole to verify_mithril_binding only — drilling lets a manifest point reach the seed_point path"
+fi
+if echo "$BODY" | grep -qE 'import\.provenance\.[A-Za-z_]'; then
+    print_fail "production composition drills into import.provenance.<field> (DC-MITHRIL-02): pass import.provenance whole to seed_provenance only"
+fi
+if echo "$BODY" | grep -qE '\bcertified_point\b'; then
+    print_fail "production composition names certified_point (DC-MITHRIL-02): the manifest's certified_point must never be extracted into the seed_point path — pass the whole report to verify_mithril_binding instead"
+fi
+
 if (( FAILED == 0 )); then
     echo "OK: Mithril bootstrap mints seed_point from operator inputs only (DC-MITHRIL-02); verify_mithril_binding precedes bootstrap_initial_state (CN-MITHRIL-01)"
 fi
