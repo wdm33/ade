@@ -17,14 +17,19 @@
 //! mint, Ade owns the runtime representation — the anchor is the
 //! single point of truth for "what we imported from the oracle".
 
-use ade_ledger::bootstrap_anchor::{BootstrapAnchor, SeedPoint};
+use ade_ledger::bootstrap_anchor::{BootstrapAnchor, SeedPoint, SeedProvenance};
 use ade_types::{Hash32, SlotNo};
 
 use crate::seed_import::UtxoFingerprint;
 
-/// Closed input bundle for [`mint`]. All six fields required; no
+/// Closed input bundle for [`mint`]. All fields required; no
 /// `Default` impl; no `#[non_exhaustive]`. Construction failure
 /// is a compile error, not a runtime error.
+///
+/// `seed_provenance` records how the seed was sourced (cardano-cli
+/// JSON or a verified Mithril snapshot, PHASE4-N-Y S1). The caller
+/// supplies it; the cardano-cli path passes
+/// `SeedProvenance::CardanoCliJson`.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct MintInputs {
     pub network_magic: u32,
@@ -34,6 +39,7 @@ pub struct MintInputs {
     pub seed_artifact_hash: Hash32,
     pub imported_utxo_fingerprint: UtxoFingerprint,
     pub initial_ledger_fingerprint: Hash32,
+    pub seed_provenance: SeedProvenance,
 }
 
 /// SOLE authority: mint a `BootstrapAnchor` from typed import
@@ -49,6 +55,7 @@ pub fn mint(inputs: MintInputs) -> BootstrapAnchor {
         seed_artifact_hash: inputs.seed_artifact_hash,
         imported_utxo_fingerprint: inputs.imported_utxo_fingerprint.0,
         initial_ledger_fingerprint: inputs.initial_ledger_fingerprint,
+        seed_provenance: inputs.seed_provenance,
     }
 }
 
@@ -69,6 +76,7 @@ mod tests {
             seed_artifact_hash: Hash32([0x33; 32]),
             imported_utxo_fingerprint: UtxoFingerprint(Hash32([0x44; 32])),
             initial_ledger_fingerprint: Hash32([0x55; 32]),
+            seed_provenance: SeedProvenance::CardanoCliJson,
         }
     }
 

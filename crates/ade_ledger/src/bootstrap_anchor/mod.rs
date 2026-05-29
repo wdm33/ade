@@ -9,9 +9,12 @@
 //! oracle-seed bootstrap path (PHASE4-N-M-A S2).
 
 pub mod anchor;
+pub mod binding;
 pub mod error;
 
 pub use anchor::{
-    decode_bootstrap_anchor, encode_bootstrap_anchor, BootstrapAnchor, SeedPoint, SCHEMA_VERSION,
+    decode_bootstrap_anchor, encode_bootstrap_anchor, BootstrapAnchor, SeedPoint, SeedProvenance,
+    SCHEMA_VERSION,
 };
+pub use binding::{verify_mithril_binding, MithrilAnchorFields, MithrilImportError};
 pub use error::BootstrapAnchorError;

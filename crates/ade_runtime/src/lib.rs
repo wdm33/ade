@@ -14,6 +14,7 @@ pub mod chaindb;
 pub mod clock;
 pub mod consensus;
 pub mod consensus_inputs;
+pub mod mithril_import;
 pub mod network;
 pub mod orchestrator;
 pub mod producer;

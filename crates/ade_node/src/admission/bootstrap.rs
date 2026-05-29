@@ -41,6 +41,7 @@ use ade_runtime::admission::{
     dial_for_admission, run_admission_wire_pump,
     AdmissionPeerEvent as RuntimeAdmissionPeerEvent,
 };
+use ade_ledger::bootstrap_anchor::SeedProvenance;
 use ade_runtime::bootstrap_anchor::{mint, MintInputs};
 use ade_runtime::chaindb::{
     InMemoryChainDb, PersistentChainDb, PersistentChainDbOptions, SnapshotStore,
@@ -161,6 +162,7 @@ async fn run_admission_inner(
             .unwrap_or(Hash32([0u8; 32])),
         imported_utxo_fingerprint: utxo_fp,
         initial_ledger_fingerprint: initial_fp.clone(),
+        seed_provenance: SeedProvenance::CardanoCliJson,
     });
 
     // 6. Build the post-import ledger + chain_dep used by the

@@ -20,8 +20,17 @@
 //! fields at construction (¬P-A3).
 //!
 //! DC-ANCHOR-01: canonical CBOR round-trip preserves byte-identity.
-//! `SCHEMA_VERSION = 1` is written into the encoded form; decode
+//! `SCHEMA_VERSION = 2` is written into the encoded form; decode
 //! rejects unknown versions fail-fast.
+//!
+//! CN-MITHRIL-01 / DC-MITHRIL-01 (PHASE4-N-Y S1): the anchor records
+//! how its seed was sourced via the closed `SeedProvenance` field —
+//! either the cardano-cli JSON path (`CardanoCliJson`) or a verified
+//! Mithril snapshot (`Mithril { .. }`). The Mithril variant records
+//! the mithril-client-verified certificate hash + certified point +
+//! immutable range as closed provenance; the STM multisig is never a
+//! BLUE trust root (verified by the RED mithril-client). Schema bumped
+//! 1→2 (additive 8th outer field).
 
 use ade_codec::cbor::{
     canonical_width, read_array_header, read_bytes, read_uint, write_array_header,
@@ -32,10 +41,15 @@ use ade_types::{Hash32, SlotNo};
 use super::error::BootstrapAnchorError;
 
 /// Pinned wire schema version. Decode rejects any other.
-pub const SCHEMA_VERSION: u32 = 1;
+pub const SCHEMA_VERSION: u32 = 2;
 
-const FIELDS_OUTER: u64 = 7;
+const FIELDS_OUTER: u64 = 8;
 const SEED_POINT_FIELDS: u64 = 2;
+
+/// Closed discriminants for the `seed_provenance` field. Written as
+/// the first element of the provenance array.
+const PROVENANCE_TAG_CARDANO_CLI_JSON: u64 = 0;
+const PROVENANCE_TAG_MITHRIL: u64 = 1;
 
 /// Closed record: the provenance bundle for an oracle-seed
 /// bootstrap. All 6 fields required at construction; no
@@ -52,6 +66,7 @@ pub struct BootstrapAnchor {
     pub seed_artifact_hash: Hash32,
     pub imported_utxo_fingerprint: Hash32,
     pub initial_ledger_fingerprint: Hash32,
+    pub seed_provenance: SeedProvenance,
 }
 
 /// Closed point reference (slot + block hash). Mirrors the
@@ -63,18 +78,40 @@ pub struct SeedPoint {
     pub block_hash: Hash32,
 }
 
+/// Closed provenance of the imported seed. Makes the seed's origin
+/// explicit and illegal states unrepresentable (DC-MITHRIL-01). The
+/// `Mithril` variant records the mithril-client-verified certificate
+/// hash plus the certified point + immutable range it binds — the
+/// STM signature itself is never re-verified or trusted in BLUE.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum SeedProvenance {
+    /// Seed imported from a cardano-cli JSON dump (CN-SEED-01 path).
+    CardanoCliJson,
+    /// Seed bound to a verified Mithril certificate.
+    Mithril {
+        certificate_hash: Hash32,
+        certified_point: SeedPoint,
+        immutable_range: (u64, u64),
+    },
+}
+
 /// Canonical CBOR encode. CN-ANCHOR-01: sole pub encoder.
 ///
 /// Wire shape:
 /// ```text
-/// array(7) [
-///   uint   SCHEMA_VERSION (= 1),
+/// array(8) [
+///   uint   SCHEMA_VERSION (= 2),
 ///   uint   network_magic,
 ///   bytes(32) genesis_hash,
 ///   array(2) [ uint seed_point.slot, bytes(32) block_hash ],
 ///   bytes(32) seed_artifact_hash,
 ///   bytes(32) imported_utxo_fingerprint,
 ///   bytes(32) initial_ledger_fingerprint,
+///   seed_provenance:
+///     CardanoCliJson  => array(1) [ uint 0 ]
+///     Mithril         => array(5) [ uint 1, bytes(32) certificate_hash,
+///                                   array(2) [ uint slot, bytes(32) block_hash ],
+///                                   uint immutable_range.0, uint immutable_range.1 ],
 /// ]
 /// ```
 pub fn encode_bootstrap_anchor(anchor: &BootstrapAnchor) -> Vec<u8> {
@@ -97,7 +134,34 @@ pub fn encode_bootstrap_anchor(anchor: &BootstrapAnchor) -> Vec<u8> {
     write_bytes_canonical(&mut buf, &anchor.seed_artifact_hash.0);
     write_bytes_canonical(&mut buf, &anchor.imported_utxo_fingerprint.0);
     write_bytes_canonical(&mut buf, &anchor.initial_ledger_fingerprint.0);
+    encode_seed_provenance(&mut buf, &anchor.seed_provenance);
     buf
+}
+
+fn encode_seed_provenance(buf: &mut Vec<u8>, provenance: &SeedProvenance) {
+    match provenance {
+        SeedProvenance::CardanoCliJson => {
+            write_array_header(buf, ContainerEncoding::Definite(1, canonical_width(1)));
+            write_uint_canonical(buf, PROVENANCE_TAG_CARDANO_CLI_JSON);
+        }
+        SeedProvenance::Mithril {
+            certificate_hash,
+            certified_point,
+            immutable_range,
+        } => {
+            write_array_header(buf, ContainerEncoding::Definite(5, canonical_width(5)));
+            write_uint_canonical(buf, PROVENANCE_TAG_MITHRIL);
+            write_bytes_canonical(buf, &certificate_hash.0);
+            write_array_header(
+                buf,
+                ContainerEncoding::Definite(SEED_POINT_FIELDS, canonical_width(SEED_POINT_FIELDS)),
+            );
+            write_uint_canonical(buf, certified_point.slot.0);
+            write_bytes_canonical(buf, &certified_point.block_hash.0);
+            write_uint_canonical(buf, immutable_range.0);
+            write_uint_canonical(buf, immutable_range.1);
+        }
+    }
 }
 
 /// Canonical CBOR decode. CN-ANCHOR-01: sole pub decoder. Fail-
@@ -131,6 +195,7 @@ pub fn decode_bootstrap_anchor(
     let seed_artifact_hash = read_hash32(bytes, &mut o)?;
     let imported_utxo_fingerprint = read_hash32(bytes, &mut o)?;
     let initial_ledger_fingerprint = read_hash32(bytes, &mut o)?;
+    let seed_provenance = decode_seed_provenance(bytes, &mut o)?;
 
     if o != bytes.len() {
         return Err(BootstrapAnchorError::TrailingBytes {
@@ -145,7 +210,58 @@ pub fn decode_bootstrap_anchor(
         seed_artifact_hash,
         imported_utxo_fingerprint,
         initial_ledger_fingerprint,
+        seed_provenance,
     })
+}
+
+fn decode_seed_provenance(
+    bytes: &[u8],
+    offset: &mut usize,
+) -> Result<SeedProvenance, BootstrapAnchorError> {
+    let enc = read_array_header(bytes, offset)?;
+    let len = match enc {
+        ContainerEncoding::Definite(n, _) => n,
+        ContainerEncoding::Indefinite => {
+            return Err(BootstrapAnchorError::Structural {
+                reason: "indefinite-length array not allowed in seed_provenance",
+            })
+        }
+    };
+    let tag = read_u64_field(bytes, offset)?;
+    match tag {
+        PROVENANCE_TAG_CARDANO_CLI_JSON => {
+            if len != 1 {
+                return Err(BootstrapAnchorError::Structural {
+                    reason: "CardanoCliJson provenance has wrong field count",
+                });
+            }
+            Ok(SeedProvenance::CardanoCliJson)
+        }
+        PROVENANCE_TAG_MITHRIL => {
+            if len != 5 {
+                return Err(BootstrapAnchorError::Structural {
+                    reason: "Mithril provenance has wrong field count",
+                });
+            }
+            let certificate_hash = read_hash32(bytes, offset)?;
+            expect_definite_array(bytes, offset, SEED_POINT_FIELDS, "seed_point")?;
+            let slot = read_u64_field(bytes, offset)?;
+            let block_hash = read_hash32(bytes, offset)?;
+            let lo = read_u64_field(bytes, offset)?;
+            let hi = read_u64_field(bytes, offset)?;
+            Ok(SeedProvenance::Mithril {
+                certificate_hash,
+                certified_point: SeedPoint {
+                    slot: SlotNo(slot),
+                    block_hash,
+                },
+                immutable_range: (lo, hi),
+            })
+        }
+        _ => Err(BootstrapAnchorError::Structural {
+            reason: "unknown seed_provenance discriminant",
+        }),
+    }
 }
 
 fn expect_definite_array(
@@ -215,6 +331,21 @@ mod tests {
             seed_artifact_hash: Hash32([0x33; 32]),
             imported_utxo_fingerprint: Hash32([0x44; 32]),
             initial_ledger_fingerprint: Hash32([0x55; 32]),
+            seed_provenance: SeedProvenance::CardanoCliJson,
+        }
+    }
+
+    fn sample_mithril() -> BootstrapAnchor {
+        BootstrapAnchor {
+            seed_provenance: SeedProvenance::Mithril {
+                certificate_hash: Hash32([0x66; 32]),
+                certified_point: SeedPoint {
+                    slot: SlotNo(23013663),
+                    block_hash: Hash32([0x22; 32]),
+                },
+                immutable_range: (0, 4242),
+            },
+            ..sample()
         }
     }
 
@@ -234,32 +365,49 @@ mod tests {
 
     #[test]
     fn bootstrap_anchor_decode_rejects_unknown_version() {
-        let mut bytes = encode_bootstrap_anchor(&sample());
-        // Locate + bump the first uint (version) — it's the 2nd
-        // byte (after the array header 0x87): we wrote 1, so byte
-        // 1 = 0x01. Replace with 99 (CBOR uint: 0x18 0x63 — two
-        // bytes). Easier: re-encode a tampered anchor by hand.
-        // Simpler: build an anchor with version=99 manually.
-        // We just slice + swap the second byte for a one-byte
-        // value 0x18 (uint-8 prefix) won't work without expanding
-        // the buffer. Instead, manually craft a 7-tuple with
-        // a version we control.
+        // Craft an outer array with version=99 then splice the rest
+        // of a fresh v2 encoding. Outer-array header is 1 byte
+        // (0x88 for array(8)); version (=2) is the next 1 byte
+        // (0x02). So the payload after the version starts at index 2.
         let mut buf = Vec::new();
         write_array_header(
             &mut buf,
             ContainerEncoding::Definite(FIELDS_OUTER, canonical_width(FIELDS_OUTER)),
         );
         write_uint_canonical(&mut buf, 99);
-        let _ = &mut bytes;
-        // Append the rest from a fresh sample encoding (drop the
-        // outer-array header + the version byte).
         let fresh = encode_bootstrap_anchor(&sample());
-        // Outer-array header is 1 byte (0x87); version (=1) is the
-        // next 1 byte (0x01). So payload starts at index 2.
         buf.extend_from_slice(&fresh[2..]);
         match decode_bootstrap_anchor(&buf) {
-            Err(BootstrapAnchorError::UnknownVersion { expected: 1, found: 99 }) => {}
+            Err(BootstrapAnchorError::UnknownVersion { expected: 2, found: 99 }) => {}
             other => panic!("expected UnknownVersion, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn bootstrap_anchor_v2_round_trips_and_rejects_unknown_version() {
+        // v2 round-trips for both provenance variants.
+        for a in [sample(), sample_mithril()] {
+            let bytes = encode_bootstrap_anchor(&a);
+            let decoded = decode_bootstrap_anchor(&bytes).expect("v2 decode");
+            assert_eq!(decoded, a);
+        }
+        // A v2 encoding decodes; a v3 (and any other) version is
+        // rejected fail-fast.
+        let fresh = encode_bootstrap_anchor(&sample());
+        assert!(decode_bootstrap_anchor(&fresh).is_ok());
+        for bad_version in [0u64, 1, 3, 99] {
+            let mut buf = Vec::new();
+            write_array_header(
+                &mut buf,
+                ContainerEncoding::Definite(FIELDS_OUTER, canonical_width(FIELDS_OUTER)),
+            );
+            write_uint_canonical(&mut buf, bad_version);
+            buf.extend_from_slice(&fresh[2..]);
+            match decode_bootstrap_anchor(&buf) {
+                Err(BootstrapAnchorError::UnknownVersion { expected: 2, found })
+                    if found == bad_version as u32 => {}
+                other => panic!("expected UnknownVersion for v{bad_version}, got {other:?}"),
+            }
         }
     }
 
@@ -310,7 +458,7 @@ mod tests {
             &mut buf,
             ContainerEncoding::Definite(FIELDS_OUTER, canonical_width(FIELDS_OUTER)),
         );
-        write_uint_canonical(&mut buf, 1); // version
+        write_uint_canonical(&mut buf, SCHEMA_VERSION as u64); // version
         write_uint_canonical(&mut buf, 1); // network_magic
         write_bytes_canonical(&mut buf, &[0u8; 31]); // genesis_hash (short)
         // We don't need to fill the rest; decode will hit Structural first.
@@ -350,6 +498,7 @@ mod tests {
             seed_artifact_hash,
             imported_utxo_fingerprint,
             initial_ledger_fingerprint,
+            seed_provenance,
         } = a;
         assert_eq!(network_magic, 1);
         assert_eq!(genesis_hash.0[0], 0x11);
@@ -357,5 +506,6 @@ mod tests {
         assert_eq!(seed_artifact_hash.0[0], 0x33);
         assert_eq!(imported_utxo_fingerprint.0[0], 0x44);
         assert_eq!(initial_ledger_fingerprint.0[0], 0x55);
+        assert_eq!(seed_provenance, SeedProvenance::CardanoCliJson);
     }
 }
