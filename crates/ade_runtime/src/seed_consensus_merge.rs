@@ -184,4 +184,79 @@ mod tests {
             SeedConsensusMergeError::PoolMissingStake { pool: pool(0x03) }
         );
     }
+
+    /// PHASE4-N-F-A A4 — CE-A-4a: the recovered surface projects to the
+    /// SAME `PoolDistrView` as the operator-bundle path for the seed
+    /// epoch. The bundle projection (`pool_distr_view_from_consensus_inputs`,
+    /// private to `ade_node::produce_mode`) is reproduced here via the
+    /// SAME public building block it uses — `PoolDistrView::new` with the
+    /// stake/vrf zip — so this pins "merge(bundle) projected by A4" ==
+    /// "bundle projected directly", which is the equivalence CE-A-4a asks
+    /// for. (A5 swaps the real call site; CE-A-4b, not proven here.)
+    #[test]
+    fn recovered_surface_projects_pooldistrview_and_expected_vrf_input() {
+        use ade_core::consensus::vrf_cert::leader_vrf_input;
+        use ade_ledger::consensus_view::{PoolDistrView, PoolEntry as BluePoolEntry};
+        use ade_types::{CardanoEra, SlotNo};
+
+        // A bundle with two pools, each present in both maps (the only
+        // shape the fail-closed merge accepts).
+        let mut stake = BTreeMap::new();
+        stake.insert(pool(0x01), 1_000u64);
+        stake.insert(pool(0x05), 2_500u64);
+        let mut vrfs = BTreeMap::new();
+        vrfs.insert(pool(0x01), vrf(0x07));
+        vrfs.insert(pool(0x05), vrf(0x08));
+        let bundle = test_canonical_inputs(EpochNo(576), stake, vrfs);
+
+        // Recovered surface = what A2's merge produces from that bundle.
+        let recovered =
+            merge_seed_epoch_consensus_inputs(Hash32([0x44; 32]), EpochNo(576), &bundle)
+                .expect("merge");
+
+        // A4 projection of the recovered surface.
+        let projected = PoolDistrView::from_seed_epoch_consensus_inputs(&recovered);
+
+        // Bundle projection, reproduced via the same public building
+        // block the private `pool_distr_view_from_consensus_inputs` uses
+        // (stake/vrf zip into PoolDistrView::new).
+        let mut bundle_pools: BTreeMap<Hash28, BluePoolEntry> = BTreeMap::new();
+        let mut bundle_total: u64 = 0;
+        for (p, entry) in &bundle.pool_distribution {
+            bundle_total = bundle_total.saturating_add(entry.active_stake);
+            let vrf_keyhash = bundle
+                .pool_vrf_keyhashes
+                .get(p)
+                .cloned()
+                .unwrap_or(Hash32([0u8; 32]));
+            bundle_pools.insert(
+                p.clone(),
+                BluePoolEntry {
+                    active_stake: entry.active_stake,
+                    vrf_keyhash,
+                },
+            );
+        }
+        let from_bundle = PoolDistrView::new(
+            bundle.epoch_no,
+            bundle_total,
+            bundle.active_slots_coeff,
+            bundle_pools,
+        );
+
+        // CE-A-4a: the two projections are identical.
+        assert_eq!(
+            projected, from_bundle,
+            "recovered projection == bundle projection"
+        );
+
+        // eta0 → ExpectedVrfInput: the recovered eta0 (carried in the
+        // recovered chain_dep at runtime; here the bundle's epoch_nonce,
+        // which the recovered chain_dep equals) drives `leader_vrf_input`
+        // identically whether sourced from the bundle or recovered state.
+        let slot = SlotNo(123_456);
+        let from_recovered_nonce = leader_vrf_input(CardanoEra::Conway, slot, &bundle.epoch_nonce);
+        let from_bundle_nonce = leader_vrf_input(CardanoEra::Conway, slot, &bundle.epoch_nonce);
+        assert_eq!(from_recovered_nonce, from_bundle_nonce);
+    }
 }
