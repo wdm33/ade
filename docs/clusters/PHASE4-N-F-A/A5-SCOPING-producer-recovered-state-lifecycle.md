@@ -64,9 +64,17 @@ lifecycle **without smuggling the forge-time operator bundle back in.**
     `genesis_initial` (`SeedEpochConsensusSource::NotRequired`);
   - forges via `run_real_forge`.
   It has **no** `FileWalStore`, **no** `PersistentChainDb`, **no**
-  `BootstrapAnchor` persistence, **no** sidecar `put`/`get`, **no**
+  `BootstrapAnchor` mint/persistence, **no** sidecar `put`/`get`, **no**
   composer call, **no** warm-start. It never persists → nothing to
-  recover.
+  recover. *(Two "anchor" false-positives to pre-empt: the producer
+  passes a zero-hash `BootstrapAnchorHash(Hash32([0u8;32]))` placeholder
+  to `make_schedule_for_imported_window` (`produce_mode.rs:447`) — a null
+  schedule arg, not a real anchor; and it holds a `GenesisAnchor`
+  (`coordinator.rs:48`) which is a **forge timing/KES-period** anchor
+  (slot-zero time, KES periods), NOT the verified-bootstrap
+  `BootstrapAnchor` identity/provenance object the recovered-state
+  lifecycle is keyed by. The producer touches neither real
+  `BootstrapAnchor`.)*
 - **`Mode::Admission` → `run_admission_inner`** (`admission/bootstrap.rs`)
   — has SOME lifecycle infra: `mint(MintInputs{…})` (anchor) +
   `FileWalStore::open` + `run_admission`. But it **still** sources
