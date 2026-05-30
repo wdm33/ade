@@ -57,11 +57,22 @@ if ! echo "$PROD_BODY" | grep -qE 'pub fn bootstrap_initial_state'; then
     print_fail "bootstrap_initial_state missing"
 fi
 
-# Positive: the function's return shape mentions LedgerState +
-# PraosChainDepState + ChainTip.
-if ! echo "$PROD_BODY" | tr '\n' ' ' | grep -qE 'pub fn bootstrap_initial_state[^{]*Result<[^>]*LedgerState[^>]*PraosChainDepState[^>]*ChainTip'; then
-    print_fail "bootstrap_initial_state must return Result<(LedgerState, PraosChainDepState, Option<ChainTip>), _>"
+# Positive: the function returns the named BootstrapState output
+# struct. (Repaired PHASE4-N-F-C L1: PHASE4-N-F-A A3b replaced the bare
+# `(LedgerState, PraosChainDepState, Option<ChainTip>)` triple with the
+# named `BootstrapState` struct that carries those three fields plus the
+# optional recovered seed-epoch consensus inputs. This gate had gone
+# stale-RED on `main` against the old triple shape.)
+if ! echo "$PROD_BODY" | tr '\n' ' ' | grep -qE 'pub fn bootstrap_initial_state[^{]*->[^{]*Result<\s*BootstrapState\s*,'; then
+    print_fail "bootstrap_initial_state must return Result<BootstrapState, _>"
 fi
+# And BootstrapState must still carry the ledger + chain_dep + tip the
+# initial-state contract requires (no silent field drop).
+for field in 'ledger:\s*LedgerState' 'chain_dep:\s*PraosChainDepState' 'tip:\s*Option<ChainTip>'; do
+    if ! echo "$PROD_BODY" | tr '\n' ' ' | grep -qE "pub struct BootstrapState\s*\{[^}]*${field}"; then
+        print_fail "BootstrapState must carry field matching: ${field}"
+    fi
+done
 
 # Positive: warm-start branch calls the materialize authority.
 if ! echo "$PROD_BODY" | grep -qE 'materialize_rolled_back_state\b'; then

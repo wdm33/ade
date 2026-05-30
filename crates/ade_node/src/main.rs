@@ -129,6 +129,14 @@ async fn main() -> ExitCode {
             };
             ade_node::produce_mode::run_produce_mode(pcli, shutdown_rx).await
         }
+        Mode::Node => {
+            // PHASE4-N-F-C: the real Ade node lifecycle owner. It opens
+            // its own persistent stores; drop the wire-only writer so no
+            // stray empty JSONL lingers.
+            drop(writer);
+            let _ = std::fs::remove_file(&cli.log_path);
+            ade_node::run_node_lifecycle(cli, shutdown_rx).await
+        }
     }
 }
 
@@ -145,7 +153,7 @@ fn print_cli_error(e: &CliError) {
         }
         CliError::UnknownMode(m) => {
             eprintln!(
-                "ade_node: --mode {} is not a known mode (expected wire_only | admission | key_gen_kes)",
+                "ade_node: --mode {} is not a known mode (expected wire_only | admission | key_gen_kes | produce | node)",
                 m
             );
         }

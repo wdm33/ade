@@ -37,6 +37,15 @@ pub enum Mode {
     /// Required flags: `--listen`, `--cold-skey`, `--kes-skey`,
     /// `--vrf-skey`, `--opcert`, `--genesis-file`.
     Produce,
+    /// PHASE4-N-F-C: the real Ade node lifecycle owner. Opens a
+    /// persistent ChainDb + FileWalStore, classifies first-run vs
+    /// warm-start as a pure function of on-disk state, and routes
+    /// initial state solely through the single `bootstrap_initial_state`
+    /// authority. L1 stands up the owner skeleton + branch; both arms
+    /// fail closed pending the Mithril first-run (L2) and warm-start
+    /// recovery (L3) wiring. Required flags: `--snapshot-dir`,
+    /// `--wal-dir`.
+    Node,
 }
 
 impl Mode {
@@ -46,6 +55,7 @@ impl Mode {
             "admission" => Some(Self::Admission),
             "key_gen_kes" => Some(Self::KeyGenKes),
             "produce" => Some(Self::Produce),
+            "node" => Some(Self::Node),
             _ => None,
         }
     }

@@ -19,6 +19,7 @@ pub mod cli;
 pub mod key_gen;
 pub mod live_log;
 pub mod node;
+pub mod node_lifecycle;
 pub mod produce_mode;
 pub mod wire_only;
 
@@ -35,3 +36,4 @@ pub use node::{
 pub use wire_only::{
     run_wire_only, PeerOutcome, EXIT_LIVE_PASS_PEER_FAILURE,
 };
+pub use node_lifecycle::{run_node_lifecycle, EXIT_NODE_LIFECYCLE_UNWIRED};
