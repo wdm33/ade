@@ -1,103 +1,126 @@
-# Slice PHASE4-N-F-C / C1 — Choose & stand up the production lifecycle owner
+# Slice PHASE4-N-F-C / L1 — Lifecycle owner skeleton + branch (`--mode node`)
+
+> **Supersedes the withdrawn "C1 — evolve `Mode::Admission` (Option A)" slice.** Reading the actual code
+> disproved the premise: `admission::run_admission_inner` builds ledger/chain_dep manually via
+> `seed_to_snapshot` and **never calls `bootstrap_initial_state`** (its module banner claims a
+> `bootstrap_initial_state` warm-start that the body does not perform). Evolving admission would mean
+> *adding* the authority call to a mode whose job is peer-verdict comparison. The owner decision is
+> therefore resolved the other way: a **dedicated `--mode node` lifecycle owner** built on the paths that
+> already route through the single bootstrap authority. `produce_mode` and `admission` are demoted to
+> diagnostic; neither is the Ade node lifecycle.
 
 ## 2. Slice Header
-- **Slice Name:** Select the production recovered-state lifecycle owner (recommended: evolve `Mode::Admission`), stand up its owner boundary routed solely through `bootstrap_initial_state`, add the lifecycle-owner CI gate, and record the committed A-vs-B rationale — leaving `run_produce_mode` diagnostic/legacy, not bounty-primary.
-- **Cluster:** PHASE4-N-F-C — Producer Recovered-State Lifecycle.
+- **Slice Name:** Stand up the `--mode node` Ade node lifecycle owner over `PersistentChainDb` +
+  `FileWalStore`, with a first-run-vs-warm-start branch that is a pure function of on-disk state, routed
+  solely through `bootstrap_initial_state`. Repair the two stale-on-`main` CN-NODE-01 gates.
+- **Cluster:** PHASE4-N-F-C — Build the real Ade node lifecycle.
 - **Status:** Proposed.
-- **Cluster Exit Criteria Addressed:**
-  - [ ] **CE-C-1** — production owner stood up & routed through the single authority (mechanical spine: mode-closure green; bootstrap-closure green; lifecycle owner uses `bootstrap_initial_state`).
-- **Slice Dependencies:** none (first slice of the cluster). Consumes only shipped N-F-A/N-K/N-T/N-Y surfaces.
+- **Cluster Exit Criteria Addressed:** CE-L-1.
+- **Slice Dependencies:** none (first slice). Consumes only shipped surfaces.
 
 ## 3. Implementation Instruction (AI)
-Implement §10 only. This is the **owner-selection + skeleton + gate + rationale** slice. Choose **Option A (evolve `Mode::Admission`)** unless a hard blocker is discovered (§9) — but the committed decision artifact `C1-DECISION-production-owner.md` must actually **show the A-vs-B call-graph comparison and the rejection criteria**, not merely assert Option A. Add the candidate gate `ci_check_lifecycle_owner_uses_bootstrap_initial_state.sh`. Do **NOT** wire production bootstrap composition (C2), warm-start recovery (C3), the consume-side fence (C5), produce handoff (C4), or BA-02 evidence (C6). Do **NOT** make `run_produce_mode` consume the recovered surface. Leave the diagnostic `produce_mode` path working unchanged. Commit with the model-attribution trailer.
+Implement §10 only. Stand up the `--mode node` owner skeleton + the on-disk branch + repair the two gates.
+Do NOT wire Mithril first-run composition (L2), warm-start recovery (L3), peer-fetch→apply (L4), produce
+handoff (L5), or BA-02 evidence (L6). Do NOT make `produce_mode` or `admission` the lifecycle owner. Leave
+both working as diagnostic modes. Commit with the model-attribution trailer.
 
 ## 4. Intent
-Make it impossible for PHASE4-N-F-C to proceed with an undecided or duplicated production lifecycle owner: exactly one named owner threads verified-bootstrap/recovery→produce, and it obtains initial state **solely** through `bootstrap_initial_state` — no second bootstrap/storage-init authority. This slice fixes *who owns the lifecycle* and proves the single-authority routing mechanically, so C2–C4 attach to a settled owner. *(Strengthens `CN-NODE-01`; sets up candidate `DC-CINPUT-02b`/`CN-CINPUT-03` consumed by C4/C5.)*
+Make it impossible for PHASE4-N-F-C to proceed without exactly one named lifecycle owner that obtains
+initial state **solely** through `bootstrap_initial_state` (CN-NODE-01) and whose first-run-vs-warm-start
+decision is a pure function of what is persisted on disk. No Mithril/genesis/bundle/cold fallback path
+exists in the branch.
 
 ## 5. Scope
-- **Modules / crates:**
-  - `ade_node` (RED) — the chosen owner boundary. **Recommended (Option A):** `ade_node::admission::bootstrap` (`run_admission_inner`) is named/annotated as the production recovered-state lifecycle owner; `main.rs` dispatch unchanged in shape (mode set stays closed). No new `Mode` variant in Option A.
-  - `ci/ci_check_lifecycle_owner_uses_bootstrap_initial_state.sh` (new candidate gate).
-  - `docs/clusters/PHASE4-N-F-C/C1-DECISION-production-owner.md` (new committed rationale).
-- **State machines affected:** none. (No transition added; this slice names the owner and adds a CI gate.)
-- **Persistence impact:** none. (C2 adds the persistent-store composition; C1 does not persist or recover.)
-- **Network-visible impact:** none.
-- **Out of scope:** production sidecar persist (C2), warm-start recovery wiring (C3), consume-side containment-gate extension (C5), produce-handoff/forge-base-from-recovered (C4), BA-02 evidence (C6), any change making `run_produce_mode` the bounty-primary recovered-state producer, any registry promotion, any grounding-doc regeneration.
+- **Modules / crates:** `ade_node` (RED) — new `Mode::Node` + its `run_node_lifecycle` owner over
+  `PersistentChainDb` + `FileWalStore`; `cli.rs` + `main.rs` closed-mode dispatch; `ci/` — the two repaired
+  gates + the candidate owner gate.
+- **State machines affected:** none (the branch is a pure on-disk-state classifier; no new authoritative
+  transition).
+- **Persistence impact:** opens `PersistentChainDb` + `FileWalStore`; persists nothing new in L1 (L2 adds
+  the sidecar; L4 adds blocks).
+- **Network-visible impact:** none in L1.
+- **Out of scope:** L2–L6 entirely.
 
 ## 6. Execution Boundary (TCB color)
-- **BLUE:** none changed. (No new authority — A5 §9.)
-- **GREEN:** none in this slice. (The first-run-vs-warm-start branch decision is C3.)
-- **RED:** the lifecycle-owner boundary in `ade_node` (Option A: `admission::bootstrap`). Owner I/O (store/WAL/peer) is RED; C1 only names the boundary and asserts its routing — it adds no new I/O.
-- **CI (enforcement, not a color):** `ci_check_lifecycle_owner_uses_bootstrap_initial_state.sh`.
-- No ambiguous colors leave implementation: owner = RED; no BLUE/GREEN change.
+- **BLUE:** none changed.
+- **GREEN:** the first-run-vs-warm-start branch classifier (pure over on-disk state) — `ade_runtime`
+  GREEN-by-content, or inline in the RED owner with a banner; resolve at implement time.
+- **RED:** the `--mode node` owner/driver (store/WAL open, dispatch).
+- **CI:** repaired `ci_check_node_mode_closure.sh` (mode set grows to include `Node`, still closed, no
+  wildcard arm); repaired `ci_check_bootstrap_closure.sh` (expects the current `BootstrapState` return,
+  not the pre-A3b tuple); candidate `ci_check_lifecycle_owner_uses_bootstrap_initial_state.sh`.
 
 ## 7. Invariants Preserved
-- `CN-NODE-01` — `bootstrap_initial_state` (`bootstrap.rs:159`) stays the sole bootstrap pub fn; the named owner already calls it (Option A: `admission/bootstrap.rs` warm-start). No parallel path added.
-- `ci_check_node_mode_closure.sh` — the `Mode` set stays closed `{WireOnly, Admission, KeyGenKes, Produce}` with no wildcard dispatch arm (Option A adds no variant; if Option B is taken, the new variant must keep the gate green).
-- `CN-CINPUT-01`/`CN-CINPUT-02` — sole codec + populate-side/forge-time fence unchanged; C1 populates nothing.
-- `CN-PROD-03`/`CN-PROD-04`/`CN-FORGE-01..04` — the diagnostic `produce_mode` forge/serve path is left working and unchanged.
-- All BLUE forbidden-pattern, dependency-boundary, and determinism invariants (no BLUE touched).
+- `CN-NODE-01` — `bootstrap_initial_state` stays the sole bootstrap pub fn; the new owner calls it; no
+  second authority.
+- Mode-closure — the dispatch stays exhaustive, no wildcard arm, after adding `Node`.
+- `produce_mode` / `admission` diagnostic paths keep working unchanged.
+- All BLUE forbidden-pattern / dependency-boundary / determinism invariants (no BLUE touched).
 
 ## 8. Invariants Strengthened or Introduced
-- **Strengthens `CN-NODE-01`** — adds a mechanical proof that the *production lifecycle owner* (not just `bootstrap_initial_state` in isolation) obtains initial state solely via that authority, via the new `ci_check_lifecycle_owner_uses_bootstrap_initial_state.sh`. (No registry edit in-slice; the `strengthened_in += "PHASE4-N-F-C"` is recorded at `/cluster-close`.)
-- Does **not** introduce `DC-CINPUT-02b`/`CN-CINPUT-03` — those are enforced by C4/C5. C1 only establishes the owner they attach to.
+- **Strengthens `CN-NODE-01`** — adds a mechanical proof that the *lifecycle owner* (not just
+  `bootstrap_initial_state` in isolation) obtains initial state solely via the authority. No registry edit
+  in-slice; `strengthened_in += "PHASE4-N-F-C"` is recorded at `/cluster-close`.
 
 ## 9. Design Summary
+A dedicated `Mode::Node` whose owner `run_node_lifecycle`:
+1. opens `PersistentChainDb` + `FileWalStore`;
+2. classifies first-run (empty store) vs warm-start (non-empty) — a pure function of on-disk state, no
+   wall-clock/env;
+3. routes both arms through `bootstrap_initial_state` (first-run arm supplies the Mithril-composed
+   genesis_initial in L2; warm-start arm supplies `RequiredFromRecoveredProvenance` in L3 — L1 leaves both
+   arms as typed stubs that fail closed rather than fall back).
 
-**Decision: choose Option A (evolve `Mode::Admission`) unless the slice discovers a hard blocker.** The C1 decision document must **show the A-vs-B call-graph comparison and the rejection criteria** — not merely assert Option A. The recommendation is the default; the evidence must still be laid out so the owner decision is made *with* the call graph, not before it.
-
-**Why Option A is recommended:**
-- **Minimal new lifecycle surface** — `run_admission_inner` (`admission/bootstrap.rs:114`) already owns `mint` (`:151`), `FileWalStore::open` (`:181`), and a `bootstrap_initial_state` warm-start path.
-- **Best alignment with `CN-NODE-01`** — it already routes through the single bootstrap authority; no second owner to reconcile.
-- **Reuses existing admission bootstrap structure** — anchor + WAL + warm-start are in place; C2/C3 extend, not invent.
-- **Avoids standing up a second owner** around `PersistentChainDb` + WAL + recovery + produce.
-- **Keeps `run_produce_mode` diagnostic/legacy** rather than bounty-primary — the cold `InMemoryChainDb` + `NotRequired` path (`produce_mode.rs:188–215`) stays a diagnostic/fixture surface.
-
-**Hard-blocker test (escalate to Option B only if):** Option A cannot cleanly own `PersistentChainDb` + `FileWalStore` + recovered-state produce handoff without becoming *more invasive* than a dedicated lifecycle mode — e.g. admission's existing consensus-inputs import (`admission/bootstrap.rs:194`) or its peer-admit responsibilities structurally conflict with owning the produce handoff. If so, document the specific conflict in `C1-DECISION-production-owner.md` and take **Option B — a dedicated producer lifecycle mode** (owning `PersistentChainDb` `chaindb/persistent.rs:85` + `FileWalStore` + `BootstrapAnchor` + recovery `recovery/restart.rs:114`/`node.rs:145` + produce), keeping the mode set closed.
-
-**Enforcement shape:** the owner boundary is annotated (module banner / doc-comment naming it the production recovered-state lifecycle owner). The new CI gate is a data-flow-resistant grep (N-Z/N-F-A `ci_check_*` style, strips `#[cfg(test)]` + comments): (a) the named owner references `bootstrap_initial_state`; (b) no `ade_node`/`ade_runtime` production path constructs initial `(LedgerState, PraosChainDepState, tip)` outside `bootstrap_initial_state`; (c) `run_produce_mode` does **not** pass `RequiredFromRecoveredProvenance` (stays diagnostic — narrow assertion; the full no-shape-swap-anywhere fence is C5n).
+The two existing gates are repaired because they are already RED on clean `main` (mode-closure predates
+`KeyGenKes`/`Produce`; bootstrap-closure predates the N-F-A `BootstrapState` return) — CN-NODE-01 hygiene
+is in scope for a cluster whose primary invariant is CN-NODE-01.
 
 ## 10. Changes Introduced
 ### Types
-- None.
+- `Mode::Node` variant (closed); the owner's typed first-run/warm-start branch enum.
 ### State Transitions
-- None.
+- None authoritative.
 ### Persistence
-- None.
+- Opens the persistent stores; no new persisted record in L1.
 ### Removal / Refactors
-- None functional. Only: owner-boundary annotation in the chosen module + the committed decision doc + the new CI gate. `run_produce_mode` untouched.
+- None to `produce_mode`/`admission` (demoted by scope, not deleted). Gate repairs only.
 
 ## 11. Replay, Crash, and Epoch Validation
-- **Replay tests added/updated:** none (no authoritative state or transition added — A5 §9). Replay obligations are owed by C3/C4/C7, not C1.
-- **Crash/restart behavior:** unchanged — C1 adds no persist/recover path.
-- **Epoch boundary:** n/a.
+- Replay tests: none new in L1 (no authoritative state added). Replay obligations are owed by L3/L4c/L5.
+- Crash/restart: L1 adds no persist/recover path; the branch classifier is unit-tested as a pure function.
+- Epoch boundary: n/a.
 
 ## 12. Mechanical Acceptance Criteria
-- [ ] `ci/ci_check_node_mode_closure.sh` passes (mode set still closed; no wildcard dispatch arm).
-- [ ] `ci/ci_check_bootstrap_closure.sh` passes (`bootstrap_initial_state` still sole bootstrap authority).
-- [ ] `ci/ci_check_lifecycle_owner_uses_bootstrap_initial_state.sh` exists and passes (named owner obtains initial state solely via `bootstrap_initial_state`; `run_produce_mode` does not pass `RequiredFromRecoveredProvenance`).
-- [ ] `docs/clusters/PHASE4-N-F-C/C1-DECISION-production-owner.md` exists and **shows the A-vs-B call-graph comparison and the rejection criteria** + the chosen owner (not a bare assertion of Option A).
-- [ ] `cargo build --workspace` + `cargo clippy` clean.
-- [ ] Scoped affected-crate tests and relevant CI gates pass. The full `ade_testkit` corpus/oracle lane remains opt-in and is **not** a C1 gate unless test hygiene changes first (it can time out ~600s on clean HEAD; do not reintroduce it as a per-slice gate).
+- [ ] `ci/ci_check_node_mode_closure.sh` passes (repaired; `Node` in the closed set; no wildcard arm).
+- [ ] `ci/ci_check_bootstrap_closure.sh` passes (repaired for the current `BootstrapState` return).
+- [ ] `ci/ci_check_lifecycle_owner_uses_bootstrap_initial_state.sh` exists and passes (the `--mode node`
+      owner obtains initial state solely via `bootstrap_initial_state`).
+- [ ] Branch classifier unit test: empty store ⇒ first-run, non-empty ⇒ warm-start, pure (two runs
+      identical).
+- [ ] `cargo build` + `cargo clippy` clean.
+- [ ] Scoped affected-crate tests + relevant CI gates pass. Full `ade_testkit` corpus/oracle lane is NOT a
+      C1 gate (times out ~600s on clean HEAD).
 
 ## 13. Failure Modes
-This slice adds no runtime transition; "failure" is mechanical-gate failure. If the chosen owner cannot be shown to route solely through `bootstrap_initial_state`, the gate fails and the slice is not mergeable — no approximation. If Option A is blocked, the block is documented and Option B is taken (still single-authority, still mode-closed); the slice does not merge a half-evolved owner.
+L1 adds no runtime transition; failure = mechanical-gate failure. The first-run/warm-start arms are typed
+stubs that **fail closed** (no Mithril/genesis/bundle/cold fallback) until L2/L3 fill them — a half-wired
+owner does not merge.
 
 ## 14. Hard Prohibitions
-**Inherited (cluster):** no patch of cold `produce_mode` into a recovered-state consumer; no shape-swap of `--consensus-inputs-path` into `SeedEpochConsensusInputs`; no second bootstrap/recovery/storage-init authority; no `InMemoryChainDb` as bounty-primary; no bundle fallback; no BA-02 claim without real peer-accept; no new BLUE authority/type; no `HashMap`/clock/float/async in BLUE.
-**Slice-specific:**
-- No production sidecar persist (C2), warm-start recovery wiring (C3), consume-side fence (C5), produce handoff (C4), or BA-02 evidence (C6).
-- No new `Mode` variant under Option A; if Option B, the new variant MUST keep `ci_check_node_mode_closure.sh` green.
-- `run_produce_mode` MUST NOT begin consuming the recovered surface in this slice.
-- No registry promotion; no grounding-doc regeneration.
+**Inherited (cluster):** no first-run bootstrap without verified Mithril provenance; no
+genesis/`--consensus-inputs-path`/tip-bundle/cold fallback; no second bootstrap/recovery/storage-init
+authority; no shape-swap; no new BLUE authority/type; no `HashMap`/clock/float/async in BLUE.
+**Slice-specific:** no L2–L6 work; no making `produce_mode`/`admission` the owner; no Mithril query in L1;
+no registry promotion; no grounding-doc regeneration.
 
 ## 15. Explicit Non-Goals
-No composition (C2), no recovery (C3), no consume-side containment (C5), no produce-from-recovered handoff (C4), no BA-02 harness (C6). No registry append. No grounding-doc refresh. No change to the diagnostic produce path beyond keeping it non-bounty-primary by scope + CI.
+No Mithril composition (L2), recovery (L3), fetch→apply (L4), produce (L5), BA-02 (L6). No registry append.
+No grounding-doc refresh.
 
 ## 16. Completion Checklist
-- [ ] Owner chosen (Option A unless documented hard blocker) and boundary annotated.
-- [ ] `C1-DECISION-production-owner.md` committed — shows the A-vs-B call-graph comparison + rejection criteria + chosen owner.
-- [ ] `ci_check_lifecycle_owner_uses_bootstrap_initial_state.sh` added and green.
-- [ ] Mode-closure + bootstrap-closure gates stay green.
-- [ ] `run_produce_mode` remains diagnostic/legacy for this slice and is not represented as the bounty-primary recovered-state producer (fenced by scope + CI).
-- [ ] `cargo build` + `cargo clippy` clean; scoped affected-crate tests + relevant CI gates green (full `ade_testkit` corpus lane not a C1 gate).
+- [ ] `Mode::Node` + `run_node_lifecycle` owner stood up over `PersistentChainDb` + `FileWalStore`.
+- [ ] First-run/warm-start branch is a pure function of on-disk state, both arms route through
+      `bootstrap_initial_state`, both fail closed pending L2/L3.
+- [ ] Two stale CN-NODE-01 gates repaired + the candidate owner gate added; all green.
+- [ ] `produce_mode`/`admission` still build and run as diagnostic modes.
+- [ ] `cargo build`/`clippy` clean; scoped tests + gates green.
