@@ -59,19 +59,43 @@ fi
 OWNER="${owners[0]}"
 OWNER_BODY="$(strip_for_grep "$OWNER")"
 
-# --- guard (b): no parallel storage-init in the owner -----------------------
-for tok in 'InMemoryChainDb' 'LedgerState::new\(' 'materialize_rolled_back_state\('; do
+# --- guard (b): no parallel / cold storage-init in the owner ----------------
+# The owner obtains node initial state ONLY via the single bootstrap
+# authority — which `bootstrap_from_mithril_snapshot` (the first-run arm,
+# guard (c-pos)) calls internally. So the owner must NOT: open a cold
+# InMemoryChainDb, materialize state itself, or call bootstrap_initial_state
+# DIRECTLY (that would be a second path around the composer). NOTE: building
+# the *seed* `LedgerState` from the extracted UTxO (`LedgerState::new` +
+# `utxo_state = …`) is NOT a parallel init — it is the seed handed TO the
+# composer, exactly as produce_mode/admission build their seed — so
+# `LedgerState::new` is intentionally NOT forbidden here (the real invariant
+# is enforced by "no InMemoryChainDb" + "no direct bootstrap_initial_state"
+# + the positive composer requirement).
+for tok in 'InMemoryChainDb' 'materialize_rolled_back_state\(' 'bootstrap_initial_state\('; do
     if echo "$OWNER_BODY" | grep -qE "$tok"; then
-        print_fail "owner ($(basename "$OWNER")) contains a parallel initial-state path token: $tok — initial state must come only via bootstrap_initial_state (CN-NODE-01)"
+        print_fail "owner ($(basename "$OWNER")) contains a parallel/cold initial-state path token: $tok — initial state must come only via bootstrap_from_mithril_snapshot -> the single bootstrap_initial_state authority (CN-NODE-01). (L3 warm-start will call bootstrap_initial_state directly; re-refine this guard then.)"
     fi
 done
 
-# --- guard (c): no genesis/bundle/cold/tip fallback in the owner ------------
-for tok in 'import_live_consensus_inputs' 'consensus_inputs_path' 'genesis_initial' 'bootstrap_from_conway_genesis'; do
+# --- guard (c-neg): no genesis branch in the owner --------------------------
+# Mithril-only first run: NO genesis composer, NO tip-bundle seed-graft. The
+# documented cardano-cli extraction (`import_live_consensus_inputs` /
+# `import_cardano_cli_json_utxo`) IS permitted on the first-run arm — it is
+# the Mithril-bound bootstrap extraction (L2 §9.5), NOT a forge-time input
+# (the forge-time fence is CN-CINPUT-03 / L5, when a forge path exists).
+for tok in 'bootstrap_from_conway_genesis' 'genesis_initial' 'seed_graft' 'tip_bundle'; do
     if echo "$OWNER_BODY" | grep -qE "$tok"; then
-        print_fail "owner ($(basename "$OWNER")) references a forbidden fallback token: $tok — the node lifecycle is Mithril-only, fail-closed"
+        print_fail "owner ($(basename "$OWNER")) references a forbidden genesis/graft token: $tok — the node lifecycle first run is Mithril-only, fail-closed"
     fi
 done
+
+# --- guard (c-pos): the first-run arm calls the Mithril composer ------------
+# The single composition that routes through bootstrap_initial_state. Its
+# presence is what makes "initial state via the single authority" true for
+# the first-run arm (L2). (L3 adds the warm-start arm; extend then.)
+if ! echo "$OWNER_BODY" | grep -qE 'bootstrap_from_mithril_snapshot\('; then
+    print_fail "owner ($(basename "$OWNER")) must call bootstrap_from_mithril_snapshot( on the first-run arm — Mithril-only first-run bootstrap routes initial state through the single authority (L2 / CN-NODE-01)"
+fi
 
 # --- guard (d): single bootstrap authority still holds ----------------------
 BOOT="$RT/bootstrap.rs"

@@ -83,10 +83,20 @@ pub struct Cli {
     pub snapshot_dir: Option<PathBuf>,
     pub network_magic: Option<u32>,
     pub genesis_hash_hex: Option<String>,
-    /// Path to the cardano-cli operator consensus-inputs JSON
-    /// bundle imported by the admission runner (PHASE4-N-M-C
-    /// CN-CONS-IN-01). Required when `--mode admission` is set.
+    /// Path to the cardano-cli operator consensus-inputs JSON bundle.
+    /// For `--mode admission` it feeds the admission runner (PHASE4-N-M-C
+    /// CN-CONS-IN-01). For `--mode node` (PHASE4-N-F-C L2) it is a
+    /// **first-run bootstrap extraction input** — documented cardano-cli
+    /// consensus-input extraction from the Mithril-certified/restored
+    /// state; NEVER a forge-time input.
     pub consensus_inputs_path: Option<PathBuf>,
+    /// Path to the Mithril manifest JSON (PHASE4-N-F-C L2). Required on
+    /// the `--mode node` first-run branch: carries the Mithril provenance
+    /// `verify_mithril_binding` cross-checks before any state is admitted.
+    /// The `--json-seed` + `--consensus-inputs-path` files are the
+    /// first-run bootstrap extraction inputs, Mithril-bound by this
+    /// manifest — not forge inputs.
+    pub mithril_manifest_path: Option<PathBuf>,
     // -------------------------------------------------------------------
     // PHASE4-N-O — KeyGenKes-mode flags. Each is parsed unconditionally
     // and validated only when `--mode key_gen_kes` is set (via
@@ -217,6 +227,7 @@ impl Cli {
         let mut network_magic: Option<u32> = None;
         let mut genesis_hash_hex: Option<String> = None;
         let mut consensus_inputs_path: Option<PathBuf> = None;
+        let mut mithril_manifest_path: Option<PathBuf> = None;
         let mut out_file: Option<PathBuf> = None;
         let mut period_idx: Option<u32> = None;
         let mut seed_file: Option<PathBuf> = None;
@@ -438,6 +449,7 @@ impl Cli {
             network_magic,
             genesis_hash_hex,
             consensus_inputs_path,
+            mithril_manifest_path,
             out_file,
             period_idx,
             seed_file,
