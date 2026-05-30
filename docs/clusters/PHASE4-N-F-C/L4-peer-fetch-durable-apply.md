@@ -21,7 +21,9 @@
 - **Status:** Proposed.
 - **Cluster Exit Criteria Addressed:** CE-L-4.
 - **Slice Dependencies:** L1 (`--mode node` owner + persistent stores), L3
-  (`warm_start_recovery` — the recovery the L4c proof round-trips against; consumed unchanged).
+  (`warm_start_recovery` — the recovery the L4c proof round-trips against; L4c extends its RED
+  driver to populate the replay `block_bytes` map for `AdmitBlock` entries from `PersistentChainDb`,
+  matching the `recover_node_state` pattern — no BLUE replay/bootstrap change).
   L2 (first-run bootstrap that seeds the anchor lineage + sidecar) is the precondition the
   applied tip is anchored to.
 
@@ -40,8 +42,11 @@ the L4c recovery proof, and the CI gate. Do NOT forge (`run_real_forge` / any fo
 do NOT convert or touch `produce_mode`, do NOT read `--consensus-inputs-path` as a forge/runtime
 input, do NOT add a genesis fallback, do NOT emit any BA-02 / peer-accept claim, do NOT treat
 `ade_core_interop::follow` as validating sync, and do NOT treat admission's verdict-only flow as
-recoverable sync. `pump_block`, `forward_sync_step`, `ForwardSyncState`, `run_admission_wire_pump`,
-and the L3 `warm_start_recovery` already exist and are consumed verbatim — **add no new BLUE
+recoverable sync. `pump_block`, `forward_sync_step`, `ForwardSyncState`, and
+`run_admission_wire_pump` already exist and are consumed verbatim. **L4c extends the RED
+`warm_start_recovery` driver to populate the replay `block_bytes` map for `AdmitBlock` entries from
+`PersistentChainDb`, matching the `recover_node_state` pattern. This is required once L4b appends
+`AdmitBlock` entries and does not alter BLUE replay or bootstrap authorities.** **Add no new BLUE
 authority** and do not change the BLUE admit chokepoint, the reducer, or `bootstrap.rs`/`replay.rs`.
 Resolve the entry obligations in §9.0 before coding. Commit with the model-attribution trailer.
 
@@ -271,8 +276,11 @@ no `HashMap`/clock/float in BLUE.
 **Slice-specific (from the L4 brief):** no BA-02 / peer-accept claim; `ade_core_interop::follow`
 is NOT validating sync and must not be used as the lifecycle sync path; admission's verdict-only
 flow must NOT be treated as recoverable sync; no change to the BLUE admit chokepoint, the GREEN
-reducer, `wire_pump.rs`, `bootstrap.rs`, `replay.rs`, or the L2/L3 arms; no multi-peer fork choice
-on the lifecycle path; no registry status flip; no grounding-doc regeneration.
+reducer, `wire_pump.rs`, `bootstrap.rs`, or `replay.rs`; no change to the L2 FirstRun arm. **L4c
+MAY extend the RED `warm_start_recovery` driver to populate the replay `block_bytes` map for
+`AdmitBlock` entries from `PersistentChainDb` (the `recover_node_state` pattern) — this is the only
+authorized L3-arm change and it alters no BLUE replay/bootstrap authority.** No multi-peer fork
+choice on the lifecycle path; no registry status flip; no grounding-doc regeneration.
 
 ## 15. Explicit Non-Goals
 No produce / consume-side fence (L5); no BA-02 evidence (L6); no forge of any kind; no multi-peer
