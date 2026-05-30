@@ -350,6 +350,12 @@ impl Cli {
                     })?;
                     consensus_inputs_path = Some(PathBuf::from(v));
                 }
+                "--mithril-manifest-path" => {
+                    let v = iter.next().ok_or_else(|| {
+                        CliError::FlagMissingValue("--mithril-manifest-path".to_string())
+                    })?;
+                    mithril_manifest_path = Some(PathBuf::from(v));
+                }
                 "--out-file" => {
                     let v = iter.next().ok_or_else(|| {
                         CliError::FlagMissingValue("--out-file".to_string())
@@ -648,6 +654,79 @@ mod tests {
         assert_eq!(
             err,
             CliError::FlagMissingValue("--genesis-path".to_string())
+        );
+    }
+
+    /// The `--mode node` first-run argument set, as a real argv. Mirrors the
+    /// documented-extraction inputs the FirstRun arm of `run_node_lifecycle`
+    /// consumes (PHASE4-N-F-C L2), with `--mithril-manifest-path` as the
+    /// Mithril provenance carrier.
+    fn node_first_run_args() -> Vec<String> {
+        vec![
+            "--genesis-path".to_string(),
+            "/g".to_string(),
+            "--mode".to_string(),
+            "node".to_string(),
+            "--json-seed".to_string(),
+            "/seed.json".to_string(),
+            "--consensus-inputs-path".to_string(),
+            "/cinputs.json".to_string(),
+            "--mithril-manifest-path".to_string(),
+            "/manifest.json".to_string(),
+            "--seed-point-slot".to_string(),
+            "23013663".to_string(),
+            "--seed-block-hash".to_string(),
+            "22".repeat(32),
+            "--network-magic".to_string(),
+            "1".to_string(),
+            "--genesis-hash".to_string(),
+            "11".repeat(32),
+            "--wal-dir".to_string(),
+            "/wal".to_string(),
+            "--snapshot-dir".to_string(),
+            "/snap".to_string(),
+        ]
+    }
+
+    #[test]
+    fn node_cli_parses_mithril_manifest_path_from_argv() {
+        // PHASE4-N-F-C L2 CLI fix: the `--mithril-manifest-path` field existed
+        // but had no parse arm, so a real argv rejected it as UnknownFlag (via
+        // the catch-all). This exercises REAL argv parsing for the `--mode
+        // node` first-run set and asserts the flag is accepted and populates
+        // the field (along with the sibling extraction flags the arm reuses).
+        let args = node_first_run_args();
+        let cli = parse(&args.iter().map(String::as_str).collect::<Vec<_>>()).expect("parse");
+        assert_eq!(cli.mode, Mode::Node);
+        assert_eq!(
+            cli.mithril_manifest_path,
+            Some(PathBuf::from("/manifest.json"))
+        );
+        assert_eq!(cli.json_seed_path, Some(PathBuf::from("/seed.json")));
+        assert_eq!(
+            cli.consensus_inputs_path,
+            Some(PathBuf::from("/cinputs.json"))
+        );
+        assert_eq!(cli.seed_point_slot, Some(23_013_663));
+        assert_eq!(cli.network_magic, Some(1));
+    }
+
+    #[test]
+    fn node_cli_mithril_manifest_path_requires_value() {
+        // The flag's value is required, mirroring every other path flag — a
+        // trailing `--mithril-manifest-path` with no value fails closed rather
+        // than swallowing the next token.
+        let err = parse(&[
+            "--genesis-path",
+            "/g",
+            "--mode",
+            "node",
+            "--mithril-manifest-path",
+        ])
+        .expect_err("must reject missing value");
+        assert_eq!(
+            err,
+            CliError::FlagMissingValue("--mithril-manifest-path".to_string())
         );
     }
 
