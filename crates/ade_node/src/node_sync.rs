@@ -384,6 +384,102 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn node_sync_kill_then_warm_start_recovers_same_tip() {
+        // L4c: the join point between sync and recovery. Seed a warm-start
+        // precondition (anchor sidecar + WAL provenance — the L2 first-run
+        // artifact), run L4b durable apply (appends AdmitBlock entries +
+        // captures a tip checkpoint via PersistentSnapshotCache), drop the
+        // handles, reopen, and recover through the REAL warm_start_recovery.
+        // The recovered tip must equal the L4b-advanced tip — recovered from
+        // the persisted checkpoint, with NO test-side snapshot injection.
+        use ade_ledger::seed_consensus_inputs::{
+            encode_seed_epoch_consensus_inputs, SeedEpochConsensusInputs,
+        };
+        use ade_runtime::seed_consensus_provenance::append_seed_epoch_provenance;
+
+        let (c, view) = corpus_view();
+        let sched = schedule();
+        let bytes = pick_lightest(&c);
+
+        let dir = TempDir::new().unwrap();
+        let snap = dir.path().join("snap");
+        let wal_dir = dir.path().join("wal");
+        std::fs::create_dir_all(&snap).unwrap();
+        std::fs::create_dir_all(&wal_dir).unwrap();
+        let chaindb_path = snap.join("chain.db");
+
+        // The anchor fingerprint shared by the seed precondition (sidecar +
+        // WAL provenance) AND the ForwardSyncState seed. `fresh_state` seeds
+        // `prior_fp` from `Hash32([0xA0; 32])`, so the first AdmitBlock
+        // chains from this exact value; warm-start discovery keys on the
+        // sidecar table, whose key must be the same anchor_fp.
+        let anchor_fp = Hash32([0xA0; 32]);
+        let mut pools: BTreeMap<Hash28, PoolEntry> = BTreeMap::new();
+        pools.insert(
+            Hash28([0x01; 28]),
+            PoolEntry {
+                active_stake: 1_000,
+                vrf_keyhash: Hash32([0x07; 32]),
+            },
+        );
+        let sidecar = SeedEpochConsensusInputs {
+            anchor_fp: anchor_fp.clone(),
+            epoch_no: EPOCH_576,
+            active_slots_coeff: ActiveSlotsCoeff {
+                numer: 5,
+                denom: 100,
+            },
+            total_active_stake: 1_000,
+            pool_distribution: pools,
+        };
+        let sidecar_bytes = encode_seed_epoch_consensus_inputs(&sidecar);
+
+        // --- Phase 1: seed the precondition + run L4b durable apply. ---
+        let advanced = {
+            let chaindb =
+                PersistentChainDb::open(PersistentChainDbOptions::at(&chaindb_path)).unwrap();
+            let mut wal = FileWalStore::open(&wal_dir).unwrap();
+
+            // L2 first-run artifact: anchor-keyed sidecar + WAL provenance.
+            chaindb
+                .put_seed_epoch_consensus_inputs(&anchor_fp, &sidecar_bytes)
+                .unwrap();
+            append_seed_epoch_provenance(&mut wal, &anchor_fp, EPOCH_576, &sidecar_bytes).unwrap();
+
+            // L4b durable apply over one ordered source.
+            let mut state = fresh_state(c.epoch_nonce);
+            let mut source = NodeBlockSource::in_memory(vec![bytes.clone()]);
+            run_node_sync(&mut source, &mut state, &chaindb, &mut wal, &sched, &view)
+                .await
+                .expect("sync ok")
+                .expect("tip advanced")
+            // chaindb + wal dropped here → the kill boundary.
+        };
+
+        // --- Phase 2: reopen + recover through the REAL recovery path. ---
+        let chaindb =
+            PersistentChainDb::open(PersistentChainDbOptions::at(&chaindb_path)).unwrap();
+        let wal = FileWalStore::open(&wal_dir).unwrap();
+        let recovered = crate::node_lifecycle::warm_start_recovery(&chaindb, &wal)
+            .expect("warm-start recovers after sync");
+
+        let recovered_tip = recovered.tip.expect("recovered a tip");
+        assert_eq!(
+            recovered_tip.slot, advanced.slot,
+            "recovered tip slot must equal the L4b-advanced tip slot"
+        );
+        assert_eq!(
+            recovered_tip.hash, advanced.hash,
+            "recovered tip hash must equal the L4b-advanced tip hash"
+        );
+        // The recovered seed-epoch sidecar still verifies (carried from L3).
+        assert!(
+            recovered.seed_epoch_consensus_inputs.is_some(),
+            "warm-start must still recover the verified seed-epoch sidecar"
+        );
+    }
+
+    #[tokio::test]
     async fn node_sync_fails_closed_on_undecodable_block() {
         // A block the BLUE decoder rejects must halt the drive fail-closed
         // (typed NodeSyncError::Pump), never skip-past, never fall back.

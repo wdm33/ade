@@ -319,8 +319,11 @@ fn run_node_lifecycle_inner(cli: &Cli) -> Result<(), NodeLifecycleError> {
 /// it fails closed here, making the deterministic placeholder schedule/view
 /// passed below provably unconsumed.
 ///
-/// `wal` is read-only here (`read_all` takes `&self`); L3 appends nothing.
-fn warm_start_recovery(
+/// `wal` is read-only here (`read_all` takes `&self`); recovery appends
+/// nothing. `pub(crate)` so the L4 sync driver's kill→recover proof
+/// (`node_sync` tests) can round-trip a synced tip through the real
+/// recovery path; not exported outside the crate.
+pub(crate) fn warm_start_recovery(
     chaindb: &PersistentChainDb,
     wal: &FileWalStore,
 ) -> Result<BootstrapState, NodeLifecycleError> {
@@ -338,14 +341,31 @@ fn warm_start_recovery(
         }
     };
 
-    // 2. Replay the WAL from the INDEPENDENT anchor_fp. L3 has no AdmitBlock
-    //    WAL entries (those arrive with L4's durable apply), so the
-    //    preserved-block-bytes map is empty; an AdmitBlock referencing absent
-    //    bytes fails closed inside `replay_from_anchor` (BlockBytesMissing).
+    // 2. Replay the WAL from the INDEPENDENT anchor_fp. Once L4b's durable
+    //    apply has appended `AdmitBlock` entries, `replay_from_anchor`
+    //    requires the preserved block bytes for each one (it fails closed
+    //    with `BlockBytesMissing` otherwise). Build that map from the
+    //    persistent ChainDb, exactly as the test/capability
+    //    `recover_node_state` does (RED driver supplying preserved bytes;
+    //    no BLUE replay change). A seed-epoch-only store (L2 first run,
+    //    pre-sync) has zero `AdmitBlock` entries, so the map is empty and
+    //    replay still passes.
     let entries = wal
         .read_all()
         .map_err(|e| NodeLifecycleError::WarmStartWalReplay(format!("{e:?}")))?;
-    let block_bytes: BTreeMap<Hash32, Vec<u8>> = BTreeMap::new();
+    let mut block_bytes: BTreeMap<Hash32, Vec<u8>> = BTreeMap::new();
+    for entry in &entries {
+        // Only `AdmitBlock` entries reference preserved block bytes;
+        // `SeedEpochConsensusInputsImported` (A3a) entries carry no block
+        // hash and are skipped.
+        if let ade_ledger::wal::WalEntry::AdmitBlock { block_hash, .. } = entry {
+            if let Some(stored) = ChainDb::get_block_by_hash(chaindb, block_hash)
+                .map_err(|e| NodeLifecycleError::OnDiskRead(format!("{e:?}")))?
+            {
+                block_bytes.insert(block_hash.clone(), stored.bytes);
+            }
+        }
+    }
     let replay = replay_from_anchor(&anchor_fp, &entries, &block_bytes)
         .map_err(|e| NodeLifecycleError::WarmStartWalReplay(format!("{e:?}")))?;
     let provenance = replay
