@@ -24,9 +24,7 @@
 
 use std::collections::BTreeMap;
 
-use ade_ledger::wal::{
-    encode_wal_entry, replay_from_anchor, BlockVerdictTag, WalEntry, WalStore,
-};
+use ade_ledger::wal::{encode_wal_entry, replay_from_anchor, BlockVerdictTag, WalEntry, WalStore};
 use ade_runtime::wal::FileWalStore;
 use ade_types::{Hash32, SlotNo};
 use tempfile::tempdir;
@@ -80,7 +78,7 @@ fn wal_replay_from_anchor_two_runs_byte_identical() {
     let b = replay_from_anchor(&anchor_fp, &read, &block_bytes).expect("run b");
     assert_eq!(a, b, "two replays must be byte-identical");
     assert_eq!(
-        a,
+        a.tail_fp,
         Hash32([0x04; 32]),
         "final fingerprint must equal WAL tail's post_fp"
     );
@@ -99,8 +97,11 @@ fn wal_replay_from_anchor_post_fp_matches_wal_tail() {
     let final_fp = replay_from_anchor(&anchor_fp, &read, &block_bytes).expect("ok");
     let expected = match read.last().expect("non-empty") {
         WalEntry::AdmitBlock { post_fp, .. } => post_fp.clone(),
+        WalEntry::SeedEpochConsensusInputsImported { .. } => {
+            panic!("this chain has no provenance entry")
+        }
     };
-    assert_eq!(final_fp, expected);
+    assert_eq!(final_fp.tail_fp, expected);
 }
 
 #[test]
@@ -167,7 +168,7 @@ fn wal_replay_from_anchor_persists_across_reopen() {
     let read = store2.read_all().expect("read_all");
     assert_eq!(read.len(), 3);
     let result = replay_from_anchor(&anchor_fp, &read, &block_bytes).expect("ok");
-    assert_eq!(result, Hash32([0x04; 32]));
+    assert_eq!(result.tail_fp, Hash32([0x04; 32]));
 }
 
 #[test]

@@ -131,16 +131,21 @@ where
     //    are absent, or `ChainBreak` on a broken fingerprint link.
     let mut block_bytes = std::collections::BTreeMap::new();
     for entry in &entries {
-        let WalEntry::AdmitBlock { block_hash, .. } = entry;
-        if let Some(stored) = chaindb
-            .get_block_by_hash(block_hash)
-            .map_err(NodeRecoveryError::ChainDb)?
-        {
-            block_bytes.insert(block_hash.clone(), stored.bytes);
+        // Only `AdmitBlock` entries reference preserved block bytes;
+        // `SeedEpochConsensusInputsImported` (A3a) entries carry no
+        // block hash and are skipped here.
+        if let WalEntry::AdmitBlock { block_hash, .. } = entry {
+            if let Some(stored) = chaindb
+                .get_block_by_hash(block_hash)
+                .map_err(NodeRecoveryError::ChainDb)?
+            {
+                block_bytes.insert(block_hash.clone(), stored.bytes);
+            }
         }
     }
-    let wal_tail_fp = replay_from_anchor(anchor_fp, &entries, &block_bytes)
+    let replay = replay_from_anchor(anchor_fp, &entries, &block_bytes)
         .map_err(NodeRecoveryError::Wal)?;
+    let wal_tail_fp = replay.tail_fp.clone();
 
     // 3. Reconcile the chaindb to the WAL tail BEFORE warm-start. The
     //    WAL — not `chaindb.tip()` — is the admission authority. S2's
@@ -152,9 +157,17 @@ where
     //    WAL-tail slot is deterministic and idempotent. An empty WAL has
     //    no admitted blocks: every stored block is an orphan, so we roll
     //    back to slot 0.
+    // The WAL tail slot is the slot of the LAST `AdmitBlock` entry. A
+    // trailing `SeedEpochConsensusInputsImported` (A3a) entry carries no
+    // slot, so we scan for the last block transition rather than blindly
+    // reading `entries.last()`.
     let wal_tail_slot = entries
-        .last()
-        .map(|WalEntry::AdmitBlock { slot, .. }| *slot)
+        .iter()
+        .rev()
+        .find_map(|entry| match entry {
+            WalEntry::AdmitBlock { slot, .. } => Some(*slot),
+            WalEntry::SeedEpochConsensusInputsImported { .. } => None,
+        })
         .unwrap_or(SlotNo(0));
     chaindb
         .rollback_to_slot(wal_tail_slot)
@@ -182,10 +195,15 @@ where
     //    `post_fp` is a genuine `fingerprint(ledger).combined` (the
     //    admit reducer computes it that way), so the tail post-fp is
     //    directly comparable to the materialized recovered fingerprint.
-    //    The empty-WAL case is exempt: there `wal_tail_fp` is the
-    //    anchor seed fingerprint, whose comparability is the anchor
-    //    materialization's own concern (CN-ANCHOR-01), not this guard.
-    if !entries.is_empty() && recovered_fp != wal_tail_fp {
+    //    The no-block case is exempt: with zero `AdmitBlock` entries
+    //    `wal_tail_fp` is the anchor seed fingerprint, whose
+    //    comparability is the anchor materialization's own concern
+    //    (CN-ANCHOR-01), not this guard. PHASE4-N-F-A A3a made
+    //    provenance-only WALs representable, so "entries non-empty" no
+    //    longer implies "a block was admitted" — the guard keys on
+    //    `replay.admit_count > 0` (the count of block transitions), not
+    //    on `entries.is_empty()`.
+    if replay.admit_count > 0 && recovered_fp != wal_tail_fp {
         return Err(NodeRecoveryError::WalTailFingerprintMismatch {
             expected: wal_tail_fp,
             actual: recovered_fp,

@@ -36,4 +36,14 @@ pub enum WalError {
     BlockBytesMissing { block_hash: Hash32 },
     /// Stored entry's CRC did not match its bytes.
     CorruptCrc { file: String },
+    /// PHASE4-N-F-A A3a: replay encountered a second
+    /// `SeedEpochConsensusInputsImported` entry. Exactly one
+    /// provenance entry is allowed per store/anchor; a duplicate
+    /// is authority-fatal (fail closed).
+    DuplicateProvenance,
+    /// PHASE4-N-F-A A3a: a `SeedEpochConsensusInputsImported`
+    /// entry's `anchor_fp` did not match the replay anchor's
+    /// `initial_ledger_fingerprint`. The sidecar provenance is
+    /// bound to a different anchor; fail closed.
+    ProvenanceAnchorMismatch { expected: Hash32, actual: Hash32 },
 }

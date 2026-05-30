@@ -25,6 +25,7 @@ pub mod store_trait;
 pub use error::WalError;
 pub use event::{
     decode_wal_entry, encode_wal_entry, BlockVerdictTag, WalEntry, TAG_ADMIT_BLOCK,
+    TAG_SEED_EPOCH_CONSENSUS_INPUTS_IMPORTED,
 };
-pub use replay::replay_from_anchor;
+pub use replay::{replay_from_anchor, RecoveredBootstrapProvenance, ReplayOutcome};
 pub use store_trait::WalStore;

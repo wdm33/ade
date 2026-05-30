@@ -37,6 +37,7 @@ CRATES="$REPO_ROOT/crates"
 GENESIS_COMP="$CRATES/ade_runtime/src/genesis_bootstrap.rs"
 MITHRIL_COMP="$CRATES/ade_runtime/src/mithril_bootstrap.rs"
 MERGE_MOD="$CRATES/ade_runtime/src/seed_consensus_merge.rs"
+PROVENANCE_MOD="$CRATES/ade_runtime/src/seed_consensus_provenance.rs"
 PRODUCE_MODE="$CRATES/ade_node/src/produce_mode.rs"
 
 FAILED=0
@@ -52,7 +53,7 @@ strip_for_grep() {
     ' "$1"
 }
 
-for f in "$GENESIS_COMP" "$MITHRIL_COMP" "$MERGE_MOD" "$PRODUCE_MODE"; do
+for f in "$GENESIS_COMP" "$MITHRIL_COMP" "$MERGE_MOD" "$PROVENANCE_MOD" "$PRODUCE_MODE"; do
     if [[ ! -f "$f" ]]; then
         print_fail "missing expected source $f"
     fi
@@ -75,6 +76,11 @@ for comp in "$GENESIS_COMP" "$MITHRIL_COMP"; do
     if ! echo "$body" | grep -qE '\bencode_seed_epoch_consensus_inputs\('; then
         print_fail "composition site $(basename "$comp") does not encode via the A1 sole encoder encode_seed_epoch_consensus_inputs("
     fi
+    # A3a: and it must append the WAL provenance entry via the shared
+    # helper (the put → append commit-point ordering lives here).
+    if ! echo "$body" | grep -qE '\bappend_seed_epoch_provenance\('; then
+        print_fail "composition site $(basename "$comp") does not append the WAL provenance entry via append_seed_epoch_provenance( (A3a)"
+    fi
 done
 
 # --- Guard (b): NEGATIVE forge-time fence — produce_mode names none of
@@ -83,26 +89,35 @@ done
 # pool_distr_view_from_consensus_inputs + --consensus-inputs-path), so
 # fencing this file fences that whole path.
 FORGE_BODY="$(strip_for_grep "$PRODUCE_MODE")"
-FORGE_FENCED_RE='(put_seed_epoch_consensus_inputs|merge_seed_epoch_consensus_inputs|encode_seed_epoch_consensus_inputs|SeedEpochConsensusInputs)'
+# A3a extends the fence with the WAL provenance tokens: the
+# forge-time path must not build/put the sidecar NOR append its
+# WAL provenance entry.
+FORGE_FENCED_RE='(put_seed_epoch_consensus_inputs|merge_seed_epoch_consensus_inputs|encode_seed_epoch_consensus_inputs|append_seed_epoch_provenance|SeedEpochConsensusInputsImported|SeedEpochConsensusInputs)'
 if echo "$FORGE_BODY" | grep -qE "$FORGE_FENCED_RE"; then
     print_fail "forge-time produce_mode.rs references a seed-epoch sidecar token (CN-CINPUT-02): the forge-time consensus-inputs path must not build or put the sidecar — $(echo "$FORGE_BODY" | grep -nE "$FORGE_FENCED_RE" | head -n1)"
 fi
 
 # --- Guard (c): GLOBAL containment (data-flow-resistant). Scan every
-# production (test-stripped) Rust file. Any *call* to the populator or
-# the builder outside the allowed composition set means a second
-# populate path could exist somewhere in the tree.
-#   Allowed call sites:
+# production (test-stripped) Rust file. Any *call* to the populator,
+# the builder, or the A3a WAL-provenance appender outside the allowed
+# composition set means a second populate path could exist somewhere
+# in the tree.
+#   Allowed sites:
 #     - genesis_bootstrap.rs / mithril_bootstrap.rs (the two composers)
 #     - seed_consensus_merge.rs (defines + may self-reference the builder)
+#     - seed_consensus_provenance.rs (defines the A3a appender; A3a)
 # A `fn put_seed_epoch_consensus_inputs(` *definition* (the trait decl +
 # the two SnapshotStore impls) is NOT a populate call — match only method
 # *calls* (`.put_seed_epoch_consensus_inputs(`) for the put token.
-ALLOWED_RE='/(genesis_bootstrap|mithril_bootstrap|seed_consensus_merge)\.rs$'
+# `append_seed_epoch_provenance` is a free fn (no leading-dot call form
+# to distinguish from its `fn` definition), so its defining module
+# `seed_consensus_provenance.rs` is allow-listed, exactly as the builder's
+# module is — the call is then contained to the two composers.
+ALLOWED_RE='/(genesis_bootstrap|mithril_bootstrap|seed_consensus_merge|seed_consensus_provenance)\.rs$'
 
 while IFS= read -r -d '' rsfile; do
     case "$rsfile" in
-        *"/genesis_bootstrap.rs"|*"/mithril_bootstrap.rs"|*"/seed_consensus_merge.rs")
+        *"/genesis_bootstrap.rs"|*"/mithril_bootstrap.rs"|*"/seed_consensus_merge.rs"|*"/seed_consensus_provenance.rs")
             continue
             ;;
     esac
@@ -115,6 +130,12 @@ while IFS= read -r -d '' rsfile; do
     if echo "$body" | grep -qE '\bmerge_seed_epoch_consensus_inputs\('; then
         print_fail "production file $rsfile references merge_seed_epoch_consensus_inputs( outside the verified-bootstrap composition sites (CN-CINPUT-02)"
     fi
+    # A3a: any reference to the WAL-provenance appender outside the
+    # allowed set — the provenance append must live only at the two
+    # composers (its definition lives in the allow-listed module).
+    if echo "$body" | grep -qE '\bappend_seed_epoch_provenance\('; then
+        print_fail "production file $rsfile references append_seed_epoch_provenance( outside the verified-bootstrap composition sites (CN-CINPUT-02 / A3a)"
+    fi
 done < <(find "$CRATES" -name '*.rs' -type f -print0)
 
 # Sanity floor for guard (c): the allow-list regex must actually match
@@ -125,6 +146,9 @@ if ! echo "$GENESIS_COMP" | grep -qE "$ALLOWED_RE"; then
 fi
 if ! echo "$MITHRIL_COMP" | grep -qE "$ALLOWED_RE"; then
     print_fail "internal: ALLOWED_RE no longer matches mithril_bootstrap.rs"
+fi
+if ! echo "$PROVENANCE_MOD" | grep -qE "$ALLOWED_RE"; then
+    print_fail "internal: ALLOWED_RE no longer matches seed_consensus_provenance.rs"
 fi
 
 if (( FAILED == 0 )); then

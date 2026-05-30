@@ -27,11 +27,10 @@ use ade_core::consensus::ledger_view::LedgerView;
 use ade_core::consensus::praos_state::PraosChainDepState;
 use ade_ledger::bootstrap_anchor::{BootstrapAnchor, SeedProvenance};
 use ade_ledger::fingerprint::fingerprint;
-use ade_ledger::genesis_source::{
-    genesis_initial_state, ConwayGenesisConfig, GenesisSourceError,
-};
+use ade_ledger::genesis_source::{genesis_initial_state, ConwayGenesisConfig, GenesisSourceError};
 use ade_ledger::seed_consensus_inputs::encode_seed_epoch_consensus_inputs;
 use ade_ledger::state::LedgerState;
+use ade_ledger::wal::{WalError, WalStore};
 use ade_types::{EpochNo, Hash32, SlotNo};
 
 use crate::bootstrap::{bootstrap_initial_state, BootstrapError, BootstrapInputs};
@@ -39,6 +38,7 @@ use crate::bootstrap_anchor::{mint, MintInputs};
 use crate::chaindb::{ChainDb, ChainDbError, ChainTip, SnapshotStore};
 use crate::consensus_inputs::LiveConsensusInputsCanonical;
 use crate::seed_consensus_merge::{merge_seed_epoch_consensus_inputs, SeedConsensusMergeError};
+use crate::seed_consensus_provenance::append_seed_epoch_provenance;
 use crate::seed_import::UtxoFingerprint;
 
 /// Closed error sum for the genesis-bootstrap entry. RED-side
@@ -59,6 +59,11 @@ pub enum GenesisBootstrapError {
     /// bootstrap that cannot record its consensus-input provenance fails
     /// rather than silently proceed.
     SeedConsensusPersist(ChainDbError),
+    /// Appending the seed-epoch consensus-inputs WAL provenance entry
+    /// failed (A3a). The WAL append is the import's commit point; if it
+    /// cannot be written the bootstrap fails rather than leave the
+    /// sidecar without a provenance record.
+    SeedConsensusProvenanceWal(WalError),
 }
 
 /// The genesis-bootstrap entry's typed output: the cold-start state
@@ -92,6 +97,7 @@ pub fn bootstrap_from_conway_genesis<D, S>(
     seed_consensus_inputs: &LiveConsensusInputsCanonical,
     chaindb: &D,
     snapshot_store: &S,
+    wal: &mut dyn WalStore,
     era_schedule: &EraSchedule,
     ledger_view: &dyn LedgerView,
 ) -> Result<GenesisBootstrapOutput, GenesisBootstrapError>
@@ -125,11 +131,7 @@ where
     })
     .map_err(GenesisBootstrapError::Bootstrap)?;
 
-    persist_seed_epoch_consensus_inputs(
-        snapshot_store,
-        &anchor,
-        seed_consensus_inputs,
-    )?;
+    persist_seed_epoch_consensus_inputs(snapshot_store, wal, &anchor, seed_consensus_inputs)?;
 
     Ok(GenesisBootstrapOutput {
         ledger,
@@ -148,6 +150,7 @@ where
 /// provenance is not allowed to proceed.
 fn persist_seed_epoch_consensus_inputs<S>(
     snapshot_store: &S,
+    wal: &mut dyn WalStore,
     anchor: &BootstrapAnchor,
     seed_consensus_inputs: &LiveConsensusInputsCanonical,
 ) -> Result<(), GenesisBootstrapError>
@@ -156,12 +159,18 @@ where
 {
     let anchor_fp = anchor.initial_ledger_fingerprint.clone();
     let epoch_no: EpochNo = seed_consensus_inputs.epoch_no;
-    let record = merge_seed_epoch_consensus_inputs(anchor_fp.clone(), epoch_no, seed_consensus_inputs)
-        .map_err(GenesisBootstrapError::SeedConsensusMerge)?;
+    let record =
+        merge_seed_epoch_consensus_inputs(anchor_fp.clone(), epoch_no, seed_consensus_inputs)
+            .map_err(GenesisBootstrapError::SeedConsensusMerge)?;
     let bytes = encode_seed_epoch_consensus_inputs(&record);
+    // Ordering (A3a): sidecar put (durable) FIRST, then the WAL
+    // provenance append (the commit point). A crash between the two
+    // leaves the sidecar with no provenance entry — "not imported".
     snapshot_store
         .put_seed_epoch_consensus_inputs(&anchor_fp, &bytes)
-        .map_err(GenesisBootstrapError::SeedConsensusPersist)
+        .map_err(GenesisBootstrapError::SeedConsensusPersist)?;
+    append_seed_epoch_provenance(wal, &anchor_fp, epoch_no, &bytes)
+        .map_err(GenesisBootstrapError::SeedConsensusProvenanceWal)
 }
 
 #[cfg(test)]
@@ -182,7 +191,34 @@ mod tests {
     use ade_types::tx::{Coin, TxIn};
     use ade_types::{CardanoEra, EpochNo, Hash28, SlotNo};
 
+    use ade_ledger::wal::{
+        decode_wal_entry, replay_from_anchor, RecoveredBootstrapProvenance, WalEntry,
+    };
+
     use crate::chaindb::InMemoryChainDb;
+
+    /// Minimal append-order in-memory `WalStore` double: enough to
+    /// thread through the composer and read back the appended
+    /// provenance entry.
+    struct VecWal {
+        entries: Vec<WalEntry>,
+    }
+    impl VecWal {
+        fn new() -> Self {
+            Self {
+                entries: Vec::new(),
+            }
+        }
+    }
+    impl ade_ledger::wal::WalStore for VecWal {
+        fn append(&mut self, entry: WalEntry) -> Result<(), ade_ledger::wal::WalError> {
+            self.entries.push(entry);
+            Ok(())
+        }
+        fn read_all(&self) -> Result<Vec<WalEntry>, ade_ledger::wal::WalError> {
+            Ok(self.entries.clone())
+        }
+    }
 
     const EPOCH_576: EpochNo = EpochNo(576);
     const EPOCH_577_START: u64 = 163_900_800;
@@ -206,7 +242,10 @@ mod tests {
     }
 
     fn empty_view() -> PoolDistrView {
-        let asc = ActiveSlotsCoeff { numer: 5, denom: 100 };
+        let asc = ActiveSlotsCoeff {
+            numer: 5,
+            denom: 100,
+        };
         let pools: BTreeMap<Hash28, PoolEntry> = BTreeMap::new();
         PoolDistrView::new(EPOCH_576, 1, asc, pools)
     }
@@ -241,6 +280,7 @@ mod tests {
     #[test]
     fn conway_genesis_bootstrap_through_single_authority() {
         let db = InMemoryChainDb::new();
+        let mut wal = VecWal::new();
         let sched = schedule();
         let view = empty_view();
         let cfg = conway_config();
@@ -254,6 +294,7 @@ mod tests {
             &inputs,
             &db,
             &db,
+            &mut wal,
             &sched,
             &view,
         )
@@ -286,6 +327,7 @@ mod tests {
     #[test]
     fn non_conway_genesis_bootstrap_fails_closed() {
         let db = InMemoryChainDb::new();
+        let mut wal = VecWal::new();
         let sched = schedule();
         let view = empty_view();
         let inputs = seed_inputs();
@@ -300,6 +342,7 @@ mod tests {
             &inputs,
             &db,
             &db,
+            &mut wal,
             &sched,
             &view,
         )
@@ -312,6 +355,8 @@ mod tests {
         ));
         // No storage initialized on the fail-closed path.
         assert!(db.list_snapshot_slots().expect("list").is_empty());
+        // And no WAL provenance entry on the fail-closed path.
+        assert!(wal.read_all().expect("read_all").is_empty());
     }
 
     #[test]
@@ -322,6 +367,7 @@ mod tests {
         };
 
         let db = InMemoryChainDb::new();
+        let mut wal = VecWal::new();
         let sched = schedule();
         let view = empty_view();
         let cfg = conway_config();
@@ -335,6 +381,7 @@ mod tests {
             &inputs,
             &db,
             &db,
+            &mut wal,
             &sched,
             &view,
         )
@@ -379,5 +426,39 @@ mod tests {
         // The sidecar lives in its own namespace — it created no
         // slot-keyed snapshot.
         assert!(db.list_snapshot_slots().expect("list").is_empty());
+
+        // A3a: the WAL recorded the provenance entry AFTER the sidecar
+        // put (the commit point), with sidecar_hash bound to the exact
+        // stored A1 bytes. This is the put-then-append ordering: the
+        // sidecar is present (asserted above) AND the WAL entry exists.
+        let entries = wal.read_all().expect("read_all");
+        assert_eq!(entries.len(), 1, "exactly one provenance entry");
+        match &entries[0] {
+            WalEntry::SeedEpochConsensusInputsImported {
+                anchor_fp: a,
+                sidecar_hash,
+                epoch_no,
+            } => {
+                assert_eq!(*a, anchor_fp);
+                assert_eq!(*epoch_no, EPOCH_576);
+                assert_eq!(*sidecar_hash, ade_crypto::blake2b_256(&stored));
+            }
+            other => panic!("expected provenance entry, got {other:?}"),
+        }
+
+        // The appended entry is itself canonically encodable, and replay
+        // surfaces the provenance view bound to this anchor.
+        let _ = decode_wal_entry(&ade_ledger::wal::encode_wal_entry(&entries[0]))
+            .expect("entry round-trips");
+        let bb = BTreeMap::new();
+        let replay = replay_from_anchor(&anchor_fp, &entries, &bb).expect("replay");
+        assert_eq!(
+            replay.provenance,
+            Some(RecoveredBootstrapProvenance {
+                anchor_fp: anchor_fp.clone(),
+                sidecar_hash: ade_crypto::blake2b_256(&stored),
+                epoch_no: EPOCH_576,
+            })
+        );
     }
 }
