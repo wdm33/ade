@@ -620,6 +620,24 @@ impl SnapshotStore for PersistentChainDb {
         let bytes = table.get(&anchor_fp.0).map_err(map_storage_err)?;
         Ok(bytes.map(|v| v.value().to_vec()))
     }
+
+    fn list_seed_epoch_consensus_anchor_fps(&self) -> Result<Vec<Hash32>, ChainDbError> {
+        let txn = self.db.begin_read().map_err(map_txn_err)?;
+        // An older file (pre-A2) has no sidecar table — that is "no anchor
+        // lineage persisted", an empty list, not an error.
+        let table = match txn.open_table(SEED_CINPUTS_BY_ANCHOR_FP) {
+            Ok(t) => t,
+            Err(redb::TableError::TableDoesNotExist(_)) => return Ok(Vec::new()),
+            Err(e) => return Err(map_table_err(e)),
+        };
+        let fps: Vec<Hash32> = table
+            .iter()
+            .map_err(map_storage_err)?
+            .filter_map(|r| r.ok())
+            .map(|(k, _)| Hash32(*k.value()))
+            .collect();
+        Ok(fps)
+    }
 }
 
 // ---------- error mapping ----------

@@ -201,4 +201,10 @@ impl SnapshotStore for InMemoryChainDb {
         let inner = self.inner.lock().map_err(lock_poisoned)?;
         Ok(inner.seed_consensus_inputs.get(anchor_fp).cloned())
     }
+
+    fn list_seed_epoch_consensus_anchor_fps(&self) -> Result<Vec<Hash32>, ChainDbError> {
+        let inner = self.inner.lock().map_err(lock_poisoned)?;
+        // BTreeMap keys are already ascending; clone into an owned Vec.
+        Ok(inner.seed_consensus_inputs.keys().cloned().collect())
+    }
 }

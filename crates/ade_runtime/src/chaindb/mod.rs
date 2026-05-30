@@ -136,4 +136,16 @@ pub trait SnapshotStore: Send + Sync {
         &self,
         anchor_fp: &Hash32,
     ) -> Result<Option<Vec<u8>>, ChainDbError>;
+
+    /// All anchor fingerprints with a stored seed-epoch consensus-inputs
+    /// sidecar, ascending. PHASE4-N-F-C L3 (W2): a read-only **discovery**
+    /// surface for warm-start recovery — it locates the persisted bootstrap
+    /// anchor lineage(s) from the sidecar table key, a source independent of
+    /// the WAL provenance entry (reading the anchor_fp back from the very WAL
+    /// entry the warm-start then validates would be circular). Discovery ONLY:
+    /// finding an `anchor_fp` here is NOT proof the sidecar is valid — the
+    /// warm-start verify chain (WAL-provenance match → sidecar hash → anchor/
+    /// epoch binding) still applies and is the actual authority. Empty when no
+    /// sidecar has been persisted.
+    fn list_seed_epoch_consensus_anchor_fps(&self) -> Result<Vec<Hash32>, ChainDbError>;
 }

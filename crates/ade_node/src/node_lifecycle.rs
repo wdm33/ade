@@ -48,10 +48,15 @@ use std::path::Path;
 use std::process::ExitCode;
 
 use ade_core::consensus::era_schedule::{EraSchedule, EraSummary};
+use ade_core::consensus::vrf_cert::ActiveSlotsCoeff;
 use ade_core::consensus::BootstrapAnchorHash;
 use ade_ledger::consensus_view::PoolDistrView;
 use ade_ledger::fingerprint::fingerprint;
 use ade_ledger::state::LedgerState;
+use ade_ledger::wal::{replay_from_anchor, WalStore};
+use ade_runtime::bootstrap::{
+    bootstrap_initial_state, BootstrapInputs, BootstrapState, SeedEpochConsensusSource,
+};
 use ade_runtime::chaindb::{
     ChainDb, PersistentChainDb, PersistentChainDbOptions, SnapshotStore,
 };
@@ -82,6 +87,15 @@ pub const EXIT_NODE_LIFECYCLE_UNWIRED: i32 = 40;
 /// bootstrap failure). Distinct so an operator can tell a Mithril
 /// provenance failure from a bad-CLI or not-yet-wired exit.
 pub const EXIT_NODE_MITHRIL_BOOTSTRAP_FAILED: i32 = 41;
+
+/// Exit code for a fail-closed production warm-start recovery (L3): no
+/// persisted anchor lineage, more than one lineage, missing WAL
+/// provenance, a WAL replay defect (chain break / missing block bytes /
+/// duplicate provenance / anchor mismatch), a snapshot below the tip that
+/// would require forward replay (L4 territory), or the
+/// `bootstrap_initial_state` sidecar verify chain failing. Distinct so an
+/// operator can tell a recovery failure from a first-run / bad-CLI exit.
+pub const EXIT_NODE_WARM_START_RECOVERY_FAILED: i32 = 42;
 
 /// The first-run-vs-warm-start classification — a closed sum derived
 /// purely from what is persisted on disk.
@@ -131,9 +145,36 @@ pub enum NodeLifecycleError {
     /// persist, or the WAL-provenance append. Carries the closed
     /// `MithrilBootstrapError` debug. Fail closed — NO fallback.
     MithrilBootstrap(String),
-    /// Warm-start arm reached: the production warm-start recovery (L3)
-    /// is not wired yet. Fail closed — NO bundle fallback is permitted.
-    WarmStartRecoveryNotWired,
+    /// Warm-start: the sidecar table holds no persisted anchor lineage,
+    /// so there is nothing to recover. Fail closed — NO bundle fallback.
+    WarmStartNoAnchorLineage,
+    /// Warm-start: the sidecar table holds more than one anchor lineage.
+    /// Exactly one is expected (single-epoch, single-shot; CN-ANCHOR-01).
+    /// Fail closed rather than guess which lineage to recover.
+    WarmStartMultipleAnchorLineages { count: usize },
+    /// Warm-start: reading or replaying the WAL fail-closed — a
+    /// `ChainBreak`, `BlockBytesMissing`, `DuplicateProvenance`, or
+    /// `ProvenanceAnchorMismatch` (the WAL provenance entry's `anchor_fp`
+    /// disagreed with the independent sidecar-key anchor_fp). Carries the
+    /// closed `WalError` debug. Fail closed.
+    WarmStartWalReplay(String),
+    /// Warm-start: the WAL replay surfaced no `RecoveredBootstrapProvenance`
+    /// (no `SeedEpochConsensusInputsImported` entry). The sidecar exists but
+    /// its commit-point provenance is absent — treat as "not imported".
+    /// Fail closed.
+    WarmStartNoProvenance,
+    /// Warm-start: the persisted snapshot is below the chain tip, so
+    /// recovery would require forward block replay. That is L4 durable-apply
+    /// territory (and L4c's crash-window proof); L3 recovers only a
+    /// snapshot-at-tip precondition. Fail closed rather than replay with a
+    /// non-recovered leadership view.
+    WarmStartForwardReplayUnsupported { tip_slot: u64 },
+    /// Warm-start: the single `bootstrap_initial_state` authority's
+    /// `RequiredFromRecoveredProvenance` verify chain fail-closed — sidecar
+    /// missing for the anchor, `sidecar_hash` mismatch, anchor/epoch binding
+    /// mismatch, byte-identity mismatch, or a malformed sidecar. Carries the
+    /// closed `BootstrapError` debug. Fail closed — NO bundle fallback.
+    WarmStartBootstrap(String),
 }
 
 /// Pure first-run-vs-warm-start classifier. A function of on-disk state
@@ -174,7 +215,12 @@ fn exit_code_for(e: &NodeLifecycleError) -> i32 {
         NodeLifecycleError::ManifestImport(_)
         | NodeLifecycleError::EpochMismatch { .. }
         | NodeLifecycleError::MithrilBootstrap(_) => EXIT_NODE_MITHRIL_BOOTSTRAP_FAILED,
-        NodeLifecycleError::WarmStartRecoveryNotWired => EXIT_NODE_LIFECYCLE_UNWIRED,
+        NodeLifecycleError::WarmStartNoAnchorLineage
+        | NodeLifecycleError::WarmStartMultipleAnchorLineages { .. }
+        | NodeLifecycleError::WarmStartWalReplay(_)
+        | NodeLifecycleError::WarmStartNoProvenance
+        | NodeLifecycleError::WarmStartForwardReplayUnsupported { .. }
+        | NodeLifecycleError::WarmStartBootstrap(_) => EXIT_NODE_WARM_START_RECOVERY_FAILED,
     }
 }
 
@@ -223,10 +269,130 @@ fn run_node_lifecycle_inner(cli: &Cli) -> Result<(), NodeLifecycleError> {
         // 5a. FirstRun: Mithril-only bootstrap (L2). Fail-closed; no
         //     genesis/bundle/cold/tip fallback.
         NodeStart::FirstRun => first_run_mithril_bootstrap(cli, &chaindb, &mut wal),
-        // 5b. WarmStart: production warm-start recovery (L3) — not wired.
-        //     Fail closed; NO bundle fallback.
-        NodeStart::WarmStart => Err(NodeLifecycleError::WarmStartRecoveryNotWired),
+        // 5b. WarmStart: production warm-start recovery (L3). Replay the
+        //     WAL, restore + verify the recovered seed-epoch sidecar through
+        //     the single bootstrap authority. Fail closed; NO bundle fallback.
+        NodeStart::WarmStart => {
+            let state = warm_start_recovery(&chaindb, &wal)?;
+            let epoch = state
+                .seed_epoch_consensus_inputs
+                .as_ref()
+                .map(|s| s.epoch_no.0);
+            let tip_slot = state.tip.as_ref().map(|t| t.slot.0);
+            // Honest success record. L3 does not sync (L4) or produce (L5).
+            eprintln!(
+                "ade_node --mode node: warm-start recovery complete \
+                 (recovered seed-epoch consensus inputs epoch={epoch:?}, recovered tip slot={tip_slot:?}). \
+                 Sync (L4) and produce (L5) are not wired; NO block produced."
+            );
+            Ok(())
+        }
     }
+}
+
+/// WarmStart arm — production warm-start recovery (L3).
+///
+/// Reconstructs the verified recovered `BootstrapState` (including the
+/// recovered `SeedEpochConsensusInputs`) from on-disk state alone:
+///
+///   1. **W2 discovery (independent of the WAL):** enumerate the anchor
+///      fingerprints persisted in the sidecar table
+///      (`list_seed_epoch_consensus_anchor_fps`). The sidecar table key is a
+///      source structurally independent of the WAL provenance entry — so
+///      using it as the replay anchor keeps the anchor-mismatch check
+///      non-circular. Require exactly one lineage; zero or many ⇒ fail closed.
+///   2. **WAL replay:** `read_all` → `replay_from_anchor(anchor_fp, …)`. The
+///      replay validates that the WAL `SeedEpochConsensusInputsImported`
+///      entry's own `anchor_fp` equals the independent `anchor_fp` from (1).
+///      No provenance recovered ⇒ fail closed.
+///   3. **Single authority:** `bootstrap_initial_state` with
+///      `RequiredFromRecoveredProvenance` runs the fail-closed verify chain
+///      (sidecar present → `blake2b_256` hash == provenance → A1 decode →
+///      anchor/epoch binding → byte-identity re-encode). NO bundle fallback.
+///
+/// L3 scope: snapshot-at-tip only. `bootstrap_initial_state`'s warm-start
+/// branch restores the sidecar; for a snapshot exactly at the target it
+/// returns BEFORE the replay-forward fold that is the SOLE consumer of
+/// `era_schedule` / `ledger_view` (`materialize_rolled_back_state` degenerate
+/// branch). A snapshot strictly below the tip would force forward replay —
+/// that is L4 durable-apply territory (L4c owns its crash-window proof) — so
+/// it fails closed here, making the deterministic placeholder schedule/view
+/// passed below provably unconsumed.
+///
+/// `wal` is read-only here (`read_all` takes `&self`); L3 appends nothing.
+fn warm_start_recovery(
+    chaindb: &PersistentChainDb,
+    wal: &FileWalStore,
+) -> Result<BootstrapState, NodeLifecycleError> {
+    // 1. W2 discovery: the independent anchor lineage(s) from the sidecar
+    //    table key. Discovery ONLY — the verify chain below is the authority.
+    let anchor_fps = SnapshotStore::list_seed_epoch_consensus_anchor_fps(chaindb)
+        .map_err(|e| NodeLifecycleError::OnDiskRead(format!("{e:?}")))?;
+    let anchor_fp = match anchor_fps.as_slice() {
+        [single] => single.clone(),
+        [] => return Err(NodeLifecycleError::WarmStartNoAnchorLineage),
+        _ => {
+            return Err(NodeLifecycleError::WarmStartMultipleAnchorLineages {
+                count: anchor_fps.len(),
+            })
+        }
+    };
+
+    // 2. Replay the WAL from the INDEPENDENT anchor_fp. L3 has no AdmitBlock
+    //    WAL entries (those arrive with L4's durable apply), so the
+    //    preserved-block-bytes map is empty; an AdmitBlock referencing absent
+    //    bytes fails closed inside `replay_from_anchor` (BlockBytesMissing).
+    let entries = wal
+        .read_all()
+        .map_err(|e| NodeLifecycleError::WarmStartWalReplay(format!("{e:?}")))?;
+    let block_bytes: BTreeMap<Hash32, Vec<u8>> = BTreeMap::new();
+    let replay = replay_from_anchor(&anchor_fp, &entries, &block_bytes)
+        .map_err(|e| NodeLifecycleError::WarmStartWalReplay(format!("{e:?}")))?;
+    let provenance = replay
+        .provenance
+        .ok_or(NodeLifecycleError::WarmStartNoProvenance)?;
+
+    // 3. Snapshot-at-tip guard. The only consumer of era_schedule/ledger_view
+    //    is the replay-forward fold, reached only when the nearest snapshot is
+    //    strictly below the target. Require a snapshot exactly at the tip so
+    //    that path is unreachable; otherwise fail closed (L4 territory).
+    let tip = ChainDb::tip(chaindb).map_err(|e| NodeLifecycleError::OnDiskRead(format!("{e:?}")))?;
+    if let Some(t) = &tip {
+        if SnapshotStore::get_snapshot(chaindb, t.slot)
+            .map_err(|e| NodeLifecycleError::OnDiskRead(format!("{e:?}")))?
+            .is_none()
+        {
+            return Err(NodeLifecycleError::WarmStartForwardReplayUnsupported {
+                tip_slot: t.slot.0,
+            });
+        }
+    }
+
+    // Deterministic placeholders, provably unconsumed (snapshot-at-tip guard
+    // ⇒ `materialize_rolled_back_state` takes the degenerate branch and never
+    // folds a block). NOT bundle-derived: a constant empty schedule + empty
+    // leadership view.
+    let era_schedule = make_node_schedule(SlotNo(0), EpochNo(0));
+    let ledger_view = PoolDistrView::new(
+        EpochNo(0),
+        0,
+        ActiveSlotsCoeff { numer: 0, denom: 1 },
+        BTreeMap::new(),
+    );
+
+    // 4. The single authority. RequiredFromRecoveredProvenance runs the
+    //    fail-closed sidecar verify chain; no `--consensus-inputs-path`
+    //    fallback exists inside it.
+    bootstrap_initial_state(BootstrapInputs {
+        chaindb,
+        snapshot_store: chaindb,
+        era_schedule: &era_schedule,
+        ledger_view: &ledger_view,
+        genesis_initial: None,
+        seed_epoch_consensus_source:
+            SeedEpochConsensusSource::RequiredFromRecoveredProvenance(provenance),
+    })
+    .map_err(|e| NodeLifecycleError::WarmStartBootstrap(format!("{e:?}")))
 }
 
 /// FirstRun arm — the Mithril-only first-run bootstrap (L2).
@@ -501,11 +667,40 @@ fn report(e: &NodeLifecycleError) {
                  verify_mithril_binding must pass before any state is admitted; no fallback."
             );
         }
-        NodeLifecycleError::WarmStartRecoveryNotWired => {
+        NodeLifecycleError::WarmStartNoAnchorLineage => {
             eprintln!(
-                "ade_node --mode node: warm start detected (non-empty store). The production \
-                 warm-start recovery (PHASE4-N-F-C L3) is not wired yet; failing closed. \
+                "ade_node --mode node: warm start detected (non-empty store) but no persisted \
+                 seed-epoch anchor lineage to recover; failing closed. No bundle fallback."
+            );
+        }
+        NodeLifecycleError::WarmStartMultipleAnchorLineages { count } => {
+            eprintln!(
+                "ade_node --mode node: warm start found {count} persisted anchor lineages; \
+                 exactly one is expected (single-epoch, single-shot). Failing closed."
+            );
+        }
+        NodeLifecycleError::WarmStartWalReplay(d) => {
+            eprintln!(
+                "ade_node --mode node: warm-start WAL replay failed ({d}); failing closed. \
                  No bundle fallback is permitted."
+            );
+        }
+        NodeLifecycleError::WarmStartNoProvenance => {
+            eprintln!(
+                "ade_node --mode node: warm-start WAL has no seed-epoch provenance entry \
+                 (sidecar present but not committed); treating as not-imported. Failing closed."
+            );
+        }
+        NodeLifecycleError::WarmStartForwardReplayUnsupported { tip_slot } => {
+            eprintln!(
+                "ade_node --mode node: warm-start needs forward block replay (no snapshot at \
+                 tip slot {tip_slot}); that is L4 durable-apply territory. Failing closed."
+            );
+        }
+        NodeLifecycleError::WarmStartBootstrap(d) => {
+            eprintln!(
+                "ade_node --mode node: warm-start recovery failed in the bootstrap authority \
+                 ({d}); failing closed. The recovered sidecar did not verify; no bundle fallback."
             );
         }
     }
@@ -796,5 +991,405 @@ mod tests {
             matches!(r, Err(NodeLifecycleError::ExtractionRead(_))),
             "malformed extraction must fail closed, got {r:?}"
         );
+    }
+
+    // ===== L3: production warm-start recovery (hermetic) =====
+    //
+    // CONSTRUCTED WARM-START PRECONDITION FIXTURE (a valid persisted
+    // precondition, NOT fabricated evidence): an anchor-fp-keyed seed-epoch
+    // sidecar + its WAL provenance entry + a snapshot at the recovered tip,
+    // written to a real PersistentChainDb + FileWalStore, then dropped and
+    // reopened (the persist -> drop -> reopen -> recover restart proof). L3
+    // proves the warm-start recovery transition over this precondition; L4c
+    // later proves that normal peer fetch + durable apply creates this
+    // precondition naturally. The fixture IS the valid persisted warm-start
+    // precondition — it is the legitimate proof input for the recovery
+    // transition, not a stand-in for live evidence.
+
+    use ade_core::consensus::praos_state::Nonce;
+    use ade_ledger::consensus_view::PoolEntry;
+    use ade_ledger::seed_consensus_inputs::{
+        encode_seed_epoch_consensus_inputs, SeedEpochConsensusInputs,
+    };
+    use ade_ledger::wal::WalEntry;
+    use ade_runtime::chaindb::StoredBlock;
+    use ade_runtime::rollback::PersistentSnapshotCache;
+    use ade_runtime::seed_consensus_provenance::append_seed_epoch_provenance;
+    use ade_types::Hash28;
+
+    const WARM_ANCHOR_FP: Hash32 = Hash32([0x5A; 32]);
+    const WARM_EPOCH: EpochNo = EpochNo(576);
+    const WARM_TIP_SLOT: u64 = 23_013_663;
+
+    struct WarmDirs {
+        _dir: TempDir,
+        snap: std::path::PathBuf,
+        wal: std::path::PathBuf,
+    }
+
+    fn fresh_warm_dirs() -> WarmDirs {
+        let dir = TempDir::new().unwrap();
+        let snap = dir.path().join("snap");
+        let wal = dir.path().join("wal");
+        std::fs::create_dir_all(&snap).unwrap();
+        std::fs::create_dir_all(&wal).unwrap();
+        WarmDirs {
+            _dir: dir,
+            snap,
+            wal,
+        }
+    }
+
+    fn open_warm_stores(d: &WarmDirs) -> (PersistentChainDb, FileWalStore) {
+        let chaindb =
+            PersistentChainDb::open(PersistentChainDbOptions::at(d.snap.join("chain.db"))).unwrap();
+        let wal = FileWalStore::open(&d.wal).unwrap();
+        (chaindb, wal)
+    }
+
+    fn warm_sample_record(anchor_fp: Hash32, epoch: EpochNo) -> SeedEpochConsensusInputs {
+        let mut pools: BTreeMap<Hash28, PoolEntry> = BTreeMap::new();
+        pools.insert(
+            Hash28([0x01; 28]),
+            PoolEntry {
+                active_stake: 1_000,
+                vrf_keyhash: Hash32([0x07; 32]),
+            },
+        );
+        SeedEpochConsensusInputs {
+            anchor_fp,
+            epoch_no: epoch,
+            active_slots_coeff: ActiveSlotsCoeff {
+                numer: 5,
+                denom: 100,
+            },
+            total_active_stake: 1_000,
+            pool_distribution: pools,
+        }
+    }
+
+    /// Put a block at `slot` and capture a bare-Conway snapshot AT that
+    /// same slot. With the snapshot exactly at the tip, the warm-start's
+    /// `materialize_rolled_back_state` takes its degenerate branch and never
+    /// folds a block forward — the sole consumer of era_schedule/ledger_view
+    /// — so those placeholders are provably unconsumed.
+    fn put_tip_and_snapshot(chaindb: &PersistentChainDb, slot: u64) {
+        chaindb
+            .put_block(&StoredBlock {
+                hash: Hash32([0xBB; 32]),
+                slot: SlotNo(slot),
+                bytes: vec![0xAB; 8],
+            })
+            .unwrap();
+        let ledger = LedgerState::new(CardanoEra::Conway);
+        let chain_dep = PraosChainDepState::genesis(Nonce(Hash32([0xCD; 32])));
+        PersistentSnapshotCache::new(chaindb)
+            .capture(SlotNo(slot), &ledger, &chain_dep)
+            .unwrap();
+    }
+
+    #[test]
+    fn warm_start_recovers_seed_epoch_consensus_inputs_byte_identical() {
+        // The CE-L-3 positive: a valid persisted precondition recovers the
+        // byte-identical seed-epoch sidecar through the single
+        // bootstrap_initial_state authority, across a drop+reopen boundary.
+        let d = fresh_warm_dirs();
+        let record = warm_sample_record(WARM_ANCHOR_FP, WARM_EPOCH);
+        let bytes = encode_seed_epoch_consensus_inputs(&record);
+        {
+            let (chaindb, mut wal) = open_warm_stores(&d);
+            chaindb
+                .put_seed_epoch_consensus_inputs(&WARM_ANCHOR_FP, &bytes)
+                .unwrap();
+            append_seed_epoch_provenance(&mut wal, &WARM_ANCHOR_FP, WARM_EPOCH, &bytes).unwrap();
+            put_tip_and_snapshot(&chaindb, WARM_TIP_SLOT);
+            // stores dropped here -> restart boundary.
+        }
+
+        let (chaindb, wal) = open_warm_stores(&d);
+        let state = warm_start_recovery(&chaindb, &wal).expect("warm-start recovers");
+
+        let recovered = state
+            .seed_epoch_consensus_inputs
+            .expect("warm-start recovers the sidecar");
+        assert_eq!(recovered, record);
+        // Byte-identity: re-encoding the recovered record reproduces exactly
+        // the persisted sidecar bytes.
+        assert_eq!(encode_seed_epoch_consensus_inputs(&recovered), bytes);
+        // Recovered tip matches the persisted tip.
+        assert_eq!(state.tip.map(|t| t.slot.0), Some(WARM_TIP_SLOT));
+    }
+
+    #[test]
+    fn warm_start_dispatch_succeeds_end_to_end() {
+        // The whole owner path: classify_start -> WarmStart arm ->
+        // warm_start_recovery -> Ok, over the same constructed precondition.
+        let d = fresh_warm_dirs();
+        let record = warm_sample_record(WARM_ANCHOR_FP, WARM_EPOCH);
+        let bytes = encode_seed_epoch_consensus_inputs(&record);
+        {
+            let (chaindb, mut wal) = open_warm_stores(&d);
+            chaindb
+                .put_seed_epoch_consensus_inputs(&WARM_ANCHOR_FP, &bytes)
+                .unwrap();
+            append_seed_epoch_provenance(&mut wal, &WARM_ANCHOR_FP, WARM_EPOCH, &bytes).unwrap();
+            put_tip_and_snapshot(&chaindb, WARM_TIP_SLOT);
+        }
+        let cli = warm_cli(&d);
+        let r = run_node_lifecycle_inner(&cli);
+        assert!(r.is_ok(), "warm-start dispatch should succeed, got {r:?}");
+    }
+
+    #[test]
+    fn warm_start_fails_closed_on_missing_sidecar() {
+        // No sidecar persisted. With W2 discovery sourced from the sidecar
+        // table key, an absent sidecar surfaces as "no anchor lineage" — the
+        // fail-closed "nothing to recover", with NO bundle fallback. (This
+        // is the reachable form of the doc's missing-sidecar case: the
+        // discovery step guarantees the sidecar key exists before the
+        // bootstrap authority's own SidecarMissing check can run.)
+        let d = fresh_warm_dirs();
+        {
+            let (chaindb, _wal) = open_warm_stores(&d);
+            put_tip_and_snapshot(&chaindb, WARM_TIP_SLOT);
+        }
+        let (chaindb, wal) = open_warm_stores(&d);
+        let r = warm_start_recovery(&chaindb, &wal);
+        assert!(
+            matches!(r, Err(NodeLifecycleError::WarmStartNoAnchorLineage)),
+            "missing sidecar must fail closed, got {r:?}"
+        );
+    }
+
+    #[test]
+    fn warm_start_fails_closed_on_missing_wal_provenance() {
+        // Sidecar present, but no WAL provenance entry committed: replay
+        // recovers no provenance -> fail closed (treat as not-imported).
+        let d = fresh_warm_dirs();
+        let record = warm_sample_record(WARM_ANCHOR_FP, WARM_EPOCH);
+        let bytes = encode_seed_epoch_consensus_inputs(&record);
+        {
+            let (chaindb, _wal) = open_warm_stores(&d);
+            chaindb
+                .put_seed_epoch_consensus_inputs(&WARM_ANCHOR_FP, &bytes)
+                .unwrap();
+            put_tip_and_snapshot(&chaindb, WARM_TIP_SLOT);
+            // No append_seed_epoch_provenance.
+        }
+        let (chaindb, wal) = open_warm_stores(&d);
+        let r = warm_start_recovery(&chaindb, &wal);
+        assert!(
+            matches!(r, Err(NodeLifecycleError::WarmStartNoProvenance)),
+            "missing WAL provenance must fail closed, got {r:?}"
+        );
+    }
+
+    #[test]
+    fn warm_start_fails_closed_on_sidecar_hash_mismatch() {
+        // Sidecar present + WAL provenance present, but the provenance
+        // sidecar_hash does not bind the persisted bytes -> the bootstrap
+        // authority's verify chain fails closed (SeedConsensusHashMismatch).
+        let d = fresh_warm_dirs();
+        let record = warm_sample_record(WARM_ANCHOR_FP, WARM_EPOCH);
+        let bytes = encode_seed_epoch_consensus_inputs(&record);
+        {
+            let (chaindb, mut wal) = open_warm_stores(&d);
+            chaindb
+                .put_seed_epoch_consensus_inputs(&WARM_ANCHOR_FP, &bytes)
+                .unwrap();
+            // Raw WAL entry with a deliberately wrong sidecar_hash.
+            wal.append(WalEntry::SeedEpochConsensusInputsImported {
+                anchor_fp: WARM_ANCHOR_FP,
+                sidecar_hash: Hash32([0xAA; 32]),
+                epoch_no: WARM_EPOCH,
+            })
+            .unwrap();
+            put_tip_and_snapshot(&chaindb, WARM_TIP_SLOT);
+        }
+        let (chaindb, wal) = open_warm_stores(&d);
+        let r = warm_start_recovery(&chaindb, &wal);
+        match r {
+            Err(NodeLifecycleError::WarmStartBootstrap(d)) => {
+                assert!(
+                    d.contains("SeedConsensusHashMismatch"),
+                    "expected SeedConsensusHashMismatch, got {d}"
+                );
+            }
+            other => panic!("hash mismatch must fail closed in bootstrap, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn warm_start_fails_closed_on_anchor_mismatch() {
+        // Sidecar stored under anchor X (the discovery source); the WAL
+        // provenance entry names a DIFFERENT anchor Y. Replaying from the
+        // independent X catches the mismatch -> fail closed. This is the
+        // non-circular check: the sidecar-key anchor must equal the WAL
+        // entry's anchor.
+        let d = fresh_warm_dirs();
+        let record = warm_sample_record(WARM_ANCHOR_FP, WARM_EPOCH);
+        let bytes = encode_seed_epoch_consensus_inputs(&record);
+        {
+            let (chaindb, mut wal) = open_warm_stores(&d);
+            chaindb
+                .put_seed_epoch_consensus_inputs(&WARM_ANCHOR_FP, &bytes)
+                .unwrap();
+            // WAL provenance for a different anchor (0x99 != 0x5A).
+            append_seed_epoch_provenance(&mut wal, &Hash32([0x99; 32]), WARM_EPOCH, &bytes).unwrap();
+            put_tip_and_snapshot(&chaindb, WARM_TIP_SLOT);
+        }
+        let (chaindb, wal) = open_warm_stores(&d);
+        let r = warm_start_recovery(&chaindb, &wal);
+        match r {
+            Err(NodeLifecycleError::WarmStartWalReplay(d)) => {
+                assert!(
+                    d.contains("ProvenanceAnchorMismatch"),
+                    "expected ProvenanceAnchorMismatch, got {d}"
+                );
+            }
+            other => panic!("anchor mismatch must fail closed in WAL replay, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn warm_start_fails_closed_on_duplicate_provenance() {
+        // Two WAL provenance entries for the same anchor -> replay fails
+        // closed (exactly one provenance entry is allowed per anchor).
+        let d = fresh_warm_dirs();
+        let record = warm_sample_record(WARM_ANCHOR_FP, WARM_EPOCH);
+        let bytes = encode_seed_epoch_consensus_inputs(&record);
+        {
+            let (chaindb, mut wal) = open_warm_stores(&d);
+            chaindb
+                .put_seed_epoch_consensus_inputs(&WARM_ANCHOR_FP, &bytes)
+                .unwrap();
+            append_seed_epoch_provenance(&mut wal, &WARM_ANCHOR_FP, WARM_EPOCH, &bytes).unwrap();
+            append_seed_epoch_provenance(&mut wal, &WARM_ANCHOR_FP, WARM_EPOCH, &bytes).unwrap();
+            put_tip_and_snapshot(&chaindb, WARM_TIP_SLOT);
+        }
+        let (chaindb, wal) = open_warm_stores(&d);
+        let r = warm_start_recovery(&chaindb, &wal);
+        match r {
+            Err(NodeLifecycleError::WarmStartWalReplay(d)) => {
+                assert!(
+                    d.contains("DuplicateProvenance"),
+                    "expected DuplicateProvenance, got {d}"
+                );
+            }
+            other => panic!("duplicate provenance must fail closed, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn warm_start_fails_closed_on_multiple_anchor_lineages() {
+        // Two distinct anchor lineages persisted -> exactly-one is required;
+        // fail closed rather than guess which to recover (CN-ANCHOR-01).
+        let d = fresh_warm_dirs();
+        let rec_a = warm_sample_record(Hash32([0x5A; 32]), WARM_EPOCH);
+        let rec_b = warm_sample_record(Hash32([0x5B; 32]), WARM_EPOCH);
+        {
+            let (chaindb, _wal) = open_warm_stores(&d);
+            chaindb
+                .put_seed_epoch_consensus_inputs(
+                    &Hash32([0x5A; 32]),
+                    &encode_seed_epoch_consensus_inputs(&rec_a),
+                )
+                .unwrap();
+            chaindb
+                .put_seed_epoch_consensus_inputs(
+                    &Hash32([0x5B; 32]),
+                    &encode_seed_epoch_consensus_inputs(&rec_b),
+                )
+                .unwrap();
+            put_tip_and_snapshot(&chaindb, WARM_TIP_SLOT);
+        }
+        let (chaindb, wal) = open_warm_stores(&d);
+        let r = warm_start_recovery(&chaindb, &wal);
+        assert!(
+            matches!(
+                r,
+                Err(NodeLifecycleError::WarmStartMultipleAnchorLineages { count: 2 })
+            ),
+            "multiple lineages must fail closed, got {r:?}"
+        );
+    }
+
+    #[test]
+    fn warm_start_fails_closed_when_forward_replay_needed() {
+        // Valid sidecar + WAL provenance, but the snapshot is BELOW the tip,
+        // so recovery would require forward block replay -> L4 territory.
+        // Fail closed rather than replay with a non-recovered leadership
+        // view (this is what makes the era_schedule/ledger_view placeholders
+        // provably unconsumed in the success path).
+        let d = fresh_warm_dirs();
+        let record = warm_sample_record(WARM_ANCHOR_FP, WARM_EPOCH);
+        let bytes = encode_seed_epoch_consensus_inputs(&record);
+        {
+            let (chaindb, mut wal) = open_warm_stores(&d);
+            chaindb
+                .put_seed_epoch_consensus_inputs(&WARM_ANCHOR_FP, &bytes)
+                .unwrap();
+            append_seed_epoch_provenance(&mut wal, &WARM_ANCHOR_FP, WARM_EPOCH, &bytes).unwrap();
+            // Block at the tip slot, but snapshot one slot BELOW it.
+            chaindb
+                .put_block(&StoredBlock {
+                    hash: Hash32([0xBB; 32]),
+                    slot: SlotNo(WARM_TIP_SLOT),
+                    bytes: vec![0xAB; 8],
+                })
+                .unwrap();
+            let ledger = LedgerState::new(CardanoEra::Conway);
+            let chain_dep = PraosChainDepState::genesis(Nonce(Hash32([0xCD; 32])));
+            PersistentSnapshotCache::new(&chaindb)
+                .capture(SlotNo(WARM_TIP_SLOT - 1), &ledger, &chain_dep)
+                .unwrap();
+        }
+        let (chaindb, wal) = open_warm_stores(&d);
+        let r = warm_start_recovery(&chaindb, &wal);
+        assert!(
+            matches!(
+                r,
+                Err(NodeLifecycleError::WarmStartForwardReplayUnsupported {
+                    tip_slot
+                }) if tip_slot == WARM_TIP_SLOT
+            ),
+            "forward replay needed must fail closed, got {r:?}"
+        );
+    }
+
+    /// Minimal node-mode Cli for the end-to-end warm-start dispatch test:
+    /// only the two persistence dirs are set; the FirstRun-only inputs are
+    /// all `None` (the WarmStart arm never reads them).
+    fn warm_cli(d: &WarmDirs) -> Cli {
+        Cli {
+            genesis_path: d._dir.path().join("genesis.json"),
+            network: "preprod".to_string(),
+            chain_db_path: None,
+            snapshot_store_path: None,
+            listen_addr: None,
+            peer_addrs: vec![],
+            mode: crate::cli::Mode::Node,
+            log_path: d._dir.path().join("node.jsonl"),
+            tip_read_timeout_secs: 5,
+            json_seed_path: None,
+            seed_point_slot: None,
+            seed_block_hash_hex: None,
+            wal_dir: Some(d.wal.clone()),
+            snapshot_dir: Some(d.snap.clone()),
+            network_magic: None,
+            genesis_hash_hex: None,
+            consensus_inputs_path: None,
+            mithril_manifest_path: None,
+            out_file: None,
+            period_idx: None,
+            seed_file: None,
+            cold_skey: None,
+            kes_skey: None,
+            vrf_skey: None,
+            opcert: None,
+            genesis_file: None,
+            evidence_log: None,
+            max_slots: None,
+        }
     }
 }
