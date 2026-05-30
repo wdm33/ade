@@ -32,7 +32,9 @@ use ade_runtime::orchestrator::event::OrchestratorEvent;
 use ade_runtime::orchestrator::leadership_session::SlotEraAnchor;
 use ade_runtime::rollback::cadence::SnapshotCadence;
 use ade_runtime::rollback::PersistentSnapshotCache;
-use ade_runtime::bootstrap::{bootstrap_initial_state, BootstrapInputs};
+use ade_runtime::bootstrap::{
+    bootstrap_initial_state, BootstrapInputs, BootstrapState, SeedEpochConsensusSource,
+};
 use ade_testkit::validity::ConwayValidityCorpus;
 use ade_types::{CardanoEra, EpochNo, Hash28, Hash32, SlotNo};
 use tokio::sync::mpsc;
@@ -197,12 +199,18 @@ async fn shutdown_then_resume_produces_byte_identical_state() {
     );
 
     // Direct fingerprint check: bootstrap again to extract the ledger.
-    let (l_again, cd_again, tip_again) = bootstrap_initial_state(BootstrapInputs {
+    let BootstrapState {
+        ledger: l_again,
+        chain_dep: cd_again,
+        tip: tip_again,
+        ..
+    } = bootstrap_initial_state(BootstrapInputs {
         chaindb: &db,
         snapshot_store: &db,
         era_schedule: &sched,
         ledger_view: view_arc.as_ref(),
         genesis_initial: None,
+        seed_epoch_consensus_source: SeedEpochConsensusSource::NotRequired,
     })
     .expect("bootstrap again");
     assert_eq!(

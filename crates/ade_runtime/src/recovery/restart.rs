@@ -41,7 +41,10 @@ use ade_ledger::wal::{replay_from_anchor, WalEntry, WalError, WalStore};
 use ade_types::SlotNo;
 use ade_types::Hash32;
 
-use crate::bootstrap::{bootstrap_initial_state, BootstrapError, BootstrapInputs};
+use crate::bootstrap::{
+    bootstrap_initial_state, BootstrapError, BootstrapInputs, BootstrapState,
+    SeedEpochConsensusSource,
+};
 use crate::chaindb::{ChainDb, ChainDbError, ChainTip, SnapshotStore};
 
 /// The authoritative state reconstructed by an unclean restart.
@@ -177,12 +180,21 @@ where
     //    branch). A partially-written checkpoint decodes as absent
     //    (DC-STORE-03) and the authority falls back to the prior valid
     //    snapshot, replaying forward over preserved bytes.
-    let (ledger, chain_dep, tip) = bootstrap_initial_state(BootstrapInputs {
+    let BootstrapState {
+        ledger,
+        chain_dep,
+        tip,
+        ..
+    } = bootstrap_initial_state(BootstrapInputs {
         chaindb,
         snapshot_store,
         era_schedule,
         ledger_view,
         genesis_initial,
+        // A3b: `recover_node_state` is the test-only secondary
+        // recovery helper; it does not demand the seed-epoch sidecar
+        // (the production warm-start wiring is a later slice).
+        seed_epoch_consensus_source: SeedEpochConsensusSource::NotRequired,
     })
     .map_err(NodeRecoveryError::Bootstrap)?;
 

@@ -38,7 +38,8 @@ use ade_ledger::rollback::MaterializeError;
 use ade_ledger::snapshot::error::SnapshotDecodeError;
 use ade_ledger::state::LedgerState;
 use ade_runtime::bootstrap::{
-    bootstrap_initial_state, BootstrapError, BootstrapInputs,
+    bootstrap_initial_state, BootstrapError, BootstrapInputs, BootstrapState,
+    SeedEpochConsensusSource,
 };
 use ade_runtime::chaindb::{ChainDb, ChainTip, SnapshotStore};
 use ade_runtime::clock::Clock;
@@ -102,6 +103,16 @@ impl NodeRunError {
             NodeRunError::Bootstrap(BootstrapError::Materialize(_)) => EXIT_GENERIC_STARTUP,
             NodeRunError::Bootstrap(BootstrapError::ChainDb(_)) => EXIT_AUTHORITY_FATAL_IO,
             NodeRunError::Bootstrap(BootstrapError::GenesisRequiredButAbsent) => EXIT_GENERIC_STARTUP,
+            // A3b: seed-epoch consensus-input warm-start verification
+            // failures are authority-fatal decode/binding halts (the
+            // recovered consensus inputs could not be trusted).
+            NodeRunError::Bootstrap(
+                BootstrapError::SeedConsensusProvenanceMissing
+                | BootstrapError::SeedConsensusSidecarMissing { .. }
+                | BootstrapError::SeedConsensusHashMismatch { .. }
+                | BootstrapError::SeedConsensusBindingMismatch { .. }
+                | BootstrapError::SeedConsensusSidecarDecode(_),
+            ) => EXIT_AUTHORITY_FATAL_DECODE,
             NodeRunError::AuthorityFatal(OrchestratorError::AuthorityFatal(kind)) => match kind {
                 AuthorityFatalKind::ChainWriteIo => EXIT_AUTHORITY_FATAL_IO,
                 AuthorityFatalKind::SnapshotDecodeUnknownVersion
@@ -142,12 +153,20 @@ where
     C: Clock + Send + 'static,
 {
     // Bootstrap (CN-NODE-01).
-    let (ledger, chain_dep, chain_tip) = bootstrap_initial_state(BootstrapInputs {
+    let BootstrapState {
+        ledger,
+        chain_dep,
+        tip: chain_tip,
+        ..
+    } = bootstrap_initial_state(BootstrapInputs {
         chaindb: inputs.chaindb,
         snapshot_store: inputs.snapshot_store,
         era_schedule: inputs.era_schedule,
         ledger_view: inputs.ledger_view.as_ref(),
         genesis_initial: inputs.genesis_initial,
+        // A3b: this orchestrator entry is not the production
+        // recovered-sidecar warm-start path (deferred slice).
+        seed_epoch_consensus_source: SeedEpochConsensusSource::NotRequired,
     })
     .map_err(NodeRunError::Bootstrap)?;
 

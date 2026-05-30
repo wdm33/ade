@@ -34,7 +34,10 @@ use ade_ledger::state::LedgerState;
 use ade_ledger::wal::{WalError, WalStore};
 use ade_types::{EpochNo, Hash32, SlotNo};
 
-use crate::bootstrap::{bootstrap_initial_state, BootstrapError, BootstrapInputs};
+use crate::bootstrap::{
+    bootstrap_initial_state, BootstrapError, BootstrapInputs, BootstrapState,
+    SeedEpochConsensusSource,
+};
 use crate::bootstrap_anchor::{mint, MintInputs};
 use crate::chaindb::{ChainDb, ChainDbError, ChainTip, SnapshotStore};
 use crate::consensus_inputs::LiveConsensusInputsCanonical;
@@ -143,12 +146,20 @@ where
 
     verify_mithril_binding(&import.report, &anchor).map_err(MithrilBootstrapError::Binding)?;
 
-    let (ledger, chain_dep, tip) = bootstrap_initial_state(BootstrapInputs {
+    let BootstrapState {
+        ledger,
+        chain_dep,
+        tip,
+        ..
+    } = bootstrap_initial_state(BootstrapInputs {
         chaindb,
         snapshot_store,
         era_schedule,
         ledger_view,
         genesis_initial: Some((seed_ledger, seed_chain_dep)),
+        // A3b: Mithril composition is a cold-start; no recovered
+        // sidecar to demand (the composer writes it after bootstrap).
+        seed_epoch_consensus_source: SeedEpochConsensusSource::NotRequired,
     })
     .map_err(MithrilBootstrapError::Bootstrap)?;
 

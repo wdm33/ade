@@ -196,19 +196,28 @@ pub async fn run_produce_mode(cli: ProduceCli, shutdown_rx: watch::Receiver<bool
         make_schedule_for_imported_window(&consensus.epoch_start_slot, consensus.epoch_no);
     let real_pool_distr = pool_distr_view_from_consensus_inputs(&consensus);
     let cold_db = ade_runtime::chaindb::InMemoryChainDb::new();
-    let (boot_ledger, boot_chain_dep, boot_tip) =
-        match ade_runtime::bootstrap::bootstrap_initial_state(
-            ade_runtime::bootstrap::BootstrapInputs {
-                chaindb: &cold_db,
-                snapshot_store: &cold_db,
-                era_schedule: &real_era_schedule,
-                ledger_view: &real_pool_distr,
-                genesis_initial: Some((seed_ledger, seed_chain_dep)),
-            },
-        ) {
-            Ok(t) => t,
-            Err(e) => return startup_fail_detail("bootstrap", &format!("{e:?}")),
-        };
+    let ade_runtime::bootstrap::BootstrapState {
+        ledger: boot_ledger,
+        chain_dep: boot_chain_dep,
+        tip: boot_tip,
+        ..
+    } = match ade_runtime::bootstrap::bootstrap_initial_state(
+        ade_runtime::bootstrap::BootstrapInputs {
+            chaindb: &cold_db,
+            snapshot_store: &cold_db,
+            era_schedule: &real_era_schedule,
+            ledger_view: &real_pool_distr,
+            genesis_initial: Some((seed_ledger, seed_chain_dep)),
+            // A3b: produce-mode cold-starts from the operator
+            // consensus-inputs bundle; the recovered-sidecar warm-start
+            // path is a later production-wiring slice, not this.
+            seed_epoch_consensus_source:
+                ade_runtime::bootstrap::SeedEpochConsensusSource::NotRequired,
+        },
+    ) {
+        Ok(t) => t,
+        Err(e) => return startup_fail_detail("bootstrap", &format!("{e:?}")),
+    };
 
     // PHASE4-N-T S3: seed the linear `ChainEvolution` typestate from the
     // real cold-start bootstrap triple. `eta0` is the consensus-inputs
@@ -1693,17 +1702,22 @@ mod tests {
         );
         let real_pool_distr = pool_distr_view_from_consensus_inputs(&consensus);
         let cold_db = ade_runtime::chaindb::InMemoryChainDb::new();
-        let (boot_ledger, _boot_chain_dep, boot_tip) =
-            ade_runtime::bootstrap::bootstrap_initial_state(
-                ade_runtime::bootstrap::BootstrapInputs {
-                    chaindb: &cold_db,
-                    snapshot_store: &cold_db,
-                    era_schedule: &real_era_schedule,
-                    ledger_view: &real_pool_distr,
-                    genesis_initial: Some((seed_ledger, seed_chain_dep)),
-                },
-            )
-            .expect("cold-start bootstrap");
+        let ade_runtime::bootstrap::BootstrapState {
+            ledger: boot_ledger,
+            tip: boot_tip,
+            ..
+        } = ade_runtime::bootstrap::bootstrap_initial_state(
+            ade_runtime::bootstrap::BootstrapInputs {
+                chaindb: &cold_db,
+                snapshot_store: &cold_db,
+                era_schedule: &real_era_schedule,
+                ledger_view: &real_pool_distr,
+                genesis_initial: Some((seed_ledger, seed_chain_dep)),
+                seed_epoch_consensus_source:
+                    ade_runtime::bootstrap::SeedEpochConsensusSource::NotRequired,
+            },
+        )
+        .expect("cold-start bootstrap");
 
         assert_eq!(
             fingerprint(&boot_ledger).combined,
