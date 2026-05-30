@@ -20,6 +20,7 @@ pub mod key_gen;
 pub mod live_log;
 pub mod node;
 pub mod node_lifecycle;
+pub mod node_sync;
 pub mod produce_mode;
 pub mod wire_only;
 
