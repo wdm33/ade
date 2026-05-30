@@ -3,7 +3,7 @@
 ## 2. Slice Header
 - **Slice Name:** SeedEpochConsensusInputs BLUE type + sole canonical codec + fingerprint-bound sidecar storage shape.
 - **Cluster:** PHASE4-N-F-A — Seed-Epoch Consensus Input Provenance.
-- **Status:** Proposed.
+- **Status:** Merged (`c13c2e9`); CE-A-1 closed.
 - **Cluster Exit Criteria Addressed:**
   - [ ] **CE-A-1** — a closed canonical persisted consensus-input surface exists (version-gated decode rejecting unknown version; round-trips byte-canonically).
   - *(CE-A-2 / CE-A-3 / CE-A-4 are explicitly out of scope for A1.)*

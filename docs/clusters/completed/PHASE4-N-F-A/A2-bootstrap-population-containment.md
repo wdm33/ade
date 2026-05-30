@@ -3,7 +3,7 @@
 ## 2. Slice Header
 - **Slice Name:** Add the dedicated keyed `SnapshotStore` sidecar surface, populate `SeedEpochConsensusInputs` during verified bootstrap (anchor-bound), and CI-fence the forge-time consensus-inputs path out of it.
 - **Cluster:** PHASE4-N-F-A — Seed-Epoch Consensus Input Provenance.
-- **Status:** Proposed.
+- **Status:** Merged (`f6bf50f`); CE-A-2 closed.
 - **Cluster Exit Criteria Addressed:**
   - [ ] **CE-A-2** — populated ONLY during verified bootstrap and anchor-bound; forge-time path fenced out.
 - **Slice Dependencies:** A1 (the `SeedEpochConsensusInputs` BLUE type + sole codec).

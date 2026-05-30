@@ -25,7 +25,7 @@
 
 ## 2. Slice Header
 - **Slice Name:** `bootstrap_initial_state` warm-start gains a fail-closed verification chain that restores + verifies the seed-epoch consensus-input sidecar against the WAL provenance view (authority-surface capability; not production-wired).
-- **Cluster:** PHASE4-N-F-A. **Status:** Proposed.
+- **Cluster:** PHASE4-N-F-A. **Status:** Merged (`104982d`); CE-A-3 closed (authority-surface).
 - **Cluster Exit Criteria Addressed:** **completes CE-A-3** as an **authority-surface** proof — `bootstrap_initial_state` warm-start, given a persisted sidecar + its WAL provenance, restores the seed-epoch consensus inputs **byte-identically** and fail-closed. The test exercises the warm-start branch directly (persist + A3a WAL append → `bootstrap_initial_state` warm-start → recovered sidecar byte-identical), not a production `main.rs` flow. The remaining *production-wiring* of that warm-start (a real caller threading a `WalStore`/anchor) is a later cluster — CE-A-3's byte-identity claim is mechanically proven on the authority surface here; the production-path claim is explicitly deferred.
 - **Slice Dependencies:** A1 (codec), A2 (keyed sidecar + population), A3a (WAL provenance entry + `RecoveredBootstrapProvenance`).
 

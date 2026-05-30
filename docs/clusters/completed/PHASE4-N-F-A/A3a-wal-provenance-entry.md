@@ -2,7 +2,7 @@
 
 ## 2. Slice Header
 - **Slice Name:** Closed `WalEntry::SeedEpochConsensusInputsImported` variant + canonical codec + replay-reconstructed bootstrap-provenance view.
-- **Cluster:** PHASE4-N-F-A. **Status:** Proposed.
+- **Cluster:** PHASE4-N-F-A. **Status:** Merged (`c507159`).
 - **Cluster Exit Criteria Addressed:** **contributes to CE-A-3** (the WAL-provenance foundation; CE-A-3 is *completed* by A3b's production warm-start byte-identity proof).
 - **Slice Dependencies:** A1 (sole sidecar codec), A2 (keyed sidecar surface + bootstrap population).
 

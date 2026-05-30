@@ -16,7 +16,7 @@
 
 ## 2. Slice Header
 - **Slice Name:** A BLUE pure projection from the recovered `SeedEpochConsensusInputs` (+ recovered eta0) to the leadership-consumed `PoolDistrView` / `ExpectedVrfInput`, with a pinning test proving it equals the prior bundle-path output for the seed epoch.
-- **Cluster:** PHASE4-N-F-A. **Status:** Proposed.
+- **Cluster:** PHASE4-N-F-A. **Status:** Merged (`8b60524`); CE-A-4a closed, CE-A-4b deferred to PHASE4-N-F-C.
 - **Cluster Exit Criteria Addressed — CE-A-4 is SPLIT:**
   - [ ] **CE-A-4a** (this slice) — projection test proves the recovered `SeedEpochConsensusInputs` projects to a `PoolDistrView` / `ExpectedVrfInput` **equivalent to the prior `pool_distr_view_from_consensus_inputs` output** for the same seed-epoch fixture.
   - [ ] **CE-A-4b** (assigned to **A5 production wiring**, NOT A4) — the bounty-primary produce call site consumes the recovered surface. A4 does not claim this.

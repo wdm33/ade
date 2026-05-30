@@ -185,6 +185,8 @@ code_locus = "crates/ade_runtime/src/recovery/mod.rs, crates/ade_runtime/src/rec
 tests = ["recover_from_snapshot_and_replay_forward", "recover_from_genesis_when_no_snapshot", "apply_failure_surfaces_with_slot", "snapshot_decode_failure_surfaces_as_error", "snapshot_with_no_post_blocks_is_ok", "stress_kill_smoke", "stress_kill_1000", "snapshot_table_intact_after_kill_loop", "persistent_passes_crash_safety_with_no_kill"]
 ci_script = "ci/ci_check_recovery_contract.sh, ci/ci_check_chaindb_crash_safety.sh"
 status = "enforced"
+strengthened_in = ["PHASE4-N-F-A"]
+evidence_notes = "PHASE4-N-F-A (2026-05-30): recovered state now includes the seed-epoch consensus inputs — the warm-start verification CAPABILITY (DC-CINPUT-01, A3b authority surface) restores the SeedEpochConsensusInputs sidecar byte-identically + fail-closed. The PRODUCTION restart path that threads this is deferred to PHASE4-N-F-C; this strengthening is the capability, not the production wiring."
 
 [[rules]]
 id = "T-REC-02"
@@ -196,6 +198,8 @@ code_locus = "crates/ade_runtime/src/recovery/mod.rs, crates/ade_runtime/src/rec
 tests = ["recover_from_snapshot_and_replay_forward", "recover_from_genesis_when_no_snapshot"]
 ci_script = "ci/ci_check_recovery_contract.sh"
 status = "enforced"
+strengthened_in = ["PHASE4-N-F-A"]
+evidence_notes = "PHASE4-N-F-A (2026-05-30): the seed-epoch consensus inputs are now part of the replay-derivable recovered surface — A3a records the import as a replay-reconstructable WAL fact (RecoveredBootstrapProvenance) and A3b's warm-start verification CAPABILITY derives the recovered SeedEpochConsensusInputs from it (DC-CINPUT-01, authority surface). Production wiring deferred to PHASE4-N-F-C."
 
 [[rules]]
 id = "T-COLL-01"
@@ -2974,7 +2978,7 @@ tests = [
 ]
 ci_script = "ci/ci_check_bootstrap_closure.sh, ci/ci_check_produce_mode_uses_bootstrap_initial_state.sh, ci/ci_check_node_mode_closure.sh"
 status = "enforced"
-strengthened_in = ["PHASE4-N-K", "PHASE4-N-M-B", "PHASE4-N-T", "PHASE4-N-Y"]
+strengthened_in = ["PHASE4-N-K", "PHASE4-N-M-B", "PHASE4-N-T", "PHASE4-N-Y", "PHASE4-N-F-A"]
 attack_rationale = "A parallel bootstrap path can produce an initial state that disagrees with the canonical materialize+decode authority chain — opening a startup-time chain-divergence vector."
 evidence_notes = "PHASE4-N-K S1 (2026-05-26) shipped ade_runtime::bootstrap::bootstrap_initial_state as the SOLE pub fn returning the initial (LedgerState, PraosChainDepState, Option<ChainTip>) triple. Cold-start vs warm-start is a single in-function branch. ci/ci_check_bootstrap_closure.sh enforces the single-pub-fn + materialize-authority-call positive grep. ade_node binary (S7) calls the function exactly once (ci/ci_check_node_binary_uses_single_bootstrap.sh). PHASE4-N-M-B (2026-05-26) strengthened by adding admission-mode dispatch closure: ci/ci_check_node_mode_closure.sh enforces Mode is closed {WireOnly, Admission}, main.rs match has no wildcard arm, and dispatch_admission is the sole admission-mode entry."
 
@@ -3574,8 +3578,8 @@ tests = [
 ]
 ci_script = "ci/ci_check_bootstrap_anchor_closure.sh"
 status = "enforced"
-strengthened_in = ["PHASE4-N-M-A", "PHASE4-N-Y"]
-evidence_notes = "PHASE4-N-M-A S2 (2026-05-26): mint is the SOLE pub fn producing a BootstrapAnchor; type-system enforces all 6 fields at construction (no Default impl, no #[non_exhaustive]). ci/ci_check_bootstrap_anchor_closure.sh enforces single-mint + single-codec authority + no-Default + no-non_exhaustive."
+strengthened_in = ["PHASE4-N-M-A", "PHASE4-N-Y", "PHASE4-N-F-A"]
+evidence_notes = "PHASE4-N-M-A S2 (2026-05-26): mint is the SOLE pub fn producing a BootstrapAnchor; type-system enforces all 6 fields at construction (no Default impl, no #[non_exhaustive]). ci/ci_check_bootstrap_anchor_closure.sh enforces single-mint + single-codec authority + no-Default + no-non_exhaustive. PHASE4-N-F-A (2026-05-30): the anchor now binds a new recovered surface — the SeedEpochConsensusInputs sidecar is anchor-fp-keyed and warm-start verification rejects an anchor_fp mismatch (CN-CINPUT-02, DC-CINPUT-01)."
 
 [[rules]]
 id = "DC-ANCHOR-01"
@@ -3599,8 +3603,8 @@ tests = [
 ]
 ci_script = "ci/ci_check_bootstrap_anchor_closure.sh"
 status = "enforced"
-strengthened_in = ["PHASE4-N-M-A", "PHASE4-N-Y"]
-evidence_notes = "PHASE4-N-M-A S2 (2026-05-26): canonical CBOR with SCHEMA_VERSION=1; encode/decode is the SOLE pub pair; fail-fast on unknown version, wrong array length, short hash, trailing bytes."
+strengthened_in = ["PHASE4-N-M-A", "PHASE4-N-Y", "PHASE4-N-F-A"]
+evidence_notes = "PHASE4-N-M-A S2 (2026-05-26): canonical CBOR with SCHEMA_VERSION=1; encode/decode is the SOLE pub pair; fail-fast on unknown version, wrong array length, short hash, trailing bytes. PHASE4-N-F-A (2026-05-30): the same version-gated byte-canonical sole-codec discipline is mirrored by the anchor-bound SeedEpochConsensusInputs sidecar codec (CN-CINPUT-01)."
 
 [[rules]]
 id = "CN-WAL-01"
@@ -4997,4 +5001,133 @@ introduced_in = "PHASE4-N-Z"
 strengthened_in = []
 cluster = "PHASE4-N-Z"
 attack_rationale = "Mithril proves a chain point; it must not be allowed to define both sides of the binding comparison. If the anchor's seed_point were sourced from the manifest (directly, via a local, or by mutating the operator inputs), verify_mithril_binding would compare a value to itself and could never fail — a forged/wrong-point snapshot would bind successfully and seed an attacker-chosen ledger. The two origins must stay structurally independent; the containment gate blocks the laundering class mechanically."
+open_obligation = ""
+
+# =============================================================================
+# PHASE4-N-F-A — Seed-Epoch Consensus Input Provenance (CAPABILITY cluster)
+# =============================================================================
+# Closes the recovered seed-epoch consensus-input CAPABILITY: canonical sidecar
+# type/codec (A1), anchor-keyed bootstrap-time population + forge-time
+# containment (A2), WAL provenance entry + replay view (A3a), warm-start
+# verification CAPABILITY at the authority surface (A3b), projection equivalence
+# (A4). It does NOT wire the producer: produce_mode still cold-starts from
+# --consensus-inputs-path. Producer consumption of the recovered surface
+# (CE-A-4b) is DEFERRED to successor cluster PHASE4-N-F-C, which will introduce
+# its own consumption rule (correct final ID at that cluster's family choice).
+# This cluster does not satisfy BA-02 and makes no claim that produce_mode
+# stopped using the bundle. A5 is a SCOPING doc, not a slice.
+
+[[rules]]
+id = "CN-CINPUT-01"
+tier = "constraint"
+statement = """
+The seed-epoch consensus inputs (epoch, active-slots coefficient, total active
+stake, and the per-pool active-stake + registered VRF keyhash distribution)
+persisted as Ade recovered state MUST be a single closed canonical type
+(SeedEpochConsensusInputs) with a SOLE encoder/decoder pair. The codec is
+deterministic CBOR, BTreeMap-ordered (no HashMap), version-gated (decode rejects
+any version != SEED_CINPUT_SCHEMA_VERSION fail-closed), and byte-canonical
+(a structurally valid but non-canonically-encoded buffer is rejected, not
+silently re-canonicalized). No second encoder/decoder for this type may exist.
+"""
+source = "docs/clusters/PHASE4-N-F-A/cluster.md; A1-seed-epoch-consensus-inputs-type.md"
+cross_ref = ["CN-ANCHOR-01", "DC-ANCHOR-01"]
+code_locus = "crates/ade_ledger/src/seed_consensus_inputs.rs (SeedEpochConsensusInputs + encode_/decode_seed_epoch_consensus_inputs + SeedConsensusInputsError)"
+tests = ["seed_epoch_consensus_inputs_round_trips_byte_identical", "seed_cinput_decode_rejects_unknown_version", "seed_cinput_decode_rejects_noncanonical_or_duplicate_keys"]
+ci_script = ""
+status = "enforced"
+introduced_in = "PHASE4-N-F-A"
+strengthened_in = []
+cluster = "PHASE4-N-F-A"
+open_obligation = ""
+
+[[rules]]
+id = "CN-CINPUT-02"
+tier = "constraint"
+statement = """
+The SeedEpochConsensusInputs sidecar MUST be populated ONLY on the
+verified-bootstrap composition path (genesis_bootstrap / mithril_bootstrap),
+through the anchor-fp-keyed SnapshotStore surface
+(put_seed_epoch_consensus_inputs), built via the GREEN merge
+(merge_seed_epoch_consensus_inputs) and the A1 sole encoder. The forge-time
+consensus-inputs path (produce_mode / import_live_consensus_inputs /
+pool_distr_view_from_consensus_inputs / --consensus-inputs-path) MUST NOT build
+or put the sidecar, nor append its WAL provenance. Enforced by a
+data-flow-resistant containment gate (global call-site scan, not a bypassable
+RHS grep). This does NOT forbid diagnostic import of LiveConsensusInputsCanonical
+(fixtures / pinning tests / first-run verified-bootstrap extraction may still
+exist); it forbids that import from populating, proving, or substituting for the
+recovered sidecar on any bounty-primary path. NOTE: this rule constrains
+POPULATION + the forge-time fence only; it does NOT assert that the producer
+CONSUMES the recovered surface — producer consumption is deferred to
+PHASE4-N-F-C and no registry rule is introduced for it in this close.
+"""
+source = "docs/clusters/PHASE4-N-F-A/cluster.md; A2-bootstrap-population-containment.md; A3a-wal-provenance-entry.md"
+cross_ref = ["CN-CINPUT-01", "CN-NODE-01", "CN-MITHRIL-01"]
+code_locus = "crates/ade_runtime/src/genesis_bootstrap.rs; crates/ade_runtime/src/mithril_bootstrap.rs; crates/ade_runtime/src/seed_consensus_merge.rs; crates/ade_runtime/src/seed_consensus_provenance.rs; ci/ci_check_consensus_input_provenance.sh"
+tests = ["bootstrap_persists_anchor_keyed_seed_consensus_inputs", "bootstrap_seed_inputs_merge_fails_closed_on_missing_vrf_or_stake", "snapshot_store_keyed_sidecar_is_disjoint_from_slot_snapshots"]
+ci_script = "ci/ci_check_consensus_input_provenance.sh"
+status = "enforced"
+introduced_in = "PHASE4-N-F-A"
+strengthened_in = []
+cluster = "PHASE4-N-F-A"
+attack_rationale = "If the forge-time operator bundle could populate (or be read as) the recovered sidecar, the 'recovered Ade state' guarantee would collapse into a relabeled operator input — the laundering class the cluster exists to prevent. The containment gate blocks the populate-side mechanically; the consume-side fence is owed to PHASE4-N-F-C."
+open_obligation = "Populate-side + forge-time-fence enforced. The CONSUME-side fence (the gate must also reject RequiredFromRecoveredProvenance / seed_epoch_consensus_source tokens in produce_mode) and producer consumption of the recovered surface (CE-A-4b) are deferred to PHASE4-N-F-C; no registry rule is introduced for that consumption path until PHASE4-N-F-C scopes/promotes it. Until then produce_mode passes only SeedEpochConsensusSource::NotRequired and cannot name the recovered type."
+
+[[rules]]
+id = "DC-CINPUT-01"
+tier = "derived"
+statement = """
+WARM-START VERIFICATION CAPABILITY (authority surface — NOT production restart).
+The seed-epoch consensus-input import is a canonical, replay-reconstructable WAL
+fact: an additive closed WalEntry::SeedEpochConsensusInputsImported variant
+(distinct tag; does NOT participate in the AdmitBlock prior_fp/post_fp chain),
+appended AFTER the sidecar put (the WAL append is the commit point). Replay
+reconstructs a typed RecoveredBootstrapProvenance view (exactly one per
+store/anchor; duplicate or anchor-mismatch fails closed). Given that view,
+bootstrap_initial_state's warm-start branch (RequiredFromRecoveredProvenance)
+restores the sidecar and verifies it fail-closed: sidecar present, blake2b_256
+== provenance.sidecar_hash, A1 decode, anchor_fp + epoch_no binding, byte-
+identity re-encode — exposing the recovered SeedEpochConsensusInputs or halting
+(typed BootstrapError, EXIT_AUTHORITY_FATAL_DECODE, no bundle fallback). This is
+proven on the AUTHORITY SURFACE (bootstrap_initial_state exercised directly);
+no production mode is wired to it (node.rs run_node_until_shutdown + recover_node_state
+are test-only; produce_mode cold-starts). The PRODUCTION restart path is this
+rule's open obligation, deferred to PHASE4-N-F-C.
+"""
+source = "docs/clusters/PHASE4-N-F-A/cluster.md; A3a-wal-provenance-entry.md; A3b-warm-start-restore.md"
+cross_ref = ["CN-CINPUT-01", "CN-CINPUT-02", "CN-NODE-01", "CN-WAL-01", "DC-WAL-02", "DC-WAL-03", "T-REC-01", "T-REC-02"]
+code_locus = "crates/ade_ledger/src/wal/event.rs (SeedEpochConsensusInputsImported, tag 3); crates/ade_ledger/src/wal/replay.rs (ReplayOutcome + RecoveredBootstrapProvenance); crates/ade_runtime/src/seed_consensus_provenance.rs (append helper); crates/ade_runtime/src/bootstrap.rs (SeedEpochConsensusSource, BootstrapState, restore_seed_epoch_consensus_inputs)"
+tests = ["wal_seed_cinput_entry_round_trips_byte_identical", "replay_yields_bootstrap_provenance_view", "replay_rejects_duplicate_provenance_entry", "replay_rejects_anchor_mismatched_provenance_entry", "admit_block_chain_unaffected_by_provenance_entry", "warm_start_restores_seed_epoch_consensus_inputs_byte_identical", "warm_start_fails_closed_on_missing_sidecar", "warm_start_fails_closed_on_hash_mismatch", "warm_start_fails_closed_on_anchor_mismatch", "warm_start_fails_closed_on_epoch_mismatch", "warm_start_required_provenance_rejects_malformed_sidecar", "warm_start_never_falls_back_to_consensus_inputs_path"]
+ci_script = ""
+status = "partial"
+introduced_in = "PHASE4-N-F-A"
+strengthened_in = []
+cluster = "PHASE4-N-F-A"
+open_obligation = "Warm-start VERIFICATION CAPABILITY proven at the authority surface (A3b). The PRODUCTION restart path — a production mode that opens a persistent store + FileWalStore, replays to a RecoveredBootstrapProvenance, and calls bootstrap_initial_state(RequiredFromRecoveredProvenance) — is NOT wired (node.rs run_node_until_shutdown + recover_node_state are test-only). Deferred to PHASE4-N-F-C (C3). Reopen when a production mode threads the recovery path."
+
+[[rules]]
+id = "DC-CINPUT-02a"
+tier = "derived"
+statement = """
+PROJECTION EQUIVALENCE. The recovered SeedEpochConsensusInputs projects
+deterministically to the leadership-consumed PoolDistrView (the full LedgerView
+surface: total_active_stake, pool_active_stake, pool_vrf_keyhash,
+active_slots_coeff; single-epoch — off-epoch queries return None) via
+PoolDistrView::from_seed_epoch_consensus_inputs, EQUIVALENT to the prior
+operator-bundle projection (pool_distr_view_from_consensus_inputs) for the seed
+epoch; and recovered eta0 (from chain_dep) drives leader_vrf_input identically.
+The projection is a pure BLUE field map (A2 already merged stake + VRF keyhash).
+This rule covers the PROJECTION only; producer CONSUMPTION of the projected
+recovered surface is deferred to PHASE4-N-F-C (CE-A-4b).
+"""
+source = "docs/clusters/PHASE4-N-F-A/cluster.md; A4-projection-pooldistr-vrf.md"
+cross_ref = ["CN-CINPUT-01", "DC-CINPUT-01"]
+code_locus = "crates/ade_ledger/src/consensus_view.rs (PoolDistrView::from_seed_epoch_consensus_inputs); crates/ade_core/src/consensus/vrf_cert.rs (leader_vrf_input, reused)"
+tests = ["recovered_surface_projects_pooldistrview_and_expected_vrf_input", "projection_maps_recovered_fields_onto_ledgerview_surface", "projection_two_runs_identical", "projection_off_epoch_returns_none"]
+ci_script = ""
+status = "enforced"
+introduced_in = "PHASE4-N-F-A"
+strengthened_in = []
+cluster = "PHASE4-N-F-A"
 open_obligation = ""
