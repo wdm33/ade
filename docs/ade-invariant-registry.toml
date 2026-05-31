@@ -3060,7 +3060,7 @@ tests = [
 ]
 ci_script = "ci/ci_check_clock_seam.sh, ci/ci_check_orchestrator_core_purity.sh"
 status = "enforced"
-strengthened_in = ["PHASE4-N-K", "PHASE4-N-L"]
+strengthened_in = ["PHASE4-N-K", "PHASE4-N-L", "PHASE4-N-F-E"]
 evidence_notes = "PHASE4-N-K S1+S2+S5+S8 (2026-05-26) shipped the Clock trait (with DeterministicClock + SystemClock), pinned the orchestrator core as the SOLE wall-clock-free consumer, and proved replay equivalence end-to-end via tests/orchestrator_replay_equivalence.rs. ci/ci_check_clock_seam.sh enforces that crates/ade_runtime/src/clock.rs is the sole site of SystemTime::now() / Instant::now() within ade_runtime, and that orchestrator/{core,event,state,mod}.rs contain none of tokio::time, rand, HashMap/HashSet, or f32/f64."
 
 [[rules]]
@@ -4382,7 +4382,7 @@ tests = ["init_emits_started_event_and_zero_other_effects", "slot_tick_emits_req
 ci_script = "ci/ci_check_producer_coordinator_no_secrets.sh, ci/ci_check_produce_mode_uses_bootstrap_initial_state.sh"
 status = "enforced"
 introduced_in = "PHASE4-N-Q"
-strengthened_in = ["PHASE4-N-R-A", "PHASE4-N-R-C", "PHASE4-N-T"]
+strengthened_in = ["PHASE4-N-R-A", "PHASE4-N-R-C", "PHASE4-N-T", "PHASE4-N-F-E"]
 cluster = "PHASE4-N-Q"
 open_obligation = "**PHASE4-N-R-A A3 closed item (1)**: real forge handler in produce_mode::apply_effects_with_forge_handler is wired (run_real_forge: RED vrf_prove → BLUE verify_and_evaluate_leader → RED kes_sign_at → GREEN assemble_tick → BLUE forge_block → BLUE self_accept). **PHASE4-N-R-C C1+C2 closed items (a)+(b)**: cardano-cli opcert envelope parser (CN-OPCERT-01) + Shelley genesis closed-contract parser (CN-GENESIS-01) both shipped. **Item (c) UPDATE 2026-05-29**: both bridges have shipped — (i) the KES-signs-real-unsigned-header bridge landed in N-S-A (run_real_forge now KES-signs the real unsigned_header_pre_image, CN-KES-HEADER-01, not a placeholder), and (ii) the MuxPump outbound-relay extension landed in N-S-B (typed OutboundCommand relay, CN-OUTBOUND-RELAY-01). The remaining live-half work is NOT in this rule's enforcement scope: a thin produce-mode wiring cluster (wire the dormant N-R-C parsers opcert_envelope::parse_opcert_envelope / genesis_parser::parse_shelley_genesis into produce_mode — they exist but produce_mode still uses parse_simple_* stand-ins, G1/G2; tip-seeded bootstrap G6; live-value pinning G4; eta0/stake/ASC pinning) + operator stake + the operator-witnessed pass, tracked in CN-CONS-06 / RO-LIVE-01 (docs/planning/operator-pass-live-leg-c1-scoping.md)."
 
@@ -5197,7 +5197,7 @@ tests = ["forge_from_recovered_uses_recovered_pool_distr", "forge_from_recovered
 ci_script = "ci/ci_check_consensus_input_provenance.sh"
 status = "enforced"
 introduced_in = "PHASE4-N-F-C"
-strengthened_in = []
+strengthened_in = ["PHASE4-N-F-E"]
 cluster = "PHASE4-N-F-C"
 open_obligation = ""
 
@@ -5269,10 +5269,10 @@ vocabulary. tests + ci_script populated at slice time.
 source = "docs/planning/phase4-n-f-d-live-node-run-loop-invariants.md"
 cross_ref = ["CN-NODE-01", "DC-SYNC-01", "DC-SYNC-02", "T-REC-03"]
 code_locus = "crates/ade_node/src/node_lifecycle.rs"
-tests = ["relay_loop_syncs_then_halts_clean_on_source_end", "relay_loop_halts_clean_on_shutdown_no_partial_write", "relay_loop_idles_then_syncs_on_incremental_feed", "relay_loop_fails_closed_on_unapplyable_block", "plan_loop_step_decision_table_is_total"]
+tests = ["relay_loop_syncs_then_halts_clean_on_source_end", "relay_loop_halts_clean_on_shutdown_no_partial_write", "relay_loop_idles_then_syncs_on_incremental_feed", "relay_loop_fails_closed_on_unapplyable_block", "plan_loop_step_forge_precedence_table_is_total"]
 ci_script = "ci_check_node_run_loop_containment.sh, ci_check_loop_planner_closed.sh"
 introduced_in = "PHASE4-N-F-D"
-strengthened_in = []
+strengthened_in = ["PHASE4-N-F-E"]
 status = "enforced"
 evidence_notes_s2 = "PHASE4-N-F-D S2 (relay loop wired): ade_node::node_lifecycle::run_relay_loop is the single live-run owner — both FirstRun and WarmStart converge into it (no print-and-exit), the GREEN plan_loop_step drives each step over the closed { SyncOnce, Idle, HaltCleanly } vocabulary, and the tip advances ONLY via run_node_sync -> pump_block. ci_check_node_run_loop_containment.sh fences the loop body (no direct pump_block / manual tip advance / forge / evidence / verdict / follower / second bootstrap). run_node_sync is UNMODIFIED (ci_check_node_sync_via_pump.sh still green). Hermetic only — no live peer (RO-LIVE-01 follow-on)."
 
@@ -5292,7 +5292,7 @@ code_locus = "crates/ade_node/src/node_sync.rs"
 tests = ["relay_loop_syncs_then_halts_clean_on_source_end", "relay_loop_idles_then_syncs_on_incremental_feed", "relay_loop_fails_closed_on_unapplyable_block", "node_sync_pump_advances_recoverable_tip"]
 ci_script = "ci_check_node_run_loop_containment.sh, ci_check_node_sync_via_pump.sh"
 introduced_in = "PHASE4-N-F-D"
-strengthened_in = []
+strengthened_in = ["PHASE4-N-F-E"]
 status = "enforced"
 evidence_notes_s2 = "PHASE4-N-F-D S2: every relay-loop iteration advances the tip ONLY through run_node_sync -> pump_block (durable-before-advance, DC-SYNC-01), driven by the GREEN planner. NodeBlockSource gained a content-blind, non-consuming readiness signal (has_work_ready / is_ended / wait_ready, filled via non-blocking try_recv); next_block is non-blocking (drain-available-then-None) so run_node_sync remains the SOLE block-consumption path and is never awaited across a shutdown cancellation boundary (cancellation only in the Idle branch). No verdict/follower/manual-tip path."
 
@@ -5313,7 +5313,7 @@ code_locus = "crates/ade_node/src/node_lifecycle.rs (run_relay_loop driver), cra
 tests = ["relay_loop_two_clean_runs_byte_identical"]
 ci_script = "ci_check_node_run_loop_containment.sh"
 introduced_in = "PHASE4-N-F-D"
-strengthened_in = []
+strengthened_in = ["PHASE4-N-F-E"]
 status = "enforced"
 evidence_notes_s3a = "PHASE4-N-F-D S3a (2026-05-31): relay_loop_two_clean_runs_byte_identical proves two clean run_relay_loop runs over identical inputs (same recovered-state seed, same ordered in-memory multi-block feed, same shutdown schedule) yield byte-identical tip (slot+hash), WAL image, and captured checkpoint slots. Deterministic orchestration absent crash interference; test-only (the loop is RED orchestration over the pure GREEN planner + the deterministic run_node_sync->pump_block seam). Crash-at-boundary recovery is S3b."
 
@@ -5341,11 +5341,11 @@ structured local outcome (cluster-scope containment, not permanent behavior).
 source = "docs/planning/phase4-n-f-e-invariants.md"
 cross_ref = ["CN-NODE-02", "DC-SYNC-02", "T-REC-03", "DC-NODE-03", "CN-PROD-02", "DC-CINPUT-02b", "CN-CINPUT-03", "CN-FORGE-01", "CN-FORGE-03"]
 code_locus = "crates/ade_node/src/node_lifecycle.rs, crates/ade_node/src/run_loop_planner.rs"
-tests = []
-ci_script = ""
+tests = ["plan_loop_step_forge_precedence_table_is_total", "forge_slot_guard_none_is_due", "forge_slot_guard_at_most_once_per_slot", "forge_slot_guard_rejects_past_slot", "relay_loop_forge_slot_derived_via_clock_seam", "relay_loop_forge_tick_attempts_forge_advances_no_tip", "relay_loop_without_producer_material_matches_nfd_relay", "relay_loop_forge_two_runs_byte_identical", "forge_tick_rotated_kes_period_skips_no_retroactive_sign", "forge_tick_off_epoch_slot_fails_closed_local"]
+ci_script = "ci/ci_check_loop_planner_closed.sh, ci/ci_check_node_run_loop_containment.sh"
 introduced_in = "PHASE4-N-F-E"
 strengthened_in = []
-status = "declared"
+status = "enforced"
 evidence_notes = """
 PHASE4-N-F-E invariant sketch (2026-05-31, /invariants gate). Declared at sketch;
 tests + ci_script populated at slice time. N-F-E is a hermetic, single-epoch,

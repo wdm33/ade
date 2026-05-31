@@ -4,97 +4,125 @@
 >
 > Regenerate with `/head-deltas <baseline>` after every cluster close. Baseline is recorded in `.idd-config.json` `head_deltas_baseline`.
 
-> Baseline: `51c9fbf` (PHASE4-N-F-D S1 doc tail of the prior baseline span; `.idd-config.json` `head_deltas_baseline`)
-> HEAD: `a02e1f5` (PHASE4-N-F-D S3b — crash-at-boundary recovery equivalence)
-> Cluster: **PHASE4-N-F-D — live relay run-loop (hermetic spine)**, closed 2026-05-31.
+> Baseline: `7de1462` (PHASE4-N-F-D close — live relay run-loop, 2026-05-31 19:04)
+> HEAD: `cd2484f` (PHASE4-N-F-E S3b — single-epoch / KES fail-closed containment, 2026-05-31 22:30)
+> Cluster: **PHASE4-N-F-E — forge-tick (hermetic, single-epoch, self-accept-only)**, slice span closed; close-pass commit to follow.
+> 13 commits, 13 files changed, +2317 / -66 lines.
 
-This window narrates the **PHASE4-N-F-D cluster** — wiring the tested-but-unwired
-N-F-C `node_sync` surface into a continuous `--mode node` relay run loop. The cluster
-is **relay-only and strictly hermetic**: bootstrap/recovery → continuous sync → durable
-tip advance → clean shutdown. No forge, no evidence, no live peer, no slot tick, **no BLUE
-crate change**.
+This window narrates the **PHASE4-N-F-E cluster** — wiring the already-enforced
+`forge_one_from_recovered` (DC-CINPUT-02b) into the slot path of the N-F-D relay
+run-loop. The cluster is **hermetic, single-epoch, and self-accept-only**: a forged
+block is a local artifact, advances no durable tip, and is never served, admitted,
+broadcast, or gossiped. The sync spine (`run_node_sync → pump_block`) remains the sole
+durable tip-advance authority. **No operator-key ingestion. No live peer. No BA-02 /
+RO-LIVE claim. No BLUE crate change.** The span also carries a test-integrity repair
+(`ffa76fc`) that un-redded the N-F-D `node_sync` suite, which had been broken on `main`
+since the N-F-D close.
 
 ## 0. Headline
 
-| Count | Baseline | HEAD | Δ |
+| Count | Baseline (`7de1462`) | HEAD (`cd2484f`) | Δ |
 |---|---|---|---|
-| CI gates (`ci/ci_check_*.sh`) | 108 | **110** | +2 |
-| Registry rules | 306 | **309** | +3 |
-| Test attributes (workspace) | ~2144 | **2164** | +20 |
+| CI gates (`ci/ci_check_*.sh`) | 110 | 110 | 0 (two gates **extended in place**, none added) |
+| Registry rules | 309 | **310** | +1 (DC-NODE-05 declared) |
+| Test attributes (`#[test]`/`#[tokio::test]`, workspace) | 2176 | **2188** | +12 (S1–S3b + `ffa76fc` repairs; ~+25 case-level) |
 | BLUE canonical types | 456 | 456 | 0 (no BLUE change) |
+
+> Registry note: at HEAD `cd2484f`, `DC-NODE-05` sits at `status = "declared"`. The
+> not-yet-made close-pass commit flips it to `enforced` and records the 6 cross-slice
+> strengthenings (mirroring how the N-F-D close-pass flipped its rules after the slice
+> span). This doc narrates the slice span; the close-pass commit follows, as in prior
+> cluster closes.
 
 ## 1. Commit Log (newest first)
 
 | Hash | Type | Summary |
 |------|------|---------|
-| `a02e1f5` | feat | PHASE4-N-F-D S3b — crash-at-boundary recovery equivalence |
-| `f710baa` | docs | add PHASE4-N-F-D S3b slice doc |
-| `ead14a7` | feat | PHASE4-N-F-D S3a — clean loop replay-equivalence |
-| `c5fdbde` | docs | add PHASE4-N-F-D S3a slice doc |
-| `458b67a` | feat | PHASE4-N-F-D S2 — RED relay loop wired into --mode node |
-| `d7aa2b7` | docs | add PHASE4-N-F-D S2 slice doc |
-| `a299307` | feat | PHASE4-N-F-D S1 — GREEN loop planner |
-| `4861e57` | docs | add PHASE4-N-F-D S1 slice doc |
-| `b1b5102` | docs | scope PHASE4-N-F-D — live relay run-loop authority docs |
+| `cd2484f` | test | PHASE4-N-F-E S3b — single-epoch / KES fail-closed containment |
+| `0b832e8` | docs | specify PHASE4-N-F-E S3b fail-closed tests |
+| `2484dd1` | test | PHASE4-N-F-E S3a — forge-tick replay-equivalence |
+| `0ab9043` | docs | specify PHASE4-N-F-E S3a forge replay |
+| `98b488a` | feat | PHASE4-N-F-E S2 — RED forge-tick wiring (self-accept-only) |
+| `2ae53d7` | docs | specify PHASE4-N-F-E S2 forge-tick wiring |
+| `2980861` | docs | add N-F-D T-REC-03 green-on-close check to N-F-E plan |
+| `214b0d3` | feat | PHASE4-N-F-E S1 — GREEN planner forge step |
+| `ffa76fc` | fix | restore N-F-D relay replay test integrity |
+| `58de369` | docs | add PHASE4-N-F-E S1 slice doc — GREEN planner forge step |
+| `c875655` | docs | define PHASE4-N-F-E forge-tick cluster |
+| `77901d9` | docs | plan PHASE4-N-F-E forge-tick cluster |
+| `de497c4` | docs | declare PHASE4-N-F-E forge-tick invariants |
 
-(Plus this close-pass commit: grounding-doc refresh + `.idd-config.json` baseline bump + cluster-doc archive.)
+(Plus the pending close-pass commit: grounding-doc refresh + DC-NODE-05 `declared→enforced`
+flip with 6 strengthenings + `.idd-config.json` baseline bump + cluster-doc archive + this
+HEAD_DELTAS.)
 
 ## 2. New Modules
 
-| Module | Color | Purpose |
-|--------|-------|---------|
-| `ade_node::run_loop_planner` | **GREEN** | Pure lifecycle decision function `plan_loop_step(loop_state, sync_status, shutdown_status) -> LoopStep` over the closed `{ SyncOnce, Idle, HaltCleanly }` vocabulary. Owns no authority; cannot encode a ledger/chain/leadership/forge/evidence decision. (S1) |
+None. No new module, no new crate, no new WAL/checkpoint/canonical type. All changes
+land in the existing RED `ade_node` crate (one GREEN submodule, one RED submodule, plus a
+test-only repair).
 
 ## 3. Modules Modified
 
-| Module | Scope | Key changes |
+| Module | Color | Key changes |
 |--------|-------|-------------|
-| `ade_node::node_lifecycle` | RED | `run_relay_loop` (the relay loop composer); both FirstRun + WarmStart arms converge into it (no more print-and-exit); `first_run_mithril_bootstrap` now returns `BootstrapState`; `run_node_lifecycle_inner` is `async` and threads `shutdown`; new closed `NodeLifecycleError::RelaySync` + `EXIT_NODE_RELAY_SYNC_FAILED = 43`. (S2) |
-| `ade_node::node_sync` | RED | `NodeBlockSource::WirePump` becomes a struct variant `{ rx, lookahead, disconnected }` with a **content-blind** availability buffer; `next_block` is now **non-blocking** (drain-available-then-`None`) so `run_node_sync` stays the SOLE block-consumption path; new content-blind readiness signals `has_work_ready` / `is_ended` / `wait_ready`. `run_node_sync` itself is UNMODIFIED. (S2) + the S2/S3a/S3b hermetic tests. |
-| `ade_node::lib` | RED | declares `pub mod run_loop_planner;`. (S1) |
+| `ade_node::run_loop_planner` | **GREEN** | **S1.** `LoopStep` gains a `ForgeTick` variant; new closed `ForgeSlotStatus` (`Due` \| `NotDue`) and the pure monotonic guard `forge_slot_status(current_slot, last_forged_slot) -> ForgeSlotStatus`. `plan_loop_step` stays **content-blind** over the closed step vocabulary — its forge input is the opaque `Due\|NotDue`; leadership eligibility is NOT decided here. The guard is the only place `SlotNo` is consumed. |
+| `ade_node::node_lifecycle` | **RED** | **S2.** New `ForgeActivation` (fenced producer-shell forge material) + a `ForgeTick` branch in `run_relay_loop`. The branch derives the current `SlotNo` only through the clock seam (RED observes `SystemClock`; GREEN converts via `millis_to_slot` over `SystemStart` + `EraSchedule` slot length — only `SlotNo` crosses the seam), reuses `kes_period_for_slot`, and makes **exactly one** fenced `forge_one_from_recovered` call. Self-accept-only: advances no durable tip, serves/admits/broadcasts/gossips nothing. |
+| `ade_node::node_sync` | **RED** | **`ffa76fc` (test-only):** repaired the N-F-D `node_sync` test suite — restored missing imports, a moved `anchor_fp`, and corrected a size-ordered feed to slot-ordered; fixed the T-REC-03 `code_locus`. Un-redded `cargo test -p ade_node`, broken on `main` since the N-F-D close. **S2/S3a/S3b (`#[cfg(test)]` only):** forge-tick wiring tests, replay-equivalence (S3a), and single-epoch / KES fail-closed containment (S3b). `run_node_sync` itself remains **UNMODIFIED**. |
 
 ## 4. Feature Flags
 
-No feature-flag deltas. No `Cargo.toml` changed.
+No feature-flag deltas. No `Cargo.toml` changed in the span.
 
-## 5. CI Checks (108 → 110)
+## 5. CI Checks (110 → 110, two extended in place)
 
 | Check | Status | Backs |
 |-------|--------|-------|
-| `ci_check_loop_planner_closed.sh` | **New** (S1) | CN-NODE-02 (planner half) — closed `LoopStep`, no `#[non_exhaustive]`, no wildcard arm, no authority/I/O token in the GREEN planner. |
-| `ci_check_node_run_loop_containment.sh` | **New** (S2) | CN-NODE-02 / DC-SYNC-02 — `run_relay_loop` calls `run_node_sync(` and reaches NO direct `pump_block` / manual tip advance / forge / evidence / verdict / follower / second-bootstrap token. |
+| `ci_check_loop_planner_closed.sh` | **Extended** (S1) | CN-NODE-02 (planner half). Removes `SlotNo` from the whole-module ban (the pure `forge_slot_status` guard legitimately consumes a `SlotNo`) and adds a **scoped** check: `plan_loop_step` itself must name no `SlotNo`, so step selection stays content-blind over the closed `ForgeSlotStatus`. |
+| `ci_check_node_run_loop_containment.sh` | **Extended** (S2) | CN-NODE-02 / DC-SYNC-02 / CE-E-4. The loop may make **exactly one** fenced `forge_one_from_recovered` call (zero ⇒ unwired; >1 ⇒ second forge path). All other forge/evidence tokens (`run_real_forge`, `correlate(`, `Ba02Manifest`) stay forbidden. New neg2b guard: no `served_chain_admit` / `push_atomic` / `OutboundCommand` / `broadcast` / `block_fetch` of a forged block — self-accept-only. |
 
+No CI gate was added or removed; the 110 total is unchanged from the N-F-D baseline.
 `ci_check_node_sync_via_pump.sh` stays green (`run_node_sync` unmodified).
 
 ## 6. Canonical Type Registry Delta
 
-n/a — no BLUE crate changed; the 456 BLUE canonical-type total is unchanged. The new
-`LoopStep` / `ShutdownStatus` / `SyncStatus` / `LoopState` and the `NodeBlockSource`
-struct-variant fields live in the RED/GREEN `ade_node` crate and are not canonical-counted.
+n/a — no separate canonical-type registry is configured (`canonical_type_registry: null`),
+and no BLUE crate changed. The 456 BLUE canonical-type total is unchanged. The new
+`ForgeTick` / `ForgeSlotStatus` / `ForgeActivation` types live in the RED/GREEN `ade_node`
+crate and are not canonical-counted.
 
-## 7. Normative / Invariant Rule Delta (306 → 309)
+## 7. Normative / Invariant Rule Delta (309 → 310)
 
-### New rules (declared at sketch, promoted this cluster)
+### New rule (declared at sketch this cluster)
 
-| ID | Tier | Status | Summary |
-|----|------|--------|---------|
-| `CN-NODE-02` | constraint | **enforced** (S2) | `--mode node` is the single live-run lifecycle owner; advances authoritative state only via the existing closed seams; no alternate apply/forge/evidence/tip-advance/second-bootstrap path. |
-| `DC-SYNC-02` | derived | **enforced** (S2) | Continuous relay sync: every iteration advances the tip only via `run_node_sync → pump_block`; no verdict/follower/manual-tip path. |
-| `T-REC-03` | true | **enforced** (S3a) | Loop-as-replay: same recovered state + same ordered feed + same shutdown schedule ⇒ byte-identical tips, WAL, checkpoints. |
+| ID | Tier | Status @ `cd2484f` | Summary |
+|----|------|--------------------|---------|
+| `DC-NODE-05` | derived | **declared** | Forge-slot discipline on the `--mode node` relay run-loop: a forge is attempted at most once per `SlotNo` and never for a slot `<=` the last forged slot (no past/duplicate forge); the current slot is derived ONLY through the clock seam (only `SlotNo` crosses; no `SystemTime`/`Instant`/float past the RED boundary); the forge tick advances no durable tip and admits/serves/gossips nothing (subordinate to the sync spine); for a fixed recovered state + ordered feed + injected clock schedule + shutdown schedule the forge-attempt sequence and forged bytes are byte-identical across runs; leadership eligibility stays in BLUE inside `forge_one_from_recovered`; single-epoch this cluster (unsupported slot fails closed / skips with a structured local outcome). |
 
-### Strengthenings (append-only `strengthened_in += "PHASE4-N-F-D"`)
+> At HEAD `cd2484f`, `DC-NODE-05.status = "declared"`. The pending close-pass commit
+> flips it to `enforced` (tests + `ci_script` populated) and records the **6 cross-slice
+> strengthenings** against the rules it composes on (`CN-NODE-02`, `DC-SYNC-02`,
+> `T-REC-03`, `DC-NODE-03`, `CN-PROD-02`, `DC-CINPUT-02b` per `cross_ref`). This
+> mechanical narration counts only what is committed at `cd2484f`.
 
-- `T-REC-01`, `T-REC-02` — relay loop's advanced tip is replay-/recovery-derivable (S3b).
-- `DC-SYNC-01` — durable-before-advance holds every loop iteration (S3b).
+This section is informational and reflects the registry state at HEAD. No rule was
+removed (expected: 0).
 
 ## 8. Honest residual (cluster scope)
 
-**Hermetic only — no live peer, no BA-02 claim.** N-F-D wires no live peer source (the
-binary enters the loop with an empty source and halts cleanly on the first tick, proving
-loop reachability + both-arms convergence); the populated-source behavior (durable sync,
-idle/shutdown, fail-closed, replay-equivalence, crash-recovery) is proven hermetically by
-the `run_relay_loop` tests. A **live, unbounded WirePump peer's** continuous-batch
-operation over a never-closing channel is the RO-LIVE-01 follow-on (the non-blocking
-`next_block` drain handles terminating/hermetic sources; live unbounded batching is future
-work). RO-LIVE-01 remains partial/operator-gated. The hard line held throughout:
-`run_node_sync` is UNMODIFIED, and the readiness lookahead is content-blind.
+**Hermetic, single-epoch, self-accept-only — no operator keys, no live peer, no BA-02.**
+
+- **No operator-key/config ingestion.** Forge material is fenced producer-shell
+  (`ForgeActivation`); real `--mode node` KES/VRF/cold/opcert/pool-id/pparams ingress is a
+  separate RED key-ingress cluster.
+- **Self-accept-only.** A forged block is a local artifact: it advances **no durable tip**
+  and is never served, admitted, broadcast, or gossiped (mechanically fenced by the
+  extended containment gate). `run_node_sync → pump_block` remains the sole durable
+  tip-advance authority.
+- **No live claim.** No live peer, no BA-02, no RO-LIVE-01/06 acceptance. RO-LIVE-01 stays
+  partial/operator-gated. The live, unbounded peer is the RO-LIVE-01 follow-on.
+- **Single-epoch.** An unsupported slot fails closed / skips with a structured local
+  outcome — cluster-scope containment proven by S3b, not permanent behavior.
+- **No BLUE change.** Mirrors N-F-D: 456 BLUE canonical types unchanged; leadership
+  eligibility stays in BLUE `forge_one_from_recovered`; the GREEN planner is content-blind;
+  `run_node_sync` is UNMODIFIED.
