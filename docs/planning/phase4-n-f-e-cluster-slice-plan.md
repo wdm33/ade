@@ -136,3 +136,10 @@ cluster.
   `/cluster-plan` gates — folded into the close, no separate refresh pass now.)
 - Per-cluster security review against the full N-F-E diff (block on HIGH+),
   between the IDD-reviewer step and the grounding-doc refresh.
+- **Confirm N-F-D's restored T-REC-03 evidence remained green while layering
+  N-F-E replay tests** — the relay spine's own replay-equivalence test
+  (`relay_loop_two_clean_runs_byte_identical`, repaired in `ffa76fc` from a
+  non-compiling/non-passing state shipped at the N-F-D close) must still pass
+  alongside the N-F-E forge-tick replay test (S3a). Also re-verify that
+  `cargo test -p ade_node` (the full lib-test target) actually compiles and
+  passes at close — the N-F-D close masked or scoped past this target.
