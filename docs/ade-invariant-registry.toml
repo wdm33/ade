@@ -5357,3 +5357,88 @@ cold/opcert/pool-id/pparams ingress is a separate RED key-ingress cluster). NO
 BA-02 / RO-LIVE-01 / peer-acceptance / serve / gossip / block-fetch claim. NO
 BLUE change expected (mirrors N-F-D).
 """
+
+[[rules]]
+id = "CN-NODE-03"
+tier = "constraint_network"
+statement = """
+Operator-key ingress + forge-on flip for --mode node. Ingress constructs an
+operator-material-backed ForgeActivation STRICTLY through RED-parse ->
+BLUE-structural-validator -> canonical-type, reusing the existing KES / VRF /
+cold / opcert loaders (KES via ade_crypto::kes_sum::Sum6Kes::raw_deserialize_signing_key_kes;
+VRF/cold via the cardano-cli text-envelope loaders; opcert via the opcert
+parser). NO new BLUE authority, NO parser reimplementation, NO plugin/trait seam,
+NO second forge codepath, NO new BLUE crate change. Key custody stays RED-confined
+to ProducerShell: passing ProducerShell to the fenced forge handoff
+(forge_one_from_recovered) is allowed, but copying or extracting its private
+material into the GREEN coordinator state, the planner, any node/loop state, or
+any persisted / logged / hashed-for-evidence / replay surface is forbidden.
+Tests and debug output MUST NOT print, snapshot, serialize, hash-for-evidence, or
+compare private key bytes (assertions may compare public identifiers, structured
+outcomes, and forged artifacts only where already produced by the fenced forge
+path). Forge intent is a pure total function of CLI key-flag presence: the
+COMPLETE required operator set { cold skey, KES skey, VRF skey, opcert, genesis
+file } present => Some(activation) (forge on); all absent => None (byte-identical
+N-F-D relay); any partial subset => structured fail-closed error (never a silent
+relay fallback, never a missing / zero / fabricated key). pool_id is either added
+to the required set or derived in one named place -- never fabricated. The forge
+base is the SAME recovered/bootstrap BootstrapState that seeds the relay spine,
+obtained via the single bootstrap_initial_state / warm-start authority (no second
+bootstrap, no second recovered state); the recovered state outlives both
+ForwardSyncState and ForgeActivation. The forge remains subordinate +
+self-accept-only: the existing N-F-E containment gate stays SEMANTICALLY
+UNCHANGED (still exactly one fenced forge_one_from_recovered call, no
+run_real_forge, no serve / admit / gossip / broadcast / block-fetch / durable-tip
+mutation); N-F-F may ADD key-ingress gates but MUST NOT relax forge containment.
+N-F-F makes the binary forge-CAPABLE once paired with a live/continuing feed; it
+does NOT itself make forge observable on the current empty-source binary path
+(plan_loop_step halts cleanly on LoopState::Ending even when a slot is Due) and
+makes NO live forge / serve / gossip / peer-acceptance / BA-02 / RO-LIVE / durable
+tip-advance claim -- observable forge is the RO-LIVE-01 follow-on. pparams /
+protocol_version reuse the existing produce-path honest-scope defaults
+(ProtocolParameters::default + default protocol_version): this is ingress /
+activation wiring, NOT mainnet-complete ledger-valid block-production fidelity.
+"""
+attack_rationale = """
+Operator-key ingress is where a forge-capable node most easily leaks authority or
+private material. The failure modes this rule forecloses: (1) a partial key set
+silently forging with a missing / zero / fabricated key, or silently degrading to
+relay-only while the operator believes forging is on; (2) private KES/VRF/cold
+bytes escaping RED custody into the GREEN coordinator/planner, node state, a log
+line, a snapshot, the WAL, or a test/evidence comparison -- any of which turns a
+debug artifact or replay surface into a key-disclosure channel; (3) a "real keys"
+change quietly relaxing the N-F-E forge containment (a second forge codepath, a
+serve/gossip/tip-advance shortcut, run_real_forge) so an operator-forged block
+reaches a peer or the durable tip outside the fenced self-accept-only path;
+(4) a fabricated pool_id or a second recovered/bootstrap state diverging the
+leadership view from the spine's recovered surface; (5) an honest-scope default
+(pparams / protocol_version) being mistaken for mainnet block-production fidelity.
+Pinning ingress to RED-parse -> BLUE-validate -> canonical-type, an all-or-nothing
+fail-closed forge intent, RED-confined custody with explicit no-leak test rules,
+and an unmodified forge-containment gate makes each of these unrepresentable.
+"""
+evidence_notes = """
+PHASE4-N-F-F invariant sketch (2026-05-31, /invariants gate). Declared at sketch;
+tests + ci_script populated at slice time. N-F-F is narrowly operator-key ingress
++ operator-material-backed ForgeActivation construction + the binary passing
+Some(activation) when a complete key set is present, on top of the enforced N-F-E
+forge tick. It REUSES the existing RED loaders (ade_runtime::producer::keys,
+opcert_envelope, genesis_parser, ProducerShell::init) and mirrors produce_mode's
+assembly, swapping the cold-start forge base for the warm-start recovered
+BootstrapState. NO new BLUE authority / plugin seam / second forge codepath; NO
+BLUE crate change expected. The forge stays subordinate + self-accept-only; the
+N-F-E containment gate is unchanged. NO live / serve / gossip / peer-acceptance /
+BA-02 / RO-LIVE-01 / durable-tip claim -- observable forge requires a
+live/continuing feed (RO-LIVE-01 follow-on). At cluster close, OP-OPS-04 /
+CN-PROD-02 / DC-NODE-05 get strengthened_in += "PHASE4-N-F-F". Carries CN-CINPUT-03
+/ DC-CINPUT-02b (recovered-surface consume-side fence) and CN-NODE-01 (single
+bootstrap authority) unchanged.
+"""
+source = "docs/planning/phase4-n-f-f-invariants.md"
+cross_ref = ["CN-NODE-01", "CN-NODE-02", "CN-PROD-02", "OP-OPS-04", "DC-NODE-05", "DC-CINPUT-02b", "CN-CINPUT-03"]
+code_locus = "crates/ade_node/src/node_lifecycle.rs"
+tests = []
+ci_script = ""
+introduced_in = "PHASE4-N-F-F"
+strengthened_in = []
+status = "declared"
