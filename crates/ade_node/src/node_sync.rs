@@ -1818,4 +1818,181 @@ mod tests {
             "forge-attempt sequence + forged bytes byte-identical across two clean runs"
         );
     }
+
+    // ===== S3b: single-epoch / KES fail-closed containment (CE-E-7) =====
+
+    /// A coordinator whose KES key is exhausted at one period: `kes_max_period
+    /// = 0` with `slots_per_kes_period = 10`, so slots 0..9 are period 0 (valid)
+    /// and any slot >= 10 rotates to period >= 1 (> max) => `None`.
+    fn s3b_kes_exhausted_coordinator() -> CoordinatorState {
+        let mut c = s2_coordinator_state();
+        c.genesis_anchor.slots_per_kes_period = 10;
+        c.genesis_anchor.kes_max_period = 0;
+        c
+    }
+
+    #[tokio::test]
+    async fn forge_tick_rotated_kes_period_skips_no_retroactive_sign() {
+        // CE-E-7 (KES clause): a Due slot whose KES period has rotated past the
+        // hot key is SKIPPED before any forge_one_from_recovered attempt — no KES
+        // signing (no retroactive sign), and the skip does NOT advance
+        // last_forged_slot. Proven by a follow-up: after the exhausted HIGH slot
+        // is skipped, a LOWER valid slot still forges — impossible if the skip
+        // had advanced last_forged to the high slot (monotonic guard would then
+        // mark the lower slot NotDue).
+        let dir = TempDir::new().unwrap();
+        let chaindb =
+            PersistentChainDb::open(PersistentChainDbOptions::at(dir.path().join("chain.db")))
+                .unwrap();
+        let mut wal = FileWalStore::open(dir.path().join("wal")).unwrap();
+        let mut state = fresh_state([0xCD; 32]);
+        let (block_tx, block_rx) = mpsc::channel::<AdmissionPeerEvent>(4);
+        let mut source = NodeBlockSource::from_wire_pump(block_rx);
+        let (sd_tx, mut sd_rx) = watch::channel(false);
+
+        let sched = l5_era_schedule();
+        let recovered = l5_recovered_state(Some(l5_recovered_inputs()));
+        let coordinator = s3b_kes_exhausted_coordinator();
+        let mut shell = l5_synth_shell(0x11, 0x22, 0x33);
+        let view = s2_idle_view();
+
+        let tip_before = ChainDb::tip(&chaindb).unwrap();
+        let wal_before = format!("{:?}", wal.read_all().unwrap());
+        let snaps_before = SnapshotStore::list_snapshot_slots(&chaindb).unwrap();
+
+        // tick1 -> slot 100 (period 10 > max 0 => KES None => SKIP);
+        // tick2 -> slot 5 (period 0 => valid => forge). Slot 5 < slot 100, so a
+        // forge at 5 proves the skip did not advance last_forged to 100.
+        let mut clock = DeterministicClock::new(0, vec![100_000, 5_000]);
+        let mut act = ForgeActivation::new(
+            &mut clock,
+            &coordinator,
+            &recovered,
+            &mut shell,
+            L5_POOL,
+            ProtocolParameters::default(),
+            ProtocolVersion { major: 9, minor: 0 },
+            0,
+            SlotNo(0),
+            1_000,
+        );
+
+        let loop_fut = run_relay_loop(
+            &mut state,
+            &mut source,
+            &chaindb,
+            &mut wal,
+            &sched,
+            &view,
+            &mut sd_rx,
+            Some(&mut act),
+        );
+        let driver = async {
+            let _ = sd_tx.send(true);
+        };
+        let (loop_res, _) = tokio::join!(loop_fut, driver);
+        loop_res.expect("loop halts cleanly");
+        drop(block_tx);
+
+        // Exactly one outcome — for the KES-valid slot 5. The exhausted slot 100
+        // produced NO forge attempt (skipped; no retroactive KES sign), and the
+        // skip did not advance last_forged (else slot 5 < 100 would be NotDue).
+        assert_eq!(
+            act.hermetic_forge_outcomes.len(),
+            1,
+            "only the KES-valid slot forges; the exhausted slot is skipped"
+        );
+        let slot = match &act.hermetic_forge_outcomes[0] {
+            CoordinatorEvent::ForgeSucceeded { slot, .. } => *slot,
+            CoordinatorEvent::ForgeNotLeader { slot, .. } => *slot,
+            CoordinatorEvent::ForgeFailed { slot, .. } => *slot,
+            other => panic!("unexpected forge outcome variant: {other:?}"),
+        };
+        assert_eq!(
+            slot, 5,
+            "the forged slot is the KES-valid follow-up (5) — proving the exhausted slot 100 was skipped and did not advance last_forged"
+        );
+
+        // Surfaces unchanged from the pre-tick baseline (forge advances no tip).
+        assert_eq!(ChainDb::tip(&chaindb).unwrap(), tip_before);
+        assert_eq!(format!("{:?}", wal.read_all().unwrap()), wal_before);
+        assert_eq!(
+            SnapshotStore::list_snapshot_slots(&chaindb).unwrap(),
+            snaps_before
+        );
+    }
+
+    #[tokio::test]
+    async fn forge_tick_off_epoch_slot_fails_closed_local() {
+        // CE-E-7 (off-epoch clause): a slot outside the recovered single-epoch
+        // window is represented locally as a structured ForgeNotLeader through
+        // the fenced forge path — never a fabricated off-epoch ForgeSucceeded,
+        // never a tip advance.
+        let dir = TempDir::new().unwrap();
+        let chaindb =
+            PersistentChainDb::open(PersistentChainDbOptions::at(dir.path().join("chain.db")))
+                .unwrap();
+        let mut wal = FileWalStore::open(dir.path().join("wal")).unwrap();
+        let mut state = fresh_state([0xCD; 32]);
+        let (block_tx, block_rx) = mpsc::channel::<AdmissionPeerEvent>(4);
+        let mut source = NodeBlockSource::from_wire_pump(block_rx);
+        let (sd_tx, mut sd_rx) = watch::channel(false);
+
+        let sched = l5_era_schedule();
+        let recovered = l5_recovered_state(Some(l5_recovered_inputs()));
+        // KES in range for slot 432000 (period 3 <= 63); the containment here is
+        // the off-epoch leader-schedule miss, not KES.
+        let coordinator = s2_coordinator_state();
+        let mut shell = l5_synth_shell(0x11, 0x22, 0x33);
+        let view = s2_idle_view();
+        let tip_before = ChainDb::tip(&chaindb).unwrap();
+
+        // Slot 432000 = epoch 1 (epoch_length_slots = 432000); the recovered
+        // view is epoch 0 -> off-epoch -> ForgeNotLeader.
+        let mut clock = DeterministicClock::new(0, vec![432_000_000]);
+        let mut act = ForgeActivation::new(
+            &mut clock,
+            &coordinator,
+            &recovered,
+            &mut shell,
+            L5_POOL,
+            ProtocolParameters::default(),
+            ProtocolVersion { major: 9, minor: 0 },
+            0,
+            SlotNo(0),
+            1_000,
+        );
+
+        let loop_fut = run_relay_loop(
+            &mut state,
+            &mut source,
+            &chaindb,
+            &mut wal,
+            &sched,
+            &view,
+            &mut sd_rx,
+            Some(&mut act),
+        );
+        let driver = async {
+            let _ = sd_tx.send(true);
+        };
+        let (loop_res, _) = tokio::join!(loop_fut, driver);
+        loop_res.expect("loop halts cleanly");
+        drop(block_tx);
+
+        assert_eq!(act.hermetic_forge_outcomes.len(), 1);
+        assert!(
+            matches!(
+                act.hermetic_forge_outcomes[0],
+                CoordinatorEvent::ForgeNotLeader { .. }
+            ),
+            "off-epoch slot must be a structured ForgeNotLeader (no fabricated off-epoch forge), got {:?}",
+            act.hermetic_forge_outcomes[0]
+        );
+        assert_eq!(
+            ChainDb::tip(&chaindb).unwrap(),
+            tip_before,
+            "off-epoch slot advances no tip"
+        );
+    }
 }
