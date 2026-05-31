@@ -56,6 +56,10 @@ if grep -qE '#\[non_exhaustive\]' <<<"$PROD"; then
 fi
 
 # No authority vocabulary and no I/O/clock/nondeterminism in the planner.
+# Note (PHASE4-N-F-E S1): `SlotNo` is NOT in this whole-module ban — the pure
+# `forge_slot_status` monotonic guard legitimately consumes a `SlotNo`. It is
+# instead forbidden ONLY inside `plan_loop_step` (scoped check below), so step
+# selection stays content-blind over the closed `ForgeSlotStatus`.
 FORBIDDEN=(
     'pump_block'
     'run_node_sync'
@@ -68,7 +72,6 @@ FORBIDDEN=(
     'BlockHash'
     'ChainTip'
     'PumpTip'
-    'SlotNo'
     'put_block'
     'AdvanceTip'
     'rollback_to_slot'
@@ -93,5 +96,20 @@ if grep -qE '_[[:space:]]*=>' <<<"$PROD"; then
     exit 1
 fi
 
-echo "OK: run_loop_planner is a closed, pure, authority-free GREEN planner (CN-NODE-02 planner half)"
+# Scoped check (PHASE4-N-F-E S1): `plan_loop_step` itself must stay
+# content-blind — it may NOT reference `SlotNo` (only the `forge_slot_status`
+# guard may). Isolate the plan_loop_step body (from its signature up to the next
+# top-level `pub fn`) out of the comment-stripped production body and assert it
+# names no SlotNo.
+PLAN_FN="$(awk '/^pub fn plan_loop_step/{f=1} f&&/^pub fn /&&!/plan_loop_step/{f=0} f{print}' <<<"$PROD")"
+if [[ -z "$PLAN_FN" ]]; then
+    echo "FAIL: could not isolate plan_loop_step body of $FILE"
+    exit 1
+fi
+if grep -qE 'SlotNo' <<<"$PLAN_FN"; then
+    echo "FAIL: plan_loop_step references SlotNo (must stay content-blind; SlotNo only in the forge_slot_status guard)"
+    exit 1
+fi
+
+echo "OK: run_loop_planner is a closed, pure, authority-free GREEN planner (CN-NODE-02 planner half + N-F-E forge step)"
 exit 0

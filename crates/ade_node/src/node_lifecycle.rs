@@ -74,7 +74,9 @@ use ade_runtime::rollback::SnapshotCadence;
 
 use crate::cli::Cli;
 use crate::node_sync::{run_node_sync, NodeBlockSource};
-use crate::run_loop_planner::{plan_loop_step, LoopState, LoopStep, ShutdownStatus, SyncStatus};
+use crate::run_loop_planner::{
+    plan_loop_step, ForgeSlotStatus, LoopState, LoopStep, ShutdownStatus, SyncStatus,
+};
 use crate::EXIT_GENERIC_STARTUP;
 
 /// Clean-exit code (mirrors the local constant in `wire_only`; the
@@ -400,7 +402,19 @@ pub async fn run_relay_loop(
         } else {
             LoopState::Continuing
         };
-        match plan_loop_step(loop_state, sync_status, shutdown_status) {
+        // PHASE4-N-F-E S1: inert compile-preserving caller update only. The
+        // relay loop always passes `ForgeSlotStatus::NotDue` (forge off), so the
+        // planner reduces exactly to its N-F-D relay mapping and never returns
+        // `ForgeTick` here (proven by
+        // run_loop_planner::tests::plan_loop_step_notdue_never_returns_forge_tick).
+        // No clock seam, producer material, or `forge_one_from_recovered` is
+        // wired in S1 — that is S2.
+        match plan_loop_step(
+            loop_state,
+            sync_status,
+            ForgeSlotStatus::NotDue,
+            shutdown_status,
+        ) {
             LoopStep::SyncOnce => {
                 run_node_sync(source, state, chaindb, wal, era_schedule, ledger_view)
                     .await
@@ -413,6 +427,12 @@ pub async fn run_relay_loop(
                 }
             }
             LoopStep::HaltCleanly => break,
+            // Structurally unreachable in S1: the caller passes NotDue. Forge
+            // wiring (the real ForgeTick arm) lands in S2.
+            LoopStep::ForgeTick => unreachable!(
+                "PHASE4-N-F-E S1: run_relay_loop passes ForgeSlotStatus::NotDue; \
+                 forge wiring lands in S2"
+            ),
         }
     }
     Ok(())
