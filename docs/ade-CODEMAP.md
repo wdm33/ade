@@ -3,7 +3,9 @@
 > **Status:** Living architectural document. Regenerated; not hand-edited.
 > Per-project instance of `~/.claude/methodology/templates/codemap.md`.
 
-> 11 crates, 456 canonical types, 2144 tests, 108 CI checks at HEAD (`71a6c80`, PHASE4-N-F-C cluster close).
+> 11 crates, 456 canonical types, 2164 tests, 110 CI checks at HEAD (`a02e1f5`, PHASE4-N-F-D cluster close).
+>
+> **PHASE4-N-F-D delta (live relay run-loop, hermetic):** no BLUE change (456 canonical types unchanged). New **GREEN** module `ade_node::run_loop_planner` (pure `plan_loop_step` over closed `LoopStep { SyncOnce, Idle, HaltCleanly }`). RED `ade_node::node_lifecycle` gained `run_relay_loop` (both `--mode node` arms converge into it) + `NodeLifecycleError::RelaySync`; RED `ade_node::node_sync` gained content-blind `NodeBlockSource` readiness (`has_work_ready` / `is_ended` / `wait_ready`) with a non-blocking `next_block` — `run_node_sync` UNMODIFIED. +2 CI gates (`ci_check_loop_planner_closed.sh`, `ci_check_node_run_loop_containment.sh`); +3 registry rules (CN-NODE-02, DC-SYNC-02, T-REC-03 enforced). Hermetic only; no live peer / BA-02.
 
 ---
 
