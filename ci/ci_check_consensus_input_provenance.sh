@@ -138,6 +138,42 @@ while IFS= read -r -d '' rsfile; do
     fi
 done < <(find "$CRATES" -name '*.rs' -type f -print0)
 
+# --- Guard (d): CN-CINPUT-03 — CONSUME-side fence on the lifecycle forge
+# path (PHASE4-N-F-C L5). The node-lifecycle forge handoff
+# (`node_sync.rs`, `forge_one_from_recovered`) must derive its leadership
+# PoolDistrView ONLY from the recovered surface — projected via
+# `from_seed_epoch_consensus_inputs` — and must NOT reach for the
+# forge-time operator bundle path, nor fabricate the recovered record. This
+# is the consume-side mirror of the populate-side containment above:
+# DC-CINPUT-02b (consume the recovered surface) + CN-CINPUT-03 (no bundle /
+# no shape-swap on the forge path).
+NODE_SYNC="$CRATES/ade_node/src/node_sync.rs"
+if [[ ! -f "$NODE_SYNC" ]]; then
+    print_fail "missing expected source $NODE_SYNC (CN-CINPUT-03)"
+else
+    SYNC_BODY="$(strip_for_grep "$NODE_SYNC")"
+    # POSITIVE: the forge path projects from the recovered surface.
+    if ! echo "$SYNC_BODY" | grep -qE '\bfrom_seed_epoch_consensus_inputs\('; then
+        print_fail "node_sync.rs forge path must derive the leadership view via from_seed_epoch_consensus_inputs( — the recovered surface is the sole consensus-input source on the lifecycle forge path (DC-CINPUT-02b)"
+    fi
+    # NEGATIVE: no bundle / cold tokens on the lifecycle forge path.
+    for tok in 'import_live_consensus_inputs' 'pool_distr_view_from_consensus_inputs' 'consensus_inputs_path' 'InMemoryChainDb'; do
+        if echo "$SYNC_BODY" | grep -qE "$tok"; then
+            print_fail "node_sync.rs forge path references a forbidden bundle/cold token: $tok — the lifecycle forge base must come from the recovered surface, never a forge-time bundle (CN-CINPUT-03)"
+        fi
+    done
+    # NO SHAPE-SWAP: the forge path must RECEIVE the recovered
+    # SeedEpochConsensusInputs via the recovered BootstrapState and project
+    # it — never CONSTRUCT a `SeedEpochConsensusInputs { ... }` literal
+    # itself (that would be fabricating the recovered type from arbitrary
+    # fields and feeding it to the projection). The populate-side guards
+    # (a–c) already restrict who may BUILD/put the sidecar; this is the
+    # consume-side mirror, scoped to the lifecycle forge module (CN-CINPUT-03).
+    if echo "$SYNC_BODY" | grep -qE '\bSeedEpochConsensusInputs[[:space:]]*\{'; then
+        print_fail "node_sync.rs forge path constructs a SeedEpochConsensusInputs { ... } literal — the forge path must receive the recovered record via BootstrapState and project it, never fabricate it (no shape-swap, CN-CINPUT-03)"
+    fi
+fi
+
 # Sanity floor for guard (c): the allow-list regex must actually match
 # the two composers (guards against an accidental path-typo that would
 # make the global scan vacuously pass).
