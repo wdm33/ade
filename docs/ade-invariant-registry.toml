@@ -5310,8 +5310,9 @@ forward-replay, NOT full-genesis replay) -- no new durability law.
 source = "docs/planning/phase4-n-f-d-live-node-run-loop-invariants.md"
 cross_ref = ["T-REC-01", "T-REC-02", "DC-SYNC-01", "DC-SYNC-02"]
 code_locus = "crates/ade_node/src/node_lifecycle.rs"
-tests = []
-ci_script = ""
+tests = ["relay_loop_two_clean_runs_byte_identical"]
+ci_script = "ci_check_node_run_loop_containment.sh"
 introduced_in = "PHASE4-N-F-D"
 strengthened_in = []
-status = "declared"
+status = "enforced"
+evidence_notes_s3a = "PHASE4-N-F-D S3a (2026-05-31): relay_loop_two_clean_runs_byte_identical proves two clean run_relay_loop runs over identical inputs (same recovered-state seed, same ordered in-memory multi-block feed, same shutdown schedule) yield byte-identical tip (slot+hash), WAL image, and captured checkpoint slots. Deterministic orchestration absent crash interference; test-only (the loop is RED orchestration over the pure GREEN planner + the deterministic run_node_sync->pump_block seam). Crash-at-boundary recovery is S3b."

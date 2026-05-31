@@ -1056,6 +1056,85 @@ mod tests {
         );
     }
 
+    #[tokio::test]
+    async fn relay_loop_two_clean_runs_byte_identical() {
+        // CE-D-4 / T-REC-03: two clean run_relay_loop runs over IDENTICAL
+        // inputs (same recovered-state seed, same ordered in-memory feed, same
+        // shutdown schedule) produce byte-identical authoritative outputs —
+        // tip (slot + hash), WAL image, and captured checkpoint slots. Proves
+        // deterministic orchestration absent crash interference. Multi-block
+        // feed so the property holds across iterations, not just one apply.
+        let (c, view) = corpus_view();
+        let sched = schedule();
+        // Two lightest blocks, deterministically ordered, for a multi-step run.
+        let mut sized: Vec<(usize, usize)> = (0..c.blocks.len())
+            .map(|i| {
+                let env = decode_block_envelope(&c.blocks[i]).expect("env");
+                (env.block_end - env.block_start, i)
+            })
+            .collect();
+        sized.sort();
+        let feed: Vec<Vec<u8>> = sized
+            .iter()
+            .take(2)
+            .map(|&(_, i)| c.blocks[i].clone())
+            .collect();
+
+        // One clean run over a fresh store set; returns the authoritative
+        // artifacts (tip, WAL Debug image, checkpoint slots).
+        async fn run_once(
+            feed: Vec<Vec<u8>>,
+            eta0: [u8; 32],
+            sched: &EraSchedule,
+            view: &PoolDistrView,
+        ) -> (Option<(SlotNo, Hash32)>, String, Vec<SlotNo>) {
+            let dir = TempDir::new().unwrap();
+            let chaindb =
+                PersistentChainDb::open(PersistentChainDbOptions::at(dir.path().join("chain.db")))
+                    .unwrap();
+            let mut wal = FileWalStore::open(dir.path().join("wal")).unwrap();
+            let mut state = fresh_state(eta0);
+            let mut source = NodeBlockSource::in_memory(feed);
+            let (_tx, mut shutdown) = watch::channel(false);
+            run_relay_loop(
+                &mut state,
+                &mut source,
+                &chaindb,
+                &mut wal,
+                sched,
+                view,
+                &mut shutdown,
+            )
+            .await
+            .expect("clean run");
+            let tip = ChainDb::tip(&chaindb)
+                .expect("tip")
+                .map(|t| (t.slot, t.hash));
+            // WAL byte-identity: the Debug image captures every field
+            // (slot/hashes/fingerprints) of every entry in order.
+            let wal_image = format!("{:?}", wal.read_all().expect("read_all"));
+            let snaps = SnapshotStore::list_snapshot_slots(&chaindb).expect("list");
+            (tip, wal_image, snaps)
+        }
+
+        let (tip_a, wal_a, snaps_a) = run_once(feed.clone(), c.epoch_nonce, &sched, &view).await;
+        let (tip_b, wal_b, snaps_b) = run_once(feed.clone(), c.epoch_nonce, &sched, &view).await;
+
+        assert!(tip_a.is_some(), "the run must advance a tip");
+        assert_eq!(
+            tip_a, tip_b,
+            "tip (slot + hash) must be byte-identical across clean runs"
+        );
+        assert_eq!(
+            wal_a, wal_b,
+            "WAL image must be byte-identical across clean runs"
+        );
+        assert_eq!(
+            snaps_a, snaps_b,
+            "captured checkpoint slots must be identical across clean runs"
+        );
+    }
+
     // =====================================================================
     // L5 — recovered-state forge handoff (hermetic, single-shot)
     // =====================================================================
