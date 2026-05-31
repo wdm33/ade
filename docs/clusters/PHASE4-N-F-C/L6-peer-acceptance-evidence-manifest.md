@@ -131,10 +131,15 @@ peer acceptance — directly instantiating
     remain `NoEvidence`.
   The manifest records the capture provenance in a typed `peer_accept_source` field so it is honest
   about which signal(s) backed the match.
-- **(M2) The forged-hash source is L5's `ForgeSucceeded`, not a re-derivation.** The manifest's
-  Ade side is `AdeForgeRecord { forged_block_hash, slot, block_number, prev_hash, network_magic }`,
-  taken from the `CoordinatorEvent::ForgeSucceeded { artifact }` L5 emits (the artifact's block
-  hash). L6 does not recompute the hash — it reads the already-minted one (no new BLUE authority).
+- **(M2) The forged evidence uses ONLY forge-event-exposed fields.** `CoordinatorEvent::ForgeSucceeded
+  { artifact }` carries a `ForgedBlockArtifact { slot, hash, bytes }` — it exposes the block `hash`
+  and `slot` directly, and NOTHING else usable as a chain-point key (no block-number, no prev-hash).
+  So the manifest's Ade side is `AdeForgeRecord { forged_block_hash, slot, network_magic }`, with
+  `forged_block_hash = artifact.hash` and `slot = artifact.slot` read DIRECTLY — the hash is never
+  recomputed, the block bytes are never parsed to recover a prev-hash or block-number, and no new
+  BLUE derivation is added (an over-specified block_number/prev_hash key was removed for exactly this
+  reason). The correlation is HASH-PRIMARY: the forged hash is the required key; the slot is the only
+  additional context, and it comes straight from the forge event.
 - **(M3) Closed vocabulary + allow-list + negative tests (mandatory, per
   `[[feedback-shell-must-not-overstate-semantic-truth]]`).** The peer-accept-log event enum is a
   CLOSED sum with a stable `event` discriminator (mirroring `admission_log`'s pattern), parsed by
@@ -143,11 +148,13 @@ peer acceptance — directly instantiating
   schema tag (mirroring `RawMithrilManifest`).
 - **(M4) NoEvidence is the default; BA02Manifest is the exception.** `correlate` returns
   `BA02Outcome::NoEvidence { reason }` for: no peer-accept event; peer-accept names a different
-  hash; hash matches but chain point (slot/block_number/prev_hash) does not; conflicting
+  hash; the forged hash matches but a PRESENT peer slot contradicts the forge slot; conflicting
   peer-accept signals at the forged context; the only signals are self-accept / `ForgeSucceeded` /
-  `block_received` / an agreement verdict; a stale log (peer-accept predates the forge, or wrong
-  network/epoch context). `BA02Manifest` is returned ONLY on an exact hash + chain-point match from
-  a genuine peer-accept event with no conflicting signal.
+  `block_received` / an agreement verdict. `BA02Manifest` is returned ONLY on a forged-hash match
+  with no contradicting context and no conflicting signal. Context rule (M1): the forged hash is the
+  required key; a peer signal's slot is OPTIONAL — when present it must equal the forge slot, when
+  omitted the signal still matches on hash (it must not CONTRADICT the forge record, but it may be
+  silent about slot).
 
 ### 9.1 The manifest + correlator (grounded in the existing patterns)
 ```
