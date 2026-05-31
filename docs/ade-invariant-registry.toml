@@ -2509,7 +2509,7 @@ code_locus = "crates/ade_runtime/src/producer/keys.rs (load_*_signing_key_skey, 
 tests = ["ade_envelope_round_trips_through_loader_at_period_0", "ade_envelope_loader_returns_kes_at_loaded_period", "ade_envelope_loader_rejects_signing_at_past_period", "cardano_cli_kes_envelope_rejects_32_byte_payload", "cardano_cli_kes_envelope_rejects_synthetic_608_byte_payload", "cardano_cli_kes_envelope_accepts_real_608_byte_payload", "cardano_cli_kes_envelope_rejects_612_byte_payload", "cardano_cli_kes_envelope_rejects_608_byte_leaf_zero_payload", "ade_envelope_loader_returns_unknown_format", "ade_envelope_loader_returns_wrong_role", "ade_envelope_loader_returns_unsupported_crypto", "ade_envelope_loader_returns_missing_seed_32", "ade_envelope_loader_returns_period_idx_overflow", "ade_envelope_loader_returns_malformed_json", "write_ade_kes_envelope_sets_0600_permissions", "vrf_and_cold_cardano_cli_skey_envelopes_round_trip", "keys_loader_rejects_wrong_envelope_type", "keys_loader_rejects_malformed_cbor_hex", "key_load_error_io_carries_no_path_bytes", "ade_envelope_load_error_io_carries_no_path_bytes", "run_key_gen_kes_writes_loadable_envelope", "run_key_gen_kes_writes_at_loaded_period", "run_key_gen_kes_rejects_short_seed_file", "cardano_cli_corpus_skey_deserializes_and_vk_matches_ground_truth", "cardano_cli_corpus_sign_then_upstream_verifies"]
 ci_script = "ci/ci_check_private_key_custody.sh, ci/ci_check_kes_envelope_closed.sh, ci/ci_check_kes_sum_compatibility.sh"
 status = "enforced"
-strengthened_in = ["PHASE4-N-O", "PHASE4-N-P"]
+strengthened_in = ["PHASE4-N-O", "PHASE4-N-P", "PHASE4-N-F-F"]
 
 [[rules]]
 id = "OP-OPS-05"
@@ -2979,7 +2979,7 @@ tests = [
 ]
 ci_script = "ci/ci_check_bootstrap_closure.sh, ci/ci_check_produce_mode_uses_bootstrap_initial_state.sh, ci/ci_check_node_mode_closure.sh"
 status = "enforced"
-strengthened_in = ["PHASE4-N-K", "PHASE4-N-M-B", "PHASE4-N-T", "PHASE4-N-Y", "PHASE4-N-F-A", "PHASE4-N-F-C"]
+strengthened_in = ["PHASE4-N-K", "PHASE4-N-M-B", "PHASE4-N-T", "PHASE4-N-Y", "PHASE4-N-F-A", "PHASE4-N-F-C", "PHASE4-N-F-F"]
 attack_rationale = "A parallel bootstrap path can produce an initial state that disagrees with the canonical materialize+decode authority chain — opening a startup-time chain-divergence vector."
 evidence_notes = "PHASE4-N-K S1 (2026-05-26) shipped ade_runtime::bootstrap::bootstrap_initial_state as the SOLE pub fn returning the initial (LedgerState, PraosChainDepState, Option<ChainTip>) triple. Cold-start vs warm-start is a single in-function branch. ci/ci_check_bootstrap_closure.sh enforces the single-pub-fn + materialize-authority-call positive grep. ade_node binary (S7) calls the function exactly once (ci/ci_check_node_binary_uses_single_bootstrap.sh). PHASE4-N-M-B (2026-05-26) strengthened by adding admission-mode dispatch closure: ci/ci_check_node_mode_closure.sh enforces Mode is closed {WireOnly, Admission}, main.rs match has no wildcard arm, and dispatch_admission is the sole admission-mode entry. PHASE4-N-F-C (2026-05-31) strengthened on two fronts: (1) the new `--mode node` lifecycle owner is the single owner threading first-run-vs-warm-start (a pure function of on-disk state) → bootstrap_initial_state → produce, with NO second bootstrap/recovery/storage-init authority; ci/ci_check_node_mode_closure.sh now pins the closed set {WireOnly, Admission, KeyGenKes, Produce, Node} (no wildcard arm). (2) new gate ci/ci_check_lifecycle_owner_uses_bootstrap_initial_state.sh enforces that the owner obtains initial state SOLELY via bootstrap_initial_state and contains the RequiredFromRecoveredProvenance constructor to owner+authority, fencing out genesis/bundle/cold/recover_node_state fallbacks."
 
@@ -4382,7 +4382,7 @@ tests = ["init_emits_started_event_and_zero_other_effects", "slot_tick_emits_req
 ci_script = "ci/ci_check_producer_coordinator_no_secrets.sh, ci/ci_check_produce_mode_uses_bootstrap_initial_state.sh"
 status = "enforced"
 introduced_in = "PHASE4-N-Q"
-strengthened_in = ["PHASE4-N-R-A", "PHASE4-N-R-C", "PHASE4-N-T", "PHASE4-N-F-E"]
+strengthened_in = ["PHASE4-N-R-A", "PHASE4-N-R-C", "PHASE4-N-T", "PHASE4-N-F-E", "PHASE4-N-F-F"]
 cluster = "PHASE4-N-Q"
 open_obligation = "**PHASE4-N-R-A A3 closed item (1)**: real forge handler in produce_mode::apply_effects_with_forge_handler is wired (run_real_forge: RED vrf_prove → BLUE verify_and_evaluate_leader → RED kes_sign_at → GREEN assemble_tick → BLUE forge_block → BLUE self_accept). **PHASE4-N-R-C C1+C2 closed items (a)+(b)**: cardano-cli opcert envelope parser (CN-OPCERT-01) + Shelley genesis closed-contract parser (CN-GENESIS-01) both shipped. **Item (c) UPDATE 2026-05-29**: both bridges have shipped — (i) the KES-signs-real-unsigned-header bridge landed in N-S-A (run_real_forge now KES-signs the real unsigned_header_pre_image, CN-KES-HEADER-01, not a placeholder), and (ii) the MuxPump outbound-relay extension landed in N-S-B (typed OutboundCommand relay, CN-OUTBOUND-RELAY-01). The remaining live-half work is NOT in this rule's enforcement scope: a thin produce-mode wiring cluster (wire the dormant N-R-C parsers opcert_envelope::parse_opcert_envelope / genesis_parser::parse_shelley_genesis into produce_mode — they exist but produce_mode still uses parse_simple_* stand-ins, G1/G2; tip-seeded bootstrap G6; live-value pinning G4; eta0/stake/ASC pinning) + operator stake + the operator-witnessed pass, tracked in CN-CONS-06 / RO-LIVE-01 (docs/planning/operator-pass-live-leg-c1-scoping.md)."
 
@@ -5344,7 +5344,7 @@ code_locus = "crates/ade_node/src/node_lifecycle.rs, crates/ade_node/src/run_loo
 tests = ["plan_loop_step_forge_precedence_table_is_total", "forge_slot_guard_none_is_due", "forge_slot_guard_at_most_once_per_slot", "forge_slot_guard_rejects_past_slot", "relay_loop_forge_slot_derived_via_clock_seam", "relay_loop_forge_tick_attempts_forge_advances_no_tip", "relay_loop_without_producer_material_matches_nfd_relay", "relay_loop_forge_two_runs_byte_identical", "forge_tick_rotated_kes_period_skips_no_retroactive_sign", "forge_tick_off_epoch_slot_fails_closed_local"]
 ci_script = "ci/ci_check_loop_planner_closed.sh, ci/ci_check_node_run_loop_containment.sh"
 introduced_in = "PHASE4-N-F-E"
-strengthened_in = []
+strengthened_in = ["PHASE4-N-F-F"]
 status = "enforced"
 evidence_notes = """
 PHASE4-N-F-E invariant sketch (2026-05-31, /invariants gate). Declared at sketch;
@@ -5436,9 +5436,9 @@ bootstrap authority) unchanged.
 """
 source = "docs/planning/phase4-n-f-f-invariants.md"
 cross_ref = ["CN-NODE-01", "CN-NODE-02", "CN-PROD-02", "OP-OPS-04", "DC-NODE-05", "DC-CINPUT-02b", "CN-CINPUT-03"]
-code_locus = "crates/ade_node/src/node_lifecycle.rs"
-tests = []
-ci_script = ""
+code_locus = "crates/ade_node/src/forge_intent.rs (GREEN tri-state classifier); crates/ade_node/src/operator_forge.rs (RED ingress + activation assembly); crates/ade_node/src/node_lifecycle.rs (Some/None binary flip + ForgeKeyIngress)"
+tests = ["classify_forge_intent_total_over_all_32_flag_combinations", "classify_forge_intent_none_present_is_off", "forge_intent_error_carries_no_path_bytes", "load_operator_producer_shell_builds_shell_from_complete_material", "load_operator_producer_shell_kes_period_past_opcert_fails_closed", "operator_forge_error_carries_no_path_or_key_bytes", "build_operator_forge_material_from_complete_material", "node_mode_with_operator_keys_warm_start_forge_capable_halts_clean", "node_mode_partial_operator_keys_fail_closed", "relay_loop_with_operator_material_forge_reaches_fenced_path", "relay_loop_with_operator_material_two_runs_byte_identical"]
+ci_script = "ci/ci_check_forge_intent_closed.sh, ci/ci_check_operator_forge_no_secret_leak.sh, ci/ci_check_node_run_loop_containment.sh"
 introduced_in = "PHASE4-N-F-F"
 strengthened_in = []
-status = "declared"
+status = "enforced"
