@@ -5309,7 +5309,7 @@ forward-replay, NOT full-genesis replay) -- no new durability law.
 """
 source = "docs/planning/phase4-n-f-d-live-node-run-loop-invariants.md"
 cross_ref = ["T-REC-01", "T-REC-02", "DC-SYNC-01", "DC-SYNC-02"]
-code_locus = "crates/ade_node/src/node_lifecycle.rs"
+code_locus = "crates/ade_node/src/node_lifecycle.rs (run_relay_loop driver), crates/ade_node/src/node_sync.rs (relay_loop_two_clean_runs_byte_identical evidence test)"
 tests = ["relay_loop_two_clean_runs_byte_identical"]
 ci_script = "ci_check_node_run_loop_containment.sh"
 introduced_in = "PHASE4-N-F-D"

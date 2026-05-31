@@ -457,7 +457,9 @@ pub fn forge_one_from_recovered(
 #[allow(clippy::expect_used)]
 mod tests {
     use super::*;
+    use ade_ledger::seed_consensus_inputs::encode_seed_epoch_consensus_inputs;
     use ade_network::codec::chain_sync::{Point, Tip};
+    use ade_runtime::seed_consensus_provenance::append_seed_epoch_provenance;
     use ade_types::{Hash32, SlotNo};
 
     fn block(b: u8) -> Vec<u8> {
@@ -522,6 +524,7 @@ mod tests {
     use ade_core::consensus::praos_state::{Nonce, PraosChainDepState};
     use ade_core::consensus::vrf_cert::ActiveSlotsCoeff;
     use ade_core::consensus::{BootstrapAnchorHash, EraSummary};
+    use ade_ledger::block_validity::decode_block;
     use ade_ledger::consensus_view::{PoolDistrView, PoolEntry};
     use ade_ledger::receive::ReceiveState;
     use ade_ledger::state::LedgerState;
@@ -1066,7 +1069,11 @@ mod tests {
         // feed so the property holds across iterations, not just one apply.
         let (c, view) = corpus_view();
         let sched = schedule();
-        // Two lightest blocks, deterministically ordered, for a multi-step run.
+        // Two lightest blocks (for a fast multi-step run), fed in ASCENDING
+        // SLOT order. The relay loop applies blocks slot-monotonically
+        // (SlotBeforeLastApplied otherwise), so the feed must be slot-ordered,
+        // not size-ordered. Slot is read via the same `decode_block` authority
+        // the pump uses (`decoded.header_input.slot`).
         let mut sized: Vec<(usize, usize)> = (0..c.blocks.len())
             .map(|i| {
                 let env = decode_block_envelope(&c.blocks[i]).expect("env");
@@ -1074,11 +1081,14 @@ mod tests {
             })
             .collect();
         sized.sort();
-        let feed: Vec<Vec<u8>> = sized
-            .iter()
-            .take(2)
-            .map(|&(_, i)| c.blocks[i].clone())
-            .collect();
+        let mut chosen: Vec<usize> = sized.iter().take(2).map(|&(_, i)| i).collect();
+        chosen.sort_by_key(|&i| {
+            decode_block(&c.blocks[i])
+                .expect("decode")
+                .header_input
+                .slot
+        });
+        let feed: Vec<Vec<u8>> = chosen.iter().map(|&i| c.blocks[i].clone()).collect();
 
         // One clean run over a fresh store set; returns the authoritative
         // artifacts (tip, WAL Debug image, checkpoint slots).
@@ -1169,7 +1179,7 @@ mod tests {
             },
         );
         let recovered_inputs = SeedEpochConsensusInputs {
-            anchor_fp,
+            anchor_fp: anchor_fp.clone(),
             epoch_no: EPOCH_576,
             active_slots_coeff: ActiveSlotsCoeff {
                 numer: 5,
