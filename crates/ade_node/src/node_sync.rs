@@ -56,7 +56,23 @@ pub enum NodeBlockSource {
     /// One peer's `run_admission_wire_pump` event stream. The pump is
     /// the N2N `BlockFetch` source; this taps its raw `Block` events —
     /// NOT admission's verdict runner (`run_admission`).
-    WirePump(mpsc::Receiver<AdmissionPeerEvent>),
+    ///
+    /// `lookahead` is a **content-blind** availability buffer of opaque block
+    /// bytes. The readiness peeks (PHASE4-N-F-D S2: `has_work_ready` /
+    /// `wait_ready`) fill it via non-blocking `try_recv`; it is drained ONLY
+    /// through `next_block`. It is RED scheduling state only — the bytes are
+    /// never decoded, hashed, validated, classified, or reordered, never
+    /// observed by BLUE/GREEN authority code, and nothing is skipped except
+    /// the pre-existing `TipUpdate` filter; a buffered block is still
+    /// delivered next, in arrival order (peek for availability, not meaning).
+    /// `disconnected` records that the peer's channel ended (a clean
+    /// disconnect is not a tip authority — it ends the feed once the
+    /// lookahead drains).
+    WirePump {
+        rx: mpsc::Receiver<AdmissionPeerEvent>,
+        lookahead: VecDeque<Vec<u8>>,
+        disconnected: bool,
+    },
     /// Deterministic in-memory ordered feed (hermetic test / loopback).
     /// Exactly the "a live socket is not required" shape `pump_block`
     /// was designed for.
@@ -71,32 +87,154 @@ impl NodeBlockSource {
 
     /// Wrap one peer's wire-pump event receiver as the source.
     pub fn from_wire_pump(rx: mpsc::Receiver<AdmissionPeerEvent>) -> Self {
-        Self::WirePump(rx)
+        Self::WirePump {
+            rx,
+            lookahead: VecDeque::new(),
+            disconnected: false,
+        }
     }
 
-    /// Next ordered block bytes, or `None` at clean end-of-feed.
+    /// Non-blocking drain of the WirePump channel into the content-blind
+    /// lookahead. Selects ONLY `Block` (buffered as opaque bytes), skips
+    /// `TipUpdate`, and stops at the first `Disconnected` / closed channel
+    /// (setting the flag) or when no event is immediately available. Never
+    /// blocks; never inspects block content. RED scheduling only.
+    fn pump_lookahead(
+        rx: &mut mpsc::Receiver<AdmissionPeerEvent>,
+        lookahead: &mut VecDeque<Vec<u8>>,
+        disconnected: &mut bool,
+    ) {
+        use tokio::sync::mpsc::error::TryRecvError;
+        loop {
+            match rx.try_recv() {
+                Ok(AdmissionPeerEvent::Block { block_bytes, .. }) => {
+                    lookahead.push_back(block_bytes);
+                }
+                Ok(AdmissionPeerEvent::TipUpdate { .. }) => continue,
+                Ok(AdmissionPeerEvent::Disconnected { .. }) => {
+                    *disconnected = true;
+                    break;
+                }
+                Err(TryRecvError::Empty) => break,
+                Err(TryRecvError::Disconnected) => {
+                    *disconnected = true;
+                    break;
+                }
+            }
+        }
+    }
+
+    /// Next ordered block bytes that are AVAILABLE NOW, or `None` at the
+    /// current batch boundary (an exhausted in-memory feed, or a WirePump
+    /// with nothing buffered right now). **Non-blocking**: it never waits for
+    /// future input — waiting happens only in the relay loop's RED `Idle`
+    /// branch (`wait_ready`), OUTSIDE `run_node_sync`, so the sync driver is
+    /// never awaited across a shutdown cancellation boundary.
     ///
     /// Selects ONLY `AdmissionPeerEvent::Block`. `TipUpdate` is skipped
-    /// (a comparison input for the verdict loop, not a block and not a
-    /// sync tip authority). `Disconnected` and a closed channel both end
-    /// the feed (a clean disconnect is not a tip authority). No verdict
-    /// is ever derived or surfaced here (E2 / no verdict-as-sync).
+    /// (a comparison input for the verdict loop, not a block and not a sync
+    /// tip authority). `Disconnected` and a closed channel both end the feed
+    /// (a clean disconnect is not a tip authority). No verdict is ever
+    /// derived or surfaced here (E2 / no verdict-as-sync).
+    ///
+    /// `run_node_sync` is the SOLE block-consumption path: it calls
+    /// `next_block` in a loop to drain the currently-available batch and
+    /// returns at the boundary. The content-blind lookahead (filled by the
+    /// readiness peeks) is drained ONLY here.
     pub async fn next_block(&mut self) -> Option<Vec<u8>> {
         match self {
             Self::InMemory(q) => q.pop_front(),
-            Self::WirePump(rx) => loop {
-                match rx.recv().await {
-                    Some(AdmissionPeerEvent::Block { block_bytes, .. }) => {
-                        return Some(block_bytes);
-                    }
-                    // Not a block; not a sync tip authority. Skip.
-                    Some(AdmissionPeerEvent::TipUpdate { .. }) => continue,
-                    // Clean disconnect ends the feed.
-                    Some(AdmissionPeerEvent::Disconnected { .. }) => return None,
-                    // Sender dropped: end of feed.
-                    None => return None,
+            Self::WirePump {
+                rx,
+                lookahead,
+                disconnected,
+            } => {
+                // Top up the content-blind lookahead from whatever is
+                // immediately available (non-blocking), then hand back one
+                // block. No `.await` on the channel — a batch boundary
+                // (open-but-empty) yields `None` so the sync driver returns
+                // and the loop can re-plan / idle / shut down cleanly.
+                if lookahead.is_empty() && !*disconnected {
+                    Self::pump_lookahead(rx, lookahead, disconnected);
                 }
-            },
+                lookahead.pop_front()
+            }
+        }
+    }
+
+    /// Whether a subsequent sync step is expected to make progress — i.e.
+    /// whether at least one block is available to apply right now. RED
+    /// scheduling information only; **content-blind** (it never inspects,
+    /// decodes, classifies, hashes, validates, reorders, or consumes block
+    /// bytes — for the WirePump arm it fills the opaque lookahead via
+    /// non-blocking `try_recv`). PHASE4-N-F-D S2.
+    pub fn has_work_ready(&mut self) -> bool {
+        match self {
+            Self::InMemory(q) => !q.is_empty(),
+            Self::WirePump {
+                rx,
+                lookahead,
+                disconnected,
+            } => {
+                if lookahead.is_empty() && !*disconnected {
+                    Self::pump_lookahead(rx, lookahead, disconnected);
+                }
+                !lookahead.is_empty()
+            }
+        }
+    }
+
+    /// Whether the source feed has structurally ended (distinct from
+    /// momentary emptiness): an in-memory feed is ended once drained; a
+    /// WirePump is ended once its channel disconnected AND the lookahead is
+    /// drained. Content-blind. PHASE4-N-F-D S2.
+    pub fn is_ended(&self) -> bool {
+        match self {
+            Self::InMemory(q) => q.is_empty(),
+            Self::WirePump {
+                lookahead,
+                disconnected,
+                ..
+            } => *disconnected && lookahead.is_empty(),
+        }
+    }
+
+    /// Resolve when the next sync step is expected to make progress, or the
+    /// feed has ended. In-memory feeds resolve immediately (work is already
+    /// present or it is ended). A WirePump with nothing buffered awaits one
+    /// event (skipping `TipUpdate`), buffering a `Block` into the
+    /// content-blind lookahead or marking disconnect. This is the loop's
+    /// sole inter-iteration await point, so a shutdown selected against it is
+    /// cancellation-safe — no durable apply is ever torn. PHASE4-N-F-D S2.
+    pub async fn wait_ready(&mut self) {
+        match self {
+            Self::InMemory(_) => {}
+            Self::WirePump {
+                rx,
+                lookahead,
+                disconnected,
+            } => {
+                if !lookahead.is_empty() || *disconnected {
+                    return;
+                }
+                loop {
+                    match rx.recv().await {
+                        Some(AdmissionPeerEvent::Block { block_bytes, .. }) => {
+                            lookahead.push_back(block_bytes);
+                            return;
+                        }
+                        Some(AdmissionPeerEvent::TipUpdate { .. }) => continue,
+                        Some(AdmissionPeerEvent::Disconnected { .. }) => {
+                            *disconnected = true;
+                            return;
+                        }
+                        None => {
+                            *disconnected = true;
+                            return;
+                        }
+                    }
+                }
+            }
         }
     }
 }
@@ -479,17 +617,10 @@ mod tests {
         let mut state = fresh_state(c.epoch_nonce);
         let mut source = NodeBlockSource::in_memory(vec![bytes.clone()]);
 
-        let tip = run_node_sync(
-            &mut source,
-            &mut state,
-            &chaindb,
-            &mut wal,
-            &sched,
-            &view,
-        )
-        .await
-        .expect("sync ok")
-        .expect("tip advanced");
+        let tip = run_node_sync(&mut source, &mut state, &chaindb, &mut wal, &sched, &view)
+            .await
+            .expect("sync ok")
+            .expect("tip advanced");
 
         // Block durably stored under the advanced tip's hash.
         let stored = ChainDb::get_block_by_hash(&chaindb, &tip.hash)
@@ -594,8 +725,7 @@ mod tests {
         };
 
         // --- Phase 2: reopen + recover through the REAL recovery path. ---
-        let chaindb =
-            PersistentChainDb::open(PersistentChainDbOptions::at(&chaindb_path)).unwrap();
+        let chaindb = PersistentChainDb::open(PersistentChainDbOptions::at(&chaindb_path)).unwrap();
         let wal = FileWalStore::open(&wal_dir).unwrap();
         let recovered = crate::node_lifecycle::warm_start_recovery(&chaindb, &wal)
             .expect("warm-start recovers after sync");
@@ -631,15 +761,7 @@ mod tests {
         let mut state = fresh_state([0xEE; 32]);
         let mut source = NodeBlockSource::in_memory(vec![vec![0xDE, 0xAD, 0xBE, 0xEF]]);
 
-        let r = run_node_sync(
-            &mut source,
-            &mut state,
-            &chaindb,
-            &mut wal,
-            &sched,
-            &view,
-        )
-        .await;
+        let r = run_node_sync(&mut source, &mut state, &chaindb, &mut wal, &sched, &view).await;
         assert!(
             matches!(r, Err(NodeSyncError::Pump(_))),
             "undecodable block must fail closed, got {r:?}"
@@ -683,6 +805,254 @@ mod tests {
             src.next_block().await,
             None,
             "disconnect ends the feed; later queued blocks are not surfaced"
+        );
+    }
+
+    // =====================================================================
+    // PHASE4-N-F-D S2 — readiness signals + the RED relay run loop
+    // =====================================================================
+    //
+    // Readiness is content-blind RED scheduling info; the relay loop composes
+    // the GREEN planner over run_node_sync (the sole block-consumption path).
+    // run_relay_loop lives in node_lifecycle; these tests drive it over the
+    // same hermetic fixtures the L4b tests use.
+
+    use crate::node_lifecycle::{run_relay_loop, NodeLifecycleError};
+    use tokio::sync::watch;
+
+    #[test]
+    fn readiness_inmemory_has_work_and_is_ended() {
+        let mut empty = NodeBlockSource::in_memory(vec![]);
+        assert!(!empty.has_work_ready(), "empty in-memory: no work");
+        assert!(empty.is_ended(), "empty in-memory: ended");
+
+        let mut full = NodeBlockSource::in_memory(vec![block(0x01), block(0x02)]);
+        assert!(full.has_work_ready(), "non-empty in-memory: work ready");
+        assert!(!full.is_ended(), "non-empty in-memory: not ended");
+    }
+
+    #[tokio::test]
+    async fn readiness_wirepump_is_content_blind_and_order_preserving() {
+        // has_work_ready fills the content-blind lookahead via non-blocking
+        // try_recv; next_block then delivers the SAME bytes in arrival order.
+        // Readiness peeks for availability, never decodes/reorders content.
+        let (tx, rx) = mpsc::channel::<AdmissionPeerEvent>(16);
+        tx.send(AdmissionPeerEvent::Block {
+            peer: "p".to_string(),
+            block_bytes: block(0xD1),
+        })
+        .await
+        .unwrap();
+        tx.send(AdmissionPeerEvent::Block {
+            peer: "p".to_string(),
+            block_bytes: block(0xD2),
+        })
+        .await
+        .unwrap();
+        drop(tx);
+
+        let mut src = NodeBlockSource::from_wire_pump(rx);
+        // Peek (fills lookahead) — does not consume or reorder.
+        assert!(src.has_work_ready(), "buffered block is ready");
+        assert!(!src.is_ended(), "not ended while a block is buffered");
+        // Delivery order preserved through the lookahead.
+        assert_eq!(src.next_block().await, Some(block(0xD1)));
+        assert_eq!(src.next_block().await, Some(block(0xD2)));
+        // Drained + channel closed ⇒ ended.
+        assert!(!src.has_work_ready(), "no more work");
+        assert!(src.is_ended(), "disconnected + drained ⇒ ended");
+        assert_eq!(src.next_block().await, None);
+    }
+
+    #[tokio::test]
+    async fn relay_loop_syncs_then_halts_clean_on_source_end() {
+        // CE-D-3: both arms converge into the loop; an available batch is
+        // synced via run_node_sync (durable tip + WAL + checkpoint), then a
+        // drained+ended source halts the loop cleanly.
+        let (c, view) = corpus_view();
+        let sched = schedule();
+        let bytes = pick_lightest(&c);
+
+        let dir = TempDir::new().unwrap();
+        let chaindb =
+            PersistentChainDb::open(PersistentChainDbOptions::at(dir.path().join("chain.db")))
+                .unwrap();
+        let mut wal = FileWalStore::open(dir.path().join("wal")).unwrap();
+        let mut state = fresh_state(c.epoch_nonce);
+        let mut source = NodeBlockSource::in_memory(vec![bytes.clone()]);
+        let (_tx, mut shutdown) = watch::channel(false);
+
+        run_relay_loop(
+            &mut state,
+            &mut source,
+            &chaindb,
+            &mut wal,
+            &sched,
+            &view,
+            &mut shutdown,
+        )
+        .await
+        .expect("relay loop drains the batch then halts cleanly");
+
+        // The durable tip advanced (only via run_node_sync → pump_block).
+        let tip = ChainDb::tip(&chaindb).expect("tip").expect("tip advanced");
+        let stored = ChainDb::get_block_by_hash(&chaindb, &tip.hash)
+            .expect("get")
+            .expect("block present");
+        assert_eq!(stored.bytes, bytes, "preserved wire bytes round-trip");
+        // WAL recorded the AdmitBlock; the source is fully drained + ended.
+        let entries = wal.read_all().expect("read_all");
+        assert!(
+            entries
+                .iter()
+                .any(|e| matches!(e, WalEntry::AdmitBlock { slot, .. } if *slot == tip.slot)),
+            "WAL must contain an AdmitBlock at the synced tip"
+        );
+        assert!(source.is_ended(), "source ended after the batch drained");
+    }
+
+    #[tokio::test]
+    async fn relay_loop_halts_clean_on_shutdown_no_partial_write() {
+        // CE-D-3: a shutdown requested BEFORE the first tick halts the loop at
+        // the boundary with NO SyncOnce — the tip never advances, no partial
+        // write (shutdown precedence; planner HaltCleanly).
+        let (c, view) = corpus_view();
+        let sched = schedule();
+        let bytes = pick_lightest(&c);
+
+        let dir = TempDir::new().unwrap();
+        let chaindb =
+            PersistentChainDb::open(PersistentChainDbOptions::at(dir.path().join("chain.db")))
+                .unwrap();
+        let mut wal = FileWalStore::open(dir.path().join("wal")).unwrap();
+        let mut state = fresh_state(c.epoch_nonce);
+        // Work IS available, but shutdown is already requested.
+        let mut source = NodeBlockSource::in_memory(vec![bytes]);
+        let (_tx, mut shutdown) = watch::channel(true);
+
+        run_relay_loop(
+            &mut state,
+            &mut source,
+            &chaindb,
+            &mut wal,
+            &sched,
+            &view,
+            &mut shutdown,
+        )
+        .await
+        .expect("relay loop halts cleanly on shutdown");
+
+        // Shutdown took precedence over the available block: nothing applied.
+        assert!(
+            ChainDb::tip(&chaindb).expect("tip").is_none(),
+            "shutdown halts before any SyncOnce — no tip advance, no partial write"
+        );
+        assert!(
+            SnapshotStore::list_snapshot_slots(&chaindb)
+                .expect("list")
+                .is_empty(),
+            "no checkpoint captured when shutdown precedes sync"
+        );
+    }
+
+    #[tokio::test]
+    async fn relay_loop_idles_then_syncs_on_incremental_feed() {
+        // CE-D-3 (Idle path): an open, momentarily-empty WirePump makes the
+        // planner Idle; wait_ready awaits the next block (the loop's sole
+        // inter-iteration await); when it arrives the loop syncs, then the
+        // closed channel ends the feed and it halts cleanly. Hermetic
+        // in-process mpsc — NO live peer.
+        let (c, view) = corpus_view();
+        let sched = schedule();
+        let bytes = pick_lightest(&c);
+
+        let dir = TempDir::new().unwrap();
+        let chaindb =
+            PersistentChainDb::open(PersistentChainDbOptions::at(dir.path().join("chain.db")))
+                .unwrap();
+        let mut wal = FileWalStore::open(dir.path().join("wal")).unwrap();
+        let mut state = fresh_state(c.epoch_nonce);
+
+        let (tx, rx) = mpsc::channel::<AdmissionPeerEvent>(16);
+        let mut source = NodeBlockSource::from_wire_pump(rx);
+        let (_tx_sd, mut shutdown) = watch::channel(false);
+
+        // Sender runs when the loop yields at wait_ready (current-thread
+        // runtime): the first tick finds no work (Idle), wait_ready awaits,
+        // the spawned task then sends one block and closes the channel.
+        let send_bytes = bytes.clone();
+        let sender = tokio::spawn(async move {
+            tx.send(AdmissionPeerEvent::Block {
+                peer: "p".to_string(),
+                block_bytes: send_bytes,
+            })
+            .await
+            .unwrap();
+            drop(tx);
+        });
+
+        run_relay_loop(
+            &mut state,
+            &mut source,
+            &chaindb,
+            &mut wal,
+            &sched,
+            &view,
+            &mut shutdown,
+        )
+        .await
+        .expect("relay loop idles, then syncs the delivered block, then halts");
+        sender.await.unwrap();
+
+        let tip = ChainDb::tip(&chaindb).expect("tip").expect("tip advanced");
+        assert_eq!(
+            ChainDb::get_block_by_hash(&chaindb, &tip.hash)
+                .expect("get")
+                .expect("present")
+                .bytes,
+            bytes,
+            "the incrementally-delivered block was synced"
+        );
+    }
+
+    #[tokio::test]
+    async fn relay_loop_fails_closed_on_unapplyable_block() {
+        // CE-D-2 fail-closed: a block run_node_sync → pump_block rejects halts
+        // the loop with a typed RelaySync error — never a skip-past, never a
+        // fallback, tip unmoved. (An undecodable block exercises the same
+        // RelaySync path a cross-epoch header takes: the recovered
+        // single-epoch view rejects an off-epoch header — DC-CINPUT-02a,
+        // proven at the view/forge level — and run_node_sync surfaces it as
+        // the identical fail-closed NodeSyncError → RelaySync.)
+        let (_c, view) = corpus_view();
+        let sched = schedule();
+
+        let dir = TempDir::new().unwrap();
+        let chaindb =
+            PersistentChainDb::open(PersistentChainDbOptions::at(dir.path().join("chain.db")))
+                .unwrap();
+        let mut wal = FileWalStore::open(dir.path().join("wal")).unwrap();
+        let mut state = fresh_state([0x5A; 32]);
+        let mut source = NodeBlockSource::in_memory(vec![vec![0xDE, 0xAD, 0xBE, 0xEF]]);
+        let (_tx, mut shutdown) = watch::channel(false);
+
+        let r = run_relay_loop(
+            &mut state,
+            &mut source,
+            &chaindb,
+            &mut wal,
+            &sched,
+            &view,
+            &mut shutdown,
+        )
+        .await;
+        assert!(
+            matches!(r, Err(NodeLifecycleError::RelaySync(_))),
+            "unapplyable block must fail closed via RelaySync, got {r:?}"
+        );
+        assert!(
+            ChainDb::tip(&chaindb).expect("tip").is_none(),
+            "no tip advance on a rejected block"
         );
     }
 
@@ -864,12 +1234,26 @@ mod tests {
         let mut shell1 = l5_synth_shell(0xAB, 0xCD, 0xEF);
         let mut shell2 = l5_synth_shell(0xAB, 0xCD, 0xEF);
         let e1 = forge_one_from_recovered(
-            &recovered, &tip, &mut shell1, &L5_POOL, &pparams, &sched, 100, 0,
+            &recovered,
+            &tip,
+            &mut shell1,
+            &L5_POOL,
+            &pparams,
+            &sched,
+            100,
+            0,
             ProtocolVersion { major: 9, minor: 0 },
         )
         .expect("ok");
         let e2 = forge_one_from_recovered(
-            &recovered, &tip, &mut shell2, &L5_POOL, &pparams, &sched, 100, 0,
+            &recovered,
+            &tip,
+            &mut shell2,
+            &L5_POOL,
+            &pparams,
+            &sched,
+            100,
+            0,
             ProtocolVersion { major: 9, minor: 0 },
         )
         .expect("ok");

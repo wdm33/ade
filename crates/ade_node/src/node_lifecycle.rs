@@ -48,6 +48,7 @@ use std::path::Path;
 use std::process::ExitCode;
 
 use ade_core::consensus::era_schedule::{EraSchedule, EraSummary};
+use ade_core::consensus::praos_state::PraosChainDepState;
 use ade_core::consensus::vrf_cert::ActiveSlotsCoeff;
 use ade_core::consensus::BootstrapAnchorHash;
 use ade_ledger::consensus_view::PoolDistrView;
@@ -57,19 +58,23 @@ use ade_ledger::wal::{replay_from_anchor, WalStore};
 use ade_runtime::bootstrap::{
     bootstrap_initial_state, BootstrapInputs, BootstrapState, SeedEpochConsensusSource,
 };
-use ade_runtime::chaindb::{
-    ChainDb, PersistentChainDb, PersistentChainDbOptions, SnapshotStore,
-};
+use ade_runtime::chaindb::{ChainDb, PersistentChainDb, PersistentChainDbOptions, SnapshotStore};
 use ade_runtime::consensus_inputs::{import_live_consensus_inputs, LiveConsensusInputsCanonical};
 use ade_runtime::mithril_bootstrap::{bootstrap_from_mithril_snapshot, MithrilSeedPointInputs};
 use ade_runtime::mithril_import::import_mithril_manifest_from_bytes;
 use ade_runtime::seed_import::import_cardano_cli_json_utxo;
 use ade_runtime::wal::FileWalStore;
-use ade_core::consensus::praos_state::PraosChainDepState;
 use ade_types::{CardanoEra, EpochNo, Hash32, SlotNo};
 use tokio::sync::watch;
 
+use ade_core::consensus::ledger_view::LedgerView;
+use ade_ledger::receive::ReceiveState;
+use ade_runtime::forward_sync::ForwardSyncState;
+use ade_runtime::rollback::SnapshotCadence;
+
 use crate::cli::Cli;
+use crate::node_sync::{run_node_sync, NodeBlockSource};
+use crate::run_loop_planner::{plan_loop_step, LoopState, LoopStep, ShutdownStatus, SyncStatus};
 use crate::EXIT_GENERIC_STARTUP;
 
 /// Clean-exit code (mirrors the local constant in `wire_only`; the
@@ -96,6 +101,12 @@ pub const EXIT_NODE_MITHRIL_BOOTSTRAP_FAILED: i32 = 41;
 /// `bootstrap_initial_state` sidecar verify chain failing. Distinct so an
 /// operator can tell a recovery failure from a first-run / bad-CLI exit.
 pub const EXIT_NODE_WARM_START_RECOVERY_FAILED: i32 = 42;
+
+/// Exit code for a fail-closed relay run-loop sync step (PHASE4-N-F-D): the
+/// `run_node_sync` → `pump_block` seam rejected a block (undecodable /
+/// unvalidatable / cross-epoch / durability fault). Distinct so an operator
+/// can tell a sync failure from a bootstrap / recovery / bad-CLI exit.
+pub const EXIT_NODE_RELAY_SYNC_FAILED: i32 = 43;
 
 /// The first-run-vs-warm-start classification — a closed sum derived
 /// purely from what is persisted on disk.
@@ -175,6 +186,12 @@ pub enum NodeLifecycleError {
     /// mismatch, byte-identity mismatch, or a malformed sidecar. Carries the
     /// closed `BootstrapError` debug. Fail closed — NO bundle fallback.
     WarmStartBootstrap(String),
+    /// The relay run loop's sync step (`run_node_sync` → `pump_block`)
+    /// fail-closed on a block (undecodable, unvalidatable, a cross-epoch
+    /// header beyond the recovered single-epoch view, or a durability
+    /// fault). Carries the closed `NodeSyncError` debug. Fail closed — the
+    /// loop never skips past a rejected block (PHASE4-N-F-D S2).
+    RelaySync(String),
 }
 
 /// Pure first-run-vs-warm-start classifier. A function of on-disk state
@@ -192,10 +209,11 @@ pub fn classify_start(has_tip: bool, has_snapshots: bool) -> NodeStart {
 
 /// The `--mode node` owner entry. Returns a process exit code.
 ///
-/// `shutdown` is accepted for signature parity with the other mode
-/// entries and the L4 slot loop to come; L2 does not run a loop.
-pub async fn run_node_lifecycle(cli: Cli, _shutdown: watch::Receiver<bool>) -> ExitCode {
-    match run_node_lifecycle_inner(&cli) {
+/// `shutdown` is the SIGINT/SIGTERM watch flag; it is now load-bearing —
+/// both lifecycle arms converge into the relay run loop (PHASE4-N-F-D S2),
+/// which halts cleanly when `shutdown` flips.
+pub async fn run_node_lifecycle(cli: Cli, mut shutdown: watch::Receiver<bool>) -> ExitCode {
+    match run_node_lifecycle_inner(&cli, &mut shutdown).await {
         Ok(()) => ExitCode::from(EXIT_OK as u8),
         Err(e) => {
             report(&e);
@@ -221,10 +239,14 @@ fn exit_code_for(e: &NodeLifecycleError) -> i32 {
         | NodeLifecycleError::WarmStartNoProvenance
         | NodeLifecycleError::WarmStartForwardReplayUnsupported { .. }
         | NodeLifecycleError::WarmStartBootstrap(_) => EXIT_NODE_WARM_START_RECOVERY_FAILED,
+        NodeLifecycleError::RelaySync(_) => EXIT_NODE_RELAY_SYNC_FAILED,
     }
 }
 
-fn run_node_lifecycle_inner(cli: &Cli) -> Result<(), NodeLifecycleError> {
+async fn run_node_lifecycle_inner(
+    cli: &Cli,
+    shutdown: &mut watch::Receiver<bool>,
+) -> Result<(), NodeLifecycleError> {
     // 1. Required persistence paths. `--snapshot-dir` holds the
     //    persistent ChainDb (which is also the SnapshotStore);
     //    `--wal-dir` holds the FileWalStore. No defaults: a missing
@@ -253,41 +275,147 @@ fn run_node_lifecycle_inner(cli: &Cli) -> Result<(), NodeLifecycleError> {
     let chaindb_path = snapshot_dir.join("chain.db");
     let chaindb = PersistentChainDb::open(PersistentChainDbOptions::at(&chaindb_path))
         .map_err(|e| NodeLifecycleError::ChainDbOpen(format!("{e:?}")))?;
-    let mut wal = FileWalStore::open(wal_dir)
-        .map_err(|e| NodeLifecycleError::WalOpen(format!("{e:?}")))?;
+    let mut wal =
+        FileWalStore::open(wal_dir).map_err(|e| NodeLifecycleError::WalOpen(format!("{e:?}")))?;
 
     // 4. Classify first-run vs warm-start as a pure function of on-disk
     //    state. (The same `(tip, snapshots)` axes `bootstrap_initial_state`
     //    branches on.)
-    let tip = ChainDb::tip(&chaindb)
-        .map_err(|e| NodeLifecycleError::OnDiskRead(format!("{e:?}")))?;
+    let tip =
+        ChainDb::tip(&chaindb).map_err(|e| NodeLifecycleError::OnDiskRead(format!("{e:?}")))?;
     let snapshot_slots = SnapshotStore::list_snapshot_slots(&chaindb)
         .map_err(|e| NodeLifecycleError::OnDiskRead(format!("{e:?}")))?;
     let start = classify_start(tip.is_some(), !snapshot_slots.is_empty());
 
-    match start {
-        // 5a. FirstRun: Mithril-only bootstrap (L2). Fail-closed; no
-        //     genesis/bundle/cold/tip fallback.
-        NodeStart::FirstRun => first_run_mithril_bootstrap(cli, &chaindb, &mut wal),
-        // 5b. WarmStart: production warm-start recovery (L3). Replay the
-        //     WAL, restore + verify the recovered seed-epoch sidecar through
-        //     the single bootstrap authority. Fail closed; NO bundle fallback.
-        NodeStart::WarmStart => {
-            let state = warm_start_recovery(&chaindb, &wal)?;
-            let epoch = state
-                .seed_epoch_consensus_inputs
-                .as_ref()
-                .map(|s| s.epoch_no.0);
-            let tip_slot = state.tip.as_ref().map(|t| t.slot.0);
-            // Honest success record. L3 does not sync (L4) or produce (L5).
-            eprintln!(
-                "ade_node --mode node: warm-start recovery complete \
-                 (recovered seed-epoch consensus inputs epoch={epoch:?}, recovered tip slot={tip_slot:?}). \
-                 Sync (L4) and produce (L5) are not wired; NO block produced."
-            );
-            Ok(())
+    // 5. Obtain the verified initial state through the single bootstrap
+    //    authority (FirstRun via bootstrap_from_mithril_snapshot; WarmStart
+    //    via the warm-start verify chain). Fail closed; NO genesis / bundle /
+    //    cold / tip fallback on either arm.
+    let state = match start {
+        NodeStart::FirstRun => first_run_mithril_bootstrap(cli, &chaindb, &mut wal)?,
+        NodeStart::WarmStart => warm_start_recovery(&chaindb, &wal)?,
+    };
+
+    // 6. Both arms CONVERGE here into the one relay run loop (CN-NODE-02): no
+    //    arm prints-and-exits any more.
+    //
+    //    N-F-D wires NO live peer (the live WirePump source is the RO-LIVE-01
+    //    follow-on), so the binary's source is EMPTY: the loop is genuinely
+    //    ENTERED and the GREEN planner drives it to a clean halt on the first
+    //    tick (Ending + NoWorkReady => HaltCleanly) WITHOUT any SyncOnce
+    //    consuming era_schedule / ledger_view. Those are deterministic
+    //    placeholders here, PROVABLY UNCONSUMED on this binary path (empty
+    //    source) — the same justification as the warm-start placeholder
+    //    schedule/view. The populated-source behavior (durable sync, idle,
+    //    shutdown, cross-epoch fail-closed) is proven HERMETICALLY by the
+    //    run_relay_loop tests, NOT on this binary path. This is a hermetic
+    //    cluster; it makes NO live-peer claim.
+    let epoch = state
+        .seed_epoch_consensus_inputs
+        .as_ref()
+        .map(|s| s.epoch_no.0);
+    let tip_slot = state.tip.as_ref().map(|t| t.slot.0);
+    let era_schedule = make_node_schedule(SlotNo(0), EpochNo(0));
+    let ledger_view = PoolDistrView::new(
+        EpochNo(0),
+        0,
+        ActiveSlotsCoeff { numer: 0, denom: 1 },
+        BTreeMap::new(),
+    );
+    let mut fwd = ForwardSyncState::new(
+        ReceiveState::new(state.ledger, state.chain_dep),
+        Hash32([0u8; 32]),
+        SnapshotCadence::DEFAULT,
+    );
+    let mut source = NodeBlockSource::in_memory(Vec::new());
+    run_relay_loop(
+        &mut fwd,
+        &mut source,
+        &chaindb,
+        &mut wal,
+        &era_schedule,
+        &ledger_view,
+        shutdown,
+    )
+    .await?;
+
+    // Honest success record. The loop was entered and halted cleanly; with
+    // no live-peer source wired in this cluster, no block was synced or
+    // produced.
+    eprintln!(
+        "ade_node --mode node: relay run loop entered and halted cleanly \
+         (recovered/bootstrapped epoch={epoch:?}, tip slot={tip_slot:?}; \
+         NO live peer source wired in this cluster — sync / idle / shutdown \
+         are proven hermetically). NO block produced."
+    );
+    Ok(())
+}
+
+/// The RED relay run loop (PHASE4-N-F-D S2). Both `--mode node` lifecycle
+/// arms converge here. Each iteration reads the three closed lifecycle inputs
+/// (operator shutdown intent, momentary source readiness, structural feed
+/// liveness), asks the GREEN [`plan_loop_step`] planner for the next step,
+/// and performs exactly that step:
+///
+///   - `SyncOnce`  → one `run_node_sync` (the SOLE block-consumption path):
+///     drains the currently-available batch through the single
+///     `run_node_sync` → `pump_block` seam, durable-before-tip, capturing its
+///     E4 checkpoint. The durable tip advances ONLY here (DC-SYNC-02). A
+///     reject fails closed via [`NodeLifecycleError::RelaySync`] — never a
+///     skip-past, never a fallback.
+///   - `Idle`      → the SOLE inter-iteration await: wait for the next block
+///     to become available OR a shutdown signal. Cancellation-safe — no
+///     durable apply is in flight here.
+///   - `HaltCleanly` → break at this boundary, on-disk state recoverable.
+///
+/// The loop owns NO authority (CN-NODE-02): it forges nothing, admits
+/// nothing through a second path, derives no verdict, follows no peer, and
+/// never advances the tip except through `run_node_sync`. `run_node_sync` is
+/// **awaited to completion** inside `SyncOnce` and is NEVER placed inside the
+/// shutdown `select!`, so it can never be cancelled between a durable apply
+/// and its checkpoint.
+#[allow(clippy::too_many_arguments)]
+pub async fn run_relay_loop(
+    state: &mut ForwardSyncState,
+    source: &mut NodeBlockSource,
+    chaindb: &PersistentChainDb,
+    wal: &mut FileWalStore,
+    era_schedule: &EraSchedule,
+    ledger_view: &dyn LedgerView,
+    shutdown: &mut watch::Receiver<bool>,
+) -> Result<(), NodeLifecycleError> {
+    loop {
+        let shutdown_status = if *shutdown.borrow() {
+            ShutdownStatus::ShutdownRequested
+        } else {
+            ShutdownStatus::Running
+        };
+        let sync_status = if source.has_work_ready() {
+            SyncStatus::WorkAvailable
+        } else {
+            SyncStatus::NoWorkReady
+        };
+        let loop_state = if source.is_ended() {
+            LoopState::Ending
+        } else {
+            LoopState::Continuing
+        };
+        match plan_loop_step(loop_state, sync_status, shutdown_status) {
+            LoopStep::SyncOnce => {
+                run_node_sync(source, state, chaindb, wal, era_schedule, ledger_view)
+                    .await
+                    .map_err(|e| NodeLifecycleError::RelaySync(format!("{e:?}")))?;
+            }
+            LoopStep::Idle => {
+                tokio::select! {
+                    _ = source.wait_ready() => {}
+                    _ = shutdown.changed() => {}
+                }
+            }
+            LoopStep::HaltCleanly => break,
         }
     }
+    Ok(())
 }
 
 /// WarmStart arm — production warm-start recovery (L3).
@@ -376,7 +504,8 @@ pub(crate) fn warm_start_recovery(
     //    is the replay-forward fold, reached only when the nearest snapshot is
     //    strictly below the target. Require a snapshot exactly at the tip so
     //    that path is unreachable; otherwise fail closed (L4 territory).
-    let tip = ChainDb::tip(chaindb).map_err(|e| NodeLifecycleError::OnDiskRead(format!("{e:?}")))?;
+    let tip =
+        ChainDb::tip(chaindb).map_err(|e| NodeLifecycleError::OnDiskRead(format!("{e:?}")))?;
     if let Some(t) = &tip {
         if SnapshotStore::get_snapshot(chaindb, t.slot)
             .map_err(|e| NodeLifecycleError::OnDiskRead(format!("{e:?}")))?
@@ -409,8 +538,9 @@ pub(crate) fn warm_start_recovery(
         era_schedule: &era_schedule,
         ledger_view: &ledger_view,
         genesis_initial: None,
-        seed_epoch_consensus_source:
-            SeedEpochConsensusSource::RequiredFromRecoveredProvenance(provenance),
+        seed_epoch_consensus_source: SeedEpochConsensusSource::RequiredFromRecoveredProvenance(
+            provenance,
+        ),
     })
     .map_err(|e| NodeLifecycleError::WarmStartBootstrap(format!("{e:?}")))
 }
@@ -434,7 +564,7 @@ fn first_run_mithril_bootstrap(
     cli: &Cli,
     chaindb: &PersistentChainDb,
     wal: &mut FileWalStore,
-) -> Result<(), NodeLifecycleError> {
+) -> Result<BootstrapState, NodeLifecycleError> {
     // --- First-run inputs (documented extraction, Mithril-bound). ---
     let manifest_path = cli
         .mithril_manifest_path
@@ -543,14 +673,23 @@ fn first_run_mithril_bootstrap(
     )
     .map_err(|e| NodeLifecycleError::MithrilBootstrap(format!("{e:?}")))?;
 
-    // Honest success record. L2 does not sync (L4) or produce (L5).
+    // Honest success record. The dispatcher converges into the relay run
+    // loop; the bootstrapped BootstrapState is returned for it. The recovered
+    // seed-epoch consensus inputs are persisted (sidecar + WAL provenance) but
+    // not held in `MithrilBootstrapOutput`; on this binary path the empty
+    // source halts the loop before any sync consumes a leadership view, so
+    // `seed_epoch_consensus_inputs: None` here is provably unobserved.
     eprintln!(
         "ade_node --mode node: first-run Mithril bootstrap complete \
-         (anchor initial_ledger_fingerprint={:?}, epoch={}). \
-         Sync (L4) and produce (L5) are not wired; NO block produced.",
+         (anchor initial_ledger_fingerprint={:?}, epoch={}).",
         out.anchor.initial_ledger_fingerprint, canonical.epoch_no.0
     );
-    Ok(())
+    Ok(BootstrapState {
+        ledger: out.ledger,
+        chain_dep: out.chain_dep,
+        tip: out.tip,
+        seed_epoch_consensus_inputs: None,
+    })
 }
 
 /// Conway-only single-era schedule consistent with the imported epoch
@@ -723,6 +862,12 @@ fn report(e: &NodeLifecycleError) {
                  ({d}); failing closed. The recovered sidecar did not verify; no bundle fallback."
             );
         }
+        NodeLifecycleError::RelaySync(d) => {
+            eprintln!(
+                "ade_node --mode node: relay run-loop sync step failed ({d}); \
+                 failing closed (no skip-past, no fallback)."
+            );
+        }
     }
 }
 
@@ -776,10 +921,8 @@ mod tests {
     const CERTIFIED_SLOT: u64 = 23_013_663; // within [EPOCH_START_SLOT, +432_000)
     const GENESIS_HASH_HEX: &str =
         "1111111111111111111111111111111111111111111111111111111111111111";
-    const BLOCK_HASH_HEX: &str =
-        "2222222222222222222222222222222222222222222222222222222222222222";
-    const CERT_HASH_HEX: &str =
-        "6666666666666666666666666666666666666666666666666666666666666666";
+    const BLOCK_HASH_HEX: &str = "2222222222222222222222222222222222222222222222222222222222222222";
+    const CERT_HASH_HEX: &str = "6666666666666666666666666666666666666666666666666666666666666666";
     const NETWORK_MAGIC: u32 = 1;
 
     fn manifest_json(certified_slot: u64, network_magic: u32, genesis_hex: &str) -> String {
@@ -894,17 +1037,22 @@ mod tests {
         Fixture { _dir: dir, cli }
     }
 
-    #[test]
-    fn first_run_mithril_positive_persists_and_succeeds() {
+    #[tokio::test]
+    async fn first_run_mithril_positive_persists_and_succeeds() {
         let f = fixture(
-            Some(&manifest_json(CERTIFIED_SLOT, NETWORK_MAGIC, GENESIS_HASH_HEX)),
+            Some(&manifest_json(
+                CERTIFIED_SLOT,
+                NETWORK_MAGIC,
+                GENESIS_HASH_HEX,
+            )),
             UTXO_JSON,
             &consensus_inputs_json(EPOCH_NO, EPOCH_START_SLOT),
             GENESIS_HASH_HEX,
             CERTIFIED_SLOT, // operator seed point == manifest certified point => binding ok
             NETWORK_MAGIC,
         );
-        let r = run_node_lifecycle_inner(&f.cli);
+        let (_sd_tx, mut sd_rx) = tokio::sync::watch::channel(false);
+        let r = run_node_lifecycle_inner(&f.cli, &mut sd_rx).await;
         assert!(r.is_ok(), "positive first-run should succeed, got {r:?}");
 
         // What the Mithril bootstrap persists on a cold store is the
@@ -930,8 +1078,8 @@ mod tests {
         );
     }
 
-    #[test]
-    fn first_run_fails_closed_on_missing_manifest() {
+    #[tokio::test]
+    async fn first_run_fails_closed_on_missing_manifest() {
         let f = fixture(
             None, // no --mithril-manifest-path
             UTXO_JSON,
@@ -940,26 +1088,32 @@ mod tests {
             CERTIFIED_SLOT,
             NETWORK_MAGIC,
         );
-        let r = run_node_lifecycle_inner(&f.cli);
+        let (_sd_tx, mut sd_rx) = tokio::sync::watch::channel(false);
+        let r = run_node_lifecycle_inner(&f.cli, &mut sd_rx).await;
         assert_eq!(
             r,
             Err(NodeLifecycleError::MissingFlag("--mithril-manifest-path"))
         );
     }
 
-    #[test]
-    fn first_run_fails_closed_on_binding_mismatch() {
+    #[tokio::test]
+    async fn first_run_fails_closed_on_binding_mismatch() {
         // Operator seed point (seed_slot) ≠ manifest certified point =>
         // verify_mithril_binding CertifiedPointMismatch, before any admit.
         let f = fixture(
-            Some(&manifest_json(CERTIFIED_SLOT, NETWORK_MAGIC, GENESIS_HASH_HEX)),
+            Some(&manifest_json(
+                CERTIFIED_SLOT,
+                NETWORK_MAGIC,
+                GENESIS_HASH_HEX,
+            )),
             UTXO_JSON,
             &consensus_inputs_json(EPOCH_NO, EPOCH_START_SLOT),
             GENESIS_HASH_HEX,
             CERTIFIED_SLOT + 1, // genuinely different point
             NETWORK_MAGIC,
         );
-        let r = run_node_lifecycle_inner(&f.cli);
+        let (_sd_tx, mut sd_rx) = tokio::sync::watch::channel(false);
+        let r = run_node_lifecycle_inner(&f.cli, &mut sd_rx).await;
         assert!(
             matches!(r, Err(NodeLifecycleError::MithrilBootstrap(_))),
             "binding mismatch must fail closed, got {r:?}"
@@ -970,43 +1124,55 @@ mod tests {
             PersistentChainDb::open(PersistentChainDbOptions::at(snapshot_dir.join("chain.db")))
                 .unwrap();
         assert!(
-            SnapshotStore::list_snapshot_slots(&chaindb).unwrap().is_empty(),
+            SnapshotStore::list_snapshot_slots(&chaindb)
+                .unwrap()
+                .is_empty(),
             "no state may be admitted when the binding fails"
         );
     }
 
-    #[test]
-    fn first_run_fails_closed_on_epoch_mismatch() {
+    #[tokio::test]
+    async fn first_run_fails_closed_on_epoch_mismatch() {
         // Consensus inputs for an epoch whose window does NOT contain the
         // manifest certified slot => EpochMismatch, before the composer.
         // Use an epoch window far from CERTIFIED_SLOT.
         let other_start = EPOCH_START_SLOT + 432_000; // next epoch window
         let f = fixture(
-            Some(&manifest_json(CERTIFIED_SLOT, NETWORK_MAGIC, GENESIS_HASH_HEX)),
+            Some(&manifest_json(
+                CERTIFIED_SLOT,
+                NETWORK_MAGIC,
+                GENESIS_HASH_HEX,
+            )),
             UTXO_JSON,
             &consensus_inputs_json(EPOCH_NO + 1, other_start),
             GENESIS_HASH_HEX,
             CERTIFIED_SLOT,
             NETWORK_MAGIC,
         );
-        let r = run_node_lifecycle_inner(&f.cli);
+        let (_sd_tx, mut sd_rx) = tokio::sync::watch::channel(false);
+        let r = run_node_lifecycle_inner(&f.cli, &mut sd_rx).await;
         assert!(
             matches!(r, Err(NodeLifecycleError::EpochMismatch { .. })),
             "epoch mismatch must fail closed, got {r:?}"
         );
     }
 
-    #[test]
-    fn first_run_fails_closed_on_malformed_extraction() {
+    #[tokio::test]
+    async fn first_run_fails_closed_on_malformed_extraction() {
         let f = fixture(
-            Some(&manifest_json(CERTIFIED_SLOT, NETWORK_MAGIC, GENESIS_HASH_HEX)),
+            Some(&manifest_json(
+                CERTIFIED_SLOT,
+                NETWORK_MAGIC,
+                GENESIS_HASH_HEX,
+            )),
             "{ not valid utxo json",
             &consensus_inputs_json(EPOCH_NO, EPOCH_START_SLOT),
             GENESIS_HASH_HEX,
             CERTIFIED_SLOT,
             NETWORK_MAGIC,
         );
-        let r = run_node_lifecycle_inner(&f.cli);
+        let (_sd_tx, mut sd_rx) = tokio::sync::watch::channel(false);
+        let r = run_node_lifecycle_inner(&f.cli, &mut sd_rx).await;
         assert!(
             matches!(r, Err(NodeLifecycleError::ExtractionRead(_))),
             "malformed extraction must fail closed, got {r:?}"
@@ -1140,8 +1306,8 @@ mod tests {
         assert_eq!(state.tip.map(|t| t.slot.0), Some(WARM_TIP_SLOT));
     }
 
-    #[test]
-    fn warm_start_dispatch_succeeds_end_to_end() {
+    #[tokio::test]
+    async fn warm_start_dispatch_succeeds_end_to_end() {
         // The whole owner path: classify_start -> WarmStart arm ->
         // warm_start_recovery -> Ok, over the same constructed precondition.
         let d = fresh_warm_dirs();
@@ -1156,7 +1322,8 @@ mod tests {
             put_tip_and_snapshot(&chaindb, WARM_TIP_SLOT);
         }
         let cli = warm_cli(&d);
-        let r = run_node_lifecycle_inner(&cli);
+        let (_sd_tx, mut sd_rx) = tokio::sync::watch::channel(false);
+        let r = run_node_lifecycle_inner(&cli, &mut sd_rx).await;
         assert!(r.is_ok(), "warm-start dispatch should succeed, got {r:?}");
     }
 
@@ -1255,7 +1422,8 @@ mod tests {
                 .put_seed_epoch_consensus_inputs(&WARM_ANCHOR_FP, &bytes)
                 .unwrap();
             // WAL provenance for a different anchor (0x99 != 0x5A).
-            append_seed_epoch_provenance(&mut wal, &Hash32([0x99; 32]), WARM_EPOCH, &bytes).unwrap();
+            append_seed_epoch_provenance(&mut wal, &Hash32([0x99; 32]), WARM_EPOCH, &bytes)
+                .unwrap();
             put_tip_and_snapshot(&chaindb, WARM_TIP_SLOT);
         }
         let (chaindb, wal) = open_warm_stores(&d);

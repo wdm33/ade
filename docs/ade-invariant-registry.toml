@@ -5269,11 +5269,12 @@ vocabulary. tests + ci_script populated at slice time.
 source = "docs/planning/phase4-n-f-d-live-node-run-loop-invariants.md"
 cross_ref = ["CN-NODE-01", "DC-SYNC-01", "DC-SYNC-02", "T-REC-03"]
 code_locus = "crates/ade_node/src/node_lifecycle.rs"
-tests = []
-ci_script = ""
+tests = ["relay_loop_syncs_then_halts_clean_on_source_end", "relay_loop_halts_clean_on_shutdown_no_partial_write", "relay_loop_idles_then_syncs_on_incremental_feed", "relay_loop_fails_closed_on_unapplyable_block", "plan_loop_step_decision_table_is_total"]
+ci_script = "ci_check_node_run_loop_containment.sh, ci_check_loop_planner_closed.sh"
 introduced_in = "PHASE4-N-F-D"
 strengthened_in = []
-status = "declared"
+status = "enforced"
+evidence_notes_s2 = "PHASE4-N-F-D S2 (relay loop wired): ade_node::node_lifecycle::run_relay_loop is the single live-run owner — both FirstRun and WarmStart converge into it (no print-and-exit), the GREEN plan_loop_step drives each step over the closed { SyncOnce, Idle, HaltCleanly } vocabulary, and the tip advances ONLY via run_node_sync -> pump_block. ci_check_node_run_loop_containment.sh fences the loop body (no direct pump_block / manual tip advance / forge / evidence / verdict / follower / second bootstrap). run_node_sync is UNMODIFIED (ci_check_node_sync_via_pump.sh still green). Hermetic only — no live peer (RO-LIVE-01 follow-on)."
 
 [[rules]]
 id = "DC-SYNC-02"
@@ -5288,11 +5289,12 @@ advance (put_block / AdvanceTip / rollback_to_slot) outside the pump.
 source = "docs/planning/phase4-n-f-d-live-node-run-loop-invariants.md"
 cross_ref = ["DC-SYNC-01", "CN-NODE-02", "T-REC-01", "DC-WAL-03"]
 code_locus = "crates/ade_node/src/node_sync.rs"
-tests = []
-ci_script = ""
+tests = ["relay_loop_syncs_then_halts_clean_on_source_end", "relay_loop_idles_then_syncs_on_incremental_feed", "relay_loop_fails_closed_on_unapplyable_block", "node_sync_pump_advances_recoverable_tip"]
+ci_script = "ci_check_node_run_loop_containment.sh, ci_check_node_sync_via_pump.sh"
 introduced_in = "PHASE4-N-F-D"
 strengthened_in = []
-status = "declared"
+status = "enforced"
+evidence_notes_s2 = "PHASE4-N-F-D S2: every relay-loop iteration advances the tip ONLY through run_node_sync -> pump_block (durable-before-advance, DC-SYNC-01), driven by the GREEN planner. NodeBlockSource gained a content-blind, non-consuming readiness signal (has_work_ready / is_ended / wait_ready, filled via non-blocking try_recv); next_block is non-blocking (drain-available-then-None) so run_node_sync remains the SOLE block-consumption path and is never awaited across a shutdown cancellation boundary (cancellation only in the Idle branch). No verdict/follower/manual-tip path."
 
 [[rules]]
 id = "T-REC-03"
