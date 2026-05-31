@@ -461,7 +461,10 @@ fn make_schedule_for_imported_window(
 /// Try the cardano-cli envelope loader first; if the envelope JSON
 /// fails to parse (Ade-native format is binary CBOR) or the envelope
 /// type doesn't match, fall back to the Ade-native loader.
-fn load_kes_skey_any_format(
+///
+/// `pub(crate)` so the PHASE4-N-F-F `operator_forge` node-path ingress site
+/// reuses the same KES-any-format loader rather than duplicating it.
+pub(crate) fn load_kes_skey_any_format(
     path: &Path,
 ) -> Result<ade_runtime::producer::signing::KesSecret, KeyLoadError> {
     match load_kes_signing_key_skey(path) {
@@ -479,7 +482,10 @@ fn load_kes_skey_any_format(
 /// S6's operator runbook will document conversion from cardano-cli
 /// `node.opcert` (text-envelope cborHex) to this format. A full
 /// cardano-cli envelope parser is deferred to S6.
-fn parse_simple_opcert_json(path: &Path) -> Result<OperationalCert, &'static str> {
+///
+/// `pub(crate)` so the PHASE4-N-F-F `operator_forge` node-path ingress site
+/// reuses the same opcert parser rather than duplicating it.
+pub(crate) fn parse_simple_opcert_json(path: &Path) -> Result<OperationalCert, &'static str> {
     let bytes = std::fs::read(path).map_err(|_| "cannot read opcert file")?;
     #[derive(serde::Deserialize)]
     struct OpCertJson {

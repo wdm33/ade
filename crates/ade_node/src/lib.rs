@@ -23,6 +23,7 @@ pub mod live_log;
 pub mod node;
 pub mod node_lifecycle;
 pub mod node_sync;
+pub mod operator_forge;
 pub mod produce_mode;
 pub mod run_loop_planner;
 pub mod wire_only;
