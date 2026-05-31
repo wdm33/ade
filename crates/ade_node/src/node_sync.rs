@@ -1708,4 +1708,114 @@ mod tests {
             .unwrap()
             .is_empty());
     }
+
+    #[tokio::test]
+    async fn relay_loop_forge_two_runs_byte_identical() {
+        // CE-E-6: forge-tick replay-equivalence. Two clean runs over IDENTICAL
+        // (recovered state, feed, injected clock tick schedule, shutdown
+        // schedule) produce byte-identical tip + WAL + checkpoints AND a
+        // byte-identical forge-attempt sequence (forged bytes for any
+        // ForgeSucceeded included, via CoordinatorEvent's PartialEq).
+        async fn run_once() -> (
+            Option<(SlotNo, Hash32)>,
+            String,
+            Vec<SlotNo>,
+            Vec<CoordinatorEvent>,
+        ) {
+            let dir = TempDir::new().unwrap();
+            let chaindb =
+                PersistentChainDb::open(PersistentChainDbOptions::at(dir.path().join("chain.db")))
+                    .unwrap();
+            let mut wal = FileWalStore::open(dir.path().join("wal")).unwrap();
+            let mut state = fresh_state([0xCD; 32]);
+            // Open WirePump (Continuing) so the forge branch is reachable.
+            let (block_tx, block_rx) = mpsc::channel::<AdmissionPeerEvent>(4);
+            let mut source = NodeBlockSource::from_wire_pump(block_rx);
+            let (sd_tx, mut sd_rx) = watch::channel(false);
+
+            let sched = l5_era_schedule();
+            let recovered = l5_recovered_state(Some(l5_recovered_inputs()));
+            let coordinator = s2_coordinator_state();
+            let mut shell = l5_synth_shell(0x11, 0x22, 0x33);
+            let view = s2_idle_view();
+            // Fixed multi-tick schedule -> slots 100/200/300, each Due by
+            // monotonic increase => a 3-attempt forge sequence.
+            let mut clock = DeterministicClock::new(0, vec![100_000, 200_000, 300_000]);
+            let mut act = ForgeActivation::new(
+                &mut clock,
+                &coordinator,
+                &recovered,
+                &mut shell,
+                L5_POOL,
+                ProtocolParameters::default(),
+                ProtocolVersion { major: 9, minor: 0 },
+                0,
+                SlotNo(0),
+                1_000,
+            );
+
+            let loop_fut = run_relay_loop(
+                &mut state,
+                &mut source,
+                &chaindb,
+                &mut wal,
+                &sched,
+                &view,
+                &mut sd_rx,
+                Some(&mut act),
+            );
+            let driver = async {
+                let _ = sd_tx.send(true);
+            };
+            let (loop_res, _) = tokio::join!(loop_fut, driver);
+            loop_res.expect("forge relay run halts cleanly");
+            drop(block_tx);
+
+            let tip = ChainDb::tip(&chaindb)
+                .expect("tip")
+                .map(|t| (t.slot, t.hash));
+            let wal_image = format!("{:?}", wal.read_all().expect("read_all"));
+            let snaps = SnapshotStore::list_snapshot_slots(&chaindb).expect("list");
+            (tip, wal_image, snaps, act.hermetic_forge_outcomes.clone())
+        }
+
+        let (tip_a, wal_a, snaps_a, outcomes_a) = run_once().await;
+        let (tip_b, wal_b, snaps_b, outcomes_b) = run_once().await;
+
+        // The forge actually ran through the fenced path: a non-empty sequence
+        // whose entries are forge_one_from_recovered outcomes (the sole producer
+        // of these variants on this path) — so the identity is not vacuous.
+        assert!(
+            !outcomes_a.is_empty(),
+            "the forge-attempt sequence must be non-empty (forge actually ran)"
+        );
+        assert!(
+            outcomes_a.iter().all(|o| matches!(
+                o,
+                CoordinatorEvent::ForgeSucceeded { .. }
+                    | CoordinatorEvent::ForgeNotLeader { .. }
+                    | CoordinatorEvent::ForgeFailed { .. }
+            )),
+            "every observed outcome must be a forge_one_from_recovered result"
+        );
+
+        // Relay-derived surfaces (unchanged by forge) byte-identical across runs.
+        assert_eq!(
+            tip_a, tip_b,
+            "tip byte-identical across two clean forge runs"
+        );
+        assert_eq!(
+            wal_a, wal_b,
+            "WAL image byte-identical across two clean forge runs"
+        );
+        assert_eq!(
+            snaps_a, snaps_b,
+            "checkpoint slots identical across two clean forge runs"
+        );
+        // The load-bearing identity: forge-attempt sequence + forged bytes.
+        assert_eq!(
+            outcomes_a, outcomes_b,
+            "forge-attempt sequence + forged bytes byte-identical across two clean runs"
+        );
+    }
 }
