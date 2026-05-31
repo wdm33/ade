@@ -50,17 +50,27 @@ if (( CALLS < 1 )); then
     print_fail "ade_node never calls bootstrap_initial_state — initial state must come from the single bootstrap authority, not a bypass"
 fi
 
-# Forbid `ReceiveState::new` outside the run-loop construction.
-# (The single legit caller is node.rs's run loop after bootstrap.)
-RECEIVE_NEW=0
+# `ReceiveState::new` is the recovered/bootstrapped-state entry into the relay
+# spine. It is legitimate ONLY in the lifecycle-owner files: node.rs's run loop
+# and node_lifecycle.rs's --mode node arms (the FirstRun/WarmStart bootstrap +,
+# PHASE4-N-F-F, the mutually-exclusive ForgeIntent::Off/On branches of the single
+# run_node_lifecycle_inner dispatcher — only one runs per process). Any
+# occurrence in any OTHER ade_node production file is a synthetic/rogue bypass of
+# the recovered state and fails closed. (A "<=1 per crate" count is impossible
+# once two owner files exist, and cannot tell mutually-exclusive arms apart;
+# double-bootstrap-within-a-path is covered by the per-file bootstrap_initial_state
+# check above + ci_check_node_run_loop_containment.sh.)
+RECEIVE_OWNERS="node.rs node_lifecycle.rs"
 for f in $(find "$NODE_DIR" -type f -name '*.rs'); do
     body=$(strip_for_grep "$f")
     c=$(echo "$body" | grep -cE 'ReceiveState::new\(' || true)
-    RECEIVE_NEW=$((RECEIVE_NEW + c))
+    if (( c > 0 )); then
+        base=$(basename "$f")
+        if ! echo " $RECEIVE_OWNERS " | grep -q " $base "; then
+            print_fail "$base constructs ReceiveState::new (rogue recovered-state bypass) — only the lifecycle owners ($RECEIVE_OWNERS) may construct it"
+        fi
+    fi
 done
-if (( RECEIVE_NEW > 1 )); then
-    print_fail "ade_node must construct ReceiveState at most once (found $RECEIVE_NEW)"
-fi
 
 if (( FAILED == 0 )); then
     echo "OK: ade_node binary uses the single bootstrap authority"
