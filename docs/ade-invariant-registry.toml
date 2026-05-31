@@ -185,7 +185,7 @@ code_locus = "crates/ade_runtime/src/recovery/mod.rs, crates/ade_runtime/src/rec
 tests = ["recover_from_snapshot_and_replay_forward", "recover_from_genesis_when_no_snapshot", "apply_failure_surfaces_with_slot", "snapshot_decode_failure_surfaces_as_error", "snapshot_with_no_post_blocks_is_ok", "stress_kill_smoke", "stress_kill_1000", "snapshot_table_intact_after_kill_loop", "persistent_passes_crash_safety_with_no_kill"]
 ci_script = "ci/ci_check_recovery_contract.sh, ci/ci_check_chaindb_crash_safety.sh"
 status = "enforced"
-strengthened_in = ["PHASE4-N-F-A", "PHASE4-N-F-C"]
+strengthened_in = ["PHASE4-N-F-A", "PHASE4-N-F-C", "PHASE4-N-F-D"]
 evidence_notes = "PHASE4-N-F-A (2026-05-30): recovered state now includes the seed-epoch consensus inputs — the warm-start verification CAPABILITY (DC-CINPUT-01, A3b authority surface) restores the SeedEpochConsensusInputs sidecar byte-identically + fail-closed. PHASE4-N-F-C (2026-05-31): the PRODUCTION restart path is now wired — the `--mode node` lifecycle owner (warm_start_recovery) drives replay_from_anchor → bootstrap_initial_state(RequiredFromRecoveredProvenance) from the binary, and L4c (node_sync_kill_then_warm_start_recovers_same_tip) proves a synced+advanced tip recovers byte-identically through it. DC-CINPUT-01 is now enforced (production wiring, not just the A3b capability)."
 
 [[rules]]
@@ -198,7 +198,7 @@ code_locus = "crates/ade_runtime/src/recovery/mod.rs, crates/ade_runtime/src/rec
 tests = ["recover_from_snapshot_and_replay_forward", "recover_from_genesis_when_no_snapshot"]
 ci_script = "ci/ci_check_recovery_contract.sh"
 status = "enforced"
-strengthened_in = ["PHASE4-N-F-A", "PHASE4-N-F-C"]
+strengthened_in = ["PHASE4-N-F-A", "PHASE4-N-F-C", "PHASE4-N-F-D"]
 evidence_notes = "PHASE4-N-F-A (2026-05-30): the seed-epoch consensus inputs are now part of the replay-derivable recovered surface — A3a records the import as a replay-reconstructable WAL fact (RecoveredBootstrapProvenance) and A3b's warm-start verification CAPABILITY derives the recovered SeedEpochConsensusInputs from it (DC-CINPUT-01, authority surface). PHASE4-N-F-C (2026-05-31): production wiring landed — the `--mode node` owner replays from the persisted WAL to reconstruct the recovered surface and the L4c kill→warm-start test proves the synced tip is fully replay-derivable through the production path (DC-CINPUT-01 now enforced)."
 
 [[rules]]
@@ -4897,7 +4897,7 @@ tests = ["forward_sync_wal_and_bytes_precede_tip_advance", "forward_sync_replay_
 ci_script = "ci/ci_check_forward_sync_chokepoint_only.sh, ci/ci_check_node_sync_via_pump.sh"
 status = "enforced"
 introduced_in = "PHASE4-N-Y"
-strengthened_in = ["PHASE4-N-F-C"]
+strengthened_in = ["PHASE4-N-F-C", "PHASE4-N-F-D"]
 cluster = "PHASE4-N-Y"
 attack_rationale = "If the tip advanced before the WAL recorded a block, a power-loss crash would leave the chaindb tip ahead of the WAL; recovery (warm-start from chaindb.tip) would silently incorporate the un-admitted orphan, diverging from a clean run and breaking replay-equivalence. The type-encoded ordering + WAL-tail recovery reconciliation close it."
 evidence_notes = "PHASE4-N-F-C (2026-05-31, L4b): the `--mode node` lifecycle is the FIRST PRODUCTION driver of forward_sync::pump_block — run_node_sync feeds peer-fetched block bytes (L4a NodeBlockSource, decoupled from the admission verdict loop) into pump_block, advancing the recoverable tip durable-before-tip and failing closed on an undecodable block. New gate ci/ci_check_node_sync_via_pump.sh isolates the run_node_sync body and fences it positive on pump_block( while forbidding follow/derive_verdict/manual tip-advance/run_real_forge — so peer tip-agreement (ade_core_interop::follow) can never masquerade as validating sync."

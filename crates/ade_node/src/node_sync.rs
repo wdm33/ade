@@ -1135,6 +1135,94 @@ mod tests {
         );
     }
 
+    #[tokio::test]
+    async fn relay_loop_kill_at_boundary_recovers_same_tip() {
+        // CE-D-5: a relay-loop-advanced tip, after a kill at an iteration
+        // boundary, is recovered through the PRODUCTION warm-start path to the
+        // same tip as an uninterrupted run. Mirrors the L4c
+        // node_sync_kill_then_warm_start_recovers_same_tip proof but drives the
+        // tip via run_relay_loop instead of run_node_sync — so the loop
+        // inherits the durable-before-advance (DC-SYNC-01) + warm-start
+        // recovery guarantee. Test-only.
+        let (c, view) = corpus_view();
+        let sched = schedule();
+        let bytes = pick_lightest(&c);
+
+        let dir = TempDir::new().unwrap();
+        let snap = dir.path().join("snap");
+        let wal_dir = dir.path().join("wal");
+        std::fs::create_dir_all(&snap).unwrap();
+        std::fs::create_dir_all(&wal_dir).unwrap();
+        let chaindb_path = snap.join("chain.db");
+
+        // Anchor fingerprint shared by the seed precondition (sidecar + WAL
+        // provenance) AND the ForwardSyncState seed: `fresh_state` seeds
+        // `prior_fp` = Hash32([0xA0; 32]); warm-start discovery keys on the
+        // sidecar table, whose key must be the same anchor_fp.
+        let anchor_fp = Hash32([0xA0; 32]);
+        let mut pools: BTreeMap<Hash28, PoolEntry> = BTreeMap::new();
+        pools.insert(
+            Hash28([0x11; 28]),
+            PoolEntry {
+                active_stake: 1,
+                vrf_keyhash: Hash32([0x22; 32]),
+            },
+        );
+        let recovered_inputs = SeedEpochConsensusInputs {
+            anchor_fp,
+            epoch_no: EPOCH_576,
+            active_slots_coeff: ActiveSlotsCoeff {
+                numer: 5,
+                denom: 100,
+            },
+            total_active_stake: 1,
+            pool_distribution: pools,
+        };
+        let sidecar_bytes = encode_seed_epoch_consensus_inputs(&recovered_inputs);
+
+        // Seed + drive the relay loop, then DROP the stores (kill).
+        let synced_tip = {
+            let chaindb =
+                PersistentChainDb::open(PersistentChainDbOptions::at(&chaindb_path)).unwrap();
+            let mut wal = FileWalStore::open(&wal_dir).unwrap();
+            chaindb
+                .put_seed_epoch_consensus_inputs(&anchor_fp, &sidecar_bytes)
+                .unwrap();
+            append_seed_epoch_provenance(&mut wal, &anchor_fp, EPOCH_576, &sidecar_bytes).unwrap();
+
+            let mut state = fresh_state(c.epoch_nonce);
+            let mut source = NodeBlockSource::in_memory(vec![bytes.clone()]);
+            let (_tx, mut shutdown) = watch::channel(false);
+            run_relay_loop(
+                &mut state,
+                &mut source,
+                &chaindb,
+                &mut wal,
+                &sched,
+                &view,
+                &mut shutdown,
+            )
+            .await
+            .expect("relay loop runs to clean halt");
+
+            ChainDb::tip(&chaindb).expect("tip").expect("tip advanced")
+            // chaindb + wal dropped here — simulates a kill at the boundary.
+        };
+
+        // Reopen at the SAME paths (restart after kill) and run the production
+        // L3 warm-start recovery — it must recover the same tip.
+        let chaindb = PersistentChainDb::open(PersistentChainDbOptions::at(&chaindb_path)).unwrap();
+        let wal = FileWalStore::open(&wal_dir).unwrap();
+        let recovered = crate::node_lifecycle::warm_start_recovery(&chaindb, &wal)
+            .expect("warm-start recovers");
+
+        assert_eq!(
+            recovered.tip.map(|t| t.slot),
+            Some(synced_tip.slot),
+            "warm-start recovers the relay-loop-advanced tip slot after a kill"
+        );
+    }
+
     // =====================================================================
     // L5 — recovered-state forge handoff (hermetic, single-shot)
     // =====================================================================
