@@ -52,6 +52,24 @@ cleanly before any `ForgeTick` (forge subordinate to feed), so this slice makes
 the node forge-capable but NOT observable — observable forge requires a live
 feed (RO-LIVE-01).
 
+### Mithril boundary (load-bearing — do not soften)
+N-F-F is **not** the Mithril implementation path and must not replace, alter, or
+weaken it. The two layers stay separate:
+- **Bootstrap/recovery (unchanged):** FirstRun → Mithril/bootstrap-derived
+  recovered `BootstrapState`; WarmStart → Ade WAL/checkpoint recovery.
+- **N-F-F (this cluster):** uses that **already-recovered** `BootstrapState` as
+  the forge base, adding only the operator signing material.
+
+Concretely, S3 **must not**: call Mithril (`bootstrap_from_mithril_snapshot` /
+`mithril_*`); create a second bootstrap path or re-derive initial state; treat
+the reused `parse_simple_genesis_json` as a bootstrap source or a new semantic
+genesis authority — it is **reuse-not-duplicate RED parsing** that extracts only
+the clock/KES anchors (`slot_zero_time_unix_ms`, `slot_length_ms`, the three KES
+fields) for the `ForgeActivation`, never a starting-state source. Mithril stays a
+bootstrap accelerator, never a shortcut around Ade validation, WAL, checkpoints,
+or replay. The forge base is the single recovered `BootstrapState` produced by
+FirstRun/WarmStart (CN-NODE-01).
+
 ## 4. Pre-conditions
 - S1 + S2 merged (`5980037`): `classify_forge_intent`/`ForgePaths`;
   `load_operator_producer_shell`/`OperatorForgeError`.
@@ -176,6 +194,11 @@ feed (RO-LIVE-01).
   `operator_forge`).
 - No second bootstrap / parallel init / cold/genesis/bundle fallback (CN-NODE-01);
   the `On` arm reuses the existing recovered `state`.
+- **No Mithril call in N-F-F** (`bootstrap_from_mithril_snapshot` / `mithril_*`);
+  Mithril stays the bootstrap/recovery layer, untouched.
+- **The reused `parse_simple_genesis_json` must not become a bootstrap source or
+  a new semantic genesis authority** — clock/KES anchor extraction only
+  (reuse-not-duplicate RED parsing).
 - No tip-advance / serve / admit / gossip path in the arm (CN-NODE-02 / CE-F-6).
 - No fabricated `SeedEpochConsensusInputs`, no forge-time bundle token
   (CN-CINPUT-03).
