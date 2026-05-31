@@ -820,7 +820,7 @@ mod tests {
     // run_relay_loop lives in node_lifecycle; these tests drive it over the
     // same hermetic fixtures the L4b tests use.
 
-    use crate::node_lifecycle::{run_relay_loop, NodeLifecycleError};
+    use crate::node_lifecycle::{run_relay_loop, ForgeActivation, NodeLifecycleError};
     use tokio::sync::watch;
 
     #[test]
@@ -893,6 +893,7 @@ mod tests {
             &sched,
             &view,
             &mut shutdown,
+            None,
         )
         .await
         .expect("relay loop drains the batch then halts cleanly");
@@ -941,6 +942,7 @@ mod tests {
             &sched,
             &view,
             &mut shutdown,
+            None,
         )
         .await
         .expect("relay loop halts cleanly on shutdown");
@@ -1002,6 +1004,7 @@ mod tests {
             &sched,
             &view,
             &mut shutdown,
+            None,
         )
         .await
         .expect("relay loop idles, then syncs the delivered block, then halts");
@@ -1047,6 +1050,7 @@ mod tests {
             &sched,
             &view,
             &mut shutdown,
+            None,
         )
         .await;
         assert!(
@@ -1114,6 +1118,7 @@ mod tests {
                 sched,
                 view,
                 &mut shutdown,
+                None,
             )
             .await
             .expect("clean run");
@@ -1211,6 +1216,7 @@ mod tests {
                 &sched,
                 &view,
                 &mut shutdown,
+                None,
             )
             .await
             .expect("relay loop runs to clean halt");
@@ -1460,5 +1466,246 @@ mod tests {
             matches!(r, Err(NodeForgeError::MissingRecoveredConsensusInputs)),
             "missing recovered consensus inputs must fail closed, got {r:?}"
         );
+    }
+
+    // ===== S2: forge-tick wiring into the relay loop (self-accept-only) =====
+
+    use ade_runtime::clock::{millis_to_slot, DeterministicClock};
+    use ade_runtime::producer::coordinator::{
+        CoordinatorState, GenesisAnchor, LedgerSnapshotRef, OpCertPublicMetadata,
+    };
+
+    /// Genesis anchor s.t. `kes_period_for_slot(small slot) == Some(0)` — so the
+    /// REUSED CoordinatorState method yields a valid period for the test slot.
+    fn s2_coordinator_state() -> CoordinatorState {
+        CoordinatorState {
+            genesis_anchor: GenesisAnchor {
+                network_magic: 1,
+                slot_zero_time_unix_ms: 0,
+                slot_length_ms: 1_000,
+                slots_per_kes_period: 129_600,
+                kes_anchor_slot: 0,
+                kes_max_period: 63,
+            },
+            opcert_meta: OpCertPublicMetadata {
+                kes_vkey: [0u8; 32],
+                kes_start_period: 0,
+                sequence_number: 0,
+                cold_vkey_hash: [0u8; 28],
+            },
+            last_slot_tick: None,
+            pending_forge_slot: None,
+            chain_tip: None,
+            ledger_snapshot_ref: LedgerSnapshotRef(0),
+            peers: BTreeMap::new(),
+            peer_id_counter: 0,
+            broadcast_queue_size: 0,
+            broadcast_queue_limit: 16,
+            peer_limit: 16,
+            shutdown_in_progress: false,
+        }
+    }
+
+    /// Trivial ledger view for the relay loop's `ledger_view` arg. The forge
+    /// path never consults it (it projects the recovered surface); it matters
+    /// only if a `SyncOnce` runs — which these forge-only tests never reach.
+    fn s2_idle_view() -> PoolDistrView {
+        PoolDistrView::new(
+            L5_EPOCH,
+            0,
+            ActiveSlotsCoeff { numer: 1, denom: 1 },
+            BTreeMap::new(),
+        )
+    }
+
+    #[tokio::test]
+    async fn relay_loop_forge_tick_attempts_forge_advances_no_tip() {
+        // CE-E-4: with forge activation present, the loop performs exactly ONE
+        // fenced forge_one_from_recovered attempt at the due slot and advances
+        // NO durable tip / serves / admits / persists nothing. The outcome
+        // (ForgeSucceeded / ForgeNotLeader / structured ForgeFailed) is observed
+        // in-memory only.
+        let dir = TempDir::new().unwrap();
+        let chaindb =
+            PersistentChainDb::open(PersistentChainDbOptions::at(dir.path().join("chain.db")))
+                .unwrap();
+        let mut wal = FileWalStore::open(dir.path().join("wal")).unwrap();
+        let mut state = fresh_state([0xCD; 32]);
+        // Open WirePump: Continuing (never ended) + NoWorkReady (no block), so
+        // the planner reaches ForgeTick (a feed-end would suppress forge).
+        let (block_tx, block_rx) = mpsc::channel::<AdmissionPeerEvent>(4);
+        let mut source = NodeBlockSource::from_wire_pump(block_rx);
+        let (sd_tx, mut sd_rx) = watch::channel(false);
+
+        let sched = l5_era_schedule();
+        let recovered = l5_recovered_state(Some(l5_recovered_inputs()));
+        let coordinator = s2_coordinator_state();
+        let mut shell = l5_synth_shell(0x11, 0x22, 0x33);
+        let view = s2_idle_view();
+        // One forge slot: tick 100_000 ms / 1_000 ms-per-slot, anchor 0, start
+        // slot 0 => SlotNo(100) (the slot the L5 forge tests use).
+        let mut clock = DeterministicClock::new(0, vec![100_000]);
+        let mut act = ForgeActivation::new(
+            &mut clock,
+            &coordinator,
+            &recovered,
+            &mut shell,
+            L5_POOL,
+            ProtocolParameters::default(),
+            ProtocolVersion { major: 9, minor: 0 },
+            0,
+            SlotNo(0),
+            1_000,
+        );
+
+        let tip_before = ChainDb::tip(&chaindb).unwrap();
+        let loop_fut = run_relay_loop(
+            &mut state,
+            &mut source,
+            &chaindb,
+            &mut wal,
+            &sched,
+            &view,
+            &mut sd_rx,
+            Some(&mut act),
+        );
+        // The loop forges the single tick synchronously, then parks at the Idle
+        // await; shutdown halts it. The channel stays open (Continuing) until
+        // after the loop has halted.
+        let driver = async {
+            let _ = sd_tx.send(true);
+        };
+        let (loop_res, _) = tokio::join!(loop_fut, driver);
+        loop_res.expect("relay loop with forge halts cleanly");
+        drop(block_tx);
+
+        assert_eq!(
+            act.hermetic_forge_outcomes.len(),
+            1,
+            "exactly one fenced forge attempt at the single due slot"
+        );
+        let tip_after = ChainDb::tip(&chaindb).unwrap();
+        assert_eq!(
+            tip_before, tip_after,
+            "forge must not advance the durable tip"
+        );
+        assert!(
+            SnapshotStore::list_snapshot_slots(&chaindb)
+                .unwrap()
+                .is_empty(),
+            "forge persists no snapshot / served state"
+        );
+    }
+
+    #[tokio::test]
+    async fn relay_loop_forge_slot_derived_via_clock_seam() {
+        // CE-E-3: the slot the forge runs at is derived ONLY through the clock
+        // seam — millis_to_slot(tick, anchor, start, slot_len). Assert the
+        // forged outcome's slot equals that pure conversion (tick 250_000 ms,
+        // 1_000 ms/slot, anchor 0, start 0 => slot 250).
+        let dir = TempDir::new().unwrap();
+        let chaindb =
+            PersistentChainDb::open(PersistentChainDbOptions::at(dir.path().join("chain.db")))
+                .unwrap();
+        let mut wal = FileWalStore::open(dir.path().join("wal")).unwrap();
+        let mut state = fresh_state([0xCD; 32]);
+        let (block_tx, block_rx) = mpsc::channel::<AdmissionPeerEvent>(4);
+        let mut source = NodeBlockSource::from_wire_pump(block_rx);
+        let (sd_tx, mut sd_rx) = watch::channel(false);
+
+        let sched = l5_era_schedule();
+        let recovered = l5_recovered_state(Some(l5_recovered_inputs()));
+        let coordinator = s2_coordinator_state();
+        let mut shell = l5_synth_shell(0x11, 0x22, 0x33);
+        let view = s2_idle_view();
+        let expected = millis_to_slot(250_000, 0, SlotNo(0), 1_000);
+        let mut clock = DeterministicClock::new(0, vec![250_000]);
+        let mut act = ForgeActivation::new(
+            &mut clock,
+            &coordinator,
+            &recovered,
+            &mut shell,
+            L5_POOL,
+            ProtocolParameters::default(),
+            ProtocolVersion { major: 9, minor: 0 },
+            0,
+            SlotNo(0),
+            1_000,
+        );
+
+        let loop_fut = run_relay_loop(
+            &mut state,
+            &mut source,
+            &chaindb,
+            &mut wal,
+            &sched,
+            &view,
+            &mut sd_rx,
+            Some(&mut act),
+        );
+        let driver = async {
+            let _ = sd_tx.send(true);
+        };
+        let (loop_res, _) = tokio::join!(loop_fut, driver);
+        loop_res.expect("relay loop with forge halts cleanly");
+        drop(block_tx);
+
+        assert_eq!(act.hermetic_forge_outcomes.len(), 1);
+        let outcome_slot = match &act.hermetic_forge_outcomes[0] {
+            CoordinatorEvent::ForgeSucceeded { slot, .. } => *slot,
+            CoordinatorEvent::ForgeNotLeader { slot, .. } => *slot,
+            CoordinatorEvent::ForgeFailed { slot, .. } => *slot,
+            other => panic!("unexpected forge outcome variant: {other:?}"),
+        };
+        assert_eq!(
+            SlotNo(outcome_slot),
+            expected,
+            "forge slot must equal the clock-seam millis_to_slot derivation"
+        );
+    }
+
+    #[tokio::test]
+    async fn relay_loop_without_producer_material_matches_nfd_relay() {
+        // CE-E-5: forge OFF (None) — the loop is the exact N-F-D relay. Over an
+        // open (Continuing) feed with no work it idles then halts on shutdown,
+        // advancing no tip, persisting nothing, and producing NO forged artifact
+        // (there is no ForgeActivation to drive one).
+        let dir = TempDir::new().unwrap();
+        let chaindb =
+            PersistentChainDb::open(PersistentChainDbOptions::at(dir.path().join("chain.db")))
+                .unwrap();
+        let mut wal = FileWalStore::open(dir.path().join("wal")).unwrap();
+        let mut state = fresh_state([0xCD; 32]);
+        let (block_tx, block_rx) = mpsc::channel::<AdmissionPeerEvent>(4);
+        let mut source = NodeBlockSource::from_wire_pump(block_rx);
+        let (sd_tx, mut sd_rx) = watch::channel(false);
+        let sched = l5_era_schedule();
+        let view = s2_idle_view();
+
+        let loop_fut = run_relay_loop(
+            &mut state,
+            &mut source,
+            &chaindb,
+            &mut wal,
+            &sched,
+            &view,
+            &mut sd_rx,
+            None,
+        );
+        let driver = async {
+            let _ = sd_tx.send(true);
+        };
+        let (loop_res, _) = tokio::join!(loop_fut, driver);
+        loop_res.expect("relay loop (forge off) halts cleanly");
+        drop(block_tx);
+
+        assert!(ChainDb::tip(&chaindb).unwrap().is_none(), "no tip advance");
+        assert!(
+            wal.read_all().expect("read_all").is_empty(),
+            "forge-off relay appends no WAL entry on an empty feed"
+        );
+        assert!(SnapshotStore::list_snapshot_slots(&chaindb)
+            .unwrap()
+            .is_empty());
     }
 }

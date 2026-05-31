@@ -64,18 +64,24 @@ use ade_runtime::mithril_bootstrap::{bootstrap_from_mithril_snapshot, MithrilSee
 use ade_runtime::mithril_import::import_mithril_manifest_from_bytes;
 use ade_runtime::seed_import::import_cardano_cli_json_utxo;
 use ade_runtime::wal::FileWalStore;
-use ade_types::{CardanoEra, EpochNo, Hash32, SlotNo};
+use ade_types::shelley::block::ProtocolVersion;
+use ade_types::{CardanoEra, EpochNo, Hash28, Hash32, SlotNo};
 use tokio::sync::watch;
 
 use ade_core::consensus::ledger_view::LedgerView;
+use ade_ledger::pparams::ProtocolParameters;
 use ade_ledger::receive::ReceiveState;
+use ade_runtime::clock::{millis_to_slot, Clock};
 use ade_runtime::forward_sync::ForwardSyncState;
+use ade_runtime::producer::coordinator::{CoordinatorEvent, CoordinatorState};
+use ade_runtime::producer::producer_shell::ProducerShell;
 use ade_runtime::rollback::SnapshotCadence;
 
 use crate::cli::Cli;
-use crate::node_sync::{run_node_sync, NodeBlockSource};
+use crate::node_sync::{forge_one_from_recovered, run_node_sync, NodeBlockSource};
 use crate::run_loop_planner::{
-    plan_loop_step, ForgeSlotStatus, LoopState, LoopStep, ShutdownStatus, SyncStatus,
+    forge_slot_status, plan_loop_step, ForgeSlotStatus, LoopState, LoopStep, ShutdownStatus,
+    SyncStatus,
 };
 use crate::EXIT_GENERIC_STARTUP;
 
@@ -330,6 +336,9 @@ async fn run_node_lifecycle_inner(
         SnapshotCadence::DEFAULT,
     );
     let mut source = NodeBlockSource::in_memory(Vec::new());
+    // Forge OFF on the binary path this cluster (PHASE4-N-F-E S2): `--mode node`
+    // performs no operator-key ingestion, so it activates no forge. `None`
+    // reduces the planner to the exact N-F-D relay behavior.
     run_relay_loop(
         &mut fwd,
         &mut source,
@@ -338,6 +347,7 @@ async fn run_node_lifecycle_inner(
         &era_schedule,
         &ledger_view,
         shutdown,
+        None,
     )
     .await?;
 
@@ -376,6 +386,81 @@ async fn run_node_lifecycle_inner(
 /// **awaited to completion** inside `SyncOnce` and is NEVER placed inside the
 /// shutdown `select!`, so it can never be cancelled between a durable apply
 /// and its checkpoint.
+/// Opt-in forge activation for the relay run loop (PHASE4-N-F-E S2).
+///
+/// When `run_relay_loop` is passed `Some(ForgeActivation)`, it attempts a
+/// **self-accept-only** forge at each due, leader-eligible slot — advancing no
+/// durable tip and serving / admitting / gossiping nothing. When passed `None`,
+/// the loop is the exact N-F-D relay (forge off; `ForgeSlotStatus::NotDue`).
+///
+/// Constructed only by hermetic callers — `--mode node` performs NO operator-key
+/// file/config ingestion (that is a separate RED key-ingress cluster). Every
+/// field is an existing recovered / bootstrap / producer-shell input; nothing
+/// here is a new semantic source.
+pub struct ForgeActivation<'a> {
+    /// Injected clock — the sole wall-clock observation. RED `now_millis` /
+    /// `next_tick` is converted to a `SlotNo` via `millis_to_slot`; only the
+    /// `SlotNo` crosses into the planner / forge call (clock seam, DC-NODE-03).
+    pub clock: &'a mut dyn Clock,
+    /// Genesis-anchor host for the REUSED `kes_period_for_slot` — no new GREEN
+    /// helper, no slot->KES reimplementation.
+    pub coordinator_state: &'a CoordinatorState,
+    /// Recovered forge base — the SOLE leadership source, projected only inside
+    /// the fenced `forge_one_from_recovered` (DC-CINPUT-02b / CN-CINPUT-03).
+    pub recovered: &'a BootstrapState,
+    /// Operator key custody (hermetic/fenced material only).
+    pub shell: &'a mut ProducerShell,
+    pub pool_id: Hash28,
+    pub pparams: ProtocolParameters,
+    pub protocol_version: ProtocolVersion,
+    /// `millis_to_slot` anchor (SystemStart + era slot length).
+    pub anchor_millis: u64,
+    pub start_slot: SlotNo,
+    pub slot_length_ms: u32,
+    /// Monotonic forge-slot guard state — updated ONLY after an actual
+    /// `forge_one_from_recovered` attempt (never on skip / forge-off).
+    last_forged_slot: Option<SlotNo>,
+    /// Slot derived this iteration; consumed by the `ForgeTick` arm and reset to
+    /// `None` at the top of every iteration so a skipped / failed path can never
+    /// forge for a stale slot.
+    pending_slot: Option<SlotNo>,
+    /// In-memory hermetic test observation ONLY. Not persisted, not logged, not
+    /// replay authority, not BA-02 / RO-LIVE evidence.
+    pub hermetic_forge_outcomes: Vec<CoordinatorEvent>,
+}
+
+impl<'a> ForgeActivation<'a> {
+    #[allow(clippy::too_many_arguments)]
+    pub fn new(
+        clock: &'a mut dyn Clock,
+        coordinator_state: &'a CoordinatorState,
+        recovered: &'a BootstrapState,
+        shell: &'a mut ProducerShell,
+        pool_id: Hash28,
+        pparams: ProtocolParameters,
+        protocol_version: ProtocolVersion,
+        anchor_millis: u64,
+        start_slot: SlotNo,
+        slot_length_ms: u32,
+    ) -> Self {
+        Self {
+            clock,
+            coordinator_state,
+            recovered,
+            shell,
+            pool_id,
+            pparams,
+            protocol_version,
+            anchor_millis,
+            start_slot,
+            slot_length_ms,
+            last_forged_slot: None,
+            pending_slot: None,
+            hermetic_forge_outcomes: Vec::new(),
+        }
+    }
+}
+
 #[allow(clippy::too_many_arguments)]
 pub async fn run_relay_loop(
     state: &mut ForwardSyncState,
@@ -385,6 +470,7 @@ pub async fn run_relay_loop(
     era_schedule: &EraSchedule,
     ledger_view: &dyn LedgerView,
     shutdown: &mut watch::Receiver<bool>,
+    mut forge: Option<&mut ForgeActivation<'_>>,
 ) -> Result<(), NodeLifecycleError> {
     loop {
         let shutdown_status = if *shutdown.borrow() {
@@ -402,23 +488,79 @@ pub async fn run_relay_loop(
         } else {
             LoopState::Continuing
         };
-        // PHASE4-N-F-E S1: inert compile-preserving caller update only. The
-        // relay loop always passes `ForgeSlotStatus::NotDue` (forge off), so the
-        // planner reduces exactly to its N-F-D relay mapping and never returns
-        // `ForgeTick` here (proven by
-        // run_loop_planner::tests::plan_loop_step_notdue_never_returns_forge_tick).
-        // No clock seam, producer material, or `forge_one_from_recovered` is
-        // wired in S1 — that is S2.
-        match plan_loop_step(
-            loop_state,
-            sync_status,
-            ForgeSlotStatus::NotDue,
-            shutdown_status,
-        ) {
+        // PHASE4-N-F-E S2: forge-slot scheduling. RED observes the injected
+        // clock; only the derived `SlotNo` crosses into the GREEN monotonic
+        // guard + planner. Forge OFF (`None`) => always `NotDue` => the planner
+        // reduces to the exact N-F-D relay mapping (no `ForgeTick`).
+        let forge_slot = match forge.as_deref_mut() {
+            None => ForgeSlotStatus::NotDue,
+            Some(act) => {
+                act.pending_slot = None; // reset so a stale slot can never forge
+                match act.clock.next_tick() {
+                    Some(now_ms) => {
+                        let slot = millis_to_slot(
+                            now_ms,
+                            act.anchor_millis,
+                            act.start_slot,
+                            act.slot_length_ms,
+                        );
+                        act.pending_slot = Some(slot);
+                        forge_slot_status(act.last_forged_slot, slot)
+                    }
+                    // Clock exhausted — no more forge slots scheduled.
+                    None => ForgeSlotStatus::NotDue,
+                }
+            }
+        };
+        match plan_loop_step(loop_state, sync_status, forge_slot, shutdown_status) {
             LoopStep::SyncOnce => {
                 run_node_sync(source, state, chaindb, wal, era_schedule, ledger_view)
                     .await
                     .map_err(|e| NodeLifecycleError::RelaySync(format!("{e:?}")))?;
+            }
+            LoopStep::ForgeTick => {
+                // ForgeTick is reachable only with forge active (the planner can
+                // never return it for `NotDue`). Exactly ONE fenced forge attempt;
+                // advances NO durable tip, serves / admits / gossips nothing.
+                let act = forge
+                    .as_deref_mut()
+                    .expect("ForgeTick implies forge activation present");
+                let slot = act
+                    .pending_slot
+                    .expect("ForgeTick implies a derived forge slot");
+                // KES period via the REUSED CoordinatorState method (no
+                // reimplementation). Out of range => skip: no forge, no
+                // `last_forged_slot` update (S3b proves the fail-closed path).
+                if let Some(kes_period) = act.coordinator_state.kes_period_for_slot(slot.0) {
+                    // Selected tip: the current durable tip if present, else the
+                    // recovered tip. Read-only — the forge never writes it.
+                    let selected_tip = match ChainDb::tip(chaindb)
+                        .map_err(|e| NodeLifecycleError::RelaySync(format!("{e:?}")))?
+                    {
+                        Some(t) => Some(t),
+                        None => act.recovered.tip.clone(),
+                    };
+                    if let Some(tip) = selected_tip {
+                        let outcome = forge_one_from_recovered(
+                            act.recovered,
+                            &tip,
+                            act.shell,
+                            &act.pool_id,
+                            &act.pparams,
+                            era_schedule,
+                            slot.0,
+                            kes_period,
+                            act.protocol_version.clone(),
+                        )
+                        .map_err(|e| NodeLifecycleError::RelaySync(format!("{e:?}")))?;
+                        // Local hermetic observation only — never persisted /
+                        // served / admitted / applied; the durable tip is
+                        // untouched by this arm. `last_forged_slot` advances ONLY
+                        // here, after an actual attempt.
+                        act.hermetic_forge_outcomes.push(outcome);
+                        act.last_forged_slot = Some(slot);
+                    }
+                }
             }
             LoopStep::Idle => {
                 tokio::select! {
@@ -427,12 +569,6 @@ pub async fn run_relay_loop(
                 }
             }
             LoopStep::HaltCleanly => break,
-            // Structurally unreachable in S1: the caller passes NotDue. Forge
-            // wiring (the real ForgeTick arm) lands in S2.
-            LoopStep::ForgeTick => unreachable!(
-                "PHASE4-N-F-E S1: run_relay_loop passes ForgeSlotStatus::NotDue; \
-                 forge wiring lands in S2"
-            ),
         }
     }
     Ok(())

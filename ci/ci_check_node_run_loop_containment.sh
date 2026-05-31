@@ -82,10 +82,32 @@ for tok in 'pump_block\(' '\.put_block\(' 'AdvanceTip' 'rollback_to_slot\('; do
     fi
 done
 
-# --- guard (neg2): no forge / evidence on the loop path ---------------------
-for tok in 'run_real_forge' 'forge_one_from_recovered' 'correlate\(' 'Ba02Manifest'; do
+# --- guard (neg2): forge is the ONE fenced self-accept call -----------------
+# PHASE4-N-F-E S2: the loop may make EXACTLY ONE fenced forge call —
+# `forge_one_from_recovered` (self-accept-only; recovered-surface leadership via
+# guard (d) of ci_check_consensus_input_provenance.sh; advances no tip). Every
+# other forge/evidence token stays forbidden, and the fenced call is the SOLE
+# forge entry — no direct `run_real_forge`, no evidence correlation.
+for tok in 'run_real_forge' 'correlate\(' 'Ba02Manifest'; do
     if echo "$LOOP_FN" | grep -qE "$tok"; then
-        print_fail "run_relay_loop references a forge/evidence token: $tok — relay-only; the loop owns no forge/evidence authority (CN-NODE-02)"
+        print_fail "run_relay_loop references a forbidden forge/evidence token: $tok — forge ONLY via the fenced forge_one_from_recovered; no direct run_real_forge / evidence (CN-NODE-02)"
+    fi
+done
+
+# The fenced forge call must appear EXACTLY ONCE — the single permitted
+# self-accept forge attempt (CE-E-4). More than one is a second forge path;
+# zero means the forge branch is not wired.
+FORGE_CALLS=$(echo "$LOOP_FN" | grep -cE 'forge_one_from_recovered\(')
+if (( FORGE_CALLS != 1 )); then
+    print_fail "run_relay_loop has $FORGE_CALLS forge_one_from_recovered( call(s) — exactly one fenced forge attempt is required (CE-E-4)"
+fi
+
+# --- guard (neg2b): no serve / broadcast / gossip of a forged block ---------
+# A forged block is self-accept-only: the loop never serves, admits, broadcasts,
+# or gossips it (CE-E-4). The single durable tip-advance path stays run_node_sync.
+for tok in 'served_chain_admit' 'push_atomic' 'OutboundCommand' 'broadcast' 'block_fetch'; do
+    if echo "$LOOP_FN" | grep -qE "$tok"; then
+        print_fail "run_relay_loop references a serve/broadcast token: $tok — a forged block is self-accept-only; the loop serves/admits/gossips nothing (CE-E-4)"
     fi
 done
 
@@ -104,6 +126,6 @@ for tok in 'bootstrap_initial_state\(' 'bootstrap_from_' 'warm_start_recovery\('
 done
 
 if (( FAILED == 0 )); then
-    echo "OK (node run-loop containment): run_relay_loop drives sync only via run_node_sync — no direct pump_block / manual tip advance, no forge/evidence, no verdict/follower, no second bootstrap (CN-NODE-02 / DC-SYNC-02)"
+    echo "OK (node run-loop containment): run_relay_loop drives sync only via run_node_sync, forges via exactly one fenced forge_one_from_recovered (self-accept-only, no tip/serve/admit), no direct run_real_forge/evidence, no verdict/follower, no second bootstrap (CN-NODE-02 / DC-SYNC-02 / CE-E-4)"
 fi
 exit $FAILED
