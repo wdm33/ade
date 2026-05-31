@@ -71,14 +71,18 @@ use tokio::sync::watch;
 use ade_core::consensus::ledger_view::LedgerView;
 use ade_ledger::pparams::ProtocolParameters;
 use ade_ledger::receive::ReceiveState;
-use ade_runtime::clock::{millis_to_slot, Clock};
+use ade_runtime::clock::{millis_to_slot, Clock, SystemClock};
 use ade_runtime::forward_sync::ForwardSyncState;
-use ade_runtime::producer::coordinator::{CoordinatorEvent, CoordinatorState};
+use ade_runtime::producer::coordinator::{
+    coordinator_init, CoordinatorConfig, CoordinatorEvent, CoordinatorState, LedgerSnapshotRef,
+};
 use ade_runtime::producer::producer_shell::ProducerShell;
 use ade_runtime::rollback::SnapshotCadence;
 
 use crate::cli::Cli;
+use crate::forge_intent::{classify_forge_intent, ForgeIntent};
 use crate::node_sync::{forge_one_from_recovered, run_node_sync, NodeBlockSource};
+use crate::operator_forge;
 use crate::run_loop_planner::{
     forge_slot_status, plan_loop_step, ForgeSlotStatus, LoopState, LoopStep, ShutdownStatus,
     SyncStatus,
@@ -115,6 +119,12 @@ pub const EXIT_NODE_WARM_START_RECOVERY_FAILED: i32 = 42;
 /// unvalidatable / cross-epoch / durability fault). Distinct so an operator
 /// can tell a sync failure from a bootstrap / recovery / bad-CLI exit.
 pub const EXIT_NODE_RELAY_SYNC_FAILED: i32 = 43;
+
+/// Exit code for a fail-closed operator-key ingress (PHASE4-N-F-F): a partial
+/// operator key set, an operator-material load failure, or a genesis-anchor
+/// parse failure on the forge-on path. Distinct so an operator can tell a
+/// key-ingress failure from a bootstrap / recovery / sync / bad-CLI exit.
+pub const EXIT_NODE_FORGE_KEY_INGRESS_FAILED: i32 = 44;
 
 /// The first-run-vs-warm-start classification — a closed sum derived
 /// purely from what is persisted on disk.
@@ -200,6 +210,13 @@ pub enum NodeLifecycleError {
     /// fault). Carries the closed `NodeSyncError` debug. Fail closed — the
     /// loop never skips past a rejected block (PHASE4-N-F-D S2).
     RelaySync(String),
+    /// PHASE4-N-F-F: operator-key ingress for `--mode node` fail-closed — a
+    /// partial operator key set (some-but-not-all key flags), an
+    /// operator-material load failure, or a genesis-anchor parse failure on the
+    /// forge-on path. Carries a structured, secret-free message (no path bytes,
+    /// no key bytes). Fail closed — NO forge with a partial set, NO silent
+    /// relay-only fallback. Does NOT touch the bootstrap/recovery layer.
+    ForgeKeyIngress(String),
 }
 
 /// Pure first-run-vs-warm-start classifier. A function of on-disk state
@@ -248,6 +265,7 @@ fn exit_code_for(e: &NodeLifecycleError) -> i32 {
         | NodeLifecycleError::WarmStartForwardReplayUnsupported { .. }
         | NodeLifecycleError::WarmStartBootstrap(_) => EXIT_NODE_WARM_START_RECOVERY_FAILED,
         NodeLifecycleError::RelaySync(_) => EXIT_NODE_RELAY_SYNC_FAILED,
+        NodeLifecycleError::ForgeKeyIngress(_) => EXIT_NODE_FORGE_KEY_INGRESS_FAILED,
     }
 }
 
@@ -323,43 +341,143 @@ async fn run_node_lifecycle_inner(
         .as_ref()
         .map(|s| s.epoch_no.0);
     let tip_slot = state.tip.as_ref().map(|t| t.slot.0);
-    let era_schedule = make_node_schedule(SlotNo(0), EpochNo(0));
-    let ledger_view = PoolDistrView::new(
-        EpochNo(0),
-        0,
-        ActiveSlotsCoeff { numer: 0, denom: 1 },
-        BTreeMap::new(),
-    );
-    let mut fwd = ForwardSyncState::new(
-        ReceiveState::new(state.ledger, state.chain_dep),
-        Hash32([0u8; 32]),
-        SnapshotCadence::DEFAULT,
-    );
-    let mut source = NodeBlockSource::in_memory(Vec::new());
-    // Forge OFF on the binary path this cluster (PHASE4-N-F-E S2): `--mode node`
-    // performs no operator-key ingestion, so it activates no forge. `None`
-    // reduces the planner to the exact N-F-D relay behavior.
-    run_relay_loop(
-        &mut fwd,
-        &mut source,
-        &chaindb,
-        &mut wal,
-        &era_schedule,
-        &ledger_view,
-        shutdown,
-        None,
-    )
-    .await?;
 
-    // Honest success record. The loop was entered and halted cleanly; with
-    // no live-peer source wired in this cluster, no block was synced or
-    // produced.
-    eprintln!(
-        "ade_node --mode node: relay run loop entered and halted cleanly \
-         (recovered/bootstrapped epoch={epoch:?}, tip slot={tip_slot:?}; \
-         NO live peer source wired in this cluster — sync / idle / shutdown \
-         are proven hermetically). NO block produced."
-    );
+    // PHASE4-N-F-F: classify forge intent from operator-key flag PRESENCE.
+    // Complete set => forge on; none => relay-only; partial => fail closed.
+    // This does NOT bootstrap and does NOT call Mithril — the forge base is the
+    // SINGLE recovered `state` produced above (FirstRun Mithril / WarmStart WAL).
+    let intent = classify_forge_intent(
+        cli.cold_skey.as_deref(),
+        cli.kes_skey.as_deref(),
+        cli.vrf_skey.as_deref(),
+        cli.opcert.as_deref(),
+        cli.genesis_file.as_deref(),
+    )
+    .map_err(|e| NodeLifecycleError::ForgeKeyIngress(format!("{e}")))?;
+
+    match intent {
+        ForgeIntent::Off => {
+            // Exact N-F-D/N-F-E relay: forge OFF. Move the recovered ledger +
+            // chain_dep into the spine (no clone); `None` reduces the planner to
+            // the exact N-F-D relay behavior. Placeholders are PROVABLY UNCONSUMED
+            // on the empty source (a feed-end halts the loop on iteration 1).
+            let era_schedule = make_node_schedule(SlotNo(0), EpochNo(0));
+            let ledger_view = PoolDistrView::new(
+                EpochNo(0),
+                0,
+                ActiveSlotsCoeff { numer: 0, denom: 1 },
+                BTreeMap::new(),
+            );
+            let mut fwd = ForwardSyncState::new(
+                ReceiveState::new(state.ledger, state.chain_dep),
+                Hash32([0u8; 32]),
+                SnapshotCadence::DEFAULT,
+            );
+            let mut source = NodeBlockSource::in_memory(Vec::new());
+            run_relay_loop(
+                &mut fwd,
+                &mut source,
+                &chaindb,
+                &mut wal,
+                &era_schedule,
+                &ledger_view,
+                shutdown,
+                None,
+            )
+            .await?;
+            eprintln!(
+                "ade_node --mode node: relay run loop entered and halted cleanly \
+                 (recovered/bootstrapped epoch={epoch:?}, tip slot={tip_slot:?}; \
+                 forge OFF — no operator keys supplied; NO live peer source wired \
+                 — sync / idle / shutdown proven hermetically). NO block produced."
+            );
+        }
+        ForgeIntent::On(paths) => {
+            // PHASE4-N-F-F: operator-material-backed forge activation. Loads the
+            // operator signing material ONLY — it does NOT bootstrap, does NOT
+            // call Mithril, and reuses the SINGLE recovered `state` above as the
+            // forge base (CN-NODE-01: no second bootstrap path).
+            let operator_forge::OperatorForgeMaterial {
+                mut shell,
+                genesis,
+                pool_id,
+                pparams,
+                protocol_version,
+                anchor_millis,
+                start_slot,
+                slot_length_ms,
+            } = operator_forge::build_operator_forge_material(&paths)
+                .map_err(|e| NodeLifecycleError::ForgeKeyIngress(format!("{e}")))?;
+            // Coordinator: the genesis-anchor host for the REUSED
+            // `kes_period_for_slot` (no slot→KES reimplementation). Holds no
+            // secrets (CN-PROD-02).
+            let (coord_state, _init_effects) = coordinator_init(CoordinatorConfig {
+                genesis_anchor: genesis,
+                opcert_meta: shell.public_metadata(),
+                initial_chain_tip: None,
+                initial_ledger_snapshot_ref: LedgerSnapshotRef(0),
+                broadcast_queue_limit: 32,
+                peer_limit: 16,
+            });
+            // Real era schedule from the recovered epoch (consumed only when a
+            // live feed lands; unconsumed on the empty source this cluster).
+            let era_schedule =
+                make_node_schedule(SlotNo(tip_slot.unwrap_or(0)), EpochNo(epoch.unwrap_or(0)));
+            let ledger_view = PoolDistrView::new(
+                EpochNo(epoch.unwrap_or(0)),
+                0,
+                ActiveSlotsCoeff { numer: 0, denom: 1 },
+                BTreeMap::new(),
+            );
+            // Recovered-state lifetime: clone ledger + chain_dep into the relay
+            // spine (the spine evolves ITS copy forward), keep `state` owned as
+            // the recovered baseline the forge reads. One recovered state; the
+            // forge base IS the spine base.
+            let mut fwd = ForwardSyncState::new(
+                ReceiveState::new(state.ledger.clone(), state.chain_dep.clone()),
+                Hash32([0u8; 32]),
+                SnapshotCadence::DEFAULT,
+            );
+            let mut source = NodeBlockSource::in_memory(Vec::new());
+            // The injected clock is the SOLE wall-clock observation (DC-NODE-03).
+            let mut clock = SystemClock::new(slot_length_ms);
+            let mut activation = ForgeActivation::new(
+                &mut clock,
+                &coord_state,
+                &state,
+                &mut shell,
+                pool_id,
+                pparams,
+                protocol_version,
+                anchor_millis,
+                start_slot,
+                slot_length_ms,
+            );
+            run_relay_loop(
+                &mut fwd,
+                &mut source,
+                &chaindb,
+                &mut wal,
+                &era_schedule,
+                &ledger_view,
+                shutdown,
+                Some(&mut activation),
+            )
+            .await?;
+            // Honest record: forge-CAPABLE, not observable. With the empty source
+            // the loop halts before any ForgeTick (forge subordinate to feed);
+            // observable forge needs a live/continuing feed (RO-LIVE-01 follow-on).
+            // NO serve / admit / gossip / durable-tip / BA-02 / RO-LIVE claim.
+            eprintln!(
+                "ade_node --mode node: relay run loop entered and halted cleanly \
+                 (recovered/bootstrapped epoch={epoch:?}, tip slot={tip_slot:?}; \
+                 forge CAPABLE — operator keys loaded — but NOT observable: no \
+                 live feed wired this cluster, the empty source halts before any \
+                 ForgeTick (RO-LIVE-01 follow-on). NO block served / admitted / \
+                 gossiped; NO durable tip advanced."
+            );
+        }
+    }
     Ok(())
 }
 
@@ -1022,6 +1140,14 @@ fn report(e: &NodeLifecycleError) {
             eprintln!(
                 "ade_node --mode node: relay run-loop sync step failed ({d}); \
                  failing closed (no skip-past, no fallback)."
+            );
+        }
+        NodeLifecycleError::ForgeKeyIngress(d) => {
+            eprintln!(
+                "ade_node --mode node: operator-key ingress failed ({d}); failing \
+                 closed. Supply the COMPLETE operator key set \
+                 (--cold-skey --kes-skey --vrf-skey --opcert --genesis-file) to \
+                 forge, or none of them to run relay-only."
             );
         }
     }
@@ -1735,5 +1861,121 @@ mod tests {
             evidence_log: None,
             max_slots: None,
         }
+    }
+
+    // ---- PHASE4-N-F-F S3: --mode node operator-key ingress (On path) -----
+
+    /// Write a complete real-format operator key set + genesis into `dir`
+    /// (ade-native KES envelope, cardano-cli VRF/cold text-envelopes, opcert
+    /// JSON whose hot_vkey is the KES vkey from the same seed). Returns
+    /// (cold, kes, vrf, opcert, genesis). Mirrors the operator_forge fixture
+    /// idiom; writes no key bytes to any log/snapshot.
+    fn write_node_operator_material(
+        dir: &std::path::Path,
+    ) -> (
+        std::path::PathBuf,
+        std::path::PathBuf,
+        std::path::PathBuf,
+        std::path::PathBuf,
+        std::path::PathBuf,
+    ) {
+        use std::io::Write as _;
+        fn hexe(bytes: &[u8]) -> String {
+            let mut s = String::with_capacity(bytes.len() * 2);
+            for b in bytes {
+                s.push_str(&format!("{b:02x}"));
+            }
+            s
+        }
+        fn cli_envelope(path: &std::path::Path, ty: &str, payload: &[u8]) {
+            let cbor_hex = format!("58{:02x}{}", payload.len(), hexe(payload));
+            let json = format!(
+                "{{\"type\":\"{ty}\",\"description\":\"N-F-F S3 fixture\",\"cborHex\":\"{cbor_hex}\"}}"
+            );
+            let mut f = std::fs::File::create(path).unwrap();
+            f.write_all(json.as_bytes()).unwrap();
+        }
+        let kes_seed = [0x42u8; 32];
+        let kes = dir.join("kes.ade.skey");
+        ade_runtime::producer::keys::write_ade_kes_envelope(&kes, &kes_seed, 0).unwrap();
+        let (vrf_sk, _) = cardano_crypto::vrf::VrfDraft03::keypair_from_seed(&[0x07u8; 32]);
+        let vrf = dir.join("vrf.skey");
+        cli_envelope(&vrf, "VrfSigningKey_PraosVRF", &vrf_sk);
+        let cold = dir.join("cold.skey");
+        cli_envelope(&cold, "StakePoolSigningKey_ed25519", &[0x33u8; 32]);
+        use ade_crypto::kes_sum::KesAlgorithm;
+        let kes_raw = ade_crypto::kes_sum::Sum6Kes::gen_key_kes_from_seed_bytes(&kes_seed).unwrap();
+        let kes_vk = ade_crypto::kes_sum::Sum6Kes::derive_verification_key(&kes_raw);
+        let opcert = dir.join("opcert.json");
+        std::fs::write(
+            &opcert,
+            format!(
+                r#"{{"hot_vkey_hex": "{}", "sequence_number": 0, "kes_period": 0, "sigma_hex": "{}"}}"#,
+                hexe(&kes_vk),
+                "0".repeat(128)
+            ),
+        )
+        .unwrap();
+        let genesis = dir.join("op-genesis.json");
+        std::fs::write(
+            &genesis,
+            br#"{"network_magic":1,"slot_zero_time_unix_ms":1700000000000,"slot_length_ms":1000,"slots_per_kes_period":129600,"kes_anchor_slot":0,"kes_max_period":63}"#,
+        )
+        .unwrap();
+        (cold, kes, vrf, opcert, genesis)
+    }
+
+    fn warm_fixture(d: &WarmDirs) {
+        let record = warm_sample_record(WARM_ANCHOR_FP, WARM_EPOCH);
+        let bytes = encode_seed_epoch_consensus_inputs(&record);
+        let (chaindb, mut wal) = open_warm_stores(d);
+        chaindb
+            .put_seed_epoch_consensus_inputs(&WARM_ANCHOR_FP, &bytes)
+            .unwrap();
+        append_seed_epoch_provenance(&mut wal, &WARM_ANCHOR_FP, WARM_EPOCH, &bytes).unwrap();
+        put_tip_and_snapshot(&chaindb, WARM_TIP_SLOT);
+    }
+
+    #[tokio::test]
+    async fn node_mode_with_operator_keys_warm_start_forge_capable_halts_clean() {
+        // On path end-to-end (CE-F-3 + CE-F-4): warm-start recovers the SINGLE
+        // BootstrapState, classify_forge_intent => On, build the
+        // operator-material-backed activation on that recovered state, enter
+        // run_relay_loop with Some(..) — and halt cleanly on the empty source
+        // (forge CAPABLE, not observable; no second bootstrap, no Mithril call).
+        let d = fresh_warm_dirs();
+        warm_fixture(&d);
+        let (cold, kes, vrf, opcert, genesis) = write_node_operator_material(d._dir.path());
+        let mut cli = warm_cli(&d);
+        cli.cold_skey = Some(cold);
+        cli.kes_skey = Some(kes);
+        cli.vrf_skey = Some(vrf);
+        cli.opcert = Some(opcert);
+        cli.genesis_file = Some(genesis);
+        let (_sd_tx, mut sd_rx) = tokio::sync::watch::channel(false);
+        let r = run_node_lifecycle_inner(&cli, &mut sd_rx).await;
+        assert!(
+            r.is_ok(),
+            "forge-on warm-start should halt cleanly, got {r:?}"
+        );
+    }
+
+    #[tokio::test]
+    async fn node_mode_partial_operator_keys_fail_closed() {
+        // A partial operator key set must fail closed — never a silent relay
+        // fallback, never a forge (CE-F-1 wired into the binary arm).
+        let d = fresh_warm_dirs();
+        warm_fixture(&d);
+        let (cold, kes, _vrf, _opcert, _genesis) = write_node_operator_material(d._dir.path());
+        let mut cli = warm_cli(&d);
+        // Only cold + kes present — VRF / opcert / genesis missing.
+        cli.cold_skey = Some(cold);
+        cli.kes_skey = Some(kes);
+        let (_sd_tx, mut sd_rx) = tokio::sync::watch::channel(false);
+        let r = run_node_lifecycle_inner(&cli, &mut sd_rx).await;
+        assert!(
+            matches!(r, Err(NodeLifecycleError::ForgeKeyIngress(_))),
+            "partial operator keys must fail closed, got {r:?}"
+        );
     }
 }

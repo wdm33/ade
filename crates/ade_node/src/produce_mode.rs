@@ -518,7 +518,10 @@ pub(crate) fn parse_simple_opcert_json(path: &Path) -> Result<OperationalCert, &
 ///   "kes_anchor_slot": <u64>, "kes_max_period": <u32>}`.
 ///
 /// Real cardano-cli `conway-genesis.json` parsing lands in S6.
-fn parse_simple_genesis_json(path: &Path) -> Result<GenesisAnchor, &'static str> {
+///
+/// `pub(crate)` so the PHASE4-N-F-F `operator_forge` node-path ingress site
+/// reuses the same genesis parser rather than duplicating it.
+pub(crate) fn parse_simple_genesis_json(path: &Path) -> Result<GenesisAnchor, &'static str> {
     let bytes = std::fs::read(path).map_err(|_| "cannot read genesis file")?;
     #[derive(serde::Deserialize)]
     struct GenesisJson {
