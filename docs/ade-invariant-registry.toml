@@ -5229,3 +5229,87 @@ introduced_in = "PHASE4-N-F-C"
 strengthened_in = []
 cluster = "PHASE4-N-F-C"
 open_obligation = "LIVE BA-02 IS NOT CLAIMED. A real BA-02 result requires: (1) an Ade-forged block hash, (2) real Haskell-peer accept evidence (a served-block or chain-tip signal from a genuine cardano-node peer) naming that exact hash, and (3) a reviewed evidence manifest produced by correlate over that captured log. Synthetic fixtures prove the mechanics only and CANNOT satisfy BA-02. The live capture is operator-gated and distinct from RO-LIVE-01 (which remains partial / operator-gated)."
+
+# =============================================================================
+# PHASE4-N-F-D — Live relay run-loop (invariant-sketch declarations)
+# Sketch: docs/planning/phase4-n-f-d-live-node-run-loop-invariants.md
+# Relay-only + strictly hermetic; no forge / evidence / slot-tick this cluster.
+# status = "declared" until slices populate tests + ci_script
+# (ci_check_registry_code_locus_exists.sh skips declared rows → stays green).
+# =============================================================================
+
+[[rules]]
+id = "CN-NODE-02"
+tier = "constraint_network"
+statement = """
+`--mode node` is the single live-run lifecycle owner. The relay run loop may
+advance authoritative state ONLY by invoking existing closed seams
+(bootstrap_initial_state for initial state; run_node_sync -> pump_block for tip
+advance). It MUST NOT introduce any alternate bootstrap, apply, forge, evidence,
+or tip-advance path, and no second binary arm may drive the live node. Relay-only
+this cluster: no forge / evidence path is wired (those are a fenced successor
+sub-cluster). The GREEN loop planner emits only a closed lifecycle vocabulary
+{ SyncOnce, Idle, HaltCleanly } and cannot express an authority decision.
+"""
+attack_rationale = """
+A long-running RED loop is the natural place for authority to leak: a "quick"
+inline apply, a fallback recovery path, a manual put_block to "catch up", or a
+self-certifying evidence shortcut. Any of these would let unverified state reach
+the tip outside the closed seams that carry the Mithril binding,
+durable-before-advance ordering, and self-accept gates. Pinning the loop to the
+existing seams (RED performs effects, GREEN plans iteration, BLUE authority stays
+behind the seams) makes that unrepresentable.
+"""
+evidence_notes = """
+PHASE4-N-F-D invariant sketch (2026-05-31). To be enforced by a new N-F-D
+containment gate (loop body advances the tip only via run_node_sync; no second
+bootstrap/apply/forge/evidence/manual-tip path) plus the closed GREEN LoopStep
+vocabulary. tests + ci_script populated at slice time.
+"""
+source = "docs/planning/phase4-n-f-d-live-node-run-loop-invariants.md"
+cross_ref = ["CN-NODE-01", "DC-SYNC-01", "DC-SYNC-02", "T-REC-03"]
+code_locus = "crates/ade_node/src/node_lifecycle.rs"
+tests = []
+ci_script = ""
+introduced_in = "PHASE4-N-F-D"
+strengthened_in = []
+status = "declared"
+
+[[rules]]
+id = "DC-SYNC-02"
+tier = "derived"
+statement = """
+Continuous relay sync: every loop iteration preserves durable-before-advance
+(DC-SYNC-01) and advances the tip ONLY through run_node_sync -> pump_block.
+Verdict / admission / follower paths (derive_verdict, run_admission,
+ade_core_interop::follow) cannot drive the live tip, and there is no manual tip
+advance (put_block / AdvanceTip / rollback_to_slot) outside the pump.
+"""
+source = "docs/planning/phase4-n-f-d-live-node-run-loop-invariants.md"
+cross_ref = ["DC-SYNC-01", "CN-NODE-02", "T-REC-01", "DC-WAL-03"]
+code_locus = "crates/ade_node/src/node_sync.rs"
+tests = []
+ci_script = ""
+introduced_in = "PHASE4-N-F-D"
+strengthened_in = []
+status = "declared"
+
+[[rules]]
+id = "T-REC-03"
+tier = "true"
+statement = """
+Loop-as-replay: the same recovered/bootstrapped state + the same ordered
+canonical block feed (NodeBlockSource) + the same deterministic loop inputs +
+the same shutdown schedule produce byte-identical authoritative outputs (tips,
+WAL/checkpoints, and halt state). Extends T-REC-01/T-REC-02 from single-shot
+recovery to continuous relay operation; rides existing recovery laws (snapshot +
+forward-replay, NOT full-genesis replay) -- no new durability law.
+"""
+source = "docs/planning/phase4-n-f-d-live-node-run-loop-invariants.md"
+cross_ref = ["T-REC-01", "T-REC-02", "DC-SYNC-01", "DC-SYNC-02"]
+code_locus = "crates/ade_node/src/node_lifecycle.rs"
+tests = []
+ci_script = ""
+introduced_in = "PHASE4-N-F-D"
+strengthened_in = []
+status = "declared"
