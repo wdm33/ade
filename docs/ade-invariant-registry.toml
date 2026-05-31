@@ -5316,3 +5316,44 @@ introduced_in = "PHASE4-N-F-D"
 strengthened_in = []
 status = "enforced"
 evidence_notes_s3a = "PHASE4-N-F-D S3a (2026-05-31): relay_loop_two_clean_runs_byte_identical proves two clean run_relay_loop runs over identical inputs (same recovered-state seed, same ordered in-memory multi-block feed, same shutdown schedule) yield byte-identical tip (slot+hash), WAL image, and captured checkpoint slots. Deterministic orchestration absent crash interference; test-only (the loop is RED orchestration over the pure GREEN planner + the deterministic run_node_sync->pump_block seam). Crash-at-boundary recovery is S3b."
+
+[[rules]]
+id = "DC-NODE-05"
+tier = "derived"
+statement = """
+Forge-slot discipline on the --mode node relay run-loop. A forge is attempted at
+most once per SlotNo and never for a slot <= the last forged slot (no past or
+duplicate forge). The current slot is derived ONLY through the clock seam: RED
+observes wall-clock (SystemClock), GREEN converts via millis_to_slot over the
+SystemStart anchor + EraSchedule slot length -- only SlotNo crosses the seam (no
+SystemTime/Instant/float past the RED observation boundary). The forge tick
+advances NO durable tip and admits/serves/gossips nothing -- it is subordinate to
+the sync spine, whose run_node_sync -> pump_block path remains the sole durable
+tip-advance authority; a forged block is a local self-accept artifact only. For a
+fixed recovered state, ordered block feed, injected clock tick schedule, and
+shutdown schedule, the forge-attempt sequence and forged block bytes are
+byte-identical across runs (replay-equivalent). Leadership eligibility is NOT
+decided in the loop or the GREEN planner (whose forge input is a content-blind
+Due|NotDue) -- it stays in BLUE inside forge_one_from_recovered.
+Single-epoch this cluster: an unsupported slot fails closed / skips with a
+structured local outcome (cluster-scope containment, not permanent behavior).
+"""
+source = "docs/planning/phase4-n-f-e-invariants.md"
+cross_ref = ["CN-NODE-02", "DC-SYNC-02", "T-REC-03", "DC-NODE-03", "CN-PROD-02", "DC-CINPUT-02b", "CN-CINPUT-03", "CN-FORGE-01", "CN-FORGE-03"]
+code_locus = "crates/ade_node/src/node_lifecycle.rs, crates/ade_node/src/run_loop_planner.rs"
+tests = []
+ci_script = ""
+introduced_in = "PHASE4-N-F-E"
+strengthened_in = []
+status = "declared"
+evidence_notes = """
+PHASE4-N-F-E invariant sketch (2026-05-31, /invariants gate). Declared at sketch;
+tests + ci_script populated at slice time. N-F-E is a hermetic, single-epoch,
+self-accept-only forge-tick wiring cluster on top of the enforced N-F-D relay
+spine -- it wires the already-enforced forge_one_from_recovered (DC-CINPUT-02b)
+into the relay loop's slot path. NO real operator key/config ingestion this
+cluster (hermetic/fenced producer-shell material only -- real --mode node KES/VRF/
+cold/opcert/pool-id/pparams ingress is a separate RED key-ingress cluster). NO
+BA-02 / RO-LIVE-01 / peer-acceptance / serve / gossip / block-fetch claim. NO
+BLUE change expected (mirrors N-F-D).
+"""
