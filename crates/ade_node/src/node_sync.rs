@@ -1995,4 +1995,205 @@ mod tests {
             "off-epoch slot advances no tip"
         );
     }
+
+    // ===== S4: operator-material-backed forge proof (replay-equivalent) =====
+
+    /// Write a complete real-format operator key set with a REAL opcert sigma
+    /// (cold key signs hot_vkey||seq||kes_period — same recipe as
+    /// `l5_synth_shell`), so the loaded opcert verifies against the cold key.
+    /// Returns the `ForgePaths` the production loader (S2) consumes.
+    fn s4_operator_material(dir: &std::path::Path) -> crate::forge_intent::ForgePaths {
+        use ade_crypto::kes_sum::{KesAlgorithm, Sum6Kes};
+        use ed25519_dalek::{Signer, SigningKey as DalekSk};
+        use std::io::Write as _;
+        fn hexe(b: &[u8]) -> String {
+            let mut s = String::with_capacity(b.len() * 2);
+            for x in b {
+                s.push_str(&format!("{x:02x}"));
+            }
+            s
+        }
+        fn cli_env(path: &std::path::Path, ty: &str, payload: &[u8]) {
+            let cbor = format!("58{:02x}{}", payload.len(), hexe(payload));
+            let json = format!(
+                "{{\"type\":\"{ty}\",\"description\":\"N-F-F S4 fixture\",\"cborHex\":\"{cbor}\"}}"
+            );
+            std::fs::File::create(path)
+                .unwrap()
+                .write_all(json.as_bytes())
+                .unwrap();
+        }
+        let kes_seed = [0x42u8; 32];
+        let kes = dir.join("kes.ade.skey");
+        ade_runtime::producer::keys::write_ade_kes_envelope(&kes, &kes_seed, 0).unwrap();
+        let (vrf_sk, _) = cardano_crypto::vrf::VrfDraft03::keypair_from_seed(&[0x07u8; 32]);
+        let vrf = dir.join("vrf.skey");
+        cli_env(&vrf, "VrfSigningKey_PraosVRF", &vrf_sk);
+        let cold_seed = [0x33u8; 32];
+        let cold = dir.join("cold.skey");
+        cli_env(&cold, "StakePoolSigningKey_ed25519", &cold_seed);
+        let kes_raw = Sum6Kes::gen_key_kes_from_seed_bytes(&kes_seed).unwrap();
+        let hot_vkey = Sum6Kes::derive_verification_key(&kes_raw);
+        let cold_dalek = DalekSk::from_bytes(&cold_seed);
+        let mut signable = Vec::with_capacity(48);
+        signable.extend_from_slice(&hot_vkey);
+        signable.extend_from_slice(&0u64.to_be_bytes());
+        signable.extend_from_slice(&0u64.to_be_bytes());
+        let sigma = cold_dalek.sign(&signable);
+        let opcert = dir.join("opcert.json");
+        std::fs::write(
+            &opcert,
+            format!(
+                r#"{{"hot_vkey_hex": "{}", "sequence_number": 0, "kes_period": 0, "sigma_hex": "{}"}}"#,
+                hexe(&hot_vkey),
+                hexe(&sigma.to_bytes())
+            ),
+        )
+        .unwrap();
+        crate::forge_intent::ForgePaths {
+            cold,
+            kes,
+            vrf,
+            opcert,
+            genesis: dir.join("genesis.json"),
+        }
+    }
+
+    /// Recovered seed-epoch inputs registering `pool` (asc 1/1 → that pool is
+    /// always leader, so leadership is decided by the recovered surface).
+    fn l5_recovered_inputs_for_pool(pool: Hash28) -> SeedEpochConsensusInputs {
+        let mut pools: BTreeMap<Hash28, PoolEntry> = BTreeMap::new();
+        pools.insert(
+            pool,
+            PoolEntry {
+                active_stake: 1_000,
+                vrf_keyhash: Hash32([0x07; 32]),
+            },
+        );
+        SeedEpochConsensusInputs {
+            anchor_fp: Hash32([0x5A; 32]),
+            epoch_no: L5_EPOCH,
+            active_slots_coeff: ActiveSlotsCoeff { numer: 1, denom: 1 },
+            total_active_stake: 1_000,
+            pool_distribution: pools,
+        }
+    }
+
+    /// Drive ONE operator-material-backed forge tick over a continuing feed and
+    /// return the in-memory outcomes. Asserts self-accept-only invariants (tip
+    /// unchanged, no snapshot) internally so both callers inherit them. The
+    /// shell is loaded through the production ingress (S2); the operator's own
+    /// derived pool is registered so the operator KES key signs.
+    async fn drive_operator_forge_once(
+        opdir: &std::path::Path,
+        chaindir: &std::path::Path,
+    ) -> Vec<CoordinatorEvent> {
+        let chaindb =
+            PersistentChainDb::open(PersistentChainDbOptions::at(chaindir.join("chain.db")))
+                .unwrap();
+        let mut wal = FileWalStore::open(chaindir.join("wal")).unwrap();
+        let mut state = fresh_state([0xCD; 32]);
+        // Open WirePump: Continuing (never ended) + NoWorkReady, so the planner
+        // reaches ForgeTick (a feed-end would suppress forge).
+        let (block_tx, block_rx) = mpsc::channel::<AdmissionPeerEvent>(4);
+        let mut source = NodeBlockSource::from_wire_pump(block_rx);
+        let (sd_tx, mut sd_rx) = watch::channel(false);
+
+        let sched = l5_era_schedule();
+        let paths = s4_operator_material(opdir);
+        let mut shell = crate::operator_forge::load_operator_producer_shell(&paths)
+            .expect("operator material loads through the production ingress");
+        // Operator's own pool id, derived exactly as build_operator_forge_material.
+        let op_pool = Hash28(ade_crypto::blake2b_224(&shell.cold_vk().0).0);
+        let recovered = l5_recovered_state(Some(l5_recovered_inputs_for_pool(op_pool.clone())));
+        let coordinator = s2_coordinator_state();
+        let view = s2_idle_view();
+        let mut clock = DeterministicClock::new(0, vec![100_000]);
+        let mut act = ForgeActivation::new(
+            &mut clock,
+            &coordinator,
+            &recovered,
+            &mut shell,
+            op_pool,
+            ProtocolParameters::default(),
+            ProtocolVersion { major: 9, minor: 0 },
+            0,
+            SlotNo(0),
+            1_000,
+        );
+
+        let tip_before = ChainDb::tip(&chaindb).unwrap();
+        let loop_fut = run_relay_loop(
+            &mut state,
+            &mut source,
+            &chaindb,
+            &mut wal,
+            &sched,
+            &view,
+            &mut sd_rx,
+            Some(&mut act),
+        );
+        let driver = async {
+            let _ = sd_tx.send(true);
+        };
+        let (loop_res, _) = tokio::join!(loop_fut, driver);
+        loop_res.expect("operator-material relay loop halts cleanly");
+        drop(block_tx);
+
+        // Self-accept-only: the forge advances NO durable tip and persists no
+        // snapshot / served state.
+        assert_eq!(
+            ChainDb::tip(&chaindb).unwrap(),
+            tip_before,
+            "operator-material forge advances no durable tip"
+        );
+        assert!(
+            SnapshotStore::list_snapshot_slots(&chaindb)
+                .unwrap()
+                .is_empty(),
+            "operator-material forge persists no snapshot / served state"
+        );
+        std::mem::take(&mut act.hermetic_forge_outcomes)
+    }
+
+    #[tokio::test]
+    async fn relay_loop_with_operator_material_forge_reaches_fenced_path() {
+        // CE-F-5: an operator-material-backed activation (real keys loaded via the
+        // production ingress) reaches ONLY the fenced forge_one_from_recovered,
+        // exactly once for the single due slot, self-accept-only. With the
+        // operator pool registered + asc 1/1 the operator KES key SIGNS (not
+        // ForgeNotLeader) — proving operator material drives the fenced forge.
+        let opdir = TempDir::new().unwrap();
+        let chaindir = TempDir::new().unwrap();
+        let outcomes = drive_operator_forge_once(opdir.path(), chaindir.path()).await;
+        assert_eq!(
+            outcomes.len(),
+            1,
+            "exactly one fenced forge attempt at the single due slot"
+        );
+        assert!(
+            !matches!(outcomes[0], CoordinatorEvent::ForgeNotLeader { .. }),
+            "operator pool is leader (asc 1/1) — the operator KES signing path \
+             must run; got {:?}",
+            outcomes[0]
+        );
+    }
+
+    #[tokio::test]
+    async fn relay_loop_with_operator_material_two_runs_byte_identical() {
+        // CE-F-5 (replay clause): a fixed recovered state + ordered feed +
+        // injected clock + fixed operator key set ⇒ a byte-identical forge-attempt
+        // sequence + forged bytes across runs.
+        let op_a = TempDir::new().unwrap();
+        let cd_a = TempDir::new().unwrap();
+        let op_b = TempDir::new().unwrap();
+        let cd_b = TempDir::new().unwrap();
+        let a = drive_operator_forge_once(op_a.path(), cd_a.path()).await;
+        let b = drive_operator_forge_once(op_b.path(), cd_b.path()).await;
+        assert_eq!(
+            format!("{a:?}"),
+            format!("{b:?}"),
+            "operator-material forge must be replay-equivalent across runs"
+        );
+    }
 }
