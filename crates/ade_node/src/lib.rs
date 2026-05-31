@@ -17,6 +17,7 @@ pub mod admission;
 pub mod admission_log;
 pub mod ba02_evidence;
 pub mod cli;
+pub mod forge_intent;
 pub mod key_gen;
 pub mod live_log;
 pub mod node;
