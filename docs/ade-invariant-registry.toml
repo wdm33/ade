@@ -185,8 +185,8 @@ code_locus = "crates/ade_runtime/src/recovery/mod.rs, crates/ade_runtime/src/rec
 tests = ["recover_from_snapshot_and_replay_forward", "recover_from_genesis_when_no_snapshot", "apply_failure_surfaces_with_slot", "snapshot_decode_failure_surfaces_as_error", "snapshot_with_no_post_blocks_is_ok", "stress_kill_smoke", "stress_kill_1000", "snapshot_table_intact_after_kill_loop", "persistent_passes_crash_safety_with_no_kill"]
 ci_script = "ci/ci_check_recovery_contract.sh, ci/ci_check_chaindb_crash_safety.sh"
 status = "enforced"
-strengthened_in = ["PHASE4-N-F-A"]
-evidence_notes = "PHASE4-N-F-A (2026-05-30): recovered state now includes the seed-epoch consensus inputs — the warm-start verification CAPABILITY (DC-CINPUT-01, A3b authority surface) restores the SeedEpochConsensusInputs sidecar byte-identically + fail-closed. The PRODUCTION restart path that threads this is deferred to PHASE4-N-F-C; this strengthening is the capability, not the production wiring."
+strengthened_in = ["PHASE4-N-F-A", "PHASE4-N-F-C"]
+evidence_notes = "PHASE4-N-F-A (2026-05-30): recovered state now includes the seed-epoch consensus inputs — the warm-start verification CAPABILITY (DC-CINPUT-01, A3b authority surface) restores the SeedEpochConsensusInputs sidecar byte-identically + fail-closed. PHASE4-N-F-C (2026-05-31): the PRODUCTION restart path is now wired — the `--mode node` lifecycle owner (warm_start_recovery) drives replay_from_anchor → bootstrap_initial_state(RequiredFromRecoveredProvenance) from the binary, and L4c (node_sync_kill_then_warm_start_recovers_same_tip) proves a synced+advanced tip recovers byte-identically through it. DC-CINPUT-01 is now enforced (production wiring, not just the A3b capability)."
 
 [[rules]]
 id = "T-REC-02"
@@ -198,8 +198,8 @@ code_locus = "crates/ade_runtime/src/recovery/mod.rs, crates/ade_runtime/src/rec
 tests = ["recover_from_snapshot_and_replay_forward", "recover_from_genesis_when_no_snapshot"]
 ci_script = "ci/ci_check_recovery_contract.sh"
 status = "enforced"
-strengthened_in = ["PHASE4-N-F-A"]
-evidence_notes = "PHASE4-N-F-A (2026-05-30): the seed-epoch consensus inputs are now part of the replay-derivable recovered surface — A3a records the import as a replay-reconstructable WAL fact (RecoveredBootstrapProvenance) and A3b's warm-start verification CAPABILITY derives the recovered SeedEpochConsensusInputs from it (DC-CINPUT-01, authority surface). Production wiring deferred to PHASE4-N-F-C."
+strengthened_in = ["PHASE4-N-F-A", "PHASE4-N-F-C"]
+evidence_notes = "PHASE4-N-F-A (2026-05-30): the seed-epoch consensus inputs are now part of the replay-derivable recovered surface — A3a records the import as a replay-reconstructable WAL fact (RecoveredBootstrapProvenance) and A3b's warm-start verification CAPABILITY derives the recovered SeedEpochConsensusInputs from it (DC-CINPUT-01, authority surface). PHASE4-N-F-C (2026-05-31): production wiring landed — the `--mode node` owner replays from the persisted WAL to reconstruct the recovered surface and the L4c kill→warm-start test proves the synced tip is fully replay-derivable through the production path (DC-CINPUT-01 now enforced)."
 
 [[rules]]
 id = "T-COLL-01"
@@ -1505,13 +1505,14 @@ id = "CN-STORE-02"
 tier = "true"
 statement = "WAL entries, checkpoints, and recovered artifacts must be bound to exactly one anchor or bootstrap lineage"
 source = "classification_table.md §I"
-cross_ref = []
-code_locus = ""
-tests = []
+cross_ref = ["CN-NODE-01", "DC-CINPUT-01", "CN-ANCHOR-01"]
+code_locus = "crates/ade_node/src/node_lifecycle.rs (warm_start_recovery: anchor-lineage discovery + fail-closed on multiple/mismatched anchors)"
+tests = ["warm_start_fails_closed_on_multiple_anchor_lineages", "warm_start_fails_closed_on_anchor_mismatch", "warm_start_fails_closed_on_duplicate_provenance"]
 ci_script = ""
-status = "declared"
+status = "partial"
+strengthened_in = ["PHASE4-N-F-C"]
 attack_rationale = "Prevents replay across incompatible histories."
-evidence_notes = "Universal: replay equivalence requires all persisted state traceable to a single authority chain."
+evidence_notes = "Universal: replay equivalence requires all persisted state traceable to a single authority chain. PHASE4-N-F-C (2026-05-31, L3) provides the first real enforcement of the RECOVERED-ARTIFACT clause: the `--mode node` warm-start discovers the seed-epoch anchor lineage and FAILS CLOSED when more than one anchor lineage is present (warm_start_fails_closed_on_multiple_anchor_lineages), when the provenance anchor mismatches (warm_start_fails_closed_on_anchor_mismatch), or on duplicate provenance. Status is PARTIAL not enforced: the rule's WAL-entry + checkpoint binding clauses are not yet comprehensively gated by a dedicated CI check — only the recovered-artifact anchor-lineage side is mechanically proven here."
 
 [[rules]]
 id = "CN-STORE-03"
@@ -2978,9 +2979,9 @@ tests = [
 ]
 ci_script = "ci/ci_check_bootstrap_closure.sh, ci/ci_check_produce_mode_uses_bootstrap_initial_state.sh, ci/ci_check_node_mode_closure.sh"
 status = "enforced"
-strengthened_in = ["PHASE4-N-K", "PHASE4-N-M-B", "PHASE4-N-T", "PHASE4-N-Y", "PHASE4-N-F-A"]
+strengthened_in = ["PHASE4-N-K", "PHASE4-N-M-B", "PHASE4-N-T", "PHASE4-N-Y", "PHASE4-N-F-A", "PHASE4-N-F-C"]
 attack_rationale = "A parallel bootstrap path can produce an initial state that disagrees with the canonical materialize+decode authority chain — opening a startup-time chain-divergence vector."
-evidence_notes = "PHASE4-N-K S1 (2026-05-26) shipped ade_runtime::bootstrap::bootstrap_initial_state as the SOLE pub fn returning the initial (LedgerState, PraosChainDepState, Option<ChainTip>) triple. Cold-start vs warm-start is a single in-function branch. ci/ci_check_bootstrap_closure.sh enforces the single-pub-fn + materialize-authority-call positive grep. ade_node binary (S7) calls the function exactly once (ci/ci_check_node_binary_uses_single_bootstrap.sh). PHASE4-N-M-B (2026-05-26) strengthened by adding admission-mode dispatch closure: ci/ci_check_node_mode_closure.sh enforces Mode is closed {WireOnly, Admission}, main.rs match has no wildcard arm, and dispatch_admission is the sole admission-mode entry."
+evidence_notes = "PHASE4-N-K S1 (2026-05-26) shipped ade_runtime::bootstrap::bootstrap_initial_state as the SOLE pub fn returning the initial (LedgerState, PraosChainDepState, Option<ChainTip>) triple. Cold-start vs warm-start is a single in-function branch. ci/ci_check_bootstrap_closure.sh enforces the single-pub-fn + materialize-authority-call positive grep. ade_node binary (S7) calls the function exactly once (ci/ci_check_node_binary_uses_single_bootstrap.sh). PHASE4-N-M-B (2026-05-26) strengthened by adding admission-mode dispatch closure: ci/ci_check_node_mode_closure.sh enforces Mode is closed {WireOnly, Admission}, main.rs match has no wildcard arm, and dispatch_admission is the sole admission-mode entry. PHASE4-N-F-C (2026-05-31) strengthened on two fronts: (1) the new `--mode node` lifecycle owner is the single owner threading first-run-vs-warm-start (a pure function of on-disk state) → bootstrap_initial_state → produce, with NO second bootstrap/recovery/storage-init authority; ci/ci_check_node_mode_closure.sh now pins the closed set {WireOnly, Admission, KeyGenKes, Produce, Node} (no wildcard arm). (2) new gate ci/ci_check_lifecycle_owner_uses_bootstrap_initial_state.sh enforces that the owner obtains initial state SOLELY via bootstrap_initial_state and contains the RequiredFromRecoveredProvenance constructor to owner+authority, fencing out genesis/bundle/cold/recover_node_state fallbacks."
 
 [[rules]]
 id = "DC-NODE-01"
@@ -3693,8 +3694,8 @@ tests = [
 ]
 ci_script = ""
 status = "enforced"
-strengthened_in = ["PHASE4-N-M-A", "PHASE4-N-M-B", "PHASE4-N-Y"]
-evidence_notes = "PHASE4-N-M-A S4 (2026-05-26): integration test wal_replay_from_anchor_two_runs_byte_identical proves the runtime contract `same anchor + same inputs + same WAL → byte-identical outputs`. Final ledger fingerprint equals WAL[N].post_fp; persists across FileWalStore reopen. PHASE4-N-M-B (2026-05-26): strengthened by admission_replay_equivalence_byte_identical_wal_after_two_runs — same property holds when the WAL is driven by the live admission runner (run_admission) over an identical peer-event stream."
+strengthened_in = ["PHASE4-N-M-A", "PHASE4-N-M-B", "PHASE4-N-Y", "PHASE4-N-F-C"]
+evidence_notes = "PHASE4-N-M-A S4 (2026-05-26): integration test wal_replay_from_anchor_two_runs_byte_identical proves the runtime contract `same anchor + same inputs + same WAL → byte-identical outputs`. Final ledger fingerprint equals WAL[N].post_fp; persists across FileWalStore reopen. PHASE4-N-M-B (2026-05-26): strengthened by admission_replay_equivalence_byte_identical_wal_after_two_runs — same property holds when the WAL is driven by the live admission runner (run_admission) over an identical peer-event stream. PHASE4-N-F-C (2026-05-31): the `--mode node` lifecycle owner is the FIRST PRODUCTION caller of replay_from_anchor — warm_start_recovery replays (BootstrapAnchor + WAL) at restart, and L4c (node_sync_kill_then_warm_start_recovers_same_tip) proves a peer-synced + pump_block-advanced tip is recovered byte-identically by that anchor+WAL replay across a kill boundary."
 
 [[rules]]
 id = "RO-GENESIS-REPLAY-01"
@@ -4461,13 +4462,14 @@ tier = "derived"
 statement = "Given the same canonical input set (slot, eta0, vrf_vk, vrf_proof_or_output, LeaderScheduleAnswer), verify_and_evaluate_leader produces a byte-identical LeaderCheckVerdict across runs. Replay-equivalence anchor for the BLUE leader-check evaluator. Strengthens the existing leader-check determinism (DC-CONS-13 family) by exposing leader eligibility as a callable, replay-anchored function — not just an internal step in forge_block."
 source = "docs/planning/phase4-n-r-invariants.md §3 (D1); §4 (R3)"
 cross_ref = ["DC-CONS-13", "DC-CONS-14", "DC-PROD-02", "CN-FORGE-02"]
-code_locus = "crates/ade_core/src/consensus/leader_check.rs (verdict_is_byte_identical_across_two_runs unit test); crates/ade_node/tests/forge_handler_variants.rs (run_real_forge_is_byte_identical_across_two_runs end-to-end pipeline anchor)"
-tests = ["verdict_is_byte_identical_across_two_runs", "run_real_forge_is_byte_identical_across_two_runs"]
+code_locus = "crates/ade_core/src/consensus/leader_check.rs (verdict_is_byte_identical_across_two_runs unit test); crates/ade_node/tests/forge_handler_variants.rs (run_real_forge_is_byte_identical_across_two_runs end-to-end pipeline anchor); crates/ade_node/src/node_sync.rs (forge_from_recovered_is_deterministic_across_two_runs — leader-check determinism over the recovered-state forge path)"
+tests = ["verdict_is_byte_identical_across_two_runs", "run_real_forge_is_byte_identical_across_two_runs", "forge_from_recovered_is_deterministic_across_two_runs"]
 ci_script = ""
 status = "enforced"
 introduced_in = "PHASE4-N-R-A"
-strengthened_in = []
+strengthened_in = ["PHASE4-N-F-C"]
 cluster = "PHASE4-N-R-A"
+evidence_notes = "PHASE4-N-F-C (2026-05-31, L5): strengthened by forge_from_recovered_is_deterministic_across_two_runs — the leader-check evaluator produces a byte-identical CoordinatorEvent across two runs when the forge base is built from the RECOVERED SeedEpochConsensusInputs surface (via PoolDistrView::from_seed_epoch_consensus_inputs), extending the replay-equivalence anchor to the node-lifecycle forge handoff."
 
 # =============================================================================
 # PHASE4-N-R-B — Served snapshot + per-peer dispatch (CN-SNAPSHOT / DC-SNAPSHOT family, declared)
@@ -4891,13 +4893,14 @@ an un-WAL'd orphan (S6).
 source = "docs/clusters/PHASE4-N-Y/S2-network-forward-sync.md; S6-torn-write-recovery-reconciliation.md"
 cross_ref = ["DC-CONS-20", "DC-STORE-01", "DC-STORE-02", "DC-STORE-05", "T-DET-01"]
 code_locus = "crates/ade_runtime/src/forward_sync/{reducer,pump}.rs; crates/ade_runtime/src/recovery/restart.rs (WAL-tail reconciliation)"
-tests = ["forward_sync_wal_and_bytes_precede_tip_advance", "forward_sync_replay_two_runs_byte_identical", "forward_sync_admission_through_chokepoints", "recovery_torn_put_block_before_wal_append_drops_orphan"]
-ci_script = "ci/ci_check_forward_sync_chokepoint_only.sh"
+tests = ["forward_sync_wal_and_bytes_precede_tip_advance", "forward_sync_replay_two_runs_byte_identical", "forward_sync_admission_through_chokepoints", "recovery_torn_put_block_before_wal_append_drops_orphan", "node_sync_pump_advances_recoverable_tip", "node_sync_fails_closed_on_undecodable_block", "node_sync_kill_then_warm_start_recovers_same_tip"]
+ci_script = "ci/ci_check_forward_sync_chokepoint_only.sh, ci/ci_check_node_sync_via_pump.sh"
 status = "enforced"
 introduced_in = "PHASE4-N-Y"
-strengthened_in = []
+strengthened_in = ["PHASE4-N-F-C"]
 cluster = "PHASE4-N-Y"
 attack_rationale = "If the tip advanced before the WAL recorded a block, a power-loss crash would leave the chaindb tip ahead of the WAL; recovery (warm-start from chaindb.tip) would silently incorporate the un-admitted orphan, diverging from a clean run and breaking replay-equivalence. The type-encoded ordering + WAL-tail recovery reconciliation close it."
+evidence_notes = "PHASE4-N-F-C (2026-05-31, L4b): the `--mode node` lifecycle is the FIRST PRODUCTION driver of forward_sync::pump_block — run_node_sync feeds peer-fetched block bytes (L4a NodeBlockSource, decoupled from the admission verdict loop) into pump_block, advancing the recoverable tip durable-before-tip and failing closed on an undecodable block. New gate ci/ci_check_node_sync_via_pump.sh isolates the run_node_sync body and fences it positive on pump_block( while forbidding follow/derive_verdict/manual tip-advance/run_real_forge — so peer tip-agreement (ade_core_interop::follow) can never masquerade as validating sync."
 open_obligation = ""
 
 [[rules]]
@@ -5069,10 +5072,10 @@ tests = ["bootstrap_persists_anchor_keyed_seed_consensus_inputs", "bootstrap_see
 ci_script = "ci/ci_check_consensus_input_provenance.sh"
 status = "enforced"
 introduced_in = "PHASE4-N-F-A"
-strengthened_in = []
+strengthened_in = ["PHASE4-N-F-C"]
 cluster = "PHASE4-N-F-A"
-attack_rationale = "If the forge-time operator bundle could populate (or be read as) the recovered sidecar, the 'recovered Ade state' guarantee would collapse into a relabeled operator input — the laundering class the cluster exists to prevent. The containment gate blocks the populate-side mechanically; the consume-side fence is owed to PHASE4-N-F-C."
-open_obligation = "Populate-side + forge-time-fence enforced. The CONSUME-side fence (the gate must also reject RequiredFromRecoveredProvenance / seed_epoch_consensus_source tokens in produce_mode) and producer consumption of the recovered surface (CE-A-4b) are deferred to PHASE4-N-F-C; no registry rule is introduced for that consumption path until PHASE4-N-F-C scopes/promotes it. Until then produce_mode passes only SeedEpochConsensusSource::NotRequired and cannot name the recovered type."
+attack_rationale = "If the forge-time operator bundle could populate (or be read as) the recovered sidecar, the 'recovered Ade state' guarantee would collapse into a relabeled operator input — the laundering class the cluster exists to prevent. The containment gate blocks the populate-side mechanically; the consume-side fence landed in PHASE4-N-F-C (CN-CINPUT-03)."
+open_obligation = "CLOSED by PHASE4-N-F-C. Populate-side + forge-time fence enforced here (A2). The CONSUME-side fence and producer consumption of the recovered surface (CE-A-4b) landed in PHASE4-N-F-C on the node-lifecycle forge path (not produce_mode, which stays diagnostic): CN-CINPUT-03 fences the node-sync/forge driver against constructing a SeedEpochConsensusInputs literal or naming the forge-time bundle tokens, and DC-CINPUT-02b binds forge_one_from_recovered to project leadership only from the recovered surface. produce_mode continues to pass only SeedEpochConsensusSource::NotRequired."
 
 [[rules]]
 id = "DC-CINPUT-01"
@@ -5098,13 +5101,14 @@ rule's open obligation, deferred to PHASE4-N-F-C.
 source = "docs/clusters/PHASE4-N-F-A/cluster.md; A3a-wal-provenance-entry.md; A3b-warm-start-restore.md"
 cross_ref = ["CN-CINPUT-01", "CN-CINPUT-02", "CN-NODE-01", "CN-WAL-01", "DC-WAL-02", "DC-WAL-03", "T-REC-01", "T-REC-02"]
 code_locus = "crates/ade_ledger/src/wal/event.rs (SeedEpochConsensusInputsImported, tag 3); crates/ade_ledger/src/wal/replay.rs (ReplayOutcome + RecoveredBootstrapProvenance); crates/ade_runtime/src/seed_consensus_provenance.rs (append helper); crates/ade_runtime/src/bootstrap.rs (SeedEpochConsensusSource, BootstrapState, restore_seed_epoch_consensus_inputs)"
-tests = ["wal_seed_cinput_entry_round_trips_byte_identical", "replay_yields_bootstrap_provenance_view", "replay_rejects_duplicate_provenance_entry", "replay_rejects_anchor_mismatched_provenance_entry", "admit_block_chain_unaffected_by_provenance_entry", "warm_start_restores_seed_epoch_consensus_inputs_byte_identical", "warm_start_fails_closed_on_missing_sidecar", "warm_start_fails_closed_on_hash_mismatch", "warm_start_fails_closed_on_anchor_mismatch", "warm_start_fails_closed_on_epoch_mismatch", "warm_start_required_provenance_rejects_malformed_sidecar", "warm_start_never_falls_back_to_consensus_inputs_path"]
-ci_script = ""
-status = "partial"
+tests = ["wal_seed_cinput_entry_round_trips_byte_identical", "replay_yields_bootstrap_provenance_view", "replay_rejects_duplicate_provenance_entry", "replay_rejects_anchor_mismatched_provenance_entry", "admit_block_chain_unaffected_by_provenance_entry", "warm_start_restores_seed_epoch_consensus_inputs_byte_identical", "warm_start_fails_closed_on_missing_sidecar", "warm_start_fails_closed_on_hash_mismatch", "warm_start_fails_closed_on_anchor_mismatch", "warm_start_fails_closed_on_epoch_mismatch", "warm_start_required_provenance_rejects_malformed_sidecar", "warm_start_never_falls_back_to_consensus_inputs_path", "warm_start_recovers_seed_epoch_consensus_inputs_byte_identical", "warm_start_fails_closed_on_missing_wal_provenance", "warm_start_fails_closed_on_duplicate_provenance", "warm_start_fails_closed_on_multiple_anchor_lineages", "warm_start_dispatch_succeeds_end_to_end", "node_sync_kill_then_warm_start_recovers_same_tip"]
+ci_script = "ci/ci_check_lifecycle_owner_uses_bootstrap_initial_state.sh"
+status = "enforced"
 introduced_in = "PHASE4-N-F-A"
-strengthened_in = []
+strengthened_in = ["PHASE4-N-F-C"]
 cluster = "PHASE4-N-F-A"
-open_obligation = "Warm-start VERIFICATION CAPABILITY proven at the authority surface (A3b). The PRODUCTION restart path — a production mode that opens a persistent store + FileWalStore, replays to a RecoveredBootstrapProvenance, and calls bootstrap_initial_state(RequiredFromRecoveredProvenance) — is NOT wired (node.rs run_node_until_shutdown + recover_node_state are test-only). Deferred to PHASE4-N-F-C (C3). Reopen when a production mode threads the recovery path."
+open_obligation = ""
+evidence_notes = "PHASE4-N-F-C (2026-05-31, L3): the PRODUCTION restart path is now wired. The `--mode node` lifecycle owner (crates/ade_node/src/node_lifecycle.rs::warm_start_recovery) opens PersistentChainDb + FileWalStore, replays via replay_from_anchor to a RecoveredBootstrapProvenance, and calls bootstrap_initial_state(RequiredFromRecoveredProvenance) — the same fail-closed verify chain proven at the A3b authority surface, now driven from the binary's warm-start branch. node.rs run_node_until_shutdown + recover_node_state remain the legacy test-only surface (untouched). L4c (node_sync_kill_then_warm_start_recovers_same_tip) additionally proves a synced+advanced tip recovers byte-identically through this same production path. Gate ci_check_lifecycle_owner_uses_bootstrap_initial_state.sh fences the owner against any genesis/bundle/cold/recover_node_state fallback."
 
 [[rules]]
 id = "DC-CINPUT-02a"
@@ -5128,6 +5132,100 @@ tests = ["recovered_surface_projects_pooldistrview_and_expected_vrf_input", "pro
 ci_script = ""
 status = "enforced"
 introduced_in = "PHASE4-N-F-A"
-strengthened_in = []
+strengthened_in = ["PHASE4-N-F-C"]
 cluster = "PHASE4-N-F-A"
 open_obligation = ""
+
+# =============================================================================
+# PHASE4-N-F-C — Ade node lifecycle wiring (consume-side + BA-02 evidence)
+# Cluster doc: docs/clusters/PHASE4-N-F-C/cluster.md (named cluster)
+# Closes CE-A-4b (producer consumption of the recovered surface) on the
+# node-lifecycle path; closes the BA-02 evidence-manifest mechanics.
+# BOUNDARY: proves the Ade node lifecycle MECHANICS through evidence closure;
+# does NOT claim live BA-02. RO-LIVE-01 remains partial/operator-gated;
+# RO-LIVE-06 is schema/correlation mechanics only.
+# =============================================================================
+
+[[rules]]
+id = "CN-CINPUT-03"
+tier = "constraint"
+statement = """
+Consume-side anti-laundering fence: on the node-lifecycle forge path the
+leadership view MUST be projected from the recovered SeedEpochConsensusInputs
+surface (PoolDistrView::from_seed_epoch_consensus_inputs over the recovered
+BootstrapState) and MUST NOT be built from a forge-time operator bundle. No
+SeedEpochConsensusInputs value may be CONSTRUCTED on the production forge path
+(no shape-swap of an operator bundle into the recovered-surface type), and the
+forge-time consensus-input tokens (import_live_consensus_inputs /
+pool_distr_view_from_consensus_inputs / --consensus-inputs-path) MUST NOT appear
+in the node-sync/forge driver. Enforced by a data-flow-resistant containment
+gate (guard (d) of ci_check_consensus_input_provenance.sh: positive recovered-
+projection grep + negative bundle/cold-token grep + no-literal-construction
+fence over the comment/test-stripped run_node_sync/forge body), not a bypassable
+RHS grep.
+"""
+source = "docs/clusters/PHASE4-N-F-C/cluster.md; L5-produce-from-recovered-state.md"
+cross_ref = ["CN-CINPUT-01", "CN-CINPUT-02", "DC-CINPUT-02a", "DC-CINPUT-02b", "CN-NODE-01"]
+code_locus = "crates/ade_node/src/node_sync.rs (forge_one_from_recovered — projects leadership only from the recovered BootstrapState); ci/ci_check_consensus_input_provenance.sh (guard (d) consume-side fence)"
+tests = ["forge_from_recovered_uses_recovered_pool_distr", "forge_from_recovered_fails_closed_without_recovered_inputs"]
+ci_script = "ci/ci_check_consensus_input_provenance.sh"
+status = "enforced"
+introduced_in = "PHASE4-N-F-C"
+strengthened_in = []
+cluster = "PHASE4-N-F-C"
+attack_rationale = "If the node-lifecycle forge path could construct (or be fed) a SeedEpochConsensusInputs-shaped object from a forge-time operator bundle, the 'forge from recovered Ade state' guarantee would collapse into a relabeled operator input at the moment of block production — the laundering class CN-CINPUT-02 fences on the populate side, closed here on the consume side."
+open_obligation = ""
+
+[[rules]]
+id = "DC-CINPUT-02b"
+tier = "derived"
+statement = """
+PRODUCER CONSUMPTION (closes CE-A-4b). The node-lifecycle forge base is built
+from the recovered selected tip + the recovered SeedEpochConsensusInputs:
+forge_one_from_recovered projects the leadership PoolDistrView via
+PoolDistrView::from_seed_epoch_consensus_inputs(recovered) and drives the reused
+run_real_forge engine with eta0 from the recovered chain_dep — and fails closed
+(MissingRecoveredConsensusInputs) when the recovered record is absent, with no
+operator-bundle / cold-InMemoryChainDb / --consensus-inputs-path fallback. This
+is the consumption half of DC-CINPUT-02a's projection: A4 proved the projection;
+this rule binds the producer to consume it. Deterministic across runs.
+"""
+source = "docs/clusters/PHASE4-N-F-C/cluster.md; L5-produce-from-recovered-state.md"
+cross_ref = ["DC-CINPUT-02a", "CN-CINPUT-03", "DC-CINPUT-01", "DC-FORGE-01", "CN-NODE-01"]
+code_locus = "crates/ade_node/src/node_sync.rs (forge_one_from_recovered: recovered BootstrapState -> PoolDistrView::from_seed_epoch_consensus_inputs -> ForgeRequestContext -> run_real_forge)"
+tests = ["forge_from_recovered_uses_recovered_pool_distr", "forge_from_recovered_fails_closed_without_recovered_inputs", "forge_from_recovered_is_deterministic_across_two_runs"]
+ci_script = "ci/ci_check_consensus_input_provenance.sh"
+status = "enforced"
+introduced_in = "PHASE4-N-F-C"
+strengthened_in = []
+cluster = "PHASE4-N-F-C"
+open_obligation = ""
+
+[[rules]]
+id = "RO-LIVE-06"
+tier = "release"
+statement = """
+BA-02 peer-acceptance evidence closure (SCHEMA + CORRELATION MECHANICS ONLY).
+The BA-02 evidence surface is a closed, versioned manifest (Ba02Manifest) plus a
+pure, total, deterministic, HASH-PRIMARY correlator: correlate is the SOLE
+Ba02Manifest constructor; the forged-block hash is the REQUIRED correlation key;
+a peer-accept signal's slot is OPTIONAL context that must AGREE when present
+(a present-but-different slot contradicts -> NoEvidence); conflicting peer
+signals -> NoEvidence; and the peer-accept-log parser is allow-list only
+(peer_served_block / peer_chain_tip), dropping every weaker/self/unknown/
+malformed line (ForgeSucceeded / self_accept / block_received / agreement_verdict
+are never coerced to acceptance). The forged evidence uses only forge-event-
+exposed fields (ForgedBlockArtifact.{hash,slot}); the hash is never recomputed
+and block bytes are never parsed. ENFORCED for the schema + correlation
+mechanics; NOT a claim that BA-02 was achieved live.
+"""
+source = "docs/clusters/PHASE4-N-F-C/cluster.md; L6-peer-acceptance-evidence-manifest.md"
+cross_ref = ["RO-LIVE-01", "DC-FORGE-01", "CN-CINPUT-03", "DC-CINPUT-02b"]
+code_locus = "crates/ade_node/src/ba02_evidence.rs (Ba02Manifest, BA02Outcome, PeerAcceptEvent, NoEvidenceReason, parse_peer_accept_events, correlate); ci/ci_check_ba02_evidence_closed.sh"
+tests = ["ba02_manifest_schema_round_trips", "ba02_correlate_served_block_yields_manifest", "ba02_correlate_chain_tip_only_yields_manifest", "ba02_correlate_both_signals_agree_records_served_primary", "ba02_correlate_served_block_without_slot_yields_manifest", "ba02_correlate_conflicting_signals_is_no_evidence", "ba02_correlate_wrong_hash_is_no_evidence", "ba02_correlate_chain_point_mismatch_is_no_evidence", "ba02_correlate_no_slot_wrong_hash_is_no_evidence", "ba02_correlate_stale_log_is_no_evidence", "ba02_correlate_empty_peer_log_is_no_evidence", "ba02_self_accept_is_not_evidence", "ba02_forge_succeeded_alone_is_not_evidence", "ba02_block_received_alone_is_not_evidence", "ba02_agreement_verdict_is_not_evidence", "ba02_parser_accepts_well_formed_served_block", "ba02_parser_drops_unknown_and_malformed_lines", "ba02_correlate_two_runs_byte_identical"]
+ci_script = "ci/ci_check_ba02_evidence_closed.sh"
+status = "enforced"
+introduced_in = "PHASE4-N-F-C"
+strengthened_in = []
+cluster = "PHASE4-N-F-C"
+open_obligation = "LIVE BA-02 IS NOT CLAIMED. A real BA-02 result requires: (1) an Ade-forged block hash, (2) real Haskell-peer accept evidence (a served-block or chain-tip signal from a genuine cardano-node peer) naming that exact hash, and (3) a reviewed evidence manifest produced by correlate over that captured log. Synthetic fixtures prove the mechanics only and CANNOT satisfy BA-02. The live capture is operator-gated and distinct from RO-LIVE-01 (which remains partial / operator-gated)."

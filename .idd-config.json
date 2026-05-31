@@ -34,8 +34,8 @@
   "_planning_doc_doc": "Active phase plan. /cluster-doc reads this when seeding new cluster docs (N-A, N-B, N-C, N-E, N-F).",
   "grounding_docs_dir": "docs",
   "_grounding_docs_dir_doc": "Where the four grounding docs live: ade-CODEMAP.md, ade-SEAMS.md, ade-HEAD_DELTAS.md, ade-TRACEABILITY.md.",
-  "head_deltas_baseline": "a3a0636",
-  "_head_deltas_baseline_doc": "PHASE4-N-F-A close baseline (commit `a3a0636`, PHASE4-N-F-A close, 2026-05-30). HEAD_DELTAS at this baseline last narrated the 67d1ccc → a3a0636 span (a short PHASE4-N-Z housekeeping tail — foreign constitution-coverage gate retirement, producer-corpus gate repoint, T-CI-01 reconcile — followed by the PHASE4-N-F-A recovered seed-epoch consensus-input CAPABILITY cluster A1-A4 + the A5 successor-scoping doc; 24 commits / 45 files / +6433 / -2676). N-F-A is a CAPABILITY cluster: the producer does NOT consume the recovered surface (CE-A-4b deferred to PHASE4-N-F-C); BA-02 unsatisfied. Bump on each cluster close to keep HEAD_DELTAS per-cluster and reviewable.",
+  "head_deltas_baseline": "71a6c80",
+  "_head_deltas_baseline_doc": "PHASE4-N-F-C close baseline (commit `71a6c80`, PHASE4-N-F-C close, 2026-05-31). HEAD_DELTAS at this baseline last narrated the a3a0636 → 71a6c80 span (a short two-commit post-N-F-A tail — N-F-A cluster archive + notify-atlas workflow removal — followed by the PHASE4-N-F-C 'Build the real Ade node lifecycle' cluster L1-L6: --mode node owner, Mithril-only first-run bootstrap, WAL-only warm-start recovery, peer-fetch→durable pump_block apply, forge-from-recovered, BA-02 evidence correlator; 23 commits / 39 files / +6713 / -495). N-F-C is the wiring cluster that closes CE-A-4b (producer consumes the recovered surface) on the node-lifecycle path and adds the BA-02 evidence mechanics; it does NOT claim live BA-02 (RO-LIVE-01 stays partial/operator-gated; RO-LIVE-06 is schema/correlation mechanics only). Bump on each cluster close to keep HEAD_DELTAS per-cluster and reviewable.",
   "normative_docs": [
     "docs/active/CE-79_gate_statement.md",
     "docs/active/CE-79_tier5_addendum.md",
@@ -48,7 +48,7 @@
   "canonical_type_registry": null,
   "_canonical_type_registry_doc": "No separate canonical-type registry file yet; canonical-type rules live inline in the invariant registry under family T.",
   "invariant_registry": "docs/ade-invariant-registry.toml",
-  "_invariant_registry_doc": "Canonical, append-only invariant registry. Schema follows ziranity-v3's constitution_rule_registry.toml (base fields identical), additively compatible with the IDD template. 303 entries at HEAD across families T (true), CN (constraint network), DC (derived constraint), OP (operational), RO (release obligation).",
+  "_invariant_registry_doc": "Canonical, append-only invariant registry. Schema follows ziranity-v3's constitution_rule_registry.toml (base fields identical), additively compatible with the IDD template. 306 entries at HEAD across families T (true), CN (constraint network), DC (derived constraint), OP (operational), RO (release obligation).",
   "ci_dirs": [
     "ci"
   ],
