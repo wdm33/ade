@@ -703,6 +703,41 @@ evidence = [
 ]
 strengthened_in = ["PHASE4-N-B"]
 
+[[rules]]
+id = "DC-EPOCH-03"
+tier = "derived"
+statement = """
+Single-epoch forge containment on the --mode node spine: in this forge path, a forge
+is valid only within the single recovered seed epoch. A candidate forge slot beyond
+the recovered seed epoch FAILS CLOSED -- it cannot be forged, served, or signed as a
+valid block. The seed-epoch nonce (eta0) is frozen at the recovered value; the forge
+apply path does NOT drive the BLUE CandidateFreeze / EpochBoundary nonce transitions
+(they exist in ade_core::consensus::nonce but nothing drives them on the forge path),
+so signing past the boundary with a stale eta0 is a peer-reject class and is
+forbidden, not silently attempted. Cross-epoch production (nonce roll + epoch
+transition driven from an epoch-aware tick + follow/durability) is a SEPARATE
+nonce-roll/epoch-transition cluster, NOT this one. The off-epoch slot fails closed
+with a structured local outcome (a fail-closed boundary for this single-epoch forge
+path, hardening DC-NODE-05's single-epoch cluster-scope containment for the live-serve
+path).
+"""
+source = "docs/planning/phase4-n-f-g-invariants.md"
+cross_ref = ["DC-NODE-05", "DC-NODE-06", "DC-EPOCH-02", "CN-FORGE-04", "DC-CONS-18", "RO-LIVE-01"]
+code_locus = "crates/ade_node/src/node_lifecycle.rs, crates/ade_node/src/run_loop_planner.rs, crates/ade_core/src/consensus/nonce.rs"
+tests = []
+ci_script = ""
+introduced_in = "PHASE4-N-F-G"
+strengthened_in = []
+status = "declared"
+evidence_notes = """
+PHASE4-N-F-G invariant sketch (/invariants gate). Declared at sketch. Single-epoch
+scope (OQ3) resolved with the user: do NOT patch nonce rollover into this cluster.
+The BLUE nonce authority's epoch-boundary transitions are present but undriven on the
+forge path (verified C1 scoping pass section 4a); this rule makes the boundary a
+fail-closed wall rather than a stale-eta0 sign. tier = derived (Cardano-specific in
+its Praos nonce / KES-period / leader-VRF details).
+"""
+
 # DC-STORE-04 describes the cardano-node three-DB architecture
 # (ImmutableDB + VolatileDB + LedgerDB). Ade has deliberately diverged
 # per CE-79 Tier 5 (intentional-divergence on non-hash-critical
@@ -5356,6 +5391,47 @@ cluster (hermetic/fenced producer-shell material only -- real --mode node KES/VR
 cold/opcert/pool-id/pparams ingress is a separate RED key-ingress cluster). NO
 BA-02 / RO-LIVE-01 / peer-acceptance / serve / gossip / block-fetch claim. NO
 BLUE change expected (mirrors N-F-D).
+"""
+
+[[rules]]
+id = "DC-NODE-06"
+tier = "derived"
+statement = """
+Self-accept -> serve handoff on the --mode node relay spine (sibling serve task,
+shape B). Only a BLUE self-accepted forged artifact may enter the sibling
+served-chain serve task: the handoff carries a typed, constructor-fenced artifact
+whose ONLY provenance is a ForgeSucceeded outcome (CN-FORGE-01 emits ForgeSucceeded
+only when BLUE self_accept accepts the forged block against its pre-forge base). The
+serve task MUST NOT accept raw forged bytes, a failed forge output (ForgeNotLeader /
+ForgeFailed), a self-declared acceptance flag, or a peer-verdict substitute.
+Served-chain mutation happens ONLY in the sibling serve authority via the single
+ServedChainHandle::push_atomic authority; the block-fetch response preserves the
+self-accepted forged block bytes as the payload and applies the single CN-WIRE-08
+tag-24 envelope authority (no parallel serializer). The relay-loop body performs NO
+serve / admit / gossip / block-fetch / durable-tip mutation -- the handoff from the
+relay loop to the sibling serve task is a typed channel send of a constructor-fenced
+self-accepted artifact, not served-chain mutation and not block-fetch serving, so the
+relay-loop containment gate (ci_check_node_run_loop_containment.sh) stays SEMANTICALLY
+UNCHANGED (this cluster may ADD a served-chain handoff gate but MUST NOT relax
+containment). Peer acceptance is proven ONLY by the peer's validation log through
+ba02_evidence::correlate, never by Ade's self-accept / ForgeSucceeded / any
+wire-success signal (RO-LIVE-06).
+"""
+source = "docs/planning/phase4-n-f-g-invariants.md"
+cross_ref = ["CN-PROD-04", "CN-CONS-07", "CN-NODE-02", "DC-NODE-05", "DC-EPOCH-03", "CN-WIRE-08", "RO-LIVE-01", "RO-LIVE-06"]
+code_locus = "crates/ade_node/src/node_lifecycle.rs, crates/ade_node/src/node_sync.rs, crates/ade_ledger/src/producer/served_chain.rs, crates/ade_runtime/src/producer/served_chain_handle.rs"
+tests = []
+ci_script = ""
+introduced_in = "PHASE4-N-F-G"
+strengthened_in = []
+status = "declared"
+evidence_notes = """
+PHASE4-N-F-G invariant sketch (/invariants gate). Declared at sketch; tests +
+ci_script populate at slice time, flip to enforced at close. Shape B (sibling serve
+task) resolved with the user: do NOT extend the relay-loop ForgeTick branch to
+admit/serve directly. The node-spine analog of CN-PROD-04 (produce_mode's
+broadcast bridge): only self-accepted forged artifacts reach push_atomic. Operator
+peer ACCEPT stays operator-gated (RO-LIVE-01 partial / blocked_until_operator_stake_available).
 """
 
 [[rules]]
