@@ -41,7 +41,7 @@ use ade_runtime::producer::coordinator::CoordinatorEvent;
 use ade_runtime::producer::producer_shell::ProducerShell;
 use ade_runtime::rollback::PersistentSnapshotCache;
 use ade_types::shelley::block::ProtocolVersion;
-use ade_types::{BlockNo, Hash28, SlotNo};
+use ade_types::{BlockNo, EpochNo, Hash28, SlotNo};
 use tokio::sync::mpsc;
 
 use crate::produce_mode::{run_real_forge, ForgeRequestContext};
@@ -342,6 +342,56 @@ pub enum NodeForgeError {
     MissingRecoveredConsensusInputs,
 }
 
+/// PHASE4-N-F-G-A S4 — the node forge path's explicit single-recovered-seed-epoch
+/// admission verdict (DC-EPOCH-03). A candidate forge slot is admissible ONLY
+/// when it locates to the recovered seed epoch; any other epoch — or an
+/// unlocatable slot — fails closed, because the recovered `chain_dep` eta0 is the
+/// *seed-epoch* nonce and is stale past the boundary (a peer-reject class).
+///
+/// Closed sum: leadership runs only on `WithinSeedEpoch`; every `OffEpoch` is a
+/// pre-leadership fail-closed. GREEN — pure, derived solely from `(slot,
+/// era_schedule, seed_epoch)`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ForgeEpochAdmission {
+    /// The candidate slot locates to the recovered seed epoch — leadership may be
+    /// evaluated.
+    WithinSeedEpoch,
+    /// The candidate slot is outside the recovered seed epoch (or cannot be
+    /// located at all): fail closed before leadership / KES signing.
+    /// `candidate_epoch` is the located epoch, or `None` when the slot does not
+    /// locate to any era.
+    OffEpoch {
+        candidate_epoch: Option<EpochNo>,
+        seed_epoch: EpochNo,
+    },
+}
+
+/// PHASE4-N-F-G-A S4: decide forge epoch-admission for `slot` against the
+/// recovered `seed_epoch`, deriving the candidate epoch through the BLUE
+/// [`EraSchedule::locate`] map — the same slot→epoch translation
+/// `query_leader_schedule` uses, so the guard never diverges from leadership.
+///
+/// Within the seed epoch ⇒ [`ForgeEpochAdmission::WithinSeedEpoch`]; any other
+/// located epoch ⇒ `OffEpoch { Some(e), seed }`; a slot that does not locate ⇒
+/// `OffEpoch { None, seed }`. Pure / deterministic — no I/O, clock, rand, float.
+pub fn forge_epoch_admission(
+    slot: u64,
+    era_schedule: &EraSchedule,
+    seed_epoch: EpochNo,
+) -> ForgeEpochAdmission {
+    match era_schedule.locate(SlotNo(slot)) {
+        Ok(loc) if loc.epoch == seed_epoch => ForgeEpochAdmission::WithinSeedEpoch,
+        Ok(loc) => ForgeEpochAdmission::OffEpoch {
+            candidate_epoch: Some(loc.epoch),
+            seed_epoch,
+        },
+        Err(_) => ForgeEpochAdmission::OffEpoch {
+            candidate_epoch: None,
+            seed_epoch,
+        },
+    }
+}
+
 /// L5 — the recovered-state forge handoff. Single-shot.
 ///
 /// Builds the forge base ENTIRELY from recovered state + the selected tip,
@@ -391,6 +441,22 @@ pub fn forge_one_from_recovered(
         .seed_epoch_consensus_inputs
         .as_ref()
         .ok_or(NodeForgeError::MissingRecoveredConsensusInputs)?;
+
+    // S4 (DC-EPOCH-03): fail closed BEFORE leadership / KES signing when the
+    // candidate slot is outside the single recovered seed epoch. The recovered
+    // chain_dep eta0 is the seed-epoch nonce; past the boundary it is stale (a
+    // peer-reject class) and the forge path drives NO nonce promotion. Reuses the
+    // same EraSchedule::locate map leadership uses (no divergence). Off-epoch
+    // surfaces as the existing structured ForgeNotLeader — never a fabricated
+    // off-epoch forge, never a leadership / sign path.
+    if let ForgeEpochAdmission::OffEpoch { .. } =
+        forge_epoch_admission(slot, era_schedule, recovered_inputs.epoch_no)
+    {
+        return Ok(CoordinatorEvent::ForgeNotLeader {
+            slot,
+            vrf_output_fingerprint: [0u8; 8],
+        });
+    }
 
     // DC-CINPUT-02b: project the leadership PoolDistrView from the
     // RECOVERED record — the sole consensus-input source on this path.
@@ -1993,6 +2059,143 @@ mod tests {
             ChainDb::tip(&chaindb).unwrap(),
             tip_before,
             "off-epoch slot advances no tip"
+        );
+    }
+
+    // ===== S4 (PHASE4-N-F-G-A): epoch-boundary forge fail-closed (DC-EPOCH-03) =====
+
+    #[test]
+    fn forge_epoch_admission_within_seed_epoch_admits() {
+        // Slot 100 locates to epoch 0 (l5 schedule start_epoch 0); seed epoch 0
+        // ⇒ WithinSeedEpoch — leadership may run.
+        let sched = l5_era_schedule();
+        assert_eq!(
+            forge_epoch_admission(100, &sched, L5_EPOCH),
+            ForgeEpochAdmission::WithinSeedEpoch
+        );
+    }
+
+    #[test]
+    fn forge_epoch_admission_off_epoch_fails_closed() {
+        // Slot 432000 locates to epoch 1 (epoch_length 432000); seed epoch 0 ⇒
+        // OffEpoch{Some(1), 0} — distinct from a VRF-lottery loss, via the SAME
+        // EraSchedule::locate map leadership uses.
+        let sched = l5_era_schedule();
+        assert_eq!(
+            forge_epoch_admission(432_000, &sched, L5_EPOCH),
+            ForgeEpochAdmission::OffEpoch {
+                candidate_epoch: Some(EpochNo(1)),
+                seed_epoch: L5_EPOCH,
+            }
+        );
+    }
+
+    #[test]
+    fn forge_epoch_admission_unlocatable_fails_closed() {
+        // A slot before the first era's start_slot does not locate ⇒ fail closed
+        // as OffEpoch{None}. An unlocatable slot can never be the seed epoch.
+        let sched = EraSchedule::new(
+            BootstrapAnchorHash(Hash32([0u8; 32])),
+            1_000,
+            vec![EraSummary {
+                era: CardanoEra::Conway,
+                start_slot: SlotNo(1_000),
+                start_epoch: EpochNo(7),
+                slot_length_ms: 1_000,
+                epoch_length_slots: 432_000,
+                safe_zone_slots: 129_600,
+            }],
+        )
+        .expect("schedule");
+        assert_eq!(
+            forge_epoch_admission(500, &sched, EpochNo(7)),
+            ForgeEpochAdmission::OffEpoch {
+                candidate_epoch: None,
+                seed_epoch: EpochNo(7),
+            }
+        );
+    }
+
+    #[test]
+    fn node_forge_off_epoch_slot_fails_closed() {
+        // CE-G-A-4 (DC-EPOCH-03): forge_one_from_recovered for a slot outside the
+        // single recovered seed epoch fails closed via the EXPLICIT epoch-admission
+        // guard — BEFORE leadership / KES signing — as the structured
+        // ForgeNotLeader; never a fabricated off-epoch ForgeSucceeded. Hardens the
+        // N-F-E forge_tick_off_epoch_slot_fails_closed_local relay-loop proof (which
+        // also pins no-tip / no-serve) into the named DC-EPOCH-03 handoff boundary.
+        let recovered = l5_recovered_state(Some(l5_recovered_inputs()));
+        let mut shell = l5_synth_shell(0x11, 0x22, 0x33);
+        let sched = l5_era_schedule();
+        let tip = recovered.tip.clone().expect("recovered tip");
+        // Slot 432000 locates to epoch 1; the recovered seed epoch is 0 ⇒ off-epoch.
+        // kes_period is irrelevant — the epoch guard fires before leadership/signing.
+        let outcome = forge_one_from_recovered(
+            &recovered,
+            &tip,
+            &mut shell,
+            &L5_POOL,
+            &ProtocolParameters::default(),
+            &sched,
+            432_000,
+            3,
+            ProtocolVersion { major: 9, minor: 0 },
+        )
+        .expect("off-epoch forge handoff is representable as a structured outcome");
+        assert!(
+            matches!(outcome, CoordinatorEvent::ForgeNotLeader { .. }),
+            "off-epoch must fail closed as the structured ForgeNotLeader, got {outcome:?}"
+        );
+        assert!(
+            !matches!(outcome, CoordinatorEvent::ForgeSucceeded { .. }),
+            "off-epoch must never produce a signed / forged block"
+        );
+    }
+
+    #[test]
+    fn node_forge_no_epoch_boundary_promotion_on_forge_path() {
+        // CE-G-A-4 (no-promotion lock): an ON-epoch forge handoff consumes the
+        // recovered seed-epoch eta0 and drives NO nonce promotion — the recovered
+        // chain_dep.epoch_nonce is identical before and after. The guard admits the
+        // slot (WithinSeedEpoch), so leadership runs (this is the on-epoch path, not
+        // a fail-closed). Cross-epoch nonce roll is a separate cluster, never here.
+        let recovered = l5_recovered_state(Some(l5_recovered_inputs()));
+        let mut shell = l5_synth_shell(0x11, 0x22, 0x33);
+        let sched = l5_era_schedule();
+        let tip = recovered.tip.clone().expect("recovered tip");
+        let seed_epoch = l5_recovered_inputs().epoch_no;
+        // Slot 100 is in epoch 0 (the recovered seed epoch): the guard admits, so
+        // leadership is reached rather than epoch-gated.
+        assert_eq!(
+            forge_epoch_admission(100, &sched, seed_epoch),
+            ForgeEpochAdmission::WithinSeedEpoch,
+            "slot 100 is in the recovered seed epoch — leadership must be reached"
+        );
+        let eta0_before = recovered.chain_dep.epoch_nonce.clone();
+        let outcome = forge_one_from_recovered(
+            &recovered,
+            &tip,
+            &mut shell,
+            &L5_POOL,
+            &ProtocolParameters::default(),
+            &sched,
+            100,
+            0,
+            ProtocolVersion { major: 9, minor: 0 },
+        )
+        .expect("on-epoch forge handoff is representable");
+        // Leadership ran (on-epoch) — a real forge result, never the typed
+        // MissingRecoveredConsensusInputs error path.
+        assert!(matches!(
+            outcome,
+            CoordinatorEvent::ForgeSucceeded { .. }
+                | CoordinatorEvent::ForgeNotLeader { .. }
+                | CoordinatorEvent::ForgeFailed { .. }
+        ));
+        // No nonce promotion: the recovered seed-epoch eta0 is consumed unchanged.
+        assert_eq!(
+            recovered.chain_dep.epoch_nonce, eta0_before,
+            "the forge path drives no nonce promotion — the recovered seed eta0 is unchanged"
         );
     }
 
