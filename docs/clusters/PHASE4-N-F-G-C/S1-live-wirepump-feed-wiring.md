@@ -30,14 +30,18 @@ CE-G-C-2 (operator-gated evidence) is **out of scope** for this slice (it is S2)
 - PHASE4-N-F-G-A (forge fidelity; the `On`-arm `ForgeActivation` assembly) — **merged**.
 
 ## 3. Implementation Instruction (AI)
-Implement exactly the wiring specified in §5/§9 — replace the empty `On`-arm source with a live
-`from_wire_pump` source built from the **existing closed** `dial_for_admission` +
-`run_admission_wire_pump` functions, selecting the upstream peer from the **existing** `--peer`
-ingress; broaden the existing handoff-fence gate; add the hermetic loopback e2e + replay tests. Do
-**not** add a new wire authority, a new CLI flag, a second forge codepath, a `NodeBlockSource`
-variant, or any peer-acceptance claim. If the recovered-tip→`Point` conversion for the pump's
-`start_point` is ambiguous, **stop and ask** (do not invent one). Commit messages carry the project
-attribution trailer (CLAUDE.md) and no other AI references.
+Implement exactly the wiring specified in §5/§9 — on the `On` arm, build a live `from_wire_pump`
+source from the **existing closed** `dial_for_admission` + `run_admission_wire_pump` functions
+**when an upstream peer is supplied** via the **existing** `--peer` ingress; when `--peer` is empty,
+keep the prior empty `in_memory` source (forge-capable, halts clean — the existing
+`node_mode_with_operator_keys_warm_start_forge_capable_halts_clean` contract). Broaden the existing
+handoff-fence gate; add the hermetic loopback e2e + replay tests. Do **not** add a new wire authority,
+a new CLI flag, a second forge codepath, a `NodeBlockSource` variant, a *new fatal invariant* (e.g.
+forge-on-requires-peer — out of scope), or any peer-acceptance claim. Dial / parse failures are
+**logged-and-dropped** per the established admission honest-scope (C3, `spawn_wire_pumps_for_admission`),
+never fatal. If the recovered-tip→`Point` conversion for the pump's `start_point` is ambiguous,
+**stop and ask** (do not invent one). Commit messages carry the project attribution trailer
+(CLAUDE.md) and no other AI references.
 
 ## 4. Intent
 Make it **impossible** for the `--mode node` forge to be observable on a path that bypasses the
@@ -49,13 +53,17 @@ self-accepted artifact can be served. (Strengthens the mechanical half of `RO-LI
 
 ## 5. Scope
 - **Modules / crates:**
-  - `ade_node::node_lifecycle` (RED) — `On`-arm: replace `NodeBlockSource::in_memory(Vec::new())`
-    (`:441`) with a live `NodeBlockSource::from_wire_pump(rx)` fed by `dial_for_admission` +
-    `run_admission_wire_pump`.
+  - `ade_node::node_lifecycle` (RED) — `On`-arm: **when `--peer` is supplied**, build a live
+    `NodeBlockSource::from_wire_pump(rx)` fed by `dial_for_admission` + `run_admission_wire_pump`
+    in place of `NodeBlockSource::in_memory(Vec::new())` (`:441`); **when `--peer` is empty, keep the
+    empty source** (forge-capable, halts clean — prior behavior). A small RED helper
+    (`spawn_live_wire_pump_source`) holds the dial/pump wiring.
   - `ade_node::cli` (RED) — **reuses the existing ingress**: `Cli.peer_addrs: Vec<String>` (the
-    repeatable `--peer ADDR` flag, `cli.rs:71`) supplies the upstream peer. **No new CLI flag is
-    added** — the `On` arm selects/parses the upstream `SocketAddr` from the existing address-only
-    `--peer` ingress (no secrets, no semantic authority).
+    repeatable `--peer ADDR` flag, `cli.rs:71`) supplies the upstream peer; `Cli.network_magic`
+    supplies the handshake magic on the live path. **No new CLI flag is added** — the `On` arm
+    selects/parses the upstream `SocketAddr` from the existing address-only `--peer` ingress (no
+    secrets, no semantic authority); a `--peer` with no `--network-magic` is a `MissingFlag`
+    fail-closed (live path only — the empty-peer path is unaffected).
   - `ade_runtime::admission::{dial_for_admission, run_admission_wire_pump}` (RED) — **reused,
     unchanged**; the closed dial → chain-sync/block-fetch → `AdmissionPeerEvent` pump.
   - `ci/ci_check_served_chain_handoff_fence.sh` — **broadened** (file scope node-spine-wide;
@@ -65,11 +73,12 @@ self-accepted artifact can be served. (Strengthens the mechanical half of `RO-LI
   variant, no new transition.**
 - **Persistence impact:** none. No new WAL record, no checkpoint shape change. The durable tip path
   (`run_node_sync → pump_block`) is unchanged.
-- **Network-visible impact:** the production `On` arm now opens an **outbound** N2N connection to the
-  operator-supplied upstream peer (via `dial_for_admission`) and runs chain-sync + block-fetch as a
-  **client** (existing protocol; no new/changed messages). **The required CI proof uses an in-process
-  loopback transport and does not claim live peer acceptance.** No inbound serve to a real peer in
-  this slice (live serve to a real peer is the operator-gated S2/RO-LIVE-01 leg).
+- **Network-visible impact:** when `--peer` is supplied, the production `On` arm opens an **outbound**
+  N2N connection to the operator-supplied upstream peer (via `dial_for_admission`) and runs chain-sync
+  + block-fetch as a **client** (existing protocol; no new/changed messages); with no `--peer` it
+  keeps the prior empty source (forge-capable, halts clean — no connection). **The required CI proof
+  uses an in-process loopback transport and does not claim live peer acceptance.** No inbound serve to
+  a real peer in this slice (live serve to a real peer is the operator-gated S2/RO-LIVE-01 leg).
 - **Out of scope:** the operator-pass runbook, evidence manifest, and `correlate` wiring (S2); any
   peer-acceptance / BA-02 claim; the `Off` arm (it may stay relay-only/empty — this slice does not
   prove live relay-only behavior).
@@ -123,13 +132,18 @@ self-accepted artifact can be served. (Strengthens the mechanical half of `RO-LI
 > RO-LIVE-01 is the primary family; the DC-NODE-06 gate-hardening is the coupled enforcement update.
 
 ## 9. Design Summary
-Production path (`run_node_lifecycle_inner`, `On` arm): in place of `in_memory(Vec::new())`,
-1. select the upstream `SocketAddr` from the existing `Cli.peer_addrs` (`--peer ADDR`);
-2. `let (transport, negotiated_version) = dial_for_admission(upstream_peer_addr, our_versions).await?`
-3. `let (events_tx, events_rx) = mpsc::channel::<AdmissionPeerEvent>(CAP);`
-4. `tokio::spawn(run_admission_wire_pump(transport, peer_addr_str, start_point, negotiated_version, network_magic, events_tx));`
-   where `start_point` = the recovered tip `Point`.
-5. `let mut source = NodeBlockSource::from_wire_pump(events_rx);`
+Production path (`run_node_lifecycle_inner`, `On` arm): when `cli.peer_addrs` is **non-empty**, build
+the live source via a small RED helper `spawn_live_wire_pump_source(&cli.peer_addrs, network_magic,
+state.tip.as_ref())` (else keep `NodeBlockSource::in_memory(Vec::new())`). The helper:
+1. builds `our_versions` by reusing the existing `build_n2n_version_table(network_magic)` (no reimpl);
+2. builds `start_point` from the recovered tip (`ChainTip { hash, slot }` → `Point::Block { slot, hash }`,
+   else `Point::Origin`);
+3. `let (events_tx, events_rx) = mpsc::channel::<AdmissionPeerEvent>(CAP);` (the runtime
+   `ade_runtime::admission::AdmissionPeerEvent` — the WirePump arm consumes it **directly**, no bridge);
+4. for each parseable `--peer` addr, `tokio::spawn` `dial_for_admission(addr, versions)` then
+   `run_admission_wire_pump(transport, label, start_point, version, network_magic, events_tx.clone())`
+   — dial / parse failures `eprintln`-and-`return` (C3 honest-scope), never fatal;
+5. returns `NodeBlockSource::from_wire_pump(events_rx)`.
 
 The `WirePump` arm (`node_sync.rs:72`) already filters to `AdmissionPeerEvent::Block` (skips
 `TipUpdate`, ends on `Disconnected`) — **no change**. The relay loop, sibling serve task, and clock
@@ -156,8 +170,10 @@ loopback pump.
 ### Persistence
 - None.
 ### Removal / Refactors
-- The empty `NodeBlockSource::in_memory(Vec::new())` on the `On` arm is replaced by the live source.
-  The `Off` arm is untouched.
+- The empty `NodeBlockSource::in_memory(Vec::new())` on the `On` arm is replaced by the live source
+  **when `--peer` is supplied**; with no `--peer` the empty source is retained (prior behavior). A
+  small RED helper `spawn_live_wire_pump_source` is added (wiring only; reuses the closed pump). The
+  `Off` arm is untouched.
 
 ## 11. Replay, Crash, and Epoch Validation
 - **Replay tests added:** `live_feed_forge_sequence_replay_byte_identical` (R1) — a captured ordered
@@ -204,8 +220,13 @@ belong to the operator-gated S2/RO-LIVE-01 leg, mirroring `RO-SYNC-EVIDENCE-01`.
 - `run_admission_wire_pump` termination (`AdmissionWirePumpResult::{Eof, Error, EventsChannelDropped}`)
   → the `WirePump` source observes channel disconnect and ends the feed once the lookahead drains
   (existing N-F-D semantics); the loop halts cleanly. **Recoverable** (re-dial on next run).
-- Empty/missing `--peer` on the `On` arm → structured fail-closed lifecycle error (no zero/fabricated
-  address, no implicit default peer). **Fail-fast.**
+- Unparseable `--peer` addr / `dial_for_admission` failure → **logged-and-dropped** per the established
+  admission honest-scope (C3, `spawn_wire_pumps_for_admission`); the feed ends and the loop halts
+  clean. **Non-fatal** (never a silent tip graft, never a fabricated address).
+- Empty `--peer` on the `On` arm → **keep the empty `in_memory` source** (forge-capable, halts clean —
+  the prior N-F-F contract; **not** an error). The live feed is opt-in via `--peer`.
+- `--peer` supplied without `--network-magic` → `NodeLifecycleError::MissingFlag("--network-magic")`
+  on the **live path only**. **Fail-fast** (the empty-peer path is unaffected).
 
 ## 14. Hard Prohibitions
 ### Inherited Cluster-Level Prohibitions
@@ -227,9 +248,10 @@ serializer; no second serve authority; no "peer accepted" rule).
 
 ## 15. Explicit Non-Goals
 This slice MUST NOT: implement the operator-pass runbook / evidence manifest / `correlate` wiring
-(S2); claim or infer peer acceptance; wire the `Off` arm to a live feed; add a protocol version,
-feature flag, or new CLI flag; optimize performance; prepare cross-epoch production; add a second
-forge codepath or a second bootstrap; modify any BLUE crate.
+(S2); claim or infer peer acceptance; wire the `Off` arm to a live feed; **make `--peer` mandatory for
+forge-on or add a forge-on-requires-peer fatal invariant** (the empty-peer path stays forge-capable +
+halts clean); add a protocol version, feature flag, or new CLI flag; optimize performance; prepare
+cross-epoch production; add a second forge codepath or a second bootstrap; modify any BLUE crate.
 
 ## 16. Completion Checklist
 - [ ] All new state is replay-derivable (R1 test passes; no new durable state).
@@ -248,7 +270,11 @@ forge codepath or a second bootstrap; modify any BLUE crate.
   bounded.
 - **Ingress confirmed:** the upstream-peer address ingress **already exists** (`Cli.peer_addrs`,
   `--peer ADDR`, repeatable, address-only) — S1 reuses it; no new flag.
-- **Slice-entry question to resolve in implementation:** the `start_point` for `run_admission_wire_pump`
-  = the recovered tip `Point`; confirm the recovered-tip→`Point` conversion exists (do not invent one).
+- **Recovered-tip→`Point` confirmed:** `state.tip: Option<ChainTip { hash: Hash32, slot: SlotNo }>`
+  (`chaindb/types.rs:29`) → `Point::Block { slot, hash }`, else `Point::Origin`. No invention.
+- **Conditional-wiring decision (resolved during implementation, doc amended):** empty `--peer`
+  **preserves** the prior empty-source forge-capable-halts-clean contract
+  (`node_mode_with_operator_keys_warm_start_forge_capable_halts_clean`); a forge-on-requires-peer
+  fatal invariant is **out of scope** (purely additive live wiring, dial failures non-fatal per C3).
 - **Follow-up implied:** S2 (operator-pass runbook + evidence manifest + `correlate`); the live peer
   ACCEPT remains the operator-gated RO-LIVE-01 leg.
