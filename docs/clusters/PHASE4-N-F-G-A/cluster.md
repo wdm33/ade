@@ -109,17 +109,39 @@ Addresses **CE-G-A-1**. TCB: **GREEN** harness + **RED** fenced setup + consume 
 > inserts S1b** (a private-net bootstrap/anchor path or a formula remediation) **before S2–S4
 > and before any G-B/G-C work**. Flagged, not expected.
 
-### S2 — Real cardano-cli opcert/genesis ingress + derived constants *(hermetic)*
+### S2a — Current protocol parameters source *(PO-1 split, 2026-06-01; hermetic)*
+**Inserted because the S2 PO-1 entry check proved the recovered ledger carries the stale default
+`protocol_major = 2`**: `seed_to_snapshot::build_seed_ledger` (`seed_to_snapshot.rs:77-80`) =
+`LedgerState::new(Conway)` + UTxO only → `ProtocolParameters::default()`, and the bootstrap runner
+ledger (`bootstrap.rs:177`) is the same. The forge call site can *reach*
+`recovered.ledger.protocol_params` (`ForgeActivation.recovered`) but the VALUE is a default, not
+the current Conway version — so S2 cannot source a truthful `protocol_version`/`pparams` from it.
+
+S2a installs the **oracle-captured current protocol parameters** into the recovered ledger at
+seed/import time (Design A — the oracle seeds the starting state, then Ade owns it): the operator
+import bundle is extended to carry the current `ProtocolParameters` (captured from the oracle —
+cardano-cli `query protocol-parameters` — via the same `ci/build_consensus_inputs_bundle.sh`
+extraction used in S1b), and `build_seed_ledger` + the bootstrap runner ledger set
+`LedgerState.protocol_params` from it (never `default()`). Warm-start recovery preserves them; the
+forge then reads the current `protocol_major`/`protocol_minor` from the recovered view. **No
+operator runtime override, no second bootstrap (CN-NODE-01 — this EXTENDS the single seed import,
+it is not a parallel recovery), no genesis-initial, no fabrication.** Addresses **CE-G-A-2a**. TCB:
+**RED** (seed import + ledger construction) + consume **BLUE**. *(First implement-slice decision:
+carry the current pparams in the existing consensus-inputs bundle vs. a dedicated oracle-pparams
+sidecar — prefer whichever avoids changing the bundle's canonical fingerprint.)*
+> **S2 gate:** S2 may proceed only after S2a proves the recovered ledger carries current
+> pparams/protocol_version (re-run the PO-1 entry check — it must pass).
+
+### S2 — Real cardano-cli opcert/genesis ingress + derived constants *(hermetic; depends on S2a)*
 `operator_forge` loads `--opcert` via `parse_opcert_envelope` and `--genesis-file` via
 `parse_shelley_genesis`, retiring `parse_simple_opcert_json`/`parse_simple_genesis_json` **on the
-node path**; `protocol_version` + `prev_opcert_counter` derive from the loaded opcert/genesis.
-**Sharpening (verified proof obligation): `parse_shelley_genesis` does not currently output
-`protocolVersion`/`protocolParams` — S2 must EXTEND it (or a sibling) to supply them, or stop and
-split.** Full `ProtocolParameters` derive **or** a test proves empty-Conway-block header+body
-validation is invariant to the honest-scope defaults. Keeps the
-`ci_check_operator_forge_no_secret_leak.sh` no-leak property. Addresses **CE-G-A-2**. TCB:
-**RED** (`operator_forge` + reused/extended RED parsers) + consume **BLUE**. *(May split S2a
-parsers / S2b constants at slice-doc.)*
+node path**. `prev_opcert_counter` derives from the loaded opcert; `protocol_version` + `pparams`
+come from the **S2a recovered current ledger view** (NOT genesis-initial, NOT defaults).
+`parse_shelley_genesis` is extended to emit the genesis-initial `protocolVersion` as a
+**cross-check only**. An empty-Conway-block header+body validation-invariance test bounds the
+honest-scope pparams burden. Keeps the `ci_check_operator_forge_no_secret_leak.sh` no-leak
+property. Addresses **CE-G-A-2**. TCB: **RED** (`operator_forge` + reused/extended RED parsers) +
+consume **BLUE**. **Depends on S2a** (re-run PO-1; it must pass).
 
 ### S3 — Slot alignment + SlotDrift fail-closed *(hermetic)*
 The node forge slot derives via `millis_to_slot` over the **real** genesis anchor
@@ -149,13 +171,23 @@ as-is.
   comparisons are observable/derived-surface only (existing
   `ci_check_no_haskell_fingerprint_equality.sh` / DC-COMPAT-01 holds). *(gates S2–S4 + all
   G-B/G-C work.)*
+- **CE-G-A-2a** — current protocol params source (PO-1 split): the recovered ledger's
+  `protocol_params` are oracle-captured current values installed at seed/import time, never
+  `LedgerState::default()` / genesis-initial. Candidate tests:
+  `seed_import_installs_current_protocol_params` (bundle carries pparams; `build_seed_ledger` +
+  runner ledger install them, not defaults), `warm_start_recovery_preserves_protocol_params`
+  (pre-seed → recover → `protocol_params` equal the fixture), `forge_call_site_sees_current_pparams`
+  (`recovered.ledger.protocol_params` yields the expected `protocol_major`/`protocol_minor`; fails
+  on the default 2.0), `no_default_or_genesis_initial_pparams_fallback`; candidate gate
+  `ci_check_recovered_ledger_pparams_sourced.sh`. *(strengthens `DC-LEDGER-10`, `CN-NODE-01`,
+  `DC-CINPUT-02b`.)* *(gates S2.)*
 - **CE-G-A-2** — ingress fidelity: `operator_forge` calls `parse_opcert_envelope` +
   `parse_shelley_genesis` (no `parse_simple_*` on the node path — candidate gate
-  `ci_check_node_forge_real_cli_ingress.sh`); `protocol_version` + `prev_opcert_counter` derive
-  from the loaded opcert/genesis (S2 extends `parse_shelley_genesis` to emit
-  `protocolVersion`/`protocolParams`); candidate test
-  `operator_forge_empty_conway_block_invariant_to_honest_pparams` (or a derived-pparams test);
-  existing `ci_check_operator_forge_no_secret_leak.sh` still green. *(strengthens `CN-OPCERT-01`,
+  `ci_check_node_forge_real_cli_ingress.sh`); `prev_opcert_counter` derives from the loaded opcert,
+  `protocol_version` + `pparams` from the **S2a recovered current view** (S2 extends
+  `parse_shelley_genesis` to emit the genesis-initial `protocolVersion` as cross-check only);
+  candidate test `operator_forge_empty_conway_block_invariant_to_honest_pparams`; existing
+  `ci_check_operator_forge_no_secret_leak.sh` still green. *(strengthens `CN-OPCERT-01`,
   `CN-GENESIS-01`.)*
 - **CE-G-A-3** — slot alignment: candidate tests
   `node_forge_slot_via_millis_to_slot_over_real_genesis_anchor`,
@@ -191,7 +223,11 @@ as-is.
 - **Do not relax `ci_check_node_run_loop_containment.sh`** (byte-/semantically unchanged); no
   serve token in the loop body.
 - No new **BLUE authority / canonical type / WAL/checkpoint format**; no second bootstrap / no
-  Mithril call on the node path (CN-NODE-01).
+  Mithril call on the node path (CN-NODE-01). **(S2a EXTENDS the single seed import to carry
+  current pparams — it adds no parallel recovery path.)**
+- No **default (`ProtocolParameters::default()` / major 2), genesis-initial, fabricated, or
+  runtime-operator-override** value standing in for the recovered ledger's current
+  `protocol_params` / `protocol_version` (S2a sources them from the oracle import — CE-G-A-2a).
 - No **fabricated** `SeedEpochConsensusInputs`/eta0/pparams/pool_id literal; no bundle token on
   the forge path (guard d).
 - No **cross-epoch nonce roll / `EpochBoundary` promotion** on the forge path (S4 fails closed
@@ -217,9 +253,14 @@ clean HEAD).
 ## Registry impact (at close)
 `DC-EPOCH-03` already `declared` at sketch (registry 311 → 313 with `DC-NODE-06`). Promotion /
 strengthening:
-- `DC-EPOCH-03` (derived) — `declared` → **enforced** across S1–S4 (CE-G-A-1..4 green).
+- `DC-EPOCH-03` (derived) — `declared` → **enforced** across S1–S4 (CE-G-A-1, 2a, 2, 3, 4 green).
 - `CN-OPCERT-01`, `CN-GENESIS-01` — `strengthened_in += "PHASE4-N-F-G-A"` (S2: real text-envelope
   ingress wired on the node path).
+- `DC-LEDGER-10`, `CN-NODE-01`, `DC-CINPUT-02b` — `strengthened_in += "PHASE4-N-F-G-A"` (S2a: the
+  recovered ledger's `protocol_params` are oracle-captured current values installed at seed/import
+  time, never `default()`/genesis-initial; the single bootstrap is extended, not duplicated). *A
+  dedicated "recovered-ledger pparams are oracle-sourced current state" rule is a cluster-close
+  candidate if the IDD review judges the `DC-LEDGER-10` strengthening insufficient.*
 - `DC-NODE-05` — `strengthened_in += "PHASE4-N-F-G-A"` (S1/S4: recovered-surface forge
   genesis-consistency-proven + epoch-hardened).
 - `DC-NODE-03` — `strengthened_in += "PHASE4-N-F-G-A"` (S3: clock seam derives the slot from the

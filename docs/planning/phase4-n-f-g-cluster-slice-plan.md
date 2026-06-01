@@ -64,11 +64,18 @@
     fixture**'s genesis-derived view, BEFORE any live forge; the operator private-net setup
     path is fenced + reuses existing extraction authorities (no new bootstrap authority —
     CN-NODE-01 intact).
+  - **CE-G-A-2a (current protocol params source — PO-1 split)** — the recovered ledger's
+    `protocol_params` are **oracle-captured current values installed at seed/import time**, never
+    `LedgerState::default()` (major 2) and never genesis-initial; tests prove the import bundle
+    carries current pparams + `build_seed_ledger`/runner-ledger install them, warm-start recovery
+    preserves them, the forge call site sees the expected current `protocol_major`/`protocol_minor`
+    (failing on the old default 2.0), and there is no operator runtime override / genesis-initial /
+    default fallback. Single bootstrap (CN-NODE-01), oracle-sourced, replay-faithful. *(gates S2.)*
   - **CE-G-A-2 (ingress fidelity — G1/G2/G4)** — the operator-forge ingress loads the real
     cardano-cli `node.opcert` text-envelope (`parse_opcert_envelope`) + `shelley-genesis.json`
-    (`parse_shelley_genesis`), retiring the simple-JSON forms on the node path;
-    `protocol_version` / `ProtocolParameters` / `prev_opcert_counter` derive from the loaded
-    genesis/opcert, not defaults.
+    (`parse_shelley_genesis`), retiring the simple-JSON forms on the node path; `prev_opcert_counter`
+    derives from the loaded opcert, `protocol_version` / `ProtocolParameters` from the **S2a
+    recovered current view** (not defaults, not genesis-initial).
   - **CE-G-A-3 (slot alignment — G7)** — the forge slot tracks the peer's live wall-clock
     slot via the genesis `slot_zero_time + slot_length` pure map at the single RED `Clock`
     seam; `SlotDrift` fails closed (not swallowed); same (genesis, millis) → same `SlotNo`.
@@ -87,12 +94,23 @@
     > genesis-consistent for the private fixture, **G-A stops and inserts S1b** (a private-net
     > bootstrap/anchor slice) **before any serve/live work** in G-B/G-C. Flagged, not expected
     > (the sketch hypothesis is that WarmStart-from-operator-pre-seeded-store suffices).
+  - **S2a — Current protocol parameters source (PO-1 split, 2026-06-01)** — invariant: the
+    recovered ledger's `protocol_params` (and thus current `protocol_version` =
+    `protocol_major`/`protocol_minor`) are the **oracle-captured current values installed at
+    seed/import time**, NEVER `LedgerState::default()` (major 2) and NEVER genesis-initial. Design
+    A: capture current pparams from the oracle into the operator import bundle and install them
+    into the recovered ledger (`build_seed_ledger` + the bootstrap runner ledger `bootstrap.rs:177`),
+    so the recovered current view is a truthful source — addresses: **CE-G-A-2a** — TCB: **RED**
+    (seed import + ledger construction) + consume **BLUE**. *(Inserted because the S2 PO-1 entry
+    check proved the recovered ledger carried the stale default major 2 — `build_seed_ledger` =
+    `LedgerState::new(Conway)` + UTxO only. S2 is blocked on S2a.)*
   - **S2 — Real opcert/genesis ingress + derived constants** — invariant: the operator-forge
     ingress loads the real `node.opcert` envelope + `shelley-genesis.json` via the dormant
-    parsers (retire simple-JSON on the node path); `protocol_version` / `pparams` /
-    `prev_opcert_counter` derive from them — addresses: **CE-G-A-2** — TCB: **RED**
-    (`operator_forge`) + consume **BLUE**. *(May split S2a parsers / S2b constants at
-    cluster-doc.)*
+    parsers (retire simple-JSON on the node path); `prev_opcert_counter` derives from the loaded
+    opcert, `protocol_version` / `pparams` from the **S2a recovered current view** — addresses:
+    **CE-G-A-2** — TCB: **RED** (`operator_forge`) + consume **BLUE**. **Depends on S2a:** may
+    proceed only after S2a proves the recovered ledger carries current pparams/protocol_version
+    (re-run the PO-1 entry check — it must pass).
   - **S3 — Slot alignment to live wall-clock + SlotDrift fail-closed** — invariant: the forge
     slot tracks the peer's live slot via the genesis slot map at the `Clock` seam; `SlotDrift`
     fails closed — addresses: **CE-G-A-3** — TCB: **RED** (clock seam) + **GREEN/BLUE** (pure
@@ -109,9 +127,11 @@
 - **FC/IS partition:** BLUE consumed-unchanged (456 canonical types expected unchanged);
   GREEN gains the pinning harness + slot map; RED gains the real-parser ingress + derived
   constants + fenced setup. No BLUE→RED edge.
-- **Close point:** G-A closes when CE-G-A-1..4 are green in CI. DC-EPOCH-03 flips
-  `declared→enforced`; `strengthened_in += "PHASE4-N-F-G-A"` on CN-OPCERT-01, CN-GENESIS-01,
-  DC-NODE-05.
+- **Close point:** G-A closes when CE-G-A-1, CE-G-A-2a, CE-G-A-2, CE-G-A-3, CE-G-A-4 are green in
+  CI. DC-EPOCH-03 flips `declared→enforced`; `strengthened_in += "PHASE4-N-F-G-A"` on CN-OPCERT-01,
+  CN-GENESIS-01, DC-NODE-05, and (S2a) DC-LEDGER-10 + CN-NODE-01 + DC-CINPUT-02b (current-pparams
+  source faithfulness; a dedicated source-of-current-ledger-state rule is a cluster-close candidate
+  if the strengthening is judged insufficient).
 
 ---
 
