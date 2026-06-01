@@ -2530,7 +2530,7 @@ tests = ["self_accept_accepts_freshly_forged_block", "self_accept_rejects_corrup
 ci_script = "ci/ci_check_self_accept_gate.sh, ci/ci_check_served_chain_closure.sh, ci/ci_check_admitted_block_closure.sh, ci/ci_check_receive_reducer_closure.sh"
 status = "enforced"
 introduced_in = "PHASE4-N-C"
-strengthened_in = ["PHASE4-N-G", "PHASE4-N-H"]
+strengthened_in = ["PHASE4-N-G", "PHASE4-N-H", "PHASE4-N-F-G-B"]
 attack_rationale = "Prevents Ade from broadcasting blocks its own validator would reject — eliminates producer/validator drift as a release failure mode. PHASE4-N-G strengthening: prevents the network seam from being an end-run around the gate; bytes that reach the wire must trace through AcceptedBlock -> ServedChainSnapshot. PHASE4-N-H strengthening: prevents the receive seam from being an end-run; bytes that reach ChainDb via the receive path must trace through AdmittedBlock (the mirror token) — same block_validity authority, two separate gate tokens (AcceptedBlock for broadcast, AdmittedBlock for admission)."
 evidence_notes = "Cardano-specific only in that the validators it wraps are Ade's Cardano-block validators (PHASE4-N-B + PHASE4-B1). The bridge pattern is general: producer authority must agree with validator authority before bytes leave BLUE. N-G S2 extends the bridge into the producer-side server pump's read path. N-H S1/S2 establishes the receive-side mirror: AdmittedBlock private-constructor token consumed by ChainDbWrite. The producer + receive gates are deliberately separate types so cross-use is mechanically impossible (¬P-6)."
 
@@ -4786,7 +4786,7 @@ tests = ["broadcast_pushes_self_accepted_block_to_served", "broadcast_rejects_no
 ci_script = ""
 status = "enforced"
 introduced_in = "PHASE4-N-T"
-strengthened_in = []
+strengthened_in = ["PHASE4-N-F-G-B"]
 cluster = "PHASE4-N-T"
 attack_rationale = "Cardano-specific: serving a block that failed self-accept (or silently dropping a forged block) would either propagate an invalid block to peers or advertise a chain the producer cannot actually serve. Gating push_atomic behind the self_accept replay and fail-closing on rejection makes 'served but not self-accepted' unrepresentable."
 evidence_notes = "S4 test broadcast_rejects_non_self_accepted_block (rejection -> no push, BroadcastPushError::SelfAcceptReplayRejected); S5 loopback test produce_forge_to_served_block_fetch_roundtrip (served block readable byte-identically via block-fetch). BlockServed is the existing closed ProducerLogEvent variant (producer_log.rs:154), emitted only for present blocks."
@@ -5420,11 +5420,11 @@ wire-success signal (RO-LIVE-06).
 source = "docs/planning/phase4-n-f-g-invariants.md"
 cross_ref = ["CN-PROD-04", "CN-CONS-07", "CN-NODE-02", "DC-NODE-05", "DC-EPOCH-03", "CN-WIRE-08", "RO-LIVE-01", "RO-LIVE-06"]
 code_locus = "crates/ade_node/src/node_lifecycle.rs, crates/ade_node/src/node_sync.rs, crates/ade_ledger/src/producer/served_chain.rs, crates/ade_runtime/src/producer/served_chain_handle.rs"
-tests = []
-ci_script = ""
+tests = ["handoff_carrier_constructs_only_from_self_accepted_forge", "forge_surfaces_accepted_block_only_on_self_accept", "handoff_carrier_has_no_raw_bytes_constructor", "serve_ingress_type_rejects_failed_forge_outcome", "sibling_serve_admits_via_push_atomic_only", "serve_sibling_admission_replay_byte_identical", "serve_sibling_push_atomic_fed_only_by_into_accepted", "relay_loop_containment_semantics_unchanged_with_serve_sibling", "block_fetch_payload_is_self_accepted_bytes", "block_fetch_tag24_round_trips_to_self_accept_input"]
+ci_script = "ci/ci_check_served_chain_handoff_fence.sh, ci/ci_check_node_run_loop_containment.sh"
 introduced_in = "PHASE4-N-F-G-B"
 strengthened_in = []
-status = "declared"
+status = "enforced"
 evidence_notes = """
 PHASE4-N-F-G invariant sketch (/invariants gate). Declared at sketch; tests +
 ci_script populate at slice time, flip to enforced at close. Shape B (sibling serve
@@ -5432,6 +5432,20 @@ task) resolved with the user: do NOT extend the relay-loop ForgeTick branch to
 admit/serve directly. The node-spine analog of CN-PROD-04 (produce_mode's
 broadcast bridge): only self-accepted forged artifacts reach push_atomic. Operator
 peer ACCEPT stays operator-gated (RO-LIVE-01 partial / blocked_until_operator_stake_available).
+
+Enforced at PHASE4-N-F-G-B close (HEAD 339cccb1): S1 GREEN SelfAcceptedHandoff carrier
+(sole ctor from_self_accepted over the BLUE AcceptedBlock; run_real_forge surfaces the
+token via a sibling return component -- NO new CoordinatorEvent variant); S2
+dispatcher-spawned sibling admit task drains a typed mpsc<SelfAcceptedHandoff> and admits
+via the single ServedChainHandle::push_atomic fed ONLY by into_accepted() (the relay loop
+holds no ServedChainHandle / push_atomic; containment gate byte-unchanged); S3 hermetic
+loopback proves the served block-fetch payload tag-24-unwraps to the self-accept input
+bytes + adds ci_check_served_chain_handoff_fence.sh. Per-cluster IDD + security reviews
+both CLEAN (no BLOCK). 2 IDD WARN carried to G-C: the handoff-fence gate is file-scoped to
+node_lifecycle.rs and its deny-list is non-exhaustive (the positive <SelfAcceptedHandoff>
+check is load-bearing) -- revisit when the serve path moves to live wiring. NO BLUE change.
+No real socket/peer wired (hermetic loopback only; live serve + operator peer ACCEPT = G-C;
+RO-LIVE-01/06 stay partial).
 """
 
 [[rules]]
