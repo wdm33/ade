@@ -55,11 +55,17 @@ use ade_runtime::producer::coordinator::CoordinatorEvent;
 use ade_runtime::producer::producer_log::ForgeFailureReason;
 use ade_runtime::producer::producer_shell::ProducerShell;
 use ade_types::shelley::block::{OperationalCert, ProtocolVersion};
-use ade_types::{BlockNo, CardanoEra, EpochNo, Hash28, Hash32};
+use ade_types::{BlockNo, CardanoEra, EpochNo, Hash28, Hash32, SlotNo};
 
+use ade_network::block_fetch::server::{
+    producer_block_fetch_serve, BlockFetchServerStep, ProducerBlockFetchServerState,
+};
+use ade_network::codec::block_fetch::{decompose_blockfetch_block, BlockFetchMessage, Point, Range};
+use ade_network::codec::version::BlockFetchVersion;
 use ade_node::produce_mode::{run_real_forge, ForgeRequestContext};
 use ade_runtime::producer::self_accepted_handoff::SelfAcceptedHandoff;
-use ade_runtime::producer::served_chain_handle::ServedChainHandle;
+use ade_runtime::producer::served_chain_handle::{ServedChainHandle, ServedChainView};
+use ade_runtime::producer::served_chain_lookups::ServedChainLookups;
 
 // =========================================================================
 // Synthetic-corpus helpers (mirror forge_handler_variants::synth_shell)
@@ -452,4 +458,95 @@ fn tpraos_producer_forge_fails_closed_with_unsupported_era() {
         }
         other => panic!("expected ForgeFailed {{ UnsupportedProducerEra }}, got {:?}", other),
     }
+}
+
+// =========================================================================
+// PHASE4-N-F-G-C S1 — live-feed forge → serve → in-process block-fetch (CE-G-C-1)
+// =========================================================================
+
+/// Serve a single `(slot, hash)` over a node-spine `ServedChainView` via the
+/// reused block-fetch reducer + `ServedChainLookups`, returning the `MsgBlock`
+/// wire payload (tag-24 wrapped). Hermetic: drives `producer_block_fetch_serve`
+/// directly — no real listener / socket / peer (that is the operator-gated leg).
+/// Mirrors `produce_loopback::serve_block_fetch_payload`; replicated here
+/// because each `tests/*.rs` is its own crate. It composes the PUBLIC serve API,
+/// not a reimplementation of any wire authority.
+fn serve_block_fetch_payload(view: &ServedChainView, slot: SlotNo, hash: Hash32) -> Vec<u8> {
+    let snap = view.borrow();
+    let look = ServedChainLookups { snap: &snap };
+    let range = Range {
+        from: Point::Block {
+            slot,
+            hash: hash.clone(),
+        },
+        to: Point::Block { slot, hash },
+    };
+    let (_state, step) = producer_block_fetch_serve(
+        ProducerBlockFetchServerState::new(),
+        BlockFetchMessage::RequestRange(range),
+        &look,
+        BlockFetchVersion::new(9),
+    )
+    .expect("serve");
+    match step {
+        BlockFetchServerStep::Replies(replies) => replies
+            .into_iter()
+            .find_map(|r| match r.into_message() {
+                BlockFetchMessage::Block { bytes } => Some(bytes),
+                _ => None,
+            })
+            .expect("a Block reply for the served range"),
+        other => panic!("expected Replies, got {other:?}"),
+    }
+}
+
+/// PHASE4-N-F-G-C S1 (CE-G-C-1): the FORGE-derived self-accepted block is served
+/// byte-identically over block-fetch. A consistent eligible-leader tick forges a
+/// real Conway/Praos block (`ForgeSucceeded`); the surfaced BLUE self-accepted
+/// token is wrapped in the S1 `SelfAcceptedHandoff` (as the node spine does) and
+/// admitted ONLY via `into_accepted()` → the single `ServedChainHandle::push_atomic`;
+/// an in-process block-fetch loopback over the served view returns a `MsgBlock`
+/// whose tag-24-unwrapped payload is the FORGED block bytes byte-for-byte.
+///
+/// This closes the serve leg of CE-G-C-1's `… → forge → self-accept →
+/// sibling-serve → in-process block-fetch …` chain for a FORGE-derived block
+/// (the G-B S3 `block_fetch_payload_is_self_accepted_bytes` proof used a
+/// corpus-derived block; this uses the real forge output). The feed → ForgeTick
+/// reachability leg is `node_sync::tests::live_wire_pump_feed_reaches_forge_tick`;
+/// the live dial/pump are proven in `ade_runtime` wire_pump tests. NO peer
+/// acceptance is claimed — that is operator-gated (RO-LIVE-01/06).
+#[test]
+fn live_feed_forge_serve_loopback_returns_forged_block() {
+    let epoch = EpochNo(0);
+    let slot = 1u64;
+
+    let mut shell = synth_shell(0x77, 0x88, 0x99);
+    let fixture = EligibleFixture::build(&shell, slot, epoch);
+    let ctx = fixture.ctx();
+
+    let (event, handoff_token) = run_real_forge(slot, /* kes_period = */ 0, &ctx, &mut shell);
+    let forged_bytes = match event {
+        CoordinatorEvent::ForgeSucceeded { slot: s, artifact } => {
+            assert_eq!(s, slot, "ForgeSucceeded preserves the slot");
+            artifact.bytes
+        }
+        other => panic!("expected ForgeSucceeded, got {:?}", other),
+    };
+    let accepted = handoff_token.expect("ForgeSucceeded surfaces the BLUE self-accepted token");
+
+    // Node-spine admit: ONLY via the S1 carrier's into_accepted() → push_atomic.
+    let handoff = SelfAcceptedHandoff::from_self_accepted(accepted);
+    let (handle, view) = ServedChainHandle::new();
+    let tip = handle
+        .push_atomic(handoff.into_accepted())
+        .expect("node-spine admit via into_accepted()");
+
+    // In-process block-fetch over the served view → MsgBlock (tag-24).
+    let payload = serve_block_fetch_payload(&view, tip.slot, tip.hash.clone());
+    let inner = decompose_blockfetch_block(&payload).expect("served payload is tag24-wrapped");
+    assert_eq!(
+        inner,
+        &forged_bytes[..],
+        "served block-fetch payload (tag24-unwrapped) is the FORGED self-accept bytes"
+    );
 }

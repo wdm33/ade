@@ -11,10 +11,10 @@ Live WirePump feed wiring + hermetic loopback forge→serve proof.
 **PHASE4-N-F-G-C** — Live feed + operator-gated evidence (RO-LIVE-01, mechanical half).
 
 ### Status
-Proposed.
+Ready for Review (all §12 mechanical acceptance green; `ade_node` + `ade_runtime` suites + both gates pass).
 
 ### Cluster Exit Criteria Addressed
-- [ ] **CE-G-C-1 (live feed wiring + hermetic e2e — MECHANICAL, closeable)** — the binary consumes a
+- [x] **CE-G-C-1 (live feed wiring + hermetic e2e — MECHANICAL, closeable)** — the binary consumes a
   live peer feed wired as `NodeBlockSource::from_wire_pump`; with a Continuing feed `LoopStep::ForgeTick`
   is reachable in the live-wired `--mode node` path; `NodeBlockSource` stays the closed 2-variant
   verdict-decoupled contract; the durable tip advances ONLY via `run_node_sync → pump_block`; a
@@ -176,11 +176,13 @@ loopback pump.
   `Off` arm is untouched.
 
 ## 11. Replay, Crash, and Epoch Validation
-- **Replay tests added:** `live_feed_forge_sequence_replay_byte_identical` (R1) — a captured ordered
-  feed of `AdmissionPeerEvent::Block` bytes + the recovered checkpoint/WAL + the injected clock
-  sequence replays to a **byte-identical post-state AND byte-identical forge sequence** across two
-  runs (extends the `DC-NODE-05`/N-F-E replay clause to the live-wired feed: the live wire is the
-  nondeterministic source; once captured as canonical ordered bytes, replay reproduces).
+- **Replay (R1) — satisfied by the EXISTING `node_sync::tests::relay_loop_forge_two_runs_byte_identical`
+  (CE-E-6).** That test is already a two-run forge replay over a `NodeBlockSource::from_wire_pump`
+  (live-source-shaped) feed, proving byte-identical tip + WAL + checkpoints + forge-attempt sequence
+  (incl. forged bytes). S1 adds **no new authoritative state** and the live wire is confined to the
+  RED content-blind `WirePump` lookahead (only canonical `SlotNo` + block bytes cross into BLUE/GREEN),
+  so R1 holds unchanged for the live-wired source — no redundant new test is introduced.
+  Populated-feed post-state replay over real blocks is covered by `tests/admission_replay_equivalence.rs`.
 - **Crash/restart behavior:** unchanged — durable state advances only via `run_node_sync →
   pump_block`; a dial/pump failure fails the lifecycle closed and recovery re-runs warm-start
   (`CN-NODE-01` intact). No new durable state to recover.
@@ -191,21 +193,30 @@ loopback pump.
 This slice is complete only when **all** of the following exist and pass in CI (hermetic — no Docker,
 no live peer):
 
-- [ ] `live_wire_pump_feed_reaches_forge_tick` — the `On`-arm relay loop fed by a loopback admission
-  pump (Continuing feed) reaches `LoopStep::ForgeTick` (unreachable on the empty source).
-- [ ] `node_block_source_stays_closed_two_variant` — `NodeBlockSource` has exactly `{WirePump,
-  InMemory}` (exhaustiveness / no-wildcard assertion); the live source is a `WirePump` fill, not a
+- [x] `node_sync::tests::live_wire_pump_feed_reaches_forge_tick` — a Continuing `WirePump` feed makes
+  the relay loop reach `LoopStep::ForgeTick` (forge attempted); the empty `InMemory` source halts
+  before any `ForgeTick` (the live-vs-empty contrast isolates the live-feed effect).
+- [x] `node_sync::tests::node_block_source_stays_closed_two_variant` — `NodeBlockSource` has exactly
+  `{WirePump, InMemory}` (exhaustive no-wildcard match); the live source is a `WirePump` fill, not a
   new variant.
-- [ ] `live_feed_forge_serve_loopback_returns_forged_block` — full hermetic e2e: loopback feed →
-  forge → self-accept → sibling `push_atomic` → **in-process block-fetch loopback over the served
-  view returns the forged block payload** (tag-24 round-trips to the self-accept input).
-- [ ] `live_feed_forge_sequence_replay_byte_identical` — R1 replay-equivalence across two runs.
-- [ ] `ci_check_served_chain_handoff_fence.sh` — **broadened** (node-spine-wide file scope; guard-3
-  allow-list `UnboundedSender<SelfAcceptedHandoff>`) and **green**.
-- [ ] `ci_check_node_run_loop_containment.sh` — **byte-/semantically unchanged and green** (no
+- [x] `node_lifecycle::tests::spawn_live_wire_pump_source_with_no_usable_peer_yields_ended_feed` — the
+  live-wire helper is fail-soft (C3): empty `--peer` / an unparseable addr yields an ended feed (the
+  relay loop halts clean) — never fatal, never a fabricated address, never a graft.
+- [x] `tests/forge_succeeds.rs::live_feed_forge_serve_loopback_returns_forged_block` — hermetic e2e
+  serve leg: a FORGE-derived self-accepted block → S1 handoff → single `push_atomic` → **in-process
+  block-fetch loopback over the served view returns the forged block payload** (tag-24 unwraps to the
+  forged bytes). (The feed→ForgeTick leg is `live_wire_pump_feed_reaches_forge_tick`; the dial/pump
+  are proven in `ade_runtime` wire_pump tests.)
+- [x] **R1 replay** — the existing `node_sync::tests::relay_loop_forge_two_runs_byte_identical`
+  (CE-E-6, a `from_wire_pump` two-run forge replay) + `tests/admission_replay_equivalence.rs`; S1 adds
+  no new authoritative state (see §11). No redundant new test.
+- [x] `ci_check_served_chain_handoff_fence.sh` — **broadened** (node-spine owner set
+  `{node_lifecycle.rs, node_sync.rs}`; guard-3 allow-list: every node-spine unbounded handoff channel
+  MUST be `<SelfAcceptedHandoff>`) and **green**.
+- [x] `ci_check_node_run_loop_containment.sh` — **byte-/semantically unchanged and green** (no
   serve/admit/`push_atomic`/second-tip token added to the relay-loop body).
-- [ ] `cargo test -p ade_node -p ade_runtime` green (scoped to touched crates per the project's
-  selective-acceptance discipline).
+- [x] `cargo test -p ade_node -p ade_runtime` green (scoped to touched crates per the project's
+  selective-acceptance discipline; `ade_testkit` corpus lane excluded — pre-existing timeout).
 
 ### Operator smoke (optional; non-blocking; NOT a slice-completion criterion)
 A bounded docker/preprod smoke against the local `cardano-node-preprod` peer validates the live dial +

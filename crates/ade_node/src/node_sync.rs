@@ -2006,6 +2006,104 @@ mod tests {
         );
     }
 
+    // ===== PHASE4-N-F-G-C S1: live WirePump feed wiring (CE-G-C-1) =========
+
+    /// PHASE4-N-F-G-C S1: the live feed is a *fill* of the closed 2-variant
+    /// `NodeBlockSource` (`WirePump` | `InMemory`), NOT a new plugin point. An
+    /// exhaustive match with NO wildcard arm pins the closure — adding a third
+    /// variant (an alternative live source) would fail to compile here.
+    #[tokio::test]
+    async fn node_block_source_stays_closed_two_variant() {
+        fn classify(s: &NodeBlockSource) -> &'static str {
+            match s {
+                NodeBlockSource::WirePump { .. } => "wire_pump",
+                NodeBlockSource::InMemory(_) => "in_memory",
+            }
+        }
+        let (_tx, rx) = mpsc::channel::<AdmissionPeerEvent>(1);
+        assert_eq!(classify(&NodeBlockSource::from_wire_pump(rx)), "wire_pump");
+        assert_eq!(classify(&NodeBlockSource::in_memory(vec![])), "in_memory");
+    }
+
+    /// PHASE4-N-F-G-C S1: a LIVE (Continuing) `WirePump` feed makes
+    /// `LoopStep::ForgeTick` reachable in the relay loop — the empty `InMemory`
+    /// source halts before any `ForgeTick`. Same recovered base / keys / clock /
+    /// schedule; the ONLY difference is the source liveness, so the contrast
+    /// isolates exactly the live-feed effect. Forge stays subordinate to the
+    /// feed (CN-NODE-02 / DC-NODE-05): a due slot forges ONLY because the feed
+    /// is Continuing. (This is the consume-side proof that the G-C live wiring
+    /// makes the forge observable; peer ACCEPT is NOT claimed — RO-LIVE-01/06.)
+    #[tokio::test]
+    async fn live_wire_pump_feed_reaches_forge_tick() {
+        // Returns the fenced forge-attempt outcomes captured by the activation.
+        async fn forge_outcomes_for(source_is_live: bool) -> Vec<CoordinatorEvent> {
+            let dir = TempDir::new().unwrap();
+            let chaindb = PersistentChainDb::open(PersistentChainDbOptions::at(
+                dir.path().join("chain.db"),
+            ))
+            .unwrap();
+            let mut wal = FileWalStore::open(dir.path().join("wal")).unwrap();
+            let mut state = fresh_state([0xCE; 32]);
+            let sched = l5_era_schedule();
+            let recovered = l5_recovered_state(Some(l5_recovered_inputs()));
+            let coordinator = s2_coordinator_state();
+            let mut shell = l5_synth_shell(0x11, 0x22, 0x33);
+            let view = s2_idle_view();
+            let mut clock = DeterministicClock::new(0, vec![100_000, 200_000, 300_000]);
+            let mut act = ForgeActivation::new(
+                &mut clock,
+                &coordinator,
+                &recovered,
+                &mut shell,
+                L5_POOL,
+                ProtocolParameters::default(),
+                ProtocolVersion { major: 9, minor: 0 },
+                0,
+                SlotNo(0),
+                1_000,
+            );
+            // Keep the sender alive ONLY in the live case (Continuing feed); the
+            // empty in_memory source is `is_ended` and halts before any ForgeTick.
+            let _keepalive;
+            let mut source = if source_is_live {
+                let (tx, rx) = mpsc::channel::<AdmissionPeerEvent>(4);
+                _keepalive = Some(tx);
+                NodeBlockSource::from_wire_pump(rx)
+            } else {
+                _keepalive = None;
+                NodeBlockSource::in_memory(Vec::new())
+            };
+            let (sd_tx, mut sd_rx) = watch::channel(false);
+            let loop_fut = run_relay_loop(
+                &mut state,
+                &mut source,
+                &chaindb,
+                &mut wal,
+                &sched,
+                &view,
+                &mut sd_rx,
+                Some(&mut act),
+            );
+            let driver = async {
+                let _ = sd_tx.send(true);
+            };
+            let (loop_res, _) = tokio::join!(loop_fut, driver);
+            loop_res.expect("relay loop halts cleanly");
+            act.hermetic_forge_outcomes.clone()
+        }
+
+        let live = forge_outcomes_for(true).await;
+        let empty = forge_outcomes_for(false).await;
+        assert!(
+            !live.is_empty(),
+            "a Continuing WirePump feed must make ForgeTick reachable (forge attempted)"
+        );
+        assert!(
+            empty.is_empty(),
+            "the empty in_memory source must halt before any ForgeTick (no forge attempted)"
+        );
+    }
+
     // ===== S3b: single-epoch / KES fail-closed containment (CE-E-7) =====
 
     /// A coordinator whose KES key is exhausted at one period: `kes_max_period

@@ -58,7 +58,10 @@ use ade_ledger::wal::{replay_from_anchor, WalStore};
 use ade_runtime::bootstrap::{
     bootstrap_initial_state, BootstrapInputs, BootstrapState, SeedEpochConsensusSource,
 };
-use ade_runtime::chaindb::{ChainDb, PersistentChainDb, PersistentChainDbOptions, SnapshotStore};
+use ade_runtime::admission::{dial_for_admission, run_admission_wire_pump, AdmissionPeerEvent};
+use ade_runtime::chaindb::{
+    ChainDb, ChainTip, PersistentChainDb, PersistentChainDbOptions, SnapshotStore,
+};
 use ade_runtime::consensus_inputs::{import_live_consensus_inputs, LiveConsensusInputsCanonical};
 use ade_runtime::mithril_bootstrap::{bootstrap_from_mithril_snapshot, MithrilSeedPointInputs};
 use ade_runtime::mithril_import::import_mithril_manifest_from_bytes;
@@ -81,6 +84,7 @@ use ade_runtime::producer::self_accepted_handoff::SelfAcceptedHandoff;
 use ade_runtime::producer::served_chain_handle::ServedChainHandle;
 use ade_runtime::rollback::SnapshotCadence;
 
+use crate::admission::bootstrap::build_n2n_version_table;
 use crate::cli::Cli;
 use crate::forge_intent::{classify_forge_intent, ForgeIntent};
 use crate::node_sync::{forge_one_from_recovered, run_node_sync, NodeBlockSource};
@@ -438,7 +442,22 @@ async fn run_node_lifecycle_inner(
                 Hash32([0u8; 32]),
                 SnapshotCadence::DEFAULT,
             );
-            let mut source = NodeBlockSource::in_memory(Vec::new());
+            // PHASE4-N-F-G-C S1: wire a LIVE WirePump feed when an upstream peer
+            // is configured (`--peer`). Empty `--peer` keeps the prior empty
+            // source (forge-CAPABLE, halts clean — the `On` arm is observable
+            // only once a live feed is wired, RO-LIVE-01). The live source is a
+            // *fill* of the closed `NodeBlockSource::WirePump` arm — no new
+            // variant, no second tip-advance, no verdict; dial / parse failures
+            // are logged-and-dropped (admission honest-scope C3), never fatal.
+            let live_feed_wired = !cli.peer_addrs.is_empty();
+            let mut source = if live_feed_wired {
+                let network_magic = cli
+                    .network_magic
+                    .ok_or(NodeLifecycleError::MissingFlag("--network-magic"))?;
+                spawn_live_wire_pump_source(&cli.peer_addrs, network_magic, state.tip.as_ref())
+            } else {
+                NodeBlockSource::in_memory(Vec::new())
+            };
             // The injected clock is the SOLE wall-clock observation (DC-NODE-03).
             let mut clock = SystemClock::new(slot_length_ms);
             // S2: protocol_version + pparams come from the recovered ledger's
@@ -493,21 +512,103 @@ async fn run_node_lifecycle_inner(
             // admit task drains any remaining handoffs and exits; then join it.
             drop(activation);
             let _ = serve_task.await;
-            // Honest record: forge-CAPABLE, not observable. With the empty source
-            // the loop halts before any ForgeTick (forge subordinate to feed);
-            // observable forge needs a live/continuing feed (RO-LIVE-01 follow-on).
-            // NO serve / admit / gossip / durable-tip / BA-02 / RO-LIVE claim.
-            eprintln!(
-                "ade_node --mode node: relay run loop entered and halted cleanly \
-                 (recovered/bootstrapped epoch={epoch:?}, tip slot={tip_slot:?}; \
-                 forge CAPABLE — operator keys loaded — but NOT observable: no \
-                 live feed wired this cluster, the empty source halts before any \
-                 ForgeTick (RO-LIVE-01 follow-on). NO block served / admitted / \
-                 gossiped; NO durable tip advanced."
-            );
+            // Honest record. PHASE4-N-F-G-C S1: with a LIVE feed wired (`--peer`)
+            // the forge is observable when the feed is Continuing and a due
+            // leader slot is reached; peer ACCEPT is NOT claimed here — it is
+            // operator-gated (RO-LIVE-01/06), proven only by the peer's
+            // validation log. With NO `--peer` the empty source halts before any
+            // ForgeTick (forge-CAPABLE, not observable — RO-LIVE-01 follow-on).
+            // Either way: NO peer-acceptance / BA-02 claim.
+            if live_feed_wired {
+                eprintln!(
+                    "ade_node --mode node: relay run loop exited \
+                     (recovered/bootstrapped epoch={epoch:?}, tip slot={tip_slot:?}; \
+                     forge CAPABLE — operator keys loaded — LIVE WirePump feed wired \
+                     to {peers:?}: forge is observable when the feed is Continuing and \
+                     a due leader slot is reached. Peer ACCEPT is NOT claimed — it is \
+                     operator-gated (RO-LIVE-01/06), proven only by the peer's \
+                     validation log. NO peer-acceptance / BA-02 claim.",
+                    peers = cli.peer_addrs
+                );
+            } else {
+                eprintln!(
+                    "ade_node --mode node: relay run loop entered and halted cleanly \
+                     (recovered/bootstrapped epoch={epoch:?}, tip slot={tip_slot:?}; \
+                     forge CAPABLE — operator keys loaded — but NOT observable: no \
+                     --peer supplied, the empty source halts before any ForgeTick \
+                     (RO-LIVE-01 follow-on). NO block served / admitted / gossiped; \
+                     NO durable tip advanced."
+                );
+            }
         }
     }
     Ok(())
+}
+
+/// PHASE4-N-F-G-C S1: capacity of the live WirePump feed channel (bounded;
+/// mirrors the admission-bootstrap precedent). The `WirePump` lookahead drains
+/// it via `next_block`; back-pressure is bounded.
+const LIVE_WIRE_PUMP_CHANNEL_CAP: usize = 64;
+
+/// PHASE4-N-F-G-C S1: build a LIVE [`NodeBlockSource::WirePump`] from the
+/// operator-supplied upstream peer(s). This is **RED wiring only** — it reuses
+/// the closed admission dial + pump (`dial_for_admission` +
+/// `run_admission_wire_pump`) VERBATIM (no reimplementation, no new wire
+/// authority) and feeds their `ade_runtime::admission::AdmissionPeerEvent`
+/// output DIRECTLY into the `WirePump` arm (the node spine consumes the runtime
+/// event type — no bridge). The live source is a *fill* of the closed 2-variant
+/// [`NodeBlockSource`] (no new variant), adds no second tip-advance path, and
+/// carries no verdict.
+///
+/// Honest-scope (C3, mirrors `admission::bootstrap::spawn_wire_pumps_for_admission`):
+/// an unparseable `--peer` addr or a `dial_for_admission` failure is
+/// logged-and-dropped — never fatal, never a fabricated address, never a silent
+/// tip graft. If no peer yields a live pump, the feed ends and the relay loop
+/// halts clean (the same outcome as the empty source).
+fn spawn_live_wire_pump_source(
+    peer_addrs: &[String],
+    network_magic: u32,
+    recovered_tip: Option<&ChainTip>,
+) -> NodeBlockSource {
+    let our_versions = build_n2n_version_table(network_magic);
+    let start_point = match recovered_tip {
+        Some(t) => ade_network::codec::chain_sync::Point::Block {
+            slot: t.slot,
+            hash: t.hash.clone(),
+        },
+        None => ade_network::codec::chain_sync::Point::Origin,
+    };
+    let (events_tx, events_rx) = mpsc::channel::<AdmissionPeerEvent>(LIVE_WIRE_PUMP_CHANNEL_CAP);
+    for raw_addr in peer_addrs {
+        let addr: std::net::SocketAddr = match raw_addr.parse() {
+            Ok(a) => a,
+            Err(_) => {
+                eprintln!("ade_node --mode node: skipping unparseable --peer addr {raw_addr}");
+                continue;
+            }
+        };
+        let pump_versions = our_versions.clone();
+        let pump_tx = events_tx.clone();
+        let start = start_point.clone();
+        let label = raw_addr.clone();
+        tokio::spawn(async move {
+            let (transport, version) = match dial_for_admission(addr, pump_versions).await {
+                Ok(pair) => pair,
+                Err(e) => {
+                    eprintln!("ade_node --mode node: dial-for-admission failed for {label}: {e:?}");
+                    return;
+                }
+            };
+            let _ =
+                run_admission_wire_pump(transport, label, start, version, network_magic, pump_tx)
+                    .await;
+        });
+    }
+    // Drop the builder's own sender: the spawned tasks hold their own clones, so
+    // the channel stays open while any pump runs and closes once they all end
+    // (or immediately if no `--peer` parsed → feed ends → loop halts clean).
+    drop(events_tx);
+    NodeBlockSource::from_wire_pump(events_rx)
 }
 
 /// The RED relay run loop (PHASE4-N-F-D S2). Both `--mode node` lifecycle
@@ -1264,6 +1365,36 @@ mod tests {
         assert_eq!(out_pv, ProtocolVersion { major: 9, minor: 1 });
         assert_eq!(out_pp.protocol_major, 9);
         assert_ne!(out_pv.major, 2, "must not be the stale default protocol_major");
+    }
+
+    // ===== PHASE4-N-F-G-C S1: live WirePump feed helper (CE-G-C-1) =========
+
+    /// PHASE4-N-F-G-C S1: the live-wire helper is fail-soft (C3 honest-scope):
+    /// with NO usable peer (empty `--peer`, or an unparseable addr) it builds a
+    /// `NodeBlockSource::WirePump` whose channel is already closed — so the feed
+    /// ends and the relay loop halts clean (the same outcome as the empty
+    /// source). NEVER fatal, NEVER a fabricated address, NEVER a silent tip
+    /// graft. (This is why empty `--peer` preserves the prior forge-CAPABLE,
+    /// halts-clean contract; the live feed is opt-in via `--peer`.)
+    #[tokio::test]
+    async fn spawn_live_wire_pump_source_with_no_usable_peer_yields_ended_feed() {
+        // Empty peer set: no pump task spawned, the builder's sender is dropped
+        // immediately → the feed is closed → next_block yields None.
+        let mut empty = spawn_live_wire_pump_source(&[], 1, None);
+        assert!(
+            empty.next_block().await.is_none(),
+            "empty --peer must yield an ended feed (no block, no graft)"
+        );
+        // Unparseable addr: logged-and-skipped (C3), no pump task → ended feed.
+        let mut bad = spawn_live_wire_pump_source(
+            &["definitely-not-a-socket-addr".to_string()],
+            1,
+            None,
+        );
+        assert!(
+            bad.next_block().await.is_none(),
+            "an unparseable --peer must be skipped, yielding an ended feed (never fatal)"
+        );
     }
 
     // ===== L1: pure classifier =====

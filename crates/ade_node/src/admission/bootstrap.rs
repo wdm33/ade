@@ -378,7 +378,7 @@ fn spawn_wire_pumps_for_admission(
 /// network magic. Mirrors `wire_only::our_n2n_versions` — V11..V15
 /// emit a 4-field NodeToNodeVersionData; V16+ emits the 5-field
 /// shape adding `perasSupport`.
-fn build_n2n_version_table(network_magic: u32) -> VersionTable {
+pub(crate) fn build_n2n_version_table(network_magic: u32) -> VersionTable {
     use ade_network::codec::primitives::{encode_array_header, encode_bool, encode_u64};
     VersionTable(
         N2N_SUPPORTED
