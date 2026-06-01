@@ -11,6 +11,20 @@
 > ledger/consensus view** for the live protocol version + parameters, the opcert envelope for the
 > opcert counter/metadata — so **no fabricated, defaulted, or genesis-initial-as-current literal
 > drives the forged block's header.**
+>
+> **S2a RESOLUTION (2026-06-01 — PO-1 discharged).** The "current recovered view; else STOP/split"
+> contingency throughout this doc (§5 table rows for `protocol_version`/`pparams`, §6, §10 PO-1, §13,
+> §14) is **DISCHARGED — the split happened.** **S2a** (`3dba81db`, pushed) installs the oracle-bound
+> current `ProtocolParameters` into the recovered ledger at seed/import time, and PO-1 re-runs green
+> (`warm_start_recovery_preserves_protocol_params`: `recovered.ledger.protocol_params` carries the
+> current major, not the default 2). **S2 now SOURCES `protocol_version` + `pparams` from
+> `recovered.ledger.protocol_params` — it must CONSUME that source, not recreate another one** (S2a
+> is the single current-pparams authority installed at seed/import time; do not re-derive from
+> genesis, defaults, or a parallel ingress). **Narrowed S2 scope (operator-confirmed):** retire
+> `parse_simple_{genesis,opcert}_json` on the node path; real `parse_shelley_genesis` for
+> **clock/KES/network constants only**; real `parse_opcert_envelope` for opcert metadata/counter;
+> `protocol_version` + `pparams` from the recovered ledger only; **no defaults; no genesis-initial as
+> current; no serve/live/RO-LIVE; no registry flip yet.**
 
 ## 1. Slice identity
 - **Cluster:** PHASE4-N-F-G-A (forge fidelity on the node spine). Gated **behind** S1
