@@ -66,7 +66,7 @@ use ade_runtime::seed_import::import_cardano_cli_json_utxo;
 use ade_runtime::wal::FileWalStore;
 use ade_types::shelley::block::ProtocolVersion;
 use ade_types::{CardanoEra, EpochNo, Hash28, Hash32, SlotNo};
-use tokio::sync::watch;
+use tokio::sync::{mpsc, watch};
 
 use ade_core::consensus::ledger_view::LedgerView;
 use ade_ledger::pparams::ProtocolParameters;
@@ -77,6 +77,8 @@ use ade_runtime::producer::coordinator::{
     coordinator_init, CoordinatorConfig, CoordinatorEvent, CoordinatorState, LedgerSnapshotRef,
 };
 use ade_runtime::producer::producer_shell::ProducerShell;
+use ade_runtime::producer::self_accepted_handoff::SelfAcceptedHandoff;
+use ade_runtime::producer::served_chain_handle::ServedChainHandle;
 use ade_runtime::rollback::SnapshotCadence;
 
 use crate::cli::Cli;
@@ -444,6 +446,25 @@ async fn run_node_lifecycle_inner(
             // source, consumed here, never fabricated or re-derived.
             let (current_pparams, current_protocol_version) =
                 forge_constants_from_pparams(&state.ledger.protocol_params);
+            // PHASE4-N-F-G-B S2: dispatcher-owned sibling served-chain admit
+            // task. The relay loop forwards each self-accepted handoff over a
+            // typed mpsc channel; this sibling task is the SOLE node-spine
+            // push_atomic site, fed ONLY by SelfAcceptedHandoff::into_accepted().
+            // The loop holds only the Sender (no ServedChainHandle, no
+            // push_atomic). The ServedChainView is retained for the S3 network
+            // serve (push_atomic admits via send_modify with no live reader).
+            let (serve_handle, _serve_view) = ServedChainHandle::new();
+            let (handoff_tx, mut handoff_rx) = mpsc::unbounded_channel::<SelfAcceptedHandoff>();
+            let serve_task = tokio::spawn(async move {
+                while let Some(handoff) = handoff_rx.recv().await {
+                    if let Err(e) = serve_handle.push_atomic(handoff.into_accepted()) {
+                        eprintln!(
+                            "ade_node --mode node: sibling served-chain admit \
+                             rejected: {e:?}"
+                        );
+                    }
+                }
+            });
             let mut activation = ForgeActivation::new(
                 &mut clock,
                 &coord_state,
@@ -455,7 +476,8 @@ async fn run_node_lifecycle_inner(
                 anchor_millis,
                 start_slot,
                 slot_length_ms,
-            );
+            )
+            .with_handoff_sender(handoff_tx);
             run_relay_loop(
                 &mut fwd,
                 &mut source,
@@ -467,6 +489,10 @@ async fn run_node_lifecycle_inner(
                 Some(&mut activation),
             )
             .await?;
+            // Close the handoff channel (drop the loop's Sender) so the sibling
+            // admit task drains any remaining handoffs and exits; then join it.
+            drop(activation);
+            let _ = serve_task.await;
             // Honest record: forge-CAPABLE, not observable. With the empty source
             // the loop halts before any ForgeTick (forge subordinate to feed);
             // observable forge needs a live/continuing feed (RO-LIVE-01 follow-on).
@@ -553,6 +579,12 @@ pub struct ForgeActivation<'a> {
     /// LOCAL node-forge observation surface — in-memory, not persisted, not logged,
     /// not evidence — that makes the fail-closed visible (never a silent `NotDue`).
     pub last_slot_alignment_fail: Option<SlotAlignmentError>,
+    /// PHASE4-N-F-G-B S2: typed handoff sender to the dispatcher-spawned sibling
+    /// served-chain admit task. `None` ⇒ forge-capable but non-serving
+    /// (byte-identical relay). When `Some`, the forge tick forwards each
+    /// self-accepted handoff as a typed channel send. The loop holds ONLY this
+    /// `Sender` — never a `ServedChainHandle`, never a `push_atomic` call.
+    handoff_tx: Option<mpsc::UnboundedSender<SelfAcceptedHandoff>>,
 }
 
 impl<'a> ForgeActivation<'a> {
@@ -584,7 +616,17 @@ impl<'a> ForgeActivation<'a> {
             pending_slot: None,
             hermetic_forge_outcomes: Vec::new(),
             last_slot_alignment_fail: None,
+            handoff_tx: None,
         }
+    }
+
+    /// PHASE4-N-F-G-B S2: wire the sibling-admit handoff channel (opt-in). The
+    /// relay-loop forge tick forwards each self-accepted handoff to this sender;
+    /// the dispatcher drains it in the sibling `push_atomic` task. Without this,
+    /// `handoff_tx` stays `None` and the loop is the exact non-serving relay.
+    pub fn with_handoff_sender(mut self, tx: mpsc::UnboundedSender<SelfAcceptedHandoff>) -> Self {
+        self.handoff_tx = Some(tx);
+        self
     }
 }
 
@@ -696,14 +738,16 @@ pub async fn run_relay_loop(
                         None => act.recovered.tip.clone(),
                     };
                     if let Some(tip) = selected_tip {
-                        // PHASE4-N-F-G-B S1: the forge surfaces a typed
-                        // Option<SelfAcceptedHandoff> for the (S2) serve task.
-                        // S1 has no serve task, so the loop body IGNORES the
-                        // handoff here (`_handoff`) — it is surfaced only at the
-                        // forge_one_from_recovered boundary. The loop still
-                        // pushes ONLY the observation outcome; no serve/tip token
-                        // enters the loop body (containment unchanged).
-                        let (outcome, _handoff) = forge_one_from_recovered(
+                        // PHASE4-N-F-G-B S2: the forge surfaces a typed
+                        // Option<SelfAcceptedHandoff>; forward it to the
+                        // dispatcher-spawned sibling admit task as a typed channel
+                        // send. This is NOT a serve/tip token — the loop holds only
+                        // the Sender, never a ServedChainHandle, and never calls
+                        // push_atomic (served-chain mutation happens in the sibling
+                        // task). None ⇒ nothing sent; the loop still pushes ONLY the
+                        // observation outcome and advances no tip (containment
+                        // semantically unchanged).
+                        let (outcome, handoff) = forge_one_from_recovered(
                             act.recovered,
                             &tip,
                             act.shell,
@@ -712,9 +756,14 @@ pub async fn run_relay_loop(
                             era_schedule,
                             slot.0,
                             kes_period,
-                            act.protocol_version.clone(),
+                            act.protocol_version,
                         )
                         .map_err(|e| NodeLifecycleError::RelaySync(format!("{e:?}")))?;
+                        if let (Some(tx), Some(h)) = (act.handoff_tx.as_ref(), handoff) {
+                            // Best-effort typed send; if the sibling task has ended,
+                            // the handoff is dropped (forge stays self-accept-only).
+                            let _ = tx.send(h);
+                        }
                         // Local hermetic observation only — never persisted /
                         // served / admitted / applied; the durable tip is
                         // untouched by this arm. `last_forged_slot` advances ONLY

@@ -1691,6 +1691,100 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn relay_loop_containment_semantics_unchanged_with_serve_sibling() {
+        // PHASE4-N-F-G-B S2: wiring the sibling-admit handoff sender does NOT
+        // change the relay loop's authority semantics — the forge tick still
+        // makes exactly ONE self-accept-only attempt, advances NO durable tip,
+        // and persists no snapshot (identical to
+        // relay_loop_forge_tick_attempts_forge_advances_no_tip). The loop's ONLY
+        // added effect is a typed channel send, emitted exactly when the forge
+        // self-accepts (ForgeSucceeded) and never on a failure outcome.
+        let dir = TempDir::new().unwrap();
+        let chaindb =
+            PersistentChainDb::open(PersistentChainDbOptions::at(dir.path().join("chain.db")))
+                .unwrap();
+        let mut wal = FileWalStore::open(dir.path().join("wal")).unwrap();
+        let mut state = fresh_state([0xCD; 32]);
+        let (block_tx, block_rx) = mpsc::channel::<AdmissionPeerEvent>(4);
+        let mut source = NodeBlockSource::from_wire_pump(block_rx);
+        let (sd_tx, mut sd_rx) = watch::channel(false);
+
+        let sched = l5_era_schedule();
+        let recovered = l5_recovered_state(Some(l5_recovered_inputs()));
+        let coordinator = s2_coordinator_state();
+        let mut shell = l5_synth_shell(0x11, 0x22, 0x33);
+        let view = s2_idle_view();
+        let mut clock = DeterministicClock::new(0, vec![100_000]);
+        // S2: wire the sibling-admit handoff channel (the send path under test).
+        let (handoff_tx, mut handoff_rx) = mpsc::unbounded_channel();
+        let mut act = ForgeActivation::new(
+            &mut clock,
+            &coordinator,
+            &recovered,
+            &mut shell,
+            L5_POOL,
+            ProtocolParameters::default(),
+            ProtocolVersion { major: 9, minor: 0 },
+            0,
+            SlotNo(0),
+            1_000,
+        )
+        .with_handoff_sender(handoff_tx);
+
+        let tip_before = ChainDb::tip(&chaindb).unwrap();
+        let loop_fut = run_relay_loop(
+            &mut state,
+            &mut source,
+            &chaindb,
+            &mut wal,
+            &sched,
+            &view,
+            &mut sd_rx,
+            Some(&mut act),
+        );
+        let driver = async {
+            let _ = sd_tx.send(true);
+        };
+        let (loop_res, _) = tokio::join!(loop_fut, driver);
+        loop_res.expect("relay loop with forge + serve sibling halts cleanly");
+        drop(block_tx);
+
+        // Authority semantics unchanged vs the no-sibling baseline.
+        assert_eq!(
+            act.hermetic_forge_outcomes.len(),
+            1,
+            "exactly one fenced forge attempt at the single due slot"
+        );
+        assert_eq!(
+            tip_before,
+            ChainDb::tip(&chaindb).unwrap(),
+            "forge must not advance the durable tip"
+        );
+        assert!(
+            SnapshotStore::list_snapshot_slots(&chaindb)
+                .unwrap()
+                .is_empty(),
+            "forge persists no snapshot / served state"
+        );
+
+        // The ONLY added effect: a typed handoff send, emitted iff the forge
+        // self-accepted (ForgeSucceeded) — never on ForgeNotLeader / ForgeFailed.
+        let succeeded = act
+            .hermetic_forge_outcomes
+            .iter()
+            .filter(|o| matches!(o, CoordinatorEvent::ForgeSucceeded { .. }))
+            .count();
+        let mut received = 0usize;
+        while handoff_rx.try_recv().is_ok() {
+            received += 1;
+        }
+        assert_eq!(
+            received, succeeded,
+            "a self-accepted handoff reaches the sibling exactly on ForgeSucceeded, never on failure"
+        );
+    }
+
+    #[tokio::test]
     async fn relay_loop_forge_slot_derived_via_clock_seam() {
         // CE-E-3: the slot the forge runs at is derived ONLY through the clock
         // seam — millis_to_slot(tick, anchor, start, slot_len). Assert the

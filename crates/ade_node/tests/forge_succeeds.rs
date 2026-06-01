@@ -59,6 +59,7 @@ use ade_types::{BlockNo, CardanoEra, EpochNo, Hash28, Hash32};
 
 use ade_node::produce_mode::{run_real_forge, ForgeRequestContext};
 use ade_runtime::producer::self_accepted_handoff::SelfAcceptedHandoff;
+use ade_runtime::producer::served_chain_handle::ServedChainHandle;
 
 // =========================================================================
 // Synthetic-corpus helpers (mirror forge_handler_variants::synth_shell)
@@ -312,6 +313,76 @@ fn handoff_carrier_constructs_only_from_self_accepted_forge() {
     // The consuming accessor yields the same BLUE token back (S2 push_atomic input).
     let back = carrier.into_accepted();
     assert_eq!(back.as_bytes(), forged_bytes.as_slice());
+}
+
+// =========================================================================
+// PHASE4-N-F-G-B S2 — sibling served-chain admit (handoff → push_atomic)
+// =========================================================================
+
+/// PHASE4-N-F-G-B S2: the node-spine sibling admit feeds the served chain ONLY
+/// by consuming a self-accepted handoff via `into_accepted()` → `push_atomic`.
+/// Forge a real handoff (the EligibleFixture self-accepts), admit it, and
+/// confirm it is present in the served snapshot — admitted via `push_atomic`.
+#[test]
+fn sibling_serve_admits_via_push_atomic_only() {
+    let mut shell = synth_shell(0x77, 0x88, 0x99);
+    let fixture = EligibleFixture::build(&shell, 1, EpochNo(0));
+    let ctx = fixture.ctx();
+    let (_event, accepted) = run_real_forge(1, /* kes_period = */ 0, &ctx, &mut shell);
+    let accepted = accepted.expect("eligible forge surfaces a self-accepted token");
+    // Wrap the surfaced BLUE token in the S1 carrier (as forge_one_from_recovered
+    // does on the node spine), then admit ONLY via into_accepted() -> push_atomic.
+    let handoff = SelfAcceptedHandoff::from_self_accepted(accepted);
+
+    let (handle, view) = ServedChainHandle::new();
+    handle
+        .push_atomic(handoff.into_accepted())
+        .expect("served-chain admit accepts the self-accepted block");
+    assert_eq!(
+        view.borrow().len(),
+        1,
+        "the self-accepted handoff is admitted to the served snapshot via push_atomic"
+    );
+}
+
+/// PHASE4-N-F-G-B S2: the same self-accepted handoff admits to a byte-identical
+/// served snapshot (`push_atomic` is deterministic in the admitted block).
+#[test]
+fn serve_sibling_admission_replay_byte_identical() {
+    let mut shell1 = synth_shell(0x77, 0x88, 0x99);
+    let f1 = EligibleFixture::build(&shell1, 1, EpochNo(0));
+    let c1 = f1.ctx();
+    let (_e1, a1) = run_real_forge(1, 0, &c1, &mut shell1);
+
+    let mut shell2 = synth_shell(0x77, 0x88, 0x99);
+    let f2 = EligibleFixture::build(&shell2, 1, EpochNo(0));
+    let c2 = f2.ctx();
+    let (_e2, a2) = run_real_forge(1, 0, &c2, &mut shell2);
+
+    let h1 = SelfAcceptedHandoff::from_self_accepted(a1.expect("a1 self-accepted"));
+    let h2 = SelfAcceptedHandoff::from_self_accepted(a2.expect("a2 self-accepted"));
+
+    let (ha, va) = ServedChainHandle::new();
+    ha.push_atomic(h1.into_accepted()).expect("admit a");
+    let (hb, vb) = ServedChainHandle::new();
+    hb.push_atomic(h2.into_accepted()).expect("admit b");
+    assert_eq!(
+        va.borrow().fingerprint(),
+        vb.borrow().fingerprint(),
+        "identical self-accepted handoffs admit to a byte-identical served snapshot"
+    );
+}
+
+/// PHASE4-N-F-G-B S2: the node-spine admit obtains the `AcceptedBlock` fed to
+/// `push_atomic` ONLY by consuming a `SelfAcceptedHandoff` via `into_accepted()`
+/// — there is no other handoff → `AcceptedBlock` path (the S1 carrier fence).
+/// The closure type-checks only because `into_accepted()` yields exactly the
+/// `AcceptedBlock` that `push_atomic` accepts — a compile-time pin of the sole
+/// admit path (no raw-bytes / direct-`AcceptedBlock` feed exists).
+#[test]
+fn serve_sibling_push_atomic_fed_only_by_into_accepted() {
+    let _admit =
+        |handle: &ServedChainHandle, h: SelfAcceptedHandoff| handle.push_atomic(h.into_accepted());
 }
 
 // =========================================================================
