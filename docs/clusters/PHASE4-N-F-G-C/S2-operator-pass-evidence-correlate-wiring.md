@@ -11,10 +11,11 @@ Operator-pass runbook + BA-02 evidence manifest + `correlate` wiring (operator-g
 **PHASE4-N-F-G-C** — Live feed + operator-gated evidence (the operator-gated half).
 
 ### Status
-Proposed.
+Ready for Review (all §12 mechanical scaffolding green; `ade_node` suite + both BA-02 gates pass; the
+live ACCEPT remains operator-gated by design).
 
 ### Cluster Exit Criteria Addressed
-- [ ] **CE-G-C-2 (operator-gated evidence — SCAFFOLDS ONLY; live ACCEPT BLOCKED)** — the corrected C1/C2
+- [x] **CE-G-C-2 (operator-gated evidence — SCAFFOLDS ONLY; live ACCEPT BLOCKED)** — the corrected C1/C2
   runbook is committed; the evidence-manifest home + sha256 cross-check is defined; `ba02_evidence::correlate`
   is wired to the operator-captured peer log; **no synthetic manifest is committed**; the OQ5
   genesis-consistency pin (`genesis_pinning`) passes for the recovered seed epoch. Live peer ACCEPT stays
@@ -154,25 +155,23 @@ success), cannot satisfy it. (Strengthens `RO-LIVE-06`; preserves `RO-LIVE-01` a
 This slice is complete only when **all** of the following exist and pass in CI (hermetic — no operator
 pass, no live peer):
 
-- [ ] `correlate_wired_to_operator_peer_log` — the RED evidence-I/O path reads a peer-log **file** +
-  forge record, runs `parse_peer_accept_events` + `correlate`, and yields `BA02Outcome::Ba02Manifest`
-  on a matching `PeerServedBlock`/`PeerChainTip` fixture and `NoEvidence` on an Ade-internal-only fixture
-  (self-accept / `ForgeSucceeded` / `block_received` lines) — synthetic fixture for reducer/mechanics
-  only; it must not be placed under the BA-02 manifest home and must not satisfy the manifest gate.
-- [ ] `correlate_from_operator_log_file_is_deterministic` — same fixture file ⇒ byte-identical
-  `BA02Outcome` (+ `to_canonical_json`) across two reads.
-- [ ] `no_synthetic_ba02_manifest_committed` (gate clause) — `ci_check_ba02_evidence_manifest_schema.sh`
-  is green: **no BA-02 manifest is committed at this HEAD** (vacuously satisfied), and if one were
-  committed it must be schema-valid + its `peer_log_file_sha256` cross-checks the committed peer-log
-  fixture.
-- [ ] `ci_check_ba02_evidence_manifest_schema.sh` — NEW gate, exists + executable + green (vacuous).
-- [ ] `ci_check_ba02_evidence_closed.sh` — existing closed-vocabulary gate stays **green** (no new
+- [x] `node_operator_pass_ba02.rs::correlate_wired_to_operator_peer_log` — the RED evidence-I/O path
+  reads a peer-log **file** + forge record, runs `parse_peer_accept_events` + `correlate`, and yields
+  `BA02Outcome::Ba02Manifest` on a matching `peer_served_block` fixture, `NoEvidence` on an
+  Ade-internal-only fixture (`self_accept` / `forge_succeeded` / `block_received` lines), and a fail-closed
+  `io::Error` on a missing file — synthetic fixture for reducer/mechanics only (lives in a `TempDir`,
+  never under the BA-02 manifest home, never satisfies the manifest gate).
+- [x] `node_operator_pass_ba02.rs::correlate_from_operator_log_file_is_deterministic` — same fixture file
+  ⇒ byte-identical `BA02Outcome` (+ `to_canonical_json`) across two reads.
+- [x] `ci_check_ba02_evidence_manifest_schema.sh` — NEW gate (117 → 118), exists + executable + green
+  (vacuous — **no BA-02 manifest committed at this HEAD**); fails closed on a schema-incomplete or
+  sha256-mismatched manifest (verified). This is the "no synthetic manifest" enforcer.
+- [x] `ci_check_ba02_evidence_closed.sh` — existing closed-vocabulary gate stays **green** (no new
   constructor / variant; allow-list parser unchanged).
-- [ ] operator-pass runbook `docs/evidence/phase4-n-f-g-c-operator-pass-README.md` committed +
+- [x] operator-pass runbook `docs/evidence/phase4-n-f-g-c-operator-pass-README.md` committed +
   contains the mandatory flags (`--peer`, `--json-seed`, `--consensus-inputs-path`), the
-  follower-not-co-producer instruction, and the `correlate` evidence-capture procedure (checked by the
-  scaffold gate or a dedicated grep clause).
-- [ ] `cargo test -p ade_node` green.
+  follower-not-co-producer instruction, and the `correlate` evidence-capture procedure.
+- [x] `cargo test -p ade_node` green (166 lib + all integration, incl. the 3 new BA-02 tests).
 
 ### Operator pass (NOT a slice-completion criterion — operator-gated)
 The real BA-02 (`RO-LIVE-06` live half) and the live ACCEPT (`RO-LIVE-01`) are executed by a real
