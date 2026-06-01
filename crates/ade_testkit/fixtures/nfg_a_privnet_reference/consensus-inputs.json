@@ -1,0 +1,26 @@
+{
+  "active_slots_coeff": {
+    "denom": 20,
+    "numer": 1
+  },
+  "epoch_end_slot": 431999,
+  "epoch_no": 0,
+  "epoch_nonce_hex": "e09b4f9cf1cc17701e00ef1db04ea040bc224254ce85ae7b44415a5b333c1fea",
+  "epoch_start_slot": 0,
+  "era": "conway",
+  "genesis_hash_hex": "e09b4f9cf1cc17701e00ef1db04ea040bc224254ce85ae7b44415a5b333c1fea",
+  "network_magic": 42,
+  "pool_distribution": {
+    "0374a307c05eb3771f4d1f8e1f5a4bb9fee5d5e1badfb9586e3b008d": {
+      "active_stake": 29999996666667037
+    }
+  },
+  "pool_vrf_keyhashes": {
+    "0374a307c05eb3771f4d1f8e1f5a4bb9fee5d5e1badfb9586e3b008d": "9b90020ed6ef4659a0560a086292124ca90087945831094e978106742596ca83"
+  },
+  "protocol_params_hash_hex": "783f2b4215ce811f1577ac9c5cdd49048e49a7b4f3afcdcd6dea462be575a96d",
+  "source_cardano_node_version": "cardano-node 11.0.1 - linux-x86_64 - ghc-9.6",
+  "source_query_command": "docker exec cardano-node-nfg-a-privnet cardano-cli query {tip,protocol-state,stake-distribution,pool-state,protocol-parameters} --testnet-magic 42",
+  "source_tip_hash_hex": "cd4d44d974d43649a3d53faa6ecbe01d71930cb27f12be2607230d7f37b71c9f",
+  "source_tip_slot": 639
+}

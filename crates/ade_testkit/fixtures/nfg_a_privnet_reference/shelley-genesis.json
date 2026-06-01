@@ -1,0 +1,78 @@
+{
+    "activeSlotsCoeff": 5.0e-2,
+    "epochLength": 432000,
+    "genDelegs": {
+        "068dc21ea7b6d68afbe77833855861d0b4138cadc6d272bc19d4b745": {
+            "delegate": "ad7f7bafaa4e0924361680e678a82b0ec57a49a4073f993b12170c95",
+            "vrf": "5e9c0d96b4400a5409e05c729e488aaf038c3c2f601e24527b512440d134bfea"
+        },
+        "1df380ad0d385692029ed8454f649486fb91d03a02b95b9503319a8d": {
+            "delegate": "53013e6581b0ec1e28d4f7eb82c75795f76ae066f24f9c36b31b47f7",
+            "vrf": "951be9f734920a9e338aa3fc352797f268b9f1aa45a96be704bbc8dd0a279fd0"
+        },
+        "ff8d8796490f4ae5cc60086fa8682f81dffab27ce9454f7d9aea8009": {
+            "delegate": "0b9d5b126d6d76032b2c318e298b087c1dfedb333562c71a87b6dca0",
+            "vrf": "01a739304b3ec7c9969fc8bad955b02caf9c81f4ba6f0dbaf15bcc11b8947671"
+        }
+    },
+    "initialFunds": {
+        "00be635cf00fbd323ee49f3c26887eb8a02476a8bc5b03b891e973deb0788069be4cb2ba202549ece37c85e50fc0e7567cbacd4ac6c10cc32b": 27000000000000000,
+        "60fb6563b256ed89ab344d645e6f928cd55ade55a6ae5f980caac0c62f": 0
+    },
+    "maxKESEvolutions": 60,
+    "maxLovelaceSupply": 30000000000000000,
+    "networkId": "Testnet",
+    "networkMagic": 42,
+    "protocolParams": {
+        "a0": 0,
+        "decentralisationParam": 1,
+        "eMax": 18,
+        "extraEntropy": {
+            "tag": "NeutralNonce"
+        },
+        "keyDeposit": 400000,
+        "maxBlockBodySize": 65536,
+        "maxBlockHeaderSize": 1100,
+        "maxTxSize": 16384,
+        "minFeeA": 1,
+        "minFeeB": 0,
+        "minPoolCost": 0,
+        "minUTxOValue": 0,
+        "nOpt": 100,
+        "poolDeposit": 0,
+        "protocolVersion": {
+            "major": 2,
+            "minor": 0
+        },
+        "rho": 0.1,
+        "tau": 0.1
+    },
+    "securityParam": 2160,
+    "slotLength": 1,
+    "slotsPerKESPeriod": 129600,
+    "staking": {
+        "pools": {
+            "0374a307c05eb3771f4d1f8e1f5a4bb9fee5d5e1badfb9586e3b008d": {
+                "accountAddress": {
+                    "credential": {
+                        "keyHash": "f79ca922b2e1f2cb40ded45e847cfbfb929be16f6f5c284eb9622c39"
+                    },
+                    "network": "Testnet"
+                },
+                "cost": 0,
+                "margin": 0,
+                "metadata": null,
+                "owners": [],
+                "pledge": 0,
+                "poolId": "0374a307c05eb3771f4d1f8e1f5a4bb9fee5d5e1badfb9586e3b008d",
+                "relays": [],
+                "vrf": "9b90020ed6ef4659a0560a086292124ca90087945831094e978106742596ca83"
+            }
+        },
+        "stake": {
+            "788069be4cb2ba202549ece37c85e50fc0e7567cbacd4ac6c10cc32b": "0374a307c05eb3771f4d1f8e1f5a4bb9fee5d5e1badfb9586e3b008d"
+        }
+    },
+    "systemStart": "2026-06-01T05:53:15Z",
+    "updateQuorum": 5
+}
