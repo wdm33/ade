@@ -209,7 +209,13 @@ fn zero_stake_answer_emits_forge_not_leader() {
     let answer = answer_for_slot(42, &fixture.eta0, 0, 1, 1, 1);
     let ctx = fixture.ctx(&answer, &vrf_vk);
 
-    let event = run_real_forge(42, /* kes_period = */ 0, &ctx, &mut shell);
+    let (event, handoff) = run_real_forge(42, /* kes_period = */ 0, &ctx, &mut shell);
+    // PHASE4-N-F-G-B S1: a not-a-leader outcome surfaces NO self-accepted
+    // handoff — the success-only token is None here.
+    assert!(
+        handoff.is_none(),
+        "ForgeNotLeader must surface no self-accepted handoff"
+    );
     match event {
         CoordinatorEvent::ForgeNotLeader {
             slot,
@@ -237,7 +243,13 @@ fn kes_period_outside_window_emits_forge_failed_kes_period_mismatch() {
 
     // kes_period = u32::MAX is outside the opcert's [0, 0+SUM6_MAX_PERIOD]
     // window; shell.kes_sign_at returns an error.
-    let event = run_real_forge(7, /* kes_period = */ u32::MAX, &ctx, &mut shell);
+    let (event, handoff) = run_real_forge(7, /* kes_period = */ u32::MAX, &ctx, &mut shell);
+    // PHASE4-N-F-G-B S1: a ForgeFailed (KesPeriodMismatch) outcome surfaces NO
+    // self-accepted handoff.
+    assert!(
+        handoff.is_none(),
+        "ForgeFailed must surface no self-accepted handoff"
+    );
     match event {
         CoordinatorEvent::ForgeFailed { slot, reason } => {
             assert_eq!(slot, 7);
@@ -265,7 +277,7 @@ fn full_stake_answer_reaches_self_accept_and_rejects() {
     let answer = answer_for_slot(13, &fixture.eta0, 1, 1, 1, 1);
     let ctx = fixture.ctx(&answer, &vrf_vk);
 
-    let event = run_real_forge(13, /* kes_period = */ 0, &ctx, &mut shell);
+    let (event, _handoff) = run_real_forge(13, /* kes_period = */ 0, &ctx, &mut shell);
     match event {
         CoordinatorEvent::ForgeFailed { slot, reason } => {
             assert_eq!(slot, 13);
@@ -319,11 +331,14 @@ fn run_real_forge_is_byte_identical_across_two_runs() {
     let ctx1 = fixture.ctx(&answer, &vrf_vk);
     let ctx2 = fixture.ctx(&answer, &vrf_vk2);
 
-    let e1 = run_real_forge(100, 0, &ctx1, &mut shell1);
-    let e2 = run_real_forge(100, 0, &ctx2, &mut shell2);
+    let (e1, h1) = run_real_forge(100, 0, &ctx1, &mut shell1);
+    let (e2, h2) = run_real_forge(100, 0, &ctx2, &mut shell2);
 
     // Both runs must produce the same CoordinatorEvent variant +
     // payload. The vrf_output_fingerprint is deterministic in
     // (vrf_sk, slot, eta0).
     assert_eq!(e1, e2, "replay byte-identity under real forge");
+    // PHASE4-N-F-G-B S1: the surfaced self-accepted token is replay
+    // byte-identical too (same forge inputs => same Option<AcceptedBlock>).
+    assert_eq!(h1, h2, "surfaced handoff token is replay byte-identical");
 }

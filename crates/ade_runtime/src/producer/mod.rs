@@ -27,6 +27,7 @@ pub mod opcert_envelope;
 pub mod producer_log;
 pub mod producer_shell;
 pub mod scheduler;
+pub mod self_accepted_handoff;
 pub mod served_chain_handle;
 pub mod served_chain_lookups;
 pub mod signing;

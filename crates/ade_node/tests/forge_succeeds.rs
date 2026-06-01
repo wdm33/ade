@@ -58,6 +58,7 @@ use ade_types::shelley::block::{OperationalCert, ProtocolVersion};
 use ade_types::{BlockNo, CardanoEra, EpochNo, Hash28, Hash32};
 
 use ade_node::produce_mode::{run_real_forge, ForgeRequestContext};
+use ade_runtime::producer::self_accepted_handoff::SelfAcceptedHandoff;
 
 // =========================================================================
 // Synthetic-corpus helpers (mirror forge_handler_variants::synth_shell)
@@ -224,7 +225,7 @@ fn forge_to_self_accept_succeeds() {
     let fixture = EligibleFixture::build(&shell, slot, epoch);
     let ctx = fixture.ctx();
 
-    let event = run_real_forge(slot, /* kes_period = */ 0, &ctx, &mut shell);
+    let (event, _handoff) = run_real_forge(slot, /* kes_period = */ 0, &ctx, &mut shell);
     match event {
         CoordinatorEvent::ForgeSucceeded { slot: s, .. } => {
             assert_eq!(s, slot, "ForgeSucceeded must preserve the slot");
@@ -243,6 +244,74 @@ fn forge_to_self_accept_succeeds() {
         }
         other => panic!("expected ForgeSucceeded, got {:?}", other),
     }
+}
+
+// =========================================================================
+// PHASE4-N-F-G-B S1 — self-accepted-artifact handoff surfacing + carrier
+// =========================================================================
+
+/// PHASE4-N-F-G-B S1: the forge surfaces the BLUE self-accepted `AcceptedBlock`
+/// token (the new sibling return component) EXACTLY on the self-accept success
+/// path — `Some` alongside `ForgeSucceeded`, and its bytes are the forged block
+/// verbatim. (The `None`-on-failure half is proven by the not-leader / failed
+/// tests in `forge_handler_variants.rs`.) The closed `CoordinatorEvent` surface
+/// is unchanged: the token rides the return tuple, not a `ForgeSucceeded` field.
+#[test]
+fn forge_surfaces_accepted_block_only_on_self_accept() {
+    let epoch = EpochNo(0);
+    let slot = 1u64;
+
+    let mut shell = synth_shell(0x77, 0x88, 0x99);
+    let fixture = EligibleFixture::build(&shell, slot, epoch);
+    let ctx = fixture.ctx();
+
+    let (event, handoff) = run_real_forge(slot, /* kes_period = */ 0, &ctx, &mut shell);
+    let artifact_bytes = match &event {
+        CoordinatorEvent::ForgeSucceeded { artifact, .. } => artifact.bytes.clone(),
+        other => panic!("expected ForgeSucceeded (eligible fixture), got {other:?}"),
+    };
+    let surfaced = handoff.expect("ForgeSucceeded must surface a self-accepted token");
+    assert_eq!(
+        surfaced.as_bytes(),
+        artifact_bytes.as_slice(),
+        "the surfaced AcceptedBlock must be the forged block verbatim — the \
+         ORIGINAL self-accept token, never re-derived from artifact.bytes"
+    );
+}
+
+/// PHASE4-N-F-G-B S1: a `SelfAcceptedHandoff` is constructible end-to-end from a
+/// real forge whose self-accept passes — and ONLY from that BLUE `AcceptedBlock`.
+/// We take the token surfaced by `run_real_forge`, wrap it via the sole
+/// constructor, and confirm the carrier holds the forged block verbatim (and
+/// `into_accepted` yields the same BLUE token back for S2's `push_atomic`).
+/// There is no raw-bytes / artifact / event constructor — that type-level fence
+/// is asserted in `ade_runtime`'s carrier tests.
+#[test]
+fn handoff_carrier_constructs_only_from_self_accepted_forge() {
+    let epoch = EpochNo(0);
+    let slot = 1u64;
+
+    let mut shell = synth_shell(0x77, 0x88, 0x99);
+    let fixture = EligibleFixture::build(&shell, slot, epoch);
+    let ctx = fixture.ctx();
+
+    let (event, handoff) = run_real_forge(slot, /* kes_period = */ 0, &ctx, &mut shell);
+    let forged_bytes = match event {
+        CoordinatorEvent::ForgeSucceeded { artifact, .. } => artifact.bytes,
+        other => panic!("expected ForgeSucceeded (eligible fixture), got {other:?}"),
+    };
+    let accepted = handoff.expect("eligible forge self-accepts and surfaces a token");
+
+    // Wrap via the SOLE constructor — it takes the BLUE `AcceptedBlock`.
+    let carrier = SelfAcceptedHandoff::from_self_accepted(accepted);
+    assert_eq!(
+        carrier.accepted().as_bytes(),
+        forged_bytes.as_slice(),
+        "the carrier must hold the original self-accepted block verbatim"
+    );
+    // The consuming accessor yields the same BLUE token back (S2 push_atomic input).
+    let back = carrier.into_accepted();
+    assert_eq!(back.as_bytes(), forged_bytes.as_slice());
 }
 
 // =========================================================================
@@ -293,7 +362,13 @@ fn tpraos_producer_forge_fails_closed_with_unsupported_era() {
         prev_opcert_counter: None,
     };
 
-    let event = run_real_forge(slot, /* kes_period = */ 0, &ctx, &mut shell);
+    let (event, handoff) = run_real_forge(slot, /* kes_period = */ 0, &ctx, &mut shell);
+    // PHASE4-N-F-G-B S1: a TPraos fail-closed (UnsupportedProducerEra) outcome
+    // surfaces no self-accepted handoff.
+    assert!(
+        handoff.is_none(),
+        "UnsupportedProducerEra fail-closed must surface no handoff"
+    );
     match event {
         CoordinatorEvent::ForgeFailed { slot: s, reason } => {
             assert_eq!(s, slot, "ForgeFailed must preserve the slot");

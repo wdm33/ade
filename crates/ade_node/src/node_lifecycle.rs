@@ -696,7 +696,14 @@ pub async fn run_relay_loop(
                         None => act.recovered.tip.clone(),
                     };
                     if let Some(tip) = selected_tip {
-                        let outcome = forge_one_from_recovered(
+                        // PHASE4-N-F-G-B S1: the forge surfaces a typed
+                        // Option<SelfAcceptedHandoff> for the (S2) serve task.
+                        // S1 has no serve task, so the loop body IGNORES the
+                        // handoff here (`_handoff`) — it is surfaced only at the
+                        // forge_one_from_recovered boundary. The loop still
+                        // pushes ONLY the observation outcome; no serve/tip token
+                        // enters the loop body (containment unchanged).
+                        let (outcome, _handoff) = forge_one_from_recovered(
                             act.recovered,
                             &tip,
                             act.shell,

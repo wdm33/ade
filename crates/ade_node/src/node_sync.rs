@@ -45,6 +45,7 @@ use ade_types::{BlockNo, EpochNo, Hash28, SlotNo};
 use tokio::sync::mpsc;
 
 use crate::produce_mode::{run_real_forge, ForgeRequestContext};
+use ade_runtime::producer::self_accepted_handoff::SelfAcceptedHandoff;
 
 /// Closed, verdict-decoupled ordered block-bytes source for the
 /// `--mode node` lifecycle sync path (PHASE4-N-F-C L4a).
@@ -435,7 +436,7 @@ pub fn forge_one_from_recovered(
     slot: u64,
     kes_period: u32,
     protocol_version: ProtocolVersion,
-) -> Result<CoordinatorEvent, NodeForgeError> {
+) -> Result<(CoordinatorEvent, Option<SelfAcceptedHandoff>), NodeForgeError> {
     // Fail-closed: the leadership view MUST be the recovered surface.
     let recovered_inputs = recovered
         .seed_epoch_consensus_inputs
@@ -452,10 +453,15 @@ pub fn forge_one_from_recovered(
     if let ForgeEpochAdmission::OffEpoch { .. } =
         forge_epoch_admission(slot, era_schedule, recovered_inputs.epoch_no)
     {
-        return Ok(CoordinatorEvent::ForgeNotLeader {
-            slot,
-            vrf_output_fingerprint: [0u8; 8],
-        });
+        // PHASE4-N-F-G-B S1: a fail-closed (off-epoch) outcome surfaces no
+        // handoff — a non-self-accepted result yields no servable artifact.
+        return Ok((
+            CoordinatorEvent::ForgeNotLeader {
+                slot,
+                vrf_output_fingerprint: [0u8; 8],
+            },
+            None,
+        ));
     }
 
     // DC-CINPUT-02b: project the leadership PoolDistrView from the
@@ -479,10 +485,14 @@ pub fn forge_one_from_recovered(
     ) {
         Ok(a) => a,
         Err(_) => {
-            return Ok(CoordinatorEvent::ForgeNotLeader {
-                slot,
-                vrf_output_fingerprint: [0u8; 8],
-            });
+            // PHASE4-N-F-G-B S1: not-a-leader is fail-closed — no handoff.
+            return Ok((
+                CoordinatorEvent::ForgeNotLeader {
+                    slot,
+                    vrf_output_fingerprint: [0u8; 8],
+                },
+                None,
+            ));
         }
     };
 
@@ -515,7 +525,18 @@ pub fn forge_one_from_recovered(
     // Single-shot forge through the reused engine. Its result variants
     // (ForgeSucceeded / ForgeNotLeader / ForgeFailed) are returned as-is;
     // there is no fallback path.
-    Ok(run_real_forge(slot, kes_period, &ctx, shell))
+    //
+    // PHASE4-N-F-G-B S1: wrap the surfaced BLUE `AcceptedBlock` (Some iff the
+    // engine self-accepted ⇒ ForgeSucceeded) into the typed, constructor-fenced
+    // `SelfAcceptedHandoff` for the (S2) serve task. `map` keeps None on
+    // ForgeNotLeader / ForgeFailed — a non-self-accepted outcome yields no
+    // handoff. The token is the ORIGINAL from `self_accept` (CN-FORGE-01),
+    // never re-derived from `artifact.bytes`.
+    let (event, self_accepted) = run_real_forge(slot, kes_period, &ctx, shell);
+    Ok((
+        event,
+        self_accepted.map(SelfAcceptedHandoff::from_self_accepted),
+    ))
 }
 
 #[cfg(test)]
@@ -1452,7 +1473,7 @@ mod tests {
         // reached — proves the projected view drove leadership).
         let tip = recovered.tip.clone().unwrap();
         let mut shell = l5_synth_shell(0x11, 0x22, 0x33);
-        let event = forge_one_from_recovered(
+        let (event, _handoff) = forge_one_from_recovered(
             &recovered,
             &tip,
             &mut shell,
@@ -1482,7 +1503,7 @@ mod tests {
 
         let mut shell1 = l5_synth_shell(0xAB, 0xCD, 0xEF);
         let mut shell2 = l5_synth_shell(0xAB, 0xCD, 0xEF);
-        let e1 = forge_one_from_recovered(
+        let (e1, h1) = forge_one_from_recovered(
             &recovered,
             &tip,
             &mut shell1,
@@ -1494,7 +1515,7 @@ mod tests {
             ProtocolVersion { major: 9, minor: 0 },
         )
         .expect("ok");
-        let e2 = forge_one_from_recovered(
+        let (e2, h2) = forge_one_from_recovered(
             &recovered,
             &tip,
             &mut shell2,
@@ -1507,6 +1528,12 @@ mod tests {
         )
         .expect("ok");
         assert_eq!(e1, e2, "recovered-state forge is replay byte-identical");
+        // PHASE4-N-F-G-B S1: the surfaced handoff token is replay byte-identical
+        // too (same recovered base + keys => same Option<SelfAcceptedHandoff>).
+        assert_eq!(
+            h1, h2,
+            "the surfaced self-accepted handoff is replay byte-identical"
+        );
     }
 
     #[test]
@@ -2130,7 +2157,7 @@ mod tests {
         let tip = recovered.tip.clone().expect("recovered tip");
         // Slot 432000 locates to epoch 1; the recovered seed epoch is 0 ⇒ off-epoch.
         // kes_period is irrelevant — the epoch guard fires before leadership/signing.
-        let outcome = forge_one_from_recovered(
+        let (outcome, handoff) = forge_one_from_recovered(
             &recovered,
             &tip,
             &mut shell,
@@ -2149,6 +2176,12 @@ mod tests {
         assert!(
             !matches!(outcome, CoordinatorEvent::ForgeSucceeded { .. }),
             "off-epoch must never produce a signed / forged block"
+        );
+        // PHASE4-N-F-G-B S1: off-epoch fail-closed surfaces no handoff — a
+        // non-self-accepted (ForgeNotLeader) outcome yields no servable token.
+        assert!(
+            handoff.is_none(),
+            "off-epoch fail-closed must surface no self-accepted handoff"
         );
     }
 
@@ -2172,7 +2205,7 @@ mod tests {
             "slot 100 is in the recovered seed epoch — leadership must be reached"
         );
         let eta0_before = recovered.chain_dep.epoch_nonce.clone();
-        let outcome = forge_one_from_recovered(
+        let (outcome, handoff) = forge_one_from_recovered(
             &recovered,
             &tip,
             &mut shell,
@@ -2192,6 +2225,14 @@ mod tests {
                 | CoordinatorEvent::ForgeNotLeader { .. }
                 | CoordinatorEvent::ForgeFailed { .. }
         ));
+        // PHASE4-N-F-G-B S1: the wrapped SelfAcceptedHandoff is Some iff the
+        // node-spine forge self-accepted (ForgeSucceeded) — the surfacing
+        // contract at the forge_one_from_recovered boundary.
+        assert_eq!(
+            handoff.is_some(),
+            matches!(outcome, CoordinatorEvent::ForgeSucceeded { .. }),
+            "handoff present iff the recovered-base forge self-accepted"
+        );
         // No nonce promotion: the recovered seed-epoch eta0 is consumed unchanged.
         assert_eq!(
             recovered.chain_dep.epoch_nonce, eta0_before,

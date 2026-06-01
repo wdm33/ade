@@ -638,12 +638,42 @@ pub struct ForgeRequestContext<'a> {
 ///    `Accepted` → emit `ForgeSucceeded`; anything else → emit
 ///    `ForgeFailed { SelfAcceptRejected }`.
 ///
-/// Returns the `CoordinatorEvent` to feed back into `coordinator_step`.
+/// Returns the `CoordinatorEvent` to feed back into `coordinator_step`,
+/// paired with the BLUE self-accepted `AcceptedBlock` token surfaced for the
+/// (S2) serve handoff — `Some(..)` iff the event is `ForgeSucceeded`, `None`
+/// on every fail-closed branch (PHASE4-N-F-G-B S1). The closed
+/// `CoordinatorEvent` / `ForgeSucceeded` surface is unchanged; the token rides
+/// a sibling return component, not a new event variant or field.
 pub fn run_real_forge(
     slot: u64,
     kes_period: u32,
     ctx: &ForgeRequestContext<'_>,
     shell: &mut ProducerShell,
+) -> (
+    CoordinatorEvent,
+    Option<ade_ledger::producer::AcceptedBlock>,
+) {
+    // PHASE4-N-F-G-B S1: the inner fn keeps every pre-split fail-closed branch
+    // byte-identical and writes the self-accepted token into `self_accepted`
+    // ONLY on the success path. So `Some` is structurally reachable only when
+    // the inner fn returns `ForgeSucceeded`.
+    let mut self_accepted: Option<ade_ledger::producer::AcceptedBlock> = None;
+    let event = run_real_forge_inner(slot, kes_period, ctx, shell, &mut self_accepted);
+    (event, self_accepted)
+}
+
+/// Inner forge composition (PHASE4-N-F-G-B S1 split out of `run_real_forge`).
+/// Returns the `CoordinatorEvent` exactly as the pre-split function did; on the
+/// self-accept success path it ALSO writes the BLUE `AcceptedBlock` token into
+/// `self_accepted_out`. Every fail-closed early return leaves
+/// `self_accepted_out` untouched (`None`), so the surfaced token is `Some` iff
+/// the event is `ForgeSucceeded`. The forge branches below are unchanged.
+fn run_real_forge_inner(
+    slot: u64,
+    kes_period: u32,
+    ctx: &ForgeRequestContext<'_>,
+    shell: &mut ProducerShell,
+    self_accepted_out: &mut Option<ade_ledger::producer::AcceptedBlock>,
 ) -> CoordinatorEvent {
     // PHASE4-N-W S1 — producer-era policy: the producer forges Praos-era
     // (Babbage/Conway) blocks only. A non-Praos era fail-closes here
@@ -922,10 +952,16 @@ pub fn run_real_forge(
     let block_hash = accepted_block_hash(&accepted);
     let _ = verified_vrf_output; // suppress unused; carried for completeness
 
-    CoordinatorEvent::ForgeSucceeded {
+    let event = CoordinatorEvent::ForgeSucceeded {
         slot,
         artifact: artifact_from_accepted(&accepted, block_hash, forged.bytes),
-    }
+    };
+    // PHASE4-N-F-G-B S1: surface the ORIGINAL BLUE self-accepted token for the
+    // (S2) serve handoff. `artifact_from_accepted` only BORROWED `accepted`, so
+    // the owned token moves here — carried verbatim, never re-derived from
+    // `artifact.bytes`. This is the sole `Some(..)` site (success path only).
+    *self_accepted_out = Some(accepted);
+    event
 }
 
 fn map_forge_error(e: &ForgeError) -> ForgeFailureReason {
@@ -1059,7 +1095,11 @@ fn apply_effects_with_forge_handler(
                             protocol_version: ProtocolVersion { major: 9, minor: 0 },
                             prev_opcert_counter: None,
                         };
-                        run_real_forge(*slot, *kes_period, &ctx, shell)
+                        // PHASE4-N-F-G-B S1: produce_mode's serve path is
+                        // functionally unaffected — it advances via the sole
+                        // `ChainEvolution::advance` (below) and ignores the
+                        // surfaced handoff token; `.0` is the event.
+                        run_real_forge(*slot, *kes_period, &ctx, shell).0
                     }
                 };
 
