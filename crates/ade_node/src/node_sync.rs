@@ -2040,13 +2040,22 @@ mod tests {
         signable.extend_from_slice(&0u64.to_be_bytes());
         signable.extend_from_slice(&0u64.to_be_bytes());
         let sigma = cold_dalek.sign(&signable);
+        // REAL cardano-cli NodeOperationalCertificate envelope (S2): cborHex =
+        // array(2)[array(4)[hot_vkey(32), seq=0, kes_period=0, sigma(64)], cold_vk(32)].
+        let mut ocbor = vec![0x82u8, 0x84, 0x58, 0x20];
+        ocbor.extend_from_slice(&hot_vkey);
+        ocbor.push(0x00); // sequence_number 0
+        ocbor.push(0x00); // kes_period 0
+        ocbor.extend_from_slice(&[0x58, 0x40]);
+        ocbor.extend_from_slice(&sigma.to_bytes());
+        ocbor.extend_from_slice(&[0x58, 0x20]);
+        ocbor.extend_from_slice(&[0u8; 32]); // cold_vk (discarded by the node path)
         let opcert = dir.join("opcert.json");
         std::fs::write(
             &opcert,
             format!(
-                r#"{{"hot_vkey_hex": "{}", "sequence_number": 0, "kes_period": 0, "sigma_hex": "{}"}}"#,
-                hexe(&hot_vkey),
-                hexe(&sigma.to_bytes())
+                "{{\"type\":\"NodeOperationalCertificate\",\"description\":\"\",\"cborHex\":\"{}\"}}",
+                hexe(&ocbor)
             ),
         )
         .unwrap();

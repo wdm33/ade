@@ -26,16 +26,14 @@
 //! path calls it until S3 assembles the `ForgeActivation` and flips `Some`/`None`.
 
 use crate::forge_intent::ForgePaths;
-use crate::produce_mode::{
-    load_kes_skey_any_format, parse_simple_genesis_json, parse_simple_opcert_json,
-};
-use ade_ledger::pparams::ProtocolParameters;
+use crate::produce_mode::load_kes_skey_any_format;
 use ade_runtime::producer::coordinator::GenesisAnchor;
+use ade_runtime::producer::genesis_parser::{parse_shelley_genesis, GenesisParseError};
 use ade_runtime::producer::keys::{
     load_cold_signing_key_skey, load_vrf_signing_key_skey, KeyLoadError,
 };
+use ade_runtime::producer::opcert_envelope::{parse_opcert_envelope, OpCertParseError};
 use ade_runtime::producer::producer_shell::{ProducerShell, ShellInitError};
-use ade_types::shelley::block::ProtocolVersion;
 use ade_types::{Hash28, SlotNo};
 
 /// Closed, secret-free error for node-path operator-material ingress. Each
@@ -47,9 +45,9 @@ pub enum OperatorForgeError {
     ColdKeyLoad(KeyLoadError),
     VrfKeyLoad(KeyLoadError),
     KesKeyLoad(KeyLoadError),
-    OpcertParse(&'static str),
+    OpcertParse(OpCertParseError),
     ShellInit(ShellInitError),
-    GenesisParse(&'static str),
+    GenesisParse(GenesisParseError),
 }
 
 impl std::fmt::Display for OperatorForgeError {
@@ -64,14 +62,14 @@ impl std::fmt::Display for OperatorForgeError {
             OperatorForgeError::KesKeyLoad(e) => {
                 write!(f, "operator KES signing key load failed: {e:?}")
             }
-            OperatorForgeError::OpcertParse(detail) => {
-                write!(f, "operator opcert parse failed: {detail}")
+            OperatorForgeError::OpcertParse(e) => {
+                write!(f, "operator opcert parse failed: {e:?}")
             }
             OperatorForgeError::ShellInit(e) => {
                 write!(f, "operator producer shell init failed: {e:?}")
             }
-            OperatorForgeError::GenesisParse(detail) => {
-                write!(f, "operator genesis anchor parse failed: {detail}")
+            OperatorForgeError::GenesisParse(e) => {
+                write!(f, "operator genesis anchor parse failed: {e:?}")
             }
         }
     }
@@ -92,8 +90,16 @@ pub fn load_operator_producer_shell(
     let cold = load_cold_signing_key_skey(&paths.cold).map_err(OperatorForgeError::ColdKeyLoad)?;
     let vrf = load_vrf_signing_key_skey(&paths.vrf).map_err(OperatorForgeError::VrfKeyLoad)?;
     let kes = load_kes_skey_any_format(&paths.kes).map_err(OperatorForgeError::KesKeyLoad)?;
-    let opcert =
-        parse_simple_opcert_json(&paths.opcert).map_err(OperatorForgeError::OpcertParse)?;
+    // Real cardano-cli `NodeOperationalCertificate` envelope ingress on the node
+    // path (PHASE4-N-F-G-A S2) — retires `parse_simple_opcert_json`. The opcert
+    // metadata/counter (hot_vkey, sequence_number, kes_period, sigma) is the real
+    // parser's output; the cold VK in the envelope is discarded (the shell's cold
+    // key is the custody authority).
+    let opcert_bytes = std::fs::read(&paths.opcert)
+        .map_err(|_| OperatorForgeError::OpcertParse(OpCertParseError::JsonShape))?;
+    let opcert = parse_opcert_envelope(&opcert_bytes)
+        .map_err(OperatorForgeError::OpcertParse)?
+        .opcert;
     ProducerShell::init(kes, vrf, cold, opcert).map_err(OperatorForgeError::ShellInit)
 }
 
@@ -110,35 +116,48 @@ pub struct OperatorForgeMaterial {
     pub shell: ProducerShell,
     pub genesis: GenesisAnchor,
     pub pool_id: Hash28,
-    pub pparams: ProtocolParameters,
-    pub protocol_version: ProtocolVersion,
     pub anchor_millis: u64,
     pub start_slot: SlotNo,
     pub slot_length_ms: u32,
 }
+
+/// Slot at which KES period 0 begins — the genesis KES-period origin. KES periods
+/// are counted from the genesis slot (0) at `slotsPerKESPeriod` cadence, so this is
+/// `0` for a from-genesis network. `parse_shelley_genesis` requires it as an
+/// argument (the real `shelley-genesis.json` does NOT carry it); the node path
+/// supplies the proven genesis origin, never a fabricated chain fact
+/// (PHASE4-N-F-G-A S2 PO-3). `ProducerShell::init`'s CN-PROD-02 freshness bound
+/// mechanically enforces consistency with the operator opcert's `kes_period`.
+const GENESIS_KES_PERIOD_ORIGIN_SLOT: u64 = 0;
 
 /// Build the operator-material-backed forge inputs from a presence-validated
 /// [`ForgePaths`].
 ///
 /// **Mithril boundary (load-bearing).** This is operator signing-material
 /// ingress, NOT bootstrap. It does NOT call Mithril, does NOT create a second
-/// bootstrap path, and does NOT re-derive initial state. `parse_simple_genesis_json`
-/// is reused only to extract the clock/KES anchors (`slot_zero_time_unix_ms`,
-/// `slot_length_ms`, the three KES fields) for the activation — it is NOT a
-/// starting-state source and NOT a new semantic genesis authority. The forge
-/// base is the single recovered `BootstrapState` the lifecycle's FirstRun
-/// (Mithril) / WarmStart (WAL) arm already produced; the caller borrows it.
+/// bootstrap path, and does NOT re-derive initial state. The real
+/// `parse_shelley_genesis` (PHASE4-N-F-G-A S2) extracts ONLY the clock/KES/network
+/// constants (`networkMagic`, `systemStart`→`slot_zero_time_unix_ms`,
+/// `slotLength`→`slot_length_ms`, the KES fields) for the activation — it is NOT a
+/// starting-state source and NOT a new semantic genesis authority. The forge base
+/// is the single recovered `BootstrapState` the lifecycle's FirstRun (Mithril) /
+/// WarmStart (WAL) arm already produced; the caller borrows it.
 ///
 /// `pool_id` is derived in this ONE named place from the operator cold key
-/// (`blake2b_224(cold_vk)`) — never fabricated. `pparams` / `protocol_version`
-/// reuse the produce-path honest-scope defaults (this is activation wiring, not
-/// mainnet-complete block-production fidelity).
+/// (`blake2b_224(cold_vk)`) — never fabricated. `protocol_version` + `pparams` are
+/// **no longer produced here**: they are sourced from the recovered ledger's
+/// current `protocol_params` (installed by S2a) at `ForgeActivation` construction,
+/// so the forge reads a truthful current protocol version, not a fabricated default.
 pub fn build_operator_forge_material(
     paths: &ForgePaths,
 ) -> Result<OperatorForgeMaterial, OperatorForgeError> {
     let shell = load_operator_producer_shell(paths)?;
-    let genesis =
-        parse_simple_genesis_json(&paths.genesis).map_err(OperatorForgeError::GenesisParse)?;
+    // Real cardano-cli `shelley-genesis.json` ingress on the node path (S2) —
+    // retires `parse_simple_genesis_json`; clock/KES/network constants ONLY.
+    let genesis_bytes = std::fs::read(&paths.genesis)
+        .map_err(|_| OperatorForgeError::GenesisParse(GenesisParseError::JsonShape))?;
+    let genesis = parse_shelley_genesis(&genesis_bytes, GENESIS_KES_PERIOD_ORIGIN_SLOT)
+        .map_err(OperatorForgeError::GenesisParse)?;
     // pool_id from the operator cold verification key — the one named derivation.
     let pool_id = Hash28(ade_crypto::blake2b_224(&shell.cold_vk().0).0);
     // Clock-seam anchors (DC-NODE-03 / DC-NODE-05): slot_zero_time IS slot 0's
@@ -152,8 +171,6 @@ pub fn build_operator_forge_material(
         shell,
         genesis,
         pool_id,
-        pparams: ProtocolParameters::default(),
-        protocol_version: ProtocolVersion { major: 9, minor: 0 },
         anchor_millis,
         start_slot: SlotNo(0),
         slot_length_ms,
@@ -185,9 +202,50 @@ mod tests {
         f.write_all(json.as_bytes()).unwrap();
     }
 
+    /// Minimal canonical CBOR uint (covers the small seq / kes_period values the
+    /// tests use).
+    fn cbor_uint(n: u64) -> Vec<u8> {
+        if n < 24 {
+            vec![n as u8]
+        } else if n < 256 {
+            vec![0x18, n as u8]
+        } else {
+            vec![0x19, (n >> 8) as u8, n as u8]
+        }
+    }
+
+    /// Write a REAL cardano-cli `NodeOperationalCertificate` text envelope: the
+    /// `cborHex` is CBOR `array(2)` of `[array(4)[hot_vkey(bytes32), seq(uint),
+    /// kes_period(uint), sigma(bytes64)], cold_vk(bytes32)]` (the exact shape
+    /// `parse_opcert_envelope` locks). The cold VK is discarded by the node path.
+    fn write_real_opcert_envelope(
+        path: &Path,
+        hot_vkey: &[u8],
+        seq: u64,
+        kes_period: u64,
+        sigma: &[u8],
+        cold_vk: &[u8],
+    ) {
+        let mut cbor = vec![0x82, 0x84]; // array(2) [ array(4) ...
+        cbor.extend_from_slice(&[0x58, 0x20]); // bytes(32)
+        cbor.extend_from_slice(hot_vkey);
+        cbor.extend_from_slice(&cbor_uint(seq));
+        cbor.extend_from_slice(&cbor_uint(kes_period));
+        cbor.extend_from_slice(&[0x58, 0x40]); // bytes(64)
+        cbor.extend_from_slice(sigma);
+        cbor.extend_from_slice(&[0x58, 0x20]); // bytes(32) cold_vk
+        cbor.extend_from_slice(cold_vk);
+        let json = format!(
+            "{{\"type\":\"NodeOperationalCertificate\",\"description\":\"\",\"cborHex\":\"{}\"}}",
+            hex_encode(&cbor)
+        );
+        std::fs::write(path, json).unwrap();
+    }
+
     /// Write a complete real-format operator key set (ade-native KES envelope,
-    /// cardano-cli VRF/cold text-envelopes, opcert JSON whose hot_vkey is the
-    /// KES vkey from the same seed). `opcert_kes_period` lets a test force a
+    /// cardano-cli VRF/cold text-envelopes, a REAL `NodeOperationalCertificate`
+    /// envelope whose hot_vkey is the KES vkey from the same seed, and a REAL
+    /// `shelley-genesis.json`). `opcert_kes_period` lets a test force a
     /// KES-period-vs-opcert mismatch. Returns the five paths as `ForgePaths`.
     fn write_operator_material(dir: &Path, opcert_kes_period: u64) -> ForgePaths {
         let kes_seed = [0x42u8; 32];
@@ -208,26 +266,27 @@ mod tests {
             ade_crypto::kes_sum::Sum6Kes::gen_key_kes_from_seed_bytes(&kes_seed).unwrap();
         let kes_vkey = ade_crypto::kes_sum::Sum6Kes::derive_verification_key(&kes_sk_raw);
         let opcert_path = dir.join("opcert.json");
-        let opcert_json = format!(
-            r#"{{"hot_vkey_hex": "{}", "sequence_number": 0, "kes_period": {}, "sigma_hex": "{}"}}"#,
-            hex_encode(&kes_vkey),
+        write_real_opcert_envelope(
+            &opcert_path,
+            &kes_vkey,
+            0,
             opcert_kes_period,
-            "0".repeat(128),
+            &[0u8; 64],
+            &[0u8; 32],
         );
-        std::fs::write(&opcert_path, opcert_json).unwrap();
 
-        // Genesis fixture (anchor extraction only; not a bootstrap source). KES
-        // anchor 0 + max 63 so the slot→period map keeps period 0 valid.
+        // REAL shelley-genesis.json (clock/KES/network constants only; S2). The
+        // node path supplies kes_anchor_slot as the genesis origin (not in genesis);
+        // systemStart 2022-06-01T00:00:00Z = 1_654_041_600_000 ms; slotLength 1s.
         let genesis_path = dir.join("genesis.json");
         std::fs::write(
             &genesis_path,
             br#"{
-                "network_magic": 1,
-                "slot_zero_time_unix_ms": 1700000000000,
-                "slot_length_ms": 1000,
-                "slots_per_kes_period": 129600,
-                "kes_anchor_slot": 0,
-                "kes_max_period": 63
+                "networkMagic": 1,
+                "systemStart": "2022-06-01T00:00:00Z",
+                "slotLength": 1,
+                "slotsPerKESPeriod": 129600,
+                "maxKESEvolutions": 63
             }"#,
         )
         .unwrap();
@@ -333,12 +392,15 @@ mod tests {
         // pool_id derived from the operator cold vkey — the one named place.
         let expected_pool = Hash28(ade_crypto::blake2b_224(&mat.shell.cold_vk().0).0);
         assert_eq!(mat.pool_id, expected_pool);
-        // Clock-seam anchors come from genesis (anchor extraction only).
-        assert_eq!(mat.anchor_millis, 1_700_000_000_000);
+        // Clock-seam anchors come from the REAL shelley-genesis (clock/KES/network
+        // only; protocol_version + pparams are NOT here — they come from the
+        // recovered ledger's current protocol_params, installed by S2a).
+        assert_eq!(mat.anchor_millis, 1_654_041_600_000);
         assert_eq!(mat.start_slot, SlotNo(0));
         assert_eq!(mat.slot_length_ms, 1000);
-        // Honest-scope defaults (matches the produce path).
-        assert_eq!(mat.protocol_version, ProtocolVersion { major: 9, minor: 0 });
+        // PO-3: kes_anchor_slot is the proven genesis KES-period origin (0), not a
+        // fabricated value nor an inherited simple-JSON field.
+        assert_eq!(mat.genesis.kes_anchor_slot, 0);
     }
 
     #[test]

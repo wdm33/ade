@@ -401,8 +401,6 @@ async fn run_node_lifecycle_inner(
                 mut shell,
                 genesis,
                 pool_id,
-                pparams,
-                protocol_version,
                 anchor_millis,
                 start_slot,
                 slot_length_ms,
@@ -441,14 +439,19 @@ async fn run_node_lifecycle_inner(
             let mut source = NodeBlockSource::in_memory(Vec::new());
             // The injected clock is the SOLE wall-clock observation (DC-NODE-03).
             let mut clock = SystemClock::new(slot_length_ms);
+            // S2: protocol_version + pparams come from the recovered ledger's
+            // current protocol_params (installed by S2a) — the single truthful
+            // source, consumed here, never fabricated or re-derived.
+            let (current_pparams, current_protocol_version) =
+                forge_constants_from_pparams(&state.ledger.protocol_params);
             let mut activation = ForgeActivation::new(
                 &mut clock,
                 &coord_state,
                 &state,
                 &mut shell,
                 pool_id,
-                pparams,
-                protocol_version,
+                current_pparams,
+                current_protocol_version,
                 anchor_millis,
                 start_slot,
                 slot_length_ms,
@@ -577,6 +580,21 @@ impl<'a> ForgeActivation<'a> {
             hermetic_forge_outcomes: Vec::new(),
         }
     }
+}
+
+/// S2: derive the forge's current `protocol_version` + `pparams` from the
+/// recovered ledger's `protocol_params` (installed by S2a) — the single truthful
+/// source, consumed here, never a fabricated default / genesis-initial value.
+pub(crate) fn forge_constants_from_pparams(
+    pp: &ProtocolParameters,
+) -> (ProtocolParameters, ProtocolVersion) {
+    (
+        pp.clone(),
+        ProtocolVersion {
+            major: pp.protocol_major as u64,
+            minor: pp.protocol_minor as u64,
+        },
+    )
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -1158,6 +1176,20 @@ fn report(e: &NodeLifecycleError) {
 #[allow(clippy::expect_used)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn node_forge_protocol_version_and_pparams_from_recovered_current_view() {
+        // S2: the forge sources protocol_version + pparams from the recovered
+        // ledger's current protocol_params (installed by S2a), NOT the stale
+        // default protocol_major 2 — the PO-1 anti-regression.
+        let mut pp = ProtocolParameters::default();
+        pp.protocol_major = 9;
+        pp.protocol_minor = 1;
+        let (out_pp, out_pv) = forge_constants_from_pparams(&pp);
+        assert_eq!(out_pv, ProtocolVersion { major: 9, minor: 1 });
+        assert_eq!(out_pp.protocol_major, 9);
+        assert_ne!(out_pv.major, 2, "must not be the stale default protocol_major");
+    }
 
     // ===== L1: pure classifier =====
 
@@ -1906,20 +1938,29 @@ mod tests {
         use ade_crypto::kes_sum::KesAlgorithm;
         let kes_raw = ade_crypto::kes_sum::Sum6Kes::gen_key_kes_from_seed_bytes(&kes_seed).unwrap();
         let kes_vk = ade_crypto::kes_sum::Sum6Kes::derive_verification_key(&kes_raw);
+        // REAL NodeOperationalCertificate envelope (S2): array(2)[array(4)[...], cold_vk].
+        let mut ocbor = vec![0x82u8, 0x84, 0x58, 0x20];
+        ocbor.extend_from_slice(&kes_vk);
+        ocbor.push(0x00); // sequence_number 0
+        ocbor.push(0x00); // kes_period 0
+        ocbor.extend_from_slice(&[0x58, 0x40]);
+        ocbor.extend_from_slice(&[0u8; 64]); // sigma
+        ocbor.extend_from_slice(&[0x58, 0x20]);
+        ocbor.extend_from_slice(&[0u8; 32]); // cold_vk
         let opcert = dir.join("opcert.json");
         std::fs::write(
             &opcert,
             format!(
-                r#"{{"hot_vkey_hex": "{}", "sequence_number": 0, "kes_period": 0, "sigma_hex": "{}"}}"#,
-                hexe(&kes_vk),
-                "0".repeat(128)
+                "{{\"type\":\"NodeOperationalCertificate\",\"description\":\"\",\"cborHex\":\"{}\"}}",
+                hexe(&ocbor)
             ),
         )
         .unwrap();
+        // REAL shelley-genesis.json (clock/KES/network constants only; S2).
         let genesis = dir.join("op-genesis.json");
         std::fs::write(
             &genesis,
-            br#"{"network_magic":1,"slot_zero_time_unix_ms":1700000000000,"slot_length_ms":1000,"slots_per_kes_period":129600,"kes_anchor_slot":0,"kes_max_period":63}"#,
+            br#"{"networkMagic":1,"systemStart":"2022-06-01T00:00:00Z","slotLength":1,"slotsPerKESPeriod":129600,"maxKESEvolutions":63}"#,
         )
         .unwrap();
         (cold, kes, vrf, opcert, genesis)
