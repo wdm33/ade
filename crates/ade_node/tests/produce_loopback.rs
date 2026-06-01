@@ -45,8 +45,17 @@ use ade_core::consensus::{BootstrapAnchorHash, EraSummary};
 use ade_ledger::block_validity::decode_block;
 use ade_ledger::consensus_view::{PoolDistrView, PoolEntry};
 use ade_ledger::state::LedgerState;
+use ade_network::block_fetch::server::{
+    producer_block_fetch_serve, BlockFetchServerStep, ProducerBlockFetchServerState,
+};
+use ade_network::codec::block_fetch::{
+    decompose_blockfetch_block, BlockFetchMessage, Point, Range,
+};
+use ade_network::codec::version::BlockFetchVersion;
 use ade_runtime::producer::chain_evolution::ChainEvolution;
-use ade_runtime::producer::served_chain_handle::ServedChainHandle;
+use ade_runtime::producer::self_accepted_handoff::SelfAcceptedHandoff;
+use ade_runtime::producer::served_chain_handle::{ServedChainHandle, ServedChainView};
+use ade_runtime::producer::served_chain_lookups::ServedChainLookups;
 use ade_testkit::validity::ConwayValidityCorpus;
 use ade_types::{CardanoEra, EpochNo, Hash28, Hash32, SlotNo};
 
@@ -187,4 +196,97 @@ fn served_snapshot_two_run_replay_byte_identical() {
         fp_a, fp_b,
         "two seed->advance->push runs must yield byte-identical served-snapshot fingerprints"
     );
+}
+
+// =========================================================================
+// PHASE4-N-F-G-B S3 — node-spine block-fetch payload proof (hermetic loopback)
+// =========================================================================
+
+/// Serve a single `(slot, hash)` over a node-spine `ServedChainView` via the
+/// reused block-fetch reducer + `ServedChainLookups`, returning the `MsgBlock`
+/// wire payload (tag-24 wrapped). Hermetic: drives `producer_block_fetch_serve`
+/// directly — no real listener / socket / peer (that is G-C).
+fn serve_block_fetch_payload(view: &ServedChainView, slot: SlotNo, hash: Hash32) -> Vec<u8> {
+    let snap = view.borrow();
+    let look = ServedChainLookups { snap: &snap };
+    let range = Range {
+        from: Point::Block {
+            slot,
+            hash: hash.clone(),
+        },
+        to: Point::Block { slot, hash },
+    };
+    let (_state, step) = producer_block_fetch_serve(
+        ProducerBlockFetchServerState::new(),
+        BlockFetchMessage::RequestRange(range),
+        &look,
+        BlockFetchVersion::new(9),
+    )
+    .expect("serve");
+    match step {
+        BlockFetchServerStep::Replies(replies) => replies
+            .into_iter()
+            .find_map(|r| match r.into_message() {
+                BlockFetchMessage::Block { bytes } => Some(bytes),
+                _ => None,
+            })
+            .expect("a Block reply for the served range"),
+        other => panic!("expected Replies, got {other:?}"),
+    }
+}
+
+#[test]
+fn block_fetch_payload_is_self_accepted_bytes() {
+    // Admit a self-accepted block via the S2 node-spine path
+    // (SelfAcceptedHandoff::into_accepted() -> push_atomic), then serve it via
+    // the reused block-fetch reducer over the node-spine view; the
+    // tag-24-unwrapped payload is the self-accept input bytes byte-for-byte.
+    let corpus = corpus();
+    let block_bytes = pick_lightest(&corpus).to_vec();
+    let (_evo, accepted) = seed_from_corpus(&corpus)
+        .advance(&block_bytes)
+        .expect("corpus block self-accepts + advances");
+
+    let handoff = SelfAcceptedHandoff::from_self_accepted(accepted);
+    let (handle, view) = ServedChainHandle::new();
+    let tip = handle
+        .push_atomic(handoff.into_accepted())
+        .expect("node-spine admit via into_accepted()");
+
+    let payload = serve_block_fetch_payload(&view, tip.slot, tip.hash.clone());
+    let inner = decompose_blockfetch_block(&payload).expect("served payload is tag24-wrapped");
+    assert_eq!(
+        inner,
+        &block_bytes[..],
+        "served block-fetch payload (tag24-unwrapped) is the self-accept input bytes"
+    );
+}
+
+#[test]
+fn block_fetch_tag24_round_trips_to_self_accept_input() {
+    // The served MsgBlock payload is bare tag-24 (0xd8 0x18); its inner bytes
+    // decode via the canonical block-envelope authority back to the self-accept
+    // input (wrap<->decode symmetry on the node spine).
+    let corpus = corpus();
+    let block_bytes = pick_lightest(&corpus).to_vec();
+    let (_evo, accepted) = seed_from_corpus(&corpus)
+        .advance(&block_bytes)
+        .expect("corpus block self-accepts + advances");
+
+    let handoff = SelfAcceptedHandoff::from_self_accepted(accepted);
+    let (handle, view) = ServedChainHandle::new();
+    let tip = handle
+        .push_atomic(handoff.into_accepted())
+        .expect("node-spine admit via into_accepted()");
+
+    let payload = serve_block_fetch_payload(&view, tip.slot, tip.hash.clone());
+    assert_eq!(
+        &payload[0..2],
+        &[0xd8, 0x18],
+        "served payload must start with tag(24)"
+    );
+    let inner = decompose_blockfetch_block(&payload).expect("tag24 unwrap");
+    let env = decode_block_envelope(inner).expect("inner decodes as [era, block]");
+    assert_eq!(env.era, CardanoEra::Conway);
+    assert_eq!(inner, &block_bytes[..]);
 }
