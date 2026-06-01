@@ -3,41 +3,135 @@
 > **Status:** Living architectural document. Regenerated; not hand-edited.
 > Per-project instance of `~/.claude/methodology/templates/seams.md`.
 
-> 11 crates, **456 canonical types**, **117 CI checks** at HEAD (`339cccb1`, PHASE4-N-F-G-B cluster close).
+> 11 crates, **456 canonical types**, **118 CI checks** at HEAD (`90791691`, PHASE4-N-F-G-C cluster close).
 > Reads CODEMAP (`docs/ade-CODEMAP.md`, regenerated at the same HEAD) for the module
 > list + TCB colors, and the invariant registry (`docs/ade-invariant-registry.toml` —
 > **313 entries** at HEAD) for the rule IDs that gate each closed surface.
 >
 > **This regeneration is a scoped INCREMENTAL catch-up through ONE cluster.** The prior file was generated
-> at the PHASE4-N-F-G-A close (header `80dac1f7` / 116 CI checks / 313 rules — forge fidelity on the
-> `--mode node` spine). It is brought current through **PHASE4-N-F-G-B** (closing now at `339cccb1` —
-> **the self-accept→serve handoff on the `--mode node` spine**). The G-B delta proves that **only a BLUE
-> self-accepted forged artifact can be served**, via a **sibling** serve task, **without relaxing relay-loop
-> containment**. The seam-relevant additions are a **NEW closed, constructor-fenced surface**
-> `SelfAcceptedHandoff` (a newtype over the BLUE `ade_ledger::producer::AcceptedBlock` with a private field
-> and a SOLE constructor `from_self_accepted`) and a **typed `mpsc<SelfAcceptedHandoff>` handoff seam** from
-> the relay loop to a dispatcher-spawned sibling served-chain admit task — **both CLOSED surfaces / fenced
-> seams, NOT new extension points.** **No BLUE crate was modified** — the 456 canonical-type total is
-> unchanged; all G-B code lands in the RED shell `ade_runtime` (the NEW GREEN
-> `producer::self_accepted_handoff` carrier — a pure newtype, not canonical-counted) and the RED
-> binary/driver `ade_node` (`produce_mode` / `node_sync` return-shape widening, `node_lifecycle` sibling task
-> + `ForgeActivation.handoff_tx`).
+> at the PHASE4-N-F-G-B close (header `339cccb1` / 117 CI checks / 313 rules — the self-accept→serve handoff on
+> the `--mode node` spine). It is brought current through **PHASE4-N-F-G-C** (closing now at `90791691` —
+> **the live WirePump feed + BA-02 evidence wiring on the `--mode node` spine**). The G-C delta makes the
+> forge-capable `On` arm **live-feed-wireable** from `--peer` (reusing the closed admission dial + pump) and wires
+> the operator-pass BA-02 evidence I/O — **without** claiming peer acceptance. The seam-relevant additions are a
+> **NEW node-spine live-feed ATTACH POINT that REUSES existing closed wire infra** (`spawn_live_wire_pump_source`
+> builds a LIVE `NodeBlockSource::WirePump` by reusing the closed `ade_runtime::admission::{dial_for_admission,
+> run_admission_wire_pump}` VERBATIM — **a FILL of the existing `WirePump` arm via `from_wire_pump`, NOT a new
+> `NodeBlockSource` variant / plugin point / new wire authority**) and a **NEW RED BA-02 evidence-I/O module**
+> `ade_node::ba02_pass` (two file-I/O fns over the pre-existing closed `Ba02Manifest` / `BA02Outcome` /
+> `PeerAcceptEvent` vocabulary — **NO new closed enum / registry**; `correlate` stays the SOLE `Ba02Manifest`
+> ctor). **Both are CLOSED surfaces / fenced seams, NOT new extension points.** **No BLUE crate was modified** —
+> the 456 canonical-type total is unchanged; all G-C code lands in the RED binary/driver `ade_node`
+> (`node_lifecycle` live-feed wire + `spawn_live_wire_pump_source`, `admission::bootstrap` fn-visibility
+> promotion, the NEW RED `ba02_pass` module), CI, and docs.
 >
-> **Boundary language (load-bearing — do not soften).** G-B is **serve-authority only** — it proves the
-> serve *mechanism* on the `--mode node` spine admits **only** a BLUE self-accepted artifact, carried through
-> the typed constructor-fenced `SelfAcceptedHandoff` into a **sibling** served-chain admit task whose sole
-> mutation is the single `ServedChainHandle::push_atomic` fed by `into_accepted()`. The relay-loop body
-> forwards a **typed channel send only** (no `ServedChainHandle`, no `push_atomic`, no served-chain mutation,
-> no block-fetch serving), so `ci_check_node_run_loop_containment.sh` is **byte-/semantically unchanged**.
-> G-B is **NOT** a live-feed cluster (no `WirePump` / `n2n_dialer` / session wiring into the binary — that is
-> G-C; the `ServedChainView` is retained for that future wiring), adds **no new `CoordinatorEvent` variant**
-> (the surfaced token rides a sibling return component), introduces **no new BLUE authority / canonical
-> type**, and makes **NO peer-acceptance / BA-02 / RO-LIVE acceptance claim** (peer ACCEPT stays
-> operator-gated; RO-LIVE-01 partial). On the empty binary source the loop still halts before any `ForgeTick`
-> — the `On` arm is forge-CAPABLE but **not observable** (RO-LIVE-01 follow-on). **BA-02 is satisfied
-> nowhere.**
+> **Boundary language (load-bearing — do not soften).** G-C closes the **MECHANICAL live-feed + evidence
+> scaffolding ONLY**. The `--mode node` `On` arm is now **live-feed-wireable**: when `--peer` is supplied,
+> `spawn_live_wire_pump_source` builds a LIVE `NodeBlockSource::WirePump` by reusing the closed `dial_for_admission`
+> + `run_admission_wire_pump` (the runtime `AdmissionPeerEvent` feeds the `WirePump` arm directly — no bridge, no
+> reimplemented wire authority, no new variant). With a live feed the forge is observable when the feed is
+> Continuing and a due leader slot is reached; **peer ACCEPT is NOT claimed here — it is operator-gated**
+> (`RO-LIVE-01` partial / `blocked_until_operator_stake_available`), proven only by an operator-captured peer log
+> through `ba02_evidence::correlate`. The BA-02 evidence I/O (`ba02_pass`) reads a real operator-captured
+> peer-log file and runs it through the SOLE `Ba02Manifest` constructor (`correlate`); `write_ba02_manifest`
+> accepts ONLY a `Ba02Manifest`, so a written manifest is always correlate-produced; **no synthetic manifest is
+> committed** (the new gate is vacuous-until-committed and sha256-binds the fixture). Ade self-accept /
+> `ForgeSucceeded` / served-block / wire success **≠ peer acceptance**. With NO `--peer` the empty source still
+> halts before any `ForgeTick` (forge-CAPABLE, not observable). The durable tip still advances only via
+> `run_node_sync → pump_block` (no second bootstrap, CN-NODE-01); `run_node_sync` is UNMODIFIED;
+> `ci_check_node_run_loop_containment.sh` is **byte-unchanged**. There is **NO new BLUE authority / canonical
+> type, no new `NodeBlockSource` variant, no new `CoordinatorEvent` variant**, and the bounty acceptance
+> criterion (an operator-witnessed accepted block) is **NOT** satisfied by this cluster.
 >
-> ### PHASE4-N-F-G-B (closing, `339cccb1`) — self-accept→serve handoff on the `--mode node` spine
+> ### PHASE4-N-F-G-C (closing, `90791691`) — live WirePump feed + BA-02 evidence wiring on the `--mode node` spine
+>
+> N-F-G-C introduced / extended (all NEW surfaces are CLOSED / fenced ATTACH POINTS — classified under §3 Closed
+> / §4 Frozen; NOT new extension points):
+>
+> - **NEW node-spine ATTACH POINT that REUSES existing closed wire infra (RED, `ade_node::node_lifecycle`):**
+>   the live WirePump feed (S1) — `spawn_live_wire_pump_source(peer_addrs: &[String], network_magic: u32,
+>   recovered_tip: Option<&ChainTip>) -> NodeBlockSource`. RED wiring ONLY: it reuses the closed
+>   `ade_runtime::admission::{dial_for_admission, run_admission_wire_pump}` VERBATIM (no reimplementation, no new
+>   wire authority) and feeds their `AdmissionPeerEvent` output DIRECTLY into the `WirePump` arm via
+>   `NodeBlockSource::from_wire_pump(rx)` (the node spine consumes the runtime event type — no bridge). Each
+>   `--peer` is dialed in a `tokio::spawn` whose `AdmissionPeerEvent` output is fed into a **bounded** `mpsc`
+>   (`LIVE_WIRE_PUMP_CHANNEL_CAP = 64`); the `start_point` is the recovered tip (`Point::Block`) or
+>   `Point::Origin`. The `On` arm wires it iff `--peer` is supplied (`let mut source = if live_feed_wired {
+>   spawn_live_wire_pump_source(...) } else { NodeBlockSource::in_memory(Vec::new()) }`). **The live source is a
+>   FILL of the closed 2-variant `NodeBlockSource` {WirePump, InMemory} (NOT a new variant), adds no second
+>   tip-advance path, carries no verdict.** Honest-scope (C3, mirrors `admission::bootstrap::
+>   spawn_wire_pumps_for_admission`): an unparseable addr or a `dial_for_admission` failure is logged-and-dropped
+>   — never fatal, never a fabricated address, never a silent tip graft; if no peer yields a live pump the feed
+>   ends and the loop halts clean (same outcome as the empty source). **This CLOSES the prior §7 candidate #0
+>   "live network serve + operator-peer surface (G-C)" on the CONSUME/FEED side** — the live feed is now wired.
+>   Gate: `ci_check_served_chain_handoff_fence.sh` BROADENED in place (S1); `ci_check_node_run_loop_containment.sh`
+>   byte-unchanged.
+> - **CHANGED (RED, fn-visibility promotion — reuse, no reimpl, `ade_node::admission::bootstrap`):**
+>   `build_n2n_version_table` is promoted `fn` → `pub(crate) fn` (S1) so `node_lifecycle::spawn_live_wire_pump_source`
+>   can REUSE the existing N2N version-table builder instead of reimplementing it. No behavior change.
+> - **NEW RED BA-02 evidence-I/O module (RED, `ade_node::ba02_pass` — `//! RED`):** operator-pass BA-02 evidence
+>   file I/O (S2). `correlate_peer_log_file(ade: &AdeForgeRecord, peer_log_path: &Path) -> io::Result<BA02Outcome>`
+>   reads the operator-captured peer-accept JSONL file → GREEN `ba02_evidence::parse_peer_accept_events`
+>   (allow-list) → `ba02_evidence::correlate` (the SOLE `Ba02Manifest` ctor); a missing/unreadable file fails
+>   closed (`io::Error`), never a synthesized acceptance. `write_ba02_manifest(manifest: &Ba02Manifest, out_path:
+>   &Path) -> io::Result<()>` accepts ONLY a `Ba02Manifest` (which only `correlate`'s exact-match arm
+>   constructs), so a written manifest is ALWAYS correlate-produced. Registered `pub mod ba02_pass;` in `lib.rs`.
+>   **NO new closed enum / registry** — two file-I/O fns over the pre-existing closed `Ba02Manifest` / `BA02Outcome`
+>   / `PeerAcceptEvent` / `NoEvidenceReason` vocabulary; the GREEN `ba02_evidence` correlator is **UNCHANGED**.
+>   Constructs no evidence, derives no acceptance, never coerces a non-acceptance line. Reached by no binary arm
+>   at this HEAD (exercised by `crates/ade_node/tests/node_operator_pass_ba02.rs` — incl. the env-gated
+>   `node_operator_pass_ba02_live`). Backs the BA-02 leg of `RO-LIVE-06` / `CN-OPERATOR-EVIDENCE-01`.
+> - **GREEN (BA-02 evidence correlator — UNCHANGED, `ade_node::ba02_evidence`):** `correlate` stays the SOLE
+>   `Ba02Manifest` constructor; the closed `BA02Outcome` / `PeerAcceptEvent` / `NoEvidenceReason` / versioned
+>   `Ba02Manifest` surface is byte-unchanged. G-C only *consumes* it from the new RED `ba02_pass` I/O wrapper.
+> - **NEW CI gate** `ci_check_ba02_evidence_manifest_schema.sh` (S2, RO-LIVE-06 BA-02 evidence; mirrors
+>   `ci_check_operator_evidence_manifest_schema.sh`) — when a committed `docs/clusters/PHASE4-N-F-G-C/CE-G-C-LIVE_*.toml`
+>   manifest is present, it verifies the closed **8-field** schema (`schema_version`, `block_hash`, `slot`,
+>   `peer_log_file`, `peer_log_file_sha256`, `peer_log_capture_command`, `peer_log_filter`, `accept_event_kind`),
+>   `schema_version == 1`, and that `peer_log_file_sha256` matches the actual SHA-256 of the committed peer-log
+>   fixture it binds. When NO manifest is committed (the typical state — the live operator pass is
+>   `blocked_until_operator_stake_available`), the gate is **vacuously satisfied** (no manifest, no claim). This is
+>   **the no-synthetic-manifest enforcer**: a hand-authored manifest with no real fixture, or a tampered fixture,
+>   FAILS.
+> - **BROADENED CI gate (in place, NOT new)** `ci_check_served_chain_handoff_fence.sh` (S1, DC-NODE-06
+>   serve-ingress clause) — the OWNERS set is broadened from `{node_lifecycle.rs}` to `{node_lifecycle.rs,
+>   node_sync.rs}` so the fence still holds if the serve owner moves; guard (3) is flipped from a 3-name
+>   **deny-list** to an **ALLOW-LIST** (every node-spine unbounded handoff channel MUST carry `SelfAcceptedHandoff`
+>   — any other token is a violation — and at least one `UnboundedSender<SelfAcceptedHandoff>` must be present).
+>   Guards (1) every `push_atomic(` fed by `into_accepted()` and (2) no direct `served_chain_admit(` on the node
+>   spine are unchanged. A **net tightening**. The CI count does NOT change for this file (modified in place).
+> - **NEW runbook** `docs/evidence/phase4-n-f-g-c-operator-pass-README.md` (S2) — the operator-pass execution
+>   runbook for the live BA-02 leg (how to capture the peer-accept log, what `correlate` requires, and the
+>   no-synthetic-manifest discipline). NEW test file `crates/ade_node/tests/node_operator_pass_ba02.rs`
+>   (`correlate_wired_to_operator_peer_log`, `correlate_from_operator_log_file_is_deterministic`, env-gated
+>   `node_operator_pass_ba02_live`); the live-feed reachability/serve legs are
+>   `node_sync::tests::live_wire_pump_feed_reaches_forge_tick` +
+>   `forge_succeeds::live_feed_forge_serve_loopback_returns_forged_block`.
+>
+> **Registry delta (N-F-G-C):** stays **313 rules** — **no new rule**. `RO-LIVE-01` (stays `partial` — its
+> `open_obligation` now records that G-C wired the MECHANICAL half; the LIVE half stays
+> `blocked_until_operator_stake_available`), `RO-LIVE-06` (stays `enforced` — schema + mechanics only; LIVE BA-02
+> IS NOT CLAIMED), `CN-OPERATOR-EVIDENCE-01` (stays `enforced` — `code_locus` now cites the new runbook + the new
+> gate), `DC-NODE-06` (stays `enforced` — `tests` gains `live_feed_forge_serve_loopback_returns_forged_block`)
+> each gain `strengthened_in += "PHASE4-N-F-G-C"`. **One new CI gate** (117 → 118):
+> `ci_check_ba02_evidence_manifest_schema.sh`. _(These registry edits are uncommitted in the working tree at this
+> regen — the cluster-close strengthening lands alongside this doc.)_
+>
+> **Governance note (N-F-G-C).** G-C upholds the load-bearing structural lines. **Mechanical scaffolding, not an
+> acceptance claim:** G-C wires a live feed and the BA-02 evidence I/O, but **claims no peer acceptance** —
+> `RO-LIVE-01` stays `partial` / `blocked_until_operator_stake_available`, `RO-LIVE-06` enforces schema +
+> mechanics only, and the new gate is vacuous-until-committed. **Reuse, not reimplementation:** the live feed
+> reuses the closed `dial_for_admission` + `run_admission_wire_pump` verbatim (no new wire authority);
+> `build_n2n_version_table` is reused via a fn-visibility promotion. **Closed source stays closed:**
+> `NodeBlockSource` is still the 2-variant `{WirePump, InMemory}` — the live source is a *fill* of the existing
+> arm via `from_wire_pump`, not a new variant; the durable tip still advances only via `run_node_sync →
+> pump_block`; `ci_check_node_run_loop_containment.sh` is byte-unchanged. **`correlate` is the sole `Ba02Manifest`
+> ctor:** `ba02_pass::write_ba02_manifest` accepts ONLY a `Ba02Manifest`, so a written manifest is always
+> correlate-produced from a real peer log; no synthetic manifest is committed; Ade self-accept / served-block /
+> wire success are NOT evidence. **No overclaim:** no new BLUE authority, no new canonical type, no new
+> `NodeBlockSource` / `CoordinatorEvent` variant, and the bounty acceptance criterion is NOT satisfied here.
+>
+> ### PHASE4-N-F-G-B (closed, `339cccb1`) — self-accept→serve handoff on the `--mode node` spine
 >
 > N-F-G-B introduced / extended (all NEW surfaces are CLOSED / fenced — classified under §3 Closed / §4 Frozen):
 >
@@ -52,7 +146,7 @@
 >   (no I/O, clock, rand, float); the carrier wraps the original token verbatim and never re-validates or
 >   re-derives it. Registered in `producer/mod.rs` (`pub mod self_accepted_handoff;`). **A CLOSED
 >   constructor-fenced carrier (a surface REDUCTION), NOT an extensible registry.** Backs `DC-NODE-06`. Gate:
->   `ci_check_served_chain_handoff_fence.sh` (S3).
+>   `ci_check_served_chain_handoff_fence.sh` (S3; broadened in place by G-C S1).
 > - **NEW fenced seam (RED, `ade_node::node_lifecycle`):** the self-accept→serve handoff seam — `ForgeActivation`
 >   gains a private `handoff_tx: Option<mpsc::UnboundedSender<SelfAcceptedHandoff>>` + a `with_handoff_sender(tx)
 >   -> Self` builder (S2). The dispatcher `run_node_lifecycle_inner` (`On` arm) `tokio::spawn`s a **sibling**
@@ -76,32 +170,23 @@
 >   off-epoch fail-closed branch). The token is the ORIGINAL from BLUE `self_accept` (CN-FORGE-01), never
 >   re-derived from `artifact.bytes`.
 > - **NEW CI gate** `ci_check_served_chain_handoff_fence.sh` (S3, CE-G-B-3 / DC-NODE-06 serve-ingress clause) —
->   scoped to the `--mode node` lifecycle owner (production code only, `#[cfg(test)]` + line comments stripped):
->   guard (1) every `push_atomic(` on the node spine is fed by `into_accepted()`; guard (2) no direct
->   `served_chain_admit(` on the node spine (mutation only via the single `push_atomic`); guard (3) the handoff
->   channel is typed `UnboundedSender<SelfAcceptedHandoff>`, never `<Vec<u8>>` / `<ForgedBlockArtifact>` /
->   `<bool>`.
+>   _(broadened in place by G-C S1; current detail in the G-C bullet above and the CI table below.)_
 >
-> **Registry delta (N-F-G-B):** stays **313 rules** — **no new rule** (`DC-NODE-06` already existed as the G-A
-> forward sketch). **`DC-NODE-06`** (self-accept→serve handoff, shape B) flips **`declared` → `enforced`** (`tests`
-> populated with the 10 G-B handoff/serve tests; `ci_script = "ci/ci_check_served_chain_handoff_fence.sh,
-> ci/ci_check_node_run_loop_containment.sh"`; `code_locus` cites `node_lifecycle.rs` + `node_sync.rs` +
-> `served_chain.rs` + `served_chain_handle.rs`). `CN-PROD-04` + `CN-CONS-07` gain `strengthened_in +=
-> "PHASE4-N-F-G-B"`. **One new CI gate** (116 → 117). _(These registry edits are uncommitted in the working tree
-> at this regen — the cluster-close flip lands alongside this doc.)_
+> **Registry delta (N-F-G-B):** stayed **313 rules** — **no new rule** (`DC-NODE-06` already existed as the G-A
+> forward sketch). **`DC-NODE-06`** (self-accept→serve handoff, shape B) flipped **`declared` → `enforced`**.
+> `CN-PROD-04` + `CN-CONS-07` gained `strengthened_in += "PHASE4-N-F-G-B"`. **One new CI gate** (116 → 117).
 >
 > **Governance note (N-F-G-B).** G-B upholds the load-bearing structural lines. **Serve authority, not a
 > relaxation:** the relay-loop body performs no serve / admit / gossip / block-fetch / durable-tip mutation — the
 > handoff from the loop to the sibling task is a **typed channel send** of a constructor-fenced self-accepted
-> artifact, so `ci_check_node_run_loop_containment.sh` stays semantically unchanged (the cluster ADDS a served-chain
-> handoff gate but does NOT relax containment). **Only self-accepted artifacts serve:** the typed
-> `SelfAcceptedHandoff`'s sole provenance is the BLUE `AcceptedBlock` from `self_accept` (private-field constructor
-> fence, CN-FORGE-01); raw bytes / a failed outcome / a self-declared flag / a peer verdict are
-> type-unrepresentable as a handoff. **Single serve mutation:** served-chain mutation happens only via the single
-> `ServedChainHandle::push_atomic`, fed only by `into_accepted()`. **No overclaim:** no new BLUE authority, no new
-> canonical type, no new `CoordinatorEvent` variant, no live feed, and **no peer-acceptance / BA-02 / RO-LIVE
-> claim** (peer ACCEPT stays operator-gated; RO-LIVE-01 partial). `DC-NODE-06` flips declared→enforced — the
-> forward sketch the predecessor declared is now mechanically backed.
+> artifact, so `ci_check_node_run_loop_containment.sh` stays semantically unchanged. **Only self-accepted
+> artifacts serve:** the typed `SelfAcceptedHandoff`'s sole provenance is the BLUE `AcceptedBlock` from
+> `self_accept` (private-field constructor fence, CN-FORGE-01). **Single serve mutation:** served-chain mutation
+> happens only via the single `ServedChainHandle::push_atomic`, fed only by `into_accepted()`. **No overclaim:**
+> no new BLUE authority, no new canonical type, no new `CoordinatorEvent` variant, no live feed, and **no
+> peer-acceptance / BA-02 / RO-LIVE claim** (peer ACCEPT stays operator-gated; RO-LIVE-01 partial). `DC-NODE-06`
+> flipped declared→enforced. _(G-C does NOT alter the serve mechanism — it only adds the live feed source and the
+> BA-02 evidence I/O around it.)_
 >
 > ### PHASE4-N-F-G-A (closed, `80dac1f7`) — forge fidelity on the `--mode node` spine
 >
@@ -166,7 +251,7 @@
 > - **EXTENDED (RED, `ade_node::node_lifecycle`):** the `On`-arm `ForgeTick` consumes the checked clock guard
 >   (S3 — `checked_millis_to_slot`; before-anchor fails closed, recorded in `last_slot_alignment_fail:
 >   Option<SlotAlignmentError>`) and sources `protocol_version` + `pparams` from the recovered CURRENT ledger
->   view (S2 — `node_lifecycle::current_forge_constants_from_recovered`), not produce-path defaults.
+>   view (S2 — `node_lifecycle::forge_constants_from_pparams`), not produce-path defaults.
 >   `run_relay_loop`'s containment is **semantically unchanged** (the new boundaries sit inside the existing
 >   fence).
 > - **EXTENDED (RED, `ade_node::admission::{seed_to_snapshot, bootstrap}`):** `build_seed_ledger` installs the
@@ -178,42 +263,24 @@
 >   recovered seed-epoch surface, drives the **REAL** `bootstrap_initial_state` warm-start, and pins Ade's
 >   recovered values + leader-eligibility inputs against the genesis-derived reference. Non-authoritative test
 >   infrastructure; **evidence input, never runtime authority**.
-> - **NEW CI gate** `ci_check_genesis_consistency_fixture_present.sh` (S1, CE-G-A-1) — the three S1b fixture
->   files are committed + well-formed + Ade-as-leader (eta0 == genesis_hash_hex, ASC, non-empty
->   pool_distribution, a VRF keyhash per pool), and NO secret key material leaked into the committed fixture
->   dir.
-> - **NEW CI gate** `ci_check_recovered_ledger_pparams_sourced.sh` (S2a, CE-G-A-2a) — the recovered ledger's
->   `protocol_params` are sourced from the operator bundle's oracle preimage (`require_forge_current_pparams`)
->   at the forge-capable seed import — never `ProtocolParameters::default()` / genesis-initial; scoped to
->   `seed_to_snapshot.rs` + `bootstrap.rs` + `canonical.rs`.
-> - **NEW CI gate** `ci_check_node_forge_real_cli_ingress.sh` (S2, CE-G-A-2) — the `--mode node`
->   operator-forge ingress loads config through the real `parse_opcert_envelope` + `parse_shelley_genesis`;
->   fails closed if a `parse_simple_*` JSON parser is reintroduced on the node forge path.
-> - **NEW CI gate** `ci_check_node_forge_single_epoch_fail_closed.sh` (S4, CE-G-A-4 / DC-EPOCH-03) —
->   `forge_one_from_recovered` calls `forge_epoch_admission` BEFORE `query_leader_schedule`; the guard derives
->   the candidate epoch via the BLUE `EraSchedule::locate` (no fabricated epoch math); the node forge path
->   drives NO `NonceInput::EpochBoundary` / `CandidateFreeze` nonce promotion.
+> - **Four NEW CI gates** (S1/S2/S2a/S4): `ci_check_genesis_consistency_fixture_present.sh`,
+>   `ci_check_recovered_ledger_pparams_sourced.sh`, `ci_check_node_forge_real_cli_ingress.sh`,
+>   `ci_check_node_forge_single_epoch_fail_closed.sh`.
 >
 > **Registry delta (N-F-G-A):** **313 rules** at HEAD (311 → 313). **NEW `DC-EPOCH-03`** (single-epoch forge
-> fail-closed on the `--mode node` spine, `tier = derived`, `introduced_in = PHASE4-N-F-G-A`) at `status =
-> enforced` (its `tests` + `ci_script` arrays populated; `code_locus` cites `node_sync.rs` +
-> `node_lifecycle.rs` + `run_loop_planner.rs` + `ade_core::consensus::nonce`). **NEW `DC-NODE-06`**
-> (self-accept→serve handoff, shape B, `tier = derived`, `introduced_in = PHASE4-N-F-G-B`) at `status =
-> declared` — a **forward sketch** for the NEXT sub-cluster G-B (`tests`/`ci_script` empty; NOT enforced by
-> G-A). Seven `strengthened_in += "PHASE4-N-F-G-A"` bumps (incl. CN-NODE-01, DC-NODE-05, and the
-> cross-referenced family rules). **Four new CI gates** (112 → 116).
+> fail-closed on the `--mode node` spine) at `status = enforced`. **NEW `DC-NODE-06`** (self-accept→serve handoff,
+> shape B) at `status = declared` — a **forward sketch** for the NEXT sub-cluster G-B (since flipped to
+> `enforced` by G-B). Seven `strengthened_in += "PHASE4-N-F-G-A"` bumps. **Four new CI gates** (112 → 116).
 >
 > **Governance note (N-F-G-A).** The load-bearing structural lines hold. The forge stays **subordinate**: the
 > GREEN planner still learns only whether a slot is *due* (content-blind `ForgeSlotStatus`), never who is a
 > leader; the single recovered `BootstrapState` is the forge base (no second bootstrap, CN-NODE-01); the
 > single durable tip-advance path remains `run_node_sync → pump_block`; the forge advances no tip and is
-> **self-accept-only** (the N-F-E containment gate is byte-unchanged). The two new boundaries are
-> **fail-closed walls, not silent saturations**. The S1 fixture is **evidence input, never runtime authority**.
-> `protocol_params` carries **no float path** — rationals are exact integer arithmetic or fail closed.
-> The `protocol_params_json` preimage stays **OUTSIDE** the frozen 15-field `LiveConsensusInputsCanonical`
-> fingerprint (the fingerprint already commits to `protocol_params_hash`) — a non-fingerprinted additive
-> carry, **NOT a fingerprint-schema change** (§4). `DC-NODE-06` is a *declared* sketch (the serve handoff is
-> the next sub-cluster G-B): a forward-declared rule keeps the invariant visible without claiming enforcement.
+> **self-accept-only**. The two new boundaries are **fail-closed walls, not silent saturations**. The S1 fixture
+> is **evidence input, never runtime authority**. `protocol_params` carries **no float path**. The
+> `protocol_params_json` preimage stays **OUTSIDE** the frozen 15-field `LiveConsensusInputsCanonical`
+> fingerprint — a non-fingerprinted additive carry, **NOT a fingerprint-schema change** (§4). `DC-NODE-06` is a
+> *declared* sketch (the serve handoff is the next sub-cluster G-B).
 >
 > ### PHASE4-N-F-F (closed, `4eb7610`) — operator-key ingress + forge-on flip on the relay spine
 >
@@ -242,8 +309,9 @@
 > - **EXTENDED (RED, `ade_node::node_lifecycle`):** the `--mode node` arm classifies forge intent and flips
 >   the binary forge path from N-F-E's always-`None` to a real `Some`/`None` decision keyed off operator-key
 >   flag presence. NO Mithril call, NO second bootstrap (CN-NODE-01 preserved). _(G-A extends the `On` arm's
->   `ForgeActivation` assembly + the `forge_one_from_recovered` fence; it does not alter the intent classifier
->   or the custody-confined ingress surface.)_ CN-NODE-03 / CN-NODE-01.
+>   `ForgeActivation` assembly + the `forge_one_from_recovered` fence; G-C extends the `On` arm's source
+>   selection (live feed vs empty) only; neither alters the intent classifier or the custody-confined ingress
+>   surface.)_ CN-NODE-03 / CN-NODE-01.
 > - **NEW CI gate** `ci_check_forge_intent_closed.sh` (CN-NODE-03 intent half). **NEW CI gate**
 >   `ci_check_operator_forge_no_secret_leak.sh` (CN-NODE-03 custody half). **MODIFIED-in-place CI gate**
 >   `ci_check_node_binary_uses_single_bootstrap.sh` (CN-NODE-01 — `ReceiveState::new` owner allow-list
@@ -268,15 +336,16 @@
 >   `CoordinatorState::kes_period_for_slot`, and calls **exactly ONE** fenced
 >   `node_sync::forge_one_from_recovered`. It advances NO durable tip and serves/admits/gossips nothing.
 >   **This is a closed, opt-in activation surface, not an extension point.** _(G-A S3 derives the `ForgeTick`
->   slot via `checked_millis_to_slot`; G-A adds `protocol_version` + `last_slot_alignment_fail` fields.)_
->   CN-NODE-02 / DC-SYNC-02 / DC-NODE-05.
+>   slot via `checked_millis_to_slot`; G-A adds `protocol_version` + `last_slot_alignment_fail` fields; G-B adds
+>   the opt-in `handoff_tx`.)_ CN-NODE-02 / DC-SYNC-02 / DC-NODE-05.
 > - **Gate evolution (the seam-closure mechanism, NO new gate):** `ci_check_node_run_loop_containment.sh`
 >   permits **exactly one fenced `forge_one_from_recovered`** while RETAINING every
 >   tip/serve/admit/`run_real_forge`/second-bootstrap prohibition and ADDING no-serve tokens. A **net
->   tightening.** _(G-A left this gate semantically unchanged.)_
+>   tightening.** _(G-A / G-B / G-C left this gate byte-/semantically unchanged.)_
 >
-> **Honest scope (N-F-E, carried into N-F-F / N-F-G-A):** relay-only + strictly hermetic; a **live unbounded
-> peer** remains the **RO-LIVE-01 follow-on** (not closed at this HEAD).
+> **Honest scope (N-F-E, carried into N-F-F / N-F-G-A / N-F-G-B):** relay-only + strictly hermetic; a **live
+> unbounded peer** for the relay loop was the **RO-LIVE-01 follow-on** (the live FEED is now wired by N-F-G-C;
+> the operator-witnessed live ACCEPT remains the gating follow-on).
 >
 > ---
 >
@@ -292,21 +361,24 @@
 >   **no wildcard arm**. The `Node` variant is the N-F-C addition. Gate: `ci_check_node_mode_closure.sh`.
 > - **CLOSED (RED, `ade_node::node_sync`)** `NodeBlockSource` — a **verdict-decoupled** peer-block source:
 >   closed 2-variant enum (`WirePump` / `InMemory`) whose `next_block` yields **only** ordered block bytes,
->   skips `TipUpdate`, ends on `Disconnected`. It NEVER derives / surfaces / depends on a verdict.
+>   skips `TipUpdate`, ends on `Disconnected`. It NEVER derives / surfaces / depends on a verdict. _(N-F-G-C
+>   FILLS the `WirePump` arm via `from_wire_pump` from a LIVE `--peer` dial — a fill, NOT a new variant.)_
 > - **CLOSED (GREEN, `ade_node::ba02_evidence`)** the BA-02 peer-acceptance evidence vocabulary — closed sums
 >   `PeerAcceptEvent` (2), `PeerAcceptSource` (3), `NoEvidenceReason` (4), `BA02Outcome` (2) — plus the
 >   **versioned** `Ba02Manifest` (`BA02_MANIFEST_SCHEMA_VERSION = 1`). `correlate` is the **SOLE**
->   `Ba02Manifest` constructor. Gate: `ci_check_ba02_evidence_closed.sh`. **BA-02 is satisfied NOWHERE.**
+>   `Ba02Manifest` constructor. Gate: `ci_check_ba02_evidence_closed.sh` (+ N-F-G-C
+>   `ci_check_ba02_evidence_manifest_schema.sh`). **BA-02 is satisfied NOWHERE.**
 > - **CLOSURE of the N-F-A consume-side seam (CN-CINPUT-03 / DC-CINPUT-02b).** The node-lifecycle forge path
 >   `node_sync::forge_one_from_recovered` may attach ONLY via the recovered surface — it projects leadership
 >   via `PoolDistrView::from_seed_epoch_consensus_inputs` and fails closed when none. Fenced by
->   `ci_check_consensus_input_provenance.sh` guard (d). _(N-F-E/N-F-F/N-F-G-A carry this fence unchanged.)_
+>   `ci_check_consensus_input_provenance.sh` guard (d). _(N-F-E/N-F-F/N-F-G-A/N-F-G-B/N-F-G-C carry this fence
+>   unchanged.)_
 > - **Lifecycle-owner rule (RED, `ade_node::node_lifecycle`)** — THE single `--mode node` recovered-state
 >   lifecycle owner (`PHASE4-N-F-C-LIFECYCLE-OWNER`). Both arms route initial state through the single
 >   `bootstrap_initial_state` authority. Gates: `ci_check_lifecycle_owner_uses_bootstrap_initial_state.sh`
 >   (CN-NODE-01) + `ci_check_node_sync_via_pump.sh` (DC-SYNC-01 driver containment).
 >
-> **What the binary `Node` arm actually runs (precise wiring honesty, updated through N-F-G-A).** `main()`
+> **What the binary `Node` arm actually runs (precise wiring honesty, updated through N-F-G-C).** `main()`
 > routes `Mode::Node → run_node_lifecycle → run_node_lifecycle_inner`. The arm is **fully wired + durable for
 > bootstrap + recovery** (FirstRun Mithril bootstrap; WarmStart WAL-replay recovery). Both arms produce the
 > **single recovered `BootstrapState`**. **N-F-F forge-intent flip:** the arm calls `classify_forge_intent`
@@ -318,17 +390,28 @@
 > the real `parse_opcert_envelope` + `parse_shelley_genesis` (S2), installs the oracle-bound current pparams
 > at seed/import (S2a), derives the `ForgeTick` slot via `checked_millis_to_slot` (S3, before-anchor
 > fail-closed), and fails an off-epoch forge closed via `forge_epoch_admission` before leadership (S4).
-> **Empty-source honesty (both arms):** `NodeBlockSource::in_memory(Vec::new())` is empty, so the planner
-> halts the loop on iteration 1 BEFORE any `SyncOnce` or `ForgeTick`. The `On` arm is therefore
-> **forge-CAPABLE but not observable** — observable forge is the RO-LIVE-01 follow-on. The L6 BA-02 evidence
-> correlator (`ba02_evidence`) remains a library surface reached by no binary arm (tested only). **BA-02 is
-> satisfied nowhere.**
+> **N-F-G-B self-accept→serve handoff:** the `On` arm spawns a **sibling** served-chain admit task draining a
+> typed `mpsc<SelfAcceptedHandoff>`; each `ForgeTick`, `forge_one_from_recovered` returns `(CoordinatorEvent,
+> Option<SelfAcceptedHandoff>)` and the loop does a best-effort `tx.send(h)` (typed channel send only — never a
+> `ServedChainHandle` / `push_atomic` in the loop body). **N-F-G-C live feed (NEW):** the `On` arm wires `let
+> mut source = if !cli.peer_addrs.is_empty() { spawn_live_wire_pump_source(&cli.peer_addrs, network_magic,
+> state.tip.as_ref()) } else { NodeBlockSource::in_memory(Vec::new()) }` — a LIVE `NodeBlockSource::WirePump`
+> from `--peer` (reusing the closed admission dial + pump; bounded `mpsc`, cap 64; recovered-tip or
+> `Point::Origin` start). **Empty-source honesty (no-`--peer` arm):** with no `--peer` the empty source halts the
+> loop on iteration 1 BEFORE any `SyncOnce` or `ForgeTick`; the `On` arm is **forge-CAPABLE but not observable**
+> without a live feed. With a live feed the forge is observable when the feed is Continuing and a due leader slot
+> is reached, but **peer ACCEPT stays operator-gated** (RO-LIVE-01 partial). **N-F-G-C BA-02 evidence I/O
+> (NEW):** the RED `ade_node::ba02_pass` module is the operator-pass evidence file I/O (`correlate_peer_log_file`
+> + `write_ba02_manifest`), reached by no binary arm at this HEAD (tested only). The L6 BA-02 evidence
+> correlator (`ba02_evidence`) remains a GREEN library surface, now *consumed* by the RED `ba02_pass` wrapper.
+> **BA-02 is satisfied nowhere.**
 >
 > **Governance note (N-F-C).** The single `bootstrap_initial_state` authority is the sole initial-state path
 > on both lifecycle arms (CN-NODE-01); the recovered surface is consumed for leadership ONLY via the closed
 > `PoolDistrView::from_seed_epoch_consensus_inputs` projection. The `Mode` sum stays closed with no wildcard
-> dispatch. **No BLUE crate was modified by N-F-C / N-F-D / N-F-E / N-F-F / N-F-G-A** (the 456 canonical-type
-> total is unchanged; all this code lands in the RED `ade_node` + RED `ade_runtime` + GREEN `ade_testkit`).
+> dispatch. **No BLUE crate was modified by N-F-C / N-F-D / N-F-E / N-F-F / N-F-G-A / N-F-G-B / N-F-G-C** (the
+> 456 canonical-type total is unchanged; all this code lands in the RED `ade_node` + RED `ade_runtime` + GREEN
+> `ade_testkit`).
 >
 > ---
 >
@@ -364,11 +447,13 @@
 > reducer / RED pump). (3) **`WalEntry` stays a CE-not-law** surface. (4) The **redb `chaindb` `SCHEMA_VERSION`
 > is a versioned gate** (v3), not a frozen contract.
 >
-> **Cluster-doc location.** The PHASE4-N-F-G-A cluster doc + slice docs (S1, S1b, S2a, S2, S3, S4) live under
-> `docs/clusters/PHASE4-N-F-G-A/`; on close they archive under `docs/clusters/completed/`. Every prior closed
-> cluster doc — the **PHASE4-N-F-A / N-F-C / N-F-D / N-F-E / N-F-F** sets, the entire **N-Q / N-R-\* / N-S-\***
-> set, the **N-M-\*** sub-trees, **N-O**, **N-P**, **N-T**, **N-V**, **N-W**, **N-X**, **N-Y**, **N-Z** — is
-> archived under `docs/clusters/completed/`.
+> **Cluster-doc location.** The PHASE4-N-F-G-C cluster doc + slice docs (S1, S2) live under
+> `docs/clusters/PHASE4-N-F-G-C/`; on close they archive under `docs/clusters/completed/`. The predecessor
+> **PHASE4-N-F-G-B** set (cluster + S1/S2/S3) is archived under `docs/clusters/completed/PHASE4-N-F-G-B/`; the
+> **PHASE4-N-F-G-A** set is archived under `docs/clusters/completed/PHASE4-N-F-G-A/`. Every prior closed
+> cluster doc — the **PHASE4-N-F-A / N-F-C / N-F-D / N-F-E / N-F-F / N-F-G-A / N-F-G-B** sets, the entire **N-Q /
+> N-R-\* / N-S-\*** set, the **N-M-\*** sub-trees, **N-O**, **N-P**, **N-T**, **N-V**, **N-W**, **N-X**, **N-Y**,
+> **N-Z** — is archived under `docs/clusters/completed/`.
 
 ---
 
@@ -379,10 +464,24 @@
 > N2N/N2C wire, operator-supplied key/genesis/opcert files, the cardano-cli UTxO seed
 > dump, the cardano-cli `query protocol-parameters` JSON (N-F-G-A), the Mithril snapshot
 > manifest (N-Y), the Mithril production-bootstrap composition (N-Z), the Conway genesis
-> file (N-Y), and argv. Each reduces to a canonical BLUE type before any authoritative
-> transition. There is **no HTTP/gRPC/message-bus ingress** (confirmed absent — not a gap).
+> file (N-Y), the operator-captured peer-accept JSONL log (BA-02 evidence, N-F-C / wired
+> N-F-G-C), and argv. Each reduces to a canonical BLUE type (or a closed evidence outcome)
+> before any authoritative transition. There is **no HTTP/gRPC/message-bus ingress**
+> (confirmed absent — not a gap).
 >
-> **N-F-G-A note:** the `--mode node` forge path now sources REAL forge constants. The cardano-cli protocol-
+> **N-F-G-C note (live feed + BA-02 evidence I/O):** the `--mode node` `On` arm is now
+> **live-feed-wireable** from `--peer`. The same N2N inbound wire surface (below) is the live
+> feed: `spawn_live_wire_pump_source` reuses the closed `ade_runtime::admission::{dial_for_admission,
+> run_admission_wire_pump}` VERBATIM and feeds their `AdmissionPeerEvent` output into the closed
+> `NodeBlockSource::WirePump` arm via `from_wire_pump` (a FILL of the existing arm — NOT a new
+> ingress *protocol* surface, NOT a new variant, NOT a new wire authority). It introduces **no new
+> reduction target** — the live block bytes traverse the EXACT same pipeline as the N2N inbound wire
+> surface. The BA-02 evidence path (operator-captured peer-accept JSONL) reduces through the SOLE
+> `correlate` constructor to the closed `BA02Outcome` (now reachable via RED file I/O in `ba02_pass`,
+> the only G-C-added I/O); a missing/unreadable file fails closed (`io::Error`), never a synthesized
+> acceptance.
+>
+> **N-F-G-A note:** the `--mode node` forge path sources REAL forge constants. The cardano-cli protocol-
 > parameters JSON (the `protocol_params_json` preimage) is ingested by the GREEN `consensus_inputs::protocol_params`
 > parser into a canonical BLUE `ProtocolParameters` (no float — exact `Rational` or fail closed), hash-bound to
 > the fingerprinted `protocol_params_hash` via the GREEN `require_forge_current_pparams` accessor; opcert + genesis
@@ -394,10 +493,12 @@
 > pparams JSON preimage carried in the consensus-inputs bundle). The off-epoch guard (`forge_epoch_admission`)
 > reduces `(slot, era_schedule, seed_epoch)` to the closed `ForgeEpochAdmission` before leadership / KES signing.
 
-### Surface: N2N inbound wire (received blocks/headers/txs)
+### Surface: N2N inbound wire (received blocks/headers/txs; the LIVE `--mode node` feed since N-F-G-C)
 
 ```
-Surface: N2N mini-protocol traffic over TCP+mux (RED ade_runtime::network::{n2n_listener, mux_pump, n2n_dialer})
+Surface: N2N mini-protocol traffic over TCP+mux (RED ade_runtime::network::{n2n_listener, mux_pump, n2n_dialer};
+  the --mode node On-arm LIVE feed reuses ade_runtime::admission::{dial_for_admission, run_admission_wire_pump} via
+  ade_node::node_lifecycle::spawn_live_wire_pump_source — N-F-G-C)
 Reduces to: decoded mini-protocol messages → tag-24-stripped inner bytes → PreservedCbor<T> → DecodedBlock (BLUE ade_codec)
 Pipeline (fixed; steps may not be reordered or shortcut):
   1. mux::frame::decode_frame                       (BLUE — single frame-decode authority)
@@ -408,6 +509,11 @@ Pipeline (fixed; steps may not be reordered or shortcut):
   5. ade_ledger::receive::reducer / mempool_ingress (BLUE — header→body bridge / wire-ingress chokepoint)
   6. forward_sync::reducer → forward_sync::pump (N-Y)  (GREEN admit-plan over the BLUE admit chokepoint → RED durability-ordered driver; AdvanceTip only after StoreBlockBytes + AppendWal ack)
   7. block_validity / tx_validity / admission        (BLUE verdict; GREEN admission compares already-authoritative outputs)
+N-F-G-C LIVE-FEED PATH (the --mode node On arm; CONSUME side of the prior §7 candidate, now wired):
+  L1. spawn_live_wire_pump_source(&cli.peer_addrs, network_magic, recovered_tip)  (RED — REUSES dial_for_admission + run_admission_wire_pump VERBATIM; build_n2n_version_table reused via pub(crate); start_point = recovered tip Point::Block or Point::Origin)
+  L2. per --peer: tokio::spawn { dial_for_admission(addr) → run_admission_wire_pump(...) → bounded mpsc::channel(LIVE_WIRE_PUMP_CHANNEL_CAP = 64) }  (an unparseable addr / dial failure is logged-and-dropped — C3 honest-scope; non-fatal; no fabricated addr, no tip graft)
+  L3. NodeBlockSource::from_wire_pump(rx)            (RED — a FILL of the closed WirePump arm; NOT a new variant; yields ordered Block bytes ONLY, skips TipUpdate, ends on Disconnected — DC-SYNC-01)
+  L4. → run_node_sync → pump_block                  (the SAME single durable tip-advance — step 6 above; no second tip-advance, no verdict)
 Cross-surface state sharing: the served ServedChainSnapshot (read by both serve and broadcast paths);
   the per-peer outbound map (PerPeerOutbound) is keyed by PeerId — no cross-peer byte leakage.
   The tag-24 unwrap step (N-X) is the SAME shared ade_codec authority used by the serve path's wrap step.
@@ -415,8 +521,49 @@ Cross-surface state sharing: the served ServedChainSnapshot (read by both serve 
   reconciles on warm-start (DC-WAL-*; WalTailFingerprintMismatch fail-fast). N-F-C: the SAME stores the
   --mode node lifecycle (node_lifecycle + node_sync) opens; pump_block gains its FIRST production caller
   in node_sync::run_node_sync. N-F-D: the relay loop (run_relay_loop) is the live-run owner that drives
-  run_node_sync each iteration. The WAL is also where the N-F-A additive SeedEpochConsensusInputsImported
-  (tag 3) provenance lives — disjoint from the AdmitBlock fp-chain.
+  run_node_sync each iteration. N-F-G-C: the --mode node On arm now feeds run_node_sync from a LIVE
+  NodeBlockSource::WirePump (reusing the admission dial + pump) when --peer is supplied — the live feed is
+  the SAME N2N surface; with no --peer the empty source halts the loop before any SyncOnce/ForgeTick. The WAL
+  is also where the N-F-A additive SeedEpochConsensusInputsImported (tag 3) provenance lives — disjoint from
+  the AdmitBlock fp-chain.
+Rule (N-F-G-C live feed; ci_check_served_chain_handoff_fence.sh BROADENED + ci_check_node_run_loop_containment.sh
+  byte-unchanged): the live feed is a REUSE of the closed dial + pump (no new wire authority, no reimpl); the
+  source stays the closed 2-variant NodeBlockSource (a from_wire_pump FILL, NOT a new variant); the tip advances
+  ONLY via run_node_sync → pump_block (no second tip-advance); a dial/parse failure is logged-and-dropped, never
+  fatal / fabricated / a tip graft.
+HONEST SCOPE: G-C wires the MECHANICAL live feed ONLY. With a live feed the forge is observable when the feed is
+  Continuing and a due leader slot is reached, but peer ACCEPT is NOT claimed here — it is operator-gated
+  (RO-LIVE-01 partial / blocked_until_operator_stake_available), proven only by an operator-captured peer log
+  through ba02_evidence::correlate. Ade self-accept / served-block / wire success != peer acceptance. BA-02 is
+  satisfied nowhere.
+```
+
+### Surface: operator-captured peer-accept log → BA-02 evidence (RED file I/O wired N-F-G-C over the GREEN N-F-C correlator)
+
+```
+Surface: operator-captured peer-accept JSONL log file (RED ade_node::ba02_pass over GREEN ade_node::ba02_evidence)
+Reduces to: closed PeerAcceptEvent set → BA02Outcome {Ba02Manifest | NoEvidence} via correlate (the SOLE Ba02Manifest ctor)
+Pipeline (RED file read → allow-list parse → exact-match correlate; fail-closed on a missing/unreadable file):
+  1. correlate_peer_log_file(ade, peer_log_path)        (RED ba02_pass — std::fs read; a missing/unreadable file ⇒ io::Error, NEVER a NoEvidence and NEVER a manifest)
+  2. parse_peer_accept_events                            (GREEN ba02_evidence — ALLOW-LIST: only `peer_served_block` / `peer_chain_tip` discriminators → PeerAcceptEvent; every weaker/unknown/malformed line DROPPED, never coerced)
+  3. AdeForgeRecord (forged hash + slot)                 (read VERBATIM from the BLUE-minted forge record — NEVER recomputed; no new BLUE authority)
+  4. correlate(ade, peer_log)                            (GREEN — pure/total/deterministic, HASH-PRIMARY; emits BA02Outcome::Ba02Manifest ONLY on an exact forged-hash↔peer-accept match at the matching chain point, no conflicting signal; else NoEvidence{reason})
+  5. write_ba02_manifest(&Ba02Manifest, out)             (RED ba02_pass — the ARGUMENT TYPE is the gate: it accepts ONLY a Ba02Manifest, which only correlate's exact-match arm constructs; there is NO path emitting a manifest from a NoEvidence outcome or from raw operator input, so a written manifest is ALWAYS correlate-produced)
+Cross-surface state sharing: NONE. GREEN evidence comparing already-authoritative outputs; forges nothing,
+  admits nothing, persists no node state. ba02_pass is RED file I/O ONLY — it constructs no evidence, derives no
+  acceptance, never coerces a non-acceptance line. A Ba02Manifest is a CLAIM ABOUT authority, not authority.
+Rule (RO-LIVE-06 / CN-OPERATOR-EVIDENCE-01, ci_check_ba02_evidence_closed.sh + ci_check_ba02_evidence_manifest_schema.sh):
+  correlate is the ONLY Ba02Manifest constructor; write_ba02_manifest accepts ONLY a Ba02Manifest; NO self-evidence
+  token (ForgeSucceeded / self_accept / block_received / served-block / wire-success / agreement_verdict / "agreed")
+  may be an acceptance source; NO committed synthetic manifest. The new schema gate verifies the closed 8-field
+  manifest + schema_version == 1 + peer_log_file_sha256 == sha256(committed fixture) WHEN a CE-G-C-LIVE_*.toml is
+  committed, and is VACUOUSLY satisfied when none is (the typical state). The versioned Ba02Manifest
+  (BA02_MANIFEST_SCHEMA_VERSION = 1) is a version-GATED contract (§4).
+HONEST SCOPE (N-F-G-C): G-C wires the BA-02 evidence I/O (ba02_pass) but is reached by NO binary arm at this HEAD
+  (tested only — incl. the env-gated node_operator_pass_ba02_live). A real BA-02 result needs a REAL
+  operator-captured peer log naming the EXACT Ade-forged hash, through correlate, against a peer that can grant
+  leadership (C1 private testnet or C2 preprod with provisioned stake). BA-02 is satisfied NOWHERE at this HEAD;
+  RO-LIVE-01 stays partial / operator-gated.
 ```
 
 ### Surface: --mode node forge constants (current protocol-parameters source + checked clock + off-epoch guard, N-F-G-A)
@@ -467,7 +614,7 @@ Pipeline (fixed; presence is classified PURELY first, then a single named RED in
        iii. pool_id = Hash28(blake2b_224(cold_vk))     (the ONE named derivation — never fabricated)
        iv.  (N-F-G-A S2) REAL parse_opcert_envelope + parse_shelley_genesis  (the parse_simple_* stubs are RETIRED on the node path; genesis extracts clock/KES/network constants ONLY — NOT a bootstrap source, NOT a new semantic genesis authority)
        v.   (N-F-G-A S2) protocol_version + pparams from the recovered CURRENT ledger view  (current_forge_constants_from_recovered — NO LONGER produce-path ProtocolParameters::default() defaults)
-  3. coordinator_init → ForgeActivation → run_relay_loop(…, Some(&mut activation))  (keys present ⇒ forge-capable, built on the single recovered BootstrapState)
+  3. coordinator_init → ForgeActivation → run_relay_loop(…, Some(&mut activation))  (keys present ⇒ forge-capable, built on the single recovered BootstrapState; N-F-G-C: the relay loop's source is a LIVE NodeBlockSource::WirePump when --peer is supplied)
 Cross-surface state sharing: the OperatorForgeMaterial.shell (ProducerShell) is RED-confined key custody —
   OperatorForgeMaterial is NOT Debug/Serialize; no byte accessor / serialization / logging; the private
   KES/VRF/cold material is passed only to the fenced forge handoff (forge_one_from_recovered) and NEVER
@@ -482,26 +629,28 @@ Rule (CN-NODE-03, ci_check_forge_intent_closed.sh + ci_check_operator_forge_no_s
   "partial" variant); classify_forge_intent is the sole entry, binding the partial arm by name (no wildcard).
   The N-F-E forge containment gate stays SEMANTICALLY UNCHANGED (still exactly one fenced
   forge_one_from_recovered; no run_real_forge / serve / admit / gossip / broadcast / block-fetch / durable-tip
-  mutation) — N-F-F/N-F-G-A may ADD ingress / fidelity gates but MUST NOT relax forge containment.
+  mutation) — N-F-F/N-F-G-A/N-F-G-B/N-F-G-C may ADD ingress / fidelity / handoff / live-feed gates but MUST NOT
+  relax forge containment.
 HONEST SCOPE: this is operator-key INGRESS + activation wiring + (N-F-G-A) real config ingress — it makes the
-  binary forge-CAPABLE with real keys + real constants, but the forge is NOT observable on the empty-source
-  binary path (the loop halts on Ending before any ForgeTick — forge subordinate to feed). Observable forge
-  requires a live/continuing feed = RO-LIVE-01 (operator-gated). NO serve / admit / gossip / durable-tip /
-  BA-02 / RO-LIVE claim. Mithril is untouched (bootstrap accelerator, NOT a forge/validation shortcut).
+  binary forge-CAPABLE with real keys + real constants. N-F-G-C makes the On arm live-feed-wireable (--peer);
+  with a live feed the forge becomes observable at a due leader slot, but peer ACCEPT stays operator-gated
+  (RO-LIVE-01). On the empty-source binary path the loop still halts before any ForgeTick. NO serve / admit /
+  gossip / durable-tip / BA-02 / RO-LIVE acceptance claim. Mithril is untouched (bootstrap accelerator, NOT a
+  forge/validation shortcut).
 ```
 
-### Surface: --mode node relay run-loop (the live-run owner, N-F-D; forge-tick N-F-E; forge-on flip N-F-F; checked clock + off-epoch guard N-F-G-A)
+### Surface: --mode node relay run-loop (the live-run owner, N-F-D; forge-tick N-F-E; forge-on flip N-F-F; checked clock + off-epoch guard N-F-G-A; self-accept→serve handoff N-F-G-B; live feed N-F-G-C)
 
 ```
 Surface: --mode node relay run loop (RED ade_node::node_lifecycle::run_relay_loop; the single live-run owner)
 Reduces to: per-iteration step over the closed GREEN LoopStep vocabulary; the tip advances ONLY via run_node_sync → pump_block
 Pipeline (fixed; GREEN plans the iteration, RED performs effects, BLUE authority stays behind the seams):
-  0. (entry) both --mode node arms converge here     (FirstRun bootstrap + WarmStart recovery → run_relay_loop; no print-and-exit. N-F-F: the arm classifies forge intent FIRST — Off ⇒ forge:None; On ⇒ forge:Some(operator-material ForgeActivation with N-F-G-A current pparams + protocol_version); PartialKeySet ⇒ fail closed)
+  0. (entry) both --mode node arms converge here     (FirstRun bootstrap + WarmStart recovery → run_relay_loop; no print-and-exit. N-F-F: the arm classifies forge intent FIRST — Off ⇒ forge:None; On ⇒ forge:Some(operator-material ForgeActivation with N-F-G-A current pparams + protocol_version); PartialKeySet ⇒ fail closed. N-F-G-C: the source is a LIVE NodeBlockSource::WirePump (spawn_live_wire_pump_source) when --peer is supplied, else the empty in_memory source)
   1. (top of iteration) reset pending_slot = None     (N-F-E: a skipped/failed path can never forge for a stale slot)
   1a. (forge-on path only) clock seam → SlotNo         (N-F-E: RED Clock::next_tick → millis_to_slot → SlotNo; N-F-G-A S3: now via checked_millis_to_slot — a before-anchor tick fails closed SlotAlignmentError::BeforeGenesisAnchor instead of saturating to start_slot; only SlotNo crosses; DC-NODE-03/DC-NODE-05)
   1b. (forge-on path only) forge_slot_status guard      (N-F-E: GREEN pure monotonic guard → ForgeSlotStatus {Due|NotDue}; at most once per SlotNo, never a past slot)
   2. GREEN plan_loop_step(loop_state, sync_status, forge_slot_status, shutdown)  (→ closed LoopStep {SyncOnce | ForgeTick | Idle | HaltCleanly}; content-blind; total table)
-  3a. SyncOnce  → run_node_sync → pump_block            (DC-SYNC-01/DC-SYNC-02: the SOLE durable tip-advance; durable-before-advance; UNMODIFIED since N-F-C)
+  3a. SyncOnce  → run_node_sync → pump_block            (DC-SYNC-01/DC-SYNC-02: the SOLE durable tip-advance; durable-before-advance; UNMODIFIED since N-F-C; N-F-G-C feeds it from the LIVE WirePump source)
   3b. ForgeTick → exactly one forge_one_from_recovered  (N-F-E: reuses kes_period_for_slot; N-F-G-A S4: forge_epoch_admission runs BEFORE query_leader_schedule — an off-epoch slot fails closed before leadership/KES signing; recovered-surface leadership; advances NO durable tip; serves/admits/gossips NOTHING in the loop body; updates last_forged_slot only on a real attempt; records into in-memory hermetic_forge_outcomes)
   3b'. (N-F-G-B) forge_one_from_recovered now returns (CoordinatorEvent, Option<SelfAcceptedHandoff>)  (RED — Some iff ForgeSucceeded; the loop does a best-effort TYPED tx.send(h) to the sibling served-chain admit task — a typed channel send ONLY; the loop body holds ONLY the mpsc Sender, never a ServedChainHandle / push_atomic / served_chain_admit, so ci_check_node_run_loop_containment.sh stays byte-unchanged)
   3c. Idle      → cancellation-safe wait                (select on source-readiness or shutdown; the only branch that awaits across a cancellation boundary)
@@ -514,8 +663,10 @@ Cross-surface state sharing: shares the persistent ChainDb + FileWalStore with t
   IN THE LOOP BODY. N-F-G-B: ForgeActivation gains an opt-in handoff_tx: Option<mpsc::UnboundedSender<
   SelfAcceptedHandoff>> (set via with_handoff_sender); the dispatcher On arm tokio::spawns a SIBLING served-chain
   admit task that drains the typed channel and admits via the single ServedChainHandle::push_atomic(into_accepted())
-  — the served-chain mutation lives in the SIBLING task, NEVER in the loop body. The ServedChainView is retained
-  for the future live network serve (G-C); at this HEAD push_atomic admits via send_modify with no live reader.
+  — the served-chain mutation lives in the SIBLING task, NEVER in the loop body. N-F-G-C: the source handed in is
+  a LIVE NodeBlockSource::WirePump fed by spawn_live_wire_pump_source (reusing the closed admission dial + pump)
+  when --peer is supplied — the SAME N2N inbound surface; the source is still the closed 2-variant enum (a fill,
+  not a new variant); the durable tip still advances ONLY via run_node_sync → pump_block.
 Rule (CN-NODE-02 / DC-SYNC-02 / DC-NODE-05 / DC-EPOCH-03 / DC-NODE-06, ci_check_node_run_loop_containment.sh + ci_check_loop_planner_closed.sh + ci_check_node_forge_single_epoch_fail_closed.sh + ci_check_served_chain_handoff_fence.sh):
   the relay-loop body advances the tip ONLY via run_node_sync; references NO run_real_forge / correlate( /
   Ba02Manifest / second-bootstrap path, NO direct manual tip-mutation token, and (N-F-E) NO serve token
@@ -527,13 +678,16 @@ Rule (CN-NODE-02 / DC-SYNC-02 / DC-NODE-05 / DC-EPOCH-03 / DC-NODE-06, ci_check_
   body containment is SEMANTICALLY UNCHANGED (the new boundaries sit inside the existing fence). N-F-G-B: the
   loop body forwards the surfaced Option<SelfAcceptedHandoff> as a TYPED mpsc tx.send(h) ONLY — the served-chain
   push_atomic / served_chain_admit live in the SIBLING task, so the loop body still references NO serve token and
-  ci_check_node_run_loop_containment.sh is byte-/semantically UNCHANGED. The sibling serve ingress is fenced by
-  ci_check_served_chain_handoff_fence.sh: every node-spine push_atomic( is fed by into_accepted(); no direct
-  served_chain_admit(; the handoff channel is typed UnboundedSender<SelfAcceptedHandoff> (never raw bytes / a
-  flag / an artifact).
-HONEST SCOPE: relay-only + hermetic for the live feed; the binary is forge-CAPABLE with real keys + real
-  constants, but observable forge needs a live feed (RO-LIVE-01 follow-on) — the empty source halts before any
-  ForgeTick. No BA-02 / serve / gossip / durable-forge claim.
+  ci_check_node_run_loop_containment.sh is byte-/semantically UNCHANGED. N-F-G-C: the live feed enters as the
+  closed NodeBlockSource handed to run_relay_loop (a from_wire_pump FILL) — the run loop body is UNCHANGED (the
+  source-selection happens in the dispatcher before the loop); ci_check_node_run_loop_containment.sh is
+  byte-unchanged. The sibling serve ingress is fenced by the BROADENED ci_check_served_chain_handoff_fence.sh
+  (owners {node_lifecycle.rs, node_sync.rs}; guard-3 allow-list: every node-spine unbounded handoff channel
+  MUST carry SelfAcceptedHandoff; every push_atomic( fed by into_accepted(); no direct served_chain_admit().
+HONEST SCOPE: N-F-G-C wires the MECHANICAL live feed; the binary is forge-CAPABLE with real keys + real
+  constants, and with a LIVE --peer feed the forge becomes observable at a due leader slot — but peer ACCEPT is
+  operator-gated (RO-LIVE-01 partial). With no --peer the empty source halts before any ForgeTick. No BA-02 /
+  serve-to-peer / gossip / durable-forge claim.
 ```
 
 ### Surface: --mode node self-accept→serve handoff (the typed handoff seam, N-F-G-B)
@@ -550,22 +704,21 @@ Pipeline (fixed; the forge SURFACES the BLUE token, the loop FORWARDS a typed ch
   6. BLUE served_chain_admit (inside push_atomic)      (the SOLE entry into the served index; only self-accepted blocks — CN-PROD-04; push_atomic wraps it in watch::Sender::send_modify, no torn snapshot)
 Cross-surface state sharing: the ServedChainHandle is the SAME single served-admit authority the produce-mode
   forge→serve path uses (CN-PROD-04 / N-R-B/N-T); the served chain is mutated ONLY via push_atomic. The handoff
-  carrier wraps the SAME BLUE AcceptedBlock minted by self_accept. The ServedChainView is RETAINED for the
-  future live network serve (G-C) — at this HEAD push_atomic admits via send_modify with no live reader (hermetic
-  loopback). NO real network listener / dialer / peer is wired (that is G-C).
-Rule (DC-NODE-06, ci_check_served_chain_handoff_fence.sh + ci_check_node_run_loop_containment.sh):
+  carrier wraps the SAME BLUE AcceptedBlock minted by self_accept. N-F-G-C: a self-accepted forged block is now
+  served byte-identically over IN-PROCESS block-fetch on the live-feed path
+  (live_feed_forge_serve_loopback_returns_forged_block); a served block leaving the node OVER THE WIRE to a peer
+  that ACCEPTS it is the operator-gated RO-LIVE-01 leg.
+Rule (DC-NODE-06, ci_check_served_chain_handoff_fence.sh [BROADENED, G-C] + ci_check_node_run_loop_containment.sh):
   (1) every node-spine push_atomic( is fed by into_accepted(); (2) NO direct served_chain_admit( on the node
-  spine (served-chain mutation only via the single push_atomic); (3) the handoff channel is typed
-  UnboundedSender<SelfAcceptedHandoff>, NEVER <Vec<u8>> / <ForgedBlockArtifact> / <bool>. SelfAcceptedHandoff's
-  SOLE constructor takes a BLUE AcceptedBlock (private field) — there is NO raw-bytes / artifact / event / flag /
-  verdict constructor, so a non-self-accepted artifact is type-unrepresentable as a handoff. The token is the
-  ORIGINAL from self_accept (CN-FORGE-01), never re-derived from artifact.bytes. The relay-loop body forwards a
-  TYPED channel send only — ci_check_node_run_loop_containment.sh is byte-/semantically UNCHANGED.
-HONEST SCOPE: this is SERVE-AUTHORITY ONLY — it proves the serve MECHANISM admits only a BLUE self-accepted
-  artifact. It is NOT a live-feed cluster (no WirePump / n2n_dialer / session wiring into the binary — that is
-  G-C); on the empty binary source the loop halts before any ForgeTick (the On arm is forge-CAPABLE but NOT
-  observable — RO-LIVE-01 follow-on). NO peer-acceptance / BA-02 / RO-LIVE acceptance claim (peer ACCEPT stays
-  operator-gated; RO-LIVE-01 partial). BA-02 satisfied nowhere.
+  spine (served-chain mutation only via the single push_atomic); (3) [G-C ALLOW-LIST] every node-spine unbounded
+  handoff channel MUST carry SelfAcceptedHandoff (never <Vec<u8>> / <ForgedBlockArtifact> / <bool>), and at least
+  one UnboundedSender<SelfAcceptedHandoff> must be present. SelfAcceptedHandoff's SOLE constructor takes a BLUE
+  AcceptedBlock (private field) — there is NO raw-bytes / artifact / event / flag / verdict constructor, so a
+  non-self-accepted artifact is type-unrepresentable as a handoff. The token is the ORIGINAL from self_accept
+  (CN-FORGE-01), never re-derived from artifact.bytes. The relay-loop body forwards a TYPED channel send only —
+  ci_check_node_run_loop_containment.sh is byte-/semantically UNCHANGED.
+HONEST SCOPE: this is SERVE-AUTHORITY (G-B); N-F-G-C adds the LIVE FEED around it. NO peer-acceptance / BA-02 /
+  RO-LIVE acceptance claim (peer ACCEPT stays operator-gated; RO-LIVE-01 partial). BA-02 satisfied nowhere.
 ```
 
 ### Surface: producer-mode forge → serve → broadcast (the live producer half)
@@ -628,78 +781,93 @@ N-F-C WIRING: the production restart path is wired — ade_node::node_lifecycle 
   bootstrap_initial_state(RequiredFromRecoveredProvenance). The CONSUME-side fence
   (ci_check_consensus_input_provenance.sh guard (d): CN-CINPUT-03 / DC-CINPUT-02b) keeps the forge path
   from fabricating the record. N-F-G-A note: the recovered ledger now also carries the oracle-bound CURRENT
-  ProtocolParameters (installed at seed/import, S2a) — warm-start preserves it.
+  ProtocolParameters (installed at seed/import, S2a) — warm-start preserves it. N-F-G-C note: the recovered tip
+  this produces is the start_point spawn_live_wire_pump_source dials from (Point::Block) on the live-feed path.
 ```
 
 ### Surface: --mode node lifecycle (FirstRun / WarmStart — the real Ade node, N-F-C)
 
 ```
 Surface: --mode node (RED ade_node::node_lifecycle; THE single PHASE4-N-F-C-LIFECYCLE-OWNER)
-Reduces to: on-disk state → closed NodeStart {FirstRun | WarmStart} → verified BootstrapState through the single bootstrap_initial_state authority → forge-intent classify (N-F-F) → run_relay_loop (N-F-D)
+Reduces to: on-disk state → closed NodeStart {FirstRun | WarmStart} → verified BootstrapState through the single bootstrap_initial_state authority → forge-intent classify (N-F-F) → source select (N-F-G-C) → run_relay_loop (N-F-D)
 Pipeline (fixed; classification is a PURE function of on-disk state):
   1. open persistent ChainDb (PersistentChainDb) + FileWalStore
   2. classify_start(has_tip, has_snapshots)            (pure → NodeStart::FirstRun | NodeStart::WarmStart)
   3a. FirstRun  → first_run_mithril_bootstrap          (Mithril-only; bootstrap_from_mithril_snapshot; verify_mithril_binding fail-closed BEFORE any state admitted; persists seed-epoch sidecar + WAL provenance; NO genesis/bundle/cold/graft fallback)
   3b. WarmStart → warm_start_recovery                  (list_seed_epoch_consensus_anchor_fps discovery → WAL replay → bootstrap_initial_state(RequiredFromRecoveredProvenance) verify chain)
   4. (N-F-F) classify_forge_intent over flag presence  (Off ⇒ forge:None; On(paths) ⇒ build_operator_forge_material → coordinator_init → ForgeActivation → forge:Some; PartialKeySet ⇒ NodeLifecycleError::ForgeKeyIngress = exit 44)
-  4a. (N-F-G-A) the On-arm ForgeActivation carries current pparams + protocol_version  (from current_forge_constants_from_recovered; real opcert/genesis ingress; checked clock; off-epoch guard inside forge_one_from_recovered)
-  5. (N-F-D) both arms converge into run_relay_loop    (the single live-run owner; the tip advances ONLY via run_node_sync → pump_block; N-F-F: forge:None on the default binary path, forge:Some on the operator-key On arm)
+  4a. (N-F-G-A) the On-arm ForgeActivation carries current pparams + protocol_version  (from forge_constants_from_pparams; real opcert/genesis ingress; checked clock; off-epoch guard inside forge_one_from_recovered)
+  4b. (N-F-G-C) source select  (--peer present ⇒ spawn_live_wire_pump_source → LIVE NodeBlockSource::WirePump via from_wire_pump, reusing the closed admission dial + pump; else NodeBlockSource::in_memory(Vec::new()) — the empty source)
+  5. (N-F-D) both arms converge into run_relay_loop    (the single live-run owner; the tip advances ONLY via run_node_sync → pump_block; N-F-F: forge:None on the default binary path, forge:Some on the operator-key On arm; N-F-G-C: the chosen source is handed in)
 Cross-surface state sharing: shares the single bootstrap_initial_state authority with produce_mode +
   the Conway-genesis + Mithril production-bootstrap paths; shares the persistent ChainDb + FileWalStore
   with the forward-sync pump + warm-start restore + the relay loop. The recovered BootstrapState is BOTH
-  the spine base AND (On arm) the forge base — one recovered state, no second bootstrap. Closed fail-closed
-  NodeLifecycleError (incl. RelaySync, N-F-D; ForgeKeyIngress, N-F-F).
+  the spine base AND (On arm) the forge base — one recovered state, no second bootstrap. N-F-G-C: the live
+  feed reuses the SAME admission dial + pump the wire-only / admission modes use (no reimpl). Closed fail-closed
+  NodeLifecycleError (incl. RelaySync, N-F-D; ForgeKeyIngress, N-F-F; MissingFlag("--network-magic") on the
+  live-feed arm, N-F-G-C).
 Rule (CN-NODE-01, ci_check_lifecycle_owner_uses_bootstrap_initial_state.sh + ci_check_node_binary_uses_single_bootstrap.sh):
   exactly one module carries the PHASE4-N-F-C-LIFECYCLE-OWNER marker; both arms route through the SINGLE
   bootstrap_initial_state authority — no second bootstrap/recovery/storage-init path, no genesis/bundle/cold/
   graft fallback, no recover_node_state overclaim. ReceiveState::new is legitimate only in the lifecycle-owner
   files {node.rs, node_lifecycle.rs} (N-F-F owner allow-list). A new mode that needs initial state MUST obtain
-  it via this one authority. The N-F-F On arm reuses the SAME recovered state as the forge base.
+  it via this one authority. The N-F-F On arm reuses the SAME recovered state as the forge base; N-F-G-C's live
+  feed introduces NO second bootstrap (the tip still advances only via run_node_sync → pump_block).
 ```
 
-### Surface: --mode node sync source (verdict-decoupled peer-block source, N-F-C; readiness extended N-F-D)
+### Surface: --mode node sync source (verdict-decoupled peer-block source, N-F-C; readiness extended N-F-D; LIVE WirePump fill N-F-G-C)
 
 ```
 Surface: NodeBlockSource (RED ade_node::node_sync; closed 2-variant enum {WirePump | InMemory})
 Reduces to: ordered peer-block BYTES only (AdmissionPeerEvent::Block → Vec<u8>); NEVER a verdict
-Pipeline (the verdict-decoupled source contract, E1/E2; N-F-D readiness signal):
+Pipeline (the verdict-decoupled source contract, E1/E2; N-F-D readiness signal; N-F-G-C live fill):
   1. next_block() selects ONLY AdmissionPeerEvent::Block, in arrival order
   1a. AdmissionPeerEvent::TipUpdate is SKIPPED            (a comparison input for admission's verdict loop, not a block, not a sync tip authority)
   1b. AdmissionPeerEvent::Disconnected / closed channel ENDS the feed (a clean disconnect is not a tip authority)
-  1c. (N-F-D) content-blind readiness                     (has_work_ready / is_ended / wait_ready via non-blocking try_recv; next_block is non-blocking drain-then-None; never awaited across a shutdown cancellation boundary)
+  1c. (N-F-D) content-blind readiness                     (has_work_ready / is_ended / wait_ready via non-blocking try_recv; next_block is non-blocking drain-then-None; never awaited across a shutdown cancellation boundary; the WirePump arm fills an opaque content-blind lookahead VecDeque<Vec<u8>> from the channel)
+  1d. (N-F-G-C) from_wire_pump(rx: mpsc::Receiver<AdmissionPeerEvent>)  (the LIVE constructor of the WirePump arm — fed by spawn_live_wire_pump_source reusing the closed admission dial + pump; a FILL of the existing arm, NOT a new variant)
   2. (driver) run_node_sync feeds bytes to forward_sync::pump_block — its production caller — durable StoreBlockBytes + AppendWal BEFORE AdvanceTip (DC-SYNC-01), then a tip checkpoint via PersistentSnapshotCache
 Cross-surface state sharing: the same persistent ChainDb + FileWalStore the lifecycle owner + warm-start
   restore + the relay loop use; the captured tip checkpoint is the exact PersistentSnapshotCache artifact warm_start_recovery reads back.
 Rule (DC-SYNC-01 / DC-SYNC-02, ci_check_node_sync_via_pump.sh): the source yields ordered block bytes and
   NOTHING else (no derive_verdict / run_admission / follow); run_node_sync advances the tip ONLY via
   pump_block (no follower-as-sync, no verdict-as-sync, no manual put_block/AdvanceTip/rollback_to_slot).
-  run_node_sync is UNMODIFIED in production by N-F-D / N-F-E / N-F-F / N-F-G-A (#[cfg(test)] additions only;
-  N-F-G-A added the forge_epoch_admission GREEN-by-fn guard + its callsite inside forge_one_from_recovered).
+  run_node_sync is UNMODIFIED in production by N-F-D / N-F-E / N-F-F / N-F-G-A / N-F-G-C (#[cfg(test)] additions
+  + N-F-G-A's forge_epoch_admission GREEN-by-fn guard; N-F-G-C added the from_wire_pump constructor + the
+  live_wire_pump_feed_reaches_forge_tick reachability test). The WirePump arm stays a closed verdict-decoupled
+  contract — a FILL from a LIVE dial, NOT a plugin point for alternative sources.
 HONEST SCOPE: run_node_sync is driven on the live run path ONLY by the N-F-D relay loop (SyncOnce);
   forge_one_from_recovered is reached ONLY via the N-F-E ForgeTick branch when a ForgeActivation is
-  supplied (hermetic at N-F-E; REAL operator material at N-F-F; current pparams at N-F-G-A). On the default
-  empty-source binary path the loop halts before any SyncOnce/ForgeTick. No live unbounded peer this HEAD (RO-LIVE-01).
+  supplied. N-F-G-C: with --peer, the WirePump arm is fed a LIVE unbounded cardano-node peer (the prior
+  RO-LIVE-01 feed-side follow-on, now wired); with no --peer the empty source halts before any SyncOnce/ForgeTick.
+  Peer ACCEPT stays operator-gated (RO-LIVE-01 partial).
 ```
 
-### Surface: BA-02 peer-acceptance evidence (GREEN correlator, N-F-C — tested-but-unwired)
+### Surface: BA-02 peer-acceptance evidence (GREEN correlator N-F-C; RED file I/O wired N-F-G-C)
 
 ```
-Surface: operator-captured peer-accept JSONL log (GREEN ade_node::ba02_evidence::parse_peer_accept_events)
+Surface: operator-captured peer-accept JSONL log (GREEN ade_node::ba02_evidence::parse_peer_accept_events; RED file I/O ade_node::ba02_pass, N-F-G-C)
 Reduces to: closed PeerAcceptEvent set → BA02Outcome {Ba02Manifest | NoEvidence} via correlate
 Pipeline (allow-list parse → exact-match correlate; the SOLE Ba02Manifest constructor):
-  1. parse_peer_accept_events                            (ALLOW-LIST: only `peer_served_block` / `peer_chain_tip` discriminators → PeerAcceptEvent; every weaker/unknown/malformed line DROPPED, never coerced)
-  2. AdeForgeRecord::from_forge_artifact                 (reads the BLUE-minted forged hash + slot VERBATIM from ForgedBlockArtifact — NEVER recomputed; no new BLUE authority)
-  3. correlate(ade, peer_log)                            (pure/total/deterministic, HASH-PRIMARY; emits BA02Outcome::Ba02Manifest ONLY on an exact forged-hash↔peer-accept match at the matching chain point, no conflicting signal; else NoEvidence{reason})
-Cross-surface state sharing: NONE. GREEN evidence comparing already-authoritative outputs; forges nothing,
-  admits nothing, persists no node state. A Ba02Manifest is a CLAIM ABOUT authority, not authority.
-Rule (RO-LIVE-06, ci_check_ba02_evidence_closed.sh): correlate is the ONLY Ba02Manifest constructor;
-  NO self-evidence token (ForgeSucceeded / self_accept / block_received / agreement_verdict / "agreed")
-  may be an acceptance source; NO committed synthetic docs/evidence/*ba02* manifest. The versioned
-  Ba02Manifest (BA02_MANIFEST_SCHEMA_VERSION = 1) is a version-GATED contract (§4).
-HONEST SCOPE: tested-but-unwired library surface — no binary arm drives it; synthetic logs prove the
-  mechanics only and CANNOT satisfy BA-02. BA-02 is satisfied NOWHERE at this HEAD (incl. N-F-E's
-  self-accept-only forge tick, N-F-F's forge-CAPABLE-but-not-observable On arm, and N-F-G-A's forge-fidelity
-  hardening); RO-LIVE-01 remains partial/operator-gated.
+  1. (N-F-G-C) ba02_pass::correlate_peer_log_file       (RED — std::fs read of the operator-captured file; a missing/unreadable file ⇒ io::Error fail-closed, NEVER a synthesized acceptance)
+  2. parse_peer_accept_events                            (GREEN ALLOW-LIST: only `peer_served_block` / `peer_chain_tip` discriminators → PeerAcceptEvent; every weaker/unknown/malformed line DROPPED, never coerced)
+  3. AdeForgeRecord::from_forge_artifact                 (reads the BLUE-minted forged hash + slot VERBATIM from ForgedBlockArtifact — NEVER recomputed; no new BLUE authority)
+  4. correlate(ade, peer_log)                            (GREEN pure/total/deterministic, HASH-PRIMARY; emits BA02Outcome::Ba02Manifest ONLY on an exact forged-hash↔peer-accept match at the matching chain point, no conflicting signal; else NoEvidence{reason})
+  5. (N-F-G-C) ba02_pass::write_ba02_manifest            (RED — accepts ONLY a Ba02Manifest, so a written manifest is ALWAYS correlate-produced — no path emits one from NoEvidence or raw operator input)
+Cross-surface state sharing: NONE. GREEN evidence comparing already-authoritative outputs; ba02_pass is RED file
+  I/O ONLY (constructs no evidence, derives no acceptance, never coerces a non-acceptance line). A Ba02Manifest is
+  a CLAIM ABOUT authority, not authority.
+Rule (RO-LIVE-06 / CN-OPERATOR-EVIDENCE-01, ci_check_ba02_evidence_closed.sh + ci_check_ba02_evidence_manifest_schema.sh):
+  correlate is the ONLY Ba02Manifest constructor; write_ba02_manifest accepts ONLY a Ba02Manifest; NO self-evidence
+  token (ForgeSucceeded / self_accept / block_received / served-block / wire-success / agreement_verdict / "agreed")
+  may be an acceptance source; NO committed synthetic *ba02* manifest. The new schema gate (8 fields +
+  schema_version == 1 + peer_log_file_sha256 cross-check) is vacuous-until-committed. The versioned Ba02Manifest
+  (BA02_MANIFEST_SCHEMA_VERSION = 1) is a version-GATED contract (§4).
+HONEST SCOPE: G-C wires the RED file I/O (ba02_pass) over the UNCHANGED GREEN correlator, reached by NO binary arm
+  at this HEAD (tested only). Synthetic logs prove the mechanics only and CANNOT satisfy BA-02. BA-02 is satisfied
+  NOWHERE at this HEAD (incl. N-F-G-C's live-feed scaffolding); RO-LIVE-01 remains partial/operator-gated — a real
+  BA-02 result needs an operator-captured peer log through correlate against a peer that can grant leadership
+  (C1 private testnet or C2 preprod with provisioned stake).
 ```
 
 ### Surface: operator file ingress (KES skey / opcert / Shelley genesis / UTxO seed dump)
@@ -725,6 +893,10 @@ N-F-G-A note: on the --mode node path the operator_forge ingress now uses the RE
   no new BLUE authority (ci_check_node_forge_real_cli_ingress.sh). The cardano-cli query protocol-parameters
   JSON is a NEW operator-sourced preimage (carried in the consensus-inputs bundle) parsed by the GREEN
   consensus_inputs::protocol_params parser into the canonical BLUE ProtocolParameters (no float).
+N-F-G-C note: a NEW operator-supplied INPUT enters here — the operator-captured peer-accept JSONL log, read by
+  the RED ba02_pass::correlate_peer_log_file and reduced through the GREEN correlate to the closed BA02Outcome
+  (see the BA-02 surface above). It is evidence input, never runtime authority; a missing/unreadable file fails
+  closed (io::Error). No new wire-feed file type — the live feed reuses the closed admission dial + pump.
 ```
 
 ### Surface: Mithril snapshot manifest — provenance binding (N-Y)
@@ -738,9 +910,9 @@ Pipeline (fixed; the RED-then-BLUE provenance binding):
   3. BLUE verify_mithril_binding(report, anchor)     (the SOLE authority deciding whether a Mithril anchor binds; cross-checks {network_magic, genesis_hash, certified_point, certificate_hash}; fails closed with MithrilImportError)
 Cross-surface state sharing: the report side (manifest) and the anchor side MUST originate
   independently — verify_mithril_binding is NOT a tautological self-check (CN-MITHRIL-01).
-N-F-F/N-F-G-A note: Mithril is UNTOUCHED — it stays the bootstrap/recovery layer (a bootstrap accelerator),
-  NOT a validation/forge shortcut. The operator-key ingress does NOT call Mithril and does NOT create
-  a second bootstrap path (CN-NODE-01; the forge base is the single recovered BootstrapState).
+N-F-F/N-F-G-A/N-F-G-C note: Mithril is UNTOUCHED — it stays the bootstrap/recovery layer (a bootstrap
+  accelerator), NOT a validation/forge shortcut. The operator-key ingress + the live feed do NOT call Mithril
+  and do NOT create a second bootstrap path (CN-NODE-01; the forge base is the single recovered BootstrapState).
 ```
 
 ### Surface: Mithril production-bootstrap composition (N-Z, extended N-F-A sidecar tail; first non-test caller N-F-C)
@@ -793,15 +965,17 @@ Pipeline: argv → Cli → mode driver. --mode produce requires --json-seed + --
   inputs (--json-seed + --consensus-inputs-path + --mithril-manifest-path, Mithril-bound — NEVER forge inputs).
   --mode node (N-F-F) ADDITIONALLY accepts the OPTIONAL operator-key flags (cold/KES/VRF skey + opcert +
   genesis-file) classified by classify_forge_intent over PRESENCE: all five ⇒ forge-on, none ⇒ relay-only,
-  any partial ⇒ fail closed (exit 44).
+  any partial ⇒ fail closed (exit 44). --mode node (N-F-G-C) ADDITIONALLY accepts the OPTIONAL --peer flag(s):
+  present ⇒ a LIVE NodeBlockSource::WirePump feed (requires --network-magic, else MissingFlag fail-closed);
+  absent ⇒ the empty in_memory source (halts before any SyncOnce/ForgeTick).
 Cross-surface state sharing: none.
 N-F-C: the `node` variant is the addition; main() routes Mode::Node → run_node_lifecycle. Adding a
   Mode variant is a SURFACE REDUCTION (closed taxonomy), not an extension point — a new variant forces a
   main.rs compile error until an explicit (wildcard-free) arm is added (ci_check_node_mode_closure.sh).
 N-F-D/N-F-E/N-F-G-A: NO new argv flag for the relay loop / forge tick / forge fidelity. N-F-F: the operator-key
-  flags are an OPTIONAL ingress on the existing --mode node arm (no new Mode variant); the forge tick becomes
-  reachable in production once paired with a live feed (RO-LIVE-01); the default (no operator keys) path passes
-  None / NotDue.
+  flags are an OPTIONAL ingress on the existing --mode node arm (no new Mode variant). N-F-G-C: --peer is an
+  OPTIONAL live-feed flag on the existing --mode node arm (no new Mode variant) — present ⇒ the forge tick
+  becomes reachable in production once a leader slot is due (RO-LIVE-01); absent ⇒ the default empty-source path.
 ```
 
 **Rule:** New ingress attaches by producing the canonical BLUE type's bytes and entering
@@ -822,6 +996,12 @@ populate-side); the CONSUME-side wiring is CLOSED in PHASE4-N-F-C, fenced by
 pattern) — the planner emits a closed vocabulary and cannot decide authority; the loop body
 advances the tip ONLY via `run_node_sync` and (if it forges) reaches EXACTLY ONE fenced
 `forge_one_from_recovered`, serving/admitting/gossiping nothing (CN-NODE-02 / DC-NODE-05).**
+**A LIVE feed for the `--mode node` spine (N-F-G-C) attaches by REUSING the closed
+`ade_runtime::admission::{dial_for_admission, run_admission_wire_pump}` and FILLING the closed
+`NodeBlockSource::WirePump` arm via `from_wire_pump` — NEVER a new `NodeBlockSource` variant, a
+new wire authority, a reimplemented dial/pump, a second tip-advance, or a verdict; a dial/parse
+failure is logged-and-dropped, never fatal / fabricated / a tip graft (the broadened
+`ci_check_served_chain_handoff_fence.sh` + the byte-unchanged `ci_check_node_run_loop_containment.sh`).**
 **Operator signing-material ingress (N-F-F) attaches as a closed presence-classifier (`forge_intent`,
 GREEN) + a single named RED ingress site (`operator_forge`) that REUSES the existing
 cold/vrf/kes/opcert loaders — NO new BLUE authority, NO parser reimpl, NO plugin seam, NO second
@@ -834,8 +1014,17 @@ via the BLUE `EraSchedule::locate` that fails the forge closed before leadership
 fail-closed surface, NOT a new extension point or a new BLUE authority; `run_relay_loop`'s
 containment stays SEMANTICALLY UNCHANGED (DC-EPOCH-03 — `ci_check_recovered_ledger_pparams_sourced.sh`
 + `ci_check_node_forge_real_cli_ingress.sh` + `ci_check_node_forge_single_epoch_fail_closed.sh` +
-`ci_check_genesis_consistency_fixture_present.sh`).** A new `--mode` that needs initial state MUST
-obtain it via the single `bootstrap_initial_state` authority (CN-NODE-01).
+`ci_check_genesis_consistency_fixture_present.sh`).** **A self-accept→serve handoff (N-F-G-B) attaches
+ONLY through the constructor-fenced `SelfAcceptedHandoff` carrier (sole ctor `from_self_accepted`,
+no raw-bytes/artifact/event/flag/verdict ctor) into a sibling served-chain admit task whose sole
+mutation is the single `ServedChainHandle::push_atomic` fed by `into_accepted()`; the relay-loop body
+forwards a typed `mpsc<SelfAcceptedHandoff>` send only (DC-NODE-06 / CN-PROD-04 /
+`ci_check_served_chain_handoff_fence.sh`).** **BA-02 evidence I/O (N-F-G-C) attaches as RED file I/O
+(`ba02_pass`) over the UNCHANGED GREEN `correlate` — `correlate` stays the SOLE `Ba02Manifest`
+constructor; `write_ba02_manifest` accepts ONLY a `Ba02Manifest`; no self-evidence acceptance source;
+no committed synthetic manifest (RO-LIVE-06 / CN-OPERATOR-EVIDENCE-01 —
+`ci_check_ba02_evidence_manifest_schema.sh`, vacuous-until-committed + sha256-bound).** A new `--mode`
+that needs initial state MUST obtain it via the single `bootstrap_initial_state` authority (CN-NODE-01).
 New ingress **may not** introduce a second `PreservedCbor` construction site, a second
 block-envelope encoder, a second era→leader-VRF-input construction (CN-FORGE-04), a second
 `wrap_tag24` / `unwrap_tag24` definition or a hand-rolled tag-24 parse in RED (CN-WIRE-08), a
@@ -848,18 +1037,22 @@ forge-time path that populates the seed-epoch sidecar / appends its WAL provenan
 `Mode` enum variant without an explicit wildcard-free `main.rs` dispatch arm (CN-NODE-MODE-01), a
 second `--mode node` lifecycle owner or a lifecycle arm bypassing `bootstrap_initial_state`
 (CN-NODE-01), a node-sync driver that advances the tip by any path other than `pump_block`
-(DC-SYNC-01), a second live-run owner or a relay-loop body that advances the tip / forges / serves /
-admits / gossips outside the closed seams (CN-NODE-02 / DC-SYNC-02), a GREEN planner that observes a
-`SlotNo` in `plan_loop_step` or emits a non-closed `LoopStep` (DC-NODE-05), a node-lifecycle forge
-path that fabricates a `SeedEpochConsensusInputs` literal or names a forge-time bundle token
-(CN-CINPUT-03 / DC-CINPUT-02b), a second operator-material ingress site / a third `ForgeIntent`
-variant / a partial-key-set silent relay fallback / private KES-VRF-cold bytes escaping `ProducerShell`
-(CN-NODE-03), a second `Ba02Manifest` constructor / a self-evidence acceptance source / a committed
-synthetic BA-02 manifest (RO-LIVE-06), **a `parse_simple_*` parser reintroduced on the `--mode node`
-forge path (CE-G-A-2 — `ci_check_node_forge_real_cli_ingress.sh`), a recovered ledger carrying
-`ProtocolParameters::default()` / genesis-initial pparams instead of the oracle preimage (CE-G-A-2a —
-`ci_check_recovered_ledger_pparams_sourced.sh`), a `forge_epoch_admission` guard reordered AFTER
-`query_leader_schedule` / a fabricated candidate epoch / a `NonceInput::EpochBoundary`|`CandidateFreeze`
+(DC-SYNC-01), a second `NodeBlockSource` variant / a reimplemented dial-pump / a live feed that
+advances a second tip (N-F-G-C — `from_wire_pump` is a FILL of the closed `WirePump` arm; the dial +
+pump are REUSED verbatim), a second `Ba02Manifest` constructor / a self-evidence acceptance source / a
+committed synthetic BA-02 manifest (RO-LIVE-06), a second live-run owner or a relay-loop body that
+advances the tip / forges / serves / admits / gossips outside the closed seams (CN-NODE-02 /
+DC-SYNC-02), a GREEN planner that observes a `SlotNo` in `plan_loop_step` or emits a non-closed
+`LoopStep` (DC-NODE-05), a node-lifecycle forge path that fabricates a `SeedEpochConsensusInputs`
+literal or names a forge-time bundle token (CN-CINPUT-03 / DC-CINPUT-02b), a second operator-material
+ingress site / a third `ForgeIntent` variant / a partial-key-set silent relay fallback / private
+KES-VRF-cold bytes escaping `ProducerShell` (CN-NODE-03), a node-spine served-chain mutation outside
+the single `push_atomic` fed by `into_accepted()` / a handoff channel typed other than
+`UnboundedSender<SelfAcceptedHandoff>` (DC-NODE-06), **a `parse_simple_*` parser reintroduced on the
+`--mode node` forge path (CE-G-A-2 — `ci_check_node_forge_real_cli_ingress.sh`), a recovered ledger
+carrying `ProtocolParameters::default()` / genesis-initial pparams instead of the oracle preimage
+(CE-G-A-2a — `ci_check_recovered_ledger_pparams_sourced.sh`), a `forge_epoch_admission` guard reordered
+AFTER `query_leader_schedule` / a fabricated candidate epoch / a `NonceInput::EpochBoundary`|`CandidateFreeze`
 nonce promotion on the forge path (DC-EPOCH-03 — `ci_check_node_forge_single_epoch_fail_closed.sh`), a
 `protocol_params` float path, a `checked_millis_to_slot` that saturates a before-anchor tick, or a
 `protocol_params_json` preimage folded INTO the 15-field canonical fingerprint (CE-G-A-1/2/2a/4).**
@@ -867,6 +1060,47 @@ nonce promotion on the forge path (DC-EPOCH-03 — `ci_check_node_forge_single_e
 ---
 
 ## 2. Data-Only vs. Authoritative Layers
+
+### Domain: live `--mode node` block feed — REUSED dial/pump vs. closed source (RED reuse / closed fill; N-F-G-C)
+
+| Layer | Module | Color | Role |
+|-------|--------|-------|------|
+| **Live-feed wiring (REUSE, no reimpl)** | `ade_node::node_lifecycle::spawn_live_wire_pump_source` (NEW, S1) | RED | Builds a LIVE `NodeBlockSource::WirePump` from the operator-supplied `--peer`. REUSES the closed `ade_runtime::admission::{dial_for_admission, run_admission_wire_pump}` VERBATIM (no reimplementation, no new wire authority) + the `pub(crate)`-promoted `build_n2n_version_table`. Each peer dialed in a `tokio::spawn` → bounded `mpsc` (`LIVE_WIRE_PUMP_CHANNEL_CAP = 64`) → `from_wire_pump(rx)`. A dial/parse failure is logged-and-dropped (C3). Decides nothing; moves bytes from a reused dial into a closed source. |
+| **Reused dial authority** | `ade_runtime::admission::dial_for_admission` | RED | The SAME admission dial the wire-only / admission modes use — REUSED verbatim. UNCHANGED. |
+| **Reused wire pump** | `ade_runtime::admission::run_admission_wire_pump` | RED | The SAME admission wire pump — REUSED verbatim; emits `AdmissionPeerEvent`. UNCHANGED. |
+| **Closed verdict-decoupled source (FILL, not a new variant)** | `ade_node::node_sync::NodeBlockSource` (`from_wire_pump`, closed 2-variant `{WirePump, InMemory}`) | RED | The `WirePump` arm is FILLED from the live `AdmissionPeerEvent` channel; yields ordered `Block` bytes ONLY, skips `TipUpdate`, ends on `Disconnected`. NEVER a verdict. A FILL of the existing arm, NOT a new variant. |
+| **Authoritative durable apply (UNMODIFIED)** | `ade_runtime::forward_sync::pump_block` (via `node_sync::run_node_sync`) | RED + BLUE admit | The SOLE durable tip-advance the live bytes feed; `StoreBlockBytes`/`AppendWal`-before-`AdvanceTip` (DC-SYNC-01). UNMODIFIED — no second tip-advance. |
+
+**Rule (N-F-G-C live feed; `ci_check_served_chain_handoff_fence.sh` BROADENED + `ci_check_node_run_loop_containment.sh`
+byte-unchanged):** the live feed is **REUSE, not reimplementation** — the dial + pump are the closed admission
+authorities, reused verbatim; `build_n2n_version_table` is reused via a fn-visibility promotion. The source stays
+the **closed 2-variant `NodeBlockSource`** — `from_wire_pump` is a FILL of the existing `WirePump` arm, **NOT a
+new variant / plugin point / new wire authority**. The durable tip advances ONLY via `run_node_sync → pump_block`
+(no second tip-advance). A dial/parse failure is logged-and-dropped — never fatal / fabricated / a tip graft.
+**None of these chokepoints move.** **Honest scope:** G-C wires the MECHANICAL live feed ONLY — with a live feed
+the forge is observable at a due leader slot, but **peer ACCEPT is operator-gated** (RO-LIVE-01 partial), proven
+only by an operator-captured peer log through `correlate`. Ade self-accept / served-block / wire success ≠ peer
+acceptance. BA-02 satisfied nowhere.
+
+### Domain: BA-02 operator-pass evidence — RED file I/O vs. GREEN correlator vs. BLUE-minted hash (N-F-C; I/O wired N-F-G-C)
+
+| Layer | Module | Color | Role |
+|-------|--------|-------|------|
+| **Data-only evidence file I/O** | `ade_node::ba02_pass` (`correlate_peer_log_file`, `write_ba02_manifest`; NEW, S2 — `//! RED`) | RED | Operator-pass BA-02 evidence file I/O. `correlate_peer_log_file` reads the operator-captured peer-accept JSONL → GREEN `parse_peer_accept_events` + `correlate`; a missing/unreadable file ⇒ `io::Error` (fail-closed), never a synthesized acceptance. `write_ba02_manifest` accepts **ONLY a `Ba02Manifest`** (which only `correlate`'s exact-match arm constructs). Constructs no evidence, derives no acceptance, never coerces a non-acceptance line. **NO new closed enum / registry.** |
+| **Evidence correlator (compares already-authoritative outputs) — UNCHANGED** | `ade_node::ba02_evidence` (`parse_peer_accept_events`, `correlate`, closed `BA02Outcome` / `PeerAcceptEvent` / `PeerAcceptSource` / `NoEvidenceReason` / versioned `Ba02Manifest`) | GREEN | COMPARES the BLUE-minted forged hash (read verbatim, never recomputed) against an operator-captured peer-accept signal; `correlate` is the **SOLE** `Ba02Manifest` constructor (hash-primary; exact-match arm only). Forges/admits/persists nothing. UNCHANGED by G-C — only *consumed* by the new RED `ba02_pass` wrapper. RO-LIVE-06. |
+| **Authoritative forge record source** | `ade_node::ba02_evidence::AdeForgeRecord::from_forge_artifact` | GREEN | Reads the BLUE-minted forged hash + slot VERBATIM from `ForgedBlockArtifact` — NEVER recomputed; no new BLUE authority. |
+
+**Rule (RO-LIVE-06 / CN-OPERATOR-EVIDENCE-01; `ci_check_ba02_evidence_closed.sh` +
+`ci_check_ba02_evidence_manifest_schema.sh`):** the RED `ba02_pass` is **file I/O ONLY** over the UNCHANGED GREEN
+correlator; **all evidence semantics live in GREEN `correlate`** — the SOLE `Ba02Manifest` constructor (no
+self-evidence acceptance source: not `ForgeSucceeded` / `self_accept` / `block_received` / served-block /
+wire-success / `agreement_verdict` / "agreed"). `write_ba02_manifest` accepts ONLY a `Ba02Manifest`, so a written
+manifest is **always correlate-produced** from a real peer log; **no synthetic manifest is committed** (the new
+gate is vacuous-until-committed; when a `CE-G-C-LIVE_*.toml` is committed it verifies the 8-field schema +
+`schema_version == 1` + `peer_log_file_sha256 == sha256(fixture)`). **The `correlate` chokepoint never moves.**
+**Honest scope:** `ba02_pass` is reached by NO binary arm at this HEAD (tested only — incl. the env-gated
+`node_operator_pass_ba02_live`). BA-02 is satisfied NOWHERE at this HEAD; a real result needs an operator-captured
+peer log through `correlate` against a peer that can grant leadership (C1/C2). RO-LIVE-01 stays partial/operator-gated.
 
 ### Domain: forge-constant fidelity — current-pparams source + checked clock + off-epoch guard (GREEN parse / GREEN accessor / BLUE authority-behind-seams; N-F-G-A)
 
@@ -914,32 +1148,36 @@ hashed-for-evidence / replay surfaces). **No new BLUE authority, no parser reimp
 second forge codepath, no new BLUE crate change.** A partial key set fails closed
 (`NodeLifecycleError::ForgeKeyIngress` → exit 44). `pool_id` is derived in ONE named place, never fabricated.
 The forge base is the single recovered `BootstrapState` (no second bootstrap). **The forge containment from
-N-F-E stays SEMANTICALLY UNCHANGED** — N-F-F/N-F-G-A may ADD ingress/fidelity gates but MUST NOT relax it.
-**None of these chokepoints move.** **Honest scope:** the binary is forge-CAPABLE with real keys + real
-constants but NOT observable on the empty-source path; observable forge is the RO-LIVE-01 follow-on. No serve
-/ admit / gossip / durable-tip / BA-02 / RO-LIVE claim. Mithril untouched.
+N-F-E stays SEMANTICALLY UNCHANGED** — N-F-F/N-F-G-A/N-F-G-C may ADD ingress/fidelity/live-feed gates but MUST
+NOT relax it. **None of these chokepoints move.** **Honest scope:** the binary is forge-CAPABLE with real keys +
+real constants; N-F-G-C makes the On arm live-feed-wireable (observable forge at a due leader slot) but peer
+ACCEPT stays operator-gated (RO-LIVE-01). No serve-to-peer / admit / gossip / durable-tip / BA-02 / RO-LIVE
+claim. Mithril untouched.
 
-### Domain: live relay run-loop (GREEN planner / RED driver / BLUE authority-behind-seams; N-F-D, forge-tick N-F-E, forge-on flip N-F-F, fidelity N-F-G-A)
+### Domain: live relay run-loop (GREEN planner / RED driver / BLUE authority-behind-seams; N-F-D, forge-tick N-F-E, forge-on flip N-F-F, fidelity N-F-G-A, live feed N-F-G-C)
 
 | Layer | Module | Color | Role |
 |-------|--------|-------|------|
-| **Pure lifecycle planner** | `ade_node::run_loop_planner` (`plan_loop_step`, closed `LoopStep`, content-blind `SyncStatus` + `ForgeSlotStatus`, the pure `forge_slot_status` guard) | GREEN | Decides each iteration's `LoopStep` from content-blind inputs over a total table. Emits ONLY `{SyncOnce, ForgeTick, Idle, HaltCleanly}` — **cannot express an authority decision**. `forge_slot_status` is the ONLY fn here that observes a `SlotNo`. With `ForgeSlotStatus::NotDue` the table collapses to the N-F-D relay mapping. Decides nothing semantic. UNCHANGED by N-F-G-A. CN-NODE-02 / DC-NODE-05. |
-| **Live-run driver (the single owner)** | `ade_node::node_lifecycle::run_relay_loop` | RED | Both `--mode node` arms converge here. Performs effects per the GREEN plan: `SyncOnce → run_node_sync` (the SOLE durable tip-advance), `ForgeTick →` exactly one fenced `forge_one_from_recovered` (N-F-E; N-F-G-A S3 derives the slot via `checked_millis_to_slot`; advances no tip, serves/admits/gossips nothing), `Idle →` cancellation-safe wait, `HaltCleanly →` exit. **Body containment SEMANTICALLY UNCHANGED across N-F-E → N-F-F → N-F-G-A** — the new boundaries sit inside the existing fence. CN-NODE-02 / DC-SYNC-02 / DC-NODE-05. |
-| **Opt-in forge-activation bundle** | `ade_node::node_lifecycle::ForgeActivation<'a>` (N-F-E; REAL operator material N-F-F; current pparams + protocol_version + checked-clock fail field N-F-G-A) | RED | The closed opt-in bundle (`forge: Option<&mut ForgeActivation>`): borrows the `Clock` seam (sole wall-clock observation; checked at N-F-G-A), the `CoordinatorState`, the recovered `BootstrapState` (SOLE leadership source + forge base), the `ProducerShell` (key custody), `pool_id` / **current** `pparams` / `protocol_version` (N-F-G-A, from the recovered current view) / the `millis_to_slot` anchor / `last_slot_alignment_fail` (N-F-G-A S3), and the in-memory `hermetic_forge_outcomes` test field. `None` ⇒ exact N-F-D/N-F-E relay. Decides nothing semantic. |
+| **Pure lifecycle planner** | `ade_node::run_loop_planner` (`plan_loop_step`, closed `LoopStep`, content-blind `SyncStatus` + `ForgeSlotStatus`, the pure `forge_slot_status` guard) | GREEN | Decides each iteration's `LoopStep` from content-blind inputs over a total table. Emits ONLY `{SyncOnce, ForgeTick, Idle, HaltCleanly}` — **cannot express an authority decision**. `forge_slot_status` is the ONLY fn here that observes a `SlotNo`. With `ForgeSlotStatus::NotDue` the table collapses to the N-F-D relay mapping. Decides nothing semantic. UNCHANGED by N-F-G-A / N-F-G-C. CN-NODE-02 / DC-NODE-05. |
+| **Live-run driver (the single owner)** | `ade_node::node_lifecycle::run_relay_loop` | RED | Both `--mode node` arms converge here. Performs effects per the GREEN plan: `SyncOnce → run_node_sync` (the SOLE durable tip-advance; N-F-G-C feeds it from the LIVE WirePump source), `ForgeTick →` exactly one fenced `forge_one_from_recovered` (advances no tip, serves/admits/gossips nothing in the body), `Idle →` cancellation-safe wait, `HaltCleanly →` exit. **Body containment SEMANTICALLY UNCHANGED across N-F-E → N-F-F → N-F-G-A → N-F-G-B → N-F-G-C** — the source-selection happens in the dispatcher BEFORE the loop; the run loop body is byte-unchanged. CN-NODE-02 / DC-SYNC-02 / DC-NODE-05. |
+| **Opt-in forge-activation bundle** | `ade_node::node_lifecycle::ForgeActivation<'a>` (N-F-E; REAL operator material N-F-F; current pparams + checked-clock fail field N-F-G-A; opt-in `handoff_tx` N-F-G-B) | RED | The closed opt-in bundle (`forge: Option<&mut ForgeActivation>`): borrows the `Clock` seam (checked at N-F-G-A), the `CoordinatorState`, the recovered `BootstrapState` (SOLE leadership source + forge base), the `ProducerShell` (key custody), `pool_id` / current `pparams` / `protocol_version` / `last_slot_alignment_fail` / the opt-in `handoff_tx: Option<mpsc::UnboundedSender<SelfAcceptedHandoff>>` (N-F-G-B). `None` ⇒ exact N-F-D/N-F-E relay. Decides nothing semantic. |
+| **Live-feed source builder (REUSE)** | `ade_node::node_lifecycle::spawn_live_wire_pump_source` (N-F-G-C) | RED | Builds the LIVE `NodeBlockSource::WirePump` from `--peer` by reusing the closed `dial_for_admission` + `run_admission_wire_pump` (a FILL, not a new variant); handed to `run_relay_loop`. Decides nothing; moves bytes from a reused dial into a closed source. |
 | **Authoritative durable apply** | `ade_runtime::forward_sync::pump_block` (carried fwd, N-Y) | RED + BLUE admit | The durability-ordered driver `run_node_sync` feeds; the BLUE admit chokepoint + `StoreBlockBytes`/`AppendWal`-before-`AdvanceTip` invariant live here. UNMODIFIED. |
-| **Authoritative forge handoff** | `ade_node::node_sync::forge_one_from_recovered` (carried fwd, N-F-C; N-F-G-A S4 off-epoch guard) | RED (driver) → BLUE | Projects leadership ONLY via `PoolDistrView::from_seed_epoch_consensus_inputs`; eligibility is the BLUE leader-schedule. **N-F-G-A** calls `forge_epoch_admission` BEFORE `query_leader_schedule` (off-epoch fails closed before leadership). CN-CINPUT-03 / DC-CINPUT-02b / DC-EPOCH-03. |
+| **Authoritative forge handoff** | `ade_node::node_sync::forge_one_from_recovered` (carried fwd, N-F-C; N-F-G-A S4 off-epoch guard; N-F-G-B token surfacing) | RED (driver) → BLUE | Projects leadership ONLY via `PoolDistrView::from_seed_epoch_consensus_inputs`; eligibility is the BLUE leader-schedule. **N-F-G-A** calls `forge_epoch_admission` BEFORE `query_leader_schedule`. **N-F-G-B** returns `(CoordinatorEvent, Option<SelfAcceptedHandoff>)`. CN-CINPUT-03 / DC-CINPUT-02b / DC-EPOCH-03 / DC-NODE-06. |
 
-**Rule (CN-NODE-02 / DC-SYNC-02 / DC-NODE-05 / DC-EPOCH-03):** the GREEN planner decides iteration shape over
-a closed, content-blind vocabulary and cannot decide authority; the RED driver performs effects but advances
-the tip ONLY via `run_node_sync → pump_block` and (if forging) reaches EXACTLY ONE fenced
-`forge_one_from_recovered`, serving/admitting/gossiping nothing; BLUE authority stays behind the existing
-seams. The wall-clock enters ONLY through the RED `Clock` seam (now checked — before-anchor fails closed),
-and only a `SlotNo` crosses into GREEN/BLUE. The off-epoch guard fails the forge closed before leadership
-(N-F-G-A). The forge is **subordinate** to the sync spine — a forged block is a local self-accept artifact,
-not a tip advance. **N-F-G-A leaves `run_relay_loop`'s body containment semantically unchanged** (the new
-fidelity boundaries sit inside the existing fence). **None of these chokepoints move.** **Honest scope:** the
-binary is forge-CAPABLE with real keys + real constants but the forge is not observable on the empty-source
-path; a live unbounded peer is the RO-LIVE-01 follow-on; BA-02 is satisfied nowhere.
+**Rule (CN-NODE-02 / DC-SYNC-02 / DC-NODE-05 / DC-EPOCH-03 / DC-NODE-06):** the GREEN planner decides iteration
+shape over a closed, content-blind vocabulary and cannot decide authority; the RED driver performs effects but
+advances the tip ONLY via `run_node_sync → pump_block` and (if forging) reaches EXACTLY ONE fenced
+`forge_one_from_recovered`, serving/admitting/gossiping nothing in the body; BLUE authority stays behind the
+existing seams. The wall-clock enters ONLY through the RED `Clock` seam (now checked — before-anchor fails
+closed), and only a `SlotNo` crosses into GREEN/BLUE. The off-epoch guard fails the forge closed before
+leadership (N-F-G-A). The N-F-G-B handoff is a typed `tx.send` only (served-chain mutation in the SIBLING task).
+**N-F-G-C leaves `run_relay_loop`'s body containment byte-unchanged** — the live-feed source-selection happens in
+the dispatcher before the loop; the source handed in is the closed `NodeBlockSource` (a `from_wire_pump` FILL).
+The forge is **subordinate** to the sync spine — a forged block is a local self-accept artifact, served only via
+the fenced sibling `push_atomic`, never a tip advance. **None of these chokepoints move.** **Honest scope:** the
+binary is forge-CAPABLE with real keys + real constants; with a LIVE `--peer` feed (N-F-G-C) the forge becomes
+observable at a due leader slot, but peer ACCEPT is operator-gated (RO-LIVE-01 partial); BA-02 satisfied nowhere.
 
 ### Domain: recovered seed-epoch consensus inputs (N-F-A; CONSUMED in N-F-C, exercised by the N-F-E forge tick + the N-F-F On arm + the N-F-G-A current-constants tick)
 
@@ -967,29 +1205,32 @@ tick now also runs the off-epoch `forge_epoch_admission` guard (via `EraSchedule
 the projection stays the SOLE leadership source. `produce_mode` stays diagnostic and still passes
 `SeedEpochConsensusSource::NotRequired`.
 
-### Domain: node lifecycle + BA-02 evidence (N-F-C)
+### Domain: node lifecycle + BA-02 evidence (N-F-C; BA-02 file I/O wired N-F-G-C)
 
 | Layer | Module | Color | Role |
 |-------|--------|-------|------|
-| **Lifecycle owner (single authority router)** | `ade_node::node_lifecycle` (`run_node_lifecycle`, `classify_start`, `first_run_mithril_bootstrap`, `warm_start_recovery`, `run_relay_loop`) | RED | THE single `--mode node` recovered-state lifecycle owner (`PHASE4-N-F-C-LIFECYCLE-OWNER`). Classifies FirstRun vs WarmStart as a PURE function of on-disk state; both arms route initial state through the SINGLE `bootstrap_initial_state` authority and converge into `run_relay_loop` (N-F-D). N-F-F adds the forge-intent classify + `Some`/`None` flip; N-F-G-A sources the On-arm constants from the recovered current view. Decides nothing semantic; never a second bootstrap/recovery/storage-init path (CN-NODE-01). |
-| **Verdict-decoupled block source** | `ade_node::node_sync::NodeBlockSource` + `run_node_sync` | RED | Yields ordered peer-block BYTES only (skips `TipUpdate`, ends on `Disconnected`; N-F-D added a content-blind readiness signal); `run_node_sync` is the production caller of `forward_sync::pump_block` (durable-before-tip, DC-SYNC-01). NEVER carries/derives a verdict. Driven on the live path by the N-F-D relay loop. |
+| **Lifecycle owner (single authority router)** | `ade_node::node_lifecycle` (`run_node_lifecycle`, `classify_start`, `first_run_mithril_bootstrap`, `warm_start_recovery`, `run_relay_loop`) | RED | THE single `--mode node` recovered-state lifecycle owner (`PHASE4-N-F-C-LIFECYCLE-OWNER`). Classifies FirstRun vs WarmStart as a PURE function of on-disk state; both arms route initial state through the SINGLE `bootstrap_initial_state` authority and converge into `run_relay_loop` (N-F-D). N-F-F adds the forge-intent classify + `Some`/`None` flip; N-F-G-A sources the On-arm constants from the recovered current view; N-F-G-C selects the live `WirePump` source (`--peer`) vs the empty source. Decides nothing semantic; never a second bootstrap/recovery/storage-init path (CN-NODE-01). |
+| **Verdict-decoupled block source** | `ade_node::node_sync::NodeBlockSource` + `run_node_sync` | RED | Yields ordered peer-block BYTES only (skips `TipUpdate`, ends on `Disconnected`; N-F-D added a content-blind readiness signal; N-F-G-C added `from_wire_pump` — a FILL of the WirePump arm); `run_node_sync` is the production caller of `forward_sync::pump_block` (durable-before-tip, DC-SYNC-01). NEVER carries/derives a verdict. Driven on the live path by the N-F-D relay loop. |
 | **Authoritative durable apply** | `ade_runtime::forward_sync::pump_block` (carried fwd, N-Y) | RED + BLUE admit | The durability-ordered driver the source feeds; the BLUE admit chokepoint + `StoreBlockBytes`/`AppendWal`-before-`AdvanceTip` invariant live here, not in the source. |
-| **Evidence correlator (compares already-authoritative outputs)** | `ade_node::ba02_evidence` (`parse_peer_accept_events`, `correlate`) | GREEN | COMPARES the BLUE-minted forged hash (read verbatim from `ForgedBlockArtifact`, never recomputed) against an operator-captured peer-accept signal; `correlate` is the SOLE `Ba02Manifest` constructor. Forges/admits/persists nothing. RO-LIVE-06. _Tested-but-unwired._ |
+| **Evidence correlator (compares already-authoritative outputs)** | `ade_node::ba02_evidence` (`parse_peer_accept_events`, `correlate`) | GREEN | COMPARES the BLUE-minted forged hash (read verbatim, never recomputed) against an operator-captured peer-accept signal; `correlate` is the SOLE `Ba02Manifest` constructor. Forges/admits/persists nothing. RO-LIVE-06. _N-F-G-C: now CONSUMED by the RED `ba02_pass` file-I/O wrapper (still reached by no binary arm; tested only)._ |
+| **Evidence file I/O (N-F-G-C)** | `ade_node::ba02_pass` (`correlate_peer_log_file`, `write_ba02_manifest`) | RED | Reads the operator-captured peer-log file into the GREEN `correlate`; `write_ba02_manifest` accepts ONLY a `Ba02Manifest`. A missing/unreadable file fails closed (`io::Error`). Constructs no evidence; reached by no binary arm at this HEAD. RO-LIVE-06 / CN-OPERATOR-EVIDENCE-01. |
 
-**Rule (CN-NODE-01 / DC-SYNC-01 / RO-LIVE-06):** the lifecycle owner ROUTES (single `bootstrap_initial_state`
-authority on both arms); the block source is data-only (bytes, never a verdict); the durable apply + admit
-authority stay in `pump_block`; the BA-02 correlator is GREEN evidence whose SOLE constructor admits no
-self-evidence acceptance source and emits no committed synthetic manifest. **None of these chokepoints move.**
-**Honest scope:** `ba02_evidence` is tested-but-unwired; `node_sync` is driven on the live path only by the
-N-F-D relay loop (SyncOnce) + the N-F-E/N-F-F/N-F-G-A forge tick (ForgeTick, with a `ForgeActivation`).
-**BA-02 is satisfied NOWHERE at this HEAD; RO-LIVE-01 remains partial/operator-gated.**
+**Rule (CN-NODE-01 / DC-SYNC-01 / RO-LIVE-06 / CN-OPERATOR-EVIDENCE-01):** the lifecycle owner ROUTES (single
+`bootstrap_initial_state` authority on both arms); the block source is data-only (bytes, never a verdict; the
+N-F-G-C live `WirePump` fill stays a closed verdict-decoupled contract); the durable apply + admit authority stay
+in `pump_block`; the BA-02 correlator is GREEN evidence whose SOLE constructor admits no self-evidence acceptance
+source and emits no committed synthetic manifest, and the N-F-G-C RED `ba02_pass` is file I/O ONLY over it
+(`write_ba02_manifest` accepts ONLY a `Ba02Manifest`). **None of these chokepoints move.** **Honest scope:**
+`ba02_evidence` + `ba02_pass` are reached by no binary arm (tested only); `node_sync` is driven on the live path
+only by the N-F-D relay loop (SyncOnce — now from a LIVE feed with `--peer`) + the forge tick (ForgeTick, with a
+`ForgeActivation`). **BA-02 is satisfied NOWHERE at this HEAD; RO-LIVE-01 remains partial/operator-gated.**
 
-### Domain: bootstrap seed provenance (N-Y, extended N-Z + N-F-A; UNTOUCHED by N-F-F / N-F-G-A)
+### Domain: bootstrap seed provenance (N-Y, extended N-Z + N-F-A; UNTOUCHED by N-F-F / N-F-G-A / N-F-G-C)
 
 | Layer | Module | Color | Role |
 |-------|--------|-------|------|
 | **Data-only Mithril shell** | `ade_runtime::mithril_import::{json, importer}` | RED | `parse_mithril_manifest_json` is the SOLE manifest-JSON parser; `import_mithril_manifest` maps it into the closed `SeedProvenance::Mithril` + `MithrilManifestReport`. No semantic decision; never re-verifies the STM multisig. |
-| **Mithril production-bootstrap composition** *(N-Z; +N-F-A sidecar tail; N-F-C first non-test caller)* | `ade_runtime::mithril_bootstrap::bootstrap_from_mithril_snapshot` | RED | **Composition-only**: import → mint anchor from the operator-independent `MithrilSeedPointInputs` → BLUE `verify_mithril_binding` fail-closed BEFORE storage init → single `bootstrap_initial_state` (NotRequired) → N-F-A sidecar tail. Symmetric with `bootstrap_from_conway_genesis`. No new authority, no new `SeedProvenance` variant, no CLI surface. Closed `MithrilBootstrapError`. **N-F-F/N-F-G-A do NOT call this** — operator-key ingress / forge fidelity is not a bootstrap. |
+| **Mithril production-bootstrap composition** *(N-Z; +N-F-A sidecar tail; N-F-C first non-test caller)* | `ade_runtime::mithril_bootstrap::bootstrap_from_mithril_snapshot` | RED | **Composition-only**: import → mint anchor from the operator-independent `MithrilSeedPointInputs` → BLUE `verify_mithril_binding` fail-closed BEFORE storage init → single `bootstrap_initial_state` (NotRequired) → N-F-A sidecar tail. Symmetric with `bootstrap_from_conway_genesis`. No new authority, no new `SeedProvenance` variant, no CLI surface. Closed `MithrilBootstrapError`. **N-F-F/N-F-G-A/N-F-G-C do NOT call this** — operator-key ingress / forge fidelity / live feed is not a bootstrap. |
 | **Data-only genesis shell** | `ade_runtime::genesis_bootstrap::bootstrap_from_conway_genesis` + `producer::genesis_parser` | RED | Reads + parses the Conway genesis file; routes the transform through the single bootstrap authority; runs the same sidecar tail. NOT on the N-F-C node lifecycle (FirstRun is Mithril-only). The N-F-F/N-F-G-A ingress reuses `genesis_parser` (N-F-G-A: the REAL `parse_shelley_genesis`) for clock/KES/network anchor extraction ONLY. |
 | **Authoritative binding predicate** | `ade_ledger::bootstrap_anchor::binding::verify_mithril_binding` | BLUE | The sole authority deciding whether a Mithril anchor binds — a pure predicate cross-checking `{network_magic, genesis_hash, certified_point, certificate_hash}`; fails closed with `MithrilImportError`. |
 | **Authoritative genesis transform** | `ade_ledger::genesis_source::genesis_initial_state` | BLUE | The pure Conway-only transform; fail-closed `GenesisSourceError::NonConwayEra`. |
@@ -1001,24 +1242,25 @@ through the **single** `bootstrap_initial_state` authority. **There is NO `Genes
 trait or plugin seam.** `verify_mithril_binding` MUST NOT be tautological. New seed-source support adds a RED
 parse/map shell + (if a new authoritative decision is needed) a BLUE predicate/transform + (for production
 wiring) a composition-only RED twin of `bootstrap_from_{conway_genesis, mithril_snapshot}`; **the
-`bootstrap_initial_state` chokepoint never moves.** **N-F-F/N-F-G-A note:** Mithril stays the bootstrap/recovery
-layer untouched — a bootstrap accelerator, not a validation/forge shortcut; operator-key ingress / forge
-fidelity neither calls Mithril nor creates a second bootstrap.
+`bootstrap_initial_state` chokepoint never moves.** **N-F-F/N-F-G-A/N-F-G-C note:** Mithril stays the
+bootstrap/recovery layer untouched — a bootstrap accelerator, not a validation/forge shortcut; operator-key
+ingress / forge fidelity / the live feed neither calls Mithril nor creates a second bootstrap.
 
-### Domain: network forward-sync (durable-before-tip, N-Y; first production driver N-F-C; driven by the N-F-D loop)
+### Domain: network forward-sync (durable-before-tip, N-Y; first production driver N-F-C; driven by the N-F-D loop; LIVE feed N-F-G-C)
 
 | Layer | Module | Color | Role |
 |-------|--------|-------|------|
 | **Effect-plan reducer** | `ade_runtime::forward_sync::reducer` (`forward_sync_step`, `AdmitPlan::durable`) | GREEN-by-content | Composes the BLUE admit chokepoint and emits the closed `SyncEffect` plan. The private `AdmitPlan::durable` is the **sole** `AdvanceTip` emitter and fixes the durable-before-tip order — an out-of-order plan is structurally inexpressible. |
-| **Durability-ordered driver** | `ade_runtime::forward_sync::pump` (`pump_block`) | RED | Applies the reducer's `SyncEffect` plan in order against the persistent `ChainDb` + `FileWalStore` + snapshot writer; refuses to advance the tip before `StoreBlockBytes` + `AppendWal` return Ok — `PumpError::TipBeforeDurable`. Its production caller is `node_sync::run_node_sync`, driven each iteration by the N-F-D relay loop's `SyncOnce`. |
+| **Durability-ordered driver** | `ade_runtime::forward_sync::pump` (`pump_block`) | RED | Applies the reducer's `SyncEffect` plan in order against the persistent `ChainDb` + `FileWalStore` + snapshot writer; refuses to advance the tip before `StoreBlockBytes` + `AppendWal` return Ok — `PumpError::TipBeforeDurable`. Its production caller is `node_sync::run_node_sync`, driven each iteration by the N-F-D relay loop's `SyncOnce`. N-F-G-C: the bytes it folds now come from a LIVE `NodeBlockSource::WirePump` (reusing the closed admission dial + pump) when `--peer` is supplied. |
 
 **Rule (DC-SYNC-01 / DC-SYNC-02):** the GREEN reducer decides the effect plan; the RED pump applies it in
 durable order. This GREEN-reducer / RED-pump split mirrors the `ade_network::session` (GREEN) /
 `ade_runtime::network::mux_pump` (RED) split. `AdvanceTip` is unreachable before `StoreBlockBytes` +
 `AppendWal` (`ci_check_forward_sync_chokepoint_only.sh`). N-F-C's `run_node_sync` advances the tip ONLY via
-`pump_block` (`ci_check_node_sync_via_pump.sh`); N-F-D's relay loop drives `run_node_sync` each iteration.
-New sync logic adds `SyncEffect` variants + reducer arms; **the single-`AdvanceTip`-emitter chokepoint never
-moves.** An **acceptance-criterion** seam, not a registry-law surface.
+`pump_block` (`ci_check_node_sync_via_pump.sh`); N-F-D's relay loop drives `run_node_sync` each iteration;
+N-F-G-C feeds it a LIVE peer (the feed-side RO-LIVE-01 follow-on, now wired) without changing the
+single-`AdvanceTip`-emitter chokepoint. New sync logic adds `SyncEffect` variants + reducer arms; **the
+single-`AdvanceTip`-emitter chokepoint never moves.** An **acceptance-criterion** seam, not a registry-law surface.
 
 ### Domain: crash recovery (N-Y, extended N-F-A provenance fold; production restart wired N-F-C; loop-as-replay N-F-D/N-F-E/N-F-G-A)
 
@@ -1046,7 +1288,7 @@ is **evidence input, never runtime authority**. `warm_start_recovery` is the sin
 | **BlockFetch composition** | `ade_network::codec::block_fetch::{compose,decompose}_blockfetch_block` | BLUE | A served `MsgBlock` payload = `tag24(bytes([era, block]))` — era **inside** the wrap; **Conway = storage index 7**. |
 | **ChainSync composition** | `ade_network::codec::chain_sync::{compose,decompose}_rollforward_header, chain_sync_wire_era_index}` | BLUE | A served `RollForward` header = `[era_tag, tag24(bytes(header_cbor))]` — era_tag **outside** the wrap; **CONSENSUS era index, Conway = 6 = storage − 1**. |
 | **Serve emitters** | `ade_network::block_fetch::server` / `chain_sync::server` | BLUE | Emit composed (tag-24-wrapped) bytes — never a bare `[era, block]` / bare header. |
-| **RED consumers (migrated)** | `ade_node::admission::runner` + `ade_core_interop::follow` | RED | Strip a peer's tag-24 envelope via `ade_codec::unwrap_tag24`; no local parse. |
+| **RED consumers (migrated)** | `ade_node::admission::runner` + `ade_core_interop::follow` | RED | Strip a peer's tag-24 envelope via `ade_codec::unwrap_tag24`; no local parse. _(N-F-G-C: the live `--mode node` feed reuses `admission::runner`'s closed pump path verbatim.)_ |
 
 **Rule (CN-WIRE-08):** one tag-24 byte authority + per-protocol composition layered over it. The two N2N
 surfaces use **different era-index schemes** (BlockFetch storage Conway = 7; ChainSync consensus Conway = 6 =
@@ -1111,7 +1353,7 @@ reuses `CoordinatorState::kes_period_for_slot`. **The custody/signing chokepoint
 |-------|--------|-------|------|
 | **Data-only handoff carrier (constructor-fenced)** | `ade_runtime::producer::self_accepted_handoff::SelfAcceptedHandoff` (sole ctor `from_self_accepted`, accessors `accepted()` / `into_accepted()`) | GREEN | A constructor-fenced newtype over the BLUE `ade_ledger::producer::AcceptedBlock`. Private field; the SOLE constructor takes an `AcceptedBlock` (itself producible only by BLUE `self_accept` returning `Ok`). NO raw-bytes / `ForgedBlockArtifact` / `CoordinatorEvent` / flag / verdict constructor — a non-self-accepted artifact is type-unrepresentable as a handoff. Pure; carries the ORIGINAL token verbatim, never re-validates or re-derives it. Decides nothing; moves a token. |
 | **Forge token surfacing** | `ade_node::produce_mode::run_real_forge` (+ `run_real_forge_inner`) / `ade_node::node_sync::forge_one_from_recovered` | RED | `run_real_forge` returns `(CoordinatorEvent, Option<AcceptedBlock>)` — `Some` iff `ForgeSucceeded` (the out-param is written only on the success path). `forge_one_from_recovered` returns `(CoordinatorEvent, Option<SelfAcceptedHandoff>)`, wrapping via `self_accepted.map(SelfAcceptedHandoff::from_self_accepted)`. The token is the ORIGINAL from BLUE `self_accept` (CN-FORGE-01), never re-derived from `artifact.bytes`. |
-| **Typed handoff channel + sibling serve task** | `ade_node::node_lifecycle` (`ForgeActivation.handoff_tx: Option<mpsc::UnboundedSender<SelfAcceptedHandoff>>`, `with_handoff_sender`, the `tokio::spawn` sibling admit task) | RED | The relay-loop body forwards each surfaced handoff as a best-effort TYPED `tx.send(h)` ONLY — it holds ONLY the `Sender`, never a `ServedChainHandle` / `push_atomic` / served-chain mutation (so `ci_check_node_run_loop_containment.sh` stays byte-unchanged). The dispatcher On arm spawns a SIBLING task that drains the typed channel and admits via the single `ServedChainHandle::push_atomic(handoff.into_accepted())` — the SOLE node-spine `push_atomic` site. |
+| **Typed handoff channel + sibling serve task** | `ade_node::node_lifecycle` (`ForgeActivation.handoff_tx: Option<mpsc::UnboundedSender<SelfAcceptedHandoff>>`, `with_handoff_sender`, the `tokio::spawn` sibling admit task) | RED | The relay-loop body forwards each surfaced handoff as a best-effort TYPED `tx.send(h)` ONLY — it holds ONLY the `Sender`, never a `ServedChainHandle` / `push_atomic` / served-chain mutation (so `ci_check_node_run_loop_containment.sh` stays byte-unchanged). The dispatcher On arm spawns a SIBLING task that drains the typed channel and admits via the single `ServedChainHandle::push_atomic(handoff.into_accepted())` — the SOLE node-spine `push_atomic` site. _(N-F-G-C BROADENED the fence's owner set to `{node_lifecycle.rs, node_sync.rs}` + flipped guard-3 to an allow-list.)_ |
 | **Atomic publisher (reused)** | `ade_runtime::producer::served_chain_handle::push_atomic` | RED (GREEN-by-content glue) | The SAME single served-admit authority `produce_mode` uses; wraps `served_chain_admit` in `watch::Sender::send_modify` (no torn snapshot). REUSED unchanged — fed ONLY by `into_accepted()` on the node spine. |
 | **Authoritative admit (reused, behind seams)** | `ade_ledger::producer::served_chain::served_chain_admit` | BLUE | The SOLE entry into the served index; only self-accepted blocks (CN-PROD-04). UNCHANGED — reached only via `push_atomic`. |
 
@@ -1121,13 +1363,13 @@ variant. **Only a BLUE self-accepted artifact can be served:** the `SelfAccepted
 the `AcceptedBlock` from `self_accept` (private-field constructor fence); raw bytes / a failed outcome / a flag
 / a peer verdict are type-unrepresentable. The relay-loop body does a **typed `tx.send` only** — served-chain
 mutation lives in the SIBLING task via the single `push_atomic` fed by `into_accepted()`
-(`ci_check_served_chain_handoff_fence.sh`: every node-spine `push_atomic(` fed by `into_accepted()`; no direct
-`served_chain_admit(`; the channel typed `UnboundedSender<SelfAcceptedHandoff>`). **None of these chokepoints
-move**; `ci_check_node_run_loop_containment.sh` is byte-/semantically unchanged. **Honest scope:** this is
-**serve-authority only** — it is NOT a live feed (no `WirePump` / `n2n_dialer` / session wiring into the binary
-— that is G-C; the `ServedChainView` is retained for it; hermetic loopback at this HEAD, `push_atomic` admits
-via `send_modify` with no live reader). On the empty binary source the loop halts before any `ForgeTick`
-(forge-CAPABLE, NOT observable — RO-LIVE-01). **No peer-acceptance / BA-02 / RO-LIVE claim; BA-02 satisfied
+(`ci_check_served_chain_handoff_fence.sh`, BROADENED by G-C: owners `{node_lifecycle.rs, node_sync.rs}`; every
+node-spine `push_atomic(` fed by `into_accepted()`; no direct `served_chain_admit(`; the allow-list requires
+every node-spine unbounded handoff channel to carry `SelfAcceptedHandoff`). **None of these chokepoints move**;
+`ci_check_node_run_loop_containment.sh` is byte-/semantically unchanged. **Honest scope:** N-F-G-C adds the
+LIVE FEED around this serve mechanism; a self-accepted block is served byte-identically over IN-PROCESS
+block-fetch (`live_feed_forge_serve_loopback_returns_forged_block`), but a served block reaching a peer that
+ACCEPTS it is the operator-gated RO-LIVE-01 leg. **No peer-acceptance / BA-02 / RO-LIVE claim; BA-02 satisfied
 nowhere.**
 
 ### Domain: forged-block serving (data-only serve vs. authoritative admit)
@@ -1142,12 +1384,13 @@ nowhere.**
 the BLUE `ServedChainSnapshot`. The serve emitter wraps via the single tag-24 authority before bytes reach a
 peer (CN-WIRE-08). **N-F-E/N-F-F/N-F-G-A note:** the relay-loop forge tick **body** does NOT touch this serve
 path — `served_chain_admit` / `push_atomic` are forbidden in the relay-loop body, even on the forge-CAPABLE On
-arm. **N-F-G-B note (DC-NODE-06 now ENFORCED):** the forge tick now SURFACES the original BLUE self-accepted
+arm. **N-F-G-B note (DC-NODE-06 ENFORCED):** the forge tick SURFACES the original BLUE self-accepted
 `AcceptedBlock` and the loop body forwards it as a TYPED `mpsc<SelfAcceptedHandoff>` send to a dispatcher-spawned
 SIBLING served-chain admit task; the sibling task — NOT the loop body — admits via the single `push_atomic`
 (fed by `into_accepted()`). The loop body still references no serve token, so containment is byte-unchanged. See
-the self-accept→serve handoff domain above (the typed carrier `SelfAcceptedHandoff` + the sibling task). This is
-**serve-authority only** — hermetic loopback; the live network serve (real reader/peer) is G-C.
+the self-accept→serve handoff domain above. **N-F-G-C note:** a self-accepted block is now served byte-identically
+over IN-PROCESS block-fetch on the live-feed path; a served block leaving the node over the wire to a peer that
+ACCEPTS it is the operator-gated RO-LIVE-01 leg (peer ACCEPT NOT claimed here).
 
 ---
 
@@ -1157,27 +1400,28 @@ the self-accept→serve handoff domain above (the typed carrier `SelfAcceptedHan
 
 | Registry | Location | Count | Change Rule |
 |----------|----------|-------|-------------|
-| `SelfAcceptedHandoff` *(NEW, N-F-G-B S1)* | `ade_runtime::producer::self_accepted_handoff` (GREEN) | constructor-fenced newtype (1 private field `accepted: AcceptedBlock`; SOLE ctor `from_self_accepted`; accessors `accepted()` / `into_accepted()`) | The typed carrier moving a BLUE self-accepted forged block from the forge path to the (S2) sibling serve task. Its **SOLE constructor** takes a BLUE `ade_ledger::producer::AcceptedBlock` (itself producible only by BLUE `self_accept` returning `Ok`); the field is private. There is **NO** constructor from a raw `Vec<u8>`, a `ForgedBlockArtifact` (`artifact.bytes` is never a token source — re-deriving would breach CN-FORGE-01; the carrier holds the ORIGINAL token), a `CoordinatorEvent`, a self-declared acceptance flag, or a peer verdict — so handing the serve task a non-self-accepted artifact is **type-unrepresentable**. A **CLOSED constructor-fenced carrier (a surface REDUCTION), NOT an extensible registry / plugin point.** Backs `DC-NODE-06`. A change to the carried type / a new accessor = a strengthening of **DC-NODE-06 / CN-PROD-04 / CN-FORGE-01** (`ci_check_served_chain_handoff_fence.sh`); **no raw-bytes / artifact / event / flag / verdict constructor may be introduced**. |
-| `SlotAlignmentError` *(NEW, N-F-G-A S3)* | `ade_runtime::clock` (GREEN-by-content) | 1 (`BeforeGenesisAnchor`) | The closed fail-closed boundary carried by `checked_millis_to_slot`. A before-anchor tick (`tick_millis < start_millis`) is an *error*, never a saturation to `start_slot`. A **surface REDUCTION (a closed fail-closed wall)**, NOT a plugin/extension point. New variant = a `checked_millis_to_slot` arm + a strengthening of **DC-EPOCH-03** (the S3 unit tests + the node-path before-anchor tests assert the wiring). |
-| `ProtocolParamsParseError` *(NEW, N-F-G-A S2a)* | `ade_runtime::consensus_inputs::protocol_params` (GREEN-by-content) | closed sum (incl. `JsonShape` / `InexactRational { field: &'static str }`) | The closed error set of the cardano-cli `query protocol-parameters` JSON parser. **No float path** — a rational literal that cannot be represented exactly by integer arithmetic fails closed (`InexactRational`); a bad shape ⇒ `JsonShape`. Carries only non-secret `&'static str` field tags. A **surface REDUCTION (a closed RED-parse → BLUE-`ProtocolParameters` pipeline)**, NOT an extension point. New variant = a `parse_protocol_parameters_json` arm + a strengthening of **CE-G-A-2a** (`ci_check_recovered_ledger_pparams_sourced.sh`); non-secret primitives only; **no float path may be introduced**. |
-| `ForgeCurrentPParamsError` *(NEW, N-F-G-A S2a)* | `ade_runtime::consensus_inputs::canonical` (GREEN-by-content) | 3 (`PreimageAbsent` / `BindMismatch` / `Parse(ProtocolParamsParseError)`) | The closed error set of `require_forge_current_pparams`. `LiveConsensusInputsCanonical` carries `protocol_params_json: Option<String>` **OUTSIDE** the frozen 15-field canonical fingerprint (which commits to `protocol_params_hash`); the accessor requires the preimage present (`PreimageAbsent`), `blake2b_256`-binds it to the fingerprinted hash (`BindMismatch`), and parses exactly (`Parse`). A hash-bound accessor, NOT an extension point. New variant = a strengthening of **CE-G-A-2a** (`ci_check_recovered_ledger_pparams_sourced.sh`); **the preimage MUST stay OUTSIDE the 15-field canonical CBOR fingerprint** (no fingerprint-schema change). |
-| `ForgeEpochAdmission` *(NEW, N-F-G-A S4)* | `ade_node::node_sync` (GREEN-by-fn inside RED `node_sync`) | 2 (`WithinSeedEpoch` / `OffEpoch { located, seed }`) | The closed off-epoch admission verdict carried by `forge_epoch_admission`, derived SOLELY from `(slot, era_schedule, seed_epoch)` via the BLUE `EraSchedule::locate`. An off-epoch / unlocatable slot is an *error* (`OffEpoch`), never a third variant. Called BEFORE `query_leader_schedule` inside `forge_one_from_recovered`. A **closed classifier vocabulary**, NOT an extension point. New variant = a `forge_epoch_admission` arm + a strengthening of **DC-EPOCH-03** (`ci_check_node_forge_single_epoch_fail_closed.sh` — must use `EraSchedule::locate`, no fabricated epoch, no nonce promotion). |
-| `CoordinatorEvent` *(DELIBERATELY NOT EXTENDED, N-F-G-A S4)* | `ade_runtime::producer::coordinator` (GREEN) | 9 (`SlotTick` / `ForgeSucceeded` / `ForgeNotLeader` / `ForgeFailed` / `PeerConnected` / `PeerDisconnected` / `LedgerSnapshotUpdated` / `BroadcastDrained` / `Shutdown`) | The closed coordinator event set. **S4 reused the existing `ForgeNotLeader` for the off-epoch outcome — NO new variant added.** An off-epoch forge is surfaced as a "not leader" outcome through the closed vocabulary, keeping the set additively stable. New variant = a strengthening of **DC-PROD-01**; closed JSONL vocab, no free-form reason strings, no key material. |
+| `NodeBlockSource` *(N-F-C; readiness extended N-F-D; LIVE WirePump FILL N-F-G-C)* | `ade_node::node_sync` (RED) | 2 (`WirePump` / `InMemory`) | The **verdict-decoupled** ordered peer-block source: `next_block` yields ONLY `AdmissionPeerEvent::Block` bytes, SKIPS `TipUpdate`, ends on `Disconnected`. N-F-D added a content-blind readiness signal. **N-F-G-C added `from_wire_pump(rx)` — a LIVE FILL of the existing `WirePump` arm fed by `spawn_live_wire_pump_source` (reusing the closed admission dial + pump VERBATIM); NOT a new variant, NOT a new wire authority, NOT a plugin point.** NEVER carries a verdict. A closed single-method contract. New variant = a `next_block` arm + a strengthening of **DC-SYNC-01 / DC-SYNC-02**; a new source must REUSE the closed dial/pump (never reimplement), FILL an existing arm, advance no second tip, and carry no verdict. |
+| `ba02_pass` evidence I/O *(NEW, N-F-G-C S2)* | `ade_node::ba02_pass` (RED — `//! RED`) | 2 fns (`correlate_peer_log_file`, `write_ba02_manifest`); **NO new closed enum / registry** | The RED operator-pass BA-02 evidence file I/O over the pre-existing closed `Ba02Manifest` / `BA02Outcome` / `PeerAcceptEvent` / `NoEvidenceReason` vocabulary. `correlate_peer_log_file` reads the operator-captured peer-log file → the GREEN `correlate` (the SOLE `Ba02Manifest` ctor); `write_ba02_manifest` accepts **ONLY a `Ba02Manifest`** — so a written manifest is ALWAYS correlate-produced. **A CLOSED file-I/O wrapper (a surface REDUCTION over the existing closed evidence vocabulary), NOT a new closed enum / registry / plugin point.** A missing/unreadable file fails closed (`io::Error`). Backs the BA-02 leg of `RO-LIVE-06` / `CN-OPERATOR-EVIDENCE-01`. Gate: `ci_check_ba02_evidence_manifest_schema.sh` (the no-synthetic-manifest enforcer; vacuous-until-committed + 8-field schema + `peer_log_file_sha256` cross-check). Adding an evidence-I/O fn = a strengthening of RO-LIVE-06; **no new acceptance source, no path emitting a manifest from `NoEvidence` / raw operator input.** |
+| `SelfAcceptedHandoff` *(N-F-G-B S1)* | `ade_runtime::producer::self_accepted_handoff` (GREEN) | constructor-fenced newtype (1 private field `accepted: AcceptedBlock`; SOLE ctor `from_self_accepted`; accessors `accepted()` / `into_accepted()`) | The typed carrier moving a BLUE self-accepted forged block from the forge path to the sibling serve task. Its **SOLE constructor** takes a BLUE `ade_ledger::producer::AcceptedBlock` (itself producible only by BLUE `self_accept` returning `Ok`); the field is private. There is **NO** constructor from a raw `Vec<u8>`, a `ForgedBlockArtifact` (`artifact.bytes` is never a token source — re-deriving would breach CN-FORGE-01; the carrier holds the ORIGINAL token), a `CoordinatorEvent`, a self-declared acceptance flag, or a peer verdict — so handing the serve task a non-self-accepted artifact is **type-unrepresentable**. A **CLOSED constructor-fenced carrier (a surface REDUCTION), NOT an extensible registry / plugin point.** Backs `DC-NODE-06`. A change to the carried type / a new accessor = a strengthening of **DC-NODE-06 / CN-PROD-04 / CN-FORGE-01** (`ci_check_served_chain_handoff_fence.sh`, BROADENED by G-C); **no raw-bytes / artifact / event / flag / verdict constructor may be introduced**. |
+| `SlotAlignmentError` *(N-F-G-A S3)* | `ade_runtime::clock` (GREEN-by-content) | 1 (`BeforeGenesisAnchor`) | The closed fail-closed boundary carried by `checked_millis_to_slot`. A before-anchor tick (`tick_millis < start_millis`) is an *error*, never a saturation to `start_slot`. A **surface REDUCTION (a closed fail-closed wall)**, NOT a plugin/extension point. New variant = a `checked_millis_to_slot` arm + a strengthening of **DC-EPOCH-03**. |
+| `ProtocolParamsParseError` *(N-F-G-A S2a)* | `ade_runtime::consensus_inputs::protocol_params` (GREEN-by-content) | closed sum (incl. `JsonShape` / `InexactRational { field: &'static str }`) | The closed error set of the cardano-cli `query protocol-parameters` JSON parser. **No float path** — a rational literal that cannot be represented exactly by integer arithmetic fails closed (`InexactRational`); a bad shape ⇒ `JsonShape`. Carries only non-secret `&'static str` field tags. A **surface REDUCTION (a closed RED-parse → BLUE-`ProtocolParameters` pipeline)**, NOT an extension point. New variant = a `parse_protocol_parameters_json` arm + a strengthening of **CE-G-A-2a** (`ci_check_recovered_ledger_pparams_sourced.sh`); non-secret primitives only; **no float path may be introduced**. |
+| `ForgeCurrentPParamsError` *(N-F-G-A S2a)* | `ade_runtime::consensus_inputs::canonical` (GREEN-by-content) | 3 (`PreimageAbsent` / `BindMismatch` / `Parse(ProtocolParamsParseError)`) | The closed error set of `require_forge_current_pparams`. `LiveConsensusInputsCanonical` carries `protocol_params_json: Option<String>` **OUTSIDE** the frozen 15-field canonical fingerprint (which commits to `protocol_params_hash`); the accessor requires the preimage present (`PreimageAbsent`), `blake2b_256`-binds it to the fingerprinted hash (`BindMismatch`), and parses exactly (`Parse`). A hash-bound accessor, NOT an extension point. New variant = a strengthening of **CE-G-A-2a**; **the preimage MUST stay OUTSIDE the 15-field canonical CBOR fingerprint** (no fingerprint-schema change). |
+| `ForgeEpochAdmission` *(N-F-G-A S4)* | `ade_node::node_sync` (GREEN-by-fn inside RED `node_sync`) | 2 (`WithinSeedEpoch` / `OffEpoch { located, seed }`) | The closed off-epoch admission verdict carried by `forge_epoch_admission`, derived SOLELY from `(slot, era_schedule, seed_epoch)` via the BLUE `EraSchedule::locate`. An off-epoch / unlocatable slot is an *error* (`OffEpoch`), never a third variant. Called BEFORE `query_leader_schedule` inside `forge_one_from_recovered`. A **closed classifier vocabulary**, NOT an extension point. New variant = a `forge_epoch_admission` arm + a strengthening of **DC-EPOCH-03** (`ci_check_node_forge_single_epoch_fail_closed.sh` — must use `EraSchedule::locate`, no fabricated epoch, no nonce promotion). |
+| `CoordinatorEvent` *(DELIBERATELY NOT EXTENDED, N-F-G-A S4)* | `ade_runtime::producer::coordinator` (GREEN) | 9 (`SlotTick` / `ForgeSucceeded` / `ForgeNotLeader` / `ForgeFailed` / `PeerConnected` / `PeerDisconnected` / `LedgerSnapshotUpdated` / `BroadcastDrained` / `Shutdown`) | The closed coordinator event set. **S4 reused the existing `ForgeNotLeader` for the off-epoch outcome — NO new variant added.** N-F-G-B surfaced the self-accepted token via a **sibling return component**, NOT a new event variant. N-F-G-C added **NO** `CoordinatorEvent` variant. An off-epoch forge is surfaced as a "not leader" outcome through the closed vocabulary, keeping the set additively stable. New variant = a strengthening of **DC-PROD-01**; closed JSONL vocab, no free-form reason strings, no key material. |
 | `ForgeIntent` *(N-F-F)* | `ade_node::forge_intent` (GREEN) | 2 (`On(ForgePaths)` / `Off`) | The closed tri-state forge-intent classification the `--mode node` arm keys its forge-on flip off. `classify_forge_intent` is the SOLE entry; **NO third "partial" variant** — a partial key set is `Err(ForgeIntentError::PartialKeySet)`. Pure/total over all 2⁵ flag-PRESENCE combinations (never observes contents). A **CE-not-law additively-closed classifier** (like `WalEntry` / `LoopStep`). New variant = a `classify_forge_intent` arm (bound by name, no wildcard) + a `node_lifecycle` dispatch arm + a strengthening of **CN-NODE-03** (`ci_check_forge_intent_closed.sh`). |
 | `ForgeIntentError` *(N-F-F)* | `ade_node::forge_intent` (GREEN) | 1 (`PartialKeySet { present, missing }`) | The closed forge-intent classify error — carries ONLY static CLI flag-name strings (`&'static str`), never a supplied path string, never key material. New variant = a strengthening of **CN-NODE-03**; static flag-name strings only (`ci_check_forge_intent_closed.sh`). |
-| `OperatorForgeError` *(N-F-F)* | `ade_node::operator_forge` (RED) | 6 (`ColdKeyLoad` / `VrfKeyLoad` / `KesKeyLoad` / `OpcertParse` / `ShellInit` / `GenesisParse`) | The closed operator-material ingress error sum — one variant per reused-loader / structural-validator step. Carries no path/key bytes (`OpcertParse`/`GenesisParse` hold `&'static str` detail only). _(N-F-G-A: the `OpcertParse`/`GenesisParse` details now come from the REAL `parse_opcert_envelope` / `parse_shelley_genesis`.)_ New variant = a strengthening of **CN-NODE-03 / OP-OPS-04**; non-secret primitives only (`ci_check_operator_forge_no_secret_leak.sh`). |
+| `OperatorForgeError` *(N-F-F)* | `ade_node::operator_forge` (RED) | 6 (`ColdKeyLoad` / `VrfKeyLoad` / `KesKeyLoad` / `OpcertParse` / `ShellInit` / `GenesisParse`) | The closed operator-material ingress error sum — one variant per reused-loader / structural-validator step. Carries no path/key bytes (`OpcertParse`/`GenesisParse` hold `&'static str` detail only). _(N-F-G-A: details now come from the REAL `parse_opcert_envelope` / `parse_shelley_genesis`.)_ New variant = a strengthening of **CN-NODE-03 / OP-OPS-04**; non-secret primitives only (`ci_check_operator_forge_no_secret_leak.sh`). |
 | `OperatorForgeMaterial` *(N-F-F)* | `ade_node::operator_forge` (RED) | closed struct (`shell: ProducerShell` / `genesis: GenesisAnchor` / `pool_id: Hash28` / `pparams` / `protocol_version` / `anchor_millis` / `start_slot` / `slot_length_ms`) | The operator-material forge inputs. **Deliberately NOT `Debug`/`Serialize`** (holds the custody `ProducerShell`); no byte accessor / serialization / logging. `pool_id` derived in ONE named place (`blake2b_224(cold_vk)`). A **CE-not-law additively-closed struct**. A new field = a struct addition behind the closed ingress contract + a strengthening of **CN-NODE-03** (`ci_check_operator_forge_no_secret_leak.sh`). |
 | `LoopStep` *(EXTENDED 3→4, N-F-E)* | `ade_node::run_loop_planner` (GREEN) | 4 (`SyncOnce` / `ForgeTick` / `Idle` / `HaltCleanly`) | The closed live-run iteration vocabulary the GREEN planner emits. **N-F-E added `ForgeTick`** (3→4). It **cannot express an authority decision**. A **CE-not-law additively-evolvable closed planner enum** (like `WalEntry`). New variant = a `plan_loop_step` arm + a fenced RED `run_relay_loop` branch + a strengthening of **CN-NODE-02 / DC-NODE-05** (`ci_check_loop_planner_closed.sh` + `ci_check_node_run_loop_containment.sh`). |
 | `ForgeSlotStatus` *(N-F-E)* | `ade_node::run_loop_planner` (GREEN) | 2 (`Due` / `NotDue`) | The **content-blind** forge-slot planner input. The planner learns only whether a slot is *due*, NEVER who is a leader (eligibility is BLUE inside `forge_one_from_recovered`). Derived by the pure `forge_slot_status` monotonic guard (the only `SlotNo`-observing fn in the module). New variant = a `plan_loop_step` arm + a strengthening of **DC-NODE-05** (`ci_check_loop_planner_closed.sh`). |
-| `ForgeActivation` *(N-F-E; real operator material N-F-F; current pparams N-F-G-A)* | `ade_node::node_lifecycle` (RED) | closed opt-in struct (`clock` / `coordinator_state` / `recovered` / `shell` / `pool_id` / `pparams` / `protocol_version` / `anchor_millis` / `start_slot` / `slot_length_ms` / `last_slot_alignment_fail` (N-F-G-A) / private `last_forged_slot`+`pending_slot` / `hermetic_forge_outcomes`) | The **opt-in forge-activation bundle** threaded into `run_relay_loop` as `forge: Option<&mut ForgeActivation>`. `Some` activates exactly one fenced `forge_one_from_recovered` per `ForgeTick`, advancing no durable tip and serving/admitting/gossiping nothing; `None` reproduces N-F-D relay. N-F-G-A: carries the **current** `pparams` + `protocol_version` (from the recovered current view) + the S3 `last_slot_alignment_fail`. **A closed activation surface, NOT an extension point.** A new field = a struct addition behind the closed activation contract + a strengthening of **DC-NODE-05**. |
-| `Mode` (run-mode set) *(N-F-C)* | `ade_node::cli` (RED) | 5 (`WireOnly` / `Admission` / `KeyGenKes` / `Produce` / `Node`) | The CLOSED `--mode` taxonomy. **NOT `#[non_exhaustive]`**; `Mode::parse` + `main.rs` dispatch are total with **NO wildcard arm**. New variant = a `Mode::parse` arm + an explicit wildcard-free `main.rs` arm + a strengthening of **CN-NODE-MODE-01** (`ci_check_node_mode_closure.sh`). _(N-F-F/N-F-G-A added NO `Mode` variant.)_ |
-| `NodeBlockSource` *(N-F-C; readiness extended N-F-D)* | `ade_node::node_sync` (RED) | 2 (`WirePump` / `InMemory`) | The **verdict-decoupled** ordered peer-block source: `next_block` yields ONLY `AdmissionPeerEvent::Block` bytes, SKIPS `TipUpdate`, ends on `Disconnected`. N-F-D added a content-blind readiness signal. NEVER carries a verdict. A closed single-method contract — **NOT a plugin point.** New variant = a `next_block` arm + a strengthening of **DC-SYNC-01 / DC-SYNC-02**. |
-| `PeerAcceptEvent` *(N-F-C)* | `ade_node::ba02_evidence` (GREEN) | 2 (`PeerServedBlock` / `PeerChainTip`) | The CLOSED **allow-list** of peer-acceptance signals; `parse_peer_accept_events` recognizes ONLY these two discriminators. New variant = a parser allow-list arm + a strengthening of **RO-LIVE-06**. |
+| `ForgeActivation` *(N-F-E; real operator material N-F-F; current pparams N-F-G-A; opt-in `handoff_tx` N-F-G-B)* | `ade_node::node_lifecycle` (RED) | closed opt-in struct (`clock` / `coordinator_state` / `recovered` / `shell` / `pool_id` / `pparams` / `protocol_version` / `anchor_millis` / `start_slot` / `slot_length_ms` / `last_slot_alignment_fail` / `handoff_tx: Option<mpsc::UnboundedSender<SelfAcceptedHandoff>>` / private `last_forged_slot`+`pending_slot` / `hermetic_forge_outcomes`) | The **opt-in forge-activation bundle** threaded into `run_relay_loop` as `forge: Option<&mut ForgeActivation>`. `Some` activates exactly one fenced `forge_one_from_recovered` per `ForgeTick`, advancing no durable tip and serving/admitting/gossiping nothing in the loop body; `None` reproduces N-F-D relay. N-F-G-B: the opt-in `handoff_tx` carries the surfaced `SelfAcceptedHandoff` to the sibling serve task (set via `with_handoff_sender`). **A closed activation surface, NOT an extension point.** A new field = a struct addition behind the closed activation contract + a strengthening of **DC-NODE-05 / DC-NODE-06**. |
+| `Mode` (run-mode set) *(N-F-C)* | `ade_node::cli` (RED) | 5 (`WireOnly` / `Admission` / `KeyGenKes` / `Produce` / `Node`) | The CLOSED `--mode` taxonomy. **NOT `#[non_exhaustive]`**; `Mode::parse` + `main.rs` dispatch are total with **NO wildcard arm**. New variant = a `Mode::parse` arm + an explicit wildcard-free `main.rs` arm + a strengthening of **CN-NODE-MODE-01** (`ci_check_node_mode_closure.sh`). _(N-F-F/N-F-G-A/N-F-G-C added NO `Mode` variant — the operator-key + `--peer` flags are OPTIONAL ingress on the existing `--mode node` arm.)_ |
+| `PeerAcceptEvent` *(N-F-C; consumed via `ba02_pass` N-F-G-C)* | `ade_node::ba02_evidence` (GREEN) | 2 (`PeerServedBlock` / `PeerChainTip`) | The CLOSED **allow-list** of peer-acceptance signals; `parse_peer_accept_events` recognizes ONLY these two discriminators. UNCHANGED by N-F-G-C (only consumed by the new RED `ba02_pass` I/O). New variant = a parser allow-list arm + a strengthening of **RO-LIVE-06**. |
 | `PeerAcceptSource` *(N-F-C)* | `ade_node::ba02_evidence` (GREEN) | 3 (`ServedBlock` / `ChainTip` / `ServedBlockAndChainTip`) | The closed typed provenance of the accepting signal. New variant = a `correlate` source arm + a strengthening of RO-LIVE-06. |
 | `NoEvidenceReason` *(N-F-C)* | `ade_node::ba02_evidence` (GREEN) | 4 (`NoPeerAccept` / `HashMismatch` / `ChainPointMismatch` / `ConflictingPeerSignals`) | The closed reason sum for `BA02Outcome::NoEvidence` — NoEvidence is the DEFAULT. New variant = a `correlate` classify arm + a strengthening of RO-LIVE-06. |
-| `BA02Outcome` *(N-F-C)* | `ade_node::ba02_evidence` (GREEN) | 2 (`Ba02Manifest(Ba02Manifest)` / `NoEvidence { reason }`) | The closed correlation outcome. `correlate` is the **SOLE** `Ba02Manifest` constructor; no self-evidence acceptance source; no committed synthetic manifest (**RO-LIVE-06**). |
-| `Ba02Manifest` schema *(N-F-C)* | `ade_node::ba02_evidence` (GREEN) | versioned struct — `BA02_MANIFEST_SCHEMA_VERSION = 1` | A **version-GATED** canonical evidence manifest (see §4); SOLE constructor `correlate`'s exact-match arm (RO-LIVE-06). |
-| `NodeLifecycleError` *(N-F-C; +RelaySync N-F-D; +ForgeKeyIngress N-F-F)* | `ade_node::node_lifecycle` (RED) | closed sum (incl. `RelaySync`, `ForgeKeyIngress(String)`) | The closed fail-closed lifecycle-owner error set (Mithril-only, no genesis/bundle/cold/graft fallback). N-F-F added `ForgeKeyIngress(String)` (→ exit 44). New variant = a strengthening of **CN-NODE-01 / CN-NODE-02 / CN-NODE-03**. |
+| `BA02Outcome` *(N-F-C; consumed via `ba02_pass` N-F-G-C)* | `ade_node::ba02_evidence` (GREEN) | 2 (`Ba02Manifest(Ba02Manifest)` / `NoEvidence { reason }`) | The closed correlation outcome. `correlate` is the **SOLE** `Ba02Manifest` constructor; no self-evidence acceptance source; no committed synthetic manifest (**RO-LIVE-06**). UNCHANGED by N-F-G-C — `ba02_pass::write_ba02_manifest` accepts ONLY the `Ba02Manifest` arm. |
+| `Ba02Manifest` schema *(N-F-C; schema gate N-F-G-C)* | `ade_node::ba02_evidence` (GREEN) | versioned struct — `BA02_MANIFEST_SCHEMA_VERSION = 1` | A **version-GATED** canonical evidence manifest (see §4); SOLE constructor `correlate`'s exact-match arm (RO-LIVE-06). N-F-G-C added the committed-manifest schema gate `ci_check_ba02_evidence_manifest_schema.sh` (8 fields + `schema_version == 1` + `peer_log_file_sha256` cross-check; vacuous-until-committed). |
+| `NodeLifecycleError` *(N-F-C; +RelaySync N-F-D; +ForgeKeyIngress N-F-F; +MissingFlag live-feed N-F-G-C)* | `ade_node::node_lifecycle` (RED) | closed sum (incl. `RelaySync`, `ForgeKeyIngress(String)`, `MissingFlag(&'static str)`) | The closed fail-closed lifecycle-owner error set (Mithril-only, no genesis/bundle/cold/graft fallback). N-F-F added `ForgeKeyIngress(String)` (→ exit 44); N-F-G-C uses `MissingFlag("--network-magic")` on the live-feed arm. New variant = a strengthening of **CN-NODE-01 / CN-NODE-02 / CN-NODE-03**. |
 | `NodeStart` *(N-F-C)* | `ade_node::node_lifecycle` (RED) | 2 (`FirstRun` / `WarmStart`) | The closed start classification — a PURE function of on-disk state. No third "ambiguous" mode. New variant = a strengthening of CN-NODE-01. |
 | `NodeSyncError` *(N-F-C)* | `ade_node::node_sync` (RED) | 2 (`Pump(String)` / `Capture(String)`) | The closed sync-driver fail-closed halt set. New variant = a strengthening of **DC-SYNC-01 / DC-SYNC-02**. |
 | `NodeForgeError` *(N-F-C; exercised by the N-F-E forge tick + N-F-F On arm + N-F-G-A tick)* | `ade_node::node_sync` (RED) | 1 (`MissingRecoveredConsensusInputs`) | The closed forge-handoff fail-closed set: a forge over a base that carries NO recovered seed-epoch record is unrepresentable. New variant = a strengthening of **CN-CINPUT-03 / DC-CINPUT-02b / DC-NODE-05**. |
@@ -1189,7 +1433,7 @@ the self-accept→serve handoff domain above (the typed carrier `SelfAcceptedHan
 | `MithrilBootstrapError` *(N-Z; +N-F-A SeedConsensus* variants)* | `ade_runtime::mithril_bootstrap` (RED) | 3 base + N-F-A `SeedConsensus*` | The closed RED-composition error sum — one variant per composed step. No catch-all/`String`; the binding step is the SOLE semantic decision (BLUE). |
 | `MithrilSeedPointInputs` *(N-Z)* | `ade_runtime::mithril_bootstrap` (RED) | closed struct | The **operator-provided, structurally-independent** seed-point origin (DC-MITHRIL-02). A new attested field = a struct addition + a strengthening of DC-MITHRIL-02. |
 | `MithrilBootstrapOutput` *(N-Z)* | `ade_runtime::mithril_bootstrap` (RED) | closed struct (`ledger` / `chain_dep` / `tip` / `anchor`) | A new field = a struct addition behind the composition contract. |
-| `SeedProvenance` *(N-Y; UNCHANGED through N-F-G-A)* | `ade_ledger::bootstrap_anchor::anchor` (BLUE) | 2 (`CardanoCliJson` / `Mithril { … }`) | **Version-gated** behind `ANCHOR_SCHEMA_VERSION = 2`. Closed — no open/wildcard variant. New variant = a `decode_bootstrap_anchor` arm + an `ANCHOR_SCHEMA_VERSION` bump + a strengthening of **CN-ANCHOR-01 / DC-ANCHOR-01**. |
+| `SeedProvenance` *(N-Y; UNCHANGED through N-F-G-C)* | `ade_ledger::bootstrap_anchor::anchor` (BLUE) | 2 (`CardanoCliJson` / `Mithril { … }`) | **Version-gated** behind `ANCHOR_SCHEMA_VERSION = 2`. Closed — no open/wildcard variant. New variant = a `decode_bootstrap_anchor` arm + an `ANCHOR_SCHEMA_VERSION` bump + a strengthening of **CN-ANCHOR-01 / DC-ANCHOR-01**. |
 | `MithrilImportError` *(N-Y)* | `ade_ledger::bootstrap_anchor::binding` (BLUE) | 5 | The closed `verify_mithril_binding` failure set. New variant = a strengthening of **CN-MITHRIL-01 / DC-MITHRIL-01**; MUST fail closed. |
 | `MithrilManifestReport` *(N-Y)* | `ade_ledger::bootstrap_anchor::binding` (BLUE) | closed struct | A new attested field = a struct addition + a strengthening of the binding predicate's cross-check. |
 | `GenesisSourceError` *(N-Y)* | `ade_ledger::genesis_source` (BLUE) | 1 load-bearing (`NonConwayEra`) | `genesis_initial_state` is Conway-only. New variant = a strengthening of **DC-GENESIS-SRC-01**. |
@@ -1214,6 +1458,7 @@ the self-accept→serve handoff domain above (the typed carrier `SelfAcceptedHan
 | `AcceptedMiniProtocol` *(N-L)* | `ade_network::session` (GREEN) | closed registry | New mini-protocol = a registry entry + a `match` arm with **no wildcard accept**. |
 | `KesError` / `KesParseError` *(N-P)* | `ade_crypto::kes_sum::errors` (BLUE) | 5 / 6 variants | New variant = a strengthening of **DC-CRYPTO-08/09**; non-secret primitives only. |
 | Operator-evidence manifest TOML schema *(N-S-C)* | `ci_check_operator_evidence_manifest_schema.sh` + `docs/clusters/completed/PHASE4-N-S-C/cluster.md` | closed key set | Any committed `CE-N-S-LIVE_*.toml` MUST conform (CN-OPERATOR-EVIDENCE-01). |
+| BA-02 operator-pass manifest TOML schema *(NEW, N-F-G-C)* | `ci_check_ba02_evidence_manifest_schema.sh` + `docs/clusters/PHASE4-N-F-G-C/CE-G-C-LIVE_*.toml` | closed 8-key set (`schema_version` / `block_hash` / `slot` / `peer_log_file` / `peer_log_file_sha256` / `peer_log_capture_command` / `peer_log_filter` / `accept_event_kind`) | Any committed `CE-G-C-LIVE_*.toml` MUST conform (`schema_version == 1`) AND its `peer_log_file_sha256` MUST match the actual SHA-256 of the committed peer-log fixture it binds (CN-OPERATOR-EVIDENCE-01 / RO-LIVE-06). **Vacuously satisfied when none is committed** (the typical state — the live operator pass is `blocked_until_operator_stake_available`). The no-synthetic-manifest enforcer. |
 | Sync-evidence manifest schema *(N-Y)* | `ci_check_sync_evidence_manifest_schema.sh` + `corpus/sync/regressions/` | closed key set | Mirrors the operator-evidence pattern; vacuously satisfied until a manifest is committed (RO-SYNC-EVIDENCE-01, **partial**). |
 | `CardanoEra` + Conway cert / governance / withdrawal enums | `ade_types::{era, conway::*}` + `ade_codec::conway::*` | closed | New era / cert / gov-action = a versioned gate (DC-LEDGER-08/09/10/11). `is_praos()` classifies exactly {Babbage, Conway}. |
 | Consensus message + verdict enums | `ade_core::consensus`, `ade_ledger::block_validity` / `tx_validity` | closed | `ci_check_consensus_closed_enums.sh` — `match` with no wildcard. |
@@ -1227,15 +1472,23 @@ the self-accept→serve handoff domain above (the typed carrier `SelfAcceptedHan
 | Seed-epoch sidecar store (anchor-fp-keyed) *(N-F-A; consumed N-F-C)* | `ade_runtime::chaindb::SnapshotStore::{put,get,list}_seed_epoch_consensus_*` | A new entry is `put` only on the verified-bootstrap composition path, keyed by `anchor_fp` in a namespace disjoint from the slot-keyed snapshot space; idempotent on identical bytes (redb `seed_cinputs_by_anchor_fp` table, `SCHEMA_VERSION = 3`). N-F-C consumes it via `list_seed_epoch_consensus_anchor_fps` + `get_seed_epoch_consensus_inputs` on the WarmStart arm. The forge-time path may NOT `put` here (CN-CINPUT-02). |
 | `PerPeerOutbound` map *(N-S-B)* | `ade_runtime::network::outbound_command` — `Arc<RwLock<BTreeMap<PeerId, mpsc::Sender<OutboundCommand>>>>` | Grows at runtime; **`BTreeMap`, not `HashMap`** — deterministic iteration; no cross-peer byte leakage (CN-PEER-OUTBOUND-MAP-01, DC-OUTBOUND-FIFO-01). |
 | `OpCertCounterMap` | `ade_core::consensus::praos_state` (BLUE) | Grows as op-certs are observed; deterministic ordering. |
-| `ServedChainSnapshot` (served blocks) | `ade_ledger::producer::served_chain` (BLUE) | Grows via `served_chain_admit` only; `push_atomic` is the sole publisher. (The N-F-E/N-F-F/N-F-G-A relay-loop forge tick does NOT publish here.) |
+| `ServedChainSnapshot` (served blocks) | `ade_ledger::producer::served_chain` (BLUE) | Grows via `served_chain_admit` only; `push_atomic` is the sole publisher. (The N-F-E/N-F-F/N-F-G-A relay-loop forge tick does NOT publish here; N-F-G-B publishes via the sibling task's single `push_atomic` fed by `into_accepted()`.) |
 | `MempoolState` (admitted txs) | `ade_ledger::mempool` (BLUE) | Grows via `mempool_ingress` → `admit` only; sorted/deduplicated. |
 | Seed entries (imported UTxO) | `ade_runtime::seed_import` (GREEN-by-content) | Grows at import time from a cardano-cli UTxO dump; canonical decoders only. |
-| Persisted ChainDb (synced blocks) *(N-Y; first production driver N-F-C; driven by the N-F-D loop)* | `ade_runtime::chaindb` via `forward_sync::pump` | Grows via the forward-sync pump applying the GREEN reducer's `SyncEffect` plan in durable order; the tip advances only after `StoreBlockBytes` + `AppendWal` ack (DC-SYNC-01). N-F-C's `node_sync::run_node_sync` is the first production driver; the N-F-D relay loop drives it each `SyncOnce` iteration. |
+| Persisted ChainDb (synced blocks) *(N-Y; first production driver N-F-C; driven by the N-F-D loop; LIVE feed N-F-G-C)* | `ade_runtime::chaindb` via `forward_sync::pump` | Grows via the forward-sync pump applying the GREEN reducer's `SyncEffect` plan in durable order; the tip advances only after `StoreBlockBytes` + `AppendWal` ack (DC-SYNC-01). N-F-C's `node_sync::run_node_sync` is the first production driver; the N-F-D relay loop drives it each `SyncOnce` iteration; N-F-G-C feeds it a LIVE `--peer` source (reusing the closed admission dial + pump). |
 | Sync regression fixtures *(N-Y)* | `corpus/sync/regressions/` | Each discovered Haskell observable-surface mismatch is committed as a named regression fixture (RO-SYNC-EVIDENCE-01). |
 | Sum_n KES family | `ade_crypto::kes_sum` (BLUE) | A new `Sum_n` attaches as an internal type-alias step; the `KesAlgorithm` trait surface does not change. |
 | Per-protocol tag-24 compositions *(N-X)* | `ade_network::codec::{block_fetch, chain_sync}` | A new CBOR-in-CBOR composition attaches as a `compose_*` / `decompose_*` pair delegating to the single `ade_codec::{wrap_tag24, unwrap_tag24}` authority (CN-WIRE-08). |
 | Bootstrap-source production compositions *(N-Z; +N-F-A sidecar tail)* | `ade_runtime::{genesis_bootstrap, mithril_bootstrap}` | A new bootstrap-source production entry attaches as a **composition-only RED twin** of `bootstrap_from_{conway_genesis, mithril_snapshot}`: import/parse + (if a point is attested) mint the anchor from an operator-independent origin + verify-before-bootstrap (fail-closed) + route through the single `bootstrap_initial_state` authority + the N-F-A sidecar tail. **No new authority, no new `*Anchor` trait/plugin, no new `SeedProvenance` variant unless the source genuinely differs** (CN-MITHRIL-01 / CN-NODE-01 / DC-MITHRIL-02 / CN-CINPUT-02). |
 
+> **Note (N-F-G-C is NOT a new extension point).** The N-F-G-C live feed is a **REUSE** of the closed
+> `ade_runtime::admission::{dial_for_admission, run_admission_wire_pump}` (no reimpl, no new wire authority) that
+> **FILLS** the closed `NodeBlockSource::WirePump` arm via `from_wire_pump` — it is **NOT a new `NodeBlockSource`
+> variant / plugin point / source-selection trait**; the durable tip still advances only via `run_node_sync →
+> pump_block`. The N-F-G-C `ba02_pass` module is **RED file I/O over the UNCHANGED closed BA-02 evidence
+> vocabulary** — it introduces **no new closed enum / registry**, and `correlate` stays the SOLE `Ba02Manifest`
+> constructor. Neither belongs in the Extensible table.
+>
 > **Note (N-F-G-A is NOT an extension point).** The N-F-G-A forge-fidelity surfaces are **surface REDUCTIONS /
 > fail-closed boundaries**, not new extensible registries: `SlotAlignmentError` / `ProtocolParamsParseError` /
 > `ForgeCurrentPParamsError` / `ForgeEpochAdmission` are closed error/classifier enums; the
@@ -1244,7 +1497,9 @@ the self-accept→serve handoff domain above (the typed carrier `SelfAcceptedHan
 > introduce no plugin trait, no `Box<dyn _>` collection, no runtime-registered handler, no new BLUE authority,
 > and `CoordinatorEvent` was deliberately NOT extended (the off-epoch outcome reuses `ForgeNotLeader`). They
 > belong in the Closed table above, not here. **Likewise N-F-F** (operator-key ingress) is a surface REDUCTION
-> (a closed classifier + a single named ingress site reusing existing loaders), not a new extensible registry.
+> (a closed classifier + a single named ingress site reusing existing loaders), and **N-F-G-B**
+> (`SelfAcceptedHandoff` + the sibling serve task) is a closed constructor-fenced carrier + a typed channel seam
+> — not new extensible registries.
 
 ---
 
@@ -1252,28 +1507,50 @@ the self-accept→serve handoff domain above (the typed carrier `SelfAcceptedHan
 
 ### Frozen (immutable at current version — change = new major version)
 
-- **Self-accept→serve handoff fence (N-F-G-B S1-S3, DC-NODE-06 — now ENFORCED).** Only a BLUE self-accepted
-  `AcceptedBlock` can be served on the `--mode node` spine. The typed carrier `SelfAcceptedHandoff` has a
-  **private field + a SOLE constructor** `from_self_accepted(AcceptedBlock)` — there is **NO** raw-bytes /
+- **Live `--mode node` feed reuses the closed dial/pump + FILLS the closed source (N-F-G-C S1, load-bearing).**
+  The live feed for the `--mode node` `On` arm is a **REUSE** of the closed `ade_runtime::admission::{dial_for_admission,
+  run_admission_wire_pump}` (no reimplementation, no new wire authority) that **FILLS** the closed
+  `NodeBlockSource::WirePump` arm via `from_wire_pump`. `NodeBlockSource` stays the **closed 2-variant `{WirePump,
+  InMemory}`** — `from_wire_pump` is a FILL of the existing arm, **NOT a new variant, NOT a plugin point, NOT a
+  source-selection trait**. The bounded `mpsc` (`LIVE_WIRE_PUMP_CHANNEL_CAP = 64`) bridges the reused pump's
+  `AdmissionPeerEvent` into the source. The **durable tip advances ONLY via `run_node_sync → pump_block`** (no
+  second tip-advance; `run_node_sync` is UNMODIFIED). A dial/parse failure is logged-and-dropped (C3 honest-scope)
+  — never fatal / fabricated / a tip graft. `ci_check_node_run_loop_containment.sh` is **byte-unchanged**;
+  `ci_check_served_chain_handoff_fence.sh` was **BROADENED in place** (owners `{node_lifecycle.rs, node_sync.rs}`;
+  guard-3 allow-list — a net tightening). **No new BLUE authority, no new canonical type, no new `NodeBlockSource`
+  / `CoordinatorEvent` variant.**
+- **BA-02 evidence I/O is RED file I/O over the SOLE GREEN `correlate` constructor (N-F-G-C S2, load-bearing).**
+  `correlate` stays the **SOLE `Ba02Manifest` constructor**. The RED `ade_node::ba02_pass::correlate_peer_log_file`
+  reads the operator-captured peer-log file → `correlate`; `write_ba02_manifest` accepts **ONLY a `Ba02Manifest`**,
+  so a written manifest is **always correlate-produced** from a real peer log. A missing/unreadable file fails
+  closed (`io::Error`), never a synthesized acceptance. **No self-evidence acceptance source** (not `ForgeSucceeded`
+  / `self_accept` / `block_received` / served-block / wire-success / `agreement_verdict` / "agreed"). **No synthetic
+  manifest is committed** — `ci_check_ba02_evidence_manifest_schema.sh` is **vacuous-until-committed**, and when a
+  `CE-G-C-LIVE_*.toml` is committed it verifies the closed **8-field** schema + `schema_version == 1` +
+  `peer_log_file_sha256 == sha256(committed fixture)` (the no-synthetic-manifest enforcer). The versioned
+  `Ba02Manifest` (`BA02_MANIFEST_SCHEMA_VERSION = 1`) is a version-GATED contract (below).
+- **Self-accept→serve handoff fence (N-F-G-B S1-S3, DC-NODE-06 — ENFORCED; BROADENED N-F-G-C).** Only a BLUE
+  self-accepted `AcceptedBlock` can be served on the `--mode node` spine. The typed carrier `SelfAcceptedHandoff`
+  has a **private field + a SOLE constructor** `from_self_accepted(AcceptedBlock)` — there is **NO** raw-bytes /
   `ForgedBlockArtifact` / `CoordinatorEvent` / flag / verdict constructor, so a non-self-accepted artifact is
   type-unrepresentable as a handoff. The token is the ORIGINAL from BLUE `self_accept` (CN-FORGE-01), never
-  re-derived from `artifact.bytes`. The relay-loop body forwards a **typed `mpsc<SelfAcceptedHandoff>` send
-  only**; served-chain mutation happens in a **sibling** task via the single `ServedChainHandle::push_atomic`
-  fed **only** by `into_accepted()`. **The serve ingress fence MUST hold** (`ci_check_served_chain_handoff_fence.sh`,
-  CE-G-B-3): every node-spine `push_atomic(` fed by `into_accepted()`; no direct `served_chain_admit(`; the
-  handoff channel typed `UnboundedSender<SelfAcceptedHandoff>` (never `<Vec<u8>>` / `<ForgedBlockArtifact>` /
-  `<bool>`). `ci_check_node_run_loop_containment.sh` stays **byte-/semantically unchanged** — the cluster ADDS
-  a served-chain handoff gate, never relaxes containment. **No new BLUE authority, no new canonical type, no
-  new `CoordinatorEvent` variant.**
+  re-derived from `artifact.bytes`. The relay-loop body forwards a **typed `mpsc<SelfAcceptedHandoff>` send only**;
+  served-chain mutation happens in a **sibling** task via the single `ServedChainHandle::push_atomic` fed **only**
+  by `into_accepted()`. **The serve ingress fence MUST hold** (`ci_check_served_chain_handoff_fence.sh`, CE-G-B-3;
+  **BROADENED by N-F-G-C** — owners `{node_lifecycle.rs, node_sync.rs}`, guard-3 flipped to an allow-list: every
+  node-spine `push_atomic(` fed by `into_accepted()`; no direct `served_chain_admit(`; every node-spine unbounded
+  handoff channel typed `UnboundedSender<SelfAcceptedHandoff>`). `ci_check_node_run_loop_containment.sh` stays
+  **byte-/semantically unchanged**. **No new BLUE authority, no new canonical type, no new `CoordinatorEvent`
+  variant.**
 - **`LiveConsensusInputsCanonical` 15-field fingerprint + the non-fingerprinted `protocol_params_json` carry
   (N-F-G-A S2a, load-bearing).** The bundle fingerprint is the **frozen 15-field** canonical CBOR of
   `LiveConsensusInputsCanonical` — it already commits to `protocol_params_hash`. The N-F-G-A
-  `protocol_params_json: Option<String>` preimage is carried **OUTSIDE** that fingerprint: it is a
-  **non-fingerprinted additive carry, NOT a fingerprint-schema change** — adding it does **not** alter the
-  bundle fingerprint, the field count stays 15, and the canonical CBOR is byte-unchanged. `require_forge_current_pparams`
-  re-binds the preimage to the fingerprinted `protocol_params_hash` via `blake2b_256` before parsing. **The
-  preimage MUST stay OUTSIDE the 15-field canonical CBOR fingerprint** (`ci_check_recovered_ledger_pparams_sourced.sh`,
-  CE-G-A-2a) — folding it INTO the fingerprint is a CI failure.
+  `protocol_params_json: Option<String>` preimage is carried **OUTSIDE** that fingerprint: a **non-fingerprinted
+  additive carry, NOT a fingerprint-schema change** — adding it does **not** alter the bundle fingerprint, the
+  field count stays 15, and the canonical CBOR is byte-unchanged. `require_forge_current_pparams` re-binds the
+  preimage to the fingerprinted `protocol_params_hash` via `blake2b_256` before parsing. **The preimage MUST stay
+  OUTSIDE the 15-field canonical CBOR fingerprint** (`ci_check_recovered_ledger_pparams_sourced.sh`, CE-G-A-2a) —
+  folding it INTO the fingerprint is a CI failure.
 - **Current-protocol-parameters source has no float path (N-F-G-A S2a).** `parse_protocol_parameters_json`
   converts the oracle pparams JSON into the canonical BLUE `ProtocolParameters` using **exact integer
   arithmetic** on `serde_json::value::RawValue` strings → `ade_ledger::rational::Rational`; no `f64`, no `as
@@ -1301,168 +1578,60 @@ the self-accept→serve handoff domain above (the typed carrier `SelfAcceptedHan
   never runtime authority** — never a production source of eta0 / stake / ASC / VRF keyhash; the in-test
   sidecar pre-seed is `#[cfg(test)]`-confined. The fixture must be committed + well-formed + Ade-as-leader and
   carry NO secret key material (`ci_check_genesis_consistency_fixture_present.sh`, CE-G-A-1).
-- **Operator-key ingress contract (N-F-F, CE-not-law)** — `--mode node` operator-material ingress is
-  STRICTLY RED-parse → BLUE-structural-validate → canonical-type, reusing the existing cold/vrf/kes loaders +
-  (N-F-G-A) the real opcert/genesis parsers (CN-NODE-03). NO new BLUE authority, NO parser reimpl, NO
-  plugin/trait seam, NO second forge codepath, NO new BLUE crate change. `ForgeIntent` is the closed 2-variant
-  set; `classify_forge_intent` is the SOLE entry; `ForgeIntentError` carries only static flag-name strings.
-  **Additively-closed acceptance criteria** (like `WalEntry` / `LoopStep`), NOT registry law.
-- **Forge-on flip + key custody (N-F-F, CN-NODE-03)** — forge intent is a pure total function of CLI key-flag
-  PRESENCE; partial ⇒ fail-closed `NodeLifecycleError::ForgeKeyIngress` (→ exit 44). `pool_id` derived in ONE
-  named place (`blake2b_224(cold_vk)`), never fabricated. Key custody RED-confined to `ProducerShell`
-  (`OperatorForgeMaterial` not `Debug`/`Serialize`; no byte accessor / serialization / logging). The forge base
-  is the SAME single recovered `BootstrapState` (no second bootstrap, no Mithril call). **The N-F-E forge
-  containment stays SEMANTICALLY UNCHANGED** — N-F-F/N-F-G-A may ADD ingress/fidelity gates but MUST NOT relax
-  it. _(N-F-G-A replaced the produce-path `pparams`/`protocol_version` honest-scope defaults with the recovered
-  CURRENT view — see the current-pparams item above.)_
-- **Single-bootstrap owner allow-list (N-F-F, CN-NODE-01)** — `ReceiveState::new` is legitimate only in the
-  two lifecycle-owner files `{node.rs, node_lifecycle.rs}` (`ci_check_node_binary_uses_single_bootstrap.sh`).
-  The `On` arm reuses the single recovered `BootstrapState`; no second bootstrap.
-- **Live-run loop step vocabulary (N-F-D / N-F-E, CE-not-law)** — the GREEN `LoopStep` (4-variant) +
-  `ForgeSlotStatus` (`Due` / `NotDue`) are closed planner enums the loop body matches exhaustively; the
-  planner cannot express an authority decision (CN-NODE-02 / DC-NODE-05 — `ci_check_loop_planner_closed.sh`).
-  **Additively-evolvable acceptance criteria**, NOT registry law.
-- **Forge-tick subordination (N-F-E, DC-NODE-05; held byte-identical-in-containment by N-F-F/N-F-G-A)** — the
-  relay-loop forge tick advances NO durable tip and serves/admits/gossips nothing; a forge is attempted at most
-  once per `SlotNo` and never for a past slot; the current slot is derived ONLY through the RED clock seam
-  (N-F-G-A: the checked `checked_millis_to_slot` — before-anchor fails closed; only a `SlotNo` crosses);
-  leadership eligibility is NOT decided in the loop or the GREEN planner. A forged block is a local self-accept
-  artifact only. (`ci_check_node_run_loop_containment.sh`.)
-- **Single live-run owner + relay-loop containment (N-F-D, CN-NODE-02 / DC-SYNC-02)** — both `--mode node`
-  arms converge into exactly one `run_relay_loop`; every iteration advances the tip ONLY through
-  `run_node_sync → pump_block`. `run_relay_loop`'s body containment is **semantically unchanged** across N-F-E
-  → N-F-F → N-F-G-A. (`ci_check_node_run_loop_containment.sh`.)
-- **Run-mode taxonomy (N-F-C)** — the `Mode` enum is a CLOSED 5-variant set, **not `#[non_exhaustive]`**, with
-  a wildcard-free `main.rs` dispatch arm per variant (CN-NODE-MODE-01). N-F-F/N-F-G-A added no variant.
-- **Single `--mode node` lifecycle owner (N-F-C)** — exactly one `PHASE4-N-F-C-LIFECYCLE-OWNER`; both arms
-  route initial state through the SINGLE `bootstrap_initial_state` authority; no genesis/bundle/cold/graft
-  fallback (CN-NODE-01).
-- **Verdict-decoupled block source contract (N-F-C / N-F-D)** — `NodeBlockSource` yields ordered block bytes
-  and NOTHING else; `run_node_sync` advances the tip only via `pump_block` (DC-SYNC-01 / DC-SYNC-02 —
-  `ci_check_node_sync_via_pump.sh`).
-- **Consensus-input provenance fence (N-F-A populate / N-F-C consume)** — the seed-epoch sidecar is populated
-  only on the verified-bootstrap composition path (CN-CINPUT-02); the node-lifecycle forge path consumes the
-  recovered surface ONLY via `PoolDistrView::from_seed_epoch_consensus_inputs` and may not fabricate a literal
-  or name a bundle token (CN-CINPUT-03 / DC-CINPUT-02b — guard (d)). _(N-F-E/N-F-F/N-F-G-A reach this fenced
-  path unchanged — production `forge_one_from_recovered` is otherwise UNMODIFIED; N-F-G-A added only the
-  off-epoch guard before leadership.)_
-- **BA-02 evidence honesty (N-F-C)** — `correlate` is the SOLE `Ba02Manifest` constructor; no self-evidence
-  token may be an acceptance source; no committed synthetic manifest (RO-LIVE-06). Wire/forge success ≠ peer
-  acceptance. (N-F-F's forge-CAPABLE On arm + N-F-G-A's forge fidelity do not change this — BA-02 satisfied
-  nowhere.)
-- **Seed-epoch consensus-input codec (N-F-A)** — `encode_/decode_seed_epoch_consensus_inputs` is the SOLE
-  codec: deterministic CBOR, `BTreeMap`-ordered, byte-canonical. The wire shape at `SEED_CINPUT_SCHEMA_VERSION
-  = 1` is frozen; the codec is version-gated for evolution (below). (CN-CINPUT-01.)
-- **WAL additive-tag chain disjointness (N-F-A)** — the `SeedEpochConsensusInputsImported` (tag 3) entry MUST
-  stay distinct from the `AdmitBlock` fp-chain; `replay_from_anchor` allows at most one provenance entry per
-  store/anchor (fail-closed). (DC-CINPUT-01.)
-- **Warm-start restore verification chain (N-F-A)** — `restore_seed_epoch_consensus_inputs` verifies in a
-  frozen order: `blake2b_256` bind → decode → anchor/epoch binding → byte-identity re-encode, failing closed at
-  each step; never falls back to the forge-time bundle. (DC-CINPUT-01.)
-- **Sidecar populate ordering (N-F-A)** — put the sidecar (durable) THEN append the WAL provenance (the commit
-  point), never the reverse. (CN-CINPUT-02.)
-- **Mithril production-bootstrap composition order (N-Z)** — import → mint → `verify_mithril_binding` →
-  `bootstrap_initial_state` (→ N-F-A sidecar tail); `verify_mithril_binding` MUST precede
-  `bootstrap_initial_state`; the anchor `seed_point` MUST be minted from the operator-independent
-  `MithrilSeedPointInputs`. (CN-MITHRIL-01 strengthened / DC-MITHRIL-02.)
-- **Mithril provenance binding cross-check (N-Y)** — `verify_mithril_binding` cross-checks the manifest's
-  attested `{network_magic, genesis_hash, certified_point, certificate_hash}`; MUST fail closed and MUST NOT be
-  tautological. (CN-MITHRIL-01 / DC-MITHRIL-01.)
-- **N2N tag-24 wire envelope (N-X)** — the `0xd8 0x18` envelope through the single `wrap_tag24` /
-  `unwrap_tag24` authority; per-protocol composition pinned byte-identically against cardano-node 11.0.1
-  captures (BlockFetch storage Conway = 7; ChainSync consensus Conway = 6). (CN-WIRE-08.)
-- **Leader-eligibility VRF transcript (N-W)** — one era→construction authority (`leader_vrf_input`).
-  (CN-FORGE-04.)
-- **Block-envelope grammar (N-V)** — storage-form `[era, block]`, Conway = discriminant 7; one encoder, one
-  decoder. (CN-FORGE-03, strengthened N-X.)
-- **Unsigned-header KES pre-image recipe (N-S-A)** — branded `UnsignedHeaderPreImage`'s only constructor is
-  the canonical recipe; byte-identical to the validator extractor. (CN-KES-HEADER-01.)
-- **Sum6KES algorithm + expand_seed prefix (N-P)** — byte-identical to Haskell `cardano-base`; `expand_seed`
-  prefix bytes `0x01`/`0x02`. 608-byte skey + 448-byte signature layouts pinned. The 608-byte skey is what the
-  N-F-F operator-KES ingress deserializes (`Sum6Kes::raw_deserialize_signing_key_kes`, reused unchanged).
-- **Conway-genesis initial-state transform (N-Y)** — `genesis_initial_state` is the pure Conway-only
-  transform. (DC-GENESIS-SRC-01.)
-- **Durable-before-tip ordering (N-Y)** — the forward-sync pump persists `StoreBlockBytes` + `AppendWal`
-  before the tip write; `AdmitPlan::durable` is the sole `AdvanceTip` emitter. (DC-SYNC-01.)
-- **Clock seam (N-K, strengthened N-F-E; checked guard N-F-G-A)** — the orchestrator/relay-loop core depends
-  on a `Clock` trait; no `SystemTime::now()` / `Instant::now()` reachable from GREEN/BLUE; only a `SlotNo`
-  crosses the seam. (DC-NODE-03.) The N-F-F On arm's sole wall-clock seam is a `SystemClock`; the N-F-G-A
-  `ForgeTick` slot is derived via the checked `checked_millis_to_slot` (before-anchor fails closed).
-- **Wire encoding** — `minicbor` / canonical CBOR; field order = wire order; `PreservedCbor` aliases the input
-  bytes (no re-encode for hashing).
-- **Hash algorithms** — Blake2b-224 / Blake2b-256; the single `block_body_hash` recipe; the `blake2b_256`
-  sidecar-provenance bind (N-F-A); the `blake2b_256` `protocol_params_json` preimage bind (N-F-G-A —
-  `require_forge_current_pparams`); the `blake2b_224` operator `pool_id` derivation (N-F-F — the one named
-  derivation site in `operator_forge::build_operator_forge_material`).
-- **Mux frame format** — single `encode_frame` / `decode_frame` pair workspace-wide.
-- **All 456 canonical types** — existing wire formats frozen; new types may be added. (N-F-A added 4 BLUE
-  types in `ade_ledger`. **N-F-C / N-F-D / N-F-E / N-F-F / N-F-G-A / N-F-G-B added NO BLUE type** — their new
-  types live in the RED/GREEN-by-content `ade_runtime` / `ade_node` and do NOT count toward the 456. N-F-G-A's
-  `SlotAlignmentError`, `ProtocolParamsParseError`, `ForgeCurrentPParamsError`, `ForgeEpochAdmission` are all
-  RED-crate types; **N-F-G-B's `SelfAcceptedHandoff` is a GREEN newtype over the BLUE `AcceptedBlock` — a pure
-  wrapper, not canonical-counted**; `ProtocolParameters` / `Rational` / `AcceptedBlock` are pre-existing BLUE
-  `ade_ledger` types.)
+- **Operator-key ingress contract (N-F-F, CE-not-law)** — `--mode node` operator-material ingress is the SINGLE
+  named `operator_forge` site reusing the existing loaders; key custody RED-confined to `ProducerShell`
+  (`OperatorForgeMaterial` not `Debug`/`Serialize`); the forge-on flip is opt-in over flag presence
+  (`ci_check_forge_intent_closed.sh` + `ci_check_operator_forge_no_secret_leak.sh`, CN-NODE-03).
+- **`--mode` taxonomy** — the 5-variant closed `Mode` set with a wildcard-free `main.rs` dispatch arm per variant
+  (`ci_check_node_mode_closure.sh`, CN-NODE-MODE-01). N-F-G-C added NO `Mode` variant (the `--peer` flag is
+  OPTIONAL ingress on the existing `--mode node` arm).
+- **Single `bootstrap_initial_state` authority** — all initial state (produce cold-start, Conway genesis, the
+  Mithril provenance + production-bootstrap paths, the N-F-A warm-start restore, both N-F-C lifecycle arms)
+  routes through this one chokepoint; no `*Anchor` trait/plugin seam (CN-NODE-01 / CN-MITHRIL-01). N-F-G-C's live
+  feed introduces no second bootstrap.
+- **`SeedEpochConsensusInputs` SOLE codec** — the A1 version-gated, byte-canonical, `BTreeMap`-ordered
+  encoder/decoder; `SEED_CINPUT_SCHEMA_VERSION = 1`; no `Default` / `#[non_exhaustive]` (CN-CINPUT-01).
+- **tag-24 wire envelope** — the single `ade_codec::cbor::tag24::{wrap_tag24, unwrap_tag24}` authority; the
+  BlockFetch (storage Conway = 7) vs ChainSync (consensus Conway = 6) era-index schemes are pinned byte-identically
+  against cardano-node 11.0.1 (CN-WIRE-08). N-F-G-C's live feed reuses `admission::runner`'s tag-24 unwrap verbatim.
+- **block-envelope grammar** — the single `encode_block_envelope` / `decode_block_envelope` pair, storage-form
+  `[era, block]`, Conway discriminant 7 (CN-FORGE-03).
+- **era→leader-VRF-input construction** — the single `leader_vrf_input` authority per era/protocol; the Praos
+  producer alpha equals the validator alpha (CN-FORGE-04).
+- **Sum6KES algorithm + 608-byte cardano-cli skey envelope** — byte-identical to Haskell `cardano-base`;
+  `raw_deserialize_signing_key_kes` is the structural validator (DC-CRYPTO-04..09).
+- **Wire format / encoding**: `postcard` / CBOR per the pinned manifest versions; field order = wire order where
+  applicable. **All 456 canonical types**: existing wire formats frozen; new types may be added behind a version
+  gate. **Hash algorithms**: `blake2b_256` / `blake2b_224` — algorithm immutable per version.
 
 ### Version-gated (can evolve across major versions)
 
-- **Forge-fidelity boundary vocabulary (N-F-G-A, CE-not-law)** — `SlotAlignmentError` /
-  `ProtocolParamsParseError` / `ForgeCurrentPParamsError` / `ForgeEpochAdmission` are **additively-closed**
-  error/classifier enums (like `WalEntry` / `LoopStep`), NOT frozen registry law. A new fail-closed reason = a
-  guard/parser arm + a strengthening of DC-EPOCH-03 / CE-G-A-2a — preserving the no-float / fail-closed /
-  preimage-outside-fingerprint / `EraSchedule::locate`-derived-epoch constraints. Not a plugin seam.
-- **Operator-key ingress vocabulary (N-F-F, CE-not-law)** — `ForgeIntent` / `ForgeIntentError` /
-  `OperatorForgeError` / `OperatorForgeMaterial` are **additively-closed** classifiers/structs, NOT frozen
-  registry law. A new operator-key requirement = a `classify_forge_intent` arm (bound by name) + an
-  `operator_forge` ingress step (reusing a loader) + a `node_lifecycle` dispatch arm + a strengthening of
-  CN-NODE-03. Not a plugin seam.
-- **Live-run loop vocabulary (N-F-D / N-F-E, CE-not-law)** — `LoopStep` / `ForgeSlotStatus` are
-  additively-evolvable closed planner enums: a new step = a `plan_loop_step` arm + a fenced RED branch + a
-  strengthening of CN-NODE-02 / DC-NODE-05. NOT registry law.
-- **BA-02 evidence manifest schema (N-F-C)** — `BA02_MANIFEST_SCHEMA_VERSION` (currently `1`) gates the
-  canonical `Ba02Manifest`; bump the tag on any field change. SOLE constructor stays `correlate` (RO-LIVE-06).
-- **Seed-epoch consensus-input schema (N-F-A)** — `SEED_CINPUT_SCHEMA_VERSION` (currently `1`) gates
-  `decode_seed_epoch_consensus_inputs`. A new field / shape = a `decode_*` arm + an additive version bump + a
-  strengthening of CN-CINPUT-01.
-- **WAL schema (CE-not-law)** — `WalEntry` is additively evolvable behind the WAL schema version (append-only
-  wire tags; `AdmitBlock` = 0, `SeedEpochConsensusInputsImported` = 3, tags 1/2 reserved).
-- **redb `chaindb` schema (N-F-A)** — `SCHEMA_VERSION` (currently `3`) gates the on-disk store; a newer
-  on-disk schema fail-closes. A versioned gate, NOT a frozen contract.
-- **Bootstrap-anchor schema (N-Y)** — `ANCHOR_SCHEMA_VERSION` (currently `2`) gates the `SeedProvenance`
-  decode. A new provenance variant = a `decode_bootstrap_anchor` arm + an additive version bump + a
-  strengthening of CN-ANCHOR-01 / DC-ANCHOR-01. (N-Z / N-F-A / N-F-C / N-F-D / N-F-E / N-F-F / N-F-G-A added no
-  new variant.)
-- **`LiveConsensusInputsCanonical` non-fingerprinted carries (N-F-G-A)** — the `protocol_params_json` preimage
-  is an additive, non-fingerprinted carry on the bundle (the frozen 15-field fingerprint is unchanged). A new
-  non-fingerprinted preimage attaches the same way: carried beside the fingerprint, hash-bound to a value the
-  fingerprint already commits to — NEVER folded into the 15-field canonical CBOR
-  (`ci_check_recovered_ledger_pparams_sourced.sh`).
-- New era support: a `decode_*_block` arm + an `encode_block_envelope` discriminant + a `CardanoEra` variant +
-  (leader path) an `ExpectedVrfInput` variant + a `leader_vrf_input` arm + (wire path) the per-protocol tag-24
-  era-index entries.
-- New mini-protocol: an `AcceptedMiniProtocol` entry + a BLUE `*_transition` reducer + (serving) an
-  `OutboundCommand` variant + (CBOR-in-CBOR) a `compose_*` / `decompose_*` pair.
-- New seed source: a RED parse/map shell + (if a new authoritative decision is needed) a BLUE
-  predicate/transform + (production wiring) a composition-only RED twin of `bootstrap_from_{conway_genesis,
-  mithril_snapshot}`, routed through `bootstrap_initial_state`.
-- New `--mode` (N-F-C): a `Mode::parse` arm + a wildcard-free `main.rs` arm + (if it needs initial state)
-  routing through the single `bootstrap_initial_state` authority + (if it forges) consuming the recovered
-  surface ONLY via `PoolDistrView::from_seed_epoch_consensus_inputs`.
-- New `SyncEffect` variant: a reducer arm + a pump apply-step + a strengthening of DC-SYNC-01.
-- New closed-enum variant (any §3 closed enum): a `[[rules]]` entry + a strengthening.
-- New canonical-type fields (sort/dedup invariants preserved).
-- New CI checks (existing checks may be tightened, never relaxed — RO-CLOSE-01).
+- New variants in the closed message / event / classifier taxonomies (`Mode`, `LoopStep`, `CoordinatorEvent`,
+  `SeedProvenance`, `SyncEffect`, `ExpectedVrfInput`, `BA02Outcome`, `PeerAcceptEvent`, …) — each requires a new
+  envelope/schema version + a wildcard-free dispatch arm + a registry-rule strengthening.
+- The `Ba02Manifest` schema (`BA02_MANIFEST_SCHEMA_VERSION = 1`) — additions bump the schema version; the N-F-G-C
+  `CE-G-C-LIVE_*.toml` operator-pass manifest schema (8 closed keys) evolves with it (RO-LIVE-06 /
+  CN-OPERATOR-EVIDENCE-01).
+- The redb `chaindb` `SCHEMA_VERSION` (currently **v3**, anchor-fp-keyed seed-epoch sidecar namespace) — a
+  versioned gate, not a frozen contract (N-F-A).
+- The `ANCHOR_SCHEMA_VERSION = 2` (`SeedProvenance`) + the `SEED_CINPUT_SCHEMA_VERSION = 1` decoders — version-gated.
+- Canonical type schema additions (new fields appended; sort/dedup + `BTreeMap` ordering invariants preserved).
+- `WalEntry` wire tags (append-only: `AdmitBlock` = 0, `SeedEpochConsensusInputsImported` = 3; 1/2 reserved) — a
+  CE-not-law additively-evolvable surface.
+- New CI checks (existing checks may be **tightened, never relaxed** — e.g. N-F-G-C BROADENED
+  `ci_check_served_chain_handoff_fence.sh` in place, a net tightening).
 
 ---
 
 ## 5. Module Addition Rules
 
-Derived from CODEMAP's Cross-Module Rules + the shared BLUE header.
+How new modules enter the workspace.
 
 | Color | Naming convention | Build-config flags | May depend on | MUST NOT depend on |
 |-------|-------------------|--------------------|----------------|--------------------|
 | **BLUE** | `ade_*` crate, or a BLUE `ade_network` submodule path in `.idd-config.json` `core_paths`; `// Core Contract:` + `//! BLUE …` banner first line | `#![deny(unsafe_code)]`, `deny(unwrap_used / expect_used / panic / float_arithmetic)`; no `#[cfg(feature = …)]` semantic gating | Other BLUE modules only (`ade_types` ← `ade_codec`/`ade_crypto` ← `ade_core` ← `ade_ledger`/`ade_plutus`; `ade_network` BLUE submodules ← `ade_codec`+`ade_types`) | `ade_runtime`, `ade_node`, `ade_core_interop`, the RED half of `ade_network`; std runtime / I/O / clock / rand / `HashMap` / float / async |
-| **GREEN** | `ade_testkit` crate, `ade_network::session`, or a GREEN-by-content sub-tree inside `ade_runtime` / `ade_node` (incl. `forward_sync::reducer`, `seed_consensus_merge` (N-F-A), `consensus_inputs::protocol_params` + `consensus_inputs::canonical::require_forge_current_pparams` (N-F-G-A), `clock::checked_millis_to_slot` (N-F-G-A), `ba02_evidence` (N-F-C), `run_loop_planner` (N-F-D/N-F-E), `forge_intent` (N-F-F), `node_sync::forge_epoch_admission` (N-F-G-A, GREEN-by-fn), `harness::sync_diff`, `consensus::genesis_pinning` (N-F-G-A, `#[cfg(test)]`), `producer::self_accepted_handoff` (N-F-G-B — the constructor-fenced `SelfAcceptedHandoff` carrier)) with a `//! GREEN …` / `// GREEN` banner | Same deny attributes as BLUE; a purity CI gate per sub-tree (`run_loop_planner`: `ci_check_loop_planner_closed.sh`; `forge_intent`: `ci_check_forge_intent_closed.sh`; `protocol_params` + `require_forge_current_pparams`: `ci_check_recovered_ledger_pparams_sourced.sh` — no float, preimage outside fingerprint; `forge_epoch_admission`: `ci_check_node_forge_single_epoch_fail_closed.sh` — `EraSchedule::locate`-derived, no nonce promotion; `genesis_pinning`: `ci_check_genesis_consistency_fixture_present.sh`; `self_accepted_handoff`: `ci_check_served_chain_handoff_fence.sh` — constructor-fenced, served only via the single `push_atomic` fed by `into_accepted()`) | BLUE modules | RED modules in non-test deps; nondeterminism; secret material (the `forge_intent` classifier observes only flag PRESENCE; the `genesis_pinning` fixture is evidence-only); float (the `protocol_params` parser is integer-only); participation in authoritative outputs |
-| **RED** | `ade_runtime`, `ade_node`, `ade_core_interop`, `ade_network::mux::transport` (incl. `forward_sync::pump`, `mithril_import`, `genesis_bootstrap`, `mithril_bootstrap` (N-Z), `seed_consensus_provenance` (N-F-A), `recovery::restart`, `node_lifecycle` (incl. `run_relay_loop` + `ForgeActivation`, N-F-D/N-F-E/N-F-G-A; N-F-G-B: `ForgeActivation.handoff_tx` + `with_handoff_sender` + the `tokio::spawn` sibling served-chain admit task), `node_sync` (N-F-C; N-F-G-B return-shape widening to `(CoordinatorEvent, Option<SelfAcceptedHandoff>)`), `operator_forge` (N-F-F, the operator-material ingress site; N-F-G-A real parsers), `admission::{seed_to_snapshot, bootstrap}` (N-F-G-A current-pparams install), `produce_mode` (N-F-G-B `run_real_forge` return-shape widening); `*_mode.rs` for mode handlers); `//! RED …` banner | tokio/std/I/O allowed; the `Clock` seam is the SOLE wall-clock observation reachable from a relay-loop/orchestrator driver (N-F-G-A: the forge path uses the checked `checked_millis_to_slot`); key custody confined to `ProducerShell` (no `Debug`/`Serialize` on the holder, no byte accessor / serialization / logging) | Any module | — (RED is the leaf) |
+| **GREEN** | `ade_testkit` crate, `ade_network::session`, or a GREEN-by-content sub-tree inside `ade_runtime` / `ade_node` (incl. `forward_sync::reducer`, `seed_consensus_merge` (N-F-A), `consensus_inputs::protocol_params` + `consensus_inputs::canonical::require_forge_current_pparams` (N-F-G-A), `clock::checked_millis_to_slot` (N-F-G-A), `ba02_evidence` (N-F-C), `producer::self_accepted_handoff` (N-F-G-B), `run_loop_planner` (N-F-D/N-F-E), `forge_intent` (N-F-F), `node_sync::forge_epoch_admission` (N-F-G-A, GREEN-by-fn), `harness::sync_diff`, `consensus::genesis_pinning` (N-F-G-A, `#[cfg(test)]`)) with a `//! GREEN …` / `// GREEN` banner | Same deny attributes as BLUE; a purity CI gate per sub-tree (`run_loop_planner`: `ci_check_loop_planner_closed.sh`; `forge_intent`: `ci_check_forge_intent_closed.sh`; `protocol_params` + `require_forge_current_pparams`: `ci_check_recovered_ledger_pparams_sourced.sh`; `forge_epoch_admission`: `ci_check_node_forge_single_epoch_fail_closed.sh`; `self_accepted_handoff`: `ci_check_served_chain_handoff_fence.sh`; `genesis_pinning`: `ci_check_genesis_consistency_fixture_present.sh`) | BLUE modules | RED modules in non-test deps; nondeterminism; secret material; float; participation in authoritative outputs |
+| **RED** | `ade_runtime`, `ade_node`, `ade_core_interop`, `ade_network::mux::transport` (incl. `forward_sync::pump`, `mithril_import`, `genesis_bootstrap`, `mithril_bootstrap` (N-Z), `seed_consensus_provenance` (N-F-A), `recovery::restart`, `node_lifecycle` (incl. `run_relay_loop` + `ForgeActivation` + `spawn_live_wire_pump_source`, N-F-D/N-F-E/N-F-G-A/N-F-G-C), `node_sync` (N-F-C), `ba02_pass` (N-F-G-C, the operator-pass BA-02 evidence I/O), `operator_forge` (N-F-F; N-F-G-A real parsers), `admission::{seed_to_snapshot, bootstrap}` (N-F-G-A current-pparams install; N-F-G-C `build_n2n_version_table` `pub(crate)`); `*_mode.rs` for mode handlers); `//! RED …` banner | tokio/std/I/O allowed; the `Clock` seam is the SOLE wall-clock observation reachable from a relay-loop/orchestrator driver (N-F-G-A: the forge path uses the checked `checked_millis_to_slot`); key custody confined to `ProducerShell` | Any module | — (RED is the leaf) |
 
 ### New module checklist
 
@@ -1506,66 +1675,71 @@ Derived from CODEMAP's Cross-Module Rules + the shared BLUE header.
     flag-name strings (`ci_check_forge_intent_closed.sh`); (ii) ingest the material at a SINGLE named RED site
     that REUSES the existing loaders (no reimpl) in a RED-parse → BLUE-structural-validate → canonical-type
     pipeline — NO new BLUE authority, NO plugin/trait seam, NO second forge/bootstrap codepath; (iii) confine
-    key custody to `ProducerShell` — the holder struct is NOT `Debug`/`Serialize`, exposes no private-byte
-    accessor / serialization / logging (`ci_check_operator_forge_no_secret_leak.sh`); (iv) derive any identity
-    (e.g. `pool_id`) in ONE named place, never fabricated; (v) make activation opt-in over flag presence — a
-    complete set ⇒ `Some(...)`, all absent ⇒ `None`, any partial ⇒ structured fail-closed; (vi) reuse the SAME
-    single recovered `BootstrapState` as the forge base (CN-NODE-01 — no second bootstrap); (vii) leave the
-    prior forge-containment gate SEMANTICALLY UNCHANGED. CN-NODE-03.
+    key custody to `ProducerShell` — the holder struct is NOT `Debug`/`Serialize`
+    (`ci_check_operator_forge_no_secret_leak.sh`); (iv) derive any identity in ONE named place; (v) make
+    activation opt-in over flag presence; (vi) reuse the SAME single recovered `BootstrapState` (CN-NODE-01);
+    (vii) leave the prior forge-containment gate SEMANTICALLY UNCHANGED. CN-NODE-03.
 13. **New forge-fidelity / fail-closed boundary (N-F-G-A rule):** (i) if it sources a forge constant from an
     oracle preimage, parse it at a single GREEN site with a closed error vocabulary, **no float path** (exact
     `Rational` or fail closed), and carry the preimage **OUTSIDE** the frozen bundle fingerprint, hash-binding
     it to a value the fingerprint already commits to (`ci_check_recovered_ledger_pparams_sourced.sh`); (ii)
     install the sourced constant at seed/import — **never a `::default()`** (CE-G-A-2a); (iii) if it ingests
-    operator config, use the REAL parsers (no `parse_simple_*` on the production path,
-    `ci_check_node_forge_real_cli_ingress.sh`); (iv) if it is a fail-closed boundary on the forge path, make it
-    an *error*, never a saturation (the checked clock guard) or a third variant (the off-epoch guard), and
-    place it INSIDE the existing forge fence so `run_relay_loop`'s containment stays semantically unchanged; (v)
-    derive any epoch/era decision via the BLUE `EraSchedule::locate` (no fabricated math) and drive NO nonce
-    promotion on the single-epoch forge path (DC-EPOCH-03, `ci_check_node_forge_single_epoch_fail_closed.sh`);
-    (vi) any committed reference fixture is **evidence-only** — well-formed, Ade-as-leader, NO secret key
-    material (`ci_check_genesis_consistency_fixture_present.sh`).
-14. **New self-accept→serve handoff (N-F-G-B rule):** (i) move an authoritative artifact to a serve/effect
-    task ONLY through a **constructor-fenced typed carrier** whose SOLE constructor takes the already-validated
-    BLUE type (private field; NO raw-bytes / artifact / event / flag / verdict constructor) — so an
-    unvalidated artifact is type-unrepresentable; (ii) **surface the ORIGINAL** BLUE token from the producing
-    authority (e.g. `run_real_forge` returns `Option<AcceptedBlock>`, `Some` iff success), NEVER re-derive it
-    from bytes (CN-FORGE-01); (iii) forward it from the relay-loop body as a **typed channel send only** — the
-    loop holds ONLY the `Sender`, never the serve authority handle / mutation, so
-    `ci_check_node_run_loop_containment.sh` stays byte-unchanged; (iv) perform the serve mutation in a
-    **sibling** task via the **single** reused serve authority (`ServedChainHandle::push_atomic`), fed ONLY by
-    the carrier's `into_accepted()`; (v) add an additive serve-ingress gate scoped to the lifecycle owner
-    (`ci_check_served_chain_handoff_fence.sh`: every `push_atomic(` fed by `into_accepted()`; no direct
-    `served_chain_admit(`; the channel typed to the fenced carrier) — never relax the relay-loop containment
-    gate. DC-NODE-06 / CN-PROD-04 / CN-FORGE-01.
+    operator config, use the REAL parsers (`ci_check_node_forge_real_cli_ingress.sh`); (iv) if it is a
+    fail-closed boundary on the forge path, make it an *error* (never a saturation or a third variant) and place
+    it INSIDE the existing forge fence; (v) derive any epoch/era decision via the BLUE `EraSchedule::locate` and
+    drive NO nonce promotion (DC-EPOCH-03, `ci_check_node_forge_single_epoch_fail_closed.sh`); (vi) any committed
+    reference fixture is **evidence-only** (`ci_check_genesis_consistency_fixture_present.sh`).
+14. **New self-accept→serve handoff (N-F-G-B rule):** (i) move a forged block to the serve task ONLY through a
+    GREEN constructor-fenced carrier whose SOLE constructor takes a BLUE self-accepted `AcceptedBlock` (no
+    raw-bytes / artifact / event / flag / verdict ctor); (ii) surface the ORIGINAL BLUE token (never re-derived
+    from `artifact.bytes`, CN-FORGE-01); (iii) the relay-loop body forwards a TYPED channel send ONLY — no
+    `ServedChainHandle` / `push_atomic` / `served_chain_admit` in the loop body; (iv) served-chain mutation lives
+    in a sibling task via the single `push_atomic` fed ONLY by `into_accepted()`; (v) the handoff channel is typed
+    `UnboundedSender<SelfAcceptedHandoff>` (never raw bytes / artifact / flag). DC-NODE-06 /
+    `ci_check_served_chain_handoff_fence.sh`.
+15. **New live `--mode node` feed (N-F-G-C rule):** (i) REUSE the closed `ade_runtime::admission::{dial_for_admission,
+    run_admission_wire_pump}` VERBATIM (no reimpl, no new wire authority); (ii) FILL the closed
+    `NodeBlockSource::WirePump` arm via `from_wire_pump` — NEVER add a `NodeBlockSource` variant / plugin point /
+    source-selection trait; (iii) bridge via a BOUNDED `mpsc`; (iv) advance the durable tip ONLY via `run_node_sync
+    → pump_block` (no second tip-advance; `run_node_sync` UNMODIFIED); (v) log-and-drop a dial/parse failure (never
+    fatal / fabricated / a tip graft); (vi) leave `ci_check_node_run_loop_containment.sh` byte-unchanged. The
+    served-chain handoff fence (`ci_check_served_chain_handoff_fence.sh`) may be BROADENED (net tightening), never
+    relaxed.
+16. **New operator-pass evidence I/O (N-F-G-C rule):** (i) it is RED file I/O over the UNCHANGED GREEN `correlate`
+    — `correlate` stays the SOLE `Ba02Manifest` constructor; (ii) a manifest-writer accepts ONLY a `Ba02Manifest`
+    (no path emitting one from `NoEvidence` / raw operator input); (iii) a missing/unreadable file fails closed
+    (`io::Error`), never a synthesized acceptance; (iv) NO self-evidence acceptance source; (v) NO committed
+    synthetic manifest — a committed-manifest schema gate is vacuous-until-committed + sha256-binds its fixture
+    (`ci_check_ba02_evidence_manifest_schema.sh`, RO-LIVE-06 / CN-OPERATOR-EVIDENCE-01).
 
-### CI gates that enforce the boundary (117 total; the N-F-G-B / N-F-G-A / N-F-F / N-F-D-E / N-F-C / N-F-A / N-Z / N-Y / producer / network set)
+### CI gates that enforce the boundary (118 total; the N-F-G-C / N-F-G-B / N-F-G-A / N-F-F / N-F-D-E / N-F-C / N-F-A / N-Z / N-Y / producer / network set)
 
 | Script | Enforces | Cluster |
 |---|---|---|
-| `ci_check_served_chain_handoff_fence.sh` *(NEW N-F-G-B S3)* | **DC-NODE-06 / CE-G-B-3** — the `--mode node` served chain is fed ONLY by a BLUE self-accepted artifact carried through the S1 handoff's `into_accepted()` into the single `ServedChainHandle::push_atomic`. Scoped to the lifecycle owner `node_lifecycle.rs` (production code only): (1) every node-spine `push_atomic(` fed by `into_accepted()`; (2) no direct `served_chain_admit(` on the node spine; (3) the handoff channel typed `UnboundedSender<SelfAcceptedHandoff>` (never `<Vec<u8>>` / `<ForgedBlockArtifact>` / `<bool>`). The relay-loop containment gate `ci_check_node_run_loop_containment.sh` is byte-unchanged. | N-F-G-B |
-| `ci_check_genesis_consistency_fixture_present.sh` *(NEW N-F-G-A S1)* | **CE-G-A-1** — the three S1b fixture files are committed + well-formed + Ade-as-leader (eta0 == genesis_hash_hex, ASC, non-empty pool_distribution, a VRF keyhash per pool), and NO secret key material leaked into the committed fixture dir. | N-F-G-A |
-| `ci_check_recovered_ledger_pparams_sourced.sh` *(NEW N-F-G-A S2a)* | **CE-G-A-2a** — the recovered ledger's `protocol_params` are sourced from the operator bundle's oracle preimage (`require_forge_current_pparams`) at the forge-capable seed import — never `ProtocolParameters::default()` / genesis-initial; the `protocol_params_json` preimage stays OUTSIDE the 15-field fingerprint; scoped to `seed_to_snapshot.rs` + `bootstrap.rs` + `canonical.rs`. | N-F-G-A |
-| `ci_check_node_forge_real_cli_ingress.sh` *(NEW N-F-G-A S2)* | **CE-G-A-2** — the `--mode node` operator-forge ingress loads config through the real `parse_opcert_envelope` + `parse_shelley_genesis`; fails closed if a `parse_simple_*` JSON parser is reintroduced on the node forge path. | N-F-G-A |
-| `ci_check_node_forge_single_epoch_fail_closed.sh` *(NEW N-F-G-A S4)* | **DC-EPOCH-03 / CE-G-A-4** — `forge_one_from_recovered` calls `forge_epoch_admission` BEFORE `query_leader_schedule`; the guard derives the candidate epoch via the BLUE `EraSchedule::locate` (no fabricated epoch math); the node forge path drives NO `NonceInput::EpochBoundary` / `CandidateFreeze` nonce promotion. | N-F-G-A |
-| `ci_check_forge_intent_closed.sh` *(N-F-F)* | **CN-NODE-03 (intent half)** — `forge_intent` carries `//! GREEN`; closed two-variant `ForgeIntent` (no third "partial" variant); `classify_forge_intent` is the sole entry; partial arm binds by name; `ForgeIntentError` carries only static flag-name strings. | N-F-F |
-| `ci_check_operator_forge_no_secret_leak.sh` *(N-F-F; reuse scope extended N-F-G-A)* | **CN-NODE-03 (custody half)** — `operator_forge` reuses the existing loaders (no `KesSecret::from_*` / parser reimpl); `OperatorForgeMaterial` is not `Debug`/`Serialize`; no private-key byte accessor / serialization / logging; `OperatorForgeError` carries no path/key bytes (OP-OPS-04). N-F-G-A reuse now includes the real opcert/genesis parsers. | N-F-F |
-| `ci_check_node_binary_uses_single_bootstrap.sh` *(MODIFIED-in-place N-F-F)* | **CN-NODE-01** — `ReceiveState::new` owner allow-list `{node.rs, node_lifecycle.rs}`, zero tolerance elsewhere. | N-F-F |
-| `ci_check_loop_planner_closed.sh` *(N-F-D; EXTENDED N-F-E; UNCHANGED N-F-G-A)* | **CN-NODE-02 / DC-NODE-05** — the GREEN `run_loop_planner` emits only the closed `LoopStep` set, selects steps content-blind; the `SlotNo` ban scoped to `plan_loop_step` (the pure `forge_slot_status` guard may consume a `SlotNo`); `ForgeTick`/`ForgeSlotStatus` pinned. | N-F-D / N-F-E |
-| `ci_check_node_run_loop_containment.sh` *(N-F-D; TIGHTENED N-F-E; UNCHANGED N-F-F/N-F-G-A/N-F-G-B)* | **CN-NODE-02 / DC-SYNC-02 / DC-NODE-05 / DC-NODE-06** — the relay-loop body advances the tip ONLY via `run_node_sync`; references NO `run_real_forge` / `correlate(` / `Ba02Manifest` / second-bootstrap path; **exactly one** fenced `forge_one_from_recovered` (CE-E-4) with the no-serve tokens forbidden. N-F-F/N-F-G-A left it semantically unchanged; **N-F-G-B left it BYTE-unchanged** — the loop forwards a TYPED `mpsc<SelfAcceptedHandoff>` send only (push_atomic lives in the sibling task, fenced by `ci_check_served_chain_handoff_fence.sh`). | N-F-D / N-F-E |
-| `ci_check_lifecycle_owner_uses_bootstrap_initial_state.sh` *(N-F-C)* | **CN-NODE-01** — exactly one `PHASE4-N-F-C-LIFECYCLE-OWNER`; FirstRun routes through `bootstrap_from_mithril_snapshot(` + WarmStart through `bootstrap_initial_state(RequiredFromRecoveredProvenance)`; no parallel/cold init, no fallback, no `recover_node_state(` overclaim. | N-F-C |
+| `ci_check_ba02_evidence_manifest_schema.sh` *(NEW N-F-G-C S2)* | **RO-LIVE-06 / CN-OPERATOR-EVIDENCE-01 (BA-02 manifest schema)** — when a committed `docs/clusters/PHASE4-N-F-G-C/CE-G-C-LIVE_*.toml` is present, verify the closed 8-field schema + `schema_version == 1` + `peer_log_file_sha256` == sha256(the committed peer-log fixture). Vacuously satisfied when none committed. The no-synthetic-manifest enforcer. | N-F-G-C |
+| `ci_check_served_chain_handoff_fence.sh` *(N-F-G-B S3; BROADENED in place N-F-G-C S1)* | **DC-NODE-06 / CN-PROD-04 (serve-ingress fence)** — owners `{node_lifecycle.rs, node_sync.rs}`; (1) every node-spine `push_atomic(` fed by `into_accepted()`; (2) no direct `served_chain_admit(` on the node spine; (3) ALLOW-LIST: every node-spine unbounded handoff channel carries `SelfAcceptedHandoff` (never `<Vec<u8>>` / `<ForgedBlockArtifact>` / `<bool>`), and at least one `UnboundedSender<SelfAcceptedHandoff>` is present. A net tightening; the CI count does NOT change for this file. | N-F-G-B / N-F-G-C |
+| `ci_check_genesis_consistency_fixture_present.sh` *(N-F-G-A S1)* | **CE-G-A-1** — the three S1b fixture files committed + well-formed + Ade-as-leader; NO secret key material. | N-F-G-A |
+| `ci_check_recovered_ledger_pparams_sourced.sh` *(N-F-G-A S2a)* | **CE-G-A-2a** — recovered ledger `protocol_params` sourced from the oracle preimage (`require_forge_current_pparams`), never `::default()`; the `protocol_params_json` preimage OUTSIDE the 15-field fingerprint. | N-F-G-A |
+| `ci_check_node_forge_real_cli_ingress.sh` *(N-F-G-A S2)* | **CE-G-A-2** — the `--mode node` operator-forge ingress uses the real `parse_opcert_envelope` + `parse_shelley_genesis`; fails closed on a `parse_simple_*` reintroduction. | N-F-G-A |
+| `ci_check_node_forge_single_epoch_fail_closed.sh` *(N-F-G-A S4)* | **DC-EPOCH-03 / CE-G-A-4** — `forge_one_from_recovered` calls `forge_epoch_admission` BEFORE `query_leader_schedule`; candidate epoch via `EraSchedule::locate`; NO nonce promotion. | N-F-G-A |
+| `ci_check_forge_intent_closed.sh` *(N-F-F)* | **CN-NODE-03 (intent half)** — closed two-variant `ForgeIntent`; `classify_forge_intent` sole entry; partial arm binds by name; `ForgeIntentError` static flag-name strings only. | N-F-F |
+| `ci_check_operator_forge_no_secret_leak.sh` *(N-F-F; reuse scope extended N-F-G-A)* | **CN-NODE-03 (custody half) / OP-OPS-04** — `operator_forge` reuses the existing loaders (incl. N-F-G-A real parsers); `OperatorForgeMaterial` not `Debug`/`Serialize`; no private-key byte accessor / serialization / logging. | N-F-F |
+| `ci_check_node_binary_uses_single_bootstrap.sh` *(MODIFIED-in-place N-F-F)* | **CN-NODE-01** — `ReceiveState::new` owner allow-list `{node.rs, node_lifecycle.rs}`. | N-F-F |
+| `ci_check_loop_planner_closed.sh` *(N-F-D; EXTENDED N-F-E; UNCHANGED N-F-G-A/N-F-G-C)* | **CN-NODE-02 / DC-NODE-05** — the GREEN `run_loop_planner` emits only the closed `LoopStep` set, content-blind; the `SlotNo` ban scoped to `plan_loop_step`; `ForgeTick`/`ForgeSlotStatus` pinned. | N-F-D / N-F-E |
+| `ci_check_node_run_loop_containment.sh` *(N-F-D; TIGHTENED N-F-E; UNCHANGED N-F-F/N-F-G-A/N-F-G-B/N-F-G-C)* | **CN-NODE-02 / DC-SYNC-02 / DC-NODE-05** — the relay-loop body advances the tip ONLY via `run_node_sync`; references NO `run_real_forge` / `correlate(` / `Ba02Manifest` / second-bootstrap path; **exactly one** fenced `forge_one_from_recovered` (CE-E-4) with the no-serve tokens forbidden. N-F-F/N-F-G-A/N-F-G-B/N-F-G-C left it byte-/semantically unchanged. | N-F-D / N-F-E |
+| `ci_check_lifecycle_owner_uses_bootstrap_initial_state.sh` *(N-F-C)* | **CN-NODE-01** — exactly one `PHASE4-N-F-C-LIFECYCLE-OWNER`; FirstRun via `bootstrap_from_mithril_snapshot(` + WarmStart via `bootstrap_initial_state(RequiredFromRecoveredProvenance)`; no parallel/cold init, no fallback, no `recover_node_state(` overclaim. | N-F-C |
 | `ci_check_node_sync_via_pump.sh` *(N-F-C)* | **DC-SYNC-01 (driver containment)** — `run_node_sync` advances the tip ONLY via `pump_block(`. (L5 `forge_one_from_recovered` excluded.) | N-F-C |
-| `ci_check_ba02_evidence_closed.sh` *(N-F-C)* | **RO-LIVE-06 (BA-02 honesty)** — exactly one `Ba02Manifest` constructor (inside `correlate`); no self-evidence token as an acceptance source; no committed `docs/evidence/*ba02*` manifest. | N-F-C |
+| `ci_check_ba02_evidence_closed.sh` *(N-F-C; reuse scope incl. `ba02_pass` N-F-G-C)* | **RO-LIVE-06 (BA-02 honesty)** — exactly one `Ba02Manifest` constructor (inside `correlate`); no self-evidence token as an acceptance source; no committed `docs/evidence/*ba02*` manifest. The N-F-G-C `ba02_pass` file I/O is consumed over this UNCHANGED correlator. | N-F-C |
 | `ci_check_node_mode_closure.sh` *(N-F-C / N-Q)* | **CN-NODE-MODE-01** — pins the full 5-variant closed `Mode` set with a wildcard-free `main.rs` arm per variant. | N-F-C / N-Q |
-| `ci_check_consensus_input_provenance.sh` *(N-F-A; guard (d) N-F-C)* | **CN-CINPUT-02 (populate)** + **CN-CINPUT-03 / DC-CINPUT-02b (consume, guard (d))** — the sidecar is populated only on the verified-bootstrap path; `node_sync::forge_one_from_recovered` must project leadership via `from_seed_epoch_consensus_inputs(`, name no bundle/cold token, and not fabricate a `SeedEpochConsensusInputs { … }` literal. | N-F-A / N-F-C |
+| `ci_check_consensus_input_provenance.sh` *(N-F-A; guard (d) N-F-C)* | **CN-CINPUT-02 (populate)** + **CN-CINPUT-03 / DC-CINPUT-02b (consume, guard (d))**. | N-F-A / N-F-C |
 | `ci_check_mithril_seed_point_independence.sh` *(N-Z)* | **DC-MITHRIL-02 + CN-MITHRIL-01** — `verify_mithril_binding(` precedes `bootstrap_initial_state(`; the `MintInputs` seed-point RHS never traces to a manifest-origin token. | N-Z |
 | `ci_check_forward_sync_chokepoint_only.sh` *(N-Y)* | DC-SYNC-01 — durable-before-tip; `AdmitPlan` is the sole `AdvanceTip` emitter. | N-Y |
 | `ci_check_mithril_uses_bootstrap_initial_state.sh` *(N-Y)* | CN-MITHRIL-01 — the Mithril path routes initial state through the single authority; no `*Anchor` trait/plugin seam. | N-Y |
-| `ci_check_no_haskell_fingerprint_equality.sh` *(N-Y; scope incl. `genesis_pinning` N-F-G-A)* | DC-COMPAT-01 — the harness (incl. the N-F-G-A `consensus::genesis_pinning` harness) compares observable surfaces only, never an internal-ledger-fingerprint-vs-Haskell-hash equality. | N-Y |
+| `ci_check_no_haskell_fingerprint_equality.sh` *(N-Y; scope incl. `genesis_pinning` N-F-G-A)* | DC-COMPAT-01 — the harness compares observable surfaces only, never an internal-ledger-fingerprint-vs-Haskell-hash equality. | N-Y |
 | `ci_check_sync_evidence_manifest_schema.sh` *(N-Y)* | RO-SYNC-EVIDENCE-01 — closed sync-evidence manifest schema. | N-Y |
 | `ci_check_recovery_contract.sh` *(strengthened N-Y)* | recovery-contract / DC-WAL-* — recovery composes existing authorities; fail-fast on `WalTailFingerprintMismatch`. | N-Y |
 | `ci_check_registry_code_locus_exists.sh` *(`5db9aae`, extended `a2af041`)* | Registry↔source coherence — every cited `crates/**.rs` + `ci/**.sh` path must exist on disk. | post-N-Y |
-| `ci_check_clock_seam.sh`, `ci_check_orchestrator_core_purity.sh` *(N-K; strengthened N-F-E)* | DC-NODE-03 — `clock.rs` is the SOLE `SystemTime::now()`/`Instant::now()` site in `ade_runtime`; the orchestrator/relay-loop core observes no clock/rand/`HashMap`/float — only a `SlotNo` crosses. (The N-F-G-A `checked_millis_to_slot` is pure, no float, no wall-clock — its before-anchor fail-closed wiring is asserted via the S3 + node-path tests.) | N-K / N-F-E |
+| `ci_check_clock_seam.sh`, `ci_check_orchestrator_core_purity.sh` *(N-K; strengthened N-F-E)* | DC-NODE-03 — `clock.rs` is the SOLE `SystemTime::now()`/`Instant::now()` site in `ade_runtime`; the orchestrator/relay-loop core observes no clock/rand/`HashMap`/float — only a `SlotNo` crosses. (The N-F-G-A `checked_millis_to_slot` is pure, no float, no wall-clock.) | N-K / N-F-E |
 | `ci_check_tag24_wire_authority.sh` | CN-WIRE-08 — single tag-24 wrap/unwrap authority. | N-X |
 | `ci_check_producer_praos_vrf.sh` | CN-FORGE-04 — single era→leader-VRF-input authority. | N-W |
 | `ci_check_leader_check_authority.sh` | CN-FORGE-02 — BLUE leader-check has no LedgerView/RED dep. | N-R-A |
@@ -1576,17 +1750,14 @@ Derived from CODEMAP's Cross-Module Rules + the shared BLUE header.
 | `ci_check_forge_decode_round_trip.sh`, `ci_check_no_independent_forge_codepath.sh` | CN-FORGE-03 — single forge codepath. | N-V |
 | `ci_check_producer_coordinator_no_secrets.sh` | CN-PROD-02 — GREEN coordinator holds no secrets. | N-Q |
 
-> **Count history:** the retired `ci_check_constitution_coverage.sh` was removed in `a2af041` (105 → 104), its
-> checks folded into `ci_check_registry_code_locus_exists.sh`; the N-F-A `ci_check_consensus_input_provenance.sh`
-> restored 105. **N-F-C added 3** → 108. **N-F-D added 2** → 110. **N-F-E added NO gate** (extended both N-F-D
-> gates in place). **N-F-F added 2** (`ci_check_forge_intent_closed.sh`, `ci_check_operator_forge_no_secret_leak.sh`)
-> → 112, AND *modified one in place* (`ci_check_node_binary_uses_single_bootstrap.sh`). **N-F-G-A added 4**
+> **Count history:** … **N-F-F added 2** → 112, AND *modified one in place*. **N-F-G-A added 4**
 > (`ci_check_genesis_consistency_fixture_present.sh`, `ci_check_recovered_ledger_pparams_sourced.sh`,
 > `ci_check_node_forge_real_cli_ingress.sh`, `ci_check_node_forge_single_epoch_fail_closed.sh`) → **116**.
-> **N-F-G-B added 1** (`ci_check_served_chain_handoff_fence.sh`; the relay-loop containment gate
-> `ci_check_node_run_loop_containment.sh` is byte-unchanged) → **117**.
-> Earlier-cluster gates (N-A..N-P, the N-M-* set, the N-L wire-session set) are present in the 117 total; the
-> full list is `ls ci/ci_check_*.sh` (= **117**).
+> **N-F-G-B added 1** (`ci_check_served_chain_handoff_fence.sh`) → **117**. **N-F-G-C added 1**
+> (`ci_check_ba02_evidence_manifest_schema.sh`) AND *broadened `ci_check_served_chain_handoff_fence.sh` in place*
+> (owners + guard-3 allow-list — a net tightening, NOT a new file) → **118**. Earlier-cluster gates (N-A..N-P, the
+> N-M-* set, the N-L wire-session set) are present in the 118 total; the full list is `ls ci/ci_check_*.sh`
+> (= **118**).
 
 ---
 
@@ -1600,41 +1771,37 @@ Derived from CODEMAP's Cross-Module Rules + the shared BLUE header.
   DC-GENESIS-SRC-01); no tautological Mithril binding check (CN-MITHRIL-01); `genesis_initial_state` is
   Conway-only. **(N-F-A) No second `SeedEpochConsensusInputs` encoder/decoder pair (CN-CINPUT-01 — SOLE codec);
   `decode_*` MUST be version-gated, byte-canonical, `BTreeMap`-ordered with no `Default` / `#[non_exhaustive]`.
-  `PoolDistrView::from_seed_epoch_consensus_inputs` MUST be a pure field-map (off-epoch ⇒ `None`, no `HashMap`)
-  — the SOLE leadership source for the node-lifecycle forge path.** **(N-F-F / N-F-G-A) No BLUE crate was
-  modified — operator-key ingress + forge fidelity reuse the existing BLUE validators
-  (`Sum6Kes::raw_deserialize_signing_key_kes`, `ProducerShell::init`'s freshness bound, the
-  `ProtocolParameters` model, exact `Rational` arithmetic, `EraSchedule::locate`) verbatim; no new BLUE
-  authority. `ade_ledger::rational::Rational` MUST stay exact-integer (no float arithmetic).**
+  `PoolDistrView::from_seed_epoch_consensus_inputs` MUST be a pure field-map.** **(N-F-F / N-F-G-A / N-F-G-B /
+  N-F-G-C) No BLUE crate was modified — operator-key ingress + forge fidelity + the self-accept→serve handoff +
+  the live feed + the BA-02 evidence I/O reuse the existing BLUE validators/authorities
+  (`Sum6Kes::raw_deserialize_signing_key_kes`, `ProducerShell::init`'s freshness bound, the `ProtocolParameters`
+  model, exact `Rational` arithmetic, `EraSchedule::locate`, `served_chain_admit`, the BLUE-minted forged hash)
+  verbatim; no new BLUE authority. `ade_ledger::rational::Rational` MUST stay exact-integer (no float arithmetic).**
 - **GREEN:** no nondeterminism; no participation in authoritative outputs. The `producer::coordinator` MUST NOT
   own/store private signing material; **its closed 9-variant `CoordinatorEvent` MUST stay additively stable —
-  the N-F-G-A off-epoch outcome reuses `ForgeNotLeader`, adding no variant.** `ChainEvolution` (N-T) MUST NEVER
-  mint `AcceptedBlock`. Closed vocabularies (`ProducerLogEvent`, `ForgeFailureReason`, `SyncEffect`, observable
-  `BlockVerdict`, `LoopStep` / `ForgeSlotStatus`, `ForgeIntent`, **`SlotAlignmentError` / `ProtocolParamsParseError`
-  / `ForgeCurrentPParamsError` / `ForgeEpochAdmission`**) — no open/wildcard variant. `forward_sync::reducer`
-  (DC-SYNC-01): MUST NOT emit `AdvanceTip` before that block's `StoreBlockBytes` + `AppendWal`. **(N-F-A)
-  `seed_consensus_merge` MUST fail closed on a pool in exactly one source map — NEVER a zero-hash fill.** **(N-F-C)
-  `ba02_evidence` is evidence, not authority — it COMPARES already-authoritative outputs, MUST read the
-  BLUE-minted forged hash VERBATIM, `correlate` MUST be the SOLE `Ba02Manifest` constructor; NO self-evidence
-  acceptance source; NO committed synthetic manifest (RO-LIVE-06).** **(N-F-D / N-F-E) `run_loop_planner` is a
-  pure decision function — it MUST observe a `SlotNo` ONLY in the dedicated `forge_slot_status` guard, NEVER in
-  `plan_loop_step`; it MUST emit only the closed `LoopStep` set and MUST NOT decide leadership/authority.** **(N-F-F)
-  `forge_intent` is a pure total decision over CLI flag PRESENCE — MUST NOT observe key CONTENTS, MUST emit only
-  the closed 2-variant `ForgeIntent`, MUST bind the partial arm by name, and `ForgeIntentError` MUST carry only
-  static flag-name strings (CN-NODE-03).** **(N-F-G-A) `consensus_inputs::protocol_params` MUST have NO float
-  path — exact `Rational` by integer arithmetic, or fail closed (`InexactRational`); it MUST NOT author the
-  `ProtocolParameters` semantics (it is glue). `require_forge_current_pparams` MUST keep the `protocol_params_json`
-  preimage OUTSIDE the 15-field canonical fingerprint and MUST hash-bind via `blake2b_256` before parsing.
-  `checked_millis_to_slot` MUST fail closed before-anchor (NEVER saturate), with no float and no wall-clock.
-  `forge_epoch_admission` MUST derive its candidate epoch via the BLUE `EraSchedule::locate` (no fabricated
-  math) and MUST NOT drive a nonce promotion. `consensus::genesis_pinning` is `#[cfg(test)]` evidence — its
-  fixture is NEVER a runtime authority, and it MUST NOT compare an internal-ledger fingerprint to a Haskell
-  hash (DC-COMPAT-01).** **(N-F-G-B) `producer::self_accepted_handoff::SelfAcceptedHandoff` MUST keep its
-  `AcceptedBlock` field private with `from_self_accepted(AcceptedBlock)` as its SOLE constructor — NO raw-bytes /
-  `ForgedBlockArtifact` / `CoordinatorEvent` / flag / verdict constructor may be added (a non-self-accepted
-  artifact MUST stay type-unrepresentable as a handoff, CN-FORGE-01 / DC-NODE-06); it MUST carry the ORIGINAL
-  token verbatim and NEVER re-validate or re-derive it from bytes. It is pure (no I/O, clock, rand, float).** `harness::sync_diff` (DC-COMPAT-01): MUST NOT compare Ade's internal ledger
-  `fingerprint` to a Haskell hash. `lagging` ≠ success; wire success ≠ admission ≠ agreement.
+  the N-F-G-A off-epoch outcome reuses `ForgeNotLeader`, the N-F-G-B token rides a sibling return component, and
+  N-F-G-C adds no variant.** `ChainEvolution` (N-T) MUST NEVER mint `AcceptedBlock`. Closed vocabularies
+  (`ProducerLogEvent`, `ForgeFailureReason`, `SyncEffect`, observable `BlockVerdict`, `LoopStep` /
+  `ForgeSlotStatus`, `ForgeIntent`, `SlotAlignmentError` / `ProtocolParamsParseError` / `ForgeCurrentPParamsError`
+  / `ForgeEpochAdmission`, the BA-02 `BA02Outcome` / `PeerAcceptEvent` / `NoEvidenceReason`) — no open/wildcard
+  variant. `forward_sync::reducer` (DC-SYNC-01): MUST NOT emit `AdvanceTip` before that block's `StoreBlockBytes`
+  + `AppendWal`. **(N-F-A) `seed_consensus_merge` MUST fail closed on a pool in exactly one source map — NEVER a
+  zero-hash fill.** **(N-F-C / N-F-G-C) `ba02_evidence` is evidence, not authority — it COMPARES already-authoritative
+  outputs, MUST read the BLUE-minted forged hash VERBATIM, `correlate` MUST be the SOLE `Ba02Manifest`
+  constructor; NO self-evidence acceptance source; NO committed synthetic manifest (RO-LIVE-06). N-F-G-C added the
+  RED `ba02_pass` file-I/O wrapper over this UNCHANGED correlator — it constructs no evidence and `write_ba02_manifest`
+  accepts ONLY a `Ba02Manifest`.** **(N-F-G-B) `producer::self_accepted_handoff::SelfAcceptedHandoff` MUST have a
+  PRIVATE field + a SOLE constructor taking a BLUE `AcceptedBlock` — NO raw-bytes / `ForgedBlockArtifact` /
+  `CoordinatorEvent` / flag / verdict constructor; it MUST carry the ORIGINAL token verbatim, never re-validating
+  or re-deriving it (CN-FORGE-01 / DC-NODE-06).** **(N-F-D / N-F-E) `run_loop_planner` MUST observe a `SlotNo` ONLY
+  in the dedicated `forge_slot_status` guard, emit only the closed `LoopStep` set, decide no authority.** **(N-F-F)
+  `forge_intent` MUST observe only flag PRESENCE, emit only the closed 2-variant `ForgeIntent`, bind the partial
+  arm by name (CN-NODE-03).** **(N-F-G-A) `consensus_inputs::protocol_params` MUST have NO float path; `require_forge_current_pparams`
+  MUST keep the `protocol_params_json` preimage OUTSIDE the 15-field fingerprint + hash-bind before parsing;
+  `checked_millis_to_slot` MUST fail closed before-anchor (never saturate); `forge_epoch_admission` MUST derive
+  via `EraSchedule::locate` + drive no nonce promotion; `consensus::genesis_pinning` is `#[cfg(test)]` evidence,
+  never runtime authority (DC-COMPAT-01).** `harness::sync_diff` (DC-COMPAT-01): MUST NOT compare Ade's internal
+  ledger `fingerprint` to a Haskell hash. `lagging` ≠ success; wire success ≠ admission ≠ agreement ≠ peer ACCEPT.
 - **RED:** no direct mutation of BLUE state; no construction of semantic types from raw bytes; no bypassing
   canonical validation. `produce_mode` emits outbound bytes only via `OutboundCommand`. The per-peer outbound
   map is `BTreeMap` (deterministic). Key custody confined to `producer::signing` / `producer_shell`.
@@ -1647,101 +1814,95 @@ Derived from CODEMAP's Cross-Module Rules + the shared BLUE header.
   `verify_mithril_binding` fail-closed BEFORE `bootstrap_initial_state` (DC-MITHRIL-02). `recovery::restart`
   MUST compose the existing WAL-replay + rollback authorities and fail fast on `WalTailFingerprintMismatch`.
   **(N-F-A) `seed_consensus_provenance::append_seed_epoch_provenance` MUST `blake2b_256` the EXACT A1 bytes the
-  composer `put`, be called only AFTER the durable sidecar put. `bootstrap::restore_seed_epoch_consensus_inputs`
-  MUST fail closed on a missing sidecar / hash mismatch / non-canonical decode / binding mismatch /
-  non-byte-identical re-encode, and MUST NOT fall back to the forge-time bundle. The forge-time `produce_mode`
-  path MUST pass `SeedEpochConsensusSource::NotRequired` and MUST NOT build / put the sidecar (CN-CINPUT-02).**
-  **(N-F-C) The `Mode` enum MUST stay closed with a wildcard-free `main.rs` dispatch arm per variant
-  (CN-NODE-MODE-01). Exactly one `--mode node` lifecycle owner; both arms route through the SINGLE
-  `bootstrap_initial_state` authority (CN-NODE-01). `NodeBlockSource` MUST yield ordered block bytes and
+  composer `put`, only AFTER the durable sidecar put. `bootstrap::restore_seed_epoch_consensus_inputs` MUST fail
+  closed on a missing sidecar / hash mismatch / non-canonical decode / binding mismatch / non-byte-identical
+  re-encode, and MUST NOT fall back to the forge-time bundle. `produce_mode` MUST pass
+  `SeedEpochConsensusSource::NotRequired` (CN-CINPUT-02).** **(N-F-C) `Mode` MUST stay closed with a wildcard-free
+  `main.rs` arm per variant (CN-NODE-MODE-01). Exactly one `--mode node` lifecycle owner; both arms route through
+  the SINGLE `bootstrap_initial_state` authority (CN-NODE-01). `NodeBlockSource` MUST yield ordered block bytes and
   NOTHING else; `run_node_sync` MUST advance the tip ONLY via `pump_block`. `node_sync::forge_one_from_recovered`
-  MUST project leadership ONLY via `PoolDistrView::from_seed_epoch_consensus_inputs` and MUST NOT fabricate a
-  literal or name a forge-time bundle token (CN-CINPUT-03 / DC-CINPUT-02b).** **(N-F-D) Exactly one live-run
-  owner (`run_relay_loop`); the relay-loop body MUST advance the tip ONLY via `run_node_sync` and reach NO
-  second bootstrap/apply/forge/evidence/manual-tip/verdict/follower path (CN-NODE-02 / DC-SYNC-02).** **(N-F-E)
-  The relay-loop forge tick MUST observe wall-clock ONLY through the RED `Clock` seam (only a `SlotNo` crosses);
-  MUST call EXACTLY ONE fenced `forge_one_from_recovered` per `ForgeTick`; MUST advance NO durable tip and
-  serve/admit/gossip NOTHING; MUST attempt a forge at most once per `SlotNo`; opt-in via `ForgeActivation` —
-  `None` MUST reproduce the exact N-F-D relay behavior.** **(N-F-F) Operator-material ingress MUST land at the
-  SINGLE named site (`operator_forge`) that REUSES the existing loaders (no reimpl) — NO new BLUE authority, NO
-  plugin seam, NO second forge codepath, NO Mithril call, NO second bootstrap. Key custody MUST stay
-  RED-confined to `ProducerShell` (`OperatorForgeMaterial` not `Debug`/`Serialize`; no private-byte accessor /
-  serialization / logging). `pool_id` MUST be derived in ONE named place (`blake2b_224(cold_vk)`). The forge-on
-  flip MUST be opt-in over flag presence (complete ⇒ `Some`; absent ⇒ `None`; partial ⇒
-  `NodeLifecycleError::ForgeKeyIngress` → exit 44).** **(N-F-G-A) The `--mode node` operator-forge ingress MUST
-  use the REAL `parse_opcert_envelope` + `parse_shelley_genesis` — the `parse_simple_*` stubs are RETIRED on the
-  node path (`ci_check_node_forge_real_cli_ingress.sh`). The recovered ledger pparams MUST be sourced from the
-  oracle preimage via `require_forge_current_pparams` — NEVER `ProtocolParameters::default()` / genesis-initial
-  (`admission::{seed_to_snapshot, bootstrap}`, `ci_check_recovered_ledger_pparams_sourced.sh`). The forge tick
-  MUST derive its slot via `checked_millis_to_slot` (a before-anchor tick fails closed, NEVER saturates).
-  `node_sync::forge_one_from_recovered` MUST call `forge_epoch_admission` BEFORE `query_leader_schedule` (an
-  off-epoch / unlocatable slot fails closed before leadership / KES signing), derive the candidate epoch via
-  the BLUE `EraSchedule::locate`, and drive NO `NonceInput::EpochBoundary` / `CandidateFreeze` nonce promotion
-  (`ci_check_node_forge_single_epoch_fail_closed.sh`). The N-F-E forge containment MUST stay SEMANTICALLY
-  UNCHANGED — the new boundaries sit INSIDE the existing fence (ADD fidelity gates, never relax containment).**
-  **(N-F-G-B) The self-accept→serve handoff MUST move a forged block to the serve task ONLY through the
-  constructor-fenced `SelfAcceptedHandoff` carrier; `run_real_forge` / `forge_one_from_recovered` MUST surface the
-  ORIGINAL BLUE `AcceptedBlock` (`Some` iff `ForgeSucceeded`), NEVER re-derived from `artifact.bytes` (CN-FORGE-01).
-  The relay-loop body MUST forward a TYPED `mpsc<SelfAcceptedHandoff>` `tx.send` ONLY — it MUST hold no
-  `ServedChainHandle`, call no `push_atomic` / `served_chain_admit`, and mutate no served chain (so
-  `ci_check_node_run_loop_containment.sh` stays byte-unchanged). Served-chain mutation MUST happen ONLY in the
+  MUST project leadership ONLY via `PoolDistrView::from_seed_epoch_consensus_inputs` (CN-CINPUT-03 /
+  DC-CINPUT-02b).** **(N-F-D/E) Exactly one live-run owner; the relay-loop body MUST advance the tip ONLY via
+  `run_node_sync`, reach EXACTLY ONE fenced `forge_one_from_recovered` per `ForgeTick`, advance NO durable tip,
+  serve/admit/gossip NOTHING (CN-NODE-02 / DC-SYNC-02 / DC-NODE-05).** **(N-F-F) Operator-material ingress MUST
+  land at the SINGLE named `operator_forge` site reusing the existing loaders — NO new BLUE authority, NO plugin
+  seam, NO second forge codepath, NO Mithril call, NO second bootstrap; key custody RED-confined to
+  `ProducerShell`; the forge-on flip opt-in over flag presence (CN-NODE-03).** **(N-F-G-A) The `--mode node`
+  ingress MUST use the REAL parsers; recovered pparams MUST be sourced from the oracle preimage (never
+  `::default()`); the forge tick MUST use `checked_millis_to_slot` + `forge_epoch_admission` BEFORE leadership;
+  NO nonce promotion (DC-EPOCH-03). The N-F-E forge containment MUST stay SEMANTICALLY UNCHANGED.** **(N-F-G-B)
+  The self-accept→serve handoff MUST move a forged block to the serve task ONLY through the constructor-fenced
+  `SelfAcceptedHandoff` carrier; `run_real_forge` / `forge_one_from_recovered` MUST surface the ORIGINAL BLUE
+  `AcceptedBlock` (`Some` iff `ForgeSucceeded`), never re-derived from `artifact.bytes` (CN-FORGE-01). The
+  relay-loop body MUST forward a TYPED `mpsc<SelfAcceptedHandoff>` `tx.send` ONLY — no `ServedChainHandle`, no
+  `push_atomic` / `served_chain_admit`, no served-chain mutation. Served-chain mutation MUST happen ONLY in the
   sibling `tokio::spawn` task via the single `ServedChainHandle::push_atomic`, fed ONLY by `into_accepted()`; the
-  handoff channel MUST be typed `UnboundedSender<SelfAcceptedHandoff>`, never `<Vec<u8>>` / `<ForgedBlockArtifact>`
-  / `<bool>` (`ci_check_served_chain_handoff_fence.sh`, DC-NODE-06 / CN-PROD-04). NO real network listener / dialer
-  / peer is wired (hermetic loopback; the live serve + operator-peer surface is G-C — the `ServedChainView` is
-  retained for it).**
+  handoff channel MUST be typed `UnboundedSender<SelfAcceptedHandoff>` (DC-NODE-06 / CN-PROD-04,
+  `ci_check_served_chain_handoff_fence.sh`).** **(N-F-G-C) The live `--mode node` feed MUST REUSE the closed
+  `ade_runtime::admission::{dial_for_admission, run_admission_wire_pump}` VERBATIM (no reimpl, no new wire
+  authority) and FILL the closed `NodeBlockSource::WirePump` arm via `from_wire_pump` — NEVER a new
+  `NodeBlockSource` variant / plugin point / source-selection trait, NEVER a second tip-advance (`run_node_sync`
+  UNMODIFIED), NEVER a dial/parse-failure that is fatal / fabricated / a tip graft (log-and-drop, C3). The bounded
+  `mpsc` cap MUST stay bounded. `ci_check_node_run_loop_containment.sh` MUST stay byte-unchanged; the served-chain
+  handoff fence may be BROADENED (net tightening), never relaxed. The RED `ba02_pass` MUST be file I/O ONLY over
+  the UNCHANGED GREEN `correlate` — `correlate` the SOLE `Ba02Manifest` ctor; `write_ba02_manifest` accepts ONLY
+  a `Ba02Manifest`; a missing/unreadable file fails closed; NO self-evidence acceptance source; NO committed
+  synthetic manifest (RO-LIVE-06 / CN-OPERATOR-EVIDENCE-01, `ci_check_ba02_evidence_manifest_schema.sh`).**
 
 ### Project-specific additions (Ade)
 
+- **Live-feed + BA-02-evidence honest scope + boundary (N-F-G-C, load-bearing — do not soften):** N-F-G-C closes
+  the **MECHANICAL live-feed + evidence scaffolding ONLY**. The `--mode node` `On` arm is **live-feed-wireable**
+  from `--peer` (reusing the closed admission dial + pump; a `from_wire_pump` FILL of the closed `WirePump` arm —
+  no new variant, no new wire authority); with a live feed the forge is observable at a due leader slot. **Peer
+  ACCEPT is NOT claimed — it is operator-gated** (`RO-LIVE-01` partial / `blocked_until_operator_stake_available`),
+  proven only by an operator-captured peer log through `correlate`. The BA-02 evidence I/O (`ba02_pass`) reads a
+  real operator-captured peer-log file through the SOLE `Ba02Manifest` constructor; `write_ba02_manifest` accepts
+  ONLY a `Ba02Manifest`; **no synthetic manifest is committed** (the new gate is vacuous-until-committed +
+  sha256-bound). **Ade self-accept / `ForgeSucceeded` / served-block / wire success ≠ peer acceptance.** With NO
+  `--peer` the empty source still halts before any `ForgeTick`. The durable tip still advances only via
+  `run_node_sync → pump_block`; `run_node_sync` UNMODIFIED; `ci_check_node_run_loop_containment.sh` byte-unchanged.
+  **NO new BLUE authority / canonical type, no new `NodeBlockSource` / `CoordinatorEvent` variant.** **The bounty
+  acceptance criterion (an operator-witnessed accepted block) is NOT satisfied by this cluster. BA-02 is satisfied
+  nowhere.**
 - **Self-accept→serve handoff honest scope + boundary (N-F-G-B, load-bearing — do not soften):** N-F-G-B is
   **serve-authority only** — it proves the serve *mechanism* on the `--mode node` spine admits **only** a BLUE
-  self-accepted artifact, via the constructor-fenced `SelfAcceptedHandoff` carried into a **sibling**
-  served-chain admit task whose sole mutation is the single `ServedChainHandle::push_atomic` fed by
-  `into_accepted()`. The relay-loop body forwards a **typed channel send only** (no `ServedChainHandle`, no
-  `push_atomic`, no served-chain mutation, no block-fetch serving), so `ci_check_node_run_loop_containment.sh`
-  is **byte-/semantically unchanged**. It is **NOT** a live-feed cluster (no `WirePump` / `n2n_dialer` /
-  session wiring into the binary — that is **G-C**; the `ServedChainView` is retained for it; hermetic
-  loopback at this HEAD). It introduces **no new BLUE authority / canonical type**, adds **no new
-  `CoordinatorEvent` variant** (the surfaced token rides a sibling return component), and makes **NO
-  peer-acceptance / BA-02 / RO-LIVE acceptance claim** (peer ACCEPT stays operator-gated; RO-LIVE-01 partial).
-  On the empty binary source the loop still halts before any `ForgeTick` (forge-CAPABLE, NOT observable —
-  RO-LIVE-01). `DC-NODE-06` flips declared→enforced. **BA-02 is satisfied nowhere.**
+  self-accepted artifact, via the constructor-fenced `SelfAcceptedHandoff` carried into a **sibling** served-chain
+  admit task whose sole mutation is the single `ServedChainHandle::push_atomic` fed by `into_accepted()`. The
+  relay-loop body forwards a **typed channel send only**, so `ci_check_node_run_loop_containment.sh` is
+  **byte-/semantically unchanged**. It introduces **no new BLUE authority / canonical type**, adds **no new
+  `CoordinatorEvent` variant**, and makes **NO peer-acceptance / BA-02 / RO-LIVE acceptance claim**. `DC-NODE-06`
+  is ENFORCED. _(N-F-G-C added the LIVE FEED around this serve mechanism; the serve mechanism is unchanged.)_
 - **Forge-fidelity honest scope + boundary (N-F-G-A, load-bearing — do not soften):** N-F-G-A is
   **forge-fidelity hardening on the relay spine** — real cardano-cli config ingress (opcert + genesis),
   oracle-bound **current** `ProtocolParameters` (no longer `::default()`), a before-anchor clock→slot
   fail-closed guard (S3), and an off-epoch forge fail-closed guard *before* leadership / KES signing (S4). It
   does **NOT** serve / admit / gossip / advance a durable tip. The forge stays **subordinate + self-accept-only**;
-  `run_relay_loop`'s containment is **semantically unchanged** (the new boundaries sit inside the existing
-  fence). On the empty binary source the loop still halts before any `ForgeTick` — the `On` arm is forge-CAPABLE
-  but **not observable** (RO-LIVE-01 follow-on). There is **NO serve / admit / gossip / durable-tip / BA-02 /
-  RO-LIVE acceptance claim**. **BA-02 is satisfied nowhere.** The two new boundaries are **fail-closed walls,
+  `run_relay_loop`'s containment is **semantically unchanged**. The two new boundaries are **fail-closed walls,
   not silent saturations**. `protocol_params` carries **no float path**. The S1 reference fixture is **evidence
   input, never runtime authority**. The `protocol_params_json` preimage stays **OUTSIDE** the frozen 15-field
-  `LiveConsensusInputsCanonical` fingerprint (a non-fingerprinted additive carry, NOT a fingerprint-schema
-  change).
+  `LiveConsensusInputsCanonical` fingerprint (a non-fingerprinted additive carry).
 - **Operator-key ingress honest scope + boundary (N-F-F, load-bearing — do not soften):** N-F-F is
   **operator-key ingress + the binary `Some`/`None` forge flip**. The binary is **forge-CAPABLE with real
-  operator keys**, but the forge is **NOT observable on the empty-source binary path**. Observable forge =
-  the **RO-LIVE-01 follow-on**. Key custody is **RED-confined** to `ProducerShell`. **Mithril stays the
-  bootstrap/recovery layer, untouched.**
+  operator keys**; key custody is **RED-confined** to `ProducerShell`. **Mithril stays the bootstrap/recovery
+  layer, untouched.**
 - **Forge-tick honest scope + boundary (N-F-E, load-bearing):** N-F-E is a **hermetic, single-epoch,
-  self-accept-only** forge-tick wiring cluster. **NO serve/broadcast/gossip; NO durable apply / tip mutation;
-  NO live peer / BA-02 / RO-LIVE claim.** **BA-02 is satisfied NOWHERE at this HEAD.**
-- **Relay-run-loop honest scope (N-F-D):** the live relay run-loop is **relay-only + strictly hermetic** — a
-  **live unbounded peer** is the **RO-LIVE-01 follow-on**.
+  self-accept-only** forge-tick wiring cluster. **NO serve/broadcast/gossip; NO durable apply / tip mutation.**
+- **Relay-run-loop honest scope (N-F-D):** the live relay run-loop is **relay-only** — N-F-G-C wires a **live
+  unbounded peer** into the `WirePump` arm (the feed-side RO-LIVE-01 follow-on); the operator-witnessed live
+  ACCEPT remains the gating follow-on.
 - **Node-lifecycle honest scope (N-F-C):** PHASE4-N-F-C proves the node lifecycle mechanics through evidence
-  closure; it does NOT claim live BA-02. `ba02_evidence` is a tested-but-unwired library surface.
+  closure; it does NOT claim live BA-02. `ba02_evidence` + the N-F-G-C `ba02_pass` I/O wrapper are reached by no
+  binary arm (tested only).
 - **Recovered-state surface is populate-contained AND consume-fenced (N-F-A populate / N-F-C consume; N-F-E +
   N-F-F + N-F-G-A exercise):** populated ONLY on the verified-bootstrap path; read back ONLY by the warm-start
-  restore (CN-CINPUT-02). The forge-time `produce_mode` path may not populate them and stays diagnostic. The
-  consume side is fenced (CN-CINPUT-03 / DC-CINPUT-02b — guard (d)). The N-F-G-A current-constants forge tick
-  reaches that fenced path from the relay loop's `ForgeTick` branch, now with the off-epoch guard before
-  leadership.
-- **No new bootstrap-source plugin seam (N-Y hard rejection, carried into N-Z + N-F-A + N-F-C + N-F-F +
-  N-F-G-A):** a new seed source attaches by populating `BootstrapInputs.genesis_initial` and routing through
+  restore (CN-CINPUT-02). The forge-time `produce_mode` path may not populate them and stays diagnostic.
+- **No new bootstrap-source plugin seam (N-Y hard rejection, carried into N-Z + N-F-A + N-F-C + N-F-F + N-F-G-A +
+  N-F-G-C):** a new seed source attaches by populating `BootstrapInputs.genesis_initial` and routing through
   `bootstrap_initial_state` — NEVER via a `GenesisAnchor` / `MithrilAnchor` trait or plugin registry.
-  **Operator-key ingress (N-F-F) and forge fidelity (N-F-G-A) are NOT a bootstrap** — they reuse the single
-  recovered `BootstrapState` as the forge base, call no Mithril, and create no second bootstrap.
+  **Operator-key ingress (N-F-F), forge fidelity (N-F-G-A), and the live feed (N-F-G-C) are NOT a bootstrap** —
+  they reuse the single recovered `BootstrapState` as the forge base, call no Mithril, and create no second
+  bootstrap.
 - **Mithril seed-point independence (N-Z hard rule, DC-MITHRIL-02):** the anchor `seed_point` MUST originate
   from an operator-supplied origin structurally independent of the manifest; `verify_mithril_binding`
   cross-checks the two and fails closed; the binding must run before any storage init.
@@ -1750,6 +1911,12 @@ Derived from CODEMAP's Cross-Module Rules + the shared BLUE header.
 - **No durability in the produce_mode forge path (N-U scope):** forged-block durability is deferred to N-U
   (§7). The network forward-sync durability (received blocks) DID land in N-Y; the N-F-E/N-F-F/N-F-G-A
   relay-loop forge tick advances NO durable tip (self-accept-only).
+- **Bounded peer-driven memory (N-F-G-C newly EXPOSED, follow-on candidate — §7):** the live `--mode node` feed
+  newly EXPOSES an unbounded mux-reassembly tail (`ade_network::session::core` `proto_buffers`) + an unbounded
+  `WirePump.lookahead` (`ade_node::node_sync`) to a bounded-rate peer-driven memory-growth surface. NOT
+  introduced by G-C — only newly reachable on the live feed. The prior CBOR length-overflow remote-DoS (N-X) is
+  NOT reintroduced. The fix (cap the reassembly tail + the lookahead depth + a negative test) is a follow-on
+  slice candidate (reuse N-M-FRAG / N-M-C infra).
 - **Registry `code_locus` must track source moves (`5db9aae`):** any rule citing a renamed/moved `crates/**.rs`
   or `ci/**.sh` path must have its `code_locus` updated; `ci_check_registry_code_locus_exists.sh` fails closed
   on a stale pointer.
@@ -1768,151 +1935,172 @@ Derived from CODEMAP's Cross-Module Rules + the shared BLUE header.
 > Surfaced honestly per IDD: these are **declared** future attach points, not closed surfaces. Each is named
 > in a registry rule or a cluster CLOSURE record.
 >
-> **N-F-G-B CLOSED the self-accept→serve handoff candidate** (the prior candidate #0): `DC-NODE-06` flipped
-> `declared` → `enforced` — only a BLUE self-accepted artifact serves, via the constructor-fenced
-> `SelfAcceptedHandoff` + the sibling `push_atomic` task. **N-F-G-B added ONE new declared follow-on** — the
-> **live network serve + operator-peer surface (G-C)**: the serve mechanism is hermetic loopback at this HEAD (no
-> `WirePump` / `n2n_dialer` / session wiring into the binary; the `ServedChainView` is retained for it). The live
-> legs RO-LIVE-01 (observable forge / live peer) and RO-LIVE-06 (live BA-02) remain the gating follow-ons.
-> N-F-F earlier CLOSED the real-`--mode node` operator-key ingress candidate; what remains is **reaching the
-> forge tick from a LIVE binary path** (observable forge), gated on a live feed (RO-LIVE-01, candidate #1).
+> **N-F-G-C PARTLY closed the prior candidate #0** (the live network serve + operator-peer surface): the **live
+> feed is now wired** (consume side — a LIVE `NodeBlockSource::WirePump` from `--peer`, reusing the closed
+> admission dial + pump) and the **operator-pass evidence path is scaffolded** (the runbook + the `ba02_pass`
+> `correlate` wiring + the manifest-schema gate). **BUT the operator-witnessed live ACCEPT remains the gating
+> follow-on** — `RO-LIVE-01` stays `partial` / `blocked_until_operator_stake_available`; `RO-LIVE-06` is NOT a
+> live-BA-02 claim (schema + mechanics only). **N-F-G-C added ONE new candidate** (the bounded peer-driven
+> memory surface, #6 below — a MEDIUM security-review finding NOT introduced by G-C, only newly EXPOSED on the
+> live feed). The other candidates are PRESERVED.
 
-0. **Live network serve + operator-peer surface (G-C follow-on — DECLARED, NEW in N-F-G-B).** N-F-G-B CLOSED
-   the self-accept→serve handoff (`DC-NODE-06` `declared` → `enforced`): a self-accepted forged block now reaches
-   the served chain via the constructor-fenced `SelfAcceptedHandoff` + the sibling `push_atomic` task. **But the
-   serve mechanism is hermetic loopback at this HEAD** — there is **NO real network listener / dialer / peer**
-   wired into the `--mode node` binary (no `WirePump` / `n2n_dialer` / session wiring; `push_atomic` admits via
-   `send_modify` with no live reader). The `ServedChainView` is **retained** for the future live wiring. The
-   declared follow-on (**PHASE4-N-F-G-C**) is wiring a live reader/peer so a served block actually leaves the node
-   over the wire. _Confirm scope before wiring G-C; it MUST NOT relax the relay-loop containment or the
-   served-chain handoff fence, served blocks stay gated on BLUE `served_chain_admit` (only self-accepted blocks,
-   CN-PROD-04), and a peer-ACCEPT claim stays RO-LIVE-01 / RO-LIVE-06 (operator-gated)._
-1. **Live unbounded peer for the relay loop → observable forge (RO-LIVE-01 follow-on — DECLARED).** The binary
-   is forge-CAPABLE with real operator keys + real constants, but the forge is **NOT observable on the
-   empty-source binary path** — the loop halts before any `ForgeTick` (forge subordinate to feed). A **live
-   unbounded cardano-node peer over the wire** driving `run_node_sync` is the declared follow-on (operator-gated)
-   — it is what makes `LoopStep::ForgeTick` reachable in production and the forge observable. _Confirm: is the
-   live-peer wiring the next live leg, and does `NodeBlockSource` stay a closed verdict-decoupled contract (not
-   a plugin point for alternative sources)?_
-2. **Live BA-02 (RO-LIVE-06 follow-on — DECLARED).** The schema + correlator mechanics are closed; a real BA-02
-   result needs a real operator-captured peer log naming the exact Ade-forged hash, run through `correlate`
-   (operator-gated, distinct from RO-LIVE-01). Synthetic fixtures prove the mechanics only. _(N-F-G-A's
-   forge-fidelity hardening does not change this: a forged block reaches no peer at this HEAD, so BA-02 stays
-   satisfied NOWHERE.)_
+0. **Live network serve + operator-peer surface (PARTLY closed by N-F-G-C; the operator-witnessed ACCEPT remains
+   the gating follow-on).** N-F-G-B CLOSED the self-accept→serve handoff (`DC-NODE-06` enforced). **N-F-G-C wired
+   the live feed (consume side)** — when `--peer` is supplied, `spawn_live_wire_pump_source` builds a LIVE
+   `NodeBlockSource::WirePump` (reusing the closed `dial_for_admission` + `run_admission_wire_pump`; a
+   `from_wire_pump` FILL of the closed `WirePump` arm), so `LoopStep::ForgeTick` is reachable in production
+   (`live_wire_pump_feed_reaches_forge_tick`) and a self-accepted forged block is served byte-identically over
+   in-process block-fetch (`live_feed_forge_serve_loopback_returns_forged_block`). **N-F-G-C also scaffolded the
+   operator-pass evidence path** — the `docs/evidence/phase4-n-f-g-c-operator-pass-README.md` runbook + the RED
+   `ba02_pass::correlate_peer_log_file` wiring over the GREEN `correlate` + the no-synthetic-manifest gate
+   `ci_check_ba02_evidence_manifest_schema.sh`. **What REMAINS gating:** the **operator-witnessed live ACCEPT** —
+   a real operator-captured peer log through `correlate` against a peer that can grant leadership (C1 private
+   testnet or C2 preprod with provisioned stake). `RO-LIVE-01` stays `partial` /
+   `blocked_until_operator_stake_available`; `RO-LIVE-06` is NOT a live-BA-02 claim. _Confirm: the operator-pass
+   execution is the next live leg; it MUST NOT relax the relay-loop containment / served-chain handoff fence, and
+   a peer-ACCEPT claim stays gated on a real operator-captured peer log through `correlate` (no synthetic manifest)._
+1. **Live unbounded peer → observable forge ACCEPT (RO-LIVE-01 follow-on — DECLARED, feed-side now wired by
+   N-F-G-C).** N-F-G-C wired the **feed side** — a live unbounded cardano-node peer over the wire drives
+   `run_node_sync` (the prior feed-side follow-on, now closed). What REMAINS is the **operator-witnessed
+   observable forge ACCEPT** against a peer that can grant Ade leadership (operator-gated; `RO-LIVE-01` partial /
+   `blocked_until_operator_stake_available`). _Confirm: does `NodeBlockSource` stay a closed verdict-decoupled
+   contract (a `from_wire_pump` FILL, not a plugin point for alternative sources)? It does at this HEAD._
+2. **Live BA-02 (RO-LIVE-06 follow-on — DECLARED, I/O scaffolded by N-F-G-C).** The schema + correlator mechanics
+   are closed, and N-F-G-C wired the RED `ba02_pass` file I/O over the GREEN `correlate` (reached by no binary arm
+   at this HEAD; tested only). A real BA-02 result needs a real operator-captured peer log naming the exact
+   Ade-forged hash, run through `correlate`, against a peer that can grant leadership (operator-gated, distinct
+   from RO-LIVE-01). Synthetic fixtures prove the mechanics only; the new gate is vacuous-until-committed +
+   sha256-bound. BA-02 stays satisfied NOWHERE.
 3. **Mithril import — remaining open obligations (RO-MITHRIL-IMPORT-01, still `partial`).** N-Z CLOSED item (b).
    Two seams remain deliberately NOT wired: **(a) seed-bytes-from-Mithril decode** and **(c) a committed
    reproducible Mithril fixture + CI/release evidence**. `bootstrap_from_mithril_snapshot` is composition-only
-   with **NO standalone argv flag**. _(N-F-F/N-F-G-A left Mithril untouched.)_
+   with **NO standalone argv flag**. _(N-F-F/N-F-G-A/N-F-G-C left Mithril untouched.)_
 4. **N-U — forged-block durability (DECLARED).** WAL / ChainDB / snapshot / warm-start for producer-**forged**
-   blocks. Out of N-T scope. The N-Y forward-sync durability covers **received** blocks; the N-F-E/N-F-F/N-F-G-A
-   forge tick is self-accept-only and advances no durable tip.
+   blocks. Out of N-T scope. The N-Y forward-sync durability covers **received** blocks; the
+   N-F-E/N-F-F/N-F-G-A/N-F-G-B forge tick is self-accept-only and advances no durable tip.
 5. **Sync-evidence live leg (N-Y — RO-SYNC-EVIDENCE-01, `partial`).** The snapshot→tip sync-evidence manifest
    schema is enforced but vacuously satisfied until a manifest is committed. An operator-witnessed execution
    gate, not a code seam.
+6. **Bounded peer-driven memory on the now-live feed (NEW, N-F-G-C security review, MEDIUM — DECLARED).** The
+   live `--mode node` feed (consume side) newly EXPOSES — **but does NOT introduce** — an unbounded
+   mux-reassembly tail (`ade_network::session::core` `proto_buffers`, the per-mini-protocol partial-frame buffer)
+   + an unbounded `WirePump.lookahead` (`ade_node::node_sync`, the content-blind opaque-bytes lookahead
+   `VecDeque<Vec<u8>>`). On the now-live feed these are a **bounded-rate peer-driven memory-growth surface**: a
+   slow consumer + a fast/adversarial peer can grow the reassembly tail / lookahead unboundedly. The prior CBOR
+   length-overflow remote-DoS (N-X) is **NOT reintroduced** (that fix holds). The fix — **cap the reassembly tail
+   + cap the lookahead depth + a negative test** — is a follow-on slice candidate (reuse the N-M-FRAG / N-M-C
+   reassembly + admission infra). _Confirm scope: the cap MUST be a closed bound (not a tunable that can be set to
+   unbounded), the over-cap behavior MUST fail closed / drop-and-disconnect (never a silent tip graft or a
+   fabricated block), and it MUST NOT relax the relay-loop containment or the verdict-decoupled source contract._
 
 ### Operator-pass execution gates (schema enforced, execution blocked)
 
-- **CN-OPERATOR-EVIDENCE-01 / CN-CONS-06 / RO-LIVE-01** — the manifest schema is enforced, but C1 (private
-  testnet) / C2 (preprod) operator-pass execution is `blocked_until_operator_pass_executed`. With CN-FORGE-04
-  (N-W), CN-WIRE-08 (N-X), CN-NODE-03 (N-F-F operator-key ingress), DC-EPOCH-03 (N-F-G-A forge fidelity), and now
-  DC-NODE-06 (N-F-G-B self-accept→serve handoff) enforced, the producer forge composition is mechanically complete
-  through the serve step AND the `--mode node` binary is forge-CAPABLE with real operator keys + real current
-  constants + two fail-closed boundaries, and a self-accepted forged block reaches the served chain via the
-  fenced sibling `push_atomic` (hermetic loopback — no live peer yet). The remaining blockers are the live
-  network serve wiring (G-C) and the OPERATOR-PASS live leg itself (a live feed makes the forge observable —
-  RO-LIVE-01).
-- **RO-LIVE-06 (BA-02, N-F-C)** — the evidence schema + correlator mechanics are enforced, but a real BA-02
-  result is operator-gated. Synthetic fixtures CANNOT satisfy BA-02. Distinct from RO-LIVE-01.
+- **CN-OPERATOR-EVIDENCE-01 / CN-CONS-06 / RO-LIVE-01** — the manifest schema is enforced (N-F-G-C added the
+  BA-02 manifest-schema gate `ci_check_ba02_evidence_manifest_schema.sh`, vacuous-until-committed + sha256-bound),
+  but C1 (private testnet) / C2 (preprod) operator-pass execution is `blocked_until_operator_pass_executed` /
+  `blocked_until_operator_stake_available`. With CN-FORGE-04 (N-W), CN-WIRE-08 (N-X), CN-NODE-03 (N-F-F
+  operator-key ingress), DC-EPOCH-03 (N-F-G-A forge fidelity), DC-NODE-06 (N-F-G-B self-accept→serve handoff)
+  enforced, AND N-F-G-C's live feed + BA-02 evidence I/O wired, the producer forge composition is mechanically
+  complete through the serve step AND the `--mode node` binary is forge-CAPABLE with real operator keys + real
+  current constants + two fail-closed boundaries + a LIVE `--peer` feed (so the forge is observable at a due
+  leader slot). The remaining blocker is the OPERATOR-PASS live leg itself — an operator-captured peer log
+  through `correlate` against a peer that can grant leadership (RO-LIVE-01 / RO-LIVE-06).
+- **RO-LIVE-06 (BA-02, N-F-C; I/O wired N-F-G-C)** — the evidence schema + correlator mechanics + the RED file
+  I/O are enforced/wired, but a real BA-02 result is operator-gated. Synthetic fixtures CANNOT satisfy BA-02;
+  the committed-manifest gate is vacuous-until-committed + sha256-bound. Distinct from RO-LIVE-01.
 
 ---
 
 ## Generation notes
 
-- Regenerated (scoped INCREMENTAL catch-up through ONE cluster) at HEAD `339cccb1` (`git rev-parse --short
+- Regenerated (scoped INCREMENTAL catch-up through ONE cluster) at HEAD `90791691` (`git rev-parse --short
   HEAD`), downstream of the CODEMAP regenerated at the same HEAD. The prior on-disk SEAMS was generated at the
-  **PHASE4-N-F-G-A close** (`80dac1f7` / 116 CI checks / 313 rules — forge fidelity on the `--mode node` spine).
-  This refresh catches it up through **PHASE4-N-F-G-B** (self-accept→serve handoff on the `--mode node` spine,
-  closing now at `339cccb1`: S1 `5e96ec74`/`c518c357` (GREEN typed `SelfAcceptedHandoff` constructor fence + the
-  forge path surfacing the original BLUE token), S2 `2dfa296e`/`a5af52e8` (the dispatcher-spawned sibling
-  served-chain admit task fed by a typed `mpsc<SelfAcceptedHandoff>` → the single `push_atomic`), S3
-  `69476831`/`738dddd1` (the block-fetch payload proof + the additive `ci_check_served_chain_handoff_fence.sh`
-  gate; `339cccb1` a here-string CI hotfix)).
-- **N-F-G-B deltas are a CLOSED constructor-fenced surface + a fenced typed-channel seam, NOT new extension
-  points (load-bearing).** `SelfAcceptedHandoff` is a GREEN constructor-fenced newtype over the BLUE
-  `AcceptedBlock` — classified under §3 Closed / §4 Frozen. The self-accept→serve handoff is a **typed
-  `mpsc<SelfAcceptedHandoff>` send** from the relay-loop body to a **sibling** served-chain admit task; the
-  served-chain mutation reuses the single `ServedChainHandle::push_atomic` (no new authority). `CoordinatorEvent`
-  was **NOT extended** (the surfaced token rides a sibling return component). **No BLUE crate was modified** —
-  the 456 canonical-type total is unchanged; all G-B code lands in RED `ade_runtime` (the GREEN newtype
-  `producer::self_accepted_handoff::SelfAcceptedHandoff` — a pure wrapper over the BLUE `AcceptedBlock`, NOT
-  canonical-counted) and RED `ade_node` (`produce_mode::run_real_forge` + `node_sync::forge_one_from_recovered`
-  return-shape widening, `node_lifecycle` `ForgeActivation.handoff_tx` + the sibling `tokio::spawn` admit task).
-  **`run_relay_loop`'s containment is byte-/semantically unchanged** — the loop body forwards a typed channel
-  send only.
-- **N-F-G-B CLOSED the prior §7 candidate #0 (the DC-NODE-06 self-accept→serve handoff)** — `DC-NODE-06` flips
-  `declared` → `enforced`. **One new §7 candidate added** — the live network serve + operator-peer surface
-  (PHASE4-N-F-G-C; hermetic loopback at this HEAD, the `ServedChainView` retained for it). The remaining §7
-  candidates are PRESERVED: live unbounded peer / observable forge (RO-LIVE-01), live BA-02 (RO-LIVE-06),
-  Mithril import remaining obligations (RO-MITHRIL-IMPORT-01), N-U forged-block durability, sync-evidence live
-  leg (RO-SYNC-EVIDENCE-01).
-- **Honest scope (load-bearing).** N-F-G-B is **serve-authority only** — it proves the serve MECHANISM admits
-  only a BLUE self-accepted artifact. It is NOT a live-feed cluster (no `WirePump` / `n2n_dialer` / session
-  wiring into the binary — that is G-C); on the empty binary source the loop halts before any `ForgeTick`
-  (forge-CAPABLE, NOT observable — RO-LIVE-01). No new BLUE authority / canonical type, no new `CoordinatorEvent`
-  variant, no peer-acceptance / BA-02 / RO-LIVE claim (peer ACCEPT stays operator-gated; RO-LIVE-01 partial).
-  **BA-02 is satisfied nowhere at this HEAD.**
-- N-F-G-B delta verified at `339cccb1` (grep/ls/git only — no `cargo`):
-  - `crates/ade_runtime/src/producer/self_accepted_handoff.rs`: `pub struct SelfAcceptedHandoff { accepted: AcceptedBlock }`
-    with a **private** field (line 37/42); `#[derive(Debug, Clone, PartialEq)]`; the **SOLE** constructor
-    `pub fn from_self_accepted(accepted: AcceptedBlock) -> Self` (line 49); accessors `pub fn accepted(&self) -> &AcceptedBlock`
-    (line 55) + `pub fn into_accepted(self) -> AcceptedBlock` (line 61); `//! GREEN` banner; no raw-bytes /
-    `ForgedBlockArtifact` / `CoordinatorEvent` / flag / verdict constructor. Registered in `producer/mod.rs` line
-    30 (`pub mod self_accepted_handoff;`).
-  - `crates/ade_node/src/produce_mode.rs`: `pub fn run_real_forge(...) -> (CoordinatorEvent, Option<ade_ledger::producer::AcceptedBlock>)`
-    (lines 647–655) — a thin wrapper over the private `fn run_real_forge_inner(..., self_accepted_out: &mut Option<AcceptedBlock>)`
-    (lines 671–676) that writes the BLUE token into the out-param ONLY on the success path.
-  - `crates/ade_node/src/node_sync.rs`: `pub fn forge_one_from_recovered(...) -> Result<(CoordinatorEvent, Option<SelfAcceptedHandoff>), NodeForgeError>`
-    (line 439); wraps via `self_accepted.map(SelfAcceptedHandoff::from_self_accepted)` (line 538) — the ORIGINAL
-    token, never re-derived from `artifact.bytes`. `use ade_runtime::producer::self_accepted_handoff::SelfAcceptedHandoff;` (line 48).
-  - `crates/ade_node/src/node_lifecycle.rs`: `ForgeActivation.handoff_tx: Option<mpsc::UnboundedSender<SelfAcceptedHandoff>>`
-    (line 587), `with_handoff_sender(tx) -> Self` (line 627), `handoff_tx: None` default (line 619); the dispatcher
-    On arm `let (handoff_tx, mut handoff_rx) = mpsc::unbounded_channel::<SelfAcceptedHandoff>();` (line 457) +
-    `tokio::spawn` sibling task calling `serve_handle.push_atomic(handoff.into_accepted())` (lines 458–460) — the
-    SOLE node-spine `push_atomic`; the loop body does only `tx.send(h)` (line 762, "served-chain mutation happens
-    in the sibling" line 746). The `ServedChainView` is retained for the future network serve (lines 454–455).
-    `use ade_runtime::producer::self_accepted_handoff::SelfAcceptedHandoff;` (line 80).
-  - Gate `ci/ci_check_served_chain_handoff_fence.sh` present, 3 guards (every `push_atomic(` fed by
-    `into_accepted()`; no direct `served_chain_admit(`; channel typed `UnboundedSender<SelfAcceptedHandoff>`);
-    `ls ci/ci_check_*.sh | wc -l` = **117** at `339cccb1` (committed). The relay-loop containment gate
-    `ci_check_node_run_loop_containment.sh` is byte-unchanged.
-  - Registry: `grep -cE '^id = '` = **313** (working tree, count stable — no new rule). `DC-NODE-06` present
-    (`tier = derived`, `introduced_in = PHASE4-N-F-G-B`) — working-tree edit flips `status` `declared` →
-    `enforced` (`tests` + `ci_script` populated). `CN-PROD-04` + `CN-CONS-07` gain `strengthened_in +=
-    "PHASE4-N-F-G-B"`. _(These registry edits are uncommitted at this regen — the cluster-close flip lands
-    alongside this doc; `git status` shows `docs/ade-invariant-registry.toml` modified.)_
-- Counts at `339cccb1` (N-F-G-B close, this refresh): **456** canonical types (Δ 0 vs the prior SEAMS — no BLUE
-  crate modified; the G-B `SelfAcceptedHandoff` is a GREEN newtype over the BLUE `AcceptedBlock`, not counted),
-  **117** CI checks (Δ +1 vs the prior SEAMS's 116 — the one G-B gate `ci_check_served_chain_handoff_fence.sh`),
-  **313** registry rules (Δ 0 vs the prior 313 — no new rule; `DC-NODE-06` flips declared→enforced in the working
-  tree).
-- All N-F-G-A / N-F-F / N-F-E / N-F-D / N-F-C / N-F-A / N-Z / N-Y closed surfaces re-verified present on disk at
-  this HEAD and unchanged by N-F-G-B (no BLUE crate modified; `run_relay_loop` containment byte-unchanged;
-  `forge_one_from_recovered` production-unchanged save for the return-shape widening to `(CoordinatorEvent,
-  Option<SelfAcceptedHandoff>)`); the refresh annotated only the seams N-F-G-B added (the constructor-fenced
-  `SelfAcceptedHandoff` carrier + the typed-channel handoff seam + the sibling `push_atomic` admit task) and the
-  surfaces they extended (the `run_real_forge` / `forge_one_from_recovered` token surfacing + the
-  `ForgeActivation.handoff_tx`).
+  **PHASE4-N-F-G-B close** (`339cccb1` / 117 CI checks / 313 rules — the self-accept→serve handoff on the
+  `--mode node` spine). This refresh catches it up through **PHASE4-N-F-G-C** (live WirePump feed + BA-02
+  evidence wiring on the `--mode node` spine, closing now at `90791691`: S1 `aa2fe4a8`/`39c18f61`/`71036d10`
+  (live WirePump feed wiring — `node_lifecycle::spawn_live_wire_pump_source` + the `On`-arm `--peer` wire +
+  `admission::bootstrap::build_n2n_version_table` `pub(crate)` + the broadened
+  `ci_check_served_chain_handoff_fence.sh`), S2 `b880c310`/`90791691` (BA-02 evidence wiring — the NEW RED
+  `ade_node::ba02_pass` module + the additive `ci_check_ba02_evidence_manifest_schema.sh` gate + the
+  `docs/evidence/phase4-n-f-g-c-operator-pass-README.md` runbook + `crates/ade_node/tests/node_operator_pass_ba02.rs`)).
+- **N-F-G-C deltas are CLOSED surfaces / fenced ATTACH POINTS that REUSE existing closed infra, NOT new extension
+  points (load-bearing).** The live feed is a **REUSE** of the closed `ade_runtime::admission::{dial_for_admission,
+  run_admission_wire_pump}` that **FILLS** the closed `NodeBlockSource::WirePump` arm via `from_wire_pump` — NOT
+  a new variant / plugin point / wire authority — classified under §3 Closed / §4 Frozen. The `ba02_pass` module
+  is **RED file I/O over the UNCHANGED closed BA-02 evidence vocabulary** — NO new closed enum / registry;
+  `correlate` stays the SOLE `Ba02Manifest` constructor. **No BLUE crate was modified** — the 456 canonical-type
+  total is unchanged; all G-C code lands in RED `ade_node` (`node_lifecycle` live-feed wire +
+  `spawn_live_wire_pump_source`, `admission::bootstrap` fn-visibility promotion, the NEW RED `ba02_pass`),
+  CI, and docs. **`run_node_sync` is UNMODIFIED**; the durable tip still advances only via `pump_block`;
+  `ci_check_node_run_loop_containment.sh` is byte-unchanged.
+- **N-F-G-C PARTLY closed the prior §7 candidate #0** (the live network serve + operator-peer surface): the
+  **live feed is wired** (consume side) and the **operator-pass evidence path is scaffolded** (runbook +
+  `ba02_pass` `correlate` wiring + the manifest-schema gate); **the operator-witnessed live ACCEPT remains the
+  gating follow-on** (RO-LIVE-01 partial / `blocked_until_operator_stake_available`; RO-LIVE-06 not a live-BA-02
+  claim). **One new §7 candidate added** — the bounded peer-driven memory surface (#6: unbounded
+  `session::core` `proto_buffers` + `WirePump.lookahead` on the now-live feed; a MEDIUM security-review finding
+  NOT introduced by G-C, only newly EXPOSED; the prior CBOR length-overflow DoS is NOT reintroduced; the fix is a
+  follow-on cap + negative test). The remaining candidates are PRESERVED: RO-MITHRIL-IMPORT-01 remaining
+  obligations, N-U forged-block durability, RO-SYNC-EVIDENCE-01 live leg.
+- **Boundary honesty (load-bearing — do NOT soften).** N-F-G-C closes the **MECHANICAL live-feed + evidence
+  scaffolding ONLY**. Peer ACCEPT stays operator-gated; **NO live BA-02 claim**; **Ade self-accept / served-block
+  / wire success ≠ peer acceptance**; `correlate` is the SOLE `Ba02Manifest` constructor; **no synthetic manifest
+  is committed**; the **bounty acceptance criterion is NOT satisfied by this cluster**. BA-02 is satisfied
+  nowhere.
+- N-F-G-C delta verified at `90791691` (grep/ls/git only — no `cargo`):
+  - `crates/ade_node/src/ba02_pass.rs`: `//! RED`; `pub fn correlate_peer_log_file(ade: &AdeForgeRecord,
+    peer_log_path: &Path) -> io::Result<BA02Outcome>` (reads the file → GREEN `parse_peer_accept_events` +
+    `correlate`); `pub fn write_ba02_manifest(manifest: &Ba02Manifest, out_path: &Path) -> io::Result<()>` (the
+    argument type is the gate — only a `Ba02Manifest`); `use crate::ba02_evidence::{correlate,
+    parse_peer_accept_events, AdeForgeRecord, BA02Outcome, Ba02Manifest, …}`. Registered `pub mod ba02_pass;` in
+    `lib.rs`. NO new closed enum / registry.
+  - `crates/ade_node/src/node_sync.rs`: `pub enum NodeBlockSource { WirePump { … }, InMemory(VecDeque<Vec<u8>>) }`
+    (still 2 variants); `pub fn from_wire_pump(rx: mpsc::Receiver<AdmissionPeerEvent>) -> Self { Self::WirePump {
+    … } }` (a FILL of the existing arm; the lookahead is an opaque content-blind `VecDeque<Vec<u8>>`).
+  - `crates/ade_node/src/node_lifecycle.rs`: `use ade_runtime::admission::{dial_for_admission,
+    run_admission_wire_pump, AdmissionPeerEvent};` + `use crate::admission::bootstrap::build_n2n_version_table;`;
+    `const LIVE_WIRE_PUMP_CHANNEL_CAP: usize = 64;`; `fn spawn_live_wire_pump_source(peer_addrs, network_magic,
+    recovered_tip) -> NodeBlockSource` (reuses the dial + pump verbatim; per-peer `tokio::spawn`; bounded
+    `mpsc::channel`); the `On` arm wires `let mut source = if live_feed_wired { spawn_live_wire_pump_source(...) }
+    else { NodeBlockSource::in_memory(Vec::new()) }` (with `MissingFlag("--network-magic")` fail-closed on the
+    live arm).
+  - `crates/ade_node/src/admission/bootstrap.rs`: `build_n2n_version_table` promoted `fn` → `pub(crate) fn` (no
+    behavior change).
+  - Gate `ci/ci_check_ba02_evidence_manifest_schema.sh` present (8-field schema + `schema_version == 1` +
+    `peer_log_file_sha256` cross-check; vacuous-until-committed). Gate `ci/ci_check_served_chain_handoff_fence.sh`
+    BROADENED in place (owners `{node_lifecycle.rs, node_sync.rs}`; guard-3 allow-list). `ls ci/ci_check_*.sh |
+    wc -l` = **118** at `90791691`. `ci_check_node_run_loop_containment.sh` byte-unchanged.
+  - Registry: `grep -cE '^\[\[rules\]\]'` = **313** (working tree, count stable — no new rule). `RO-LIVE-01`
+    (`strengthened_in` += `"PHASE4-N-F-G-C"`, stays `partial`), `RO-LIVE-06` (+= `"PHASE4-N-F-G-C"`, stays
+    `enforced`), `CN-OPERATOR-EVIDENCE-01` (+= `"PHASE4-N-F-G-C"`, stays `enforced`; `code_locus` now cites the
+    runbook + the new gate), `DC-NODE-06` (+= `"PHASE4-N-F-G-C"`, stays `enforced`; `tests` gains
+    `live_feed_forge_serve_loopback_returns_forged_block`). _(These registry edits are uncommitted at this regen —
+    the cluster-close strengthening lands alongside this doc; `git status` shows
+    `docs/ade-invariant-registry.toml` modified.)_
+- Counts at `90791691` (N-F-G-C close, this refresh): **456** canonical types (Δ 0 vs the prior SEAMS — no BLUE
+  crate modified; the G-C `ba02_pass` is RED file I/O, the live feed is a RED reuse of the closed dial/pump, not
+  canonical-counted), **118** CI checks (Δ +1 vs the prior SEAMS's 117 — the one G-C gate
+  `ci_check_ba02_evidence_manifest_schema.sh`; `ci_check_served_chain_handoff_fence.sh` was BROADENED in place,
+  not added), **313** registry rules (Δ 0 vs the prior 313 — no new rule; four rules gain `strengthened_in +=
+  "PHASE4-N-F-G-C"`). All counts match the CODEMAP header regenerated at the same HEAD.
+- All N-F-G-B / N-F-G-A / N-F-F / N-F-E / N-F-D / N-F-C / N-F-A / N-Z / N-Y closed surfaces re-verified present on
+  disk at this HEAD and unchanged by N-F-G-C (no BLUE crate modified; `run_relay_loop` containment byte-unchanged;
+  `run_node_sync` production-unchanged save for the `from_wire_pump` FILL + the
+  `live_wire_pump_feed_reaches_forge_tick` test); the refresh annotated only the seams N-F-G-C added (the live
+  WirePump feed ATTACH POINT reusing the closed dial/pump + the `ba02_pass` evidence I/O wrapper) and the surfaces
+  they touched (the `NodeBlockSource::WirePump` FILL, the `On`-arm source selection, the broadened serve fence).
 - **Cross-reference check (CODEMAP ↔ SEAMS):** every module named in this SEAMS appears in the CODEMAP
-  regenerated at the same HEAD — `producer::self_accepted_handoff` (`//! GREEN`), `produce_mode` (`//! RED`),
-  `node_sync` (`//! RED`), `node_lifecycle` (`//! RED`) are all inventoried there; the 456 / 117 / 313 counts
-  match the CODEMAP header. No stale module references. The one new CI gate
-  (`ci_check_served_chain_handoff_fence.sh`) is named in both docs. The carried N-F-G-A modules
-  (`consensus_inputs::protocol_params`, `clock::checked_millis_to_slot`, `node_sync::forge_epoch_admission`,
-  `operator_forge`, `consensus::genesis_pinning`) remain inventoried in both.
-- **Stale `.idd-config.json` fields (surfaced, not edited).** `.idd-config.json` `_invariant_registry_doc` still
-  reads "311 entries"; `_head_deltas_baseline` is `80dac1f7` (the N-F-G-A close). The registry is **313** at HEAD;
-  the HEAD_DELTAS baseline should be bumped to `339cccb1` on the N-F-G-B HEAD_DELTAS refresh. (This doc does not
-  edit config.)
+  regenerated at the same HEAD — `ba02_pass` (`//! RED`), `node_lifecycle::spawn_live_wire_pump_source` (`//! RED`),
+  `node_sync::from_wire_pump` (`//! RED`), `admission::bootstrap::build_n2n_version_table` (`pub(crate)`),
+  `ba02_evidence` (`//! GREEN`, unchanged), and the carried N-F-G-B (`producer::self_accepted_handoff`) /
+  N-F-G-A (`consensus_inputs::protocol_params`, `clock::checked_millis_to_slot`, `node_sync::forge_epoch_admission`,
+  `operator_forge`, `consensus::genesis_pinning`) modules are all inventoried there; the **456 / 118 / 313**
+  counts match the CODEMAP header. No stale module references. The one new CI gate
+  (`ci_check_ba02_evidence_manifest_schema.sh`) + the broadened `ci_check_served_chain_handoff_fence.sh` are named
+  in both docs.
+- **Stale `.idd-config.json` fields (surfaced, not edited).** `.idd-config.json` `_invariant_registry_doc` reads
+  "313 entries" (correct); `_head_deltas_baseline` is `339cccb1` (the N-F-G-B close) — it should be bumped to
+  `90791691` on the N-F-G-C HEAD_DELTAS refresh. (This doc does not edit config.)
 - The doc is regenerated, not edited. If a value drifts, fix the source, not the doc.
 - NOTE: no `cargo build`/`test`/`check` was run during this regeneration (grep/ls/git only, per the task
   constraint).

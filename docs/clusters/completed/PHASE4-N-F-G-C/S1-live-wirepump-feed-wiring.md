@@ -11,7 +11,7 @@ Live WirePump feed wiring + hermetic loopback forge→serve proof.
 **PHASE4-N-F-G-C** — Live feed + operator-gated evidence (RO-LIVE-01, mechanical half).
 
 ### Status
-Ready for Review (all §12 mechanical acceptance green; `ade_node` + `ade_runtime` suites + both gates pass).
+Merged (PHASE4-N-F-G-C close — impl `71036d10`; CE-G-C-1 green).
 
 ### Cluster Exit Criteria Addressed
 - [x] **CE-G-C-1 (live feed wiring + hermetic e2e — MECHANICAL, closeable)** — the binary consumes a

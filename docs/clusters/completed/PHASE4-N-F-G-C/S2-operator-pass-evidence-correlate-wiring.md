@@ -11,8 +11,7 @@ Operator-pass runbook + BA-02 evidence manifest + `correlate` wiring (operator-g
 **PHASE4-N-F-G-C** — Live feed + operator-gated evidence (the operator-gated half).
 
 ### Status
-Ready for Review (all §12 mechanical scaffolding green; `ade_node` suite + both BA-02 gates pass; the
-live ACCEPT remains operator-gated by design).
+Merged (PHASE4-N-F-G-C close — impl `90791691`; CE-G-C-2 scaffolding green; live ACCEPT operator-gated).
 
 ### Cluster Exit Criteria Addressed
 - [x] **CE-G-C-2 (operator-gated evidence — SCAFFOLDS ONLY; live ACCEPT BLOCKED)** — the corrected C1/C2

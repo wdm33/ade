@@ -4,287 +4,325 @@
 >
 > Regenerate with `/head-deltas <baseline>` after every cluster close. Baseline is recorded in `.idd-config.json` `head_deltas_baseline`.
 
-> Baseline: `80dac1f7` (PHASE4-N-F-G-A S4 — fail closed on off-epoch forge before leadership, 2026-06-01 17:12)
-> HEAD: `339cccb1` (here-strings in served-chain handoff fence to avoid pipefail SIGPIPE false-negative, 2026-06-01 22:33)
-> Cluster: **PHASE4-N-F-G-B — self-accept → serve handoff on the `--mode node` relay spine**, slice span closed; close-pass commit to follow.
-> 10 commits (no merges), 26 files changed, +3391 / -1600 lines.
+> Baseline: `339cccb1` (here-strings in served-chain handoff fence to avoid pipefail SIGPIPE false-negative, 2026-06-01 22:33)
+> HEAD: `90791691` (wire operator peer-log → correlate BA-02 evidence path — PHASE4-N-F-G-C S2, 2026-06-02 01:22)
+> Cluster: **PHASE4-N-F-G-C — live WirePump feed + BA-02 operator-pass evidence wiring on the `--mode node` spine**, slice span closed; close-pass commit to follow.
+> 7 commits (no merges), 23 files changed, +2348 / -464 lines.
 
-This window narrates the **PHASE4-N-F-G-B cluster** — the second of three planned
-PHASE4-N-F-G sub-clusters (G-A forge fidelity / **G-B self-accept→serve handoff** /
-G-C live operator serve). G-B **surfaces the BLUE self-accepted forged artifact that
-the relay-spine forge tick already minted (and previously discarded) and routes it,
-through a typed constructor-fenced carrier, into a sibling served-chain admit task**
-fed by the single `ServedChainHandle::push_atomic` authority. The forge tick now
-returns a typed `Option<SelfAcceptedHandoff>` alongside its `CoordinatorEvent`
-(`Some` iff `ForgeSucceeded`); the relay loop forwards it over a typed mpsc channel;
-the dispatcher-spawned sibling task is the **sole node-spine `push_atomic` site** and
-ingests **only** `SelfAcceptedHandoff::into_accepted()`. **NO BLUE crate changed (456
-canonical types, Δ0); no new `CoordinatorEvent` variant or field — the token rides a
-sibling return component; the relay-loop body performs no serve / admit / gossip /
-block-fetch / durable-tip mutation, so the N-F-E containment gate is semantically
-unchanged.** Peer ACCEPT is still proven only by the peer's validation log
-(RO-LIVE-06), never by Ade's self-accept / `ForgeSucceeded` / any wire-success signal.
-Live serve / operator-peer ACCEPT / BA-02 / RO-LIVE remain the gated G-C follow-on.
+This window narrates the **PHASE4-N-F-G-C cluster** — the third and last of the three
+planned PHASE4-N-F-G sub-clusters (G-A forge fidelity / G-B self-accept→serve handoff /
+**G-C live operator serve + BA-02 evidence wiring**). G-C **makes the forge-capable
+`--mode node` `On` arm live-feed-wireable and wires the operator-pass BA-02 evidence
+I/O** — without claiming peer acceptance. **S1** wires a live `NodeBlockSource::WirePump`
+feed from the operator-supplied `--peer` by **reusing the closed admission dial+pump
+verbatim** (`dial_for_admission` → `run_admission_wire_pump` → `from_wire_pump`), making
+`LoopStep::ForgeTick` reachable on the live-wired path; `NodeBlockSource` stays the
+**closed 2-variant** (a *fill* of `WirePump`, no new variant), and the empty-`--peer`
+path keeps the prior empty source (forge-capable, halts clean). **S2** adds a NEW RED
+module `ade_node::ba02_pass` (peer-log file I/O over the GREEN `ba02_evidence::correlate`
+— the sole `Ba02Manifest` constructor), a NEW gate that enforces the no-synthetic-manifest
+line, and an operator-pass runbook. **NO BLUE crate changed (456 canonical types, Δ0);
+no new `CoordinatorEvent` variant; `correlate` stays the sole `Ba02Manifest` ctor.**
+Peer ACCEPT is still proven only by the operator-captured peer validation log
+(RO-LIVE-06), never by Ade's self-accept / served-block / `ForgeSucceeded` / any
+wire-success signal. **The bounty acceptance criterion is NOT satisfied by this cluster
+— the remaining step is an operator-witnessed live pass on a peer that can grant
+leadership (C1/C2).**
 
-The span also carries the **PHASE4-N-F-G-A close tail** (`62cb8718` + `1806584c`) —
-docs/registry only — which lands inside this window because the baseline `80dac1f7` is
-the N-F-G-A *slice-span* HEAD, not its close commit (see §1).
+The span also carries the **PHASE4-N-F-G-B close tail** (`febee120`) — docs/registry
+only — which lands inside this window because the baseline `339cccb1` is the N-F-G-B
+*slice-span* HEAD, not its close commit (see §1). This mirrors how the previous
+HEAD_DELTAS window carried the **G-A** close tail (`62cb8718` + `1806584c`) for the same
+slice-span-vs-close-commit reason.
 
 ## 0. Headline
 
-| Count | Baseline (`80dac1f7`) | HEAD (`339cccb1`) | Δ |
+| Count | Baseline (`339cccb1`) | HEAD (`90791691`) | Δ |
 |---|---|---|---|
-| CI gates (`ci/ci_check_*.sh`) | 116 | **117** | **+1 new** (`served_chain_handoff_fence`); none removed |
-| Registry rules | 313 | 313 | **0** (no new ID; `DC-NODE-06` already existed as the G-B forward sketch — it flips `declared → enforced` at the *pending* close-pass, not at this HEAD) |
-| Test attributes (`#[test]`/`#[tokio::test]`, workspace) | 2213 | **2223** | **+10** (G-B S1/S2/S3 surface, across `self_accepted_handoff`/`node_sync`/`forge_succeeds`/`forge_handler_variants`/`produce_loopback`) |
-| BLUE canonical types | 456 | 456 | **0 — NO BLUE change** (all code lands in RED `ade_runtime` / RED `ade_node`) |
+| CI gates (`ci/ci_check_*.sh`) | 117 | **118** | **+1 new** (`ba02_evidence_manifest_schema`, S2); none removed. `served_chain_handoff_fence` was **broadened in place** by S1 — count-neutral |
+| Registry rules | 313 | 313 | **0** (no new ID) |
+| Test attributes (`#[test]`/`#[tokio::test]`, workspace) | 2223 | **2230** | **+7** (G-C S1/S2 surface, across `node_lifecycle`/`node_sync`/`forge_succeeds`/`node_operator_pass_ba02`) |
+| BLUE canonical types | 456 | 456 | **0 — NO BLUE change** (all code lands in RED `ade_node`) |
 
-> **Registry note (load-bearing — read before §7).** At HEAD `339cccb1` the committed
-> registry is in **slice-span state**: `DC-NODE-06` (the G-B primary invariant) sits at
-> `status = "declared"` (`tests = []`, `ci_script = ""`, `introduced_in =
-> "PHASE4-N-F-G-B"`, `strengthened_in = []`), and **neither** `CN-PROD-04` **nor**
-> `CN-CONS-07` (the two rules the cluster composes on) carries a `strengthened_in +=
-> "PHASE4-N-F-G-B"` token yet. The not-yet-made **close-pass commit** flips `DC-NODE-06`
-> `declared → enforced` (populating `tests` + `ci_script = "ci/ci_check_served_chain_handoff_fence.sh"`
-> with the S1/S2/S3 tests + the S3 gate) and records the **2 cross-slice strengthenings**
-> (`CN-PROD-04`, `CN-CONS-07`) — exactly as the N-F-G-A close-pass flipped `DC-EPOCH-03`
-> after its slice span (see the prior baseline window). This doc narrates **what is
-> committed at `339cccb1`**; the close-pass follows. The committed registry and the
-> committed CODEMAP / SEAMS / TRACEABILITY **agree** at this HEAD that `DC-NODE-06` is
-> `declared` (those three docs are still at the **G-A** close — see the staleness note in
-> the generation section); this HEAD_DELTAS regen is the first G-B grounding-doc refresh,
-> and the close-pass regenerates the other three together with the registry flip.
+> **Registry / grounding-doc sequencing note (load-bearing — read before §7).** This
+> window contains **two** distinct close events, and the registry / sibling-doc state
+> differs between *committed at HEAD `90791691`* and *the working tree at this regen*:
 >
-> **G-A tail already reconciled.** Unlike `DC-NODE-06`, the two **G-A** registry edits
-> (`62cb8718` `DC-EPOCH-03` `declared → enforced` + the 7 G-A strengthenings; `1806584c`
-> binds the four G-A gates to their `ci_script` slots) **are** committed in this span —
-> they are the N-F-G-A close-pass that the previous HEAD_DELTAS window flagged as owed.
-> The rule count is unchanged at 313 because both `DC-EPOCH-03` (G-A) and `DC-NODE-06`
-> (G-B) IDs already existed at the baseline as forward sketches from the shared
-> PHASE4-N-F-G invariant pass.
+> - **The G-B close-pass (`febee120`) is committed inside this window.** At HEAD
+>   `90791691` the registry therefore already reflects the G-B close: `DC-NODE-06` is
+>   `enforced` (flipped from `declared` by `febee120`, with its tests + `ci_script`
+>   populated) and `RO-LIVE-06` is `enforced` — **but neither yet carries a
+>   `strengthened_in += "PHASE4-N-F-G-C"` token** (those are owed at the *next*
+>   close-pass; see below). This is the close-pass the **previous** HEAD_DELTAS window
+>   flagged as owed, and it is why the rule count holds at 313 rather than rising
+>   (`DC-NODE-06` was a pre-existing ID).
+> - **The G-C close-pass is NOT yet committed.** At HEAD `90791691` the **four** G-C
+>   `strengthened_in += "PHASE4-N-F-G-C"` tokens (`RO-LIVE-01` stays `partial`;
+>   `RO-LIVE-06` / `CN-OPERATOR-EVIDENCE-01` / `DC-NODE-06` stay `enforced`) are
+>   **uncommitted** — they exist only in the **working tree** at this regen. So is the
+>   `RO-LIVE-06.ci_script += "ci/ci_check_ba02_evidence_manifest_schema.sh"` binding
+>   (and the same binding on `CN-OPERATOR-EVIDENCE-01`). The pending close-pass commits
+>   them — exactly as the N-F-G-B close-pass recorded the G-B strengthenings after its
+>   slice span.
+> - **Sibling-doc split.** The CODEMAP / SEAMS / TRACEABILITY **committed at HEAD
+>   `90791691`** are still the **G-B close** docs (`febee120`): they report **117** CI
+>   checks, **2223** tests, and do **not** mention `ba02_pass`. The **working tree** of
+>   all three (and the registry) has been **regenerated to the G-C close state** —
+>   **118** CI checks, **456** canonical types, **2230** tests, **313** rules, with the
+>   new `ba02_pass` locus and the `ba02_evidence_manifest_schema` gate cross-referenced
+>   — and they **agree** with this doc's counts. `docs/ade-HEAD_DELTAS.md` and
+>   `.idd-config.json` are the only two files this regen / the close-pass still owe; the
+>   `.idd-config.json` baseline bump is the closer's edit, not this regen's.
+>
+> **Not a rule removal, not a discipline violation** — a sequencing artifact reconciled
+> by the close-pass.
 
 ## 1. Commit Log (newest first)
 
 | Hash | Type | Summary |
 |------|------|---------|
-| `339cccb1` | fix(ci) | here-strings in served-chain handoff fence to avoid pipefail SIGPIPE false-negative (PHASE4-N-F-G-B S3) |
-| `738dddd1` | test | prove node-spine block-fetch serves self-accepted bytes + add handoff fence gate (PHASE4-N-F-G-B S3) |
-| `69476831` | docs | specify PHASE4-N-F-G-B S3 block-fetch payload proof |
-| `a5af52e8` | feat | wire sibling served-chain admit task fed by self-accepted handoff (PHASE4-N-F-G-B S2) |
-| `2dfa296e` | docs | specify PHASE4-N-F-G-B S2 sibling admit task |
-| `c518c357` | feat | surface self-accepted forge token via typed handoff fence (PHASE4-N-F-G-B S1) |
-| `5e96ec74` | docs | specify PHASE4-N-F-G-B S1 self-accepted handoff fence |
-| `d3478e6f` | docs | define PHASE4-N-F-G-B serve handoff cluster |
-| `1806584c` | docs | bind G-A gates to registry traceability |
-| `62cb8718` | docs | close PHASE4-N-F-G-A forge fidelity |
+| `90791691` | feat | wire operator peer-log → correlate BA-02 evidence path (PHASE4-N-F-G-C S2) |
+| `b880c310` | docs | specify PHASE4-N-F-G-C S2 operator evidence |
+| `71036d10` | feat | wire live WirePump feed on the --mode node On arm (PHASE4-N-F-G-C S1) |
+| `39c18f61` | docs | correct PHASE4-N-F-G-C S1 to conditional live-feed wiring |
+| `aa2fe4a8` | docs | specify PHASE4-N-F-G-C S1 live WirePump wiring |
+| `aebe913f` | docs | define PHASE4-N-F-G-C live evidence cluster |
+| `febee120` | docs | close PHASE4-N-F-G-B — self-accept→serve handoff (DC-NODE-06 enforced) |
 
 No merge commits in the span.
 
-The first two commits (newest-listed-last) are the **PHASE4-N-F-G-A close tail** that
-lands inside this window because the baseline `80dac1f7` is the N-F-G-A *slice-span*
-HEAD, not its close commit: `62cb8718` is the N-F-G-A close-pass (registry
-`DC-EPOCH-03` `declared → enforced` + 7 strengthenings + grounding-doc refresh +
-cluster-doc archive), and `1806584c` is the G-A gate-binding follow-up (the four G-A
-gates bound to their registry `ci_script` slots + a TRACEABILITY regen; the registry
-stays byte-stable at 313 rules). Both are **docs/registry only** — no source change.
-`d3478e6f` defines the G-B cluster; everything from `5e96ec74` onward is G-B proper
-(S1 → S3, doc-then-impl per slice).
+The **last-listed** commit (`febee120`) is the **PHASE4-N-F-G-B close-pass** that lands
+inside this window because the baseline `339cccb1` is the N-F-G-B *slice-span* HEAD, not
+its close commit: `febee120` is the G-B close-pass (registry `DC-NODE-06`
+`declared → enforced` + the 2 G-B strengthenings `CN-PROD-04` / `CN-CONS-07` + a
+four-doc grounding-doc refresh CODEMAP/SEAMS/TRACEABILITY/HEAD_DELTAS + the
+`.idd-config.json` baseline bump `80dac1f7 → 339cccb1` + the G-B cluster-doc archive).
+It is **docs/registry only** — no source change, and **count-neutral on CI** (117 → 117;
+the G-B gate `served_chain_handoff_fence` was already committed at the baseline
+`339cccb1`). `aebe913f` defines the G-C cluster; everything from `aa2fe4a8` onward is
+G-C proper (S1 doc → correction → impl, then S2 doc → impl — doc-then-impl per slice).
 
-(Plus the pending close-pass commit: grounding-doc refresh + `DC-NODE-06`
-`declared → enforced` flip with 2 strengthenings + `.idd-config.json` baseline bump
-`80dac1f7 → 339cccb1` + cluster-doc archive + this HEAD_DELTAS.)
+(Plus the pending close-pass commit: grounding-doc reconciliation of the committed
+CODEMAP/SEAMS/TRACEABILITY from the G-B close to the G-C working-tree state + the four
+`strengthened_in += "PHASE4-N-F-G-C"` registry tokens + the two `ci_script` bindings on
+`RO-LIVE-06` / `CN-OPERATOR-EVIDENCE-01` + `.idd-config.json` baseline bump
+`339cccb1 → 90791691` + the G-C cluster-doc archive + this HEAD_DELTAS.)
 
 ## 2. New Modules
 
-One new source module — a GREEN constructor-fenced carrier in the RED `ade_runtime`
-crate. No new crate, no new BLUE authority, no new WAL/checkpoint/canonical type, no
-new `CoordinatorEvent` variant.
+One new source module — a RED file-I/O shim in the RED `ade_node` crate. No new crate,
+no new BLUE authority, no new WAL/checkpoint/canonical type, no new `CoordinatorEvent`
+variant, no new GREEN evidence reducer (`ba02_evidence::correlate` is reused unchanged).
 
 | Module | Color | Purpose | Key sub-paths | Added in |
 |--------|-------|---------|---------------|----------|
-| `ade_runtime::producer::self_accepted_handoff` | **GREEN** | The typed, constructor-fenced carrier that moves a BLUE self-accepted forged block (`ade_ledger::producer::AcceptedBlock`) from the relay-spine forge tick toward the sibling served-chain admit task. Its **sole** constructor, `SelfAcceptedHandoff::from_self_accepted(AcceptedBlock)`, takes a token producible only by BLUE `self_accept` returning `Ok` (CN-FORGE-01) — there is **no** constructor from raw `Vec<u8>`, from a `ForgedBlockArtifact` (re-deriving the token from `artifact.bytes` would breach CN-FORGE-01; the carrier holds the **original** token), from a `CoordinatorEvent`, from a self-declared acceptance flag, or from a peer verdict. "Hand a not-BLUE-self-accepted artifact to the serve task" is therefore type-unrepresentable. This is the GREEN fence backing **DC-NODE-06**. | `SelfAcceptedHandoff` (private `accepted: AcceptedBlock` field); `from_self_accepted` (sole ctor); `accepted(&self) -> &AcceptedBlock`; `into_accepted(self) -> AcceptedBlock` (the value consumed by `ServedChainHandle::push_atomic` in S2). Pure: no I/O, clock, rand, or float; the carrier wraps the token verbatim and never re-validates it (same `AcceptedBlock` ⇒ same carrier). `#[cfg(test)]` surface-pinning tests assert the sole constructor is `fn(AcceptedBlock) -> SelfAcceptedHandoff` (no raw-bytes / artifact / event / flag path). | `PHASE4-N-F-G-B` S1 (`c518c357`) |
+| `ade_node::ba02_pass` | **RED** | RED operator-pass BA-02 evidence **file I/O only**. Reads the operator-captured peer-accept JSONL log from disk and runs it through the GREEN `crate::ba02_evidence` reducer (`parse_peer_accept_events` allow-list → `correlate`, the **sole** `Ba02Manifest` constructor). It **constructs no evidence, derives no acceptance, and never coerces a non-acceptance line** — `correlate` stays the only authority; a `Ba02Manifest` is a *claim about* authority, not authority (`[[feedback-evidence-reducers-are-green-not-authority]]`). The honesty line is enforced by construction: the **only** input that can yield a manifest is a real operator-captured peer log naming the **exact** forged hash, through `correlate`; a missing/unreadable peer-log file fails closed (`io::Error`), **never** a synthesized acceptance (`[[feedback-shell-must-not-overstate-semantic-truth]]`). | `correlate_peer_log_file(&AdeForgeRecord, &Path) -> io::Result<BA02Outcome>` — file bytes → `parse_peer_accept_events` → `correlate`; a missing/unreadable file is an `io::Error` (fail-closed), **not** a `NoEvidence` and **not** a manifest. `write_ba02_manifest(&Ba02Manifest, &Path) -> io::Result<()>` — the **argument type is the gate**: only a `Ba02Manifest` (which only `correlate`'s exact-match arm constructs) is writable, so a written manifest is **always** `correlate`-produced (no path emits a manifest from `NoEvidence` or from raw operator input). RED I/O only: `std::fs` read/write; no clock/rand/float; constructs no evidence and re-validates nothing. `#[cfg(test)]` proofs `correlate_wired_to_operator_peer_log` + `correlate_from_operator_log_file_is_deterministic` live in `tests/node_operator_pass_ba02.rs`. | `PHASE4-N-F-G-C` S2 (`90791691`) |
 
-Cross-reference: the new module is **not yet** in CODEMAP §GREEN or SEAMS — those two
-docs are still at the **G-A** close (HEAD `80dac1f7`) and have not been regenerated for
-G-B. This HEAD_DELTAS regen is the first G-B grounding-doc refresh; the close-pass
-regenerates CODEMAP / SEAMS / TRACEABILITY together. (Not a staleness *defect* — a
-sequencing artifact; the close-pass reconciles all four.)
+Cross-reference: the new module is in CODEMAP §RED and SEAMS in the **working tree**
+(both regenerated to the G-C close state at `90791691` — `ba02_pass` is present and the
+`code_locus` `crates/ade_node/src/ba02_pass.rs` resolves), but is **not yet** in the
+CODEMAP/SEAMS **committed at HEAD `90791691`** — those committed copies are still the
+**G-B close** docs (`febee120`). This is the sibling-doc split called out in §0; the
+close-pass commits the working-tree CODEMAP/SEAMS/TRACEABILITY alongside this doc. (Not
+a staleness *defect* — a sequencing artifact reconciled by the close-pass.)
 
 ## 3. Modules Modified
 
 All modified source files existed at baseline. Trivial/no-behavioral-effect changes are
-skipped (the one-line `pub mod self_accepted_handoff;` registration in
-`ade_runtime/src/producer/mod.rs`, and the `ade_node` test-file diffs that only adapt
-call sites to the new `(CoordinatorEvent, Option<SelfAcceptedHandoff>)` tuple return).
+skipped (the one-line `pub mod ba02_pass;` registration in `ade_node/src/lib.rs`, and
+the one-line `state.tip.as_ref()` accessor adjustment in
+`ade_node/src/admission/bootstrap.rs` so the live-feed start-point reads the recovered
+tip).
 
 | Module | Color | Scope | Key changes |
 |--------|-------|-------|-------------|
-| `ade_node::node_sync` | **RED** (host of GREEN-pure `forge_epoch_admission` + the fenced BLUE forge composition) | +165 / -? lines (mostly `#[cfg(test)]`) | **S1/S2 (`c518c357`, `a5af52e8`) — surface the self-accepted token at the recovered-forge boundary.** `forge_one_from_recovered` now returns `Result<(CoordinatorEvent, Option<SelfAcceptedHandoff>), NodeForgeError>` (was `Result<CoordinatorEvent, …>`). Every **fail-closed** branch (off-epoch `OffEpoch`, not-a-leader) returns `(.., None)` — a non-self-accepted outcome yields **no** servable token. On the success path it wraps `run_real_forge`'s newly-surfaced `Option<AcceptedBlock>` via `SelfAcceptedHandoff::from_self_accepted` (the **original** `self_accept` token, never re-derived from `artifact.bytes`). New `#[cfg(test)]` proofs: handoff present **iff** `ForgeSucceeded`; off-epoch fail-closed surfaces no handoff; the surfaced `Option<SelfAcceptedHandoff>` is **replay byte-identical** across two runs (same recovered base + keys); and `relay_loop_containment_semantics_unchanged_with_serve_sibling` (S2) — wiring the handoff sender leaves the forge tick at exactly one self-accept-only attempt, advances **no** durable tip, persists **no** snapshot, and adds **only** a typed channel send emitted exactly on `ForgeSucceeded`. |
-| `ade_node::node_lifecycle` | **RED** | +64 / -? lines | **S2 (`a5af52e8`) — dispatcher-owned sibling served-chain admit task.** The `--mode node` forge-capable `On`-arm now spawns a sibling `tokio` task that owns the `ServedChainHandle` and is the **sole node-spine `push_atomic` site**, fed **only** by `handoff.into_accepted()` drained off a typed `mpsc::UnboundedSender<SelfAcceptedHandoff>`. The relay loop holds **only** the `Sender` (never a `ServedChainHandle`, never a `push_atomic` call). `ForgeActivation` gains a private `handoff_tx: Option<…>` + a `with_handoff_sender(tx)` opt-in builder; `None` ⇒ forge-capable but **non-serving** (byte-identical to the N-F-E/N-F-F relay). The relay-loop forge arm forwards the surfaced `Option<SelfAcceptedHandoff>` to the sender (best-effort typed send; if the sibling task ended, the handoff is dropped — forge stays self-accept-only). On loop exit the dispatcher drops the `Sender` so the sibling drains + exits, then joins it. The `ServedChainView` is retained for the S3 network-serve read path. The single `SystemClock` wall-clock seam (DC-NODE-03) and the `Off`/`On` dispatch shape are unchanged. |
-| `ade_node::produce_mode` | **RED** | +48 / -? lines | **S1 (`c518c357`) — `run_real_forge` return-type split (no behavioral change).** `run_real_forge` now returns `(CoordinatorEvent, Option<ade_ledger::producer::AcceptedBlock>)`; the closed `CoordinatorEvent` / `ForgeSucceeded` surface is **unchanged** (the token rides a sibling return component, **not** a new variant or field). The forge composition moved verbatim into a private `run_real_forge_inner(.., self_accepted_out: &mut Option<AcceptedBlock>)` that keeps every pre-split fail-closed early-return byte-identical and writes the **original** owned `accepted` token into `self_accepted_out` at the **sole** success site (after `artifact_from_accepted` borrows it) — so `Some(..)` is structurally reachable only when the inner fn returns `ForgeSucceeded`. The **produce-mode** serve path is functionally unaffected: it takes `run_real_forge(..).0` (the event) and advances via the existing sole `ChainEvolution::advance`, ignoring the surfaced token. |
+| `ade_node::node_lifecycle` | **RED** | +159 / -? lines (incl. `#[cfg(test)]`) | **S1 (`71036d10`) — wire the live WirePump feed on the `--mode node` `On` arm.** New `spawn_live_wire_pump_source(peer_addrs, network_magic, recovered_tip) -> NodeBlockSource` (+ `const LIVE_WIRE_PUMP_CHANNEL_CAP = 64`): it builds a LIVE `NodeBlockSource::WirePump` by **reusing the closed admission dial+pump VERBATIM** (`dial_for_admission` → `run_admission_wire_pump`, no reimplementation, no new wire authority); the runtime `ade_runtime::admission::AdmissionPeerEvent` output feeds the `WirePump` arm **directly** (the node spine consumes the runtime event type — no bridge). The `On` arm wires it iff `--peer` is supplied (`live_feed_wired = !cli.peer_addrs.is_empty()`; requires `--network-magic`, else `MissingFlag`); empty `--peer` keeps the prior `NodeBlockSource::in_memory(Vec::new())` (forge-CAPABLE, halts clean). The start point is the recovered `ChainTip` (`Point::Block` / `Point::Origin`). **Honest-scope C3** (mirrors `admission::bootstrap::spawn_wire_pumps_for_admission`): an unparseable `--peer` addr or a `dial_for_admission` failure is **logged-and-dropped — never fatal, never a fabricated address, never a silent tip graft**; if no peer yields a live pump, the feed ends and the relay loop halts clean (same outcome as the empty source). The honest end-of-run log split into a `live_feed_wired` branch (forge observable when the feed is Continuing + a due leader slot is reached — peer ACCEPT **not** claimed, operator-gated RO-LIVE-01/06) vs the empty branch (forge-CAPABLE, halts clean). The single `SystemClock` wall-clock seam (DC-NODE-03) and the `Off`/`On` dispatch shape are unchanged; the durable tip still advances only via `run_node_sync → pump_block` (no second tip-advance, no verdict). New `#[cfg(test)]` proof `spawn_live_wire_pump_source_with_no_usable_peer_yields_ended_feed` (empty / unparseable `--peer` → already-closed feed → `next_block()` is `None`). |
+| `ade_node::node_sync` | **RED** (host of the closed `NodeBlockSource` + GREEN-pure `forge_epoch_admission` + the fenced BLUE forge composition) | +98 lines (all `#[cfg(test)]`) | **S1 (`71036d10`) — consume-side proofs that the live feed makes the forge observable.** No production-body change in this file — the surface that S1 exercises (`NodeBlockSource::from_wire_pump` / `in_memory`, the closed 2-variant enum, `run_relay_loop`) already existed. New `#[cfg(test)]` proofs: `node_block_source_stays_closed_two_variant` (an exhaustive match with **no** wildcard arm pins `NodeBlockSource` as the closed `{WirePump, InMemory}` — a third "alternative live source" variant would fail to compile, so the live feed is a **fill**, not a plugin point); and `live_wire_pump_feed_reaches_forge_tick` (same recovered base / keys / clock / schedule; the **only** difference is source liveness — a Continuing `WirePump` feed makes `LoopStep::ForgeTick` reachable while the empty `InMemory` source halts before any `ForgeTick`, isolating exactly the live-feed effect; forge stays **subordinate** to the feed per CN-NODE-02 / DC-NODE-05). |
+| `ade_node::admission::bootstrap` | **RED** | +2 / -? lines | **S1 (`71036d10`) — visibility promotion + start-point read.** `build_n2n_version_table` promoted `fn` → `pub(crate) fn` so `node_lifecycle::spawn_live_wire_pump_source` reuses the closed N2N version table **verbatim** (no reimplementation). No behavioral change to the admission bootstrap path itself. |
 
 ## 4. Feature Flags
 
-**No project feature-flag deltas.** Ade declares no `[features]` table in any
-workspace `Cargo.toml` (confirmed at both refs — the table is absent), and no
-`#[cfg(feature = …)]` gate was introduced in the span. **No `Cargo.toml` change at all
-in this window** (the prior G-A `serde_json` `raw_value` dependency-feature add already
-landed before the baseline). No coupling, no `compile_error!` guard.
+**No project feature-flag deltas.** Ade declares no `[features]` table in any workspace
+`Cargo.toml` (confirmed at both refs — the table is absent), and no `#[cfg(feature =
+…)]` gate was introduced in the span. **No `Cargo.toml` change at all in this window.**
+No coupling, no `compile_error!` guard.
 
-## 5. CI Checks (116 → 117; +1 new, 0 modified, 0 removed)
+## 5. CI Checks (117 → 118; +1 new, 1 broadened-in-place, 0 removed)
 
-One new gate, repo-root-relative, mirroring the existing `ci/ci_check_*.sh`
-convention. It strips the `#[cfg(test)]` module + line comments before its greps so
-commentary naming a forbidden token cannot trip the guard, and feeds every grep via a
-**here-string** (`<<<`) rather than `echo | grep` — the `339cccb1` SIGPIPE fix that
-avoids a `pipefail` false-negative when `grep -q` exits early on a large input.
+One new gate plus one broadened-in-place gate, both repo-root-relative and mirroring the
+existing `ci/ci_check_*.sh` convention.
 
-### PHASE4-N-F-G-B gate (1, from baseline through HEAD)
+### PHASE4-N-F-G-C gates (from baseline through HEAD)
 
 | Check | Status | Cluster origin | What it checks |
 |-------|--------|----------------|----------------|
-| `ci_check_served_chain_handoff_fence.sh` | **New** | S3 (`738dddd1`; SIGPIPE fix `339cccb1`) | Backs **CE-G-B-2 / CE-G-B-3** / the **DC-NODE-06** serve-ingress clause. Scoped to the `--mode node` lifecycle owner (`crates/ade_node/src/node_lifecycle.rs`), production body only (`#[cfg(test)]` + line comments stripped). Three guards: (1) **every** `push_atomic(` on the node spine is fed by `into_accepted()` (no raw-bytes / non-handoff serve ingress) and at least one such site exists; (2) **no** direct `served_chain_admit(` on the node spine — served-chain mutation goes only through the single `push_atomic` authority (CN-PROD-04); (3) the handoff channel is typed `UnboundedSender<SelfAcceptedHandoff>` and **not** `<Vec<u8>>` / `<ForgedBlockArtifact>` / `<bool>` (the serve-ingress carrier is the S1 self-accepted fence, never raw bytes / a flag). Hermetic — no Docker / cardano-cli / live node. |
+| `ci_check_ba02_evidence_manifest_schema.sh` | **New** | S2 (`90791691`) | Backs the **RO-LIVE-06** BA-02-evidence schema clause (mirrors `ci_check_operator_evidence_manifest_schema.sh`). **Vacuous-until-committed**: when no `docs/clusters/PHASE4-N-F-G-C/CE-G-C-LIVE_*.toml` is present (the typical state — the live operator pass is `blocked_until_operator_stake_available`), the gate passes (**no manifest, no claim**). When a manifest *is* committed, it enforces (1) all 8 required schema fields present (`schema_version`, `block_hash`, `slot`, `peer_log_file`, `peer_log_file_sha256`, `peer_log_capture_command`, `peer_log_filter`, `accept_event_kind`); (2) `schema_version == 1` (the canonical `BA02_MANIFEST_SCHEMA_VERSION`); (3) **`peer_log_file_sha256` matches the actual SHA-256 of the committed peer-log fixture** — the **no-synthetic-manifest** line: a hand-authored manifest with no real fixture, or a tampered fixture, **FAILS**. The complementary provenance fence is in code (`ba02_pass::write_ba02_manifest` accepts only a `Ba02Manifest`, which only `ba02_evidence::correlate`'s exact-match arm constructs). Hermetic — no Docker / cardano-cli / live node. |
+| `ci_check_served_chain_handoff_fence.sh` | **Modified (broadened in place)** | S1 (`71036d10`); introduced N-F-G-B S3 | Still backs the **DC-NODE-06** serve-ingress clause. **Broadened** for the live-feed path: (a) the scope grew from the single `node_lifecycle.rs` owner to the node-spine serve **owner set** `{node_lifecycle.rs, node_sync.rs}` (so the fence still holds if the serve wiring moves between them; the `--mode produce` path `produce_mode.rs` / CN-PROD-04 stays a **separate** serve authority + gate, deliberately out of scope here); (b) **guard-3 became an allow-list** (was a 3-name deny-list): **every** node-spine unbounded handoff channel (`UnboundedSender<…>` / `UnboundedReceiver<…>` / `unbounded_channel::<…>`) MUST carry `SelfAcceptedHandoff` — **any** other payload fails, not just the three previously named (`<Vec<u8>>` / `<ForgedBlockArtifact>` / `<bool>`) — and at least one `UnboundedSender<SelfAcceptedHandoff>` must exist. The new bounded live-feed channel (`mpsc::channel::<AdmissionPeerEvent>`) is **not** a handoff channel and is intentionally not matched. Guards (1) (every node-spine `push_atomic(` fed by `into_accepted()`) and (2) (no direct `served_chain_admit(` on the node spine) are unchanged. |
 
 The N-F-E forge-containment gate (`ci_check_node_run_loop_containment.sh`) is
-**semantically unchanged** — the relay-loop body still performs no serve / admit /
-gossip / broadcast / block-fetch / durable-tip mutation; the handoff is a typed
-channel **send** from the loop, and served-chain mutation happens only in the **sibling**
-task. G-B **added** a served-chain handoff gate but did **not** relax containment.
+**byte-unchanged** — the relay-loop body still performs no serve / admit / gossip /
+broadcast / block-fetch / durable-tip mutation. G-C **added** an evidence-schema gate
+and **broadened** the handoff fence's reach, but did **not** relax containment.
 
-> Cross-reference (TRACEABILITY): at HEAD `339cccb1`, `DC-NODE-06.ci_script` is still
-> `""` (the rule is `declared`), so `ci_check_served_chain_handoff_fence.sh` is **not
-> yet** cross-referenced from any registry rule — it currently enforces a rule that has
-> no committed `ci_script` binding, and TRACEABILITY (still at the G-A close, HEAD
-> `62cb8718`) renders `DC-NODE-06` with empty Tests/CI cells. The close-pass flips
-> `DC-NODE-06` to `enforced` (binding this gate + the S1/S2/S3 tests) and regenerates
+> Cross-reference (TRACEABILITY): in the **working tree** at `90791691`,
+> `ci_check_ba02_evidence_manifest_schema.sh` is cited by `RO-LIVE-06.ci_script`
+> **and** `CN-OPERATOR-EVIDENCE-01.ci_script`, and TRACEABILITY (working tree) renders
+> those rows with the gate present (14 working-tree TRACEABILITY mentions of the gate
+> name). At the **committed** HEAD `90791691`, the registry already binds
+> `ci_check_served_chain_handoff_fence.sh` + `ci_check_node_run_loop_containment.sh`
+> to `DC-NODE-06` (from the G-B close `febee120`), but the **new** S2 gate's
+> `ci_script` binding on `RO-LIVE-06` / `CN-OPERATOR-EVIDENCE-01` is **working-tree
+> only** (uncommitted) — the close-pass commits it and regenerates the committed
 > TRACEABILITY. See the warnings in the generation section.
 
 ## 6. Canonical Type Registry Delta
 
 **n/a — no separate canonical-type registry is configured** (`canonical_type_registry: null`),
 and **no BLUE crate changed**. The 456 BLUE canonical-type total is **unchanged (Δ0)**
-across the span (independently re-verified at HEAD `339cccb1`: the CODEMAP at this HEAD
-— still the G-A close — reports 456 canonical, and `git diff --name-only
-80dac1f7..339cccb1` matches no `core_paths` entry). The new `SelfAcceptedHandoff`
-carrier lives in the RED `ade_runtime` crate and is not canonical-counted;
-`run_real_forge`'s newly-surfaced `Option<AcceptedBlock>` reuses the existing BLUE
-`ade_ledger::producer::AcceptedBlock` (no new type). **No new `CoordinatorEvent`
-variant or field was introduced** — the self-accepted token rides a sibling return
-component.
+across the span (independently re-verified: `git diff --name-only 339cccb1..90791691`
+matches **no** `core_paths` (BLUE) entry — every changed source file is RED `ade_node`;
+the working-tree CODEMAP at `90791691` reports 456 canonical). The new `ba02_pass`
+module is RED file I/O in `ade_node` and is not canonical-counted; it reuses the existing
+GREEN `ade_node::ba02_evidence` types (`AdeForgeRecord`, `BA02Outcome`, `Ba02Manifest`)
+verbatim — no new type. **No new `CoordinatorEvent` variant or field was introduced.**
 
 ## 7. Normative / Invariant Rule Delta (313 → 313)
 
-**No rule ID was added or removed in the span** (313 at both refs). The G-B primary
-invariant `DC-NODE-06` already existed at the baseline as the **forward sketch**
-declared at the shared PHASE4-N-F-G invariant pass.
+**No rule ID was added or removed in the span** (313 at both refs). G-C ships **no new
+rule** — it extends existing rules. This window also commits the **G-B** close-pass
+registry edits (`febee120`), which is why the count holds at 313 (`DC-NODE-06` was a
+pre-existing ID, not a new one).
 
-### G-B primary rule (still `declared` at this HEAD)
+### G-B close-pass registry edits (committed in this span, by `febee120`)
 
-| ID | Tier | Status @ `339cccb1` | `introduced_in` | Summary |
-|----|------|---------------------|-----------------|---------|
-| `DC-NODE-06` | derived | **declared** | `PHASE4-N-F-G-B` | Self-accept → serve handoff on the `--mode node` relay spine (sibling serve task, shape B). Only a BLUE self-accepted forged artifact (whose **only** provenance is a `ForgeSucceeded` outcome — CN-FORGE-01) may enter the sibling served-chain serve task via the single `ServedChainHandle::push_atomic` authority; the serve task must not accept raw forged bytes, a failed forge output (`ForgeNotLeader` / `ForgeFailed`), a self-declared acceptance flag, or a peer-verdict substitute. The relay-loop body performs **no** serve/admit/gossip/block-fetch/durable-tip mutation — the handoff is a typed channel send of a constructor-fenced artifact, so the containment gate stays **semantically unchanged** (a cluster may ADD a served-chain handoff gate but MUST NOT relax containment). Peer acceptance is proven **only** by the peer's validation log (RO-LIVE-06), never by Ade's self-accept / `ForgeSucceeded` / any wire-success signal. **G-B S1/S2/S3 implement this rule** (the GREEN `SelfAcceptedHandoff` fence; the dispatcher-owned sibling `push_atomic` task; the hermetic block-fetch payload proof + `ci_check_served_chain_handoff_fence.sh`) — but at this HEAD the registry entry is still the sketch (`tests = []`, `ci_script = ""`, `strengthened_in = []`). The close-pass flips it `declared → enforced` when CE-G-B-1..3 are all green. |
+For completeness — these were the *owed* edits flagged in the **previous** (N-F-G-B)
+HEAD_DELTAS window and are **committed here**:
 
-### Strengthenings (owed at close, NOT yet committed)
+- `DC-NODE-06` flipped `declared → enforced` (`tests` populated with the 10 G-B
+  handoff/serve tests; `ci_script = "ci/ci_check_served_chain_handoff_fence.sh,
+  ci/ci_check_node_run_loop_containment.sh"`).
+- 2 G-B strengthenings recorded: `CN-PROD-04` (`strengthened_in += "PHASE4-N-F-G-B"`)
+  and `CN-CONS-07` (`strengthened_in += "PHASE4-N-F-G-B"`).
 
-At HEAD `339cccb1` **zero** `strengthened_in += "PHASE4-N-F-G-B"` tokens are committed.
-The pending close-pass records the **2 cross-slice strengthenings** the cluster
-composes on:
+### G-C strengthenings (owed at close, NOT yet committed)
 
-| Rule | Why strengthened by G-B |
-|------|--------------------------|
-| `CN-PROD-04` | The single `ServedChainHandle::push_atomic` admit authority is extended onto the `--mode node` relay spine via the dispatcher-owned sibling task; the new gate pins it as the **sole** node-spine served-chain mutation site (no direct `served_chain_admit`). |
-| `CN-CONS-07` | The self-acceptance → serve bridge (only BLUE-self-accepted bytes may reach the served chain) is extended across the node-spine relay→sibling-task handoff seam — the typed `SelfAcceptedHandoff` carrier prevents the channel from being an end-run around the gate. |
+At HEAD `90791691` **zero** `strengthened_in += "PHASE4-N-F-G-C"` tokens are committed —
+they exist only in the **working tree** at this regen. The pending close-pass records the
+**4 cross-rule strengthenings** the cluster extends, plus the new S2 gate's `ci_script`
+bindings:
 
-### G-A close tail (already committed in this span)
+| Rule | Status (held) | Why strengthened by G-C |
+|------|---------------|--------------------------|
+| `RO-LIVE-01` | **`partial`** (held — `blocked_until_operator_stake_available`) | G-C wired the **MECHANICAL** half on the `--mode node` spine: a live `NodeBlockSource::WirePump` feed makes `LoopStep::ForgeTick` reachable (`live_wire_pump_feed_reaches_forge_tick`) and the forge-derived self-accepted block is served byte-identically over in-process block-fetch (`live_feed_forge_serve_loopback_returns_forged_block`). The **LIVE** half is unchanged: peer ACCEPT stays `blocked_until_operator_stake_available`, proven **only** by the operator-captured peer log through `correlate`. |
+| `RO-LIVE-06` | **`enforced`** (held) | The operator-pass BA-02 evidence path is now wired: `ba02_pass::correlate_peer_log_file` reads the operator-captured peer log and runs it through `correlate`; the new `ci_check_ba02_evidence_manifest_schema.sh` gate (added to `ci_script`) enforces schema + sha256-binding on any committed manifest. **Live BA-02 is still NOT claimed** — schema + mechanics only. |
+| `CN-OPERATOR-EVIDENCE-01` | **`enforced`** (held) | The new BA-02 manifest-schema gate is added to its `ci_script` set (alongside `ci_check_operator_evidence_manifest_schema.sh`) — the operator-evidence manifest discipline now also covers the `--mode node` BA-02 manifest family (`CE-G-C-LIVE_*.toml`). |
+| `DC-NODE-06` | **`enforced`** (held; flipped by the G-B close `febee120` earlier in this window) | The served-chain handoff fence it binds (`ci_check_served_chain_handoff_fence.sh`) was **broadened in place** to the node-spine owner set + an allow-list guard-3 — strengthening (never relaxing) the serve-ingress clause as the live feed is wired. |
 
-For completeness — these were the *owed* strengthenings flagged in the **previous**
-(N-F-G-A) HEAD_DELTAS window and are **committed here** by `62cb8718` + `1806584c`,
-which is why the rule count holds at 313 rather than rising:
-
-- `DC-EPOCH-03` flipped `declared → enforced` (`tests` + `ci_script =
-  "ci/ci_check_node_forge_single_epoch_fail_closed.sh"` populated).
-- 7 G-A strengthenings recorded (`CN-OPCERT-01`, `CN-GENESIS-01`, `DC-LEDGER-10`,
-  `CN-NODE-01`, `DC-CINPUT-02b`, `DC-NODE-05`, `DC-NODE-03`).
-- The four G-A gates bound to their `ci_script` slots (`1806584c`), with a TRACEABILITY
-  regen; the registry stays byte-stable at 313 rules.
-
-This section is informational and reflects the **committed** registry state at HEAD.
-**No rule was removed (expected: 0).**
+This section is informational and reflects the **committed** registry state at HEAD
+(`DC-NODE-06` `enforced`, `RO-LIVE-06` `enforced`, both **without** a G-C token yet;
+`RO-LIVE-01` `partial`). **No rule was removed (expected: 0).**
 
 ## 8. Honest residual (cluster scope)
 
-**The relay-spine forge now hands its BLUE self-accepted artifact to a sibling
-served-chain admit task. It still does NOT gossip, broadcast to a peer, or advance a
-durable tip — and with no live feed wired this cluster, it does not even observably
-forge.**
+**G-C closes the MECHANICAL live-feed + evidence scaffolding ONLY. The forge-capable
+`--mode node` `On` arm is now live-feed-wireable, and the operator-pass BA-02 evidence
+I/O is wired — but peer ACCEPT is NOT claimed, and the bounty acceptance criterion is
+NOT satisfied.**
 
-- **Typed handoff, not a serve.** The forge tick surfaces a constructor-fenced
-  `SelfAcceptedHandoff` (S1) and the relay loop **sends** it over a typed mpsc channel;
-  the dispatcher-owned **sibling** task is the sole node-spine `push_atomic` site, fed
-  only by `into_accepted()` (S2). The relay loop holds only the `Sender` — never a
-  `ServedChainHandle`, never `push_atomic`, never `served_chain_admit`.
-- **Containment semantically unchanged.** The N-F-E forge-containment gate is
-  semantically unchanged; the relay-loop body performs no serve / admit / gossip /
-  broadcast / block-fetch / durable-tip mutation. `ci_check_served_chain_handoff_fence.sh`
-  (S3) adds the serve-ingress guard without relaxing containment.
-- **Self-accept gate held.** Only a BLUE `AcceptedBlock` (provenance `ForgeSucceeded`,
-  CN-FORGE-01) can populate the carrier; fail-closed outcomes (`OffEpoch` /
-  `ForgeNotLeader` / `ForgeFailed`) surface **no** handoff. The token is the **original**
-  `self_accept` token, never re-derived from `artifact.bytes`. Replay byte-identical
-  (same recovered base + keys ⇒ same `Option<SelfAcceptedHandoff>`).
-- **Peer ACCEPT not claimed.** Served-chain admission is **not** peer acceptance.
-  RO-LIVE-06 acceptance is proven only by the peer's validation log via
-  `ba02_evidence::correlate` — never by Ade's self-accept / `ForgeSucceeded` / any
-  wire-success signal.
-- **Forge-CAPABLE but NOT observable.** With no live/continuing feed wired this cluster,
-  `run_relay_loop` still halts before any `ForgeTick` on the empty binary source (the
-  `On` arm is forge-capable, the serve sibling spawns, but neither is observable).
-  **Observable forge / live serve / operator-peer ACCEPT / BA-02 / RO-LIVE-01
-  acceptance is the gated G-C follow-on.** BA-02 is satisfied nowhere.
+- **Live feed, not acceptance.** S1 wires a live `NodeBlockSource::WirePump` from
+  `--peer` by **reusing** the closed admission dial+pump verbatim; a Continuing feed
+  makes `LoopStep::ForgeTick` reachable (the empty source halts before any `ForgeTick`).
+  `NodeBlockSource` stays the **closed 2-variant** (a fill of `WirePump`); the durable
+  tip still advances only via `run_node_sync → pump_block` (no second tip-advance, no
+  verdict). Empty `--peer` preserves the prior forge-CAPABLE, halts-clean contract;
+  dial/parse failures are logged-and-dropped (C3), never fatal, never a fabricated
+  address, never a silent tip graft.
+- **Self-accept / served-block / wire-success ≠ peer acceptance.** A live wire feed and
+  an in-process served-block loopback prove the serve **mechanism**, not acceptance.
+  The bounty acceptance criterion (an operator-witnessed accepted block on a peer that
+  can grant leadership) is **NOT** satisfied by this cluster.
+- **`correlate` is the sole evidence authority.** S2's `ba02_pass` is RED file I/O over
+  the GREEN `ba02_evidence::correlate` — the **sole** `Ba02Manifest` constructor. It
+  constructs no evidence, derives no acceptance, and never coerces a non-acceptance
+  line; a missing/unreadable peer log fails closed (`io::Error`), never a synthesized
+  acceptance. `write_ba02_manifest` accepts only a `Ba02Manifest`, so a written manifest
+  is **always** correlate-produced. **No synthetic manifest is committed** — the
+  `ci_check_ba02_evidence_manifest_schema.sh` gate is vacuously satisfied until an
+  operator commits a real `CE-G-C-LIVE_*.toml` bound to a real peer-log fixture by
+  sha256.
+- **Peer ACCEPT operator-gated.** `RO-LIVE-01` stays `partial` /
+  `blocked_until_operator_stake_available`; `RO-LIVE-06` enforces **schema + mechanics
+  only** — **no live BA-02 claim**. The remaining step is an operator-witnessed live
+  pass on a peer that can grant leadership: **C1** (private testnet — Ade holds ~all
+  stake, the cheapest real ACCEPT) or **C2** (preprod — needs ~2 epochs of provisioned
+  active stake; the public preprod docker peer **cannot** grant acceptance — Ade has no
+  stake there). See `docs/evidence/phase4-n-f-g-c-operator-pass-README.md` (the new
+  operator-pass runbook; supersedes the stale N-S-C S1 runbook and closes the
+  C1-scoping-doc bugs).
 - **No BLUE change.** 456 BLUE canonical types unchanged (Δ0); no new `CoordinatorEvent`
-  variant or field. All code lands in RED `ade_runtime` (the GREEN
-  `producer::self_accepted_handoff` carrier) and RED `ade_node` (`produce_mode`
-  `run_real_forge` return-type split, `node_sync` surfacing, `node_lifecycle` S2 sibling
-  task). The carrier is pure — no I/O / clock / rand / float.
+  variant or field. All code lands in RED `ade_node` (`node_lifecycle`
+  `spawn_live_wire_pump_source` + the live-feed `On`-arm wiring; `node_sync` consume-side
+  `#[cfg(test)]` proofs; the new RED `ba02_pass` file-I/O shim; `bootstrap`
+  visibility promotion). No new GREEN evidence reducer — `ba02_evidence::correlate` is
+  reused unchanged.
+- **New MEDIUM follow-on (exposed, not introduced here).** The live feed newly exposes
+  the WirePump's bounded mux-reassembly tail and its lookahead on the `--mode node`
+  spine (reused admission infra — **not** introduced by G-C). This is a MEDIUM
+  follow-on for a dedicated slice (bounded mux-reassembly tail hardening + WirePump
+  lookahead behavior on the live feed), tracked alongside the operator-witnessed live
+  pass.
 
 ---
 
-## Generation notes (regen `80dac1f7 → 339cccb1`, PHASE4-N-F-G-B)
+## Generation notes (regen `339cccb1 → 90791691`, PHASE4-N-F-G-C)
 
-- **Baseline is `80dac1f7`** (the `.idd-config.json` `head_deltas_baseline` value at
-  regen time — the PHASE4-N-F-G-A slice-span HEAD). **The close-pass commit must bump
-  `head_deltas_baseline` to `339cccb1`** (the G-B slice-span HEAD) so the next cluster's
+- **Baseline is `339cccb1`** (the `.idd-config.json` `head_deltas_baseline` value at
+  regen time — the PHASE4-N-F-G-B slice-span HEAD). **The close-pass commit must bump
+  `head_deltas_baseline` to `90791691`** (the G-C slice-span HEAD) so the next cluster's
   `/head-deltas` measures from here. The registry-count comment stays 313 (no ID added
   or removed across the window). The `.idd-config.json` edit itself is handled by the
   closer, not this regen.
-- Counts are mechanical: commit log + `--shortstat` over `80dac1f7..339cccb1` (10
-  commits, no merges / 26 files / +3391 / -1600); CI gate count via `ls-tree | grep
-  ci_check_*.sh` at each ref (116 → 117, +1 new — `served_chain_handoff_fence`, none
-  removed); registry rule count via `grep -c '^\[\[rules\]\]'` at each ref (313 → 313,
-  no ID added or removed); workspace test attributes via `git grep -hE
-  '#\[(tokio::)?test\]'` (2213 → 2223, +10); BLUE canonical types unchanged at 456 (no
-  BLUE crate file in the diff — verified: `git diff --name-only` matches no
-  `core_paths` entry).
-- **Grounding-doc staleness (NOT an anomaly).** The committed CODEMAP (`80dac1f7`),
-  SEAMS (`80dac1f7`), and TRACEABILITY (`62cb8718`) at this HEAD are all from the **G-A
-  close** — they report **116** CI checks and render `DC-NODE-06` as a **declared
-  forward sketch** with empty Tests/CI. They have **not** been regenerated for G-B, so
-  they do **not** yet reflect G-B's new gate (117), the new GREEN
-  `producer::self_accepted_handoff` module, or the S1/S2/S3 source. The committed
-  registry (`DC-NODE-06` `declared`) and these three committed docs (`DC-NODE-06`
-  declared sketch) therefore **agree** — there is **no** CODEMAP-vs-registry conflict.
-  This HEAD_DELTAS regen is the first G-B grounding-doc refresh; the close-pass
-  regenerates CODEMAP / SEAMS / TRACEABILITY alongside the `DC-NODE-06`
-  `declared → enforced` registry flip + the 2 strengthenings. **Not a rule removal, not
-  a discipline violation** — a sequencing artifact reconciled by the close-pass.
-- **CI cross-reference warning.** `ci_check_served_chain_handoff_fence.sh` is **not yet**
-  cited by any registry rule's `ci_script` at this HEAD (because `DC-NODE-06` is still
-  `declared` with `ci_script = ""`), so it does **not** appear in TRACEABILITY as
-  enforcing a named invariant. The close-pass flips `DC-NODE-06` to `enforced`
-  (binding the gate) and regenerates TRACEABILITY. The four **G-A** gates, by contrast,
-  are now cited (the `1806584c` gate-binding follow-up landed in this span).
-- `DC-NODE-06` is `declared` at this HEAD; its `tests`/`ci_script` are empty, so it does
-  not yet appear in TRACEABILITY and the new gate is not yet cross-referenced there — the
-  close-pass flips it to `enforced` and refreshes TRACEABILITY (and the four grounding
-  docs G-A → G-B). G-C (live operator serve) is the next sub-cluster; RO-LIVE-01 /
-  RO-LIVE-06 acceptance stays the gated follow-on.
+- Counts are mechanical (git/grep/ls only, no cargo): commit log + `--shortstat` over
+  `339cccb1..90791691` (7 commits, no merges / 23 files / +2348 / -464); CI gate count
+  via `git ls-tree -r --name-only <ref> ci/ | grep -E 'ci_check_.*\.sh' | wc -l` at each
+  ref (117 → 118, **+1 new** — `ba02_evidence_manifest_schema` at S2, none removed; the
+  G-B gate `served_chain_handoff_fence` already existed at the baseline `339cccb1` and
+  was **broadened in place** by S1, so the net count change is the single S2 add);
+  registry rule count via `grep -c '^id = '` (and `grep -c '^\[\[rules\]\]'`) at each ref
+  (313 → 313, no ID added or removed); workspace test attributes via `git grep -hE
+  '#\[(tokio::)?test\]'` (2223 → 2230, +7); BLUE canonical types unchanged at 456 (no
+  BLUE crate file in the diff — verified: `git diff --name-only` matches no `core_paths`
+  entry).
+- **Two close events in one window (NOT an anomaly).** The **G-B** close-pass
+  (`febee120`) is **committed** inside this window (because the baseline `339cccb1` is
+  the G-B slice-span HEAD, not its close commit) — it flipped `DC-NODE-06`
+  `declared → enforced`, recorded the 2 G-B strengthenings, and refreshed the four
+  grounding docs to the **G-B** close. The **G-C** close-pass is **not yet committed**.
+  So at HEAD `90791691`: the registry has `DC-NODE-06` / `RO-LIVE-06` `enforced` (G-B
+  state) but **none** of the four G-C `strengthened_in` tokens; and the **committed**
+  CODEMAP / SEAMS / TRACEABILITY are still the **G-B** close docs (117 CI, 2223 tests,
+  no `ba02_pass`).
+- **Sibling-doc coherence (working tree).** The CODEMAP / SEAMS / TRACEABILITY **working
+  tree** (and the registry) have already been regenerated to the **G-C** close state —
+  **118** CI checks (matches the on-disk `ls ci/ci_check_*.sh | wc -l = 118`), **456**
+  canonical types, **2230** tests, **313** rules, with the new `ba02_pass` locus and the
+  `ba02_evidence_manifest_schema` gate cross-referenced — and they **agree** with this
+  doc's counts. `git status` shows `docs/ade-CODEMAP.md`, `docs/ade-SEAMS.md`,
+  `docs/ade-TRACEABILITY.md`, and `docs/ade-invariant-registry.toml` modified
+  (working-tree close-pass edits already applied); `docs/ade-HEAD_DELTAS.md` and
+  `.idd-config.json` are the two files this regen / the close-pass still owe.
+- **CI cross-reference warning.** `ci_check_ba02_evidence_manifest_schema.sh` is cited by
+  `RO-LIVE-06` / `CN-OPERATOR-EVIDENCE-01` only in the **working-tree** registry
+  (uncommitted at this HEAD); the **committed** TRACEABILITY at `90791691` is the G-B
+  close doc and does not yet show it. The close-pass commits the `ci_script` bindings and
+  regenerates the committed TRACEABILITY. (The G-B gate `served_chain_handoff_fence` +
+  the containment gate are already cited by `DC-NODE-06` in the committed registry, via
+  `febee120`.)
+- **Not a rule removal, not a discipline violation** — the working-tree-vs-committed
+  split is a sequencing artifact reconciled by the close-pass (which commits the four
+  G-C `strengthened_in` tokens, the two new `ci_script` bindings, the
+  CODEMAP/SEAMS/TRACEABILITY working-tree regen, the `.idd-config.json` baseline bump
+  `339cccb1 → 90791691`, the G-C cluster-doc archive, and this HEAD_DELTAS). The next
+  sub-cluster work is the **operator-witnessed live pass** (C1/C2) that flips
+  `RO-LIVE-01` off `partial` and produces a real BA-02 manifest — plus the MEDIUM
+  mux-reassembly-tail / WirePump-lookahead follow-on newly exposed on the live feed.

@@ -2644,12 +2644,12 @@ statement = "A Haskell cardano-node peer issuing RequestRange covering an Ade-fo
 source = "docs/planning/phase4-n-a-successor-invariants.md §8"
 cross_ref = ["DC-CONS-16", "DC-CONS-17", "DC-CONS-18", "CN-PROTO-06", "DC-PROTO-07", "DC-PROTO-08", "CN-CONS-06", "CN-PROD-01", "CN-PROD-02"]
 code_locus = "crates/ade_runtime/tests/cross_impl_server_pipeline.rs (mechanical adapter — CE-N-G-7); crates/ade_core_interop/src/bin/live_block_fetch_session.rs (legacy operator-action binary — CE-N-G-8); crates/ade_runtime/src/network/n2n_listener.rs (PHASE4-N-Q RED listener + handshake gate); crates/ade_node/src/produce_mode.rs (RED produce-mode driver — run_real_forge live forge composition (N-R-A/N-S/N-W/N-X); per-peer block-fetch dispatch wired N-R-B/N-S-B); docs/clusters/completed/PHASE4-N-G/CE-N-G-8_PROCEDURE.md + docs/clusters/PHASE4-N-Q/CE-N-Q-OPERATOR_PROCEDURE.md (operator procedures)"
-tests = ["cross_impl_server_pipeline_request_range_returns_decodable_bytes", "cross_impl_server_pipeline_request_range_byte_identical_to_self_accept_input", "live_block_fetch_session_hermetic_default_prints_readiness", "n2n_listener_loopback_handshake_succeeds", "produce_mode_starts_runs_three_slots_and_exits_via_max_slots"]
+tests = ["cross_impl_server_pipeline_request_range_returns_decodable_bytes", "cross_impl_server_pipeline_request_range_byte_identical_to_self_accept_input", "live_block_fetch_session_hermetic_default_prints_readiness", "n2n_listener_loopback_handshake_succeeds", "produce_mode_starts_runs_three_slots_and_exits_via_max_slots", "live_wire_pump_feed_reaches_forge_tick", "live_feed_forge_serve_loopback_returns_forged_block"]
 ci_script = "ci/ci_check_server_paths_corpus_present.sh"
 status = "partial"
 cluster = "PHASE4-N-G"
-strengthened_in = ["PHASE4-N-Q"]
-open_obligation = "blocked_until_produce_mode_wiring_cluster + blocked_until_operator_stake_available + blocked_until_operator_pass_executed (the real forge handler landed in N-R-A/N-S/N-W/N-X — see CN-CONS-06.open_obligation; remaining: a thin produce-mode wiring cluster G1/G2/G4/G6/G7 + a pinning harness + operator stake + the operator-witnessed live pass, per docs/planning/operator-pass-live-leg-c1-scoping.md)"
+strengthened_in = ["PHASE4-N-Q", "PHASE4-N-F-G-C"]
+open_obligation = "blocked_until_produce_mode_wiring_cluster + blocked_until_operator_stake_available + blocked_until_operator_pass_executed (the real forge handler landed in N-R-A/N-S/N-W/N-X — see CN-CONS-06.open_obligation; remaining: a thin produce-mode wiring cluster G1/G2/G4/G6/G7 + a pinning harness + operator stake + the operator-witnessed live pass, per docs/planning/operator-pass-live-leg-c1-scoping.md). PHASE4-N-F-G-C wired the MECHANICAL half on the --mode node spine — a live NodeBlockSource::WirePump feed makes LoopStep::ForgeTick reachable (live_wire_pump_feed_reaches_forge_tick) and the forge-derived self-accepted block is served byte-identically over in-process block-fetch (live_feed_forge_serve_loopback_returns_forged_block), plus the operator-pass runbook + BA-02 evidence wiring (RO-LIVE-06). The LIVE half is UNCHANGED: status stays partial; peer ACCEPT remains blocked_until_operator_stake_available and is proven ONLY by the operator-captured peer log through ba02_evidence::correlate."
 evidence = ["Mechanical pre-condition closed by cross_impl_server_pipeline test: every served Block{bytes} decodes via Ade's envelope+block decoder and the recomputed body-hash matches the announced header's body_hash field.", "Binary live_block_fetch_session builds + starts in hermetic mode; --connect mode requires a private cardano-node peer (open_obligation).", "PHASE4-N-Q ships the producer-side listener (CN-PROD-01 enforced) + slot loop composition (CN-PROD-02 enforced) + closed evidence vocabulary (DC-PROD-01 enforced) + replay anchor (DC-PROD-02 enforced) — the infrastructure required for an operator-pass evidence capture is now in place. UPDATE 2026-05-29: the forge path is now fully wired — run_real_forge (live, no stub) + ServedChainSnapshot push_atomic on ForgeSucceeded + per-peer dispatch from the listener into the n2n_server reducers all landed (N-R-A/N-R-B/N-S-A/N-S-B/N-W/N-X). What is still open before the bounty-facing evidence is reachable: a thin produce-mode wiring cluster (dormant cardano-cli opcert/genesis parsers G1/G2 + tip-seeded bootstrap G6 + current-slot alignment G7 + live-value pinning G4 + an eta0/stake/ASC pinning harness) + operator-provisioned stake + the operator-witnessed live pass (docs/planning/operator-pass-live-leg-c1-scoping.md).", "Procedure to flip status to enforced (operator captures log + commits) documented at docs/clusters/completed/PHASE4-N-G/CE-N-G-8_PROCEDURE.md and docs/clusters/PHASE4-N-Q/CE-N-Q-OPERATOR_PROCEDURE.md."]
 
 # =============================================================================
@@ -4736,13 +4736,13 @@ id = "CN-OPERATOR-EVIDENCE-01"
 tier = "release"
 statement = "Every PHASE4-N-S-C operator-pass evidence manifest (docs/clusters/PHASE4-N-S-C/CE-N-S-LIVE_YYYYMMDD-<short_commit>.toml) carries the closed schema: schema_version, ade_commit, cardano_node_version, cardano_cli_version, network, block_hash, slot, opcert_fingerprint, genesis_fingerprint, ade_evidence_file, peer_log_file, peer_log_capture_command, peer_log_filter, peer_log_file_sha256, acceptance_keyword_match. The peer_log_file_sha256 cross-checks the committed peer.log file's actual hash. grep filter is documentation, not authority — the committed peer_log_file is the raw docker logs output."
 source = "docs/planning/phase4-n-s-invariants.md §1 (I6); §2 (N6, N7); user-direction correction 6"
-cross_ref = ["CN-CONS-06", "RO-LIVE-01"]
-code_locus = "docs/clusters/PHASE4-N-S-C/cluster.md + S1.md + S2.md (runbook + manifest schema); ci/ci_check_operator_evidence_manifest_schema.sh (schema enforcement when a manifest is committed)"
+cross_ref = ["CN-CONS-06", "RO-LIVE-01", "RO-LIVE-06"]
+code_locus = "docs/clusters/PHASE4-N-S-C/cluster.md + S1.md + S2.md (runbook + manifest schema); ci/ci_check_operator_evidence_manifest_schema.sh (schema enforcement when a manifest is committed); PHASE4-N-F-G-C: docs/evidence/phase4-n-f-g-c-operator-pass-README.md (the --mode node operator-pass runbook) + ci/ci_check_ba02_evidence_manifest_schema.sh (the BA-02 manifest schema + sha256 cross-check, vacuous-until-committed — same manifest+sha256 discipline extended to the node-spine BA-02 evidence path)"
 tests = []
-ci_script = "ci/ci_check_operator_evidence_manifest_schema.sh"
+ci_script = "ci/ci_check_operator_evidence_manifest_schema.sh, ci/ci_check_ba02_evidence_manifest_schema.sh"
 status = "enforced"
 introduced_in = "PHASE4-N-S-C"
-strengthened_in = []
+strengthened_in = ["PHASE4-N-F-G-C"]
 cluster = "PHASE4-N-S-C"
 open_obligation = "**Schema is enforced**: any committed CE-N-S-LIVE_*.toml file MUST conform to the documented schema (the CI gate runs only when such a file is present). **C1/C2 execution is blocked_until_operator_pass_executed**: until the operator brings up a private testnet (C1) or preprod stake is provisioned (C2) and the binary is run + paired evidence committed, no CE-N-S-LIVE_*.toml exists and the CI gate is vacuously satisfied. Reopen criteria: operator commits at least one CE-N-S-LIVE_*.toml; the gate then verifies schema + sha256 match."
 
@@ -5256,12 +5256,12 @@ mechanics; NOT a claim that BA-02 was achieved live.
 """
 source = "docs/clusters/PHASE4-N-F-C/cluster.md; L6-peer-acceptance-evidence-manifest.md"
 cross_ref = ["RO-LIVE-01", "DC-FORGE-01", "CN-CINPUT-03", "DC-CINPUT-02b"]
-code_locus = "crates/ade_node/src/ba02_evidence.rs (Ba02Manifest, BA02Outcome, PeerAcceptEvent, NoEvidenceReason, parse_peer_accept_events, correlate); ci/ci_check_ba02_evidence_closed.sh"
-tests = ["ba02_manifest_schema_round_trips", "ba02_correlate_served_block_yields_manifest", "ba02_correlate_chain_tip_only_yields_manifest", "ba02_correlate_both_signals_agree_records_served_primary", "ba02_correlate_served_block_without_slot_yields_manifest", "ba02_correlate_conflicting_signals_is_no_evidence", "ba02_correlate_wrong_hash_is_no_evidence", "ba02_correlate_chain_point_mismatch_is_no_evidence", "ba02_correlate_no_slot_wrong_hash_is_no_evidence", "ba02_correlate_stale_log_is_no_evidence", "ba02_correlate_empty_peer_log_is_no_evidence", "ba02_self_accept_is_not_evidence", "ba02_forge_succeeded_alone_is_not_evidence", "ba02_block_received_alone_is_not_evidence", "ba02_agreement_verdict_is_not_evidence", "ba02_parser_accepts_well_formed_served_block", "ba02_parser_drops_unknown_and_malformed_lines", "ba02_correlate_two_runs_byte_identical"]
-ci_script = "ci/ci_check_ba02_evidence_closed.sh"
+code_locus = "crates/ade_node/src/ba02_evidence.rs (Ba02Manifest, BA02Outcome, PeerAcceptEvent, NoEvidenceReason, parse_peer_accept_events, correlate); crates/ade_node/src/ba02_pass.rs (PHASE4-N-F-G-C: RED operator-pass evidence I/O — correlate_peer_log_file reads the operator-captured peer log into the GREEN correlate; write_ba02_manifest accepts ONLY a Ba02Manifest); ci/ci_check_ba02_evidence_closed.sh; ci/ci_check_ba02_evidence_manifest_schema.sh"
+tests = ["ba02_manifest_schema_round_trips", "ba02_correlate_served_block_yields_manifest", "ba02_correlate_chain_tip_only_yields_manifest", "ba02_correlate_both_signals_agree_records_served_primary", "ba02_correlate_served_block_without_slot_yields_manifest", "ba02_correlate_conflicting_signals_is_no_evidence", "ba02_correlate_wrong_hash_is_no_evidence", "ba02_correlate_chain_point_mismatch_is_no_evidence", "ba02_correlate_no_slot_wrong_hash_is_no_evidence", "ba02_correlate_stale_log_is_no_evidence", "ba02_correlate_empty_peer_log_is_no_evidence", "ba02_self_accept_is_not_evidence", "ba02_forge_succeeded_alone_is_not_evidence", "ba02_block_received_alone_is_not_evidence", "ba02_agreement_verdict_is_not_evidence", "ba02_parser_accepts_well_formed_served_block", "ba02_parser_drops_unknown_and_malformed_lines", "ba02_correlate_two_runs_byte_identical", "correlate_wired_to_operator_peer_log", "correlate_from_operator_log_file_is_deterministic"]
+ci_script = "ci/ci_check_ba02_evidence_closed.sh, ci/ci_check_ba02_evidence_manifest_schema.sh"
 status = "enforced"
 introduced_in = "PHASE4-N-F-C"
-strengthened_in = []
+strengthened_in = ["PHASE4-N-F-G-C"]
 cluster = "PHASE4-N-F-C"
 open_obligation = "LIVE BA-02 IS NOT CLAIMED. A real BA-02 result requires: (1) an Ade-forged block hash, (2) real Haskell-peer accept evidence (a served-block or chain-tip signal from a genuine cardano-node peer) naming that exact hash, and (3) a reviewed evidence manifest produced by correlate over that captured log. Synthetic fixtures prove the mechanics only and CANNOT satisfy BA-02. The live capture is operator-gated and distinct from RO-LIVE-01 (which remains partial / operator-gated)."
 
@@ -5420,10 +5420,10 @@ wire-success signal (RO-LIVE-06).
 source = "docs/planning/phase4-n-f-g-invariants.md"
 cross_ref = ["CN-PROD-04", "CN-CONS-07", "CN-NODE-02", "DC-NODE-05", "DC-EPOCH-03", "CN-WIRE-08", "RO-LIVE-01", "RO-LIVE-06"]
 code_locus = "crates/ade_node/src/node_lifecycle.rs, crates/ade_node/src/node_sync.rs, crates/ade_ledger/src/producer/served_chain.rs, crates/ade_runtime/src/producer/served_chain_handle.rs"
-tests = ["handoff_carrier_constructs_only_from_self_accepted_forge", "forge_surfaces_accepted_block_only_on_self_accept", "handoff_carrier_has_no_raw_bytes_constructor", "serve_ingress_type_rejects_failed_forge_outcome", "sibling_serve_admits_via_push_atomic_only", "serve_sibling_admission_replay_byte_identical", "serve_sibling_push_atomic_fed_only_by_into_accepted", "relay_loop_containment_semantics_unchanged_with_serve_sibling", "block_fetch_payload_is_self_accepted_bytes", "block_fetch_tag24_round_trips_to_self_accept_input"]
+tests = ["handoff_carrier_constructs_only_from_self_accepted_forge", "forge_surfaces_accepted_block_only_on_self_accept", "handoff_carrier_has_no_raw_bytes_constructor", "serve_ingress_type_rejects_failed_forge_outcome", "sibling_serve_admits_via_push_atomic_only", "serve_sibling_admission_replay_byte_identical", "serve_sibling_push_atomic_fed_only_by_into_accepted", "relay_loop_containment_semantics_unchanged_with_serve_sibling", "block_fetch_payload_is_self_accepted_bytes", "block_fetch_tag24_round_trips_to_self_accept_input", "live_feed_forge_serve_loopback_returns_forged_block"]
 ci_script = "ci/ci_check_served_chain_handoff_fence.sh, ci/ci_check_node_run_loop_containment.sh"
 introduced_in = "PHASE4-N-F-G-B"
-strengthened_in = []
+strengthened_in = ["PHASE4-N-F-G-C"]
 status = "enforced"
 evidence_notes = """
 PHASE4-N-F-G invariant sketch (/invariants gate). Declared at sketch; tests +
