@@ -4,189 +4,276 @@
 >
 > Regenerate with `/head-deltas <baseline>` after every cluster close. Baseline is recorded in `.idd-config.json` `head_deltas_baseline`.
 
-> Baseline: `e606ed6` (PHASE4-N-F-E close — forge-tick on the relay spine, hermetic, self-accept-only, 2026-05-31 23:33)
-> HEAD: `4eb7610` (PHASE4-N-F-F S5 — single-bootstrap gate ReceiveState owner allow-list, 2026-06-01 01:14)
-> Cluster: **PHASE4-N-F-F — operator-key ingress into `--mode node` + operator-material-backed `ForgeActivation` + the binary `Some`/`None` forge-on flip**, slice span closed; close-pass commit to follow.
-> 13 commits, 17 files changed, +2577 / -48 lines.
+> Baseline: `4eb7610` (PHASE4-N-F-F S5 — single-bootstrap gate ReceiveState owner allow-list, 2026-06-01 01:14)
+> HEAD: `80dac1f7` (fail closed on off-epoch forge before leadership, 2026-06-01 17:12)
+> Cluster: **PHASE4-N-F-G-A — forge fidelity on the `--mode node` spine**, slice span closed; close-pass commit to follow.
+> 20 commits (19 non-merge + 1 N-F-F close merge), 43 files changed, +5221 / -595 lines.
 
-This window narrates the **PHASE4-N-F-F cluster** — making the `--mode node`
-binary **forge-CAPABLE** with real operator keys. It ingests the complete operator
-key set (cold / KES / VRF / opcert / genesis) from CLI flags, loads it into RED
-custody, builds an operator-material-backed `ForgeActivation` on the **single
-recovered `BootstrapState`** that already seeds the relay spine, and flips the
-binary forge argument from the hardcoded `None` (the N-F-E relay-only behavior) to
-`Some(activation)` when a complete key set is present. A **partial** key set fails
-closed (exit 44); the **empty** set reproduces the byte-identical N-F-D/N-F-E relay
-path. The forge stays **subordinate + self-accept-only** — the N-F-E containment
-gate is semantically unchanged; nothing is served, admitted, broadcast, gossiped,
-or durably tip-advanced. **No second bootstrap (CN-NODE-01 held), no Mithril call,
-no new BLUE authority, no BLUE crate change.** The span also carries a close-surfaced
-CI remediation (`4eb7610`): the single-bootstrap gate's `ReceiveState::new`
-owner check, stale and red since N-F-C/N-F-D, is replaced with a per-file owner
-allow-list and is green again.
+This window narrates the **PHASE4-N-F-G-A cluster** — the first of three planned
+PHASE4-N-F-G sub-clusters (G-A forge fidelity / G-B self-accept→serve handoff / G-C
+live operator serve). G-A **hardens the N-F-F forge-on path so the constants it
+forges with are real**, and so two boundaries the prior path masked **fail closed**.
+The `--mode node` forge path now sources the **real** operator opcert/genesis config
+through the closed cardano-cli parsers (retiring the `parse_simple_*` stubs on the
+node path), installs the **current** oracle-bound `ProtocolParameters` + protocol
+version into the recovered ledger (instead of `ProtocolParameters::default()`), fails
+closed on a before-genesis-anchor clock→slot saturation (S3), and fails closed on an
+off-epoch forge slot **before** leadership / KES signing with **no nonce promotion**
+(S4). A new GREEN `#[cfg(test)]` genesis-consistency pinning harness (S1/S1b) drives
+the **real** `bootstrap_initial_state` warm-start against a committed private-net
+Ade-as-leader reference fixture. **NO BLUE crate changed (456 canonical types, Δ0);
+no new `CoordinatorEvent` variant; the forge stays subordinate + self-accept-only —
+the N-F-E containment gate is byte-unchanged; nothing is served, admitted, gossiped,
+broadcast, or durably tip-advanced.** Live serve / operator-peer ACCEPT / BA-02 /
+RO-LIVE remain the gated G-B / G-C follow-ons.
 
 ## 0. Headline
 
-| Count | Baseline (`e606ed6`) | HEAD (`4eb7610`) | Δ |
+| Count | Baseline (`4eb7610`) | HEAD (`80dac1f7`) | Δ |
 |---|---|---|---|
-| CI gates (`ci/ci_check_*.sh`) | 110 | **112** | +2 new (`forge_intent_closed`, `operator_forge_no_secret_leak`); 1 **modified in place** (`node_binary_uses_single_bootstrap`) |
-| Registry rules | 310 | **311** | +1 (CN-NODE-03 declared) |
-| Test attributes (`#[test]`/`#[tokio::test]`, workspace) | 2169 | **2188** | +19 (all in `ade_node`: S1/S3/S4 + the binary On/Off arms; ~+25 case-level) |
-| BLUE canonical types | 456 | 456 | **0 — NO BLUE change** (all code lands in RED/GREEN `ade_node`) |
+| CI gates (`ci/ci_check_*.sh`) | 112 | **116** | **+4 new** (`genesis_consistency_fixture_present`, `recovered_ledger_pparams_sourced`, `node_forge_real_cli_ingress`, `node_forge_single_epoch_fail_closed`); none removed |
+| Registry rules | 311 | **313** | **+2** (`DC-EPOCH-03`, `DC-NODE-06` — both `declared` at this HEAD); none removed |
+| Test attributes (`#[test]`/`#[tokio::test]`, workspace) | 2188 | **2213** | **+25** (G-A surface, across `protocol_params`/`clock`/`canonical`/`genesis_pinning`/`node_sync`/`node_lifecycle`/`seed_to_snapshot`) |
+| BLUE canonical types | 456 | 456 | **0 — NO BLUE change** (all code lands in RED `ade_runtime` / RED `ade_node` / GREEN `ade_testkit`) |
 
-> Registry note: at HEAD `4eb7610`, `CN-NODE-03` sits at `status = "declared"`
-> (`tests = []`, `ci_script = ""`). The not-yet-made close-pass commit flips it to
-> `enforced` (populating `tests` + `ci_script`) and records the **4 cross-slice
-> strengthenings** against the rules it composes on — mirroring how the N-F-E
-> close-pass flipped `DC-NODE-05` after its slice span. This doc narrates the slice
-> span; the close-pass commit follows, as in prior cluster closes.
+> **Registry note (load-bearing — read before §7).** At HEAD `80dac1f7` the
+> committed registry is in **slice-span state**: `DC-EPOCH-03` sits at
+> `status = "declared"` (`tests = []`, `ci_script = ""`, `introduced_in =
+> "PHASE4-N-F-G-A"`, `strengthened_in = []`), and **none** of the seven rules the
+> cluster composes on carry a `strengthened_in += "PHASE4-N-F-G-A"` token yet. The
+> not-yet-made **close-pass commit** flips `DC-EPOCH-03` `declared → enforced`
+> (populating `tests` + `ci_script` with the S4 gate + tests) and records the **7
+> cross-slice strengthenings** (`CN-OPCERT-01`, `CN-GENESIS-01`, `DC-LEDGER-10`,
+> `CN-NODE-01`, `DC-CINPUT-02b`, `DC-NODE-05`, `DC-NODE-03`) — exactly as the N-F-E
+> close-pass flipped `DC-NODE-05` and the N-F-F close-pass flipped `CN-NODE-03` after
+> their slice spans. This doc narrates **what is committed at `80dac1f7`**; the
+> close-pass follows. (The already-regenerated CODEMAP narrates the *owed end-state*
+> — see the anomaly note in the generation section.)
 
 ## 1. Commit Log (newest first)
 
 | Hash | Type | Summary |
 |------|------|---------|
-| `4eb7610` | fix | PHASE4-N-F-F S5 — single-bootstrap gate ReceiveState owner allow-list |
-| `d08a065` | docs | specify PHASE4-N-F-F S5 single-bootstrap gate precision |
-| `58acca1` | test | PHASE4-N-F-F S4 — operator-material forge proof |
-| `a6b5c2a` | docs | specify PHASE4-N-F-F S4 operator-material forge proof |
-| `217ad15` | feat | PHASE4-N-F-F S3 — forge activation assembly + Some/None flip |
-| `fc95eb4` | docs | tighten PHASE4-N-F-F S3 Mithril boundary |
-| `4d11d88` | docs | specify PHASE4-N-F-F S3 forge activation assembly |
-| `5980037` | feat | PHASE4-N-F-F S2 — operator material into RED custody |
-| `c53755a` | docs | specify PHASE4-N-F-F S2 operator material custody |
-| `3c4bcca` | feat | PHASE4-N-F-F S1 — forge intent classifier |
-| `0e5f040` | docs | specify PHASE4-N-F-F S1 forge intent |
-| `b2a2df6` | docs | plan PHASE4-N-F-F cluster slices |
-| `a3eee84` | docs | declare PHASE4-N-F-F operator key ingress |
+| `80dac1f7` | feat | feat(node): fail closed on off-epoch forge before leadership |
+| `5204a8d8` | docs | specify PHASE4-N-F-G-A S4 epoch fail-closed |
+| `2049ec9d` | feat | feat(node): fail closed on before-anchor forge slot alignment |
+| `2a27d352` | docs | specify PHASE4-N-F-G-A S3 slot alignment |
+| `11704998` | feat | PHASE4-N-F-G-A S2 — real opcert/genesis ingress + recovered-current constants |
+| `e56e8cca` | docs | refresh PHASE4-N-F-G-A S2 — PO-1 discharged by S2a, narrowed scope |
+| `3dba81db` | feat | PHASE4-N-F-G-A S2a — current protocol parameters source |
+| `38680107` | docs | specify PHASE4-N-F-G-A S2a current pparams source |
+| `225e61d9` | docs | insert PHASE4-N-F-G-A S2a (current protocol params source) into G-A plan + cluster doc |
+| `a5afb013` | docs | specify PHASE4-N-F-G-A S2 real opcert/genesis ingress + derived constants |
+| `b5decb3e` | test | PHASE4-N-F-G-A S1 — genesis-consistency pinning harness |
+| `23addfbb` | test | PHASE4-N-F-G-A S1b — private-net genesis reference fixture |
+| `50c6a5b0` | docs | specify PHASE4-N-F-G-A S1b private reference extraction |
+| `2684a618` | docs | specify PHASE4-N-F-G-A S1 genesis pinning |
+| `58809947` | docs | define PHASE4-N-F-G-A forge fidelity cluster |
+| `1c3b077f` | docs | plan PHASE4-N-F-G as three sub-clusters |
+| `b063c6a4` | docs | declare PHASE4-N-F-G live serve invariants |
+| `cd2f87ae` | docs | Close PHASE4-N-F-F — operator-key ingress + forge-on flip for --mode node |
+| `73f032fb` | ci | notify ade-atlas on grounding-doc changes (event-driven; cron stays as fallback) |
 
-(Plus the pending close-pass commit: grounding-doc refresh + CN-NODE-03 `declared→enforced`
-flip with 4 strengthenings + `.idd-config.json` baseline / registry-count bump + cluster-doc
-archive + this HEAD_DELTAS.)
+Plus one merge commit in the span: `f08b12ca` *Merge origin/main (ade-atlas notify CI)
+into PHASE4-N-F-F close* — the N-F-F close merge that opens the window.
+
+The first three non-G-A commits (`cd2f87ae` N-F-F close-pass, `73f032fb` + the
+`f08b12ca` merge the non-gating ade-atlas notify CI) are the **N-F-F tail** that
+lands inside this span because the baseline `4eb7610` is the N-F-F *slice-span* HEAD,
+not its close commit. `b063c6a4` / `1c3b077f` are the PHASE4-N-F-G **invariant
+sketch + sub-cluster plan** (they declare `DC-EPOCH-03` and `DC-NODE-06` and the G-B /
+G-C boundaries), and `58809947` defines the G-A cluster. Everything from `2684a618`
+onward is G-A proper (S1 → S4).
+
+(Plus the pending close-pass commit: grounding-doc refresh + `DC-EPOCH-03`
+`declared → enforced` flip with 7 strengthenings + `.idd-config.json` baseline bump
+`4eb7610 → 80dac1f7` and registry-count bump 311 → 313 + cluster-doc archive + this
+HEAD_DELTAS.)
 
 ## 2. New Modules
 
-Two new submodules, both in the existing RED `ade_node` crate. No new crate, no new
-WAL/checkpoint/canonical type, no BLUE change.
+Two new source modules — one GREEN parser in the RED `ade_runtime` crate, one GREEN
+`#[cfg(test)]` harness in the GREEN `ade_testkit` crate — plus a committed test
+fixture bundle. No new crate, no new BLUE authority, no new WAL/checkpoint/canonical
+type.
 
 | Module | Color | Purpose | Key sub-paths | Added in |
 |--------|-------|---------|---------------|----------|
-| `ade_node::forge_intent` | **GREEN** | Pure tri-state classifier: "may `--mode node` forge?" as a total function of which operator-key CLI flags are *present* — never of their contents. Opens no file, parses no key, touches no secret. | `classify_forge_intent(cold, kes, vrf, opcert, genesis) -> Result<ForgeIntent, ForgeIntentError>`; closed two-variant `ForgeIntent` (`On(ForgePaths)` \| `Off`); `ForgePaths` (the presence-validated complete path set); `ForgeIntentError::PartialKeySet { present, missing }` (static flag-name strings only). Exhaustive without a wildcard arm — a partial set can never collapse into `On`/`Off`. | `PHASE4-N-F-F` S1 (`3c4bcca`) |
-| `ade_node::operator_forge` | **RED** | The single named `--mode node` operator-material ingress site. Consumes a presence-validated `ForgePaths` and builds a `ProducerShell` (RED key-custody holder) by **reusing** the existing cold/VRF/KES/opcert loaders — no parser reimplementation. Then assembles the canonical forge material. | `load_operator_producer_shell(paths) -> Result<.., OperatorForgeError>` (S2); `build_operator_forge_material(paths) -> Result<OperatorForgeMaterial, ..>` + the `OperatorForgeMaterial` carrier (S3); closed secret-free `OperatorForgeError` (inner `KeyLoadError` carries no path bytes per OP-OPS-04). RED-confined custody: no byte accessor, no serialization, no logging. | `PHASE4-N-F-F` S2 (`5980037`) / S3 (`217ad15`) |
+| `ade_runtime::consensus_inputs::protocol_params` | **GREEN** | The cardano-cli `query protocol-parameters` JSON parser. Converts the oracle's `protocol_params_json` preimage (carried in the operator consensus-inputs bundle) into a canonical BLUE `ProtocolParameters`, so the recovered ledger carries the **current** protocol version + modeled parameters instead of `ProtocolParameters::default()` (the stale `protocol_major = 2` the S2 PO-1 entry check exposed). | `parse_protocol_parameters_json(bytes, network_magic) -> Result<ProtocolParameters, ProtocolParamsParseError>`; closed `ProtocolParamsParseError`. **No float path (hard rule):** the rational unit-/non-negative-interval literals (`poolPledgeInfluence`, `monetaryExpansion`, `treasuryCut`) are preserved as strings via `serde_json::value::RawValue` and converted to exact `ade_ledger::rational::Rational` by **integer** decimal/scientific parsing — no `f64`, no `as f64`, no serde float deserialization; a literal that cannot be represented exactly fails closed (`InexactRational`). Conway-only fields outside the modeled forge-header surface are **ignored, not denied** (documented). | `PHASE4-N-F-G-A` S2a (`3dba81db`) |
+| `ade_testkit::consensus::genesis_pinning` | **GREEN** (`#[cfg(test)]`) | A genesis-consistency pinning harness. Reads the committed private-net Ade-as-leader reference fixture (S1b), builds the recovered seed-epoch surface, drives the **real** `bootstrap_initial_state` warm-start, and pins Ade's recovered values + leader-eligibility inputs against the genesis-derived reference. Non-authoritative test infrastructure; comparisons over observable/derived surfaces only (DC-COMPAT-01). | The four named pinning tests; `include_str!` of the committed fixture bundle; the recovered-surface builder + reference cross-checks (eta0 == genesis_hash, ASC numer/denom, non-empty pool_distribution, per-pool pool_vrf_keyhashes). | `PHASE4-N-F-G-A` S1 (`b5decb3e`) |
 
-Both modules are wired in `crates/ade_node/src/lib.rs` (`pub mod forge_intent;`,
-`pub mod operator_forge;`).
+New committed **test fixture** (not a code module): `crates/ade_testkit/fixtures/nfg_a_privnet_reference/`
+— a private-net Ade-as-leader reference bundle, `consensus-inputs.json` +
+`shelley-genesis.json` + `PROVENANCE.md` (S1b, `23addfbb`). Evidence input to the S1
+harness, **never runtime authority**; the `ci_check_genesis_consistency_fixture_present.sh`
+gate asserts no `*.skey`/`*.vkey`/cardano-cli signing-key envelope leaked into the dir.
 
-Cross-reference: both already appear in CODEMAP §GREEN / §RED.
+Cross-reference: both modules + the fixture already appear in CODEMAP §GREEN (the
+CODEMAP was regenerated against this same HEAD).
 
 ## 3. Modules Modified
 
+All modified files existed at baseline. Trivial/no-behavioral-effect changes are
+skipped (e.g., the one-line `serde_json` dependency-feature add in `ade_runtime/Cargo.toml`
+— see §4).
+
 | Module | Color | Scope | Key changes |
 |--------|-------|-------|-------------|
-| `ade_node::node_lifecycle` | **RED** | +280 / -38 lines | **S3 (`217ad15`) — the forge-on flip.** `run_node_lifecycle_inner` now classifies forge intent from operator-key flag *presence* (`classify_forge_intent` over the `cli` flags) and `match`es it: `ForgeIntent::Off` moves the recovered ledger + chain_dep into the relay spine and calls `run_relay_loop(.., None)` (the exact N-F-D/N-F-E relay path); `ForgeIntent::On(paths)` builds the operator-material-backed `ForgeActivation` (via `operator_forge::build_operator_forge_material`, hosting the reused `kes_period_for_slot` through a secret-free `coordinator_init`), constructs a `SystemClock` as the sole wall-clock seam (DC-NODE-03), and calls `run_relay_loop(.., Some(&mut activation))`. New `NodeLifecycleError::ForgeKeyIngress(String)` + `EXIT_NODE_FORGE_KEY_INGRESS_FAILED = 44` (distinct exit so an operator distinguishes a partial/failed key-ingress from a bootstrap/recovery/sync/bad-CLI exit; secret-free message). **Recovered-state lifetime restructure:** on the `On` arm the recovered ledger + chain_dep are *cloned* into the relay spine (the spine evolves its copy), while `state` is kept owned as the forge baseline — one recovered state, forge base = spine base. The forge base does **not** bootstrap and does **not** call Mithril. Two new `#[tokio::test]`s: forge-on warm-start halts clean (forge-capable) and partial keys fail closed. |
-| `ade_node::produce_mode` | **RED** | +12 / -3 lines | **S2 (`5980037`) — visibility only.** Three loaders widened from private `fn` to `pub(crate)` so the new `operator_forge` ingress site reuses them rather than duplicating parsers: `load_kes_skey_any_format`, `parse_simple_opcert_json`, `parse_simple_genesis_json`. No behavioral change. |
-| `ade_node::node_sync` | **RED** | +201 / -0 lines (`#[cfg(test)]` only) | **S4 (`58acca1`) — operator-material forge proof, tests only.** New `#[cfg(test)]` fixtures + tests that drive the binary On path through the relay loop to the fenced `forge_one_from_recovered`: `relay_loop_with_operator_material_forge_reaches_fenced_path` (operator-material activation reaches the single fenced forge handoff, self-accept-only) and `relay_loop_with_operator_material_two_runs_byte_identical` (replay-equivalence — same recovered state + ordered feed + injected clock ⇒ byte-identical forge sequence). `run_node_sync` itself is **UNMODIFIED**. |
-
-`ade_node::lib` changed (+2) only to register the two new submodules; not a behavioral
-modification.
+| `ade_node::node_sync` | **RED** (host of GREEN-pure `forge_epoch_admission` + the fenced BLUE `forge_one_from_recovered`) | +284 / -0 lines (mostly `#[cfg(test)]`) | **S4 (`80dac1f7`) — the off-epoch fail-closed boundary.** New closed two-variant `ForgeEpochAdmission` (`WithinSeedEpoch` \| `OffEpoch { candidate_epoch, seed_epoch }`) + the GREEN-pure `forge_epoch_admission(slot, era_schedule, seed_epoch) -> ForgeEpochAdmission` total function that derives the candidate epoch via the BLUE `EraSchedule::locate` (no fabricated epoch math; a `locate` error is treated as off-epoch). `forge_one_from_recovered` now calls `forge_epoch_admission` and fails closed on `OffEpoch` **BEFORE** `query_leader_schedule` — off-epoch forge fails before leadership / KES signing, and the apply path drives **no** `NonceInput::EpochBoundary` / `CandidateFreeze` nonce promotion (the seed-epoch eta0 stays frozen at the recovered value). New `#[cfg(test)]` proofs: `forge_epoch_admission_within_seed_epoch_admits`, off-epoch fail-closed, no-nonce-promotion. |
+| `ade_node::operator_forge` | **RED** | +156 / -88 lines | **S2 (`11704998`) — real config ingress on the node path.** The operator-forge ingress site retires the `parse_simple_opcert_json` / `parse_simple_genesis_json` stubs **on the node path** and loads operator config through the **real** closed-contract cardano-cli parsers `parse_opcert_envelope` + `parse_shelley_genesis`. `protocol_version` / `pparams` are taken from the recovered **current** view (S2a) rather than produce-path honest-scope defaults. Custody stays RED-confined; the `ci_check_node_forge_real_cli_ingress.sh` gate fails closed if a simple-JSON parser reappears on the node forge path. |
+| `ade_node::node_lifecycle` | **RED** | +98 / -? lines | **S2/S3 wiring.** Threads the recovered **current** `ProtocolParameters` + protocol version into the forge-capable `On`-arm activation (S2/S2a), and wires the S3 checked clock→slot guard so a before-genesis-anchor candidate slot fails closed (`SlotAlignmentError::BeforeGenesisAnchor`) instead of saturating to `start_slot`. The single `SystemClock` wall-clock seam (DC-NODE-03) is unchanged in placement; the N-F-F forge-on `Off`/`On` dispatch is unchanged in shape. New tests: protocol-version/pparams sourced from the recovered current view; before-anchor fail-closed. |
+| `ade_node::admission::seed_to_snapshot` | **RED** | +66 / -? lines | **S2a (`3dba81db`) — install current pparams at seed/import.** `build_seed_ledger` now installs the **caller-supplied current** `ProtocolParameters` into the recovered ledger at the forge-capable seed import — never `ProtocolParameters::default()` / genesis-initial. The bind is **fail-closed** on an absent preimage / hash mismatch (via the new `require_forge_current_pparams` accessor). The `ci_check_recovered_ledger_pparams_sourced.sh` gate fails closed if a future change reverts the forge recovered-ledger to a defaulted `protocol_params`. |
+| `ade_node::admission::bootstrap` | **RED** | +23 / -? lines | **S2a — forge-capable bootstrap binds the current pparams.** The forge-capable bootstrap path binds + installs the current pparams preimage (hash-bound), preserving warm-start behavior. No second bootstrap (CN-NODE-01 held). |
+| `ade_runtime::clock` | **GREEN-by-content seam** | +63 / -0 lines | **S3 (`2049ec9d`) — checked clock→slot.** New `checked_millis_to_slot(tick_millis, slot_length_ms, start_slot, ..) -> Result<SlotNo, SlotAlignmentError>` + closed `SlotAlignmentError` (`BeforeGenesisAnchor`). Returns the aligned slot exactly when `tick_millis >= anchor`, and `Err(BeforeGenesisAnchor)` when `tick_millis < anchor` — replacing the saturating `millis_to_slot` behavior on the forge path. Two `#[cfg(test)]` proofs: matches `millis_to_slot` when aligned; before-anchor fails closed. The existing `SystemClock` / `DeterministicClock` seams are unchanged. |
+| `ade_runtime::consensus_inputs::canonical` | **GREEN** | +103 / -0 lines | **S2a — the hash-bound preimage accessor.** New `LiveConsensusInputsCanonical::require_forge_current_pparams` (+ supporting carrier) — a hash-bound preimage accessor that yields the operator-bundle current-pparams JSON only when its hash matches the canonical commitment, so the S2a install path is preimage-bound and fails closed on absence / mismatch. `#[cfg(test)]` present / hash-mismatch proofs. |
+| `ade_runtime::consensus_inputs::{importer, json, mod, seed_consensus_merge}` | **GREEN** | +17 / -0 lines total | **S2a plumbing.** `mod.rs` registers `pub mod protocol_params;`; `importer.rs` (+5) / `json.rs` (+9) / `seed_consensus_merge.rs` (+1) thread the current-pparams preimage through the import + merge path. No behavioral change beyond carrying the new preimage. |
 
 ## 4. Feature Flags
 
-No feature-flag deltas. No `Cargo.toml` changed in the span.
+**No project feature-flag deltas.** Ade declares no `[features]` table in any
+workspace `Cargo.toml` (confirmed at both refs — the table is absent), and no
+`#[cfg(feature = …)]` gate was introduced in the span.
 
-## 5. CI Checks (110 → 112; +2 new, 1 modified in place)
+The only `Cargo.toml` change is a **dependency-feature** add in
+`crates/ade_runtime/Cargo.toml`: `serde_json` gains the `raw_value` feature
+(`serde_json = { version = "1", features = ["raw_value"] }`). This is required by the
+new GREEN `protocol_params` parser to preserve rational literals as strings
+(`serde_json::value::RawValue`) and convert them to exact `Rational` by integer
+parsing — the mechanical enforcement of the "no float path" hard rule. It gates no
+Ade code via a `cfg`; it is a transitive capability of a dependency, not an Ade
+feature flag. No coupling, no `compile_error!` guard.
 
-| Check | Status | Backs |
-|-------|--------|-------|
-| `ci_check_forge_intent_closed.sh` | **New** (S1) | CN-NODE-03 (intent-classification half). Asserts the GREEN classifier module exists with a `//! GREEN` banner, `ForgeIntent` + `classify_forge_intent` are defined, and the production body (doc comments + `#[cfg(test)]` stripped first) is closed: no `#[non_exhaustive]`, no key-material / I/O / clock / nondeterminism token, and **no wildcard arm** in the classification decision that could collapse an unenumerated presence combination into `On` or `Off`. |
-| `ci_check_operator_forge_no_secret_leak.sh` | **New** (S2) | CN-NODE-03 (RED-custody-loading half). Asserts the ingress module has a `//! RED` banner, `load_operator_producer_shell` is defined, `ProducerShell::init` is called (freshness enforced there, not reimplemented), and the production body leaks no private-key bytes — no byte accessor, no serialization, no logging vector. |
-| `ci_check_node_binary_uses_single_bootstrap.sh` | **Modified in place** (S5, `4eb7610`) | CN-NODE-01 (single bootstrap authority). Replaces the stale `≤1 ReceiveState::new per crate` count — impossible-to-satisfy once two lifecycle-owner files exist, and unable to tell mutually-exclusive arms apart — with a per-file **owner allow-list** (`node.rs`, `node_lifecycle.rs`). `ReceiveState::new` in any *other* `ade_node` production file is a rogue recovered-state bypass and fails closed; the mutually-exclusive `ForgeIntent::Off`/`On` arms of the single dispatcher are no longer miscounted. Double-bootstrap-within-a-path stays covered by the per-file `bootstrap_initial_state` check + `ci_check_node_run_loop_containment.sh`. This was a close-surfaced remediation from the per-cluster security review (the guard had been red since N-F-C/N-F-D). |
+## 5. CI Checks (112 → 116; +4 new, 0 modified, 0 removed)
+
+All four new gates are repo-root-relative and mirror the existing `ci/ci_check_*.sh`
+convention. Every one strips the `#[cfg(test)]` module + doc/line comments before its
+negative greps so commentary naming a retired/forbidden token cannot trip the guard.
+
+### PHASE4-N-F-G-A gates (4, from baseline through HEAD)
+
+| Check | Status | Cluster origin | What it checks |
+|-------|--------|----------------|----------------|
+| `ci_check_genesis_consistency_fixture_present.sh` | **New** | S1 (`b5decb3e`) | Backs **CE-G-A-1** (genesis-consistency). The three fixture files are committed; the bundle is well-formed and Ade-as-leader (eta0, ASC numer/denom, non-empty pool_distribution, per-pool pool_vrf_keyhashes, eta0 == genesis_hash); **no secret key material** is committed (no `*.skey`/`*.vkey`, no cardano-cli signing-key envelope); and the GREEN harness module exists, is wired into `ade_testkit`, embeds the fixture via `include_str!`, and defines the four named pinning tests. Hermetic — no Docker / cardano-cli / live node. |
+| `ci_check_recovered_ledger_pparams_sourced.sh` | **New** | S2a (`3dba81db`) | Backs **CE-G-A-2a**. The recovered ledger's `protocol_params` are sourced from the operator consensus-inputs bundle's oracle preimage at the forge-capable seed import — **never** `ProtocolParameters::default()` / genesis-initial. Positive: `build_seed_ledger` installs the caller-supplied current pparams. Negative: its production body must NOT default `protocol_params`. The bind is fail-closed on absent preimage / hash mismatch. |
+| `ci_check_node_forge_real_cli_ingress.sh` | **New** | S2 (`11704998`) | Backs **CE-G-A-2**. The `--mode node` operator-forge ingress loads config through the **real** closed-contract parsers (`parse_opcert_envelope` + `parse_shelley_genesis`) and **retires the `parse_simple_*` stubs on the node path**. Fails closed if a future change reintroduces a simple-JSON parser on the node forge path. |
+| `ci_check_node_forge_single_epoch_fail_closed.sh` | **New** | S4 (`80dac1f7`) | Backs **CE-G-A-4** / **DC-EPOCH-03**. The node forge path fails closed at the single recovered seed-epoch boundary **before** leadership / KES signing and drives **no** nonce promotion: (a) `forge_one_from_recovered` calls the explicit `forge_epoch_admission` guard BEFORE `query_leader_schedule`; (b) the guard derives the candidate epoch via the BLUE `EraSchedule::locate` (no fabricated epoch math); (c) the node forge path drives no `NonceInput::EpochBoundary` / `CandidateFreeze` promotion. Fails closed if a future change reorders the guard after leadership, fabricates the epoch, or introduces a nonce roll. |
 
 The N-F-E forge-containment gate (`ci_check_node_run_loop_containment.sh`) is
 **semantically unchanged** — still exactly one fenced `forge_one_from_recovered`
-call, no serve/admit/gossip/broadcast/block-fetch/durable-tip path. N-F-F added
-key-ingress gates but did **not** relax forge containment.
+call, no serve / admit / gossip / broadcast / block-fetch / durable-tip path. G-A
+added forge-**fidelity** gates but did **not** relax forge containment.
 
-Cross-reference: the two new gates and the modified gate will be cross-referenced
-in TRACEABILITY by the close-pass (CN-NODE-03 is still `declared` at this HEAD, so
-its `ci_script` array is empty and TRACEABILITY does not yet list these gates — see
-the warnings below).
+> Cross-reference: at HEAD `80dac1f7`, `DC-EPOCH-03.ci_script` is still `""` (the rule
+> is `declared`), so these four gates are **not yet** cross-referenced from
+> TRACEABILITY. The close-pass flips `DC-EPOCH-03` to `enforced` (populating its
+> `ci_script` + `tests`) and refreshes TRACEABILITY. See the warnings in the
+> generation section.
 
 ## 6. Canonical Type Registry Delta
 
-n/a — no separate canonical-type registry is configured (`canonical_type_registry: null`),
-and no BLUE crate changed. The 456 BLUE canonical-type total is **unchanged (Δ0)**.
-The new `ForgeIntent` / `ForgePaths` / `ForgeIntentError` / `OperatorForgeMaterial` /
-`OperatorForgeError` / `ForgeActivation` types and the `NodeLifecycleError::ForgeKeyIngress`
-variant all live in the RED/GREEN `ade_node` crate and are not canonical-counted.
+**n/a — no separate canonical-type registry is configured** (`canonical_type_registry: null`),
+and **no BLUE crate changed**. The 456 BLUE canonical-type total is **unchanged (Δ0)**
+across the span (independently re-verified in CODEMAP: `ade_ledger` 177, `ade_core`
+49, `ade_codec` 11, `ade_types` 81, `ade_crypto` 21, `ade_plutus` 8, `ade_network`
+BLUE submodules 109). The new `ProtocolParamsParseError`, `SlotAlignmentError`, and
+`ForgeEpochAdmission` types all live in the RED `ade_runtime` / RED `ade_node` crates
+and are not canonical-counted. No new `CoordinatorEvent` variant was introduced.
 
-## 7. Normative / Invariant Rule Delta (310 → 311)
+## 7. Normative / Invariant Rule Delta (311 → 313)
 
-### New rule (declared at sketch this cluster)
+Two rule IDs were added in the span. **Both are `declared` sketches at HEAD
+`80dac1f7`** — neither is `enforced` in the committed registry yet.
 
-| ID | Tier | Status @ `4eb7610` | Summary |
-|----|------|--------------------|---------|
-| `CN-NODE-03` | constraint_network | **declared** | Operator-key ingress + forge-on flip for `--mode node`. Ingress builds an operator-material-backed `ForgeActivation` strictly via RED-parse → BLUE-structural-validator → canonical-type, **reusing** the existing KES/VRF/cold/opcert loaders — no new BLUE authority, no parser reimplementation, no plugin seam, no second forge codepath, no BLUE crate change. Key custody stays RED-confined to `ProducerShell` (no copy/extract into GREEN coordinator/planner/node/loop state or any persisted/logged/hashed-for-evidence/replay surface; tests must not print/snapshot/serialize/compare private key bytes). Forge intent is a pure total function of CLI key-flag presence: complete set ⇒ `Some(activation)`; all absent ⇒ `None` (byte-identical N-F-D relay); any partial subset ⇒ structured fail-closed error (never a silent relay fallback, never a missing/zero/fabricated key). The forge base is the **same** recovered `BootstrapState` that seeds the relay spine (single bootstrap authority; no second bootstrap, no second recovered state). Forge stays subordinate + self-accept-only — the N-F-E containment gate stays semantically unchanged; N-F-F may add key-ingress gates but must not relax forge containment. N-F-F makes the binary forge-**capable** once paired with a live/continuing feed; it does **not** make forge observable on the current empty-source binary path (`plan_loop_step` halts on `LoopState::Ending` even when a slot is `Due`) and makes **no** live forge / serve / gossip / peer-acceptance / BA-02 / RO-LIVE / durable-tip claim. `pparams` / `protocol_version` reuse the produce-path honest-scope defaults — ingress/activation wiring, not mainnet-complete block-production fidelity. |
+### New rules (declared at the PHASE4-N-F-G invariant sketch this cluster)
 
-> At HEAD `4eb7610`, `CN-NODE-03.status = "declared"` (`tests = []`, `ci_script = ""`,
-> `introduced_in = "PHASE4-N-F-F"`, `strengthened_in = []`). The pending close-pass
-> commit flips it to `enforced` (populating `tests` + `ci_script` with the S1/S2 gates
-> and the S3/S4 lifecycle + node_sync tests) and records the **4 cross-slice
-> strengthenings** against the rules it composes on — `OP-OPS-04`, `CN-PROD-02`,
-> `DC-NODE-05`, and the single-bootstrap-authority anchor (`evidence_notes`:
-> "OP-OPS-04 / CN-PROD-02 / DC-NODE-05 get `strengthened_in += "PHASE4-N-F-F"`";
-> `cross_ref` also carries CN-NODE-01 / CN-NODE-02 / DC-CINPUT-02b / CN-CINPUT-03
-> unchanged). This mechanical narration counts only what is committed at `4eb7610`.
+| ID | Tier | Status @ `80dac1f7` | `introduced_in` | Summary |
+|----|------|---------------------|-----------------|---------|
+| `DC-EPOCH-03` | derived | **declared** | `PHASE4-N-F-G-A` | Single-epoch forge fail-closed on the `--mode node` spine. A candidate forge slot is valid only within the single recovered seed epoch; an off-epoch candidate fails closed and the seed-epoch nonce (eta0) stays frozen at the recovered value — the forge apply path does **not** drive the BLUE `CandidateFreeze` / `EpochBoundary` nonce transitions. Cross-epoch production (nonce roll + epoch boundary) is **forbidden, not silently attempted**. **S4 (`80dac1f7`) implements this rule** (`forge_epoch_admission` + the before-leadership guard + the no-nonce-promotion property) and `ci_check_node_forge_single_epoch_fail_closed.sh` enforces it — but at this HEAD the registry entry is still the sketch (`tests = []`, `ci_script = ""`, `strengthened_in = []`). The close-pass flips it `declared → enforced`. |
+| `DC-NODE-06` | derived | **declared** | `PHASE4-N-F-G-B` | Self-accept → serve handoff on the `--mode node` relay spine (sibling serve task, shape B). A **forward sketch for the next sub-cluster (G-B)** — declared at the PHASE4-N-F-G invariant pass, **NOT implemented or enforced by G-A**. Only a BLUE self-accepted forged artifact (`ForgeSucceeded` provenance) may enter the sibling served-chain serve task via the single `ServedChainHandle::push_atomic` authority; the relay-loop body performs no serve/admit/gossip/block-fetch/durable-tip mutation, so the containment gate stays semantically unchanged. Peer acceptance is proven ONLY by the peer's validation log (RO-LIVE-06), never by Ade's self-accept / any wire-success signal. `tests = []`, `ci_script = ""`, `status = "declared"`. |
 
-This section is informational and reflects the registry state at HEAD. **No rule was
-removed (expected: 0).**
+### Strengthenings (owed at close, NOT yet committed)
+
+At HEAD `80dac1f7` **zero** `strengthened_in += "PHASE4-N-F-G-A"` tokens are
+committed. The pending close-pass records the **7 cross-slice strengthenings** the
+cluster composes on:
+
+| Rule | Why strengthened by G-A |
+|------|--------------------------|
+| `CN-OPCERT-01` | S2 retires the opcert stub on the node path for the real `parse_opcert_envelope` closed-contract parser. |
+| `CN-GENESIS-01` | S2 retires the genesis stub on the node path for the real `parse_shelley_genesis` closed-contract parser. |
+| `DC-LEDGER-10` | S2a installs the **current** oracle-bound `ProtocolParameters` (real protocol version / modeled params) into the recovered ledger instead of the defaulted view. |
+| `CN-NODE-01` | S2a forge-capable bootstrap binds the current-pparams preimage on the **same** single recovered bootstrap — no second bootstrap. |
+| `DC-CINPUT-02b` | S2a threads the hash-bound current-pparams preimage through the consensus-inputs import/merge path. |
+| `DC-NODE-05` | S3/S4 forge-tick now fails closed on before-anchor (clock→slot) and off-epoch boundaries — the self-accept-only forge gains two fail-closed boundaries. |
+| `DC-NODE-03` | S3 keeps the single `SystemClock` wall-clock seam and routes its output through the checked `checked_millis_to_slot` guard. |
+
+This section is informational and reflects the **committed** registry state at HEAD.
+**No rule was removed (expected: 0).**
 
 ## 8. Honest residual (cluster scope)
 
-**Forge-CAPABLE with real operator keys, but NOT observable on the empty-source
-binary path.**
+**Forge-fidelity hardening on the relay spine — real config + current pparams + two
+new fail-closed boundaries. It does NOT serve, admit, gossip, or advance a durable
+tip.**
 
-- **Forge-capable, not observable.** The binary ingests a complete operator key set,
-  loads it into RED custody, and builds the operator-material-backed `ForgeActivation`
-  on the single recovered state — but with no live/continuing feed wired this cluster,
-  the empty source halts the loop before any `ForgeTick` (forge is subordinate to the
-  feed; `plan_loop_step` halts on `LoopState::Ending` even when a slot is `Due`).
-  **Observable forge / live peer / BA-02 / RO-LIVE-01 acceptance is the operator-gated
-  follow-on.**
+- **Real constants, not stubs.** The `--mode node` forge path now sources the real
+  operator opcert/genesis config (S2, closed cardano-cli parsers; `parse_simple_*`
+  retired on the node path) and the **current** oracle-bound `ProtocolParameters` +
+  protocol version (S2a, hash-bound preimage), instead of the prior stub/default
+  constants. The fix targets the stale `protocol_major = 2` the S2 PO-1 check exposed.
+- **Two new fail-closed boundaries.** A before-genesis-anchor candidate slot fails
+  closed (`SlotAlignmentError::BeforeGenesisAnchor`, S3) instead of saturating to
+  `start_slot`; an off-epoch candidate slot fails closed **before** leadership / KES
+  signing (`ForgeEpochAdmission::OffEpoch`, S4) and drives **no** nonce promotion.
 - **Self-accept-only, unchanged.** No serve / admit / gossip / broadcast / block-fetch
-  / durable-tip claim. The N-F-E containment gate is semantically unchanged; the forge
-  remains the single fenced `forge_one_from_recovered` call. `run_node_sync → pump_block`
-  remains the sole durable tip-advance authority.
-- **Single bootstrap held (CN-NODE-01).** The forge base is the **same** recovered
-  `BootstrapState` that seeds the relay spine — **no Mithril call, no second bootstrap,
-  no second recovered state**. The recovered `state` outlives both `ForwardSyncState`
-  and `ForgeActivation`.
-- **Fail-closed ingress.** A partial operator key set fails closed (exit 44,
-  `NodeLifecycleError::ForgeKeyIngress`) — never a silent relay-only fallback, never a
-  forge with a missing/zero/fabricated key. The empty set is the byte-identical N-F-D
-  relay path.
-- **No BLUE change.** 456 BLUE canonical types unchanged (Δ0); all code lands in the
-  RED `operator_forge` / RED `node_lifecycle` and the GREEN `forge_intent` classifier.
-  Leadership eligibility stays in BLUE `forge_one_from_recovered`; no new BLUE authority,
-  no plugin/trait seam, no parser reimplementation.
+  / durable-tip claim. The N-F-E containment gate is **byte-unchanged**; the forge
+  remains the single fenced `forge_one_from_recovered` call. `run_node_sync →
+  pump_block` remains the sole durable tip-advance authority.
+- **Forge-CAPABLE but NOT observable.** With no live/continuing feed wired this
+  cluster, `run_relay_loop` still halts before any `ForgeTick` on the empty binary
+  source (the `On` arm is forge-capable but not observable). **Observable forge / live
+  serve / operator-peer ACCEPT / BA-02 / RO-LIVE-01 acceptance is the gated G-B / G-C
+  follow-on.** BA-02 is satisfied nowhere.
+- **Single bootstrap held (CN-NODE-01).** S2a binds the current-pparams preimage on
+  the **same** single recovered bootstrap — no Mithril call, no second bootstrap, no
+  second recovered state.
+- **No BLUE change.** 456 BLUE canonical types unchanged (Δ0); no new `CoordinatorEvent`
+  variant. All code lands in RED `ade_runtime` (`clock` checked guard,
+  `consensus_inputs::protocol_params` GREEN parser, `consensus_inputs::canonical`
+  accessor), RED `ade_node` (`operator_forge` real parsers, `node_lifecycle` S2/S3
+  wiring, `node_sync` S4 epoch guard, `admission::{seed_to_snapshot, bootstrap}` S2a
+  install), and GREEN `ade_testkit` (`consensus::genesis_pinning` `#[cfg(test)]`). No
+  float path in `protocol_params`; `BTreeMap` / sorted keys / integer-only rational
+  arithmetic throughout. The S1 fixture is **evidence input, never runtime authority**.
 
 ---
 
-## Generation notes (regen `e606ed6 → 4eb7610`, PHASE4-N-F-F)
+## Generation notes (regen `4eb7610 → 80dac1f7`, PHASE4-N-F-G-A)
 
-- **Baseline is `e606ed6`, the PHASE4-N-F-E close — not the `.idd-config.json` value.**
-  At regen time `.idd-config.json` `head_deltas_baseline` reads `cd2484f` (the N-F-E
-  **pre-close** S3b commit), which is **stale**: the N-F-E close-pass landed at
-  `e606ed6` and is the correct frozen reference for the N-F-F span. This doc was
-  generated against `e606ed6`. **The close-pass commit must bump
-  `head_deltas_baseline` to `4eb7610`** (the N-F-F HEAD) so the next cluster's
-  `/head-deltas` measures from here, and bump the registry-count comment 310 → 311.
-- Counts are mechanical: commit log + `--stat` over `e606ed6..4eb7610`; CI gate count
-  via `ls-tree | grep ci_check_*.sh` at each ref (110 → 112); registry rule count via
-  `grep -c '^\[\[rules\]\]'` at each ref (310 → 311, one ID added: `CN-NODE-03`, none
-  removed); workspace test attributes via `grep -rohE '#\[(tokio::)?test\]'` (2169 →
-  2188, all +19 in `ade_node`); BLUE canonical types unchanged at 456 (no BLUE crate in
-  the diff).
-- CN-NODE-03 is `declared` at this HEAD; its `tests`/`ci_script` are empty, so it does
-  not yet appear in TRACEABILITY and the two new gates are not yet cross-referenced
-  there — the close-pass flips it to `enforced` and refreshes TRACEABILITY (and the
-  four grounding docs N-F-E → N-F-F).
+- **Baseline is `4eb7610`** (the `.idd-config.json` `head_deltas_baseline` value at
+  regen time — the PHASE4-N-F-F slice-span HEAD). **The close-pass commit must bump
+  `head_deltas_baseline` to `80dac1f7`** (the G-A HEAD) so the next cluster's
+  `/head-deltas` measures from here, and bump the registry-count comment 311 → 313.
+- Counts are mechanical: commit log + `--shortstat` over `4eb7610..80dac1f7` (20
+  commits incl. 1 merge / 43 files / +5221 / -595); CI gate count via `ls-tree |
+  grep ci_check_*.sh` at each ref (112 → 116, +4 new, none removed); registry rule
+  count via `grep -c '^\[\[rules\]\]'` at each ref (311 → 313, two IDs added —
+  `DC-EPOCH-03` + `DC-NODE-06`, none removed); workspace test attributes via `git
+  grep -hE '#\[(tokio::)?test\]'` (2188 → 2213, +25); BLUE canonical types unchanged
+  at 456 (no BLUE crate in the diff).
+- **ANOMALY surfaced (CODEMAP vs. committed registry).** The already-regenerated
+  CODEMAP (HEAD `80dac1f7`) narrates `DC-EPOCH-03` at `status = enforced` and "Seven
+  `strengthened_in += "PHASE4-N-F-G-A"` bumps." The **committed registry at the same
+  HEAD** shows `DC-EPOCH-03` at `status = "declared"` (`tests = []`, `ci_script = ""`,
+  `strengthened_in = []`) and **zero** committed G-A strengthenings. This is the
+  standard slice-span-vs-close-pass gap (same pattern N-F-E used for `DC-NODE-05` and
+  N-F-F used for `CN-NODE-03`): CODEMAP narrates the **owed end-state**; this
+  HEAD_DELTAS narrates **what is committed**. The close-pass that flips `DC-EPOCH-03`
+  to `enforced` + records the 7 strengthenings reconciles them. This is **not** a rule
+  removal and **not** a discipline violation — it is a sequencing artifact of
+  regenerating grounding docs before the close-pass registry edit.
+- `DC-EPOCH-03` is `declared` at this HEAD; its `tests`/`ci_script` are empty, so it
+  does not yet appear in TRACEABILITY and the four new gates are not yet
+  cross-referenced there — the close-pass flips it to `enforced` and refreshes
+  TRACEABILITY (and the four grounding docs N-F-F → N-F-G-A). `DC-NODE-06` is a
+  forward sketch for G-B and is expected to stay `declared` until that sub-cluster.

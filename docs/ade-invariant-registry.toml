@@ -723,12 +723,12 @@ path).
 """
 source = "docs/planning/phase4-n-f-g-invariants.md"
 cross_ref = ["DC-NODE-05", "DC-NODE-06", "DC-EPOCH-02", "CN-FORGE-04", "DC-CONS-18", "RO-LIVE-01"]
-code_locus = "crates/ade_node/src/node_lifecycle.rs, crates/ade_node/src/run_loop_planner.rs, crates/ade_core/src/consensus/nonce.rs"
-tests = []
-ci_script = ""
+code_locus = "crates/ade_node/src/node_sync.rs, crates/ade_node/src/node_lifecycle.rs, crates/ade_node/src/run_loop_planner.rs, crates/ade_core/src/consensus/nonce.rs"
+tests = ["forge_epoch_admission_within_seed_epoch_admits", "forge_epoch_admission_off_epoch_fails_closed", "forge_epoch_admission_unlocatable_fails_closed", "node_forge_off_epoch_slot_fails_closed", "node_forge_no_epoch_boundary_promotion_on_forge_path", "forge_tick_off_epoch_slot_fails_closed_local"]
+ci_script = "ci/ci_check_node_forge_single_epoch_fail_closed.sh"
 introduced_in = "PHASE4-N-F-G-A"
 strengthened_in = []
-status = "declared"
+status = "enforced"
 evidence_notes = """
 PHASE4-N-F-G invariant sketch (/invariants gate). Declared at sketch. Single-epoch
 scope (OQ3) resolved with the user: do NOT patch nonce rollover into this cluster.
@@ -2291,7 +2291,7 @@ authority_surface = "BLUE credential representation fidelity"
 # docs/planning/oq5-credential-discriminant-invariants.md); it will become
 # strengthened_in/introduced_in once the cluster is planned.
 cluster = "CL-LEDGER-VERDICT"
-strengthened_in = ["COMMITTEE-CRED-FIDELITY", "DREP-VOTE-FIDELITY", "ENACTMENT-COMMITTEE-FIDELITY", "ENACTMENT-COMMITTEE-WRITEBACK"]
+strengthened_in = ["COMMITTEE-CRED-FIDELITY", "DREP-VOTE-FIDELITY", "ENACTMENT-COMMITTEE-FIDELITY", "ENACTMENT-COMMITTEE-WRITEBACK", "PHASE4-N-F-G-A"]
 
 [[rules]]
 id = "DC-LEDGER-11"
@@ -3014,7 +3014,7 @@ tests = [
 ]
 ci_script = "ci/ci_check_bootstrap_closure.sh, ci/ci_check_produce_mode_uses_bootstrap_initial_state.sh, ci/ci_check_node_mode_closure.sh"
 status = "enforced"
-strengthened_in = ["PHASE4-N-K", "PHASE4-N-M-B", "PHASE4-N-T", "PHASE4-N-Y", "PHASE4-N-F-A", "PHASE4-N-F-C", "PHASE4-N-F-F"]
+strengthened_in = ["PHASE4-N-K", "PHASE4-N-M-B", "PHASE4-N-T", "PHASE4-N-Y", "PHASE4-N-F-A", "PHASE4-N-F-C", "PHASE4-N-F-F", "PHASE4-N-F-G-A"]
 attack_rationale = "A parallel bootstrap path can produce an initial state that disagrees with the canonical materialize+decode authority chain — opening a startup-time chain-divergence vector."
 evidence_notes = "PHASE4-N-K S1 (2026-05-26) shipped ade_runtime::bootstrap::bootstrap_initial_state as the SOLE pub fn returning the initial (LedgerState, PraosChainDepState, Option<ChainTip>) triple. Cold-start vs warm-start is a single in-function branch. ci/ci_check_bootstrap_closure.sh enforces the single-pub-fn + materialize-authority-call positive grep. ade_node binary (S7) calls the function exactly once (ci/ci_check_node_binary_uses_single_bootstrap.sh). PHASE4-N-M-B (2026-05-26) strengthened by adding admission-mode dispatch closure: ci/ci_check_node_mode_closure.sh enforces Mode is closed {WireOnly, Admission}, main.rs match has no wildcard arm, and dispatch_admission is the sole admission-mode entry. PHASE4-N-F-C (2026-05-31) strengthened on two fronts: (1) the new `--mode node` lifecycle owner is the single owner threading first-run-vs-warm-start (a pure function of on-disk state) → bootstrap_initial_state → produce, with NO second bootstrap/recovery/storage-init authority; ci/ci_check_node_mode_closure.sh now pins the closed set {WireOnly, Admission, KeyGenKes, Produce, Node} (no wildcard arm). (2) new gate ci/ci_check_lifecycle_owner_uses_bootstrap_initial_state.sh enforces that the owner obtains initial state SOLELY via bootstrap_initial_state and contains the RequiredFromRecoveredProvenance constructor to owner+authority, fencing out genesis/bundle/cold/recover_node_state fallbacks."
 
@@ -3095,7 +3095,7 @@ tests = [
 ]
 ci_script = "ci/ci_check_clock_seam.sh, ci/ci_check_orchestrator_core_purity.sh"
 status = "enforced"
-strengthened_in = ["PHASE4-N-K", "PHASE4-N-L", "PHASE4-N-F-E"]
+strengthened_in = ["PHASE4-N-K", "PHASE4-N-L", "PHASE4-N-F-E", "PHASE4-N-F-G-A"]
 evidence_notes = "PHASE4-N-K S1+S2+S5+S8 (2026-05-26) shipped the Clock trait (with DeterministicClock + SystemClock), pinned the orchestrator core as the SOLE wall-clock-free consumer, and proved replay equivalence end-to-end via tests/orchestrator_replay_equivalence.rs. ci/ci_check_clock_seam.sh enforces that crates/ade_runtime/src/clock.rs is the sole site of SystemTime::now() / Instant::now() within ade_runtime, and that orchestrator/{core,event,state,mod}.rs contain none of tokio::time, rand, HashMap/HashSet, or f32/f64."
 
 [[rules]]
@@ -4577,7 +4577,7 @@ tests = ["accepted_envelope_decodes_to_expected_opcert", "malformed_type_envelop
 ci_script = ""
 status = "enforced"
 introduced_in = "PHASE4-N-R-C"
-strengthened_in = []
+strengthened_in = ["PHASE4-N-F-G-A"]
 cluster = "PHASE4-N-R-C"
 
 [[rules]]
@@ -4605,7 +4605,7 @@ tests = ["accepted_shelley_genesis_parses_to_expected_anchor", "missing_required
 ci_script = ""
 status = "enforced"
 introduced_in = "PHASE4-N-R-C"
-strengthened_in = ["PHASE4-N-Y"]
+strengthened_in = ["PHASE4-N-Y", "PHASE4-N-F-G-A"]
 cluster = "PHASE4-N-R-C"
 
 [[rules]]
@@ -5232,7 +5232,7 @@ tests = ["forge_from_recovered_uses_recovered_pool_distr", "forge_from_recovered
 ci_script = "ci/ci_check_consensus_input_provenance.sh"
 status = "enforced"
 introduced_in = "PHASE4-N-F-C"
-strengthened_in = ["PHASE4-N-F-E"]
+strengthened_in = ["PHASE4-N-F-E", "PHASE4-N-F-G-A"]
 cluster = "PHASE4-N-F-C"
 open_obligation = ""
 
@@ -5379,7 +5379,7 @@ code_locus = "crates/ade_node/src/node_lifecycle.rs, crates/ade_node/src/run_loo
 tests = ["plan_loop_step_forge_precedence_table_is_total", "forge_slot_guard_none_is_due", "forge_slot_guard_at_most_once_per_slot", "forge_slot_guard_rejects_past_slot", "relay_loop_forge_slot_derived_via_clock_seam", "relay_loop_forge_tick_attempts_forge_advances_no_tip", "relay_loop_without_producer_material_matches_nfd_relay", "relay_loop_forge_two_runs_byte_identical", "forge_tick_rotated_kes_period_skips_no_retroactive_sign", "forge_tick_off_epoch_slot_fails_closed_local"]
 ci_script = "ci/ci_check_loop_planner_closed.sh, ci/ci_check_node_run_loop_containment.sh"
 introduced_in = "PHASE4-N-F-E"
-strengthened_in = ["PHASE4-N-F-F"]
+strengthened_in = ["PHASE4-N-F-F", "PHASE4-N-F-G-A"]
 status = "enforced"
 evidence_notes = """
 PHASE4-N-F-E invariant sketch (2026-05-31, /invariants gate). Declared at sketch;
