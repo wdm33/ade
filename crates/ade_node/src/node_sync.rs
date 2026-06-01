@@ -2096,7 +2096,11 @@ mod tests {
     async fn drive_operator_forge_once(
         opdir: &std::path::Path,
         chaindir: &std::path::Path,
-    ) -> Vec<CoordinatorEvent> {
+        anchor_millis: u64,
+    ) -> (
+        Vec<CoordinatorEvent>,
+        Option<ade_runtime::clock::SlotAlignmentError>,
+    ) {
         let chaindb =
             PersistentChainDb::open(PersistentChainDbOptions::at(chaindir.join("chain.db")))
                 .unwrap();
@@ -2126,7 +2130,7 @@ mod tests {
             op_pool,
             ProtocolParameters::default(),
             ProtocolVersion { major: 9, minor: 0 },
-            0,
+            anchor_millis,
             SlotNo(0),
             1_000,
         );
@@ -2162,7 +2166,10 @@ mod tests {
                 .is_empty(),
             "operator-material forge persists no snapshot / served state"
         );
-        std::mem::take(&mut act.hermetic_forge_outcomes)
+        (
+            std::mem::take(&mut act.hermetic_forge_outcomes),
+            act.last_slot_alignment_fail,
+        )
     }
 
     #[tokio::test]
@@ -2174,7 +2181,7 @@ mod tests {
         // ForgeNotLeader) — proving operator material drives the fenced forge.
         let opdir = TempDir::new().unwrap();
         let chaindir = TempDir::new().unwrap();
-        let outcomes = drive_operator_forge_once(opdir.path(), chaindir.path()).await;
+        let (outcomes, _) = drive_operator_forge_once(opdir.path(), chaindir.path(), 0).await;
         assert_eq!(
             outcomes.len(),
             1,
@@ -2197,12 +2204,57 @@ mod tests {
         let cd_a = TempDir::new().unwrap();
         let op_b = TempDir::new().unwrap();
         let cd_b = TempDir::new().unwrap();
-        let a = drive_operator_forge_once(op_a.path(), cd_a.path()).await;
-        let b = drive_operator_forge_once(op_b.path(), cd_b.path()).await;
+        let (a, _) = drive_operator_forge_once(op_a.path(), cd_a.path(), 0).await;
+        let (b, _) = drive_operator_forge_once(op_b.path(), cd_b.path(), 0).await;
         assert_eq!(
             format!("{a:?}"),
             format!("{b:?}"),
             "operator-material forge must be replay-equivalent across runs"
+        );
+    }
+
+    #[tokio::test]
+    async fn node_forge_slot_via_millis_to_slot_over_real_genesis_anchor() {
+        // CE-G-A-3 (aligned): with the genesis anchor at millis 0 and the
+        // injected wall-clock observing 100_000ms (tick >= anchor), the node
+        // forge path derives the forge slot through the checked clock→slot seam
+        // (slot 100 at 1000ms/slot) and reaches the fenced forge — the alignment
+        // guard does not trip.
+        let opdir = TempDir::new().unwrap();
+        let chaindir = TempDir::new().unwrap();
+        let (outcomes, slot_fail) =
+            drive_operator_forge_once(opdir.path(), chaindir.path(), 0).await;
+        assert_eq!(
+            slot_fail, None,
+            "an aligned wall-clock (tick >= anchor) must not trip the slot guard"
+        );
+        assert_eq!(
+            outcomes.len(),
+            1,
+            "the aligned clock derives a forgeable slot through the checked seam"
+        );
+    }
+
+    #[tokio::test]
+    async fn node_forge_slot_drift_fails_closed() {
+        // CE-G-A-3 (drift): a genesis anchor AHEAD of the observed wall-clock
+        // (anchor 200_000ms > tick 100_000ms) is an implausible alignment the
+        // saturating millis_to_slot would mask to slot 0. The node forge path
+        // fails CLOSED at the RED clock seam — no forge attempt, the structured
+        // SlotAlignmentError is surfaced, and no durable tip / snapshot moves
+        // (asserted inside the helper).
+        let opdir = TempDir::new().unwrap();
+        let chaindir = TempDir::new().unwrap();
+        let (outcomes, slot_fail) =
+            drive_operator_forge_once(opdir.path(), chaindir.path(), 200_000).await;
+        assert_eq!(
+            slot_fail,
+            Some(ade_runtime::clock::SlotAlignmentError::BeforeGenesisAnchor),
+            "an anchor ahead of the wall-clock must fail closed, not mask drift"
+        );
+        assert!(
+            outcomes.is_empty(),
+            "a drift-failed slot alignment forges nothing"
         );
     }
 }

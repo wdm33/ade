@@ -71,7 +71,7 @@ use tokio::sync::watch;
 use ade_core::consensus::ledger_view::LedgerView;
 use ade_ledger::pparams::ProtocolParameters;
 use ade_ledger::receive::ReceiveState;
-use ade_runtime::clock::{millis_to_slot, Clock, SystemClock};
+use ade_runtime::clock::{checked_millis_to_slot, Clock, SlotAlignmentError, SystemClock};
 use ade_runtime::forward_sync::ForwardSyncState;
 use ade_runtime::producer::coordinator::{
     coordinator_init, CoordinatorConfig, CoordinatorEvent, CoordinatorState, LedgerSnapshotRef,
@@ -548,6 +548,11 @@ pub struct ForgeActivation<'a> {
     /// In-memory hermetic test observation ONLY. Not persisted, not logged, not
     /// replay authority, not BA-02 / RO-LIVE evidence.
     pub hermetic_forge_outcomes: Vec<CoordinatorEvent>,
+    /// S3: the last clock→slot alignment fail-closed (set when the wall-clock is
+    /// before the genesis anchor, cleared on a successful alignment). A structured
+    /// LOCAL node-forge observation surface — in-memory, not persisted, not logged,
+    /// not evidence — that makes the fail-closed visible (never a silent `NotDue`).
+    pub last_slot_alignment_fail: Option<SlotAlignmentError>,
 }
 
 impl<'a> ForgeActivation<'a> {
@@ -578,6 +583,7 @@ impl<'a> ForgeActivation<'a> {
             last_forged_slot: None,
             pending_slot: None,
             hermetic_forge_outcomes: Vec::new(),
+            last_slot_alignment_fail: None,
         }
     }
 }
@@ -633,16 +639,29 @@ pub async fn run_relay_loop(
             Some(act) => {
                 act.pending_slot = None; // reset so a stale slot can never forge
                 match act.clock.next_tick() {
-                    Some(now_ms) => {
-                        let slot = millis_to_slot(
-                            now_ms,
-                            act.anchor_millis,
-                            act.start_slot,
-                            act.slot_length_ms,
-                        );
-                        act.pending_slot = Some(slot);
-                        forge_slot_status(act.last_forged_slot, slot)
-                    }
+                    Some(now_ms) => match checked_millis_to_slot(
+                        now_ms,
+                        act.anchor_millis,
+                        act.start_slot,
+                        act.slot_length_ms,
+                    ) {
+                        Ok(slot) => {
+                            act.last_slot_alignment_fail = None;
+                            act.pending_slot = Some(slot);
+                            forge_slot_status(act.last_forged_slot, slot)
+                        }
+                        // S3 (CE-G-A-3): an implausible clock→slot alignment (the
+                        // wall-clock is before the genesis anchor) FAILS CLOSED at
+                        // the RED clock seam — no forge, no `last_forged_slot`
+                        // advance, `pending_slot` stays None; surfaced as a
+                        // structured local outcome (`last_slot_alignment_fail`).
+                        // NotDue to the planner; the relay loop keeps syncing
+                        // (forge stays subordinate to the sync spine, DC-NODE-05).
+                        Err(e) => {
+                            act.last_slot_alignment_fail = Some(e);
+                            ForgeSlotStatus::NotDue
+                        }
+                    },
                     // Clock exhausted — no more forge slots scheduled.
                     None => ForgeSlotStatus::NotDue,
                 }

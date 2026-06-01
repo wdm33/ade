@@ -93,6 +93,42 @@ pub fn millis_to_slot(
     SlotNo(start_slot.0.saturating_add(slots_since_anchor))
 }
 
+/// Closed error for the node forge-path clock→slot alignment guard
+/// (PHASE4-N-F-G-A S3).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SlotAlignmentError {
+    /// The observed wall-clock millis is BEFORE the genesis anchor
+    /// (`tick < start_millis`): the slot cannot be exactly derived —
+    /// `millis_to_slot` would saturation-mask this to `start_slot`. The node
+    /// forge path fails closed here instead of forging a masked slot.
+    BeforeGenesisAnchor,
+}
+
+/// Checked `millis_to_slot` for the node forge path (PHASE4-N-F-G-A S3): fails
+/// closed on an implausible clock→slot alignment instead of saturating.
+///
+/// Returns `Err(SlotAlignmentError::BeforeGenesisAnchor)` when `tick_millis <
+/// start_millis` (the exact case the saturating [`millis_to_slot`] masks to
+/// `start_slot`); otherwise the EXACT [`millis_to_slot`] result. Pure integer
+/// arithmetic; no wall-clock, no float. The saturating `millis_to_slot` is left
+/// unchanged for the produce path (which swallows drift by design).
+pub fn checked_millis_to_slot(
+    tick_millis: u64,
+    start_millis: u64,
+    start_slot: SlotNo,
+    slot_length_ms: u32,
+) -> Result<SlotNo, SlotAlignmentError> {
+    if tick_millis < start_millis {
+        return Err(SlotAlignmentError::BeforeGenesisAnchor);
+    }
+    Ok(millis_to_slot(
+        tick_millis,
+        start_millis,
+        start_slot,
+        slot_length_ms,
+    ))
+}
+
 /// Production wall-clock impl. RED sub-classified — never
 /// reachable from BLUE or GREEN code paths. Lives in this file
 /// only to keep the seam single-sited.
@@ -219,5 +255,32 @@ mod tests {
     fn millis_to_slot_handles_zero_slot_length() {
         // Degenerate; returns start_slot rather than dividing by 0.
         assert_eq!(millis_to_slot(99999, 0, SlotNo(42), 0), SlotNo(42));
+    }
+
+    #[test]
+    fn checked_millis_to_slot_matches_millis_to_slot_when_aligned() {
+        // tick >= anchor: the checked map equals the exact saturating map.
+        for tick in [1000u64, 1500, 2000, 999_999] {
+            assert_eq!(
+                checked_millis_to_slot(tick, 1000, SlotNo(0), 1000),
+                Ok(millis_to_slot(tick, 1000, SlotNo(0), 1000))
+            );
+        }
+        // Boundary: tick == anchor is aligned (slot == start_slot).
+        assert_eq!(
+            checked_millis_to_slot(1000, 1000, SlotNo(0), 1000),
+            Ok(SlotNo(0))
+        );
+    }
+
+    #[test]
+    fn checked_millis_to_slot_before_anchor_fails_closed() {
+        // tick < anchor: the saturating map returns start_slot (slot 0); the
+        // checked guard fails closed instead of masking the drift.
+        assert_eq!(millis_to_slot(500, 1000, SlotNo(0), 1000), SlotNo(0));
+        assert_eq!(
+            checked_millis_to_slot(500, 1000, SlotNo(0), 1000),
+            Err(SlotAlignmentError::BeforeGenesisAnchor)
+        );
     }
 }
