@@ -134,6 +134,7 @@ pub(crate) fn test_canonical_inputs(
         source_tip_hash: Hash32([0xFF; 32]),
         source_tip_slot: SlotNo(100),
         fingerprint: Hash32([0xAB; 32]),
+        protocol_params_json: None,
     }
 }
 

@@ -88,15 +88,18 @@ that is a genuine source.
    (existing codec); the forge then reads current `protocol_major`/`protocol_minor`.
 
 ## 6. TCB color (execution boundary)
-- **RED (extended):** `ade_runtime::consensus_inputs::{canonical, importer, json}` (carry +
-  provenance-bind current pparams); `ade_node::admission::{seed_to_snapshot::build_seed_ledger,
-  bootstrap}` (install into the recovered ledger); `ci/build_consensus_inputs_bundle.sh` (emit
-  oracle params). All RED import/shell — no authoritative transition added.
+*(Corrected at implement: the `consensus_inputs` modules are GREEN per their module headers, not
+RED as first drafted.)*
+- **GREEN (extended):** `ade_runtime::consensus_inputs::{canonical, importer, json,
+  protocol_params}` (carry + provenance-bind + parse current pparams) — deterministic glue (their
+  module headers declare GREEN); no authoritative transition added. `protocol_params` is the new
+  GREEN cardano-cli-protocol-parameters → `ProtocolParameters` parser (no float path).
+- **RED (extended):** `ade_node::admission::{seed_to_snapshot::build_seed_ledger, bootstrap}`
+  (install into the recovered ledger); `ci/build_consensus_inputs_bundle.sh` (emit oracle params).
 - **BLUE (consumed, unchanged):** `ade_ledger::{state::LedgerState, pparams::ProtocolParameters,
   snapshot::{ledger codec}}` — read/populated, not redefined. **No new BLUE authority.** Any change
   to BLUE-owned ledger semantics, `ProtocolParameters`, or `LedgerState` definitions is a red flag
-  and must stop/re-scope; S2a should populate existing fields, not redefine them.
-- **GREEN:** none new.
+  and must stop/re-scope; S2a populates existing fields, not redefine them.
 
 ## 7. Invariants preserved (must not weaken) — by registry ID
 - `CN-NODE-01` — **single bootstrap.** S2a EXTENDS the one seed import to carry current pparams; it
@@ -144,6 +147,11 @@ installed at seed/import time, provenance-bound to the bundle commitment — nev
   stable** (they pin those surfaces, not pparams, so they should be invariant — verify).
 - **D-4 — snapshot codec coverage.** Confirm the snapshot/WAL pparams codec round-trips every
   installed field (esp. `protocol_minor`); extend it if not. AC2 is the mechanical catch.
+- **Implementation note (S2a, normative).** The protocol-parameters JSON parser is designed against
+  the committed isolated private-net cardano-cli 11.x sample. Decimal/scientific JSON numbers are
+  parsed exactly into `Rational` (integer arithmetic); binary float conversion is forbidden
+  (`serde_json` `raw_value` preserves the number literal — no `f64`, no `as f64`, no serde float
+  path). A literal that cannot be represented exactly fails closed (`InexactRational`).
 
 ## 10. Replay / determinism obligations
 Deterministic: the bundle parse + provenance bind + ledger install are pure functions of the

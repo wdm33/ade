@@ -34,12 +34,14 @@ use ade_codec::cbor::{
 use ade_core::consensus::praos_state::Nonce;
 use ade_core::consensus::vrf_cert::ActiveSlotsCoeff;
 use ade_crypto::blake2b::blake2b_256;
+use ade_ledger::pparams::ProtocolParameters;
 use ade_types::{CardanoEra, EpochNo, Hash28, Hash32, SlotNo};
 
 use super::importer::{
     import_live_consensus_inputs_raw_from_bytes, LiveConsensusInputsImportError,
     LiveConsensusInputsRaw, PoolEntry,
 };
+use super::protocol_params::{parse_protocol_parameters_json, ProtocolParamsParseError};
 
 /// Canonical form of an operator consensus-inputs bundle —
 /// identical field shape to [`LiveConsensusInputsRaw`], plus a
@@ -68,6 +70,13 @@ pub struct LiveConsensusInputsCanonical {
     pub source_tip_hash: Hash32,
     pub source_tip_slot: SlotNo,
     pub fingerprint: Hash32,
+    /// Oracle preimage for `protocol_params_hash` (PHASE4-N-F-G-A S2a), carried
+    /// OUTSIDE the canonical CBOR fingerprint: the fingerprint already commits to
+    /// `protocol_params_hash` (index 10), so this is that hash's preimage, not a
+    /// new fingerprinted field — it does not alter the bundle fingerprint.
+    /// Optional at structural import; required + hash-bound at the forge-install
+    /// (`require_forge_current_pparams`).
+    pub protocol_params_json: Option<String>,
 }
 
 /// Lift a validated raw bundle into the canonical form, computing
@@ -93,6 +102,7 @@ pub fn canonical_from_raw(raw: LiveConsensusInputsRaw) -> LiveConsensusInputsCan
         source_tip_hash: raw.source_tip_hash,
         source_tip_slot: raw.source_tip_slot,
         fingerprint,
+        protocol_params_json: raw.protocol_params_json,
     }
 }
 
@@ -112,6 +122,48 @@ pub fn import_live_consensus_inputs_from_bytes(
 ) -> Result<LiveConsensusInputsCanonical, LiveConsensusInputsImportError> {
     let raw = import_live_consensus_inputs_raw_from_bytes(bytes)?;
     Ok(canonical_from_raw(raw))
+}
+
+/// Closed error for the forge-current-pparams install (PHASE4-N-F-G-A S2a).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ForgeCurrentPParamsError {
+    /// The bundle carries no `protocol_params_json` preimage. Forbidden on the
+    /// forge-current-pparams install path: fail closed (no default substitution).
+    PreimageAbsent,
+    /// `blake2b_256(protocol_params_json) != protocol_params_hash`. The carried
+    /// preimage does not match the fingerprinted oracle commitment. Fail closed.
+    BindMismatch,
+    /// The preimage hash-bound correctly but did not parse into a canonical
+    /// `ProtocolParameters`.
+    Parse(ProtocolParamsParseError),
+}
+
+impl LiveConsensusInputsCanonical {
+    /// Produce the **current** `ProtocolParameters` for a forge-fidelity recovered
+    /// ledger, sourced from the oracle preimage carried in this bundle.
+    ///
+    /// Mandatory + fail-closed (PHASE4-N-F-G-A S2a, CE-G-A-2a):
+    /// 1. `protocol_params_json` MUST be present (else `PreimageAbsent`) — the
+    ///    forge-current-pparams install never substitutes a default.
+    /// 2. `blake2b_256(protocol_params_json)` MUST equal the fingerprinted
+    ///    `protocol_params_hash` (else `BindMismatch`) — bound to the already-
+    ///    committed oracle hash; no second commitment is invented.
+    /// 3. The preimage parses into the modeled `ProtocolParameters`
+    ///    (`network_id` derived from this bundle's `network_magic`).
+    pub fn require_forge_current_pparams(
+        &self,
+    ) -> Result<ProtocolParameters, ForgeCurrentPParamsError> {
+        let preimage = self
+            .protocol_params_json
+            .as_ref()
+            .ok_or(ForgeCurrentPParamsError::PreimageAbsent)?;
+        let digest = blake2b_256(preimage.as_bytes());
+        if digest != self.protocol_params_hash {
+            return Err(ForgeCurrentPParamsError::BindMismatch);
+        }
+        parse_protocol_parameters_json(preimage.as_bytes(), self.network_magic)
+            .map_err(ForgeCurrentPParamsError::Parse)
+    }
 }
 
 /// Canonical CBOR encoding of the 15 raw fields (the fingerprint
@@ -358,6 +410,7 @@ mod tests {
             source_query_command: c.source_query_command.clone(),
             source_tip_hash: c.source_tip_hash.clone(),
             source_tip_slot: c.source_tip_slot,
+            protocol_params_json: c.protocol_params_json.clone(),
         };
         let bytes = encode_canonical_cbor(&raw);
         // CBOR map(15) = major type 5 (0xa_) with argument 15
@@ -375,5 +428,55 @@ mod tests {
         let expected = blake2b_256(&encode_canonical_cbor(&raw));
         let canonical = canonical_from_raw(raw);
         assert_eq!(canonical.fingerprint, expected);
+    }
+
+    // ---- S2a: require_forge_current_pparams (bind + parse) ----
+
+    /// A minimal-but-valid cardano-cli protocol-parameters JSON with a non-default
+    /// major (9) + rational floats, to prove the bind + exact parse on a value the
+    /// `ProtocolParameters::default()` (major 2) would not produce.
+    const CLI_PP_MAJOR_9: &str = r#"{"collateralPercentage":150,"maxBlockBodySize":90112,"maxBlockHeaderSize":1100,"maxTxExecutionUnits":{"memory":14000000,"steps":10000000000},"maxTxSize":16384,"minPoolCost":170000000,"monetaryExpansion":3.0e-3,"poolPledgeInfluence":0.3,"poolRetireMaxEpoch":18,"protocolVersion":{"major":9,"minor":0},"stakeAddressDeposit":2000000,"stakePoolDeposit":500000000,"stakePoolTargetNum":500,"treasuryCut":0.2,"txFeeFixed":155381,"txFeePerByte":44}"#;
+
+    fn bound_bundle(pp_json: &str) -> LiveConsensusInputsCanonical {
+        let mut stake = BTreeMap::new();
+        stake.insert(Hash28([0x01; 28]), 1_000u64);
+        let mut vrfs = BTreeMap::new();
+        vrfs.insert(Hash28([0x01; 28]), Hash32([0x07; 32]));
+        let mut b = crate::seed_consensus_merge::test_canonical_inputs(EpochNo(0), stake, vrfs);
+        b.protocol_params_hash = blake2b_256(pp_json.as_bytes());
+        b.protocol_params_json = Some(pp_json.to_string());
+        b
+    }
+
+    #[test]
+    fn require_forge_current_pparams_binds_and_parses() {
+        let pp = bound_bundle(CLI_PP_MAJOR_9)
+            .require_forge_current_pparams()
+            .expect("preimage present + binds + parses");
+        assert_eq!(pp.protocol_major, 9);
+        assert_eq!(pp.protocol_minor, 0);
+        assert_eq!(pp.monetary_expansion, ProtocolParameters::default().monetary_expansion);
+        assert_eq!(pp.treasury_growth, ProtocolParameters::default().treasury_growth);
+    }
+
+    #[test]
+    fn require_forge_current_pparams_absent_preimage_fails_closed() {
+        let mut b = bound_bundle(CLI_PP_MAJOR_9);
+        b.protocol_params_json = None;
+        assert_eq!(
+            b.require_forge_current_pparams().unwrap_err(),
+            ForgeCurrentPParamsError::PreimageAbsent
+        );
+    }
+
+    #[test]
+    fn require_forge_current_pparams_tampered_preimage_fails_bind() {
+        let mut b = bound_bundle(CLI_PP_MAJOR_9);
+        // Keep the committed hash; tamper the preimage => no longer hash-binds.
+        b.protocol_params_json = Some(CLI_PP_MAJOR_9.replace("\"major\":9", "\"major\":10"));
+        assert_eq!(
+            b.require_forge_current_pparams().unwrap_err(),
+            ForgeCurrentPParamsError::BindMismatch
+        );
     }
 }

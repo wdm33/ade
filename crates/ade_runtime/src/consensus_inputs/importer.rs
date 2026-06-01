@@ -68,6 +68,10 @@ pub struct LiveConsensusInputsRaw {
     pub source_query_command: String,
     pub source_tip_hash: Hash32,
     pub source_tip_slot: SlotNo,
+    /// Oracle preimage for `protocol_params_hash` (PHASE4-N-F-G-A S2a). Optional
+    /// at structural import; required + hash-bound at the forge-install site (see
+    /// `canonical::LiveConsensusInputsCanonical::require_forge_current_pparams`).
+    pub protocol_params_json: Option<String>,
 }
 
 /// Closed import-error sum (DC-CONS-IN-01).
@@ -232,6 +236,7 @@ fn validate_and_lift(
         source_query_command: raw.source_query_command,
         source_tip_hash,
         source_tip_slot: SlotNo(raw.source_tip_slot),
+        protocol_params_json: raw.protocol_params_json,
     })
 }
 

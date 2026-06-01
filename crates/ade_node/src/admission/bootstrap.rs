@@ -80,6 +80,11 @@ pub enum AdmissionBootstrapError {
     /// LiveConsensusInputs bundle import failed (PHASE4-N-M-C
     /// CN-CONS-IN-01 / DC-CONS-IN-01).
     ConsensusInputsImport(LiveConsensusInputsImportError),
+    /// The forge-capable seed import could not source the current protocol
+    /// parameters from the bundle: the `protocol_params_json` preimage was
+    /// absent, did not hash-bind to `protocol_params_hash`, or did not parse
+    /// (PHASE4-N-F-G-A S2a, CE-G-A-2a). Fail closed — no default substitution.
+    ForgeCurrentPParams(String),
 }
 
 /// SOLE admission-dispatch entry point. Performs the closed
@@ -137,6 +142,19 @@ async fn run_admission_inner(
     let chaindb = PersistentChainDb::open(PersistentChainDbOptions::at(&chaindb_path))
         .map_err(|e| AdmissionBootstrapError::ChainDbOpen(format!("{:?}", e)))?;
 
+    // S2a (CE-G-A-2a): the forge-capable seed import REQUIRES the current
+    // protocol parameters. Import the operator consensus-inputs bundle and bind
+    // its `protocol_params_json` preimage to the fingerprinted
+    // `protocol_params_hash`, then parse the current ProtocolParameters — fail
+    // closed if the preimage is absent or unbound. Installed into BOTH recovered-
+    // ledger construction sites (the captured snapshot + the runner ledger) so
+    // the node forge reads a truthful current protocol version, not the default.
+    let canonical = import_live_consensus_inputs(&acli.consensus_inputs_path)
+        .map_err(AdmissionBootstrapError::ConsensusInputsImport)?;
+    let current_pparams = canonical
+        .require_forge_current_pparams()
+        .map_err(|e| AdmissionBootstrapError::ForgeCurrentPParams(format!("{e:?}")))?;
+
     // 4. seed_to_snapshot (uses ChainDb as the SnapshotStore).
     let chain_dep_seed = PraosChainDepState::genesis(Nonce::ZERO);
     let initial_fp = seed_to_snapshot(
@@ -144,6 +162,7 @@ async fn run_admission_inner(
         chain_dep_seed.clone(),
         SlotNo(acli.seed_point_slot),
         &chaindb,
+        current_pparams.clone(),
     )
     .map_err(|e| AdmissionBootstrapError::SeedToSnapshot(format!("{:?}", e)))?;
 
@@ -176,6 +195,8 @@ async fn run_admission_inner(
     //    chain_dep was masked.)
     let mut ledger = ade_ledger::state::LedgerState::new(CardanoEra::Conway);
     ledger.utxo_state = utxo;
+    // S2a: the runner's recovered ledger carries the oracle-bound current pparams.
+    ledger.protocol_params = current_pparams.clone();
 
     // 7. Open file WAL + verify the chain head from the anchor.
     let wal_store = FileWalStore::open(&acli.wal_dir)
@@ -191,8 +212,6 @@ async fn run_admission_inner(
     //    the Conway entry's start slot is the imported epoch
     //    start, so the BLUE consensus path can resolve epochs
     //    within that window from a single era summary.
-    let canonical = import_live_consensus_inputs(&acli.consensus_inputs_path)
-        .map_err(AdmissionBootstrapError::ConsensusInputsImport)?;
     let era_schedule = make_schedule_for_imported_window(&canonical.epoch_start_slot, canonical.epoch_no);
     let ledger_view = LiveLedgerView::new(canonical.clone());
     let consensus_inputs_fingerprint = canonical.fingerprint.clone();

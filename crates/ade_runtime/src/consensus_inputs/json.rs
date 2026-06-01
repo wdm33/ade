@@ -62,6 +62,15 @@ pub struct RawConsensusInputs {
     pub source_tip_hash_hex: String,
     /// Tip slot at extract time.
     pub source_tip_slot: u64,
+    /// The exact cardano-cli `query protocol-parameters` JSON string (the
+    /// canonical dump the builder hashes) — the oracle **preimage** for the
+    /// already-fingerprinted `protocol_params_hash`. It is NOT a new canonical
+    /// bundle field and does not alter the bundle fingerprint (PHASE4-N-F-G-A
+    /// S2a). Structurally optional: historical / import-only bundles (pre-S2a
+    /// evidence) may omit it; it is **mandatory and hash-bound at the node
+    /// forge-current-pparams install site** (`require_forge_current_pparams`).
+    #[serde(default)]
+    pub protocol_params_json: Option<String>,
 }
 
 /// Rational fraction `numer / denom` for ASC. `denom` must be

@@ -24,6 +24,7 @@
 
 use ade_core::consensus::praos_state::PraosChainDepState;
 use ade_ledger::fingerprint::fingerprint;
+use ade_ledger::pparams::ProtocolParameters;
 use ade_ledger::state::LedgerState;
 use ade_ledger::utxo::UTxOState;
 use ade_runtime::chaindb::SnapshotStore;
@@ -57,8 +58,9 @@ pub fn seed_to_snapshot<S: SnapshotStore + ?Sized>(
     chain_dep_seed: PraosChainDepState,
     seed_point: SlotNo,
     store: &S,
+    protocol_params: ProtocolParameters,
 ) -> Result<Hash32, SeedToSnapshotError> {
-    let ledger = build_seed_ledger(utxo);
+    let ledger = build_seed_ledger(utxo, protocol_params);
     let initial_fp = fingerprint(&ledger).combined;
     let cache = PersistentSnapshotCache::new(store);
     cache
@@ -71,12 +73,17 @@ pub fn seed_to_snapshot<S: SnapshotStore + ?Sized>(
     Ok(initial_fp)
 }
 
-/// Pure ledger build: Conway era, supplied UTxO map, all other
-/// fields at their canonical defaults (LedgerState::new(Conway)).
-/// Visible for tests + B4 reuse.
-pub fn build_seed_ledger(utxo: UTxOState) -> LedgerState {
+/// Pure ledger build: Conway era, supplied UTxO map, and the **caller-supplied
+/// current `protocol_params`** (PHASE4-N-F-G-A S2a — the recovered ledger no
+/// longer carries `ProtocolParameters::default()`; the forge-capable caller
+/// passes the oracle-bound current parameters via
+/// `LiveConsensusInputsCanonical::require_forge_current_pparams`). All other
+/// fields are at their canonical defaults (`LedgerState::new(Conway)`). Visible
+/// for tests + B4 reuse.
+pub fn build_seed_ledger(utxo: UTxOState, protocol_params: ProtocolParameters) -> LedgerState {
     let mut ledger = LedgerState::new(CardanoEra::Conway);
     ledger.utxo_state = utxo;
+    ledger.protocol_params = protocol_params;
     ledger
 }
 
@@ -103,7 +110,7 @@ mod tests {
     fn seed_to_snapshot_writes_via_persistent_cache() {
         let store = InMemoryChainDb::new();
         let slot = SlotNo(12345);
-        let _fp = seed_to_snapshot(empty_utxo(), empty_chain_dep(), slot, &store).expect("ok");
+        let _fp = seed_to_snapshot(empty_utxo(), empty_chain_dep(), slot, &store, ProtocolParameters::default()).expect("ok");
         // Read it back through the cache.
         let cache = PersistentSnapshotCache::new(&store);
         let bytes = store.get_snapshot(slot).expect("get").expect("present");
@@ -119,8 +126,8 @@ mod tests {
     fn seed_to_snapshot_returns_initial_ledger_fingerprint() {
         let store = InMemoryChainDb::new();
         let slot = SlotNo(1);
-        let fp = seed_to_snapshot(empty_utxo(), empty_chain_dep(), slot, &store).expect("ok");
-        let expected = fingerprint(&build_seed_ledger(empty_utxo())).combined;
+        let fp = seed_to_snapshot(empty_utxo(), empty_chain_dep(), slot, &store, ProtocolParameters::default()).expect("ok");
+        let expected = fingerprint(&build_seed_ledger(empty_utxo(), ProtocolParameters::default())).combined;
         assert_eq!(fp, expected);
     }
 
@@ -129,8 +136,8 @@ mod tests {
         let s1 = InMemoryChainDb::new();
         let s2 = InMemoryChainDb::new();
         let slot = SlotNo(42);
-        let fp1 = seed_to_snapshot(empty_utxo(), empty_chain_dep(), slot, &s1).expect("ok");
-        let fp2 = seed_to_snapshot(empty_utxo(), empty_chain_dep(), slot, &s2).expect("ok");
+        let fp1 = seed_to_snapshot(empty_utxo(), empty_chain_dep(), slot, &s1, ProtocolParameters::default()).expect("ok");
+        let fp2 = seed_to_snapshot(empty_utxo(), empty_chain_dep(), slot, &s2, ProtocolParameters::default()).expect("ok");
         assert_eq!(fp1, fp2);
         let b1 = s1.get_snapshot(slot).expect("get").expect("present");
         let b2 = s2.get_snapshot(slot).expect("get").expect("present");
@@ -148,5 +155,44 @@ mod tests {
         let cache = PersistentSnapshotCache::new(&store);
         let result = cache.capture(SlotNo(1), &ledger, &empty_chain_dep());
         assert!(matches!(result, Err(PersistentCacheError::Encode(_))));
+    }
+
+    // ---- S2a: current-pparams install + warm-start preservation ----
+
+    fn pparams_major(major: u32) -> ProtocolParameters {
+        let mut pp = ProtocolParameters::default();
+        pp.protocol_major = major;
+        pp
+    }
+
+    #[test]
+    fn seed_import_installs_current_protocol_params() {
+        // build_seed_ledger installs the supplied current pparams, not the default.
+        let pp = pparams_major(9);
+        let ledger = build_seed_ledger(empty_utxo(), pp.clone());
+        assert_eq!(ledger.protocol_params, pp);
+        assert_ne!(
+            ledger.protocol_params.protocol_major,
+            ProtocolParameters::default().protocol_major
+        );
+    }
+
+    #[test]
+    fn warm_start_recovery_preserves_protocol_params() {
+        // Capture a snapshot whose ledger carries current (major 9) pparams, then
+        // restore it the way warm-start recovery does. The recovered ledger the
+        // forge reads (`recovered.ledger.protocol_params`) carries major 9, NOT the
+        // default 2 — the S2 PO-1 re-run / forge-call-site-sees-current proof.
+        let store = InMemoryChainDb::new();
+        let slot = SlotNo(7);
+        let pp = pparams_major(9);
+        seed_to_snapshot(empty_utxo(), empty_chain_dep(), slot, &store, pp.clone())
+            .expect("capture");
+        let cache = PersistentSnapshotCache::new(&store);
+        let (resolved, ledger, _chain_dep) =
+            ade_ledger::rollback::SnapshotReader::nearest_le(&cache, slot).expect("restore");
+        assert_eq!(resolved, slot);
+        assert_eq!(ledger.protocol_params, pp);
+        assert_ne!(ledger.protocol_params.protocol_major, 2);
     }
 }

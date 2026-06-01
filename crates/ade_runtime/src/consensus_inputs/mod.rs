@@ -35,6 +35,7 @@
 pub mod canonical;
 pub mod importer;
 pub mod json;
+pub mod protocol_params;
 pub mod view;
 
 pub use canonical::{
@@ -46,4 +47,5 @@ pub use importer::{
     LiveConsensusInputsImportError, LiveConsensusInputsRaw, PoolEntry,
 };
 pub use json::{parse_consensus_inputs_json, RawConsensusInputs};
+pub use protocol_params::{parse_protocol_parameters_json, ProtocolParamsParseError};
 pub use view::LiveLedgerView;
