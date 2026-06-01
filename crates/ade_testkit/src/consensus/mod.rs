@@ -8,5 +8,6 @@
 // `fork_choice`, `rollback`, and `consensus_stream_replay` drivers.
 
 pub mod corpus;
+pub mod genesis_pinning;
 pub mod ledger_view_stub;
 pub mod stream_replay;
