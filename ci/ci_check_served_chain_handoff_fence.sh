@@ -46,28 +46,34 @@ strip_for_grep() {
 
 PROD="$(strip_for_grep "$OWNER")"
 
+# All greps below feed `$PROD` via a here-string (`<<<`), NOT `echo "$PROD" |
+# grep`. With `set -o pipefail`, `grep -q` exits early on a match while the
+# upstream `echo` is still writing a large input — `echo` then takes SIGPIPE
+# (141), which pipefail would surface as a spurious pipe failure (a false
+# negative on the positive checks). A here-string avoids the pipe entirely.
+
 # --- guard (1): every push_atomic( is fed by into_accepted() ----------------
-PUSH_LINES="$(echo "$PROD" | grep -nE 'push_atomic\(' || true)"
+PUSH_LINES="$(grep -nE 'push_atomic\(' <<< "$PROD" || true)"
 if [[ -z "$PUSH_LINES" ]]; then
     print_fail "no push_atomic( on the node spine — the S2 served-chain admit site is missing"
 else
-    NON_HANDOFF="$(echo "$PUSH_LINES" | grep -vE 'into_accepted\(\)' || true)"
+    NON_HANDOFF="$(grep -vE 'into_accepted\(\)' <<< "$PUSH_LINES" || true)"
     if [[ -n "$NON_HANDOFF" ]]; then
         print_fail "a node-spine push_atomic( is not fed by into_accepted() (raw-bytes / non-handoff serve ingress): $NON_HANDOFF"
     fi
 fi
 
 # --- guard (2): no direct served_chain_admit( on the node spine -------------
-if echo "$PROD" | grep -qE 'served_chain_admit\('; then
+if grep -qE 'served_chain_admit\(' <<< "$PROD"; then
     print_fail "node-spine code calls served_chain_admit( directly — served-chain mutation must go through the single push_atomic authority (CN-PROD-04)"
 fi
 
 # --- guard (3): the handoff channel carries the self-accepted fence ---------
-if ! echo "$PROD" | grep -qE 'UnboundedSender<SelfAcceptedHandoff>'; then
+if ! grep -qE 'UnboundedSender<SelfAcceptedHandoff>' <<< "$PROD"; then
     print_fail "the handoff channel is not typed UnboundedSender<SelfAcceptedHandoff> — the serve-ingress carrier must be the S1 self-accepted fence"
 fi
 for bad in 'UnboundedSender<Vec<u8>>' 'UnboundedSender<ForgedBlockArtifact>' 'UnboundedSender<bool>'; do
-    if echo "$PROD" | grep -qE "$bad"; then
+    if grep -qE "$bad" <<< "$PROD"; then
         print_fail "the handoff channel carries a non-self-accepted payload: $bad"
     fi
 done
