@@ -5820,4 +5820,28 @@ defines none, produce_mode reuses it -- green; fail-closed verified on an inject
 NO BLUE change; NO node-spine wiring (that is S2); NO proactive advance_tip; the containment /
 path-fidelity / handoff fences byte-unchanged. The ci_script binding + the declared->enforced
 flip happen at the G-H close (after S2/S3).
+
+PHASE4-N-F-G-H S2 (node-spine serve wiring + hermetic loopback) LANDED: the --mode node
+On arm now RETAINS the ServedChainView (was discarded as `_serve_view`) and, when --listen
+is set, spawns run_node_serve_task OUTSIDE run_relay_loop -- a sibling that accepts inbound
+peers (reusing run_per_peer_session) and routes events to the S1 coordinator-free primitives
+(install_server_peer_state / remove_server_peer_state / dispatch_server_frame_event_to_outbound)
+over the served view. REQUEST-DRIVEN serve only (NO advance_tip, NO served_chain_view.changed()
+reactor). Serve-start bind failure is surfaced via bind_serve_listener ->
+NodeLifecycleError::ServeStart (fail-fast; no silent live-serve claim). The shared dispatch
+core was made Send -- the watch::Ref read guard is now block-scoped in BOTH the chain-sync and
+block-fetch arms (dropped before the outbound .await) so the serve sibling can tokio::spawn it;
+produce_mode behavior byte-unchanged (produce_loopback 4/4 + ade_network server 21/21 green).
+Hermetic loopback node_spine_serve_loopback_follower_fetches_self_accepted_block: Ade-serve
+<-> Ade-consume over a real ephemeral TCP socket -- the follower (dial_for_admission +
+run_admission_wire_pump) discovers the served tip via ChainSync + BlockFetches the body; the
+tag-24-unwrapped payload == the served self-accepted block (DC-CONS-17 + CN-WIRE-08).
+node_serve_start_failure_is_surfaced_not_silent: bind on an occupied port -> ServeStartError::Bind;
+unparseable addr -> InvalidAddr. Containment / path-fidelity / handoff fences byte-unchanged +
+green; single-serve-dispatch gate green; NO new --mode node flag (reuses --listen); NO BLUE
+change; NO RO-LIVE flip. ade_node 171 + ade_runtime 343 green. Known shared-path item (NOT S2):
+the serve listener advertises the static N2N_SUPPORTED responder table (mainnet magic, mirroring
+produce_mode); a non-mainnet (preprod/C1) real follower's magic-match is an S3 operator-pass
+finding to fix in the shared listener path if it fails. The tests binding + the
+declared->enforced flip happen at the G-H close (after S3).
 """

@@ -44,8 +44,10 @@
 //! + recovered inputs; L6 BA-02 peer-acceptance evidence.
 
 use std::collections::BTreeMap;
+use std::net::SocketAddr;
 use std::path::Path;
 use std::process::ExitCode;
+use std::sync::Arc;
 
 use ade_core::consensus::era_schedule::{EraSchedule, EraSummary};
 use ade_core::consensus::praos_state::PraosChainDepState;
@@ -69,6 +71,7 @@ use ade_runtime::seed_import::import_cardano_cli_json_utxo;
 use ade_runtime::wal::FileWalStore;
 use ade_types::shelley::block::ProtocolVersion;
 use ade_types::{CardanoEra, EpochNo, Hash28, Hash32, SlotNo};
+use tokio::net::TcpListener;
 use tokio::sync::{mpsc, watch};
 
 use ade_core::consensus::ledger_view::LedgerView;
@@ -81,7 +84,7 @@ use ade_runtime::producer::coordinator::{
 };
 use ade_runtime::producer::producer_shell::ProducerShell;
 use ade_runtime::producer::self_accepted_handoff::SelfAcceptedHandoff;
-use ade_runtime::producer::served_chain_handle::ServedChainHandle;
+use ade_runtime::producer::served_chain_handle::{ServedChainHandle, ServedChainView};
 use ade_runtime::rollback::SnapshotCadence;
 
 use crate::admission::bootstrap::build_n2n_version_table;
@@ -94,6 +97,22 @@ use crate::run_loop_planner::{
     SyncStatus,
 };
 use crate::EXIT_GENERIC_STARTUP;
+
+// PHASE4-N-F-G-H S2: node-spine serve-to-peer sibling imports. The serve
+// reuses the per-peer N2N session machinery (`run_per_peer_session`) + the
+// single shared serve-dispatch core (S1, `ade_runtime::network::serve_dispatch`)
+// over the G-B `ServedChainView`. The serve listener advertises the static
+// responder version table (`N2N_SUPPORTED`), mirroring `produce_mode`.
+use ade_network::handshake::version_table::N2N_SUPPORTED;
+use ade_runtime::network::n2n_listener::{run_per_peer_session, PerPeerSessionConfig};
+use ade_runtime::network::outbound_command::new_per_peer_outbound;
+use ade_runtime::network::serve_dispatch::{
+    dispatch_server_frame_event_to_outbound, install_server_peer_state, remove_server_peer_state,
+    ServerPeerStates,
+};
+use ade_runtime::orchestrator::event::{OrchestratorEvent, PeerRole};
+use ade_runtime::orchestrator::n2n_server_pump::PeerIdGenerator;
+use ade_runtime::producer::producer_log::PeerId as ServerPeerId;
 
 /// Clean-exit code (mirrors the local constant in `wire_only`; the
 /// crate root does not re-export a single `EXIT_OK`).
@@ -223,6 +242,12 @@ pub enum NodeLifecycleError {
     /// no key bytes). Fail closed — NO forge with a partial set, NO silent
     /// relay-only fallback. Does NOT touch the bootstrap/recovery layer.
     ForgeKeyIngress(String),
+    /// PHASE4-N-F-G-H S2: node-spine serve-to-peer start fail-closed — the
+    /// `--listen` value did not parse, or binding the serve listener failed.
+    /// Surfaced explicitly (fail-fast): the node never proceeds claiming live
+    /// serve capability while serving is disabled (no silent live-serve claim).
+    /// Carries a structured, secret-free message.
+    ServeStart(String),
 }
 
 /// Pure first-run-vs-warm-start classifier. A function of on-disk state
@@ -260,7 +285,8 @@ fn exit_code_for(e: &NodeLifecycleError) -> i32 {
         | NodeLifecycleError::WalOpen(_)
         | NodeLifecycleError::OnDiskRead(_)
         | NodeLifecycleError::BadHashHex(_)
-        | NodeLifecycleError::ExtractionRead(_) => EXIT_GENERIC_STARTUP,
+        | NodeLifecycleError::ExtractionRead(_)
+        | NodeLifecycleError::ServeStart(_) => EXIT_GENERIC_STARTUP,
         NodeLifecycleError::ManifestImport(_)
         | NodeLifecycleError::EpochMismatch { .. }
         | NodeLifecycleError::MithrilBootstrap(_) => EXIT_NODE_MITHRIL_BOOTSTRAP_FAILED,
@@ -470,9 +496,10 @@ async fn run_node_lifecycle_inner(
             // typed mpsc channel; this sibling task is the SOLE node-spine
             // push_atomic site, fed ONLY by SelfAcceptedHandoff::into_accepted().
             // The loop holds only the Sender (no ServedChainHandle, no
-            // push_atomic). The ServedChainView is retained for the S3 network
-            // serve (push_atomic admits via send_modify with no live reader).
-            let (serve_handle, _serve_view) = ServedChainHandle::new();
+            // push_atomic). PHASE4-N-F-G-H S2: the ServedChainView is now READ by
+            // the node-spine serve sibling (`run_node_serve_task`) when `--listen`
+            // is set — request-driven serve of the self-accepted chain to peers.
+            let (serve_handle, serve_view) = ServedChainHandle::new();
             let (handoff_tx, mut handoff_rx) = mpsc::unbounded_channel::<SelfAcceptedHandoff>();
             let serve_task = tokio::spawn(async move {
                 while let Some(handoff) = handoff_rx.recv().await {
@@ -484,6 +511,24 @@ async fn run_node_lifecycle_inner(
                     }
                 }
             });
+            // PHASE4-N-F-G-H S2: node-spine serve-to-peer sibling. When `--listen`
+            // is set, bind the serve listener (fail-fast on bind failure — no
+            // silent live-serve claim) and spawn `run_node_serve_task` OUTSIDE
+            // `run_relay_loop`, reading the SAME `ServedChainView` the push sibling
+            // feeds. Request-driven serve only (no `advance_tip`). The dedicated
+            // stop signal is flipped after `run_relay_loop` returns (the relay loop
+            // may halt clean without the operator shutdown flipping).
+            let (node_serve_handle, node_serve_stop) = match cli.listen_addr.as_deref() {
+                Some(listen) => {
+                    let listener = bind_serve_listener(listen)
+                        .await
+                        .map_err(|e| NodeLifecycleError::ServeStart(format!("{e:?}")))?;
+                    let (stop_tx, stop_rx) = watch::channel(false);
+                    let task = tokio::spawn(run_node_serve_task(listener, serve_view, stop_rx));
+                    (Some(task), Some(stop_tx))
+                }
+                None => (None, None),
+            };
             let mut activation = ForgeActivation::new(
                 &mut clock,
                 &coord_state,
@@ -512,6 +557,16 @@ async fn run_node_lifecycle_inner(
             // admit task drains any remaining handoffs and exits; then join it.
             drop(activation);
             let _ = serve_task.await;
+            // PHASE4-N-F-G-H S2: stop + join the node-spine serve sibling. It ran
+            // OUTSIDE `run_relay_loop`; the relay loop may have halted clean without
+            // the operator shutdown flipping, so signal the serve sibling
+            // explicitly, then join it.
+            if let Some(stop_tx) = node_serve_stop {
+                let _ = stop_tx.send(true);
+            }
+            if let Some(handle) = node_serve_handle {
+                let _ = handle.await;
+            }
             // Honest record. PHASE4-N-F-G-C S1: with a LIVE feed wired (`--peer`)
             // the forge is observable when the feed is Continuing and a due
             // leader slot is reached; peer ACCEPT is NOT claimed here — it is
@@ -609,6 +664,134 @@ fn spawn_live_wire_pump_source(
     // (or immediately if no `--peer` parsed → feed ends → loop halts clean).
     drop(events_tx);
     NodeBlockSource::from_wire_pump(events_rx)
+}
+
+/// PHASE4-N-F-G-H S2: capacity of the node-spine serve event channel (inbound
+/// `OrchestratorEvent`s from the per-peer sessions). Bounded back-pressure.
+const NODE_SERVE_EVENT_CHANNEL_CAP: usize = 64;
+
+/// PHASE4-N-F-G-H S2: closed serve-start failure surface. A bind failure under
+/// `--listen` MUST be surfaced (no silent live-serve claim).
+#[derive(Debug)]
+pub enum ServeStartError {
+    /// The `--listen` value did not parse as a socket address.
+    InvalidAddr(String),
+    /// Binding the serve listener failed (e.g. address already in use).
+    Bind(std::io::ErrorKind),
+}
+
+/// PHASE4-N-F-G-H S2: bind the node-spine serve listener, surfacing a bind
+/// failure explicitly. The On-arm fail-fasts on `Err` — the node never proceeds
+/// claiming live-serve capability while serving is disabled. Returns the BOUND
+/// listener so the caller knows the actual local address (an ephemeral `:0`
+/// resolves to a real port) and the serve task binds exactly ONCE.
+pub async fn bind_serve_listener(listen_addr: &str) -> Result<TcpListener, ServeStartError> {
+    let addr: SocketAddr = listen_addr
+        .parse()
+        .map_err(|_| ServeStartError::InvalidAddr(listen_addr.to_string()))?;
+    TcpListener::bind(addr)
+        .await
+        .map_err(|e| ServeStartError::Bind(e.kind()))
+}
+
+/// PHASE4-N-F-G-H S2: the node-spine serve sibling task. REQUEST-DRIVEN serve of
+/// the G-B self-accepted `ServedChainView` to real peers, run OUTSIDE
+/// `run_relay_loop` (a sibling, like the push task). It accepts inbound peers on
+/// the pre-bound `listener` — reusing the per-peer N2N session machinery
+/// `run_per_peer_session` (handshake + mux + session) verbatim — and routes each
+/// orchestrator event to the SINGLE shared serve-dispatch core (S1):
+/// `PeerConnected { role: DownstreamServer }` -> `install_server_peer_state`;
+/// `PeerDisconnected` -> `remove_server_peer_state`; server frames ->
+/// `dispatch_server_frame_event_to_outbound` over `serve_view`.
+///
+/// COORDINATOR-FREE: no `CoordinatorState`, no `coordinator_step`, no producer
+/// evidence writer (those stay in `produce_mode`). REQUEST-DRIVEN ONLY: there is
+/// NO proactive `producer_chain_sync_advance_tip` and NO `serve_view.changed()`
+/// reactor — a follower's `RequestNext` is answered with `RollForward` iff the
+/// block is already present in `serve_view` at request time. Stops when
+/// `shutdown_rx` flips. The serve is read-only over `serve_view`; it advances no
+/// durable tip and admits nothing.
+pub async fn run_node_serve_task(
+    listener: TcpListener,
+    serve_view: ServedChainView,
+    mut shutdown_rx: watch::Receiver<bool>,
+) {
+    let (events_tx, mut events_rx) =
+        mpsc::channel::<OrchestratorEvent>(NODE_SERVE_EVENT_CHANNEL_CAP);
+    let peer_outbound = new_per_peer_outbound();
+    let peer_id_generator = Arc::new(PeerIdGenerator::new());
+    let mut peers_state: ServerPeerStates = BTreeMap::new();
+
+    loop {
+        tokio::select! {
+            biased;
+            _ = shutdown_rx.changed() => {
+                if *shutdown_rx.borrow() {
+                    break;
+                }
+            }
+            accept = listener.accept() => {
+                let (stream, _addr) = match accept {
+                    Ok(pair) => pair,
+                    // A fatal accept error ends the serve sibling; the relay/sync
+                    // spine is independent. (Bindability was already surfaced by
+                    // `bind_serve_listener`; this is a post-bind accept fault.)
+                    Err(_) => break,
+                };
+                let session_cfg = PerPeerSessionConfig {
+                    stream,
+                    our_supported: N2N_SUPPORTED,
+                    peer_id_generator: peer_id_generator.clone(),
+                    events_out: events_tx.clone(),
+                    peer_outbound: Some(peer_outbound.clone()),
+                };
+                tokio::spawn(run_per_peer_session(session_cfg));
+            }
+            evt = events_rx.recv() => {
+                let evt = match evt {
+                    Some(e) => e,
+                    None => break,
+                };
+                match &evt {
+                    OrchestratorEvent::PeerConnected {
+                        peer_id,
+                        chain_sync_version,
+                        block_fetch_version,
+                        role: PeerRole::DownstreamServer,
+                    } => {
+                        install_server_peer_state(
+                            &mut peers_state,
+                            ServerPeerId(peer_id.0),
+                            *chain_sync_version,
+                            *block_fetch_version,
+                        );
+                    }
+                    OrchestratorEvent::PeerDisconnected { peer_id, .. } => {
+                        remove_server_peer_state(
+                            &mut peers_state,
+                            &peer_outbound,
+                            ServerPeerId(peer_id.0),
+                        )
+                        .await;
+                    }
+                    OrchestratorEvent::PeerN2nServerChainSyncFrame { .. }
+                    | OrchestratorEvent::PeerN2nServerBlockFetchFrame { .. } => {
+                        // Request-driven serve over the SINGLE shared dispatch
+                        // core. Dispatch errors drop the peer; never panic, never
+                        // mutate authoritative state.
+                        let _ = dispatch_server_frame_event_to_outbound(
+                            &evt,
+                            &mut peers_state,
+                            &serve_view,
+                            &peer_outbound,
+                        )
+                        .await;
+                    }
+                    _ => {}
+                }
+            }
+        }
+    }
 }
 
 /// The RED relay run loop (PHASE4-N-F-D S2). Both `--mode node` lifecycle
@@ -1342,6 +1525,14 @@ fn report(e: &NodeLifecycleError) {
                  closed. Supply the COMPLETE operator key set \
                  (--cold-skey --kes-skey --vrf-skey --opcert --genesis-file) to \
                  forge, or none of them to run relay-only."
+            );
+        }
+        NodeLifecycleError::ServeStart(d) => {
+            eprintln!(
+                "ade_node --mode node: serve-to-peer start failed ({d}); failing \
+                 closed. The --listen address must parse and be bindable; the node \
+                 does not proceed claiming live-serve capability while serving is \
+                 disabled."
             );
         }
     }
