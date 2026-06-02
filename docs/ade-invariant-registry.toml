@@ -5866,4 +5866,25 @@ node_serve_start_failure_is_surfaced_not_silent. produce_loopback 4/4; ade_netwo
 handshake+server 51; ade_node 171; ade_runtime 343; single-serve-dispatch / containment /
 path-fidelity / handoff gates green / byte-unchanged. The tests binding + the
 declared->enforced flip happen at the G-H close (after S3).
+
+PHASE4-N-F-G-H S3 (C1 serve runbook + operator-gated harness) LANDED -- the operator-gated
+half of G-H. NEW serve-direction runbook docs/evidence/phase4-n-f-g-h-node-serve-README.md: a
+strict adaptation of the G-C/G-D operator-pass runbooks; the ONLY additions are the
+downstream-follower topology (a real Haskell cardano-node whose topology.json lists Ade's
+--listen dials Ade + ChainSync-discovers + BlockFetches Ade's forged block, the A7 serve
+direction) + --listen (S2, in the closed flag set) + the S2b magic-aware serve (magic 42). NEW
+env-gated harness crates/ade_node/tests/node_c1_serve_live.rs: node_c1_serve_live
+(ADE_LIVE_C1_SERVE) reuses correlate_peer_log_file_into_rehearsal + write_private_rehearsal_manifest
+(G-D) VERBATIM -- the operator-captured Haskell-FOLLOWER log -> a NON-promotable
+PrivateRehearsalManifest (C1 != bounty); NoEvidence panics (no manifest); skipped in CI; NOT a
+node mode. The hermetic correlate->manifest wiring is the existing
+c1_dry_run_correlate_to_rehearsal_envelope (no second hermetic test added). Request-driven
+serve only; a parked-at-tip follower needing a proactive advance_tip is a STOP-and-scope
+SEPARATE cluster (not patched into S3). NO synthetic/committed manifest; NO BLUE change; NO
+handshake change; NO --mode produce; NO RO-LIVE flip; the live C1 serve execution is
+blocked_until_operator_c1_serve_executed; the bounty deliverable remains the separate C2
+preprod pass. ade_node 171 + ade_runtime green; the 5 serve / containment / path-fidelity /
+handoff gates green / byte-unchanged. With S1 + S2 + S2b + S3 mechanically green, DC-NODE-07's
+tests + ci_script binding + the declared->enforced flip happen at /cluster-close
+PHASE4-N-F-G-H.
 """
