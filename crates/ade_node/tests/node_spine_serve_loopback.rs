@@ -37,7 +37,6 @@ use ade_ledger::consensus_view::{PoolDistrView, PoolEntry};
 use ade_ledger::state::LedgerState;
 use ade_network::codec::block_fetch::decompose_blockfetch_block;
 use ade_network::codec::chain_sync::Point;
-use ade_network::handshake::version_table::MAINNET_NETWORK_MAGIC;
 use ade_node::admission::bootstrap::build_n2n_version_table;
 use ade_node::node_lifecycle::{bind_serve_listener, run_node_serve_task, ServeStartError};
 use ade_runtime::admission::{dial_for_admission, run_admission_wire_pump, AdmissionPeerEvent};
@@ -50,6 +49,12 @@ use tokio::sync::{mpsc, watch};
 const EPOCH_576: EpochNo = EpochNo(576);
 const EPOCH_577_START: u64 = 163_900_800;
 const MAINNET_EPOCH_LENGTH: u64 = 432_000;
+
+/// PHASE4-N-F-G-H S2b: a non-mainnet (C1-style) network magic. The node serve
+/// listener advertises THIS magic (via `n2n_supported_for_magic`) and the
+/// follower proposes the same — proving the serve handshake is magic-aware (a
+/// mainnet-only serve table would refuse this peer).
+const C1_MAGIC: u32 = 42;
 
 // --- corpus -> self-accepted block helpers (mirror `produce_loopback.rs`) ---
 
@@ -162,12 +167,13 @@ async fn node_spine_serve_loopback_follower_fetches_self_accepted_block() {
         .expect("bind node-spine serve listener");
     let serve_addr = listener.local_addr().expect("serve local addr");
     let (stop_tx, stop_rx) = watch::channel(false);
-    let serve = tokio::spawn(run_node_serve_task(listener, serve_view, stop_rx));
+    let serve = tokio::spawn(run_node_serve_task(listener, serve_view, C1_MAGIC, stop_rx));
 
     // Follower = Ade's OWN consume client (dial + N2N handshake + chain-sync +
-    // block-fetch). The serve advertises the static `N2N_SUPPORTED` responder
-    // table (mainnet magic), so the follower proposes the matching magic.
-    let our_versions = build_n2n_version_table(MAINNET_NETWORK_MAGIC);
+    // block-fetch). The serve advertises the C1 magic via n2n_supported_for_magic
+    // (S2b), so the follower proposes the same NON-mainnet magic — a mainnet-only
+    // serve table would refuse this handshake.
+    let our_versions = build_n2n_version_table(C1_MAGIC);
     let (transport, version) = dial_for_admission(serve_addr, our_versions)
         .await
         .expect("follower dials + N2N-handshakes the node-spine serve");
@@ -177,7 +183,7 @@ async fn node_spine_serve_loopback_follower_fetches_self_accepted_block() {
         serve_addr.to_string(),
         Point::Origin,
         version,
-        MAINNET_NETWORK_MAGIC,
+        C1_MAGIC,
         ev_tx,
     ));
 

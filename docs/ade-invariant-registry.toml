@@ -5844,4 +5844,26 @@ the serve listener advertises the static N2N_SUPPORTED responder table (mainnet 
 produce_mode); a non-mainnet (preprod/C1) real follower's magic-match is an S3 operator-pass
 finding to fix in the shared listener path if it fails. The tests binding + the
 declared->enforced flip happen at the G-H close (after S3).
+
+PHASE4-N-F-G-H S2b (magic-aware serve listener) LANDED -- resolves the mainnet-only serve
+shared-path item flagged in S2 BEFORE S3 (not deferred to the operator pass). The live serve
+listeners (node-spine run_node_serve_task + produce_mode) now advertise N2N versions using the
+CONFIGURED network magic (node: cli.network_magic; produce: parsed-genesis network_magic) via
+the additive BLUE builder ade_network::handshake::version_table::n2n_supported_for_magic -- the
+ONLY approved BLUE touch in G-H (additive, pure, deterministic, over the UNCHANGED closed
+V11..=V16 version set; only network_magic parameterized; N2N_SUPPORTED + n2n() unchanged; no
+canonical type, no version widening). N2nListenerConfig / PerPeerSessionConfig.our_supported
+changed &'static [(u16,VersionData)] -> Arc<[(u16,VersionData)]> (owned; no leak). This fixes
+the mainnet-only serve handshake the G-D C1 dry-run surfaced: a real preprod (magic 1) / C1
+(magic 42) follower would otherwise refuse the handshake on a magic mismatch -- blocking both
+the C1 private dry-run and the C2 preprod bounty pass. NEW gate
+ci/ci_check_serve_listener_magic_aware.sh (no live serve site uses static N2N_SUPPORTED; both
+build via n2n_supported_for_magic) -- green; forbidden-pattern detection verified. Tests:
+n2n_supported_for_magic_produces_configured_magic (magic 1/42/mainnet correct + closed version
+set unchanged) + node_spine_serve_loopback now end-to-end on NON-mainnet magic 42 (serve
+advertises 42; follower proposes 42; handshake + fetch succeed) +
+node_serve_start_failure_is_surfaced_not_silent. produce_loopback 4/4; ade_network
+handshake+server 51; ade_node 171; ade_runtime 343; single-serve-dispatch / containment /
+path-fidelity / handoff gates green / byte-unchanged. The tests binding + the
+declared->enforced flip happen at the G-H close (after S3).
 """

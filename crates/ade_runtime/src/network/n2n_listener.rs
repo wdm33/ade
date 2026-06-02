@@ -73,9 +73,12 @@ pub enum PeerSessionError {
 /// Configuration for the inbound listener.
 pub struct N2nListenerConfig {
     pub bind_addr: SocketAddr,
-    /// Supported N2N versions (responder side). Typically
-    /// `ade_network::handshake::version_table::N2N_SUPPORTED`.
-    pub our_supported: &'static [(u16, VersionData)],
+    /// Supported N2N versions (responder side). PHASE4-N-F-G-H S2b: built per
+    /// the configured network magic via
+    /// `ade_network::handshake::version_table::n2n_supported_for_magic` (owned
+    /// so the spawned per-peer session need not borrow a `'static` table; live
+    /// serve listeners must NOT advertise the static mainnet `N2N_SUPPORTED`).
+    pub our_supported: Arc<[(u16, VersionData)]>,
     pub peer_id_generator: Arc<PeerIdGenerator>,
     pub events_out: mpsc::Sender<OrchestratorEvent>,
     /// PHASE4-N-S-B B3: shared per-peer outbound channel map.
@@ -118,7 +121,7 @@ pub async fn run_n2n_listener(
                 };
                 let session_cfg = PerPeerSessionConfig {
                     stream,
-                    our_supported: cfg.our_supported,
+                    our_supported: cfg.our_supported.clone(),
                     peer_id_generator: cfg.peer_id_generator.clone(),
                     events_out: cfg.events_out.clone(),
                     peer_outbound: cfg.peer_outbound.clone(),
@@ -132,7 +135,7 @@ pub async fn run_n2n_listener(
 /// Per-peer session config. Owned by the spawned task.
 pub struct PerPeerSessionConfig {
     pub stream: TcpStream,
-    pub our_supported: &'static [(u16, VersionData)],
+    pub our_supported: Arc<[(u16, VersionData)]>,
     pub peer_id_generator: Arc<PeerIdGenerator>,
     pub events_out: mpsc::Sender<OrchestratorEvent>,
     /// PHASE4-N-S-B B3: per-peer outbound map (see
@@ -157,7 +160,7 @@ pub async fn run_per_peer_session(cfg: PerPeerSessionConfig) -> Result<(), PeerS
     let (transport_back_in, transport_back_out, negotiated) =
         tokio::task::spawn_blocking(move || {
             let mut bt = BlockingTransport::new(inbound, outbound);
-            let result = run_n2n_handshake_responder(&mut bt, our_supported);
+            let result = run_n2n_handshake_responder(&mut bt, &our_supported);
             let (inbound, outbound) = bt.into_halves();
             (inbound, outbound, result)
         })
@@ -315,7 +318,7 @@ mod tests {
         let (events_tx, mut events_rx) = mpsc::channel(8);
         let listener_cfg = N2nListenerConfig {
             bind_addr: addr,
-            our_supported: N2N_SUPPORTED,
+            our_supported: N2N_SUPPORTED.into(),
             peer_id_generator: Arc::new(PeerIdGenerator::new()),
             events_out: events_tx.clone(),
             peer_outbound: None,

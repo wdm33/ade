@@ -57,6 +57,22 @@ pub const N2N_SUPPORTED: &[(u16, VersionData)] = &[
     (16, n2n(MAINNET_NETWORK_MAGIC)),
 ];
 
+/// PHASE4-N-F-G-H S2b: the N2N supported-version table for an arbitrary
+/// configured network magic. The closed version SET is exactly
+/// `N2N_SUPPORTED`'s version numbers (V11..=V16 — the single source, no
+/// duplication) and the `VersionData` shape is identical; ONLY `network_magic`
+/// is derived from the configured network identity (DC-NODE-07). Live serve
+/// listeners build this from the configured magic instead of the static
+/// mainnet `N2N_SUPPORTED`, so a non-mainnet (preprod magic 1 / private magic
+/// 42) follower's N2N handshake succeeds. Additive + pure + deterministic; no
+/// version widening, no version-set change, no new canonical type.
+pub fn n2n_supported_for_magic(network_magic: u32) -> Vec<(u16, VersionData)> {
+    N2N_SUPPORTED
+        .iter()
+        .map(|(version, _)| (*version, n2n(network_magic)))
+        .collect()
+}
+
 const fn n2c(version_magic: u32) -> N2cVersionData {
     N2cVersionData {
         network_magic: version_magic,
@@ -80,3 +96,39 @@ pub const N2C_SUPPORTED: &[(u16, N2cVersionData)] = &[
     (22, n2c(MAINNET_NETWORK_MAGIC)),
     (23, n2c(MAINNET_NETWORK_MAGIC)),
 ];
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// PHASE4-N-F-G-H S2b (CE-G-H-2b): the magic-aware N2N table parameterizes
+    /// only `network_magic` over the unchanged closed version set — proven for
+    /// preprod (1), C1 (42), and mainnet.
+    #[test]
+    fn n2n_supported_for_magic_produces_configured_magic() {
+        let want_versions: Vec<u16> = N2N_SUPPORTED.iter().map(|(v, _)| *v).collect();
+        for magic in [1u32, 42, MAINNET_NETWORK_MAGIC] {
+            let table = n2n_supported_for_magic(magic);
+            // Closed version SET unchanged (no widening, no version-set change).
+            let got_versions: Vec<u16> = table.iter().map(|(v, _)| *v).collect();
+            assert_eq!(got_versions, want_versions, "closed N2N version set unchanged");
+            // Every advertised version carries the CONFIGURED magic.
+            for (_, vd) in &table {
+                assert_eq!(vd.network_magic, magic, "VersionData advertises the configured magic");
+            }
+        }
+        // The mainnet specialization matches the static `N2N_SUPPORTED` table
+        // (same version numbers + same advertised magic) — mainnet behavior
+        // remains available when configured.
+        for ((gv, gvd), (sv, svd)) in n2n_supported_for_magic(MAINNET_NETWORK_MAGIC)
+            .iter()
+            .zip(N2N_SUPPORTED.iter())
+        {
+            assert_eq!(gv, sv, "version numbers match the static table");
+            assert_eq!(
+                gvd.network_magic, svd.network_magic,
+                "mainnet specialization advertises the static table's magic"
+            );
+        }
+    }
+}

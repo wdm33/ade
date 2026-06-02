@@ -101,9 +101,10 @@ use crate::EXIT_GENERIC_STARTUP;
 // PHASE4-N-F-G-H S2: node-spine serve-to-peer sibling imports. The serve
 // reuses the per-peer N2N session machinery (`run_per_peer_session`) + the
 // single shared serve-dispatch core (S1, `ade_runtime::network::serve_dispatch`)
-// over the G-B `ServedChainView`. The serve listener advertises the static
-// responder version table (`N2N_SUPPORTED`), mirroring `produce_mode`.
-use ade_network::handshake::version_table::N2N_SUPPORTED;
+// over the G-B `ServedChainView`. The serve listener advertises the N2N
+// responder table built per the configured network magic (S2b,
+// `n2n_supported_for_magic`) — NOT the static mainnet `N2N_SUPPORTED`.
+use ade_network::handshake::version_table::n2n_supported_for_magic;
 use ade_runtime::network::n2n_listener::{run_per_peer_session, PerPeerSessionConfig};
 use ade_runtime::network::outbound_command::new_per_peer_outbound;
 use ade_runtime::network::serve_dispatch::{
@@ -520,11 +521,22 @@ async fn run_node_lifecycle_inner(
             // may halt clean without the operator shutdown flipping).
             let (node_serve_handle, node_serve_stop) = match cli.listen_addr.as_deref() {
                 Some(listen) => {
+                    // Serving a peer requires the network's magic (the serve
+                    // listener advertises it via n2n_supported_for_magic, S2b);
+                    // fail-fast if absent (no silent live-serve claim).
+                    let serve_magic = cli
+                        .network_magic
+                        .ok_or(NodeLifecycleError::MissingFlag("--network-magic"))?;
                     let listener = bind_serve_listener(listen)
                         .await
                         .map_err(|e| NodeLifecycleError::ServeStart(format!("{e:?}")))?;
                     let (stop_tx, stop_rx) = watch::channel(false);
-                    let task = tokio::spawn(run_node_serve_task(listener, serve_view, stop_rx));
+                    let task = tokio::spawn(run_node_serve_task(
+                        listener,
+                        serve_view,
+                        serve_magic,
+                        stop_rx,
+                    ));
                     (Some(task), Some(stop_tx))
                 }
                 None => (None, None),
@@ -714,6 +726,7 @@ pub async fn bind_serve_listener(listen_addr: &str) -> Result<TcpListener, Serve
 pub async fn run_node_serve_task(
     listener: TcpListener,
     serve_view: ServedChainView,
+    network_magic: u32,
     mut shutdown_rx: watch::Receiver<bool>,
 ) {
     let (events_tx, mut events_rx) =
@@ -740,7 +753,7 @@ pub async fn run_node_serve_task(
                 };
                 let session_cfg = PerPeerSessionConfig {
                     stream,
-                    our_supported: N2N_SUPPORTED,
+                    our_supported: n2n_supported_for_magic(network_magic).into(),
                     peer_id_generator: peer_id_generator.clone(),
                     events_out: events_tx.clone(),
                     peer_outbound: Some(peer_outbound.clone()),

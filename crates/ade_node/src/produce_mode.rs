@@ -258,7 +258,10 @@ pub async fn run_produce_mode(cli: ProduceCli, shutdown_rx: watch::Receiver<bool
     let peer_outbound = ade_runtime::network::outbound_command::new_per_peer_outbound();
     let listener_cfg = N2nListenerConfig {
         bind_addr: listen_addr,
-        our_supported: ade_network::handshake::version_table::N2N_SUPPORTED,
+        our_supported: ade_network::handshake::version_table::n2n_supported_for_magic(
+            genesis.network_magic,
+        )
+        .into(),
         peer_id_generator: Arc::new(PeerIdGenerator::new()),
         events_out: events_tx,
         peer_outbound: Some(peer_outbound.clone()),
