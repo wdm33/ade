@@ -26,6 +26,8 @@ pub mod node_lifecycle;
 pub mod node_sync;
 pub mod operator_forge;
 pub mod produce_mode;
+pub mod rehearsal_evidence;
+pub mod rehearsal_pass;
 pub mod run_loop_planner;
 pub mod wire_only;
 

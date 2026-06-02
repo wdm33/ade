@@ -5679,4 +5679,26 @@ build_consensus_inputs_from_genesis ctor). The 3 containment / handoff / memory 
 are byte-unchanged + green; cargo test -p ade_node + -p ade_runtime green. The
 tests/ci_script array binding + the declared->enforced flip are deferred to the G-D
 close pass (clause 1 path fidelity is mechanically green in CI from S1 onward).
+
+PHASE4-N-F-G-D S2 (rehearsal-evidence surface + gate) LANDED: new GREEN
+ade_node::rehearsal_evidence -- PrivateRehearsalManifest WRAPS a correlate-produced
+Ba02Manifest payload in a distinct rehearsal envelope; sole ctor from_correlate_outcome
+returns None on NoEvidence (nothing to write); to_canonical_toml emits is_rehearsal = true
++ not_bounty_evidence = true as LITERALS (the type cannot represent a non-rehearsal). New
+RED ade_node::rehearsal_pass -- correlate_peer_log_file_into_rehearsal REUSES
+ba02_pass::correlate_peer_log_file verbatim (no alternate correlator);
+write_private_rehearsal_manifest accepts ONLY a PrivateRehearsalManifest. New gate
+ci/ci_check_rehearsal_manifest_schema.sh (vacuous-until-committed; closed rehearsal schema
++ venue/private-testnet + is_rehearsal/not_bounty_evidence markers + peer_log_file_sha256
+binding; THREE non-promotability barriers: distinct docs/evidence/ home, the rehearsal
+markers, and a cross-check that no rehearsal marker appears in any .toml under the bounty
+home docs/clusters/PHASE4-N-F-G-C/; fail-closed-smoke-verified on wrong sha256 / missing
+marker / bounty-home leak). 3 tests (rehearsal_envelope_wraps_correlate_produced_payload,
+rehearsal_correlate_no_evidence_writes_nothing,
+rehearsal_envelope_is_structurally_distinct_from_ba02_manifest). RO-LIVE-01 / RO-LIVE-06 +
+the bounty BA-02 gate (ci_check_ba02_evidence_manifest_schema.sh) + the S1 fence + the 3
+containment / handoff / memory fences are byte-unchanged; no BLUE change; cargo test
+-p ade_node green. The tests/ci_script array binding + the declared->enforced flip remain
+deferred to the G-D close pass (clause 2 evidence non-promotability is mechanically green
+in CI from S2 onward).
 """
