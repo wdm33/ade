@@ -11,11 +11,12 @@ Bound the live-feed memory surfaces (reassembly-tail cap + WirePump lookahead-de
 **PHASE4-N-F-G-E** — Live-feed bounded memory.
 
 ### Status
-Proposed.
+Ready for Review (all §12 mechanical acceptance green; `ade_network` + `ade_node` suites pass, both
+fences byte-unchanged + green, `ci_check_live_feed_memory_bounds.sh` green; no BLUE change).
 
 ### Cluster Exit Criteria Addressed
-- [ ] **CE-G-E-1 (live-feed memory bounded + fail-closed)** — the four named tests pass; the existing
-  containment + handoff-fence gates are byte-unchanged + green; (optional) `ci_check_live_feed_memory_bounds.sh`
+- [x] **CE-G-E-1 (live-feed memory bounded + fail-closed)** — the four named tests pass; the existing
+  containment + handoff-fence gates are byte-unchanged + green; `ci_check_live_feed_memory_bounds.sh`
   green; `cargo test -p ade_network` + `cargo test -p ade_node` green.
 
 ### Slice Dependencies
@@ -123,19 +124,20 @@ serve/containment fences.)
 ## 12. Mechanical Acceptance Criteria
 This slice is complete only when **all** of the following exist and pass in CI (hermetic):
 
-- [ ] `session_reassembly_tail_over_cap_fails_closed` — feeding a per-protocol reassembly buffer past
-  16 MiB without a complete item returns `SessionError::ReassemblyBufferOverflow`; no silent truncation,
-  no partial decode.
-- [ ] `session_reassembly_tail_under_cap_still_drains_complete_item` — a normal under-cap multi-frame item
-  reassembles + drains unchanged (byte-identical to pre-cap behavior).
-- [ ] `wirepump_lookahead_stops_at_cap` — `pump_lookahead` stops draining at 256 buffered blocks.
-- [ ] `wirepump_lookahead_cap_preserves_relay_behavior_under_normal_feed` — under a normal feed the cap is
-  never hit; relay/sync (block order + delivery) is unchanged.
-- [ ] `ci_check_node_run_loop_containment.sh` — **byte-unchanged + green**.
-- [ ] `ci_check_served_chain_handoff_fence.sh` — **byte-unchanged + green**.
-- [ ] (optional, if cheap + stable) `ci_check_live_feed_memory_bounds.sh` — both constants exist + are not
-  wired to CLI / env / config; green.
-- [ ] `cargo test -p ade_network` + `cargo test -p ade_node` green.
+- [x] `session_reassembly_tail_over_cap_fails_closed` (`ade_network` `session::core`) — feeding a
+  per-protocol reassembly buffer past 16 MiB without a complete item returns
+  `SessionError::ReassemblyBufferOverflow`; no silent truncation, no partial decode.
+- [x] `session_reassembly_tail_under_cap_still_drains_complete_item` (`session::core`) — a normal
+  under-cap multi-frame item reassembles + drains unchanged.
+- [x] `wirepump_lookahead_stops_at_cap` (`ade_node` `node_sync`) — opportunistic draining stops at 256
+  buffered blocks (lookahead capped, not unbounded).
+- [x] `wirepump_lookahead_cap_preserves_relay_behavior_under_normal_feed` (`node_sync`) — under a normal
+  feed the cap is never hit; every block delivered in arrival order.
+- [x] `ci_check_node_run_loop_containment.sh` — **byte-unchanged + green** (verified `git diff` vs `main`).
+- [x] `ci_check_served_chain_handoff_fence.sh` — **byte-unchanged + green** (verified `git diff` vs `main`).
+- [x] `ci_check_live_feed_memory_bounds.sh` — NEW gate; both constants exist as closed literals + are not
+  wired to CLI / env / config; green (smoke-tested fail-closed on an injected escape hatch).
+- [x] `cargo test -p ade_network` + `cargo test -p ade_node` green (no regression; `ade_node` lib 166→168).
 
 ## 13. Failure Modes
 - Reassembly buffer over 16 MiB → `SessionError::ReassemblyBufferOverflow` (structured); the caller drops

@@ -185,6 +185,18 @@ pub enum SessionError {
         protocol: u16,
         detail: &'static str,
     },
+    /// A mini-protocol's reassembly buffer exceeded the closed
+    /// `MAX_REASSEMBLY_TAIL_BYTES` bound while still holding an
+    /// INCOMPLETE item — a peer streaming an endless / oversized
+    /// item. Peer-fatal: the session fails closed (drop the peer)
+    /// rather than grow memory unbounded. A defensive
+    /// implementation bound, NOT a Cardano semantic parameter; no
+    /// runtime option may disable it. PHASE4-N-F-G-E (DC-LIVEMEM-01).
+    ReassemblyBufferOverflow {
+        protocol: u16,
+        len: usize,
+        cap: usize,
+    },
 }
 
 /// `HandshakeRole` — initiator (we dial) vs responder (we accept).

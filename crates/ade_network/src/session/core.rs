@@ -38,6 +38,16 @@ use super::event::{
 };
 use super::state::{ConnectedState, SessionState};
 
+/// PHASE4-N-F-G-E S1 (DC-LIVEMEM-01): the maximum bytes a single
+/// per-mini-protocol reassembly buffer may hold for an INCOMPLETE item before
+/// the session fails closed (drop the peer). Generous headroom over any
+/// legitimate single block/item (a Cardano block is ~tens of KiB), while
+/// bounding a peer that streams an endless / oversized incomplete item. A
+/// **defensive implementation bound, NOT a Cardano semantic parameter**; it may
+/// be tightened by a future hardening slice, but no runtime option (CLI / env /
+/// config) may disable it or set it unbounded. Closed constant.
+const MAX_REASSEMBLY_TAIL_BYTES: usize = 16 * 1024 * 1024;
+
 /// One step of the session reducer. Pure: same `(state, event)`
 /// inputs → same `Vec<SessionEffect>` output across runs.
 pub fn step(
@@ -231,6 +241,18 @@ fn drain_connected_frames(
                 let buf = connected.proto_buffers.get_mut(proto);
                 buf.extend_from_slice(&frame.payload);
                 drain_protocol_items(proto, buf, &mut effects)?;
+                // PHASE4-N-F-G-E S1 (DC-LIVEMEM-01): bound the reassembly tail.
+                // After draining every COMPLETE item, an incomplete tail past
+                // the cap is a peer streaming an endless / oversized item — fail
+                // closed (drop the peer), never grow unbounded. No silent
+                // truncation, no partial decode. Defensive bound, no disable.
+                if buf.len() > MAX_REASSEMBLY_TAIL_BYTES {
+                    return Err(SessionError::ReassemblyBufferOverflow {
+                        protocol: proto.id(),
+                        len: buf.len(),
+                        cap: MAX_REASSEMBLY_TAIL_BYTES,
+                    });
+                }
             }
         }
     }
@@ -411,6 +433,94 @@ mod tests {
             payload,
         };
         encode_frame(&f).expect("encode")
+    }
+
+    fn conn_vdata() -> VersionData {
+        VersionData {
+            network_magic: MAINNET_NETWORK_MAGIC,
+            initiator_only_diffusion: false,
+            peer_sharing: PeerSharingFlag::NoPeerSharing,
+            query: false,
+            peras_support: false,
+        }
+    }
+
+    fn wrap_block_fetch_frame(payload: Vec<u8>, mode: MuxMode) -> Vec<u8> {
+        let f = MuxFrame {
+            header: MuxHeader {
+                timestamp: 0,
+                mode,
+                mini_protocol_id: MiniProtocolId::new(3).expect("3"),
+                length: payload.len() as u16,
+            },
+            payload,
+        };
+        encode_frame(&f).expect("encode")
+    }
+
+    // ===== PHASE4-N-F-G-E S1: reassembly-tail cap (DC-LIVEMEM-01) =====
+
+    #[test]
+    fn session_reassembly_tail_over_cap_fails_closed() {
+        // A peer streams an endless INCOMPLETE item: a CBOR byte string (0x5B,
+        // major 2 / 8-byte length) declaring a length far over the cap, then
+        // never delivering it. `skip_item` returns UnexpectedEof on every drain,
+        // so the per-protocol reassembly buffer grows. Once it exceeds
+        // MAX_REASSEMBLY_TAIL_BYTES (16 MiB) the session MUST fail closed (drop
+        // the peer) — never grow unbounded, never partial-accept.
+        let mut state = SessionState::Connected(ConnectedState::new(14, conn_vdata()));
+        let declared_len: u64 = 100 * 1024 * 1024; // >> the 16 MiB cap
+        let mut first = vec![0x5Bu8];
+        first.extend_from_slice(&declared_len.to_be_bytes());
+        first.extend_from_slice(&vec![0u8; 60 * 1024]);
+        let filler = vec![0u8; 60 * 1024];
+
+        let mut got: Option<SessionError> = None;
+        for i in 0..400u32 {
+            let payload = if i == 0 { first.clone() } else { filler.clone() };
+            let frame = wrap_block_fetch_frame(payload, MuxMode::Initiator);
+            match step(&mut state, ByteChunkIn::Inbound(frame)) {
+                Ok(_) => continue, // still under the cap, item still incomplete
+                Err(e) => {
+                    got = Some(e);
+                    break;
+                }
+            }
+        }
+        let err = got.expect("reassembly MUST fail closed past the 16 MiB cap");
+        assert!(
+            matches!(
+                err,
+                SessionError::ReassemblyBufferOverflow { cap, len, .. }
+                    if cap == 16 * 1024 * 1024 && len > cap
+            ),
+            "expected ReassemblyBufferOverflow over the 16 MiB cap, got {err:?}"
+        );
+    }
+
+    #[test]
+    fn session_reassembly_tail_under_cap_still_drains_complete_item() {
+        // A normal under-cap item reassembles + drains UNCHANGED: a complete
+        // 4-byte CBOR byte string (0x44 + 4 bytes) split across two frames →
+        // exactly one DeliverPeerFrame carrying the full item, no error.
+        let mut state = SessionState::Connected(ConnectedState::new(14, conn_vdata()));
+        let f1 = wrap_block_fetch_frame(vec![0x44, 0x01, 0x02], MuxMode::Initiator);
+        let e1 = step(&mut state, ByteChunkIn::Inbound(f1)).expect("frame1 ok");
+        assert!(
+            !e1.iter()
+                .any(|e| matches!(e, SessionEffect::DeliverPeerFrame { .. })),
+            "no complete item yet (item is split), got {e1:?}"
+        );
+        let f2 = wrap_block_fetch_frame(vec![0x03, 0x04], MuxMode::Initiator);
+        let e2 = step(&mut state, ByteChunkIn::Inbound(f2)).expect("frame2 ok");
+        assert!(
+            e2.iter().any(|e| matches!(
+                e,
+                SessionEffect::DeliverPeerFrame { payload, .. }
+                    if payload.as_slice() == [0x44, 0x01, 0x02, 0x03, 0x04]
+            )),
+            "the completed item must be delivered intact, got {e2:?}"
+        );
     }
 
     fn propose_v14_only() -> HandshakeMessage {

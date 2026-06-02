@@ -296,6 +296,12 @@ fn session_err_to_halt(err: &SessionError) -> PeerHaltReason {
         SessionError::ProtocolPayloadMalformed { .. } => {
             PeerHaltReason::ChainSyncDecodeError
         }
+        // PHASE4-N-F-G-E (DC-LIVEMEM-01): a reassembly-buffer overflow is a
+        // peer-fatal protocol-layer fault — drop the peer (closest wire-side
+        // bucket), never grow memory.
+        SessionError::ReassemblyBufferOverflow { .. } => {
+            PeerHaltReason::ChainSyncDecodeError
+        }
     }
 }
 

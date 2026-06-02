@@ -5561,9 +5561,9 @@ handoff fence are all unchanged.
 """
 source = "docs/planning/phase4-n-f-g-e-invariants.md"
 cross_ref = ["CN-SESS-04", "DC-SESS-06", "DC-SYNC-01", "DC-SYNC-02", "DC-NODE-06", "CN-NODE-02"]
-code_locus = "crates/ade_network/src/session/core.rs (GREEN 16 MiB reassembly-tail cap + additive SessionError overflow variant); crates/ade_node/src/node_sync.rs (RED 256-block WirePump lookahead-depth cap)"
-tests = []
-ci_script = ""
+code_locus = "crates/ade_network/src/session/core.rs (GREEN 16 MiB reassembly-tail cap MAX_REASSEMBLY_TAIL_BYTES + additive SessionError::ReassemblyBufferOverflow); crates/ade_node/src/node_sync.rs (RED 256-block WirePump lookahead-depth cap MAX_WIRE_PUMP_LOOKAHEAD); crates/ade_runtime/src/network/mux_pump.rs (the overflow variant maps to PeerHaltReason::ChainSyncDecodeError — drop the peer)"
+tests = ["session_reassembly_tail_over_cap_fails_closed", "session_reassembly_tail_under_cap_still_drains_complete_item", "wirepump_lookahead_stops_at_cap", "wirepump_lookahead_cap_preserves_relay_behavior_under_normal_feed"]
+ci_script = "ci/ci_check_live_feed_memory_bounds.sh"
 introduced_in = "PHASE4-N-F-G-E"
 strengthened_in = []
 status = "declared"

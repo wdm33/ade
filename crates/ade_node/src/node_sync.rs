@@ -47,6 +47,16 @@ use tokio::sync::mpsc;
 use crate::produce_mode::{run_real_forge, ForgeRequestContext};
 use ade_runtime::producer::self_accepted_handoff::SelfAcceptedHandoff;
 
+/// PHASE4-N-F-G-E S1 (DC-LIVEMEM-01): the maximum blocks the content-blind
+/// WirePump lookahead may buffer. At the cap, `pump_lookahead` stops the
+/// opportunistic `try_recv` drain and the existing bounded mpsc
+/// (`LIVE_WIRE_PUMP_CHANNEL_CAP`) back-pressures the pump's `events_tx.send` —
+/// end-to-end bounded, no unbounded `VecDeque` growth from a fast / hostile
+/// peer. A **defensive implementation bound, NOT a Cardano semantic
+/// parameter**; tightenable by a future hardening slice, but no runtime option
+/// (CLI / env / config) may disable it or set it unbounded. Closed constant.
+const MAX_WIRE_PUMP_LOOKAHEAD: usize = 256;
+
 /// Closed, verdict-decoupled ordered block-bytes source for the
 /// `--mode node` lifecycle sync path (PHASE4-N-F-C L4a).
 ///
@@ -107,6 +117,15 @@ impl NodeBlockSource {
     ) {
         use tokio::sync::mpsc::error::TryRecvError;
         loop {
+            // PHASE4-N-F-G-E S1 (DC-LIVEMEM-01): bound the content-blind
+            // lookahead depth. At the cap, stop opportunistic draining; the
+            // existing bounded mpsc (LIVE_WIRE_PUMP_CHANNEL_CAP) then
+            // back-pressures the pump's events_tx.send. No unbounded growth
+            // from a fast / hostile peer; never a silent drop (the bytes stay
+            // queued in the bounded channel and are drained once below the cap).
+            if lookahead.len() >= MAX_WIRE_PUMP_LOOKAHEAD {
+                break;
+            }
             match rx.try_recv() {
                 Ok(AdmissionPeerEvent::Block { block_bytes, .. }) => {
                     lookahead.push_back(block_bytes);
@@ -2101,6 +2120,66 @@ mod tests {
         assert!(
             empty.is_empty(),
             "the empty in_memory source must halt before any ForgeTick (no forge attempted)"
+        );
+    }
+
+    // ===== PHASE4-N-F-G-E S1: WirePump lookahead-depth cap (DC-LIVEMEM-01) =====
+
+    /// A fast / hostile peer cannot grow the content-blind lookahead unbounded:
+    /// one opportunistic drain stops at `MAX_WIRE_PUMP_LOOKAHEAD`, leaving the
+    /// rest queued in the bounded channel (back-pressure), never an unbounded
+    /// `VecDeque`.
+    #[tokio::test]
+    async fn wirepump_lookahead_stops_at_cap() {
+        // A generous channel so the sends don't block — the point is the
+        // lookahead DRAIN stops at the cap regardless of how much is available.
+        let (tx, rx) = mpsc::channel::<AdmissionPeerEvent>(MAX_WIRE_PUMP_LOOKAHEAD * 4);
+        for i in 0..(MAX_WIRE_PUMP_LOOKAHEAD + 50) {
+            tx.send(AdmissionPeerEvent::Block {
+                peer: "p".to_string(),
+                block_bytes: vec![i as u8],
+            })
+            .await
+            .unwrap();
+        }
+        let mut source = NodeBlockSource::from_wire_pump(rx);
+        // Trigger one opportunistic pump (has_work_ready pumps when empty).
+        assert!(source.has_work_ready());
+        match &source {
+            NodeBlockSource::WirePump { lookahead, .. } => assert_eq!(
+                lookahead.len(),
+                MAX_WIRE_PUMP_LOOKAHEAD,
+                "lookahead must stop draining at the cap, not grow unbounded"
+            ),
+            _ => panic!("expected WirePump"),
+        }
+        drop(tx);
+    }
+
+    /// Under a normal feed (well under the cap) the cap is never hit and every
+    /// block is delivered in arrival order — relay/sync behavior unchanged.
+    #[tokio::test]
+    async fn wirepump_lookahead_cap_preserves_relay_behavior_under_normal_feed() {
+        let (tx, rx) = mpsc::channel::<AdmissionPeerEvent>(64);
+        let n: usize = 10;
+        for i in 0..n {
+            tx.send(AdmissionPeerEvent::Block {
+                peer: "p".to_string(),
+                block_bytes: vec![i as u8],
+            })
+            .await
+            .unwrap();
+        }
+        drop(tx); // close the feed so it ends after draining
+        let mut source = NodeBlockSource::from_wire_pump(rx);
+        let mut got = Vec::new();
+        while let Some(b) = source.next_block().await {
+            got.push(b[0]);
+        }
+        assert_eq!(
+            got,
+            (0..n as u8).collect::<Vec<u8>>(),
+            "every block delivered in arrival order; the cap is never hit under a normal feed"
         );
     }
 
