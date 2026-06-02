@@ -27,7 +27,29 @@ set -euo pipefail
 REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$REPO_ROOT"
 
-MANIFESTS=$(find docs/clusters/PHASE4-N-F-G-C -name "CE-G-C-LIVE_*.toml" 2>/dev/null || true)
+# Scan both real G-C bounty-evidence homes: the active operator-pass home AND the
+# archived home (G-C is archived to completed/). Build the existing-homes list
+# first — "home absent" => no manifests there (deliberate), never "skip the check";
+# a scan error on an EXISTING home => fail closed (NOT swallowed). Same archived-home
+# fix as PHASE4-N-F-G-D S4 applied to the rehearsal gate; the pre-fix gate scanned
+# only the (now-archived, absent) active home behind a swallow-all guard.
+BOUNTY_HOMES=("docs/clusters/PHASE4-N-F-G-C" "docs/clusters/completed/PHASE4-N-F-G-C")
+EXISTING_HOMES=()
+for h in "${BOUNTY_HOMES[@]}"; do
+  [[ -d "$h" ]] && EXISTING_HOMES+=("$h")
+done
+
+MANIFESTS=""
+if (( ${#EXISTING_HOMES[@]} > 0 )); then
+  set +e
+  MANIFESTS="$(find "${EXISTING_HOMES[@]}" -name "CE-G-C-LIVE_*.toml")"
+  find_rc=$?
+  set -e
+  if (( find_rc != 0 )); then
+    echo "[ci_check_ba02_evidence_manifest_schema] FAIL — manifest scan errored on an existing bounty home (find rc=$find_rc); failing closed"
+    exit 1
+  fi
+fi
 
 if [[ -z "$MANIFESTS" ]]; then
   echo "[ci_check_ba02_evidence_manifest_schema] PASS (no manifest committed; vacuous — live ACCEPT is operator-gated)"
