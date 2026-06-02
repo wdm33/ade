@@ -5663,4 +5663,20 @@ acceptance = bounty completion. No RO-LIVE flip; no strengthened_in bump on RO-L
 RO-LIVE-06 / CN-OPERATOR-EVIDENCE-01 (G-D does not advance the bounty deliverable). The
 relay-loop containment gate, the served-chain handoff fence, and the live-feed memory
 bounds stay byte-unchanged.
+
+PHASE4-N-F-G-D S1 (path-fidelity proof + fence) LANDED: OQ1 proven empirically -- the
+shared importer is venue-agnostic. A private / epoch-0-shaped bundle (epoch_no=0,
+epoch_start_slot=0, origin tip in-window) AND a synced-preprod-tip-shaped bundle both
+import through the single import_live_consensus_inputs_from_bytes with NO venue branch
+(no shared-path fix needed -- validate_and_lift's inclusive window check passes epoch 0).
+New test node_accepted_block_consensus_inputs_via_shared_import
+(crates/ade_node/tests/node_path_fidelity.rs) + new gate
+ci/ci_check_node_path_fidelity.sh (guard a: cli.rs flag set == the pinned 28-flag closed
+allow-list, G-D adds none; guard b: no from-genesis consensus-inputs constructor +
+node_lifecycle sources consensus inputs only via the shared importer; both
+fail-closed-smoke-verified against an injected --private-net flag + a
+build_consensus_inputs_from_genesis ctor). The 3 containment / handoff / memory fences
+are byte-unchanged + green; cargo test -p ade_node + -p ade_runtime green. The
+tests/ci_script array binding + the declared->enforced flip are deferred to the G-D
+close pass (clause 1 path fidelity is mechanically green in CI from S1 onward).
 """
