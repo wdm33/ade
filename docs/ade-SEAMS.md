@@ -3,30 +3,105 @@
 > **Status:** Living architectural document. Regenerated; not hand-edited.
 > Per-project instance of `~/.claude/methodology/templates/seams.md`.
 
-> 11 crates, **456 canonical types**, **118 CI checks** at HEAD (`90791691`, PHASE4-N-F-G-C cluster close).
+> 11 crates, **456 canonical types**, **119 CI checks** at HEAD (`6f848825`, PHASE4-N-F-G-E cluster close).
 > Reads CODEMAP (`docs/ade-CODEMAP.md`, regenerated at the same HEAD) for the module
 > list + TCB colors, and the invariant registry (`docs/ade-invariant-registry.toml` —
-> **313 entries** at HEAD) for the rule IDs that gate each closed surface.
+> **314 entries** at HEAD) for the rule IDs that gate each closed surface.
 >
 > **This regeneration is a scoped INCREMENTAL catch-up through ONE cluster.** The prior file was generated
-> at the PHASE4-N-F-G-B close (header `339cccb1` / 117 CI checks / 313 rules — the self-accept→serve handoff on
-> the `--mode node` spine). It is brought current through **PHASE4-N-F-G-C** (closing now at `90791691` —
-> **the live WirePump feed + BA-02 evidence wiring on the `--mode node` spine**). The G-C delta makes the
-> forge-capable `On` arm **live-feed-wireable** from `--peer` (reusing the closed admission dial + pump) and wires
-> the operator-pass BA-02 evidence I/O — **without** claiming peer acceptance. The seam-relevant additions are a
-> **NEW node-spine live-feed ATTACH POINT that REUSES existing closed wire infra** (`spawn_live_wire_pump_source`
-> builds a LIVE `NodeBlockSource::WirePump` by reusing the closed `ade_runtime::admission::{dial_for_admission,
-> run_admission_wire_pump}` VERBATIM — **a FILL of the existing `WirePump` arm via `from_wire_pump`, NOT a new
-> `NodeBlockSource` variant / plugin point / new wire authority**) and a **NEW RED BA-02 evidence-I/O module**
-> `ade_node::ba02_pass` (two file-I/O fns over the pre-existing closed `Ba02Manifest` / `BA02Outcome` /
-> `PeerAcceptEvent` vocabulary — **NO new closed enum / registry**; `correlate` stays the SOLE `Ba02Manifest`
-> ctor). **Both are CLOSED surfaces / fenced seams, NOT new extension points.** **No BLUE crate was modified** —
-> the 456 canonical-type total is unchanged; all G-C code lands in the RED binary/driver `ade_node`
-> (`node_lifecycle` live-feed wire + `spawn_live_wire_pump_source`, `admission::bootstrap` fn-visibility
-> promotion, the NEW RED `ba02_pass` module), CI, and docs.
+> at the PHASE4-N-F-G-C close (header `351d46bc` / 118 CI checks / 313 rules — the live WirePump feed + BA-02
+> evidence wiring on the `--mode node` spine). It is brought current through **PHASE4-N-F-G-E** (closing now at
+> `6f848825` — **live-feed bounded memory before authoritative decode/apply on the `--mode node` spine**). The
+> G-E delta bounds two pre-existing UNBOUNDED peer-driven memory surfaces that the G-C live-feed wiring EXPOSED
+> on the binary path (the G-C per-cluster security-review MEDIUM + the prior SEAMS §7 candidate #6): a GREEN
+> per-mini-protocol reassembly-tail cap and a RED WirePump lookahead-depth cap, each fail-closed BEFORE the BLUE
+> `ade_codec` decode path. The seam-relevant additions are **all CLOSED / fenced surface REDUCTIONS, NOT new
+> extension points**: a NEW closed const `MAX_REASSEMBLY_TAIL_BYTES = 16 MiB` (GREEN `ade_network::session::core`)
+> fail-closed via the NEW **additive CLOSED-enum variant** `SessionError::ReassemblyBufferOverflow` (no wildcard;
+> the sole exhaustive consumer `ade_runtime::network::mux_pump::session_err_to_halt` handles it → drop the peer),
+> and a NEW closed const `MAX_WIRE_PUMP_LOOKAHEAD = 256` (RED `ade_node::node_sync::pump_lookahead`,
+> back-pressuring the existing bounded `mpsc`). **Both bounds are CLOSED LITERAL constants with NO runtime / CLI
+> / env / config override** (the no-escape-hatch surface reduction). **No new module, no new `NodeBlockSource` /
+> `CoordinatorEvent` variant.** **No BLUE crate was modified** — the 456 canonical-type total is unchanged
+> (`session/` is GREEN-by-content, NOT a BLUE `ade_network` submodule path, so the new `SessionError` variant is
+> NOT canonical-counted); the four changed files (`session::{core.rs, event.rs}` GREEN-by-content,
+> `node_sync.rs` + `mux_pump.rs` RED) touch no BLUE crate. **Registry → 314 rules** (NEW `DC-LIVEMEM-01`,
+> `tier = derived`, operational-hardening, `enforced`); **118 → 119 CI** (NEW `ci_check_live_feed_memory_bounds.sh`).
 >
-> **Boundary language (load-bearing — do not soften).** G-C closes the **MECHANICAL live-feed + evidence
-> scaffolding ONLY**. The `--mode node` `On` arm is now **live-feed-wireable**: when `--peer` is supplied,
+> **Boundary language (load-bearing — do NOT soften / do NOT broaden).** G-E bounds **peer-driven memory on the
+> live `--mode node` feed BEFORE authoritative decode/apply** — and nothing more. Two closed caps, each
+> fail-closed in front of the BLUE `ade_codec` decode path: the GREEN per-mini-protocol reassembly-tail cap
+> (`MAX_REASSEMBLY_TAIL_BYTES = 16 MiB`, `SessionError::ReassemblyBufferOverflow`, drop the peer) and the RED
+> WirePump lookahead-depth cap (`MAX_WIRE_PUMP_LOOKAHEAD = 256`, back-pressuring the existing bounded `mpsc`). The
+> claim is **NARROW**: it is **NOT** full network DoS resistance, **NOT** peer resource fairness, **NOT** BA-02 /
+> live-evidence readiness. G-E closed **ONE specific live-feed memory surface** — other DoS surfaces remain future
+> hardening slices (e.g. a per-connection aggregate ceiling across the ~10 independent per-protocol reassembly
+> buffers, and per-connection-COUNT / peer-fairness limits, are out of scope). **Precision (close-review — record,
+> do not overclaim):** the reassembly cap is checked *post-extend*, so a single buffer's transient peak is `cap +
+> one <=64 KiB mux frame` (~16.06 MiB), not an absolute 16 MiB; `ProtoBuffers` holds up to ~10 INDEPENDENT
+> per-protocol buffers, each capped separately, so the per-connection aggregate ceiling is ~10× the single-buffer
+> cap — still O(constant) per connection. The bounds are **CLOSED LITERAL constants — defensive implementation
+> bounds, NOT Cardano semantic parameters**; a future hardening slice may *tighten* them, but **no runtime option
+> (CLI / env / config) may disable them or set them unbounded** (`ci_check_live_feed_memory_bounds.sh` guard 3).
+> There is **NO BLUE change**, **NO new `NodeBlockSource` / `CoordinatorEvent` variant**, **NO serve / forge /
+> containment change** (the relay-loop containment gate `ci_check_node_run_loop_containment.sh` and the
+> served-chain handoff fence `ci_check_served_chain_handoff_fence.sh` are byte-unchanged), and **NO live-evidence /
+> BA-02 / RO-LIVE flip or claim**.
+>
+> ### PHASE4-N-F-G-E (closing, `6f848825`) — live-feed bounded memory before authoritative decode/apply on the `--mode node` spine
+>
+> N-F-G-E introduced / extended (all NEW surfaces are CLOSED / fenced — classified under §3 Closed / §4 Frozen;
+> NOT new extension points). This is a surface REDUCTION (two fail-closed memory bounds in front of the BLUE
+> decode path), NOT a new attach point:
+>
+> - **NEW CLOSED const + additive CLOSED-enum variant (GREEN, `ade_network::session::{core, event}`):**
+>   `MAX_REASSEMBLY_TAIL_BYTES = 16 * 1024 * 1024` (`session/core.rs:49`). After `drain_protocol_items` drains
+>   every COMPLETE item, an incomplete per-mini-protocol reassembly tail whose `buf.len() > MAX_REASSEMBLY_TAIL_BYTES`
+>   (`core.rs:249`) returns the NEW `SessionError::ReassemblyBufferOverflow { protocol, len, cap }`
+>   (`event.rs:195`) — **fail closed, drop the peer; no silent truncation, no partial decode**. The cap fires
+>   **BEFORE** the BLUE `ade_codec` decode path. `SessionError` gains the variant **additively** — there is **NO
+>   wildcard**; the SOLE exhaustive consumer `ade_runtime::network::mux_pump::session_err_to_halt` (`mux_pump.rs:278`)
+>   maps it → `PeerHaltReason::ChainSyncDecodeError` (`mux_pump.rs:302-303`). Deterministic (pure `buf.len()`
+>   check; the GREEN no-clock/rand/float/HashMap contract is preserved). `session/` is GREEN-by-content (NOT a
+>   BLUE `ade_network` submodule `core_path`), so the new variant is **NOT canonical-counted**. **A closed memory
+>   bound + a closed additive enum variant (a surface REDUCTION), NOT a new extension point.** Backs
+>   `DC-LIVEMEM-01`. Gate: `ci_check_live_feed_memory_bounds.sh`.
+> - **NEW CLOSED const (RED, `ade_node::node_sync`):** `MAX_WIRE_PUMP_LOOKAHEAD = 256` (`node_sync.rs:58`).
+>   `pump_lookahead` stops the opportunistic `try_recv` drain at the cap (`node_sync.rs:126`,
+>   `lookahead.len() >= MAX_WIRE_PUMP_LOOKAHEAD`), so the existing bounded `mpsc` (`LIVE_WIRE_PUMP_CHANNEL_CAP = 64`)
+>   **back-pressures** the pump. Content-blind; the verdict-decoupled `NodeBlockSource` contract (closed 2-variant
+>   `{WirePump, InMemory}`) + arrival order are **unchanged** — this is a depth cap on the existing opaque
+>   `VecDeque<Vec<u8>>` lookahead, **not a new variant / source / verdict**. **A closed lookahead-depth bound (a
+>   surface REDUCTION), NOT a new extension point.** Backs `DC-LIVEMEM-01`. Gate:
+>   `ci_check_live_feed_memory_bounds.sh`.
+> - **CHANGED (RED, `ade_runtime::network::mux_pump`):** `session_err_to_halt` maps the new
+>   `SessionError::ReassemblyBufferOverflow { .. }` → `PeerHaltReason::ChainSyncDecodeError` (drop the peer). The
+>   exhaustive `match` (no wildcard) is what makes the additive `SessionError` variant a closed extension.
+> - **NEW CI gate** `ci_check_live_feed_memory_bounds.sh` (DC-LIVEMEM-01) — verifies BOTH bounds are CLOSED
+>   LITERAL constants AND not wired to CLI / env / config (the no-escape-hatch guard 3; line comments are stripped
+>   first so the doc-comments naming "CLI / env / config" do not self-trip). **Both caps are closed literals, NOT
+>   tunables.**
+>
+> **Registry delta (N-F-G-E):** **314 rules** (313 → 314). **NEW `DC-LIVEMEM-01`** (`tier = derived`,
+> operational-hardening — live-feed peer-driven memory bounded before authoritative decode/apply) at
+> `status = enforced`. **No rule weakened.** **One new CI gate** (118 → 119): `ci_check_live_feed_memory_bounds.sh`.
+>
+> **Governance note (N-F-G-E).** G-E upholds the load-bearing structural lines. **Operational hardening, not an
+> authority change:** `DC-LIVEMEM-01` is `tier = derived` — explicitly NOT BLUE consensus law (the rule text says
+> so); it bounds shell/glue memory, never a chain fact. **The cap fires before the BLUE decode path** (`ade_codec`
+> byte-unchanged) — no silent truncation, no partial decode, no unbounded fallback. **Closed source/enum surfaces
+> stay closed:** the reassembly cap fails closed via an *additive* closed-enum variant
+> (`SessionError::ReassemblyBufferOverflow`, no wildcard, one exhaustive consumer); `NodeBlockSource` stays the
+> 2-variant `{WirePump, InMemory}`; both bounds are closed literal constants with no runtime escape hatch.
+> **Containment is untouched:** the serve/forge/containment fences (`ci_check_node_run_loop_containment.sh` +
+> `ci_check_served_chain_handoff_fence.sh`) are byte-unchanged. **No overclaim:** the claim is bounded memory
+> before authoritative decode/apply — NOT network DoS resistance, NOT peer fairness, NOT BA-02 readiness; no
+> `RO-LIVE` flip.
+>
+> ### PHASE4-N-F-G-C (closed, `351d46bc`) — live WirePump feed + BA-02 evidence wiring on the `--mode node` spine
+>
+> **Boundary language (carried — N-F-G-C — do not soften).** G-C closes the **MECHANICAL live-feed + evidence
+> scaffolding ONLY**. The `--mode node` `On` arm is **live-feed-wireable**: when `--peer` is supplied,
 > `spawn_live_wire_pump_source` builds a LIVE `NodeBlockSource::WirePump` by reusing the closed `dial_for_admission`
 > + `run_admission_wire_pump` (the runtime `AdmissionPeerEvent` feeds the `WirePump` arm directly — no bridge, no
 > reimplemented wire authority, no new variant). With a live feed the forge is observable when the feed is
@@ -35,18 +110,18 @@
 > through `ba02_evidence::correlate`. The BA-02 evidence I/O (`ba02_pass`) reads a real operator-captured
 > peer-log file and runs it through the SOLE `Ba02Manifest` constructor (`correlate`); `write_ba02_manifest`
 > accepts ONLY a `Ba02Manifest`, so a written manifest is always correlate-produced; **no synthetic manifest is
-> committed** (the new gate is vacuous-until-committed and sha256-binds the fixture). Ade self-accept /
+> committed** (the gate is vacuous-until-committed and sha256-binds the fixture). Ade self-accept /
 > `ForgeSucceeded` / served-block / wire success **≠ peer acceptance**. With NO `--peer` the empty source still
 > halts before any `ForgeTick` (forge-CAPABLE, not observable). The durable tip still advances only via
 > `run_node_sync → pump_block` (no second bootstrap, CN-NODE-01); `run_node_sync` is UNMODIFIED;
 > `ci_check_node_run_loop_containment.sh` is **byte-unchanged**. There is **NO new BLUE authority / canonical
 > type, no new `NodeBlockSource` variant, no new `CoordinatorEvent` variant**, and the bounty acceptance
-> criterion (an operator-witnessed accepted block) is **NOT** satisfied by this cluster.
->
-> ### PHASE4-N-F-G-C (closing, `90791691`) — live WirePump feed + BA-02 evidence wiring on the `--mode node` spine
+> criterion (an operator-witnessed accepted block) is **NOT** satisfied by this cluster. _(N-F-G-E added two
+> closed memory caps in front of this live feed; it changed neither the live-feed wiring, the serve mechanism, nor
+> any BLUE authority.)_
 >
 > N-F-G-C introduced / extended (all NEW surfaces are CLOSED / fenced ATTACH POINTS — classified under §3 Closed
-> / §4 Frozen; NOT new extension points):
+> / §4 Frozen; NOT new extension points; carried unchanged from the G-C close):
 >
 > - **NEW node-spine ATTACH POINT that REUSES existing closed wire infra (RED, `ade_node::node_lifecycle`):**
 >   the live WirePump feed (S1) — `spawn_live_wire_pump_source(peer_addrs: &[String], network_magic: u32,
@@ -505,6 +580,7 @@ Pipeline (fixed; steps may not be reordered or shortcut):
   2. session::core::step                            (GREEN — partial-frame buffer + payload reassembly + closed AcceptedMiniProtocol registry)
   3. per-mini-protocol *_transition reducer         (BLUE — chain_sync / block_fetch / etc.)
   3a. tag-24 strip (N-X)                             (BLUE — decompose_blockfetch_block / decompose_rollforward_header delegate to ade_codec::unwrap_tag24; RED admission::runner / follow call ade_codec::unwrap_tag24 directly — no hand-rolled parse)
+  3b. (N-F-G-E) memory bound BEFORE decode           (GREEN session::core: after drain_protocol_items drains every COMPLETE item, an incomplete per-mini-protocol reassembly tail over MAX_REASSEMBLY_TAIL_BYTES = 16 MiB ⇒ SessionError::ReassemblyBufferOverflow ⇒ mux_pump::session_err_to_halt drops the peer — fail-closed, no silent truncation, no partial decode; closed literal const, no CLI/env/config escape hatch. This is a fail-closed BOUND in front of step 4, NOT a new pipeline step. DC-LIVEMEM-01)
   4. ade_codec decode_block_envelope / decode_*     (BLUE — sole PreservedCbor construction site, over the verbatim tag-24-stripped inner bytes)
   5. ade_ledger::receive::reducer / mempool_ingress (BLUE — header→body bridge / wire-ingress chokepoint)
   6. forward_sync::reducer → forward_sync::pump (N-Y)  (GREEN admit-plan over the BLUE admit chokepoint → RED durability-ordered driver; AdvanceTip only after StoreBlockBytes + AppendWal ack)
@@ -512,6 +588,7 @@ Pipeline (fixed; steps may not be reordered or shortcut):
 N-F-G-C LIVE-FEED PATH (the --mode node On arm; CONSUME side of the prior §7 candidate, now wired):
   L1. spawn_live_wire_pump_source(&cli.peer_addrs, network_magic, recovered_tip)  (RED — REUSES dial_for_admission + run_admission_wire_pump VERBATIM; build_n2n_version_table reused via pub(crate); start_point = recovered tip Point::Block or Point::Origin)
   L2. per --peer: tokio::spawn { dial_for_admission(addr) → run_admission_wire_pump(...) → bounded mpsc::channel(LIVE_WIRE_PUMP_CHANNEL_CAP = 64) }  (an unparseable addr / dial failure is logged-and-dropped — C3 honest-scope; non-fatal; no fabricated addr, no tip graft)
+  L2a. (N-F-G-E) pump_lookahead depth cap            (RED node_sync: the opportunistic try_recv drain stops at MAX_WIRE_PUMP_LOOKAHEAD = 256, so the bounded mpsc (cap 64) back-pressures the pump; content-blind; the closed 2-variant NodeBlockSource + arrival order are unchanged; closed literal const, no CLI/env/config escape hatch — DC-LIVEMEM-01)
   L3. NodeBlockSource::from_wire_pump(rx)            (RED — a FILL of the closed WirePump arm; NOT a new variant; yields ordered Block bytes ONLY, skips TipUpdate, ends on Disconnected — DC-SYNC-01)
   L4. → run_node_sync → pump_block                  (the SAME single durable tip-advance — step 6 above; no second tip-advance, no verdict)
 Cross-surface state sharing: the served ServedChainSnapshot (read by both serve and broadcast paths);
@@ -536,6 +613,12 @@ HONEST SCOPE: G-C wires the MECHANICAL live feed ONLY. With a live feed the forg
   (RO-LIVE-01 partial / blocked_until_operator_stake_available), proven only by an operator-captured peer log
   through ba02_evidence::correlate. Ade self-accept / served-block / wire success != peer acceptance. BA-02 is
   satisfied nowhere.
+N-F-G-E (bounded memory before decode/apply): the two caps above (reassembly tail + lookahead depth) bound
+  peer-driven memory on this live feed BEFORE authoritative decode/apply — a NARROW claim. NOT full network DoS
+  resistance, NOT peer fairness, NOT BA-02/live-evidence readiness. Precision: the reassembly check is post-extend
+  (single-buffer transient peak cap + one <=64 KiB frame ~16.06 MiB); ProtoBuffers holds ~10 INDEPENDENT
+  per-protocol buffers each capped (per-connection aggregate ~10x single-buffer, still O(constant)/connection).
+  Per-connection-COUNT / peer-fairness limits are a SEPARATE out-of-scope surface.
 ```
 
 ### Surface: operator-captured peer-accept log → BA-02 evidence (RED file I/O wired N-F-G-C over the GREEN N-F-C correlator)
@@ -1400,6 +1483,9 @@ ACCEPTS it is the operator-gated RO-LIVE-01 leg (peer ACCEPT NOT claimed here).
 
 | Registry | Location | Count | Change Rule |
 |----------|----------|-------|-------------|
+| `SessionError::ReassemblyBufferOverflow` *(NEW, N-F-G-E)* | `ade_network::session::event` (GREEN-by-content) | additive variant `{ protocol, len, cap }` on the closed `SessionError` enum | The closed fail-closed signal for an incomplete per-mini-protocol reassembly tail over `MAX_REASSEMBLY_TAIL_BYTES`. Added **additively** — there is **NO wildcard**; the SOLE exhaustive consumer `ade_runtime::network::mux_pump::session_err_to_halt` maps it → `PeerHaltReason::ChainSyncDecodeError` (drop the peer). The cap fires **BEFORE** the BLUE `ade_codec` decode path — no silent truncation, no partial decode. `session/` is GREEN-by-content (NOT a BLUE `ade_network` submodule path), so the variant is **NOT canonical-counted**. **A closed additive enum variant (a surface REDUCTION / fail-closed bound), NOT an extension point.** New variant = a `SessionError` arm + a `session_err_to_halt` arm (no wildcard) + a strengthening of **DC-LIVEMEM-01** (`ci_check_live_feed_memory_bounds.sh`). |
+| `MAX_REASSEMBLY_TAIL_BYTES` (closed memory bound) *(NEW, N-F-G-E)* | `ade_network::session::core` (GREEN-by-content, `core.rs:49`) | closed literal const `16 * 1024 * 1024` (16 MiB) | The per-mini-protocol reassembly-tail cap. After `drain_protocol_items` drains every COMPLETE item, `buf.len() > MAX_REASSEMBLY_TAIL_BYTES` ⇒ `SessionError::ReassemblyBufferOverflow` (fail closed, drop the peer). A **CLOSED LITERAL constant — a defensive implementation bound, NOT a Cardano semantic parameter**; **NO runtime / CLI / env / config override** (the no-escape-hatch surface reduction, `ci_check_live_feed_memory_bounds.sh` guard 3). A future hardening slice may **tighten** it (a strengthening of **DC-LIVEMEM-01**), but may NEVER make it a tunable / unbounded. |
+| `MAX_WIRE_PUMP_LOOKAHEAD` (closed lookahead-depth bound) *(NEW, N-F-G-E)* | `ade_node::node_sync` (RED, `node_sync.rs:58`) | closed literal const `256` | The WirePump opportunistic-drain depth cap. `pump_lookahead` stops the `try_recv` drain at the cap (`node_sync.rs:126`), so the existing bounded `mpsc` (`LIVE_WIRE_PUMP_CHANNEL_CAP = 64`) **back-pressures** the pump. Content-blind; the verdict-decoupled `NodeBlockSource` (closed 2-variant `{WirePump, InMemory}`) + arrival order are **unchanged** (a depth cap on the existing opaque `VecDeque<Vec<u8>>`, NOT a new variant / source / verdict). A **CLOSED LITERAL constant — a defensive implementation bound**; **NO runtime / CLI / env / config override** (`ci_check_live_feed_memory_bounds.sh` guard 3). A future hardening slice may **tighten** it (a strengthening of **DC-LIVEMEM-01**), never make it a tunable / unbounded. |
 | `NodeBlockSource` *(N-F-C; readiness extended N-F-D; LIVE WirePump FILL N-F-G-C)* | `ade_node::node_sync` (RED) | 2 (`WirePump` / `InMemory`) | The **verdict-decoupled** ordered peer-block source: `next_block` yields ONLY `AdmissionPeerEvent::Block` bytes, SKIPS `TipUpdate`, ends on `Disconnected`. N-F-D added a content-blind readiness signal. **N-F-G-C added `from_wire_pump(rx)` — a LIVE FILL of the existing `WirePump` arm fed by `spawn_live_wire_pump_source` (reusing the closed admission dial + pump VERBATIM); NOT a new variant, NOT a new wire authority, NOT a plugin point.** NEVER carries a verdict. A closed single-method contract. New variant = a `next_block` arm + a strengthening of **DC-SYNC-01 / DC-SYNC-02**; a new source must REUSE the closed dial/pump (never reimplement), FILL an existing arm, advance no second tip, and carry no verdict. |
 | `ba02_pass` evidence I/O *(NEW, N-F-G-C S2)* | `ade_node::ba02_pass` (RED — `//! RED`) | 2 fns (`correlate_peer_log_file`, `write_ba02_manifest`); **NO new closed enum / registry** | The RED operator-pass BA-02 evidence file I/O over the pre-existing closed `Ba02Manifest` / `BA02Outcome` / `PeerAcceptEvent` / `NoEvidenceReason` vocabulary. `correlate_peer_log_file` reads the operator-captured peer-log file → the GREEN `correlate` (the SOLE `Ba02Manifest` ctor); `write_ba02_manifest` accepts **ONLY a `Ba02Manifest`** — so a written manifest is ALWAYS correlate-produced. **A CLOSED file-I/O wrapper (a surface REDUCTION over the existing closed evidence vocabulary), NOT a new closed enum / registry / plugin point.** A missing/unreadable file fails closed (`io::Error`). Backs the BA-02 leg of `RO-LIVE-06` / `CN-OPERATOR-EVIDENCE-01`. Gate: `ci_check_ba02_evidence_manifest_schema.sh` (the no-synthetic-manifest enforcer; vacuous-until-committed + 8-field schema + `peer_log_file_sha256` cross-check). Adding an evidence-I/O fn = a strengthening of RO-LIVE-06; **no new acceptance source, no path emitting a manifest from `NoEvidence` / raw operator input.** |
 | `SelfAcceptedHandoff` *(N-F-G-B S1)* | `ade_runtime::producer::self_accepted_handoff` (GREEN) | constructor-fenced newtype (1 private field `accepted: AcceptedBlock`; SOLE ctor `from_self_accepted`; accessors `accepted()` / `into_accepted()`) | The typed carrier moving a BLUE self-accepted forged block from the forge path to the sibling serve task. Its **SOLE constructor** takes a BLUE `ade_ledger::producer::AcceptedBlock` (itself producible only by BLUE `self_accept` returning `Ok`); the field is private. There is **NO** constructor from a raw `Vec<u8>`, a `ForgedBlockArtifact` (`artifact.bytes` is never a token source — re-deriving would breach CN-FORGE-01; the carrier holds the ORIGINAL token), a `CoordinatorEvent`, a self-declared acceptance flag, or a peer verdict — so handing the serve task a non-self-accepted artifact is **type-unrepresentable**. A **CLOSED constructor-fenced carrier (a surface REDUCTION), NOT an extensible registry / plugin point.** Backs `DC-NODE-06`. A change to the carried type / a new accessor = a strengthening of **DC-NODE-06 / CN-PROD-04 / CN-FORGE-01** (`ci_check_served_chain_handoff_fence.sh`, BROADENED by G-C); **no raw-bytes / artifact / event / flag / verdict constructor may be introduced**. |
@@ -1481,6 +1567,14 @@ ACCEPTS it is the operator-gated RO-LIVE-01 leg (peer ACCEPT NOT claimed here).
 | Per-protocol tag-24 compositions *(N-X)* | `ade_network::codec::{block_fetch, chain_sync}` | A new CBOR-in-CBOR composition attaches as a `compose_*` / `decompose_*` pair delegating to the single `ade_codec::{wrap_tag24, unwrap_tag24}` authority (CN-WIRE-08). |
 | Bootstrap-source production compositions *(N-Z; +N-F-A sidecar tail)* | `ade_runtime::{genesis_bootstrap, mithril_bootstrap}` | A new bootstrap-source production entry attaches as a **composition-only RED twin** of `bootstrap_from_{conway_genesis, mithril_snapshot}`: import/parse + (if a point is attested) mint the anchor from an operator-independent origin + verify-before-bootstrap (fail-closed) + route through the single `bootstrap_initial_state` authority + the N-F-A sidecar tail. **No new authority, no new `*Anchor` trait/plugin, no new `SeedProvenance` variant unless the source genuinely differs** (CN-MITHRIL-01 / CN-NODE-01 / DC-MITHRIL-02 / CN-CINPUT-02). |
 
+> **Note (N-F-G-E is NOT a new extension point).** The N-F-G-E surfaces are **surface REDUCTIONS / fail-closed
+> memory bounds**, not new extensible registries: `MAX_REASSEMBLY_TAIL_BYTES` (16 MiB) and `MAX_WIRE_PUMP_LOOKAHEAD`
+> (256) are **closed literal constants** with **NO runtime / CLI / env / config override**; the additive
+> `SessionError::ReassemblyBufferOverflow` variant is a closed-enum extension (no wildcard, one exhaustive
+> consumer). They cap memory in front of the UNCHANGED closed decode path / the UNCHANGED closed verdict-decoupled
+> `NodeBlockSource` — no plugin trait, no `Box<dyn _>`, no runtime-registered handler, no new BLUE authority, no
+> new `NodeBlockSource` / `CoordinatorEvent` variant. They belong in the Closed table above, not here.
+>
 > **Note (N-F-G-C is NOT a new extension point).** The N-F-G-C live feed is a **REUSE** of the closed
 > `ade_runtime::admission::{dial_for_admission, run_admission_wire_pump}` (no reimpl, no new wire authority) that
 > **FILLS** the closed `NodeBlockSource::WirePump` arm via `from_wire_pump` — it is **NOT a new `NodeBlockSource`
@@ -1507,6 +1601,26 @@ ACCEPTS it is the operator-gated RO-LIVE-01 leg (peer ACCEPT NOT claimed here).
 
 ### Frozen (immutable at current version — change = new major version)
 
+- **Live-feed peer-driven memory is bounded BEFORE authoritative decode/apply by two closed literal caps
+  (N-F-G-E, DC-LIVEMEM-01 — load-bearing; do NOT soften / do NOT broaden).** Two closed constants, each
+  fail-closed in front of the BLUE `ade_codec` decode path, with **NO runtime / CLI / env / config escape hatch**
+  (`ci_check_live_feed_memory_bounds.sh` guard 3): (1) GREEN `ade_network::session::core`
+  `MAX_REASSEMBLY_TAIL_BYTES = 16 MiB` — after `drain_protocol_items` drains every COMPLETE item, an incomplete
+  per-mini-protocol reassembly tail over the cap returns the additive closed `SessionError::ReassemblyBufferOverflow`
+  and `mux_pump::session_err_to_halt` drops the peer (no silent truncation, no partial decode); (2) RED
+  `ade_node::node_sync` `MAX_WIRE_PUMP_LOOKAHEAD = 256` — `pump_lookahead` stops the opportunistic drain at the
+  cap so the bounded `mpsc` (`LIVE_WIRE_PUMP_CHANNEL_CAP = 64`) back-pressures the pump. These are **defensive
+  implementation bounds, NOT Cardano semantic parameters** — a future hardening slice may **tighten** them, but
+  may NEVER disable them or set them unbounded. The claim is **NARROW**: bounded memory before authoritative
+  decode/apply — **NOT** full network DoS resistance, **NOT** peer resource fairness, **NOT** BA-02 / live-evidence
+  readiness (the per-connection aggregate ceiling across the ~10 independent per-protocol reassembly buffers and
+  per-connection-COUNT / peer-fairness are a SEPARATE, out-of-scope surface). **NO BLUE change** (`ade_codec`
+  byte-unchanged); **NO new `NodeBlockSource` / `CoordinatorEvent` variant**; the serve/forge/containment fences
+  (`ci_check_node_run_loop_containment.sh` + `ci_check_served_chain_handoff_fence.sh`) are **byte-unchanged**; **no
+  live-evidence / BA-02 / RO-LIVE flip or claim**. Precision (record, not overclaim): the reassembly check is
+  post-extend, so a single buffer's transient peak is `cap + one <=64 KiB mux frame` (~16.06 MiB), and
+  `ProtoBuffers` holds up to ~10 INDEPENDENT per-protocol buffers each capped separately (per-connection aggregate
+  ~10× the single-buffer cap — still O(constant) per connection).
 - **Live `--mode node` feed reuses the closed dial/pump + FILLS the closed source (N-F-G-C S1, load-bearing).**
   The live feed for the `--mode node` `On` arm is a **REUSE** of the closed `ade_runtime::admission::{dial_for_admission,
   run_admission_wire_pump}` (no reimplementation, no new wire authority) that **FILLS** the closed
@@ -1618,8 +1732,13 @@ ACCEPTS it is the operator-gated RO-LIVE-01 leg (peer ACCEPT NOT claimed here).
 - Canonical type schema additions (new fields appended; sort/dedup + `BTreeMap` ordering invariants preserved).
 - `WalEntry` wire tags (append-only: `AdmitBlock` = 0, `SeedEpochConsensusInputsImported` = 3; 1/2 reserved) — a
   CE-not-law additively-evolvable surface.
+- The N-F-G-E memory bounds (`MAX_REASSEMBLY_TAIL_BYTES = 16 MiB`, `MAX_WIRE_PUMP_LOOKAHEAD = 256`) — closed
+  literal constants that a future hardening slice may **tighten** (a strengthening of DC-LIVEMEM-01), but may
+  NEVER make tunable / unbounded; they carry **no CLI / env / config override** at any version
+  (`ci_check_live_feed_memory_bounds.sh` guard 3).
 - New CI checks (existing checks may be **tightened, never relaxed** — e.g. N-F-G-C BROADENED
-  `ci_check_served_chain_handoff_fence.sh` in place, a net tightening).
+  `ci_check_served_chain_handoff_fence.sh` in place, a net tightening; N-F-G-E added
+  `ci_check_live_feed_memory_bounds.sh`).
 
 ---
 
@@ -1711,11 +1830,22 @@ How new modules enter the workspace.
     (`io::Error`), never a synthesized acceptance; (iv) NO self-evidence acceptance source; (v) NO committed
     synthetic manifest — a committed-manifest schema gate is vacuous-until-committed + sha256-binds its fixture
     (`ci_check_ba02_evidence_manifest_schema.sh`, RO-LIVE-06 / CN-OPERATOR-EVIDENCE-01).
+17. **New peer-driven memory bound (N-F-G-E rule):** (i) bound the surface with a **CLOSED LITERAL constant** —
+    NEVER a tunable wired to CLI / env / config (`ci_check_live_feed_memory_bounds.sh` guard 3; a future slice may
+    only *tighten* it); (ii) the over-cap behavior MUST **fail closed** — drop-and-disconnect for an inbound
+    surface (the reassembly cap → the additive closed `SessionError::ReassemblyBufferOverflow` → drop the peer) or
+    back-pressure an existing bounded channel (the lookahead cap → the bounded `mpsc`) — NEVER a silent truncation,
+    partial decode, fabricated block, or tip graft; (iii) place the bound **BEFORE** the BLUE `ade_codec` decode
+    path / before any authoritative apply; (iv) if it signals via a closed enum, extend it **additively** with NO
+    wildcard and handle the new variant in every exhaustive consumer; (v) leave the verdict-decoupled
+    `NodeBlockSource` contract, the relay-loop containment gate, and the served-chain handoff fence
+    byte-unchanged. DC-LIVEMEM-01.
 
-### CI gates that enforce the boundary (118 total; the N-F-G-C / N-F-G-B / N-F-G-A / N-F-F / N-F-D-E / N-F-C / N-F-A / N-Z / N-Y / producer / network set)
+### CI gates that enforce the boundary (119 total; the N-F-G-E / N-F-G-C / N-F-G-B / N-F-G-A / N-F-F / N-F-D-E / N-F-C / N-F-A / N-Z / N-Y / producer / network set)
 
 | Script | Enforces | Cluster |
 |---|---|---|
+| `ci_check_live_feed_memory_bounds.sh` *(NEW N-F-G-E S1)* | **DC-LIVEMEM-01** — both live-feed memory bounds are CLOSED LITERAL constants (`MAX_REASSEMBLY_TAIL_BYTES = 16 MiB` in `session/core.rs`; `MAX_WIRE_PUMP_LOOKAHEAD = 256` in `node_sync.rs`) AND not wired to CLI / env / config (the no-escape-hatch guard 3; line comments stripped first so the doc-comments naming "CLI / env / config" do not self-trip). The reassembly cap fails closed via the additive `SessionError::ReassemblyBufferOverflow` (no wildcard; sole consumer `mux_pump::session_err_to_halt`). | N-F-G-E |
 | `ci_check_ba02_evidence_manifest_schema.sh` *(NEW N-F-G-C S2)* | **RO-LIVE-06 / CN-OPERATOR-EVIDENCE-01 (BA-02 manifest schema)** — when a committed `docs/clusters/PHASE4-N-F-G-C/CE-G-C-LIVE_*.toml` is present, verify the closed 8-field schema + `schema_version == 1` + `peer_log_file_sha256` == sha256(the committed peer-log fixture). Vacuously satisfied when none committed. The no-synthetic-manifest enforcer. | N-F-G-C |
 | `ci_check_served_chain_handoff_fence.sh` *(N-F-G-B S3; BROADENED in place N-F-G-C S1)* | **DC-NODE-06 / CN-PROD-04 (serve-ingress fence)** — owners `{node_lifecycle.rs, node_sync.rs}`; (1) every node-spine `push_atomic(` fed by `into_accepted()`; (2) no direct `served_chain_admit(` on the node spine; (3) ALLOW-LIST: every node-spine unbounded handoff channel carries `SelfAcceptedHandoff` (never `<Vec<u8>>` / `<ForgedBlockArtifact>` / `<bool>`), and at least one `UnboundedSender<SelfAcceptedHandoff>` is present. A net tightening; the CI count does NOT change for this file. | N-F-G-B / N-F-G-C |
 | `ci_check_genesis_consistency_fixture_present.sh` *(N-F-G-A S1)* | **CE-G-A-1** — the three S1b fixture files committed + well-formed + Ade-as-leader; NO secret key material. | N-F-G-A |
@@ -1755,9 +1885,9 @@ How new modules enter the workspace.
 > `ci_check_node_forge_real_cli_ingress.sh`, `ci_check_node_forge_single_epoch_fail_closed.sh`) → **116**.
 > **N-F-G-B added 1** (`ci_check_served_chain_handoff_fence.sh`) → **117**. **N-F-G-C added 1**
 > (`ci_check_ba02_evidence_manifest_schema.sh`) AND *broadened `ci_check_served_chain_handoff_fence.sh` in place*
-> (owners + guard-3 allow-list — a net tightening, NOT a new file) → **118**. Earlier-cluster gates (N-A..N-P, the
-> N-M-* set, the N-L wire-session set) are present in the 118 total; the full list is `ls ci/ci_check_*.sh`
-> (= **118**).
+> (owners + guard-3 allow-list — a net tightening, NOT a new file) → **118**. **N-F-G-E added 1**
+> (`ci_check_live_feed_memory_bounds.sh`) → **119**. Earlier-cluster gates (N-A..N-P, the N-M-* set, the N-L
+> wire-session set) are present in the 119 total; the full list is `ls ci/ci_check_*.sh` (= **119**).
 
 ---
 
@@ -1796,7 +1926,10 @@ How new modules enter the workspace.
   or re-deriving it (CN-FORGE-01 / DC-NODE-06).** **(N-F-D / N-F-E) `run_loop_planner` MUST observe a `SlotNo` ONLY
   in the dedicated `forge_slot_status` guard, emit only the closed `LoopStep` set, decide no authority.** **(N-F-F)
   `forge_intent` MUST observe only flag PRESENCE, emit only the closed 2-variant `ForgeIntent`, bind the partial
-  arm by name (CN-NODE-03).** **(N-F-G-A) `consensus_inputs::protocol_params` MUST have NO float path; `require_forge_current_pparams`
+  arm by name (CN-NODE-03).** **(N-F-G-E) `ade_network::session::core` MUST fail closed on a reassembly tail over
+  `MAX_REASSEMBLY_TAIL_BYTES` via the additive closed `SessionError::ReassemblyBufferOverflow` (NO wildcard; the
+  bound fires BEFORE the BLUE decode path — no silent truncation, no partial decode); the cap MUST be a closed
+  literal constant with NO CLI / env / config escape hatch (DC-LIVEMEM-01).** **(N-F-G-A) `consensus_inputs::protocol_params` MUST have NO float path; `require_forge_current_pparams`
   MUST keep the `protocol_params_json` preimage OUTSIDE the 15-field fingerprint + hash-bind before parsing;
   `checked_millis_to_slot` MUST fail closed before-anchor (never saturate); `forge_epoch_admission` MUST derive
   via `EraSchedule::locate` + drive no nonce promotion; `consensus::genesis_pinning` is `#[cfg(test)]` evidence,
@@ -1848,9 +1981,28 @@ How new modules enter the workspace.
   the UNCHANGED GREEN `correlate` — `correlate` the SOLE `Ba02Manifest` ctor; `write_ba02_manifest` accepts ONLY
   a `Ba02Manifest`; a missing/unreadable file fails closed; NO self-evidence acceptance source; NO committed
   synthetic manifest (RO-LIVE-06 / CN-OPERATOR-EVIDENCE-01, `ci_check_ba02_evidence_manifest_schema.sh`).**
+  **(N-F-G-E) `ade_node::node_sync::pump_lookahead` MUST stop the opportunistic `try_recv` drain at a CLOSED
+  LITERAL `MAX_WIRE_PUMP_LOOKAHEAD` (so the existing bounded `mpsc` back-pressures) — NO unbounded drain, NO
+  CLI/env/config override (DC-LIVEMEM-01); `ade_runtime::network::mux_pump::session_err_to_halt` MUST handle the
+  new `SessionError::ReassemblyBufferOverflow` variant in its exhaustive (no-wildcard) `match` and drop the peer.
+  The closed verdict-decoupled `NodeBlockSource` contract, the relay-loop containment gate, and the served-chain
+  handoff fence MUST stay byte-unchanged.**
 
 ### Project-specific additions (Ade)
 
+- **Live-feed bounded-memory honest scope + boundary (N-F-G-E, load-bearing — do NOT soften / do NOT broaden):**
+  N-F-G-E bounds **peer-driven memory on the live `--mode node` feed BEFORE authoritative decode/apply** — and
+  nothing more. Two closed literal caps fail closed in front of the BLUE `ade_codec` decode path
+  (`MAX_REASSEMBLY_TAIL_BYTES = 16 MiB` → the additive closed `SessionError::ReassemblyBufferOverflow` → drop the
+  peer; `MAX_WIRE_PUMP_LOOKAHEAD = 256` → the bounded `mpsc` back-pressures), with **NO CLI / env / config escape
+  hatch**. The claim is **NARROW**: it is **NOT** full network DoS resistance, **NOT** peer resource fairness,
+  **NOT** BA-02 / live-evidence readiness — other DoS surfaces (the per-connection aggregate ceiling across the
+  ~10 independent per-protocol reassembly buffers, per-connection-COUNT / peer-fairness) remain future hardening
+  slices. The bounds are **defensive implementation constants, NOT Cardano semantic parameters** (tighten-only).
+  **NO BLUE change** (`ade_codec` byte-unchanged); **NO new `NodeBlockSource` / `CoordinatorEvent` variant**; the
+  serve/forge/containment fences are **byte-unchanged**; **no live-evidence / BA-02 / RO-LIVE flip or claim**.
+  `DC-LIVEMEM-01` is `tier = derived` (operational hardening, NOT BLUE consensus law). _(G-E does not alter the
+  G-C live-feed wiring, the serve mechanism, or any BLUE authority.)_
 - **Live-feed + BA-02-evidence honest scope + boundary (N-F-G-C, load-bearing — do not soften):** N-F-G-C closes
   the **MECHANICAL live-feed + evidence scaffolding ONLY**. The `--mode node` `On` arm is **live-feed-wireable**
   from `--peer` (reusing the closed admission dial + pump; a `from_wire_pump` FILL of the closed `WirePump` arm —
@@ -1911,12 +2063,15 @@ How new modules enter the workspace.
 - **No durability in the produce_mode forge path (N-U scope):** forged-block durability is deferred to N-U
   (§7). The network forward-sync durability (received blocks) DID land in N-Y; the N-F-E/N-F-F/N-F-G-A
   relay-loop forge tick advances NO durable tip (self-accept-only).
-- **Bounded peer-driven memory (N-F-G-C newly EXPOSED, follow-on candidate — §7):** the live `--mode node` feed
-  newly EXPOSES an unbounded mux-reassembly tail (`ade_network::session::core` `proto_buffers`) + an unbounded
-  `WirePump.lookahead` (`ade_node::node_sync`) to a bounded-rate peer-driven memory-growth surface. NOT
-  introduced by G-C — only newly reachable on the live feed. The prior CBOR length-overflow remote-DoS (N-X) is
-  NOT reintroduced. The fix (cap the reassembly tail + the lookahead depth + a negative test) is a follow-on
-  slice candidate (reuse N-M-FRAG / N-M-C infra).
+- **Bounded peer-driven memory (CLOSED by N-F-G-E — was the N-F-G-C-exposed §7 candidate #6):** the live
+  `--mode node` feed's unbounded mux-reassembly tail (`ade_network::session::core`) + unbounded
+  `WirePump.lookahead` (`ade_node::node_sync`) are now BOUNDED before authoritative decode/apply by two closed
+  literal caps — `MAX_REASSEMBLY_TAIL_BYTES = 16 MiB` (fail-closed via the additive closed
+  `SessionError::ReassemblyBufferOverflow` → drop the peer) + `MAX_WIRE_PUMP_LOOKAHEAD = 256` (the bounded `mpsc`
+  back-pressures), each with NO CLI/env/config escape hatch, fenced by the NEW `ci_check_live_feed_memory_bounds.sh`
+  (DC-LIVEMEM-01). **NARROW claim — bounded memory before decode/apply, NOT full network DoS resistance / peer
+  fairness / BA-02 readiness** (per-connection aggregate + per-connection-COUNT / peer-fairness remain future
+  hardening). The prior CBOR length-overflow remote-DoS (N-X) was already NOT reintroduced.
 - **Registry `code_locus` must track source moves (`5db9aae`):** any rule citing a renamed/moved `crates/**.rs`
   or `ci/**.sh` path must have its `code_locus` updated; `ci_check_registry_code_locus_exists.sh` fails closed
   on a stale pointer.
@@ -1935,14 +2090,21 @@ How new modules enter the workspace.
 > Surfaced honestly per IDD: these are **declared** future attach points, not closed surfaces. Each is named
 > in a registry rule or a cluster CLOSURE record.
 >
-> **N-F-G-C PARTLY closed the prior candidate #0** (the live network serve + operator-peer surface): the **live
-> feed is now wired** (consume side — a LIVE `NodeBlockSource::WirePump` from `--peer`, reusing the closed
-> admission dial + pump) and the **operator-pass evidence path is scaffolded** (the runbook + the `ba02_pass`
-> `correlate` wiring + the manifest-schema gate). **BUT the operator-witnessed live ACCEPT remains the gating
-> follow-on** — `RO-LIVE-01` stays `partial` / `blocked_until_operator_stake_available`; `RO-LIVE-06` is NOT a
-> live-BA-02 claim (schema + mechanics only). **N-F-G-C added ONE new candidate** (the bounded peer-driven
-> memory surface, #6 below — a MEDIUM security-review finding NOT introduced by G-C, only newly EXPOSED on the
-> live feed). The other candidates are PRESERVED.
+> **N-F-G-E CLOSED the prior candidate #6** (bounded mux-reassembly tail + WirePump lookahead — the live-feed
+> peer-driven memory surface that the G-C close added from its security-review MEDIUM). It is **RETIRED** from the
+> list below: two closed literal caps (`MAX_REASSEMBLY_TAIL_BYTES = 16 MiB` + `MAX_WIRE_PUMP_LOOKAHEAD = 256`),
+> each fail-closed before authoritative decode/apply, with NO CLI/env/config escape hatch, fenced by the NEW
+> `ci_check_live_feed_memory_bounds.sh` (DC-LIVEMEM-01). **G-E closed ONE specific live-feed memory surface — it
+> is NOT full network DoS resistance, NOT peer resource fairness, NOT BA-02 / live-evidence readiness**; other DoS
+> surfaces remain future hardening slices (e.g. the per-connection aggregate ceiling across the ~10 independent
+> per-protocol reassembly buffers, and per-connection-COUNT / peer-fairness limits, are out of scope).
+>
+> **N-F-G-C PARTLY closed candidate #0** (the live network serve + operator-peer surface): the **live feed is
+> wired** (consume side — a LIVE `NodeBlockSource::WirePump` from `--peer`, reusing the closed admission dial +
+> pump) and the **operator-pass evidence path is scaffolded** (the runbook + the `ba02_pass` `correlate` wiring +
+> the manifest-schema gate). **BUT the operator-witnessed live ACCEPT remains the gating follow-on** —
+> `RO-LIVE-01` stays `partial` / `blocked_until_operator_stake_available`; `RO-LIVE-06` is NOT a live-BA-02 claim
+> (schema + mechanics only). The other candidates (#0-#5) are carried UNCHANGED.
 
 0. **Live network serve + operator-peer surface (PARTLY closed by N-F-G-C; the operator-witnessed ACCEPT remains
    the gating follow-on).** N-F-G-B CLOSED the self-accept→serve handoff (`DC-NODE-06` enforced). **N-F-G-C wired
@@ -1981,17 +2143,21 @@ How new modules enter the workspace.
 5. **Sync-evidence live leg (N-Y — RO-SYNC-EVIDENCE-01, `partial`).** The snapshot→tip sync-evidence manifest
    schema is enforced but vacuously satisfied until a manifest is committed. An operator-witnessed execution
    gate, not a code seam.
-6. **Bounded peer-driven memory on the now-live feed (NEW, N-F-G-C security review, MEDIUM — DECLARED).** The
-   live `--mode node` feed (consume side) newly EXPOSES — **but does NOT introduce** — an unbounded
-   mux-reassembly tail (`ade_network::session::core` `proto_buffers`, the per-mini-protocol partial-frame buffer)
-   + an unbounded `WirePump.lookahead` (`ade_node::node_sync`, the content-blind opaque-bytes lookahead
-   `VecDeque<Vec<u8>>`). On the now-live feed these are a **bounded-rate peer-driven memory-growth surface**: a
-   slow consumer + a fast/adversarial peer can grow the reassembly tail / lookahead unboundedly. The prior CBOR
-   length-overflow remote-DoS (N-X) is **NOT reintroduced** (that fix holds). The fix — **cap the reassembly tail
-   + cap the lookahead depth + a negative test** — is a follow-on slice candidate (reuse the N-M-FRAG / N-M-C
-   reassembly + admission infra). _Confirm scope: the cap MUST be a closed bound (not a tunable that can be set to
-   unbounded), the over-cap behavior MUST fail closed / drop-and-disconnect (never a silent tip graft or a
-   fabricated block), and it MUST NOT relax the relay-loop containment or the verdict-decoupled source contract._
+6. **~~Bounded peer-driven memory on the now-live feed~~ — CLOSED by PHASE4-N-F-G-E (RETIRED from this list).**
+   _(Added at the G-C close from the G-C per-cluster security-review MEDIUM; closed at HEAD `6f848825`.)_ The two
+   surfaces — the per-mini-protocol mux-reassembly tail (`ade_network::session::core`) and the content-blind
+   `WirePump.lookahead` (`ade_node::node_sync`, `VecDeque<Vec<u8>>`) — are now BOUNDED before authoritative
+   decode/apply by **two closed literal caps**: `MAX_REASSEMBLY_TAIL_BYTES = 16 MiB` (fail-closed via the additive
+   closed `SessionError::ReassemblyBufferOverflow` → `mux_pump::session_err_to_halt` drops the peer; no silent
+   truncation, no partial decode) + `MAX_WIRE_PUMP_LOOKAHEAD = 256` (the bounded `mpsc`, cap 64, back-pressures
+   the pump). Both carry **NO CLI / env / config escape hatch** and are fenced by the NEW
+   `ci_check_live_feed_memory_bounds.sh` (DC-LIVEMEM-01, `enforced`). The over-cap behavior is fail-closed
+   (drop-and-disconnect / back-pressure — never a silent tip graft or a fabricated block); the relay-loop
+   containment gate + the verdict-decoupled `NodeBlockSource` contract are byte-unchanged. **Scope was NARROW —
+   bounded memory before decode/apply only.** It is **NOT** full network DoS resistance, **NOT** peer resource
+   fairness, **NOT** BA-02 / live-evidence readiness; the per-connection aggregate ceiling across the ~10
+   independent per-protocol reassembly buffers and per-connection-COUNT / peer-fairness limits remain SEPARATE,
+   out-of-scope future hardening slices.
 
 ### Operator-pass execution gates (schema enforced, execution blocked)
 
@@ -2013,94 +2179,109 @@ How new modules enter the workspace.
 
 ## Generation notes
 
-- Regenerated (scoped INCREMENTAL catch-up through ONE cluster) at HEAD `90791691` (`git rev-parse --short
+- Regenerated (scoped INCREMENTAL catch-up through ONE cluster) at HEAD `6f848825` (`git rev-parse --short
   HEAD`), downstream of the CODEMAP regenerated at the same HEAD. The prior on-disk SEAMS was generated at the
-  **PHASE4-N-F-G-B close** (`339cccb1` / 117 CI checks / 313 rules — the self-accept→serve handoff on the
-  `--mode node` spine). This refresh catches it up through **PHASE4-N-F-G-C** (live WirePump feed + BA-02
-  evidence wiring on the `--mode node` spine, closing now at `90791691`: S1 `aa2fe4a8`/`39c18f61`/`71036d10`
-  (live WirePump feed wiring — `node_lifecycle::spawn_live_wire_pump_source` + the `On`-arm `--peer` wire +
-  `admission::bootstrap::build_n2n_version_table` `pub(crate)` + the broadened
-  `ci_check_served_chain_handoff_fence.sh`), S2 `b880c310`/`90791691` (BA-02 evidence wiring — the NEW RED
-  `ade_node::ba02_pass` module + the additive `ci_check_ba02_evidence_manifest_schema.sh` gate + the
-  `docs/evidence/phase4-n-f-g-c-operator-pass-README.md` runbook + `crates/ade_node/tests/node_operator_pass_ba02.rs`)).
-- **N-F-G-C deltas are CLOSED surfaces / fenced ATTACH POINTS that REUSE existing closed infra, NOT new extension
-  points (load-bearing).** The live feed is a **REUSE** of the closed `ade_runtime::admission::{dial_for_admission,
-  run_admission_wire_pump}` that **FILLS** the closed `NodeBlockSource::WirePump` arm via `from_wire_pump` — NOT
-  a new variant / plugin point / wire authority — classified under §3 Closed / §4 Frozen. The `ba02_pass` module
-  is **RED file I/O over the UNCHANGED closed BA-02 evidence vocabulary** — NO new closed enum / registry;
-  `correlate` stays the SOLE `Ba02Manifest` constructor. **No BLUE crate was modified** — the 456 canonical-type
-  total is unchanged; all G-C code lands in RED `ade_node` (`node_lifecycle` live-feed wire +
-  `spawn_live_wire_pump_source`, `admission::bootstrap` fn-visibility promotion, the NEW RED `ba02_pass`),
-  CI, and docs. **`run_node_sync` is UNMODIFIED**; the durable tip still advances only via `pump_block`;
-  `ci_check_node_run_loop_containment.sh` is byte-unchanged.
-- **N-F-G-C PARTLY closed the prior §7 candidate #0** (the live network serve + operator-peer surface): the
-  **live feed is wired** (consume side) and the **operator-pass evidence path is scaffolded** (runbook +
-  `ba02_pass` `correlate` wiring + the manifest-schema gate); **the operator-witnessed live ACCEPT remains the
-  gating follow-on** (RO-LIVE-01 partial / `blocked_until_operator_stake_available`; RO-LIVE-06 not a live-BA-02
-  claim). **One new §7 candidate added** — the bounded peer-driven memory surface (#6: unbounded
-  `session::core` `proto_buffers` + `WirePump.lookahead` on the now-live feed; a MEDIUM security-review finding
-  NOT introduced by G-C, only newly EXPOSED; the prior CBOR length-overflow DoS is NOT reintroduced; the fix is a
-  follow-on cap + negative test). The remaining candidates are PRESERVED: RO-MITHRIL-IMPORT-01 remaining
-  obligations, N-U forged-block durability, RO-SYNC-EVIDENCE-01 live leg.
-- **Boundary honesty (load-bearing — do NOT soften).** N-F-G-C closes the **MECHANICAL live-feed + evidence
-  scaffolding ONLY**. Peer ACCEPT stays operator-gated; **NO live BA-02 claim**; **Ade self-accept / served-block
-  / wire success ≠ peer acceptance**; `correlate` is the SOLE `Ba02Manifest` constructor; **no synthetic manifest
-  is committed**; the **bounty acceptance criterion is NOT satisfied by this cluster**. BA-02 is satisfied
-  nowhere.
-- N-F-G-C delta verified at `90791691` (grep/ls/git only — no `cargo`):
-  - `crates/ade_node/src/ba02_pass.rs`: `//! RED`; `pub fn correlate_peer_log_file(ade: &AdeForgeRecord,
-    peer_log_path: &Path) -> io::Result<BA02Outcome>` (reads the file → GREEN `parse_peer_accept_events` +
-    `correlate`); `pub fn write_ba02_manifest(manifest: &Ba02Manifest, out_path: &Path) -> io::Result<()>` (the
-    argument type is the gate — only a `Ba02Manifest`); `use crate::ba02_evidence::{correlate,
-    parse_peer_accept_events, AdeForgeRecord, BA02Outcome, Ba02Manifest, …}`. Registered `pub mod ba02_pass;` in
-    `lib.rs`. NO new closed enum / registry.
-  - `crates/ade_node/src/node_sync.rs`: `pub enum NodeBlockSource { WirePump { … }, InMemory(VecDeque<Vec<u8>>) }`
-    (still 2 variants); `pub fn from_wire_pump(rx: mpsc::Receiver<AdmissionPeerEvent>) -> Self { Self::WirePump {
-    … } }` (a FILL of the existing arm; the lookahead is an opaque content-blind `VecDeque<Vec<u8>>`).
-  - `crates/ade_node/src/node_lifecycle.rs`: `use ade_runtime::admission::{dial_for_admission,
-    run_admission_wire_pump, AdmissionPeerEvent};` + `use crate::admission::bootstrap::build_n2n_version_table;`;
-    `const LIVE_WIRE_PUMP_CHANNEL_CAP: usize = 64;`; `fn spawn_live_wire_pump_source(peer_addrs, network_magic,
-    recovered_tip) -> NodeBlockSource` (reuses the dial + pump verbatim; per-peer `tokio::spawn`; bounded
-    `mpsc::channel`); the `On` arm wires `let mut source = if live_feed_wired { spawn_live_wire_pump_source(...) }
-    else { NodeBlockSource::in_memory(Vec::new()) }` (with `MissingFlag("--network-magic")` fail-closed on the
-    live arm).
-  - `crates/ade_node/src/admission/bootstrap.rs`: `build_n2n_version_table` promoted `fn` → `pub(crate) fn` (no
-    behavior change).
-  - Gate `ci/ci_check_ba02_evidence_manifest_schema.sh` present (8-field schema + `schema_version == 1` +
-    `peer_log_file_sha256` cross-check; vacuous-until-committed). Gate `ci/ci_check_served_chain_handoff_fence.sh`
-    BROADENED in place (owners `{node_lifecycle.rs, node_sync.rs}`; guard-3 allow-list). `ls ci/ci_check_*.sh |
-    wc -l` = **118** at `90791691`. `ci_check_node_run_loop_containment.sh` byte-unchanged.
-  - Registry: `grep -cE '^\[\[rules\]\]'` = **313** (working tree, count stable — no new rule). `RO-LIVE-01`
-    (`strengthened_in` += `"PHASE4-N-F-G-C"`, stays `partial`), `RO-LIVE-06` (+= `"PHASE4-N-F-G-C"`, stays
-    `enforced`), `CN-OPERATOR-EVIDENCE-01` (+= `"PHASE4-N-F-G-C"`, stays `enforced`; `code_locus` now cites the
-    runbook + the new gate), `DC-NODE-06` (+= `"PHASE4-N-F-G-C"`, stays `enforced`; `tests` gains
-    `live_feed_forge_serve_loopback_returns_forged_block`). _(These registry edits are uncommitted at this regen —
-    the cluster-close strengthening lands alongside this doc; `git status` shows
-    `docs/ade-invariant-registry.toml` modified.)_
-- Counts at `90791691` (N-F-G-C close, this refresh): **456** canonical types (Δ 0 vs the prior SEAMS — no BLUE
-  crate modified; the G-C `ba02_pass` is RED file I/O, the live feed is a RED reuse of the closed dial/pump, not
-  canonical-counted), **118** CI checks (Δ +1 vs the prior SEAMS's 117 — the one G-C gate
-  `ci_check_ba02_evidence_manifest_schema.sh`; `ci_check_served_chain_handoff_fence.sh` was BROADENED in place,
-  not added), **313** registry rules (Δ 0 vs the prior 313 — no new rule; four rules gain `strengthened_in +=
-  "PHASE4-N-F-G-C"`). All counts match the CODEMAP header regenerated at the same HEAD.
-- All N-F-G-B / N-F-G-A / N-F-F / N-F-E / N-F-D / N-F-C / N-F-A / N-Z / N-Y closed surfaces re-verified present on
-  disk at this HEAD and unchanged by N-F-G-C (no BLUE crate modified; `run_relay_loop` containment byte-unchanged;
-  `run_node_sync` production-unchanged save for the `from_wire_pump` FILL + the
-  `live_wire_pump_feed_reaches_forge_tick` test); the refresh annotated only the seams N-F-G-C added (the live
-  WirePump feed ATTACH POINT reusing the closed dial/pump + the `ba02_pass` evidence I/O wrapper) and the surfaces
-  they touched (the `NodeBlockSource::WirePump` FILL, the `On`-arm source selection, the broadened serve fence).
+  **PHASE4-N-F-G-C close** (`351d46bc` / 118 CI checks / 313 rules — the live WirePump feed + BA-02 evidence
+  wiring on the `--mode node` spine). This refresh catches it up through **PHASE4-N-F-G-E** (live-feed bounded
+  memory before authoritative decode/apply on the `--mode node` spine, closing now at `6f848825`: a single slice
+  S1 `6f848825` — the GREEN `ade_network::session::core` `MAX_REASSEMBLY_TAIL_BYTES = 16 MiB` reassembly-tail cap
+  + the additive closed `SessionError::ReassemblyBufferOverflow` (GREEN `session::event`), the RED
+  `ade_node::node_sync` `MAX_WIRE_PUMP_LOOKAHEAD = 256` lookahead cap, the RED `ade_runtime::network::mux_pump`
+  variant→`PeerHaltReason::ChainSyncDecodeError` mapping, and the NEW `ci_check_live_feed_memory_bounds.sh` gate;
+  doc commit `5a4d8c12`).
+- **N-F-G-E deltas are CLOSED surfaces / fail-closed memory bounds, NOT new extension points (load-bearing).**
+  The two caps are **closed literal constants** (`MAX_REASSEMBLY_TAIL_BYTES = 16 MiB`, `MAX_WIRE_PUMP_LOOKAHEAD =
+  256`) with **NO CLI / env / config escape hatch** — classified under §3 Closed / §4 Frozen. The reassembly cap
+  fails closed via the additive closed `SessionError::ReassemblyBufferOverflow` (NO wildcard; sole exhaustive
+  consumer `mux_pump::session_err_to_halt` → drop the peer); the lookahead cap back-pressures the existing bounded
+  `mpsc`. **No new module, no new `NodeBlockSource` / `CoordinatorEvent` variant.** **No BLUE crate was modified**
+  — the 456 canonical-type total is unchanged (`session/` is GREEN-by-content, NOT a BLUE `ade_network` submodule
+  path, so the new `SessionError` variant is NOT canonical-counted); the four changed files
+  (`session::{core.rs, event.rs}` GREEN-by-content, `node_sync.rs` + `mux_pump.rs` RED) touch no BLUE crate. The
+  cap fires **BEFORE** the BLUE `ade_codec` decode path (`ade_codec` byte-unchanged). **`run_node_sync` /
+  `run_relay_loop` containment + the served-chain handoff fence are byte-unchanged.** _(N-F-G-C deltas — the live
+  WirePump feed reusing the closed dial/pump + the `ba02_pass` evidence I/O — are carried forward unchanged; G-E
+  changed neither.)_
+- **N-F-G-E CLOSED §7 candidate #6** (bounded mux-reassembly tail + WirePump lookahead — the live-feed
+  peer-driven memory surface added at the G-C close from the G-C security-review MEDIUM): two closed literal caps
+  (`MAX_REASSEMBLY_TAIL_BYTES = 16 MiB` + `MAX_WIRE_PUMP_LOOKAHEAD = 256`), each fail-closed before authoritative
+  decode/apply, NO CLI/env/config escape hatch, fenced by the NEW `ci_check_live_feed_memory_bounds.sh`
+  (DC-LIVEMEM-01). **Candidate #6 is RETIRED from §7.** **G-E closed ONE specific live-feed memory surface — it is
+  NOT full network DoS resistance, NOT peer resource fairness, NOT BA-02 / live-evidence readiness** (the
+  per-connection aggregate ceiling across the ~10 independent per-protocol reassembly buffers and
+  per-connection-COUNT / peer-fairness remain SEPARATE, out-of-scope future hardening slices). **The OTHER §7
+  candidates are carried UNCHANGED and were NOT broadened:** #0 (live network serve + operator-peer — partly
+  closed at G-C; operator-witnessed ACCEPT still the gating follow-on, RO-LIVE-01 partial / RO-LIVE-06 live BA-02
+  not claimed), #1 (live unbounded peer → observable forge ACCEPT), #2 (live BA-02), #3 (RO-MITHRIL-IMPORT-01
+  remaining), #4 (N-U forged-block durability), #5 (RO-SYNC-EVIDENCE-01 live leg).
+- **Boundary honesty (load-bearing — do NOT soften / do NOT broaden).** N-F-G-E bounds **peer-driven memory on
+  the live `--mode node` feed BEFORE authoritative decode/apply** — and nothing more. It is **NOT** full network
+  DoS resistance, **NOT** peer resource fairness, **NOT** BA-02 / live-evidence readiness (the per-connection
+  aggregate ceiling across the ~10 independent per-protocol reassembly buffers and per-connection-COUNT /
+  peer-fairness remain SEPARATE, out-of-scope future hardening). The reassembly cap is checked post-extend
+  (single-buffer transient peak `cap + one <=64 KiB frame` ~16.06 MiB); the per-connection aggregate is ~10×
+  single-buffer, still O(constant)/connection. The bounds are **closed literal constants, NOT Cardano semantic
+  parameters** (tighten-only, no CLI/env/config escape hatch). **NO BLUE change** (`ade_codec` byte-unchanged);
+  the serve/forge/containment fences are **byte-unchanged**; **no live-evidence / BA-02 / RO-LIVE flip or claim**.
+  (Carried — N-F-G-C: peer ACCEPT stays operator-gated; `correlate` is the SOLE `Ba02Manifest` constructor; no
+  synthetic manifest committed; the bounty acceptance criterion is NOT satisfied. BA-02 is satisfied nowhere.)
+- N-F-G-E delta verified at `6f848825` (grep/ls/git only — no `cargo`):
+  - `crates/ade_network/src/session/core.rs`: `const MAX_REASSEMBLY_TAIL_BYTES: usize = 16 * 1024 * 1024;` (line
+    49; `//! GREEN`); the post-drain check `if buf.len() > MAX_REASSEMBLY_TAIL_BYTES { return Err(
+    SessionError::ReassemblyBufferOverflow { protocol, len, cap: MAX_REASSEMBLY_TAIL_BYTES }) }` (lines 249-253);
+    `session/` is GREEN-by-content (NOT a BLUE `ade_network` submodule `core_path`), so the new variant is NOT
+    canonical-counted.
+  - `crates/ade_network/src/session/event.rs`: the additive `SessionError::ReassemblyBufferOverflow { protocol,
+    len, cap }` variant (line ~195; doc-comment names the `MAX_REASSEMBLY_TAIL_BYTES` bound).
+  - `crates/ade_runtime/src/network/mux_pump.rs`: `fn session_err_to_halt(err: &SessionError) -> PeerHaltReason`
+    (line 278) is an exhaustive `match` (NO wildcard) whose new arm `SessionError::ReassemblyBufferOverflow { .. }
+    => PeerHaltReason::ChainSyncDecodeError` (lines 302-303) drops the peer.
+  - `crates/ade_node/src/node_sync.rs`: `const MAX_WIRE_PUMP_LOOKAHEAD: usize = 256;` (line 58); the cap check
+    `if lookahead.len() >= MAX_WIRE_PUMP_LOOKAHEAD { … }` in `pump_lookahead` (line 126); the bounded
+    `LIVE_WIRE_PUMP_CHANNEL_CAP = 64` (carried) back-pressures the pump. `NodeBlockSource` is still the closed
+    2-variant `{WirePump, InMemory}` — UNCHANGED.
+  - Gate `ci/ci_check_live_feed_memory_bounds.sh` present (verifies both bounds are CLOSED LITERAL constants AND
+    not wired to CLI / env / config — guard 3; line comments stripped first). `ls ci/ci_check_*.sh | wc -l` =
+    **119** at `6f848825`. `ci_check_node_run_loop_containment.sh` + `ci_check_served_chain_handoff_fence.sh`
+    byte-unchanged.
+  - Registry: `grep -cE '^\[\[rules\]\]' docs/ade-invariant-registry.toml` = **314**. NEW `DC-LIVEMEM-01`
+    (`tier = derived`, operational-hardening, `status = enforced`) present (`grep -n 'DC-LIVEMEM-01'`). No rule
+    weakened.
+  - Carried (N-F-G-C, verified present + unchanged at this HEAD): `crates/ade_node/src/ba02_pass.rs` (`//! RED`;
+    `correlate_peer_log_file` + `write_ba02_manifest` accepting ONLY a `Ba02Manifest`); `node_sync.rs`
+    `from_wire_pump` (a FILL of the closed `WirePump` arm); `node_lifecycle.rs` `spawn_live_wire_pump_source`
+    (reuses `dial_for_admission` + `run_admission_wire_pump` verbatim); `admission::bootstrap::build_n2n_version_table`
+    `pub(crate)`; gates `ci_check_ba02_evidence_manifest_schema.sh` + the broadened
+    `ci_check_served_chain_handoff_fence.sh`.
+- Counts at `6f848825` (N-F-G-E close, this refresh): **456** canonical types (Δ 0 vs the prior SEAMS — no BLUE
+  crate modified; `session/` is GREEN-by-content so the new `SessionError` variant is NOT canonical-counted; the
+  two caps are closed consts, the lookahead cap is RED), **119** CI checks (Δ +1 vs the prior SEAMS's 118 — the
+  one G-E gate `ci_check_live_feed_memory_bounds.sh`), **314** registry rules (Δ +1 vs the prior 313 — NEW
+  `DC-LIVEMEM-01`, `tier = derived`, `enforced`; no rule weakened). All counts match the CODEMAP header
+  regenerated at the same HEAD.
+- All N-F-G-C / N-F-G-B / N-F-G-A / N-F-F / N-F-E / N-F-D / N-F-C / N-F-A / N-Z / N-Y closed surfaces re-verified
+  present on disk at this HEAD and unchanged by N-F-G-E (no BLUE crate modified; `ade_codec` byte-unchanged;
+  `run_relay_loop` / `run_node_sync` containment + the served-chain handoff fence byte-unchanged; the live-feed
+  wiring + the serve mechanism unchanged); the refresh annotated only the seams N-F-G-E added (the two closed
+  memory caps + the additive closed `SessionError::ReassemblyBufferOverflow` + the new gate) and the surfaces they
+  touched (the live-feed pipeline's pre-decode memory bound, the `WirePump` lookahead-depth cap). The G-C live
+  WirePump feed + `ba02_pass` evidence I/O are carried forward unchanged.
 - **Cross-reference check (CODEMAP ↔ SEAMS):** every module named in this SEAMS appears in the CODEMAP
-  regenerated at the same HEAD — `ba02_pass` (`//! RED`), `node_lifecycle::spawn_live_wire_pump_source` (`//! RED`),
-  `node_sync::from_wire_pump` (`//! RED`), `admission::bootstrap::build_n2n_version_table` (`pub(crate)`),
-  `ba02_evidence` (`//! GREEN`, unchanged), and the carried N-F-G-B (`producer::self_accepted_handoff`) /
-  N-F-G-A (`consensus_inputs::protocol_params`, `clock::checked_millis_to_slot`, `node_sync::forge_epoch_admission`,
-  `operator_forge`, `consensus::genesis_pinning`) modules are all inventoried there; the **456 / 118 / 313**
-  counts match the CODEMAP header. No stale module references. The one new CI gate
-  (`ci_check_ba02_evidence_manifest_schema.sh`) + the broadened `ci_check_served_chain_handoff_fence.sh` are named
+  regenerated at the same HEAD — the N-F-G-E surfaces `ade_network::session::core` (`MAX_REASSEMBLY_TAIL_BYTES`,
+  `//! GREEN`), `ade_network::session::event` (`SessionError::ReassemblyBufferOverflow`, `//! GREEN`),
+  `ade_node::node_sync` (`MAX_WIRE_PUMP_LOOKAHEAD`, `//! RED`), `ade_runtime::network::mux_pump` (`session_err_to_halt`,
+  `//! RED`), AND the carried N-F-G-C (`ba02_pass` `//! RED`, `node_lifecycle::spawn_live_wire_pump_source`,
+  `node_sync::from_wire_pump`, `admission::bootstrap::build_n2n_version_table`, `ba02_evidence` `//! GREEN`) /
+  N-F-G-B (`producer::self_accepted_handoff`) / N-F-G-A (`consensus_inputs::protocol_params`,
+  `clock::checked_millis_to_slot`, `node_sync::forge_epoch_admission`, `operator_forge`, `consensus::genesis_pinning`)
+  modules are all inventoried there; the CODEMAP header's PHASE4-N-F-G-E delta names the same two caps + the
+  additive `SessionError` variant + `DC-LIVEMEM-01` + the new gate. The **456 / 119 / 314** counts match the
+  CODEMAP header. No stale module references. The one new CI gate (`ci_check_live_feed_memory_bounds.sh`) is named
   in both docs.
 - **Stale `.idd-config.json` fields (surfaced, not edited).** `.idd-config.json` `_invariant_registry_doc` reads
-  "313 entries" (correct); `_head_deltas_baseline` is `339cccb1` (the N-F-G-B close) — it should be bumped to
-  `90791691` on the N-F-G-C HEAD_DELTAS refresh. (This doc does not edit config.)
+  "313 entries" — now **314** at this close (NEW `DC-LIVEMEM-01`); `_head_deltas_baseline` is `90791691` (the
+  N-F-G-C close) — it should be bumped to `6f848825` on the N-F-G-E HEAD_DELTAS refresh. (This doc does not edit
+  config.)
 - The doc is regenerated, not edited. If a value drifts, fix the source, not the doc.
 - NOTE: no `cargo build`/`test`/`check` was run during this regeneration (grep/ls/git only, per the task
   constraint).

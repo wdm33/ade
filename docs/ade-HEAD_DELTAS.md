@@ -4,73 +4,81 @@
 >
 > Regenerate with `/head-deltas <baseline>` after every cluster close. Baseline is recorded in `.idd-config.json` `head_deltas_baseline`.
 
-> Baseline: `339cccb1` (here-strings in served-chain handoff fence to avoid pipefail SIGPIPE false-negative, 2026-06-01 22:33)
-> HEAD: `90791691` (wire operator peer-log → correlate BA-02 evidence path — PHASE4-N-F-G-C S2, 2026-06-02 01:22)
-> Cluster: **PHASE4-N-F-G-C — live WirePump feed + BA-02 operator-pass evidence wiring on the `--mode node` spine**, slice span closed; close-pass commit to follow.
-> 7 commits (no merges), 23 files changed, +2348 / -464 lines.
+> Baseline: `90791691` (wire operator peer-log → correlate BA-02 evidence path — PHASE4-N-F-G-C S2, 2026-06-02 01:22)
+> HEAD: `6f848825` (bound live-feed memory before authoritative decode — PHASE4-N-F-G-E S1, 2026-06-02 12:48)
+> Cluster: **PHASE4-N-F-G-E — live-feed bounded memory before authoritative decode/apply on the `--mode node` spine**, slice span closed; close-pass commit to follow.
+> 3 commits (no merges), 17 files changed, +2120 / -1109 lines.
 
-This window narrates the **PHASE4-N-F-G-C cluster** — the third and last of the three
-planned PHASE4-N-F-G sub-clusters (G-A forge fidelity / G-B self-accept→serve handoff /
-**G-C live operator serve + BA-02 evidence wiring**). G-C **makes the forge-capable
-`--mode node` `On` arm live-feed-wireable and wires the operator-pass BA-02 evidence
-I/O** — without claiming peer acceptance. **S1** wires a live `NodeBlockSource::WirePump`
-feed from the operator-supplied `--peer` by **reusing the closed admission dial+pump
-verbatim** (`dial_for_admission` → `run_admission_wire_pump` → `from_wire_pump`), making
-`LoopStep::ForgeTick` reachable on the live-wired path; `NodeBlockSource` stays the
-**closed 2-variant** (a *fill* of `WirePump`, no new variant), and the empty-`--peer`
-path keeps the prior empty source (forge-capable, halts clean). **S2** adds a NEW RED
-module `ade_node::ba02_pass` (peer-log file I/O over the GREEN `ba02_evidence::correlate`
-— the sole `Ba02Manifest` constructor), a NEW gate that enforces the no-synthetic-manifest
-line, and an operator-pass runbook. **NO BLUE crate changed (456 canonical types, Δ0);
-no new `CoordinatorEvent` variant; `correlate` stays the sole `Ba02Manifest` ctor.**
-Peer ACCEPT is still proven only by the operator-captured peer validation log
-(RO-LIVE-06), never by Ade's self-accept / served-block / `ForgeSucceeded` / any
-wire-success signal. **The bounty acceptance criterion is NOT satisfied by this cluster
-— the remaining step is an operator-witnessed live pass on a peer that can grant
-leadership (C1/C2).**
+This window narrates the **PHASE4-N-F-G-E cluster** — an operational-hardening cluster
+that **bounds peer-driven memory on the live `--mode node` feed BEFORE the authoritative
+BLUE decode/apply path**, with **NO BLUE crate changed**. The cluster is a single slice
+(S1) prompted by the PHASE4-N-F-G-C per-cluster security review (MEDIUM) and SEAMS §7
+candidate #6: the G-C live-feed wiring **exposed** two pre-existing unbounded peer-driven
+memory surfaces (reused N-M-FRAG / N-M-C infra) on the binary path — it did not introduce
+them. G-E caps both, each **fail-closed before the BLUE `ade_codec` decode path**:
 
-The span also carries the **PHASE4-N-F-G-B close tail** (`febee120`) — docs/registry
-only — which lands inside this window because the baseline `339cccb1` is the N-F-G-B
+- **GREEN `ade_network::session::core`** gains a closed const `MAX_REASSEMBLY_TAIL_BYTES =
+  16 * 1024 * 1024` (16 MiB). After `drain_protocol_items` drains every COMPLETE item, an
+  incomplete per-mini-protocol reassembly *tail* `> cap` returns the NEW additive closed
+  variant `SessionError::ReassemblyBufferOverflow { protocol, len, cap }` — **drop the
+  peer** (no silent truncation, no partial decode, no unbounded fallback).
+- **RED `ade_node::node_sync`** gains a closed const `MAX_WIRE_PUMP_LOOKAHEAD = 256`. The
+  `pump_lookahead` opportunistic `try_recv` drain stops at the cap so the existing bounded
+  `mpsc` (`LIVE_WIRE_PUMP_CHANNEL_CAP = 64`) **back-pressures** the pump.
+- **RED `ade_runtime::network::mux_pump`** maps the new `SessionError` variant
+  (`session_err_to_halt`) → `PeerHaltReason::ChainSyncDecodeError` (drop the peer).
+
+The bounds are **CLOSED CONSTANTS** — defensive implementation bounds, not Cardano
+semantic parameters; **no runtime option (CLI / env / config) may disable them or set them
+unbounded**, enforced by the NEW gate `ci_check_live_feed_memory_bounds.sh`. The new rule
+`DC-LIVEMEM-01` (`tier = derived`, operational-hardening) is **enforced** at this close.
+**The bounty acceptance criterion is NOT satisfied by this cluster** — the claim is narrow
+(memory bounded before authoritative decode), and the operator-witnessed live pass remains
+the gating follow-on.
+
+The span also carries the **PHASE4-N-F-G-C close tail** (`351d46bc`) — docs/registry only
+— which lands inside this window because the baseline `90791691` is the N-F-G-C
 *slice-span* HEAD, not its close commit (see §1). This mirrors how the previous
-HEAD_DELTAS window carried the **G-A** close tail (`62cb8718` + `1806584c`) for the same
-slice-span-vs-close-commit reason.
+HEAD_DELTAS window carried the **G-B** close tail (`febee120`), and the one before that the
+**G-A** tail (`62cb8718` + `1806584c`), for the same slice-span-vs-close-commit reason.
 
 ## 0. Headline
 
-| Count | Baseline (`339cccb1`) | HEAD (`90791691`) | Δ |
+| Count | Baseline (`90791691`) | HEAD (`6f848825`) | Δ |
 |---|---|---|---|
-| CI gates (`ci/ci_check_*.sh`) | 117 | **118** | **+1 new** (`ba02_evidence_manifest_schema`, S2); none removed. `served_chain_handoff_fence` was **broadened in place** by S1 — count-neutral |
-| Registry rules | 313 | 313 | **0** (no new ID) |
-| Test attributes (`#[test]`/`#[tokio::test]`, workspace) | 2223 | **2230** | **+7** (G-C S1/S2 surface, across `node_lifecycle`/`node_sync`/`forge_succeeds`/`node_operator_pass_ba02`) |
-| BLUE canonical types | 456 | 456 | **0 — NO BLUE change** (all code lands in RED `ade_node`) |
+| CI gates (`ci/ci_check_*.sh`) | 118 | **119** | **+1 new** (`live_feed_memory_bounds`, G-E S1); none removed, none modified |
+| Registry rules | 313 | **314** | **+1** (`DC-LIVEMEM-01`, G-E); plus the 4 G-C-close `strengthened_in` tokens land in this window (no ID added by them) |
+| Test attributes (`#[test]`/`#[tokio::test]`, workspace) | 2230 | **2234** | **+4** (the four `DC-LIVEMEM-01` tests, across `session::core` + `node_sync`) |
+| BLUE canonical types | 456 | 456 | **0 — NO BLUE change** (`session/` is GREEN-by-content, not a BLUE `ade_network` submodule; the other two changed files are RED) |
 
 > **Registry / grounding-doc sequencing note (load-bearing — read before §7).** This
 > window contains **two** distinct close events, and the registry / sibling-doc state
-> differs between *committed at HEAD `90791691`* and *the working tree at this regen*:
+> differs between *committed at HEAD `6f848825`* and *the working tree at this regen*:
 >
-> - **The G-B close-pass (`febee120`) is committed inside this window.** At HEAD
->   `90791691` the registry therefore already reflects the G-B close: `DC-NODE-06` is
->   `enforced` (flipped from `declared` by `febee120`, with its tests + `ci_script`
->   populated) and `RO-LIVE-06` is `enforced` — **but neither yet carries a
->   `strengthened_in += "PHASE4-N-F-G-C"` token** (those are owed at the *next*
->   close-pass; see below). This is the close-pass the **previous** HEAD_DELTAS window
->   flagged as owed, and it is why the rule count holds at 313 rather than rising
->   (`DC-NODE-06` was a pre-existing ID).
-> - **The G-C close-pass is NOT yet committed.** At HEAD `90791691` the **four** G-C
+> - **The G-C close-pass (`351d46bc`) is committed inside this window.** At HEAD
+>   `6f848825` the registry therefore already reflects the G-C close: the **four** G-C
 >   `strengthened_in += "PHASE4-N-F-G-C"` tokens (`RO-LIVE-01` stays `partial`;
 >   `RO-LIVE-06` / `CN-OPERATOR-EVIDENCE-01` / `DC-NODE-06` stay `enforced`) are
->   **uncommitted** — they exist only in the **working tree** at this regen. So is the
->   `RO-LIVE-06.ci_script += "ci/ci_check_ba02_evidence_manifest_schema.sh"` binding
->   (and the same binding on `CN-OPERATOR-EVIDENCE-01`). The pending close-pass commits
->   them — exactly as the N-F-G-B close-pass recorded the G-B strengthenings after its
->   slice span.
+>   **committed**, as is the G-C gate `ci_check_ba02_evidence_manifest_schema.sh`. (That
+>   gate was committed at the **baseline** `90791691` itself — G-C S2 — so it does **not**
+>   appear as a window-add; see the CI lineage in §5.) This is the close-pass the
+>   **previous** HEAD_DELTAS window flagged as owed at its `90791691` HEAD.
+> - **The G-E close-pass is NOT yet committed.** At HEAD `6f848825` the new rule
+>   `DC-LIVEMEM-01` is committed as `status = "declared"` (its `tests` + `ci_script` are
+>   populated by the S1 impl) — but the **flip to `enforced`** lives only in the **working
+>   tree** at this regen. So does the working-tree regeneration of CODEMAP / SEAMS /
+>   TRACEABILITY to the G-E close state. The pending close-pass commits the flip and the
+>   three siblings — exactly as the N-F-G-C close-pass committed the G-C strengthenings
+>   after its slice span.
 > - **Sibling-doc split.** The CODEMAP / SEAMS / TRACEABILITY **committed at HEAD
->   `90791691`** are still the **G-B close** docs (`febee120`): they report **117** CI
->   checks, **2223** tests, and do **not** mention `ba02_pass`. The **working tree** of
->   all three (and the registry) has been **regenerated to the G-C close state** —
->   **118** CI checks, **456** canonical types, **2230** tests, **313** rules, with the
->   new `ba02_pass` locus and the `ba02_evidence_manifest_schema` gate cross-referenced
->   — and they **agree** with this doc's counts. `docs/ade-HEAD_DELTAS.md` and
+>   `6f848825`** are still the **G-C close** docs (`351d46bc`): they report **118** CI
+>   checks, **2230** tests, **313** rules, and do **not** mention `DC-LIVEMEM-01` or
+>   `ci_check_live_feed_memory_bounds.sh`. The **working tree** of all three (and the
+>   registry) has been **regenerated to the G-E close state** — **119** CI checks, **456**
+>   canonical types, **2234** tests, **314** rules, with `DC-LIVEMEM-01` `enforced`, the
+>   new `session::core` / `node_sync` caps, and the new gate cross-referenced — and they
+>   **agree** with this doc's counts (CODEMAP/SEAMS headers: "119 CI checks at HEAD
+>   (`6f848825`, PHASE4-N-F-G-E cluster close)"). `docs/ade-HEAD_DELTAS.md` and
 >   `.idd-config.json` are the only two files this regen / the close-pass still owe; the
 >   `.idd-config.json` baseline bump is the closer's edit, not this regen's.
 >
@@ -81,248 +89,252 @@ slice-span-vs-close-commit reason.
 
 | Hash | Type | Summary |
 |------|------|---------|
-| `90791691` | feat | wire operator peer-log → correlate BA-02 evidence path (PHASE4-N-F-G-C S2) |
-| `b880c310` | docs | specify PHASE4-N-F-G-C S2 operator evidence |
-| `71036d10` | feat | wire live WirePump feed on the --mode node On arm (PHASE4-N-F-G-C S1) |
-| `39c18f61` | docs | correct PHASE4-N-F-G-C S1 to conditional live-feed wiring |
-| `aa2fe4a8` | docs | specify PHASE4-N-F-G-C S1 live WirePump wiring |
-| `aebe913f` | docs | define PHASE4-N-F-G-C live evidence cluster |
-| `febee120` | docs | close PHASE4-N-F-G-B — self-accept→serve handoff (DC-NODE-06 enforced) |
+| `6f848825` | feat | bound live-feed memory before authoritative decode (PHASE4-N-F-G-E S1) |
+| `5a4d8c12` | docs | define PHASE4-N-F-G-E live-feed bounded-memory cluster + S1 |
+| `351d46bc` | (close) | Close PHASE4-N-F-G-C — live feed + operator-gated evidence |
 
 No merge commits in the span.
 
-The **last-listed** commit (`febee120`) is the **PHASE4-N-F-G-B close-pass** that lands
-inside this window because the baseline `339cccb1` is the N-F-G-B *slice-span* HEAD, not
-its close commit: `febee120` is the G-B close-pass (registry `DC-NODE-06`
-`declared → enforced` + the 2 G-B strengthenings `CN-PROD-04` / `CN-CONS-07` + a
-four-doc grounding-doc refresh CODEMAP/SEAMS/TRACEABILITY/HEAD_DELTAS + the
-`.idd-config.json` baseline bump `80dac1f7 → 339cccb1` + the G-B cluster-doc archive).
-It is **docs/registry only** — no source change, and **count-neutral on CI** (117 → 117;
-the G-B gate `served_chain_handoff_fence` was already committed at the baseline
-`339cccb1`). `aebe913f` defines the G-C cluster; everything from `aa2fe4a8` onward is
-G-C proper (S1 doc → correction → impl, then S2 doc → impl — doc-then-impl per slice).
+The **last-listed** commit (`351d46bc`) is the **PHASE4-N-F-G-C close-pass** that lands
+inside this window because the baseline `90791691` is the N-F-G-C *slice-span* HEAD, not
+its close commit: `351d46bc` flipped the **four** G-C cross-rule strengthenings
+(`RO-LIVE-01` stays `partial` / `blocked_until_operator_stake_available`; `RO-LIVE-06` /
+`CN-OPERATOR-EVIDENCE-01` / `DC-NODE-06` stay `enforced` — each gains
+`strengthened_in += "PHASE4-N-F-G-C"`), bound the G-C gate
+`ci_check_ba02_evidence_manifest_schema.sh` to `RO-LIVE-06` / `CN-OPERATOR-EVIDENCE-01`,
+regenerated the four grounding docs to the **G-C** close, bumped the `.idd-config.json`
+baseline `339cccb1 → 90791691`, and archived the G-C cluster. It is **docs/registry only**
+— no source change — and **count-neutral on CI** (118 → 118; the G-C gate
+`ba02_evidence_manifest_schema` was already committed at the baseline `90791691`, at G-C
+S2, so the close added no gate). `5a4d8c12` defines the G-E cluster + S1; `6f848825` is the
+G-E S1 implementation (doc-then-impl per slice).
 
-(Plus the pending close-pass commit: grounding-doc reconciliation of the committed
-CODEMAP/SEAMS/TRACEABILITY from the G-B close to the G-C working-tree state + the four
-`strengthened_in += "PHASE4-N-F-G-C"` registry tokens + the two `ci_script` bindings on
-`RO-LIVE-06` / `CN-OPERATOR-EVIDENCE-01` + `.idd-config.json` baseline bump
-`339cccb1 → 90791691` + the G-C cluster-doc archive + this HEAD_DELTAS.)
+(Plus the pending close-pass commit: the `DC-LIVEMEM-01` `declared → enforced` flip, the
+grounding-doc commit of the working-tree CODEMAP/SEAMS/TRACEABILITY G-E regen, the
+`.idd-config.json` baseline bump `90791691 → 6f848825`, the G-E cluster-doc archive, and
+this HEAD_DELTAS.)
 
 ## 2. New Modules
 
-One new source module — a RED file-I/O shim in the RED `ade_node` crate. No new crate,
-no new BLUE authority, no new WAL/checkpoint/canonical type, no new `CoordinatorEvent`
-variant, no new GREEN evidence reducer (`ba02_evidence::correlate` is reused unchanged).
+**None.** G-E adds **no new source module, no new crate, no new BLUE authority, no new
+WAL/checkpoint/canonical type, no new `CoordinatorEvent` variant, no new GREEN evidence
+reducer.** The cluster lands as two closed memory **caps** added to **existing** modules,
+plus one additive closed enum variant and its single halt-mapping arm:
 
-| Module | Color | Purpose | Key sub-paths | Added in |
-|--------|-------|---------|---------------|----------|
-| `ade_node::ba02_pass` | **RED** | RED operator-pass BA-02 evidence **file I/O only**. Reads the operator-captured peer-accept JSONL log from disk and runs it through the GREEN `crate::ba02_evidence` reducer (`parse_peer_accept_events` allow-list → `correlate`, the **sole** `Ba02Manifest` constructor). It **constructs no evidence, derives no acceptance, and never coerces a non-acceptance line** — `correlate` stays the only authority; a `Ba02Manifest` is a *claim about* authority, not authority (`[[feedback-evidence-reducers-are-green-not-authority]]`). The honesty line is enforced by construction: the **only** input that can yield a manifest is a real operator-captured peer log naming the **exact** forged hash, through `correlate`; a missing/unreadable peer-log file fails closed (`io::Error`), **never** a synthesized acceptance (`[[feedback-shell-must-not-overstate-semantic-truth]]`). | `correlate_peer_log_file(&AdeForgeRecord, &Path) -> io::Result<BA02Outcome>` — file bytes → `parse_peer_accept_events` → `correlate`; a missing/unreadable file is an `io::Error` (fail-closed), **not** a `NoEvidence` and **not** a manifest. `write_ba02_manifest(&Ba02Manifest, &Path) -> io::Result<()>` — the **argument type is the gate**: only a `Ba02Manifest` (which only `correlate`'s exact-match arm constructs) is writable, so a written manifest is **always** `correlate`-produced (no path emits a manifest from `NoEvidence` or from raw operator input). RED I/O only: `std::fs` read/write; no clock/rand/float; constructs no evidence and re-validates nothing. `#[cfg(test)]` proofs `correlate_wired_to_operator_peer_log` + `correlate_from_operator_log_file_is_deterministic` live in `tests/node_operator_pass_ba02.rs`. | `PHASE4-N-F-G-C` S2 (`90791691`) |
+- a closed const in the existing GREEN `ade_network::session::core`,
+- a closed const in the existing RED `ade_node::node_sync`,
+- one additive variant on the existing closed enum `SessionError` in
+  `ade_network::session::event`,
+- one additive match arm in the existing RED `ade_runtime::network::mux_pump`.
 
-Cross-reference: the new module is in CODEMAP §RED and SEAMS in the **working tree**
-(both regenerated to the G-C close state at `90791691` — `ba02_pass` is present and the
-`code_locus` `crates/ade_node/src/ba02_pass.rs` resolves), but is **not yet** in the
-CODEMAP/SEAMS **committed at HEAD `90791691`** — those committed copies are still the
-**G-B close** docs (`febee120`). This is the sibling-doc split called out in §0; the
-close-pass commits the working-tree CODEMAP/SEAMS/TRACEABILITY alongside this doc. (Not
-a staleness *defect* — a sequencing artifact reconciled by the close-pass.)
+See §3 for the per-module change detail.
 
 ## 3. Modules Modified
 
-All modified source files existed at baseline. Trivial/no-behavioral-effect changes are
-skipped (the one-line `pub mod ba02_pass;` registration in `ade_node/src/lib.rs`, and
-the one-line `state.tip.as_ref()` accessor adjustment in
-`ade_node/src/admission/bootstrap.rs` so the live-feed start-point reads the recovered
-tip).
+All four modified source files existed at baseline. There are no trivial/skipped source
+changes in this window — every changed source file carries the bounded-memory hardening.
 
 | Module | Color | Scope | Key changes |
 |--------|-------|-------|-------------|
-| `ade_node::node_lifecycle` | **RED** | +159 / -? lines (incl. `#[cfg(test)]`) | **S1 (`71036d10`) — wire the live WirePump feed on the `--mode node` `On` arm.** New `spawn_live_wire_pump_source(peer_addrs, network_magic, recovered_tip) -> NodeBlockSource` (+ `const LIVE_WIRE_PUMP_CHANNEL_CAP = 64`): it builds a LIVE `NodeBlockSource::WirePump` by **reusing the closed admission dial+pump VERBATIM** (`dial_for_admission` → `run_admission_wire_pump`, no reimplementation, no new wire authority); the runtime `ade_runtime::admission::AdmissionPeerEvent` output feeds the `WirePump` arm **directly** (the node spine consumes the runtime event type — no bridge). The `On` arm wires it iff `--peer` is supplied (`live_feed_wired = !cli.peer_addrs.is_empty()`; requires `--network-magic`, else `MissingFlag`); empty `--peer` keeps the prior `NodeBlockSource::in_memory(Vec::new())` (forge-CAPABLE, halts clean). The start point is the recovered `ChainTip` (`Point::Block` / `Point::Origin`). **Honest-scope C3** (mirrors `admission::bootstrap::spawn_wire_pumps_for_admission`): an unparseable `--peer` addr or a `dial_for_admission` failure is **logged-and-dropped — never fatal, never a fabricated address, never a silent tip graft**; if no peer yields a live pump, the feed ends and the relay loop halts clean (same outcome as the empty source). The honest end-of-run log split into a `live_feed_wired` branch (forge observable when the feed is Continuing + a due leader slot is reached — peer ACCEPT **not** claimed, operator-gated RO-LIVE-01/06) vs the empty branch (forge-CAPABLE, halts clean). The single `SystemClock` wall-clock seam (DC-NODE-03) and the `Off`/`On` dispatch shape are unchanged; the durable tip still advances only via `run_node_sync → pump_block` (no second tip-advance, no verdict). New `#[cfg(test)]` proof `spawn_live_wire_pump_source_with_no_usable_peer_yields_ended_feed` (empty / unparseable `--peer` → already-closed feed → `next_block()` is `None`). |
-| `ade_node::node_sync` | **RED** (host of the closed `NodeBlockSource` + GREEN-pure `forge_epoch_admission` + the fenced BLUE forge composition) | +98 lines (all `#[cfg(test)]`) | **S1 (`71036d10`) — consume-side proofs that the live feed makes the forge observable.** No production-body change in this file — the surface that S1 exercises (`NodeBlockSource::from_wire_pump` / `in_memory`, the closed 2-variant enum, `run_relay_loop`) already existed. New `#[cfg(test)]` proofs: `node_block_source_stays_closed_two_variant` (an exhaustive match with **no** wildcard arm pins `NodeBlockSource` as the closed `{WirePump, InMemory}` — a third "alternative live source" variant would fail to compile, so the live feed is a **fill**, not a plugin point); and `live_wire_pump_feed_reaches_forge_tick` (same recovered base / keys / clock / schedule; the **only** difference is source liveness — a Continuing `WirePump` feed makes `LoopStep::ForgeTick` reachable while the empty `InMemory` source halts before any `ForgeTick`, isolating exactly the live-feed effect; forge stays **subordinate** to the feed per CN-NODE-02 / DC-NODE-05). |
-| `ade_node::admission::bootstrap` | **RED** | +2 / -? lines | **S1 (`71036d10`) — visibility promotion + start-point read.** `build_n2n_version_table` promoted `fn` → `pub(crate) fn` so `node_lifecycle::spawn_live_wire_pump_source` reuses the closed N2N version table **verbatim** (no reimplementation). No behavioral change to the admission bootstrap path itself. |
+| `ade_network::session::core` | **GREEN-by-content** (the `session/` subtree is **not** one of the 9 BLUE `ade_network` submodule `core_paths`; deterministic GREEN session reducer) | +110 lines (incl. `#[cfg(test)]`) | **G-E S1 (`6f848825`) — reassembly-tail cap.** New closed const `MAX_REASSEMBLY_TAIL_BYTES = 16 * 1024 * 1024` (16 MiB). In `step` / `drain_protocol_items`: after every **COMPLETE** item is drained, if a per-mini-protocol reassembly **tail** still buffered satisfies `buf.len() > MAX_REASSEMBLY_TAIL_BYTES` the reducer returns the NEW additive `SessionError::ReassemblyBufferOverflow { protocol, len, cap }` (**fail closed** — drop the peer; **no** silent truncation, **no** partial decode, **no** unbounded fallback). Pure (`buf.len()` comparison only; the GREEN no-clock/rand/float/`HashMap` contract is preserved). The cap fires **before** the BLUE `ade_codec` decode path (unchanged). New `#[cfg(test)]` proofs `session_reassembly_tail_over_cap_fails_closed` (tail `> cap` → `ReassemblyBufferOverflow`) and `session_reassembly_tail_under_cap_still_drains_complete_item` (a complete item under the cap still drains intact — the cap does not regress the happy path). |
+| `ade_network::session::event` | **GREEN-by-content** (same `session/` subtree) | +12 lines | **G-E S1 (`6f848825`) — additive closed-enum variant.** `SessionError` gains the closed variant `ReassemblyBufferOverflow { protocol, len, cap }` (no wildcard arm anywhere; the enum stays exhaustively matched). The cap is carried on the variant so the halt reason is self-describing. Its sole exhaustive consumer is `ade_runtime::network::mux_pump::session_err_to_halt` (see below). |
+| `ade_node::node_sync` | **RED** (host of the closed `NodeBlockSource` + GREEN-pure `forge_epoch_admission` + the fenced BLUE forge composition; the file itself is RED) | +79 lines (incl. `#[cfg(test)]`) | **G-E S1 (`6f848825`) — WirePump lookahead cap (bounded-channel back-pressure).** New closed const `MAX_WIRE_PUMP_LOOKAHEAD = 256`. `pump_lookahead` stops the opportunistic `try_recv` drain once `lookahead.len() >= MAX_WIRE_PUMP_LOOKAHEAD`, so the existing bounded `mpsc` (`LIVE_WIRE_PUMP_CHANNEL_CAP = 64`) **back-pressures** the upstream pump instead of the pump draining unboundedly into an in-memory lookahead vector. Content-blind: the verdict-decoupled `NodeBlockSource` contract and the arrival ordering are unchanged. New `#[cfg(test)]` proofs `wirepump_lookahead_stops_at_cap` (feeding `cap + 50` items, one opportunistic drain stops at exactly `MAX_WIRE_PUMP_LOOKAHEAD`) and `wirepump_lookahead_cap_preserves_relay_behavior_under_normal_feed` (a normal-depth feed under the cap relays unchanged — the cap does not perturb the common path). |
+| `ade_runtime::network::mux_pump` | **RED** (shell mux pump) | +6 lines | **G-E S1 (`6f848825`) — halt mapping.** `session_err_to_halt` gains one additive arm: `SessionError::ReassemblyBufferOverflow { .. } => PeerHaltReason::ChainSyncDecodeError` — the overflow drops the peer through the existing structured halt path (no panic, no unbounded retry; the RED retry/halt discipline is unchanged). |
 
 ## 4. Feature Flags
 
 **No project feature-flag deltas.** Ade declares no `[features]` table in any workspace
 `Cargo.toml` (confirmed at both refs — the table is absent), and no `#[cfg(feature =
 …)]` gate was introduced in the span. **No `Cargo.toml` change at all in this window.**
-No coupling, no `compile_error!` guard.
+No coupling, no `compile_error!` guard. The two new bounds are plain `const` items, not
+feature flags.
 
-## 5. CI Checks (117 → 118; +1 new, 1 broadened-in-place, 0 removed)
+## 5. CI Checks (118 → 119; +1 new, 0 modified, 0 removed)
 
-One new gate plus one broadened-in-place gate, both repo-root-relative and mirroring the
-existing `ci/ci_check_*.sh` convention.
+One new gate, repo-root-relative and mirroring the existing `ci/ci_check_*.sh` convention.
 
-### PHASE4-N-F-G-C gates (from baseline through HEAD)
+### PHASE4-N-F-G-E gate
 
 | Check | Status | Cluster origin | What it checks |
 |-------|--------|----------------|----------------|
-| `ci_check_ba02_evidence_manifest_schema.sh` | **New** | S2 (`90791691`) | Backs the **RO-LIVE-06** BA-02-evidence schema clause (mirrors `ci_check_operator_evidence_manifest_schema.sh`). **Vacuous-until-committed**: when no `docs/clusters/PHASE4-N-F-G-C/CE-G-C-LIVE_*.toml` is present (the typical state — the live operator pass is `blocked_until_operator_stake_available`), the gate passes (**no manifest, no claim**). When a manifest *is* committed, it enforces (1) all 8 required schema fields present (`schema_version`, `block_hash`, `slot`, `peer_log_file`, `peer_log_file_sha256`, `peer_log_capture_command`, `peer_log_filter`, `accept_event_kind`); (2) `schema_version == 1` (the canonical `BA02_MANIFEST_SCHEMA_VERSION`); (3) **`peer_log_file_sha256` matches the actual SHA-256 of the committed peer-log fixture** — the **no-synthetic-manifest** line: a hand-authored manifest with no real fixture, or a tampered fixture, **FAILS**. The complementary provenance fence is in code (`ba02_pass::write_ba02_manifest` accepts only a `Ba02Manifest`, which only `ba02_evidence::correlate`'s exact-match arm constructs). Hermetic — no Docker / cardano-cli / live node. |
-| `ci_check_served_chain_handoff_fence.sh` | **Modified (broadened in place)** | S1 (`71036d10`); introduced N-F-G-B S3 | Still backs the **DC-NODE-06** serve-ingress clause. **Broadened** for the live-feed path: (a) the scope grew from the single `node_lifecycle.rs` owner to the node-spine serve **owner set** `{node_lifecycle.rs, node_sync.rs}` (so the fence still holds if the serve wiring moves between them; the `--mode produce` path `produce_mode.rs` / CN-PROD-04 stays a **separate** serve authority + gate, deliberately out of scope here); (b) **guard-3 became an allow-list** (was a 3-name deny-list): **every** node-spine unbounded handoff channel (`UnboundedSender<…>` / `UnboundedReceiver<…>` / `unbounded_channel::<…>`) MUST carry `SelfAcceptedHandoff` — **any** other payload fails, not just the three previously named (`<Vec<u8>>` / `<ForgedBlockArtifact>` / `<bool>`) — and at least one `UnboundedSender<SelfAcceptedHandoff>` must exist. The new bounded live-feed channel (`mpsc::channel::<AdmissionPeerEvent>`) is **not** a handoff channel and is intentionally not matched. Guards (1) (every node-spine `push_atomic(` fed by `into_accepted()`) and (2) (no direct `served_chain_admit(` on the node spine) are unchanged. |
+| `ci_check_live_feed_memory_bounds.sh` | **New** | G-E S1 (`6f848825`) | Backs the new **`DC-LIVEMEM-01`** rule. Verifies both live-feed memory bounds are **CLOSED LITERAL constants** — `MAX_REASSEMBLY_TAIL_BYTES` in `crates/ade_network/src/session/core.rs` and `MAX_WIRE_PUMP_LOOKAHEAD` in `crates/ade_node/src/node_sync.rs` — **AND** that neither is wired to a runtime escape hatch: no CLI flag, env var, or config field may set or disable them (the **no-escape-hatch** guard). Line comments are stripped first so the doc-comments that *name* "CLI / env / config" (to forbid them) do not self-trip the grep. Hermetic — no Docker / cardano-cli / live node. |
 
-The N-F-E forge-containment gate (`ci_check_node_run_loop_containment.sh`) is
-**byte-unchanged** — the relay-loop body still performs no serve / admit / gossip /
-broadcast / block-fetch / durable-tip mutation. G-C **added** an evidence-schema gate
-and **broadened** the handoff fence's reach, but did **not** relax containment.
+The serve/forge/containment fences are **byte-unchanged** in this window:
+`ci_check_node_run_loop_containment.sh` (relay-loop containment — no serve / admit / gossip
+/ broadcast / block-fetch / durable-tip mutation in the loop body) and
+`ci_check_served_chain_handoff_fence.sh` (self-accept→serve handoff) are both untouched.
+G-E **added** a bounded-memory gate and relaxed **nothing**.
 
-> Cross-reference (TRACEABILITY): in the **working tree** at `90791691`,
-> `ci_check_ba02_evidence_manifest_schema.sh` is cited by `RO-LIVE-06.ci_script`
-> **and** `CN-OPERATOR-EVIDENCE-01.ci_script`, and TRACEABILITY (working tree) renders
-> those rows with the gate present (14 working-tree TRACEABILITY mentions of the gate
-> name). At the **committed** HEAD `90791691`, the registry already binds
-> `ci_check_served_chain_handoff_fence.sh` + `ci_check_node_run_loop_containment.sh`
-> to `DC-NODE-06` (from the G-B close `febee120`), but the **new** S2 gate's
-> `ci_script` binding on `RO-LIVE-06` / `CN-OPERATOR-EVIDENCE-01` is **working-tree
-> only** (uncommitted) — the close-pass commits it and regenerates the committed
-> TRACEABILITY. See the warnings in the generation section.
+### CI gate lineage (for cross-window readers — explains the headline +1)
+
+The on-disk gate count rose **116 → 117 → 118 → 119** across the G-A…G-E sub-clusters:
+
+- **116 → 117** — G-B S3 added `ci_check_served_chain_handoff_fence.sh` (narrated in the
+  N-F-G-B HEAD_DELTAS).
+- **117 → 118** — G-C **S2** added `ci_check_ba02_evidence_manifest_schema.sh` **at the
+  baseline commit `90791691` itself** (narrated in the **previous**, N-F-G-C, HEAD_DELTAS
+  window `339cccb1 → 90791691`, which recorded 117 → 118). Because that gate was committed
+  **at** this window's baseline, it is **not** a window-add here — the G-C close-pass
+  `351d46bc` was docs/registry only and count-neutral (118 → 118).
+- **118 → 119** — G-E S1 added `ci_check_live_feed_memory_bounds.sh` (this window).
+
+So **this** window's CI delta is the **single** G-E gate: **118 → 119 (+1)**.
+
+> Cross-reference (TRACEABILITY): in the **working tree** at `6f848825`,
+> `ci_check_live_feed_memory_bounds.sh` is cited by `DC-LIVEMEM-01.ci_script`, and the
+> working-tree TRACEABILITY renders that row (11 working-tree TRACEABILITY mentions of the
+> gate name). At the **committed** HEAD `6f848825`, the committed TRACEABILITY is still the
+> **G-C** close doc (`351d46bc`) and does **not** yet show the gate — the close-pass
+> commits the working-tree TRACEABILITY regen. See the warnings in the generation section.
 
 ## 6. Canonical Type Registry Delta
 
-**n/a — no separate canonical-type registry is configured** (`canonical_type_registry: null`),
-and **no BLUE crate changed**. The 456 BLUE canonical-type total is **unchanged (Δ0)**
-across the span (independently re-verified: `git diff --name-only 339cccb1..90791691`
-matches **no** `core_paths` (BLUE) entry — every changed source file is RED `ade_node`;
-the working-tree CODEMAP at `90791691` reports 456 canonical). The new `ba02_pass`
-module is RED file I/O in `ade_node` and is not canonical-counted; it reuses the existing
-GREEN `ade_node::ba02_evidence` types (`AdeForgeRecord`, `BA02Outcome`, `Ba02Manifest`)
-verbatim — no new type. **No new `CoordinatorEvent` variant or field was introduced.**
+**n/a — no separate canonical-type registry is configured** (`canonical_type_registry:
+null`), and **no BLUE crate changed**. The 456 BLUE canonical-type total is **unchanged
+(Δ0)** across the span (independently re-verified: `git diff --name-only
+90791691..6f848825` matches **no** `core_paths` (BLUE) entry — the four changed source
+files are `session::core.rs` + `session::event.rs` (the `session/` subtree is GREEN — it
+is **not** one of the 9 BLUE `ade_network` submodule paths: `mux/frame.rs`, `codec/`,
+`handshake/`, `chain_sync/`, `block_fetch/`, `tx_submission/`, `keep_alive/`,
+`peer_sharing/`, `n2c/`), plus RED `node_sync.rs` + RED `mux_pump.rs`). The working-tree
+CODEMAP at `6f848825` reports 456 canonical. The new closed `SessionError` variant is
+**GREEN-by-content and not canonical-counted**; no new type was added to any BLUE crate.
+**No new `CoordinatorEvent` variant or field was introduced.**
 
-## 7. Normative / Invariant Rule Delta (313 → 313)
+## 7. Normative / Invariant Rule Delta (313 → 314)
 
-**No rule ID was added or removed in the span** (313 at both refs). G-C ships **no new
-rule** — it extends existing rules. This window also commits the **G-B** close-pass
-registry edits (`febee120`), which is why the count holds at 313 (`DC-NODE-06` was a
-pre-existing ID, not a new one).
+**One rule ID added, zero removed** (313 → 314). G-E ships exactly one new rule; this
+window also commits the **G-C** close-pass cross-rule strengthenings (`351d46bc`), which
+add **no** new ID (they extend existing rules).
 
-### G-B close-pass registry edits (committed in this span, by `febee120`)
+### G-E new rule (committed in this span, by `6f848825`; flip to `enforced` owed at close)
 
-For completeness — these were the *owed* edits flagged in the **previous** (N-F-G-B)
-HEAD_DELTAS window and are **committed here**:
+| Rule | Tier | Status (committed at HEAD) | What it pins |
+|------|------|---------------------------|--------------|
+| `DC-LIVEMEM-01` | `derived` (operational-hardening; **NOT** BLUE consensus law) | `declared` at `6f848825`; **flips to `enforced`** at the close-pass (already `enforced` in the working-tree registry at this regen) | **Live-feed bounded memory before authoritative decode/apply.** Peer-driven memory on the live `--mode node` feed is bounded BEFORE the BLUE decode/apply path: the per-mini-protocol reassembly tail (`session::core` `MAX_REASSEMBLY_TAIL_BYTES`, 16 MiB) fails closed with a structured `SessionError::ReassemblyBufferOverflow` (drop the peer); the WirePump lookahead (`node_sync` `MAX_WIRE_PUMP_LOOKAHEAD`, 256) stops opportunistic draining so the bounded `mpsc` (cap 64) back-pressures the pump. No silent truncation, no partial decode, no unbounded fallback. The bounds are **CLOSED CONSTANTS** — defensive implementation bounds, NOT Cardano semantic parameters; **no runtime option (CLI / env / config) may disable them or set them unbounded**. `tests = [session_reassembly_tail_over_cap_fails_closed, session_reassembly_tail_under_cap_still_drains_complete_item, wirepump_lookahead_stops_at_cap, wirepump_lookahead_cap_preserves_relay_behavior_under_normal_feed]`; `ci_script = ci/ci_check_live_feed_memory_bounds.sh`. `cross_ref = CN-SESS-04, DC-SESS-06, DC-SYNC-01, DC-SYNC-02, DC-NODE-06, CN-NODE-02`. |
 
-- `DC-NODE-06` flipped `declared → enforced` (`tests` populated with the 10 G-B
-  handoff/serve tests; `ci_script = "ci/ci_check_served_chain_handoff_fence.sh,
-  ci/ci_check_node_run_loop_containment.sh"`).
-- 2 G-B strengthenings recorded: `CN-PROD-04` (`strengthened_in += "PHASE4-N-F-G-B"`)
-  and `CN-CONS-07` (`strengthened_in += "PHASE4-N-F-G-B"`).
+> **Status sequencing (mirrors the prior G-B/G-C windows).** At the committed HEAD
+> `6f848825` (the G-E **slice-span** HEAD), `DC-LIVEMEM-01.status = "declared"` — the rule
+> is committed with its `tests` and `ci_script` populated, but the `declared → enforced`
+> flip is the close-pass edit and lives only in the **working-tree** registry at this
+> regen (where it is already `enforced`). This is the exact pattern the N-F-G-B window
+> documented for `DC-NODE-06` (`declared` at its slice-span HEAD, flipped at close). The
+> count itself rises 313 → 314 at the slice-span HEAD because the **ID** is added by the
+> S1 impl `6f848825`; only the status word changes at close.
 
-### G-C strengthenings (owed at close, NOT yet committed)
+### G-C close-pass cross-rule strengthenings (committed in this span, by `351d46bc`)
 
-At HEAD `90791691` **zero** `strengthened_in += "PHASE4-N-F-G-C"` tokens are committed —
-they exist only in the **working tree** at this regen. The pending close-pass records the
-**4 cross-rule strengthenings** the cluster extends, plus the new S2 gate's `ci_script`
-bindings:
+For completeness — these were the *owed* edits flagged in the **previous** (N-F-G-C)
+HEAD_DELTAS window and are **committed here** (no new ID; the count holds at 313 across
+them, then rises to 314 with `DC-LIVEMEM-01`):
 
-| Rule | Status (held) | Why strengthened by G-C |
-|------|---------------|--------------------------|
-| `RO-LIVE-01` | **`partial`** (held — `blocked_until_operator_stake_available`) | G-C wired the **MECHANICAL** half on the `--mode node` spine: a live `NodeBlockSource::WirePump` feed makes `LoopStep::ForgeTick` reachable (`live_wire_pump_feed_reaches_forge_tick`) and the forge-derived self-accepted block is served byte-identically over in-process block-fetch (`live_feed_forge_serve_loopback_returns_forged_block`). The **LIVE** half is unchanged: peer ACCEPT stays `blocked_until_operator_stake_available`, proven **only** by the operator-captured peer log through `correlate`. |
-| `RO-LIVE-06` | **`enforced`** (held) | The operator-pass BA-02 evidence path is now wired: `ba02_pass::correlate_peer_log_file` reads the operator-captured peer log and runs it through `correlate`; the new `ci_check_ba02_evidence_manifest_schema.sh` gate (added to `ci_script`) enforces schema + sha256-binding on any committed manifest. **Live BA-02 is still NOT claimed** — schema + mechanics only. |
-| `CN-OPERATOR-EVIDENCE-01` | **`enforced`** (held) | The new BA-02 manifest-schema gate is added to its `ci_script` set (alongside `ci_check_operator_evidence_manifest_schema.sh`) — the operator-evidence manifest discipline now also covers the `--mode node` BA-02 manifest family (`CE-G-C-LIVE_*.toml`). |
-| `DC-NODE-06` | **`enforced`** (held; flipped by the G-B close `febee120` earlier in this window) | The served-chain handoff fence it binds (`ci_check_served_chain_handoff_fence.sh`) was **broadened in place** to the node-spine owner set + an allow-list guard-3 — strengthening (never relaxing) the serve-ingress clause as the live feed is wired. |
+| Rule | Status (held) | Strengthening recorded by `351d46bc` |
+|------|---------------|--------------------------------------|
+| `RO-LIVE-01` | **`partial`** (held — `blocked_until_operator_stake_available`) | `strengthened_in += "PHASE4-N-F-G-C"` — G-C wired the MECHANICAL live-feed half (`live_wire_pump_feed_reaches_forge_tick`); the LIVE peer-ACCEPT half stays operator-gated. |
+| `RO-LIVE-06` | **`enforced`** (held) | `strengthened_in += "PHASE4-N-F-G-C"`; `ci_script += "ci/ci_check_ba02_evidence_manifest_schema.sh"` — the operator-pass BA-02 evidence path is wired (schema + mechanics only; no live BA-02 claim). |
+| `CN-OPERATOR-EVIDENCE-01` | **`enforced`** (held) | `strengthened_in += "PHASE4-N-F-G-C"`; `ci_script += "ci/ci_check_ba02_evidence_manifest_schema.sh"` — operator-evidence manifest discipline now covers the `--mode node` BA-02 manifest family. |
+| `DC-NODE-06` | **`enforced`** (held) | `strengthened_in += "PHASE4-N-F-G-C"` — the served-chain handoff fence it binds was broadened in place (node-spine owner set + allow-list guard-3) when the live feed was wired. |
 
-This section is informational and reflects the **committed** registry state at HEAD
-(`DC-NODE-06` `enforced`, `RO-LIVE-06` `enforced`, both **without** a G-C token yet;
-`RO-LIVE-01` `partial`). **No rule was removed (expected: 0).**
+**No rule was removed (expected: 0).** The 313 → 314 delta is a single additive ID
+(`DC-LIVEMEM-01`); the four G-C tokens are strengthenings, never weakenings.
 
 ## 8. Honest residual (cluster scope)
 
-**G-C closes the MECHANICAL live-feed + evidence scaffolding ONLY. The forge-capable
-`--mode node` `On` arm is now live-feed-wireable, and the operator-pass BA-02 evidence
-I/O is wired — but peer ACCEPT is NOT claimed, and the bounty acceptance criterion is
-NOT satisfied.**
+**G-E closes a NARROW operational-hardening claim: peer-driven memory on the live
+`--mode node` feed is BOUNDED BEFORE authoritative decode/apply. It is NOT full network
+DoS resistance, NOT peer resource fairness, NOT BA-02 / live-evidence readiness, and it
+does NOT satisfy the bounty acceptance criterion.**
 
-- **Live feed, not acceptance.** S1 wires a live `NodeBlockSource::WirePump` from
-  `--peer` by **reusing** the closed admission dial+pump verbatim; a Continuing feed
-  makes `LoopStep::ForgeTick` reachable (the empty source halts before any `ForgeTick`).
-  `NodeBlockSource` stays the **closed 2-variant** (a fill of `WirePump`); the durable
-  tip still advances only via `run_node_sync → pump_block` (no second tip-advance, no
-  verdict). Empty `--peer` preserves the prior forge-CAPABLE, halts-clean contract;
-  dial/parse failures are logged-and-dropped (C3), never fatal, never a fabricated
-  address, never a silent tip graft.
-- **Self-accept / served-block / wire-success ≠ peer acceptance.** A live wire feed and
-  an in-process served-block loopback prove the serve **mechanism**, not acceptance.
-  The bounty acceptance criterion (an operator-witnessed accepted block on a peer that
-  can grant leadership) is **NOT** satisfied by this cluster.
-- **`correlate` is the sole evidence authority.** S2's `ba02_pass` is RED file I/O over
-  the GREEN `ba02_evidence::correlate` — the **sole** `Ba02Manifest` constructor. It
-  constructs no evidence, derives no acceptance, and never coerces a non-acceptance
-  line; a missing/unreadable peer log fails closed (`io::Error`), never a synthesized
-  acceptance. `write_ba02_manifest` accepts only a `Ba02Manifest`, so a written manifest
-  is **always** correlate-produced. **No synthetic manifest is committed** — the
-  `ci_check_ba02_evidence_manifest_schema.sh` gate is vacuously satisfied until an
-  operator commits a real `CE-G-C-LIVE_*.toml` bound to a real peer-log fixture by
-  sha256.
-- **Peer ACCEPT operator-gated.** `RO-LIVE-01` stays `partial` /
-  `blocked_until_operator_stake_available`; `RO-LIVE-06` enforces **schema + mechanics
-  only** — **no live BA-02 claim**. The remaining step is an operator-witnessed live
-  pass on a peer that can grant leadership: **C1** (private testnet — Ade holds ~all
-  stake, the cheapest real ACCEPT) or **C2** (preprod — needs ~2 epochs of provisioned
-  active stake; the public preprod docker peer **cannot** grant acceptance — Ade has no
-  stake there). See `docs/evidence/phase4-n-f-g-c-operator-pass-README.md` (the new
-  operator-pass runbook; supersedes the stale N-S-C S1 runbook and closes the
-  C1-scoping-doc bugs).
-- **No BLUE change.** 456 BLUE canonical types unchanged (Δ0); no new `CoordinatorEvent`
-  variant or field. All code lands in RED `ade_node` (`node_lifecycle`
-  `spawn_live_wire_pump_source` + the live-feed `On`-arm wiring; `node_sync` consume-side
-  `#[cfg(test)]` proofs; the new RED `ba02_pass` file-I/O shim; `bootstrap`
-  visibility promotion). No new GREEN evidence reducer — `ba02_evidence::correlate` is
-  reused unchanged.
-- **New MEDIUM follow-on (exposed, not introduced here).** The live feed newly exposes
-  the WirePump's bounded mux-reassembly tail and its lookahead on the `--mode node`
-  spine (reused admission infra — **not** introduced by G-C). This is a MEDIUM
-  follow-on for a dedicated slice (bounded mux-reassembly tail hardening + WirePump
-  lookahead behavior on the live feed), tracked alongside the operator-witnessed live
-  pass.
+- **Bounded-before-decode, not DoS-proof.** The two caps fail closed before the BLUE
+  `ade_codec` decode path runs, so a single peer cannot drive unbounded in-memory growth
+  through the reassembly tail or the lookahead. This is **not** a claim of full network DoS
+  resistance and **not** a claim of peer resource fairness.
+- **Precision (recorded from the close reviews — do not soften, do not broaden):**
+  - The reassembly check is **post-extend** (`buf.len() > cap` after the buffer grew by the
+    arriving frame), so a single buffer's transient peak is `cap + one ≤64 KiB mux frame`
+    (~**16.06 MiB**), **not** an absolute 16 MiB.
+  - `ProtoBuffers` holds up to **~10 INDEPENDENT** per-mini-protocol buffers, each capped
+    separately, so the per-connection aggregate ceiling is **~10× the single-buffer cap** —
+    still **O(constant) per connection**. **Per-connection-COUNT limits / peer fairness are
+    a SEPARATE, out-of-scope surface** (not addressed by G-E).
+- **No BLUE change.** 456 BLUE canonical types unchanged (Δ0); `session/` is GREEN-by-content
+  (not a BLUE `ade_network` submodule), and the other two changed files are RED. The new
+  `SessionError` variant is GREEN-by-content and not canonical-counted. No new
+  `CoordinatorEvent` variant or field.
+- **Fences byte-unchanged; no live-evidence / BA-02 / RO-LIVE claim.** The serve/forge
+  containment gate (`ci_check_node_run_loop_containment.sh`) and the served-chain handoff
+  fence (`ci_check_served_chain_handoff_fence.sh`) are **byte-unchanged**. G-E flips **no**
+  RO-LIVE rule and makes **no** BA-02 / live-evidence claim. `RO-LIVE-01` stays `partial`
+  / `blocked_until_operator_stake_available`; the live operator pass is unchanged by this
+  cluster.
+- **Gating follow-ons (unchanged).** The bounty acceptance criterion — an
+  operator-witnessed accepted block on a peer that can grant leadership — remains gated on
+  the **operator-witnessed live pass** (**C1** private testnet, the cheapest real ACCEPT;
+  or **C2** preprod with ~2 epochs of provisioned active stake — the public preprod docker
+  peer cannot grant acceptance), plus the **PHASE4-N-F-G-D** private-testnet rehearsal.
+  G-E removes a hardening blocker for those runs; it does not advance the acceptance claim.
 
 ---
 
-## Generation notes (regen `339cccb1 → 90791691`, PHASE4-N-F-G-C)
+## Generation notes (regen `90791691 → 6f848825`, PHASE4-N-F-G-E)
 
-- **Baseline is `339cccb1`** (the `.idd-config.json` `head_deltas_baseline` value at
-  regen time — the PHASE4-N-F-G-B slice-span HEAD). **The close-pass commit must bump
-  `head_deltas_baseline` to `90791691`** (the G-C slice-span HEAD) so the next cluster's
-  `/head-deltas` measures from here. The registry-count comment stays 313 (no ID added
-  or removed across the window). The `.idd-config.json` edit itself is handled by the
-  closer, not this regen.
+- **Baseline is `90791691`** (the `.idd-config.json` `head_deltas_baseline` value at regen
+  time — the PHASE4-N-F-G-C slice-span HEAD). **The close-pass commit must bump
+  `head_deltas_baseline` to `6f848825`** (the G-E slice-span HEAD) so the next cluster's
+  `/head-deltas` measures from here. The registry-count comment must also bump:
+  `_invariant_registry_doc` currently reads **"313 entries at HEAD"** and must become
+  **"314 entries at HEAD"**. Both `.idd-config.json` edits are handled by the closer, not
+  this regen.
 - Counts are mechanical (git/grep/ls only, no cargo): commit log + `--shortstat` over
-  `339cccb1..90791691` (7 commits, no merges / 23 files / +2348 / -464); CI gate count
-  via `git ls-tree -r --name-only <ref> ci/ | grep -E 'ci_check_.*\.sh' | wc -l` at each
-  ref (117 → 118, **+1 new** — `ba02_evidence_manifest_schema` at S2, none removed; the
-  G-B gate `served_chain_handoff_fence` already existed at the baseline `339cccb1` and
-  was **broadened in place** by S1, so the net count change is the single S2 add);
-  registry rule count via `grep -c '^id = '` (and `grep -c '^\[\[rules\]\]'`) at each ref
-  (313 → 313, no ID added or removed); workspace test attributes via `git grep -hE
-  '#\[(tokio::)?test\]'` (2223 → 2230, +7); BLUE canonical types unchanged at 456 (no
-  BLUE crate file in the diff — verified: `git diff --name-only` matches no `core_paths`
-  entry).
-- **Two close events in one window (NOT an anomaly).** The **G-B** close-pass
-  (`febee120`) is **committed** inside this window (because the baseline `339cccb1` is
-  the G-B slice-span HEAD, not its close commit) — it flipped `DC-NODE-06`
-  `declared → enforced`, recorded the 2 G-B strengthenings, and refreshed the four
-  grounding docs to the **G-B** close. The **G-C** close-pass is **not yet committed**.
-  So at HEAD `90791691`: the registry has `DC-NODE-06` / `RO-LIVE-06` `enforced` (G-B
-  state) but **none** of the four G-C `strengthened_in` tokens; and the **committed**
-  CODEMAP / SEAMS / TRACEABILITY are still the **G-B** close docs (117 CI, 2223 tests,
-  no `ba02_pass`).
+  `90791691..6f848825` (**3** commits, no merges / **17** files / **+2120 / -1109**); CI
+  gate count via `git ls-tree -r --name-only <ref> ci/ | grep -c 'ci_check_.*\.sh'` at each
+  ref (**118 → 119**, **+1 new** — `live_feed_memory_bounds` at G-E S1, none removed, none
+  modified; the only file in `git diff --diff-filter=A 90791691..6f848825 -- ci/` is that
+  gate); registry rule count via `grep -c '^id = '` at each ref (**313 → 314**, the single
+  new ID `DC-LIVEMEM-01`; `diff` of sorted `^id =` lines shows exactly one `>` add and zero
+  `<` removals); workspace test attributes via `git grep -hE '#\[(tokio::)?test\]'`
+  (**2230 → 2234**, +4); BLUE canonical types unchanged at 456 (no BLUE `core_paths` file
+  in the diff — `session/` is GREEN-by-content, not a BLUE `ade_network` submodule).
+- **CI-gate premise corrected against git (not an anomaly).** The on-disk gate count at the
+  **baseline** `90791691` is **118** (verified `git ls-tree`), and the G-C close commit
+  `351d46bc` is also **118**. `ci_check_ba02_evidence_manifest_schema.sh` was added at
+  `90791691` **itself** (`git log --diff-filter=A -- ci/ci_check_ba02_evidence_manifest_schema.sh`
+  → `90791691`, G-C S2) — i.e., **at** this window's baseline, so it is **not** a
+  window-add; the previous (N-F-G-C) HEAD_DELTAS already counted it in its `339cccb1 →
+  90791691` window (117 → 118). This window's CI delta is therefore **118 → 119 (+1)** —
+  the single G-E gate — **not** 117 → 119 (+2). The G-C close `351d46bc` was docs/registry
+  only and added no gate.
+- **Two close events in one window (NOT an anomaly).** The **G-C** close-pass (`351d46bc`)
+  is **committed** inside this window (because the baseline `90791691` is the G-C slice-span
+  HEAD, not its close commit) — it recorded the four G-C `strengthened_in` tokens, bound the
+  G-C gate to `RO-LIVE-06` / `CN-OPERATOR-EVIDENCE-01`, refreshed the four grounding docs to
+  the **G-C** close, and bumped the baseline `339cccb1 → 90791691`. The **G-E** close-pass
+  is **not yet committed**. So at HEAD `6f848825`: the registry has the four G-C tokens
+  committed and `DC-LIVEMEM-01` as `declared` (the `enforced` flip is working-tree only);
+  and the **committed** CODEMAP / SEAMS / TRACEABILITY are still the **G-C** close docs (118
+  CI, 2230 tests, 313 rules, no `DC-LIVEMEM-01`).
 - **Sibling-doc coherence (working tree).** The CODEMAP / SEAMS / TRACEABILITY **working
-  tree** (and the registry) have already been regenerated to the **G-C** close state —
-  **118** CI checks (matches the on-disk `ls ci/ci_check_*.sh | wc -l = 118`), **456**
-  canonical types, **2230** tests, **313** rules, with the new `ba02_pass` locus and the
-  `ba02_evidence_manifest_schema` gate cross-referenced — and they **agree** with this
-  doc's counts. `git status` shows `docs/ade-CODEMAP.md`, `docs/ade-SEAMS.md`,
-  `docs/ade-TRACEABILITY.md`, and `docs/ade-invariant-registry.toml` modified
-  (working-tree close-pass edits already applied); `docs/ade-HEAD_DELTAS.md` and
+  tree** (and the registry) have already been regenerated to the **G-E** close state —
+  **119** CI checks (matches the on-disk `ls ci/ci_check_*.sh | wc -l = 119`), **456**
+  canonical types, **2234** tests, **314** rules, with `DC-LIVEMEM-01` `enforced`, the new
+  `session::core` / `node_sync` caps, and the `live_feed_memory_bounds` gate cross-referenced
+  — and they **agree** with this doc's counts (CODEMAP/SEAMS headers explicitly read "119 CI
+  checks at HEAD (`6f848825`, PHASE4-N-F-G-E cluster close)"; `DC-LIVEMEM-01` appears 13× in
+  CODEMAP, 27× in SEAMS, 18× in TRACEABILITY). `git status` shows `docs/ade-CODEMAP.md`,
+  `docs/ade-SEAMS.md`, `docs/ade-TRACEABILITY.md`, and `docs/ade-invariant-registry.toml`
+  modified (working-tree close-pass edits already applied); `docs/ade-HEAD_DELTAS.md` and
   `.idd-config.json` are the two files this regen / the close-pass still owe.
-- **CI cross-reference warning.** `ci_check_ba02_evidence_manifest_schema.sh` is cited by
-  `RO-LIVE-06` / `CN-OPERATOR-EVIDENCE-01` only in the **working-tree** registry
-  (uncommitted at this HEAD); the **committed** TRACEABILITY at `90791691` is the G-B
-  close doc and does not yet show it. The close-pass commits the `ci_script` bindings and
-  regenerates the committed TRACEABILITY. (The G-B gate `served_chain_handoff_fence` +
-  the containment gate are already cited by `DC-NODE-06` in the committed registry, via
-  `febee120`.)
-- **Not a rule removal, not a discipline violation** — the working-tree-vs-committed
-  split is a sequencing artifact reconciled by the close-pass (which commits the four
-  G-C `strengthened_in` tokens, the two new `ci_script` bindings, the
-  CODEMAP/SEAMS/TRACEABILITY working-tree regen, the `.idd-config.json` baseline bump
-  `339cccb1 → 90791691`, the G-C cluster-doc archive, and this HEAD_DELTAS). The next
-  sub-cluster work is the **operator-witnessed live pass** (C1/C2) that flips
-  `RO-LIVE-01` off `partial` and produces a real BA-02 manifest — plus the MEDIUM
-  mux-reassembly-tail / WirePump-lookahead follow-on newly exposed on the live feed.
+- **CI cross-reference warning.** `ci_check_live_feed_memory_bounds.sh` is cited by
+  `DC-LIVEMEM-01` only in the **working-tree** registry / TRACEABILITY (the committed
+  TRACEABILITY at `6f848825` is still the G-C close doc and does not yet show it). The
+  close-pass commits the `ci_script` binding's enforced state and regenerates the committed
+  TRACEABILITY. (The G-C gate `ba02_evidence_manifest_schema` and the handoff/containment
+  fences are already cited in the committed registry, via `351d46bc` / earlier.)
+- **Not a rule removal, not a discipline violation** — the working-tree-vs-committed split
+  is a sequencing artifact reconciled by the close-pass (which commits the `DC-LIVEMEM-01`
+  `declared → enforced` flip, the CODEMAP/SEAMS/TRACEABILITY working-tree regen, the
+  `.idd-config.json` baseline bump `90791691 → 6f848825` + the `313 → 314` registry-count
+  comment, the G-E cluster-doc archive, and this HEAD_DELTAS). The next gating work is the
+  **operator-witnessed live pass** (C1/C2) and the **PHASE4-N-F-G-D** private-testnet
+  rehearsal — neither advanced by G-E, which only removes a bounded-memory hardening
+  blocker ahead of them.

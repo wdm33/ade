@@ -11,8 +11,8 @@ Bound the live-feed memory surfaces (reassembly-tail cap + WirePump lookahead-de
 **PHASE4-N-F-G-E** — Live-feed bounded memory.
 
 ### Status
-Ready for Review (all §12 mechanical acceptance green; `ade_network` + `ade_node` suites pass, both
-fences byte-unchanged + green, `ci_check_live_feed_memory_bounds.sh` green; no BLUE change).
+Merged (PHASE4-N-F-G-E close — impl `6f848825`; CE-G-E-1 green; DC-LIVEMEM-01 enforced; IDD + security
+review PASS, no BLOCK).
 
 ### Cluster Exit Criteria Addressed
 - [x] **CE-G-E-1 (live-feed memory bounded + fail-closed)** — the four named tests pass; the existing

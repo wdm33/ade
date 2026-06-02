@@ -5566,16 +5566,30 @@ tests = ["session_reassembly_tail_over_cap_fails_closed", "session_reassembly_ta
 ci_script = "ci/ci_check_live_feed_memory_bounds.sh"
 introduced_in = "PHASE4-N-F-G-E"
 strengthened_in = []
-status = "declared"
+status = "enforced"
 evidence_notes = """
-PHASE4-N-F-G-E invariant sketch (/invariants gate). Declared at sketch; tests +
-ci_script populate at slice time, flip to enforced at close. Prompted by the
-PHASE4-N-F-G-C per-cluster security review (MEDIUM) + SEAMS §7 candidate #6: the
-G-C live-feed wiring EXPOSED two pre-existing unbounded peer-driven memory
-surfaces (reused N-M-FRAG / N-M-C infra) on the --mode node binary path. The
-prior CBOR length-overflow remote-DoS (fixed in N-X) is NOT reintroduced -- this
-is a pre-decode reassembly/scheduling bound. Bounds: MAX_REASSEMBLY_TAIL_BYTES =
-16 MiB (session::core, GREEN); MAX_WIRE_PUMP_LOOKAHEAD = 256 (node_sync, RED).
+PHASE4-N-F-G-E invariant sketch (/invariants gate). ENFORCED at the
+PHASE4-N-F-G-E close (4 tests + ci_check_live_feed_memory_bounds.sh green; both
+containment fences byte-unchanged; IDD + per-cluster security review PASS, no
+BLOCK). Prompted by the PHASE4-N-F-G-C per-cluster security review (MEDIUM) +
+SEAMS §7 candidate #6: the G-C live-feed wiring EXPOSED two pre-existing
+unbounded peer-driven memory surfaces (reused N-M-FRAG / N-M-C infra) on the
+--mode node binary path. The prior CBOR length-overflow remote-DoS (fixed in
+N-X) is NOT reintroduced -- this is a pre-decode reassembly/scheduling bound.
+Bounds: MAX_REASSEMBLY_TAIL_BYTES = 16 MiB (session::core, GREEN);
+MAX_WIRE_PUMP_LOOKAHEAD = 256 (node_sync, RED).
+
+Precision (close-review, do not overclaim): the reassembly check is post-extend,
+so a single buffer's transient peak is cap + one <=64 KiB mux frame (~16.06 MiB),
+not an absolute 16 MiB. ProtoBuffers holds up to 10 INDEPENDENT per-protocol
+buffers each capped separately, so the per-connection aggregate ceiling is ~10x
+the single-buffer cap -- still O(constant) per connection (the invariant
+"peer-driven memory is bounded before decode/apply" holds). Per-connection-COUNT
+limits / peer resource fairness are a SEPARATE, out-of-scope surface (a future
+hardening slice). The claim is NARROW: bounded memory before authoritative
+decode/apply -- NOT full network DoS resistance, NOT peer fairness, NOT
+BA-02/live-evidence readiness.
+
 NO live-evidence / BA-02 / rehearsal claim; NO RO-LIVE flip; NO serve / forge /
 containment change.
 """
