@@ -5739,3 +5739,71 @@ BLUE/containment surface. All 6 gates green; cargo test -p ade_node green. Barri
 now actually enforced -- CN-REHEARSAL-FIDELITY-01 is mechanically complete (S1 + S2 + S3 +
 S4); the declared->enforced flip happens at the re-run /cluster-close PHASE4-N-F-G-D.
 """
+
+[[rules]]
+id = "DC-NODE-07"
+tier = "derived"
+statement = """
+Node-spine live serve-to-peer. --mode node serves real peers ONLY from the G-B
+self-accepted ServedChainView (the read side of the single ServedChainHandle fed by the
+sibling self-accept->serve push task, DC-NODE-06), OUTSIDE run_relay_loop, THROUGH the
+existing ChainSync + BlockFetch serve reducers, with NO second serve authority or
+serializer. A sibling listener + serve-dispatch task (spawned outside the relay loop,
+mirroring the G-B push task) reuses the existing N2N serve machinery (run_n2n_listener +
+dispatch_server_frame_event_to_outbound) and the BLUE producer_chain_sync_serve +
+producer_block_fetch_serve (+ producer_chain_sync_advance_tip) -- serving BOTH the
+ChainSync header advertisement (a follower discovers Ade's served tip on each
+ServedChainView update, DC-CONS-18) AND the BlockFetch body (the follower fetches the
+served block by hash, DC-CONS-17), under the closed server-agency reply surface
+(CN-PROTO-06) and the deterministic/total session reducers (DC-PROTO-07, DC-PROTO-08).
+There is NO second ServedChain authority, NO parallel tag-24 serializer (the single
+CN-WIRE-08 envelope authority), and NO serve / push_atomic / served-chain mutation inside
+run_relay_loop (the containment gate ci_check_node_run_loop_containment.sh stays
+SEMANTICALLY UNCHANGED, CN-NODE-02). --mode node reuses the EXISTING --listen flag (no new
+--mode node argv flag; the S1 path-fidelity fence ci_check_node_path_fidelity.sh stays
+green) and is NOT switched to --mode produce. Wiring the serve is NOT a peer-acceptance
+claim: acceptance is proven ONLY by the peer's validation log through
+ba02_evidence::correlate (RO-LIVE-06), and RO-LIVE-01 / RO-LIVE-06 do NOT flip at this
+cluster's implementation close.
+"""
+source = "docs/planning/phase4-n-f-g-h-invariants.md"
+cross_ref = ["DC-NODE-06", "CN-NODE-02", "DC-CONS-17", "DC-CONS-18", "CN-PROTO-06", "DC-PROTO-07", "DC-PROTO-08", "CN-WIRE-08", "CN-FORGE-01", "RO-LIVE-01", "RO-LIVE-06", "CN-REHEARSAL-FIDELITY-01"]
+code_locus = "crates/ade_node/src/node_lifecycle.rs (retain the ServedChainView + spawn the sibling listener/serve-dispatch task outside run_relay_loop -- the only new code), crates/ade_node/src/produce_mode.rs (run_n2n_listener + dispatch_server_frame_event_to_outbound + new_per_peer_outbound -- shared serve adapter to be EXTRACTED to a shared module, not duplicated; OQ1), crates/ade_network/src/chain_sync/server.rs (producer_chain_sync_serve + producer_chain_sync_advance_tip -- reused BLUE), crates/ade_network/src/block_fetch/server.rs (producer_block_fetch_serve -- reused BLUE), crates/ade_runtime/src/producer/served_chain_handle.rs (ServedChainHandle/ServedChainView -- reused GREEN)"
+tests = []
+ci_script = ""
+introduced_in = "PHASE4-N-F-G-H"
+strengthened_in = []
+status = "declared"
+evidence_notes = """
+PHASE4-N-F-G-H invariant sketch (/invariants gate). Declared at sketch; tests + ci_script
+populate at slice time, flip to enforced at close. Surfaced by the G-D C1 dry-run: --mode
+node forges + self-accepts + pushes into a ServedChainHandle but DISCARDS the
+ServedChainView read side (node_lifecycle.rs "no live reader") and runs NO listener / NO
+serve server on the node spine, so a real Haskell follower cannot fetch Ade's forged block
+-- forge-acceptance is unreachable in --mode node. This is the owed SHARED-PATH leg (C2
+preprod needs it too); fixed on the node spine (NOT --mode produce) so the G-D
+path-fidelity guarantee (CN-REHEARSAL-FIDELITY-01) holds. Reuse, not new authority: the
+BLUE serve reducers (ade_network) + the GREEN ServedChainView (ade_runtime) already exist
+and produce_mode already drives both; the only new code is RED wiring (retain the view +
+spawn the sibling serve task). A follower needs BOTH ChainSync (header discovery,
+DC-CONS-18) AND BlockFetch (body, DC-CONS-17) -- verified in produce_mode's existing
+dual-serve, not assumed.
+
+Slice-entry proof obligation (OQ2 / A7): C1 must prove a topology that makes BOTH required
+traffic directions true -- (a) Ade receives a Continuing UPSTREAM live feed that keeps
+NodeBlockSource::WirePump Continuing so the forge loop reaches ForgeTick, AND (b) a
+DOWNSTREAM Haskell follower connects to Ade's --listen, discovers the served header via
+ChainSync, and fetches the body via BlockFetch. These are DISTINCT traffic directions;
+"serve is wired" is insufficient. Do NOT assume one connection can satisfy both directions.
+Whether one reciprocal Haskell peer (Ade --peer Haskell; Haskell topology includes Ade) or
+two Haskell nodes realizes the topology is resolved at slice entry, not assumed.
+
+Open at sketch: (OQ3) the node-spine ChainSync server MUST advertise the served tip when
+ServedChainView updates so a follower can request the block body by hash through BlockFetch
+-- so the shared serve adapter must include produce_mode's ChainSync advance/serve behavior
+(producer_chain_sync_advance_tip), not BlockFetch alone. (OQ1) the shared serve adapter
+(dispatch_server_frame_event_to_outbound + new_per_peer_outbound, currently private in RED
+produce_mode) is EXTRACTED to a shared serve module both modes call -- never duplicated (no
+second serve authority); its TCB color is resolved at cluster-plan. The kept
+~/.cardano-private-testnet-c1 net is the regression harness for the live proof of OQ2/OQ3.
+"""
