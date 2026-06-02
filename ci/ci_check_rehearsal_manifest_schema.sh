@@ -33,16 +33,34 @@ cd "$REPO_ROOT"
 
 REHEARSAL_HOME="docs/evidence"
 REHEARSAL_GLOB="phase4-n-f-g-d-private-rehearsal-*.toml"
-BOUNTY_HOME="docs/clusters/PHASE4-N-F-G-C"
+# All real bounty-evidence homes a CE-G-C-LIVE manifest could live in: the active
+# operator-pass home AND the archived home (G-C is archived to completed/). A
+# rehearsal marker must never appear in ANY of them. (PHASE4-N-F-G-D S4 — the
+# pre-S4 gate scanned only the active home behind an `[[ -d ]]` guard, so after
+# G-C's archival the whole check silently skipped.)
+BOUNTY_HOMES=("docs/clusters/PHASE4-N-F-G-C" "docs/clusters/completed/PHASE4-N-F-G-C")
 
 FAIL=0
 
-# --- non-promotability cross-check: no rehearsal marker in any .toml under the
-#     bounty home (a rehearsal manifest must never live in the bounty home) -----
-if [[ -d "$BOUNTY_HOME" ]]; then
-  LEAK="$(grep -rlE '^(is_rehearsal|not_bounty_evidence)[[:space:]]*=' "$BOUNTY_HOME" --include='*.toml' 2>/dev/null || true)"
-  if [[ -n "$LEAK" ]]; then
-    echo "[ci_check_rehearsal_manifest_schema] FAIL — rehearsal marker found in a .toml under the bounty home $BOUNTY_HOME (a rehearsal manifest must never live in the bounty home):"
+# --- non-promotability cross-check: no rehearsal marker in any .toml under any
+#     bounty home. Build the list of EXISTING homes first, then scan those.
+#     "Home absent" => empty contribution (deliberate) — never "skip the check".
+#     A scan ERROR on an EXISTING home (grep rc >= 2) => fail closed, NOT swallowed
+#     (so `2>/dev/null || true` is deliberately NOT used over the existing homes). -
+EXISTING_BOUNTY_HOMES=()
+for h in "${BOUNTY_HOMES[@]}"; do
+  [[ -d "$h" ]] && EXISTING_BOUNTY_HOMES+=("$h")
+done
+if (( ${#EXISTING_BOUNTY_HOMES[@]} > 0 )); then
+  set +e
+  LEAK="$(grep -rlE '^(is_rehearsal|not_bounty_evidence)[[:space:]]*=' "${EXISTING_BOUNTY_HOMES[@]}" --include='*.toml')"
+  grep_rc=$?
+  set -e
+  if (( grep_rc >= 2 )); then
+    echo "[ci_check_rehearsal_manifest_schema] FAIL — leak scan errored on an existing bounty home (grep rc=$grep_rc); failing closed (an existing home that cannot be scanned is never silently passed)"
+    FAIL=1
+  elif [[ -n "$LEAK" ]]; then
+    echo "[ci_check_rehearsal_manifest_schema] FAIL — rehearsal marker found in a .toml under a bounty home (a rehearsal manifest must never live in a bounty home):"
     echo "$LEAK"
     FAIL=1
   fi

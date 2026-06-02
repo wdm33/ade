@@ -5722,4 +5722,20 @@ CN-REHEARSAL-FIDELITY-01 is complete; the tests/ci_script binding + the declared
 flip happen at /cluster-close PHASE4-N-F-G-D. The live C1 run is
 blocked_until_operator_c1_net_executed; the bounty deliverable remains the separate C2
 preprod pass.
+
+PHASE4-N-F-G-D S4 (rehearsal leak gate archived-home hardening) LANDED: fixes the
+per-cluster-security-review HIGH (barrier b dead). ci/ci_check_rehearsal_manifest_schema.sh
+now scans ALL real bounty homes -- docs/clusters/PHASE4-N-F-G-C/ (active) AND
+docs/clusters/completed/PHASE4-N-F-G-C/ (archived) -- by building the EXISTING-homes list
+first (no [[ -d ]] whole-check skip): "home absent" => empty contribution (deliberate); a
+scan error on an EXISTING home (grep rc>=2) => fail closed, not swallowed. New durable
+regression test crates/ade_node/tests/rehearsal_gate_archived_home.rs
+(rehearsal_gate_fails_on_archived_home_leak): clean tree => gate green; a rehearsal-marked
+.toml under the ARCHIVED home => gate FAILS (Drop-guarded fixture). VERIFIED: the exact
+pre-S4 smuggle that passed (exit 0) now fails (exit 1). NO change to the BA-02 bounty gate
+(its same stale active-home glob is a separate follow-up), to rehearsal_evidence /
+rehearsal_pass (no toml_escape fold-in -- deferred), to the S1 fence, or to any
+BLUE/containment surface. All 6 gates green; cargo test -p ade_node green. Barrier (b) is
+now actually enforced -- CN-REHEARSAL-FIDELITY-01 is mechanically complete (S1 + S2 + S3 +
+S4); the declared->enforced flip happens at the re-run /cluster-close PHASE4-N-F-G-D.
 """
