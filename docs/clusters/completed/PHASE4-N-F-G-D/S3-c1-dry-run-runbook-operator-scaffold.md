@@ -11,7 +11,7 @@ C1 dry-run runbook + operator-gated execution scaffold (a strict subset of the G
 **PHASE4-N-F-G-D** — Private-testnet accepted-block bounty dry-run.
 
 ### Status
-Planned (cluster doc `ce313927`; S1 merged `d4d0f456`, S2 merged `459cf78d`). Third and final slice — the operator-gated half.
+Merged (PHASE4-N-F-G-D close — impl `076a5af5`; CE-G-D-3 green). Third slice — the operator-gated half.
 
 ### Cluster Exit Criteria Addressed
 - [ ] **CE-G-D-3 (operator-gated C1 dry-run — SCAFFOLDS ONLY; live execution BLOCKED)** — the C1 dry-run runbook is committed as a **provable strict subset** of the preprod operator-pass runbook (`docs/evidence/phase4-n-f-g-c-operator-pass-README.md`), differing only in venue (operator-authored private genesis stake → fast slots; follower peer, one-producer-per-key) and the rehearsal label; the rehearsal-evidence I/O is wired end-to-end and exercised on a hermetic fixture; **no synthetic manifest committed**; the actual C1 live execution is `blocked_until_operator_c1_net_executed` (named, not deferred).

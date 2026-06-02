@@ -4,337 +4,388 @@
 >
 > Regenerate with `/head-deltas <baseline>` after every cluster close. Baseline is recorded in `.idd-config.json` `head_deltas_baseline`.
 
-> Baseline: `90791691` (wire operator peer-log → correlate BA-02 evidence path — PHASE4-N-F-G-C S2, 2026-06-02 01:22)
-> HEAD: `6f848825` (bound live-feed memory before authoritative decode — PHASE4-N-F-G-E S1, 2026-06-02 12:48)
-> Cluster: **PHASE4-N-F-G-E — live-feed bounded memory before authoritative decode/apply on the `--mode node` spine**, slice span closed; close-pass commit to follow.
-> 3 commits (no merges), 17 files changed, +2120 / -1109 lines.
+> Baseline: `6f848825` (bound live-feed memory before authoritative decode — PHASE4-N-F-G-E S1, 2026-06-02 12:48)
+> HEAD: `6bd60c80` (scan archived bounty home in rehearsal leak gate — PHASE4-N-F-G-D S4, 2026-06-02 17:10)
+> Cluster: **PHASE4-N-F-G-D — private-testnet accepted-block bounty DRY-RUN fidelity harness on the `--mode node` spine**, slice span closed; close-pass commit to follow.
+> 12 commits (no merges), 24 files changed, +2928 / -499 lines.
 
-This window narrates the **PHASE4-N-F-G-E cluster** — an operational-hardening cluster
-that **bounds peer-driven memory on the live `--mode node` feed BEFORE the authoritative
-BLUE decode/apply path**, with **NO BLUE crate changed**. The cluster is a single slice
-(S1) prompted by the PHASE4-N-F-G-C per-cluster security review (MEDIUM) and SEAMS §7
-candidate #6: the G-C live-feed wiring **exposed** two pre-existing unbounded peer-driven
-memory surfaces (reused N-M-FRAG / N-M-C infra) on the binary path — it did not introduce
-them. G-E caps both, each **fail-closed before the BLUE `ade_codec` decode path**:
+This window narrates the **PHASE4-N-F-G-D cluster** — a bounty **dry-run fidelity** cluster
+that ships a **path-faithful, NON-PROMOTABLE rehearsal HARNESS** for the private-testnet
+(C1) accepted-block dry-run, **with NO BLUE crate changed**. G-D answers one question early
+— *will a real Haskell node accept an Ade-forged block when Ade has legitimate leader
+rights?* — by exercising the **EXACT** preview/preprod `--mode node` accepted-block path in a
+venue where the operator controls stake (a private genesis that makes Ade win slots fast).
+The cluster is **four slices**, each fail-faithful to the shared path:
 
-- **GREEN `ade_network::session::core`** gains a closed const `MAX_REASSEMBLY_TAIL_BYTES =
-  16 * 1024 * 1024` (16 MiB). After `drain_protocol_items` drains every COMPLETE item, an
-  incomplete per-mini-protocol reassembly *tail* `> cap` returns the NEW additive closed
-  variant `SessionError::ReassemblyBufferOverflow { protocol, len, cap }` — **drop the
-  peer** (no silent truncation, no partial decode, no unbounded fallback).
-- **RED `ade_node::node_sync`** gains a closed const `MAX_WIRE_PUMP_LOOKAHEAD = 256`. The
-  `pump_lookahead` opportunistic `try_recv` drain stops at the cap so the existing bounded
-  `mpsc` (`LIVE_WIRE_PUMP_CHANNEL_CAP = 64`) **back-pressures** the pump.
-- **RED `ade_runtime::network::mux_pump`** maps the new `SessionError` variant
-  (`session_err_to_halt`) → `PeerHaltReason::ChainSyncDecodeError` (drop the peer).
+- **S1 (`d4d0f456`) — path fidelity.** Proves the C1 private dry-run uses the **same**
+  `--mode node` accepted-block path as preview/preprod (`import_live_consensus_inputs` →
+  forge → self-accept → sibling-serve → block-fetch → peer log → correlate) with **NO**
+  private-only flag, branch, bootstrap authority, or from-genesis constructor — the only
+  differences are operator **inputs** (the private genesis stake allocation) and the
+  evidence **label** (S2). New gate `ci_check_node_path_fidelity.sh` pins the `cli.rs` flag
+  set to a **28-flag closed allow-list** (guard a) and forbids any from-genesis
+  consensus-inputs constructor while requiring `node_lifecycle.rs` to source consensus
+  inputs only via the shared `import_live_consensus_inputs` (guard b).
+- **S2 (`459cf78d`) — rehearsal evidence surface.** New **GREEN** `ade_node::rehearsal_evidence`
+  (`PrivateRehearsalManifest` **wraps** a correlate-produced `Ba02Manifest` in a structurally
+  distinct, non-promotable envelope; sole ctor `from_correlate_outcome` returns `None` on
+  `NoEvidence`; `to_canonical_toml` always emits `is_rehearsal = true` + `not_bounty_evidence
+  = true` as **literals**). New **RED** `ade_node::rehearsal_pass` (file I/O that **reuses**
+  `ba02_pass::correlate_peer_log_file` verbatim and writes only a `PrivateRehearsalManifest`).
+  New gate `ci_check_rehearsal_manifest_schema.sh` — vacuous-until-committed; closed
+  **12-field** schema + private-testnet venue + the two non-promotability markers +
+  `peer_log_file_sha256` binding; **three** non-promotability barriers.
+- **S3 (`076a5af5`) — C1 dry-run runbook + operator scaffold.** A runbook that is a provable
+  **strict subset** of the G-C preprod operator-pass runbook, plus the RED test file
+  `node_c1_dry_run_rehearsal.rs` (a hermetic correlate→envelope proof + the env-gated
+  `node_c1_dry_run_rehearsal_live` operator harness — a RED test skipped in CI, **NOT** a
+  runtime node mode). **No** binary wiring, no new flag, no new gate, no synthetic manifest.
+- **S4 (`6bd60c80`) — close-surfaced security fix.** The S2 rehearsal leak gate's barrier
+  (b) was **dead** after G-C's archival (the pre-S4 `[[ -d ]]` guard skipped the whole check
+  because the active home had moved to `docs/clusters/completed/`). S4 repoints the gate to
+  scan **both** real bounty homes (active **and** archived) fail-closed and adds a durable
+  regression test (`rehearsal_gate_archived_home.rs`).
 
-The bounds are **CLOSED CONSTANTS** — defensive implementation bounds, not Cardano
-semantic parameters; **no runtime option (CLI / env / config) may disable them or set them
-unbounded**, enforced by the NEW gate `ci_check_live_feed_memory_bounds.sh`. The new rule
-`DC-LIVEMEM-01` (`tier = derived`, operational-hardening) is **enforced** at this close.
-**The bounty acceptance criterion is NOT satisfied by this cluster** — the claim is narrow
-(memory bounded before authoritative decode), and the operator-witnessed live pass remains
-the gating follow-on.
+The new rule `CN-REHEARSAL-FIDELITY-01` (`tier = release`, two coupled clauses — path
+fidelity + evidence non-promotability) is **enforced** at this close (in the working-tree
+registry; committed as `declared` at the slice-span HEAD — see the sequencing note below).
+**G-D closes a NARROW claim: the rehearsal HARNESS is path-faithful and non-promotable.** It
+does **NOT** enforce that a C1 run has succeeded (the rehearsal gate is **vacuous until a
+real operator-produced manifest is committed**); it flips **NO** RO-LIVE rule; it makes **NO**
+bounty / preview / preprod completion claim; the live C1 execution stays
+`blocked_until_operator_c1_net_executed`.
 
-The span also carries the **PHASE4-N-F-G-C close tail** (`351d46bc`) — docs/registry only
-— which lands inside this window because the baseline `90791691` is the N-F-G-C
-*slice-span* HEAD, not its close commit (see §1). This mirrors how the previous
-HEAD_DELTAS window carried the **G-B** close tail (`febee120`), and the one before that the
-**G-A** tail (`62cb8718` + `1806584c`), for the same slice-span-vs-close-commit reason.
+The span also carries the **PHASE4-N-F-G-E close tail** (`da205bff`) — docs/registry only —
+which lands inside this window because the baseline `6f848825` is the N-F-G-E *slice-span*
+HEAD, not its close commit (see §1). This mirrors how the previous HEAD_DELTAS window
+carried the **G-C** close tail (`351d46bc`), and the ones before that the **G-B** tail
+(`febee120`) and the **G-A** tail (`62cb8718` + `1806584c`), for the same
+slice-span-vs-close-commit reason.
 
 ## 0. Headline
 
-| Count | Baseline (`90791691`) | HEAD (`6f848825`) | Δ |
+| Count | Baseline (`6f848825`) | HEAD (`6bd60c80`) | Δ |
 |---|---|---|---|
-| CI gates (`ci/ci_check_*.sh`) | 118 | **119** | **+1 new** (`live_feed_memory_bounds`, G-E S1); none removed, none modified |
-| Registry rules | 313 | **314** | **+1** (`DC-LIVEMEM-01`, G-E); plus the 4 G-C-close `strengthened_in` tokens land in this window (no ID added by them) |
-| Test attributes (`#[test]`/`#[tokio::test]`, workspace) | 2230 | **2234** | **+4** (the four `DC-LIVEMEM-01` tests, across `session::core` + `node_sync`) |
-| BLUE canonical types | 456 | 456 | **0 — NO BLUE change** (`session/` is GREEN-by-content, not a BLUE `ade_network` submodule; the other two changed files are RED) |
+| CI gates (`ci/ci_check_*.sh`) | 119 | **121** | **+2 new** (`node_path_fidelity` G-D S1, `rehearsal_manifest_schema` G-D S2); none removed, none modified |
+| Registry rules | 314 | **315** | **+1** (`CN-REHEARSAL-FIDELITY-01`, G-D); no other ID added — G-D records **no** `strengthened_in` bump (it does not advance the bounty deliverable) |
+| Test attributes (`#[test]`/`#[tokio::test]`, workspace) | 2234 | **2241** | **+7** (the seven G-D tests, across `node_path_fidelity` + `rehearsal_pass` + `node_c1_dry_run_rehearsal` + `rehearsal_gate_archived_home`) |
+| BLUE canonical types | 456 | 456 | **0 — NO BLUE change** (`git diff --name-only 6f848825..6bd60c80` matches **no** BLUE `core_paths` entry; the changed source is all `ade_node` — RED `rehearsal_pass` + GREEN-by-content `rehearsal_evidence` + the `lib.rs` `pub mod` lines) |
 
-> **Registry / grounding-doc sequencing note (load-bearing — read before §7).** This
-> window contains **two** distinct close events, and the registry / sibling-doc state
-> differs between *committed at HEAD `6f848825`* and *the working tree at this regen*:
+> **Registry / grounding-doc sequencing note (load-bearing — read before §7).** This window
+> contains **two** distinct close events, and the registry / sibling-doc state differs
+> between *committed at HEAD `6bd60c80`* and *the working tree at this regen*:
 >
-> - **The G-C close-pass (`351d46bc`) is committed inside this window.** At HEAD
->   `6f848825` the registry therefore already reflects the G-C close: the **four** G-C
->   `strengthened_in += "PHASE4-N-F-G-C"` tokens (`RO-LIVE-01` stays `partial`;
->   `RO-LIVE-06` / `CN-OPERATOR-EVIDENCE-01` / `DC-NODE-06` stay `enforced`) are
->   **committed**, as is the G-C gate `ci_check_ba02_evidence_manifest_schema.sh`. (That
->   gate was committed at the **baseline** `90791691` itself — G-C S2 — so it does **not**
->   appear as a window-add; see the CI lineage in §5.) This is the close-pass the
->   **previous** HEAD_DELTAS window flagged as owed at its `90791691` HEAD.
-> - **The G-E close-pass is NOT yet committed.** At HEAD `6f848825` the new rule
->   `DC-LIVEMEM-01` is committed as `status = "declared"` (its `tests` + `ci_script` are
->   populated by the S1 impl) — but the **flip to `enforced`** lives only in the **working
->   tree** at this regen. So does the working-tree regeneration of CODEMAP / SEAMS /
->   TRACEABILITY to the G-E close state. The pending close-pass commits the flip and the
->   three siblings — exactly as the N-F-G-C close-pass committed the G-C strengthenings
+> - **The G-E close-pass (`da205bff`) is committed inside this window.** At HEAD `6bd60c80`
+>   the registry therefore already reflects the G-E close: `DC-LIVEMEM-01` is `enforced`, and
+>   the G-E gate `ci_check_live_feed_memory_bounds.sh` is committed. This is the close-pass
+>   the **previous** HEAD_DELTAS window flagged as owed at its `6f848825` HEAD.
+> - **The G-D close-pass is NOT yet committed.** At HEAD `6bd60c80` the new rule
+>   `CN-REHEARSAL-FIDELITY-01` is committed as `status = "declared"` with `tests = []` and
+>   `ci_script = ""` — but the **flip to `enforced`** and the binding of its `tests` +
+>   `ci_script` arrays live only in the **working tree** at this regen (where the rule is
+>   already `enforced`, `tests = [node_accepted_block_consensus_inputs_via_shared_import,
+>   rehearsal_envelope_wraps_correlate_produced_payload,
+>   rehearsal_correlate_no_evidence_writes_nothing,
+>   rehearsal_envelope_is_structurally_distinct_from_ba02_manifest,
+>   c1_dry_run_correlate_to_rehearsal_envelope, node_c1_dry_run_rehearsal_live,
+>   rehearsal_gate_fails_on_archived_home_leak]`, `ci_script = "ci/ci_check_node_path_fidelity.sh,
+>   ci/ci_check_rehearsal_manifest_schema.sh"`). The pending close-pass commits the flip and
+>   the array bindings — exactly as the N-F-G-E close-pass committed the `DC-LIVEMEM-01` flip
 >   after its slice span.
-> - **Sibling-doc split.** The CODEMAP / SEAMS / TRACEABILITY **committed at HEAD
->   `6f848825`** are still the **G-C close** docs (`351d46bc`): they report **118** CI
->   checks, **2230** tests, **313** rules, and do **not** mention `DC-LIVEMEM-01` or
->   `ci_check_live_feed_memory_bounds.sh`. The **working tree** of all three (and the
->   registry) has been **regenerated to the G-E close state** — **119** CI checks, **456**
->   canonical types, **2234** tests, **314** rules, with `DC-LIVEMEM-01` `enforced`, the
->   new `session::core` / `node_sync` caps, and the new gate cross-referenced — and they
->   **agree** with this doc's counts (CODEMAP/SEAMS headers: "119 CI checks at HEAD
->   (`6f848825`, PHASE4-N-F-G-E cluster close)"). `docs/ade-HEAD_DELTAS.md` and
->   `.idd-config.json` are the only two files this regen / the close-pass still owe; the
->   `.idd-config.json` baseline bump is the closer's edit, not this regen's.
+> - **Sibling-doc split (partial — not uniform).** The **registry** and **CODEMAP** working
+>   trees have been regenerated to the **G-D** close state (registry: 315 rules,
+>   `CN-REHEARSAL-FIDELITY-01` `enforced`; CODEMAP header: "456 canonical types, **2241**
+>   tests, **121** CI checks at HEAD (`6bd60c80`, PHASE4-N-F-G-D cluster close)", with the
+>   full G-D delta block and **32** `rehearsal_*` mentions). But **SEAMS and TRACEABILITY
+>   are still the G-E close docs** — they have **not** been regenerated for G-D: TRACEABILITY
+>   still reads "**314 rules** at this working tree" referencing `6f848825` / `DC-LIVEMEM-01`,
+>   and neither SEAMS nor TRACEABILITY mentions `CN-REHEARSAL-FIDELITY-01`, the two new G-D
+>   gates, or G-D at all. The **committed** CODEMAP / SEAMS / TRACEABILITY at HEAD `6bd60c80`
+>   are all still the **G-E close** docs (119 CI checks, 2234 tests, 314 rules, no G-D delta).
+>   `docs/ade-HEAD_DELTAS.md`, the **SEAMS/TRACEABILITY G-D regen**, and the `.idd-config.json`
+>   baseline bump are what this regen / the close-pass still owe; the `.idd-config.json`
+>   baseline has **already** been bumped to `6bd60c80` (the closer's edit), so `/head-deltas`
+>   for this window uses the **explicit** `6f848825..6bd60c80` span, not the config value.
 >
-> **Not a rule removal, not a discipline violation** — a sequencing artifact reconciled
-> by the close-pass.
+> **Not a rule removal, not a discipline violation** — a sequencing artifact reconciled by
+> the close-pass.
 
 ## 1. Commit Log (newest first)
 
 | Hash | Type | Summary |
 |------|------|---------|
-| `6f848825` | feat | bound live-feed memory before authoritative decode (PHASE4-N-F-G-E S1) |
-| `5a4d8c12` | docs | define PHASE4-N-F-G-E live-feed bounded-memory cluster + S1 |
-| `351d46bc` | (close) | Close PHASE4-N-F-G-C — live feed + operator-gated evidence |
+| `6bd60c80` | fix | scan archived bounty home in rehearsal leak gate (PHASE4-N-F-G-D S4) |
+| `a8003dc8` | docs | specify PHASE4-N-F-G-D S4 rehearsal leak gate hardening |
+| `076a5af5` | feat | C1 private-testnet dry-run runbook + operator scaffold (PHASE4-N-F-G-D S3) |
+| `93472991` | docs | specify PHASE4-N-F-G-D S3 C1 dry-run scaffold |
+| `459cf78d` | feat | add non-promotable rehearsal evidence surface (PHASE4-N-F-G-D S2) |
+| `e3382532` | docs | specify PHASE4-N-F-G-D S2 rehearsal evidence |
+| `d4d0f456` | feat | prove --mode node accepted-block path fidelity (PHASE4-N-F-G-D S1) |
+| `c01ff046` | docs | specify PHASE4-N-F-G-D S1 path fidelity |
+| `ce313927` | docs | define PHASE4-N-F-G-D bounty dry-run cluster |
+| `bc39d431` | docs | plan PHASE4-N-F-G-D bounty dry-run fidelity |
+| `07e6a340` | docs | declare PHASE4-N-F-G-D bounty dry-run fidelity |
+| `da205bff` | (close) | Close PHASE4-N-F-G-E — peer-driven live-feed memory bounded before authoritative decode/apply |
 
 No merge commits in the span.
 
-The **last-listed** commit (`351d46bc`) is the **PHASE4-N-F-G-C close-pass** that lands
-inside this window because the baseline `90791691` is the N-F-G-C *slice-span* HEAD, not
-its close commit: `351d46bc` flipped the **four** G-C cross-rule strengthenings
-(`RO-LIVE-01` stays `partial` / `blocked_until_operator_stake_available`; `RO-LIVE-06` /
-`CN-OPERATOR-EVIDENCE-01` / `DC-NODE-06` stay `enforced` — each gains
-`strengthened_in += "PHASE4-N-F-G-C"`), bound the G-C gate
-`ci_check_ba02_evidence_manifest_schema.sh` to `RO-LIVE-06` / `CN-OPERATOR-EVIDENCE-01`,
-regenerated the four grounding docs to the **G-C** close, bumped the `.idd-config.json`
-baseline `339cccb1 → 90791691`, and archived the G-C cluster. It is **docs/registry only**
-— no source change — and **count-neutral on CI** (118 → 118; the G-C gate
-`ba02_evidence_manifest_schema` was already committed at the baseline `90791691`, at G-C
-S2, so the close added no gate). `5a4d8c12` defines the G-E cluster + S1; `6f848825` is the
-G-E S1 implementation (doc-then-impl per slice).
+The **last-listed** commit (`da205bff`) is the **PHASE4-N-F-G-E close-pass** that lands inside
+this window because the baseline `6f848825` is the N-F-G-E *slice-span* HEAD, not its close
+commit: `da205bff` flipped `DC-LIVEMEM-01` `declared → enforced`, regenerated the four
+grounding docs to the **G-E** close, bumped the `.idd-config.json` baseline `90791691 →
+6f848825`, and archived the G-E cluster. It is **docs/registry only** — no source change — and
+**count-neutral on CI** (119 → 119; the G-E gate `live_feed_memory_bounds` was already committed
+at the baseline `6f848825`, at G-E S1, so the close added no gate). The G-D cluster is then the
+**three declare/plan/define docs** (`07e6a340` / `bc39d431` / `ce313927`) followed by **four
+doc-then-impl slice pairs** (S1 `c01ff046`+`d4d0f456`, S2 `e3382532`+`459cf78d`, S3
+`93472991`+`076a5af5`, S4 `a8003dc8`+`6bd60c80`).
 
-(Plus the pending close-pass commit: the `DC-LIVEMEM-01` `declared → enforced` flip, the
-grounding-doc commit of the working-tree CODEMAP/SEAMS/TRACEABILITY G-E regen, the
-`.idd-config.json` baseline bump `90791691 → 6f848825`, the G-E cluster-doc archive, and
-this HEAD_DELTAS.)
+(Plus the pending G-D close-pass commit: the `CN-REHEARSAL-FIDELITY-01` `declared → enforced`
+flip + `tests`/`ci_script` array binding, the grounding-doc commit of the working-tree
+CODEMAP/registry G-D regen **and** the still-owed SEAMS/TRACEABILITY G-D regen, the
+`.idd-config.json` baseline bump confirmation (`6f848825 → 6bd60c80`, already applied) + the
+registry-count comment, the G-D cluster-doc archive, and this HEAD_DELTAS.)
 
 ## 2. New Modules
 
-**None.** G-E adds **no new source module, no new crate, no new BLUE authority, no new
-WAL/checkpoint/canonical type, no new `CoordinatorEvent` variant, no new GREEN evidence
-reducer.** The cluster lands as two closed memory **caps** added to **existing** modules,
-plus one additive closed enum variant and its single halt-mapping arm:
+Two new source modules, both in `ade_node` (added in **PHASE4-N-F-G-D S2**, `459cf78d`). Both
+are confirmed **absent at the baseline** `6f848825` and registered by the two `pub mod` lines
+added to `crates/ade_node/src/lib.rs` in the same slice.
 
-- a closed const in the existing GREEN `ade_network::session::core`,
-- a closed const in the existing RED `ade_node::node_sync`,
-- one additive variant on the existing closed enum `SessionError` in
-  `ade_network::session::event`,
-- one additive match arm in the existing RED `ade_runtime::network::mux_pump`.
+| Module | Color | Purpose | Key sub-paths | Added in (cluster/slice) |
+|--------|-------|---------|---------------|--------------------------|
+| `ade_node::rehearsal_evidence` | **GREEN-by-content** (the file carries the deterministic Core-Contract banner; pure types + serializer, no I/O / clock / rand / float / `HashMap`; `ade_node` is neither a BLUE `core_paths` crate nor RED at crate level — this module is deterministic GREEN evidence by content) | The non-promotable rehearsal **envelope**: `PrivateRehearsalManifest` **wraps** a correlate-produced `Ba02Manifest` payload; closed 1-variant `RehearsalVenue::PrivateTestnetC1`; `RehearsalEnvelope` operator metadata (venue + peer-log filename + sha256). | `crates/ade_node/src/rehearsal_evidence.rs` — `PrivateRehearsalManifest` (`+ ba02 / venue / peer_log_file / peer_log_file_sha256` fields); **sole ctor** `from_correlate_outcome` (returns `None` on `BA02Outcome::NoEvidence` — nothing to wrap); `to_canonical_toml` (pure; emits `is_rehearsal = true` + `not_bounty_evidence = true` as **literals** — the type cannot represent a non-rehearsal); `REHEARSAL_MANIFEST_SCHEMA_VERSION = 1`; `toml_escape` helper. | `PHASE4-N-F-G-D` S2 (`459cf78d`) |
+| `ade_node::rehearsal_pass` | **RED** (file I/O; `//! RED` banner; `fs::write` + `io::Result`) | Rehearsal-evidence **I/O**: reads the operator-captured peer-accept JSONL log, runs it through the GREEN correlate **verbatim**, and writes only a `PrivateRehearsalManifest`. Constructs no evidence, synthesizes no acceptance, uses no alternate correlator. | `crates/ade_node/src/rehearsal_pass.rs` — `correlate_peer_log_file_into_rehearsal` (**reuses** `ba02_pass::correlate_peer_log_file`; `Ok(None)` iff `NoEvidence`; missing/unreadable file → `io::Error`, fail closed); `write_private_rehearsal_manifest` (the **argument type is the gate** — only a `PrivateRehearsalManifest` is writable). Hosts the 3 S2 `#[cfg(test)]` proofs. | `PHASE4-N-F-G-D` S2 (`459cf78d`) |
 
-See §3 for the per-module change detail.
+> **Cross-reference warning (CODEMAP):** both modules appear in the **working-tree** CODEMAP
+> (32 combined `rehearsal_evidence` / `rehearsal_pass` mentions, in the G-D delta block) — but
+> **not** in the CODEMAP **committed at HEAD `6bd60c80`** (still the G-E close doc, 0 mentions).
+> The G-D close-pass commits the working-tree CODEMAP regen. See the generation notes.
+
+No new crate, no new workspace, no new BLUE authority, no new WAL/checkpoint/canonical type,
+no new `CoordinatorEvent` variant was added. The cluster's only other source change is the
+`lib.rs` `pub mod` wiring; S1/S3/S4 add **tests and CI**, not modules.
 
 ## 3. Modules Modified
 
-All four modified source files existed at baseline. There are no trivial/skipped source
-changes in this window — every changed source file carries the bounded-memory hardening.
+The only modified source file in the window is `crates/ade_node/src/lib.rs` (the module
+wiring); all G-D behavior arrives as **new** files (§2) plus tests and CI (§5). There are no
+trivial/skipped source changes in this window.
 
 | Module | Color | Scope | Key changes |
 |--------|-------|-------|-------------|
-| `ade_network::session::core` | **GREEN-by-content** (the `session/` subtree is **not** one of the 9 BLUE `ade_network` submodule `core_paths`; deterministic GREEN session reducer) | +110 lines (incl. `#[cfg(test)]`) | **G-E S1 (`6f848825`) — reassembly-tail cap.** New closed const `MAX_REASSEMBLY_TAIL_BYTES = 16 * 1024 * 1024` (16 MiB). In `step` / `drain_protocol_items`: after every **COMPLETE** item is drained, if a per-mini-protocol reassembly **tail** still buffered satisfies `buf.len() > MAX_REASSEMBLY_TAIL_BYTES` the reducer returns the NEW additive `SessionError::ReassemblyBufferOverflow { protocol, len, cap }` (**fail closed** — drop the peer; **no** silent truncation, **no** partial decode, **no** unbounded fallback). Pure (`buf.len()` comparison only; the GREEN no-clock/rand/float/`HashMap` contract is preserved). The cap fires **before** the BLUE `ade_codec` decode path (unchanged). New `#[cfg(test)]` proofs `session_reassembly_tail_over_cap_fails_closed` (tail `> cap` → `ReassemblyBufferOverflow`) and `session_reassembly_tail_under_cap_still_drains_complete_item` (a complete item under the cap still drains intact — the cap does not regress the happy path). |
-| `ade_network::session::event` | **GREEN-by-content** (same `session/` subtree) | +12 lines | **G-E S1 (`6f848825`) — additive closed-enum variant.** `SessionError` gains the closed variant `ReassemblyBufferOverflow { protocol, len, cap }` (no wildcard arm anywhere; the enum stays exhaustively matched). The cap is carried on the variant so the halt reason is self-describing. Its sole exhaustive consumer is `ade_runtime::network::mux_pump::session_err_to_halt` (see below). |
-| `ade_node::node_sync` | **RED** (host of the closed `NodeBlockSource` + GREEN-pure `forge_epoch_admission` + the fenced BLUE forge composition; the file itself is RED) | +79 lines (incl. `#[cfg(test)]`) | **G-E S1 (`6f848825`) — WirePump lookahead cap (bounded-channel back-pressure).** New closed const `MAX_WIRE_PUMP_LOOKAHEAD = 256`. `pump_lookahead` stops the opportunistic `try_recv` drain once `lookahead.len() >= MAX_WIRE_PUMP_LOOKAHEAD`, so the existing bounded `mpsc` (`LIVE_WIRE_PUMP_CHANNEL_CAP = 64`) **back-pressures** the upstream pump instead of the pump draining unboundedly into an in-memory lookahead vector. Content-blind: the verdict-decoupled `NodeBlockSource` contract and the arrival ordering are unchanged. New `#[cfg(test)]` proofs `wirepump_lookahead_stops_at_cap` (feeding `cap + 50` items, one opportunistic drain stops at exactly `MAX_WIRE_PUMP_LOOKAHEAD`) and `wirepump_lookahead_cap_preserves_relay_behavior_under_normal_feed` (a normal-depth feed under the cap relays unchanged — the cap does not perturb the common path). |
-| `ade_runtime::network::mux_pump` | **RED** (shell mux pump) | +6 lines | **G-E S1 (`6f848825`) — halt mapping.** `session_err_to_halt` gains one additive arm: `SessionError::ReassemblyBufferOverflow { .. } => PeerHaltReason::ChainSyncDecodeError` — the overflow drops the peer through the existing structured halt path (no panic, no unbounded retry; the RED retry/halt discipline is unchanged). |
+| `ade_node` (crate root `lib.rs`) | neither BLUE nor RED at crate level (RED binary/library home) | +2 lines | **G-D S2 (`459cf78d`) — module registration.** Adds `pub mod rehearsal_evidence;` and `pub mod rehearsal_pass;`. No other behavioral change to `lib.rs`. |
+
+The G-A…G-E forge / serve / live-feed / containment source surfaces are **unchanged** in this
+window. In particular, no BLUE `ade_network` submodule, no `ade_runtime` shell file, and no
+`ade_core` / `ade_ledger` / `ade_codec` / `ade_types` / `ade_crypto` / `ade_plutus` file
+appears in `git diff --name-only 6f848825..6bd60c80` — every BLUE count is byte-unchanged.
 
 ## 4. Feature Flags
 
 **No project feature-flag deltas.** Ade declares no `[features]` table in any workspace
-`Cargo.toml` (confirmed at both refs — the table is absent), and no `#[cfg(feature =
-…)]` gate was introduced in the span. **No `Cargo.toml` change at all in this window.**
-No coupling, no `compile_error!` guard. The two new bounds are plain `const` items, not
-feature flags.
+`Cargo.toml` (confirmed absent at both refs), and no `#[cfg(feature = …)]` gate was introduced
+in the span. **No `Cargo.toml` change at all in this window.** No coupling, no `compile_error!`
+guard. (The C1 dry-run operator harness is gated by an **environment variable**
+`ADE_LIVE_C1_DRY_RUN`, **not** a Cargo feature — it is a `#[test]` skipped in CI, not a
+compile-time flag and not a runtime node mode.)
 
-## 5. CI Checks (118 → 119; +1 new, 0 modified, 0 removed)
+## 5. CI Checks (119 → 121; +2 new, 0 modified, 0 removed)
 
-One new gate, repo-root-relative and mirroring the existing `ci/ci_check_*.sh` convention.
+Two new gates, repo-root-relative and mirroring the existing `ci/ci_check_*.sh` convention.
+The only files in `git diff --diff-filter=A 6f848825..6bd60c80 -- ci/` are these two; no `ci/`
+file was modified or removed.
 
-### PHASE4-N-F-G-E gate
+### PHASE4-N-F-G-D gates
 
 | Check | Status | Cluster origin | What it checks |
 |-------|--------|----------------|----------------|
-| `ci_check_live_feed_memory_bounds.sh` | **New** | G-E S1 (`6f848825`) | Backs the new **`DC-LIVEMEM-01`** rule. Verifies both live-feed memory bounds are **CLOSED LITERAL constants** — `MAX_REASSEMBLY_TAIL_BYTES` in `crates/ade_network/src/session/core.rs` and `MAX_WIRE_PUMP_LOOKAHEAD` in `crates/ade_node/src/node_sync.rs` — **AND** that neither is wired to a runtime escape hatch: no CLI flag, env var, or config field may set or disable them (the **no-escape-hatch** guard). Line comments are stripped first so the doc-comments that *name* "CLI / env / config" (to forbid them) do not self-trip the grep. Hermetic — no Docker / cardano-cli / live node. |
+| `ci_check_node_path_fidelity.sh` | **New** | G-D S1 (`d4d0f456`) | Backs **`CN-REHEARSAL-FIDELITY-01` clause 1 (path fidelity)**. Guard (a): the `cli.rs` argv flag-literal set **equals** a pinned **28-flag closed allow-list** — G-D adds **no** flag, and a private-only / venue flag (`--private-net`, `--from-genesis`, `--devnet`, `--rehearsal`, …) would change the set and trip. Guard (b): **no** from-genesis consensus-inputs constructor exists (a fn whose name carries **both** `genesis` and `consensus`; line comments stripped first so prose naming the forbidden construct cannot self-trip), **and** `node_lifecycle.rs` sources consensus inputs only via the shared `import_live_consensus_inputs` (the same authority the preprod pass uses). Both fail-closed-smoke-verified against an injected `--private-net` flag + a `build_consensus_inputs_from_genesis` ctor. Hermetic. |
+| `ci_check_rehearsal_manifest_schema.sh` | **New** (S2; hardened in S4) | G-D S2 (`459cf78d`), S4 fix (`6bd60c80`) | Backs **`CN-REHEARSAL-FIDELITY-01` clause 2 (evidence non-promotability)**. **Vacuous-until-committed**: when no `docs/evidence/phase4-n-f-g-d-private-rehearsal-*.toml` manifest is present (the typical state — the C1 dry-run is operator-gated, only the README is committed) the gate passes. When one is present it verifies the closed **12-field** schema, `schema_version == 1`, the `is_rehearsal = true` + `not_bounty_evidence = true` markers, a `venue = "private-testnet…"` venue, and that `peer_log_file_sha256` **matches** the committed peer-log file (the no-synthetic binding). **Three** non-promotability barriers: (1) distinct `docs/evidence/` home; (2) the rehearsal markers; (3) a cross-check that **no** rehearsal marker (`^is_rehearsal =` / `^not_bounty_evidence =`) appears in any `.toml` under a bounty home. **S4 hardening:** barrier (3) now scans **all** real bounty homes — `docs/clusters/PHASE4-N-F-G-C/` (active) **and** `docs/clusters/completed/PHASE4-N-F-G-C/` (archived) — by building the **existing-homes** list first (no `[[ -d ]]` whole-check skip): *home absent* ⇒ empty contribution (deliberate); a scan error on an **existing** home (`grep` rc ≥ 2) ⇒ **fail closed**, not swallowed. Hermetic. |
 
-The serve/forge/containment fences are **byte-unchanged** in this window:
-`ci_check_node_run_loop_containment.sh` (relay-loop containment — no serve / admit / gossip
-/ broadcast / block-fetch / durable-tip mutation in the loop body) and
-`ci_check_served_chain_handoff_fence.sh` (self-accept→serve handoff) are both untouched.
-G-E **added** a bounded-memory gate and relaxed **nothing**.
+The three containment / handoff / memory fences are **byte-unchanged** in this window:
+`ci_check_node_run_loop_containment.sh` (relay-loop containment), `ci_check_served_chain_handoff_fence.sh`
+(self-accept→serve handoff), and `ci_check_live_feed_memory_bounds.sh` (G-E live-feed memory
+bounds) are all untouched. G-D **added** two gates and relaxed **nothing**.
 
-### CI gate lineage (for cross-window readers — explains the headline +1)
+### CI gate lineage (for cross-window readers — explains the headline +2)
 
-The on-disk gate count rose **116 → 117 → 118 → 119** across the G-A…G-E sub-clusters:
+The on-disk gate count rose **117 → 118 → 119 → 121** across the G-C…G-D sub-clusters:
 
-- **116 → 117** — G-B S3 added `ci_check_served_chain_handoff_fence.sh` (narrated in the
-  N-F-G-B HEAD_DELTAS).
-- **117 → 118** — G-C **S2** added `ci_check_ba02_evidence_manifest_schema.sh` **at the
-  baseline commit `90791691` itself** (narrated in the **previous**, N-F-G-C, HEAD_DELTAS
-  window `339cccb1 → 90791691`, which recorded 117 → 118). Because that gate was committed
-  **at** this window's baseline, it is **not** a window-add here — the G-C close-pass
-  `351d46bc` was docs/registry only and count-neutral (118 → 118).
-- **118 → 119** — G-E S1 added `ci_check_live_feed_memory_bounds.sh` (this window).
+- **117 → 118** — G-C **S2** added `ci_check_ba02_evidence_manifest_schema.sh` (narrated in the
+  N-F-G-C HEAD_DELTAS window).
+- **118 → 119** — G-E S1 added `ci_check_live_feed_memory_bounds.sh` (narrated in the **previous**,
+  N-F-G-E, HEAD_DELTAS window `90791691 → 6f848825`). Because that gate was committed **at**
+  this window's baseline `6f848825`, it is **not** a window-add here; the G-E close-pass
+  `da205bff` was docs/registry only and count-neutral (119 → 119).
+- **119 → 121** — G-D S1 + S2 added `ci_check_node_path_fidelity.sh` and
+  `ci_check_rehearsal_manifest_schema.sh` (this window).
 
-So **this** window's CI delta is the **single** G-E gate: **118 → 119 (+1)**.
+So **this** window's CI delta is the **two** G-D gates: **119 → 121 (+2)**.
 
-> Cross-reference (TRACEABILITY): in the **working tree** at `6f848825`,
-> `ci_check_live_feed_memory_bounds.sh` is cited by `DC-LIVEMEM-01.ci_script`, and the
-> working-tree TRACEABILITY renders that row (11 working-tree TRACEABILITY mentions of the
-> gate name). At the **committed** HEAD `6f848825`, the committed TRACEABILITY is still the
-> **G-C** close doc (`351d46bc`) and does **not** yet show the gate — the close-pass
-> commits the working-tree TRACEABILITY regen. See the warnings in the generation section.
+> Cross-reference (TRACEABILITY): in the **working-tree registry**, both new gates are cited by
+> `CN-REHEARSAL-FIDELITY-01.ci_script`. But **TRACEABILITY has not been regenerated for G-D** —
+> neither the committed (`6bd60c80`) nor the working-tree TRACEABILITY mentions
+> `ci_check_node_path_fidelity.sh`, `ci_check_rehearsal_manifest_schema.sh`, or
+> `CN-REHEARSAL-FIDELITY-01` (both still report the **G-E** close, 314 rules,
+> `DC-LIVEMEM-01`). The G-D close-pass owes the TRACEABILITY regen that renders these rows. See
+> the warnings in the generation section.
 
 ## 6. Canonical Type Registry Delta
 
-**n/a — no separate canonical-type registry is configured** (`canonical_type_registry:
-null`), and **no BLUE crate changed**. The 456 BLUE canonical-type total is **unchanged
-(Δ0)** across the span (independently re-verified: `git diff --name-only
-90791691..6f848825` matches **no** `core_paths` (BLUE) entry — the four changed source
-files are `session::core.rs` + `session::event.rs` (the `session/` subtree is GREEN — it
-is **not** one of the 9 BLUE `ade_network` submodule paths: `mux/frame.rs`, `codec/`,
-`handshake/`, `chain_sync/`, `block_fetch/`, `tx_submission/`, `keep_alive/`,
-`peer_sharing/`, `n2c/`), plus RED `node_sync.rs` + RED `mux_pump.rs`). The working-tree
-CODEMAP at `6f848825` reports 456 canonical. The new closed `SessionError` variant is
-**GREEN-by-content and not canonical-counted**; no new type was added to any BLUE crate.
-**No new `CoordinatorEvent` variant or field was introduced.**
+**n/a — no separate canonical-type registry is configured** (`canonical_type_registry: null`),
+and **no BLUE crate changed**. The 456 BLUE canonical-type total is **unchanged (Δ0)** across
+the span (independently re-verified: `git diff --name-only 6f848825..6bd60c80` matches **no**
+`core_paths` (BLUE) entry — every changed source file is under `ade_node`: the new RED
+`rehearsal_pass.rs`, the new GREEN-by-content `rehearsal_evidence.rs`, the `lib.rs` `pub mod`
+wiring, and the three new test files). The working-tree CODEMAP at `6bd60c80` reports 456
+canonical. The new `PrivateRehearsalManifest` / `RehearsalVenue` / `RehearsalEnvelope` types
+are **GREEN-by-content and not canonical-counted** (they wrap, but do not extend, the existing
+`Ba02Manifest`); no new type was added to any BLUE crate. **No new `CoordinatorEvent` variant
+or field was introduced.**
 
-## 7. Normative / Invariant Rule Delta (313 → 314)
+## 7. Normative / Invariant Rule Delta (314 → 315)
 
-**One rule ID added, zero removed** (313 → 314). G-E ships exactly one new rule; this
-window also commits the **G-C** close-pass cross-rule strengthenings (`351d46bc`), which
-add **no** new ID (they extend existing rules).
+**One rule ID added, zero removed** (314 → 315). G-D ships exactly one new rule; this window
+also commits the **G-E** close-pass `DC-LIVEMEM-01` `declared → enforced` flip (`da205bff`),
+which adds **no** new ID.
 
-### G-E new rule (committed in this span, by `6f848825`; flip to `enforced` owed at close)
+### G-D new rule (committed in this span, by S2 `459cf78d`; flip to `enforced` owed at close)
 
 | Rule | Tier | Status (committed at HEAD) | What it pins |
 |------|------|---------------------------|--------------|
-| `DC-LIVEMEM-01` | `derived` (operational-hardening; **NOT** BLUE consensus law) | `declared` at `6f848825`; **flips to `enforced`** at the close-pass (already `enforced` in the working-tree registry at this regen) | **Live-feed bounded memory before authoritative decode/apply.** Peer-driven memory on the live `--mode node` feed is bounded BEFORE the BLUE decode/apply path: the per-mini-protocol reassembly tail (`session::core` `MAX_REASSEMBLY_TAIL_BYTES`, 16 MiB) fails closed with a structured `SessionError::ReassemblyBufferOverflow` (drop the peer); the WirePump lookahead (`node_sync` `MAX_WIRE_PUMP_LOOKAHEAD`, 256) stops opportunistic draining so the bounded `mpsc` (cap 64) back-pressures the pump. No silent truncation, no partial decode, no unbounded fallback. The bounds are **CLOSED CONSTANTS** — defensive implementation bounds, NOT Cardano semantic parameters; **no runtime option (CLI / env / config) may disable them or set them unbounded**. `tests = [session_reassembly_tail_over_cap_fails_closed, session_reassembly_tail_under_cap_still_drains_complete_item, wirepump_lookahead_stops_at_cap, wirepump_lookahead_cap_preserves_relay_behavior_under_normal_feed]`; `ci_script = ci/ci_check_live_feed_memory_bounds.sh`. `cross_ref = CN-SESS-04, DC-SESS-06, DC-SYNC-01, DC-SYNC-02, DC-NODE-06, CN-NODE-02`. |
+| `CN-REHEARSAL-FIDELITY-01` | `release` (bounty dry-run fidelity; **NOT** BLUE consensus law) | `declared` at `6bd60c80` (`tests = []`, `ci_script = ""`); **flips to `enforced`** at the close-pass (already `enforced` in the working-tree registry at this regen, with all 7 tests + both gates bound) | **Private-testnet accepted-block bounty dry-run fidelity** — two coupled clauses; if either fails the rehearsal becomes misleading. **(1) PATH FIDELITY:** the C1 private dry-run uses the **SAME** `--mode node` accepted-block path as preview/preprod (N-M-C `import_live_consensus_inputs` → forge → self-accept → sibling-serve → block-fetch → peer log → correlate) with **NO** private-only flag, branch, bootstrap authority, or from-genesis constructor; the only differences are operator-controlled **inputs** (private genesis stake) + the evidence **label**; no private-only helper may make the rehearsal pass if the same condition would fail on preview/preprod. **(2) EVIDENCE NON-PROMOTABILITY:** any private-testnet manifest is clearly marked `rehearsal` / `private-testnet`, stored **only** under the rehearsal home (`docs/evidence/phase4-n-f-g-d-private-rehearsal-*.toml`, never the bounty home `docs/clusters/PHASE4-N-F-G-C/CE-G-C-LIVE_*.toml`), sha256-bound to a real Haskell peer log, correlate-produced (`ba02_evidence::correlate` is the **sole** acceptance-evidence constructor), and flips **NO** RO-LIVE rule — C1 rehearsal evidence is **not** bounty evidence. `cross_ref = RO-LIVE-01, RO-LIVE-06, CN-OPERATOR-EVIDENCE-01, DC-NODE-06, DC-EPOCH-03, CN-NODE-02, CN-CINPUT-03, DC-CINPUT-02b`. Working-tree `tests = [node_accepted_block_consensus_inputs_via_shared_import, rehearsal_envelope_wraps_correlate_produced_payload, rehearsal_correlate_no_evidence_writes_nothing, rehearsal_envelope_is_structurally_distinct_from_ba02_manifest, c1_dry_run_correlate_to_rehearsal_envelope, node_c1_dry_run_rehearsal_live, rehearsal_gate_fails_on_archived_home_leak]`; working-tree `ci_script = ci/ci_check_node_path_fidelity.sh, ci/ci_check_rehearsal_manifest_schema.sh`. |
 
-> **Status sequencing (mirrors the prior G-B/G-C windows).** At the committed HEAD
-> `6f848825` (the G-E **slice-span** HEAD), `DC-LIVEMEM-01.status = "declared"` — the rule
-> is committed with its `tests` and `ci_script` populated, but the `declared → enforced`
-> flip is the close-pass edit and lives only in the **working-tree** registry at this
-> regen (where it is already `enforced`). This is the exact pattern the N-F-G-B window
-> documented for `DC-NODE-06` (`declared` at its slice-span HEAD, flipped at close). The
-> count itself rises 313 → 314 at the slice-span HEAD because the **ID** is added by the
-> S1 impl `6f848825`; only the status word changes at close.
+> **Status sequencing (mirrors the prior G-B/G-C/G-E windows).** At the committed HEAD
+> `6bd60c80` (the G-D **S4 slice-span** HEAD), `CN-REHEARSAL-FIDELITY-01.status = "declared"`,
+> `tests = []`, `ci_script = ""` — the rule **ID** is committed (so the count rises 314 → 315
+> at the slice-span HEAD), but the `declared → enforced` flip **and** the `tests` / `ci_script`
+> array bindings are the close-pass edit and live only in the **working-tree** registry at this
+> regen (where the rule is already `enforced` with all 7 tests + both gates bound). This is the
+> exact pattern the N-F-G-E window documented for `DC-LIVEMEM-01` (`declared` at its slice-span
+> HEAD, flipped at close).
 
-### G-C close-pass cross-rule strengthenings (committed in this span, by `351d46bc`)
+### No cross-rule strengthenings recorded by G-D (load-bearing)
 
-For completeness — these were the *owed* edits flagged in the **previous** (N-F-G-C)
-HEAD_DELTAS window and are **committed here** (no new ID; the count holds at 313 across
-them, then rises to 314 with `DC-LIVEMEM-01`):
+Unlike the G-C close-pass (four `strengthened_in` tokens), **G-D records NO `strengthened_in`
+bump** — verified by grep over the registry at HEAD: `RO-LIVE-01`, `RO-LIVE-06`, and
+`CN-OPERATOR-EVIDENCE-01` gain **no** `PHASE4-N-F-G-D` token. This is **deliberate and
+load-bearing**: G-D is a dry-run harness and **does not advance the bounty deliverable**, so it
+must not strengthen the release-obligation rules. `RO-LIVE-01` stays `partial`
+(`blocked_until_operator_stake_available`); `RO-LIVE-06` stays `enforced` (schema-only); the
+single bounty deliverable is preview/preprod acceptance, captured separately.
 
-| Rule | Status (held) | Strengthening recorded by `351d46bc` |
-|------|---------------|--------------------------------------|
-| `RO-LIVE-01` | **`partial`** (held — `blocked_until_operator_stake_available`) | `strengthened_in += "PHASE4-N-F-G-C"` — G-C wired the MECHANICAL live-feed half (`live_wire_pump_feed_reaches_forge_tick`); the LIVE peer-ACCEPT half stays operator-gated. |
-| `RO-LIVE-06` | **`enforced`** (held) | `strengthened_in += "PHASE4-N-F-G-C"`; `ci_script += "ci/ci_check_ba02_evidence_manifest_schema.sh"` — the operator-pass BA-02 evidence path is wired (schema + mechanics only; no live BA-02 claim). |
-| `CN-OPERATOR-EVIDENCE-01` | **`enforced`** (held) | `strengthened_in += "PHASE4-N-F-G-C"`; `ci_script += "ci/ci_check_ba02_evidence_manifest_schema.sh"` — operator-evidence manifest discipline now covers the `--mode node` BA-02 manifest family. |
-| `DC-NODE-06` | **`enforced`** (held) | `strengthened_in += "PHASE4-N-F-G-C"` — the served-chain handoff fence it binds was broadened in place (node-spine owner set + allow-list guard-3) when the live feed was wired. |
-
-**No rule was removed (expected: 0).** The 313 → 314 delta is a single additive ID
-(`DC-LIVEMEM-01`); the four G-C tokens are strengthenings, never weakenings.
+**No rule was removed (expected: 0).** The 314 → 315 delta is a single additive ID
+(`CN-REHEARSAL-FIDELITY-01`); the `DC-LIVEMEM-01` flip carried by the G-E close-pass is a
+status change on an existing rule, never a removal.
 
 ## 8. Honest residual (cluster scope)
 
-**G-E closes a NARROW operational-hardening claim: peer-driven memory on the live
-`--mode node` feed is BOUNDED BEFORE authoritative decode/apply. It is NOT full network
-DoS resistance, NOT peer resource fairness, NOT BA-02 / live-evidence readiness, and it
-does NOT satisfy the bounty acceptance criterion.**
+**G-D closes a NARROW claim: the private-testnet (C1) accepted-block dry-run is a
+PATH-FAITHFUL, NON-PROMOTABLE rehearsal HARNESS (enforced). It is NOT a live-pass, NOT a
+bounty / preview / preprod completion claim, and it does NOT enforce that a C1 run has
+succeeded.**
 
-- **Bounded-before-decode, not DoS-proof.** The two caps fail closed before the BLUE
-  `ade_codec` decode path runs, so a single peer cannot drive unbounded in-memory growth
-  through the reassembly tail or the lookahead. This is **not** a claim of full network DoS
-  resistance and **not** a claim of peer resource fairness.
-- **Precision (recorded from the close reviews — do not soften, do not broaden):**
-  - The reassembly check is **post-extend** (`buf.len() > cap` after the buffer grew by the
-    arriving frame), so a single buffer's transient peak is `cap + one ≤64 KiB mux frame`
-    (~**16.06 MiB**), **not** an absolute 16 MiB.
-  - `ProtoBuffers` holds up to **~10 INDEPENDENT** per-mini-protocol buffers, each capped
-    separately, so the per-connection aggregate ceiling is **~10× the single-buffer cap** —
-    still **O(constant) per connection**. **Per-connection-COUNT limits / peer fairness are
-    a SEPARATE, out-of-scope surface** (not addressed by G-E).
-- **No BLUE change.** 456 BLUE canonical types unchanged (Δ0); `session/` is GREEN-by-content
-  (not a BLUE `ade_network` submodule), and the other two changed files are RED. The new
-  `SessionError` variant is GREEN-by-content and not canonical-counted. No new
-  `CoordinatorEvent` variant or field.
-- **Fences byte-unchanged; no live-evidence / BA-02 / RO-LIVE claim.** The serve/forge
-  containment gate (`ci_check_node_run_loop_containment.sh`) and the served-chain handoff
-  fence (`ci_check_served_chain_handoff_fence.sh`) are **byte-unchanged**. G-E flips **no**
-  RO-LIVE rule and makes **no** BA-02 / live-evidence claim. `RO-LIVE-01` stays `partial`
-  / `blocked_until_operator_stake_available`; the live operator pass is unchanged by this
-  cluster.
-- **Gating follow-ons (unchanged).** The bounty acceptance criterion — an
-  operator-witnessed accepted block on a peer that can grant leadership — remains gated on
-  the **operator-witnessed live pass** (**C1** private testnet, the cheapest real ACCEPT;
-  or **C2** preprod with ~2 epochs of provisioned active stake — the public preprod docker
-  peer cannot grant acceptance), plus the **PHASE4-N-F-G-D** private-testnet rehearsal.
-  G-E removes a hardening blocker for those runs; it does not advance the acceptance claim.
+- **Harness, not a successful run.** G-D enforces that *if* a C1 dry-run is executed and an
+  acceptance manifest committed, it is path-faithful (clause 1) and non-promotable (clause 2).
+  It does **not** enforce that any C1 run has happened: `ci_check_rehearsal_manifest_schema.sh`
+  is **vacuous until a real operator-produced manifest is committed** (only the README is
+  committed under the rehearsal home — no `.toml` manifest), and the env-gated
+  `node_c1_dry_run_rehearsal_live` test is **skipped in CI**. The live C1 execution stays
+  **`blocked_until_operator_c1_net_executed`**.
+- **NO RO-LIVE flip; no bounty/preview/preprod claim.** G-D flips **no** RO-LIVE rule and
+  records **no** `strengthened_in` bump on `RO-LIVE-01` / `RO-LIVE-06` /
+  `CN-OPERATOR-EVIDENCE-01`. `RO-LIVE-01` stays `partial`; `RO-LIVE-06` stays schema-only /
+  `enforced`. **Private C1 acceptance ≠ bounty completion** — preview/preprod acceptance is the
+  single bounty deliverable, captured separately.
+- **No BLUE change.** 456 BLUE canonical types unchanged (Δ0); the new modules are RED
+  (`rehearsal_pass`) + GREEN-by-content (`rehearsal_evidence`), and the only modified source
+  file is `lib.rs` (module wiring). No new `CoordinatorEvent` variant or field; the new
+  envelope types wrap, never extend, the BLUE-derived `Ba02Manifest`.
+- **Fences byte-unchanged.** The three containment / handoff / memory fences
+  (`ci_check_node_run_loop_containment.sh`, `ci_check_served_chain_handoff_fence.sh`,
+  `ci_check_live_feed_memory_bounds.sh`) are **byte-unchanged**; the G-A…G-E forge / serve /
+  live-feed surfaces are unchanged. G-D **added** two gates and relaxed nothing.
+- **S4 close-surfaced security fix (record, do not soften).** S4 fixes a per-cluster
+  security-review **HIGH**: the S2 rehearsal leak gate's non-promotability barrier (b) ("no
+  rehearsal marker may live in a bounty-evidence home") was **dead** after G-C's archival — the
+  pre-S4 `[[ -d ]]` guard checked **only** the active home `docs/clusters/PHASE4-N-F-G-C/`,
+  which had moved to `docs/clusters/completed/PHASE4-N-F-G-C/`, so the whole leak scan silently
+  skipped. The exact pre-S4 smuggle (a rehearsal-marked `.toml` under the archived home) passed
+  with exit 0. S4 repoints the gate to scan **both** real homes fail-closed (existing-homes list
+  built first; *home absent* ⇒ empty contribution; scan error on an existing home ⇒ fail closed)
+  and adds the durable regression test `rehearsal_gate_fails_on_archived_home_leak` (clean tree
+  ⇒ green; archived-home leak ⇒ **fails**; Drop-guarded fixture). Verified: the exact pre-S4
+  smuggle now fails with exit 1.
+- **Carried follow-ups (explicit, deferred by S4's tight scope — do not treat as closed).**
+  Three hardenings are deliberately **out of S4's scope** and remain owed:
+  1. **The BA-02 bounty gate's same stale active-home glob.**
+     `ci_check_ba02_evidence_manifest_schema.sh` still globs **only**
+     `find docs/clusters/PHASE4-N-F-G-C -name "CE-G-C-LIVE_*.toml"` — the *identical* bug S4
+     fixed in the rehearsal gate, but on G-C's gate. A separate G-C-gate follow-up.
+  2. **`toml_escape` control-character hardening.** `rehearsal_evidence::toml_escape` escapes
+     only backslash + double-quote; control characters in operator-supplied fields are not yet
+     handled. Deferred — it touches the serializer (left byte-unchanged by S4).
+  3. **`pub`-field sole-constructor hardening.** `PrivateRehearsalManifest` / `RehearsalEnvelope`
+     expose `pub` fields (so the "sole ctor `from_correlate_outcome`" non-promotability
+     guarantee is by-convention on the struct literal, not type-enforced against a hand-built
+     value). Inherited from G-C, project-wide; deferred.
 
 ---
 
-## Generation notes (regen `90791691 → 6f848825`, PHASE4-N-F-G-E)
+## Generation notes (regen `6f848825 → 6bd60c80`, PHASE4-N-F-G-D)
 
-- **Baseline is `90791691`** (the `.idd-config.json` `head_deltas_baseline` value at regen
-  time — the PHASE4-N-F-G-C slice-span HEAD). **The close-pass commit must bump
-  `head_deltas_baseline` to `6f848825`** (the G-E slice-span HEAD) so the next cluster's
-  `/head-deltas` measures from here. The registry-count comment must also bump:
-  `_invariant_registry_doc` currently reads **"313 entries at HEAD"** and must become
-  **"314 entries at HEAD"**. Both `.idd-config.json` edits are handled by the closer, not
-  this regen.
+- **Explicit span, NOT the config baseline.** This regen was run against the **explicit**
+  `6f848825..6bd60c80` span. The `.idd-config.json` `head_deltas_baseline` has **already** been
+  bumped to `6bd60c80` (the closer's edit for the **next** cluster), so reading it would
+  mis-measure this window; the explicit baseline `6f848825` (the PHASE4-N-F-G-E slice-span HEAD)
+  is correct for the G-D close. The `_invariant_registry_doc` comment in `.idd-config.json`
+  already reads **"315 entries at HEAD"** (the closer's edit).
 - Counts are mechanical (git/grep/ls only, no cargo): commit log + `--shortstat` over
-  `90791691..6f848825` (**3** commits, no merges / **17** files / **+2120 / -1109**); CI
-  gate count via `git ls-tree -r --name-only <ref> ci/ | grep -c 'ci_check_.*\.sh'` at each
-  ref (**118 → 119**, **+1 new** — `live_feed_memory_bounds` at G-E S1, none removed, none
-  modified; the only file in `git diff --diff-filter=A 90791691..6f848825 -- ci/` is that
-  gate); registry rule count via `grep -c '^id = '` at each ref (**313 → 314**, the single
-  new ID `DC-LIVEMEM-01`; `diff` of sorted `^id =` lines shows exactly one `>` add and zero
-  `<` removals); workspace test attributes via `git grep -hE '#\[(tokio::)?test\]'`
-  (**2230 → 2234**, +4); BLUE canonical types unchanged at 456 (no BLUE `core_paths` file
-  in the diff — `session/` is GREEN-by-content, not a BLUE `ade_network` submodule).
-- **CI-gate premise corrected against git (not an anomaly).** The on-disk gate count at the
-  **baseline** `90791691` is **118** (verified `git ls-tree`), and the G-C close commit
-  `351d46bc` is also **118**. `ci_check_ba02_evidence_manifest_schema.sh` was added at
-  `90791691` **itself** (`git log --diff-filter=A -- ci/ci_check_ba02_evidence_manifest_schema.sh`
-  → `90791691`, G-C S2) — i.e., **at** this window's baseline, so it is **not** a
-  window-add; the previous (N-F-G-C) HEAD_DELTAS already counted it in its `339cccb1 →
-  90791691` window (117 → 118). This window's CI delta is therefore **118 → 119 (+1)** —
-  the single G-E gate — **not** 117 → 119 (+2). The G-C close `351d46bc` was docs/registry
-  only and added no gate.
-- **Two close events in one window (NOT an anomaly).** The **G-C** close-pass (`351d46bc`)
-  is **committed** inside this window (because the baseline `90791691` is the G-C slice-span
-  HEAD, not its close commit) — it recorded the four G-C `strengthened_in` tokens, bound the
-  G-C gate to `RO-LIVE-06` / `CN-OPERATOR-EVIDENCE-01`, refreshed the four grounding docs to
-  the **G-C** close, and bumped the baseline `339cccb1 → 90791691`. The **G-E** close-pass
-  is **not yet committed**. So at HEAD `6f848825`: the registry has the four G-C tokens
-  committed and `DC-LIVEMEM-01` as `declared` (the `enforced` flip is working-tree only);
-  and the **committed** CODEMAP / SEAMS / TRACEABILITY are still the **G-C** close docs (118
-  CI, 2230 tests, 313 rules, no `DC-LIVEMEM-01`).
-- **Sibling-doc coherence (working tree).** The CODEMAP / SEAMS / TRACEABILITY **working
-  tree** (and the registry) have already been regenerated to the **G-E** close state —
-  **119** CI checks (matches the on-disk `ls ci/ci_check_*.sh | wc -l = 119`), **456**
-  canonical types, **2234** tests, **314** rules, with `DC-LIVEMEM-01` `enforced`, the new
-  `session::core` / `node_sync` caps, and the `live_feed_memory_bounds` gate cross-referenced
-  — and they **agree** with this doc's counts (CODEMAP/SEAMS headers explicitly read "119 CI
-  checks at HEAD (`6f848825`, PHASE4-N-F-G-E cluster close)"; `DC-LIVEMEM-01` appears 13× in
-  CODEMAP, 27× in SEAMS, 18× in TRACEABILITY). `git status` shows `docs/ade-CODEMAP.md`,
-  `docs/ade-SEAMS.md`, `docs/ade-TRACEABILITY.md`, and `docs/ade-invariant-registry.toml`
-  modified (working-tree close-pass edits already applied); `docs/ade-HEAD_DELTAS.md` and
-  `.idd-config.json` are the two files this regen / the close-pass still owe.
-- **CI cross-reference warning.** `ci_check_live_feed_memory_bounds.sh` is cited by
-  `DC-LIVEMEM-01` only in the **working-tree** registry / TRACEABILITY (the committed
-  TRACEABILITY at `6f848825` is still the G-C close doc and does not yet show it). The
-  close-pass commits the `ci_script` binding's enforced state and regenerates the committed
-  TRACEABILITY. (The G-C gate `ba02_evidence_manifest_schema` and the handoff/containment
-  fences are already cited in the committed registry, via `351d46bc` / earlier.)
-- **Not a rule removal, not a discipline violation** — the working-tree-vs-committed split
-  is a sequencing artifact reconciled by the close-pass (which commits the `DC-LIVEMEM-01`
-  `declared → enforced` flip, the CODEMAP/SEAMS/TRACEABILITY working-tree regen, the
-  `.idd-config.json` baseline bump `90791691 → 6f848825` + the `313 → 314` registry-count
-  comment, the G-E cluster-doc archive, and this HEAD_DELTAS). The next gating work is the
-  **operator-witnessed live pass** (C1/C2) and the **PHASE4-N-F-G-D** private-testnet
-  rehearsal — neither advanced by G-E, which only removes a bounded-memory hardening
-  blocker ahead of them.
+  `6f848825..6bd60c80` (**12** commits, no merges / **24** files / **+2928 / -499**); CI gate
+  count via `git ls-tree -r --name-only <ref> ci/ | grep -c 'ci_check_.*\.sh'` at each ref
+  (**119 → 121**, **+2 new** — `node_path_fidelity` at G-D S1, `rehearsal_manifest_schema` at
+  G-D S2; the only files in `git diff --diff-filter=A 6f848825..6bd60c80 -- ci/` are those two;
+  `--diff-filter=M` and `--diff-filter=D` over `ci/` are empty — none modified, none removed);
+  registry rule count via `grep -c '^id = '` at each ref (**314 → 315**, the single new ID
+  `CN-REHEARSAL-FIDELITY-01`; `diff` of sorted `^id =` lines shows exactly one `>` add and zero
+  `<` removals); workspace test attributes via `git grep -hE '#\[(tokio::)?test\]'` over
+  `crates/**/*.rs` (**2234 → 2241**, +7 — 1 in `node_path_fidelity.rs`, 3 in `rehearsal_pass.rs`,
+  2 in `node_c1_dry_run_rehearsal.rs`, 1 in `rehearsal_gate_archived_home.rs`); BLUE canonical
+  types unchanged at 456 (no BLUE `core_paths` file in the diff — every changed source file is
+  under `ade_node`).
+- **Two close events in one window (NOT an anomaly).** The **G-E** close-pass (`da205bff`) is
+  **committed** inside this window (because the baseline `6f848825` is the G-E slice-span HEAD,
+  not its close commit) — it flipped `DC-LIVEMEM-01` to `enforced`, refreshed the four grounding
+  docs to the **G-E** close, and bumped the baseline `90791691 → 6f848825`. The **G-D** close-pass
+  is **not yet committed**. So at HEAD `6bd60c80`: the registry has `DC-LIVEMEM-01` `enforced`
+  and `CN-REHEARSAL-FIDELITY-01` as `declared` (the `enforced` flip + array binding are
+  working-tree only); and the **committed** CODEMAP / SEAMS / TRACEABILITY are still the **G-E**
+  close docs (119 CI, 2234 tests, 314 rules, no `CN-REHEARSAL-FIDELITY-01`).
+- **Sibling-doc coherence is PARTIAL at this regen (load-bearing).** The **registry** and
+  **CODEMAP** **working trees** have been regenerated to the **G-D** close state — registry: 315
+  rules, `CN-REHEARSAL-FIDELITY-01` `enforced` with `tests`/`ci_script` bound; CODEMAP header:
+  "456 canonical types, 2241 tests, 121 CI checks at HEAD (`6bd60c80`, PHASE4-N-F-G-D cluster
+  close)", with the full G-D delta block and 32 `rehearsal_*` mentions — and they **agree** with
+  this doc's counts. But **SEAMS and TRACEABILITY have NOT been regenerated for G-D**:
+  TRACEABILITY still reads "314 rules at this working tree" referencing `6f848825` /
+  `DC-LIVEMEM-01`, and neither SEAMS nor TRACEABILITY mentions `CN-REHEARSAL-FIDELITY-01`, the
+  two new G-D gates, or G-D. `git status` at this regen shows only `.idd-config.json`,
+  `docs/ade-CODEMAP.md`, and `docs/ade-invariant-registry.toml` dirty (the SEAMS/TRACEABILITY
+  G-D regen is still owed by the close-pass).
+- **CI cross-reference warning.** Both new G-D gates are cited by `CN-REHEARSAL-FIDELITY-01`
+  only in the **working-tree registry** — **TRACEABILITY does not yet cite them** (it is still
+  the G-E close doc, in both the committed and working-tree copies). The close-pass commits the
+  `ci_script` binding's enforced state and regenerates TRACEABILITY so these two gates render
+  against `CN-REHEARSAL-FIDELITY-01`. (The G-E gate `live_feed_memory_bounds` and the G-C BA-02
+  gate are already cited in the committed TRACEABILITY, via `da205bff` / earlier.)
+- **Not a rule removal, not a discipline violation** — the working-tree-vs-committed split (and
+  the partial sibling-doc regen) is a sequencing artifact reconciled by the close-pass, which
+  commits the `CN-REHEARSAL-FIDELITY-01` `declared → enforced` flip + `tests`/`ci_script` array
+  binding, the CODEMAP/registry working-tree regen, the **owed** SEAMS/TRACEABILITY G-D regen,
+  the `.idd-config.json` baseline bump confirmation (`6f848825 → 6bd60c80`, already applied) +
+  the registry-count comment, the G-D cluster-doc archive, and this HEAD_DELTAS. The next gating
+  work is the **operator-witnessed live pass** — the C1 dry-run execution
+  (`blocked_until_operator_c1_net_executed`) and, for the bounty deliverable, the separate
+  preview/preprod acceptance pass — neither advanced by G-D, which only ships the path-faithful
+  rehearsal harness ahead of them.

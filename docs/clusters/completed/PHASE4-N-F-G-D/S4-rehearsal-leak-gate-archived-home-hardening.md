@@ -11,7 +11,7 @@ Rehearsal leak gate archived-home hardening (make the non-promotability leak cro
 **PHASE4-N-F-G-D** — Private-testnet accepted-block bounty dry-run.
 
 ### Status
-Planned. Close-surfaced slice — the per-cluster security review (HIGH, verified) found barrier (b) of CN-REHEARSAL-FIDELITY-01 dead. S1 `d4d0f456`, S2 `459cf78d`, S3 `076a5af5` merged; the G-D close is **halted** until S4 lands.
+Merged (PHASE4-N-F-G-D close — impl `6bd60c80`; CE-G-D-2 barrier (b) green). Close-surfaced slice — the per-cluster security review (HIGH, verified) found barrier (b) of CN-REHEARSAL-FIDELITY-01 dead; S4 fixed it and the close resumed.
 
 ### Cluster Exit Criteria Addressed
 - [ ] **CE-G-D-2 (rehearsal-evidence non-promotability — completes barrier (b))** — the leak cross-check (one of the three non-promotability barriers) must actually run against the **real** G-C home(s). Today it targets only the non-existent active home `docs/clusters/PHASE4-N-F-G-C/` behind an `[[ -d ]]` guard, so it silently skips (G-C is archived to `completed/`). S4 makes it scan both the active and archived homes, fail closed on any rehearsal marker (and on a scan error of an existing home), with no whole-check skip — and adds the boundary negative test that proves it.

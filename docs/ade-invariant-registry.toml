@@ -5628,11 +5628,11 @@ gate. The single bounty deliverable is preview/preprod acceptance, captured sepa
 source = "docs/planning/phase4-n-f-g-d-invariants.md"
 cross_ref = ["RO-LIVE-01", "RO-LIVE-06", "CN-OPERATOR-EVIDENCE-01", "DC-NODE-06", "DC-EPOCH-03", "CN-NODE-02", "CN-CINPUT-03", "DC-CINPUT-02b"]
 code_locus = "crates/ade_node/src/ba02_evidence.rs (correlate — reused, the sole acceptance-evidence constructor); crates/ade_node/src/ba02_pass.rs (RED evidence I/O — the rehearsal write-wrapper mirrors/extends this into the rehearsal home); crates/ade_runtime/src/consensus_inputs/ (import_live_consensus_inputs — the shared N-M-C extraction/import the path-fidelity clause pins; OQ1 slice-entry proof obligation: it must consume an early/private-net extraction through the SAME path used for a synced preprod tip); docs/evidence/phase4-n-f-g-c-operator-pass-README.md (the preprod operator-pass runbook the C1 dry-run runbook must be a strict subset of); docs/evidence/phase4-n-f-g-d-private-rehearsal-*.toml (planned — the distinct rehearsal-evidence home); ci/ci_check_rehearsal_manifest_schema.sh (planned — vacuous-until-committed schema + sha256 + label + distinct-home gate); ci/ci_check_node_path_fidelity.sh (planned — no new --mode node flag, no from-genesis consensus-inputs constructor)"
-tests = []
-ci_script = ""
+tests = ["node_accepted_block_consensus_inputs_via_shared_import", "rehearsal_envelope_wraps_correlate_produced_payload", "rehearsal_correlate_no_evidence_writes_nothing", "rehearsal_envelope_is_structurally_distinct_from_ba02_manifest", "c1_dry_run_correlate_to_rehearsal_envelope", "node_c1_dry_run_rehearsal_live", "rehearsal_gate_fails_on_archived_home_leak"]
+ci_script = "ci/ci_check_node_path_fidelity.sh, ci/ci_check_rehearsal_manifest_schema.sh"
 introduced_in = "PHASE4-N-F-G-D"
 strengthened_in = []
-status = "declared"
+status = "enforced"
 evidence_notes = """
 PHASE4-N-F-G-D invariant sketch (/invariants gate, 2026-06-02). Declared at sketch;
 tests + ci_script populate at slice time, flip to enforced at close. G-D is a BOUNTY

@@ -11,7 +11,7 @@ Rehearsal-evidence surface + gate (`PrivateRehearsalManifest` = a distinct, non-
 **PHASE4-N-F-G-D** — Private-testnet accepted-block bounty dry-run.
 
 ### Status
-Planned (cluster doc `ce313927`; S1 merged `d4d0f456`). Second of three slices — the evidence-non-promotability half.
+Merged (PHASE4-N-F-G-D close — impl `459cf78d`; CE-G-D-2 green). Second slice — the evidence-non-promotability half.
 
 ### Cluster Exit Criteria Addressed
 - [ ] **CE-G-D-2 (rehearsal-evidence non-promotability — MECHANICAL, closeable)** — a clearly-marked rehearsal manifest that **wraps the same correlate-produced `Ba02Manifest` payload but carries a distinct rehearsal envelope** (`venue` / `is_rehearsal` / `not_bounty_evidence`) lives **only** under `docs/evidence/phase4-n-f-g-d-private-rehearsal-*.toml`, is **correlate-produced** and **sha256-bound**; a new vacuous-until-committed gate forbids it under the bounty home (and a bounty manifest under the rehearsal home) and cross-checks that `ci_check_ba02_evidence_manifest_schema.sh` does not match the rehearsal home; a hermetic fixture proves correlate-produced + fail-closed (`NoEvidence` → write nothing). Flips **no** RO-LIVE rule.

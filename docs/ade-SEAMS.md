@@ -3,52 +3,142 @@
 > **Status:** Living architectural document. Regenerated; not hand-edited.
 > Per-project instance of `~/.claude/methodology/templates/seams.md`.
 
-> 11 crates, **456 canonical types**, **119 CI checks** at HEAD (`6f848825`, PHASE4-N-F-G-E cluster close).
+> 11 crates, **456 canonical types**, **121 CI checks** at HEAD (`6bd60c80`, PHASE4-N-F-G-D cluster close).
 > Reads CODEMAP (`docs/ade-CODEMAP.md`, regenerated at the same HEAD) for the module
 > list + TCB colors, and the invariant registry (`docs/ade-invariant-registry.toml` —
-> **314 entries** at HEAD) for the rule IDs that gate each closed surface.
+> **315 entries** at HEAD) for the rule IDs that gate each closed surface.
 >
 > **This regeneration is a scoped INCREMENTAL catch-up through ONE cluster.** The prior file was generated
-> at the PHASE4-N-F-G-C close (header `351d46bc` / 118 CI checks / 313 rules — the live WirePump feed + BA-02
-> evidence wiring on the `--mode node` spine). It is brought current through **PHASE4-N-F-G-E** (closing now at
-> `6f848825` — **live-feed bounded memory before authoritative decode/apply on the `--mode node` spine**). The
-> G-E delta bounds two pre-existing UNBOUNDED peer-driven memory surfaces that the G-C live-feed wiring EXPOSED
-> on the binary path (the G-C per-cluster security-review MEDIUM + the prior SEAMS §7 candidate #6): a GREEN
-> per-mini-protocol reassembly-tail cap and a RED WirePump lookahead-depth cap, each fail-closed BEFORE the BLUE
-> `ade_codec` decode path. The seam-relevant additions are **all CLOSED / fenced surface REDUCTIONS, NOT new
-> extension points**: a NEW closed const `MAX_REASSEMBLY_TAIL_BYTES = 16 MiB` (GREEN `ade_network::session::core`)
-> fail-closed via the NEW **additive CLOSED-enum variant** `SessionError::ReassemblyBufferOverflow` (no wildcard;
-> the sole exhaustive consumer `ade_runtime::network::mux_pump::session_err_to_halt` handles it → drop the peer),
-> and a NEW closed const `MAX_WIRE_PUMP_LOOKAHEAD = 256` (RED `ade_node::node_sync::pump_lookahead`,
-> back-pressuring the existing bounded `mpsc`). **Both bounds are CLOSED LITERAL constants with NO runtime / CLI
-> / env / config override** (the no-escape-hatch surface reduction). **No new module, no new `NodeBlockSource` /
-> `CoordinatorEvent` variant.** **No BLUE crate was modified** — the 456 canonical-type total is unchanged
-> (`session/` is GREEN-by-content, NOT a BLUE `ade_network` submodule path, so the new `SessionError` variant is
-> NOT canonical-counted); the four changed files (`session::{core.rs, event.rs}` GREEN-by-content,
-> `node_sync.rs` + `mux_pump.rs` RED) touch no BLUE crate. **Registry → 314 rules** (NEW `DC-LIVEMEM-01`,
-> `tier = derived`, operational-hardening, `enforced`); **118 → 119 CI** (NEW `ci_check_live_feed_memory_bounds.sh`).
+> at the PHASE4-N-F-G-E close (header `6f848825` / 119 CI checks / 314 rules — live-feed bounded memory before
+> authoritative decode/apply on the `--mode node` spine). It is brought current through **PHASE4-N-F-G-D**
+> (closing now at `6bd60c80` — a **private-testnet accepted-block bounty DRY-RUN harness** on the same
+> `--mode node` spine). **G-D is a bounty DRY-RUN harness — NOT the bounty deliverable.** It adds a
+> **path-faithful, non-promotable** rehearsal apparatus and does **NOT** enforce that a C1 run has succeeded
+> (the rehearsal-schema gate is **vacuous until a real operator-produced manifest is committed**). The
+> seam-relevant additions are **two NEW closed/fenced ATTACH POINTS + two NEW fences — NOT new extension
+> points**: (1) a **NEW non-promotable rehearsal-evidence surface** — GREEN `ade_node::rehearsal_evidence`
+> (`PrivateRehearsalManifest` WRAPS a correlate-produced `Ba02Manifest` in a structurally distinct,
+> NON-PROMOTABLE envelope; closed **1-variant** `RehearsalVenue { PrivateTestnetC1 }`; the SOLE ctor
+> `from_correlate_outcome` returns `None` on `NoEvidence`; `to_canonical_toml` ALWAYS emits `is_rehearsal = true`
+> + `not_bounty_evidence = true` as LITERALS) + RED `ade_node::rehearsal_pass` (file I/O that REUSES
+> `ba02_pass::correlate_peer_log_file` VERBATIM — no alternate correlator — and writes ONLY to the rehearsal
+> home `docs/evidence/phase4-n-f-g-d-private-rehearsal-*.toml`), gated by the NEW
+> `ci_check_rehearsal_manifest_schema.sh` (vacuous-until-committed; scans the active + archived G-C bounty homes,
+> fail-closed; THREE non-promotability barriers); and (2) a **NEW path-fidelity fence**
+> `ci_check_node_path_fidelity.sh` pinning the `--mode node` accepted-block path (no new `--mode node` argv flag
+> vs the pinned **28-flag** closed allow-list; no from-genesis consensus-inputs constructor; the node path
+> sources consensus inputs ONLY via the shared `import_live_consensus_inputs`). **No new BLUE authority / canonical
+> type, no new `--mode node` flag, no new `NodeBlockSource` / `CoordinatorEvent` / `Mode` variant, no binary
+> wiring.** **No BLUE crate was modified** — the 456 canonical-type total is unchanged (the NEW
+> `ade_node::rehearsal_evidence` is GREEN-by-content and the NEW `ade_node::rehearsal_pass` is RED — neither is
+> canonical-counted; both live in `ade_node`, not a BLUE `core_paths` entry). **Registry → 315 rules** (NEW
+> `CN-REHEARSAL-FIDELITY-01`, `tier = release`, `enforced`; two coupled clauses — path fidelity + evidence
+> non-promotability); **119 → 121 CI** (NEW `ci_check_node_path_fidelity.sh` + `ci_check_rehearsal_manifest_schema.sh`).
 >
-> **Boundary language (load-bearing — do NOT soften / do NOT broaden).** G-E bounds **peer-driven memory on the
-> live `--mode node` feed BEFORE authoritative decode/apply** — and nothing more. Two closed caps, each
-> fail-closed in front of the BLUE `ade_codec` decode path: the GREEN per-mini-protocol reassembly-tail cap
-> (`MAX_REASSEMBLY_TAIL_BYTES = 16 MiB`, `SessionError::ReassemblyBufferOverflow`, drop the peer) and the RED
-> WirePump lookahead-depth cap (`MAX_WIRE_PUMP_LOOKAHEAD = 256`, back-pressuring the existing bounded `mpsc`). The
-> claim is **NARROW**: it is **NOT** full network DoS resistance, **NOT** peer resource fairness, **NOT** BA-02 /
-> live-evidence readiness. G-E closed **ONE specific live-feed memory surface** — other DoS surfaces remain future
-> hardening slices (e.g. a per-connection aggregate ceiling across the ~10 independent per-protocol reassembly
-> buffers, and per-connection-COUNT / peer-fairness limits, are out of scope). **Precision (close-review — record,
-> do not overclaim):** the reassembly cap is checked *post-extend*, so a single buffer's transient peak is `cap +
-> one <=64 KiB mux frame` (~16.06 MiB), not an absolute 16 MiB; `ProtoBuffers` holds up to ~10 INDEPENDENT
-> per-protocol buffers, each capped separately, so the per-connection aggregate ceiling is ~10× the single-buffer
-> cap — still O(constant) per connection. The bounds are **CLOSED LITERAL constants — defensive implementation
-> bounds, NOT Cardano semantic parameters**; a future hardening slice may *tighten* them, but **no runtime option
-> (CLI / env / config) may disable them or set them unbounded** (`ci_check_live_feed_memory_bounds.sh` guard 3).
-> There is **NO BLUE change**, **NO new `NodeBlockSource` / `CoordinatorEvent` variant**, **NO serve / forge /
-> containment change** (the relay-loop containment gate `ci_check_node_run_loop_containment.sh` and the
-> served-chain handoff fence `ci_check_served_chain_handoff_fence.sh` are byte-unchanged), and **NO live-evidence /
-> BA-02 / RO-LIVE flip or claim**.
+> **Boundary language (load-bearing — do NOT soften / do NOT broaden).** G-D enforces that the private C1
+> dry-run is a **path-faithful, non-promotable rehearsal HARNESS** — and nothing more. (1) **PATH FIDELITY:** the
+> C1 private dry-run uses the SAME `--mode node` accepted-block path as preview/preprod
+> (`import_live_consensus_inputs` → forge → self-accept → sibling-serve → block-fetch → peer log → `correlate`),
+> with NO private-only flag / branch / bootstrap authority / from-genesis constructor; the only differences are
+> operator-controlled INPUTS (a private genesis whose stake makes Ade win slots fast) + the evidence LABEL. A
+> private-only helper that would make the rehearsal pass where the same condition would fail on preview/preprod
+> is a **shared-path bug to fix in the shared path, never special-cased.** (2) **EVIDENCE NON-PROMOTABILITY:** any
+> private-testnet manifest is clearly marked rehearsal / private-testnet, stored ONLY under the rehearsal home
+> (`docs/evidence/phase4-n-f-g-d-private-rehearsal-*.toml`, never a bounty home), sha256-bound to a real Haskell
+> peer log, correlate-produced (`ba02_evidence::correlate` is the SOLE acceptance-evidence constructor), and flips
+> **NO RO-LIVE rule**. The C1 dry-run is **NOT a runtime node mode** and is **not wired into any binary arm** —
+> the live C1 execution stays `blocked_until_operator_c1_net_executed`, exercised only by the env-gated RED test
+> `crates/ade_node/tests/node_c1_dry_run_rehearsal.rs::node_c1_dry_run_rehearsal_live` (`ADE_LIVE_C1_DRY_RUN=1`,
+> skipped in CI). G-D does **NOT** enforce that a C1 run has succeeded; the rehearsal gate is **vacuous until a
+> real operator-produced manifest is committed**. There is **NO RO-LIVE flip** (`RO-LIVE-01` stays `partial`;
+> `RO-LIVE-06` stays schema-only / `enforced`; neither gains a G-D strengthening), **NO bounty / preview / preprod
+> completion claim**. Private C1 acceptance ≠ bounty completion; preview/preprod acceptance = the single bounty
+> deliverable, captured separately. The G-A..G-E forge / serve / live-feed / containment surfaces are
+> **unchanged**; the three containment / handoff / memory fences (`ci_check_node_run_loop_containment.sh`,
+> `ci_check_served_chain_handoff_fence.sh`, `ci_check_live_feed_memory_bounds.sh`) are **byte-unchanged**.
 >
-> ### PHASE4-N-F-G-E (closing, `6f848825`) — live-feed bounded memory before authoritative decode/apply on the `--mode node` spine
+> ### PHASE4-N-F-G-D (closing, `6bd60c80`) — private-testnet accepted-block bounty DRY-RUN harness on the `--mode node` spine
+>
+> N-F-G-D introduced / extended (the two NEW surfaces are CLOSED / fenced ATTACH POINTS — classified under §3
+> Closed / §4 Frozen; NOT new extension points). G-D adds a path-faithful, non-promotable bounty DRY-RUN
+> **harness**, not a runtime mode:
+>
+> - **NEW CLOSED non-promotable surface (GREEN, `ade_node::rehearsal_evidence` — `//! GREEN`):** the
+>   `PrivateRehearsalManifest` (S2) — a structurally distinct, NON-PROMOTABLE rehearsal envelope WRAPPING a
+>   correlate-produced `ba02_evidence::Ba02Manifest` payload (the SAME proof the bounty BA-02 path produces).
+>   Closed **1-variant** `RehearsalVenue { PrivateTestnetC1 }` (a non-private venue is **unrepresentable** — a
+>   rehearsal is never preprod / preview). The **SOLE constructor** `from_correlate_outcome(&BA02Outcome,
+>   RehearsalEnvelope) -> Option<Self>` wraps `BA02Outcome::Ba02Manifest` and returns `None` on `NoEvidence`
+>   (nothing to wrap, nothing to write) — so a rehearsal manifest is **ALWAYS correlate-produced**; there is **NO**
+>   path from raw operator input or a `NoEvidence` outcome to a manifest. `to_canonical_toml` is pure and **ALWAYS
+>   emits `is_rehearsal = true` + `not_bounty_evidence = true` as LITERALS** — the type **cannot represent a
+>   non-rehearsal**. `REHEARSAL_MANIFEST_SCHEMA_VERSION = 1`. Pure / deterministic (no I/O / clock / rand / float /
+>   `HashMap`); promotable-shape GREEN. `session/`-style GREEN-by-content (lives in `ade_node`, NOT a BLUE
+>   `core_paths` entry), so **NOT canonical-counted**. **A CLOSED constructor-fenced non-promotable envelope (a
+>   surface REDUCTION), NOT an extensible registry / plugin point.** Backs `CN-REHEARSAL-FIDELITY-01` clause 2.
+>   Gate: `ci_check_rehearsal_manifest_schema.sh`.
+> - **NEW RED rehearsal-evidence file I/O (RED, `ade_node::rehearsal_pass` — `//! RED`):** the file I/O over the
+>   GREEN `PrivateRehearsalManifest` (S2). `correlate_peer_log_file_into_rehearsal(ade, peer_log_path, envelope)
+>   -> io::Result<Option<PrivateRehearsalManifest>>` **REUSES `ba02_pass::correlate_peer_log_file` VERBATIM** (no
+>   alternate correlator), then wraps a correlate-produced payload in the envelope; `Ok(None)` iff `correlate`
+>   returned `NoEvidence`; a missing/unreadable file fails closed (`io::Error`).
+>   `write_private_rehearsal_manifest(&PrivateRehearsalManifest, out_path) -> io::Result<()>` accepts **ONLY a
+>   `PrivateRehearsalManifest`** (the argument type IS the gate — only an already-constructed one is writable).
+>   Registered `pub mod rehearsal_pass;` in `lib.rs`. Constructs no evidence, synthesizes no acceptance, uses no
+>   alternate correlator. **RED file I/O over an UNCHANGED closed evidence vocabulary — NO new closed enum /
+>   registry / plugin point.** Backs `CN-REHEARSAL-FIDELITY-01` clause 2. Gate:
+>   `ci_check_rehearsal_manifest_schema.sh`.
+> - **REUSED VERBATIM (RED, `ade_node::ba02_pass` — UNCHANGED):** `rehearsal_pass` calls
+>   `ba02_pass::correlate_peer_log_file` (→ GREEN `ba02_evidence::correlate`, the SOLE `Ba02Manifest` ctor)
+>   verbatim — there is **NO alternate correlator**. The G-C `ba02_pass` evidence I/O is byte-unchanged by G-D.
+> - **NEW path-fidelity FENCE (CI, `ci_check_node_path_fidelity.sh`):** the `--mode node` accepted-block PATH
+>   FIDELITY fence (S1, CN-REHEARSAL-FIDELITY-01 clause 1). **Guard (a):** the `crates/ade_node/src/cli.rs` argv
+>   flag-literal set equals the pinned closed **28-flag** allow-list — G-D adds none; a private-only / venue flag
+>   (e.g. `--private-net`, `--from-genesis`, `--devnet`, `--rehearsal`) would change the set and trip the guard.
+>   **Guard (b):** no fn whose name carries BOTH `genesis` and `consensus` exists (a from-genesis consensus-inputs
+>   constructor; line comments stripped first so prose cannot self-trip) AND `node_lifecycle.rs` sources consensus
+>   inputs via the shared `import_live_consensus_inputs`. The C1 dry-run differs from the preprod pass **only in
+>   operator INPUTS + the evidence LABEL — never in code.**
+> - **NEW rehearsal-schema FENCE (CI, `ci_check_rehearsal_manifest_schema.sh`):** vacuous-until-committed (S2;
+>   hardened in S4, CN-REHEARSAL-FIDELITY-01 clause 2). When a committed
+>   `docs/evidence/phase4-n-f-g-d-private-rehearsal-*.toml` is present it verifies the closed **12-field** schema +
+>   `schema_version == 1` + `is_rehearsal = true` + `not_bounty_evidence = true` + a `venue` of `private-testnet*`
+>   + `peer_log_file_sha256 == sha256(the committed peer-log fixture)`. **THREE non-promotability barriers:** (i)
+>   the distinct `docs/evidence/` rehearsal home; (ii) the explicit rehearsal markers; (iii) a cross-check (S4
+>   hardening) that **NO** rehearsal marker (`^is_rehearsal` / `^not_bounty_evidence`) appears in any `.toml` under
+>   EITHER bounty home (active `docs/clusters/PHASE4-N-F-G-C/` AND archived
+>   `docs/clusters/completed/PHASE4-N-F-G-C/`) — built from the EXISTING-homes list first (no `[[ -d ]]`
+>   whole-check skip), **fail-closed** on a scan error (grep rc≥2) over an existing home. When NO manifest is
+>   committed (the typical state — the C1 dry-run is `blocked_until_operator_c1_net_executed`), the gate is
+>   **vacuously satisfied**.
+> - **NEW runbook (S3):** `docs/evidence/phase4-n-f-g-d-private-rehearsal-README.md` — the C1 dry-run execution
+>   runbook, a provable **STRICT SUBSET** of the G-C preprod operator-pass runbook (same `--mode node` path /
+>   `--peer` feed / operator-key flow / peer-log capture / `correlate` / NoEvidence fail-closed; ONLY
+>   `venue=private-testnet-c1` + operator genesis stake + the `PrivateRehearsalManifest` envelope differ — the
+>   strict-subset property is ANCHORED by the S1 path-fidelity fence).
+>
+> **Registry delta (N-F-G-D):** **315 rules** (314 → 315). **NEW `CN-REHEARSAL-FIDELITY-01`** (`tier = release`,
+> `status = enforced` at this close; `introduced_in = "PHASE4-N-F-G-D"`; two coupled clauses — (1) path fidelity +
+> (2) evidence non-promotability; `ci_script = ci/ci_check_node_path_fidelity.sh, ci/ci_check_rehearsal_manifest_schema.sh`;
+> 7 tests). **No rule weakened; no RO-LIVE strengthening bump** (G-D does not advance the bounty deliverable).
+> **Two new CI gates** (119 → 121): `ci_check_node_path_fidelity.sh` + `ci_check_rehearsal_manifest_schema.sh`.
+>
+> **Governance note (N-F-G-D).** G-D upholds the load-bearing structural lines. **A HARNESS, not an acceptance
+> claim:** G-D ships a path-fidelity fence + a non-promotable rehearsal-evidence surface + a dry-run runbook + an
+> operator-gated execution scaffold, but **claims no peer acceptance and no bounty completion** — `RO-LIVE-01`
+> stays `partial`, `RO-LIVE-06` enforces schema + mechanics only, and the rehearsal gate is vacuous-until-committed.
+> **Path fidelity is mechanically fenced:** `ci_check_node_path_fidelity.sh` forbids any new `--mode node` flag
+> (28-flag pinned allow-list) and any from-genesis consensus-inputs constructor — the C1 dry-run differs from
+> preprod only in operator inputs + the evidence label, never in code. **Evidence is non-promotable:** `correlate`
+> stays the SOLE `Ba02Manifest` ctor; the `PrivateRehearsalManifest` type cannot represent a non-rehearsal; three
+> independent barriers (distinct home, explicit markers, bounty-home leak cross-check) keep a rehearsal manifest
+> out of the bounty path. **Closed surfaces stay closed:** `RehearsalVenue` is a closed 1-variant enum;
+> `NodeBlockSource` / `CoordinatorEvent` / `Mode` are unchanged; no new BLUE authority / canonical type / argv flag
+> / bootstrap. **Containment is untouched:** the relay-loop containment gate, the served-chain handoff fence, and
+> the live-feed memory bounds are byte-unchanged. **No overclaim:** private C1 acceptance ≠ bounty completion; the
+> live C1 execution stays `blocked_until_operator_c1_net_executed`.
+>
+> ### PHASE4-N-F-G-E (closed, `6f848825`) — live-feed bounded memory before authoritative decode/apply on the `--mode node` spine
 >
 > N-F-G-E introduced / extended (all NEW surfaces are CLOSED / fenced — classified under §3 Closed / §4 Frozen;
 > NOT new extension points). This is a surface REDUCTION (two fail-closed memory bounds in front of the BLUE
@@ -1059,6 +1149,12 @@ N-F-D/N-F-E/N-F-G-A: NO new argv flag for the relay loop / forge tick / forge fi
   flags are an OPTIONAL ingress on the existing --mode node arm (no new Mode variant). N-F-G-C: --peer is an
   OPTIONAL live-feed flag on the existing --mode node arm (no new Mode variant) — present ⇒ the forge tick
   becomes reachable in production once a leader slot is due (RO-LIVE-01); absent ⇒ the default empty-source path.
+N-F-G-D: NO new argv flag — the --mode node accepted-block PATH is pinned to a closed 28-flag allow-list by
+  ci_check_node_path_fidelity.sh (a private-only / venue flag — e.g. --private-net / --from-genesis / --devnet /
+  --rehearsal — would trip the fence). The C1 private-testnet dry-run uses the SAME path as preview/preprod,
+  differing ONLY in operator INPUTS (a private genesis whose stake makes Ade win slots fast) + the evidence
+  LABEL (a non-promotable PrivateRehearsalManifest); there is NO from-genesis consensus-inputs constructor —
+  the node path sources consensus inputs ONLY via the shared import_live_consensus_inputs (CN-REHEARSAL-FIDELITY-01).
 ```
 
 **Rule:** New ingress attaches by producing the canonical BLUE type's bytes and entering
@@ -1106,7 +1202,18 @@ forwards a typed `mpsc<SelfAcceptedHandoff>` send only (DC-NODE-06 / CN-PROD-04 
 (`ba02_pass`) over the UNCHANGED GREEN `correlate` — `correlate` stays the SOLE `Ba02Manifest`
 constructor; `write_ba02_manifest` accepts ONLY a `Ba02Manifest`; no self-evidence acceptance source;
 no committed synthetic manifest (RO-LIVE-06 / CN-OPERATOR-EVIDENCE-01 —
-`ci_check_ba02_evidence_manifest_schema.sh`, vacuous-until-committed + sha256-bound).** A new `--mode`
+`ci_check_ba02_evidence_manifest_schema.sh`, vacuous-until-committed + sha256-bound).** **A bounty DRY-RUN
+rehearsal (N-F-G-D) attaches as a path-faithful, NON-PROMOTABLE apparatus that adds NO new `--mode node` argv
+flag (the `cli.rs` flag set equals the pinned 28-flag closed allow-list) and NO from-genesis consensus-inputs
+constructor — the C1 private dry-run uses the SAME accepted-block path as preview/preprod, sourcing consensus
+inputs ONLY via the shared `import_live_consensus_inputs`; a condition that would fail on preprod is a
+shared-path bug, never special-cased. Its evidence attaches as a GREEN constructor-fenced
+`PrivateRehearsalManifest` (sole ctor `from_correlate_outcome`, `None` on `NoEvidence`; `to_canonical_toml`
+emits `is_rehearsal`/`not_bounty_evidence` literals) over the UNCHANGED `correlate`, written by a RED
+`rehearsal_pass` that REUSES `ba02_pass::correlate_peer_log_file` VERBATIM — stored ONLY under the rehearsal home
+`docs/evidence/phase4-n-f-g-d-private-rehearsal-*.toml`, sha256-bound, never under / referenced by a bounty home,
+flipping NO RO-LIVE rule (CN-REHEARSAL-FIDELITY-01 — `ci_check_node_path_fidelity.sh` +
+`ci_check_rehearsal_manifest_schema.sh`, vacuous-until-committed).** A new `--mode`
 that needs initial state MUST obtain it via the single `bootstrap_initial_state` authority (CN-NODE-01).
 New ingress **may not** introduce a second `PreservedCbor` construction site, a second
 block-envelope encoder, a second era→leader-VRF-input construction (CN-FORGE-04), a second
@@ -1138,7 +1245,13 @@ carrying `ProtocolParameters::default()` / genesis-initial pparams instead of th
 AFTER `query_leader_schedule` / a fabricated candidate epoch / a `NonceInput::EpochBoundary`|`CandidateFreeze`
 nonce promotion on the forge path (DC-EPOCH-03 — `ci_check_node_forge_single_epoch_fail_closed.sh`), a
 `protocol_params` float path, a `checked_millis_to_slot` that saturates a before-anchor tick, or a
-`protocol_params_json` preimage folded INTO the 15-field canonical fingerprint (CE-G-A-1/2/2a/4).**
+`protocol_params_json` preimage folded INTO the 15-field canonical fingerprint (CE-G-A-1/2/2a/4), a new
+`--mode node` argv flag beyond the pinned 28-flag allow-list / a from-genesis consensus-inputs constructor / a
+node path that sources consensus inputs by anything other than the shared `import_live_consensus_inputs`
+(CN-REHEARSAL-FIDELITY-01 clause 1), a `PrivateRehearsalManifest` constructed from anything but a
+correlate-produced payload / an alternate correlator in `rehearsal_pass` / a rehearsal manifest written outside
+the rehearsal home or referenced by a bounty home / a rehearsal manifest that flips a RO-LIVE rule
+(CN-REHEARSAL-FIDELITY-01 clause 2).**
 
 ---
 
@@ -1184,6 +1297,30 @@ gate is vacuous-until-committed; when a `CE-G-C-LIVE_*.toml` is committed it ver
 **Honest scope:** `ba02_pass` is reached by NO binary arm at this HEAD (tested only — incl. the env-gated
 `node_operator_pass_ba02_live`). BA-02 is satisfied NOWHERE at this HEAD; a real result needs an operator-captured
 peer log through `correlate` against a peer that can grant leadership (C1/C2). RO-LIVE-01 stays partial/operator-gated.
+
+### Domain: private-testnet rehearsal evidence — RED file I/O vs. GREEN non-promotable envelope vs. the REUSED GREEN correlate (N-F-G-D)
+
+| Layer | Module | Color | Role |
+|-------|--------|-------|------|
+| **Data-only rehearsal file I/O (REUSE, no alternate correlator)** | `ade_node::rehearsal_pass` (`correlate_peer_log_file_into_rehearsal`, `write_private_rehearsal_manifest`; NEW, S2 — `//! RED`) | RED | The private-testnet rehearsal-evidence file I/O. `correlate_peer_log_file_into_rehearsal` REUSES `ba02_pass::correlate_peer_log_file` **VERBATIM** (→ the GREEN `correlate`, the SOLE `Ba02Manifest` ctor) — **no alternate correlator** — then wraps a correlate-produced payload in the GREEN envelope; `Ok(None)` iff `correlate` returned `NoEvidence`; a missing/unreadable file ⇒ `io::Error` (fail-closed). `write_private_rehearsal_manifest` accepts **ONLY a `PrivateRehearsalManifest`** (the argument type IS the gate). Constructs no evidence, synthesizes no acceptance. **NO new closed enum / registry.** |
+| **Non-promotable evidence envelope (compares nothing new — wraps the SAME proof)** | `ade_node::rehearsal_evidence` (`PrivateRehearsalManifest`, closed 1-variant `RehearsalVenue { PrivateTestnetC1 }`, `RehearsalEnvelope`, `REHEARSAL_MANIFEST_SCHEMA_VERSION = 1`) | GREEN | WRAPS a correlate-produced `ba02_evidence::Ba02Manifest` (the SAME proof the bounty path produces) in a structurally distinct, NON-PROMOTABLE envelope. SOLE ctor `from_correlate_outcome` returns `None` on `NoEvidence`; `to_canonical_toml` ALWAYS emits `is_rehearsal = true` + `not_bounty_evidence = true` as LITERALS — the type **cannot represent a non-rehearsal**. Pure / deterministic; no I/O / clock / rand / float / `HashMap`. Forges/admits/persists nothing. `CN-REHEARSAL-FIDELITY-01` clause 2. |
+| **Acceptance authority (REUSED VERBATIM — UNCHANGED)** | `ade_node::ba02_evidence::correlate` (via `ba02_pass::correlate_peer_log_file`) | GREEN | `correlate` stays the **SOLE** `Ba02Manifest` constructor (hash-primary; exact-match arm only). UNCHANGED by G-D — only *consumed* (transitively) through the reused `ba02_pass` wrapper. Ade self-accept / served bytes / wire success ≠ acceptance — only the Haskell peer log through `correlate` is (the allow-list is inherited verbatim). |
+
+**Rule (CN-REHEARSAL-FIDELITY-01 clause 2; `ci_check_rehearsal_manifest_schema.sh`):** the rehearsal apparatus
+is **REUSE, not reimplementation** — `rehearsal_pass` calls `ba02_pass::correlate_peer_log_file` (the SOLE
+correlate path) **verbatim**; there is **NO alternate correlator**. **All acceptance semantics still live in the
+UNCHANGED GREEN `correlate`** — the SOLE `Ba02Manifest` constructor; the `PrivateRehearsalManifest` merely WRAPS a
+correlate-produced payload in a NON-PROMOTABLE envelope (sole ctor `from_correlate_outcome`, `None` on
+`NoEvidence`; `is_rehearsal`/`not_bounty_evidence` literals — the type cannot represent a non-rehearsal).
+`write_private_rehearsal_manifest` accepts ONLY a `PrivateRehearsalManifest`, so a written rehearsal manifest is
+**always correlate-produced**, stored ONLY under the rehearsal home (`docs/evidence/phase4-n-f-g-d-private-rehearsal-*.toml`),
+sha256-bound, **never under / referenced by a bounty home** (three barriers: distinct home, explicit markers, a
+fail-closed cross-check over the active + archived G-C bounty homes), and flips **NO RO-LIVE rule**. **The
+`correlate` chokepoint never moves.** **Honest scope:** `rehearsal_pass` is reached by NO binary arm at this HEAD
+(tested only — incl. the env-gated `node_c1_dry_run_rehearsal_live`, `ADE_LIVE_C1_DRY_RUN`). **A bounty DRY-RUN
+harness — NOT the bounty deliverable.** Private C1 acceptance ≠ bounty completion; the live C1 execution stays
+`blocked_until_operator_c1_net_executed`. BA-02 is satisfied NOWHERE; preview/preprod acceptance is the single
+bounty deliverable, captured separately.
 
 ### Domain: forge-constant fidelity — current-pparams source + checked clock + off-epoch guard (GREEN parse / GREEN accessor / BLUE authority-behind-seams; N-F-G-A)
 
@@ -1483,6 +1620,8 @@ ACCEPTS it is the operator-gated RO-LIVE-01 leg (peer ACCEPT NOT claimed here).
 
 | Registry | Location | Count | Change Rule |
 |----------|----------|-------|-------------|
+| `RehearsalVenue` *(NEW, N-F-G-D S2)* | `ade_node::rehearsal_evidence` (GREEN-by-content) | 1 (`PrivateTestnetC1`) | The closed rehearsal-venue tag on the non-promotable `PrivateRehearsalManifest`. **A non-private venue is unrepresentable** — a rehearsal is NEVER preprod / preview, so a private-testnet manifest can never masquerade as bounty evidence by venue. Lives in `ade_node` (NOT a BLUE `core_paths` entry), so **NOT canonical-counted**. **A closed 1-variant enum (a surface REDUCTION), NOT an extension point.** New variant = a `to_str`/serialize arm + a strengthening of **CN-REHEARSAL-FIDELITY-01** clause 2 (`ci_check_rehearsal_manifest_schema.sh`); a `venue` of `private-testnet*` is the enforced literal, and a non-rehearsal venue must stay unrepresentable. |
+| `PrivateRehearsalManifest` *(NEW, N-F-G-D S2)* | `ade_node::rehearsal_evidence` (GREEN-by-content) | constructor-fenced struct (`ba02: Ba02Manifest` + `venue: RehearsalVenue` + `peer_log_file` + `peer_log_file_sha256`; `REHEARSAL_MANIFEST_SCHEMA_VERSION = 1`) over the existing closed `Ba02Manifest` | The NON-PROMOTABLE private-testnet rehearsal envelope WRAPPING a correlate-produced `Ba02Manifest` (the SAME proof the bounty BA-02 path produces). **SOLE constructor** `from_correlate_outcome(&BA02Outcome, RehearsalEnvelope) -> Option<Self>` wraps `BA02Outcome::Ba02Manifest` and returns `None` on `NoEvidence` — so a rehearsal manifest is **ALWAYS correlate-produced**; there is **NO** path from raw operator input / `NoEvidence` to a manifest. `to_canonical_toml` ALWAYS emits `is_rehearsal = true` + `not_bounty_evidence = true` as **LITERALS** — the type **cannot represent a non-rehearsal**. Pure / deterministic; no I/O / clock / rand / float / `HashMap`. Lives in `ade_node`, so **NOT canonical-counted**. **A CLOSED constructor-fenced non-promotable envelope (a surface REDUCTION), NOT an extensible registry / plugin point.** Backs `CN-REHEARSAL-FIDELITY-01` clause 2. A new field / schema bump = a struct addition + a `REHEARSAL_MANIFEST_SCHEMA_VERSION` bump + a strengthening of **CN-REHEARSAL-FIDELITY-01** (`ci_check_rehearsal_manifest_schema.sh`, 12-field schema); **no raw-operator-input / `NoEvidence` ctor may be introduced, and the type MUST stay incapable of serializing a non-rehearsal.** |
 | `SessionError::ReassemblyBufferOverflow` *(NEW, N-F-G-E)* | `ade_network::session::event` (GREEN-by-content) | additive variant `{ protocol, len, cap }` on the closed `SessionError` enum | The closed fail-closed signal for an incomplete per-mini-protocol reassembly tail over `MAX_REASSEMBLY_TAIL_BYTES`. Added **additively** — there is **NO wildcard**; the SOLE exhaustive consumer `ade_runtime::network::mux_pump::session_err_to_halt` maps it → `PeerHaltReason::ChainSyncDecodeError` (drop the peer). The cap fires **BEFORE** the BLUE `ade_codec` decode path — no silent truncation, no partial decode. `session/` is GREEN-by-content (NOT a BLUE `ade_network` submodule path), so the variant is **NOT canonical-counted**. **A closed additive enum variant (a surface REDUCTION / fail-closed bound), NOT an extension point.** New variant = a `SessionError` arm + a `session_err_to_halt` arm (no wildcard) + a strengthening of **DC-LIVEMEM-01** (`ci_check_live_feed_memory_bounds.sh`). |
 | `MAX_REASSEMBLY_TAIL_BYTES` (closed memory bound) *(NEW, N-F-G-E)* | `ade_network::session::core` (GREEN-by-content, `core.rs:49`) | closed literal const `16 * 1024 * 1024` (16 MiB) | The per-mini-protocol reassembly-tail cap. After `drain_protocol_items` drains every COMPLETE item, `buf.len() > MAX_REASSEMBLY_TAIL_BYTES` ⇒ `SessionError::ReassemblyBufferOverflow` (fail closed, drop the peer). A **CLOSED LITERAL constant — a defensive implementation bound, NOT a Cardano semantic parameter**; **NO runtime / CLI / env / config override** (the no-escape-hatch surface reduction, `ci_check_live_feed_memory_bounds.sh` guard 3). A future hardening slice may **tighten** it (a strengthening of **DC-LIVEMEM-01**), but may NEVER make it a tunable / unbounded. |
 | `MAX_WIRE_PUMP_LOOKAHEAD` (closed lookahead-depth bound) *(NEW, N-F-G-E)* | `ade_node::node_sync` (RED, `node_sync.rs:58`) | closed literal const `256` | The WirePump opportunistic-drain depth cap. `pump_lookahead` stops the `try_recv` drain at the cap (`node_sync.rs:126`), so the existing bounded `mpsc` (`LIVE_WIRE_PUMP_CHANNEL_CAP = 64`) **back-pressures** the pump. Content-blind; the verdict-decoupled `NodeBlockSource` (closed 2-variant `{WirePump, InMemory}`) + arrival order are **unchanged** (a depth cap on the existing opaque `VecDeque<Vec<u8>>`, NOT a new variant / source / verdict). A **CLOSED LITERAL constant — a defensive implementation bound**; **NO runtime / CLI / env / config override** (`ci_check_live_feed_memory_bounds.sh` guard 3). A future hardening slice may **tighten** it (a strengthening of **DC-LIVEMEM-01**), never make it a tunable / unbounded. |
@@ -1493,7 +1632,7 @@ ACCEPTS it is the operator-gated RO-LIVE-01 leg (peer ACCEPT NOT claimed here).
 | `ProtocolParamsParseError` *(N-F-G-A S2a)* | `ade_runtime::consensus_inputs::protocol_params` (GREEN-by-content) | closed sum (incl. `JsonShape` / `InexactRational { field: &'static str }`) | The closed error set of the cardano-cli `query protocol-parameters` JSON parser. **No float path** — a rational literal that cannot be represented exactly by integer arithmetic fails closed (`InexactRational`); a bad shape ⇒ `JsonShape`. Carries only non-secret `&'static str` field tags. A **surface REDUCTION (a closed RED-parse → BLUE-`ProtocolParameters` pipeline)**, NOT an extension point. New variant = a `parse_protocol_parameters_json` arm + a strengthening of **CE-G-A-2a** (`ci_check_recovered_ledger_pparams_sourced.sh`); non-secret primitives only; **no float path may be introduced**. |
 | `ForgeCurrentPParamsError` *(N-F-G-A S2a)* | `ade_runtime::consensus_inputs::canonical` (GREEN-by-content) | 3 (`PreimageAbsent` / `BindMismatch` / `Parse(ProtocolParamsParseError)`) | The closed error set of `require_forge_current_pparams`. `LiveConsensusInputsCanonical` carries `protocol_params_json: Option<String>` **OUTSIDE** the frozen 15-field canonical fingerprint (which commits to `protocol_params_hash`); the accessor requires the preimage present (`PreimageAbsent`), `blake2b_256`-binds it to the fingerprinted hash (`BindMismatch`), and parses exactly (`Parse`). A hash-bound accessor, NOT an extension point. New variant = a strengthening of **CE-G-A-2a**; **the preimage MUST stay OUTSIDE the 15-field canonical CBOR fingerprint** (no fingerprint-schema change). |
 | `ForgeEpochAdmission` *(N-F-G-A S4)* | `ade_node::node_sync` (GREEN-by-fn inside RED `node_sync`) | 2 (`WithinSeedEpoch` / `OffEpoch { located, seed }`) | The closed off-epoch admission verdict carried by `forge_epoch_admission`, derived SOLELY from `(slot, era_schedule, seed_epoch)` via the BLUE `EraSchedule::locate`. An off-epoch / unlocatable slot is an *error* (`OffEpoch`), never a third variant. Called BEFORE `query_leader_schedule` inside `forge_one_from_recovered`. A **closed classifier vocabulary**, NOT an extension point. New variant = a `forge_epoch_admission` arm + a strengthening of **DC-EPOCH-03** (`ci_check_node_forge_single_epoch_fail_closed.sh` — must use `EraSchedule::locate`, no fabricated epoch, no nonce promotion). |
-| `CoordinatorEvent` *(DELIBERATELY NOT EXTENDED, N-F-G-A S4)* | `ade_runtime::producer::coordinator` (GREEN) | 9 (`SlotTick` / `ForgeSucceeded` / `ForgeNotLeader` / `ForgeFailed` / `PeerConnected` / `PeerDisconnected` / `LedgerSnapshotUpdated` / `BroadcastDrained` / `Shutdown`) | The closed coordinator event set. **S4 reused the existing `ForgeNotLeader` for the off-epoch outcome — NO new variant added.** N-F-G-B surfaced the self-accepted token via a **sibling return component**, NOT a new event variant. N-F-G-C added **NO** `CoordinatorEvent` variant. An off-epoch forge is surfaced as a "not leader" outcome through the closed vocabulary, keeping the set additively stable. New variant = a strengthening of **DC-PROD-01**; closed JSONL vocab, no free-form reason strings, no key material. |
+| `CoordinatorEvent` *(DELIBERATELY NOT EXTENDED, N-F-G-A S4)* | `ade_runtime::producer::coordinator` (GREEN) | 9 (`SlotTick` / `ForgeSucceeded` / `ForgeNotLeader` / `ForgeFailed` / `PeerConnected` / `PeerDisconnected` / `LedgerSnapshotUpdated` / `BroadcastDrained` / `Shutdown`) | The closed coordinator event set. **S4 reused the existing `ForgeNotLeader` for the off-epoch outcome — NO new variant added.** N-F-G-B surfaced the self-accepted token via a **sibling return component**, NOT a new event variant. N-F-G-C added **NO** `CoordinatorEvent` variant; N-F-G-D added **NO** `CoordinatorEvent` variant. An off-epoch forge is surfaced as a "not leader" outcome through the closed vocabulary, keeping the set additively stable. New variant = a strengthening of **DC-PROD-01**; closed JSONL vocab, no free-form reason strings, no key material. |
 | `ForgeIntent` *(N-F-F)* | `ade_node::forge_intent` (GREEN) | 2 (`On(ForgePaths)` / `Off`) | The closed tri-state forge-intent classification the `--mode node` arm keys its forge-on flip off. `classify_forge_intent` is the SOLE entry; **NO third "partial" variant** — a partial key set is `Err(ForgeIntentError::PartialKeySet)`. Pure/total over all 2⁵ flag-PRESENCE combinations (never observes contents). A **CE-not-law additively-closed classifier** (like `WalEntry` / `LoopStep`). New variant = a `classify_forge_intent` arm (bound by name, no wildcard) + a `node_lifecycle` dispatch arm + a strengthening of **CN-NODE-03** (`ci_check_forge_intent_closed.sh`). |
 | `ForgeIntentError` *(N-F-F)* | `ade_node::forge_intent` (GREEN) | 1 (`PartialKeySet { present, missing }`) | The closed forge-intent classify error — carries ONLY static CLI flag-name strings (`&'static str`), never a supplied path string, never key material. New variant = a strengthening of **CN-NODE-03**; static flag-name strings only (`ci_check_forge_intent_closed.sh`). |
 | `OperatorForgeError` *(N-F-F)* | `ade_node::operator_forge` (RED) | 6 (`ColdKeyLoad` / `VrfKeyLoad` / `KesKeyLoad` / `OpcertParse` / `ShellInit` / `GenesisParse`) | The closed operator-material ingress error sum — one variant per reused-loader / structural-validator step. Carries no path/key bytes (`OpcertParse`/`GenesisParse` hold `&'static str` detail only). _(N-F-G-A: details now come from the REAL `parse_opcert_envelope` / `parse_shelley_genesis`.)_ New variant = a strengthening of **CN-NODE-03 / OP-OPS-04**; non-secret primitives only (`ci_check_operator_forge_no_secret_leak.sh`). |
@@ -1501,7 +1640,7 @@ ACCEPTS it is the operator-gated RO-LIVE-01 leg (peer ACCEPT NOT claimed here).
 | `LoopStep` *(EXTENDED 3→4, N-F-E)* | `ade_node::run_loop_planner` (GREEN) | 4 (`SyncOnce` / `ForgeTick` / `Idle` / `HaltCleanly`) | The closed live-run iteration vocabulary the GREEN planner emits. **N-F-E added `ForgeTick`** (3→4). It **cannot express an authority decision**. A **CE-not-law additively-evolvable closed planner enum** (like `WalEntry`). New variant = a `plan_loop_step` arm + a fenced RED `run_relay_loop` branch + a strengthening of **CN-NODE-02 / DC-NODE-05** (`ci_check_loop_planner_closed.sh` + `ci_check_node_run_loop_containment.sh`). |
 | `ForgeSlotStatus` *(N-F-E)* | `ade_node::run_loop_planner` (GREEN) | 2 (`Due` / `NotDue`) | The **content-blind** forge-slot planner input. The planner learns only whether a slot is *due*, NEVER who is a leader (eligibility is BLUE inside `forge_one_from_recovered`). Derived by the pure `forge_slot_status` monotonic guard (the only `SlotNo`-observing fn in the module). New variant = a `plan_loop_step` arm + a strengthening of **DC-NODE-05** (`ci_check_loop_planner_closed.sh`). |
 | `ForgeActivation` *(N-F-E; real operator material N-F-F; current pparams N-F-G-A; opt-in `handoff_tx` N-F-G-B)* | `ade_node::node_lifecycle` (RED) | closed opt-in struct (`clock` / `coordinator_state` / `recovered` / `shell` / `pool_id` / `pparams` / `protocol_version` / `anchor_millis` / `start_slot` / `slot_length_ms` / `last_slot_alignment_fail` / `handoff_tx: Option<mpsc::UnboundedSender<SelfAcceptedHandoff>>` / private `last_forged_slot`+`pending_slot` / `hermetic_forge_outcomes`) | The **opt-in forge-activation bundle** threaded into `run_relay_loop` as `forge: Option<&mut ForgeActivation>`. `Some` activates exactly one fenced `forge_one_from_recovered` per `ForgeTick`, advancing no durable tip and serving/admitting/gossiping nothing in the loop body; `None` reproduces N-F-D relay. N-F-G-B: the opt-in `handoff_tx` carries the surfaced `SelfAcceptedHandoff` to the sibling serve task (set via `with_handoff_sender`). **A closed activation surface, NOT an extension point.** A new field = a struct addition behind the closed activation contract + a strengthening of **DC-NODE-05 / DC-NODE-06**. |
-| `Mode` (run-mode set) *(N-F-C)* | `ade_node::cli` (RED) | 5 (`WireOnly` / `Admission` / `KeyGenKes` / `Produce` / `Node`) | The CLOSED `--mode` taxonomy. **NOT `#[non_exhaustive]`**; `Mode::parse` + `main.rs` dispatch are total with **NO wildcard arm**. New variant = a `Mode::parse` arm + an explicit wildcard-free `main.rs` arm + a strengthening of **CN-NODE-MODE-01** (`ci_check_node_mode_closure.sh`). _(N-F-F/N-F-G-A/N-F-G-C added NO `Mode` variant — the operator-key + `--peer` flags are OPTIONAL ingress on the existing `--mode node` arm.)_ |
+| `Mode` (run-mode set) *(N-F-C)* | `ade_node::cli` (RED) | 5 (`WireOnly` / `Admission` / `KeyGenKes` / `Produce` / `Node`) | The CLOSED `--mode` taxonomy. **NOT `#[non_exhaustive]`**; `Mode::parse` + `main.rs` dispatch are total with **NO wildcard arm**. New variant = a `Mode::parse` arm + an explicit wildcard-free `main.rs` arm + a strengthening of **CN-NODE-MODE-01** (`ci_check_node_mode_closure.sh`). _(N-F-F/N-F-G-A/N-F-G-C added NO `Mode` variant — the operator-key + `--peer` flags are OPTIONAL ingress on the existing `--mode node` arm; N-F-G-D added NO `Mode` variant and NO new argv flag — the `cli.rs` flag set is pinned to a 28-flag closed allow-list by `ci_check_node_path_fidelity.sh`, and the C1 dry-run is a HARNESS, not a runtime mode.)_ |
 | `PeerAcceptEvent` *(N-F-C; consumed via `ba02_pass` N-F-G-C)* | `ade_node::ba02_evidence` (GREEN) | 2 (`PeerServedBlock` / `PeerChainTip`) | The CLOSED **allow-list** of peer-acceptance signals; `parse_peer_accept_events` recognizes ONLY these two discriminators. UNCHANGED by N-F-G-C (only consumed by the new RED `ba02_pass` I/O). New variant = a parser allow-list arm + a strengthening of **RO-LIVE-06**. |
 | `PeerAcceptSource` *(N-F-C)* | `ade_node::ba02_evidence` (GREEN) | 3 (`ServedBlock` / `ChainTip` / `ServedBlockAndChainTip`) | The closed typed provenance of the accepting signal. New variant = a `correlate` source arm + a strengthening of RO-LIVE-06. |
 | `NoEvidenceReason` *(N-F-C)* | `ade_node::ba02_evidence` (GREEN) | 4 (`NoPeerAccept` / `HashMismatch` / `ChainPointMismatch` / `ConflictingPeerSignals`) | The closed reason sum for `BA02Outcome::NoEvidence` — NoEvidence is the DEFAULT. New variant = a `correlate` classify arm + a strengthening of RO-LIVE-06. |
@@ -1545,6 +1684,7 @@ ACCEPTS it is the operator-gated RO-LIVE-01 leg (peer ACCEPT NOT claimed here).
 | `KesError` / `KesParseError` *(N-P)* | `ade_crypto::kes_sum::errors` (BLUE) | 5 / 6 variants | New variant = a strengthening of **DC-CRYPTO-08/09**; non-secret primitives only. |
 | Operator-evidence manifest TOML schema *(N-S-C)* | `ci_check_operator_evidence_manifest_schema.sh` + `docs/clusters/completed/PHASE4-N-S-C/cluster.md` | closed key set | Any committed `CE-N-S-LIVE_*.toml` MUST conform (CN-OPERATOR-EVIDENCE-01). |
 | BA-02 operator-pass manifest TOML schema *(NEW, N-F-G-C)* | `ci_check_ba02_evidence_manifest_schema.sh` + `docs/clusters/PHASE4-N-F-G-C/CE-G-C-LIVE_*.toml` | closed 8-key set (`schema_version` / `block_hash` / `slot` / `peer_log_file` / `peer_log_file_sha256` / `peer_log_capture_command` / `peer_log_filter` / `accept_event_kind`) | Any committed `CE-G-C-LIVE_*.toml` MUST conform (`schema_version == 1`) AND its `peer_log_file_sha256` MUST match the actual SHA-256 of the committed peer-log fixture it binds (CN-OPERATOR-EVIDENCE-01 / RO-LIVE-06). **Vacuously satisfied when none is committed** (the typical state — the live operator pass is `blocked_until_operator_stake_available`). The no-synthetic-manifest enforcer. |
+| Private-testnet rehearsal manifest TOML schema *(NEW, N-F-G-D)* | `ci_check_rehearsal_manifest_schema.sh` + `docs/evidence/phase4-n-f-g-d-private-rehearsal-*.toml` | closed 12-key set (`schema_version` / `venue` / `is_rehearsal` / `not_bounty_evidence` / `peer_log_file` / `peer_log_file_sha256` / `forged_block_hash_hex` / `slot` / `network_magic` / `peer_accept_source` / `peer` / `matched_block_hash_hex`) | Any committed `phase4-n-f-g-d-private-rehearsal-*.toml` MUST conform (`schema_version == 1`, `is_rehearsal = true`, `not_bounty_evidence = true`, `venue` of `private-testnet*`) AND its `peer_log_file_sha256` MUST match the actual SHA-256 of the committed peer-log fixture (CN-REHEARSAL-FIDELITY-01 clause 2). **THREE non-promotability barriers:** the distinct `docs/evidence/` rehearsal home; the explicit rehearsal markers; and a fail-closed cross-check that NO rehearsal marker appears in any `.toml` under EITHER bounty home (active `docs/clusters/PHASE4-N-F-G-C/` AND archived `docs/clusters/completed/PHASE4-N-F-G-C/`). **Vacuously satisfied when none is committed** (the typical state — the C1 dry-run is `blocked_until_operator_c1_net_executed`). The no-synthetic-rehearsal-manifest + no-bounty-home-leak enforcer. A rehearsal manifest is NOT bounty evidence and flips NO RO-LIVE rule. |
 | Sync-evidence manifest schema *(N-Y)* | `ci_check_sync_evidence_manifest_schema.sh` + `corpus/sync/regressions/` | closed key set | Mirrors the operator-evidence pattern; vacuously satisfied until a manifest is committed (RO-SYNC-EVIDENCE-01, **partial**). |
 | `CardanoEra` + Conway cert / governance / withdrawal enums | `ade_types::{era, conway::*}` + `ade_codec::conway::*` | closed | New era / cert / gov-action = a versioned gate (DC-LEDGER-08/09/10/11). `is_praos()` classifies exactly {Babbage, Conway}. |
 | Consensus message + verdict enums | `ade_core::consensus`, `ade_ledger::block_validity` / `tx_validity` | closed | `ci_check_consensus_closed_enums.sh` — `match` with no wildcard. |
@@ -1567,6 +1707,17 @@ ACCEPTS it is the operator-gated RO-LIVE-01 leg (peer ACCEPT NOT claimed here).
 | Per-protocol tag-24 compositions *(N-X)* | `ade_network::codec::{block_fetch, chain_sync}` | A new CBOR-in-CBOR composition attaches as a `compose_*` / `decompose_*` pair delegating to the single `ade_codec::{wrap_tag24, unwrap_tag24}` authority (CN-WIRE-08). |
 | Bootstrap-source production compositions *(N-Z; +N-F-A sidecar tail)* | `ade_runtime::{genesis_bootstrap, mithril_bootstrap}` | A new bootstrap-source production entry attaches as a **composition-only RED twin** of `bootstrap_from_{conway_genesis, mithril_snapshot}`: import/parse + (if a point is attested) mint the anchor from an operator-independent origin + verify-before-bootstrap (fail-closed) + route through the single `bootstrap_initial_state` authority + the N-F-A sidecar tail. **No new authority, no new `*Anchor` trait/plugin, no new `SeedProvenance` variant unless the source genuinely differs** (CN-MITHRIL-01 / CN-NODE-01 / DC-MITHRIL-02 / CN-CINPUT-02). |
 
+> **Note (N-F-G-D is NOT a new extension point).** The N-F-G-D rehearsal surfaces are **CLOSED / constructor-fenced
+> ATTACH POINTS**, not new extensible registries: `RehearsalVenue` is a closed **1-variant** enum (a non-private
+> venue is unrepresentable); `PrivateRehearsalManifest` is a constructor-fenced non-promotable envelope (sole ctor
+> `from_correlate_outcome`, `None` on `NoEvidence`; `is_rehearsal`/`not_bounty_evidence` literals) WRAPPING the
+> existing closed `Ba02Manifest`; `rehearsal_pass` is RED file I/O that REUSES `ba02_pass::correlate_peer_log_file`
+> **verbatim** (no alternate correlator). There is **no plugin trait, no `Box<dyn _>`, no runtime-registered
+> handler, no new BLUE authority, no new `--mode node` flag, and no new `NodeBlockSource` / `CoordinatorEvent` /
+> `Mode` variant** — the path-fidelity fence `ci_check_node_path_fidelity.sh` pins the closed 28-flag allow-list +
+> bars a from-genesis consensus-inputs constructor, and `correlate` stays the SOLE `Ba02Manifest` constructor.
+> They belong in the Closed table above, not here.
+>
 > **Note (N-F-G-E is NOT a new extension point).** The N-F-G-E surfaces are **surface REDUCTIONS / fail-closed
 > memory bounds**, not new extensible registries: `MAX_REASSEMBLY_TAIL_BYTES` (16 MiB) and `MAX_WIRE_PUMP_LOOKAHEAD`
 > (256) are **closed literal constants** with **NO runtime / CLI / env / config override**; the additive
@@ -1736,9 +1887,15 @@ ACCEPTS it is the operator-gated RO-LIVE-01 leg (peer ACCEPT NOT claimed here).
   literal constants that a future hardening slice may **tighten** (a strengthening of DC-LIVEMEM-01), but may
   NEVER make tunable / unbounded; they carry **no CLI / env / config override** at any version
   (`ci_check_live_feed_memory_bounds.sh` guard 3).
+- The N-F-G-D `PrivateRehearsalManifest` schema (`REHEARSAL_MANIFEST_SCHEMA_VERSION = 1`, closed 12-key TOML; the
+  closed 1-variant `RehearsalVenue`) — a version-gated rehearsal-evidence envelope; additions bump the schema
+  version. The type stays incapable of representing a non-rehearsal (`is_rehearsal`/`not_bounty_evidence`
+  literals), correlate-produced, rehearsal-home-only, and flips NO RO-LIVE rule at any version
+  (CN-REHEARSAL-FIDELITY-01 / `ci_check_rehearsal_manifest_schema.sh`).
 - New CI checks (existing checks may be **tightened, never relaxed** — e.g. N-F-G-C BROADENED
   `ci_check_served_chain_handoff_fence.sh` in place, a net tightening; N-F-G-E added
-  `ci_check_live_feed_memory_bounds.sh`).
+  `ci_check_live_feed_memory_bounds.sh`; N-F-G-D added `ci_check_node_path_fidelity.sh` +
+  `ci_check_rehearsal_manifest_schema.sh`).
 
 ---
 
@@ -1749,8 +1906,8 @@ How new modules enter the workspace.
 | Color | Naming convention | Build-config flags | May depend on | MUST NOT depend on |
 |-------|-------------------|--------------------|----------------|--------------------|
 | **BLUE** | `ade_*` crate, or a BLUE `ade_network` submodule path in `.idd-config.json` `core_paths`; `// Core Contract:` + `//! BLUE …` banner first line | `#![deny(unsafe_code)]`, `deny(unwrap_used / expect_used / panic / float_arithmetic)`; no `#[cfg(feature = …)]` semantic gating | Other BLUE modules only (`ade_types` ← `ade_codec`/`ade_crypto` ← `ade_core` ← `ade_ledger`/`ade_plutus`; `ade_network` BLUE submodules ← `ade_codec`+`ade_types`) | `ade_runtime`, `ade_node`, `ade_core_interop`, the RED half of `ade_network`; std runtime / I/O / clock / rand / `HashMap` / float / async |
-| **GREEN** | `ade_testkit` crate, `ade_network::session`, or a GREEN-by-content sub-tree inside `ade_runtime` / `ade_node` (incl. `forward_sync::reducer`, `seed_consensus_merge` (N-F-A), `consensus_inputs::protocol_params` + `consensus_inputs::canonical::require_forge_current_pparams` (N-F-G-A), `clock::checked_millis_to_slot` (N-F-G-A), `ba02_evidence` (N-F-C), `producer::self_accepted_handoff` (N-F-G-B), `run_loop_planner` (N-F-D/N-F-E), `forge_intent` (N-F-F), `node_sync::forge_epoch_admission` (N-F-G-A, GREEN-by-fn), `harness::sync_diff`, `consensus::genesis_pinning` (N-F-G-A, `#[cfg(test)]`)) with a `//! GREEN …` / `// GREEN` banner | Same deny attributes as BLUE; a purity CI gate per sub-tree (`run_loop_planner`: `ci_check_loop_planner_closed.sh`; `forge_intent`: `ci_check_forge_intent_closed.sh`; `protocol_params` + `require_forge_current_pparams`: `ci_check_recovered_ledger_pparams_sourced.sh`; `forge_epoch_admission`: `ci_check_node_forge_single_epoch_fail_closed.sh`; `self_accepted_handoff`: `ci_check_served_chain_handoff_fence.sh`; `genesis_pinning`: `ci_check_genesis_consistency_fixture_present.sh`) | BLUE modules | RED modules in non-test deps; nondeterminism; secret material; float; participation in authoritative outputs |
-| **RED** | `ade_runtime`, `ade_node`, `ade_core_interop`, `ade_network::mux::transport` (incl. `forward_sync::pump`, `mithril_import`, `genesis_bootstrap`, `mithril_bootstrap` (N-Z), `seed_consensus_provenance` (N-F-A), `recovery::restart`, `node_lifecycle` (incl. `run_relay_loop` + `ForgeActivation` + `spawn_live_wire_pump_source`, N-F-D/N-F-E/N-F-G-A/N-F-G-C), `node_sync` (N-F-C), `ba02_pass` (N-F-G-C, the operator-pass BA-02 evidence I/O), `operator_forge` (N-F-F; N-F-G-A real parsers), `admission::{seed_to_snapshot, bootstrap}` (N-F-G-A current-pparams install; N-F-G-C `build_n2n_version_table` `pub(crate)`); `*_mode.rs` for mode handlers); `//! RED …` banner | tokio/std/I/O allowed; the `Clock` seam is the SOLE wall-clock observation reachable from a relay-loop/orchestrator driver (N-F-G-A: the forge path uses the checked `checked_millis_to_slot`); key custody confined to `ProducerShell` | Any module | — (RED is the leaf) |
+| **GREEN** | `ade_testkit` crate, `ade_network::session`, or a GREEN-by-content sub-tree inside `ade_runtime` / `ade_node` (incl. `forward_sync::reducer`, `seed_consensus_merge` (N-F-A), `consensus_inputs::protocol_params` + `consensus_inputs::canonical::require_forge_current_pparams` (N-F-G-A), `clock::checked_millis_to_slot` (N-F-G-A), `ba02_evidence` (N-F-C), `producer::self_accepted_handoff` (N-F-G-B), `run_loop_planner` (N-F-D/N-F-E), `forge_intent` (N-F-F), `node_sync::forge_epoch_admission` (N-F-G-A, GREEN-by-fn), `rehearsal_evidence` (N-F-G-D, the non-promotable `PrivateRehearsalManifest` envelope), `harness::sync_diff`, `consensus::genesis_pinning` (N-F-G-A, `#[cfg(test)]`)) with a `//! GREEN …` / `// GREEN` banner | Same deny attributes as BLUE; a purity CI gate per sub-tree (`run_loop_planner`: `ci_check_loop_planner_closed.sh`; `forge_intent`: `ci_check_forge_intent_closed.sh`; `protocol_params` + `require_forge_current_pparams`: `ci_check_recovered_ledger_pparams_sourced.sh`; `forge_epoch_admission`: `ci_check_node_forge_single_epoch_fail_closed.sh`; `self_accepted_handoff`: `ci_check_served_chain_handoff_fence.sh`; `genesis_pinning`: `ci_check_genesis_consistency_fixture_present.sh`; `rehearsal_evidence`: `ci_check_rehearsal_manifest_schema.sh`) | BLUE modules | RED modules in non-test deps; nondeterminism; secret material; float; participation in authoritative outputs |
+| **RED** | `ade_runtime`, `ade_node`, `ade_core_interop`, `ade_network::mux::transport` (incl. `forward_sync::pump`, `mithril_import`, `genesis_bootstrap`, `mithril_bootstrap` (N-Z), `seed_consensus_provenance` (N-F-A), `recovery::restart`, `node_lifecycle` (incl. `run_relay_loop` + `ForgeActivation` + `spawn_live_wire_pump_source`, N-F-D/N-F-E/N-F-G-A/N-F-G-C), `node_sync` (N-F-C), `ba02_pass` (N-F-G-C, the operator-pass BA-02 evidence I/O), `rehearsal_pass` (N-F-G-D, the rehearsal-evidence I/O reusing `ba02_pass::correlate_peer_log_file`), `operator_forge` (N-F-F; N-F-G-A real parsers), `admission::{seed_to_snapshot, bootstrap}` (N-F-G-A current-pparams install; N-F-G-C `build_n2n_version_table` `pub(crate)`); `*_mode.rs` for mode handlers); `//! RED …` banner | tokio/std/I/O allowed; the `Clock` seam is the SOLE wall-clock observation reachable from a relay-loop/orchestrator driver (N-F-G-A: the forge path uses the checked `checked_millis_to_slot`); key custody confined to `ProducerShell` | Any module | — (RED is the leaf) |
 
 ### New module checklist
 
@@ -1841,10 +1998,12 @@ How new modules enter the workspace.
     `NodeBlockSource` contract, the relay-loop containment gate, and the served-chain handoff fence
     byte-unchanged. DC-LIVEMEM-01.
 
-### CI gates that enforce the boundary (119 total; the N-F-G-E / N-F-G-C / N-F-G-B / N-F-G-A / N-F-F / N-F-D-E / N-F-C / N-F-A / N-Z / N-Y / producer / network set)
+### CI gates that enforce the boundary (121 total; the N-F-G-D / N-F-G-E / N-F-G-C / N-F-G-B / N-F-G-A / N-F-F / N-F-D-E / N-F-C / N-F-A / N-Z / N-Y / producer / network set)
 
 | Script | Enforces | Cluster |
 |---|---|---|
+| `ci_check_node_path_fidelity.sh` *(NEW N-F-G-D S1)* | **CN-REHEARSAL-FIDELITY-01 (clause 1, path fidelity)** — guard (a): the `crates/ade_node/src/cli.rs` argv flag-literal set equals the pinned closed **28-flag** allow-list (G-D adds none; a private-only / venue flag — `--private-net` / `--from-genesis` / `--devnet` / `--rehearsal` — trips it); guard (b): no fn whose name carries BOTH `genesis` and `consensus` (a from-genesis consensus-inputs constructor; line comments stripped first) AND `node_lifecycle.rs` sources consensus inputs via the shared `import_live_consensus_inputs`. The C1 dry-run differs from the preprod pass ONLY in operator INPUTS + the evidence LABEL — never in code. | N-F-G-D |
+| `ci_check_rehearsal_manifest_schema.sh` *(NEW N-F-G-D S2; hardened S4)* | **CN-REHEARSAL-FIDELITY-01 (clause 2, evidence non-promotability)** — when a committed `docs/evidence/phase4-n-f-g-d-private-rehearsal-*.toml` is present, verify the closed 12-field schema + `schema_version == 1` + `is_rehearsal = true` + `not_bounty_evidence = true` + a `venue` of `private-testnet*` + `peer_log_file_sha256` == sha256(the committed peer-log fixture). THREE non-promotability barriers: the distinct `docs/evidence/` home; the rehearsal markers; and a fail-closed cross-check that NO rehearsal marker appears in any `.toml` under EITHER bounty home (active `docs/clusters/PHASE4-N-F-G-C/` AND archived `docs/clusters/completed/PHASE4-N-F-G-C/` — EXISTING-homes list built first, fail-closed on grep rc≥2). Vacuously satisfied when none committed (C1 dry-run `blocked_until_operator_c1_net_executed`). The no-synthetic-rehearsal-manifest + no-bounty-home-leak enforcer; flips NO RO-LIVE rule. | N-F-G-D |
 | `ci_check_live_feed_memory_bounds.sh` *(NEW N-F-G-E S1)* | **DC-LIVEMEM-01** — both live-feed memory bounds are CLOSED LITERAL constants (`MAX_REASSEMBLY_TAIL_BYTES = 16 MiB` in `session/core.rs`; `MAX_WIRE_PUMP_LOOKAHEAD = 256` in `node_sync.rs`) AND not wired to CLI / env / config (the no-escape-hatch guard 3; line comments stripped first so the doc-comments naming "CLI / env / config" do not self-trip). The reassembly cap fails closed via the additive `SessionError::ReassemblyBufferOverflow` (no wildcard; sole consumer `mux_pump::session_err_to_halt`). | N-F-G-E |
 | `ci_check_ba02_evidence_manifest_schema.sh` *(NEW N-F-G-C S2)* | **RO-LIVE-06 / CN-OPERATOR-EVIDENCE-01 (BA-02 manifest schema)** — when a committed `docs/clusters/PHASE4-N-F-G-C/CE-G-C-LIVE_*.toml` is present, verify the closed 8-field schema + `schema_version == 1` + `peer_log_file_sha256` == sha256(the committed peer-log fixture). Vacuously satisfied when none committed. The no-synthetic-manifest enforcer. | N-F-G-C |
 | `ci_check_served_chain_handoff_fence.sh` *(N-F-G-B S3; BROADENED in place N-F-G-C S1)* | **DC-NODE-06 / CN-PROD-04 (serve-ingress fence)** — owners `{node_lifecycle.rs, node_sync.rs}`; (1) every node-spine `push_atomic(` fed by `into_accepted()`; (2) no direct `served_chain_admit(` on the node spine; (3) ALLOW-LIST: every node-spine unbounded handoff channel carries `SelfAcceptedHandoff` (never `<Vec<u8>>` / `<ForgedBlockArtifact>` / `<bool>`), and at least one `UnboundedSender<SelfAcceptedHandoff>` is present. A net tightening; the CI count does NOT change for this file. | N-F-G-B / N-F-G-C |
@@ -1886,8 +2045,11 @@ How new modules enter the workspace.
 > **N-F-G-B added 1** (`ci_check_served_chain_handoff_fence.sh`) → **117**. **N-F-G-C added 1**
 > (`ci_check_ba02_evidence_manifest_schema.sh`) AND *broadened `ci_check_served_chain_handoff_fence.sh` in place*
 > (owners + guard-3 allow-list — a net tightening, NOT a new file) → **118**. **N-F-G-E added 1**
-> (`ci_check_live_feed_memory_bounds.sh`) → **119**. Earlier-cluster gates (N-A..N-P, the N-M-* set, the N-L
-> wire-session set) are present in the 119 total; the full list is `ls ci/ci_check_*.sh` (= **119**).
+> (`ci_check_live_feed_memory_bounds.sh`) → **119**. **N-F-G-D added 2** (`ci_check_node_path_fidelity.sh` +
+> `ci_check_rehearsal_manifest_schema.sh`) → **121** (the three containment / handoff / memory fences
+> `ci_check_node_run_loop_containment.sh`, `ci_check_served_chain_handoff_fence.sh`,
+> `ci_check_live_feed_memory_bounds.sh` are byte-unchanged by G-D). Earlier-cluster gates (N-A..N-P, the N-M-* set,
+> the N-L wire-session set) are present in the 121 total; the full list is `ls ci/ci_check_*.sh` (= **121**).
 
 ---
 
@@ -1990,6 +2152,25 @@ How new modules enter the workspace.
 
 ### Project-specific additions (Ade)
 
+- **Bounty DRY-RUN rehearsal harness honest scope + boundary (N-F-G-D, load-bearing — do NOT soften / do NOT
+  broaden):** G-D ships a **path-faithful, non-promotable bounty DRY-RUN harness — NOT the bounty deliverable.**
+  **(1) Path fidelity:** the C1 private-testnet dry-run uses the SAME `--mode node` accepted-block path as
+  preview/preprod (`import_live_consensus_inputs` → forge → self-accept → sibling-serve → block-fetch → peer log →
+  `correlate`), with NO private-only flag / branch / bootstrap / from-genesis constructor (the `cli.rs` flag set is
+  the pinned 28-flag closed allow-list); the only differences are operator INPUTS + the evidence LABEL — a
+  condition that would fail on preprod is a shared-path bug, never special-cased. **(2) Evidence
+  non-promotability:** the GREEN `PrivateRehearsalManifest` cannot represent a non-rehearsal (`is_rehearsal` /
+  `not_bounty_evidence` literals; sole ctor `from_correlate_outcome`, `None` on `NoEvidence`); `correlate` stays
+  the SOLE `Ba02Manifest` ctor (RED `rehearsal_pass` REUSES `ba02_pass::correlate_peer_log_file` verbatim, no
+  alternate correlator); a rehearsal manifest lives ONLY under the rehearsal home, sha256-bound, never under /
+  referenced by a bounty home (three barriers). **G-D does NOT enforce that a C1 run has succeeded** — the
+  rehearsal-schema gate is **vacuous until a real operator-produced manifest is committed**; the C1 dry-run is
+  **NOT a runtime node mode** and is **not wired into any binary arm** (exercised only by the env-gated RED test
+  `node_c1_dry_run_rehearsal_live`, skipped in CI). **NO RO-LIVE flip** (`RO-LIVE-01` partial; `RO-LIVE-06`
+  schema-only), **NO bounty / preview / preprod completion claim**; private C1 acceptance ≠ bounty completion (the
+  live C1 execution stays `blocked_until_operator_c1_net_executed`). **No new BLUE authority / canonical type / argv
+  flag / `NodeBlockSource` / `CoordinatorEvent` / `Mode` variant**; the relay-loop containment gate, the
+  served-chain handoff fence, and the live-feed memory bounds are **byte-unchanged**.
 - **Live-feed bounded-memory honest scope + boundary (N-F-G-E, load-bearing — do NOT soften / do NOT broaden):**
   N-F-G-E bounds **peer-driven memory on the live `--mode node` feed BEFORE authoritative decode/apply** — and
   nothing more. Two closed literal caps fail closed in front of the BLUE `ade_codec` decode path
@@ -2090,6 +2271,16 @@ How new modules enter the workspace.
 > Surfaced honestly per IDD: these are **declared** future attach points, not closed surfaces. Each is named
 > in a registry rule or a cluster CLOSURE record.
 >
+> **N-F-G-D RETIRES NOTHING and BROADENS NOTHING below.** G-D adds a path-faithful, non-promotable bounty DRY-RUN
+> **harness** (the rehearsal-evidence surface + the path-fidelity fence) — a HARNESS, not a closure of any
+> candidate. It does **NOT** advance the bounty deliverable: `RO-LIVE-01` stays `partial`, `RO-LIVE-06` stays
+> schema-only, and the rehearsal-schema gate is vacuous-until-committed. G-D adds **one new operator-pass
+> execution gate** (the **C1 private-testnet dry-run**, recorded under "Operator-pass execution gates" below) —
+> operator-gated (`blocked_until_operator_c1_net_executed`), exercised only by the env-gated RED test
+> `node_c1_dry_run_rehearsal_live` (skipped in CI, NOT a runtime node mode), producing a clearly-marked rehearsal
+> manifest, NOT bounty evidence, flipping no RO-LIVE rule. It is **DISTINCT** from the bounty operator pass (the C2
+> preprod leg). All candidates (#0–#5) and the already-retired #6 are carried UNCHANGED.
+>
 > **N-F-G-E CLOSED the prior candidate #6** (bounded mux-reassembly tail + WirePump lookahead — the live-feed
 > peer-driven memory surface that the G-C close added from its security-review MEDIUM). It is **RETIRED** from the
 > list below: two closed literal caps (`MAX_REASSEMBLY_TAIL_BYTES = 16 MiB` + `MAX_WIRE_PUMP_LOOKAHEAD = 256`),
@@ -2161,6 +2352,19 @@ How new modules enter the workspace.
 
 ### Operator-pass execution gates (schema enforced, execution blocked)
 
+- **C1 private-testnet DRY-RUN (NEW, N-F-G-D — CN-REHEARSAL-FIDELITY-01; schema enforced, execution blocked)** —
+  the rehearsal-manifest schema + the path-fidelity fence are enforced (`ci_check_rehearsal_manifest_schema.sh`,
+  vacuous-until-committed + sha256-bound + the no-bounty-home-leak cross-check; `ci_check_node_path_fidelity.sh`,
+  28-flag allow-list + no from-genesis constructor), but the C1 private-testnet dry-run EXECUTION is
+  **`blocked_until_operator_c1_net_executed`**. The env-gated `node_c1_dry_run_rehearsal_live` harness
+  (`ADE_LIVE_C1_DRY_RUN=1`) is a **RED test, skipped in CI, NOT a runtime node mode** and **not wired into any
+  binary arm**; it produces a clearly-marked, NON-PROMOTABLE `PrivateRehearsalManifest` (`is_rehearsal` /
+  `not_bounty_evidence` literals), **NOT bounty evidence**, and **flips NO RO-LIVE rule**. It is a **bounty
+  DRY-RUN harness**, **DISTINCT** from the bounty operator pass (the C2 preprod leg below): private C1 acceptance
+  ≠ bounty completion. It MUST NOT relax the relay-loop containment / served-chain handoff / live-feed memory
+  fences, MUST NOT add a `--mode node` flag or a from-genesis constructor, and a manifest stays correlate-produced
+  through `ba02_evidence::correlate` (the sole acceptance-evidence constructor), stored only under the rehearsal
+  home.
 - **CN-OPERATOR-EVIDENCE-01 / CN-CONS-06 / RO-LIVE-01** — the manifest schema is enforced (N-F-G-C added the
   BA-02 manifest-schema gate `ci_check_ba02_evidence_manifest_schema.sh`, vacuous-until-committed + sha256-bound),
   but C1 (private testnet) / C2 (preprod) operator-pass execution is `blocked_until_operator_pass_executed` /
@@ -2179,109 +2383,115 @@ How new modules enter the workspace.
 
 ## Generation notes
 
-- Regenerated (scoped INCREMENTAL catch-up through ONE cluster) at HEAD `6f848825` (`git rev-parse --short
-  HEAD`), downstream of the CODEMAP regenerated at the same HEAD. The prior on-disk SEAMS was generated at the
-  **PHASE4-N-F-G-C close** (`351d46bc` / 118 CI checks / 313 rules — the live WirePump feed + BA-02 evidence
-  wiring on the `--mode node` spine). This refresh catches it up through **PHASE4-N-F-G-E** (live-feed bounded
-  memory before authoritative decode/apply on the `--mode node` spine, closing now at `6f848825`: a single slice
-  S1 `6f848825` — the GREEN `ade_network::session::core` `MAX_REASSEMBLY_TAIL_BYTES = 16 MiB` reassembly-tail cap
-  + the additive closed `SessionError::ReassemblyBufferOverflow` (GREEN `session::event`), the RED
-  `ade_node::node_sync` `MAX_WIRE_PUMP_LOOKAHEAD = 256` lookahead cap, the RED `ade_runtime::network::mux_pump`
-  variant→`PeerHaltReason::ChainSyncDecodeError` mapping, and the NEW `ci_check_live_feed_memory_bounds.sh` gate;
-  doc commit `5a4d8c12`).
-- **N-F-G-E deltas are CLOSED surfaces / fail-closed memory bounds, NOT new extension points (load-bearing).**
-  The two caps are **closed literal constants** (`MAX_REASSEMBLY_TAIL_BYTES = 16 MiB`, `MAX_WIRE_PUMP_LOOKAHEAD =
-  256`) with **NO CLI / env / config escape hatch** — classified under §3 Closed / §4 Frozen. The reassembly cap
-  fails closed via the additive closed `SessionError::ReassemblyBufferOverflow` (NO wildcard; sole exhaustive
-  consumer `mux_pump::session_err_to_halt` → drop the peer); the lookahead cap back-pressures the existing bounded
-  `mpsc`. **No new module, no new `NodeBlockSource` / `CoordinatorEvent` variant.** **No BLUE crate was modified**
-  — the 456 canonical-type total is unchanged (`session/` is GREEN-by-content, NOT a BLUE `ade_network` submodule
-  path, so the new `SessionError` variant is NOT canonical-counted); the four changed files
-  (`session::{core.rs, event.rs}` GREEN-by-content, `node_sync.rs` + `mux_pump.rs` RED) touch no BLUE crate. The
-  cap fires **BEFORE** the BLUE `ade_codec` decode path (`ade_codec` byte-unchanged). **`run_node_sync` /
-  `run_relay_loop` containment + the served-chain handoff fence are byte-unchanged.** _(N-F-G-C deltas — the live
-  WirePump feed reusing the closed dial/pump + the `ba02_pass` evidence I/O — are carried forward unchanged; G-E
-  changed neither.)_
-- **N-F-G-E CLOSED §7 candidate #6** (bounded mux-reassembly tail + WirePump lookahead — the live-feed
-  peer-driven memory surface added at the G-C close from the G-C security-review MEDIUM): two closed literal caps
-  (`MAX_REASSEMBLY_TAIL_BYTES = 16 MiB` + `MAX_WIRE_PUMP_LOOKAHEAD = 256`), each fail-closed before authoritative
-  decode/apply, NO CLI/env/config escape hatch, fenced by the NEW `ci_check_live_feed_memory_bounds.sh`
-  (DC-LIVEMEM-01). **Candidate #6 is RETIRED from §7.** **G-E closed ONE specific live-feed memory surface — it is
-  NOT full network DoS resistance, NOT peer resource fairness, NOT BA-02 / live-evidence readiness** (the
-  per-connection aggregate ceiling across the ~10 independent per-protocol reassembly buffers and
-  per-connection-COUNT / peer-fairness remain SEPARATE, out-of-scope future hardening slices). **The OTHER §7
-  candidates are carried UNCHANGED and were NOT broadened:** #0 (live network serve + operator-peer — partly
-  closed at G-C; operator-witnessed ACCEPT still the gating follow-on, RO-LIVE-01 partial / RO-LIVE-06 live BA-02
-  not claimed), #1 (live unbounded peer → observable forge ACCEPT), #2 (live BA-02), #3 (RO-MITHRIL-IMPORT-01
-  remaining), #4 (N-U forged-block durability), #5 (RO-SYNC-EVIDENCE-01 live leg).
-- **Boundary honesty (load-bearing — do NOT soften / do NOT broaden).** N-F-G-E bounds **peer-driven memory on
-  the live `--mode node` feed BEFORE authoritative decode/apply** — and nothing more. It is **NOT** full network
-  DoS resistance, **NOT** peer resource fairness, **NOT** BA-02 / live-evidence readiness (the per-connection
-  aggregate ceiling across the ~10 independent per-protocol reassembly buffers and per-connection-COUNT /
-  peer-fairness remain SEPARATE, out-of-scope future hardening). The reassembly cap is checked post-extend
-  (single-buffer transient peak `cap + one <=64 KiB frame` ~16.06 MiB); the per-connection aggregate is ~10×
-  single-buffer, still O(constant)/connection. The bounds are **closed literal constants, NOT Cardano semantic
-  parameters** (tighten-only, no CLI/env/config escape hatch). **NO BLUE change** (`ade_codec` byte-unchanged);
-  the serve/forge/containment fences are **byte-unchanged**; **no live-evidence / BA-02 / RO-LIVE flip or claim**.
-  (Carried — N-F-G-C: peer ACCEPT stays operator-gated; `correlate` is the SOLE `Ba02Manifest` constructor; no
-  synthetic manifest committed; the bounty acceptance criterion is NOT satisfied. BA-02 is satisfied nowhere.)
-- N-F-G-E delta verified at `6f848825` (grep/ls/git only — no `cargo`):
-  - `crates/ade_network/src/session/core.rs`: `const MAX_REASSEMBLY_TAIL_BYTES: usize = 16 * 1024 * 1024;` (line
-    49; `//! GREEN`); the post-drain check `if buf.len() > MAX_REASSEMBLY_TAIL_BYTES { return Err(
-    SessionError::ReassemblyBufferOverflow { protocol, len, cap: MAX_REASSEMBLY_TAIL_BYTES }) }` (lines 249-253);
-    `session/` is GREEN-by-content (NOT a BLUE `ade_network` submodule `core_path`), so the new variant is NOT
-    canonical-counted.
-  - `crates/ade_network/src/session/event.rs`: the additive `SessionError::ReassemblyBufferOverflow { protocol,
-    len, cap }` variant (line ~195; doc-comment names the `MAX_REASSEMBLY_TAIL_BYTES` bound).
-  - `crates/ade_runtime/src/network/mux_pump.rs`: `fn session_err_to_halt(err: &SessionError) -> PeerHaltReason`
-    (line 278) is an exhaustive `match` (NO wildcard) whose new arm `SessionError::ReassemblyBufferOverflow { .. }
-    => PeerHaltReason::ChainSyncDecodeError` (lines 302-303) drops the peer.
-  - `crates/ade_node/src/node_sync.rs`: `const MAX_WIRE_PUMP_LOOKAHEAD: usize = 256;` (line 58); the cap check
-    `if lookahead.len() >= MAX_WIRE_PUMP_LOOKAHEAD { … }` in `pump_lookahead` (line 126); the bounded
-    `LIVE_WIRE_PUMP_CHANNEL_CAP = 64` (carried) back-pressures the pump. `NodeBlockSource` is still the closed
-    2-variant `{WirePump, InMemory}` — UNCHANGED.
-  - Gate `ci/ci_check_live_feed_memory_bounds.sh` present (verifies both bounds are CLOSED LITERAL constants AND
-    not wired to CLI / env / config — guard 3; line comments stripped first). `ls ci/ci_check_*.sh | wc -l` =
-    **119** at `6f848825`. `ci_check_node_run_loop_containment.sh` + `ci_check_served_chain_handoff_fence.sh`
-    byte-unchanged.
-  - Registry: `grep -cE '^\[\[rules\]\]' docs/ade-invariant-registry.toml` = **314**. NEW `DC-LIVEMEM-01`
-    (`tier = derived`, operational-hardening, `status = enforced`) present (`grep -n 'DC-LIVEMEM-01'`). No rule
-    weakened.
-  - Carried (N-F-G-C, verified present + unchanged at this HEAD): `crates/ade_node/src/ba02_pass.rs` (`//! RED`;
-    `correlate_peer_log_file` + `write_ba02_manifest` accepting ONLY a `Ba02Manifest`); `node_sync.rs`
-    `from_wire_pump` (a FILL of the closed `WirePump` arm); `node_lifecycle.rs` `spawn_live_wire_pump_source`
-    (reuses `dial_for_admission` + `run_admission_wire_pump` verbatim); `admission::bootstrap::build_n2n_version_table`
-    `pub(crate)`; gates `ci_check_ba02_evidence_manifest_schema.sh` + the broadened
-    `ci_check_served_chain_handoff_fence.sh`.
-- Counts at `6f848825` (N-F-G-E close, this refresh): **456** canonical types (Δ 0 vs the prior SEAMS — no BLUE
-  crate modified; `session/` is GREEN-by-content so the new `SessionError` variant is NOT canonical-counted; the
-  two caps are closed consts, the lookahead cap is RED), **119** CI checks (Δ +1 vs the prior SEAMS's 118 — the
-  one G-E gate `ci_check_live_feed_memory_bounds.sh`), **314** registry rules (Δ +1 vs the prior 313 — NEW
-  `DC-LIVEMEM-01`, `tier = derived`, `enforced`; no rule weakened). All counts match the CODEMAP header
-  regenerated at the same HEAD.
-- All N-F-G-C / N-F-G-B / N-F-G-A / N-F-F / N-F-E / N-F-D / N-F-C / N-F-A / N-Z / N-Y closed surfaces re-verified
-  present on disk at this HEAD and unchanged by N-F-G-E (no BLUE crate modified; `ade_codec` byte-unchanged;
-  `run_relay_loop` / `run_node_sync` containment + the served-chain handoff fence byte-unchanged; the live-feed
-  wiring + the serve mechanism unchanged); the refresh annotated only the seams N-F-G-E added (the two closed
-  memory caps + the additive closed `SessionError::ReassemblyBufferOverflow` + the new gate) and the surfaces they
-  touched (the live-feed pipeline's pre-decode memory bound, the `WirePump` lookahead-depth cap). The G-C live
-  WirePump feed + `ba02_pass` evidence I/O are carried forward unchanged.
-- **Cross-reference check (CODEMAP ↔ SEAMS):** every module named in this SEAMS appears in the CODEMAP
-  regenerated at the same HEAD — the N-F-G-E surfaces `ade_network::session::core` (`MAX_REASSEMBLY_TAIL_BYTES`,
-  `//! GREEN`), `ade_network::session::event` (`SessionError::ReassemblyBufferOverflow`, `//! GREEN`),
-  `ade_node::node_sync` (`MAX_WIRE_PUMP_LOOKAHEAD`, `//! RED`), `ade_runtime::network::mux_pump` (`session_err_to_halt`,
-  `//! RED`), AND the carried N-F-G-C (`ba02_pass` `//! RED`, `node_lifecycle::spawn_live_wire_pump_source`,
-  `node_sync::from_wire_pump`, `admission::bootstrap::build_n2n_version_table`, `ba02_evidence` `//! GREEN`) /
-  N-F-G-B (`producer::self_accepted_handoff`) / N-F-G-A (`consensus_inputs::protocol_params`,
-  `clock::checked_millis_to_slot`, `node_sync::forge_epoch_admission`, `operator_forge`, `consensus::genesis_pinning`)
-  modules are all inventoried there; the CODEMAP header's PHASE4-N-F-G-E delta names the same two caps + the
-  additive `SessionError` variant + `DC-LIVEMEM-01` + the new gate. The **456 / 119 / 314** counts match the
-  CODEMAP header. No stale module references. The one new CI gate (`ci_check_live_feed_memory_bounds.sh`) is named
-  in both docs.
-- **Stale `.idd-config.json` fields (surfaced, not edited).** `.idd-config.json` `_invariant_registry_doc` reads
-  "313 entries" — now **314** at this close (NEW `DC-LIVEMEM-01`); `_head_deltas_baseline` is `90791691` (the
-  N-F-G-C close) — it should be bumped to `6f848825` on the N-F-G-E HEAD_DELTAS refresh. (This doc does not edit
-  config.)
+- Regenerated (scoped INCREMENTAL catch-up through ONE cluster) at HEAD `6bd60c80` (`git rev-parse --short
+  HEAD`), downstream of the CODEMAP regenerated at the same HEAD (121 CI checks, 315 rules, 456 canonical types).
+  The prior on-disk SEAMS was generated at the **PHASE4-N-F-G-E close** (`6f848825` / 119 CI checks / 314 rules —
+  live-feed bounded memory before authoritative decode/apply on the `--mode node` spine). This refresh catches it
+  up through **PHASE4-N-F-G-D** (a private-testnet accepted-block bounty DRY-RUN harness on the `--mode node`
+  spine, closing now at `6bd60c80`): four slices — S1 `d4d0f456` (path-fidelity proof + the NEW
+  `ci_check_node_path_fidelity.sh` fence), S2 `459cf78d` (the NEW GREEN `ade_node::rehearsal_evidence`
+  `PrivateRehearsalManifest` + the NEW RED `ade_node::rehearsal_pass` file I/O + the NEW
+  `ci_check_rehearsal_manifest_schema.sh` gate), S3 `076a5af5` (the C1 dry-run runbook + the env-gated operator
+  scaffold), S4 `6bd60c80` (a close-surfaced security fix hardening the rehearsal leak gate against an
+  archived-home leak); doc commits `a8003dc8` / `93472991`.
+- **N-F-G-D deltas are CLOSED / constructor-fenced ATTACH POINTS + two NEW fences, NOT new extension points
+  (load-bearing).** The NEW GREEN `PrivateRehearsalManifest` is a constructor-fenced non-promotable envelope (sole
+  ctor `from_correlate_outcome`, `None` on `NoEvidence`; `is_rehearsal`/`not_bounty_evidence` literals; closed
+  1-variant `RehearsalVenue`) WRAPPING the existing closed `Ba02Manifest`; the NEW RED `rehearsal_pass` is file
+  I/O that REUSES `ba02_pass::correlate_peer_log_file` **verbatim** (no alternate correlator) — both classified
+  under §3 Closed. **No new module beyond these two `ade_node` modules; no new BLUE authority / canonical type; no
+  new `--mode node` argv flag (the `cli.rs` flag set is the pinned 28-flag closed allow-list); no new
+  `NodeBlockSource` / `CoordinatorEvent` / `Mode` variant; no from-genesis consensus-inputs constructor; no binary
+  wiring.** **No BLUE crate was modified** — the 456 canonical-type total is unchanged (the NEW
+  `ade_node::rehearsal_evidence` is GREEN-by-content and the NEW `ade_node::rehearsal_pass` is RED — neither is
+  canonical-counted; both live in `ade_node`, not a BLUE `core_paths` entry). `correlate` stays the SOLE
+  `Ba02Manifest` constructor. **`run_node_sync` / `run_relay_loop` containment + the served-chain handoff fence +
+  the live-feed memory bounds are byte-unchanged.** _(N-F-G-E deltas — the two closed memory caps in front of the
+  decode path — and the N-F-G-C live WirePump feed + `ba02_pass` evidence I/O are carried forward unchanged; G-D
+  changed none of them.)_
+- **N-F-G-D RETIRES NOTHING in §7 and BROADENS NOTHING (load-bearing).** G-D adds a path-faithful, non-promotable
+  bounty DRY-RUN **harness** — NOT the bounty deliverable — and does NOT close any §7 candidate. It adds **one new
+  operator-pass execution gate** (the **C1 private-testnet dry-run**), operator-gated
+  (`blocked_until_operator_c1_net_executed`), exercised only by the env-gated RED test
+  `node_c1_dry_run_rehearsal_live` (`ADE_LIVE_C1_DRY_RUN=1`, skipped in CI, NOT a runtime node mode), producing a
+  clearly-marked rehearsal manifest, NOT bounty evidence, **flipping no RO-LIVE rule** — DISTINCT from the bounty
+  operator pass (the C2 preprod leg). Candidate **#6 stays RETIRED** (closed by G-E). **The OTHER §7 candidates
+  are carried UNCHANGED and were NOT broadened:** #0 (live network serve + operator-peer — partly closed at G-C;
+  operator-witnessed ACCEPT still the gating follow-on, RO-LIVE-01 partial / RO-LIVE-06 live BA-02 not claimed),
+  #1 (live unbounded peer → observable forge ACCEPT), #2 (live BA-02), #3 (RO-MITHRIL-IMPORT-01 remaining), #4
+  (N-U forged-block durability), #5 (RO-SYNC-EVIDENCE-01 live leg).
+- **Boundary honesty (load-bearing — do NOT soften / do NOT broaden).** N-F-G-D enforces that the private C1
+  dry-run is a **path-faithful, non-promotable rehearsal HARNESS** — and nothing more. (1) PATH FIDELITY: the C1
+  private dry-run uses the SAME `--mode node` accepted-block path as preview/preprod (`import_live_consensus_inputs`
+  → forge → self-accept → sibling-serve → block-fetch → peer log → `correlate`), with NO private-only flag /
+  branch / bootstrap / from-genesis constructor; the only differences are operator INPUTS + the evidence LABEL.
+  (2) EVIDENCE NON-PROMOTABILITY: a rehearsal manifest is correlate-produced, marked rehearsal, stored ONLY under
+  the rehearsal home, sha256-bound, never under / referenced by a bounty home, and flips NO RO-LIVE rule. G-D does
+  **NOT** enforce that a C1 run has succeeded — the rehearsal-schema gate is **vacuous until a real
+  operator-produced manifest is committed** (only the README is committed under the rehearsal home; no `.toml`).
+  **NO RO-LIVE flip** (`RO-LIVE-01` stays `partial`; `RO-LIVE-06` stays schema-only/`enforced`; neither gains a
+  G-D strengthening), **NO bounty / preview / preprod completion claim**; private C1 acceptance ≠ bounty completion
+  (preview/preprod acceptance = the single bounty deliverable, captured separately); the live C1 execution stays
+  `blocked_until_operator_c1_net_executed`. **NO BLUE change**; the relay-loop containment gate, the served-chain
+  handoff fence, and the live-feed memory bounds are **byte-unchanged**. BA-02 is satisfied nowhere.
+- N-F-G-D delta verified at `6bd60c80` (grep/ls/git only — no `cargo`):
+  - `crates/ade_node/src/rehearsal_evidence.rs`: `//! GREEN` (line 8); `pub const REHEARSAL_MANIFEST_SCHEMA_VERSION:
+    u32 = 1;` (line 40); closed 1-variant `pub enum RehearsalVenue { PrivateTestnetC1 }` (line 46); `pub struct
+    PrivateRehearsalManifest` (line 73); the SOLE ctor `pub fn from_correlate_outcome(...) -> Option<Self>` (line
+    87) returning `None` on `NoEvidence`; `pub fn to_canonical_toml(&self) -> String` (line 106) emitting
+    `is_rehearsal = true` + `not_bounty_evidence = true` as LITERALS. Pure (no I/O/clock/rand/float/HashMap); lives
+    in `ade_node` (NOT a BLUE `core_path`), so NOT canonical-counted.
+  - `crates/ade_node/src/rehearsal_pass.rs`: `//! RED` (line 8); `use crate::ba02_pass::correlate_peer_log_file;`
+    (line 24 — the REUSED correlator, verbatim); `pub fn correlate_peer_log_file_into_rehearsal(...) ->
+    io::Result<Option<PrivateRehearsalManifest>>` (line 31); `pub fn write_private_rehearsal_manifest(manifest:
+    &PrivateRehearsalManifest, ...) -> io::Result<()>` (line 48 — the argument type IS the gate). Registered `pub
+    mod rehearsal_evidence;` + `pub mod rehearsal_pass;` in `lib.rs` (lines 29–30).
+  - Gate `ci/ci_check_node_path_fidelity.sh` present (guard (a): `cli.rs` argv flag set == the pinned closed
+    28-flag allow-list; guard (b): no from-genesis consensus-inputs constructor AND `node_lifecycle.rs` sources
+    consensus inputs via the shared `import_live_consensus_inputs`). Gate `ci/ci_check_rehearsal_manifest_schema.sh`
+    present (vacuous-until-committed; 12-field schema + `is_rehearsal`/`not_bounty_evidence` markers +
+    `peer_log_file_sha256` cross-check + the no-bounty-home-leak cross-check over the active + archived G-C bounty
+    homes, fail-closed). `ls ci/ci_check_*.sh | wc -l` = **121** at `6bd60c80`.
+    `ci_check_node_run_loop_containment.sh`, `ci_check_served_chain_handoff_fence.sh`, and
+    `ci_check_live_feed_memory_bounds.sh` are **byte-unchanged** (`git diff --name-only da205bff..6bd60c80` matches
+    none of the three).
+  - Registry: `grep -cE '^id = ' docs/ade-invariant-registry.toml` = **315**. NEW `CN-REHEARSAL-FIDELITY-01`
+    (`tier = release`, `status = enforced`, `introduced_in = "PHASE4-N-F-G-D"`; two coupled clauses) present
+    (`grep -n 'CN-REHEARSAL-FIDELITY-01'`). No rule weakened; no RO-LIVE strengthening bump.
+  - Carried (N-F-G-E + N-F-G-C, verified present + unchanged at this HEAD): `session/core.rs`
+    `MAX_REASSEMBLY_TAIL_BYTES = 16 MiB` + `session/event.rs` `SessionError::ReassemblyBufferOverflow`;
+    `node_sync.rs` `MAX_WIRE_PUMP_LOOKAHEAD = 256`; `ba02_pass.rs` (`//! RED`; `correlate_peer_log_file` +
+    `write_ba02_manifest` accepting ONLY a `Ba02Manifest`); `node_sync.rs` `from_wire_pump`; `node_lifecycle.rs`
+    `spawn_live_wire_pump_source`; gates `ci_check_live_feed_memory_bounds.sh` +
+    `ci_check_ba02_evidence_manifest_schema.sh`.
+- Counts at `6bd60c80` (N-F-G-D close, this refresh): **456** canonical types (Δ 0 vs the prior SEAMS — no BLUE
+  crate modified; the NEW `ade_node::rehearsal_evidence` is GREEN-by-content and `ade_node::rehearsal_pass` is RED,
+  so neither is canonical-counted), **121** CI checks (Δ +2 vs the prior SEAMS's 119 — the two G-D gates
+  `ci_check_node_path_fidelity.sh` + `ci_check_rehearsal_manifest_schema.sh`), **315** registry rules (Δ +1 vs the
+  prior 314 — NEW `CN-REHEARSAL-FIDELITY-01`, `tier = release`, `enforced`; no rule weakened). All counts match
+  the CODEMAP header regenerated at the same HEAD.
+- All N-F-G-E / N-F-G-C / N-F-G-B / N-F-G-A / N-F-F / N-F-E / N-F-D / N-F-C / N-F-A / N-Z / N-Y closed surfaces
+  re-verified present on disk at this HEAD and unchanged by N-F-G-D (no BLUE crate modified; `ade_codec`
+  byte-unchanged; `run_relay_loop` / `run_node_sync` containment + the served-chain handoff fence + the live-feed
+  memory bounds byte-unchanged; the live-feed wiring + the serve mechanism unchanged); the refresh annotated only
+  the seams N-F-G-D added (the GREEN `PrivateRehearsalManifest` non-promotable envelope + the RED `rehearsal_pass`
+  file I/O + the path-fidelity fence + the rehearsal-schema gate) and the surfaces they touched (the §1 argv
+  path-fidelity note; the §2 rehearsal-evidence data-only/authoritative split; the §3 Closed rows; the §5 CI
+  table; the §6 honest-scope bullet; the §7 C1 dry-run operator-pass gate).
+- **Cross-reference check (CODEMAP ↔ SEAMS):** every module named in this SEAMS appears in the CODEMAP regenerated
+  at the same HEAD — the N-F-G-D surfaces `ade_node::rehearsal_evidence` (`PrivateRehearsalManifest`,
+  `RehearsalVenue`, `from_correlate_outcome`, `to_canonical_toml`, `//! GREEN`) + `ade_node::rehearsal_pass`
+  (`correlate_peer_log_file_into_rehearsal`, `write_private_rehearsal_manifest`, `//! RED`), AND the carried
+  N-F-G-E (`session::core` `MAX_REASSEMBLY_TAIL_BYTES`, `session::event` `SessionError::ReassemblyBufferOverflow`,
+  `node_sync` `MAX_WIRE_PUMP_LOOKAHEAD`, `mux_pump::session_err_to_halt`) / N-F-G-C (`ba02_pass`,
+  `node_lifecycle::spawn_live_wire_pump_source`, `node_sync::from_wire_pump`, `ba02_evidence`) modules are all
+  inventoried there; the CODEMAP header's PHASE4-N-F-G-D delta names the same two `ade_node` modules + the two new
+  gates + `CN-REHEARSAL-FIDELITY-01`. The **456 / 121 / 315** counts match the CODEMAP header. No stale module
+  references. The two new CI gates (`ci_check_node_path_fidelity.sh` + `ci_check_rehearsal_manifest_schema.sh`) are
+  named in both docs.
+- **`.idd-config.json` is CURRENT at this close (verified, not edited).** `_invariant_registry_doc` reads "315
+  entries at HEAD" (matches), and `head_deltas_baseline` is `6bd60c80` (the N-F-G-D close baseline). No stale count
+  fields surfaced this refresh. (This doc does not edit config.)
 - The doc is regenerated, not edited. If a value drifts, fix the source, not the doc.
 - NOTE: no `cargo build`/`test`/`check` was run during this regeneration (grep/ls/git only, per the task
   constraint).

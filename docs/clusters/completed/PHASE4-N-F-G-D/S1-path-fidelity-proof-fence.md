@@ -11,7 +11,7 @@ Path-fidelity proof + fence (prove the `--mode node` accepted-block path is inpu
 **PHASE4-N-F-G-D** — Private-testnet accepted-block bounty dry-run.
 
 ### Status
-Planned (cluster doc `ce313927`). First and load-bearing slice — the bounty-alignment proof.
+Merged (PHASE4-N-F-G-D close — impl `d4d0f456`; CE-G-D-1 green). First and load-bearing slice — the bounty-alignment proof.
 
 ### Cluster Exit Criteria Addressed
 - [ ] **CE-G-D-1 (path fidelity — MECHANICAL, closeable)** — a test proves `import_live_consensus_inputs` consumes an early/private-net extraction through the **same** path used for a synced preprod-tip extraction (OQ1 proof obligation; if it cannot, the slice fixes the **shared** path, never a private-only workaround); a path-fidelity CI fence proves G-D adds **no new `--mode node` argv flag** and **no from-genesis consensus-inputs constructor** (the `--mode node` accepted-block path's consensus inputs are populated only via `import_live_consensus_inputs`).
