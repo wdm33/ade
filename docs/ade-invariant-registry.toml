@@ -5532,3 +5532,50 @@ ci_script = "ci/ci_check_forge_intent_closed.sh, ci/ci_check_operator_forge_no_s
 introduced_in = "PHASE4-N-F-F"
 strengthened_in = []
 status = "enforced"
+
+# =============================================================================
+# PHASE4-N-F-G-E — Live-feed bounded memory (operational-hardening)
+# Sketch: docs/planning/phase4-n-f-g-e-invariants.md
+# Cluster: docs/clusters/PHASE4-N-F-G-E/cluster.md
+# status = "declared" until S1 populates tests + ci_script + the close flip
+# (ci_check_registry_code_locus_exists.sh skips declared rows → stays green).
+# =============================================================================
+
+[[rules]]
+id = "DC-LIVEMEM-01"
+tier = "derived"
+statement = """
+Live-feed bounded memory (operational-hardening; NOT BLUE consensus law).
+Peer-driven memory on the live --mode node feed is bounded BEFORE authoritative
+decode/apply: a per-mini-protocol reassembly buffer (ade_network::session::core
+proto_buffers) over 16 MiB fails closed with a structured SessionError (drop the
+peer); the WirePump lookahead (ade_node::node_sync) stops opportunistic draining
+at 256 buffered blocks, letting the existing bounded mpsc (cap 64) back-pressure
+the pump. No silent truncation, no partial decode, no unbounded fallback. The
+bounds are CLOSED CONSTANTS -- defensive implementation bounds, NOT Cardano
+semantic parameters; they may be tightened by a future hardening slice, but no
+runtime option (CLI / env / config) may disable them or set them to unbounded.
+The cap fires before the BLUE decode path (unchanged); the verdict-decoupled
+NodeBlockSource contract, the relay-loop containment, and the served-chain
+handoff fence are all unchanged.
+"""
+source = "docs/planning/phase4-n-f-g-e-invariants.md"
+cross_ref = ["CN-SESS-04", "DC-SESS-06", "DC-SYNC-01", "DC-SYNC-02", "DC-NODE-06", "CN-NODE-02"]
+code_locus = "crates/ade_network/src/session/core.rs (GREEN 16 MiB reassembly-tail cap + additive SessionError overflow variant); crates/ade_node/src/node_sync.rs (RED 256-block WirePump lookahead-depth cap)"
+tests = []
+ci_script = ""
+introduced_in = "PHASE4-N-F-G-E"
+strengthened_in = []
+status = "declared"
+evidence_notes = """
+PHASE4-N-F-G-E invariant sketch (/invariants gate). Declared at sketch; tests +
+ci_script populate at slice time, flip to enforced at close. Prompted by the
+PHASE4-N-F-G-C per-cluster security review (MEDIUM) + SEAMS §7 candidate #6: the
+G-C live-feed wiring EXPOSED two pre-existing unbounded peer-driven memory
+surfaces (reused N-M-FRAG / N-M-C infra) on the --mode node binary path. The
+prior CBOR length-overflow remote-DoS (fixed in N-X) is NOT reintroduced -- this
+is a pre-decode reassembly/scheduling bound. Bounds: MAX_REASSEMBLY_TAIL_BYTES =
+16 MiB (session::core, GREEN); MAX_WIRE_PUMP_LOOKAHEAD = 256 (node_sync, RED).
+NO live-evidence / BA-02 / rehearsal claim; NO RO-LIVE flip; NO serve / forge /
+containment change.
+"""
