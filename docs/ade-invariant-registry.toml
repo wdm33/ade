@@ -5701,4 +5701,25 @@ containment / handoff / memory fences are byte-unchanged; no BLUE change; cargo 
 -p ade_node green. The tests/ci_script array binding + the declared->enforced flip remain
 deferred to the G-D close pass (clause 2 evidence non-promotability is mechanically green
 in CI from S2 onward).
+
+PHASE4-N-F-G-D S3 (C1 dry-run runbook + operator-gated execution scaffold) LANDED: new
+runbook docs/evidence/phase4-n-f-g-d-private-rehearsal-README.md -- a STRICT SUBSET of the
+G-C preprod operator-pass runbook (same --mode node path / --peer feed / --json-seed /
+--consensus-inputs-path / operator-key flow / peer-log capture / correlate / NoEvidence
+fail-closed; ONLY venue=private-testnet-c1 + operator genesis stake + the
+PrivateRehearsalManifest envelope differ; the strict-subset property is ANCHORED by the S1
+path-fidelity fence, not merely asserted). New RED test file
+crates/ade_node/tests/node_c1_dry_run_rehearsal.rs: hermetic
+c1_dry_run_correlate_to_rehearsal_envelope (file -> correlate_peer_log_file_into_rehearsal
+-> write_private_rehearsal_manifest -> read back; markers + payload asserted; NoEvidence ->
+None -> nothing written; missing log -> io::Error) + env-gated node_c1_dry_run_rehearsal_live
+(ADE_LIVE_C1_DRY_RUN; the operator execution harness -- a RED test, skipped in CI, NOT a
+runtime node mode; NoEvidence panics, never writes). NO binary wiring, NO new --mode node
+flag, NO new bootstrap/constructor, NO alternate correlator, NO new CI gate, NO synthetic
+manifest committed (the rehearsal gate stays vacuous), NO RO-LIVE flip, NO BLUE change. All
+6 gates green; cargo test -p ade_node green. With S1 + S2 + S3 mechanically green,
+CN-REHEARSAL-FIDELITY-01 is complete; the tests/ci_script binding + the declared->enforced
+flip happen at /cluster-close PHASE4-N-F-G-D. The live C1 run is
+blocked_until_operator_c1_net_executed; the bounty deliverable remains the separate C2
+preprod pass.
 """
