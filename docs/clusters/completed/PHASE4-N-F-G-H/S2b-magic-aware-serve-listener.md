@@ -11,7 +11,7 @@ Magic-aware node/producer serve listener (serve listeners advertise N2N versions
 **PHASE4-N-F-G-H** — Node-spine live serve-to-peer. *Inserted between S2 and S3 as a prerequisite shared-path correctness fix* — the S2 socket test passes only because both sides used mainnet magic; a real preprod (magic 1) or C1 (magic 42) follower would fail the N2N handshake. This directly blocks both the C1 private dry-run (S3) and the C2 preprod bounty pass.
 
 ### Status
-Proposed (doc-before-implement). Depends on S2 (the node serve sibling).
+Merged (impl `a8ca5e52`). Depends on S2 (the node serve sibling).
 
 ### Cluster Exit Criteria Addressed
 - [ ] **CE-G-H-2b (magic-aware serve handshake — MECHANICAL, closeable)** — the node-spine and producer serve listeners advertise N2N versions using the configured network magic (node: `cli.network_magic`; produce: parsed-genesis `network_magic`); the static mainnet-only `N2N_SUPPORTED` is **not** used as a live serve listener's `our_supported`; the closed/enumerated version *set* is unchanged (only the `network_magic` field is parameterized).

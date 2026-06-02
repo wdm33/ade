@@ -11,7 +11,7 @@ Extract shared serve-dispatch authority (move the coordinator-free serve-dispatc
 **PHASE4-N-F-G-H** — Node-spine live serve-to-peer.
 
 ### Status
-Proposed (doc-before-implement; not yet implemented). First slice — the reuse-enabling refactor that S2 builds on.
+Merged (impl `8b8b8139`). First slice — the reuse-enabling refactor that S2 builds on.
 
 ### Cluster Exit Criteria Addressed
 - [ ] **CE-G-H-1 (single serve-dispatch authority — MECHANICAL, closeable)** — a candidate gate `ci_check_single_serve_dispatch_authority.sh` is green: exactly one definition of the serve-dispatch core in `ade_runtime`, imported by both `produce_mode` and `node_lifecycle`; no parallel serve-dispatch defined in `node_lifecycle`. `produce_mode` serve behavior byte-unchanged: `cargo test -p ade_node` green (incl. the existing producer serve tests) + the `ade_network` server tests green.

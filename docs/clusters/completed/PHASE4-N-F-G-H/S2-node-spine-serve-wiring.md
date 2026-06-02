@@ -11,7 +11,7 @@ Node-spine serve wiring + hermetic loopback (retain the `ServedChainView`; spawn
 **PHASE4-N-F-G-H** — Node-spine live serve-to-peer.
 
 ### Status
-Proposed (doc-before-implement; not yet implemented). Depends on S1 (shared serve-dispatch core).
+Merged (impl `8c6a6a7e`). Depends on S1 (shared serve-dispatch core).
 
 ### Cluster Exit Criteria Addressed
 - [ ] **CE-G-H-2 (node-spine request-driven serve — MECHANICAL, closeable)** — `--mode node` (given `--listen`) serves the G-B self-accepted `ServedChainView` to a peer via **both** ChainSync (`RollForward` header, `DC-CONS-18`) **and** BlockFetch (body, `DC-CONS-17`), through a sibling task **outside** `run_relay_loop`, reusing `run_n2n_listener` + the shared adapter; the containment gate (`ci_check_node_run_loop_containment.sh`) and the path-fidelity fence (`ci_check_node_path_fidelity.sh`) stay byte-/semantically unchanged; a hermetic loopback test proves a peer discovers + fetches an **already-served** self-accepted block via the request-driven path.

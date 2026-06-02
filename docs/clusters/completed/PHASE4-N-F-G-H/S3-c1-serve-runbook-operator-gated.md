@@ -11,7 +11,7 @@ C1 dry-run runbook + operator-gated serve harness (exercise a real Haskell follo
 **PHASE4-N-F-G-H** — Node-spine live serve-to-peer. The **operator-gated half** (mirrors G-C/G-D): a mechanical scaffold (runbook + env-gated harness, closeable) + the actual C1 live execution (`blocked_until_operator_c1_serve_executed`).
 
 ### Status
-Proposed (doc-before-implement). Depends on S2 (node serve sibling) + S2b (magic-aware serve listener — without it the C1 magic-42 follower's handshake would be refused).
+Merged (impl `f59b1eaa`). Depends on S2 (node serve sibling) + S2b (magic-aware serve listener — without it the C1 magic-42 follower's handshake would be refused).
 
 ### Cluster Exit Criteria Addressed
 - [ ] **CE-G-H-3 (operator-gated C1 serve — SCAFFOLDS ONLY; live execution BLOCKED)** — the runbook `docs/evidence/phase4-n-f-g-h-node-serve-README.md` is committed (a strict adaptation of the G-C/G-D operator-pass runbooks); a candidate env-gated `node_c1_serve_live` (`ADE_LIVE_C1_SERVE`) is skipped/blocked without the C1 net; **no synthetic evidence committed**; live execution stays `blocked_until_operator_c1_serve_executed`.

@@ -2575,7 +2575,7 @@ ci_script = "ci/ci_check_block_fetch_server_closure.sh, ci/ci_check_broadcast_to
 status = "enforced"
 authority_surface = "producer-side block-fetch wire-byte transmission"
 cluster = "PHASE4-N-G"
-strengthened_in = ["PHASE4-N-R-B", "PHASE4-N-X"]
+strengthened_in = ["PHASE4-N-R-B", "PHASE4-N-X", "PHASE4-N-F-G-H"]
 evidence = ["End-to-end transcript test session_transcript_served_block_bytes_equal_admitted_accepted_block_bytes asserts every Block{bytes} payload in a corpus-driven transcript equals the admitted AcceptedBlock.as_bytes() at its (slot,hash) key.", "CI gate ci_check_block_fetch_server_closure.sh enforces that producer_block_fetch_serve sources Block{bytes} only through served.range_bytes (positive grep)."]
 
 [[rules]]
@@ -2590,7 +2590,7 @@ ci_script = "ci/ci_check_no_parallel_header_splitter.sh, ci/ci_check_broadcast_t
 status = "enforced"
 authority_surface = "producer-side chain-sync RollForward header projection"
 cluster = "PHASE4-N-G"
-strengthened_in = ["PHASE4-N-R-A", "PHASE4-N-S-A", "PHASE4-N-T", "PHASE4-N-V", "PHASE4-N-X"]
+strengthened_in = ["PHASE4-N-R-A", "PHASE4-N-S-A", "PHASE4-N-T", "PHASE4-N-V", "PHASE4-N-X", "PHASE4-N-F-G-H"]
 evidence = ["End-to-end transcript test session_transcript_announced_header_matches_served_body_recipe asserts the rolled header bytes equal accepted_block_header_bytes over the same AcceptedBlock the matching block-fetch range subsequently serves.", "The single canonical header splitter is enforced by ci_check_no_parallel_header_splitter.sh; the GREEN adapter imports accepted_block_header_bytes (positive grep in ci_check_broadcast_to_served_purity.sh)."]
 
 [[rules]]
@@ -2603,6 +2603,7 @@ code_locus = "crates/ade_network/src/chain_sync/server.rs (producer_chain_sync_s
 tests = ["producer_chain_sync_serve_replays_byte_identical_over_corpus", "producer_block_fetch_serve_replays_byte_identical_over_corpus", "drain_and_admit_is_deterministic_over_arrival_sequence", "session_transcript_replay_byte_identical"]
 ci_script = "ci/ci_check_chain_sync_server_closure.sh, ci/ci_check_block_fetch_server_closure.sh, ci/ci_check_broadcast_to_served_purity.sh"
 status = "enforced"
+strengthened_in = ["PHASE4-N-F-G-H"]
 authority_surface = "producer-side server-role session transcript"
 cluster = "PHASE4-N-G"
 evidence = ["End-to-end test session_transcript_replay_byte_identical drives the full pipeline over identical canonical inputs twice and asserts byte-equal outgoing frame sequences.", "Per-reducer determinism tests in chain_sync::server and block_fetch::server cover each reducer in isolation; the GREEN adapter's determinism test covers admission ordering."]
@@ -2617,6 +2618,7 @@ code_locus = "crates/ade_network/src/chain_sync/server.rs (producer_chain_sync_s
 tests = ["producer_chain_sync_serve_request_next_idle_yields_roll_forward_when_served_has_block", "producer_chain_sync_serve_request_next_idle_yields_await_reply_when_served_empty", "producer_chain_sync_serve_find_intersect_known_point_yields_intersect_found", "producer_chain_sync_serve_find_intersect_unknown_point_yields_intersect_not_found", "producer_chain_sync_serve_done_terminates_session", "producer_chain_sync_serve_rejects_illegal_grammar_pair", "producer_chain_sync_advance_tip_idle_yields_none", "producer_chain_sync_advance_tip_can_await_yields_roll_forward_when_block_available", "producer_chain_sync_advance_tip_must_reply_yields_roll_forward_when_block_available", "producer_chain_sync_advance_tip_can_await_yields_none_when_cursor_at_head", "producer_chain_sync_serve_roll_forward_header_equals_accepted_block_header_bytes", "producer_chain_sync_serve_replays_byte_identical_over_corpus"]
 ci_script = "ci/ci_check_chain_sync_server_closure.sh"
 status = "enforced"
+strengthened_in = ["PHASE4-N-F-G-H"]
 authority_surface = "producer-side chain-sync server-agency reducer"
 cluster = "PHASE4-N-G"
 evidence = ["Reducer signature is total: every (state, in_msg) pair under client-agency returns Ok(ServerStep::Reply(_)) or Ok(ServerStep::Done) or Err(ProducerServerError::Grammar(_)). The match arm covering server-originated messages from client agency returns a Grammar error (defensive; the underlying BLUE state machine rejects these first).", "Server-agency states (CanAwait/MustReply) are exited via either ServerReply::roll_forward(_) (data available) or ServerReply::await_reply() (parks in MustReply for advance_tip). Intersect leg always returns IntersectFound or IntersectNotFound. Done leg always returns ServerStep::Done."]
@@ -2631,6 +2633,7 @@ code_locus = "crates/ade_network/src/chain_sync/server.rs (ServerReply for chain
 tests = ["chain_sync_server_reply_round_trips_through_codec", "chain_sync_server_reply_into_message_only_yields_server_variants", "block_fetch_server_reply_round_trips_through_codec", "block_fetch_server_reply_into_message_only_yields_server_variants", "accepted_block_header_bytes_equals_validator_split_on_corpus", "accepted_block_header_bytes_is_subslice_of_as_bytes", "accepted_block_header_bytes_rejects_malformed_envelope"]
 ci_script = "ci/ci_check_no_parallel_header_splitter.sh"
 status = "enforced"
+strengthened_in = ["PHASE4-N-F-G-H"]
 authority_surface = "producer-side server-role mini-protocol reply surface"
 cluster = "PHASE4-N-G"
 evidence = ["ServerReply structs in chain_sync/server.rs and block_fetch/server.rs have private inner enums; no public constructor exists for client-agency variants (RequestNext, FindIntersect, Done for chain-sync; RequestRange, ClientDone for block-fetch). into_message() projects only to server-agency wire variants; exhaustive match tests prove the closure.", "ci_check_no_parallel_header_splitter.sh enforces single-authority header projection: the only pub fn *_header_bytes in the workspace lives at crates/ade_ledger/src/block_validity/header_input.rs."]
@@ -5769,11 +5772,11 @@ cluster's implementation close.
 source = "docs/planning/phase4-n-f-g-h-invariants.md"
 cross_ref = ["DC-NODE-06", "CN-NODE-02", "DC-CONS-17", "DC-CONS-18", "CN-PROTO-06", "DC-PROTO-07", "DC-PROTO-08", "CN-WIRE-08", "CN-FORGE-01", "RO-LIVE-01", "RO-LIVE-06", "CN-REHEARSAL-FIDELITY-01"]
 code_locus = "crates/ade_node/src/node_lifecycle.rs (retain the ServedChainView + spawn the sibling listener/serve-dispatch task outside run_relay_loop -- the only new code), crates/ade_node/src/produce_mode.rs (run_n2n_listener + dispatch_server_frame_event_to_outbound + new_per_peer_outbound -- shared serve adapter to be EXTRACTED to a shared module, not duplicated; OQ1), crates/ade_network/src/chain_sync/server.rs (producer_chain_sync_serve + producer_chain_sync_advance_tip -- reused BLUE), crates/ade_network/src/block_fetch/server.rs (producer_block_fetch_serve -- reused BLUE), crates/ade_runtime/src/producer/served_chain_handle.rs (ServedChainHandle/ServedChainView -- reused GREEN)"
-tests = []
-ci_script = ""
+tests = ["node_spine_serve_loopback_follower_fetches_self_accepted_block", "node_serve_start_failure_is_surfaced_not_silent", "n2n_supported_for_magic_produces_configured_magic", "node_c1_serve_live"]
+ci_script = "ci/ci_check_single_serve_dispatch_authority.sh, ci/ci_check_serve_listener_magic_aware.sh"
 introduced_in = "PHASE4-N-F-G-H"
 strengthened_in = []
-status = "declared"
+status = "enforced"
 evidence_notes = """
 PHASE4-N-F-G-H invariant sketch (/invariants gate). Declared at sketch; tests + ci_script
 populate at slice time, flip to enforced at close. Surfaced by the G-D C1 dry-run: --mode
