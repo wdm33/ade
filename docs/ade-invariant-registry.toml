@@ -5593,3 +5593,74 @@ BA-02/live-evidence readiness.
 NO live-evidence / BA-02 / rehearsal claim; NO RO-LIVE flip; NO serve / forge /
 containment change.
 """
+
+# =============================================================================
+# PHASE4-N-F-G-D — Private-testnet accepted-block bounty dry-run (fidelity)
+# Sketch: docs/planning/phase4-n-f-g-d-invariants.md
+# status = "declared" until slices populate tests + ci_script + the close flip
+# (ci_check_registry_code_locus_exists.sh skips declared rows → stays green).
+# =============================================================================
+
+[[rules]]
+id = "CN-REHEARSAL-FIDELITY-01"
+tier = "release"
+statement = """
+Private-testnet accepted-block bounty dry-run fidelity (two coupled clauses; if
+either fails the rehearsal becomes misleading). (1) PATH FIDELITY: the C1 private
+dry-run uses the SAME --mode node accepted-block path as preview/preprod --
+N-M-C extraction/import (import_live_consensus_inputs) -> forge -> self-accept ->
+sibling-serve -> block-fetch -> peer log -> correlate -- with NO private-only flag,
+branch, bootstrap authority, or from-genesis constructor. The only differences from
+the preprod pass are operator-controlled inputs (a private genesis whose stake
+allocation makes Ade win slots fast) and the evidence label (rehearsal). No
+private-only helper may make the rehearsal pass if the same condition would fail on
+preview/preprod -- such a condition is a shared-path bug to fix in the shared path,
+never special-cased. (2) EVIDENCE NON-PROMOTABILITY: any private-testnet manifest is
+clearly marked rehearsal / private-testnet, stored ONLY under the rehearsal home
+(docs/evidence/phase4-n-f-g-d-private-rehearsal-*.toml, never the bounty home
+docs/clusters/PHASE4-N-F-G-C/CE-G-C-LIVE_*.toml), sha256-bound to a real Haskell peer
+log, correlate-produced (ba02_evidence::correlate is the sole acceptance-evidence
+constructor; allow-list, hash-primary), and flips NO RO-LIVE rule. C1 rehearsal
+evidence may increase confidence in the bounty path, but it is NOT bounty evidence and
+MUST NOT be referenced by the CE-G-C-LIVE_* / ci_check_ba02_evidence_manifest_schema.sh
+gate. The single bounty deliverable is preview/preprod acceptance, captured separately.
+"""
+source = "docs/planning/phase4-n-f-g-d-invariants.md"
+cross_ref = ["RO-LIVE-01", "RO-LIVE-06", "CN-OPERATOR-EVIDENCE-01", "DC-NODE-06", "DC-EPOCH-03", "CN-NODE-02", "CN-CINPUT-03", "DC-CINPUT-02b"]
+code_locus = "crates/ade_node/src/ba02_evidence.rs (correlate — reused, the sole acceptance-evidence constructor); crates/ade_node/src/ba02_pass.rs (RED evidence I/O — the rehearsal write-wrapper mirrors/extends this into the rehearsal home); crates/ade_runtime/src/consensus_inputs/ (import_live_consensus_inputs — the shared N-M-C extraction/import the path-fidelity clause pins; OQ1 slice-entry proof obligation: it must consume an early/private-net extraction through the SAME path used for a synced preprod tip); docs/evidence/phase4-n-f-g-c-operator-pass-README.md (the preprod operator-pass runbook the C1 dry-run runbook must be a strict subset of); docs/evidence/phase4-n-f-g-d-private-rehearsal-*.toml (planned — the distinct rehearsal-evidence home); ci/ci_check_rehearsal_manifest_schema.sh (planned — vacuous-until-committed schema + sha256 + label + distinct-home gate); ci/ci_check_node_path_fidelity.sh (planned — no new --mode node flag, no from-genesis consensus-inputs constructor)"
+tests = []
+ci_script = ""
+introduced_in = "PHASE4-N-F-G-D"
+strengthened_in = []
+status = "declared"
+evidence_notes = """
+PHASE4-N-F-G-D invariant sketch (/invariants gate, 2026-06-02). Declared at sketch;
+tests + ci_script populate at slice time, flip to enforced at close. G-D is a BOUNTY
+DRY-RUN HARNESS -- a fast failure detector for the EXACT preview/preprod accepted-block
+path, run in a venue where the operator controls stake (private genesis) so Ade wins
+slots fast. It answers one question: will a real Haskell node accept an Ade-forged block
+when Ade has legitimate leader rights? -- surfacing the bounty-blocking failure classes
+(opcert/KES, Praos leader proof, header fields, block body/wire, tag-24 BlockFetch
+payload, serve path, peer-log parsing) early.
+
+The mechanical accepted-block pipeline is already complete (G-A forge fidelity, G-B
+self-accept->serve handoff, G-C live feed + BA-02 evidence I/O, G-E live-feed bounded
+memory). G-D adds NO new BLUE authority, NO new canonical type, NO new
+NodeBlockSource/CoordinatorEvent variant, NO new --mode node argv flag, NO from-genesis
+consensus-inputs constructor, NO private-only bootstrap. It reuses the proven N-M-C
+import_live_consensus_inputs extraction (the SAME path preprod uses) -- the from-genesis
+offline constructor (C1-scoping doc G3/§4 item 3) is a private-only path and is
+DELIBERATELY NOT built (litmus test: every G-D element must transfer verbatim to
+preview/preprod).
+
+Two halves, mirroring G-C: a MECHANICAL half (closeable hermetically -- the path-fidelity
+fence + the distinct rehearsal-evidence surface + gate + a dry-run runbook that is a
+provable strict subset of the preprod operator-pass runbook) and an OPERATOR-GATED half
+(the actual C1 live execution -- blocked_until_operator_c1_net_executed).
+
+Hard limit (do not soften): private C1 acceptance != bounty completion; preview/preprod
+acceptance = bounty completion. No RO-LIVE flip; no strengthened_in bump on RO-LIVE-01 /
+RO-LIVE-06 / CN-OPERATOR-EVIDENCE-01 (G-D does not advance the bounty deliverable). The
+relay-loop containment gate, the served-chain handoff fence, and the live-feed memory
+bounds stay byte-unchanged.
+"""
