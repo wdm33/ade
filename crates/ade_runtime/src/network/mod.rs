@@ -22,10 +22,15 @@ pub mod n2n_dialer;
 pub mod n2n_listener;
 pub mod n2n_server;
 pub mod outbound_command;
+pub mod serve_dispatch;
 
 pub use mux_pump::MuxPump;
 pub use outbound_command::{CloseReason, OutboundCommand};
 pub use n2n_dialer::{DialError, N2nDialer};
 pub use n2n_listener::{
     run_n2n_listener, run_per_peer_session, ListenerError, N2nListenerConfig, PeerSessionError,
+};
+pub use serve_dispatch::{
+    dispatch_server_frame_event_to_outbound, install_server_peer_state, remove_server_peer_state,
+    DispatchError, ServedBlockEvidence, ServerPeerStates,
 };

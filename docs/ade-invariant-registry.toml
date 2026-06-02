@@ -5806,4 +5806,18 @@ ServedChainView updates so a follower can request the block body by hash through
 produce_mode) is EXTRACTED to a shared serve module both modes call -- never duplicated (no
 second serve authority); its TCB color is resolved at cluster-plan. The kept
 ~/.cardano-private-testnet-c1 net is the regression harness for the live proof of OQ2/OQ3.
+
+PHASE4-N-F-G-H S1 (extract shared serve-dispatch authority) LANDED: the coordinator-free
+serve-dispatch core (dispatch_server_frame_event_to_outbound + the per-peer-state lifecycle
+install_server_peer_state/remove_server_peer_state + ServerPeerStates + DispatchError +
+ServedBlockEvidence) moved verbatim from ade_node::produce_mode to the shared
+ade_runtime::network::serve_dispatch module; produce_mode's handle_listener_event re-pointed
+at it and KEEPS its CoordinatorState/coordinator_step/producer-evidence wrapping (behavior
+byte-unchanged: produce_loopback 4/4, ade_network server tests 21/21, ade_runtime 343,
+ade_node 171 -- all green). NEW gate ci/ci_check_single_serve_dispatch_authority.sh: exactly
+one `fn dispatch_server_frame_event_to_outbound` (under crates/ade_runtime/), node_lifecycle
+defines none, produce_mode reuses it -- green; fail-closed verified on an injected duplicate.
+NO BLUE change; NO node-spine wiring (that is S2); NO proactive advance_tip; the containment /
+path-fidelity / handoff fences byte-unchanged. The ci_script binding + the declared->enforced
+flip happen at the G-H close (after S2/S3).
 """

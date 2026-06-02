@@ -55,6 +55,10 @@ use ade_ledger::producer::self_accept::self_accept;
 use ade_ledger::state::LedgerState;
 use ade_runtime::consensus_inputs::{import_live_consensus_inputs, LiveConsensusInputsCanonical};
 use ade_runtime::network::n2n_listener::{run_n2n_listener, N2nListenerConfig};
+use ade_runtime::network::serve_dispatch::{
+    dispatch_server_frame_event_to_outbound, install_server_peer_state,
+    remove_server_peer_state, ServerPeerStates,
+};
 use ade_runtime::producer::tick_assembler::{assemble_tick, TickInputs};
 use ade_runtime::seed_import::import_cardano_cli_json_utxo;
 use ade_types::shelley::block::ProtocolVersion;
@@ -1178,12 +1182,6 @@ fn apply_effects_with_forge_handler(
     Ok(())
 }
 
-/// PHASE4-N-R-B B3 per-peer state map. Keyed by `PeerId`;
-/// inserted on `PeerConnected { role: DownstreamServer }`;
-/// removed on `PeerDisconnected`; consumed by frame-event
-/// dispatch.
-type ServerPeerStates = BTreeMap<PeerId, ade_runtime::network::n2n_server::PerPeerN2nServerState>;
-
 async fn handle_listener_event(
     evt: OrchestratorEvent,
     coord_state: &mut ade_runtime::producer::coordinator::CoordinatorState,
@@ -1204,12 +1202,11 @@ async fn handle_listener_event(
             connected_peers.insert(coord_peer_id, ());
             // PHASE4-N-R-B B3: install per-peer n2n_server state so
             // subsequent server-frame events can dispatch.
-            peers_state.insert(
+            install_server_peer_state(
+                peers_state,
                 coord_peer_id,
-                ade_runtime::network::n2n_server::PerPeerN2nServerState::new(
-                    chain_sync_version,
-                    block_fetch_version,
-                ),
+                chain_sync_version,
+                block_fetch_version,
             );
             let prev_state = coord_state.clone();
             let (new_state, effects) = coordinator_step(
@@ -1230,11 +1227,7 @@ async fn handle_listener_event(
         }
         OrchestratorEvent::PeerDisconnected { peer_id, .. } => {
             let coord_peer_id = PeerId(peer_id.0);
-            peers_state.remove(&coord_peer_id);
-            peer_outbound
-                .write()
-                .await
-                .remove(&ade_runtime::orchestrator::event::PeerId(peer_id.0));
+            remove_server_peer_state(peers_state, peer_outbound, coord_peer_id).await;
             if connected_peers.remove(&coord_peer_id).is_some() {
                 let prev_state = coord_state.clone();
                 let (new_state, effects) = coordinator_step(
@@ -1285,188 +1278,6 @@ async fn handle_listener_event(
     Ok(())
 }
 
-/// **PHASE4-N-S-B B4** — closed dispatch-error surface for the
-/// outbound-relay path. No `String` payloads.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum DispatchError {
-    /// Peer is not in the per-peer state map (PeerConnected
-    /// never arrived or PeerDisconnected already cleared it).
-    UnknownPeer { peer_id: u64 },
-    /// Peer is in `peers_state` but the PerPeerOutbound map
-    /// has no sender registered for that peer. Indicates a
-    /// listener/produce_mode synchronization bug.
-    PeerOutboundMissing { peer_id: u64 },
-    /// `mpsc::Sender::try_send` failed — either the channel
-    /// is full (peer not draining fast enough) or the
-    /// receiver was dropped (MuxPump task exited).
-    SendFailure { peer_id: u64 },
-    /// BLUE reducer rejected the inbound frame as malformed.
-    ReducerError,
-}
-
-/// **PHASE4-N-T S4** — GREEN evidence observation of a block actually
-/// present in the served snapshot for a block-fetch request range.
-/// Collected into an owned `Vec` BEFORE any `.await` (never holds the
-/// `watch::Ref` across an await) and emitted as
-/// `ProducerLogEvent::BlockServed` by `handle_listener_event`. This
-/// OBSERVES the served snapshot; it does not re-decide what the BLUE
-/// serve reducer (`producer_block_fetch_serve`) serves, and is never
-/// fabricated — `(slot, hash, bytes_len)` are read from the snapshot.
-struct ServedBlockEvidence {
-    peer_id: PeerId,
-    slot: u64,
-    hash: [u8; 32],
-    bytes_len: u32,
-}
-
-/// **PHASE4-N-S-B B4** — outbound-relay-aware dispatch.
-///
-/// Uses the lower-level BLUE reducers (`producer_chain_sync_serve` /
-/// `producer_block_fetch_serve`) directly so the reply is
-/// typed `ServerReply`, not pre-encoded `Vec<u8>`. The typed
-/// reply is wrapped in `OutboundCommand` and try_sent through
-/// the per-peer outbound channel. No `Vec<u8>` byte tunnel.
-///
-/// On lookup or send failure, returns the closed
-/// `DispatchError` variant; never panics.
-async fn dispatch_server_frame_event_to_outbound(
-    event: &OrchestratorEvent,
-    peers_state: &mut ServerPeerStates,
-    served_chain_view: &ade_runtime::producer::served_chain_handle::ServedChainView,
-    peer_outbound: &ade_runtime::network::outbound_command::PerPeerOutbound,
-) -> Result<(usize, Vec<ServedBlockEvidence>), DispatchError> {
-    use ade_network::block_fetch::server::producer_block_fetch_serve;
-    use ade_network::chain_sync::server::producer_chain_sync_serve;
-    use ade_network::codec::block_fetch::{decode_block_fetch_message, BlockFetchMessage, Point};
-    use ade_network::codec::chain_sync::decode_chain_sync_message;
-    use ade_runtime::network::outbound_command::OutboundCommand;
-    use ade_runtime::producer::served_chain_lookups::ServedChainLookups;
-
-    match event {
-        OrchestratorEvent::PeerN2nServerChainSyncFrame { peer_id, bytes } => {
-            let key = PeerId(peer_id.0);
-            let state = peers_state
-                .get(&key)
-                .cloned()
-                .ok_or(DispatchError::UnknownPeer { peer_id: peer_id.0 })?;
-            let snap_ref = served_chain_view.borrow();
-            let msg = decode_chain_sync_message(bytes)
-                .map_err(|_| DispatchError::ReducerError)?;
-            let lookups = ServedChainLookups { snap: &*snap_ref };
-            let chain_sync_version = state.chain_sync_version;
-            let block_fetch_version = state.block_fetch_version;
-            let block_fetch_old = state.block_fetch;
-            let (cs2, step) = producer_chain_sync_serve(
-                state.chain_sync,
-                msg,
-                &lookups,
-                chain_sync_version,
-            )
-            .map_err(|_| DispatchError::ReducerError)?;
-            let mut sent = 0usize;
-            if let ade_network::chain_sync::server::ServerStep::Reply(reply) = step {
-                let cmd = OutboundCommand::ChainSync {
-                    peer: ade_runtime::orchestrator::event::PeerId(peer_id.0),
-                    reply,
-                };
-                let map = peer_outbound.read().await;
-                let sender = map.get(&ade_runtime::orchestrator::event::PeerId(peer_id.0))
-                    .ok_or(DispatchError::PeerOutboundMissing { peer_id: peer_id.0 })?;
-                sender
-                    .try_send(cmd)
-                    .map_err(|_| DispatchError::SendFailure { peer_id: peer_id.0 })?;
-                sent = 1;
-            }
-            let updated_state = ade_runtime::network::n2n_server::PerPeerN2nServerState {
-                chain_sync: cs2,
-                block_fetch: block_fetch_old,
-                chain_sync_version,
-                block_fetch_version,
-            };
-            peers_state.insert(key, updated_state);
-            Ok((sent, Vec::new()))
-        }
-        OrchestratorEvent::PeerN2nServerBlockFetchFrame { peer_id, bytes } => {
-            let key = PeerId(peer_id.0);
-            let state = peers_state
-                .get(&key)
-                .cloned()
-                .ok_or(DispatchError::UnknownPeer { peer_id: peer_id.0 })?;
-            let snap_ref = served_chain_view.borrow();
-            let msg = decode_block_fetch_message(bytes)
-                .map_err(|_| DispatchError::ReducerError)?;
-            // Capture the requested point range before `msg` is consumed
-            // by the reducer; a closed-end RequestRange carries `(slot,
-            // hash)` for both endpoints (Origin has no key in the
-            // snapshot's BTreeMap, so a range touching Origin observes no
-            // present block — never over-claims).
-            let requested_range = match &msg {
-                BlockFetchMessage::RequestRange(r) => match (&r.from, &r.to) {
-                    (
-                        Point::Block { slot: fs, hash: fh },
-                        Point::Block { slot: ts, hash: th },
-                    ) => Some(((*fs, fh.clone()), (*ts, th.clone()))),
-                    _ => None,
-                },
-                _ => None,
-            };
-            let lookups = ServedChainLookups { snap: &*snap_ref };
-            let chain_sync_version = state.chain_sync_version;
-            let block_fetch_version = state.block_fetch_version;
-            let chain_sync_old = state.chain_sync;
-            let (bf2, step) = producer_block_fetch_serve(
-                state.block_fetch,
-                msg,
-                &lookups,
-                block_fetch_version,
-            )
-            .map_err(|_| DispatchError::ReducerError)?;
-            // GREEN evidence: observe which requested blocks are PRESENT in
-            // the served snapshot, reading real `(slot, hash, bytes_len)`.
-            // Collect into an owned `Vec` while the `watch::Ref` is held,
-            // then drop the ref BEFORE the outbound `.await` (no Ref held
-            // across await). Only present blocks within the requested
-            // range are observed — never a fabricated/zeroed BlockServed.
-            let mut served_evidence: Vec<ServedBlockEvidence> = Vec::new();
-            if let Some((from, to)) = requested_range {
-                for (s, h, b) in snap_ref.range_bytes(from, to) {
-                    served_evidence.push(ServedBlockEvidence {
-                        peer_id: PeerId(peer_id.0),
-                        slot: s.0,
-                        hash: h.0,
-                        bytes_len: b.len() as u32,
-                    });
-                }
-            }
-            drop(snap_ref);
-            let mut sent = 0usize;
-            if let ade_network::block_fetch::server::BlockFetchServerStep::Replies(replies) = step {
-                let map = peer_outbound.read().await;
-                let sender = map.get(&ade_runtime::orchestrator::event::PeerId(peer_id.0))
-                    .ok_or(DispatchError::PeerOutboundMissing { peer_id: peer_id.0 })?;
-                for reply in replies {
-                    let cmd = OutboundCommand::BlockFetch {
-                        peer: ade_runtime::orchestrator::event::PeerId(peer_id.0),
-                        reply,
-                    };
-                    sender
-                        .try_send(cmd)
-                        .map_err(|_| DispatchError::SendFailure { peer_id: peer_id.0 })?;
-                    sent += 1;
-                }
-            }
-            let updated_state = ade_runtime::network::n2n_server::PerPeerN2nServerState {
-                chain_sync: chain_sync_old,
-                block_fetch: bf2,
-                chain_sync_version,
-                block_fetch_version,
-            };
-            peers_state.insert(key, updated_state);
-            Ok((sent, served_evidence))
-        }
-        _ => Ok((0, Vec::new())),
-    }
-}
 
 fn write_evidence_event(
     writer: &mut std::fs::File,
