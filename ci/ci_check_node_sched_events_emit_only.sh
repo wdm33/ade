@@ -41,8 +41,11 @@ strip_for_grep() {
 # --- Guard (a): NEGATIVE — the planner names no CN-NODE-04 diagnostic token.
 PLANNER_BODY="$(strip_for_grep "$PLANNER")"
 DIAG_RE='NodeSchedEvent|NodeSchedSink|NodeSchedLogWriter|sched_event|sched_writer|FeedReason|ForgeOutcome'
-if echo "$PLANNER_BODY" | grep -qE "$DIAG_RE"; then
-    print_fail "run_loop_planner.rs references a CN-NODE-04 diagnostic token (emit-only violation): the planner must never emit or read a NodeSchedEvent — events flow one-directionally relay-loop -> log: $(echo "$PLANNER_BODY" | grep -nE "$DIAG_RE" | head -n1)"
+# grep reads via herestring (<<<), not `echo "$VAR" | grep` — under `set -o pipefail` a
+# `grep -q` that matches early SIGPIPEs the upstream `echo`, surfacing 141 and spuriously
+# failing the guard. A herestring has no pipe, so no race.
+if grep -qE "$DIAG_RE" <<<"$PLANNER_BODY"; then
+    print_fail "run_loop_planner.rs references a CN-NODE-04 diagnostic token (emit-only violation): the planner must never emit or read a NodeSchedEvent — events flow one-directionally relay-loop -> log: $(grep -nE "$DIAG_RE" <<<"$PLANNER_BODY" | head -n1)"
 fi
 
 # --- Guard (b): POSITIVE — the vocabulary is defined + the relay loop emits it.
@@ -50,7 +53,7 @@ if ! grep -qE 'enum NodeSchedEvent' "$SCHED_EVENT"; then
     print_fail "the closed NodeSchedEvent vocabulary is not defined in $SCHED_EVENT"
 fi
 LIFECYCLE_BODY="$(strip_for_grep "$LIFECYCLE")"
-if ! echo "$LIFECYCLE_BODY" | grep -qE 'NodeSchedEvent::'; then
+if ! grep -qE 'NodeSchedEvent::' <<<"$LIFECYCLE_BODY"; then
     print_fail "node_lifecycle.rs does not emit any NodeSchedEvent — the relay loop is the sole producer"
 fi
 
