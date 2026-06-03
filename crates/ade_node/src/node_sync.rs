@@ -219,6 +219,40 @@ impl NodeBlockSource {
         }
     }
 
+    /// Classify WHY the feed currently yields no block, as the closed
+    /// `FeedReason` taxonomy (PHASE4-N-F-G-J S1, CN-NODE-04). Content-blind RED
+    /// scheduling info only — emitted as a diagnostic, NEVER read by the planner
+    /// (emit-only). Fail-closed-on-ambiguity (option (b)): the reason-less
+    /// `disconnected` collapse cannot prove a clean drain, so a WirePump
+    /// disconnect classifies the ineligible `UnknownDisconnected` — never an
+    /// eligible `CleanEmpty`. An InMemory drain is a deterministic, provably-clean
+    /// exhaustion (`CleanEmpty`); an open WirePump with no block ready is
+    /// `NoBlockAvailable`. The specific error reasons + a reason-enriched live
+    /// `CleanEmpty` await a future wire-pump enrichment (not S1).
+    pub fn feed_reason(&self) -> crate::live_log::FeedReason {
+        use crate::live_log::FeedReason;
+        match self {
+            Self::InMemory(q) => {
+                if q.is_empty() {
+                    FeedReason::CleanEmpty
+                } else {
+                    FeedReason::NoBlockAvailable
+                }
+            }
+            Self::WirePump {
+                lookahead,
+                disconnected,
+                ..
+            } => {
+                if *disconnected && lookahead.is_empty() {
+                    FeedReason::UnknownDisconnected
+                } else {
+                    FeedReason::NoBlockAvailable
+                }
+            }
+        }
+    }
+
     /// Resolve when the next sync step is expected to make progress, or the
     /// feed has ended. In-memory feeds resolve immediately (work is already
     /// present or it is ended). A WirePump with nothing buffered awaits one
@@ -926,7 +960,9 @@ mod tests {
     // run_relay_loop lives in node_lifecycle; these tests drive it over the
     // same hermetic fixtures the L4b tests use.
 
-    use crate::node_lifecycle::{run_relay_loop, ForgeActivation, NodeLifecycleError};
+    use crate::node_lifecycle::{
+        run_relay_loop, run_relay_loop_with_sched, ForgeActivation, NodeLifecycleError,
+    };
     use tokio::sync::watch;
 
     #[test]
@@ -971,6 +1007,78 @@ mod tests {
         assert!(!src.has_work_ready(), "no more work");
         assert!(src.is_ended(), "disconnected + drained ⇒ ended");
         assert_eq!(src.next_block().await, None);
+    }
+
+    #[tokio::test]
+    async fn node_sched_events_emit_closed_vocabulary() {
+        // CE-G-J-1 (positive emit): the `--mode node` relay loop emits the
+        // closed CN-NODE-04 vocabulary through the emit-only sched sink. A
+        // drained in-memory feed (the hermetic analogue of the C1 sole-producer
+        // empty feed) classifies as the ELIGIBLE `clean_empty` — NEVER an
+        // ineligible reason (OQ1) — and the loop emits `feed_unavailable`
+        // before halting cleanly. Every emitted line's `event` is in the closed
+        // allow-list. Forge is OFF here (no ForgeActivation), so this is purely
+        // the feed-end emit; the no-behavior-change proof lives in the unchanged
+        // run_loop_planner determinism/precedence-table tests.
+        let (c, view) = corpus_view();
+        let sched = schedule();
+
+        let dir = TempDir::new().unwrap();
+        let chaindb =
+            PersistentChainDb::open(PersistentChainDbOptions::at(dir.path().join("chain.db")))
+                .unwrap();
+        let mut wal = FileWalStore::open(dir.path().join("wal")).unwrap();
+        let mut state = fresh_state(c.epoch_nonce);
+        // Drained feed — is_ended() right away, no block to sync.
+        let mut source = NodeBlockSource::in_memory(vec![]);
+        let (_tx, mut shutdown) = watch::channel(false);
+
+        let mut sched_log = crate::live_log::NodeSchedLogWriter::new(Vec::<u8>::new());
+        run_relay_loop_with_sched(
+            &mut state,
+            &mut source,
+            &chaindb,
+            &mut wal,
+            &sched,
+            &view,
+            &mut shutdown,
+            None,
+            Some(&mut sched_log),
+        )
+        .await
+        .expect("relay loop halts cleanly on a drained feed");
+
+        let bytes = sched_log.into_inner();
+        let text = std::str::from_utf8(&bytes).expect("utf8");
+        let lines: Vec<&str> = text.lines().filter(|l| !l.is_empty()).collect();
+        assert!(
+            !lines.is_empty(),
+            "the relay loop must emit at least one CN-NODE-04 event on a drained feed"
+        );
+        // The closed allow-list — the same set the emit-only gate enforces.
+        const ALLOW: &[&str] = &[
+            "feed_unavailable",
+            "forge_tick_considered",
+            "forge_tick_skipped",
+            "forge_attempted",
+            "forge_result",
+        ];
+        for line in &lines {
+            assert!(
+                ALLOW
+                    .iter()
+                    .any(|d| line.contains(&format!("\"event\":\"{d}\""))),
+                "emitted line is outside the closed CN-NODE-04 allow-list: {line}"
+            );
+        }
+        // The drained in-memory feed is the ELIGIBLE clean_empty case (OQ1) —
+        // never an ineligible reason.
+        assert!(
+            lines.iter().any(|l| l
+                .contains("\"event\":\"feed_unavailable\"")
+                && l.contains("\"reason\":\"clean_empty\"")),
+            "a drained in-memory feed must emit feed_unavailable{{clean_empty}} (eligible), got: {text}"
+        );
     }
 
     #[tokio::test]

@@ -5903,23 +5903,32 @@ id = "CN-NODE-04"
 tier = "operational"
 statement = """
 --mode node emits a CLOSED, allow-listed diagnostic event vocabulary for feed/forge
-scheduling: feed_unavailable{reason} with a closed reason enum (NoBlockAvailable | AtTip |
-PeerEndedCleanly | PeerLost | DecodeError | ProtocolError | SourceInvalid), forge_tick_considered,
+scheduling: feed_unavailable{reason} with a closed reason enum, forge_tick_considered,
 forge_tick_skipped{closed reason}, forge_attempted, and forge_result{closed outcome}. Closed
-reason/outcome enums only -- no stringly-typed authoritative errors. The events are
-operational/diagnostic ONLY: never a consensus-evidence, acceptance, or BA-02 signal, and
-emitting them changes no forge scheduling, base, or authority. CN-NODE-04 events are NEVER read
-by planner logic -- the planner may EMIT events but MUST NOT consume them (emit-only,
-one-directional planner -> log). Only the NoBlockAvailable / AtTip (and a carefully-defined clean
-empty-source) reasons may be eligible for the DC-NODE-08 forge allowance; PeerLost / DecodeError /
-ProtocolError / SourceInvalid are never eligible.
+reason/outcome enums only -- no stringly-typed authoritative errors and no catch-all/Other variant
+(a new variant is a compile error at the exhaustive JSONL encoder and fails the allow-list
+closedness test until wired + allow-listed). The S1-producible closed reason set from the current
+NodeBlockSource signals is exactly three: NoBlockAvailable (a WirePump open but momentarily empty)
+and CleanEmpty (an InMemory feed's provably-clean deterministic drain) are forge-eligible;
+UnknownDisconnected (a reason-less / ambiguous WirePump disconnect) is INELIGIBLE
+(fail-closed-on-ambiguity -- no ambiguous disconnect may become forge-eligible). The richer error
+reasons (PeerLost | DecodeError | ProtocolError | SourceInvalid) and a reason-enriched live AtTip
+are a FUTURE wire-pump-enrichment prerequisite, NOT yet in the closed set. The events are
+operational/diagnostic ONLY: never a consensus-evidence, acceptance, or BA-02 signal, and emitting
+them changes no forge scheduling, base, or authority. CN-NODE-04 events are NEVER read by planner
+logic -- the planner may EMIT events but MUST NOT consume them (emit-only, one-directional
+planner -> log). Only the forge-eligible reasons (NoBlockAvailable | CleanEmpty) may be eligible for
+the DC-NODE-08 forge allowance; the ineligible reasons are never eligible.
 """
 source = "docs/planning/phase4-n-f-g-j-invariants.md"
 cross_ref = ["DC-NODE-08", "DC-NODE-05", "RO-LIVE-01"]
-code_locus = "crates/ade_node/src/node_sync.rs; crates/ade_node/src/node_lifecycle.rs; crates/ade_node/src/live_log/ (closed event vocabulary)"
-tests = []
-ci_script = ""
-status = "declared"
+code_locus = "crates/ade_node/src/node_sync.rs; crates/ade_node/src/node_lifecycle.rs; crates/ade_node/src/live_log/sched_event.rs; crates/ade_node/src/live_log/sched_writer.rs (closed event vocabulary + emit-only JSONL writer)"
+tests = [
+  "node_sched_events_emit_closed_vocabulary",
+  "node_sched_event_allowlist_rejects_unknown_variants",
+]
+ci_script = "ci/ci_check_node_sched_events_emit_only.sh"
+status = "enforced"
 introduced_in = "PHASE4-N-F-G-J"
 strengthened_in = []
 cluster = "PHASE4-N-F-G-J"

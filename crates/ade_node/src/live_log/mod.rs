@@ -9,9 +9,13 @@
 //! pass (PHASE4-N-L-LIVE S1).
 
 pub mod event;
+pub mod sched_event;
+pub mod sched_writer;
 pub mod writer;
 
 pub use event::{
     LiveLogEvent, ModeTag, PeerDialFailureKind, WireOnlyShutdownReason,
 };
+pub use sched_event::{FeedReason, ForgeOutcome, NodeSchedEvent};
+pub use sched_writer::{NodeSchedLogWriter, NodeSchedSink};
 pub use writer::LiveLogWriter;

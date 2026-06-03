@@ -407,7 +407,11 @@ async fn run_node_lifecycle_inner(
                 SnapshotCadence::DEFAULT,
             );
             let mut source = NodeBlockSource::in_memory(Vec::new());
-            run_relay_loop(
+            // PHASE4-N-F-G-J S1 (CN-NODE-04): emit the closed feed/forge
+            // scheduling diagnostics to stderr (emit-only; never alters
+            // scheduling). The C1 rerun captures these.
+            let mut sched_log = crate::live_log::NodeSchedLogWriter::new(std::io::stderr());
+            run_relay_loop_with_sched(
                 &mut fwd,
                 &mut source,
                 &chaindb,
@@ -416,6 +420,7 @@ async fn run_node_lifecycle_inner(
                 &ledger_view,
                 shutdown,
                 None,
+                Some(&mut sched_log),
             )
             .await?;
             eprintln!(
@@ -554,7 +559,12 @@ async fn run_node_lifecycle_inner(
                 slot_length_ms,
             )
             .with_handoff_sender(handoff_tx);
-            run_relay_loop(
+            // PHASE4-N-F-G-J S1 (CN-NODE-04): emit the closed feed/forge
+            // scheduling diagnostics to stderr (emit-only; never alters
+            // scheduling). The forge-on path the C1 rerun exercises —
+            // forge_tick_skipped{reason} reveals the empty-feed halt.
+            let mut sched_log = crate::live_log::NodeSchedLogWriter::new(std::io::stderr());
+            run_relay_loop_with_sched(
                 &mut fwd,
                 &mut source,
                 &chaindb,
@@ -563,6 +573,7 @@ async fn run_node_lifecycle_inner(
                 &ledger_view,
                 shutdown,
                 Some(&mut activation),
+                Some(&mut sched_log),
             )
             .await?;
             // Close the handoff channel (drop the loop's Sender) so the sibling
@@ -943,6 +954,10 @@ pub(crate) fn forge_constants_from_pparams(
 }
 
 #[allow(clippy::too_many_arguments)]
+/// Relay loop with NO diagnostic sink (the existing 8-arg API — hermetic tests
+/// and any caller that does not emit CN-NODE-04 events). Delegates to
+/// [`run_relay_loop_with_sched`] with `sched = None`; the scheduling is
+/// identical (the sink is emit-only and never alters control flow).
 pub async fn run_relay_loop(
     state: &mut ForwardSyncState,
     source: &mut NodeBlockSource,
@@ -951,7 +966,28 @@ pub async fn run_relay_loop(
     era_schedule: &EraSchedule,
     ledger_view: &dyn LedgerView,
     shutdown: &mut watch::Receiver<bool>,
+    forge: Option<&mut ForgeActivation<'_>>,
+) -> Result<(), NodeLifecycleError> {
+    run_relay_loop_with_sched(
+        state, source, chaindb, wal, era_schedule, ledger_view, shutdown, forge, None,
+    )
+    .await
+}
+
+/// Relay loop with an optional emit-only CN-NODE-04 diagnostic sink
+/// (PHASE4-N-F-G-J S1). The binary `--mode node` path passes a real sink; the
+/// sink is best-effort and NEVER alters the loop's scheduling / control flow,
+/// and the GREEN planner never reads an event (emit-only).
+pub async fn run_relay_loop_with_sched(
+    state: &mut ForwardSyncState,
+    source: &mut NodeBlockSource,
+    chaindb: &PersistentChainDb,
+    wal: &mut FileWalStore,
+    era_schedule: &EraSchedule,
+    ledger_view: &dyn LedgerView,
+    shutdown: &mut watch::Receiver<bool>,
     mut forge: Option<&mut ForgeActivation<'_>>,
+    mut sched: Option<&mut dyn crate::live_log::NodeSchedSink>,
 ) -> Result<(), NodeLifecycleError> {
     loop {
         let shutdown_status = if *shutdown.borrow() {
@@ -1006,6 +1042,10 @@ pub async fn run_relay_loop(
                 }
             }
         };
+        // PHASE4-N-F-G-J S1: was a forge slot due THIS iteration? Captured before
+        // the (unchanged) planner call so the HaltCleanly arm can emit the
+        // forge_tick_skipped diagnostic without consulting the planner output.
+        let forge_was_due = matches!(forge_slot, ForgeSlotStatus::Due);
         match plan_loop_step(loop_state, sync_status, forge_slot, shutdown_status) {
             LoopStep::SyncOnce => {
                 run_node_sync(source, state, chaindb, wal, era_schedule, ledger_view)
@@ -1013,6 +1053,9 @@ pub async fn run_relay_loop(
                     .map_err(|e| NodeLifecycleError::RelaySync(format!("{e:?}")))?;
             }
             LoopStep::ForgeTick => {
+                if let Some(s) = sched.as_deref_mut() {
+                    s.record(&crate::live_log::NodeSchedEvent::ForgeTickConsidered);
+                }
                 // ForgeTick is reachable only with forge active (the planner can
                 // never return it for `NotDue`). Exactly ONE fenced forge attempt;
                 // advances NO durable tip, serves / admits / gossips nothing.
@@ -1025,6 +1068,7 @@ pub async fn run_relay_loop(
                 // KES period via the REUSED CoordinatorState method (no
                 // reimplementation). Out of range => skip: no forge, no
                 // `last_forged_slot` update (S3b proves the fail-closed path).
+                let mut forged = false;
                 if let Some(kes_period) = act.coordinator_state.kes_period_for_slot(slot.0) {
                     // Selected tip: the current durable tip if present, else the
                     // recovered tip. Read-only — the forge never writes it.
@@ -1035,6 +1079,9 @@ pub async fn run_relay_loop(
                         None => act.recovered.tip.clone(),
                     };
                     if let Some(tip) = selected_tip {
+                        if let Some(s) = sched.as_deref_mut() {
+                            s.record(&crate::live_log::NodeSchedEvent::ForgeAttempted);
+                        }
                         // PHASE4-N-F-G-B S2: the forge surfaces a typed
                         // Option<SelfAcceptedHandoff>; forward it to the
                         // dispatcher-spawned sibling admit task as a typed channel
@@ -1061,25 +1108,77 @@ pub async fn run_relay_loop(
                             // the handoff is dropped (forge stays self-accept-only).
                             let _ = tx.send(h);
                         }
+                        // Closed diagnostic projection of the reused forge outcome,
+                        // read before the move-push. Operational tier — never an
+                        // acceptance / BA-02 signal.
+                        let forge_outcome = forge_outcome_of(&outcome);
                         // Local hermetic observation only — never persisted /
                         // served / admitted / applied; the durable tip is
                         // untouched by this arm. `last_forged_slot` advances ONLY
                         // here, after an actual attempt.
                         act.hermetic_forge_outcomes.push(outcome);
                         act.last_forged_slot = Some(slot);
+                        forged = true;
+                        if let Some(s) = sched.as_deref_mut() {
+                            s.record(&crate::live_log::NodeSchedEvent::ForgeResult {
+                                outcome: forge_outcome,
+                            });
+                        }
+                    }
+                }
+                if !forged {
+                    // Considered, but no forge ran (KES period out of range or no
+                    // selected tip) — the closed off-tip skip outcome.
+                    if let Some(s) = sched.as_deref_mut() {
+                        s.record(&crate::live_log::NodeSchedEvent::ForgeResult {
+                            outcome: crate::live_log::ForgeOutcome::NoTipAvailable,
+                        });
                     }
                 }
             }
             LoopStep::Idle => {
+                if let Some(s) = sched.as_deref_mut() {
+                    s.record(&crate::live_log::NodeSchedEvent::FeedUnavailable {
+                        reason: source.feed_reason(),
+                    });
+                }
                 tokio::select! {
                     _ = source.wait_ready() => {}
                     _ = shutdown.changed() => {}
                 }
             }
-            LoopStep::HaltCleanly => break,
+            LoopStep::HaltCleanly => {
+                // PHASE4-N-F-G-J S1: the diagnostic that reveals the C1 skip — a
+                // forge slot was due but the (terminal) feed-end made the planner
+                // halt. `forge_tick_skipped{reason}` carries the closed feed-state
+                // classification (fail-closed `unknown_disconnected` for a
+                // reason-less WirePump end); otherwise the plain feed_unavailable.
+                if let Some(s) = sched.as_deref_mut() {
+                    let reason = source.feed_reason();
+                    if forge_was_due {
+                        s.record(&crate::live_log::NodeSchedEvent::ForgeTickSkipped { reason });
+                    } else {
+                        s.record(&crate::live_log::NodeSchedEvent::FeedUnavailable { reason });
+                    }
+                }
+                break;
+            }
         }
     }
     Ok(())
+}
+
+/// Closed diagnostic projection of the reused forge `CoordinatorEvent` outcome
+/// (PHASE4-N-F-G-J S1, CN-NODE-04). Operational tier — never an acceptance /
+/// BA-02 signal. An unexpected non-forge variant from the forge path maps to
+/// `Failed` (defensive).
+fn forge_outcome_of(ev: &CoordinatorEvent) -> crate::live_log::ForgeOutcome {
+    use crate::live_log::ForgeOutcome;
+    match ev {
+        CoordinatorEvent::ForgeSucceeded { .. } => ForgeOutcome::Succeeded,
+        CoordinatorEvent::ForgeNotLeader { .. } => ForgeOutcome::NotLeader,
+        _ => ForgeOutcome::Failed,
+    }
 }
 
 /// WarmStart arm — production warm-start recovery (L3).
