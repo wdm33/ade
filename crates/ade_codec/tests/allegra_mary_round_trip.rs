@@ -141,7 +141,7 @@ fn allegra_fields_match_reference() {
         assert_eq!(reference["slot"], hb.slot, "{ref_file}");
         assert_eq!(
             reference["prev_block_hash"],
-            hex_encode(&hb.prev_hash.0),
+            hex_encode(&hb.prev_hash.block_hash().expect("corpus block has a Block predecessor").0),
             "{ref_file}"
         );
         assert_eq!(
@@ -170,7 +170,7 @@ fn mary_fields_match_reference() {
         assert_eq!(reference["slot"], hb.slot, "{ref_file}");
         assert_eq!(
             reference["prev_block_hash"],
-            hex_encode(&hb.prev_hash.0),
+            hex_encode(&hb.prev_hash.block_hash().expect("corpus block has a Block predecessor").0),
             "{ref_file}"
         );
         assert_eq!(reference["hfc_era_tag"], 4, "{ref_file}");

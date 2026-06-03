@@ -74,7 +74,7 @@ mod tests {
                 body: ShelleyHeaderBody {
                     block_number: 1,
                     slot: 100,
-                    prev_hash: Hash32([0u8; 32]),
+                    prev_hash: ade_types::shelley::block::PrevHash::Block(Hash32([0u8; 32])),
                     issuer_vkey: vec![0u8; 32],
                     vrf_vkey: vec![0u8; 32],
                     vrf: VrfData::Combined {

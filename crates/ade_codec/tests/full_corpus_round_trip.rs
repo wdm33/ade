@@ -154,7 +154,7 @@ fn check_fields(era_name: &str, cbor_file: &str, ref_file: &str) {
     assert_eq!(reference["slot"], hb.slot, "{era_name}/{ref_file}");
     assert_eq!(
         reference["prev_block_hash"],
-        hex_encode(&hb.prev_hash.0),
+        hex_encode(&hb.prev_hash.block_hash().expect("corpus block has a Block predecessor").0),
         "{era_name}/{ref_file}"
     );
     assert_eq!(

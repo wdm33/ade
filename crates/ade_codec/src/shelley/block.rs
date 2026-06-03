@@ -127,6 +127,20 @@ impl AdeEncode for ShelleyHeader {
     }
 }
 
+/// Decode the header_body `prev_hash` field — the closed grammar `$hash32 / null`
+/// (cardano-ledger `PrevHash`). POSITION-BLIND: the `Genesis | Block` decision is a
+/// pure function of the CBOR token (null `0xf6` vs a 32-byte string), never the
+/// `block_number`. The block-position rule (block 0 requires `Genesis`) lives in the
+/// validator, not in this decoder.
+fn decode_prev_hash(data: &[u8], offset: &mut usize) -> Result<PrevHash, CodecError> {
+    if data.get(*offset) == Some(&0xf6) {
+        *offset += 1;
+        Ok(PrevHash::Genesis)
+    } else {
+        Ok(PrevHash::Block(crate::byron::read_hash32(data, offset)?))
+    }
+}
+
 fn decode_header_body(data: &[u8], offset: &mut usize) -> Result<ShelleyHeaderBody, CodecError> {
     let enc = cbor::read_array_header(data, offset)?;
     let hdr_len = match enc {
@@ -141,7 +155,7 @@ fn decode_header_body(data: &[u8], offset: &mut usize) -> Result<ShelleyHeaderBo
 
     let (block_number, _) = cbor::read_uint(data, offset)?;
     let (slot, _) = cbor::read_uint(data, offset)?;
-    let prev_hash = crate::byron::read_hash32(data, offset)?;
+    let prev_hash = decode_prev_hash(data, offset)?;
     let (issuer_vkey, _) = cbor::read_bytes(data, offset)?;
     let (vrf_vkey, _) = cbor::read_bytes(data, offset)?;
 
@@ -233,7 +247,10 @@ impl AdeEncode for ShelleyHeaderBody {
         cbor::write_array_header(buf, ContainerEncoding::Definite(hdr_len, IntWidth::Inline));
         cbor::write_uint_canonical(buf, self.block_number);
         cbor::write_uint_canonical(buf, self.slot);
-        cbor::write_bytes_canonical(buf, &self.prev_hash.0);
+        match &self.prev_hash {
+            PrevHash::Genesis => cbor::write_null(buf),
+            PrevHash::Block(h) => cbor::write_bytes_canonical(buf, &h.0),
+        }
         cbor::write_bytes_canonical(buf, &self.issuer_vkey);
         cbor::write_bytes_canonical(buf, &self.vrf_vkey);
 
@@ -270,5 +287,146 @@ impl AdeEncode for ShelleyHeaderBody {
         }
 
         Ok(())
+    }
+}
+
+#[cfg(test)]
+#[allow(clippy::unwrap_used)]
+#[allow(clippy::expect_used)]
+#[allow(clippy::panic)]
+mod prevhash_codec_tests {
+    use super::*;
+    use ade_types::{CardanoEra, Hash32};
+
+    fn ctx() -> CodecContext {
+        CodecContext {
+            era: CardanoEra::Conway,
+        }
+    }
+
+    /// A round-trippable Babbage-Conway (array(10)) header body with the given
+    /// `prev_hash`. `vrf_result` is one valid CBOR item (the decoder does
+    /// `skip_item`); `hot_vkey`/`sigma` are `read_bytes`-symmetric.
+    fn sample_body(prev_hash: PrevHash) -> ShelleyHeaderBody {
+        let mut vrf_result = Vec::new();
+        cbor::write_bytes_canonical(&mut vrf_result, &[0x33u8; 32]);
+        ShelleyHeaderBody {
+            block_number: 0,
+            slot: 0,
+            prev_hash,
+            issuer_vkey: vec![0x11; 32],
+            vrf_vkey: vec![0x22; 32],
+            vrf: VrfData::Combined { vrf_result },
+            body_size: 0,
+            body_hash: Hash32([0x44; 32]),
+            operational_cert: OperationalCert {
+                hot_vkey: vec![0x55; 32],
+                sequence_number: 3,
+                kes_period: 10,
+                sigma: vec![0x66; 64],
+            },
+            protocol_version: ProtocolVersion { major: 9, minor: 0 },
+        }
+    }
+
+    fn encode(hb: &ShelleyHeaderBody) -> Vec<u8> {
+        let mut buf = Vec::new();
+        hb.ade_encode(&mut buf, &ctx()).unwrap();
+        buf
+    }
+
+    #[test]
+    fn prevhash_genesis_round_trips_as_null() {
+        let mut off = 0;
+        assert_eq!(
+            decode_prev_hash(&[0xf6], &mut off).unwrap(),
+            PrevHash::Genesis
+        );
+        assert_eq!(off, 1, "null consumes exactly one byte");
+        let hb = sample_body(PrevHash::Genesis);
+        let mut o = 0;
+        assert_eq!(
+            decode_header_body(&encode(&hb), &mut o).unwrap().prev_hash,
+            PrevHash::Genesis
+        );
+    }
+
+    #[test]
+    fn prevhash_block_round_trips_as_hash32() {
+        let h = Hash32([0xAB; 32]);
+        let mut enc = Vec::new();
+        cbor::write_bytes_canonical(&mut enc, &h.0);
+        let mut off = 0;
+        assert_eq!(
+            decode_prev_hash(&enc, &mut off).unwrap(),
+            PrevHash::Block(h.clone())
+        );
+        let hb = sample_body(PrevHash::Block(h.clone()));
+        let mut o = 0;
+        assert_eq!(
+            decode_header_body(&encode(&hb), &mut o).unwrap().prev_hash,
+            PrevHash::Block(h)
+        );
+    }
+
+    #[test]
+    fn prevhash_codec_is_position_blind() {
+        // `decode_prev_hash` takes NO block_number: the Genesis|Block decision is a
+        // pure function of the CBOR token. A null token decodes to Genesis even on a
+        // body whose block_number is > 0 (the position rule lives in the validator, S3).
+        let h = Hash32([0x01; 32]);
+        let mut hbytes = Vec::new();
+        cbor::write_bytes_canonical(&mut hbytes, &h.0);
+        let (mut o1, mut o2) = (0usize, 0usize);
+        assert_eq!(
+            decode_prev_hash(&[0xf6], &mut o1).unwrap(),
+            PrevHash::Genesis
+        );
+        assert_eq!(
+            decode_prev_hash(&hbytes, &mut o2).unwrap(),
+            PrevHash::Block(h)
+        );
+        let mut body = sample_body(PrevHash::Genesis);
+        body.block_number = 999;
+        let mut o = 0;
+        assert_eq!(
+            decode_header_body(&encode(&body), &mut o).unwrap().prev_hash,
+            PrevHash::Genesis
+        );
+    }
+
+    #[test]
+    fn genesis_successor_header_round_trips_with_null_prev() {
+        let hb = sample_body(PrevHash::Genesis);
+        let bytes = encode(&hb);
+        // array(10)=0x8a, block_number 0=0x00, slot 0=0x00, prev_hash at index 3 = null.
+        assert_eq!(bytes[3], 0xf6, "genesis-successor prev_hash is CBOR null");
+        let mut o = 0;
+        let decoded = decode_header_body(&bytes, &mut o).unwrap();
+        assert_eq!(decoded, hb);
+        assert_eq!(encode(&decoded), bytes, "re-encode is byte-identical");
+    }
+
+    #[test]
+    fn block_header_prev_hash_byte_identical_after_migration() {
+        // The Block(h) case encodes EXACTLY as the pre-migration flat Hash32 did: a
+        // canonical 32-byte bytestring, never null. (Real-block corpus round-trips in
+        // tests/{shelley,allegra_mary,full_corpus}_round_trip.rs corroborate on real data.)
+        let h = Hash32([0xCD; 32]);
+        let hb = sample_body(PrevHash::Block(h.clone()));
+        let bytes = encode(&hb);
+        let mut expected_prev = Vec::new();
+        cbor::write_bytes_canonical(&mut expected_prev, &h.0);
+        assert_ne!(bytes[3], 0xf6, "Block prev_hash is never null");
+        assert_eq!(
+            &bytes[3..3 + expected_prev.len()],
+            &expected_prev[..],
+            "Block prev_hash encodes as canonical hash32"
+        );
+        let mut o = 0;
+        assert_eq!(
+            decode_header_body(&bytes, &mut o).unwrap().prev_hash,
+            PrevHash::Block(h)
+        );
     }
 }

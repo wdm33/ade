@@ -27,7 +27,7 @@ pub fn decode_shelley_block_fields(raw_cbor: &[u8]) -> Result<BlockFields, Harne
     fields.insert("slot".into(), serde_json::json!(hb.slot));
     fields.insert(
         "prev_block_hash".into(),
-        serde_json::json!(hex_encode(&hb.prev_hash.0)),
+        serde_json::json!(hex_encode(&hb.prev_hash.block_hash().expect("corpus block has a Block predecessor").0)),
     );
     fields.insert(
         "issuer_vkey_hash".into(),

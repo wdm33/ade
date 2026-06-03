@@ -5977,16 +5977,22 @@ block (block_number 0 on a from-genesis chain) MUST carry PrevHash::Genesis/null
 (block_number > 0) MUST carry PrevHash::Block(hash32). Encoding is canonical and round-trips through
 ONE shared BLUE ade_codec authority; the raw byte codec is POSITION-BLIND (it decodes null -> Genesis
 and hash32 -> Block without knowing block_number). No all-zero Hash32, no anchor fingerprint, and no
-Shelley genesis hash may stand in for the genesis predecessor. The validator / header-position checks
-fail closed on the wrong variant for the block position (block_number 0 requires Genesis;
-block_number > 0 requires Block).
+Shelley genesis hash may stand in for the genesis predecessor. The position-aware check
+(block_number 0 requires Genesis; block_number > 0 requires Block) is enforced by the sibling
+forge/validation slice (CE-G-J-3, S3), NOT by this position-blind codec.
 """
 source = "docs/planning/phase4-n-f-g-j-genesis-successor-prevhash-invariants.md"
 cross_ref = ["CN-WIRE-08", "DC-FORGE-01", "CN-FORGE-01", "DC-NODE-08", "RO-LIVE-01"]
-code_locus = "crates/ade_codec/src/shelley/block.rs (header_body prev_hash decode -> will become $hash32 / null; currently read_hash32-only); crates/ade_runtime/src/producer/tick_assembler.rs + crates/ade_runtime/src/producer/chain_evolution.rs (prev_hash representation -> closed PrevHash sum). New PrevHash sum-type home resolved in /cluster-doc."
-tests = []
-ci_script = ""
-status = "declared"
+code_locus = "crates/ade_types/src/shelley/block.rs (PrevHash = Genesis | Block(Hash32) + ShelleyHeaderBody.prev_hash + block_hash() accessor); crates/ade_codec/src/shelley/block.rs (decode_prev_hash + the ShelleyHeaderBody AdeEncode null/hash32 match -- POSITION-BLIND); crates/ade_ledger/src/producer/forge.rs + crates/ade_ledger/src/block_validity/unsigned_header_pre_image.rs (ShelleyHeaderBody constructors wrap PrevHash::Block, byte-identical)"
+tests = [
+  "prevhash_genesis_round_trips_as_null",
+  "prevhash_block_round_trips_as_hash32",
+  "prevhash_codec_is_position_blind",
+  "genesis_successor_header_round_trips_with_null_prev",
+  "block_header_prev_hash_byte_identical_after_migration",
+]
+ci_script = "ci/ci_check_prevhash_single_wire_authority.sh"
+status = "enforced"
 introduced_in = "PHASE4-N-F-G-J"
 strengthened_in = []
 cluster = "PHASE4-N-F-G-J"

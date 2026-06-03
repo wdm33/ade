@@ -30,7 +30,7 @@
 
 use ade_codec::traits::{AdeEncode, CodecContext};
 use ade_types::shelley::block::{
-    OperationalCert, ProtocolVersion, ShelleyHeaderBody, VrfData,
+    OperationalCert, PrevHash, ProtocolVersion, ShelleyHeaderBody, VrfData,
 };
 use ade_types::{CardanoEra, Hash32};
 
@@ -98,7 +98,7 @@ pub fn unsigned_header_pre_image(
     let body = ShelleyHeaderBody {
         block_number,
         slot,
-        prev_hash,
+        prev_hash: PrevHash::Block(prev_hash),
         issuer_vkey,
         vrf_vkey,
         vrf: VrfData::Combined { vrf_result },
@@ -190,7 +190,13 @@ mod tests {
             let issuer_vkey = shelley_block.header.body.issuer_vkey.clone();
             let vrf_vkey = shelley_block.header.body.vrf_vkey.clone();
             let body_size = shelley_block.header.body.body_size;
-            let prev_hash_field = shelley_block.header.body.prev_hash.clone();
+            let prev_hash_field = shelley_block
+                .header
+                .body
+                .prev_hash
+                .block_hash()
+                .expect("real corpus block has a Block predecessor")
+                .clone();
 
             let recipe_out = unsigned_header_pre_image(
                 decoded.header_input.slot.0,

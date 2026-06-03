@@ -34,6 +34,30 @@ pub struct ShelleyHeader {
     pub kes_signature: Vec<u8>,
 }
 
+/// Header `prev_hash` field — the closed Cardano wire grammar `$hash32 / null`
+/// (cardano-ledger `PrevHash = GenesisHash | BlockHash`). `Genesis` is the
+/// genesis predecessor (the first block on a from-genesis chain), encoded as
+/// CBOR null; `Block(h)` is a normal parent header hash, encoded as hash32.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum PrevHash {
+    /// The genesis predecessor — CBOR null on the wire. Carried by a
+    /// genesis-successor block (`block_number` 0 on a from-genesis chain).
+    Genesis,
+    /// A normal parent header hash — a 32-byte hash32 on the wire.
+    Block(Hash32),
+}
+
+impl PrevHash {
+    /// The parent header hash for a `Block` predecessor, or `None` for the
+    /// `Genesis` predecessor (which has no hash — it is CBOR null on the wire).
+    pub fn block_hash(&self) -> Option<&Hash32> {
+        match self {
+            PrevHash::Genesis => None,
+            PrevHash::Block(h) => Some(h),
+        }
+    }
+}
+
 /// Header body fields common across all post-Byron eras.
 ///
 /// For Shelley-Alonzo: array(15) with inlined operational cert + protocol version,
@@ -44,7 +68,7 @@ pub struct ShelleyHeader {
 pub struct ShelleyHeaderBody {
     pub block_number: u64,
     pub slot: u64,
-    pub prev_hash: Hash32,
+    pub prev_hash: PrevHash,
     /// Issuer verification key (32 bytes).
     pub issuer_vkey: Vec<u8>,
     /// VRF verification key (32 bytes).

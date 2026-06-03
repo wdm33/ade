@@ -31,7 +31,7 @@ use ade_core::consensus::leader_check::is_leader_for_vrf_output;
 use ade_core::consensus::opcert_validate::{opcert_validate, OpCertError};
 use ade_crypto::kes::SUM6_KES_SIG_LEN;
 use ade_types::shelley::block::{
-    ShelleyBlock, ShelleyHeader, ShelleyHeaderBody, VrfData,
+    PrevHash, ShelleyBlock, ShelleyHeader, ShelleyHeaderBody, VrfData,
 };
 use ade_types::CardanoEra;
 
@@ -290,7 +290,7 @@ pub fn forge_block(
     let header_body = ShelleyHeaderBody {
         block_number: tick.block_number.0,
         slot: tick.slot.0,
-        prev_hash: tick.prev_hash.clone(),
+        prev_hash: PrevHash::Block(tick.prev_hash.clone()),
         issuer_vkey: tick.cold_vk.0.to_vec(),
         vrf_vkey: tick.vrf_vkey.clone(),
         vrf: VrfData::Combined { vrf_result },
