@@ -30,9 +30,7 @@ use ade_codec::traits::{AdeEncode, CodecContext};
 use ade_core::consensus::leader_check::is_leader_for_vrf_output;
 use ade_core::consensus::opcert_validate::{opcert_validate, OpCertError};
 use ade_crypto::kes::SUM6_KES_SIG_LEN;
-use ade_types::shelley::block::{
-    PrevHash, ShelleyBlock, ShelleyHeader, ShelleyHeaderBody, VrfData,
-};
+use ade_types::shelley::block::{ShelleyBlock, ShelleyHeader, ShelleyHeaderBody, VrfData};
 use ade_types::CardanoEra;
 
 use crate::mempool::admit::{admit, AdmitOutcome, MempoolState};
@@ -290,7 +288,7 @@ pub fn forge_block(
     let header_body = ShelleyHeaderBody {
         block_number: tick.block_number.0,
         slot: tick.slot.0,
-        prev_hash: PrevHash::Block(tick.prev_hash.clone()),
+        prev_hash: tick.prev_hash.clone(),
         issuer_vkey: tick.cold_vk.0.to_vec(),
         vrf_vkey: tick.vrf_vkey.clone(),
         vrf: VrfData::Combined { vrf_result },
@@ -370,7 +368,7 @@ mod tests {
     use ade_crypto::kes::{KesPeriod, KesSignature, SUM6_KES_SIG_LEN};
     use ade_crypto::vrf::{VrfOutput, VrfProof};
     use ade_types::primitives::SlotNo;
-    use ade_types::shelley::block::{OperationalCert, ProtocolVersion};
+    use ade_types::shelley::block::{OperationalCert, PrevHash, ProtocolVersion};
     use ade_types::{BlockNo, CardanoEra, EpochNo, Hash28, Hash32};
     use ed25519_dalek::{Signer, SigningKey as DalekSk};
 
@@ -448,7 +446,7 @@ mod tests {
             cold_vk,
             prev_opcert_counter: None,
             block_number: BlockNo(1),
-            prev_hash: Hash32([0u8; 32]),
+            prev_hash: PrevHash::Block(Hash32([0u8; 32])),
             protocol_version: ProtocolVersion {
                 major: 9,
                 minor: 0,
@@ -595,5 +593,151 @@ mod tests {
         // Asserting non-`None` here is vacuous; the binding above is the
         // real proof (it would fail to compile if the symbol diverged).
         let _ = _PRODUCER_LEADER_CHECK_IS_VALIDATOR_FN;
+    }
+
+    // -----------------------------------------------------------------
+    // PHASE4-N-F-G-J S3 — genesis-successor forge + header-position rule.
+    // -----------------------------------------------------------------
+    use crate::block_validity::header_input::decode_block;
+    use crate::block_validity::unsigned_header_pre_image::unsigned_header_pre_image;
+    use crate::block_validity::verdict::{BlockRejectClass, BlockValidityError};
+
+    /// A genesis-successor tick: `block_number 0`, `PrevHash::Genesis`.
+    fn genesis_tick() -> ProducerTick {
+        let mut t = base_tick();
+        t.block_number = BlockNo(0);
+        t.prev_hash = PrevHash::Genesis;
+        t
+    }
+
+    #[test]
+    fn forge_block_number_zero_emits_genesis_prev_hash() {
+        let (forged, _) = forge_block(&genesis_tick()).expect("forge block 0");
+        assert_eq!(forged.block.header.body.prev_hash, PrevHash::Genesis);
+        // The encoded header carries Genesis (CBOR null), never a hash32:
+        // re-decode the inner block and confirm.
+        let decoded = decode_block(&forged.bytes).expect("block 0 + Genesis is position-legal");
+        let inner = &forged.bytes[decoded.inner_start..decoded.inner_end];
+        let reparsed = ade_codec::conway::decode_conway_block(inner).expect("inner decodes");
+        assert_eq!(reparsed.decoded().header.body.prev_hash, PrevHash::Genesis);
+    }
+
+    #[test]
+    fn forge_nonzero_block_emits_block_prev_byte_identical() {
+        // base_tick() is block_number 1 with PrevHash::Block([0;32]).
+        let (a, _) = forge_block(&base_tick()).expect("forge block 1");
+        let (b, _) = forge_block(&base_tick()).expect("forge block 1 again");
+        // Deterministic Block path (DC-FORGE-01); the pre-S3 byte-identity
+        // is anchored by the ade_testkit producer replay fixtures.
+        assert_eq!(a.bytes, b.bytes, "Block path forge is deterministic");
+        // block_number > 0 re-decodes to Block(hash32), never Genesis.
+        let decoded = decode_block(&a.bytes).expect("block 1 + Block is position-legal");
+        let inner = &a.bytes[decoded.inner_start..decoded.inner_end];
+        let reparsed = ade_codec::conway::decode_conway_block(inner).expect("inner decodes");
+        assert_eq!(
+            reparsed.decoded().header.body.prev_hash,
+            PrevHash::Block(Hash32([0u8; 32]))
+        );
+    }
+
+    #[test]
+    fn forge_block_zero_self_consistent_through_decode_block() {
+        // The forge's own block-0 output passes decode_block, which runs
+        // check_header_position — forge and validator agree.
+        let (forged, _) = forge_block(&genesis_tick()).expect("forge block 0");
+        let decoded = decode_block(&forged.bytes)
+            .expect("forged genesis block must pass decode_block + check_header_position");
+        assert_eq!(decoded.header_input.block_no.0, 0);
+    }
+
+    #[test]
+    fn decode_block_rejects_block_prev_at_block_number_zero() {
+        // An illegal block (block 0 with a Block predecessor) is encodable
+        // but decode_block's position rule rejects it.
+        let mut tick = base_tick();
+        tick.block_number = BlockNo(0);
+        tick.prev_hash = PrevHash::Block(Hash32([0xAB; 32]));
+        let (forged, _) = forge_block(&tick).expect("forge encodes the illegal block");
+        let err = decode_block(&forged.bytes)
+            .expect_err("block 0 with a Block predecessor is position-illegal");
+        match err {
+            BlockValidityError::HeaderPositionInvalid {
+                block_number,
+                prev_is_genesis,
+            } => {
+                assert_eq!(block_number, 0);
+                assert!(!prev_is_genesis);
+            }
+            other => panic!("expected HeaderPositionInvalid, got {other:?}"),
+        }
+        assert_eq!(
+            decode_block(&forged.bytes).unwrap_err().class(),
+            BlockRejectClass::HeaderInvalid
+        );
+    }
+
+    #[test]
+    fn decode_block_rejects_genesis_prev_at_nonzero_block_number() {
+        let mut tick = base_tick(); // block_number 1
+        tick.prev_hash = PrevHash::Genesis;
+        let (forged, _) = forge_block(&tick).expect("forge encodes the illegal block");
+        let err = decode_block(&forged.bytes)
+            .expect_err("block_number > 0 with Genesis is position-illegal");
+        match err {
+            BlockValidityError::HeaderPositionInvalid {
+                block_number,
+                prev_is_genesis,
+            } => {
+                assert_eq!(block_number, 1);
+                assert!(prev_is_genesis);
+            }
+            other => panic!("expected HeaderPositionInvalid, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn forged_block_zero_kes_preimage_equals_decoded_header_body_bytes() {
+        // The deepest invariant: for a block-0 forge, the KES pre-image
+        // bytes equal the decoded ShelleyHeaderBody bytes the validator
+        // extracts — including PrevHash::Genesis encoded as CBOR null.
+        let (forged, _) = forge_block(&genesis_tick()).expect("forge block 0");
+        let hb = &forged.block.header.body;
+        assert_eq!(hb.prev_hash, PrevHash::Genesis);
+
+        let vrf_result = match &hb.vrf {
+            VrfData::Combined { vrf_result } => vrf_result.clone(),
+            VrfData::Split { .. } => panic!("forge emits Combined VRF"),
+        };
+        let preimage = unsigned_header_pre_image(
+            hb.slot,
+            hb.block_number,
+            hb.prev_hash.clone(),
+            hb.issuer_vkey.clone(),
+            hb.vrf_vkey.clone(),
+            vrf_result,
+            hb.body_size,
+            hb.body_hash.clone(),
+            hb.operational_cert.clone(),
+            hb.protocol_version,
+        )
+        .expect("pre-image encodes");
+
+        let decoded = decode_block(&forged.bytes).expect("forged genesis block decodes");
+        let signed = &decoded
+            .header_input
+            .kes
+            .as_ref()
+            .expect("Conway header carries kes")
+            .header_body_bytes;
+        assert_eq!(
+            preimage.as_bytes(),
+            signed.as_slice(),
+            "KES pre-image bytes must equal the decoded ShelleyHeaderBody bytes for block 0"
+        );
+        // The signed bytes decode back to Genesis — the genesis predecessor
+        // is CBOR null in the exact bytes the KES signature covers.
+        let inner = &forged.bytes[decoded.inner_start..decoded.inner_end];
+        let reparsed = ade_codec::conway::decode_conway_block(inner).expect("inner decodes");
+        assert_eq!(reparsed.decoded().header.body.prev_hash, PrevHash::Genesis);
     }
 }

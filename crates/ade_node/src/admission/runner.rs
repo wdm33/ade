@@ -525,6 +525,7 @@ fn process_block(
 fn classify_validity_error(e: &BlockValidityError) -> InvalidAdmitReason {
     match e {
         BlockValidityError::Header(_) => InvalidAdmitReason::Header,
+        BlockValidityError::HeaderPositionInvalid { .. } => InvalidAdmitReason::Header,
         BlockValidityError::Body(_) => InvalidAdmitReason::Body,
         BlockValidityError::MalformedField(_) => InvalidAdmitReason::MalformedField,
         BlockValidityError::BodyHashMismatch { .. } => InvalidAdmitReason::BodyHashMismatch,

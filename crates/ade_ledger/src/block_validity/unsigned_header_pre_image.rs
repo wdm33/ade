@@ -86,7 +86,7 @@ impl UnsignedHeaderPreImage {
 pub fn unsigned_header_pre_image(
     slot: u64,
     block_number: u64,
-    prev_hash: Hash32,
+    prev_hash: PrevHash,
     issuer_vkey: Vec<u8>,
     vrf_vkey: Vec<u8>,
     vrf_result: Vec<u8>, // pre-encoded CBOR array(2) of [output, proof]
@@ -98,7 +98,7 @@ pub fn unsigned_header_pre_image(
     let body = ShelleyHeaderBody {
         block_number,
         slot,
-        prev_hash: PrevHash::Block(prev_hash),
+        prev_hash,
         issuer_vkey,
         vrf_vkey,
         vrf: VrfData::Combined { vrf_result },
@@ -190,13 +190,7 @@ mod tests {
             let issuer_vkey = shelley_block.header.body.issuer_vkey.clone();
             let vrf_vkey = shelley_block.header.body.vrf_vkey.clone();
             let body_size = shelley_block.header.body.body_size;
-            let prev_hash_field = shelley_block
-                .header
-                .body
-                .prev_hash
-                .block_hash()
-                .expect("real corpus block has a Block predecessor")
-                .clone();
+            let prev_hash_field = shelley_block.header.body.prev_hash.clone();
 
             let recipe_out = unsigned_header_pre_image(
                 decoded.header_input.slot.0,
@@ -226,7 +220,7 @@ mod tests {
     #[test]
     fn recipe_output_is_byte_identical_across_two_runs() {
         // DC-KES-HEADER-01 replay anchor.
-        let prev_hash = Hash32([0xAA; 32]);
+        let prev_hash = PrevHash::Block(Hash32([0xAA; 32]));
         let issuer = vec![0x01; 32];
         let vrf_vkey = vec![0x02; 32];
         let vrf_result = {
@@ -282,5 +276,120 @@ mod tests {
         // The branded type's only public construction path
         // is `unsigned_header_pre_image(...)`.
         let _ = "branded type — no other constructor reachable";
+    }
+
+    // -----------------------------------------------------------------
+    // PHASE4-N-F-G-J S3 — genesis (null) vs Block (hash32) pre-image.
+    // -----------------------------------------------------------------
+
+    fn sample_vrf_result() -> Vec<u8> {
+        use ade_codec::cbor::{
+            write_array_header, write_bytes_canonical, ContainerEncoding, IntWidth,
+        };
+        let mut buf = Vec::new();
+        write_array_header(&mut buf, ContainerEncoding::Definite(2, IntWidth::Inline));
+        write_bytes_canonical(&mut buf, &[0x03; 64]);
+        write_bytes_canonical(&mut buf, &[0x04; 80]);
+        buf
+    }
+
+    fn sample_opcert() -> OperationalCert {
+        OperationalCert {
+            hot_vkey: vec![0x06; 32],
+            sequence_number: 7,
+            kes_period: 42,
+            sigma: vec![0x08; 64],
+        }
+    }
+
+    #[test]
+    fn pre_image_block_zero_emits_genesis_prev() {
+        let pv = ProtocolVersion { major: 9, minor: 0 };
+        let genesis = unsigned_header_pre_image(
+            100,
+            0,
+            PrevHash::Genesis,
+            vec![0x01; 32],
+            vec![0x02; 32],
+            sample_vrf_result(),
+            128,
+            Hash32([0x05; 32]),
+            sample_opcert(),
+            pv,
+        )
+        .unwrap();
+        let blocky = unsigned_header_pre_image(
+            100,
+            0,
+            PrevHash::Block(Hash32([0xAB; 32])),
+            vec![0x01; 32],
+            vec![0x02; 32],
+            sample_vrf_result(),
+            128,
+            Hash32([0x05; 32]),
+            sample_opcert(),
+            pv,
+        )
+        .unwrap();
+        // Genesis -> CBOR null (1 byte); Block -> bytes(32) (0x58 0x20 + 32
+        // = 34 bytes). The genesis pre-image is exactly 33 bytes shorter.
+        assert_eq!(blocky.len() - genesis.len(), 33);
+        assert!(
+            genesis.as_bytes().contains(&0xf6),
+            "the genesis predecessor must be encoded as CBOR null"
+        );
+    }
+
+    #[test]
+    fn pre_image_nonzero_block_prev_byte_identical() {
+        let pv = ProtocolVersion { major: 9, minor: 0 };
+        let h = Hash32([0xAB; 32]);
+        let a = unsigned_header_pre_image(
+            100,
+            1,
+            PrevHash::Block(h.clone()),
+            vec![0x01; 32],
+            vec![0x02; 32],
+            sample_vrf_result(),
+            128,
+            Hash32([0x05; 32]),
+            sample_opcert(),
+            pv,
+        )
+        .unwrap();
+        let b = unsigned_header_pre_image(
+            100,
+            1,
+            PrevHash::Block(h),
+            vec![0x01; 32],
+            vec![0x02; 32],
+            sample_vrf_result(),
+            128,
+            Hash32([0x05; 32]),
+            sample_opcert(),
+            pv,
+        )
+        .unwrap();
+        assert_eq!(a, b, "Block-path pre-image is deterministic");
+        // The 32-byte parent hash appears verbatim in the signed bytes.
+        assert!(a.as_bytes().windows(32).any(|w| w == [0xAB; 32]));
+    }
+
+    #[test]
+    fn corpus_blocks_pass_header_position_rule() {
+        // Every real corpus block (block_number > 0, Block predecessor)
+        // decodes — i.e. passes check_header_position — via decode_block.
+        let corpus = ConwayValidityCorpus::load().expect("corpus");
+        let mut checked = 0usize;
+        for (i, block_bytes) in corpus.blocks.iter().enumerate() {
+            let decoded = decode_block(block_bytes)
+                .unwrap_or_else(|e| panic!("corpus block {i} must pass the position rule: {e:?}"));
+            assert!(
+                decoded.header_input.block_no.0 > 0,
+                "corpus blocks are non-genesis"
+            );
+            checked += 1;
+        }
+        assert!(checked > 0, "must check at least one corpus block");
     }
 }

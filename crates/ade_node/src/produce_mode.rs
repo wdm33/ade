@@ -61,7 +61,7 @@ use ade_runtime::network::serve_dispatch::{
 };
 use ade_runtime::producer::tick_assembler::{assemble_tick, TickInputs};
 use ade_runtime::seed_import::import_cardano_cli_json_utxo;
-use ade_types::shelley::block::ProtocolVersion;
+use ade_types::shelley::block::{PrevHash, ProtocolVersion};
 use ade_types::{BlockNo, EpochNo, Hash28, Hash32, SlotNo};
 use ade_runtime::orchestrator::event::{OrchestratorEvent, PeerRole};
 use ade_runtime::orchestrator::n2n_server_pump::PeerIdGenerator;
@@ -620,7 +620,7 @@ pub struct ForgeRequestContext<'a> {
     pub era_schedule: &'a EraSchedule,
     pub pool_distr_view: &'a PoolDistrView,
     pub block_number: BlockNo,
-    pub prev_hash: Hash32,
+    pub prev_hash: PrevHash,
     pub protocol_version: ProtocolVersion,
     pub prev_opcert_counter: Option<u64>,
 }

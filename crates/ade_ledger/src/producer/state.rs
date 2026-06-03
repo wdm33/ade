@@ -24,8 +24,8 @@ use ade_crypto::ed25519::Ed25519VerificationKey;
 use ade_crypto::kes::{KesPeriod, KesSignature};
 use ade_crypto::vrf::{VrfOutput, VrfProof};
 use ade_types::primitives::SlotNo;
-use ade_types::shelley::block::{OperationalCert, ProtocolVersion};
-use ade_types::{BlockNo, Hash32};
+use ade_types::shelley::block::{OperationalCert, PrevHash, ProtocolVersion};
+use ade_types::BlockNo;
 
 use crate::mempool::admit::MempoolState;
 use crate::pparams::ProtocolParameters;
@@ -69,6 +69,6 @@ pub struct ProducerTick {
     /// first opcert this node has ever produced.
     pub prev_opcert_counter: Option<u64>,
     pub block_number: BlockNo,
-    pub prev_hash: Hash32,
+    pub prev_hash: PrevHash,
     pub protocol_version: ProtocolVersion,
 }

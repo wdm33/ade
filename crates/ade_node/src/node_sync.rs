@@ -40,7 +40,7 @@ use ade_runtime::forward_sync::{pump_block, ForwardSyncState, NoCheckpointSink, 
 use ade_runtime::producer::coordinator::CoordinatorEvent;
 use ade_runtime::producer::producer_shell::ProducerShell;
 use ade_runtime::rollback::PersistentSnapshotCache;
-use ade_types::shelley::block::ProtocolVersion;
+use ade_types::shelley::block::{PrevHash, ProtocolVersion};
 use ade_types::{BlockNo, EpochNo, Hash28, SlotNo};
 use tokio::sync::mpsc;
 
@@ -570,7 +570,7 @@ pub fn forge_one_from_recovered(
         era_schedule,
         pool_distr_view: &pool_distr_view,
         block_number: BlockNo(next_block_number),
-        prev_hash: selected_tip.hash.clone(),
+        prev_hash: PrevHash::Block(selected_tip.hash.clone()),
         protocol_version,
         prev_opcert_counter: None,
     };

@@ -23,9 +23,10 @@ use ade_crypto::vrf::{VrfOutput, VrfProof, VrfVerificationKey};
 use ade_types::shelley::block::VrfData;
 use ade_types::{BlockNo, CardanoEra, Hash28, Hash32, SlotNo};
 
-use super::{BlockValidityError, FieldError, FieldKind};
+use super::{check_header_position, BlockValidityError, FieldError, FieldKind};
 
 /// A decoded block, projected to the inputs both authorities need.
+#[derive(Debug)]
 pub struct DecodedBlock {
     /// The era discriminant from the outer envelope.
     pub era: CardanoEra,
@@ -85,6 +86,12 @@ pub fn decode_block(block_cbor: &[u8]) -> Result<DecodedBlock, BlockValidityErro
     let block = decode_inner(env.era, inner)?;
     let block = block.decoded();
     let hb = &block.header.body;
+
+    // CN-WIRE-09 position clause (CE-G-J-3): reject a position-illegal
+    // header (block_number 0 without Genesis, or > 0 with Genesis) before
+    // the header authority runs. Position-AWARE — distinct from the
+    // position-blind byte codec that already ran in `decode_inner`.
+    check_header_position(hb.block_number, &hb.prev_hash)?;
 
     let header_cbor = header_cbor_slice(inner)?;
     let block_hash = Hash32(blake2b_256(header_cbor).0);

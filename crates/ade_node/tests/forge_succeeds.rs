@@ -54,7 +54,7 @@ use ade_ledger::state::LedgerState;
 use ade_runtime::producer::coordinator::CoordinatorEvent;
 use ade_runtime::producer::producer_log::ForgeFailureReason;
 use ade_runtime::producer::producer_shell::ProducerShell;
-use ade_types::shelley::block::{OperationalCert, ProtocolVersion};
+use ade_types::shelley::block::{OperationalCert, PrevHash, ProtocolVersion};
 use ade_types::{BlockNo, CardanoEra, EpochNo, Hash28, Hash32, SlotNo};
 
 use ade_network::block_fetch::server::{
@@ -205,7 +205,7 @@ impl EligibleFixture {
             era_schedule: &self.era_schedule,
             pool_distr_view: &self.pool_distr_view,
             block_number: BlockNo(0),
-            prev_hash: Hash32([0u8; 32]),
+            prev_hash: PrevHash::Genesis,
             protocol_version: ProtocolVersion { major: 9, minor: 0 },
             prev_opcert_counter: None,
         }
@@ -434,7 +434,7 @@ fn tpraos_producer_forge_fails_closed_with_unsupported_era() {
         era_schedule: &shelley_schedule,
         pool_distr_view: &fixture.pool_distr_view,
         block_number: BlockNo(0),
-        prev_hash: Hash32([0u8; 32]),
+        prev_hash: PrevHash::Genesis,
         protocol_version: ProtocolVersion { major: 9, minor: 0 },
         prev_opcert_counter: None,
     };

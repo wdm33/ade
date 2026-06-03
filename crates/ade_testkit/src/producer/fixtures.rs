@@ -37,7 +37,7 @@ use ade_ledger::mempool::admit::MempoolState;
 use ade_ledger::producer::state::ProducerTick;
 use ade_ledger::state::LedgerState;
 use ade_types::primitives::SlotNo;
-use ade_types::shelley::block::{OperationalCert, ProtocolVersion};
+use ade_types::shelley::block::{OperationalCert, PrevHash, ProtocolVersion};
 use ade_types::{BlockNo, CardanoEra, EpochNo, Hash28, Hash32};
 
 use super::replay::{ExpectedErr, ProducerReplayFixture};
@@ -228,7 +228,7 @@ fn base_tick_template() -> ProducerTick {
         cold_vk: cold_vk(),
         prev_opcert_counter: None,
         block_number: BlockNo(1),
-        prev_hash: Hash32([0u8; 32]),
+        prev_hash: PrevHash::Block(Hash32([0u8; 32])),
         protocol_version: ProtocolVersion { major: 9, minor: 0 },
     }
 }

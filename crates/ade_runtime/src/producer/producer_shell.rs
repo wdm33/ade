@@ -446,7 +446,7 @@ mod tests {
         };
         use ade_crypto::kes_sum::KesAlgorithm;
         use ade_ledger::block_validity::unsigned_header_pre_image::unsigned_header_pre_image;
-        use ade_types::shelley::block::ProtocolVersion;
+        use ade_types::shelley::block::{PrevHash, ProtocolVersion};
         use ade_types::Hash32;
 
         let shell = make_shell(0);
@@ -466,7 +466,7 @@ mod tests {
         let preimage = unsigned_header_pre_image(
             100,
             1,
-            Hash32([0u8; 32]),
+            PrevHash::Block(Hash32([0u8; 32])),
             vec![0x01; 32],
             vec![0x02; 32],
             vrf_result,

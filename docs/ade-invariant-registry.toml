@@ -5983,16 +5983,32 @@ forge/validation slice (CE-G-J-3, S3), NOT by this position-blind codec.
 """
 source = "docs/planning/phase4-n-f-g-j-genesis-successor-prevhash-invariants.md"
 cross_ref = ["CN-WIRE-08", "DC-FORGE-01", "CN-FORGE-01", "DC-NODE-08", "RO-LIVE-01"]
-code_locus = "crates/ade_types/src/shelley/block.rs (PrevHash = Genesis | Block(Hash32) + ShelleyHeaderBody.prev_hash + block_hash() accessor); crates/ade_codec/src/shelley/block.rs (decode_prev_hash + the ShelleyHeaderBody AdeEncode null/hash32 match -- POSITION-BLIND); crates/ade_ledger/src/producer/forge.rs + crates/ade_ledger/src/block_validity/unsigned_header_pre_image.rs (ShelleyHeaderBody constructors wrap PrevHash::Block, byte-identical)"
+code_locus = "crates/ade_types/src/shelley/block.rs (PrevHash = Genesis | Block(Hash32) + ShelleyHeaderBody.prev_hash + block_hash() accessor); crates/ade_codec/src/shelley/block.rs (decode_prev_hash + the ShelleyHeaderBody AdeEncode null/hash32 match -- POSITION-BLIND); crates/ade_ledger/src/block_validity/header_position.rs (check_header_position -- the single POSITION-AWARE authority, block_number 0 <=> Genesis; S3); crates/ade_ledger/src/block_validity/header_input.rs (decode_block calls check_header_position before the header authority; S3); crates/ade_ledger/src/block_validity/verdict.rs (BlockValidityError::HeaderPositionInvalid -> existing HeaderInvalid class; S3); crates/ade_ledger/src/producer/forge.rs + crates/ade_ledger/src/block_validity/unsigned_header_pre_image.rs (forge + KES pre-image carry tick.prev_hash: PrevHash directly -- Genesis for block 0, byte-identical Block path; S3); crates/ade_runtime/src/producer/chain_evolution.rs (prev_hash() cold-start -> PrevHash::Genesis, all-zero stand-in deleted; S3) -- producer prev_hash migrated Hash32->PrevHash end to end (ProducerTick/TickInputs/ForgeRequestContext; S3)"
 tests = [
   "prevhash_genesis_round_trips_as_null",
   "prevhash_block_round_trips_as_hash32",
   "prevhash_codec_is_position_blind",
   "genesis_successor_header_round_trips_with_null_prev",
   "block_header_prev_hash_byte_identical_after_migration",
+  "header_position_zero_requires_genesis_ok",
+  "header_position_zero_with_block_is_rejected",
+  "header_position_nonzero_requires_block_ok",
+  "header_position_nonzero_with_genesis_is_rejected",
+  "decode_block_rejects_block_prev_at_block_number_zero",
+  "decode_block_rejects_genesis_prev_at_nonzero_block_number",
+  "corpus_blocks_pass_header_position_rule",
+  "forge_block_number_zero_emits_genesis_prev_hash",
+  "forge_nonzero_block_emits_block_prev_byte_identical",
+  "forge_block_zero_self_consistent_through_decode_block",
+  "pre_image_block_zero_emits_genesis_prev",
+  "pre_image_nonzero_block_prev_byte_identical",
+  "forged_block_zero_kes_preimage_equals_decoded_header_body_bytes",
+  "chain_evolution_prev_hash_genesis_at_cold_start",
+  "chain_evolution_prev_hash_block_with_tip",
 ]
 ci_script = "ci/ci_check_prevhash_single_wire_authority.sh"
 status = "enforced"
 introduced_in = "PHASE4-N-F-G-J"
 strengthened_in = []
 cluster = "PHASE4-N-F-G-J"
+evidence_notes = "PHASE4-N-F-G-J S3 (2026-06-03) discharged the deferred position-aware clause -- now ENFORCED, not merely documented. The single BLUE check_header_position authority (ade_ledger::block_validity::header_position) is called by decode_block (header_input.rs) before the header authority and rejects block_number 0 + Block (and block_number > 0 + Genesis) as BlockValidityError::HeaderPositionInvalid (coarse class HeaderInvalid -- no new BlockRejectClass). Forge + KES pre-image emit PrevHash::Genesis for block 0: forge_to_self_accept_succeeds now forges a real genesis-successor block its own validator accepts, and forged_block_zero_kes_preimage_equals_decoded_header_body_bytes pins the KES-signed bytes == decoded ShelleyHeaderBody bytes incl. Genesis as CBOR null. The producer prev_hash migrated Hash32->PrevHash end to end, deleting the all-zero stand-in at its source (ChainEvolution::prev_hash cold-start -> PrevHash::Genesis). ci/ci_check_prevhash_single_wire_authority.sh extended: (c) single position-rule authority referenced by decode_block and never in ade_codec; (d) no prev_hash: Hash32 field on the producer path + ChainEvolution cold-start -> Genesis. ade_codec stays POSITION-BLIND. No strengthened_in self-bump (introduced_in already this cluster)."

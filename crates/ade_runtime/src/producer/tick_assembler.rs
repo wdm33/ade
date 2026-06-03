@@ -22,8 +22,8 @@ use ade_ledger::pparams::ProtocolParameters;
 use ade_ledger::producer::state::ProducerTick;
 use ade_ledger::state::LedgerState;
 use ade_types::primitives::SlotNo;
-use ade_types::shelley::block::{OperationalCert, ProtocolVersion};
-use ade_types::{BlockNo, Hash32};
+use ade_types::shelley::block::{OperationalCert, PrevHash, ProtocolVersion};
+use ade_types::BlockNo;
 
 /// Closed RED-supplied inputs the assembler stitches into a canonical
 /// [`ProducerTick`]. Carries signed artifacts only; no private keys.
@@ -40,7 +40,7 @@ pub struct TickInputs {
     pub mempool_tx_bytes: Vec<Vec<u8>>,
     pub prev_opcert_counter: Option<u64>,
     pub block_number: BlockNo,
-    pub prev_hash: Hash32,
+    pub prev_hash: PrevHash,
     pub protocol_version: ProtocolVersion,
 }
 
@@ -110,7 +110,7 @@ mod tests {
 
     use ade_core::consensus::vrf_cert::{ActiveSlotsCoeff, ExpectedVrfInput};
     use ade_crypto::kes::SUM6_KES_SIG_LEN;
-    use ade_types::{CardanoEra, EpochNo, Hash28};
+    use ade_types::{CardanoEra, EpochNo, Hash28, Hash32};
     use cardano_crypto::vrf::VrfDraft03;
 
     fn keypair_proof(slot: u64) -> VrfProof {
@@ -152,7 +152,7 @@ mod tests {
             mempool_tx_bytes: Vec::new(),
             prev_opcert_counter: None,
             block_number: BlockNo(1),
-            prev_hash: Hash32([0u8; 32]),
+            prev_hash: PrevHash::Block(Hash32([0u8; 32])),
             protocol_version: ProtocolVersion { major: 9, minor: 0 },
         }
     }

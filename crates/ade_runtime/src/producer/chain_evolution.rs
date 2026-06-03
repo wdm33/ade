@@ -35,6 +35,7 @@ use ade_ledger::consensus_view::PoolDistrView;
 use ade_ledger::producer::self_accept::{self_accept, AcceptedBlock, SelfAcceptError};
 use ade_ledger::state::LedgerState;
 use ade_types::Hash32;
+use ade_types::shelley::block::PrevHash;
 
 use crate::producer::coordinator::ChainTip;
 
@@ -126,12 +127,16 @@ impl ChainEvolution {
         }
     }
 
-    /// Previous block hash to thread into the next header: the current
-    /// `tip.block_hash`, or the all-zero hash at cold-start.
-    pub fn prev_hash(&self) -> Hash32 {
+    /// Previous-block predecessor to thread into the next header:
+    /// `PrevHash::Block(tip.block_hash)`, or `PrevHash::Genesis` (CBOR
+    /// null) at cold-start — never an all-zero `Hash32` stand-in
+    /// (CN-WIRE-09). This is a GREEN proposal from already-authoritative
+    /// tip state; the BLUE `decode_block -> check_header_position` rule is
+    /// the final authority on whether it is position-legal.
+    pub fn prev_hash(&self) -> PrevHash {
         match &self.tip {
-            Some(t) => Hash32(t.block_hash),
-            None => Hash32([0u8; 32]),
+            Some(t) => PrevHash::Block(Hash32(t.block_hash)),
+            None => PrevHash::Genesis,
         }
     }
 
@@ -427,5 +432,33 @@ mod tests {
             reconcile_verdicts(false, true),
             Err(ChainEvolutionError::AuthorityMismatch)
         );
+    }
+
+    #[test]
+    fn chain_evolution_prev_hash_genesis_at_cold_start() {
+        // tip None (cold-start) proposes PrevHash::Genesis, never an
+        // all-zero Hash32 stand-in; the next block is number 0.
+        let evo = seed_from_corpus(&corpus());
+        assert_eq!(evo.prev_hash(), PrevHash::Genesis);
+        assert_eq!(evo.next_block_number(), 0);
+    }
+
+    #[test]
+    fn chain_evolution_prev_hash_block_with_tip() {
+        let base = seed_from_corpus(&corpus());
+        let evo = ChainEvolution::seed(
+            base.base_ledger().clone(),
+            base.base_chain_dep().clone(),
+            Some(ChainTip {
+                slot: 10,
+                block_hash: [0x07; 32],
+                block_number: 4,
+            }),
+            base.era_schedule().clone(),
+            base.pool_distr_view().clone(),
+            base.eta0().clone(),
+        );
+        assert_eq!(evo.prev_hash(), PrevHash::Block(Hash32([0x07; 32])));
+        assert_eq!(evo.next_block_number(), 5);
     }
 }

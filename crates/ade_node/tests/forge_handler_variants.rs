@@ -47,7 +47,7 @@ use ade_ledger::state::LedgerState;
 use ade_runtime::producer::coordinator::CoordinatorEvent;
 use ade_runtime::producer::producer_log::ForgeFailureReason;
 use ade_runtime::producer::producer_shell::ProducerShell;
-use ade_types::shelley::block::{OperationalCert, ProtocolVersion};
+use ade_types::shelley::block::{OperationalCert, PrevHash, ProtocolVersion};
 use ade_types::{BlockNo, CardanoEra, EpochNo, Hash28, Hash32};
 
 use ade_node::produce_mode::{run_real_forge, ForgeRequestContext};
@@ -149,7 +149,7 @@ struct Fixture {
     era_schedule: EraSchedule,
     pool_distr_view: PoolDistrView,
     block_number: BlockNo,
-    prev_hash: Hash32,
+    prev_hash: PrevHash,
     protocol_version: ProtocolVersion,
 }
 
@@ -168,7 +168,7 @@ impl Fixture {
                 BTreeMap::new(),
             ),
             block_number: BlockNo(1),
-            prev_hash: Hash32([0u8; 32]),
+            prev_hash: PrevHash::Block(Hash32([0u8; 32])),
             protocol_version: ProtocolVersion { major: 9, minor: 0 },
         }
     }

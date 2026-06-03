@@ -47,6 +47,15 @@ pub enum BlockValidityError {
     BodyHashMismatch { header: Hash32, actual: Hash32 },
     MalformedField(FieldError),
     MissingConsensusInput(MissingInput),
+    /// The header's `block_number`/`prev_hash` pair is position-illegal:
+    /// a genesis-successor (`block_number 0`) without `PrevHash::Genesis`,
+    /// or a non-genesis block (`> 0`) with `PrevHash::Genesis`. Fail-fast
+    /// at decode, ahead of the header authority (CN-WIRE-09 position
+    /// clause, CE-G-J-3). Coarse class: `HeaderInvalid`.
+    HeaderPositionInvalid {
+        block_number: u64,
+        prev_is_genesis: bool,
+    },
 }
 
 impl BlockValidityError {
@@ -60,6 +69,7 @@ impl BlockValidityError {
             BlockValidityError::MissingConsensusInput(_) => {
                 BlockRejectClass::MissingConsensusInput
             }
+            BlockValidityError::HeaderPositionInvalid { .. } => BlockRejectClass::HeaderInvalid,
         }
     }
 }

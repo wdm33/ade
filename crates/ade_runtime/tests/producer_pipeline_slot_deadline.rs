@@ -27,7 +27,7 @@ use ade_runtime::producer::scheduler::{scheduler_step, SchedulerInput, Scheduler
 use ade_runtime::producer::tick_assembler::TickInputs;
 use ade_testkit::validity::ConwayValidityCorpus;
 use ade_types::primitives::SlotNo;
-use ade_types::shelley::block::{OperationalCert, ProtocolVersion};
+use ade_types::shelley::block::{OperationalCert, PrevHash, ProtocolVersion};
 use ade_types::{BlockNo, CardanoEra, EpochNo, Hash28, Hash32};
 use cardano_crypto::vrf::VrfDraft03;
 use ed25519_dalek::{Signer, SigningKey as DalekSk};
@@ -140,7 +140,7 @@ fn base_tick_inputs() -> TickInputs {
         mempool_tx_bytes: Vec::new(),
         prev_opcert_counter: None,
         block_number: BlockNo(1),
-        prev_hash: Hash32([0u8; 32]),
+        prev_hash: PrevHash::Block(Hash32([0u8; 32])),
         protocol_version: ProtocolVersion { major: 9, minor: 0 },
     }
 }

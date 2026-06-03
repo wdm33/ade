@@ -193,7 +193,7 @@ mod tests {
     use ade_ledger::mempool::admit::MempoolState;
     use ade_ledger::state::LedgerState;
     use ade_testkit::validity::ConwayValidityCorpus;
-    use ade_types::shelley::block::{OperationalCert, ProtocolVersion};
+    use ade_types::shelley::block::{OperationalCert, PrevHash, ProtocolVersion};
     use ade_types::{BlockNo, CardanoEra, EpochNo, Hash28, Hash32, SlotNo};
     use ed25519_dalek::{Signer, SigningKey as DalekSk};
 
@@ -340,7 +340,7 @@ mod tests {
             mempool_tx_bytes: Vec::new(),
             prev_opcert_counter: None,
             block_number: BlockNo(1),
-            prev_hash: Hash32([0u8; 32]),
+            prev_hash: PrevHash::Block(Hash32([0u8; 32])),
             protocol_version: ProtocolVersion { major: 9, minor: 0 },
         }
     }
