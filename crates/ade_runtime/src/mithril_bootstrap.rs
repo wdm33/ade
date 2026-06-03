@@ -29,10 +29,9 @@ use ade_core::consensus::era_schedule::EraSchedule;
 use ade_core::consensus::ledger_view::LedgerView;
 use ade_core::consensus::praos_state::PraosChainDepState;
 use ade_ledger::bootstrap_anchor::{verify_mithril_binding, BootstrapAnchor, MithrilImportError};
-use ade_ledger::seed_consensus_inputs::encode_seed_epoch_consensus_inputs;
 use ade_ledger::state::LedgerState;
 use ade_ledger::wal::{WalError, WalStore};
-use ade_types::{EpochNo, Hash32, SlotNo};
+use ade_types::{Hash32, SlotNo};
 
 use crate::bootstrap::{
     bootstrap_initial_state, BootstrapError, BootstrapInputs, BootstrapState,
@@ -42,8 +41,8 @@ use crate::bootstrap_anchor::{mint, MintInputs};
 use crate::chaindb::{ChainDb, ChainDbError, ChainTip, SnapshotStore};
 use crate::consensus_inputs::LiveConsensusInputsCanonical;
 use crate::mithril_import::{import_mithril_manifest_from_bytes, MithrilManifestError};
-use crate::seed_consensus_merge::{merge_seed_epoch_consensus_inputs, SeedConsensusMergeError};
-use crate::seed_consensus_provenance::append_seed_epoch_provenance;
+use crate::seed_consensus_merge::SeedConsensusMergeError;
+use crate::seed_epoch_lineage::SeedEpochLineagePersistError;
 use crate::seed_import::UtxoFingerprint;
 
 /// Operator-provided seed-point extraction inputs — the origin that is
@@ -190,20 +189,19 @@ fn persist_seed_epoch_consensus_inputs<S>(
 where
     S: SnapshotStore + ?Sized,
 {
-    let anchor_fp = anchor.initial_ledger_fingerprint.clone();
-    let epoch_no: EpochNo = seed_consensus_inputs.epoch_no;
-    let record =
-        merge_seed_epoch_consensus_inputs(anchor_fp.clone(), epoch_no, seed_consensus_inputs)
-            .map_err(MithrilBootstrapError::SeedConsensusMerge)?;
-    let bytes = encode_seed_epoch_consensus_inputs(&record);
-    // Ordering (A3a): sidecar put (durable) FIRST, then the WAL
-    // provenance append (the commit point). A crash between the two
-    // leaves the sidecar with no provenance entry — "not imported".
-    snapshot_store
-        .put_seed_epoch_consensus_inputs(&anchor_fp, &bytes)
-        .map_err(MithrilBootstrapError::SeedConsensusPersist)?;
-    append_seed_epoch_provenance(wal, &anchor_fp, epoch_no, &bytes)
-        .map_err(MithrilBootstrapError::SeedConsensusProvenanceWal)
+    crate::seed_epoch_lineage::persist_seed_epoch_consensus_inputs(
+        snapshot_store,
+        wal,
+        anchor,
+        seed_consensus_inputs,
+    )
+    .map_err(|e| match e {
+        SeedEpochLineagePersistError::Merge(x) => MithrilBootstrapError::SeedConsensusMerge(x),
+        SeedEpochLineagePersistError::Persist(x) => MithrilBootstrapError::SeedConsensusPersist(x),
+        SeedEpochLineagePersistError::ProvenanceWal(x) => {
+            MithrilBootstrapError::SeedConsensusProvenanceWal(x)
+        }
+    })
 }
 
 #[cfg(test)]

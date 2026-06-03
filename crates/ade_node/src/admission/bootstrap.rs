@@ -85,6 +85,11 @@ pub enum AdmissionBootstrapError {
     /// absent, did not hash-bind to `protocol_params_hash`, or did not parse
     /// (PHASE4-N-F-G-A S2a, CE-G-A-2a). Fail closed — no default substitution.
     ForgeCurrentPParams(String),
+    /// Persisting the seed-epoch anchor lineage (the anchor-fp-keyed sidecar +
+    /// WAL provenance) failed (PHASE4-N-F-G-I). The pre-seed mints the anchor
+    /// and MUST persist the lineage a `--mode node` WarmStart recovers; a store
+    /// that cannot record it fails rather than silently proceed.
+    SeedEpochLineagePersist(String),
 }
 
 /// SOLE admission-dispatch entry point. Performs the closed
@@ -166,8 +171,8 @@ async fn run_admission_inner(
     )
     .map_err(|e| AdmissionBootstrapError::SeedToSnapshot(format!("{:?}", e)))?;
 
-    // 5. Mint anchor.
-    let _anchor = mint(MintInputs {
+    // 5. Mint anchor (kept — its lineage is persisted in step 7b).
+    let anchor = mint(MintInputs {
         network_magic: acli.network_magic,
         genesis_hash,
         seed_slot: SlotNo(acli.seed_point_slot),
@@ -199,11 +204,25 @@ async fn run_admission_inner(
     ledger.protocol_params = current_pparams.clone();
 
     // 7. Open file WAL + verify the chain head from the anchor.
-    let wal_store = FileWalStore::open(&acli.wal_dir)
+    let mut wal_store = FileWalStore::open(&acli.wal_dir)
         .map_err(|e| AdmissionBootstrapError::FileWalStoreOpen(format!("{:?}", e)))?;
     wal_store
         .verify_chain(&initial_fp)
         .map_err(|e| AdmissionBootstrapError::WalChainBreak(format!("{:?}", e)))?;
+
+    // 7b. PHASE4-N-F-G-I: persist the seed-epoch anchor lineage the pre-seed
+    //     minted — the SAME lineage the mithril/genesis bootstraps persist —
+    //     so a `--mode node` WarmStart recovers a forge-capable store seeded
+    //     purely from this shared `--json-seed` + `import_live_consensus_inputs`
+    //     path. Derived ONLY from the minted anchor (its initial_ledger_fp) +
+    //     the imported canonical inputs; never a genesis-derived constructor.
+    ade_runtime::seed_epoch_lineage::persist_seed_epoch_consensus_inputs(
+        &chaindb,
+        &mut wal_store,
+        &anchor,
+        &canonical,
+    )
+    .map_err(|e| AdmissionBootstrapError::SeedEpochLineagePersist(format!("{e:?}")))?;
 
     // 8. Build the era schedule + the LiveLedgerView from the
     //    operator-imported consensus-inputs bundle
