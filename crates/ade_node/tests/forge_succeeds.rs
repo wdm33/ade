@@ -254,6 +254,102 @@ fn forge_to_self_accept_succeeds() {
 }
 
 // =========================================================================
+// PHASE4-N-F-G-J S5 — genesis-successor rehearsal mechanics (hermetic).
+//
+// The C1 genesis rehearsal correlates a real Haskell follower's accept of an
+// Ade-forged GENESIS-SUCCESSOR block (block 0 + PrevHash::Genesis) into a
+// non-promotable PrivateRehearsalManifest. These hermetic tests prove the
+// harness wiring + bind it to the genesis-successor; the live correlate runs
+// only under the operator-gated node_c1_genesis_rehearsal_live arm. The
+// synthetic peer event here is correlate MECHANICS only — never written under
+// the rehearsal home, never an acceptance claim.
+// =========================================================================
+
+#[test]
+fn genesis_rehearsal_manifest_binds_block_zero_genesis() {
+    use ade_node::ba02_evidence::{correlate, AdeForgeRecord, PeerAcceptEvent};
+    use ade_node::rehearsal_evidence::{
+        PrivateRehearsalManifest, RehearsalEnvelope, RehearsalVenue,
+    };
+
+    let epoch = EpochNo(0);
+    let slot = 1u64;
+    let magic = 42u32;
+
+    // EligibleFixture forges a self-accepting genesis-successor (block 0 +
+    // Genesis) — the SAME fixture forge_to_self_accept_succeeds proves.
+    let mut shell = synth_shell(0x77, 0x88, 0x99);
+    let fixture = EligibleFixture::build(&shell, slot, epoch);
+    let ctx = fixture.ctx();
+    let (event, _handoff) = run_real_forge(slot, /* kes_period = */ 0, &ctx, &mut shell);
+    let artifact = match event {
+        CoordinatorEvent::ForgeSucceeded { artifact, .. } => artifact,
+        other => panic!("expected ForgeSucceeded genesis block, got {other:?}"),
+    };
+
+    // The forged block IS the genesis-successor. decode_block runs the S3
+    // check_header_position rule, so a block_number 0 that decodes successfully
+    // MUST carry PrevHash::Genesis (else it would be rejected).
+    let decoded = ade_ledger::block_validity::decode_block(&artifact.bytes)
+        .expect("forged genesis block decodes + passes check_header_position");
+    assert_eq!(
+        decoded.header_input.block_no.0, 0,
+        "genesis-successor is block 0 (Genesis prev guaranteed by check_header_position)"
+    );
+
+    // Correlate a follower's served-block accept of THIS genesis block's hash.
+    let ade = AdeForgeRecord::from_forge_artifact(&artifact, magic);
+    let events = vec![PeerAcceptEvent::PeerServedBlock {
+        block_hash: Hash32(artifact.hash),
+        slot: Some(artifact.slot),
+        peer: "127.0.0.1:3010".to_string(),
+    }];
+    let outcome = correlate(&ade, &events);
+    let envelope = RehearsalEnvelope {
+        venue: RehearsalVenue::PrivateTestnetC1,
+        peer_log_file: "phase4-n-f-g-j-genesis-rehearsal-test-peer.log".to_string(),
+        peer_log_file_sha256: "ee".repeat(32),
+    };
+    let manifest = PrivateRehearsalManifest::from_correlate_outcome(&outcome, envelope)
+        .expect("a follower accept of the genesis block correlates to a rehearsal manifest");
+
+    let toml = manifest.to_canonical_toml();
+    assert!(toml.contains("is_rehearsal = true"), "non-promotable marker");
+    assert!(toml.contains("not_bounty_evidence = true"), "non-promotable marker");
+    let hex: String = artifact.hash.iter().map(|b| format!("{b:02x}")).collect();
+    assert!(
+        toml.contains(&format!("matched_block_hash_hex = \"{hex}\"")),
+        "manifest binds the exact forged genesis-block hash"
+    );
+}
+
+#[test]
+fn genesis_rehearsal_no_evidence_writes_nothing() {
+    use ade_node::ba02_evidence::{correlate, AdeForgeRecord};
+    use ade_node::rehearsal_evidence::{
+        PrivateRehearsalManifest, RehearsalEnvelope, RehearsalVenue,
+    };
+
+    // No follower accept => NoEvidence => from_correlate_outcome => None. There
+    // is no synthetic-manifest path for the genesis rehearsal.
+    let ade = AdeForgeRecord {
+        forged_block_hash: Hash32([0x11; 32]),
+        slot: 1,
+        network_magic: 42,
+    };
+    let outcome = correlate(&ade, &[]);
+    let envelope = RehearsalEnvelope {
+        venue: RehearsalVenue::PrivateTestnetC1,
+        peer_log_file: "phase4-n-f-g-j-genesis-rehearsal-none.log".to_string(),
+        peer_log_file_sha256: "ee".repeat(32),
+    };
+    assert!(
+        PrivateRehearsalManifest::from_correlate_outcome(&outcome, envelope).is_none(),
+        "NoEvidence must yield no genesis rehearsal manifest"
+    );
+}
+
+// =========================================================================
 // PHASE4-N-F-G-B S1 — self-accepted-artifact handoff surfacing + carrier
 // =========================================================================
 

@@ -3,11 +3,12 @@
 # ci_check_rehearsal_manifest_schema.sh — PHASE4-N-F-G-D S2 gate
 # (CN-REHEARSAL-FIDELITY-01 clause 2 — non-promotable rehearsal evidence).
 #
-# When a committed private-testnet rehearsal manifest
-# `docs/evidence/phase4-n-f-g-d-private-rehearsal-*.toml` is present, verify the
-# closed rehearsal schema + the non-promotability markers + the sha256 binding
-# to the committed peer log. When NONE is committed (the typical state — the C1
-# dry-run is operator-gated), the gate is vacuously satisfied.
+# When a committed private-testnet rehearsal manifest is present — the G-D bounty
+# dry-run (`docs/evidence/phase4-n-f-g-d-private-rehearsal-*.toml`) or the G-J
+# genesis-successor rehearsal (`docs/evidence/phase4-n-f-g-j-genesis-rehearsal-*.toml`)
+# — verify the closed rehearsal schema + the non-promotability markers + the
+# sha256 binding to the committed peer log. When NONE is committed (the typical
+# state — the C1 rehearsals are operator-gated), the gate is vacuously satisfied.
 #
 # Non-promotability (three independent barriers):
 #   - distinct rehearsal home (docs/evidence/, never the bounty home
@@ -32,7 +33,10 @@ REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$REPO_ROOT"
 
 REHEARSAL_HOME="docs/evidence"
-REHEARSAL_GLOB="phase4-n-f-g-d-private-rehearsal-*.toml"
+# Rehearsal-manifest homes this gate covers: the G-D bounty dry-run and the G-J
+# genesis-successor rehearsal. Each is a non-promotable private-testnet manifest
+# held to the identical closed schema + markers + sha256 binding.
+REHEARSAL_GLOBS=("phase4-n-f-g-d-private-rehearsal-*.toml" "phase4-n-f-g-j-genesis-rehearsal-*.toml")
 # All real bounty-evidence homes a CE-G-C-LIVE manifest could live in: the active
 # operator-pass home AND the archived home (G-C is archived to completed/). A
 # rehearsal marker must never appear in ANY of them. (PHASE4-N-F-G-D S4 — the
@@ -66,7 +70,7 @@ if (( ${#EXISTING_BOUNTY_HOMES[@]} > 0 )); then
   fi
 fi
 
-MANIFESTS="$(find "$REHEARSAL_HOME" -name "$REHEARSAL_GLOB" 2>/dev/null || true)"
+MANIFESTS="$(find "$REHEARSAL_HOME" \( -name "${REHEARSAL_GLOBS[0]}" -o -name "${REHEARSAL_GLOBS[1]}" \) 2>/dev/null || true)"
 
 if [[ -z "$MANIFESTS" ]]; then
   if [[ $FAIL -eq 0 ]]; then

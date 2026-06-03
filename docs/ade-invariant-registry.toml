@@ -5636,11 +5636,11 @@ gate. The single bounty deliverable is preview/preprod acceptance, captured sepa
 """
 source = "docs/planning/phase4-n-f-g-d-invariants.md"
 cross_ref = ["RO-LIVE-01", "RO-LIVE-06", "CN-OPERATOR-EVIDENCE-01", "DC-NODE-06", "DC-EPOCH-03", "CN-NODE-02", "CN-CINPUT-03", "DC-CINPUT-02b"]
-code_locus = "crates/ade_node/src/ba02_evidence.rs (correlate — reused, the sole acceptance-evidence constructor); crates/ade_node/src/ba02_pass.rs (RED evidence I/O — the rehearsal write-wrapper mirrors/extends this into the rehearsal home); crates/ade_runtime/src/consensus_inputs/ (import_live_consensus_inputs — the shared N-M-C extraction/import the path-fidelity clause pins; OQ1 slice-entry proof obligation: it must consume an early/private-net extraction through the SAME path used for a synced preprod tip); docs/evidence/phase4-n-f-g-c-operator-pass-README.md (the preprod operator-pass runbook the C1 dry-run runbook must be a strict subset of); docs/evidence/phase4-n-f-g-d-private-rehearsal-*.toml (planned — the distinct rehearsal-evidence home); ci/ci_check_rehearsal_manifest_schema.sh (planned — vacuous-until-committed schema + sha256 + label + distinct-home gate); ci/ci_check_node_path_fidelity.sh (planned — no new --mode node flag, no from-genesis consensus-inputs constructor)"
-tests = ["node_accepted_block_consensus_inputs_via_shared_import", "rehearsal_envelope_wraps_correlate_produced_payload", "rehearsal_correlate_no_evidence_writes_nothing", "rehearsal_envelope_is_structurally_distinct_from_ba02_manifest", "c1_dry_run_correlate_to_rehearsal_envelope", "node_c1_dry_run_rehearsal_live", "rehearsal_gate_fails_on_archived_home_leak"]
-ci_script = "ci/ci_check_node_path_fidelity.sh, ci/ci_check_rehearsal_manifest_schema.sh"
+code_locus = "crates/ade_node/src/ba02_evidence.rs (correlate — reused, the sole acceptance-evidence constructor); crates/ade_node/src/ba02_pass.rs (RED evidence I/O — the rehearsal write-wrapper mirrors/extends this into the rehearsal home); crates/ade_runtime/src/consensus_inputs/ (import_live_consensus_inputs — the shared N-M-C extraction/import the path-fidelity clause pins; OQ1 slice-entry proof obligation: it must consume an early/private-net extraction through the SAME path used for a synced preprod tip); docs/evidence/phase4-n-f-g-c-operator-pass-README.md (the preprod operator-pass runbook the C1 dry-run runbook must be a strict subset of); docs/evidence/phase4-n-f-g-d-private-rehearsal-*.toml (planned — the distinct rehearsal-evidence home); ci/ci_check_rehearsal_manifest_schema.sh (planned — vacuous-until-committed schema + sha256 + label + distinct-home gate); ci/ci_check_node_path_fidelity.sh (planned — no new --mode node flag, no from-genesis consensus-inputs constructor); crates/ade_node/tests/forge_succeeds.rs (S5 genesis-rehearsal mechanics — genesis_rehearsal_manifest_binds_block_zero_genesis + _no_evidence, reusing EligibleFixture's self-accepting block 0 + Genesis); crates/ade_node/tests/node_c1_genesis_rehearsal.rs (S5 env-gated genesis live arm); docs/evidence/phase4-n-f-g-j-genesis-rehearsal-README.md + phase4-n-f-g-j-genesis-rehearsal-*.toml (S5 genesis-successor rehearsal runbook + home, covered by ci_check_rehearsal_manifest_schema.sh); ci/ci_check_genesis_successor_reachability.sh (S5 reuses — the cold-start path the genesis rehearsal exercises)"
+tests = ["node_accepted_block_consensus_inputs_via_shared_import", "rehearsal_envelope_wraps_correlate_produced_payload", "rehearsal_correlate_no_evidence_writes_nothing", "rehearsal_envelope_is_structurally_distinct_from_ba02_manifest", "c1_dry_run_correlate_to_rehearsal_envelope", "node_c1_dry_run_rehearsal_live", "rehearsal_gate_fails_on_archived_home_leak", "genesis_rehearsal_manifest_binds_block_zero_genesis", "genesis_rehearsal_no_evidence_writes_nothing", "node_c1_genesis_rehearsal_live"]
+ci_script = "ci/ci_check_node_path_fidelity.sh, ci/ci_check_rehearsal_manifest_schema.sh, ci/ci_check_genesis_successor_reachability.sh"
 introduced_in = "PHASE4-N-F-G-D"
-strengthened_in = []
+strengthened_in = ["PHASE4-N-F-G-J"]
 status = "enforced"
 evidence_notes = """
 PHASE4-N-F-G-D invariant sketch (/invariants gate, 2026-06-02). Declared at sketch;
@@ -5747,6 +5747,23 @@ rehearsal_pass (no toml_escape fold-in -- deferred), to the S1 fence, or to any
 BLUE/containment surface. All 6 gates green; cargo test -p ade_node green. Barrier (b) is
 now actually enforced -- CN-REHEARSAL-FIDELITY-01 is mechanically complete (S1 + S2 + S3 +
 S4); the declared->enforced flip happens at the re-run /cluster-close PHASE4-N-F-G-D.
+
+PHASE4-N-F-G-J S5 (2026-06-03) STRENGTHENS this rule to the GENESIS-SUCCESSOR rehearsal:
+the cold-start path (S4 reachability: both tips None -> forge block 0 + PrevHash::Genesis
+per S3) is exercised end-to-end under the SAME --mode node fidelity fence
+(ci_check_node_path_fidelity.sh + ci_check_genesis_successor_reachability.sh) and produces
+ONLY a non-promotable PrivateRehearsalManifest under the distinct genesis home
+docs/evidence/phase4-n-f-g-j-genesis-rehearsal-*.toml (now covered by
+ci_check_rehearsal_manifest_schema.sh). Reuses correlate + PrivateRehearsalManifest
+VERBATIM -- no new evidence type, no manifest-schema change, no BLUE change. Hermetic
+mechanics: genesis_rehearsal_manifest_binds_block_zero_genesis (reuses EligibleFixture's
+self-accepting block 0 + Genesis, correlates a follower served-block accept of its hash; a
+block_number 0 that decode_block accepts MUST carry Genesis via the S3 check_header_position
+rule) + genesis_rehearsal_no_evidence_writes_nothing (NoEvidence -> None). The live arm
+node_c1_genesis_rehearsal_live (ADE_LIVE_C1_GENESIS_REHEARSAL) is env-gated/skipped in CI.
+Acceptance is ONLY a real follower log through correlate -- never Ade self-accept /
+forge_succeeded / served bytes / wire success. NO RO-LIVE flip; the live C1 genesis run is
+blocked_until_operator_c1_genesis_successor_rehearsal.
 """
 
 [[rules]]
