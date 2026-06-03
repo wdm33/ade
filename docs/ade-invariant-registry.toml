@@ -5937,24 +5937,53 @@ cluster = "PHASE4-N-F-G-J"
 id = "DC-NODE-08"
 tier = "derived"
 statement = """
---mode node MAY run the producer tick from the recovered authoritative base when the live feed
-is in an Empty / AtTip / NoBlockAvailable state, but ONLY when ALL hold: (a) the base is
-explicitly WarmStart-recovered/imported (the recovered SeedEpochConsensusInputs surface +
-recovered tip + seed-epoch lineage present), never an unanchored/from-genesis-constructed or
-stale base; (b) ForgeIntent::On with the complete operator key material; (c) the slot/epoch/KES
-guards pass (DC-EPOCH-03 single-epoch containment + the BLUE leader check + KES-period/opcert);
-and (d) the forged block flows through self_accept -> SelfAcceptedHandoff (DC-NODE-06) ->
-ServedChainView (DC-NODE-07). An unexpected PeerLost / DecodeError / ProtocolError / SourceInvalid
-feed state MUST fail closed or halt per existing lifecycle policy -- never masked as sole-producer
-mode. The durable tip advances ONLY through the accepted path, never from forge scheduling alone;
-the forge base, composition, and bytes are unchanged (DC-FORGE-01 / CN-FORGE-01..04); the forge
-base is the recovered surface only (CN-CINPUT-03 / DC-CINPUT-02b); no RO-LIVE-01/06 flip. The
-eligibility signal is general (forge-configured + valid recovered base), never a private-only /
-C1-only flag.
+--mode node MAY forge the genesis-successor (FIRST) block from the recovered authoritative base when
+ChainDb::tip() AND the recovered tip (recovered.tip) are BOTH None, but ONLY when ALL hold: (a) the
+explicitly WarmStart-recovered/imported seed-epoch lineage is present (the recovered
+SeedEpochConsensusInputs + anchor lineage), never an unanchored / from-genesis-file-constructed or
+stale base; (b) ForgeIntent::On with complete operator key material; (c) the feed state is
+forge-eligible under the CN-NODE-04 closed split (no_block_available | clean_empty), never an
+ineligible / ambiguous (unknown_disconnected) or error state; (d) the slot/epoch/KES/leader guards
+pass (DC-EPOCH-03 single-epoch containment + the BLUE leader check + KES-period/opcert); and (e) the
+forged first block carries PrevHash::Genesis (CBOR null per CN-WIRE-09) and flows through self_accept
+-> SelfAcceptedHandoff (DC-NODE-06) -> ServedChainView (DC-NODE-07). The recovered lineage gates
+PERMISSION to forge from the genesis-successor position; it is NOT the source of the prev_hash bytes,
+which are structurally null. The first-block reachability fires EXACTLY ONCE; once a durable tip
+exists, block_number > 0 takes the normal selected_tip path with PrevHash::Block. The durable tip
+advances ONLY through the accepted path, never from forge scheduling alone; no forge from raw /
+unanchored genesis; the forge base is the recovered surface only (CN-CINPUT-03 / DC-CINPUT-02b); no
+RO-LIVE-01/06 flip. The eligibility signal is general (forge-configured + valid recovered base),
+never a private-only / C1-only flag.
 """
-source = "docs/planning/phase4-n-f-g-j-invariants.md"
-cross_ref = ["DC-NODE-05", "DC-NODE-06", "DC-NODE-07", "DC-EPOCH-03", "CN-CINPUT-03", "DC-CINPUT-02b", "DC-FORGE-01", "CN-FORGE-01", "CN-NODE-04", "RO-LIVE-01"]
-code_locus = "crates/ade_node/src/node_sync.rs (plan_loop_step / forge_slot_status / NodeBlockSource feed states); crates/ade_node/src/node_lifecycle.rs (relay run loop); crates/ade_node/src/forge_intent.rs (ForgeIntent)"
+source = "docs/planning/phase4-n-f-g-j-genesis-successor-prevhash-invariants.md"
+cross_ref = ["DC-NODE-05", "DC-NODE-06", "DC-NODE-07", "DC-EPOCH-03", "CN-CINPUT-03", "DC-CINPUT-02b", "DC-FORGE-01", "CN-FORGE-01", "CN-NODE-04", "CN-WIRE-09", "RO-LIVE-01"]
+code_locus = "crates/ade_node/src/node_lifecycle.rs (the LoopStep::ForgeTick arm: ChainDb::tip / recovered.tip selection -> first-block reachability); crates/ade_node/src/node_sync.rs (forge_one_from_recovered); crates/ade_node/src/forge_intent.rs (ForgeIntent)"
+tests = []
+ci_script = ""
+status = "declared"
+introduced_in = "PHASE4-N-F-G-J"
+strengthened_in = []
+cluster = "PHASE4-N-F-G-J"
+
+[[rules]]
+id = "CN-WIRE-09"
+tier = "derived"
+statement = """
+The Shelley-and-later header_body `prev_hash` field is the closed wire grammar `$hash32 / null`
+(cardano-ledger PrevHash = GenesisHash | BlockHash). Ade represents it as the closed sum
+PrevHash = Genesis | Block(Hash32) -- never a flat Hash32. PrevHash::Genesis encodes to / decodes from
+CBOR null (0xf6); PrevHash::Block(h) encodes to / decodes from a 32-byte hash32. A genesis-successor
+block (block_number 0 on a from-genesis chain) MUST carry PrevHash::Genesis/null; a non-genesis block
+(block_number > 0) MUST carry PrevHash::Block(hash32). Encoding is canonical and round-trips through
+ONE shared BLUE ade_codec authority; the raw byte codec is POSITION-BLIND (it decodes null -> Genesis
+and hash32 -> Block without knowing block_number). No all-zero Hash32, no anchor fingerprint, and no
+Shelley genesis hash may stand in for the genesis predecessor. The validator / header-position checks
+fail closed on the wrong variant for the block position (block_number 0 requires Genesis;
+block_number > 0 requires Block).
+"""
+source = "docs/planning/phase4-n-f-g-j-genesis-successor-prevhash-invariants.md"
+cross_ref = ["CN-WIRE-08", "DC-FORGE-01", "CN-FORGE-01", "DC-NODE-08", "RO-LIVE-01"]
+code_locus = "crates/ade_codec/src/shelley/block.rs (header_body prev_hash decode -> will become $hash32 / null; currently read_hash32-only); crates/ade_runtime/src/producer/tick_assembler.rs + crates/ade_runtime/src/producer/chain_evolution.rs (prev_hash representation -> closed PrevHash sum). New PrevHash sum-type home resolved in /cluster-doc."
 tests = []
 ci_script = ""
 status = "declared"

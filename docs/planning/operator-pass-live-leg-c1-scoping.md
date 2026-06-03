@@ -403,7 +403,12 @@ accepted at the live preprod tip, within one epoch** — bounty priority #3.
 ### Why the tip path is *more* work than genesis (not less)
 
 The genesis/epoch-0 path hid two gaps because it starts from a trivial state
-(`prev_hash = 0`, `block_no = 0`, `eta0 = genesis constant`, slot = 0). The tip
+(`prev_hash = 0`, `block_no = 0`, `eta0 = genesis constant`, slot = 0). **[Correction
+(2026-06-03, PHASE4-N-F-G-J OQ1): the `prev_hash = 0` assumption here is DISPROVEN.
+Cardano `PrevHash::GenesisHash` encodes as CBOR `null` (`0xf6`), not a hash — per
+cardano-ledger `BHeader.hs` (`encCBOR GenesisHash = encodeNull`) and `babbage.cddl`
+(`prev_hash : $hash32 / null`). An all-zero `Hash32` is a `BlockHash` value (a
+nonexistent parent), not the genesis predecessor; a real peer rejects it.]** The tip
 path must instead **graft onto a live chain**: real tip hash, real next block
 number, real current-epoch nonce, and a slot that is plausibly *now*. That is G6 +
 G7 on top of G1–G5.
