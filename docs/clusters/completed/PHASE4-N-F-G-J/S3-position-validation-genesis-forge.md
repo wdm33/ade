@@ -6,7 +6,7 @@
 
 - **Slice:** PHASE4-N-F-G-J S3 — Header-position validation (`block_number 0 ⟺ Genesis`) + forge/KES-pre-image emit `Genesis` for block 0; producer `prev_hash` migrates `Hash32 → PrevHash`.
 - **Cluster:** PHASE4-N-F-G-J — Genesis-successor block correctness (`c167cd41`).
-- **Status:** Proposed (doc-before-implement).
+- **Status:** Merged (`0c1939a1`).
 - **Cluster Exit Criteria addressed — CE-G-J-3 (verbatim):** "header-position validation rejects `Block` at `block_number 0` and `Genesis` at `block_number > 0`; the forge emits `PrevHash::Genesis` for the first block (hermetic); the all-zero parent is gone." *(CE-G-J-1/2 already met; CE-G-J-4 node-spine reachability and CE-G-J-5 C1 rehearsal out of scope.)*
 
 ## §3 Slice Dependencies

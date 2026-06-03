@@ -3,7 +3,7 @@
 ## §1 Slice ID
 - **Cluster:** PHASE4-N-F-G-J — Node forge when feed is empty/at tip (`docs/clusters/PHASE4-N-F-G-J/cluster.md`, `ff03e244`)
 - **Slice:** S1 — Closed feed-state taxonomy + diagnostic events (observability-first)
-- **Status:** Drafted (doc-before-implement)
+- **Status:** Merged (`60303079`)
 - **TCB:** GREEN (closed enums) + RED (classification + emission); **no BLUE change**
 
 ## §2 Cluster Exit Criteria Addressed

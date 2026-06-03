@@ -6,7 +6,7 @@
 
 - **Slice:** PHASE4-N-F-G-J S5 — C1 operator-gated genesis-successor rehearsal (the mechanical harness closes; the live C1 run stays operator-gated).
 - **Cluster:** PHASE4-N-F-G-J — Genesis-successor block correctness (`c167cd41`).
-- **Status:** Proposed (doc-before-implement).
+- **Status:** Merged (`550eec3a`).
 - **Cluster Exit Criteria addressed — CE-G-J-5 (verbatim):** "a C1 rerun harness + runbook: a real Haskell follower **is expected to** validate/fetch the Ade-forged genesis-successor block **if the block is protocol-valid**; the only acceptance claim comes from the follower log through `correlate → PrivateRehearsalManifest`. No RO-LIVE flip. `blocked_until_operator_c1_genesis_successor_rehearsal` (the mechanical harness closes; live execution stays gated)." *(CE-G-J-1..4 already met.)*
 
 ## §3 Slice Dependencies

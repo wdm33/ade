@@ -4,6 +4,361 @@
 >
 > Regenerate with `/head-deltas <baseline>` after every cluster close. Baseline is recorded in `.idd-config.json` `head_deltas_baseline`.
 
+> Baseline: `13028d49` (Close PHASE4-N-F-G-I — shared admission bootstrap persists seed-epoch anchor lineage, 2026-06-03 12:27)
+> HEAD: `550eec3a` (C1 genesis-successor rehearsal harness — PHASE4-N-F-G-J S5, 2026-06-03 22:02)
+> Cluster: **PHASE4-N-F-G-J — genesis-successor block correctness** (empty-feed forge scheduling → null PrevHash wire authority → position rule → cold-start reachability → C1 genesis rehearsal harness), slice span closed; close-pass commit to follow.
+> 17 commits (no merges), 48 files changed, +3587 / -84 lines.
+
+This window narrates the **PHASE4-N-F-G-J cluster** — **genesis-successor block
+correctness** on the `--mode node` spine. The cluster answers one structural question:
+*can the node legitimately forge and serve the FIRST block of a from-genesis chain — the
+genesis-successor — with the CORRECT wire shape and the CORRECT cold-start permission?*
+It does so across **five slices**, walking inward from a diagnostic surface to the BLUE
+wire grammar and back out to a path-faithful rehearsal harness:
+
+- **S1 (`60303079`) — emit-only feed/forge scheduling events.** New **GREEN**
+  `ade_node::live_log::sched_event` (a closed, fail-closed-on-unknown JSONL event
+  vocabulary — `feed_unavailable{reason}`, `forge_tick_considered`, `forge_tick_skipped`,
+  `forge_attempted`, `forge_result`, all with closed reason/outcome enums and **no**
+  catch-all variant) + new **GREEN** `ade_node::live_log::sched_writer` (a hand-rolled
+  byte-deterministic one-object-per-line JSONL writer mirroring `live_log/writer.rs`). The
+  closed S1 reason set is exactly three — `NoBlockAvailable` and `CleanEmpty` are
+  forge-**eligible**; `UnknownDisconnected` (a reason-less / ambiguous WirePump disconnect)
+  is **INELIGIBLE** (fail-closed-on-ambiguity). The events are **emit-only** — the planner
+  may EMIT but MUST NOT consume them. New gate `ci_check_node_sched_events_emit_only.sh`
+  (later hardened by `36b2216f` against a pipefail race). New rule **`CN-NODE-04`**
+  (`enforced`).
+- **S2 (`3b24c572`) — PrevHash null/hash32 wire authority.** New **BLUE** canonical sum
+  type `PrevHash = Genesis | Block(Hash32)` in `ade_types` (replaces the flat `Hash32` for
+  the Shelley-and-later `header_body.prev_hash`) + the **POSITION-BLIND** `$hash32 / null`
+  codec in `ade_codec` (`PrevHash::Genesis` ⇄ CBOR `null` `0xf6`; `PrevHash::Block(h)` ⇄ a
+  32-byte `hash32` — decoded without knowing `block_number`). New gate
+  `ci_check_prevhash_single_wire_authority.sh` pins the codec as the **one** shared wire
+  authority. Backs **`CN-WIRE-09`** clause 1 (wire grammar). The CI fix `36b2216f`
+  (`fix(ci)`) repairs the S1 sched-event gate's pipefail race.
+- **S3 (`0c1939a1`) — genesis-successor position rule + genesis forge.** New **BLUE**
+  `ade_ledger::block_validity::header_position` (`check_header_position` — the **single
+  POSITION-AWARE authority**: `block_number 0 ⟺ PrevHash::Genesis`, `block_number > 0 ⟺
+  PrevHash::Block`); new variant `BlockValidityError::HeaderPositionInvalid` folded into the
+  **existing** `BlockRejectClass::HeaderInvalid` coarse class (no new reject class). The
+  producer `prev_hash` is migrated **`Hash32` → `PrevHash` end-to-end** (`ade_ledger`
+  `producer/{state,forge}.rs` + `block_validity/unsigned_header_pre_image.rs`; `ade_runtime`
+  `producer/{chain_evolution,tick_assembler,scheduler}.rs`; `ade_node`
+  `produce_mode.rs`/`node_sync.rs` `ForgeRequestContext`) — the cold-start `prev_hash()`
+  now yields `PrevHash::Genesis` and the **all-zero `Hash32` stand-in is deleted**.
+  `decode_block` calls `check_header_position` **before** the header authority. Backs
+  **`CN-WIRE-09`** clause 2 (position rule). **The `Block`-path wire encoding is
+  byte-identical post-migration** — no BLUE-authority weakening.
+- **S4 (`3df8bd4f`) — node-spine cold-start first-block reachability.** `node_sync`
+  `forge_one_from_recovered` now takes `Option<&ChainTip>` + a **GREEN**
+  `forge_header_position` (single cold-start convention: `None` ⇒ block 0 + `PrevHash::Genesis`,
+  `Some` ⇒ `last_block_no + 1` + `Block`; the old `.unwrap_or(1)` is **deleted**) +
+  `NodeForgeError::RecoveredTipMissingBlockNo` (malformed-height fails closed). `node_lifecycle`
+  gains a **GREEN** `may_cold_start_forge` permission gate on the `LoopStep::ForgeTick`
+  arm: the genesis-successor (both-`None`) forge fires EXACTLY ONCE, only when the
+  WarmStart-recovered seed-epoch lineage is present, `ForgeIntent::On`, and the feed is
+  forge-eligible under the `CN-NODE-04` split. New gate
+  `ci_check_genesis_successor_reachability.sh`. New rule **`DC-NODE-08`** (`enforced`).
+- **S5 (`550eec3a`) — C1 genesis-successor rehearsal harness.** A path-faithful,
+  **non-promotable** rehearsal harness for the C1 genesis-successor accepted-block leg:
+  `docs/evidence/phase4-n-f-g-j-genesis-rehearsal-README.md` (operator README, no `.toml`
+  manifest committed) + `tests/node_c1_genesis_rehearsal.rs` (an **env-gated**
+  `ADE_LIVE_C1_GENESIS_REHEARSAL=1` operator live arm + a hermetic correlate→envelope
+  proof) + two hermetic genesis-rehearsal tests in `forge_succeeds.rs`. The harness
+  **reuses** `ba02_evidence::correlate` and the G-D `PrivateRehearsalManifest` envelope
+  **verbatim** — **no new evidence type** (`rehearsal_evidence.rs` is byte-unchanged). The
+  G-D rehearsal gate `ci_check_rehearsal_manifest_schema.sh` is **EXTENDED in place** to add
+  the G-J genesis-rehearsal home glob. **`CN-REHEARSAL-FIDELITY-01`** gains
+  `strengthened_in += PHASE4-N-F-G-J`.
+
+**NARROW CLAIM (load-bearing — recorded honestly).** G-J enforces the genesis-successor
+forge **MECHANISM** (cold-start reachability) + **wire authority** (null/hash32 PrevHash +
+the position rule) + the rehearsal **HARNESS**. It does **NOT** claim: a live C1 accepted
+block, preprod acceptance, any RO-LIVE flip (**`RO-LIVE-01` stays `partial`**), bounty
+satisfaction, or durable block-1+ progression (the durable tip advances ONLY through the
+accepted path, never from forge scheduling alone). The live C1 genesis rehearsal stays
+**`blocked_until_operator_c1_genesis_successor_rehearsal`**. There is **NO BLUE-authority
+weakening**: the `Block`-path wire encoding is **byte-identical** after the `Hash32 →
+PrevHash` migration (genesis is a *new representable* predecessor, not a changed one).
+
+> **Baseline-gap note (load-bearing — read before §1).** This window's baseline is the
+> **PHASE4-N-F-G-I** close (`13028d49`, 2026-06-03 12:27). The **previous** HEAD_DELTAS lead
+> (preserved below as *Historical*) narrates **PHASE4-N-F-G-D** (`6f848825..6bd60c80`). The
+> intervening closes **G-E (committed `da205bff` inside the G-D window), G-F, G-G, G-H, and
+> G-I** were each closed and their grounding docs refreshed, but **HEAD_DELTAS was not
+> re-led** for them (each `/head-deltas` regen narrates its own cluster and the prior lead is
+> demoted; the G-E…G-I leads are recoverable from their own close-pass commits and the
+> registry, not reconstructed here). Their cumulative effect is visible only in the count
+> baselines this window measures **from**: at `13028d49` the registry holds **316 rules** and
+> the on-disk gate count is **123** — already well past the G-D figures (315 rules, 121
+> gates). This regen does **NOT fabricate** the missing G-E…G-I narratives; it measures the
+> explicit `13028d49..550eec3a` G-J span and preserves the G-D lead verbatim as the most
+> recent surviving narrative.
+
+## 0. Headline
+
+| Count | Baseline (`13028d49`) | HEAD (`550eec3a`) | Δ |
+|---|---|---|---|
+| CI gates (`ci/ci_check_*.sh`) | 123 | **126** | **+3 new** (`node_sched_events_emit_only` S1, `prevhash_single_wire_authority` S2, `genesis_successor_reachability` S4); **+1 modified in place** (`rehearsal_manifest_schema` S5 — genesis-home glob added); none removed |
+| Registry rules | 316 | **319** | **+3 new** (`CN-NODE-04` S1, `CN-WIRE-09` S2/S3, `DC-NODE-08` S4); **1 strengthening** (`CN-REHEARSAL-FIDELITY-01` `strengthened_in += PHASE4-N-F-G-J`, S5); none removed |
+| Test attributes (`#[test]`/`#[tokio::test]`, workspace) | 2245 | **2284** | **+39** (the G-J tests, concentrated in `CN-WIRE-09` (20) + `DC-NODE-08` (9) + `CN-NODE-04` (2) + the S5 rehearsal proofs + the producer-migration round-trips) |
+| BLUE canonical types | 456 | **457** | **+1** (`PrevHash = Genesis \| Block(Hash32)` in `ade_types`, S2 — absent at baseline; replaces the flat `Hash32` for `header_body.prev_hash`) |
+
+> **Sibling-doc coherence (load-bearing — read before §7).** At this regen the **other three
+> grounding docs are ALREADY G-J-regenerated in the working tree** (CODEMAP / SEAMS /
+> TRACEABILITY are dirty per `git status`), and their **counts agree with this doc**: CODEMAP
+> header reads "**457 canonical types, 2284 tests, 126 CI checks** … PHASE4-N-F-G-J cluster
+> close"; TRACEABILITY reads "**319 rules** at HEAD … `+3` this close … `CN-WIRE-09`,
+> `DC-NODE-08`, `CN-NODE-04` … `CN-REHEARSAL-FIDELITY-01` is `strengthened_in +=
+> PHASE4-N-F-G-J`." All four new/strengthened G-J rule leaves (20 `CN-WIRE-09`, 9
+> `DC-NODE-08`, 2 `CN-NODE-04`, 3 G-J `CN-REHEARSAL-FIDELITY-01`) and all five live G-J gates
+> are cross-checked present on disk. **SHA labels reconciled at close:** all four grounding
+> docs (CODEMAP / TRACEABILITY / SEAMS / this) now label the close HEAD **`550eec3a`** (the
+> S5 impl `feat(node): C1 genesis-successor rehearsal harness`); the in-span S2 CI-fix
+> **`36b2216f`** (an ancestor of `550eec3a`) is referenced only where it is the actual commit
+> (the §1 commit table + the gate-hardening notes). Counts are the `550eec3a` figures (457 /
+> 2284 / 126). No content divergence.
+>
+> **Not a rule removal, not a discipline violation** — a label artifact, reconciled at close.
+
+## 1. Commit Log (newest first)
+
+| Hash | Type | Summary |
+|------|------|---------|
+| `550eec3a` | feat | C1 genesis-successor rehearsal harness (PHASE4-N-F-G-J S5) |
+| `33162030` | docs | slice doc PHASE4-N-F-G-J S5 C1 genesis rehearsal |
+| `3df8bd4f` | feat | node-spine cold-start first-block reachability (PHASE4-N-F-G-J S4) |
+| `8b71766c` | docs | slice doc PHASE4-N-F-G-J S4 node-spine cold-start reachability |
+| `0c1939a1` | feat | enforce genesis-successor PrevHash position rule (PHASE4-N-F-G-J S3) |
+| `6b754e6a` | docs | slice doc PHASE4-N-F-G-J S3 position validation + genesis forge |
+| `36b2216f` | fix | avoid pipefail race in node sched event gate |
+| `3b24c572` | feat | enforce PrevHash null/hash32 wire authority (PHASE4-N-F-G-J S2) |
+| `599e7d9b` | docs | slice doc PHASE4-N-F-G-J S2 PrevHash codec authority |
+| `c167cd41` | docs | re-scope PHASE4-N-F-G-J around PrevHash null authority |
+| `b85a6170` | docs | replan PHASE4-N-F-G-J around PrevHash null authority |
+| `60303079` | feat | emit-only CN-NODE-04 feed/forge scheduling events (PHASE4-N-F-G-J S1) |
+| `b6554715` | docs | amend PHASE4-N-F-G-J to fail-closed UnknownDisconnected (option b) |
+| `d97dc293` | docs | slice doc PHASE4-N-F-G-J S1 feed/forge events |
+| `ff03e244` | docs | cluster doc PHASE4-N-F-G-J empty-feed forge scheduling |
+| `6461160e` | docs | plan PHASE4-N-F-G-J empty-feed forge scheduling |
+| `9eb6f39b` | docs | declare PHASE4-N-F-G-J empty-feed forge scheduling |
+
+No merge commits in the span. **Unlike the G-D window, the baseline `13028d49` IS a close
+commit** (the PHASE4-N-F-G-I close-pass), so **no prior-cluster close tail is carried** into
+this window — the span is the G-J cluster only: **6 declare/plan/cluster/replan docs**
+(`9eb6f39b` / `6461160e` / `ff03e244` / `c167cd41` / `b85a6170`) followed by **five
+doc-then-impl slices** (S1 `d97dc293`+`b6554715`+`60303079`, S2 `599e7d9b`+`3b24c572`, S3
+`6b754e6a`+`0c1939a1`, S4 `8b71766c`+`3df8bd4f`, S5 `33162030`+`550eec3a`) plus the one S2
+CI hotfix `36b2216f`.
+
+Six commits carry a `feat:`/`fix:` conventional prefix; eleven carry `docs:`. **Zero
+unclassified** — every commit follows conventional commits.
+
+(Plus the pending G-J close-pass commit: the working-tree CODEMAP / SEAMS / TRACEABILITY /
+registry G-J regen, the `.idd-config.json` baseline bump (`6bd60c80 → 550eec3a` — see the
+generation notes; the config baseline is **two clusters stale** at `6bd60c80`), the G-J
+cluster-doc archive, and this HEAD_DELTAS.)
+
+## 2. New Modules
+
+Three new source modules: one **BLUE** (`ade_ledger` block-validity authority) and two
+**GREEN** (`ade_node` diagnostic surface). All three are confirmed **absent at the baseline**
+`13028d49` and registered by the `mod`/`pub mod` lines added in their slices.
+
+| Module | Color | Purpose | Key sub-paths | Added in (cluster/slice) |
+|--------|-------|---------|---------------|--------------------------|
+| `ade_ledger::block_validity::header_position` | **BLUE** (deterministic block-validity authority; `core_paths` `crates/ade_ledger/`) | The **single POSITION-AWARE authority** for genesis-successor correctness: `block_number 0 ⟺ PrevHash::Genesis`, `block_number > 0 ⟺ PrevHash::Block(hash32)`. The position-blind codec (§3, `ade_codec`) decodes shape only; this module is where shape is bound to chain position. | `crates/ade_ledger/src/block_validity/header_position.rs` — `check_header_position(block_number, prev_hash)`; on violation surfaces `BlockValidityError::HeaderPositionInvalid { block_number, prev_is_genesis }` (folded into the existing `HeaderInvalid` coarse class). Registered via `pub mod header_position;` in `block_validity/mod.rs`; called by `decode_block` (`header_input.rs`) **before** the header authority. | `PHASE4-N-F-G-J` S3 (`0c1939a1`) |
+| `ade_node::live_log::sched_event` | **GREEN** (deterministic Core-Contract banner + `//! GREEN`; pure closed-enum types, no I/O / clock / rand / float / `HashMap`) | The **closed, emit-only** `--mode node` feed/forge scheduling event vocabulary: `feed_unavailable{reason}`, `forge_tick_considered`, `forge_tick_skipped{reason}`, `forge_attempted`, `forge_result{outcome}` — closed reason/outcome enums with **no** catch-all `Other` variant (a new variant is a compile error at the exhaustive encoder + fails the allow-list closedness test until wired). | `crates/ade_node/src/live_log/sched_event.rs` — `NodeSchedEvent` closed enum; the closed reason set (`NoBlockAvailable` / `CleanEmpty` forge-eligible; `UnknownDisconnected` ineligible, fail-closed-on-ambiguity); exhaustive JSONL encoder. | `PHASE4-N-F-G-J` S1 (`60303079`) |
+| `ade_node::live_log::sched_writer` | **GREEN** (deterministic Core-Contract banner + `//! GREEN`; byte-deterministic JSONL writer) | The byte-deterministic JSONL writer for `NodeSchedEvent` — one JSON object per line, flushed after every emit, mirroring `live_log/writer.rs`. **Emit-only**: the planner writes events but never reads them (one-directional planner → log). | `crates/ade_node/src/live_log/sched_writer.rs` — hand-rolled JSON serializer over the closed sched-event enum. | `PHASE4-N-F-G-J` S1 (`60303079`) |
+
+> **Cross-reference (CODEMAP): consistent.** All three modules appear in the **working-tree**
+> CODEMAP (27 `header_position` + 19 `sched_event`/`sched_writer` mentions, in the G-J delta
+> block). No staleness warning for this window — the working-tree CODEMAP is G-J-current (the
+> only caveat is the SHA-label discrepancy in §0; counts agree).
+
+No new crate, no new workspace, no new WAL/checkpoint, no new `CoordinatorEvent` variant.
+The S5 rehearsal harness adds **no new module** — it reuses the G-D
+`ade_node::rehearsal_evidence` / `rehearsal_pass` and the `PrivateRehearsalManifest` envelope
+verbatim (confirmed: `rehearsal_evidence.rs` is **not** in the span diff).
+
+## 3. Modules Modified
+
+The producer `prev_hash` migration (S3) and the cold-start reachability wiring (S4) touch a
+spread of BLUE + RED + GREEN files. Trivial test-fixture churn (the `Hash32 → PrevHash`
+call-site edits in `ade_codec`/`ade_testkit`/`ade_runtime` round-trip tests — each a few
+lines) is folded into the relevant module row rather than listed separately.
+
+| Module | Color | Scope | Key changes |
+|--------|-------|-------|-------------|
+| `ade_types::shelley::block` | **BLUE** (`crates/ade_types/`) | +26/-? | **G-J S2 (`3b24c572`) — new canonical type.** Introduces `PrevHash = Genesis \| Block(Hash32)` (+ `block_hash()` accessor) and migrates `ShelleyHeaderBody.prev_hash` from flat `Hash32` to `PrevHash`. **+1 canonical type** (456 → 457). |
+| `ade_codec::shelley::block` | **BLUE** (`crates/ade_codec/`) | +162 | **G-J S2 (`3b24c572`) — position-blind wire codec.** `decode_prev_hash` + the `ShelleyHeaderBody` `AdeEncode` `null`/`hash32` match: `PrevHash::Genesis` ⇄ CBOR `null` (`0xf6`), `PrevHash::Block(h)` ⇄ `hash32`. **POSITION-BLIND** — decodes shape without knowing `block_number` (the position rule lives in S3's `header_position`). The **`Block` path is byte-identical** to the pre-migration `Hash32` encoding. |
+| `ade_ledger::block_validity` (`mod.rs` / `header_input.rs` / `verdict.rs` / `unsigned_header_pre_image.rs`) | **BLUE** (`crates/ade_ledger/`) | +142 across 4 files (+ new `header_position.rs`, §2) | **G-J S3 (`0c1939a1`).** `mod.rs` registers `header_position`; `header_input.rs` `decode_block` calls `check_header_position` **before** the header authority; `verdict.rs` adds `BlockValidityError::HeaderPositionInvalid` → existing `BlockRejectClass::HeaderInvalid`; `unsigned_header_pre_image.rs` carries `tick.prev_hash: PrevHash` into the KES pre-image directly (`Genesis` for block 0; `Block` path byte-identical). |
+| `ade_ledger::producer` (`forge.rs` / `state.rs`) | **BLUE** (`crates/ade_ledger/`) | +160 | **G-J S3 (`0c1939a1`) — producer prev_hash migration.** `ProducerTick`/`TickInputs` carry `prev_hash: PrevHash`; `forge.rs` emits `PrevHash::Genesis` at `block_number 0` and a byte-identical `Block` prev otherwise. |
+| `ade_node::node_sync` | **GREEN/RED** (`crates/ade_node/` — relay-loop home) | +289 | **G-J S3+S4.** S3: `ForgeRequestContext` prev_hash `Hash32 → PrevHash`. S4 (`3df8bd4f`): `forge_one_from_recovered(selected_tip: Option<&ChainTip>)`; new **GREEN** `forge_header_position` (single cold-start convention: `None` ⇒ block 0 + `Genesis`, `Some` ⇒ `last_block_no+1` + `Block`; the **`.unwrap_or(1)` is deleted**); `NodeForgeError::RecoveredTipMissingBlockNo` (malformed height fails closed); routes the cold-start ctx through the **same** `run_real_forge` S3 proved. |
+| `ade_node::node_lifecycle` | **GREEN/RED** (`crates/ade_node/`) | +166 | **G-J S4 (`3df8bd4f`) — cold-start permission.** New **GREEN** `may_cold_start_forge` gate on the `LoopStep::ForgeTick` arm: the both-`None` genesis-successor forge fires EXACTLY ONCE, only when the recovered seed-epoch lineage is present + `ForgeIntent::On` + the feed is forge-eligible under `CN-NODE-04`. Passes `selected_tip.as_ref()` into `forge_one_from_recovered`. |
+| `ade_node::live_log` (`mod.rs`) | **GREEN** (`crates/ade_node/`) | +4 | **G-J S1 (`60303079`) — module registration.** Adds `pub mod sched_event;` + `pub mod sched_writer;`. |
+| `ade_node::admission::runner` / `produce_mode` | **GREEN/RED** (`crates/ade_node/`) | +1 / +4 | **G-J S1/S3.** `admission/runner.rs` wires the sched-event surface (+1); `produce_mode.rs` carries the `PrevHash` migration through `ForgeRequestContext` (+4). |
+| `ade_runtime::producer` (`chain_evolution.rs` / `tick_assembler.rs` / `scheduler.rs` / `producer_shell.rs`) | **RED** (`crates/ade_runtime/` — shell) | +61 | **G-J S3 (`0c1939a1`) — prev_hash migration through the shell.** `chain_evolution.rs` `prev_hash()` cold-start now yields `PrevHash::Genesis` (the **all-zero `Hash32` stand-in is deleted**); `tick_assembler`/`scheduler`/`producer_shell` thread `PrevHash` through the producer pipeline. |
+| `ade_node::tests::forge_succeeds` | test | +102 | **G-J S5 (`550eec3a`) — hermetic genesis-rehearsal proofs** (`genesis_rehearsal_manifest_binds_block_zero_genesis`, `genesis_rehearsal_no_evidence_writes_nothing`) reusing `correlate` + `PrivateRehearsalManifest`. |
+| `ade_codec` / `ade_testkit` / `ade_runtime` round-trip tests (5 files) + `ade_ledger::block_body_hash` | test / BLUE | ≤4 lines each | **G-J S2/S3 — `Hash32 → PrevHash` call-site churn** in `{allegra_mary,full_corpus,shelley}_round_trip.rs`, `harness/adapters/{shelley,shelley_common}.rs`, `producer/fixtures.rs`, `producer_pipeline_slot_deadline.rs`, and a 2-line `block_body_hash.rs` adjust. Trivial mechanical migration; no behavioral change. |
+
+The non-G-J forge / serve / live-feed / containment surfaces are otherwise **unchanged** in
+this window.
+
+## 4. Feature Flags
+
+**No project feature-flag deltas.** Ade declares no `[features]` table in any workspace
+`Cargo.toml` (confirmed absent at both refs), and no `#[cfg(feature = …)]` gate was
+introduced in the span. **No `Cargo.toml` change at all in this window.** No coupling, no
+`compile_error!` guard. (The S5 C1 genesis rehearsal operator harness is gated by an
+**environment variable** `ADE_LIVE_C1_GENESIS_REHEARSAL`, **not** a Cargo feature — it is a
+`#[test]` skipped in CI, not a compile-time flag and not a runtime node mode.)
+
+## 5. CI Checks (123 → 126; +3 new, +1 modified in place, 0 removed)
+
+Three new gates plus one in-place extension, repo-root-relative and mirroring the existing
+`ci/ci_check_*.sh` convention. The only files in `git diff --diff-filter=A 13028d49..HEAD --
+ci/` are the three new gates; the only `--diff-filter=M` file is `rehearsal_manifest_schema`;
+`--diff-filter=D` over `ci/` is empty.
+
+### PHASE4-N-F-G-J gates
+
+| Check | Status | Cluster origin | What it checks |
+|-------|--------|----------------|----------------|
+| `ci_check_node_sched_events_emit_only.sh` | **New** | G-J S1 (`60303079`); hotfix `36b2216f` | Backs **`CN-NODE-04`**. Pins the sched-event vocabulary as **closed + emit-only**: the `NodeSchedEvent` reason/outcome enums have no catch-all `Other`; the planner EMITS but never CONSUMES the events (one-directional); only the forge-eligible reasons (`NoBlockAvailable` / `CleanEmpty`) may feed the `DC-NODE-08` forge allowance. The hotfix `36b2216f` removed a `pipefail` race in the gate's own pipeline. |
+| `ci_check_prevhash_single_wire_authority.sh` | **New** | G-J S2 (`3b24c572`) | Backs **`CN-WIRE-09`** clause 1. Pins the **single** shared BLUE `ade_codec` wire authority for `prev_hash` (`$hash32 / null`): `PrevHash::Genesis` ⇄ CBOR `null`, `PrevHash::Block` ⇄ `hash32`; forbids any second/competing prev_hash codec, any all-zero `Hash32` / anchor-fingerprint / Shelley-genesis-hash stand-in for the genesis predecessor, and confirms the codec is **position-blind** (the position rule lives in `header_position`, S3). |
+| `ci_check_genesis_successor_reachability.sh` | **New** | G-J S4 (`3df8bd4f`) | Backs **`DC-NODE-08`**. Pins the cold-start forge permission: the both-`None` genesis-successor forge is reachable ONLY from the recovered seed-epoch lineage (never an unanchored / from-genesis-file base), fires EXACTLY ONCE, requires `ForgeIntent::On` + a forge-eligible feed, carries `PrevHash::Genesis`, and flows through `self_accept → SelfAcceptedHandoff → ServedChainView`; the durable tip advances only through the accepted path, never from forge scheduling alone; **no RO-LIVE-01/06 flip**. |
+| `ci_check_rehearsal_manifest_schema.sh` | **Modified in place** | G-D S2 (origin); G-J S5 extension (`550eec3a`) | The G-D rehearsal-manifest schema gate, **extended** to cover the G-J genesis-rehearsal home: `REHEARSAL_GLOBS` now matches **both** `phase4-n-f-g-d-private-rehearsal-*.toml` and `phase4-n-f-g-j-genesis-rehearsal-*.toml`. Still **vacuous-until-committed** (only READMEs are committed under the rehearsal homes; the live runs are operator-gated). The closed schema, the two non-promotability markers (`is_rehearsal` / `not_bounty_evidence`), the `peer_log_file_sha256` binding, and the bounty-home leak barriers are unchanged in shape — only the glob set widened. |
+
+The non-G-J containment / handoff / memory fences are **byte-unchanged** in this window;
+G-J **added** three gates, **extended** one rehearsal gate to cover a second non-promotable
+home, and relaxed **nothing**.
+
+### CI gate lineage (for cross-window readers — explains the headline +3)
+
+The on-disk gate count rose **121 → 123 → 126** from the G-D close to this G-J close:
+
+- **121 → 123** — the intervening **G-E…G-I** closes added net **+2** gates (not narrated in
+  this window; recoverable from those clusters' close-pass commits). At this window's
+  baseline `13028d49` (the G-I close) the on-disk count is **123**.
+- **123 → 126** — G-J S1 + S2 + S4 added `node_sched_events_emit_only`,
+  `prevhash_single_wire_authority`, and `genesis_successor_reachability` (this window), plus
+  the in-place `rehearsal_manifest_schema` extension (S5, count-neutral).
+
+So **this** window's CI delta is the **three** new G-J gates: **123 → 126 (+3)**, plus the
+one in-place rehearsal-gate extension.
+
+> **Cross-reference (TRACEABILITY): consistent.** The working-tree TRACEABILITY is
+> G-J-current and cites all five live G-J gates by their rules (`CN-WIRE-09 →
+> ci_check_prevhash_single_wire_authority`, `DC-NODE-08 →
+> ci_check_genesis_successor_reachability`, `CN-NODE-04 →
+> ci_check_node_sched_events_emit_only`, and the two rehearsal gates under
+> `CN-REHEARSAL-FIDELITY-01`), each cross-checked present on disk. SHA labels are reconciled at
+> close — all four grounding docs label `550eec3a` (the in-span S2 CI-fix `36b2216f` is an ancestor).
+
+## 6. Canonical Type Registry Delta
+
+**n/a — no separate canonical-type registry is configured** (`canonical_type_registry:
+null`); canonical-type rules live inline in the invariant registry under family **T**. The
+BLUE canonical-type total **rose 456 → 457 (+1)**: the new sum type `PrevHash = Genesis |
+Block(Hash32)` in `ade_types::shelley::block` (independently confirmed absent at `13028d49`
+and present at `550eec3a`). It **replaces** the flat `Hash32` on `ShelleyHeaderBody.prev_hash`
+— the migration is **shape-additive, not authority-weakening**: `PrevHash::Block(h)` encodes
+**byte-identically** to the pre-migration `Hash32`, and `PrevHash::Genesis` adds a *new
+representable* predecessor (CBOR `null`) that the flat `Hash32` could not express. The
+working-tree CODEMAP at this regen reports **457 canonical**. **No new `CoordinatorEvent`
+variant or field was introduced.** The S5 rehearsal harness adds **no** canonical type (it
+reuses the G-D `PrivateRehearsalManifest`, which is GREEN-by-content and not
+canonical-counted).
+
+## 7. Normative / Invariant Rule Delta (316 → 319)
+
+**Three rule IDs added, one strengthening, zero removed** (316 → 319). All three new rules
+are committed `enforced` in this span (no `declared → enforced` close-flip is owed for the
+new IDs — verified at HEAD); the one strengthening (`CN-REHEARSAL-FIDELITY-01`) is committed
+in the working-tree registry at this regen.
+
+### G-J new rules (committed `enforced` in this span)
+
+| Rule | Family / Tier | Status (at HEAD) | What it pins |
+|------|---------------|------------------|--------------|
+| `CN-NODE-04` | CN / `operational` | `enforced` | **Closed, allow-listed, emit-only feed/forge scheduling event vocabulary** for `--mode node`. Closed reason/outcome enums (`feed_unavailable{reason}`, `forge_tick_considered`, `forge_tick_skipped`, `forge_attempted`, `forge_result`) with **no catch-all**; the S1-producible closed reason set is exactly `NoBlockAvailable` / `CleanEmpty` (forge-eligible) + `UnknownDisconnected` (INELIGIBLE, fail-closed-on-ambiguity). Operational/diagnostic ONLY — never a consensus/acceptance/BA-02 signal; **emit-only** (planner emits, never consumes). `code_locus = node_sync.rs; node_lifecycle.rs; live_log/sched_event.rs; live_log/sched_writer.rs`. `tests = [node_sched_events_emit_closed_vocabulary, node_sched_event_allowlist_rejects_unknown_variants]`; `ci_script = ci/ci_check_node_sched_events_emit_only.sh`. |
+| `CN-WIRE-09` | CN / `derived` | `enforced` | **The `header_body.prev_hash` closed wire grammar `$hash32 / null`** (cardano-ledger `PrevHash = GenesisHash \| BlockHash`). Ade represents it as the closed sum `PrevHash = Genesis \| Block(Hash32)` — never a flat `Hash32`. `Genesis` ⇄ CBOR `null`; `Block(h)` ⇄ `hash32`; one shared **position-blind** BLUE codec. The **position-aware** rule (`block_number 0 ⟺ Genesis`) is enforced by `check_header_position` (S3), not the codec. No all-zero `Hash32` / anchor fingerprint / Shelley-genesis-hash stand-in. `code_locus` spans `ade_types`/`ade_codec` (S2) + `ade_ledger::block_validity::{header_position,header_input,verdict,unsigned_header_pre_image}` + `producer/forge.rs` + `ade_runtime::producer::chain_evolution` (S3, producer prev_hash migrated end-to-end). **20 tests** (round-trip + position + byte-identity + forge + pre-image); `ci_script = ci/ci_check_prevhash_single_wire_authority.sh`. |
+| `DC-NODE-08` | DC / `derived` | `enforced` | **`--mode node` MAY forge the genesis-successor (FIRST) block** when `ChainDb::tip()` AND `recovered.tip` are BOTH `None`, but ONLY when ALL hold: (a) the WarmStart-recovered seed-epoch lineage is present (never unanchored/from-genesis-file/stale); (b) `ForgeIntent::On` + complete key material; (c) the feed is forge-eligible under the `CN-NODE-04` split; (d) slot/epoch/KES/leader guards pass; (e) the forged block carries `PrevHash::Genesis` and flows through `self_accept → SelfAcceptedHandoff (DC-NODE-06) → ServedChainView (DC-NODE-07)`. The recovered lineage gates **permission**, not the prev_hash bytes (which are structurally `null`). Fires EXACTLY ONCE; the durable tip advances only through the accepted path; **no RO-LIVE-01/06 flip**. `code_locus = node_sync.rs (forge_header_position + forge_one_from_recovered + RecoveredTipMissingBlockNo); node_lifecycle.rs (may_cold_start_forge)`. **9 tests**; `ci_script = ci/ci_check_genesis_successor_reachability.sh`. |
+
+### G-J strengthening (working-tree registry at this regen)
+
+| Rule | Change | Why |
+|------|--------|-----|
+| `CN-REHEARSAL-FIDELITY-01` | `strengthened_in += "PHASE4-N-F-G-J"` (stays `tier = release`, `status = enforced`) | S5 extends the G-D non-promotable rehearsal discipline to a **second** private-testnet venue — the C1 **genesis-successor** rehearsal — reusing the same `correlate`-produced `PrivateRehearsalManifest` envelope and adding the genesis-rehearsal home to the schema gate. The rule is **strengthened** (a new venue is brought under the same non-promotability + path-fidelity discipline), never weakened. |
+
+> **Status sequencing (load-bearing — DIFFERS from the G-D window).** Unlike G-D (where
+> `CN-REHEARSAL-FIDELITY-01` was committed `declared` at the slice-span HEAD and flipped at
+> close), all **three** G-J rules are committed **`enforced`** in-span (verified by reading
+> the registry at `550eec3a`: `CN-NODE-04` / `CN-WIRE-09` / `DC-NODE-08` all `status =
+> "enforced"`, `introduced_in = "PHASE4-N-F-G-J"`, with `tests` + `ci_script` already bound).
+> The `CN-REHEARSAL-FIDELITY-01` strengthening is likewise present in the working-tree
+> registry. So **no `declared → enforced` close-flip is owed** for the new IDs in this
+> window; the close-pass commits the working-tree registry + sibling docs + this HEAD_DELTAS,
+> not a rule-status flip.
+
+**No rule was removed (expected: 0).** The 316 → 319 delta is three additive IDs
+(`CN-NODE-04`, `CN-WIRE-09`, `DC-NODE-08`); the `CN-REHEARSAL-FIDELITY-01` change is a
+`strengthened_in` append on an existing rule, never a removal.
+
+## 8. Honest residual (cluster scope)
+
+**G-J closes a NARROW claim: the genesis-successor forge MECHANISM (cold-start
+reachability), the wire AUTHORITY (null/hash32 PrevHash + the position rule), and the
+rehearsal HARNESS are enforced. It is NOT a live-pass, NOT a bounty / preview / preprod
+completion claim, and it does NOT enforce that a C1 genesis run has succeeded.**
+
+- **Mechanism + wire authority + harness, not a successful run.** G-J enforces that the node
+  *can* forge a correctly-shaped genesis-successor (block 0 carries `PrevHash::Genesis` ⇄
+  CBOR `null`, position-rule-checked), *can* reach that forge exactly once from a recovered
+  base, and *if* a C1 genesis rehearsal is executed it is path-faithful + non-promotable. It
+  does **not** enforce that any C1 run has happened: `ci_check_genesis_successor_reachability.sh`
+  pins the permission gate (not an executed forge), and `ci_check_rehearsal_manifest_schema.sh`
+  is **vacuous until a real operator-produced genesis-rehearsal manifest is committed** (only
+  the README is committed; the env-gated `ADE_LIVE_C1_GENESIS_REHEARSAL` test is skipped in
+  CI). The live C1 genesis rehearsal stays **`blocked_until_operator_c1_genesis_successor_rehearsal`**.
+- **NO RO-LIVE flip; no bounty/preview/preprod claim.** G-J flips **no** RO-LIVE rule.
+  `RO-LIVE-01` stays **`partial`**; `RO-LIVE-06` stays schema-only. The genesis-successor leg
+  is C1 rehearsal infrastructure, **not** bounty evidence — preview/preprod acceptance remains
+  the single bounty deliverable, captured separately.
+- **No durable block-1+ progression.** The durable tip advances **only** through the accepted
+  path, never from forge scheduling alone. G-J makes block 0 *reachable and correctly shaped*;
+  it does **not** demonstrate a durable chain of forged blocks (block 1, 2, … with
+  `PrevHash::Block` chaining) — that is downstream of an accepted, served genesis block.
+- **No BLUE-authority weakening (byte-identity preserved).** The `Hash32 → PrevHash`
+  migration is **shape-additive**: `PrevHash::Block(h)` encodes byte-identically to the
+  pre-migration `Hash32` (independently asserted by the `forge_nonzero_block_emits_block_prev_byte_identical`
+  / `block_header_prev_hash_byte_identical_after_migration` /
+  `forged_block_zero_kes_preimage_equals_decoded_header_body_bytes` tests). `PrevHash::Genesis`
+  adds a *new representable* predecessor (CBOR `null`) that the flat `Hash32` could not
+  express — the all-zero `Hash32` cold-start stand-in is **deleted**, closing a latent
+  wrong-shape risk rather than introducing one. +1 canonical type (456 → 457), all in BLUE
+  `ade_types`/`ade_codec`/`ade_ledger`.
+- **Emit-only diagnostic surface, not consensus evidence.** `CN-NODE-04`'s sched-event
+  vocabulary is operational/diagnostic ONLY: emitting an event changes no forge scheduling,
+  base, or authority, and the planner may emit but **never consume** the events. It is not a
+  BA-02, acceptance, or agreement signal.
+- **Fail-closed-on-ambiguity preserved.** `UnknownDisconnected` (a reason-less WirePump
+  disconnect) is **INELIGIBLE** for the cold-start forge — no ambiguous disconnect may become
+  forge-eligible (`option b`, amended in `b6554715`). The richer error reasons (`PeerLost` /
+  `DecodeError` / `ProtocolError` / `SourceInvalid`) and a reason-enriched live `AtTip` are a
+  **future wire-pump-enrichment prerequisite**, deliberately NOT in the closed set yet.
+
+---
+
+## Historical — PHASE4-N-F-G-D window (`6f848825 → 6bd60c80`)
+
+> The section below is the **previous** HEAD_DELTAS lead, preserved verbatim. It narrates the
+> **PHASE4-N-F-G-D** cluster (`6f848825..6bd60c80`). The intervening **G-E (`da205bff`,
+> committed inside the G-D window), G-F, G-G, G-H, G-I** closes were each closed with their own
+> grounding-doc refresh but **not** re-led in HEAD_DELTAS; their narratives live in their own
+> close-pass commits. The current lead (above) measures from the G-I close `13028d49`.
+
 > Baseline: `6f848825` (bound live-feed memory before authoritative decode — PHASE4-N-F-G-E S1, 2026-06-02 12:48)
 > HEAD: `6bd60c80` (scan archived bounty home in rehearsal leak gate — PHASE4-N-F-G-D S4, 2026-06-02 17:10)
 > Cluster: **PHASE4-N-F-G-D — private-testnet accepted-block bounty DRY-RUN fidelity harness on the `--mode node` spine**, slice span closed; close-pass commit to follow.
@@ -62,7 +417,7 @@ carried the **G-C** close tail (`351d46bc`), and the ones before that the **G-B*
 (`febee120`) and the **G-A** tail (`62cb8718` + `1806584c`), for the same
 slice-span-vs-close-commit reason.
 
-## 0. Headline
+### 0. Headline
 
 | Count | Baseline (`6f848825`) | HEAD (`6bd60c80`) | Δ |
 |---|---|---|---|
@@ -110,7 +465,7 @@ slice-span-vs-close-commit reason.
 > **Not a rule removal, not a discipline violation** — a sequencing artifact reconciled by
 > the close-pass.
 
-## 1. Commit Log (newest first)
+### 1. Commit Log (newest first)
 
 | Hash | Type | Summary |
 |------|------|---------|
@@ -146,7 +501,7 @@ CODEMAP/registry G-D regen **and** the still-owed SEAMS/TRACEABILITY G-D regen, 
 `.idd-config.json` baseline bump confirmation (`6f848825 → 6bd60c80`, already applied) + the
 registry-count comment, the G-D cluster-doc archive, and this HEAD_DELTAS.)
 
-## 2. New Modules
+### 2. New Modules
 
 Two new source modules, both in `ade_node` (added in **PHASE4-N-F-G-D S2**, `459cf78d`). Both
 are confirmed **absent at the baseline** `6f848825` and registered by the two `pub mod` lines
@@ -166,7 +521,7 @@ No new crate, no new workspace, no new BLUE authority, no new WAL/checkpoint/can
 no new `CoordinatorEvent` variant was added. The cluster's only other source change is the
 `lib.rs` `pub mod` wiring; S1/S3/S4 add **tests and CI**, not modules.
 
-## 3. Modules Modified
+### 3. Modules Modified
 
 The only modified source file in the window is `crates/ade_node/src/lib.rs` (the module
 wiring); all G-D behavior arrives as **new** files (§2) plus tests and CI (§5). There are no
@@ -181,7 +536,7 @@ window. In particular, no BLUE `ade_network` submodule, no `ade_runtime` shell f
 `ade_core` / `ade_ledger` / `ade_codec` / `ade_types` / `ade_crypto` / `ade_plutus` file
 appears in `git diff --name-only 6f848825..6bd60c80` — every BLUE count is byte-unchanged.
 
-## 4. Feature Flags
+### 4. Feature Flags
 
 **No project feature-flag deltas.** Ade declares no `[features]` table in any workspace
 `Cargo.toml` (confirmed absent at both refs), and no `#[cfg(feature = …)]` gate was introduced
@@ -190,13 +545,13 @@ guard. (The C1 dry-run operator harness is gated by an **environment variable**
 `ADE_LIVE_C1_DRY_RUN`, **not** a Cargo feature — it is a `#[test]` skipped in CI, not a
 compile-time flag and not a runtime node mode.)
 
-## 5. CI Checks (119 → 121; +2 new, 0 modified, 0 removed)
+### 5. CI Checks (119 → 121; +2 new, 0 modified, 0 removed)
 
 Two new gates, repo-root-relative and mirroring the existing `ci/ci_check_*.sh` convention.
 The only files in `git diff --diff-filter=A 6f848825..6bd60c80 -- ci/` are these two; no `ci/`
 file was modified or removed.
 
-### PHASE4-N-F-G-D gates
+#### PHASE4-N-F-G-D gates
 
 | Check | Status | Cluster origin | What it checks |
 |-------|--------|----------------|----------------|
@@ -208,7 +563,7 @@ The three containment / handoff / memory fences are **byte-unchanged** in this w
 (self-accept→serve handoff), and `ci_check_live_feed_memory_bounds.sh` (G-E live-feed memory
 bounds) are all untouched. G-D **added** two gates and relaxed **nothing**.
 
-### CI gate lineage (for cross-window readers — explains the headline +2)
+#### CI gate lineage (for cross-window readers — explains the headline +2)
 
 The on-disk gate count rose **117 → 118 → 119 → 121** across the G-C…G-D sub-clusters:
 
@@ -231,12 +586,12 @@ So **this** window's CI delta is the **two** G-D gates: **119 → 121 (+2)**.
 > `DC-LIVEMEM-01`). The G-D close-pass owes the TRACEABILITY regen that renders these rows. See
 > the warnings in the generation section.
 
-## 6. Canonical Type Registry Delta
+### 6. Canonical Type Registry Delta
 
 **n/a — no separate canonical-type registry is configured** (`canonical_type_registry: null`),
 and **no BLUE crate changed**. The 456 BLUE canonical-type total is **unchanged (Δ0)** across
 the span (independently re-verified: `git diff --name-only 6f848825..6bd60c80` matches **no**
-`core_paths` (BLUE) entry — every changed source file is under `ade_node`: the new RED
+`core_paths` (BLUE) entry; every changed source file is under `ade_node`: the new RED
 `rehearsal_pass.rs`, the new GREEN-by-content `rehearsal_evidence.rs`, the `lib.rs` `pub mod`
 wiring, and the three new test files). The working-tree CODEMAP at `6bd60c80` reports 456
 canonical. The new `PrivateRehearsalManifest` / `RehearsalVenue` / `RehearsalEnvelope` types
@@ -244,13 +599,13 @@ are **GREEN-by-content and not canonical-counted** (they wrap, but do not extend
 `Ba02Manifest`); no new type was added to any BLUE crate. **No new `CoordinatorEvent` variant
 or field was introduced.**
 
-## 7. Normative / Invariant Rule Delta (314 → 315)
+### 7. Normative / Invariant Rule Delta (314 → 315)
 
 **One rule ID added, zero removed** (314 → 315). G-D ships exactly one new rule; this window
 also commits the **G-E** close-pass `DC-LIVEMEM-01` `declared → enforced` flip (`da205bff`),
 which adds **no** new ID.
 
-### G-D new rule (committed in this span, by S2 `459cf78d`; flip to `enforced` owed at close)
+#### G-D new rule (committed in this span, by S2 `459cf78d`; flip to `enforced` owed at close)
 
 | Rule | Tier | Status (committed at HEAD) | What it pins |
 |------|------|---------------------------|--------------|
@@ -265,7 +620,7 @@ which adds **no** new ID.
 > exact pattern the N-F-G-E window documented for `DC-LIVEMEM-01` (`declared` at its slice-span
 > HEAD, flipped at close).
 
-### No cross-rule strengthenings recorded by G-D (load-bearing)
+#### No cross-rule strengthenings recorded by G-D (load-bearing)
 
 Unlike the G-C close-pass (four `strengthened_in` tokens), **G-D records NO `strengthened_in`
 bump** — verified by grep over the registry at HEAD: `RO-LIVE-01`, `RO-LIVE-06`, and
@@ -279,7 +634,7 @@ single bounty deliverable is preview/preprod acceptance, captured separately.
 (`CN-REHEARSAL-FIDELITY-01`); the `DC-LIVEMEM-01` flip carried by the G-E close-pass is a
 status change on an existing rule, never a removal.
 
-## 8. Honest residual (cluster scope)
+### 8. Honest residual (cluster scope)
 
 **G-D closes a NARROW claim: the private-testnet (C1) accepted-block dry-run is a
 PATH-FAITHFUL, NON-PROMOTABLE rehearsal HARNESS (enforced). It is NOT a live-pass, NOT a
@@ -333,7 +688,65 @@ succeeded.**
 
 ---
 
-## Generation notes (regen `6f848825 → 6bd60c80`, PHASE4-N-F-G-D)
+## Generation notes
+
+### Regen `13028d49 → 550eec3a` (PHASE4-N-F-G-J — current lead)
+
+- **Explicit span, NOT the config baseline.** This regen was run against the **explicit**
+  `13028d49..550eec3a` G-J span (`13028d49` = the PHASE4-N-F-G-I close; `550eec3a` = the G-J S5
+  impl, the true working-tree tip). The `.idd-config.json` `head_deltas_baseline` is **two
+  clusters stale** at `6bd60c80` (the G-D close) — reading it would mis-measure this window by
+  re-including the entire G-E…G-I run. The close-pass should bump `head_deltas_baseline`
+  `6bd60c80 → 550eec3a` (and update the stale `_invariant_registry_doc` "315 entries" comment to
+  **319**).
+- **Baseline gap (G-E…G-I not re-led).** HEAD_DELTAS was **not** re-led for the five intervening
+  closes G-E/G-F/G-G/G-H/G-I; each was closed with its own grounding-doc refresh, and their
+  narratives live in their own close-pass commits + the registry. This regen does **NOT
+  fabricate** those narratives — it narrates only the explicit G-J span and preserves the G-D
+  lead verbatim as the most recent surviving narrative (the next-older lead beyond G-D was
+  itself overwritten by the G-D regen and is not reconstructable from this doc).
+- Counts are mechanical (git/grep/ls only, no cargo): commit log + `--shortstat` over
+  `13028d49..550eec3a` (**17** commits, no merges / **48** files / **+3587 / -84**); CI gate
+  count via `git ls-tree -r --name-only <ref> ci/ | grep -c 'ci_check_.*\.sh'` at each ref
+  (**123 → 126**, **+3 new** — `node_sched_events_emit_only` G-J S1, `prevhash_single_wire_authority`
+  G-J S2, `genesis_successor_reachability` G-J S4 — plus `rehearsal_manifest_schema` **modified in
+  place** at S5; `--diff-filter=A` over `ci/` lists exactly the three new gates, `--diff-filter=M`
+  lists only `rehearsal_manifest_schema`, `--diff-filter=D` is empty); registry rule count via
+  `grep -c '^id = '` at each ref (**316 → 319**; `diff` of sorted `^id =` lines shows exactly
+  three `>` adds — `CN-NODE-04`, `CN-WIRE-09`, `DC-NODE-08` — and zero `<` removals); workspace
+  test attributes via `git grep -hE '#\[(tokio::)?test\]'` over `crates/**/*.rs` (**2245 →
+  2284**, +39); BLUE canonical types **456 → 457** (the new `PrevHash` sum type in
+  `ade_types::shelley::block`, confirmed absent at `13028d49` via `git show
+  13028d49:crates/ade_types/src/shelley/block.rs | grep -c 'enum PrevHash'` = 0).
+- **All three G-J rules committed `enforced` in-span (NO close-flip owed).** Verified by reading
+  the registry at `550eec3a`: `CN-NODE-04` / `CN-WIRE-09` / `DC-NODE-08` are all `status =
+  "enforced"`, `introduced_in = "PHASE4-N-F-G-J"`, with `tests` + `ci_script` bound; and
+  `CN-REHEARSAL-FIDELITY-01.strengthened_in = ["PHASE4-N-F-G-J"]`. This differs from the G-D
+  window's `declared`-at-slice-span-then-flip-at-close pattern: G-J needs **no** rule-status flip
+  at close — only the working-tree grounding-doc commit + baseline bump + this HEAD_DELTAS.
+- **Sibling-doc coherence is FULL on counts, with ONE SHA-label caveat (load-bearing).** At this
+  regen CODEMAP / SEAMS / TRACEABILITY are all dirty (`git status`) and **G-J-regenerated**:
+  CODEMAP header "11 crates, **457 canonical types, 2284 tests, 126 CI checks** … PHASE4-N-F-G-J
+  cluster close" (27 `header_position` + 19 `sched_event`/`sched_writer` mentions); TRACEABILITY
+  "**319 rules** … `+3` this close … `CN-WIRE-09`, `DC-NODE-08`, `CN-NODE-04` …
+  `CN-REHEARSAL-FIDELITY-01` is `strengthened_in += PHASE4-N-F-G-J`", with all G-J leaves +
+  gates cross-checked present on disk. **All three sibling-doc count-sets AGREE with this doc.**
+  **SHA labels reconciled at close:** all four grounding docs label the close HEAD
+  **`550eec3a`** (the S5 impl); the in-span S2 CI-fix **`36b2216f`** (an ancestor) is referenced
+  only where it is the actual commit. The *counts* are the `550eec3a` figures — **not** a content
+  divergence.
+- **Not a rule removal, not a discipline violation** — the SHA-label discrepancy and the stale
+  config baseline are sequencing/labeling artifacts reconciled by the close-pass (which commits
+  the working-tree CODEMAP / SEAMS / TRACEABILITY / registry G-J regen, bumps
+  `.idd-config.json` `head_deltas_baseline` `6bd60c80 → 550eec3a`, updates the registry-count
+  comment to 319, archives the G-J cluster doc, and commits this HEAD_DELTAS). The next gating
+  work is the **operator-witnessed live pass** — the C1 genesis-successor rehearsal
+  (`blocked_until_operator_c1_genesis_successor_rehearsal`) and, for the bounty deliverable, the
+  separate preview/preprod acceptance pass — **neither advanced by G-J**, which ships only the
+  genesis-successor forge mechanism + wire authority + cold-start reachability + the rehearsal
+  harness ahead of them.
+
+### Regen `6f848825 → 6bd60c80` (PHASE4-N-F-G-D — historical)
 
 - **Explicit span, NOT the config baseline.** This regen was run against the **explicit**
   `6f848825..6bd60c80` span. The `.idd-config.json` `head_deltas_baseline` has **already** been
@@ -384,8 +797,4 @@ succeeded.**
   commits the `CN-REHEARSAL-FIDELITY-01` `declared → enforced` flip + `tests`/`ci_script` array
   binding, the CODEMAP/registry working-tree regen, the **owed** SEAMS/TRACEABILITY G-D regen,
   the `.idd-config.json` baseline bump confirmation (`6f848825 → 6bd60c80`, already applied) +
-  the registry-count comment, the G-D cluster-doc archive, and this HEAD_DELTAS. The next gating
-  work is the **operator-witnessed live pass** — the C1 dry-run execution
-  (`blocked_until_operator_c1_net_executed`) and, for the bounty deliverable, the separate
-  preview/preprod acceptance pass — neither advanced by G-D, which only ships the path-faithful
-  rehearsal harness ahead of them.
+  the registry-count comment, the G-D cluster-doc archive, and this HEAD_DELTAS.

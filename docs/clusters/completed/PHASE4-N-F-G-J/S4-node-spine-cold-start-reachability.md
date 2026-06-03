@@ -6,7 +6,7 @@
 
 - **Slice:** PHASE4-N-F-G-J S4 — node-spine first-block reachability (both tips `None` → forge block 0 + `Genesis` through the accepted path, exactly one genesis handoff per cold-start execution).
 - **Cluster:** PHASE4-N-F-G-J — Genesis-successor block correctness (`c167cd41`).
-- **Status:** Proposed (doc-before-implement).
+- **Status:** Merged (`3df8bd4f`).
 - **Cluster Exit Criteria addressed — CE-G-J-4 (verbatim):** "a hermetic first-block-from-empty-feed forge tick fires, self-accepts → handoff → served from the recovered lineage when both tips are `None` + eligible feed + `ForgeIntent::On`, exactly once. Named test resolved in the S4 slice doc; `DC-NODE-08` declared → enforced." *(CE-G-J-1/2/3 already met; CE-G-J-5 C1 rehearsal out of scope.)*
 
 ## §3 Slice Dependencies

@@ -6,7 +6,7 @@
 
 - **Slice:** PHASE4-N-F-G-J S2 — PrevHash type + codec authority.
 - **Cluster:** PHASE4-N-F-G-J — Genesis-successor block correctness (`c167cd41`).
-- **Status:** Proposed (doc-before-implement).
+- **Status:** Merged (`3b24c572`).
 - **Cluster Exit Criteria addressed — CE-G-J-2 (verbatim):** the header_body `prev_hash` codec
   round-trips `Genesis ↔ null` and `Block(h) ↔ hash32` canonically through one position-blind BLUE
   authority; a genesis-successor null-prev header round-trips in the corpus. *(CE-G-J-3/4/5 out of

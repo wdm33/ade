@@ -3,10 +3,85 @@
 > **Status:** Living architectural document. Regenerated; not hand-edited.
 > Per-project instance of `~/.claude/methodology/templates/seams.md`.
 
-> 11 crates, **456 canonical types**, **121 CI checks** at HEAD (`6bd60c80`, PHASE4-N-F-G-D cluster close).
+> 11 crates, **457 canonical types**, **126 CI checks** at HEAD (`550eec3a`, PHASE4-N-F-G-J cluster close).
 > Reads CODEMAP (`docs/ade-CODEMAP.md`, regenerated at the same HEAD) for the module
 > list + TCB colors, and the invariant registry (`docs/ade-invariant-registry.toml` —
-> **315 entries** at HEAD) for the rule IDs that gate each closed surface.
+> **319 entries** at HEAD) for the rule IDs that gate each closed surface.
+>
+> ### PHASE4-N-F-G-J (closing, `550eec3a`) — PrevHash null/hash32 wire authority + position-aware header rule + genesis-successor cold-start forge on the `--mode node` spine
+>
+> **This regeneration is a scoped DELTA-REFRESH at the PHASE4-N-F-G-J close.** It brings the counts and the
+> closed-surface tables current with the CODEMAP regenerated at the same HEAD (`550eec3a` / **457** canonical
+> types / **126** CI checks / **319** rules), and splices the N-F-G-J closed-surface deltas. **G-J adds only
+> CLOSED sums + ONE NEW BLUE module — NO extensible / negotiated surface (verified).** The seam-relevant
+> additions are:
+>
+> - **NEW CLOSED BLUE sum `PrevHash = Genesis | Block(Hash32)`** (`ade_types::shelley::block`, **CN-WIRE-09**) —
+>   the header `prev_hash` wire grammar `$hash32 / null` (cardano-ledger `PrevHash = GenesisHash | BlockHash`),
+>   replacing the prior flat `prev_hash: Hash32` field (**456 → 457** canonical types). Closed 2-variant; **NOT
+>   `#[non_exhaustive]`**. ONE **POSITION-BLIND** BLUE codec authority (`ade_codec::shelley::block::decode_prev_hash`
+>   decodes `null -> Genesis` / `hash32 -> Block` as a pure function of the CBOR token, NEVER `block_number`; the
+>   `ShelleyHeaderBody` `AdeEncode` writes `Genesis -> write_null` / `Block(h) -> write_bytes_canonical`) + ONE
+>   **POSITION-AWARE** validator authority (`ade_ledger::block_validity::header_position::check_header_position`).
+>   The `null` grammar is scoped to **header_body ONLY** — it MUST NOT leak into the chain-sync/block-fetch
+>   `Point`/`Tip` codec (`Point::Origin` stays `array(0)`); a frozen contract fenced by
+>   `ci_check_prevhash_single_wire_authority.sh`. A surface REDUCTION, NOT an extension point. Classified under
+>   §3 Closed / §4 Frozen.
+> - **NEW CLOSED GREEN emit-only scheduling vocabulary (CN-NODE-04, S1):** `ade_node::live_log::sched_event`
+>   `NodeSchedEvent` (closed 5-variant) + `FeedReason` (`NoBlockAvailable | CleanEmpty | UnknownDisconnected`) +
+>   `ForgeOutcome` (closed 4-variant), with the byte-deterministic JSONL encoder `live_log::sched_writer`. **None
+>   is `#[non_exhaustive]`; no catch-all / `Other` variant; no stringly-typed field.** EMIT-ONLY: the GREEN
+>   planner never constructs or reads a `NodeSchedEvent`; the relay loop emits them around the planner call +
+>   the `LoopStep` arms (recording feed/forge decisions WITHOUT changing them). Allow-list + negative tests;
+>   fenced by `ci_check_node_sched_events_emit_only.sh` (the planner must never name the vocabulary). A closed
+>   diagnostic vocabulary (a surface REDUCTION), NOT an extension point. Classified under §3 Closed.
+> - **ADDITIVE closed-variant extensions (no surface widening):** `BlockValidityError::HeaderPositionInvalid`
+>   folds into the **UNCHANGED** closed `BlockRejectClass::HeaderInvalid` (NO new reject class);
+>   `NodeForgeError::RecoveredTipMissingBlockNo` (a fail-closed cold-start edge). Both are additive variants on
+>   existing closed sums, no wildcard.
+> - **NEW BLUE module `ade_ledger::block_validity::header_position`** (added under the existing `block_validity`
+>   authority — the SINGLE position-rule authority `check_header_position` + the `HeaderPositionInvalid` variant;
+>   a fn + a variant, NO struct/enum). Called by `decode_block` BEFORE the header authority. It **MUST NOT** be
+>   duplicated and **MUST NOT** live in `ade_codec`. See §5 Module Addition Rules.
+> - **UNCHANGED closed surfaces (note they did NOT gain variants):** `ForgeEpochAdmission` (the off-epoch guard
+>   authority), `NodeBlockSource` (closed 2-variant — the cold-start is a new code PATH through the existing
+>   `NodeBlockSource`, NOT a new variant), `Mode` / the CLI flag allow-list (unchanged — no private-only flag,
+>   fenced by `ci_check_node_path_fidelity.sh`), `CoordinatorEvent` (the cold-start reuses the existing forge
+>   events).
+> - **S5 rehearsal reuses existing surfaces VERBATIM:** `ba02_evidence::correlate` + `rehearsal_evidence::PrivateRehearsalManifest`
+>   (no new evidence type, no manifest-schema change); the genesis-rehearsal home
+>   `phase4-n-f-g-j-genesis-rehearsal-*.toml` is covered by the extended `ci_check_rehearsal_manifest_schema.sh`.
+>
+> **Registry → 319 rules** (NEW `CN-WIRE-09` + `DC-NODE-08` + `CN-NODE-04`, all `tier = derived`, `enforced`;
+> `CN-REHEARSAL-FIDELITY-01` gains `strengthened_in += "PHASE4-N-F-G-J"`; no rule weakened). **121 → 126 CI**
+> (NEW `ci_check_node_sched_events_emit_only.sh` + `ci_check_prevhash_single_wire_authority.sh` +
+> `ci_check_genesis_successor_reachability.sh`).
+>
+> **Boundary honesty (load-bearing — do NOT soften / do NOT broaden).** The raw byte codec is **POSITION-BLIND**
+> (the `Genesis|Block` decision is the CBOR token's, never `block_number`'s). The position-AWARE coupling
+> (`block_number 0 <=> Genesis`) lives in EXACTLY ONE BLUE authority (`check_header_position`), called by
+> `decode_block`, surfacing `HeaderPositionInvalid` (coarse class `HeaderInvalid` — no new `BlockRejectClass`);
+> it MUST NOT live in `ade_codec` and MUST NOT be duplicated. No all-zero `Hash32`, no anchor fingerprint, and
+> no Shelley genesis hash may stand in for the genesis predecessor — it is structurally CBOR null (the producer
+> `prev_hash` migrated `Hash32 -> PrevHash` end to end, deleting the all-zero stand-in at its source in
+> `ChainEvolution::prev_hash()`). The node-spine cold-start first-block reachability (`DC-NODE-08`) is **scoped
+> to the hermetic cold-start execution** (NO `genesis_forged` latch); the recovered seed-epoch lineage gates
+> **PERMISSION** to forge from the genesis-successor position, it is **NOT** the source of the prev_hash bytes;
+> the forge engine holds **no `ChainDb` handle**, so it advances **no durable tip** (durable block-1+ = N-U). The
+> S1 scheduling-event vocabulary is **emit-only**. **NO RO-LIVE flip** (`RO-LIVE-01` stays `partial` /
+> operator-gated); the cold-start eligibility signal is general (forge-configured + valid recovered base),
+> **never a private-only / C1-only flag**.
+>
+> > **NOTE — the G-H cluster is NOT yet reflected in this SEAMS body.** This file was last fully regenerated at
+> > the **G-D** close (`6bd60c80`); the intervening **PHASE4-N-F-G-H** cluster (node-spine live serve-to-peer —
+> > the NEW RED `ade_runtime::network::serve_dispatch`, `ade_node::node_lifecycle::run_node_serve_task` /
+> > `bind_serve_listener` / `ServeStartError`, the additive BLUE fn `n2n_supported_for_magic`, `DC-NODE-07`, and
+> > the gates `ci_check_single_serve_dispatch_authority.sh` + `ci_check_serve_listener_magic_aware.sh`) is
+> > documented in the CODEMAP carried delta but is **NOT** spliced into the §1–§7 bodies below. This delta-refresh
+> > was scoped to **G-J** only (per the regeneration constraint). The header counts above (457 / 126 / 319) are the
+> > true HEAD values and DO include G-H's contributions; a fuller G-H surface catch-up (the serve-to-peer §1
+> > surface + the §3 `ServeStartError` row + the §5 serve gates) is the recommended follow-on. **Treat the §1–§7
+> > bodies as current through G-J for everything EXCEPT the G-H serve-to-peer surface.**
 >
 > **This regeneration is a scoped INCREMENTAL catch-up through ONE cluster.** The prior file was generated
 > at the PHASE4-N-F-G-E close (header `6f848825` / 119 CI checks / 314 rules — live-feed bounded memory before
@@ -824,7 +899,8 @@ Pipeline (fixed; GREEN plans the iteration, RED performs effects, BLUE authority
   1b. (forge-on path only) forge_slot_status guard      (N-F-E: GREEN pure monotonic guard → ForgeSlotStatus {Due|NotDue}; at most once per SlotNo, never a past slot)
   2. GREEN plan_loop_step(loop_state, sync_status, forge_slot_status, shutdown)  (→ closed LoopStep {SyncOnce | ForgeTick | Idle | HaltCleanly}; content-blind; total table)
   3a. SyncOnce  → run_node_sync → pump_block            (DC-SYNC-01/DC-SYNC-02: the SOLE durable tip-advance; durable-before-advance; UNMODIFIED since N-F-C; N-F-G-C feeds it from the LIVE WirePump source)
-  3b. ForgeTick → exactly one forge_one_from_recovered  (N-F-E: reuses kes_period_for_slot; N-F-G-A S4: forge_epoch_admission runs BEFORE query_leader_schedule — an off-epoch slot fails closed before leadership/KES signing; recovered-surface leadership; advances NO durable tip; serves/admits/gossips NOTHING in the loop body; updates last_forged_slot only on a real attempt; records into in-memory hermetic_forge_outcomes)
+  3b. ForgeTick → exactly one forge_one_from_recovered  (N-F-E: reuses kes_period_for_slot; N-F-G-A S4: forge_epoch_admission runs BEFORE query_leader_schedule — an off-epoch slot fails closed before leadership/KES signing; recovered-surface leadership; advances NO durable tip; serves/admits/gossips NOTHING in the loop body; updates last_forged_slot only on a real attempt; records into in-memory hermetic_forge_outcomes. N-F-G-J: the arm derives (block_number, prev_hash) via the GREEN node_sync::forge_header_position(selected_tip.as_ref()) — the ONE cold-start convention: None => (0, PrevHash::Genesis); Some => (last_block_no+1, PrevHash::Block(tip.hash)); a tip-without-height edge fails closed NodeForgeError::RecoveredTipMissingBlockNo — never .unwrap_or(1). When ChainDb::tip() AND the recovered tip are BOTH None, the GREEN node_lifecycle::may_cold_start_forge(selected_tip_present=false, has_recovered_lineage, feed_eligible) permits forging block 0 + PrevHash::Genesis through the SAME run_real_forge → self_accept → SelfAcceptedHandoff path S3 proved — DC-NODE-08; the forge holds NO ChainDb handle, advances NO durable tip — scoped to the hermetic cold-start, no genesis_forged latch)
+  3b''. (N-F-G-J) run_relay_loop_with_sched emits the closed GREEN NodeSchedEvent diagnostics to stderr around the planner call + the LoopStep arms  (EMIT-ONLY — records the feed/forge scheduling decision WITHOUT altering it; FeedReason {NoBlockAvailable | CleanEmpty | UnknownDisconnected}; ForgeOutcome {Succeeded | NotLeader | Failed | NoTipAvailable}; the planner never names the vocabulary — ci_check_node_sched_events_emit_only.sh, CN-NODE-04)
   3b'. (N-F-G-B) forge_one_from_recovered now returns (CoordinatorEvent, Option<SelfAcceptedHandoff>)  (RED — Some iff ForgeSucceeded; the loop does a best-effort TYPED tx.send(h) to the sibling served-chain admit task — a typed channel send ONLY; the loop body holds ONLY the mpsc Sender, never a ServedChainHandle / push_atomic / served_chain_admit, so ci_check_node_run_loop_containment.sh stays byte-unchanged)
   3c. Idle      → cancellation-safe wait                (select on source-readiness or shutdown; the only branch that awaits across a cancellation boundary)
   3d. HaltCleanly → exit, on-disk state recoverable
@@ -1620,12 +1696,17 @@ ACCEPTS it is the operator-gated RO-LIVE-01 leg (peer ACCEPT NOT claimed here).
 
 | Registry | Location | Count | Change Rule |
 |----------|----------|-------|-------------|
+| `PrevHash` *(NEW, N-F-G-J S2)* | `ade_types::shelley::block` (BLUE) | 2 (`Genesis` = CBOR null / `Block(Hash32)` = hash32) | The closed Cardano header `prev_hash` wire grammar `$hash32 / null` (cardano-ledger `PrevHash = GenesisHash / BlockHash`), replacing the prior flat `prev_hash: Hash32` field (**456 → 457** canonical types). **NOT `#[non_exhaustive]`.** ONE **POSITION-BLIND** BLUE codec authority — `ade_codec::shelley::block::decode_prev_hash` decodes `null -> Genesis` / `hash32 -> Block` as a pure function of the CBOR token (NEVER `block_number`); the `ShelleyHeaderBody` `AdeEncode` writes `Genesis -> write_null` / `Block(h) -> write_bytes_canonical`. The `null` grammar is scoped to **header_body ONLY** — it MUST NOT leak into the chain-sync/block-fetch `Point`/`Tip` codec (`Point::Origin` stays `array(0)`). The position-AWARE coupling (`block_number 0 <=> Genesis`) lives in the SEPARATE single BLUE `ade_ledger::block_validity::header_position::check_header_position`, NEVER in `ade_codec`. **A closed BLUE sum (a surface REDUCTION over the wire grammar), NOT an extension point.** Backs **CN-WIRE-09**. New variant = a `decode_prev_hash` arm + an `AdeEncode` arm + a strengthening of **CN-WIRE-09** (`ci_check_prevhash_single_wire_authority.sh`); the codec stays POSITION-BLIND, the null grammar stays header_body-scoped, and the single wire + single position authority MUST NOT be duplicated. |
+| `NodeSchedEvent` + `FeedReason` + `ForgeOutcome` *(NEW, N-F-G-J S1)* | `ade_node::live_log::sched_event` (GREEN) | `NodeSchedEvent` 5 (`FeedUnavailable{reason}` / `ForgeTickConsidered` / `ForgeTickSkipped{reason}` / `ForgeAttempted` / `ForgeResult{outcome}`); `FeedReason` 3 (`NoBlockAvailable` / `CleanEmpty` / `UnknownDisconnected`); `ForgeOutcome` 4 (`Succeeded` / `NotLeader` / `Failed` / `NoTipAvailable`) | The closed `--mode node` feed/forge **scheduling-event vocabulary**, byte-deterministically JSONL-encoded by `live_log::sched_writer`. **None is `#[non_exhaustive]`; there is deliberately NO catch-all / `Other` variant and no stringly-typed field** (`reason`/`outcome` are the closed enums; `as_str` is the stable discriminator). **EMIT-ONLY:** the GREEN planner never constructs or reads a `NodeSchedEvent`; the relay loop (`run_relay_loop_with_sched`) emits them around the planner call + the `LoopStep` arms, recording the scheduling decision WITHOUT altering it (`FeedReason::eligible` mirrors the planner's forge-eligibility predicate, but the event is observation only). Allow-list + negative tests. Lives in `ade_node` (NOT a BLUE `core_paths` entry), so **NOT canonical-counted**. **A closed diagnostic vocabulary (a surface REDUCTION), NOT an extension point.** Backs **CN-NODE-04**. New event/reason/outcome = an exhaustive-`match` arm in the encoder (compile error until wired + allow-listed) + a negative test + a strengthening of **CN-NODE-04** (`ci_check_node_sched_events_emit_only.sh` — the planner must never name the vocabulary). |
+| `BlockValidityError::HeaderPositionInvalid` *(NEW additive variant, N-F-G-J S3)* | `ade_ledger::block_validity` (BLUE) | additive variant `{ block_number, expected, actual }`-shape on the closed `BlockValidityError` sum | The closed fail-closed signal raised by the single BLUE position authority `check_header_position` (`block_number 0 <=> Genesis`). Added **additively, no wildcard**; it folds into the **UNCHANGED** closed `BlockRejectClass::HeaderInvalid` (verdict.rs — **NO new reject class**). Surfaced by `decode_block` BEFORE the header authority. **A closed additive enum variant (a surface REDUCTION), NOT an extension point.** Backs **CN-WIRE-09 / DC-NODE-08**. New variant = a `check_header_position` arm + a `BlockRejectClass` mapping arm (folding into an existing coarse class) + a strengthening of **CN-WIRE-09**; non-secret position primitives only. |
+| `BlockRejectClass` *(DELIBERATELY NOT EXTENDED, N-F-G-J S3)* | `ade_ledger::block_validity::verdict` (BLUE) | UNCHANGED — `HeaderPositionInvalid` maps to the existing `HeaderInvalid` coarse class | The closed coarse block-reject taxonomy. **S3 reused the existing `HeaderInvalid` for the position-rule failure — NO new variant added** (`verdict.rs`: `BlockValidityError::HeaderPositionInvalid { .. } => BlockRejectClass::HeaderInvalid`). A position-rule violation is surfaced through the existing coarse class, keeping the set additively stable. New variant = a strengthening of the verdict contract; closed, no wildcard. |
+| `NodeForgeError::RecoveredTipMissingBlockNo` *(NEW additive variant, N-F-G-J S4)* | `ade_node::node_sync` (RED) | additive variant on the closed `NodeForgeError` sum (now 2: `MissingRecoveredConsensusInputs` / `RecoveredTipMissingBlockNo`) | The closed cold-start fail-closed edge: a `Some(tip)` without a block height fails closed (`forge_header_position` returns `Err(RecoveredTipMissingBlockNo)`), **never `.unwrap_or(1)`**. **A closed additive enum variant (a surface REDUCTION), NOT an extension point.** Backs **DC-NODE-08**. New variant = a `forge_header_position` arm + a strengthening of **DC-NODE-08 / CN-CINPUT-03**. |
 | `RehearsalVenue` *(NEW, N-F-G-D S2)* | `ade_node::rehearsal_evidence` (GREEN-by-content) | 1 (`PrivateTestnetC1`) | The closed rehearsal-venue tag on the non-promotable `PrivateRehearsalManifest`. **A non-private venue is unrepresentable** — a rehearsal is NEVER preprod / preview, so a private-testnet manifest can never masquerade as bounty evidence by venue. Lives in `ade_node` (NOT a BLUE `core_paths` entry), so **NOT canonical-counted**. **A closed 1-variant enum (a surface REDUCTION), NOT an extension point.** New variant = a `to_str`/serialize arm + a strengthening of **CN-REHEARSAL-FIDELITY-01** clause 2 (`ci_check_rehearsal_manifest_schema.sh`); a `venue` of `private-testnet*` is the enforced literal, and a non-rehearsal venue must stay unrepresentable. |
 | `PrivateRehearsalManifest` *(NEW, N-F-G-D S2)* | `ade_node::rehearsal_evidence` (GREEN-by-content) | constructor-fenced struct (`ba02: Ba02Manifest` + `venue: RehearsalVenue` + `peer_log_file` + `peer_log_file_sha256`; `REHEARSAL_MANIFEST_SCHEMA_VERSION = 1`) over the existing closed `Ba02Manifest` | The NON-PROMOTABLE private-testnet rehearsal envelope WRAPPING a correlate-produced `Ba02Manifest` (the SAME proof the bounty BA-02 path produces). **SOLE constructor** `from_correlate_outcome(&BA02Outcome, RehearsalEnvelope) -> Option<Self>` wraps `BA02Outcome::Ba02Manifest` and returns `None` on `NoEvidence` — so a rehearsal manifest is **ALWAYS correlate-produced**; there is **NO** path from raw operator input / `NoEvidence` to a manifest. `to_canonical_toml` ALWAYS emits `is_rehearsal = true` + `not_bounty_evidence = true` as **LITERALS** — the type **cannot represent a non-rehearsal**. Pure / deterministic; no I/O / clock / rand / float / `HashMap`. Lives in `ade_node`, so **NOT canonical-counted**. **A CLOSED constructor-fenced non-promotable envelope (a surface REDUCTION), NOT an extensible registry / plugin point.** Backs `CN-REHEARSAL-FIDELITY-01` clause 2. A new field / schema bump = a struct addition + a `REHEARSAL_MANIFEST_SCHEMA_VERSION` bump + a strengthening of **CN-REHEARSAL-FIDELITY-01** (`ci_check_rehearsal_manifest_schema.sh`, 12-field schema); **no raw-operator-input / `NoEvidence` ctor may be introduced, and the type MUST stay incapable of serializing a non-rehearsal.** |
 | `SessionError::ReassemblyBufferOverflow` *(NEW, N-F-G-E)* | `ade_network::session::event` (GREEN-by-content) | additive variant `{ protocol, len, cap }` on the closed `SessionError` enum | The closed fail-closed signal for an incomplete per-mini-protocol reassembly tail over `MAX_REASSEMBLY_TAIL_BYTES`. Added **additively** — there is **NO wildcard**; the SOLE exhaustive consumer `ade_runtime::network::mux_pump::session_err_to_halt` maps it → `PeerHaltReason::ChainSyncDecodeError` (drop the peer). The cap fires **BEFORE** the BLUE `ade_codec` decode path — no silent truncation, no partial decode. `session/` is GREEN-by-content (NOT a BLUE `ade_network` submodule path), so the variant is **NOT canonical-counted**. **A closed additive enum variant (a surface REDUCTION / fail-closed bound), NOT an extension point.** New variant = a `SessionError` arm + a `session_err_to_halt` arm (no wildcard) + a strengthening of **DC-LIVEMEM-01** (`ci_check_live_feed_memory_bounds.sh`). |
 | `MAX_REASSEMBLY_TAIL_BYTES` (closed memory bound) *(NEW, N-F-G-E)* | `ade_network::session::core` (GREEN-by-content, `core.rs:49`) | closed literal const `16 * 1024 * 1024` (16 MiB) | The per-mini-protocol reassembly-tail cap. After `drain_protocol_items` drains every COMPLETE item, `buf.len() > MAX_REASSEMBLY_TAIL_BYTES` ⇒ `SessionError::ReassemblyBufferOverflow` (fail closed, drop the peer). A **CLOSED LITERAL constant — a defensive implementation bound, NOT a Cardano semantic parameter**; **NO runtime / CLI / env / config override** (the no-escape-hatch surface reduction, `ci_check_live_feed_memory_bounds.sh` guard 3). A future hardening slice may **tighten** it (a strengthening of **DC-LIVEMEM-01**), but may NEVER make it a tunable / unbounded. |
 | `MAX_WIRE_PUMP_LOOKAHEAD` (closed lookahead-depth bound) *(NEW, N-F-G-E)* | `ade_node::node_sync` (RED, `node_sync.rs:58`) | closed literal const `256` | The WirePump opportunistic-drain depth cap. `pump_lookahead` stops the `try_recv` drain at the cap (`node_sync.rs:126`), so the existing bounded `mpsc` (`LIVE_WIRE_PUMP_CHANNEL_CAP = 64`) **back-pressures** the pump. Content-blind; the verdict-decoupled `NodeBlockSource` (closed 2-variant `{WirePump, InMemory}`) + arrival order are **unchanged** (a depth cap on the existing opaque `VecDeque<Vec<u8>>`, NOT a new variant / source / verdict). A **CLOSED LITERAL constant — a defensive implementation bound**; **NO runtime / CLI / env / config override** (`ci_check_live_feed_memory_bounds.sh` guard 3). A future hardening slice may **tighten** it (a strengthening of **DC-LIVEMEM-01**), never make it a tunable / unbounded. |
-| `NodeBlockSource` *(N-F-C; readiness extended N-F-D; LIVE WirePump FILL N-F-G-C)* | `ade_node::node_sync` (RED) | 2 (`WirePump` / `InMemory`) | The **verdict-decoupled** ordered peer-block source: `next_block` yields ONLY `AdmissionPeerEvent::Block` bytes, SKIPS `TipUpdate`, ends on `Disconnected`. N-F-D added a content-blind readiness signal. **N-F-G-C added `from_wire_pump(rx)` — a LIVE FILL of the existing `WirePump` arm fed by `spawn_live_wire_pump_source` (reusing the closed admission dial + pump VERBATIM); NOT a new variant, NOT a new wire authority, NOT a plugin point.** NEVER carries a verdict. A closed single-method contract. New variant = a `next_block` arm + a strengthening of **DC-SYNC-01 / DC-SYNC-02**; a new source must REUSE the closed dial/pump (never reimplement), FILL an existing arm, advance no second tip, and carry no verdict. |
+| `NodeBlockSource` *(N-F-C; readiness extended N-F-D; LIVE WirePump FILL N-F-G-C)* | `ade_node::node_sync` (RED) | 2 (`WirePump` / `InMemory`) | The **verdict-decoupled** ordered peer-block source: `next_block` yields ONLY `AdmissionPeerEvent::Block` bytes, SKIPS `TipUpdate`, ends on `Disconnected`. N-F-D added a content-blind readiness signal. **N-F-G-C added `from_wire_pump(rx)` — a LIVE FILL of the existing `WirePump` arm fed by `spawn_live_wire_pump_source` (reusing the closed admission dial + pump VERBATIM); NOT a new variant, NOT a new wire authority, NOT a plugin point.** NEVER carries a verdict. A closed single-method contract. New variant = a `next_block` arm + a strengthening of **DC-SYNC-01 / DC-SYNC-02**; a new source must REUSE the closed dial/pump (never reimplement), FILL an existing arm, advance no second tip, and carry no verdict. **N-F-G-J added NO `NodeBlockSource` variant — the genesis-successor cold-start is a new code PATH (the both-`None`-tip arm) through the EXISTING closed source, not a new variant.** |
 | `ba02_pass` evidence I/O *(NEW, N-F-G-C S2)* | `ade_node::ba02_pass` (RED — `//! RED`) | 2 fns (`correlate_peer_log_file`, `write_ba02_manifest`); **NO new closed enum / registry** | The RED operator-pass BA-02 evidence file I/O over the pre-existing closed `Ba02Manifest` / `BA02Outcome` / `PeerAcceptEvent` / `NoEvidenceReason` vocabulary. `correlate_peer_log_file` reads the operator-captured peer-log file → the GREEN `correlate` (the SOLE `Ba02Manifest` ctor); `write_ba02_manifest` accepts **ONLY a `Ba02Manifest`** — so a written manifest is ALWAYS correlate-produced. **A CLOSED file-I/O wrapper (a surface REDUCTION over the existing closed evidence vocabulary), NOT a new closed enum / registry / plugin point.** A missing/unreadable file fails closed (`io::Error`). Backs the BA-02 leg of `RO-LIVE-06` / `CN-OPERATOR-EVIDENCE-01`. Gate: `ci_check_ba02_evidence_manifest_schema.sh` (the no-synthetic-manifest enforcer; vacuous-until-committed + 8-field schema + `peer_log_file_sha256` cross-check). Adding an evidence-I/O fn = a strengthening of RO-LIVE-06; **no new acceptance source, no path emitting a manifest from `NoEvidence` / raw operator input.** |
 | `SelfAcceptedHandoff` *(N-F-G-B S1)* | `ade_runtime::producer::self_accepted_handoff` (GREEN) | constructor-fenced newtype (1 private field `accepted: AcceptedBlock`; SOLE ctor `from_self_accepted`; accessors `accepted()` / `into_accepted()`) | The typed carrier moving a BLUE self-accepted forged block from the forge path to the sibling serve task. Its **SOLE constructor** takes a BLUE `ade_ledger::producer::AcceptedBlock` (itself producible only by BLUE `self_accept` returning `Ok`); the field is private. There is **NO** constructor from a raw `Vec<u8>`, a `ForgedBlockArtifact` (`artifact.bytes` is never a token source — re-deriving would breach CN-FORGE-01; the carrier holds the ORIGINAL token), a `CoordinatorEvent`, a self-declared acceptance flag, or a peer verdict — so handing the serve task a non-self-accepted artifact is **type-unrepresentable**. A **CLOSED constructor-fenced carrier (a surface REDUCTION), NOT an extensible registry / plugin point.** Backs `DC-NODE-06`. A change to the carried type / a new accessor = a strengthening of **DC-NODE-06 / CN-PROD-04 / CN-FORGE-01** (`ci_check_served_chain_handoff_fence.sh`, BROADENED by G-C); **no raw-bytes / artifact / event / flag / verdict constructor may be introduced**. |
 | `SlotAlignmentError` *(N-F-G-A S3)* | `ade_runtime::clock` (GREEN-by-content) | 1 (`BeforeGenesisAnchor`) | The closed fail-closed boundary carried by `checked_millis_to_slot`. A before-anchor tick (`tick_millis < start_millis`) is an *error*, never a saturation to `start_slot`. A **surface REDUCTION (a closed fail-closed wall)**, NOT a plugin/extension point. New variant = a `checked_millis_to_slot` arm + a strengthening of **DC-EPOCH-03**. |
@@ -1640,7 +1721,7 @@ ACCEPTS it is the operator-gated RO-LIVE-01 leg (peer ACCEPT NOT claimed here).
 | `LoopStep` *(EXTENDED 3→4, N-F-E)* | `ade_node::run_loop_planner` (GREEN) | 4 (`SyncOnce` / `ForgeTick` / `Idle` / `HaltCleanly`) | The closed live-run iteration vocabulary the GREEN planner emits. **N-F-E added `ForgeTick`** (3→4). It **cannot express an authority decision**. A **CE-not-law additively-evolvable closed planner enum** (like `WalEntry`). New variant = a `plan_loop_step` arm + a fenced RED `run_relay_loop` branch + a strengthening of **CN-NODE-02 / DC-NODE-05** (`ci_check_loop_planner_closed.sh` + `ci_check_node_run_loop_containment.sh`). |
 | `ForgeSlotStatus` *(N-F-E)* | `ade_node::run_loop_planner` (GREEN) | 2 (`Due` / `NotDue`) | The **content-blind** forge-slot planner input. The planner learns only whether a slot is *due*, NEVER who is a leader (eligibility is BLUE inside `forge_one_from_recovered`). Derived by the pure `forge_slot_status` monotonic guard (the only `SlotNo`-observing fn in the module). New variant = a `plan_loop_step` arm + a strengthening of **DC-NODE-05** (`ci_check_loop_planner_closed.sh`). |
 | `ForgeActivation` *(N-F-E; real operator material N-F-F; current pparams N-F-G-A; opt-in `handoff_tx` N-F-G-B)* | `ade_node::node_lifecycle` (RED) | closed opt-in struct (`clock` / `coordinator_state` / `recovered` / `shell` / `pool_id` / `pparams` / `protocol_version` / `anchor_millis` / `start_slot` / `slot_length_ms` / `last_slot_alignment_fail` / `handoff_tx: Option<mpsc::UnboundedSender<SelfAcceptedHandoff>>` / private `last_forged_slot`+`pending_slot` / `hermetic_forge_outcomes`) | The **opt-in forge-activation bundle** threaded into `run_relay_loop` as `forge: Option<&mut ForgeActivation>`. `Some` activates exactly one fenced `forge_one_from_recovered` per `ForgeTick`, advancing no durable tip and serving/admitting/gossiping nothing in the loop body; `None` reproduces N-F-D relay. N-F-G-B: the opt-in `handoff_tx` carries the surfaced `SelfAcceptedHandoff` to the sibling serve task (set via `with_handoff_sender`). **A closed activation surface, NOT an extension point.** A new field = a struct addition behind the closed activation contract + a strengthening of **DC-NODE-05 / DC-NODE-06**. |
-| `Mode` (run-mode set) *(N-F-C)* | `ade_node::cli` (RED) | 5 (`WireOnly` / `Admission` / `KeyGenKes` / `Produce` / `Node`) | The CLOSED `--mode` taxonomy. **NOT `#[non_exhaustive]`**; `Mode::parse` + `main.rs` dispatch are total with **NO wildcard arm**. New variant = a `Mode::parse` arm + an explicit wildcard-free `main.rs` arm + a strengthening of **CN-NODE-MODE-01** (`ci_check_node_mode_closure.sh`). _(N-F-F/N-F-G-A/N-F-G-C added NO `Mode` variant — the operator-key + `--peer` flags are OPTIONAL ingress on the existing `--mode node` arm; N-F-G-D added NO `Mode` variant and NO new argv flag — the `cli.rs` flag set is pinned to a 28-flag closed allow-list by `ci_check_node_path_fidelity.sh`, and the C1 dry-run is a HARNESS, not a runtime mode.)_ |
+| `Mode` (run-mode set) *(N-F-C)* | `ade_node::cli` (RED) | 5 (`WireOnly` / `Admission` / `KeyGenKes` / `Produce` / `Node`) | The CLOSED `--mode` taxonomy. **NOT `#[non_exhaustive]`**; `Mode::parse` + `main.rs` dispatch are total with **NO wildcard arm**. New variant = a `Mode::parse` arm + an explicit wildcard-free `main.rs` arm + a strengthening of **CN-NODE-MODE-01** (`ci_check_node_mode_closure.sh`). _(N-F-F/N-F-G-A/N-F-G-C added NO `Mode` variant — the operator-key + `--peer` flags are OPTIONAL ingress on the existing `--mode node` arm; N-F-G-D added NO `Mode` variant and NO new argv flag — the `cli.rs` flag set is pinned to a 28-flag closed allow-list by `ci_check_node_path_fidelity.sh`, and the C1 dry-run is a HARNESS, not a runtime mode.)_ _(N-F-G-J added NO `Mode` variant and NO new argv flag — the cold-start forge fires through the existing `--mode node` arm; the CLI flag allow-list is unchanged and stays fenced by `ci_check_node_path_fidelity.sh`.)_ |
 | `PeerAcceptEvent` *(N-F-C; consumed via `ba02_pass` N-F-G-C)* | `ade_node::ba02_evidence` (GREEN) | 2 (`PeerServedBlock` / `PeerChainTip`) | The CLOSED **allow-list** of peer-acceptance signals; `parse_peer_accept_events` recognizes ONLY these two discriminators. UNCHANGED by N-F-G-C (only consumed by the new RED `ba02_pass` I/O). New variant = a parser allow-list arm + a strengthening of **RO-LIVE-06**. |
 | `PeerAcceptSource` *(N-F-C)* | `ade_node::ba02_evidence` (GREEN) | 3 (`ServedBlock` / `ChainTip` / `ServedBlockAndChainTip`) | The closed typed provenance of the accepting signal. New variant = a `correlate` source arm + a strengthening of RO-LIVE-06. |
 | `NoEvidenceReason` *(N-F-C)* | `ade_node::ba02_evidence` (GREEN) | 4 (`NoPeerAccept` / `HashMismatch` / `ChainPointMismatch` / `ConflictingPeerSignals`) | The closed reason sum for `BA02Outcome::NoEvidence` — NoEvidence is the DEFAULT. New variant = a `correlate` classify arm + a strengthening of RO-LIVE-06. |
@@ -1707,6 +1788,18 @@ ACCEPTS it is the operator-gated RO-LIVE-01 leg (peer ACCEPT NOT claimed here).
 | Per-protocol tag-24 compositions *(N-X)* | `ade_network::codec::{block_fetch, chain_sync}` | A new CBOR-in-CBOR composition attaches as a `compose_*` / `decompose_*` pair delegating to the single `ade_codec::{wrap_tag24, unwrap_tag24}` authority (CN-WIRE-08). |
 | Bootstrap-source production compositions *(N-Z; +N-F-A sidecar tail)* | `ade_runtime::{genesis_bootstrap, mithril_bootstrap}` | A new bootstrap-source production entry attaches as a **composition-only RED twin** of `bootstrap_from_{conway_genesis, mithril_snapshot}`: import/parse + (if a point is attested) mint the anchor from an operator-independent origin + verify-before-bootstrap (fail-closed) + route through the single `bootstrap_initial_state` authority + the N-F-A sidecar tail. **No new authority, no new `*Anchor` trait/plugin, no new `SeedProvenance` variant unless the source genuinely differs** (CN-MITHRIL-01 / CN-NODE-01 / DC-MITHRIL-02 / CN-CINPUT-02). |
 
+> **Note (N-F-G-J is NOT a new extension point — G-J adds ONLY closed sums + one BLUE module).** G-J introduces
+> **NO extensible / negotiated surface.** The new closed BLUE sum `PrevHash` is a 2-variant wire grammar (not
+> `#[non_exhaustive]`, single POSITION-BLIND codec authority + single POSITION-AWARE validator authority); the
+> new GREEN `NodeSchedEvent` / `FeedReason` / `ForgeOutcome` are closed emit-only diagnostic enums (no catch-all,
+> no stringly field, planner-never-names them); the additive `BlockValidityError::HeaderPositionInvalid` /
+> `NodeForgeError::RecoveredTipMissingBlockNo` are closed-enum variants (no wildcard); the new BLUE module
+> `ade_ledger::block_validity::header_position` is a single position-rule authority (a fn + a variant), not a
+> registry/plugin point. The genesis-successor cold-start is a new code PATH through the UNCHANGED closed
+> `NodeBlockSource`, not a new variant. **No plugin trait, no `Box<dyn _>`, no runtime-registered handler, no
+> new `--mode node` flag, no new `NodeBlockSource` / `CoordinatorEvent` / `Mode` / `BlockRejectClass` variant.**
+> They belong in the Closed table above, not here.
+>
 > **Note (N-F-G-D is NOT a new extension point).** The N-F-G-D rehearsal surfaces are **CLOSED / constructor-fenced
 > ATTACH POINTS**, not new extensible registries: `RehearsalVenue` is a closed **1-variant** enum (a non-private
 > venue is unrepresentable); `PrivateRehearsalManifest` is a constructor-fenced non-promotable envelope (sole ctor
@@ -1752,6 +1845,43 @@ ACCEPTS it is the operator-gated RO-LIVE-01 leg (peer ACCEPT NOT claimed here).
 
 ### Frozen (immutable at current version — change = new major version)
 
+- **Header `prev_hash` is the closed `$hash32 / null` wire grammar with a SINGLE POSITION-BLIND codec authority +
+  a SINGLE POSITION-AWARE validator authority (N-F-G-J S2/S3, CN-WIRE-09 — load-bearing; do NOT soften / do NOT
+  broaden).** The Shelley-and-later header `prev_hash` field is the closed sum `PrevHash = Genesis | Block(Hash32)`
+  (cardano-ledger `PrevHash = GenesisHash / BlockHash`); `Genesis` is CBOR null, `Block(h)` is a 32-byte hash32.
+  The raw byte codec is **POSITION-BLIND**: `ade_codec::shelley::block::decode_prev_hash` decodes `null -> Genesis`
+  / `hash32 -> Block` as a pure function of the CBOR token and the `ShelleyHeaderBody` `AdeEncode` writes
+  `Genesis -> write_null` / `Block(h) -> write_bytes_canonical` — **NEVER consulting `block_number`**. The
+  position-AWARE coupling (`block_number 0 <=> Genesis`) lives in EXACTLY ONE BLUE authority,
+  `ade_ledger::block_validity::header_position::check_header_position`, called by `decode_block` BEFORE the header
+  authority, surfacing `BlockValidityError::HeaderPositionInvalid` (coarse class `HeaderInvalid` — **no new
+  `BlockRejectClass`**); it **MUST NOT** live in `ade_codec` and **MUST NOT** be duplicated. The `null` grammar is
+  scoped to **header_body ONLY** — it **MUST NOT** leak into the chain-sync/block-fetch `Point`/`Tip` codec
+  (`Point::Origin` stays `array(0)`). No all-zero `Hash32`, no anchor fingerprint, and no Shelley genesis hash may
+  stand in for the genesis predecessor — it is structurally CBOR null (the producer `prev_hash` migrated
+  `Hash32 -> PrevHash` end to end, deleting the all-zero stand-in at its source in `ChainEvolution::prev_hash()`).
+  `ci_check_prevhash_single_wire_authority.sh` fences the single wire authority + the header_body-only null scope.
+- **Genesis-successor cold-start forge is scoped to the hermetic execution; the recovered lineage gates PERMISSION,
+  not the prev_hash bytes (N-F-G-J S4, DC-NODE-08 — load-bearing).** On the `--mode node` `On` arm, the
+  `LoopStep::ForgeTick` branch derives `(block_number, prev_hash)` via the GREEN
+  `node_sync::forge_header_position(Option<&ChainTip>)` — the ONE cold-start convention: `None => (0,
+  PrevHash::Genesis)`; `Some => (last_block_no+1, PrevHash::Block(tip.hash))`; a tip-without-height edge fails
+  closed `NodeForgeError::RecoveredTipMissingBlockNo` (never `.unwrap_or(1)`). When `ChainDb::tip()` AND the
+  recovered tip are BOTH `None`, the GREEN `node_lifecycle::may_cold_start_forge(selected_tip_present=false,
+  has_recovered_lineage, feed_eligible)` permits forging block 0 + `PrevHash::Genesis` through the SAME
+  `run_real_forge → self_accept → SelfAcceptedHandoff → ServedChainView` path S3 proved. The cold-start fires
+  **within the hermetic execution** (NO `genesis_forged` latch); the recovered seed-epoch lineage gates
+  **PERMISSION** to forge from the genesis-successor position, it is **NOT** the source of the prev_hash bytes
+  (which are structurally null); the forge engine holds **no `ChainDb` handle**, so it advances **no durable
+  tip** (durable block-1+ progression is N-U). **NO RO-LIVE flip** (`RO-LIVE-01` stays `partial`); the cold-start
+  eligibility signal is general (forge-configured + valid recovered base), **never a private-only / C1-only
+  flag**. (`ci_check_genesis_successor_reachability.sh`.)
+- **`--mode node` feed/forge scheduling-event vocabulary is closed + emit-only (N-F-G-J S1, CN-NODE-04).** The
+  GREEN `ade_node::live_log::{sched_event, sched_writer}` `NodeSchedEvent` / `FeedReason` / `ForgeOutcome` are
+  closed enums (none `#[non_exhaustive]`; no catch-all / `Other`; no stringly field), byte-deterministically
+  JSONL-encoded. **EMIT-ONLY:** the GREEN planner never constructs or reads them; `run_relay_loop_with_sched`
+  records the feed/forge scheduling decisions WITHOUT changing them. `ci_check_node_sched_events_emit_only.sh`
+  enforces the planner never names the vocabulary; allow-list + negative tests.
 - **Live-feed peer-driven memory is bounded BEFORE authoritative decode/apply by two closed literal caps
   (N-F-G-E, DC-LIVEMEM-01 — load-bearing; do NOT soften / do NOT broaden).** Two closed constants, each
   fail-closed in front of the BLUE `ade_codec` decode path, with **NO runtime / CLI / env / config escape hatch**
@@ -1872,8 +2002,12 @@ ACCEPTS it is the operator-gated RO-LIVE-01 leg (peer ACCEPT NOT claimed here).
 ### Version-gated (can evolve across major versions)
 
 - New variants in the closed message / event / classifier taxonomies (`Mode`, `LoopStep`, `CoordinatorEvent`,
-  `SeedProvenance`, `SyncEffect`, `ExpectedVrfInput`, `BA02Outcome`, `PeerAcceptEvent`, …) — each requires a new
-  envelope/schema version + a wildcard-free dispatch arm + a registry-rule strengthening.
+  `SeedProvenance`, `SyncEffect`, `ExpectedVrfInput`, `BA02Outcome`, `PeerAcceptEvent`, `PrevHash` (N-F-G-J),
+  `NodeSchedEvent` / `FeedReason` / `ForgeOutcome` (N-F-G-J), …) — each requires a new envelope/schema version +
+  a wildcard-free dispatch arm + a registry-rule strengthening. **`PrevHash`** additionally requires the codec
+  to stay POSITION-BLIND, the `null` grammar to stay header_body-scoped (out of the `Point`/`Tip` codec), and the
+  single wire + single position authority to stay un-duplicated (CN-WIRE-09); **the `NodeSchedEvent` family** must
+  stay emit-only with no catch-all variant and no planner reference (CN-NODE-04).
 - The `Ba02Manifest` schema (`BA02_MANIFEST_SCHEMA_VERSION = 1`) — additions bump the schema version; the N-F-G-C
   `CE-G-C-LIVE_*.toml` operator-pass manifest schema (8 closed keys) evolves with it (RO-LIVE-06 /
   CN-OPERATOR-EVIDENCE-01).
@@ -1906,8 +2040,8 @@ How new modules enter the workspace.
 | Color | Naming convention | Build-config flags | May depend on | MUST NOT depend on |
 |-------|-------------------|--------------------|----------------|--------------------|
 | **BLUE** | `ade_*` crate, or a BLUE `ade_network` submodule path in `.idd-config.json` `core_paths`; `// Core Contract:` + `//! BLUE …` banner first line | `#![deny(unsafe_code)]`, `deny(unwrap_used / expect_used / panic / float_arithmetic)`; no `#[cfg(feature = …)]` semantic gating | Other BLUE modules only (`ade_types` ← `ade_codec`/`ade_crypto` ← `ade_core` ← `ade_ledger`/`ade_plutus`; `ade_network` BLUE submodules ← `ade_codec`+`ade_types`) | `ade_runtime`, `ade_node`, `ade_core_interop`, the RED half of `ade_network`; std runtime / I/O / clock / rand / `HashMap` / float / async |
-| **GREEN** | `ade_testkit` crate, `ade_network::session`, or a GREEN-by-content sub-tree inside `ade_runtime` / `ade_node` (incl. `forward_sync::reducer`, `seed_consensus_merge` (N-F-A), `consensus_inputs::protocol_params` + `consensus_inputs::canonical::require_forge_current_pparams` (N-F-G-A), `clock::checked_millis_to_slot` (N-F-G-A), `ba02_evidence` (N-F-C), `producer::self_accepted_handoff` (N-F-G-B), `run_loop_planner` (N-F-D/N-F-E), `forge_intent` (N-F-F), `node_sync::forge_epoch_admission` (N-F-G-A, GREEN-by-fn), `rehearsal_evidence` (N-F-G-D, the non-promotable `PrivateRehearsalManifest` envelope), `harness::sync_diff`, `consensus::genesis_pinning` (N-F-G-A, `#[cfg(test)]`)) with a `//! GREEN …` / `// GREEN` banner | Same deny attributes as BLUE; a purity CI gate per sub-tree (`run_loop_planner`: `ci_check_loop_planner_closed.sh`; `forge_intent`: `ci_check_forge_intent_closed.sh`; `protocol_params` + `require_forge_current_pparams`: `ci_check_recovered_ledger_pparams_sourced.sh`; `forge_epoch_admission`: `ci_check_node_forge_single_epoch_fail_closed.sh`; `self_accepted_handoff`: `ci_check_served_chain_handoff_fence.sh`; `genesis_pinning`: `ci_check_genesis_consistency_fixture_present.sh`; `rehearsal_evidence`: `ci_check_rehearsal_manifest_schema.sh`) | BLUE modules | RED modules in non-test deps; nondeterminism; secret material; float; participation in authoritative outputs |
-| **RED** | `ade_runtime`, `ade_node`, `ade_core_interop`, `ade_network::mux::transport` (incl. `forward_sync::pump`, `mithril_import`, `genesis_bootstrap`, `mithril_bootstrap` (N-Z), `seed_consensus_provenance` (N-F-A), `recovery::restart`, `node_lifecycle` (incl. `run_relay_loop` + `ForgeActivation` + `spawn_live_wire_pump_source`, N-F-D/N-F-E/N-F-G-A/N-F-G-C), `node_sync` (N-F-C), `ba02_pass` (N-F-G-C, the operator-pass BA-02 evidence I/O), `rehearsal_pass` (N-F-G-D, the rehearsal-evidence I/O reusing `ba02_pass::correlate_peer_log_file`), `operator_forge` (N-F-F; N-F-G-A real parsers), `admission::{seed_to_snapshot, bootstrap}` (N-F-G-A current-pparams install; N-F-G-C `build_n2n_version_table` `pub(crate)`); `*_mode.rs` for mode handlers); `//! RED …` banner | tokio/std/I/O allowed; the `Clock` seam is the SOLE wall-clock observation reachable from a relay-loop/orchestrator driver (N-F-G-A: the forge path uses the checked `checked_millis_to_slot`); key custody confined to `ProducerShell` | Any module | — (RED is the leaf) |
+| **GREEN** | `ade_testkit` crate, `ade_network::session`, or a GREEN-by-content sub-tree inside `ade_runtime` / `ade_node` (incl. `forward_sync::reducer`, `seed_consensus_merge` (N-F-A), `consensus_inputs::protocol_params` + `consensus_inputs::canonical::require_forge_current_pparams` (N-F-G-A), `clock::checked_millis_to_slot` (N-F-G-A), `ba02_evidence` (N-F-C), `producer::self_accepted_handoff` (N-F-G-B), `run_loop_planner` (N-F-D/N-F-E), `forge_intent` (N-F-F), `node_sync::forge_epoch_admission` (N-F-G-A, GREEN-by-fn), `rehearsal_evidence` (N-F-G-D, the non-promotable `PrivateRehearsalManifest` envelope), `live_log::{sched_event, sched_writer}` (N-F-G-J, the closed emit-only `NodeSchedEvent` / `FeedReason` / `ForgeOutcome` scheduling vocabulary + its byte-deterministic JSONL encoder), `node_sync::forge_header_position` + `node_lifecycle::may_cold_start_forge` (N-F-G-J, GREEN-by-fn — the cold-start header-position + permission decisions inside RED `ade_node`), `harness::sync_diff`, `consensus::genesis_pinning` (N-F-G-A, `#[cfg(test)]`)) with a `//! GREEN …` / `// GREEN` banner | Same deny attributes as BLUE; a purity CI gate per sub-tree (`run_loop_planner`: `ci_check_loop_planner_closed.sh`; `forge_intent`: `ci_check_forge_intent_closed.sh`; `protocol_params` + `require_forge_current_pparams`: `ci_check_recovered_ledger_pparams_sourced.sh`; `forge_epoch_admission`: `ci_check_node_forge_single_epoch_fail_closed.sh`; `self_accepted_handoff`: `ci_check_served_chain_handoff_fence.sh`; `genesis_pinning`: `ci_check_genesis_consistency_fixture_present.sh`; `rehearsal_evidence`: `ci_check_rehearsal_manifest_schema.sh`) | BLUE modules | RED modules in non-test deps; nondeterminism; secret material; float; participation in authoritative outputs |
+| **RED** | `ade_runtime`, `ade_node`, `ade_core_interop`, `ade_network::mux::transport` (incl. `forward_sync::pump`, `mithril_import`, `genesis_bootstrap`, `mithril_bootstrap` (N-Z), `seed_consensus_provenance` (N-F-A), `recovery::restart`, `node_lifecycle` (incl. `run_relay_loop` + `ForgeActivation` + `spawn_live_wire_pump_source`, N-F-D/N-F-E/N-F-G-A/N-F-G-C), `node_sync` (N-F-C), `ba02_pass` (N-F-G-C, the operator-pass BA-02 evidence I/O), `rehearsal_pass` (N-F-G-D, the rehearsal-evidence I/O reusing `ba02_pass::correlate_peer_log_file`), the N-F-G-J cold-start wiring in `node_lifecycle` (`may_cold_start_forge` permission gate, GREEN-by-fn) + `node_sync` (`forge_header_position` + the additive `NodeForgeError::RecoveredTipMissingBlockNo`), `operator_forge` (N-F-F; N-F-G-A real parsers), `admission::{seed_to_snapshot, bootstrap}` (N-F-G-A current-pparams install; N-F-G-C `build_n2n_version_table` `pub(crate)`); `*_mode.rs` for mode handlers); `//! RED …` banner | tokio/std/I/O allowed; the `Clock` seam is the SOLE wall-clock observation reachable from a relay-loop/orchestrator driver (N-F-G-A: the forge path uses the checked `checked_millis_to_slot`); key custody confined to `ProducerShell` | Any module | — (RED is the leaf) |
 
 ### New module checklist
 
@@ -1997,11 +2131,36 @@ How new modules enter the workspace.
     wildcard and handle the new variant in every exhaustive consumer; (v) leave the verdict-decoupled
     `NodeBlockSource` contract, the relay-loop containment gate, and the served-chain handoff fence
     byte-unchanged. DC-LIVEMEM-01.
+18. **New wire-grammar sum with a position-aware coupling (N-F-G-J rule):** (i) model the wire field as a CLOSED
+    BLUE sum (not `#[non_exhaustive]`); (ii) decode/encode it **POSITION-BLIND** in EXACTLY ONE `ade_codec`
+    authority — a pure function of the CBOR token, NEVER of a structural index like `block_number`
+    (`ci_check_prevhash_single_wire_authority.sh`, CN-WIRE-09); (iii) if a field's grammar (e.g. `null`) is
+    scoped to one envelope, it MUST NOT leak into a sibling codec (`Point::Origin` stays `array(0)`); (iv) put any
+    POSITION-AWARE coupling in a SEPARATE single BLUE authority (a NEW `block_validity` submodule like
+    `header_position::check_header_position`), called from `decode_block` BEFORE the header authority — **never in
+    `ade_codec`, never duplicated**; (v) surface a failure as an additive closed `BlockValidityError` variant that
+    folds into an EXISTING coarse `BlockRejectClass` (no new reject class); (vi) delete any all-zero / fingerprint
+    stand-in for the absent value at its source — it is structurally the wire-grammar's absent token. CN-WIRE-09 /
+    DC-NODE-08.
+19. **New cold-start forge reachability (N-F-G-J rule):** (i) derive `(block_number, prev_hash)` via ONE GREEN
+    convention (`forge_header_position`): both-`None` tip => `(0, Genesis)`, `Some` => `(last+1, Block)`, a
+    `Some`-without-height edge **fails closed** (never `.unwrap_or`); (ii) gate the cold-start with a GREEN
+    permission predicate (`may_cold_start_forge`) keyed on the recovered lineage + forge-intent + a forge-eligible
+    feed — the lineage gates PERMISSION, NOT the prev_hash bytes (which are structurally null); (iii) reuse the
+    SAME `run_real_forge → self_accept → SelfAcceptedHandoff` path (no second forge codepath); (iv) hold NO
+    `ChainDb` handle — advance no durable tip (durability is N-U); (v) scope it to the hermetic execution (no
+    `genesis_forged` latch); (vi) keep the eligibility signal general (never a private-only / C1-only flag); (vii)
+    any scheduling-event vocabulary is CLOSED + EMIT-ONLY (the planner never names it,
+    `ci_check_node_sched_events_emit_only.sh`, CN-NODE-04). DC-NODE-08
+    (`ci_check_genesis_successor_reachability.sh`).
 
-### CI gates that enforce the boundary (121 total; the N-F-G-D / N-F-G-E / N-F-G-C / N-F-G-B / N-F-G-A / N-F-F / N-F-D-E / N-F-C / N-F-A / N-Z / N-Y / producer / network set)
+### CI gates that enforce the boundary (126 total; the N-F-G-J / N-F-G-D / N-F-G-E / N-F-G-C / N-F-G-B / N-F-G-A / N-F-F / N-F-D-E / N-F-C / N-F-A / N-Z / N-Y / producer / network set)
 
 | Script | Enforces | Cluster |
 |---|---|---|
+| `ci_check_prevhash_single_wire_authority.sh` *(NEW N-F-G-J S2)* | **CN-WIRE-09** — the header `prev_hash` is the closed sum `PrevHash = Genesis / Block(Hash32)` ($hash32/null); the SINGLE POSITION-BLIND BLUE codec authority is `ade_codec::shelley::block::decode_prev_hash` (decodes the CBOR token, NEVER `block_number`); the `null` grammar is scoped to header_body ONLY — it MUST NOT leak into the chain-sync/block-fetch `Point`/`Tip` codec (`Point::Origin` stays `array(0)`); no second wire authority, no all-zero/fingerprint stand-in for the genesis predecessor. | N-F-G-J |
+| `ci_check_genesis_successor_reachability.sh` *(NEW N-F-G-J S4)* | **DC-NODE-08** — the both-`None`-tip `LoopStep::ForgeTick` arm derives `(0, PrevHash::Genesis)` via the GREEN `node_sync::forge_header_position` (a `Some`-without-height edge fails closed `NodeForgeError::RecoveredTipMissingBlockNo`, never `.unwrap_or(1)`) and forges block 0 through the SAME `run_real_forge → self_accept → SelfAcceptedHandoff` path; permission gated by the GREEN `node_lifecycle::may_cold_start_forge` (recovered lineage + forge-intent + forge-eligible feed); the forge holds NO `ChainDb` handle (no durable tip); scoped to the hermetic cold-start (no `genesis_forged` latch); the eligibility signal is general (never a private-only / C1-only flag). | N-F-G-J |
+| `ci_check_node_sched_events_emit_only.sh` *(NEW N-F-G-J S1)* | **CN-NODE-04** — the GREEN `ade_node::live_log::{sched_event, sched_writer}` `NodeSchedEvent` / `FeedReason` / `ForgeOutcome` are CLOSED (none `#[non_exhaustive]`; no catch-all / `Other`; no stringly field) and EMIT-ONLY — the GREEN run-loop planner must NEVER name the vocabulary; the relay loop emits them around the planner call + the `LoopStep` arms, recording the scheduling decision WITHOUT altering it; allow-list + negative tests. | N-F-G-J |
 | `ci_check_node_path_fidelity.sh` *(NEW N-F-G-D S1)* | **CN-REHEARSAL-FIDELITY-01 (clause 1, path fidelity)** — guard (a): the `crates/ade_node/src/cli.rs` argv flag-literal set equals the pinned closed **28-flag** allow-list (G-D adds none; a private-only / venue flag — `--private-net` / `--from-genesis` / `--devnet` / `--rehearsal` — trips it); guard (b): no fn whose name carries BOTH `genesis` and `consensus` (a from-genesis consensus-inputs constructor; line comments stripped first) AND `node_lifecycle.rs` sources consensus inputs via the shared `import_live_consensus_inputs`. The C1 dry-run differs from the preprod pass ONLY in operator INPUTS + the evidence LABEL — never in code. | N-F-G-D |
 | `ci_check_rehearsal_manifest_schema.sh` *(NEW N-F-G-D S2; hardened S4)* | **CN-REHEARSAL-FIDELITY-01 (clause 2, evidence non-promotability)** — when a committed `docs/evidence/phase4-n-f-g-d-private-rehearsal-*.toml` is present, verify the closed 12-field schema + `schema_version == 1` + `is_rehearsal = true` + `not_bounty_evidence = true` + a `venue` of `private-testnet*` + `peer_log_file_sha256` == sha256(the committed peer-log fixture). THREE non-promotability barriers: the distinct `docs/evidence/` home; the rehearsal markers; and a fail-closed cross-check that NO rehearsal marker appears in any `.toml` under EITHER bounty home (active `docs/clusters/PHASE4-N-F-G-C/` AND archived `docs/clusters/completed/PHASE4-N-F-G-C/` — EXISTING-homes list built first, fail-closed on grep rc≥2). Vacuously satisfied when none committed (C1 dry-run `blocked_until_operator_c1_net_executed`). The no-synthetic-rehearsal-manifest + no-bounty-home-leak enforcer; flips NO RO-LIVE rule. | N-F-G-D |
 | `ci_check_live_feed_memory_bounds.sh` *(NEW N-F-G-E S1)* | **DC-LIVEMEM-01** — both live-feed memory bounds are CLOSED LITERAL constants (`MAX_REASSEMBLY_TAIL_BYTES = 16 MiB` in `session/core.rs`; `MAX_WIRE_PUMP_LOOKAHEAD = 256` in `node_sync.rs`) AND not wired to CLI / env / config (the no-escape-hatch guard 3; line comments stripped first so the doc-comments naming "CLI / env / config" do not self-trip). The reassembly cap fails closed via the additive `SessionError::ReassemblyBufferOverflow` (no wildcard; sole consumer `mux_pump::session_err_to_halt`). | N-F-G-E |
@@ -2048,8 +2207,15 @@ How new modules enter the workspace.
 > (`ci_check_live_feed_memory_bounds.sh`) → **119**. **N-F-G-D added 2** (`ci_check_node_path_fidelity.sh` +
 > `ci_check_rehearsal_manifest_schema.sh`) → **121** (the three containment / handoff / memory fences
 > `ci_check_node_run_loop_containment.sh`, `ci_check_served_chain_handoff_fence.sh`,
-> `ci_check_live_feed_memory_bounds.sh` are byte-unchanged by G-D). Earlier-cluster gates (N-A..N-P, the N-M-* set,
-> the N-L wire-session set) are present in the 121 total; the full list is `ls ci/ci_check_*.sh` (= **121**).
+> `ci_check_live_feed_memory_bounds.sh` are byte-unchanged by G-D). **N-F-G-J added 3**
+> (`ci_check_node_sched_events_emit_only.sh` (S1) + `ci_check_prevhash_single_wire_authority.sh` (S2) +
+> `ci_check_genesis_successor_reachability.sh` (S4)) → **126** (the relay-loop containment / served-chain handoff /
+> live-feed memory fences stay byte-unchanged; `ci_check_rehearsal_manifest_schema.sh` was EXTENDED in place to
+> also cover the S5 `phase4-n-f-g-j-genesis-rehearsal-*.toml` home — a net tightening, not a new file).
+> _(The G-H gates `ci_check_single_serve_dispatch_authority.sh` + `ci_check_serve_listener_magic_aware.sh` are part
+> of the 126 total at HEAD but are NOT row-detailed in this table — see the G-H-gap note in the header.)_
+> Earlier-cluster gates (N-A..N-P, the N-M-* set, the N-L wire-session set) are present in the 126 total; the full
+> list is `ls ci/ci_check_*.sh` (= **126**).
 
 ---
 
@@ -2063,7 +2229,14 @@ How new modules enter the workspace.
   DC-GENESIS-SRC-01); no tautological Mithril binding check (CN-MITHRIL-01); `genesis_initial_state` is
   Conway-only. **(N-F-A) No second `SeedEpochConsensusInputs` encoder/decoder pair (CN-CINPUT-01 — SOLE codec);
   `decode_*` MUST be version-gated, byte-canonical, `BTreeMap`-ordered with no `Default` / `#[non_exhaustive]`.
-  `PoolDistrView::from_seed_epoch_consensus_inputs` MUST be a pure field-map.** **(N-F-F / N-F-G-A / N-F-G-B /
+  `PoolDistrView::from_seed_epoch_consensus_inputs` MUST be a pure field-map.** **(N-F-G-J) BLUE WAS extended by exactly ONE canonical type + ONE new module — the header `prev_hash` is now the
+  closed sum `PrevHash = Genesis | Block(Hash32)` (`ade_types::shelley::block`, 456 → 457), decoded/encoded
+  POSITION-BLIND by the SINGLE `ade_codec::shelley::block::decode_prev_hash` (NEVER `block_number`); the
+  position-AWARE rule lives in the SINGLE NEW BLUE `ade_ledger::block_validity::header_position::check_header_position`
+  (a fn + the additive `BlockValidityError::HeaderPositionInvalid` variant — no struct/enum), called by
+  `decode_block`, folding into the UNCHANGED `BlockRejectClass::HeaderInvalid`. The `null` grammar MUST stay
+  header_body-scoped (out of the `Point`/`Tip` codec); the single wire + single position authority MUST NOT be
+  duplicated; no all-zero/fingerprint stand-in for the genesis predecessor (CN-WIRE-09).** **(N-F-F / N-F-G-A / N-F-G-B /
   N-F-G-C) No BLUE crate was modified — operator-key ingress + forge fidelity + the self-accept→serve handoff +
   the live feed + the BA-02 evidence I/O reuse the existing BLUE validators/authorities
   (`Sum6Kes::raw_deserialize_signing_key_kes`, `ProducerShell::init`'s freshness bound, the `ProtocolParameters`
@@ -2075,8 +2248,14 @@ How new modules enter the workspace.
   N-F-G-C adds no variant.** `ChainEvolution` (N-T) MUST NEVER mint `AcceptedBlock`. Closed vocabularies
   (`ProducerLogEvent`, `ForgeFailureReason`, `SyncEffect`, observable `BlockVerdict`, `LoopStep` /
   `ForgeSlotStatus`, `ForgeIntent`, `SlotAlignmentError` / `ProtocolParamsParseError` / `ForgeCurrentPParamsError`
-  / `ForgeEpochAdmission`, the BA-02 `BA02Outcome` / `PeerAcceptEvent` / `NoEvidenceReason`) — no open/wildcard
-  variant. `forward_sync::reducer` (DC-SYNC-01): MUST NOT emit `AdvanceTip` before that block's `StoreBlockBytes`
+  / `ForgeEpochAdmission`, the BA-02 `BA02Outcome` / `PeerAcceptEvent` / `NoEvidenceReason`, the N-F-G-J `NodeSchedEvent` /
+  `FeedReason` / `ForgeOutcome`) — no open/wildcard variant. **(N-F-G-J) `live_log::{sched_event, sched_writer}`
+  MUST stay EMIT-ONLY — the GREEN `run_loop_planner` MUST NEVER construct, read, or name the `NodeSchedEvent`
+  vocabulary; the relay loop records scheduling decisions WITHOUT altering them; no catch-all / `Other` variant,
+  no stringly field (CN-NODE-04, `ci_check_node_sched_events_emit_only.sh`). `node_sync::forge_header_position` +
+  `node_lifecycle::may_cold_start_forge` MUST keep the cold-start convention pure (both-`None` => `(0, Genesis)`;
+  `Some` => `(last+1, Block)`; a `Some`-without-height edge fails closed, never `.unwrap_or`) and gate PERMISSION
+  only — never the prev_hash bytes (DC-NODE-08).** `forward_sync::reducer` (DC-SYNC-01): MUST NOT emit `AdvanceTip` before that block's `StoreBlockBytes`
   + `AppendWal`. **(N-F-A) `seed_consensus_merge` MUST fail closed on a pool in exactly one source map — NEVER a
   zero-hash fill.** **(N-F-C / N-F-G-C) `ba02_evidence` is evidence, not authority — it COMPARES already-authoritative
   outputs, MUST read the BLUE-minted forged hash VERBATIM, `correlate` MUST be the SOLE `Ba02Manifest`
@@ -2152,6 +2331,34 @@ How new modules enter the workspace.
 
 ### Project-specific additions (Ade)
 
+- **PrevHash null/hash32 wire authority + position-aware header rule + genesis-successor cold-start forge honest
+  scope + boundary (N-F-G-J, load-bearing — do NOT soften / do NOT broaden):** G-J makes the header `prev_hash`
+  field the closed wire grammar `$hash32 / null` and discharges the position-aware coupling — and **nothing
+  more**. The raw byte codec (`ade_codec::shelley::block::decode_prev_hash` + the `ShelleyHeaderBody` `AdeEncode`
+  match) is **POSITION-BLIND**: it decodes `null -> Genesis` / `hash32 -> Block` as a pure function of the CBOR
+  token, NEVER consulting `block_number`. The position-AWARE coupling (`block_number 0 <=> Genesis`) lives in
+  EXACTLY ONE BLUE authority, `ade_ledger::block_validity::header_position::check_header_position`, called by
+  `decode_block` BEFORE the header authority and surfacing `BlockValidityError::HeaderPositionInvalid` (coarse
+  class `HeaderInvalid` — **no new `BlockRejectClass`**); it **MUST NOT** live in `ade_codec` and **MUST NOT** be
+  duplicated. The `null` grammar is scoped to **header_body ONLY** — it MUST NOT leak into the chain-sync/
+  block-fetch `Point`/`Tip` codec (`Point::Origin` stays `array(0)`). No all-zero `Hash32`, no anchor
+  fingerprint, and no Shelley genesis hash may stand in for the genesis predecessor — it is structurally CBOR
+  null (the producer `prev_hash` migrated `Hash32 -> PrevHash` end to end, deleting the all-zero stand-in at its
+  source in `ChainEvolution::prev_hash()`). The node-spine cold-start first-block reachability (`DC-NODE-08`) is
+  **scoped to the hermetic cold-start execution** (NO `genesis_forged` latch); the recovered seed-epoch lineage
+  gates **PERMISSION** to forge from the genesis-successor position, it is **NOT** the source of the prev_hash
+  bytes; the forge engine holds **no `ChainDb` handle**, so it advances **no durable tip** (durable block-1+
+  progression is N-U). The S1 scheduling-event vocabulary (`NodeSchedEvent` / `FeedReason` / `ForgeOutcome`) is
+  **closed + emit-only** — it records the relay loop's feed/forge decisions WITHOUT changing them, and the GREEN
+  planner never names it. **NO RO-LIVE flip** (`RO-LIVE-01` stays `partial` / operator-gated); the cold-start
+  eligibility signal is general (forge-configured + valid recovered base), **never a private-only / C1-only
+  flag**. G-J adds **ONE BLUE canonical type** (`PrevHash`, 456 → 457) + **ONE NEW BLUE module**
+  (`header_position`, a fn + a variant) + **closed GREEN diagnostic enums** + **two additive closed-enum
+  variants** — **NO extensible / negotiated surface, no plugin trait, no new `--mode node` flag, no new
+  `NodeBlockSource` / `CoordinatorEvent` / `Mode` / `BlockRejectClass` variant.** **No rule weakened.** S5 reuses
+  the existing BA-02 + rehearsal surfaces VERBATIM (no new evidence type, no manifest-schema change). _(G-J does
+  not alter the G-A..G-E forge / serve / live-feed / containment surfaces; the three containment / handoff /
+  memory fences are byte-unchanged.)_
 - **Bounty DRY-RUN rehearsal harness honest scope + boundary (N-F-G-D, load-bearing — do NOT soften / do NOT
   broaden):** G-D ships a **path-faithful, non-promotable bounty DRY-RUN harness — NOT the bounty deliverable.**
   **(1) Path fidelity:** the C1 private-testnet dry-run uses the SAME `--mode node` accepted-block path as
@@ -2271,6 +2478,18 @@ How new modules enter the workspace.
 > Surfaced honestly per IDD: these are **declared** future attach points, not closed surfaces. Each is named
 > in a registry rule or a cluster CLOSURE record.
 >
+> **N-F-G-J RETIRES NOTHING and BROADENS NOTHING below.** G-J adds ONLY closed sums + one BLUE module (the
+> `PrevHash` wire grammar + the single `header_position` validator authority + the closed emit-only
+> `NodeSchedEvent` vocabulary + two additive closed-enum variants + the genesis-successor cold-start PATH through
+> the UNCHANGED closed `NodeBlockSource`) — **no new extension point, no plugin/negotiated surface.** It does NOT
+> close any §7 candidate and does **NOT** advance the bounty deliverable: `RO-LIVE-01` stays `partial` (the
+> cold-start forge is hermetic + self-accept-only, advancing no durable tip — N-U owns durability). The S5 C1
+> genesis rehearsal reuses the existing rehearsal surfaces VERBATIM (no new evidence type), under the
+> extended `ci_check_rehearsal_manifest_schema.sh`; it is the same operator-gated DRY-RUN class as the G-D C1
+> dry-run (`blocked_until_operator_c1_net_executed`), NOT bounty evidence, flipping no RO-LIVE rule. All
+> candidates (#0–#5) and the already-retired #6 are carried UNCHANGED. **(The G-H serve-to-peer surface is NOT
+> spliced into this body — see the G-H-gap note in the header; candidate #0 there is the closest related seam.)**
+>
 > **N-F-G-D RETIRES NOTHING and BROADENS NOTHING below.** G-D adds a path-faithful, non-promotable bounty DRY-RUN
 > **harness** (the rehearsal-evidence surface + the path-fidelity fence) — a HARNESS, not a closure of any
 > candidate. It does **NOT** advance the bounty deliverable: `RO-LIVE-01` stays `partial`, `RO-LIVE-06` stays
@@ -2383,8 +2602,46 @@ How new modules enter the workspace.
 
 ## Generation notes
 
-- Regenerated (scoped INCREMENTAL catch-up through ONE cluster) at HEAD `6bd60c80` (`git rev-parse --short
-  HEAD`), downstream of the CODEMAP regenerated at the same HEAD (121 CI checks, 315 rules, 456 canonical types).
+- Regenerated (scoped DELTA-REFRESH at the PHASE4-N-F-G-J close) at HEAD `550eec3a` (`git rev-parse --short
+  HEAD`), downstream of the CODEMAP regenerated at the same HEAD (**126** CI checks, **319** rules, **457**
+  canonical types). The prior on-disk SEAMS body was generated at the **PHASE4-N-F-G-D close** (`6bd60c80` / 121
+  CI / 315 rules). This refresh splices the **PHASE4-N-F-G-J** closed-surface deltas (five slices — S1 the closed
+  GREEN `NodeSchedEvent` emit-only scheduling vocabulary + `ci_check_node_sched_events_emit_only.sh`; S2 the
+  closed BLUE sum `PrevHash` + the POSITION-BLIND `$hash32/null` codec + `ci_check_prevhash_single_wire_authority.sh`;
+  S3 the NEW BLUE single POSITION-AWARE authority `ade_ledger::block_validity::header_position::check_header_position`
+  + a real genesis-successor forge; S4 the node-spine cold-start reachability +
+  `ci_check_genesis_successor_reachability.sh`; S5 the C1 genesis rehearsal harness, reuse-only) and updates the
+  counts. **G-J adds ONLY closed sums + one NEW BLUE module — verified NO extensible / negotiated surface.** ONE
+  NEW BLUE canonical type (`PrevHash`, 456 → 457); ONE NEW BLUE module (`header_position`, a fn + a variant); the
+  closed GREEN `live_log::{sched_event, sched_writer}` vocabulary; two additive closed-enum variants
+  (`BlockValidityError::HeaderPositionInvalid`, `NodeForgeError::RecoveredTipMissingBlockNo`). Registry → **319**
+  (NEW `CN-WIRE-09` + `DC-NODE-08` + `CN-NODE-04`, all `tier = derived`, `enforced`; `CN-REHEARSAL-FIDELITY-01`
+  `strengthened_in += "PHASE4-N-F-G-J"`; no rule weakened); CI 121 → **126** (the three NEW gates above; the three
+  containment / handoff / memory fences byte-unchanged; `ci_check_rehearsal_manifest_schema.sh` EXTENDED in place
+  for the S5 genesis-rehearsal home).
+- **G-J delta spot-checked at HEAD `550eec3a` (grep/ls only — no `cargo`):** `crates/ade_types/src/shelley/block.rs`
+  `pub enum PrevHash { Genesis, Block(Hash32) }` (NOT `#[non_exhaustive]`); `crates/ade_codec/src/shelley/block.rs`
+  `fn decode_prev_hash`; `crates/ade_ledger/src/block_validity/header_position.rs` `pub fn check_header_position`
+  + `BlockValidityError::HeaderPositionInvalid` (folding into `BlockRejectClass::HeaderInvalid` in `verdict.rs`,
+  no new class); `crates/ade_node/src/live_log/sched_event.rs` `pub enum NodeSchedEvent` (5) + `pub enum FeedReason`
+  (`NoBlockAvailable`/`CleanEmpty`/`UnknownDisconnected`) + `pub enum ForgeOutcome` (4), all closed, EMIT-ONLY;
+  `crates/ade_node/src/node_sync.rs` `fn forge_header_position` + `NodeForgeError::RecoveredTipMissingBlockNo`;
+  `crates/ade_node/src/node_lifecycle.rs` `fn may_cold_start_forge`. The three NEW gates
+  (`ci_check_node_sched_events_emit_only.sh`, `ci_check_prevhash_single_wire_authority.sh`,
+  `ci_check_genesis_successor_reachability.sh`) present; `ls ci/ci_check_*.sh | wc -l` = **126**;
+  `grep -cE '^id = ' docs/ade-invariant-registry.toml` = **319** (`CN-WIRE-09` / `DC-NODE-08` / `CN-NODE-04`
+  present). The unaffected G-A..G-E surfaces were NOT re-walked (per the delta-refresh constraint).
+- **G-H GAP (load-bearing — honest cross-reference):** this SEAMS body was last fully regenerated at the **G-D**
+  close and skipped the intervening **PHASE4-N-F-G-H** cluster. The header counts (457 / 126 / 319) are the true
+  HEAD values and include G-H's contributions (the BLUE fn `n2n_supported_for_magic`; the NEW RED
+  `ade_runtime::network::serve_dispatch`; `ade_node::node_lifecycle::{run_node_serve_task, bind_serve_listener}` +
+  the closed `ServeStartError`; `DC-NODE-07`; the gates `ci_check_single_serve_dispatch_authority.sh` +
+  `ci_check_serve_listener_magic_aware.sh`), but the §1 serve-to-peer surface, the §3 `ServeStartError` row, and
+  the §5 serve-gate rows are **NOT** spliced into the bodies below. A fuller G-H surface catch-up is the
+  recommended follow-on; the CODEMAP carried delta documents G-H fully in the meantime.
+- (Prior G-D entry, carried.) Regenerated (scoped INCREMENTAL catch-up through ONE cluster) at HEAD `6bd60c80`
+  (`git rev-parse --short HEAD`), downstream of the CODEMAP regenerated at the same HEAD (121 CI checks, 315
+  rules, 456 canonical types).
   The prior on-disk SEAMS was generated at the **PHASE4-N-F-G-E close** (`6f848825` / 119 CI checks / 314 rules —
   live-feed bounded memory before authoritative decode/apply on the `--mode node` spine). This refresh catches it
   up through **PHASE4-N-F-G-D** (a private-testnet accepted-block bounty DRY-RUN harness on the `--mode node`
