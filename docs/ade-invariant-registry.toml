@@ -5086,11 +5086,17 @@ open_obligation = ""
 id = "CN-CINPUT-02"
 tier = "constraint"
 statement = """
-The SeedEpochConsensusInputs sidecar MUST be populated ONLY on the
-verified-bootstrap composition path (genesis_bootstrap / mithril_bootstrap),
-through the anchor-fp-keyed SnapshotStore surface
+The SeedEpochConsensusInputs sidecar MUST be populated ONLY through the single
+shared ade_runtime::seed_epoch_lineage::persist_seed_epoch_consensus_inputs
+authority — the anchor-fp-keyed SnapshotStore surface
 (put_seed_epoch_consensus_inputs), built via the GREEN merge
-(merge_seed_epoch_consensus_inputs) and the A1 sole encoder. The forge-time
+(merge_seed_epoch_consensus_inputs) and the A1 sole encoder, with the A3a WAL
+provenance append — called ONLY by the verified-bootstrap composition sites
+(genesis_bootstrap / mithril_bootstrap / the operator admission pre-seed
+ade_node::admission::bootstrap). PHASE4-N-F-G-I extracted the populator into this
+single authority (was inline-per-composer) and added the admission pre-seed
+caller, so a --mode node WarmStart recovers a forge-capable store seeded purely
+from the shared --json-seed + import_live_consensus_inputs path. The forge-time
 consensus-inputs path (produce_mode / import_live_consensus_inputs /
 pool_distr_view_from_consensus_inputs / --consensus-inputs-path) MUST NOT build
 or put the sidecar, nor append its WAL provenance. Enforced by a
@@ -5105,12 +5111,12 @@ PHASE4-N-F-C and no registry rule is introduced for it in this close.
 """
 source = "docs/clusters/PHASE4-N-F-A/cluster.md; A2-bootstrap-population-containment.md; A3a-wal-provenance-entry.md"
 cross_ref = ["CN-CINPUT-01", "CN-NODE-01", "CN-MITHRIL-01"]
-code_locus = "crates/ade_runtime/src/genesis_bootstrap.rs; crates/ade_runtime/src/mithril_bootstrap.rs; crates/ade_runtime/src/seed_consensus_merge.rs; crates/ade_runtime/src/seed_consensus_provenance.rs; ci/ci_check_consensus_input_provenance.sh"
-tests = ["bootstrap_persists_anchor_keyed_seed_consensus_inputs", "bootstrap_seed_inputs_merge_fails_closed_on_missing_vrf_or_stake", "snapshot_store_keyed_sidecar_is_disjoint_from_slot_snapshots"]
+code_locus = "crates/ade_runtime/src/seed_epoch_lineage.rs (single shared populator authority); crates/ade_runtime/src/genesis_bootstrap.rs; crates/ade_runtime/src/mithril_bootstrap.rs; crates/ade_node/src/admission/bootstrap.rs (admission pre-seed caller); crates/ade_runtime/src/seed_consensus_merge.rs; crates/ade_runtime/src/seed_consensus_provenance.rs; ci/ci_check_consensus_input_provenance.sh"
+tests = ["bootstrap_persists_anchor_keyed_seed_consensus_inputs", "bootstrap_seed_inputs_merge_fails_closed_on_missing_vrf_or_stake", "snapshot_store_keyed_sidecar_is_disjoint_from_slot_snapshots", "persist_writes_anchor_keyed_sidecar_and_recoverable_wal_provenance"]
 ci_script = "ci/ci_check_consensus_input_provenance.sh"
 status = "enforced"
 introduced_in = "PHASE4-N-F-A"
-strengthened_in = ["PHASE4-N-F-C"]
+strengthened_in = ["PHASE4-N-F-C", "PHASE4-N-F-G-I"]
 cluster = "PHASE4-N-F-A"
 attack_rationale = "If the forge-time operator bundle could populate (or be read as) the recovered sidecar, the 'recovered Ade state' guarantee would collapse into a relabeled operator input — the laundering class the cluster exists to prevent. The containment gate blocks the populate-side mechanically; the consume-side fence landed in PHASE4-N-F-C (CN-CINPUT-03)."
 open_obligation = "CLOSED by PHASE4-N-F-C. Populate-side + forge-time fence enforced here (A2). The CONSUME-side fence and producer consumption of the recovered surface (CE-A-4b) landed in PHASE4-N-F-C on the node-lifecycle forge path (not produce_mode, which stays diagnostic): CN-CINPUT-03 fences the node-sync/forge driver against constructing a SeedEpochConsensusInputs literal or naming the forge-time bundle tokens, and DC-CINPUT-02b binds forge_one_from_recovered to project leadership only from the recovered surface. produce_mode continues to pass only SeedEpochConsensusSource::NotRequired."
