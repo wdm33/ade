@@ -40,13 +40,22 @@ consumes `CN-NODE-04` events (emit-only, one-directional planner → log).
 single `is_ended: bool` — **no distinction** between an **eligible** empty/at-tip end (the
 sole-producer/genesis peer had nothing) and an **ineligible** peer-loss/error end. The **closed
 feed-state taxonomy is the spine**:
-- **eligible:** `NoBlockAvailable` / `AtTip` / `CleanEmpty`
-- **ineligible:** `PeerLost` / `DecodeError` / `ProtocolError` / `SourceInvalid`
+- **eligible (only when provably so):** `NoBlockAvailable` / `AtTip` / `CleanEmpty`
+- **ineligible (fail-closed):** `UnknownDisconnected` (the reason-less/ambiguous end — what S1
+  produces today) and, **once the wire-pump captures a closed reason** (a future prerequisite,
+  NOT S1), `PeerLost` / `DecodeError` / `ProtocolError` / `SourceInvalid`
 
 S1 introduces the taxonomy (emit-only, **no behavior change**); S2 consumes it (the one semantic
-gate). The observed C1 case (WirePump channel disconnected because the genesis peer had nothing to
-serve) **MUST** classify as an eligible `CleanEmpty`/`NoBlockAvailable` case, **never** `PeerLost`
-— the exact `is_ended → taxonomy` mapping is the load-bearing **OQ1** for S1.
+gate). **Fail-closed-on-ambiguity (load-bearing OQ1):** `AdmissionPeerEvent::Disconnected` carries
+no reason and is emitted for **both** clean EOF and protocol error, and `NodeBlockSource` collapses
+it into a single `disconnected: bool` — so the source **cannot prove** a clean drain today.
+Therefore: **S1 must REVEAL the C1 feed-end reason. Eligibility is allowed only if the feed end is
+provably clean/no-block/at-tip. A reason-less or ambiguous disconnect is ineligible and must fail
+closed (`UnknownDisconnected`) until the source captures a closed clean/error reason.** Hard rule:
+**no ambiguous disconnect may become forge-eligible.** The C1 rerun (S3) with S1 observability tells
+us whether the real blocker is a clean no-block feed (then a reason-enriched `CleanEmpty` path is a
+prerequisite before S2 may allow forge) or a protocol/decode/source error (then fix the shared
+wire/codec path — do **not** add empty-feed forge scheduling).
 
 ## §4 Normative anchors
 - `docs/planning/phase4-n-f-g-j-invariants.md` (`9eb6f39b`); `docs/planning/phase4-n-f-g-j-cluster-slice-plan.md` (`6461160e`).
@@ -148,9 +157,13 @@ acceptance, never read back by authority).
 - Any C2/preprod behavior change — the Continuing-feed path is byte-unchanged for them.
 
 ## §13 Open questions (carried to slice docs)
-- **OQ1 (load-bearing, S1):** the exact `is_ended → closed feed_state` mapping in `NodeBlockSource`
-  — which concrete WirePump end conditions map to eligible (`NoBlockAvailable|AtTip|CleanEmpty`) vs
-  ineligible (`PeerLost|…`). The C1 disconnect **MUST** be eligible.
+- **OQ1 (load-bearing) — RESOLVED fail-closed in S1:** the `is_ended → closed feed_state` mapping.
+  The reason-less `disconnected: bool` cannot prove a clean drain, so a WirePump disconnect → the
+  ineligible `UnknownDisconnected`; a WirePump open-but-empty → eligible `NoBlockAvailable`; an
+  InMemory drain → eligible `CleanEmpty`. The C1 disconnect is therefore **ineligible until S1's
+  observability reveals its real reason** (the C1 rerun) — not assumed eligible. The specific error
+  reasons (`PeerLost|DecodeError|…`) and a reason-enriched live `CleanEmpty` await a future
+  wire-pump enrichment (NOT S1).
 - **OQ-color (S2):** confirm `plan_loop_step` stays a separable pure GREEN fn — **extend the table,
   do not embed leadership**.
 - **OQ-liveness (S2):** an eligible empty feed at a **non-forge-slot** must `Idle` (bounded), never

@@ -111,20 +111,22 @@ wall-clock beyond the existing captured slot/tick; no `HashMap`/float/rand intro
 **OQ1 (load-bearing) — RESOLVED in this slice (the classification).** Mapping the concrete
 `NodeBlockSource` end/empty conditions to the closed taxonomy, under a **fail-closed-on-ambiguity**
 rule:
-- A feed end is `CleanEmpty` / `NoBlockAvailable` (**eligible**) **only when the source can PROVE
-  the feed drained cleanly** with no pending error/protocol/provenance failure — i.e. the WirePump
-  channel closed after a clean sync with a drained lookahead and no error signal (or it is alive
-  and momentarily at-tip with no block ready).
-- **`channel disconnected` does NOT automatically mean `CleanEmpty`.** It is `CleanEmpty` only on a
-  *provably* clean drain; otherwise it is `PeerLost` or `SourceInvalid`.
-- A decode / protocol / source-provenance failure → the matching **ineligible** variant
-  (`DecodeError` / `ProtocolError` / `SourceInvalid`).
-- **Any ambiguous or unprovable feed end → fail closed as ineligible (`PeerLost` / `SourceInvalid`),
-  NEVER eligible.** Eligible-by-default is forbidden.
-- The observed C1 disconnect (genesis peer had nothing to serve; clean drained feed; no error) →
-  eligible `CleanEmpty`.
-- Any concrete end condition that cannot be cleanly **and provably** classified is an **S1
-  implementation proof obligation**, not a footnote (no stringly fallback, no eligible-by-default).
+- **S1 does NOT enrich the wire-pump reason** (option (b)). `AdmissionPeerEvent::Disconnected`
+  carries no reason and is emitted for **both** clean EOF and protocol error; `NodeBlockSource`
+  collapses it to `disconnected: bool`. So the source **cannot prove** a clean drain today.
+- S1's **producible** closed taxonomy from the current signals: a WirePump **open but momentarily
+  empty** (not disconnected, lookahead empty) → eligible `NoBlockAvailable`; an **InMemory** feed
+  drained → eligible `CleanEmpty` (a deterministic, provably-clean exhaustion — the hermetic
+  source); a WirePump **disconnect** (reason-less) → **ineligible `UnknownDisconnected`**.
+- **`channel disconnected` does NOT mean `CleanEmpty`.** A reason-less / ambiguous WirePump end is
+  `UnknownDisconnected` — **ineligible, fail-closed** — until a future wire-pump enrichment captures
+  a closed clean/error reason. Eligible-by-default is forbidden.
+- The observed C1 disconnect is therefore **`UnknownDisconnected` (ineligible)** — **not** assumed
+  `CleanEmpty`. The C1 rerun (with S1 events) reveals the real reason; only a *provably* clean
+  no-block end could later be eligible.
+- **Hard rule: no ambiguous disconnect may become forge-eligible.**
+- The specific error reasons (`PeerLost` / `DecodeError` / `ProtocolError` / `SourceInvalid`) and a
+  reason-enriched **live** `CleanEmpty` path are a **future wire-pump prerequisite, NOT S1**.
 
 ## §14 Hard Prohibitions
 Inherits cluster §11 (no co-producer; no private-only/C1-only flag; no bypass of
@@ -135,8 +137,10 @@ non-self-accepted bytes; no BLUE change; no RO-LIVE flip), **plus slice-specific
 - **EMIT-ONLY** — the planner never reads a `CN-NODE-04` event (one-directional planner → log; the
   gate enforces it).
 - The `CN-NODE-04` vocabulary **fails closed** on an unknown variant (allow-list rejects, never drops).
-- **Fail closed on ambiguity** — an unprovable/ambiguous feed end classifies **ineligible**
-  (`PeerLost`/`SourceInvalid`), never eligible `CleanEmpty`.
+- **Fail closed on ambiguity** — a reason-less/ambiguous feed end classifies **ineligible
+  `UnknownDisconnected`**, never eligible `CleanEmpty`. No ambiguous disconnect may become
+  forge-eligible. **No cross-crate wire-pump reason enrichment in S1** (that is a future
+  prerequisite, not this slice).
 - **Operational/diagnostic tier only** — never a consensus/acceptance/BA-02 signal; no
   stringly-typed authoritative errors.
 - No wall-clock beyond the existing captured slot/tick.
