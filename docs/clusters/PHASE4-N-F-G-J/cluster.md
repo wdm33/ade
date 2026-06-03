@@ -1,170 +1,163 @@
-# Cluster — PHASE4-N-F-G-J — Node forge when feed is empty/at tip
+# PHASE4-N-F-G-J — Genesis-successor block correctness (PrevHash `null` authority)
 
-> Single follow-on sub-cluster (like G-E/G-H/G-I). Sources: invariants sketch
-> `docs/planning/phase4-n-f-g-j-invariants.md` (`9eb6f39b`) + plan
-> `docs/planning/phase4-n-f-g-j-cluster-slice-plan.md` (`6461160e`). Declares `CN-NODE-04`
-> (operational) + `DC-NODE-08` (derived). Surfaced by the C1 forge dry-run, **after** G-I
-> fixed the anchor-lineage WarmStart gap and the whole-second-`systemStart` regen fixed
-> `SystemStartParseFailure`: on a fresh **sole-producer** net Ade fully WarmStart-recovers and
-> wires the live feed, but the genesis peer has **zero blocks**, the WirePump ends, and
-> `plan_loop_step` halts before any `ForgeTick` — Ade can never produce the **first** block.
-> A **shared `--mode node`** producer-scheduling change (also serves C2/preprod, unexercised
-> there because preprod's feed is already Continuing) — **not** a C1-only path.
+> **Re-scope of the original G-J.** The original "feed ends → planner halts before `ForgeTick` →
+> fix the planner" premise was **falsified by S1's own diagnostic**: on the live C1 sole-producer net
+> the feed stays open/empty (eligible `no_block_available`), the planner **already** emits `ForgeTick`
+> (×31), and the forge skips with `no_tip_available` (`forge_attempted = 0`) because both
+> `ChainDb::tip()` and `recovered.tip` are `None` at genesis. The interim "forge from the recovered
+> anchor as parent" framing was then **falsified by OQ1**: the genesis-successor parent is not a hash
+> at all. **S1 (`CN-NODE-04`) stays valid and enforced** — it is what produced this diagnostic. S2–S5
+> are re-scoped around the real defect: a Cardano **wire-grammar** incompatibility.
+>
+> Grounding: `docs/planning/phase4-n-f-g-j-genesis-successor-prevhash-invariants.md` +
+> `docs/planning/phase4-n-f-g-j-rescope-cluster-slice-plan.md` (committed `b85a6170`).
 
-## §0 Two halves with sharply different IDD status
-- **Mechanical, hermetically closeable (S1 + S2):** the closed feed-state taxonomy + diagnostic
-  events (S1) and the planner scheduling allowance (S2) close on hermetic tests + CI gates.
-- **Operator-gated (S3):** the live C1 forge rerun stays `blocked_until_operator_c1_forge_rerun`
-  — the mechanical scaffold closes; the live execution + any acceptance stay gated (G-H precedent).
+## §0 Slices with sharply different IDD status
+
+- **Done / enforced (S1):** the closed feed/forge diagnostics (`CN-NODE-04`) — `60303079`. It is the
+  instrument that produced this re-scope.
+- **Mechanical, hermetically closeable (S2 + S3 + S4):** the PrevHash wire type/codec (`CN-WIRE-09`),
+  header-position validation + genesis-successor forge, and node-spine first-block reachability
+  (`DC-NODE-08`) all close on hermetic tests + CI gates.
+- **Operator-gated (S5):** the live C1 genesis-successor rerun stays
+  `blocked_until_operator_c1_genesis_successor_rehearsal` — the mechanical scaffold closes; the live
+  execution + any acceptance stay gated (G-H/G-D precedent).
 
 ## §1 Primary invariant
-**`DC-NODE-08`** (declared → enforced at S2 close) — `--mode node` may run the producer tick from
-the **recovered authoritative base** when the feed is `Empty|AtTip|NoBlockAvailable` (and only
-then), gated on a recovered base + `ForgeIntent::On` + a **due forge slot**, with
-**epoch/KES/leader eligibility enforced by the existing forge path**, the forged block still
-flowing `self_accept → SelfAcceptedHandoff → ServedChainView`; an ineligible peer-lost/error feed
-stays fail-closed/halt. Introduces **`CN-NODE-04`** (declared → enforced at S1 close) — the closed
-diagnostic feed/forge event vocabulary.
 
-## §2 Planner-is-scheduler boundary (read first — load-bearing)
-The pure planner `run_loop_planner::plan_loop_step` decides **WHEN to attempt a forge tick**
-(scheduling), **never** whether Ade is the leader. Leadership/epoch/KES authority stays in the
-**BLUE** `forge_one_from_recovered` leader check + KES/opcert + `DC-EPOCH-03`. S2 adds only a
-**scheduling** allowance (eligible empty/at-tip feed + recovered base + producer intent + a due
-forge slot → emit `ForgeTick`); the forge path still enforces leader eligibility and may return
-`ForgeNotLeader` (no block). The planner **never** becomes a leadership authority, and **never**
-consumes `CN-NODE-04` events (emit-only, one-directional planner → log).
+A genesis-successor block (`block_number 0` on a from-genesis chain) carries
+`prev_hash = PrevHash::Genesis`, serialized as **CBOR `null` (`0xf6`)** — never a hash. Ade forges it
+only from the explicitly recovered seed-epoch lineage, under existing slot/epoch/KES/leader checks,
+only via `self_accept → SelfAcceptedHandoff → ServedChainView`. **Registry:** `CN-WIRE-09` (the wire
+grammar) + `DC-NODE-08` (node-spine reachability), both `declared` → enforced across this cluster.
 
-## §3 Load-bearing finding (the S1/S2 spine)
-`NodeBlockSource` (`crates/ade_node/src/node_sync.rs`) today collapses every feed-end into a
-single `is_ended: bool` — **no distinction** between an **eligible** empty/at-tip end (the
-sole-producer/genesis peer had nothing) and an **ineligible** peer-loss/error end. The **closed
-feed-state taxonomy is the spine**:
-- **eligible (only when provably so):** `NoBlockAvailable` / `AtTip` / `CleanEmpty`
-- **ineligible (fail-closed):** `UnknownDisconnected` (the reason-less/ambiguous end — what S1
-  produces today) and, **once the wire-pump captures a closed reason** (a future prerequisite,
-  NOT S1), `PeerLost` / `DecodeError` / `ProtocolError` / `SourceInvalid`
+## §2 The resolved compatibility fact (OQ1 — proven, not assumed; read first)
 
-S1 introduces the taxonomy (emit-only, **no behavior change**); S2 consumes it (the one semantic
-gate). **Fail-closed-on-ambiguity (load-bearing OQ1):** `AdmissionPeerEvent::Disconnected` carries
-no reason and is emitted for **both** clean EOF and protocol error, and `NodeBlockSource` collapses
-it into a single `disconnected: bool` — so the source **cannot prove** a clean drain today.
-Therefore: **S1 must REVEAL the C1 feed-end reason. Eligibility is allowed only if the feed end is
-provably clean/no-block/at-tip. A reason-less or ambiguous disconnect is ineligible and must fail
-closed (`UnknownDisconnected`) until the source captures a closed clean/error reason.** Hard rule:
-**no ambiguous disconnect may become forge-eligible.** The C1 rerun (S3) with S1 observability tells
-us whether the real blocker is a clean no-block feed (then a reason-enriched `CleanEmpty` path is a
-prerequisite before S2 may allow forge) or a protocol/decode/source error (then fix the shared
-wire/codec path — do **not** add empty-feed forge scheduling).
+```
+PrevHash for the genesis-successor block = PrevHash::GenesisHash → CBOR null (0xf6)
+  ≠ all-zero Hash32     ≠ anchor_fp     ≠ Shelley genesis hash
+```
 
-## §4 Normative anchors
-- `docs/planning/phase4-n-f-g-j-invariants.md` (`9eb6f39b`); `docs/planning/phase4-n-f-g-j-cluster-slice-plan.md` (`6461160e`).
-- Registry: `DC-NODE-08`, `CN-NODE-04` (declared); preserves `DC-NODE-05/06/07`, `DC-EPOCH-03`, `CN-CINPUT-03`, `DC-CINPUT-02b`, `DC-FORGE-01`, `CN-FORGE-01..04`; cross-refs `RO-LIVE-01`.
+- cardano-ledger `BHeader.hs`: `encCBOR GenesisHash = encodeNull`; `decCBOR … TypeNull → GenesisHash`.
+- `babbage.cddl`: `header_body = [ block_number, slot, prev_hash : $hash32 / null, … ]`.
+- IntersectMBO/cardano-ledger#1317 (the GenesisHash rationale).
 
-## §5 Entry conditions (what prior clusters guarantee)
-- G-A..G-E/G-F: real forge composition + `forge_one_from_recovered` + the relay-spine forge tick (`DC-NODE-05`, `CN-FORGE-*`, `DC-FORGE-01`).
-- G-B/G-H: `self_accept → SelfAcceptedHandoff (DC-NODE-06) → ServedChainView (DC-NODE-07)` — the single accepted/serve path.
-- G-I: the admission/pre-seed bootstrap persists the seed-epoch anchor lineage → `--mode node` WarmStart recovers a forge-capable base (`CN-CINPUT-02`). **This cluster builds directly on that recovered base.**
-- The C1 net (`~/.cardano-private-testnet-c1-conway`, Conway, whole-second `systemStart`) reproduces the empty-feed halt — the cluster's regression harness.
+An all-zero `Hash32` is a `BlockHash` value (a nonexistent parent) — a real peer rejects it. **This is
+a wire representation/codec defect, not forge-base selection.**
 
-## §6 Verified component inventory + TCB color map
-| Module | Role | Color |
-|---|---|---|
-| `ade_node::run_loop_planner` (`plan_loop_step` / `forge_slot_status` / `LoopState` / `LoopStep` / `ForgeSlotStatus`) | pure planner; total deterministic decision table (`…precedence_table_is_total`, `…is_deterministic`). **S2 extends the table.** | **GREEN** |
-| feed-state **taxonomy enum** (new; classifies the `NodeBlockSource` end/empty condition) | closed eligible/ineligible split | **GREEN** |
-| `ade_node::live_log::event` (`LiveLogEvent` + allow-list) | **CN-NODE-04** vocabulary home | **GREEN** |
-| `ade_node::node_sync` (`NodeBlockSource` `WirePump`/`InMemory`; `is_ended`/`has_work_ready`/`next_block`) | source shell; **the `is_ended → taxonomy` classification lands here (S1)** | **RED** |
-| `ade_node::node_lifecycle` + `run_node_sync` / `run_relay_loop` | executes the planner, emits events | **RED** |
-| `ade_node::live_log::writer` | event emission | **RED** |
-| `forge_one_from_recovered` (`node_sync.rs`) + the `ade_core`/`ade_ledger` forge composition + leader check + `self_accept` | the forge authority — **reused VERBATIM** | **BLUE** (unchanged) |
-| `ade_node::forge_intent` (`ForgeIntent`) | the producer-intent signal | **RED** (read by the planner inputs) |
+## §3 The load-bearing FC/IS split (position-blind codec vs position-aware validator)
 
-## §7 Cluster Exit Criteria (CI-verifiable)
-- **CE-G-J-1** (mechanical, S1): `--mode node` emits the closed, allow-listed `CN-NODE-04`
-  vocabulary — `feed_unavailable{reason}` (closed reason enum, eligible `NoBlockAvailable|AtTip|
-  CleanEmpty` vs ineligible `PeerLost|DecodeError|ProtocolError|SourceInvalid`) +
-  `forge_tick_considered` / `forge_tick_skipped{reason}` / `forge_attempted` /
-  `forge_result{outcome}` — through `live_log`. Verified by: a positive emit test
-  (`node_sched_events_emit_closed_vocabulary`); an **allow-list negative test that rejects
-  non-vocabulary/stringly event variants** (`node_sched_event_allowlist_rejects_unknown_variants`)
-  — **fail-closed** on an unknown/added variant, **never silently dropped**; an **emit-only** CI
-  gate (`ci/ci_check_node_sched_events_emit_only.sh` — `run_loop_planner`/`plan_loop_step` reads no
-  `LiveLogEvent`); and a **no-behavior-change** proof (the existing
-  `plan_loop_step_forge_precedence_table_is_total` + `plan_loop_step_is_deterministic` stay green,
-  byte-unchanged). `CN-NODE-04` declared → enforced.
-- **CE-G-J-2** (mechanical, S2): `plan_loop_step`, given an **eligible** feed + recovered base +
-  `ForgeIntent::On` + a **due forge slot**, returns `ForgeTick` (was `Halt`) — leadership/epoch/KES
-  still enforced by `forge_one_from_recovered` + `DC-EPOCH-03`; an **ineligible** feed still
-  returns `Halt`/fail-closed; the extended table stays total + deterministic. Verified by:
-  `plan_loop_step_eligible_empty_feed_forges_from_recovered_base`,
-  `plan_loop_step_ineligible_feed_fails_closed`, the extended
-  `plan_loop_step_forge_precedence_table_is_total`/`…is_deterministic`, and a hermetic
-  `empty_feed_recovered_base_forge_tick_self_accepts` (the tick fires + the block `self_accept`s →
-  `SelfAcceptedHandoff` → `ServedChainView`). BLUE forge bytes/base unchanged (`DC-FORGE-01`
-  reused; `ci/ci_check_consensus_input_provenance.sh` + the `DC-NODE-06/07` handoff/serve gates
-  stay byte-/semantically green). `DC-NODE-08` declared → enforced.
-- **CE-G-J-3** (operator-gated, S3): a C1 forge-rerun runbook
-  (`docs/evidence/phase4-n-f-g-j-c1-forge-rerun-README.md`, strict adaptation of the G-H/G-D
-  operator pattern) + an env-gated harness (`ADE_LIVE_C1_FORGE_RERUN`, `node_c1_forge_rerun_live`)
-  proving, on the real C1 net, that `--mode node` reaches a forge tick + self-accepts from the
-  empty feed (the prior halt gone), the S1 events showing
-  `forge_tick_skipped → forge_attempted → forge_result`. `blocked_until_operator_c1_forge_rerun`;
-  **no synthetic evidence; no RO-LIVE flip** (peer ACCEPT operator-gated via `correlate`).
+- **BLUE codec (S2) is POSITION-BLIND** — it decodes `null → Genesis` and `hash32 → Block` *without*
+  knowing `block_number`, and encodes the inverse, canonically. It has no position semantics.
+- **BLUE validator (S3) is POSITION-AWARE** — `block_number 0` requires `Genesis`; `block_number > 0`
+  requires `Block`. This rule lives in header/position validation, **never** the byte decoder alone.
 
-## §8 Slices
-- **S1 — Closed feed-state taxonomy + diagnostic events** (CE-G-J-1) — invariant: a closed,
-  allow-listed `CN-NODE-04` vocabulary + the closed feed-state taxonomy, **emit-only**, **no
-  behavior change**. — **TCB: GREEN** (vocab + taxonomy) **+ RED** (classification + emission); no
-  BLUE change, no scheduling change.
-- **S2 — Empty/at-tip recovered-base forge scheduling** (CE-G-J-2) — invariant: the `DC-NODE-08`
-  gate — extend `plan_loop_step` so an eligible empty/at-tip feed + recovered base + producer
-  intent + a due forge slot yields `ForgeTick` (ineligible stays fail-closed); leadership/epoch/KES
-  enforced by the existing forge path; reuse `forge_one_from_recovered` verbatim. — **TCB: GREEN**
-  (planner table) **+ RED** (loop wiring); no BLUE change.
-- **S3 — C1 forge rerun harness + runbook** (CE-G-J-3) — invariant: the empty-feed forge mechanism
-  is exercised on the real C1 net (sole producer; the Haskell node a follower-**not**-co-producer),
-  the prior halt gone, acceptance still proven only via `correlate`. — **TCB: RED** (harness +
-  runbook); no BLUE change.
+## §4 The recovered-lineage doctrine (preserves the Mithril/recovered-state line)
+
+The recovered seed-epoch lineage gates **permission** to forge from the genesis-successor position (it
+proves the base is recovered, not raw genesis). It is **not** the source of the prev_hash bytes —
+those are structurally `null`, from the Cardano header grammar. Recovered state remains bootstrap
+authority, never the wire-format source.
+
+## §5 Verified component inventory (colors + facts confirmed this session)
+
+| Locus | Fact | Color | Touched by |
+|---|---|---|---|
+| `ade_codec/src/shelley/block.rs:144` | `prev_hash = read_hash32(...)` unconditional; no `null` branch | BLUE | **S2** |
+| `ade_runtime/src/producer/tick_assembler.rs:43` | `pub prev_hash: Hash32` (flat) | BLUE | **S2** |
+| `ade_runtime/src/producer/chain_evolution.rs:131-136` | `None => Hash32([0u8;32])` (all-zeros, wrong); `next_block_number()=0` at tip None | BLUE | **S3** |
+| `ade_core` consensus/header validation (`header_summary.rs`, `block_validity`) | position-rule home (OQ-C) | BLUE | **S3** |
+| `ade_node/src/node_lifecycle.rs:1055-1138` | `selected_tip = tip ?? recovered.tip`; `!forged → NoTipAvailable` (recovered.tip also None at genesis) | RED/GREEN | **S4** |
+| `ade_node/src/node_sync.rs:482-518` | `forge_one_from_recovered(recovered, selected_tip, …)` — reused, base only | BLUE-driven | S3/S4 |
+| `ade_runtime/src/bootstrap.rs:92` | `BootstrapState{ledger, chain_dep, tip:Option<ChainTip>, seed_epoch_consensus_inputs}` — **no anchor field**; `anchor_fp` ≠ header parent | — | (context) |
+| `ade_node/src/live_log/sched_event.rs` | `FeedReason::is_forge_eligible` (S1, enforced) | GREEN | reused by **S4** |
+
+## §6 TCB color map
+
+- **BLUE** — `ade_codec` (`PrevHash` sum + header_body `$hash32 / null` codec, position-blind);
+  `ade_core`/`ade_ledger` (header-position validation + forge emitting `Genesis` + header-hash over a
+  null-prev header).
+- **GREEN** — `ade_node` node-spine first-block *permission* decision (a pure selection over recovered
+  state) + the reused `CN-NODE-04` `FeedReason` eligibility.
+- **RED** — `ade_node` relay-loop wiring + the C1 rehearsal harness.
+
+## §7 Slices (dependency chain: represent → validate/forge → reach → prove)
+
+| Slice | Scope | CE | TCB | Registry | Status |
+|---|---|---|---|---|---|
+| **S1** | Closed feed/forge diagnostics, emit-only, no behavior change | CE-G-J-1 | GREEN+RED | `CN-NODE-04` | **DONE / ENFORCED** (`60303079`) |
+| **S2** | `PrevHash = Genesis \| Block(Hash32)`; header_body codec `$hash32 / null`; canonical, position-blind round-trip; migrate flat `Hash32` → `PrevHash` | CE-G-J-2 | BLUE | `CN-WIRE-09` → enforced | planned |
+| **S3** | Header-position validation (`0 ⇒ Genesis`, `>0 ⇒ Block`); forge emits `Genesis` for block 0 (all-zero parent gone) | CE-G-J-3 | BLUE | `DC-FORGE-01` reused | planned — **after S2** |
+| **S4** | Node-spine first-block reachability: both tips `None` + recovered lineage + eligible feed + `ForgeIntent::On` → forge first block through the accepted path, once | CE-G-J-4 | GREEN+RED | `DC-NODE-08` → enforced | planned — **after S3** |
+| **S5** | C1 operator-gated genesis-successor rehearsal; `correlate → PrivateRehearsalManifest` | CE-G-J-5 | RED | `RO-LIVE-01` cross-ref, no flip | planned — operator-gated |
+
+## §8 Cluster Exit Criteria
+
+- **CE-G-J-1** (mechanical, **met**) — `--mode node` emits the closed `CN-NODE-04` feed/forge
+  diagnostic vocabulary, emit-only, no behavior change. Tests `node_sched_events_emit_closed_vocabulary`
+  + `node_sched_event_allowlist_rejects_unknown_variants`; gate `ci_check_node_sched_events_emit_only.sh`.
+- **CE-G-J-2** (mechanical) — the header_body `prev_hash` codec round-trips `Genesis ↔ null` and
+  `Block(h) ↔ hash32` canonically through one position-blind BLUE authority; a genesis-successor
+  null-prev header round-trips in the corpus. Named tests + gate resolved in the S2 slice doc;
+  `CN-WIRE-09` declared → enforced.
+- **CE-G-J-3** (mechanical) — header-position validation rejects `Block` at `block_number 0` and
+  `Genesis` at `block_number > 0`; the forge emits `PrevHash::Genesis` for the first block (hermetic);
+  the all-zero parent is gone. Named tests resolved in the S3 slice doc.
+- **CE-G-J-4** (mechanical) — a hermetic first-block-from-empty-feed forge tick fires, self-accepts →
+  handoff → served from the recovered lineage when both tips are `None` + eligible feed +
+  `ForgeIntent::On`, exactly once. Named test resolved in the S4 slice doc; `DC-NODE-08` declared →
+  enforced.
+- **CE-G-J-5** (operator-gated) — a C1 rerun harness + runbook: a real Haskell follower **is expected
+  to** validate/fetch the Ade-forged genesis-successor block **if the block is protocol-valid**; the
+  only acceptance claim comes from the follower log through `correlate → PrivateRehearsalManifest`.
+  No RO-LIVE flip. `blocked_until_operator_c1_genesis_successor_rehearsal` (the mechanical harness
+  closes; live execution stays gated).
 
 ## §9 Replay obligations
-**None new.** No new authoritative state, no new canonical type on the forge path; the forged block
-+ `self_accept/handoff/served` effects stay byte-identical (`DC-FORGE-01` / `DC-NODE-06/07`).
-`plan_loop_step` stays a total, deterministic table (existing tests **extended, not weakened**).
-The feed-state taxonomy classifies a **RED shell input**, not authoritative state. `CN-NODE-04`
-events are **operational tier**, **outside** the replay-equivalence weight class (never gate
-acceptance, never read back by authority).
 
-## §10 FC/IS partition
-- **BLUE** = `ade_core`/`ade_ledger` forge composition (reused, unchanged).
-- **GREEN** = `ade_node::run_loop_planner` + the feed-state taxonomy enum + `ade_node::live_log::event`.
-- **RED** = `ade_node::node_sync` (`NodeBlockSource`), `ade_node::node_lifecycle` (relay loop), `ade_node::live_log::writer`.
+- **S2 introduces a new canonical wire type** — `PrevHash` (header_body `prev_hash`: flat `hash32` →
+  `$hash32 / null`). The canonical-type count moves; a **genesis-successor null-prev header round-trip
+  corpus entry** is owed in S2.
+- **S3/S4** — the forged first block + `self_accept`/handoff/serve effects stay byte-identical
+  (`DC-FORGE-01`) for a given recovered surface; no further new canonical types.
+- **S1** — `CN-NODE-04` events stay operational-tier, outside the replay weight class.
 
-## §11 Forbidden during this cluster (inherited by every slice)
-- No co-producer workaround; no private-only/C1-only flag or branch.
-- No bypass of `import_live_consensus_inputs`; forge base is the recovered surface only
-  (`CN-CINPUT-03`/`DC-CINPUT-02b` byte-/semantically unchanged); no forge from unanchored genesis;
-  no stale-base forge.
-- No durable tip advance from forge scheduling alone; no serve of non-self-accepted bytes
-  (`DC-NODE-06/07` unweakened); no BLUE change to the forge composition.
-- The planner stays a **scheduler, never a leadership authority**; the planner **never consumes**
-  `CN-NODE-04` events (emit-only).
-- No peer-acceptance/BA-02 claim without a real peer log through `ba02_evidence::correlate`; **no
-  `RO-LIVE-01/06` flip** at implementation close.
+## §10 Invariants
 
-## §12 Non-goals
-- A proactive serve `advance_tip` driver (separate cluster, if a parked follower needs it).
-- Multi-producer / co-producer topology; any change to the leader-election authority.
-- Any C2/preprod behavior change — the Continuing-feed path is byte-unchanged for them.
+- **Preserves:** `CN-NODE-04` (S1, enforced, byte-unchanged), `DC-FORGE-01` / `CN-FORGE-01..04`
+  (forged-block bytes for a given base), `DC-NODE-06` (self-accept handoff), `DC-NODE-07` (single
+  shared serve), `DC-EPOCH-03` (single-epoch forge containment), `CN-CINPUT-03` / `DC-CINPUT-02b`
+  (forge base = recovered surface only), `RO-LIVE-01/06` (no flip).
+- **Strengthens:** `CN-WIRE-09` declared → enforced at S2 close (PrevHash wire grammar);
+  `DC-NODE-08` declared → enforced at S4 close (node-spine genesis-successor reachability).
 
-## §13 Open questions (carried to slice docs)
-- **OQ1 (load-bearing) — RESOLVED fail-closed in S1:** the `is_ended → closed feed_state` mapping.
-  The reason-less `disconnected: bool` cannot prove a clean drain, so a WirePump disconnect → the
-  ineligible `UnknownDisconnected`; a WirePump open-but-empty → eligible `NoBlockAvailable`; an
-  InMemory drain → eligible `CleanEmpty`. The C1 disconnect is therefore **ineligible until S1's
-  observability reveals its real reason** (the C1 rerun) — not assumed eligible. The specific error
-  reasons (`PeerLost|DecodeError|…`) and a reason-enriched live `CleanEmpty` await a future
-  wire-pump enrichment (NOT S1).
-- **OQ-color (S2):** confirm `plan_loop_step` stays a separable pure GREEN fn — **extend the table,
-  do not embed leadership**.
-- **OQ-liveness (S2):** an eligible empty feed at a **non-forge-slot** must `Idle` (bounded), never
-  busy-loop; confirm the existing `NoWorkReady` idle/backpressure bounds it.
+## §11 Forbidden during this cluster (slice-level hard prohibitions inherit)
+
+Genesis predecessor is `null`/`Genesis` only — no hash stand-in (all-zeros / `anchor_fp` / genesis
+hash); no forge from raw/unanchored genesis; no from-genesis consensus-input constructor; no bypass of
+`import_live_consensus_inputs`; no stale base; no durable tip advance from forge scheduling alone; no
+skip around `self_accept`; no serve of non-self-accepted bytes; **no second PrevHash representation /
+parallel header encoder**; the position rule lives in the validator, never the byte codec alone;
+**S4 ships only after S2 + S3** (never make Ade emit a prev_hash a real peer must reject); no
+RO-LIVE-01/06 flip (peer-accept operator-gated via `ba02_evidence::correlate`); no co-producer
+workaround; no private-only / C1-only flag.
+
+## §12 Open questions (carried to the slice docs)
+
+- **OQ-A** — does the header-hash domain cover `prev_hash`, so a null-prev header hashes correctly
+  (block 2's future parent)? Resolve before S3.
+- **OQ-B** — `null` is scoped to the header_body `prev_hash` field **only**; chain-sync / block-fetch
+  Points & Tips stay `hash32`, never `null`. The codec change must not leak `null` into Point/Tip.
+- **OQ-C** — where exactly do `block_validity` / `self_accept` / `ade_core` `header_summary.rs` enforce
+  the position rule?
+- **OQ-D** — S4 eligibility reuses S1 `FeedReason::is_forge_eligible` (`no_block_available |
+  clean_empty`); `unknown_disconnected` never reaches first-block forge.
+- **OQ-E** — `PrevHash` sum-type home: `ade_types` / `ade_codec` / `ade_core` consensus.
+
+## §13 Non-goals
+
+Tip-path forge behavior for an existing real parent remains out of scope **except** for migrating the
+representation from flat `Hash32` to `PrevHash::Block(hash32)` and preserving byte-identical `hash32`
+encoding (a representation migration, not a semantic change); Mithril FirstRun changes; any RO-LIVE
+flip or bounty BA-02 completion; proactive serve beyond the existing handoff; preprod execution (C1
+rehearsal only).
