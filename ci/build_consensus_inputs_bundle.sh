@@ -45,9 +45,14 @@ run_cli() {
 }
 
 # 1. Tip — hash + slot + slot-in-epoch.
+# At a fresh net's origin (no blocks produced yet) `query tip` returns
+# neither `hash` nor `slot`; treat that as the genesis point (slot 0,
+# origin-sentinel hash) so the same extractor works at any tip, origin
+# included. The consensus fields (nonce/stake/ASC/epoch) are populated
+# from epoch 0 regardless.
 TIP_JSON=$(run_cli query tip)
-TIP_HASH=$(echo "$TIP_JSON" | python3 -c 'import json,sys; print(json.load(sys.stdin)["hash"])')
-TIP_SLOT=$(echo "$TIP_JSON" | python3 -c 'import json,sys; print(json.load(sys.stdin)["slot"])')
+TIP_HASH=$(echo "$TIP_JSON" | python3 -c 'import json,sys; print(json.load(sys.stdin).get("hash","0"*64))')
+TIP_SLOT=$(echo "$TIP_JSON" | python3 -c 'import json,sys; print(json.load(sys.stdin).get("slot",0))')
 EPOCH_NO=$(echo "$TIP_JSON" | python3 -c 'import json,sys; print(json.load(sys.stdin)["epoch"])')
 SLOT_IN_EPOCH=$(echo "$TIP_JSON" | python3 -c 'import json,sys; print(json.load(sys.stdin)["slotInEpoch"])')
 NODE_VERSION=$(docker exec "$CONTAINER" cardano-node --version 2>&1 | head -1)
@@ -69,15 +74,18 @@ POOL_STATE_JSON=$(run_cli query pool-state --all-stake-pools)
 # `protocol_params_hash_hex` (blake2b-256 of canonical JSON).
 PROTO_PARAMS_JSON=$(run_cli query protocol-parameters)
 
-# 6. Genesis hash from local config.
+# 6. Genesis hash from the venue's node config (default: the local
+# preprod config; override via ADE_LIVE_GENESIS_CONFIG for another
+# venue, e.g. a private testnet — same extraction, different node).
+GENESIS_CONFIG="${ADE_LIVE_GENESIS_CONFIG:-${REPO_ROOT}/.cardano-node-preprod/config/config.json}"
 GENESIS_HASH=$(python3 -c "
 import json,sys
-with open('${REPO_ROOT}/.cardano-node-preprod/config/config.json') as f:
+with open('${GENESIS_CONFIG}') as f:
     cfg = json.load(f)
 print(cfg.get('ShelleyGenesisHash'))
 ")
 if [[ -z "$GENESIS_HASH" || "$GENESIS_HASH" == "None" ]]; then
-    echo "FATAL: ShelleyGenesisHash missing from preprod config.json" >&2
+    echo "FATAL: ShelleyGenesisHash missing from ${GENESIS_CONFIG}" >&2
     exit 1
 fi
 
@@ -202,6 +210,10 @@ bundle = {
     "pool_distribution": pool_distribution,
     "pool_vrf_keyhashes": pool_vrf_keyhashes,
     "protocol_params_hash_hex": proto_params_hash,
+    # Oracle preimage for the forge-current-pparams install
+    # (require_forge_current_pparams): the EXACT canonical dump that
+    # protocol_params_hash binds, so blake2b_256(preimage) == hash.
+    "protocol_params_json": canonical_pp.decode(),
     "source_cardano_node_version": node_version,
     "source_query_command": (
         "docker exec cardano-node-preprod cardano-cli query "
