@@ -1078,7 +1078,22 @@ pub async fn run_relay_loop_with_sched(
                         Some(t) => Some(t),
                         None => act.recovered.tip.clone(),
                     };
-                    if let Some(tip) = selected_tip {
+                    // S4 (DC-NODE-08): the genesis-successor is reachable when
+                    // BOTH tips are None (a from-genesis cold start), but ONLY
+                    // when the recovered seed-epoch lineage is present AND the
+                    // feed is forge-eligible (the CN-NODE-04 split:
+                    // no_block_available | clean_empty). ForgeIntent::On is
+                    // implied (the `act` activation is present). A present tip
+                    // takes the existing WITH-tip path. Ineligible feed / missing
+                    // lineage fail closed — no forge, exactly like a
+                    // NoTipAvailable skip. The cold-start ctx is assembled inside
+                    // forge_one_from_recovered (None ⇒ block 0 + PrevHash::Genesis).
+                    let may_cold_start = may_cold_start_forge(
+                        selected_tip.is_some(),
+                        act.recovered.seed_epoch_consensus_inputs.is_some(),
+                        source.feed_reason().is_forge_eligible(),
+                    );
+                    if selected_tip.is_some() || may_cold_start {
                         if let Some(s) = sched.as_deref_mut() {
                             s.record(&crate::live_log::NodeSchedEvent::ForgeAttempted);
                         }
@@ -1093,7 +1108,7 @@ pub async fn run_relay_loop_with_sched(
                         // semantically unchanged).
                         let (outcome, handoff) = forge_one_from_recovered(
                             act.recovered,
-                            &tip,
+                            selected_tip.as_ref(),
                             act.shell,
                             &act.pool_id,
                             &act.pparams,
@@ -1650,6 +1665,21 @@ fn report(e: &NodeLifecycleError) {
     }
 }
 
+/// GREEN cold-start forge permission (DC-NODE-08): the genesis-successor may be
+/// forged only when there is NO selected tip (a from-genesis cold start) AND the
+/// recovered seed-epoch lineage is present AND the feed is forge-eligible
+/// (CN-NODE-04: no_block_available | clean_empty). ForgeIntent::On is a
+/// precondition of reaching this decision (the forge activation is present); a
+/// present tip takes the existing WITH-tip path, never this gate. Pure: proposes
+/// the permission; the BLUE forge / self_accept disposes.
+fn may_cold_start_forge(
+    selected_tip_present: bool,
+    has_recovered_lineage: bool,
+    feed_eligible: bool,
+) -> bool {
+    !selected_tip_present && has_recovered_lineage && feed_eligible
+}
+
 #[cfg(test)]
 #[allow(clippy::unwrap_used)]
 #[allow(clippy::expect_used)]
@@ -1668,6 +1698,33 @@ mod tests {
         assert_eq!(out_pv, ProtocolVersion { major: 9, minor: 1 });
         assert_eq!(out_pp.protocol_major, 9);
         assert_ne!(out_pv.major, 2, "must not be the stale default protocol_major");
+    }
+
+    // ===== PHASE4-N-F-G-J S4: cold-start forge permission gate =====
+
+    #[test]
+    fn cold_start_gate_allows_genesis_when_eligible_and_recovered() {
+        // no tip + recovered lineage + eligible feed ⇒ may cold-start forge.
+        assert!(may_cold_start_forge(false, true, true));
+    }
+
+    #[test]
+    fn node_spine_cold_start_ineligible_feed_does_not_forge() {
+        // UnknownDisconnected (ineligible feed) ⇒ no genesis forge; fail closed.
+        assert!(!may_cold_start_forge(false, true, false));
+    }
+
+    #[test]
+    fn cold_start_gate_blocks_without_recovered_lineage() {
+        // No recovered seed-epoch lineage ⇒ no forge from raw/unanchored genesis.
+        assert!(!may_cold_start_forge(false, false, true));
+    }
+
+    #[test]
+    fn cold_start_gate_inactive_when_tip_present() {
+        // A present tip takes the existing WITH-tip path, never the cold-start
+        // gate — so the genesis forge never double-fires once a tip exists.
+        assert!(!may_cold_start_forge(true, true, true));
     }
 
     // ===== PHASE4-N-F-G-C S1: live WirePump feed helper (CE-G-C-1) =========

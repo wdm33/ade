@@ -394,6 +394,11 @@ pub enum NodeForgeError {
     /// from the recovered surface (DC-CINPUT-02b); without it there is no
     /// forge base, and L5 fails closed rather than reach for a bundle.
     MissingRecoveredConsensusInputs,
+    /// A selected tip is present but `recovered.chain_dep.last_block_no` is
+    /// None — a malformed recovered state (a tip implies a block height).
+    /// Fail closed rather than default to a magic block number (the
+    /// cold-start `block 0` path is the `selected_tip == None` branch).
+    RecoveredTipMissingBlockNo,
 }
 
 /// PHASE4-N-F-G-A S4 — the node forge path's explicit single-recovered-seed-epoch
@@ -475,13 +480,36 @@ pub fn forge_epoch_admission(
 /// Single-shot: one slot, one attempt. No slot loop, no peer evidence, no
 /// BA-02 claim, no multi-epoch — those are deferred to L6 / N-U.
 ///
+/// GREEN cold-start header position (DC-NODE-08) — the single cold-start
+/// convention. No selected tip ⇒ the genesis-successor: `block_number 0` +
+/// `PrevHash::Genesis`, matching `ChainEvolution::next_block_number()` (tip
+/// None ⇒ 0). A selected tip ⇒ `block (last_block_no + 1)` +
+/// `PrevHash::Block(tip.hash)`; a tip without a recorded height is a malformed
+/// recovered state and fails closed — never a magic block-number default. Pure:
+/// proposes the `(block_number, prev_hash)` pair; the BLUE check_header_position
+/// (S3) is the final authority on its legality.
+fn forge_header_position(
+    selected_tip: Option<&ChainTip>,
+    last_block_no: Option<BlockNo>,
+) -> Result<(u64, PrevHash), NodeForgeError> {
+    match selected_tip {
+        None => Ok((0, PrevHash::Genesis)),
+        Some(tip) => {
+            let n = last_block_no
+                .map(|b| b.0 + 1)
+                .ok_or(NodeForgeError::RecoveredTipMissingBlockNo)?;
+            Ok((n, PrevHash::Block(tip.hash.clone())))
+        }
+    }
+}
+
 /// Returns the reused `CoordinatorEvent` (`ForgeSucceeded` /
 /// `ForgeNotLeader` / `ForgeFailed`), or a typed `NodeForgeError` when the
 /// recovered base cannot host a forge.
 #[allow(clippy::too_many_arguments)]
 pub fn forge_one_from_recovered(
     recovered: &BootstrapState,
-    selected_tip: &ChainTip,
+    selected_tip: Option<&ChainTip>,
     shell: &mut ProducerShell,
     pool_id: &Hash28,
     pparams: &ProtocolParameters,
@@ -549,15 +577,10 @@ pub fn forge_one_from_recovered(
         }
     };
 
-    // Forge base from recovered state + the selected tip. block_number is
-    // tip+1: the recovered chain_dep's last_block_no is the tip's block
-    // number (0/None ⇒ first forged block is number 1).
-    let next_block_number = recovered
-        .chain_dep
-        .last_block_no
-        .map(|b| b.0 + 1)
-        .unwrap_or(1);
-    let _ = selected_tip.slot; // tip identity is the prev_hash below.
+    // Cold-start convention (ONE, matching ChainEvolution::next_block_number):
+    // the genesis-successor (no selected tip) is block 0 + PrevHash::Genesis.
+    let (next_block_number, prev_hash) =
+        forge_header_position(selected_tip, recovered.chain_dep.last_block_no)?;
     let vrf_vk = shell.vrf_verification_key();
 
     let ctx = ForgeRequestContext {
@@ -570,7 +593,7 @@ pub fn forge_one_from_recovered(
         era_schedule,
         pool_distr_view: &pool_distr_view,
         block_number: BlockNo(next_block_number),
-        prev_hash: PrevHash::Block(selected_tip.hash.clone()),
+        prev_hash,
         protocol_version,
         prev_opcert_counter: None,
     };
@@ -1558,6 +1581,10 @@ mod tests {
         let mut chain_dep = PraosChainDepState::empty();
         chain_dep.epoch_nonce = Nonce(Hash32([0xCD; 32]));
         chain_dep.evolving_nonce = Nonce(Hash32([0xCD; 32]));
+        // A recovered tip implies a recorded block height: the recovered tip is
+        // block 0, so the next forged block is number 1 (the WITH-tip path),
+        // byte-identical to the pre-S4 unwrap_or(1) behaviour.
+        chain_dep.last_block_no = Some(BlockNo(0));
         BootstrapState {
             ledger,
             chain_dep,
@@ -1602,7 +1629,7 @@ mod tests {
         let mut shell = l5_synth_shell(0x11, 0x22, 0x33);
         let (event, _handoff) = forge_one_from_recovered(
             &recovered,
-            &tip,
+            Some(&tip),
             &mut shell,
             &L5_POOL,
             &ProtocolParameters::default(),
@@ -1632,7 +1659,7 @@ mod tests {
         let mut shell2 = l5_synth_shell(0xAB, 0xCD, 0xEF);
         let (e1, h1) = forge_one_from_recovered(
             &recovered,
-            &tip,
+            Some(&tip),
             &mut shell1,
             &L5_POOL,
             &pparams,
@@ -1644,7 +1671,7 @@ mod tests {
         .expect("ok");
         let (e2, h2) = forge_one_from_recovered(
             &recovered,
-            &tip,
+            Some(&tip),
             &mut shell2,
             &L5_POOL,
             &pparams,
@@ -1673,7 +1700,7 @@ mod tests {
         let mut shell = l5_synth_shell(0x44, 0x55, 0x66);
         let r = forge_one_from_recovered(
             &recovered,
-            &tip,
+            Some(&tip),
             &mut shell,
             &L5_POOL,
             &ProtocolParameters::default(),
@@ -1686,6 +1713,122 @@ mod tests {
             matches!(r, Err(NodeForgeError::MissingRecoveredConsensusInputs)),
             "missing recovered consensus inputs must fail closed, got {r:?}"
         );
+    }
+
+    // ===== PHASE4-N-F-G-J S4: cold-start (genesis) reachability =====
+
+    #[test]
+    fn forge_one_from_recovered_cold_start_is_block_zero_genesis() {
+        // No selected tip ⇒ genesis-successor: block 0 + PrevHash::Genesis,
+        // regardless of any recovered last_block_no.
+        assert_eq!(
+            forge_header_position(None, None).unwrap(),
+            (0u64, PrevHash::Genesis)
+        );
+        assert_eq!(
+            forge_header_position(None, Some(BlockNo(99))).unwrap(),
+            (0u64, PrevHash::Genesis)
+        );
+    }
+
+    #[test]
+    fn forge_one_from_recovered_with_tip_is_block_n_plus_one_block_prev() {
+        let tip = ChainTip {
+            hash: Hash32([0xBB; 32]),
+            slot: SlotNo(10),
+        };
+        assert_eq!(
+            forge_header_position(Some(&tip), Some(BlockNo(4))).unwrap(),
+            (5u64, PrevHash::Block(Hash32([0xBB; 32])))
+        );
+    }
+
+    #[test]
+    fn forge_header_position_some_tip_without_block_no_fails_closed() {
+        let tip = ChainTip {
+            hash: Hash32([0xBB; 32]),
+            slot: SlotNo(10),
+        };
+        assert!(matches!(
+            forge_header_position(Some(&tip), None),
+            Err(NodeForgeError::RecoveredTipMissingBlockNo)
+        ));
+    }
+
+    #[test]
+    fn cold_start_block_number_is_zero_single_convention() {
+        // ONE cold-start convention: node_sync's cold-start block number is 0,
+        // matching ChainEvolution::next_block_number() at tip None (also 0).
+        // The pre-S4 disagreement (node_sync unwrap_or(1)) is gone.
+        use ade_runtime::producer::chain_evolution::ChainEvolution;
+        let (n, prev) = forge_header_position(None, None).unwrap();
+        assert_eq!(n, 0, "cold-start block number is 0, not 1");
+        assert_eq!(prev, PrevHash::Genesis);
+        let evo = ChainEvolution::seed(
+            LedgerState::new(CardanoEra::Conway),
+            PraosChainDepState::empty(),
+            None, // tip None = cold start
+            l5_era_schedule(),
+            PoolDistrView::from_seed_epoch_consensus_inputs(&l5_recovered_inputs()),
+            Nonce(Hash32([0xCD; 32])),
+        );
+        assert_eq!(
+            n,
+            evo.next_block_number(),
+            "node_sync and ChainEvolution agree on the cold-start block number"
+        );
+    }
+
+    #[test]
+    fn node_spine_cold_start_forges_genesis_block_zero() {
+        // The cold-start ctx (None tip) flows through the SAME run_real_forge
+        // S3 proved. asc 1/1 ⇒ the operator is always leader, so the Eligible
+        // forge path is reached; on self-accept the forged block is 0 + Genesis.
+        let recovered = l5_recovered_state(Some(l5_recovered_inputs()));
+        let mut shell = l5_synth_shell(0x11, 0x22, 0x33);
+        let (event, handoff) = forge_one_from_recovered(
+            &recovered,
+            None,
+            &mut shell,
+            &L5_POOL,
+            &ProtocolParameters::default(),
+            &l5_era_schedule(),
+            13,
+            0,
+            ProtocolVersion { major: 9, minor: 0 },
+        )
+        .expect("cold-start forge over the recovered base");
+        match event {
+            CoordinatorEvent::ForgeSucceeded { artifact, .. } => {
+                let decoded = ade_ledger::block_validity::decode_block(&artifact.bytes)
+                    .expect("forged genesis block decodes (passes check_header_position)");
+                assert_eq!(
+                    decoded.header_input.block_no.0, 0,
+                    "genesis-successor is block 0"
+                );
+                let inner = &artifact.bytes[decoded.inner_start..decoded.inner_end];
+                let reparsed = ade_codec::conway::decode_conway_block(inner).unwrap();
+                assert_eq!(
+                    reparsed.decoded().header.body.prev_hash,
+                    PrevHash::Genesis,
+                    "the genesis-successor carries PrevHash::Genesis"
+                );
+                assert!(
+                    handoff.is_some(),
+                    "ForgeSucceeded surfaces exactly one self-accept handoff"
+                );
+            }
+            CoordinatorEvent::ForgeFailed { .. } => {
+                // The cold-start ctx reached the forge engine (Eligible leader,
+                // asc 1/1) but the synthetic VRF/KES did not self-accept. The
+                // block-0/Genesis derivation is proven by forge_header_position;
+                // this still proves reachability (NOT ForgeNotLeader).
+            }
+            CoordinatorEvent::ForgeNotLeader { .. } => {
+                panic!("cold-start ctx must reach the Eligible forge path (asc 1/1)");
+            }
+            other => panic!("unexpected cold-start outcome: {other:?}"),
+        }
     }
 
     // ===== S2: forge-tick wiring into the relay loop (self-accept-only) =====
@@ -2538,7 +2681,7 @@ mod tests {
         // kes_period is irrelevant — the epoch guard fires before leadership/signing.
         let (outcome, handoff) = forge_one_from_recovered(
             &recovered,
-            &tip,
+            Some(&tip),
             &mut shell,
             &L5_POOL,
             &ProtocolParameters::default(),
@@ -2586,7 +2729,7 @@ mod tests {
         let eta0_before = recovered.chain_dep.epoch_nonce.clone();
         let (outcome, handoff) = forge_one_from_recovered(
             &recovered,
-            &tip,
+            Some(&tip),
             &mut shell,
             &L5_POOL,
             &ProtocolParameters::default(),

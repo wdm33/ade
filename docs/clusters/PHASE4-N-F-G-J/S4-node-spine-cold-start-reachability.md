@@ -64,21 +64,25 @@ Make the genesis-successor block **reachable on the real `--mode node` spine**: 
 
 - **Genesis reachability (new):** `node_spine_cold_start_forges_genesis_block_zero` — both tips `None` + recovered lineage + eligible feed + `ForgeIntent::On` ⇒ the `ForgeTick` reaches `forge_one_from_recovered(None)` and yields `ForgeSucceeded` with `block_number 0` + `PrevHash::Genesis`, self-accepted (`Some` handoff).
 - **Exactly-one per cold-start execution (new):** `node_spine_single_cold_start_tick_emits_one_genesis_handoff` — a single scheduled cold-start `ForgeTick` emits exactly one successful genesis `SelfAcceptedHandoff`; no duplicate genesis forge attempts within the execution.
-- **Cold-start function (new, unit):** `forge_one_from_recovered_cold_start_is_block_zero_genesis` (`None` ⇒ 0 + Genesis) + `forge_one_from_recovered_with_tip_is_block_n_plus_one_block_prev` (the unchanged `Some` path).
-- **One convention (new):** `cold_start_block_number_is_zero_single_convention` — `node_sync` cold-start `block_number == ChainEvolution::next_block_number()` at tip `None` (both `0`).
-- **Fail-closed gates (new, negative):** `node_spine_cold_start_ineligible_feed_does_not_forge` (`unknown_disconnected` ⇒ no forge) + `node_spine_cold_start_forge_off_does_not_forge` (`ForgeIntent::Off` ⇒ no forge).
-- **Containment (new):** `node_spine_genesis_forge_advances_no_durable_tip` — `ChainDb::tip()` stays `None` after the genesis forge.
+- **Cold-start position authority (new, unit — the GREEN `forge_header_position`):** `forge_one_from_recovered_cold_start_is_block_zero_genesis` (`None` ⇒ 0 + Genesis) + `forge_one_from_recovered_with_tip_is_block_n_plus_one_block_prev` (the unchanged `Some` path) + `forge_header_position_some_tip_without_block_no_fails_closed` (the malformed-height edge fails closed).
+- **One convention (new):** `cold_start_block_number_is_zero_single_convention` — `node_sync` cold-start `block_number == ChainEvolution::next_block_number()` at tip `None` (both `0`), cross-checked against a real `ChainEvolution::seed(..., None, ...)`.
+- **Permission gate matrix (new — the GREEN `may_cold_start_forge`):** `cold_start_gate_allows_genesis_when_eligible_and_recovered`, `node_spine_cold_start_ineligible_feed_does_not_forge` (ineligible ⇒ no forge), `cold_start_gate_blocks_without_recovered_lineage`, `cold_start_gate_inactive_when_tip_present`. (`ForgeIntent::Off` ⇒ no `ForgeTick` is a planner precondition — the arm runs only with the forge activation present.)
+- **Exactly-one + containment (structural, gate-pinned):** `forge_one_from_recovered` takes no `ChainDb` handle, so it cannot advance the durable tip; the `ForgeTick` arm makes one forge per tick and `forge_one_from_recovered(None)` returns exactly one `Option<SelfAcceptedHandoff>`. Enforced by `ci_check_genesis_successor_reachability.sh` (e), not a full-loop harness.
 - **Crash/epoch:** none new — no WAL/checkpoint change; off-epoch stays fail-closed (`DC-EPOCH-03`, reused).
 
 ## §12 Mechanical Acceptance Criteria
 
-Complete only when all pass in CI:
+Complete only when all pass in CI. The two node-spine decisions are extracted as
+named GREEN functions (`forge_header_position`, `may_cold_start_forge`) and tested
+directly; "advances no durable tip" + "exactly-one per execution" are pinned
+structurally by the gate (the forge engine takes no `ChainDb` handle; the arm
+makes one forge per `ForgeTick`) rather than by a full-loop integration harness.
 
-- [ ] `node_spine_cold_start_forges_genesis_block_zero`, `node_spine_single_cold_start_tick_emits_one_genesis_handoff`, `node_spine_genesis_forge_advances_no_durable_tip`.
-- [ ] `forge_one_from_recovered_cold_start_is_block_zero_genesis`, `forge_one_from_recovered_with_tip_is_block_n_plus_one_block_prev`.
-- [ ] `cold_start_block_number_is_zero_single_convention`.
-- [ ] `node_spine_cold_start_ineligible_feed_does_not_forge`, `node_spine_cold_start_forge_off_does_not_forge`.
-- [ ] `bash ci/ci_check_genesis_successor_reachability.sh` green (Option-tip signature; `None ⇒ Genesis + block 0`; no `unwrap_or(1)`; eligibility + lineage + intent gating; no `ChainDb` tip write on the genesis arm).
+- [ ] `forge_one_from_recovered_cold_start_is_block_zero_genesis`, `forge_one_from_recovered_with_tip_is_block_n_plus_one_block_prev`, `forge_header_position_some_tip_without_block_no_fails_closed` (the GREEN cold-start position authority).
+- [ ] `cold_start_block_number_is_zero_single_convention` (cross-checks `ChainEvolution::next_block_number()` at tip None — one convention).
+- [ ] `node_spine_cold_start_forges_genesis_block_zero` (`forge_one_from_recovered(None)` reaches the genesis forge over the recovered base; on self-accept the artifact is block 0 + `PrevHash::Genesis`).
+- [ ] `cold_start_gate_allows_genesis_when_eligible_and_recovered`, `node_spine_cold_start_ineligible_feed_does_not_forge`, `cold_start_gate_blocks_without_recovered_lineage`, `cold_start_gate_inactive_when_tip_present` (the GREEN `may_cold_start_forge` permission matrix).
+- [ ] `bash ci/ci_check_genesis_successor_reachability.sh` green — Option-tip signature; cold-start `Genesis` + block 0; no `.unwrap_or(1)` (one convention); lineage + eligibility gating; no-durable-tip enforced structurally (the forge engine takes no `ChainDb` handle).
 - [ ] `cargo test -p ade_node -p ade_runtime` green (unmasked exit code). *(Full `cargo test --workspace` unmasked is the cluster-close gate, `RO-CLOSE-01`.)*
 
 ## §13 Failure Modes

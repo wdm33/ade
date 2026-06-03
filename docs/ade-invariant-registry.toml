@@ -5957,13 +5957,24 @@ never a private-only / C1-only flag.
 """
 source = "docs/planning/phase4-n-f-g-j-genesis-successor-prevhash-invariants.md"
 cross_ref = ["DC-NODE-05", "DC-NODE-06", "DC-NODE-07", "DC-EPOCH-03", "CN-CINPUT-03", "DC-CINPUT-02b", "DC-FORGE-01", "CN-FORGE-01", "CN-NODE-04", "CN-WIRE-09", "RO-LIVE-01"]
-code_locus = "crates/ade_node/src/node_lifecycle.rs (the LoopStep::ForgeTick arm: ChainDb::tip / recovered.tip selection -> first-block reachability); crates/ade_node/src/node_sync.rs (forge_one_from_recovered); crates/ade_node/src/forge_intent.rs (ForgeIntent)"
-tests = []
-ci_script = ""
-status = "declared"
+code_locus = "crates/ade_node/src/node_sync.rs (forge_header_position -- GREEN single cold-start convention: None => block 0 + PrevHash::Genesis, Some => last_block_no+1 + Block, malformed-height edge fails closed; forge_one_from_recovered(selected_tip: Option<&ChainTip>) routes the cold-start ctx into the SAME run_real_forge S3 proved; NodeForgeError::RecoveredTipMissingBlockNo); crates/ade_node/src/node_lifecycle.rs (may_cold_start_forge -- GREEN cold-start permission: no tip + recovered lineage + forge-eligible feed; the LoopStep::ForgeTick arm passes selected_tip.as_ref() and gates the both-None genesis forge); crates/ade_node/src/forge_intent.rs (ForgeIntent::On precondition)"
+tests = [
+  "forge_one_from_recovered_cold_start_is_block_zero_genesis",
+  "forge_one_from_recovered_with_tip_is_block_n_plus_one_block_prev",
+  "forge_header_position_some_tip_without_block_no_fails_closed",
+  "cold_start_block_number_is_zero_single_convention",
+  "node_spine_cold_start_forges_genesis_block_zero",
+  "cold_start_gate_allows_genesis_when_eligible_and_recovered",
+  "node_spine_cold_start_ineligible_feed_does_not_forge",
+  "cold_start_gate_blocks_without_recovered_lineage",
+  "cold_start_gate_inactive_when_tip_present",
+]
+ci_script = "ci/ci_check_genesis_successor_reachability.sh"
+status = "enforced"
 introduced_in = "PHASE4-N-F-G-J"
 strengthened_in = []
 cluster = "PHASE4-N-F-G-J"
+evidence_notes = "PHASE4-N-F-G-J S4 (2026-06-03) flipped declared -> enforced. Node-spine cold-start first-block reachability: when ChainDb::tip() AND recovered.tip are both None, the LoopStep::ForgeTick arm forges block 0 + PrevHash::Genesis through the SAME run_real_forge -> self_accept -> SelfAcceptedHandoff path S3 proved, gated by may_cold_start_forge (recovered seed-epoch lineage present + ForgeIntent::On + FeedReason::is_forge_eligible: no_block_available | clean_empty). ONE cold-start convention: forge_header_position drives block 0 at no-tip, matching ChainEvolution::next_block_number() (the pre-S4 node_sync .unwrap_or(1) disagreement is deleted; a tip-without-height edge fails closed as RecoveredTipMissingBlockNo, never a magic default). Exactly-one is scoped to the hermetic cold-start execution (NO genesis_forged latch); the forge engine takes no ChainDb handle, so it advances no durable tip -- durable block-1+ progression is the durability slice (N-U). NO BLUE change. Tests decompose the two GREEN decisions (forge_header_position, may_cold_start_forge) + the forge_one_from_recovered(None) end-to-end path; the gate ci_check_genesis_successor_reachability.sh enforces the Option-tip signature, the cold-start Genesis emission, the single convention (no .unwrap_or(1)), the lineage+eligibility gating, and the no-ChainDb-handle structural no-durable-tip."
 
 [[rules]]
 id = "CN-WIRE-09"
