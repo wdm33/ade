@@ -51,17 +51,24 @@ durable tip is untouched (DC-NODE-05 intact).
 ## §7 Slices
 | Slice | Scope | CE | Registry | Status |
 |---|---|---|---|---|
-| **S1** | The serve sibling serves only block_no-advancing handoffs (first block 0 wins; later block-0 re-forges skipped); regression pins (a) two block-0 handoffs → the served view holds exactly ONE block 0 (the first); (b) a strictly-higher block_no handoff IS served | CE-G-R-1 | DC-NODE-11 → enforced | planned |
-| **S2** | Live C1 rerun (follower at genesis): Ade forges block 0, serves it STABLY (no churn), the follower fetches/adopts → `AddedToCurrentChain` → `correlate` → `PrivateRehearsalManifest` | CE-G-R-2 | operator-gated | planned |
+| **S1** | The serve sibling serves only block_no-advancing handoffs (first block 0 wins; later block-0 re-forges skipped); regression pins (a) two block-0 handoffs → the served view holds exactly ONE block 0 (the first); (b) a strictly-higher block_no handoff IS served | CE-G-R-1 | DC-NODE-11 → enforced | done |
+| **S2** | Live C1 rerun (follower at genesis): Ade forges block 0, serves it STABLY (no churn), the follower fetches/adopts → `AddedToCurrentChain` → `correlate` → `PrivateRehearsalManifest` | CE-G-R-2 | live-confirmed (manifest) | done |
 
 ## §8 Cluster Exit Criteria
 - **CE-G-R-1 (mechanical):**
   1. Two block_no-0 forge handoffs pushed through the serve gate → the served view holds exactly ONE block 0 (the first); the second is skipped (not re-served).
   2. A handoff whose block_no strictly exceeds the highest served IS served (the gate does not freeze the chain).
   3. No durable own-tip advance; no bypass of `self_accept`; no serve of unvalidated bytes.
-- **CE-G-R-2 (operator-gated):** a C1 rerun (follower at genesis) shows the follower fetch + ADOPT a STABLE
-  Ade-forged block 0 (`ChainDB.AddedToCurrentChain` / `ValidCandidate`), bound only by the follower log through
-  `correlate` → `PrivateRehearsalManifest`. `blocked_until_operator_c1_genesis_successor_rehearsal`; no RO-LIVE flip.
+- **CE-G-R-2 (live-confirmed 2026-06-04):** a C1 rerun (follower reset to genesis) showed the follower fetch +
+  ADOPT a STABLE Ade-forged block 0 — follower log `ChainDB.AddBlockValidation.ValidCandidate` +
+  `ChainDB.AddBlockEvent.AddedToCurrentChain` for `56a29ac4…c868f26f` at slot 122520, and `cardano-cli query tip`
+  reports the follower tip = that hash / block 0 / slot 122520. Bound the project's way: the follower-tip
+  peer-accept event through `ba02_evidence::correlate` → `Agreed` (`forged == matched == 56a29ac4…`,
+  `peer_accept_source = chain_tip`) → `PrivateRehearsalManifest` at
+  `docs/evidence/c1-genesis-rehearsal-manifest.toml` (`is_rehearsal = true`, `not_bounty_evidence = true`,
+  `venue = private-testnet-c1`). NARROW CLAIM: C1 private rehearsal success ONLY — **not** preprod, **not** bounty
+  BA-02, **no** RO-LIVE flip. Underlying proof: `docs/evidence/c1-genesis-rehearsal-follower.log` (raw
+  cardano-node chain events) + `…-peer-accept.jsonl` (the correlate input).
 
 ## §9 Replay obligations
 The serve gate is a deterministic monotone filter (same handoff sequence ⇒ same served view). No new
@@ -89,3 +96,13 @@ authoritative transition; `self_accept` + `served_chain_admit` + the serve reduc
   block 0 and forges block 1 (G-Q), the served view holds block 1 without the ingested predecessor block 0
   (the dirty-follower `UnexpectedBlockNo(0,1)` case). G-R's monotone gate keeps block 0 stable but does not
   serve a feed-ingested predecessor; that belongs with the own-tip / ingest-serve cluster.
+
+## §13 Close (2026-06-04)
+**CLOSED.** S1 mechanical (DC-NODE-11 enforced, `ci/ci_check_served_chain_stability.sh`) at `32e4498b`; S2 live
+on C1 (CE-G-R-2 above). This is **the C1 genesis-successor rehearsal milestone**: a real cardano-node follower
+validated + adopted an Ade-forged genesis-successor block, formally bound by the `PrivateRehearsalManifest`.
+The G-O→G-R sequence peeled the live blocker one layer deeper each slice — decode (G-O, CN-WIRE-12) → feed
+validate/ingest (G-P, DC-CINPUT-04) → forge-successor numbering (G-Q, DC-NODE-10) → **serve stability (G-R,
+DC-NODE-11)**, which eliminated the block-0 churn so the follower saw one stable block 0 to adopt. **Owed next
+(separate cluster, OQ-R1):** full producer own-tip advance — forge self-accepts → node adopts its own block as
+the durable tip → next forge builds block 1, 2, … Bounty BA-02 remains gated on C2/preprod real evidence.
