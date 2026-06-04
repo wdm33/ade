@@ -1,0 +1,33 @@
+# Captured real cardano-node ChainSync IntersectFound fixture (PHASE4-N-F-G-M grounding artifact).
+# The EXACT failing peer: the live C1 private-net follower (cardano-node 11.0.1, magic 42) at genesis.
+# Captured via `ade_chain_sync_capture` dialing the c1 node: handshake v15 -> FindIntersect[Origin] ->
+# THIS IntersectFound. It is the canonical RESPONDER reply Ade's serve ChainSync server must produce
+# when a real cardano-node follower sends MsgFindIntersect at SingIntersect.
+peer = "C1 private-net follower cardano-node 11.0.1 (127.0.0.1:3010), at genesis (tip block_no 0)"
+captured_at_utc = "2026-06-04"
+network_magic = 42
+negotiated_version = 15
+protocol = "ChainSync (N2N mini-protocol 2)"
+direction_recv = "Responder (IntersectFound)"
+recv_bytes_len = 14  # 8-byte mux header + 6-byte payload
+recv_payload_hex = "830580828000"
+# Decoded: [5, Origin, [Origin, 0]]
+#   83   array(3)  -> MsgIntersectFound [tag, point, tip]
+#   05   5          (IntersectFound tag)
+#   80   array(0)  -> point = Origin (the queried intersection point)
+#   82   array(2)  -> tip = [tipPoint, blockNo]
+#   80   array(0)  -> tip.point = Origin (the c1 node's chain is empty)
+#   00   0          -> tip.blockNo = 0
+#
+# GRAMMAR (the pin target): MsgIntersectFound = [5, point, [tipPoint, blockNo]]. point = Origin (0x80)
+# for a genesis intersect. The TIP is node-specific: the c1 node (empty chain) reports tip=(Origin, 0);
+# Ade's serve (chain has self-accepted block 0) would report tip=(block-0 point, 0). So the pin is the
+# IntersectFound GRAMMAR (tag 5 + Origin point + 2-element tip), NOT byte-identity of the dynamic tip.
+# Cross-check: corpus/network/n2n/chain_sync/preprod_origin_5_frames_intersect_recv.cbor (magic 1,
+# populated chain) has the SAME grammar with a populated tip [[slot,hash], blockNo]; that set also has
+# the canonical RollBackward[Origin] + RollForward frames.
+#
+# THE G-M BLOCKER: Ade's serve ChainSync server did NOT answer the follower's MsgFindIntersect at all
+# (live: ExceededTimeLimit (ChainSync ... ServerHasAgency (SingIntersect))). The fix makes Ade EMIT this
+# IntersectFound grammar from the single ServedChainView. Do NOT add a second serve authority; do NOT
+# validate against the Ade<->Ade loopback.
