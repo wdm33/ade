@@ -1,0 +1,33 @@
+# Captured real cardano-node ChainSync MsgFindIntersect REQUEST fixture (PHASE4-N-F-G-M grounding artifact).
+# The EXACT failing exchange: the live C1 private-net follower (cardano-node 11.0.1, magic 42) at genesis,
+# dialing Ade's serve :3002 AFTER a successful V15 handshake. Captured live (2026-06-04) via a serve
+# instrument on run_node_serve_task -> serve_dispatch (the de-muxed ChainSync payload Ade's server received);
+# reproduced byte-identically across 9 consecutive follower reconnects (peer id=1..9), then the instrument
+# was reverted.
+#
+# This is the REQUEST half that PHASE4-N-F-G-M S1 (the IntersectFound *reply*,
+# c1privnet_origin_intersect_recv.cbor) did NOT capture -- and it is where the live failure actually is:
+# Ade's ChainSync decoder REJECTED these bytes ("indefinite-length array not allowed") -> dispatch dropped
+# the frame -> no reply -> the follower timed out at SingIntersect. CN-WIRE-11 accepts this canonical encoding.
+peer = "C1 private-net follower cardano-node 11.0.1 (127.0.0.1:3010), at genesis, dialing Ade serve :3002"
+captured_at_utc = "2026-06-04"
+network_magic = 42
+negotiated_version = 15
+protocol = "ChainSync (N2N mini-protocol 2)"
+direction = "Request received by Ade's serve (the follower is the ChainSync client)"
+note = "de-muxed ChainSync message payload (no 8-byte mux header), exactly as serve_dispatch decodes it"
+recv_bytes_len = 6
+recv_payload_hex = "82049f8080ff"
+# Decoded: MsgFindIntersect { points: [Origin, Origin] }, points list as a CBOR INDEFINITE-length array.
+#   82   array(2)            -> MsgFindIntersect [tag, points]
+#   04   4                    (FindIntersect tag)
+#   9f   array(*) indefinite -> the POINTS LIST (this is what Ade rejected)
+#     80   array(0)          -> Point::Origin
+#     80   array(0)          -> Point::Origin    (tip + genesis both reduce to Origin at genesis)
+#   ff   break               -> end of indefinite points list
+#
+# GRAMMAR (the decode pin target): the MsgFindIntersect points list MAY be a CBOR indefinite-length array
+# (0x9f .. 0xff). Ade encodes it definite-length; a real cardano-node encodes it indefinite. CN-WIRE-11 accepts
+# BOTH canonical forms for THIS list ONLY -- the outer message array, the points themselves, and the tip stay
+# strictly definite (decode_array_header is unchanged for them). Do NOT add a second serve authority; do NOT
+# validate against the Ade<->Ade loopback (which passes because Ade round-trips its own definite encoding).
