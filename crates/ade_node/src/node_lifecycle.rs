@@ -522,9 +522,10 @@ async fn run_node_lifecycle_inner(
             // silent live-serve claim) and spawn `run_node_serve_task` OUTSIDE
             // `run_relay_loop`, reading the SAME `ServedChainView` the push sibling
             // feeds. Request-driven serve only (no `advance_tip`). The dedicated
-            // stop signal is flipped after `run_relay_loop` returns (the relay loop
-            // may halt clean without the operator shutdown flipping).
-            let (node_serve_handle, node_serve_stop) = match cli.listen_addr.as_deref() {
+            // serve task lifetime is owned by the node lifecycle owner (the operator
+            // `shutdown` watch), NOT the feed loop (DC-NODE-09): a clean feed-end halt
+            // must not tear down serving.
+            let node_serve_handle = match cli.listen_addr.as_deref() {
                 Some(listen) => {
                     // Serving a peer requires the network's magic (the serve
                     // listener advertises it via n2n_supported_for_magic, S2b);
@@ -535,16 +536,22 @@ async fn run_node_lifecycle_inner(
                     let listener = bind_serve_listener(listen)
                         .await
                         .map_err(|e| NodeLifecycleError::ServeStart(format!("{e:?}")))?;
-                    let (stop_tx, stop_rx) = watch::channel(false);
+                    // DC-NODE-09: gate the serve task on the operator `shutdown` watch
+                    // (a clone), never a feed-end-triggered stop. The serve listener
+                    // stays available until explicit node shutdown, a fatal serve
+                    // error, or lifecycle cancellation — so a peer that retries after
+                    // the upstream feed ended can still BlockFetch the self-accepted
+                    // block. The serve task is read-only over ServedChainView; this
+                    // grants availability, not authority.
                     let task = tokio::spawn(run_node_serve_task(
                         listener,
                         serve_view,
                         serve_magic,
-                        stop_rx,
+                        shutdown.clone(),
                     ));
-                    (Some(task), Some(stop_tx))
+                    Some(task)
                 }
-                None => (None, None),
+                None => None,
             };
             let mut activation = ForgeActivation::new(
                 &mut clock,
@@ -580,13 +587,13 @@ async fn run_node_lifecycle_inner(
             // admit task drains any remaining handoffs and exits; then join it.
             drop(activation);
             let _ = serve_task.await;
-            // PHASE4-N-F-G-H S2: stop + join the node-spine serve sibling. It ran
-            // OUTSIDE `run_relay_loop`; the relay loop may have halted clean without
-            // the operator shutdown flipping, so signal the serve sibling
-            // explicitly, then join it.
-            if let Some(stop_tx) = node_serve_stop {
-                let _ = stop_tx.send(true);
-            }
+            // DC-NODE-09: do NOT stop the serve task at feed-end. Await it — it ends
+            // ONLY when the operator `shutdown` watch flips (which `run_relay_loop`
+            // also observed) or on a fatal serve error. On a clean feed-end halt with
+            // `shutdown` still false, this keeps Ade reachable so a late peer can
+            // BlockFetch the self-accepted block already in the served view. The
+            // process still always terminates: operator shutdown ends BOTH the relay
+            // loop and the serve task.
             if let Some(handle) = node_serve_handle {
                 let _ = handle.await;
             }

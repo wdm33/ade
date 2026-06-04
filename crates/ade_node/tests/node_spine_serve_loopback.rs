@@ -251,3 +251,117 @@ async fn node_serve_start_failure_is_surfaced_not_silent() {
 
     drop(occupier);
 }
+
+// --- PHASE4-N-F-G-K S1 (DC-NODE-09): serve lifetime decoupled from feed end ---
+
+/// CE-G-K-1 (DC-NODE-09): the node-spine serve task's lifetime is owned by the
+/// shutdown watch, NOT the upstream feed. With the shutdown watch held FALSE (the
+/// feed-end case — `run_relay_loop` would have returned with shutdown still false),
+/// the serve task stays alive and a follower that dials LATE still BlockFetches the
+/// already-self-accepted block. The task is observably still running across the
+/// fetch; only flipping the shutdown watch ends it.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn serve_task_outlives_feed_end_and_serves_late_fetch() {
+    let corpus = corpus();
+    let block_bytes = pick_lightest(&corpus).to_vec();
+    let (_evo, accepted) = seed_from_corpus(&corpus)
+        .advance(&block_bytes)
+        .expect("validator-accepted corpus block advances");
+
+    let (handle, serve_view) = ServedChainHandle::new();
+    let _tip = handle.push_atomic(accepted).expect("push_atomic");
+
+    let listener = bind_serve_listener("127.0.0.1:0")
+        .await
+        .expect("bind node-spine serve listener");
+    let serve_addr = listener.local_addr().expect("serve local addr");
+    // This watch stands in for the operator `shutdown` watch the On-arm now clones
+    // into the serve task (DC-NODE-09). It stays FALSE across the feed-end + the
+    // late fetch — the serve task must NOT terminate on its own.
+    let (shutdown_tx, shutdown_rx) = watch::channel(false);
+    let serve = tokio::spawn(run_node_serve_task(listener, serve_view, C1_MAGIC, shutdown_rx));
+
+    // The feed has ended (no feed loop here; shutdown stays false). The serve task
+    // must still be running — feed-end does not end it.
+    tokio::task::yield_now().await;
+    assert!(
+        !serve.is_finished(),
+        "DC-NODE-09: a clean feed-end (shutdown false) must NOT terminate the serve task"
+    );
+
+    // A LATE follower (dials after the feed ended) still fetches the served block.
+    let our_versions = build_n2n_version_table(C1_MAGIC);
+    let (transport, version) = dial_for_admission(serve_addr, our_versions)
+        .await
+        .expect("late follower dials + N2N-handshakes the still-alive serve");
+    let (ev_tx, mut ev_rx) = mpsc::channel::<AdmissionPeerEvent>(64);
+    tokio::spawn(run_admission_wire_pump(
+        transport,
+        serve_addr.to_string(),
+        Point::Origin,
+        version,
+        C1_MAGIC,
+        ev_tx,
+    ));
+    let fetched = tokio::time::timeout(Duration::from_secs(15), async {
+        loop {
+            match ev_rx.recv().await {
+                Some(AdmissionPeerEvent::Block { block_bytes, .. }) => return Some(block_bytes),
+                Some(_) => continue,
+                None => return None,
+            }
+        }
+    })
+    .await
+    .expect("late follower receives a block-fetch reply within the timeout")
+    .expect("late follower received a Block event (not a premature disconnect)");
+    let inner = decompose_blockfetch_block(&fetched)
+        .expect("the late follower's block-fetch payload is tag-24-wrapped (CN-WIRE-08)");
+    assert_eq!(
+        inner,
+        &block_bytes[..],
+        "the late follower fetched the served self-accepted block byte-identically"
+    );
+
+    // Still alive after serving the late fetch — only shutdown ends it.
+    assert!(
+        !serve.is_finished(),
+        "DC-NODE-09: the serve task remains alive after a late fetch (no feed-end coupling)"
+    );
+
+    // Explicit shutdown terminates it (the CE-G-K-2 termination path).
+    let _ = shutdown_tx.send(true);
+    tokio::time::timeout(Duration::from_secs(5), serve)
+        .await
+        .expect("serve task terminates promptly on shutdown (no hang)")
+        .expect("serve task joins cleanly");
+    drop(handle);
+}
+
+/// CE-G-K-2 (DC-NODE-09): the longer-lived serve task terminates cleanly when the
+/// operator shutdown watch flips — no hang, no leaked task. (Termination on a fatal
+/// accept error is the unchanged `run_node_serve_task` break; serve-start bind
+/// failure is covered by `node_serve_start_failure_is_surfaced_not_silent`.)
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn serve_task_terminates_on_shutdown_no_hang() {
+    let (_handle, serve_view) = ServedChainHandle::new();
+    let listener = bind_serve_listener("127.0.0.1:0")
+        .await
+        .expect("bind node-spine serve listener");
+    let (shutdown_tx, shutdown_rx) = watch::channel(false);
+    let serve = tokio::spawn(run_node_serve_task(listener, serve_view, C1_MAGIC, shutdown_rx));
+
+    // No feed, no peer — the serve task is idle-serving. It must not self-terminate.
+    tokio::task::yield_now().await;
+    assert!(
+        !serve.is_finished(),
+        "serve task must stay alive until shutdown (not tied to feed/peer presence)"
+    );
+
+    // Operator shutdown -> the serve task ends promptly.
+    let _ = shutdown_tx.send(true);
+    tokio::time::timeout(Duration::from_secs(5), serve)
+        .await
+        .expect("serve task terminates within the timeout on shutdown (no hang)")
+        .expect("serve task joins cleanly (no leak)");
+}

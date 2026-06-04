@@ -6040,3 +6040,36 @@ introduced_in = "PHASE4-N-F-G-J"
 strengthened_in = []
 cluster = "PHASE4-N-F-G-J"
 evidence_notes = "PHASE4-N-F-G-J S3 (2026-06-03) discharged the deferred position-aware clause -- now ENFORCED, not merely documented. The single BLUE check_header_position authority (ade_ledger::block_validity::header_position) is called by decode_block (header_input.rs) before the header authority and rejects block_number 0 + Block (and block_number > 0 + Genesis) as BlockValidityError::HeaderPositionInvalid (coarse class HeaderInvalid -- no new BlockRejectClass). Forge + KES pre-image emit PrevHash::Genesis for block 0: forge_to_self_accept_succeeds now forges a real genesis-successor block its own validator accepts, and forged_block_zero_kes_preimage_equals_decoded_header_body_bytes pins the KES-signed bytes == decoded ShelleyHeaderBody bytes incl. Genesis as CBOR null. The producer prev_hash migrated Hash32->PrevHash end to end, deleting the all-zero stand-in at its source (ChainEvolution::prev_hash cold-start -> PrevHash::Genesis). ci/ci_check_prevhash_single_wire_authority.sh extended: (c) single position-rule authority referenced by decode_block and never in ade_codec; (d) no prev_hash: Hash32 field on the producer path + ChainEvolution cold-start -> Genesis. ade_codec stays POSITION-BLIND. No strengthened_in self-bump (introduced_in already this cluster)."
+
+[[rules]]
+id = "DC-NODE-09"
+tier = "derived"
+statement = """
+Once --mode node has spawned a --listen serve task (run_node_serve_task) over a ServedChainView, the
+end of the upstream feed (the relay loop returning -- e.g. a clean feed-end HaltCleanly with the
+operator shutdown watch still false) alone MUST NOT terminate that serve task. The serve listener's
+lifetime is owned by the node lifecycle owner: it terminates ONLY on (a) explicit node shutdown (the
+operator shutdown watch), (b) a fatal serve error (a post-bind accept fault), or (c) lifecycle-owner
+cancellation. The serve task stays read-only over ServedChainView (fed only by forge -> self_accept ->
+SelfAcceptedHandoff -> push_atomic, DC-NODE-06 / DC-NODE-07); it holds no ChainDb / WAL / forge handle,
+so extending its lifetime grants AVAILABILITY, not authority -- a peer that retries after the feed ended
+can still BlockFetch the already-self-accepted block. The process-termination guarantee is PRESERVED
+(moved from the feed-end stop to the lifecycle owner, never removed): operator shutdown ends BOTH the
+relay loop and the serve task. No serve of bytes outside ServedChainView; no durable tip advance; no
+peer-block admission; no RO-LIVE flip; no unbounded never-terminating serve.
+"""
+source = "docs/clusters/PHASE4-N-F-G-K/cluster.md"
+cross_ref = ["DC-NODE-06", "DC-NODE-07", "DC-NODE-08", "CN-NODE-04", "DC-CONS-17", "RO-LIVE-01"]
+code_locus = "crates/ade_node/src/node_lifecycle.rs (run_node_lifecycle_inner On-arm: the --listen serve task is spawned with shutdown.clone() -- the operator shutdown watch -- NOT a dedicated feed-end stop channel; the post-run_relay_loop node_serve_stop.send(true) flip is REMOVED; node_serve_handle is awaited and ends only on shutdown / fatal serve error. run_node_serve_task -- the serve loop -- is UNCHANGED: it breaks on its shutdown watch, a fatal accept error, and events-channel close, and takes only (TcpListener, ServedChainView, network_magic, watch::Receiver<bool>))"
+tests = [
+  "serve_task_outlives_feed_end_and_serves_late_fetch",
+  "serve_task_terminates_on_shutdown_no_hang",
+  "node_spine_serve_loopback_follower_fetches_self_accepted_block",
+  "node_serve_start_failure_is_surfaced_not_silent",
+]
+ci_script = "ci/ci_check_node_serve_lifetime.sh"
+status = "enforced"
+introduced_in = "PHASE4-N-F-G-K"
+strengthened_in = []
+cluster = "PHASE4-N-F-G-K"
+evidence_notes = "PHASE4-N-F-G-K S1 (2026-06-04). Grounded in the live C1 genesis-successor rehearsal: Ade --mode node forged + self-accepted block 0 (forge_attempted -> forge_result:succeeded) against a healthy Haskell follower session, but the follower never fetched it -- the On-arm tore down the serve listener the moment the upstream feed ended (node_serve_stop flipped right after run_relay_loop returned), before the follower's ~160s :3002 retry landed. Fix: the serve task is gated on the operator shutdown watch (shutdown.clone()), not a feed-end stop; node_serve_handle is awaited (it ends only on shutdown / fatal serve error). run_node_serve_task is byte-unchanged (already read-only over ServedChainView; no ChainDb/WAL/forge handle). RED-only; no BLUE change; no new canonical type; serving is RED I/O over already-self-accepted bytes (no replay weight). Tests: serve_task_outlives_feed_end_and_serves_late_fetch (the serve task stays alive across a feed-end + a LATE follower still BlockFetches the served block byte-identically; only shutdown ends it) + serve_task_terminates_on_shutdown_no_hang (clean termination on shutdown, no hang/leak); the existing loopback fetch + bind-failure tests are preserved unchanged. Gate ci_check_node_serve_lifetime.sh pins: the On-arm spawns the serve task with the shutdown watch (not a feed-end stop channel), no node_serve_stop.send after run_relay_loop, run_node_serve_task takes no ChainDb/forge handle. CE-G-K-3 (the live C1 rerun where the follower fetches + validates -> correlate -> PrivateRehearsalManifest) stays operator-gated (blocked_until_operator_c1_genesis_successor_rehearsal); no RO-LIVE flip; acceptance only via the follower log through correlate."
