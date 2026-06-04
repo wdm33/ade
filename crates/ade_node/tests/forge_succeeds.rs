@@ -46,10 +46,13 @@ use ade_core::consensus::era_schedule::EraSchedule;
 use ade_core::consensus::leader_schedule::LeaderScheduleAnswer;
 use ade_core::consensus::praos_state::{Nonce, PraosChainDepState};
 use ade_core::consensus::vrf_cert::{leader_vrf_input, ActiveSlotsCoeff};
+use ade_core::consensus::errors::{HeaderValidationError, VrfCertError};
+use ade_core::consensus::validate_and_apply_header;
 use ade_core::consensus::{BootstrapAnchorHash, EraSummary};
 use ade_crypto::vrf::VrfVerificationKey;
 use ade_ledger::consensus_view::{PoolDistrView, PoolEntry};
 use ade_ledger::pparams::ProtocolParameters;
+use ade_ledger::seed_consensus_inputs::SeedEpochConsensusInputs;
 use ade_ledger::state::LedgerState;
 use ade_runtime::producer::coordinator::CoordinatorEvent;
 use ade_runtime::producer::producer_log::ForgeFailureReason;
@@ -712,5 +715,91 @@ fn feed_unwrap_decodes_genesis_successor_block_zero() {
         decoded.header_input.block_no.0, 0,
         "the feed decodes Ade's genesis-successor block 0 (PrevHash::Genesis \
          guaranteed by check_header_position)"
+    );
+}
+
+// =========================================================================
+// PHASE4-N-F-G-P S1 — feed header-validation view from the recovered surface (DC-CINPUT-04)
+// =========================================================================
+
+/// PHASE4-N-F-G-P (DC-CINPUT-04): the feed/receive header validator MUST use the
+/// recovered consensus surface — the SAME projection the forge uses
+/// (`PoolDistrView::from_seed_epoch_consensus_inputs`) — so Step 5 (VRF-keyhash
+/// binding) + Step 7 (leader threshold) find the producer's stake. The live C1
+/// feed failed `Header(VrfCert(VerificationFailed))` because the wiring fed an
+/// EMPTY placeholder view (`pool_active_stake = None`). This pins both halves:
+/// (1) the recovered-surface view validates the forged genesis-successor header
+/// through Step 5 + Step 7; (2) the empty placeholder view fails closed exactly as
+/// the live feed did — locking the regression. (Same recovered record drives the
+/// forge leadership view, so forge + feed share one consensus surface.)
+#[test]
+fn feed_header_validates_against_recovered_surface_not_empty_view() {
+    let epoch = EpochNo(0);
+    let slot = 1u64;
+
+    let mut shell = synth_shell(0x77, 0x88, 0x99);
+    let fixture = EligibleFixture::build(&shell, slot, epoch);
+    let ctx = fixture.ctx();
+    let (event, _handoff) = run_real_forge(slot, /* kes_period = */ 0, &ctx, &mut shell);
+    let forged_bytes = match event {
+        CoordinatorEvent::ForgeSucceeded { artifact, .. } => artifact.bytes,
+        other => panic!("expected ForgeSucceeded genesis block, got {other:?}"),
+    };
+    let decoded =
+        ade_ledger::block_validity::decode_block(&forged_bytes).expect("forged genesis block decodes");
+
+    // Build the recovered SeedEpochConsensusInputs over the SAME consensus surface
+    // the fixture forged under (pool_id = blake2b_224(cold_vk), vrf_keyhash =
+    // blake2b_256(vrf_vk), total = 1, ASC 1/1 — the EligibleFixture recipe).
+    let pool_id: Hash28 = ade_crypto::blake2b::blake2b_224(&shell.cold_vk().0);
+    let vrf_keyhash: Hash32 = ade_crypto::blake2b::blake2b_256(&fixture.vrf_vk.0);
+    let mut pools: BTreeMap<Hash28, PoolEntry> = BTreeMap::new();
+    pools.insert(
+        pool_id,
+        PoolEntry {
+            active_stake: 1,
+            vrf_keyhash,
+        },
+    );
+    let record = SeedEpochConsensusInputs {
+        anchor_fp: Hash32([0u8; 32]),
+        epoch_no: epoch,
+        epoch_nonce: fixture.eta0_holder.epoch_nonce.clone(),
+        active_slots_coeff: ActiveSlotsCoeff { numer: 1, denom: 1 },
+        total_active_stake: 1,
+        pool_distribution: pools,
+    };
+
+    // (1) The recovered-surface feed view validates the header (Step 5 + Step 7).
+    let recovered_view = PoolDistrView::from_seed_epoch_consensus_inputs(&record);
+    validate_and_apply_header(
+        &fixture.eta0_holder,
+        &decoded.header_input,
+        &recovered_view,
+        &fixture.era_schedule,
+    )
+    .expect(
+        "the recovered consensus surface validates the genesis-successor header \
+         through Step 5 + Step 7 (DC-CINPUT-04)",
+    );
+
+    // (2) The EMPTY placeholder view fails closed exactly as the live C1 feed did
+    // (pool_active_stake = None ⇒ Step 7 VrfCert(VerificationFailed)) — the
+    // pre-G-P bug this slice removes from the live feed wiring.
+    let empty_view =
+        PoolDistrView::new(epoch, 0, ActiveSlotsCoeff { numer: 0, denom: 1 }, BTreeMap::new());
+    let err = validate_and_apply_header(
+        &fixture.eta0_holder,
+        &decoded.header_input,
+        &empty_view,
+        &fixture.era_schedule,
+    )
+    .expect_err("the empty placeholder view must fail closed (the pre-G-P bug)");
+    assert!(
+        matches!(
+            err,
+            HeaderValidationError::VrfCert(VrfCertError::VerificationFailed)
+        ),
+        "empty view fails at the Step 7 leader threshold with VrfCert(VerificationFailed), got {err:?}"
     );
 }

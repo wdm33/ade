@@ -249,6 +249,13 @@ pub enum NodeLifecycleError {
     /// serve capability while serving is disabled (no silent live-serve claim).
     /// Carries a structured, secret-free message.
     ServeStart(String),
+    /// PHASE4-N-F-G-P (DC-CINPUT-04): a live feed is wired (`--peer`) but the
+    /// recovered state carries no `SeedEpochConsensusInputs`, so the feed
+    /// header-validation view (Step 5 VRF-keyhash + Step 7 leader threshold)
+    /// cannot be projected from the recovered consensus surface. Fail closed —
+    /// never validate a peer's block against an empty stake view, never
+    /// accept-if-missing.
+    FeedMissingRecoveredConsensusInputs,
 }
 
 /// Pure first-run-vs-warm-start classifier. A function of on-disk state
@@ -297,7 +304,8 @@ fn exit_code_for(e: &NodeLifecycleError) -> i32 {
         | NodeLifecycleError::WarmStartNoProvenance
         | NodeLifecycleError::WarmStartForwardReplayUnsupported { .. }
         | NodeLifecycleError::WarmStartBootstrap(_) => EXIT_NODE_WARM_START_RECOVERY_FAILED,
-        NodeLifecycleError::RelaySync(_) => EXIT_NODE_RELAY_SYNC_FAILED,
+        NodeLifecycleError::RelaySync(_)
+        | NodeLifecycleError::FeedMissingRecoveredConsensusInputs => EXIT_NODE_RELAY_SYNC_FAILED,
         NodeLifecycleError::ForgeKeyIngress(_) => EXIT_NODE_FORGE_KEY_INGRESS_FAILED,
     }
 }
@@ -459,12 +467,30 @@ async fn run_node_lifecycle_inner(
             // live feed lands; unconsumed on the empty source this cluster).
             let era_schedule =
                 make_node_schedule(SlotNo(tip_slot.unwrap_or(0)), EpochNo(epoch.unwrap_or(0)));
-            let ledger_view = PoolDistrView::new(
-                EpochNo(epoch.unwrap_or(0)),
-                0,
-                ActiveSlotsCoeff { numer: 0, denom: 1 },
-                BTreeMap::new(),
-            );
+            // DC-CINPUT-04 (PHASE4-N-F-G-P): the feed header-validation view MUST be
+            // the recovered consensus surface — the SAME projection the forge uses
+            // (`forge_one_from_recovered` / DC-CINPUT-02b) — so Step 5 (VRF-keyhash
+            // binding) + Step 7 (leader threshold) see the real recovered ASC + total
+            // + pool stake + pool VRF keyhash. An empty placeholder makes the live
+            // feed reject EVERY block (`pool_active_stake == None` ⇒ a structural
+            // `VrfCert(VerificationFailed)`). Fail closed when a live feed is wired
+            // (`--peer`) but the recovered record is absent — never an empty view,
+            // never accept-if-missing. With NO feed wired the loop halts before
+            // consuming the view, so an absent record degrades to a
+            // provably-unconsumed placeholder rather than a hard stop.
+            let live_feed_wired = !cli.peer_addrs.is_empty();
+            let ledger_view = match state.seed_epoch_consensus_inputs.as_ref() {
+                Some(record) => PoolDistrView::from_seed_epoch_consensus_inputs(record),
+                None if live_feed_wired => {
+                    return Err(NodeLifecycleError::FeedMissingRecoveredConsensusInputs)
+                }
+                None => PoolDistrView::new(
+                    EpochNo(epoch.unwrap_or(0)),
+                    0,
+                    ActiveSlotsCoeff { numer: 0, denom: 1 },
+                    BTreeMap::new(),
+                ),
+            };
             // Recovered-state lifetime: clone ledger + chain_dep into the relay
             // spine (the spine evolves ITS copy forward), keep `state` owned as
             // the recovered baseline the forge reads. One recovered state; the
@@ -481,7 +507,6 @@ async fn run_node_lifecycle_inner(
             // *fill* of the closed `NodeBlockSource::WirePump` arm — no new
             // variant, no second tip-advance, no verdict; dial / parse failures
             // are logged-and-dropped (admission honest-scope C3), never fatal.
-            let live_feed_wired = !cli.peer_addrs.is_empty();
             let mut source = if live_feed_wired {
                 let network_magic = cli
                     .network_magic
@@ -1651,6 +1676,15 @@ fn report(e: &NodeLifecycleError) {
             eprintln!(
                 "ade_node --mode node: relay run-loop sync step failed ({d}); \
                  failing closed (no skip-past, no fallback)."
+            );
+        }
+        NodeLifecycleError::FeedMissingRecoveredConsensusInputs => {
+            eprintln!(
+                "ade_node --mode node: a live feed is wired (--peer) but the recovered \
+                 state carries no seed-epoch consensus inputs, so the feed \
+                 header-validation view (leader threshold + VRF-keyhash) cannot be \
+                 projected from the recovered consensus surface; failing closed \
+                 (no empty-stake view, no accept-if-missing)."
             );
         }
         NodeLifecycleError::ForgeKeyIngress(d) => {

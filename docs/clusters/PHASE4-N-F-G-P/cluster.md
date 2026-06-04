@@ -106,10 +106,13 @@ feeds (Step 7) is the existing BLUE authority, unchanged.
 - **no RO-LIVE flip; no acceptance claim** without the follower log through `correlate`.
 
 ## §12 Open questions
-- **OQ-P1:** the FIRST-RUN arm (`node_lifecycle.rs:398`) builds the SAME empty placeholder view and also feeds
-  `run_node_sync`. Its consensus-input source is the Mithril first-run import, NOT the recovered
-  `SeedEpochConsensusInputs`. Whether a live feed on first-run needs the equivalent projection (from the
-  Mithril-imported surface) is a follow-on; G-P scopes the WARM-START feed path the C1 rehearsal exercises.
+- **OQ-P1:** the `ForgeIntent::Off` (relay-only) arm (`node_lifecycle.rs:398`) builds the same empty
+  placeholder view but hardcodes an ALWAYS-empty in-memory source (no `--peer` live feed, line ≈409), so its
+  placeholder is genuinely unconsumed — no fix needed there. The real open question is the FIRST-RUN (Mithril)
+  path: when it reaches the forge-on arm with a live feed, does the Mithril bootstrap populate
+  `state.seed_epoch_consensus_inputs`? If not, S1's fail-closed (`FeedMissingRecoveredConsensusInputs`) fires
+  — the Mithril-first-run feed view (projecting from the Mithril-imported surface) is the follow-on. G-P scopes
+  the WARM-START forge-on feed path the C1 rehearsal exercises.
 - **OQ-P2:** multi-epoch — the recovered view is the single seed epoch (`DC-EPOCH-03`); a feed block past the
   seed-epoch boundary is off-epoch (the forge already fails closed there). The feed validator's cross-epoch
   stake-view evolution is the N-U / multi-epoch concern, not G-P.
