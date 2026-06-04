@@ -46,8 +46,8 @@ unwrapped, flow through the UNCHANGED BLUE `decode_block` / `pump_block`.
 ## §7 Slices
 | Slice | Scope | CE | Registry | Status |
 |---|---|---|---|---|
-| **S1** | Feed receive path calls `decompose_blockfetch_block` (the existing authority) before `pump_block`; pin to the captured real-node wrapped payload (unwrap → bare `[era, block]` → decodes as block 0 with `PrevHash::Genesis`); fail-closed test on a non-tag-24 payload | CE-G-O-1 | CN-WIRE-12 → enforced | planned |
-| **S2** | Live C1 rerun: Ade's feed no longer crashes on the echoed tag-24 block; serve stays alive; `correlate` decides whether the follower adopted | CE-G-O-2 | operator-gated | planned |
+| **S1** | Feed receive path calls `decompose_blockfetch_block` (the existing authority) before `pump_block`; pin to the captured real-node wrapped payload (unwrap → bare `[era, block]` → decodes as block 0 with `PrevHash::Genesis`); fail-closed test on a non-tag-24 payload | CE-G-O-1 | CN-WIRE-12 → enforced | **closed** (`f539aa7a`; live-confirmed) |
+| **S2** | Live C1 rerun: Ade's feed no longer crashes on the echoed tag-24 block; serve stays alive; `correlate` decides whether the follower adopted | CE-G-O-2 | operator-gated | **partial** — decode crash gone live (`UnexpectedType` count = 0); a SEPARATE feed-side header-VRF blocker now tears the feed down before serve/`correlate` → PHASE4-N-F-G-P |
 
 ## §8 Cluster Exit Criteria
 - **CE-G-O-1 (mechanical):**
@@ -85,3 +85,34 @@ authoritative transition; covered by the S1 pin + the existing tag-24 round-trip
   `AdmissionPeerEvent::Block` and would hit the identical wrapped-block decode — but it admitted nothing at
   C1 genesis, so it is unexercised. Whether to also unwrap there (or share a single feed/receive unwrap
   point) is a follow-on; G-O is scoped to the FEED path that the C1 rehearsal exercises.
+
+## §13 Close record — S1 (2026-06-04)
+**G-O CLOSED with a narrow claim.** `CN-WIRE-12` enforced: the feed/receive BlockFetch path strips the tag-24
+wrapper via the single `ade_codec` authority (`decompose_blockfetch_block`) before `decode_block`, emitting
+bare `[era, block]`; fail-closed `BlockFetchDecode` on a non-tag-24 payload. Mechanical (CE-G-O-1): the
+genesis-successor pin `feed_unwrap_decodes_genesis_successor_block_zero` (captured-shape wrapped block 0 →
+unwrap → decode → block 0 / `PrevHash::Genesis`) + the wire-pump unit pins
+(`block_fetch_unwraps_tag24_emitting_bare_block`, `block_fetch_fails_closed_on_non_tag24_payload`) + the
+end-to-end node-spine serve loopback (now bare delivery) + `ci/ci_check_feed_tag24_unwrap.sh`. The serve-side
+wrap (CN-WIRE-08) is unchanged. (Preceded by a G-M test-scope hotfix, `275a2318`: G-M's raw-CBOR `c1privnet_*`
+fixtures had broken `chain_sync_real_capture_corpus` — a latent workspace-red since G-M.)
+
+**LIVE-CONFIRMED (narrow, CE-G-O-1.6):** the C1 `--mode node` rerun (2026-06-04 12:23Z, both fixes in the
+binary) shows the old crash `Body(Decoding(UnexpectedType @ offset 0))` is GONE (`UnexpectedType` count = 0) —
+the feed now DECODES the tag-24-wrapped block.
+
+**NOT claimed:** block adopted (this run); serve stays alive; C1 rehearsal complete; RO-LIVE flip;
+preprod/bounty success. CE-G-O-2's serve-alive / `correlate`-adoption half is NOT reached — a separate
+receive-side blocker tears the feed down first. (A real cardano-node DID adopt an Ade-forged genesis-successor
+block — `ChainDB AddedToCurrentChain` / `ValidCandidate`, slot 107405, hash `52e3ae88…be2652d`, 11:20:17Z —
+but in a PRIOR run; strong standing evidence, NOT a project acceptance claim until `correlate` binds the
+follower log.)
+
+**NEW separate blocker → PHASE4-N-F-G-P (Feed-side header VRF eta0 fidelity):** with the body decode fixed,
+the feed advances to header validation and fails closed —
+`Receive(Validity(Header(VrfCert(VerificationFailed))))`. Ade's feed (recovered tip = genesis) re-syncs the
+follower's tip (Ade's own slot-107405 block, which the real node validated) and REJECTS its header VRF. Strong
+hypothesis: the receive/pump-path validator's eta0 sourcing (genesis/ZERO vs the recovered `953a4c34`) — the
+RECEIVE-side mirror of G-N's FORGE eta0 bug. Proof-first: instrument the feed/header validator to log
+`(block_no, slot, eta0, praos_vrf_input, pool_vrf_keyhash, proof len/hash)`, rerun C1, THEN fix; do NOT fix
+from hypothesis.
