@@ -6142,3 +6142,59 @@ introduced_in = "PHASE4-N-F-G-M"
 strengthened_in = []
 cluster = "PHASE4-N-F-G-M"
 evidence_notes = "PHASE4-N-F-G-M S1+S2 (2026-06-04). SCOPE CORRECTED by the live fixture: G-M's original premise was a RESPONSE-grammar defect (Ade decodes the request but fails to answer MsgFindIntersect). An instrumented C1 rerun proved the failure is EARLIER, in the REQUEST DECODE: the real cardano-node 11.0.1 follower (c1 private-net, magic 42, genesis) sends MsgFindIntersect bytes 82 04 9f 80 80 ff = FindIntersect{points:[Origin,Origin]} with the points list as a CBOR INDEFINITE-length array (9f..ff), and Ade's ChainSync decoder rejected it ('indefinite-length array not allowed') -> dispatch dropped the frame -> no reply -> the follower timed out at SingIntersect. Reproduced byte-identically across 9 consecutive follower reconnects (the V15 handshake completes each time -- CN-WIRE-10 holds live). Ade<->Ade loopback passed because Ade ENCODES the points list definite-length, so it round-trips its own bytes. S1 captured the IntersectFound reply (corpus/network/n2n/chain_sync/c1privnet_origin_intersect_recv.cbor); S2 captured the FindIntersect request (corpus/network/n2n/chain_sync/c1privnet_follower_findintersect_recv.cbor -- the half S1 missed) and fixed both halves: (A) decode_find_intersect_points accepts the indefinite points list for MsgFindIntersect ONLY (via the scoped decode_array_head_two_form + try_consume_break; decode_array_header stays definite-only, guarded by the decode_array_header_still_rejects_indefinite test); (B) the reducer answers IntersectFound[Origin] for an Origin intersection (block points unchanged via the existing closed intersect). This is NOT decoder loosening -- it accepts the real cardano-node MsgFindIntersect points-list encoding, the exact compatibility target. ade_network chain_sync lib (46) + the new fixture pins (2) + the primitives scope guards (3) + the G-L handshake responder pins (3) all pass (no regression). CE-G-M-2 (the live follower's hot session sustaining past SingIntersect + proceeding toward header/BlockFetch) stays operator-gated; no RO-LIVE flip; no acceptance claim without the follower log through correlate."
+
+[[rules]]
+id = "T-REC-04"
+tier = "true"
+statement = """
+The WarmStart-recovered forge `chain_dep.epoch_nonce` (eta0) MUST come from the imported/recovered consensus
+input, never from a snapshot placeholder and never from genesis. Authoritative recovered state is explicit,
+persisted, replayable, and comparable: the seed-epoch eta0 is carried as an EXPLICIT field in the persisted
+`SeedEpochConsensusInputs` sidecar and applied (overlaid) onto the recovered `PraosChainDepState` in the
+single `bootstrap_initial_state` authority. A snapshot-seeded `Nonce::ZERO` must NEVER reach the
+forge/self_accept path when a seed-epoch lineage exists. Fail-closed: an old sidecar that omits `epoch_nonce`
+decodes as a version mismatch (`UnknownVersion`, schema v1 vs v2), never a default-to-zero eta0. Authority
+split preserved: snapshot = ledger/chain skeleton; seed-epoch sidecar = the Praos consensus inputs incl. eta0.
+"""
+source = "docs/clusters/PHASE4-N-F-G-N/cluster.md"
+cross_ref = ["DC-CINPUT-03", "DC-EPOCH-03", "CN-CINPUT-01", "CN-FORGE-04", "T-REC-01", "T-REC-02", "T-REC-03", "RO-LIVE-01"]
+code_locus = "crates/ade_ledger/src/seed_consensus_inputs.rs (SeedEpochConsensusInputs.epoch_nonce field + versioned codec, SEED_CINPUT_SCHEMA_VERSION=2 fail-closed on the schema change); crates/ade_runtime/src/seed_consensus_merge.rs (merge persists canonical.epoch_nonce); crates/ade_runtime/src/bootstrap.rs (bootstrap_initial_state overlays the recovered sidecar epoch_nonce onto chain_dep.epoch_nonce + evolving_nonce)"
+tests = [
+  "warm_start_overlays_recovered_eta0_onto_chain_dep_g_n",
+  "warm_start_restores_seed_epoch_consensus_inputs_byte_identical",
+  "seed_cinput_decode_rejects_unknown_version",
+  "seed_epoch_consensus_inputs_round_trips_byte_identical",
+  "pinning_preseed_warmstart_roundtrip_faithful",
+]
+ci_script = "ci/ci_check_warmstart_eta0_overlay.sh"
+status = "enforced"
+introduced_in = "PHASE4-N-F-G-N"
+strengthened_in = []
+cluster = "PHASE4-N-F-G-N"
+evidence_notes = "PHASE4-N-F-G-N S1 (2026-06-04). Proven bug: a forge instrument (since reverted) showed Ade forged its C1 block-0 header VRF over eta0 = Nonce::ZERO while the C1 follower verifies over the genesis nonce 953a4c34 -> VRFKeyBadProof. Root cause: SeedEpochConsensusInputs OMITTED epoch_nonce, so admission imported eta0 (LiveConsensusInputsCanonical.epoch_nonce) -> the merge DROPPED it -> WarmStart had no recoverable eta0 -> the snapshot's Nonce::ZERO (admission/bootstrap.rs:164) reached the forge. The admission/bootstrap.rs comment (198-200) predicted it; self-accept masked it (Ade's validator read the same recovered ZERO). FIX: added epoch_nonce to the sidecar (versioned CBOR, v1->v2, fail-closed via UnknownVersion -- never default-to-zero), the merge persists canonical.epoch_nonce, and bootstrap_initial_state overlays the recovered sidecar eta0 onto chain_dep (epoch_nonce + evolving_nonce). NOT a snapshot replacement, NO VRF crypto/variant change, NO genesis-derived nonce, NO C1-only branch. Regression warm_start_overlays_recovered_eta0_onto_chain_dep_g_n proves a snapshot eta0 != sidecar eta0 -> recovered chain_dep == sidecar eta0. ade_ledger seed-consensus (4) + ade_runtime bootstrap A3b (22, incl. the new regression) + merge/genesis/mithril + ade_testkit genesis_pinning (CE-G-A-1) + ade_node node_sync (43) + node_lifecycle (25) all pass. The C1 staged store must be regenerated (re-run admission) since its sidecar predates eta0; an old store fails closed at recovery. CE-G-N-2 (live C1: forge eta0 == 953a4c34, no VRFKeyBadProof) is operator-gated; no RO-LIVE flip."
+
+[[rules]]
+id = "DC-CINPUT-03"
+tier = "derived"
+statement = """
+The producer Praos VRF leader/header input is `praos_vrf_input(slot, eta0)` = `blake2b256(slot_be8 ‖ eta0_32)`
+(= cardano `mkInputVRF`), where eta0 is the Cardano epoch nonce carried by the recovered
+`SeedEpochConsensusInputs` and overlaid onto `chain_dep` at WarmStart (T-REC-04). A forged Conway header
+therefore verifies under a real peer's `mkInputVRF(slot, eta0)`. The VRF variant is UNCHANGED -- IETF draft-03,
+80-byte proof (verified against real mainnet + preprod Conway headers, both draft-03); the fix is the recovered
+eta0 SOURCING, not the crypto. No draft-13/batch-compat migration, no C1-only branch, no genesis-derived nonce.
+"""
+source = "docs/clusters/PHASE4-N-F-G-N/cluster.md"
+cross_ref = ["T-REC-04", "CN-FORGE-04", "DC-EPOCH-03", "DC-CINPUT-01", "DC-CINPUT-02a", "DC-CINPUT-02b", "RO-LIVE-01"]
+code_locus = "crates/ade_core/src/consensus/vrf_cert.rs (praos_vrf_input = blake2b256(slot_be8 ‖ eta0_32) = mkInputVRF); crates/ade_runtime/src/producer/signing.rs (vrf_prove over the alpha); crates/ade_ledger/src/seed_consensus_inputs.rs (epoch_nonce sidecar field); crates/ade_runtime/src/bootstrap.rs (overlay onto chain_dep)"
+tests = [
+  "warm_start_overlays_recovered_eta0_onto_chain_dep_g_n",
+  "pinning_praos_vrf_input_and_threshold_match_fixture",
+  "recovered_surface_projects_pooldistrview_and_expected_vrf_input",
+]
+ci_script = "ci/ci_check_warmstart_eta0_overlay.sh"
+status = "enforced"
+introduced_in = "PHASE4-N-F-G-N"
+strengthened_in = []
+cluster = "PHASE4-N-F-G-N"
+evidence_notes = "PHASE4-N-F-G-N S1 (2026-06-04). The Praos VRF input construction (praos_vrf_input) + the draft-03 crypto were PROVEN correct against real Conway headers (Ade's verify_praos_vrf verifies real mainnet Conway-576 + preprod headers; both 80-byte draft-03 -- the draft-13/batch-compat theory was measured dead). So the only defect was the eta0 SOURCING: the forge signed over the snapshot's ZERO placeholder instead of the recovered seed-epoch eta0. DC-CINPUT-03 binds the VRF input to the recovered-and-overlaid sidecar eta0 (T-REC-04). pinning_praos_vrf_input_and_threshold_match_fixture pins praos_vrf_input(slot, recovered chain_dep.epoch_nonce) against the genesis fixture; warm_start_overlays_recovered_eta0_onto_chain_dep_g_n proves the recovered eta0 reaching chain_dep is the sidecar's. Operator-gated live confirmation under RO-LIVE-01 (CE-G-N-2)."

@@ -89,6 +89,9 @@ pub fn merge_seed_epoch_consensus_inputs(
     Ok(SeedEpochConsensusInputs {
         anchor_fp,
         epoch_no,
+        // PHASE4-N-F-G-N (DC-CINPUT-03): carry the imported eta0 into the
+        // persisted sidecar so WarmStart can recover it onto chain_dep.
+        epoch_nonce: canonical.epoch_nonce.clone(),
         active_slots_coeff: canonical.active_slots_coeff,
         total_active_stake,
         pool_distribution,

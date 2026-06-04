@@ -426,6 +426,7 @@ mod tests {
         let expected = SeedEpochConsensusInputs {
             anchor_fp: anchor_fp.clone(),
             epoch_no: EPOCH_576,
+            epoch_nonce: inputs.epoch_nonce.clone(),
             active_slots_coeff: inputs.active_slots_coeff,
             total_active_stake: 3_500,
             pool_distribution: expected_pools,

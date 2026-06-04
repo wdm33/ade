@@ -173,6 +173,7 @@ mod tests {
         SeedEpochConsensusInputs {
             anchor_fp: Hash32([0x5A; 32]),
             epoch_no: EpochNo(576),
+            epoch_nonce: ade_core::consensus::praos_state::Nonce(Hash32([0x55; 32])),
             active_slots_coeff: ActiveSlotsCoeff { numer: 5, denom: 100 },
             total_active_stake: 3_500,
             pool_distribution: pools,

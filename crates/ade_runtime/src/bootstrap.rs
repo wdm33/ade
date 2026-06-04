@@ -212,7 +212,7 @@ where
     let reader = PersistentSnapshotCache::new(inputs.snapshot_store);
     let source = ChainDbBlockSource::new(inputs.chaindb);
 
-    let (ledger, chain_dep) = materialize_rolled_back_state(
+    let (ledger, mut chain_dep) = materialize_rolled_back_state(
         target,
         &reader,
         &source,
@@ -230,6 +230,22 @@ where
             Some(restore_seed_epoch_consensus_inputs(inputs.snapshot_store, &provenance)?)
         }
     };
+
+    // PHASE4-N-F-G-N (T-REC-04 / DC-CINPUT-03): overlay the recovered seed-epoch
+    // eta0 onto the recovered chain_dep. The snapshot materializes the
+    // ledger/chain skeleton, but its chain_dep carries the admission seed's
+    // PLACEHOLDER eta0 (`Nonce::ZERO`, admission/bootstrap.rs:164); the
+    // authoritative seed-epoch eta0 lives in the recovered consensus-input
+    // sidecar. Without this, forge/self_accept sign the header VRF over ZERO and
+    // a real Conway peer rejects it (VRFKeyBadProof). At the seed epoch (no
+    // blocks applied since the seed) the evolving nonce equals eta0, so both are
+    // set — reconstructing `genesis(eta0)`. This is the explicit recovered-input
+    // overlay, NOT a snapshot replacement; eta0 is sourced from the sidecar, not
+    // genesis-derived and not a placeholder.
+    if let Some(sidecar) = &seed_epoch_consensus_inputs {
+        chain_dep.epoch_nonce = sidecar.epoch_nonce.clone();
+        chain_dep.evolving_nonce = sidecar.epoch_nonce.clone();
+    }
 
     Ok(BootstrapState {
         ledger,
@@ -664,6 +680,7 @@ mod tests {
         SeedEpochConsensusInputs {
             anchor_fp,
             epoch_no: epoch,
+            epoch_nonce: Nonce(Hash32([0x99; 32])),
             active_slots_coeff: ActiveSlotsCoeff {
                 numer: 5,
                 denom: 100,
@@ -718,6 +735,51 @@ mod tests {
         // Byte-identity: re-encoding the recovered record reproduces
         // exactly the persisted sidecar bytes.
         assert_eq!(encode_seed_epoch_consensus_inputs(&recovered), _bytes);
+    }
+
+    #[test]
+    fn warm_start_overlays_recovered_eta0_onto_chain_dep_g_n() {
+        // PHASE4-N-F-G-N (T-REC-04 / DC-CINPUT-03): the WarmStart-recovered forge
+        // chain_dep.epoch_nonce MUST come from the seed-epoch sidecar, NOT the
+        // snapshot. The snapshot's chain_dep here carries the corpus eta0 (a
+        // stand-in for the C1 admission seed's Nonce::ZERO placeholder); the
+        // persisted sidecar carries a DISTINCT eta0 ([0x99;32]). The recovered
+        // chain_dep must equal the SIDECAR's eta0 — the exact bug fix (pre-G-N
+        // the forge signed the header VRF over the snapshot's wrong nonce ->
+        // VRFKeyBadProof from a real Conway peer).
+        let (corpus, _v) = corpus_view();
+        let snapshot_eta0 = Nonce(Hash32(corpus.epoch_nonce));
+        let (db, sched, view) = warm_started_db();
+        let record = sample_sidecar(A3B_ANCHOR, EPOCH_576); // epoch_nonce = [0x99;32]
+        assert_ne!(
+            record.epoch_nonce, snapshot_eta0,
+            "precondition: the sidecar eta0 must differ from the snapshot's eta0"
+        );
+        let (_bytes, provenance) = seed_sidecar(&db, &record);
+
+        let out = bootstrap_initial_state(BootstrapInputs {
+            chaindb: &db,
+            snapshot_store: &db,
+            era_schedule: &sched,
+            ledger_view: &view,
+            genesis_initial: None,
+            seed_epoch_consensus_source:
+                SeedEpochConsensusSource::RequiredFromRecoveredProvenance(provenance),
+        })
+        .expect("required warm-start");
+
+        assert_eq!(
+            out.chain_dep.epoch_nonce, record.epoch_nonce,
+            "recovered forge eta0 must be the sidecar's, not the snapshot's"
+        );
+        assert_eq!(
+            out.chain_dep.evolving_nonce, record.epoch_nonce,
+            "seed-epoch evolving nonce equals eta0"
+        );
+        assert_ne!(
+            out.chain_dep.epoch_nonce, snapshot_eta0,
+            "the snapshot's placeholder eta0 must NOT reach the forge"
+        );
     }
 
     #[test]

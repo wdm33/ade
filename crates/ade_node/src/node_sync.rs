@@ -859,6 +859,7 @@ mod tests {
         let sidecar = SeedEpochConsensusInputs {
             anchor_fp: anchor_fp.clone(),
             epoch_no: EPOCH_576,
+            epoch_nonce: Nonce(Hash32([0x8a; 32])),
             active_slots_coeff: ActiveSlotsCoeff {
                 numer: 5,
                 denom: 100,
@@ -1423,6 +1424,7 @@ mod tests {
         let recovered_inputs = SeedEpochConsensusInputs {
             anchor_fp: anchor_fp.clone(),
             epoch_no: EPOCH_576,
+            epoch_nonce: Nonce(Hash32([0x8b; 32])),
             active_slots_coeff: ActiveSlotsCoeff {
                 numer: 5,
                 denom: 100,
@@ -1564,6 +1566,7 @@ mod tests {
         SeedEpochConsensusInputs {
             anchor_fp: Hash32([0x5A; 32]),
             epoch_no: L5_EPOCH,
+            epoch_nonce: Nonce(Hash32([0x8c; 32])),
             // asc 1/1 → every slot eligible regardless of VRF output bytes,
             // so the Eligible path is reached deterministically.
             active_slots_coeff: ActiveSlotsCoeff { numer: 1, denom: 1 },
@@ -2848,6 +2851,7 @@ mod tests {
         SeedEpochConsensusInputs {
             anchor_fp: Hash32([0x5A; 32]),
             epoch_no: L5_EPOCH,
+            epoch_nonce: Nonce(Hash32([0x8d; 32])),
             active_slots_coeff: ActiveSlotsCoeff { numer: 1, denom: 1 },
             total_active_stake: 1_000,
             pool_distribution: pools,

@@ -2132,6 +2132,7 @@ mod tests {
         SeedEpochConsensusInputs {
             anchor_fp,
             epoch_no: epoch,
+            epoch_nonce: Nonce(Hash32([0x99; 32])),
             active_slots_coeff: ActiveSlotsCoeff {
                 numer: 5,
                 denom: 100,

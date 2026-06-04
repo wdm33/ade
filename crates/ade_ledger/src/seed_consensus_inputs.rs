@@ -30,15 +30,18 @@ use ade_codec::cbor::{
     canonical_width, read_array_header, read_bytes, read_map_header, read_uint, write_array_header,
     write_bytes_canonical, write_map_header, write_uint_canonical, ContainerEncoding, IntWidth,
 };
+use ade_core::consensus::praos_state::Nonce;
 use ade_core::consensus::vrf_cert::ActiveSlotsCoeff;
 use ade_types::{EpochNo, Hash28, Hash32};
 
 use crate::consensus_view::PoolEntry;
 
-/// Pinned wire schema version. Decode rejects any other.
-pub const SEED_CINPUT_SCHEMA_VERSION: u32 = 1;
+/// Pinned wire schema version. Decode rejects any other (fail-closed: an old v1
+/// sidecar omitted `epoch_nonce`, so it decodes as `UnknownVersion` — never a
+/// default-to-zero eta0). Bumped 1 -> 2 by PHASE4-N-F-G-N (T-REC-04 / DC-CINPUT-03).
+pub const SEED_CINPUT_SCHEMA_VERSION: u32 = 2;
 
-const FIELDS_OUTER: u64 = 6;
+const FIELDS_OUTER: u64 = 7;
 const ASC_FIELDS: u64 = 2;
 const POOL_ENTRY_FIELDS: u64 = 2;
 
@@ -51,6 +54,11 @@ pub struct SeedEpochConsensusInputs {
     pub anchor_fp: Hash32,
     /// The single seed epoch these inputs are valid for.
     pub epoch_no: EpochNo,
+    /// Praos epoch nonce (eta0) for `epoch_no`. Added by PHASE4-N-F-G-N so the
+    /// recovered consensus inputs carry eta0 EXPLICITLY (T-REC-04); the forge VRF
+    /// input is `praos_vrf_input(slot, epoch_nonce)`, and WarmStart overlays this
+    /// onto `chain_dep.epoch_nonce` (DC-CINPUT-03).
+    pub epoch_nonce: Nonce,
     pub active_slots_coeff: ActiveSlotsCoeff,
     pub total_active_stake: u64,
     /// Deterministic `BTreeMap` ordering; `PoolEntry` carries the VRF keyhash,
@@ -104,6 +112,7 @@ pub fn encode_seed_epoch_consensus_inputs(inputs: &SeedEpochConsensusInputs) -> 
     write_uint_canonical(&mut buf, SEED_CINPUT_SCHEMA_VERSION as u64);
     write_bytes_canonical(&mut buf, &inputs.anchor_fp.0);
     write_uint_canonical(&mut buf, inputs.epoch_no.0);
+    write_bytes_canonical(&mut buf, inputs.epoch_nonce.as_bytes());
 
     write_array_header(
         &mut buf,
@@ -153,6 +162,7 @@ pub fn decode_seed_epoch_consensus_inputs(
 
     let anchor_fp = read_hash32(bytes, &mut o)?;
     let epoch_no = EpochNo(read_u64_field(bytes, &mut o)?);
+    let epoch_nonce = Nonce(read_hash32(bytes, &mut o)?);
 
     expect_definite_array(bytes, &mut o, ASC_FIELDS, "active_slots_coeff")?;
     let numer = read_u32_field(bytes, &mut o)?;
@@ -172,6 +182,7 @@ pub fn decode_seed_epoch_consensus_inputs(
     let decoded = SeedEpochConsensusInputs {
         anchor_fp,
         epoch_no,
+        epoch_nonce,
         active_slots_coeff,
         total_active_stake,
         pool_distribution,
@@ -327,6 +338,7 @@ mod tests {
         SeedEpochConsensusInputs {
             anchor_fp: Hash32([0x44; 32]),
             epoch_no: EpochNo(576),
+            epoch_nonce: Nonce(Hash32([0x55; 32])),
             active_slots_coeff: ActiveSlotsCoeff { numer: 1, denom: 20 },
             total_active_stake: 1_003_499,
             pool_distribution,
@@ -346,12 +358,14 @@ mod tests {
 
     #[test]
     fn seed_cinput_decode_rejects_unknown_version() {
-        // Splice a version=99 header in front of an otherwise-valid v1 body.
-        // The outer array header is 1 byte (0x86 for array(6)); the version
-        // (=1) is the next 1 byte (0x01). So the body after the version starts
-        // at index 2.
+        // Splice a bad version header in front of an otherwise-valid body.
+        // The outer array header is 1 byte (0x87 for array(7)); the version
+        // (=2) is the next 1 byte (0x02). So the body after the version starts
+        // at index 2. PHASE4-N-F-G-N: the current version is 2; bad_version=1 is
+        // the old v1 sidecar (which omitted epoch_nonce) — proving it fails
+        // closed (UnknownVersion), never a default-to-zero eta0.
         let fresh = encode_seed_epoch_consensus_inputs(&sample());
-        for bad_version in [0u64, 2, 3, 99] {
+        for bad_version in [0u64, 1, 3, 99] {
             let mut buf = Vec::new();
             write_array_header(
                 &mut buf,
@@ -360,7 +374,7 @@ mod tests {
             write_uint_canonical(&mut buf, bad_version);
             buf.extend_from_slice(&fresh[2..]);
             match decode_seed_epoch_consensus_inputs(&buf) {
-                Err(SeedConsensusInputsError::UnknownVersion { expected: 1, found })
+                Err(SeedConsensusInputsError::UnknownVersion { expected: 2, found })
                     if found == bad_version as u32 => {}
                 other => panic!("expected UnknownVersion for v{bad_version}, got {other:?}"),
             }
@@ -433,6 +447,7 @@ mod tests {
         write_uint_canonical(&mut buf, SEED_CINPUT_SCHEMA_VERSION as u64);
         write_bytes_canonical(&mut buf, &s.anchor_fp.0);
         write_uint_canonical(&mut buf, s.epoch_no.0);
+        write_bytes_canonical(&mut buf, s.epoch_nonce.as_bytes());
         write_array_header(
             &mut buf,
             ContainerEncoding::Definite(ASC_FIELDS, canonical_width(ASC_FIELDS)),
