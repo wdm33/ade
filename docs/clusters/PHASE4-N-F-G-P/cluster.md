@@ -69,8 +69,8 @@ by forge and feed.
 ## §7 Slices
 | Slice | Scope | CE | Registry | Status |
 |---|---|---|---|---|
-| **S1** | The live warm-start feed `ledger_view` is projected from the recovered `SeedEpochConsensusInputs` via the forge's `PoolDistrView::from_seed_epoch_consensus_inputs` authority (not an empty placeholder); fail-closed when the recovered record is absent on a feed-wired node; regression pins (a) the projected view exposes real ASC + total_active_stake + pool_active_stake + pool_vrf_keyhash and (b) forge and feed views are byte-identical projections of the same recovered record | CE-G-P-1 | DC-CINPUT-04 → enforced | planned |
-| **S2** | Live C1 rerun: the feed validates the previously-failing block past Step 5 + Step 7 (no `VrfCert(VerificationFailed)`); serve stays alive; `correlate` decides adoption | CE-G-P-2 | operator-gated | planned |
+| **S1** | The live warm-start feed `ledger_view` is projected from the recovered `SeedEpochConsensusInputs` via the forge's `PoolDistrView::from_seed_epoch_consensus_inputs` authority (not an empty placeholder); fail-closed when the recovered record is absent on a feed-wired node; regression pins (a) the projected view exposes real ASC + total_active_stake + pool_active_stake + pool_vrf_keyhash and (b) forge and feed views are byte-identical projections of the same recovered record | CE-G-P-1 | DC-CINPUT-04 → enforced | **closed** (`609dc3cc`; live-confirmed) |
+| **S2** | Live C1 rerun: the feed validates the previously-failing block past Step 5 + Step 7 (no `VrfCert(VerificationFailed)`); serve stays alive; `correlate` decides adoption | CE-G-P-2 | operator-gated | **partial** — feed past Step 5+7 + block ingested live; a SEPARATE forge-successor blocker (`RecoveredTipMissingBlockNo`) halts before serve/`correlate` → PHASE4-N-F-G-Q |
 
 ## §8 Cluster Exit Criteria
 - **CE-G-P-1 (mechanical):**
@@ -116,3 +116,33 @@ feeds (Step 7) is the existing BLUE authority, unchanged.
 - **OQ-P2:** multi-epoch — the recovered view is the single seed epoch (`DC-EPOCH-03`); a feed block past the
   seed-epoch boundary is off-epoch (the forge already fails closed there). The feed validator's cross-epoch
   stake-view evolution is the N-U / multi-epoch concern, not G-P.
+
+## §13 Close record — S1 (2026-06-04)
+**G-P CLOSED with a narrow claim.** `DC-CINPUT-04` enforced: the feed/receive header-validation `LedgerView` is
+projected from the recovered `SeedEpochConsensusInputs` via the single
+`PoolDistrView::from_seed_epoch_consensus_inputs` authority the forge uses (one recovered consensus surface) —
+not an empty placeholder; fail-closed (`FeedMissingRecoveredConsensusInputs`) when `--peer` is set but the
+record is absent. Mechanical (CE-G-P-1): `feed_header_validates_against_recovered_surface_not_empty_view` (the
+recovered-surface view validates the forged genesis-successor header through Step 5 + Step 7; the empty
+placeholder fails closed `VrfCert(VerificationFailed)`) + `ci/ci_check_feed_leader_threshold_view.sh`. No VRF /
+eta0 / Step-5/6/7 / ledger-state change. The `ForgeIntent::Off` relay-only arm hardcodes an always-empty
+in-memory source (no `--peer`), so its placeholder is genuinely unconsumed — left as-is.
+
+**LIVE-CONFIRMED:** the C1 `--mode node` rerun (2026-06-04 13:20Z, the fix in the binary) shows
+`VrfCert(VerificationFailed)` GONE (count = 0). The feed DECODES (G-O) + VALIDATES Step 5 + Step 7 (G-P) +
+INGESTS Ade's own block 0 (slot 107405, served by the follower at 13:20:32 `BlockFetch.Server.SendBlock`),
+advancing Ade's tip genesis → slot 107405.
+
+**NOT claimed:** serve stays alive; C1 rehearsal complete; RO-LIVE flip; bounty success. CE-G-P-2's serve-alive
+/ `correlate`-adoption half is NOT reached — a separate forge-successor blocker halts before the follower's next
+`:3002` retry. (A real cardano-node DID adopt an Ade-forged genesis-successor block at slot 107405 in a PRIOR
+run — strong standing evidence, NOT a project acceptance claim until `correlate` binds the follower log.)
+
+**NEW separate blocker → PHASE4-N-F-G-Q (Forge-successor tip/block_no fidelity):** with the block ingested, the
+forge tries to build the successor and fails `relay run-loop sync step failed (RecoveredTipMissingBlockNo)` =
+`forge_header_position(selected_tip=Some(slot 107405), last_block_no=None)` (node_sync.rs:501-503). The
+feed/spine evolves its `chain_dep` (block_no 0) but the forge reads the un-evolved recovered baseline
+(`state.chain_dep.last_block_no = None`) — a forge/feed state desync after feed-ingest. Capture-first:
+instrument the feed apply/admit result + `forge_header_position` (selected_tip slot/hash, recovered/chain tip
+block_no, `last_block_no` source, which `chain_dep` the forge reads), rerun C1, THEN fix; no guessed block_no,
+no `unwrap_or(0/1)`, no synthetic successor numbering.
