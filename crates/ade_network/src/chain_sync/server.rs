@@ -236,23 +236,28 @@ pub fn producer_chain_sync_serve(
             }
         }
         ChainSyncMessage::FindIntersect { points } => {
-            // state is now Intersect. Resolve immediately.
+            // state is now Intersect. Resolve immediately: walk the
+            // client-listed points in order and answer with the FIRST that
+            // is on the served chain. `Origin` is the universal common
+            // ancestor — every chain descends from genesis — so it always
+            // intersects (CN-WIRE-11; matches the real cardano-node, which
+            // answers IntersectFound[Origin] even with an empty chain).
+            // Block points resolve through the existing closed lookup; no
+            // widening beyond the Origin intersect.
             let tip = tip_from_lookup(served);
-            match served.intersect(&points) {
-                Some((slot, hash)) => {
-                    state.state = ChainSyncState::Idle;
-                    Ok((
-                        state,
-                        ServerStep::Reply(ServerReply::intersect_found(
-                            Point::Block { slot, hash },
-                            tip,
-                        )),
-                    ))
-                }
-                None => {
-                    state.state = ChainSyncState::Idle;
-                    Ok((state, ServerStep::Reply(ServerReply::intersect_not_found(tip))))
-                }
+            state.state = ChainSyncState::Idle;
+            let matched: Option<Point> = points.iter().find_map(|p| match p {
+                Point::Origin => Some(Point::Origin),
+                Point::Block { .. } => served
+                    .intersect(std::slice::from_ref(p))
+                    .map(|(s, h)| Point::Block { slot: s, hash: h }),
+            });
+            match matched {
+                Some(point) => Ok((
+                    state,
+                    ServerStep::Reply(ServerReply::intersect_found(point, tip)),
+                )),
+                None => Ok((state, ServerStep::Reply(ServerReply::intersect_not_found(tip)))),
             }
         }
         ChainSyncMessage::Done => Ok((state, ServerStep::Done)),
@@ -615,6 +620,43 @@ mod tests {
             ServerStep::Reply(reply) => match reply.into_message() {
                 ChainSyncMessage::IntersectNotFound { .. } => {}
                 other => panic!("expected IntersectNotFound, got {other:?}"),
+            },
+            other => panic!("expected Reply, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn producer_chain_sync_serve_find_intersect_origin_yields_intersect_found_origin() {
+        // PHASE4-N-F-G-M / CN-WIRE-11 (B): a real cardano-node follower at
+        // genesis sends FindIntersect with Origin in its points (the live c1
+        // follower sent [Origin, Origin]). Origin is the universal common
+        // ancestor, so Ade MUST answer IntersectFound[Origin] — the captured
+        // c1 reply fixture proves the node does this even with an empty chain.
+        // Pre-G-M, intersect() ignored Origin -> wrong IntersectNotFound.
+        let (snap, _blocks) = build_served_with_first_n_lightest(1);
+        let look = SnapshotLookup { snap: &snap };
+        let state = ProducerChainSyncServerState::new();
+        let (state2, step) = producer_chain_sync_serve(
+            state,
+            ChainSyncMessage::FindIntersect { points: vec![Point::Origin, Point::Origin] },
+            &look,
+            v(),
+        )
+        .unwrap();
+        assert_eq!(state2.state, ChainSyncState::Idle);
+        match step {
+            ServerStep::Reply(reply) => match reply.into_message() {
+                ChainSyncMessage::IntersectFound { point, tip } => {
+                    assert_eq!(point, Point::Origin, "must intersect at Origin (universal ancestor)");
+                    // Ade serves block 0, so its OWN tip point is a Block
+                    // (node-specific; NOT byte-identity with the c1 fixture's
+                    // empty-chain tip). Grammatical pin: a 2-element tip.
+                    match tip.point {
+                        Point::Block { .. } => {}
+                        Point::Origin => panic!("Ade serves block 0 -> tip point must be a Block"),
+                    }
+                }
+                other => panic!("expected IntersectFound[Origin], got {other:?}"),
             },
             other => panic!("expected Reply, got {other:?}"),
         }

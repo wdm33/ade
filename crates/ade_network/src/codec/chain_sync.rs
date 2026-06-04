@@ -30,8 +30,8 @@ use ade_types::{CardanoEra, Hash32, SlotNo};
 
 use crate::codec::error::{CodecError, ProtocolKind};
 use crate::codec::primitives::{
-    decode_array_header, decode_bytes, decode_u64, encode_array_header, encode_bytes, encode_u64,
-    require_consumed,
+    decode_array_head_two_form, decode_array_header, decode_bytes, decode_u64, encode_array_header,
+    encode_bytes, encode_u64, require_consumed, try_consume_break, ArrayHead,
 };
 
 const PROTOCOL: ProtocolKind = ProtocolKind::ChainSync;
@@ -187,6 +187,43 @@ fn decode_tip(data: &[u8], offset: &mut usize) -> Result<Tip, CodecError> {
     Ok(Tip { point, block_no })
 }
 
+/// Decode the `MsgFindIntersect` points list. A real cardano-node encodes
+/// this list as a CBOR INDEFINITE-length array (`9f … ff`); Ade encodes it
+/// definite-length. Accept BOTH canonical forms (`CN-WIRE-11`) — scoped to
+/// THIS list ONLY; `decode_array_header` stays definite-only everywhere
+/// else. Each element is the existing closed [`decode_point`]; the
+/// indefinite form requires the `0xff` break. No catch-all, no other shape.
+fn decode_find_intersect_points(
+    data: &[u8],
+    offset: &mut usize,
+) -> Result<Vec<Point>, CodecError> {
+    match decode_array_head_two_form(PROTOCOL, data, offset)? {
+        ArrayHead::Definite(n) => {
+            let mut points = Vec::with_capacity((n as usize).min(data.len()));
+            for _ in 0..n {
+                points.push(decode_point(data, offset)?);
+            }
+            Ok(points)
+        }
+        ArrayHead::Indefinite => {
+            let mut points = Vec::new();
+            loop {
+                if try_consume_break(data, offset) {
+                    break;
+                }
+                if *offset >= data.len() {
+                    return Err(CodecError::InvalidProtocolMessage {
+                        protocol: PROTOCOL,
+                        reason: "indefinite FindIntersect points list missing break",
+                    });
+                }
+                points.push(decode_point(data, offset)?);
+            }
+            Ok(points)
+        }
+    }
+}
+
 pub fn decode_chain_sync_message(bytes: &[u8]) -> Result<ChainSyncMessage, CodecError> {
     if bytes.is_empty() {
         return Err(CodecError::Truncated { needed: 1, got: 0 });
@@ -223,11 +260,7 @@ pub fn decode_chain_sync_message(bytes: &[u8]) -> Result<ChainSyncMessage, Codec
             ChainSyncMessage::RollBackward { point, tip }
         }
         (4, 2) => {
-            let n = decode_array_header(PROTOCOL, bytes, &mut offset)?;
-            let mut points = Vec::with_capacity((n as usize).min(bytes.len()));
-            for _ in 0..n {
-                points.push(decode_point(bytes, &mut offset)?);
-            }
+            let points = decode_find_intersect_points(bytes, &mut offset)?;
             ChainSyncMessage::FindIntersect { points }
         }
         (5, 3) => {
