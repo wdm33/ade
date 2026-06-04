@@ -352,6 +352,9 @@ where
         // internal cadence checkpoint marker is a no-op here
         // (`NoCheckpointSink`); the REAL recovery snapshot is captured
         // below via `PersistentSnapshotCache` (E4). A reject fails closed.
+        // The block bytes arrive already bare `[era, block]`: the wire feed
+        // strips the BlockFetch tag-24 wrapper at the receive boundary
+        // (CN-WIRE-12), and the in-memory feed yields bare directly.
         let tip = pump_block(
             state,
             chaindb,

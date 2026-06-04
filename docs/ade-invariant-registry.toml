@@ -6198,3 +6198,34 @@ introduced_in = "PHASE4-N-F-G-N"
 strengthened_in = []
 cluster = "PHASE4-N-F-G-N"
 evidence_notes = "PHASE4-N-F-G-N S1 (2026-06-04). The Praos VRF input construction (praos_vrf_input) + the draft-03 crypto were PROVEN correct against real Conway headers (Ade's verify_praos_vrf verifies real mainnet Conway-576 + preprod headers; both 80-byte draft-03 -- the draft-13/batch-compat theory was measured dead). So the only defect was the eta0 SOURCING: the forge signed over the snapshot's ZERO placeholder instead of the recovered seed-epoch eta0. DC-CINPUT-03 binds the VRF input to the recovered-and-overlaid sidecar eta0 (T-REC-04). pinning_praos_vrf_input_and_threshold_match_fixture pins praos_vrf_input(slot, recovered chain_dep.epoch_nonce) against the genesis fixture; warm_start_overlays_recovered_eta0_onto_chain_dep_g_n proves the recovered eta0 reaching chain_dep is the sidecar's. Operator-gated live confirmation under RO-LIVE-01 (CE-G-N-2)."
+
+[[rules]]
+id = "CN-WIRE-12"
+tier = "derived"
+statement = """
+Ade's FEED/receive-side BlockFetch path MUST remove the protocol tag-24 wrapper using the SINGLE ade_codec
+unwrap authority (decompose_blockfetch_block = ade_codec::unwrap_tag24) before authoritative block decode, so
+decode_block / pump_block receive ONLY bare [era, block] bytes. This is the receive-side mirror of the
+serve-side compose_blockfetch_block (wrap_tag24, CN-WIRE-08) -- NOT a new block decoder, NOT a second unwrap
+implementation. The wire pump performs the unwrap EXACTLY ONCE, at the MsgBlock receive boundary, before it
+emits AdmissionPeerEvent::Block; the bare-bytes contract downstream (run_node_sync -> pump_block, and
+recovery/restart from WAL/db) is unchanged -- so the unwrap belongs on the FEED path, NOT inside pump_block
+(which recovery also feeds with bare bytes). Fail-closed: a malformed tag-24, a non-tag-24 payload where the
+BlockFetch protocol requires tag-24, or inner bytes that are not [era, block] -> a structured BlockFetchDecode
+error / peer drop, never a silent pass-through, skip, or fallback.
+"""
+source = "docs/clusters/PHASE4-N-F-G-O/cluster.md"
+cross_ref = ["CN-WIRE-08", "CN-WIRE-09", "CN-WIRE-11", "DC-NODE-07", "CN-NODE-02", "DC-SYNC-02", "RO-LIVE-01"]
+code_locus = "crates/ade_runtime/src/admission/wire_pump.rs (handle_block_fetch BlockFetchMessage::Block arm -- calls decompose_blockfetch_block ONCE at the receive boundary, emits bare [era, block]; fail-closed BlockFetchDecode on a non-tag-24 payload); crates/ade_network/src/codec/block_fetch.rs (decompose_blockfetch_block = ade_codec::unwrap_tag24 -- the SINGLE inverse of compose_blockfetch_block, unchanged); crates/ade_node/src/node_sync.rs (run_node_sync -> pump_block consumes the bare [era, block] the wire pump now delivers)"
+tests = [
+  "feed_unwrap_decodes_genesis_successor_block_zero",
+  "block_fetch_unwraps_tag24_emitting_bare_block",
+  "block_fetch_fails_closed_on_non_tag24_payload",
+  "node_spine_serve_loopback_follower_fetches_self_accepted_block",
+]
+ci_script = "ci/ci_check_feed_tag24_unwrap.sh"
+status = "enforced"
+introduced_in = "PHASE4-N-F-G-O"
+strengthened_in = []
+cluster = "PHASE4-N-F-G-O"
+evidence_notes = "PHASE4-N-F-G-O S1 (2026-06-04). With G-N's eta0 fix in, the C1 cardano-node follower (c1 private-net, magic 42, genesis) accepted Ade's block-0 header VRF (VRFKeyBadProof count 0) and block-fetched the body -- then Ade crashed fail-closed (exit 43) on its FEED/receive side: run_node_sync -> pump_block -> decode_block rejected the received block with Body(Decoding(UnexpectedType @ offset 0)). The captured 830-byte payload was d8 18 59 03 39 82 07 85 ... = CBOR tag-24 (d8 18) wrapping bytes(825) = [era 7, Conway block 0, prev null = Genesis] -- Ade's OWN block 0 echoed back from the follower. decode_block expects the BARE [era, block] (0x82...); it hit the 0xd8 tag. ROOT CAUSE: the receive path forwarded the wrapped MsgBlock bytes verbatim -- the missing mirror of the N-X serve-side compose_blockfetch_block (wrap_tag24, CN-WIRE-08). The inverse authority decompose_blockfetch_block (unwrap_tag24, fail-closed) already EXISTED; the wire pump just never called it. FIX: handle_block_fetch now strips the tag-24 wrapper via decompose_blockfetch_block ONCE at the MsgBlock receive boundary, emitting bare [era, block]; pump_block / decode_block + recovery (bare WAL/db bytes) are unchanged. feed_unwrap_decodes_genesis_successor_block_zero forges the genesis-successor block 0, serves it tag-24-wrapped (d8 18 prefix = the captured shape), unwraps via the single authority, and decode_blocks it as block 0 (PrevHash::Genesis guaranteed by check_header_position) -- the captured wrapped-payload -> unwrap -> decode -> block 0/Genesis chain, WITHOUT a brittle 830-byte literal (the forged block IS the echoed payload; the serve composer produces the identical shape). block_fetch_unwraps_tag24_emitting_bare_block pins the wire pump emitting the bare (not wrapped) bytes; block_fetch_fails_closed_on_non_tag24_payload pins the BlockFetchDecode fail-closed on a bare (non-tag-24) payload with no event emitted. The node-spine serve loopback (real wire pump end-to-end) stays green with the bare-delivery assertion. NOT decoder loosening -- decode_block still requires bare [era, block]; the wire pump strips the wrapper the BlockFetch protocol mandates. CE-G-O-2 (the live C1 feed no longer crashing; serve staying alive; correlate deciding adoption) stays operator-gated; no RO-LIVE flip; no acceptance claim without the follower log through correlate."

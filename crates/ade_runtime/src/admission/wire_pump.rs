@@ -38,7 +38,8 @@ use std::io;
 use std::net::SocketAddr;
 
 use ade_network::codec::block_fetch::{
-    decode_block_fetch_message, encode_block_fetch_message, BlockFetchMessage,
+    decode_block_fetch_message, decompose_blockfetch_block, encode_block_fetch_message,
+    BlockFetchMessage,
     Point as BfPoint, Range,
 };
 use ade_network::codec::chain_sync::{
@@ -462,12 +463,22 @@ async fn handle_block_fetch(
             Ok(())
         }
         BlockFetchMessage::Block { bytes } => {
+            // CN-WIRE-12 (PHASE4-N-F-G-O): the BlockFetch wire delivers the
+            // block tag-24-wrapped (`tag24(bytes([era, block]))` — the serve
+            // side composes it via CN-WIRE-08). Strip the wrapper through the
+            // SINGLE `ade_codec` authority before delivery, so the feed/runner
+            // consumers receive bare `[era, block]` for the authoritative
+            // decode. Fail-closed on a non-tag-24 / malformed payload
+            // (`BlockFetchDecode` → drop the peer; never a silent pass-through).
+            let bare = decompose_blockfetch_block(&bytes).map_err(|_| {
+                AdmissionWirePumpResult::Error(AdmissionWirePumpError::BlockFetchDecode)
+            })?;
             emit(
                 events_out,
                 peer_addr,
                 AdmissionPeerEvent::Block {
                     peer: peer_addr.to_string(),
-                    block_bytes: bytes,
+                    block_bytes: bare.to_vec(),
                 },
             )
             .await
@@ -754,6 +765,7 @@ mod tests {
     use ade_network::mux::frame::{
         encode_frame, MiniProtocolId, MuxFrame, MuxHeader, MuxMode as TestMuxMode,
     };
+    use ade_network::codec::block_fetch::compose_blockfetch_block;
     use ade_network::mux::transport::{spawn_duplex, DuplexCapacity};
     use ade_types::{Hash32, SlotNo};
     use tokio::net::{TcpListener, TcpStream};
@@ -1087,11 +1099,12 @@ mod tests {
 
         // 4. Server replies StartBatch + Block(B0) + BatchDone.
         let block0_bytes = {
-            // Minimal valid CBOR for the runner-side decoder:
-            // tag(24, bytes(4))[DE AD BE EF]. The runner's
-            // process_block fails to decode but the WIRE PUMP
-            // only forwards bytes; pump tests don't assert
-            // runner behavior.
+            // A tag-24-wrapped MsgBlock payload:
+            // tag(24, bytes(4))[DE AD BE EF]. The WIRE PUMP
+            // strips the tag-24 wrapper (CN-WIRE-12), emitting
+            // the bare inner bytes; this test only asserts a
+            // Block event is emitted (not the runner-side decode
+            // of the inner bytes).
             let mut b = Vec::new();
             b.push(0xD8);
             b.push(0x18);
@@ -1207,5 +1220,89 @@ mod tests {
             }
         }
         let _ = pump_handle.await;
+    }
+
+    /// CN-WIRE-12 (PHASE4-N-F-G-O): the block-fetch receive handler strips the
+    /// protocol tag-24 wrapper via the single `ade_codec` authority before
+    /// delivery, so the emitted `AdmissionPeerEvent::Block` carries the BARE
+    /// `[era, block]` storage bytes — NOT the wrapped wire payload. (The serve
+    /// side composes the wrapper via `compose_blockfetch_block` / CN-WIRE-08;
+    /// this is its receive-side mirror.)
+    #[tokio::test]
+    async fn block_fetch_unwraps_tag24_emitting_bare_block() {
+        let (tx, mut rx) = mpsc::channel::<AdmissionPeerEvent>(4);
+        let mut outbox: VecDeque<ByteChunkIn> = VecDeque::new();
+        let mut cs_in_flight = false;
+        let mut bf_in_flight = true;
+
+        // Bare [era 7, []] stand-in storage bytes, wrapped by the serve-side
+        // authority — the exact shape the BlockFetch wire delivers.
+        let bare = vec![0x82u8, 0x07, 0x80];
+        let wrapped = compose_blockfetch_block(&bare);
+        assert_eq!(
+            &wrapped[0..2],
+            &[0xd8, 0x18],
+            "the wire payload is tag-24-wrapped (d8 18)"
+        );
+
+        handle_block_fetch(
+            BlockFetchMessage::Block { bytes: wrapped },
+            "127.0.0.1:0",
+            &tx,
+            &mut outbox,
+            &mut cs_in_flight,
+            &mut bf_in_flight,
+        )
+        .await
+        .expect("a valid tag-24 block-fetch payload unwraps and emits");
+
+        match rx.try_recv().expect("a Block event is emitted") {
+            AdmissionPeerEvent::Block { block_bytes, .. } => assert_eq!(
+                block_bytes, bare,
+                "the emitted block is the tag-24-UNWRAPPED bare [era, block] \
+                 (CN-WIRE-12), never the wire wrapper"
+            ),
+            other => panic!("expected a Block event, got {other:?}"),
+        }
+    }
+
+    /// CN-WIRE-12 fail-closed: a non-tag-24 `MsgBlock` payload (where the
+    /// BlockFetch protocol requires the tag-24 wrapper) is rejected as a
+    /// structured `BlockFetchDecode` error — never a silent pass-through of the
+    /// unwrapped-but-not-actually-wrapped bytes, and no `Block` event emitted.
+    #[tokio::test]
+    async fn block_fetch_fails_closed_on_non_tag24_payload() {
+        let (tx, mut rx) = mpsc::channel::<AdmissionPeerEvent>(4);
+        let mut outbox: VecDeque<ByteChunkIn> = VecDeque::new();
+        let mut cs_in_flight = false;
+        let mut bf_in_flight = true;
+
+        // Bare [era, []] with NO tag-24 wrapper — a protocol violation on the
+        // BlockFetch receive path.
+        let non_tag24 = vec![0x82u8, 0x07, 0x80];
+
+        let res = handle_block_fetch(
+            BlockFetchMessage::Block { bytes: non_tag24 },
+            "127.0.0.1:0",
+            &tx,
+            &mut outbox,
+            &mut cs_in_flight,
+            &mut bf_in_flight,
+        )
+        .await;
+
+        assert!(
+            matches!(
+                res,
+                Err(AdmissionWirePumpResult::Error(
+                    AdmissionWirePumpError::BlockFetchDecode
+                ))
+            ),
+            "a non-tag-24 payload must fail closed with BlockFetchDecode, got {res:?}"
+        );
+        assert!(
+            rx.try_recv().is_err(),
+            "no Block event is emitted on a fail-closed unwrap"
+        );
     }
 }

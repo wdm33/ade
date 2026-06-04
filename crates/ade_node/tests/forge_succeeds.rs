@@ -646,3 +646,71 @@ fn live_feed_forge_serve_loopback_returns_forged_block() {
         "served block-fetch payload (tag24-unwrapped) is the FORGED self-accept bytes"
     );
 }
+
+// =========================================================================
+// PHASE4-N-F-G-O S1 — feed-side BlockFetch tag-24 unwrap before decode (CN-WIRE-12)
+// =========================================================================
+
+/// PHASE4-N-F-G-O (CN-WIRE-12): the FEED/receive-side mirror of the serve wrap.
+/// The genesis-successor block 0 (PrevHash::Genesis), served tag-24-wrapped over
+/// block-fetch (the captured-shape `d8 18 …` wire payload the C1 follower echoed
+/// back — the exact bytes Ade's feed crashed on before this cluster), is stripped
+/// by the SINGLE `ade_codec` unwrap authority (`decompose_blockfetch_block` = the
+/// exact call the wire pump now makes on the receive path) back to the bare
+/// `[era, block]`, which `decode_block` accepts as Ade's block 0. This pins the
+/// captured wrapped payload → unwrap → decode → block 0 / Genesis chain (G-O §12
+/// acceptance #1 + #2) WITHOUT a brittle 830-byte literal: the forged genesis
+/// block IS the payload the follower echoes, and the serve composer produces the
+/// identical tag-24 shape.
+#[test]
+fn feed_unwrap_decodes_genesis_successor_block_zero() {
+    let epoch = EpochNo(0);
+    let slot = 1u64;
+
+    let mut shell = synth_shell(0x77, 0x88, 0x99);
+    let fixture = EligibleFixture::build(&shell, slot, epoch);
+    let ctx = fixture.ctx();
+
+    // Forge the genesis-successor block 0 (PrevHash::Genesis) and admit it to the
+    // served view via the sole node-spine path (handoff → into_accepted → push_atomic).
+    let (event, handoff_token) = run_real_forge(slot, /* kes_period = */ 0, &ctx, &mut shell);
+    let forged_bytes = match event {
+        CoordinatorEvent::ForgeSucceeded { artifact, .. } => artifact.bytes,
+        other => panic!("expected ForgeSucceeded genesis block, got {other:?}"),
+    };
+    let accepted = handoff_token.expect("ForgeSucceeded surfaces the BLUE self-accepted token");
+    let handoff = SelfAcceptedHandoff::from_self_accepted(accepted);
+    let (handle, view) = ServedChainHandle::new();
+    let tip = handle
+        .push_atomic(handoff.into_accepted())
+        .expect("node-spine admit via into_accepted()");
+
+    // Serve it tag-24-wrapped (the captured-shape wire payload: `d8 18 …`).
+    let wire_payload = serve_block_fetch_payload(&view, tip.slot, tip.hash.clone());
+    assert_eq!(
+        &wire_payload[0..2],
+        &[0xd8, 0x18],
+        "the served BlockFetch payload is tag-24-wrapped (the captured C1 shape)"
+    );
+
+    // FEED/receive-side unwrap via the SINGLE authority — the exact call the wire
+    // pump's receive path makes → bare [era, block].
+    let bare = decompose_blockfetch_block(&wire_payload)
+        .expect("the captured-shape tag-24 payload unwraps via the single authority");
+    assert_eq!(
+        bare,
+        &forged_bytes[..],
+        "the unwrapped bare bytes are the forged genesis block verbatim"
+    );
+
+    // The bare bytes decode as Ade's block 0; decode_block runs the S3
+    // check_header_position rule, so a block_no 0 that decodes MUST carry
+    // PrevHash::Genesis (else it would be rejected) — the feed no longer crashes.
+    let decoded = ade_ledger::block_validity::decode_block(bare)
+        .expect("the unwrapped bare bytes decode as a block (the feed no longer crashes)");
+    assert_eq!(
+        decoded.header_input.block_no.0, 0,
+        "the feed decodes Ade's genesis-successor block 0 (PrevHash::Genesis \
+         guaranteed by check_header_position)"
+    );
+}

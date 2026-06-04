@@ -35,7 +35,6 @@ use ade_core::consensus::vrf_cert::ActiveSlotsCoeff;
 use ade_core::consensus::{BootstrapAnchorHash, EraSummary};
 use ade_ledger::consensus_view::{PoolDistrView, PoolEntry};
 use ade_ledger::state::LedgerState;
-use ade_network::codec::block_fetch::decompose_blockfetch_block;
 use ade_network::codec::chain_sync::Point;
 use ade_node::admission::bootstrap::build_n2n_version_table;
 use ade_node::node_lifecycle::{bind_serve_listener, run_node_serve_task, ServeStartError};
@@ -203,16 +202,14 @@ async fn node_spine_serve_loopback_follower_fetches_self_accepted_block() {
     .expect("follower receives a block-fetch reply within the timeout")
     .expect("follower received a Block event (not a premature disconnect)");
 
-    // The wire pump emits the raw `MsgBlock` payload (tag-24-wrapped per
-    // CN-WIRE-08); unwrap it and assert the inner block is byte-identical to the
-    // served self-accepted block (DC-CONS-17), mirroring produce_loopback's
-    // `block_fetch_payload_is_self_accepted_bytes`.
-    let inner = decompose_blockfetch_block(&fetched)
-        .expect("the follower's block-fetch payload is tag-24-wrapped (CN-WIRE-08)");
+    // PHASE4-N-F-G-O (CN-WIRE-12): the wire pump now strips the BlockFetch tag-24
+    // wrapper at the receive boundary, so the feed delivers the BARE [era, block]
+    // storage form. Assert it byte-identical to the served self-accepted block
+    // (DC-CONS-17), mirroring produce_loopback's `block_fetch_payload_is_self_accepted_bytes`.
     assert_eq!(
-        inner,
+        &fetched[..],
         &block_bytes[..],
-        "the body the follower block-fetched (tag-24-unwrapped) must be \
+        "the body the follower block-fetched (tag-24 stripped at the receive boundary) must be \
          byte-identical to the served self-accepted block (DC-CONS-17)"
     );
 
@@ -315,12 +312,11 @@ async fn serve_task_outlives_feed_end_and_serves_late_fetch() {
     .await
     .expect("late follower receives a block-fetch reply within the timeout")
     .expect("late follower received a Block event (not a premature disconnect)");
-    let inner = decompose_blockfetch_block(&fetched)
-        .expect("the late follower's block-fetch payload is tag-24-wrapped (CN-WIRE-08)");
     assert_eq!(
-        inner,
+        &fetched[..],
         &block_bytes[..],
-        "the late follower fetched the served self-accepted block byte-identically"
+        "the late follower fetched the served self-accepted block byte-identically \
+         (tag-24 stripped at the receive boundary, CN-WIRE-12)"
     );
 
     // Still alive after serving the late fetch — only shutdown ends it.
