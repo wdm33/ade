@@ -57,8 +57,8 @@ new BLUE type; no new authoritative transition.
 ## §7 Slices
 | Slice | Scope | CE | Registry | Status |
 |---|---|---|---|---|
-| **S1** | The forge-successor derives (block_no, chain state) from the evolved `state.receive` (not the recovered baseline); successor block_no = evolved `last_block_no` + 1; regression pins (a) post-ingest the forge reads evolved block_no `Some(0)` → successor block_no 1 (not `RecoveredTipMissingBlockNo`), (b) pre-ingest no-tip still forges block 0 (`DC-NODE-08`/G-J), (c) no fallback/guess in the path | CE-G-Q-1 | DC-NODE-10 → enforced | planned |
-| **S2** | Live C1 rerun: the node proceeds past `RecoveredTipMissingBlockNo` and attempts/produces block 1+ | CE-G-Q-2 | operator-gated | planned |
+| **S1** | The forge-successor derives (block_no, chain state) from the evolved `state.receive` (not the recovered baseline); successor block_no = evolved `last_block_no` + 1; regression pins (a) post-ingest the forge reads evolved block_no `Some(0)` → successor block_no 1 (not `RecoveredTipMissingBlockNo`), (b) pre-ingest no-tip still forges block 0 (`DC-NODE-08`/G-J), (c) no fallback/guess in the path | CE-G-Q-1 | DC-NODE-10 → enforced | **closed** (`bd85892b`; live-confirmed) |
+| **S2** | Live C1 rerun: the node proceeds past `RecoveredTipMissingBlockNo` and attempts/produces block 1+ | CE-G-Q-2 | operator-gated | **met-with-new-blocker** — node stable + block 1+ live (no `RecoveredTipMissingBlockNo`); the follower follows `:3002` but REJECTS Ade's served chain (`UnexpectedBlockNo`) → PHASE4-N-F-G-R |
 
 ## §8 Cluster Exit Criteria
 - **CE-G-Q-1 (mechanical):**
@@ -100,3 +100,33 @@ state ⇒ same successor block_no + prev_hash). No new authoritative transition;
 - **OQ-Q2:** the evolved `ledger` (base_state) threaded for the successor body — block 1 in the C1 rehearsal is
   expected empty (no txs available on the feed); the evolved ledger is selected for correctness, but successor
   BODY content (txs) is the multi-block / N-U concern, not G-Q.
+
+## §13 Close record — S1 (2026-06-04)
+**G-Q CLOSED with a narrow claim.** `DC-NODE-10` enforced: `forge_one_from_recovered` takes the evolved chain
+state (`live_chain_dep` + `live_ledger`); the relay loop threads the evolved `state.receive.{chain_dep,ledger}`
+into it, so the forge-successor reads the evolved admitted spine (block_no + the self-accept chain-state), not
+the stale WarmStart baseline. Mechanical (CE-G-Q-1):
+`forge_successor_reads_evolved_spine_block_no_not_stale_baseline_g_q` (forge_header_position(Some(tip),
+Some(0)) → block 1; evolved Some(0) → NOT RecoveredTipMissingBlockNo; stale None → RecoveredTipMissingBlockNo) +
+`ci/ci_check_forge_successor_evolved_spine.sh`. The relay-loop forge tests now build the spine from the
+recovered base (`l5_forge_spine`, mirroring the real node) — a latent test inconsistency the fix exposed. No
+VRF / eta0 / Step-5/6/7 / durable-recovery change; no guessed block_no.
+
+**LIVE-CONFIRMED:** the C1 `--mode node` rerun (2026-06-04 14:28Z, clean regenerated store) shows
+`RecoveredTipMissingBlockNo` count 0; **97 forge ticks, clean exit 0** — the FIRST run that does not crash (the
+relay loop ran continuously + halted cleanly at feed EOF); 2 blocks produced; the feed ingested block 0; and
+the follower CONNECTED to Ade's `:3002` serve + `ChainSync.Client.DownloadedHeader` (the follower now actively
+follows Ade's chain).
+
+**NOT claimed:** block adopted; C1 rehearsal complete; RO-LIVE flip; bounty success. The follower DOWNLOADED but
+REJECTED Ade's served headers (`HeaderEnvelopeError UnexpectedBlockNo`) → `correlate` = no adoption.
+
+**NEW separate blocker → PHASE4-N-F-G-R (Served-chain header sequence / follower intersection fidelity):** the
+follower rejects Ade's served chain — `ChainSync.Client.Exception HeaderError … HeaderEnvelopeError
+(UnexpectedBlockNo (BlockNo 0) (BlockNo 1))`; follower tip = `(SlotNo 107405) 52e3ae88…be2652d (BlockNo 0)` [a
+PRIOR-run Ade block it adopted], Ade's served tip = `(SlotNo 118791) b1b5e71b… (BlockNo 1)`. Strong hypothesis:
+a STALE-FOLLOWER fork (the follower holds a prior-run block 0 that forks from Ade's freshly-forged block 0 at
+the current slot). Capture-first: follower tip before the run; Ade's served-chain headers
+(hash/slot/block_no/prev_hash); the FindIntersect intersection chosen; the first RollForward header; the
+follower rejection context — THEN decide (follower chain reset vs Ade serve-chain fix). No synthetic fork
+repair, no follower-state workaround hidden in Ade.
