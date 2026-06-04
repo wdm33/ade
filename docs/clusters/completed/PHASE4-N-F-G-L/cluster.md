@@ -60,9 +60,16 @@ both directions, structured errors, NO decoder loosening). No new canonical type
 ## §7 Slices
 | Slice | Scope | CE | Registry | Status |
 |---|---|---|---|---|
-| **S1** | Capture + commit the canonical real-cardano-node V15 handshake fixture (the failing peer + a public reference); pin the target | CE-G-L-1 (capture half) | CN-WIRE-10 (declared) | done |
-| **S2** | Correct Ade's serve responder versionData/accept encoding to match the fixture per negotiated version; one shared closed handshake authority for initiator + responder | CE-G-L-1 (encode half) | CN-WIRE-10 → enforced | planned |
-| **S3** | Live C1 handshake confirmation: a real cardano-node completes the handshake with Ade's serve + proceeds to ChainSync; resumes the G-K rehearsal | CE-G-L-2 | operator-gated | planned |
+| **S1** | Capture + commit the canonical real-cardano-node V15 handshake fixture (the failing peer + a public reference); pin the target | CE-G-L-1 (capture half) | CN-WIRE-10 (declared) | Merged (`e42cb249`) |
+| **S2** | Correct Ade's serve responder versionData/accept encoding to match the fixture per negotiated version; one shared closed handshake authority for initiator + responder | CE-G-L-1 (encode half) | CN-WIRE-10 enforced | Merged (`853344f7`) |
+| **S3** | Live C1 handshake confirmation: a real cardano-node completes the handshake with Ade's serve. The ChainSync `MsgFindIntersect` step that follows is a NEW layer = **PHASE4-N-F-G-M** (not unfinished G-L). | CE-G-L-2 | CN-WIRE-10 | **LIVE-CONFIRMED** (follower `ColdToWarm → WarmToHot → PromoteWarmDone` on :3002, 2026-06-04 07:27:04Z; no HandshakeDecodeError / TInt 1) |
+
+> **CLOSE (narrow claim).** `CN-WIRE-10` enforced: Ade's serve-side N2N handshake RESPONDER is
+> cardano-node compatible for V15 (byte-pinned to the captured real-node fixtures + live-confirmed: the
+> real follower reaches HOT with Ade's serve). This cluster does **NOT** claim ChainSync works,
+> BlockFetch works, the follower accepted block 0, or any RO-LIVE completion. The next blocker — the
+> serve-side ChainSync `MsgFindIntersect` response (the follower's hot session times out at
+> `ExceededTimeLimit (ChainSync … ServerHasAgency (SingIntersect))` ~10 s in) — is **PHASE4-N-F-G-M**.
 
 ## §8 Cluster Exit Criteria
 - **CE-G-L-1 (mechanical):** Ade's serve responder encodes the V15 (and each supported version's)

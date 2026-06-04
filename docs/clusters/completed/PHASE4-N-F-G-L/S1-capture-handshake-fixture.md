@@ -6,7 +6,7 @@
 - **Slice:** PHASE4-N-F-G-L S1 — capture the canonical real-cardano-node N2N V15 `MsgAcceptVersion`
   (responder) encoding and commit it as the corpus fixture S2's encoder fix is pinned against.
 - **Cluster:** PHASE4-N-F-G-L — Serve-side N2N handshake cardano-node compatibility.
-- **Status:** done (fixtures committed) — capture clean; the encoder fix is S2.
+- **Status:** Merged (`e42cb249`) — fixtures committed; the encoder fix landed in S2 (`853344f7`, `CN-WIRE-10` enforced + live-confirmed: the real follower reaches HOT with Ade's serve).
 - **CE addressed:** CE-G-L-1 (capture half). [S2 = encode half; S3 = live, operator-gated.]
 
 ## §3 Dependencies
