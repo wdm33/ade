@@ -9,7 +9,7 @@
   lifecycle cancellation). The serve listener survives a clean feed-end halt so a late peer can still
   BlockFetch an already-self-accepted block.
 - **Cluster:** PHASE4-N-F-G-K — Node serve lifetime decoupled from feed end.
-- **Status:** planned.
+- **Status:** Merged (`b8829a6a`).
 - **Cluster Exit Criteria addressed — CE-G-K-1 + CE-G-K-2.** (CE-G-K-3 = the operator-gated C1 rerun,
   out of slice scope.)
 
