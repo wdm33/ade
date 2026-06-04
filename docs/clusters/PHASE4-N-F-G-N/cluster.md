@@ -66,8 +66,8 @@ authority.
 ## §7 Slices
 | Slice | Scope | CE | Registry | Status |
 |---|---|---|---|---|
-| **S1** | Add `epoch_nonce` to `SeedEpochConsensusInputs` (versioned, fail-closed); persist it via the admission merge; recover + overlay onto `chain_dep` at WarmStart; regression (persist→recover round-trip + ZERO snapshot → recovered eta0 == 953a4c34) + fail-closed test | CE-G-N-1 | T-REC-04 + DC-CINPUT-03 → enforced | planned |
-| **S2** | Regenerate the C1 staged store (re-run admission) + live C1 confirmation: forge eta0 == `953a4c34`; follower verifies header VRF (no `VRFKeyBadProof`) + proceeds past `DownloadedHeader` | CE-G-N-2 | operator-gated | planned |
+| **S1** | Add `epoch_nonce` to `SeedEpochConsensusInputs` (versioned, fail-closed); persist it via the admission merge; recover + overlay onto `chain_dep` at WarmStart; regression (persist→recover round-trip + ZERO snapshot → recovered eta0 == 953a4c34) + fail-closed test | CE-G-N-1 | T-REC-04 + DC-CINPUT-03 → enforced | done |
+| **S2** | Regenerate the C1 staged store (re-run admission) + live C1 confirmation: forge eta0 == `953a4c34`; follower verifies header VRF (no `VRFKeyBadProof`) + proceeds past `DownloadedHeader` | CE-G-N-2 | operator-gated | done — live-confirmed 2026-06-04 |
 
 ## §8 Cluster Exit Criteria (CE-G-N-1, mechanical)
 1. `SeedEpochConsensusInputs` gains an `epoch_nonce` field.
@@ -113,3 +113,27 @@ Persist→recover of eta0 is deterministic + replay-equivalent (same canonical i
   under RO-LIVE-01 — no flip).
 - **operational:** the operator bundle sources eta0 from the C1/preprod node extraction path
   (`import_live_consensus_inputs`); never hand-authored.
+
+## §13 Cluster close (2026-06-04) — NARROW CLAIM
+**Claim (what G-N proves):** the WarmStart-recovered forge `eta0` (`chain_dep.epoch_nonce`) now comes from
+the persisted seed-epoch consensus input (`SeedEpochConsensusInputs.epoch_nonce`, v2), NOT `Nonce::ZERO`; an
+old v1 sidecar fails closed; and a real C1 cardano-node follower's header VRF verification proceeds PAST
+`VRFKeyBadProof`.
+
+**Live evidence (S2, 2026-06-04; C1 cardano-node 11.0.1 follower, magic 42):**
+- old v1 store → WarmStart fails closed (exit 42, `SeedConsensusSidecarDecode(Structural "outer array has wrong field count"); failing closed … no bundle fallback`).
+- regenerated v2 store → `--mode node` recovers (no fail-closed) + forges block 0 (slot 107405).
+- follower: **`VRFKeyBadProof` count = 0**; `WarmToHot → ChainSync.Client.FoundIntersection → DownloadedHeader (slot 107405) → BlockFetch AddedFetchRequest…CompletedBlockFetch` (fetched Ade's full block-0 body).
+
+**Mechanical:** `T-REC-04` + `DC-CINPUT-03` enforced; `ci/ci_check_warmstart_eta0_overlay.sh`; regression
+`warm_start_overlays_recovered_eta0_onto_chain_dep_g_n` + the seed-consensus / bootstrap-A3b / merge /
+genesis / mithril / genesis_pinning / node_sync / node_lifecycle suites pass. **NO VRF crypto/variant change.**
+
+**Explicitly NOT claimed:** block adopted by the follower; C1 genesis rehearsal complete; RO-LIVE flip;
+preprod/bounty success. Adoption was NOT confirmed — Ade crashed feed-side ~2.4 s after the body fetch,
+before the follower logged adoption; no acceptance claim without the follower log through `correlate`.
+
+**New blocker (separate — NOT in G-N):** Ade crashed fail-closed (exit 43) on its FEED/receive side —
+`relay run-loop sync step failed (Receive(Validity(Body(Decoding(DecodingError { offset: 0, reason: UnexpectedType })))))` — `run_node_sync` receiving a block from `:3010` and failing to decode the BODY. Scoped
+as **PHASE4-N-F-G-O — Feed-side block-body decode compatibility** (evidence-first: capture the exact received
+bytes, then fix the shared receive decoder; likely a tag-24 / framing mismatch, but do not fix from hypothesis).
