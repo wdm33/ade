@@ -78,6 +78,14 @@ fn real_capture_round_trips_byte_identical() {
         if !name.ends_with("_recv.cbor") {
             continue;
         }
+        // PHASE4-N-F-G-M (CN-WIRE-11) added raw-CBOR (de-muxed) FindIntersect /
+        // IntersectFound fixtures (c1privnet_*) to this dir for the dedicated
+        // serve_chainsync_findintersect_cardano_node_fixture test. They carry NO
+        // 8-byte mux header, so the mux-strip round-trip here does not apply —
+        // this test consumes the mux-framed preprod captures only.
+        if name.starts_with("c1privnet_") {
+            continue;
+        }
         let msg = round_trip_chain_sync_payload(&path);
         frames += 1;
         match msg {
