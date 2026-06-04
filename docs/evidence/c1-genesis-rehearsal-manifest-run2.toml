@@ -1,0 +1,12 @@
+schema_version = 1
+venue = "private-testnet-c1"
+is_rehearsal = true
+not_bounty_evidence = true
+peer_log_file = "c1-genesis-rehearsal-peer-accept-run2.jsonl"
+peer_log_file_sha256 = "5bcd08726ae13d1b3b2e471973cf6c9c120dde323857199006358ec4c5e3d8ca"
+forged_block_hash_hex = "850b56dcd167432ca79d4e4639afcef368f161434ac2636f4eb603b678fcfa0a"
+slot = 125634
+network_magic = 42
+peer_accept_source = "chain_tip"
+peer = "127.0.0.1:3010"
+matched_block_hash_hex = "850b56dcd167432ca79d4e4639afcef368f161434ac2636f4eb603b678fcfa0a"

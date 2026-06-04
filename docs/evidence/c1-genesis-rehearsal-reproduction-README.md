@@ -23,6 +23,21 @@ clearly-labeled, non-promotable `PrivateRehearsalManifest`
 written ONLY by a real operator-captured follower log through `correlate`. Bounty
 BA-02 stays gated on a **C2/preprod** pass with a staked Ade pool.
 
+## Confirmed runs (the procedure is repeatable)
+
+| Run | When (UTC) | Ade-forged + follower-adopted block 0 | Slot | Manifest |
+|---|---|---|---|---|
+| 1 | 2026-06-04 15:33 | `56a29ac4…c868f26f` | 122520 | `c1-genesis-rehearsal-manifest.toml` |
+| 2 | 2026-06-04 16:25 | `850b56dc…fcfa0a` | 125634 | `c1-genesis-rehearsal-manifest-run2.toml` |
+
+Two independent cold-start runs (run 2 executed straight from this runbook) each
+produced a **distinct** Ade-forged genesis-successor block 0 that the reset follower
+validated + adopted (`ValidCandidate` + `AddedToCurrentChain` → `correlate` →
+`Agreed` → manifest, `peer_accept_source = chain_tip`). Distinct hashes (a fresh
+winning slot → fresh VRF) under an identical procedure = **the procedure, not the
+hash, is the repeatable artifact**. Both manifests are schema/sha/marker-checked by
+`ci/ci_check_rehearsal_manifest_schema.sh`.
+
 ## Fidelity rule (do not drift)
 
 C1 uses the **same `--mode node` accepted-block path** as C2. Ade's consensus inputs
@@ -127,16 +142,26 @@ follower state:
 
 ```
 rm -rf "$C1"/ade-inputs/{snap,wal}                  # fresh store
+ZERO=0000000000000000000000000000000000000000000000000000000000000000   # genesis = Origin
+GH=953a4c343cfec1e89a6f3f012afd18b134fe254820ae7db5f21d9eb23ce4cd8b      # C1 ShelleyGenesisHash (config.json)
 "$ADE"/target/debug/ade_node --mode admission \
   --json-seed            "$C1/ade-inputs/utxo-seed.json" \
   --consensus-inputs-path "$C1/ade-inputs/consensus-inputs.json" \
+  --seed-point-slot      0 \                  # genesis seed point: slot 0 …
+  --seed-block-hash      "$ZERO" \            # … / all-zeros hash (Origin)
   --peer                 127.0.0.1:9 \
   --snapshot-dir         "$C1/ade-inputs/snap" \
   --wal-dir              "$C1/ade-inputs/wal" \
-  --genesis-file         "$C1/shelley-genesis.json" \
+  --genesis-path         "$C1" \              # the genesis DIR (required; NOT --genesis-file here)
+  --genesis-hash         "$GH" \
   --network-magic        42
-# expect: a tip-0 store; wal-0000.bin ≈ 76B (seed entry only).
+# expect exit 0 (the dead peer logs ConnectionRefused — that's fine; the seed import
+# completes anyway), a tip-0 store: snap/chain.db + wal/wal-0000.bin ≈ 76B (seed only).
 ```
+
+Admission's required flag set is `--json-seed --seed-point-slot --seed-block-hash
+--wal-dir --snapshot-dir --network-magic --genesis-hash --consensus-inputs-path` +
+≥1 `--peer` + the general `--genesis-path` (`extract_admission_cli` / `cli.rs`).
 
 A clean store every run avoids the `ChainBreak` that a previously-ingested block 0
 leaves in the WAL (that re-recovery failure is the separate N-U durability concern,
@@ -157,8 +182,10 @@ Same flags as the C2/preprod node modulo operator inputs:
   --cold-skey      "$C1/pools-keys/pool1/cold.skey" \
   --kes-skey       "$C1/pools-keys/pool1/kes.skey" \
   --vrf-skey       "$C1/pools-keys/pool1/vrf.skey" \
-  --opcert         "$C1/pools-keys/pool1/opcert" \
+  --opcert         "$C1/pools-keys/pool1/opcert.cert" \
+  --genesis-path   "$C1" \
   --genesis-file   "$C1/shelley-genesis.json" \
+  --genesis-hash   "$GH" \
   --network-magic  42 \
   2> "$C1/ade-inputs/repro-node.stderr"
 ```
