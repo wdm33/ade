@@ -6289,3 +6289,31 @@ introduced_in = "PHASE4-N-F-G-Q"
 strengthened_in = []
 cluster = "PHASE4-N-F-G-Q"
 evidence_notes = "PHASE4-N-F-G-Q S1 (2026-06-04). Capture-first: with G-P in, the feed ingests block 0 (slot 107405) + advances the node-spine tip; the forge then failed relay run-loop sync step failed (RecoveredTipMissingBlockNo). FORGE-TIP-DIAG (instrument, reverted) PROVED the desync: tick 2 (post-ingest) selected_tip=Some(107405), baseline_last_block_no=None (forge_header_position read recovered.chain_dep.last_block_no, node_sync.rs:586), spine_last_block_no=Some(BlockNo(0)) + spine_last_slot=Some(SlotNo(107405)) (the evolved state.receive.chain_dep the feed advanced). The durable ChainTip = {hash, slot} (no block_no), so the durable tip can't supply it. FIX: the relay loop threads the evolved state.receive (chain_dep + ledger) into forge_one_from_recovered; the forge derives the successor block_no + self-accept chain-state from the evolved spine, not the WarmStart baseline; the recovered seed sidecar still supplies the per-epoch PoolDistr (DC-CINPUT-02b). The relay-loop forge tests now build the spine from the recovered base (l5_forge_spine, mirroring the real node) -- a latent test inconsistency (genesis spine vs block-0 recovered) the fix exposed. forge_successor_reads_evolved_spine_block_no_not_stale_baseline_g_q proves: forge_header_position(Some(tip), Some(0)) -> block 1; the forge reads the evolved block_no (Some(0) -> NOT RecoveredTipMissingBlockNo) vs the stale baseline (None + tip -> RecoveredTipMissingBlockNo, the pre-G-Q bug). No VRF/eta0/Step-5/6/7/durable-recovery change. CE-G-Q-2 (live C1 past RecoveredTipMissingBlockNo; block 1+) stays operator-gated; no RO-LIVE flip; no acceptance claim without correlate. The ChainBreak-on-restart (the feed-ingested block 0 does not chain to the seed WAL entry) is a SEPARATE N-U durability slice (dirty store preserved at ade-inputs/{snap,wal}.go-p-ingested-dirty). LIVE-CONFIRMED 2026-06-04 14:28Z: the C1 rerun shows RecoveredTipMissingBlockNo count 0; 97 forge ticks, clean exit 0 (the FIRST non-crashing run); 2 blocks produced; the follower connected to Ade's :3002 serve + ChainSync.Client.DownloadedHeader. The next failure is SEPARATE (the follower REJECTS Ade's served chain: HeaderEnvelopeError UnexpectedBlockNo) -> PHASE4-N-F-G-R (served-chain header-sequence / follower-intersection fidelity), NOT a DC-NODE-10 gap; no acceptance claim (follower rejected, correlate = no adoption)."
+
+[[rules]]
+id = "DC-NODE-11"
+tier = "derived"
+statement = """
+Once --mode node has self-accepted and SERVED a genesis-successor block at block_no 0, it MUST NOT add/replace
+the served view (ServedChainView) with another block_no-0 block during the same recovered NO-TIP episode
+(durable ChainDb tip + recovered tip both None). The node-level serve gate admits a self-accepted forge handoff
+to the ServedChainView ONLY when its block_no STRICTLY EXCEEDS the highest already-served block_no
+(serve_gate_admits) -- so the FIRST block 0 wins the served view and the hermetic forge's subsequent block-0
+re-forges (DC-NODE-05, no own-tip advance) are NOT re-served; a follower then sees a STABLE block 0 to fetch +
+adopt. NARROW: no durable own-tip advance (the own-tip-adoption path is a separate cluster); no forged block 1+
+claim; no synthetic numbering; the served block is still self-accepted (no bypass of self_accept, no serve of
+unvalidated bytes); the forge + served_chain_admit + durable tip are UNCHANGED (DC-NODE-05 intact).
+"""
+source = "docs/clusters/PHASE4-N-F-G-R/cluster.md"
+cross_ref = ["DC-NODE-05", "DC-NODE-07", "DC-NODE-08", "DC-NODE-10", "CN-FORGE-01", "RO-LIVE-01"]
+code_locus = "crates/ade_node/src/node_lifecycle.rs (serve_gate_admits -- the pure monotone-block_no gate; the serve sibling tracks highest_served_block_no + push_atomics a handoff ONLY when serve_gate_admits is true); crates/ade_ledger/src/producer/served_chain.rs (ServedChainSnapshot append-only BTreeMap + served_chain_admit -- UNCHANGED; the node-level gate decides what is pushed)"
+tests = [
+  "serve_gate_admits_first_block_zero_then_skips_reforged_block_zero",
+  "serve_gate_keeps_first_block_zero_skips_reforge",
+]
+ci_script = "ci/ci_check_served_chain_stability.sh"
+status = "enforced"
+introduced_in = "PHASE4-N-F-G-R"
+strengthened_in = []
+cluster = "PHASE4-N-F-G-R"
+evidence_notes = "PHASE4-N-F-G-R S1 (2026-06-04). Capture-first (code + clean-follower live run): after G-Q + the follower RESET to genesis, Ade serves the right block_no (block 0) but the follower does NOT adopt -- 0 adoptions, 48x UnexpectedBlockNo(BlockNo 1)(BlockNo 0). CAUSE: the hermetic forge (DC-NODE-05) re-mints a genesis-successor block 0 each winning slot (7x, slots 120465/120537/...), and ServedChainSnapshot.blocks is an append-only BTreeMap<(slot,hash), AcceptedBlock> (served_chain.rs:40) whose served_chain_admit inserts each block with no block_no dedup -- so the served view accumulated multiple block_no-0 blocks; the follower downloaded one, expected block 1, got another block 0. FIX: the node-level serve sibling gates by serve_gate_admits (push to the ServedChainView only when block_no strictly exceeds the highest served) -- the first block 0 wins, re-forges skipped. serve_gate_admits_first_block_zero_then_skips_reforged_block_zero pins the gate decision (None->0 admit; Some(0)->0 skip; Some(0)->1 admit; lower/equal skip); serve_gate_keeps_first_block_zero_skips_reforge forges two distinct block 0s and proves the served view holds EXACTLY ONE. No forge/durable-tip/self_accept/served_chain_admit change (DC-NODE-05 intact). CE-G-R-2 (live C1 follower adopts a STABLE block 0 -> correlate -> PrivateRehearsalManifest) stays operator-gated; no RO-LIVE flip; no acceptance claim without correlate. OQ-R1 (separate cluster): full producer own-tip advance (forge -> adopt own block -> build block 1+). OQ-R2: served-chain completeness after a feed ingest."

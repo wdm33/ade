@@ -271,6 +271,20 @@ pub fn classify_start(has_tip: bool, has_snapshots: bool) -> NodeStart {
     }
 }
 
+/// PHASE4-N-F-G-R (DC-NODE-11): the node-level served-chain gate. A self-accepted
+/// forge handoff is admitted to the `ServedChainView` ONLY when its block_no
+/// strictly exceeds the highest already-served block_no — so the FIRST
+/// genesis-successor block 0 is served stably and the hermetic forge's subsequent
+/// block-0 re-forges (DC-NODE-05, no own-tip advance) are NOT re-served (a follower
+/// then sees a STABLE block 0 to fetch + adopt). Pure + total; no durable own-tip
+/// advance (that is the separately-scoped own-tip cluster, OQ-R1).
+pub fn serve_gate_admits(highest_served_block_no: Option<u64>, candidate_block_no: u64) -> bool {
+    match highest_served_block_no {
+        None => true,
+        Some(h) => candidate_block_no > h,
+    }
+}
+
 /// The `--mode node` owner entry. Returns a process exit code.
 ///
 /// `shutdown` is the SIGINT/SIGTERM watch flag; it is now load-bearing —
@@ -533,12 +547,32 @@ async fn run_node_lifecycle_inner(
             let (serve_handle, serve_view) = ServedChainHandle::new();
             let (handoff_tx, mut handoff_rx) = mpsc::unbounded_channel::<SelfAcceptedHandoff>();
             let serve_task = tokio::spawn(async move {
+                // DC-NODE-11 (PHASE4-N-F-G-R): serve a monotone-block_no chain. The
+                // FIRST self-accepted block 0 wins the served view; the hermetic
+                // forge's subsequent block-0 re-forges (DC-NODE-05, no own-tip
+                // advance) are NOT re-served, so a follower sees a STABLE block 0 to
+                // fetch + adopt (no churn / no block-0-replaces-block-0).
+                let mut highest_served_block_no: Option<u64> = None;
                 while let Some(handoff) = handoff_rx.recv().await {
-                    if let Err(e) = serve_handle.push_atomic(handoff.into_accepted()) {
-                        eprintln!(
+                    let accepted = handoff.into_accepted();
+                    let block_no =
+                        match ade_ledger::block_validity::decode_block(accepted.as_bytes()) {
+                            Ok(d) => d.header_input.block_no.0,
+                            // A self-accepted block always decodes; never serve
+                            // undecodable bytes on the impossible failure.
+                            Err(_) => continue,
+                        };
+                    if !serve_gate_admits(highest_served_block_no, block_no) {
+                        // Already serving a >= block_no — keep the stable served
+                        // chain (skip the churned re-forge).
+                        continue;
+                    }
+                    match serve_handle.push_atomic(accepted) {
+                        Ok(_) => highest_served_block_no = Some(block_no),
+                        Err(e) => eprintln!(
                             "ade_node --mode node: sibling served-chain admit \
                              rejected: {e:?}"
-                        );
+                        ),
                     }
                 }
             });
@@ -1728,6 +1762,25 @@ fn may_cold_start_forge(
 #[allow(clippy::expect_used)]
 mod tests {
     use super::*;
+
+    /// DC-NODE-11 (PHASE4-N-F-G-R): the served-chain gate admits a forge handoff
+    /// ONLY when its block_no strictly advances the highest already-served. The
+    /// FIRST block 0 wins; a second block 0 (the hermetic forge's re-mint) is
+    /// skipped; a strictly-higher block_no is admitted (the gate never freezes).
+    #[test]
+    fn serve_gate_admits_first_block_zero_then_skips_reforged_block_zero() {
+        assert!(serve_gate_admits(None, 0), "the first block 0 is served");
+        assert!(
+            !serve_gate_admits(Some(0), 0),
+            "a second block 0 must NOT be re-served (no block-0-replaces-block-0)"
+        );
+        assert!(
+            serve_gate_admits(Some(0), 1),
+            "a strictly-higher block_no is served (the gate does not freeze)"
+        );
+        assert!(!serve_gate_admits(Some(1), 0), "a lower block_no is not re-served");
+        assert!(!serve_gate_admits(Some(5), 5), "an equal block_no is not re-served");
+    }
 
     #[test]
     fn node_forge_protocol_version_and_pparams_from_recovered_current_view() {
