@@ -30,8 +30,10 @@ use std::collections::VecDeque;
 use ade_core::consensus::era_schedule::EraSchedule;
 use ade_core::consensus::leader_schedule::{query_leader_schedule, LeaderScheduleQuery};
 use ade_core::consensus::ledger_view::LedgerView;
+use ade_core::consensus::praos_state::PraosChainDepState;
 use ade_ledger::consensus_view::PoolDistrView;
 use ade_ledger::pparams::ProtocolParameters;
+use ade_ledger::state::LedgerState;
 use ade_ledger::wal::WalStore;
 use ade_runtime::admission::AdmissionPeerEvent;
 use ade_runtime::bootstrap::BootstrapState;
@@ -512,6 +514,8 @@ fn forge_header_position(
 #[allow(clippy::too_many_arguments)]
 pub fn forge_one_from_recovered(
     recovered: &BootstrapState,
+    live_chain_dep: &PraosChainDepState,
+    live_ledger: &LedgerState,
     selected_tip: Option<&ChainTip>,
     shell: &mut ProducerShell,
     pool_id: &Hash28,
@@ -565,7 +569,7 @@ pub fn forge_one_from_recovered(
         },
         &pool_distr_view,
         era_schedule,
-        &recovered.chain_dep,
+        live_chain_dep,
     ) {
         Ok(a) => a,
         Err(_) => {
@@ -583,16 +587,16 @@ pub fn forge_one_from_recovered(
     // Cold-start convention (ONE, matching ChainEvolution::next_block_number):
     // the genesis-successor (no selected tip) is block 0 + PrevHash::Genesis.
     let (next_block_number, prev_hash) =
-        forge_header_position(selected_tip, recovered.chain_dep.last_block_no)?;
+        forge_header_position(selected_tip, live_chain_dep.last_block_no)?;
     let vrf_vk = shell.vrf_verification_key();
 
     let ctx = ForgeRequestContext {
-        eta0: &recovered.chain_dep.epoch_nonce,
+        eta0: &live_chain_dep.epoch_nonce,
         vrf_vk: &vrf_vk,
         leader_schedule_answer: &answer,
         pparams,
-        base_state: &recovered.ledger,
-        chain_dep_state: &recovered.chain_dep,
+        base_state: live_ledger,
+        chain_dep_state: live_chain_dep,
         era_schedule,
         pool_distr_view: &pool_distr_view,
         block_number: BlockNo(next_block_number),
@@ -1602,6 +1606,22 @@ mod tests {
         }
     }
 
+    /// The node spine the relay loop drives, initialized from the SAME recovered
+    /// base the forge reads — mirroring the real node, where `ForwardSyncState`
+    /// is built from the recovered `ledger` + `chain_dep`
+    /// (`node_lifecycle` On-arm). So the spine's `chain_dep.last_block_no` is
+    /// `Some(0)` (consistent with the recovered tip at block 0), which the
+    /// DC-NODE-10 forge-successor reads (a fresh genesis spine would desync the
+    /// forge-successor block_no from the recovered tip).
+    fn l5_forge_spine() -> ForwardSyncState {
+        let r = l5_recovered_state(None);
+        ForwardSyncState::new(
+            ReceiveState::new(r.ledger, r.chain_dep),
+            Hash32([0xA0; 32]),
+            SnapshotCadence::DEFAULT,
+        )
+    }
+
     #[test]
     fn forge_from_recovered_uses_recovered_pool_distr() {
         // DC-CINPUT-02b: the leadership view the forge consumes is exactly
@@ -1635,6 +1655,8 @@ mod tests {
         let mut shell = l5_synth_shell(0x11, 0x22, 0x33);
         let (event, _handoff) = forge_one_from_recovered(
             &recovered,
+            &recovered.chain_dep,
+            &recovered.ledger,
             Some(&tip),
             &mut shell,
             &L5_POOL,
@@ -1665,6 +1687,8 @@ mod tests {
         let mut shell2 = l5_synth_shell(0xAB, 0xCD, 0xEF);
         let (e1, h1) = forge_one_from_recovered(
             &recovered,
+            &recovered.chain_dep,
+            &recovered.ledger,
             Some(&tip),
             &mut shell1,
             &L5_POOL,
@@ -1677,6 +1701,8 @@ mod tests {
         .expect("ok");
         let (e2, h2) = forge_one_from_recovered(
             &recovered,
+            &recovered.chain_dep,
+            &recovered.ledger,
             Some(&tip),
             &mut shell2,
             &L5_POOL,
@@ -1706,6 +1732,8 @@ mod tests {
         let mut shell = l5_synth_shell(0x44, 0x55, 0x66);
         let r = forge_one_from_recovered(
             &recovered,
+            &recovered.chain_dep,
+            &recovered.ledger,
             Some(&tip),
             &mut shell,
             &L5_POOL,
@@ -1718,6 +1746,89 @@ mod tests {
         assert!(
             matches!(r, Err(NodeForgeError::MissingRecoveredConsensusInputs)),
             "missing recovered consensus inputs must fail closed, got {r:?}"
+        );
+    }
+
+    // ===== PHASE4-N-F-G-Q: forge-successor from the evolved admitted spine =====
+
+    /// DC-NODE-10: after the feed advances the node spine, the forge-successor
+    /// derives block_no from the EVOLVED admitted chain state, not a stale
+    /// baseline. Proven both ways: (1) the evolved chain state (last_block_no
+    /// Some(0)) + a selected tip ⇒ the forge computes successor block_no 1
+    /// (not RecoveredTipMissingBlockNo); (2) a STALE chain state (last_block_no
+    /// None) + a selected tip ⇒ RecoveredTipMissingBlockNo — the pre-G-Q bug,
+    /// locked. (Pre-ingest no-tip cold-start ⇒ block 0 is covered by the G-J
+    /// cold-start tests; forge_header_position ignores last_block_no when the
+    /// selected tip is None.)
+    #[test]
+    fn forge_successor_reads_evolved_spine_block_no_not_stale_baseline_g_q() {
+        let recovered = l5_recovered_state(Some(l5_recovered_inputs()));
+        let tip = recovered.tip.clone().unwrap();
+        let sched = l5_era_schedule();
+        let pparams = ProtocolParameters::default();
+
+        // The successor header POSITION (acceptance #2): an evolved chain at
+        // block 0 + a selected tip ⇒ block_no 1 + PrevHash::Block(tip).
+        // forge_header_position is the single position authority (its N+1
+        // behaviour is unit-tested in the cold-start/with-tip tests below).
+        let (n, prev) = forge_header_position(Some(&tip), Some(BlockNo(0))).unwrap();
+        assert_eq!(n, 1, "evolved last_block_no 0 + a selected tip ⇒ successor block_no 1");
+        assert!(matches!(prev, PrevHash::Block(_)), "successor prev is the selected tip");
+
+        // (1) EVOLVED admitted chain state: the feed advanced it to block 0
+        // (last_block_no Some(0)). The forge-successor must read THIS.
+        let evolved = l5_recovered_state(None);
+        assert_eq!(
+            evolved.chain_dep.last_block_no,
+            Some(BlockNo(0)),
+            "the evolved admitted chain state is at block 0"
+        );
+        let mut shell = l5_synth_shell(0x11, 0x22, 0x33);
+        let r_evolved = forge_one_from_recovered(
+            &recovered,
+            &evolved.chain_dep,
+            &evolved.ledger,
+            Some(&tip),
+            &mut shell,
+            &L5_POOL,
+            &pparams,
+            &sched,
+            100,
+            0,
+            ProtocolVersion { major: 9, minor: 0 },
+        );
+        // The forge READ the evolved block_no and proceeded past the position to
+        // build the successor — it did NOT RecoveredTipMissingBlockNo. (A
+        // downstream SelfAcceptRejected over the L5 placeholder tip is a fixture
+        // artifact, not a DC-NODE-10 concern.)
+        assert!(
+            !matches!(r_evolved, Err(NodeForgeError::RecoveredTipMissingBlockNo)),
+            "the evolved chain state (last_block_no Some(0)) must NOT RecoveredTipMissingBlockNo \
+             — the forge reads the evolved block_no, got {r_evolved:?}"
+        );
+
+        // (2) STALE chain state (last_block_no None) + a selected tip ⇒ the
+        // pre-G-Q bug: RecoveredTipMissingBlockNo. Locks the regression.
+        let mut stale = l5_recovered_state(None);
+        stale.chain_dep.last_block_no = None;
+        let mut shell2 = l5_synth_shell(0x11, 0x22, 0x33);
+        let r = forge_one_from_recovered(
+            &recovered,
+            &stale.chain_dep,
+            &stale.ledger,
+            Some(&tip),
+            &mut shell2,
+            &L5_POOL,
+            &pparams,
+            &sched,
+            100,
+            0,
+            ProtocolVersion { major: 9, minor: 0 },
+        );
+        assert!(
+            matches!(r, Err(NodeForgeError::RecoveredTipMissingBlockNo)),
+            "a selected tip with a stale (None) chain-state block_no must fail closed \
+             RecoveredTipMissingBlockNo — the pre-G-Q bug, got {r:?}"
         );
     }
 
@@ -1794,6 +1905,8 @@ mod tests {
         let mut shell = l5_synth_shell(0x11, 0x22, 0x33);
         let (event, handoff) = forge_one_from_recovered(
             &recovered,
+            &recovered.chain_dep,
+            &recovered.ledger,
             None,
             &mut shell,
             &L5_POOL,
@@ -1899,7 +2012,7 @@ mod tests {
             PersistentChainDb::open(PersistentChainDbOptions::at(dir.path().join("chain.db")))
                 .unwrap();
         let mut wal = FileWalStore::open(dir.path().join("wal")).unwrap();
-        let mut state = fresh_state([0xCD; 32]);
+        let mut state = l5_forge_spine();
         // Open WirePump: Continuing (never ended) + NoWorkReady (no block), so
         // the planner reaches ForgeTick (a feed-end would suppress forge).
         let (block_tx, block_rx) = mpsc::channel::<AdmissionPeerEvent>(4);
@@ -1980,7 +2093,7 @@ mod tests {
             PersistentChainDb::open(PersistentChainDbOptions::at(dir.path().join("chain.db")))
                 .unwrap();
         let mut wal = FileWalStore::open(dir.path().join("wal")).unwrap();
-        let mut state = fresh_state([0xCD; 32]);
+        let mut state = l5_forge_spine();
         let (block_tx, block_rx) = mpsc::channel::<AdmissionPeerEvent>(4);
         let mut source = NodeBlockSource::from_wire_pump(block_rx);
         let (sd_tx, mut sd_rx) = watch::channel(false);
@@ -2071,7 +2184,7 @@ mod tests {
             PersistentChainDb::open(PersistentChainDbOptions::at(dir.path().join("chain.db")))
                 .unwrap();
         let mut wal = FileWalStore::open(dir.path().join("wal")).unwrap();
-        let mut state = fresh_state([0xCD; 32]);
+        let mut state = l5_forge_spine();
         let (block_tx, block_rx) = mpsc::channel::<AdmissionPeerEvent>(4);
         let mut source = NodeBlockSource::from_wire_pump(block_rx);
         let (sd_tx, mut sd_rx) = watch::channel(false);
@@ -2138,7 +2251,7 @@ mod tests {
             PersistentChainDb::open(PersistentChainDbOptions::at(dir.path().join("chain.db")))
                 .unwrap();
         let mut wal = FileWalStore::open(dir.path().join("wal")).unwrap();
-        let mut state = fresh_state([0xCD; 32]);
+        let mut state = l5_forge_spine();
         let (block_tx, block_rx) = mpsc::channel::<AdmissionPeerEvent>(4);
         let mut source = NodeBlockSource::from_wire_pump(block_rx);
         let (sd_tx, mut sd_rx) = watch::channel(false);
@@ -2190,7 +2303,7 @@ mod tests {
                 PersistentChainDb::open(PersistentChainDbOptions::at(dir.path().join("chain.db")))
                     .unwrap();
             let mut wal = FileWalStore::open(dir.path().join("wal")).unwrap();
-            let mut state = fresh_state([0xCD; 32]);
+            let mut state = l5_forge_spine();
             // Open WirePump (Continuing) so the forge branch is reachable.
             let (block_tx, block_rx) = mpsc::channel::<AdmissionPeerEvent>(4);
             let mut source = NodeBlockSource::from_wire_pump(block_rx);
@@ -2319,7 +2432,7 @@ mod tests {
             ))
             .unwrap();
             let mut wal = FileWalStore::open(dir.path().join("wal")).unwrap();
-            let mut state = fresh_state([0xCE; 32]);
+            let mut state = l5_forge_spine();
             let sched = l5_era_schedule();
             let recovered = l5_recovered_state(Some(l5_recovered_inputs()));
             let coordinator = s2_coordinator_state();
@@ -2466,7 +2579,7 @@ mod tests {
             PersistentChainDb::open(PersistentChainDbOptions::at(dir.path().join("chain.db")))
                 .unwrap();
         let mut wal = FileWalStore::open(dir.path().join("wal")).unwrap();
-        let mut state = fresh_state([0xCD; 32]);
+        let mut state = l5_forge_spine();
         let (block_tx, block_rx) = mpsc::channel::<AdmissionPeerEvent>(4);
         let mut source = NodeBlockSource::from_wire_pump(block_rx);
         let (sd_tx, mut sd_rx) = watch::channel(false);
@@ -2554,7 +2667,7 @@ mod tests {
             PersistentChainDb::open(PersistentChainDbOptions::at(dir.path().join("chain.db")))
                 .unwrap();
         let mut wal = FileWalStore::open(dir.path().join("wal")).unwrap();
-        let mut state = fresh_state([0xCD; 32]);
+        let mut state = l5_forge_spine();
         let (block_tx, block_rx) = mpsc::channel::<AdmissionPeerEvent>(4);
         let mut source = NodeBlockSource::from_wire_pump(block_rx);
         let (sd_tx, mut sd_rx) = watch::channel(false);
@@ -2687,6 +2800,8 @@ mod tests {
         // kes_period is irrelevant — the epoch guard fires before leadership/signing.
         let (outcome, handoff) = forge_one_from_recovered(
             &recovered,
+            &recovered.chain_dep,
+            &recovered.ledger,
             Some(&tip),
             &mut shell,
             &L5_POOL,
@@ -2735,6 +2850,8 @@ mod tests {
         let eta0_before = recovered.chain_dep.epoch_nonce.clone();
         let (outcome, handoff) = forge_one_from_recovered(
             &recovered,
+            &recovered.chain_dep,
+            &recovered.ledger,
             Some(&tip),
             &mut shell,
             &L5_POOL,
@@ -2878,7 +2995,7 @@ mod tests {
             PersistentChainDb::open(PersistentChainDbOptions::at(chaindir.join("chain.db")))
                 .unwrap();
         let mut wal = FileWalStore::open(chaindir.join("wal")).unwrap();
-        let mut state = fresh_state([0xCD; 32]);
+        let mut state = l5_forge_spine();
         // Open WirePump: Continuing (never ended) + NoWorkReady, so the planner
         // reaches ForgeTick (a feed-end would suppress forge).
         let (block_tx, block_rx) = mpsc::channel::<AdmissionPeerEvent>(4);

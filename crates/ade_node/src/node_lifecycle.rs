@@ -1140,6 +1140,8 @@ pub async fn run_relay_loop_with_sched(
                         // semantically unchanged).
                         let (outcome, handoff) = forge_one_from_recovered(
                             act.recovered,
+                            &state.receive.chain_dep,
+                            &state.receive.ledger,
                             selected_tip.as_ref(),
                             act.shell,
                             &act.pool_id,

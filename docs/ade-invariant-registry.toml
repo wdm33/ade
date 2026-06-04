@@ -6258,3 +6258,34 @@ introduced_in = "PHASE4-N-F-G-P"
 strengthened_in = []
 cluster = "PHASE4-N-F-G-P"
 evidence_notes = "PHASE4-N-F-G-P S1 (2026-06-04). Capture-first: instrumenting validate_and_apply_header (FEED-VRF-DIAG, reverted) PROVED the eta0/VRF-mirror hypothesis WRONG -- eta0=953a4c34 (recovered, correct), verify_ok=true, recomputed_eq_output=true. The VrfCert(VerificationFailed) is Step 7 (leader threshold): DIAG-2 showed epoch=0 pool_active_stake=None total_active_stake=Some(0) asc=Some((0,1)) -- the receive-path ledger_view had an EMPTY pool distribution. ROOT CAUSE: node_lifecycle.rs (forge-on On-arm) built the feed ledger_view as PoolDistrView::new(epoch, 0, ASC{0,1}, BTreeMap::new()) -- an empty placeholder justified pre-G-O by 'feed source empty, UNCONSUMED' (now consumed: the live feed delivers blocks). The forge path already used the populated PoolDistrView::from_seed_epoch_consensus_inputs(recovered) (node_sync.rs:553), so the forge self-accepted while the feed rejected (forge/feed asymmetry). The persisted SeedEpochConsensusInputs already carried ASC + total_active_stake + pool_distribution (with per-pool VRF keyhash) -- purely a WIRING gap. FIX: the On-arm feed ledger_view is now from_seed_epoch_consensus_inputs(recovered), fail-closed FeedMissingRecoveredConsensusInputs when --peer is set + the record absent (no empty fallback, no accept-if-missing). The ForgeIntent::Off relay-only arm hardcodes an always-empty in-memory source (no --peer) so its placeholder is genuinely unconsumed (no fix). feed_header_validates_against_recovered_surface_not_empty_view forges the genesis-successor block 0 and proves the recovered-surface view validates the header through Step 5 + Step 7 while the empty placeholder fails closed (VrfCert(VerificationFailed)) -- locking the regression. NO VRF/eta0/Step-5/6/7/ledger-state change. CE-G-P-2 (live C1 feed past Step 5 + Step 7; serve alive; correlate adoption) stays operator-gated; no RO-LIVE flip; no acceptance claim without the follower log through correlate. LIVE-CONFIRMED 2026-06-04 13:20Z: the C1 --mode node rerun shows VerificationFailed count = 0 -- the feed validates Step 5 + Step 7 and INGESTS Ade's block 0 (tip genesis -> slot 107405). The next failure moved to the SEPARATE forge-successor path (RecoveredTipMissingBlockNo: forge_header_position selected_tip=Some + last_block_no=None) -> PHASE4-N-F-G-Q, NOT a DC-CINPUT-04 gap."
+
+[[rules]]
+id = "DC-NODE-10"
+tier = "derived"
+statement = """
+After the feed validation/admission advances the node spine (a block ingested -> state.receive evolved), the
+next forge MUST derive the successor header position -- block_no (and the chain_dep/ledger it self-accepts
+against) -- from the EVOLVED admitted node-spine state (state.receive: the evolved chain_dep + ledger), NOT the
+stale WarmStart baseline (recovered.chain_dep / recovered.ledger). The successor block_no = the evolved
+chain_dep.last_block_no + 1; the prev_hash = the durable selected tip's hash. RecoveredTipMissingBlockNo is
+reserved for a genuinely malformed recovered state and MUST NOT fire for a feed-advanced tip (the feed sets the
+evolved block_no). No guessed block_no, no unwrap_or(1), no synthetic numbering. The genesis-successor
+cold-start (BOTH tips None -> block 0 + PrevHash::Genesis) is UNCHANGED (DC-NODE-08). The seed-epoch PoolDistr +
+eta0 (DC-CINPUT-02b / DC-CINPUT-03) are per-epoch and unchanged -- valid for the in-epoch successor; cross-epoch
+is off-epoch fail-closed (DC-EPOCH-03). NARROW: selects the evolved admitted chain state for the forge; no other
+forge-semantics change, no durable-recovery / WAL change (the ChainBreak-on-restart is a SEPARATE N-U
+durability concern).
+"""
+source = "docs/clusters/PHASE4-N-F-G-Q/cluster.md"
+cross_ref = ["DC-NODE-08", "DC-CINPUT-02b", "DC-CINPUT-03", "T-REC-04", "DC-NODE-05", "DC-EPOCH-03", "CN-WIRE-12", "DC-CINPUT-04", "RO-LIVE-01"]
+code_locus = "crates/ade_node/src/node_lifecycle.rs (the relay-loop forge call threads the evolved state.receive.chain_dep + state.receive.ledger into forge_one_from_recovered -- NOT the recovered baseline); crates/ade_node/src/node_sync.rs (forge_one_from_recovered(recovered, live_chain_dep, live_ledger, selected_tip, ...) -- forge_header_position + the self-accept ctx read live_chain_dep/live_ledger; recovered supplies only the seed-epoch PoolDistr + the off-epoch guard)"
+tests = [
+  "forge_successor_reads_evolved_spine_block_no_not_stale_baseline_g_q",
+  "forge_one_from_recovered_cold_start_is_block_zero_genesis",
+]
+ci_script = "ci/ci_check_forge_successor_evolved_spine.sh"
+status = "enforced"
+introduced_in = "PHASE4-N-F-G-Q"
+strengthened_in = []
+cluster = "PHASE4-N-F-G-Q"
+evidence_notes = "PHASE4-N-F-G-Q S1 (2026-06-04). Capture-first: with G-P in, the feed ingests block 0 (slot 107405) + advances the node-spine tip; the forge then failed relay run-loop sync step failed (RecoveredTipMissingBlockNo). FORGE-TIP-DIAG (instrument, reverted) PROVED the desync: tick 2 (post-ingest) selected_tip=Some(107405), baseline_last_block_no=None (forge_header_position read recovered.chain_dep.last_block_no, node_sync.rs:586), spine_last_block_no=Some(BlockNo(0)) + spine_last_slot=Some(SlotNo(107405)) (the evolved state.receive.chain_dep the feed advanced). The durable ChainTip = {hash, slot} (no block_no), so the durable tip can't supply it. FIX: the relay loop threads the evolved state.receive (chain_dep + ledger) into forge_one_from_recovered; the forge derives the successor block_no + self-accept chain-state from the evolved spine, not the WarmStart baseline; the recovered seed sidecar still supplies the per-epoch PoolDistr (DC-CINPUT-02b). The relay-loop forge tests now build the spine from the recovered base (l5_forge_spine, mirroring the real node) -- a latent test inconsistency (genesis spine vs block-0 recovered) the fix exposed. forge_successor_reads_evolved_spine_block_no_not_stale_baseline_g_q proves: forge_header_position(Some(tip), Some(0)) -> block 1; the forge reads the evolved block_no (Some(0) -> NOT RecoveredTipMissingBlockNo) vs the stale baseline (None + tip -> RecoveredTipMissingBlockNo, the pre-G-Q bug). No VRF/eta0/Step-5/6/7/durable-recovery change. CE-G-Q-2 (live C1 past RecoveredTipMissingBlockNo; block 1+) stays operator-gated; no RO-LIVE flip; no acceptance claim without correlate. The ChainBreak-on-restart (the feed-ingested block 0 does not chain to the seed WAL entry) is a SEPARATE N-U durability slice (dirty store preserved at ade-inputs/{snap,wal}.go-p-ingested-dirty)."
