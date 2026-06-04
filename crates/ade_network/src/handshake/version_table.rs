@@ -27,6 +27,8 @@
 // 11.0.1). We default it to `false` across all entries; Peras
 // consensus integration is a future cluster.
 
+use crate::codec::handshake::VersionParams;
+use crate::codec::primitives::{encode_array_header, encode_bool, encode_u64};
 use crate::handshake::state::{N2cVersionData, PeerSharingFlag, VersionData};
 
 /// Mainnet network magic per `cardano-configurations` mainnet config.
@@ -71,6 +73,30 @@ pub fn n2n_supported_for_magic(network_magic: u32) -> Vec<(u16, VersionData)> {
         .iter()
         .map(|(version, _)| (*version, n2n(network_magic)))
         .collect()
+}
+
+/// PHASE4-N-F-G-L (CN-WIRE-10): the SINGLE closed N2N `versionData` wire encoding, per
+/// negotiated version. V11..=15 emit the 4-field `NodeToNodeVersionData`
+/// `[networkMagic, initiatorAndResponderDiffusionMode, peerSharing, query]`; V16+ append
+/// `perasSupport`. This is the SHARED authority used by BOTH the initiator
+/// (`build_n2n_version_table`) and the serve RESPONDER (the session handshake driver), so the two
+/// directions cannot diverge. The emitted shape is byte-pinned against the captured real
+/// cardano-node V15 fixture (`corpus/network/n2n/handshake/*_v11_v16_propose_recv.cbor`:
+/// `[1, 15, [magic, true, 0, false]]`). Values match the proven initiator path
+/// (`initiatorAndResponderDiffusionMode = true`, `peerSharing = NoPeerSharing (0)`, `query = false`,
+/// `perasSupport = false`). Closed grammar — never a placeholder / fallback.
+pub fn encode_n2n_version_params(version: u16, network_magic: u32) -> VersionParams {
+    let mut buf = Vec::new();
+    let field_count: u64 = if version >= 16 { 5 } else { 4 };
+    encode_array_header(&mut buf, field_count);
+    encode_u64(&mut buf, network_magic as u64);
+    encode_bool(&mut buf, true); // initiatorAndResponderDiffusionMode
+    encode_u64(&mut buf, 0); // peerSharing = NoPeerSharing
+    encode_bool(&mut buf, false); // query
+    if version >= 16 {
+        encode_bool(&mut buf, false); // perasSupport (V16+)
+    }
+    VersionParams(buf)
 }
 
 const fn n2c(version_magic: u32) -> N2cVersionData {

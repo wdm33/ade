@@ -16,7 +16,7 @@
 //! `NegotiatedN2n` (DC-SESS-03 partial).
 
 use crate::codec::handshake::{
-    decode_handshake_message, encode_handshake_message, HandshakeMessage, VersionParams,
+    decode_handshake_message, encode_handshake_message, HandshakeMessage,
     VersionTable,
 };
 #[cfg(test)]
@@ -26,6 +26,7 @@ use crate::handshake::state::{
     HandshakeError, HandshakeState, N2nHandshakeOutput, VersionData,
 };
 use crate::handshake::transition::n2n_transition;
+use crate::handshake::version_table::encode_n2n_version_params;
 use crate::mux::frame::{
     decode_frame, encode_frame, MiniProtocolId, MuxError, MuxFrame, MuxHeader, MuxMode,
     HEADER_LEN,
@@ -151,7 +152,14 @@ pub fn run_n2n_handshake_responder(
     match output {
         N2nHandshakeOutput::Selected(version, params) => {
             // Send AcceptVersion.
-            let reply = HandshakeMessage::AcceptVersion(version, VersionParams(vec![0x01]));
+            // PHASE4-N-F-G-L (CN-WIRE-10): encode the NEGOTIATED versionData via the single shared
+            // per-version authority -- NOT a placeholder. A real cardano-node V15 peer rejects a bare
+            // int (the prior `VersionParams(vec![0x01])` = CBOR TInt 1) with HandshakeDecodeError
+            // NodeToNodeV_15 "unknown encoding: TInt 1".
+            let reply = HandshakeMessage::AcceptVersion(
+                version,
+                encode_n2n_version_params(version.get(), params.network_magic),
+            );
             let bytes = encode_handshake_message(&reply);
             write_handshake_frame(transport, &bytes, MuxMode::Responder)?;
             Ok(NegotiatedN2n {
@@ -214,7 +222,7 @@ fn read_handshake_frame(transport: &mut dyn Transport) -> Result<MuxFrame, Trans
 #[allow(clippy::panic)]
 mod tests {
     use super::*;
-    use crate::codec::handshake::VersionTable;
+    use crate::codec::handshake::{VersionParams, VersionTable};
     use crate::handshake::state::{PeerSharingFlag, VersionData};
     use crate::handshake::version_table::{MAINNET_NETWORK_MAGIC, N2N_SUPPORTED};
     use std::sync::{Arc, Mutex};

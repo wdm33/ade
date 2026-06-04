@@ -34,7 +34,7 @@ use ade_core::consensus::era_schedule::EraSchedule;
 use ade_core::consensus::praos_state::{Nonce, PraosChainDepState};
 use ade_ledger::fingerprint::fingerprint;
 use ade_ledger::wal::WalStore;
-use ade_network::codec::handshake::{VersionParams, VersionTable};
+use ade_network::codec::handshake::VersionTable;
 use ade_network::codec::version::N2NVersion;
 use ade_network::handshake::version_table::N2N_SUPPORTED;
 use ade_runtime::admission::{
@@ -398,22 +398,20 @@ fn spawn_wire_pumps_for_admission(
 /// emit a 4-field NodeToNodeVersionData; V16+ emits the 5-field
 /// shape adding `perasSupport`.
 pub fn build_n2n_version_table(network_magic: u32) -> VersionTable {
-    use ade_network::codec::primitives::{encode_array_header, encode_bool, encode_u64};
+    // PHASE4-N-F-G-L (CN-WIRE-10): build the per-version versionData via the SINGLE shared authority
+    // the serve responder also uses (encode_n2n_version_params) -- initiator and responder cannot
+    // diverge. Byte-identical to the prior inline encoding; now one source of truth.
     VersionTable(
         N2N_SUPPORTED
             .iter()
             .map(|(v, _)| {
-                let mut buf = Vec::new();
-                let field_count: u64 = if *v >= 16 { 5 } else { 4 };
-                encode_array_header(&mut buf, field_count);
-                encode_u64(&mut buf, network_magic as u64);
-                encode_bool(&mut buf, true); // initiatorOnlyDiffusionMode
-                encode_u64(&mut buf, 0); // peerSharing = NoPeerSharing
-                encode_bool(&mut buf, false); // query
-                if *v >= 16 {
-                    encode_bool(&mut buf, false); // perasSupport
-                }
-                (N2NVersion::new(*v), VersionParams(buf))
+                (
+                    N2NVersion::new(*v),
+                    ade_network::handshake::version_table::encode_n2n_version_params(
+                        *v,
+                        network_magic,
+                    ),
+                )
             })
             .collect(),
     )

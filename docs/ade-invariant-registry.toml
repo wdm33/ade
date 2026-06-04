@@ -6073,3 +6073,33 @@ introduced_in = "PHASE4-N-F-G-K"
 strengthened_in = []
 cluster = "PHASE4-N-F-G-K"
 evidence_notes = "PHASE4-N-F-G-K S1 (2026-06-04). Grounded in the live C1 genesis-successor rehearsal: Ade --mode node forged + self-accepted block 0 (forge_attempted -> forge_result:succeeded) against a healthy Haskell follower session, but the follower never fetched it -- the On-arm tore down the serve listener the moment the upstream feed ended (node_serve_stop flipped right after run_relay_loop returned), before the follower's ~160s :3002 retry landed. Fix: the serve task is gated on the operator shutdown watch (shutdown.clone()), not a feed-end stop; node_serve_handle is awaited (it ends only on shutdown / fatal serve error). run_node_serve_task is byte-unchanged (already read-only over ServedChainView; no ChainDb/WAL/forge handle). RED-only; no BLUE change; no new canonical type; serving is RED I/O over already-self-accepted bytes (no replay weight). Tests: serve_task_outlives_feed_end_and_serves_late_fetch (the serve task stays alive across a feed-end + a LATE follower still BlockFetches the served block byte-identically; only shutdown ends it) + serve_task_terminates_on_shutdown_no_hang (clean termination on shutdown, no hang/leak); the existing loopback fetch + bind-failure tests are preserved unchanged. Gate ci_check_node_serve_lifetime.sh pins: the On-arm spawns the serve task with the shutdown watch (not a feed-end stop channel), no node_serve_stop.send after run_relay_loop, run_node_serve_task takes no ChainDb/forge handle. CE-G-K-3 (the live C1 rerun where the follower fetches + validates -> correlate -> PrivateRehearsalManifest) stays operator-gated (blocked_until_operator_c1_genesis_successor_rehearsal); no RO-LIVE flip; acceptance only via the follower log through correlate."
+
+[[rules]]
+id = "CN-WIRE-10"
+tier = "derived"
+statement = """
+Ade's serve-side N2N handshake RESPONDER must encode versionData / MsgAcceptVersion / query-reply in
+the closed Cardano NodeToNode wire grammar a real cardano-node decodes, through the SINGLE shared
+per-version authority (encode_n2n_version_params) the INITIATOR also uses -- the two directions cannot
+diverge. The versionData arity matches the negotiated version: V11..=15 emit the 4-element
+[networkMagic, initiatorAndResponderDiffusionMode, peerSharing, query]; V16+ append perasSupport. The
+responder MUST NOT emit a placeholder / bare value (the prior VersionParams(vec![0x01]) = CBOR TInt 1,
+which a real cardano-node rejected with HandshakeDecodeError NodeToNodeV_15 "unknown encoding: TInt 1").
+Closed grammar -- no fallback interpretation, no decoder loosening; the encoding is byte-pinned against
+captured real cardano-node fixtures, never an Ade<->Ade round-trip.
+"""
+source = "docs/clusters/PHASE4-N-F-G-L/cluster.md"
+cross_ref = ["CN-WIRE-08", "DC-NODE-07", "DC-NODE-09", "CN-SESS-01", "RO-LIVE-01"]
+code_locus = "crates/ade_network/src/handshake/version_table.rs (encode_n2n_version_params -- the SINGLE per-version N2N versionData wire authority); crates/ade_network/src/session/handshake_driver.rs (the serve responder builds AcceptVersion via encode_n2n_version_params(version.get(), params.network_magic), NOT a placeholder); crates/ade_node/src/admission/bootstrap.rs (build_n2n_version_table -- the initiator uses the SAME authority)"
+tests = [
+  "responder_v15_accept_matches_real_cardano_node_preprod_fixture",
+  "responder_v15_accept_matches_failing_c1_peer_fixture",
+  "responder_v15_versiondata_is_a_four_element_array_not_a_bare_int",
+  "node_spine_serve_loopback_follower_fetches_self_accepted_block",
+]
+ci_script = "ci/ci_check_n2n_handshake_versiondata_authority.sh"
+status = "enforced"
+introduced_in = "PHASE4-N-F-G-L"
+strengthened_in = []
+cluster = "PHASE4-N-F-G-L"
+evidence_notes = "PHASE4-N-F-G-L S1+S2 (2026-06-04). The G-K live rerun showed the follower reaches Ade :3002 but the N2N handshake fails: HandshakeDecodeError NodeToNodeV_15 'unknown encoding: TInt 1'. ROOT CAUSE: session/handshake_driver.rs built the serve responder's MsgAcceptVersion with a hardcoded placeholder VersionParams(vec![0x01]) (= CBOR TInt 1), discarding the negotiated versionData -- asymmetric (the initiator path encoded versionData correctly, so Ade's INITIATOR handshake worked). S1 captured the canonical real cardano-node V15 reply (corpus/network/n2n/handshake/{preprod,c1privnet}_v11_v16_propose_recv.cbor: [1, 15, [magic, true, 0, false]] -- a 4-element array; cardano-node 11.0.1 negotiates V15). S2 added the SINGLE shared per-version authority encode_n2n_version_params (V11-15 4-field, V16+ +perasSupport) used by BOTH the serve responder (handshake_driver) AND the initiator (build_n2n_version_table), and pinned the responder's V15 accept BYTE-IDENTICALLY against the captured fixtures (preprod magic 1 + the EXACT c1 failing peer magic 42) -- NOT an Ade<->Ade round-trip (which passed against the [0x01] placeholder and could not catch this). The DECODER was NOT loosened; the ENCODER now emits the closed grammar. ade_network handshake units (30) + the Ade<->Ade serve loopback (4) still pass (no regression). CN-WIRE-08 (tag-24) unchanged. CE-G-L-2 (the live C1 handshake completing + resuming the G-K rehearsal) stays operator-gated; no RO-LIVE flip; no acceptance claim without the follower log through correlate."
