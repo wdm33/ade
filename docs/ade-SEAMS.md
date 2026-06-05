@@ -3,12 +3,81 @@
 > **Status:** Living architectural document. Regenerated; not hand-edited.
 > Per-project instance of `~/.claude/methodology/templates/seams.md`.
 
-> 11 crates, **458 canonical types**, **135 CI checks** at HEAD (`999199f8`, post-PHASE4-N-U gate-hygiene span).
-> Reads CODEMAP (`docs/ade-CODEMAP.md`, intentionally NOT regenerated this pass — structurally current,
-> still pinned at `4e358e92`: same 458 canonical types / 135 CI / 333 rules) for the module
-> list + TCB colors, and the invariant registry (`docs/ade-invariant-registry.toml` —
-> **333 entries** at HEAD, already reconciled for the DC-NODE-06 repoint) for the rule IDs that gate each closed surface.
-> **Counts unchanged across this span** (458 / 135 / 333) — the span is gate hygiene, NOT an invariant or surface change.
+> 11 crates, **458 canonical types**, **136 CI checks** at HEAD (`b0365df0`, PHASE4-N-AA cluster close — bounded peer-driven serve range).
+> Reads the CODEMAP regenerated at the same close (`docs/ade-CODEMAP.md` — **458 canonical types / 136 CI / 334 rules**,
+> pinned at the N-AA security-review tip `5c9f6cf6`; `b0365df0` is the close commit one past it, with no further
+> code/type/gate change) for the module list + TCB colors, and the invariant registry (`docs/ade-invariant-registry.toml` —
+> **334 entries** at HEAD) for the rule IDs that gate each closed surface.
+> **N-AA is RED-only (0 BLUE diff): +1 rule (`DC-SERVEMEM-01`, declared → enforced), +1 CI gate
+> (`ci_check_serve_range_bounded.sh`), ZERO new BLUE canonical types / authorities / fns** — it BOUNDS the
+> existing closed `--mode node` durable-chain serve seam (DC-NODE-13), it does NOT open a new one.
+>
+> ### PHASE4-N-AA cluster close (`5c9f6cf6` / close `b0365df0`) — bounded peer-driven serve range (`DC-SERVEMEM-01`)
+
+>
+> **This regeneration is a single-cluster cluster-close refresh, applied directly to the on-disk SEAMS.** The
+> prior on-disk SEAMS was pinned at the post-PHASE4-N-U gate-hygiene span (`999199f8` / **458** canonical types /
+> **135** CI / **333** rules). It is brought current to the CODEMAP regenerated at the N-AA close (`5c9f6cf6` /
+> **458** canonical types / **136** CI / **334** rules; `b0365df0` is the close commit one past it). It splices
+> the **single closed cluster PHASE4-N-AA** (bounded peer-driven serve range — the `--mode node` serve path bounds
+> per-request work and fails closed on oversized / inverted / undecodable ranges). **N-AA is RED-only — ZERO BLUE
+> diff** (458 canonical types unchanged; no BLUE struct/enum/fn added — the lone BLUE-tree touch in the close span
+> is a `// Core Contract:` comment header on `ade_ledger::block_validity::mod.rs`, no type/authority/export change).
+> It is the **serve-side analog of `DC-LIVEMEM-01`** (the receive-side bounded-memory cap, N-F-G-E) and closes the
+> **PHASE4-N-U cross-slice security-review MEDIUM finding** (peer-driven serve resource amplification). The
+> seam-relevant additions — all classified under §3 Closed (closed RED enum / struct / fixed defensive constant),
+> with §3 Extensible (the durable-chain serve impl now BOUNDED), §4 Frozen (the symmetric serve-side fixed cap),
+> §5 (one NEW gate, 135 → 136), §6 (the RED no-unbounded-serve prohibition), and §7 (NO new candidate — a bounding
+> of an already-closed seam) updated — are:
+>
+> - **NEW closed RED enum `ServeRangeOutcome { Served(Vec<(SlotNo, Hash32, Vec<u8>)>) | Empty | CapExceeded | ReadError }`**
+>   (`ade_runtime::network::served_chain_projection` (RED, `//! RED`); **DC-SERVEMEM-01**) — the four internal
+>   reasons the bounded BlockFetch serve distinguishes; **every non-`Served` variant maps to an empty `Vec` → the
+>   BLUE reducer's wire `NoBlocks`** (`CapExceeded` on an oversized range, decided BY THE BOUND before any decode;
+>   `Empty` on an out-of-chain or inverted window; `ReadError` on an in-range block the single BLUE `decode_block`
+>   cannot authenticate — the serve never emits a block it cannot authenticate). **NOT `#[non_exhaustive]`; no
+>   catch-all.** A RED serve-read outcome, **NOT** a dispatch (the single `dispatch_server_frame_event_to_outbound`
+>   is unchanged — DC-NODE-07 preserved), **NOT** canonical-counted. A closed fail-closed reason vocabulary (a
+>   surface REDUCTION), NOT an extension point. Classified under §3 Closed.
+> - **NEW closed RED value struct `CappedSlotRange { blocks: Vec<(SlotNo, Vec<u8>)>, truncated: bool }`**
+>   (`ade_runtime::chaindb::types` (RED); **DC-SERVEMEM-01**) — the result of the bounded hash-free read primitive
+>   `range_bytes_capped(from, to, max)`: `blocks` holds at most `max` `(slot, bytes)` pairs slot-ascending,
+>   `truncated = true` when the requested range held MORE than `max` (the per-request cap was exceeded). A RED
+>   storage value type, **NOT** canonical-counted. A closed value type (a surface REDUCTION), NOT an extension point.
+> - **NEW fixed defensive constant `MAX_SERVE_RANGE_BLOCKS = 256`** (`ade_runtime::network::served_chain_projection`;
+>   **DC-SERVEMEM-01**) — the per-request serve-range cap, **symmetric with the receive-side
+>   `MAX_WIRE_PUMP_LOOKAHEAD = 256` (DC-LIVEMEM-01)**. A **FIXED, closed, non-configurable** bound — **NO CLI / env
+>   / config escape, no unbounded mode** — that a later hardening slice may **tighten** (a strengthening of
+>   `DC-SERVEMEM-01`) but may NEVER make tunable / unbounded. A defensive **implementation** bound, NOT a Cardano
+>   semantic parameter (it does not change which chain is served, only the per-request work ceiling). Recorded in §4
+>   Frozen alongside `DC-LIVEMEM-01`'s `MAX_WIRE_PUMP_LOOKAHEAD` / `MAX_REASSEMBLY_TAIL_BYTES`.
+> - **BOUNDS the existing closed serve seam — `ChainDbServedSource` reads via the bounded hash-free ChainDb
+>   primitives `range_bytes_capped` + `last_block_bytes`** (NEW `ChainDb` trait methods; **DC-SERVEMEM-01**) instead
+>   of the unbounded `iter_from_slot` / O(N) `chaindb.tip()` (which materialized the full `from..tip` range and
+>   recovered each hash via a per-block `SLOT_BY_HASH` scan — O(N²)). The block hash is derived from each block's
+>   own bytes via the single BLUE `decode_block` authority (NO second hash authority, NO `SLOT_BY_HASH` reference on
+>   the serve path). The trusted recovery / rollback `iter_from_slot` / `tip` internals are **doc-fenced (not
+>   peer-driven), unchanged**. **This is a bounding of the DC-NODE-13 durable-chain serve seam — it opens NO new
+>   seam.** A security-review MEDIUM (`5c9f6cf6`) added an inverted-range (`from > to`, incl. `from = u64::MAX`)
+>   guard on both `ChainDb` impls so a peer controlling both endpoints gets an empty result, never a panic.
+>
+> **Registry → 334 rules** (ONE NEW, `DC-SERVEMEM-01`, `tier = derived`, `introduced_in = "PHASE4-N-AA"`,
+> `enforced`, `ci_script = ci/ci_check_serve_range_bounded.sh`, `cross_ref = [DC-LIVEMEM-01, DC-NODE-13, DC-NODE-07,
+> CN-CONS-07, DC-CONS-17]`). **TWO strengthened** (`strengthened_in += "PHASE4-N-AA"`): `DC-NODE-13` (the `--mode
+> node` durable-chain serve projection is now BOUNDED) and `DC-LIVEMEM-01` (extended from the receive-side to a
+> symmetric serve-side bound — a cross-ref, not a code change to G-E). **No rule weakened.** **NET +1 CI gate (135 →
+> 136): +1 NEW** `ci_check_serve_range_bounded.sh` (fences the serve to the bounded hash-free primitives — no
+> `iter_from_slot` / `chaindb.tip()` — the fixed non-configurable cap, and `decode_block`-only hash derivation).
+>
+> **Boundary honesty (load-bearing — do NOT soften / do NOT broaden).** N-AA is a **defensive resource bound on the
+> read-only serve path** — and **nothing more**. The cap is an **implementation bound, NOT a Cardano semantic
+> parameter** and **cannot be disabled at runtime**. There is **NO new canonical / BLUE type** (`CappedSlotRange` +
+> `ServeRangeOutcome` are RED storage/serve value types, NOT canonical-counted); **NO second hash authority** (the
+> serve derives the hash via the single BLUE `decode_block`; the bounded primitive is hash-FREE); **NO new dispatch
+> authority** (the single `dispatch_server_frame_event_to_outbound` is unchanged — DC-NODE-07 preserved); the
+> trusted recovery / rollback `iter_from_slot` internals are **OUT OF SCOPE** (doc-fenced, unchanged); and there is
+> **NO RO-LIVE flip** — bounding serve work ≠ operator-witnessed peer acceptance (`RO-LIVE-01` stays `partial` /
+> operator-gated). It is pre-RO-LIVE hardening item 1.
 >
 > ### Post-N-U gate-hygiene span (`4e358e92` → `999199f8`, 2026-06-05) — DC-NODE-06 handoff-fence REPOINT + green-means-green CI sweep
 
@@ -1951,7 +2020,7 @@ nowhere.**
 | **Authoritative admit** | `ade_ledger::producer::served_chain::served_chain_admit` | BLUE | Sole entry into the served index; only self-accepted blocks (CN-PROD-04). |
 | **Atomic publisher** | `ade_runtime::producer::served_chain_handle::push_atomic` | RED (GREEN-by-content glue) | Wraps `served_chain_admit` in `watch::Sender::send_modify` — no torn snapshot. |
 | **Read-side serve (snapshot — `--mode produce`)** | `ade_network::block_fetch::server::producer_block_fetch_serve` over `ade_runtime::producer::served_chain_lookups::ServedChainLookups` | BLUE reducer / RED impl | Serves a `RequestRange` only if endpoints + every intervening block are present; emits the tag-24 composition (N-X). The snapshot impl of the closed serve seams. |
-| **Read-side serve (durable projection — `--mode node`, N-U)** | `ade_network::{chain_sync,block_fetch}::server` over `ade_runtime::network::served_chain_projection::ChainDbServedSource` | BLUE reducers / RED impl | The `--mode node` served view as a READ-ONLY projection of the durable ChainDb (`iter_from_slot` / `get_block_by_hash` / `tip`); serves `stored.bytes` verbatim, reuses `block_header_bytes` + `decode_block` (DC-NODE-13). A SECOND impl of the same closed serve seams. |
+| **Read-side serve (durable projection — `--mode node`, N-U; BOUNDED N-AA)** | `ade_network::{chain_sync,block_fetch}::server` over `ade_runtime::network::served_chain_projection::ChainDbServedSource` | BLUE reducers / RED impl | The `--mode node` served view as a READ-ONLY projection of the durable ChainDb; serves `stored.bytes` verbatim, reuses `block_header_bytes` + `decode_block` (DC-NODE-13). A SECOND impl of the same closed serve seams. **N-AA (DC-SERVEMEM-01): the peer-driven BlockFetch read is now BOUNDED** — it reads via the bounded **hash-free** primitives `range_bytes_capped` + `last_block_bytes` (NOT the unbounded `iter_from_slot` / O(N) `chaindb.tip()`), caps each request at the fixed non-configurable `MAX_SERVE_RANGE_BLOCKS = 256`, derives the hash via the single BLUE `decode_block` (no second hash authority, no `SLOT_BY_HASH` on the serve path), and fails closed via the closed `ServeRangeOutcome` (`CapExceeded` / `Empty` / `ReadError`) → wire `NoBlocks`. |
 
 **Rule:** a forged block is visible to peers only after `push_atomic`; the read-side serve is data-only over
 the BLUE `ServedChainSnapshot`. The serve emitter wraps via the single tag-24 authority before bytes reach a
@@ -1965,7 +2034,7 @@ the self-accept→serve handoff domain above. **N-F-G-C note:** a self-accepted 
 over IN-PROCESS block-fetch on the live-feed path; a served block leaving the node over the wire to a peer that
 ACCEPTS it is the operator-gated RO-LIVE-01 leg (peer ACCEPT NOT claimed here).
 
-**N-U note (DC-NODE-12 / DC-NODE-13):** the forge's OWN block now becomes **durable** — the relay-loop `ForgeTick` arm routes the self-accepted block through the fenced `node_sync::admit_forged_block_durably` → the single `pump_block` durable chokepoint (extend-only; the durable tip advances; the next forge builds N+1 on it; a stale-tip forge fails closed). The `--mode node` SERVE path is now a READ-ONLY **projection of the durable ChainDb** (`ChainDbServedSource` over `ServedChainSource::DurableChainDb`), read by the single `dispatch_server_frame_event_to_outbound` (DC-NODE-07 preserved — one dispatch, two read sources), NOT the retired G-R in-memory `ServedChainView` accumulator + `serve_gate_admits` monotone gate. The forge still advances NO durable tip DIRECTLY (`pump_block` is the sole durable tip authority); durability + coherent serve ≠ peer acceptance (`RO-LIVE-01` stays operator-gated). The snapshot serve (`ServedChainSnapshot` + `push_atomic`) above stays the `--mode produce` path; N-U does NOT move it.
+**N-U note (DC-NODE-12 / DC-NODE-13):** the forge's OWN block now becomes **durable** — the relay-loop `ForgeTick` arm routes the self-accepted block through the fenced `node_sync::admit_forged_block_durably` → the single `pump_block` durable chokepoint (extend-only; the durable tip advances; the next forge builds N+1 on it; a stale-tip forge fails closed). The `--mode node` SERVE path is now a READ-ONLY **projection of the durable ChainDb** (`ChainDbServedSource` over `ServedChainSource::DurableChainDb`), read by the single `dispatch_server_frame_event_to_outbound` (DC-NODE-07 preserved — one dispatch, two read sources), NOT the retired G-R in-memory `ServedChainView` accumulator + `serve_gate_admits` monotone gate. The forge still advances NO durable tip DIRECTLY (`pump_block` is the sole durable tip authority); durability + coherent serve ≠ peer acceptance (`RO-LIVE-01` stays operator-gated). The snapshot serve (`ServedChainSnapshot` + `push_atomic`) above stays the `--mode produce` path; N-U does NOT move it. **N-AA note (DC-SERVEMEM-01):** the `--mode node` durable-projection serve READ is now BOUNDED — each peer BlockFetch range is read via the bounded hash-free `range_bytes_capped` + `last_block_bytes`, capped at the fixed `MAX_SERVE_RANGE_BLOCKS = 256` (symmetric with the receive-side `MAX_WIRE_PUMP_LOOKAHEAD`), failing closed on an oversized / inverted / undecodable range; the single `dispatch_server_frame_event_to_outbound` (DC-NODE-07), the hash authority (single `decode_block`), within-cap byte-identity (DC-CONS-17), and the WRITE side (`pump_block`) are all unchanged. RED-only, 0 BLUE diff, no RO-LIVE flip.
 
 ---
 
@@ -1975,7 +2044,10 @@ ACCEPTS it is the operator-gated RO-LIVE-01 leg (peer ACCEPT NOT claimed here).
 
 | Registry | Location | Count | Change Rule |
 |----------|----------|-------|-------------|
-| `ServedChainSource` *(NEW, N-U / DC-NODE-13; DC-NODE-07 PRESERVED)* | `ade_runtime::network::serve_dispatch` (RED) | 2 (`Snapshot(&ServedChainView)` / `DurableChainDb(&dyn ChainDb)`) | The closed read-source selector read by the SINGLE serve-dispatch authority `dispatch_server_frame_event_to_outbound`. `Snapshot` is the `--mode produce` in-memory `ServedChainSnapshot`/`ServedChainView` accumulator path; `DurableChainDb` is the `--mode node` durable-chain projection (NEW in N-U — `ChainDbServedSource`). **ONE dispatch, TWO read sources** — the serve authority does NOT fork; the source enum selects which read-side the single dispatch reads from (DC-NODE-07 preserved — `ci_check_served_chain_projection.sh` pins exactly one `dispatch_server_frame_event_to_outbound`). **NOT `#[non_exhaustive]`**; the dispatch `match` is total with NO wildcard. **A closed read-source selector (a surface REDUCTION), NOT an extension point.** Backs **DC-NODE-13**. A new read source = a `ServedChainSource` variant + a `dispatch_server_frame_event_to_outbound` arm (no wildcard) + a strengthening of **DC-NODE-13** (`ci_check_served_chain_projection.sh`); the single serve dispatch MUST NOT be duplicated, and the new read source MUST implement the same closed serve seams (`ServedHeaderLookup` / `ServedRangeLookup`). |
+| `ServedChainSource` *(NEW, N-U / DC-NODE-13 — serve BOUNDED N-AA / DC-SERVEMEM-01; DC-NODE-07 PRESERVED)* | `ade_runtime::network::serve_dispatch` (RED) | 2 (`Snapshot(&ServedChainView)` / `DurableChainDb(&dyn ChainDb)`) | The closed read-source selector read by the SINGLE serve-dispatch authority `dispatch_server_frame_event_to_outbound`. `Snapshot` is the `--mode produce` in-memory `ServedChainSnapshot`/`ServedChainView` accumulator path; `DurableChainDb` is the `--mode node` durable-chain projection (NEW in N-U — `ChainDbServedSource`). **ONE dispatch, TWO read sources** — the serve authority does NOT fork; the source enum selects which read-side the single dispatch reads from (DC-NODE-07 preserved — `ci_check_served_chain_projection.sh` pins exactly one `dispatch_server_frame_event_to_outbound`). **NOT `#[non_exhaustive]`**; the dispatch `match` is total with NO wildcard. **A closed read-source selector (a surface REDUCTION), NOT an extension point.** Backs **DC-NODE-13**. A new read source = a `ServedChainSource` variant + a `dispatch_server_frame_event_to_outbound` arm (no wildcard) + a strengthening of **DC-NODE-13** (`ci_check_served_chain_projection.sh`); the single serve dispatch MUST NOT be duplicated, and the new read source MUST implement the same closed serve seams (`ServedHeaderLookup` / `ServedRangeLookup`). |
+| `ServeRangeOutcome` *(NEW, N-AA / DC-SERVEMEM-01)* | `ade_runtime::network::served_chain_projection` (RED, `//! RED`) | 4 (`Served(Vec<(SlotNo, Hash32, Vec<u8>)>)` / `Empty` / `CapExceeded` / `ReadError`) | The closed internal outcome of the BOUNDED `--mode node` BlockFetch serve read. **Every non-`Served` variant maps to an empty `Vec` → the BLUE reducer's wire `NoBlocks`** — `CapExceeded` on an oversized range (decided BY THE FIXED BOUND `MAX_SERVE_RANGE_BLOCKS`, **before** any decode), `Empty` on an out-of-chain or inverted (`from > to`) window, `ReadError` on an in-range block the single BLUE `decode_block` cannot authenticate (the serve never emits a block it cannot authenticate). **NOT `#[non_exhaustive]`; no catch-all.** It is a serve-READ outcome, **NOT a dispatch** (the single `dispatch_server_frame_event_to_outbound` is unchanged — DC-NODE-07 preserved); lives in `ade_runtime` (not a BLUE `core_paths` entry), so **NOT canonical-counted**. **A closed fail-closed reason vocabulary (a surface REDUCTION), NOT an extension point.** Backs **DC-SERVEMEM-01**. A new reason = a `range_bytes_with_outcome` arm (no wildcard) + every non-`Served` arm still mapping to `NoBlocks` + a strengthening of **DC-SERVEMEM-01** (`ci_check_serve_range_bounded.sh`); the fixed cap MUST NOT become configurable, and no second block-hash authority may be introduced. |
+| `CappedSlotRange` *(NEW, N-AA / DC-SERVEMEM-01)* | `ade_runtime::chaindb::types` (RED) | closed value struct (`blocks: Vec<(SlotNo, Vec<u8>)>` / `truncated: bool`) | The result of the bounded **hash-free** ChainDb read primitive `range_bytes_capped(from, to, max)`: `blocks` holds at most `max` `(slot, bytes)` pairs in slot-ascending order; `truncated = true` when the requested range contained MORE than `max` blocks (the per-request serve cap was exceeded) — the serve uses `truncated` to fail closed (`ServeRangeOutcome::CapExceeded`) and to distinguish "cap exceeded" from "genuinely empty". A RED storage value type, **NOT canonical-counted**. **A closed value struct (a surface REDUCTION), NOT an extension point.** Backs **DC-SERVEMEM-01**. A new field = a struct addition behind the bounded-read contract + a strengthening of **DC-SERVEMEM-01**; the primitive MUST stay hash-free (no `SLOT_BY_HASH` scan) and read at most `max + 1` blocks lazily. |
+| `MAX_SERVE_RANGE_BLOCKS` (closed serve-range cap) *(NEW, N-AA / DC-SERVEMEM-01)* | `ade_runtime::network::served_chain_projection` (RED) | closed literal const `256` | The per-request `--mode node` serve-range cap, **SYMMETRIC with the receive-side `MAX_WIRE_PUMP_LOOKAHEAD = 256` (DC-LIVEMEM-01)**. A **CLOSED LITERAL constant — a defensive implementation bound, NOT a Cardano semantic parameter** (it does not change which chain is served, only the per-request work ceiling); **NO runtime / CLI / env / config override, no unbounded mode** (the no-escape-hatch surface reduction, `ci_check_serve_range_bounded.sh`). A future hardening slice may **tighten** it (a strengthening of **DC-SERVEMEM-01**), but may NEVER make it a tunable / unbounded. Recorded in §4 Frozen alongside `MAX_REASSEMBLY_TAIL_BYTES` / `MAX_WIRE_PUMP_LOOKAHEAD`. |
 | `ArrayHead` *(NEW, N-F-G-M / CN-WIRE-11)* | `ade_network::codec::primitives` (BLUE) | 2 (`Definite(u64)` / `Indefinite`) | The closed two-form CBOR array-head grammar for real cardano-node ChainSync `FindIntersect`. The closed BLUE fn `decode_array_head_two_form(protocol, data, offset)` decodes BOTH the definite (`9f…`/`98…`) and the indefinite (`0x9f … 0xff`) forms; on `Indefinite` the caller consumes the matching `0xff` break. **NOT `#[non_exhaustive]`.** The codec/ BLUE submodule count `38 → 39` (total **457 → 458**) — the LONE new BLUE canonical type in the whole G-K…G-R span. **SCOPED to ChainSync `FindIntersect`** (`decode_find_intersect_points` consumes it; the rest of the closed wire grammar stays definite-only — `ArrayHead` / `decode_array_head_two_form` is NOT a general definite/indefinite decoder); **no catch-all**. Paired with the `chain_sync::server` `Origin → IntersectFound[Origin]` reply (the universal common ancestor — matches the real node, does NOT widen the served chain). Pinned against captured cardano-node 11.0.1 FindIntersect/IntersectFound fixtures. **A closed BLUE sum (a surface REDUCTION for real-node wire compat), NOT an extension point.** Backs **CN-WIRE-11**. New variant = a `decode_array_head_two_form` arm + a strengthening of **CN-WIRE-11** (`ci_check_chainsync_findintersect_compat.sh`); the indefinite acceptance MUST stay scoped to FindIntersect, and the `Origin` reply MUST NOT widen the served chain beyond the Origin intersect. |
 | Per-version N2N `versionData` encoding (`encode_n2n_version_params`) *(NEW fn, N-F-G-L / CN-WIRE-10)* | `ade_network::handshake::version_table` (BLUE) | the SINGLE per-version `versionData` encoder over the **unchanged closed `N2N_SUPPORTED` version SET** (V11..=V15 → the 4-field `[networkMagic, diffusionMode, peerSharing, query]`; V16+ → the extended shape) | The single per-version N2N `versionData` wire encoding — for V11..=V15 the 4-field `NodeToNodeVersionData` (`diffusionMode = true`, `peerSharing = NoPeerSharing(0)`, `query = false`), for V16+ the extended shape — so a real cardano-node accepts the serve-side handshake at NodeToNodeV_15 (fixes `HandshakeDecodeError NodeToNodeV_15 'unknown encoding: TInt 1'`). An additive BLUE **fn** (no struct/enum — 458 unchanged) over the unchanged closed `N2N_SUPPORTED` version SET. **NO version-set widening, NO runtime negotiation of meaning** (a successful handshake is a wire-layer event, NOT peer acceptance — `RO-LIVE-01` stays `partial`). **A closed per-version wire encoder (a surface REDUCTION / real-node-compat strengthening of the closed version table), NOT an extension point.** Backs **CN-WIRE-10**. A new per-version shape = a `encode_n2n_version_params` arm + a strengthening of **CN-WIRE-10** (`ci_check_n2n_handshake_versiondata_authority.sh` — the single per-version encoder + the per-version field shape, pinned against the real-node handshake fixture); the closed `N2N_SUPPORTED` version SET MUST NOT be widened and no runtime negotiation of meaning may be introduced. |
 | Feed-side BlockFetch tag-24 unwrap (REUSES the frozen authority) *(N-F-G-O / CN-WIRE-12)* | `ade_runtime::admission::wire_pump` (RED) | REUSES the single `ade_codec::unwrap_tag24` (CN-WIRE-08) authority; **NO new serializer / parallel parser** | The feed-side WirePump strips the peer's BlockFetch `MsgBlock` tag-24 (`0xd8 0x18`) CBOR-in-CBOR envelope via the single `ade_codec::unwrap_tag24` authority **BEFORE** the BLUE decode (so the live feed decodes the inner `[era, block]` cleanly — `UnexpectedType` gone), mirroring the already-correct `admission::runner` + `ade_core_interop::follow` paths. **There is NO second `unwrap_tag24` / hand-rolled tag-24 parse** — the single `CN-WIRE-08` (N-X) authority is reused; a non-tag-24 / malformed payload fails closed. **A closed decode-boundary reuse (a surface REDUCTION over the frozen tag-24 authority), NOT a new closed enum / parallel envelope / extension point.** Backs **CN-WIRE-12**. Adding a feed-side unwrap site = a strengthening of **CN-WIRE-12** (`ci_check_feed_tag24_unwrap.sh` — the feed-side WirePump unwraps via `ade_codec::unwrap_tag24` before decode, and adds no hand-rolled tag-24 parse); no parallel tag-24 authority may be introduced. |
@@ -2062,7 +2134,7 @@ ACCEPTS it is the operator-gated RO-LIVE-01 leg (peer ACCEPT NOT claimed here).
 
 | Registry | Location | Extension Rule |
 |----------|----------|----------------|
-| Served read-side trait seams `ServedHeaderLookup` / `ServedRangeLookup` *(impls extended N-U)* | `ade_network::chain_sync::server::ServedHeaderLookup` + `ade_network::block_fetch::server::ServedRangeLookup` (BLUE reducers) — impls in `ade_runtime` | **THE closed read-side extension surface for the serve reducers.** A new served read-side attaches by IMPLEMENTING these two BLUE trait seams; the BLUE serve reducers + the single `dispatch_server_frame_event_to_outbound` are reused UNCHANGED. **Two impls exist at HEAD:** the produce-mode snapshot impl `ade_runtime::producer::served_chain_lookups::ServedChainLookups` (over `ServedChainSnapshot`) and the NEW N-U durable-chain impl `ade_runtime::network::served_chain_projection::ChainDbServedSource` (over the durable ChainDb — DC-NODE-13). A new impl MUST serve already-durable / already-self-accepted bytes VERBATIM (no re-encode — DC-CONS-17), reuse the single `block_header_bytes` (DC-CONS-18) + `decode_block` (NO parallel splitter, NO `AcceptedBlock` reconstruction), and be selected through a closed `ServedChainSource` variant (NOT a `Box<dyn _>` registry / negotiated surface) — provenance MUST stay structural (durable ChainDb ⇐ `pump_block` / self-accept). `ci_check_served_chain_projection.sh`. |
+| Served read-side trait seams `ServedHeaderLookup` / `ServedRangeLookup` *(impls extended N-U; durable impl BOUNDED N-AA)* | `ade_network::chain_sync::server::ServedHeaderLookup` + `ade_network::block_fetch::server::ServedRangeLookup` (BLUE reducers) — impls in `ade_runtime` | **THE closed read-side extension surface for the serve reducers.** A new served read-side attaches by IMPLEMENTING these two BLUE trait seams; the BLUE serve reducers + the single `dispatch_server_frame_event_to_outbound` are reused UNCHANGED. **Two impls exist at HEAD:** the produce-mode snapshot impl `ade_runtime::producer::served_chain_lookups::ServedChainLookups` (over `ServedChainSnapshot`) and the NEW N-U durable-chain impl `ade_runtime::network::served_chain_projection::ChainDbServedSource` (over the durable ChainDb — DC-NODE-13). A new impl MUST serve already-durable / already-self-accepted bytes VERBATIM (no re-encode — DC-CONS-17), reuse the single `block_header_bytes` (DC-CONS-18) + `decode_block` (NO parallel splitter, NO `AcceptedBlock` reconstruction), and be selected through a closed `ServedChainSource` variant (NOT a `Box<dyn _>` registry / negotiated surface) — provenance MUST stay structural (durable ChainDb ⇐ `pump_block` / self-accept). **N-AA (DC-SERVEMEM-01): the `--mode node` `ChainDbServedSource` BlockFetch read is now BOUNDED** — it reads via the bounded hash-free ChainDb primitives `range_bytes_capped` + `last_block_bytes` (NOT `iter_from_slot` / `chaindb.tip()`), caps each peer request at the fixed non-configurable `MAX_SERVE_RANGE_BLOCKS = 256`, and fails closed (`ServeRangeOutcome`) on an oversized / inverted / undecodable range; a NEW serve impl MUST likewise read via bounded primitives and cap per request (no unbounded materialization, no `SLOT_BY_HASH` scan). `ci_check_served_chain_projection.sh` + `ci_check_serve_range_bounded.sh`. |
 | Ade-native WAL (append-only) | `ade_runtime::wal` (GREEN-by-content) + `ade_ledger::wal::event` (BLUE encoder/decoder) | Append-only; committed entries are never mutated (`ci_check_wal_append_only.sh`). **`WalEntry` is a deliberately CE-not-law surface** — additively evolvable behind the WAL schema (append-only wire tags; `AdmitBlock` = 0, `SeedEpochConsensusInputsImported` = 3, tags 1/2 reserved). An acceptance criterion, NOT a frozen registry-law enum. |
 | Seed-epoch sidecar store (anchor-fp-keyed) *(N-F-A; consumed N-F-C)* | `ade_runtime::chaindb::SnapshotStore::{put,get,list}_seed_epoch_consensus_*` | A new entry is `put` only on the verified-bootstrap composition path, keyed by `anchor_fp` in a namespace disjoint from the slot-keyed snapshot space; idempotent on identical bytes (redb `seed_cinputs_by_anchor_fp` table, `SCHEMA_VERSION = 3`). N-F-C consumes it via `list_seed_epoch_consensus_anchor_fps` + `get_seed_epoch_consensus_inputs` on the WarmStart arm. The forge-time path may NOT `put` here (CN-CINPUT-02). |
 | `PerPeerOutbound` map *(N-S-B)* | `ade_runtime::network::outbound_command` — `Arc<RwLock<BTreeMap<PeerId, mpsc::Sender<OutboundCommand>>>>` | Grows at runtime; **`BTreeMap`, not `HashMap`** — deterministic iteration; no cross-peer byte leakage (CN-PEER-OUTBOUND-MAP-01, DC-OUTBOUND-FIFO-01). |
@@ -2070,7 +2142,7 @@ ACCEPTS it is the operator-gated RO-LIVE-01 leg (peer ACCEPT NOT claimed here).
 | `ServedChainSnapshot` (served blocks) | `ade_ledger::producer::served_chain` (BLUE) | Grows via `served_chain_admit` only; `push_atomic` is the sole publisher. (The N-F-E/N-F-F/N-F-G-A relay-loop forge tick does NOT publish here; N-F-G-B publishes via the sibling task's single `push_atomic` fed by `into_accepted()`.) |
 | `MempoolState` (admitted txs) | `ade_ledger::mempool` (BLUE) | Grows via `mempool_ingress` → `admit` only; sorted/deduplicated. |
 | Seed entries (imported UTxO) | `ade_runtime::seed_import` (GREEN-by-content) | Grows at import time from a cardano-cli UTxO dump; canonical decoders only. |
-| Persisted ChainDb (synced blocks) *(N-Y; first production driver N-F-C; driven by the N-F-D loop; LIVE feed N-F-G-C; own-forged blocks N-U; serve-read source N-U)* | `ade_runtime::chaindb` via `forward_sync::pump` (write) + `ChainDbServedSource` (read, N-U) | Grows via the forward-sync pump applying the GREEN reducer's `SyncEffect` plan in durable order; the tip advances only after `StoreBlockBytes` + `AppendWal` ack (DC-SYNC-01). N-F-C's `node_sync::run_node_sync` is the first production driver; the N-F-D relay loop drives it each `SyncOnce` iteration; N-F-G-C feeds it a LIVE `--peer` source. **N-U: the SAME `pump_block` chokepoint now also durably admits the forge's OWN self-accepted block** (via `node_sync::admit_forged_block_durably`; extend-only, durable-before-tip — DC-NODE-12 / DC-CONS-23 / DC-WAL-04), so the producer own-tip advances. The sole production WRITERS stay `pump_block` + the validated `bootstrap_initial_state` (CN-CONS-07). **N-U also makes the durable ChainDb the `--mode node` SERVE-READ source** — `ChainDbServedSource` projects it READ-ONLY through the serve seams (DC-NODE-13); a forged-block durable tip recovers byte-identically on restart (T-REC-05) and serving survives restart. |
+| Persisted ChainDb (synced blocks) *(N-Y; first production driver N-F-C; driven by the N-F-D loop; LIVE feed N-F-G-C; own-forged blocks N-U; serve-read source N-U)* | `ade_runtime::chaindb` via `forward_sync::pump` (write) + `ChainDbServedSource` (read, N-U) | Grows via the forward-sync pump applying the GREEN reducer's `SyncEffect` plan in durable order; the tip advances only after `StoreBlockBytes` + `AppendWal` ack (DC-SYNC-01). N-F-C's `node_sync::run_node_sync` is the first production driver; the N-F-D relay loop drives it each `SyncOnce` iteration; N-F-G-C feeds it a LIVE `--peer` source. **N-U: the SAME `pump_block` chokepoint now also durably admits the forge's OWN self-accepted block** (via `node_sync::admit_forged_block_durably`; extend-only, durable-before-tip — DC-NODE-12 / DC-CONS-23 / DC-WAL-04), so the producer own-tip advances. The sole production WRITERS stay `pump_block` + the validated `bootstrap_initial_state` (CN-CONS-07). **N-U also makes the durable ChainDb the `--mode node` SERVE-READ source** — `ChainDbServedSource` projects it READ-ONLY through the serve seams (DC-NODE-13); a forged-block durable tip recovers byte-identically on restart (T-REC-05) and serving survives restart. **N-AA bounds that serve-read** — the peer-driven BlockFetch range is read via the bounded hash-free `range_bytes_capped` + `last_block_bytes` and capped at the fixed `MAX_SERVE_RANGE_BLOCKS = 256`, failing closed on an oversized / inverted / undecodable range (DC-SERVEMEM-01); the WRITE side (`pump_block` + `bootstrap_initial_state`) is unchanged. |
 | Sync regression fixtures *(N-Y)* | `corpus/sync/regressions/` | Each discovered Haskell observable-surface mismatch is committed as a named regression fixture (RO-SYNC-EVIDENCE-01). |
 | Sum_n KES family | `ade_crypto::kes_sum` (BLUE) | A new `Sum_n` attaches as an internal type-alias step; the `KesAlgorithm` trait surface does not change. |
 | Per-protocol tag-24 compositions *(N-X)* | `ade_network::codec::{block_fetch, chain_sync}` | A new CBOR-in-CBOR composition attaches as a `compose_*` / `decompose_*` pair delegating to the single `ade_codec::{wrap_tag24, unwrap_tag24}` authority (CN-WIRE-08). |
@@ -2270,6 +2342,28 @@ ACCEPTS it is the operator-gated RO-LIVE-01 leg (peer ACCEPT NOT claimed here).
   post-extend, so a single buffer's transient peak is `cap + one <=64 KiB mux frame` (~16.06 MiB), and
   `ProtoBuffers` holds up to ~10 INDEPENDENT per-protocol buffers each capped separately (per-connection aggregate
   ~10× the single-buffer cap — still O(constant) per connection).
+- **Peer-driven `--mode node` SERVE-range work is bounded BEFORE unbounded storage/CPU by a fixed defensive cap
+  (N-AA, DC-SERVEMEM-01 — load-bearing; do NOT soften / do NOT broaden; the serve-side analog of the
+  DC-LIVEMEM-01 receive-side bound above).** The `--mode node` durable-chain serve (`ChainDbServedSource`,
+  DC-NODE-13) reads each peer BlockFetch range via the bounded **hash-free** ChainDb primitives `range_bytes_capped`
+  + `last_block_bytes` (NOT the unbounded `iter_from_slot` / O(N) `chaindb.tip()` — which materialized the full
+  `from..tip` range and recovered each hash via a per-block `SLOT_BY_HASH` scan, O(N²)), caps each request at the
+  **fixed `MAX_SERVE_RANGE_BLOCKS = 256`** (SYMMETRIC with `MAX_WIRE_PUMP_LOOKAHEAD = 256`), and fails closed via
+  the closed `ServeRangeOutcome` — `CapExceeded` on an oversized range (decided BY THE BOUND, before any decode),
+  `Empty` on an out-of-chain / inverted (`from > to`) window, `ReadError` on an in-range block the single BLUE
+  `decode_block` cannot authenticate; **every non-`Served` outcome maps to the wire `NoBlocks`**. The cap is a
+  **defensive implementation bound, NOT a Cardano semantic parameter** (it does not change WHICH chain is served,
+  only the per-request work ceiling) with **NO runtime / CLI / env / config escape hatch, no unbounded mode**
+  (`ci_check_serve_range_bounded.sh`); a future hardening slice may **tighten** it, but may NEVER disable it or set
+  it unbounded. The block hash is derived from each block's own bytes via the single BLUE `decode_block` authority
+  (**NO second hash authority, NO `SLOT_BY_HASH` reference on the serve path**); the bounded primitive is hash-FREE.
+  The single serve `dispatch_server_frame_event_to_outbound` is unchanged (**DC-NODE-07 preserved** —
+  `ServeRangeOutcome` is an internal serve-read outcome, NOT a dispatch). Within-cap serving stays **byte-identical**
+  to the pre-cluster behavior (**DC-CONS-17 preserved**). The trusted recovery / rollback `iter_from_slot` / `tip`
+  internals are **OUT OF SCOPE** (doc-fenced, not peer-driven, unchanged). The claim is **NARROW**: a per-request
+  serve-range bound on the read-only serve path — **NOT** full network DoS resistance, **NOT** peer-fairness, **NOT**
+  a per-connection-COUNT / repeated-request limit (those remain SEPARATE, out-of-scope future hardening, as with
+  DC-LIVEMEM-01), and **NOT** an RO-LIVE flip (`RO-LIVE-01` stays `partial` / operator-gated).
 - **Live `--mode node` feed reuses the closed dial/pump + FILLS the closed source (N-F-G-C S1, load-bearing).**
   The live feed for the `--mode node` `On` arm is a **REUSE** of the closed `ade_runtime::admission::{dial_for_admission,
   run_admission_wire_pump}` (no reimplementation, no new wire authority) that **FILLS** the closed
@@ -2407,10 +2501,11 @@ ACCEPTS it is the operator-gated RO-LIVE-01 leg (peer ACCEPT NOT claimed here).
 - Canonical type schema additions (new fields appended; sort/dedup + `BTreeMap` ordering invariants preserved).
 - `WalEntry` wire tags (append-only: `AdmitBlock` = 0, `SeedEpochConsensusInputsImported` = 3; 1/2 reserved) — a
   CE-not-law additively-evolvable surface.
-- The N-F-G-E memory bounds (`MAX_REASSEMBLY_TAIL_BYTES = 16 MiB`, `MAX_WIRE_PUMP_LOOKAHEAD = 256`) — closed
-  literal constants that a future hardening slice may **tighten** (a strengthening of DC-LIVEMEM-01), but may
-  NEVER make tunable / unbounded; they carry **no CLI / env / config override** at any version
-  (`ci_check_live_feed_memory_bounds.sh` guard 3).
+- The N-F-G-E memory bounds (`MAX_REASSEMBLY_TAIL_BYTES = 16 MiB`, `MAX_WIRE_PUMP_LOOKAHEAD = 256`) AND the N-AA
+  serve-range cap (`MAX_SERVE_RANGE_BLOCKS = 256`, symmetric) — closed literal constants that a future hardening
+  slice may **tighten** (a strengthening of DC-LIVEMEM-01 / DC-SERVEMEM-01), but may NEVER make tunable /
+  unbounded; they carry **no CLI / env / config override** at any version (`ci_check_live_feed_memory_bounds.sh`
+  guard 3 / `ci_check_serve_range_bounded.sh`).
 - The N-F-G-D `PrivateRehearsalManifest` schema (`REHEARSAL_MANIFEST_SCHEMA_VERSION = 1`, closed 12-key TOML; the
   closed 1-variant `RehearsalVenue`) — a version-gated rehearsal-evidence envelope; additions bump the schema
   version. The type stays incapable of representing a non-rehearsal (`is_rehearsal`/`not_bounty_evidence`
@@ -2425,7 +2520,8 @@ ACCEPTS it is the operator-gated RO-LIVE-01 leg (peer ACCEPT NOT claimed here).
   `ci_check_feed_leader_threshold_view.sh`, `ci_check_forge_successor_evolved_spine.sh`,
   `ci_check_served_chain_stability.sh`) → **134**; the C1-evidence commit BROADENED
   `ci_check_rehearsal_manifest_schema.sh` in place again to ALSO cover the c1 rehearsal manifests — a net
-  tightening, NOT a new file, CI count unchanged).
+  tightening, NOT a new file, CI count unchanged; **N-U** added +2 − 1 retired → **135**; **N-AA** added 1
+  (`ci_check_serve_range_bounded.sh`, DC-SERVEMEM-01) → **136**).
 
 ---
 
@@ -2571,10 +2667,11 @@ How new modules enter the workspace.
     (iv) keep the record a single closed canonical type with the SOLE codec (no `Default`, no `#[non_exhaustive]`,
     `BTreeMap`-ordered) — the field is additive ONLY behind the version gate, NOT a new TYPE.
 
-### CI gates that enforce the boundary (135 total; the N-U / N-F-G-K…G-R / N-F-G-J / N-F-G-D / N-F-G-E / N-F-G-C / N-F-G-B / N-F-G-A / N-F-F / N-F-D-E / N-F-C / N-F-A / N-Z / N-Y / producer / network set)
+### CI gates that enforce the boundary (136 total; the N-AA / N-U / N-F-G-K…G-R / N-F-G-J / N-F-G-D / N-F-G-E / N-F-G-C / N-F-G-B / N-F-G-A / N-F-F / N-F-D-E / N-F-C / N-F-A / N-Z / N-Y / producer / network set)
 
 | Script | Enforces | Cluster |
 |---|---|---|
+| `ci_check_serve_range_bounded.sh` *(NEW N-AA S2)* | **DC-SERVEMEM-01** — the `--mode node` durable-chain serve projection (`ChainDbServedSource`, `ade_runtime::network::served_chain_projection`) reads each peer BlockFetch range via the bounded **hash-free** ChainDb primitives `range_bytes_capped` + `last_block_bytes` (NEVER the unbounded `iter_from_slot` / O(N) `chaindb.tip()`), does NO `SLOT_BY_HASH` / full-index scan, caps each request at the FIXED non-configurable `MAX_SERVE_RANGE_BLOCKS = 256` literal (no CLI / env / config read, no "unbounded" path), and derives each block's hash via the single BLUE `decode_block` / `block_header_bytes` (NO second hash authority, NO `SLOT_BY_HASH` on the serve path); an oversized / inverted / undecodable range fails closed via `ServeRangeOutcome` → wire `NoBlocks`. **Non-vacuous** (pre-S2 HEAD had 2 `iter_from_slot` + 1 `chaindb.tip()` serve calls its Guards 2/3 fire on; S2 has 0). The serve-side analog of `ci_check_live_feed_memory_bounds.sh` (DC-LIVEMEM-01). | N-AA |
 | `ci_check_forged_durable_admit_via_pump.sh` *(NEW N-U S1)* | **DC-NODE-12 + DC-CONS-23 + DC-WAL-04** — the relay-loop `ForgeTick` arm routes the self-accepted forged block through the fenced `node_sync::admit_forged_block_durably` into the SINGLE `forward_sync::pump_block` durable chokepoint (extend-only `admit_via_block_validity` → StoreBlockBytes → AppendWal → AdvanceTip, durable-before-tip); the forge gains NO direct tip-advance path, NO `NodeBlockSource` variant, NO new `WalEntry` variant (reuses `WalEntry::AdmitBlock`); `accepted.into_bytes()` is byte-identical to the self-accept input (no re-encode, I-10); a stale-tip forge fails closed via header-position / `prior_fp`, never an own-block override. `pump_block` stays the sole durable tip authority. | N-U |
 | `ci_check_served_chain_projection.sh` *(NEW N-U S3)* | **DC-NODE-13** — the `--mode node` served view is a READ-ONLY projection of the durable ChainDb: `ChainDbServedSource` (`ade_runtime::network::served_chain_projection`) implements the closed serve seams `ServedHeaderLookup` / `ServedRangeLookup` over `iter_from_slot` / `get_block_by_hash` / `tip`, selected through the closed `ServedChainSource::DurableChainDb` read by the SINGLE `dispatch_server_frame_event_to_outbound` (DC-NODE-07 preserved — exactly one serve dispatch); serves `stored.bytes` verbatim (no re-encode — DC-CONS-17), reuses the single `block_header_bytes` (DC-CONS-18) + `decode_block` (NO parallel splitter, NO `AcceptedBlock` reconstruction); a follower fetches coherent durable history A→B (never B without A) and serving survives restart. Supersedes the retired G-R `ci_check_served_chain_stability.sh` (DC-NODE-11 mechanism). | N-U |
 | `ci_check_chainsync_findintersect_compat.sh` *(NEW N-F-G-M)* | **CN-WIRE-11** — the ChainSync `FindIntersect` points-list array-head is the closed sum `ArrayHead = Definite(u64) / Indefinite` decoded by the scoped `decode_array_head_two_form` (accepts the real-node indefinite-length list; SCOPED to FindIntersect — NOT a general definite/indefinite decoder; no catch-all); the `chain_sync::server` answers `Origin → IntersectFound[Origin]` (the universal common ancestor — does NOT widen the served chain). Pinned against captured cardano-node 11.0.1 FindIntersect/IntersectFound fixtures. | N-F-G-M |
@@ -2655,10 +2752,15 @@ How new modules enter the workspace.
 > one `admit_forged_block_durably` driver call — a net tightening, NO file-count change). The S2 §8-named
 > `ci_check_forged_tip_recovery.sh` was **NOT created** — T-REC-05 is test-enforced (honest drift; `ci_script =
 > ""`).
+> **N-AA added 1 (135 → 136): +1 NEW** `ci_check_serve_range_bounded.sh` (S2, DC-SERVEMEM-01) — fences the
+> `--mode node` durable-chain serve to the bounded hash-free primitives (no `iter_from_slot` / `chaindb.tip()`),
+> the fixed non-configurable `MAX_SERVE_RANGE_BLOCKS` cap, and `decode_block`-only hash derivation. **0 retired,
+> 0 modified-in-place** (the relay-loop containment / served-chain handoff / live-feed memory / serve-projection
+> fences stay byte-unchanged). The serve-side analog of N-F-G-E's `ci_check_live_feed_memory_bounds.sh`.
 > _(The G-H gates `ci_check_single_serve_dispatch_authority.sh` + `ci_check_serve_listener_magic_aware.sh` are part
-> of the 135 total at HEAD but are NOT row-detailed in this table — see the G-H-gap note in the header.)_
-> Earlier-cluster gates (N-A..N-P, the N-M-* set, the N-L wire-session set) are present in the 135 total; the full
-> list is `ls ci/ci_check_*.sh` (= **135**).
+> of the 136 total at HEAD but are NOT row-detailed in this table — see the G-H-gap note in the header.)_
+> Earlier-cluster gates (N-A..N-P, the N-M-* set, the N-L wire-session set) are present in the 136 total; the full
+> list is `ls ci/ci_check_*.sh` (= **136**).
 
 ---
 
@@ -2802,6 +2904,22 @@ How new modules enter the workspace.
   is `praos_vrf_input(slot, epoch_nonce)`); a v1 sidecar MUST fail closed `UnknownVersion`, NEVER default eta0 to
   zero (T-REC-04 / DC-CINPUT-03). The whole G-K…G-R span MUST leave `run_relay_loop`'s containment + the
   served-chain handoff fence byte-unchanged.**
+- **(N-AA, DC-SERVEMEM-01 — RED serve path) the peer-driven `--mode node` serve MUST be bounded and fail
+  closed; it MUST NOT amplify peer-driven storage/CPU.** The `--mode node` durable-chain serve
+  (`ChainDbServedSource`) MUST read each peer BlockFetch range via the bounded **hash-free** ChainDb
+  primitives `range_bytes_capped` + `last_block_bytes` — **NEVER** the unbounded `iter_from_slot` / O(N)
+  `chaindb.tip()` on the peer-driven serve path; MUST do **NO** `SLOT_BY_HASH` / full-index scan and **NO**
+  per-request full-chain materialization (no unbounded `Vec` of peer-requested blocks); MUST cap each request
+  at the **FIXED, non-configurable** `MAX_SERVE_RANGE_BLOCKS = 256` literal — **NO CLI / env / config escape
+  hatch, no "unbounded" mode**; MUST derive each block's hash via the single BLUE `decode_block` /
+  `block_header_bytes` (**NO second / duplicate block-hash authority, NO `SLOT_BY_HASH` on the serve path**);
+  and MUST fail closed on an oversized (`CapExceeded`) / out-of-chain or inverted `from > to` (`Empty`) /
+  undecodable in-range (`ReadError`) range, with **every non-`Served` `ServeRangeOutcome` mapping to the wire
+  `NoBlocks`** (the serve MUST NOT emit a block it cannot authenticate via `decode_block`). The single serve
+  `dispatch_server_frame_event_to_outbound` MUST stay the sole dispatch (**DC-NODE-07** — `ServeRangeOutcome`
+  is an internal serve-read outcome, not a dispatch); within-cap serving MUST stay byte-identical
+  (**DC-CONS-17**); and the trusted recovery / rollback `iter_from_slot` / `tip` internals stay doc-fenced /
+  unchanged. A later slice may **tighten** the cap, never disable it (`ci_check_serve_range_bounded.sh`).**
 
 ### Project-specific additions (Ade)
 
@@ -2963,6 +3081,19 @@ How new modules enter the workspace.
   (DC-LIVEMEM-01). **NARROW claim — bounded memory before decode/apply, NOT full network DoS resistance / peer
   fairness / BA-02 readiness** (per-connection aggregate + per-connection-COUNT / peer-fairness remain future
   hardening). The prior CBOR length-overflow remote-DoS (N-X) was already NOT reintroduced.
+- **Bounded peer-driven SERVE range (CLOSED by PHASE4-N-AA — closes the N-U cross-slice security-review MEDIUM):**
+  the `--mode node` durable-chain serve (`ChainDbServedSource`, DC-NODE-13) — which formerly read each peer
+  BlockFetch range via the unbounded `iter_from_slot` (full `from..tip` materialization + per-block `SLOT_BY_HASH`
+  scan, O(N²)) + an O(N) `chaindb.tip()` — is now BOUNDED before unbounded storage/CPU by the FIXED defensive cap
+  `MAX_SERVE_RANGE_BLOCKS = 256` (symmetric with the receive-side `MAX_WIRE_PUMP_LOOKAHEAD = 256`, DC-LIVEMEM-01),
+  reading via the bounded hash-free `range_bytes_capped` + `last_block_bytes` and failing closed via the closed
+  `ServeRangeOutcome` (`CapExceeded` / `Empty` / `ReadError` → wire `NoBlocks`), with NO CLI / env / config escape
+  hatch, fenced by the NEW `ci_check_serve_range_bounded.sh` (DC-SERVEMEM-01). **NARROW claim — a per-request
+  serve-range bound on the read-only serve path, NOT full network DoS resistance / peer fairness / per-connection-
+  COUNT or repeated-request limits** (those remain SEPARATE, out-of-scope future hardening, as with DC-LIVEMEM-01).
+  **RED-only, 0 BLUE diff; no second hash authority; DC-NODE-07 single dispatch preserved; within-cap serving
+  byte-identical (DC-CONS-17); no RO-LIVE flip** (`RO-LIVE-01` stays `partial`). The trusted recovery / rollback
+  `iter_from_slot` internals are out of scope (doc-fenced, not peer-driven).
 - **Registry `code_locus` must track source moves (`5db9aae`):** any rule citing a renamed/moved `crates/**.rs`
   or `ci/**.sh` path must have its `code_locus` updated; `ci_check_registry_code_locus_exists.sh` fails closed
   on a stale pointer.
@@ -2980,6 +3111,20 @@ How new modules enter the workspace.
 
 > Surfaced honestly per IDD: these are **declared** future attach points, not closed surfaces. Each is named
 > in a registry rule or a cluster CLOSURE record.
+>
+> **N-AA CLOSES pre-RO-LIVE hardening item 1 (bounded peer-driven serve range) — it BROADENS NOTHING below and
+> adds NO new candidate.** PHASE4-N-AA bounds the `--mode node` durable-chain serve (`ChainDbServedSource`,
+> DC-NODE-13) against peer-driven resource amplification — the FIXED `MAX_SERVE_RANGE_BLOCKS = 256` cap +
+> bounded hash-free reads (`range_bytes_capped` / `last_block_bytes`) + fail-closed `ServeRangeOutcome` →
+> `NoBlocks` (`DC-SERVEMEM-01`, enforced; gate `ci_check_serve_range_bounded.sh`). This **CLOSES the PHASE4-N-U
+> cross-slice security-review MEDIUM finding** (item recorded under "Pre-RO-LIVE hardening" below, now marked
+> CLOSED). N-AA is **RED-only (0 BLUE diff)**, adds **NO new extension point** (it BOUNDS the already-closed
+> DC-NODE-13 serve seam — it opens no new one; `CappedSlotRange` + `ServeRangeOutcome` are closed RED value
+> types, the cap is a fixed non-configurable constant), and does **NOT** flip any RO-LIVE rule — bounding serve
+> work ≠ operator-witnessed peer acceptance (`RO-LIVE-01` stays `partial` / operator-gated). The serve-side
+> candidate #0 below stays gating on the operator-witnessed ACCEPT; all other candidates (#0–#3, #5) and the
+> already-retired #4 / #6 are carried UNCHANGED. **There is NO NEW candidate seam from N-AA** (a defensive
+> bounding of an existing closed seam surfaces none).
 >
 > **N-U CLOSES candidate #4 (forged-block durability) and RETIRES the G-R serve-gate mechanism — it BROADENS
 > NOTHING below.** PHASE4-N-U ships forged-block durability: the forge's OWN self-accepted block becomes durable
@@ -3120,6 +3265,27 @@ How new modules enter the workspace.
    independent per-protocol reassembly buffers and per-connection-COUNT / peer-fairness limits remain SEPARATE,
    out-of-scope future hardening slices.
 
+7. **~~Pre-RO-LIVE hardening item 1 — bounded peer-driven serve range~~ — CLOSED by PHASE4-N-AA (HEAD `b0365df0`).**
+   The `--mode node` durable-chain serve (`ChainDbServedSource`, DC-NODE-13) formerly read each peer BlockFetch
+   range via the unbounded `iter_from_slot` (full `from..tip` materialization + a per-block `SLOT_BY_HASH` hash
+   scan, O(N²)) plus an O(N) `chaindb.tip()` on every chain-sync request — a peer-driven resource-amplification
+   path flagged by the **PHASE4-N-U cross-slice security review (MEDIUM)**. N-AA bounds it: (1) the serve reads via
+   the bounded **hash-free** ChainDb primitives `range_bytes_capped` + `last_block_bytes` (NOT `iter_from_slot` /
+   `chaindb.tip()`); (2) each request is capped at the **FIXED, non-configurable** `MAX_SERVE_RANGE_BLOCKS = 256`
+   (symmetric with the receive-side `MAX_WIRE_PUMP_LOOKAHEAD = 256`, DC-LIVEMEM-01) — NO CLI / env / config escape,
+   no unbounded mode; (3) the hash is derived from each block's own bytes via the single BLUE `decode_block`
+   authority (NO second hash authority, NO `SLOT_BY_HASH` on the serve path); (4) an oversized / out-of-chain /
+   inverted (`from > to`) / undecodable range fails closed via the closed `ServeRangeOutcome` (`CapExceeded` /
+   `Empty` / `ReadError`) → wire `NoBlocks` (the serve never emits a block it cannot authenticate). Gate
+   `ci_check_serve_range_bounded.sh` (DC-SERVEMEM-01, `enforced`); the security-review MEDIUM (`5c9f6cf6`) added the
+   inverted-range guard on both `ChainDb` impls. **NARROW: a per-request serve-range bound on the read-only serve
+   path — RED-only (0 BLUE diff); NO second hash authority; DC-NODE-07 single dispatch + DC-CONS-17 within-cap
+   byte-identity preserved; NOT full network DoS resistance / peer fairness / per-connection-COUNT limits (SEPARATE,
+   out-of-scope future hardening, as with DC-LIVEMEM-01); and NO RO-LIVE flip** (`RO-LIVE-01` stays `partial`). The
+   trusted recovery / rollback `iter_from_slot` internals are doc-fenced (not peer-driven), unchanged. _(The
+   serve-side analog of N-F-G-E's bounded receive-side memory; the two are symmetric — receive `MAX_WIRE_PUMP_LOOKAHEAD`
+   / serve `MAX_SERVE_RANGE_BLOCKS`, both = 256.)_
+
 ### Operator-pass execution gates (schema enforced, execution blocked)
 
 - **C1 private-testnet DRY-RUN (NEW, N-F-G-D — CN-REHEARSAL-FIDELITY-01; schema enforced, execution blocked)** —
@@ -3152,6 +3318,48 @@ How new modules enter the workspace.
 ---
 
 ## Generation notes
+
+- **Regenerated (single-cluster CLUSTER-CLOSE refresh, PHASE4-N-AA) at HEAD `b0365df0`** (`git rev-parse
+  --short HEAD` — the *Close PHASE4-N-AA* commit), applied DIRECTLY to the on-disk SEAMS, downstream of the
+  CODEMAP regenerated at the N-AA close (`5c9f6cf6` — **458** canonical types / **136** CI / **334** rules;
+  `b0365df0` is the close commit one past it, with no further code/type/gate change). The prior on-disk SEAMS
+  was pinned at the post-PHASE4-N-U gate-hygiene span (`999199f8` / **458** / **135** / **333**). This refresh
+  splices the **single closed cluster PHASE4-N-AA** (bounded peer-driven serve range — `DC-SERVEMEM-01`) and
+  updates the counts. **N-AA is RED-only — the net BLUE delta is ZERO new canonical types / authorities / fns**
+  (the lone BLUE-tree touch in the close span is a `// Core Contract:` comment header on
+  `ade_ledger/src/block_validity/mod.rs`, no type/authority/export change). It BOUNDS the existing closed
+  DC-NODE-13 durable-chain serve seam — it opens **NO** new seam, plugin, or negotiated surface. Registry →
+  **334** (ONE NEW, `DC-SERVEMEM-01`, `tier = derived`, `introduced_in = "PHASE4-N-AA"`, `enforced`,
+  `ci_script = ci/ci_check_serve_range_bounded.sh`; TWO strengthened — `DC-NODE-13` serve-now-bounded +
+  `DC-LIVEMEM-01` symmetric-serve-side cross-ref; no rule weakened); CI **135 → 136** (NET +1: +1 NEW
+  `ci_check_serve_range_bounded.sh`; 0 retired, 0 modified-in-place).
+- **N-AA delta spot-checked at HEAD `b0365df0` (grep/ls/git only — no `cargo`):** the close span over the BLUE
+  `core_paths` trees adds **zero** `^+(pub )?(struct|enum|fn)` lines (RED-only — the lone BLUE-tree touch is
+  the `// Core Contract:` comment header on `ade_ledger/src/block_validity/mod.rs`). NEW closed RED `pub enum
+  ServeRangeOutcome { Served(Vec<(SlotNo, Hash32, Vec<u8>)>), Empty, CapExceeded, ReadError }` at
+  `crates/ade_runtime/src/network/served_chain_projection.rs:57`, with the FIXED `const MAX_SERVE_RANGE_BLOCKS:
+  usize = 256` at `:50`; NEW closed RED `pub struct CappedSlotRange { blocks: Vec<(SlotNo, Vec<u8>)>,
+  truncated: bool }` at `crates/ade_runtime/src/chaindb/types.rs:46`; NEW `ChainDb` trait methods
+  `range_bytes_capped` (`crates/ade_runtime/src/chaindb/mod.rs:103`) + `last_block_bytes` (`:114`). The serve
+  reads via `range_bytes_capped` (`served_chain_projection.rs:102`) + the O(log N) `last_block_bytes` (`:198`)
+  — **0** `iter_from_slot` / `chaindb.tip()` calls remain on the serve path (the only `tip()` is the serve's own
+  `ServedHeaderLookup::tip()` in a test assertion). The NEW gate `ci_check_serve_range_bounded.sh` is present;
+  `ls ci/ci_check_*.sh | wc -l` = **136**; `grep -cE '^id = ' docs/ade-invariant-registry.toml` = **334** (the
+  new `DC-SERVEMEM-01` present). These RED storage/serve value types are **NOT canonical-counted** (458
+  unchanged).
+- **Cross-reference check (CODEMAP ↔ SEAMS) at the N-AA close:** the **458 / 136 / 334** counts match the
+  CODEMAP header regenerated at the same close exactly. Every module named in the N-AA splice appears in that
+  CODEMAP — `ade_runtime::network::served_chain_projection (ChainDbServedSource, ServeRangeOutcome,
+  MAX_SERVE_RANGE_BLOCKS)`, `ade_runtime::chaindb::{types (CappedSlotRange), mod (range_bytes_capped /
+  last_block_bytes)}` — all inventoried there; the CODEMAP header's PHASE4-N-AA delta names the same one rule
+  (`DC-SERVEMEM-01`) + the +1 CI gate + the same two strengthenings (`DC-NODE-13` / `DC-LIVEMEM-01`). No stale
+  module references; no drift vs CODEMAP unreconciled.
+- **Candidate seams surfaced for confirm/reject (this cluster):** **NONE NEW.** PHASE4-N-AA is a defensive
+  **bounding of an already-closed seam** (the DC-NODE-13 durable-chain serve) — it introduces no new ingress
+  surface, no new closed/extensible registry beyond the closed RED value types (`ServeRangeOutcome` /
+  `CappedSlotRange`) and the fixed non-configurable cap (`MAX_SERVE_RANGE_BLOCKS`), and no new version-gated
+  contract. The serve-read primitives + cap have a single mechanical fence (`ci_check_serve_range_bounded.sh`,
+  DC-SERVEMEM-01). No human-judgment item is outstanding from this cluster.
 
 - **Focused single-span refresh (post-PHASE4-N-U gate hygiene) at HEAD `999199f8`** (`git rev-parse --short
   HEAD`), applied DIRECTLY to the on-disk SEAMS. Brings SEAMS current from its last pin (`4e358e92`, the
