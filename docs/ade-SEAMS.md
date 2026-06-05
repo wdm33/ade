@@ -3,12 +3,140 @@
 > **Status:** Living architectural document. Regenerated; not hand-edited.
 > Per-project instance of `~/.claude/methodology/templates/seams.md`.
 
-> 11 crates, **457 canonical types**, **126 CI checks** at HEAD (`550eec3a`, PHASE4-N-F-G-J cluster close).
+> 11 crates, **458 canonical types**, **134 CI checks** at HEAD (`65954fa3`, multi-cluster catch-up: PHASE4-N-F-G-K…G-R + C1 evidence).
 > Reads CODEMAP (`docs/ade-CODEMAP.md`, regenerated at the same HEAD) for the module
 > list + TCB colors, and the invariant registry (`docs/ade-invariant-registry.toml` —
-> **319 entries** at HEAD) for the rule IDs that gate each closed surface.
+> **328 entries** at HEAD) for the rule IDs that gate each closed surface.
 >
-> ### PHASE4-N-F-G-J (closing, `550eec3a`) — PrevHash null/hash32 wire authority + position-aware header rule + genesis-successor cold-start forge on the `--mode node` spine
+> ### PHASE4-N-F-G-K … G-R + C1 evidence (catch-up, `65954fa3`) — serve-side real-node compat + feed decode/view fidelity + forge-successor + monotone serve gate + recovered eta0
+>
+> **This regeneration is a multi-cluster CATCH-UP refresh.** The prior on-disk SEAMS was pinned at the
+> PHASE4-N-F-G-J close (`550eec3a` / **457** canonical types / **126** CI / **319** rules). It is brought current
+> to the CODEMAP regenerated at the same HEAD (`65954fa3` / **458** canonical types / **134** CI / **328** rules),
+> splicing the **eight closed clusters G-K → G-R + the C1 genesis-successor rehearsal evidence**. **The WHOLE
+> span adds ONLY closed sums + version-gated fields — NO new extensible / negotiated / plugin / runtime-registered
+> surface (verified two ways: (a) `git diff --name-only 550eec3a..65954fa3` touches exactly the BLUE `core_paths`
+> files `ade_network/src/{handshake/version_table.rs, chain_sync/server.rs, codec/{chain_sync,primitives}.rs}` +
+> `ade_ledger/src/{seed_consensus_inputs.rs, consensus_view.rs}`, the rest RED/GREEN/test; (b) the net BLUE delta
+> is ONE canonical type (`ArrayHead`, G-M), two additive BLUE fns (`encode_n2n_version_params` G-L,
+> `decode_array_head_two_form` G-M), and one additive BLUE record-field + version-gate bump
+> (`SeedEpochConsensusInputs.epoch_nonce` + `SEED_CINPUT_SCHEMA_VERSION 1 → 2`, G-N)).** The eight headline rules
+> (G-N ships two) are all `enforced`; registry **319 → 328** (+9); CI **126 → 134** (+8, one gate per cluster).
+> The seam-relevant additions — each classified under §3 Closed / §4 Frozen / §4 Version-gated, **none
+> extensible** — are:
+>
+> - **NEW CLOSED BLUE enum `ArrayHead = Definite(u64) | Indefinite`** (`ade_network::codec::primitives` (BLUE);
+>   the `codec/` BLUE submodule count **38 → 39**, total **457 → 458**; **CN-WIRE-11 / G-M**) — the two-form CBOR
+>   array-head grammar for real cardano-node ChainSync `FindIntersect`. A real cardano-node sends the points list
+>   as a CBOR **INDEFINITE-length** array (`0x9f … 0xff`); the closed BLUE fn `decode_array_head_two_form` accepts
+>   BOTH the definite (`9f…`) and indefinite forms, and on `Indefinite` the caller consumes the matching `0xff`
+>   break. **SCOPED to ChainSync `FindIntersect`** — it is NOT a general definite/indefinite decoder for the rest
+>   of the closed wire grammar (the rest stays definite-only); **no catch-all**. Paired with the
+>   `chain_sync::server` `Origin → IntersectFound[Origin]` reply (the universal common ancestor; matches the real
+>   node, does NOT widen the served chain). Pinned against captured cardano-node 11.0.1 FindIntersect/IntersectFound
+>   fixtures. A surface REDUCTION for real-node compat, **NOT an extension point.** Classified under §3 Closed /
+>   §4 Frozen; fenced by `ci_check_chainsync_findintersect_compat.sh`.
+> - **VERSION-GATED field `SeedEpochConsensusInputs.epoch_nonce: Nonce`** behind `SEED_CINPUT_SCHEMA_VERSION 1 → 2`
+>   (`ade_ledger::seed_consensus_inputs` (BLUE); **T-REC-04 + DC-CINPUT-03 / G-N**) — persists the recovered Praos
+>   eta0 in the seed-epoch sidecar so the WarmStart forge VRF input is `praos_vrf_input(slot, epoch_nonce)` (a
+>   recovered follower no longer fails `VRFKeyBadProof`). **A versioned-GATE evolution, NOT a new open surface:**
+>   the field is additive ONLY behind the schema bump; `SeedEpochConsensusInputs` stays a single closed canonical
+>   type with the SOLE codec (no `Default`, no `#[non_exhaustive]`, `BTreeMap`-ordered, byte-canonical); a **v1
+>   sidecar that omitted `epoch_nonce` decodes as `UnknownVersion`, NEVER a default-to-zero eta0** (verified:
+>   `seed_consensus_inputs.rs` `SEED_CINPUT_SCHEMA_VERSION = 2`, the decoder rejects `version != 2` as
+>   `UnknownVersion`, and a v1-shape test pins the fail). Classified under §4 Version-gated; fenced by
+>   `ci_check_warmstart_eta0_overlay.sh`. **NO new canonical TYPE** (458 unchanged — a field on an existing closed
+>   record).
+> - **FROZEN per-version N2N `versionData` wire encoding `encode_n2n_version_params(version, network_magic)`**
+>   (`ade_network::handshake::version_table` (BLUE); an additive BLUE **fn**, no struct/enum — 458 unchanged;
+>   **CN-WIRE-10 / G-L**) — the serve-side N2N handshake was emitting a `versionData` a real cardano-node rejected
+>   (`HandshakeDecodeError NodeToNodeV_15 'unknown encoding: TInt 1'`). The single per-version `versionData`
+>   encoder emits, for V11..=V15, the 4-field `NodeToNodeVersionData` `[networkMagic,
+>   initiatorAndResponderDiffusionMode, peerSharing, query]` (and the extended V16+ shape) — so a real
+>   cardano-node accepts the serve-side handshake at NodeToNodeV_15. **The N2N version table is a CLOSED / FROZEN
+>   contract:** this is the single per-version encoder over the **unchanged closed `N2N_SUPPORTED` version SET** —
+>   **NO version-set widening, NO runtime negotiation of meaning** (a successful handshake is a wire-layer event,
+>   not peer acceptance). Classified under §4 Frozen (real-node-compat strengthening of the closed version table);
+>   fenced by `ci_check_n2n_handshake_versiondata_authority.sh`.
+> - **REUSES the FROZEN tag-24 authority — feed-side BlockFetch tag-24 unwrap** (`ade_runtime::admission::wire_pump`
+>   (RED); **CN-WIRE-12 / G-O**) — the live admission feed was handing a peer's BlockFetch `MsgBlock` payload to
+>   the BLUE decoder WITHOUT first stripping its tag-24 (`0xd8 0x18`) CBOR-in-CBOR envelope (`UnexpectedType`). G-O
+>   makes the feed-side WirePump strip it via the **single `ade_codec::unwrap_tag24` authority BEFORE the BLUE
+>   decode** (mirroring the already-correct `admission::runner` + `ade_core_interop::follow` paths). **There is NO
+>   second `unwrap_tag24` / parallel tag-24 parser** — the single `CN-WIRE-08` (N-X) authority is reused. NOT a new
+>   serializer / parallel envelope / extension point; a decode-boundary fix. Classified under §4 Frozen (reuses
+>   the frozen tag-24 authority); fenced by `ci_check_feed_tag24_unwrap.sh`.
+> - **RED `ade_node` orchestration deltas — no new attach point** (`G-K` `DC-NODE-09`, `G-P` `DC-CINPUT-04`, `G-Q`
+>   `DC-NODE-10`, `G-R` `DC-NODE-11`; all RED, NO BLUE change, 458 unchanged): **G-K** decouples the `--mode node`
+>   serve-listener lifetime from feed end (the serve sibling, spawned OUTSIDE `run_relay_loop`, stays up serving
+>   past feed-end so a follower keeps fetching) — `ci_check_node_serve_lifetime.sh`; **G-P** sources the feed-side
+>   header-validation view (the leader-threshold stake distribution for Steps 5 + 7) from the recovered consensus
+>   surface (`PoolDistrView::from_seed_epoch_consensus_inputs`) so a valid live block 0 is ingested
+>   (`VerificationFailed` gone) — `ci_check_feed_leader_threshold_view.sh`; **G-Q** derives the forge-SUCCESSOR
+>   position `(last_admitted_block_no + 1, PrevHash::Block(last_admitted_hash))` from the evolved admitted spine
+>   state (not the stale recovered tip) — the first stable node, block 1+, reusing the G-J `forge_header_position`
+>   convention, no new variant / `NodeBlockSource` — `ci_check_forge_successor_evolved_spine.sh`; **G-R** adds a
+>   **monotone serve gate** (`node_lifecycle::serve_gate_admits(highest_served_block_no, candidate_block_no)`) so
+>   the served tip never regresses once block 0 is served (a candidate that would move the served chain backward,
+>   or re-serve an already-served height with a divergent hash, is refused) — a genesis-successor follower adopts
+>   a **stable served block 0** — `ci_check_served_chain_stability.sh`. Each is **RED orchestration wiring inside
+>   `node_lifecycle` / `node_sync`**, threading evolved-spine / recovered-view / serve-gate state through existing
+>   signatures — **NO new closed enum / `NodeBlockSource` / `CoordinatorEvent` / `Mode` variant, NO new `--mode
+>   node` flag, NO new BLUE authority, NO plugin/negotiated surface.** `run_relay_loop`'s containment is
+>   byte-unchanged; the serve sibling stays read-only over the `ServedChainView`. Classified under §3 Closed
+>   (closed RED vocabulary / fences); each backs a `derived` `enforced` rule.
+> - **C1 genesis-successor rehearsal evidence (carried — `129d25ac`, `65954fa3`):** docs/evidence + CI only, **NO
+>   crate changed**. A real Haskell follower on the C1 private testnet adopts Ade's stable served block 0,
+>   captured at `docs/evidence/c1-genesis-rehearsal-{follower.log,peer-accept.jsonl,manifest.toml}` + the run-2
+>   reproduction + the reproduction runbook; `65954fa3` broadens the rehearsal-manifest schema gate
+>   (`ci_check_rehearsal_manifest_schema.sh`) IN PLACE to ALSO cover the c1 rehearsal manifests (a gate-scope
+>   broadening, NOT a new gate; CI count unchanged at 134). It is fenced by the non-promotable
+>   `PrivateRehearsalManifest` envelope (`is_rehearsal` / `not_bounty_evidence` literals, distinct rehearsal home).
+>
+> **Registry → 328 rules** (NEW `DC-NODE-09` (G-K), `CN-WIRE-10` (G-L), `CN-WIRE-11` (G-M), `T-REC-04` (G-N,
+> **tier = true**) + `DC-CINPUT-03` (G-N), `CN-WIRE-12` (G-O), `DC-CINPUT-04` (G-P), `DC-NODE-10` (G-Q),
+> `DC-NODE-11` (G-R) — all `enforced`; no rule weakened). **126 → 134 CI** (one new gate per cluster:
+> `ci_check_node_serve_lifetime.sh` + `ci_check_n2n_handshake_versiondata_authority.sh` +
+> `ci_check_chainsync_findintersect_compat.sh` + `ci_check_warmstart_eta0_overlay.sh` + `ci_check_feed_tag24_unwrap.sh`
+> + `ci_check_feed_leader_threshold_view.sh` + `ci_check_forge_successor_evolved_spine.sh` +
+> `ci_check_served_chain_stability.sh`; the C1 evidence commit broadened `ci_check_rehearsal_manifest_schema.sh` in
+> place — no count change).
+>
+> **Boundary honesty (load-bearing — do NOT soften / do NOT broaden).** The whole G-K…G-R span is **serve-side
+> real-node compat + feed decode/view fidelity + forge-successor continuity + a monotone serve gate + an explicit
+> recovered eta0** — and **nothing more**. The `ArrayHead` indefinite-length acceptance is **SCOPED to ChainSync
+> `FindIntersect`** (NOT a general definite/indefinite decoder); the `Origin → IntersectFound[Origin]` reply
+> matches the real node and **does NOT widen the served chain** beyond the Origin intersect. The `versionData`
+> encoder is over the **unchanged closed `N2N_SUPPORTED` version SET** (no widening, no runtime negotiation); a
+> successful handshake is a wire-layer event, **NOT peer acceptance**. The feed tag-24 unwrap **reuses the single
+> `CN-WIRE-08` authority** (no parallel parser). The `epoch_nonce` schema bump is **version-GATED** (a v1 sidecar
+> fails closed as `UnknownVersion`, never silently zero-eta0); the WarmStart overlay supplies the recovered eta0
+> to the forge VRF input but **does NOT make the recovered sidecar a runtime authority for nonce evolution** (the
+> BLUE `consensus::nonce` transitions stay undriven on the forge path, DC-EPOCH-03). The forge-successor position
+> is faithful to the admitted spine but the forge still holds **no `ChainDb` handle** — it advances **no durable
+> tip** (the "first stable node, block 1+" claim is in-memory spine continuity past block 0, **NOT** durable
+> block-1+ persistence — that is N-U). The monotone serve gate makes the served tip monotone so a follower adopts
+> a stable block 0 — it is a **served-chain STABILITY** fix on the read-only serve path, **NOT** a durable-tip
+> advance and **NOT** a peer-acceptance claim. **NO RO-LIVE flip** across the entire span — `RO-LIVE-01` stays
+> `partial` / operator-gated; the C1 evidence is a **rehearsal REPRODUCTION**, NOT a bounty-completion claim
+> (private C1 acceptance ≠ bounty completion; preview/preprod acceptance = the single bounty deliverable). **NO
+> new BLUE authority beyond the one closed `ArrayHead` enum + the two additive BLUE fns + the one version-gated
+> field; NO new extensible / negotiated / plugin surface; NO new `--mode node` flag / `NodeBlockSource` /
+> `CoordinatorEvent` / `Mode` variant.** `run_relay_loop`'s containment is byte-unchanged.
+>
+> > **NOTE — the G-H serve-to-peer §1/§3/§5 bodies are still carried-only (the G-K…G-R serve deltas are spliced).**
+> > The intervening **PHASE4-N-F-G-H** cluster (the NEW RED `ade_runtime::network::serve_dispatch`,
+> > `ade_node::node_lifecycle::{run_node_serve_task, bind_serve_listener, ServeStartError}`, the additive BLUE fn
+> > `n2n_supported_for_magic`, `DC-NODE-07`, the gates `ci_check_single_serve_dispatch_authority.sh` +
+> > `ci_check_serve_listener_magic_aware.sh`) is documented in the CODEMAP carried delta but its serve-to-peer §1
+> > surface + §3 `ServeStartError` row + §5 serve-gate rows are **NOT** spliced into the §1–§7 bodies below — the
+> > G-K…G-R serve-side deltas (G-K lifetime decouple, G-L `versionData`, G-M FindIntersect/Origin, G-R monotone
+> > serve gate) EXTEND that G-H serve sibling, and are folded into §3/§4/§5/§6 + the per-cluster note above. The
+> > header counts (458 / 134 / 328) are the true HEAD values and DO include G-H's contributions; a fuller G-H §1
+> > serve-to-peer surface catch-up is the recommended follow-on. **Treat the §1–§7 bodies as current through
+> > G-R for everything EXCEPT the G-H §1 serve-to-peer surface block.**
+>
+> ### PHASE4-N-F-G-J (closed, `550eec3a`) — PrevHash null/hash32 wire authority + position-aware header rule + genesis-successor cold-start forge on the `--mode node` spine
 >
 > **This regeneration is a scoped DELTA-REFRESH at the PHASE4-N-F-G-J close.** It brings the counts and the
 > closed-surface tables current with the CODEMAP regenerated at the same HEAD (`550eec3a` / **457** canonical
@@ -1696,6 +1824,13 @@ ACCEPTS it is the operator-gated RO-LIVE-01 leg (peer ACCEPT NOT claimed here).
 
 | Registry | Location | Count | Change Rule |
 |----------|----------|-------|-------------|
+| `ArrayHead` *(NEW, N-F-G-M / CN-WIRE-11)* | `ade_network::codec::primitives` (BLUE) | 2 (`Definite(u64)` / `Indefinite`) | The closed two-form CBOR array-head grammar for real cardano-node ChainSync `FindIntersect`. The closed BLUE fn `decode_array_head_two_form(protocol, data, offset)` decodes BOTH the definite (`9f…`/`98…`) and the indefinite (`0x9f … 0xff`) forms; on `Indefinite` the caller consumes the matching `0xff` break. **NOT `#[non_exhaustive]`.** The codec/ BLUE submodule count `38 → 39` (total **457 → 458**) — the LONE new BLUE canonical type in the whole G-K…G-R span. **SCOPED to ChainSync `FindIntersect`** (`decode_find_intersect_points` consumes it; the rest of the closed wire grammar stays definite-only — `ArrayHead` / `decode_array_head_two_form` is NOT a general definite/indefinite decoder); **no catch-all**. Paired with the `chain_sync::server` `Origin → IntersectFound[Origin]` reply (the universal common ancestor — matches the real node, does NOT widen the served chain). Pinned against captured cardano-node 11.0.1 FindIntersect/IntersectFound fixtures. **A closed BLUE sum (a surface REDUCTION for real-node wire compat), NOT an extension point.** Backs **CN-WIRE-11**. New variant = a `decode_array_head_two_form` arm + a strengthening of **CN-WIRE-11** (`ci_check_chainsync_findintersect_compat.sh`); the indefinite acceptance MUST stay scoped to FindIntersect, and the `Origin` reply MUST NOT widen the served chain beyond the Origin intersect. |
+| Per-version N2N `versionData` encoding (`encode_n2n_version_params`) *(NEW fn, N-F-G-L / CN-WIRE-10)* | `ade_network::handshake::version_table` (BLUE) | the SINGLE per-version `versionData` encoder over the **unchanged closed `N2N_SUPPORTED` version SET** (V11..=V15 → the 4-field `[networkMagic, diffusionMode, peerSharing, query]`; V16+ → the extended shape) | The single per-version N2N `versionData` wire encoding — for V11..=V15 the 4-field `NodeToNodeVersionData` (`diffusionMode = true`, `peerSharing = NoPeerSharing(0)`, `query = false`), for V16+ the extended shape — so a real cardano-node accepts the serve-side handshake at NodeToNodeV_15 (fixes `HandshakeDecodeError NodeToNodeV_15 'unknown encoding: TInt 1'`). An additive BLUE **fn** (no struct/enum — 458 unchanged) over the unchanged closed `N2N_SUPPORTED` version SET. **NO version-set widening, NO runtime negotiation of meaning** (a successful handshake is a wire-layer event, NOT peer acceptance — `RO-LIVE-01` stays `partial`). **A closed per-version wire encoder (a surface REDUCTION / real-node-compat strengthening of the closed version table), NOT an extension point.** Backs **CN-WIRE-10**. A new per-version shape = a `encode_n2n_version_params` arm + a strengthening of **CN-WIRE-10** (`ci_check_n2n_handshake_versiondata_authority.sh` — the single per-version encoder + the per-version field shape, pinned against the real-node handshake fixture); the closed `N2N_SUPPORTED` version SET MUST NOT be widened and no runtime negotiation of meaning may be introduced. |
+| Feed-side BlockFetch tag-24 unwrap (REUSES the frozen authority) *(N-F-G-O / CN-WIRE-12)* | `ade_runtime::admission::wire_pump` (RED) | REUSES the single `ade_codec::unwrap_tag24` (CN-WIRE-08) authority; **NO new serializer / parallel parser** | The feed-side WirePump strips the peer's BlockFetch `MsgBlock` tag-24 (`0xd8 0x18`) CBOR-in-CBOR envelope via the single `ade_codec::unwrap_tag24` authority **BEFORE** the BLUE decode (so the live feed decodes the inner `[era, block]` cleanly — `UnexpectedType` gone), mirroring the already-correct `admission::runner` + `ade_core_interop::follow` paths. **There is NO second `unwrap_tag24` / hand-rolled tag-24 parse** — the single `CN-WIRE-08` (N-X) authority is reused; a non-tag-24 / malformed payload fails closed. **A closed decode-boundary reuse (a surface REDUCTION over the frozen tag-24 authority), NOT a new closed enum / parallel envelope / extension point.** Backs **CN-WIRE-12**. Adding a feed-side unwrap site = a strengthening of **CN-WIRE-12** (`ci_check_feed_tag24_unwrap.sh` — the feed-side WirePump unwraps via `ade_codec::unwrap_tag24` before decode, and adds no hand-rolled tag-24 parse); no parallel tag-24 authority may be introduced. |
+| `serve_gate_admits` monotone serve gate *(NEW, N-F-G-R / DC-NODE-11)* | `ade_node::node_lifecycle` (RED; the serve sibling spawned OUTSIDE `run_relay_loop`) | pure predicate `serve_gate_admits(highest_served_block_no: Option<u64>, candidate_block_no: u64) -> bool` | The closed monotone serve gate: once block 0 (the genesis successor) is served, the served tip only ever advances — a candidate that would move the served chain backward (`candidate_block_no <= highest_served_block_no`), or re-serve an already-served height, is **refused**, so a genesis-successor follower adopts a **stable served block 0** (`serve_gate_admits(None, 0)` admits; `serve_gate_admits(Some(0), 0)` refuses a re-served block 0; `serve_gate_admits(Some(0), 1)` admits the advance; `serve_gate_admits(Some(5), 5)` refuses an equal height). RED, read-only over the `ServedChainView`; admits nothing to the durable tip (no `ChainDb` handle). **A closed read-only serve fence (a surface REDUCTION / served-chain STABILITY fix), NOT an extension point.** Backs **DC-NODE-11**. New gate behavior = a strengthening of **DC-NODE-11** (`ci_check_served_chain_stability.sh` — the served tip never regresses; an already-served height is not re-served with a divergent hash). |
+| Forge-successor position from the evolved admitted spine *(NEW, N-F-G-Q / DC-NODE-10)* | `ade_node::node_sync` (RED — `forge_one_from_recovered` threading) | reuses the closed G-J `forge_header_position` convention; **NO new variant / `NodeBlockSource`** | After the genesis-successor block 0 is admitted, the NEXT forge derives `(block_number, prev_hash) = (last_admitted_block_no + 1, PrevHash::Block(last_admitted_hash))` from the **evolved admitted spine state** (the position the just-admitted block established), NOT the stale recovered tip — yielding the first stable node (block 1+, no successor crash). It reuses the SINGLE G-J `forge_header_position` convention; the forge still holds NO `ChainDb` handle (advances no durable tip — durability is N-U). **A closed RED forge-position threading (a surface REDUCTION), NOT an extension point.** Backs **DC-NODE-10**. A change to the successor position = a strengthening of **DC-NODE-10** (`ci_check_forge_successor_evolved_spine.sh` — the successor forge position is sourced from the evolved admitted spine, not the stale recovered tip); no new variant, no second forge codepath, no RO-LIVE flip. |
+| Feed header-validation view from the recovered consensus surface *(NEW, N-F-G-P / DC-CINPUT-04)* | `ade_node::node_lifecycle` (RED — feed header/ledger Step-5/7 validation) | sources the leader-threshold view via the BLUE `PoolDistrView::from_seed_epoch_consensus_inputs`; **NO new closed enum** | The feed's header-step + ledger Step-5/7 validation derives its leader-threshold stake-distribution view (+ the VRF-keyhash / ASC / total-active-stake inputs) from the **recovered consensus surface** (`from_seed_epoch_consensus_inputs`, the same projection the forge handoff consumes), NOT a defaulted / empty distribution — so a valid live block 0 is ingested (`VerificationFailed` gone). The verdict stays BLUE (Steps 5 + 7 are BLUE authorities); G-P only sources the VIEW. **A closed RED view-provenance threading (a surface REDUCTION), NOT an extension point.** Backs **DC-CINPUT-04**. A change to the feed view = a strengthening of **DC-CINPUT-04** (`ci_check_feed_leader_threshold_view.sh` — the feed header-validation view is derived from the recovered consensus surface, never a defaulted / empty distribution). |
+| Serve-listener lifetime decoupled from feed end *(NEW, N-F-G-K / DC-NODE-09)* | `ade_node::node_lifecycle` (RED — the serve sibling on the `On` arm) | RED lifetime fence; **NO new closed enum / variant** | The `--mode node` serve listener's lifetime is **independent of the live feed's end** — the serve sibling (`run_node_serve_task`, spawned OUTSIDE `run_relay_loop`) stays up serving past feed-end, so a follower mid-fetch keeps fetching (validated against the live C1 follower reaching `:3002`). RED, read-only over the self-accepted `ServedChainView`; admits nothing, advances no durable tip, makes no peer-acceptance claim. **A closed RED serve-lifetime fence (a surface REDUCTION), NOT an extension point.** Backs **DC-NODE-09**. A change to the serve lifetime = a strengthening of **DC-NODE-09** (`ci_check_node_serve_lifetime.sh` — the serve listener's lifetime is independent of the feed source's end); `run_relay_loop`'s containment is byte-unchanged (the serve task lives outside it). |
 | `PrevHash` *(NEW, N-F-G-J S2)* | `ade_types::shelley::block` (BLUE) | 2 (`Genesis` = CBOR null / `Block(Hash32)` = hash32) | The closed Cardano header `prev_hash` wire grammar `$hash32 / null` (cardano-ledger `PrevHash = GenesisHash / BlockHash`), replacing the prior flat `prev_hash: Hash32` field (**456 → 457** canonical types). **NOT `#[non_exhaustive]`.** ONE **POSITION-BLIND** BLUE codec authority — `ade_codec::shelley::block::decode_prev_hash` decodes `null -> Genesis` / `hash32 -> Block` as a pure function of the CBOR token (NEVER `block_number`); the `ShelleyHeaderBody` `AdeEncode` writes `Genesis -> write_null` / `Block(h) -> write_bytes_canonical`. The `null` grammar is scoped to **header_body ONLY** — it MUST NOT leak into the chain-sync/block-fetch `Point`/`Tip` codec (`Point::Origin` stays `array(0)`). The position-AWARE coupling (`block_number 0 <=> Genesis`) lives in the SEPARATE single BLUE `ade_ledger::block_validity::header_position::check_header_position`, NEVER in `ade_codec`. **A closed BLUE sum (a surface REDUCTION over the wire grammar), NOT an extension point.** Backs **CN-WIRE-09**. New variant = a `decode_prev_hash` arm + an `AdeEncode` arm + a strengthening of **CN-WIRE-09** (`ci_check_prevhash_single_wire_authority.sh`); the codec stays POSITION-BLIND, the null grammar stays header_body-scoped, and the single wire + single position authority MUST NOT be duplicated. |
 | `NodeSchedEvent` + `FeedReason` + `ForgeOutcome` *(NEW, N-F-G-J S1)* | `ade_node::live_log::sched_event` (GREEN) | `NodeSchedEvent` 5 (`FeedUnavailable{reason}` / `ForgeTickConsidered` / `ForgeTickSkipped{reason}` / `ForgeAttempted` / `ForgeResult{outcome}`); `FeedReason` 3 (`NoBlockAvailable` / `CleanEmpty` / `UnknownDisconnected`); `ForgeOutcome` 4 (`Succeeded` / `NotLeader` / `Failed` / `NoTipAvailable`) | The closed `--mode node` feed/forge **scheduling-event vocabulary**, byte-deterministically JSONL-encoded by `live_log::sched_writer`. **None is `#[non_exhaustive]`; there is deliberately NO catch-all / `Other` variant and no stringly-typed field** (`reason`/`outcome` are the closed enums; `as_str` is the stable discriminator). **EMIT-ONLY:** the GREEN planner never constructs or reads a `NodeSchedEvent`; the relay loop (`run_relay_loop_with_sched`) emits them around the planner call + the `LoopStep` arms, recording the scheduling decision WITHOUT altering it (`FeedReason::eligible` mirrors the planner's forge-eligibility predicate, but the event is observation only). Allow-list + negative tests. Lives in `ade_node` (NOT a BLUE `core_paths` entry), so **NOT canonical-counted**. **A closed diagnostic vocabulary (a surface REDUCTION), NOT an extension point.** Backs **CN-NODE-04**. New event/reason/outcome = an exhaustive-`match` arm in the encoder (compile error until wired + allow-listed) + a negative test + a strengthening of **CN-NODE-04** (`ci_check_node_sched_events_emit_only.sh` — the planner must never name the vocabulary). |
 | `BlockValidityError::HeaderPositionInvalid` *(NEW additive variant, N-F-G-J S3)* | `ade_ledger::block_validity` (BLUE) | additive variant `{ block_number, expected, actual }`-shape on the closed `BlockValidityError` sum | The closed fail-closed signal raised by the single BLUE position authority `check_header_position` (`block_number 0 <=> Genesis`). Added **additively, no wildcard**; it folds into the **UNCHANGED** closed `BlockRejectClass::HeaderInvalid` (verdict.rs — **NO new reject class**). Surfaced by `decode_block` BEFORE the header authority. **A closed additive enum variant (a surface REDUCTION), NOT an extension point.** Backs **CN-WIRE-09 / DC-NODE-08**. New variant = a `check_header_position` arm + a `BlockRejectClass` mapping arm (folding into an existing coarse class) + a strengthening of **CN-WIRE-09**; non-secret position primitives only. |
@@ -1731,9 +1866,9 @@ ACCEPTS it is the operator-gated RO-LIVE-01 leg (peer ACCEPT NOT claimed here).
 | `NodeStart` *(N-F-C)* | `ade_node::node_lifecycle` (RED) | 2 (`FirstRun` / `WarmStart`) | The closed start classification — a PURE function of on-disk state. No third "ambiguous" mode. New variant = a strengthening of CN-NODE-01. |
 | `NodeSyncError` *(N-F-C)* | `ade_node::node_sync` (RED) | 2 (`Pump(String)` / `Capture(String)`) | The closed sync-driver fail-closed halt set. New variant = a strengthening of **DC-SYNC-01 / DC-SYNC-02**. |
 | `NodeForgeError` *(N-F-C; exercised by the N-F-E forge tick + N-F-F On arm + N-F-G-A tick)* | `ade_node::node_sync` (RED) | 1 (`MissingRecoveredConsensusInputs`) | The closed forge-handoff fail-closed set: a forge over a base that carries NO recovered seed-epoch record is unrepresentable. New variant = a strengthening of **CN-CINPUT-03 / DC-CINPUT-02b / DC-NODE-05**. |
-| `SeedEpochConsensusInputs` *(N-F-A)* | `ade_ledger::seed_consensus_inputs` (BLUE) | closed canonical record; **version-gated** behind `SEED_CINPUT_SCHEMA_VERSION = 1` | The recovered seed-epoch consensus-input record with a **SOLE** encoder/decoder pair. `decode_*` rejects any version != the constant fail-closed, and rejects a structurally-valid-but-non-canonical buffer. No `Default`, no `#[non_exhaustive]`, `BTreeMap`. New field / version = a `decode_*` arm + a `SEED_CINPUT_SCHEMA_VERSION` bump + a strengthening of **CN-CINPUT-01**. No second codec. |
+| `SeedEpochConsensusInputs` *(N-F-A; +`epoch_nonce` field, schema `1 → 2` N-F-G-N)* | `ade_ledger::seed_consensus_inputs` (BLUE) | closed canonical record; **version-gated** behind `SEED_CINPUT_SCHEMA_VERSION = 2` (now a 7-field outer record) | The recovered seed-epoch consensus-input record with a **SOLE** encoder/decoder pair. **N-F-G-N added the additive BLUE field `epoch_nonce: Nonce`** (the recovered Praos eta0 for `epoch_no`) and **bumped `SEED_CINPUT_SCHEMA_VERSION 1 → 2`** — the field is additive ONLY behind the bump; a **v1 sidecar that omitted `epoch_nonce` decodes as `UnknownVersion`, NEVER a default-to-zero eta0** (verified: the decoder rejects `version != 2` as `UnknownVersion`; a v1-shape test pins the fail). `decode_*` rejects any version != the constant fail-closed, and rejects a structurally-valid-but-non-canonical buffer. No `Default`, no `#[non_exhaustive]`, `BTreeMap`. **A closed canonical record evolving behind a VERSION GATE (a version-gated field add, NOT a new TYPE — 458 unchanged), NOT an extension point.** Backs **CN-CINPUT-01** (strengthened by **T-REC-04 / DC-CINPUT-03**). New field / version = a `decode_*` arm + a `SEED_CINPUT_SCHEMA_VERSION` bump + a strengthening of **CN-CINPUT-01**; the recovered eta0 MUST be carried verbatim (never default-to-zero) and the v1→v2 gate MUST fail closed (`ci_check_warmstart_eta0_overlay.sh`). No second codec. |
 | `SeedConsensusInputsError` *(N-F-A)* | `ade_ledger::seed_consensus_inputs` (BLUE) | 6 (`MalformedCbor` / `UnknownVersion` / `Structural` / `NonCanonicalMapOrder` / `DuplicatePoolKey` / `TrailingBytes`) | The closed `decode_*` failure set. New variant = a strengthening of **CN-CINPUT-01**; non-secret primitives only; MUST fail closed. |
-| `SeedConsensusMergeError` *(N-F-A)* | `ade_runtime::seed_consensus_merge` (GREEN) | 2 (`PoolMissingVrfKeyhash` / `PoolMissingStake`) | A pool present in exactly one source map fails closed here, **never a zero-hash fill**. New variant = a strengthening of the merge contract (CN-CINPUT-02). No catch-all. |
+| `SeedConsensusMergeError` *(N-F-A; carries recovered eta0 N-F-G-N)* | `ade_runtime::seed_consensus_merge` (GREEN) | 2 (`PoolMissingVrfKeyhash` / `PoolMissingStake`) | A pool present in exactly one source map fails closed here, **never a zero-hash fill**. **N-F-G-N:** the merge now also carries the recovered Praos `epoch_nonce` (eta0) verbatim into the BLUE record's new `epoch_nonce` field — a pure field-pass, **never default-to-zero** (DC-CINPUT-03 forbids a zero-eta0 fallback; the BLUE codec's v1→v2 gate backs it). New variant = a strengthening of the merge contract (CN-CINPUT-02). No catch-all. |
 | `SeedEpochConsensusSource` *(N-F-A; CONSUME-side wired N-F-C)* | `ade_runtime::bootstrap` (RED) | 2 (`NotRequired` / `RequiredFromRecoveredProvenance(RecoveredBootstrapProvenance)`) | The input-mode discriminant for warm-start. The `--mode node` WarmStart arm passes `RequiredFromRecoveredProvenance`; its construction is contained to {lifecycle owner, `bootstrap.rs`}. New variant = a strengthening of DC-CINPUT-01. |
 | `BootstrapError` (N-F-A new variants) | `ade_runtime::bootstrap` (RED) | +5 (`SeedConsensusProvenanceMissing` / `SeedConsensusSidecarMissing` / `SeedConsensusHashMismatch` / `SeedConsensusBindingMismatch` / `SeedConsensusSidecarDecode`) | The fail-closed warm-start-restore failure set; MUST NOT fall back to the forge-time bundle. New variant = a strengthening of **DC-CINPUT-01**; non-secret primitives only. |
 | `MithrilBootstrapError` *(N-Z; +N-F-A SeedConsensus* variants)* | `ade_runtime::mithril_bootstrap` (RED) | 3 base + N-F-A `SeedConsensus*` | The closed RED-composition error sum — one variant per composed step. No catch-all/`String`; the binding step is the SOLE semantic decision (BLUE). |
@@ -1788,6 +1923,22 @@ ACCEPTS it is the operator-gated RO-LIVE-01 leg (peer ACCEPT NOT claimed here).
 | Per-protocol tag-24 compositions *(N-X)* | `ade_network::codec::{block_fetch, chain_sync}` | A new CBOR-in-CBOR composition attaches as a `compose_*` / `decompose_*` pair delegating to the single `ade_codec::{wrap_tag24, unwrap_tag24}` authority (CN-WIRE-08). |
 | Bootstrap-source production compositions *(N-Z; +N-F-A sidecar tail)* | `ade_runtime::{genesis_bootstrap, mithril_bootstrap}` | A new bootstrap-source production entry attaches as a **composition-only RED twin** of `bootstrap_from_{conway_genesis, mithril_snapshot}`: import/parse + (if a point is attested) mint the anchor from an operator-independent origin + verify-before-bootstrap (fail-closed) + route through the single `bootstrap_initial_state` authority + the N-F-A sidecar tail. **No new authority, no new `*Anchor` trait/plugin, no new `SeedProvenance` variant unless the source genuinely differs** (CN-MITHRIL-01 / CN-NODE-01 / DC-MITHRIL-02 / CN-CINPUT-02). |
 
+> **Note (G-K … G-R is NOT a new extension point — the span adds ONLY closed sums + version-gated fields).** The
+> entire G-K…G-R catch-up span introduces **NO extensible / negotiated / plugin / runtime-registered surface.**
+> The lone new BLUE canonical type, the closed 2-variant `ArrayHead` (G-M), is a wire-grammar REDUCTION decoded
+> by the scoped `decode_array_head_two_form` (FindIntersect-only — NOT a general definite/indefinite decoder);
+> the `Origin → IntersectFound[Origin]` reply matches the real node and does NOT widen the served chain. The G-L
+> `encode_n2n_version_params` is the single per-version `versionData` encoder over the **unchanged closed**
+> `N2N_SUPPORTED` version SET (no widening, no runtime negotiation). The G-N `SeedEpochConsensusInputs.epoch_nonce`
+> is a **version-GATED** additive field behind `SEED_CINPUT_SCHEMA_VERSION 1 → 2` (a v1 sidecar fails closed
+> `UnknownVersion`, never zero-eta0) — NOT a new type, NOT an open variant. The G-O feed tag-24 unwrap **REUSES**
+> the single `ade_codec::unwrap_tag24` (CN-WIRE-08) authority — NO parallel parser. The G-K/G-P/G-Q/G-R deltas are
+> **RED orchestration** inside `node_lifecycle` / `node_sync` (serve-lifetime decouple, feed header-validation
+> view, forge-successor position, monotone serve gate) — closed RED fences / pure predicates, **NO new closed
+> enum / `NodeBlockSource` / `CoordinatorEvent` / `Mode` variant, NO new `--mode node` flag, NO new BLUE
+> authority.** There is **no plugin trait, no `Box<dyn _>`, no runtime-registered handler, no negotiated surface.**
+> They belong in the Closed table above (and §4 Frozen / §4 Version-gated), not in the Extensible table.
+>
 > **Note (N-F-G-J is NOT a new extension point — G-J adds ONLY closed sums + one BLUE module).** G-J introduces
 > **NO extensible / negotiated surface.** The new closed BLUE sum `PrevHash` is a 2-variant wire grammar (not
 > `#[non_exhaustive]`, single POSITION-BLIND codec authority + single POSITION-AWARE validator authority); the
@@ -1845,6 +1996,56 @@ ACCEPTS it is the operator-gated RO-LIVE-01 leg (peer ACCEPT NOT claimed here).
 
 ### Frozen (immutable at current version — change = new major version)
 
+- **ChainSync `FindIntersect` two-form array-head grammar is closed + SCOPED (N-F-G-M, CN-WIRE-11 — load-bearing;
+  do NOT soften / do NOT broaden).** The header points-list array-head is the closed BLUE sum `ArrayHead =
+  Definite(u64) | Indefinite` (`ade_network::codec::primitives`, the lone new BLUE canonical type in the span,
+  457 → 458). `decode_array_head_two_form` accepts BOTH the definite (`9f…`/`98…`) and indefinite (`0x9f … 0xff`)
+  forms; on `Indefinite` the caller consumes the matching `0xff` break. The indefinite acceptance is **SCOPED to
+  ChainSync `FindIntersect`** (`decode_find_intersect_points`) — it is **NOT** a general definite/indefinite
+  decoder; the rest of the closed wire grammar stays definite-only, and there is **no catch-all**. The paired
+  `chain_sync::server` `Origin → IntersectFound[Origin]` reply matches the real cardano-node (the universal
+  common ancestor) and **MUST NOT widen the served chain** beyond the Origin intersect. Pinned byte-identically
+  against captured cardano-node 11.0.1 FindIntersect/IntersectFound fixtures
+  (`ci_check_chainsync_findintersect_compat.sh`).
+- **Per-version N2N `versionData` wire encoding is the single encoder over the closed version SET (N-F-G-L,
+  CN-WIRE-10 — load-bearing).** `encode_n2n_version_params(version, network_magic)` is the SINGLE per-version
+  `versionData` encoder (`ade_network::handshake::version_table`, an additive BLUE fn — 458 unchanged): for
+  V11..=V15 the 4-field `NodeToNodeVersionData` `[networkMagic, initiatorAndResponderDiffusionMode, peerSharing,
+  query]` (`diffusionMode = true`, `peerSharing = NoPeerSharing(0)`, `query = false`), for V16+ the extended
+  shape — so a real cardano-node accepts the serve-side handshake at NodeToNodeV_15 (fixes `HandshakeDecodeError
+  NodeToNodeV_15 'unknown encoding: TInt 1'`). It is the single encoder over the **unchanged closed
+  `N2N_SUPPORTED` version SET** — **NO version-set widening, NO runtime negotiation of meaning**; a successful
+  handshake is a wire-layer event, **NOT** peer acceptance (`RO-LIVE-01` stays `partial`). Pinned against the
+  real-node handshake fixture (`ci_check_n2n_handshake_versiondata_authority.sh`).
+- **Feed-side BlockFetch tag-24 unwrap REUSES the single frozen tag-24 authority (N-F-G-O, CN-WIRE-12 —
+  load-bearing).** The feed-side WirePump (`ade_runtime::admission::wire_pump`) strips the peer's BlockFetch
+  `MsgBlock` tag-24 (`0xd8 0x18`) envelope via the single `ade_codec::unwrap_tag24` (CN-WIRE-08) authority
+  **BEFORE** the BLUE decode (so the inner `[era, block]` decodes cleanly — `UnexpectedType` gone), mirroring the
+  already-correct `admission::runner` + `ade_core_interop::follow` paths. **There is NO second `unwrap_tag24` /
+  hand-rolled tag-24 parse** — the single frozen authority is reused; a non-tag-24 / malformed payload fails
+  closed (`ci_check_feed_tag24_unwrap.sh`).
+- **`--mode node` serve listener lifetime is decoupled from feed end + the served tip is monotone (N-F-G-K +
+  N-F-G-R, DC-NODE-09 + DC-NODE-11 — load-bearing).** The serve sibling (`run_node_serve_task`, spawned OUTSIDE
+  `run_relay_loop`) stays up serving **past feed-end** (its lifetime is independent of the feed source's end —
+  `ci_check_node_serve_lifetime.sh`), and once block 0 (the genesis successor) is served the served tip is
+  **monotone** — `node_lifecycle::serve_gate_admits(highest_served_block_no, candidate_block_no)` refuses any
+  candidate that would regress the served chain (`candidate_block_no <= highest_served_block_no`) or re-serve an
+  already-served height with a divergent hash, so a genesis-successor follower adopts a **stable served block 0**
+  (`ci_check_served_chain_stability.sh`). The serve sibling is **read-only** over the `ServedChainView` — it
+  admits nothing, advances **no durable tip** (no `ChainDb` handle), and makes **no peer-acceptance claim**
+  (`RO-LIVE-01` stays `partial`); `run_relay_loop`'s containment is byte-unchanged (the serve task lives outside
+  it).
+- **Forge-successor position is sourced from the evolved admitted spine + the feed header-validation view from
+  the recovered consensus surface (N-F-G-Q + N-F-G-P, DC-NODE-10 + DC-CINPUT-04 — load-bearing).** After the
+  genesis-successor block 0 is admitted, the NEXT forge derives `(block_number, prev_hash) = (last_admitted_block_no
+  + 1, PrevHash::Block(last_admitted_hash))` from the **evolved admitted spine state** (not the stale recovered
+  tip), reusing the single G-J `forge_header_position` convention — the first stable node, block 1+, no successor
+  crash (`ci_check_forge_successor_evolved_spine.sh`); the forge holds **no `ChainDb` handle** (advances no
+  durable tip — that is N-U). The feed's header-step + ledger Step-5/7 validation derives its leader-threshold
+  stake-distribution view from the recovered consensus surface (`PoolDistrView::from_seed_epoch_consensus_inputs`),
+  **never a defaulted / empty distribution** — so a valid live block 0 is ingested (`VerificationFailed` gone —
+  `ci_check_feed_leader_threshold_view.sh`); the verdict stays BLUE (Steps 5 + 7 are BLUE authorities). **NO
+  RO-LIVE flip.**
 - **Header `prev_hash` is the closed `$hash32 / null` wire grammar with a SINGLE POSITION-BLIND codec authority +
   a SINGLE POSITION-AWARE validator authority (N-F-G-J S2/S3, CN-WIRE-09 — load-bearing; do NOT soften / do NOT
   broaden).** The Shelley-and-later header `prev_hash` field is the closed sum `PrevHash = Genesis | Block(Hash32)`
@@ -1984,8 +2185,25 @@ ACCEPTS it is the operator-gated RO-LIVE-01 leg (peer ACCEPT NOT claimed here).
   Mithril provenance + production-bootstrap paths, the N-F-A warm-start restore, both N-F-C lifecycle arms)
   routes through this one chokepoint; no `*Anchor` trait/plugin seam (CN-NODE-01 / CN-MITHRIL-01). N-F-G-C's live
   feed introduces no second bootstrap.
+- **Recovered eta0 is explicit + replayable + version-gated; the WarmStart overlay supplies it to the forge VRF
+  input (N-F-G-N, T-REC-04 + DC-CINPUT-03 — load-bearing; do NOT soften / do NOT broaden).** The closed BLUE
+  `SeedEpochConsensusInputs` gains the additive field `epoch_nonce: Nonce` (the recovered Praos eta0 for
+  `epoch_no`) and its sole codec bumps `SEED_CINPUT_SCHEMA_VERSION 1 → 2`; the GREEN merge
+  (`seed_consensus_merge`) carries the recovered eta0 verbatim into the field (never default-to-zero), and
+  **WarmStart overlays it onto `chain_dep.epoch_nonce`** so the forge VRF input is
+  `praos_vrf_input(slot, epoch_nonce)` (a recovered follower no longer fails `VRFKeyBadProof`). The schema bump is
+  **VERSION-GATED**: a v1 sidecar that omitted `epoch_nonce` decodes as `UnknownVersion` — **NEVER a
+  default-to-zero eta0** (`ci_check_warmstart_eta0_overlay.sh` pins the sidecar carries `epoch_nonce`, that
+  WarmStart overlays it, and that the forge VRF input is `praos_vrf_input(slot, epoch_nonce)`). The WarmStart
+  overlay supplies the recovered eta0 to the forge VRF input but does **NOT** make the recovered sidecar a
+  runtime authority for nonce evolution — the BLUE `consensus::nonce` transitions stay undriven on the forge
+  path (DC-EPOCH-03). `SeedEpochConsensusInputs` stays a single closed canonical type with the SOLE codec; the
+  field is additive ONLY behind the version gate (NOT a new type — 458 unchanged, NOT an open/extensible
+  variant).
 - **`SeedEpochConsensusInputs` SOLE codec** — the A1 version-gated, byte-canonical, `BTreeMap`-ordered
-  encoder/decoder; `SEED_CINPUT_SCHEMA_VERSION = 1`; no `Default` / `#[non_exhaustive]` (CN-CINPUT-01).
+  encoder/decoder; **`SEED_CINPUT_SCHEMA_VERSION = 2`** (N-F-G-N — the now-7-field outer record carrying
+  `epoch_nonce`; a v1 sidecar decodes as `UnknownVersion`); no `Default` / `#[non_exhaustive]` (CN-CINPUT-01,
+  strengthened by T-REC-04 / DC-CINPUT-03).
 - **tag-24 wire envelope** — the single `ade_codec::cbor::tag24::{wrap_tag24, unwrap_tag24}` authority; the
   BlockFetch (storage Conway = 7) vs ChainSync (consensus Conway = 6) era-index schemes are pinned byte-identically
   against cardano-node 11.0.1 (CN-WIRE-08). N-F-G-C's live feed reuses `admission::runner`'s tag-24 unwrap verbatim.
@@ -1996,14 +2214,15 @@ ACCEPTS it is the operator-gated RO-LIVE-01 leg (peer ACCEPT NOT claimed here).
 - **Sum6KES algorithm + 608-byte cardano-cli skey envelope** — byte-identical to Haskell `cardano-base`;
   `raw_deserialize_signing_key_kes` is the structural validator (DC-CRYPTO-04..09).
 - **Wire format / encoding**: `postcard` / CBOR per the pinned manifest versions; field order = wire order where
-  applicable. **All 456 canonical types**: existing wire formats frozen; new types may be added behind a version
-  gate. **Hash algorithms**: `blake2b_256` / `blake2b_224` — algorithm immutable per version.
+  applicable. **All 458 canonical types**: existing wire formats frozen; new types may be added behind a version
+  gate (the lone canonical-type add in the G-K…G-R span is the closed `ArrayHead` enum, G-M — 457 → 458). **Hash algorithms**: `blake2b_256` / `blake2b_224` — algorithm immutable per version.
 
 ### Version-gated (can evolve across major versions)
 
 - New variants in the closed message / event / classifier taxonomies (`Mode`, `LoopStep`, `CoordinatorEvent`,
   `SeedProvenance`, `SyncEffect`, `ExpectedVrfInput`, `BA02Outcome`, `PeerAcceptEvent`, `PrevHash` (N-F-G-J),
-  `NodeSchedEvent` / `FeedReason` / `ForgeOutcome` (N-F-G-J), …) — each requires a new envelope/schema version +
+  `NodeSchedEvent` / `FeedReason` / `ForgeOutcome` (N-F-G-J), `ArrayHead` (N-F-G-M — the FindIntersect two-form
+  array-head grammar), …) — each requires a new envelope/schema version +
   a wildcard-free dispatch arm + a registry-rule strengthening. **`PrevHash`** additionally requires the codec
   to stay POSITION-BLIND, the `null` grammar to stay header_body-scoped (out of the `Point`/`Tip` codec), and the
   single wire + single position authority to stay un-duplicated (CN-WIRE-09); **the `NodeSchedEvent` family** must
@@ -2013,7 +2232,11 @@ ACCEPTS it is the operator-gated RO-LIVE-01 leg (peer ACCEPT NOT claimed here).
   CN-OPERATOR-EVIDENCE-01).
 - The redb `chaindb` `SCHEMA_VERSION` (currently **v3**, anchor-fp-keyed seed-epoch sidecar namespace) — a
   versioned gate, not a frozen contract (N-F-A).
-- The `ANCHOR_SCHEMA_VERSION = 2` (`SeedProvenance`) + the `SEED_CINPUT_SCHEMA_VERSION = 1` decoders — version-gated.
+- The `ANCHOR_SCHEMA_VERSION = 2` (`SeedProvenance`) + the **`SEED_CINPUT_SCHEMA_VERSION = 2`** (N-F-G-N — the
+  7-field `SeedEpochConsensusInputs` carrying the additive `epoch_nonce: Nonce` eta0 field; a v1 sidecar decodes
+  as `UnknownVersion`, never zero-eta0) decoders — version-gated. The schema bump is the canonical example of a
+  **version-GATED field add**: the recovered eta0 is additive ONLY behind the `1 → 2` bump, fenced by
+  `ci_check_warmstart_eta0_overlay.sh` (T-REC-04 / DC-CINPUT-03).
 - Canonical type schema additions (new fields appended; sort/dedup + `BTreeMap` ordering invariants preserved).
 - `WalEntry` wire tags (append-only: `AdmitBlock` = 0, `SeedEpochConsensusInputsImported` = 3; 1/2 reserved) — a
   CE-not-law additively-evolvable surface.
@@ -2029,7 +2252,13 @@ ACCEPTS it is the operator-gated RO-LIVE-01 leg (peer ACCEPT NOT claimed here).
 - New CI checks (existing checks may be **tightened, never relaxed** — e.g. N-F-G-C BROADENED
   `ci_check_served_chain_handoff_fence.sh` in place, a net tightening; N-F-G-E added
   `ci_check_live_feed_memory_bounds.sh`; N-F-G-D added `ci_check_node_path_fidelity.sh` +
-  `ci_check_rehearsal_manifest_schema.sh`).
+  `ci_check_rehearsal_manifest_schema.sh`; **N-F-G-K…G-R added 8** — one gate per cluster
+  (`ci_check_node_serve_lifetime.sh`, `ci_check_n2n_handshake_versiondata_authority.sh`,
+  `ci_check_chainsync_findintersect_compat.sh`, `ci_check_warmstart_eta0_overlay.sh`, `ci_check_feed_tag24_unwrap.sh`,
+  `ci_check_feed_leader_threshold_view.sh`, `ci_check_forge_successor_evolved_spine.sh`,
+  `ci_check_served_chain_stability.sh`) → **134**; the C1-evidence commit BROADENED
+  `ci_check_rehearsal_manifest_schema.sh` in place again to ALSO cover the c1 rehearsal manifests — a net
+  tightening, NOT a new file, CI count unchanged).
 
 ---
 
@@ -2153,11 +2382,40 @@ How new modules enter the workspace.
     any scheduling-event vocabulary is CLOSED + EMIT-ONLY (the planner never names it,
     `ci_check_node_sched_events_emit_only.sh`, CN-NODE-04). DC-NODE-08
     (`ci_check_genesis_successor_reachability.sh`).
+20. **New real-cardano-node wire-compat surface (N-F-G-L / G-M / G-O rule):** (i) if the real node uses a wire
+    shape Ade did not accept, model it as a CLOSED BLUE sum/encoder and pin it byte-identically against a
+    committed cardano-node fixture — e.g. the two-form `ArrayHead = Definite(u64) / Indefinite` for FindIntersect
+    (`ci_check_chainsync_findintersect_compat.sh`, CN-WIRE-11), or the single per-version `encode_n2n_version_params`
+    `versionData` encoder (`ci_check_n2n_handshake_versiondata_authority.sh`, CN-WIRE-10); (ii) **SCOPE** a widened
+    grammar to the one mini-protocol that needs it — the indefinite-length acceptance is FindIntersect-only, NOT a
+    general decoder, with no catch-all; (iii) a reply that matches the real node (e.g. `Origin →
+    IntersectFound[Origin]`) MUST NOT widen the served chain beyond what the protocol grants; (iv) the closed
+    `N2N_SUPPORTED` version SET MUST NOT be widened and no runtime negotiation of meaning may be introduced — a
+    successful handshake is a wire-layer event, NOT peer acceptance (`RO-LIVE-01` stays `partial`); (v) if a peer
+    payload is tag-24-wrapped, strip it via the single `ade_codec::unwrap_tag24` (CN-WIRE-08) authority BEFORE the
+    BLUE decode — NEVER a second / hand-rolled tag-24 parse (`ci_check_feed_tag24_unwrap.sh`, CN-WIRE-12).
+21. **New recovered-record field for the forge (N-F-G-N rule):** (i) add the field ADDITIVELY to the closed BLUE
+    record behind a `*_SCHEMA_VERSION` BUMP — a prior-version buffer MUST decode as `UnknownVersion`, **NEVER a
+    default-to-zero / silent fill** (`ci_check_warmstart_eta0_overlay.sh`, T-REC-04 / DC-CINPUT-03); (ii) the GREEN
+    merge carries the recovered value verbatim (never default); (iii) the WarmStart composition OVERLAYS the
+    recovered value onto the forge input (e.g. `chain_dep.epoch_nonce` → the VRF input `praos_vrf_input(slot,
+    epoch_nonce)`) — it supplies the recovered value to the forge, it does NOT make the recovered sidecar a runtime
+    authority for the corresponding BLUE state transition (which stays undriven on the forge path, DC-EPOCH-03);
+    (iv) keep the record a single closed canonical type with the SOLE codec (no `Default`, no `#[non_exhaustive]`,
+    `BTreeMap`-ordered) — the field is additive ONLY behind the version gate, NOT a new TYPE.
 
-### CI gates that enforce the boundary (126 total; the N-F-G-J / N-F-G-D / N-F-G-E / N-F-G-C / N-F-G-B / N-F-G-A / N-F-F / N-F-D-E / N-F-C / N-F-A / N-Z / N-Y / producer / network set)
+### CI gates that enforce the boundary (134 total; the N-F-G-K…G-R / N-F-G-J / N-F-G-D / N-F-G-E / N-F-G-C / N-F-G-B / N-F-G-A / N-F-F / N-F-D-E / N-F-C / N-F-A / N-Z / N-Y / producer / network set)
 
 | Script | Enforces | Cluster |
 |---|---|---|
+| `ci_check_chainsync_findintersect_compat.sh` *(NEW N-F-G-M)* | **CN-WIRE-11** — the ChainSync `FindIntersect` points-list array-head is the closed sum `ArrayHead = Definite(u64) / Indefinite` decoded by the scoped `decode_array_head_two_form` (accepts the real-node indefinite-length list; SCOPED to FindIntersect — NOT a general definite/indefinite decoder; no catch-all); the `chain_sync::server` answers `Origin → IntersectFound[Origin]` (the universal common ancestor — does NOT widen the served chain). Pinned against captured cardano-node 11.0.1 FindIntersect/IntersectFound fixtures. | N-F-G-M |
+| `ci_check_n2n_handshake_versiondata_authority.sh` *(NEW N-F-G-L)* | **CN-WIRE-10** — `encode_n2n_version_params` is the SINGLE per-version N2N `versionData` encoder over the unchanged closed `N2N_SUPPORTED` version SET (V11..=V15 → the 4-field `[networkMagic, diffusionMode, peerSharing, query]`; V16+ → the extended shape); pinned against the real-node handshake fixture. NO version-set widening, NO runtime negotiation. | N-F-G-L |
+| `ci_check_warmstart_eta0_overlay.sh` *(NEW N-F-G-N)* | **T-REC-04 + DC-CINPUT-03** — the seed-epoch sidecar carries the recovered `epoch_nonce` (eta0) behind `SEED_CINPUT_SCHEMA_VERSION 1 → 2` (a v1 sidecar decodes as `UnknownVersion`, never zero-eta0); WarmStart overlays it onto `chain_dep.epoch_nonce` so the forge VRF input is `praos_vrf_input(slot, epoch_nonce)` (never a defaulted/zero eta0). | N-F-G-N |
+| `ci_check_feed_tag24_unwrap.sh` *(NEW N-F-G-O)* | **CN-WIRE-12** — the feed-side WirePump (`ade_runtime::admission::wire_pump`) strips the peer's BlockFetch `MsgBlock` tag-24 envelope via the single `ade_codec::unwrap_tag24` (CN-WIRE-08) authority BEFORE the BLUE decode, and adds NO hand-rolled / parallel tag-24 parse. | N-F-G-O |
+| `ci_check_feed_leader_threshold_view.sh` *(NEW N-F-G-P)* | **DC-CINPUT-04** — the feed header-validation view (leader-threshold stake distribution for header Step 5 + ledger Step 7) is derived from the recovered consensus surface (`PoolDistrView::from_seed_epoch_consensus_inputs`), never a defaulted / empty distribution; the verdict stays BLUE. | N-F-G-P |
+| `ci_check_forge_successor_evolved_spine.sh` *(NEW N-F-G-Q)* | **DC-NODE-10** — the successor forge position is sourced from the evolved admitted spine state `(last_admitted_block_no + 1, PrevHash::Block(last_admitted_hash))`, NOT the stale recovered tip; reuses the single `forge_header_position` convention; advances no durable tip (no `ChainDb` handle); no RO-LIVE flip. | N-F-G-Q |
+| `ci_check_served_chain_stability.sh` *(NEW N-F-G-R)* | **DC-NODE-11** — the monotone serve gate `node_lifecycle::serve_gate_admits(highest_served_block_no, candidate_block_no)`: once block 0 is served the served tip never regresses (a candidate `<=` the highest served height, or an already-served height with a divergent hash, is refused), so a genesis-successor follower adopts a stable served block 0; read-only over the `ServedChainView`, advances no durable tip. | N-F-G-R |
+| `ci_check_node_serve_lifetime.sh` *(NEW N-F-G-K)* | **DC-NODE-09** — the `--mode node` serve listener's lifetime (`run_node_serve_task`, spawned OUTSIDE `run_relay_loop`) is independent of the feed source's end — it stays up serving past feed-end so a follower mid-fetch keeps fetching; read-only over the `ServedChainView`, admits nothing, advances no durable tip, makes no peer-acceptance claim; `run_relay_loop` containment byte-unchanged. | N-F-G-K |
 | `ci_check_prevhash_single_wire_authority.sh` *(NEW N-F-G-J S2)* | **CN-WIRE-09** — the header `prev_hash` is the closed sum `PrevHash = Genesis / Block(Hash32)` ($hash32/null); the SINGLE POSITION-BLIND BLUE codec authority is `ade_codec::shelley::block::decode_prev_hash` (decodes the CBOR token, NEVER `block_number`); the `null` grammar is scoped to header_body ONLY — it MUST NOT leak into the chain-sync/block-fetch `Point`/`Tip` codec (`Point::Origin` stays `array(0)`); no second wire authority, no all-zero/fingerprint stand-in for the genesis predecessor. | N-F-G-J |
 | `ci_check_genesis_successor_reachability.sh` *(NEW N-F-G-J S4)* | **DC-NODE-08** — the both-`None`-tip `LoopStep::ForgeTick` arm derives `(0, PrevHash::Genesis)` via the GREEN `node_sync::forge_header_position` (a `Some`-without-height edge fails closed `NodeForgeError::RecoveredTipMissingBlockNo`, never `.unwrap_or(1)`) and forges block 0 through the SAME `run_real_forge → self_accept → SelfAcceptedHandoff` path; permission gated by the GREEN `node_lifecycle::may_cold_start_forge` (recovered lineage + forge-intent + forge-eligible feed); the forge holds NO `ChainDb` handle (no durable tip); scoped to the hermetic cold-start (no `genesis_forged` latch); the eligibility signal is general (never a private-only / C1-only flag). | N-F-G-J |
 | `ci_check_node_sched_events_emit_only.sh` *(NEW N-F-G-J S1)* | **CN-NODE-04** — the GREEN `ade_node::live_log::{sched_event, sched_writer}` `NodeSchedEvent` / `FeedReason` / `ForgeOutcome` are CLOSED (none `#[non_exhaustive]`; no catch-all / `Other`; no stringly field) and EMIT-ONLY — the GREEN run-loop planner must NEVER name the vocabulary; the relay loop emits them around the planner call + the `LoopStep` arms, recording the scheduling decision WITHOUT altering it; allow-list + negative tests. | N-F-G-J |
@@ -2212,10 +2470,19 @@ How new modules enter the workspace.
 > `ci_check_genesis_successor_reachability.sh` (S4)) → **126** (the relay-loop containment / served-chain handoff /
 > live-feed memory fences stay byte-unchanged; `ci_check_rehearsal_manifest_schema.sh` was EXTENDED in place to
 > also cover the S5 `phase4-n-f-g-j-genesis-rehearsal-*.toml` home — a net tightening, not a new file).
+> **N-F-G-K…G-R added 8** (one gate per cluster): `ci_check_node_serve_lifetime.sh` (G-K, DC-NODE-09) +
+> `ci_check_n2n_handshake_versiondata_authority.sh` (G-L, CN-WIRE-10) +
+> `ci_check_chainsync_findintersect_compat.sh` (G-M, CN-WIRE-11) + `ci_check_warmstart_eta0_overlay.sh` (G-N,
+> T-REC-04 + DC-CINPUT-03) + `ci_check_feed_tag24_unwrap.sh` (G-O, CN-WIRE-12) +
+> `ci_check_feed_leader_threshold_view.sh` (G-P, DC-CINPUT-04) + `ci_check_forge_successor_evolved_spine.sh`
+> (G-Q, DC-NODE-10) + `ci_check_served_chain_stability.sh` (G-R, DC-NODE-11) → **126 → 134** (the relay-loop
+> containment / served-chain handoff / live-feed memory fences stay byte-unchanged; the C1-evidence commit
+> BROADENED `ci_check_rehearsal_manifest_schema.sh` in place AGAIN — to also cover the c1 rehearsal manifests —
+> a net tightening, NOT a new file, CI count unchanged).
 > _(The G-H gates `ci_check_single_serve_dispatch_authority.sh` + `ci_check_serve_listener_magic_aware.sh` are part
-> of the 126 total at HEAD but are NOT row-detailed in this table — see the G-H-gap note in the header.)_
-> Earlier-cluster gates (N-A..N-P, the N-M-* set, the N-L wire-session set) are present in the 126 total; the full
-> list is `ls ci/ci_check_*.sh` (= **126**).
+> of the 134 total at HEAD but are NOT row-detailed in this table — see the G-H-gap note in the header.)_
+> Earlier-cluster gates (N-A..N-P, the N-M-* set, the N-L wire-session set) are present in the 134 total; the full
+> list is `ls ci/ci_check_*.sh` (= **134**).
 
 ---
 
@@ -2241,7 +2508,15 @@ How new modules enter the workspace.
   the live feed + the BA-02 evidence I/O reuse the existing BLUE validators/authorities
   (`Sum6Kes::raw_deserialize_signing_key_kes`, `ProducerShell::init`'s freshness bound, the `ProtocolParameters`
   model, exact `Rational` arithmetic, `EraSchedule::locate`, `served_chain_admit`, the BLUE-minted forged hash)
-  verbatim; no new BLUE authority. `ade_ledger::rational::Rational` MUST stay exact-integer (no float arithmetic).**
+  verbatim; no new BLUE authority. `ade_ledger::rational::Rational` MUST stay exact-integer (no float arithmetic).** **(N-F-G-K…G-R) BLUE gained exactly ONE canonical type + two additive fns + one
+  version-gated field — and nothing else: the closed `ArrayHead = Definite(u64) | Indefinite`
+  (`ade_network::codec::primitives`, 457 → 458) decoded by the scoped `decode_array_head_two_form` (FindIntersect-
+  only — NOT a general definite/indefinite decoder; CN-WIRE-11); the additive fn `encode_n2n_version_params` (the
+  single per-version N2N `versionData` encoder over the UNCHANGED closed `N2N_SUPPORTED` version SET — no
+  widening, no runtime negotiation; CN-WIRE-10); and the additive field `SeedEpochConsensusInputs.epoch_nonce`
+  behind the version-GATED `SEED_CINPUT_SCHEMA_VERSION 1 → 2` (a v1 sidecar MUST fail closed `UnknownVersion`,
+  never zero-eta0; the SOLE codec stays `BTreeMap`-ordered, no `Default` / `#[non_exhaustive]`; T-REC-04 /
+  DC-CINPUT-03). NO other BLUE change; `ade_ledger::rational::Rational` stays exact-integer.**
 - **GREEN:** no nondeterminism; no participation in authoritative outputs. The `producer::coordinator` MUST NOT
   own/store private signing material; **its closed 9-variant `CoordinatorEvent` MUST stay additively stable —
   the N-F-G-A off-epoch outcome reuses `ForgeNotLeader`, the N-F-G-B token rides a sibling return component, and
@@ -2275,7 +2550,15 @@ How new modules enter the workspace.
   `checked_millis_to_slot` MUST fail closed before-anchor (never saturate); `forge_epoch_admission` MUST derive
   via `EraSchedule::locate` + drive no nonce promotion; `consensus::genesis_pinning` is `#[cfg(test)]` evidence,
   never runtime authority (DC-COMPAT-01).** `harness::sync_diff` (DC-COMPAT-01): MUST NOT compare Ade's internal
-  ledger `fingerprint` to a Haskell hash. `lagging` ≠ success; wire success ≠ admission ≠ agreement ≠ peer ACCEPT.
+  ledger `fingerprint` to a Haskell hash. `lagging` ≠ success; wire success ≠ admission ≠ agreement ≠ peer ACCEPT. **(N-F-G-N) `seed_consensus_merge` MUST carry the recovered `epoch_nonce` (eta0) verbatim into
+  the BLUE record's new field — NEVER a default-to-zero fill (DC-CINPUT-03; the BLUE codec's v1→v2 gate backs it).
+  (N-F-G-R) `node_lifecycle::serve_gate_admits` MUST stay a pure monotone predicate (`serve_gate_admits(None, 0)`
+  admits; a candidate `<=` the highest served height, or an already-served height with a divergent hash, is
+  refused) — the served tip never regresses once block 0 is served (DC-NODE-11). (N-F-G-P) the feed
+  header-validation view MUST derive its leader-threshold distribution from the recovered consensus surface
+  (`PoolDistrView::from_seed_epoch_consensus_inputs`), never a defaulted / empty distribution — the verdict stays
+  BLUE (DC-CINPUT-04). (N-F-G-Q) the forge-successor position MUST be sourced from the evolved admitted spine via
+  the single `forge_header_position` convention, never the stale recovered tip (DC-NODE-10).**
 - **RED:** no direct mutation of BLUE state; no construction of semantic types from raw bytes; no bypassing
   canonical validation. `produce_mode` emits outbound bytes only via `OutboundCommand`. The per-peer outbound
   map is `BTreeMap` (deterministic). Key custody confined to `producer::signing` / `producer_shell`.
@@ -2327,10 +2610,54 @@ How new modules enter the workspace.
   CLI/env/config override (DC-LIVEMEM-01); `ade_runtime::network::mux_pump::session_err_to_halt` MUST handle the
   new `SessionError::ReassemblyBufferOverflow` variant in its exhaustive (no-wildcard) `match` and drop the peer.
   The closed verdict-decoupled `NodeBlockSource` contract, the relay-loop containment gate, and the served-chain
-  handoff fence MUST stay byte-unchanged.**
+  handoff fence MUST stay byte-unchanged.** **(N-F-G-O) the feed-side WirePump (`ade_runtime::admission::wire_pump`) MUST strip
+  the peer's BlockFetch `MsgBlock` tag-24 envelope via the single `ade_codec::unwrap_tag24` (CN-WIRE-08) authority
+  BEFORE the BLUE decode — NEVER a second / hand-rolled tag-24 parse; a non-tag-24 / malformed payload fails
+  closed (CN-WIRE-12, `ci_check_feed_tag24_unwrap.sh`). (N-F-G-K) the `--mode node` serve listener
+  (`run_node_serve_task`, spawned OUTSIDE `run_relay_loop`) MUST have a lifetime independent of the feed source's
+  end (stays up serving past feed-end) and stay read-only over the `ServedChainView` — admitting nothing,
+  advancing no durable tip (DC-NODE-09). (N-F-G-R) the served tip MUST be monotone via
+  `node_lifecycle::serve_gate_admits` once block 0 is served — no regression, no re-serve of an already-served
+  height with a divergent hash (DC-NODE-11). (N-F-G-Q) the forge-successor position MUST derive `(block_number,
+  prev_hash)` from the evolved admitted spine `(last_admitted_block_no + 1, PrevHash::Block(last_admitted_hash))`,
+  never the stale recovered tip; the forge MUST hold NO `ChainDb` handle (no durable tip — N-U); NO new
+  `NodeBlockSource` variant, NO second forge codepath, NO RO-LIVE flip (DC-NODE-10). (N-F-G-N) WarmStart MUST
+  overlay the recovered `epoch_nonce` (eta0) from the v2 sidecar onto `chain_dep.epoch_nonce` (the forge VRF input
+  is `praos_vrf_input(slot, epoch_nonce)`); a v1 sidecar MUST fail closed `UnknownVersion`, NEVER default eta0 to
+  zero (T-REC-04 / DC-CINPUT-03). The whole G-K…G-R span MUST leave `run_relay_loop`'s containment + the
+  served-chain handoff fence byte-unchanged.**
 
 ### Project-specific additions (Ade)
 
+- **Serve-side real-node compat + feed decode/view fidelity + forge-successor + monotone serve gate + recovered
+  eta0 honest scope + boundary (N-F-G-K … G-R, load-bearing — do NOT soften / do NOT broaden):** the whole
+  G-K…G-R span is serve-side real-cardano-node compatibility + live-feed decode/view fidelity + forge-successor
+  continuity + a monotone serve gate + an explicit recovered eta0 — and **nothing more**. **G-M** (`CN-WIRE-11`):
+  the closed `ArrayHead = Definite(u64) | Indefinite` + `decode_array_head_two_form` widens the ChainSync
+  `FindIntersect` array-head grammar to accept the real node's indefinite-length points list — **SCOPED to
+  FindIntersect** (NOT a general definite/indefinite decoder; no catch-all); the `Origin → IntersectFound[Origin]`
+  reply matches the real node and **does NOT widen the served chain**. **G-L** (`CN-WIRE-10`):
+  `encode_n2n_version_params` is the single per-version `versionData` encoder over the **unchanged closed
+  `N2N_SUPPORTED` version SET** (no widening, no runtime negotiation); a successful handshake is a wire-layer
+  event, **NOT peer acceptance**. **G-O** (`CN-WIRE-12`): the feed-side WirePump strips the BlockFetch tag-24
+  envelope via the single `ade_codec::unwrap_tag24` (CN-WIRE-08) authority before the BLUE decode — **NO parallel
+  tag-24 parser**. **G-N** (`T-REC-04` + `DC-CINPUT-03`): the recovered eta0 is an additive `epoch_nonce` field
+  behind the **version-GATED** `SEED_CINPUT_SCHEMA_VERSION 1 → 2` bump (a v1 sidecar fails closed `UnknownVersion`,
+  never zero-eta0); WarmStart overlays it onto `chain_dep.epoch_nonce` so the forge VRF input is
+  `praos_vrf_input(slot, epoch_nonce)`, but the recovered sidecar is **NOT** a runtime authority for nonce
+  evolution (the BLUE `consensus::nonce` transitions stay undriven on the forge path, DC-EPOCH-03). **G-K /
+  G-P / G-Q / G-R** are RED orchestration inside `node_lifecycle` / `node_sync` (serve-lifetime decouple; feed
+  header-validation view from the recovered consensus surface; forge-successor position from the evolved admitted
+  spine; monotone serve gate) — the forge holds **no `ChainDb` handle** (advances **no durable tip** — the "first
+  stable node, block 1+" is in-memory spine continuity, durability is N-U); the serve sibling is **read-only** over
+  the `ServedChainView` (admits nothing, makes no peer-acceptance claim). **NO RO-LIVE flip** across the entire
+  span (`RO-LIVE-01` stays `partial` / operator-gated); the C1 evidence is a **rehearsal REPRODUCTION**, fenced
+  by the non-promotable `PrivateRehearsalManifest`, **NOT** a bounty-completion claim (private C1 acceptance ≠
+  bounty completion). The span adds **ONE BLUE canonical type** (`ArrayHead`, 457 → 458) + **two additive BLUE
+  fns** (`encode_n2n_version_params`, `decode_array_head_two_form`) + **one version-gated BLUE field**
+  (`SeedEpochConsensusInputs.epoch_nonce` + schema `1 → 2`) — **NO extensible / negotiated surface, no plugin
+  trait, no `Box<dyn _>`, no runtime-registered handler, no new `--mode node` flag, no new `NodeBlockSource` /
+  `CoordinatorEvent` / `Mode` variant.** **No rule weakened.** `run_relay_loop`'s containment is byte-unchanged.
 - **PrevHash null/hash32 wire authority + position-aware header rule + genesis-successor cold-start forge honest
   scope + boundary (N-F-G-J, load-bearing — do NOT soften / do NOT broaden):** G-J makes the header `prev_hash`
   field the closed wire grammar `$hash32 / null` and discharges the position-aware coupling — and **nothing
@@ -2478,6 +2805,22 @@ How new modules enter the workspace.
 > Surfaced honestly per IDD: these are **declared** future attach points, not closed surfaces. Each is named
 > in a registry rule or a cluster CLOSURE record.
 >
+> **N-F-G-K … G-R RETIRE NOTHING and BROADEN NOTHING below.** The eight-cluster span adds ONLY closed sums +
+> version-gated fields (the `ArrayHead` FindIntersect wire grammar + the `Origin` reply; the single per-version
+> `versionData` encoder; the version-gated recovered `epoch_nonce`; the feed tag-24 reuse of the single CN-WIRE-08
+> authority; and RED orchestration — serve-lifetime decouple, feed header-validation view, forge-successor
+> position, monotone serve gate) — **no new extension point, no plugin/negotiated surface.** It does NOT close any
+> §7 candidate and does **NOT** advance the bounty deliverable: `RO-LIVE-01` stays `partial` (the forge is
+> self-accept-only, holds no `ChainDb` handle, and advances no durable tip — N-U owns durability; the serve
+> sibling is read-only over the `ServedChainView`). The C1 genesis-successor rehearsal evidence (`129d25ac`,
+> `65954fa3`) is a **rehearsal REPRODUCTION** of the same operator-gated DRY-RUN class as the G-D C1 dry-run —
+> fenced by the non-promotable `PrivateRehearsalManifest`, under the IN-PLACE-broadened
+> `ci_check_rehearsal_manifest_schema.sh` (now also covering the c1 rehearsal home), **NOT bounty evidence**,
+> flipping no RO-LIVE rule (private C1 acceptance ≠ bounty completion). All candidates (#0–#5) and the
+> already-retired #6 are carried UNCHANGED. **(The G-H §1 serve-to-peer surface is still NOT spliced into this
+> body — see the G-H §1-gap note in the header; candidate #0 there is the closest related seam, and the G-K/G-L/
+> G-M/G-R serve deltas EXTEND that G-H serve sibling.)**
+>
 > **N-F-G-J RETIRES NOTHING and BROADENS NOTHING below.** G-J adds ONLY closed sums + one BLUE module (the
 > `PrevHash` wire grammar + the single `header_position` validator authority + the closed emit-only
 > `NodeSchedEvent` vocabulary + two additive closed-enum variants + the genesis-successor cold-start PATH through
@@ -2602,6 +2945,58 @@ How new modules enter the workspace.
 
 ## Generation notes
 
+- Regenerated (multi-cluster CATCH-UP refresh, PHASE4-N-F-G-K…G-R + C1 evidence) at HEAD `65954fa3`
+  (`git rev-parse --short HEAD`), downstream of the CODEMAP regenerated at the same HEAD (**134** CI checks,
+  **328** rules, **458** canonical types). The prior on-disk SEAMS was pinned at the **PHASE4-N-F-G-J close**
+  (`550eec3a` / 126 CI / 319 rules / 457 canonical types). This refresh splices the **eight closed clusters
+  G-K → G-R + the C1 genesis-successor rehearsal evidence** and updates the counts. **The WHOLE span adds ONLY
+  closed sums + version-gated fields — verified NO extensible / negotiated / plugin surface.** Net BLUE delta:
+  **ONE** new canonical type (`ArrayHead = Definite(u64) | Indefinite`, `ade_network::codec::primitives`, G-M —
+  457 → 458), **two** additive BLUE fns (`encode_n2n_version_params`, G-L; `decode_array_head_two_form`, G-M),
+  and **one** version-gated BLUE field (`SeedEpochConsensusInputs.epoch_nonce` + `SEED_CINPUT_SCHEMA_VERSION 1 →
+  2`, G-N). Registry → **328** (NEW `DC-NODE-09`, `CN-WIRE-10`, `CN-WIRE-11`, `T-REC-04`, `DC-CINPUT-03`,
+  `CN-WIRE-12`, `DC-CINPUT-04`, `DC-NODE-10`, `DC-NODE-11` — all `enforced`; no rule weakened); CI 126 → **134**
+  (one new gate per cluster; the C1-evidence commit broadened `ci_check_rehearsal_manifest_schema.sh` in place —
+  no count change).
+- **G-K…G-R delta spot-checked at HEAD `65954fa3` (grep/ls/git only — no `cargo`):**
+  `git diff --name-only 550eec3a..65954fa3 -- crates/` touches the BLUE `core_paths` files
+  `ade_network/src/{handshake/version_table.rs, chain_sync/server.rs, codec/chain_sync.rs, codec/primitives.rs}` +
+  `ade_ledger/src/{seed_consensus_inputs.rs, consensus_view.rs}` (the rest RED/GREEN/test).
+  `crates/ade_network/src/codec/primitives.rs` `pub enum ArrayHead { Definite(u64), Indefinite }` (line 64) +
+  `pub fn decode_array_head_two_form` (line 73); `crates/ade_network/src/handshake/version_table.rs`
+  `pub fn encode_n2n_version_params(version: u16, network_magic: u32) -> VersionParams` (line 88);
+  `crates/ade_network/src/chain_sync/server.rs` `IntersectFound { point, tip }` variant + `Origin`-reply test;
+  `crates/ade_ledger/src/seed_consensus_inputs.rs` `pub const SEED_CINPUT_SCHEMA_VERSION: u32 = 2` (line 42) +
+  `pub epoch_nonce: Nonce` (line 61) + the decoder rejecting `version != 2` as `UnknownVersion` (a v1-shape test
+  pins the fail); `crates/ade_runtime/src/admission/wire_pump.rs` strips the BlockFetch tag-24 wrapper via the
+  single `ade_codec::unwrap_tag24` authority before decode (CN-WIRE-12, with a fail-closed test);
+  `crates/ade_node/src/node_lifecycle.rs` `pub fn serve_gate_admits(highest_served_block_no: Option<u64>,
+  candidate_block_no: u64) -> bool` (line 281, DC-NODE-11) + the feed header-validation view via
+  `PoolDistrView::from_seed_epoch_consensus_inputs` (DC-CINPUT-04); `crates/ade_node/src/node_sync.rs` the
+  forge-successor evolved-spine position (DC-NODE-10). The eight NEW gates
+  (`ci_check_node_serve_lifetime.sh`, `ci_check_n2n_handshake_versiondata_authority.sh`,
+  `ci_check_chainsync_findintersect_compat.sh`, `ci_check_warmstart_eta0_overlay.sh`,
+  `ci_check_feed_tag24_unwrap.sh`, `ci_check_feed_leader_threshold_view.sh`,
+  `ci_check_forge_successor_evolved_spine.sh`, `ci_check_served_chain_stability.sh`) all present;
+  `ls ci/ci_check_*.sh | wc -l` = **134**; `grep -cE '^id = ' docs/ade-invariant-registry.toml` = **328** (the
+  nine new rule IDs present). `run_relay_loop` containment + the served-chain handoff fence are byte-unchanged.
+- **Cross-reference check (CODEMAP ↔ SEAMS) at `65954fa3`:** the **458 / 134 / 328** counts match the CODEMAP
+  header regenerated at the same HEAD exactly. Every module named in the G-K…G-R splices appears in that CODEMAP —
+  `ade_network::{codec::primitives (ArrayHead, decode_array_head_two_form), handshake::version_table
+  (encode_n2n_version_params), chain_sync::server (Origin reply)}`, `ade_ledger::seed_consensus_inputs
+  (epoch_nonce, SEED_CINPUT_SCHEMA_VERSION = 2)`, `ade_runtime::admission::wire_pump (feed tag-24 unwrap)`,
+  `ade_node::{node_lifecycle (serve_gate_admits, feed view), node_sync (forge-successor)}` — all inventoried
+  there; the CODEMAP header's per-cluster G-K…G-R deltas name the same rules + gates. No stale module references;
+  no drift vs CODEMAP unreconciled. (The one carried stale `456` in the §4 Frozen wire-format bullet was corrected
+  to `458` this refresh.)
+- **`.idd-config.json` is NOT edited by this doc.** Its `_invariant_registry_doc` still reads "321 entries at
+  HEAD" and `head_deltas_baseline` is `853344f7` (the G-K S1 baseline) — both **stale vs the true HEAD** (328
+  rules at `65954fa3`); a `/head-deltas` / config refresh is the recommended follow-on, but per the task
+  constraint this regeneration does **NOT** modify `.idd-config.json` (the authoritative counts are the CODEMAP
+  header + `grep -cE '^id = ' docs/ade-invariant-registry.toml`, both = 328).
+- NOTE: no `cargo build`/`test`/`check` was run during this regeneration (grep/ls/git only, per the task
+  constraint).
+- (Prior G-J entry, carried below.)
 - Regenerated (scoped DELTA-REFRESH at the PHASE4-N-F-G-J close) at HEAD `550eec3a` (`git rev-parse --short
   HEAD`), downstream of the CODEMAP regenerated at the same HEAD (**126** CI checks, **319** rules, **457**
   canonical types). The prior on-disk SEAMS body was generated at the **PHASE4-N-F-G-D close** (`6bd60c80` / 121
