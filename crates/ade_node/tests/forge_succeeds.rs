@@ -65,7 +65,6 @@ use ade_network::block_fetch::server::{
 };
 use ade_network::codec::block_fetch::{decompose_blockfetch_block, BlockFetchMessage, Point, Range};
 use ade_network::codec::version::BlockFetchVersion;
-use ade_node::node_lifecycle::serve_gate_admits;
 use ade_node::produce_mode::{run_real_forge, ForgeRequestContext};
 use ade_runtime::producer::self_accepted_handoff::SelfAcceptedHandoff;
 use ade_runtime::producer::served_chain_handle::{ServedChainHandle, ServedChainView};
@@ -816,62 +815,16 @@ fn feed_header_validates_against_recovered_surface_not_empty_view() {
 }
 
 // =========================================================================
-// PHASE4-N-F-G-R S1 — stable served block 0 (monotone served block_no, DC-NODE-11)
+// PHASE4-N-F-G-R S1 — stable served block 0 (DC-NODE-11)
 // =========================================================================
-
-/// PHASE4-N-F-G-R (DC-NODE-11): two block_no-0 forges (the hermetic forge re-mints
-/// a genesis successor each winning slot) pushed through the node-level serve gate
-/// (`serve_gate_admits`) leave the served view holding EXACTLY ONE block 0 — the
-/// first wins; the second (block_no 0, not strictly advancing) is skipped, so a
-/// follower sees a STABLE block 0. (The gate decision — incl. a strictly-higher
-/// block_no being served — is unit-pinned in node_lifecycle.)
-#[test]
-fn serve_gate_keeps_first_block_zero_skips_reforge() {
-    // Forge two DISTINCT genesis-successor block 0s (slots 1 + 2; the EligibleFixture
-    // recipe ⇒ both block_no 0 + PrevHash::Genesis, different slot ⇒ different hash).
-    let mut shell1 = synth_shell(0x77, 0x88, 0x99);
-    let f1 = EligibleFixture::build(&shell1, 1, EpochNo(0));
-    let c1 = f1.ctx();
-    let (_e1, h1) = run_real_forge(1, 0, &c1, &mut shell1);
-    let a1 = h1.expect("forge 1 self-accepts a block 0");
-
-    let mut shell2 = synth_shell(0x77, 0x88, 0x99);
-    let f2 = EligibleFixture::build(&shell2, 2, EpochNo(0));
-    let c2 = f2.ctx();
-    let (_e2, h2) = run_real_forge(2, 0, &c2, &mut shell2);
-    let a2 = h2.expect("forge 2 self-accepts a block 0");
-
-    for a in [&a1, &a2] {
-        let bn = ade_ledger::block_validity::decode_block(a.as_bytes())
-            .expect("decode")
-            .header_input
-            .block_no
-            .0;
-        assert_eq!(bn, 0, "both forges are genesis-successor block 0");
-    }
-
-    // Drive the node-level serve gate over the two block-0 handoffs.
-    let (handle, view) = ServedChainHandle::new();
-    let mut highest: Option<u64> = None;
-    for a in [a1, a2] {
-        let bn = ade_ledger::block_validity::decode_block(a.as_bytes())
-            .expect("decode")
-            .header_input
-            .block_no
-            .0;
-        if serve_gate_admits(highest, bn) {
-            handle.push_atomic(a).expect("admit");
-            highest = Some(bn);
-        }
-    }
-
-    assert_eq!(
-        view.borrow().len(),
-        1,
-        "two block-0 forges through the serve gate leave EXACTLY ONE block 0 in the served \
-         view (the first wins; the re-forge is skipped) — DC-NODE-11"
-    );
-}
+// PHASE4-N-U S3 (DC-NODE-13): serve_gate_keeps_first_block_zero_skips_reforge is
+// RETIRED with the monotone serve gate. The durable chain is extend-only
+// (DC-CONS-23) — a re-mint block 0 fails closed at admit — so it holds exactly
+// one block 0 by construction, and the serve PROJECTION serves that stable chain
+// without a gate. DC-NODE-11's stability is now proven by serve-as-projection:
+// tests/node_spine_serve_loopback.rs (served_view_projects_durable_chain,
+// follower_fetches_coherent_history_incl_ingested_predecessor,
+// served_view_retires_accumulator) + ci/ci_check_served_chain_projection.sh.
 
 // =========================================================================
 // PHASE4-N-U S1 — own-forged durable admit through the pump (DC-NODE-12,

@@ -29,11 +29,33 @@ use std::collections::BTreeMap;
 
 use ade_network::codec::version::{BlockFetchVersion, ChainSyncVersion};
 
+use crate::chaindb::ChainDb;
 use crate::network::n2n_server::PerPeerN2nServerState;
 use crate::network::outbound_command::PerPeerOutbound;
+use crate::network::served_chain_projection::ChainDbServedSource;
 use crate::orchestrator::event::OrchestratorEvent;
 use crate::producer::producer_log::PeerId;
 use crate::producer::served_chain_handle::ServedChainView;
+
+/// **PHASE4-N-U S3 (DC-NODE-13)** — the read source the single
+/// serve-dispatch authority projects to peers. This is NOT a second serve
+/// authority: there is exactly one `dispatch_server_frame_event_to_outbound`
+/// (DC-NODE-07); the enum only selects WHERE that one authority reads.
+///
+/// - `Snapshot` — the `--mode produce` (and migration) in-memory
+///   `ServedChainSnapshot` accumulator, fed by
+///   `ServedChainHandle::push_atomic` from broadcast-admitted
+///   `AcceptedBlock`s (the original CN-CONS-07 token-proof).
+/// - `DurableChainDb` — the `--mode node` durable-chain projection: a
+///   read-only view of the durable ChainDb (whose sole production writers
+///   are the validated `pump_block` admit (DC-NODE-12) + the warm-start /
+///   genesis replay `bootstrap_initial_state`), served through
+///   [`ChainDbServedSource`]. Serve-as-projection (DC-NODE-13): a follower
+///   fetches coherent durable history A→B and serving survives restart.
+pub enum ServedChainSource<'a> {
+    Snapshot(&'a ServedChainView),
+    DurableChainDb(&'a dyn ChainDb),
+}
 
 /// Per-peer N2N server session state, keyed by the coordinator
 /// `PeerId`. Shared by both serve drivers (`--mode produce` and
@@ -115,7 +137,7 @@ pub async fn remove_server_peer_state(
 pub async fn dispatch_server_frame_event_to_outbound(
     event: &OrchestratorEvent,
     peers_state: &mut ServerPeerStates,
-    served_chain_view: &ServedChainView,
+    source: ServedChainSource<'_>,
     peer_outbound: &PerPeerOutbound,
 ) -> Result<(usize, Vec<ServedBlockEvidence>), DispatchError> {
     use crate::network::outbound_command::OutboundCommand;
@@ -124,6 +146,7 @@ pub async fn dispatch_server_frame_event_to_outbound(
     use ade_network::chain_sync::server::producer_chain_sync_serve;
     use ade_network::codec::block_fetch::{decode_block_fetch_message, BlockFetchMessage, Point};
     use ade_network::codec::chain_sync::decode_chain_sync_message;
+    use ade_types::{Hash32, SlotNo};
 
     match event {
         OrchestratorEvent::PeerN2nServerChainSyncFrame { peer_id, bytes } => {
@@ -136,18 +159,23 @@ pub async fn dispatch_server_frame_event_to_outbound(
             let chain_sync_version = state.chain_sync_version;
             let block_fetch_version = state.block_fetch_version;
             let block_fetch_old = state.block_fetch;
-            // Scope the `watch::Ref` (a `!Send` read guard) so it is dropped
-            // BEFORE the outbound `.await` below, keeping this dispatch future
-            // `Send` (the node-spine serve sibling spawns it). The reducer reads
-            // the snapshot via `lookups` and returns `step`; the snapshot is not
-            // needed for the send. (Mirrors the block-fetch arm's `drop(snap_ref)`;
-            // produce_mode's behavior is unchanged — it just releases the read
-            // guard a few statements sooner.)
-            let (cs2, step) = {
-                let snap_ref = served_chain_view.borrow();
-                let lookups = ServedChainLookups { snap: &*snap_ref };
-                producer_chain_sync_serve(state.chain_sync, msg, &lookups, chain_sync_version)
-                    .map_err(|_| DispatchError::ReducerError)?
+            // Read the reply from the selected source. Each arm scopes any
+            // `!Send` read guard (the Snapshot `watch::Ref`) so it is
+            // dropped BEFORE the outbound `.await` below, keeping this
+            // dispatch future `Send` (the node-spine serve task spawns it).
+            let (cs2, step) = match &source {
+                ServedChainSource::Snapshot(view) => {
+                    let snap_ref = view.borrow();
+                    let lookups = ServedChainLookups { snap: &*snap_ref };
+                    producer_chain_sync_serve(state.chain_sync, msg, &lookups, chain_sync_version)
+                        .map_err(|_| DispatchError::ReducerError)?
+                }
+                ServedChainSource::DurableChainDb(chaindb) => {
+                    // PHASE4-N-U S3 (DC-NODE-13): project the durable chain.
+                    let proj = ChainDbServedSource::new(*chaindb);
+                    producer_chain_sync_serve(state.chain_sync, msg, &proj, chain_sync_version)
+                        .map_err(|_| DispatchError::ReducerError)?
+                }
             };
             let mut sent = 0usize;
             if let ade_network::chain_sync::server::ServerStep::Reply(reply) = step {
@@ -182,51 +210,78 @@ pub async fn dispatch_server_frame_event_to_outbound(
             let chain_sync_version = state.chain_sync_version;
             let block_fetch_version = state.block_fetch_version;
             let chain_sync_old = state.chain_sync;
-            // Scope the `watch::Ref` (a `!Send` read guard) to this block so it is
-            // dropped BEFORE the outbound `.await` below, keeping this dispatch
-            // future `Send` (the node-spine serve sibling spawns it). Everything
-            // read from the snapshot is captured as OWNED data (`step` +
-            // `served_evidence`) before the block ends. The requested point range
-            // is captured before `msg` is consumed by the reducer; a closed-end
-            // RequestRange carries `(slot, hash)` for both endpoints (Origin has no
-            // key in the snapshot's BTreeMap, so a range touching Origin observes
-            // no present block — never over-claims). GREEN evidence: observe which
-            // requested blocks are PRESENT in the served snapshot, reading real
-            // `(slot, hash, bytes_len)`, never fabricated/zeroed.
-            let (bf2, step, served_evidence) = {
-                let snap_ref = served_chain_view.borrow();
-                let msg =
-                    decode_block_fetch_message(bytes).map_err(|_| DispatchError::ReducerError)?;
-                let requested_range = match &msg {
-                    BlockFetchMessage::RequestRange(r) => match (&r.from, &r.to) {
-                        (
-                            Point::Block { slot: fs, hash: fh },
-                            Point::Block { slot: ts, hash: th },
-                        ) => Some(((*fs, fh.clone()), (*ts, th.clone()))),
-                        _ => None,
-                    },
+            // Decode + extract the requested range BEFORE matching the source
+            // (neither needs the source). The range endpoints are captured
+            // before `msg` is consumed by the reducer; a closed-end
+            // RequestRange carries `(slot, hash)` for both endpoints (Origin
+            // has no durable key, so a range touching Origin observes no
+            // present block — never over-claims).
+            let msg = decode_block_fetch_message(bytes).map_err(|_| DispatchError::ReducerError)?;
+            let requested_range = match &msg {
+                BlockFetchMessage::RequestRange(r) => match (&r.from, &r.to) {
+                    (
+                        Point::Block { slot: fs, hash: fh },
+                        Point::Block { slot: ts, hash: th },
+                    ) => Some(((*fs, fh.clone()), (*ts, th.clone()))),
                     _ => None,
-                };
-                let lookups = ServedChainLookups { snap: &*snap_ref };
-                let (bf2, step) = producer_block_fetch_serve(
-                    state.block_fetch,
-                    msg,
-                    &lookups,
-                    block_fetch_version,
-                )
-                .map_err(|_| DispatchError::ReducerError)?;
-                let mut served_evidence: Vec<ServedBlockEvidence> = Vec::new();
-                if let Some((from, to)) = requested_range {
-                    for (s, h, b) in snap_ref.range_bytes(from, to) {
-                        served_evidence.push(ServedBlockEvidence {
-                            peer_id: PeerId(peer_id.0),
-                            slot: s.0,
-                            hash: h.0,
-                            bytes_len: b.len() as u32,
-                        });
-                    }
+                },
+                _ => None,
+            };
+            // GREEN evidence: observe which requested blocks are PRESENT in
+            // the served source, reading real `(slot, hash, bytes_len)`,
+            // never fabricated/zeroed. Each arm scopes any `!Send` read guard
+            // (the Snapshot `watch::Ref`) so it never crosses the `.await`
+            // below — the future stays `Send` for the node-spine serve task.
+            let to_evidence = |entries: Vec<(SlotNo, Hash32, Vec<u8>)>| -> Vec<ServedBlockEvidence> {
+                entries
+                    .into_iter()
+                    .map(|(s, h, b)| ServedBlockEvidence {
+                        peer_id: PeerId(peer_id.0),
+                        slot: s.0,
+                        hash: h.0,
+                        bytes_len: b.len() as u32,
+                    })
+                    .collect()
+            };
+            let (bf2, step, served_evidence) = match &source {
+                ServedChainSource::Snapshot(view) => {
+                    let snap_ref = view.borrow();
+                    let lookups = ServedChainLookups { snap: &*snap_ref };
+                    let (bf2, step) = producer_block_fetch_serve(
+                        state.block_fetch,
+                        msg,
+                        &lookups,
+                        block_fetch_version,
+                    )
+                    .map_err(|_| DispatchError::ReducerError)?;
+                    let ev = match requested_range {
+                        Some((from, to)) => to_evidence(
+                            snap_ref
+                                .range_bytes(from, to)
+                                .map(|(s, h, b)| (s, h.clone(), b.to_vec()))
+                                .collect(),
+                        ),
+                        None => Vec::new(),
+                    };
+                    (bf2, step, ev)
                 }
-                (bf2, step, served_evidence)
+                ServedChainSource::DurableChainDb(chaindb) => {
+                    // PHASE4-N-U S3 (DC-NODE-13): project the durable chain.
+                    use ade_network::block_fetch::server::ServedRangeLookup;
+                    let proj = ChainDbServedSource::new(*chaindb);
+                    let (bf2, step) = producer_block_fetch_serve(
+                        state.block_fetch,
+                        msg,
+                        &proj,
+                        block_fetch_version,
+                    )
+                    .map_err(|_| DispatchError::ReducerError)?;
+                    let ev = match requested_range {
+                        Some((from, to)) => to_evidence(proj.range_bytes(from, to)),
+                        None => Vec::new(),
+                    };
+                    (bf2, step, ev)
+                }
             };
             let mut sent = 0usize;
             if let ade_network::block_fetch::server::BlockFetchServerStep::Replies(replies) = step {

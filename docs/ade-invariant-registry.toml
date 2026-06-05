@@ -5809,7 +5809,7 @@ cluster's implementation close.
 source = "docs/planning/phase4-n-f-g-h-invariants.md"
 cross_ref = ["DC-NODE-06", "CN-NODE-02", "DC-CONS-17", "DC-CONS-18", "CN-PROTO-06", "DC-PROTO-07", "DC-PROTO-08", "CN-WIRE-08", "CN-FORGE-01", "RO-LIVE-01", "RO-LIVE-06", "CN-REHEARSAL-FIDELITY-01"]
 code_locus = "crates/ade_node/src/node_lifecycle.rs (retain the ServedChainView + spawn the sibling listener/serve-dispatch task outside run_relay_loop -- the only new code), crates/ade_node/src/produce_mode.rs (run_n2n_listener + dispatch_server_frame_event_to_outbound + new_per_peer_outbound -- shared serve adapter to be EXTRACTED to a shared module, not duplicated; OQ1), crates/ade_network/src/chain_sync/server.rs (producer_chain_sync_serve + producer_chain_sync_advance_tip -- reused BLUE), crates/ade_network/src/block_fetch/server.rs (producer_block_fetch_serve -- reused BLUE), crates/ade_runtime/src/producer/served_chain_handle.rs (ServedChainHandle/ServedChainView -- reused GREEN)"
-tests = ["node_spine_serve_loopback_follower_fetches_self_accepted_block", "node_serve_start_failure_is_surfaced_not_silent", "n2n_supported_for_magic_produces_configured_magic", "node_c1_serve_live"]
+tests = ["served_view_projects_durable_chain", "node_serve_start_failure_is_surfaced_not_silent", "n2n_supported_for_magic_produces_configured_magic", "node_c1_serve_live"]
 ci_script = "ci/ci_check_single_serve_dispatch_authority.sh, ci/ci_check_serve_listener_magic_aware.sh"
 introduced_in = "PHASE4-N-F-G-H"
 strengthened_in = []
@@ -5872,7 +5872,7 @@ NodeLifecycleError::ServeStart (fail-fast; no silent live-serve claim). The shar
 core was made Send -- the watch::Ref read guard is now block-scoped in BOTH the chain-sync and
 block-fetch arms (dropped before the outbound .await) so the serve sibling can tokio::spawn it;
 produce_mode behavior byte-unchanged (produce_loopback 4/4 + ade_network server 21/21 green).
-Hermetic loopback node_spine_serve_loopback_follower_fetches_self_accepted_block: Ade-serve
+Hermetic loopback served_view_projects_durable_chain: Ade-serve
 <-> Ade-consume over a real ephemeral TCP socket -- the follower (dial_for_admission +
 run_admission_wire_pump) discovers the served tip via ChainSync + BlockFetches the body; the
 tag-24-unwrapped payload == the served self-accepted block (DC-CONS-17 + CN-WIRE-08).
@@ -6078,7 +6078,7 @@ code_locus = "crates/ade_node/src/node_lifecycle.rs (run_node_lifecycle_inner On
 tests = [
   "serve_task_outlives_feed_end_and_serves_late_fetch",
   "serve_task_terminates_on_shutdown_no_hang",
-  "node_spine_serve_loopback_follower_fetches_self_accepted_block",
+  "served_view_projects_durable_chain",
   "node_serve_start_failure_is_surfaced_not_silent",
 ]
 ci_script = "ci/ci_check_node_serve_lifetime.sh"
@@ -6109,7 +6109,7 @@ tests = [
   "responder_v15_accept_matches_real_cardano_node_preprod_fixture",
   "responder_v15_accept_matches_failing_c1_peer_fixture",
   "responder_v15_versiondata_is_a_four_element_array_not_a_bare_int",
-  "node_spine_serve_loopback_follower_fetches_self_accepted_block",
+  "served_view_projects_durable_chain",
 ]
 ci_script = "ci/ci_check_n2n_handshake_versiondata_authority.sh"
 status = "enforced"
@@ -6235,7 +6235,7 @@ tests = [
   "feed_unwrap_decodes_genesis_successor_block_zero",
   "block_fetch_unwraps_tag24_emitting_bare_block",
   "block_fetch_fails_closed_on_non_tag24_payload",
-  "node_spine_serve_loopback_follower_fetches_self_accepted_block",
+  "served_view_projects_durable_chain",
 ]
 ci_script = "ci/ci_check_feed_tag24_unwrap.sh"
 status = "enforced"
@@ -6317,20 +6317,26 @@ re-forges (DC-NODE-05, no own-tip advance) are NOT re-served; a follower then se
 adopt. NARROW: no durable own-tip advance (the own-tip-adoption path is a separate cluster); no forged block 1+
 claim; no synthetic numbering; the served block is still self-accepted (no bypass of self_accept, no serve of
 unvalidated bytes); the forge + served_chain_admit + durable tip are UNCHANGED (DC-NODE-05 intact).
+PHASE4-N-U (DC-NODE-13) SUPERSEDES the serve_gate_admits MECHANISM with serve-as-projection: own-forged
+blocks are now durably admitted (DC-NODE-12) and the durable chain is extend-only (DC-CONS-23), so it holds
+exactly one block 0 by construction; the served view PROJECTS the durable ChainDb (ChainDbServedSource),
+serving that stable, coherent chain WITHOUT a monotone gate. The invariant (a follower sees a STABLE block 0,
+no block-0-replaces-block-0 churn) is PRESERVED and strengthened -- it now also survives restart (the durable
+ChainDb is recovered by T-REC-05; the accumulator was not).
 """
-source = "docs/clusters/PHASE4-N-F-G-R/cluster.md"
-cross_ref = ["DC-NODE-05", "DC-NODE-07", "DC-NODE-08", "DC-NODE-10", "CN-FORGE-01", "RO-LIVE-01"]
-code_locus = "crates/ade_node/src/node_lifecycle.rs (serve_gate_admits -- the pure monotone-block_no gate; the serve sibling tracks highest_served_block_no + push_atomics a handoff ONLY when serve_gate_admits is true); crates/ade_ledger/src/producer/served_chain.rs (ServedChainSnapshot append-only BTreeMap + served_chain_admit -- UNCHANGED; the node-level gate decides what is pushed)"
+source = "docs/clusters/PHASE4-N-F-G-R/cluster.md; docs/clusters/PHASE4-N-U/S3-serve-as-durable-chain-projection.md"
+cross_ref = ["DC-NODE-05", "DC-NODE-07", "DC-NODE-08", "DC-NODE-10", "CN-FORGE-01", "RO-LIVE-01", "DC-NODE-13", "DC-CONS-23"]
+code_locus = "crates/ade_runtime/src/network/served_chain_projection.rs (ChainDbServedSource -- PHASE4-N-U S3: serve-as-projection of the durable ChainDb provides the stable/coherent served chain; the durable chain is extend-only so it holds exactly one block 0); crates/ade_node/src/node_lifecycle.rs (run_node_serve_task serves the durable projection; serve_gate_admits RETIRED); crates/ade_ledger/src/receive/{reducer,admitted}.rs + block_validity (extend-only durable admit -- DC-CONS-23 -- rejects a re-mint block 0). HISTORICAL (PHASE4-N-F-G-R, superseded): node_lifecycle serve_gate_admits monotone-block_no gate over the ServedChainView accumulator + crates/ade_ledger/src/producer/served_chain.rs ServedChainSnapshot"
 tests = [
-  "serve_gate_admits_first_block_zero_then_skips_reforged_block_zero",
-  "serve_gate_keeps_first_block_zero_skips_reforge",
+  "served_view_projects_durable_chain",
+  "served_view_retires_accumulator",
 ]
-ci_script = "ci/ci_check_served_chain_stability.sh"
+ci_script = "ci/ci_check_served_chain_projection.sh"
 status = "enforced"
 introduced_in = "PHASE4-N-F-G-R"
-strengthened_in = []
+strengthened_in = ["PHASE4-N-U"]
 cluster = "PHASE4-N-F-G-R"
-evidence_notes = "PHASE4-N-F-G-R S1 (2026-06-04). Capture-first (code + clean-follower live run): after G-Q + the follower RESET to genesis, Ade serves the right block_no (block 0) but the follower does NOT adopt -- 0 adoptions, 48x UnexpectedBlockNo(BlockNo 1)(BlockNo 0). CAUSE: the hermetic forge (DC-NODE-05) re-mints a genesis-successor block 0 each winning slot (7x, slots 120465/120537/...), and ServedChainSnapshot.blocks is an append-only BTreeMap<(slot,hash), AcceptedBlock> (served_chain.rs:40) whose served_chain_admit inserts each block with no block_no dedup -- so the served view accumulated multiple block_no-0 blocks; the follower downloaded one, expected block 1, got another block 0. FIX: the node-level serve sibling gates by serve_gate_admits (push to the ServedChainView only when block_no strictly exceeds the highest served) -- the first block 0 wins, re-forges skipped. serve_gate_admits_first_block_zero_then_skips_reforged_block_zero pins the gate decision (None->0 admit; Some(0)->0 skip; Some(0)->1 admit; lower/equal skip); serve_gate_keeps_first_block_zero_skips_reforge forges two distinct block 0s and proves the served view holds EXACTLY ONE. No forge/durable-tip/self_accept/served_chain_admit change (DC-NODE-05 intact). CE-G-R-2 LIVE-CONFIRMED 2026-06-04: a C1 rerun (follower reset to genesis) showed the follower ValidCandidate + AddedToCurrentChain Ade-forged genesis-successor block 0 (56a29ac4...c868f26f, slot 122520; cardano-cli query tip = that hash / block 0 / slot 122520; UnexpectedBlockNo churn gone). Bound the project's way: the follower-tip peer-accept event through ba02_evidence::correlate -> Agreed (forged == matched == 56a29ac4, peer_accept_source = chain_tip) -> PrivateRehearsalManifest at docs/evidence/c1-genesis-rehearsal-manifest.toml (is_rehearsal=true, not_bounty_evidence=true, venue=private-testnet-c1), with docs/evidence/c1-genesis-rehearsal-{peer-accept.jsonl,follower.log} as the correlate input + the raw cardano-node proof. NARROW CLAIM: C1 private rehearsal success ONLY -- NOT preprod, NOT bounty BA-02, NO RO-LIVE flip. OQ-R1 (separate cluster): full producer own-tip advance (forge -> adopt own block -> build block 1+). OQ-R2: served-chain completeness after a feed ingest."
+evidence_notes = "PHASE4-N-F-G-R S1 (2026-06-04). Capture-first (code + clean-follower live run): after G-Q + the follower RESET to genesis, Ade serves the right block_no (block 0) but the follower does NOT adopt -- 0 adoptions, 48x UnexpectedBlockNo(BlockNo 1)(BlockNo 0). CAUSE: the hermetic forge (DC-NODE-05) re-mints a genesis-successor block 0 each winning slot (7x, slots 120465/120537/...), and ServedChainSnapshot.blocks is an append-only BTreeMap<(slot,hash), AcceptedBlock> (served_chain.rs:40) whose served_chain_admit inserts each block with no block_no dedup -- so the served view accumulated multiple block_no-0 blocks; the follower downloaded one, expected block 1, got another block 0. FIX: the node-level serve sibling gates by serve_gate_admits (push to the ServedChainView only when block_no strictly exceeds the highest served) -- the first block 0 wins, re-forges skipped. serve_gate_admits_first_block_zero_then_skips_reforged_block_zero pins the gate decision (None->0 admit; Some(0)->0 skip; Some(0)->1 admit; lower/equal skip); serve_gate_keeps_first_block_zero_skips_reforge forges two distinct block 0s and proves the served view holds EXACTLY ONE. No forge/durable-tip/self_accept/served_chain_admit change (DC-NODE-05 intact). CE-G-R-2 LIVE-CONFIRMED 2026-06-04: a C1 rerun (follower reset to genesis) showed the follower ValidCandidate + AddedToCurrentChain Ade-forged genesis-successor block 0 (56a29ac4...c868f26f, slot 122520; cardano-cli query tip = that hash / block 0 / slot 122520; UnexpectedBlockNo churn gone). Bound the project's way: the follower-tip peer-accept event through ba02_evidence::correlate -> Agreed (forged == matched == 56a29ac4, peer_accept_source = chain_tip) -> PrivateRehearsalManifest at docs/evidence/c1-genesis-rehearsal-manifest.toml (is_rehearsal=true, not_bounty_evidence=true, venue=private-testnet-c1), with docs/evidence/c1-genesis-rehearsal-{peer-accept.jsonl,follower.log} as the correlate input + the raw cardano-node proof. NARROW CLAIM: C1 private rehearsal success ONLY -- NOT preprod, NOT bounty BA-02, NO RO-LIVE flip. OQ-R1 (separate cluster): full producer own-tip advance (forge -> adopt own block -> build block 1+). OQ-R2: served-chain completeness after a feed ingest. PHASE4-N-U S3 SUPERSESSION (2026-06-05): OQ-R1 + OQ-R2 are now closed by N-U. serve_gate_admits, ci_check_served_chain_stability.sh, and the serve_gate_* tests (serve_gate_admits_first_block_zero_then_skips_reforged_block_zero, serve_gate_keeps_first_block_zero_skips_reforge) are RETIRED (mechanism superseded -- justified test/CI removal). The stability property they enforced is now a structural consequence of serve-as-projection over the extend-only durable chain (DC-NODE-13): own-forged blocks are durably admitted (DC-NODE-12), a re-mint block 0 fails closed at the extend-only admit (DC-CONS-23), so the durable chain holds exactly one block 0 and the projection serves it stably -- proven by served_view_projects_durable_chain + served_view_retires_accumulator + ci/ci_check_served_chain_projection.sh, and now ALSO surviving restart (T-REC-05). The rule is preserved + strengthened, not weakened."
 
 # =============================================================================
 # PHASE4-N-U (OQ-R1) -- forged-block durability (declared at /invariants 2026-06-05)
@@ -6448,9 +6454,9 @@ serve-gate workaround (which gated an accumulator) with serve-as-projection.
 source = "docs/planning/phase4-n-u-forged-block-durability-invariants.md; docs/clusters/PHASE4-N-U/S3-serve-as-durable-chain-projection.md"
 cross_ref = ["DC-NODE-11", "DC-NODE-12", "DC-NODE-07", "DC-CONS-17", "DC-CONS-18", "CN-CONS-07", "DC-CONS-23"]
 code_locus = "crates/ade_runtime/src/network/served_chain_projection.rs (ChainDbServedSource — RED read-only projection adapter implementing ServedHeaderLookup + ServedRangeLookup over &dyn ChainDb: next_after/intersect/tip/range_bytes read the durable ChainDb via iter_from_slot/get_block_by_hash/tip, decode_block for block_no/era, block_header_bytes for the header, stored.bytes served verbatim); crates/ade_runtime/src/network/serve_dispatch.rs (ServedChainSource enum {Snapshot|DurableChainDb}; the single dispatch authority reads either source — DC-NODE-07 preserved); crates/ade_node/src/node_lifecycle.rs (run_node_serve_task dispatches with ServedChainSource::DurableChainDb over Arc<PersistentChainDb>; the G-R push sibling + serve_gate_admits retired); crates/ade_ledger/src/block_validity/header_input.rs (block_header_bytes — the DC-CONS-18 header authority exposed for raw durable bytes; accepted_block_header_bytes delegates)"
-tests = []
-ci_script = ""
-status = "declared"
+tests = ["served_view_projects_durable_chain", "follower_fetches_coherent_history_incl_ingested_predecessor", "served_view_retires_accumulator"]
+ci_script = "ci/ci_check_served_chain_projection.sh"
+status = "enforced"
 introduced_in = "PHASE4-N-U"
 strengthened_in = []
-evidence_notes = "PHASE4-N-U invariant sketch (2026-06-05), OQ-R2 (D-2: in N-U scope as a later slice). Declared at sketch; code_locus set at /slice-doc (S3, 2026-06-05) — status stays declared until the S3 impl lands (then enforced, with tests served_view_projects_durable_chain + follower_fetches_coherent_history_incl_ingested_predecessor + served_view_retires_accumulator and gate ci/ci_check_served_chain_projection.sh). Sequenced AFTER the durable admit path (DC-NODE-12, S1) + recovery (T-REC-05, S2) are proven; converts the G-R monotone serve-gate (an in-memory accumulator workaround, DC-NODE-11) into serve-as-projection of the durable chain. SHAPE: a ChainDbServedSource RED adapter projects the durable ChainDb through the existing N-G BLUE serve reducers' ServedHeaderLookup/ServedRangeLookup seams; the single serve-dispatch authority (dispatch_server_frame_event_to_outbound) reads a ServedChainSource enum (Snapshot for --mode produce / DurableChainDb for --mode node); the durable ChainDb's sole production writers are pump_block + bootstrap_initial_state, so serving from it preserves CN-CONS-07 (no unvalidated bytes leave)."
+evidence_notes = "PHASE4-N-U S3 (2026-06-05). ENFORCED. The --mode node served view is a RED read-only projection of the durable ChainDb: ChainDbServedSource (crates/ade_runtime/src/network/served_chain_projection.rs) implements the BLUE serve seams ServedHeaderLookup + ServedRangeLookup over &dyn ChainDb (iter_from_slot/get_block_by_hash/tip; decode_block for block_no/era; the single block_header_bytes / DC-CONS-18 header authority; stored.bytes served verbatim, no re-encode). The single serve-dispatch authority dispatch_server_frame_event_to_outbound reads a ServedChainSource enum (Snapshot for --mode produce / DurableChainDb for --mode node) — DC-NODE-07 preserved (one dispatch, two read sources). run_node_serve_task serves over an Arc<dyn ChainDb> clone of the durable ChainDb; the G-R push sibling + serve_gate_admits + the ServedChainView accumulator are retired from the node path. Tests (tests/node_spine_serve_loopback.rs): served_view_projects_durable_chain (a follower block-fetches the durable block via the projection, byte-identical, DC-CONS-17); follower_fetches_coherent_history_incl_ingested_predecessor (durable A→B ⇒ next_after walk None→A→B→None + RequestRange[A,B] = StartBatch,Block(A),Block(B),BatchDone, never B without A); served_view_retires_accumulator (an empty durable chain serves nothing — RequestNext parks AwaitReply, no phantom accumulator). Unit tests in served_chain_projection.rs pin the empty-store + range-boundary contract. Gate ci/ci_check_served_chain_projection.sh fences the projection (reuses block_header_bytes, no parallel splitter, no re-encode) + the retirement (no serve_gate_admits / .push_atomic( / ServedChainHandle::new( in node_lifecycle). SUPERSEDES the PHASE4-N-F-G-R monotone serve-gate workaround (DC-NODE-11): the durable chain is extend-only (DC-CONS-23) so it holds exactly one block 0 by construction; serve-as-projection serves that stable, coherent chain without a gate, and serving survives restart (the durable ChainDb is recovered by T-REC-05; the accumulator was not). Provenance (CN-CONS-07 serve clause): the durable ChainDb's sole production writers are pump_block (DC-NODE-12) + bootstrap_initial_state, so serving cannot leak a byte that did not clear block_validity."

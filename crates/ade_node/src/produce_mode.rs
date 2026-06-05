@@ -57,7 +57,7 @@ use ade_runtime::consensus_inputs::{import_live_consensus_inputs, LiveConsensusI
 use ade_runtime::network::n2n_listener::{run_n2n_listener, N2nListenerConfig};
 use ade_runtime::network::serve_dispatch::{
     dispatch_server_frame_event_to_outbound, install_server_peer_state,
-    remove_server_peer_state, ServerPeerStates,
+    remove_server_peer_state, ServedChainSource, ServerPeerStates,
 };
 use ade_runtime::producer::tick_assembler::{assemble_tick, TickInputs};
 use ade_runtime::seed_import::import_cardano_cli_json_utxo;
@@ -1255,7 +1255,11 @@ async fn handle_listener_event(
                 dispatch_server_frame_event_to_outbound(
                     &evt,
                     peers_state,
-                    served_chain_view,
+                    // --mode produce serves the self_accept'd accumulator
+                    // (no durable admit path here) — the original CN-CONS-07
+                    // token-proof. PHASE4-N-U S3 added the source enum; the
+                    // single dispatch authority is otherwise unchanged.
+                    ServedChainSource::Snapshot(served_chain_view),
                     peer_outbound,
                 )
                 .await

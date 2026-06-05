@@ -46,7 +46,10 @@ grep -Eq 'fn feed_unwrap_decodes_genesis_successor_block_zero' "$FORGE_T" \
 for t in block_fetch_unwraps_tag24_emitting_bare_block block_fetch_fails_closed_on_non_tag24_payload; do
     grep -Eq "fn $t" "$PUMP" || print_fail "wire_pump pin test $t missing"
 done
-grep -Eq 'fn node_spine_serve_loopback_follower_fetches_self_accepted_block' "$LOOP_T" \
+# PHASE4-N-U S3: the end-to-end wire-pump-unwrap loopback pin was renamed to
+# served_view_projects_durable_chain (serve migrated to the durable-chain
+# projection, DC-NODE-13); it still asserts BARE delivery (&fetched == &block_bytes).
+grep -Eq 'fn served_view_projects_durable_chain' "$LOOP_T" \
     || print_fail "node-spine serve loopback (end-to-end wire-pump unwrap) pin missing"
 # the loopback now asserts BARE delivery -- the wire pump already unwrapped, so the test must NOT
 # re-decompose (that pattern would mean the wire pump is still forwarding the wrapper).

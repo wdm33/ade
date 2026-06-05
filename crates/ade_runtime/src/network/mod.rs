@@ -23,6 +23,7 @@ pub mod n2n_listener;
 pub mod n2n_server;
 pub mod outbound_command;
 pub mod serve_dispatch;
+pub mod served_chain_projection;
 
 pub use mux_pump::MuxPump;
 pub use outbound_command::{CloseReason, OutboundCommand};
@@ -32,5 +33,6 @@ pub use n2n_listener::{
 };
 pub use serve_dispatch::{
     dispatch_server_frame_event_to_outbound, install_server_peer_state, remove_server_peer_state,
-    DispatchError, ServedBlockEvidence, ServerPeerStates,
+    DispatchError, ServedBlockEvidence, ServedChainSource, ServerPeerStates,
 };
+pub use served_chain_projection::ChainDbServedSource;

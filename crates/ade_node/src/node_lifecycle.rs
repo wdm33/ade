@@ -84,8 +84,6 @@ use ade_runtime::producer::coordinator::{
     coordinator_init, CoordinatorConfig, CoordinatorEvent, CoordinatorState, LedgerSnapshotRef,
 };
 use ade_runtime::producer::producer_shell::ProducerShell;
-use ade_runtime::producer::self_accepted_handoff::SelfAcceptedHandoff;
-use ade_runtime::producer::served_chain_handle::{ServedChainHandle, ServedChainView};
 use ade_runtime::rollback::SnapshotCadence;
 
 use crate::admission::bootstrap::build_n2n_version_table;
@@ -112,7 +110,7 @@ use ade_runtime::network::n2n_listener::{run_per_peer_session, PerPeerSessionCon
 use ade_runtime::network::outbound_command::new_per_peer_outbound;
 use ade_runtime::network::serve_dispatch::{
     dispatch_server_frame_event_to_outbound, install_server_peer_state, remove_server_peer_state,
-    ServerPeerStates,
+    ServedChainSource, ServerPeerStates,
 };
 use ade_runtime::orchestrator::event::{OrchestratorEvent, PeerRole};
 use ade_runtime::orchestrator::n2n_server_pump::PeerIdGenerator;
@@ -274,19 +272,16 @@ pub fn classify_start(has_tip: bool, has_snapshots: bool) -> NodeStart {
     }
 }
 
-/// PHASE4-N-F-G-R (DC-NODE-11): the node-level served-chain gate. A self-accepted
-/// forge handoff is admitted to the `ServedChainView` ONLY when its block_no
-/// strictly exceeds the highest already-served block_no — so the FIRST
-/// genesis-successor block 0 is served stably and the hermetic forge's subsequent
-/// block-0 re-forges (DC-NODE-05, no own-tip advance) are NOT re-served (a follower
-/// then sees a STABLE block 0 to fetch + adopt). Pure + total; no durable own-tip
-/// advance (that is the separately-scoped own-tip cluster, OQ-R1).
-pub fn serve_gate_admits(highest_served_block_no: Option<u64>, candidate_block_no: u64) -> bool {
-    match highest_served_block_no {
-        None => true,
-        Some(h) => candidate_block_no > h,
-    }
-}
+// PHASE4-N-U S3 (DC-NODE-13): the PHASE4-N-F-G-R monotone served-chain gate
+// (`serve_gate_admits`) is RETIRED. It gated an in-memory accumulator so the
+// served view held exactly one block 0 despite the hermetic forge's re-mints.
+// With own-forged durable admit (S1), the durable chain is extend-only
+// (DC-CONS-23) — a re-mint block 0 fails closed at admit, so the durable chain
+// holds exactly one block 0 by construction. The serve task now projects that
+// durable chain (`run_node_serve_task` over `ChainDbServedSource`), so the
+// stability the gate provided is a property of the durable chain itself — no
+// gate needed. DC-NODE-11's invariant is preserved (and strengthened) by
+// serve-as-projection.
 
 /// The `--mode node` owner entry. Returns a process exit code.
 ///
@@ -357,17 +352,24 @@ async fn run_node_lifecycle_inner(
     //    SnapshotStore (PHASE4-N-T/N-Y); the WAL is the on-disk append
     //    log. Opening is non-mutating w.r.t. chain facts.
     let chaindb_path = snapshot_dir.join("chain.db");
-    let chaindb = PersistentChainDb::open(PersistentChainDbOptions::at(&chaindb_path))
-        .map_err(|e| NodeLifecycleError::ChainDbOpen(format!("{e:?}")))?;
+    // PHASE4-N-U S3 (DC-NODE-13): shared (Arc) so the spawned serve task can
+    // READ the durable ChainDb projection concurrently with the relay loop's
+    // writes — redb reads are MVCC, so concurrent read-during-write is safe.
+    // The setup + relay loop borrow `&chaindb` (deref-coerces to
+    // `&PersistentChainDb`); the serve task gets an owned `Arc::clone`.
+    let chaindb = Arc::new(
+        PersistentChainDb::open(PersistentChainDbOptions::at(&chaindb_path))
+            .map_err(|e| NodeLifecycleError::ChainDbOpen(format!("{e:?}")))?,
+    );
     let mut wal =
         FileWalStore::open(wal_dir).map_err(|e| NodeLifecycleError::WalOpen(format!("{e:?}")))?;
 
     // 4. Classify first-run vs warm-start as a pure function of on-disk
     //    state. (The same `(tip, snapshots)` axes `bootstrap_initial_state`
     //    branches on.)
-    let tip =
-        ChainDb::tip(&chaindb).map_err(|e| NodeLifecycleError::OnDiskRead(format!("{e:?}")))?;
-    let snapshot_slots = SnapshotStore::list_snapshot_slots(&chaindb)
+    let tip = ChainDb::tip(chaindb.as_ref())
+        .map_err(|e| NodeLifecycleError::OnDiskRead(format!("{e:?}")))?;
+    let snapshot_slots = SnapshotStore::list_snapshot_slots(chaindb.as_ref())
         .map_err(|e| NodeLifecycleError::OnDiskRead(format!("{e:?}")))?;
     let start = classify_start(tip.is_some(), !snapshot_slots.is_empty());
 
@@ -539,54 +541,17 @@ async fn run_node_lifecycle_inner(
             // source, consumed here, never fabricated or re-derived.
             let (current_pparams, current_protocol_version) =
                 forge_constants_from_pparams(&state.ledger.protocol_params);
-            // PHASE4-N-F-G-B S2: dispatcher-owned sibling served-chain admit
-            // task. The relay loop forwards each self-accepted handoff over a
-            // typed mpsc channel; this sibling task is the SOLE node-spine
-            // push_atomic site, fed ONLY by SelfAcceptedHandoff::into_accepted().
-            // The loop holds only the Sender (no ServedChainHandle, no
-            // push_atomic). PHASE4-N-F-G-H S2: the ServedChainView is now READ by
-            // the node-spine serve sibling (`run_node_serve_task`) when `--listen`
-            // is set — request-driven serve of the self-accepted chain to peers.
-            let (serve_handle, serve_view) = ServedChainHandle::new();
-            let (handoff_tx, mut handoff_rx) = mpsc::unbounded_channel::<SelfAcceptedHandoff>();
-            let serve_task = tokio::spawn(async move {
-                // DC-NODE-11 (PHASE4-N-F-G-R): serve a monotone-block_no chain. The
-                // FIRST self-accepted block 0 wins the served view; the hermetic
-                // forge's subsequent block-0 re-forges (DC-NODE-05, no own-tip
-                // advance) are NOT re-served, so a follower sees a STABLE block 0 to
-                // fetch + adopt (no churn / no block-0-replaces-block-0).
-                let mut highest_served_block_no: Option<u64> = None;
-                while let Some(handoff) = handoff_rx.recv().await {
-                    let accepted = handoff.into_accepted();
-                    let block_no =
-                        match ade_ledger::block_validity::decode_block(accepted.as_bytes()) {
-                            Ok(d) => d.header_input.block_no.0,
-                            // A self-accepted block always decodes; never serve
-                            // undecodable bytes on the impossible failure.
-                            Err(_) => continue,
-                        };
-                    if !serve_gate_admits(highest_served_block_no, block_no) {
-                        // Already serving a >= block_no — keep the stable served
-                        // chain (skip the churned re-forge).
-                        continue;
-                    }
-                    match serve_handle.push_atomic(accepted) {
-                        Ok(_) => highest_served_block_no = Some(block_no),
-                        Err(e) => eprintln!(
-                            "ade_node --mode node: sibling served-chain admit \
-                             rejected: {e:?}"
-                        ),
-                    }
-                }
-            });
-            // PHASE4-N-F-G-H S2: node-spine serve-to-peer sibling. When `--listen`
-            // is set, bind the serve listener (fail-fast on bind failure — no
-            // silent live-serve claim) and spawn `run_node_serve_task` OUTSIDE
-            // `run_relay_loop`, reading the SAME `ServedChainView` the push sibling
-            // feeds. Request-driven serve only (no `advance_tip`). The dedicated
-            // serve task lifetime is owned by the node lifecycle owner (the operator
-            // `shutdown` watch), NOT the feed loop (DC-NODE-09): a clean feed-end halt
-            // must not tear down serving.
+            // PHASE4-N-U S3 (DC-NODE-13): node-spine serve-to-peer task reading
+            // the DURABLE ChainDb projection. When `--listen` is set, bind the
+            // serve listener (fail-fast on bind failure — no silent live-serve
+            // claim) and spawn `run_node_serve_task` OUTSIDE `run_relay_loop`,
+            // reading an Arc::clone of the durable ChainDb (serve-as-projection;
+            // the G-R push sibling + accumulator are retired — own-forged blocks
+            // are durably admitted via admit_forged_block_durably -> pump_block in
+            // the ForgeTick arm, S1). Request-driven serve only (no `advance_tip`).
+            // The serve task lifetime is owned by the node lifecycle owner (the
+            // operator `shutdown` watch), NOT the feed loop (DC-NODE-09): a clean
+            // feed-end halt must not tear down serving.
             let node_serve_handle = match cli.listen_addr.as_deref() {
                 Some(listen) => {
                     // Serving a peer requires the network's magic (the serve
@@ -602,12 +567,13 @@ async fn run_node_lifecycle_inner(
                     // (a clone), never a feed-end-triggered stop. The serve listener
                     // stays available until explicit node shutdown, a fatal serve
                     // error, or lifecycle cancellation — so a peer that retries after
-                    // the upstream feed ended can still BlockFetch the self-accepted
-                    // block. The serve task is read-only over ServedChainView; this
-                    // grants availability, not authority.
+                    // the upstream feed ended can still BlockFetch a durable block.
+                    // The serve task is READ-ONLY over the durable ChainDb (an
+                    // Arc::clone); this grants availability, not authority.
+                    let serve_chaindb: Arc<dyn ChainDb> = chaindb.clone();
                     let task = tokio::spawn(run_node_serve_task(
                         listener,
-                        serve_view,
+                        serve_chaindb,
                         serve_magic,
                         shutdown.clone(),
                     ));
@@ -626,8 +592,7 @@ async fn run_node_lifecycle_inner(
                 anchor_millis,
                 start_slot,
                 slot_length_ms,
-            )
-            .with_handoff_sender(handoff_tx);
+            );
             // PHASE4-N-F-G-J S1 (CN-NODE-04): emit the closed feed/forge
             // scheduling diagnostics to stderr (emit-only; never alters
             // scheduling). The forge-on path the C1 rerun exercises —
@@ -645,17 +610,18 @@ async fn run_node_lifecycle_inner(
                 Some(&mut sched_log),
             )
             .await?;
-            // Close the handoff channel (drop the loop's Sender) so the sibling
-            // admit task drains any remaining handoffs and exits; then join it.
+            // PHASE4-N-U S3: no handoff channel / push sibling to drain — the
+            // serve task reads the durable ChainDb directly. Drop the forge
+            // activation (releases its &mut borrows on clock/shell), then await
+            // the serve task.
             drop(activation);
-            let _ = serve_task.await;
             // DC-NODE-09: do NOT stop the serve task at feed-end. Await it — it ends
             // ONLY when the operator `shutdown` watch flips (which `run_relay_loop`
             // also observed) or on a fatal serve error. On a clean feed-end halt with
             // `shutdown` still false, this keeps Ade reachable so a late peer can
-            // BlockFetch the self-accepted block already in the served view. The
-            // process still always terminates: operator shutdown ends BOTH the relay
-            // loop and the serve task.
+            // BlockFetch a durable block from the served projection. The process
+            // still always terminates: operator shutdown ends BOTH the relay loop
+            // and the serve task.
             if let Some(handle) = node_serve_handle {
                 let _ = handle.await;
             }
@@ -786,26 +752,29 @@ pub async fn bind_serve_listener(listen_addr: &str) -> Result<TcpListener, Serve
         .map_err(|e| ServeStartError::Bind(e.kind()))
 }
 
-/// PHASE4-N-F-G-H S2: the node-spine serve sibling task. REQUEST-DRIVEN serve of
-/// the G-B self-accepted `ServedChainView` to real peers, run OUTSIDE
-/// `run_relay_loop` (a sibling, like the push task). It accepts inbound peers on
-/// the pre-bound `listener` — reusing the per-peer N2N session machinery
+/// PHASE4-N-U S3 (DC-NODE-13): the node-spine serve task. REQUEST-DRIVEN serve of
+/// the DURABLE adopted chain (a read-only projection of the durable ChainDb) to
+/// real peers, run OUTSIDE `run_relay_loop` (a sibling). It accepts inbound peers
+/// on the pre-bound `listener` — reusing the per-peer N2N session machinery
 /// `run_per_peer_session` (handshake + mux + session) verbatim — and routes each
 /// orchestrator event to the SINGLE shared serve-dispatch core (S1):
 /// `PeerConnected { role: DownstreamServer }` -> `install_server_peer_state`;
 /// `PeerDisconnected` -> `remove_server_peer_state`; server frames ->
-/// `dispatch_server_frame_event_to_outbound` over `serve_view`.
+/// `dispatch_server_frame_event_to_outbound` over `ServedChainSource::DurableChainDb`.
 ///
 /// COORDINATOR-FREE: no `CoordinatorState`, no `coordinator_step`, no producer
 /// evidence writer (those stay in `produce_mode`). REQUEST-DRIVEN ONLY: there is
-/// NO proactive `producer_chain_sync_advance_tip` and NO `serve_view.changed()`
-/// reactor — a follower's `RequestNext` is answered with `RollForward` iff the
-/// block is already present in `serve_view` at request time. Stops when
-/// `shutdown_rx` flips. The serve is read-only over `serve_view`; it advances no
-/// durable tip and admits nothing.
+/// NO proactive `producer_chain_sync_advance_tip` reactor — a follower's
+/// `RequestNext` is answered with `RollForward` iff the block is already durable
+/// at request time. Stops when `shutdown_rx` flips. The serve is READ-ONLY over
+/// the durable ChainDb (it advances no tip, admits nothing); every byte served
+/// traces to the validated durable admit (CN-CONS-07 serve clause). Supersedes
+/// the G-R monotone-gated accumulator: the durable chain is extend-only, so it
+/// is coherent and holds exactly one block 0 by construction, and serving
+/// survives restart (the accumulator did not).
 pub async fn run_node_serve_task(
     listener: TcpListener,
-    serve_view: ServedChainView,
+    serve_chaindb: Arc<dyn ChainDb>,
     network_magic: u32,
     mut shutdown_rx: watch::Receiver<bool>,
 ) {
@@ -870,12 +839,13 @@ pub async fn run_node_serve_task(
                     OrchestratorEvent::PeerN2nServerChainSyncFrame { .. }
                     | OrchestratorEvent::PeerN2nServerBlockFetchFrame { .. } => {
                         // Request-driven serve over the SINGLE shared dispatch
-                        // core. Dispatch errors drop the peer; never panic, never
-                        // mutate authoritative state.
+                        // core, reading the durable ChainDb projection
+                        // (DC-NODE-13). Dispatch errors drop the peer; never
+                        // panic, never mutate authoritative state.
                         let _ = dispatch_server_frame_event_to_outbound(
                             &evt,
                             &mut peers_state,
-                            &serve_view,
+                            ServedChainSource::DurableChainDb(serve_chaindb.as_ref()),
                             &peer_outbound,
                         )
                         .await;
@@ -956,12 +926,6 @@ pub struct ForgeActivation<'a> {
     /// LOCAL node-forge observation surface — in-memory, not persisted, not logged,
     /// not evidence — that makes the fail-closed visible (never a silent `NotDue`).
     pub last_slot_alignment_fail: Option<SlotAlignmentError>,
-    /// PHASE4-N-F-G-B S2: typed handoff sender to the dispatcher-spawned sibling
-    /// served-chain admit task. `None` ⇒ forge-capable but non-serving
-    /// (byte-identical relay). When `Some`, the forge tick forwards each
-    /// self-accepted handoff as a typed channel send. The loop holds ONLY this
-    /// `Sender` — never a `ServedChainHandle`, never a `push_atomic` call.
-    handoff_tx: Option<mpsc::UnboundedSender<SelfAcceptedHandoff>>,
 }
 
 impl<'a> ForgeActivation<'a> {
@@ -993,17 +957,7 @@ impl<'a> ForgeActivation<'a> {
             pending_slot: None,
             hermetic_forge_outcomes: Vec::new(),
             last_slot_alignment_fail: None,
-            handoff_tx: None,
         }
-    }
-
-    /// PHASE4-N-F-G-B S2: wire the sibling-admit handoff channel (opt-in). The
-    /// relay-loop forge tick forwards each self-accepted handoff to this sender;
-    /// the dispatcher drains it in the sibling `push_atomic` task. Without this,
-    /// `handoff_tx` stays `None` and the loop is the exact non-serving relay.
-    pub fn with_handoff_sender(mut self, tx: mpsc::UnboundedSender<SelfAcceptedHandoff>) -> Self {
-        self.handoff_tx = Some(tx);
-        self
     }
 }
 
@@ -1166,15 +1120,12 @@ pub async fn run_relay_loop_with_sched(
                         if let Some(s) = sched.as_deref_mut() {
                             s.record(&crate::live_log::NodeSchedEvent::ForgeAttempted);
                         }
-                        // PHASE4-N-F-G-B S2: the forge surfaces a typed
-                        // Option<SelfAcceptedHandoff>; forward it to the
-                        // dispatcher-spawned sibling admit task as a typed channel
-                        // send. This is NOT a serve/tip token — the loop holds only
-                        // the Sender, never a ServedChainHandle, and never calls
-                        // push_atomic (served-chain mutation happens in the sibling
-                        // task). None ⇒ nothing sent; the loop still pushes ONLY the
-                        // observation outcome and advances no tip (containment
-                        // semantically unchanged).
+                        // The forge surfaces a typed Option<SelfAcceptedHandoff>.
+                        // PHASE4-N-U S1: a Some handoff is admitted durably through
+                        // the pump (below); S3: there is no serve handoff — the
+                        // durable block IS what the serve task projects. None ⇒
+                        // nothing admitted; the loop still records ONLY the
+                        // observation outcome and advances no tip directly.
                         let (outcome, handoff) = forge_one_from_recovered(
                             act.recovered,
                             &state.receive.chain_dep,
@@ -1192,18 +1143,17 @@ pub async fn run_relay_loop_with_sched(
                         // PHASE4-N-U S1 (DC-NODE-12): a self-accepted forged block
                         // becomes durable ONLY by submission to the SAME pump_block
                         // chokepoint received blocks use (durable-before-tip; the
-                        // forge advances no tip directly). Admit the self-accepted
-                        // token through the fenced driver BEFORE the serve handoff,
-                        // so the durable tip advances and the next ForgeTick builds
-                        // N+1 (state.receive + the durable ChainDb advance together
-                        // via pump_block). A stale-tip forge fails closed inside
-                        // pump_block (extend-only block_validity / prior_fp —
-                        // DC-CONS-23); in this single-threaded loop the forge always
-                        // builds on the tip it just read, so a reject is a real
-                        // invariant/IO failure and is propagated (fail-fast). The
-                        // G-R serve handoff is RETAINED unchanged (sibling
-                        // push_atomic) until S3 makes serve a durable-chain
-                        // projection.
+                        // forge advances no tip directly), so the durable tip
+                        // advances and the next ForgeTick builds N+1 (state.receive
+                        // + the durable ChainDb advance together via pump_block). A
+                        // stale-tip forge fails closed inside pump_block (extend-only
+                        // block_validity / prior_fp — DC-CONS-23); in this
+                        // single-threaded loop the forge always builds on the tip it
+                        // just read, so a reject is a real invariant/IO failure and
+                        // is propagated (fail-fast). PHASE4-N-U S3: there is no
+                        // separate serve handoff — the durable block this admits IS
+                        // what the serve task projects (serve-as-projection,
+                        // DC-NODE-13); the G-R push sibling is retired.
                         if let Some(h) = handoff {
                             admit_forged_block_durably(
                                 &h,
@@ -1214,11 +1164,6 @@ pub async fn run_relay_loop_with_sched(
                                 ledger_view,
                             )
                             .map_err(|e| NodeLifecycleError::RelaySync(format!("{e:?}")))?;
-                            if let Some(tx) = act.handoff_tx.as_ref() {
-                                // Best-effort typed serve send (G-R); a dropped
-                                // sibling means no serve, never a tip effect.
-                                let _ = tx.send(h);
-                            }
                         }
                         // Closed diagnostic projection of the reused forge outcome,
                         // read before the move-push. Operational tier — never an
@@ -1819,24 +1764,12 @@ fn may_cold_start_forge(
 mod tests {
     use super::*;
 
-    /// DC-NODE-11 (PHASE4-N-F-G-R): the served-chain gate admits a forge handoff
-    /// ONLY when its block_no strictly advances the highest already-served. The
-    /// FIRST block 0 wins; a second block 0 (the hermetic forge's re-mint) is
-    /// skipped; a strictly-higher block_no is admitted (the gate never freezes).
-    #[test]
-    fn serve_gate_admits_first_block_zero_then_skips_reforged_block_zero() {
-        assert!(serve_gate_admits(None, 0), "the first block 0 is served");
-        assert!(
-            !serve_gate_admits(Some(0), 0),
-            "a second block 0 must NOT be re-served (no block-0-replaces-block-0)"
-        );
-        assert!(
-            serve_gate_admits(Some(0), 1),
-            "a strictly-higher block_no is served (the gate does not freeze)"
-        );
-        assert!(!serve_gate_admits(Some(1), 0), "a lower block_no is not re-served");
-        assert!(!serve_gate_admits(Some(5), 5), "an equal block_no is not re-served");
-    }
+    // PHASE4-N-U S3 (DC-NODE-13): the serve_gate_admits monotone-block_no test
+    // (serve_gate_admits_first_block_zero_then_skips_reforged_block_zero) is
+    // RETIRED with the gate. Serve-as-projection of the extend-only durable
+    // chain provides the same (stronger) stability — the durable chain holds
+    // exactly one block 0 by construction (DC-CONS-23) — proven by the
+    // tests/ade_node served-chain-projection tests + ci_check_served_chain_projection.sh.
 
     #[test]
     fn node_forge_protocol_version_and_pparams_from_recovered_current_view() {

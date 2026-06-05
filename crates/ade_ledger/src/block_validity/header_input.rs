@@ -58,20 +58,36 @@ pub struct DecodedBlock {
 pub fn accepted_block_header_bytes(
     accepted: &crate::producer::AcceptedBlock,
 ) -> Result<&[u8], BlockValidityError> {
-    let bytes = accepted.as_bytes();
-    let env = decode_block_envelope(bytes).map_err(codec)?;
+    block_header_bytes(accepted.as_bytes())
+}
+
+/// Return the header CBOR sub-slice of a canonical `[era, block]` block
+/// envelope's raw bytes — the same `header_cbor_slice` recipe
+/// [`accepted_block_header_bytes`] uses, factored out for callers that
+/// hold the raw canonical block bytes rather than an `AcceptedBlock`
+/// token (PHASE4-N-U S3: the `--mode node` served-chain projection reads
+/// `StoredBlock.bytes` directly from the durable ChainDb). This is the
+/// SAME single header-projection authority (`DC-CONS-18`) — no parallel
+/// splitter, no second walker; the only difference is the input type.
+///
+/// The returned slice is a contiguous subslice of `block_cbor`. For a
+/// Babbage/Conway envelope `[era, inner_block]`, the header is the first
+/// element of `inner_block`'s outer `array(N)`.
+pub fn block_header_bytes(block_cbor: &[u8]) -> Result<&[u8], BlockValidityError> {
+    let env = decode_block_envelope(block_cbor).map_err(codec)?;
     let inner_start = env.block_start;
-    let inner = &bytes[inner_start..env.block_end];
+    let inner = &block_cbor[inner_start..env.block_end];
     let header = header_cbor_slice(inner)?;
-    // Project `header` (a slice of `inner`) back into `bytes` coordinates
-    // via slice arithmetic on the parent slice positions. The walker
-    // returns `&inner[start..end]`, and `inner` is `&bytes[inner_start..]`,
-    // so `header` lives at `bytes[inner_start + (header.start - inner.start)]`.
-    // We use `as_ptr()` arithmetic on the contiguous parent slice — both
-    // pointers come from `bytes`, so the subtraction is safe.
+    // Project `header` (a slice of `inner`) back into `block_cbor`
+    // coordinates via slice arithmetic on the parent slice positions. The
+    // walker returns `&inner[start..end]`, and `inner` is
+    // `&block_cbor[inner_start..]`, so `header` lives at
+    // `block_cbor[inner_start + (header.start - inner.start)]`. We use
+    // `as_ptr()` arithmetic on the contiguous parent slice — both pointers
+    // come from `block_cbor`, so the subtraction is safe.
     let header_start_in_inner = (header.as_ptr() as usize) - (inner.as_ptr() as usize);
     let header_start_in_bytes = inner_start + header_start_in_inner;
-    Ok(&bytes[header_start_in_bytes..header_start_in_bytes + header.len()])
+    Ok(&block_cbor[header_start_in_bytes..header_start_in_bytes + header.len()])
 }
 
 /// Decode an era-tagged block envelope and project it.
