@@ -3399,9 +3399,17 @@ inverse of CN-SESS-04 inbound reassembly.
 source = "docs/clusters/PHASE4-N-AB/cluster.md §1; project_pre_rolive_hardening_queue.md item 2"
 cross_ref = ["CN-SESS-04", "DC-LIVEMEM-01", "CN-WIRE-08", "DC-SERVEMEM-01", "DC-CONS-17"]
 code_locus = "crates/ade_network/src/session/core.rs (handle_outbound owns segmentation: splits MAX_PAYLOAD < len <= MAX_OUTBOUND_PAYLOAD_BYTES into ordered <=MAX_PAYLOAD frames via encode_inner_frame, reusing one captured timestamp; encode_inner_frame stays the single-frame encoder authority with its MAX_PAYLOAD guard; MAX_OUTBOUND_PAYLOAD_BYTES fixed constant)"
-tests = []
-ci_script = ""
-status = "declared"
+tests = [
+    "crates/ade_network/src/session/core.rs::tests::outbound_payload_at_max_payload_is_one_frame",
+    "crates/ade_network/src/session/core.rs::tests::outbound_payload_over_max_payload_segments_into_two",
+    "crates/ade_network/src/session/core.rs::tests::outbound_segment_order_preserved",
+    "crates/ade_network/src/session/core.rs::tests::outbound_segments_keep_same_mini_protocol_id_and_mode",
+    "crates/ade_network/src/session/core.rs::tests::outbound_large_payload_reassembles_byte_identical_via_inbound",
+    "crates/ade_network/src/session/core.rs::tests::outbound_payload_at_upper_bound_is_allowed",
+    "crates/ade_network/src/session/core.rs::tests::outbound_payload_over_upper_bound_fails_closed",
+]
+ci_script = "ci/ci_check_outbound_segmentation.sh"
+status = "enforced"
 introduced_in = "PHASE4-N-AB"
 strengthened_in = []
 authority_surface = "wire-layer outbound segmentation across mux frame boundaries"

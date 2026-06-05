@@ -3,7 +3,7 @@
 ## §2 Slice Header
 - **Slice Name:** outbound mux segmentation
 - **Cluster:** PHASE4-N-AB (outbound mux segmentation) — primary invariant **CN-SESS-05**
-- **Status:** in progress
+- **Status:** Merged
 - **Cluster Exit Criteria Addressed:** **CE-1** (the whole cluster — one slice).
 
 ## §3 Dependencies

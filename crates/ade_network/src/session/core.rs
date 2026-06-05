@@ -48,6 +48,17 @@ use super::state::{ConnectedState, SessionState};
 /// config) may disable it or set it unbounded. Closed constant.
 const MAX_REASSEMBLY_TAIL_BYTES: usize = 16 * 1024 * 1024;
 
+/// PHASE4-N-AB S1 (CN-SESS-05): the maximum size of a single OUTBOUND
+/// mini-protocol payload `handle_outbound` will segment into mux frames. Above
+/// it, the send fails closed (`OutboundPayloadTooLarge`). The outbound
+/// counterpart of `MAX_REASSEMBLY_TAIL_BYTES` (16 MiB, symmetric with the
+/// inbound DC-LIVEMEM-01 reassembly cap) — generous over any legitimate single
+/// block/item, while bounding the outbound buffer. A **defensive implementation
+/// bound, NOT a Cardano semantic parameter**; it may be tightened by a future
+/// slice, but no runtime option (CLI / env / config) may disable it or set it
+/// unbounded. Closed constant.
+const MAX_OUTBOUND_PAYLOAD_BYTES: usize = 16 * 1024 * 1024;
+
 /// One step of the session reducer. Pure: same `(state, event)`
 /// inputs → same `Vec<SessionEffect>` output across runs.
 pub fn step(
@@ -322,7 +333,10 @@ fn handle_outbound(
     mode: MuxMode,
     timestamp: u32,
 ) -> Result<Vec<SessionEffect>, SessionError> {
-    if payload.len() > MAX_PAYLOAD {
+    // CN-SESS-05: fail closed only ABOVE the outbound ceiling; payloads up to it
+    // are SEGMENTED below into <= MAX_PAYLOAD frames (so the per-frame guard in
+    // encode_inner_frame is always satisfied).
+    if payload.len() > MAX_OUTBOUND_PAYLOAD_BYTES {
         return Err(SessionError::OutboundPayloadTooLarge { len: payload.len() });
     }
     if let SessionState::Connected(c) = state {
@@ -334,8 +348,24 @@ fn handle_outbound(
             id: mini_protocol.id(),
         });
     }
-    let bytes = encode_inner_frame(mini_protocol, payload, mode, timestamp)?;
-    Ok(vec![SessionEffect::SendBytes(bytes)])
+    // CN-SESS-05 outbound segmentation — the inverse of CN-SESS-04 inbound
+    // reassembly. A payload larger than MAX_PAYLOAD is split into ordered
+    // <= MAX_PAYLOAD chunks, each encoded via the single-frame encode_inner_frame
+    // authority; every segment carries the SAME mini-protocol id + mode and the
+    // SAME captured `timestamp` (GREEN — no per-segment clock). An empty payload
+    // still emits exactly one (empty) frame. The ordered frame bytes are
+    // concatenated into one SendBytes; the receiver's demux + CN-SESS-04
+    // reassembly reconstructs the original. Byte-preserving + lossless:
+    // concat(segment payloads) == payload.
+    let mut frames: Vec<u8> = Vec::new();
+    if payload.is_empty() {
+        frames.extend(encode_inner_frame(mini_protocol, Vec::new(), mode, timestamp)?);
+    } else {
+        for chunk in payload.chunks(MAX_PAYLOAD) {
+            frames.extend(encode_inner_frame(mini_protocol, chunk.to_vec(), mode, timestamp)?);
+        }
+    }
+    Ok(vec![SessionEffect::SendBytes(frames)])
 }
 
 fn handle_handshake_start_initiator(
@@ -973,5 +1003,164 @@ mod tests {
         // N2N_SUPPORTED is loaded but unused outside the handshake driver;
         // touch it here so the import lint stays clean for now.
         let _ = N2N_SUPPORTED.len();
+    }
+
+    // -------------------------------------------------------------
+    // PHASE4-N-AB S1: outbound mux segmentation (CN-SESS-05).
+    // -------------------------------------------------------------
+
+    /// Decode every mux frame in a SendBytes blob (what a peer's demux does).
+    fn decode_all_frames(mut bytes: &[u8]) -> Vec<MuxFrame> {
+        let mut out = Vec::new();
+        while !bytes.is_empty() {
+            let (frame, rest) = decode_frame(bytes).expect("decode frame");
+            out.push(frame);
+            bytes = rest;
+        }
+        out
+    }
+
+    /// Drive one outbound BlockFetch message through the reducer and return the
+    /// encoded mux frames (Responder mode = the serve direction).
+    fn outbound_frames(payload: Vec<u8>) -> Vec<MuxFrame> {
+        let mut state = fresh_connected_state();
+        let effects = step(
+            &mut state,
+            ByteChunkIn::OutboundFrame {
+                mini_protocol: AcceptedMiniProtocol::BlockFetch,
+                payload,
+                mode: MuxMode::Responder,
+                timestamp: 99,
+            },
+        )
+        .expect("outbound step");
+        let bytes = match effects.first() {
+            Some(SessionEffect::SendBytes(b)) => b.clone(),
+            other => panic!("expected SendBytes, got {other:?}"),
+        };
+        decode_all_frames(&bytes)
+    }
+
+    #[test]
+    fn outbound_payload_at_max_payload_is_one_frame() {
+        let frames = outbound_frames(vec![0xCD; MAX_PAYLOAD]);
+        assert_eq!(frames.len(), 1, "len == MAX_PAYLOAD is a single frame");
+        assert_eq!(frames[0].payload.len(), MAX_PAYLOAD);
+    }
+
+    #[test]
+    fn outbound_payload_over_max_payload_segments_into_two() {
+        let frames = outbound_frames(vec![0xCD; MAX_PAYLOAD + 1]);
+        assert_eq!(frames.len(), 2, "len == MAX_PAYLOAD + 1 is two frames");
+        assert_eq!(frames[0].payload.len(), MAX_PAYLOAD);
+        assert_eq!(frames[1].payload.len(), 1);
+    }
+
+    #[test]
+    fn outbound_segment_order_preserved() {
+        let len = MAX_PAYLOAD * 2 + 7;
+        let payload: Vec<u8> = (0..len).map(|i| (i % 251) as u8).collect();
+        let frames = outbound_frames(payload.clone());
+        assert_eq!(frames.len(), 3);
+        let reassembled: Vec<u8> = frames.iter().flat_map(|f| f.payload.clone()).collect();
+        assert_eq!(reassembled, payload, "concat(segments) == original, in order");
+    }
+
+    #[test]
+    fn outbound_segments_keep_same_mini_protocol_id_and_mode() {
+        let frames = outbound_frames(vec![0x01; MAX_PAYLOAD * 2 + 100]);
+        assert_eq!(frames.len(), 3);
+        let id0 = frames[0].header.mini_protocol_id.get();
+        let mode0 = frames[0].header.mode;
+        for f in &frames {
+            assert_eq!(f.header.mini_protocol_id.get(), id0, "same mini-protocol id");
+            assert_eq!(f.header.mode, mode0, "same mode");
+            assert!(f.payload.len() <= MAX_PAYLOAD, "each frame <= MAX_PAYLOAD");
+        }
+    }
+
+    #[test]
+    fn outbound_large_payload_reassembles_byte_identical_via_inbound() {
+        // A valid CBOR item [4, bytes(70000)] (block-fetch-shaped) > MAX_PAYLOAD.
+        let bytes_item = big_cbor_bytes(70_000);
+        let mut full_msg: Vec<u8> = Vec::with_capacity(2 + bytes_item.len());
+        full_msg.push(0x82);
+        full_msg.push(0x04);
+        full_msg.extend_from_slice(&bytes_item);
+        // Segment it via the outbound reducer (Responder = serve direction).
+        let mut out_state = fresh_connected_state();
+        let effects = step(
+            &mut out_state,
+            ByteChunkIn::OutboundFrame {
+                mini_protocol: AcceptedMiniProtocol::BlockFetch,
+                payload: full_msg.clone(),
+                mode: MuxMode::Responder,
+                timestamp: 7,
+            },
+        )
+        .expect("outbound step");
+        let wire = match effects.first() {
+            Some(SessionEffect::SendBytes(b)) => b.clone(),
+            other => panic!("expected SendBytes, got {other:?}"),
+        };
+        assert!(decode_all_frames(&wire).len() >= 2, "70KB payload must segment");
+        // Feed the segmented wire bytes back through Ade's OWN inbound reassembly
+        // (CN-SESS-04) — the round-trip must reconstruct the original exactly.
+        let mut in_state = fresh_connected_state();
+        let delivered = step(&mut in_state, ByteChunkIn::Inbound(wire)).expect("inbound step");
+        match delivered.as_slice() {
+            [SessionEffect::DeliverPeerFrame {
+                mini_protocol: AcceptedMiniProtocol::BlockFetch,
+                payload,
+            }] => assert_eq!(payload, &full_msg, "segment -> reassemble == identity"),
+            other => panic!("expected one DeliverPeerFrame, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn outbound_payload_at_upper_bound_is_allowed() {
+        let mut state = fresh_connected_state();
+        let effects = step(
+            &mut state,
+            ByteChunkIn::OutboundFrame {
+                mini_protocol: AcceptedMiniProtocol::BlockFetch,
+                payload: vec![0x00; MAX_OUTBOUND_PAYLOAD_BYTES],
+                mode: MuxMode::Responder,
+                timestamp: 1,
+            },
+        )
+        .expect("payload at the upper bound is allowed (segmented)");
+        let bytes = match effects.first() {
+            Some(SessionEffect::SendBytes(b)) => b.clone(),
+            other => panic!("expected SendBytes, got {other:?}"),
+        };
+        let frames = decode_all_frames(&bytes);
+        let total: usize = frames.iter().map(|f| f.payload.len()).sum();
+        assert_eq!(
+            total, MAX_OUTBOUND_PAYLOAD_BYTES,
+            "every byte segmented, none dropped"
+        );
+        for f in &frames {
+            assert!(f.payload.len() <= MAX_PAYLOAD);
+        }
+    }
+
+    #[test]
+    fn outbound_payload_over_upper_bound_fails_closed() {
+        let mut state = fresh_connected_state();
+        let err = step(
+            &mut state,
+            ByteChunkIn::OutboundFrame {
+                mini_protocol: AcceptedMiniProtocol::BlockFetch,
+                payload: vec![0x00; MAX_OUTBOUND_PAYLOAD_BYTES + 1],
+                mode: MuxMode::Responder,
+                timestamp: 1,
+            },
+        )
+        .expect_err("payload over the upper bound fails closed");
+        assert!(matches!(
+            err,
+            SessionError::OutboundPayloadTooLarge { len } if len == MAX_OUTBOUND_PAYLOAD_BYTES + 1
+        ));
     }
 }
