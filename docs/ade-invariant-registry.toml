@@ -3386,6 +3386,29 @@ cluster = "CL-WIRE-PROTOCOL"
 evidence_notes = "PHASE4-N-M-FRAG (2026-05-27) surfaced + closed the missing per-mini-protocol reassembly in the session reducer. cardano-node fragments large block-fetch responses (Conway blocks exceeding the 65535-byte mux payload limit) across multiple mux frames bearing the same protocol id. Before FRAG, `drain_connected_frames` emitted one `DeliverPeerFrame` per mux frame; the block-fetch codec received a truncated CBOR item and failed → wire pump exited with `BlockFetchDecode`. After FRAG, the reducer accumulates per-protocol bytes and drains COMPLETE CBOR items via `ade_codec::cbor::skip_item`. Live operator pass against fully-synced docker preprod (epoch 291, slot ~124M) now decodes block-fetch responses successfully (committed bootstrap transcript records `block_received` events with the canonical block hash matching the peer's announced tip)."
 
 [[rules]]
+id = "CN-SESS-05"
+tier = "derived"
+statement = """
+Outbound mini-protocol payloads larger than MAX_PAYLOAD are segmented into
+ordered mux frames, each no larger than MAX_PAYLOAD, preserving mini-protocol id,
+mode, and byte order. Concatenating segment payloads reconstructs the original
+payload exactly. Payloads above MAX_OUTBOUND_PAYLOAD_BYTES fail closed.
+Segmentation uses the single existing frame encoder authority and is the outbound
+inverse of CN-SESS-04 inbound reassembly.
+"""
+source = "docs/clusters/PHASE4-N-AB/cluster.md §1; project_pre_rolive_hardening_queue.md item 2"
+cross_ref = ["CN-SESS-04", "DC-LIVEMEM-01", "CN-WIRE-08", "DC-SERVEMEM-01", "DC-CONS-17"]
+code_locus = "crates/ade_network/src/session/core.rs (handle_outbound owns segmentation: splits MAX_PAYLOAD < len <= MAX_OUTBOUND_PAYLOAD_BYTES into ordered <=MAX_PAYLOAD frames via encode_inner_frame, reusing one captured timestamp; encode_inner_frame stays the single-frame encoder authority with its MAX_PAYLOAD guard; MAX_OUTBOUND_PAYLOAD_BYTES fixed constant)"
+tests = []
+ci_script = ""
+status = "declared"
+introduced_in = "PHASE4-N-AB"
+strengthened_in = []
+authority_surface = "wire-layer outbound segmentation across mux frame boundaries"
+cluster = "CL-WIRE-PROTOCOL"
+evidence_notes = "Declared at cluster scoping (2026-06-06, user-confirmed). Pre-RO-LIVE hardening item 2. The outbound inverse of CN-SESS-04: that rule made Ade REASSEMBLE inbound multi-frame payloads (Conway blocks > 65535-byte mux SDU limit); this rule makes Ade SEGMENT its own outbound payloads the same way, so a large served BlockFetch Block is transmittable. Before N-AB, handle_outbound + encode_inner_frame both errored (OutboundPayloadTooLarge) above MAX_PAYLOAD = 65535 -> Ade could receive but not send large blocks. Design (GREEN session::core, no BLUE change): handle_outbound segments; encode_inner_frame stays strict single-frame; MAX_OUTBOUND_PAYLOAD_BYTES = 16 MiB (fixed, non-configurable; symmetric with the inbound MAX_REASSEMBLY_TAIL_BYTES / DC-LIVEMEM-01). Byte-preserving + lossless; one captured timestamp reused across a message's segments (GREEN calls no clock). Enforced at S1 with ci/ci_check_outbound_segmentation.sh + the 7 required tests; declared rows are skipped by ci_check_registry_code_locus_exists.sh."
+
+[[rules]]
 id = "DC-SESS-06"
 tier = "derived"
 statement = """
