@@ -6387,13 +6387,13 @@ full-genesis replay) -- no new durability law.
 """
 source = "docs/planning/phase4-n-u-forged-block-durability-invariants.md"
 cross_ref = ["T-REC-01", "T-REC-02", "T-REC-03", "DC-SYNC-01", "DC-NODE-12", "DC-WAL-04"]
-code_locus = "crates/ade_node/src/{node_lifecycle,node_sync}.rs; crates/ade_runtime/src/recovery/restart.rs (TBD at /cluster-plan)"
-tests = []
+code_locus = "crates/ade_node/src/node_lifecycle.rs (warm_start_recovery: sidecar-reconstructed era_schedule/ledger_view + forward-replay via bootstrap_initial_state + fingerprint fail-fast guard); crates/ade_node/src/node_sync.rs (admit_forged_block_durably -> pump_block); crates/ade_runtime/src/bootstrap.rs (bootstrap_initial_state warm-start forward-replay -- reused)"
+tests = ["forge_kill_then_warm_start_recovers_same_tip_via_forward_replay"]
 ci_script = ""
-status = "declared"
+status = "enforced"
 introduced_in = "PHASE4-N-U"
 strengthened_in = []
-evidence_notes = "PHASE4-N-U invariant sketch (2026-06-05). Declared at sketch. True-tier: the forged-then-admitted durable chain is replay-equivalent and crash-recoverable byte-identically, exactly as the received-block chain (T-REC-01/02/03)."
+evidence_notes = "PHASE4-N-U S2 (2026-06-05). ENFORCED (test-enforced; no dedicated CI gate). A forged-block durable tip carries NO snapshot-at-tip (admit_forged_block_durably captures none); warm_start_recovery recovers it by FORWARD-REPLAY from the genesis slot-0 snapshot over the durable WAL block, and its fingerprint guard asserts the recovered ledger fp == the WAL-tail post_fp -- so reaching Ok with the same tip is byte-identical replay equivalence (forge_kill_then_warm_start_recovers_same_tip_via_forward_replay: forge block 0 -> admit -> kill -> reopen -> warm_start_recovery -> recovered tip slot+hash == the pre-kill durable tip). Rides the existing snapshot + forward-replay recovery law (the bootstrap_initial_state warm-start branch, already proven by recover_node_state's recovery_crash_at_phase_sync_byte_identical) -- no new durability law. True-tier: extends T-REC-01/02/03 from received-only to forged+received durable progression."
 
 [[rules]]
 id = "DC-CONS-23"

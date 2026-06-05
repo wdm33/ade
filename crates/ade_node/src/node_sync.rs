@@ -1776,6 +1776,160 @@ mod tests {
     }
 
     #[test]
+    fn forge_kill_then_warm_start_recovers_same_tip_via_forward_replay() {
+        // PHASE4-N-U S2 (T-REC-05): a forged-block durable tip carries NO
+        // snapshot-at-tip (admit_forged_block_durably captures none), so warm-start
+        // recovers it by FORWARD-REPLAY from the genesis slot-0 snapshot over the
+        // durable WAL block. The recovered tip + ledger fingerprint are
+        // byte-identical to the pre-kill durable tip (the fingerprint guard inside
+        // warm_start_recovery asserts the fp equality, so reaching Ok with the same
+        // tip proves byte-identical forward replay).
+        use ade_ledger::seed_consensus_inputs::{
+            encode_seed_epoch_consensus_inputs, SeedEpochConsensusInputs,
+        };
+        use ade_runtime::seed_consensus_provenance::append_seed_epoch_provenance;
+
+        let eta0 = Nonce(Hash32([0xCD; 32]));
+        // anchor_fp == the ForwardSyncState prior_fp seed, so the first forged
+        // AdmitBlock.prior_fp chains from it and warm-start discovery keys on it.
+        let anchor_fp = Hash32([0xA0; 32]);
+        let genesis_base = || {
+            let mut ledger = LedgerState::new(CardanoEra::Conway);
+            ledger.epoch_state.epoch = EpochNo(0);
+            let mut chain_dep = PraosChainDepState::empty();
+            chain_dep.epoch_nonce = Nonce(Hash32([0xCD; 32]));
+            chain_dep.evolving_nonce = Nonce(Hash32([0xCD; 32]));
+            (ledger, chain_dep)
+        };
+        // MUST equal warm_start_recovery's reconstruction
+        // make_node_schedule(epoch_no*432_000, epoch_no) = (0,0) for the genesis
+        // seed epoch (safe_zone 432_000, NOT the l5 helper's 129_600).
+        let era_schedule = EraSchedule::new(
+            BootstrapAnchorHash(Hash32([0u8; 32])),
+            0,
+            vec![EraSummary {
+                era: CardanoEra::Conway,
+                start_slot: SlotNo(0),
+                start_epoch: EpochNo(0),
+                slot_length_ms: 1_000,
+                epoch_length_slots: 432_000,
+                safe_zone_slots: 432_000,
+            }],
+        )
+        .expect("era schedule");
+
+        // The pool keyed to the shell, so the forged block self-accepts AND the
+        // sidecar-reconstructed ledger_view validates it the same way on replay.
+        let mut shell = l5_synth_shell(0x31, 0x41, 0x59);
+        let cold_vk = shell.cold_vk();
+        let vrf_vk = shell.vrf_verification_key();
+        let pool_id: Hash28 = ade_crypto::blake2b::blake2b_224(&cold_vk.0);
+        let vrf_keyhash: Hash32 = ade_crypto::blake2b::blake2b_256(&vrf_vk.0);
+        let mut pools: BTreeMap<Hash28, PoolEntry> = BTreeMap::new();
+        pools.insert(
+            pool_id.clone(),
+            PoolEntry {
+                active_stake: 1,
+                vrf_keyhash,
+            },
+        );
+        let sidecar = SeedEpochConsensusInputs {
+            anchor_fp: anchor_fp.clone(),
+            epoch_no: EpochNo(0),
+            epoch_nonce: eta0.clone(),
+            active_slots_coeff: ActiveSlotsCoeff { numer: 1, denom: 1 },
+            total_active_stake: 1,
+            pool_distribution: pools,
+        };
+        let sidecar_bytes = encode_seed_epoch_consensus_inputs(&sidecar);
+        let ledger_view = PoolDistrView::from_seed_epoch_consensus_inputs(&sidecar);
+
+        // Forge the genesis-successor block 0 -> self-accept.
+        let (l_r, c_r) = genesis_base();
+        let recovered = BootstrapState {
+            ledger: l_r,
+            chain_dep: c_r,
+            tip: None,
+            seed_epoch_consensus_inputs: Some(sidecar.clone()),
+        };
+        let (event, handoff) = forge_one_from_recovered(
+            &recovered,
+            &recovered.chain_dep,
+            &recovered.ledger,
+            None,
+            &mut shell,
+            &pool_id,
+            &ProtocolParameters::default(),
+            &era_schedule,
+            1,
+            0,
+            ProtocolVersion { major: 9, minor: 0 },
+        )
+        .expect("forge over the recovered genesis base");
+        let handoff = match (event, handoff) {
+            (CoordinatorEvent::ForgeSucceeded { .. }, Some(h)) => h,
+            (ev, _) => {
+                panic!("expected ForgeSucceeded with a self-accepted handoff, got {ev:?}")
+            }
+        };
+
+        let dir = TempDir::new().unwrap();
+        let chaindb_path = dir.path().join("chain.db");
+        let wal_dir = dir.path().join("wal");
+
+        // Phase 1: seed the sidecar + provenance + a genesis slot-0 snapshot, then
+        // durably admit the forged block (NO snapshot captured by the driver).
+        let advanced = {
+            let chaindb =
+                PersistentChainDb::open(PersistentChainDbOptions::at(&chaindb_path)).unwrap();
+            let mut wal = FileWalStore::open(&wal_dir).unwrap();
+            chaindb
+                .put_seed_epoch_consensus_inputs(&anchor_fp, &sidecar_bytes)
+                .unwrap();
+            append_seed_epoch_provenance(&mut wal, &anchor_fp, EpochNo(0), &sidecar_bytes).unwrap();
+            // The genesis slot-0 snapshot — the forward-replay base.
+            let (l_s, c_s) = genesis_base();
+            PersistentSnapshotCache::new(&chaindb)
+                .capture(SlotNo(0), &l_s, &c_s)
+                .unwrap();
+            // Admit the forged block over the SAME genesis base (no tip snapshot).
+            let (l_a, c_a) = genesis_base();
+            let mut state = ForwardSyncState::new(
+                ReceiveState::new(l_a, c_a),
+                anchor_fp.clone(),
+                SnapshotCadence::DEFAULT,
+            );
+            admit_forged_block_durably(
+                &handoff,
+                &mut state,
+                &chaindb,
+                &mut wal,
+                &era_schedule,
+                &ledger_view,
+            )
+            .expect("durable admit")
+            .expect("tip advanced")
+            // chaindb + wal dropped here -> the kill boundary.
+        };
+
+        // Phase 2: reopen + recover through the REAL warm_start_recovery, which
+        // forward-replays from the slot-0 snapshot over the durable WAL block.
+        let chaindb = PersistentChainDb::open(PersistentChainDbOptions::at(&chaindb_path)).unwrap();
+        let wal = FileWalStore::open(&wal_dir).unwrap();
+        let state = crate::node_lifecycle::warm_start_recovery(&chaindb, &wal)
+            .expect("warm-start forward-replays the forged tip");
+        let tip = state.tip.expect("recovered a tip");
+        assert_eq!(
+            tip.slot, advanced.slot,
+            "forward-replay recovers the forged tip slot byte-identically (T-REC-05)"
+        );
+        assert_eq!(
+            tip.hash, advanced.hash,
+            "forward-replay recovers the forged tip hash byte-identically (T-REC-05)"
+        );
+    }
+
+    #[test]
     fn forge_from_recovered_fails_closed_without_recovered_inputs() {
         // The forge base MUST carry recovered consensus inputs. A recovered
         // state with seed_epoch_consensus_inputs: None is unrepresentable as
