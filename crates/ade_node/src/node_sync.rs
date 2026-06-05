@@ -384,6 +384,59 @@ where
     Ok(selected_tip)
 }
 
+/// PHASE4-N-U S1 (DC-NODE-12) — the durable-forge-admit driver: route a BLUE
+/// self-accepted forged block into the SAME `forward_sync::pump_block`
+/// chokepoint received blocks use, so a forged block becomes durable ONLY
+/// through the single durable tip-advance authority. The forge advances no
+/// durable tip directly; `pump_block` stays the sole authority (DC-NODE-12
+/// supersedes DC-NODE-05's "local artifact only" containment, preserving its
+/// deeper invariant).
+///
+/// The bytes admitted are EXACTLY the self-accepted bytes
+/// (`handoff.accepted().as_bytes()`) — no re-encode, no reserialize, no new
+/// `WalEntry` variant (I-10); the carrier is the constructor-fenced
+/// [`SelfAcceptedHandoff`], so only a BLUE self-accepted token (CN-FORGE-01)
+/// can be admitted. `pump_block` runs the EXTEND-ONLY admit chokepoint
+/// (`decode_block` → `admit_via_block_validity` → `block_validity`, incl.
+/// `header_position`) then the ordered durable effects `StoreBlockBytes` →
+/// `AppendWal` → `AdvanceTip` (durable-before-tip; DC-SYNC-01 enforced inside
+/// `apply_plan`). The forged `AdmitBlock`'s `prior_fp` chains to the current
+/// durable `post_fp` exactly as a received block's does (DC-WAL-04 chaining).
+///
+/// Extend-only race safety (DC-CONS-23): there is NO admit-time fork-choice. A
+/// forge built on a stale tip (one a feed block has since advanced) fails
+/// closed here — `block_validity`'s header-position/`prev_hash` check or the
+/// `TipBeforeDurable` guard rejects it — and `pump_block` leaves the tip
+/// unchanged.
+///
+/// No snapshot is captured here: forged admits are WAL-durable and ride the
+/// existing DC-STORE-07 cadence; recovery is proven through WAL replay (S2),
+/// not by forcing a snapshot at every forged tip.
+pub fn admit_forged_block_durably<D>(
+    handoff: &SelfAcceptedHandoff,
+    state: &mut ForwardSyncState,
+    chaindb: &D,
+    wal: &mut dyn WalStore,
+    era_schedule: &EraSchedule,
+    ledger_view: &dyn LedgerView,
+) -> Result<Option<PumpTip>, NodeSyncError>
+where
+    D: ChainDb,
+{
+    // I-10: the durably-admitted bytes ARE the self-accepted bytes (no re-encode).
+    let block_bytes = handoff.accepted().as_bytes();
+    pump_block(
+        state,
+        chaindb,
+        wal,
+        &NoCheckpointSink,
+        block_bytes,
+        era_schedule,
+        ledger_view,
+    )
+    .map_err(|e| NodeSyncError::Pump(format!("{e:?}")))
+}
+
 // =========================================================================
 // L5 — recovered-state forge handoff (single-shot)
 // =========================================================================

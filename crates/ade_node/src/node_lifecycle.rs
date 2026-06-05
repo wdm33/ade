@@ -90,7 +90,9 @@ use ade_runtime::rollback::SnapshotCadence;
 use crate::admission::bootstrap::build_n2n_version_table;
 use crate::cli::Cli;
 use crate::forge_intent::{classify_forge_intent, ForgeIntent};
-use crate::node_sync::{forge_one_from_recovered, run_node_sync, NodeBlockSource};
+use crate::node_sync::{
+    admit_forged_block_durably, forge_one_from_recovered, run_node_sync, NodeBlockSource,
+};
 use crate::operator_forge;
 use crate::run_loop_planner::{
     forge_slot_status, plan_loop_step, ForgeSlotStatus, LoopState, LoopStep, ShutdownStatus,
@@ -1186,10 +1188,36 @@ pub async fn run_relay_loop_with_sched(
                             act.protocol_version,
                         )
                         .map_err(|e| NodeLifecycleError::RelaySync(format!("{e:?}")))?;
-                        if let (Some(tx), Some(h)) = (act.handoff_tx.as_ref(), handoff) {
-                            // Best-effort typed send; if the sibling task has ended,
-                            // the handoff is dropped (forge stays self-accept-only).
-                            let _ = tx.send(h);
+                        // PHASE4-N-U S1 (DC-NODE-12): a self-accepted forged block
+                        // becomes durable ONLY by submission to the SAME pump_block
+                        // chokepoint received blocks use (durable-before-tip; the
+                        // forge advances no tip directly). Admit the self-accepted
+                        // token through the fenced driver BEFORE the serve handoff,
+                        // so the durable tip advances and the next ForgeTick builds
+                        // N+1 (state.receive + the durable ChainDb advance together
+                        // via pump_block). A stale-tip forge fails closed inside
+                        // pump_block (extend-only block_validity / prior_fp —
+                        // DC-CONS-23); in this single-threaded loop the forge always
+                        // builds on the tip it just read, so a reject is a real
+                        // invariant/IO failure and is propagated (fail-fast). The
+                        // G-R serve handoff is RETAINED unchanged (sibling
+                        // push_atomic) until S3 makes serve a durable-chain
+                        // projection.
+                        if let Some(h) = handoff {
+                            admit_forged_block_durably(
+                                &h,
+                                state,
+                                chaindb,
+                                wal,
+                                era_schedule,
+                                ledger_view,
+                            )
+                            .map_err(|e| NodeLifecycleError::RelaySync(format!("{e:?}")))?;
+                            if let Some(tx) = act.handoff_tx.as_ref() {
+                                // Best-effort typed serve send (G-R); a dropped
+                                // sibling means no serve, never a tip effect.
+                                let _ = tx.send(h);
+                            }
                         }
                         // Closed diagnostic projection of the reused forge outcome,
                         // read before the move-push. Operational tier — never an
