@@ -3,7 +3,7 @@
 ## §2 Slice Header
 - **Slice Name:** bounded ChainDb read primitives
 - **Cluster:** PHASE4-N-AA (bounded peer-driven serve range) — primary invariant **DC-SERVEMEM-01**
-- **Status:** in progress
+- **Status:** Merged
 - **Cluster Exit Criteria Addressed:** **CE-1** — the bounded, hash-free, slot-ordered read primitives the serve cap (S2) is built on. *(CE-2 / the DC-SERVEMEM-01 flip = S2.)*
 
 ## §3 Dependencies

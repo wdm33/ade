@@ -30,3 +30,20 @@ pub struct ChainTip {
     pub hash: Hash32,
     pub slot: SlotNo,
 }
+
+/// Bounded, hash-free result of [`super::ChainDb::range_bytes_capped`]
+/// (PHASE4-N-AA, DC-SERVEMEM-01).
+///
+/// `blocks` holds at most `max` `(slot, bytes)` pairs in slot-ascending order;
+/// `truncated` is `true` when the requested range contained MORE than `max`
+/// blocks — i.e. the per-request serve cap was exceeded. The serve uses
+/// `truncated` to fail closed and to distinguish "cap exceeded" from "genuinely
+/// empty" (both encode to the same wire `NoBlocks`, but the internal reason
+/// differs for diagnostics + tests). Hash-free: the serve derives each block's
+/// hash from its own bytes via the BLUE decode authority, so no `SLOT_BY_HASH`
+/// scan is performed here.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct CappedSlotRange {
+    pub blocks: Vec<(SlotNo, Vec<u8>)>,
+    pub truncated: bool,
+}

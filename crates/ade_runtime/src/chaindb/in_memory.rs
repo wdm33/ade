@@ -17,7 +17,9 @@ use std::sync::Mutex;
 
 use ade_types::primitives::{Hash32, SlotNo};
 
-use super::{BlockIter, ChainDb, ChainDbError, ChainTip, SnapshotStore, StoredBlock};
+use super::{
+    BlockIter, CappedSlotRange, ChainDb, ChainDbError, ChainTip, SnapshotStore, StoredBlock,
+};
 
 /// In-memory chain database.
 ///
@@ -108,6 +110,36 @@ impl ChainDb for InMemoryChainDb {
             .collect();
         drop(inner);
         Ok(Box::new(snapshot.into_iter().map(Ok)))
+    }
+
+    fn range_bytes_capped(
+        &self,
+        from: SlotNo,
+        to: SlotNo,
+        max: usize,
+    ) -> Result<CappedSlotRange, ChainDbError> {
+        let inner = self.inner.lock().map_err(lock_poisoned)?;
+        // Bounded, hash-free: read at most `max` in-range blocks (stop after a
+        // (max+1)-th proves the request exceeded the cap). DC-SERVEMEM-01.
+        let mut out: Vec<(SlotNo, Vec<u8>)> = Vec::new();
+        let mut truncated = false;
+        for (slot, b) in inner.by_slot.range(from..=to) {
+            if out.len() == max {
+                truncated = true;
+                break;
+            }
+            out.push((*slot, b.bytes.clone()));
+        }
+        Ok(CappedSlotRange { blocks: out, truncated })
+    }
+
+    fn last_block_bytes(&self) -> Result<Option<(SlotNo, Vec<u8>)>, ChainDbError> {
+        let inner = self.inner.lock().map_err(lock_poisoned)?;
+        Ok(inner
+            .by_slot
+            .values()
+            .next_back()
+            .map(|b| (b.slot, b.bytes.clone())))
     }
 
     fn rollback_to_slot(&self, slot: SlotNo) -> Result<(), ChainDbError> {

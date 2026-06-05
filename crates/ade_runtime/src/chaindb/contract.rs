@@ -56,6 +56,12 @@ where
     same_block_reput_is_idempotent(&make_db());
     conflicting_slot_put_errors(&make_db());
     not_found_is_ok_none(&make_db());
+    // PHASE4-N-AA S1 — bounded, hash-free serve read primitives (DC-SERVEMEM-01).
+    range_bytes_capped_returns_at_most_max(&make_db());
+    range_bytes_capped_within_cap_not_truncated(&make_db());
+    range_bytes_capped_respects_bounds(&make_db());
+    range_bytes_capped_bytes_byte_identical(&make_db());
+    last_block_bytes_returns_highest_slot(&make_db());
 }
 
 fn empty_db_has_no_tip<D: ChainDb>(db: &D) {
@@ -168,6 +174,63 @@ fn not_found_is_ok_none<D: ChainDb>(db: &D) {
             .expect("get")
             .is_none()
     );
+}
+
+// --- PHASE4-N-AA S1: bounded, hash-free serve read primitives ----------------
+
+fn range_bytes_capped_returns_at_most_max<D: ChainDb>(db: &D) {
+    for s in 1..=10u64 {
+        db.put_block(&block(s, s as u8)).expect("put");
+    }
+    // A 10-block range read with cap 3 yields EXACTLY 3 blocks (never the full
+    // chain) and signals truncation.
+    let r = db.range_bytes_capped(SlotNo(1), SlotNo(10), 3).expect("capped");
+    assert_eq!(r.blocks.len(), 3, "at most max=3 blocks materialized");
+    assert!(r.truncated, "range of 10 blocks > cap 3 -> truncated");
+    let slots: Vec<u64> = r.blocks.iter().map(|(s, _)| s.0).collect();
+    assert_eq!(slots, vec![1, 2, 3], "first max blocks, slot-ascending");
+}
+
+fn range_bytes_capped_within_cap_not_truncated<D: ChainDb>(db: &D) {
+    for s in [10u64, 20, 30] {
+        db.put_block(&block(s, s as u8)).expect("put");
+    }
+    let r = db.range_bytes_capped(SlotNo(0), SlotNo(100), 8).expect("capped");
+    assert!(!r.truncated, "3 blocks <= cap 8 -> not truncated");
+    let slots: Vec<u64> = r.blocks.iter().map(|(s, _)| s.0).collect();
+    assert_eq!(slots, vec![10, 20, 30]);
+}
+
+fn range_bytes_capped_respects_bounds<D: ChainDb>(db: &D) {
+    for s in [5u64, 15, 25, 35] {
+        db.put_block(&block(s, s as u8)).expect("put");
+    }
+    let r = db.range_bytes_capped(SlotNo(15), SlotNo(25), 8).expect("capped");
+    let slots: Vec<u64> = r.blocks.iter().map(|(s, _)| s.0).collect();
+    assert_eq!(slots, vec![15, 25], "only [15,25] inclusive, ascending");
+    assert!(!r.truncated);
+}
+
+fn range_bytes_capped_bytes_byte_identical<D: ChainDb>(db: &D) {
+    let b = block(42, 0x42);
+    db.put_block(&b).expect("put");
+    let r = db.range_bytes_capped(SlotNo(42), SlotNo(42), 8).expect("capped");
+    assert_eq!(r.blocks.len(), 1);
+    assert_eq!(r.blocks[0].0, SlotNo(42));
+    assert_eq!(
+        r.blocks[0].1, b.bytes,
+        "served bytes are the stored bytes verbatim"
+    );
+}
+
+fn last_block_bytes_returns_highest_slot<D: ChainDb>(db: &D) {
+    assert!(db.last_block_bytes().expect("lb").is_none(), "empty -> None");
+    db.put_block(&block(7, 0x07)).expect("put");
+    db.put_block(&block(42, 0x42)).expect("put");
+    db.put_block(&block(13, 0x13)).expect("put");
+    let (slot, bytes) = db.last_block_bytes().expect("lb").expect("present");
+    assert_eq!(slot, SlotNo(42), "highest slot");
+    assert_eq!(bytes, vec![0x42u8; 64], "tip block bytes");
 }
 
 #[cfg(test)]

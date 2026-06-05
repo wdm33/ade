@@ -32,7 +32,7 @@ pub use error::ChainDbError;
 pub use in_memory::InMemoryChainDb;
 pub use persistent::{PersistentChainDb, PersistentChainDbOptions, SyncCadence};
 pub use snapshot_contract::run_snapshot_contract_tests;
-pub use types::{ChainTip, StoredBlock};
+pub use types::{CappedSlotRange, ChainTip, StoredBlock};
 
 use ade_types::primitives::{Hash32, SlotNo};
 
@@ -73,11 +73,45 @@ pub trait ChainDb: Send + Sync {
     ) -> Result<Option<StoredBlock>, ChainDbError>;
 
     /// Highest slot with a stored block, or `None` for an empty DB.
+    ///
+    /// NOTE (PHASE4-N-AA / DC-SERVEMEM-01): some impls recover the tip hash via a
+    /// full hash-index scan. This is a TRUSTED-CALLER read (node startup, etc.) —
+    /// the peer-driven serve path MUST use [`ChainDb::last_block_bytes`] instead.
     fn tip(&self) -> Result<Option<ChainTip>, ChainDbError>;
 
     /// Stream blocks in slot order, starting at `from` (inclusive).
     /// Implementations may yield items lazily.
+    ///
+    /// NOTE (PHASE4-N-AA / DC-SERVEMEM-01): some impls MATERIALIZE the full
+    /// `from..tip` range and recover each block's hash via a per-block hash-index
+    /// scan (O(N²)). This is for TRUSTED, full-range internal callers only
+    /// (recovery / rollback). The peer-driven `--mode node` serve path MUST use
+    /// the bounded [`ChainDb::range_bytes_capped`] / [`ChainDb::last_block_bytes`]
+    /// primitives instead — never this method.
     fn iter_from_slot(&self, from: SlotNo) -> Result<BlockIter<'_>, ChainDbError>;
+
+    /// Bounded, hash-free, slot-ordered read of blocks in `[from, to]`
+    /// (inclusive) for the peer-driven serve path (PHASE4-N-AA, DC-SERVEMEM-01).
+    ///
+    /// Returns at most `max` blocks as `(slot, bytes)` in ascending slot order,
+    /// plus [`CappedSlotRange::truncated`] = `true` when the range contained MORE
+    /// than `max` blocks (the per-request serve cap was exceeded). Memory is
+    /// bounded to `<= max` blocks regardless of chain length. Does NOT recover the
+    /// block hash (the serve derives it from the bytes via the BLUE decode
+    /// authority) — so this performs NO hash-index scan. Use this on the serve
+    /// path, NOT [`ChainDb::iter_from_slot`].
+    fn range_bytes_capped(
+        &self,
+        from: SlotNo,
+        to: SlotNo,
+        max: usize,
+    ) -> Result<CappedSlotRange, ChainDbError>;
+
+    /// The highest-slot stored block's `(slot, bytes)`, or `None` for an empty
+    /// DB. O(log N) tip access (no full iteration, no hash scan); the serve
+    /// derives the tip hash + block_no from the bytes (PHASE4-N-AA,
+    /// DC-SERVEMEM-01).
+    fn last_block_bytes(&self) -> Result<Option<(SlotNo, Vec<u8>)>, ChainDbError>;
 
     /// Discard all blocks at slots strictly greater than `slot`.
     /// After return, no read operation observes such a block.

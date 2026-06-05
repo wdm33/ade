@@ -20,7 +20,9 @@ use redb::{Database, ReadableTable, TableDefinition};
 
 use ade_types::primitives::{Hash32, SlotNo};
 
-use super::{BlockIter, ChainDb, ChainDbError, ChainTip, SnapshotStore, StoredBlock};
+use super::{
+    BlockIter, CappedSlotRange, ChainDb, ChainDbError, ChainTip, SnapshotStore, StoredBlock,
+};
 
 const BLOCKS_BY_SLOT: TableDefinition<u64, &[u8]> =
     TableDefinition::new("blocks_by_slot");
@@ -417,6 +419,59 @@ impl ChainDb for PersistentChainDb {
             snapshot.push(StoredBlock { slot, hash, bytes });
         }
         Ok(Box::new(snapshot.into_iter().map(Ok)))
+    }
+
+    fn range_bytes_capped(
+        &self,
+        from: SlotNo,
+        to: SlotNo,
+        max: usize,
+    ) -> Result<CappedSlotRange, ChainDbError> {
+        let txn = self.db.begin_read().map_err(map_txn_err)?;
+        let blocks = match txn.open_table(BLOCKS_BY_SLOT) {
+            Ok(t) => t,
+            Err(redb::TableError::TableDoesNotExist(_)) => {
+                return Ok(CappedSlotRange::default());
+            }
+            Err(e) => return Err(map_table_err(e)),
+        };
+        // Lazily range [from, to] and read at most max + 1 entries, so peak
+        // memory is bounded to <= max blocks regardless of chain length. NO
+        // per-block SLOT_BY_HASH scan: this read is hash-free (the serve derives
+        // the hash from the bytes via the BLUE decode authority). DC-SERVEMEM-01.
+        let mut out: Vec<(SlotNo, Vec<u8>)> = Vec::new();
+        let mut truncated = false;
+        for entry in blocks
+            .range(from.0..=to.0)
+            .map_err(map_storage_err)?
+            .take(max.saturating_add(1))
+        {
+            let (slot_v, bytes_v) = entry.map_err(map_storage_err)?;
+            if out.len() == max {
+                // A (max+1)-th in-range block exists — the request exceeded the
+                // per-request cap. Drop it; signal truncation.
+                truncated = true;
+                break;
+            }
+            out.push((SlotNo(slot_v.value()), bytes_v.value().to_vec()));
+        }
+        Ok(CappedSlotRange { blocks: out, truncated })
+    }
+
+    fn last_block_bytes(&self) -> Result<Option<(SlotNo, Vec<u8>)>, ChainDbError> {
+        let txn = self.db.begin_read().map_err(map_txn_err)?;
+        let blocks = match txn.open_table(BLOCKS_BY_SLOT) {
+            Ok(t) => t,
+            Err(redb::TableError::TableDoesNotExist(_)) => return Ok(None),
+            Err(e) => return Err(map_table_err(e)),
+        };
+        // O(log N) highest-slot access via redb `last()` — no full iteration, no
+        // hash scan. Bind + map to owned values so the AccessGuard borrow of
+        // `blocks` does not outlive the table at the end of the method.
+        let last = blocks.last().map_err(map_storage_err)?;
+        let out =
+            last.map(|(slot_v, bytes_v)| (SlotNo(slot_v.value()), bytes_v.value().to_vec()));
+        Ok(out)
     }
 
     fn rollback_to_slot(&self, slot: SlotNo) -> Result<(), ChainDbError> {
