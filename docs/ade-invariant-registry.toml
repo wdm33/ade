@@ -3381,6 +3381,7 @@ tests = [
 ]
 ci_script = "ci/ci_check_session_proto_reassembly.sh"
 status = "enforced"
+strengthened_in = ["PHASE4-N-AB"]
 authority_surface = "wire-layer reassembly across mux frame boundaries"
 cluster = "CL-WIRE-PROTOCOL"
 evidence_notes = "PHASE4-N-M-FRAG (2026-05-27) surfaced + closed the missing per-mini-protocol reassembly in the session reducer. cardano-node fragments large block-fetch responses (Conway blocks exceeding the 65535-byte mux payload limit) across multiple mux frames bearing the same protocol id. Before FRAG, `drain_connected_frames` emitted one `DeliverPeerFrame` per mux frame; the block-fetch codec received a truncated CBOR item and failed → wire pump exited with `BlockFetchDecode`. After FRAG, the reducer accumulates per-protocol bytes and drains COMPLETE CBOR items via `ade_codec::cbor::skip_item`. Live operator pass against fully-synced docker preprod (epoch 291, slot ~124M) now decodes block-fetch responses successfully (committed bootstrap transcript records `block_received` events with the canonical block hash matching the peer's announced tip)."
@@ -5702,7 +5703,7 @@ tests = ["range_bytes_capped_returns_at_most_max", "range_bytes_capped_within_ca
 ci_script = "ci/ci_check_serve_range_bounded.sh"
 status = "enforced"
 introduced_in = "PHASE4-N-AA"
-strengthened_in = []
+strengthened_in = ["PHASE4-N-AB"]
 evidence_notes = "Declared at cluster scoping (2026-06-05, user-confirmed). ENFORCED at the PHASE4-N-AA S2 close. Pre-RO-LIVE hardening item 1; closes the PHASE4-N-U cross-slice security review MEDIUM finding (peer-driven serve resource amplification). The serve-side analog of DC-LIVEMEM-01 (receive-side bounded memory). MAX_SERVE_RANGE_BLOCKS = 256 (symmetric with MAX_WIRE_PUMP_LOOKAHEAD; fixed/closed/non-configurable). No schema change: S1 added bounded hash-free slot-ordered ChainDb read primitives (range_bytes_capped + last_block_bytes; 5 contract tests run against BOTH PersistentChainDb + InMemoryChainDb). S2 switched ChainDbServedSource range_bytes/next_after/tip to those primitives, applied the cap (CapExceeded -> empty -> reducer NoBlocks), and derives each block's hash from its bytes via the single BLUE decode_block authority (no HASH_BY_SLOT index, no second hash authority). A closed ServeRangeOutcome enum distinguishes Served/Empty/CapExceeded/ReadError internally (all non-Served -> wire NoBlocks). Gate ci_check_serve_range_bounded.sh is non-vacuous: pre-S2 HEAD had 2 iter_from_slot + 1 chaindb.tip() serve calls (Guards 2/3 would fire); S2 has 0. Within-cap real-bytes serving (Served, byte-identical, derived hash == stored) is covered by the ade_node serve integration tests (real forged blocks). The trusted recovery/rollback iter_from_slot internals are OUT OF SCOPE (doc-fenced, not peer-driven)."
 
 # =============================================================================

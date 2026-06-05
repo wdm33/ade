@@ -78,4 +78,23 @@ Segmentation is a deterministic pure function of `(payload, mini_protocol, mode,
 - **SDU size (resolved):** segment at `MAX_PAYLOAD = 65535` (the protocol SDU limit; receivers accept up to it). Not a smaller configured `sduSize` — fixed at the max.
 
 ## §13 Close record
-*(Open — filled at `/cluster-close` once CE-1 is green.)*
+**CLOSED 2026-06-06.** Pre-RO-LIVE hardening item 2 — outbound mux segmentation (CN-SESS-05 enforced). Ade can now SERVE a >64 KB block: `handle_outbound` segments large mini-protocol payloads into ordered ≤`MAX_PAYLOAD` frames, the outbound inverse of the CN-SESS-04 inbound reassembly. Pairs with PHASE4-N-AA (item 1 caps *how many* blocks; this makes *one large* block sendable).
+
+**Cluster commits (impl span `e9cd60fc..HEAD`):**
+- `87713149` — cluster doc + CN-SESS-05 declared.
+- `6e814ca9` / `02e6e557` — S1 doc + impl (GREEN `session::core` `handle_outbound` segmentation + `MAX_OUTBOUND_PAYLOAD_BYTES = 16 MiB`; `encode_inner_frame` stays the strict single-frame encoder; new gate `ci_check_outbound_segmentation.sh`; CN-SESS-05 → enforced).
+- *(this commit)* — close record + `strengthened_in` edits + grounding-doc refresh + archive.
+
+**CE-1 — passes mechanically:**
+- `cargo test -p ade_network --lib session::core` green — the 7 required tests: `outbound_payload_at_max_payload_is_one_frame` (65535→1), `_over_max_payload_segments_into_two` (65536→2), `outbound_large_payload_reassembles_byte_identical_via_inbound` (large→reassembles byte-identical through Ade's own CN-SESS-04 path), `outbound_payload_at_upper_bound_is_allowed` (16 MiB→ok), `_over_upper_bound_fails_closed` (16 MiB+1→`OutboundPayloadTooLarge`), `outbound_segment_order_preserved`, `outbound_segments_keep_same_mini_protocol_id_and_mode`.
+- Gate `ci/ci_check_outbound_segmentation.sh` green + non-vacuous (pre-S1 had 0 `chunks(MAX_PAYLOAD)` + no `MAX_OUTBOUND_PAYLOAD_BYTES`).
+- Cluster-wide: `cargo test -p ade_network -p ade_runtime -p ade_node` green; full `ci/ci_check_*.sh` sweep **137 / 0** (136 + the new gate).
+
+**Reviews — both PASS, no findings:**
+- **IDD reviewer: PASS** (no BLOCK/WARN) — GREEN slice, 0 BLUE diff; determinism verified (the `timestamp` is an input reused across segments, GREEN calls no clock); byte-preservation + genuine round-trip identity through the real CN-SESS-04 reassembler; fail-closed at the fixed bound before any frame is built; every §11 hard prohibition verified.
+- **Cross-slice security review: PASS** (no HIGH+) — bounded outbound (≤257 frames, fails closed before allocation); no off-by-one / no `u16` truncation (triple backstop); atomic send (no partial-success); composes cleanly with DC-SERVEMEM-01 (256-block cap) + DC-LIVEMEM-01 (16 MiB inbound cap); no new panic/unwrap on a peer-reachable path.
+- **Open obligation (operator-pass / RO-LIVE, NOT owed by this GREEN slice):** confirm a real cardano-node demux accepts the reused-per-segment SDU timestamp. The loopback proves Ade↔Ade; cross-peer is the live leg (hardening item 4), correctly fenced behind the unflipped RO-LIVE obligations.
+
+**Registry:** +CN-SESS-05 (enforced, tier derived); rules 334 → 335. `strengthened_in += "PHASE4-N-AB"` on CN-SESS-04 (receive+send symmetry now complete) + DC-SERVEMEM-01 (the bounded serve can now transmit a large in-range block). New GREEN constant `MAX_OUTBOUND_PAYLOAD_BYTES`. CI gates 136 → 137. No schema change, no BLUE change, no RO-LIVE flip.
+
+**Grounding docs refreshed:** CODEMAP / TRACEABILITY / SEAMS / HEAD_DELTAS regenerated; `head_deltas_baseline` bumped to the close.
