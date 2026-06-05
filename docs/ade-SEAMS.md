@@ -3,14 +3,82 @@
 > **Status:** Living architectural document. Regenerated; not hand-edited.
 > Per-project instance of `~/.claude/methodology/templates/seams.md`.
 
-> 11 crates, **458 canonical types**, **136 CI checks** at HEAD (`b0365df0`, PHASE4-N-AA cluster close — bounded peer-driven serve range).
-> Reads the CODEMAP regenerated at the same close (`docs/ade-CODEMAP.md` — **458 canonical types / 136 CI / 334 rules**,
-> pinned at the N-AA security-review tip `5c9f6cf6`; `b0365df0` is the close commit one past it, with no further
-> code/type/gate change) for the module list + TCB colors, and the invariant registry (`docs/ade-invariant-registry.toml` —
-> **334 entries** at HEAD) for the rule IDs that gate each closed surface.
-> **N-AA is RED-only (0 BLUE diff): +1 rule (`DC-SERVEMEM-01`, declared → enforced), +1 CI gate
-> (`ci_check_serve_range_bounded.sh`), ZERO new BLUE canonical types / authorities / fns** — it BOUNDS the
-> existing closed `--mode node` durable-chain serve seam (DC-NODE-13), it does NOT open a new one.
+> 11 crates, **458 canonical types**, **137 CI checks** at HEAD (`c6e7fafe`, PHASE4-N-AB cluster close — outbound mux segmentation).
+> Reads the CODEMAP regenerated at the same close (`docs/ade-CODEMAP.md` — **458 canonical types / 137 CI / 335 rules**,
+> pinned at `c6e7fafe`) for the module list + TCB colors, and the invariant registry (`docs/ade-invariant-registry.toml` —
+> **335 entries** at HEAD) for the rule IDs that gate each closed surface.
+> **N-AB is GREEN-only (0 BLUE diff): +1 rule (`CN-SESS-05`, declared → enforced), +1 CI gate
+> (`ci_check_outbound_segmentation.sh`), ZERO new BLUE canonical types / authorities / fns, ZERO new closed enum**
+> — it completes the OUTBOUND direction of the existing closed wire-protocol session seam (CN-SESS family), it does
+> NOT open a new one.
+>
+> ### PHASE4-N-AB cluster close (`c6e7fafe`) — outbound mux segmentation (`CN-SESS-05`)
+
+>
+> **This regeneration is a single-cluster cluster-close refresh, applied directly to the on-disk SEAMS.** The
+> prior on-disk SEAMS was pinned at the PHASE4-N-AA close (`b0365df0` / **458** canonical types / **136** CI /
+> **334** rules). It is brought current to HEAD `c6e7fafe` (the *Close PHASE4-N-AB* commit — **458** canonical
+> types / **137** CI / **335** rules). It splices the **single closed cluster PHASE4-N-AB** (outbound mux
+> segmentation — the GREEN `session::core` `handle_outbound` now SEGMENTS an outbound mini-protocol payload larger
+> than the mux SDU limit `MAX_PAYLOAD` into ordered `<= MAX_PAYLOAD` frames, the outbound inverse of the
+> `CN-SESS-04` inbound reassembly Ade already performs). **N-AB is GREEN-only — ZERO BLUE diff** (458 canonical
+> types unchanged; the ONLY source file touched in the whole `b0365df0..c6e7fafe` span is the GREEN session reducer
+> `ade_network::session::core` (`crates/ade_network/src/session/core.rs`); `mux::frame` and every other BLUE
+> submodule are reused **unchanged**). It pairs with PHASE4-N-AA (item 1 bounded *how many* blocks a peer can pull
+> per request; this makes *one large* block — a Conway block exceeding 64 KiB — actually transmittable). The
+> seam-relevant additions — recorded under §1 (the outbound inverse of the §1 N2N inbound reassembly), §3 (no new
+> closed enum — REUSES the closed `SessionError::OutboundPayloadTooLarge` + the `AcceptedMiniProtocol` registry +
+> the single `encode_inner_frame` authority), §4 Frozen (the symmetric outbound fixed bound), §5 (one NEW gate,
+> 136 → 137), §6 (the GREEN no-truncation / single-encoder / fixed-bound prohibition), and §7 (NO new candidate — a
+> completion of an already-closed seam's outbound direction) — are:
+>
+> - **`handle_outbound` (in GREEN `ade_network::session::core`) now SEGMENTS an outbound mini-protocol payload**
+>   (`CN-SESS-05`): a payload with `MAX_PAYLOAD < len <= MAX_OUTBOUND_PAYLOAD_BYTES` is split into ordered
+>   `<= MAX_PAYLOAD` chunks (`payload.chunks(MAX_PAYLOAD)`), each encoded via the SAME single-frame
+>   `encode_inner_frame` authority (which wraps `mux::frame::encode_frame` and keeps its own strict `MAX_PAYLOAD`
+>   guard — never a second / parallel frame encoder), and emitted in order; every segment carries the SAME
+>   mini-protocol id + mode + the SAME single captured `timestamp` input (GREEN — no per-segment clock read); an
+>   empty payload still emits exactly one (empty) frame; `concat(segment payloads) == payload` exactly
+>   (byte-preserving, lossless, ordered — DC-CONS-17 preserved). It is the **outbound inverse of the `CN-SESS-04`
+>   inbound `drain_protocol_items` reassembly**: a conformant peer (and Ade's own inbound CN-SESS-04 path)
+>   reconstructs the original payload.
+> - **NEW fixed defensive GREEN constant `MAX_OUTBOUND_PAYLOAD_BYTES = 16 MiB`** (`ade_network::session::core`,
+>   `core.rs:60`; **CN-SESS-05**) — the outbound payload ceiling, **symmetric with the receive-side
+>   `MAX_REASSEMBLY_TAIL_BYTES = 16 MiB` (DC-LIVEMEM-01)**. A payload above it fails closed
+>   (`SessionError::OutboundPayloadTooLarge { len }`) **before** any segmentation. A **FIXED, closed,
+>   non-configurable** bound — **NO CLI / env / config escape, no unbounded mode, no partial-success send** — that a
+>   later hardening slice may **tighten** (a strengthening of `CN-SESS-05`) but may NEVER make tunable / unbounded.
+>   A **GREEN constant, NOT a BLUE canonical type** (458 unchanged). Recorded in §4 Frozen alongside
+>   `DC-LIVEMEM-01`'s `MAX_REASSEMBLY_TAIL_BYTES` / `MAX_WIRE_PUMP_LOOKAHEAD` and `DC-SERVEMEM-01`'s
+>   `MAX_SERVE_RANGE_BLOCKS`.
+> - **NO new closed enum, NO new canonical type, NO new authority.** Segmentation REUSES the existing closed
+>   `SessionError::OutboundPayloadTooLarge` variant (`session::event`, `event.rs:177` — not added by N-AB), the
+>   closed `AcceptedMiniProtocol` registry (mini-protocol id + mode unchanged), and the single `encode_inner_frame`
+>   → `mux::frame::encode_frame` per-frame authority. `MAX_OUTBOUND_PAYLOAD_BYTES` is a GREEN closed constant.
+>
+> **Registry → 335 rules** (ONE NEW, `CN-SESS-05`, `tier = derived`, `introduced_in = "PHASE4-N-AB"`, `enforced`,
+> `ci_script = ci/ci_check_outbound_segmentation.sh`, `cross_ref = [CN-SESS-04, DC-LIVEMEM-01, CN-WIRE-08,
+> DC-SERVEMEM-01, DC-CONS-17]`). **TWO strengthened** (`strengthened_in += "PHASE4-N-AB"`): `CN-SESS-04` (the
+> inbound per-mini-protocol reassembly invariant now has its symmetric outbound inverse — receive+send symmetry; the
+> reassembly contract is a round-trip, segment-then-reassemble is byte-identical) and `DC-SERVEMEM-01` (the bounded
+> serve can now actually transmit a large in-range block — the bounded serve range and the outbound segmentation
+> compose). **No rule weakened.** **NET +1 CI gate (136 -> 137): +1 NEW** `ci_check_outbound_segmentation.sh`
+> (fences the single `encode_inner_frame` authority, the `encode_inner_frame` `MAX_PAYLOAD` guard,
+> `handle_outbound` segmentation, and the fixed non-configurable `MAX_OUTBOUND_PAYLOAD_BYTES` bound).
+>
+> **Boundary honesty (load-bearing — do NOT soften / do NOT broaden).** N-AB makes the outbound wire path SEGMENT
+> large payloads into legal mux frames — and **nothing more**. It is the **GREEN, deterministic** inverse of the
+> `CN-SESS-04` inbound reassembly; it transmits bytes the producer already produced, it does **NOT** decide which
+> block is served, **NOT** advance a durable tip, and **NOT** make any peer-acceptance claim. There is **NO new BLUE
+> canonical type** (`MAX_OUTBOUND_PAYLOAD_BYTES` is a GREEN const; 458 unchanged); **NO second frame encoder**
+> (`encode_inner_frame` stays the single single-frame authority — `mux::frame` reused unchanged); **NO new closed
+> enum** (`SessionError::OutboundPayloadTooLarge` reused); **NO truncation / drop / reorder** (lossless,
+> byte-preserving, ordered); **NO partial-success send** (a message either fully segments+emits or fails closed);
+> **NO per-segment clock** (one captured `timestamp` input reused — determinism preserved); the upper bound is a
+> **fixed, non-configurable** ceiling that fails closed above it (`OutboundPayloadTooLarge`), never an unbounded
+> outbound buffer; and there is **NO RO-LIVE flip** — segmenting bytes != operator-witnessed peer acceptance
+> (`RO-LIVE-01` stays `partial` / operator-gated; confirming a real cardano-node demux accepts the reused-per-segment
+> SDU timestamp is the live leg, fenced behind the unflipped RO-LIVE obligations). It is pre-RO-LIVE hardening item 2.
 >
 > ### PHASE4-N-AA cluster close (`5c9f6cf6` / close `b0365df0`) — bounded peer-driven serve range (`DC-SERVEMEM-01`)
 
@@ -1107,6 +1175,18 @@ N-F-G-E (bounded memory before decode/apply): the two caps above (reassembly tai
   (single-buffer transient peak cap + one <=64 KiB frame ~16.06 MiB); ProtoBuffers holds ~10 INDEPENDENT
   per-protocol buffers each capped (per-connection aggregate ~10x single-buffer, still O(constant)/connection).
   Per-connection-COUNT / peer-fairness limits are a SEPARATE out-of-scope surface.
+OUTBOUND INVERSE (N-AB, CN-SESS-05): the SEND direction of step 2 mirrors this inbound reassembly. The GREEN
+  session::core::handle_outbound SEGMENTS an outbound mini-protocol payload larger than the mux SDU limit
+  MAX_PAYLOAD (= u16::MAX = 65535) into ordered <= MAX_PAYLOAD frames via the SAME single encode_inner_frame ->
+  mux::frame::encode_frame per-frame authority (each chunk satisfies encode_inner_frame's strict MAX_PAYLOAD
+  guard), so a >64 KiB Conway block-fetch Block can be sent; every segment keeps the SAME mini-protocol id + mode
+  + the SAME single captured timestamp input (GREEN — no per-segment clock); concat(segment payloads) == payload
+  exactly (byte-preserving, lossless, ordered — DC-CONS-17), so Ade's own inbound CN-SESS-04 reassembly (and a
+  conformant peer) reconstructs the original. A payload above the FIXED, non-configurable MAX_OUTBOUND_PAYLOAD_BYTES
+  = 16 MiB (symmetric with the inbound MAX_REASSEMBLY_TAIL_BYTES, DC-LIVEMEM-01) fails closed BEFORE any
+  segmentation (SessionError::OutboundPayloadTooLarge — the existing closed variant, reused, NOT added). This is
+  the OUTBOUND inverse of the inbound reassembly above, NOT a new pipeline step / encoder / closed enum; no
+  truncation / drop / reorder / partial-success send. NO BLUE change, NO RO-LIVE flip (RO-LIVE-01 stays partial).
 ```
 
 ### Surface: operator-captured peer-accept log → BA-02 evidence (RED file I/O wired N-F-G-C over the GREEN N-F-C correlator)
@@ -1571,7 +1651,12 @@ N-F-G-D: NO new argv flag — the --mode node accepted-block PATH is pinned to a
 
 **Rule:** New ingress attaches by producing the canonical BLUE type's bytes and entering
 the **same** pipeline. A new mini-protocol attaches through `session::core::step` + a BLUE
-`*_transition` reducer + a closed `AcceptedMiniProtocol` registry entry. A new operator
+`*_transition` reducer + a closed `AcceptedMiniProtocol` registry entry — and on the SEND side
+its large outbound payloads are SEGMENTED by the SAME `session::core::handle_outbound` into
+ordered `<= MAX_PAYLOAD` frames via the single `encode_inner_frame` authority (N-AB / CN-SESS-05;
+the outbound inverse of CN-SESS-04 inbound reassembly — never a second frame encoder, never a
+runtime-configurable / unbounded payload cap; `> MAX_OUTBOUND_PAYLOAD_BYTES = 16 MiB` fails closed).
+A new operator
 file type attaches as a RED parser feeding a BLUE structural validator. **A new bootstrap
 seed source (like Mithril or genesis) attaches by populating `BootstrapInputs.genesis_initial`
 and routing through the single `bootstrap_initial_state` authority — NEVER via a new
@@ -2063,8 +2148,9 @@ ACCEPTS it is the operator-gated RO-LIVE-01 leg (peer ACCEPT NOT claimed here).
 | `RehearsalVenue` *(NEW, N-F-G-D S2)* | `ade_node::rehearsal_evidence` (GREEN-by-content) | 1 (`PrivateTestnetC1`) | The closed rehearsal-venue tag on the non-promotable `PrivateRehearsalManifest`. **A non-private venue is unrepresentable** — a rehearsal is NEVER preprod / preview, so a private-testnet manifest can never masquerade as bounty evidence by venue. Lives in `ade_node` (NOT a BLUE `core_paths` entry), so **NOT canonical-counted**. **A closed 1-variant enum (a surface REDUCTION), NOT an extension point.** New variant = a `to_str`/serialize arm + a strengthening of **CN-REHEARSAL-FIDELITY-01** clause 2 (`ci_check_rehearsal_manifest_schema.sh`); a `venue` of `private-testnet*` is the enforced literal, and a non-rehearsal venue must stay unrepresentable. |
 | `PrivateRehearsalManifest` *(NEW, N-F-G-D S2)* | `ade_node::rehearsal_evidence` (GREEN-by-content) | constructor-fenced struct (`ba02: Ba02Manifest` + `venue: RehearsalVenue` + `peer_log_file` + `peer_log_file_sha256`; `REHEARSAL_MANIFEST_SCHEMA_VERSION = 1`) over the existing closed `Ba02Manifest` | The NON-PROMOTABLE private-testnet rehearsal envelope WRAPPING a correlate-produced `Ba02Manifest` (the SAME proof the bounty BA-02 path produces). **SOLE constructor** `from_correlate_outcome(&BA02Outcome, RehearsalEnvelope) -> Option<Self>` wraps `BA02Outcome::Ba02Manifest` and returns `None` on `NoEvidence` — so a rehearsal manifest is **ALWAYS correlate-produced**; there is **NO** path from raw operator input / `NoEvidence` to a manifest. `to_canonical_toml` ALWAYS emits `is_rehearsal = true` + `not_bounty_evidence = true` as **LITERALS** — the type **cannot represent a non-rehearsal**. Pure / deterministic; no I/O / clock / rand / float / `HashMap`. Lives in `ade_node`, so **NOT canonical-counted**. **A CLOSED constructor-fenced non-promotable envelope (a surface REDUCTION), NOT an extensible registry / plugin point.** Backs `CN-REHEARSAL-FIDELITY-01` clause 2. A new field / schema bump = a struct addition + a `REHEARSAL_MANIFEST_SCHEMA_VERSION` bump + a strengthening of **CN-REHEARSAL-FIDELITY-01** (`ci_check_rehearsal_manifest_schema.sh`, 12-field schema); **no raw-operator-input / `NoEvidence` ctor may be introduced, and the type MUST stay incapable of serializing a non-rehearsal.** |
 | `SessionError::ReassemblyBufferOverflow` *(NEW, N-F-G-E)* | `ade_network::session::event` (GREEN-by-content) | additive variant `{ protocol, len, cap }` on the closed `SessionError` enum | The closed fail-closed signal for an incomplete per-mini-protocol reassembly tail over `MAX_REASSEMBLY_TAIL_BYTES`. Added **additively** — there is **NO wildcard**; the SOLE exhaustive consumer `ade_runtime::network::mux_pump::session_err_to_halt` maps it → `PeerHaltReason::ChainSyncDecodeError` (drop the peer). The cap fires **BEFORE** the BLUE `ade_codec` decode path — no silent truncation, no partial decode. `session/` is GREEN-by-content (NOT a BLUE `ade_network` submodule path), so the variant is **NOT canonical-counted**. **A closed additive enum variant (a surface REDUCTION / fail-closed bound), NOT an extension point.** New variant = a `SessionError` arm + a `session_err_to_halt` arm (no wildcard) + a strengthening of **DC-LIVEMEM-01** (`ci_check_live_feed_memory_bounds.sh`). |
-| `MAX_REASSEMBLY_TAIL_BYTES` (closed memory bound) *(NEW, N-F-G-E)* | `ade_network::session::core` (GREEN-by-content, `core.rs:49`) | closed literal const `16 * 1024 * 1024` (16 MiB) | The per-mini-protocol reassembly-tail cap. After `drain_protocol_items` drains every COMPLETE item, `buf.len() > MAX_REASSEMBLY_TAIL_BYTES` ⇒ `SessionError::ReassemblyBufferOverflow` (fail closed, drop the peer). A **CLOSED LITERAL constant — a defensive implementation bound, NOT a Cardano semantic parameter**; **NO runtime / CLI / env / config override** (the no-escape-hatch surface reduction, `ci_check_live_feed_memory_bounds.sh` guard 3). A future hardening slice may **tighten** it (a strengthening of **DC-LIVEMEM-01**), but may NEVER make it a tunable / unbounded. |
+| `MAX_REASSEMBLY_TAIL_BYTES` (closed memory bound) *(NEW, N-F-G-E)* | `ade_network::session::core` (GREEN-by-content, `core.rs:49`) | closed literal const `16 * 1024 * 1024` (16 MiB) | The per-mini-protocol reassembly-tail cap. After `drain_protocol_items` drains every COMPLETE item, `buf.len() > MAX_REASSEMBLY_TAIL_BYTES` ⇒ `SessionError::ReassemblyBufferOverflow` (fail closed, drop the peer). A **CLOSED LITERAL constant — a defensive implementation bound, NOT a Cardano semantic parameter**; **NO runtime / CLI / env / config override** (the no-escape-hatch surface reduction, `ci_check_live_feed_memory_bounds.sh` guard 3). A future hardening slice may **tighten** it (a strengthening of **DC-LIVEMEM-01**), but may NEVER make it a tunable / unbounded. **(N-AB)** its symmetric OUTBOUND counterpart is `MAX_OUTBOUND_PAYLOAD_BYTES = 16 MiB` (below; CN-SESS-05) — the outbound `handle_outbound` segmentation cap. |
 | `MAX_WIRE_PUMP_LOOKAHEAD` (closed lookahead-depth bound) *(NEW, N-F-G-E)* | `ade_node::node_sync` (RED, `node_sync.rs:58`) | closed literal const `256` | The WirePump opportunistic-drain depth cap. `pump_lookahead` stops the `try_recv` drain at the cap (`node_sync.rs:126`), so the existing bounded `mpsc` (`LIVE_WIRE_PUMP_CHANNEL_CAP = 64`) **back-pressures** the pump. Content-blind; the verdict-decoupled `NodeBlockSource` (closed 2-variant `{WirePump, InMemory}`) + arrival order are **unchanged** (a depth cap on the existing opaque `VecDeque<Vec<u8>>`, NOT a new variant / source / verdict). A **CLOSED LITERAL constant — a defensive implementation bound**; **NO runtime / CLI / env / config override** (`ci_check_live_feed_memory_bounds.sh` guard 3). A future hardening slice may **tighten** it (a strengthening of **DC-LIVEMEM-01**), never make it a tunable / unbounded. |
+| `MAX_OUTBOUND_PAYLOAD_BYTES` (closed outbound payload bound) *(NEW, N-AB / CN-SESS-05)* | `ade_network::session::core` (GREEN-by-content, `core.rs:60`) | closed literal const `16 * 1024 * 1024` (16 MiB) | The OUTBOUND mini-protocol payload ceiling, **SYMMETRIC with the receive-side `MAX_REASSEMBLY_TAIL_BYTES = 16 MiB` (DC-LIVEMEM-01)**. `session::core::handle_outbound` SEGMENTS a payload with `MAX_PAYLOAD < len <= MAX_OUTBOUND_PAYLOAD_BYTES` into ordered `<= MAX_PAYLOAD` frames (the outbound inverse of CN-SESS-04 inbound reassembly); a payload ABOVE the cap fails closed with the **existing** closed `SessionError::OutboundPayloadTooLarge { len }` (REUSED, **NOT a new variant**) **before** any segmentation. A **CLOSED LITERAL constant — a defensive implementation bound**; **NO runtime / CLI / env / config override, no unbounded mode, no partial-success send** (`ci_check_outbound_segmentation.sh`). `session/` is GREEN-by-content (NOT a BLUE `ade_network` submodule path), so the const is **NOT canonical-counted** (458 unchanged). A future hardening slice may **tighten** it (a strengthening of **CN-SESS-05**), but may NEVER make it a tunable / unbounded. **No new closed enum** — segmentation reuses the single `encode_inner_frame` → `mux::frame::encode_frame` authority + the closed `AcceptedMiniProtocol` registry. |
 | `NodeBlockSource` *(N-F-C; readiness extended N-F-D; LIVE WirePump FILL N-F-G-C)* | `ade_node::node_sync` (RED) | 2 (`WirePump` / `InMemory`) | The **verdict-decoupled** ordered peer-block source: `next_block` yields ONLY `AdmissionPeerEvent::Block` bytes, SKIPS `TipUpdate`, ends on `Disconnected`. N-F-D added a content-blind readiness signal. **N-F-G-C added `from_wire_pump(rx)` — a LIVE FILL of the existing `WirePump` arm fed by `spawn_live_wire_pump_source` (reusing the closed admission dial + pump VERBATIM); NOT a new variant, NOT a new wire authority, NOT a plugin point.** NEVER carries a verdict. A closed single-method contract. New variant = a `next_block` arm + a strengthening of **DC-SYNC-01 / DC-SYNC-02**; a new source must REUSE the closed dial/pump (never reimplement), FILL an existing arm, advance no second tip, and carry no verdict. **N-F-G-J added NO `NodeBlockSource` variant — the genesis-successor cold-start is a new code PATH (the both-`None`-tip arm) through the EXISTING closed source, not a new variant.** |
 | `ba02_pass` evidence I/O *(NEW, N-F-G-C S2)* | `ade_node::ba02_pass` (RED — `//! RED`) | 2 fns (`correlate_peer_log_file`, `write_ba02_manifest`); **NO new closed enum / registry** | The RED operator-pass BA-02 evidence file I/O over the pre-existing closed `Ba02Manifest` / `BA02Outcome` / `PeerAcceptEvent` / `NoEvidenceReason` vocabulary. `correlate_peer_log_file` reads the operator-captured peer-log file → the GREEN `correlate` (the SOLE `Ba02Manifest` ctor); `write_ba02_manifest` accepts **ONLY a `Ba02Manifest`** — so a written manifest is ALWAYS correlate-produced. **A CLOSED file-I/O wrapper (a surface REDUCTION over the existing closed evidence vocabulary), NOT a new closed enum / registry / plugin point.** A missing/unreadable file fails closed (`io::Error`). Backs the BA-02 leg of `RO-LIVE-06` / `CN-OPERATOR-EVIDENCE-01`. Gate: `ci_check_ba02_evidence_manifest_schema.sh` (the no-synthetic-manifest enforcer; vacuous-until-committed + 8-field schema + `peer_log_file_sha256` cross-check). Adding an evidence-I/O fn = a strengthening of RO-LIVE-06; **no new acceptance source, no path emitting a manifest from `NoEvidence` / raw operator input.** |
 | `SelfAcceptedHandoff` *(N-F-G-B S1)* | `ade_runtime::producer::self_accepted_handoff` (GREEN) | constructor-fenced newtype (1 private field `accepted: AcceptedBlock`; SOLE ctor `from_self_accepted`; accessors `accepted()` / `into_accepted()`) | The typed carrier moving a BLUE self-accepted forged block from the forge path to the sibling serve task. Its **SOLE constructor** takes a BLUE `ade_ledger::producer::AcceptedBlock` (itself producible only by BLUE `self_accept` returning `Ok`); the field is private. There is **NO** constructor from a raw `Vec<u8>`, a `ForgedBlockArtifact` (`artifact.bytes` is never a token source — re-deriving would breach CN-FORGE-01; the carrier holds the ORIGINAL token), a `CoordinatorEvent`, a self-declared acceptance flag, or a peer verdict — so handing the serve task a non-self-accepted artifact is **type-unrepresentable**. A **CLOSED constructor-fenced carrier (a surface REDUCTION), NOT an extensible registry / plugin point.** **N-U S3 / DC-NODE-13 note (repoint `60deecf3`):** the `--mode node` serve usage of this carrier (the G-B `SelfAcceptedHandoff` → `push_atomic` accumulator handoff) is **SUPERSEDED** by serve-as-projection of the durable ChainDb — on the node spine a forged block reaches the served view by becoming DURABLE (`admit_forged_block_durably` → `pump_block`), not via this carrier. **The carrier is RETAINED for `--mode produce` (CN-PROD-04, `ServedChainSource::Snapshot`) — a SEPARATE serve authority** — so it still Backs `DC-NODE-06` (now via durable-provenance on `--mode node`; via the snapshot accumulator on `--mode produce`). A change to the carried type / a new accessor = a strengthening of **DC-NODE-06 / CN-PROD-04 / CN-FORGE-01** (`ci_check_served_chain_handoff_fence.sh`, REPOINTED N-U S3 to the durable-provenance serve); **no raw-bytes / artifact / event / flag / verdict constructor may be introduced**. |
@@ -2120,7 +2206,7 @@ ACCEPTS it is the operator-gated RO-LIVE-01 leg (peer ACCEPT NOT claimed here).
 | `GenesisParseError` *(N-R-C; reused on the node path N-F-G-A)* | `ade_runtime::producer::genesis_parser` (RED) | closed sum | New variant = a strengthening of **CN-GENESIS-01**. The N-F-G-A `operator_forge` ingress reuses `parse_shelley_genesis` (this error type) on the node path. |
 | `OpCertParseError` *(N-R-C; reused on the node path N-F-G-A)* | `ade_runtime::producer::opcert_envelope` (RED) | closed sum | New variant = a strengthening of **CN-OPCERT-01**. The N-F-G-A `operator_forge` ingress reuses `parse_opcert_envelope` (this error type) on the node path. |
 | `UnsignedHeaderPreImageError` *(N-S-A)* | `ade_ledger::block_validity::unsigned_header_pre_image` (BLUE) | closed sum | New variant = a strengthening of **DC-KES-HEADER-01**. |
-| `AcceptedMiniProtocol` *(N-L)* | `ade_network::session` (GREEN) | closed registry | New mini-protocol = a registry entry + a `match` arm with **no wildcard accept**. |
+| `AcceptedMiniProtocol` *(N-L; outbound segmentation REUSES it, N-AB)* | `ade_network::session` (GREEN) | closed registry | New mini-protocol = a registry entry + a `match` arm with **no wildcard accept**. **N-AB (CN-SESS-05):** the outbound `session::core::handle_outbound` segmentation carries the SAME mini-protocol id + mode across every segment of a message — it REUSES this closed registry (no new variant, no new mini-protocol) and the single `encode_inner_frame` per-frame authority. |
 | `KesError` / `KesParseError` *(N-P)* | `ade_crypto::kes_sum::errors` (BLUE) | 5 / 6 variants | New variant = a strengthening of **DC-CRYPTO-08/09**; non-secret primitives only. |
 | Operator-evidence manifest TOML schema *(N-S-C)* | `ci_check_operator_evidence_manifest_schema.sh` + `docs/clusters/completed/PHASE4-N-S-C/cluster.md` | closed key set | Any committed `CE-N-S-LIVE_*.toml` MUST conform (CN-OPERATOR-EVIDENCE-01). |
 | BA-02 operator-pass manifest TOML schema *(NEW, N-F-G-C)* | `ci_check_ba02_evidence_manifest_schema.sh` + `docs/clusters/PHASE4-N-F-G-C/CE-G-C-LIVE_*.toml` | closed 8-key set (`schema_version` / `block_hash` / `slot` / `peer_log_file` / `peer_log_file_sha256` / `peer_log_capture_command` / `peer_log_filter` / `accept_event_kind`) | Any committed `CE-G-C-LIVE_*.toml` MUST conform (`schema_version == 1`) AND its `peer_log_file_sha256` MUST match the actual SHA-256 of the committed peer-log fixture it binds (CN-OPERATOR-EVIDENCE-01 / RO-LIVE-06). **Vacuously satisfied when none is committed** (the typical state — the live operator pass is `blocked_until_operator_stake_available`). The no-synthetic-manifest enforcer. |
@@ -2364,6 +2450,26 @@ ACCEPTS it is the operator-gated RO-LIVE-01 leg (peer ACCEPT NOT claimed here).
   serve-range bound on the read-only serve path — **NOT** full network DoS resistance, **NOT** peer-fairness, **NOT**
   a per-connection-COUNT / repeated-request limit (those remain SEPARATE, out-of-scope future hardening, as with
   DC-LIVEMEM-01), and **NOT** an RO-LIVE flip (`RO-LIVE-01` stays `partial` / operator-gated).
+- **Outbound mini-protocol payloads are SEGMENTED into ordered mux frames by a fixed defensive bound
+  (N-AB, CN-SESS-05 — load-bearing; do NOT soften / do NOT broaden; the outbound inverse of the CN-SESS-04 inbound
+  reassembly and the symmetric outbound counterpart of the DC-LIVEMEM-01 receive-side `MAX_REASSEMBLY_TAIL_BYTES`).**
+  The GREEN `ade_network::session::core::handle_outbound` segments a payload with
+  `MAX_PAYLOAD < len <= MAX_OUTBOUND_PAYLOAD_BYTES` into ordered `<= MAX_PAYLOAD` chunks (`payload.chunks(MAX_PAYLOAD)`),
+  each encoded via the SAME single-frame `encode_inner_frame` → `mux::frame::encode_frame` authority (`encode_inner_frame`
+  keeps its strict `MAX_PAYLOAD` guard — **never a second / parallel frame encoder**); every segment carries the SAME
+  mini-protocol id + mode + the SAME single captured `timestamp` input (GREEN — no per-segment clock); an empty payload
+  emits exactly one (empty) frame; `concat(segment payloads) == payload` exactly (byte-preserving, lossless, ordered —
+  **DC-CONS-17 preserved**), so Ade's own inbound CN-SESS-04 reassembly reconstructs the original. The
+  **fixed `MAX_OUTBOUND_PAYLOAD_BYTES = 16 MiB`** (SYMMETRIC with `MAX_REASSEMBLY_TAIL_BYTES = 16 MiB`) is a **closed
+  literal constant — a defensive implementation bound, NOT a Cardano semantic parameter** with **NO runtime / CLI /
+  env / config escape hatch, no unbounded mode, no partial-success send**; a payload ABOVE it fails closed with the
+  **existing** closed `SessionError::OutboundPayloadTooLarge { len }` (REUSED — **NOT a new variant / new closed
+  enum**) BEFORE any segmentation (`ci_check_outbound_segmentation.sh`); a future hardening slice may **tighten** it,
+  but may NEVER disable it or set it unbounded. There is **NO new BLUE canonical type** (`MAX_OUTBOUND_PAYLOAD_BYTES`
+  is a GREEN const; 458 unchanged), **NO BLUE change** (`mux::frame` reused unchanged), and the claim is **NARROW**:
+  segmenting bytes the producer already produced into legal mux frames — it does **NOT** decide which block is served,
+  **NOT** advance a durable tip, and is **NOT** an RO-LIVE flip (`RO-LIVE-01` stays `partial` / operator-gated;
+  confirming a real cardano-node demux accepts the reused-per-segment SDU timestamp is the live leg).
 - **Live `--mode node` feed reuses the closed dial/pump + FILLS the closed source (N-F-G-C S1, load-bearing).**
   The live feed for the `--mode node` `On` arm is a **REUSE** of the closed `ade_runtime::admission::{dial_for_admission,
   run_admission_wire_pump}` (no reimplementation, no new wire authority) that **FILLS** the closed
@@ -2501,11 +2607,13 @@ ACCEPTS it is the operator-gated RO-LIVE-01 leg (peer ACCEPT NOT claimed here).
 - Canonical type schema additions (new fields appended; sort/dedup + `BTreeMap` ordering invariants preserved).
 - `WalEntry` wire tags (append-only: `AdmitBlock` = 0, `SeedEpochConsensusInputsImported` = 3; 1/2 reserved) — a
   CE-not-law additively-evolvable surface.
-- The N-F-G-E memory bounds (`MAX_REASSEMBLY_TAIL_BYTES = 16 MiB`, `MAX_WIRE_PUMP_LOOKAHEAD = 256`) AND the N-AA
-  serve-range cap (`MAX_SERVE_RANGE_BLOCKS = 256`, symmetric) — closed literal constants that a future hardening
-  slice may **tighten** (a strengthening of DC-LIVEMEM-01 / DC-SERVEMEM-01), but may NEVER make tunable /
-  unbounded; they carry **no CLI / env / config override** at any version (`ci_check_live_feed_memory_bounds.sh`
-  guard 3 / `ci_check_serve_range_bounded.sh`).
+- The N-F-G-E memory bounds (`MAX_REASSEMBLY_TAIL_BYTES = 16 MiB`, `MAX_WIRE_PUMP_LOOKAHEAD = 256`), the N-AA
+  serve-range cap (`MAX_SERVE_RANGE_BLOCKS = 256`, symmetric) AND the N-AB outbound segmentation cap
+  (`MAX_OUTBOUND_PAYLOAD_BYTES = 16 MiB`, the symmetric outbound counterpart of `MAX_REASSEMBLY_TAIL_BYTES`) —
+  closed literal constants that a future hardening slice may **tighten** (a strengthening of DC-LIVEMEM-01 /
+  DC-SERVEMEM-01 / CN-SESS-05), but may NEVER make tunable / unbounded; they carry **no CLI / env / config
+  override** at any version (`ci_check_live_feed_memory_bounds.sh` guard 3 / `ci_check_serve_range_bounded.sh` /
+  `ci_check_outbound_segmentation.sh`).
 - The N-F-G-D `PrivateRehearsalManifest` schema (`REHEARSAL_MANIFEST_SCHEMA_VERSION = 1`, closed 12-key TOML; the
   closed 1-variant `RehearsalVenue`) — a version-gated rehearsal-evidence envelope; additions bump the schema
   version. The type stays incapable of representing a non-rehearsal (`is_rehearsal`/`not_bounty_evidence`
@@ -2521,7 +2629,8 @@ ACCEPTS it is the operator-gated RO-LIVE-01 leg (peer ACCEPT NOT claimed here).
   `ci_check_served_chain_stability.sh`) → **134**; the C1-evidence commit BROADENED
   `ci_check_rehearsal_manifest_schema.sh` in place again to ALSO cover the c1 rehearsal manifests — a net
   tightening, NOT a new file, CI count unchanged; **N-U** added +2 − 1 retired → **135**; **N-AA** added 1
-  (`ci_check_serve_range_bounded.sh`, DC-SERVEMEM-01) → **136**).
+  (`ci_check_serve_range_bounded.sh`, DC-SERVEMEM-01) → **136**; **N-AB** added 1
+  (`ci_check_outbound_segmentation.sh`, CN-SESS-05) → **137**).
 
 ---
 
@@ -2667,10 +2776,11 @@ How new modules enter the workspace.
     (iv) keep the record a single closed canonical type with the SOLE codec (no `Default`, no `#[non_exhaustive]`,
     `BTreeMap`-ordered) — the field is additive ONLY behind the version gate, NOT a new TYPE.
 
-### CI gates that enforce the boundary (136 total; the N-AA / N-U / N-F-G-K…G-R / N-F-G-J / N-F-G-D / N-F-G-E / N-F-G-C / N-F-G-B / N-F-G-A / N-F-F / N-F-D-E / N-F-C / N-F-A / N-Z / N-Y / producer / network set)
+### CI gates that enforce the boundary (137 total; the N-AB / N-AA / N-U / N-F-G-K…G-R / N-F-G-J / N-F-G-D / N-F-G-E / N-F-G-C / N-F-G-B / N-F-G-A / N-F-F / N-F-D-E / N-F-C / N-F-A / N-Z / N-Y / producer / network set)
 
 | Script | Enforces | Cluster |
 |---|---|---|
+| `ci_check_outbound_segmentation.sh` *(NEW N-AB S1)* | **CN-SESS-05** — the GREEN `ade_network::session::core::handle_outbound` SEGMENTS an outbound mini-protocol payload `> MAX_PAYLOAD` into ordered `<= MAX_PAYLOAD` frames via the SINGLE `encode_inner_frame` → `mux::frame::encode_frame` per-frame authority — (a) NO second / alternate mux frame encoder in `session`; (b) `encode_inner_frame` still has its strict `MAX_PAYLOAD` guard; (c) `handle_outbound` owns segmentation (references `MAX_PAYLOAD` + `MAX_OUTBOUND_PAYLOAD_BYTES` + chunks); (d) `MAX_OUTBOUND_PAYLOAD_BYTES = 16 MiB` is a FIXED literal, NOT runtime-configurable (no CLI / env / config read, no unbounded mode); every segment keeps the same mini-protocol id + mode + the single captured timestamp (no per-segment clock); segmentation never truncates / drops / reorders; a payload above the fixed bound fails closed via the EXISTING `SessionError::OutboundPayloadTooLarge` (reused, no new variant). The outbound inverse of the `CN-SESS-04` inbound reassembly fenced by `ci_check_live_feed_memory_bounds.sh` (DC-LIVEMEM-01). **Non-vacuous** (pre-S1 HEAD had 0 `chunks(MAX_PAYLOAD)` + no `MAX_OUTBOUND_PAYLOAD_BYTES`). | N-AB |
 | `ci_check_serve_range_bounded.sh` *(NEW N-AA S2)* | **DC-SERVEMEM-01** — the `--mode node` durable-chain serve projection (`ChainDbServedSource`, `ade_runtime::network::served_chain_projection`) reads each peer BlockFetch range via the bounded **hash-free** ChainDb primitives `range_bytes_capped` + `last_block_bytes` (NEVER the unbounded `iter_from_slot` / O(N) `chaindb.tip()`), does NO `SLOT_BY_HASH` / full-index scan, caps each request at the FIXED non-configurable `MAX_SERVE_RANGE_BLOCKS = 256` literal (no CLI / env / config read, no "unbounded" path), and derives each block's hash via the single BLUE `decode_block` / `block_header_bytes` (NO second hash authority, NO `SLOT_BY_HASH` on the serve path); an oversized / inverted / undecodable range fails closed via `ServeRangeOutcome` → wire `NoBlocks`. **Non-vacuous** (pre-S2 HEAD had 2 `iter_from_slot` + 1 `chaindb.tip()` serve calls its Guards 2/3 fire on; S2 has 0). The serve-side analog of `ci_check_live_feed_memory_bounds.sh` (DC-LIVEMEM-01). | N-AA |
 | `ci_check_forged_durable_admit_via_pump.sh` *(NEW N-U S1)* | **DC-NODE-12 + DC-CONS-23 + DC-WAL-04** — the relay-loop `ForgeTick` arm routes the self-accepted forged block through the fenced `node_sync::admit_forged_block_durably` into the SINGLE `forward_sync::pump_block` durable chokepoint (extend-only `admit_via_block_validity` → StoreBlockBytes → AppendWal → AdvanceTip, durable-before-tip); the forge gains NO direct tip-advance path, NO `NodeBlockSource` variant, NO new `WalEntry` variant (reuses `WalEntry::AdmitBlock`); `accepted.into_bytes()` is byte-identical to the self-accept input (no re-encode, I-10); a stale-tip forge fails closed via header-position / `prior_fp`, never an own-block override. `pump_block` stays the sole durable tip authority. | N-U |
 | `ci_check_served_chain_projection.sh` *(NEW N-U S3)* | **DC-NODE-13** — the `--mode node` served view is a READ-ONLY projection of the durable ChainDb: `ChainDbServedSource` (`ade_runtime::network::served_chain_projection`) implements the closed serve seams `ServedHeaderLookup` / `ServedRangeLookup` over `iter_from_slot` / `get_block_by_hash` / `tip`, selected through the closed `ServedChainSource::DurableChainDb` read by the SINGLE `dispatch_server_frame_event_to_outbound` (DC-NODE-07 preserved — exactly one serve dispatch); serves `stored.bytes` verbatim (no re-encode — DC-CONS-17), reuses the single `block_header_bytes` (DC-CONS-18) + `decode_block` (NO parallel splitter, NO `AcceptedBlock` reconstruction); a follower fetches coherent durable history A→B (never B without A) and serving survives restart. Supersedes the retired G-R `ci_check_served_chain_stability.sh` (DC-NODE-11 mechanism). | N-U |
@@ -2757,6 +2867,13 @@ How new modules enter the workspace.
 > the fixed non-configurable `MAX_SERVE_RANGE_BLOCKS` cap, and `decode_block`-only hash derivation. **0 retired,
 > 0 modified-in-place** (the relay-loop containment / served-chain handoff / live-feed memory / serve-projection
 > fences stay byte-unchanged). The serve-side analog of N-F-G-E's `ci_check_live_feed_memory_bounds.sh`.
+> **N-AB added 1 (136 → 137): +1 NEW** `ci_check_outbound_segmentation.sh` (S1, CN-SESS-05) — fences the GREEN
+> `session::core::handle_outbound` outbound segmentation: the single `encode_inner_frame` → `mux::frame::encode_frame`
+> authority (no second / parallel frame encoder), the preserved `encode_inner_frame` `MAX_PAYLOAD` guard,
+> `handle_outbound` chunk-into-`<= MAX_PAYLOAD`-frames behaviour, and the fixed non-configurable
+> `MAX_OUTBOUND_PAYLOAD_BYTES` bound (no CLI / env / config escape, fail-closed via the EXISTING reused
+> `SessionError::OutboundPayloadTooLarge`). **0 retired, 0 modified-in-place** (every other gate byte-unchanged;
+> GREEN-only, 0 BLUE diff). The outbound inverse of N-F-G-E's `ci_check_live_feed_memory_bounds.sh` (DC-LIVEMEM-01).
 > _(The G-H gates `ci_check_single_serve_dispatch_authority.sh` + `ci_check_serve_listener_magic_aware.sh` are part
 > of the 136 total at HEAD but are NOT row-detailed in this table — see the G-H-gap note in the header.)_
 > Earlier-cluster gates (N-A..N-P, the N-M-* set, the N-L wire-session set) are present in the 136 total; the full
@@ -2820,7 +2937,12 @@ How new modules enter the workspace.
   or re-deriving it (CN-FORGE-01 / DC-NODE-06).** **(N-F-D / N-F-E) `run_loop_planner` MUST observe a `SlotNo` ONLY
   in the dedicated `forge_slot_status` guard, emit only the closed `LoopStep` set, decide no authority.** **(N-F-F)
   `forge_intent` MUST observe only flag PRESENCE, emit only the closed 2-variant `ForgeIntent`, bind the partial
-  arm by name (CN-NODE-03).** **(N-F-G-E) `ade_network::session::core` MUST fail closed on a reassembly tail over
+  arm by name (CN-NODE-03).** **(N-AB, CN-SESS-05) `ade_network::session::core::handle_outbound` MUST SEGMENT an
+  outbound payload over `MAX_PAYLOAD` into ordered `<= MAX_PAYLOAD` frames via the single `encode_inner_frame`
+  authority (no second frame encoder), byte-preservingly (no truncate / drop / reorder / partial-success), reusing
+  one captured `timestamp` (no per-segment clock), failing closed via the existing `SessionError::OutboundPayloadTooLarge`
+  at the FIXED non-configurable `MAX_OUTBOUND_PAYLOAD_BYTES = 16 MiB` (no CLI / env / config escape; the outbound
+  inverse of the inbound reassembly bound below).** **(N-F-G-E) `ade_network::session::core` MUST fail closed on a reassembly tail over
   `MAX_REASSEMBLY_TAIL_BYTES` via the additive closed `SessionError::ReassemblyBufferOverflow` (NO wildcard; the
   bound fires BEFORE the BLUE decode path — no silent truncation, no partial decode); the cap MUST be a closed
   literal constant with NO CLI / env / config escape hatch (DC-LIVEMEM-01).** **(N-F-G-A) `consensus_inputs::protocol_params` MUST have NO float path; `require_forge_current_pparams`
@@ -2920,6 +3042,20 @@ How new modules enter the workspace.
   is an internal serve-read outcome, not a dispatch); within-cap serving MUST stay byte-identical
   (**DC-CONS-17**); and the trusted recovery / rollback `iter_from_slot` / `tip` internals stay doc-fenced /
   unchanged. A later slice may **tighten** the cap, never disable it (`ci_check_serve_range_bounded.sh`).**
+- **(N-AB, CN-SESS-05 — GREEN session reducer) outbound segmentation MUST use the single frame encoder, must be
+  byte-preserving, and must fail closed at the fixed bound.** The GREEN `ade_network::session::core::handle_outbound`
+  MUST segment an outbound mini-protocol payload `> MAX_PAYLOAD` into ordered `<= MAX_PAYLOAD` frames via the SAME
+  single `encode_inner_frame` → `mux::frame::encode_frame` per-frame authority — **NO second / alternate / parallel
+  mux frame encoder** in `session`; `encode_inner_frame` MUST keep its strict `MAX_PAYLOAD` guard. It MUST **NOT**
+  truncate, drop tail bytes, reorder, or partial-success send (a message either fully segments + emits or fails
+  closed); `concat(segment payloads) == payload` exactly (**DC-CONS-17**). Every segment MUST carry the SAME
+  mini-protocol id + mode + the **single captured `timestamp` input** — **NO per-segment clock call in GREEN**
+  (determinism). A payload above the **FIXED, non-configurable** `MAX_OUTBOUND_PAYLOAD_BYTES = 16 MiB` literal
+  (SYMMETRIC with the receive-side `MAX_REASSEMBLY_TAIL_BYTES`, DC-LIVEMEM-01) MUST fail closed with the EXISTING
+  reused `SessionError::OutboundPayloadTooLarge` (**NO new closed enum / variant**) — **NO CLI / env / config escape
+  hatch, no unbounded / runtime-configurable payload cap**. It MUST make **NO BLUE change** (`mux::frame` reused
+  unchanged) and **NO RO-LIVE flip**. A later slice may **tighten** the bound, never disable it
+  (`ci_check_outbound_segmentation.sh`).**
 
 ### Project-specific additions (Ade)
 
@@ -3094,6 +3230,22 @@ How new modules enter the workspace.
   **RED-only, 0 BLUE diff; no second hash authority; DC-NODE-07 single dispatch preserved; within-cap serving
   byte-identical (DC-CONS-17); no RO-LIVE flip** (`RO-LIVE-01` stays `partial`). The trusted recovery / rollback
   `iter_from_slot` internals are out of scope (doc-fenced, not peer-driven).
+- **Outbound mux segmentation (CLOSED by PHASE4-N-AB — pre-RO-LIVE hardening item 2):** the GREEN
+  `ade_network::session::core` formerly had no symmetric OUTBOUND path — an outbound mini-protocol payload larger
+  than the mux SDU limit `MAX_PAYLOAD` (e.g. a Conway block-fetch `Block` over 64 KiB) hit `encode_inner_frame`'s
+  strict single-frame guard and FAILED, so the `--mode node` serve could not transmit a large block. N-AB makes
+  `handle_outbound` SEGMENT a payload with `MAX_PAYLOAD < len <= MAX_OUTBOUND_PAYLOAD_BYTES` into ordered
+  `<= MAX_PAYLOAD` frames via the SAME single `encode_inner_frame` → `mux::frame::encode_frame` authority — the
+  outbound inverse of the `CN-SESS-04` inbound reassembly — byte-preservingly (`concat(segment payloads) ==
+  payload`, DC-CONS-17), each segment carrying the SAME mini-protocol id + mode + the SAME single captured
+  `timestamp` (GREEN, no per-segment clock); a payload above the FIXED, non-configurable
+  `MAX_OUTBOUND_PAYLOAD_BYTES = 16 MiB` (symmetric with the receive-side `MAX_REASSEMBLY_TAIL_BYTES = 16 MiB`,
+  DC-LIVEMEM-01) fails closed via the EXISTING reused `SessionError::OutboundPayloadTooLarge` (no new closed enum),
+  fenced by the NEW `ci_check_outbound_segmentation.sh` (`CN-SESS-05`, enforced). Pairs with N-AA (item 1 bounds
+  *how many* blocks per request; this makes *one large* block sendable). **GREEN-only, 0 BLUE diff; no second frame
+  encoder (`mux::frame` reused unchanged); no truncation / drop / reorder / partial-success send; no new canonical
+  type (`MAX_OUTBOUND_PAYLOAD_BYTES` is a GREEN const); no RO-LIVE flip** (`RO-LIVE-01` stays `partial`; confirming
+  a real cardano-node demux accepts the reused-per-segment SDU timestamp is the live leg, hardening item 4).
 - **Registry `code_locus` must track source moves (`5db9aae`):** any rule citing a renamed/moved `crates/**.rs`
   or `ci/**.sh` path must have its `code_locus` updated; `ci_check_registry_code_locus_exists.sh` fails closed
   on a stale pointer.
@@ -3111,6 +3263,20 @@ How new modules enter the workspace.
 
 > Surfaced honestly per IDD: these are **declared** future attach points, not closed surfaces. Each is named
 > in a registry rule or a cluster CLOSURE record.
+>
+> **N-AB CLOSES pre-RO-LIVE hardening item 2 (outbound mux segmentation) — it BROADENS NOTHING below and adds
+> NO new candidate.** PHASE4-N-AB COMPLETES the OUTBOUND direction of the existing closed wire-protocol session
+> seam (CN-SESS family): the GREEN `session::core::handle_outbound` now SEGMENTS an outbound mini-protocol payload
+> `> MAX_PAYLOAD` into ordered `<= MAX_PAYLOAD` frames via the single `encode_inner_frame` authority — the outbound
+> inverse of the `CN-SESS-04` inbound reassembly — failing closed above the FIXED `MAX_OUTBOUND_PAYLOAD_BYTES =
+> 16 MiB` (`CN-SESS-05`, enforced; gate `ci_check_outbound_segmentation.sh`). This **CLOSES pre-RO-LIVE hardening
+> item 2** (recorded under "Pre-RO-LIVE hardening" above, marked CLOSED). N-AB is **GREEN-only (0 BLUE diff)**,
+> adds **NO new extension point / closed enum / canonical type** (it COMPLETES an already-closed seam's outbound
+> direction — `MAX_OUTBOUND_PAYLOAD_BYTES` is a GREEN const, `SessionError::OutboundPayloadTooLarge` is reused, the
+> single `encode_inner_frame` authority + the closed `AcceptedMiniProtocol` registry are reused), and does **NOT**
+> flip any RO-LIVE rule — segmenting bytes ≠ operator-witnessed peer acceptance (`RO-LIVE-01` stays `partial` /
+> operator-gated). All candidates (#0–#3, #5) and the already-retired #4 / #6 are carried UNCHANGED. **There is NO
+> NEW candidate seam from N-AB** (completing an existing closed seam's outbound direction surfaces none).
 >
 > **N-AA CLOSES pre-RO-LIVE hardening item 1 (bounded peer-driven serve range) — it BROADENS NOTHING below and
 > adds NO new candidate.** PHASE4-N-AA bounds the `--mode node` durable-chain serve (`ChainDbServedSource`,
@@ -3318,6 +3484,48 @@ How new modules enter the workspace.
 ---
 
 ## Generation notes
+
+- **Regenerated (single-cluster CLUSTER-CLOSE refresh, PHASE4-N-AB) at HEAD `c6e7fafe`** (`git rev-parse
+  --short HEAD` — the *Close PHASE4-N-AB* commit), applied DIRECTLY to the on-disk SEAMS, downstream of the
+  CODEMAP regenerated at the same close (`c6e7fafe` — **458** canonical types / **137** CI / **335** rules). The
+  prior on-disk SEAMS was pinned at the PHASE4-N-AA close (`b0365df0` / **458** / **136** / **334**). This refresh
+  splices the **single closed cluster PHASE4-N-AB** (outbound mux segmentation — `CN-SESS-05`) and updates the
+  counts. **N-AB is GREEN-only — the net BLUE delta is ZERO new canonical types / authorities / fns / closed
+  enums** (the ONLY source file touched in the whole `b0365df0..c6e7fafe` span is the GREEN session reducer
+  `ade_network::session::core`; `mux::frame` and every other BLUE submodule reused unchanged). It COMPLETES the
+  OUTBOUND direction of the existing closed wire-protocol session seam (the CN-SESS family) — it opens **NO** new
+  seam, plugin, closed enum, or negotiated surface. Registry → **335** (ONE NEW, `CN-SESS-05`, `tier = derived`,
+  `introduced_in = "PHASE4-N-AB"`, `enforced`, `ci_script = ci/ci_check_outbound_segmentation.sh`; TWO
+  strengthened — `CN-SESS-04` receive+send-symmetry + `DC-SERVEMEM-01` bounded-serve-now-transmits-large-block; no
+  rule weakened); CI **136 → 137** (NET +1: +1 NEW `ci_check_outbound_segmentation.sh`; 0 retired, 0
+  modified-in-place).
+- **N-AB delta spot-checked at HEAD `c6e7fafe` (grep/ls/git only — no `cargo`):** `git diff b0365df0..c6e7fafe`
+  over the BLUE `core_paths` trees adds **zero** `^+(pub )?(struct|enum|fn)` lines (GREEN-only — the ONLY source
+  file in the whole span is `crates/ade_network/src/session/core.rs`, a GREEN `session::core` submodule, NOT a
+  BLUE `core_paths` entry). NEW fixed GREEN `const MAX_OUTBOUND_PAYLOAD_BYTES: usize = 16 * 1024 * 1024` at
+  `crates/ade_network/src/session/core.rs:60`; `handle_outbound` segments via `payload.chunks(MAX_PAYLOAD)` at
+  `:364` and fails closed above the bound at `:339`; `encode_inner_frame` (at `:404`) keeps its strict
+  `MAX_PAYLOAD` guard at `:410-411` and remains the SOLE per-frame encoder wrapping the single
+  `ade_network::mux::frame::encode_frame` authority (`mux/frame.rs:87`, unchanged in span). `SessionError::OutboundPayloadTooLarge { len }`
+  at `crates/ade_network/src/session/event.rs:177` is the EXISTING closed variant (REUSED, not added). The NEW
+  gate `ci_check_outbound_segmentation.sh` is present; `ls ci/ci_check_*.sh | wc -l` = **137**;
+  `grep -cE '^id = ' docs/ade-invariant-registry.toml` = **335** (the new `CN-SESS-05` present).
+  `MAX_OUTBOUND_PAYLOAD_BYTES` is a GREEN const, **NOT canonical-counted** (458 unchanged).
+- **Cross-reference check (CODEMAP ↔ SEAMS) at the N-AB close:** the **458 / 137 / 335** counts match the CODEMAP
+  header regenerated at the same close (`c6e7fafe`) exactly. The one module named in the N-AB splice —
+  `ade_network::session::core` (`handle_outbound`, `MAX_OUTBOUND_PAYLOAD_BYTES`, the reused `encode_inner_frame`)
+  — is inventoried there; the CODEMAP header's PHASE4-N-AB delta names the same one rule (`CN-SESS-05`) + the +1
+  CI gate (`ci_check_outbound_segmentation.sh`) + the same two strengthenings (`CN-SESS-04` / `DC-SERVEMEM-01`).
+  No stale module references; no drift vs CODEMAP unreconciled.
+- **Candidate seams surfaced for confirm/reject (this cluster):** **NONE NEW.** PHASE4-N-AB **completes the
+  OUTBOUND direction of an already-closed seam** (the CN-SESS wire-protocol session reducer) — it introduces no
+  new ingress surface, no new closed / extensible registry (segmentation reuses the closed
+  `SessionError::OutboundPayloadTooLarge` + the `AcceptedMiniProtocol` registry + the single `encode_inner_frame`
+  authority; `MAX_OUTBOUND_PAYLOAD_BYTES` is a fixed non-configurable GREEN const), and no new version-gated
+  contract. The outbound segmentation + the fixed bound have a single mechanical fence
+  (`ci_check_outbound_segmentation.sh`, CN-SESS-05). No human-judgment item is outstanding from this cluster. (The
+  ONE open obligation — confirming a real cardano-node demux accepts the reused-per-segment SDU timestamp — is the
+  live leg, correctly fenced behind the unflipped RO-LIVE obligations as pre-RO-LIVE hardening item 4.)
 
 - **Regenerated (single-cluster CLUSTER-CLOSE refresh, PHASE4-N-AA) at HEAD `b0365df0`** (`git rev-parse
   --short HEAD` — the *Close PHASE4-N-AA* commit), applied DIRECTLY to the on-disk SEAMS, downstream of the
