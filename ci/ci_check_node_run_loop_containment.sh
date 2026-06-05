@@ -122,11 +122,12 @@ if (( FORGE_CALLS != 1 )); then
 fi
 
 # --- guard (neg2b): no direct serve / broadcast / gossip in the loop body ---
-# PHASE4-N-U S1: the forged block IS now durably admitted (via the fenced
-# admit_forged_block_durably driver -> pump_block, DC-NODE-12) and handed to the
-# G-R serve sibling via a typed channel send (tx.send). But the loop body itself
-# never serves/broadcasts/gossips directly — no served_chain_admit / push_atomic
-# / broadcast / block_fetch / OutboundCommand here (serve is the sibling task).
+# PHASE4-N-U S1: the forged block IS durably admitted (via the fenced
+# admit_forged_block_durably driver -> pump_block, DC-NODE-12). PHASE4-N-U S3:
+# the durable block is what the serve task PROJECTS (DC-NODE-13) — the G-R
+# push sibling + tx.send serve handoff are retired. The loop body itself never
+# serves/broadcasts/gossips directly — no served_chain_admit / push_atomic /
+# broadcast / block_fetch / OutboundCommand here (serve is run_node_serve_task).
 for tok in 'served_chain_admit' 'push_atomic' 'OutboundCommand' 'broadcast' 'block_fetch'; do
     if echo "$LOOP_FN" | grep -qE "$tok"; then
         print_fail "run_relay_loop_with_sched references a serve/broadcast token: $tok — a forged block is self-accept-only; the loop serves/admits/gossips nothing (CE-E-4)"
