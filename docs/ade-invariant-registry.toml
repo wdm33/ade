@@ -6364,13 +6364,13 @@ un-WAL'd forged orphan at or ahead of the durable tip.
 """
 source = "docs/planning/phase4-n-u-forged-block-durability-invariants.md"
 cross_ref = ["DC-WAL-01", "DC-WAL-02", "DC-WAL-03", "DC-SYNC-01", "T-REC-05", "DC-NODE-12"]
-code_locus = "crates/ade_ledger/src/wal/* (WalEntry::AdmitBlock prior_fp/post_fp + verify_chain -- reused); crates/ade_node/src/node_sync.rs (admit_forged_block_durably -> pump_block appends the forged AdmitBlock). S2: crates/ade_runtime/src/{recovery/restart,wal}.rs (no-orphan reconciliation)"
-tests = ["forged_admit_wal_prior_fp_chains"]
+code_locus = "crates/ade_ledger/src/wal/* (WalEntry::AdmitBlock prior_fp/post_fp + verify_chain -- reused); crates/ade_node/src/node_sync.rs (admit_forged_block_durably -> pump_block appends the forged AdmitBlock); crates/ade_node/src/node_lifecycle.rs (warm_start_recovery WAL-tail reconciliation: rollback_to_slot(wal_tail_slot) before warm-start)"
+tests = ["forged_admit_wal_prior_fp_chains", "warm_start_drops_orphan_block_above_wal_tail"]
 ci_script = "ci/ci_check_forged_durable_admit_via_pump.sh"
-status = "partial"
+status = "enforced"
 introduced_in = "PHASE4-N-U"
 strengthened_in = []
-evidence_notes = "PHASE4-N-U S1 (2026-06-05). PARTIAL -- the CHAINING clause is enforced: a forged AdmitBlock's prior_fp chains from the anchor initial_ledger_fingerprint and the forged WAL verifies from it (forged_admit_wal_prior_fp_chains), because admit_forged_block_durably routes through the SAME pump_block / forward_sync_step that sets prior_fp = state.prior_fp and post_fp = the post-admit fingerprint. The NO-ORPHAN-RECOVERY clause (warm-start reconciliation: a torn forge-admit crash leaves no un-WAL'd forged orphan) flips this to enforced at S2 (T-REC-05)."
+evidence_notes = "PHASE4-N-U S1+S2 (2026-06-05). ENFORCED. CHAINING (S1): a forged AdmitBlock's prior_fp chains from the anchor initial_ledger_fingerprint and the forged WAL verifies from it (forged_admit_wal_prior_fp_chains), because admit_forged_block_durably routes through the SAME pump_block / forward_sync_step that sets prior_fp = state.prior_fp and post_fp = the post-admit fingerprint. NO-ORPHAN-RECOVERY (S2): production warm_start_recovery reconciles the ChainDb to the WAL tail (rollback_to_slot before warm-start), so a torn StoreBlockBytes-before-AppendWal crash leaves no un-WAL'd orphan at or ahead of the durable tip (warm_start_drops_orphan_block_above_wal_tail). Full byte-identical forward-replay equivalence over forged blocks is T-REC-05 (its forward-replay test is the remaining S2 work)."
 
 [[rules]]
 id = "T-REC-05"

@@ -56,6 +56,7 @@ use ade_core::consensus::BootstrapAnchorHash;
 use ade_ledger::consensus_view::PoolDistrView;
 use ade_ledger::fingerprint::fingerprint;
 use ade_ledger::state::LedgerState;
+use ade_ledger::seed_consensus_inputs::decode_seed_epoch_consensus_inputs;
 use ade_ledger::wal::{replay_from_anchor, WalStore};
 use ade_runtime::bootstrap::{
     bootstrap_initial_state, BootstrapInputs, BootstrapState, SeedEpochConsensusSource,
@@ -1312,14 +1313,17 @@ fn forge_outcome_of(ev: &CoordinatorEvent) -> crate::live_log::ForgeOutcome {
 ///      (sidecar present → `blake2b_256` hash == provenance → A1 decode →
 ///      anchor/epoch binding → byte-identity re-encode). NO bundle fallback.
 ///
-/// L3 scope: snapshot-at-tip only. `bootstrap_initial_state`'s warm-start
-/// branch restores the sidecar; for a snapshot exactly at the target it
-/// returns BEFORE the replay-forward fold that is the SOLE consumer of
-/// `era_schedule` / `ledger_view` (`materialize_rolled_back_state` degenerate
-/// branch). A snapshot strictly below the tip would force forward replay —
-/// that is L4 durable-apply territory (L4c owns its crash-window proof) — so
-/// it fails closed here, making the deterministic placeholder schedule/view
-/// passed below provably unconsumed.
+/// PHASE4-N-U S2: forward-replay IS supported. `bootstrap_initial_state`'s
+/// warm-start branch forward-replays from the nearest snapshot ≤ the
+/// (reconciled) tip over the preserved bytes — so a forged tip (which carries
+/// no snapshot-at-tip; S1 captures none, recovery is via WAL replay) recovers.
+/// The `era_schedule` / `ledger_view` the fold consumes are reconstructed from
+/// the recovered seed-epoch sidecar (NOT placeholders). Before warm-start the
+/// chaindb is reconciled to the WAL tail (DC-WAL-04 no-orphan), and after, the
+/// recovered fingerprint is checked against the WAL-tail post_fp (T-REC-05,
+/// fail-fast on divergence). From-genesis single-Conway-era era_schedule
+/// reconstruction (the genesis seed epoch ⇒ (0,0)); non-genesis multi-era is a
+/// separate concern (S2 §15 non-goal).
 ///
 /// `wal` is read-only here (`read_all` takes `&self`); recovery appends
 /// nothing. `pub(crate)` so the L4 sync driver's kill→recover proof
@@ -1373,40 +1377,51 @@ pub(crate) fn warm_start_recovery(
     let provenance = replay
         .provenance
         .ok_or(NodeLifecycleError::WarmStartNoProvenance)?;
+    let wal_tail_fp = replay.tail_fp.clone();
+    let admit_count = replay.admit_count;
 
-    // 3. Snapshot-at-tip guard. The only consumer of era_schedule/ledger_view
-    //    is the replay-forward fold, reached only when the nearest snapshot is
-    //    strictly below the target. Require a snapshot exactly at the tip so
-    //    that path is unreachable; otherwise fail closed (L4 territory).
-    let tip =
-        ChainDb::tip(chaindb).map_err(|e| NodeLifecycleError::OnDiskRead(format!("{e:?}")))?;
-    if let Some(t) = &tip {
-        if SnapshotStore::get_snapshot(chaindb, t.slot)
-            .map_err(|e| NodeLifecycleError::OnDiskRead(format!("{e:?}")))?
-            .is_none()
-        {
-            return Err(NodeLifecycleError::WarmStartForwardReplayUnsupported {
-                tip_slot: t.slot.0,
-            });
-        }
-    }
+    // 3. PHASE4-N-U S2: reconstruct the recovery era_schedule + ledger_view from
+    //    the recovered seed-epoch sidecar (replacing the L3 snapshot-at-tip-only
+    //    placeholders), so bootstrap_initial_state's warm-start branch can
+    //    FORWARD-REPLAY from a snapshot strictly below the tip. A forged tip (S1)
+    //    carries NO snapshot-at-tip; it is recovered by WAL replay over the
+    //    durable blocks. The sidecar is durable in the anchor-fp-keyed table.
+    let sidecar_bytes = SnapshotStore::get_seed_epoch_consensus_inputs(chaindb, &anchor_fp)
+        .map_err(|e| NodeLifecycleError::OnDiskRead(format!("{e:?}")))?
+        .ok_or(NodeLifecycleError::WarmStartNoProvenance)?;
+    let sidecar = decode_seed_epoch_consensus_inputs(&sidecar_bytes)
+        .map_err(|e| NodeLifecycleError::WarmStartBootstrap(format!("sidecar decode: {e:?}")))?;
+    let ledger_view = PoolDistrView::from_seed_epoch_consensus_inputs(&sidecar);
+    // From-genesis single-Conway-era: the seed epoch starts at
+    // epoch_no * epoch_length_slots (the genesis seed epoch ⇒ (0, 0), matching
+    // the live WarmStart arm's make_node_schedule). Non-genesis multi-era
+    // reconstruction is a separate concern (S2 §15 non-goal).
+    let era_schedule =
+        make_node_schedule(SlotNo(sidecar.epoch_no.0 * 432_000), sidecar.epoch_no);
 
-    // Deterministic placeholders, provably unconsumed (snapshot-at-tip guard
-    // ⇒ `materialize_rolled_back_state` takes the degenerate branch and never
-    // folds a block). NOT bundle-derived: a constant empty schedule + empty
-    // leadership view.
-    let era_schedule = make_node_schedule(SlotNo(0), EpochNo(0));
-    let ledger_view = PoolDistrView::new(
-        EpochNo(0),
-        0,
-        ActiveSlotsCoeff { numer: 0, denom: 1 },
-        BTreeMap::new(),
-    );
+    // 4. PHASE4-N-U S2 (DC-WAL-04 no-orphan): reconcile the chaindb to the WAL
+    //    tail BEFORE warm-start. The WAL — not chaindb.tip() — is the admission
+    //    authority; a torn StoreBlockBytes-before-AppendWal crash leaves an
+    //    orphan block durable in the chaindb but absent from the WAL. Drop every
+    //    block above the WAL-tail slot (deterministic, idempotent; empty WAL ⇒
+    //    slot 0). Mirrors recover_node_state.
+    let wal_tail_slot = entries
+        .iter()
+        .rev()
+        .find_map(|entry| match entry {
+            ade_ledger::wal::WalEntry::AdmitBlock { slot, .. } => Some(*slot),
+            ade_ledger::wal::WalEntry::SeedEpochConsensusInputsImported { .. } => None,
+        })
+        .unwrap_or(SlotNo(0));
+    chaindb
+        .rollback_to_slot(wal_tail_slot)
+        .map_err(|e| NodeLifecycleError::OnDiskRead(format!("rollback_to_slot: {e:?}")))?;
 
-    // 4. The single authority. RequiredFromRecoveredProvenance runs the
-    //    fail-closed sidecar verify chain; no `--consensus-inputs-path`
-    //    fallback exists inside it.
-    bootstrap_initial_state(BootstrapInputs {
+    // 5. The single authority. RequiredFromRecoveredProvenance runs the
+    //    fail-closed sidecar verify chain; its warm-start branch forward-replays
+    //    from the nearest snapshot ≤ the (reconciled) tip over the preserved
+    //    bytes (the SOLE consumer of era_schedule / ledger_view).
+    let recovered = bootstrap_initial_state(BootstrapInputs {
         chaindb,
         snapshot_store: chaindb,
         era_schedule: &era_schedule,
@@ -1416,7 +1431,20 @@ pub(crate) fn warm_start_recovery(
             provenance,
         ),
     })
-    .map_err(|e| NodeLifecycleError::WarmStartBootstrap(format!("{e:?}")))
+    .map_err(|e| NodeLifecycleError::WarmStartBootstrap(format!("{e:?}")))?;
+
+    // 6. PHASE4-N-U S2 (T-REC-05): the recovered ledger fingerprint MUST equal
+    //    the WAL-tail post_fp (when ≥1 AdmitBlock) — a deterministic fail-fast,
+    //    never a silent recovery divergence (the WAL is the admission authority).
+    if admit_count > 0 {
+        let recovered_fp = fingerprint(&recovered.ledger).combined;
+        if recovered_fp != wal_tail_fp {
+            return Err(NodeLifecycleError::WarmStartBootstrap(format!(
+                "wal-tail fingerprint mismatch: expected {wal_tail_fp:?}, recovered {recovered_fp:?}"
+            )));
+        }
+    }
+    Ok(recovered)
 }
 
 /// FirstRun arm — the Mithril-only first-run bootstrap (L2).
@@ -2279,6 +2307,36 @@ mod tests {
             .unwrap();
     }
 
+    /// PHASE4-N-U S2: a REALISTIC durable tip — a block, its WAL `AdmitBlock`,
+    /// and a snapshot AT the tip slot (mirrors the pump's StoreBlockBytes +
+    /// AppendWal + checkpoint). The `AdmitBlock` chains from the anchor
+    /// (`prior_fp == WARM_ANCHOR_FP`) and its `post_fp` is the snapshot ledger's
+    /// fingerprint, so warm_start_recovery's WAL-tail reconciliation KEEPS the
+    /// block and the T-REC-05 fingerprint guard passes (snapshot-at-tip ⇒
+    /// degenerate forward-replay).
+    fn put_durable_tip(chaindb: &PersistentChainDb, wal: &mut FileWalStore, slot: u64) {
+        let ledger = LedgerState::new(CardanoEra::Conway);
+        let chain_dep = PraosChainDepState::genesis(Nonce(Hash32([0xCD; 32])));
+        chaindb
+            .put_block(&StoredBlock {
+                hash: Hash32([0xBB; 32]),
+                slot: SlotNo(slot),
+                bytes: vec![0xAB; 8],
+            })
+            .unwrap();
+        wal.append(ade_ledger::wal::WalEntry::AdmitBlock {
+            prior_fp: WARM_ANCHOR_FP,
+            block_hash: Hash32([0xBB; 32]),
+            slot: SlotNo(slot),
+            verdict: ade_ledger::wal::BlockVerdictTag::Valid,
+            post_fp: fingerprint(&ledger).combined,
+        })
+        .unwrap();
+        PersistentSnapshotCache::new(chaindb)
+            .capture(SlotNo(slot), &ledger, &chain_dep)
+            .unwrap();
+    }
+
     #[test]
     fn warm_start_recovers_seed_epoch_consensus_inputs_byte_identical() {
         // The CE-L-3 positive: a valid persisted precondition recovers the
@@ -2293,7 +2351,7 @@ mod tests {
                 .put_seed_epoch_consensus_inputs(&WARM_ANCHOR_FP, &bytes)
                 .unwrap();
             append_seed_epoch_provenance(&mut wal, &WARM_ANCHOR_FP, WARM_EPOCH, &bytes).unwrap();
-            put_tip_and_snapshot(&chaindb, WARM_TIP_SLOT);
+            put_durable_tip(&chaindb, &mut wal, WARM_TIP_SLOT);
             // stores dropped here -> restart boundary.
         }
 
@@ -2508,12 +2566,14 @@ mod tests {
     }
 
     #[test]
-    fn warm_start_fails_closed_when_forward_replay_needed() {
-        // Valid sidecar + WAL provenance, but the snapshot is BELOW the tip,
-        // so recovery would require forward block replay -> L4 territory.
-        // Fail closed rather than replay with a non-recovered leadership
-        // view (this is what makes the era_schedule/ledger_view placeholders
-        // provably unconsumed in the success path).
+    fn warm_start_drops_orphan_block_above_wal_tail() {
+        // PHASE4-N-U S2 (DC-WAL-04 no-orphan): a torn StoreBlockBytes-before-
+        // AppendWal crash leaves a block durable in the ChainDb but ABSENT from
+        // the WAL — an orphan ABOVE the WAL tail. Warm-start reconciles the
+        // ChainDb to the WAL tail (rollback_to_slot) and drops the orphan; the
+        // recovered tip is the WAL-tail tip, never the un-WAL'd orphan.
+        // (This replaces the obsolete snapshot-at-tip-only guard test: forward
+        // replay from a sub-tip snapshot IS now supported — S2.)
         let d = fresh_warm_dirs();
         let record = warm_sample_record(WARM_ANCHOR_FP, WARM_EPOCH);
         let bytes = encode_seed_epoch_consensus_inputs(&record);
@@ -2523,30 +2583,33 @@ mod tests {
                 .put_seed_epoch_consensus_inputs(&WARM_ANCHOR_FP, &bytes)
                 .unwrap();
             append_seed_epoch_provenance(&mut wal, &WARM_ANCHOR_FP, WARM_EPOCH, &bytes).unwrap();
-            // Block at the tip slot, but snapshot one slot BELOW it.
+            // The legit durable tip: block + WAL AdmitBlock + snapshot.
+            put_durable_tip(&chaindb, &mut wal, WARM_TIP_SLOT);
+            // A torn-write ORPHAN one slot above: a ChainDb block with NO WAL
+            // AdmitBlock (StoreBlockBytes done, AppendWal not).
             chaindb
                 .put_block(&StoredBlock {
-                    hash: Hash32([0xBB; 32]),
-                    slot: SlotNo(WARM_TIP_SLOT),
-                    bytes: vec![0xAB; 8],
+                    hash: Hash32([0xCC; 32]),
+                    slot: SlotNo(WARM_TIP_SLOT + 1),
+                    bytes: vec![0xCD; 8],
                 })
-                .unwrap();
-            let ledger = LedgerState::new(CardanoEra::Conway);
-            let chain_dep = PraosChainDepState::genesis(Nonce(Hash32([0xCD; 32])));
-            PersistentSnapshotCache::new(&chaindb)
-                .capture(SlotNo(WARM_TIP_SLOT - 1), &ledger, &chain_dep)
                 .unwrap();
         }
         let (chaindb, wal) = open_warm_stores(&d);
-        let r = warm_start_recovery(&chaindb, &wal);
+        let state = warm_start_recovery(&chaindb, &wal)
+            .expect("warm-start recovers, reconciling the orphan away");
+        // The recovered tip is the WAL-tail tip, NOT the un-WAL'd orphan above it.
+        assert_eq!(
+            state.tip.map(|t| t.slot.0),
+            Some(WARM_TIP_SLOT),
+            "the orphan block above the WAL tail must be dropped (DC-WAL-04 no-orphan)"
+        );
+        // The orphan is gone from the durable ChainDb.
         assert!(
-            matches!(
-                r,
-                Err(NodeLifecycleError::WarmStartForwardReplayUnsupported {
-                    tip_slot
-                }) if tip_slot == WARM_TIP_SLOT
-            ),
-            "forward replay needed must fail closed, got {r:?}"
+            ChainDb::get_block_by_hash(&chaindb, &Hash32([0xCC; 32]))
+                .unwrap()
+                .is_none(),
+            "the reconciliation must drop the orphan block from the ChainDb"
         );
     }
 
