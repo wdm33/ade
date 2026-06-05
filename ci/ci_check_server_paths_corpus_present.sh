@@ -16,7 +16,7 @@ ADAPTER_TEST="$REPO_ROOT/crates/ade_runtime/tests/cross_impl_server_pipeline.rs"
 TRANSCRIPT_TEST="$REPO_ROOT/crates/ade_runtime/tests/server_paths_transcript_replay.rs"
 BINARY_SRC="$REPO_ROOT/crates/ade_core_interop/src/bin/live_block_fetch_session.rs"
 BINARY_CARGO="$REPO_ROOT/crates/ade_core_interop/Cargo.toml"
-PROCEDURE="$REPO_ROOT/docs/clusters/PHASE4-N-G/CE-N-G-8_PROCEDURE.md"
+PROCEDURE="$REPO_ROOT/docs/clusters/completed/PHASE4-N-G/CE-N-G-8_PROCEDURE.md"
 
 FAILED=0
 

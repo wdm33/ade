@@ -9,9 +9,12 @@ set -uo pipefail
 #   1. No I/O / clock / rand / HashMap iteration / floating-point /
 #      println / async in forge.rs, state.rs, or tx_components.rs.
 #   2. forge.rs calls `is_leader_for_vrf_output(` (validator's
-#      shared function). The only `fn .*is_leader.*` definition
-#      reachable from ade_core / ade_ledger is the canonical one at
-#      crates/ade_core/src/consensus/leader_schedule.rs.
+#      shared function). The only `fn .*is_leader.*` definitions
+#      reachable from ade_core / ade_ledger are the canonical ones at
+#      crates/ade_core/src/consensus/leader_schedule.rs and
+#      crates/ade_core/src/consensus/leader_check.rs (the latter hosts
+#      the relocated is_leader_for_vrf_output as of N-R-A; its own
+#      authority is enforced by ci_check_leader_check_authority.sh).
 #   3. `pub fn forge_block` returns the closed sum
 #      `Result<(ForgedBlock, Vec<ForgeEffects>), ForgeError>`.
 #   4. `ForgeError`, `ForgeEffects`, `ProducerTick`, `ForgedBlock`,
@@ -30,6 +33,7 @@ TX_COMPONENTS_RS="$REPO_ROOT/crates/ade_codec/src/shelley/tx_components.rs"
 
 LEADER_SCHEDULE_RS="$REPO_ROOT/crates/ade_core/src/consensus/leader_schedule.rs"
 VRF_CERT_RS="$REPO_ROOT/crates/ade_core/src/consensus/vrf_cert.rs"
+LEADER_CHECK_RS="$REPO_ROOT/crates/ade_core/src/consensus/leader_check.rs"
 
 TARGET_FILES=("$FORGE_RS" "$STATE_RS" "$TX_COMPONENTS_RS")
 
@@ -111,7 +115,7 @@ IS_LEADER_DEFS=$(grep -rEn '^\s*pub fn [a-z_]*is_leader[a-z_]*\b|^\s*fn [a-z_]*i
 while IFS= read -r hit; do
     [ -z "$hit" ] && continue
     file="${hit%%:*}"
-    if [ "$file" = "$LEADER_SCHEDULE_RS" ] || [ "$file" = "$VRF_CERT_RS" ]; then
+    if [ "$file" = "$LEADER_SCHEDULE_RS" ] || [ "$file" = "$VRF_CERT_RS" ] || [ "$file" = "$LEADER_CHECK_RS" ]; then
         continue
     fi
     # Whitelist test helper definitions inside #[cfg(test)] blocks.

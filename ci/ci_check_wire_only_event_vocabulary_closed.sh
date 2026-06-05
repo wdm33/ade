@@ -52,7 +52,16 @@ FORBIDDEN=(
 # in node.rs (PHASE4-N-K admission-evidence counter). The
 # guard's intent is the JSONL emission surface, not Rust
 # identifiers.
-for f in $(find "$NODE_SRC" -type f -name '*.rs'); do
+#
+# Scope: ONLY the wire-only surface (live_log/ + wire_only.rs).
+# The later-added admission_log/ directory legitimately registers
+# `agreement_verdict` as an admission event; its closure is owned
+# by the sibling gate ci_check_admission_log_vocabulary_closed.sh.
+WIRE_ONLY_FILES() {
+    find "$NODE_SRC/live_log" -type f -name '*.rs' 2>/dev/null
+    [[ -f "$NODE_SRC/wire_only.rs" ]] && echo "$NODE_SRC/wire_only.rs"
+}
+for f in $(WIRE_ONLY_FILES); do
     rel="${f#$REPO_ROOT/}"
     body=$(strip_for_grep "$f")
     for needle in "${FORBIDDEN[@]}"; do

@@ -101,7 +101,8 @@ for crate in "${BLUE_CRATES[@]}"; do
 
     matches=$(grep -rn 'minicbor::decode\|minicbor::Decode\|from_cbor\|cbor_decode' "$SRC_DIR" --include='*.rs' 2>/dev/null | \
         grep -v ':[0-9]*:\s*//' | \
-        grep -v '/ade_plutus/src/evaluator\.rs:' || true)
+        grep -v '/ade_plutus/src/evaluator\.rs:' | \
+        grep -v 'minicbor::decode::Error' || true)
 
     if [ -n "$matches" ]; then
         echo "FAIL: Raw CBOR decoding outside ade_codec in $crate:"
@@ -116,7 +117,8 @@ for path in "${ADE_NETWORK_BLUE_PATHS[@]}"; do
         continue
     fi
     matches=$(grep -rn 'minicbor::decode\|minicbor::Decode\|from_cbor\|cbor_decode' "$FULL_PATH" --include='*.rs' 2>/dev/null | \
-        grep -v ':[0-9]*:\s*//' || true)
+        grep -v ':[0-9]*:\s*//' | \
+        grep -v 'minicbor::decode::Error' || true)
 
     if [ -n "$matches" ]; then
         echo "FAIL: Raw CBOR decoding outside ade_codec in ade_network path $path:"

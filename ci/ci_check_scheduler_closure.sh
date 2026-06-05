@@ -92,13 +92,22 @@ done
 
 # std::time is permitted ONLY in the timing test (whitelisted by path).
 # Any other producer/ source file containing std::time is a failure.
+# Each file is run through emit_production_lines first so that std::time
+# in a `//` comment or inside a #[cfg(test)] module does not trip the
+# gate (the whitelisted timing test lives in tests/, outside PRODUCER_DIR).
 PRODUCER_DIR="$REPO_ROOT/crates/ade_runtime/src/producer"
-EXTRA_TIME_HITS=$(grep -rEn 'std::time' "$PRODUCER_DIR" --include='*.rs' 2>/dev/null || true)
-while IFS= read -r hit; do
-    [ -z "$hit" ] && continue
-    print_fail "Guard 1 (std::time inside producer/ source — only the timing integration test may import std::time):"
-    echo "  $hit"
-done <<< "$EXTRA_TIME_HITS"
+if [ -d "$PRODUCER_DIR" ]; then
+    while IFS= read -r -d '' rs; do
+        hits=$(emit_production_lines "$rs" | grep -E 'std::time' || true)
+        if [ -n "$hits" ]; then
+            print_fail "Guard 1 (std::time inside producer/ source — only the timing integration test may import std::time):"
+            echo "$hits" | while IFS= read -r h; do
+                [ -z "$h" ] && continue
+                echo "  $rs:$h"
+            done
+        fi
+    done < <(find "$PRODUCER_DIR" -name '*.rs' -print0)
+fi
 
 # ---------------------------------------------------------------------------
 # Guard 2 — broadcast::enqueue consumes AcceptedBlock by value.

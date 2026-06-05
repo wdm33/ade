@@ -14,9 +14,16 @@ set -uo pipefail
 #   4. admit() is called only from sanctioned production sites:
 #        - crates/ade_ledger/src/mempool/admit.rs (definition + #[cfg(test)] only)
 #        - crates/ade_ledger/src/mempool/ingress.rs (the bridge)
+#        - crates/ade_ledger/src/producer/forge.rs (reject-only admit-prefix
+#          re-validation: each call either continues or returns Err — it can
+#          narrow/reject but never false-accept, so the admission chokepoint
+#          invariant is preserved)
 #      Any other src/ caller is a closure violation. (tests/ dirs and
 #      benches/ dirs are exempt: tests legitimately drive admit directly,
 #      and the gate explicitly forbids production callers, not test ones.)
+#      Note: InMemorySnapshotCache::admit (ade_runtime rollback caches) is a
+#      distinct 3-arg snapshot-cache method, unrelated to mempool admit; its
+#      call sites are excluded by path below.
 #   5. mempool_ingress's body does not branch on event.source — the
 #      verdict is a function of (state, tx_bytes) alone (N-E-8).
 #
@@ -99,6 +106,8 @@ CALLS=$(grep -rnE '(^|[^A-Za-z_])admit\(' \
     | grep -vE '/benches/' \
     | grep -vE '/mempool/admit\.rs:' \
     | grep -vE '/mempool/ingress\.rs:' \
+    | grep -vE '/producer/forge\.rs:' \
+    | grep -vE '/rollback/(in_memory|persistent)_cache\.rs:' \
     | grep -vE ':[[:space:]]*//' \
     | grep -vE '^[^:]*\.md:' \
     | grep -vE 'fn admit\(' \

@@ -6,11 +6,14 @@ set -uo pipefail
 # Mechanical guards (closure proof for CE-N-C-5 / CN-CONS-07):
 #
 #   1. `AcceptedBlock` has no public constructor outside self_accept.rs.
-#      - struct-literal `AcceptedBlock {` matches ONLY in self_accept.rs.
-#      - EXACTLY one `pub fn .* -> AcceptedBlock` match across crates/
-#        (the `self_accept` function in self_accept.rs returning
-#        `Result<AcceptedBlock, SelfAcceptError>` — the regex matches
-#        the `AcceptedBlock` portion of the return).
+#      - struct-literal `AcceptedBlock { … }` CONSTRUCTION matches ONLY in
+#        self_accept.rs (fn return types `-> [&]AcceptedBlock {` are excluded —
+#        they hand back an existing/validated token, they do not construct one).
+#      - EXACTLY one fallible `-> Result<AcceptedBlock, SelfAcceptError>`
+#        construction signature across crates/ (the `self_accept` function).
+#        The G-B handoff accessors (`into_accepted`/`accepted`) return a BARE
+#        `-> AcceptedBlock` / `-> &AcceptedBlock` (an already-constructed token,
+#        not construction) and are intentionally not counted.
 #      - No `impl Default for AcceptedBlock` / `impl From<.*> for
 #        AcceptedBlock` / `impl TryFrom<.*> for AcceptedBlock` anywhere.
 #   2. `AcceptedBlock.bytes` field is private (no `pub bytes:` in
@@ -48,8 +51,17 @@ fi
 # Guard 1 — AcceptedBlock has no public constructor outside self_accept.rs.
 # ---------------------------------------------------------------------------
 
-# (1a) Struct-literal `AcceptedBlock {` only in self_accept.rs.
-G1A_HITS=$(grep -rnE 'AcceptedBlock\s*\{' "$CRATES_DIR" --include='*.rs' 2>/dev/null || true)
+# (1a) Struct-literal `AcceptedBlock { … }` construction only in self_accept.rs.
+# Exclude fn RETURN types followed by the body brace (`-> AcceptedBlock {` /
+# `-> &AcceptedBlock {` / `-> Result<AcceptedBlock,_> {`): those return an
+# existing/validated token, they do NOT construct one. (The private `bytes`
+# field + cross-crate visibility already make a real `AcceptedBlock { bytes: … }`
+# literal impossible outside self_accept.rs; this refinement drops fn-return +
+# test-helper false positives while a real struct literal anywhere still fails.)
+# NOTE: the exclusion pattern is written `[-]>` (not `->`) so grep does not
+# parse a leading `-` as an option flag.
+G1A_HITS=$(grep -rnE 'AcceptedBlock\s*\{' "$CRATES_DIR" --include='*.rs' 2>/dev/null \
+    | grep -vE '[-]>\s*&?\s*(Result<)?AcceptedBlock' || true)
 while IFS= read -r hit; do
     [ -z "$hit" ] && continue
     file="${hit%%:*}"
@@ -59,12 +71,14 @@ while IFS= read -r hit; do
     fi
 done <<< "$G1A_HITS"
 
-# (1b) Exactly one public function whose return type binds AcceptedBlock,
-# anywhere in crates/. The canonical shape is
-# `-> Result<AcceptedBlock, SelfAcceptError>`; we also flag a bare
-# `-> AcceptedBlock` if it ever appears. Multi-line signatures are
-# handled by greppng for the arrow-+-type token directly.
-G1B_HITS=$(grep -rnE '\-> *(Result<)?AcceptedBlock\b' "$CRATES_DIR" --include='*.rs' 2>/dev/null || true)
+# (1b) Exactly one function CONSTRUCTS a fresh validated token: its return type
+# is the fallible canonical shape `-> Result<AcceptedBlock, SelfAcceptError>`
+# (only self_accept, which can reject). The G-B handoff accessors that hand back
+# an ALREADY-constructed token return a BARE `-> AcceptedBlock` / `-> &AcceptedBlock`
+# (infallible) — that is NOT construction and is not counted here; a struct
+# literal anywhere is still caught by Guard 1a above. Construction must be the
+# sole, fallible self_accept.
+G1B_HITS=$(grep -rnE '\-> *Result< *AcceptedBlock\b' "$CRATES_DIR" --include='*.rs' 2>/dev/null || true)
 G1B_COUNT=$(echo -n "$G1B_HITS" | grep -c . || true)
 if [ "$G1B_COUNT" -ne 1 ]; then
     print_fail "Guard 1b (expected exactly 1 '-> [Result<]AcceptedBlock' return-type match across crates/, got $G1B_COUNT):"

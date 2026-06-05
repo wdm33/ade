@@ -15,7 +15,8 @@
 //! - Conway-era Babbage-shape outputs supported (map-form CBOR).
 //! - Lovelace + multi-asset values.
 //! - Inline datum (via `inlineDatumRaw` hex) + datum hash.
-//! - Reference scripts → fail-fast `UnsupportedTxOutFeature`.
+//! - Reference scripts → supported (A1.1): `match`ed + encoded via
+//!   `encode_script_ref`, fail-closed on malformed via `BadReferenceScript`.
 
 use std::collections::BTreeMap;
 use std::fs;

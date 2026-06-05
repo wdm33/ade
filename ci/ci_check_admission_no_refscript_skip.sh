@@ -2,14 +2,18 @@
 set -uo pipefail
 
 # PHASE4-N-M-B S3 — admission must not silently skip reference scripts
-# (DC-ADMIT-09).
+# (DC-ADMIT-09). PHASE4-N-U gate-hygiene: Guard 2 repointed for the A1.1
+# reference-script support that superseded the A1 fail-fast.
 #
 # A1 shipped `JsonSeedError::UnsupportedTxOutFeature { feature:
-# "referenceScript" }` as a fail-fast guard so admission cannot
-# bootstrap from a UTxO seed that includes a reference-script
-# output (those outputs require Conway script-decode authority that
-# A1.1 will add). Sub-cluster B must NOT add any permissive
-# matching that bypasses this guard:
+# "referenceScript" }` as a fail-fast guard (reference-script outputs require
+# Conway script-decode authority). A1.1 (PHASE4-N-M-A1.1) then added FULL
+# reference-script support: importer.rs now `match`es every entry's
+# reference_script and encodes it via `encode_script_ref`, failing closed via
+# the typed `BadReferenceScript` on an unknown script type / bad hex. The
+# invariant is unchanged — refscript is NEVER silently skipped — only its
+# mechanism evolved (fail-fast -> support + fail-closed). No permissive
+# bypass may be added:
 #
 #   - no `JsonSeedError::UnsupportedTxOutFeature ... => continue|skip|()|Ok(_)`
 #   - no `if entry.reference_script.is_some() { continue }`
@@ -19,10 +23,11 @@ set -uo pipefail
 # Mechanical guards:
 #   1. Inside the admission code paths (`crates/ade_node/src/admission/`,
 #      `crates/ade_runtime/src/seed_import/`), grep for the forbidden
-#      shapes and fail if any match.
-#   2. Confirm `crates/ade_runtime/src/seed_import/importer.rs` still
-#      contains the literal A1 fail-fast guard, so no future commit
-#      can remove it without tripping this gate.
+#      skip shapes and fail if any match (the load-bearing no-silent-skip check).
+#   2. Confirm `crates/ade_runtime/src/seed_import/importer.rs` HANDLES
+#      reference scripts (`match &entry.reference_script`) and fails closed
+#      (`BadReferenceScript`), so no future commit can drop refscript handling
+#      back to a silent skip without tripping this gate.
 #   3. Confirm exactly one `pub fn import_cardano_cli_json_utxo`
 #      survives.
 
@@ -62,16 +67,22 @@ if [[ -n "$refscript_todos" ]]; then
     echo "$refscript_todos"
 fi
 
-# Guard 2: the A1 fail-fast guard is still present verbatim.
+# Guard 2: reference scripts are HANDLED + fail closed on malformed (NEVER
+# silently skipped). PHASE4-N-M-A1.1 superseded the A1 fail-fast with full
+# reference-script support: importer.rs now `match`es every entry's
+# reference_script and encodes it (encode_script_ref), failing closed via the
+# typed BadReferenceScript on an unknown script type / bad hex. The "never
+# silently skip" invariant remains enforced by Guard 1a (no skip/continue arms);
+# this guard confirms the support surface exists so a future commit cannot drop
+# refscript handling back to a silent skip without tripping the gate.
 if [[ ! -f "$SEED_IMPORTER" ]]; then
     print_fail "missing $SEED_IMPORTER"
 else
-    if ! grep -qE 'UnsupportedTxOutFeature[[:space:]]*\{[[:space:]]*$' "$SEED_IMPORTER" && \
-       ! grep -qE 'UnsupportedTxOutFeature[[:space:]]*\{[[:space:]]*feature:[[:space:]]*"referenceScript"' "$SEED_IMPORTER"; then
-        print_fail "A1 fail-fast guard for referenceScript missing from $SEED_IMPORTER"
+    if ! grep -qE 'match &entry\.reference_script' "$SEED_IMPORTER"; then
+        print_fail "reference-script handling (match &entry.reference_script) missing from $SEED_IMPORTER — refscript must be HANDLED, not skipped"
     fi
-    if ! grep -qE 'entry\.reference_script\.is_some\(\)' "$SEED_IMPORTER"; then
-        print_fail "A1 reference_script.is_some() check missing from $SEED_IMPORTER"
+    if ! grep -qE 'BadReferenceScript' "$SEED_IMPORTER"; then
+        print_fail "fail-closed BadReferenceScript surface missing from $SEED_IMPORTER — malformed refscript must fail closed"
     fi
 fi
 
@@ -92,6 +103,6 @@ if [[ "$n_ss" -ne 1 ]]; then
 fi
 
 if (( FAILED == 0 )); then
-    echo "OK: admission + seed_import never skip reference scripts; A1 fail-fast intact; sole seed_to_snapshot authority"
+    echo "OK: admission + seed_import never skip reference scripts (A1.1 support: handled via match + fail-closed via BadReferenceScript); sole seed_to_snapshot authority"
 fi
 exit $FAILED
