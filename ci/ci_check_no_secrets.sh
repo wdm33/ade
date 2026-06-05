@@ -10,10 +10,16 @@ set -euo pipefail
 
 REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 
-# Get list of git-tracked files
+# Write the git-tracked file list to a temp FILE and pass its PATH to python3 —
+# NOT the list itself via an env var. The list is large enough that exporting it
+# into the python3 process environment exceeds ARG_MAX (execve packs args + env
+# together), failing as "Argument list too long" (E2BIG) — the secret scan then
+# silently never runs (exit 126), providing zero protection.
 export REPO_ROOT
-export GIT_FILES
-GIT_FILES=$(cd "$REPO_ROOT" && git ls-files)
+GIT_FILES_LIST="$(mktemp)"
+trap 'rm -f "$GIT_FILES_LIST"' EXIT
+(cd "$REPO_ROOT" && git ls-files) > "$GIT_FILES_LIST"
+export GIT_FILES_LIST
 
 python3 << 'PYEOF'
 import os
@@ -21,7 +27,7 @@ import re
 import sys
 
 REPO_ROOT = os.environ.get("REPO_ROOT", os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-GIT_FILES = os.environ.get("GIT_FILES", "")
+GIT_FILES_LIST = os.environ.get("GIT_FILES_LIST", "")
 
 failed = False
 
@@ -91,9 +97,19 @@ def is_safe_ip(match_text):
     for safe_pattern in SAFE_IP_PATTERNS:
         if re.fullmatch(safe_pattern, match_text):
             return True
+    # Synthetic / documentation placeholder IPs used in tests + docstrings, never
+    # real infrastructure: all-four-octets-identical (1.1.1.1, 2.2.2.2, 3.3.3.3, …)
+    # and the canonical sequential example 1.2.3.4.
+    octets = match_text.split(".")
+    if len(octets) == 4:
+        if len(set(octets)) == 1:
+            return True
+        if octets == ["1", "2", "3", "4"]:
+            return True
     return False
 
-tracked_files = [f for f in GIT_FILES.splitlines() if f.strip()]
+with open(GIT_FILES_LIST, "r", errors="ignore") as _flist:
+    tracked_files = [line.rstrip("\n") for line in _flist if line.strip()]
 
 scanned = 0
 violations = 0
@@ -131,8 +147,17 @@ for relpath in tracked_files:
                             after = line[end] if end < len(line) else " "
                             if before.isalpha() or after.isalpha():
                                 continue
-                            # "version": "0.26.0.3" — version in key name
-                            if re.search(r'version', line, re.IGNORECASE):
+                            # Version-number-shaped token (NOT an IP): a 4-part
+                            # dotted number in a version context — the word
+                            # "version", or a tool/lib that carries a 4-part
+                            # version (OpenSSL, cardano-cli, cardano-node, ghc),
+                            # or a "generated using" header. e.g. "OpenSSL 3.0.14.4",
+                            # "cardano-cli 11.0.0.0", "version": "0.26.0.3".
+                            if re.search(
+                                r'version|openssl|cardano-(cli|node)|\bghc\b|generated using',
+                                line,
+                                re.IGNORECASE,
+                            ):
                                 continue
 
                         fail(f"{relpath}:{lineno}: {description} — '{match_text}'")
