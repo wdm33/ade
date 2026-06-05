@@ -118,6 +118,13 @@ impl ChainDb for InMemoryChainDb {
         to: SlotNo,
         max: usize,
     ) -> Result<CappedSlotRange, ChainDbError> {
+        // An inverted range (from > to) is a malformed (peer-controllable)
+        // request — return empty, NEVER let it reach `BTreeMap::range`, which
+        // panics when start > end. Keeps parity with PersistentChainDb (redb
+        // treats start > end as empty). DC-SERVEMEM-01.
+        if from > to {
+            return Ok(CappedSlotRange::default());
+        }
         let inner = self.inner.lock().map_err(lock_poisoned)?;
         // Bounded, hash-free: read at most `max` in-range blocks (stop after a
         // (max+1)-th proves the request exceeded the cap). DC-SERVEMEM-01.

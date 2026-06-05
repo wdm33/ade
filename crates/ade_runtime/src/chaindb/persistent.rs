@@ -427,6 +427,13 @@ impl ChainDb for PersistentChainDb {
         to: SlotNo,
         max: usize,
     ) -> Result<CappedSlotRange, ChainDbError> {
+        // An inverted range (from > to) is a malformed (peer-controllable)
+        // request — empty. redb already treats start > end as empty; this makes
+        // the contract explicit and parity-guaranteed with InMemoryChainDb (whose
+        // BTreeMap::range would otherwise panic). DC-SERVEMEM-01.
+        if from.0 > to.0 {
+            return Ok(CappedSlotRange::default());
+        }
         let txn = self.db.begin_read().map_err(map_txn_err)?;
         let blocks = match txn.open_table(BLOCKS_BY_SLOT) {
             Ok(t) => t,

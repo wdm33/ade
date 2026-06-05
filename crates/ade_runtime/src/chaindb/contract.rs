@@ -62,6 +62,7 @@ where
     range_bytes_capped_respects_bounds(&make_db());
     range_bytes_capped_bytes_byte_identical(&make_db());
     last_block_bytes_returns_highest_slot(&make_db());
+    range_bytes_capped_inverted_range_is_empty(&make_db());
 }
 
 fn empty_db_has_no_tip<D: ChainDb>(db: &D) {
@@ -231,6 +232,26 @@ fn last_block_bytes_returns_highest_slot<D: ChainDb>(db: &D) {
     let (slot, bytes) = db.last_block_bytes().expect("lb").expect("present");
     assert_eq!(slot, SlotNo(42), "highest slot");
     assert_eq!(bytes, vec![0x42u8; 64], "tip block bytes");
+}
+
+fn range_bytes_capped_inverted_range_is_empty<D: ChainDb>(db: &D) {
+    // An inverted range (from > to) is a malformed (peer-controllable) request:
+    // both impls return empty + not-truncated, and NEITHER panics (InMemory's
+    // BTreeMap::range would panic on start > end without the guard). Pins the
+    // CE-1 contract parity across PersistentChainDb + InMemoryChainDb.
+    for s in [10u64, 20, 30] {
+        db.put_block(&block(s, s as u8)).expect("put");
+    }
+    let r = db
+        .range_bytes_capped(SlotNo(30), SlotNo(0), 8)
+        .expect("inverted range ok");
+    assert!(r.blocks.is_empty(), "inverted range -> empty");
+    assert!(!r.truncated, "inverted range -> not truncated");
+    // Extreme inverted endpoints must also not panic / overflow.
+    let r2 = db
+        .range_bytes_capped(SlotNo(u64::MAX), SlotNo(0), 8)
+        .expect("extreme inverted range ok");
+    assert!(r2.blocks.is_empty());
 }
 
 #[cfg(test)]

@@ -335,6 +335,25 @@ mod tests {
     }
 
     #[test]
+    fn serve_range_inverted_range_fails_closed() {
+        // A peer controls both endpoints; an inverted (slot) range fails closed
+        // (Empty) on the serve path and NEVER panics (the InMemory primitive is
+        // guarded against the BTreeMap::range start > end panic). DC-SERVEMEM-01.
+        let db = InMemoryChainDb::new();
+        db.put_block(&synth(10, 0x10)).unwrap();
+        db.put_block(&synth(20, 0x20)).unwrap();
+        let src = ChainDbServedSource::new(&db);
+        let from = (SlotNo(20), Hash32([0x20; 32]));
+        let to = (SlotNo(10), Hash32([0x10; 32]));
+        assert_eq!(
+            src.serve_range(from.clone(), to.clone()),
+            ServeRangeOutcome::Empty,
+            "inverted range -> Empty (fail closed, no panic)"
+        );
+        assert!(src.range_bytes(from, to).is_empty());
+    }
+
+    #[test]
     fn intersect_matches_only_a_durable_key() {
         let db = InMemoryChainDb::new();
         db.put_block(&StoredBlock {
