@@ -42,6 +42,32 @@ use ade_types::{Hash32, SlotNo};
 
 use crate::chaindb::ChainDb;
 
+/// Per-request serve range cap (PHASE4-N-AA, DC-SERVEMEM-01). A fixed, closed,
+/// non-configurable defensive bound — symmetric with the receive-side
+/// `MAX_WIRE_PUMP_LOOKAHEAD = 256` (DC-LIVEMEM-01). NOT a Cardano semantic
+/// parameter; it may be tightened later, but no runtime option (CLI / env /
+/// config) may disable it or set it unbounded.
+const MAX_SERVE_RANGE_BLOCKS: usize = 256;
+
+/// Closed internal outcome of a peer serve range read (DC-SERVEMEM-01). Every
+/// non-`Served` variant encodes to the same wire `NoBlocks`, but the reason is
+/// distinct for diagnostics + tests (cap-exceeded is NOT the same condition as a
+/// genuinely empty window).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ServeRangeOutcome {
+    /// In-range blocks (`<= MAX_SERVE_RANGE_BLOCKS`); the BLUE reducer's
+    /// both-endpoints-present check then decides StartBatch/.../BatchDone.
+    Served(Vec<(SlotNo, Hash32, Vec<u8>)>),
+    /// No durable block lies in the requested `[from, to]` window.
+    Empty,
+    /// The request spans more than `MAX_SERVE_RANGE_BLOCKS` blocks — fail closed
+    /// BEFORE any unbounded storage/CPU work (no decode, no serve).
+    CapExceeded,
+    /// A ChainDb read error, or a durable block that does not decode — serve
+    /// nothing (never torn / partial / unauthenticated bytes).
+    ReadError,
+}
+
 /// RED read-only projection of the durable ChainDb into the producer-side
 /// serve read seams. Holds a borrowed `&dyn ChainDb`; the serve task
 /// constructs one per dispatched frame. Cheap to build (a single
@@ -54,6 +80,55 @@ impl<'a> ChainDbServedSource<'a> {
     /// Wrap a borrowed durable ChainDb as a serve source.
     pub fn new(chaindb: &'a dyn ChainDb) -> Self {
         Self { chaindb }
+    }
+
+    /// Read the durable blocks in the `[from, to]` `(slot, hash)` window for a
+    /// peer BlockFetch RequestRange, BOUNDED to `MAX_SERVE_RANGE_BLOCKS`
+    /// (DC-SERVEMEM-01). The per-request cap is enforced via S1's hash-free
+    /// `range_bytes_capped` BEFORE any block is decoded or served, so an
+    /// oversized request fails closed (`CapExceeded`) with no unbounded
+    /// storage/CPU work and no per-block `SLOT_BY_HASH` scan. The hash is then
+    /// derived from each block's own bytes via the single BLUE `decode_block`
+    /// authority (== the stored hash; no second hash authority). Returns the
+    /// structured outcome; [`ServedRangeLookup::range_bytes`] maps every
+    /// non-`Served` outcome to an empty `Vec` (→ reducer `NoBlocks`).
+    pub fn serve_range(
+        &self,
+        from: (SlotNo, Hash32),
+        to: (SlotNo, Hash32),
+    ) -> ServeRangeOutcome {
+        let capped = match self
+            .chaindb
+            .range_bytes_capped(from.0, to.0, MAX_SERVE_RANGE_BLOCKS)
+        {
+            Ok(c) => c,
+            Err(_) => return ServeRangeOutcome::ReadError,
+        };
+        if capped.truncated {
+            // The slot range holds more than the cap — fail closed before
+            // decoding or serving anything.
+            return ServeRangeOutcome::CapExceeded;
+        }
+        let mut out: Vec<(SlotNo, Hash32, Vec<u8>)> = Vec::new();
+        for (slot, bytes) in capped.blocks {
+            // Derive the hash from the bytes via the single BLUE decode
+            // authority (no second hash authority, no SLOT_BY_HASH scan).
+            // Undecodable bytes fail closed — the serve never emits a block it
+            // cannot authenticate.
+            let hash = match decode_block(&bytes) {
+                Ok(d) => d.block_hash,
+                Err(_) => return ServeRangeOutcome::ReadError,
+            };
+            let key = (slot, hash.clone());
+            if key >= from && key <= to {
+                out.push((slot, hash, bytes));
+            }
+        }
+        if out.is_empty() {
+            ServeRangeOutcome::Empty
+        } else {
+            ServeRangeOutcome::Served(out)
+        }
     }
 }
 
@@ -68,12 +143,22 @@ impl<'a> ServedHeaderLookup for ChainDbServedSource<'a> {
             Some((s, _)) => *s,
             None => SlotNo(0),
         };
-        let iter = self.chaindb.iter_from_slot(from).ok()?;
-        for item in iter {
-            // A read error mid-iteration: serve nothing this round (never
-            // wrong/partial bytes).
-            let stored = item.ok()?;
-            let key = (stored.slot, stored.hash.clone());
+        // Bounded read (DC-SERVEMEM-01): the durable chain is slot-ascending,
+        // linear, extend-only (<= 1 block per slot), so the first key strictly
+        // past the cursor is within the first 2 blocks from the cursor slot —
+        // the block AT the cursor slot (skipped: key == cursor) and the next.
+        // Read that 2-block window via the S1 primitive — NO iter_from_slot, NO
+        // SLOT_BY_HASH scan.
+        let capped = self
+            .chaindb
+            .range_bytes_capped(from, SlotNo(u64::MAX), 2)
+            .ok()?;
+        for (slot, bytes) in capped.blocks {
+            // Reuse the single decode authority over the raw durable bytes —
+            // derive the hash, no AcceptedBlock reconstruction.
+            let decoded = decode_block(&bytes).ok()?;
+            let hash = decoded.block_hash.clone();
+            let key = (slot, hash.clone());
             let past_cursor = match &cursor {
                 Some(c) => key > *c,
                 None => true,
@@ -81,13 +166,10 @@ impl<'a> ServedHeaderLookup for ChainDbServedSource<'a> {
             if !past_cursor {
                 continue;
             }
-            // Reuse the single header-projection + decode authorities over
-            // the raw durable bytes — no AcceptedBlock reconstruction.
-            let decoded = decode_block(&stored.bytes).ok()?;
-            let header = block_header_bytes(&stored.bytes).ok()?.to_vec();
+            let header = block_header_bytes(&bytes).ok()?.to_vec();
             return Some(HeaderProjection {
-                slot: stored.slot,
-                hash: stored.hash,
+                slot,
+                hash,
                 block_no: decoded.header_input.block_no.0,
                 era: decoded.era,
                 header_bytes: header,
@@ -112,12 +194,13 @@ impl<'a> ServedHeaderLookup for ChainDbServedSource<'a> {
     }
 
     fn tip(&self) -> Option<(SlotNo, Hash32, u64)> {
-        let tip = self.chaindb.tip().ok()??;
-        // ChainTip carries no block_no — derive it from the stored block
-        // via the single decode authority.
-        let stored = self.chaindb.get_block_by_hash(&tip.hash).ok()??;
-        let decoded = decode_block(&stored.bytes).ok()?;
-        Some((tip.slot, tip.hash, decoded.header_input.block_no.0))
+        // Bounded tip (DC-SERVEMEM-01): the highest-slot block's bytes via the
+        // S1 O(log N) primitive — NO chaindb.tip() O(N) iteration + hash scan,
+        // NO get_block_by_hash. Derive the hash + block_no from the bytes via
+        // the single decode authority.
+        let (slot, bytes) = self.chaindb.last_block_bytes().ok()??;
+        let decoded = decode_block(&bytes).ok()?;
+        Some((slot, decoded.block_hash, decoded.header_input.block_no.0))
     }
 }
 
@@ -127,33 +210,19 @@ impl<'a> ServedRangeLookup for ChainDbServedSource<'a> {
         from: (SlotNo, Hash32),
         to: (SlotNo, Hash32),
     ) -> Vec<(SlotNo, Hash32, Vec<u8>)> {
-        // Durable blocks whose (slot, hash) key lies in [from, to]
-        // (tuple-lexicographic), ascending — replicating the
-        // ServedChainSnapshot BTreeMap-range semantics over the linear
-        // durable chain. The BLUE reducer's both-endpoints-present check
-        // (CN-SNAPSHOT-02) then decides StartBatch/.../BatchDone vs
-        // NoBlocks; this source only supplies the in-range entries.
-        // `stored.bytes` are served verbatim (no re-encode — DC-CONS-17).
-        let iter = match self.chaindb.iter_from_slot(from.0) {
-            Ok(it) => it,
-            Err(_) => return Vec::new(),
-        };
-        let mut out: Vec<(SlotNo, Hash32, Vec<u8>)> = Vec::new();
-        for item in iter {
-            let stored = match item {
-                Ok(s) => s,
-                // A read error: serve nothing (never a torn/partial range).
-                Err(_) => return Vec::new(),
-            };
-            if stored.slot > to.0 {
-                break;
-            }
-            let key = (stored.slot, stored.hash.clone());
-            if key >= from && key <= to {
-                out.push((stored.slot, stored.hash, stored.bytes));
-            }
+        // Bounded + fail-closed (DC-SERVEMEM-01). `serve_range` reads at most
+        // MAX_SERVE_RANGE_BLOCKS via the S1 hash-free primitive, derives the
+        // hash from the bytes, and fails closed on an oversized range. Every
+        // non-`Served` outcome maps to an empty Vec, so the BLUE reducer's
+        // both-endpoints-present check (CN-SNAPSHOT-02) emits NoBlocks. Within
+        // the cap the in-range `stored.bytes` are served verbatim (no re-encode
+        // — DC-CONS-17), identical to the pre-cap projection.
+        match self.serve_range(from, to) {
+            ServeRangeOutcome::Served(v) => v,
+            ServeRangeOutcome::Empty
+            | ServeRangeOutcome::CapExceeded
+            | ServeRangeOutcome::ReadError => Vec::new(),
         }
-        out
     }
 }
 
@@ -187,49 +256,82 @@ mod tests {
         assert!(src.intersect(&[Point::Block { slot: SlotNo(1), hash: Hash32([1u8; 32]) }]).is_none());
     }
 
-    #[test]
-    fn range_bytes_collects_inclusive_window_in_slot_order() {
-        // Synthetic stored blocks (raw bytes need not decode for the range
-        // contract — range_bytes never decodes; it serves stored.bytes).
-        let db = InMemoryChainDb::new();
-        let mk = |slot: u64, tag: u8| StoredBlock {
+    // PHASE4-N-AA S2 — bounded serve range + fail-closed (DC-SERVEMEM-01).
+    // These use synthetic StoredBlocks: the CAP outcome (range_bytes_capped
+    // .truncated) and the EMPTY window are decided BEFORE any decode, and an
+    // undecodable in-range block fails closed (ReadError) — so they pin the
+    // bound + fail-closed reasons without a real corpus. Within-cap serving of
+    // REAL decodable blocks (Served, byte-identical, derived hash == stored
+    // hash) is covered end-to-end by the ade_node serve integration tests
+    // (served_view_projects_durable_chain / follower_fetches_coherent_history),
+    // which forge and durably admit real blocks. The pre-S2 synthetic
+    // range-window unit tests were removed: range_bytes now derives the hash via
+    // decode_block, so the in-window semantics are pinned by S1's
+    // range_bytes_capped_* contract tests (no decode) + those integration tests.
+    fn synth(slot: u64, tag: u8) -> StoredBlock {
+        StoredBlock {
             slot: SlotNo(slot),
             hash: Hash32([tag; 32]),
             bytes: vec![tag; 4],
-        };
-        db.put_block(&mk(10, 0x10)).unwrap();
-        db.put_block(&mk(20, 0x20)).unwrap();
-        db.put_block(&mk(30, 0x30)).unwrap();
-        let src = ChainDbServedSource::new(&db);
-        let got = src.range_bytes(
-            (SlotNo(10), Hash32([0x10; 32])),
-            (SlotNo(20), Hash32([0x20; 32])),
-        );
-        assert_eq!(got.len(), 2, "inclusive [10,20] window");
-        assert_eq!(got[0].0, SlotNo(10));
-        assert_eq!(got[1].0, SlotNo(20));
-        assert_eq!(got[0].2, vec![0x10; 4], "serves stored.bytes verbatim");
+        }
     }
 
     #[test]
-    fn range_bytes_excludes_out_of_window_and_stops_past_to() {
+    fn serve_range_over_cap_fails_closed() {
+        // A slot range holding more than MAX_SERVE_RANGE_BLOCKS blocks fails
+        // closed (CapExceeded) — decided by the S1 bound BEFORE any decode, so
+        // synthetic bytes suffice. range_bytes maps it to an empty Vec.
         let db = InMemoryChainDb::new();
-        let mk = |slot: u64, tag: u8| StoredBlock {
-            slot: SlotNo(slot),
-            hash: Hash32([tag; 32]),
-            bytes: vec![tag; 4],
-        };
-        db.put_block(&mk(10, 0x10)).unwrap();
-        db.put_block(&mk(20, 0x20)).unwrap();
-        db.put_block(&mk(30, 0x30)).unwrap();
+        for s in 1..=300u64 {
+            db.put_block(&synth(s, 0xAB)).unwrap();
+        }
         let src = ChainDbServedSource::new(&db);
-        // Window [20,20] yields exactly the slot-20 block.
-        let got = src.range_bytes(
-            (SlotNo(20), Hash32([0x20; 32])),
-            (SlotNo(20), Hash32([0x20; 32])),
+        let from = (SlotNo(1), Hash32([0xAB; 32]));
+        let to = (SlotNo(300), Hash32([0xAB; 32]));
+        assert_eq!(
+            src.serve_range(from.clone(), to.clone()),
+            ServeRangeOutcome::CapExceeded,
+            "300 blocks > cap 256 -> CapExceeded (decided before decode)"
         );
-        assert_eq!(got.len(), 1);
-        assert_eq!(got[0].0, SlotNo(20));
+        assert!(
+            src.range_bytes(from, to).is_empty(),
+            "oversized range fails closed -> empty -> reducer NoBlocks"
+        );
+    }
+
+    #[test]
+    fn serve_range_empty_window_is_empty_not_capexceeded() {
+        // An out-of-chain window is Empty (a distinct internal reason from
+        // CapExceeded), even though both encode to NoBlocks.
+        let db = InMemoryChainDb::new();
+        db.put_block(&synth(10, 0x10)).unwrap();
+        db.put_block(&synth(20, 0x20)).unwrap();
+        let src = ChainDbServedSource::new(&db);
+        assert_eq!(
+            src.serve_range(
+                (SlotNo(100), Hash32([0u8; 32])),
+                (SlotNo(200), Hash32([0xff; 32])),
+            ),
+            ServeRangeOutcome::Empty,
+            "no durable block in [100,200] -> Empty, not CapExceeded"
+        );
+    }
+
+    #[test]
+    fn serve_range_undecodable_in_range_fails_closed() {
+        // A durable block whose bytes do not decode fails closed (ReadError):
+        // the serve never emits a block it cannot authenticate via decode_block
+        // (no garbage, no stored-hash shortcut).
+        let db = InMemoryChainDb::new();
+        db.put_block(&synth(10, 0x10)).unwrap(); // vec![0x10; 4] does not decode
+        let src = ChainDbServedSource::new(&db);
+        let pt = (SlotNo(10), Hash32([0x10; 32]));
+        assert_eq!(
+            src.serve_range(pt.clone(), pt.clone()),
+            ServeRangeOutcome::ReadError,
+            "undecodable in-range block -> ReadError (fail closed)"
+        );
+        assert!(src.range_bytes(pt.clone(), pt).is_empty());
     }
 
     #[test]

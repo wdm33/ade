@@ -3,7 +3,7 @@
 ## §2 Slice Header
 - **Slice Name:** serve projection cap + fail-closed
 - **Cluster:** PHASE4-N-AA (bounded peer-driven serve range) — primary invariant **DC-SERVEMEM-01**
-- **Status:** in progress
+- **Status:** Merged
 - **Cluster Exit Criteria Addressed:** **CE-2** — the DC-SERVEMEM-01 flip (the peer-facing policy: cap + fail-closed + derive-hash-at-serve + the gate).
 
 ## §3 Dependencies
