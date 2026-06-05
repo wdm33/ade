@@ -6330,7 +6330,7 @@ Own-forged durable admit chokepoint. A self-accepted forged block may become par
 durable chain ONLY by being submitted to the same durable admit chokepoint as received
 blocks (run_node_sync -> pump_block / forward_sync AdmitPlan::durable): StoreBlockBytes ->
 AppendWal -> AdvanceTip, durable-before-tip, behind the BLUE admit authority (decode ->
-validate_and_apply_header -> block_validity -> fork-choice). The forge has NO second
+validate_and_apply_header -> block_validity, extend-only). The forge has NO second
 tip-advance path and performs NO direct tip mutation -- it submits a self-accepted artifact
 as an admit INPUT. The bytes admitted durably (StoreBlockBytes + WAL) are byte-identical to
 the bytes self_accept validated -- no re-encode / reserialize / reconstruct between
@@ -6399,23 +6399,25 @@ evidence_notes = "PHASE4-N-U invariant sketch (2026-06-05). Declared at sketch. 
 id = "DC-CONS-23"
 tier = "derived"
 statement = """
-Own-forged adoption through fork-choice. An own-forged candidate block is admitted to the
-durable tip ONLY via select_best_chain (DC-CONS-03: block number first, then Praos
-TiebreakerView) evaluated against the CURRENT durable tip at admit time -- never the tip
-observed at forge time. It does not unconditionally override the tip: if a feed block has
-advanced the tip between forge and admit (the forge<->feed race), fork-choice decides, and
-a forged candidate that does not improve on the current tip is not admitted. No own-block
-special case bypasses fork-choice.
+Own-forged stale-tip race safety by extend-only durable admit. An own-forged candidate is
+admitted to the durable tip ONLY if it EXTENDS the current durable tip at admit time, through
+the existing EXTEND-ONLY durable admit validation path (receive_apply ->
+admit_via_block_validity -> block_validity, incl. header_position). If a feed block advanced
+the tip after forge time (the forge<->feed race), the forged candidate FAILS CLOSED -- via
+header-position / prev_hash validation, TipBeforeDurable, or WAL prior_fp mismatch -- and the
+next forge tick re-forges on the current durable tip. N-U adds NO admit-time fork-choice and
+NO own-block override path. DC-CONS-03 (select_best_chain) remains the fork-choice authority
+in the follow / chain_selector paths -- NOT the durable admit.
 """
 source = "docs/planning/phase4-n-u-forged-block-durability-invariants.md"
-cross_ref = ["DC-CONS-03", "DC-NODE-12", "DC-SYNC-01", "DC-SYNC-02"]
-code_locus = "crates/ade_core/src/consensus/{fork_choice,candidate}.rs; crates/ade_runtime/src/consensus/chain_selector.rs (TBD at /cluster-plan)"
+cross_ref = ["DC-CONS-03", "DC-NODE-12", "DC-WAL-04", "DC-SYNC-01", "CN-WIRE-09"]
+code_locus = "crates/ade_ledger/src/receive/{reducer,admitted}.rs (extend-only admit_via_block_validity); crates/ade_ledger/src/block_validity/header_position.rs (prev_hash/position fail-closed); crates/ade_runtime/src/forward_sync/{reducer,pump}.rs (prior_fp chain + TipBeforeDurable) (TBD at /cluster-plan)"
 tests = []
 ci_script = ""
 status = "declared"
 introduced_in = "PHASE4-N-U"
 strengthened_in = []
-evidence_notes = "PHASE4-N-U invariant sketch (2026-06-05). Declared at sketch. Keeps own-forged admission under the single BLUE fork-choice authority (DC-CONS-03); closes the forge<->feed race by evaluating against the current durable tip at admit time."
+evidence_notes = "PHASE4-N-U cluster plan (2026-06-05). Reframed from the sketch's fork-choice framing after code investigation: the durable admit path (receive_apply -> admit_via_block_validity -> block_validity) is EXTEND-ONLY -- select_best_chain/fork_choice are NOT called there (they live only in ade_core_interop::follow + ade_runtime::consensus::chain_selector). Own-forged race safety is achieved by extend-only validation + WAL prior_fp chaining failing closed on a stale-tip forge, NOT by an admit-time fork-choice. DC-CONS-03 stays the fork-choice authority where it actually exists."
 
 [[rules]]
 id = "DC-NODE-13"
