@@ -4,114 +4,112 @@
 >
 > Regenerate with `/head-deltas <baseline>` after every cluster close. Baseline is recorded in `.idd-config.json` `head_deltas_baseline`.
 
-> Baseline: `550eec3a` (PHASE4-N-F-G-J close — last state the grounding docs reflected, 2026-06-03 22:02)
-> HEAD: `65954fa3` (run-2 genesis-rehearsal reproduction + runbook flag fixes + gate now covers c1 manifests, 2026-06-04 23:32)
-> Span: **PHASE4-N-F-G-J close-pass → G-K, G-L, G-M, G-N, G-O, G-P, G-Q, G-R → C1 genesis-successor rehearsal evidence** — a multi-cluster catch-up.
-> 28 commits (no merges), 73 files changed, +4967 / -243 lines.
+> Baseline: `65954fa3` (run-2 genesis-rehearsal reproduction + runbook flag fixes + gate now covers c1 manifests — G-K…G-R + C1 catch-up close, 2026-06-04 23:32)
+> HEAD: `4e358e92` (refresh stale G-R serve-handoff comment in containment gate (post-N-U-S3), 2026-06-05 17:17)
+> Span: **PHASE4-N-U — forged-block durability** (own-forged durable admit → forged-tip crash recovery + replay-equivalence → serve-as-durable-chain projection), plus the G-K…G-R grounding-doc catch-up tail and the cluster-close-in-progress working tree.
+> 14 commits (no merges), 28 files changed, +3726 / -1802 lines.
 
-> **Baseline note (load-bearing — read before §0).** This window's baseline is **`550eec3a`**, the
-> **PHASE4-N-F-G-J slice-span HEAD** — the exact commit the four grounding docs were last
-> regenerated against (the previous HEAD_DELTAS lead, preserved below as *Historical*, narrated the
-> `13028d49..550eec3a` G-J span). The `.idd-config.json` `head_deltas_baseline` value at this regen
-> is **`853344f7`**, which is **stale and mislabeled**: `853344f7` is mid-cluster **G-L S2** (the
-> `feat(network): serve-side N2N handshake emits per-version versionData` impl commit), and its
-> config note wrongly calls it the "G-K close." Measuring from `853344f7` would silently **skip the
-> G-J close-pass commit `487bd829` and all of cluster G-K (`DC-NODE-09`)**. This regen therefore
-> deliberately measures the **explicit `550eec3a..65954fa3` span** so the delta is gap-free from the
-> last state the docs reflected. (The closer bumps `head_deltas_baseline` to `65954fa3` after this
-> regen.)
+> **Baseline note (load-bearing — read before §0).** This window's baseline is **`65954fa3`**, the
+> `.idd-config.json` `head_deltas_baseline` set by the *previous* (G-K…G-R + C1 catch-up) regen — and
+> it is **valid**: `git rev-parse 65954fa3` resolves and `git merge-base 65954fa3 HEAD == 65954fa3`
+> (it is a strict ancestor of HEAD). The span is the **single cluster PHASE4-N-U** plus its bracketing
+> housekeeping: it opens with `08b64ffc` (the G-K…G-R grounding-doc refresh that landed *after* the
+> prior baseline commit `65954fa3`), runs the N-U sketch→plan→doc→three-slice arc, and ends at the
+> close-in-progress NIT-hygiene commit `4e358e92` with the **cluster close-record + slice-status edits
+> still in the working tree** (uncommitted; see §"Close-in-progress working tree"). The closer bumps
+> `head_deltas_baseline` `65954fa3 → 4e358e92` after this regen so the next cluster measures from the
+> N-U close HEAD.
 
-This window is a **multi-cluster catch-up**. Ade closed **eight clusters** (G-K through G-R) plus a
-G-J **close-pass** and a C1 **genesis-successor rehearsal evidence** pass in a single dense day,
-each one peeling off the next concrete blocker on the path to a **live C1 private-testnet
-genesis-successor follower** that adopts an Ade-forged block 0 over a real `cardano-node` peer. The
-clusters form a sequential chain: serve-listener lifetime (G-K) → real-node **handshake** compat
-(G-L) → real-node **ChainSync FindIntersect** compat (G-M) → recovered-eta0 **WarmStart** so the
-follower's leader check stops failing (G-N) → feed-side **tag-24 unwrap** so block-fetch payloads
-decode (G-O) → feed-side **leader-threshold view** from the recovered surface so the follower
-validates and ingests block 0 (G-P) → **forge-successor position** from the evolved admitted spine
-so the node survives past block 0 (G-Q) → **stable served block 0** via a monotone serve gate so the
-follower can adopt it (G-R) → and finally the C1 **reproduction evidence** (two recorded runs).
+This window is a **single-cluster lead: PHASE4-N-U — forged-block durability.** It answers one
+structural question that every prior forge/serve cluster left open: *once Ade forges its own block,
+does that block become part of the **durable** chain — survive a crash, replay byte-identically, and
+get served to a follower as durable history — through the SAME gate received blocks use, with NO
+second tip-advance path?* Before N-U a forged block was a **local self-accept artifact only**
+(DC-NODE-05): the forge tick advanced no durable tip, and the served view was an in-memory
+`ServedChainSnapshot` accumulator that did **not** survive restart. N-U closes that gap across three
+slices, each peeling one layer:
 
-Each of G-L, G-M, G-N, G-O, G-P, G-Q, G-R makes a **NARROW, live-confirmed** structural claim —
-"live-confirmed" means *the specific failure that gated the follower is gone against the real
-preprod/C1 `cardano-node` peer* (the next-blocker error string disappears). It does **NOT** mean
-bounty completion, preprod acceptance, or any `RO-LIVE` flip. **`RO-LIVE-01` / `RO-LIVE-06` stay
-operator-gated** throughout; the C1 genesis-successor rehearsal is **C1 rehearsal infrastructure,
-not bounty evidence** — preview/preprod acceptance remains the single bounty deliverable, captured
-separately. The honest residual is carried per-cluster in §§ G-K…C1 and summarized in the closing
+- **S1 — own-forged durable admit through the pump (`DC-NODE-12`).** The self-accepted forged block
+  is now submitted to the **same durable admit chokepoint received blocks use** (`forward_sync::pump_block`:
+  `StoreBlockBytes → AppendWal → AdvanceTip`, durable-before-tip, behind the BLUE admit authority).
+  The forge gains **no** second tip-advance path; it feeds an admit *input*. The durable admit is
+  **extend-only** — a stale-tip re-forge fails closed (`DC-CONS-23`) — and the bytes admitted durably
+  are **byte-identical** to the bytes `self_accept` validated, no re-encode (`DC-WAL-04` prior-fp
+  clause + I-10).
+- **S2 — forged-tip crash recovery + replay-equivalence (`T-REC-05`, `DC-WAL-04` no-orphan clause).**
+  Production `warm_start_recovery` now **forward-replays from the nearest snapshot ≤ tip and
+  reconciles the WAL tail**, so a forge-then-kill recovers the same durable tip *byte-identically*;
+  an un-WAL'd forged orphan above the WAL tail is **dropped** on recovery.
+- **S3 — serve-as-durable-chain projection (`DC-NODE-13`; strengthens `CN-CONS-07`, `DC-NODE-11`).**
+  The `--mode node` served view is now a deterministic **read-only projection of the durable
+  ChainDb** (`ChainDbServedSource`), not the in-memory accumulator. The G-R monotone serve-gate
+  workaround (`DC-NODE-11`) is **superseded by structure**: the durable chain is extend-only, so it
+  holds exactly one block 0, the projection serves it stably, **and serving survives restart** —
+  whereas the accumulator did not. A follower fetches **coherent history A→B** (never B without A).
+
+Each slice's claim is **NARROW and durability-scoped**. N-U makes a forged block *durable, recoverable,
+and coherently servable* — it **flips no `RO-LIVE` rule**, makes no preview/preprod bounty-accept
+claim, and demonstrates no operator-witnessed peer acceptance. `RO-LIVE-01` stays operator-gated. The
+honest residual (two tracked follow-ons + the serve-availability scope line) is carried in the closing
 "Honest residual" section.
 
 ## 0. Headline
 
-| Count | Baseline (`550eec3a`) | HEAD (`65954fa3`) | Δ |
+| Count | Baseline (`65954fa3`) | HEAD (`4e358e92`) | Δ |
 |---|---|---|---|
-| CI gates (`ci/ci_check_*.sh`) | 126 | **134** | **+8 new**, **+1 modified in place** (`rehearsal_manifest_schema` — C1-manifest glob added), **0 removed** |
-| Registry rules (`docs/ade-invariant-registry.toml`) | 319 | **328** | **+9 new** (`DC-NODE-09`, `CN-WIRE-10`, `CN-WIRE-11`, `T-REC-04`, `DC-CINPUT-03`, `CN-WIRE-12`, `DC-CINPUT-04`, `DC-NODE-10`, `DC-NODE-11`); **0 strengthenings recorded in-span**; **0 removed** |
-| Test attributes (`#[test]`/`#[tokio::test]`, workspace) | 2305 | **2324** | **+19** (broad grep; CODEMAP's strict line-anchored matcher omits `multi_thread`-flavor tokio tests → it reads 2284→2301/**+17** over the same span — same tests, narrower matcher); concentrated in G-M (+6), G-L/G-O (+3 each) |
-| BLUE canonical types | 457 | **458** | **+1** — G-M adds the closed BLUE enum `ArrayHead = Definite(u64) \| Indefinite` (`ade_network::codec::primitives`, CN-WIRE-11; codec BLUE submodule 38→39). G-L (`encode_n2n_version_params` fn) + G-N (`epoch_nonce` field + `SEED_CINPUT_SCHEMA_VERSION` 1→2) extend existing types, add no type |
+| CI gates (`ci/ci_check_*.sh`) | 134 | **135** | **+2 new** (`forged_durable_admit_via_pump` S1, `served_chain_projection` S3), **−1 removed** (`served_chain_stability` — S3 mechanism supersession), **+3 modified in place** (`node_run_loop_containment`, `node_serve_lifetime`, `feed_tag24_unwrap`) → **net +1** |
+| Registry rules (`docs/ade-invariant-registry.toml`) | 328 | **333** | **+5 new** (`DC-NODE-12`, `DC-WAL-04`, `T-REC-05`, `DC-CONS-23`, `DC-NODE-13`); **+2 strengthenings** (`CN-CONS-07`, `DC-NODE-11` each `strengthened_in += "PHASE4-N-U"`); **0 removed** |
+| Registry status (enforced / partial / declared) | 196 / 20 / 112 | **201 / 20 / 112** | **+5 enforced** — all five new rules committed `enforced` in-span (no `declared → enforced` close-flip owed) |
+| Test attributes (`#[test]`/`#[tokio::test]`, workspace, broad grep) | 2324 | **2334** | **+10** (broad `git grep -hE '#\[(tokio::)?test'`; CODEMAP's strict line-anchored matcher reads lower → it sat at 2301 at baseline and the catch-up CODEMAP header still reads 2301, so its narrower count tracks separately). Concentrated in S2 (`forge_succeeds.rs` / `node_sync.rs` recovery tests) and S3 (`node_spine_serve_loopback.rs` / `forge_succeeds.rs`) |
+| BLUE canonical types | 458 | **458** | **0** — the one BLUE touch (`ade_ledger::block_validity::header_input`) factors `accepted_block_header_bytes` into a new public `block_header_bytes(&[u8]) -> Result<&[u8], …>` **function** so the serve projection can read `StoredBlock.bytes` directly; the wire-byte recipe (`DC-CONS-18`) is byte-identical, no new `struct`/`enum` |
 
-The **+8 CI gates / +9 rules / +19 tests** are the net of nine close events. The one-to-one
-gate↔cluster↔rule map:
+The **+1 net CI gate / +5 rules / +10 tests** are the net of one cluster's three slices. The
+slice↔rule↔gate map:
 
-| Cluster | New CI gate | Rule(s) introduced (`enforced`) |
-|---|---|---|
-| G-K | `ci_check_node_serve_lifetime.sh` | `DC-NODE-09` |
-| G-L | `ci_check_n2n_handshake_versiondata_authority.sh` | `CN-WIRE-10` |
-| G-M | `ci_check_chainsync_findintersect_compat.sh` | `CN-WIRE-11` |
-| G-N | `ci_check_warmstart_eta0_overlay.sh` | `T-REC-04`, `DC-CINPUT-03` |
-| G-O | `ci_check_feed_tag24_unwrap.sh` | `CN-WIRE-12` |
-| G-P | `ci_check_feed_leader_threshold_view.sh` | `DC-CINPUT-04` |
-| G-Q | `ci_check_forge_successor_evolved_spine.sh` | `DC-NODE-10` |
-| G-R | `ci_check_served_chain_stability.sh` | `DC-NODE-11` |
-| C1 | (modifies `ci_check_rehearsal_manifest_schema.sh`) | — (no rule; evidence only) |
+| Slice | New CI gate | Retired CI gate | Rule(s) introduced (`enforced`) | Rule(s) strengthened |
+|---|---|---|---|---|
+| S1 | `ci_check_forged_durable_admit_via_pump.sh` | — | `DC-NODE-12`, `DC-CONS-23`, `DC-WAL-04` (prior-fp clause) | — |
+| S2 | — (T-REC-05 test-enforced; see §5 drift note) | — | `T-REC-05`, `DC-WAL-04` (no-orphan clause) | — |
+| S3 | `ci_check_served_chain_projection.sh` | `ci_check_served_chain_stability.sh` | `DC-NODE-13` | `CN-CONS-07` (serve clause), `DC-NODE-11` (mechanism superseded; preserved + strengthened) |
 
-> **Cross-reference (other grounding docs).** This is a **catch-up regen**: at the prior baseline
-> `550eec3a` the four grounding docs were G-J-current (CODEMAP/SEAMS/TRACEABILITY headers all read
-> 319 rules / 126 CI checks / 2284 tests). The CODEMAP/SEAMS/TRACEABILITY refresh for G-K…G-R + C1 is
-> committed alongside this HEAD_DELTAS in the catch-up close-pass; their headers should read **328
-> rules / 134 CI checks** at HEAD `65954fa3`. If a sibling doc still reads 319/126, it is stale for
-> this window — regenerate it, do not patch.
+> **Cross-reference (other grounding docs) — EXPECTED catch-up state, not drift.** At this baseline
+> `65954fa3` the four grounding docs were all pinned at the **G-K…G-R + C1 catch-up close** (their
+> headers read **328 rules / 134 CI / 458 types**, and `git grep` confirms **none** of them mention
+> `served_chain_projection`, `ServedChainSource`/`ChainDbServedSource`, or any of the five new N-U
+> rules `DC-NODE-12` / `DC-WAL-04` / `T-REC-05` / `DC-CONS-23` / `DC-NODE-13`). **This HEAD_DELTAS is
+> the FIRST of the four docs to advance to the N-U HEAD.** The matching CODEMAP / SEAMS / TRACEABILITY
+> refresh for N-U is part of *this same close pass* — they are not yet committed at the moment this
+> doc is written, so at HEAD `4e358e92` a sibling doc reading 328/134/458 is **mid-close, not stale**.
+> The closer must regenerate all three to **333 rules / 135 CI checks** and add the new module +
+> rules; that is the expected close sequencing, not a discipline failure.
 
 ## 1. Commit Log (newest first)
 
 | Hash | Type | Summary |
 |------|------|---------|
-| `65954fa3` | evidence | run-2 genesis-rehearsal reproduction + runbook flag fixes + gate now covers c1 manifests |
-| `129d25ac` | docs | C1 genesis-successor rehearsal reproduction runbook (post-G-R, two-phase, fidelity-fenced) |
-| `0d7624d4` | docs | close PHASE4-N-F-G-R + bank C1 genesis-successor rehearsal manifest (follower adopted stable block 0) |
-| `32e4498b` | feat | stable served block 0 via a monotone serve gate (PHASE4-N-F-G-R S1, DC-NODE-11) |
-| `f17413f5` | docs | PHASE4-N-F-G-R cluster + S1 slice doc — served-chain stability for the genesis-successor rehearsal (DC-NODE-11) |
-| `cd0d9d48` | docs | close PHASE4-N-F-G-Q — forge-successor live-confirmed (first stable node, block 1+, no successor crash) |
-| `bd85892b` | feat | forge-successor position from the evolved admitted spine state (PHASE4-N-F-G-Q S1, DC-NODE-10) |
-| `24c00644` | docs | PHASE4-N-F-G-Q cluster + S1 slice doc — forge-successor tip/block_no fidelity (DC-NODE-10) |
-| `36c07cf1` | docs | close PHASE4-N-F-G-P — feed validates Step 5+7 + ingests block 0 live (VerificationFailed gone) |
-| `609dc3cc` | feat | feed header-validation view from the recovered consensus surface (PHASE4-N-F-G-P S1, DC-CINPUT-04) |
-| `2ec131ed` | docs | PHASE4-N-F-G-P cluster + S1 slice doc — feed-side leader-threshold stake-distribution fidelity (DC-CINPUT-04) |
-| `f43727b2` | docs | close PHASE4-N-F-G-O — feed tag-24 unwrap live-confirmed (UnexpectedType gone) |
-| `f539aa7a` | feat | feed-side BlockFetch tag-24 unwrap before decode (PHASE4-N-F-G-O S1, CN-WIRE-12) |
-| `275a2318` | fix | scope chain-sync round-trip corpus to mux-framed captures (PHASE4-N-F-G-M follow-up) |
-| `994e3bc0` | docs | PHASE4-N-F-G-O cluster + S1 slice doc — feed-side BlockFetch tag-24 unwrap (CN-WIRE-12) |
-| `87dbe99e` | docs | close PHASE4-N-F-G-N — WarmStart eta0 fix live-confirmed (follower past VRFKeyBadProof) |
-| `3235461a` | feat | WarmStart forge eta0 from the seed-epoch sidecar (PHASE4-N-F-G-N S1, T-REC-04 + DC-CINPUT-03) |
-| `c32b548b` | docs | PHASE4-N-F-G-N cluster + S1 slice doc — persist eta0 in the seed-epoch sidecar + WarmStart overlay (T-REC-04, DC-CINPUT-03) |
-| `b6805965` | feat | real cardano-node ChainSync FindIntersect compat — scoped indefinite decode + Origin reply (PHASE4-N-F-G-M S2, CN-WIRE-11) |
-| `992d3537` | docs | PHASE4-N-F-G-M S2 scope correction + real-node FindIntersect request fixture (CN-WIRE-11) |
-| `6ce9325a` | docs | PHASE4-N-F-G-M authority doc + S1 real-cardano-node ChainSync IntersectFound fixture (CN-WIRE-11) |
-| `a5c39d68` | docs | close PHASE4-N-F-G-L — serve-side N2N handshake cardano-node compatible (CN-WIRE-10) |
-| `853344f7` | feat | serve-side N2N handshake emits per-version versionData (PHASE4-N-F-G-L S2, CN-WIRE-10) |
-| `e42cb249` | docs | PHASE4-N-F-G-L authority doc + S1 real-cardano-node handshake fixture (CN-WIRE-10) |
-| `d78ff038` | docs | close PHASE4-N-F-G-K — node serve lifetime decoupled from feed end (DC-NODE-09) |
-| `b8829a6a` | feat | decouple --mode node serve listener lifetime from feed end (PHASE4-N-F-G-K S1) |
-| `c029a281` | docs | PHASE4-N-F-G-K cluster + S1 slice — node serve lifetime decoupled from feed end |
-| `487bd829` | (close) | Close PHASE4-N-F-G-J — genesis-successor block correctness (PrevHash null wire authority) |
+| `4e358e92` | chore(ci) | refresh stale G-R serve-handoff comment in containment gate (post-N-U-S3) |
+| `8e0dbe99` | feat | serve-as-durable-chain projection — enforce DC-NODE-13 (PHASE4-N-U S3) |
+| `a49563bc` | docs | slice doc PHASE4-N-U S3 serve-as-durable-chain projection + restate CN-CONS-07 |
+| `f7e38712` | test | forged-tip forward-replay recovery — enforce T-REC-05 (PHASE4-N-U S2) |
+| `232071f7` | feat | forward-replay + WAL-tail reconciliation in warm_start_recovery (PHASE4-N-U S2, DC-WAL-04 enforced) |
+| `985bf966` | docs | slice doc PHASE4-N-U S2 forged-tip crash recovery + replay-equivalence |
+| `3fedabea` | test | PHASE4-N-U S1 forged durable admit — 5 tests + enforce DC-NODE-12/DC-CONS-23 |
+| `f35451f5` | feat | own-forged durable admit through the pump (PHASE4-N-U S1, DC-NODE-12) |
+| `71e789db` | fix(ci) | repair stale node run-loop containment gate target |
+| `77d0b4a6` | docs | slice doc PHASE4-N-U S1 forged durable admit |
+| `f152b025` | docs | cluster doc PHASE4-N-U forged-block durability |
+| `15cebb90` | docs | plan PHASE4-N-U forged-block durability |
+| `f3ca7dbd` | docs | sketch PHASE4-N-U forged-block durability invariants |
+| `08b64ffc` | docs | refresh grounding docs to HEAD 65954fa3 (G-K…G-R + C1 catch-up) |
 
-No merge commits in the span. **28 commits, zero unclassified** — every commit carries a
-conventional prefix (`feat:` / `fix:` / `docs:` / `evidence:`) or is the G-J `Close …` close-pass.
-The shape is regular: the **G-J close-pass** (`487bd829`, docs/registry only), then eight clusters
-each as **doc → impl → close** (G-K/G-N/G-O/G-P/G-Q/G-R) or **doc(S1) → doc+fixture(S2) → impl(S2)
-→ close** (G-L, G-M, the latter with a `fix(test)` follow-up `275a2318`), then the **C1 evidence**
-pair (`129d25ac` runbook + `65954fa3` run-2 + gate coverage).
+No merge commits in the span. **14 commits, zero unclassified** — every commit carries a conventional
+prefix (`feat:` / `fix(ci):` / `test:` / `docs:` / `chore(ci):`). The shape is regular: the
+**G-K…G-R grounding-doc catch-up** (`08b64ffc`, docs only — the refresh that followed the prior
+baseline commit), then the **N-U sketch → plan → cluster doc** (`f3ca7dbd` / `15cebb90` / `f152b025`),
+then a containment-gate target repair (`71e789db`), then three slices each **doc → impl → test**
+(S1 `77d0b4a6`/`f35451f5`/`3fedabea`; S2 `985bf966`/`232071f7`/`f7e38712`; S3 `a49563bc`/`8e0dbe99`),
+then the close-pass NIT-hygiene (`4e358e92`). The cluster **close-record + slice-status flips are
+still uncommitted** (working tree — see §"Close-in-progress working tree").
 
 > **Note (commit-attribution policy).** Per this repo's `CLAUDE.md` override (vibe-coded-node bounty
 > trailer requirement), commits in this repo carry a `Co-Authored-By:` model-attribution trailer;
@@ -120,403 +118,341 @@ pair (`129d25ac` runbook + `65954fa3` run-2 + gate coverage).
 
 ## 2. New Modules
 
-**None.** No new source module (`crates/*/src/**.rs`) and no new crate were added in this window —
-confirmed by `git diff --diff-filter=A --name-only 550eec3a..65954fa3 -- 'crates/*/src/'` (empty).
-Every code change **extends an existing module**. The new `.rs` files in the span are all **test
-fixtures / capture-replay tests** under `crates/*/tests/` adjuncts and real-node CBOR fixtures
-(`crates/ade_network/tests/fixtures/{handshake,chain_sync}/…`), not new modules. The new files under
-`docs/evidence/` are recorded C1 rehearsal artifacts, not code.
+One new source module landed in this window.
 
-The work that lands in this window is therefore **modification of existing modules** (§3),
-**new CI gates** (§5), and **new evidence** (C1, §"C1 evidence").
+| Module | Color | Purpose | Key sub-paths | Added in (cluster/slice) |
+|--------|-------|---------|---------------|--------------------------|
+| `ade_runtime::network::served_chain_projection` | **RED** (shell, `crates/ade_runtime/`; the file's `//! RED` header confirms) | Projects the **durable ChainDb** through the BLUE serve reducers' read seams so the `--mode node` serve path serves the durable adopted chain instead of an in-memory accumulator (`DC-NODE-13`; serve-as-projection that supersedes the G-R monotone serve-gate workaround). Read-only: advances no tip, admits nothing, derives no verdict; on a `ChainDbError` yields `None`/empty (serve nothing this round — availability, never wrong/partial bytes). | `served_chain_projection.rs` (+255): `pub struct ChainDbServedSource<'a>` holding `&'a dyn ChainDb`; `impl ServedHeaderLookup` (`next_after` — smallest durable key strictly past the cursor) + `impl ServedRangeLookup` over the durable store; reuses the single BLUE `block_header_bytes` header-projection authority (`DC-CONS-18`) and `decode_block`, serving `stored.bytes` **verbatim** (`DC-CONS-17`) — no parallel splitter, no `AcceptedBlock` reconstruction. | `PHASE4-N-U` S3 (`8e0dbe99`) |
+
+> **Cross-reference (CODEMAP) — EXPECTED, sequencing not staleness.** `git grep served_chain_projection
+> docs/ade-CODEMAP.md` returns **0** at HEAD — the new module is **not yet in CODEMAP**. This is the
+> expected close sequencing (see §0 cross-reference note): CODEMAP is pinned at the prior G-K…G-R
+> catch-up close and the N-U refresh is part of *this* close pass. The closer must add
+> `ade_runtime::network::served_chain_projection` to CODEMAP §RED. It is **not** a "CODEMAP is silently
+> stale" anomaly — it would only become one if CODEMAP were left unrefreshed after this close.
+
+The rest of the code work in this window is **modification of existing modules** (§3), **new CI
+gates** (§5), and the **registry delta** (§7). No new crate, no new workspace, no new `Cargo.toml`.
+
+> **Diff-glob footgun (generation note).** `git diff --diff-filter=A --name-only 65954fa3..HEAD --
+> 'crates/*/src/'` returns **empty** and would wrongly suggest "no new module" — the glob `crates/*/src/`
+> matches one path level only and misses `crates/ade_runtime/src/network/served_chain_projection.rs`
+> (two levels deep). The module's newness was confirmed by `git diff --name-status` (`A`) + `git
+> cat-file -e 65954fa3:…` (absent at baseline). Verify new modules with `--name-status` over the full
+> changed-file set, not a one-level glob.
 
 ## 3. Modules Modified
 
-Grouped by cluster. Each row names the cluster's BLUE/GREEN/RED touch and the rule it backs. The
-per-cluster file/line stats are `git diff --shortstat` between the cluster's pre-first-commit parent
-and its close commit.
+Grouped by slice. Each row names the slice's BLUE/GREEN/RED touch and the rule it backs. Per-file
+line counts are `git show --numstat <commit> -- <file>` for the slice's impl/test commits.
 
-### G-J close-pass (`487bd829`) — docs/registry only
+### S1 — own-forged durable admit through the pump (`f35451f5` impl, `3fedabea` tests)
 
-`Close PHASE4-N-F-G-J — genesis-successor block correctness (PrevHash null wire authority)`. The
-G-J **slice work was already narrated in the prior HEAD_DELTAS** (preserved as *Historical* below);
-this is the close-pass commit at the head of the span. **11 files, +860 / -134** — the four
-grounding-doc G-J regen (CODEMAP/SEAMS/TRACEABILITY/HEAD_DELTAS), the `.idd-config.json` baseline
-bump, the five G-J slice-doc touches, and the G-J cluster-doc archive move. **No source change, no
-new rule, no new gate** (the three G-J rules and gates were committed in-span at the slice HEADs).
-Carried here only so the span is gap-free.
-
-### G-K (`c029a281` → `b8829a6a` → `d78ff038`) — serve-listener lifetime, RED-only
-
-`DC-NODE-09` `enforced` · 7 files, **+492 / -17** · +2 tests · +1 gate
+`DC-NODE-12` + `DC-CONS-23` + `DC-WAL-04` (prior-fp clause) `enforced` · +1 gate
 
 | Module | Color | Key changes |
 |--------|-------|-------------|
-| `ade_node::node_lifecycle` | **RED** (relay-loop home, `crates/ade_node/`) | **G-K S1 (`b8829a6a`).** Decouples the `--mode node` On-arm **serve-listener lifetime from feed end**: when the live feed (WirePump) reaches its end/disconnect, the node **keeps the serve side up** so a downstream follower can still dial `:3002` and block-fetch the served chain, rather than tearing the whole node down with the feed. RED-only lifecycle change; **no BLUE change, no new canonical type**. New test file `node_spine_serve_loopback.rs` (+114) proves the serve listener outlives feed end. |
+| `ade_node::node_sync` | **GREEN/RED** (`crates/ade_node/`) | **S1 (`f35451f5`, +53).** New `pub fn admit_forged_block_durably` — the **fenced driver** that takes a `&SelfAcceptedHandoff` and feeds its bytes (`.accepted().as_bytes()`, **no re-encode**, I-10) into the existing `forward_sync::pump_block` chokepoint (`StoreBlockBytes → AppendWal → AdvanceTip`, durable-before-tip, behind the BLUE admit authority). Adds **no** admit-time fork-choice; a stale-tip re-forge fails closed inside `pump_block` via `block_validity` / prior-fp (`DC-CONS-23`). |
+| `ade_node::node_lifecycle` | **RED** (relay-loop home) | **S1 (`f35451f5`, +33 / −5).** The `--mode node` `ForgeTick` arm now calls `admit_forged_block_durably` **before** the G-R serve handoff, so `pump_block` advances `state.receive` + the durable ChainDb together and the next forge builds N+1. The forge advances **no** durable tip directly — `DC-NODE-05` preserved (the loop body still reaches for no direct apply / manual-tip / rollback). |
 
-**New gate** `ci_check_node_serve_lifetime.sh` backs `DC-NODE-09`: pins that the serve-listener task
-is not joined to / cancelled by the feed task's completion. **Live-confirmed** at close: against the
-C1 follower, Ade stays up serving past feed-end and the follower reaches `:3002`. The next blocker
-surfaced at close was a serve-side N2N **handshake** incompatibility (`HandshakeDecodeError
-NodeToNodeV_15 'unknown encoding: TInt 1'`) — scoped as **G-L**.
+New gate `ci_check_forged_durable_admit_via_pump.sh` fences the driver body: routes through
+`pump_block(`, feeds `.accepted().as_bytes()` (no re-encode), adds no fork-choice, no manual tip
+advance. The containment gate `ci_check_node_run_loop_containment.sh` was **extended in place** to
+allow-list the 2nd fenced tip-advancer (`admit_forged_block_durably`) while still forbidding direct
+`pump_block`/`put_block`/`AdvanceTip`/`rollback` in the loop body. Tests (`3fedabea`):
+`forge_tick_durable_admit_advances_tip`, `forge_successor_builds_block_1_from_durable_tip`,
+`forged_admit_bytes_byte_identical_to_self_accept`, `stale_tip_forge_fails_closed`,
+`forged_admit_wal_prior_fp_chains`.
 
-### G-L (`e42cb249` → `853344f7` → `a5c39d68`) — serve-side N2N handshake, BLUE touch
+### S2 — forged-tip crash recovery + replay-equivalence (`232071f7` impl, `f7e38712` test)
 
-`CN-WIRE-10` `enforced` · 12 files, **+407 / -18** · +3 tests · +1 gate
-
-| Module | Color | Key changes |
-|--------|-------|-------------|
-| `ade_network::handshake::version_table` | **BLUE** (`core_paths` `crates/ade_network/src/handshake/`) | **G-L S2 (`853344f7`).** The serve-side N2N handshake now emits **per-version `versionData`** matching `cardano-node`'s `NodeToNodeV_15` encoding (the prior flat encoding produced the follower-side `'unknown encoding: TInt 1'` decode error). `version_table.rs` (+26) carries the per-version version-data shape. |
-| `ade_network::session::handshake_driver` | **RED** (session is RED) | **G-L S2.** Drives the per-version version-data through the responder handshake (+14). |
-| `ade_node::admission::bootstrap` | **GREEN/RED** (`crates/ade_node/`) | **G-L S2.** Call-site adjustment for the per-version version-data (+24 / churn). |
-
-S1 (`e42cb249`) banked a **real-cardano-node handshake fixture**
-(`fixtures/handshake/c1privnet_v11_v16_propose_{sent,recv}.cbor` + `_meta.toml`) and a responder
-fixture test (`handshake_responder_cardano_node_fixture.rs`, +85). **New gate**
-`ci_check_n2n_handshake_versiondata_authority.sh` backs `CN-WIRE-10` (per-version version-data is
-the single serve-side authority, NodeToNodeV_15 cardano-node-compatible). **Live-confirmed**: the
-handshake now completes against the real peer. NARROW — handshake compat only; not a full N2N
-session, not acceptance.
-
-### G-M (`6ce9325a` → `992d3537` → `b6805965`; follow-up `275a2318`) — ChainSync FindIntersect, BLUE touch
-
-`CN-WIRE-11` `enforced` · 13 files, **+738 / -23** (+ follow-up +8) · +6 tests (+1 follow-up) · +1 gate
+`T-REC-05` + `DC-WAL-04` (no-orphan clause) `enforced`
 
 | Module | Color | Key changes |
 |--------|-------|-------------|
-| `ade_network::chain_sync::server` | **BLUE** (`core_paths` `crates/ade_network/src/chain_sync/`) | **G-M S2 (`b6805965`).** Real `cardano-node` **ChainSync `FindIntersect`** compat: the served chain-sync server now decodes the follower's `FindIntersect` request and, when no intersection is found, replies **`IntersectFound`/`Origin`** as the real node expects for a from-genesis follower (+74). |
-| `ade_network::codec::chain_sync` | **BLUE** (`core_paths` `crates/ade_network/src/codec/`) | **G-M S2.** `FindIntersect` request decode wired into the chain-sync message codec (+47). |
-| `ade_network::codec::primitives` | **BLUE** (`core_paths`) | **G-M S2.** **Scoped indefinite-length CBOR decode** primitive (+87) — handles the real node's indefinite-length array encoding in the `FindIntersect` points list (a scoped/bounded decode, not an open one). |
+| `ade_node::node_lifecycle` | **RED** (recovery home, `crates/ade_node/`) | **S2 (`232071f7`, +130 / −67).** Production `warm_start_recovery` (the `bootstrap_initial_state` warm-start branch) now **forward-replays from the nearest snapshot ≤ tip and reconciles the WAL tail** (`recover_node_state`-style), replacing the prior snapshot-at-tip-only placeholders. It reconstructs the seed-epoch sidecar (`from_seed_epoch_consensus_inputs`) so the recovered surface is realistic, and **drops a forged orphan above the WAL tail** (an un-WAL'd block constructed but not yet durably appended) so recovery converges to the durable tip (`DC-WAL-04` no-orphan clause). |
+| `ade_node::node_sync` | test (`crates/ade_node/`) | **S2 (`f7e38712`, +154).** In-crate recovery test `forge_kill_then_warm_start_recovers_same_tip_via_forward_replay`: forge a genesis-successor block, kill, then assert `warm_start_recovery` recovers the **byte-identical** durable tip via forward replay from the genesis slot-0 snapshot (`T-REC-05`). In-crate to avoid `make_node_schedule(0,0)` reconstruction churn. |
 
-S1 (`6ce9325a`) + the S2 scope-correction (`992d3537`) banked two real-node ChainSync fixtures
-(`fixtures/chain_sync/c1privnet_{follower_findintersect,origin_intersect}_*`) and a fixture test
-(`chainsync_findintersect_cardano_node_fixture.rs`, +119). The follow-up **`275a2318`** (`fix(test)`)
-**scopes the chain-sync round-trip corpus to mux-framed captures** (+8 in
-`chain_sync_real_capture_corpus.rs`) so the corpus test replays only genuinely mux-framed captures.
-**New gate** `ci_check_chainsync_findintersect_compat.sh` backs `CN-WIRE-11`. **Live-confirmed**: the
-real follower's `FindIntersect` is decoded and answered. NARROW — FindIntersect/Origin compat only.
+`T-REC-05` is **test-enforced** (`ci_script = ""` in the registry — see §5 drift note). The S2 work
+backs the replay-equivalence half of the cluster: same checkpoint + same WAL → same post-state.
 
-### G-N (`c32b548b` → `3235461a` → `87dbe99e`) — WarmStart recovered-eta0 overlay
+### S3 — serve-as-durable-chain projection (`8e0dbe99` impl)
 
-`T-REC-04` + `DC-CINPUT-03` `enforced` · 13 files, **+438 / -10** · +1 test (inline) · +1 gate
+`DC-NODE-13` `enforced`; `CN-CONS-07` + `DC-NODE-11` `strengthened_in += "PHASE4-N-U"` · +1 gate, −1 gate
 
 | Module | Color | Key changes |
 |--------|-------|-------------|
-| `ade_ledger::seed_consensus_inputs` | **BLUE** (`core_paths` `crates/ade_ledger/`) | **G-N S1 (`3235461a`).** Persists **eta0** (the seed-epoch nonce) in the seed-epoch consensus-inputs sidecar so it survives a `WarmStart` recovery (+33). `consensus_view.rs` carries the field through (+1). Backs `T-REC-04` (the recovered surface is byte-faithful incl. eta0). |
-| `ade_runtime::bootstrap` | **RED** (shell, `crates/ade_runtime/`) | **G-N S1.** The `WarmStart` recovery path now **overlays the recovered eta0** into the forge consensus surface (+64), so the follower's leader/VRF check uses the correct nonce. `genesis_bootstrap.rs` / `mithril_bootstrap.rs` / `seed_consensus_merge.rs` thread the field (+1/+1/+3). Backs `DC-CINPUT-03`. |
-| `ade_node::{node_lifecycle, node_sync}`, `ade_testkit::consensus::genesis_pinning` | GREEN/RED / test | **G-N S1.** Call-site threading of recovered eta0 (+1/+4/+1). |
+| `ade_runtime::network::served_chain_projection` | **RED** (**NEW** — §2) | **S3 (`8e0dbe99`, +255).** The new `ChainDbServedSource` projection adapter (see §2). |
+| `ade_runtime::network::serve_dispatch` | **RED** (`crates/ade_runtime/`) | **S3 (`8e0dbe99`, +167 / churn).** The single serve-dispatch authority (`DC-NODE-07`) gains a **closed source-selector enum** `ServedChainSource<'a>` with two arms — `Snapshot(view)` (the existing in-memory accumulator, still used by `--mode produce`) and **`DurableChainDb(&'a dyn ChainDb)`** (the new `--mode node` durable projection, constructed per dispatched frame as a `ChainDbServedSource`). The enum only selects **where** the one dispatch authority reads; the dispatch logic is otherwise unchanged. |
+| `ade_ledger::block_validity::header_input` | **BLUE** (`core_paths` `crates/ade_ledger/`) | **S3 (`8e0dbe99`, +36 / churn).** `accepted_block_header_bytes` is refactored to delegate to a **new public `block_header_bytes(&[u8]) -> Result<&[u8], BlockValidityError>`** — the **same** `header_cbor_slice`/`decode_block_envelope` recipe (`DC-CONS-18`), factored out for callers that hold raw canonical block bytes (`StoredBlock.bytes`) rather than an `AcceptedBlock` token. **Byte-identical** projection, **no** parallel splitter, **no** new type (one new fn; re-exported from `block_validity::mod`). |
+| `ade_node::{node_lifecycle, node_sync}` | **RED/GREEN** (`crates/ade_node/`) | **S3 (`8e0dbe99`, lifecycle +88 / −155; node_sync +16 / −31).** The `--mode node` serve task now takes the **durable ChainDb as a READ source** (`ServedChainSource::DurableChainDb`) instead of the in-memory `ServedChainView` accumulator; the net negative line count is the **retirement** of the G-R `serve_gate_admits` accumulator + `serve_gate_*` tests (mechanism superseded). |
+| `ade_node::produce_mode` | **RED/GREEN** (`crates/ade_node/`) | **S3 (`8e0dbe99`, +8 — near-trivial).** Call-site adjustment for the new source enum: `--mode produce` continues to serve the `self_accept`'d accumulator via the explicit `ServedChainSource::Snapshot(view)` arm (the original `CN-CONS-07` token-proof; no durable admit path in produce mode). Not a behavior change — the enum just made the source explicit. |
 
-**New gate** `ci_check_warmstart_eta0_overlay.sh` backs both `T-REC-04` and `DC-CINPUT-03`. **The bug
-this fixed:** before G-N the follower failed its leader check with **`VRFKeyBadProof`** because the
-WarmStart-recovered surface dropped eta0 (`bootstrap.rs` predicted it; self-accept masked it because
-Ade's own validator read the same wrong nonce on both sides). **Live-confirmed**: the follower now
-gets **past `VRFKeyBadProof`**. (The boundary-grep test count is flat 2317→2317; the +1 net test-attr
-is inlined in `bootstrap.rs`.) NARROW — the eta0 fix only; the next decode blocker is G-O.
-
-### G-O (`994e3bc0` → `f539aa7a` → `f43727b2`) — feed-side BlockFetch tag-24 unwrap, RED
-
-`CN-WIRE-12` `enforced` · 9 files, **+467 / -20** · +3 tests · +1 gate
-
-| Module | Color | Key changes |
-|--------|-------|-------------|
-| `ade_runtime::admission::wire_pump` | **RED** (shell, `crates/ade_runtime/`) | **G-O S1 (`f539aa7a`).** The feed-side **BlockFetch** path now **unwraps the tag-24 CBOR envelope before decoding** the block body (+111) — the real node wraps block-fetch payloads in a `#6.24(bytes)` envelope, and decoding the wrapped bytes directly produced `UnexpectedType`. This is the **receive/feed** counterpart to the existing serve-side tag-24 authority (`CN-WIRE-08`). |
-| `ade_node::node_sync` | GREEN/RED | **G-O S1.** Feed-pump call-site adjust (+3). |
-
-Tests land in `forge_succeeds.rs` (+68) + `node_spine_serve_loopback.rs` (churn); the follow-up to
-`chain_sync_real_capture_corpus.rs` (+8) is also in this commit range. **New gate**
-`ci_check_feed_tag24_unwrap.sh` backs `CN-WIRE-12`. **Live-confirmed**: feed-side block-fetch
-payloads now decode — **`UnexpectedType` gone**. NARROW — feed tag-24 unwrap only.
-
-### G-P (`2ec131ed` → `609dc3cc` → `36c07cf1`) — feed-side leader-threshold view, GREEN
-
-`DC-CINPUT-04` `enforced` · 6 files, **+441 / -8** · +1 test · +1 gate
-
-| Module | Color | Key changes |
-|--------|-------|-------------|
-| `ade_node::node_lifecycle` | **GREEN/RED** (`crates/ade_node/`) | **G-P S1 (`609dc3cc`).** Builds the feed's **header-validation view (leader-threshold stake distribution) from the recovered consensus surface** (+50), so the follower validates the incoming block-0 header against the correct stake/threshold view — closing the gap that produced `VerificationFailed` at validation Step 5 + Step 7. The validated block 0 is then **ingested live**. |
-
-Tests land in `forge_succeeds.rs` (+89). **New gate** `ci_check_feed_leader_threshold_view.sh` backs
-`DC-CINPUT-04`. **Live-confirmed**: the follower **validates Step 5 + 7 and ingests block 0 live —
-`VerificationFailed` gone**. NARROW — the feed-side validation view only.
-
-### G-Q (`24c00644` → `bd85892b` → `cd0d9d48`) — forge-successor from evolved spine
-
-`DC-NODE-10` `enforced` · 6 files, **+423 / -14** · +1 test · +1 gate
-
-| Module | Color | Key changes |
-|--------|-------|-------------|
-| `ade_node::node_sync` | **GREEN/RED** (`crates/ade_node/`) | **G-Q S1 (`bd85892b`).** The forge-successor's **position (tip / block_no) is now read from the evolved admitted spine state**, not a stale snapshot (+145), so after block 0 is accepted-and-served the node forges **block 1+** at the correct successor position instead of crashing on a stale/duplicate position. `node_lifecycle.rs` threads the evolved tip (+2). |
-
-**New gate** `ci_check_forge_successor_evolved_spine.sh` backs `DC-NODE-10`. **Live-confirmed: first
-stable node — block 1+, no successor crash.** NARROW — successor-position fidelity only; durable
-multi-block progression past the demonstrated successor is still downstream.
-
-### G-R (`f17413f5` → `32e4498b` → `0d7624d4`) — stable served block 0, monotone serve gate
-
-`DC-NODE-11` `enforced` · 9 files, **+388 / -3** · +2 tests · +1 gate
-
-| Module | Color | Key changes |
-|--------|-------|-------------|
-| `ade_node::node_lifecycle` | **GREEN/RED** (`crates/ade_node/`) | **G-R S1 (`32e4498b`).** Serves a **stable block 0 via a monotone serve gate** (+59): the served chain head only ever advances monotonically, so a from-genesis follower that intersects at Origin and block-fetches block 0 sees a **stable** served block 0 (no flap/regression) and can **adopt** it. |
-
-Tests land in `forge_succeeds.rs` (+59). **New gate** `ci_check_served_chain_stability.sh` backs
-`DC-NODE-11`. The close (`0d7624d4`) also **banks the first C1 genesis-successor rehearsal manifest**
-(`docs/evidence/c1-genesis-rehearsal-{follower.log, manifest.toml, peer-accept.jsonl}`). **NARROW
-CLAIM (load-bearing):** the **follower adopted the stable block 0** in the recorded C1
-genesis-successor rehearsal — this is the genesis-successor leg working end-to-end in the C1
-rehearsal venue. It is **NOT** a preview/preprod bounty accept, flips **no** `RO-LIVE` rule, and the
-banked manifest is **C1 rehearsal evidence under `CN-REHEARSAL-FIDELITY-01` non-promotability**, not
-bounty evidence.
+New gate `ci_check_served_chain_projection.sh` backs `DC-NODE-13`: pins that `ChainDbServedSource`
+exists, implements **both** BLUE serve seams over the durable ChainDb, reuses the single
+`block_header_bytes` authority, serves `stored.bytes` verbatim (no envelope re-walk), and is
+read-only. The G-R gate `ci_check_served_chain_stability.sh` is **retired** (mechanism superseded —
+the monotone-serve property is now a structural consequence of serve-as-projection over the
+extend-only durable chain). Tests: `served_view_projects_durable_chain`,
+`follower_fetches_coherent_history_incl_ingested_predecessor`, `served_view_retires_accumulator`.
 
 ## 4. Feature Flags
 
-**No project feature-flag deltas.** Ade declares no `[features]` table in any workspace `Cargo.toml`,
-and **no `Cargo.toml` changed at all in this window** (`git diff --name-only 550eec3a..65954fa3 --
-'**/Cargo.toml'` is empty). No `#[cfg(feature = …)]` gate was introduced; no coupling, no
-`compile_error!` guard. The C1 genesis rehearsal operator harness remains gated by an **environment
-variable** (`ADE_LIVE_C1_GENESIS_REHEARSAL`), not a Cargo feature — a `#[test]` skipped in CI, not a
-compile-time flag and not a runtime node mode.
+**No project feature-flag deltas.** Ade declares no `[features]` table in any workspace `Cargo.toml`
+(`git grep -l '^\[features\]'` over all `Cargo.toml` is empty), and **no `Cargo.toml` changed at all
+in this window** (`git diff --name-only 65954fa3..HEAD -- '**/Cargo.toml' 'Cargo.toml'` is empty). No
+`#[cfg(feature = …)]` gate was introduced (`git diff … | grep -c 'cfg(feature'` over `crates/` is
+**0**); no coupling, no `compile_error!` guard. The closed `ServedChainSource` source-selector enum is
+a **runtime** dispatch selector inside the RED shell, not a compile-time feature flag.
 
-## 5. CI Checks (126 → 134; +8 new, +1 modified in place, 0 removed)
+## 5. CI Checks (134 → 135; +2 new, +3 modified in place, −1 removed)
 
-Eight new gates plus one in-place extension, repo-root-relative, mirroring the existing
-`ci/ci_check_*.sh` convention. `git diff --diff-filter=A 550eec3a..65954fa3 -- ci/` lists exactly the
-eight new gates; `--diff-filter=M` lists exactly `ci_check_rehearsal_manifest_schema.sh`;
-`--diff-filter=D` over `ci/` is **empty** (no gate removed).
+Two new gates, three in-place extensions, and **one removal** (a justified mechanism supersession),
+repo-root-relative, mirroring the `ci/ci_check_*.sh` convention. `git diff --diff-filter=A
+65954fa3..HEAD -- ci/` lists exactly the two new gates; `--diff-filter=D` lists exactly
+`ci_check_served_chain_stability.sh`; `--diff-filter=M` lists exactly the three extended gates.
 
-### New gates (one per cluster, G-K…G-R)
+### New gates
 
-| Check | Status | Cluster origin | What it checks |
-|-------|--------|----------------|----------------|
-| `ci_check_node_serve_lifetime.sh` | **New** | G-K S1 (`b8829a6a`) | Backs **`DC-NODE-09`**. Pins that the `--mode node` On-arm **serve-listener lifetime is decoupled from feed end** — the serve task is not joined to / cancelled by the live-feed (WirePump) task completing, so a follower can still dial and block-fetch after feed-end. |
-| `ci_check_n2n_handshake_versiondata_authority.sh` | **New** | G-L S2 (`853344f7`) | Backs **`CN-WIRE-10`**. Pins the serve-side N2N handshake **per-version `versionData`** as the single authority, `NodeToNodeV_15` cardano-node-compatible (closes the follower-side `'unknown encoding: TInt 1'`). |
-| `ci_check_chainsync_findintersect_compat.sh` | **New** | G-M S2 (`b6805965`) | Backs **`CN-WIRE-11`**. Pins the served ChainSync **`FindIntersect` decode** (scoped indefinite-length CBOR) + the **`IntersectFound`/`Origin`** reply the real node expects for a from-genesis follower. |
-| `ci_check_warmstart_eta0_overlay.sh` | **New** | G-N S1 (`3235461a`) | Backs **`T-REC-04` + `DC-CINPUT-03`**. Pins that **eta0 is persisted in the seed-epoch sidecar** and **overlaid into the forge consensus surface on WarmStart recovery** (closes `VRFKeyBadProof` on the follower). |
-| `ci_check_feed_tag24_unwrap.sh` | **New** | G-O S1 (`f539aa7a`) | Backs **`CN-WIRE-12`**. Pins that the **feed-side BlockFetch** path **unwraps the tag-24 (`#6.24`) envelope before decoding** the block body (closes `UnexpectedType` on feed decode) — the receive-side counterpart to the serve-side `CN-WIRE-08` tag-24 authority. |
-| `ci_check_feed_leader_threshold_view.sh` | **New** | G-P S1 (`609dc3cc`) | Backs **`DC-CINPUT-04`**. Pins that the **feed-side header-validation (leader-threshold stake-distribution) view is built from the recovered consensus surface** (closes `VerificationFailed` at validation Step 5 + Step 7, enabling live block-0 ingest). |
-| `ci_check_forge_successor_evolved_spine.sh` | **New** | G-Q S1 (`bd85892b`) | Backs **`DC-NODE-10`**. Pins that the **forge-successor position (tip / block_no) is read from the evolved admitted spine state**, so block 1+ forges at the correct successor position with no stale-position crash. |
-| `ci_check_served_chain_stability.sh` | **New** | G-R S1 (`32e4498b`) | Backs **`DC-NODE-11`**. Pins the **monotone serve gate** — the served chain head advances monotonically, so a from-genesis follower sees a **stable served block 0** and can adopt it (no head flap/regression). |
+| Check | Status | Slice origin | What it checks |
+|-------|--------|--------------|----------------|
+| `ci_check_forged_durable_admit_via_pump.sh` | **New** | S1 (`f35451f5`) | Backs **`DC-NODE-12` + `DC-CONS-23` + `DC-WAL-04`**. Fences the `admit_forged_block_durably` driver body (in `node_sync.rs`, production code only): (pos) routes through `pump_block(` — the single durable apply engine; (pos) feeds the self-accepted bytes via `.accepted()` + `.as_bytes()` (I-10: no re-encode / reserialize between `self_accept` and durable admit); (neg) no admit-time fork-choice, no manual tip advance (a stale-tip forge fails closed inside `pump_block` via `block_validity` / prior-fp, never an own-block override). |
+| `ci_check_served_chain_projection.sh` | **New** | S3 (`8e0dbe99`) | Backs **`DC-NODE-13`**. Pins that the projection adapter `ChainDbServedSource` exists and implements **both** BLUE serve seams (`ServedHeaderLookup` + `ServedRangeLookup`) over the durable ChainDb (`iter_from_slot` / `get_block_by_hash` / `tip`); that it reuses the single `DC-CONS-18` header authority (`block_header_bytes`) and serves `stored.bytes` **verbatim** (no parallel splitter / envelope re-walk); and that the serve path is read-only (advances no tip, admits nothing). |
 
-### Modified gate (C1 evidence)
+### Modified gates (extended in place)
 
 | Check | Status | Origin / change | What it checks |
 |-------|--------|-----------------|----------------|
-| `ci_check_rehearsal_manifest_schema.sh` | **Modified in place** | G-D origin; G-J extension; **C1 extension (`65954fa3`)** | The rehearsal-manifest schema gate, **extended in place** so its glob set now also covers the **C1 genesis-successor rehearsal manifests** (`docs/evidence/c1-genesis-rehearsal-*` incl. the run-2 `-run2.toml`). The closed schema, the two non-promotability markers (`is_rehearsal` / `not_bounty_evidence`), and the `peer_log_file_sha256` binding are unchanged in shape — only the glob set widened (+19/-churn). Now that **real C1 rehearsal manifests are committed**, the gate is no longer vacuous for the C1 home: it validates the banked manifests against the closed schema. |
+| `ci_check_node_run_loop_containment.sh` | **Modified in place** | PHASE4-N-F-D S2 origin; **N-U S1 + S3 extension** | The relay run-loop containment gate, extended so the loop body may advance the durable tip through **two** fenced drivers — `run_node_sync` (received blocks, `DC-SYNC-02`) and `admit_forged_block_durably` (own-forged, `DC-NODE-12`) — each routing through `pump_block`, while still forbidding direct apply / manual-tip / `pump_block` / `put_block` / `AdvanceTip` / rollback in the loop body. (`71e789db` separately repaired a stale target path on this gate before S1.) |
+| `ci_check_node_serve_lifetime.sh` | **Modified in place** | PHASE4-N-F-G-K S1 origin (`DC-NODE-09`); **N-U S3 extension** | The serve-lifetime gate (serve task outlives feed-end, owned by the operator shutdown watch), extended so it now pins that the serve source migrated from the in-memory `ServedChainView` accumulator to the **durable ChainDb projection** (`ServedChainSource::DurableChainDb`): the serve task takes the durable ChainDb as a **READ** source (`Arc<dyn ChainDb>`), still read-only (no WAL/forge handle, no durable-write call). |
+| `ci_check_feed_tag24_unwrap.sh` | **Modified in place** | PHASE4-N-F-G-O origin (`CN-WIRE-12`); **N-U S3 touch** | The feed-side BlockFetch tag-24 unwrap gate (`CN-WIRE-12`), touched in the S3 commit to keep its asserted test/source anchors (`forge_succeeds.rs`, `node_spine_serve_loopback.rs`) aligned after the S3 serve refactor moved/renamed serve-path test scaffolding. Closed shape unchanged. |
 
-**No gate was removed; none was weakened.** The eight new gates each add a closed structural check;
-the one modification widens a glob to bring committed C1 evidence under the existing schema.
+### Retired gate (mechanism supersession — justified removal)
 
-> **Cross-reference (TRACEABILITY).** Each new gate is the `ci_script` of its rule in the registry at
-> HEAD (`DC-NODE-09 → ci_check_node_serve_lifetime`, `CN-WIRE-10 → …versiondata_authority`,
-> `CN-WIRE-11 → …findintersect_compat`, `T-REC-04` + `DC-CINPUT-03 → …warmstart_eta0_overlay`,
-> `CN-WIRE-12 → …feed_tag24_unwrap`, `DC-CINPUT-04 → …feed_leader_threshold_view`, `DC-NODE-10 →
-> …forge_successor_evolved_spine`, `DC-NODE-11 → …served_chain_stability`) — verified by reading the
-> registry at `65954fa3`. The TRACEABILITY regen for this window should cite all eight.
+| Check | Status | Origin / removal | Why removed |
+|-------|--------|------------------|-------------|
+| `ci_check_served_chain_stability.sh` | **Removed** | PHASE4-N-F-G-R S1 origin (`DC-NODE-11`); **retired by N-U S3** | The G-R monotone serve-gate gate. Its stability property — the served chain head advances monotonically, so a follower sees a stable block 0 — is now a **structural consequence** of serve-as-projection over the **extend-only** durable chain (`DC-NODE-13` + `DC-CONS-23`): own-forged blocks are durably admitted (`DC-NODE-12`), a re-mint block 0 fails closed at the extend-only admit (`DC-CONS-23`), so the durable chain holds exactly one block 0 and the projection serves it stably **and survives restart** (`T-REC-05`). `DC-NODE-11` is **preserved + strengthened** (`strengthened_in += "PHASE4-N-U"`; its `ci_script` repointed to `ci_check_served_chain_projection.sh`) — the rule is NOT removed, only its now-redundant accumulator-gate enforcement mechanism. The retired `serve_gate_*` tests go with it.
+
+> **Removal honesty (load-bearing).** This is a **mechanism supersession, not a discipline violation**:
+> no rule was removed (registry is 328 → 333, all additive + 2 strengthenings), and the property the
+> retired gate enforced is now enforced *more strongly* (survives restart) by the projection gate +
+> the extend-only durable admit. The retired gate's name still appears once in the registry — in
+> `DC-NODE-12`'s `evidence_notes`, documenting the supersession as historical context, not as a live
+> reference (`git grep` confirms no other live consumer at HEAD).
+
+> **CI/test drift on S2 (recorded honestly in the close record).** The cluster doc §8 originally named
+> a CE-5 gate `ci_check_forged_tip_recovery.sh` and a CE-6 test `forge_two_clean_runs_byte_identical`;
+> **neither was created literally.** S2 instead enforced replay-equivalence via the kill-recover
+> fingerprint-equality test (recovered fp == WAL-tail post_fp) — `T-REC-05` is recorded **test-enforced**
+> (`ci_script = ""`, with rationale) and `DC-WAL-04`'s no-orphan clause via
+> `warm_start_drops_orphan_block_above_wal_tail`. The invariants are enforced; the §8 CE *artifact
+> names* drifted during S2. This is surfaced in the §"Close-in-progress working tree" close record, not
+> hidden. (TRACEABILITY should record `T-REC-05` as test-only — no CI cell — when it refreshes.)
+
+> **Cross-reference (TRACEABILITY).** At HEAD the registry binds: `DC-NODE-12` →
+> `ci_check_forged_durable_admit_via_pump.sh` + `ci_check_node_run_loop_containment.sh`; `DC-CONS-23` +
+> `DC-WAL-04` → `ci_check_forged_durable_admit_via_pump.sh`; `T-REC-05` → `""` (test-enforced);
+> `DC-NODE-13` + `DC-NODE-11` → `ci_check_served_chain_projection.sh`; `CN-CONS-07` →
+> (its existing four gates, unchanged). The TRACEABILITY refresh for this window should cite the two
+> new gates, record `T-REC-05` as test-only, and drop the retired `ci_check_served_chain_stability.sh`
+> row.
 
 ## 6. Canonical Type Registry Delta
 
 **n/a — no separate canonical-type registry is configured** (`canonical_type_registry: null`);
-canonical-type rules live inline in the invariant registry under family **T**. **One new canonical type was introduced in this window** — the closed BLUE enum
-`ArrayHead = Definite(u64) | Indefinite` (`ade_network::codec::primitives`, G-M / CN-WIRE-11; the
-codec BLUE submodule count 38 → 39, total **457 → 458**). The other BLUE touches **add no type**:
-G-L `handshake::version_table` adds the `encode_n2n_version_params` fn; G-M also adds the
-`decode_array_head_two_form` fn; G-N `ade_ledger::seed_consensus_inputs` adds the `epoch_nonce`
-field + `SEED_CINPUT_SCHEMA_VERSION 1 → 2` bump — all extend existing types. No new
-`CoordinatorEvent` variant or field. The C1 evidence pass adds no type (it reuses the G-D
-`PrivateRehearsalManifest` envelope).
+canonical-type rules live inline in the invariant registry under family **T**. **No new canonical
+type was introduced in this window** (BLUE count unchanged, 458 → 458). The single BLUE touch
+(`ade_ledger::block_validity::header_input`, S3) adds **one function** — `pub fn block_header_bytes(&[u8])
+-> Result<&[u8], BlockValidityError>`, factored out of `accepted_block_header_bytes` so the serve
+projection can read `StoredBlock.bytes` directly — and **no `struct`/`enum`**; the header-projection
+recipe (`DC-CONS-18`) is byte-identical. The closed `ServedChainSource<'a>` enum added in S3 lives in
+the **RED** shell (`ade_runtime::network::serve_dispatch`), not a BLUE `core_paths` module, so it is
+not a BLUE canonical type; it is a runtime serve-source selector.
 
-## 7. Normative / Invariant Rule Delta (319 → 328)
+## 7. Normative / Invariant Rule Delta (328 → 333)
 
-**Nine rule IDs added, zero strengthenings recorded in-span, zero removed** (319 → 328). All nine new
-rules are committed **`enforced`** in this span (verified by reading the registry at `65954fa3`:
-each has `status = "enforced"`, `introduced_in` = its cluster, and a bound `ci_script`). **No
-`declared → enforced` close-flip is owed** — each rule was committed enforced at its cluster close.
+**Five rule IDs added, two strengthenings recorded in-span, zero removed** (328 → 333). All five new
+rules are committed **`enforced`** in this span (verified by reading the registry at HEAD: each has
+`status = "enforced"`, `introduced_in = "PHASE4-N-U"`, a bound `tests` array, and — except the
+test-enforced `T-REC-05` — a bound `ci_script`). **No `declared → enforced` close-flip is owed** —
+each rule was committed enforced at its slice.
 
 | Rule | Family / Tier | Introduced in | What it pins |
 |------|---------------|---------------|--------------|
-| `DC-NODE-09` | DC / `derived` | G-K | `--mode node` On-arm **serve-listener lifetime is decoupled from feed end** — serve outlives the live feed so a follower can dial/block-fetch past feed-end. `ci_script = ci/ci_check_node_serve_lifetime.sh`. |
-| `CN-WIRE-10` | CN / `derived` | G-L | Serve-side N2N handshake **per-version `versionData`** is the single authority, **NodeToNodeV_15 cardano-node-compatible** (live-confirmed). `ci_script = ci/ci_check_n2n_handshake_versiondata_authority.sh`. |
-| `CN-WIRE-11` | CN / `derived` | G-M | Served ChainSync **`FindIntersect`** is decoded (scoped indefinite-length CBOR) and answered with **`IntersectFound`/`Origin`** as the real node expects for a from-genesis follower. `ci_script = ci/ci_check_chainsync_findintersect_compat.sh`. |
-| `T-REC-04` | T / `true` | G-N | The recovered seed-epoch consensus surface is byte-faithful **including eta0** — eta0 is persisted in the seed-epoch sidecar (recovery-stable). `ci_script = ci/ci_check_warmstart_eta0_overlay.sh`. |
-| `DC-CINPUT-03` | DC / `derived` | G-N | On **WarmStart recovery** the recovered **eta0 is overlaid into the forge consensus surface**, so the follower's leader/VRF check uses the correct nonce (closes `VRFKeyBadProof`). `ci_script = ci/ci_check_warmstart_eta0_overlay.sh`. |
-| `CN-WIRE-12` | CN / `derived` | G-O | The **feed-side BlockFetch** path **unwraps the tag-24 (`#6.24`) envelope before decoding** the block body (closes `UnexpectedType`) — receive-side counterpart to the serve-side `CN-WIRE-08`. `ci_script = ci/ci_check_feed_tag24_unwrap.sh`. |
-| `DC-CINPUT-04` | DC / `derived` | G-P | The **feed-side header-validation (leader-threshold stake-distribution) view is built from the recovered consensus surface** (closes `VerificationFailed` at validation Step 5 + Step 7; enables live block-0 ingest). `ci_script = ci/ci_check_feed_leader_threshold_view.sh`. |
-| `DC-NODE-10` | DC / `derived` | G-Q | The **forge-successor position (tip / block_no) is read from the evolved admitted spine state** — block 1+ forges at the correct successor position, no stale-position crash. `ci_script = ci/ci_check_forge_successor_evolved_spine.sh`. |
-| `DC-NODE-11` | DC / `derived` | G-R | **Monotone serve gate** — the served chain head advances monotonically, so a from-genesis follower sees a **stable served block 0** and can adopt it. `ci_script = ci/ci_check_served_chain_stability.sh`. |
+| `DC-NODE-12` | DC / `derived` | PHASE4-N-U (S1) | **Own-forged durable admit chokepoint.** A self-accepted forged block may become durable ONLY via the **same** durable admit chokepoint received blocks use (`admit_forged_block_durably` → `forward_sync::pump_block`: `StoreBlockBytes → AppendWal → AdvanceTip`, durable-before-tip, behind the BLUE admit authority, extend-only). The forge has **no** second tip-advance path; bytes admitted durably are byte-identical to bytes `self_accept` validated. **Supersedes** the DC-NODE-05 "forged block is a local artifact only" consequence while **preserving** DC-NODE-05's deeper invariant (forge advances no durable tip directly; `pump_block` remains sole durable tip-advance authority). `ci_script = ci_check_forged_durable_admit_via_pump.sh` + `ci_check_node_run_loop_containment.sh`. |
+| `DC-CONS-23` | DC / `derived` | PHASE4-N-U (S1) | **Extend-only durable admit.** The durable admit is extend-only — a **stale-tip forge fails closed** inside `pump_block` via `block_validity` / prior-fp; there is no own-block override of the extend-only rule. `ci_script = ci_check_forged_durable_admit_via_pump.sh`; test `stale_tip_forge_fails_closed`. |
+| `DC-WAL-04` | DC / `derived` | PHASE4-N-U (S1 prior-fp clause, S2 no-orphan clause) | **WAL chaining + recovery reconciliation.** The forged-admit WAL entry **chains its prior fingerprint** (no re-encode break); and on `WarmStart` the WAL-tail reconciliation **drops a forged orphan above the WAL tail**. `ci_script = ci_check_forged_durable_admit_via_pump.sh`; tests `forged_admit_wal_prior_fp_chains`, `warm_start_drops_orphan_block_above_wal_tail`. |
+| `T-REC-05` | T / `true` | PHASE4-N-U (S2) | **Forged-tip crash-recovery replay-equivalence.** A forge-then-kill recovers the **byte-identical** durable tip via forward replay from the nearest snapshot ≤ tip + WAL-tail reconciliation (same checkpoint + same WAL → same post-state). **Test-enforced** (`ci_script = ""`); test `forge_kill_then_warm_start_recovers_same_tip_via_forward_replay`. |
+| `DC-NODE-13` | DC / `derived` | PHASE4-N-U (S3) | **Serve-as-durable-chain projection.** The `--mode node` served view (ChainSync header advertisement + BlockFetch body) is a deterministic **read-only projection of the durable ChainDb** (`ChainDbServedSource`), whose sole production writers are `pump_block` (`DC-NODE-12`) + the validated warm-start / genesis replay `bootstrap_initial_state` — serving cannot leak a byte that did not clear `block_validity`; a follower fetches coherent history A→B; **not** the retired in-memory `ServedChainSnapshot` accumulator. `ci_script = ci_check_served_chain_projection.sh`; tests `served_view_projects_durable_chain`, `follower_fetches_coherent_history_incl_ingested_predecessor`, `served_view_retires_accumulator`. |
 
-**No rule was removed (expected: 0); no in-span `strengthened_in` append was recorded** — the 319 →
-328 delta is nine purely-additive IDs, each `enforced` with a bound CI gate. Family spread: **6 DC**
-(`DC-NODE-09/10/11`, `DC-CINPUT-03/04`), **3 CN** (`CN-WIRE-10/11/12`), **1 T** (`T-REC-04`).
+**Strengthenings (`strengthened_in += "PHASE4-N-U"`):**
 
-## C1 evidence — genesis-successor rehearsal reproduction (`129d25ac`, `65954fa3`)
+| Rule | Family / Tier | Strengthening |
+|------|---------------|---------------|
+| `CN-CONS-07` | CN / `release` | **Serve-provenance clause.** The forge-self-accept gate's serve clause is **generalized from an in-memory-token proof to a durable-provenance proof**: when `--mode node` serves its adopted chain (forged AND received), the bytes are a read-only projection of the durable ChainDb whose sole production writers are `pump_block` + validated warm-start replay — a strict generalization of the N-G token-proof (the durable ChainDb is precisely where the `AcceptedBlock` + `AdmittedBlock` gate outputs land, durable-before-tip), **not** a relaxation. Prior `strengthened_in`: N-G, N-H, N-F-G-B. |
+| `DC-NODE-11` | DC / `derived` | **Mechanism superseded, invariant preserved + strengthened.** The G-R monotone serve-gate **mechanism** is superseded by serve-as-projection over the extend-only durable chain; the stability property is now a structural consequence (durable chain holds exactly one block 0, projection serves it stably) **and survives restart** (`T-REC-05`) — strictly stronger than the in-memory gate. `ci_script` repointed `ci_check_served_chain_stability.sh` → `ci_check_served_chain_projection.sh`; the `serve_gate_*` tests retired. The rule is **preserved + strengthened, not weakened**. |
 
-After G-R closed the genesis-successor leg, two commits bank the **C1 reproduction evidence** — **no
-source change** (`git diff --name-only 0d7624d4..65954fa3 -- 'crates/*/src/'` is empty); docs/evidence
-+ the one gate-glob extension only. **5 files, +322 / -5.**
+**No rule was removed (expected: 0).** The 328 → 333 delta is five purely-additive `enforced` IDs
+plus two `strengthened_in` appends. Family spread of the new rules: **3 DC** (`DC-NODE-12/13`,
+`DC-CONS-23`, `DC-WAL-04` — four DC IDs touched, one of which spans two slice clauses), **1 T**
+(`T-REC-05`). Registry status tally moves **196 → 201 enforced** (the five new IDs), partial **20**
+and declared **112** unchanged.
 
-- **`129d25ac`** — `docs: C1 genesis-successor rehearsal reproduction runbook (post-G-R, two-phase,
-  fidelity-fenced)`. A **two-phase, fidelity-fenced** operator runbook
-  (`docs/evidence/c1-genesis-rehearsal-reproduction-README.md`, +291) for reproducing the
-  G-R-demonstrated follower-adopts-block-0 run. "Fidelity-fenced" = it reuses the **same** `--mode
-  node` accepted/served path (no C1-only flag or from-genesis constructor), consistent with the
-  live-pass-path-fidelity discipline and `CN-REHEARSAL-FIDELITY-01`.
-- **`65954fa3`** — `evidence(c1): run-2 genesis-rehearsal reproduction + runbook flag fixes + gate
-  now covers c1 manifests`. Banks a **second recorded run** (`c1-genesis-rehearsal-{follower-run2.log,
-  manifest-run2.toml, peer-accept-run2.jsonl}`), fixes runbook flag strings, and **extends
-  `ci_check_rehearsal_manifest_schema.sh`** so its glob covers the C1 genesis-rehearsal manifests
-  (so the committed run-1 + run-2 manifests are schema-validated, not vacuous).
+## Close-in-progress working tree (uncommitted at HEAD `4e358e92`)
 
-**NARROW CLAIM (load-bearing).** The C1 evidence demonstrates the **genesis-successor leg
-reproducing in the C1 private-testnet rehearsal venue** (follower adopts an Ade-forged stable block
-0) across **two recorded runs**. It is **C1 rehearsal infrastructure**, validated under
-`CN-REHEARSAL-FIDELITY-01` non-promotability (`is_rehearsal = true`, `not_bounty_evidence = true`).
-It is **NOT** a preview/preprod bounty accept, flips **no** `RO-LIVE` rule, and is **not** bounty
-evidence. **Preview/preprod acceptance remains the single bounty deliverable**, captured separately;
-`RO-LIVE-01` / `RO-LIVE-06` stay operator-gated.
+The cluster **close record + slice-status flips are staged in the working tree, not yet committed** —
+this regen is the grounding-doc step of the close pass and runs *before* the close commit. `git status
+--short` at HEAD shows three modified docs (plus an untracked `.mithril-scratch/` scratch dir, ignored):
+
+- **`docs/clusters/PHASE4-N-U/cluster.md`** (+18 / −1) — the §13 **Close record**: marks **CLOSED
+  2026-06-05**, 3 slices merged, registry **328 → 333** (the five new rules `enforced` + the two
+  strengthenings), the per-CE mechanical results (incl. the honest S2 artifact-name drift note), the
+  IDD-reviewer **PASS** (one NIT, fixed in `4e358e92`) + cross-slice security **PASS** (no HIGH/CRITICAL),
+  and the two tracked follow-ons (below). The cluster-wide gate sweep records **0 S3-introduced
+  regressions** and **`cargo test --workspace --exclude ade_testkit` → 0 failed** (ade_testkit excluded
+  for the pre-existing ~600s corpus-suite timeout, environmental).
+- **`docs/clusters/PHASE4-N-U/S2-forged-tip-recovery.md`** (+1 / −1) — status `in progress → done`.
+- **`docs/clusters/PHASE4-N-U/S3-serve-as-durable-chain-projection.md`** (+1 / −1) — status `in
+  progress → done`.
+
+These are docs-only and complete the close; no source/CI/registry change remains in the working tree.
 
 ## Honest residual (window scope)
 
-This window closed eight clusters that each removed one concrete blocker on the C1
-genesis-successor follower path, plus banked the C1 reproduction evidence. The honest boundary:
+PHASE4-N-U made a forged block **durable, crash-recoverable, and coherently servable** through the
+same gate received blocks use. The honest boundary:
 
-- **A chain of NARROW, live-confirmed fixes — not a bounty accept.** Each of G-L…G-R confirms that
-  *the specific next-blocker error against the real `cardano-node` peer is gone* (handshake
-  `'unknown encoding'`, ChainSync FindIntersect, `VRFKeyBadProof`, feed `UnexpectedType`,
-  `VerificationFailed`, successor crash, served-head flap). Together they let a **C1 follower adopt
-  an Ade-forged block 0** in the rehearsal venue. None of this is preview/preprod acceptance.
-- **NO `RO-LIVE` flip; no bounty/preview/preprod claim.** No `RO-LIVE` rule was flipped in this
-  window. `RO-LIVE-01` / `RO-LIVE-06` stay operator-gated. The C1 genesis-successor rehearsal is
-  rehearsal infrastructure under `CN-REHEARSAL-FIDELITY-01`, **not** bounty evidence.
-- **C1, not preprod.** The live-confirmation venue is the **C1 private testnet** (operator-controlled
-  stake, fast leader rights), which is the rehearsal target. The bounty deliverable is
-  preview/preprod acceptance over a non-operator-controlled peer — a separate, still-owed capture.
-- **No durable long-chain progression demonstrated.** G-Q demonstrates **block 1+** (the first
-  stable successor, no crash) and G-R a stable served block 0; neither demonstrates a durable
-  many-block forged chain. That is downstream of a sustained accepted+served run.
-- **No BLUE-authority weakening.** The BLUE touches (G-L handshake, G-M chain-sync/codec, G-N
-  seed-consensus) weaken no codec authority — they extend existing wire/recovery surfaces to match
-  the real node (per-version version-data, scoped indefinite-length decode, eta0 in the recovered
-  surface). The one **new** type is G-M's closed enum `ArrayHead` (457 → 458, +1); G-L adds a fn and
-  G-N a field, no type. **+1 canonical-type delta (ArrayHead), 0 rule removals, 0 in-span
-  strengthenings.**
+- **Durability + coherent serve ≠ peer acceptance — NO `RO-LIVE` flip.** No `RO-LIVE` rule was flipped
+  in this window. `RO-LIVE-01` stays operator-gated. N-U enforces the forged-block durability
+  MECHANISM + recovery + serve-as-projection; it makes **no** preview/preprod bounty-accept claim and
+  demonstrates **no** operator-witnessed peer acceptance. The live C1/preprod leg stays a separate,
+  still-owed capture.
+- **Hermetic / in-crate evidence.** The recovery and serve tests are hermetic (in-crate kill-recover,
+  loopback serve); the C1 genesis-rehearsal mechanical regression is preserved (a follower still
+  adopts the served block 0, now via the durable projection — `served_view_projects_durable_chain`),
+  but the **live** C1 rerun stays operator-gated.
+- **No durable long-chain progression demonstrated.** N-U proves N+1 builds from the durable tip and a
+  forged block survives one kill-recover cycle byte-identically; it does **not** demonstrate a
+  sustained many-block forged chain over a real peer. That is downstream of an operator-witnessed run.
+- **Two tracked follow-ons (non-blocking now; before any large-chain live serve).** Recorded in the
+  close record, both reinforce the no-live-serve claim:
+  - **[MEDIUM]** `ChainDb::iter_from_slot` (pre-existing, `chaindb/persistent.rs`) materializes the
+    full range + O(N²) hash recovery, and the serve path has **no per-request range cap** →
+    per-request availability amplification on a long chain. Needs a streaming iterator +
+    max-blocks-per-range bound before any large-chain live serve.
+  - **[LOW]** > 64 KB block bodies cannot be served (session encoder does not segment payloads >
+    `MAX_PAYLOAD` 65 535 B → drops the peer, fail-closed); unbounded inbound accept in
+    `run_node_serve_task` (pre-existing shared infra).
+- **No BLUE-authority weakening.** The one BLUE touch (`block_header_bytes` extraction) is a
+  byte-identical refactor of the `DC-CONS-18` header-projection recipe — same wire bytes, one new fn,
+  no new type. The retired `ci_check_served_chain_stability.sh` is a **mechanism supersession**, not a
+  rule removal — the stability property is now enforced more strongly (survives restart) by the
+  projection gate over the extend-only durable admit. **0 canonical-type delta, 0 rule removals, +2
+  in-span strengthenings, +5 new enforced rules.**
 
 ---
 
-## Historical — PHASE4-N-F-G-J window (`13028d49 → 550eec3a`)
+## Historical — PHASE4-N-F-G-K … G-R + C1 window (`550eec3a → 65954fa3`)
 
-> The section below is the **previous** HEAD_DELTAS lead, preserved in condensed form. It narrated the
-> **PHASE4-N-F-G-J** cluster (`13028d49..550eec3a`) — genesis-successor block correctness. The
-> **G-J close-pass** commit (`487bd829`) that completed it is the first commit of *this* window's
-> span (see §3, "G-J close-pass"). Counts in this Historical section are the G-J figures (319 rules,
-> 126 CI gates, 2284 tests at `550eec3a`); this window measures **forward** from `550eec3a`. The full
-> G-J §§0–8 narrative (and the G-D window before it) is recoverable from this doc's git history at
-> `550eec3a`.
+> The section below is the **previous** HEAD_DELTAS lead, preserved in condensed form. It was a
+> **multi-cluster catch-up** narrating the `550eec3a..65954fa3` span — the PHASE4-N-F-G-J close-pass +
+> eight clusters (G-K through G-R) + the C1 genesis-successor rehearsal reproduction evidence. Counts in
+> this Historical section are the figures **at `65954fa3`** (328 rules, 134 CI gates, 458 canonical
+> types); the current window measures **forward** from `65954fa3`. The full G-K…C1 §§0–7 narrative (and
+> the G-J window before it) is recoverable from this doc's git history at `65954fa3`.
 
-> Baseline: `13028d49` (Close PHASE4-N-F-G-I — shared admission bootstrap persists seed-epoch anchor lineage, 2026-06-03 12:27)
-> HEAD: `550eec3a` (C1 genesis-successor rehearsal harness — PHASE4-N-F-G-J S5, 2026-06-03 22:02)
-> Cluster: **PHASE4-N-F-G-J — genesis-successor block correctness** (empty-feed forge scheduling → null PrevHash wire authority → position rule → cold-start reachability → C1 genesis rehearsal harness), slice span closed; close-pass commit `487bd829` (first commit of the current window).
-> 17 commits (no merges), 48 files changed, +3587 / -84 lines.
+> Baseline: `550eec3a` (PHASE4-N-F-G-J close — last state the grounding docs reflected, 2026-06-03 22:02)
+> HEAD: `65954fa3` (run-2 genesis-rehearsal reproduction + runbook flag fixes + gate now covers c1 manifests, 2026-06-04 23:32)
+> Span: **G-J close-pass → G-K, G-L, G-M, G-N, G-O, G-P, G-Q, G-R → C1 genesis-successor rehearsal evidence** — 28 commits, 73 files, +4967 / −243.
 
-This window narrated the **PHASE4-N-F-G-J cluster** — **genesis-successor block correctness** on the
-`--mode node` spine. The cluster answered one structural question: *can the node legitimately forge
-and serve the FIRST block of a from-genesis chain — the genesis-successor — with the CORRECT wire
-shape and the CORRECT cold-start permission?* It did so across **five slices**, walking inward from a
-diagnostic surface to the BLUE wire grammar and back out to a path-faithful rehearsal harness:
+This window was a **multi-cluster catch-up**. Ade closed **eight clusters** (G-K through G-R) plus a
+G-J **close-pass** and a C1 **genesis-successor rehearsal evidence** pass, each peeling off the next
+concrete blocker on the path to a live C1 genesis-successor follower adopting an Ade-forged block 0
+over a real `cardano-node` peer. The chain: serve-listener lifetime (G-K, `DC-NODE-09`) → real-node
+**handshake** compat (G-L, `CN-WIRE-10`) → real-node **ChainSync FindIntersect** compat (G-M,
+`CN-WIRE-11`, + the closed BLUE enum `ArrayHead = Definite(u64) | Indefinite`, the window's only +1
+canonical type, 457 → 458) → recovered-eta0 **WarmStart** so the follower's leader check stops failing
+(G-N, `T-REC-04` + `DC-CINPUT-03`) → feed-side **tag-24 unwrap** so block-fetch payloads decode (G-O,
+`CN-WIRE-12`) → feed-side **leader-threshold view** so the follower validates + ingests block 0 (G-P,
+`DC-CINPUT-04`) → **forge-successor position** from the evolved admitted spine so the node survives
+past block 0 (G-Q, `DC-NODE-10`) → **stable served block 0** via a monotone serve gate so the follower
+adopts it (G-R, `DC-NODE-11`, gate `ci_check_served_chain_stability.sh`) → and finally the C1
+**reproduction evidence** (two recorded runs).
 
-- **S1 (`60303079`) — emit-only feed/forge scheduling events.** New **GREEN**
-  `ade_node::live_log::sched_event` (a closed, fail-closed-on-unknown JSONL event vocabulary —
-  `feed_unavailable{reason}`, `forge_tick_considered`, `forge_tick_skipped`, `forge_attempted`,
-  `forge_result`, all with closed reason/outcome enums and **no** catch-all variant) + new **GREEN**
-  `ade_node::live_log::sched_writer`. The closed S1 reason set is exactly three —
-  `NoBlockAvailable` and `CleanEmpty` are forge-**eligible**; `UnknownDisconnected` is **INELIGIBLE**
-  (fail-closed-on-ambiguity). **Emit-only.** New gate `ci_check_node_sched_events_emit_only.sh`
-  (later hardened by `36b2216f`). New rule **`CN-NODE-04`** (`enforced`).
-- **S2 (`3b24c572`) — PrevHash null/hash32 wire authority.** New **BLUE** canonical sum type
-  `PrevHash = Genesis | Block(Hash32)` in `ade_types` + the **POSITION-BLIND** `$hash32 / null`
-  codec in `ade_codec`. New gate `ci_check_prevhash_single_wire_authority.sh`. Backs **`CN-WIRE-09`**
-  clause 1.
-- **S3 (`0c1939a1`) — genesis-successor position rule + genesis forge.** New **BLUE**
-  `ade_ledger::block_validity::header_position` (`block_number 0 ⟺ PrevHash::Genesis`). Producer
-  `prev_hash` migrated **`Hash32` → `PrevHash` end-to-end**. Backs **`CN-WIRE-09`** clause 2.
-- **S4 (`3df8bd4f`) — node-spine cold-start first-block reachability.** **GREEN**
-  `forge_header_position` + a `may_cold_start_forge` permission gate; the genesis-successor forge
-  fires EXACTLY ONCE from the recovered seed-epoch lineage. New gate
-  `ci_check_genesis_successor_reachability.sh`. New rule **`DC-NODE-08`** (`enforced`).
-- **S5 (`550eec3a`) — C1 genesis-successor rehearsal harness.** A path-faithful, **non-promotable**
-  rehearsal harness reusing `ba02_evidence::correlate` + the G-D `PrivateRehearsalManifest` envelope
-  verbatim. The G-D rehearsal gate `ci_check_rehearsal_manifest_schema.sh` **extended in place**.
-  **`CN-REHEARSAL-FIDELITY-01`** gained `strengthened_in += PHASE4-N-F-G-J`.
+Each of G-L…G-R made a **NARROW, live-confirmed** structural claim — "live-confirmed" meaning *the
+specific failure that gated the follower is gone against the real preprod/C1 peer* — but **no**
+bounty/preprod-accept claim and **no** `RO-LIVE` flip; `RO-LIVE-01` / `RO-LIVE-06` stayed
+operator-gated, and the C1 genesis rehearsal was banked under `CN-REHEARSAL-FIDELITY-01`
+non-promotability (`is_rehearsal = true`, `not_bounty_evidence = true`), **not** bounty evidence.
 
-**G-J headline (at `550eec3a`):** CI gates **123 → 126** (+3 new + 1 modified in place); registry
-**316 → 319** (+3 new `CN-NODE-04`, `CN-WIRE-09`, `DC-NODE-08`; 1 strengthening
-`CN-REHEARSAL-FIDELITY-01`); BLUE canonical types **456 → 457** (+1 `PrevHash`); tests **2245 →
-2284**. **NARROW CLAIM:** G-J enforced the genesis-successor forge MECHANISM + wire AUTHORITY +
-rehearsal HARNESS — **not** a live C1 accepted block, **no** `RO-LIVE` flip, **no** BLUE-authority
-weakening (the `Block`-path wire encoding is byte-identical after the `Hash32 → PrevHash` migration).
-The live C1 genesis rehearsal stayed `blocked_until_operator_c1_genesis_successor_rehearsal` — the
-work the current window's G-K…C1 clusters then carried forward toward a real C1 follower.
+**G-K…C1 headline (at `65954fa3`):** CI gates **126 → 134** (+8 new, one per cluster G-K…G-R, +
+`ci_check_rehearsal_manifest_schema.sh` modified in place for C1, 0 removed); registry **319 → 328**
+(+9 new — `DC-NODE-09`, `CN-WIRE-10`, `CN-WIRE-11`, `T-REC-04`, `DC-CINPUT-03`, `CN-WIRE-12`,
+`DC-CINPUT-04`, `DC-NODE-10`, `DC-NODE-11`, all `enforced`; 0 strengthenings; 0 removed); BLUE
+canonical types **457 → 458** (+1 `ArrayHead`); tests **2305 → 2324** (broad grep). **No new module**
+in that window (every code change extended an existing module; new `.rs` files were test
+fixtures/captures). **Note:** the G-R gate `ci_check_served_chain_stability.sh` introduced in that
+window is **retired in the current PHASE4-N-U window** (mechanism superseded by serve-as-projection —
+see §5), and `DC-NODE-11` is strengthened there.
 
 > *(The G-E…G-I leads were never re-led in HEAD_DELTAS — each was closed with its own grounding-doc
-> refresh and lives in its own close-pass commit + the registry; they are not reconstructed here.
-> This catch-up regen preserves the G-J lead in condensed form and measures the new
-> `550eec3a..65954fa3` span above.)*
+> refresh and lives in its own close-pass commit + the registry; they are not reconstructed here. The
+> G-J lead before that is recoverable from this doc's git history at `65954fa3`.)*
 
 ---
 
 ## Generation notes
 
-### Regen `550eec3a → 65954fa3` (G-K…G-R + C1 catch-up — current lead)
+### Regen `65954fa3 → 4e358e92` (PHASE4-N-U — current lead)
 
-- **Explicit span, NOT the config baseline.** This regen was run against the **explicit**
-  `550eec3a..65954fa3` span. The `.idd-config.json` `head_deltas_baseline` at this regen is
-  **`853344f7`**, which is **stale and mislabeled**: `853344f7` is mid-cluster **G-L S2** (the
-  `feat(network): serve-side N2N handshake emits per-version versionData` impl), and its config note
-  wrongly calls it the "G-K close." Measuring from it would silently drop the **G-J close-pass
-  `487bd829`** and **all of cluster G-K (`DC-NODE-09`)**. The correct baseline is **`550eec3a`** —
-  the G-J slice-span HEAD the four grounding docs were last regenerated against — so the delta is
-  gap-free. The close-pass should bump `head_deltas_baseline` `853344f7 → 65954fa3` (and update the
-  stale `_invariant_registry_doc` "321 entries" comment to **328**).
-- **Multi-cluster catch-up (NOT a single-cluster lead).** This is a deliberate catch-up: eight closes
-  (G-K…G-R) + a G-J close-pass + a C1 evidence pass landed since the docs were last regenerated.
-  Structured as a per-cluster narrative (§3 + §"C1 evidence"), oldest→newest within the span ordering,
-  rather than the usual single-cluster lead.
-- Counts are mechanical (git/grep/ls only, no cargo): commit log + `--shortstat` over
-  `550eec3a..65954fa3` (**28** commits, no merges / **73** files / **+4967 / -243**); CI gate count
-  via `git ls-tree -r --name-only <ref> ci/ | grep -c 'ci_check_.*\.sh'` at each ref (**126 → 134**,
-  **+8 new** — one per cluster G-K…G-R — plus `rehearsal_manifest_schema` **modified in place** by
-  the C1 evidence commit; `--diff-filter=A` over `ci/` lists exactly the eight new gates,
-  `--diff-filter=M` lists only `rehearsal_manifest_schema`, `--diff-filter=D` is empty); registry
-  rule count via `grep -c '^\s*id\s*='` at each ref (**319 → 328**; `comm` of sorted id lists shows
-  exactly nine adds — `DC-NODE-09`, `CN-WIRE-10`, `CN-WIRE-11`, `T-REC-04`, `DC-CINPUT-03`,
-  `CN-WIRE-12`, `DC-CINPUT-04`, `DC-NODE-10`, `DC-NODE-11` — and **zero** removals, no duplicates);
-  workspace test attributes via `git grep -hE '#\[(tokio::)?test'` over `crates/**/*.rs` + top-level
-  `*.rs` (**2305 → 2324**, +19).
-- **All nine new rules committed `enforced` in-span (NO close-flip owed).** Verified by reading the
-  registry at `65954fa3`: each of the nine IDs is `status = "enforced"`, `introduced_in` = its
-  cluster (G-K…G-R), with a bound `ci_script`; **none** records an in-span `strengthened_in` append,
-  and a grep for `strengthened_in` tokens `PHASE4-N-F-G-[K-R]` over the HEAD registry returns empty.
-- **No new module, +1 new canonical type, no Cargo.toml change.**
-  `git diff --diff-filter=A --name-only 550eec3a..65954fa3 -- 'crates/*/src/'` is empty (no new source
-  FILE; new `.rs` files are test fixtures / capture-replay tests) — but G-M adds a new BLUE *type*
-  inside an existing file: the closed enum `ArrayHead = Definite(u64) | Indefinite` in
-  `ade_network/src/codec/primitives.rs` (457 → 458). The `--diff-filter=A` file check does **not**
-  catch a type added to an existing file — canonical-type deltas must be verified by introspecting
-  `struct`/`enum` definitions over the BLUE `core_paths`, not by new-file diff. `git diff --name-only
-  550eec3a..65954fa3 -- '**/Cargo.toml' 'Cargo.toml'` is empty (no feature-flag delta). The other BLUE
-  touches (G-L `ade_network::handshake` `encode_n2n_version_params` fn, G-N
-  `ade_ledger::seed_consensus_inputs` `epoch_nonce` field — all `core_paths` per `.idd-config.json`)
-  extend existing types and add no type.
-- **Cluster-doc archival state (observation, not a blocker).** At HEAD `65954fa3`, the **G-J / G-K /
-  G-L** cluster docs are archived under `docs/clusters/completed/`, but the **G-M / G-N / G-O / G-P /
-  G-Q / G-R** cluster docs are still at `docs/clusters/PHASE4-N-F-G-X/` (not yet moved to
-  `completed/`). This is a docs-housekeeping residual, not a rule/CI/test discrepancy — all nine
-  rules are `enforced` and all gates are on disk regardless. The next `/cluster-close` housekeeping
-  pass should archive the six unmoved cluster docs.
-- **Sibling-doc coherence (catch-up).** At the prior baseline `550eec3a` the four grounding docs were
-  G-J-current (319 rules / 126 CI / 2284 tests). The CODEMAP / SEAMS / TRACEABILITY refresh for
-  G-K…G-R + C1 is committed alongside this HEAD_DELTAS in the catch-up close-pass and should read
-  **328 rules / 134 CI checks** at HEAD. **No rule removal, not a discipline violation** — the +9
-  rules / +8 gates are all additive and `enforced`. The next gating work remains the
-  **operator-witnessed bounty live pass** (preview/preprod acceptance over a non-operator-controlled
-  peer), **not advanced by this window** — which ships only the C1 genesis-successor follower path +
-  its rehearsal reproduction evidence ahead of it.
+- **Baseline valid; single-cluster lead.** Run against the config baseline `65954fa3` (the prior
+  G-K…G-R + C1 catch-up close), which `git rev-parse` resolves and `git merge-base 65954fa3 HEAD`
+  confirms is a strict ancestor of HEAD. The span is the single cluster **PHASE4-N-U** plus the
+  G-K…G-R grounding-doc catch-up tail (`08b64ffc`, the docs refresh that followed the prior baseline
+  commit) and the close-in-progress working tree. The closer bumps `head_deltas_baseline`
+  `65954fa3 → 4e358e92` after this regen.
+- **Counts are mechanical (git/grep/ls only, no cargo):** commit log + `--shortstat` over
+  `65954fa3..HEAD` (**14** commits, no merges / **28** files / **+3726 / −1802**); CI gate count via
+  `git ls-tree -r --name-only <ref> ci/ | grep -c 'ci_check_.*\.sh'` at each ref (**134 → 135**;
+  `--diff-filter=A` over `ci/` = the two new gates, `--diff-filter=D` = exactly
+  `ci_check_served_chain_stability.sh`, `--diff-filter=M` = the three extended gates); registry rule
+  count via `grep -cE '^\s*id\s*='` at each ref (**328 → 333**; `comm` of sorted id lists shows
+  exactly five adds — `DC-NODE-12`, `DC-WAL-04`, `T-REC-05`, `DC-CONS-23`, `DC-NODE-13` — and **zero**
+  removals); registry status via `grep -E '^status = ' | sort | uniq -c` at HEAD (**201 enforced / 20
+  partial / 112 declared**); workspace test attributes via `git grep -hE '#\[(tokio::)?test'` over
+  `crates/**/*.rs` + top-level `*.rs` (**2324 → 2334**, +10 broad-grep).
+- **All five new rules committed `enforced` in-span (NO close-flip owed); 2 strengthenings.** Verified
+  by reading the registry at HEAD: each of the five IDs is `status = "enforced"`, `introduced_in =
+  "PHASE4-N-U"`, with bound `tests` (and a bound `ci_script` except the test-enforced `T-REC-05`,
+  `ci_script = ""`). Two strengthenings recorded — `CN-CONS-07` (`strengthened_in` now
+  `[N-G, N-H, N-F-G-B, PHASE4-N-U]`) and `DC-NODE-11` (`strengthened_in = [PHASE4-N-U]`, `ci_script`
+  repointed to the new projection gate).
+- **One new module, +0 canonical type, no Cargo.toml change.** `git diff --name-status 65954fa3..HEAD`
+  shows **`A crates/ade_runtime/src/network/served_chain_projection.rs`** (RED; absent at baseline per
+  `git cat-file -e`). **Caution:** `git diff --diff-filter=A --name-only … 'crates/*/src/'` returns
+  empty (one-level glob misses the two-level `…/network/served_chain_projection.rs`) — verify new
+  modules with `--name-status` over the full changed set, not a one-level glob. The BLUE touch
+  (`block_header_bytes` extraction) adds **one function, no type** (458 → 458 unchanged); the new
+  `ServedChainSource` enum is RED (`serve_dispatch.rs`), not a BLUE canonical type. `git diff
+  --name-only … '**/Cargo.toml' 'Cargo.toml'` is empty (no feature-flag delta; no `[features]` table
+  exists workspace-wide).
+- **CI removal is a mechanism supersession, NOT a discipline violation.** `ci_check_served_chain_stability.sh`
+  is retired because its stability property is now a structural consequence of serve-as-projection over
+  the extend-only durable chain (`DC-NODE-13` + `DC-CONS-23` + `T-REC-05`); `DC-NODE-11` is preserved +
+  strengthened (its `ci_script` repointed to `ci_check_served_chain_projection.sh`). The `serve_gate_*`
+  tests retired with it. No rule was removed.
+- **S2 CE-artifact-name drift recorded, not hidden.** The §8-named CE-5 gate
+  `ci_check_forged_tip_recovery.sh` + CE-6 test `forge_two_clean_runs_byte_identical` were **not created
+  literally**; `T-REC-05` is **test-enforced** (`ci_script = ""`) via the kill-recover fingerprint test,
+  `DC-WAL-04` no-orphan via `warm_start_drops_orphan_block_above_wal_tail`. The invariants are enforced;
+  the CE *artifact names* drifted. Surfaced in the §"Close-in-progress working tree" close record.
+- **Sibling-doc coherence — EXPECTED catch-up, not staleness.** At HEAD `4e358e92` CODEMAP / SEAMS /
+  TRACEABILITY are still pinned at the prior G-K…G-R catch-up close (328 rules / 134 CI / 458 types; none
+  mention the new module or the five new rules). **This HEAD_DELTAS is the first of the four docs to
+  advance to the N-U HEAD** — the matching CODEMAP/SEAMS/TRACEABILITY refresh is part of this same close
+  pass and must bring them to **333 rules / 135 CI checks** (+ the new module in CODEMAP §RED, the five
+  new rules + two strengthenings in TRACEABILITY, the retired gate dropped). A sibling reading 328/134
+  at this instant is mid-close, not silently stale.
+- **Close-in-progress working tree.** This regen ran *before* the close commit: the cluster.md §13 close
+  record + the S2/S3 status flips are staged in the working tree (docs-only; see the dedicated section).
+  The untracked `.mithril-scratch/` is operator scratch, ignored.

@@ -3,7 +3,7 @@
 ## §2 Slice Header
 - **Slice Name:** forged-tip crash recovery + replay-equivalence
 - **Cluster:** PHASE4-N-U — primary invariant DC-NODE-12 (S2 enforces T-REC-05 + the DC-WAL-04 no-orphan clause)
-- **Status:** in progress
+- **Status:** done — S2 complete + merged (`985bf966` doc, `232071f7` reconciliation+DC-WAL-04 no-orphan, `f7e38712` forward-replay+T-REC-05); T-REC-05 + DC-WAL-04 → enforced
 - **Cluster Exit Criteria Addressed:** **CE-5** (T-REC-05 + DC-WAL-04 no-orphan — production `warm_start_recovery` recovers a forged-block durable tip byte-identically; WAL-tail reconciliation drops an un-WAL'd forged orphan), **CE-6** (T-REC-05 replay — two clean forge-runs → byte-identical durable outputs).
 
 ## §3 Dependencies

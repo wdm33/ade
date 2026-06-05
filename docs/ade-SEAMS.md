@@ -3,10 +3,90 @@
 > **Status:** Living architectural document. Regenerated; not hand-edited.
 > Per-project instance of `~/.claude/methodology/templates/seams.md`.
 
-> 11 crates, **458 canonical types**, **134 CI checks** at HEAD (`65954fa3`, multi-cluster catch-up: PHASE4-N-F-G-K…G-R + C1 evidence).
+> 11 crates, **458 canonical types**, **135 CI checks** at HEAD (`4e358e92`, PHASE4-N-U cluster close — forged-block durability).
 > Reads CODEMAP (`docs/ade-CODEMAP.md`, regenerated at the same HEAD) for the module
 > list + TCB colors, and the invariant registry (`docs/ade-invariant-registry.toml` —
-> **328 entries** at HEAD) for the rule IDs that gate each closed surface.
+> **333 entries** at HEAD) for the rule IDs that gate each closed surface.
+>
+> ### PHASE4-N-U cluster close (`4e358e92`) — forged-block durability: own-tip durable admit + warm-start recovery + serve-as-projection of the durable ChainDb
+
+>
+> **This regeneration is a single-cluster cluster-close refresh.** The prior on-disk SEAMS was pinned at the
+> PHASE4-N-F-G-K…G-R catch-up (`65954fa3` / **458** canonical types / **134** CI / **328** rules). It is brought
+> current to the CODEMAP regenerated at the same HEAD (`4e358e92` / **458** canonical types / **135** CI / **333**
+> rules), splicing the **single closed cluster PHASE4-N-U** (forged-block durability — full producer own-tip
+> advance). **The net BLUE delta is ZERO new canonical types and ZERO new BLUE authorities** — the lone BLUE touch
+> is the additive `ade_ledger::block_validity::header_input::block_header_bytes(block_cbor: &[u8]) -> Result<&[u8],
+> BlockValidityError>`, factored out of the existing `accepted_block_header_bytes` (which now delegates
+> `block_header_bytes(accepted.as_bytes())`) — the SAME single DC-CONS-18 header-projection authority, generalized
+> from `&AcceptedBlock` to `&[u8]` so the durable-chain serve projection can read `StoredBlock.bytes` directly; no
+> new logic, no new type, no parallel splitter. Everything else is **RED wiring** on the `--mode node` spine. The
+> seam-relevant additions — classified under §3 Closed / §3 Extensible (a SECOND impl of an existing closed trait
+> seam) / §7 (one declared seam CLOSED, one prior seam RETIRED) — are:
+>
+> - **NEW CLOSED read-source selector `ServedChainSource { Snapshot | DurableChainDb }`** (`ade_runtime::network::serve_dispatch`
+>   (RED); **DC-NODE-07 PRESERVED**) — a closed 2-variant enum read by the SINGLE serve-dispatch authority
+>   `dispatch_server_frame_event_to_outbound`. `Snapshot(&ServedChainView)` is the `--mode produce` in-memory
+>   accumulator path; `DurableChainDb(&dyn ChainDb)` is the `--mode node` durable-chain projection (NEW in N-U).
+>   **ONE dispatch, two read sources** — the serve authority does not fork; the source enum selects which read-side
+>   the single dispatch reads from. **A closed read-source selector (a surface REDUCTION), NOT an extension point.**
+>   Classified under §3 Closed; no new serve authority, no second dispatch (`ci_check_served_chain_projection.sh`).
+> - **NEW SECOND IMPL of the closed serve seams — `ChainDbServedSource`** (`ade_runtime::network::served_chain_projection`
+>   (RED, `//! RED`); **DC-NODE-13**) — a NEW RED module implementing the EXISTING BLUE serve seams
+>   `ServedHeaderLookup` (`ade_network::chain_sync::server`) / `ServedRangeLookup` (`ade_network::block_fetch::server`)
+>   over the durable ChainDb (`iter_from_slot` / `get_block_by_hash` / `tip`). It is a **second impl of those trait
+>   seams ALONGSIDE the produce-mode `ServedChainLookups`** (the snapshot impl, `ade_runtime::producer::served_chain_lookups`).
+>   These two trait seams remain **THE closed read-side extension surface for the serve reducers** — a new served
+>   read-side attaches by implementing them (see §3 Extensible). `ChainDbServedSource` serves `stored.bytes`
+>   VERBATIM (no re-encode — DC-CONS-17), reuses the single `block_header_bytes` header-projection authority
+>   (DC-CONS-18) + `decode_block` (NO parallel splitter, NO `AcceptedBlock` reconstruction). Provenance is
+>   structural (CN-CONS-07 serve clause): every byte is `StoredBlock.bytes` from the durable ChainDb whose sole
+>   production writers are `pump_block` (DC-NODE-12) + the validated `bootstrap_initial_state` — serving cannot
+>   leak a byte that did not clear `block_validity`.
+> - **REUSES the single durable tip authority — `admit_forged_block_durably` → `pump_block`** (`ade_node::node_sync`
+>   (RED); **DC-NODE-12 / DC-CONS-23 / DC-WAL-04**) — the forge's own self-accepted block (`accepted.into_bytes()`,
+>   byte-identical to the self-accept input — no re-encode, I-10) is fed into the SAME `forward_sync::pump_block`
+>   chokepoint received blocks use (extend-only `admit_via_block_validity` → StoreBlockBytes → AppendWal →
+>   AdvanceTip, durable-before-tip). The forge gains **NO** direct tip-advance path (`pump_block` stays the sole
+>   durable tip authority), **NO** `NodeBlockSource` variant, **NO** new `WalEntry` variant (it reuses
+>   `WalEntry::AdmitBlock`); a stale-tip forge fails closed via header-position / `prior_fp`, never an own-block
+>   override. **NOT a new chokepoint** — a REUSE of the closed `pump_block` durable tip authority.
+> - **WarmStart recovery extended — forged-tip recovery + no-orphan drop** (`ade_node::{node_sync, node_lifecycle}`
+>   (RED); **T-REC-05 / DC-WAL-04**) — production `warm_start_recovery` gains WAL-tail reconciliation +
+>   forward-replay-from-sub-tip-snapshot (reusing the BLUE `bootstrap_initial_state` forward-replay authority), so
+>   a forged-block durable tip (which captures no snapshot-at-tip — rides DC-STORE-07) recovers byte-identically;
+>   a torn forge-admit crash drops the un-WAL'd orphan; a recovered fp ≠ WAL-tail `post_fp` is a deterministic
+>   fail-fast (`WarmStartWalTailFingerprintMismatch`). T-REC-05 is **test-enforced** (the kill-recover
+>   fingerprint-equality tests `forge_kill_then_warm_start_recovers_same_tip_via_forward_replay` +
+>   `warm_start_drops_orphan_block_above_wal_tail`; `T-REC-05.ci_script = ""`).
+>
+> **Registry → 333 rules** (FIVE NEW, all `introduced_in = "PHASE4-N-U"`, all `enforced`: `DC-NODE-12` (own-forged
+> durable admit via the single `pump_block` chokepoint), `DC-CONS-23` (extend-only durable admit / stale-tip
+> fail-closed), `DC-WAL-04` (forged WAL `prior_fp` chaining + no-orphan recovery), `T-REC-05` (**tier = true**,
+> forged-tip recovery byte-identity + replay-equivalence — test-enforced, `ci_script = ""`), `DC-NODE-13`
+> (serve-as-projection of the durable chain). TWO strengthened: `CN-CONS-07` (serve-provenance clause →
+> durable-provenance), `DC-NODE-11` (monotone-serve-gate MECHANISM superseded by serve-as-projection; the
+> invariant *a follower sees a stable, coherent served block 0* is preserved + strengthened — it now survives
+> restart). **No rule weakened.** **NET +1 CI gate (134 → 135): +2 NEW** (`ci_check_forged_durable_admit_via_pump.sh`
+> S1 / DC-NODE-12 + DC-CONS-23 + DC-WAL-04; `ci_check_served_chain_projection.sh` S3 / DC-NODE-13), **−1 RETIRED**
+> (`ci_check_served_chain_stability.sh`, the G-R DC-NODE-11 monotone-serve-gate mechanism superseded). The S1 also
+> EXTENDED `ci_check_node_run_loop_containment.sh` in place (allow-list for the one `admit_forged_block_durably`
+> driver call; no count change).
+>
+> **Boundary honesty (load-bearing — do NOT soften / do NOT broaden).** N-U makes own-forged blocks **durable**,
+> **recoverable**, and **coherently servable** — and **nothing more**. There is **NO second durable tip-advance
+> path** (the forged block goes THROUGH `pump_block`; no forge-specific `put_block` / `AdvanceTip` / `rollback`);
+> **NO admit-time fork-choice** (the durable admit is extend-only — `select_best_chain` / `fork_choice` are NOT on
+> this path; DC-CONS-03 stays the follow/`chain_selector` authority, cross-ref only); **NO re-encode**
+> (`accepted.into_bytes()` verbatim); **NO `AcceptedBlock` reconstruction** in the serve projection (it reads raw
+> `stored.bytes` + `block_header_bytes(&[u8])`); **NO re-validation shortcut** (provenance is structural: durable
+> ChainDb ⇐ `pump_block` ⇐ `block_validity`); **NO new BLUE authority or canonical type**; and **NO RO-LIVE flip**
+> — durability + coherent serve ≠ operator-witnessed peer acceptance (`RO-LIVE-01` stays `partial` /
+> operator-gated). **Honest drift (recorded at close, NOT a gap):** the S2 §8-named gate
+> `ci_check_forged_tip_recovery.sh` and the §8-named test `forge_two_clean_runs_byte_identical` were **not created
+> literally** — S2 enforced T-REC-05 + DC-WAL-04(no-orphan) via the kill-recover fingerprint-equality tests named
+> above (in `cargo test -p ade_node`), and the registry records `T-REC-05.ci_script = ""` (test-enforced). The
+> invariants are enforced; the §8 CE artifact names drifted during S2.
 >
 > ### PHASE4-N-F-G-K … G-R + C1 evidence (catch-up, `65954fa3`) — serve-side real-node compat + feed decode/view fidelity + forge-successor + monotone serve gate + recovered eta0
 >
@@ -1802,7 +1882,8 @@ nowhere.**
 |-------|--------|-------|------|
 | **Authoritative admit** | `ade_ledger::producer::served_chain::served_chain_admit` | BLUE | Sole entry into the served index; only self-accepted blocks (CN-PROD-04). |
 | **Atomic publisher** | `ade_runtime::producer::served_chain_handle::push_atomic` | RED (GREEN-by-content glue) | Wraps `served_chain_admit` in `watch::Sender::send_modify` — no torn snapshot. |
-| **Read-side serve** | `ade_network::block_fetch::server::producer_block_fetch_serve` | BLUE | Serves a `RequestRange` only if endpoints + every intervening block are present; emits the tag-24 composition (N-X). |
+| **Read-side serve (snapshot — `--mode produce`)** | `ade_network::block_fetch::server::producer_block_fetch_serve` over `ade_runtime::producer::served_chain_lookups::ServedChainLookups` | BLUE reducer / RED impl | Serves a `RequestRange` only if endpoints + every intervening block are present; emits the tag-24 composition (N-X). The snapshot impl of the closed serve seams. |
+| **Read-side serve (durable projection — `--mode node`, N-U)** | `ade_network::{chain_sync,block_fetch}::server` over `ade_runtime::network::served_chain_projection::ChainDbServedSource` | BLUE reducers / RED impl | The `--mode node` served view as a READ-ONLY projection of the durable ChainDb (`iter_from_slot` / `get_block_by_hash` / `tip`); serves `stored.bytes` verbatim, reuses `block_header_bytes` + `decode_block` (DC-NODE-13). A SECOND impl of the same closed serve seams. |
 
 **Rule:** a forged block is visible to peers only after `push_atomic`; the read-side serve is data-only over
 the BLUE `ServedChainSnapshot`. The serve emitter wraps via the single tag-24 authority before bytes reach a
@@ -1816,6 +1897,8 @@ the self-accept→serve handoff domain above. **N-F-G-C note:** a self-accepted 
 over IN-PROCESS block-fetch on the live-feed path; a served block leaving the node over the wire to a peer that
 ACCEPTS it is the operator-gated RO-LIVE-01 leg (peer ACCEPT NOT claimed here).
 
+**N-U note (DC-NODE-12 / DC-NODE-13):** the forge's OWN block now becomes **durable** — the relay-loop `ForgeTick` arm routes the self-accepted block through the fenced `node_sync::admit_forged_block_durably` → the single `pump_block` durable chokepoint (extend-only; the durable tip advances; the next forge builds N+1 on it; a stale-tip forge fails closed). The `--mode node` SERVE path is now a READ-ONLY **projection of the durable ChainDb** (`ChainDbServedSource` over `ServedChainSource::DurableChainDb`), read by the single `dispatch_server_frame_event_to_outbound` (DC-NODE-07 preserved — one dispatch, two read sources), NOT the retired G-R in-memory `ServedChainView` accumulator + `serve_gate_admits` monotone gate. The forge still advances NO durable tip DIRECTLY (`pump_block` is the sole durable tip authority); durability + coherent serve ≠ peer acceptance (`RO-LIVE-01` stays operator-gated). The snapshot serve (`ServedChainSnapshot` + `push_atomic`) above stays the `--mode produce` path; N-U does NOT move it.
+
 ---
 
 ## 3. Closed vs. Extensible Registries
@@ -1824,10 +1907,11 @@ ACCEPTS it is the operator-gated RO-LIVE-01 leg (peer ACCEPT NOT claimed here).
 
 | Registry | Location | Count | Change Rule |
 |----------|----------|-------|-------------|
+| `ServedChainSource` *(NEW, N-U / DC-NODE-13; DC-NODE-07 PRESERVED)* | `ade_runtime::network::serve_dispatch` (RED) | 2 (`Snapshot(&ServedChainView)` / `DurableChainDb(&dyn ChainDb)`) | The closed read-source selector read by the SINGLE serve-dispatch authority `dispatch_server_frame_event_to_outbound`. `Snapshot` is the `--mode produce` in-memory `ServedChainSnapshot`/`ServedChainView` accumulator path; `DurableChainDb` is the `--mode node` durable-chain projection (NEW in N-U — `ChainDbServedSource`). **ONE dispatch, TWO read sources** — the serve authority does NOT fork; the source enum selects which read-side the single dispatch reads from (DC-NODE-07 preserved — `ci_check_served_chain_projection.sh` pins exactly one `dispatch_server_frame_event_to_outbound`). **NOT `#[non_exhaustive]`**; the dispatch `match` is total with NO wildcard. **A closed read-source selector (a surface REDUCTION), NOT an extension point.** Backs **DC-NODE-13**. A new read source = a `ServedChainSource` variant + a `dispatch_server_frame_event_to_outbound` arm (no wildcard) + a strengthening of **DC-NODE-13** (`ci_check_served_chain_projection.sh`); the single serve dispatch MUST NOT be duplicated, and the new read source MUST implement the same closed serve seams (`ServedHeaderLookup` / `ServedRangeLookup`). |
 | `ArrayHead` *(NEW, N-F-G-M / CN-WIRE-11)* | `ade_network::codec::primitives` (BLUE) | 2 (`Definite(u64)` / `Indefinite`) | The closed two-form CBOR array-head grammar for real cardano-node ChainSync `FindIntersect`. The closed BLUE fn `decode_array_head_two_form(protocol, data, offset)` decodes BOTH the definite (`9f…`/`98…`) and the indefinite (`0x9f … 0xff`) forms; on `Indefinite` the caller consumes the matching `0xff` break. **NOT `#[non_exhaustive]`.** The codec/ BLUE submodule count `38 → 39` (total **457 → 458**) — the LONE new BLUE canonical type in the whole G-K…G-R span. **SCOPED to ChainSync `FindIntersect`** (`decode_find_intersect_points` consumes it; the rest of the closed wire grammar stays definite-only — `ArrayHead` / `decode_array_head_two_form` is NOT a general definite/indefinite decoder); **no catch-all**. Paired with the `chain_sync::server` `Origin → IntersectFound[Origin]` reply (the universal common ancestor — matches the real node, does NOT widen the served chain). Pinned against captured cardano-node 11.0.1 FindIntersect/IntersectFound fixtures. **A closed BLUE sum (a surface REDUCTION for real-node wire compat), NOT an extension point.** Backs **CN-WIRE-11**. New variant = a `decode_array_head_two_form` arm + a strengthening of **CN-WIRE-11** (`ci_check_chainsync_findintersect_compat.sh`); the indefinite acceptance MUST stay scoped to FindIntersect, and the `Origin` reply MUST NOT widen the served chain beyond the Origin intersect. |
 | Per-version N2N `versionData` encoding (`encode_n2n_version_params`) *(NEW fn, N-F-G-L / CN-WIRE-10)* | `ade_network::handshake::version_table` (BLUE) | the SINGLE per-version `versionData` encoder over the **unchanged closed `N2N_SUPPORTED` version SET** (V11..=V15 → the 4-field `[networkMagic, diffusionMode, peerSharing, query]`; V16+ → the extended shape) | The single per-version N2N `versionData` wire encoding — for V11..=V15 the 4-field `NodeToNodeVersionData` (`diffusionMode = true`, `peerSharing = NoPeerSharing(0)`, `query = false`), for V16+ the extended shape — so a real cardano-node accepts the serve-side handshake at NodeToNodeV_15 (fixes `HandshakeDecodeError NodeToNodeV_15 'unknown encoding: TInt 1'`). An additive BLUE **fn** (no struct/enum — 458 unchanged) over the unchanged closed `N2N_SUPPORTED` version SET. **NO version-set widening, NO runtime negotiation of meaning** (a successful handshake is a wire-layer event, NOT peer acceptance — `RO-LIVE-01` stays `partial`). **A closed per-version wire encoder (a surface REDUCTION / real-node-compat strengthening of the closed version table), NOT an extension point.** Backs **CN-WIRE-10**. A new per-version shape = a `encode_n2n_version_params` arm + a strengthening of **CN-WIRE-10** (`ci_check_n2n_handshake_versiondata_authority.sh` — the single per-version encoder + the per-version field shape, pinned against the real-node handshake fixture); the closed `N2N_SUPPORTED` version SET MUST NOT be widened and no runtime negotiation of meaning may be introduced. |
 | Feed-side BlockFetch tag-24 unwrap (REUSES the frozen authority) *(N-F-G-O / CN-WIRE-12)* | `ade_runtime::admission::wire_pump` (RED) | REUSES the single `ade_codec::unwrap_tag24` (CN-WIRE-08) authority; **NO new serializer / parallel parser** | The feed-side WirePump strips the peer's BlockFetch `MsgBlock` tag-24 (`0xd8 0x18`) CBOR-in-CBOR envelope via the single `ade_codec::unwrap_tag24` authority **BEFORE** the BLUE decode (so the live feed decodes the inner `[era, block]` cleanly — `UnexpectedType` gone), mirroring the already-correct `admission::runner` + `ade_core_interop::follow` paths. **There is NO second `unwrap_tag24` / hand-rolled tag-24 parse** — the single `CN-WIRE-08` (N-X) authority is reused; a non-tag-24 / malformed payload fails closed. **A closed decode-boundary reuse (a surface REDUCTION over the frozen tag-24 authority), NOT a new closed enum / parallel envelope / extension point.** Backs **CN-WIRE-12**. Adding a feed-side unwrap site = a strengthening of **CN-WIRE-12** (`ci_check_feed_tag24_unwrap.sh` — the feed-side WirePump unwraps via `ade_codec::unwrap_tag24` before decode, and adds no hand-rolled tag-24 parse); no parallel tag-24 authority may be introduced. |
-| `serve_gate_admits` monotone serve gate *(NEW, N-F-G-R / DC-NODE-11)* | `ade_node::node_lifecycle` (RED; the serve sibling spawned OUTSIDE `run_relay_loop`) | pure predicate `serve_gate_admits(highest_served_block_no: Option<u64>, candidate_block_no: u64) -> bool` | The closed monotone serve gate: once block 0 (the genesis successor) is served, the served tip only ever advances — a candidate that would move the served chain backward (`candidate_block_no <= highest_served_block_no`), or re-serve an already-served height, is **refused**, so a genesis-successor follower adopts a **stable served block 0** (`serve_gate_admits(None, 0)` admits; `serve_gate_admits(Some(0), 0)` refuses a re-served block 0; `serve_gate_admits(Some(0), 1)` admits the advance; `serve_gate_admits(Some(5), 5)` refuses an equal height). RED, read-only over the `ServedChainView`; admits nothing to the durable tip (no `ChainDb` handle). **A closed read-only serve fence (a surface REDUCTION / served-chain STABILITY fix), NOT an extension point.** Backs **DC-NODE-11**. New gate behavior = a strengthening of **DC-NODE-11** (`ci_check_served_chain_stability.sh` — the served tip never regresses; an already-served height is not re-served with a divergent hash). |
+| ~~`serve_gate_admits` monotone serve gate~~ **RETIRED (N-U S3 — superseded by serve-as-projection, DC-NODE-13)** *(was N-F-G-R / DC-NODE-11)* | ~~`ade_node::node_lifecycle`~~ — REMOVED from source (only retirement comments + the retired-test marker remain at `node_lifecycle.rs:276` / `:1767`) | — | **RETIRED.** N-U S3 supersedes the monotone serve-gate MECHANISM with serve-as-projection: the `--mode node` served view is now a READ-ONLY projection of the **durable** ChainDb (`ChainDbServedSource` over `ServedChainSource::DurableChainDb`), and the durable chain is extend-only (DC-CONS-23), so it holds exactly one block 0 by construction and a follower fetches coherent history A→B (never B without A) — **more strongly** than the in-memory `serve_gate_admits` predicate, and serving now **survives restart** (the durable ChainDb is recovered, T-REC-05; the accumulator was not). The DC-NODE-11 INVARIANT (*a follower sees a stable, coherent served block 0*) is **preserved + strengthened**, not weakened; its `ci_script` migrated `ci_check_served_chain_stability.sh` (RETIRED) → `ci_check_served_chain_projection.sh`. The pure predicate `serve_gate_admits` + its in-module test are gone from source. See the durable-chain serve projection in §3 Extensible + the §2 forged-block serving domain. |
 | Forge-successor position from the evolved admitted spine *(NEW, N-F-G-Q / DC-NODE-10)* | `ade_node::node_sync` (RED — `forge_one_from_recovered` threading) | reuses the closed G-J `forge_header_position` convention; **NO new variant / `NodeBlockSource`** | After the genesis-successor block 0 is admitted, the NEXT forge derives `(block_number, prev_hash) = (last_admitted_block_no + 1, PrevHash::Block(last_admitted_hash))` from the **evolved admitted spine state** (the position the just-admitted block established), NOT the stale recovered tip — yielding the first stable node (block 1+, no successor crash). It reuses the SINGLE G-J `forge_header_position` convention; the forge still holds NO `ChainDb` handle (advances no durable tip — durability is N-U). **A closed RED forge-position threading (a surface REDUCTION), NOT an extension point.** Backs **DC-NODE-10**. A change to the successor position = a strengthening of **DC-NODE-10** (`ci_check_forge_successor_evolved_spine.sh` — the successor forge position is sourced from the evolved admitted spine, not the stale recovered tip); no new variant, no second forge codepath, no RO-LIVE flip. |
 | Feed header-validation view from the recovered consensus surface *(NEW, N-F-G-P / DC-CINPUT-04)* | `ade_node::node_lifecycle` (RED — feed header/ledger Step-5/7 validation) | sources the leader-threshold view via the BLUE `PoolDistrView::from_seed_epoch_consensus_inputs`; **NO new closed enum** | The feed's header-step + ledger Step-5/7 validation derives its leader-threshold stake-distribution view (+ the VRF-keyhash / ASC / total-active-stake inputs) from the **recovered consensus surface** (`from_seed_epoch_consensus_inputs`, the same projection the forge handoff consumes), NOT a defaulted / empty distribution — so a valid live block 0 is ingested (`VerificationFailed` gone). The verdict stays BLUE (Steps 5 + 7 are BLUE authorities); G-P only sources the VIEW. **A closed RED view-provenance threading (a surface REDUCTION), NOT an extension point.** Backs **DC-CINPUT-04**. A change to the feed view = a strengthening of **DC-CINPUT-04** (`ci_check_feed_leader_threshold_view.sh` — the feed header-validation view is derived from the recovered consensus surface, never a defaulted / empty distribution). |
 | Serve-listener lifetime decoupled from feed end *(NEW, N-F-G-K / DC-NODE-09)* | `ade_node::node_lifecycle` (RED — the serve sibling on the `On` arm) | RED lifetime fence; **NO new closed enum / variant** | The `--mode node` serve listener's lifetime is **independent of the live feed's end** — the serve sibling (`run_node_serve_task`, spawned OUTSIDE `run_relay_loop`) stays up serving past feed-end, so a follower mid-fetch keeps fetching (validated against the live C1 follower reaching `:3002`). RED, read-only over the self-accepted `ServedChainView`; admits nothing, advances no durable tip, makes no peer-acceptance claim. **A closed RED serve-lifetime fence (a surface REDUCTION), NOT an extension point.** Backs **DC-NODE-09**. A change to the serve lifetime = a strengthening of **DC-NODE-09** (`ci_check_node_serve_lifetime.sh` — the serve listener's lifetime is independent of the feed source's end); `run_relay_loop`'s containment is byte-unchanged (the serve task lives outside it). |
@@ -1910,6 +1994,7 @@ ACCEPTS it is the operator-gated RO-LIVE-01 leg (peer ACCEPT NOT claimed here).
 
 | Registry | Location | Extension Rule |
 |----------|----------|----------------|
+| Served read-side trait seams `ServedHeaderLookup` / `ServedRangeLookup` *(impls extended N-U)* | `ade_network::chain_sync::server::ServedHeaderLookup` + `ade_network::block_fetch::server::ServedRangeLookup` (BLUE reducers) — impls in `ade_runtime` | **THE closed read-side extension surface for the serve reducers.** A new served read-side attaches by IMPLEMENTING these two BLUE trait seams; the BLUE serve reducers + the single `dispatch_server_frame_event_to_outbound` are reused UNCHANGED. **Two impls exist at HEAD:** the produce-mode snapshot impl `ade_runtime::producer::served_chain_lookups::ServedChainLookups` (over `ServedChainSnapshot`) and the NEW N-U durable-chain impl `ade_runtime::network::served_chain_projection::ChainDbServedSource` (over the durable ChainDb — DC-NODE-13). A new impl MUST serve already-durable / already-self-accepted bytes VERBATIM (no re-encode — DC-CONS-17), reuse the single `block_header_bytes` (DC-CONS-18) + `decode_block` (NO parallel splitter, NO `AcceptedBlock` reconstruction), and be selected through a closed `ServedChainSource` variant (NOT a `Box<dyn _>` registry / negotiated surface) — provenance MUST stay structural (durable ChainDb ⇐ `pump_block` / self-accept). `ci_check_served_chain_projection.sh`. |
 | Ade-native WAL (append-only) | `ade_runtime::wal` (GREEN-by-content) + `ade_ledger::wal::event` (BLUE encoder/decoder) | Append-only; committed entries are never mutated (`ci_check_wal_append_only.sh`). **`WalEntry` is a deliberately CE-not-law surface** — additively evolvable behind the WAL schema (append-only wire tags; `AdmitBlock` = 0, `SeedEpochConsensusInputsImported` = 3, tags 1/2 reserved). An acceptance criterion, NOT a frozen registry-law enum. |
 | Seed-epoch sidecar store (anchor-fp-keyed) *(N-F-A; consumed N-F-C)* | `ade_runtime::chaindb::SnapshotStore::{put,get,list}_seed_epoch_consensus_*` | A new entry is `put` only on the verified-bootstrap composition path, keyed by `anchor_fp` in a namespace disjoint from the slot-keyed snapshot space; idempotent on identical bytes (redb `seed_cinputs_by_anchor_fp` table, `SCHEMA_VERSION = 3`). N-F-C consumes it via `list_seed_epoch_consensus_anchor_fps` + `get_seed_epoch_consensus_inputs` on the WarmStart arm. The forge-time path may NOT `put` here (CN-CINPUT-02). |
 | `PerPeerOutbound` map *(N-S-B)* | `ade_runtime::network::outbound_command` — `Arc<RwLock<BTreeMap<PeerId, mpsc::Sender<OutboundCommand>>>>` | Grows at runtime; **`BTreeMap`, not `HashMap`** — deterministic iteration; no cross-peer byte leakage (CN-PEER-OUTBOUND-MAP-01, DC-OUTBOUND-FIFO-01). |
@@ -1917,12 +2002,26 @@ ACCEPTS it is the operator-gated RO-LIVE-01 leg (peer ACCEPT NOT claimed here).
 | `ServedChainSnapshot` (served blocks) | `ade_ledger::producer::served_chain` (BLUE) | Grows via `served_chain_admit` only; `push_atomic` is the sole publisher. (The N-F-E/N-F-F/N-F-G-A relay-loop forge tick does NOT publish here; N-F-G-B publishes via the sibling task's single `push_atomic` fed by `into_accepted()`.) |
 | `MempoolState` (admitted txs) | `ade_ledger::mempool` (BLUE) | Grows via `mempool_ingress` → `admit` only; sorted/deduplicated. |
 | Seed entries (imported UTxO) | `ade_runtime::seed_import` (GREEN-by-content) | Grows at import time from a cardano-cli UTxO dump; canonical decoders only. |
-| Persisted ChainDb (synced blocks) *(N-Y; first production driver N-F-C; driven by the N-F-D loop; LIVE feed N-F-G-C)* | `ade_runtime::chaindb` via `forward_sync::pump` | Grows via the forward-sync pump applying the GREEN reducer's `SyncEffect` plan in durable order; the tip advances only after `StoreBlockBytes` + `AppendWal` ack (DC-SYNC-01). N-F-C's `node_sync::run_node_sync` is the first production driver; the N-F-D relay loop drives it each `SyncOnce` iteration; N-F-G-C feeds it a LIVE `--peer` source (reusing the closed admission dial + pump). |
+| Persisted ChainDb (synced blocks) *(N-Y; first production driver N-F-C; driven by the N-F-D loop; LIVE feed N-F-G-C; own-forged blocks N-U; serve-read source N-U)* | `ade_runtime::chaindb` via `forward_sync::pump` (write) + `ChainDbServedSource` (read, N-U) | Grows via the forward-sync pump applying the GREEN reducer's `SyncEffect` plan in durable order; the tip advances only after `StoreBlockBytes` + `AppendWal` ack (DC-SYNC-01). N-F-C's `node_sync::run_node_sync` is the first production driver; the N-F-D relay loop drives it each `SyncOnce` iteration; N-F-G-C feeds it a LIVE `--peer` source. **N-U: the SAME `pump_block` chokepoint now also durably admits the forge's OWN self-accepted block** (via `node_sync::admit_forged_block_durably`; extend-only, durable-before-tip — DC-NODE-12 / DC-CONS-23 / DC-WAL-04), so the producer own-tip advances. The sole production WRITERS stay `pump_block` + the validated `bootstrap_initial_state` (CN-CONS-07). **N-U also makes the durable ChainDb the `--mode node` SERVE-READ source** — `ChainDbServedSource` projects it READ-ONLY through the serve seams (DC-NODE-13); a forged-block durable tip recovers byte-identically on restart (T-REC-05) and serving survives restart. |
 | Sync regression fixtures *(N-Y)* | `corpus/sync/regressions/` | Each discovered Haskell observable-surface mismatch is committed as a named regression fixture (RO-SYNC-EVIDENCE-01). |
 | Sum_n KES family | `ade_crypto::kes_sum` (BLUE) | A new `Sum_n` attaches as an internal type-alias step; the `KesAlgorithm` trait surface does not change. |
 | Per-protocol tag-24 compositions *(N-X)* | `ade_network::codec::{block_fetch, chain_sync}` | A new CBOR-in-CBOR composition attaches as a `compose_*` / `decompose_*` pair delegating to the single `ade_codec::{wrap_tag24, unwrap_tag24}` authority (CN-WIRE-08). |
 | Bootstrap-source production compositions *(N-Z; +N-F-A sidecar tail)* | `ade_runtime::{genesis_bootstrap, mithril_bootstrap}` | A new bootstrap-source production entry attaches as a **composition-only RED twin** of `bootstrap_from_{conway_genesis, mithril_snapshot}`: import/parse + (if a point is attested) mint the anchor from an operator-independent origin + verify-before-bootstrap (fail-closed) + route through the single `bootstrap_initial_state` authority + the N-F-A sidecar tail. **No new authority, no new `*Anchor` trait/plugin, no new `SeedProvenance` variant unless the source genuinely differs** (CN-MITHRIL-01 / CN-NODE-01 / DC-MITHRIL-02 / CN-CINPUT-02). |
 
+> **Note (N-U realizes a SECOND impl of an EXISTING closed extension point — it adds NO new extensible /
+> negotiated / plugin surface).** The N-U serve projection `ChainDbServedSource` is a **second impl of the
+> ALREADY-CLOSED serve read-side trait seams** `ServedHeaderLookup` / `ServedRangeLookup` (the produce-mode
+> `ServedChainLookups` is the first) — selected through the **closed** `ServedChainSource { Snapshot |
+> DurableChainDb }` enum read by the SINGLE `dispatch_server_frame_event_to_outbound`. There is **no `Box<dyn
+> _>` registry, no runtime-registered serve handler, no negotiated surface, no second serve dispatch** (DC-NODE-07
+> preserved). The durable admit `node_sync::admit_forged_block_durably` is a **REUSE** of the single closed
+> `pump_block` durable tip authority — NOT a new chokepoint, NO new `NodeBlockSource` / `WalEntry` /
+> `CoordinatorEvent` / `Mode` variant, NO new `--mode node` flag, NO new BLUE authority or canonical type. The
+> lone BLUE touch (`block_header_bytes(&[u8])`) is an additive fn factored out of `accepted_block_header_bytes`
+> (the SAME DC-CONS-18 authority). N-U RETIRES the G-R `serve_gate_admits` monotone-gate mechanism (superseded by
+> serve-as-projection — see the RETIRED row in §3 Closed). The serve-seam row + the extended Persisted-ChainDb
+> row above are the N-U extensible entries; the `ServedChainSource` selector belongs in the Closed table.
+>
 > **Note (G-K … G-R is NOT a new extension point — the span adds ONLY closed sums + version-gated fields).** The
 > entire G-K…G-R catch-up span introduces **NO extensible / negotiated / plugin / runtime-registered surface.**
 > The lone new BLUE canonical type, the closed 2-variant `ArrayHead` (G-M), is a wire-grammar REDUCTION decoded
@@ -2404,17 +2503,19 @@ How new modules enter the workspace.
     (iv) keep the record a single closed canonical type with the SOLE codec (no `Default`, no `#[non_exhaustive]`,
     `BTreeMap`-ordered) — the field is additive ONLY behind the version gate, NOT a new TYPE.
 
-### CI gates that enforce the boundary (134 total; the N-F-G-K…G-R / N-F-G-J / N-F-G-D / N-F-G-E / N-F-G-C / N-F-G-B / N-F-G-A / N-F-F / N-F-D-E / N-F-C / N-F-A / N-Z / N-Y / producer / network set)
+### CI gates that enforce the boundary (135 total; the N-U / N-F-G-K…G-R / N-F-G-J / N-F-G-D / N-F-G-E / N-F-G-C / N-F-G-B / N-F-G-A / N-F-F / N-F-D-E / N-F-C / N-F-A / N-Z / N-Y / producer / network set)
 
 | Script | Enforces | Cluster |
 |---|---|---|
+| `ci_check_forged_durable_admit_via_pump.sh` *(NEW N-U S1)* | **DC-NODE-12 + DC-CONS-23 + DC-WAL-04** — the relay-loop `ForgeTick` arm routes the self-accepted forged block through the fenced `node_sync::admit_forged_block_durably` into the SINGLE `forward_sync::pump_block` durable chokepoint (extend-only `admit_via_block_validity` → StoreBlockBytes → AppendWal → AdvanceTip, durable-before-tip); the forge gains NO direct tip-advance path, NO `NodeBlockSource` variant, NO new `WalEntry` variant (reuses `WalEntry::AdmitBlock`); `accepted.into_bytes()` is byte-identical to the self-accept input (no re-encode, I-10); a stale-tip forge fails closed via header-position / `prior_fp`, never an own-block override. `pump_block` stays the sole durable tip authority. | N-U |
+| `ci_check_served_chain_projection.sh` *(NEW N-U S3)* | **DC-NODE-13** — the `--mode node` served view is a READ-ONLY projection of the durable ChainDb: `ChainDbServedSource` (`ade_runtime::network::served_chain_projection`) implements the closed serve seams `ServedHeaderLookup` / `ServedRangeLookup` over `iter_from_slot` / `get_block_by_hash` / `tip`, selected through the closed `ServedChainSource::DurableChainDb` read by the SINGLE `dispatch_server_frame_event_to_outbound` (DC-NODE-07 preserved — exactly one serve dispatch); serves `stored.bytes` verbatim (no re-encode — DC-CONS-17), reuses the single `block_header_bytes` (DC-CONS-18) + `decode_block` (NO parallel splitter, NO `AcceptedBlock` reconstruction); a follower fetches coherent durable history A→B (never B without A) and serving survives restart. Supersedes the retired G-R `ci_check_served_chain_stability.sh` (DC-NODE-11 mechanism). | N-U |
 | `ci_check_chainsync_findintersect_compat.sh` *(NEW N-F-G-M)* | **CN-WIRE-11** — the ChainSync `FindIntersect` points-list array-head is the closed sum `ArrayHead = Definite(u64) / Indefinite` decoded by the scoped `decode_array_head_two_form` (accepts the real-node indefinite-length list; SCOPED to FindIntersect — NOT a general definite/indefinite decoder; no catch-all); the `chain_sync::server` answers `Origin → IntersectFound[Origin]` (the universal common ancestor — does NOT widen the served chain). Pinned against captured cardano-node 11.0.1 FindIntersect/IntersectFound fixtures. | N-F-G-M |
 | `ci_check_n2n_handshake_versiondata_authority.sh` *(NEW N-F-G-L)* | **CN-WIRE-10** — `encode_n2n_version_params` is the SINGLE per-version N2N `versionData` encoder over the unchanged closed `N2N_SUPPORTED` version SET (V11..=V15 → the 4-field `[networkMagic, diffusionMode, peerSharing, query]`; V16+ → the extended shape); pinned against the real-node handshake fixture. NO version-set widening, NO runtime negotiation. | N-F-G-L |
 | `ci_check_warmstart_eta0_overlay.sh` *(NEW N-F-G-N)* | **T-REC-04 + DC-CINPUT-03** — the seed-epoch sidecar carries the recovered `epoch_nonce` (eta0) behind `SEED_CINPUT_SCHEMA_VERSION 1 → 2` (a v1 sidecar decodes as `UnknownVersion`, never zero-eta0); WarmStart overlays it onto `chain_dep.epoch_nonce` so the forge VRF input is `praos_vrf_input(slot, epoch_nonce)` (never a defaulted/zero eta0). | N-F-G-N |
 | `ci_check_feed_tag24_unwrap.sh` *(NEW N-F-G-O)* | **CN-WIRE-12** — the feed-side WirePump (`ade_runtime::admission::wire_pump`) strips the peer's BlockFetch `MsgBlock` tag-24 envelope via the single `ade_codec::unwrap_tag24` (CN-WIRE-08) authority BEFORE the BLUE decode, and adds NO hand-rolled / parallel tag-24 parse. | N-F-G-O |
 | `ci_check_feed_leader_threshold_view.sh` *(NEW N-F-G-P)* | **DC-CINPUT-04** — the feed header-validation view (leader-threshold stake distribution for header Step 5 + ledger Step 7) is derived from the recovered consensus surface (`PoolDistrView::from_seed_epoch_consensus_inputs`), never a defaulted / empty distribution; the verdict stays BLUE. | N-F-G-P |
 | `ci_check_forge_successor_evolved_spine.sh` *(NEW N-F-G-Q)* | **DC-NODE-10** — the successor forge position is sourced from the evolved admitted spine state `(last_admitted_block_no + 1, PrevHash::Block(last_admitted_hash))`, NOT the stale recovered tip; reuses the single `forge_header_position` convention; advances no durable tip (no `ChainDb` handle); no RO-LIVE flip. | N-F-G-Q |
-| `ci_check_served_chain_stability.sh` *(NEW N-F-G-R)* | **DC-NODE-11** — the monotone serve gate `node_lifecycle::serve_gate_admits(highest_served_block_no, candidate_block_no)`: once block 0 is served the served tip never regresses (a candidate `<=` the highest served height, or an already-served height with a divergent hash, is refused), so a genesis-successor follower adopts a stable served block 0; read-only over the `ServedChainView`, advances no durable tip. | N-F-G-R |
+| ~~`ci_check_served_chain_stability.sh`~~ **RETIRED (N-U S3 — superseded by `ci_check_served_chain_projection.sh`)** *(was NEW N-F-G-R)* | **DC-NODE-11 (mechanism superseded)** — the G-R monotone serve gate `node_lifecycle::serve_gate_admits` is RETIRED: N-U S3 supersedes it with serve-as-projection (the durable chain is extend-only, so it holds exactly one block 0 by construction — DC-CONS-23 — and a follower fetches coherent history A→B more strongly than the in-memory predicate, surviving restart — DC-NODE-13). The DC-NODE-11 INVARIANT (*a follower sees a stable, coherent served block 0*) is preserved + strengthened; its `ci_script` migrated to `ci_check_served_chain_projection.sh`. NOT among the 135 active gates. | ~~N-F-G-R~~ → N-U |
 | `ci_check_node_serve_lifetime.sh` *(NEW N-F-G-K)* | **DC-NODE-09** — the `--mode node` serve listener's lifetime (`run_node_serve_task`, spawned OUTSIDE `run_relay_loop`) is independent of the feed source's end — it stays up serving past feed-end so a follower mid-fetch keeps fetching; read-only over the `ServedChainView`, admits nothing, advances no durable tip, makes no peer-acceptance claim; `run_relay_loop` containment byte-unchanged. | N-F-G-K |
 | `ci_check_prevhash_single_wire_authority.sh` *(NEW N-F-G-J S2)* | **CN-WIRE-09** — the header `prev_hash` is the closed sum `PrevHash = Genesis / Block(Hash32)` ($hash32/null); the SINGLE POSITION-BLIND BLUE codec authority is `ade_codec::shelley::block::decode_prev_hash` (decodes the CBOR token, NEVER `block_number`); the `null` grammar is scoped to header_body ONLY — it MUST NOT leak into the chain-sync/block-fetch `Point`/`Tip` codec (`Point::Origin` stays `array(0)`); no second wire authority, no all-zero/fingerprint stand-in for the genesis predecessor. | N-F-G-J |
 | `ci_check_genesis_successor_reachability.sh` *(NEW N-F-G-J S4)* | **DC-NODE-08** — the both-`None`-tip `LoopStep::ForgeTick` arm derives `(0, PrevHash::Genesis)` via the GREEN `node_sync::forge_header_position` (a `Some`-without-height edge fails closed `NodeForgeError::RecoveredTipMissingBlockNo`, never `.unwrap_or(1)`) and forges block 0 through the SAME `run_real_forge → self_accept → SelfAcceptedHandoff` path; permission gated by the GREEN `node_lifecycle::may_cold_start_forge` (recovered lineage + forge-intent + forge-eligible feed); the forge holds NO `ChainDb` handle (no durable tip); scoped to the hermetic cold-start (no `genesis_forged` latch); the eligibility signal is general (never a private-only / C1-only flag). | N-F-G-J |
@@ -2432,7 +2533,7 @@ How new modules enter the workspace.
 | `ci_check_operator_forge_no_secret_leak.sh` *(N-F-F; reuse scope extended N-F-G-A)* | **CN-NODE-03 (custody half) / OP-OPS-04** — `operator_forge` reuses the existing loaders (incl. N-F-G-A real parsers); `OperatorForgeMaterial` not `Debug`/`Serialize`; no private-key byte accessor / serialization / logging. | N-F-F |
 | `ci_check_node_binary_uses_single_bootstrap.sh` *(MODIFIED-in-place N-F-F)* | **CN-NODE-01** — `ReceiveState::new` owner allow-list `{node.rs, node_lifecycle.rs}`. | N-F-F |
 | `ci_check_loop_planner_closed.sh` *(N-F-D; EXTENDED N-F-E; UNCHANGED N-F-G-A/N-F-G-C)* | **CN-NODE-02 / DC-NODE-05** — the GREEN `run_loop_planner` emits only the closed `LoopStep` set, content-blind; the `SlotNo` ban scoped to `plan_loop_step`; `ForgeTick`/`ForgeSlotStatus` pinned. | N-F-D / N-F-E |
-| `ci_check_node_run_loop_containment.sh` *(N-F-D; TIGHTENED N-F-E; UNCHANGED N-F-F/N-F-G-A/N-F-G-B/N-F-G-C)* | **CN-NODE-02 / DC-SYNC-02 / DC-NODE-05** — the relay-loop body advances the tip ONLY via `run_node_sync`; references NO `run_real_forge` / `correlate(` / `Ba02Manifest` / second-bootstrap path; **exactly one** fenced `forge_one_from_recovered` (CE-E-4) with the no-serve tokens forbidden. N-F-F/N-F-G-A/N-F-G-B/N-F-G-C left it byte-/semantically unchanged. | N-F-D / N-F-E |
+| `ci_check_node_run_loop_containment.sh` *(N-F-D; TIGHTENED N-F-E; UNCHANGED N-F-F/N-F-G-A/N-F-G-B/N-F-G-C; ALLOW-LIST EXTENDED in place N-U S1)* | **CN-NODE-02 / DC-SYNC-02 / DC-NODE-05 / DC-NODE-12** — the relay-loop body advances the tip ONLY via `run_node_sync`; references NO `run_real_forge` / `correlate(` / `Ba02Manifest` / second-bootstrap path; **exactly one** fenced `forge_one_from_recovered` (CE-E-4) with the no-serve tokens forbidden. **N-U S1 EXTENDED the allow-list in place** to admit the one `node_sync::admit_forged_block_durably` driver call (which itself routes through the single `pump_block` durable chokepoint — DC-NODE-12); a net tightening, NO file-count change. N-F-F/N-F-G-A/N-F-G-B/N-F-G-C left it byte-/semantically unchanged. | N-F-D / N-F-E / N-U |
 | `ci_check_lifecycle_owner_uses_bootstrap_initial_state.sh` *(N-F-C)* | **CN-NODE-01** — exactly one `PHASE4-N-F-C-LIFECYCLE-OWNER`; FirstRun via `bootstrap_from_mithril_snapshot(` + WarmStart via `bootstrap_initial_state(RequiredFromRecoveredProvenance)`; no parallel/cold init, no fallback, no `recover_node_state(` overclaim. | N-F-C |
 | `ci_check_node_sync_via_pump.sh` *(N-F-C)* | **DC-SYNC-01 (driver containment)** — `run_node_sync` advances the tip ONLY via `pump_block(`. (L5 `forge_one_from_recovered` excluded.) | N-F-C |
 | `ci_check_ba02_evidence_closed.sh` *(N-F-C; reuse scope incl. `ba02_pass` N-F-G-C)* | **RO-LIVE-06 (BA-02 honesty)** — exactly one `Ba02Manifest` constructor (inside `correlate`); no self-evidence token as an acceptance source; no committed `docs/evidence/*ba02*` manifest. The N-F-G-C `ba02_pass` file I/O is consumed over this UNCHANGED correlator. | N-F-C |
@@ -2479,10 +2580,17 @@ How new modules enter the workspace.
 > containment / served-chain handoff / live-feed memory fences stay byte-unchanged; the C1-evidence commit
 > BROADENED `ci_check_rehearsal_manifest_schema.sh` in place AGAIN — to also cover the c1 rehearsal manifests —
 > a net tightening, NOT a new file, CI count unchanged).
+> **N-U added 1 net (134 → 135): +2 NEW** (`ci_check_forged_durable_admit_via_pump.sh` (S1, DC-NODE-12 +
+> DC-CONS-23 + DC-WAL-04) + `ci_check_served_chain_projection.sh` (S3, DC-NODE-13)) **− 1 RETIRED**
+> (`ci_check_served_chain_stability.sh`, the G-R DC-NODE-11 monotone-serve-gate mechanism superseded by
+> serve-as-projection). N-U also EXTENDED `ci_check_node_run_loop_containment.sh` in place (allow-list for the
+> one `admit_forged_block_durably` driver call — a net tightening, NO file-count change). The S2 §8-named
+> `ci_check_forged_tip_recovery.sh` was **NOT created** — T-REC-05 is test-enforced (honest drift; `ci_script =
+> ""`).
 > _(The G-H gates `ci_check_single_serve_dispatch_authority.sh` + `ci_check_serve_listener_magic_aware.sh` are part
-> of the 134 total at HEAD but are NOT row-detailed in this table — see the G-H-gap note in the header.)_
-> Earlier-cluster gates (N-A..N-P, the N-M-* set, the N-L wire-session set) are present in the 134 total; the full
-> list is `ls ci/ci_check_*.sh` (= **134**).
+> of the 135 total at HEAD but are NOT row-detailed in this table — see the G-H-gap note in the header.)_
+> Earlier-cluster gates (N-A..N-P, the N-M-* set, the N-L wire-session set) are present in the 135 total; the full
+> list is `ls ci/ci_check_*.sh` (= **135**).
 
 ---
 
@@ -2805,6 +2913,23 @@ How new modules enter the workspace.
 > Surfaced honestly per IDD: these are **declared** future attach points, not closed surfaces. Each is named
 > in a registry rule or a cluster CLOSURE record.
 >
+> **N-U CLOSES candidate #4 (forged-block durability) and RETIRES the G-R serve-gate mechanism — it BROADENS
+> NOTHING below.** PHASE4-N-U ships forged-block durability: the forge's OWN self-accepted block becomes durable
+> through the single `pump_block` chokepoint (`DC-NODE-12` / `DC-CONS-23` / `DC-WAL-04`), recovers byte-identically
+> across restart + drops an un-WAL'd orphan (`T-REC-05`), and the `--mode node` served view becomes a READ-ONLY
+> projection of the durable ChainDb (`DC-NODE-13`). So **candidate #4 below is now CLOSED** (marked inline).
+> N-U **RETIRES the PHASE4-N-F-G-R `serve_gate_admits` monotone-serve-gate mechanism** (superseded by
+> serve-as-projection — the durable chain is extend-only, so it holds exactly one block 0 by construction and a
+> follower fetches coherent history A→B more strongly than the in-memory predicate, and serving survives
+> restart; the `DC-NODE-11` invariant is preserved + strengthened, its gate migrated
+> `ci_check_served_chain_stability.sh` → `ci_check_served_chain_projection.sh`). N-U adds **NO new extension
+> point** (the durable admit REUSES `pump_block`; the serve projection is a SECOND impl of the already-closed
+> serve trait seams selected through the closed `ServedChainSource` enum) and does **NOT** flip any RO-LIVE rule —
+> durability + coherent serve ≠ operator-witnessed peer acceptance (`RO-LIVE-01` stays `partial` /
+> operator-gated). The serve-side candidate #0 below stays gating on the operator-witnessed ACCEPT (the N-U
+> serve projection makes the served view durable + restart-surviving, but the peer-ACCEPT leg is unchanged).
+> Candidates #0–#3 and #5, and the already-retired #6, are carried UNCHANGED.
+>
 > **N-F-G-K … G-R RETIRE NOTHING and BROADEN NOTHING below.** The eight-cluster span adds ONLY closed sums +
 > version-gated fields (the `ArrayHead` FindIntersect wire grammar + the `Origin` reply; the single per-version
 > `versionData` encoder; the version-gated recovered `epoch_nonce`; the feed tag-24 reuse of the single CN-WIRE-08
@@ -2890,9 +3015,24 @@ How new modules enter the workspace.
    Two seams remain deliberately NOT wired: **(a) seed-bytes-from-Mithril decode** and **(c) a committed
    reproducible Mithril fixture + CI/release evidence**. `bootstrap_from_mithril_snapshot` is composition-only
    with **NO standalone argv flag**. _(N-F-F/N-F-G-A/N-F-G-C left Mithril untouched.)_
-4. **N-U — forged-block durability (DECLARED).** WAL / ChainDB / snapshot / warm-start for producer-**forged**
-   blocks. Out of N-T scope. The N-Y forward-sync durability covers **received** blocks; the
-   N-F-E/N-F-F/N-F-G-A/N-F-G-B forge tick is self-accept-only and advances no durable tip.
+4. **~~N-U — forged-block durability~~ — CLOSED by PHASE4-N-U (HEAD `4e358e92`).** WAL / ChainDB / warm-start for
+   producer-**forged** blocks is now wired: (1) the forge's OWN self-accepted block (`accepted.into_bytes()`,
+   byte-identical — no re-encode) is admitted durably through the SAME single `forward_sync::pump_block`
+   chokepoint received blocks use, via the fenced `node_sync::admit_forged_block_durably` (extend-only,
+   durable-before-tip; a stale-tip forge fails closed — `DC-NODE-12` / `DC-CONS-23` / `DC-WAL-04`; reuses
+   `WalEntry::AdmitBlock`, NO new `NodeBlockSource` / `WalEntry` variant; `pump_block` stays the sole durable
+   tip authority); (2) production `warm_start_recovery` recovers a forged-block durable tip byte-identically
+   (forward-replay from the sub-tip snapshot, reusing the BLUE `bootstrap_initial_state` authority) + drops an
+   un-WAL'd orphan + fails fast on a WAL-tail fingerprint divergence (`T-REC-05`, test-enforced —
+   `forge_kill_then_warm_start_recovers_same_tip_via_forward_replay` + `warm_start_drops_orphan_block_above_wal_tail`);
+   (3) the `--mode node` served view is a READ-ONLY projection of the durable ChainDb (`ChainDbServedSource` over
+   `ServedChainSource::DurableChainDb`, read by the single `dispatch_server_frame_event_to_outbound` — DC-NODE-07
+   preserved — `DC-NODE-13`). Gates `ci_check_forged_durable_admit_via_pump.sh` (S1) +
+   `ci_check_served_chain_projection.sh` (S3); the G-R `ci_check_served_chain_stability.sh` is RETIRED.
+   **NARROW: durability + coherent serve only — NO admit-time fork-choice (extend-only; `select_best_chain` /
+   `fork_choice` are NOT on this path), NO second durable tip-advance path, NO new BLUE authority / canonical
+   type, and NO RO-LIVE flip** (durability ≠ operator-witnessed peer acceptance; `RO-LIVE-01` stays `partial`).
+   _(The N-Y forward-sync durability already covered **received** blocks; N-U closes the producer-**forged** half.)_
 5. **Sync-evidence live leg (N-Y — RO-SYNC-EVIDENCE-01, `partial`).** The snapshot→tip sync-evidence manifest
    schema is enforced but vacuously satisfied until a manifest is committed. An operator-witnessed execution
    gate, not a code seam.
@@ -2945,6 +3085,67 @@ How new modules enter the workspace.
 
 ## Generation notes
 
+- Regenerated (single-cluster CLUSTER-CLOSE refresh, PHASE4-N-U) at HEAD `4e358e92`
+  (`git rev-parse --short HEAD`), downstream of the CODEMAP regenerated at the same HEAD (**135** CI checks,
+  **333** rules, **458** canonical types). The prior on-disk SEAMS was pinned at the **PHASE4-N-F-G-K…G-R
+  catch-up** (`65954fa3` / 134 CI / 328 rules / 458 canonical types). This refresh splices the **single closed
+  cluster PHASE4-N-U** (forged-block durability — full producer own-tip advance) and updates the counts.
+  **The net BLUE delta is ZERO new canonical types + ZERO new BLUE authorities — verified NO new extensible /
+  negotiated / plugin surface** (N-U realizes a SECOND impl of the ALREADY-CLOSED serve trait seams + a closed
+  read-source enum). The lone BLUE touch is the additive fn
+  `ade_ledger::block_validity::header_input::block_header_bytes(&[u8])`, factored out of
+  `accepted_block_header_bytes` (which now delegates) — the SAME DC-CONS-18 header-projection authority, no new
+  type, no parallel splitter. Registry → **333** (FIVE NEW, all `introduced_in = "PHASE4-N-U"`, all `enforced`:
+  `DC-NODE-12`, `DC-CONS-23`, `DC-WAL-04`, `T-REC-05` (tier = true, test-enforced — `ci_script = ""`),
+  `DC-NODE-13`; TWO strengthened: `CN-CONS-07` serve-provenance, `DC-NODE-11` mechanism superseded; no rule
+  weakened); CI 134 → **135** (NET +1: +2 NEW `ci_check_forged_durable_admit_via_pump.sh` +
+  `ci_check_served_chain_projection.sh`; −1 RETIRED `ci_check_served_chain_stability.sh`; N-U also extended
+  `ci_check_node_run_loop_containment.sh` in place — no count change).
+- **N-U delta spot-checked at HEAD `4e358e92` (grep/ls/git only — no `cargo`):**
+  `git diff --name-only 65954fa3..4e358e92 -- crates/` touches exactly two BLUE `core_paths` files
+  (`ade_ledger/src/block_validity/{header_input.rs, mod.rs}`), and that BLUE diff adds **zero**
+  `^+(pub )?(struct|enum)` lines (the BLUE touch is the additive `pub fn block_header_bytes(block_cbor: &[u8])
+  -> Result<&[u8], BlockValidityError>` at `header_input.rs:76`; `accepted_block_header_bytes` now delegates
+  `block_header_bytes(accepted.as_bytes())` at `:58`). NEW RED `crates/ade_runtime/src/network/served_chain_projection.rs`
+  (`//! RED`) `pub struct ChainDbServedSource` with `impl ServedHeaderLookup` (line 60) + `impl ServedRangeLookup`
+  (line 124); the closed `pub enum ServedChainSource<'a> { Snapshot(&ServedChainView), DurableChainDb(&dyn
+  ChainDb) }` at `crates/ade_runtime/src/network/serve_dispatch.rs:55`, read by the single
+  `pub async fn dispatch_server_frame_event_to_outbound` (line 137; `match` arms for both variants, no wildcard).
+  `crates/ade_node/src/node_sync.rs` the fenced `admit_forged_block_durably` routing through
+  `forward_sync::pump_block` (line 360) + the recovery test
+  `forge_kill_then_warm_start_recovers_same_tip_via_forward_replay` (`:1779`);
+  `crates/ade_node/src/node_lifecycle.rs` the orphan-drop test `warm_start_drops_orphan_block_above_wal_tail`
+  (`:2502`) + the `serve_gate_admits` RETIREMENT comments (`:276`, `:1767`) — the predicate + its in-module test
+  are GONE from source. `ServedChainLookups` (the produce-mode snapshot impl of the same seams) is unchanged at
+  `crates/ade_runtime/src/producer/served_chain_lookups.rs:31` (`impl ServedHeaderLookup` `:35`, `impl
+  ServedRangeLookup` `:81`). The two NEW gates (`ci_check_forged_durable_admit_via_pump.sh`,
+  `ci_check_served_chain_projection.sh`) present; the RETIRED `ci_check_served_chain_stability.sh` is ABSENT;
+  `ls ci/ci_check_*.sh | wc -l` = **135**; `grep -cE '^id = ' docs/ade-invariant-registry.toml` = **333** (the
+  five new rule IDs `DC-NODE-12`/`DC-WAL-04`/`T-REC-05`/`DC-CONS-23`/`DC-NODE-13` present). `run_relay_loop`
+  containment is allow-list-EXTENDED (the one driver call) but otherwise byte-unchanged; the served-chain handoff
+  fence is byte-unchanged.
+- **Cross-reference check (CODEMAP ↔ SEAMS) at `4e358e92`:** the **458 / 135 / 333** counts match the CODEMAP
+  header regenerated at the same HEAD exactly. Every module named in the N-U splice appears in that CODEMAP —
+  `ade_ledger::block_validity::header_input (block_header_bytes)`, the NEW RED
+  `ade_runtime::network::served_chain_projection (ChainDbServedSource)`, the closed
+  `ade_runtime::network::serve_dispatch (ServedChainSource)`, `ade_node::{node_sync
+  (admit_forged_block_durably), node_lifecycle (warm-start recovery)}` — all inventoried there; the CODEMAP
+  header's PHASE4-N-U delta names the same five rules + the +2/−1 CI gates + the same RETIRED G-R
+  `serve_gate_admits` mechanism. No stale module references; no drift vs CODEMAP unreconciled. **Honest drift
+  (carried from the CODEMAP close note):** the S2 §8-named gate `ci_check_forged_tip_recovery.sh` + the §8-named
+  test `forge_two_clean_runs_byte_identical` were NOT created literally — T-REC-05 is test-enforced via the
+  kill-recover fingerprint-equality tests named above (`T-REC-05.ci_script = ""`); the invariants are enforced,
+  the §8 CE artifact NAMES drifted during S2. **The carried G-K…G-R / G-J Generation-notes entries below are
+  retained verbatim at their own pins (`65954fa3` / `550eec3a`) and are NOT rewritten — they describe those spans
+  correctly; the historical `134` / `328` / `65954fa3` references inside the carried delta narratives + carried
+  notes are pin-correct for their spans, not stale.**
+- **`.idd-config.json` is NOT edited by this doc.** Its `head_deltas_baseline` is `65954fa3` (the G-K…G-R
+  baseline) — the next `/head-deltas` measures the N-U span from there. The authoritative counts are the CODEMAP
+  header + `grep -cE '^id = ' docs/ade-invariant-registry.toml` (= 333) + `ls ci/ci_check_*.sh | wc -l` (= 135);
+  per the task constraint this regeneration does NOT modify `.idd-config.json`.
+- NOTE: no `cargo build`/`test`/`check` was run during this regeneration (grep/ls/git only, per the task
+  constraint).
+- (Prior multi-cluster CATCH-UP entry, carried below.)
 - Regenerated (multi-cluster CATCH-UP refresh, PHASE4-N-F-G-K…G-R + C1 evidence) at HEAD `65954fa3`
   (`git rev-parse --short HEAD`), downstream of the CODEMAP regenerated at the same HEAD (**134** CI checks,
   **328** rules, **458** canonical types). The prior on-disk SEAMS was pinned at the **PHASE4-N-F-G-J close**

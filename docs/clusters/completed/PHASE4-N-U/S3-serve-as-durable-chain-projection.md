@@ -3,7 +3,7 @@
 ## §2 Slice Header
 - **Slice Name:** serve-as-durable-chain projection
 - **Cluster:** PHASE4-N-U (forged-block durability) — primary invariant **DC-NODE-12**; S3 enforces **DC-NODE-13** and restates the serve-provenance clause of **CN-CONS-07**.
-- **Status:** in progress
+- **Status:** done — S3 complete + merged (`a49563bc` doc + CN-CONS-07 restatement, `8e0dbe99` impl); DC-NODE-13 → enforced; CN-CONS-07 + DC-NODE-11 strengthened (`strengthened_in += PHASE4-N-U`)
 - **Cluster Exit Criteria Addressed:** **CE-7** (DC-NODE-13 — the `--mode node` served view is a deterministic projection of the durable ChainDb; a follower fetches coherent durable history A→B incl. a feed-ingested predecessor; the G-R monotone-serve-gate accumulator workaround is retired). *(CE-1…CE-4 = S1; CE-5/6 = S2.)*
 
 ## §3 Dependencies

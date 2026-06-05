@@ -73,4 +73,20 @@ OQ-b/c/d/f/g resolved at `/cluster-plan` (code investigation). Residual:
 - **Pre-existing wording (noted, not touched):** DC-SYNC-01's statement says the received-admit chokepoint is "…→ block_validity → fork-choice"; the code is extend-only (that "fork-choice" is a linear-extend decision, not a `select_best_chain` call). Out of N-U scope — flagged for a future DC-SYNC-01 wording pass.
 
 ## §13 Close record
-*(Open — filled at `/cluster-close` once CE-1…CE-7 are green.)*
+**CLOSED 2026-06-05.** 3 slices merged: S1 (`f35451f5`/`3fedabea`/`71e789db`), S2 (`232071f7`/`f7e38712`), S3 (`a49563bc` doc + `8e0dbe99` impl). NIT-hygiene `4e358e92`.
+
+**Rules (registry):** DC-NODE-12, DC-CONS-23, DC-WAL-04, T-REC-05, DC-NODE-13 → **enforced** (328→333). Strengthened (`strengthened_in += "PHASE4-N-U"`): CN-CONS-07 (serve-provenance clause: in-memory-token-proof → durable-provenance), DC-NODE-11 (monotone serve-gate mechanism superseded by serve-as-projection; invariant preserved + strengthened — survives restart). DC-NODE-05 / DC-SYNC-01/02 / CN-NODE-02 / T-REC-01/02/03 / DC-STORE-07 / DC-NODE-10 carry the supersede-via-cross-ref relationship documented per-rule. DC-CONS-03 preserved (cross-ref only; durable admit is extend-only).
+
+**CEs (mechanical):**
+- CE-1/2/3/4 (S1): `ci/ci_check_forged_durable_admit_via_pump.sh` PASS; tests `forge_tick_durable_admit_advances_tip`, `forge_successor_builds_block_1_from_durable_tip`, `forged_admit_bytes_byte_identical_to_self_accept`, `stale_tip_forge_fails_closed`, `forged_admit_wal_prior_fp_chains` green.
+- CE-5/6 (S2): T-REC-05 + DC-WAL-04(no-orphan) **test-enforced** via `forge_kill_then_warm_start_recovers_same_tip_via_forward_replay` + `warm_start_drops_orphan_block_above_wal_tail` (in `cargo test -p ade_node`). HONEST DRIFT: the CE-5 gate `ci_check_forged_tip_recovery.sh` and the CE-6 test `forge_two_clean_runs_byte_identical` named in §8 were **not created literally** — S2 enforced replay-equivalence via the kill-recover fingerprint-equality test (recovered fp == WAL-tail post_fp) + the registry records T-REC-05 `ci_script = ""` (test-enforced) with rationale. The invariants are enforced; the §8 CE artifact names drifted during S2.
+- CE-7 (S3): `ci/ci_check_served_chain_projection.sh` PASS; tests `served_view_projects_durable_chain`, `follower_fetches_coherent_history_incl_ingested_predecessor`, `served_view_retires_accumulator` green.
+- Cluster-wide: `cargo test --workspace --exclude ade_testkit` → 0 failed (ade_testkit excluded — pre-existing ~600s corpus-suite timeout, environmental). Full CI gate sweep: 0 S3-introduced regressions (baseline-diff verified); S3 net-**fixed** `ci_check_registry_code_locus_exists`; 12 pre-existing gate failures remain (gate-vs-code drift in files N-U never touched — out of scope). C1 genesis-rehearsal mechanical regression preserved: a follower still adopts the served block 0, now via the durable projection (`served_view_projects_durable_chain`); the LIVE C1 rerun stays operator-gated.
+
+**Reviews:** IDD reviewer **PASS** (no BLOCK; one NIT — stale containment-gate comment, fixed in `4e358e92`). Cross-slice security reviewer **PASS** (no HIGH/CRITICAL). Central provenance confirmed: the durable store's only production writers are `pump_block` (validated admit; received + forged) + `bootstrap_initial_state` (trusted seed) — no unvalidated write path feeds the served store.
+
+**Tracked follow-ons (non-blocking; before RO-LIVE-01 / live serve):**
+- **[MEDIUM]** `ChainDb::iter_from_slot` (pre-existing, `chaindb/persistent.rs`) materializes the full range + O(N²) hash recovery, and the serve path has no per-request range cap → per-request availability amplification on a long chain. Add a streaming iterator + a max-blocks-per-range bound before any large-chain live serve. Hermetic/operator-gated/no-RO-LIVE-claim now, so not release-blocking.
+- **[LOW]** >64 KB block bodies cannot be served (session encoder does not segment payloads > `MAX_PAYLOAD` 65 535 B → drops the peer, fail-closed); unbounded inbound accept in `run_node_serve_task` (pre-existing shared infra). Both reinforce the cluster's no-live-serve claim.
+
+**No RO-LIVE flip; durability + coherent serve ≠ operator-witnessed peer acceptance (RO-LIVE-01 stays operator-gated).**
