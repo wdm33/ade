@@ -78,4 +78,24 @@ Serve is read-only (advances no tip, admits nothing). The bounded reads are a de
 - **`tip()` (resolved):** the serve stops calling `chaindb.tip()` (uses `last_block_bytes` + derive); `chaindb.tip()`'s O(N) remains for its trusted callers (not peer-driven) and is left alone.
 
 ## §13 Close record
-*(Open — filled at `/cluster-close` once CE-1…CE-2 are green.)*
+**CLOSED 2026-06-06.** Pre-RO-LIVE hardening item 1 — the `--mode node` serve path is now bounded against peer-driven resource amplification (DC-SERVEMEM-01 enforced). Closes the PHASE4-N-U cross-slice security review MEDIUM finding.
+
+**Cluster commits (impl span `610d666a..HEAD`):**
+- `a6e184e8` — cluster doc + DC-SERVEMEM-01 declared.
+- `f34a2229` / `6b8f1779` — S1 doc + impl (bounded hash-free ChainDb read primitives `range_bytes_capped` + `last_block_bytes`; `iter_from_slot`/`tip` doc-fenced, internals unchanged).
+- `1bed02e3` / `3d853ec0` — S2 doc + impl (serve cap `MAX_SERVE_RANGE_BLOCKS = 256` + fail-closed + derive-hash-at-serve; new gate `ci_check_serve_range_bounded.sh`; DC-SERVEMEM-01 → enforced).
+- `5c9f6cf6` — security-review MEDIUM fix (inverted-range `from > to` guard on both ChainDb impls + parity/serve tests).
+- *(this commit)* — close record + `strengthened_in` edits + grounding-doc refresh + archive.
+
+**CEs — all pass mechanically:**
+- **CE-1** (S1): `cargo test -p ade_runtime --lib chaindb` green — `range_bytes_capped_*` (5) + `last_block_bytes_returns_highest_slot` + `range_bytes_capped_inverted_range_is_empty` run against BOTH `PersistentChainDb` + `InMemoryChainDb` via `run_contract_tests` (contract parity now true incl. inverted ranges).
+- **CE-2** (S2, DC-SERVEMEM-01): `ci/ci_check_serve_range_bounded.sh` green + non-vacuous (pre-S2 HEAD had 2 `iter_from_slot` + 1 `chaindb.tip()` serve calls; S2 has 0); serve unit tests `serve_range_over_cap_fails_closed` / `_empty_window_is_empty_not_capexceeded` / `_undecodable_in_range_fails_closed` / `_inverted_range_fails_closed`; within-cap real-bytes parity via the `ade_node` serve loopback integration tests.
+- **Cluster-wide:** `cargo test -p ade_runtime -p ade_node` green; full `ci/ci_check_*.sh` sweep **136 / 0** (135 + the new gate).
+
+**Reviews:**
+- **IDD reviewer: PASS** (no BLOCK, no WARN) — RED-only (0 BLUE diff lines); determinism/replay/fail-fast/closed-surfaces all hold; every §11 hard prohibition mechanically verified.
+- **Cross-slice security review: PASS** (no HIGH+) — the hole is closed on every production-reachable path with layered fail-closed semantics + preserved byte-provenance. One MEDIUM (`InMemoryChainDb::range_bytes_capped` inverted-range panic + contract-parity gap) was FIXED in-cluster (`5c9f6cf6`), not deferred. Residual INFO (per-connection-count / repeated-request amplification) is out of scope — a separate later hardening surface, as with DC-LIVEMEM-01.
+
+**Registry:** +DC-SERVEMEM-01 (enforced); rules 333 → 334. `strengthened_in += "PHASE4-N-AA"` on DC-NODE-13 (serve projection now bounded) + DC-LIVEMEM-01 (the symmetric serve-side bound). New RED types `CappedSlotRange` + `ServeRangeOutcome` (not canonical). CI gates 135 → 136. No schema change, no BLUE change, no RO-LIVE flip.
+
+**Grounding docs refreshed:** CODEMAP / TRACEABILITY / SEAMS / HEAD_DELTAS regenerated; `head_deltas_baseline` bumped to the close.

@@ -5618,7 +5618,7 @@ code_locus = "crates/ade_network/src/session/core.rs (GREEN 16 MiB reassembly-ta
 tests = ["session_reassembly_tail_over_cap_fails_closed", "session_reassembly_tail_under_cap_still_drains_complete_item", "wirepump_lookahead_stops_at_cap", "wirepump_lookahead_cap_preserves_relay_behavior_under_normal_feed"]
 ci_script = "ci/ci_check_live_feed_memory_bounds.sh"
 introduced_in = "PHASE4-N-F-G-E"
-strengthened_in = []
+strengthened_in = ["PHASE4-N-AA"]
 status = "enforced"
 evidence_notes = """
 PHASE4-N-F-G-E invariant sketch (/invariants gate). ENFORCED at the
@@ -6515,5 +6515,5 @@ tests = ["served_view_projects_durable_chain", "follower_fetches_coherent_histor
 ci_script = "ci/ci_check_served_chain_projection.sh"
 status = "enforced"
 introduced_in = "PHASE4-N-U"
-strengthened_in = []
+strengthened_in = ["PHASE4-N-AA"]
 evidence_notes = "PHASE4-N-U S3 (2026-06-05). ENFORCED. The --mode node served view is a RED read-only projection of the durable ChainDb: ChainDbServedSource (crates/ade_runtime/src/network/served_chain_projection.rs) implements the BLUE serve seams ServedHeaderLookup + ServedRangeLookup over &dyn ChainDb (iter_from_slot/get_block_by_hash/tip; decode_block for block_no/era; the single block_header_bytes / DC-CONS-18 header authority; stored.bytes served verbatim, no re-encode). The single serve-dispatch authority dispatch_server_frame_event_to_outbound reads a ServedChainSource enum (Snapshot for --mode produce / DurableChainDb for --mode node) — DC-NODE-07 preserved (one dispatch, two read sources). run_node_serve_task serves over an Arc<dyn ChainDb> clone of the durable ChainDb; the G-R push sibling + serve_gate_admits + the ServedChainView accumulator are retired from the node path. Tests (tests/node_spine_serve_loopback.rs): served_view_projects_durable_chain (a follower block-fetches the durable block via the projection, byte-identical, DC-CONS-17); follower_fetches_coherent_history_incl_ingested_predecessor (durable A→B ⇒ next_after walk None→A→B→None + RequestRange[A,B] = StartBatch,Block(A),Block(B),BatchDone, never B without A); served_view_retires_accumulator (an empty durable chain serves nothing — RequestNext parks AwaitReply, no phantom accumulator). Unit tests in served_chain_projection.rs pin the empty-store + range-boundary contract. Gate ci/ci_check_served_chain_projection.sh fences the projection (reuses block_header_bytes, no parallel splitter, no re-encode) + the retirement (no serve_gate_admits / .push_atomic( / ServedChainHandle::new( in node_lifecycle). SUPERSEDES the PHASE4-N-F-G-R monotone serve-gate workaround (DC-NODE-11): the durable chain is extend-only (DC-CONS-23) so it holds exactly one block 0 by construction; serve-as-projection serves that stable, coherent chain without a gate, and serving survives restart (the durable ChainDb is recovered by T-REC-05; the accumulator was not). Provenance (CN-CONS-07 serve clause): the durable ChainDb's sole production writers are pump_block (DC-NODE-12) + bootstrap_initial_state, so serving cannot leak a byte that did not clear block_validity."
