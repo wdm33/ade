@@ -5439,14 +5439,26 @@ UNCHANGED (this cluster may ADD a served-chain handoff gate but MUST NOT relax
 containment). Peer acceptance is proven ONLY by the peer's validation log through
 ba02_evidence::correlate, never by Ade's self-accept / ForgeSucceeded / any
 wire-success signal (RO-LIVE-06).
+
+PHASE4-N-U S3 (DC-NODE-13) SUPERSEDES the SelfAcceptedHandoff -> ServedChainHandle::push_atomic
+accumulator MECHANISM on the --mode node spine with serve-as-projection: the node spine no longer
+feeds an in-memory accumulator; it serves a READ-ONLY PROJECTION of the durable ChainDb
+(ServedChainSource::DurableChainDb), whose bytes entered ONLY through the validated durable admit
+(pump_block, DC-NODE-12) + the trusted seed (bootstrap_initial_state). DC-NODE-06's DEEPER invariant --
+only validated/admitted bytes may be served on the node spine -- is PRESERVED and STRENGTHENED
+(durable-provenance per the CN-CONS-07 restatement; now survives restart). The handoff-fence gate is
+REPOINTED to fence the evolved invariant (the node-spine serve sources ONLY the durable ChainDb
+projection; no retired non-durable serve ingress -- no push_atomic / served_chain_admit /
+ServedChainHandle / SelfAcceptedHandoff channel). The --mode produce serve path (CN-PROD-04) is a
+SEPARATE authority and legitimately retains the SelfAcceptedHandoff carrier + ServedChainHandle.
 """
-source = "docs/planning/phase4-n-f-g-invariants.md"
-cross_ref = ["CN-PROD-04", "CN-CONS-07", "CN-NODE-02", "DC-NODE-05", "DC-EPOCH-03", "CN-WIRE-08", "RO-LIVE-01", "RO-LIVE-06"]
-code_locus = "crates/ade_node/src/node_lifecycle.rs, crates/ade_node/src/node_sync.rs, crates/ade_ledger/src/producer/served_chain.rs, crates/ade_runtime/src/producer/served_chain_handle.rs"
-tests = ["handoff_carrier_constructs_only_from_self_accepted_forge", "forge_surfaces_accepted_block_only_on_self_accept", "handoff_carrier_has_no_raw_bytes_constructor", "serve_ingress_type_rejects_failed_forge_outcome", "sibling_serve_admits_via_push_atomic_only", "serve_sibling_admission_replay_byte_identical", "serve_sibling_push_atomic_fed_only_by_into_accepted", "relay_loop_containment_semantics_unchanged_with_serve_sibling", "block_fetch_payload_is_self_accepted_bytes", "block_fetch_tag24_round_trips_to_self_accept_input", "live_feed_forge_serve_loopback_returns_forged_block"]
-ci_script = "ci/ci_check_served_chain_handoff_fence.sh, ci/ci_check_node_run_loop_containment.sh"
+source = "docs/planning/phase4-n-f-g-invariants.md; docs/clusters/completed/PHASE4-N-U/cluster.md (S3 supersession)"
+cross_ref = ["CN-PROD-04", "CN-CONS-07", "CN-NODE-02", "DC-NODE-05", "DC-EPOCH-03", "CN-WIRE-08", "RO-LIVE-01", "RO-LIVE-06", "DC-NODE-13", "DC-NODE-12"]
+code_locus = "crates/ade_node/src/node_lifecycle.rs (run_node_serve_task -> ServedChainSource::DurableChainDb over Arc<dyn ChainDb>; the G-B push sibling + serve_gate_admits + handoff channel retired), crates/ade_node/src/node_sync.rs, crates/ade_runtime/src/network/served_chain_projection.rs (ChainDbServedSource -- the durable-provenance serve source), crates/ade_runtime/src/network/serve_dispatch.rs (ServedChainSource). HISTORICAL (G-B/G-C, superseded by N-U S3): crates/ade_runtime/src/producer/served_chain_handle.rs (ServedChainHandle -- now --mode produce only), crates/ade_ledger/src/producer/served_chain.rs"
+tests = ["handoff_carrier_constructs_only_from_self_accepted_forge", "forge_surfaces_accepted_block_only_on_self_accept", "handoff_carrier_has_no_raw_bytes_constructor", "serve_ingress_type_rejects_failed_forge_outcome", "sibling_serve_admits_via_push_atomic_only", "serve_sibling_admission_replay_byte_identical", "serve_sibling_push_atomic_fed_only_by_into_accepted", "relay_loop_containment_semantics_after_serve_sibling_retired", "block_fetch_payload_is_self_accepted_bytes", "block_fetch_tag24_round_trips_to_self_accept_input", "live_feed_forge_serve_loopback_returns_forged_block", "served_view_projects_durable_chain", "served_view_retires_accumulator"]
+ci_script = "ci/ci_check_served_chain_handoff_fence.sh, ci/ci_check_node_run_loop_containment.sh, ci/ci_check_served_chain_projection.sh"
 introduced_in = "PHASE4-N-F-G-B"
-strengthened_in = ["PHASE4-N-F-G-C"]
+strengthened_in = ["PHASE4-N-F-G-C", "PHASE4-N-U"]
 status = "enforced"
 evidence_notes = """
 PHASE4-N-F-G invariant sketch (/invariants gate). Declared at sketch; tests +
@@ -5469,6 +5481,24 @@ node_lifecycle.rs and its deny-list is non-exhaustive (the positive <SelfAccepte
 check is load-bearing) -- revisit when the serve path moves to live wiring. NO BLUE change.
 No real socket/peer wired (hermetic loopback only; live serve + operator peer ACCEPT = G-C;
 RO-LIVE-01/06 stay partial).
+
+PHASE4-N-U S3 SUPERSESSION + CLOSE CORRECTION (2026-06-05). N-U S3 retired the --mode node spine
+SelfAcceptedHandoff -> push_atomic accumulator (the mechanism this rule's gate fenced) in favor of
+serve-as-projection from the durable ChainDb (DC-NODE-13). The DC-NODE-06 gate
+ci_check_served_chain_handoff_fence.sh was therefore STRANDED by the N-U close -- it kept fencing the
+retired mechanism (the gate's "no push_atomic on the node spine" check inverted: N-U removed the very
+push_atomic it required). The N-U /cluster-close set-based gate-diff MASKED this (the gate was already
+failing for an unrelated same-line technicality, so it appeared in both the pre- and post-impl failing
+sets and was mis-classified pre-existing), so the close commit's "0 N-U-introduced gate regressions"
+claim was INCOMPLETE. CORRECTED post-close: the gate is REPOINTED (not retired -- the CI count stays
+135, avoiding churn in the just-refreshed grounding docs) to fence the EVOLVED durable-provenance serve
+(node-spine serve sources ONLY ServedChainSource::DurableChainDb; no retired non-durable serve ingress),
+GREEN; strengthened_in += PHASE4-N-U; the renamed relay_loop_containment test reference fixed; the
+durable-projection serve tests (served_view_projects_durable_chain, served_view_retires_accumulator) +
+gate ci_check_served_chain_projection.sh added. Mirrors the DC-NODE-11 supersession treatment. The
+DEEPER invariant (only validated/admitted bytes served on the node spine) is preserved + strengthened
+(durable-provenance, survives restart). Grounding-doc descriptions of this gate's checks are reconciled
+in the follow-on gate-hygiene pass. NO RO-LIVE flip.
 """
 
 [[rules]]
