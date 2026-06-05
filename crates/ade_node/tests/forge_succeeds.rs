@@ -71,6 +71,16 @@ use ade_runtime::producer::self_accepted_handoff::SelfAcceptedHandoff;
 use ade_runtime::producer::served_chain_handle::{ServedChainHandle, ServedChainView};
 use ade_runtime::producer::served_chain_lookups::ServedChainLookups;
 
+// PHASE4-N-U S1 — durable-forge-admit (DC-NODE-12) test surface.
+use ade_ledger::receive::ReceiveState;
+use ade_ledger::wal::{WalEntry, WalStore};
+use ade_node::node_sync::admit_forged_block_durably;
+use ade_runtime::chaindb::{ChainDb, PersistentChainDb, PersistentChainDbOptions};
+use ade_runtime::forward_sync::ForwardSyncState;
+use ade_runtime::rollback::SnapshotCadence;
+use ade_runtime::wal::FileWalStore;
+use tempfile::TempDir;
+
 // =========================================================================
 // Synthetic-corpus helpers (mirror forge_handler_variants::synth_shell)
 // =========================================================================
@@ -861,4 +871,280 @@ fn serve_gate_keeps_first_block_zero_skips_reforge() {
         "two block-0 forges through the serve gate leave EXACTLY ONE block 0 in the served \
          view (the first wins; the re-forge is skipped) — DC-NODE-11"
     );
+}
+
+// =========================================================================
+// PHASE4-N-U S1 — own-forged durable admit through the pump (DC-NODE-12,
+// DC-CONS-23, DC-WAL-04 chaining). A self-accepted forged block becomes
+// durable ONLY through admit_forged_block_durably -> pump_block (the SAME
+// chokepoint received blocks use): extend-only validate -> StoreBlockBytes ->
+// AppendWal -> AdvanceTip. The forge advances no durable tip directly.
+// =========================================================================
+
+/// Forge a genesis-successor block 0 (block 0 + PrevHash::Genesis) to
+/// self-accept; return the typed handoff, the self-accepted bytes (for the
+/// I-10 byte-identity check), and the eligible fixture (whose era_schedule +
+/// pool_distr_view the durable admit reuses for header validation).
+fn forge_block0_handoff(
+    shell: &mut ProducerShell,
+    slot: u64,
+) -> (SelfAcceptedHandoff, Vec<u8>, EligibleFixture) {
+    let fixture = EligibleFixture::build(shell, slot, EpochNo(0));
+    let (event, handoff) = run_real_forge(slot, 0, &fixture.ctx(), shell);
+    let accepted = match (event, handoff) {
+        (CoordinatorEvent::ForgeSucceeded { .. }, Some(a)) => a,
+        (ev, _) => panic!(
+            "PHASE4-N-U S1 setup: expected block-0 ForgeSucceeded with a self-accepted token, \
+             got {ev:?}"
+        ),
+    };
+    let forged_bytes = accepted.as_bytes().to_vec();
+    (
+        SelfAcceptedHandoff::from_self_accepted(accepted),
+        forged_bytes,
+        fixture,
+    )
+}
+
+/// A fresh durable store (real PersistentChainDb + FileWalStore) plus a
+/// ForwardSyncState whose base matches the forge base (genesis Conway @ epoch 0
+/// + chain_dep eta0 = 0xCD, the EligibleFixture constants), so pump_block's
+/// extend-only block_validity accepts the forged genesis-successor block 0.
+/// The anchor/prior_fp seed is Hash32([0xA0; 32]) — the first forged AdmitBlock
+/// chains from it (DC-WAL-04).
+fn durable_store() -> (TempDir, PersistentChainDb, FileWalStore, ForwardSyncState) {
+    let dir = TempDir::new().expect("tempdir");
+    let chaindb =
+        PersistentChainDb::open(PersistentChainDbOptions::at(dir.path().join("chain.db")))
+            .expect("chaindb");
+    let wal = FileWalStore::open(dir.path().join("wal")).expect("wal");
+    let mut ledger = LedgerState::new(CardanoEra::Conway);
+    ledger.epoch_state.epoch = EpochNo(0);
+    let mut chain_dep = PraosChainDepState::empty();
+    chain_dep.epoch_nonce = Nonce(Hash32([0xCD; 32]));
+    let state = ForwardSyncState::new(
+        ReceiveState::new(ledger, chain_dep),
+        Hash32([0xA0; 32]),
+        SnapshotCadence::DEFAULT,
+    );
+    (dir, chaindb, wal, state)
+}
+
+#[test]
+fn forge_tick_durable_admit_advances_tip() {
+    // DC-NODE-12 / CE-1: a self-accepted forged block reaches the durable tip
+    // ONLY through admit_forged_block_durably -> pump_block (durable-before-tip).
+    let mut shell = synth_shell(0x11, 0x22, 0x33);
+    let (h, _bytes, fixture) = forge_block0_handoff(&mut shell, 1);
+    let (_dir, chaindb, mut wal, mut state) = durable_store();
+
+    let tip = admit_forged_block_durably(
+        &h,
+        &mut state,
+        &chaindb,
+        &mut wal,
+        &fixture.era_schedule,
+        &fixture.pool_distr_view,
+    )
+    .expect("durable admit ok")
+    .expect("the forged block advanced the durable tip");
+
+    let chain_tip = ChainDb::tip(&chaindb).expect("tip").expect("non-empty");
+    assert_eq!(chain_tip.slot, tip.slot, "ChainDb tip slot == admitted tip");
+    assert_eq!(chain_tip.hash, tip.hash, "ChainDb tip hash == admitted tip");
+    let entries = wal.read_all().expect("read_all");
+    assert!(
+        entries
+            .iter()
+            .any(|e| matches!(e, WalEntry::AdmitBlock { slot, .. } if *slot == tip.slot)),
+        "the forged block must be WAL-admitted at the durable tip slot (durable-before-tip)"
+    );
+}
+
+#[test]
+fn forge_successor_builds_block_1_from_durable_tip() {
+    // DC-NODE-12 / CE-1: after admitting block 0, state.receive + the durable
+    // ChainDb advance together, so the next forge builds block 1 on the durable
+    // tip — a real growing chain.
+    let mut shell = synth_shell(0xBB, 0xCC, 0xDD);
+    let (h0, _b0, fx0) = forge_block0_handoff(&mut shell, 1);
+    let (_dir, chaindb, mut wal, mut state) = durable_store();
+
+    let tip0 = admit_forged_block_durably(
+        &h0,
+        &mut state,
+        &chaindb,
+        &mut wal,
+        &fx0.era_schedule,
+        &fx0.pool_distr_view,
+    )
+    .expect("admit block 0")
+    .expect("tip 0");
+    assert_eq!(
+        state.receive.chain_dep.last_block_no,
+        Some(BlockNo(0)),
+        "the evolved spine's last_block_no is 0 after admitting block 0"
+    );
+
+    // Forge block 1 on the DURABLE tip (block 0), against the EVOLVED base.
+    let fx1 = EligibleFixture::build(&shell, 2, EpochNo(0));
+    let ctx1 = ForgeRequestContext {
+        eta0: &state.receive.chain_dep.epoch_nonce,
+        vrf_vk: &fx1.vrf_vk,
+        leader_schedule_answer: &fx1.leader_answer,
+        pparams: &fx1.pparams,
+        base_state: &state.receive.ledger,
+        chain_dep_state: &state.receive.chain_dep,
+        era_schedule: &fx1.era_schedule,
+        pool_distr_view: &fx1.pool_distr_view,
+        block_number: BlockNo(1),
+        prev_hash: PrevHash::Block(tip0.hash.clone()),
+        protocol_version: ProtocolVersion { major: 9, minor: 0 },
+        prev_opcert_counter: None,
+    };
+    let (ev1, hd1) = run_real_forge(2, 0, &ctx1, &mut shell);
+    let accepted1 = match (ev1, hd1) {
+        (CoordinatorEvent::ForgeSucceeded { .. }, Some(a)) => a,
+        (ev, _) => panic!("expected block-1 ForgeSucceeded on the durable tip, got {ev:?}"),
+    };
+    let h1 = SelfAcceptedHandoff::from_self_accepted(accepted1);
+
+    let tip1 = admit_forged_block_durably(
+        &h1,
+        &mut state,
+        &chaindb,
+        &mut wal,
+        &fx1.era_schedule,
+        &fx1.pool_distr_view,
+    )
+    .expect("admit block 1")
+    .expect("tip 1");
+
+    assert_ne!(tip1.hash, tip0.hash, "block 1 has a distinct hash from block 0");
+    assert_eq!(
+        state.receive.chain_dep.last_block_no,
+        Some(BlockNo(1)),
+        "after admitting block 1 the durable spine's last_block_no is 1 — a real growing chain"
+    );
+    let chain_tip = ChainDb::tip(&chaindb).expect("tip").expect("non-empty");
+    assert_eq!(chain_tip.hash, tip1.hash, "the durable ChainDb tip is block 1");
+    let admits = wal
+        .read_all()
+        .expect("read_all")
+        .into_iter()
+        .filter(|e| matches!(e, WalEntry::AdmitBlock { .. }))
+        .count();
+    assert_eq!(
+        admits, 2,
+        "the WAL holds two forged AdmitBlock entries (block 0 + block 1)"
+    );
+}
+
+#[test]
+fn forged_admit_bytes_byte_identical_to_self_accept() {
+    // I-10 / CE-2: the durably-stored bytes are byte-identical to the
+    // self-accepted bytes — no re-encode between self_accept and durable admit.
+    let mut shell = synth_shell(0x44, 0x55, 0x66);
+    let (h, forged_bytes, fixture) = forge_block0_handoff(&mut shell, 1);
+    let (_dir, chaindb, mut wal, mut state) = durable_store();
+
+    let tip = admit_forged_block_durably(
+        &h,
+        &mut state,
+        &chaindb,
+        &mut wal,
+        &fixture.era_schedule,
+        &fixture.pool_distr_view,
+    )
+    .expect("ok")
+    .expect("tip");
+
+    let stored = ChainDb::get_block_by_hash(&chaindb, &tip.hash)
+        .expect("get")
+        .expect("block present durably");
+    assert_eq!(
+        stored.bytes, forged_bytes,
+        "the durably-stored bytes must be byte-identical to the self-accepted bytes (I-10)"
+    );
+}
+
+#[test]
+fn stale_tip_forge_fails_closed() {
+    // DC-CONS-23 / CE-3: a stale-tip forge (a re-mint block 0 against a chain
+    // already at block 0) fails closed at the extend-only admit; the durable
+    // tip is unchanged. No own-block override; no admit-time fork-choice.
+    let mut shell = synth_shell(0x88, 0x99, 0xAA);
+    let (h0, _b0, fx0) = forge_block0_handoff(&mut shell, 1);
+    let (_dir, chaindb, mut wal, mut state) = durable_store();
+    let tip0 = admit_forged_block_durably(
+        &h0,
+        &mut state,
+        &chaindb,
+        &mut wal,
+        &fx0.era_schedule,
+        &fx0.pool_distr_view,
+    )
+    .expect("admit block 0")
+    .expect("tip 0");
+
+    // A second genesis-successor block 0 (PrevHash::Genesis) does not extend a
+    // chain already at block 0 — the extend-only admit rejects it.
+    let (h_stale, _bs, fx_stale) = forge_block0_handoff(&mut shell, 3);
+    let res = admit_forged_block_durably(
+        &h_stale,
+        &mut state,
+        &chaindb,
+        &mut wal,
+        &fx_stale.era_schedule,
+        &fx_stale.pool_distr_view,
+    );
+    assert!(
+        res.is_err(),
+        "a stale-tip re-mint (block 0 on a chain already at block 0) must fail closed (DC-CONS-23)"
+    );
+    let chain_tip = ChainDb::tip(&chaindb).expect("tip").expect("non-empty");
+    assert_eq!(
+        chain_tip.hash, tip0.hash,
+        "the durable tip is unchanged after the failed stale-tip admit"
+    );
+    assert_eq!(chain_tip.slot, tip0.slot);
+}
+
+#[test]
+fn forged_admit_wal_prior_fp_chains() {
+    // DC-WAL-04 (chaining) / CE-4: the forged AdmitBlock's prior_fp chains from
+    // the anchor initial_ledger_fingerprint, and the WAL verifies from it.
+    let mut shell = synth_shell(0x77, 0x12, 0x34);
+    let (h, _bytes, fixture) = forge_block0_handoff(&mut shell, 1);
+    let (_dir, chaindb, mut wal, mut state) = durable_store();
+    admit_forged_block_durably(
+        &h,
+        &mut state,
+        &chaindb,
+        &mut wal,
+        &fixture.era_schedule,
+        &fixture.pool_distr_view,
+    )
+    .expect("ok")
+    .expect("tip");
+
+    let (prior_fp, post_fp) = wal
+        .read_all()
+        .expect("read_all")
+        .into_iter()
+        .find_map(|e| match e {
+            WalEntry::AdmitBlock {
+                prior_fp, post_fp, ..
+            } => Some((prior_fp, post_fp)),
+            _ => None,
+        })
+        .expect("a forged AdmitBlock entry");
+    assert_eq!(
+        prior_fp,
+        Hash32([0xA0; 32]),
+        "the first forged AdmitBlock.prior_fp == the anchor initial_ledger_fingerprint"
+    );
+    assert_ne!(post_fp, Hash32([0u8; 32]), "post_fp is a real ledger fingerprint");
+    wal.verify_chain(&Hash32([0xA0; 32]))
+        .expect("the forged WAL chain verifies from the anchor");
 }

@@ -6342,13 +6342,13 @@ durable tip-advance authority.
 """
 source = "docs/planning/phase4-n-u-forged-block-durability-invariants.md"
 cross_ref = ["DC-NODE-05", "DC-SYNC-01", "DC-SYNC-02", "CN-NODE-02", "CN-FORGE-01", "DC-WAL-04", "DC-CONS-23", "T-REC-05"]
-code_locus = "crates/ade_node/src/{node_lifecycle,node_sync}.rs; crates/ade_runtime/src/forward_sync/{reducer,pump}.rs; crates/ade_ledger/src/{receive,producer/self_accept}.rs (TBD at /cluster-plan)"
-tests = []
-ci_script = ""
-status = "declared"
+code_locus = "crates/ade_node/src/node_sync.rs (admit_forged_block_durably -- the fenced driver -> pump_block); crates/ade_node/src/node_lifecycle.rs (ForgeTick arm admits the self-accepted handoff via the driver); crates/ade_runtime/src/forward_sync/{reducer,pump}.rs (pump_block / AdmitPlan::durable -- reused)"
+tests = ["forge_tick_durable_admit_advances_tip", "forge_successor_builds_block_1_from_durable_tip", "forged_admit_bytes_byte_identical_to_self_accept"]
+ci_script = "ci/ci_check_forged_durable_admit_via_pump.sh, ci/ci_check_node_run_loop_containment.sh"
+status = "enforced"
 introduced_in = "PHASE4-N-U"
 strengthened_in = []
-evidence_notes = "PHASE4-N-U invariant sketch (2026-06-05, /invariants gate). Declared at sketch; tests + ci_script populated at slice time. Core N-U rule: routes own-forged blocks through the existing durable admit authority (not a forge-specific tip path). OQ-a resolved as supersede-via-cross-ref (option 1): DC-NODE-05 PRESERVED (no direct forge-side tip mutation), DC-NODE-12 introduced; no major-version deprecation."
+evidence_notes = "PHASE4-N-U S1 (2026-06-05). ENFORCED. ade_node::node_sync::admit_forged_block_durably feeds the self-accepted handoff's bytes (accepted().as_bytes(), no re-encode) into the existing forward_sync::pump_block chokepoint (StoreBlockBytes -> AppendWal -> AdvanceTip, durable-before-tip); the ForgeTick arm calls it before the G-R serve handoff. pump_block advances state.receive + the durable ChainDb together, so the next forge builds N+1 (forge_successor_builds_block_1_from_durable_tip). The forge advances no durable tip directly (DC-NODE-05 preserved; ci_check_node_run_loop_containment.sh allow-lists the 2nd fenced tip-advancer + forbids direct pump_block/put_block/AdvanceTip/rollback in the loop body). ci_check_forged_durable_admit_via_pump.sh fences the driver (routes through pump_block, no re-encode, no fork-choice, no manual tip advance). OQ-a resolved as supersede-via-cross-ref: DC-NODE-05 PRESERVED."
 
 [[rules]]
 id = "DC-WAL-04"
@@ -6364,13 +6364,13 @@ un-WAL'd forged orphan at or ahead of the durable tip.
 """
 source = "docs/planning/phase4-n-u-forged-block-durability-invariants.md"
 cross_ref = ["DC-WAL-01", "DC-WAL-02", "DC-WAL-03", "DC-SYNC-01", "T-REC-05", "DC-NODE-12"]
-code_locus = "crates/ade_ledger/src/wal/*; crates/ade_runtime/src/{wal,recovery/restart}.rs (TBD at /cluster-plan)"
-tests = []
-ci_script = ""
-status = "declared"
+code_locus = "crates/ade_ledger/src/wal/* (WalEntry::AdmitBlock prior_fp/post_fp + verify_chain -- reused); crates/ade_node/src/node_sync.rs (admit_forged_block_durably -> pump_block appends the forged AdmitBlock). S2: crates/ade_runtime/src/{recovery/restart,wal}.rs (no-orphan reconciliation)"
+tests = ["forged_admit_wal_prior_fp_chains"]
+ci_script = "ci/ci_check_forged_durable_admit_via_pump.sh"
+status = "partial"
 introduced_in = "PHASE4-N-U"
 strengthened_in = []
-evidence_notes = "PHASE4-N-U invariant sketch (2026-06-05). Declared at sketch. Fixes the README ChainBreak hazard (a prior-run ingested/adopted block 0 leaving a WAL that does not chain to the seed WAL) by binding forged AdmitBlock entries to the same verify_chain prior_fp==post_fp discipline as received blocks."
+evidence_notes = "PHASE4-N-U S1 (2026-06-05). PARTIAL -- the CHAINING clause is enforced: a forged AdmitBlock's prior_fp chains from the anchor initial_ledger_fingerprint and the forged WAL verifies from it (forged_admit_wal_prior_fp_chains), because admit_forged_block_durably routes through the SAME pump_block / forward_sync_step that sets prior_fp = state.prior_fp and post_fp = the post-admit fingerprint. The NO-ORPHAN-RECOVERY clause (warm-start reconciliation: a torn forge-admit crash leaves no un-WAL'd forged orphan) flips this to enforced at S2 (T-REC-05)."
 
 [[rules]]
 id = "T-REC-05"
@@ -6411,13 +6411,13 @@ in the follow / chain_selector paths -- NOT the durable admit.
 """
 source = "docs/planning/phase4-n-u-forged-block-durability-invariants.md"
 cross_ref = ["DC-CONS-03", "DC-NODE-12", "DC-WAL-04", "DC-SYNC-01", "CN-WIRE-09"]
-code_locus = "crates/ade_ledger/src/receive/{reducer,admitted}.rs (extend-only admit_via_block_validity); crates/ade_ledger/src/block_validity/header_position.rs (prev_hash/position fail-closed); crates/ade_runtime/src/forward_sync/{reducer,pump}.rs (prior_fp chain + TipBeforeDurable) (TBD at /cluster-plan)"
-tests = []
-ci_script = ""
-status = "declared"
+code_locus = "crates/ade_ledger/src/receive/{reducer,admitted}.rs (extend-only admit_via_block_validity -- reused); crates/ade_ledger/src/block_validity/header_position.rs (prev_hash/position fail-closed -- reused); crates/ade_node/src/node_sync.rs (admit_forged_block_durably -> pump_block, no admit-time fork-choice)"
+tests = ["stale_tip_forge_fails_closed"]
+ci_script = "ci/ci_check_forged_durable_admit_via_pump.sh"
+status = "enforced"
 introduced_in = "PHASE4-N-U"
 strengthened_in = []
-evidence_notes = "PHASE4-N-U cluster plan (2026-06-05). Reframed from the sketch's fork-choice framing after code investigation: the durable admit path (receive_apply -> admit_via_block_validity -> block_validity) is EXTEND-ONLY -- select_best_chain/fork_choice are NOT called there (they live only in ade_core_interop::follow + ade_runtime::consensus::chain_selector). Own-forged race safety is achieved by extend-only validation + WAL prior_fp chaining failing closed on a stale-tip forge, NOT by an admit-time fork-choice. DC-CONS-03 stays the fork-choice authority where it actually exists."
+evidence_notes = "PHASE4-N-U S1 (2026-06-05). ENFORCED. A stale-tip forge (a re-mint block 0 admitted against a chain already at block 0) FAILS CLOSED at the extend-only durable admit -- block_validity rejects the non-extending block; the durable tip is unchanged (stale_tip_forge_fails_closed). No admit-time fork-choice was added (ci_check_forged_durable_admit_via_pump.sh fences select_best_chain/fork_choice absent from the driver); DC-CONS-03 stays the fork-choice authority in the follow/chain_selector paths. Reframed at /cluster-plan from the sketch's (incorrect) fork-choice framing after code investigation confirmed the durable admit is extend-only."
 
 [[rules]]
 id = "DC-NODE-13"

@@ -3,7 +3,7 @@
 ## §2 Slice Header
 - **Slice Name:** own-forged durable admit through the pump
 - **Cluster:** PHASE4-N-U (forged-block durability) — primary invariant **DC-NODE-12**
-- **Status:** declared → in progress
+- **Status:** done — S1 complete (commits `71e789db` gate repair, `f35451f5` code+fences, + tests/rule-flip); DC-NODE-12 + DC-CONS-23 → enforced, DC-WAL-04 → partial (chaining; no-orphan = S2)
 - **Cluster Exit Criteria Addressed:** **CE-1** (DC-NODE-12 — forged block reaches the durable tip ONLY via the fenced driver → `pump_block`, durable-before-tip, no second tip-advance path), **CE-2** (I-10 — byte-identity; no re-encode; no new `WalEntry` variant), **CE-3** (DC-CONS-23 — stale-tip forge fails closed; no admit-time fork-choice), **CE-4** (DC-WAL-04 chaining — forged `AdmitBlock.prior_fp == current durable post_fp`). *(CE-5/6 recovery = S2; CE-7 serve = S3.)*
 
 ## §3 Dependencies
