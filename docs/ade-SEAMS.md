@@ -3,10 +3,56 @@
 > **Status:** Living architectural document. Regenerated; not hand-edited.
 > Per-project instance of `~/.claude/methodology/templates/seams.md`.
 
-> 11 crates, **458 canonical types**, **135 CI checks** at HEAD (`4e358e92`, PHASE4-N-U cluster close — forged-block durability).
-> Reads CODEMAP (`docs/ade-CODEMAP.md`, regenerated at the same HEAD) for the module
+> 11 crates, **458 canonical types**, **135 CI checks** at HEAD (`999199f8`, post-PHASE4-N-U gate-hygiene span).
+> Reads CODEMAP (`docs/ade-CODEMAP.md`, intentionally NOT regenerated this pass — structurally current,
+> still pinned at `4e358e92`: same 458 canonical types / 135 CI / 333 rules) for the module
 > list + TCB colors, and the invariant registry (`docs/ade-invariant-registry.toml` —
-> **333 entries** at HEAD) for the rule IDs that gate each closed surface.
+> **333 entries** at HEAD, already reconciled for the DC-NODE-06 repoint) for the rule IDs that gate each closed surface.
+> **Counts unchanged across this span** (458 / 135 / 333) — the span is gate hygiene, NOT an invariant or surface change.
+>
+> ### Post-N-U gate-hygiene span (`4e358e92` → `999199f8`, 2026-06-05) — DC-NODE-06 handoff-fence REPOINT + green-means-green CI sweep
+
+>
+> **This regeneration is a FOCUSED single-span refresh** (applied directly to the on-disk SEAMS, no CODEMAP
+> regenerate). It brings SEAMS current from its last pin (`4e358e92`, the PHASE4-N-U close-doc refresh) to HEAD
+> (`999199f8`), splicing the post-N-U-close gate-hygiene span. **CODEMAP was intentionally NOT regenerated** — it
+> is structurally current (unchanged module inventory; **458** canonical types / **135** CI / **333** rules) and
+> stays pinned at `4e358e92`; this refresh reads it as-is. **Counts are UNCHANGED across the span** (458 / 135 /
+> 333): **NO new BLUE type, NO new surface, NO new version-gated contract, NO net CI gate** (the 11 gates the span
+> touches are all MODIFIED in place — count stays 135). The two source-file touches
+> (`ade_ledger/src/block_validity/mod.rs`, `ade_runtime/src/seed_import/importer.rs`) are pure **doc-comment**
+> hygiene (stale comments reconciled to the code a gate greps); **no semantic code change, no invariant weakened.**
+>
+> **The ONE material SEAMS change — the DC-NODE-06 handoff-fence REPOINT (`60deecf3`).** The gate
+> `ci/ci_check_served_chain_handoff_fence.sh` was **repointed** (not retired — the CI count stays **135**, avoiding
+> churn in the just-refreshed grounding docs). It **NO LONGER** fences the PHASE4-N-F-G-B *“`SelfAcceptedHandoff`
+> → `ServedChainHandle::push_atomic` accumulator”* handoff on the `--mode node` spine: **N-U S3 RETIRED that
+> mechanism** in favor of serve-as-projection (DC-NODE-13), and the N-U close STRANDED the gate (its “every
+> node-spine `push_atomic(` fed by `into_accepted()`” check inverted — N-U removed the very `push_atomic` it
+> required; the set-based close-pass gate-diff masked this). It now fences the **EVOLVED DC-NODE-06
+> durable-provenance serve**: the `--mode node` spine serve sources **ONLY** `ServedChainSource::DurableChainDb`
+> (the durable ChainDb read-only projection, `ade_runtime::network::served_chain_projection::ChainDbServedSource`)
+> over `Arc<dyn ChainDb>`, with **NO retired non-durable serve ingress** — no `push_atomic(` / `served_chain_admit(`
+> / `ServedChainHandle` / `SelfAcceptedHandoff` handoff channel on the node spine. DC-NODE-06's **DEEPER**
+> invariant (*only validated/admitted bytes may be served on the node spine*) is **PRESERVED and STRENGTHENED**
+> (durable-provenance per the CN-CONS-07 restatement; it now SURVIVES RESTART). Owners stay
+> `{node_lifecycle.rs, node_sync.rs}`; complementary to `ci_check_served_chain_projection.sh` (the DC-NODE-13
+> projection-SHAPE gate) — this gate is the serve-PROVENANCE angle. The registry (`DC-NODE-06`) was already
+> reconciled at `60deecf3` (`ci_script += ci_check_served_chain_projection.sh`; `code_locus` repointed to the
+> durable-projection serve source; `strengthened_in += PHASE4-N-U`; rule count UNCHANGED at 333).
+>
+> **The G-B handoff MECHANISM is now SUPERSEDED** (by N-U S3 / DC-NODE-13) **wherever it described the `--mode
+> node` serve path** — §1 *self-accept→serve handoff* surface, §2 *self-accept→serve handoff* domain, and the §3
+> `SelfAcceptedHandoff` registry entry are annotated below. **The `SelfAcceptedHandoff` carrier itself is
+> RETAINED** — `--mode produce` (CN-PROD-04) is a SEPARATE serve authority that legitimately keeps the carrier +
+> `ServedChainHandle` (`ServedChainSource::Snapshot`). **Historical / carried narrative references to this gate in
+> past-cluster (G-B / G-C / G-D / G-E / G-H) delta sections below are pin-correct for their spans and are LEFT
+> as-is** — only the CURRENT-state descriptions are updated.
+>
+> **Green-means-green.** The other 10 gates the span touches (`999199f8` repaired 10 pre-existing gate-vs-code
+> drifts; `e92b40b7` made `ci_check_no_secrets.sh` actually run past `ARG_MAX` + tuned IP false positives) are
+> drift/hygiene fixes only — **no invariant weakened**. The full CI sweep is now **135 / 0 GREEN**
+> (`ls ci/ci_check_*.sh | wc -l` = 135, every gate passes).
 >
 > ### PHASE4-N-U cluster close (`4e358e92`) — forged-block durability: own-tip durable admit + warm-start recovery + serve-as-projection of the durable ChainDb
 
@@ -1147,7 +1193,20 @@ HONEST SCOPE: N-F-G-C wires the MECHANICAL live feed; the binary is forge-CAPABL
   serve-to-peer / gossip / durable-forge claim.
 ```
 
-### Surface: --mode node self-accept→serve handoff (the typed handoff seam, N-F-G-B)
+### Surface: --mode node self-accept→serve handoff (the typed handoff seam, N-F-G-B) — MECHANISM SUPERSEDED on the `--mode node` spine by N-U S3 / DC-NODE-13
+
+> **SUPERSEDED on the `--mode node` spine (N-U S3 / DC-NODE-13, repoint `60deecf3`).** The serve-handoff
+> MECHANISM described in this block — surfacing the self-accepted `AcceptedBlock` → `SelfAcceptedHandoff` carrier →
+> typed channel → sibling task → `ServedChainHandle::push_atomic` — is **RETIRED on the `--mode node` spine.** N-U
+> S3 replaced it with **serve-as-projection of the durable ChainDb** (`ServedChainSource::DurableChainDb`; see the
+> §1 *--mode node lifecycle* / §2 *forged-block serving* N-U notes): the node spine no longer feeds an in-memory
+> accumulator — it serves a READ-ONLY projection of the durable chain, whose bytes entered ONLY through the
+> validated durable admit (`pump_block`, DC-NODE-12) + the trusted seed (`bootstrap_initial_state`). The forge's
+> own block reaches the served view by becoming DURABLE (`admit_forged_block_durably` → `pump_block`), NOT by a
+> serve handoff. The handoff-fence gate `ci_check_served_chain_handoff_fence.sh` is REPOINTED accordingly (see §5).
+> **The `SelfAcceptedHandoff` carrier is RETAINED for `--mode produce` (CN-PROD-04, `ServedChainSource::Snapshot`)
+> — a SEPARATE serve authority.** The block below is preserved as the historical N-F-G-B mechanism; the
+> CURRENT `--mode node` serve provenance is durable-projection.
 
 ```
 Surface: self-accept→serve handoff on the --mode node spine (GREEN ade_runtime::producer::self_accepted_handoff::SelfAcceptedHandoff + RED ade_node::{node_sync::forge_one_from_recovered, node_lifecycle sibling serve task})
@@ -1851,7 +1910,16 @@ reuses `CoordinatorState::kes_period_for_slot`. **The custody/signing chokepoint
 **Rule (CN-FORGE-02):** BLUE never sees the VRF/KES/cold keys; the evaluator has no
 `LedgerView`/`EraSchedule`/`ChainDepState`/clock/storage/RED dep. The RED/BLUE split never moves.
 
-### Domain: self-accept→serve handoff — typed carrier vs. single serve authority (GREEN carrier / RED sibling task / BLUE admit-behind-seams; N-F-G-B)
+### Domain: self-accept→serve handoff — typed carrier vs. single serve authority (GREEN carrier / RED sibling task / BLUE admit-behind-seams; N-F-G-B) — `--mode node` serve usage SUPERSEDED by N-U S3 / DC-NODE-13
+
+> **SUPERSEDED on the `--mode node` spine (N-U S3 / DC-NODE-13, repoint `60deecf3`).** The `--mode node` serve no
+> longer routes a forged block through this typed carrier → sibling `push_atomic` mechanism; it serves a READ-ONLY
+> projection of the durable ChainDb (`ServedChainSource::DurableChainDb` over `Arc<dyn ChainDb>` — see the §2
+> *forged-block serving* domain's N-U note and the durable-projection serve row). A forged block reaches the served
+> view by becoming DURABLE (`admit_forged_block_durably` → `pump_block`, DC-NODE-12), not by a serve handoff. The
+> fence `ci_check_served_chain_handoff_fence.sh` is REPOINTED to the durable-provenance serve (§5). **The carrier +
+> `ServedChainHandle` below are RETAINED for `--mode produce` (CN-PROD-04, `ServedChainSource::Snapshot`) — a
+> SEPARATE serve authority.** The table + rule below are the historical N-F-G-B `--mode node` mechanism.
 
 | Layer | Module | Color | Role |
 |-------|--------|-------|------|
@@ -1927,7 +1995,7 @@ ACCEPTS it is the operator-gated RO-LIVE-01 leg (peer ACCEPT NOT claimed here).
 | `MAX_WIRE_PUMP_LOOKAHEAD` (closed lookahead-depth bound) *(NEW, N-F-G-E)* | `ade_node::node_sync` (RED, `node_sync.rs:58`) | closed literal const `256` | The WirePump opportunistic-drain depth cap. `pump_lookahead` stops the `try_recv` drain at the cap (`node_sync.rs:126`), so the existing bounded `mpsc` (`LIVE_WIRE_PUMP_CHANNEL_CAP = 64`) **back-pressures** the pump. Content-blind; the verdict-decoupled `NodeBlockSource` (closed 2-variant `{WirePump, InMemory}`) + arrival order are **unchanged** (a depth cap on the existing opaque `VecDeque<Vec<u8>>`, NOT a new variant / source / verdict). A **CLOSED LITERAL constant — a defensive implementation bound**; **NO runtime / CLI / env / config override** (`ci_check_live_feed_memory_bounds.sh` guard 3). A future hardening slice may **tighten** it (a strengthening of **DC-LIVEMEM-01**), never make it a tunable / unbounded. |
 | `NodeBlockSource` *(N-F-C; readiness extended N-F-D; LIVE WirePump FILL N-F-G-C)* | `ade_node::node_sync` (RED) | 2 (`WirePump` / `InMemory`) | The **verdict-decoupled** ordered peer-block source: `next_block` yields ONLY `AdmissionPeerEvent::Block` bytes, SKIPS `TipUpdate`, ends on `Disconnected`. N-F-D added a content-blind readiness signal. **N-F-G-C added `from_wire_pump(rx)` — a LIVE FILL of the existing `WirePump` arm fed by `spawn_live_wire_pump_source` (reusing the closed admission dial + pump VERBATIM); NOT a new variant, NOT a new wire authority, NOT a plugin point.** NEVER carries a verdict. A closed single-method contract. New variant = a `next_block` arm + a strengthening of **DC-SYNC-01 / DC-SYNC-02**; a new source must REUSE the closed dial/pump (never reimplement), FILL an existing arm, advance no second tip, and carry no verdict. **N-F-G-J added NO `NodeBlockSource` variant — the genesis-successor cold-start is a new code PATH (the both-`None`-tip arm) through the EXISTING closed source, not a new variant.** |
 | `ba02_pass` evidence I/O *(NEW, N-F-G-C S2)* | `ade_node::ba02_pass` (RED — `//! RED`) | 2 fns (`correlate_peer_log_file`, `write_ba02_manifest`); **NO new closed enum / registry** | The RED operator-pass BA-02 evidence file I/O over the pre-existing closed `Ba02Manifest` / `BA02Outcome` / `PeerAcceptEvent` / `NoEvidenceReason` vocabulary. `correlate_peer_log_file` reads the operator-captured peer-log file → the GREEN `correlate` (the SOLE `Ba02Manifest` ctor); `write_ba02_manifest` accepts **ONLY a `Ba02Manifest`** — so a written manifest is ALWAYS correlate-produced. **A CLOSED file-I/O wrapper (a surface REDUCTION over the existing closed evidence vocabulary), NOT a new closed enum / registry / plugin point.** A missing/unreadable file fails closed (`io::Error`). Backs the BA-02 leg of `RO-LIVE-06` / `CN-OPERATOR-EVIDENCE-01`. Gate: `ci_check_ba02_evidence_manifest_schema.sh` (the no-synthetic-manifest enforcer; vacuous-until-committed + 8-field schema + `peer_log_file_sha256` cross-check). Adding an evidence-I/O fn = a strengthening of RO-LIVE-06; **no new acceptance source, no path emitting a manifest from `NoEvidence` / raw operator input.** |
-| `SelfAcceptedHandoff` *(N-F-G-B S1)* | `ade_runtime::producer::self_accepted_handoff` (GREEN) | constructor-fenced newtype (1 private field `accepted: AcceptedBlock`; SOLE ctor `from_self_accepted`; accessors `accepted()` / `into_accepted()`) | The typed carrier moving a BLUE self-accepted forged block from the forge path to the sibling serve task. Its **SOLE constructor** takes a BLUE `ade_ledger::producer::AcceptedBlock` (itself producible only by BLUE `self_accept` returning `Ok`); the field is private. There is **NO** constructor from a raw `Vec<u8>`, a `ForgedBlockArtifact` (`artifact.bytes` is never a token source — re-deriving would breach CN-FORGE-01; the carrier holds the ORIGINAL token), a `CoordinatorEvent`, a self-declared acceptance flag, or a peer verdict — so handing the serve task a non-self-accepted artifact is **type-unrepresentable**. A **CLOSED constructor-fenced carrier (a surface REDUCTION), NOT an extensible registry / plugin point.** Backs `DC-NODE-06`. A change to the carried type / a new accessor = a strengthening of **DC-NODE-06 / CN-PROD-04 / CN-FORGE-01** (`ci_check_served_chain_handoff_fence.sh`, BROADENED by G-C); **no raw-bytes / artifact / event / flag / verdict constructor may be introduced**. |
+| `SelfAcceptedHandoff` *(N-F-G-B S1)* | `ade_runtime::producer::self_accepted_handoff` (GREEN) | constructor-fenced newtype (1 private field `accepted: AcceptedBlock`; SOLE ctor `from_self_accepted`; accessors `accepted()` / `into_accepted()`) | The typed carrier moving a BLUE self-accepted forged block from the forge path to the sibling serve task. Its **SOLE constructor** takes a BLUE `ade_ledger::producer::AcceptedBlock` (itself producible only by BLUE `self_accept` returning `Ok`); the field is private. There is **NO** constructor from a raw `Vec<u8>`, a `ForgedBlockArtifact` (`artifact.bytes` is never a token source — re-deriving would breach CN-FORGE-01; the carrier holds the ORIGINAL token), a `CoordinatorEvent`, a self-declared acceptance flag, or a peer verdict — so handing the serve task a non-self-accepted artifact is **type-unrepresentable**. A **CLOSED constructor-fenced carrier (a surface REDUCTION), NOT an extensible registry / plugin point.** **N-U S3 / DC-NODE-13 note (repoint `60deecf3`):** the `--mode node` serve usage of this carrier (the G-B `SelfAcceptedHandoff` → `push_atomic` accumulator handoff) is **SUPERSEDED** by serve-as-projection of the durable ChainDb — on the node spine a forged block reaches the served view by becoming DURABLE (`admit_forged_block_durably` → `pump_block`), not via this carrier. **The carrier is RETAINED for `--mode produce` (CN-PROD-04, `ServedChainSource::Snapshot`) — a SEPARATE serve authority** — so it still Backs `DC-NODE-06` (now via durable-provenance on `--mode node`; via the snapshot accumulator on `--mode produce`). A change to the carried type / a new accessor = a strengthening of **DC-NODE-06 / CN-PROD-04 / CN-FORGE-01** (`ci_check_served_chain_handoff_fence.sh`, REPOINTED N-U S3 to the durable-provenance serve); **no raw-bytes / artifact / event / flag / verdict constructor may be introduced**. |
 | `SlotAlignmentError` *(N-F-G-A S3)* | `ade_runtime::clock` (GREEN-by-content) | 1 (`BeforeGenesisAnchor`) | The closed fail-closed boundary carried by `checked_millis_to_slot`. A before-anchor tick (`tick_millis < start_millis`) is an *error*, never a saturation to `start_slot`. A **surface REDUCTION (a closed fail-closed wall)**, NOT a plugin/extension point. New variant = a `checked_millis_to_slot` arm + a strengthening of **DC-EPOCH-03**. |
 | `ProtocolParamsParseError` *(N-F-G-A S2a)* | `ade_runtime::consensus_inputs::protocol_params` (GREEN-by-content) | closed sum (incl. `JsonShape` / `InexactRational { field: &'static str }`) | The closed error set of the cardano-cli `query protocol-parameters` JSON parser. **No float path** — a rational literal that cannot be represented exactly by integer arithmetic fails closed (`InexactRational`); a bad shape ⇒ `JsonShape`. Carries only non-secret `&'static str` field tags. A **surface REDUCTION (a closed RED-parse → BLUE-`ProtocolParameters` pipeline)**, NOT an extension point. New variant = a `parse_protocol_parameters_json` arm + a strengthening of **CE-G-A-2a** (`ci_check_recovered_ledger_pparams_sourced.sh`); non-secret primitives only; **no float path may be introduced**. |
 | `ForgeCurrentPParamsError` *(N-F-G-A S2a)* | `ade_runtime::consensus_inputs::canonical` (GREEN-by-content) | 3 (`PreimageAbsent` / `BindMismatch` / `Parse(ProtocolParamsParseError)`) | The closed error set of `require_forge_current_pparams`. `LiveConsensusInputsCanonical` carries `protocol_params_json: Option<String>` **OUTSIDE** the frozen 15-field canonical fingerprint (which commits to `protocol_params_hash`); the accessor requires the preimage present (`PreimageAbsent`), `blake2b_256`-binds it to the fingerprinted hash (`BindMismatch`), and parses exactly (`Parse`). A hash-bound accessor, NOT an extension point. New variant = a strengthening of **CE-G-A-2a**; **the preimage MUST stay OUTSIDE the 15-field canonical CBOR fingerprint** (no fingerprint-schema change). |
@@ -2524,7 +2592,7 @@ How new modules enter the workspace.
 | `ci_check_rehearsal_manifest_schema.sh` *(NEW N-F-G-D S2; hardened S4)* | **CN-REHEARSAL-FIDELITY-01 (clause 2, evidence non-promotability)** — when a committed `docs/evidence/phase4-n-f-g-d-private-rehearsal-*.toml` is present, verify the closed 12-field schema + `schema_version == 1` + `is_rehearsal = true` + `not_bounty_evidence = true` + a `venue` of `private-testnet*` + `peer_log_file_sha256` == sha256(the committed peer-log fixture). THREE non-promotability barriers: the distinct `docs/evidence/` home; the rehearsal markers; and a fail-closed cross-check that NO rehearsal marker appears in any `.toml` under EITHER bounty home (active `docs/clusters/PHASE4-N-F-G-C/` AND archived `docs/clusters/completed/PHASE4-N-F-G-C/` — EXISTING-homes list built first, fail-closed on grep rc≥2). Vacuously satisfied when none committed (C1 dry-run `blocked_until_operator_c1_net_executed`). The no-synthetic-rehearsal-manifest + no-bounty-home-leak enforcer; flips NO RO-LIVE rule. | N-F-G-D |
 | `ci_check_live_feed_memory_bounds.sh` *(NEW N-F-G-E S1)* | **DC-LIVEMEM-01** — both live-feed memory bounds are CLOSED LITERAL constants (`MAX_REASSEMBLY_TAIL_BYTES = 16 MiB` in `session/core.rs`; `MAX_WIRE_PUMP_LOOKAHEAD = 256` in `node_sync.rs`) AND not wired to CLI / env / config (the no-escape-hatch guard 3; line comments stripped first so the doc-comments naming "CLI / env / config" do not self-trip). The reassembly cap fails closed via the additive `SessionError::ReassemblyBufferOverflow` (no wildcard; sole consumer `mux_pump::session_err_to_halt`). | N-F-G-E |
 | `ci_check_ba02_evidence_manifest_schema.sh` *(NEW N-F-G-C S2)* | **RO-LIVE-06 / CN-OPERATOR-EVIDENCE-01 (BA-02 manifest schema)** — when a committed `docs/clusters/PHASE4-N-F-G-C/CE-G-C-LIVE_*.toml` is present, verify the closed 8-field schema + `schema_version == 1` + `peer_log_file_sha256` == sha256(the committed peer-log fixture). Vacuously satisfied when none committed. The no-synthetic-manifest enforcer. | N-F-G-C |
-| `ci_check_served_chain_handoff_fence.sh` *(N-F-G-B S3; BROADENED in place N-F-G-C S1)* | **DC-NODE-06 / CN-PROD-04 (serve-ingress fence)** — owners `{node_lifecycle.rs, node_sync.rs}`; (1) every node-spine `push_atomic(` fed by `into_accepted()`; (2) no direct `served_chain_admit(` on the node spine; (3) ALLOW-LIST: every node-spine unbounded handoff channel carries `SelfAcceptedHandoff` (never `<Vec<u8>>` / `<ForgedBlockArtifact>` / `<bool>`), and at least one `UnboundedSender<SelfAcceptedHandoff>` is present. A net tightening; the CI count does NOT change for this file. | N-F-G-B / N-F-G-C |
+| `ci_check_served_chain_handoff_fence.sh` *(N-F-G-B S3; REPOINTED N-U S3 close-correction `60deecf3` — DC-NODE-13)* | **DC-NODE-06 (EVOLVED durable-provenance serve)** — owners `{node_lifecycle.rs, node_sync.rs}`; the `--mode node` spine serve sources ONLY the durable ChainDb projection: (1) `ServedChainSource::DurableChainDb` is present; (2) the serve task takes the durable ChainDb read source (`run_node_serve_task` over `Arc<dyn ChainDb>`); (3) NO retired non-durable serve ingress on the node spine — no `push_atomic(`, no `served_chain_admit(`, no `ServedChainHandle`, no `SelfAcceptedHandoff` handoff channel. **REPOINTED, NOT retired** (CI count stays 135). The G-B *“`SelfAcceptedHandoff` → `push_atomic` accumulator”* handoff it formerly fenced is SUPERSEDED by N-U S3 serve-as-projection (DC-NODE-13); DC-NODE-06's deeper *only-validated-bytes-served* invariant is preserved + strengthened (now survives restart). Complementary to the DC-NODE-13 projection-SHAPE gate `ci_check_served_chain_projection.sh` (this is the serve-PROVENANCE angle). The `--mode produce` path (CN-PROD-04, `ServedChainSource::Snapshot`) is a SEPARATE serve authority — deliberately out of scope; it retains the `SelfAcceptedHandoff` carrier + `ServedChainHandle`. | N-F-G-B / N-U |
 | `ci_check_genesis_consistency_fixture_present.sh` *(N-F-G-A S1)* | **CE-G-A-1** — the three S1b fixture files committed + well-formed + Ade-as-leader; NO secret key material. | N-F-G-A |
 | `ci_check_recovered_ledger_pparams_sourced.sh` *(N-F-G-A S2a)* | **CE-G-A-2a** — recovered ledger `protocol_params` sourced from the oracle preimage (`require_forge_current_pparams`), never `::default()`; the `protocol_params_json` preimage OUTSIDE the 15-field fingerprint. | N-F-G-A |
 | `ci_check_node_forge_real_cli_ingress.sh` *(N-F-G-A S2)* | **CE-G-A-2** — the `--mode node` operator-forge ingress uses the real `parse_opcert_envelope` + `parse_shelley_genesis`; fails closed on a `parse_simple_*` reintroduction. | N-F-G-A |
@@ -3084,6 +3152,42 @@ How new modules enter the workspace.
 ---
 
 ## Generation notes
+
+- **Focused single-span refresh (post-PHASE4-N-U gate hygiene) at HEAD `999199f8`** (`git rev-parse --short
+  HEAD`), applied DIRECTLY to the on-disk SEAMS. Brings SEAMS current from its last pin (`4e358e92`, the
+  PHASE4-N-U close-doc refresh) to HEAD, splicing the span `4e358e92..999199f8` (commits `60deecf3` DC-NODE-06
+  handoff-fence repoint, `e92b40b7` `ci_check_no_secrets.sh` ARG_MAX/IP-false-positive fix, `999199f8` 10
+  gate-vs-code drift repairs; the `7f00e75d` *Close PHASE4-N-U* commit in the span is administrative bookkeeping —
+  the SEAMS-material content already landed in the `4e358e92` close-doc refresh). **CODEMAP was intentionally NOT
+  regenerated** — structurally current, unchanged inventory, still pinned at `4e358e92`; read as-is. **Counts
+  UNCHANGED across the span: 458 canonical types / 135 CI / 333 rules.** Verified gate-set unchanged:
+  `git diff --name-status 4e358e92..999199f8 -- 'ci/ci_check_*.sh'` shows 11 gates, ALL `M` (modified) — zero
+  added/deleted; `ls ci/ci_check_*.sh | wc -l` = **135**; `grep -c '^[[]rules[]][]]' docs/ade-invariant-registry.toml`
+  = **333** (baseline and HEAD identical). The two source-file touches in the span
+  (`ade_ledger/src/block_validity/mod.rs`, `ade_runtime/src/seed_import/importer.rs`) are pure doc-comment hygiene
+  (stale comments reconciled to the code a gate greps) — no semantic code change, no invariant weakened.
+- **The ONE material SEAMS delta: the DC-NODE-06 handoff-fence REPOINT (`60deecf3`).**
+  `ci/ci_check_served_chain_handoff_fence.sh` is REPOINTED (not retired — CI count stays 135): it no longer fences
+  the G-B *“`SelfAcceptedHandoff` → `push_atomic` accumulator”* handoff (N-U S3 RETIRED that mechanism for
+  serve-as-projection, DC-NODE-13), and now fences the EVOLVED DC-NODE-06 durable-provenance serve — the `--mode
+  node` spine serve sources ONLY `ServedChainSource::DurableChainDb` over `Arc<dyn ChainDb>`, with NO retired
+  non-durable serve ingress (no `push_atomic` / `served_chain_admit` / `ServedChainHandle` / `SelfAcceptedHandoff`
+  channel). DC-NODE-06's deeper *only-validated-bytes-served* invariant is preserved + strengthened (now survives
+  restart). The registry was already reconciled at `60deecf3` (DC-NODE-06 `ci_script += ci_check_served_chain_projection.sh`;
+  `code_locus` repointed; `strengthened_in += PHASE4-N-U`; rule count UNCHANGED at 333) — this pass reconciles the
+  grounding-doc PROSE descriptions, as that registry note directs. Updated CURRENT-state surfaces: §1 *self-accept→serve
+  handoff* (supersession banner), §2 *self-accept→serve handoff* domain (supersession banner), §3 `SelfAcceptedHandoff`
+  registry entry (durable-provenance / `--mode produce`-retained framing), §5 gate-table row (repointed checks). The
+  `SelfAcceptedHandoff` carrier is RETAINED for `--mode produce` (CN-PROD-04). **Historical references to this gate
+  in past-cluster (G-B/G-C/G-D/G-E/G-H) delta sections are pin-correct for their spans and LEFT as-is** — only the
+  CURRENT-state descriptions were updated.
+- **Green-means-green: the full CI sweep is now 135 / 0 GREEN** (`ls ci/ci_check_*.sh | wc -l` = 135, every gate
+  passes after the `999199f8` drift repairs + the `e92b40b7` no_secrets fix).
+- **Candidate seams surfaced for confirm/reject (this span):** NONE NEW. The span introduced no new surface, no
+  new closed/extensible registry, no new version-gated contract; the DC-NODE-06 repoint is a description/provenance
+  reconciliation of an ALREADY-CLOSED seam (the durable-projection serve, classified at the N-U close under §2
+  *forged-block serving* + §3 Closed `ServedChainSource` + §3 Extensible second-impl-of-closed-trait). No
+  human-judgment item is outstanding from this span.
 
 - Regenerated (single-cluster CLUSTER-CLOSE refresh, PHASE4-N-U) at HEAD `4e358e92`
   (`git rev-parse --short HEAD`), downstream of the CODEMAP regenerated at the same HEAD (**135** CI checks,
