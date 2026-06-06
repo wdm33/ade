@@ -273,10 +273,16 @@ and `slotsPerKESPeriod=129600` keeps the opcert (KES period 0) fresh.)
 > (`UnexpectedBlockNo`). Both gaps are recorded as later invariant slices in
 > `docs/planning/c2-local-discovered-gaps.md` (Gap 1: multi-producer fork-choice; Gap 2:
 > forge-on-followed-tip + serve continuity). **Not** worked around by weakening Ade.
-> Likely-clean next attempt: recover **far enough behind** the frozen tip that the follow
-> catches up before the forge-tick fires (the recover-at-158 run already showed
-> follow-then-forge works). Recover alone is also proven against the synced preprod node
-> read-only. **C2-preprod-live (§6) runs only after this local loop is green.**
+> **Recover-far-behind run EXECUTED (2026-06-06)** (anchor block 8, relays frozen at block
+> 21, k=13): it **eliminated Ade's receive-side error** — Ade caught up cleanly and forged
+> **BlockNo 22 = followed-tip+1, no `BlockNoOutOfOrder`** — but node2-relay **still rejected
+> the served chain** (`UnexpectedBlockNo (22)(0)`). So Gap 2 splits: **2a forge-on-followed-tip**
+> (met by orchestration at the BlockNo level) vs **2b serve-continuity** (Ade's durable
+> served chain isn't peer-adoptable — the crux, UNMET). **Orchestration is exhausted; #8–#9
+> remain unproven; the next work is the Gap 2 implementation slice** (`docs/planning/c2-local-discovered-gaps.md`
+> → Slice A: serve-continuity + forge-on-followed-tip gate). Recover alone is also proven
+> against the synced preprod node read-only. **C2-preprod-live (§6) runs only after Slice A
+> closes this local loop.**
 
 ---
 

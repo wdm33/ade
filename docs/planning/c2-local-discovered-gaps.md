@@ -68,10 +68,29 @@ non-Origin tip, **follows the relay to its current tip**, forges the successor *
 tip**, serves it, and **the relay adopts** it (`ValidCandidate` + `AddedToCurrentChain`),
 with **forged hash == adopted hash**.
 
-**Likely-clean workaround for the next attempt (no Ade change):** recover **far enough
-behind** the relays' frozen tip that the follow catches up *before* the forge-tick fires
-(capture an earlier block's point during bootstrap), so Ade adopts the relay tip then forges
-the successor — the shape the recover-at-158 run already exhibited.
+**Recover-far-behind attempt (2026-06-06) — ISOLATED Gap 2 into 2a + 2b:** bounded
+orchestration run — relays frozen at T=block 21, Ade recovered at anchor=block 8 (k=13,
+both epoch 0), Ade followed node2-relay and **caught up cleanly with NO receive-side error**
+(the `BlockNoOutOfOrder` from the close 1-block gap is GONE) and forged **BlockNo 22 =
+followed-tip(21)+1**. But node2-relay (connected, HandshakeSuccess) **still rejected Ade's
+served chain** (`UnexpectedBlockNo (BlockNo 22) (BlockNo 0)`, intersecting only at an early
+point). So:
+
+- **Gap 2a — forge-on-followed-tip:** *met by this orchestration at the BlockNo level* (Ade
+  caught up then forged the successor at followed-tip+1, no fork). NOT mechanically enforced
+  — it held by timing (large k), so the admission gate "forge admissible only when local
+  selected tip == followed peer tip" is still owed as code.
+- **Gap 2b — serve-continuity (the crux, UNMET):** Ade's durable **served** chain is not a
+  continuous, peer-adoptable chain — node2-relay cannot intersect at the followed tip
+  (block 21) and roll forward onto Ade's forged successor (block 22); it intersects only at
+  an early common point and then sees BlockNo 22 where it expected the next block, and
+  rejects. Ade must serve a chain that exposes the followed tip as an intersect point with
+  the forged successor extending it (the followed history must be in the durable served
+  chain, not only the recovered anchor + own-forged blocks).
+
+**#8–#9 remain NOT proven.** Per the project rule, orchestration stops; the next real work
+is the **Gap 2 implementation slice** (below), centred on **2b serve-continuity** (+ the
+2a admission gate), then the Gap 1 slice.
 
 ---
 
@@ -84,3 +103,31 @@ peer adopts the forged block — that is gated on Gap 1 (competing producers) an
 (forge-on-followed-tip + serve continuity) above.
 
 Status: **#1–#7 proven; #8–#9 not proven; two Ade gaps recorded for later slices.**
+
+---
+
+## Implementation slices (next work, IDD discipline)
+
+Orchestration is exhausted — the recover-far-behind run isolated the remaining gap to
+**serve-continuity**. The next real work is code, in this order:
+
+### Slice A — Gap 2 (do first; directly unblocks the C2-LOCAL adoption proof)
+- **recover → serve continuity:** the durable served chain must be continuous from the
+  recovered anchor through the followed blocks to the forged successor, so a Haskell peer
+  can intersect at the followed tip and roll forward onto Ade's block. *(the 2b crux)*
+- **forge-on-followed-tip admission gate:** forge admissible **only when** local selected
+  tip == followed peer tip (mechanical enforcement, not timing). *(2a)*
+- **peer intersection before forge** + **structured refusal when not caught up** (no
+  forge on a stale/recovered-only tip; fail closed with a typed reason).
+- **Closure proof:** the non-producing-relay venue (Gap 2 proof obligation above) — relay
+  adopts Ade's forged successor; **forged-block parent == relay selected tip hash**; forged
+  hash == adopted hash.
+
+### Slice B — Gap 1 (after Slice A)
+- **multi-producer candidate intake** + **deterministic fork-choice** + **competing-branch
+  handling** (chain selection that matches Haskell, independent of arrival order).
+- **Closure proof:** competing-producer private net where Ade + ≥1 Haskell producer
+  converge on the same tip.
+
+Until Slice A lands, a C2-LOCAL "Haskell peers adopted Ade's block" manifest is **not**
+emittable; #8–#9 are proven only on preprod or after Slice A closes the local loop.
