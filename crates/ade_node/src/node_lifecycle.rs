@@ -432,9 +432,14 @@ async fn run_node_lifecycle_inner(
                 ActiveSlotsCoeff { numer: 0, denom: 1 },
                 BTreeMap::new(),
             );
+            // PHASE4-N-AE.C (DC-WAL-02): the first followed AdmitBlock must chain
+            // from the fingerprint of the ledger state the follow extends (the
+            // recovered ledger tip = the WAL-tail post_fp), not from zero. Read it
+            // before `state.ledger` is moved into the receive sub-state.
+            let anchor_fp = fingerprint(&state.ledger).combined;
             let mut fwd = ForwardSyncState::new(
                 ReceiveState::new(state.ledger, state.chain_dep),
-                Hash32([0u8; 32]),
+                anchor_fp,
                 SnapshotCadence::DEFAULT,
             );
             let mut source = NodeBlockSource::in_memory(Vec::new());
@@ -518,9 +523,13 @@ async fn run_node_lifecycle_inner(
             // spine (the spine evolves ITS copy forward), keep `state` owned as
             // the recovered baseline the forge reads. One recovered state; the
             // forge base IS the spine base.
+            // PHASE4-N-AE.C (DC-WAL-02): first followed AdmitBlock chains from the
+            // fingerprint of the recovered ledger tip the follow extends (the
+            // WAL-tail post_fp), not from zero — so a recover→followed store
+            // warm-starts replay-equivalently (T-REC-05).
             let mut fwd = ForwardSyncState::new(
                 ReceiveState::new(state.ledger.clone(), state.chain_dep.clone()),
-                Hash32([0u8; 32]),
+                fingerprint(&state.ledger).combined,
                 SnapshotCadence::DEFAULT,
             );
             // PHASE4-N-F-G-C S1: wire a LIVE WirePump feed when an upstream peer

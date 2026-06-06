@@ -1755,6 +1755,209 @@ mod tests {
     }
 
     // =====================================================================
+    // PHASE4-N-AE.C — recover→follow WAL prior-fp lineage continuity
+    // =====================================================================
+    //
+    // The recover→follow seam: the FIRST followed AdmitBlock's prior_fp MUST
+    // equal the recovered ledger-tip fingerprint (the anchor post_fp), not
+    // zero (DC-WAL-02 first-entry clause). `relay_loop_kill_at_boundary_*`
+    // masks this by using an arbitrary matched anchor_fp (0xA0) == the
+    // `fresh_state` 0xA0 seed; here the anchor_fp is the REAL
+    // `fingerprint(ledger)` (exactly what seed_to_snapshot writes as the
+    // initial_ledger_fingerprint), so the ForwardSyncState prior_fp seed the
+    // live node_lifecycle wiring supplies MUST be `fingerprint(ledger)` for
+    // the chain to survive a kill + warm-start (T-REC-05). seed=0 reproduces
+    // the CE-A5 exit-42 ChainBreak@1.
+
+    /// Fingerprint of the fresh recover base (the ledger the follow extends) —
+    /// the value the live fix seeds (`fingerprint(&state.ledger).combined`).
+    fn aec_recover_base_fp() -> Hash32 {
+        let mut ledger = LedgerState::new(CardanoEra::Conway);
+        ledger.epoch_state.epoch = EPOCH_576;
+        ade_ledger::fingerprint::fingerprint(&ledger).combined
+    }
+
+    /// Drive recover(anchor_fp = the REAL ledger fingerprint) → follow one
+    /// corpus block via the production relay loop → kill → production
+    /// `warm_start_recovery`, with `seed` as the ForwardSyncState prior_fp (the
+    /// value the live wiring supplies). Returns (first followed AdmitBlock
+    /// prior_fp, pre-kill synced tip, warm-start result as (slot,hash) | err).
+    async fn aec_recover_follow_kill_warmstart(
+        dir: &TempDir,
+        seed: Hash32,
+    ) -> (
+        Option<Hash32>,
+        (SlotNo, Hash32),
+        Result<Option<(SlotNo, Hash32)>, String>,
+    ) {
+        use ade_ledger::seed_consensus_inputs::{
+            encode_seed_epoch_consensus_inputs, SeedEpochConsensusInputs,
+        };
+        use ade_runtime::seed_consensus_provenance::append_seed_epoch_provenance;
+
+        let (c, view) = corpus_view();
+        let sched = schedule();
+        let bytes = pick_lightest(&c);
+        let snap = dir.path().join("snap");
+        let wal_dir = dir.path().join("wal");
+        std::fs::create_dir_all(&snap).unwrap();
+        std::fs::create_dir_all(&wal_dir).unwrap();
+        let chaindb_path = snap.join("chain.db");
+
+        // The anchor_fp is the REAL recover-base ledger fingerprint — exactly
+        // what the live seed_to_snapshot persists as initial_ledger_fingerprint
+        // — NOT an arbitrary matched constant.
+        let anchor_fp = aec_recover_base_fp();
+        let mut pools: BTreeMap<Hash28, PoolEntry> = BTreeMap::new();
+        pools.insert(
+            Hash28([0x11; 28]),
+            PoolEntry {
+                active_stake: 1,
+                vrf_keyhash: Hash32([0x22; 32]),
+            },
+        );
+        let recovered_inputs = SeedEpochConsensusInputs {
+            anchor_fp: anchor_fp.clone(),
+            epoch_no: EPOCH_576,
+            epoch_nonce: Nonce(Hash32([0x8b; 32])),
+            active_slots_coeff: ActiveSlotsCoeff {
+                numer: 5,
+                denom: 100,
+            },
+            total_active_stake: 1,
+            pool_distribution: pools,
+        };
+        let sidecar_bytes = encode_seed_epoch_consensus_inputs(&recovered_inputs);
+
+        let synced_tip = {
+            let chaindb =
+                PersistentChainDb::open(PersistentChainDbOptions::at(&chaindb_path)).unwrap();
+            let mut wal = FileWalStore::open(&wal_dir).unwrap();
+            chaindb
+                .put_seed_epoch_consensus_inputs(&anchor_fp, &sidecar_bytes)
+                .unwrap();
+            append_seed_epoch_provenance(&mut wal, &anchor_fp, EPOCH_576, &sidecar_bytes).unwrap();
+
+            // The recover base ledger the follow extends; the prior_fp seed is
+            // the value under test (the live node_lifecycle wiring's seed).
+            let mut ledger = LedgerState::new(CardanoEra::Conway);
+            ledger.epoch_state.epoch = EPOCH_576;
+            let mut chain_dep = PraosChainDepState::empty();
+            chain_dep.epoch_nonce = Nonce(Hash32(c.epoch_nonce));
+            chain_dep.evolving_nonce = Nonce(Hash32(c.epoch_nonce));
+            let mut state = ForwardSyncState::new(
+                ReceiveState::new(ledger, chain_dep),
+                seed,
+                SnapshotCadence::DEFAULT,
+            );
+            let mut source = NodeBlockSource::in_memory(vec![bytes.clone()]);
+            let (_tx, mut shutdown) = watch::channel(false);
+            run_relay_loop(
+                &mut state,
+                &mut source,
+                &chaindb,
+                &mut wal,
+                &sched,
+                &view,
+                &mut shutdown,
+                None,
+            )
+            .await
+            .expect("relay loop runs to clean halt");
+
+            let t = ChainDb::tip(&chaindb)
+                .expect("tip")
+                .expect("tip advanced");
+            (t.slot, t.hash)
+            // chaindb + wal dropped here — the kill boundary.
+        };
+
+        // The first followed AdmitBlock's prior_fp (DC-WAL-02 first-entry clause).
+        let wal = FileWalStore::open(&wal_dir).unwrap();
+        let first_admit_prior_fp = wal.read_all().unwrap().into_iter().find_map(|e| match e {
+            WalEntry::AdmitBlock { prior_fp, .. } => Some(prior_fp),
+            _ => None,
+        });
+
+        // Reopen at the SAME paths + the PRODUCTION warm-start.
+        let chaindb =
+            PersistentChainDb::open(PersistentChainDbOptions::at(&chaindb_path)).unwrap();
+        let wal2 = FileWalStore::open(&wal_dir).unwrap();
+        let warm = match crate::node_lifecycle::warm_start_recovery(&chaindb, &wal2) {
+            Ok(rec) => Ok(rec.tip.map(|t| (t.slot, t.hash))),
+            Err(e) => Err(format!("{e:?}")),
+        };
+        (first_admit_prior_fp, synced_tip, warm)
+    }
+
+    #[tokio::test]
+    async fn recover_follow_kill_warm_start_chains_from_ledger_fp() {
+        // FIX: seed = fingerprint(recovered ledger) == the anchor post_fp. The
+        // first followed AdmitBlock chains from the ledger tip; warm-start
+        // recovers the same tip (no ChainBreak) — DC-WAL-02 + T-REC-05.
+        let dir = TempDir::new().unwrap();
+        let ledger_fp = aec_recover_base_fp();
+        let (first_admit_prior_fp, synced_tip, warm) =
+            aec_recover_follow_kill_warmstart(&dir, ledger_fp.clone()).await;
+        assert_eq!(
+            first_admit_prior_fp,
+            Some(ledger_fp.clone()),
+            "first followed AdmitBlock.prior_fp == fingerprint(recovered ledger) (DC-WAL-02)"
+        );
+        let recovered_tip = warm
+            .expect("warm-start recovers a recover→followed store without ChainBreak")
+            .expect("warm-start recovers a non-empty tip");
+        assert_eq!(
+            recovered_tip, synced_tip,
+            "warm-start recovers the SAME followed tip (slot, hash) as the pre-kill run (T-REC-05)"
+        );
+    }
+
+    #[tokio::test]
+    async fn recover_follow_zero_seed_chainbreaks() {
+        // BUG (pre-fix live wiring): seed = 0. The first followed AdmitBlock's
+        // prior_fp is 0, not the anchor post_fp → warm-start fails ChainBreak@1,
+        // reproducing the CE-A5 exit-42 failure. The fix must seed the chain,
+        // not loosen verify_chain.
+        let dir = TempDir::new().unwrap();
+        let (first_admit_prior_fp, _synced_tip, warm) =
+            aec_recover_follow_kill_warmstart(&dir, Hash32([0u8; 32])).await;
+        assert_eq!(
+            first_admit_prior_fp,
+            Some(Hash32([0u8; 32])),
+            "the zero seed writes a zero first prior_fp (the bug)"
+        );
+        let msg =
+            warm.expect_err("a zero-seeded recover→followed store MUST fail warm-start, not silently recover");
+        assert!(
+            msg.contains("ChainBreak") && msg.contains("entry_index: 1"),
+            "warm-start fails with ChainBreak@1 (the CE-A5 exit-42 failure), got: {msg}"
+        );
+    }
+
+    #[tokio::test]
+    async fn recover_follow_two_runs_byte_identical() {
+        // T-REC-05: same recover base + same followed block → byte-identical WAL
+        // image + the same recovered served tip across two independent runs.
+        let ledger_fp = aec_recover_base_fp();
+        let dir_a = TempDir::new().unwrap();
+        let (_fp_a, tip_a, warm_a) =
+            aec_recover_follow_kill_warmstart(&dir_a, ledger_fp.clone()).await;
+        let dir_b = TempDir::new().unwrap();
+        let (_fp_b, tip_b, warm_b) =
+            aec_recover_follow_kill_warmstart(&dir_b, ledger_fp.clone()).await;
+        assert_eq!(
+            warm_a.expect("run A warm-starts"),
+            warm_b.expect("run B warm-starts"),
+            "two runs recover an identical served tip"
+        );
+        assert_eq!(tip_a, tip_b, "two runs reach the same followed tip");
+        let wal_a = std::fs::read(dir_a.path().join("wal").join("wal-0000.bin")).unwrap();
+        let wal_b = std::fs::read(dir_b.path().join("wal").join("wal-0000.bin")).unwrap();
+        assert_eq!(wal_a, wal_b, "two runs produce a byte-identical WAL image");
+    }
+
+    // =====================================================================
     // L5 — recovered-state forge handoff (hermetic, single-shot)
     // =====================================================================
     //
