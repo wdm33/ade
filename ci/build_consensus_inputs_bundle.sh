@@ -57,8 +57,24 @@ EPOCH_NO=$(echo "$TIP_JSON" | python3 -c 'import json,sys; print(json.load(sys.s
 SLOT_IN_EPOCH=$(echo "$TIP_JSON" | python3 -c 'import json,sys; print(json.load(sys.stdin)["slotInEpoch"])')
 NODE_VERSION=$(docker exec "$CONTAINER" cardano-node --version 2>&1 | head -1)
 
+# Venue-general epoch length + active-slots-coeff: read from the venue's
+# shelley-genesis (NOT hardcoded), so the SAME extractor is correct for
+# preprod (epochLength 432000, ASC 0.05 -> 1/20) AND any private testnet
+# (e.g. a short-epoch local rehearsal venue). Default path is the local
+# preprod shelley-genesis; override with ADE_LIVE_SHELLEY_GENESIS.
+SHELLEY_GENESIS="${ADE_LIVE_SHELLEY_GENESIS:-${REPO_ROOT}/.cardano-node-preprod/config/shelley-genesis.json}"
+EPOCHLEN=$(python3 -c "import json; print(int(json.load(open('${SHELLEY_GENESIS}'))['epochLength']))")
+read -r ASC_NUMER ASC_DENOM < <(python3 -c "
+import json
+from fractions import Fraction
+from decimal import Decimal
+asc = json.load(open('${SHELLEY_GENESIS}'))['activeSlotsCoeff']
+fr = Fraction(Decimal(str(asc)))
+print(fr.numerator, fr.denominator)
+")
+
 EPOCH_START=$((TIP_SLOT - SLOT_IN_EPOCH))
-EPOCH_END=$((EPOCH_START + 432000 - 1))
+EPOCH_END=$((EPOCH_START + EPOCHLEN - 1))
 
 # 2. Protocol state for epoch nonce.
 PROTOCOL_STATE=$(run_cli query protocol-state)
@@ -107,6 +123,8 @@ python3 - "$OUT" \
     "$TIP_HASH" \
     "$TIP_SLOT" \
     "$NODE_VERSION" \
+    "$ASC_NUMER" \
+    "$ASC_DENOM" \
     "$TMP_DIR/stake_distr.json" \
     "$TMP_DIR/pool_state.json" \
     "$TMP_DIR/proto_params.json" <<'PYEOF'
@@ -125,6 +143,8 @@ import sys
     tip_hash,
     tip_slot,
     node_version,
+    asc_numer,
+    asc_denom,
     stake_distr_path,
     pool_state_path,
     proto_params_path,
@@ -205,7 +225,7 @@ bundle = {
     "epoch_no": int(epoch_no),
     "epoch_start_slot": int(epoch_start),
     "epoch_end_slot": int(epoch_end),
-    "active_slots_coeff": {"numer": 1, "denom": 20},
+    "active_slots_coeff": {"numer": int(asc_numer), "denom": int(asc_denom)},
     "epoch_nonce_hex": epoch_nonce.lower(),
     "pool_distribution": pool_distribution,
     "pool_vrf_keyhashes": pool_vrf_keyhashes,
