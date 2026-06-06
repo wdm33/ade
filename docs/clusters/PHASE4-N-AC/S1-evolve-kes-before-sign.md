@@ -3,7 +3,7 @@
 ## §2 Slice Header
 - **Slice Name:** evolve KES key before sign
 - **Cluster:** PHASE4-N-AC (KES signing evolves key to current period) — primary invariant **DC-CRYPTO-10**
-- **Status:** in progress
+- **Status:** Merged
 - **Cluster Exit Criteria Addressed:** **CE-1** (the whole one-slice cluster). *(Acceptance #3 = the live C1 re-run at close.)*
 
 ## §3 Dependencies

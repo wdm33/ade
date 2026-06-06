@@ -2430,9 +2430,14 @@ beyond the key lifetime, or cannot be reached by sequential evolution.
 source = "docs/clusters/PHASE4-N-AC/cluster.md; docs/evidence/c1-genesis-rehearsal-reproduction-README.md (item-4 C1 re-run finding)"
 cross_ref = ["CN-KES-HEADER-01", "T-KEY-01", "DC-CRYPTO-04", "DC-CRYPTO-09", "CN-FORGE-03"]
 code_locus = "crates/ade_runtime/src/producer/producer_shell.rs (kes_sign_header_advancing = kes_advance_to(period) then kes_sign_header; kes_advance_to -> kes_update fail-closed: EvolutionBackwards / EvolutionExhausted); crates/ade_node/src/produce_mode.rs (the forge's single real KES sign uses kes_sign_header_advancing)"
-tests = []
-ci_script = ""
-status = "declared"
+tests = [
+    "crates/ade_runtime/src/producer/producer_shell.rs::tests::shell_kes_sign_header_advancing_evolves_then_signs",
+    "crates/ade_runtime/src/producer/producer_shell.rs::tests::shell_kes_sign_header_advancing_at_current_period_signs",
+    "crates/ade_runtime/src/producer/producer_shell.rs::tests::shell_kes_sign_header_advancing_backwards_fails_closed",
+    "crates/ade_runtime/src/producer/producer_shell.rs::tests::shell_kes_sign_header_advancing_beyond_lifetime_fails_closed",
+]
+ci_script = "ci/ci_check_kes_evolution_before_sign.sh"
+status = "enforced"
 introduced_in = "PHASE4-N-AC"
 strengthened_in = []
 authority_surface = "RED producer-shell KES key evolution before signing"

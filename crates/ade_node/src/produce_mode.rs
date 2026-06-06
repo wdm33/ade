@@ -887,8 +887,11 @@ fn run_real_forge_inner(
 
     // RED step 3 (real) — KES-sign the canonical unsigned-header
     // pre-image via the branded type. Arbitrary-byte signing is
-    // structurally unrepresentable.
-    let real_kes_signature = match shell.kes_sign_header(kes_period, &preimage) {
+    // structurally unrepresentable. PHASE4-N-AC / DC-CRYPTO-10: the shell
+    // EVOLVES the KES key forward to `kes_period` before signing (the minted-at-
+    // period-0 key would otherwise fail KesPeriodNotCurrent once the chain's KES
+    // period > 0); fail-closed if backwards / beyond the key lifetime.
+    let real_kes_signature = match shell.kes_sign_header_advancing(kes_period, &preimage) {
         Ok(s) => s,
         Err(_) => {
             return CoordinatorEvent::ForgeFailed {

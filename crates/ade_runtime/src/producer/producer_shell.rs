@@ -275,6 +275,35 @@ impl ProducerShell {
         self.kes_sign_at(period, preimage.as_bytes())
     }
 
+    /// **PHASE4-N-AC / DC-CRYPTO-10** — evolve the KES key forward to `period`
+    /// (if needed) and KES-sign the canonical unsigned-header pre-image at it.
+    ///
+    /// The RED signing shell evolves the operator key to the REQUESTED period
+    /// BEFORE signing, via the deterministic Sum6KES update (`kes_advance_to` →
+    /// `kes_update`):
+    /// - `period == current` → no-op evolution (the `while current < to` loop in
+    ///   `kes_update` does nothing), then sign — existing period-0 signing is
+    ///   unchanged;
+    /// - `period > current` (in window) → forward evolution, then sign;
+    /// - `period < current` → fail closed `Signing(EvolutionBackwards)` — a
+    ///   destroyed past period cannot be re-signed (forward-secrecy);
+    /// - `period` beyond the key lifetime / unreachable by sequential evolution
+    ///   → fail closed `Signing(EvolutionExhausted)`.
+    ///
+    /// The `period` is passed verbatim — never manually adjusted. After a
+    /// successful `kes_advance_to`, `current == period`, so `kes_sign_header`
+    /// signs at the current period (no `KesPeriodNotCurrent`). This is the method
+    /// the forge MUST use; the `&self` `kes_sign_at`/`kes_sign_header` remain for
+    /// callers that manage periods themselves.
+    pub fn kes_sign_header_advancing(
+        &mut self,
+        period: u32,
+        preimage: &ade_ledger::block_validity::unsigned_header_pre_image::UnsignedHeaderPreImage,
+    ) -> Result<KesSignature, ShellSignError> {
+        self.kes_advance_to(period)?;
+        self.kes_sign_header(period, preimage)
+    }
+
     /// Current KES period.
     pub fn kes_current_period(&self) -> KesPeriod {
         self.kes.current_period()
@@ -513,6 +542,114 @@ mod tests {
         assert!(matches!(err, ShellSignError::KesPeriodNotCurrent { .. }));
         // Signing at the NEW period must succeed.
         shell.kes_sign_at(5, b"y").unwrap();
+    }
+
+    // ---- PHASE4-N-AC / DC-CRYPTO-10: evolve-then-sign --------------------
+
+    /// Build a canonical unsigned-header pre-image for the advancing tests
+    /// (mirrors `shell_kes_sign_header_produces_verifiable_signature`).
+    fn synth_preimage(
+        opcert: ade_types::shelley::block::OperationalCert,
+    ) -> ade_ledger::block_validity::unsigned_header_pre_image::UnsignedHeaderPreImage {
+        use ade_codec::cbor::{
+            write_array_header, write_bytes_canonical, ContainerEncoding, IntWidth,
+        };
+        use ade_ledger::block_validity::unsigned_header_pre_image::unsigned_header_pre_image;
+        use ade_types::shelley::block::{PrevHash, ProtocolVersion};
+        use ade_types::Hash32;
+        let vrf_result = {
+            let mut buf = Vec::new();
+            write_array_header(&mut buf, ContainerEncoding::Definite(2, IntWidth::Inline));
+            write_bytes_canonical(&mut buf, &[0xAA; 64]);
+            write_bytes_canonical(&mut buf, &[0xBB; 80]);
+            buf
+        };
+        unsigned_header_pre_image(
+            100,
+            1,
+            PrevHash::Block(Hash32([0u8; 32])),
+            vec![0x01; 32],
+            vec![0x02; 32],
+            vrf_result,
+            128,
+            Hash32([0x05; 32]),
+            opcert,
+            ProtocolVersion { major: 9, minor: 0 },
+        )
+        .expect("recipe encode")
+    }
+
+    fn kes_root_vk() -> KesVerificationKey {
+        use ade_crypto::kes_sum::KesAlgorithm;
+        let kes_sk =
+            ade_crypto::kes_sum::Sum6Kes::gen_key_kes_from_seed_bytes(&[0x10; 32]).unwrap();
+        KesVerificationKey(ade_crypto::kes_sum::Sum6Kes::derive_verification_key(&kes_sk))
+    }
+
+    #[test]
+    fn shell_kes_sign_header_advancing_evolves_then_signs() {
+        // period-0 key, requested period 1 -> evolves to 1 then signs (acceptance #1).
+        let mut shell = make_shell(0);
+        let pre = synth_preimage(shell.opcert().clone());
+        let sig = shell
+            .kes_sign_header_advancing(1, &pre)
+            .expect("evolve to period 1 then sign");
+        assert_eq!(shell.kes_current_period().0, 1, "key evolved to period 1");
+        verify_kes_signature(&kes_root_vk(), KesPeriod(1), pre.as_bytes(), &sig)
+            .expect("signature must verify at the evolved period 1");
+    }
+
+    #[test]
+    fn shell_kes_sign_header_advancing_at_current_period_signs() {
+        // requested period == current (0) -> no-op evolution, still signs
+        // (acceptance #4: existing period-0 signing unchanged).
+        let mut shell = make_shell(0);
+        let pre = synth_preimage(shell.opcert().clone());
+        let sig = shell
+            .kes_sign_header_advancing(0, &pre)
+            .expect("no-op evolution at current period then sign");
+        assert_eq!(shell.kes_current_period().0, 0);
+        verify_kes_signature(&kes_root_vk(), KesPeriod(0), pre.as_bytes(), &sig)
+            .expect("signature must verify at period 0");
+    }
+
+    #[test]
+    fn shell_kes_sign_header_advancing_backwards_fails_closed() {
+        // advanced to 5, then a backwards request (2) fails closed; no signature
+        // (acceptance #2: before the key's current period / forward-secrecy).
+        let mut shell = make_shell(0);
+        shell.kes_advance_to(5).unwrap();
+        let pre = synth_preimage(shell.opcert().clone());
+        let err = shell
+            .kes_sign_header_advancing(2, &pre)
+            .expect_err("backwards period must fail closed");
+        assert!(matches!(
+            err,
+            ShellSignError::Signing(crate::producer::signing::SigningError::EvolutionBackwards { .. })
+        ));
+        // Fail-closed = the structured EvolutionBackwards error + NO signature
+        // (the `expect_err` above). We do NOT assert the post-error key period:
+        // `kes_advance_to` replaces the key before `kes_update`, so a failed
+        // advance leaves it zeroed — a pre-existing primitive behavior that is
+        // UNREACHABLE via the forge (the `kes_period_in_window` pre-check rejects
+        // a backwards/out-of-window period BEFORE `kes_sign_header_advancing` is
+        // ever called; this test invokes the shell method directly to exercise
+        // the guard).
+    }
+
+    #[test]
+    fn shell_kes_sign_header_advancing_beyond_lifetime_fails_closed() {
+        // beyond SUM6_MAX_PERIOD (63) -> unreachable by evolution; fail closed
+        // (acceptance #2: beyond key lifetime).
+        let mut shell = make_shell(0);
+        let pre = synth_preimage(shell.opcert().clone());
+        let err = shell
+            .kes_sign_header_advancing(ade_crypto::kes::SUM6_MAX_PERIOD + 1, &pre)
+            .expect_err("period beyond key lifetime must fail closed");
+        assert!(matches!(
+            err,
+            ShellSignError::Signing(crate::producer::signing::SigningError::EvolutionExhausted { .. })
+        ));
     }
 
     #[test]
