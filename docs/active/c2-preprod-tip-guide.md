@@ -279,10 +279,17 @@ and `slotsPerKESPeriod=129600` keeps the opcert (KES period 0) fresh.)
 > the served chain** (`UnexpectedBlockNo (22)(0)`). So Gap 2 splits: **2a forge-on-followed-tip**
 > (met by orchestration at the BlockNo level) vs **2b serve-continuity** (Ade's durable
 > served chain isn't peer-adoptable — the crux, UNMET). **Orchestration is exhausted; #8–#9
-> remain unproven; the next work is the Gap 2 implementation slice** (`docs/planning/c2-local-discovered-gaps.md`
-> → Slice A: serve-continuity + forge-on-followed-tip gate). Recover alone is also proven
-> against the synced preprod node read-only. **C2-preprod-live (§6) runs only after Slice A
-> closes this local loop.**
+> remain unproven.** Root cause (grounded in code): `ade_node::admission::seed_to_snapshot`
+> persists a ledger **snapshot** at the anchor, **not servable `StoredBlock` bytes**, so the
+> recovered anchor is not a peer-intersectable servable block (`ChainDbServedSource` serves
+> only servable blocks) → the served chain isn't a continuous lineage the relay can intersect.
+> The next work is the **Gap 2 implementation slice — PHASE4-N-AE Slice A**, whose IDD
+> invariants gate is **done** (`docs/planning/phase4-n-ae-slice-a-invariants.md`:
+> recover→serve servable lineage + forge-on-followed-tip admissibility gate + structured
+> `ForgeRefused::NotCaughtUp` + replay determinism); both gaps scoped in
+> `docs/planning/c2-local-discovered-gaps.md`. Pick up fresh at `/cluster-doc PHASE4-N-AE`.
+> Recover alone is also proven against the synced preprod node read-only. **C2-preprod-live
+> (§6) runs only after Slice A closes this local loop.**
 
 ---
 
