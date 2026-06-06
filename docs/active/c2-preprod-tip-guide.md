@@ -196,12 +196,60 @@ forge-successor over evolved state, durable admission, block serving, **real Has
 adoption**, and BA-02 evidence correlation. Ade enters only by recover at the Conway tip
 — **never forges block 0**.
 
-> **Status / next step (honest):** the recover step alone is proven against the synced
-> preprod node read-only today. The **C2-LOCAL rehearsal is the immediate next build** —
-> it needs the already-past-bootstrap private Conway chain (via the `d`-bridge /
-> `cardano-testnet`) with Ade stake active + 2 Haskell nodes, which is **not yet stood
-> up**. **That rehearsal — NOT preprod stake registration — is the next step.**
-> C2-preprod-live (§6) runs only after the local rehearsal loop is green.
+### Concrete venue recipe (cardano-testnet — VALIDATED for #1–#4, 2026-06-06)
+
+`cardano-testnet` is the venue generator (it runs the `d`-bridge bootstrap internally). It
+is **not** in the cardano-node docker image — it ships in the release tarball
+`cardano-node-11.0.1-linux-amd64.tar.gz` (`./bin/cardano-testnet`). Run it **inside the
+matching `cardano-node:11.0.1` image** (so its child nodes get the right libs), binaries
+mounted, with the env vars it requires (it fails `Could not find plan.json` without
+`CARDANO_CLI`/`CARDANO_NODE`):
+
+    docker run -d --name c2-testnet --network host \
+      -v ~/.cardano-c2-testnet:/work -v ~/.cardano-testnet-bin:/ctn \
+      -e PATH=/ctn/bin:/usr/bin:/bin -e HOME=/work -e TMPDIR=/work/tmp \
+      -e CARDANO_CLI=/ctn/bin/cardano-cli -e CARDANO_NODE=/ctn/bin/cardano-node \
+      -e CARDANO_SUBMIT_API=/ctn/bin/cardano-submit-api \
+      --entrypoint /ctn/bin/cardano-testnet ghcr.io/intersectmbo/cardano-node:11.0.1 \
+      cardano --num-pool-nodes 3 --testnet-magic 42 \
+              --epoch-length 2000 --slot-length 0.1 --output-dir /work/env
+
+It "keeps running until stopped" and reaches a **producing Conway chain within a minute or
+two** — cardano-testnet **seeds the initial stake distribution active from epoch 0**
+(unlike `create-testnet-data`'s `mark`-only, §4), so the SPO pools forge immediately in
+Conway (validated: epoch 0, block 39, 3 nodes producing — **no epoch-2 wait, pool1 is an
+active leader at once**). It writes the env to `~/.cardano-c2-testnet/env/`: 3 SPO pools
+`pools-keys/pool{1,2,3}/` (cold/vrf/kes/opcert — **active-staked identities**), sockets
+`socket/node{1,2,3}/sock`, logs `logs/node{N}/`, N2N ports per `node-data/*/topology.json`.
+**#1–#4 validated:** `query tip` → epoch 2–3, era Conway, block 70–105, 3 nodes producing.
+(`--epoch-length 2000 --slot-length 0.1` ≈ 3.3-min epochs — enough room for the recover →
+forge-within-seed-epoch step; the default 50 s epoch is a timing stunt, don't use it.)
+
+### The node1-replacement integration (#5–#9)
+
+1. **Adopt pool1's identity** — use `pools-keys/pool1/{cold.skey,vrf.skey,kes.skey,opcert.cert}`
+   as Ade's operator keys (an **already-active-staked** pool — no registration wait).
+2. **Stop node1** (kill only its process inside `c2-testnet`; node2+node3 keep producing) so
+   pool1's slots are produced **only by Ade** — no equivocation. If killing node1
+   destabilises the cluster, record it as a bounded venue failure; do **not** keep node1
+   alive on pool1's keys.
+3. **#5 Extract** the live tip + consensus inputs from node2/node3
+   (`build_consensus_inputs_bundle.sh`; `ADE_LIVE_PEER_CONTAINER=c2-testnet`,
+   `ADE_LIVE_PEER_SOCKET=/work/env/socket/node2/sock`, magic 42; the venue uses
+   `configuration.yaml`, so feed the shelley hash via a small `{"ShelleyGenesisHash":"…"}`
+   from `cardano-cli genesis hash --genesis shelley-genesis.json`); dump the seed UTxO.
+4. **#6 Ade recovers** @ the live non-Origin tip (`--mode admission` `seed_to_snapshot`).
+5. **#7 Ade forges** pool1's successor (`--mode node`, peering node2/node3) within the
+   recovered seed epoch.
+6. **#8 node2/node3 adopt** Ade's pool1 block (`ValidCandidate` + `AddedToCurrentChain`).
+7. **#9 correlate** → manifest marked **`C2-LOCAL-REHEARSAL`, non-promotable, private
+   Conway venue, Haskell peers: node2,node3, Ade identity: pool1, forged hash == adopted
+   hash.**
+
+> **Status / next step (honest):** the **venue (#1–#4) is VALIDATED** via cardano-testnet.
+> The **Ade integration (#5–#9) is in progress** on the node1-replacement plan above.
+> Recover alone is also proven against the synced preprod node read-only. **C2-preprod-live
+> (§6) runs only after this local rehearsal loop is green.**
 
 ---
 
