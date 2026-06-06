@@ -212,7 +212,7 @@ mounted, with the env vars it requires (it fails `Could not find plan.json` with
       -e CARDANO_SUBMIT_API=/ctn/bin/cardano-submit-api \
       --entrypoint /ctn/bin/cardano-testnet ghcr.io/intersectmbo/cardano-node:11.0.1 \
       cardano --num-pool-nodes 3 --testnet-magic 42 \
-              --epoch-length 2000 --slot-length 0.1 --output-dir /work/env
+              --epoch-length 2000 --slot-length 1 --output-dir /work/env   # slot-length MUST be integer
 
 It "keeps running until stopped" and reaches a **producing Conway chain within a minute or
 two** — cardano-testnet **seeds the initial stake distribution active from epoch 0**
@@ -222,34 +222,52 @@ active leader at once**). It writes the env to `~/.cardano-c2-testnet/env/`: 3 S
 `pools-keys/pool{1,2,3}/` (cold/vrf/kes/opcert — **active-staked identities**), sockets
 `socket/node{1,2,3}/sock`, logs `logs/node{N}/`, N2N ports per `node-data/*/topology.json`.
 **#1–#4 validated:** `query tip` → epoch 2–3, era Conway, block 70–105, 3 nodes producing.
-(`--epoch-length 2000 --slot-length 0.1` ≈ 3.3-min epochs — enough room for the recover →
-forge-within-seed-epoch step; the default 50 s epoch is a timing stunt, don't use it.)
+**`--slot-length` MUST be an INTEGER (use `1`, NOT `0.1`):** Ade's `parse_shelley_genesis`
+does `require_u64("slotLength")` and rejects a fractional `slotLength` per its no-floats
+determinism invariant — a fractional value fails the forge path with exit 44. With
+`--slot-length 1 --epoch-length 2000` the epoch is ~33 min (a comfortable forge window),
+and `slotsPerKESPeriod=129600` keeps the opcert (KES period 0) fresh.)
 
-### The node1-replacement integration (#5–#9)
+### The integration (#5–#9) — and the key finding from the first run
 
-1. **Adopt pool1's identity** — use `pools-keys/pool1/{cold.skey,vrf.skey,kes.skey,opcert.cert}`
-   as Ade's operator keys (an **already-active-staked** pool — no registration wait).
-2. **Stop node1** (kill only its process inside `c2-testnet`; node2+node3 keep producing) so
-   pool1's slots are produced **only by Ade** — no equivocation. If killing node1
-   destabilises the cluster, record it as a bounded venue failure; do **not** keep node1
-   alive on pool1's keys.
-3. **#5 Extract** the live tip + consensus inputs from node2/node3
+1. **Adopt pool1's identity** — `pools-keys/pool1/{cold.skey,vrf.skey,kes.skey,opcert.cert}`
+   as Ade's operator keys (already active-staked — no registration wait).
+2. **#5 Extract** the live tip + consensus inputs from a peer
    (`build_consensus_inputs_bundle.sh`; `ADE_LIVE_PEER_CONTAINER=c2-testnet`,
    `ADE_LIVE_PEER_SOCKET=/work/env/socket/node2/sock`, magic 42; the venue uses
    `configuration.yaml`, so feed the shelley hash via a small `{"ShelleyGenesisHash":"…"}`
-   from `cardano-cli genesis hash --genesis shelley-genesis.json`); dump the seed UTxO.
-4. **#6 Ade recovers** @ the live non-Origin tip (`--mode admission` `seed_to_snapshot`).
-5. **#7 Ade forges** pool1's successor (`--mode node`, peering node2/node3) within the
-   recovered seed epoch.
-6. **#8 node2/node3 adopt** Ade's pool1 block (`ValidCandidate` + `AddedToCurrentChain`).
-7. **#9 correlate** → manifest marked **`C2-LOCAL-REHEARSAL`, non-promotable, private
-   Conway venue, Haskell peers: node2,node3, Ade identity: pool1, forged hash == adopted
-   hash.**
+   from `cardano-cli genesis hash --genesis shelley-genesis.json`); dump the seed UTxO. **DONE.**
+3. **#6 Ade recovers** @ the live non-Origin tip (`--mode admission` `seed_to_snapshot`). **DONE.**
+4. **#7 Ade forges** pool1's successor (`--mode node`, pool1 keys + recovered store +
+   `--peer node2 --listen node1-port`). **DONE — 2 `forge_result:succeeded` pool1 blocks
+   from recovered non-Origin Conway state.**
 
-> **Status / next step (honest):** the **venue (#1–#4) is VALIDATED** via cardano-testnet.
-> The **Ade integration (#5–#9) is in progress** on the node1-replacement plan above.
-> Recover alone is also proven against the synced preprod node read-only. **C2-preprod-live
-> (§6) runs only after this local rehearsal loop is green.**
+> **#8 KEY FINDING (2026-06-06): node2/node3 must be NON-PRODUCING relays, not competing
+> producers.** The first run had all 3 cardano-testnet nodes as **pools**. Ade `--mode node`
+> forges on its **own recovered chain** (`forge_one_from_recovered`) and follows the peer
+> *separately*; with node2/node3 *also* producing (pool2/pool3), Ade's pool1 branch **loses
+> fork-choice** to their longer chain and Ade's extend-only receive-side **fails closed**
+> (`BlockNoOutOfOrder{last:10,attempted:9}`). Ade has no fork-choice to be
+> one-producer-among-several — and per the guardrail we do **not** add it. **C1 worked only
+> because Ade was the SOLE producer + the peer a PURE follower.** So #8 needs that shape.
+
+**Two-phase relay venue (the fix — venue config, NOT an Ade-semantics change):**
+- **Phase 1:** cardano-testnet 3-pool cluster bootstraps to a non-Origin Conway tip (above).
+- **Phase 2:** **stop the cluster**, then re-run node2/node3 as cardano-node **relays** —
+  reuse their `node-data/nodeN/{db,configuration.yaml}`, point topology at Ade's listen port,
+  and **omit `--shelley-kes-key`/`--shelley-vrf-key`/`--shelley-operational-certificate`** so
+  they do not forge. Now Ade (pool1) is the **sole producer**; the chain only advances via Ade.
+- Ade recovers @ the frozen tip → forges pool1 successors → **#8 the relays adopt** (no
+  competition) → **#9 correlate** → manifest: **`C2-LOCAL-REHEARSAL`, non-promotable, private
+  Conway venue, Haskell peers (relays): node2,node3, Ade identity: pool1, forged hash ==
+  adopted hash.**
+
+> **Status (honest):** **#1–#7 DONE** — venue validated; live tip + consensus inputs
+> extracted; Ade recovered from the non-Origin tip; Ade forged **real pool1 blocks** from
+> that recovered state. **#8–#9 require the two-phase relay venue** above (node2/node3 as
+> non-producing relays) — surfaced as an Ade fork-choice gap, **not** worked around. Recover
+> alone is also proven against the synced preprod node read-only. **C2-preprod-live (§6) runs
+> only after this local loop is green.**
 
 ---
 
