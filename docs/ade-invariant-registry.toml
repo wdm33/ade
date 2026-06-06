@@ -727,7 +727,7 @@ code_locus = "crates/ade_node/src/node_sync.rs, crates/ade_node/src/node_lifecyc
 tests = ["forge_epoch_admission_within_seed_epoch_admits", "forge_epoch_admission_off_epoch_fails_closed", "forge_epoch_admission_unlocatable_fails_closed", "node_forge_off_epoch_slot_fails_closed", "node_forge_no_epoch_boundary_promotion_on_forge_path", "forge_tick_off_epoch_slot_fails_closed_local"]
 ci_script = "ci/ci_check_node_forge_single_epoch_fail_closed.sh"
 introduced_in = "PHASE4-N-F-G-A"
-strengthened_in = []
+strengthened_in = ["PHASE4-N-AE"]
 status = "enforced"
 evidence_notes = """
 PHASE4-N-F-G invariant sketch (/invariants gate). Declared at sketch. Single-epoch
@@ -5466,7 +5466,7 @@ code_locus = "crates/ade_node/src/node_lifecycle.rs, crates/ade_node/src/run_loo
 tests = ["plan_loop_step_forge_precedence_table_is_total", "forge_slot_guard_none_is_due", "forge_slot_guard_at_most_once_per_slot", "forge_slot_guard_rejects_past_slot", "relay_loop_forge_slot_derived_via_clock_seam", "relay_loop_forge_tick_attempts_forge_advances_no_tip", "relay_loop_without_producer_material_matches_nfd_relay", "relay_loop_forge_two_runs_byte_identical", "forge_tick_rotated_kes_period_skips_no_retroactive_sign", "forge_tick_off_epoch_slot_fails_closed_local"]
 ci_script = "ci/ci_check_loop_planner_closed.sh, ci/ci_check_node_run_loop_containment.sh, ci/ci_check_genesis_consistency_fixture_present.sh"
 introduced_in = "PHASE4-N-F-E"
-strengthened_in = ["PHASE4-N-F-F", "PHASE4-N-F-G-A"]
+strengthened_in = ["PHASE4-N-F-F", "PHASE4-N-F-G-A", "PHASE4-N-AE"]
 status = "enforced"
 evidence_notes = """
 PHASE4-N-F-E invariant sketch (2026-05-31, /invariants gate). Declared at sketch;
@@ -6529,11 +6529,11 @@ full-genesis replay) -- no new durability law.
 source = "docs/planning/phase4-n-u-forged-block-durability-invariants.md"
 cross_ref = ["T-REC-01", "T-REC-02", "T-REC-03", "DC-SYNC-01", "DC-NODE-12", "DC-WAL-04"]
 code_locus = "crates/ade_node/src/node_lifecycle.rs (warm_start_recovery: sidecar-reconstructed era_schedule/ledger_view + forward-replay via bootstrap_initial_state + fingerprint fail-fast guard); crates/ade_node/src/node_sync.rs (admit_forged_block_durably -> pump_block); crates/ade_runtime/src/bootstrap.rs (bootstrap_initial_state warm-start forward-replay -- reused)"
-tests = ["forge_kill_then_warm_start_recovers_same_tip_via_forward_replay", "forge_tip_successor_kill_then_warm_start_recovers_block_one"]
+tests = ["forge_kill_then_warm_start_recovers_same_tip_via_forward_replay", "forge_tip_successor_kill_then_warm_start_recovers_block_one", "recover_follow_forge_two_runs_byte_identical"]
 ci_script = ""
 status = "enforced"
 introduced_in = "PHASE4-N-U"
-strengthened_in = ["PHASE4-N-AD"]
+strengthened_in = ["PHASE4-N-AD", "PHASE4-N-AE"]
 evidence_notes = "PHASE4-N-U S2 (2026-06-05). ENFORCED (test-enforced; no dedicated CI gate). A forged-block durable tip carries NO snapshot-at-tip (admit_forged_block_durably captures none); warm_start_recovery recovers it by FORWARD-REPLAY from the genesis slot-0 snapshot over the durable WAL block, and its fingerprint guard asserts the recovered ledger fp == the WAL-tail post_fp -- so reaching Ok with the same tip is byte-identical replay equivalence (forge_kill_then_warm_start_recovers_same_tip_via_forward_replay: forge block 0 -> admit -> kill -> reopen -> warm_start_recovery -> recovered tip slot+hash == the pre-kill durable tip). Rides the existing snapshot + forward-replay recovery law (the bootstrap_initial_state warm-start branch, already proven by recover_node_state's recovery_crash_at_phase_sync_byte_identical) -- no new durability law. True-tier: extends T-REC-01/02/03 from received-only to forged+received durable progression. PHASE4-N-AD (2026-06-06) STRENGTHENS: forge_tip_successor_kill_then_warm_start_recovers_block_one extends the proof from a single block-0 forge to a multi-block forged progression -- forge block 0 -> admit -> forge block 1 on the durable NON-Origin tip -> admit -> kill -> warm_start_recovery recovers block 1 byte-identically (no ChainBreak), proving the block-N -> block-N+1 prior_fp chains across WAL replay. The C1 cold-start seed -> block-0 ChainBreak (seed ledger fp vs the PrevHash::Genesis/null prior) is a C1 genesis-successor-only durability limitation, NOT a C2 tip-successor blocker -- C2 enters from a non-Origin recovered tip."
 
 [[rules]]
@@ -6596,12 +6596,13 @@ snapshot anchor is never served as a chain head a peer cannot intersect. PARTIAL
 """
 source = "docs/clusters/PHASE4-N-AE/cluster.md; docs/planning/phase4-n-ae-slice-a-invariants.md; docs/planning/c2-local-discovered-gaps.md"
 cross_ref = ["DC-NODE-15", "DC-CONS-24", "DC-NODE-13", "DC-NODE-12", "DC-CONS-23", "CN-CONS-07", "CN-STORE-08"]
-code_locus = ""
-tests = []
-ci_script = ""
-status = "declared"
+code_locus = "crates/ade_runtime/src/network/served_chain_projection.rs (ChainDbServedSource::intersect/next_after/tip over the durable ChainDb -- read-only, reused); crates/ade_node/src/node_lifecycle.rs (the forge-on-followed-tip gate gives the projection an intersectable parent)"
+tests = ["served_chain_intersects_at_followed_tip_and_rolls_to_forged"]
+ci_script = "ci/ci_check_forge_followed_tip_admission.sh"
+status = "partial"
 introduced_in = "PHASE4-N-AE"
 strengthened_in = []
+evidence_notes = "PHASE4-N-AE.A (2026-06-06). PARTIAL -- the FOLLOWED-TIP LINEAGE CLAUSE is enforced; the RECOVERED-ANCHOR CLAUSE is still open (AE.B). After the follow durably stored the peer tip T as a servable StoredBlock (DC-NODE-12 via pump_block) and the DC-NODE-15 gate admitted the forged successor T+1 on it, a peer at T can FindIntersect there and roll forward onto Ade's forged successor: served_chain_intersects_at_followed_tip_and_rolls_to_forged asserts ChainDbServedSource::intersect([T]) == Some(T) and next_after(T) projects the forged T+1 (slot+hash+block_no). The recovered-anchor clause (make a snapshot-only recovered anchor peer-intersectable for the recover-at/near-tip zero-followed-block case) is NOT satisfied by AE.A and stays declared/open -- the two AE.B fixtures (recovered_anchor_is_not_peer_intersectable, forged_successor_on_recovered_anchor_is_not_peer_adoptable) remain #[ignore]d (red-on-demand) in phase4_n_ae_recover_serve_continuity_diag.rs until AE.B. No serve-projection change was needed; the continuity is mechanically proven, not assumed."
 
 [[rules]]
 id = "DC-NODE-15"
@@ -6618,12 +6619,13 @@ input only: it may PREVENT a forge but may not select, replace, reorder, or pref
 """
 source = "docs/clusters/PHASE4-N-AE/cluster.md; docs/clusters/PHASE4-N-AE/slices/AE.A.md; docs/planning/phase4-n-ae-slice-a-invariants.md"
 cross_ref = ["DC-NODE-14", "DC-CONS-24", "DC-EPOCH-03", "DC-NODE-05", "DC-CONS-03", "DC-NODE-08"]
-code_locus = ""
-tests = []
-ci_script = ""
-status = "declared"
+code_locus = "crates/ade_node/src/node_sync.rs (forge_followed_tip_admission GREEN classifier + ForgeFollowedTipAdmission/NotCaughtUpReason + ForgeRefused/NodeForgeOutcome + FollowedPeerTipSignal); crates/ade_node/src/node_lifecycle.rs (run_relay_loop_with_sched ForgeTick arm: recovered.tip forge-base fallback removed, gate called before the single fenced forge_one_from_recovered, typed ForgeRefused::NotCaughtUp recorded into ForgeActivation.last_forge_refused)"
+tests = ["forge_refused_not_caught_up", "forge_base_falls_back_to_snapshot_anchor", "forge_on_followed_tip_proceeds_with_parent_byte_equal"]
+ci_script = "ci/ci_check_forge_followed_tip_admission.sh"
+status = "enforced"
 introduced_in = "PHASE4-N-AE"
 strengthened_in = []
+evidence_notes = "PHASE4-N-AE.A (2026-06-06). ENFORCED. The --mode node ForgeTick recovered.tip forge-base fallback (node_lifecycle.rs:1102 `None => act.recovered.tip.clone()`) is removed: the forge base is the durable servable tip (ChainDb::tip(); the recovered snapshot anchor is never a forge base). A closed GREEN classifier forge_followed_tip_admission(durable_servable_tip, followed_peer_tip) returns CaughtUp iff BOTH tips are present AND hash AND block_no are equal, else NotCaughtUp{reason} (NoFollowedPeerTip | NoDurableServableTip | TipMismatch). On the recovered/following path the ForgeTick arm calls the classifier BEFORE the single fenced forge_one_from_recovered; NotCaughtUp records a typed ForgeRefused::NotCaughtUp{local_servable_tip, followed_peer_tip, reason} into ForgeActivation.last_forge_refused (a structured LOCAL observation, never a log-string-only path) and the forge does not fire (no state transition, tip unchanged) -- mechanically distinct from a forge Failed. The followed-peer-tip signal (FollowedPeerTipSignal) is sourced from the SAME run_admission_wire_pump stream (the AdmissionPeerEvent::TipUpdate events NodeBlockSource skips for sync are recorded as a write-only side effect); it is a forge-ADMISSIBILITY input only and never reaches select_best_chain/chain_selector/fork_choice (gate (d) static-grep enforced). The from-genesis cold-start (recovered.tip None) is upstream of the gate (DC-NODE-08). Gate: ci_check_forge_followed_tip_admission.sh."
 
 [[rules]]
 id = "DC-CONS-24"
@@ -6635,9 +6637,10 @@ prev_hash byte-equals the followed peer tip hash AND its block_no == followed_ti
 """
 source = "docs/clusters/PHASE4-N-AE/cluster.md; docs/clusters/PHASE4-N-AE/slices/AE.A.md"
 cross_ref = ["DC-NODE-15", "DC-NODE-14", "CN-WIRE-09", "DC-NODE-08", "DC-NODE-10"]
-code_locus = ""
-tests = []
-ci_script = ""
-status = "declared"
+code_locus = "crates/ade_node/src/node_lifecycle.rs (run_relay_loop_with_sched ForgeTick CaughtUp arm forges on selected_tip == the durable servable tip == the followed peer tip); crates/ade_node/src/node_sync.rs (forge_header_position sets prev_hash = PrevHash::Block(selected_tip.hash))"
+tests = ["forge_on_followed_tip_proceeds_with_parent_byte_equal"]
+ci_script = "ci/ci_check_forge_followed_tip_admission.sh"
+status = "enforced"
 introduced_in = "PHASE4-N-AE"
 strengthened_in = []
+evidence_notes = "PHASE4-N-AE.A (2026-06-06). ENFORCED. When the forge is admissible (CaughtUp), the ForgeTick arm forges on selected_tip = ChainDb::tip() = the durable servable tip, which equals the followed peer tip (DC-NODE-15). forge_header_position sets the successor prev_hash = PrevHash::Block(selected_tip.hash) and block_no = last_block_no + 1, so the forged parent hash BYTE-EQUALS the peer-visible selected tip and block_no == followed_tip.block_no + 1. Test forge_on_followed_tip_proceeds_with_parent_byte_equal reads the forged prev_hash from the inner Conway header body (preserved CBOR, never inferred from block_no) and asserts byte-equality to the followed peer tip hash + block_no + 1. Gate: ci_check_forge_followed_tip_admission.sh (assertion (b): the classifier compares hash AND block_no)."

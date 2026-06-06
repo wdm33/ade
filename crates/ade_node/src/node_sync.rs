@@ -33,8 +33,10 @@ use ade_core::consensus::ledger_view::LedgerView;
 use ade_core::consensus::praos_state::PraosChainDepState;
 use ade_ledger::consensus_view::PoolDistrView;
 use ade_ledger::pparams::ProtocolParameters;
+use ade_ledger::receive::events::TipPoint;
 use ade_ledger::state::LedgerState;
 use ade_ledger::wal::WalStore;
+use ade_network::codec::chain_sync::{Point, Tip};
 use ade_runtime::admission::AdmissionPeerEvent;
 use ade_runtime::bootstrap::BootstrapState;
 use ade_runtime::chaindb::{ChainDb, ChainTip, SnapshotStore};
@@ -85,17 +87,48 @@ pub enum NodeBlockSource {
         rx: mpsc::Receiver<AdmissionPeerEvent>,
         lookahead: VecDeque<Vec<u8>>,
         disconnected: bool,
+        /// PHASE4-N-AE.A (DC-NODE-15): the followed-peer-tip admissibility
+        /// signal, updated as a write-only side effect when the wire stream
+        /// yields a `TipUpdate` (which is otherwise skipped for sync). It is
+        /// read ONLY by the ForgeTick admissibility gate, never by
+        /// `next_block` / readiness — so it can only PREVENT a forge, never
+        /// drive sync or chain selection.
+        followed_peer_tip: FollowedPeerTipSignal,
     },
     /// Deterministic in-memory ordered feed (hermetic test / loopback).
     /// Exactly the "a live socket is not required" shape `pump_block`
-    /// was designed for.
-    InMemory(VecDeque<Vec<u8>>),
+    /// was designed for. The followed-peer-tip signal carried alongside is
+    /// set explicitly by hermetic tests (the in-memory feed observes no live
+    /// `TipUpdate`).
+    InMemory {
+        blocks: VecDeque<Vec<u8>>,
+        followed_peer_tip: FollowedPeerTipSignal,
+    },
 }
 
 impl NodeBlockSource {
     /// Build an in-memory source from an ordered block-bytes sequence.
     pub fn in_memory(blocks: Vec<Vec<u8>>) -> Self {
-        Self::InMemory(VecDeque::from(blocks))
+        Self::InMemory {
+            blocks: VecDeque::from(blocks),
+            followed_peer_tip: FollowedPeerTipSignal::new(),
+        }
+    }
+
+    /// Build an in-memory source with an explicit followed-peer-tip
+    /// admissibility signal (hermetic forge-gate tests). The in-memory feed
+    /// observes no live `TipUpdate`, so tests set the signal directly to
+    /// exercise the caught-up / not-caught-up classifier paths.
+    pub fn in_memory_with_followed_tip(
+        blocks: Vec<Vec<u8>>,
+        followed_peer_tip: Option<TipPoint>,
+    ) -> Self {
+        Self::InMemory {
+            blocks: VecDeque::from(blocks),
+            followed_peer_tip: FollowedPeerTipSignal {
+                latest: followed_peer_tip,
+            },
+        }
     }
 
     /// Wrap one peer's wire-pump event receiver as the source.
@@ -104,6 +137,22 @@ impl NodeBlockSource {
             rx,
             lookahead: VecDeque::new(),
             disconnected: false,
+            followed_peer_tip: FollowedPeerTipSignal::new(),
+        }
+    }
+
+    /// PHASE4-N-AE.A (DC-NODE-15): the followed-peer-tip admissibility signal
+    /// observed from this source's wire stream (or set explicitly for an
+    /// in-memory feed). Read ONLY by the ForgeTick admissibility gate — never a
+    /// sync / chain-selection authority.
+    pub fn followed_peer_tip_signal(&self) -> &FollowedPeerTipSignal {
+        match self {
+            Self::InMemory {
+                followed_peer_tip, ..
+            } => followed_peer_tip,
+            Self::WirePump {
+                followed_peer_tip, ..
+            } => followed_peer_tip,
         }
     }
 
@@ -116,6 +165,7 @@ impl NodeBlockSource {
         rx: &mut mpsc::Receiver<AdmissionPeerEvent>,
         lookahead: &mut VecDeque<Vec<u8>>,
         disconnected: &mut bool,
+        followed_peer_tip: &mut FollowedPeerTipSignal,
     ) {
         use tokio::sync::mpsc::error::TryRecvError;
         loop {
@@ -132,7 +182,14 @@ impl NodeBlockSource {
                 Ok(AdmissionPeerEvent::Block { block_bytes, .. }) => {
                     lookahead.push_back(block_bytes);
                 }
-                Ok(AdmissionPeerEvent::TipUpdate { .. }) => continue,
+                // PHASE4-N-AE.A (DC-NODE-15): a TipUpdate is STILL skipped for
+                // sync (it is not a block and not a sync tip authority), but it
+                // is recorded into the followed-peer-tip admissibility signal as
+                // a write-only side effect — read only by the ForgeTick gate.
+                Ok(AdmissionPeerEvent::TipUpdate { tip, .. }) => {
+                    followed_peer_tip.observe(&tip);
+                    continue;
+                }
                 Ok(AdmissionPeerEvent::Disconnected { .. }) => {
                     *disconnected = true;
                     break;
@@ -165,11 +222,12 @@ impl NodeBlockSource {
     /// readiness peeks) is drained ONLY here.
     pub async fn next_block(&mut self) -> Option<Vec<u8>> {
         match self {
-            Self::InMemory(q) => q.pop_front(),
+            Self::InMemory { blocks, .. } => blocks.pop_front(),
             Self::WirePump {
                 rx,
                 lookahead,
                 disconnected,
+                followed_peer_tip,
             } => {
                 // Top up the content-blind lookahead from whatever is
                 // immediately available (non-blocking), then hand back one
@@ -177,7 +235,7 @@ impl NodeBlockSource {
                 // (open-but-empty) yields `None` so the sync driver returns
                 // and the loop can re-plan / idle / shut down cleanly.
                 if lookahead.is_empty() && !*disconnected {
-                    Self::pump_lookahead(rx, lookahead, disconnected);
+                    Self::pump_lookahead(rx, lookahead, disconnected, followed_peer_tip);
                 }
                 lookahead.pop_front()
             }
@@ -192,14 +250,15 @@ impl NodeBlockSource {
     /// non-blocking `try_recv`). PHASE4-N-F-D S2.
     pub fn has_work_ready(&mut self) -> bool {
         match self {
-            Self::InMemory(q) => !q.is_empty(),
+            Self::InMemory { blocks, .. } => !blocks.is_empty(),
             Self::WirePump {
                 rx,
                 lookahead,
                 disconnected,
+                followed_peer_tip,
             } => {
                 if lookahead.is_empty() && !*disconnected {
-                    Self::pump_lookahead(rx, lookahead, disconnected);
+                    Self::pump_lookahead(rx, lookahead, disconnected, followed_peer_tip);
                 }
                 !lookahead.is_empty()
             }
@@ -212,7 +271,7 @@ impl NodeBlockSource {
     /// drained. Content-blind. PHASE4-N-F-D S2.
     pub fn is_ended(&self) -> bool {
         match self {
-            Self::InMemory(q) => q.is_empty(),
+            Self::InMemory { blocks, .. } => blocks.is_empty(),
             Self::WirePump {
                 lookahead,
                 disconnected,
@@ -234,8 +293,8 @@ impl NodeBlockSource {
     pub fn feed_reason(&self) -> crate::live_log::FeedReason {
         use crate::live_log::FeedReason;
         match self {
-            Self::InMemory(q) => {
-                if q.is_empty() {
+            Self::InMemory { blocks, .. } => {
+                if blocks.is_empty() {
                     FeedReason::CleanEmpty
                 } else {
                     FeedReason::NoBlockAvailable
@@ -264,11 +323,12 @@ impl NodeBlockSource {
     /// cancellation-safe — no durable apply is ever torn. PHASE4-N-F-D S2.
     pub async fn wait_ready(&mut self) {
         match self {
-            Self::InMemory(_) => {}
+            Self::InMemory { .. } => {}
             Self::WirePump {
                 rx,
                 lookahead,
                 disconnected,
+                followed_peer_tip,
             } => {
                 if !lookahead.is_empty() || *disconnected {
                     return;
@@ -279,7 +339,14 @@ impl NodeBlockSource {
                             lookahead.push_back(block_bytes);
                             return;
                         }
-                        Some(AdmissionPeerEvent::TipUpdate { .. }) => continue,
+                        // PHASE4-N-AE.A (DC-NODE-15): a TipUpdate does not end
+                        // the await (it is not a block), but its tip IS recorded
+                        // into the followed-peer-tip admissibility signal before
+                        // we keep waiting for the next block.
+                        Some(AdmissionPeerEvent::TipUpdate { tip, .. }) => {
+                            followed_peer_tip.observe(&tip);
+                            continue;
+                        }
                         Some(AdmissionPeerEvent::Disconnected { .. }) => {
                             *disconnected = true;
                             return;
@@ -506,6 +573,155 @@ pub fn forge_epoch_admission(
             candidate_epoch: None,
             seed_epoch,
         },
+    }
+}
+
+/// PHASE4-N-AE.A (DC-NODE-15): why a forge is not admissible against the
+/// followed peer tip. A distinct, named reason for each absence/mismatch — never
+/// a fabricated tip and never a silently-collapsed equality failure.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum NotCaughtUpReason {
+    /// No followed peer tip has been observed yet (the follow has reported no
+    /// peer tip on this run). Distinct from a durable-tip absence.
+    NoFollowedPeerTip,
+    /// No durable servable tip exists yet (the follow has not durably stored a
+    /// peer block, so `ChainDb::tip()` / the served projection is empty). The
+    /// recovered snapshot anchor is NOT a durable servable tip — so a forge here
+    /// would have no peer-intersectable base.
+    NoDurableServableTip,
+    /// Both tips are present but disagree (hash or block_no): the durable
+    /// servable tip is behind / diverged from the followed peer tip, so a forge
+    /// would build on a base the peer is not standing on.
+    TipMismatch,
+}
+
+/// PHASE4-N-AE.A (DC-NODE-15): the forge-on-followed-tip admission verdict. A
+/// closed two-variant GREEN classifier sibling to [`ForgeEpochAdmission`]:
+/// `CaughtUp` iff BOTH tips are present AND their `hash` AND `block_no` are
+/// equal; otherwise `NotCaughtUp` carrying the named reason.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ForgeFollowedTipAdmission {
+    /// The durable servable tip equals the followed peer tip — a forge may be
+    /// attempted (its successor builds on a peer-intersectable parent).
+    CaughtUp,
+    /// The durable servable tip does not equal the followed peer tip — fail
+    /// closed before leadership / signing.
+    NotCaughtUp { reason: NotCaughtUpReason },
+}
+
+/// PHASE4-N-AE.A (DC-NODE-15): decide forge-on-followed-tip admission. Pure /
+/// deterministic GREEN — no I/O, clock, rand, float; derived solely from the two
+/// `Option<TipPoint>` inputs. `CaughtUp` requires BOTH tips present AND their
+/// `hash` AND `block_no` equal. Absence is an explicit named reason: a missing
+/// followed peer tip is [`NotCaughtUpReason::NoFollowedPeerTip`], a missing
+/// durable servable tip is [`NotCaughtUpReason::NoDurableServableTip`], and a
+/// present-but-unequal pair is [`NotCaughtUpReason::TipMismatch`]. The slot is
+/// ignored for equality — two blocks at the same `(hash, block_no)` are the same
+/// chain point by their canonical hash (the parent identity DC-CONS-24 binds).
+///
+/// The followed peer tip is a forge-ADMISSIBILITY input only: this classifier
+/// can only return a verdict that PREVENTS a forge; it selects nothing and never
+/// reaches `select_best_chain` / `chain_selector` / `fork_choice`.
+pub fn forge_followed_tip_admission(
+    durable_servable_tip: Option<TipPoint>,
+    followed_peer_tip: Option<TipPoint>,
+) -> ForgeFollowedTipAdmission {
+    match (durable_servable_tip, followed_peer_tip) {
+        (Some(durable), Some(peer)) => {
+            if durable.hash == peer.hash && durable.block_no == peer.block_no {
+                ForgeFollowedTipAdmission::CaughtUp
+            } else {
+                ForgeFollowedTipAdmission::NotCaughtUp {
+                    reason: NotCaughtUpReason::TipMismatch,
+                }
+            }
+        }
+        (None, Some(_)) => ForgeFollowedTipAdmission::NotCaughtUp {
+            reason: NotCaughtUpReason::NoDurableServableTip,
+        },
+        (_, None) => ForgeFollowedTipAdmission::NotCaughtUp {
+            reason: NotCaughtUpReason::NoFollowedPeerTip,
+        },
+    }
+}
+
+/// PHASE4-N-AE.A (DC-NODE-15): a typed, structured forge refusal — semantically
+/// distinct from a forge *error* ([`NodeForgeError`]) and from a forge *result*
+/// (the BLUE self-accept outcome). A `ForgeRefused` means the admissibility gate
+/// PREVENTED the forge: **no state transition was attempted**, the tip is
+/// unchanged, nothing was admitted / served / handed off. It is never a
+/// log-string-only path — the carrier holds the tips + the named reason.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ForgeRefused {
+    /// The forge was not caught up to the followed peer tip. Carries the
+    /// observed tips + the named reason for diagnostics. `local_servable_tip` is
+    /// the durable servable tip Ade would have built on (NEVER the recovered
+    /// snapshot anchor); `followed_peer_tip` is the peer tip the follow observed.
+    NotCaughtUp {
+        local_servable_tip: Option<TipPoint>,
+        followed_peer_tip: Option<TipPoint>,
+        reason: NotCaughtUpReason,
+    },
+}
+
+/// PHASE4-N-AE.A: the closed outcome of one `--mode node` ForgeTick attempt.
+/// Three mechanically-distinct states (NOT folded into `CoordinatorEvent`):
+/// `Refused` (the admissibility gate prevented the forge — no state transition),
+/// `Forged` (the forge path ran, carrying the existing success carrier), and
+/// `Failed` (the forge path was attempted and failed). A RED/GREEN sum, not a
+/// canonical type.
+#[derive(Debug)]
+pub enum NodeForgeOutcome {
+    /// The forge path ran. Carries the existing forge-result carrier — the
+    /// reused `CoordinatorEvent` plus the optional self-accepted handoff.
+    Forged(CoordinatorEvent, Option<SelfAcceptedHandoff>),
+    /// The admissibility gate refused the forge: no state transition attempted,
+    /// tip unchanged.
+    Refused(ForgeRefused),
+    /// The forge path was attempted but failed with a typed error.
+    Failed(NodeForgeError),
+}
+
+/// PHASE4-N-AE.A (DC-NODE-15): the structured followed-peer-tip admissibility
+/// signal — a sibling of the block-bytes source, sourced from the SAME
+/// `run_admission_wire_pump` stream that already observes the peer tip (the
+/// `AdmissionPeerEvent::TipUpdate` events `NodeBlockSource` deliberately skips
+/// for sync). It carries the latest observed followed peer tip as an
+/// `Option<TipPoint>` and is consumed ONLY as a forge-admissibility input.
+///
+/// This is NOT a sync / chain-selection authority: it never advances a tip,
+/// never feeds `next_block` / `pump_block`, and never reaches a chain selector.
+/// It can only PREVENT a forge (via [`forge_followed_tip_admission`]). It does
+/// NOT revive `TipUpdate` as a sync tip authority.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct FollowedPeerTipSignal {
+    latest: Option<TipPoint>,
+}
+
+impl FollowedPeerTipSignal {
+    /// A signal that has observed no followed peer tip yet.
+    pub fn new() -> Self {
+        Self { latest: None }
+    }
+
+    /// The latest observed followed peer tip, or `None` if none observed yet.
+    pub fn tip(&self) -> Option<TipPoint> {
+        self.latest.clone()
+    }
+
+    /// Record an observed followed peer tip from the wire stream's `TipUpdate`.
+    /// A `Point::Origin` tip carries no `(slot, hash)` to stand on, so it is
+    /// ignored — admissibility stays at the last concrete tip (or `None`). This
+    /// is the ONLY mutation; it is a write-only side effect of draining the wire
+    /// stream and never influences which block `next_block` yields.
+    fn observe(&mut self, tip: &Tip) {
+        if let Point::Block { slot, hash } = &tip.point {
+            self.latest = Some(TipPoint {
+                slot: *slot,
+                hash: hash.clone(),
+                block_no: tip.block_no,
+            });
+        }
     }
 }
 
@@ -1659,15 +1875,48 @@ mod tests {
         }
     }
 
-    /// The node spine the relay loop drives, initialized from the SAME recovered
-    /// base the forge reads — mirroring the real node, where `ForwardSyncState`
-    /// is built from the recovered `ledger` + `chain_dep`
-    /// (`node_lifecycle` On-arm). So the spine's `chain_dep.last_block_no` is
-    /// `Some(0)` (consistent with the recovered tip at block 0), which the
-    /// DC-NODE-10 forge-successor reads (a fresh genesis spine would desync the
-    /// forge-successor block_no from the recovered tip).
+    /// PHASE4-N-AE.A (DC-NODE-15): the node spine the relay-loop forge tests
+    /// drive. The relay-loop forge now requires the from-genesis cold-start
+    /// branch (a recovered-ANCHOR forge needs being caught up to the followed
+    /// peer tip — DC-NODE-15 — covered end-to-end by the AE.A diagnostic suite),
+    /// so the spine is genesis-fresh (`last_block_no: None`), matching
+    /// [`l5_recovered_state_cold`]. Pre-AE.A this spine carried the recovered tip
+    /// at block 0 (`last_block_no: Some(0)`); the recovered-tip-as-forge-base
+    /// fallback it relied on is removed.
     fn l5_forge_spine() -> ForwardSyncState {
-        let r = l5_recovered_state(None);
+        l5_forge_spine_cold()
+    }
+
+    /// PHASE4-N-AE.A (DC-NODE-15): a from-genesis cold-start recovered state —
+    /// `tip: None` (no recovered anchor) + `last_block_no: None`. The
+    /// followed-tip admission gate does NOT apply to a genuine from-genesis cold
+    /// start (its parent is `PrevHash::Genesis`, intersectable via Origin —
+    /// DC-NODE-08 is upstream of the gate), so the relay-loop forge tests below
+    /// exercise the FULL forge path (KES, off-epoch, leadership, self-accept)
+    /// through the ungated cold-start branch. (A recovered-ANCHOR forge now
+    /// requires being caught up to the followed peer tip — DC-NODE-15 — which the
+    /// PHASE4-N-AE.A diagnostic suite proves end-to-end.)
+    fn l5_recovered_state_cold(
+        seed_epoch_consensus_inputs: Option<SeedEpochConsensusInputs>,
+    ) -> BootstrapState {
+        let mut ledger = LedgerState::new(CardanoEra::Conway);
+        ledger.epoch_state.epoch = L5_EPOCH;
+        let mut chain_dep = PraosChainDepState::empty();
+        chain_dep.epoch_nonce = Nonce(Hash32([0xCD; 32]));
+        chain_dep.evolving_nonce = Nonce(Hash32([0xCD; 32]));
+        BootstrapState {
+            ledger,
+            chain_dep,
+            tip: None,
+            seed_epoch_consensus_inputs,
+        }
+    }
+
+    /// The from-genesis cold-start spine (genesis-fresh ledger, `last_block_no:
+    /// None`) matching [`l5_recovered_state_cold`] — the spine the cold-start
+    /// relay-loop forge tests drive.
+    fn l5_forge_spine_cold() -> ForwardSyncState {
+        let r = l5_recovered_state_cold(None);
         ForwardSyncState::new(
             ReceiveState::new(r.ledger, r.chain_dep),
             Hash32([0xA0; 32]),
@@ -2441,7 +2690,7 @@ mod tests {
         let (sd_tx, mut sd_rx) = watch::channel(false);
 
         let sched = l5_era_schedule();
-        let recovered = l5_recovered_state(Some(l5_recovered_inputs()));
+        let recovered = l5_recovered_state_cold(Some(l5_recovered_inputs()));
         let coordinator = s2_coordinator_state();
         let mut shell = l5_synth_shell(0x11, 0x22, 0x33);
         let view = s2_idle_view();
@@ -2522,7 +2771,7 @@ mod tests {
         let (sd_tx, mut sd_rx) = watch::channel(false);
 
         let sched = l5_era_schedule();
-        let recovered = l5_recovered_state(Some(l5_recovered_inputs()));
+        let recovered = l5_recovered_state_cold(Some(l5_recovered_inputs()));
         let coordinator = s2_coordinator_state();
         let mut shell = l5_synth_shell(0x11, 0x22, 0x33);
         let view = s2_idle_view();
@@ -2596,7 +2845,7 @@ mod tests {
         let (sd_tx, mut sd_rx) = watch::channel(false);
 
         let sched = l5_era_schedule();
-        let recovered = l5_recovered_state(Some(l5_recovered_inputs()));
+        let recovered = l5_recovered_state_cold(Some(l5_recovered_inputs()));
         let coordinator = s2_coordinator_state();
         let mut shell = l5_synth_shell(0x11, 0x22, 0x33);
         let view = s2_idle_view();
@@ -2716,7 +2965,7 @@ mod tests {
             let (sd_tx, mut sd_rx) = watch::channel(false);
 
             let sched = l5_era_schedule();
-            let recovered = l5_recovered_state(Some(l5_recovered_inputs()));
+            let recovered = l5_recovered_state_cold(Some(l5_recovered_inputs()));
             let coordinator = s2_coordinator_state();
             let mut shell = l5_synth_shell(0x11, 0x22, 0x33);
             let view = s2_idle_view();
@@ -2812,7 +3061,7 @@ mod tests {
         fn classify(s: &NodeBlockSource) -> &'static str {
             match s {
                 NodeBlockSource::WirePump { .. } => "wire_pump",
-                NodeBlockSource::InMemory(_) => "in_memory",
+                NodeBlockSource::InMemory { .. } => "in_memory",
             }
         }
         let (_tx, rx) = mpsc::channel::<AdmissionPeerEvent>(1);
@@ -2840,7 +3089,7 @@ mod tests {
             let mut wal = FileWalStore::open(dir.path().join("wal")).unwrap();
             let mut state = l5_forge_spine();
             let sched = l5_era_schedule();
-            let recovered = l5_recovered_state(Some(l5_recovered_inputs()));
+            let recovered = l5_recovered_state_cold(Some(l5_recovered_inputs()));
             let coordinator = s2_coordinator_state();
             let mut shell = l5_synth_shell(0x11, 0x22, 0x33);
             let view = s2_idle_view();
@@ -2991,7 +3240,7 @@ mod tests {
         let (sd_tx, mut sd_rx) = watch::channel(false);
 
         let sched = l5_era_schedule();
-        let recovered = l5_recovered_state(Some(l5_recovered_inputs()));
+        let recovered = l5_recovered_state_cold(Some(l5_recovered_inputs()));
         let coordinator = s3b_kes_exhausted_coordinator();
         let mut shell = l5_synth_shell(0x11, 0x22, 0x33);
         let view = s2_idle_view();
@@ -3079,7 +3328,7 @@ mod tests {
         let (sd_tx, mut sd_rx) = watch::channel(false);
 
         let sched = l5_era_schedule();
-        let recovered = l5_recovered_state(Some(l5_recovered_inputs()));
+        let recovered = l5_recovered_state_cold(Some(l5_recovered_inputs()));
         // KES in range for slot 432000 (period 3 <= 63); the containment here is
         // the off-epoch leader-schedule miss, not KES.
         let coordinator = s2_coordinator_state();
@@ -3414,7 +3663,8 @@ mod tests {
             .expect("operator material loads through the production ingress");
         // Operator's own pool id, derived exactly as build_operator_forge_material.
         let op_pool = Hash28(ade_crypto::blake2b_224(&shell.cold_vk().0).0);
-        let recovered = l5_recovered_state(Some(l5_recovered_inputs_for_pool(op_pool.clone())));
+        let recovered =
+            l5_recovered_state_cold(Some(l5_recovered_inputs_for_pool(op_pool.clone())));
         let coordinator = s2_coordinator_state();
         let view = s2_idle_view();
         let mut clock = DeterministicClock::new(0, vec![100_000]);

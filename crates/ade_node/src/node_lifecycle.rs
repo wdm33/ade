@@ -90,7 +90,8 @@ use crate::admission::bootstrap::build_n2n_version_table;
 use crate::cli::Cli;
 use crate::forge_intent::{classify_forge_intent, ForgeIntent};
 use crate::node_sync::{
-    admit_forged_block_durably, forge_one_from_recovered, run_node_sync, NodeBlockSource,
+    admit_forged_block_durably, forge_followed_tip_admission, forge_one_from_recovered,
+    run_node_sync, ForgeFollowedTipAdmission, ForgeRefused, NodeBlockSource, NodeForgeOutcome,
 };
 use crate::operator_forge;
 use crate::run_loop_planner::{
@@ -105,6 +106,8 @@ use crate::EXIT_GENERIC_STARTUP;
 // over the G-B `ServedChainView`. The serve listener advertises the N2N
 // responder table built per the configured network magic (S2b,
 // `n2n_supported_for_magic`) — NOT the static mainnet `N2N_SUPPORTED`.
+use ade_ledger::receive::events::TipPoint;
+use ade_network::chain_sync::server::ServedHeaderLookup;
 use ade_network::handshake::version_table::n2n_supported_for_magic;
 use ade_runtime::network::n2n_listener::{run_per_peer_session, PerPeerSessionConfig};
 use ade_runtime::network::outbound_command::new_per_peer_outbound;
@@ -112,6 +115,7 @@ use ade_runtime::network::serve_dispatch::{
     dispatch_server_frame_event_to_outbound, install_server_peer_state, remove_server_peer_state,
     ServedChainSource, ServerPeerStates,
 };
+use ade_runtime::network::ChainDbServedSource;
 use ade_runtime::orchestrator::event::{OrchestratorEvent, PeerRole};
 use ade_runtime::orchestrator::n2n_server_pump::PeerIdGenerator;
 use ade_runtime::producer::producer_log::PeerId as ServerPeerId;
@@ -926,6 +930,13 @@ pub struct ForgeActivation<'a> {
     /// LOCAL node-forge observation surface — in-memory, not persisted, not logged,
     /// not evidence — that makes the fail-closed visible (never a silent `NotDue`).
     pub last_slot_alignment_fail: Option<SlotAlignmentError>,
+    /// PHASE4-N-AE.A (DC-NODE-15): the last forge-on-followed-tip refusal
+    /// (`ForgeRefused::NotCaughtUp`), set when the admissibility gate prevented
+    /// a forge (durable servable tip != followed peer tip) and cleared when a
+    /// forge is admitted. A structured LOCAL observation surface carrying the
+    /// observed tips + reason — in-memory, not persisted, not evidence — that
+    /// makes the typed refusal visible (never a silent skip, never log-only).
+    pub last_forge_refused: Option<ForgeRefused>,
 }
 
 impl<'a> ForgeActivation<'a> {
@@ -957,6 +968,7 @@ impl<'a> ForgeActivation<'a> {
             pending_slot: None,
             hermetic_forge_outcomes: Vec::new(),
             last_slot_alignment_fail: None,
+            last_forge_refused: None,
         }
     }
 }
@@ -1093,40 +1105,90 @@ pub async fn run_relay_loop_with_sched(
                 // `last_forged_slot` update (S3b proves the fail-closed path).
                 let mut forged = false;
                 if let Some(kes_period) = act.coordinator_state.kes_period_for_slot(slot.0) {
-                    // Selected tip: the current durable tip if present, else the
-                    // recovered tip. Read-only — the forge never writes it.
-                    let selected_tip = match ChainDb::tip(chaindb)
-                        .map_err(|e| NodeLifecycleError::RelaySync(format!("{e:?}")))?
-                    {
-                        Some(t) => Some(t),
-                        None => act.recovered.tip.clone(),
+                    // PHASE4-N-AE.A (DC-NODE-15): the forge base is the DURABLE
+                    // servable tip — `ChainDb::tip()`. The recovered snapshot
+                    // anchor is NEVER a forge base (the `recovered.tip` fallback
+                    // is removed): a forge must build only on a StoredBlock a peer
+                    // can FindIntersect. Read-only — the forge never writes it.
+                    let selected_tip = ChainDb::tip(chaindb)
+                        .map_err(|e| NodeLifecycleError::RelaySync(format!("{e:?}")))?;
+                    // DC-NODE-15 admissibility inputs: the durable servable tip a
+                    // peer would see (the serve PROJECTION's tip — slot, hash, AND
+                    // block_no), and the followed peer tip the wire stream observed
+                    // (a separate structured admissibility input, NOT a sync tip
+                    // authority). The peer-tip signal may only PREVENT a forge.
+                    let durable_servable_tip: Option<TipPoint> = ChainDbServedSource::new(chaindb)
+                        .tip()
+                        .map(|(slot, hash, block_no)| TipPoint {
+                            slot,
+                            hash,
+                            block_no,
+                        });
+                    let followed_peer_tip = source.followed_peer_tip_signal().tip();
+                    // S4 (DC-NODE-08): the from-genesis cold-start (block 0 +
+                    // PrevHash::Genesis) is a distinct path, UPSTREAM of the
+                    // followed-tip gate. It applies ONLY when there is no durable
+                    // tip AND the node did NOT recover at a non-Origin anchor
+                    // (`recovered.tip` is None ⇒ genesis), the recovered
+                    // seed-epoch lineage is present, and the feed is forge-eligible
+                    // (CN-NODE-04: no_block_available | clean_empty). A node that
+                    // recovered at a non-Origin anchor is NEVER cold-started — it
+                    // takes the DC-NODE-15 gate and waits to be caught up.
+                    let is_from_genesis_cold_start =
+                        selected_tip.is_none() && act.recovered.tip.is_none();
+                    let cold_start_permitted = is_from_genesis_cold_start
+                        && may_cold_start_forge(
+                            false,
+                            act.recovered.seed_epoch_consensus_inputs.is_some(),
+                            source.feed_reason().is_forge_eligible(),
+                        );
+                    // PHASE4-N-AE.A (DC-NODE-15): on the recovered/following path,
+                    // the forge is admissible ONLY when `durable_servable_tip ==
+                    // followed_peer_tip` (hash AND block_no); otherwise it fails
+                    // closed to a typed `ForgeRefused::NotCaughtUp`. The cold-start
+                    // path is ungated (its parent is Genesis, intersectable via
+                    // Origin). A `Refused` is NO forge, NO state transition, tip
+                    // unchanged — the typed refusal is recorded (never log-only).
+                    let refusal: Option<ForgeRefused> = if is_from_genesis_cold_start {
+                        None
+                    } else {
+                        match forge_followed_tip_admission(
+                            durable_servable_tip.clone(),
+                            followed_peer_tip.clone(),
+                        ) {
+                            ForgeFollowedTipAdmission::CaughtUp => None,
+                            ForgeFollowedTipAdmission::NotCaughtUp { reason } => {
+                                Some(ForgeRefused::NotCaughtUp {
+                                    local_servable_tip: durable_servable_tip.clone(),
+                                    followed_peer_tip: followed_peer_tip.clone(),
+                                    reason,
+                                })
+                            }
+                        }
                     };
-                    // S4 (DC-NODE-08): the genesis-successor is reachable when
-                    // BOTH tips are None (a from-genesis cold start), but ONLY
-                    // when the recovered seed-epoch lineage is present AND the
-                    // feed is forge-eligible (the CN-NODE-04 split:
-                    // no_block_available | clean_empty). ForgeIntent::On is
-                    // implied (the `act` activation is present). A present tip
-                    // takes the existing WITH-tip path. Ineligible feed / missing
-                    // lineage fail closed — no forge, exactly like a
-                    // NoTipAvailable skip. The cold-start ctx is assembled inside
-                    // forge_one_from_recovered (None ⇒ block 0 + PrevHash::Genesis).
-                    let may_cold_start = may_cold_start_forge(
-                        selected_tip.is_some(),
-                        act.recovered.seed_epoch_consensus_inputs.is_some(),
-                        source.feed_reason().is_forge_eligible(),
-                    );
-                    if selected_tip.is_some() || may_cold_start {
+                    if let Some(refused) = refusal {
+                        // Fail-closed, deterministic: the forge does not fire this
+                        // slot, no partial state, tip unchanged — exactly like an
+                        // off-epoch / not-leader skip. Record the TYPED refusal
+                        // (the LOCAL structured observation surface carrying the
+                        // tips + reason — never a log-string-only path); advance NO
+                        // `last_forged_slot`. The operational `NoTipAvailable`
+                        // diagnostic is emitted by the shared `!forged` tail below.
+                        act.last_forge_refused = Some(refused);
+                    } else if cold_start_permitted || selected_tip.is_some() {
                         if let Some(s) = sched.as_deref_mut() {
                             s.record(&crate::live_log::NodeSchedEvent::ForgeAttempted);
                         }
-                        // The forge surfaces a typed Option<SelfAcceptedHandoff>.
-                        // PHASE4-N-U S1: a Some handoff is admitted durably through
-                        // the pump (below); S3: there is no serve handoff — the
-                        // durable block IS what the serve task projects. None ⇒
-                        // nothing admitted; the loop still records ONLY the
-                        // observation outcome and advances no tip directly.
-                        let (outcome, handoff) = forge_one_from_recovered(
+                        // The single fenced forge attempt, mapped to the closed
+                        // NodeForgeOutcome. CaughtUp ⇒ forge on the durable
+                        // servable tip (`selected_tip`, which byte-equals the
+                        // followed peer tip — DC-CONS-24); cold-start ⇒ the
+                        // genesis-successor (selected_tip None ⇒ block 0 +
+                        // PrevHash::Genesis, assembled inside the forge call). The
+                        // forge call only ever produces Forged / Failed — the
+                        // Refused state is the gate's exclusive output (handled
+                        // above), so it cannot arise here.
+                        let outcome = match forge_one_from_recovered(
                             act.recovered,
                             &state.receive.chain_dep,
                             &state.receive.ledger,
@@ -1138,48 +1200,69 @@ pub async fn run_relay_loop_with_sched(
                             slot.0,
                             kes_period,
                             act.protocol_version,
-                        )
-                        .map_err(|e| NodeLifecycleError::RelaySync(format!("{e:?}")))?;
-                        // PHASE4-N-U S1 (DC-NODE-12): a self-accepted forged block
-                        // becomes durable ONLY by submission to the SAME pump_block
-                        // chokepoint received blocks use (durable-before-tip; the
-                        // forge advances no tip directly), so the durable tip
-                        // advances and the next ForgeTick builds N+1 (state.receive
-                        // + the durable ChainDb advance together via pump_block). A
-                        // stale-tip forge fails closed inside pump_block (extend-only
-                        // block_validity / prior_fp — DC-CONS-23); in this
-                        // single-threaded loop the forge always builds on the tip it
-                        // just read, so a reject is a real invariant/IO failure and
-                        // is propagated (fail-fast). PHASE4-N-U S3: there is no
-                        // separate serve handoff — the durable block this admits IS
-                        // what the serve task projects (serve-as-projection,
-                        // DC-NODE-13); the G-R push sibling is retired.
-                        if let Some(h) = handoff {
-                            admit_forged_block_durably(
-                                &h,
-                                state,
-                                chaindb,
-                                wal,
-                                era_schedule,
-                                ledger_view,
-                            )
-                            .map_err(|e| NodeLifecycleError::RelaySync(format!("{e:?}")))?;
-                        }
-                        // Closed diagnostic projection of the reused forge outcome,
-                        // read before the move-push. Operational tier — never an
-                        // acceptance / BA-02 signal.
-                        let forge_outcome = forge_outcome_of(&outcome);
-                        // Local hermetic observation only — never persisted /
-                        // served / admitted / applied; the durable tip is
-                        // untouched by this arm. `last_forged_slot` advances ONLY
-                        // here, after an actual attempt.
-                        act.hermetic_forge_outcomes.push(outcome);
-                        act.last_forged_slot = Some(slot);
-                        forged = true;
-                        if let Some(s) = sched.as_deref_mut() {
-                            s.record(&crate::live_log::NodeSchedEvent::ForgeResult {
-                                outcome: forge_outcome,
-                            });
+                        ) {
+                            Ok((event, handoff)) => NodeForgeOutcome::Forged(event, handoff),
+                            Err(e) => NodeForgeOutcome::Failed(e),
+                        };
+                        match outcome {
+                            // Failed = the forge path was attempted and failed;
+                            // propagate fail-fast (a real invariant/IO failure in
+                            // this single-threaded loop). Mechanically DISTINCT
+                            // from Refused (gate-prevented, no transition).
+                            NodeForgeOutcome::Failed(e) => {
+                                return Err(NodeLifecycleError::RelaySync(format!("{e:?}")));
+                            }
+                            // Refused never originates from the forge call.
+                            NodeForgeOutcome::Refused(refused) => {
+                                act.last_forge_refused = Some(refused);
+                            }
+                            NodeForgeOutcome::Forged(event, handoff) => {
+                                // PHASE4-N-U S1 (DC-NODE-12): a self-accepted forged
+                                // block becomes durable ONLY by submission to the
+                                // SAME pump_block chokepoint received blocks use
+                                // (durable-before-tip; the forge advances no tip
+                                // directly), so the durable tip advances and the
+                                // next ForgeTick builds N+1 (state.receive + the
+                                // durable ChainDb advance together via pump_block). A
+                                // stale-tip forge fails closed inside pump_block
+                                // (extend-only block_validity / prior_fp —
+                                // DC-CONS-23); in this single-threaded loop the forge
+                                // always builds on the tip it just read, so a reject
+                                // is a real invariant/IO failure and is propagated
+                                // (fail-fast). PHASE4-N-U S3: there is no separate
+                                // serve handoff — the durable block this admits IS
+                                // what the serve task projects (serve-as-projection,
+                                // DC-NODE-13); the G-R push sibling is retired.
+                                if let Some(h) = handoff {
+                                    admit_forged_block_durably(
+                                        &h,
+                                        state,
+                                        chaindb,
+                                        wal,
+                                        era_schedule,
+                                        ledger_view,
+                                    )
+                                    .map_err(|e| NodeLifecycleError::RelaySync(format!("{e:?}")))?;
+                                }
+                                // Closed diagnostic projection of the reused forge
+                                // outcome, read before the move-push. Operational
+                                // tier — never an acceptance / BA-02 signal.
+                                let forge_outcome = forge_outcome_of(&event);
+                                // A forge was admitted: clear any stale refusal.
+                                act.last_forge_refused = None;
+                                // Local hermetic observation only — never persisted
+                                // / served / admitted / applied; the durable tip is
+                                // untouched by this arm. `last_forged_slot` advances
+                                // ONLY here, after an actual attempt.
+                                act.hermetic_forge_outcomes.push(event);
+                                act.last_forged_slot = Some(slot);
+                                forged = true;
+                                if let Some(s) = sched.as_deref_mut() {
+                                    s.record(&crate::live_log::NodeSchedEvent::ForgeResult {
+                                        outcome: forge_outcome,
+                                    });
+                                }
+                            }
                         }
                     }
                 }
