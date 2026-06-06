@@ -72,4 +72,26 @@ KES evolution is deterministic (`Sum6Kes::update_kes`, byte-for-byte cardano-bas
 - **Cross-period sustained production (out of scope):** this fixes signing within the opcert's KES window across periods; sustained multi-epoch production (epoch-nonce roll, opcert renewal) remains a separate larger cluster (per the C1 scoping §4a).
 
 ## §13 Close record
-*(Open — filled at `/cluster-close` once CE-1 + the C1 re-run are green.)*
+**CLOSED 2026-06-06.** Live-readiness fix: the RED producer signing shell now evolves the operator KES key to the requested period before signing (DC-CRYPTO-10 enforced), so the forge works across KES periods within the opcert window — closing the gap the item-4 C1 re-run surfaced.
+
+**Cluster commits (impl span `6184eb0b..HEAD`):**
+- `cbe6633f` — cluster doc + DC-CRYPTO-10 declared.
+- `68a85dbe` / `7d4a4a72` — S1 doc + impl (`ProducerShell::kes_sign_header_advancing` = `kes_advance_to(period)? + kes_sign_header(period)`; the forge's single real sign rewired to it; new gate `ci_check_kes_evolution_before_sign.sh`; DC-CRYPTO-10 → enforced).
+- *(this commit)* — close record + `strengthened_in` + grounding refresh + archive.
+
+**CE-1 — passes mechanically:** `cargo test -p ade_runtime -p ade_node` green incl. the 4 shell tests (evolve-then-sign at period 1 + verify; no-op at current / period-0 still works; backwards → EvolutionBackwards; beyond-lifetime → EvolutionExhausted). Gate `ci_check_kes_evolution_before_sign.sh` green + non-vacuous (pre-S1 the forge used the raw `.kes_sign_header(`). Full `ci/ci_check_*.sh` sweep **138 / 0**.
+
+**Narrow claim proven (acceptance #3, the live C1 re-run):** *Ade's RED signing shell evolves the KES key to the requested period before signing, and period-1 forged headers are produced and parsed by a real cardano-node without KES rejection.* With the fix, Ade **forged 3 period-1 blocks** and self-accepted them, and the real `cardano-node` **downloaded the period-1 header with no KES/parse rejection** — where pre-fix every period-1 forge `failed` with `KesPeriodNotCurrent` (`failed=5, succeeded=0`).
+
+**Genesis-window finding (recorded honestly, per user):** the follower did NOT *adopt* — it rejected with `CandidateTooSparse (Point Origin)`. This is the Cardano **genesis density window** limit, **not** a KES rejection: `slotsPerKESPeriod = 129600` equals `3k/f = 3·2160/0.05 = 129600`, so KES period 1 begins exactly when the genesis window closes. A from-genesis rehearsal therefore can never show forge-at-period-1 AND follower-adopt simultaneously (period 0 = window open / no evolution; period 1+ = evolution exercised / window shut). The net is at slot ~251740 (past the window). **Cross-period end-to-end forge→adopt is proven on the C2 tip path** (dense current tip, no genesis window — the real bounty path), NOT a net reset (which returns to period 0 and re-proves only the narrow period-0 case). See `docs/evidence/c1-genesis-rehearsal-reproduction-README.md` §"Genesis-window / KES-period limit".
+
+**Reviews — both PASS, no findings above INFO:**
+- **IDD reviewer: PASS** (no BLOCK/WARN) — RED-only (0 BLUE diff); fail-closed in TWO layers (`kes_update` on the advance + `kes_sign` at the sign call — no path to a stale-period signature); period passed verbatim (gate guard discriminating); determinism + forward-secrecy preserved; all §11 prohibitions verified.
+- **Cross-slice security review: PASS** (no HIGH+) — no wrong/stale-period signature; fail-closed completeness; signing stays RED with no key bytes in errors; no new panic/unwrap on the forge path.
+- **Two pre-existing fail-closed INFO items handed to C2** (NOT blockers, NOT introduced here): (1) `kes_advance_to` zeroes the key on a failed advance (`std::mem::replace` before `kes_update`) — unreachable via the forge (`kes_period_in_window` + `kes_period_for_slot` bound it), fail-safe; a `restore-on-error` hardening for a later cluster. (2) the opcert window upper bound `opcert_start + 63` can diverge from the absolute Sum6KES ceiling 63 when `opcert_start > 0` (real preprod opcerts) — still fail-closed (`EvolutionExhausted`), but the **C2 config must derive `kes_max_period` from the absolute ceiling, not `opcert_start + 63`**.
+
+**Registry:** +DC-CRYPTO-10 (enforced, tier derived); rules 335 → 336. `strengthened_in += "PHASE4-N-AC"` on CN-KES-HEADER-01 (the real-pre-image sign now works across KES periods). New gate; CI 137 → 138. Signing stays RED; the BLUE Sum6KES algorithm + KES verifier + forge eligibility + wire rules unchanged; no C1-only path; no RO-LIVE flip.
+
+**Grounding docs refreshed:** CODEMAP / TRACEABILITY / SEAMS / HEAD_DELTAS regenerated; `head_deltas_baseline` bumped to the close.
+
+**Next:** the C2 tip-path cluster — forge block #(tip+1) on the live preprod tip, where the KES-evolution fix gets its end-to-end cross-period forge→adopt proof, and which is the real bounty deliverable. It must also address the two INFO items above (preprod `opcert_start > 0`).

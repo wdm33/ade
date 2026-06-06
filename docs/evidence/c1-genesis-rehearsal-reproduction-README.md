@@ -289,3 +289,37 @@ Expect `peer_accept_source = chain_tip`, `matched_block_hash_hex == ADE_LIVE_FOR
   self-accepts → node adopts its own block as the **durable tip** → next forge builds
   block 1, 2, … This runbook is the **regression target** for that work: if OQ-R1
   breaks block-0 acceptance, re-running this procedure catches it immediately.
+
+## Genesis-window / KES-period limit (structural — found 2026-06-06)
+
+This from-genesis rehearsal can only complete (forge → **adopt**) while the net is
+within the Cardano **Genesis density window** — the first `3k/f` slots. On this net
+that boundary **coincides exactly with the KES-period boundary**:
+
+```
+slotsPerKESPeriod = 129600
+3k/f (k=2160, f=0.05) = 129600   # genesis density window
+```
+
+So the two halves of "forge at KES period 1 AND the follower adopts" are mutually
+exclusive on a genesis net:
+
+- **KES period 0** (slots < 129600): genesis window OPEN → adoption works, but the
+  KES key is at its minted period 0 so **no KES evolution is exercised**. (The two
+  committed successes — slots 122520 / 125634 — are here.)
+- **KES period 1+** (slots ≥ 129600): KES evolution IS exercised, but a single
+  block at a slot past the window, built directly on Origin, is rejected
+  `CandidateTooSparse (Point Origin)` — **a density-window rejection, not a KES
+  rejection**.
+
+The 2026-06-06 re-run (HEAD `7d4a4a72`, net at slot ~251740, KES period 1) confirmed
+this: with the **PHASE4-N-AC / DC-CRYPTO-10** KES-evolution fix, Ade **forged 3
+period-1 blocks** and the real `cardano-node` **downloaded the period-1 header with
+no KES/parse rejection** (pre-fix it failed `KesPeriodNotCurrent`). The only
+remaining rejection was `CandidateTooSparse` — the genesis-window limit above, not
+KES. **Do NOT reset the net merely to return to period 0** — that re-proves the
+narrow period-0 case and does not exercise the KES evolution.
+
+**Cross-period end-to-end forge → adopt is proven on the C2 tip path**, not here:
+C2 forges block #(tip+1) on the dense current public-chain tip (no genesis window,
+no sparseness check), which is also the real bounty path.
