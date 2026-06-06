@@ -323,3 +323,35 @@ narrow period-0 case and does not exercise the KES evolution.
 **Cross-period end-to-end forge → adopt is proven on the C2 tip path**, not here:
 C2 forges block #(tip+1) on the dense current public-chain tip (no genesis window,
 no sparseness check), which is also the real bounty path.
+
+## Genesis-successor durability limit (WarmStart ChainBreak — C1-only, NOT a C2 blocker)
+
+A cold-start C1 run (seed at Origin → forge block 0 on `PrevHash::Genesis`) that is
+then restarted fails WarmStart recovery with:
+
+```
+warm-start WAL replay failed (ChainBreak { entry_index: 1,
+  expected_prior_fp: <seed ledger fp>, actual_prior_fp: 0000…0000 })
+```
+
+This is a **known C1 genesis-successor durability limitation**, not a C2 bug. The
+durable WAL's **seed** entry ends at the seed-UTxO **ledger** fingerprint, but the
+genesis-successor block 0 (`forge_header_position → (0, PrevHash::Genesis)`) records
+`prior_fp = 0000…` (the Cardano genesis/null predecessor). The two differ, so WAL
+replay breaks at the **seed → block-0** seam. It only exists where a chain is rooted
+at block-0-on-Origin.
+
+**C2 never hits this seam.** C2 enters from a **non-Origin recovered tip** (a
+snapshot-at-N, not block-0-on-Origin), so its first durable entry's `post_fp` is the
+tip-N ledger fingerprint and the forged successor's `prior_fp` chains to it. The
+C2-relevant **tip-successor** seam (block N → block N+1: `prior_fp` = the real
+previous `post_fp`) is **proven clean** by the permanent regression
+`forge_tip_successor_kill_then_warm_start_recovers_block_one`
+(`crates/ade_node/src/node_sync.rs`, PHASE4-N-AD): forge block 0 → admit → forge
+block 1 on the durable tip → admit → kill → WarmStart → recovers block 1
+byte-identically, **no ChainBreak**.
+
+Do **not** "fix" this by changing `PrevHash::Genesis`/null or the block-0 wire
+semantics. The C1 cold-start recovery limit is cosmetic to the rehearsal (a fresh
+cold start re-stages a clean store anyway); the C2 path it might be confused for is
+clean.

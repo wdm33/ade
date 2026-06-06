@@ -1930,6 +1930,220 @@ mod tests {
     }
 
     #[test]
+    fn forge_tip_successor_kill_then_warm_start_recovers_block_one() {
+        // C2 TIP-SUCCESSOR DURABILITY DIAGNOSTIC (controlled Ade state, no venue).
+        //
+        // The question this isolates: does a forged TIP-SUCCESSOR (block N+1 on a
+        // NON-Origin parent) recover across a restart — i.e. does block N+1's
+        // prior_fp (= the durable POST_fp of block N, computed by the durable
+        // apply, NOT constructed) chain across WAL replay?
+        //
+        // This is the C2-relevant boundary. The genesis seam (block 0's prior_fp
+        // vs the seed/anchor) stays construction-matched (anchor_fp == the block-0
+        // prior_fp, exactly as T-REC-05) — that case is the documented C1
+        // genesis-successor limitation and is deliberately OUT OF SCOPE here. The
+        // NEW seam under test is block-0 -> block-1: block 1's prior_fp is the real
+        // post_fp of block 0 after the durable apply. If warm-start forward-replay
+        // recovers block 1, the tip-successor durability boundary is clean.
+        use ade_ledger::seed_consensus_inputs::{
+            encode_seed_epoch_consensus_inputs, SeedEpochConsensusInputs,
+        };
+        use ade_runtime::seed_consensus_provenance::append_seed_epoch_provenance;
+
+        let eta0 = Nonce(Hash32([0xCD; 32]));
+        // anchor_fp == the ForwardSyncState prior_fp seed == the block-0 prior_fp,
+        // so the GENESIS seam is matched by construction (the C1-only case, masked
+        // here on purpose); the block-0 -> block-1 seam is the real one under test.
+        let anchor_fp = Hash32([0xA0; 32]);
+        let genesis_base = || {
+            let mut ledger = LedgerState::new(CardanoEra::Conway);
+            ledger.epoch_state.epoch = EpochNo(0);
+            let mut chain_dep = PraosChainDepState::empty();
+            chain_dep.epoch_nonce = Nonce(Hash32([0xCD; 32]));
+            chain_dep.evolving_nonce = Nonce(Hash32([0xCD; 32]));
+            (ledger, chain_dep)
+        };
+        let era_schedule = EraSchedule::new(
+            BootstrapAnchorHash(Hash32([0u8; 32])),
+            0,
+            vec![EraSummary {
+                era: CardanoEra::Conway,
+                start_slot: SlotNo(0),
+                start_epoch: EpochNo(0),
+                slot_length_ms: 1_000,
+                epoch_length_slots: 432_000,
+                safe_zone_slots: 432_000,
+            }],
+        )
+        .expect("era schedule");
+
+        // Always-leader pool (ASC 1/1, all stake), keyed to the shell.
+        let mut shell = l5_synth_shell(0x31, 0x41, 0x59);
+        let cold_vk = shell.cold_vk();
+        let vrf_vk = shell.vrf_verification_key();
+        let pool_id: Hash28 = ade_crypto::blake2b::blake2b_224(&cold_vk.0);
+        let vrf_keyhash: Hash32 = ade_crypto::blake2b::blake2b_256(&vrf_vk.0);
+        let mut pools: BTreeMap<Hash28, PoolEntry> = BTreeMap::new();
+        pools.insert(
+            pool_id.clone(),
+            PoolEntry {
+                active_stake: 1,
+                vrf_keyhash,
+            },
+        );
+        let sidecar = SeedEpochConsensusInputs {
+            anchor_fp: anchor_fp.clone(),
+            epoch_no: EpochNo(0),
+            epoch_nonce: eta0.clone(),
+            active_slots_coeff: ActiveSlotsCoeff { numer: 1, denom: 1 },
+            total_active_stake: 1,
+            pool_distribution: pools,
+        };
+        let sidecar_bytes = encode_seed_epoch_consensus_inputs(&sidecar);
+        let ledger_view = PoolDistrView::from_seed_epoch_consensus_inputs(&sidecar);
+
+        // Forge the genesis-successor block 0 over the recovered genesis base.
+        let (l_r, c_r) = genesis_base();
+        let recovered = BootstrapState {
+            ledger: l_r,
+            chain_dep: c_r,
+            tip: None,
+            seed_epoch_consensus_inputs: Some(sidecar.clone()),
+        };
+        let (event0, handoff0) = forge_one_from_recovered(
+            &recovered,
+            &recovered.chain_dep,
+            &recovered.ledger,
+            None,
+            &mut shell,
+            &pool_id,
+            &ProtocolParameters::default(),
+            &era_schedule,
+            1,
+            0,
+            ProtocolVersion { major: 9, minor: 0 },
+        )
+        .expect("forge block 0 over the recovered genesis base");
+        let handoff0 = match (event0, handoff0) {
+            (CoordinatorEvent::ForgeSucceeded { .. }, Some(h)) => h,
+            (ev, _) => panic!("expected block-0 ForgeSucceeded, got {ev:?}"),
+        };
+
+        let dir = TempDir::new().unwrap();
+        let chaindb_path = dir.path().join("chain.db");
+        let wal_dir = dir.path().join("wal");
+
+        // Phase 1: seed precondition + genesis slot-0 snapshot, admit block 0, then
+        // forge block 1 on the DURABLE tip and admit it. Keep state alive across
+        // both admits (the durable spine evolves); the kill is the scope end.
+        let advanced1 = {
+            let chaindb =
+                PersistentChainDb::open(PersistentChainDbOptions::at(&chaindb_path)).unwrap();
+            let mut wal = FileWalStore::open(&wal_dir).unwrap();
+            chaindb
+                .put_seed_epoch_consensus_inputs(&anchor_fp, &sidecar_bytes)
+                .unwrap();
+            append_seed_epoch_provenance(&mut wal, &anchor_fp, EpochNo(0), &sidecar_bytes).unwrap();
+            let (l_s, c_s) = genesis_base();
+            PersistentSnapshotCache::new(&chaindb)
+                .capture(SlotNo(0), &l_s, &c_s)
+                .unwrap();
+            let (l_a, c_a) = genesis_base();
+            let mut state = ForwardSyncState::new(
+                ReceiveState::new(l_a, c_a),
+                anchor_fp.clone(),
+                SnapshotCadence::DEFAULT,
+            );
+
+            // Admit block 0 (genesis-successor) — the durable tip becomes block 0.
+            let advanced0 = admit_forged_block_durably(
+                &handoff0,
+                &mut state,
+                &chaindb,
+                &mut wal,
+                &era_schedule,
+                &ledger_view,
+            )
+            .expect("durable admit block 0")
+            .expect("tip 0 advanced");
+            assert_eq!(
+                state.receive.chain_dep.last_block_no,
+                Some(BlockNo(0)),
+                "after admitting block 0 the durable spine's last_block_no is 0"
+            );
+            // The ChainTip of the durable block 0 — the non-Origin parent for the
+            // tip-successor forge (selected_tip wants &ChainTip, not the PumpTip).
+            let chain_tip0 = ChainDb::tip(&chaindb)
+                .expect("durable tip")
+                .expect("non-empty after block 0");
+
+            // Forge block 1 ON the durable tip (block 0) against the EVOLVED spine.
+            // selected_tip = Some(block 0) -> block 1, PrevHash::Block(tip0). The
+            // sidecar (recovered.seed_epoch_consensus_inputs) drives leadership.
+            let (event1, handoff1) = forge_one_from_recovered(
+                &recovered,
+                &state.receive.chain_dep,
+                &state.receive.ledger,
+                Some(&chain_tip0),
+                &mut shell,
+                &pool_id,
+                &ProtocolParameters::default(),
+                &era_schedule,
+                2,
+                0,
+                ProtocolVersion { major: 9, minor: 0 },
+            )
+            .expect("forge block 1 over the durable tip");
+            let handoff1 = match (event1, handoff1) {
+                (CoordinatorEvent::ForgeSucceeded { .. }, Some(h)) => h,
+                (ev, _) => panic!("expected block-1 ForgeSucceeded on the durable tip, got {ev:?}"),
+            };
+
+            // Admit block 1 — the durable tip becomes block 1 (tip-successor).
+            let advanced1 = admit_forged_block_durably(
+                &handoff1,
+                &mut state,
+                &chaindb,
+                &mut wal,
+                &era_schedule,
+                &ledger_view,
+            )
+            .expect("durable admit block 1")
+            .expect("tip 1 advanced");
+            assert_ne!(
+                advanced1.hash, advanced0.hash,
+                "block 1 is a distinct block from block 0"
+            );
+            assert_eq!(
+                state.receive.chain_dep.last_block_no,
+                Some(BlockNo(1)),
+                "after admitting block 1 the durable spine's last_block_no is 1"
+            );
+            advanced1
+            // chaindb + wal + state dropped here -> the kill boundary.
+        };
+
+        // Phase 2: reopen + recover through the REAL warm_start_recovery. This
+        // forward-replays from the slot-0 snapshot over BOTH durable WAL blocks.
+        // The decisive seam is block-0 -> block-1 (block 1's prior_fp == block 0's
+        // real post_fp). If this ChainBreaks, the tip-successor recovery is broken;
+        // if it recovers block 1, the C2 tip-successor durability boundary is clean.
+        let chaindb = PersistentChainDb::open(PersistentChainDbOptions::at(&chaindb_path)).unwrap();
+        let wal = FileWalStore::open(&wal_dir).unwrap();
+        let state = crate::node_lifecycle::warm_start_recovery(&chaindb, &wal)
+            .expect("warm-start forward-replays the tip-successor chain without ChainBreak");
+        let tip = state.tip.expect("recovered a tip");
+        assert_eq!(
+            tip.slot, advanced1.slot,
+            "warm-start recovers the BLOCK-1 (tip-successor) slot — block-0 -> block-1 prior_fp chains across WAL replay"
+        );
+        assert_eq!(
+            tip.hash, advanced1.hash,
+            "warm-start recovers the BLOCK-1 (tip-successor) hash"
+        );
+    }
+
+    #[test]
     fn forge_from_recovered_fails_closed_without_recovered_inputs() {
         // The forge base MUST carry recovered consensus inputs. A recovered
         // state with seed_epoch_consensus_inputs: None is unrepresentable as
