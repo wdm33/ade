@@ -2,41 +2,56 @@
 
 > **Read this before scoping, planning, building a venue for, or explaining any C2
 > work.** It exists because a specific wrong turn keeps recurring and burned a whole
-> session: trying to manufacture a **local Conway net from genesis** so Ade can forge,
-> instead of **recovering the real existing Conway tip** (preprod, via Mithril/snapshot)
-> the way a real node does. This guide locks the correct path so we build on it without
-> regression. It is the C2 sibling of `docs/active/live-pass-path-fidelity-guide.md`
-> (read that too — same anti-drift purpose, complementary rule).
+> session: trying to manufacture a **local Conway net from genesis** so Ade can forge
+> block 0, instead of **recovering an existing non-Origin Conway tip** the way a real
+> node does. The correct C2 path is the same recover → forge tip+1 → Haskell-peer-adopt
+> loop on two venues, **in order**: a **required private-testnet rehearsal first** (an
+> already-bootstrapped private Conway chain, Ade stake active, 2 Haskell nodes), **then
+> preprod-live**. This guide locks that so we build on it without regression. It is the
+> C2 sibling of `docs/active/live-pass-path-fidelity-guide.md` (read that too — same
+> anti-drift purpose, complementary rule).
 
 ---
 
 ## 0. The one rule
 
-**C2 = recover an EXISTING non-Origin Conway tip, then forge the successor on it.**
-The tip already exists on a real chain (preprod). Ade **restores from a snapshot at
-that tip** (Mithril-verified UTxO + N-M-C cardano-cli extraction for consensus inputs)
-— exactly as a real node fast-syncs. **A node does NOT replay from slot 0.**
+**C2 = recover an EXISTING non-Origin Conway tip, forge the successor on it, and have a
+real Haskell peer adopt it.** The tip already exists on a real, **already-bootstrapped**
+Conway chain; Ade **restores from a snapshot/extraction at that tip** (Mithril-verified
+UTxO + cardano-cli extraction for consensus inputs) exactly as a real node fast-syncs.
+**A node does NOT replay from slot 0, and Ade NEVER forges block 0.**
 
-```
-Mithril/snapshot of the real preprod Conway tip (epoch ~293, slot ~125M)
-  → cardano-cli extraction (build_consensus_inputs_bundle.sh against the synced preprod node)
-  → import_live_consensus_inputs + seed_to_snapshot @ the real tip   [RECOVER — proven, NO stake]
-  → forge block tip+1 → self-accept → durable admit → serve          [FORGE — needs Ade stake]
-  → real preprod peer adopts → peer log → correlate → Ba02 evidence   [ADOPT — needs Ade stake]
-```
+The shared shape:
 
-- **C2 NEVER starts from genesis / slot 0.** There is no local net to "build up."
-- **The non-Origin tip is real and external (preprod).** Ade enters at it via the
-  SAME recover/import path proven against preprod slot 124140368 (N-M-C / N-M-A1.1).
+    recover non-Origin Conway tip  (extract + import_live_consensus_inputs + seed_to_snapshot @ tip)
+      → forge block tip+1 → self-accept → durable admit → serve
+      → real Haskell peer adopts → peer log → correlate → evidence
+
+It runs on TWO venues, **in this order**:
+
+- **C2-LOCAL-REHEARSAL — REQUIRED, FIRST (§5b).** An already-past-bootstrap **private**
+  Conway chain: a non-Origin tip, Ade's pool **active-staked**, **2 Haskell peer nodes**.
+  Proves the full recover→forge→adopt loop (and BA-04's 2-Haskell-node shape) with **no
+  preprod risk**. Non-promotable rehearsal — the C2 analog of the C1 genesis rehearsal.
+- **C2-PREPROD-LIVE — the bounty (§6).** The real preprod Conway tip (Mithril/snapshot +
+  extraction). The **identical** loop on the public chain, once Ade's pool stake is active.
+
+**Hard invariants (both venues):** C2 never starts from genesis / slot 0; the private
+chain must be **already bootstrapped past the cold-start** (§4) and sitting at a
+non-Origin Conway tip with Ade stake **already active**; Ade only ever ENTERS by recover,
+**never forges block 0**. The recover/import is the SAME path proven against preprod slot
+124140368 (N-M-C / N-M-A1.1).
 
 ---
 
 ## 1. The recurring wrong turn (the genesis trap)
 
-The mistake arrives dressed as "let's rehearse C2 locally first," and goes:
+A local rehearsal **is** required before preprod (§5b) — but on an **already-bootstrapped**
+private chain (non-Origin Conway tip, Ade stake active), never by **building one from
+genesis**. The trap is the latter, and it arrives dressed as:
 
-> "Spin up a local private net (`create-testnet-data`), let it produce a tip, then have
-> Ade recover from that local tip."
+> "Spin up a fresh local private net (`create-testnet-data`, Conway-from-genesis), let it
+> produce a tip, then have Ade recover from that local tip."
 
 **This is wrong, and it is a dead end:**
 
@@ -67,6 +82,14 @@ In a plan, slice doc, scoping pass, explanation, or command:
 - ❌ a multi-era OBFT/`d`-bridge local net just to reach a Conway tip locally
 
 Any of these = you have drifted into the genesis trap. Re-read §0 and §3.
+
+> **Not a red flag:** a properly-bootstrapped **multi-era `d`-bridge** producing net
+> (Shelley/Babbage `d=1` → genesis-delegates forge the cold-start → fork up to Conway),
+> or `cardano-testnet`, used as a **local rehearsal venue** where the Haskell node makes
+> the tip and **Ade recovers** from it. That is the legitimate local pre-preprod path
+> (§5b) — distinct from the stillborn `create-testnet-data` Conway-from-genesis trap.
+> The line that's never crossed: **Ade enters by recover at a Conway tip, never forges
+> block 0.**
 
 ---
 
@@ -104,9 +127,12 @@ forge), and from first principles:
   Origin** (the genesis trap), because its leadership comes from the extracted bundle.
 
 `cardano-testnet` produces local nets only because it automates a **multi-era / `d`-bridge
-bootstrap** (start pre-Conway, delegates forge, fork up). That is real venue engineering
-and is **out of scope for C2** — C2 uses the real preprod chain, which is already past
-all of this.
+bootstrap** (start pre-Conway, delegates forge, fork up). That `d`-bridge is **NOT** the
+C2 path itself — it is the one-time venue **precondition** for the required C2-LOCAL
+rehearsal (§5b): it produces the already-past-bootstrap private Conway chain (Ade stake
+active, 2 Haskell nodes) that Ade then **recovers** from. The dead end is only
+`create-testnet-data` **Conway-from-genesis** (no `d`-bridge → stillborn → pushes Ade to
+forge block 0). With the `d`-bridge venue and Ade entering by **recover**, it is correct.
 
 ---
 
@@ -115,7 +141,7 @@ all of this.
 | Half | Needs Ade stake? | Status | How |
 |---|---|---|---|
 | **RECOVER** the real non-Origin Conway tip | **No** | **Proven** (N-M-C / N-M-A1.1; RO-LIVE-05 enforced @ slot 124140368) | Mithril snapshot (UTxO) + `build_consensus_inputs_bundle.sh` (consensus inputs) + `import_live_consensus_inputs` + admission `seed_to_snapshot` @ the tip |
-| **FORGE tip+1 + real-peer ADOPT** | **Yes** | **Gated** | Ade's pool must be a **registered, active** leader in preprod's stake distribution. Register the pool + delegate + wait ~2 epochs (~10 days). |
+| **FORGE tip+1 + real-peer ADOPT** | **Yes** | **Gated on Ade *active* stake in the target chain** | C2-LOCAL: already active by the §5b bootstrap precondition (rehearse here first). C2-preprod: register the pool + delegate + wait ~2 epochs (~10 days). |
 
 **The stake gate is unavoidable and no snapshot bypasses it.** For a peer to *adopt*
 Ade's block tip+1, it validates the VRF leader proof against Ade's pool's stake fraction
@@ -123,8 +149,59 @@ in the peer's leader-election distribution. If Ade's pool isn't active-staked on
 chain, σ=0, threshold=0, the block is rejected. Mithril hands Ade the *tip state*; it
 cannot make Ade a *leader* on a chain where it isn't staked.
 
-So: **recover is doable now; forge+adopt waits on preprod pool stake.** Nothing else
-should be invented to "get around" the stake gate.
+So: **recover is doable now; forge+adopt needs Ade *active* stake on the target chain —
+rehearsed FIRST on a private chain where stake is already active (§5b), then preprod
+(register + wait).** Nothing else should be invented to "get around" the stake gate.
+
+---
+
+## 5b. C2-LOCAL-REHEARSAL — required before preprod
+
+A private-testnet rehearsal is **REQUIRED before touching preprod**, and it must rehearse
+the **exact preprod shape**: recover a non-Origin Conway tip → forge tip+1 → a real
+Haskell peer adopts → correlate. Its purpose is to de-risk the real mechanics cheaply,
+off the public chain. It must **NOT** regress into fresh Conway-from-genesis bootstrapping
+(§1, §4) — that tests nothing real.
+
+### Precondition (venue setup — a one-time bootstrap, SEPARATE from the rehearsal)
+
+An **already-bootstrapped private Conway chain** sitting at a non-Origin Conway tip, with:
+- **Ade's pool already ACTIVE in the ledger stake** (past the 2-epoch activation), and
+- **2 Haskell nodes** as peers — exactly BA-04's "private testnet with 2 other Haskell nodes".
+
+Reaching that state is the cold-start bootstrap — done by the **Haskell venue**, not Ade,
+and **not** by `create-testnet-data` Conway-from-genesis (stillborn, §4). The correct
+bootstrap is the **multi-era `d`-bridge**: genesis in a pre-Conway era (Shelley/Babbage)
+with `decentralizationParam d = 1`, so the Haskell **genesis-delegate** keys forge the
+cold-start blocks (no stake needed → chain stays at wall-clock, never `CurrentSlotUnknown`);
+Ade's pool stake activates (~2 epochs); ramp `d → 0`; hard-fork up to **Conway**.
+`cardano-testnet` automates exactly this. **This bootstrap is a one-time venue
+precondition; the rehearsal starts from its output — a non-Origin Conway tip with Ade
+staked — and never re-touches genesis.**
+
+### The rehearsal (the part that mirrors preprod — the part worth proving)
+
+Against that already-advanced private chain + its 2 Haskell nodes:
+1. **Extract** recovered-tip state from a Haskell node (`build_consensus_inputs_bundle.sh`
+   + a Mithril/UTxO seed) at the current non-Origin Conway tip.
+2. **Ade recovers/imports** that tip (`import_live_consensus_inputs` + `seed_to_snapshot`).
+3. **Ade forges tip+1** over the evolved recovered state → self-accept → durable admit.
+4. **Ade serves** the block; a **Haskell node adopts** it.
+5. **`correlate`** the Haskell adoption log → non-promotable `PrivateRehearsalManifest`
+   (`venue = private-testnet`, NOT bounty evidence).
+
+This is the C2 analog of the C1 genesis rehearsal, and it exercises the **exact risky
+mechanics** before preprod: recovered-tip extraction, live ledger / chain-dep import,
+forge-successor over evolved state, durable admission, block serving, **real Haskell
+adoption**, and BA-02 evidence correlation. Ade enters only by recover at the Conway tip
+— **never forges block 0**.
+
+> **Status / next step (honest):** the recover step alone is proven against the synced
+> preprod node read-only today. The **C2-LOCAL rehearsal is the immediate next build** —
+> it needs the already-past-bootstrap private Conway chain (via the `d`-bridge /
+> `cardano-testnet`) with Ade stake active + 2 Haskell nodes, which is **not yet stood
+> up**. **That rehearsal — NOT preprod stake registration — is the next step.**
+> C2-preprod-live (§6) runs only after the local rehearsal loop is green.
 
 ---
 
@@ -179,24 +256,39 @@ registered + active on preprod.**
 - **Proven now:** recover the real preprod Conway tip (extraction works at epoch 293 /
   slot 125056777 today; full recover proven N-M-C / N-M-A1.1; RO-LIVE-05 enforced). The
   tip-successor **durability** seam is proven hermetically (PHASE4-N-AD).
-- **Owed:** (a) register Ade's pool stake on preprod (operator action, ~2-epoch gate);
-  (b) the forge+adopt operator pass once stake is active → `Ba02Manifest`;
-  (c) `CN-CONS-06` / `RO-LIVE-01` live halves flip **only** on committed `correlate`
-  evidence over a real preprod peer log — never on recover/forge/serve alone.
+- **Owed (in this order):**
+  - **(a) C2-LOCAL rehearsal — the NEXT step.** Stand up an already-past-bootstrap private
+    Conway chain (`d`-bridge / `cardano-testnet`) with Ade stake **active** + **2 Haskell
+    nodes**, then run recover → forge tip+1 → Haskell adopt → `correlate` there (§5b).
+    **This, not preprod stake registration, is what comes next.**
+  - **(b) Then C2-preprod.** Register Ade's pool stake on preprod (~2-epoch gate) + the
+    forge+adopt operator pass once active → `Ba02Manifest`.
+  - **(c)** `CN-CONS-06` / `RO-LIVE-01` live halves flip **only** on committed `correlate`
+    evidence over a real **preprod** peer log — never on recover/forge/serve alone, and
+    never on the local rehearsal (non-promotable).
 
 ---
 
 ## 8. Anti-regression checklist (the wrong turns this session, never repeat)
 
-- ✅ The Conway tip is **recovered from preprod**, never grown from a local genesis.
+- ✅ The Conway tip is **recovered** from an already-bootstrapped chain (private rehearsal
+  or preprod), never **grown by Ade from a local genesis**.
 - ✅ Ade enters via `seed_to_snapshot` @ a **non-Origin** slot, never block-0-on-Origin.
-- ✅ No `create-testnet-data` / short-epoch / `d`-bridge local net is on the C2 path.
-- ✅ Forge+adopt is gated on **real preprod stake**, not faked, not local-genesis-staked.
+- ✅ **Private testnet is REQUIRED before preprod, but it rehearses the recovered
+  non-Origin path** (recover → forge tip+1 → 2 Haskell peers adopt → correlate, on an
+  **already-bootstrapped** Conway chain). It must **not** regress into fresh
+  Conway-from-genesis bootstrapping.
+- ✅ No `create-testnet-data` **Conway-from-genesis** / short-epoch / Ade-forge-from-slot-0
+  on any C2 venue. (The `d`-bridge multi-era net is the **required** local-rehearsal
+  precondition — §5b — **not** forbidden.)
+- ✅ Forge+adopt is gated on Ade **active stake in the target chain** — local rehearsal
+  first (stake active by the §5b precondition), then preprod (register); never faked.
 - ✅ `PrevHash::Genesis`, the BLUE Sum6KES/VRF/header rules, and the importer are unchanged.
-- ✅ No RO-LIVE flip without committed `correlate` evidence.
+- ✅ No RO-LIVE flip without committed `correlate` evidence over a **preprod** peer log.
 
-If a plan needs *any* local block production to reach a Conway tip, it has drifted —
-the real tip is on preprod, already there, free.
+If a plan has **Ade** forge from genesis/slot 0, or builds a **Conway-from-genesis** net
+for Ade to bootstrap, it has drifted. Local block production by the **Haskell venue** (the
+`d`-bridge, to reach a past-bootstrap tip) is correct — Ade only ever **recovers**.
 
 ---
 
