@@ -2412,6 +2412,33 @@ status = "enforced"
 introduced_in = "PHASE4-N-P"
 strengthened_in = []
 
+# =============================================================================
+# PHASE4-N-AC — KES signing evolves key to current period (live-readiness).
+# Cluster doc: docs/clusters/PHASE4-N-AC/cluster.md
+# status = "declared" until S1 populates tests + ci_script + the close flip.
+# =============================================================================
+
+[[rules]]
+id = "DC-CRYPTO-10"
+tier = "derived"
+statement = """
+The RED signing shell must evolve the operator KES signing key to the requested
+KES period before signing, using the existing deterministic Sum6KES update
+primitive. It must fail closed if the requested period is before the key start,
+beyond the key lifetime, or cannot be reached by sequential evolution.
+"""
+source = "docs/clusters/PHASE4-N-AC/cluster.md; docs/evidence/c1-genesis-rehearsal-reproduction-README.md (item-4 C1 re-run finding)"
+cross_ref = ["CN-KES-HEADER-01", "T-KEY-01", "DC-CRYPTO-04", "DC-CRYPTO-09", "CN-FORGE-03"]
+code_locus = "crates/ade_runtime/src/producer/producer_shell.rs (kes_sign_header_advancing = kes_advance_to(period) then kes_sign_header; kes_advance_to -> kes_update fail-closed: EvolutionBackwards / EvolutionExhausted); crates/ade_node/src/produce_mode.rs (the forge's single real KES sign uses kes_sign_header_advancing)"
+tests = []
+ci_script = ""
+status = "declared"
+introduced_in = "PHASE4-N-AC"
+strengthened_in = []
+authority_surface = "RED producer-shell KES key evolution before signing"
+cluster = "CL-PRODUCER-KEYS"
+evidence_notes = "Declared at cluster scoping (2026-06-06, user-confirmed). Surfaced by the item-4 C1 re-run: the C1 genesis rehearsal stopped reproducing once the private net aged past one KES period (slot ~249659 / slotsPerKESPeriod 129600 -> KES period 1), because the forge's only real KES sign (produce_mode.rs:891 kes_sign_header) requires kes.current_period() == requested and nothing evolved the minted-at-period-0 key forward -> KesPeriodNotCurrent{requested:1,current:0} on every leader slot (succeeded=0; the follower KeepAlive-timed-out waiting for a block). NOT a regression from N-U/AA/AB (the wire/serve path handshook + found the chain-sync intersection). Fix (S1): add ProducerShell::kes_sign_header_advancing (kes_advance_to(period) then kes_sign_header) and wire the :891 site to it; kes_advance_to -> kes_update is already idempotent at the current period and fail-closed (EvolutionBackwards on backwards, EvolutionExhausted beyond SUM6_MAX_PERIOD=63 / unreachable). Signing stays RED; the Sum6KES algorithm + KES verifier + forge eligibility + wire rules are unchanged. Enforced at S1 with ci/ci_check_kes_evolution_before_sign.sh + 4 shell tests + the live C1 re-run in KES period 1 (acceptance #3, non-promotable rehearsal)."
+
 [[rules]]
 id = "DC-CONS-11"
 tier = "derived"
