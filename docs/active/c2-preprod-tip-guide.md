@@ -262,12 +262,21 @@ and `slotsPerKESPeriod=129600` keeps the opcert (KES period 0) fresh.)
   Conway venue, Haskell peers (relays): node2,node3, Ade identity: pool1, forged hash ==
   adopted hash.**
 
-> **Status (honest):** **#1–#7 DONE** — venue validated; live tip + consensus inputs
-> extracted; Ade recovered from the non-Origin tip; Ade forged **real pool1 blocks** from
-> that recovered state. **#8–#9 require the two-phase relay venue** above (node2/node3 as
-> non-producing relays) — surfaced as an Ade fork-choice gap, **not** worked around. Recover
-> alone is also proven against the synced preprod node read-only. **C2-preprod-live (§6) runs
-> only after this local loop is green.**
+> **Status (honest, 2026-06-06):** **#1–#7 DONE** — venue validated; live tip + consensus
+> inputs extracted; Ade recovered from the non-Origin tip; Ade forged **real pool1 blocks**
+> (`forge_result:succeeded`) from that recovered state. **#8–#9 NOT proven** — forge success
+> is local; external validity needs a Haskell peer to receive→validate→adopt→correlate. The
+> two-phase relay venue **was executed** and *removed* Gap 1 (no more competing-producer
+> `BlockNoOutOfOrder`), but exposed **Gap 2**: Ade's forge-tick **races the follow** — it
+> forged its own block on the recovered tip instead of first adopting the relay's tip block,
+> so its chain **forked** and node2-relay **rejected** the served chain
+> (`UnexpectedBlockNo`). Both gaps are recorded as later invariant slices in
+> `docs/planning/c2-local-discovered-gaps.md` (Gap 1: multi-producer fork-choice; Gap 2:
+> forge-on-followed-tip + serve continuity). **Not** worked around by weakening Ade.
+> Likely-clean next attempt: recover **far enough behind** the frozen tip that the follow
+> catches up before the forge-tick fires (the recover-at-158 run already showed
+> follow-then-forge works). Recover alone is also proven against the synced preprod node
+> read-only. **C2-preprod-live (§6) runs only after this local loop is green.**
 
 ---
 
