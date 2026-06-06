@@ -51,3 +51,21 @@ The test IS a replay-equivalence assertion (kill → WarmStart forward-replay �
 - **Adds:** none.
 - **Strengthens** (`strengthened_in += "PHASE4-N-AD"` at close): **T-REC-05** (forged recovery equivalence extended from block-0-only to a multi-block forged progression) and **DC-WAL-04** (the "previous entry's post_fp otherwise" tip-successor `prior_fp` clause now replay-tested).
 - **Preserves:** the C1 genesis-successor durability limitation (documented, not changed), `PrevHash::Genesis`/null, all BLUE/wire rules.
+
+## §11 Close record
+**CLOSED 2026-06-06.** A narrow coverage-correction follow-up to the closed PHASE4-N-U (no reopen, no history rewrite). It banks the C2-relevant tip-successor durability seam as a permanent regression and classifies the live-surfaced genesis ChainBreak as C1-only.
+
+**Commits:**
+- `68d83406` — cluster + slice doc (authority-first).
+- `67ce7ac6` — S1 impl: the regression test + the C1 runbook genesis-ChainBreak note + the T-REC-05 / DC-WAL-04 strengthenings.
+- *(this commit)* — close record + archive.
+
+**CE-1 — passes mechanically:** `cargo test -p ade_node forge_tip_successor_kill_then_warm_start_recovers_block_one` green; `cargo test -p ade_node` green (no regression). The test forges block 0 → durable admit → forges block 1 on the durable non-Origin tip → admit → kill → `warm_start_recovery` recovers block 1 byte-identically with **no ChainBreak**.
+
+**Narrow claim proven:** *the C2-style tip-successor WAL/recovery seam is clean — a forged successor's `prior_fp` chains to the real previous `post_fp` across WAL replay, and WarmStart recovers the byte-identical successor tip.* **Not claimed:** full preprod/C2 acceptance, peer adoption, or the end-to-end real-C2 integration (Mithril `seed_to_snapshot` at a real non-Origin tip → recover → forge → recover live) — that remains the eventual preprod/C2 pass, now unblocked on the durability front.
+
+**Genesis ChainBreak classified (per user):** the C1 cold-start `seed → block-0` WAL seam (seed-UTxO ledger fingerprint vs the `PrevHash::Genesis`/null prior) is a **C1 genesis-successor-only durability limitation, NOT a C2 tip-successor blocker** — documented in `docs/evidence/c1-genesis-rehearsal-reproduction-README.md`. Not fixed (out of scope); `PrevHash::Genesis`/null unchanged.
+
+**Registry:** no new rule. `strengthened_in += "PHASE4-N-AD"` on **T-REC-05** + **DC-WAL-04** (+ the test appended to both `tests` arrays + evidence notes). No production code change; no preprod claim; no RO-LIVE flip.
+
+**Reviews:** test + docs + registry only — no production-code / BLUE / RED behavior change, no new attack surface. IDD + security review: trivially PASS (nothing to review beyond a `#[cfg(test)]` addition and documentation).
