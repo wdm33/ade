@@ -3,14 +3,92 @@
 > **Status:** Living architectural document. Regenerated; not hand-edited.
 > Per-project instance of `~/.claude/methodology/templates/seams.md`.
 
-> 11 crates, **458 canonical types**, **137 CI checks** at HEAD (`c6e7fafe`, PHASE4-N-AB cluster close — outbound mux segmentation).
-> Reads the CODEMAP regenerated at the same close (`docs/ade-CODEMAP.md` — **458 canonical types / 137 CI / 335 rules**,
-> pinned at `c6e7fafe`) for the module list + TCB colors, and the invariant registry (`docs/ade-invariant-registry.toml` —
-> **335 entries** at HEAD) for the rule IDs that gate each closed surface.
-> **N-AB is GREEN-only (0 BLUE diff): +1 rule (`CN-SESS-05`, declared → enforced), +1 CI gate
-> (`ci_check_outbound_segmentation.sh`), ZERO new BLUE canonical types / authorities / fns, ZERO new closed enum**
-> — it completes the OUTBOUND direction of the existing closed wire-protocol session seam (CN-SESS family), it does
-> NOT open a new one.
+> 11 crates, **458 canonical types**, **138 CI checks** at HEAD (`1d54abb4`, PHASE4-N-AC cluster close — KES signing evolves the operator key to the current period before signing).
+> Reads the CODEMAP regenerated at the same close (`docs/ade-CODEMAP.md` — **458 canonical types / 138 CI / 336 rules**,
+> pinned at `1d54abb4`) for the module list + TCB colors, and the invariant registry (`docs/ade-invariant-registry.toml` —
+> **336 entries** at HEAD) for the rule IDs that gate each closed surface.
+> **N-AC is RED-only (0 BLUE diff): +1 rule (`DC-CRYPTO-10`, declared → enforced), +1 CI gate
+> (`ci_check_kes_evolution_before_sign.sh`), ZERO new BLUE canonical types / authorities / fns, ZERO new closed
+> enum, ZERO version-gated contract bump** — it COMPLETES / STRENGTHENS the existing RED KES signing seam
+> (`CN-KES-HEADER-01`, `strengthened_in += "PHASE4-N-AC"`), it does NOT open a new ingress surface or extension
+> point.
+>
+> ### PHASE4-N-AC cluster close (`1d54abb4`) — KES signing evolves the operator key to the current period (`DC-CRYPTO-10`)
+
+>
+> **This regeneration is a single-cluster cluster-close refresh, applied directly to the on-disk SEAMS.** The
+> prior on-disk SEAMS was pinned at the PHASE4-N-AB close (`c6e7fafe` / **458** canonical types / **137** CI /
+> **335** rules). It is brought current to HEAD `1d54abb4` (the *Close PHASE4-N-AC* commit — **458** canonical
+> types / **138** CI / **336** rules). It splices the **single closed cluster PHASE4-N-AC** (the RED producer
+> signing shell now EVOLVES the operator KES signing key FORWARD to the requested KES period BEFORE signing, via
+> the EXISTING deterministic Sum6KES `kes_update` primitive; fail-closed backwards / beyond-lifetime). **N-AC is
+> RED-only — ZERO BLUE diff** (458 canonical types unchanged; the two source files touched in the whole
+> `c6e7fafe..1d54abb4` span are BOTH RED — `crates/ade_runtime/src/producer/producer_shell.rs` (the RED producer
+> key-custody shell — NEW method `kes_sign_header_advancing`) + `crates/ade_node/src/produce_mode.rs` (the RED
+> forge — its single real KES sign now calls the new method); `git diff c6e7fafe..1d54abb4` over the BLUE
+> `core_paths` trees touches **no** file and adds **zero** `struct`/`enum` lines — the BLUE Sum6KES algorithm +
+> KES verifier + forge eligibility + wire rules are reused UNCHANGED; `T-KEY-01` "no signing in BLUE" preserved).
+> The seam-relevant change — recorded under §1 (the producer-forge pipeline's single real KES-sign step now
+> evolves-then-signs), §2 (the KES signing-key custody domain's signing-operation row + rule), §3 (no new closed
+> enum / no version-gated contract — the change REUSES the EXISTING closed `SigningError` variants
+> `EvolutionBackwards` / `EvolutionExhausted` + the branded `KesSignature` / `UnsignedHeaderPreImage`), §4 (no
+> frozen-contract / wire-format / hash-algorithm change), §5 (one NEW gate, 137 → 138, + a `strengthened_in` note
+> on `CN-KES-HEADER-01`), §6 (the RED no-stale-period-sign / verbatim-period / fail-closed-both-directions
+> prohibition + the per-cluster honest-scope bullet), and §7 (NO new candidate — a COMPLETION/STRENGTHENING of an
+> already-closed RED signing seam; plus the genesis-window / KES-period coupling honest-scope finding) — is:
+>
+> - **NEW RED method `ProducerShell::kes_sign_header_advancing(&mut self, period: u32, preimage: &UnsignedHeaderPreImage)
+>   -> Result<KesSignature, ShellSignError>`** (`ade_runtime::producer::producer_shell` (RED, `//! RED`);
+>   **DC-CRYPTO-10**) — `self.kes_advance_to(period)?` THEN `self.kes_sign_header(period, preimage)`. `kes_advance_to
+>   -> kes_update` is the EXISTING deterministic Sum6KES forward evolution: `period == current` → no-op evolution
+>   (the `while current < to` loop does nothing) then sign (existing period-0 signing UNCHANGED); `period > current`
+>   (in window) → forward evolution then sign; `period < current` → fail closed `Signing(EvolutionBackwards)` (a
+>   destroyed past period cannot be re-signed — forward-secrecy); `period` beyond the key lifetime / unreachable by
+>   sequential evolution → fail closed `Signing(EvolutionExhausted)` (`SUM6_MAX_PERIOD = 63`). The `period` is
+>   passed **VERBATIM** (no `period ± N` mutation). After a successful `kes_advance_to`, `current == period`, so
+>   `kes_sign_header` signs at the current period (no `KesPeriodNotCurrent`). The `&self` `kes_sign_at` /
+>   `kes_sign_header` REMAIN for callers that manage periods themselves.
+> - **The forge's SINGLE real KES sign now evolves-then-signs.** `ade_node::produce_mode::run_real_forge_inner`
+>   step 3 calls `kes_sign_header_advancing` instead of the raw `kes_sign_header`; on `Err(_)` it still returns the
+>   closed `CoordinatorEvent::ForgeFailed`. The forge's existing `kes_period_in_window` pre-check is preserved (it
+>   also rejects `period > opcert_last`). So the forge now works across the opcert's KES window, not only the
+>   minted-at-0 period (the gap the item-4 C1 re-run surfaced — every period-1 leader slot was failing
+>   `KesPeriodNotCurrent { requested: 1, current: 0 }`).
+> - **NO new closed enum, NO new canonical type, NO version-gated contract bump.** Evolution + signing REUSE the
+>   EXISTING closed `SigningError` variants `EvolutionBackwards` / `EvolutionExhausted` and the branded
+>   `KesSignature` / `UnsignedHeaderPreImage` types. The Sum6KES `kes_update` evolution is the EXISTING primitive
+>   (reused, not re-implemented); the wire format / envelope / hash algorithms / canonical-type set are UNCHANGED.
+>
+> **Registry → 336 rules** (ONE NEW, `DC-CRYPTO-10`, `tier = derived`, `introduced_in = "PHASE4-N-AC"`, `enforced`,
+> `ci_script = ci/ci_check_kes_evolution_before_sign.sh`, `cross_ref = [CN-KES-HEADER-01, T-KEY-01, DC-CRYPTO-04,
+> DC-CRYPTO-09, CN-FORGE-03]`). **ONE strengthened** (`strengthened_in += "PHASE4-N-AC"`): `CN-KES-HEADER-01` (the
+> KES-signs-the-real-unsigned-header-pre-image invariant now ALSO covers period evolution — the signed pre-image is
+> at the EVOLVED current period, not a stale minted-at-0 period). **No rule weakened.** **NET +1 CI gate (137 ->
+> 138): +1 NEW** `ci_check_kes_evolution_before_sign.sh` — pins that the forge real KES sign uses
+> `kes_sign_header_advancing` (NOT the raw `kes_sign_header` / `kes_sign_at`), that `kes_sign_header_advancing`
+> calls `kes_advance_to(period)` VERBATIM before signing (no `period ± N`), and that `kes_update` retains BOTH
+> fail-closed guards (`EvolutionBackwards` + `EvolutionExhausted`); the standing `ci_check_no_signing_in_blue.sh`
+> remains the BLUE `T-KEY-01` fence.
+>
+> **Boundary honesty (load-bearing — do NOT soften / do NOT broaden).** N-AC makes the RED signing shell EVOLVE
+> the operator KES key to the requested period before signing — and **nothing more**. The Sum6KES evolution is the
+> EXISTING deterministic `kes_update` primitive (reused, not re-implemented); signing stays **RED** (`T-KEY-01`
+> preserved — no signing in BLUE); the BLUE Sum6KES algorithm + KES verifier + forge eligibility + wire rules are
+> UNCHANGED. There is **NO new BLUE canonical type or authority** (`kes_sign_header_advancing` is a RED `&mut self`
+> method; 458 unchanged); **NO new closed enum / version-gated contract** (the existing `SigningError` variants +
+> branded `KesSignature` / `UnsignedHeaderPreImage` are reused); the period is passed **VERBATIM** (no manual
+> `± N`); the evolution is **fail-closed both directions** (backwards / beyond-lifetime → structured error + NO
+> signature, never a key override); and there is **NO RO-LIVE flip** — a forged + self-accepted period-1 block a
+> real cardano-node DOWNLOADS with no KES/parse rejection is a wire-layer / header-acceptance event, NOT
+> operator-witnessed bounty acceptance (`RO-LIVE-01` stays `partial` / operator-gated). **Genesis-window / KES-period
+> coupling finding (recorded honestly, NOT a gap):** `slotsPerKESPeriod = 129600` equals `3k/f = 3·2160/0.05 =
+> 129600`, so KES period 1 begins exactly when the Cardano genesis density window closes — a **from-genesis C1
+> rehearsal can therefore never show forge-at-period-1 AND follower-adopt simultaneously** (period 0 = window open
+> / no evolution exercised; period 1+ = evolution exercised but the follower rejects `CandidateTooSparse`, which is
+> **genesis-density-window-limited, KES-INDEPENDENT**, NOT a KES rejection). **Cross-period end-to-end forge→adopt
+> is proven on the dense C2 tip path** (the real bounty path — current preprod tip, no genesis window), NOT a net
+> reset (which returns to period 0 and re-proves only the narrow period-0 case). It is the live-readiness fix
+> surfaced by the pre-RO-LIVE hardening queue (item-4 finding → item-5 fix).
 >
 > ### PHASE4-N-AB cluster close (`c6e7fafe`) — outbound mux segmentation (`CN-SESS-05`)
 
@@ -1396,7 +1474,7 @@ Pipeline (fixed; the BLUE-then-RED-then-BLUE composition of run_real_forge):
   1a. era guard (N-W)                                (RED — non-Praos era fail-closes to ForgeFailureReason::UnsupportedProducerEra before any forge)
   2. RED vrf_prove over expected_vrf_input.alpha_bytes()  (operator VRF key; alpha comes from the BLUE LeaderScheduleAnswer — no RED-side era dispatch; N-W)
   3. BLUE verify_and_evaluate_leader(era, …) → LeaderCheckVerdict  (ade_core::consensus::leader_check; era-correct Praos construction; N-R-A + N-W)
-  4. RED kes_sign_header(UnsignedHeaderPreImage)    (signs ONLY the branded pre-image; N-S-A)
+  4. RED kes_sign_header_advancing(period, UnsignedHeaderPreImage)  (N-S-A pre-image; N-AC EVOLVES the operator KES key to `period` via the deterministic Sum6KES kes_update THEN signs ONLY the branded pre-image at the evolved current period; fail-closed EvolutionBackwards / EvolutionExhausted; period passed verbatim; DC-CRYPTO-10)
   5. GREEN assemble_tick
   6. BLUE forge_block → encode_block_envelope       (single canonical block encoder, storage-form [era, block]; N-V)
   7. BLUE self_accept                               (gate — no ForgeSucceeded without Accepted; N-F-G-B: run_real_forge now SURFACES this original BLUE AcceptedBlock token as the .1 of (CoordinatorEvent, Option<AcceptedBlock>) — Some iff ForgeSucceeded — never re-derived from artifact.bytes; the produce_mode BroadcastBlock caller takes .0 and is functionally unaffected)
@@ -2044,7 +2122,7 @@ moves.**
 | **Data-only loader (shared)** | `ade_runtime::producer::keys::load_kes_signing_key_skey` / `produce_mode::load_kes_skey_any_format` | RED | Reads the 608-byte cardano-cli skey envelope. `load_kes_skey_any_format` is `pub(crate)` (N-F-F) and REUSED verbatim by `operator_forge::load_operator_producer_shell` — no reimpl. |
 | **Authoritative deserializer** | `ade_crypto::kes_sum::Sum6Kes::raw_deserialize_signing_key_kes` | BLUE | Byte layout is the structural validator. UNCHANGED. |
 | **Authoritative algorithm** | `ade_crypto::kes_sum` | BLUE | Ade-native Sum6KES, byte-identical to Haskell `cardano-base`. UNCHANGED. |
-| **Signing operation** | `ade_runtime::producer::signing` / `producer_shell::kes_sign_header` | RED | Sole key-custody surface; signs only the branded `UnsignedHeaderPreImage`. |
+| **Signing operation** | `ade_runtime::producer::signing` / `producer_shell::{kes_sign_header, kes_sign_header_advancing}` | RED | Sole key-custody surface; signs only the branded `UnsignedHeaderPreImage`, emitting the branded `KesSignature`. **N-AC (DC-CRYPTO-10): the forge's single real KES sign now calls `kes_sign_header_advancing`** — `kes_advance_to(period)? then kes_sign_header(period, preimage)` — EVOLVING the operator KES key FORWARD to the requested period via the EXISTING deterministic Sum6KES `kes_update` BEFORE signing, so signing works across the opcert's KES window (not only the minted-at-0 period); fail-closed `Signing(EvolutionBackwards)` (backwards / forward-secrecy) / `Signing(EvolutionExhausted)` (beyond `SUM6_MAX_PERIOD = 63`); the `period` is passed VERBATIM. The `&self` `kes_sign_at` / `kes_sign_header` REMAIN for period-managing callers. |
 | **`--mode node` operator-material ingress (N-F-F; real parsers N-F-G-A)** | `ade_node::operator_forge::{load_operator_producer_shell, build_operator_forge_material}` | RED | The single named `--mode node` operator-material ingress site: REUSES the KES/VRF/cold loaders + (N-F-G-A) the real `parse_opcert_envelope` / `parse_shelley_genesis` → `ProducerShell::init` → `OperatorForgeMaterial` (custody shell, not `Debug`/`Serialize`). Key custody RED-confined to `ProducerShell`; passed only to the fenced `forge_one_from_recovered`, never copied/logged/serialized/hashed-for-evidence (CN-NODE-03). |
 
 **Rule (CN-NODE-03):** the RED loader may not call `KesSecret::from_*` inside `load_kes_signing_key_skey` /
@@ -2052,7 +2130,15 @@ moves.**
 `--mode node` ingests REAL operator KES/VRF/cold/opcert material** via the single named `operator_forge`
 ingress site, which REUSES the existing loaders (N-F-G-A: + the real opcert/genesis parsers; no reimpl, no
 new BLUE authority, no plugin seam) and keeps custody confined to `ProducerShell`. The forge tick still
-reuses `CoordinatorState::kes_period_for_slot`. **The custody/signing chokepoint never moves.**
+reuses `CoordinatorState::kes_period_for_slot`. **The custody/signing chokepoint never moves.** **N-AC
+(DC-CRYPTO-10): the forge's single real KES sign EVOLVES the key to the chain's current KES period before
+signing** (`kes_sign_header_advancing` = `kes_advance_to(period)? then kes_sign_header(period, …)`), using the
+EXISTING deterministic Sum6KES `kes_update` (idempotent at the current period; fail-closed backwards /
+beyond-lifetime); the period is passed VERBATIM; signing stays RED; the BLUE Sum6KES algorithm + KES verifier are
+UNCHANGED. NO new BLUE authority / canonical type; NO new closed enum (the existing `SigningError` variants +
+branded `KesSignature` / `UnsignedHeaderPreImage` are reused). `CN-KES-HEADER-01` `strengthened_in +=
+"PHASE4-N-AC"` (the real-pre-image sign now works across KES periods, not only the minted one)
+(`ci_check_kes_evolution_before_sign.sh`).
 
 ### Domain: leader eligibility (RED/BLUE split)
 
@@ -2206,6 +2292,7 @@ ACCEPTS it is the operator-gated RO-LIVE-01 leg (peer ACCEPT NOT claimed here).
 | `GenesisParseError` *(N-R-C; reused on the node path N-F-G-A)* | `ade_runtime::producer::genesis_parser` (RED) | closed sum | New variant = a strengthening of **CN-GENESIS-01**. The N-F-G-A `operator_forge` ingress reuses `parse_shelley_genesis` (this error type) on the node path. |
 | `OpCertParseError` *(N-R-C; reused on the node path N-F-G-A)* | `ade_runtime::producer::opcert_envelope` (RED) | closed sum | New variant = a strengthening of **CN-OPCERT-01**. The N-F-G-A `operator_forge` ingress reuses `parse_opcert_envelope` (this error type) on the node path. |
 | `UnsignedHeaderPreImageError` *(N-S-A)* | `ade_ledger::block_validity::unsigned_header_pre_image` (BLUE) | closed sum | New variant = a strengthening of **DC-KES-HEADER-01**. |
+| `SigningError` / branded `KesSignature` + `UnsignedHeaderPreImage` *(KES signing surface; REUSED — NOT extended — by N-AC)* | `ade_runtime::producer::{signing, producer_shell}` (RED) + `ade_ledger::block_validity::unsigned_header_pre_image` (BLUE) | closed sum + branded newtypes | **N-AC (DC-CRYPTO-10): adds NO new closed enum / variant and NO version-gated contract.** The new RED `kes_sign_header_advancing` evolves-then-signs by REUSING the EXISTING closed `SigningError` variants `EvolutionBackwards` (backwards / forward-secrecy) + `EvolutionExhausted` (beyond `SUM6_MAX_PERIOD = 63`) and the EXISTING branded `KesSignature` / `UnsignedHeaderPreImage` types — the closed-surface set is unchanged. New variant on `SigningError` = a strengthening of **DC-CRYPTO-04..09 / CN-KES-HEADER-01**; non-secret primitives only (no key bytes in errors). |
 | `AcceptedMiniProtocol` *(N-L; outbound segmentation REUSES it, N-AB)* | `ade_network::session` (GREEN) | closed registry | New mini-protocol = a registry entry + a `match` arm with **no wildcard accept**. **N-AB (CN-SESS-05):** the outbound `session::core::handle_outbound` segmentation carries the SAME mini-protocol id + mode across every segment of a message — it REUSES this closed registry (no new variant, no new mini-protocol) and the single `encode_inner_frame` per-frame authority. |
 | `KesError` / `KesParseError` *(N-P)* | `ade_crypto::kes_sum::errors` (BLUE) | 5 / 6 variants | New variant = a strengthening of **DC-CRYPTO-08/09**; non-secret primitives only. |
 | Operator-evidence manifest TOML schema *(N-S-C)* | `ci_check_operator_evidence_manifest_schema.sh` + `docs/clusters/completed/PHASE4-N-S-C/cluster.md` | closed key set | Any committed `CE-N-S-LIVE_*.toml` MUST conform (CN-OPERATOR-EVIDENCE-01). |
@@ -2776,10 +2863,11 @@ How new modules enter the workspace.
     (iv) keep the record a single closed canonical type with the SOLE codec (no `Default`, no `#[non_exhaustive]`,
     `BTreeMap`-ordered) — the field is additive ONLY behind the version gate, NOT a new TYPE.
 
-### CI gates that enforce the boundary (137 total; the N-AB / N-AA / N-U / N-F-G-K…G-R / N-F-G-J / N-F-G-D / N-F-G-E / N-F-G-C / N-F-G-B / N-F-G-A / N-F-F / N-F-D-E / N-F-C / N-F-A / N-Z / N-Y / producer / network set)
+### CI gates that enforce the boundary (138 total; the N-AC / N-AB / N-AA / N-U / N-F-G-K…G-R / N-F-G-J / N-F-G-D / N-F-G-E / N-F-G-C / N-F-G-B / N-F-G-A / N-F-F / N-F-D-E / N-F-C / N-F-A / N-Z / N-Y / producer / network set)
 
 | Script | Enforces | Cluster |
 |---|---|---|
+| `ci_check_kes_evolution_before_sign.sh` *(NEW N-AC S1)* | **DC-CRYPTO-10** — the forge's SINGLE real KES sign (`ade_node::produce_mode::run_real_forge_inner` step 3) uses the EVOLVING `kes_sign_header_advancing` (NOT the raw `kes_sign_header` / `kes_sign_at`); `kes_sign_header_advancing` (`producer_shell`) calls `kes_advance_to(period)` VERBATIM BEFORE `kes_sign_header` (no `period + 1` / `period - 1` mutation); `kes_advance_to` → `kes_update` retains BOTH fail-closed guards (`EvolutionBackwards` on a backwards period / `EvolutionExhausted` beyond the key lifetime); and signing stays in RED `ade_runtime` (the standing `ci_check_no_signing_in_blue.sh` is the BLUE `T-KEY-01` fence — no `kes_sign` / `SigningKey` in BLUE). **Non-vacuous** (pre-S1 the forge used the raw `.kes_sign_header(`). The evolve-before-sign companion to `ci_check_unsigned_header_preimage_single_source.sh` (CN-KES-HEADER-01). | N-AC |
 | `ci_check_outbound_segmentation.sh` *(NEW N-AB S1)* | **CN-SESS-05** — the GREEN `ade_network::session::core::handle_outbound` SEGMENTS an outbound mini-protocol payload `> MAX_PAYLOAD` into ordered `<= MAX_PAYLOAD` frames via the SINGLE `encode_inner_frame` → `mux::frame::encode_frame` per-frame authority — (a) NO second / alternate mux frame encoder in `session`; (b) `encode_inner_frame` still has its strict `MAX_PAYLOAD` guard; (c) `handle_outbound` owns segmentation (references `MAX_PAYLOAD` + `MAX_OUTBOUND_PAYLOAD_BYTES` + chunks); (d) `MAX_OUTBOUND_PAYLOAD_BYTES = 16 MiB` is a FIXED literal, NOT runtime-configurable (no CLI / env / config read, no unbounded mode); every segment keeps the same mini-protocol id + mode + the single captured timestamp (no per-segment clock); segmentation never truncates / drops / reorders; a payload above the fixed bound fails closed via the EXISTING `SessionError::OutboundPayloadTooLarge` (reused, no new variant). The outbound inverse of the `CN-SESS-04` inbound reassembly fenced by `ci_check_live_feed_memory_bounds.sh` (DC-LIVEMEM-01). **Non-vacuous** (pre-S1 HEAD had 0 `chunks(MAX_PAYLOAD)` + no `MAX_OUTBOUND_PAYLOAD_BYTES`). | N-AB |
 | `ci_check_serve_range_bounded.sh` *(NEW N-AA S2)* | **DC-SERVEMEM-01** — the `--mode node` durable-chain serve projection (`ChainDbServedSource`, `ade_runtime::network::served_chain_projection`) reads each peer BlockFetch range via the bounded **hash-free** ChainDb primitives `range_bytes_capped` + `last_block_bytes` (NEVER the unbounded `iter_from_slot` / O(N) `chaindb.tip()`), does NO `SLOT_BY_HASH` / full-index scan, caps each request at the FIXED non-configurable `MAX_SERVE_RANGE_BLOCKS = 256` literal (no CLI / env / config read, no "unbounded" path), and derives each block's hash via the single BLUE `decode_block` / `block_header_bytes` (NO second hash authority, NO `SLOT_BY_HASH` on the serve path); an oversized / inverted / undecodable range fails closed via `ServeRangeOutcome` → wire `NoBlocks`. **Non-vacuous** (pre-S2 HEAD had 2 `iter_from_slot` + 1 `chaindb.tip()` serve calls its Guards 2/3 fire on; S2 has 0). The serve-side analog of `ci_check_live_feed_memory_bounds.sh` (DC-LIVEMEM-01). | N-AA |
 | `ci_check_forged_durable_admit_via_pump.sh` *(NEW N-U S1)* | **DC-NODE-12 + DC-CONS-23 + DC-WAL-04** — the relay-loop `ForgeTick` arm routes the self-accepted forged block through the fenced `node_sync::admit_forged_block_durably` into the SINGLE `forward_sync::pump_block` durable chokepoint (extend-only `admit_via_block_validity` → StoreBlockBytes → AppendWal → AdvanceTip, durable-before-tip); the forge gains NO direct tip-advance path, NO `NodeBlockSource` variant, NO new `WalEntry` variant (reuses `WalEntry::AdmitBlock`); `accepted.into_bytes()` is byte-identical to the self-accept input (no re-encode, I-10); a stale-tip forge fails closed via header-position / `prior_fp`, never an own-block override. `pump_block` stays the sole durable tip authority. | N-U |
@@ -2825,7 +2913,7 @@ How new modules enter the workspace.
 | `ci_check_tag24_wire_authority.sh` | CN-WIRE-08 — single tag-24 wrap/unwrap authority. | N-X |
 | `ci_check_producer_praos_vrf.sh` | CN-FORGE-04 — single era→leader-VRF-input authority. | N-W |
 | `ci_check_leader_check_authority.sh` | CN-FORGE-02 — BLUE leader-check has no LedgerView/RED dep. | N-R-A |
-| `ci_check_unsigned_header_preimage_single_source.sh` | CN-KES-HEADER-01 / DC-KES-HEADER-01 — single pre-image recipe. | N-S-A |
+| `ci_check_unsigned_header_preimage_single_source.sh` | CN-KES-HEADER-01 *(strengthened_in PHASE4-N-AC)* / DC-KES-HEADER-01 — single pre-image recipe. **N-AC strengthened CN-KES-HEADER-01**: the real-pre-image KES sign now ALSO covers period evolution (the signed pre-image is at the EVOLVED current period, not a stale minted-at-0 period) — fenced by the companion `ci_check_kes_evolution_before_sign.sh` (DC-CRYPTO-10). | N-S-A / N-AC |
 | `ci_check_no_produce_mode_direct_transport_writes.sh` | CN-OUTBOUND-RELAY-01 — bytes only via `OutboundCommand` → `MuxPump`. | N-S-B |
 | `ci_check_operator_evidence_manifest_schema.sh` | CN-OPERATOR-EVIDENCE-01 — closed evidence-manifest TOML schema. | N-S-C |
 | `ci_check_produce_mode_uses_bootstrap_initial_state.sh` | CN-PROD-03 / N-T — `produce_mode` obtains initial state only via `bootstrap_initial_state`. | N-T |
@@ -2874,10 +2962,17 @@ How new modules enter the workspace.
 > `MAX_OUTBOUND_PAYLOAD_BYTES` bound (no CLI / env / config escape, fail-closed via the EXISTING reused
 > `SessionError::OutboundPayloadTooLarge`). **0 retired, 0 modified-in-place** (every other gate byte-unchanged;
 > GREEN-only, 0 BLUE diff). The outbound inverse of N-F-G-E's `ci_check_live_feed_memory_bounds.sh` (DC-LIVEMEM-01).
+> **N-AC added 1 (137 → 138): +1 NEW** `ci_check_kes_evolution_before_sign.sh` (S1, DC-CRYPTO-10) — pins that the
+> forge's single real KES sign uses the evolving `kes_sign_header_advancing` (NOT the raw `kes_sign_header` /
+> `kes_sign_at`), that it calls `kes_advance_to(period)` VERBATIM before signing (no `period ± N`), and that
+> `kes_update` retains both fail-closed guards (`EvolutionBackwards` + `EvolutionExhausted`). **0 retired, 0
+> modified-in-place** (every other gate byte-unchanged; RED-only, 0 BLUE diff — the standing
+> `ci_check_no_signing_in_blue.sh` remains the BLUE `T-KEY-01` fence). The evolve-before-sign companion to
+> `ci_check_unsigned_header_preimage_single_source.sh` (CN-KES-HEADER-01, `strengthened_in PHASE4-N-AC`).
 > _(The G-H gates `ci_check_single_serve_dispatch_authority.sh` + `ci_check_serve_listener_magic_aware.sh` are part
-> of the 136 total at HEAD but are NOT row-detailed in this table — see the G-H-gap note in the header.)_
-> Earlier-cluster gates (N-A..N-P, the N-M-* set, the N-L wire-session set) are present in the 136 total; the full
-> list is `ls ci/ci_check_*.sh` (= **136**).
+> of the 138 total at HEAD but are NOT row-detailed in this table — see the G-H-gap note in the header.)_
+> Earlier-cluster gates (N-A..N-P, the N-M-* set, the N-L wire-session set) are present in the 138 total; the full
+> list is `ls ci/ci_check_*.sh` (= **138**).
 
 ---
 
@@ -3056,9 +3151,59 @@ How new modules enter the workspace.
   hatch, no unbounded / runtime-configurable payload cap**. It MUST make **NO BLUE change** (`mux::frame` reused
   unchanged) and **NO RO-LIVE flip**. A later slice may **tighten** the bound, never disable it
   (`ci_check_outbound_segmentation.sh`).**
+- **(N-AC, DC-CRYPTO-10 — RED signing shell) the forge's single real KES sign MUST evolve the operator key to the
+  requested period before signing, fail-closed both directions, and never sign at a stale period.** The forge
+  (`ade_node::produce_mode::run_real_forge_inner` step 3) MUST call the EVOLVING
+  `ProducerShell::kes_sign_header_advancing(period, preimage)` — **NOT** the raw `kes_sign_header` / `kes_sign_at`
+  (those `&self` methods REMAIN only for callers that manage periods themselves). `kes_sign_header_advancing` MUST
+  call `kes_advance_to(period)` **VERBATIM** before `kes_sign_header` (**NO** `period + 1` / `period - 1` / `± N`
+  mutation of the forge-computed period). `kes_advance_to` → `kes_update` (the EXISTING deterministic Sum6KES
+  forward evolution — reused, **NOT** re-implemented) MUST stay idempotent at the current period (`while current <
+  to`) and MUST retain BOTH fail-closed guards: `period < current` → `Signing(EvolutionBackwards)` (a destroyed
+  past period cannot be re-signed — forward-secrecy), `period` beyond the key lifetime / `SUM6_MAX_PERIOD = 63` →
+  `Signing(EvolutionExhausted)`. After a successful advance `current == period`, so the sign is at the current
+  period (no `KesPeriodNotCurrent`); on a failed advance there is **NO signature** (never a key override). Signing
+  MUST stay **RED** (`T-KEY-01` — no `kes_sign` / `SigningKey` in BLUE, `ci_check_no_signing_in_blue.sh`); the BLUE
+  Sum6KES algorithm + KES verifier + forge eligibility + wire rules MUST stay UNCHANGED. **NO new BLUE authority /
+  canonical type, NO new closed enum / version-gated contract** (the existing `SigningError` variants + branded
+  `KesSignature` / `UnsignedHeaderPreImage` are reused), **NO C1-only key path** (the same `--mode node` forge path
+  serves C1 and C2), and **NO RO-LIVE flip** (`RO-LIVE-01` stays `partial`). The forge's `kes_period_in_window`
+  pre-check MUST be preserved (`ci_check_kes_evolution_before_sign.sh`; `CN-KES-HEADER-01` `strengthened_in +=
+  "PHASE4-N-AC"`).**
 
 ### Project-specific additions (Ade)
 
+- **KES-signing-evolves-the-operator-key honest scope + boundary (N-AC, load-bearing — do NOT soften / do NOT
+  broaden):** N-AC makes the RED producer signing shell EVOLVE the operator KES signing key FORWARD to the chain's
+  current KES period BEFORE the single real KES sign — and **nothing more**. The new RED
+  `ProducerShell::kes_sign_header_advancing` = `kes_advance_to(period)? then kes_sign_header(period, preimage)`,
+  where `kes_advance_to` → `kes_update` is the EXISTING deterministic Sum6KES forward evolution (byte-for-byte
+  cardano-base; reused, NOT re-implemented; idempotent at the current period; fail-closed `EvolutionBackwards`
+  backwards / `EvolutionExhausted` beyond `SUM6_MAX_PERIOD = 63`). This closed the live-readiness gap the item-4
+  C1 re-run surfaced: the forge's only real sign called the raw `kes_sign_header(kes_period, …)`, which requires
+  `kes.current_period() == requested`, and nothing evolved the minted-at-0 operator key forward — so every
+  period-1 leader slot failed `KesPeriodNotCurrent { requested: 1, current: 0 }`. **NARROW — signing stays RED**
+  (`T-KEY-01` preserved); **the BLUE Sum6KES algorithm + KES verifier + forge eligibility + wire rules are
+  UNCHANGED**; the period is passed **VERBATIM** (no `± N`); the evolution is **fail-closed both directions**
+  (backwards / beyond-lifetime → structured error + NO signature, never a key override); **NO new BLUE authority /
+  canonical type, NO new closed enum / version-gated contract** (the existing `SigningError` variants + branded
+  `KesSignature` / `UnsignedHeaderPreImage` are reused); **NO C1-only key path** (same `--mode node` forge path for
+  C1 and C2); and **NO RO-LIVE flip** — a forged + self-accepted period-1 block a real cardano-node DOWNLOADS with
+  no KES/parse rejection is a wire-layer / header-acceptance event, NOT operator-witnessed bounty acceptance
+  (`RO-LIVE-01` stays `partial` / operator-gated). **Genesis-window / KES-period coupling finding (honest, NOT a
+  gap):** `slotsPerKESPeriod = 129600` equals `3k/f = 3·2160/0.05 = 129600`, so KES period 1 begins exactly when
+  the Cardano genesis density window closes — a from-genesis C1 rehearsal can never show forge-at-period-1 AND
+  follower-adopt simultaneously (period 0 = window open, no evolution exercised; period 1+ = evolution exercised
+  but the follower rejects `CandidateTooSparse`, which is genesis-density-window-limited and **KES-INDEPENDENT**,
+  not a KES rejection). **Cross-period end-to-end forge→adopt is the C2 dense-tip path** (the real bounty path —
+  current preprod tip, no genesis window), NOT a net reset. Two pre-existing fail-closed INFO items are handed to
+  C2 (recorded in the registry `evidence_notes`): (1) `kes_advance_to` zeroes the key on a FAILED advance —
+  UNREACHABLE via the forge (the `kes_period_in_window` + `kes_period_for_slot` pre-check bounds the period),
+  fail-safe; (2) the opcert window upper bound `opcert_start + 63` can diverge from the absolute Sum6KES ceiling 63
+  when `opcert_start > 0` (real preprod opcerts) — still fail-closed (`EvolutionExhausted`), but the C2 config must
+  derive `kes_max_period` from the absolute ceiling. DC-CRYPTO-10 is `tier = derived`; `CN-KES-HEADER-01`
+  `strengthened_in += "PHASE4-N-AC"`. _(N-AC does not alter any wire / serve / live-feed / containment / bounded-memory
+  surface; the relay-loop containment, served-chain handoff, and bounded-serve fences are byte-unchanged.)_
 - **Serve-side real-node compat + feed decode/view fidelity + forge-successor + monotone serve gate + recovered
   eta0 honest scope + boundary (N-F-G-K … G-R, load-bearing — do NOT soften / do NOT broaden):** the whole
   G-K…G-R span is serve-side real-cardano-node compatibility + live-feed decode/view fidelity + forge-successor
@@ -3246,6 +3391,29 @@ How new modules enter the workspace.
   encoder (`mux::frame` reused unchanged); no truncation / drop / reorder / partial-success send; no new canonical
   type (`MAX_OUTBOUND_PAYLOAD_BYTES` is a GREEN const); no RO-LIVE flip** (`RO-LIVE-01` stays `partial`; confirming
   a real cardano-node demux accepts the reused-per-segment SDU timestamp is the live leg, hardening item 4).
+- **KES signing evolves the operator key to the current period (CLOSED by PHASE4-N-AC — live-readiness fix
+  surfaced by the item-4 C1 re-run):** the forge's only real KES sign formerly called the raw
+  `ProducerShell::kes_sign_header(kes_period, …)`, which requires `kes.current_period() == requested`, and nothing
+  evolved the minted-at-0 cardano-cli operator key forward — so the moment the chain's KES period crossed 0 (slot
+  ~249659 / `slotsPerKESPeriod = 129600`) every leader slot failed `KesPeriodNotCurrent { requested: 1, current:
+  0 }` → `ForgeFailed` (`succeeded = 0`; the follower KeepAlive-timed-out). N-AC adds the RED
+  `ProducerShell::kes_sign_header_advancing(period, preimage)` = `kes_advance_to(period)? then
+  kes_sign_header(period, …)`, EVOLVING the operator KES key FORWARD to the requested period via the EXISTING
+  deterministic Sum6KES `kes_update` (idempotent at the current period; fail-closed `EvolutionBackwards` backwards
+  / `EvolutionExhausted` beyond `SUM6_MAX_PERIOD = 63`) BEFORE signing; the period is passed VERBATIM; the forge's
+  single real sign is rewired to it, fenced by the NEW `ci_check_kes_evolution_before_sign.sh` (DC-CRYPTO-10,
+  `enforced`; `CN-KES-HEADER-01` `strengthened_in += "PHASE4-N-AC"`). **NARROW: an evolve-then-sign fix on the RED
+  signing shell — signing stays RED (`T-KEY-01`); the BLUE Sum6KES algorithm + KES verifier + forge eligibility +
+  wire rules are UNCHANGED; NO new BLUE authority / canonical type / closed enum / version-gated contract (the
+  existing `SigningError` variants + branded `KesSignature` / `UnsignedHeaderPreImage` are reused); fail-closed
+  both directions (never a key override); NO C1-only path; and NO RO-LIVE flip** (`RO-LIVE-01` stays `partial`).
+  **Genesis-window / KES-period coupling (honest, NOT a gap):** `slotsPerKESPeriod = 129600` equals `3k/f =
+  3·2160/0.05 = 129600`, so KES period 1 begins exactly when the genesis density window closes — a from-genesis C1
+  rehearsal can never show forge-at-period-1 AND follower-adopt simultaneously (the follower's `CandidateTooSparse`
+  rejection is genesis-density-window-limited, KES-INDEPENDENT); **cross-period end-to-end forge→adopt is proven on
+  the dense C2 tip path**, not a net reset. Two pre-existing fail-closed INFO items are handed to C2: the
+  `kes_advance_to`-zeroes-on-failed-advance (UNREACHABLE via the forge; fail-safe) and the `opcert_start + 63` vs
+  absolute-63 ceiling (C2 must derive `kes_max_period` from the absolute ceiling).
 - **Registry `code_locus` must track source moves (`5db9aae`):** any rule citing a renamed/moved `crates/**.rs`
   or `ci/**.sh` path must have its `code_locus` updated; `ci_check_registry_code_locus_exists.sh` fails closed
   on a stale pointer.
@@ -3263,6 +3431,25 @@ How new modules enter the workspace.
 
 > Surfaced honestly per IDD: these are **declared** future attach points, not closed surfaces. Each is named
 > in a registry rule or a cluster CLOSURE record.
+>
+> **N-AC COMPLETES / STRENGTHENS the existing RED KES signing seam (KES signing evolves the operator key) — it
+> BROADENS NOTHING below and adds NO new candidate.** PHASE4-N-AC makes the forge's single real KES sign EVOLVE
+> the operator KES key FORWARD to the chain's current KES period BEFORE signing (via the EXISTING deterministic
+> Sum6KES `kes_update`; fail-closed backwards / beyond-lifetime; period passed VERBATIM) — `DC-CRYPTO-10`,
+> enforced; gate `ci_check_kes_evolution_before_sign.sh`; `CN-KES-HEADER-01` `strengthened_in += "PHASE4-N-AC"`.
+> This **COMPLETES / STRENGTHENS the existing RED KES signing surface (CN-KES-HEADER-01)** — it does NOT open a new
+> ingress surface or extension point. N-AC is **RED-only (0 BLUE diff)**, adds **NO new extension point / closed
+> enum / canonical type / version-gated contract** (signing + evolution REUSE the existing `SigningError` variants
+> `EvolutionBackwards` / `EvolutionExhausted` + the branded `KesSignature` / `UnsignedHeaderPreImage`; the Sum6KES
+> evolution is the existing `kes_update` primitive), and does **NOT** flip any RO-LIVE rule — a forged +
+> self-accepted period-1 block a real cardano-node DOWNLOADS with no KES/parse rejection is a wire-layer /
+> header-acceptance event, NOT operator-witnessed peer acceptance (`RO-LIVE-01` stays `partial` / operator-gated).
+> **Genesis-window / KES-period coupling finding (honest, NOT a gap):** `slotsPerKESPeriod = 129600` equals `3k/f =
+> 129600`, so a from-genesis C1 rehearsal can never show forge-at-period-1 AND follower-adopt simultaneously (the
+> follower's `CandidateTooSparse` is genesis-density-window-limited, KES-INDEPENDENT) — cross-period end-to-end
+> forge→adopt is the **C2 dense-tip path**. All candidates (#0–#3, #5) and the already-retired #4 / #6 are carried
+> UNCHANGED. **There is NO NEW candidate seam from N-AC** (completing/strengthening an existing closed RED seam
+> surfaces none).
 >
 > **N-AB CLOSES pre-RO-LIVE hardening item 2 (outbound mux segmentation) — it BROADENS NOTHING below and adds
 > NO new candidate.** PHASE4-N-AB COMPLETES the OUTBOUND direction of the existing closed wire-protocol session
@@ -3485,6 +3672,51 @@ How new modules enter the workspace.
 
 ## Generation notes
 
+- **Regenerated (single-cluster CLUSTER-CLOSE refresh, PHASE4-N-AC) at HEAD `1d54abb4`** (`git rev-parse
+  --short HEAD` — the *Close PHASE4-N-AC* commit), applied DIRECTLY to the on-disk SEAMS, downstream of the
+  CODEMAP regenerated at the same close (`1d54abb4` — **458** canonical types / **138** CI / **336** rules). The
+  prior on-disk SEAMS was pinned at the PHASE4-N-AB close (`c6e7fafe` / **458** / **137** / **335**). This refresh
+  splices the **single closed cluster PHASE4-N-AC** (the RED producer signing shell evolves the operator KES key to
+  the current period before signing — `DC-CRYPTO-10`) and updates the counts. **N-AC is RED-only — the net BLUE
+  delta is ZERO new canonical types / authorities / fns / closed enums / version-gated contracts** (the two source
+  files touched in the whole `c6e7fafe..1d54abb4` span are BOTH RED — `crates/ade_runtime/src/producer/producer_shell.rs`
+  + `crates/ade_node/src/produce_mode.rs`; the BLUE Sum6KES algorithm + KES verifier + forge eligibility + wire
+  rules reused unchanged). It COMPLETES / STRENGTHENS the existing RED KES signing seam (`CN-KES-HEADER-01`) — it
+  opens **NO** new seam, plugin, closed enum, or version-gated contract. Registry → **336** (ONE NEW,
+  `DC-CRYPTO-10`, `tier = derived`, `introduced_in = "PHASE4-N-AC"`, `enforced`,
+  `ci_script = ci/ci_check_kes_evolution_before_sign.sh`; ONE strengthened — `CN-KES-HEADER-01`
+  period-evolution-coverage; no rule weakened); CI **137 → 138** (NET +1: +1 NEW
+  `ci_check_kes_evolution_before_sign.sh`; 0 retired, 0 modified-in-place).
+- **N-AC delta spot-checked at HEAD `1d54abb4` (grep/ls/git only — no `cargo`):** `git diff c6e7fafe..1d54abb4`
+  over the BLUE `core_paths` trees touches **no** file and adds **zero** `^+(pub )?(struct|enum|fn)` lines
+  (RED-only — the two source files in the whole span are `crates/ade_runtime/src/producer/producer_shell.rs`
+  (`//! RED`) + `crates/ade_node/src/produce_mode.rs` (`//! RED`), neither a BLUE `core_paths` entry). NEW RED
+  method `ProducerShell::kes_sign_header_advancing(&mut self, period: u32, preimage: &UnsignedHeaderPreImage) ->
+  Result<KesSignature, ShellSignError>` = `self.kes_advance_to(period)?` then `self.kes_sign_header(period,
+  preimage)`; the forge's single real KES sign (`produce_mode::run_real_forge_inner` step 3) calls it instead of
+  the raw `.kes_sign_header(`. `kes_advance_to` → `kes_update` is the EXISTING deterministic Sum6KES evolution
+  (idempotent at the current period; fail-closed `EvolutionBackwards` / `EvolutionExhausted` — the existing
+  `SigningError` variants, REUSED, not added). The NEW gate `ci_check_kes_evolution_before_sign.sh` is present;
+  `ls ci/ci_check_*.sh | wc -l` = **138**; `grep -cE '^id = ' docs/ade-invariant-registry.toml` = **336** (the new
+  `DC-CRYPTO-10` present). `kes_sign_header_advancing` is a RED `&mut self` method, **NOT canonical-counted** (458
+  unchanged).
+- **Cross-reference check (CODEMAP ↔ SEAMS) at the N-AC close:** the **458 / 138 / 336** counts match the CODEMAP
+  header regenerated at the same close (`1d54abb4`) exactly. The two modules named in the N-AC splice —
+  `ade_runtime::producer::producer_shell` (`kes_sign_header_advancing`, `kes_advance_to`) +
+  `ade_node::produce_mode` (the rewired single real sign) — are inventoried there; the CODEMAP header's
+  PHASE4-N-AC delta names the same one rule (`DC-CRYPTO-10`) + the +1 CI gate
+  (`ci_check_kes_evolution_before_sign.sh`) + the same one strengthening (`CN-KES-HEADER-01`). No stale module
+  references; no drift vs CODEMAP unreconciled.
+- **Candidate seams surfaced for confirm/reject (this cluster):** **NONE NEW.** PHASE4-N-AC **completes /
+  strengthens an already-closed RED seam** (the KES signing surface, CN-KES-HEADER-01) — it introduces no new
+  ingress surface, no new closed / extensible registry (evolution + signing reuse the EXISTING closed `SigningError`
+  variants `EvolutionBackwards` / `EvolutionExhausted` + the branded `KesSignature` / `UnsignedHeaderPreImage`; the
+  Sum6KES `kes_update` evolution is the existing primitive), and no new version-gated contract. The evolve-before-sign
+  composition has a single mechanical fence (`ci_check_kes_evolution_before_sign.sh`, DC-CRYPTO-10). No human-judgment
+  item is outstanding from this cluster. (The honest-scope genesis-window / KES-period coupling — a from-genesis C1
+  rehearsal cannot show forge-at-period-1 AND follower-adopt simultaneously; cross-period forge→adopt is the C2
+  dense-tip path — is recorded under §6 Project-specific additions + §7 Pre-RO-LIVE hardening, and the two
+  pre-existing fail-closed INFO items are handed to C2.)
 - **Regenerated (single-cluster CLUSTER-CLOSE refresh, PHASE4-N-AB) at HEAD `c6e7fafe`** (`git rev-parse
   --short HEAD` — the *Close PHASE4-N-AB* commit), applied DIRECTLY to the on-disk SEAMS, downstream of the
   CODEMAP regenerated at the same close (`c6e7fafe` — **458** canonical types / **137** CI / **335** rules). The
