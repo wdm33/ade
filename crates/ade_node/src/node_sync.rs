@@ -1094,6 +1094,47 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn run_node_sync_survives_reannounced_block_in_feed() {
+        // PHASE4-N-AE.F (DC-NODE-16, CE-F4): the live-shape echo. A feed that
+        // re-announces an already-applied block (the relay serving Ade's own adopted
+        // tip back over the follow link, post-CE-A5) must NOT terminate the sync loop
+        // -- the duplicate is an idempotent no-op, the loop completes, and the WAL
+        // records the block exactly once (no double-apply, no SlotBeforeLastApplied
+        // exit-43).
+        let (c, view) = corpus_view();
+        let sched = schedule();
+        let bytes = pick_lightest(&c);
+
+        let dir = TempDir::new().unwrap();
+        let chaindb =
+            PersistentChainDb::open(PersistentChainDbOptions::at(dir.path().join("chain.db")))
+                .unwrap();
+        let mut wal = FileWalStore::open(dir.path().join("wal")).unwrap();
+        let mut state = fresh_state(c.epoch_nonce);
+        // The SAME block twice: apply, then the echo.
+        let mut source = NodeBlockSource::in_memory(vec![bytes.clone(), bytes.clone()]);
+
+        let tip = run_node_sync(&mut source, &mut state, &chaindb, &mut wal, &sched, &view)
+            .await
+            .expect("sync survives the re-announced block (no fail-close)")
+            .expect("tip advanced once");
+
+        // The block was admitted EXACTLY once (the echo is a no-op, no double-apply).
+        let admits = wal
+            .read_all()
+            .expect("read_all")
+            .into_iter()
+            .filter(|e| matches!(e, WalEntry::AdmitBlock { slot, .. } if *slot == tip.slot))
+            .count();
+        assert_eq!(
+            admits, 1,
+            "the re-announced block is admitted exactly once (no double-apply)"
+        );
+        let chain_tip = ChainDb::tip(&chaindb).expect("tip").expect("non-empty");
+        assert_eq!(chain_tip.hash, tip.hash, "tip is the applied block");
+    }
+
+    #[tokio::test]
     async fn node_sync_kill_then_warm_start_recovers_same_tip() {
         // L4c: the join point between sync and recovery. Seed a warm-start
         // precondition (anchor sidecar + WAL provenance — the L2 first-run

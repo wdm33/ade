@@ -6654,6 +6654,30 @@ strengthened_in = []
 evidence_notes = "PHASE4-N-AE.A (2026-06-06). ENFORCED. The --mode node ForgeTick recovered.tip forge-base fallback (node_lifecycle.rs:1102 `None => act.recovered.tip.clone()`) is removed: the forge base is the durable servable tip (ChainDb::tip(); the recovered snapshot anchor is never a forge base). A closed GREEN classifier forge_followed_tip_admission(durable_servable_tip, followed_peer_tip) returns CaughtUp iff BOTH tips are present AND hash AND block_no are equal, else NotCaughtUp{reason} (NoFollowedPeerTip | NoDurableServableTip | TipMismatch). On the recovered/following path the ForgeTick arm calls the classifier BEFORE the single fenced forge_one_from_recovered; NotCaughtUp records a typed ForgeRefused::NotCaughtUp{local_servable_tip, followed_peer_tip, reason} into ForgeActivation.last_forge_refused (a structured LOCAL observation, never a log-string-only path) and the forge does not fire (no state transition, tip unchanged) -- mechanically distinct from a forge Failed. The followed-peer-tip signal (FollowedPeerTipSignal) is sourced from the SAME run_admission_wire_pump stream (the AdmissionPeerEvent::TipUpdate events NodeBlockSource skips for sync are recorded as a write-only side effect); it is a forge-ADMISSIBILITY input only and never reaches select_best_chain/chain_selector/fork_choice (gate (d) static-grep enforced). The from-genesis cold-start (recovered.tip None) is upstream of the gate (DC-NODE-08). Gate: ci_check_forge_followed_tip_admission.sh."
 
 [[rules]]
+id = "DC-NODE-16"
+tier = "derived"
+statement = """
+Receive idempotency: a peer-delivered block already durably present
+byte-identically in the ChainDb (same slot, same hash) is an idempotent
+no-op at the durable-admit chokepoint (pump_block) -- no validation step,
+no WAL append, no tip change; the post-state is identical and
+replay-equivalent. A DIFFERENT block (different hash) at/before the
+last-applied slot is NOT short-circuited: it reaches the unchanged BLUE
+header authority and fails closed (SlotBeforeLastApplied / BlockNoOutOfOrder).
+The skip is gated on HASH equality vs the durable store, never slot alone;
+no skip-past, no fork-choice (DC-CONS-03 untouched).
+"""
+source = "docs/clusters/PHASE4-N-AE/slices/AE.F.md; docs/planning/phase4-n-ae-f-echo-idempotency-invariants.md; docs/evidence/phase4-n-ae-ce-a5-relay-adoption.md"
+cross_ref = ["DC-NODE-12", "DC-PROTO-09", "DC-PROTO-10", "DC-CONS-03", "T-REC-05", "DC-WAL-02"]
+code_locus = "crates/ade_runtime/src/forward_sync/pump.rs (pump_block -- the hash-exact get_block_by_hash already-have gate, placed before the BLUE chokepoint reducer)"
+tests = ["pump_block_reannounced_block_is_idempotent_noop", "pump_block_different_block_at_or_before_tip_still_fails_closed", "run_node_sync_survives_reannounced_block_in_feed"]
+ci_script = "ci/ci_check_receive_idempotency.sh"
+status = "enforced"
+introduced_in = "PHASE4-N-AE"
+strengthened_in = []
+evidence_notes = "PHASE4-N-AE.F (2026-06-07). ENFORCED. Closes the post-CE-A5 echo: after the relay adopted Ade's forged block 17 it re-announced that block over Ade's follow link, and the BLUE header authority correctly rejected SlotBeforeLastApplied{last=421,attempted=421} -- terminating the run (exit 43) AFTER AddedToCurrentChain (not a manifest blocker, but it ends a continuous run). Fix: pump_block, immediately after decode_block, queries db.get_block_by_hash(&decoded.block_hash); if Some(stored) AND stored.slot == decoded.header_input.slot it returns Ok(None) (idempotent no-op) BEFORE the RollForward/BlockDelivered reducer steps. get_block_by_hash is hash-exact, so a different block (different hash) returns None, falls through to the unchanged validate_and_apply_header, and fails closed (AE-F-INV-2). The no-op runs no reducer step and appends nothing to the WAL, so warm-start replay is unaffected (T-REC-05 / DC-WAL-02 preserved). RED chokepoint only; NO BLUE change -- a refinement of the sketch's BLUE ReceiveOutcome::AlreadyHave: get_block_by_hash is a DETERMINISTIC durable-store query (not nondeterminism), so the gate lives at the chokepoint with no new reducer input and the BLUE authority is untouched. CE-F1 pump_block_reannounced_block_is_idempotent_noop (re-pump -> Ok(None); chain-dep last_slot / WAL length / ChainDb tip unchanged); CE-F2 pump_block_different_block_at_or_before_tip_still_fails_closed (a different lower-slot block -> SlotBeforeLastApplied); CE-F4 run_node_sync_survives_reannounced_block_in_feed (run_node_sync over [block, same-block] completes, admits exactly once, no exit-43). Gate ci_check_receive_idempotency.sh fences hash-keyed + gate-before-reducer + slot-consistency."
+
+[[rules]]
 id = "DC-CONS-24"
 tier = "derived"
 statement = """

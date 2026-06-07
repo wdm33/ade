@@ -89,6 +89,25 @@ where
     let decoded = decode_block(block_bytes)
         .map_err(|e| PumpError::Receive(ReceiveError::Validity(e)))?;
 
+    // PHASE4-N-AE.F (DC-NODE-16): receive idempotency. A block already durably
+    // present byte-identically (same hash at the same slot) in the ChainDb is an
+    // idempotent no-op — a peer re-announcing a block Ade already applied (e.g. its
+    // own forged tip echoed back over the follow link after the peer adopted it).
+    // Gated on HASH equality vs the durable store (`get_block_by_hash` is
+    // hash-exact): a DIFFERENT block at/before the last-applied slot returns None
+    // here and falls through to the unchanged BLUE chokepoint reducer below, which
+    // fails closed (SlotBeforeLastApplied / BlockNoOutOfOrder). The no-op runs no
+    // reducer step, appends nothing to the WAL, and writes nothing — the post-state
+    // is identical and replay-equivalent (the WAL never records the re-announce).
+    if let Some(stored) = db
+        .get_block_by_hash(&decoded.block_hash)
+        .map_err(PumpError::Store)?
+    {
+        if stored.slot == decoded.header_input.slot {
+            return Ok(None);
+        }
+    }
+
     // Header cache step (RollForward), then body (BlockDelivered) —
     // both events feed the same BLUE chokepoint reducer.
     let cache_ev = ReceiveEvent::RollForward {
@@ -318,5 +337,100 @@ mod tests {
         let chain_tip = db.tip().expect("tip").expect("non-empty");
         assert_eq!(chain_tip.slot, tip.slot);
         assert_eq!(chain_tip.hash, tip.hash);
+    }
+
+    #[test]
+    fn pump_block_reannounced_block_is_idempotent_noop() {
+        // PHASE4-N-AE.F (DC-NODE-16, CE-F1): re-pumping a block Ade already durably
+        // holds (same hash) is an idempotent no-op -- Ok(None) -- leaving the ChainDb
+        // tip, the BLUE chain-dep, and the WAL length unchanged. This is the
+        // post-CE-A5 echo (the relay re-announcing Ade's own adopted tip).
+        let (c, view) = corpus_view();
+        let sched = schedule();
+        let bytes = pick_lightest(&c);
+        let mut state = fresh_state(c.epoch_nonce);
+        let db = InMemoryChainDb::new();
+        let mut wal = VecWal::default();
+
+        // First pump applies + advances the tip.
+        let tip = pump_block(
+            &mut state, &db, &mut wal, &NoCheckpointSink, &bytes, &sched, &view,
+        )
+        .expect("first pump")
+        .expect("tip advanced");
+        let last_slot_after = state.receive.chain_dep.last_slot;
+        let wal_len_after = wal.entries.len();
+        let db_tip_after = db.tip().expect("tip").expect("present");
+
+        // Re-pump the SAME bytes (the echo): idempotent no-op.
+        let outcome = pump_block(
+            &mut state, &db, &mut wal, &NoCheckpointSink, &bytes, &sched, &view,
+        )
+        .expect("re-pump of an already-have block must NOT be an error");
+        assert_eq!(
+            outcome, None,
+            "a re-announced already-have block advances no tip (Ok(None))"
+        );
+
+        // Nothing changed by the no-op.
+        assert_eq!(
+            state.receive.chain_dep.last_slot, last_slot_after,
+            "chain-dep last_slot unchanged by the re-announce"
+        );
+        assert_eq!(
+            wal.entries.len(),
+            wal_len_after,
+            "no WAL append on the no-op (replay-equivalent)"
+        );
+        let db_tip_now = db.tip().expect("tip").expect("present");
+        assert_eq!(db_tip_now.slot, db_tip_after.slot, "ChainDb tip slot unchanged");
+        assert_eq!(db_tip_now.hash, db_tip_after.hash, "ChainDb tip hash unchanged");
+        assert_eq!(db_tip_now.hash, tip.hash, "tip is still the originally-applied block");
+    }
+
+    #[test]
+    fn pump_block_different_block_at_or_before_tip_still_fails_closed() {
+        // PHASE4-N-AE.F (AE-F-INV-2, CE-F2): the gate is HASH-keyed, so a DIFFERENT
+        // block (different hash) at/before the last-applied slot is NOT short-circuited
+        // -- it reaches the unchanged BLUE authority and fails closed.
+        let (c, view) = corpus_view();
+        let sched = schedule();
+        // The two lowest-slot distinct corpus blocks (both within the forecast horizon).
+        let mut by_slot: Vec<(SlotNo, Vec<u8>)> = c
+            .blocks
+            .iter()
+            .map(|b| {
+                let d = decode_block(b).expect("decode corpus block");
+                (d.header_input.slot, b.clone())
+            })
+            .collect();
+        by_slot.sort_by_key(|(s, _)| s.0);
+        by_slot.dedup_by_key(|(s, _)| s.0);
+        assert!(by_slot.len() >= 2, "need >= 2 distinct-slot corpus blocks");
+        let (lo_slot, lo_bytes) = by_slot[0].clone();
+        let (hi_slot, hi_bytes) = by_slot[1].clone();
+        assert!(hi_slot.0 > lo_slot.0, "two distinct slots");
+
+        let mut state = fresh_state(c.epoch_nonce);
+        let db = InMemoryChainDb::new();
+        let mut wal = VecWal::default();
+
+        // Apply the higher-slot block -> last_slot = hi_slot.
+        pump_block(
+            &mut state, &db, &mut wal, &NoCheckpointSink, &hi_bytes, &sched, &view,
+        )
+        .expect("higher-slot block applies")
+        .expect("tip advanced");
+
+        // Pump the lower-slot block (different hash, slot < last) -> fail closed.
+        let err = pump_block(
+            &mut state, &db, &mut wal, &NoCheckpointSink, &lo_bytes, &sched, &view,
+        )
+        .expect_err("a different block at/before the last-applied slot must fail closed");
+        let s = format!("{err:?}");
+        assert!(
+            s.contains("SlotBeforeLastApplied") || s.contains("BlockNoOutOfOrder"),
+            "expected a monotone-violation header rejection from the BLUE authority, got: {s}"
+        );
     }
 }

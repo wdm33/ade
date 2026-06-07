@@ -83,9 +83,12 @@ zero WAL growth.
 - **CE-F3** — `ci/ci_check_receive_idempotency.sh`: the gate is hash-keyed
   (`get_block_by_hash`), not slot-only, and the already-have arm runs no reducer step / appends
   no WAL.
-- **CE-F4** (live-shape, hermetic) — `recover_follow_forge_then_reannounce_own_tip_is_noop`:
-  recover → forge a successor (durably admit it) → pump the forged block's own bytes back →
-  `Ok(None)`, tip stable, no error (the CE-A5 echo, reproduced and survived).
+- **CE-F4** (live-shape, hermetic) — `run_node_sync_survives_reannounced_block_in_feed`:
+  `run_node_sync` over a feed containing an already-applied block (`[block, same-block]` — the
+  relay serving Ade's adopted tip back over the follow link) completes without fail-close and
+  admits the block exactly once (the CE-A5 echo, reproduced and survived). The forged-block case
+  is the same mechanism: a forged block is admitted via `pump_block` (DC-NODE-12), so re-pumping
+  it hits the same hash-exact no-op.
 
 ## §14 Hard prohibitions
 - No slot-only skip (must be hash-keyed). No skip-past a gap. No fork-choice (DC-CONS-03
