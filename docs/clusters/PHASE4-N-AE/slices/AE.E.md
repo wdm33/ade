@@ -32,9 +32,13 @@ cursor `None` (serve from the chain start — correct, and why Origin-sync clien
 earlier clusters were unaffected).
 
 ## §6 Execution boundary (TCB color)
-- `crates/ade_network/src/chain_sync/server.rs` — **GREEN** (pure protocol reducer; no I/O,
-  no clock, no rand). Unchanged color; the edit is a state assignment inside the existing
-  pure transition.
+- `crates/ade_network/src/chain_sync/server.rs` — **BLUE** (deterministic producer-side
+  chain-sync server reducer, per the file banner + `.idd-config.json core_paths`; no I/O, no
+  clock, no rand, no HashMap, no floats). Unchanged color; the edit is a pure deterministic
+  state assignment inside the existing total transition — it satisfies the BLUE Core Contract
+  (the cursor value is derived only from the resolved intersect point). _Correction: an earlier
+  draft of this doc + the AE.E commit message labeled this GREEN; CODEMAP regeneration at
+  cluster close confirmed BLUE._
 
 ## §7 Invariants preserved
 - DC-PROTO-07, DC-PROTO-08 (chain-sync server agency / grammar closure) — unchanged.

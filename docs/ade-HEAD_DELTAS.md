@@ -4,100 +4,162 @@
 >
 > Regenerate with `/head-deltas <baseline>` after every cluster close. Baseline is recorded in `.idd-config.json` `head_deltas_baseline`.
 
-> Baseline: `c6e7fafe` (Close PHASE4-N-AB — outbound mux segmentation (CN-SESS-05), 2026-06-06 03:48)
-> HEAD: `1d54abb4` (Close PHASE4-N-AC — KES signing evolves key to current period (DC-CRYPTO-10), 2026-06-06 11:08)
-> Span: **a grounding-doc refresh + the PHASE4-N-AC cluster** — the prior-lead's PHASE4-N-AB close-refresh commit (`6184eb0b`, which refreshed CODEMAP/TRACEABILITY/SEAMS/HEAD_DELTAS for the N-AB close) followed by the single closed cluster **PHASE4-N-AC — KES signing evolves key to current period** (a live-readiness fix surfaced by the item-4 C1 re-run).
-> 5 commits (no merges), 12 files changed, +1029 / −340 lines.
+> Baseline: `25ddeebd` (grounding-doc refresh for PHASE4-N-AC close, 2026-06-06 11:48)
+> HEAD: `a76672b9` (AE.E chain-sync server FindIntersect cursor — CE-A5 manifest achieved, 2026-06-07 12:26)
+> Span: **the PHASE4-N-AC close-refresh tail + the PHASE4-N-AD cluster + the C2-LOCAL guide/finding tail + the PHASE4-N-AE cluster** — the prior-lead's PHASE4-N-AC grounding-doc refresh (`25ddeebd`, the window baseline) is the span-opening commit, followed by **PHASE4-N-AD — tip-successor durability proof** (test-only), a run of **C2-LOCAL preprod-tip / cardano-testnet venue guides + discovered-gaps findings** (docs-only), and the closing cluster **PHASE4-N-AE — Recover→Serve Continuity and Forge Admissibility**, which achieved the **CE-A5 manifest**: a real `cardano-node 11.0.1` relay **adopting an Ade-forged block** as its current chain tip.
+> 19 commits (no merges), 24 files changed, +3635 / −129 lines.
 
-> **Baseline note (load-bearing — read before §0).** This window's baseline is **`c6e7fafe`**, the
-> `.idd-config.json` `head_deltas_baseline` set by the *previous* (PHASE4-N-AB close) regen — and it is
-> **valid**: `git rev-parse c6e7fafe` resolves and `git merge-base c6e7fafe HEAD == c6e7fafe` (it is a
-> strict ancestor of HEAD; `c6e7fafe` carries no tag). HEAD is **`1d54abb4`** (the PHASE4-N-AC close).
-> The span has **two parts**: (1) the span-opening commit `6184eb0b` — the *grounding-doc refresh for the
-> PHASE4-N-AB close* (it refreshed all four grounding docs CODEMAP/TRACEABILITY/SEAMS/HEAD_DELTAS for the
-> N-AB close; it is the tail of the *prior* N-AB lead, included here because it sits inside this span);
-> and (2) the **PHASE4-N-AC cluster** (4 commits) — a **RED-only** live-readiness cluster that makes the
-> producer signing shell **evolve the operator KES key forward to the requested period before signing**,
-> so the forge works once the chain's KES period advances past 0. The closer bumps `head_deltas_baseline`
-> `c6e7fafe → 1d54abb4` after this regen so the next cluster measures from here.
+> **Baseline note (load-bearing — read before §0).** This window's baseline is **`25ddeebd`**, the
+> PHASE4-N-AC grounding-doc-refresh commit that *wrote the previous HEAD_DELTAS lead* — and it is
+> **valid**: `git rev-parse 25ddeebd` resolves and `git merge-base 25ddeebd HEAD == 25ddeebd` (it is a
+> strict ancestor of HEAD; `25ddeebd` carries no tag). HEAD is **`a76672b9`** (the PHASE4-N-AE.E CE-A5
+> closer). The config baseline at the start of this regen was `1d54abb4` (the PHASE4-N-AC close *impl*);
+> `25ddeebd` is one commit later (the N-AC grounding refresh), so this window measures from the doc-refresh
+> commit forward and the `1d54abb4..25ddeebd` step (the N-AC refresh itself) is folded into the
+> span-opening tail. The span has **three parts**: (1) the span-opening commit `25ddeebd` — the
+> *grounding-doc refresh for the PHASE4-N-AC close* (it carried `DC-CRYPTO-10` into all four grounding
+> docs); (2) the **PHASE4-N-AD cluster** (3 commits) — a **test-only** durability-proof cluster
+> (tip-successor WAL replay regression); and (3) — after a docs-only C2-LOCAL guide/finding run — the
+> **PHASE4-N-AE cluster** (8 commits across 4 impl slices), the **Recover→Serve Continuity and Forge
+> Admissibility** cluster that **achieved the CE-A5 manifest**. The closer bumps `head_deltas_baseline`
+> `1d54abb4 → a76672b9` after this regen so the next cluster measures from here.
 
-This window is **led by a single closed cluster: PHASE4-N-AC — KES signing evolves key to current
-period.** It is a **live-readiness fix surfaced by the item-4 C1 re-run** and it closes a real forge gap
-that only manifests once a chain ages past its first KES period. Before N-AC, the forge's **only real KES
-sign** (`produce_mode.rs:891`, `shell.kes_sign_header(kes_period, …)`) required
-`kes.current_period() == kes_period`, and **nothing evolved the minted-at-period-0 operator key forward** —
-so once the private net aged past one KES period (slot ≈ 249659, `slotsPerKESPeriod = 129600` → KES
-period 1) the forge returned `KesPeriodNotCurrent { requested: 1, current: 0 }` on **every** leader slot
-(`succeeded = 0`), and the waiting follower `KeepAlive`-timed-out. This was **not** a regression from
-N-U / N-AA / N-AB (the wire/serve path still handshook and found the chain-sync intersection) — it was a
-latent gap in the producer key-custody shell. N-AC closes it in one slice:
+This window is **led by the CE-A5 cluster: PHASE4-N-AE — Recover→Serve Continuity and Forge
+Admissibility.** It is the cluster that turned the long-standing producer/serve pipeline into a **proven
+end-to-end live result**: a **real `cardano-node 11.0.1` relay `AddedToCurrentChain` an Ade-forged
+successor block** (block 17 @ slot 421, hash `db3b5675…`, issuerHash `a1ed4e04…` == `blake2b-224(pool1`
+cold VK`)`; relay node2 forging = 0; Ade forge `succeeded = 1`) — the **CE-A5 manifest**, evidence at
+`docs/evidence/phase4-n-ae-ce-a5-relay-adoption.{md,jsonl}`. Before N-AE the recover→follow→forge→serve
+pipeline existed but the **adopt** half failed across four CE-A5 reruns with the real relay rejecting
+`HeaderEnvelopeError (UnexpectedBlockNo (BlockNo N) (BlockNo 0))` and falling back to `Origin`. N-AE
+closed that across **four implementation slices** (committed in the order A → C → B → E):
 
-- **S1 — evolve KES key to current period before signing (`68a85dbe` doc, `7d4a4a72` impl;
-  `DC-CRYPTO-10 → enforced`).** A new **RED** producer-shell method
-  `ProducerShell::kes_sign_header_advancing(period, pre_image)` =
-  **`kes_advance_to(period)` then `kes_sign_header(period, pre_image)`** — it evolves the operator KES
-  signing key forward to the requested period via the **existing deterministic `Sum6KES` update**
-  (`kes_advance_to → kes_update`, which is idempotent when `current == period`), then signs. It
-  **fails closed** if the requested period is before the key start (`Signing(EvolutionBackwards)`) or
-  beyond the key lifetime / unreachable (`Signing(EvolutionExhausted)`, above `SUM6_MAX_PERIOD = 63`).
-  The forge's **single real KES sign** (`produce_mode.rs:891`) is **rewired** from the raw
-  `kes_sign_header` to this evolving variant (the period is passed **verbatim** — no `± N`). **Signing
-  stays RED**; the `Sum6KES` algorithm, the KES verifier, forge eligibility, and the wire rules are all
-  unchanged. New gate `ci_check_kes_evolution_before_sign.sh`.
+- **AE.A — forge-on-followed-tip admission gate (`5f2afc2a`; `DC-NODE-15` + `DC-CONS-24 → enforced`,
+  `DC-NODE-14 → partial`).** The `--mode node` `ForgeTick` arm's **recovered-tip forge-base fallback**
+  (`node_lifecycle.rs` `None => act.recovered.tip.clone()`) is **removed**: the forge base is the
+  **durable servable tip** (`ChainDb::tip()`), and a forge is admissible **only when**
+  `durable_servable_tip == followed_peer_tip` (hash **and** `block_no`). A closed **GREEN** classifier
+  `forge_followed_tip_admission` returns `CaughtUp` iff both tips are present and equal, else
+  `NotCaughtUp{reason}` (`NoFollowedPeerTip | NoDurableServableTip | TipMismatch`); a `NotCaughtUp` records
+  a typed `ForgeRefused::NotCaughtUp{local_servable_tip, followed_peer_tip, reason}` into
+  `ForgeActivation.last_forge_refused` (a structured local observation, never log-string-only) and the
+  forge **does not fire** (no state transition, tip unchanged) — mechanically distinct from a forge
+  `Failed`. The followed-peer-tip signal is a forge-**admissibility** input only — it may *prevent* a
+  forge but never reaches `select_best_chain` / `chain_selector` / `fork_choice` (gate static-grep
+  enforced). New gate `ci_check_forge_followed_tip_admission.sh`.
+- **AE.C — recover→follow WAL prior-fp seeding (`5425b23c`; `DC-WAL-02` + `T-REC-05` strengthened).** The
+  live recover→follow path seeds the follow `ForwardSyncState.prior_fp` with
+  **`fingerprint(&state.ledger).combined`** (the recovered ledger-tip post-fp) instead of the all-zero
+  `Hash32([0u8;32])`. The CE-A5 live run surfaced `node_lifecycle` seeding `prior_fp` with **zero**, so the
+  first followed `AdmitBlock`'s `prior_fp` was `0`, not the recovered ledger-tip post-fp, and a
+  recover→followed store failed warm-start (`ChainBreak@1`, exit 42). Fixed at **both** lifecycle sites
+  (forge-off + forge-on); `recover_follow_zero_seed_chainbreaks` reproduces the break,
+  `recover_follow_kill_warm_start_chains_from_ledger_fp` proves the fix. New gate
+  `ci_check_recover_follow_wal_lineage.sh` (fences the live seed **without** loosening `verify_chain`).
+- **AE.B — recovered/forge-parent intersectability, Option B (`450c6992`; `DC-NODE-14` partial→enforced,
+  `CN-CONS-07` + `DC-CONS-23` strengthened).** `ChainDbServedSource::intersect` projects the `prev_hash`
+  of the **earliest servable `StoredBlock`** (the forge parent) as a **FindIntersect-only**, **proof-gated**
+  intersect point **iff** a real servable successor exists; it **never serves bytes** for it
+  (`get_block_by_hash` / `serve_range` stay empty → BlockFetch refuses structurally; **no synthetic
+  `StoredBlock`**). A recover-only store (no successor) yields **no projection** (fail-closed). Backed by an
+  **additive BLUE** field — `ade_ledger::block_validity::DecodedBlock.prev_hash` is exposed (it was
+  **already parsed** for `check_header_position`) so the projection can prove the parent is the parent of a
+  real servable successor. New gate `ci_check_recovered_anchor_intersectable.sh` (fences FindIntersect-only
+  + proof-gated + no synthetic bytes).
+- **AE.E — chain-sync SERVER FindIntersect cursor fix (`a76672b9`; `DC-PROTO-10` NEW enforced; `CN-CONS-06`
+  + `DC-NODE-14` strengthened).** **The CE-A5 closer.** After the producer chain-sync **server** answers
+  `IntersectFound(point)`, it now **sets its read cursor** (`state.last_announced`) to that point — so the
+  next `RequestNext` serves `next_after(point)` (the successor the client rolls forward onto), **never**
+  `next_after(None)` (the chain start). Across four prior CE-A5 reruns the server resolved the intersect
+  (the relay's own tip) and replied `IntersectFound`, but **left the cursor unset**, so the next
+  `RequestNext` served **block 0** to a client whose read pointer was its own tip — which the relay
+  rejected as `UnexpectedBlockNo(tip_block_no + 1)(0)`. Origin-sync clients were unaffected (`Origin → None`
+  is correct) — which is why the earlier producer-serve clusters (N-G) passed. With the fix, venue `c2ae18`
+  produced the **CE-A5 manifest**. The fix is a **BLUE** change to `ade_network::chain_sync::server` —
+  additive cursor-threading logic + one regression test; **no new type, no grammar change**.
 
-**The headline:** the **RED producer signing shell now evolves the operator KES key to the requested
-period before signing**, so the forge works **across KES periods** instead of only at the minted period 0.
-The **item-4 C1 re-run proved it live**: with the fix, Ade **forged 3 period-1 blocks** and **self-accepted
-them**, and the real `cardano-node` **downloaded the period-1 header with no KES (or parse) rejection**
-(pre-fix: `failed = 5 / succeeded = 0`, `KesPeriodNotCurrent`). **Both gating reviews PASS** (per-slice and
-per-cluster) — **no HIGH+ this cluster**. The window is **RED-only**: **0 BLUE canonical-type change**
-(458 unchanged), no `RO-LIVE` flip, no behavior change to the authoritative core.
+**The headline:** the **recover→follow→forge→serve→ADOPT** path is now proven **end-to-end live** — a real
+`cardano-node 11.0.1` relay adopted an Ade-forged block as its current chain tip (**CE-A5 manifest**).
+**Both gating reviews PASS** for the cluster work. The span is **BLUE-additive but +0 canonical type**:
+the two BLUE files touched (`ade_ledger::block_validity::header_input` — additive `DecodedBlock.prev_hash`
+field; `ade_network::chain_sync::server` — additive FindIntersect-cursor logic) add **zero** new
+`struct`/`enum` (BLUE canonical-type count **458 → 458**). **No `RO-LIVE` rule was flipped** in the
+registry this span (the CE-A5 manifest is recorded as `enforced`-backing evidence on `DC-NODE-14` /
+`DC-PROTO-10`, not a `RO-LIVE-01` status flip).
 
 ## 0. Headline
 
-| Count | Baseline (`c6e7fafe`) | HEAD (`1d54abb4`) | Δ |
+| Count | Baseline (`25ddeebd`) | HEAD (`a76672b9`) | Δ |
 |---|---|---|---|
-| CI gates (`ci/ci_check_*.sh`) | 137 | **138** | **+1** — **one NEW gate**, `ci_check_kes_evolution_before_sign.sh` (S1, `DC-CRYPTO-10`; added — `--diff-filter=A`). **No gate modified, no gate removed** in `ci/` this span (`--diff-filter=M` and `--diff-filter=D` over `ci/` are both empty). |
-| Registry rules (`docs/ade-invariant-registry.toml`) | 335 | **336** | **+1** — one NEW rule **`DC-CRYPTO-10`** (`tier = derived`, `introduced_in = "PHASE4-N-AC"`, `status = enforced`). **Zero removed** (`diff` of the sorted `id =` lists shows the single addition `DC-CRYPTO-10` and no removal). |
-| Registry status (enforced / partial / declared) | 203 / 20 / 112 | **204 / 20 / 112** | **+1 enforced** — `DC-CRYPTO-10` lands `enforced` at the S1 close (declared at cluster scoping → enforced at the same close). |
-| Registry strengthenings | — | **1** | `strengthened_in += "PHASE4-N-AC"` on exactly one rule: **`CN-KES-HEADER-01`** (the KES signature is over the canonical unsigned-header pre-image — N-AC adds that the signing key is now evolved to the block's KES period before that sign). A strengthening, **not** a new rule. |
-| BLUE canonical types | 458 | **458** | **0** — **RED-only span.** No `ade_core` / `ade_codec` / `ade_types` / `ade_crypto` / `ade_plutus` / `ade_ledger` / `ade_network`-BLUE (`mux::frame` / `codec` / `handshake` / `chain_sync` / `block_fetch` / `tx_submission` / `keep_alive` / `peer_sharing` / `n2c`) source change. The two touched source files are `ade_runtime::producer::producer_shell` (RED shell, +137) and `ade_node::produce_mode` (binary/shell entry, +7 / −2). |
-| Grounding docs | CODEMAP/SEAMS/TRACEABILITY refreshed for N-AB in `6184eb0b` (span-opening) | **CODEMAP/SEAMS/TRACEABILITY refreshed for the N-AC close** | The span-opening commit `6184eb0b` refreshed all four grounding docs for the **N-AB** close. This **N-AC** close refreshes CODEMAP/SEAMS/TRACEABILITY again to carry `DC-CRYPTO-10` (alongside this HEAD_DELTAS). The on-disk CODEMAP header carried the N-AB figures (458 types / 137 CI) at the instant of writing; the parallel refresh brings the CI count to 138 and folds in the `DC-CRYPTO-10 ↔ ci_check_kes_evolution_before_sign.sh` binding. The registry already records the rule + binding authoritatively at HEAD (336 rules). |
+| CI gates (`ci/ci_check_*.sh`) | 138 | **141** | **+3** — **three NEW gates** (`--diff-filter=A` over `ci/`): `ci_check_forge_followed_tip_admission.sh` (AE.A), `ci_check_recover_follow_wal_lineage.sh` (AE.C), `ci_check_recovered_anchor_intersectable.sh` (AE.B). **No gate removed** (`--diff-filter=D` over `ci/` empty). **One non-gate CI script modified** (`--diff-filter=M`): `ci/build_consensus_inputs_bundle.sh` (the venue-general consensus-inputs extractor — now reads `epochLength` + `activeSlotsCoeff` from the venue's `shelley-genesis` instead of hardcoding preprod's `432000` / `1/20`, so the SAME extractor is correct for a short-epoch C2-LOCAL rehearsal venue). It is **not** a `ci_check_*.sh` gate, so it does not move the gate count. |
+| Registry rules (`docs/ade-invariant-registry.toml`) | 336 | **340** | **+4** — four NEW rules **`DC-CONS-24`**, **`DC-NODE-14`**, **`DC-NODE-15`** (all PHASE4-N-AE), **`DC-PROTO-10`** (PHASE4-N-AE.E). **Zero removed** (`diff` of the sorted `id =` lists shows exactly the four additions and no removal). |
+| Registry status (enforced / partial / declared) | 204 / 20 / 112 | **208 / 20 / 112** | **+4 enforced** — all four new rules land `enforced` at HEAD (`DC-NODE-14` lands `partial` at AE.A, then `enforced` at AE.B). Partial / declared counts unchanged. |
+| Registry strengthenings | — | **9** (8 distinct rules) | `strengthened_in += "PHASE4-N-AD"` on **2** rules (`DC-WAL-04`, `T-REC-05`); `strengthened_in += "PHASE4-N-AE"` on **7** rules (`DC-EPOCH-03`, `CN-CONS-06`, `CN-CONS-07`, `DC-WAL-02`, `DC-NODE-05`, `T-REC-05`, `DC-CONS-23`). `T-REC-05` was strengthened by **both** N-AD and N-AE (8 distinct rules touched). All strengthenings, **no** rule weakened. |
+| BLUE canonical types | 458 | **458** | **0** — **BLUE-additive, +0 type.** The span touches **two** BLUE `core_paths` files: `ade_ledger::block_validity::header_input` (+8 / −1 — exposes the already-parsed `DecodedBlock.prev_hash` field for the AE.B intersect proof) and `ade_network::chain_sync::server` (+80 / −4 — the AE.E FindIntersect-cursor fix + its regression test). Both are **additive** — a new public *field* on an existing struct and new *logic* + a test — adding **zero** `^+(pub )?(struct\|enum)` lines (verified mechanically). All other source changes are RED (`ade_node::{node_sync, node_lifecycle}`) or RED-shell (`ade_runtime::network::served_chain_projection`). |
+| Grounding docs | refreshed for the **N-AC** close in `25ddeebd` (span-opening) | **CODEMAP/SEAMS/TRACEABILITY already refreshed for the N-AE close; this HEAD_DELTAS completes the set** | The span-opening commit `25ddeebd` refreshed all four grounding docs for the **N-AC** close (it carried `DC-CRYPTO-10`). The other three grounding docs are **already current at HEAD `a76672b9`** in this close pass: **CODEMAP** is fully regenerated (header `a76672b9`, 458 types / 141 CI / 340 rules, full N-AE coverage incl. the load-bearing BLUE-vs-GREEN classification of `chain_sync/server.rs` as **BLUE**); **TRACEABILITY** is re-pinned to HEAD `a76672b9` (registry 340; CODEMAP cross-ref `a76672b9` / 458 / 141 / 340); **SEAMS** is re-pinned to HEAD `a76672b9` (340 entries / 141 CI; records the 4 new rules + 3 new gates). This HEAD_DELTAS is the last of the four to be brought current. The registry records the rules + bindings authoritatively at HEAD (340 rules). |
 
-This is a **single-cluster lead** (PHASE4-N-AC) preceded by the prior-lead's N-AB close-refresh tail. The
-slice↔rule↔gate map for the cluster:
+This is a **multi-part lead** — the N-AC close-refresh tail, the **test-only PHASE4-N-AD** durability
+cluster, a docs-only C2-LOCAL guide/finding run, and the **CE-A5 cluster PHASE4-N-AE**. The
+slice↔rule↔gate map for the N-AE cluster:
 
-| Slice | Rule | Gate | What shipped |
+| Slice | Rule(s) | Gate | What shipped |
 |---|---|---|---|
-| **S1** (`7d4a4a72`) | **`DC-CRYPTO-10`** (NEW, enforced) | **`ci_check_kes_evolution_before_sign.sh`** (NEW) | New RED `ProducerShell::kes_sign_header_advancing` = `kes_advance_to(period)` then `kes_sign_header`; the forge's single real KES sign (`produce_mode.rs:891`) is rewired to it; period passed verbatim; fail-closed `EvolutionBackwards` (backwards) / `EvolutionExhausted` (beyond lifetime). Signing stays RED. |
+| **AE.A** (`5f2afc2a`) | **`DC-NODE-15`** + **`DC-CONS-24`** (NEW, enforced); **`DC-NODE-14`** (NEW, partial) | **`ci_check_forge_followed_tip_admission.sh`** (NEW) | Forge-on-followed-tip admission gate: recovered-tip forge-base fallback removed; GREEN `forge_followed_tip_admission` classifier; typed `ForgeRefused::NotCaughtUp`; followed-peer-tip is an admissibility input only (never reaches chain selection). |
+| **AE.C** (`5425b23c`) | `DC-WAL-02` + `T-REC-05` (**strengthened**) | **`ci_check_recover_follow_wal_lineage.sh`** (NEW) | Live recover→follow `ForwardSyncState.prior_fp = fingerprint(&state.ledger).combined` (was all-zero `Hash32`); fixed at both forge-off/forge-on lifecycle sites; `verify_chain` first-entry clause now enforced on the live path **without** loosening it. |
+| **AE.B** (`450c6992`) | **`DC-NODE-14`** (partial→**enforced**); `CN-CONS-07` + `DC-CONS-23` (**strengthened**) | **`ci_check_recovered_anchor_intersectable.sh`** (NEW) | `ChainDbServedSource::intersect` projects the earliest servable `StoredBlock`'s `prev_hash` as a **FindIntersect-only**, proof-gated intersect point iff a real successor exists; never serves bytes for it; additive BLUE `DecodedBlock.prev_hash` exposure. |
+| **AE.E** (`a76672b9`) | **`DC-PROTO-10`** (NEW, enforced); `CN-CONS-06` + `DC-NODE-14` (**strengthened**) | *(no dedicated gate — regression-test enforced)* | **CE-A5 closer.** Producer chain-sync server `producer_chain_sync_serve` now sets `state.last_announced` to the resolved intersect point after `IntersectFound`; the next `RequestNext` rolls the client forward past it (not block 0). Regression test `producer_chain_sync_serve_find_intersect_sets_cursor_then_rolls_forward_past_it`. |
 
 The per-commit shape:
 
 | Commit | Kind | What it did | Code / CI / registry effect |
 |---|---|---|---|
-| `6184eb0b` | docs (prior-lead tail) | Grounding-doc refresh for the PHASE4-N-AB close (CODEMAP/TRACEABILITY/SEAMS/HEAD_DELTAS) | **0 code / 0 CI**; touched the four grounding docs + `.idd-config.json` (baseline bump for the N-AB close); no rule added/removed |
-| `cbe6633f` | docs (cluster doc) | PHASE4-N-AC cluster doc; **declare `DC-CRYPTO-10`** | **0 code / 0 CI**; registry: `DC-CRYPTO-10` added `declared` |
-| `68a85dbe` | docs (slice doc) | S1 slice doc (evolve KES key before sign) | **0 code / 0 CI / 0 registry** |
-| `7d4a4a72` | feat(producer) | S1 impl — `kes_sign_header_advancing` (evolve-then-sign) + rewire of the forge's single real KES sign; `kes_advance_to` fail-closed; 4 shell tests | **RED code** (`producer_shell.rs` +137, `produce_mode.rs` +7 / −2); **+1 CI** (`ci_check_kes_evolution_before_sign.sh`); registry: `DC-CRYPTO-10 → enforced` |
-| `1d54abb4` | chore (close) | Close PHASE4-N-AC — archive cluster/slice docs; `strengthened_in += "PHASE4-N-AC"` on `CN-KES-HEADER-01`; C1 reproduction README genesis-window addendum | **0 code / 0 CI**; registry: 1 strengthening (no new rule); 2 doc moves to `docs/clusters/completed/PHASE4-N-AC/`; 1 evidence-README addendum |
+| `25ddeebd` | docs (prior-lead tail) | Grounding-doc refresh for the PHASE4-N-AC close (CODEMAP/TRACEABILITY/SEAMS/HEAD_DELTAS) | **0 code / 0 CI**; refreshed the four grounding docs to carry `DC-CRYPTO-10`; no rule added/removed |
+| `68d83406` | docs (cluster+slice doc) | PHASE4-N-AD cluster + slice doc (tip-successor durability proof) | **0 code / 0 CI / 0 registry** |
+| `67ce7ac6` | test(node) | PHASE4-N-AD S1 — tip-successor durability regression (WAL replay) | **RED test** (`node_sync.rs` +214); **0 CI**; registry: 2 strengthenings (`DC-WAL-04`, `T-REC-05` += N-AD); C1 README addendum |
+| `0e6bff35` | chore (close) | Close PHASE4-N-AD — tip-successor durability proof | **0 code / 0 CI / 0 registry**; archives N-AD docs to `docs/clusters/completed/PHASE4-N-AD/` |
+| `00144008` … `bc05cb81` | docs (C2-LOCAL guides + findings) | C2 preprod-tip guide (Conway-from-Mithril) + venue-general extractor; C2-LOCAL cardano-testnet venue recipe; discovered-gaps findings (Gap 2 forge-vs-follow race isolated into 2a/2b); N-AE Slice A invariants sketch | **0 code**; **1 CI script MODIFIED** (`build_consensus_inputs_bundle.sh` — venue-general epoch length + ASC, in `00144008`); new planning/active docs; **0 registry** |
+| `48a8009c` | docs (cluster doc) | PHASE4-N-AE cluster doc; **declare `DC-NODE-14` / `DC-NODE-15` + `DC-CONS-24`** | **0 code / 0 CI**; registry: 3 rules added `declared` |
+| `2108b825` | docs (slice doc) | AE.A slice doc (forge-on-followed-tip gate + serve continuity) | **0 code / 0 CI / 0 registry** |
+| `5f2afc2a` | feat (AE.A impl) | AE.A — forge-on-followed-tip admission gate | **RED code** (`node_lifecycle.rs` +229, `node_sync.rs` +310); **+1 CI** (`ci_check_forge_followed_tip_admission.sh`); registry: `DC-NODE-15` + `DC-CONS-24 → enforced`, `DC-NODE-14 → partial` |
+| `a058d649` | docs (slice doc) | AE.C slice doc (recover→follow WAL prior-fp seeding) | **0 code / 0 CI / 0 registry** |
+| `5425b23c` | fix (AE.C impl) | AE.C — recover→follow WAL prior-fp seeding | **RED code** (`node_lifecycle.rs` +13, `node_sync.rs` +203); **+1 CI** (`ci_check_recover_follow_wal_lineage.sh`); registry: `DC-WAL-02` + `T-REC-05` += N-AE |
+| `238aff61` | docs (slice doc) | AE.B slice doc (recovered/forge-parent intersectability, Option B) | **0 code / 0 CI / 0 registry** |
+| `450c6992` | fix (AE.B impl) | AE.B — recovered/forge-parent intersectability (Option B) | **BLUE-additive + RED** (`header_input.rs` BLUE +8 / −1; `served_chain_projection.rs` RED +49; `node_sync.rs` RED +142); **+1 CI** (`ci_check_recovered_anchor_intersectable.sh`); registry: `DC-NODE-14 → enforced`, `CN-CONS-07` + `DC-CONS-23` += N-AE |
+| `a76672b9` | fix (AE.E impl, CE-A5 closer) | AE.E — chain-sync server FindIntersect cursor; **CE-A5 manifest** | **BLUE-additive** (`chain_sync/server.rs` +80 / −4); **0 CI** (regression-test enforced); registry: `DC-PROTO-10` NEW `enforced`, `CN-CONS-06` + `DC-NODE-14` += N-AE; CE-A5 evidence `{md,jsonl}` |
 
 ## 1. Commit Log (newest first)
 
 | Hash | Type | Summary |
 |------|------|---------|
-| `1d54abb4` | chore (close) | Close PHASE4-N-AC — KES signing evolves key to current period (DC-CRYPTO-10) |
-| `7d4a4a72` | feat | evolve KES key to current period before signing (PHASE4-N-AC S1, DC-CRYPTO-10) |
-| `68a85dbe` | docs | slice doc PHASE4-N-AC S1 evolve KES key before sign |
-| `cbe6633f` | docs | cluster doc PHASE4-N-AC KES signing evolves key to current period + declare DC-CRYPTO-10 |
-| `6184eb0b` | docs | grounding-doc refresh for PHASE4-N-AB close (CODEMAP/TRACEABILITY/SEAMS/HEAD_DELTAS) |
+| `a76672b9` | fix | AE.E chain-sync server FindIntersect cursor — CE-A5 manifest achieved (PHASE4-N-AE.E, DC-PROTO-10) |
+| `450c6992` | fix | AE.B recovered/forge-parent intersectability (Option B) — DC-NODE-14 enforced (PHASE4-N-AE.B) |
+| `238aff61` | docs | AE.B slice — recovered/forge-parent intersectability (Option B), promoted to CE-A5 closer |
+| `5425b23c` | fix | AE.C recover→follow WAL prior-fp seeding (PHASE4-N-AE.C, DC-WAL-02 + T-REC-05) |
+| `a058d649` | docs | AE.C slice — recover→follow WAL prior-fp seeding |
+| `5f2afc2a` | feat | PHASE4-N-AE.A — enforce forge-on-followed-tip admission |
+| `2108b825` | docs | AE.A slice doc — forge-on-followed-tip gate + followed-block serve continuity |
+| `48a8009c` | docs | cluster doc — recover→serve continuity + forge admissibility; declare DC-NODE-14/15 + DC-CONS-24 |
+| `bc05cb81` | docs | c2-guide §5b status → committed PHASE4-N-AE Slice A invariants gate + grounded root cause |
+| `e32afd8b` | docs | PHASE4-N-AE Slice A invariants sketch — recover→serve continuity + forge-on-followed-tip gate (Gap 2) |
+| `19a400e2` | docs | C2 recover-far-behind run isolates Gap 2 into 2a (forge-on-followed-tip) + 2b (serve-continuity); scope impl slices |
+| `42b42194` | docs | C2 C2-LOCAL #8 not proven — relay venue removed Gap 1, exposed Gap 2 (forge-vs-follow race); gaps recorded |
+| `20e20c12` | docs | c2-guide C2-LOCAL #1-7 proven (Ade forged pool1 blocks); #8 finding — node2/node3 must be non-producing relays |
+| `1a4df0a4` | docs | c2-guide proven cardano-testnet venue recipe + node1-replacement integration (#1-4 validated) |
+| `88f5d6a5` | docs | c2-guide C2-local rehearsal (private chain, 2 Haskell nodes) is REQUIRED before preprod |
+| `00144008` | docs | C2 preprod-tip guide (Conway-from-Mithril, never from genesis) + venue-general extractor |
+| `0e6bff35` | chore | close PHASE4-N-AD — tip-successor durability proof |
+| `67ce7ac6` | test | tip-successor durability regression (PHASE4-N-AD S1) |
+| `68d83406` | docs | cluster + slice doc PHASE4-N-AD tip-successor durability proof |
 
-No merge commits in the span. **5 commits, zero unclassified** — one carries an explicit
-conventional-commits prefix (`feat(producer):`), three are `docs:`, and the close commit `1d54abb4`
-("Close PHASE4-N-AC …") is a `/cluster-close`-style record (its diff scope is exclusively `docs/` +
-`docs/ade-invariant-registry.toml`, so it classifies `chore`/`docs`). The shape is **N-AB-close refresh →
-declare → S1 → close**: the prior-lead grounding refresh (`6184eb0b`), the cluster doc declaring
-`DC-CRYPTO-10` (`cbe6633f`), the single slice (S1 doc `68a85dbe`, impl `7d4a4a72`), and the close
-(`1d54abb4`). The cluster work landed 2026-06-06 (the close at 11:08).
+No merge commits in the span. **19 commits, zero unclassified** — `feat(...)`/`fix(...)`/`test(...)` carry
+explicit conventional-commits prefixes; the bulk are `docs:` (the C2-LOCAL guide/finding run + the N-AD/N-AE
+cluster + slice docs); the two close-style commits (`0e6bff35` "close PHASE4-N-AD …" and `25ddeebd` the
+N-AC refresh) classify `chore`/`docs` (their diff scope is exclusively `docs/` + the registry). The shape
+is **N-AC refresh → N-AD (doc → S1 test → close) → C2-LOCAL guide/finding run → N-AE (cluster doc declaring
+3 rules → AE.A → AE.C → AE.B → AE.E)**. Note the **commit order ≠ slice-letter order** for N-AE: the impl
+landed A (`5f2afc2a`) → C (`5425b23c`) → B (`450c6992`) → E (`a76672b9`) — the AE.B "Option B" approach was
+promoted to the CE-A5 closer (per the `238aff61` slice doc) and AE.E was the final cursor fix that made the
+relay adopt. The N-AE cluster work landed 2026-06-06 → 2026-06-07 (the CE-A5 manifest on 2026-06-07).
 
 > **Note (commit-attribution policy).** Per this repo's `CLAUDE.md` override (vibe-coded-node bounty
 > trailer requirement), commits in this repo carry a `Co-Authored-By:` model-attribution trailer; that
@@ -106,372 +168,368 @@ declare → S1 → close**: the prior-lead grounding refresh (`6184eb0b`), the c
 
 ## 2. New Modules
 
-**None.** `git diff --diff-filter=A --name-only c6e7fafe..1d54abb4 -- '*.rs'` shows **no new `.rs` source
-file**, no new crate, no new `Cargo.toml`, no new workspace. The only added files this span are **one CI
-gate** (`ci/ci_check_kes_evolution_before_sign.sh`, §5) and **two cluster/slice docs**
-(`docs/clusters/completed/PHASE4-N-AC/{cluster.md, S1-evolve-kes-before-sign.md}`). The span is
-**modification only** in code — the two touched source files are the **existing** RED producer-shell
-module `ade_runtime::producer::producer_shell` and the **existing** binary entry `ade_node::produce_mode`.
+**None.** `git diff --diff-filter=A --name-only 25ddeebd..HEAD -- '*.rs'` shows **no new `.rs` *source*
+file**, no new crate, no new `Cargo.toml`, no new workspace. The only added `.rs` file this span is a
+**test** — `crates/ade_node/tests/phase4_n_ae_recover_serve_continuity_diag.rs` (the N-AE
+recover→serve-continuity diagnostic/regression harness, ~844 lines at AE.A, extended through AE.B). The
+other added files are **three CI gates** (§5) and the N-AD/N-AE **cluster + slice docs**, the **C2-LOCAL
+guides + findings** (`docs/active/c2-preprod-tip-guide.md`, `docs/planning/c2-local-discovered-gaps.md`,
+`docs/planning/phase4-n-ae-slice-a-invariants.md`), and the **CE-A5 evidence pair**
+(`docs/evidence/phase4-n-ae-ce-a5-relay-adoption.{md,jsonl}`). The span is **modification only** in
+production code — all touched production files are **existing** modules.
 
-> **Cross-reference (CODEMAP/SEAMS) — `DC-CRYPTO-10` carried by the parallel N-AC refresh.** This span adds
-> **no new module**, but it adds **new RED surface to an existing module**: the new method
-> `ProducerShell::kes_sign_header_advancing` (and its private `kes_advance_to` helper) inside
-> `ade_runtime::producer::producer_shell`. The `producer` module and `ProducerShell` are already in
-> CODEMAP. CODEMAP/SEAMS are **refreshed for this N-AC close** to fold in the evolve-then-sign surface
-> and the `DC-CRYPTO-10` rule. The registry already records `DC-CRYPTO-10` authoritatively
-> (`code_locus = crates/ade_runtime/src/producer/producer_shell.rs … ; crates/ade_node/src/produce_mode.rs`).
+> **Cross-reference (CODEMAP/SEAMS) — N-AE surfaces, already in the refreshed docs.** This span adds
+> **no new module**, but it adds **new surface to existing modules**: the GREEN forge-admissibility
+> classifier `forge_followed_tip_admission` + `ForgeRefused`/`NodeForgeOutcome`/`FollowedPeerTipSignal`
+> (RED `ade_node::node_sync`); the FindIntersect-only proof-gated projection in
+> `ChainDbServedSource::intersect` (RED-shell `ade_runtime::network::served_chain_projection`); the
+> additive BLUE `DecodedBlock.prev_hash` field (BLUE `ade_ledger::block_validity::header_input`); and the
+> FindIntersect-cursor threading in the BLUE chain-sync server
+> (`ade_network::chain_sync::server::producer_chain_sync_serve`). All four host modules were already in
+> CODEMAP. CODEMAP and SEAMS are **already refreshed at HEAD `a76672b9`** in this close pass and fold in
+> these surfaces and the four new rules (CODEMAP records the `chain_sync/server.rs` change as BLUE — under
+> its `ade_network` BLUE entry — and SEAMS lists no new crate/module/TCB color). The registry already
+> records the rules authoritatively (the `code_locus` fields name every site).
 
 ## 3. Modules Modified
 
-Two modules changed this span (both RED-shell `.rs` files; **zero BLUE**):
+Five modules changed this span (two BLUE — both **additive, +0 canonical type** — and three RED/RED-shell):
 
-| Module | Scope | Key changes |
-|--------|-------|-------------|
-| `ade_runtime::producer::producer_shell` (`crates/ade_runtime/src/producer/producer_shell.rs`) | +137 (RED shell) | **S1 (`7d4a4a72`).** Adds the new RED method **`ProducerShell::kes_sign_header_advancing(period, pre_image)`** = **`self.kes_advance_to(period)?` then `kes_sign_header(period, pre_image)`** — it evolves the operator KES signing key **forward** to the requested period via the **existing deterministic `Sum6KES` update** (`kes_advance_to → kes_update`, idempotent when `current == period`), then signs the canonical unsigned-header pre-image. **Fail-closed** on a non-reachable period: `period < current` → `ShellSignError::Signing(SigningError::EvolutionBackwards{…})`; `period > SUM6_MAX_PERIOD` (= 63) / beyond the key lifetime → `Signing(EvolutionExhausted{…})`. The period is **passed verbatim** (no `± N`). Adds **4 shell tests** (`tests::shell_kes_sign_header_advancing_*`): evolves-then-signs at a forward period; signs at the current period (idempotent); fails closed backwards (with **no** signature emitted — `kes_advance_to` replaces the key before `kes_update`, so a failed advance leaves no usable key); fails closed beyond lifetime. **No new BLUE type, no signature change to any BLUE surface, signing stays RED** (the standing `ci_check_no_signing_in_blue.sh` remains the BLUE fence). |
-| `ade_node::produce_mode` (`crates/ade_node/src/produce_mode.rs`) | +7 / −2 (binary/shell entry) | **S1 (`7d4a4a72`).** Rewires the forge's **single real KES sign** site (`run_real_forge_inner`, the line previously `shell.kes_sign_header(kes_period, &preimage)`) to **`shell.kes_sign_header_advancing(kes_period, &preimage)`**, with a `// PHASE4-N-AC / DC-CRYPTO-10` comment recording *why* (the minted-at-period-0 key fails `KesPeriodNotCurrent` once the chain's KES period > 0). The error arm is unchanged (`ForgeFailed` on `Err`). This is the **only** real KES sign in the forge path. |
+| Module | Color / scope | Key changes |
+|--------|---------------|-------------|
+| `ade_node::node_sync` (`crates/ade_node/src/node_sync.rs`) | RED, +869 / −105 | **N-AD S1 (`67ce7ac6`):** tip-successor durability regression (WAL replay) — proves a forged tip-successor survives a crash and replays byte-identically (`DC-WAL-04` + `T-REC-05` strengthened). **AE.A (`5f2afc2a`):** the closed **GREEN** classifier `forge_followed_tip_admission(durable_servable_tip, followed_peer_tip)` (returns `CaughtUp` iff both tips present + hash + `block_no` equal, else `NotCaughtUp{NoFollowedPeerTip | NoDurableServableTip | TipMismatch}`); the typed outcomes `ForgeFollowedTipAdmission` / `NotCaughtUpReason` / `ForgeRefused` / `NodeForgeOutcome` / `FollowedPeerTipSignal`. **AE.C (`5425b23c`):** the recover→follow `prior_fp` seeding path (= `fingerprint(&state.ledger).combined`). **AE.B (`450c6992`):** the live-style follow→serve store-and-intersect wiring (the forge parent is stored as a servable `StoredBlock` and made FindIntersect-able via the projection). |
+| `ade_node::node_lifecycle` (`crates/ade_node/src/node_lifecycle.rs`) | RED, +242 / (net) | **AE.A (`5f2afc2a`):** the `run_relay_loop_with_sched` `ForgeTick` arm — the `recovered.tip` forge-base fallback (`None => act.recovered.tip.clone()`) is **removed**; the admission classifier is called **before** the single fenced `forge_one_from_recovered`; a `NotCaughtUp` records `ForgeRefused::NotCaughtUp` into `ForgeActivation.last_forge_refused`; the `CaughtUp` arm forges on `selected_tip = ChainDb::tip()` (= the followed peer tip), with the successor `prev_hash = PrevHash::Block(selected_tip.hash)` and `block_no = last + 1` (`DC-CONS-24`). **AE.C (`5425b23c`):** the `prior_fp` seed is set to the recovered ledger-tip post-fp at **both** lifecycle sites (forge-off + forge-on) — was the all-zero `Hash32`. |
+| `ade_runtime::network::served_chain_projection` (`crates/ade_runtime/src/network/served_chain_projection.rs`) | RED shell, +49 / −2 | **AE.B (`450c6992`):** `ChainDbServedSource::intersect` projects the `prev_hash` of the **earliest servable `StoredBlock`** (the forge parent, via the new private helper `earliest_servable_block_prev_hash`) as a **FindIntersect-only**, **proof-gated** intersect point **iff** a real servable successor exists; it **never serves bytes** for that point (`get_block_by_hash` / `serve_range` stay empty → BlockFetch refuses structurally; **no synthetic `StoredBlock`**). A recover-only store (no successor) → **no projection** (fail-closed). |
+| `ade_ledger::block_validity::header_input` (`crates/ade_ledger/src/block_validity/header_input.rs`) | **BLUE, additive** +8 / −1 | **AE.B (`450c6992`):** `DecodedBlock.prev_hash: PrevHash` is **exposed** — an **already-parsed** field (decoded for `check_header_position`), surfaced so the serve projection can prove a recovered/forged parent is the parent of a real servable successor (`DC-NODE-14`). **Additive — a new public *field* on an existing struct; no new type, no new parse, no behavior change** (`block_hash` / `computed_body_hash` / the position rule are byte-identical). BLUE canonical-type count unchanged (**458 → 458**). |
+| `ade_network::chain_sync::server` (`crates/ade_network/src/chain_sync/server.rs`) | **BLUE, additive** +80 / −4 | **AE.E (`a76672b9`) — CE-A5 closer.** `producer_chain_sync_serve`'s `FindIntersect` handler now sets `state.last_announced` from the matched intersect point (`Point::Block{slot,hash} → Some((slot,hash))`; `Point::Origin → None`) **before** replying `IntersectFound`, so the next `RequestNext` serves `next_after(point)` (the successor), not `next_after(None)` (block 0). **Additive cursor-threading logic + one regression test** (`producer_chain_sync_serve_find_intersect_sets_cursor_then_rolls_forward_past_it`); **no new type, no wire-grammar change** (`ProducerChainSyncServerState` is unchanged — this is an existing-field write). BLUE canonical-type count unchanged (**458 → 458**). |
 
-> **No BLUE-authority change (load-bearing).** This span touches **no BLUE source file** — the two code
-> changes are in the **RED** producer shell (`ade_runtime::producer::producer_shell`) and the binary
-> entry (`ade_node::produce_mode`); neither is in the BLUE `core_paths`. The KES evolution reuses the
-> **existing deterministic `Sum6KES` update** (`kes_update`) — it introduces **no new KES algorithm, no
-> new verifier, no new canonical type**. The BLUE canonical-type count is **458 → 458**. Forge
-> eligibility (the VRF leader check) and the wire/serve rules are unchanged.
+> **BLUE change is additive only (load-bearing).** Two BLUE `core_paths` files are touched this span, but
+> **both changes are additive and add zero canonical type**: (1) `ade_ledger::block_validity::header_input`
+> exposes an **already-parsed** field (`DecodedBlock.prev_hash`) — a new public *field*, not a new struct/
+> enum, with no new parse path; (2) `ade_network::chain_sync::server` adds **cursor-threading logic** to an
+> existing handler (`producer_chain_sync_serve`) plus a regression test — no new type, **no widening of the
+> closed wire grammar** (the FindIntersect decode shape is unchanged; this fixes only the server's *read
+> cursor* after a successful intersect). The BLUE canonical-type count is **458 → 458** (verified: `git
+> diff 25ddeebd..HEAD` over the BLUE trees adds **zero** `^+(pub )?(struct\|enum)` lines). The header /
+> body authorities, the KES verifier, forge eligibility, and the closed wire grammar are otherwise
+> unchanged.
 
 ## 4. Feature Flags
 
 **No project feature-flag deltas.** Ade declares no `[features]` table in any workspace `Cargo.toml`,
-and **no `Cargo.toml` changed in this window** (`git diff --name-only c6e7fafe..1d54abb4 --
-'**/Cargo.toml' 'Cargo.toml'` is empty). No `#[cfg(feature = …)]` gate was introduced. The KES-period
-bound is governed by the **fixed** `SUM6_MAX_PERIOD = 63` `Sum6KES` ceiling (not a feature flag, CLI flag,
-env var, or config knob); the new gate `ci_check_kes_evolution_before_sign.sh` fences that the shell
-passes the period **verbatim** and retains its fail-closed `EvolutionBackwards` / `EvolutionExhausted`
-guards.
+and **no `Cargo.toml` changed in this window** (`git diff --name-only 25ddeebd..HEAD -- '**/Cargo.toml'
+'Cargo.toml'` is empty). No `#[cfg(feature = …)]` gate was introduced. The N-AE behavior is governed by
+**fixed, typed** constructs (the closed `forge_followed_tip_admission` classifier + `ForgeRefused`
+variants; the FindIntersect-only proof-gate in `ChainDbServedSource::intersect`; the chain-sync server
+cursor) — not feature flags, CLI flags, env vars, or config knobs. The one venue-general behavior added —
+the consensus-inputs extractor reading `epochLength`/`activeSlotsCoeff` from `shelley-genesis` — is in a
+**non-gate operator script** (`ci/build_consensus_inputs_bundle.sh`), overridable via the
+`ADE_LIVE_SHELLEY_GENESIS` env var, and is **not** a code feature flag.
 
-## 5. CI Checks (137 → 138; +1 new, 0 modified, 0 removed)
+## 5. CI Checks (138 → 141; +3 new gates, 0 gates modified, 0 gates removed; +1 non-gate script modified)
 
-One new gate this span; no gate modified, no gate removed. `git diff --diff-filter=A c6e7fafe..1d54abb4
--- ci/` lists exactly the one gate below; `--diff-filter=M` and `--diff-filter=D` over `ci/` are both
-**empty**.
+Three new gates this span; no gate modified, no gate removed. `git diff --diff-filter=A 25ddeebd..HEAD
+-- ci/` lists exactly the three gates below; `--diff-filter=D` over `ci/` is **empty**; `--diff-filter=M`
+over `ci/` lists exactly **one** file — and it is the **non-gate** operator script
+`ci/build_consensus_inputs_bundle.sh` (so it does not move the `ci_check_*.sh` gate count).
 
-### PHASE4-N-AC KES-evolution gate (`7d4a4a72`)
+### PHASE4-N-AE gates (`5f2afc2a`, `5425b23c`, `450c6992`)
 
 | Check | Status | Origin / change | What it checks |
 |-------|--------|-----------------|----------------|
-| `ci_check_kes_evolution_before_sign.sh` | **New** | PHASE4-N-AC S1 (`7d4a4a72`); `DC-CRYPTO-10` | The forge's real KES sign must **evolve** the operator KES key to the requested period **before** signing, via `kes_sign_header_advancing → kes_advance_to → kes_update` (the deterministic `Sum6KES` update), passing the period **verbatim**; and `kes_update` must keep its fail-closed backwards + exhausted guards. Three fences (over a comment-stripped, pre-`#[cfg(test)]` production view of `produce_mode.rs` + `producer_shell.rs` + `signing.rs`): **(a)** the forge real KES sign uses `kes_sign_header_advancing`, **not** the raw `kes_sign_header` / `kes_sign_at`; **(b)** `kes_sign_header_advancing` evolves (`kes_advance_to(period)`) before signing, with the period passed verbatim (no `period ± N`); **(c)** `kes_update` retains the `EvolutionBackwards` + `EvolutionExhausted` guards. Signing stays RED (the standing `ci_check_no_signing_in_blue.sh` is the BLUE fence). |
+| `ci_check_forge_followed_tip_admission.sh` | **New** | PHASE4-N-AE.A (`5f2afc2a`); `DC-NODE-15` + `DC-CONS-24` (+ `DC-NODE-14` partial) | The `--mode node` forge is admissible **only** when `durable_servable_tip == followed_peer_tip` (hash AND `block_no`): **(a)** the recovered-tip forge-base fallback is removed (forge base is `ChainDb::tip()`); **(b)** the classifier compares hash AND `block_no`; **(c)** a `NotCaughtUp` records a typed `ForgeRefused::NotCaughtUp` (no forge, tip unchanged); **(d)** static-grep — the followed-peer-tip signal never reaches `select_best_chain` / `chain_selector` / `fork_choice`. |
+| `ci_check_recover_follow_wal_lineage.sh` | **New** | PHASE4-N-AE.C (`5425b23c`); `DC-WAL-02` + `T-REC-05` | The live recover→follow path seeds `ForwardSyncState.prior_fp = fingerprint(&state.ledger).combined` (the recovered ledger-tip post-fp), **not** the all-zero `Hash32`, at **both** lifecycle sites — so the first followed `AdmitBlock`'s `prior_fp` chains from the recovered ledger fp and warm-start does not `ChainBreak@1`. Fences the live **seed** without loosening `WalStore::verify_chain`. |
+| `ci_check_recovered_anchor_intersectable.sh` | **New** | PHASE4-N-AE.B (`450c6992`); `DC-NODE-14` | `ChainDbServedSource::intersect` projects the earliest servable `StoredBlock`'s `prev_hash` as a **FindIntersect-only**, **proof-gated** point **iff** a real servable successor exists; it **never serves bytes** for it (no synthetic `StoredBlock`; `get_block_by_hash` / `serve_range` stay empty). A recover-only store yields **no projection** (fail-closed). |
 
-> **Cross-reference (TRACEABILITY) — `DC-CRYPTO-10 ↔ ci_check_kes_evolution_before_sign.sh` carried by the
-> N-AC refresh.** TRACEABILITY is **refreshed for this N-AC close** (alongside this HEAD_DELTAS) to add
-> the `DC-CRYPTO-10 ↔ ci_check_kes_evolution_before_sign.sh` row. The registry already records the binding
-> at HEAD (`DC-CRYPTO-10.ci_script = "ci/ci_check_kes_evolution_before_sign.sh"`), so the rule↔gate link
-> is **authoritative in the registry**; the TRACEABILITY doc is the view being brought current alongside
-> this regen. **No rule↔gate binding was removed.** The new gate enforces a named, enforced invariant
-> (`DC-CRYPTO-10`), so it is **not** an orphan gate.
+### Non-gate operator script (`00144008`)
+
+| Script | Status | Change | What it does |
+|--------|--------|--------|--------------|
+| `ci/build_consensus_inputs_bundle.sh` | **Modified** (non-gate) | C2 preprod-tip guide (`00144008`) | The venue-general consensus-inputs extractor now reads `epochLength` + `activeSlotsCoeff` from the venue's `shelley-genesis` (default the local preprod genesis; override via `ADE_LIVE_SHELLEY_GENESIS`) instead of hardcoding preprod's `epochLength 432000` / `ASC 1/20` — so the **same** extractor is correct for preprod **and** a short-epoch C2-LOCAL rehearsal venue (e.g. `--epoch-length 2000`). Not a `ci_check_*.sh` gate; does not move the gate count. |
+
+> **Cross-reference (TRACEABILITY) — new bindings + one regression-test-only rule.** TRACEABILITY is
+> **already refreshed at HEAD `a76672b9`** in this close pass; the new rule↔gate bindings
+> (`DC-NODE-15` / `DC-CONS-24` / `DC-NODE-14` ↔ `ci_check_forge_followed_tip_admission.sh` +
+> `ci_check_recovered_anchor_intersectable.sh`; `DC-WAL-02` / `T-REC-05` ↔
+> `ci_check_recover_follow_wal_lineage.sh`) are recorded authoritatively in the **registry** at HEAD, so
+> the rule↔gate links are **authoritative in the registry** regardless of TRACEABILITY's per-row trace
+> depth. **`DC-PROTO-10` has an empty `ci_script`** — it is enforced by a **regression test**
+> (`producer_chain_sync_serve_find_intersect_sets_cursor_then_rolls_forward_past_it`), not a dedicated
+> `ci_check_*.sh` gate; this is a **deliberate** test-enforced rule (a server-cursor behavioral invariant
+> pinned by a round-trip test), **not** an orphan gate. **No rule↔gate binding was removed.** |
 
 ## 6. Canonical Type Registry Delta
 
 **n/a — no separate canonical-type registry is configured** (`canonical_type_registry: null`);
 canonical-type rules live inline in the invariant registry under family **T**. **No canonical type was
-added or removed in this window** — this is a **RED-only** span (BLUE count unchanged, **458 → 458**, per
-the CODEMAP header). The KES evolution reuses the existing `Sum6KES` update primitive; it adds **no BLUE
-canonical type**. No `Cargo.toml` changed.
+added or removed in this window** — the BLUE count is unchanged (**458 → 458**). The two BLUE source
+changes are **additive**: a new public *field* (`DecodedBlock.prev_hash`, already parsed) and new server
+*logic* + a test — neither adds a `struct`/`enum`. No `Cargo.toml` changed.
 
-## 7. Normative / Invariant Rule Delta (335 → 336; +1 enforced rule, 1 strengthening, zero removals)
+## 7. Normative / Invariant Rule Delta (336 → 340; +4 enforced rules, 9 strengthenings, zero removals)
 
-**One rule ID was added; zero removed** (335 → 336; `diff` of the sorted `id =` lists shows the single
-addition `DC-CRYPTO-10` and no removal). The status tally moves **203 → 204 enforced** (20 partial /
-112 declared unchanged) — the new rule lands `enforced` at the S1 close.
+**Four rule IDs were added; zero removed** (336 → 340; `diff` of the sorted `id =` lists shows exactly the
+four additions `DC-CONS-24`, `DC-NODE-14`, `DC-NODE-15`, `DC-PROTO-10` and no removal). The status tally
+moves **204 → 208 enforced** (20 partial / 112 declared unchanged) — all four new rules are `enforced` at
+HEAD.
 
 *(The configured `normative_docs` — the CE-79 tier-gate statement + addendum, the three contract docs,
-and `CLAUDE.md` — were **not** changed this span: `git diff --name-only c6e7fafe..1d54abb4` over those
-paths is empty. The rule-count delta is entirely the invariant-registry change below.)*
+the CE-73 reclassification, and `CLAUDE.md` — were **not** changed this span: `git diff --name-only
+25ddeebd..HEAD` over those paths is empty. The rule-count delta is entirely the invariant-registry change
+below.)*
 
-**New rule (`+1`, enforced):**
+**New rules (`+4`, all enforced):**
 
 | Rule | Family / Tier | Statement (summary) |
 |------|---------------|---------------------|
-| `DC-CRYPTO-10` | DC / `derived` (`enforced`; `introduced_in = "PHASE4-N-AC"`) | **The RED signing shell evolves the operator KES key to the requested period before signing.** Using the existing deterministic `Sum6KES` update primitive, the shell advances the key forward to the requested KES period, then signs; it **fails closed** if the requested period is **before** the key start, **beyond** the key lifetime, or **cannot be reached** by sequential evolution. `ci_script = ci/ci_check_kes_evolution_before_sign.sh`; `cross_ref = [CN-KES-HEADER-01, T-KEY-01, DC-CRYPTO-04, DC-CRYPTO-09, CN-FORGE-03]`. Lets the forge sign across KES periods (not just the minted period 0); the item-4 C1 re-run proved it live (Ade forged 3 period-1 blocks; the real cardano-node downloaded the period-1 header with no KES rejection). |
+| `DC-NODE-15` | DC / `derived` (enforced; `introduced_in = "PHASE4-N-AE"`) | **Forge admissibility requires the durable servable tip to equal the followed peer tip.** A `--mode node` forge is admissible **only** when `durable_servable_tip == followed_peer_tip` (hash AND `block_no`); otherwise it fails closed with a typed `ForgeRefused::NotCaughtUp{local_servable_tip, followed_peer_tip, reason}` — no forge, no state transition, tip unchanged. The recovered anchor is **never** a forge base. The followed-peer-tip signal is a forge-**admissibility** input only — it may *prevent* a forge but never reaches `select_best_chain` / `chain_selector` / `fork_choice`. `ci_script = ci/ci_check_forge_followed_tip_admission.sh`. |
+| `DC-CONS-24` | DC / `derived` (enforced; `introduced_in = "PHASE4-N-AE"`) | **Forged parent hash byte-equals the peer-visible selected tip.** The forged successor's `prev_hash` byte-equals the followed peer tip hash **and** its `block_no == followed_tip.block_no + 1`. Parent identity is the **canonical hash**, never inferred from block number alone. `ci_script = ci/ci_check_forge_followed_tip_admission.sh`. |
+| `DC-NODE-14` | DC / `derived` (partial at AE.A → enforced at AE.B; `introduced_in = "PHASE4-N-AE"`) | **Every claimed forge parent must be servable or peer-intersectable in the durable served lineage.** A `--mode node` forge may build only on a parent a Haskell peer can `FindIntersect`: the followed peer tip (a durably-stored `StoredBlock`, AE.A) or a recovered anchor made intersectable (AE.B). The served chain exposes that parent as a FindIntersect point from which the peer rolls forward onto the forged successor; the recovered snapshot anchor is **never** served as a chain head a peer cannot intersect (Option B: FindIntersect-**only**, proof-gated, never serves bytes for the projected point). `ci_script = ci/ci_check_forge_followed_tip_admission.sh ci/ci_check_recovered_anchor_intersectable.sh`. |
+| `DC-PROTO-10` | DC / `derived` (enforced; `introduced_in = "PHASE4-N-AE"`) | **Chain-sync server FindIntersect cursor.** After the producer chain-sync server answers `IntersectFound(point)`, its read cursor (`last_announced`) **IS** that point — the next `RequestNext` serves `next_after(point)` (the successor the client rolls forward onto), never `next_after(None)` (the chain start). A non-`Origin` intersect that left the cursor unset would serve block 0 to a client whose read pointer is its own tip, which the client rejects as `UnexpectedBlockNo(tip_block_no + 1)(0)`. An `Origin` intersect keeps the cursor `None` (serve from the chain start, correct). **`ci_script = ""` — enforced by regression test** `producer_chain_sync_serve_find_intersect_sets_cursor_then_rolls_forward_past_it`. **This is the CE-A5 closer.** |
 
-**Strengthening (`strengthened_in += "PHASE4-N-AC"`) — exactly one, no rule weakened:**
+**Strengthenings (`strengthened_in +=`) — 9 (8 distinct rules), no rule weakened:**
 
-| Rule | Family / Tier | Strengthening |
-|------|---------------|---------------|
-| `CN-KES-HEADER-01` | CN / `derived` (`enforced`, unchanged) | **KES signature over the canonical unsigned-header pre-image — now signed with the period-evolved key.** CN-KES-HEADER-01 (PHASE4-N-S-A) fixes that the header KES signature is over the branded `UnsignedHeaderPreImage` and that arbitrary-byte signing is unrepresentable. N-AC strengthens the producer side: the **single** `kes_sign_header` call in the forge is now reached **only** via `kes_sign_header_advancing`, which evolves the key to the block's KES period first (`DC-CRYPTO-10`). The pre-image / single-source-of-truth contract is preserved **and** extended — the signing key is now correct for the block's period across period boundaries. |
+| Rule | By | Strengthening |
+|------|----|----|
+| `DC-WAL-04` | PHASE4-N-AD | Forged-tip WAL no-orphan / prior-fp clause — the **tip-successor** durability regression proves a forged tip-successor is WAL-durable and replays byte-identically (the N-AD S1 test). |
+| `T-REC-05` | PHASE4-N-AD, PHASE4-N-AE | Forged-tip crash-recovery replay-equivalence — strengthened by N-AD (tip-successor regression) **and** N-AE.C (the live recover→follow `prior_fp` seed now chains warm-start replay from the recovered ledger-tip fp instead of the all-zero seed). |
+| `DC-WAL-02` | PHASE4-N-AE | WAL chain-link first-entry clause now enforced on the **live** recover→follow path: the first followed `AdmitBlock`'s `prior_fp` is the recovered ledger-tip post-fp (was zero), so the live store passes `verify_chain` warm-start (AE.C) — **without** loosening `verify_chain`. |
+| `CN-CONS-07` | PHASE4-N-AE | Served-chain projection / forge-parent intersectability — the served view now also exposes a recovered/forged parent as a FindIntersect-only proof-gated point (AE.B), extending the durable-projection contract. |
+| `DC-CONS-23` | PHASE4-N-AE | Own-forged durable-admit / parent-linkage — extended by the forge-on-followed-tip parent identity + the recovered-anchor intersectability proof (AE.A/AE.B). |
+| `CN-CONS-06` | PHASE4-N-AE | Block-production / live forge → serve → adopt — strengthened by the AE.E chain-sync server FindIntersect-cursor fix, which made the real relay roll forward onto the forged successor (the CE-A5 manifest). |
+| `DC-EPOCH-03` | PHASE4-N-AE | Single-epoch forge containment on the `--mode node` spine — hardened alongside the AE.A forge-admissibility gate (the forge base is the durable servable tip within the recovered seed epoch). |
+| `DC-NODE-05` | PHASE4-N-AE | `--mode node` durable-tip-only forge rule — strengthened by the AE.A admissibility gate (the durable-tip forge now also gates on followed-tip caught-up; a non-caught-up tick fails closed with a typed `ForgeRefused`, no forge). |
 
-> **Both gating reviews PASS — no HIGH+ this cluster (load-bearing).** The PHASE4-N-AC per-slice review
-> (S1) and the per-cluster cross-slice review **both PASS with no HIGH (or higher) finding.** The
-> evolve-then-sign design reuses the existing deterministic `Sum6KES` update, passes the period verbatim,
-> and fails closed on a non-reachable period; the live C1 re-run (KES period 1) is the end-to-end
-> evidence. Two **pre-existing fail-closed INFO items** were recorded honestly and handed to C2 (neither
-> reachable via the forge today): **(1)** `kes_advance_to` zeroes the key on a *failed* advance
-> (`std::mem::replace` before `kes_update`) — unreachable via the forge (the `kes_period_in_window` /
-> `kes_period_for_slot` bounds prevent it) and **fail-safe** (a zeroed key signs nothing a peer accepts);
-> **(2)** the opcert window upper bound `opcert_start + 63` can diverge from the absolute `Sum6KES`
-> ceiling `63` when `opcert_start > 0` (real preprod opcerts) — still fail-closed (`EvolutionExhausted`),
-> but the C2 config must derive `kes_max_period` from the **absolute** ceiling, not `opcert_start + 63`.
+> **CE-A5 manifest — load-bearing evidence (not a registry status flip).** The N-AE cluster achieved the
+> **CE-A5 manifest**: a real `cardano-node 11.0.1` relay (`c2ae18`, non-producing node2) `AddedToCurrentChain`
+> an **Ade-forged block** (block 17 @ slot 421, hash `db3b5675…`, `issuerHash a1ed4e04… == blake2b-224(pool1`
+> cold VK`)`, `forging = 0` on the relay; Ade forge `succeeded = 1`). The relay's own log line
+> (`ChainDB.AddBlockEvent.AddedToCurrentChain`, `newtip db3b5675…@421`) is committed at
+> `docs/evidence/phase4-n-ae-ce-a5-relay-adoption.jsonl`; the narrative at `…-relay-adoption.md`. This is
+> recorded as **`enforced`-backing evidence** on `DC-NODE-14` / `DC-PROTO-10` (and the `CN-CONS-06`
+> strengthening) — **not** a `RO-LIVE-01` registry status flip. The full path proven end-to-end live is
+> **recover (behind the relay tip) → follow → admissibility-gate → forge T+1 on the followed tip → serve →
+> relay adopts**.
 
-**No rule was removed (expected: 0).** The registry delta is **one new enforced rule + one
-`strengthened_in` append** — purely additive / strengthening, consistent with append-only registry
+**No rule was removed (expected: 0).** The registry delta is **four new enforced rules + nine
+`strengthened_in` appends** — purely additive / strengthening, consistent with append-only registry
 discipline.
 
-## Working tree at HEAD `1d54abb4`
+## Working tree at HEAD `a76672b9`
 
-Clean of tracked changes from this span — the cluster + close are all committed. `git status --short`
-shows only an untracked `.mithril-scratch/` (operator scratch, ignored). **This regen runs *after* all
-five span commits** (the close commit `1d54abb4` is HEAD for this window); the CODEMAP/SEAMS/TRACEABILITY
-refresh + the baseline bump (`c6e7fafe → 1d54abb4`) are the close-pass follow-on actions.
+Clean of tracked changes from this span — the N-AD cluster + close, the C2-LOCAL guide/finding run, and
+the N-AE slices (through the CE-A5 closer) are all committed. `git status --short` shows only an untracked
+`.mithril-scratch/` (operator scratch, ignored). **This regen runs *after* all 19 span commits** (the
+CE-A5 closer `a76672b9` is HEAD for this window); CODEMAP/SEAMS/TRACEABILITY are **already refreshed at
+HEAD `a76672b9`** in this close pass, so the remaining close-pass actions are this HEAD_DELTAS, the
+PHASE4-N-AE cluster-doc archive, and the baseline bump (`1d54abb4 → a76672b9`).
+
+> **Cluster-archive note.** The **PHASE4-N-AD** docs are archived under
+> `docs/clusters/completed/PHASE4-N-AD/` (the `0e6bff35` close). The **PHASE4-N-AE** cluster + slice docs
+> are at `docs/clusters/PHASE4-N-AE/` (active path) at HEAD `a76672b9` — the CE-A5 closer `a76672b9` is a
+> `fix(...)` commit, not a formal `chore: close` archive commit; the cluster archive + the `head_deltas_baseline`
+> bump are part of this close pass.
 
 ## Honest residual (window scope)
 
-PHASE4-N-AC **makes the forge sign correctly across KES periods** — and that is the entire claim. The
-honest boundary:
+PHASE4-N-AE **proved the recover→follow→forge→serve→ADOPT path end-to-end live** — a real `cardano-node
+11.0.1` relay adopted an Ade-forged block (CE-A5 manifest). The honest boundary:
 
-- **Live-readiness fix, NOT a capability flip.** N-AC closes a latent forge gap (the minted-at-period-0
-  KES key never evolved forward). **No `RO-LIVE` rule was flipped** — `RO-LIVE-01` stays operator-gated.
-  No authoritative behavior changed; the span is **RED-only** (0 BLUE change, 458 canonical types
-  unchanged). It makes the producer signing shell live-correct across KES-period boundaries; it does not
-  by itself complete the bounty.
-- **RED shell, single sign site, reuses the deterministic `Sum6KES` update.** The change lives entirely
-  in the RED producer shell + the binary entry, **reuses the existing `kes_update` primitive** (no new
-  KES algorithm / verifier), and the forge has exactly **one** real KES sign — now reached only via the
-  evolving variant (gate-enforced). Signing stays RED; the BLUE `Sum6KES` algorithm, the KES verifier,
-  forge eligibility, and the wire rules are unchanged. The period is passed **verbatim** and the shell
-  **fails closed** on any non-reachable period.
-- **Live proof (non-promotable rehearsal).** The item-4 C1 re-run (HEAD `7d4a4a72`, private net at slot
-  ≈ 251740, KES period 1) confirmed the fix: Ade **forged 3 period-1 blocks** and self-accepted them, and
-  the real `cardano-node` **downloaded the period-1 header with no KES/parse rejection** (pre-fix:
-  `failed = 5 / succeeded = 0`, `KesPeriodNotCurrent`). This is the **C1 genesis-rehearsal harness**
-  (acceptance #3) — a non-promotable rehearsal, **not** a bounty/preview/preprod completion claim.
-- **Genesis-window finding (structural, recorded honestly).** On this net `slotsPerKESPeriod = 129600`
-  **equals** the Cardano genesis density window `3k/f = 129600` (`k = 2160`, `f = 0.05`), so KES period 1
-  begins **exactly** when the genesis window closes. The two halves of "forge at KES period 1 **and** the
-  follower adopts" are therefore **mutually exclusive on a from-genesis net**: in period 0 (slots
-  < 129600) the genesis window is open so adoption works, but the key is at its minted period 0 so **no
-  KES evolution is exercised**; in period 1+ (slots ≥ 129600) KES evolution **is** exercised, but the
-  follower rejects with **`CandidateTooSparse`** — a **genesis-density-window** rejection, **KES-
-  independent**, not a KES rejection. The **cross-period end-to-end forge → adopt** path is proven on the
-  **C2 tip path** (a dense current tip, no genesis window), **not** by resetting the net (which returns to
-  period 0 and re-proves only the narrow period-0 case). The C1 reproduction README carries this addendum
-  (close commit `1d54abb4`).
-- **CODEMAP/SEAMS/TRACEABILITY refreshed for this close.** This N-AC close regenerates all four grounding
-  docs to carry `DC-CRYPTO-10` (the evolve-then-sign surface, the `CN-KES-HEADER-01` strengthening, and
-  the `DC-CRYPTO-10 ↔ ci_check_kes_evolution_before_sign.sh` binding). The registry records the rule + its
-  gate binding authoritatively at HEAD (336 rules).
+- **CE-A5 is the C2-LOCAL #8–#9 manifest, NOT a registry `RO-LIVE` flip.** The manifest is recorded as
+  `enforced`-backing live evidence on `DC-NODE-14` / `DC-PROTO-10` (and the `CN-CONS-06` strengthening),
+  **not** a `RO-LIVE-01` status flip. `RO-LIVE-01` remains as scoped. The CE-A5 venue is a **hermetic
+  C2-LOCAL** `cardano-testnet` (`--testnet-magic 42`, Conway, `--epoch-length 2000`) — a private 2-Haskell-
+  node rehearsal, the **required** pre-preprod venue; it is **not** a preprod/mainnet operator-pass.
+- **BLUE-additive, +0 canonical type.** The span touches two BLUE files but **adds no new canonical type**:
+  an already-parsed public *field* (`DecodedBlock.prev_hash`) and additive chain-sync server cursor *logic*
+  + a test. The closed wire grammar, the header/body authorities, the KES verifier, and forge eligibility
+  are unchanged. BLUE canonical-type count **458 → 458**.
+- **The AE.B projection is FindIntersect-ONLY and proof-gated.** `ChainDbServedSource::intersect` exposes a
+  recovered/forged parent as a FindIntersect point **only when** a real servable successor exists, and it
+  **never serves bytes** for that point (no synthetic `StoredBlock`; BlockFetch refuses structurally). A
+  recover-only store yields **no projection** (fail-closed). The recovered snapshot anchor is **never**
+  served as an adoptable chain head.
+- **The followed-peer-tip signal is admissibility-only.** It may *prevent* a forge (`ForgeRefused::NotCaughtUp`)
+  but it **never** reaches `select_best_chain` / `chain_selector` / `fork_choice` (gate (d) static-grep
+  enforced) — it cannot select, replace, reorder, or prefer chains.
+- **PHASE4-N-AD is a durability *proof* (test-only).** N-AD added **no** production code — it is the
+  tip-successor WAL-replay regression (one RED test, +214 lines), strengthening `DC-WAL-04` + `T-REC-05`. It
+  proves the forged tip-successor is WAL-durable + replay-equivalent; it changes no authoritative behavior.
+- **C2-LOCAL guide/finding run is docs + one operator script.** The `00144008..bc05cb81` run is docs-only
+  except for the venue-general `ci/build_consensus_inputs_bundle.sh` change (read `epochLength`/`ASC` from
+  `shelley-genesis`). It records the C2 venue recipe (Conway-from-Mithril for preprod; private 2-node
+  rehearsal first) and isolates the forge-vs-follow race (Gap 2) into 2a (forge-on-followed-tip, AE.A) +
+  2b (serve-continuity, AE.B/AE.E) — the scoping that drove the N-AE slices.
+- **All four grounding docs current at this close.** CODEMAP/SEAMS/TRACEABILITY are already refreshed at
+  HEAD `a76672b9` (carrying the N-AD strengthenings, the four N-AE rules, the new surfaces, and the nine
+  strengthenings); this HEAD_DELTAS completes the set. The registry records the rules + gate bindings
+  authoritatively at HEAD (340 rules).
+
+---
+
+## Historical — PHASE4-N-AC close + cluster window (`c6e7fafe → 1d54abb4`)
+
+> The section below is the **previous** HEAD_DELTAS lead, preserved in condensed form. It was a
+> **grounding-doc refresh + the PHASE4-N-AC cluster** (KES signing evolves the operator KES key to the
+> current period before signing), narrating the `c6e7fafe → 1d54abb4` span. Counts here are the figures
+> **at `1d54abb4`** (336 rules, 138 CI gates, 458 canonical types); the current window measures **forward**
+> from `25ddeebd` (the N-AC grounding refresh, one commit after `1d54abb4`). The full §§0–7 narrative is
+> recoverable from this doc's git history at `1d54abb4` / `25ddeebd`.
+
+> Baseline: `c6e7fafe` (Close PHASE4-N-AB — outbound mux segmentation (CN-SESS-05), 2026-06-06 03:48)
+> HEAD: `1d54abb4` (Close PHASE4-N-AC — KES signing evolves key to current period (DC-CRYPTO-10), 2026-06-06 11:08)
+> Span: **a grounding-doc refresh + the PHASE4-N-AC cluster** — 5 commits, 12 files, +1029 / −340.
+
+PHASE4-N-AC was a **RED-only live-readiness fix surfaced by the item-4 C1 re-run**: the forge's only real
+KES sign required `kes.current_period() == kes_period`, and nothing evolved the minted-at-period-0 operator
+key forward, so once the chain aged past one KES period the forge returned `KesPeriodNotCurrent` on every
+leader slot. N-AC closed it in one slice:
+
+- **S1 — evolve KES key to current period before signing (`7d4a4a72`; `DC-CRYPTO-10 → enforced`).** A new
+  **RED** producer-shell method `ProducerShell::kes_sign_header_advancing(period, pre_image)` =
+  `kes_advance_to(period)` then `kes_sign_header(period, pre_image)` — it evolves the operator KES key
+  forward via the **existing deterministic `Sum6KES` update** (idempotent at the current period), then
+  signs; **fails closed** `EvolutionBackwards` (before key start) / `EvolutionExhausted` (beyond
+  `SUM6_MAX_PERIOD = 63`). The forge's single real KES sign is rewired to it (period passed verbatim).
+  Signing stays RED. New gate `ci_check_kes_evolution_before_sign.sh`.
+
+**N-AC headline (at `1d54abb4`):** Registry **335 → 336** (+1 enforced `DC-CRYPTO-10`; +1 strengthening
+`CN-KES-HEADER-01`; 0 removed). CI gates **137 → 138** (+1 `ci_check_kes_evolution_before_sign.sh`).
+**RED-only — BLUE canonical types 458 → 458.** The item-4 C1 re-run proved it live (Ade forged 3 period-1
+blocks; the real cardano-node downloaded the period-1 header with no KES rejection). **No `RO-LIVE` flip.**
+A genesis-window finding was recorded honestly (`slotsPerKESPeriod = 129600 == 3k/f`, so a from-genesis
+rehearsal cannot show forge-at-period-1 **and** follower-adopt simultaneously — the period-1 follower
+rejection is `CandidateTooSparse`, KES-independent).
 
 ---
 
 ## Historical — PHASE4-N-AB close + cluster window (`b0365df0 → c6e7fafe`)
 
-> The section below is the **previous** HEAD_DELTAS lead, preserved in condensed form. It was a
-> **grounding-doc refresh + the PHASE4-N-AB cluster**, narrating the `b0365df0 → c6e7fafe` span. Counts
-> in this Historical section are the figures **at `c6e7fafe`** (335 rules, 137 CI gates, 458 canonical
-> types); the current window measures **forward** from `c6e7fafe`. The full §§0–7 narrative is recoverable
-> from this doc's git history at `c6e7fafe`.
+> Preserved in condensed form. A **grounding-doc refresh + the PHASE4-N-AB cluster**, narrating the
+> `b0365df0 → c6e7fafe` span. Counts here are the figures **at `c6e7fafe`** (335 rules, 137 CI gates, 458
+> canonical types). The full §§0–7 narrative is recoverable from this doc's git history at `c6e7fafe`.
 
 > Baseline: `b0365df0` (Close PHASE4-N-AA — bounded peer-driven serve range (DC-SERVEMEM-01), 2026-06-06 01:43)
 > HEAD: `c6e7fafe` (Close PHASE4-N-AB — outbound mux segmentation (CN-SESS-05), 2026-06-06 03:48)
 > Span: **a grounding-doc refresh + the PHASE4-N-AB cluster** — 5 commits, 10 files, +1130 / −406.
 
-PHASE4-N-AB was **pre-RO-LIVE hardening item 2** and closed a **receive/send asymmetry** that
-PHASE4-N-M-FRAG left half-open: Ade could *receive* a block fragmented across multiple mux frames
-(CN-SESS-04 inbound reassembly), but it could **not transmit one** — `handle_outbound` (and the
-single-frame encoder `encode_inner_frame`) **errored `OutboundPayloadTooLarge`** for any payload above
-`MAX_PAYLOAD = 65535` bytes. N-AB closed that in one slice:
+PHASE4-N-AB was **pre-RO-LIVE hardening item 2** and closed a **receive/send asymmetry**: Ade could
+*receive* a block fragmented across multiple mux frames (CN-SESS-04 inbound reassembly) but could **not
+transmit one** (`OutboundPayloadTooLarge` above `MAX_PAYLOAD = 65535`). N-AB closed that in one slice:
 
 - **S1 — outbound mux segmentation (`02e6e557`; `CN-SESS-05 → enforced`).** The **GREEN** session
-  reducer's `handle_outbound` (`crates/ade_network/src/session/core.rs`) now **segments** a payload in
-  the range `MAX_PAYLOAD < len <= MAX_OUTBOUND_PAYLOAD_BYTES` into **ordered `<= MAX_PAYLOAD` mux frames**
-  (`payload.chunks(MAX_PAYLOAD)`, each encoded via the **single `encode_inner_frame` authority**) and
-  **fails closed above** a new **fixed, non-configurable** const `MAX_OUTBOUND_PAYLOAD_BYTES = 16 MiB`
-  (symmetric with the inbound `MAX_REASSEMBLY_TAIL_BYTES` / DC-LIVEMEM-01). Every segment carries the
-  **same** mini-protocol id + mode + the **same captured `timestamp`** (GREEN — no per-segment clock);
-  concatenating the segment payloads reconstructs the original byte-for-byte. New gate
-  `ci_check_outbound_segmentation.sh`.
+  reducer's `handle_outbound` now **segments** a payload in `MAX_PAYLOAD < len <= MAX_OUTBOUND_PAYLOAD_BYTES`
+  into ordered `<= MAX_PAYLOAD` mux frames (each via the single `encode_inner_frame` authority) and **fails
+  closed above** the new fixed `MAX_OUTBOUND_PAYLOAD_BYTES = 16 MiB`. New gate `ci_check_outbound_segmentation.sh`.
 
 **N-AB headline (at `c6e7fafe`):** Registry **334 → 335** (+1 enforced `CN-SESS-05`; +2 strengthenings
 `CN-SESS-04` + `DC-SERVEMEM-01`; 0 removed). CI gates **136 → 137** (+1 `ci_check_outbound_segmentation.sh`).
-**GREEN-only — BLUE canonical types 458 → 458.** Outbound inverse of CN-SESS-04 inbound reassembly; closes
-the receive/send wire-layer asymmetry. **No `RO-LIVE` flip.**
+**GREEN-only — BLUE canonical types 458 → 458.** Outbound inverse of CN-SESS-04 inbound reassembly. **No
+`RO-LIVE` flip.**
 
 ---
 
 ## Historical — PHASE4-N-AA close + cluster window (`999199f8 → b0365df0`)
 
-> The section below is the **PHASE4-N-AA** lead, preserved in condensed form. It was a **focused grounding
-> refresh + the PHASE4-N-AA cluster**, narrating the `999199f8 → b0365df0` span. Counts here are the
-> figures **at `b0365df0`** (334 rules, 136 CI gates, 458 canonical types). The full §§0–7 narrative is
-> recoverable from this doc's git history at `b0365df0`.
+> Preserved in condensed form. A **focused grounding refresh + the PHASE4-N-AA cluster**, narrating the
+> `999199f8 → b0365df0` span. Counts here are the figures **at `b0365df0`** (334 rules, 136 CI gates, 458
+> canonical types). The full §§0–7 narrative is recoverable from this doc's git history at `b0365df0`.
 
 > Baseline: `999199f8` (repair 10 pre-existing gate-vs-code drifts (gate hygiene), 2026-06-05 19:28)
 > HEAD: `b0365df0` (Close PHASE4-N-AA — bounded peer-driven serve range (DC-SERVEMEM-01), 2026-06-06 01:43)
 > Span: **a focused grounding refresh + the PHASE4-N-AA cluster** — 8 commits, 15 files, +1254 / −492.
 
-PHASE4-N-AA was **pre-RO-LIVE hardening item 1** and closed the **MEDIUM** finding the PHASE4-N-U
-cross-slice security review left open: *the `--mode node` serve path could be driven by a peer into
-unbounded memory + O(N²) CPU work.* N-AA closed that across two slices + an in-cluster security fix:
+PHASE4-N-AA was **pre-RO-LIVE hardening item 1** and closed the **MEDIUM** the PHASE4-N-U cross-slice
+review left open: *the `--mode node` serve path could be driven by a peer into unbounded memory + O(N²)
+CPU.* N-AA closed it across two slices + an in-cluster security fix:
 
-- **S1 — bounded hash-free ChainDb read primitives (`6b8f1779`; CE-1).** Two new **bounded,
-  slot-ordered, hash-free** `ChainDb` trait primitives: `range_bytes_capped(from, to, max)` and
-  `last_block_bytes()`; new **RED type** `CappedSlotRange { blocks, truncated }`; the unbounded
-  `iter_from_slot` / `tip` doc-fenced as TRUSTED-CALLER reads (internals unchanged).
-- **S2 — serve projection cap + fail-closed (`3d853ec0`; `DC-SERVEMEM-01 → enforced`).**
-  `ChainDbServedSource` switched onto the S1 bounded primitives behind a fixed `const
-  MAX_SERVE_RANGE_BLOCKS = 256`; new **RED enum** `ServeRangeOutcome { Served | Empty | CapExceeded |
-  ReadError }` — every non-`Served` maps to wire `NoBlocks`. New gate `ci_check_serve_range_bounded.sh`.
-- **In-cluster security-review MEDIUM (`5c9f6cf6`).** An inverted-range (`from > to`) panic was found +
-  fixed in-cluster (a `from > to → empty` guard on both `ChainDb` impls + tests).
+- **S1 — bounded hash-free ChainDb read primitives (`6b8f1779`; CE-1).** Two new bounded, slot-ordered,
+  hash-free `ChainDb` primitives `range_bytes_capped` / `last_block_bytes`; new RED type `CappedSlotRange`.
+- **S2 — serve projection cap + fail-closed (`3d853ec0`; `DC-SERVEMEM-01 → enforced`).** `ChainDbServedSource`
+  switched onto the bounded primitives behind `MAX_SERVE_RANGE_BLOCKS = 256`; new RED enum `ServeRangeOutcome`.
+  New gate `ci_check_serve_range_bounded.sh`.
+- **In-cluster security-review MEDIUM (`5c9f6cf6`).** An inverted-range (`from > to`) panic fixed in-cluster.
 
 **N-AA headline (at `b0365df0`):** Registry **333 → 334** (+1 enforced `DC-SERVEMEM-01`; +2 strengthenings
 `DC-NODE-13` + `DC-LIVEMEM-01`; 0 removed). CI gates **135 → 136** (+1 `ci_check_serve_range_bounded.sh`).
-**RED-only — BLUE canonical types 458 → 458.** Serve-side analog of `DC-LIVEMEM-01`; closes the N-U
-cross-slice MEDIUM. **No `RO-LIVE` flip.**
+**RED-only — BLUE canonical types 458 → 458.** Serve-side analog of `DC-LIVEMEM-01`. **No `RO-LIVE` flip.**
 
 ---
 
-## Historical — PHASE4-N-U close + gate-hygiene window (`4e358e92 → 999199f8`)
+## Historical — earlier windows (`4e358e92 → 999199f8` and before)
 
-> Preserved in condensed form. The **PHASE4-N-U cluster CLOSE + a gate-hygiene / close-correction
-> tail**, narrating the `4e358e92 → 999199f8` span. Counts here are the figures **at `999199f8`** (333
-> rules, 135 CI gates, 458 canonical types). The full §§0–7 narrative is recoverable from this doc's git
-> history at `999199f8`.
+> Preserved as pointers. The **PHASE4-N-U cluster CLOSE + gate-hygiene tail** (`4e358e92 → 999199f8`, 333
+> rules / 135 CI gates at `999199f8` — 11 gates repaired in place, 0 added/removed, 0 invariants weakened);
+> the **PHASE4-N-U cluster** (`65954fa3 → 4e358e92`, forged-block durability — `DC-NODE-12`, `DC-CONS-23`,
+> `DC-WAL-04`, `T-REC-05`, `DC-NODE-13`; one new RED module `served_chain_projection`; 328 → 333 rules);
+> and the **G-K…G-R + C1 multi-cluster catch-up** (`550eec3a → 65954fa3`, eight clusters G-K through G-R
+> toward a live genesis-successor follower — 319 → 328 rules, 126 → 134 CI gates, the one BLUE canonical
+> type `ArrayHead` 457 → 458). The full §§0–7 narrative for each is recoverable from this doc's git history
+> at `999199f8` / `4e358e92` / `65954fa3`.
 
-> Baseline: `4e358e92` (refresh stale G-R serve-handoff comment in containment gate (post-N-U-S3), 2026-06-05 17:17)
-> HEAD: `999199f8` (repair 10 pre-existing gate-vs-code drifts (gate hygiene; 0 invariants weakened), 2026-06-05 19:28)
-> Span: **PHASE4-N-U cluster CLOSE + a gate-hygiene / close-correction tail** — 4 commits, 23 files, +1063 / −658.
-
-The window was **not a feature cluster** — it was the **PHASE4-N-U close pass** (commit `7f00e75d`,
-docs-only: archive + 4-grounding-doc refresh + baseline bump `65954fa3 → 4e358e92`) plus a
-**gate-hygiene / close-correction tail** of three CI-only commits (`60deecf3`, `e92b40b7`, `999199f8`).
-It answered one operational question the N-U close left open: *is the `ci/ci_check_*.sh` sweep
-trustworthy as release evidence — does GREEN actually mean GREEN?* The window repaired **every failing
-gate in place** — adding no gate, removing no gate, weakening no invariant.
-
-**N-U-close-window headline (at `999199f8`):** CI gates **135 → 135** (0 net — 11 gates repaired in
-place); registry **333 → 333** (identical ID set — the lone edit was the `DC-NODE-06` strengthening);
-status **201 / 20 / 112** unchanged; BLUE types **458 → 458**. The full `ci/ci_check_*.sh` sweep was
-**135 passed / 0 failed** at HEAD. **No `RO-LIVE` flip, no behavior change** — pure
-enforcement-trustworthiness work.
-
----
-
-## Historical — PHASE4-N-U cluster window (`65954fa3 → 4e358e92`)
-
-> Preserved in condensed form. The single-cluster lead **PHASE4-N-U — forged-block durability**,
-> narrating the `65954fa3 → 4e358e92` span. Counts here are the figures **at `4e358e92`** (333 rules,
-> 135 CI gates, 458 canonical types). The full N-U §§0–7 narrative is recoverable from this doc's git
-> history at `4e358e92` / `999199f8`.
-
-> Baseline: `65954fa3` (G-K…G-R + C1 catch-up close, 2026-06-04 23:32)
-> HEAD: `4e358e92` (refresh stale G-R serve-handoff comment in containment gate (post-N-U-S3), 2026-06-05 17:17)
-> Span: **PHASE4-N-U — forged-block durability** (own-forged durable admit → forged-tip crash recovery + replay-equivalence → serve-as-durable-chain projection) — 14 commits, 28 files, +3726 / −1802.
-
-PHASE4-N-U answered: *once Ade forges its own block, does it become part of the **durable** chain —
-survive a crash, replay byte-identically, and get served to a follower — through the SAME gate received
-blocks use, with NO second tip-advance path?* It closed that across three slices:
-
-- **S1 — own-forged durable admit through the pump (`DC-NODE-12` + `DC-CONS-23` + `DC-WAL-04` prior-fp
-  clause).** A fenced RED driver `ade_node::node_sync::admit_forged_block_durably` feeds the
-  self-accepted bytes into the **same** `forward_sync::pump_block` chokepoint received blocks use. New
-  gate `ci_check_forged_durable_admit_via_pump.sh`.
-- **S2 — forged-tip crash recovery + replay-equivalence (`T-REC-05`, `DC-WAL-04` no-orphan clause).**
-  Production `warm_start_recovery` forward-replays from the nearest snapshot ≤ tip and reconciles the
-  WAL tail; an un-WAL'd forged orphan is dropped. `T-REC-05` is test-enforced.
-- **S3 — serve-as-durable-chain projection (`DC-NODE-13`; strengthens `CN-CONS-07`, `DC-NODE-11`).** The
-  `--mode node` served view became a deterministic read-only projection of the durable ChainDb (the NEW
-  RED module `ade_runtime::network::served_chain_projection`). New gate
-  `ci_check_served_chain_projection.sh`; retired gate `ci_check_served_chain_stability.sh`.
-
-**N-U headline (at `4e358e92`):** Registry **328 → 333** (+5 enforced: `DC-NODE-12`, `DC-CONS-23`,
-`DC-WAL-04`, `T-REC-05`, `DC-NODE-13`; +2 strengthenings: `CN-CONS-07`, `DC-NODE-11`; 0 removed). CI
-gates **134 → 135** (+1 net: +2 new, −1 retired). **One new RED module** (`served_chain_projection`).
-**BLUE canonical types 458 → 458.** **No `RO-LIVE` flip.**
-
----
-
-## Historical — PHASE4-N-F-G-K … G-R + C1 window (`550eec3a → 65954fa3`)
-
-> Preserved in condensed form. A **multi-cluster catch-up** narrating the `550eec3a..65954fa3` span —
-> the PHASE4-N-F-G-J close-pass + eight clusters (G-K through G-R) + the C1 genesis-successor rehearsal
-> reproduction evidence. Counts here are the figures **at `65954fa3`** (328 rules, 134 CI gates, 458
-> canonical types). The full G-K…C1 §§0–7 narrative (and the G-J window before it) is recoverable from
-> this doc's git history at `65954fa3` / `4e358e92` / `999199f8`.
-
-> Baseline: `550eec3a` (PHASE4-N-F-G-J close, 2026-06-03 22:02)
-> HEAD: `65954fa3` (run-2 genesis-rehearsal reproduction + runbook flag fixes + gate now covers c1 manifests, 2026-06-04 23:32)
-> Span: **G-J close-pass → G-K, G-L, G-M, G-N, G-O, G-P, G-Q, G-R → C1 genesis-successor rehearsal evidence** — 28 commits, 73 files, +4967 / −243.
-
-Ade closed **eight clusters** (G-K through G-R) plus a G-J close-pass and a C1 genesis-successor
-rehearsal evidence pass, each peeling off the next blocker toward a live C1 genesis-successor follower
-adopting an Ade-forged block 0: serve-listener lifetime (G-K, `DC-NODE-09`) → real-node handshake
-compat (G-L, `CN-WIRE-10`) → real-node ChainSync FindIntersect compat (G-M, `CN-WIRE-11`, + the closed
-BLUE enum `ArrayHead = Definite(u64) | Indefinite`, the window's only +1 canonical type, 457 → 458) →
-recovered-eta0 WarmStart (G-N, `T-REC-04` + `DC-CINPUT-03`) → feed-side tag-24 unwrap (G-O, `CN-WIRE-12`)
-→ feed-side leader-threshold view (G-P, `DC-CINPUT-04`) → forge-successor position (G-Q, `DC-NODE-10`) →
-stable served block 0 via a monotone serve gate (G-R, `DC-NODE-11`) → and the C1 reproduction evidence.
-
-**G-K…C1 headline (at `65954fa3`):** CI gates **126 → 134** (+8, one per cluster); registry **319 →
-328** (+9, all `enforced`); BLUE canonical types **457 → 458** (+1 `ArrayHead`); no new module. **Note:**
-the G-R gate `ci_check_served_chain_stability.sh` was **retired in PHASE4-N-U** (mechanism superseded by
-serve-as-projection), and `DC-NODE-11` was strengthened there; `DC-NODE-11`'s stranded sibling
-`DC-NODE-06` was reconciled in the N-U close window (`60deecf3`).
-
-> *(The G-E…G-I leads were never re-led in HEAD_DELTAS — each was closed with its own grounding-doc
-> refresh. The G-J lead before that is recoverable from this doc's git history at `65954fa3`.)*
+> *(The G-E…G-I and earlier leads were each closed with their own grounding-doc refresh and are recoverable
+> from this doc's git history.)*
 
 ---
 
 ## Generation notes
 
-### Regen `c6e7fafe → 1d54abb4` (PHASE4-N-AC — KES signing evolves key to current period — current lead)
+### Regen `25ddeebd → a76672b9` (PHASE4-N-AD durability proof + C2-LOCAL guide/finding run + PHASE4-N-AE CE-A5 cluster — current lead)
 
-- **Baseline valid; single-cluster lead (RED-only) preceded by the prior-lead's N-AB close-refresh
-  tail.** Run against the config baseline `c6e7fafe` (the PHASE4-N-AB close HEAD), which `git rev-parse`
-  resolves and `git merge-base c6e7fafe HEAD` confirms is a strict ancestor of HEAD `1d54abb4`
-  (`c6e7fafe` carries no tag). The span is the **grounding-doc refresh for the N-AB close** `6184eb0b`
-  (the prior lead's tail — CODEMAP/TRACEABILITY/SEAMS/HEAD_DELTAS refresh) **plus the PHASE4-N-AC cluster**
-  (4 commits: cluster doc + S1 doc + S1 impl + close). The closer bumps `head_deltas_baseline`
-  `c6e7fafe → 1d54abb4` after this regen.
-- **Counts are mechanical (git/grep/ls):** commit log + `--shortstat` over `c6e7fafe..1d54abb4`
-  (**5** commits, no merges / **12** files / **+1029 / −340**); CI gate count via
-  `git ls-tree -r --name-only <ref> ci/ | grep -c 'ci_check_.*\.sh$'` at each ref (**137 → 138**;
-  `--diff-filter=A` over `ci/` = exactly `ci_check_kes_evolution_before_sign.sh`; `--diff-filter=M` and
-  `--diff-filter=D` over `ci/` both **empty**); registry rule count via `grep -cE '^\[\[rules\]\]'` at
-  each ref (**335 → 336**; `diff` of sorted `id =` lists shows the single addition `DC-CRYPTO-10`, zero
-  removals); registry status via `grep -E '^status = ' | sort | uniq -c` (**203 → 204 enforced**, 20
-  partial / 112 declared unchanged); strengthening via the registry diff (**1**: `CN-KES-HEADER-01`
-  gained `strengthened_in = ["PHASE4-N-AC"]`); BLUE canonical types via the CODEMAP header (**458 → 458**).
-- **RED-only span — no BLUE touch, +0 canonical type, no Cargo.toml change.** `git diff --name-status
-  c6e7fafe..1d54abb4` shows **no new `.rs` source file** (only `A` for one CI gate + two cluster/slice
-  docs, `M` for the two `.rs` files + the registry + grounding docs, `D`/`A` for the two cluster-doc
-  archive moves, `M` for the C1 README). The two touched `.rs` files are
-  `crates/ade_runtime/src/producer/producer_shell.rs` (RED shell) and
-  `crates/ade_node/src/produce_mode.rs` (binary/shell entry) — **neither in the BLUE `core_paths`**. `git
-  diff --name-only … '**/Cargo.toml' 'Cargo.toml'` is empty (no feature-flag delta).
-- **Registry delta is +1 enforced rule + 1 strengthening, NOT a removal.** `DC-CRYPTO-10` is the new rule
-  (declared at the cluster doc `cbe6633f`, enforced at the S1 impl `7d4a4a72`); `CN-KES-HEADER-01` gained
-  `strengthened_in += "PHASE4-N-AC"` at the close (`1d54abb4`). The sorted-id `diff` confirms zero
-  removals.
-- **Normative docs unchanged this span.** `git diff --name-only c6e7fafe..1d54abb4` over the configured
-  `normative_docs` (CE-79 statement + addendum, the three contract docs, `CLAUDE.md`) is empty — the §7
-  delta is entirely the invariant-registry change.
-- **Doc-refresh — all four grounding docs regenerated for this close.** The span-opening `6184eb0b`
-  refreshed the four docs for the **N-AB** close. This **N-AC** close regenerates them again: CODEMAP +
-  SEAMS + TRACEABILITY are refreshed (alongside this HEAD_DELTAS) to carry `DC-CRYPTO-10` (the
-  evolve-then-sign surface, the `CN-KES-HEADER-01` strengthening, and the `DC-CRYPTO-10 ↔
-  ci_check_kes_evolution_before_sign.sh` binding). The registry already records the rule + gate binding
-  authoritatively at HEAD (336 rules); the CODEMAP/SEAMS/TRACEABILITY refresh brings the narrative docs
-  current alongside this regen.
-- **Both gating reviews PASS — no HIGH+ this cluster.** The PHASE4-N-AC per-slice (S1) and per-cluster
-  cross-slice security reviews both pass with no HIGH+ finding. Two pre-existing fail-closed INFO items
-  (the `kes_advance_to` zero-on-failed-advance — unreachable via the forge, fail-safe; and the
-  `opcert_start + 63` vs absolute-`63` window divergence — still fail-closed) were recorded and handed to
-  C2. The live evidence is the item-4 C1 re-run (KES period 1): Ade forged 3 period-1 blocks; the real
-  cardano-node downloaded the period-1 header with no KES rejection.
-- **Genesis-window finding recorded honestly.** `slotsPerKESPeriod = 129600 == 3k/f = 129600`, so a
-  from-genesis rehearsal cannot show forge-at-period-1 **and** follower-adopt simultaneously (the period-1
-  follower rejection is `CandidateTooSparse` — a genesis-density-window limit, **KES-independent**).
-  Cross-period end-to-end forge → adopt is the **C2 tip path** (dense current tip, no genesis window), not
-  a net reset. The C1 reproduction README carries this addendum (close commit `1d54abb4`).
-- **Working tree clean.** This regen runs *after* all five span commits (the close `1d54abb4` is HEAD for
-  this window); `git status --short` shows only an untracked `.mithril-scratch/` (operator scratch,
-  ignored). The remaining close-pass actions are the parallel CODEMAP/SEAMS/TRACEABILITY refresh + the
-  baseline bump `c6e7fafe → 1d54abb4`.
+- **Baseline valid; multi-part lead (N-AC refresh tail → N-AD test-only → C2-LOCAL docs → N-AE CE-A5).**
+  Run against `25ddeebd` (the PHASE4-N-AC grounding-refresh commit that wrote the previous lead), which
+  `git rev-parse` resolves and `git merge-base 25ddeebd HEAD` confirms is a strict ancestor of HEAD
+  `a76672b9` (`25ddeebd` carries no tag). The start-of-regen config baseline was `1d54abb4` (the N-AC close
+  *impl*); `25ddeebd` is the next commit (the N-AC refresh), so the window measures from the doc-refresh
+  commit and the `1d54abb4..25ddeebd` step is folded into the span-opening tail. The closer bumps
+  `head_deltas_baseline` `1d54abb4 → a76672b9` after this regen.
+- **Counts are mechanical (git/grep/ls):** commit log + `--shortstat` over `25ddeebd..HEAD` (**19** commits,
+  no merges / **24** files / **+3635 / −129**); CI gate count via
+  `git ls-tree -r --name-only <ref> ci/ | grep -c 'ci_check_.*\.sh$'` at each ref (**138 → 141**;
+  `--diff-filter=A` over `ci/` = the three new gates; `--diff-filter=D` over `ci/` **empty**;
+  `--diff-filter=M` over `ci/` = exactly `build_consensus_inputs_bundle.sh`, a **non-gate** operator script);
+  registry rule count via `grep -cE '^\[\[rules\]\]'` at each ref (**336 → 340**; `diff` of sorted `id =`
+  lists shows the four additions `DC-CONS-24` / `DC-NODE-14` / `DC-NODE-15` / `DC-PROTO-10`, zero removals);
+  registry status via `grep -E '^status = ' | sort | uniq -c` (**204 → 208 enforced**, 20 partial / 112
+  declared unchanged); strengthenings via the registry `strengthened_in` scan (**9** appends across **8**
+  distinct rules: N-AD on `DC-WAL-04` + `T-REC-05`; N-AE on `DC-EPOCH-03`, `CN-CONS-06`, `CN-CONS-07`,
+  `DC-WAL-02`, `DC-NODE-05`, `T-REC-05`, `DC-CONS-23`); BLUE canonical types via a direct
+  `git grep -hE "^(pub )?(struct|enum) "` count over the BLUE trees at each ref (**458 → 458**).
+- **BLUE-additive span — two BLUE files, +0 canonical type, no Cargo.toml change.** `git diff --name-status
+  25ddeebd..HEAD` shows two BLUE `core_paths` files touched —
+  `crates/ade_ledger/src/block_validity/header_input.rs` (additive `DecodedBlock.prev_hash` field, already
+  parsed) and `crates/ade_network/src/chain_sync/server.rs` (additive FindIntersect-cursor logic + a
+  regression test) — and `git diff 25ddeebd..HEAD` over the BLUE trees adds **zero** `^+(pub )?(struct\|enum)`
+  lines. The other source changes are RED (`ade_node::{node_sync, node_lifecycle}`) or RED-shell
+  (`ade_runtime::network::served_chain_projection`). No new `.rs` *source* file (the one added `.rs` is the
+  N-AE diagnostic *test*). `git diff --name-only … '**/Cargo.toml' 'Cargo.toml'` is empty (no feature-flag
+  delta). **Note (classification):** `ade_network::chain_sync::server` is **BLUE** — it sits under the BLUE
+  `core_paths` path `chain_sync/` and opens with the BLUE banner; CODEMAP documents the AE.E change in its
+  BLUE `ade_network` entry, not as GREEN.
+- **Registry delta is +4 enforced rules + 9 strengthenings, NOT a removal.** The four new rules are
+  declared at the N-AE cluster doc (`48a8009c`, `DC-NODE-14` / `DC-NODE-15` / `DC-CONS-24`) + the AE.E impl
+  (`a76672b9`, `DC-PROTO-10`), enforced at their slice impls (`DC-NODE-14` lands `partial` at AE.A
+  `5f2afc2a`, `enforced` at AE.B `450c6992`). `DC-PROTO-10` carries an **empty `ci_script`** — it is
+  **regression-test enforced** (`producer_chain_sync_serve_find_intersect_sets_cursor_then_rolls_forward_past_it`),
+  a deliberate test-enforced server-cursor invariant. The sorted-id `diff` confirms zero removals.
+- **CE-A5 manifest is `enforced`-backing evidence, NOT a `RO-LIVE` flip.** The real-relay adoption
+  (`docs/evidence/phase4-n-ae-ce-a5-relay-adoption.{md,jsonl}`; relay `AddedToCurrentChain` Ade's forged
+  block 17 @ slot 421) backs `DC-NODE-14` / `DC-PROTO-10` (and the `CN-CONS-06` strengthening); no
+  `RO-LIVE-01` registry status changed this span.
+- **Normative docs unchanged this span.** `git diff --name-only 25ddeebd..HEAD` over the configured
+  `normative_docs` (CE-79 statement + addendum, the three contract docs, CE-73 reclassification, `CLAUDE.md`)
+  is empty — the §7 delta is entirely the invariant-registry change.
+- **Commit order ≠ slice-letter order for N-AE.** The impl landed A (`5f2afc2a`) → C (`5425b23c`) → B
+  (`450c6992`) → E (`a76672b9`); the AE.B Option-B approach was promoted to the CE-A5 closer (per the
+  `238aff61` slice doc) and AE.E was the final cursor fix. The §1 commit log is verbatim from
+  `git log --oneline --no-merges` (newest first); the per-slice synthesis is in §0/§3.
+- **Doc-refresh — all four grounding docs current at HEAD `a76672b9`.** The span-opening `25ddeebd`
+  refreshed the four docs for the **N-AC** close. In this close pass CODEMAP/SEAMS/TRACEABILITY are
+  **already regenerated to HEAD `a76672b9`** (verified on disk: CODEMAP header `a76672b9` / 458 / 141 / 340
+  with full N-AE coverage; TRACEABILITY + SEAMS re-pinned to `a76672b9` / registry 340) — this HEAD_DELTAS
+  is the last of the four brought current. The registry records the rules + gate bindings authoritatively
+  at HEAD (340 rules).
+- **Working tree clean.** This regen runs *after* all 19 span commits (the CE-A5 closer `a76672b9` is HEAD
+  for this window); `git status --short` shows only an untracked `.mithril-scratch/` (operator scratch,
+  ignored). The remaining close-pass actions are this HEAD_DELTAS, the PHASE4-N-AE cluster-doc archive, and
+  the baseline bump `1d54abb4 → a76672b9`.
