@@ -428,6 +428,22 @@ economics. **Tie the climb to what the bounty requires** — the manifest alread
 *minimal* block-production bar; the ladder buys robustness/confidence, not a new acceptance
 gate (only rung 3's preprod `correlate` flips an RO-LIVE rule).
 
+**Forecast-horizon — rung-1 Finding A (2026-06-07; operational/venue constraint, NOT an Ade
+invariant).** In a frozen-relay single-producer venue the forecast horizon (stability window
+`3k/f` ≈ 300 slots here) is a **peer** constraint. The rung-1 loop remains valid while the relay
+keeps adopting Ade's blocks and therefore tracks Ade's tip; a leadership dry spell longer than the
+peer forecast horizon is a **venue/liveness limitation, not a BLUE-path invariant failure**.
+**Operational consequence (setup):** the freeze→first-forge path must land Ade's first forged
+successor within ~`3k/f` slots of the frozen relay tip — freeze a *fresh* tip and run
+freeze→relay→recover→node back-to-back (no inter-step latency). A fast setup adopts (c2ae18; the
+rung-1 `c2t1` retry, gap ≪ 300, 0 `CandidateTooSparse`); a slow setup overshoots the horizon
+(rung-1 `c2r4`, gap > 300 → 222 `CandidateTooSparse` / 0 adoptions). Mechanism: ouroboros-consensus
+ChainSync `checkTime` → `CandidateTooSparse` = "header beyond the forecast horizon AND their
+fragment not preferable to ours", not gated by any Genesis flag. Evidence: `~/.cardano-rung1-host/`
++ the `project_rung1_kickoff` memory. The distinct **sustained-forge** stall (rung-1 Finding B — the
+loop stops after one block) is an Ade gap, scoped at `docs/planning/sustained-single-producer-forge-invariants.md`
+(DC-NODE-17, declared).
+
 ---
 
 ## 8. Anti-regression checklist (the wrong turns this session, never repeat)

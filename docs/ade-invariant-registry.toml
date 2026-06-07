@@ -6694,3 +6694,28 @@ status = "enforced"
 introduced_in = "PHASE4-N-AE"
 strengthened_in = []
 evidence_notes = "PHASE4-N-AE.A (2026-06-06). ENFORCED. When the forge is admissible (CaughtUp), the ForgeTick arm forges on selected_tip = ChainDb::tip() = the durable servable tip, which equals the followed peer tip (DC-NODE-15). forge_header_position sets the successor prev_hash = PrevHash::Block(selected_tip.hash) and block_no = last_block_no + 1, so the forged parent hash BYTE-EQUALS the peer-visible selected tip and block_no == followed_tip.block_no + 1. Test forge_on_followed_tip_proceeds_with_parent_byte_equal reads the forged prev_hash from the inner Conway header body (preserved CBOR, never inferred from block_no) and asserts byte-equality to the followed peer tip hash + block_no + 1. Gate: ci_check_forge_followed_tip_admission.sh (assertion (b): the classifier compares hash AND block_no)."
+
+[[rules]]
+id = "DC-NODE-17"
+tier = "derived"
+statement = """
+followed_peer_tip advances ONLY from a real observed peer ChainSync advertisement of the
+peer's selected tip, INCLUDING the self-adoption echo case where the advertised block is
+already durably held by Ade (the relay re-announcing Ade's own just-adopted block). The
+advance is a RED scheduling observation of the peer's real selection: it updates forge
+ADMISSIBILITY only (DC-NODE-15) and must NEVER mutate the durable tip / WAL / ledger
+(DC-NODE-16 idempotency preserved; replay-neutral) and NEVER reach chain selection /
+fork-choice (DC-CONS-03 stays the follow authority). A sole producer therefore recognizes
+catch-up to its own adopted block and forges the successor, sustaining a chain (N, N+1, ...)
+rather than stalling at one block. NOT a chain-selection rule; a RED observation rule for
+forge admissibility only.
+"""
+source = "docs/planning/sustained-single-producer-forge-invariants.md"
+cross_ref = ["DC-NODE-15", "DC-NODE-16", "DC-CONS-03", "DC-NODE-10", "DC-CONS-24", "T-REC-05", "DC-WAL-02"]
+code_locus = "CANDIDATE (pending OQ-1): crates/ade_node/src/node_sync.rs (FollowedPeerTipSignal.observe + the wire-pump pump_lookahead/wait_ready which today observes only AdmissionPeerEvent::TipUpdate)"
+tests = []
+ci_script = ""
+status = "declared"
+introduced_in = "TBD"
+strengthened_in = []
+evidence_notes = "Rung-1 Finding B (2026-06-07). DECLARED, NOT enforced -- blocked on OQ-1: a live-instrumented run must first prove WHETHER the relay re-announces/advertises Ade's own adopted block over the follow link. Honest read: followed_peer_tip did not advance to Ade's adopted block N, so the DC-NODE-15 gate stayed NotCaughtUp and Ade forged exactly ONE block per recover (1 succeeded, 65 no_tip_available; relay AddedToCurrentChain block 11 issuer 48a5ff1f == blake2b-224(pool1 cold VK), 0 CandidateTooSparse, then follow link EOF). The precise wire mechanism (RollForward carrying tip=N vs. an idle serve-to-Ade) is UNPROVEN. Enforcement preconditions (ALL required before -> enforced): (1) no WAL append on the advance; (2) no durable ChainDb tip mutation; (3) no ledger/chain_dep mutation; (4) no fork-choice / chain-selection influence; (5) no bypass of the DC-NODE-15 gate durable_servable_tip == followed_peer_tip; (6) committed live evidence that the peer actually re-announces/advertises Ade's adopted block. RED-only, NO BLUE change (mirrors DC-NODE-16's RED-chokepoint shape). Sibling follow-link liveness (SF-6/OQ-2) held in docs/planning/sustained-single-producer-forge-invariants.md, NOT declared, pending proof EOF/reconnect is independent (-> a later DC-NODE-18 or operational rule only if OQ-2 confirms)."
