@@ -411,7 +411,7 @@ cross-period KES is already covered by N-AC / N-P).
 
 | Rung | Venue | Failure class isolated | Likely new work | "Done" = |
 |---|---|---|---|---|
-| **1** | C2-LOCAL, single-producer (the existing CE-A5 harness) | operational stability · **settlement beyond k** · **epoch transition** · restart durability | maybe an epoch-transition slice | several Ade blocks settle `>k` into the relay's ImmutableDB · **1 epoch crossed** with adoption continuing · survives a **mid-run kill→warm-start** |
+| **1** | C2-LOCAL, single-producer (the existing CE-A5 harness) | operational stability · **settlement beyond k** · **epoch transition** · restart durability | DC-NODE-19 single-producer extend-mode loop continuation after follow EOF; later epoch-transition slice if exposed | several Ade blocks settle `>k` into the relay's ImmutableDB · **1 epoch crossed** with adoption continuing · survives a **mid-run kill→warm-start** |
 | **2** | C2-LOCAL, multi-producer (un-freeze a 2nd pool so it competes) | **fork-choice / rollback** — DC-CONS-03, never exercised live | a live fork-choice cluster (**real** new work) | Ade selects the best chain across a real fork **and** recovers from losing one |
 | **3** | preprod | real network · stake · load · adversaries | SPO registration + ~2-epoch stake gate + operator wiring | a registered Ade SPO's block accepted on preprod → `Ba02Manifest` (flips RO-LIVE-01 / CN-CONS-06 live half) |
 
@@ -441,8 +441,23 @@ rung-1 `c2t1` retry, gap ≪ 300, 0 `CandidateTooSparse`); a slow setup overshoo
 ChainSync `checkTime` → `CandidateTooSparse` = "header beyond the forecast horizon AND their
 fragment not preferable to ours", not gated by any Genesis flag. Evidence: `~/.cardano-rung1-host/`
 + the `project_rung1_kickoff` memory. The distinct **sustained-forge** stall (rung-1 Finding B — the
-loop stops after one block) is an Ade gap, scoped at `docs/planning/sustained-single-producer-forge-invariants.md`
-(DC-NODE-17, declared).
+loop stopped after one block) was an Ade gap; OQ-1 (2026-06-07) live-disproved the DC-NODE-17 relay-echo
+hypothesis, and **PHASE4-N-AF fixed the core** (DC-NODE-18 — see the update below); the sustained-past-k /
+loop-continuation remainder is **DC-NODE-19**.
+
+> **Update — PHASE4-N-AF / DC-NODE-18 closed (2026-06-08):**
+> The sustained single-producer stall root cause was corrected for the core successor case.
+> Live evidence `c2t7-extend-proof` shows Ade forged block N, the Haskell relay adopted it,
+> the harness supplied explicit adoption evidence, Ade promoted into single-producer
+> extend-own-spine mode, forged N+1 without requiring a relay echo of N, and the relay
+> adopted N+1. This enforces DC-NODE-18 for the proven core claim: after initial catch-up
+> and explicit relay-adoption evidence, a single-producer Ade may extend its own durable
+> adopted spine without waiting for the relay to re-announce Ade's block.
+>
+> This does **not** complete rung 1. The run stopped after the follow link EOF'd
+> (`forge_tick_skipped: unknown_disconnected`). Sustained production past `k`, relay
+> ImmutableDB settlement, follow-link/loop continuation after EOF, restart during sustained
+> extension, and epoch crossing remain deferred to DC-NODE-19 / follow-up rung-1 liveness work.
 
 ---
 
