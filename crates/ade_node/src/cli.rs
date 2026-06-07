@@ -127,6 +127,20 @@ pub struct Cli {
     /// ticks. Honest-scope: production omits this; the operator
     /// drives shutdown via SIGINT/SIGTERM.
     pub max_slots: Option<u64>,
+    // -------------------------------------------------------------------
+    // PHASE4-N-AF (DC-NODE-18) — single-producer extend-own-spine flags.
+    // ONLY for an explicitly single-producer venue (rung-1 / C2-LOCAL);
+    // default off ⇒ the forge stays pure DC-NODE-15.
+    // -------------------------------------------------------------------
+    /// `--single-producer-venue`: declare an explicitly single-producer venue
+    /// (relay non-producing, Ade sole producer), enabling DC-NODE-18
+    /// extend-own-durable-spine behind the fail-closed fence. Default `false`.
+    pub single_producer_venue: bool,
+    /// `--adoption-cert-path PATH`: the RED venue-adoption certificate file
+    /// (admissibility-only — never persisted / replay-visible). Names the own
+    /// tip the relay adopted; read only while awaiting promotion. Only
+    /// meaningful with `--single-producer-venue`.
+    pub adoption_cert_path: Option<PathBuf>,
 }
 
 /// Closed admission-mode CLI bundle (B5).
@@ -238,6 +252,8 @@ impl Cli {
         let mut genesis_file: Option<PathBuf> = None;
         let mut evidence_log: Option<PathBuf> = None;
         let mut max_slots: Option<u64> = None;
+        let mut single_producer_venue = false;
+        let mut adoption_cert_path: Option<PathBuf> = None;
 
         while let Some(arg) = iter.next() {
             match arg.as_str() {
@@ -275,6 +291,16 @@ impl Cli {
                         .next()
                         .ok_or_else(|| CliError::FlagMissingValue("--peer".to_string()))?;
                     peer_addrs.push(v);
+                }
+                // PHASE4-N-AF (DC-NODE-18) — single-producer venue declaration.
+                "--single-producer-venue" => {
+                    single_producer_venue = true;
+                }
+                "--adoption-cert-path" => {
+                    let v = iter.next().ok_or_else(|| {
+                        CliError::FlagMissingValue("--adoption-cert-path".to_string())
+                    })?;
+                    adoption_cert_path = Some(PathBuf::from(v));
                 }
                 "--mode" => {
                     let v = iter
@@ -466,6 +492,8 @@ impl Cli {
             genesis_file,
             evidence_log,
             max_slots,
+            single_producer_venue,
+            adoption_cert_path,
         })
     }
 

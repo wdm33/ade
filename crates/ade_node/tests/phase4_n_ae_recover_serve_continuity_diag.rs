@@ -245,6 +245,9 @@ fn forge_refused_not_caught_up() {
             assert_eq!(followed_peer_tip, Some(peer_ahead));
             assert_eq!(reason, NotCaughtUpReason::TipMismatch);
         }
+        ForgeRefused::SingleProducerFenceViolation { .. } => {
+            panic!("expected NotCaughtUp, got SingleProducerFenceViolation")
+        }
     }
 }
 

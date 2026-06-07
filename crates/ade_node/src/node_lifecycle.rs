@@ -90,8 +90,11 @@ use crate::admission::bootstrap::build_n2n_version_table;
 use crate::cli::Cli;
 use crate::forge_intent::{classify_forge_intent, ForgeIntent};
 use crate::node_sync::{
-    admit_forged_block_durably, forge_followed_tip_admission, forge_one_from_recovered,
-    run_node_sync, ForgeFollowedTipAdmission, ForgeRefused, NodeBlockSource, NodeForgeOutcome,
+    admit_forged_block_durably, forge_followed_tip_admission, forge_mode_on_caughtup,
+    forge_mode_on_extend, forge_mode_on_first_own_block_served, forge_one_from_recovered,
+    run_node_sync, single_producer_forge_decision, ForgeFollowedTipAdmission, ForgeMode,
+    ForgeRefused, NodeBlockSource, NodeForgeOutcome, SingleProducerForgeDecision,
+    VenueAdoptionCertificate, VenueRole,
 };
 use crate::operator_forge;
 use crate::run_loop_planner::{
@@ -606,6 +609,12 @@ async fn run_node_lifecycle_inner(
                 start_slot,
                 slot_length_ms,
             );
+            // PHASE4-N-AF (DC-NODE-18): when the operator declares an explicitly
+            // single-producer venue, enable extend-own-spine behind the fence.
+            // Absent the flag, `venue_role` stays Unknown ⇒ pure DC-NODE-15.
+            if cli.single_producer_venue {
+                activation.declare_single_producer_venue(cli.adoption_cert_path.clone());
+            }
             // PHASE4-N-F-G-J S1 (CN-NODE-04): emit the closed feed/forge
             // scheduling diagnostics to stderr (emit-only; never alters
             // scheduling). The forge-on path the C1 rerun exercises —
@@ -946,6 +955,17 @@ pub struct ForgeActivation<'a> {
     /// observed tips + reason — in-memory, not persisted, not evidence — that
     /// makes the typed refusal visible (never a silent skip, never log-only).
     pub last_forge_refused: Option<ForgeRefused>,
+    /// DC-NODE-18 (PHASE4-N-AF): the single-producer forge mode (RED scheduling
+    /// state; NOT persisted, NOT replay-visible). Default `InitialCatchupRequired`.
+    pub forge_mode: ForgeMode,
+    /// DC-NODE-18: the declared venue role. Default `Unknown` — the extend gate
+    /// fails closed, so a node that does NOT explicitly declare a single-producer
+    /// venue forges EXACTLY as the prior DC-NODE-15-only path (no behavior change).
+    pub venue_role: VenueRole,
+    /// DC-NODE-18: path to the RED venue-adoption certificate file (operator/harness
+    /// -supplied; admissibility-only — never persisted, never replay-visible). Read
+    /// only while in `FirstOwnBlockServed` to promote into the extend state.
+    pub adoption_cert_path: Option<std::path::PathBuf>,
 }
 
 impl<'a> ForgeActivation<'a> {
@@ -978,7 +998,77 @@ impl<'a> ForgeActivation<'a> {
             hermetic_forge_outcomes: Vec::new(),
             last_slot_alignment_fail: None,
             last_forge_refused: None,
+            forge_mode: ForgeMode::InitialCatchupRequired,
+            venue_role: VenueRole::Unknown,
+            adoption_cert_path: None,
         }
+    }
+
+    /// DC-NODE-18: declare this an explicitly single-producer venue (relay
+    /// non-producing, Ade sole producer), enabling extend-own-spine behind the
+    /// fail-closed fence. `cert_path` is the RED venue-adoption certificate file.
+    /// If un-called, `venue_role` stays `Unknown` ⇒ the extend path never activates
+    /// and the forge stays pure DC-NODE-15.
+    pub fn declare_single_producer_venue(&mut self, cert_path: Option<std::path::PathBuf>) {
+        self.venue_role = VenueRole::SingleProducer;
+        self.adoption_cert_path = cert_path;
+    }
+}
+
+/// DC-NODE-18 (PHASE4-N-AF) — RED loop glue.
+
+/// Decode a 64-char hex string into 32 bytes (the adopted-tip hash in the
+/// venue-adoption certificate file). `None` on any malformed input.
+fn parse_hex32(s: &str) -> Option<[u8; 32]> {
+    if s.len() != 64 {
+        return None;
+    }
+    let mut out = [0u8; 32];
+    for (i, byte) in out.iter_mut().enumerate() {
+        *byte = u8::from_str_radix(s.get(2 * i..2 * i + 2)?, 16).ok()?;
+    }
+    Some(out)
+}
+
+/// DC-NODE-18: read the RED venue-adoption certificate from `path`. The file is
+/// three whitespace-separated tokens — `<block_no> <slot> <hash_hex64>` — naming the
+/// own-forged tip the operator/harness certifies the relay adopted. ADMISSIBILITY
+/// evidence ONLY: it advances the RED forge-mode and is NEVER persisted or
+/// replay-visible. `None` if absent / unset / malformed (fail-closed: no promotion
+/// without a well-formed certificate).
+fn read_adoption_cert(path: &Option<std::path::PathBuf>) -> Option<VenueAdoptionCertificate> {
+    let content = std::fs::read_to_string(path.as_ref()?).ok()?;
+    let mut it = content.split_whitespace();
+    let block_no: u64 = it.next()?.parse().ok()?;
+    let slot: u64 = it.next()?.parse().ok()?;
+    let hash = parse_hex32(it.next()?)?;
+    Some(VenueAdoptionCertificate {
+        adopted_tip: TipPoint {
+            slot: SlotNo(slot),
+            hash: Hash32(hash),
+            block_no,
+        },
+    })
+}
+
+/// DC-NODE-15 forge-on-followed-tip refusal, factored so the DC-NODE-18
+/// `UseInitialCatchupGate` path and the default (non-single-producer) path share ONE
+/// gate. `None` ⇒ admissible (caught up, or cold-start).
+fn dc_node_15_refusal(
+    is_cold_start: bool,
+    durable_servable_tip: &Option<TipPoint>,
+    followed_peer_tip: &Option<TipPoint>,
+) -> Option<ForgeRefused> {
+    if is_cold_start {
+        return None;
+    }
+    match forge_followed_tip_admission(durable_servable_tip.clone(), followed_peer_tip.clone()) {
+        ForgeFollowedTipAdmission::CaughtUp => None,
+        ForgeFollowedTipAdmission::NotCaughtUp { reason } => Some(ForgeRefused::NotCaughtUp {
+            local_servable_tip: durable_servable_tip.clone(),
+            followed_peer_tip: followed_peer_tip.clone(),
+            reason,
+        }),
     }
 }
 
@@ -1158,33 +1248,89 @@ pub async fn run_relay_loop_with_sched(
                     // path is ungated (its parent is Genesis, intersectable via
                     // Origin). A `Refused` is NO forge, NO state transition, tip
                     // unchanged — the typed refusal is recorded (never log-only).
-                    let refusal: Option<ForgeRefused> = if is_from_genesis_cold_start {
-                        None
-                    } else {
-                        match forge_followed_tip_admission(
+                    // DC-NODE-18 (PHASE4-N-AF) mode-aware forge gate. The DEFAULT
+                    // venue (`Unknown`) takes the pure DC-NODE-15 path — EXACTLY the
+                    // prior behavior (no change). An explicitly declared
+                    // single-producer venue walks the `ForgeMode` state machine:
+                    // initial catch-up via DC-NODE-15, then — once the relay has
+                    // adopted the first successor (proved by an explicit RED
+                    // certificate, NEVER inferred from self-admit) — it extends its
+                    // OWN durable spine. A refuse/await is NO forge, NO state
+                    // transition, tip unchanged; the typed refusal is recorded (never
+                    // log-only). `proceed_to_forge` is a per-tick control flag, NOT
+                    // the mode (the mode is the `ForgeMode` enum on `act`).
+                    let proceed_to_forge: bool = if act.venue_role == VenueRole::SingleProducer {
+                        let cert = if matches!(act.forge_mode, ForgeMode::FirstOwnBlockServed { .. })
+                        {
+                            read_adoption_cert(&act.adoption_cert_path)
+                        } else {
+                            None
+                        };
+                        match single_producer_forge_decision(
+                            &act.forge_mode,
                             durable_servable_tip.clone(),
                             followed_peer_tip.clone(),
+                            followed_peer_tip.clone(),
+                            act.venue_role,
+                            false,
+                            false,
+                            cert.as_ref(),
                         ) {
-                            ForgeFollowedTipAdmission::CaughtUp => None,
-                            ForgeFollowedTipAdmission::NotCaughtUp { reason } => {
-                                Some(ForgeRefused::NotCaughtUp {
-                                    local_servable_tip: durable_servable_tip.clone(),
-                                    followed_peer_tip: followed_peer_tip.clone(),
-                                    reason,
-                                })
+                            // ExtendOwnSpine forges on the durable spine head. The
+                            // GREEN fence already required durable_servable_tip ==
+                            // current_tip (the forge_base it returns), and the forge
+                            // below builds on `selected_tip` (ChainDb::tip) — the SAME
+                            // durable head — so the forge base stays BLUE-sourced and
+                            // byte-equals forge_base (DC-CONS-24); the payload is not
+                            // re-threaded because the base is read fresh from the tip.
+                            SingleProducerForgeDecision::ExtendOwnSpine { .. } => true,
+                            SingleProducerForgeDecision::Promote { next } => {
+                                act.forge_mode = next;
+                                false
+                            }
+                            SingleProducerForgeDecision::AwaitAdoptionCertificate => false,
+                            SingleProducerForgeDecision::Refuse(refused) => {
+                                act.last_forge_refused = Some(refused);
+                                false
+                            }
+                            SingleProducerForgeDecision::UseInitialCatchupGate => {
+                                match dc_node_15_refusal(
+                                    is_from_genesis_cold_start,
+                                    &durable_servable_tip,
+                                    &followed_peer_tip,
+                                ) {
+                                    Some(refused) => {
+                                        act.last_forge_refused = Some(refused);
+                                        false
+                                    }
+                                    None => {
+                                        // Caught up (or cold-start): advance the mode
+                                        // to CaughtUpToPeerTip when a real peer tip is
+                                        // present (the on-caughtup transition).
+                                        if let Some(pt) = followed_peer_tip.clone() {
+                                            act.forge_mode =
+                                                forge_mode_on_caughtup(&act.forge_mode, pt);
+                                        }
+                                        true
+                                    }
+                                }
                             }
                         }
+                    } else {
+                        // Default (non-single-producer) venue — pure DC-NODE-15.
+                        match dc_node_15_refusal(
+                            is_from_genesis_cold_start,
+                            &durable_servable_tip,
+                            &followed_peer_tip,
+                        ) {
+                            Some(refused) => {
+                                act.last_forge_refused = Some(refused);
+                                false
+                            }
+                            None => true,
+                        }
                     };
-                    if let Some(refused) = refusal {
-                        // Fail-closed, deterministic: the forge does not fire this
-                        // slot, no partial state, tip unchanged — exactly like an
-                        // off-epoch / not-leader skip. Record the TYPED refusal
-                        // (the LOCAL structured observation surface carrying the
-                        // tips + reason — never a log-string-only path); advance NO
-                        // `last_forged_slot`. The operational `NoTipAvailable`
-                        // diagnostic is emitted by the shared `!forged` tail below.
-                        act.last_forge_refused = Some(refused);
-                    } else if cold_start_permitted || selected_tip.is_some() {
+                    if proceed_to_forge && (cold_start_permitted || selected_tip.is_some()) {
                         if let Some(s) = sched.as_deref_mut() {
                             s.record(&crate::live_log::NodeSchedEvent::ForgeAttempted);
                         }
@@ -1266,6 +1412,37 @@ pub async fn run_relay_loop_with_sched(
                                 act.hermetic_forge_outcomes.push(event);
                                 act.last_forged_slot = Some(slot);
                                 forged = true;
+                                // DC-NODE-18: advance the single-producer forge mode
+                                // after a successful forge+admit — admissibility
+                                // SCHEDULING only (the durable surface above is
+                                // untouched; in a non-single-producer venue a no-op).
+                                // `own_tip` is the durable spine head just admitted:
+                                // the first own block records its parent peer tip;
+                                // each extend advances `current_tip`.
+                                if act.venue_role == VenueRole::SingleProducer {
+                                    let own_tip = ChainDbServedSource::new(chaindb).tip().map(
+                                        |(slot, hash, block_no)| TipPoint {
+                                            slot,
+                                            hash,
+                                            block_no,
+                                        },
+                                    );
+                                    if let Some(own) = own_tip {
+                                        act.forge_mode = match &act.forge_mode {
+                                            ForgeMode::CaughtUpToPeerTip { .. } => {
+                                                forge_mode_on_first_own_block_served(
+                                                    &act.forge_mode,
+                                                    own.clone(),
+                                                    followed_peer_tip.clone().unwrap_or(own),
+                                                )
+                                            }
+                                            ForgeMode::SingleProducerExtendOwnDurableSpine {
+                                                ..
+                                            } => forge_mode_on_extend(&act.forge_mode, own),
+                                            _ => act.forge_mode.clone(),
+                                        };
+                                    }
+                                }
                                 if let Some(s) = sched.as_deref_mut() {
                                     s.record(&crate::live_log::NodeSchedEvent::ForgeResult {
                                         outcome: forge_outcome,
@@ -2090,6 +2267,8 @@ mod tests {
             genesis_file: None,
             evidence_log: None,
             max_slots: None,
+            single_producer_venue: false,
+            adoption_cert_path: None,
         };
         Fixture { _dir: dir, cli }
     }
@@ -2671,6 +2850,8 @@ mod tests {
             genesis_file: None,
             evidence_log: None,
             max_slots: None,
+            single_producer_venue: false,
+            adoption_cert_path: None,
         }
     }
 

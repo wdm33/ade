@@ -230,6 +230,8 @@ fn make_cli(peer_addr: std::net::SocketAddr, log_path: PathBuf, mode: Mode) -> C
         genesis_file: None,
         evidence_log: None,
         max_slots: None,
+        single_producer_venue: false,
+        adoption_cert_path: None,
     }
 }
 

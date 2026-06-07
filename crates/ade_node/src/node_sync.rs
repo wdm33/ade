@@ -662,6 +662,17 @@ pub enum ForgeRefused {
         followed_peer_tip: Option<TipPoint>,
         reason: NotCaughtUpReason,
     },
+    /// DC-NODE-18 (PHASE4-N-AF): the single-producer extend-own-spine fence
+    /// refused the forge. Structured + comparable (never a stringly-authoritative
+    /// error): the named reason plus the tips + venue role observed at the gate.
+    /// No state transition was attempted; the tip is unchanged.
+    SingleProducerFenceViolation {
+        reason: SingleProducerFenceReason,
+        durable_tip: Option<TipPoint>,
+        followed_peer_tip: Option<TipPoint>,
+        observed_peer_tip: Option<TipPoint>,
+        venue_role: VenueRole,
+    },
 }
 
 /// PHASE4-N-AE.A: the closed outcome of one `--mode node` ForgeTick attempt.
@@ -721,6 +732,230 @@ impl FollowedPeerTipSignal {
                 hash: hash.clone(),
                 block_no: tip.block_no,
             });
+        }
+    }
+}
+
+// =====================================================================
+// DC-NODE-18 (PHASE4-N-AF) — single-producer extend-own-durable-spine.
+//
+// After the initial DC-NODE-15 catch-up to a real peer tip and the serve of the
+// first own successor, a node in an EXPLICITLY single-producer venue may extend
+// its OWN durable adopted spine (forge N+2 on durable N+1, ...) without requiring
+// the relay to re-announce each own block back over the follow link (OQ-1: the
+// relay does NOT re-announce; see DC-NODE-17 notes). Promotion into the extend
+// state requires an explicit RED venue-adoption certificate; it is NEVER inferred
+// from self-admit. A gate-APPLICABILITY refinement, NOT a fork-choice weakening
+// (DC-CONS-03 stays the multi-chain authority); fenced strictly to single-producer.
+// =====================================================================
+
+/// Whether the venue is explicitly declared single-producer. The extend gate
+/// fails closed on `Unknown` — DC-NODE-18 applies ONLY in an explicitly declared
+/// single-producer venue (relay non-producing, Ade sole producer). A venue-scoped
+/// admissibility input, NOT a global semantics knob.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum VenueRole {
+    /// Not declared single-producer — the extend fence fails closed.
+    Unknown,
+    /// Explicitly declared single-producer: relay non-producing, Ade sole producer.
+    SingleProducer,
+}
+
+/// Explicit RED venue-adoption certificate: operator/harness-supplied evidence
+/// that the relay adopted Ade's own block at `adopted_tip`. ADMISSIBILITY evidence
+/// ONLY — it MUST NOT be persisted as authoritative chain state and MUST NOT alter
+/// replay-visible durable state; it advances ONLY the RED/GREEN forge-mode state.
+/// Relay adoption is NEVER inferred from self-admit; only this certificate promotes
+/// the forge mode into the extend state.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct VenueAdoptionCertificate {
+    /// The own-forged tip the relay is certified (by the operator/harness) to have
+    /// adopted.
+    pub adopted_tip: TipPoint,
+}
+
+/// DC-NODE-18: the explicit single-producer forge mode (NO booleans). The forge
+/// scheduler walks this enum; the BLUE durable-admit + chain-selection paths are
+/// untouched.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ForgeMode {
+    /// Pre-catch-up: the DC-NODE-15 gate (durable == followed) governs the forge.
+    InitialCatchupRequired,
+    /// Caught up to the peer tip; the first successor forges on it (DC-NODE-15).
+    CaughtUpToPeerTip { peer_tip: TipPoint },
+    /// The first own successor has been served; awaiting an explicit venue-adoption
+    /// certificate before extending the own spine. (The OQ-1 stall point, now
+    /// EXPLICIT: the relay does not re-announce the own block, so the node waits for
+    /// a certificate rather than a follow echo.)
+    FirstOwnBlockServed {
+        own_tip: TipPoint,
+        parent_peer_tip: TipPoint,
+    },
+    /// Single-producer steady state: extend the own durable adopted spine.
+    SingleProducerExtendOwnDurableSpine {
+        adopted_root: TipPoint,
+        current_tip: TipPoint,
+    },
+}
+
+/// DC-NODE-18: why a single-producer extend-forge is fenced off (fail-closed).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SingleProducerFenceReason {
+    /// The venue is not explicitly declared single-producer.
+    VenueNotDeclaredSingleProducer,
+    /// The relay is producing (not a pure follower of Ade's chain).
+    RelayProducing,
+    /// A peer block beyond the adopted root (a block Ade did not forge) was
+    /// observed — there is another producer.
+    CompetingPeerBlockBeyondAdoptedRoot,
+    /// The observed peer tip disagrees (hash) with Ade's single-producer spine at
+    /// that block_no — a fork / a divergent durable tip.
+    PeerTipDisagreesWithSpine,
+    /// The recovered anchor is the k=0 snapshot-conflict edge (the frozen relay tip
+    /// equals the recover anchor). DC-NODE-18 does not apply there.
+    RecoveredAnchorK0SnapshotConflict,
+}
+
+/// DC-NODE-18: the per-ForgeTick decision for the single-producer forge mode. Pure
+/// / total / deterministic GREEN — derived solely from the mode + the tip inputs +
+/// the venue facts + an optional certificate. The followed/observed peer tips are
+/// forge-ADMISSIBILITY inputs only; this never selects/reorders/prefers chains and
+/// never reaches `select_best_chain` / `chain_selector` / `fork_choice`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum SingleProducerForgeDecision {
+    /// Initial modes — defer to the existing DC-NODE-15 followed-tip gate
+    /// (`forge_followed_tip_admission`); DC-NODE-18 does not apply yet.
+    UseInitialCatchupGate,
+    /// A venue-adoption certificate matched the served own tip — promote the mode;
+    /// no forge this tick.
+    Promote { next: ForgeMode },
+    /// Awaiting the venue-adoption certificate (none matching this tick) — no forge,
+    /// no transition. The honest, explicit OQ-1 wait.
+    AwaitAdoptionCertificate,
+    /// Extend the own durable spine — forge on `forge_base` (the durable tip).
+    ExtendOwnSpine { forge_base: TipPoint },
+    /// Fenced off — refuse with the structured violation.
+    Refuse(ForgeRefused),
+}
+
+/// DC-NODE-18 transition: `InitialCatchupRequired -> CaughtUpToPeerTip` once the
+/// DC-NODE-15 gate reports CaughtUp (durable == followed == `peer_tip`). Total;
+/// idempotent in any other mode.
+pub fn forge_mode_on_caughtup(mode: &ForgeMode, peer_tip: TipPoint) -> ForgeMode {
+    match mode {
+        ForgeMode::InitialCatchupRequired => ForgeMode::CaughtUpToPeerTip { peer_tip },
+        other => other.clone(),
+    }
+}
+
+/// DC-NODE-18 transition: `CaughtUpToPeerTip -> FirstOwnBlockServed` after the first
+/// own successor is forged + served (`own_tip` on `parent_peer_tip`). Total.
+pub fn forge_mode_on_first_own_block_served(
+    mode: &ForgeMode,
+    own_tip: TipPoint,
+    parent_peer_tip: TipPoint,
+) -> ForgeMode {
+    match mode {
+        ForgeMode::CaughtUpToPeerTip { .. } => ForgeMode::FirstOwnBlockServed {
+            own_tip,
+            parent_peer_tip,
+        },
+        other => other.clone(),
+    }
+}
+
+/// DC-NODE-18 transition: advance `SingleProducerExtendOwnDurableSpine.current_tip`
+/// after a successful extend forge. Total; only advances within the extend state.
+pub fn forge_mode_on_extend(mode: &ForgeMode, new_tip: TipPoint) -> ForgeMode {
+    match mode {
+        ForgeMode::SingleProducerExtendOwnDurableSpine { adopted_root, .. } => {
+            ForgeMode::SingleProducerExtendOwnDurableSpine {
+                adopted_root: adopted_root.clone(),
+                current_tip: new_tip,
+            }
+        }
+        other => other.clone(),
+    }
+}
+
+/// DC-NODE-18: decide the single-producer forge action for this ForgeTick. Pure /
+/// deterministic GREEN. `relay_producing` and `recovered_anchor_k0` are RED venue
+/// facts supplied by the loop; `cert` is the optional explicit venue-adoption
+/// certificate (admissibility-only — never persisted, never replay-visible). The
+/// fence fails closed (refuses) on any single-producer-venue violation.
+pub fn single_producer_forge_decision(
+    mode: &ForgeMode,
+    durable_servable_tip: Option<TipPoint>,
+    followed_peer_tip: Option<TipPoint>,
+    observed_peer_tip: Option<TipPoint>,
+    venue_role: VenueRole,
+    relay_producing: bool,
+    recovered_anchor_k0: bool,
+    cert: Option<&VenueAdoptionCertificate>,
+) -> SingleProducerForgeDecision {
+    let violation = |reason: SingleProducerFenceReason| {
+        SingleProducerForgeDecision::Refuse(ForgeRefused::SingleProducerFenceViolation {
+            reason,
+            durable_tip: durable_servable_tip.clone(),
+            followed_peer_tip: followed_peer_tip.clone(),
+            observed_peer_tip: observed_peer_tip.clone(),
+            venue_role,
+        })
+    };
+    match mode {
+        // Initial modes: DC-NODE-18 does not apply; the existing DC-NODE-15 gate governs.
+        ForgeMode::InitialCatchupRequired | ForgeMode::CaughtUpToPeerTip { .. } => {
+            SingleProducerForgeDecision::UseInitialCatchupGate
+        }
+        // First own block served: promote ONLY on an explicit certificate matching the
+        // served own tip. Adoption is NEVER inferred from self-admit.
+        ForgeMode::FirstOwnBlockServed { own_tip, .. } => match cert {
+            Some(c) if &c.adopted_tip == own_tip => SingleProducerForgeDecision::Promote {
+                next: ForgeMode::SingleProducerExtendOwnDurableSpine {
+                    adopted_root: own_tip.clone(),
+                    current_tip: own_tip.clone(),
+                },
+            },
+            _ => SingleProducerForgeDecision::AwaitAdoptionCertificate,
+        },
+        // Extend state: fail-closed fence, then forge on the durable spine head.
+        ForgeMode::SingleProducerExtendOwnDurableSpine {
+            adopted_root,
+            current_tip,
+        } => {
+            if venue_role != VenueRole::SingleProducer {
+                return violation(SingleProducerFenceReason::VenueNotDeclaredSingleProducer);
+            }
+            if relay_producing {
+                return violation(SingleProducerFenceReason::RelayProducing);
+            }
+            if recovered_anchor_k0 {
+                return violation(SingleProducerFenceReason::RecoveredAnchorK0SnapshotConflict);
+            }
+            if let Some(obs) = &observed_peer_tip {
+                if obs.block_no > current_tip.block_no {
+                    return violation(SingleProducerFenceReason::CompetingPeerBlockBeyondAdoptedRoot);
+                }
+                if obs.block_no == current_tip.block_no && obs.hash != current_tip.hash {
+                    return violation(SingleProducerFenceReason::PeerTipDisagreesWithSpine);
+                }
+                if obs.block_no == adopted_root.block_no && obs.hash != adopted_root.hash {
+                    return violation(SingleProducerFenceReason::PeerTipDisagreesWithSpine);
+                }
+            }
+            // The forge base is Ade's own durable spine head. It must be present and
+            // equal `current_tip`; a missing/diverged durable tip fails closed.
+            match &durable_servable_tip {
+                Some(durable)
+                    if durable.hash == current_tip.hash
+                        && durable.block_no == current_tip.block_no =>
+                {
+                    SingleProducerForgeDecision::ExtendOwnSpine {
+                        forge_base: durable.clone(),
+                    }
+                }
+                _ => violation(SingleProducerFenceReason::PeerTipDisagreesWithSpine),
+            }
         }
     }
 }
@@ -2778,6 +3013,229 @@ mod tests {
         );
     }
 
+    /// CE-AF-5 (DC-NODE-18 / T-REC-05): warm-start replay of a K≥2 own-forged
+    /// chain is byte-identical. Forges a 3-block own spine — the extend-own-spine
+    /// shape, each successor built on the prior DURABLE tip (PrevHash::Block,
+    /// prior_fp = parent post_fp) — kills, and recovers through the REAL
+    /// warm_start_recovery. The recovered tip byte-equals the pre-kill durable tip
+    /// (warm_start_recovery's internal fingerprint guard asserts fp equality, so
+    /// reaching the same tip proves byte-identical forward replay over the whole
+    /// spine). The `ForgeMode` is RED + not persisted, so it cannot perturb this
+    /// deterministic surface.
+    #[test]
+    fn extend_own_spine_two_runs_byte_identical() {
+        use ade_ledger::seed_consensus_inputs::{
+            encode_seed_epoch_consensus_inputs, SeedEpochConsensusInputs,
+        };
+        use ade_runtime::seed_consensus_provenance::append_seed_epoch_provenance;
+
+        let eta0 = Nonce(Hash32([0xCD; 32]));
+        let anchor_fp = Hash32([0xA0; 32]);
+        let genesis_base = || {
+            let mut ledger = LedgerState::new(CardanoEra::Conway);
+            ledger.epoch_state.epoch = EpochNo(0);
+            let mut chain_dep = PraosChainDepState::empty();
+            chain_dep.epoch_nonce = Nonce(Hash32([0xCD; 32]));
+            chain_dep.evolving_nonce = Nonce(Hash32([0xCD; 32]));
+            (ledger, chain_dep)
+        };
+        let era_schedule = EraSchedule::new(
+            BootstrapAnchorHash(Hash32([0u8; 32])),
+            0,
+            vec![EraSummary {
+                era: CardanoEra::Conway,
+                start_slot: SlotNo(0),
+                start_epoch: EpochNo(0),
+                slot_length_ms: 1_000,
+                epoch_length_slots: 432_000,
+                safe_zone_slots: 432_000,
+            }],
+        )
+        .expect("era schedule");
+
+        // Always-leader pool (ASC 1/1, all stake), keyed to the shell.
+        let mut shell = l5_synth_shell(0x31, 0x41, 0x59);
+        let cold_vk = shell.cold_vk();
+        let vrf_vk = shell.vrf_verification_key();
+        let pool_id: Hash28 = ade_crypto::blake2b::blake2b_224(&cold_vk.0);
+        let vrf_keyhash: Hash32 = ade_crypto::blake2b::blake2b_256(&vrf_vk.0);
+        let mut pools: BTreeMap<Hash28, PoolEntry> = BTreeMap::new();
+        pools.insert(
+            pool_id.clone(),
+            PoolEntry {
+                active_stake: 1,
+                vrf_keyhash,
+            },
+        );
+        let sidecar = SeedEpochConsensusInputs {
+            anchor_fp: anchor_fp.clone(),
+            epoch_no: EpochNo(0),
+            epoch_nonce: eta0.clone(),
+            active_slots_coeff: ActiveSlotsCoeff { numer: 1, denom: 1 },
+            total_active_stake: 1,
+            pool_distribution: pools,
+        };
+        let sidecar_bytes = encode_seed_epoch_consensus_inputs(&sidecar);
+        let ledger_view = PoolDistrView::from_seed_epoch_consensus_inputs(&sidecar);
+
+        // Forge block 0 (genesis-successor) over the recovered base.
+        let (l_r, c_r) = genesis_base();
+        let recovered = BootstrapState {
+            ledger: l_r,
+            chain_dep: c_r,
+            tip: None,
+            seed_epoch_consensus_inputs: Some(sidecar.clone()),
+        };
+        let (event0, handoff0) = forge_one_from_recovered(
+            &recovered,
+            &recovered.chain_dep,
+            &recovered.ledger,
+            None,
+            &mut shell,
+            &pool_id,
+            &ProtocolParameters::default(),
+            &era_schedule,
+            1,
+            0,
+            ProtocolVersion { major: 9, minor: 0 },
+        )
+        .expect("forge block 0 over the recovered genesis base");
+        let handoff0 = match (event0, handoff0) {
+            (CoordinatorEvent::ForgeSucceeded { .. }, Some(h)) => h,
+            (ev, _) => panic!("expected block-0 ForgeSucceeded, got {ev:?}"),
+        };
+
+        let dir = TempDir::new().unwrap();
+        let chaindb_path = dir.path().join("chain.db");
+        let wal_dir = dir.path().join("wal");
+
+        // Phase 1: seed precondition + genesis slot-0 snapshot, then forge+admit a
+        // 3-block own spine (block 0, then 1 on durable-0, then 2 on durable-1),
+        // keeping state alive so the durable spine evolves. The kill ends the scope.
+        let advanced2 = {
+            let chaindb =
+                PersistentChainDb::open(PersistentChainDbOptions::at(&chaindb_path)).unwrap();
+            let mut wal = FileWalStore::open(&wal_dir).unwrap();
+            chaindb
+                .put_seed_epoch_consensus_inputs(&anchor_fp, &sidecar_bytes)
+                .unwrap();
+            append_seed_epoch_provenance(&mut wal, &anchor_fp, EpochNo(0), &sidecar_bytes).unwrap();
+            let (l_s, c_s) = genesis_base();
+            PersistentSnapshotCache::new(&chaindb)
+                .capture(SlotNo(0), &l_s, &c_s)
+                .unwrap();
+            let (l_a, c_a) = genesis_base();
+            let mut state = ForwardSyncState::new(
+                ReceiveState::new(l_a, c_a),
+                anchor_fp.clone(),
+                SnapshotCadence::DEFAULT,
+            );
+
+            // Admit block 0 — the durable tip becomes block 0.
+            admit_forged_block_durably(
+                &handoff0,
+                &mut state,
+                &chaindb,
+                &mut wal,
+                &era_schedule,
+                &ledger_view,
+            )
+            .expect("durable admit block 0")
+            .expect("tip 0 advanced");
+            let chain_tip0 = ChainDb::tip(&chaindb)
+                .expect("durable tip")
+                .expect("non-empty after block 0");
+
+            // Forge + admit block 1 ON the durable tip 0 (extend the own spine).
+            let (event1, handoff1) = forge_one_from_recovered(
+                &recovered,
+                &state.receive.chain_dep,
+                &state.receive.ledger,
+                Some(&chain_tip0),
+                &mut shell,
+                &pool_id,
+                &ProtocolParameters::default(),
+                &era_schedule,
+                2,
+                0,
+                ProtocolVersion { major: 9, minor: 0 },
+            )
+            .expect("forge block 1 over durable tip 0");
+            let handoff1 = match (event1, handoff1) {
+                (CoordinatorEvent::ForgeSucceeded { .. }, Some(h)) => h,
+                (ev, _) => panic!("expected block-1 ForgeSucceeded, got {ev:?}"),
+            };
+            admit_forged_block_durably(
+                &handoff1,
+                &mut state,
+                &chaindb,
+                &mut wal,
+                &era_schedule,
+                &ledger_view,
+            )
+            .expect("durable admit block 1")
+            .expect("tip 1 advanced");
+            let chain_tip1 = ChainDb::tip(&chaindb)
+                .expect("durable tip")
+                .expect("non-empty after block 1");
+
+            // Forge + admit block 2 ON the durable tip 1 (extend the own spine again).
+            let (event2, handoff2) = forge_one_from_recovered(
+                &recovered,
+                &state.receive.chain_dep,
+                &state.receive.ledger,
+                Some(&chain_tip1),
+                &mut shell,
+                &pool_id,
+                &ProtocolParameters::default(),
+                &era_schedule,
+                3,
+                0,
+                ProtocolVersion { major: 9, minor: 0 },
+            )
+            .expect("forge block 2 over durable tip 1");
+            let handoff2 = match (event2, handoff2) {
+                (CoordinatorEvent::ForgeSucceeded { .. }, Some(h)) => h,
+                (ev, _) => panic!("expected block-2 ForgeSucceeded, got {ev:?}"),
+            };
+            let advanced2 = admit_forged_block_durably(
+                &handoff2,
+                &mut state,
+                &chaindb,
+                &mut wal,
+                &era_schedule,
+                &ledger_view,
+            )
+            .expect("durable admit block 2")
+            .expect("tip 2 advanced");
+            assert_eq!(
+                state.receive.chain_dep.last_block_no,
+                Some(BlockNo(2)),
+                "after admitting the 3-block own spine the durable last_block_no is 2"
+            );
+            advanced2
+            // chaindb + wal + state dropped here -> the kill boundary.
+        };
+
+        // Phase 2: reopen + recover. warm_start_recovery forward-replays from the
+        // slot-0 snapshot over ALL THREE durable WAL blocks; the recovered tip must
+        // byte-equal the pre-kill durable block-2 tip (no ChainBreak across the
+        // extend-own-spine seams).
+        let chaindb = PersistentChainDb::open(PersistentChainDbOptions::at(&chaindb_path)).unwrap();
+        let wal = FileWalStore::open(&wal_dir).unwrap();
+        let state = crate::node_lifecycle::warm_start_recovery(&chaindb, &wal)
+            .expect("warm-start forward-replays the 3-block own spine without ChainBreak");
+        let tip = state.tip.expect("recovered a tip");
+        assert_eq!(
+            tip.slot, advanced2.slot,
+            "warm-start recovers the block-2 spine-head slot byte-identically (CE-AF-5)"
+        );
+        assert_eq!(
+            tip.hash, advanced2.hash,
+            "warm-start recovers the block-2 spine-head hash byte-identically (CE-AF-5)"
+        );
+    }
+
     #[test]
     fn forge_from_recovered_fails_closed_without_recovered_inputs() {
         // The forge base MUST carry recovered consensus inputs. A recovered
@@ -4188,5 +4646,228 @@ mod tests {
             outcomes.is_empty(),
             "a drift-failed slot alignment forges nothing"
         );
+    }
+
+    // ===================================================================
+    // DC-NODE-18 (PHASE4-N-AF) — single-producer extend-own-durable-spine.
+    // ===================================================================
+
+    fn tp(block_no: u64, slot: u64, h: u8) -> TipPoint {
+        TipPoint {
+            slot: SlotNo(slot),
+            hash: Hash32([h; 32]),
+            block_no,
+        }
+    }
+
+    /// CE-AF-1: the forge-mode transitions are total + deterministic — each fires
+    /// only in its source state, is a no-op elsewhere, and is a pure function of its
+    /// inputs.
+    #[test]
+    fn forge_mode_transitions_are_total_and_deterministic() {
+        let peer = tp(10, 100, 0xAA);
+        let own = tp(11, 145, 0xBB);
+
+        // on_caughtup: only from InitialCatchupRequired.
+        assert_eq!(
+            forge_mode_on_caughtup(&ForgeMode::InitialCatchupRequired, peer.clone()),
+            ForgeMode::CaughtUpToPeerTip {
+                peer_tip: peer.clone()
+            }
+        );
+        let cu = ForgeMode::CaughtUpToPeerTip {
+            peer_tip: peer.clone(),
+        };
+        assert_eq!(forge_mode_on_caughtup(&cu, tp(99, 999, 0xCC)), cu);
+
+        // on_first_own_block_served: only from CaughtUpToPeerTip.
+        assert_eq!(
+            forge_mode_on_first_own_block_served(&cu, own.clone(), peer.clone()),
+            ForgeMode::FirstOwnBlockServed {
+                own_tip: own.clone(),
+                parent_peer_tip: peer.clone(),
+            }
+        );
+        assert_eq!(
+            forge_mode_on_first_own_block_served(
+                &ForgeMode::InitialCatchupRequired,
+                own.clone(),
+                peer.clone()
+            ),
+            ForgeMode::InitialCatchupRequired
+        );
+
+        // on_extend: advances current_tip within the extend state, keeps adopted_root.
+        let ext = ForgeMode::SingleProducerExtendOwnDurableSpine {
+            adopted_root: own.clone(),
+            current_tip: own.clone(),
+        };
+        let next = tp(12, 160, 0xCC);
+        assert_eq!(
+            forge_mode_on_extend(&ext, next.clone()),
+            ForgeMode::SingleProducerExtendOwnDurableSpine {
+                adopted_root: own.clone(),
+                current_tip: next.clone(),
+            }
+        );
+        assert_eq!(
+            forge_mode_on_extend(&ForgeMode::InitialCatchupRequired, next.clone()),
+            ForgeMode::InitialCatchupRequired
+        );
+        // deterministic: same input → same output.
+        assert_eq!(
+            forge_mode_on_extend(&ext, next.clone()),
+            forge_mode_on_extend(&ext, next)
+        );
+    }
+
+    /// CE-AF-2: promotion into SingleProducerExtendOwnDurableSpine requires an
+    /// explicit venue-adoption certificate matching the served own tip; it is NEVER
+    /// inferred from self-admit (no cert / a non-matching cert ⇒ await).
+    #[test]
+    fn extend_own_spine_promotion_requires_adoption_certificate() {
+        let parent = tp(10, 100, 0xAA);
+        let own = tp(11, 145, 0xBB);
+        let mode = ForgeMode::FirstOwnBlockServed {
+            own_tip: own.clone(),
+            parent_peer_tip: parent.clone(),
+        };
+
+        // No certificate → await (self-admit alone never promotes).
+        assert_eq!(
+            single_producer_forge_decision(
+                &mode,
+                Some(own.clone()),
+                Some(parent.clone()),
+                Some(parent.clone()),
+                VenueRole::SingleProducer,
+                false,
+                false,
+                None
+            ),
+            SingleProducerForgeDecision::AwaitAdoptionCertificate
+        );
+        // A certificate for a DIFFERENT tip → still await (no spurious promotion).
+        let wrong = VenueAdoptionCertificate {
+            adopted_tip: tp(11, 145, 0xCC),
+        };
+        assert_eq!(
+            single_producer_forge_decision(
+                &mode,
+                Some(own.clone()),
+                Some(parent.clone()),
+                Some(parent.clone()),
+                VenueRole::SingleProducer,
+                false,
+                false,
+                Some(&wrong)
+            ),
+            SingleProducerForgeDecision::AwaitAdoptionCertificate
+        );
+        // A matching certificate → promote to the extend state.
+        let cert = VenueAdoptionCertificate {
+            adopted_tip: own.clone(),
+        };
+        assert_eq!(
+            single_producer_forge_decision(
+                &mode,
+                Some(own.clone()),
+                Some(parent.clone()),
+                Some(parent),
+                VenueRole::SingleProducer,
+                false,
+                false,
+                Some(&cert)
+            ),
+            SingleProducerForgeDecision::Promote {
+                next: ForgeMode::SingleProducerExtendOwnDurableSpine {
+                    adopted_root: own.clone(),
+                    current_tip: own,
+                }
+            }
+        );
+    }
+
+    /// CE-AF-3: in the extend state, the forge proceeds on the durable servable tip
+    /// WITHOUT requiring followed_peer_tip == durable (the followed tip lags because
+    /// the relay does not re-announce Ade's own block); the forge base byte-equals
+    /// the durable spine head.
+    #[test]
+    fn extend_own_spine_forges_on_durable_tip_without_followed_equality() {
+        let adopted = tp(11, 145, 0xBB);
+        let current = tp(13, 175, 0xDD); // Ade forged 12, 13 since adoption
+        let mode = ForgeMode::SingleProducerExtendOwnDurableSpine {
+            adopted_root: adopted.clone(),
+            current_tip: current.clone(),
+        };
+        // followed lags at the adopted root (relay never re-announced 12/13);
+        // durable == current. DC-NODE-15 alone would say NotCaughtUp here.
+        let decision = single_producer_forge_decision(
+            &mode,
+            Some(current.clone()),  // durable
+            Some(adopted.clone()),  // followed (lags — != durable)
+            Some(adopted),          // observed (relay at the adopted root, on-spine)
+            VenueRole::SingleProducer,
+            false,
+            false,
+            None,
+        );
+        assert_eq!(
+            decision,
+            SingleProducerForgeDecision::ExtendOwnSpine {
+                forge_base: current,
+            },
+            "extend forges on the durable spine head despite followed != durable, and the forge base byte-equals it"
+        );
+    }
+
+    /// CE-AF-4: the fence fails closed — each violation condition yields a structured
+    /// SingleProducerFenceViolation carrying the named reason + the tips + venue role.
+    #[test]
+    fn single_producer_fence_fails_closed() {
+        use SingleProducerFenceReason as R;
+        let adopted = tp(11, 145, 0xBB);
+        let current = tp(12, 160, 0xCC);
+        let mode = ForgeMode::SingleProducerExtendOwnDurableSpine {
+            adopted_root: adopted,
+            current_tip: current.clone(),
+        };
+
+        // (1) venue not declared single-producer.
+        assert!(matches!(
+            single_producer_forge_decision(&mode, Some(current.clone()), Some(current.clone()), None, VenueRole::Unknown, false, false, None),
+            SingleProducerForgeDecision::Refuse(ForgeRefused::SingleProducerFenceViolation { reason: R::VenueNotDeclaredSingleProducer, .. })
+        ));
+        // (2) relay producing.
+        assert!(matches!(
+            single_producer_forge_decision(&mode, Some(current.clone()), Some(current.clone()), None, VenueRole::SingleProducer, true, false, None),
+            SingleProducerForgeDecision::Refuse(ForgeRefused::SingleProducerFenceViolation { reason: R::RelayProducing, .. })
+        ));
+        // (3) recovered anchor k=0 edge.
+        assert!(matches!(
+            single_producer_forge_decision(&mode, Some(current.clone()), Some(current.clone()), None, VenueRole::SingleProducer, false, true, None),
+            SingleProducerForgeDecision::Refuse(ForgeRefused::SingleProducerFenceViolation { reason: R::RecoveredAnchorK0SnapshotConflict, .. })
+        ));
+        // (4) competing peer block beyond the adopted root (block_no > current).
+        assert!(matches!(
+            single_producer_forge_decision(&mode, Some(current.clone()), Some(current.clone()), Some(tp(20, 300, 0xEE)), VenueRole::SingleProducer, false, false, None),
+            SingleProducerForgeDecision::Refuse(ForgeRefused::SingleProducerFenceViolation { reason: R::CompetingPeerBlockBeyondAdoptedRoot, .. })
+        ));
+        // (5) peer tip disagrees with the spine (same block_no as current, different hash).
+        let d5 = single_producer_forge_decision(&mode, Some(current.clone()), Some(current.clone()), Some(tp(12, 160, 0xFF)), VenueRole::SingleProducer, false, false, None);
+        assert!(matches!(
+            &d5,
+            SingleProducerForgeDecision::Refuse(ForgeRefused::SingleProducerFenceViolation { reason: R::PeerTipDisagreesWithSpine, .. })
+        ));
+        // the violation carries the structured fields.
+        if let SingleProducerForgeDecision::Refuse(ForgeRefused::SingleProducerFenceViolation {
+            venue_role,
+            durable_tip,
+            ..
+        }) = d5
+        {
+            assert_eq!(venue_role, VenueRole::SingleProducer);
+            assert_eq!(durable_tip, Some(current));
+        }
     }
 }
