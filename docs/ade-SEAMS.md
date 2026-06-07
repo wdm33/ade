@@ -3,29 +3,104 @@
 > **Status:** Living architectural document. Regenerated; not hand-edited.
 > Per-project instance of `~/.claude/methodology/templates/seams.md`.
 
-> 11 crates, **458 canonical types**, **141 CI checks** at HEAD (`a76672b9`, PHASE4-N-AE cluster close — recover→serve continuity + forge admissibility: the forge-on-followed-tip gate, the proof-gated FindIntersect-only recovered-anchor serve projection, and the chain-sync server FindIntersect cursor fix).
-> Reads the CODEMAP regenerated at the same close (`docs/ade-CODEMAP.md` — **458 canonical types / 141 CI / 340
-> rules**, pinned at `a76672b9`) for the module list + TCB colors, and the invariant registry
-> (`docs/ade-invariant-registry.toml` — **340 entries** at HEAD: 208 enforced / 20 partial / 112 declared) for the
-> rule IDs that gate each closed surface. **The counts agree across CODEMAP / SEAMS / registry at this close (458 /
-> 141 / 340).** N-AE added **no new crate, no new module, and no TCB color change** (the module inventory + colors
-> SEAMS depends on are unchanged); the only additive BLUE symbol is a read-only field (`DecodedBlock.prev_hash`,
-> already-parsed, exposed for a proof), the rest is BLUE/RED tightening of existing modules. **TCB-color note
-> (load-bearing, per CODEMAP):** the chain-sync server change (`DC-PROTO-10`, `crates/ade_network/src/chain_sync/server.rs`)
-> is **BLUE** — `chain_sync/` is a BLUE `core_paths` submodule and the file carries the `// Core Contract:` BLUE
-> banner; the forge-admissibility classifier is GREEN-by-function inside RED `ade_node::node_sync`; the serve
-> projection + node wiring are RED.
-> **N-AE opened NO new ingress surface, NO new registry (closed or extensible), NO new version-gated contract, and
-> NO new plugin/extension point.** It TIGHTENS three existing authority paths and mints **+4 rules** (`DC-NODE-15`,
-> `DC-NODE-14`, `DC-CONS-24` enforced; `DC-PROTO-10` enforced) + **+3 CI gates** (`ci_check_forge_followed_tip_admission.sh`,
-> `ci_check_recovered_anchor_intersectable.sh`, `ci_check_recover_follow_wal_lineage.sh`). The closed `Point` enum
-> and the chain-sync server wire grammar are UNCHANGED; the serve projection's new FindIntersect branch is a
-> closed, proof-gated read-only behavior, **not** a registration surface. **SEAMS is therefore materially
-> unchanged from the N-AC pin** — this refresh re-pins HEAD/counts and records the three tightenings against the
-> existing seams they touch (§1 producer-forge pipeline + serve surface; §2 forged-block serving + crash recovery;
-> §3 NO new registry; §4 NO contract change; §5 +3 CI gates; §6 the new RED/GREEN forge-admissibility prohibitions;
-> §7 the FindIntersect-only projection examined as a candidate extension point and REJECTED as one).
+> 11 crates, **458 canonical types**, **142 CI checks** at HEAD (`6363683e`, PHASE4-N-AE.F — receive idempotency at the durable-admit chokepoint: a hash-exact already-have no-op in `pump_block` that survives the post-adoption echo, `DC-NODE-16`).
+> Reads the CODEMAP (`docs/ade-CODEMAP.md` — **458 canonical types / 141 CI / 340 rules**, pinned at `a76672b9`,
+> the PHASE4-N-AE close) for the module list + TCB colors, and the invariant registry
+> (`docs/ade-invariant-registry.toml` — **341 entries** at HEAD `6363683e`: 209 enforced / 20 partial / 112 declared)
+> for the rule IDs that gate each closed surface. **Count reconciliation (load-bearing — read honestly): this SEAMS
+> and the registry AGREE at HEAD (458 / 142 / 341); the on-disk CODEMAP LAGS at `a76672b9` (458 / 141 / 340) because
+> AE.F is a hygiene/correctness follow-on that adds NO crate, NO module, NO canonical type, and NO TCB-color change —
+> the module inventory + colors SEAMS reads from CODEMAP are unaffected, so CODEMAP was not regenerated (refresh-on-next-cluster
+> item, not a discipline gap).** N-AE.F added **no new crate, no new module, and no TCB color change**: the gate lives
+> inside the EXISTING inventoried RED module `ade_runtime::forward_sync::pump` (`pump_block`); there is **ZERO BLUE diff**
+> (the additive `DecodedBlock.prev_hash` field was the N-AE BLUE change, already on disk; AE.F touches no BLUE file).
+> **TCB-color note (carried from the N-AE close, per CODEMAP, still accurate):** the chain-sync server change
+> (`DC-PROTO-10`, `crates/ade_network/src/chain_sync/server.rs`) is **BLUE** — `chain_sync/` is a BLUE `core_paths`
+> submodule and the file carries the BLUE banner; the forge-admissibility classifier is GREEN-by-function inside RED
+> `ade_node::node_sync`; the serve projection + node wiring + the AE.F idempotency gate are RED.
+> **N-AE.F opened NO new ingress surface, NO new registry (closed or extensible), NO new version-gated contract,
+> NO new closed enum, and NO new plugin/extension point.** It adds a single deterministic guard INSIDE the existing
+> RED durable-admit chokepoint `pump_block`: immediately after `decode_block` and BEFORE the BLUE chokepoint reducer,
+> it queries `db.get_block_by_hash(&decoded.block_hash)` and, if `Some(stored)` AND `stored.slot == decoded.slot`,
+> returns `Ok(None)` (an idempotent no-op — no reducer step, no WAL append, no tip change). It mints **+1 rule**
+> (`DC-NODE-16`, enforced) + **+1 CI gate** (`ci_check_receive_idempotency.sh`). The gate is a plain conditional +
+> early return over the already-closed `ChainDb` membership query — **NOT** a new closed enum, **NOT** a new attach
+> point: a DIFFERENT block (different hash) at/before the last-applied slot still falls through to the UNCHANGED BLUE
+> header authority and fails closed (`SlotBeforeLastApplied`), and `pump_block` stays the sole durable tip authority.
+> **SEAMS is therefore MATERIALLY UNCHANGED from the N-AE pin — AE.F adds NO new seam.** This refresh re-pins
+> HEAD/counts and records the single chokepoint-guard tightening against the seam it touches (§2 the forged-block /
+> received-block durable-admit domain; §5 +1 CI gate, 141 → 142; §6 the new RED idempotency-chokepoint prohibition;
+> §7 examined for a candidate seam and NONE found). The N-AE through G-A history below is carried unchanged.
 >
+> ### PHASE4-N-AE.F (`6363683e`) — receive idempotency at the durable-admit chokepoint (`DC-NODE-16`)
+
+>
+> **This regeneration is a single-slice follow-on refresh, applied directly to the on-disk SEAMS.** The prior
+> on-disk SEAMS was pinned at the PHASE4-N-AE close (`a76672b9` / **458** canonical types / **141** CI / **340**
+> rules). It is brought current to HEAD `6363683e` (the *AE.F receive idempotency* commit — **458** canonical types
+> / **142** CI / **341** rules). It folds in **PHASE4-N-AE.F** — the post-CE-A5 echo fix. After the real
+> cardano-node 11.0.1 relay `AddedToCurrentChain` Ade's forged block 17 (the CE-A5 manifest, venue c2ae18), the
+> relay re-announced that block BACK to Ade over Ade's follow link; the BLUE header authority correctly rejected it
+> as `SlotBeforeLastApplied { last: 421, attempted: 421 }`, terminating the continuous run (exit 43) AFTER
+> adoption. AE.F makes Ade no-op that echo so a long-running C2-LOCAL / preprod relay survives its own served tip
+> coming back.
+>
+> **N-AE.F opened NO new seam.** The `a76672b9..6363683e` span touches **ONE source file — RED, already inventoried,
+> with ZERO new `struct`/`enum`:** `crates/ade_runtime/src/forward_sync/pump.rs` (the RED durable-admit chokepoint
+> `pump_block`, which already performs ChainDb/WAL I/O). **No new crate, no new module, no new registry file, no
+> closed-enum addition, no version-gated contract bump, and NO BLUE diff.** The seam-relevant change — recorded
+> under §2 (the forged-block / received-block durable-admit domain gains an idempotent fast-path BEFORE the BLUE
+> reducer; the data-only/authoritative split is unchanged — the guard is a deterministic durable-store read, not a
+> new authority), §5 (+1 CI gate, 141 → 142), §6 (the new RED idempotency-chokepoint prohibition), and §7 (NO new
+> candidate seam) — is:
+>
+> - **The receive-idempotency chokepoint guard (AE.F — `DC-NODE-16`, enforced).** In RED
+>   `ade_runtime::forward_sync::pump::pump_block`, immediately after `decode_block` and BEFORE the BLUE chokepoint
+>   reducer (`forward_sync_step` / `validate_and_apply_header`), the chokepoint queries
+>   `db.get_block_by_hash(&decoded.block_hash)`; if `Some(stored)` AND `stored.slot == decoded.header_input.slot`
+>   it returns `Ok(None)` — an **idempotent no-op**: no reducer step, no `WalEntry::AdmitBlock`, no tip change, so
+>   the post-state (ledger, chain_dep, ChainDb tip, WAL length) is IDENTICAL and the WAL never records the
+>   re-announce (replay-equivalent — `T-REC-05` / `DC-WAL-02` preserved). The decision key is **HASH equality vs
+>   the durable store**, never slot alone: a DIFFERENT block (different hash) at/before the last-applied slot
+>   returns `None` from `get_block_by_hash`, falls through to the UNCHANGED BLUE header authority, and fails closed
+>   (`SlotBeforeLastApplied` / `BlockNoOutOfOrder` — AE-F-INV-2, the fail-closed boundary). No skip-past, no
+>   fork-choice (`DC-CONS-03` untouched — AE-F-INV-3). **This is a deterministic conditional + early return over
+>   the already-closed `ChainDb` membership query, NOT a new closed enum, NOT a registration surface, NOT a second
+>   tip-advance path** — `pump_block` stays the sole durable tip authority (`DC-NODE-12`).
+> - **TCB-placement refinement (load-bearing, vs the AE.F invariants sketch).** The `/invariants` sketch
+>   (`docs/planning/phase4-n-ae-f-echo-idempotency-invariants.md` §5) proposed a BLUE `ReceiveOutcome::AlreadyHave`
+>   reducer variant. The implementation instead places the gate at the **RED** chokepoint with **NO BLUE change and
+>   no new reducer input**: `get_block_by_hash` is a DETERMINISTIC durable-store query (not nondeterminism), so the
+>   already-have decision is correctly RED orchestration over a deterministic read, and the BLUE authority is left
+>   untouched and still fail-closes every block that reaches it. This is the right FC/IS split — the chokepoint
+>   already owns the ChainDb/WAL I/O; the guard adds one read + one early return, no new BLUE canonical type or
+>   reducer variant (458 canonical types unchanged).
+>
+> **Registry → 341 rules** (209 enforced / 20 partial / 112 declared). **ONE NEW** (`introduced_in =
+> "PHASE4-N-AE"`): `DC-NODE-16` (`tier = derived`, `enforced`, `ci_script = ci/ci_check_receive_idempotency.sh`,
+> `cross_ref = [DC-NODE-12, DC-PROTO-09, DC-PROTO-10, DC-CONS-03, T-REC-05, DC-WAL-02]`) — receive idempotency at
+> the durable-admit chokepoint. **No rule strengthened, no rule weakened** by AE.F (the BLUE authority is
+> unchanged; the existing replay/durability rules are preserved, not re-tagged). **NET +1 CI gate (141 → 142):**
+> `ci_check_receive_idempotency.sh` — fences the gate as hash-keyed (`get_block_by_hash(&decoded.block_hash)`,
+> never slot-only), gated-before-the-reducer (the `return Ok(None)` precedes `forward_sync_step`), and
+> slot-consistent (`stored.slot == decoded.header_input.slot`). DC-NODE-16 mints a dedicated gate (it is NOT
+> test-only).
+>
+> **Boundary honesty (load-bearing — do NOT soften / do NOT broaden).** N-AE.F makes the receive path no-op a
+> byte-identical already-applied block re-announced by the peer — and **nothing more**. There is **NO BLUE change**
+> (the BLUE header authority `validate_and_apply_header` / `block_validity` is UNCHANGED and still fail-closes every
+> block that reaches it; 458 canonical types unchanged); **NO new closed/extensible registry**; **NO version-gated
+> contract or wire-grammar change**; **NO fork-choice / multi-producer intake** (`DC-CONS-03` untouched — the skip
+> is exact-match idempotency, never chain selection, never a skip-past a gap, never accepting a better chain); the
+> idempotent skip is gated on **HASH equality against the durable store**, never slot alone, so the
+> `SlotBeforeLastApplied` fail-close stays the fence for any DIFFERENT block at/before the last-applied slot
+> (AE-F-INV-2); and there is **NO second durable tip-advance path** — `pump_block` remains the sole durable tip
+> authority (`DC-NODE-12`), and the no-op advances no tip at all. **NO RO-LIVE flip** — surviving the post-adoption
+> echo is a continuous-run precondition for long-running C2-LOCAL / preprod operation, NOT operator-witnessed
+> bounty acceptance (only a committed `ba02_evidence::correlate` manifest over the preprod tip advances
+> `RO-LIVE-01`, which stays `partial` / operator-gated).
+>
+
 > ### PHASE4-N-AE cluster close (`a76672b9`) — recover→serve continuity + forge admissibility (`DC-NODE-15` / `DC-NODE-14` / `DC-CONS-24` / `DC-PROTO-10`)
 
 >
@@ -3037,10 +3112,11 @@ How new modules enter the workspace.
     (iv) keep the record a single closed canonical type with the SOLE codec (no `Default`, no `#[non_exhaustive]`,
     `BTreeMap`-ordered) — the field is additive ONLY behind the version gate, NOT a new TYPE.
 
-### CI gates that enforce the boundary (141 total; the N-AE / N-AC / N-AB / N-AA / N-U / N-F-G-K…G-R / N-F-G-J / N-F-G-D / N-F-G-E / N-F-G-C / N-F-G-B / N-F-G-A / N-F-F / N-F-D-E / N-F-C / N-F-A / N-Z / N-Y / producer / network set)
+### CI gates that enforce the boundary (142 total; the N-AE.F / N-AE / N-AC / N-AB / N-AA / N-U / N-F-G-K…G-R / N-F-G-J / N-F-G-D / N-F-G-E / N-F-G-C / N-F-G-B / N-F-G-A / N-F-F / N-F-D-E / N-F-C / N-F-A / N-Z / N-Y / producer / network set)
 
 | Script | Enforces | Cluster |
 |---|---|---|
+| `ci_check_receive_idempotency.sh` *(NEW N-AE.F)* | **DC-NODE-16** — receive idempotency at the durable-admit chokepoint: in RED `ade_runtime::forward_sync::pump::pump_block`, immediately after `decode_block` and BEFORE the BLUE chokepoint reducer, the no-op is **HASH-keyed** (`get_block_by_hash(&decoded.block_hash)`, never slot-only); the `return Ok(None)` is **gated by that hit** (a byte-identical already-stored block — same slot, same hash — is skipped: no reducer step, no WAL append, no tip change, replay-equivalent); the slot is cross-checked (`stored.slot == decoded.header_input.slot`); a DIFFERENT block (different hash) at/before the last-applied slot returns `None`, reaches the UNCHANGED BLUE header authority, and fails closed (`SlotBeforeLastApplied`). **Non-vacuous** (the gate must find the hash-keyed query + the gated early return + the slot cross-check in the production region of `pump.rs`). No fork-choice, no skip-past (`DC-CONS-03` untouched); `pump_block` stays the sole durable tip authority (`DC-NODE-12`). | N-AE.F |
 | `ci_check_forge_followed_tip_admission.sh` *(NEW N-AE A)* | **DC-NODE-15 + DC-CONS-24** — the `--mode node` `ForgeTick` `selected_tip` has **NO `recovered.tip` fallback** as a forge base; a forge fires only when the durable servable tip equals the followed peer tip (`hash` AND `block_no`), else it returns the typed `ForgeRefused::NotCaughtUp { local_servable_tip, followed_peer_tip, reason }` (a structured value, NOT a log line); the forged successor's `prev_hash` byte-equals the followed peer tip hash AND `block_no == followed_tip.block_no + 1` (parent identity is the canonical hash, never inferred from block number); and the followed-peer-tip signal NEVER reaches `select_best_chain` / `chain_selector` (admissibility-only, never a chain selector). The forge-admissibility sibling of `ci_check_node_forge_single_epoch_fail_closed.sh` (DC-EPOCH-03). | N-AE |
 | `ci_check_recovered_anchor_intersectable.sh` *(NEW N-AE B)* | **DC-NODE-14 (anchor/parent clause)** — the recovered/forged parent is peer-intersectable via a **FindIntersect-ONLY**, **proof-gated** projection in `ChainDbServedSource::intersect` (`ade_runtime::network::served_chain_projection`): it advertises the `prev_hash` of the EARLIEST servable `StoredBlock` (the private bounded helper `earliest_servable_block_prev_hash`, reads exactly one block — DC-SERVEMEM-01) as an intersect point IFF a real servable successor exists; it serves **NO bytes** for that point (`get_block_by_hash` / `serve_range` / BlockFetch refuse structurally — no synthetic `StoredBlock`, no synthetic CBOR); recover-only (no `StoredBlock`) and `PrevHash::Genesis` fail closed (no projection). Option A (materialize anchor bytes) explicitly NOT taken. The serve-side completion of the DC-NODE-13 projection (`ci_check_served_chain_projection.sh`). | N-AE |
 | `ci_check_recover_follow_wal_lineage.sh` *(NEW N-AE C)* | **DC-WAL-02 + T-REC-05 (strengthened)** — both `node_lifecycle` live `ForwardSyncState::new` prior-fp seeds are `fingerprint(&state.ledger)` (the recovered ledger tip being extended), NEVER `Hash32([0u8;32])` / zero / `default()` — so the first followed `AdmitBlock` chains from the WAL-tail post_fp and a recover→followed store warm-starts replay-equivalently (it was failing `ChainBreak`, exit 42); WAL `verify_chain` / `replay_from_anchor` carry NO new accept-break/skip path (the fix seeds the chain correctly, it does NOT loosen recovery). | N-AE |
@@ -3156,6 +3232,13 @@ How new modules enter the workspace.
 > server FindIntersect cursor fix) is **test-enforced** (regression
 > `producer_chain_sync_serve_find_intersect_sets_cursor_then_rolls_forward_past_it`; `ci_script = ""`, honest
 > drift) — it mints no CI gate, so the +3 above is the full N-AE CI delta.
+> **N-AE.F added 1 (141 → 142): +1 NEW** `ci_check_receive_idempotency.sh` (DC-NODE-16) — fences the receive-idempotency
+> chokepoint guard in RED `ade_runtime::forward_sync::pump::pump_block`: the no-op is HASH-keyed
+> (`get_block_by_hash(&decoded.block_hash)`, never slot-only), the `return Ok(None)` is gated by that hit and
+> precedes the BLUE reducer (`forward_sync_step`), and the slot is cross-checked (`stored.slot ==
+> decoded.header_input.slot`). **0 retired, 0 modified-in-place** (every other gate byte-unchanged; RED-only, 0 BLUE
+> diff — the standing `ci_check_no_signing_in_blue.sh` / containment / served-projection / bounded-serve fences are
+> all byte-unchanged). Unlike DC-PROTO-10 (test-enforced), DC-NODE-16 mints a dedicated gate.
 > _(The G-H gates `ci_check_single_serve_dispatch_authority.sh` + `ci_check_serve_listener_magic_aware.sh` are part
 > of the 141 total at HEAD but are NOT row-detailed in this table — see the G-H-gap note in the header.)_
 > Earlier-cluster gates (N-A..N-P, the N-M-* set, the N-L wire-session set) are present in the 141 total; the full
@@ -3357,9 +3440,45 @@ How new modules enter the workspace.
   serves C1 and C2), and **NO RO-LIVE flip** (`RO-LIVE-01` stays `partial`). The forge's `kes_period_in_window`
   pre-check MUST be preserved (`ci_check_kes_evolution_before_sign.sh`; `CN-KES-HEADER-01` `strengthened_in +=
   "PHASE4-N-AC"`).**
+- **(N-AE.F, DC-NODE-16 — RED durable-admit chokepoint) the receive-idempotency no-op MUST be hash-keyed against
+  the durable store, gated before the BLUE reducer, and MUST NOT weaken the fail-closed boundary for a different
+  block.** In RED `ade_runtime::forward_sync::pump::pump_block`, the already-have skip MUST query the durable store
+  by **HASH** (`get_block_by_hash(&decoded.block_hash)`) — **NEVER** slot alone — and return `Ok(None)` (the
+  idempotent no-op) **ONLY** when `Some(stored)` AND `stored.slot == decoded.header_input.slot`; the check MUST run
+  AFTER `decode_block` and BEFORE the BLUE chokepoint reducer (`forward_sync_step` / `validate_and_apply_header`).
+  The no-op MUST run **NO** reducer step, append **NOTHING** to the WAL, and change **NO** tip (the post-state —
+  ledger / chain_dep / ChainDb tip / WAL length — MUST be identical and replay-equivalent; T-REC-05 / DC-WAL-02
+  preserved). A **DIFFERENT** block (different hash) at/before the last-applied slot MUST **NOT** be short-circuited
+  — it MUST reach the UNCHANGED BLUE header authority and fail closed (`SlotBeforeLastApplied` / `BlockNoOutOfOrder`
+  — AE-F-INV-2). The skip MUST **NOT** skip *past* a gap, accept a *better* chain, or select among competing tips
+  (no fork-choice — `DC-CONS-03` untouched, AE-F-INV-3). It MUST make **NO BLUE change** (the BLUE authority + the
+  reducer inputs stay UNCHANGED — the sketch's BLUE `ReceiveOutcome::AlreadyHave` was NOT taken; the gate is RED
+  orchestration over a deterministic durable-store read), introduce **NO** new closed enum / canonical type /
+  version-gated contract, and add **NO** second durable tip-advance path (`pump_block` stays the sole durable tip
+  authority — DC-NODE-12). **NO RO-LIVE flip** (`ci_check_receive_idempotency.sh`).**
 
 ### Project-specific additions (Ade)
 
+- **Receive-idempotency honest scope + boundary (N-AE.F, load-bearing — do NOT soften / do NOT broaden):** N-AE.F
+  makes the receive path NO-OP a byte-identical already-applied block re-announced by the peer (the post-CE-A5
+  echo: after the relay adopted Ade's forged block 17 it served that block BACK over Ade's follow link, and the
+  BLUE header authority rejected `SlotBeforeLastApplied{last=421,attempted=421}`, ending the continuous run with
+  exit 43) — and **nothing more**. The discriminator is **HASH equality against the durable ChainDb**, never slot
+  alone: `pump_block` queries `get_block_by_hash(&decoded.block_hash)` AFTER `decode_block` and BEFORE the BLUE
+  reducer, returns `Ok(None)` ONLY on a same-hash-same-slot hit, and otherwise falls through UNCHANGED. The hard
+  boundaries (all mechanically fenced by `ci_check_receive_idempotency.sh`): **(1) NO weakening of the fail-closed
+  boundary** — a DIFFERENT block (different hash) at/before the last-applied slot still reaches the UNCHANGED BLUE
+  header authority and fails closed `SlotBeforeLastApplied` (AE-F-INV-2). **(2) NO fork-choice / skip-past** — the
+  skip is exact-match idempotency, never chain selection, never skipping a gap, never accepting a better chain
+  (`DC-CONS-03` untouched, AE-F-INV-3). **(3) NO BLUE change** — the sketch's BLUE `ReceiveOutcome::AlreadyHave`
+  variant was NOT taken; `get_block_by_hash` is a DETERMINISTIC durable-store query, so the gate is RED
+  orchestration over a deterministic read, with no new reducer input and the BLUE authority untouched (458
+  canonical types unchanged). **(4) NO second durable tip-advance path** — `pump_block` stays the sole durable tip
+  authority (DC-NODE-12); the no-op advances no tip and appends nothing to the WAL (replay-equivalent — T-REC-05 /
+  DC-WAL-02 preserved). **NO RO-LIVE flip** — surviving the echo is a long-running-relay precondition, NOT
+  operator-witnessed bounty acceptance (`RO-LIVE-01` stays `partial` / operator-gated). DC-NODE-16 is `tier =
+  derived` and `enforced`; no rule strengthened, no rule weakened. _(N-AE.F does not alter any wire / serve /
+  forge / containment / bounded-memory surface; all those fences are byte-unchanged.)_
 - **Recover→serve continuity + forge-admissibility honest scope + boundary (N-AE, load-bearing — do NOT soften /
   do NOT broaden):** N-AE makes a `--mode node` forge produce a peer-ADOPTABLE successor and tightens the
   serve/chain-sync path so a real relay can FindIntersect at the forged parent and roll forward onto it — and
@@ -3648,6 +3767,21 @@ How new modules enter the workspace.
 > Surfaced honestly per IDD: these are **declared** future attach points, not closed surfaces. Each is named
 > in a registry rule or a cluster CLOSURE record.
 >
+> **N-AE.F adds an idempotency guard INSIDE the existing RED durable-admit chokepoint — it OPENS NO new attach
+> point, adds NO new closed/extensible registry, and surfaces NO new candidate seam.** PHASE4-N-AE.F makes the
+> receive path NO-OP a byte-identical already-applied block re-announced by the peer (the post-CE-A5 echo):
+> `ade_runtime::forward_sync::pump::pump_block` queries `get_block_by_hash(&decoded.block_hash)` AFTER
+> `decode_block` and BEFORE the BLUE reducer, and returns `Ok(None)` on a same-hash-same-slot hit (`DC-NODE-16`,
+> enforced; gate `ci_check_receive_idempotency.sh`). This is a deterministic conditional + early return over the
+> already-closed `ChainDb` membership query — **not** a new closed enum, registration path, plugin trait, or
+> ingress surface; it is a TIGHTENING of the existing forged-block / received-block durable-admit chokepoint
+> (`pump_block`, the sole durable tip authority — `DC-NODE-12`). A DIFFERENT block (different hash) at/before the
+> last-applied slot still falls through to the UNCHANGED BLUE header authority and fails closed
+> (`SlotBeforeLastApplied`). N-AE.F is **RED-only (0 BLUE diff)** and does **NOT** flip any RO-LIVE rule — surviving
+> the echo is a long-running-relay precondition, not operator-witnessed peer acceptance. All candidates (#0–#3, #5,
+> the carried Gap-1 multi-producer fork-choice #7) and the already-retired #4 / #6 are carried UNCHANGED. **There
+> is NO NEW candidate seam from N-AE.F** (an idempotency guard inside an existing chokepoint surfaces none).
+>
 > **N-AE TIGHTENS three existing authority paths (recover→serve continuity + forge admissibility) — it OPENS
 > NO new attach point and adds NO new closed/extensible registry.** PHASE4-N-AE makes a `--mode node` forge
 > produce a peer-ADOPTABLE successor: a forge-admissibility gate (`DC-NODE-15` / `DC-CONS-24`, enforced — forge
@@ -3925,6 +4059,51 @@ How new modules enter the workspace.
 
 ## Generation notes
 
+- **Regenerated (single-slice follow-on refresh, PHASE4-N-AE.F) at HEAD `6363683e`** (`git rev-parse --short
+  HEAD` — the *AE.F receive idempotency* commit), applied DIRECTLY to the on-disk SEAMS. The prior on-disk SEAMS
+  was pinned at the PHASE4-N-AE close (`a76672b9` / **458** canonical types / **141** CI / **340** rules). This
+  refresh folds in **PHASE4-N-AE.F** (the post-CE-A5 echo fix — receive idempotency at the durable-admit
+  chokepoint, `DC-NODE-16`) and updates the counts to **458** canonical types / **142** CI / **341** rules.
+  **N-AE.F added NO new ingress surface, NO new registry (closed or extensible), NO new version-gated contract, NO
+  new closed enum, and NO new plugin/extension point** — it adds a single deterministic guard INSIDE the existing
+  RED durable-admit chokepoint `pump_block`. **SEAMS is therefore MATERIALLY UNCHANGED from the N-AE pin — AE.F
+  adds NO new seam** (the idempotency gate is an internal chokepoint guard, not an attach point). Registry → **341**
+  (ONE NEW — `DC-NODE-16`, `tier = derived`, `introduced_in = "PHASE4-N-AE"`, `enforced`,
+  `ci_script = ci/ci_check_receive_idempotency.sh`; no rule strengthened, no rule weakened); CI **141 → 142** (NET
+  +1 NEW — `ci_check_receive_idempotency.sh`; 0 retired, 0 modified-in-place).
+- **N-AE.F delta spot-checked at HEAD `6363683e` (grep/ls/git only — no `cargo`):** `git diff a76672b9..6363683e`
+  touches **ONE** source `.rs` file — RED, already inventoried, with **ZERO new `struct`/`enum`:**
+  `crates/ade_runtime/src/forward_sync/pump.rs` (the RED durable-admit chokepoint `pump_block`, which already does
+  ChainDb/WAL I/O — its `//!`/header is RED). The added production lines are a `db.get_block_by_hash(&decoded.block_hash)`
+  query immediately after `decode_block` and a gated `return Ok(None)` (when `stored.slot ==
+  decoded.header_input.slot`), BEFORE the BLUE reducer step — a deterministic conditional + early return, NOT a new
+  type. `git diff a76672b9..6363683e` over the BLUE `core_paths` trees touches **no** file and adds **zero** new
+  `struct`/`enum` (verified by the change scope; 458 canonical types unchanged; the BLUE header authority
+  `validate_and_apply_header` / `block_validity` is UNCHANGED and still fail-closes every block that reaches it).
+  The NEW gate `ci_check_receive_idempotency.sh` is present; `ls ci/ci_check_*.sh | wc -l` = **142**; `grep -cE
+  '^id = ' docs/ade-invariant-registry.toml` = **341** (the new `DC-NODE-16` present, `status = "enforced"`; 209
+  enforced / 20 partial / 112 declared).
+- **Cross-reference check (CODEMAP ↔ SEAMS ↔ registry) at the N-AE.F refresh — read honestly:** this SEAMS and the
+  registry AGREE at HEAD `6363683e` (**458 / 142 / 341**: `ls ci/ci_check_*.sh | wc -l` = **142**; `grep -cE '^id =
+  ' docs/ade-invariant-registry.toml` = **341**). The on-disk CODEMAP was **NOT regenerated** for AE.F — it stays
+  pinned at the PHASE4-N-AE close (`a76672b9` / **458 / 141 / 340**) and does NOT carry `DC-NODE-16`. This is a
+  deliberate, honest lag, **not a discipline gap**: AE.F adds NO crate, NO module, NO canonical type, and NO
+  TCB-color change, so the module inventory + colors SEAMS reads from CODEMAP are unaffected (the one touched
+  module, RED `ade_runtime::forward_sync::pump`, is already inventoried in the CODEMAP). The CODEMAP is a
+  refresh-on-next-cluster item; it will pick up `DC-NODE-16` + the +1 CI gate + the `pump_block` idempotency-gate
+  note at the next cluster close. No stale module references in this SEAMS; the lone module it newly cites for AE.F
+  (`ade_runtime::forward_sync::pump`) is inventoried in the (lagging) CODEMAP.
+- **Candidate seams surfaced for confirm/reject (this refresh):** **NONE — AE.F added none.** PHASE4-N-AE.F adds a
+  hash-exact already-have idempotency guard INSIDE the existing RED durable-admit chokepoint `pump_block` (a
+  deterministic `ChainDb` membership check returning `Ok(None)` for a re-announced block). It is **not** a new
+  attach point: there is **no registration path** (no `register_*` / `add_*` / plugin trait / `Box<dyn Trait>` /
+  handler map — it is a plain conditional + early return); it is **a tightening of an existing chokepoint**, not a
+  new surface (`pump_block` is the SAME sole durable-admit / sole durable tip authority documented since N-Y /
+  DC-NODE-12, and new work still attaches to the durable chain ONLY via that chokepoint + `bootstrap_initial_state`);
+  and it introduces **no closed enum** (the decision is a conditional, not a sum type — the sketch's BLUE
+  `ReceiveOutcome::AlreadyHave` variant was explicitly NOT taken). **No new ingress surface, no new closed/extensible
+  registry, no new version-gated contract, no new extension/plugin point were introduced by N-AE.F; no
+  human-judgment item is outstanding from this refresh.**
 - **Regenerated (single-cluster CLUSTER-CLOSE refresh, PHASE4-N-AE) at HEAD `a76672b9`** (`git rev-parse
   --short HEAD` — the *AE.E chain-sync server FindIntersect cursor* commit, the PHASE4-N-AE close), applied
   DIRECTLY to the on-disk SEAMS. The prior on-disk SEAMS was pinned at the PHASE4-N-AC close (`1d54abb4` / **458**
