@@ -11,6 +11,14 @@
 > C2 sibling of `docs/active/live-pass-path-fidelity-guide.md` (read that too — same
 > anti-drift purpose, complementary rule).
 
+> **MILESTONE (2026-06-07): the C2-LOCAL adoption manifest (CE-A5) is PROVEN** — a real
+> cardano-node 11.0.1 relay committed an Ade-forged block (§5b; PHASE4-N-AE.A/B/C/E; the
+> closer was AE.E's chain-sync-server cursor fix, DC-PROTO-10; post-adoption echo fixed by
+> AE.F, DC-NODE-16). It is a **non-promotable private-venue rehearsal** — it strengthened but
+> did NOT flip CN-CONS-06 / RO-LIVE-01. Next work is the **§7b robustness ladder** (rung 1
+> sustained + epoch on C2-LOCAL → rung 2 multi-producer fork-choice → rung 3 preprod). Status
+> detail: §5b + §7 + §7b.
+
 ---
 
 ## 0. The one rule
@@ -262,7 +270,38 @@ and `slotsPerKESPeriod=129600` keeps the opcert (KES period 0) fresh.)
   Conway venue, Haskell peers (relays): node2,node3, Ade identity: pool1, forged hash ==
   adopted hash.**
 
-> **Status (honest, 2026-06-06):** **#1–#7 DONE** — venue validated; live tip + consensus
+> **Status (RESOLVED, 2026-06-07): #8–#9 PROVEN — the CE-A5 manifest.** A real cardano-node
+> 11.0.1 relay (non-producing, per the #8 finding) **`AddedToCurrentChain`** an Ade-forged
+> block: venue `c2ae18`, Ade=pool1 recovered @ block 8 → followed the relay to its frozen tip
+> (block 16) → forged **block 17 @ slot 421** → served it → the relay committed it
+> (`newtip db3b5675…@421`; `issuerHash a1ed4e04` = blake2b-224(pool1 cold VK); relay
+> forging=0; Ade `forge_result:succeeded`=1). Evidence:
+> `docs/evidence/phase4-n-ae-ce-a5-relay-adoption.{md,jsonl}`.
+>
+> **What closed it — PHASE4-N-AE** (and the hypothesis it corrected): AE.A (forge-on-followed-tip
+> gate, DC-NODE-15) + AE.C (recover→follow WAL prior-fp, DC-WAL-02) + AE.B (recovered/forge-parent
+> FindIntersect-only projection, DC-NODE-14) addressed Gaps 2a/2b — but FOUR runs still failed
+> `UnexpectedBlockNo(N)(0)` until **AE.E**. Dumping the live store **DISPROVED the
+> `seed_to_snapshot` hypothesis** in the superseded block below: the store was a COMPLETE
+> contiguous chain (block 0–20) and `ChainDbServedSource::intersect` was correct on it. The real
+> bug was the chain-sync **server** (`ade_network::chain_sync::server`): the `FindIntersect`
+> handler resolved the intersect (the relay's tip) and replied `IntersectFound` but **never set
+> the read cursor `last_announced`**, so the next `RequestNext` served `next_after(None)` = block 0
+> → `UnexpectedBlockNo(tip+1)(0)`. AE.E sets the cursor to the resolved intersect (**DC-PROTO-10**).
+> **Anti-stray lesson: the live run is the arbiter — AE.B "looked right" hermetically but did NOT
+> close it; never declare a live gap closed on a hermetic fixture alone.**
+>
+> **Post-adoption echo fixed — AE.F (DC-NODE-16):** after adoption the relay re-announced Ade's own
+> block over the follow link → Ade fail-closed `SlotBeforeLastApplied` (exit-43) AFTER the manifest.
+> AE.F makes a re-announced already-have block (hash-exact) an idempotent no-op at the durable-admit
+> chokepoint, so a continuous run survives its own served tip coming back (rung-1 prerequisite, §7b).
+> The #8 KEY FINDING stands: relays stay **non-producing** (multi-producer fork-choice is **rung 2**
+> of the §7b ladder, NOT added to Ade here). **C2-preprod-live (§6) is rung 3 of §7b.**
+>
+> ---
+>
+> **Prior-run history (2026-06-06 — SUPERSEDED by the RESOLVED status above; the `seed_to_snapshot`
+> root-cause hypothesis at the END of this block was DISPROVEN by the AE.E finding):** **#1–#7 DONE** — venue validated; live tip + consensus
 > inputs extracted; Ade recovered from the non-Origin tip; Ade forged **real pool1 blocks**
 > (`forge_result:succeeded`) from that recovered state. **#8–#9 NOT proven** — forge success
 > is local; external validity needs a Haskell peer to receive→validate→adopt→correlate. The
@@ -341,19 +380,53 @@ registered + active on preprod.**
 
 ## 7. What is proven vs owed (do not overstate)
 
-- **Proven now:** recover the real preprod Conway tip (extraction works at epoch 293 /
-  slot 125056777 today; full recover proven N-M-C / N-M-A1.1; RO-LIVE-05 enforced). The
-  tip-successor **durability** seam is proven hermetically (PHASE4-N-AD).
-- **Owed (in this order):**
-  - **(a) C2-LOCAL rehearsal — the NEXT step.** Stand up an already-past-bootstrap private
-    Conway chain (`d`-bridge / `cardano-testnet`) with Ade stake **active** + **2 Haskell
-    nodes**, then run recover → forge tip+1 → Haskell adopt → `correlate` there (§5b).
-    **This, not preprod stake registration, is what comes next.**
-  - **(b) Then C2-preprod.** Register Ade's pool stake on preprod (~2-epoch gate) + the
-    forge+adopt operator pass once active → `Ba02Manifest`.
-  - **(c)** `CN-CONS-06` / `RO-LIVE-01` live halves flip **only** on committed `correlate`
-    evidence over a real **preprod** peer log — never on recover/forge/serve alone, and
-    never on the local rehearsal (non-promotable).
+- **Proven now:** recover the real preprod Conway tip (extraction at epoch 293 / slot
+  125056777; full recover N-M-C / N-M-A1.1; RO-LIVE-05 enforced). Tip-successor **durability**
+  hermetic (PHASE4-N-AD). **The C2-LOCAL adoption manifest (CE-A5, 2026-06-07): a real Haskell
+  relay committed an Ade-forged block** (§5b; PHASE4-N-AE.A/B/C/E; echo fixed by AE.F) — a
+  **non-promotable private-venue rehearsal** that does NOT flip any RO-LIVE rule on its own.
+- **Owed — the robustness ladder (§7b), in order:** rung 1 sustained / settlement-beyond-k +
+  the epoch transition (C2-LOCAL single-producer, cheap — the NEXT step); rung 2 multi-producer
+  fork-choice (C2-LOCAL, a new cluster); rung 3 C2-preprod register (~2-epoch gate) + the
+  operator pass → `Ba02Manifest`.
+- **`CN-CONS-06` / `RO-LIVE-01` live halves flip ONLY** on committed `correlate` evidence over
+  a real **preprod** peer log — never on recover/forge/serve alone, and never on the local
+  rehearsal (non-promotable). The CE-A5 manifest is rehearsal evidence: it **strengthened**
+  CN-CONS-06 (first live cross-impl acceptance) but did **NOT** flip it.
+
+---
+
+## 7b. The robustness ladder — phased de-risking after the manifest
+
+**Principle (anti-stray): exercise each failure class in the CHEAPEST venue that can produce
+it.** A bug found in C2-LOCAL costs hours; the same bug in preprod costs the ~2-epoch
+(~10-day) stake-snapshot gate to retest. Climb in order. **Do NOT skip the hermetic
+multi-producer rung — preprod IS multi-producer, so skipping rung 2 means first-contact with
+fork-choice in the venue where every retest costs ~10 days.**
+
+Venue constants (from the venue shelley-genesis): `epochLength 2000 × slotLength 1s` =
+**epoch ≈ 33 min**; `securityParam k=5` → stability window `3k/f = 300 slots` ≈ **5 min**;
+`slotsPerKESPeriod 129600` ≈ **36 h** (a KES period is **out of reach** — don't target it;
+cross-period KES is already covered by N-AC / N-P).
+
+| Rung | Venue | Failure class isolated | Likely new work | "Done" = |
+|---|---|---|---|---|
+| **1** | C2-LOCAL, single-producer (the existing CE-A5 harness) | operational stability · **settlement beyond k** · **epoch transition** · restart durability | maybe an epoch-transition slice | several Ade blocks settle `>k` into the relay's ImmutableDB · **1 epoch crossed** with adoption continuing · survives a **mid-run kill→warm-start** |
+| **2** | C2-LOCAL, multi-producer (un-freeze a 2nd pool so it competes) | **fork-choice / rollback** — DC-CONS-03, never exercised live | a live fork-choice cluster (**real** new work) | Ade selects the best chain across a real fork **and** recovers from losing one |
+| **3** | preprod | real network · stake · load · adversaries | SPO registration + ~2-epoch stake gate + operator wiring | a registered Ade SPO's block accepted on preprod → `Ba02Manifest` (flips RO-LIVE-01 / CN-CONS-06 live half) |
+
+**Rung 1 is the cheap, high-value next step** (and validates AE.F): run the existing CE-A5
+harness ~5 min (**settlement beyond k** — strictly stronger than the one-block manifest:
+Ade's blocks become the relay's *immutable* history, not just its *selected* tip), then
+continue past slot 2000 (one **epoch**). The epoch transition is single-producer and the path
+most likely to surface a gap — Ade's `--mode node` loop has not been shown to roll
+nonce / re-snapshot stake / recompute leadership live. **Find that here, not in preprod.**
+
+**Honest scope (at any rung length):** rung 1 proves operational stability + settlement, NOT
+fork-choice (single producer → one chain → DC-CONS-03 never fires) and NOT real-stake
+economics. **Tie the climb to what the bounty requires** — the manifest already cleared the
+*minimal* block-production bar; the ladder buys robustness/confidence, not a new acceptance
+gate (only rung 3's preprod `correlate` flips an RO-LIVE rule).
 
 ---
 
@@ -373,6 +446,9 @@ registered + active on preprod.**
   first (stake active by the §5b precondition), then preprod (register); never faked.
 - ✅ `PrevHash::Genesis`, the BLUE Sum6KES/VRF/header rules, and the importer are unchanged.
 - ✅ No RO-LIVE flip without committed `correlate` evidence over a **preprod** peer log.
+- ✅ The robustness ladder (§7b) is climbed **in order** (C2-LOCAL single → C2-LOCAL
+  multi-producer → preprod); never first-contact fork-choice in preprod, and never declare a
+  **live** gap closed on a hermetic fixture alone (the AE.B→AE.E lesson: the live run is the arbiter).
 
 If a plan has **Ade** forge from genesis/slot 0, or builds a **Conway-from-genesis** net
 for Ade to bootstrap, it has drifted. Local block production by the **Haskell venue** (the
