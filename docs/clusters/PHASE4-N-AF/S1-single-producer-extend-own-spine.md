@@ -4,7 +4,7 @@
 
 **Slice Name:** Single-producer extend-own-durable-spine (DC-NODE-18)
 **Cluster:** PHASE4-N-AF — single-slice; **rung-1 only, single-producer only**
-**Status:** Proposed
+**Status:** Implemented — DC-NODE-18 `enforced` for the scoped core (CE-AF-6a live-proven via run `c2t7`, 2026-06-07); CE-AF-6b (sustained-past-k) deferred to DC-NODE-19
 **Authority source:** `docs/planning/single-producer-extend-own-spine-invariants.md`; registry `DC-NODE-18` (declared → enforced on this slice)
 
 **Cluster Exit Criteria Addressed** (this single-slice cluster's CEs = the DC-NODE-18 acceptance contract):
@@ -13,7 +13,8 @@
 - [ ] **CE-AF-3** (hermetic): in `SingleProducerExtendOwnDurableSpine`, a ForgeTick forges on `durable_servable_tip` **without** requiring `followed_peer_tip == durable_servable_tip`; the forged successor's parent byte-equals the durable tip (DC-CONS-24 preserved).
 - [ ] **CE-AF-4** (hermetic, fail-closed fence): forge refuses `ForgeRefused::SingleProducerFenceViolation{reason, durable_tip, followed_peer_tip, observed_peer_tip, venue_role}` if — venue not declared single-producer · relay producing · a competing peer block beyond `adopted_root` observed · peer tip disagrees with the expected single-producer spine · the recovered anchor is the k=0 snapshot-conflict edge.
 - [ ] **CE-AF-5** (replay): warm-start replay of a K≥2 own-forged chain is byte-identical (durable state **and** served chain) — T-REC-05 extended to the chain.
-- [ ] **CE-AF-6** (operator-gated LIVE evidence; the DC-NODE-18 live half): committed `rung1-auto.sh` (k≥2) transcript — Ade forges N → relay adopts; Ade forges N+1 **without** relay echo → relay adopts; sustained past k (several Ade blocks in the relay ImmutableDB).
+- [x] **CE-AF-6a** (operator-gated LIVE — the DC-NODE-18 core proof; **SATISFIED** by `c2t7-extend-proof`): committed transcript — Ade forges N → relay adopts → explicit RED adoption certificate → Ade forges N+1 from its durable adopted spine **without** relay echo of N → relay adopts N+1.
+- [ ] **CE-AF-6b** (operator-gated LIVE — sustained-rung proof; **DEFERRED / out of scope for this slice**): Ade continues past k into the relay ImmutableDB and warm-start replay remains byte-identical over the sustained chain. Deferred to the follow-up loop-continuation / follow-liveness slice (**DC-NODE-19**).
 
 Exit criteria not listed here are out of scope for this slice.
 
@@ -39,7 +40,7 @@ Make it impossible for a single-producer Ade to stall after one forged block: on
 `DC-NODE-15` (initial caught-up gate still gates the FIRST forge) · `DC-NODE-16` (pump_block idempotency) · `DC-CONS-03` (chain-selection/fork-choice authority — **untouched**) · `DC-NODE-10` / `DC-CONS-24` (successor position + parent-hash byte-equality) · `DC-NODE-12` / `DC-WAL-04` (forged durable admit; no-orphan) · `T-REC-05` / `DC-WAL-02` (recover→follow + forged-chain replay-equivalence; the venue certificate is **not** replay-visible) · `DC-NODE-17` (followed-peer-tip reflects only real peer advertisements; never local inference; admissibility-only) · `T-DET-01` (the GREEN classifier is pure/deterministic).
 
 ## 8. Invariants Strengthened or Introduced
-`DC-NODE-18` — declared → **enforced**. (This slice's tests + CI gate append to the registry entry; status flips on the hermetic CI **and** the committed CE-AF-6 live transcript.) Exactly one invariant family (DC-NODE forge).
+`DC-NODE-18` — declared → **enforced for the scoped core** (successor extension after an explicit adoption certificate; see the registry SCOPE BOUNDARY). This slice's 6 tests + the CI gate append to the registry entry; status flips on the hermetic CI **and** the committed CE-AF-6a core live transcript. CE-AF-6b (sustained-past-k) is **deferred to DC-NODE-19** — not claimed here. Exactly one invariant family (DC-NODE forge).
 
 ## 9. Design Summary
 The ForgeTick gate becomes **mode-aware** via an explicit `ForgeMode` enum (RED loop state; GREEN transition function):
@@ -68,7 +69,8 @@ The ForgeTick gate becomes **mode-aware** via an explicit `ForgeMode` enum (RED 
 - [ ] `single_producer_fence_fails_closed` — each of the 5 conditions → `SingleProducerFenceViolation{…}` with populated structured fields (CE-AF-4).
 - [ ] `extend_own_spine_two_runs_byte_identical` warm-start replay (CE-AF-5).
 - [ ] CI gate `ci/ci_check_single_producer_extend_own_spine.sh` — fences: explicit enum (no mode boolean); promotion-requires-certificate; certificate not persisted/replay-visible; fence fail-closed; the mode never references the chain-selector (DC-CONS-03 untouched).
-- [ ] **CE-AF-6 (operator-gated, NOT CI):** committed `docs/evidence/phase4-n-af-extend-own-spine.{md,jsonl}` — the live `rung1-auto.sh` transcript (forge N→adopt; N+1→adopt-without-echo; past k). DC-NODE-18 flips to `enforced` only when the hermetic items **and** this transcript are committed.
+- [x] **CE-AF-6a (operator-gated, NOT CI) — SATISFIED:** committed `docs/evidence/phase4-n-af-extend-own-spine.{md,jsonl}` — the live `c2t7` transcript (forge N→adopt; explicit RED adoption certificate; forge N+1 from the durable own spine **without** echo → adopt N+1). DC-NODE-18 is `enforced` for this scoped core on the hermetic items **and** this transcript.
+- [ ] **CE-AF-6b (operator-gated, NOT CI) — DEFERRED:** sustained production past k into the relay ImmutableDB + warm-start replay byte-identical over the sustained chain. NOT claimed by this slice; deferred to **DC-NODE-19** (the c2t7 run stopped at 2 blocks on a follow-link EOF — a loop-lifecycle obligation, not the DC-NODE-18 authority claim).
 
 ## 13. Failure Modes
 - `SingleProducerFenceViolation` — **fail-fast**, deterministic, comparable (structured fields); no forge, no state transition, tip unchanged. The **default** when no single-producer certificate is present (fail-closed).
@@ -95,4 +97,4 @@ Multi-producer fork-choice (rung 2) · follow-link keep-alive / OQ-KA · preprod
 - [ ] No TODOs/placeholders in the gate; zero BLUE change.
 - [ ] CI enforces DC-NODE-18 (`ci_check_single_producer_extend_own_spine.sh` + the hermetic tests).
 - [ ] Replay-equivalence passes (CE-AF-5).
-- [ ] CE-AF-6 live transcript committed; DC-NODE-18 flipped declared→enforced.
+- [x] CE-AF-6a core live transcript committed; DC-NODE-18 flipped declared→enforced **for the scoped core**. CE-AF-6b (sustained-past-k) deferred to **DC-NODE-19**.

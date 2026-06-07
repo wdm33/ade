@@ -90,11 +90,11 @@ use crate::admission::bootstrap::build_n2n_version_table;
 use crate::cli::Cli;
 use crate::forge_intent::{classify_forge_intent, ForgeIntent};
 use crate::node_sync::{
-    admit_forged_block_durably, forge_followed_tip_admission, forge_mode_on_caughtup,
-    forge_mode_on_extend, forge_mode_on_first_own_block_served, forge_one_from_recovered,
-    run_node_sync, single_producer_forge_decision, ForgeFollowedTipAdmission, ForgeMode,
-    ForgeRefused, NodeBlockSource, NodeForgeOutcome, SingleProducerForgeDecision,
-    VenueAdoptionCertificate, VenueRole,
+    admit_forged_block_durably, forge_followed_tip_admission, forge_mode_after_admit,
+    forge_mode_on_caughtup, forge_one_from_recovered, run_node_sync,
+    single_producer_forge_decision, ForgeFollowedTipAdmission, ForgeMode, ForgeRefused,
+    NodeBlockSource, NodeForgeOutcome, SingleProducerForgeDecision, VenueAdoptionCertificate,
+    VenueRole,
 };
 use crate::operator_forge;
 use crate::run_loop_planner::{
@@ -1388,6 +1388,11 @@ pub async fn run_relay_loop_with_sched(
                                 // serve handoff — the durable block this admits IS
                                 // what the serve task projects (serve-as-projection,
                                 // DC-NODE-13); the G-R push sibling is retired.
+                                // DC-NODE-18: capture whether an ACTUAL block was
+                                // admitted (handoff present). A not_leader / no-op
+                                // tick sets `forged = true` but admits nothing, and
+                                // MUST NOT advance the single-producer mode.
+                                let admitted = handoff.is_some();
                                 if let Some(h) = handoff {
                                     admit_forged_block_durably(
                                         &h,
@@ -1413,12 +1418,11 @@ pub async fn run_relay_loop_with_sched(
                                 act.last_forged_slot = Some(slot);
                                 forged = true;
                                 // DC-NODE-18: advance the single-producer forge mode
-                                // after a successful forge+admit — admissibility
-                                // SCHEDULING only (the durable surface above is
-                                // untouched; in a non-single-producer venue a no-op).
-                                // `own_tip` is the durable spine head just admitted:
-                                // the first own block records its parent peer tip;
-                                // each extend advances `current_tip`.
+                                // ONLY after an actual forge+admit (`admitted`) --
+                                // admissibility SCHEDULING only (the durable surface
+                                // above is untouched; a no-op in a non-single-producer
+                                // venue and on a not_leader tick). `own_tip` is the
+                                // durable spine head just admitted.
                                 if act.venue_role == VenueRole::SingleProducer {
                                     let own_tip = ChainDbServedSource::new(chaindb).tip().map(
                                         |(slot, hash, block_no)| TipPoint {
@@ -1427,21 +1431,12 @@ pub async fn run_relay_loop_with_sched(
                                             block_no,
                                         },
                                     );
-                                    if let Some(own) = own_tip {
-                                        act.forge_mode = match &act.forge_mode {
-                                            ForgeMode::CaughtUpToPeerTip { .. } => {
-                                                forge_mode_on_first_own_block_served(
-                                                    &act.forge_mode,
-                                                    own.clone(),
-                                                    followed_peer_tip.clone().unwrap_or(own),
-                                                )
-                                            }
-                                            ForgeMode::SingleProducerExtendOwnDurableSpine {
-                                                ..
-                                            } => forge_mode_on_extend(&act.forge_mode, own),
-                                            _ => act.forge_mode.clone(),
-                                        };
-                                    }
+                                    act.forge_mode = forge_mode_after_admit(
+                                        &act.forge_mode,
+                                        admitted,
+                                        own_tip,
+                                        followed_peer_tip.clone(),
+                                    );
                                 }
                                 if let Some(s) = sched.as_deref_mut() {
                                     s.record(&crate::live_log::NodeSchedEvent::ForgeResult {

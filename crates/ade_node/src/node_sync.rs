@@ -878,6 +878,35 @@ pub fn forge_mode_on_extend(mode: &ForgeMode, new_tip: TipPoint) -> ForgeMode {
     }
 }
 
+/// DC-NODE-18: the post-forge mode transition, applied by the RED loop ONLY after a
+/// forge attempt. `admitted` is true IFF an actual block was forged AND durably
+/// admitted — a not_leader / no-op tick sets the loop's `forged` flag but admits
+/// nothing, and MUST NOT advance the mode. Pure / total: `!admitted` or a missing
+/// `own_tip` returns the mode unchanged; otherwise `CaughtUpToPeerTip` records the
+/// first own block (with its parent peer tip) and the extend state advances
+/// `current_tip`.
+pub fn forge_mode_after_admit(
+    mode: &ForgeMode,
+    admitted: bool,
+    own_tip: Option<TipPoint>,
+    parent_peer_tip: Option<TipPoint>,
+) -> ForgeMode {
+    if !admitted {
+        return mode.clone();
+    }
+    let own = match own_tip {
+        Some(t) => t,
+        None => return mode.clone(),
+    };
+    match mode {
+        ForgeMode::CaughtUpToPeerTip { .. } => {
+            forge_mode_on_first_own_block_served(mode, own.clone(), parent_peer_tip.unwrap_or(own))
+        }
+        ForgeMode::SingleProducerExtendOwnDurableSpine { .. } => forge_mode_on_extend(mode, own),
+        other => other.clone(),
+    }
+}
+
 /// DC-NODE-18: decide the single-producer forge action for this ForgeTick. Pure /
 /// deterministic GREEN. `relay_producing` and `recovered_anchor_k0` are RED venue
 /// facts supplied by the loop; `cert` is the optional explicit venue-adoption
@@ -910,12 +939,22 @@ pub fn single_producer_forge_decision(
         // First own block served: promote ONLY on an explicit certificate matching the
         // served own tip. Adoption is NEVER inferred from self-admit.
         ForgeMode::FirstOwnBlockServed { own_tip, .. } => match cert {
-            Some(c) if &c.adopted_tip == own_tip => SingleProducerForgeDecision::Promote {
-                next: ForgeMode::SingleProducerExtendOwnDurableSpine {
-                    adopted_root: own_tip.clone(),
-                    current_tip: own_tip.clone(),
-                },
-            },
+            // Match the certificate to the served own tip by CHAIN-POINT IDENTITY
+            // (hash + block_no), NOT full TipPoint equality — consistent with
+            // `forge_followed_tip_admission` (the slot is metadata; the canonical
+            // hash + height identify the block). The relay-reported slot in the
+            // certificate need not byte-equal the served-tip slot.
+            Some(c)
+                if c.adopted_tip.hash == own_tip.hash
+                    && c.adopted_tip.block_no == own_tip.block_no =>
+            {
+                SingleProducerForgeDecision::Promote {
+                    next: ForgeMode::SingleProducerExtendOwnDurableSpine {
+                        adopted_root: own_tip.clone(),
+                        current_tip: own_tip.clone(),
+                    },
+                }
+            }
             _ => SingleProducerForgeDecision::AwaitAdoptionCertificate,
         },
         // Extend state: fail-closed fence, then forge on the durable spine head.
@@ -4764,6 +4803,26 @@ mod tests {
             ),
             SingleProducerForgeDecision::AwaitAdoptionCertificate
         );
+        // Same chain-point identity (hash + block_no) but a DIFFERENT slot → PROMOTE.
+        // The certificate matches by (hash, block_no); the relay-reported slot need
+        // not byte-equal the served-tip slot (consistent with the catch-up gate's
+        // documented slot-ignoring equality). Locks the cert-match relaxation.
+        let diff_slot = VenueAdoptionCertificate {
+            adopted_tip: tp(11, 999, 0xBB),
+        };
+        assert!(matches!(
+            single_producer_forge_decision(
+                &mode,
+                Some(own.clone()),
+                Some(parent.clone()),
+                Some(parent.clone()),
+                VenueRole::SingleProducer,
+                false,
+                false,
+                Some(&diff_slot)
+            ),
+            SingleProducerForgeDecision::Promote { .. }
+        ));
         // A matching certificate → promote to the extend state.
         let cert = VenueAdoptionCertificate {
             adopted_tip: own.clone(),
@@ -4869,5 +4928,52 @@ mod tests {
             assert_eq!(venue_role, VenueRole::SingleProducer);
             assert_eq!(durable_tip, Some(current));
         }
+    }
+
+    /// CE-AF regression (live-surfaced): the post-forge transition advances ONLY on
+    /// an ACTUAL admitted block. A not_leader / no-op tick (admitted=false) sets the
+    /// loop's `forged` flag but admits nothing — it MUST NOT promote the mode (the
+    /// bug the first live CE-AF-6 run caught: forged=true on not_leader wrongly
+    /// advanced CaughtUpToPeerTip -> FirstOwnBlockServed, then stalled awaiting a
+    /// certificate for a block never forged).
+    #[test]
+    fn forge_mode_after_admit_only_advances_on_real_admit() {
+        let peer = tp(10, 100, 0xAA);
+        let own = tp(11, 145, 0xBB);
+        let caught = ForgeMode::CaughtUpToPeerTip {
+            peer_tip: peer.clone(),
+        };
+
+        // not_leader / no-op tick (admitted = false) -> mode UNCHANGED.
+        assert_eq!(
+            forge_mode_after_admit(&caught, false, Some(own.clone()), Some(peer.clone())),
+            caught
+        );
+        // a missing durable tip -> unchanged (defensive).
+        assert_eq!(
+            forge_mode_after_admit(&caught, true, None, Some(peer.clone())),
+            caught
+        );
+        // a real admit from CaughtUpToPeerTip -> FirstOwnBlockServed (own + parent).
+        assert_eq!(
+            forge_mode_after_admit(&caught, true, Some(own.clone()), Some(peer.clone())),
+            ForgeMode::FirstOwnBlockServed {
+                own_tip: own.clone(),
+                parent_peer_tip: peer.clone(),
+            }
+        );
+        // a real admit in the extend state -> current_tip advances, adopted_root kept.
+        let ext = ForgeMode::SingleProducerExtendOwnDurableSpine {
+            adopted_root: own.clone(),
+            current_tip: own.clone(),
+        };
+        let next = tp(12, 160, 0xCC);
+        assert_eq!(
+            forge_mode_after_admit(&ext, true, Some(next.clone()), Some(peer)),
+            ForgeMode::SingleProducerExtendOwnDurableSpine {
+                adopted_root: own,
+                current_tip: next,
+            }
+        );
     }
 }
