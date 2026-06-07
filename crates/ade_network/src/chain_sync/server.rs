@@ -253,10 +253,25 @@ pub fn producer_chain_sync_serve(
                     .map(|(s, h)| Point::Block { slot: s, hash: h }),
             });
             match matched {
-                Some(point) => Ok((
-                    state,
-                    ServerStep::Reply(ServerReply::intersect_found(point, tip)),
-                )),
+                Some(point) => {
+                    // After IntersectFound the server's read cursor IS the
+                    // intersect point: the next RequestNext must serve
+                    // next_after(intersect) (the successor the client rolls
+                    // forward onto), NOT next_after(None) (the chain start).
+                    // Without this, a client that intersects at a NON-Origin
+                    // point (e.g. its own tip) is served block 0 and rejects
+                    // UnexpectedBlockNo(tip_block_no + 1)(0). (Origin-sync
+                    // clients are unaffected: Origin -> None -> serve from the
+                    // chain start, which is correct.)
+                    state.last_announced = match &point {
+                        Point::Block { slot, hash } => Some((*slot, hash.clone())),
+                        Point::Origin => None,
+                    };
+                    Ok((
+                        state,
+                        ServerStep::Reply(ServerReply::intersect_found(point, tip)),
+                    ))
+                }
                 None => Ok((state, ServerStep::Reply(ServerReply::intersect_not_found(tip)))),
             }
         }
@@ -594,6 +609,67 @@ mod tests {
                     assert_eq!(point, known);
                 }
                 other => panic!("expected IntersectFound, got {other:?}"),
+            },
+            other => panic!("expected Reply, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn producer_chain_sync_serve_find_intersect_sets_cursor_then_rolls_forward_past_it() {
+        // PHASE4-N-AE.E regression (the CE-A5 relay-adoption bug): after
+        // IntersectFound at a NON-Origin point, the server's read cursor IS that
+        // point, so the NEXT RequestNext serves the SUCCESSOR (next_after(intersect)),
+        // NOT block 0 (next_after(None)). Before the fix, FindIntersect left
+        // last_announced == None, so a client intersecting at its own tip was served
+        // the chain start and rejected `UnexpectedBlockNo(tip_block_no + 1)(0)`.
+        let (snap, _blocks) = build_served_with_first_n_lightest(2);
+        let look = SnapshotLookup { snap: &snap };
+        let mut sorted: Vec<(SlotNo, Hash32)> =
+            snap.iter().map(|(s, h, _)| (s, h.clone())).collect();
+        sorted.sort_by(|a, b| (a.0, &a.1).cmp(&(b.0, &b.1)));
+        let (first_slot, first_hash) = sorted[0].clone();
+        let (second_slot, second_hash) = sorted[1].clone();
+        let intersect = Point::Block {
+            slot: first_slot,
+            hash: first_hash.clone(),
+        };
+
+        // (1) FindIntersect at the FIRST (non-tip) block -> IntersectFound + cursor set.
+        let state = ProducerChainSyncServerState::new();
+        let (state2, step) = producer_chain_sync_serve(
+            state,
+            ChainSyncMessage::FindIntersect { points: vec![intersect.clone()] },
+            &look,
+            v(),
+        )
+        .unwrap();
+        match step {
+            ServerStep::Reply(reply) => match reply.into_message() {
+                ChainSyncMessage::IntersectFound { point, .. } => assert_eq!(point, intersect),
+                other => panic!("expected IntersectFound, got {other:?}"),
+            },
+            other => panic!("expected Reply, got {other:?}"),
+        }
+        assert_eq!(
+            state2.last_announced,
+            Some((first_slot, first_hash)),
+            "the fix: after IntersectFound the cursor IS the intersect point"
+        );
+
+        // (2) RequestNext -> RollForward the SUCCESSOR (next_after(intersect)), NOT block 0.
+        let (state3, step3) =
+            producer_chain_sync_serve(state2, ChainSyncMessage::RequestNext, &look, v()).unwrap();
+        assert_eq!(
+            state3.last_announced,
+            Some((second_slot, second_hash)),
+            "RequestNext after the non-Origin intersect rolls forward to the SUCCESSOR, not the chain start"
+        );
+        match step3 {
+            ServerStep::Reply(reply) => match reply.into_message() {
+                ChainSyncMessage::RollForward { header, .. } => {
+                    assert!(!header.is_empty(), "RollForward carries the successor header")
+                }
+                other => panic!("expected RollForward(successor), got {other:?}"),
             },
             other => panic!("expected Reply, got {other:?}"),
         }
