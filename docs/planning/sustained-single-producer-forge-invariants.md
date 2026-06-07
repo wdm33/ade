@@ -132,3 +132,43 @@ only. The slice that implements it must prove, with mechanical gates + a committ
   proves it independent.
 - **Multi-producer fork-choice (rung 2), preprod (rung 3):** not climbed until single-producer
   sustained works (§7b ladder discipline).
+
+## OQ-1 RESULT (2026-06-07) — live-proven; reframes the fix
+
+Two instrumented C2-LOCAL passes (temporary `OQ1_PUMP`/`OQ1_GATE` diagnostics, since reverted; tree
+clean at `bd1a7a73`):
+
+- **c2t4 (decisive):** Ade caught up, forged **block 12**, the relay **adopted** it
+  (`AddedToCurrentChain blockNo=12`). But the pump's `TipUpdate`s carried **only `block_no=11`** (the
+  pre-forge relay tip) — **no `TipUpdate` for block 12 ever arrived** — and the gate logged
+  `NotCaughtUp durable=block12 followed=block11`, then the follow link `exit=Eof`. So `followed_peer_tip`
+  stayed at 11 while the durable tip was 12 → permanent NotCaughtUp → no block 13.
+- The pump **correctly** emits `TipUpdate` on every `RollForward` (verified live for block 11). So the
+  stall is **NOT** a pump-surfacing bug — **there is simply no `RollForward(12)`**: the relay does not
+  re-announce Ade's own adopted block over the follow link in the observed window.
+- **c2t2 (separate sub-finding):** at **k=0** (frozen relay tip == recover anchor) the follow
+  re-delivers the anchor block and the recover snapshot-slot fail-closes
+  (`Store(InvalidOperation("snapshot at slot N already occupied by different bytes"))`) — the recovered
+  anchor is a slot-keyed snapshot, not a hash-keyed StoredBlock, so AE.F idempotency misses it.
+  rung1-auto now guards k≥2; recover→follow anchor robustness is a separate edge.
+
+**Refined sub-question (a vs b) — NOT yet disambiguated:** the link `exit=Eof`'d ~7 ticks after the
+forge, and Ade's follow pump runs **no keep-alive** (chain-sync + block-fetch only), so the relay's
+`ProtocolIdleTimeout = 5s` likely closed the idle link. So: **(a)** the relay fundamentally won't
+re-serve the producer's own block, or **(b)** the link died (idle-timeout) before it could. A one-shot
+probe (keep the link alive: bump the relay idle timeout or add keep-alive) disambiguates.
+
+**Implication — DC-NODE-17 is NOT the stall-fix.** It stays a valid *safety guard* ("advance only from
+a real peer advertisement"), but the advertisement for Ade's own block **does not arrive**, so observing
+it cannot un-stick the loop. The fix is one of:
+- **(b-fix) follow-link keep-alive (SF-6)** so the relay *can* re-announce → then DC-NODE-17 fires
+  per-block (safest: peer-confirmed each block). Viable only if the probe shows (b).
+- **(a-fix) gate refinement (recommended, first-principles):** a real sole producer does **not** depend
+  on a relay echoing its own blocks back. Catch up to the peer's tip **once** (AE.A/DC-NODE-15), forge
+  the first successor on it, then **extend the OWN durable chain** — each successor is adoptable *by
+  induction* (it extends an already-adoptable parent; the relay is a pure follower of Ade's chain).
+  Must be **single-producer-fenced** (NOT multi-producer fork-choice = rung 2; DC-CONS-03 stays the
+  multi-chain authority). Needs a NEW invariant (a gate-applicability refinement), beyond DC-NODE-17.
+
+**NEXT:** re-scope around the (a) gate refinement (fresh `/invariants` or `/cluster-plan`), optionally
+after the (a)/(b) keep-alive probe. Do NOT enforce DC-NODE-17 as the fix.
