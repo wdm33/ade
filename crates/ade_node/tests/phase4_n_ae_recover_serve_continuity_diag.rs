@@ -50,13 +50,14 @@ use ade_core::consensus::praos_state::PraosChainDepState;
 use ade_ledger::pparams::ProtocolParameters;
 use ade_ledger::receive::events::TipPoint;
 use ade_ledger::utxo::UTxOState;
+use ade_network::block_fetch::server::ServedRangeLookup;
 use ade_network::chain_sync::server::ServedHeaderLookup;
 use ade_network::codec::chain_sync::Point;
 use ade_node::admission::seed_to_snapshot;
 use ade_node::node_sync::{
     forge_followed_tip_admission, ForgeFollowedTipAdmission, ForgeRefused, NotCaughtUpReason,
 };
-use ade_runtime::chaindb::{ChainDb, InMemoryChainDb};
+use ade_runtime::chaindb::{ChainDb, InMemoryChainDb, StoredBlock};
 use ade_runtime::network::ChainDbServedSource;
 use ade_types::{Hash32, SlotNo};
 
@@ -253,8 +254,17 @@ fn forge_refused_not_caught_up() {
 // ===========================================================================
 
 #[test]
-#[ignore = "RED until PHASE4-N-AE Slice B (Gap 2b: recovered-anchor intersectability)"]
 fn recovered_anchor_is_not_peer_intersectable() {
+    // PHASE4-N-AE.B (Option B — the invariant's FAIL-CLOSED side): a recover-ONLY
+    // store (zero followed/forged blocks ⇒ NO servable successor) has no
+    // projectable forge parent. The invariant is "advertise a parent as an
+    // intersection point ONLY IF Ade can prove it is the parent of a real
+    // servable successor" — with no successor there is nothing to prove, so
+    // intersect(anchor) == None (the peer falls back to Origin; there is nothing
+    // to adopt yet). The POSITIVE case (a forged successor ⇒ the parent IS
+    // intersectable) is `followed_tip::forged_successor_on_recovered_anchor_is_not_peer_adoptable`
+    // + the live-style follow→serve test. This guards the "no synthetic / no
+    // magic anchor" boundary: the anchor is NEVER materialized as a StoredBlock.
     let db = recover_at_anchor(ANCHOR_SLOT);
     let served = ChainDbServedSource::new(&db);
     let anchor = anchor_hash();
@@ -266,25 +276,26 @@ fn recovered_anchor_is_not_peer_intersectable() {
         hash: anchor.clone(),
     }]);
 
-    eprintln!("[AE.B diag] after recover (seed_to_snapshot @ non-Origin anchor):");
+    eprintln!("[AE.B diag] after recover-ONLY (seed_to_snapshot @ non-Origin anchor, no successor):");
     field("recovered_tip_slot", ANCHOR_SLOT.0.to_string());
     field("recovered_tip_hash", hash_hex(&anchor));
     field("durable_servable_tip", format!("{durable_tip:?}"));
     field(
         "get_block_by_hash(recovered_tip_hash)",
-        format!("{:?}", gbh.map(|b| b.slot)),
+        format!("{:?}", gbh.as_ref().map(|b| b.slot)),
     );
     field("intersect(recovered_tip)", format!("{isect:?}"));
 
-    // DESIRED Slice B invariant (currently VIOLATED -> RED):
+    // Option B fail-closed: no servable successor ⇒ no projection.
     assert_eq!(
-        isect,
-        Some((ANCHOR_SLOT, anchor)),
-        "Gap 2b: a peer at the recovered tip (zero followed blocks) must be able to \
-         FindIntersect there. `seed_to_snapshot` persists a snapshot-only anchor (no \
-         StoredBlock), so `intersect` returns None and the peer falls back to Origin. Slice B: \
-         make the recovered anchor intersectable (Option A materialize iff original bytes + \
-         hash-verify; Option B intersect-point-only)."
+        isect, None,
+        "recover-ONLY (no servable successor) must NOT project the anchor — the \
+         projection is proof-gated on a real servable successor (the earliest \
+         StoredBlock's prev_hash). Positive case: forged_successor_..._is_not_peer_adoptable."
+    );
+    assert!(
+        gbh.is_none(),
+        "the recovered anchor is NEVER materialized as a StoredBlock (no synthetic bytes)"
     );
 }
 
@@ -759,7 +770,9 @@ mod followed_tip {
     // =======================================================================
 
     #[test]
-    #[ignore = "RED until PHASE4-N-AE Slice B (forged successor on recovered anchor)"]
+    // Named historically (was RED, demonstrating non-adoptability). AE.B Option B
+    // FLIPS it green: the forged successor on the recovered anchor IS now
+    // peer-adoptable via the proof-gated FindIntersect-only projection.
     fn forged_successor_on_recovered_anchor_is_not_peer_adoptable() {
         // A modest non-Origin anchor (epoch 0, so the always-eligible leadership
         // fixture locates cleanly). The bug does not depend on the slot magnitude.
@@ -803,6 +816,17 @@ mod followed_tip {
         let forged_hash = Hash32(artifact.hash);
         let forged_parent = anchor.clone();
 
+        // Admit the forged successor as a SERVABLE StoredBlock (the real flow
+        // admits it durably via admit_forged_block_durably -> pump_block ->
+        // put_block; here put_block directly populates the served store the
+        // projection reads — this fixture exercises the SERVE projection).
+        db.put_block(&StoredBlock {
+            slot: SlotNo(successor_slot),
+            hash: forged_hash.clone(),
+            bytes: artifact.bytes.clone(),
+        })
+        .expect("the forged successor is a servable StoredBlock");
+
         let served = ChainDbServedSource::new(&db);
         let parent_servable =
             ChainDb::get_block_by_hash(&db, &forged_parent).expect("get_block_by_hash");
@@ -810,35 +834,61 @@ mod followed_tip {
             slot: anchor_slot,
             hash: forged_parent.clone(),
         }]);
-
-        eprintln!("[AE.B diag] after a REAL forge of the successor on the recovered anchor:");
-        field("recovered/forged_parent_hash", hash_hex(&forged_parent));
-        field(
-            "forged_parent_block_no (anchor)",
-            anchor_block_no.to_string(),
+        let next = served.next_after(Some((anchor_slot, forged_parent.clone())));
+        let parent_bytes = ServedRangeLookup::range_bytes(
+            &served,
+            (anchor_slot, forged_parent.clone()),
+            (anchor_slot, forged_parent.clone()),
         );
+
+        eprintln!("[AE.B diag] forged successor on the recovered anchor + durable admit:");
+        field("recovered/forged_parent_hash", hash_hex(&forged_parent));
+        field("forged_parent_block_no (anchor)", anchor_block_no.to_string());
         field("forged_block_no", forged_block_no.to_string());
         field("forged_block_hash", hash_hex(&forged_hash));
         field(
             "get_block_by_hash(forged_parent)",
-            format!("{:?}", parent_servable.map(|b| b.slot)),
+            format!("{:?}", parent_servable.as_ref().map(|b| b.slot)),
         );
         field("intersect(forged_parent)", format!("{isect:?}"));
+        field(
+            "next_after(forged_parent)",
+            format!("{:?}", next.as_ref().map(|h| hash_hex(&h.hash))),
+        );
 
         assert_eq!(
             forged_block_no,
             anchor_block_no + 1,
             "the forge built the successor (anchor_block_no + 1) on the recovered tip"
         );
-
-        // DESIRED Slice B invariant (currently VIOLATED -> RED):
+        // AE.B Option B (DC-NODE-14 anchor clause): the forged parent (the recovered
+        // anchor) IS peer-intersectable via the proof-gated FindIntersect-only
+        // projection (the earliest servable StoredBlock's prev_hash == the anchor).
         assert_eq!(
             isect,
-            Some((anchor_slot, forged_parent)),
-            "Gap 2 (end-to-end): a forged successor whose parent is the recovered anchor is not \
-             peer-adoptable — the parent is snapshot-only (not a StoredBlock), so the served \
-             chain cannot FindIntersect at the forged parent. Slice B makes the recovered anchor \
-             intersectable (the recover-at-tip / zero-followed-block case)."
+            Some((anchor_slot, forged_parent.clone())),
+            "the forged successor's parent (recovered anchor) is FindIntersect-able (proof-gated)"
+        );
+        // ...and a relay that intersects there rolls forward onto the forged successor.
+        let next = next.expect("next_after(forged_parent) projects the forged successor");
+        assert_eq!(
+            next.hash, forged_hash,
+            "next_after(parent) == the forged successor hash"
+        );
+        assert_eq!(
+            next.slot,
+            SlotNo(successor_slot),
+            "next_after(parent) slot == the forged successor slot"
+        );
+        // Hard boundary (no synthetic bytes): the projected parent is NEVER a
+        // StoredBlock and BlockFetch of it refuses structurally (serves no bytes).
+        assert!(
+            parent_servable.is_none(),
+            "the recovered anchor is never materialized as a StoredBlock (no synthetic bytes)"
+        );
+        assert!(
+            parent_bytes.is_empty(),
+            "BlockFetch of the projected parent refuses structurally (no bytes served)"
         );
     }
 }

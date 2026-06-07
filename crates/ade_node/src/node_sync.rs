@@ -1958,6 +1958,148 @@ mod tests {
     }
 
     // =====================================================================
+    // PHASE4-N-AE.B CE-B3 — live-style follow→serve forge-parent intersectability
+    // =====================================================================
+    //
+    // Resolves AE.B open-obligation #2: a REAL `run_relay_loop` follow stores the
+    // followed block as a servable StoredBlock, AND the serve projects the followed
+    // block's PARENT (its prev_hash) as a proof-gated FindIntersect-only point — so
+    // a peer that already holds the parent can FindIntersect there and roll forward
+    // onto Ade's served successor. This is the hermetic proxy for the CE-A5
+    // relay-adoption surface: "a peer can FindIntersect at the forged parent, then
+    // roll forward to Ade's forged successor" (NOT "ChainDb has the block").
+
+    #[tokio::test]
+    async fn recover_follow_serve_forged_parent_intersectable() {
+        use ade_ledger::block_validity::decode_block;
+        use ade_ledger::seed_consensus_inputs::{
+            encode_seed_epoch_consensus_inputs, SeedEpochConsensusInputs,
+        };
+        use ade_network::chain_sync::server::ServedHeaderLookup;
+        use ade_network::codec::chain_sync::Point;
+        use ade_runtime::network::ChainDbServedSource;
+        use ade_runtime::seed_consensus_provenance::append_seed_epoch_provenance;
+        use ade_types::shelley::block::PrevHash;
+
+        let (c, view) = corpus_view();
+        let sched = schedule();
+        let bytes = pick_lightest(&c);
+        // The followed block's parent (prev_hash) — the point a real peer would
+        // FindIntersect at (the peer already holds the parent block).
+        let parent_hash = match decode_block(&bytes).unwrap().prev_hash {
+            PrevHash::Block(h) => h,
+            PrevHash::Genesis => panic!("corpus block must be a non-Origin successor"),
+        };
+
+        let dir = TempDir::new().unwrap();
+        let snap = dir.path().join("snap");
+        let wal_dir = dir.path().join("wal");
+        std::fs::create_dir_all(&snap).unwrap();
+        std::fs::create_dir_all(&wal_dir).unwrap();
+        let chaindb_path = snap.join("chain.db");
+
+        let anchor_fp = aec_recover_base_fp();
+        let mut pools: BTreeMap<Hash28, PoolEntry> = BTreeMap::new();
+        pools.insert(
+            Hash28([0x11; 28]),
+            PoolEntry {
+                active_stake: 1,
+                vrf_keyhash: Hash32([0x22; 32]),
+            },
+        );
+        let recovered_inputs = SeedEpochConsensusInputs {
+            anchor_fp: anchor_fp.clone(),
+            epoch_no: EPOCH_576,
+            epoch_nonce: Nonce(Hash32([0x8b; 32])),
+            active_slots_coeff: ActiveSlotsCoeff {
+                numer: 5,
+                denom: 100,
+            },
+            total_active_stake: 1,
+            pool_distribution: pools,
+        };
+        let sidecar_bytes = encode_seed_epoch_consensus_inputs(&recovered_inputs);
+
+        let chaindb =
+            PersistentChainDb::open(PersistentChainDbOptions::at(&chaindb_path)).unwrap();
+        let mut wal = FileWalStore::open(&wal_dir).unwrap();
+        chaindb
+            .put_seed_epoch_consensus_inputs(&anchor_fp, &sidecar_bytes)
+            .unwrap();
+        append_seed_epoch_provenance(&mut wal, &anchor_fp, EPOCH_576, &sidecar_bytes).unwrap();
+
+        let mut ledger = LedgerState::new(CardanoEra::Conway);
+        ledger.epoch_state.epoch = EPOCH_576;
+        let mut chain_dep = PraosChainDepState::empty();
+        chain_dep.epoch_nonce = Nonce(Hash32(c.epoch_nonce));
+        chain_dep.evolving_nonce = Nonce(Hash32(c.epoch_nonce));
+        // AE.C-correct prior-fp seed (== fingerprint of the recover base ledger).
+        let mut state = ForwardSyncState::new(
+            ReceiveState::new(ledger, chain_dep),
+            anchor_fp,
+            SnapshotCadence::DEFAULT,
+        );
+        let mut source = NodeBlockSource::in_memory(vec![bytes.clone()]);
+        let (_tx, mut shutdown) = watch::channel(false);
+        run_relay_loop(
+            &mut state, &mut source, &chaindb, &mut wal, &sched, &view, &mut shutdown, None,
+        )
+        .await
+        .expect("relay loop follows the corpus block");
+
+        // === serve checks (store alive — the live-style follow→serve surface) ===
+        let served = ChainDbServedSource::new(&chaindb);
+        let tip = ChainDb::tip(&chaindb)
+            .expect("tip")
+            .expect("the follow advanced the durable tip");
+
+        // (a) open-obligation #2: the LIVE follow stores the followed block as a
+        //     get_block_by_hash servable StoredBlock.
+        assert!(
+            ChainDb::get_block_by_hash(&chaindb, &tip.hash)
+                .unwrap()
+                .is_some(),
+            "the live run_relay_loop follow stores the followed block as a servable StoredBlock"
+        );
+        // (b) the followed tip is FindIntersect-able (StoredBlock path).
+        assert_eq!(
+            served.intersect(&[Point::Block {
+                slot: tip.slot,
+                hash: tip.hash.clone(),
+            }]),
+            Some((tip.slot, tip.hash.clone())),
+            "the followed tip is FindIntersect-able (StoredBlock path)"
+        );
+        // (c) the followed/forged PARENT is FindIntersect-able via the proof-gated
+        //     projection (earliest servable StoredBlock's prev_hash == parent).
+        let parent_slot = SlotNo(tip.slot.0.saturating_sub(1));
+        assert_eq!(
+            served.intersect(&[Point::Block {
+                slot: parent_slot,
+                hash: parent_hash.clone(),
+            }]),
+            Some((parent_slot, parent_hash.clone())),
+            "the followed/forged parent is FindIntersect-able via the proof-gated projection (AC #8)"
+        );
+        // (d) ...and a relay that intersects at the parent rolls forward onto the
+        //     served successor (the followed block).
+        let next = served
+            .next_after(Some((parent_slot, parent_hash)))
+            .expect("next_after(parent) projects the served successor");
+        assert_eq!(
+            next.hash, tip.hash,
+            "next_after(parent) rolls forward onto the followed/served successor"
+        );
+        // (e) hard boundary: the projected parent is never a StoredBlock (no bytes).
+        assert!(
+            ChainDb::get_block_by_hash(&chaindb, &next.hash.clone())
+                .unwrap()
+                .is_some(),
+            "the served successor IS a real StoredBlock (real bytes), the parent is NOT"
+        );
+    }
+
+    // =====================================================================
     // L5 — recovered-state forge handoff (hermetic, single-shot)
     // =====================================================================
     //

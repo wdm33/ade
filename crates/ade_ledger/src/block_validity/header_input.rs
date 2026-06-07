@@ -20,7 +20,7 @@ use ade_codec::CodecError;
 use ade_core::consensus::{HeaderInput, HeaderKes, HeaderVrf};
 use ade_crypto::blake2b::{blake2b_224, blake2b_256};
 use ade_crypto::vrf::{VrfOutput, VrfProof, VrfVerificationKey};
-use ade_types::shelley::block::VrfData;
+use ade_types::shelley::block::{PrevHash, VrfData};
 use ade_types::{BlockNo, CardanoEra, Hash28, Hash32, SlotNo};
 
 use super::{check_header_position, BlockValidityError, FieldError, FieldKind};
@@ -34,6 +34,12 @@ pub struct DecodedBlock {
     pub header_input: HeaderInput,
     /// `blake2b_256(header_cbor)` — the block hash / `Point.hash`.
     pub block_hash: Hash32,
+    /// The header's `prev_hash` (parent linkage). Additive exposure — already
+    /// parsed for `check_header_position` — so the serve projection can prove a
+    /// recovered/forged parent is the parent of a real servable successor
+    /// (PHASE4-N-AE.B, DC-NODE-14): the earliest servable StoredBlock's
+    /// `prev_hash` IS the FindIntersect-only projected point.
+    pub prev_hash: PrevHash,
     /// Recomputed era-correct block body hash (segwit). The body-hash binding
     /// asserts this equals the validated header's `body_hash`.
     pub computed_body_hash: Hash32,
@@ -127,6 +133,7 @@ pub fn decode_block(block_cbor: &[u8]) -> Result<DecodedBlock, BlockValidityErro
         era: env.era,
         header_input,
         block_hash,
+        prev_hash: hb.prev_hash.clone(),
         computed_body_hash,
         inner_start: env.block_start,
         inner_end: env.block_end,

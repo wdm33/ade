@@ -38,6 +38,7 @@ use ade_ledger::block_validity::{block_header_bytes, decode_block};
 use ade_network::block_fetch::server::ServedRangeLookup;
 use ade_network::chain_sync::server::{HeaderProjection, ServedHeaderLookup};
 use ade_network::codec::chain_sync::Point;
+use ade_types::shelley::block::PrevHash;
 use ade_types::{Hash32, SlotNo};
 
 use crate::chaindb::ChainDb;
@@ -130,6 +131,24 @@ impl<'a> ChainDbServedSource<'a> {
             ServeRangeOutcome::Served(out)
         }
     }
+
+    /// The parent hash of the EARLIEST servable StoredBlock — the proof, for
+    /// PHASE4-N-AE.B Option B, that Ade has a real servable successor whose
+    /// parent is that hash. `None` when there is no StoredBlock (recover-only ⇒
+    /// no projection, fail-closed), the earliest block does not decode, or its
+    /// `prev_hash` is Genesis (a from-genesis root has no projectable parent
+    /// point). Bounded: reads exactly the earliest block (DC-SERVEMEM-01).
+    fn earliest_servable_block_prev_hash(&self) -> Option<Hash32> {
+        let capped = self
+            .chaindb
+            .range_bytes_capped(SlotNo(0), SlotNo(u64::MAX), 1)
+            .ok()?;
+        let (_slot, bytes) = capped.blocks.into_iter().next()?;
+        match decode_block(&bytes).ok()?.prev_hash {
+            PrevHash::Block(h) => Some(h),
+            PrevHash::Genesis => None,
+        }
+    }
 }
 
 impl<'a> ServedHeaderLookup for ChainDbServedSource<'a> {
@@ -179,12 +198,40 @@ impl<'a> ServedHeaderLookup for ChainDbServedSource<'a> {
     }
 
     fn intersect(&self, points: &[Point]) -> Option<(SlotNo, Hash32)> {
-        // First listed point that is on the durable chain. Origin is
-        // resolved by the BLUE reducer (the universal ancestor), not here.
+        // (1) First listed point that is a durable StoredBlock (DC-NODE-14
+        // followed-tip clause). Origin is resolved by the BLUE reducer (the
+        // universal ancestor), not here.
         for p in points {
             if let Point::Block { slot, hash } = p {
                 if let Ok(Some(stored)) = self.chaindb.get_block_by_hash(hash) {
                     if stored.slot == *slot {
+                        return Some((*slot, hash.clone()));
+                    }
+                }
+            }
+        }
+        // (2) PHASE4-N-AE.B (DC-NODE-14 anchor/parent clause) — Option B,
+        // FindIntersect-ONLY, proof-gated. Project the FORGE PARENT: the
+        // `prev_hash` of the EARLIEST servable StoredBlock. That earliest block
+        // is a real servable successor; its prev IS the recovered/forged parent
+        // Ade built on. A relay that already holds the parent block can
+        // FindIntersect there and roll forward onto the real successor
+        // (`next_after` returns it via the slot range, since parent.slot <
+        // successor.slot). NO bytes are ever served for the projected point —
+        // `get_block_by_hash` / `serve_range` stay empty, so BlockFetch refuses
+        // structurally; no synthetic StoredBlock. Recover-only (no StoredBlock)
+        // ⇒ no projection (fail-closed; never a "magic" anchor).
+        if let Some(parent_hash) = self.earliest_servable_block_prev_hash() {
+            for p in points {
+                if let Point::Block { slot, hash } = p {
+                    if *hash == parent_hash {
+                        // The offered slot is taken verbatim: the parent is NOT a
+                        // StoredBlock (Ade cannot know its true slot). Sound — a
+                        // lying slot only confuses the offering peer's own cursor;
+                        // Ade serves NO bytes for this point, and its own tip/cursor
+                        // derive from real StoredBlocks (next_after/last_block_bytes),
+                        // never from this echoed intersect. Contrast branch (1),
+                        // which validates `stored.slot == *slot`.
                         return Some((*slot, hash.clone()));
                     }
                 }
