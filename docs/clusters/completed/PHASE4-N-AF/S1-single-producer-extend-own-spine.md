@@ -4,7 +4,7 @@
 
 **Slice Name:** Single-producer extend-own-durable-spine (DC-NODE-18)
 **Cluster:** PHASE4-N-AF — single-slice; **rung-1 only, single-producer only**
-**Status:** Implemented — DC-NODE-18 `enforced` for the scoped core (CE-AF-6a live-proven via run `c2t7`, 2026-06-07); CE-AF-6b (sustained-past-k) deferred to DC-NODE-19
+**Status:** Merged (origin/main `f87d0056`) — DC-NODE-18 `enforced` for the scoped core (CE-AF-6a live-proven via run `c2t7`, 2026-06-07); CE-AF-6b (sustained-past-k) deferred to DC-NODE-19
 **Authority source:** `docs/planning/single-producer-extend-own-spine-invariants.md`; registry `DC-NODE-18` (declared → enforced on this slice)
 
 **Cluster Exit Criteria Addressed** (this single-slice cluster's CEs = the DC-NODE-18 acceptance contract):

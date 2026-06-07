@@ -56,7 +56,7 @@ single-producer fence (§8).
 |---|---|---|---|---|
 | **S1** | `ForgeMode` enum (no booleans) + promotion-requires-RED-certificate (admissibility-only, not persisted/replay-visible) + fail-closed single-producer fence (`ForgeRefused::SingleProducerFenceViolation`) + mode-aware ForgeTick gate; hermetic tests + `ci_check_single_producer_extend_own_spine.sh`; live CE-AF-6 transcript. | CE-AF-1..6 | DC-NODE-18 declared→enforced | RED/GREEN |
 
-## §7 Cluster Exit Criteria (mechanical except the operator-gated CE-AF-6)
+## §7 Cluster Exit Criteria (mechanical except the operator-gated CE-AF-6a; CE-AF-6b deferred to DC-NODE-19)
 - **CE-AF-1:** explicit `ForgeMode` enum; transitions total + deterministic; no booleans.
 - **CE-AF-2:** promotion to `SingleProducerExtendOwnDurableSpine` requires an explicit RED venue-adoption
   certificate; never inferred from self-admit (self-admit w/o cert stays `FirstOwnBlockServed`).
@@ -65,8 +65,8 @@ single-producer fence (§8).
 - **CE-AF-4:** fail-closed fence → `ForgeRefused::SingleProducerFenceViolation{reason, durable_tip,
   followed_peer_tip, observed_peer_tip, venue_role}` for each refuse condition (§8).
 - **CE-AF-5:** warm-start replay of a K≥2 own-forged chain byte-identical (durable state + served chain).
-- **CE-AF-6 (operator-gated):** committed `rung1-auto.sh` (k≥2) live transcript — forge N→adopt; N+1→adopt
-  without relay echo; sustained past k.
+- **CE-AF-6a (operator-gated) — SATISFIED (run c2t7):** committed `docs/evidence/phase4-n-af-extend-own-spine.{md,jsonl}` — forge N → relay adopts; explicit RED adoption certificate; Ade forges N+1 from its durable own spine **without** relay echo → relay adopts N+1.
+- **CE-AF-6b (operator-gated) — DEFERRED to DC-NODE-19 (out of scope for this slice):** sustained production past k into the relay ImmutableDB + warm-start replay byte-identical over the sustained chain. The c2t7 run stopped at 2 blocks on a follow-link EOF — a loop-lifecycle obligation, not the DC-NODE-18 authority claim.
 - Tree green: `cargo test -p ade_node`; the new CI gate green.
 
 ## §8 Forbidden during this cluster (hard boundaries — the fence)
@@ -87,11 +87,25 @@ cannot perturb the deterministic surface. The venue-adoption certificate is admi
 **not** replay-visible. No new durability law, no WAL/schema change (DC-NODE-16 / DC-WAL-04 unchanged).
 
 ## §10 Invariants
-- **Adds:** DC-NODE-18 (declared → enforced on close).
+- **Adds:** DC-NODE-18 — declared → **enforced for the scoped core** (successor-extension-after-adoption-certificate; CE-AF-6a). CE-AF-6b (sustained-past-k) deferred to DC-NODE-19.
 - **Preserves:** DC-NODE-15, DC-NODE-16, DC-CONS-03, DC-NODE-10, DC-CONS-24, DC-NODE-12, DC-WAL-04,
   T-REC-05, DC-WAL-02, **DC-NODE-17 (retained safety/observation-only — not the fix)**, T-DET-01.
 - **Strengthens:** none (DC-NODE-18 is the new rule; the preserved rules are not weakened).
 
 ## §11 Close record
-*(Filled at `/cluster-close`: commits, CE-AF-1..6 pass evidence, the committed CE-AF-6 transcript path,
-DC-NODE-18 declared→enforced + its tests/ci_script appended, reviews.)*
+**CLOSED 2026-06-08.** DC-NODE-18 `enforced` for the **scoped core** (successor-extension-after-adoption-certificate, no relay echo). One invariant strengthened (declared → enforced); no scope creep; no false CE claim.
+
+**Commits (origin/main):** `b7b1bb52` (cluster + slice doc) → `f746084f` (impl) → `f87d0056` (2 live-surfaced loop fixes + DC-NODE-18 enforce + c2t7 evidence).
+
+**CEs:**
+- **CE-AF-1..5 — PASS:** 6 hermetic `ade_node` node_sync tests (`forge_mode_transitions_are_total_and_deterministic`, `extend_own_spine_promotion_requires_adoption_certificate`, `extend_own_spine_forges_on_durable_tip_without_followed_equality`, `single_producer_fence_fails_closed`, `extend_own_spine_two_runs_byte_identical`, `forge_mode_after_admit_only_advances_on_real_admit`) + `ci/ci_check_single_producer_extend_own_spine.sh`.
+- **CE-AF-6a — SATISFIED:** live run c2t7 (C2-LOCAL cardano-testnet magic 42) — forge block 11 → relay adopts → RED adoption certificate → promote (chain-point identity) → forge block 12 via extend, no echo → relay adopts 12. Evidence: `docs/evidence/phase4-n-af-extend-own-spine.{md,jsonl}`.
+- **CE-AF-6b — DEFERRED to DC-NODE-19** (sustained-past-k / relay ImmutableDB settlement / follow-link liveness / loop continuation after EOF). The c2t7 run stopped at 2 blocks on a follow-link EOF — a loop-lifecycle obligation, not a DC-NODE-18 authority failure.
+
+**Registry:** DC-NODE-18 declared → enforced (scoped); +6 tests + the CI gate; `introduced_in = PHASE4-N-AF`. DC-NODE-17 retained declared (safety/observation-only; OQ-1 disproved it as the stall fix). 341 → 343 rules.
+
+**Reviews:** IDD (FC/IS) + per-cluster security — both **CLEAN, no BLOCK**. 2 INFO for DC-NODE-19: (1) `relay_producing`/`recovered_anchor_k0` hard-wired `false` at the call site → 2 of the 5 fence reasons are unit-tested-only (fine for the operator-declared single-producer scope); (2) no direct malformed-input unit test for the cert parser (fail-closed by construction). Open item: confirm the off-repo CI orchestrator picks up the new gate.
+
+**Grounding docs:** HEAD_DELTAS + TRACEABILITY refreshed (baseline `6363683e` → `f87d0056`). CODEMAP + SEAMS **deferred** (no new module, no BLUE seam, no new authoritative persistence surface) — the next cluster refresh must include baseline `f87d0056`.
+
+**Zero BLUE change.** **Next slice: DC-NODE-19** (single-producer extend-mode loop continuation after follow EOF; touches DC-NODE-05).
