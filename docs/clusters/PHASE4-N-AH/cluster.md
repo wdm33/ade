@@ -162,3 +162,23 @@ T-REC-03/05 extend to cover cert-free local-tip-derived successors.
 
 ## 11. Cluster Close Record
 *OPEN — filled at `/cluster-close` (CE-AH-7).*
+
+## 12. Follow-ons & Notes (surfaced during S1)
+- **AH-FOLLOW-1 (rung-1 hardening; NOT an S1 blocker):** broaden the DC-NODE-20
+  competing-block fence from the observed-tip `block_no`/hash checks
+  (`CompetingPeerBlockBeyondAdoptedRoot` / `PeerTipDisagreesWithSpine`) to a RED-computed
+  "peer-origin candidate not in Ade's admitted spine / own-served lineage" flag (ChainDb
+  spine-membership of the observed tip) threaded into the GREEN fence. Classify as
+  **rung-1 hardening before multi-producer / rung 2**, not a blocker for the S1 cert
+  authority correction. (The existing fence already fails closed on competing tips
+  ahead-of / diverging-at the spine head + adopted root.)
+- **`ci_check_forge_followed_tip_admission.sh` — pre-existing stale grep:** its loop
+  grep for `forge_followed_tip_admission(` is stale (the call lives in `dc_node_15_refusal`,
+  not the loop body); **identical on HEAD and current**. Unchanged by S1; DC-NODE-15
+  covered code not touched. **This gate did NOT pass during S1 verification** (it fails
+  pre-existing). Repair owed separately or during AH close if required by project gate
+  discipline — not claimed as passing.
+- **Cert parser retained (S1 only):** `read_adoption_cert` / `parse_hex32` are
+  `#[allow(dead_code)]` — not used by forge authority; retained for S2 (DC-NODE-21)
+  evidence-only transcript work, which removes or fences the parser's final role and adds
+  `ci_check_cert_evidence_only.sh`.

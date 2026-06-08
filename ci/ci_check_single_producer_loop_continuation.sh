@@ -122,18 +122,15 @@ for tok in 'select_best_chain' 'chain_selector' 'fork_choice'; do
     fi
 done
 
-# --- (d) the per-continuation certificate re-validation (condition 7) ---------
-if ! grep -qE 'continuation_cert_missing' <<<"$LOOP_FN"; then
-    fail "the loop has no per-continuation certificate re-validation (continuation_cert_missing)"
+# --- (d) DC-NODE-20: the continuation no longer requires a certificate --------
+# DC-NODE-20 supersedes DC-NODE-19's cert-fence clause: the extend-state continuation
+# forges on the LOCAL durable spine (ChainDb::tip), NOT gated on an operator cert.
+# The loop must NOT re-introduce the cert into the forge / continuation path.
+if grep -qE 'continuation_cert_missing|AdoptionCertificateMissingOrMalformed' <<<"$LOOP_FN"; then
+    fail "the loop still gates the continuation on a certificate (continuation_cert_missing / AdoptionCertificateMissingOrMalformed) — DC-NODE-20 forges on the local durable spine, not a cert"
 fi
-if ! grep -qE 'read_adoption_cert\(' <<<"$LOOP_FN"; then
-    fail "the per-continuation cert re-validation does not reuse read_adoption_cert"
-fi
-if ! grep -qE 'AdoptionCertificateMissingOrMalformed' <<<"$LOOP_FN"; then
-    fail "the loop does not fail closed on an absent/malformed continuation certificate (AdoptionCertificateMissingOrMalformed)"
-fi
-if ! grep -qE 'AdoptionCertificateMissingOrMalformed' <<<"$SYNC_PROD"; then
-    fail "SingleProducerFenceReason::AdoptionCertificateMissingOrMalformed is not defined in $SYNC"
+if grep -qE 'read_adoption_cert\(' <<<"$LOOP_FN"; then
+    fail "the loop still reads the adoption cert in the forge / continuation path — the cert is evidence-only (DC-NODE-21); the forge base is ChainDb::tip"
 fi
 
 # --- (e) the venue_policy projection is single-producer-extend-only -----------
@@ -155,6 +152,6 @@ else
 fi
 
 if (( FAILED == 0 )); then
-    echo "OK (single-producer loop-continuation): the loop threads venue_policy(act.venue_role, &act.forge_mode) into plan_loop_step (HaltOnFeedEnd forge-off default); the Idle arm wakes the dead-feed Ending branch on a clock-cadence timer + shutdown (never source.wait_ready); the continuation reuses single_producer_forge_decision (no fork-choice); the per-continuation cert re-validation fails closed via AdoptionCertificateMissingOrMalformed; venue_policy yields ContinueInSingleProducerExtend only for the single-producer extend state (DC-NODE-19 / DC-NODE-05 / DC-CONS-03 boundaries preserved)"
+    echo "OK (single-producer loop-continuation): the loop threads venue_policy(act.venue_role, &act.forge_mode) into plan_loop_step (HaltOnFeedEnd forge-off default); the Idle arm wakes the dead-feed Ending branch on a clock-cadence timer + shutdown (never source.wait_ready); the continuation reuses single_producer_forge_decision (no fork-choice); DC-NODE-20: the continuation forges on the LOCAL durable spine with NO cert in the path (the DC-NODE-19 cert-fence clause is superseded); venue_policy yields ContinueInSingleProducerExtend only for the single-producer extend state (DC-NODE-19 / DC-NODE-05 / DC-CONS-03 boundaries preserved)"
 fi
 exit $FAILED

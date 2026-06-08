@@ -93,8 +93,8 @@ use crate::node_sync::{
     admit_forged_block_durably, forge_followed_tip_admission, forge_mode_after_admit,
     forge_mode_on_caughtup, forge_one_from_recovered, run_node_sync,
     single_producer_forge_decision, venue_policy, ForgeFollowedTipAdmission, ForgeMode,
-    ForgeRefused, NodeBlockSource, NodeForgeOutcome, SingleProducerFenceReason,
-    SingleProducerForgeDecision, VenueAdoptionCertificate, VenueRole,
+    ForgeRefused, NodeBlockSource, NodeForgeOutcome, SingleProducerForgeDecision,
+    VenueAdoptionCertificate, VenueRole,
 };
 use crate::operator_forge;
 use crate::run_loop_planner::{
@@ -1019,6 +1019,9 @@ impl<'a> ForgeActivation<'a> {
 
 /// Decode a 64-char hex string into 32 bytes (the adopted-tip hash in the
 /// venue-adoption certificate file). `None` on any malformed input.
+// DC-NODE-20: not used by forge authority (the forge base is ChainDb::tip);
+// retained for S2 (DC-NODE-21) evidence-only transcript work.
+#[allow(dead_code)]
 fn parse_hex32(s: &str) -> Option<[u8; 32]> {
     if s.len() != 64 {
         return None;
@@ -1036,6 +1039,9 @@ fn parse_hex32(s: &str) -> Option<[u8; 32]> {
 /// evidence ONLY: it advances the RED forge-mode and is NEVER persisted or
 /// replay-visible. `None` if absent / unset / malformed (fail-closed: no promotion
 /// without a well-formed certificate).
+// DC-NODE-20: not used by forge authority; retained for S2 (DC-NODE-21)
+// evidence-only transcript work.
+#[allow(dead_code)]
 fn read_adoption_cert(path: &Option<std::path::PathBuf>) -> Option<VenueAdoptionCertificate> {
     let content = std::fs::read_to_string(path.as_ref()?).ok()?;
     let mut it = content.split_whitespace();
@@ -1274,32 +1280,12 @@ pub async fn run_relay_loop_with_sched(
                     // certificate to remain present + well-formed; absent/malformed ⇒
                     // fail closed (no continuation), recorded as a typed fence
                     // violation. The pre-EOF (Continuing) path is unchanged.
-                    // read_adoption_cert is RED admissibility only (never persisted /
-                    // replay-visible).
-                    let continuation_cert_missing = act.venue_role == VenueRole::SingleProducer
-                        && loop_state == LoopState::Ending
-                        && matches!(
-                            act.forge_mode,
-                            ForgeMode::SingleProducerExtendOwnDurableSpine { .. }
-                        )
-                        && read_adoption_cert(&act.adoption_cert_path).is_none();
-                    let proceed_to_forge: bool = if continuation_cert_missing {
-                        act.last_forge_refused = Some(ForgeRefused::SingleProducerFenceViolation {
-                            reason:
-                                SingleProducerFenceReason::AdoptionCertificateMissingOrMalformed,
-                            durable_tip: durable_servable_tip.clone(),
-                            followed_peer_tip: followed_peer_tip.clone(),
-                            observed_peer_tip: followed_peer_tip.clone(),
-                            venue_role: act.venue_role,
-                        });
-                        false
-                    } else if act.venue_role == VenueRole::SingleProducer {
-                        let cert = if matches!(act.forge_mode, ForgeMode::FirstOwnBlockServed { .. })
-                        {
-                            read_adoption_cert(&act.adoption_cert_path)
-                        } else {
-                            None
-                        };
+                    // DC-NODE-20: the forge base is Ade's own local durable spine head
+                    // (ChainDb::tip). The adoption certificate is NOT read into the forge
+                    // path -- it is evidence-only (DC-NODE-21). A feed-EOF continuation in
+                    // the extend state no longer requires a cert (DC-NODE-19 continue-past-
+                    // EOF core preserved; its cert-fence clause superseded by DC-NODE-20).
+                    let proceed_to_forge: bool = if act.venue_role == VenueRole::SingleProducer {
                         match single_producer_forge_decision(
                             &act.forge_mode,
                             durable_servable_tip.clone(),
@@ -1308,7 +1294,6 @@ pub async fn run_relay_loop_with_sched(
                             act.venue_role,
                             false,
                             false,
-                            cert.as_ref(),
                         ) {
                             // ExtendOwnSpine forges on the durable spine head. The
                             // GREEN fence already required durable_servable_tip ==
@@ -1318,11 +1303,6 @@ pub async fn run_relay_loop_with_sched(
                             // byte-equals forge_base (DC-CONS-24); the payload is not
                             // re-threaded because the base is read fresh from the tip.
                             SingleProducerForgeDecision::ExtendOwnSpine { .. } => true,
-                            SingleProducerForgeDecision::Promote { next } => {
-                                act.forge_mode = next;
-                                false
-                            }
-                            SingleProducerForgeDecision::AwaitAdoptionCertificate => false,
                             SingleProducerForgeDecision::Refuse(refused) => {
                                 act.last_forge_refused = Some(refused);
                                 false

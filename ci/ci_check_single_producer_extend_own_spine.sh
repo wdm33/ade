@@ -70,37 +70,50 @@ LOOP_FN="$(awk '
     capture && /^}/ { exit }
 ' <<<"$LIFE_PROD")"
 
-# --- (a) the forge mode is an explicit enum with the four named states ------
+# --- (a) the forge mode is an explicit enum with the named states -----------
+# DC-NODE-20: FirstOwnBlockServed (the cert-wait state) is folded OUT -- self-admit
+# enters the extend state directly. The closed mode surface is the three states.
 if [[ -z "$MODE_ENUM" ]]; then
     fail "pub enum ForgeMode not found in $SYNC (the forge mode must be an explicit enum, not a boolean)"
 else
-    for st in 'InitialCatchupRequired' 'CaughtUpToPeerTip' 'FirstOwnBlockServed' 'SingleProducerExtendOwnDurableSpine'; do
+    for st in 'InitialCatchupRequired' 'CaughtUpToPeerTip' 'SingleProducerExtendOwnDurableSpine'; do
         if ! grep -qE "$st" <<<"$MODE_ENUM"; then
-            fail "ForgeMode is missing the '$st' state (the four-state machine is the closed mode surface)"
+            fail "ForgeMode is missing the '$st' state (the closed mode surface)"
         fi
     done
+    if grep -qE 'FirstOwnBlockServed' <<<"$MODE_ENUM"; then
+        fail "ForgeMode still has FirstOwnBlockServed — DC-NODE-20 folds out the cert-wait state (self-admit enters extend directly)"
+    fi
 fi
 # The mode must never be represented as a boolean.
 if grep -qE '\bforge_mode *: *bool\b' <<<"$SYNC_PROD$LIFE_PROD"; then
     fail "the forge mode is represented as a bool — it MUST be the ForgeMode enum (no booleans)"
 fi
 
-# --- (b) promotion requires an explicit certificate -------------------------
+# --- (b) DC-NODE-20: self-admit (NOT a cert) enters the extend state ---------
+# forge_mode_after_admit promotes CaughtUpToPeerTip DIRECTLY into the extend state on
+# the own durable tip; single_producer_forge_decision has NO cert-promotion arm (the
+# cert is evidence-only, DC-NODE-21), and the extend decision forges on the durable
+# spine head.
+ADMIT_FN="$(awk '/pub fn forge_mode_after_admit/{c=1} c{print} c&&/^}/{exit}' <<<"$SYNC_PROD")"
 if [[ -z "$DECISION_FN" ]]; then
     fail "pub fn single_producer_forge_decision not found in $SYNC"
+elif [[ -z "$ADMIT_FN" ]]; then
+    fail "pub fn forge_mode_after_admit not found in $SYNC"
 else
-    if ! grep -qE '\bcert\b' <<<"$DECISION_FN"; then
-        fail "single_producer_forge_decision does not consult a certificate (promotion must require explicit evidence)"
+    if ! grep -qE 'ExtendOwnSpine' <<<"$DECISION_FN"; then
+        fail "single_producer_forge_decision has no ExtendOwnSpine path (the extend state forges on the durable spine head)"
     fi
-    if ! grep -qE 'Promote' <<<"$DECISION_FN"; then
-        fail "single_producer_forge_decision has no Promote path"
+    # DC-NODE-20: NO cert-promotion / await-cert arm.
+    if grep -qE 'AwaitAdoptionCertificate|Promote' <<<"$DECISION_FN"; then
+        fail "single_producer_forge_decision still has a cert-promotion / await-cert arm — DC-NODE-20 enters extend on self-admit, never a cert"
     fi
-    if ! grep -qE 'AwaitAdoptionCertificate' <<<"$DECISION_FN"; then
-        fail "single_producer_forge_decision has no AwaitAdoptionCertificate path — without a cert it must AWAIT, never promote (no self-admit inference)"
+    # forge_mode_after_admit enters the extend state directly; no FirstOwnBlockServed.
+    if ! grep -qE 'SingleProducerExtendOwnDurableSpine' <<<"$ADMIT_FN"; then
+        fail "forge_mode_after_admit does not enter SingleProducerExtendOwnDurableSpine directly (self-admit must promote into the extend state)"
     fi
-    # The Promote must be guarded by a certificate match (adopted_tip), not unconditional.
-    if ! grep -qE 'adopted_tip' <<<"$DECISION_FN"; then
-        fail "single_producer_forge_decision Promote is not guarded by the certificate's adopted_tip (promotion must match the served own tip)"
+    if grep -qE 'FirstOwnBlockServed' <<<"$ADMIT_FN"; then
+        fail "forge_mode_after_admit still routes through FirstOwnBlockServed — DC-NODE-20 folds out the cert-wait"
     fi
 fi
 
@@ -159,6 +172,6 @@ else
 fi
 
 if (( FAILED == 0 )); then
-    echo "OK (single-producer extend-own-spine): ForgeMode is an explicit 4-state enum (no bool); promotion requires an explicit adopted_tip certificate (AwaitAdoptionCertificate without one — no self-admit inference); the certificate is admissibility-only (never persisted); the fence fails closed to a typed SingleProducerFenceViolation checking the venue role; no chain selector on the mode/decision path; the loop is mode-aware behind VenueRole::SingleProducer and preserves the DC-NODE-15 default (DC-NODE-18 / DC-CONS-03 untouched)"
+    echo "OK (single-producer extend-own-spine): ForgeMode is an explicit 3-state enum (no bool; FirstOwnBlockServed folded out — DC-NODE-20); self-admit enters the extend state DIRECTLY via forge_mode_after_admit (no cert-promotion / await-cert arm — the cert is evidence-only, DC-NODE-21); the extend decision forges on the durable spine head (ExtendOwnSpine); the certificate token never co-occurs with a persistence verb; the fence fails closed to a typed SingleProducerFenceViolation checking the venue role; no chain selector on the mode/decision path; the loop is mode-aware behind VenueRole::SingleProducer and preserves the DC-NODE-15 default (DC-NODE-18 core / DC-CONS-03 untouched)"
 fi
 exit $FAILED
