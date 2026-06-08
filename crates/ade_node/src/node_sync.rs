@@ -5474,4 +5474,181 @@ mod tests {
             "the Idle timer woke the loop to forge block 2 across the dead-feed Idle"
         );
     }
+
+    // ===== PHASE4-N-AG S3 (DC-NODE-19): replay-equivalence over a post-feed-end chain =====
+
+    use ade_network::chain_sync::server::HeaderProjection;
+
+    /// The served chain as a follower would walk it: the ordered ChainSync
+    /// `next_after` projection (header bytes, DC-CONS-18) paired with each block's
+    /// BlockFetch body (the verbatim durable bytes, DC-NODE-13). A deterministic
+    /// snapshot of the served chain for replay comparison.
+    fn served_snapshot(chaindb: &PersistentChainDb) -> Vec<(HeaderProjection, Vec<u8>)> {
+        let src = ChainDbServedSource::new(chaindb);
+        let mut out = Vec::new();
+        let mut cursor: Option<(SlotNo, Hash32)> = None;
+        while let Some(hp) = src.next_after(cursor.clone()) {
+            let body = chaindb
+                .get_block_by_hash(&hp.hash)
+                .expect("get_block_by_hash")
+                .expect("served point has a durable block body")
+                .bytes;
+            cursor = Some((hp.slot, hp.hash.clone()));
+            out.push((hp, body));
+        }
+        out
+    }
+
+    /// Drive a fresh always-leader extend venue past an ENDED feed: one due clock
+    /// tick (slot 2) forges block 1 on the durable block-0 spine — a single
+    /// post-EOF successor — then shutdown halts the loop. The borrows on `lead`
+    /// are released on return, so the caller can snapshot the durable surfaces.
+    async fn s2_run_continue_one(lead: &mut S2Lead, cert_path: std::path::PathBuf) {
+        std::fs::write(&cert_path, s2_cert_for(&lead.block0_tip)).unwrap();
+        let coordinator = s2_coordinator_state();
+        let mut clock = DeterministicClock::new(0, vec![2_000]); // slot 2 -> block 1
+        let mut act = ForgeActivation::new(
+            &mut clock,
+            &coordinator,
+            &lead.recovered,
+            &mut lead.shell,
+            lead.pool_id.clone(),
+            ProtocolParameters::default(),
+            ProtocolVersion { major: 9, minor: 0 },
+            0,
+            SlotNo(0),
+            1_000,
+        );
+        act.declare_single_producer_venue(Some(cert_path));
+        act.forge_mode = ForgeMode::SingleProducerExtendOwnDurableSpine {
+            adopted_root: lead.block0_tip.clone(),
+            current_tip: lead.block0_tip.clone(),
+        };
+        let mut source = NodeBlockSource::in_memory(vec![]); // ENDED feed
+        let (sd_tx, mut sd_rx) = watch::channel(false);
+        let loop_fut = run_relay_loop(
+            &mut lead.state,
+            &mut source,
+            &lead.chaindb,
+            &mut lead.wal,
+            &lead.era_schedule,
+            &lead.ledger_view,
+            &mut sd_rx,
+            Some(&mut act),
+        );
+        let driver = async {
+            let _ = sd_tx.send(true);
+        };
+        let (loop_res, _) = tokio::join!(loop_fut, driver);
+        loop_res.expect("loop halts cleanly on shutdown");
+    }
+
+    /// CE-AG-4: two clean runs of the post-feed-end continuation are byte-identical
+    /// across ALL FOUR surfaces — WAL image, durable tip, ledger fingerprint, AND
+    /// served chain — under the same recovered state + ended feed + injected clock
+    /// + adoption cert + shutdown schedule.
+    #[tokio::test]
+    async fn continue_past_eof_two_runs_byte_identical() {
+        let mut a = s2_extend_lead();
+        let cert_a = a._dir.path().join("cert");
+        s2_run_continue_one(&mut a, cert_a).await;
+        let wal_a = a.wal.read_all().expect("wal a");
+        let tip_a = ChainDbServedSource::new(&a.chaindb).tip();
+        let fp_a = ade_ledger::fingerprint::fingerprint(&a.state.receive.ledger);
+        let served_a = served_snapshot(&a.chaindb);
+
+        let mut b = s2_extend_lead();
+        let cert_b = b._dir.path().join("cert");
+        s2_run_continue_one(&mut b, cert_b).await;
+        let wal_b = b.wal.read_all().expect("wal b");
+        let tip_b = ChainDbServedSource::new(&b.chaindb).tip();
+        let fp_b = ade_ledger::fingerprint::fingerprint(&b.state.receive.ledger);
+        let served_b = served_snapshot(&b.chaindb);
+
+        assert_eq!(
+            tip_a.as_ref().map(|t| t.2),
+            Some(1),
+            "the run forged block 1 PAST the feed EOF"
+        );
+        assert_eq!(tip_a, tip_b, "durable tip byte-identical across runs");
+        assert_eq!(fp_a, fp_b, "ledger fingerprint byte-identical across runs");
+        assert_eq!(served_a, served_b, "served chain byte-identical across runs");
+        assert_eq!(wal_a, wal_b, "WAL image byte-identical across runs");
+    }
+
+    /// CE-AG-4: a post-feed-end forged chain recovers via warm_start_recovery to
+    /// the SAME durable tip + ledger fingerprint + served chain (no ChainBreak
+    /// across the post-EOF forge seam) — T-REC-05 extended to the loop-continued
+    /// chain. The TempDir is kept alive across the kill via destructuring.
+    #[tokio::test]
+    async fn continue_past_eof_kill_warm_start_recovers_byte_identical() {
+        let mut lead = s2_extend_lead();
+        let cert = lead._dir.path().join("cert");
+        s2_run_continue_one(&mut lead, cert).await;
+
+        // Destructure so the TempDir outlives the kill; drop the durable handles.
+        let S2Lead {
+            _dir,
+            chaindb,
+            wal,
+            state,
+            ..
+        } = lead;
+        let chaindb_path = _dir.path().join("chain.db");
+        let wal_dir = _dir.path().join("wal");
+        let pre_tip = ChainDbServedSource::new(&chaindb).tip();
+        let pre_fp = ade_ledger::fingerprint::fingerprint(&state.receive.ledger);
+        let pre_served = served_snapshot(&chaindb);
+        assert_eq!(
+            pre_tip.as_ref().map(|t| t.2),
+            Some(1),
+            "block 1 forged past the EOF before the kill"
+        );
+        drop(chaindb);
+        drop(wal);
+        drop(state);
+
+        // Reopen + warm-start recover (forward-replay over the post-EOF WAL).
+        let chaindb2 =
+            PersistentChainDb::open(PersistentChainDbOptions::at(&chaindb_path)).unwrap();
+        let wal2 = FileWalStore::open(&wal_dir).unwrap();
+        let recovered = crate::node_lifecycle::warm_start_recovery(&chaindb2, &wal2)
+            .expect("warm-start forward-replays the post-EOF chain without ChainBreak");
+        let post_tip = ChainDbServedSource::new(&chaindb2).tip();
+        let post_fp = ade_ledger::fingerprint::fingerprint(&recovered.ledger);
+        let post_served = served_snapshot(&chaindb2);
+
+        assert_eq!(pre_tip, post_tip, "warm-start recovers the durable tip byte-identically");
+        assert_eq!(pre_fp, post_fp, "warm-start recovers the ledger fingerprint byte-identically");
+        assert_eq!(
+            pre_served, post_served,
+            "warm-start recovers the served chain byte-identically"
+        );
+    }
+
+    /// CE-AG-4: feed EOF is loop-control input, not durable input. After K=1
+    /// post-EOF forged successor, the WAL grew by exactly one WalEntry::AdmitBlock
+    /// (the forged successor) — the EOF itself appended nothing.
+    #[tokio::test]
+    async fn feed_eof_appends_nothing_to_wal() {
+        let mut lead = s2_extend_lead();
+        let admits = |w: &[WalEntry]| w.iter().filter(|e| matches!(e, WalEntry::AdmitBlock { .. })).count();
+        let wal_before = lead.wal.read_all().expect("wal before");
+        let admits_before = admits(&wal_before);
+        let cert = lead._dir.path().join("cert");
+        s2_run_continue_one(&mut lead, cert).await; // one post-EOF forged successor
+        let wal_after = lead.wal.read_all().expect("wal after");
+        let admits_after = admits(&wal_after);
+
+        assert_eq!(
+            admits_after,
+            admits_before + 1,
+            "exactly one post-EOF forged AdmitBlock entry"
+        );
+        assert_eq!(
+            wal_after.len(),
+            wal_before.len() + 1,
+            "the feed EOF appends NO WAL entry — the only new entry is the forged successor's AdmitBlock"
+        );
+    }
 }
