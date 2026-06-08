@@ -97,6 +97,14 @@ pub struct BootstrapState {
     /// `RequiredFromRecoveredProvenance` warm-start that verified;
     /// `None` on cold-start and `NotRequired` warm-start.
     pub seed_epoch_consensus_inputs: Option<SeedEpochConsensusInputs>,
+    /// PHASE4-N-AH S4b (DC-NODE-22). Block number of the replay anchor, derived
+    /// during warm-start recovery as:
+    ///   recovered_tip.block_no - replayed_admit_count.
+    /// This is NOT an independently persisted chain point. It is an auditable
+    /// recovery summary used to distinguish bare-anchor recovery from recovery
+    /// with a replayed local continuation spine. `None` on cold-start / first-run
+    /// (only `warm_start_recovery` populates it).
+    pub replayed_anchor_block_no: Option<u64>,
 }
 
 /// Closed bootstrap-error sum. Authority-fatal at the binary
@@ -182,6 +190,7 @@ where
             chain_dep,
             tip: None,
             seed_epoch_consensus_inputs: None,
+            replayed_anchor_block_no: None,
         });
     }
 
@@ -252,6 +261,9 @@ where
         chain_dep,
         tip,
         seed_epoch_consensus_inputs,
+        // Cold-start / first-run / NotRequired warm-start: no replay anchor summary.
+        // `warm_start_recovery` overrides this with the derived value when it replays.
+        replayed_anchor_block_no: None,
     })
 }
 

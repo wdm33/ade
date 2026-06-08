@@ -875,6 +875,34 @@ pub fn forge_mode_after_admit(
     }
 }
 
+/// DC-NODE-22 (PHASE4-N-AH S4b): single-producer warm-start re-entry. Derive the forge
+/// mode from the recovered local durable spine — GREEN, pure, total. In a declared
+/// single-producer venue, when the recovered durable tip is ABOVE the replay anchor
+/// (`recovered_tip.block_no > replayed_anchor_block_no`, i.e. recovery replayed ≥ 1 own
+/// block — a local continuation spine), re-enter the extend state on `ChainDb::tip`
+/// under the DC-NODE-20 fence WITHOUT a fresh followed-peer catch-up. ANY unmet
+/// condition — not single-producer, missing recovered tip, missing replay-anchor
+/// summary, or tip == anchor (bare anchor) — FAILS CLOSED to `InitialCatchupRequired`
+/// (no guessed extend). The per-tick DC-NODE-20 observed-feed / no-fork-choice / no-cert
+/// fence + `pump_block`-sole-durable-admit still apply in the loop; this only sets the
+/// ENTRY mode after a clean warm-start recovery. The threshold is equivalent to the
+/// recovery's `admit_count > 0`.
+pub fn warm_start_forge_mode(
+    venue_role: VenueRole,
+    recovered_tip: Option<&TipPoint>,
+    replayed_anchor_block_no: Option<u64>,
+) -> ForgeMode {
+    match (venue_role, recovered_tip, replayed_anchor_block_no) {
+        (VenueRole::SingleProducer, Some(tip), Some(anchor_bn)) if tip.block_no > anchor_bn => {
+            ForgeMode::SingleProducerExtendOwnDurableSpine {
+                adopted_root: tip.clone(),
+                current_tip: tip.clone(),
+            }
+        }
+        _ => ForgeMode::InitialCatchupRequired,
+    }
+}
+
 /// DC-NODE-18 + DC-NODE-20: decide the single-producer forge action for this
 /// ForgeTick. Pure / deterministic GREEN. `relay_producing` and `recovered_anchor_k0`
 /// are RED venue facts supplied by the loop. DC-NODE-20: the forge base is Ade's own
@@ -2499,6 +2527,7 @@ mod tests {
                 slot: SlotNo(10),
             }),
             seed_epoch_consensus_inputs,
+            replayed_anchor_block_no: None,
         }
     }
 
@@ -2536,6 +2565,7 @@ mod tests {
             chain_dep,
             tip: None,
             seed_epoch_consensus_inputs,
+            replayed_anchor_block_no: None,
         }
     }
 
@@ -2727,6 +2757,7 @@ mod tests {
             chain_dep: c_r,
             tip: None,
             seed_epoch_consensus_inputs: Some(sidecar.clone()),
+            replayed_anchor_block_no: None,
         };
         let (event, handoff) = forge_one_from_recovered(
             &recovered,
@@ -2885,6 +2916,7 @@ mod tests {
             chain_dep: c_r,
             tip: None,
             seed_epoch_consensus_inputs: Some(sidecar.clone()),
+            replayed_anchor_block_no: None,
         };
         let (event0, handoff0) = forge_one_from_recovered(
             &recovered,
@@ -3091,6 +3123,7 @@ mod tests {
             chain_dep: c_r,
             tip: None,
             seed_epoch_consensus_inputs: Some(sidecar.clone()),
+            replayed_anchor_block_no: None,
         };
         let (event0, handoff0) = forge_one_from_recovered(
             &recovered,
@@ -5017,6 +5050,7 @@ mod tests {
             chain_dep: c_r,
             tip: None,
             seed_epoch_consensus_inputs: Some(sidecar.clone()),
+            replayed_anchor_block_no: None,
         };
 
         let dir = TempDir::new().unwrap();
@@ -5841,6 +5875,126 @@ mod tests {
         assert!(
             !jsonl.contains("adoption_cert") && !jsonl.contains("read_adoption"),
             "no adoption-cert token may appear in the sched transcript"
+        );
+    }
+
+    // ===== PHASE4-N-AH S4b (DC-NODE-22): single-producer warm-start re-entry =====
+
+    /// CE-AH-8 (DC-NODE-22): the warm-start re-entry decision is fail-closed. The pure
+    /// `warm_start_forge_mode` derives the extend mode ONLY for a single-producer venue
+    /// whose recovered durable tip is ABOVE the replay anchor; every other case falls
+    /// back to `InitialCatchupRequired` (no guessed extend).
+    #[test]
+    fn warm_start_reentry_requires_tip_above_recovered_anchor() {
+        let tip = TipPoint {
+            slot: SlotNo(20),
+            hash: Hash32([0xAB; 32]),
+            block_no: 5,
+        };
+        // (i) tip == anchor (admit_count 0, bare anchor) → InitialCatchupRequired.
+        assert!(matches!(
+            warm_start_forge_mode(VenueRole::SingleProducer, Some(&tip), Some(5)),
+            ForgeMode::InitialCatchupRequired
+        ));
+        // (ii) tip > anchor (admit_count > 0) → extend on the recovered tip.
+        match warm_start_forge_mode(VenueRole::SingleProducer, Some(&tip), Some(3)) {
+            ForgeMode::SingleProducerExtendOwnDurableSpine {
+                current_tip,
+                adopted_root,
+            } => {
+                assert_eq!(current_tip, tip);
+                assert_eq!(adopted_root, tip);
+            }
+            other => panic!("expected extend, got {other:?}"),
+        }
+        // (iii) missing replay-anchor summary → InitialCatchupRequired.
+        assert!(matches!(
+            warm_start_forge_mode(VenueRole::SingleProducer, Some(&tip), None),
+            ForgeMode::InitialCatchupRequired
+        ));
+        // (iv) non-single-producer → InitialCatchupRequired.
+        assert!(matches!(
+            warm_start_forge_mode(VenueRole::Unknown, Some(&tip), Some(3)),
+            ForgeMode::InitialCatchupRequired
+        ));
+        // (bonus) missing recovered tip → InitialCatchupRequired.
+        assert!(matches!(
+            warm_start_forge_mode(VenueRole::SingleProducer, None, Some(3)),
+            ForgeMode::InitialCatchupRequired
+        ));
+    }
+
+    /// CE-AH-8 (DC-NODE-22): after forging a local continuation spine, a simulated
+    /// warm-start re-entry — a fresh `ForgeActivation` whose `forge_mode` is derived by
+    /// `warm_start_forge_mode` from the recovered durable tip (above the block-0 anchor)
+    /// — RESUMES forging on `ChainDb::tip` over an ENDED feed (no follow-link catch-up),
+    /// the exact run-2 stall the rule eliminates.
+    #[tokio::test]
+    async fn warm_start_single_producer_re_enters_extend_and_forges() {
+        let mut lead = s2_extend_lead();
+        // Forge a local continuation spine (blocks 1, 2) above the block-0 anchor.
+        local_spine_run_two(&mut lead).await;
+        let (_, _, pre_block_no) = ChainDbServedSource::new(&lead.chaindb)
+            .tip()
+            .expect("tip after the continuation forge");
+        assert!(pre_block_no >= 2, "forged a continuation spine above the anchor");
+
+        // WARM-START RE-ENTRY: derive forge_mode from the recovered tip (above anchor 0).
+        let recovered_tip = ChainDbServedSource::new(&lead.chaindb)
+            .tip()
+            .map(|(slot, hash, block_no)| TipPoint {
+                slot,
+                hash,
+                block_no,
+            });
+        let forge_mode =
+            warm_start_forge_mode(VenueRole::SingleProducer, recovered_tip.as_ref(), Some(0));
+        assert!(
+            matches!(forge_mode, ForgeMode::SingleProducerExtendOwnDurableSpine { .. }),
+            "warm-start re-entry derives the extend mode from the recovered spine above the anchor"
+        );
+
+        let coordinator = s2_coordinator_state();
+        let mut clock = DeterministicClock::new(0, vec![40, 50]); // slots 4,5 → next successors
+        let mut act = ForgeActivation::new(
+            &mut clock,
+            &coordinator,
+            &lead.recovered,
+            &mut lead.shell,
+            lead.pool_id.clone(),
+            ProtocolParameters::default(),
+            ProtocolVersion { major: 9, minor: 0 },
+            0,
+            SlotNo(0),
+            10,
+        );
+        act.declare_single_producer_venue();
+        act.forge_mode = forge_mode; // the warm-start-re-entry mode (NOT InitialCatchupRequired)
+        let mut source = NodeBlockSource::in_memory(vec![]); // ENDED feed — no catch-up available
+        let (sd_tx, mut sd_rx) = watch::channel(false);
+        let loop_fut = run_relay_loop(
+            &mut lead.state,
+            &mut source,
+            &lead.chaindb,
+            &mut lead.wal,
+            &lead.era_schedule,
+            &lead.ledger_view,
+            &mut sd_rx,
+            Some(&mut act),
+        );
+        let driver = async {
+            tokio::time::sleep(std::time::Duration::from_millis(300)).await;
+            let _ = sd_tx.send(true);
+        };
+        let (loop_res, _) = tokio::join!(loop_fut, driver);
+        loop_res.expect("loop halts cleanly on shutdown");
+        drop(act);
+        let (_, _, post_block_no) = ChainDbServedSource::new(&lead.chaindb)
+            .tip()
+            .expect("tip after the re-entry forge");
+        assert!(
+            post_block_no > pre_block_no,
+            "warm-start re-entry RESUMED forging on ChainDb::tip ({pre_block_no} -> {post_block_no}) with NO follow-link catch-up"
         );
     }
 }

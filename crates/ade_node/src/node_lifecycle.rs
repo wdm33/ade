@@ -619,6 +619,25 @@ async fn run_node_lifecycle_inner(
             // Absent the flag, `venue_role` stays Unknown ⇒ pure DC-NODE-15.
             if cli.single_producer_venue {
                 activation.declare_single_producer_venue();
+                // PHASE4-N-AH S4b (DC-NODE-22): re-enter the extend state directly when
+                // warm-start recovered a local durable continuation spine ABOVE the
+                // replay anchor (the warm-start analog of DC-NODE-20) — so a restarted
+                // single-producer node resumes forging on ChainDb::tip without a fresh
+                // follow-link catch-up. Else (bare anchor / first-run / no summary) the
+                // forge mode stays InitialCatchupRequired. Fail-closed; the per-tick
+                // DC-NODE-20 fence + pump_block-sole-admit still gate every forge.
+                let recovered_tip = ChainDbServedSource::new(&*chaindb)
+                    .tip()
+                    .map(|(slot, hash, block_no)| TipPoint {
+                        slot,
+                        hash,
+                        block_no,
+                    });
+                activation.forge_mode = crate::node_sync::warm_start_forge_mode(
+                    activation.venue_role,
+                    recovered_tip.as_ref(),
+                    state.replayed_anchor_block_no,
+                );
             }
             // PHASE4-N-F-G-J S1 (CN-NODE-04): emit the closed feed/forge
             // scheduling diagnostics to stderr (emit-only; never alters
@@ -1682,7 +1701,7 @@ pub(crate) fn warm_start_recovery(
     //    fail-closed sidecar verify chain; its warm-start branch forward-replays
     //    from the nearest snapshot ≤ the (reconciled) tip over the preserved
     //    bytes (the SOLE consumer of era_schedule / ledger_view).
-    let recovered = bootstrap_initial_state(BootstrapInputs {
+    let mut recovered = bootstrap_initial_state(BootstrapInputs {
         chaindb,
         snapshot_store: chaindb,
         era_schedule: &era_schedule,
@@ -1705,6 +1724,18 @@ pub(crate) fn warm_start_recovery(
             )));
         }
     }
+
+    // PHASE4-N-AH S4b (DC-NODE-22): the derived replay-anchor summary. The recovered
+    // tip is `admit_count` AdmitBlocks above the replay anchor, so the anchor's block
+    // number = recovered_tip.block_no - admit_count. This is a DERIVED recovery summary
+    // (not an independently persisted chain point), using recovery's authoritative
+    // admit_count (the same count that backs the T-REC-05 fingerprint check above) --
+    // NOT the snapshot-fragile raw WAL entry count. It lets the warm-start arm
+    // distinguish bare-anchor recovery (admit_count 0) from recovery with a replayed
+    // local continuation spine (admit_count > 0).
+    let recovered_tip_block_no = ChainDbServedSource::new(chaindb).tip().map(|(_, _, bn)| bn);
+    recovered.replayed_anchor_block_no =
+        recovered_tip_block_no.map(|tip_bn| tip_bn.saturating_sub(admit_count as u64));
     Ok(recovered)
 }
 
@@ -1852,6 +1883,7 @@ fn first_run_mithril_bootstrap(
         chain_dep: out.chain_dep,
         tip: out.tip,
         seed_epoch_consensus_inputs: None,
+        replayed_anchor_block_no: None,
     })
 }
 
