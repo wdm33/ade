@@ -6951,3 +6951,151 @@ restart), T-REC-05 (recovery now RESUMES forging, not just recovers state), CN-N
 warm-start wiring). Does NOT alter DC-CONS-03 (rung-2 fork-choice). SCOPE: rung-1 single-producer
 only; never multi-producer / preprod.
 """
+
+# =============================================================================
+# DC-NODE-23..28 -- PHASE4-N-AI live fork-choice wiring (rung-2, single-best-peer)
+# Declared at /invariants 2026-06-09. Wire the EXISTING enforced fork-choice
+# authority (select_best_chain DC-CONS-03 / apply_rollback DC-CONS-05/06 /
+# materialize_rolled_back_state CN-STORE-07 / lockstep receive reducer DC-CONS-20 /
+# chain_selector orchestrator) into the live --mode node receive path. NOT a BLUE
+# build. Enforced as slices land per the cluster plan; OQ-1 (rollback durability)
+# must be resolved before the rollback-replay slice. Planned strengthenings
+# (CN-CONS-01/03, DC-CONS-03/05/06/20, CN-STORE-07, DC-NODE-05/12/20, T-REC-03/05)
+# are deferred to cluster close.
+# =============================================================================
+
+[[rules]]
+id = "DC-NODE-23"
+tier = "derived"
+statement = """
+Shared receive-side fork-choice detector (rung-2). A peer-origin candidate that is NOT
+already known as part of Ade's admitted durable spine / own-served lineage -- including but
+not limited to a header that does not build on ChainDb::tip -- is classified ONCE,
+venue-blind, by a pure total predicate over (durable_tip, candidate_header_summary) ->
+ReceiveDisposition { AlreadyHave | LinearExtend | RefuseSingleProducer | NeedsForkChoice }. A
+duplicate / already-known peer echo is AlreadyHave, never a competing candidate merely because
+it is not a fresh extension. Observes no venue, no wall-clock, no network state; the single
+classification point that both the SingleProducer fail-closed arm (DC-NODE-20) and the
+Participant fork-choice arm (DC-NODE-24) consume. It never selects, reorders, or prefers
+chains (that is select_best_chain / DC-CONS-03).
+"""
+source = "docs/planning/phase4-n-ai-live-fork-choice-invariants.md (I-5)"
+cross_ref = ["DC-NODE-20", "DC-NODE-24", "DC-NODE-15", "DC-NODE-16", "DC-CONS-03"]
+code_locus = "CANDIDATE (pending /cluster-plan): crates/ade_node/src/node_sync.rs (a GREEN-by-function classifier over the durable tip + the arriving candidate header summary; sibling to forge_followed_tip_admission / single_producer_forge_decision)."
+tests = []
+ci_script = ""
+status = "declared"
+introduced_in = "PHASE4-N-AI"
+strengthened_in = []
+
+[[rules]]
+id = "DC-NODE-24"
+tier = "derived"
+statement = """
+Venue-split fork-choice resolver (rung-2). The DC-NODE-23 detector's non-spine consequent is
+gated by venue and TOTAL over the closed venue set: VenueRole::SingleProducer => fail closed
+(the DC-NODE-20 rung-1 behavior, byte-unchanged -- never adopt a peer candidate);
+VenueRole::Participant => NeedsForkChoice => the existing
+ade_runtime::consensus::chain_selector orchestrator (process_stream_input -> BLUE
+select_best_chain, DC-CONS-03). Venue input is explicit and fail-safe (an undeclared / unknown
+venue takes the conservative SingleProducer refuse arm). In Participant mode the peer's
+VALIDATED header summary (post validate_and_apply_header) becomes a candidate; a raw
+followed_peer_tip signal MUST NOT reach select_best_chain.
+"""
+source = "docs/planning/phase4-n-ai-live-fork-choice-invariants.md (I-6)"
+cross_ref = ["DC-NODE-23", "DC-NODE-20", "DC-NODE-15", "DC-CONS-03", "CN-CONS-01"]
+code_locus = "CANDIDATE (pending /cluster-plan): crates/ade_node/src/node_sync.rs (the venue->resolver projection) + crates/ade_node/src/node_lifecycle.rs (the receive arm dispatching to the chain_selector orchestrator on the Participant path; the SingleProducer path keeps the DC-NODE-20 fail-closed)."
+tests = []
+ci_script = ""
+status = "declared"
+introduced_in = "PHASE4-N-AI"
+strengthened_in = []
+
+[[rules]]
+id = "DC-NODE-25"
+tier = "derived"
+statement = """
+Live fork-choice durable application authority (rung-2). A ChainSelected / RolledBack outcome
+from the chain_selector orchestrator is applied to the durable stores ONLY via the existing
+enforced authorities: the lockstep receive reducer (DC-CONS-20 -- ChainDb + LedgerState +
+PraosChainDepState advanced / rolled-back as one structural transition) +
+materialize_rolled_back_state (CN-STORE-07) for the rollback target + pump_block
+(DC-NODE-05/12) for roll-forward. NO second apply path, NO second durable tip-advance path, NO
+second rollback-materialize path. A fork-choice win is provisional: the chain is durably
+adopted ONLY when its BODIES validate and apply through pump_block (no header-only tip
+advance). A TiebreakerLossKeepCurrent outcome makes no durable change.
+"""
+source = "docs/planning/phase4-n-ai-live-fork-choice-invariants.md (I-2, I-3, I-4, I-11)"
+cross_ref = ["DC-CONS-20", "CN-STORE-07", "DC-NODE-05", "DC-NODE-12", "DC-NODE-13", "DC-CONS-03"]
+code_locus = "CANDIDATE (pending /cluster-plan): crates/ade_node/src/node_lifecycle.rs (the RED apply driver) over crates/ade_ledger/src/receive/reducer.rs + crates/ade_ledger/src/rollback/* + crates/ade_runtime/src/forward_sync/pump.rs. REUSES the enforced authorities; no new BLUE."
+tests = []
+ci_script = ""
+status = "declared"
+introduced_in = "PHASE4-N-AI"
+strengthened_in = []
+
+[[rules]]
+id = "DC-NODE-26"
+tier = "derived"
+statement = """
+Decision / durable reconciliation (rung-2). After any applied receive decision, the
+chain_selector orchestrator's selector.current_tip EQUALS the durable ChainDb::tip (and the
+orchestrator chain_dep equals the durable PraosChainDepState). The in-memory decision state
+never diverges from the persisted authority: the orchestrator decides, the durable lockstep
+path applies, and the two are reconciled every decision. No applied decision leaves the
+selector ahead of, behind, or forked from the durable spine.
+"""
+source = "docs/planning/phase4-n-ai-live-fork-choice-invariants.md (I-7)"
+cross_ref = ["DC-NODE-25", "DC-NODE-27", "DC-CONS-20", "DC-NODE-12"]
+code_locus = "CANDIDATE (pending /cluster-plan): crates/ade_node/src/node_sync.rs / node_lifecycle.rs (the reconciliation projection: derive ChainSelectorState from the durable stores, or hold OrchestratorState in lockstep -- OQ-2)."
+tests = []
+ci_script = ""
+status = "declared"
+introduced_in = "PHASE4-N-AI"
+strengthened_in = []
+
+[[rules]]
+id = "DC-NODE-27"
+tier = "derived"
+statement = """
+Rollback+reselection replay-equivalence (rung-2). The ordered live receive-event sequence
+(RollForward headers, RollBackward points, body deliveries) replayed against the same
+bootstrap anchor + durable log produces a BYTE-IDENTICAL durable tip + ledger fingerprint +
+PraosChainDepState -- INCLUDING any rollback+reselection. A live rollback is recorded durably
+(append-only, canonical bytes -- CN-WAL-01) such that replay re-invokes the SAME
+materialize / reducer authority (CN-STORE-07 / DC-CONS-20) at that point; the durable record is
+NOT a second rollback implementation. No implicit live-only rollback: a rollback that happened
+live MUST be reproducible on recovery (T-REC-03/05, DC-CONS-06/22). OQ-1 (the WAL-marker vs
+proven-tail-reconciliation mechanism) MUST be decided before this is enforced.
+"""
+source = "docs/planning/phase4-n-ai-live-fork-choice-invariants.md (section 4, OQ-1)"
+cross_ref = ["DC-CONS-06", "DC-CONS-22", "DC-CONS-20", "CN-STORE-07", "CN-WAL-01", "T-REC-03", "T-REC-05", "DC-NODE-26"]
+code_locus = "CANDIDATE (pending /cluster-plan; OQ-1 mechanism decision REQUIRED first): either a version-gated WalEntry::RollBack marker (crates/ade_ledger/src/wal/) replayed through the existing rollback authority, OR a proven WAL-tail reconciliation (crates/ade_runtime/src/recovery/restart.rs). No implicit live-only rollback."
+tests = []
+ci_script = ""
+status = "declared"
+introduced_in = "PHASE4-N-AI"
+strengthened_in = []
+
+[[rules]]
+id = "DC-NODE-28"
+tier = "derived"
+statement = """
+No forge across unresolved re-selection (rung-2). Once a peer-origin candidate is classified
+NeedsForkChoice (DC-NODE-23) in a Participant venue, forging is DISABLED until the fork-choice
+outcome is either (a) durably applied and reconciled (DC-NODE-25/26) or (b) rejected with
+durable state unchanged. The forge base is NEVER selected from a stale pre-resolution
+ChainDb::tip while a decision is pending -- a producer tick that fires during a pending
+decision fails closed (typed ForgeRefused), never forges on the old local tip. This is a
+producer race fence DISTINCT from pump_block durable admit, rollback replay, or selector /
+durable reconciliation, so it carries its own evidence. Prevents stale local authority leaking
+into block production. Derived tier with a true-tier authority consequence.
+"""
+source = "docs/planning/phase4-n-ai-live-fork-choice-invariants.md (I-12)"
+cross_ref = ["DC-NODE-23", "DC-NODE-24", "DC-NODE-20", "DC-NODE-05", "DC-CONS-13"]
+code_locus = "CANDIDATE (pending /cluster-plan): crates/ade_node/src/node_sync.rs (the forge gate -- extend single_producer_forge_decision / the Participant forge-base selection with a pending-resolution fence) + node_lifecycle.rs (the ForgeTick arm respects the pending state)."
+tests = []
+ci_script = ""
+status = "declared"
+introduced_in = "PHASE4-N-AI"
+strengthened_in = []
