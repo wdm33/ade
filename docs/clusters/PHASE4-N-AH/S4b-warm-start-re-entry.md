@@ -21,7 +21,7 @@ Make warm-start a first-class part of the sustained-producer claim: a rung-1 sin
 
 ## 5. Scope
 - **`node_lifecycle.rs` warm-start arm:** derive the extend `forge_mode` from the recovered `ChainDb::tip` for a single-producer venue with a recovered own-spine tip above the anchor, fenced (the 9-condition DC-NODE-22 fence; fail-closed to `InitialCatchupRequired`).
-- **The above-anchor / own-spine threshold** (the one design detail to resolve in implementation): compare the recovered `ChainDb::tip.block_no` against the recovered **bootstrap anchor block_no** (the imported seed tip) — tip above anchor ⇒ Ade forged its own continuation. (Alternative if the anchor block_no is not readily threaded: the recovered tip's block issuer == Ade's pool key. Lean to the anchor-block_no comparison; surface if a seam is missing.)
+- **The above-anchor threshold — RESOLVED (seam check done, option a′ approved):** the bootstrap anchor block_no is NOT independently available in the warm-start arm (`BootstrapState` had no anchor field — only `anchor_fp` + the authoritative `admit_count`). So `warm_start_recovery` adds an **audit-honest derived recovery-summary field** `replayed_anchor_block_no: Option<BlockNo>` = `recovered_tip.block_no − replayed_admit_count`, where `replayed_admit_count` is recovery's authoritative count of `AdmitBlock`s replayed from the verified `anchor_fp` lineage (it already backs the T-REC-05 fingerprint check) — **NOT** the rejected snapshot-fragile raw `wal.read_all()` count. The threshold `recovered_tip.block_no > replayed_anchor_block_no` is therefore **mathematically equivalent to `replayed_admit_count > 0`** — exactly "did warm-start recover only the anchor, or a local continuation spine above it?". The field is documented as a *derived recovery summary, not an independently persisted chain point*. An independently-persisted anchor tip (option b′) is a bigger storage/bootstrap change — **deferred to a later storage-hardening slice, NOT pulled into this node-lifecycle fix.**
 - **Out of scope:** the live run-3 (operator pass); the harness counter fix (operator scratch); any BLUE / fork-choice / multi-producer / preprod change; flipping DC-NODE-22 (close).
 
 ## 6. Execution Boundary (TCB color)
@@ -40,18 +40,21 @@ Make warm-start a first-class part of the sustained-producer claim: a rung-1 sin
 After `warm_start_recovery` returns the recovered state and `declare_single_producer_venue()` sets `venue_role = SingleProducer`, the warm-start arm computes the DC-NODE-22 predicate: `venue_role == SingleProducer` ∧ recovery succeeded ∧ `ChainDb::tip` present + contiguous/servable ∧ `tip.block_no > anchor.block_no` ∧ (the DC-NODE-20 observed-feed fence is not yet violated). If true, `act.forge_mode = SingleProducerExtendOwnDurableSpine{adopted_root = recovered_tip, current_tip = recovered_tip}`; the next `ForgeTick` then forges on `ChainDb::tip` via the existing DC-NODE-20 path (emitting `ForgeBaseSelected{forge_base_source=local_chaindb_tip}`). If false (bare anchor, non-single-producer, recovery error), `forge_mode` stays `InitialCatchupRequired` (the existing catch-up flow). Fail-closed.
 
 ## 10. Changes Introduced
-- `node_lifecycle.rs`: the warm-start arm sets `act.forge_mode` from the recovered `ChainDb::tip` under the DC-NODE-22 fence (a small post-recovery derivation + the threshold helper).
-- Hermetic test (§11/§12).
-- `ci/ci_check_warm_start_re_entry.sh` (new) — asserts the warm-start arm derives the extend mode for a single-producer above-anchor recovery, fenced + fail-closed, with no cert / fork-choice / new BLUE.
+- `ade_runtime::bootstrap::BootstrapState`: add `replayed_anchor_block_no: Option<BlockNo>` (the derived recovery-summary field, documented as NOT an independently persisted chain point); cold-start / first-run leave it `None`.
+- `node_lifecycle::warm_start_recovery`: populate `replayed_anchor_block_no = Some(recovered_tip.block_no − admit_count)` (admit_count is the existing authoritative replay count, line ~1642).
+- `node_lifecycle.rs` warm-start arm: set `act.forge_mode` from the recovered `ChainDb::tip` under the DC-NODE-22 fence (the threshold `recovered_tip.block_no > replayed_anchor_block_no` ≡ `admit_count > 0`); else `InitialCatchupRequired`.
+- Hermetic tests (§11/§12).
+- `ci/ci_check_warm_start_re_entry.sh` (new) — asserts the warm-start arm derives the extend mode for a single-producer above-anchor recovery, fenced + fail-closed, no cert / fork-choice / new BLUE.
 
 ## 11. Replay, Crash, and Epoch Validation
-- **Crash/warm-start (the core):** a new hermetic test `warm_start_single_producer_re_enters_extend_and_forges` — stand up the local-spine forge (S3 harness), kill, `warm_start_recovery`, build the warm-start `ForgeActivation`, assert `forge_mode == SingleProducerExtendOwnDurableSpine{current_tip == recovered ChainDb::tip}` (NOT `InitialCatchupRequired`), then drive one `ForgeTick` over an **ended** feed (no follow-link catch-up available) and assert it **forges a successor on `ChainDb::tip`** (the transcript emits `forge_base_selected` + a succeeded `forge_result`). Plus a negative: a bare-anchor / non-single-producer recovery stays `InitialCatchupRequired`.
+- **Threshold (the decision) — `warm_start_reentry_requires_tip_above_recovered_anchor`:** a pure-function test over the new GREEN `warm_start_forge_mode` helper, all three (+1) cases — (i) `replayed_anchor == tip.block_no` (admit_count 0, **bare anchor**) → `InitialCatchupRequired`; (ii) `tip.block_no > replayed_anchor` (admit_count > 0) → `SingleProducerExtendOwnDurableSpine{current_tip = recovered tip}`; (iii) `replayed_anchor == None` (**missing summary**) → `InitialCatchupRequired`; (iv) non-single-producer → `InitialCatchupRequired`.
+- **Forge resumption (the core) — `warm_start_single_producer_re_enters_extend_and_forges`:** stand up the local-spine forge (S3 harness), build the warm-start `ForgeActivation` with `forge_mode` from `warm_start_forge_mode`, drive one `ForgeTick` over an **ended** feed (no follow-link catch-up available) and assert it **forges a successor on `ChainDb::tip`** (the transcript emits `forge_base_selected` + a succeeded `forge_result`).
 - **T-REC-05** byte-identity (S3) is unchanged.
 - **Epoch:** not applicable.
 
 ## 12. Mechanical Acceptance Criteria
-- [ ] `cargo test -p ade_node warm_start_single_producer_re_enters_extend_and_forges` green.
-- [ ] `cargo test -p ade_node warm_start_bare_anchor_stays_catchup` (negative) green.
+- [ ] `cargo test -p ade_node warm_start_reentry_requires_tip_above_recovered_anchor` green (the 3+1 threshold cases).
+- [ ] `cargo test -p ade_node warm_start_single_producer_re_enters_extend_and_forges` green (forge resumption on `ChainDb::tip`).
 - [ ] `ci/ci_check_warm_start_re_entry.sh` (new) green.
 - [ ] `cargo test -p ade_node` green overall.
 - [ ] `ci_check_local_durable_forge_base.sh` + `ci_check_cert_evidence_only.sh` + `ci_check_live_transcript_forge_base.sh` + `ci_check_node_run_loop_containment.sh` + `ci_check_node_path_fidelity.sh` + `ci_check_node_sched_events_emit_only.sh` stay green.
