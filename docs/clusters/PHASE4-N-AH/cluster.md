@@ -181,4 +181,11 @@ T-REC-03/05 extend to cover cert-free local-tip-derived successors.
 - **Cert parser retained (S1 only):** `read_adoption_cert` / `parse_hex32` are
   `#[allow(dead_code)]` — not used by forge authority; retained for S2 (DC-NODE-21)
   evidence-only transcript work, which removes or fences the parser's final role and adds
-  `ci_check_cert_evidence_only.sh`.
+  `ci_check_cert_evidence_only.sh`. *(Resolved in S2 `050237e9`: parser fully deleted.)*
+- **Path-fidelity reconciliation (S2 premise correction):** CN-REHEARSAL-FIDELITY-01
+  preserved: pinned flag set reconciled from **28→29** to include the pre-existing
+  legitimate `--single-producer-venue` flag; `--adoption-cert-path` removed from cli.rs
+  and never added to the allow-list. (The S2 slice doc's assumed "28→27" was a premise
+  error — `--adoption-cert-path` was never in the pinned set; the real divergence was the
+  N-AF-introduced `--single-producer-venue`, legitimately missing from PINNED since N-AF.
+  The allow-list stays closed: no from-genesis/devnet/backdoor flag added.)
