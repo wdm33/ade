@@ -6749,3 +6749,61 @@ status = "enforced"
 introduced_in = "PHASE4-N-AF"
 strengthened_in = []
 evidence_notes = "Rung-1 Finding B fix (2026-06-07), introduced after OQ-1 disproved DC-NODE-17-as-fix (the relay does NOT re-announce Ade's own adopted block). ENFORCED for the SCOPED core invariant ONLY (successor extension after an explicit adoption certificate -- see the statement SCOPE BOUNDARY); NOT for sustained-past-k. Tier=derived (Cardano-compatibility/liveness for the C2-LOCAL single-producer relay spine); the true-tier laws underneath are unchanged. HERMETIC ENFORCEMENT: ci/ci_check_single_producer_extend_own_spine.sh + 6 ade_node node_sync tests -- forge-mode state machine total/deterministic; promotion requires an explicit certificate matched by chain-point identity (hash+block_no), never self-admit-inferred, slot ignored; extend forges on the durable tip without followed==durable; fail-closed SingleProducerFenceViolation on each of 5 conditions; warm-start replay byte-identical over a K=3 own-forged chain (T-REC-05); forge_mode_after_admit advances ONLY on an actual admit (not on a not_leader tick). BLUE UNCHANGED: pump_block durable admission stays authoritative+idempotent (DC-NODE-16); ledger/chain_dep/WAL unchanged; successor construction derives from the evolved admitted spine (DC-NODE-10/DC-CONS-24); chain selection (DC-CONS-03) stays the sole follow/fork authority. LIVE CORE PROOF (CE-AF-6a; C2-LOCAL cardano-testnet magic 42, run c2t7, 2026-06-07; docs/evidence/phase4-n-af-extend-own-spine.{md,jsonl}): Ade forged block 11 -> the non-producing Haskell relay adopted it -> the operator/harness wrote the RED venue-adoption certificate (11 327 7e67cd0d...) -> Ade promoted (own_tip == cert by chain-point identity) -> Ade forged block 12 from its OWN durable adopted spine -> the relay adopted block 12, with NO echo of block 11 back to Ade. Two live-surfaced loop bugs were found + fixed en route, BOTH missed by the hermetic suite + the IDD/security reviews (the live gate's value): (1) the post-forge mode advancement fired on a not_leader tick (forged=true but nothing admitted), wrongly promoting before any block; (2) the cert promotion used full TipPoint equality incl. slot instead of chain-point identity. DEFERRED, NOT claimed here (CE-AF-6b): sustained production past k, relay ImmutableDB settlement, follow-link liveness, and forge-loop continuation after the Ade->relay follow link EOFs. The c2t7 run stopped at 2 blocks because that follow link EOF'd (relay idle timeout; no keep-alive) and the loop currently treats the follow source as a lifecycle authority -- scoped to DC-NODE-19 (single-producer extend-mode loop continuation after follow EOF), which touches DC-NODE-05 (forge subordinate to the sync spine). OQ-KA (follow-link keep-alive) remains a separate non-blocking diagnostic."
+
+[[rules]]
+id = "DC-NODE-19"
+tier = "derived"
+statement = """
+Single-producer forge-loop continuation after follow-link EOF. In an explicitly declared single-producer
+venue (VenueRole::SingleProducer) that has ALREADY entered the DC-NODE-18 extend state
+(ForgeMode::SingleProducerExtendOwnDurableSpine, reached only via DC-NODE-15 catch-up + an explicit
+venue-adoption-certificate promotion), a LoopState::Ending caused SOLELY by structural feed EOF (the
+Ade->relay follow link closing/draining) MUST NOT by itself terminate the forge loop; the loop continues
+forging successors on its OWN certified durable spine (each admitted via pump_block, DC-NODE-12). The
+continuation is FENCED to the certified single-producer run and FAILS CLOSED (no continuation; verbatim
+HaltCleanly / typed refusal, never a silent forge) if ANY hold: (1) not VenueRole::SingleProducer; (2) not
+ForgeMode::SingleProducerExtendOwnDurableSpine; (3) operator shutdown requested; (4) the slot is outside
+existing forge-valid bounds (off-epoch DC-EPOCH-03 / beyond forecast horizon DC-CONS-09 / KES period); (5) a
+KES/forecast/epoch fence fails; (6) a competing chain was observed before EOF; (7) relay-producing evidence
+exists; (8) the venue certificate is absent or malformed -- the DC-NODE-18 SingleProducerFenceReason set plus
+the venue/mode/cert fence. NO numeric "max blind forges" cap (an artificial operator policy, not a Cardano
+semantic invariant); the certified-run fence + the existing BLUE bounds + operator shutdown bound it.
+RELOCATES the loop's termination authority off feed-liveness onto explicit operator shutdown / fatal error
+(the same move DC-NODE-09 made for the serve-listener lifetime) while PRESERVING DC-NODE-05's deeper
+invariant: the forge advances NO durable tip directly and run_node_sync -> pump_block remains the SOLE
+durable tip-advance authority, and available feed work still drains via SyncOnce before any ForgeTick
+(produce subordinate to the sync spine). The default VenueRole::Unknown venue takes the verbatim prior
+HaltCleanly-on-feed-end path. A loop-lifecycle refinement, NOT a fork-choice change -- DC-CONS-03 stays the
+sole follow/fork authority; the continuation never selects/reorders/prefers chains. Only a clean structural
+feed EOF is continued; a LoopState::Ending representing a real shutdown or a fatal source failure exits via
+Err/fail-fast and is NEVER continued. SCOPE: continuation only (don't-die-on-EOF); follow-link keep-alive /
+reconnect (OQ-KA) is a separate non-blocking cousin.
+"""
+source = "docs/planning/single-producer-loop-continuation-after-feed-eof-invariants.md"
+cross_ref = ["DC-NODE-18", "DC-NODE-05", "DC-NODE-09", "DC-NODE-12", "CN-NODE-02", "T-REC-03", "T-REC-05", "DC-CONS-03", "DC-EPOCH-03", "DC-CONS-09"]
+code_locus = "CANDIDATE (pending /cluster-plan): crates/ade_node/src/run_loop_planner.rs (plan_loop_step gains a 5th closed content-blind VenuePolicy input -- the 32-case total table; + a GREEN VenueRole/ForgeMode -> VenuePolicy projection); crates/ade_node/src/node_lifecycle.rs (run_relay_loop_with_sched threads the venue policy + restructures the Idle-under-feed-end wait so a dead feed does not starve the forge cadence; the shutdown watch stays the lifecycle authority; the certified-run continuation fence reuses the DC-NODE-18 SingleProducerFenceReason); crates/ade_node/src/node_sync.rs (the venue/mode/cert continuation fence reuses single_producer_forge_decision / SingleProducerFenceReason)"
+tests = []
+ci_script = ""
+status = "declared"
+introduced_in = "TBD"
+strengthened_in = []
+evidence_notes = """
+CE-AF-6b, deferred from DC-NODE-18 (PHASE4-N-AF). DECLARED at /invariants (2026-06-08, user-approved
+framing); enforced only when the slice lands with ALL of: the GREEN plan_loop_step 5th-input totality gate
+(32-case, no wildcard); the certified-run continuation fence (the 8 fail-closed conditions in the statement,
+reusing the DC-NODE-18 SingleProducerFenceReason); replay-equivalence over a chain that includes successors
+forged AFTER a feed EOF (T-REC-03 two-clean-runs byte-identical + T-REC-05 kill/warm-start byte-identical);
+the verbatim VenueRole::Unknown halt-on-feed-end default preserved; and a committed sustained-past-k live
+transcript (CE-AF-6b: > k Ade blocks settle into the relay's ImmutableDB across >= 1 follow-link EOF,
+warm-start replay byte-identical; operator-gated on the rung1-auto C2-LOCAL harness). RED/GREEN-only, NO BLUE
+change (mirrors DC-NODE-18). DESIGN RESOLUTIONS (2026-06-08): OQ-19-2 no numeric cap, fence to the certified
+single-producer run; OQ-19-5 NEW rule (not a DC-NODE-05 mutation); OQ-19-6 explicit GREEN 5th planner input
+(no RED LoopState re-derivation). WORDING: scoped to a LoopState::Ending caused SOLELY by structural feed EOF
+-- a fatal source failure exits via Err/fail-fast and is never continued. AT CLOSE: strengthened_in +=
+DC-NODE-19 on DC-NODE-05 (feed work still drains before forge; no direct durable tip advance), CN-NODE-02
+(lifecycle owner = explicit operator shutdown / fatal error, not accidental feed EOF), T-REC-03 + T-REC-05
+(replay equivalence now covers post-feed-end forged successors), and DC-NODE-18 (the proven extend state is
+now sustained); DC-CONS-03 explicitly untouched. OQ-KA (follow-link keep-alive/reconnect) stays a separate
+non-blocking cousin. OPEN at cluster-doc: OQ-19-1 (the cancellation-safe Idle wait under a dead feed -- a
+clock-tick wakeup so the forge cadence is not starved).
+"""
