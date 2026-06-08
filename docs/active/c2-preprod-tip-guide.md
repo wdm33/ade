@@ -411,7 +411,7 @@ cross-period KES is already covered by N-AC / N-P).
 
 | Rung | Venue | Failure class isolated | Likely new work | "Done" = |
 |---|---|---|---|---|
-| **1** | C2-LOCAL, single-producer (the existing CE-A5 harness) | operational stability · **settlement beyond k** · **epoch transition** · restart durability | DC-NODE-19 single-producer extend-mode loop continuation after follow EOF; later epoch-transition slice if exposed | several Ade blocks settle `>k` into the relay's ImmutableDB · **1 epoch crossed** with adoption continuing · survives a **mid-run kill→warm-start** |
+| **1** | C2-LOCAL, single-producer (the existing CE-A5 harness) | operational stability · **settlement beyond k** · **epoch transition** · restart durability | DC-NODE-19 (loop-continuation, hermetic) → **DC-NODE-20/21** (forge base = local `ChainDb::tip`; cert evidence-only) for the live sustained leg; later epoch-transition slice if exposed | several Ade blocks settle `>k` into the relay's ImmutableDB · **1 epoch crossed** with adoption continuing · survives a **mid-run kill→warm-start** |
 | **2** | C2-LOCAL, multi-producer (un-freeze a 2nd pool so it competes) | **fork-choice / rollback** — DC-CONS-03, never exercised live | a live fork-choice cluster (**real** new work) | Ade selects the best chain across a real fork **and** recovers from losing one |
 | **3** | preprod | real network · stake · load · adversaries | SPO registration + ~2-epoch stake gate + operator wiring | a registered Ade SPO's block accepted on preprod → `Ba02Manifest` (flips RO-LIVE-01 / CN-CONS-06 live half) |
 
@@ -458,6 +458,32 @@ loop-continuation remainder is **DC-NODE-19**.
 > (`forge_tick_skipped: unknown_disconnected`). Sustained production past `k`, relay
 > ImmutableDB settlement, follow-link/loop continuation after EOF, restart during sustained
 > extension, and epoch crossing remain deferred to DC-NODE-19 / follow-up rung-1 liveness work.
+
+> **Update — DC-NODE-19 hermetic core done; LIVE pivoted to DC-NODE-20/21 (2026-06-08):**
+> DC-NODE-19 (continue-past-EOF in the extend state) hermetic core S1–S3 is complete (origin/main
+> `a65e2039`). Running the rung-1 live pass to close the sustained-past-k leg surfaced a deeper
+> defect: at σ=0.5 Ade forged its first block live and the relay adopted it, but Ade then returned
+> `no_tip_available` every subsequent tick and stalled at one block. Root cause: the `proceed_to_forge`
+> gate required `durable_servable_tip == followed_peer_tip`, which fails the instant Ade self-admits a
+> block the non-producing relay does not re-announce; the only escape (cert-promotion into extend mode)
+> raced and lost to the follow-link EOF. **The operator adoption certificate had leaked from EVIDENCE
+> into forge-loop AUTHORITY** — a normal producer extends its own local selected durable ChainDB tip.
+>
+> **Correction — cluster PHASE4-N-AH (authority bundle `b261589d`):** DC-NODE-20 = in a rung-1
+> single-producer venue, after Ade self-admits a valid forged block via `pump_block` onto its local
+> durable ChainDB spine, the next forge base is the local selected durable tip (`ChainDb::tip`), NOT
+> `followed_peer_tip` and NOT the cert; fenced (single-producer · no competing peer block observed ·
+> relay non-producing · admitted via pump_block · contiguous servable spine · no fork-choice required),
+> fail-closed. DC-NODE-21 = the adoption cert is **rung-1 evidence-only** — the harness may still WRITE
+> it for the transcript/bounty bundle, but the node MUST NEVER READ it for forge authority (and never
+> in multi-producer/preprod/production). DC-NODE-15 stays the initial catch-up gate; DC-CONS-03
+> (fork-choice) is the rung-2 successor, untouched.
+>
+> So the rung-1 **sustained-past-k / settlement-beyond-k live leg (§7b rung 1) re-homes onto the
+> DC-NODE-20 path** (off the cert promotion). PHASE4-N-AG is hermetic-core-complete; its live CE is
+> superseded/re-homed here; DC-NODE-19 remains declared/partial until exercised on the local-tip
+> authority path. The cert is scaffolding, not architecture: it must be removed/replaced by node-local
+> selected-chain / fork-choice authority before rung 2 / preprod.
 
 ---
 
