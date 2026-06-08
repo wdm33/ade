@@ -6807,3 +6807,94 @@ now sustained); DC-CONS-03 explicitly untouched. OQ-KA (follow-link keep-alive/r
 non-blocking cousin. OPEN at cluster-doc: OQ-19-1 (the cancellation-safe Idle wait under a dead feed -- a
 clock-tick wakeup so the forge cadence is not starved).
 """
+
+[[rules]]
+id = "DC-NODE-20"
+tier = "derived"
+statement = """
+Local selected durable chain forge-base authority (rung-1 single-producer). In a declared rung-1
+single-producer venue, after Ade self-admits a valid forged block through pump_block (DC-NODE-12)
+onto its local durable ChainDB spine, the next forge base is Ade's LOCAL SELECTED DURABLE TIP -- the
+head of its own admitted ChainDB spine (ChainDb::tip) -- NOT followed_peer_tip and NOT an operator
+adoption certificate. This RETIRES, as forge authority, the upstream durable_servable_tip ==
+followed_peer_tip re-check (which fired NoTipAvailable on every tick after Ade self-admitted a block
+the non-producing relay does not re-announce) and the DC-NODE-18 cert-promotion-into-extend
+mechanism. The local-tip forge base engages ONLY while ALL hold; ANY failure FAILS CLOSED (no silent
+fallback to followed_peer_tip or the cert): (1) VenueRole::SingleProducer; (2) NO competing block has
+been observed on the canonical peer receive stream since initial catch-up / self-admit -- an
+OBSERVED-FEED fence, NOT fork-choice; if observed, fail closed, do NOT resolve (that is rung 2); (3)
+the relay is non-producing; (4) the block was admitted through pump_block (DC-NODE-05 stays the SOLE
+durable admit authority -- DC-NODE-20 only READS the tip pump_block produced; it advances no tip);
+(5) the ChainDB spine is contiguous and servable; (6) no fork-choice decision is required -- in rung
+1 mechanically DERIVED from (2): no competing candidate observed => the local spine head is the
+degenerate selected tip; a competing candidate => fork-choice required => DC-NODE-20 disabled. The
+FirstOwnBlockServed cert-wait intermediate is FOLDED OUT of the authority path: the transition is
+DIRECT -- (CaughtUpToPeerTip + self-admit valid own block via pump_block + the fence) =>
+SingleProducerExtendOwnDurableSpine{current_tip = ChainDb::tip}, with NO cert read. DC-NODE-15
+remains the INITIAL catch-up gate (durable == followed before the first own-forge); DC-NODE-20
+supersedes ONLY the repeated post-self-admit durable == followed re-check. Relay adoption remains an
+EVIDENCE obligation for the transcript/bounty proof (DC-NODE-21), NOT a forge-loop precondition. In
+rung 1 'selected' is DEGENERATE (no competing candidate => local ChainDB head = selected tip); rung 2
+MUST replace this with real fork-choice (DC-CONS-03, untouched here). Preserves DC-NODE-19
+(continue-past-EOF in the extend state, now ENTERED via local self-admit not the cert) and
+T-REC-03/05 (the local-tip forge base derives from the local durable spine alone -- removing the RED
+cert/timing from the authority path makes the post-self-admit forge MORE deterministic /
+replay-equivalent). SCOPE: rung-1 single-producer only; follow-link keep-alive (OQ-KA), real
+fork-choice / multi-producer (rung 2), and preprod are OUT of scope.
+"""
+source = "docs/planning/local-selected-durable-chain-forge-base-invariants.md"
+cross_ref = ["DC-NODE-05", "DC-NODE-12", "DC-NODE-15", "DC-NODE-18", "DC-NODE-19", "DC-NODE-21", "DC-CONS-03", "DC-CONS-23", "T-REC-03", "T-REC-05"]
+code_locus = "CANDIDATE (pending /cluster-plan): crates/ade_node/src/node_lifecycle.rs (the proceed_to_forge gate -- replace the post-self-admit durable_servable_tip == followed_peer_tip re-check + the read_adoption_cert promotion with a local-selected-durable-tip authority derived from ChainDb::tip, fenced); crates/ade_node/src/node_sync.rs (the ForgeMode transition CaughtUpToPeerTip -> SingleProducerExtendOwnDurableSpine becomes DIRECT on self-admit, folding out the cert-gated FirstOwnBlockServed intermediate; the observed-feed competing-block fence). REUSES BLUE ChainDb::tip + pump_block (no new BLUE authority)."
+tests = []
+ci_script = ""
+status = "declared"
+introduced_in = "PHASE4-N-AH"
+strengthened_in = []
+evidence_notes = """
+Motivated by the run-4 live finding (2026-06-08): Ade forged block 11, a real Haskell relay adopted
+it, but Ade returned no_tip_available every subsequent tick because the proceed_to_forge gate
+required durable_servable_tip == followed_peer_tip -- which fails the instant Ade self-admits a block
+the non-producing relay does not re-announce -- and the only escape (cert-promotion into extend mode)
+raced and lost to the follow-link EOF. The cert had leaked from evidence into forge-loop authority.
+DECLARED at /invariants (2026-06-08, user-approved framing). DESIGN RESOLUTIONS: OQ-20-2 fold
+FirstOwnBlockServed (direct self-admit -> extend); OQ-20-1 condition (2) is an observed-feed fence
+over the canonical peer receive stream (GREEN predicate, not fork-choice), condition (6) mechanically
+derived from (2); OQ-20-4 DC-NODE-15 stays the initial catch-up gate. Enforced ONLY when the slice
+lands with: the forge base derived from ChainDb::tip (not followed_peer_tip, not the cert) under the
+6-condition fence; the direct CaughtUpToPeerTip -> extend transition; the observed-feed
+competing-block fail-closed; and replay-equivalence (T-REC-03/05) over the local-tip-derived
+successors. Live re-home of the DC-NODE-19 sustained-past-k proof onto this path. Run-4 logs preserved
+at ~/.cardano-rung1-host/run4-dcnode20-motivation/ (operator scratch, not committed).
+"""
+
+[[rules]]
+id = "DC-NODE-21"
+tier = "derived"
+statement = """
+Adoption certificate is rung-1 evidence-only, never forge authority. The file-based operator adoption
+certificate is a rung-1 RED EVIDENCE-ONLY shim. It MAY prove relay adoption for the transcript /
+bounty bundle, but MUST NEVER control forge-base selection (DC-NODE-20 derives the forge base from
+the local durable ChainDB tip) or any durable authority, and MUST NEVER appear in multi-producer,
+preprod, or production forge paths. It MUST be removed or replaced by node-local selected-chain /
+fork-choice authority (DC-CONS-03) before rung 2 / preprod. Hard removal boundary: the shim exists
+ONLY because Ade does not yet have full multi-producer fork-choice + peer-state lifecycle; it must
+not creep back into later slices as authority. Relay adoption is evidence for the bounty proof, never
+a forge-loop precondition.
+"""
+source = "docs/planning/local-selected-durable-chain-forge-base-invariants.md"
+cross_ref = ["DC-NODE-20", "DC-NODE-18", "DC-NODE-19", "DC-CONS-03"]
+code_locus = "CANDIDATE (pending /cluster-plan): crates/ade_node/src/node_lifecycle.rs (read_adoption_cert demoted to an evidence-only transcript record, REMOVED from the forge-base / proceed_to_forge path); a CI gate asserting the cert is never a forge-base input and never present in multi-producer/preprod/production forge paths."
+tests = []
+ci_script = ""
+status = "declared"
+introduced_in = "PHASE4-N-AH"
+strengthened_in = []
+evidence_notes = """
+DECLARED at /invariants (2026-06-08, user-approved). Separated from DC-NODE-20 (OQ-20-3) because 'cert
+is evidence-only, never authority' is independently enforceable and needs a hard rung-2 removal
+boundary -- folding it into DC-NODE-20 would make it easier for the shim to creep back into later
+slices as authority. Enforced when the slice demotes read_adoption_cert to a transcript-only evidence
+record (off the forge-base path) + a CI gate asserts the cert never feeds forge-base selection and
+never appears in multi-producer/preprod/production. Hard follow-up: replace/remove before rung 2 /
+preprod; the cert can never become chain-selection or durable authority.
+"""
