@@ -5594,4 +5594,173 @@ mod tests {
             "the feed EOF appends NO WAL entry — the only new entry is the forged successor's AdmitBlock"
         );
     }
+
+    // ===== PHASE4-N-AH S3 (DC-NODE-20 ∩ T-REC): replay-equivalence over the no-cert
+    //       local-tip-derived K=2 successor chain =====
+
+    /// Drive a fresh always-leader single-producer extend venue past an ENDED feed for
+    /// K=2 successors on the LOCAL durable spine (forge base = ChainDb::tip), NO cert.
+    /// Mirrors `local_spine_sustains_two_successors_no_cert`; the borrows on `lead`
+    /// release on return so the caller can snapshot the durable surfaces.
+    async fn local_spine_run_two(lead: &mut S2Lead) {
+        let coordinator = s2_coordinator_state();
+        let mut clock = DeterministicClock::new(0, vec![20, 20, 30]);
+        let mut act = ForgeActivation::new(
+            &mut clock,
+            &coordinator,
+            &lead.recovered,
+            &mut lead.shell,
+            lead.pool_id.clone(),
+            ProtocolParameters::default(),
+            ProtocolVersion { major: 9, minor: 0 },
+            0,
+            SlotNo(0),
+            10,
+        );
+        act.declare_single_producer_venue();
+        act.forge_mode = ForgeMode::SingleProducerExtendOwnDurableSpine {
+            adopted_root: lead.block0_tip.clone(),
+            current_tip: lead.block0_tip.clone(),
+        };
+        let mut source = NodeBlockSource::in_memory(vec![]); // ENDED feed
+        let (sd_tx, mut sd_rx) = watch::channel(false);
+        let loop_fut = run_relay_loop(
+            &mut lead.state,
+            &mut source,
+            &lead.chaindb,
+            &mut lead.wal,
+            &lead.era_schedule,
+            &lead.ledger_view,
+            &mut sd_rx,
+            Some(&mut act),
+        );
+        let driver = async {
+            tokio::time::sleep(std::time::Duration::from_millis(300)).await;
+            let _ = sd_tx.send(true);
+        };
+        let (loop_res, _) = tokio::join!(loop_fut, driver);
+        loop_res.expect("loop halts cleanly on shutdown");
+    }
+
+    /// CE-AH-4 (DC-NODE-20 ∩ T-REC-03): two clean runs of the no-cert K=2 local-spine
+    /// forge are byte-identical across ALL FOUR durable surfaces — WAL image, durable
+    /// tip, ledger fingerprint, served chain. The local-tip forge base is a pure
+    /// function of the recovered state + canonical slot schedule (no wall-clock).
+    #[tokio::test]
+    async fn local_spine_two_runs_byte_identical() {
+        let mut a = s2_extend_lead();
+        local_spine_run_two(&mut a).await;
+        let wal_a = a.wal.read_all().expect("wal a");
+        let tip_a = ChainDbServedSource::new(&a.chaindb).tip();
+        let fp_a = ade_ledger::fingerprint::fingerprint(&a.state.receive.ledger);
+        let served_a = served_snapshot(&a.chaindb);
+
+        let mut b = s2_extend_lead();
+        local_spine_run_two(&mut b).await;
+        let wal_b = b.wal.read_all().expect("wal b");
+        let tip_b = ChainDbServedSource::new(&b.chaindb).tip();
+        let fp_b = ade_ledger::fingerprint::fingerprint(&b.state.receive.ledger);
+        let served_b = served_snapshot(&b.chaindb);
+
+        assert_eq!(
+            tip_a.as_ref().map(|t| t.2),
+            Some(2),
+            "K=2 successors forged on the local spine"
+        );
+        assert_eq!(tip_a, tip_b, "durable tip byte-identical across runs");
+        assert_eq!(fp_a, fp_b, "ledger fingerprint byte-identical across runs");
+        assert_eq!(served_a, served_b, "served chain byte-identical across runs");
+        assert_eq!(wal_a, wal_b, "WAL image byte-identical across runs");
+    }
+
+    /// CE-AH-4 (DC-NODE-20 ∩ T-REC-05): the no-cert K=2 local-spine chain recovers via
+    /// `warm_start_recovery` to the SAME durable tip + ledger fingerprint + served chain
+    /// (no ChainBreak across the local-spine forge seam).
+    #[tokio::test]
+    async fn local_spine_kill_warm_start_byte_identical() {
+        let mut lead = s2_extend_lead();
+        local_spine_run_two(&mut lead).await;
+
+        let S2Lead {
+            _dir,
+            chaindb,
+            wal,
+            state,
+            ..
+        } = lead;
+        let chaindb_path = _dir.path().join("chain.db");
+        let wal_dir = _dir.path().join("wal");
+        let pre_tip = ChainDbServedSource::new(&chaindb).tip();
+        let pre_fp = ade_ledger::fingerprint::fingerprint(&state.receive.ledger);
+        let pre_served = served_snapshot(&chaindb);
+        assert_eq!(
+            pre_tip.as_ref().map(|t| t.2),
+            Some(2),
+            "K=2 forged before the kill"
+        );
+        drop(chaindb);
+        drop(wal);
+        drop(state);
+
+        let chaindb2 =
+            PersistentChainDb::open(PersistentChainDbOptions::at(&chaindb_path)).unwrap();
+        let wal2 = FileWalStore::open(&wal_dir).unwrap();
+        let recovered = crate::node_lifecycle::warm_start_recovery(&chaindb2, &wal2)
+            .expect("warm-start forward-replays the local-spine chain without ChainBreak");
+        let post_tip = ChainDbServedSource::new(&chaindb2).tip();
+        let post_fp = ade_ledger::fingerprint::fingerprint(&recovered.ledger);
+        let post_served = served_snapshot(&chaindb2);
+
+        assert_eq!(pre_tip, post_tip, "warm-start recovers the durable tip byte-identically");
+        assert_eq!(pre_fp, post_fp, "warm-start recovers the ledger fingerprint byte-identically");
+        assert_eq!(
+            pre_served, post_served,
+            "warm-start recovers the served chain byte-identically"
+        );
+    }
+
+    /// CE-AH-4 (DC-NODE-20 ∩ DC-NODE-21): a cert FILE present on disk does NOT alter the
+    /// replay surface — the cert-present and no-cert runs produce byte-identical WAL +
+    /// durable tip + ledger fingerprint + served chain, and the cert's (bogus) adopted-
+    /// tip hash never enters any served block body. The cert is absent from replay.
+    #[tokio::test]
+    async fn local_spine_cert_file_absent_from_replay_surface() {
+        // Baseline: no cert file on disk.
+        let mut no_cert = s2_extend_lead();
+        local_spine_run_two(&mut no_cert).await;
+        let wal_no = no_cert.wal.read_all().expect("wal no-cert");
+        let tip_no = ChainDbServedSource::new(&no_cert.chaindb).tip();
+        let fp_no = ade_ledger::fingerprint::fingerprint(&no_cert.state.receive.ledger);
+        let served_no = served_snapshot(&no_cert.chaindb);
+
+        // A cert file present on disk, carrying a DISTINCTIVE bogus adopted-tip hash the
+        // node must never read (DC-NODE-21).
+        let mut with_cert = s2_extend_lead();
+        let bogus_hash_hex = "7e".repeat(32);
+        std::fs::write(
+            with_cert._dir.path().join("cert"),
+            format!("99 9999 {bogus_hash_hex}"),
+        )
+        .unwrap();
+        local_spine_run_two(&mut with_cert).await;
+        let wal_with = with_cert.wal.read_all().expect("wal with-cert");
+        let tip_with = ChainDbServedSource::new(&with_cert.chaindb).tip();
+        let fp_with = ade_ledger::fingerprint::fingerprint(&with_cert.state.receive.ledger);
+        let served_with = served_snapshot(&with_cert.chaindb);
+
+        assert_eq!(tip_no, tip_with, "a cert file present does not change the durable tip");
+        assert_eq!(fp_no, fp_with, "a cert file present does not change the ledger fingerprint");
+        assert_eq!(served_no, served_with, "a cert file present does not change the served chain");
+        assert_eq!(wal_no, wal_with, "a cert file present does not change the WAL image");
+
+        // The bogus cert hash never enters any served block body (the cert is unread).
+        let bogus = [0x7eu8; 32];
+        let leaked = served_with
+            .iter()
+            .any(|(_, body)| body.windows(32).any(|w| w == bogus));
+        assert!(
+            !leaked,
+            "the cert's bogus adopted-tip hash never enters the durable/served bytes"
+        );
+    }
 }

@@ -49,13 +49,13 @@ Each test stands up `s2_extend_lead()` (recovered block-0 spine), declares a sin
 ## 10. Changes Introduced
 - **`local_spine_two_runs_byte_identical`** — two independent runs of the K=2 no-cert local-spine forge (`local_spine_sustains` shape); assert all four surfaces byte-identical across runs and `tip.block_no == 2`.
 - **`local_spine_kill_warm_start_byte_identical`** — one K=2 run, capture pre-kill tip/fp/served, drop the handles (TempDir survives), reopen + `warm_start_recovery`, assert post-recovery tip/fp/served byte-identical (no ChainBreak across the local-spine seam).
-- **`local_spine_cert_file_absent_from_replay_surface`** — run the local-spine forge **with** a cert file present (`s2_cert_for` written) and **without** one; assert the two runs' WAL + tip + fp + served are byte-identical, **and** the cert line's hash bytes do not appear in the WAL image — the cert never enters the replay surface even when on disk.
+- **`local_spine_cert_file_absent_from_replay_surface`** — run the local-spine forge **with** a cert file present (carrying a distinctive **bogus** adopted-tip hash) and **without** one; assert the two runs' WAL + tip + fp + served are byte-identical (the cert file does not change the replay surface), **and** the bogus cert hash never appears in any served block body — the cert never enters the replay surface even when on disk. *(A valid cert references the real parent block, whose hash is legitimately in the WAL; the byte-identity is the load-bearing proof, the bogus-hash containment the secondary check.)*
 - **No production files touched.**
 
 ## 11. Replay, Crash, and Epoch Validation
 - **Replay (two-runs):** `local_spine_two_runs_byte_identical` (new) — joins the existing `continue_past_eof_two_runs_byte_identical`, `extend_own_spine_two_runs_byte_identical`, `recover_follow_two_runs_byte_identical` under T-REC-03.
 - **Crash/warm-start:** `local_spine_kill_warm_start_byte_identical` (new) — joins `continue_past_eof_kill_warm_start_recovers_byte_identical`, `forge_tip_successor_kill_then_warm_start_recovers_block_one` under T-REC-05.
-- **Surface containment:** `local_spine_cert_file_absent_from_replay_surface` (new) — the cert is absent from WAL/durable/served bytes; complements `feed_eof_appends_nothing_to_wal`.
+- **Surface containment:** `local_spine_cert_file_absent_from_replay_surface` (new) — a cert file present (bogus hash) yields a byte-identical replay surface vs no-cert, and the bogus hash never enters a served body; complements `feed_eof_appends_nothing_to_wal`.
 - **Epoch:** not applicable.
 
 ## 12. Mechanical Acceptance Criteria
