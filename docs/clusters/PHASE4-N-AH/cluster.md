@@ -98,11 +98,18 @@ authority.
   `docs/evidence/phase4-n-ah-local-tip-forge.{md,jsonl}` — sustained > k Ade-forged blocks settle
   into the relay's ImmutableDB across ≥ 1 follow-link EOF, forge base derives from local `ChainDb::tip`,
   warm-start byte-identical; rung1-auto C2-LOCAL; verbatim `--mode node`.
-- **CE-AH-7 (close) [/cluster-close]:** `DC-NODE-20` + `DC-NODE-21` flipped declared→enforced
-  (tests + ci_scripts appended); strengthen `DC-NODE-05`/`DC-NODE-12`/`DC-NODE-15`/`DC-NODE-18`/`DC-NODE-19`
-  (`DC-CONS-03` untouched); PHASE4-N-AG superseded/partial-close bookkeeping (hermetic core complete;
-  live CE re-homed; DC-NODE-19 declared/partial); 4 grounding docs refreshed (incl. the CODEMAP+SEAMS
-  deferred from N-AF baseline `f87d0056`).
+- **CE-AH-8 (warm-start re-entry, DC-NODE-22) [S4b]:** in a single-producer venue, after warm-start
+  recovery yields a durable local `ChainDb::tip` above the bootstrap anchor, the node re-enters
+  `SingleProducerExtendOwnDurableSpine{current_tip = ChainDb::tip}` and **resumes forging on the
+  recovered spine without a fresh follow-link catch-up** (hermetic + live run-3); fenced, fails closed
+  to `InitialCatchupRequired`. Found by the S4 run-2 partial — warm-start recovery was clean but
+  forge-resumption stalled in `NoTipAvailable`.
+- **CE-AH-7 (close) [/cluster-close]:** `DC-NODE-20` + `DC-NODE-21` + `DC-NODE-22` flipped
+  declared→enforced (tests + ci_scripts appended); `CN-NODE-04` strengthened (S4a forge-base
+  transcript); strengthen `DC-NODE-05`/`DC-NODE-12`/`DC-NODE-15`/`DC-NODE-18`/`DC-NODE-19` + `T-REC-03`/
+  `T-REC-05` + `CN-NODE-02` (`DC-CONS-03` untouched); PHASE4-N-AG superseded/partial-close bookkeeping
+  (hermetic core complete; live CE re-homed; DC-NODE-19 declared/partial); 4 grounding docs refreshed
+  (incl. the CODEMAP+SEAMS deferred from N-AF baseline `f87d0056`).
 
 ## 6. Expected Slices
 - **S1** `DC-NODE-20` forge-base authority rewire — **one sealed slice** (local `ChainDb::tip` base +
@@ -114,7 +121,12 @@ authority.
 - **S3** replay-equivalence — T-REC-03/05 over the local-tip-derived post-self-admit chain — CE-AH-4.
   Tests over existing BLUE/RED (no production change).
 - **S4** operator-gated live acceptance — re-homed CE-AF-6b on the DC-NODE-20 path — CE-AH-6. RED
-  harness + evidence.
+  harness + evidence. (Run-1 + run-2 partials committed; gated on S4b + run-3.)
+- **S4a** live transcript forge-base evidence (`CN-NODE-04`) — `ForgeBaseSelected` + enriched
+  `ForgeResult` in the closed `--mode node` sched vocabulary, wired to the `--log` JSONL; RED evidence
+  only. (Shipped `7049d813`; validated by run-2.)
+- **S4b** `DC-NODE-22` single-producer warm-start re-entry — derive the extend forge mode from the
+  recovered local durable spine — CE-AH-8. GREEN+RED; BLUE unchanged.
 - **close** — CE-AH-7 via `/cluster-close`.
 
 ## 7. TCB Color Map

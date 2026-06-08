@@ -133,3 +133,26 @@ scratch, not committed).
 pure function of canonical state. DC-NODE-20 *removes* the nondeterministic RED inputs (cert file,
 followed-peer timing) from the authority path — it makes the forge base **more** deterministic /
 replay-equivalent, not less. No new nondeterminism is introduced.
+
+## Addendum — DC-NODE-22 (single-producer warm-start re-entry), from S4 run-2 (2026-06-08)
+
+The S4 live run-2 (`docs/evidence/phase4-n-ah-live-run-2-partial.md`) surfaced the next invariant: the
+DC-NODE-20 forge base is correct on the clean path, but **warm-start re-initializes
+`forge_mode = InitialCatchupRequired`**, requiring a fresh follow-link catch-up; when the follow link
+EOFs first, the node stalls in `NoTipAvailable` — re-introducing through restart the follow-link
+dependency DC-NODE-20 retired (96 `forge_tick_considered` / 0 `forge_attempted` post-restart).
+
+- **Must always be true:** in a declared rung-1 single-producer venue, if warm-start recovery yields a
+  durable local `ChainDb::tip` **above the bootstrap anchor** (own-forged continuation), `forge_mode`
+  re-enters `SingleProducerExtendOwnDurableSpine{current_tip = ChainDb::tip}` under the DC-NODE-20
+  fence, **without** a fresh followed-peer catch-up — the warm-start analog of DC-NODE-20.
+- **Must never be possible:** re-entering extend at the bare anchor / non-single-producer / on a
+  recovery error / with a competing peer block / with a cert — all FAIL CLOSED to
+  `InitialCatchupRequired`. NOT a general restart rule for multi-producer / preprod (DC-CONS-03
+  untouched).
+- **Replay-equivalent:** warm-start recovery of the durable tip / served chain is unchanged
+  (T-REC-05); DC-NODE-22 only sets the post-recovery forge mode. `pump_block` stays the sole durable
+  admit.
+- **TCB:** GREEN predicate (recovered tip + anchor + venue facts) + RED `node_lifecycle` warm-start
+  arm; BLUE unchanged. Registry: **DC-NODE-22** (declared); strengthens DC-NODE-20/19 + T-REC-05 +
+  CN-NODE-02.

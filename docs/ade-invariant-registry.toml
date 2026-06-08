@@ -6898,3 +6898,56 @@ record (off the forge-base path) + a CI gate asserts the cert never feeds forge-
 never appears in multi-producer/preprod/production. Hard follow-up: replace/remove before rung 2 /
 preprod; the cert can never become chain-selection or durable authority.
 """
+
+[[rules]]
+id = "DC-NODE-22"
+tier = "derived"
+statement = """
+Single-producer warm-start re-entry derives forge mode from the recovered local durable spine. In a
+declared rung-1 single-producer venue, if warm-start recovery yields a durable local ChainDB tip
+ABOVE the recovered bootstrap anchor (the recovered tip proves an own-forged continuation of Ade's
+own spine, not the bare imported anchor), forge mode MUST re-enter
+SingleProducerExtendOwnDurableSpine{current_tip = ChainDb::tip} under the DC-NODE-20 fence, WITHOUT
+requiring a fresh followed-peer catch-up. This is the warm-start analog of DC-NODE-20: on the clean
+live path, self-admitting an own block makes ChainDb::tip the forge base and enters the extend state;
+on warm-start, the recovered durable own spine ALREADY makes ChainDb::tip the forge base, so re-entry
+into the extend state is immediate. Without it, warm-start re-initializes forge_mode =
+InitialCatchupRequired, which needs a fresh follow-link catch-up; if the follow link EOFs first the
+node stalls in NoTipAvailable forever -- re-introducing, through restart, the exact follow-link
+dependency DC-NODE-20 retired. The re-entry engages ONLY while ALL hold; ANY failure FAILS CLOSED
+(fall back to InitialCatchupRequired, never silently forge): (1) VenueRole::SingleProducer; (2) after
+a SUCCESSFUL warm-start recovery (no ChainBreak / recovery error); (3) the recovered ChainDB spine is
+contiguous and servable; (4) the recovered tip is BEYOND the original recovered bootstrap anchor /
+proves own-forged continuation (at the bare anchor, use the normal catch-up flow); (5) NO competing
+peer block observed on the canonical receive stream (the DC-NODE-20 observed-feed fence); (6) the
+relay is a non-producing venue; (7) no cert is read (DC-NODE-21); (8) no fork-choice decision is
+required; (9) pump_block remains the SOLE durable admit authority (DC-NODE-05/12 -- this rule only
+sets the forge MODE / reads the recovered tip; it admits nothing). SCOPE: rung-1 single-producer
+ONLY. NOT a general restart rule for multi-producer or preprod -- those require real fork-choice +
+peer-state lifecycle (DC-CONS-03, untouched).
+"""
+source = "docs/planning/local-selected-durable-chain-forge-base-invariants.md"
+cross_ref = ["DC-NODE-20", "DC-NODE-19", "DC-NODE-15", "DC-NODE-12", "DC-NODE-05", "T-REC-05", "CN-NODE-02", "DC-CONS-03"]
+code_locus = "CANDIDATE (pending S4b): crates/ade_node/src/node_lifecycle.rs -- the warm-start arm of run_node_lifecycle_inner: after warm_start_recovery + declare_single_producer_venue, derive forge_mode = SingleProducerExtendOwnDurableSpine{current_tip = recovered ChainDb::tip} when venue_role == SingleProducer AND the recovered tip is above the bootstrap anchor / own-spine threshold, fenced as in the statement. REUSES the DC-NODE-20 fence + ChainDb::tip + pump_block (no new BLUE authority)."
+tests = []
+ci_script = ""
+status = "declared"
+introduced_in = "PHASE4-N-AH"
+strengthened_in = []
+evidence_notes = """
+DECLARED 2026-06-08 from the PHASE4-N-AH S4 live run-2 (docs/evidence/phase4-n-ah-live-run-2-partial.{md,jsonl}):
+run-2 proved the DC-NODE-20 forge-base transcript is now DIRECT (249 forge_base_selected, all
+local_chaindb_tip + cert_path_present=false; 10 self_admit_via_pump_block) and warm-start RECOVERY is
+clean (ws_err=0, no ChainBreak, relay 18->20 no rollback), BUT post-restart the node emitted 96
+forge_tick_considered / 0 forge_attempted / 0 forge_base_selected (all NoTipAvailable): warm-start
+re-initialized forge_mode=InitialCatchupRequired and the follow link EOF'd before re-catch-up. The
+live gate found the next invariant. Enforced when S4b lands with: the warm-start ForgeActivation
+initialization deriving forge_mode = SingleProducerExtendOwnDurableSpine{current_tip = recovered
+ChainDb::tip} for a single-producer venue with a recovered own-spine tip above the anchor, fenced as
+above; a hermetic test proving post-warm-start forge resumption on ChainDb::tip with NO follow-link
+catch-up; a live run-3 transcript showing post-restart forge_base_selected resuming. Strengthens
+DC-NODE-20 (forge base = ChainDb::tip on warm-start too), DC-NODE-19 (continue-past-EOF survives
+restart), T-REC-05 (recovery now RESUMES forging, not just recovers state), CN-NODE-02 (the run-loop
+warm-start wiring). Does NOT alter DC-CONS-03 (rung-2 fork-choice). SCOPE: rung-1 single-producer
+only; never multi-producer / preprod.
+"""
