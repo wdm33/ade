@@ -10,8 +10,13 @@ set -euo pipefail
 # Asserts:
 #  (a) the ForgeTick `selected_tip` has NO `recovered.tip` fallback — the forge
 #      base is `ChainDb::tip()` (the durable servable tip), never recovered.tip;
-#  (b) the forge fires only when durable_servable_tip == followed_peer_tip
-#      (hash AND block_no) — the GREEN classifier compares BOTH fields;
+#  (b) the DC-NODE-15 initial-catch-up gate is invoked via the call chain
+#      run_relay_loop_with_sched -> dc_node_15_refusal -> forge_followed_tip_admission
+#      (BOTH links verified), and the classifier requires durable_servable_tip ==
+#      followed_peer_tip on BOTH hash AND block_no. This is the PHASE4-N-AH /
+#      DC-NODE-20 phase-split: INITIAL catch-up requires the followed echo (here),
+#      while the POST-self-admit forge base is the local ChainDb::tip — part (a) —
+#      with NO followed re-check;
 #  (c) NotCaughtUp is a TYPED structured refusal carrying
 #      { local_servable_tip, followed_peer_tip, reason } — not a log-string-only
 #      path;
@@ -81,15 +86,35 @@ if grep -qE 'recovered\.tip\.clone\(\)' <<<"$LOOP_FN"; then
     fail "run_relay_loop_with_sched still clones recovered.tip (the removed forge-base fallback)"
 fi
 
-# The gate classifier must be CALLED in the loop, BEFORE the single fenced forge.
-ADM_LINE="$(grep -nE 'forge_followed_tip_admission\(' <<<"$LOOP_FN" | head -1 | cut -d: -f1)"
+# DC-NODE-15 initial-catch-up gate — the call chain, BOTH links verified.
+# PHASE4-N-AH / DC-NODE-20 moved the followed-tip admissibility check out of the
+# loop body into the named `dc_node_15_refusal` helper. This encodes the PHASE-SPLIT:
+# the INITIAL catch-up still requires durable == followed (the helper -> classifier),
+# while the POST-self-admit forge base is the local ChainDb::tip (part (a)) with NO
+# followed re-check. Verify BOTH links of the chain — not "the function exists
+# somewhere in the repo":
+#   run_relay_loop_with_sched -> dc_node_15_refusal -> forge_followed_tip_admission
+#
+# (b1) the dc_node_15_refusal helper invokes the DC-NODE-15 classifier.
+REFUSAL_FN="$(awk '
+    /fn dc_node_15_refusal/ { capture=1 }
+    capture { print }
+    capture && /^}/ { exit }
+' <<<"$LIFE_PROD")"
+if [[ -z "$REFUSAL_FN" ]]; then
+    fail "dc_node_15_refusal helper not found in $LIFECYCLE (the DC-NODE-15 initial-catch-up refusal path moved/renamed?)"
+elif ! grep -qE 'forge_followed_tip_admission\(' <<<"$REFUSAL_FN"; then
+    fail "dc_node_15_refusal does not call forge_followed_tip_admission (the DC-NODE-15 caught-up classifier)"
+fi
+# (b2) the loop invokes the dc_node_15_refusal helper, BEFORE the single fenced forge.
+ADM_LINE="$(grep -nE 'dc_node_15_refusal\(' <<<"$LOOP_FN" | head -1 | cut -d: -f1)"
 FORGE_LINE="$(grep -nE 'forge_one_from_recovered\(' <<<"$LOOP_FN" | head -1 | cut -d: -f1)"
 if [[ -z "$ADM_LINE" ]]; then
-    fail "run_relay_loop_with_sched does not call the forge_followed_tip_admission gate"
+    fail "run_relay_loop_with_sched does not call the dc_node_15_refusal helper (the initial catch-up / refusal path)"
 elif [[ -z "$FORGE_LINE" ]]; then
     fail "run_relay_loop_with_sched no longer calls forge_one_from_recovered (unexpected)"
 elif (( ADM_LINE >= FORGE_LINE )); then
-    fail "forge_followed_tip_admission (line $ADM_LINE) must precede forge_one_from_recovered (line $FORGE_LINE) — admissibility is decided BEFORE the forge"
+    fail "dc_node_15_refusal (line $ADM_LINE) must precede forge_one_from_recovered (line $FORGE_LINE) — initial-catch-up admissibility is decided BEFORE the forge"
 fi
 
 # --- (b) the classifier compares hash AND block_no -------------------------
@@ -125,12 +150,15 @@ else
         fi
     done
 fi
-# The loop must CONSTRUCT the typed refusal (carrying the tips), not a log line.
-if ! grep -qE 'ForgeRefused::NotCaughtUp' <<<"$LOOP_FN"; then
-    fail "run_relay_loop_with_sched does not construct a typed ForgeRefused::NotCaughtUp on the not-caught-up path"
+# The typed refusal must be CONSTRUCTED (carrying the tips) in the dc_node_15_refusal
+# helper, and RECORDED into the typed last_forge_refused surface BY THE LOOP — never a
+# log-only line. (PHASE4-N-AH / DC-NODE-20 moved the construction into the helper, which
+# returns Option<ForgeRefused>; the loop records the helper's returned refusal.)
+if ! grep -qE 'ForgeRefused::NotCaughtUp' <<<"$REFUSAL_FN"; then
+    fail "dc_node_15_refusal does not construct a typed ForgeRefused::NotCaughtUp on the not-caught-up path"
 fi
 if ! grep -qE 'last_forge_refused *= *Some' <<<"$LOOP_FN"; then
-    fail "the not-caught-up refusal is not recorded into the typed last_forge_refused surface (it must not be a log-only path)"
+    fail "the not-caught-up refusal is not recorded into the typed last_forge_refused surface by the loop (it must not be a log-only path)"
 fi
 
 # --- (d) the peer-tip signal never reaches a chain selector -----------------
@@ -146,6 +174,6 @@ for tok in 'select_best_chain' 'chain_selector' 'fork_choice'; do
 done
 
 if (( FAILED == 0 )); then
-    echo "OK (forge-followed-tip admission): selected_tip is the durable ChainDb::tip (no recovered.tip fallback); forge gated on durable==followed (hash AND block_no) BEFORE the forge; NotCaughtUp is a typed refusal carrying { local_servable_tip, followed_peer_tip, reason }; no chain selector on the peer-tip path (DC-NODE-15 / DC-CONS-24)"
+    echo "OK (forge-followed-tip admission): selected_tip is the durable ChainDb::tip (no recovered.tip fallback — DC-NODE-20 post-self-admit local-tip); the DC-NODE-15 initial-catch-up gate is invoked via run_relay_loop_with_sched -> dc_node_15_refusal -> forge_followed_tip_admission BEFORE the forge, gated on durable==followed (hash AND block_no); NotCaughtUp is a typed refusal carrying { local_servable_tip, followed_peer_tip, reason }; no chain selector on the peer-tip path (DC-NODE-15 / DC-NODE-20 phase-split / DC-CONS-24)"
 fi
 exit $FAILED
