@@ -6845,7 +6845,7 @@ fork-choice / multi-producer (rung 2), and preprod are OUT of scope.
 source = "docs/planning/local-selected-durable-chain-forge-base-invariants.md"
 cross_ref = ["DC-NODE-05", "DC-NODE-12", "DC-NODE-15", "DC-NODE-18", "DC-NODE-19", "DC-NODE-21", "DC-CONS-03", "DC-CONS-23", "T-REC-03", "T-REC-05"]
 code_locus = "CANDIDATE (pending /cluster-plan): crates/ade_node/src/node_lifecycle.rs (the proceed_to_forge gate -- replace the post-self-admit durable_servable_tip == followed_peer_tip re-check + the read_adoption_cert promotion with a local-selected-durable-tip authority derived from ChainDb::tip, fenced); crates/ade_node/src/node_sync.rs (the ForgeMode transition CaughtUpToPeerTip -> SingleProducerExtendOwnDurableSpine becomes DIRECT on self-admit, folding out the cert-gated FirstOwnBlockServed intermediate; the observed-feed competing-block fence). REUSES BLUE ChainDb::tip + pump_block (no new BLUE authority)."
-tests = ["caughtup_self_admit_enters_extend_directly_no_cert", "post_self_admit_forges_on_local_tip_durable_ne_followed_no_cert", "local_spine_sustains_two_successors_no_cert", "local_spine_two_runs_byte_identical"]
+tests = ["caughtup_self_admit_enters_extend_directly_no_cert", "forge_base_selected_transcript_witnesses_local_tip", "local_spine_sustains_two_successors_no_cert", "local_spine_two_runs_byte_identical"]
 ci_script = "ci/ci_check_local_durable_forge_base.sh, ci/ci_check_forge_followed_tip_admission.sh"
 status = "enforced"
 introduced_in = "PHASE4-N-AH"
@@ -6884,7 +6884,7 @@ a forge-loop precondition.
 source = "docs/planning/local-selected-durable-chain-forge-base-invariants.md"
 cross_ref = ["DC-NODE-20", "DC-NODE-18", "DC-NODE-19", "DC-CONS-03"]
 code_locus = "CANDIDATE (pending /cluster-plan): crates/ade_node/src/node_lifecycle.rs (read_adoption_cert demoted to an evidence-only transcript record, REMOVED from the forge-base / proceed_to_forge path); a CI gate asserting the cert is never a forge-base input and never present in multi-producer/preprod/production forge paths."
-tests = ["caughtup_self_admit_enters_extend_directly_no_cert", "post_self_admit_forges_on_local_tip_durable_ne_followed_no_cert", "local_spine_cert_file_absent_from_replay_surface"]
+tests = ["caughtup_self_admit_enters_extend_directly_no_cert", "forge_base_selected_transcript_witnesses_local_tip", "local_spine_cert_file_absent_from_replay_surface"]
 ci_script = "ci/ci_check_cert_evidence_only.sh, ci/ci_check_node_path_fidelity.sh"
 status = "enforced"
 introduced_in = "PHASE4-N-AH"

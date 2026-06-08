@@ -3,102 +3,141 @@
 > **Status:** Living architectural document. Regenerated; not hand-edited.
 > Per-project instance of `~/.claude/methodology/templates/seams.md`.
 
-> 11 crates, **458 canonical types**, **142 CI checks** at HEAD (`6363683e`, PHASE4-N-AE.F — receive idempotency at the durable-admit chokepoint: a hash-exact already-have no-op in `pump_block` that survives the post-adoption echo, `DC-NODE-16`).
-> Reads the CODEMAP (`docs/ade-CODEMAP.md` — **458 canonical types / 141 CI / 340 rules**, pinned at `a76672b9`,
-> the PHASE4-N-AE close) for the module list + TCB colors, and the invariant registry
-> (`docs/ade-invariant-registry.toml` — **341 entries** at HEAD `6363683e`: 209 enforced / 20 partial / 112 declared)
-> for the rule IDs that gate each closed surface. **Count reconciliation (load-bearing — read honestly): this SEAMS
-> and the registry AGREE at HEAD (458 / 142 / 341); the on-disk CODEMAP LAGS at `a76672b9` (458 / 141 / 340) because
-> AE.F is a hygiene/correctness follow-on that adds NO crate, NO module, NO canonical type, and NO TCB-color change —
-> the module inventory + colors SEAMS reads from CODEMAP are unaffected, so CODEMAP was not regenerated (refresh-on-next-cluster
-> item, not a discipline gap).** N-AE.F added **no new crate, no new module, and no TCB color change**: the gate lives
-> inside the EXISTING inventoried RED module `ade_runtime::forward_sync::pump` (`pump_block`); there is **ZERO BLUE diff**
-> (the additive `DecodedBlock.prev_hash` field was the N-AE BLUE change, already on disk; AE.F touches no BLUE file).
-> **TCB-color note (carried from the N-AE close, per CODEMAP, still accurate):** the chain-sync server change
-> (`DC-PROTO-10`, `crates/ade_network/src/chain_sync/server.rs`) is **BLUE** — `chain_sync/` is a BLUE `core_paths`
-> submodule and the file carries the BLUE banner; the forge-admissibility classifier is GREEN-by-function inside RED
-> `ade_node::node_sync`; the serve projection + node wiring + the AE.F idempotency gate are RED.
-> **N-AE.F opened NO new ingress surface, NO new registry (closed or extensible), NO new version-gated contract,
-> NO new closed enum, and NO new plugin/extension point.** It adds a single deterministic guard INSIDE the existing
-> RED durable-admit chokepoint `pump_block`: immediately after `decode_block` and BEFORE the BLUE chokepoint reducer,
-> it queries `db.get_block_by_hash(&decoded.block_hash)` and, if `Some(stored)` AND `stored.slot == decoded.slot`,
-> returns `Ok(None)` (an idempotent no-op — no reducer step, no WAL append, no tip change). It mints **+1 rule**
-> (`DC-NODE-16`, enforced) + **+1 CI gate** (`ci_check_receive_idempotency.sh`). The gate is a plain conditional +
-> early return over the already-closed `ChainDb` membership query — **NOT** a new closed enum, **NOT** a new attach
-> point: a DIFFERENT block (different hash) at/before the last-applied slot still falls through to the UNCHANGED BLUE
-> header authority and fails closed (`SlotBeforeLastApplied`), and `pump_block` stays the sole durable tip authority.
-> **SEAMS is therefore MATERIALLY UNCHANGED from the N-AE pin — AE.F adds NO new seam.** This refresh re-pins
-> HEAD/counts and records the single chokepoint-guard tightening against the seam it touches (§2 the forged-block /
-> received-block durable-admit domain; §5 +1 CI gate, 141 → 142; §6 the new RED idempotency-chokepoint prohibition;
-> §7 examined for a candidate seam and NONE found). The N-AE through G-A history below is carried unchanged.
+> 11 crates, **458 canonical types**, **148 CI checks** at HEAD (`5858288e`, PHASE4-N-AH — local selected durable chain forge-base authority: after Ade self-admits a forged block through `pump_block`, the next forge base is its OWN local durable tip (`ChainDb::tip`), NOT a followed peer tip and NOT an adoption cert; the cert is REMOVED — `DC-NODE-20` / `DC-NODE-21` / `DC-NODE-22`).
+> Reads the CODEMAP (`docs/ade-CODEMAP.md` — **458 canonical types / 148 CI / 347 rules**, regenerated at `5858288e`,
+> the PHASE4-N-AH close) for the module list + TCB colors, and the invariant registry
+> (`docs/ade-invariant-registry.toml` — **347 entries** at HEAD `5858288e`: 213 enforced / 20 partial / 114 declared)
+> for the rule IDs that gate each closed surface. **Count reconciliation (load-bearing — read honestly): this SEAMS,
+> the on-disk CODEMAP, and the registry all AGREE at HEAD `5858288e` (458 / 148 / 347).** The whole
+> `f87d0056..HEAD` span (PHASE4-N-AF + N-AG + N-AH) is **GREEN/RED-only — ZERO BLUE diff, ZERO new canonical type**:
+> six source files changed and **none is in the BLUE `core_paths`** — GREEN `ade_node::{node_sync, run_loop_planner,
+> live_log/sched_event, live_log/sched_writer}`, RED `ade_node::{node_lifecycle, cli}`, and RED
+> `ade_runtime::bootstrap`. No new crate, no new module, no TCB-color change.
+> **TCB-color note (per CODEMAP, still accurate):** `node_sync` + `node_lifecycle` are **RED** (they drive the apply
+> path + own the persistent-store reads + the forge wrap); their forge-decision fns
+> (`forge_mode_after_admit` / `warm_start_forge_mode` / `single_producer_forge_decision` / `venue_policy` /
+> `forge_followed_tip_admission`) are **GREEN-by-function** (pure / total / deterministic) inside the RED host;
+> `run_loop_planner` + `live_log::{sched_event, sched_writer}` are GREEN-by-content; `ade_runtime::bootstrap` is RED.
 >
-> ### PHASE4-N-AE.F (`6363683e`) — receive idempotency at the durable-admit chokepoint (`DC-NODE-16`)
+> **What this span did to the seam surface (the PHASE4-N-AH cluster close also pays the SEAMS debt deferred since
+> the PHASE4-N-AF baseline `f87d0056`).** Three closures, all on the `--mode node` single-producer (rung-1) forge
+> spine. **No new ingress surface, no new extensible / plugin / negotiated registry, no new version-gated contract,
+> no new BLUE authority.** The span ADDED four closed (version-gated / frozen — NOT openly extensible) surfaces, and
+> REMOVED two (a hard `DC-NODE-21` boundary — they must not creep back). It re-homed the forge-base AUTHORITY from
+> the followed-peer-tip / cert path onto the local durable `ChainDb::tip` under a deterministic fence, leaving
+> `pump_block` the sole durable tip-advance authority and `DC-CONS-03` (the frozen rung-2 Praos fork-choice
+> contract) UNTOUCHED.
+>
+> ### PHASE4-N-AH cluster close (`5858288e`) — local selected durable chain forge-base authority + cert evidence-only + single-producer warm-start re-entry (`DC-NODE-20` / `DC-NODE-21` / `DC-NODE-22`); folds in N-AG + N-AF
 
 >
-> **This regeneration is a single-slice follow-on refresh, applied directly to the on-disk SEAMS.** The prior
-> on-disk SEAMS was pinned at the PHASE4-N-AE close (`a76672b9` / **458** canonical types / **141** CI / **340**
-> rules). It is brought current to HEAD `6363683e` (the *AE.F receive idempotency* commit — **458** canonical types
-> / **142** CI / **341** rules). It folds in **PHASE4-N-AE.F** — the post-CE-A5 echo fix. After the real
-> cardano-node 11.0.1 relay `AddedToCurrentChain` Ade's forged block 17 (the CE-A5 manifest, venue c2ae18), the
-> relay re-announced that block BACK to Ade over Ade's follow link; the BLUE header authority correctly rejected it
-> as `SlotBeforeLastApplied { last: 421, attempted: 421 }`, terminating the continuous run (exit 43) AFTER
-> adoption. AE.F makes Ade no-op that echo so a long-running C2-LOCAL / preprod relay survives its own served tip
-> coming back.
+> **This regeneration is a cluster-close refresh covering THREE clusters, applied directly to the on-disk SEAMS.**
+> The prior on-disk SEAMS was pinned at the PHASE4-N-AE.F follow-on (`6363683e` / **458** canonical types / **142**
+> CI / **341** rules). It is brought current to HEAD `5858288e` (the PHASE4-N-AH close — **458** canonical types /
+> **148** CI / **347** rules) and pays the SEAMS debt deferred at the N-AF close (the N-AF `/head-deltas` recorded
+> "CODEMAP/SEAMS refresh deferred this close … the next cluster refresh must include baseline `f87d0056`"). It folds
+> in three GREEN/RED-only clusters — **N-AF** (single-producer extend-own-durable-spine, `DC-NODE-18`), **N-AG**
+> (single-producer loop-continuation-after-feed-EOF, `DC-NODE-19`), and **N-AH** (local selected durable chain
+> forge-base authority + cert evidence-only + single-producer warm-start re-entry, `DC-NODE-20`/`21`/`22`).
 >
-> **N-AE.F opened NO new seam.** The `a76672b9..6363683e` span touches **ONE source file — RED, already inventoried,
-> with ZERO new `struct`/`enum`:** `crates/ade_runtime/src/forward_sync/pump.rs` (the RED durable-admit chokepoint
-> `pump_block`, which already performs ChainDb/WAL I/O). **No new crate, no new module, no new registry file, no
-> closed-enum addition, no version-gated contract bump, and NO BLUE diff.** The seam-relevant change — recorded
-> under §2 (the forged-block / received-block durable-admit domain gains an idempotent fast-path BEFORE the BLUE
-> reducer; the data-only/authoritative split is unchanged — the guard is a deterministic durable-store read, not a
-> new authority), §5 (+1 CI gate, 141 → 142), §6 (the new RED idempotency-chokepoint prohibition), and §7 (NO new
-> candidate seam) — is:
+> **The forge-base AUTHORITY moved (the load-bearing structural change).** Through N-AE the `--mode node` forge base
+> on the recovered/following path was the *followed peer tip* (`DC-NODE-15`: forge iff `durable_servable_tip ==
+> followed_peer_tip`). N-AF added a single-producer escape (forge on Ade's OWN adopted durable spine after an
+> explicit RED venue-adoption **certificate** matched by chain-point identity — `DC-NODE-18`; the cert was
+> admissibility-only, never persisted). **N-AH REPLACED that authority entirely:** after Ade self-admits a valid
+> forged block through `pump_block` onto its local durable ChainDB spine, the next forge base is Ade's **LOCAL
+> SELECTED DURABLE TIP (`ChainDb::tip`)** — NOT `followed_peer_tip` and NOT a cert (`DC-NODE-20`). The cert is
+> **FULLY REMOVED** from `ade_node` (it is rung-1 RED operator EVIDENCE parsed by the harness OUTSIDE the node —
+> `DC-NODE-21`). `forge_followed_tip_admission` (DC-NODE-15) REMAINS, phase-split, as the INITIAL catch-up gate
+> ONLY (the gate is preserved, not deleted — verified via the `run_relay_loop_with_sched -> dc_node_15_refusal ->
+> forge_followed_tip_admission` call chain). **Where new forge work attaches now: there is NO cert attach point and
+> NO fork-choice attach point on the rung-1 forge path** — the forge base is read from `ChainDb::tip` under the
+> `DC-NODE-20` 6-condition fence, and the next rung (multi-producer, real fork-choice) attaches to the EXISTING
+> frozen BLUE `select_best_chain` / `fork_choice` authority (`DC-CONS-03`, untouched — candidate #8 below).
 >
-> - **The receive-idempotency chokepoint guard (AE.F — `DC-NODE-16`, enforced).** In RED
->   `ade_runtime::forward_sync::pump::pump_block`, immediately after `decode_block` and BEFORE the BLUE chokepoint
->   reducer (`forward_sync_step` / `validate_and_apply_header`), the chokepoint queries
->   `db.get_block_by_hash(&decoded.block_hash)`; if `Some(stored)` AND `stored.slot == decoded.header_input.slot`
->   it returns `Ok(None)` — an **idempotent no-op**: no reducer step, no `WalEntry::AdmitBlock`, no tip change, so
->   the post-state (ledger, chain_dep, ChainDb tip, WAL length) is IDENTICAL and the WAL never records the
->   re-announce (replay-equivalent — `T-REC-05` / `DC-WAL-02` preserved). The decision key is **HASH equality vs
->   the durable store**, never slot alone: a DIFFERENT block (different hash) at/before the last-applied slot
->   returns `None` from `get_block_by_hash`, falls through to the UNCHANGED BLUE header authority, and fails closed
->   (`SlotBeforeLastApplied` / `BlockNoOutOfOrder` — AE-F-INV-2, the fail-closed boundary). No skip-past, no
->   fork-choice (`DC-CONS-03` untouched — AE-F-INV-3). **This is a deterministic conditional + early return over
->   the already-closed `ChainDb` membership query, NOT a new closed enum, NOT a registration surface, NOT a second
->   tip-advance path** — `pump_block` stays the sole durable tip authority (`DC-NODE-12`).
-> - **TCB-placement refinement (load-bearing, vs the AE.F invariants sketch).** The `/invariants` sketch
->   (`docs/planning/phase4-n-ae-f-echo-idempotency-invariants.md` §5) proposed a BLUE `ReceiveOutcome::AlreadyHave`
->   reducer variant. The implementation instead places the gate at the **RED** chokepoint with **NO BLUE change and
->   no new reducer input**: `get_block_by_hash` is a DETERMINISTIC durable-store query (not nondeterminism), so the
->   already-have decision is correctly RED orchestration over a deterministic read, and the BLUE authority is left
->   untouched and still fail-closes every block that reaches it. This is the right FC/IS split — the chokepoint
->   already owns the ChainDb/WAL I/O; the guard adds one read + one early return, no new BLUE canonical type or
->   reducer variant (458 canonical types unchanged).
+> **NEW closed surfaces (closed discriminants — extension is version-gated / frozen, NOT openly extensible):**
+> - **`VenuePolicy`** (GREEN `ade_node::run_loop_planner`, N-AG / `DC-NODE-19`) — the closed 2-variant
+>   `HaltOnFeedEnd | ContinueInSingleProducerExtend`; the explicit GREEN 5th `plan_loop_step` input (the 32-case
+>   total table). Under `ContinueInSingleProducerExtend` a drained, ended feed continues the certified
+>   single-producer forge cadence instead of halting; `HaltOnFeedEnd` reproduces the verbatim prior N-F-D
+>   feed-end-halts behaviour. The `(VenueRole, ForgeMode) -> VenuePolicy` projection (`node_sync::venue_policy`) is
+>   GREEN/content-blind (reads only the role + the forge-mode discriminant, never a tip/hash/slot). §3 Closed.
+> - **`ForgeBaseSource`** (GREEN `ade_node::live_log::sched_event`, N-AH S4a) — the closed **1-variant**
+>   `LocalChaindbTip`. The closed set has NO peer-tip / cert source — those are fail-closed by `DC-NODE-20`/`21`.
+> - **`ForgeModeKind`** (GREEN `live_log::sched_event`, N-AH S4a) — the closed 3-variant Copy-mirror of
+>   `node_sync::ForgeMode` for the diagnostic transcript only (never read by the planner / any authority path).
+> - **`NodeSchedEvent`** (GREEN `live_log::sched_event`, `CN-NODE-04`) — the closed **emit-only** event vocabulary
+>   gained the `ForgeBaseSelected` variant (witnessing the `DC-NODE-20` forge-base decision directly: `forge_mode`,
+>   `forge_base_source`, `forge_base_hash`, `forge_base_block_no`, `followed_peer_tip_{block_no,hash}`,
+>   `cert_path_present`) + an enriched `ForgeResult { outcome, self_admit_via_pump_block, entered_forge_mode }`. An
+>   allow-list test + `ci_check_node_sched_events_emit_only.sh` enforce closedness; it is emit-only and NEVER read by
+>   any authority (`CN-NODE-04` `strengthened_in += "PHASE4-N-AH"`). §3 Closed.
+> - **`ForgeMode`** (GREEN `ade_node::node_sync`, N-AF declared the type / N-AH folded it down) — now a CLOSED
+>   **3-variant** state machine `InitialCatchupRequired -> CaughtUpToPeerTip{peer_tip} ->
+>   SingleProducerExtendOwnDurableSpine{adopted_root, current_tip}`. The N-AF `FirstOwnBlockServed` cert-wait
+>   intermediate was **FOLDED OUT** by `DC-NODE-20`: the transition `CaughtUpToPeerTip ->
+>   SingleProducerExtendOwnDurableSpine` is now **DIRECT on self-admit** (`forge_mode_after_admit`), with NO cert
+>   read. §3 Closed (the forge-mode state-machine row).
 >
-> **Registry → 341 rules** (209 enforced / 20 partial / 112 declared). **ONE NEW** (`introduced_in =
-> "PHASE4-N-AE"`): `DC-NODE-16` (`tier = derived`, `enforced`, `ci_script = ci/ci_check_receive_idempotency.sh`,
-> `cross_ref = [DC-NODE-12, DC-PROTO-09, DC-PROTO-10, DC-CONS-03, T-REC-05, DC-WAL-02]`) — receive idempotency at
-> the durable-admit chokepoint. **No rule strengthened, no rule weakened** by AE.F (the BLUE authority is
-> unchanged; the existing replay/durability rules are preserved, not re-tagged). **NET +1 CI gate (141 → 142):**
-> `ci_check_receive_idempotency.sh` — fences the gate as hash-keyed (`get_block_by_hash(&decoded.block_hash)`,
-> never slot-only), gated-before-the-reducer (the `return Ok(None)` precedes `forward_sync_step`), and
-> slot-consistent (`stored.slot == decoded.header_input.slot`). DC-NODE-16 mints a dedicated gate (it is NOT
-> test-only).
+> **REMOVED surfaces (retired — must not creep back; `DC-NODE-21` hard boundary):**
+> - The **`VenueAdoptionCertificate`** type + the `read_adoption_cert` / `parse_hex32` parsers (N-AH S2 deleted them
+>   from `ade_node`). The cert is now harness-owned RED evidence, parsed OUTSIDE the node, never a forge-base input.
+> - The **`--adoption-cert-path`** CLI flag (`ade_node::cli`). It must NEVER be re-added to the path-fidelity
+>   allow-list — `ci_check_node_path_fidelity.sh` pins the `--mode node` flag set at **29** (the 28-flag set + the
+>   N-AF `--single-producer-venue`; the cert flag is gone — the N-AF +1 venue flag and the N-AH −1 cert flag net the
+>   pinned 29).
 >
-> **Boundary honesty (load-bearing — do NOT soften / do NOT broaden).** N-AE.F makes the receive path no-op a
-> byte-identical already-applied block re-announced by the peer — and **nothing more**. There is **NO BLUE change**
-> (the BLUE header authority `validate_and_apply_header` / `block_validity` is UNCHANGED and still fail-closes every
-> block that reaches it; 458 canonical types unchanged); **NO new closed/extensible registry**; **NO version-gated
-> contract or wire-grammar change**; **NO fork-choice / multi-producer intake** (`DC-CONS-03` untouched — the skip
-> is exact-match idempotency, never chain selection, never a skip-past a gap, never accepting a better chain); the
-> idempotent skip is gated on **HASH equality against the durable store**, never slot alone, so the
-> `SlotBeforeLastApplied` fail-close stays the fence for any DIFFERENT block at/before the last-applied slot
-> (AE-F-INV-2); and there is **NO second durable tip-advance path** — `pump_block` remains the sole durable tip
-> authority (`DC-NODE-12`), and the no-op advances no tip at all. **NO RO-LIVE flip** — surviving the post-adoption
-> echo is a continuous-run precondition for long-running C2-LOCAL / preprod operation, NOT operator-witnessed
-> bounty acceptance (only a committed `ba02_evidence::correlate` manifest over the preprod tip advances
-> `RO-LIVE-01`, which stays `partial` / operator-gated).
+> **NEW field (additive recovery-output seam — NOT an extension point):**
+> - **`BootstrapState.replayed_anchor_block_no: Option<u64>`** (RED `ade_runtime::bootstrap`, N-AH S4b /
+>   `DC-NODE-22`) — a DERIVED warm-start recovery SUMMARY (`= recovered_tip.block_no − admit_count`), `None` on
+>   cold-start / first-run (only `warm_start_recovery` populates it). It is **NOT an independently persisted chain
+>   point** and **NOT a new authoritative WAL / durable surface** — it is an auditable recovery summary the GREEN
+>   `node_sync::warm_start_forge_mode` reads to distinguish a bare-anchor recovery from a recovery with a replayed
+>   own-spine continuation (the `DC-NODE-22` warm-start re-entry decision). **Deferred storage-hardening seam
+>   (explicitly NOT taken here — surfaced as candidate #9 below):** option-b′, an INDEPENDENTLY PERSISTED anchor tip
+>   (a real durable chain point rather than a derived summary). §2 the bootstrap / crash-recovery domain; §3
+>   Extensible note; §7 candidate #9.
+>
+> **Module-addition / attach-point rules this span changed (reflected in §5):** the forge-base authority is now
+> `ChainDb::tip` under the `DC-NODE-20` 6-condition fence (an OBSERVED-FEED competing-block fail-closed — **NOT**
+> fork-choice; relay non-producing; admitted via `pump_block`; spine contiguous/servable; no fork-choice required).
+> **There is NO cert attach point and NO fork-choice attach point on the rung-1 forge path.** `DC-CONS-03` stays the
+> frozen rung-2 contract, UNTOUCHED. Warm-start re-entry (`DC-NODE-22`) is fenced to rung-1 single-producer (fail
+> closed to `InitialCatchupRequired` otherwise). `pump_block` stays the SOLE durable tip-advance authority.
+>
+> **Registry → 347 rules** (213 enforced / 20 partial / 114 declared). **SIX NEW across the span:** `DC-NODE-17`
+> (N-AF, `declared`, `introduced_in = "TBD"` — the OQ-1 SAFETY-only observation invariant, no gate); `DC-NODE-18`
+> (N-AF, `enforced` — single-producer extend-own-spine, `strengthened_in += "PHASE4-N-AH"`); `DC-NODE-19` (N-AG,
+> `declared`, `introduced_in = "TBD"`, `strengthened_in = ["PHASE4-N-AH"]` — loop-continuation-after-feed-EOF, the
+> gate landed but full enforcement re-homed onto `DC-NODE-20`); `DC-NODE-20` (N-AH, `enforced` — local selected
+> durable chain forge-base authority); `DC-NODE-21` (N-AH, `enforced` — cert evidence-only); `DC-NODE-22` (N-AH,
+> `enforced` — single-producer warm-start re-entry). **Status flips vs the on-disk base (209 enforced / 20 partial /
+> 112 declared):** enforced 209 → 213 (+4: DC-NODE-18/20/21/22), declared 112 → 114 (+2: DC-NODE-17/19), partial 20
+> unchanged. **Strengthened (`strengthened_in += "PHASE4-N-AH"`):** `CN-NODE-04` (the closed sched vocabulary now
+> carries the `ForgeBaseSelected` + enriched `ForgeResult` evidence) + `DC-NODE-19` (the proven extend state now
+> survives warm-start), plus the N-AG carry-forward strengthenings on `T-REC-03` / `T-REC-05` and the DC-NODE-15/18
+> family. **No rule weakened; `DC-CONS-03` untouched (rung-2).** **NET +6 CI gates (142 → 148):** `ci_check_single_producer_extend_own_spine.sh`
+> (N-AF, DC-NODE-18), `ci_check_single_producer_loop_continuation.sh` (N-AG, DC-NODE-19),
+> `ci_check_local_durable_forge_base.sh` (N-AH, DC-NODE-20), `ci_check_cert_evidence_only.sh` (N-AH, DC-NODE-21),
+> `ci_check_warm_start_re_entry.sh` (N-AH, DC-NODE-22), `ci_check_live_transcript_forge_base.sh` (N-AH S4a,
+> CN-NODE-04 / DC-NODE-20 evidence). Two gates were modified IN PLACE (not added): `ci_check_forge_followed_tip_admission.sh`
+> (phase-split for the DC-NODE-20 call chain) + `ci_check_node_path_fidelity.sh` (the S2 cert-removal 28→29
+> reconcile). 0 gates removed.
+>
+> **Boundary honesty (load-bearing — do NOT soften / do NOT broaden).** The span re-homes the rung-1 single-producer
+> forge BASE onto the local durable tip and removes the cert — and **nothing more**. There is **NO BLUE change** (the
+> BLUE header authority + `pump_block` durable admit + the Praos fork-choice `select_best_chain` / `fork_choice`
+> authority are UNCHANGED; 458 canonical types unchanged); **NO new openly-extensible / plugin / negotiated
+> registry**; **NO version-gated contract or wire-grammar change**; **NO fork-choice / multi-producer intake** — the
+> `DC-NODE-20` competing-block fence is an OBSERVED-FEED fail-closed (if a competing block is observed, fail closed;
+> do NOT resolve — that is rung 2, `DC-CONS-03`, untouched); and there is **NO second durable tip-advance path** —
+> `pump_block` remains the sole durable tip authority (`DC-NODE-05` / `DC-NODE-12`), and `DC-NODE-20` only READS the
+> tip `pump_block` produced. **NO RO-LIVE flip** — the run-4 transcript (a real Haskell relay adopting cert-free
+> local-tip-forged blocks, sustained > k across a follow-link EOF + a restart;
+> `docs/evidence/phase4-n-ah-ce-ah-6-close.{md,jsonl}`) is the **C2-LOCAL rung-1 mechanism**, NOT operator-witnessed
+> bounty acceptance (only a committed `ba02_evidence::correlate` manifest over the preprod tip advances `RO-LIVE-01`,
+> which stays `partial` / operator-gated). N-AF's cert-promotion mechanism + the `FirstOwnBlockServed` intermediate
+> are **SUPERSEDED** by N-AH (folded out + removed). The N-AE through G-A history below is carried unchanged.
 >
 
 > ### PHASE4-N-AE cluster close (`a76672b9`) — recover→serve continuity + forge admissibility (`DC-NODE-15` / `DC-NODE-14` / `DC-CONS-24` / `DC-PROTO-10`)
@@ -1600,7 +1639,7 @@ HONEST SCOPE: this is operator-key INGRESS + activation wiring + (N-F-G-A) real 
   forge/validation shortcut).
 ```
 
-### Surface: --mode node relay run-loop (the live-run owner, N-F-D; forge-tick N-F-E; forge-on flip N-F-F; checked clock + off-epoch guard N-F-G-A; self-accept→serve handoff N-F-G-B; live feed N-F-G-C; forge-on-followed-tip admissibility N-AE)
+### Surface: --mode node relay run-loop (the live-run owner, N-F-D; forge-tick N-F-E; forge-on flip N-F-F; checked clock + off-epoch guard N-F-G-A; self-accept→serve handoff N-F-G-B; live feed N-F-G-C; forge-on-followed-tip admissibility N-AE; single-producer extend-own-spine N-AF; loop-continuation-after-feed-EOF N-AG; local-tip forge-base authority + cert removed + warm-start re-entry N-AH)
 
 ```
 Surface: --mode node relay run loop (RED ade_node::node_lifecycle::run_relay_loop; the single live-run owner)
@@ -1610,10 +1649,10 @@ Pipeline (fixed; GREEN plans the iteration, RED performs effects, BLUE authority
   1. (top of iteration) reset pending_slot = None     (N-F-E: a skipped/failed path can never forge for a stale slot)
   1a. (forge-on path only) clock seam → SlotNo         (N-F-E: RED Clock::next_tick → millis_to_slot → SlotNo; N-F-G-A S3: now via checked_millis_to_slot — a before-anchor tick fails closed SlotAlignmentError::BeforeGenesisAnchor instead of saturating to start_slot; only SlotNo crosses; DC-NODE-03/DC-NODE-05)
   1b. (forge-on path only) forge_slot_status guard      (N-F-E: GREEN pure monotonic guard → ForgeSlotStatus {Due|NotDue}; at most once per SlotNo, never a past slot)
-  2. GREEN plan_loop_step(loop_state, sync_status, forge_slot_status, shutdown)  (→ closed LoopStep {SyncOnce | ForgeTick | Idle | HaltCleanly}; content-blind; total table)
+  2. GREEN plan_loop_step(loop_state, sync_status, forge_slot_status, shutdown, venue_policy)  (→ closed LoopStep {SyncOnce | ForgeTick | Idle | HaltCleanly}; content-blind; total table. N-AG: venue_policy is the GREEN 5th VenuePolicy input {HaltOnFeedEnd | ContinueInSingleProducerExtend} — the 32-case total table; under ContinueInSingleProducerExtend a drained, ENDED feed continues the certified single-producer forge cadence instead of HaltCleanly; HaltOnFeedEnd reproduces the verbatim prior N-F-D feed-end-halts behaviour. The (VenueRole, ForgeMode) → VenuePolicy projection node_sync::venue_policy is content-blind — reads only the role + the forge-mode discriminant, never a tip/hash/slot; the planner consumes the resulting yes/no, never the mode itself — DC-NODE-19, ci_check_single_producer_loop_continuation.sh)
   3a. SyncOnce  → run_node_sync → pump_block            (DC-SYNC-01/DC-SYNC-02: the SOLE durable tip-advance; durable-before-advance; UNMODIFIED since N-F-C; N-F-G-C feeds it from the LIVE WirePump source)
-  3b. ForgeTick → exactly one forge_one_from_recovered  (N-F-E: reuses kes_period_for_slot; N-F-G-A S4: forge_epoch_admission runs BEFORE query_leader_schedule — an off-epoch slot fails closed before leadership/KES signing; recovered-surface leadership; advances NO durable tip; serves/admits/gossips NOTHING in the loop body; updates last_forged_slot only on a real attempt; records into in-memory hermetic_forge_outcomes. N-F-G-J: the arm derives (block_number, prev_hash) via the GREEN node_sync::forge_header_position(selected_tip.as_ref()) — the ONE cold-start convention: None => (0, PrevHash::Genesis); Some => (last_block_no+1, PrevHash::Block(tip.hash)); a tip-without-height edge fails closed NodeForgeError::RecoveredTipMissingBlockNo — never .unwrap_or(1). When ChainDb::tip() AND the recovered tip are BOTH None, the GREEN node_lifecycle::may_cold_start_forge(selected_tip_present=false, has_recovered_lineage, feed_eligible) permits forging block 0 + PrevHash::Genesis through the SAME run_real_forge → self_accept → SelfAcceptedHandoff path S3 proved — DC-NODE-08; the forge holds NO ChainDb handle, advances NO durable tip — scoped to the hermetic cold-start, no genesis_forged latch. N-AE: a forge-admissibility gate (a GREEN-by-fn classifier sibling to forge_epoch_admission, computed BEFORE leadership) now refuses the forge unless durable_servable_tip.{hash,block_no} == followed_peer_tip.{hash,block_no} — fail-closed to a typed ForgeRefused::NotCaughtUp {local_servable_tip, followed_peer_tip, reason}; the recovered.tip fallback as a forge base is REMOVED; the forged successor's prev_hash byte-equals the followed peer tip hash and block_no == followed_tip.block_no + 1 — DC-NODE-15 + DC-CONS-24; the followed-peer-tip signal is a structured admissibility input (FollowedPeerTipSignal), NEVER a chain selector — it never reaches select_best_chain/chain_selector)
-  3b''. (N-F-G-J) run_relay_loop_with_sched emits the closed GREEN NodeSchedEvent diagnostics to stderr around the planner call + the LoopStep arms  (EMIT-ONLY — records the feed/forge scheduling decision WITHOUT altering it; FeedReason {NoBlockAvailable | CleanEmpty | UnknownDisconnected}; ForgeOutcome {Succeeded | NotLeader | Failed | NoTipAvailable}; the planner never names the vocabulary — ci_check_node_sched_events_emit_only.sh, CN-NODE-04)
+  3b. ForgeTick → exactly one forge_one_from_recovered  (N-F-E: reuses kes_period_for_slot; N-F-G-A S4: forge_epoch_admission runs BEFORE query_leader_schedule — an off-epoch slot fails closed before leadership/KES signing; recovered-surface leadership; advances NO durable tip; serves/admits/gossips NOTHING in the loop body; updates last_forged_slot only on a real attempt; records into in-memory hermetic_forge_outcomes. N-F-G-J: the arm derives (block_number, prev_hash) via the GREEN node_sync::forge_header_position(selected_tip.as_ref()) — the ONE cold-start convention: None => (0, PrevHash::Genesis); Some => (last_block_no+1, PrevHash::Block(tip.hash)); a tip-without-height edge fails closed NodeForgeError::RecoveredTipMissingBlockNo — never .unwrap_or(1). When ChainDb::tip() AND the recovered tip are BOTH None, the GREEN node_lifecycle::may_cold_start_forge(selected_tip_present=false, has_recovered_lineage, feed_eligible) permits forging block 0 + PrevHash::Genesis through the SAME run_real_forge → self_accept → SelfAcceptedHandoff path S3 proved — DC-NODE-08; the forge holds NO ChainDb handle, advances NO durable tip — scoped to the hermetic cold-start, no genesis_forged latch. N-AE: a forge-admissibility gate (a GREEN-by-fn classifier sibling to forge_epoch_admission, computed BEFORE leadership) now refuses the forge unless durable_servable_tip.{hash,block_no} == followed_peer_tip.{hash,block_no} — fail-closed to a typed ForgeRefused::NotCaughtUp {local_servable_tip, followed_peer_tip, reason}; the recovered.tip fallback as a forge base is REMOVED; the forged successor's prev_hash byte-equals the followed peer tip hash and block_no == followed_tip.block_no + 1 — DC-NODE-15 + DC-CONS-24; the followed-peer-tip signal is a structured admissibility input (FollowedPeerTipSignal), NEVER a chain selector — it never reaches select_best_chain/chain_selector. N-AF/N-AH (forge-base AUTHORITY moved — SUPERSEDES the post-self-admit followed-tip re-check above): once a DECLARED single-producer venue (VenueRole::SingleProducer) self-admits a valid forged block through pump_block onto its LOCAL durable ChainDB spine, forge_mode_after_admit enters SingleProducerExtendOwnDurableSpine{current_tip = ChainDb::tip} DIRECTLY (the N-AF FirstOwnBlockServed cert-wait intermediate is FOLDED OUT — ForgeMode is now 3-state), and single_producer_forge_decision derives the next forge base from the LOCAL selected durable tip (ChainDb::tip) — NOT followed_peer_tip and NOT a cert — under a 6-condition fence (an OBSERVED-FEED competing-block fail-closed, NOT fork-choice; relay non-producing; admitted via pump_block; spine contiguous/servable; no fork-choice required), fail-closed ForgeRefused::SingleProducerFenceViolation — DC-NODE-20. forge_followed_tip_admission REMAINS the DC-NODE-15 INITIAL catch-up gate (phase-split, not removed — the post-self-admit re-check is what DC-NODE-20 supersedes). The adoption cert + read_adoption_cert/parse_hex32 + --adoption-cert-path are FULLY REMOVED (harness-owned evidence, DC-NODE-21). pump_block stays the sole durable tip-advance authority; DC-CONS-03 untouched. N-AG: under VenuePolicy::ContinueInSingleProducerExtend a clean structural feed EOF no longer terminates the loop — it continues forging the certified own spine, fenced to the 7 certified-run conditions, until operator shutdown / a fatal error / a BLUE forge-validity bound / an observed competing chain — DC-NODE-19)
+  3b''. (N-F-G-J) run_relay_loop_with_sched emits the closed GREEN NodeSchedEvent diagnostics to stderr around the planner call + the LoopStep arms  (EMIT-ONLY — records the feed/forge scheduling decision WITHOUT altering it; FeedReason {NoBlockAvailable | CleanEmpty | UnknownDisconnected}; ForgeOutcome {Succeeded | NotLeader | Failed | NoTipAvailable}; the planner never names the vocabulary — ci_check_node_sched_events_emit_only.sh, CN-NODE-04. N-AH S4a: NodeSchedEvent gained the ForgeBaseSelected{forge_mode: ForgeModeKind, forge_base_source: ForgeBaseSource (closed 1-variant LocalChaindbTip), forge_base_hash, forge_base_block_no, followed_peer_tip_{block_no,hash}, cert_path_present} variant — witnessing the DC-NODE-20 forge-base decision DIRECTLY — plus an enriched ForgeResult{outcome, self_admit_via_pump_block, entered_forge_mode}; emit-only — it serializes a decision already made, never read by the planner / any authority — ci_check_live_transcript_forge_base.sh, CN-NODE-04 strengthened by N-AH)
   3b'. (N-F-G-B) forge_one_from_recovered now returns (CoordinatorEvent, Option<SelfAcceptedHandoff>)  (RED — Some iff ForgeSucceeded; the loop does a best-effort TYPED tx.send(h) to the sibling served-chain admit task — a typed channel send ONLY; the loop body holds ONLY the mpsc Sender, never a ServedChainHandle / push_atomic / served_chain_admit, so ci_check_node_run_loop_containment.sh stays byte-unchanged)
   3c. Idle      → cancellation-safe wait                (select on source-readiness or shutdown; the only branch that awaits across a cancellation boundary)
   3d. HaltCleanly → exit, on-disk state recoverable
@@ -1629,7 +1668,7 @@ Cross-surface state sharing: shares the persistent ChainDb + FileWalStore with t
   a LIVE NodeBlockSource::WirePump fed by spawn_live_wire_pump_source (reusing the closed admission dial + pump)
   when --peer is supplied — the SAME N2N inbound surface; the source is still the closed 2-variant enum (a fill,
   not a new variant); the durable tip still advances ONLY via run_node_sync → pump_block.
-Rule (CN-NODE-02 / DC-SYNC-02 / DC-NODE-05 / DC-EPOCH-03 / DC-NODE-06 / DC-NODE-15 / DC-CONS-24, ci_check_node_run_loop_containment.sh + ci_check_loop_planner_closed.sh + ci_check_node_forge_single_epoch_fail_closed.sh + ci_check_served_chain_handoff_fence.sh + ci_check_forge_followed_tip_admission.sh):
+Rule (CN-NODE-02 / DC-SYNC-02 / DC-NODE-05 / DC-EPOCH-03 / DC-NODE-06 / DC-NODE-15 / DC-CONS-24 / DC-NODE-19 / DC-NODE-20 / DC-NODE-21 / DC-NODE-22, ci_check_node_run_loop_containment.sh + ci_check_loop_planner_closed.sh + ci_check_node_forge_single_epoch_fail_closed.sh + ci_check_served_chain_handoff_fence.sh + ci_check_forge_followed_tip_admission.sh + ci_check_single_producer_extend_own_spine.sh + ci_check_single_producer_loop_continuation.sh + ci_check_local_durable_forge_base.sh + ci_check_cert_evidence_only.sh + ci_check_warm_start_re_entry.sh + ci_check_live_transcript_forge_base.sh):
   the relay-loop body advances the tip ONLY via run_node_sync; references NO run_real_forge / correlate( /
   Ba02Manifest / second-bootstrap path, NO direct manual tip-mutation token, and (N-F-E) NO serve token
   (served_chain_admit / push_atomic / OutboundCommand / broadcast / block_fetch); it may have EXACTLY ONE
@@ -1645,7 +1684,7 @@ Rule (CN-NODE-02 / DC-SYNC-02 / DC-NODE-05 / DC-EPOCH-03 / DC-NODE-06 / DC-NODE-
   source-selection happens in the dispatcher before the loop); ci_check_node_run_loop_containment.sh is
   byte-unchanged. The sibling serve ingress is fenced by the BROADENED ci_check_served_chain_handoff_fence.sh
   (owners {node_lifecycle.rs, node_sync.rs}; guard-3 allow-list: every node-spine unbounded handoff channel
-  MUST carry SelfAcceptedHandoff; every push_atomic( fed by into_accepted(); no direct served_chain_admit(). N-AE: the ForgeTick gate is a TIGHTENING inside the existing fence (it can only PREVENT a forge, never select a chain) — ci_check_forge_followed_tip_admission.sh fences no recovered.tip forge-base fallback, the typed ForgeRefused::NotCaughtUp, and that the peer-tip signal never reaches select_best_chain; the relay-loop body containment + the closed LoopStep planner are byte-/semantically UNCHANGED.
+  MUST carry SelfAcceptedHandoff; every push_atomic( fed by into_accepted(); no direct served_chain_admit(). N-AE: the ForgeTick gate is a TIGHTENING inside the existing fence (it can only PREVENT a forge, never select a chain) — ci_check_forge_followed_tip_admission.sh fences no recovered.tip forge-base fallback, the typed ForgeRefused::NotCaughtUp, and that the peer-tip signal never reaches select_best_chain; the relay-loop body containment + the closed LoopStep planner are byte-/semantically UNCHANGED. N-AF/N-AG/N-AH: the post-self-admit forge BASE moved off the followed-peer-tip / cert path onto the LOCAL durable ChainDb::tip under the DC-NODE-20 6-condition fence (an OBSERVED-FEED competing-block fail-closed, NOT fork-choice — ci_check_local_durable_forge_base.sh), the adoption cert + its parser + the --adoption-cert-path flag are FULLY REMOVED (ci_check_cert_evidence_only.sh + ci_check_node_path_fidelity.sh pin no cert token in the forge path and the 29-flag --mode node set), a certified single-producer venue continues the forge loop past a clean structural feed EOF (ci_check_single_producer_loop_continuation.sh — the SyncOnce drain still runs first; pump_block stays the sole durable tip-advance authority), and warm-start RE-ENTERS the extend state on the recovered own-spine ChainDb::tip without a fresh catch-up (ci_check_warm_start_re_entry.sh, DC-NODE-22; the replayed_anchor_block_no summary comes from BootstrapState). The forge-base decision is witnessed by the closed emit-only NodeSchedEvent::ForgeBaseSelected transcript (ci_check_live_transcript_forge_base.sh). DC-CONS-03 untouched (rung-2); the relay-loop body containment is byte-/semantically UNCHANGED (the new boundaries sit inside the existing fence; the allow-list extends only for the GREEN forge-decision classifier reads).
 HONEST SCOPE: N-F-G-C wires the MECHANICAL live feed; the binary is forge-CAPABLE with real keys + real
   constants, and with a LIVE --peer feed the forge becomes observable at a due leader slot — but peer ACCEPT is
   operator-gated (RO-LIVE-01 partial). With no --peer the empty source halts before any ForgeTick. No BA-02 /
@@ -2206,6 +2245,21 @@ the fenced sibling `push_atomic`, never a tip advance. **None of these chokepoin
 binary is forge-CAPABLE with real keys + real constants; with a LIVE `--peer` feed (N-F-G-C) the forge becomes
 observable at a due leader slot, but peer ACCEPT is operator-gated (RO-LIVE-01 partial); BA-02 satisfied nowhere.
 
+**N-AF / N-AG / N-AH (the forge-base AUTHORITY moved; the data-only/authoritative split is preserved):** on the
+rung-1 single-producer spine the **authoritative forge handoff** (`forge_one_from_recovered`) now builds on a base
+DERIVED by the GREEN-by-fn `single_producer_forge_decision` from the LOCAL durable `ChainDb::tip` (`DC-NODE-20`) —
+NOT the followed peer tip and NOT a cert — fail-closed `ForgeRefused::SingleProducerFenceViolation` under the
+6-condition observed-feed fence; the GREEN `forge_mode_after_admit` enters the extend state DIRECTLY on a real
+self-admit through `pump_block` (the `FirstOwnBlockServed` cert-wait intermediate folded out — `ForgeMode` 3-state),
+and the GREEN 5th `plan_loop_step` input `VenuePolicy` (N-AG) lets the planner continue the certified forge cadence
+past a clean feed EOF. The adoption **cert + its parser + the `--adoption-cert-path` flag are FULLY REMOVED**
+(`DC-NODE-21`) — they are NOT a forge-base input (harness-owned RED evidence). These are GREEN-by-fn DECISIONS over
+the BLUE `ChainDb::tip` read; the **authoritative durable apply stays `pump_block`** (the SOLE durable tip-advance
+authority — `DC-NODE-20` only READS the tip `pump_block` produced; `DC-CONS-03` UNTOUCHED). The closed emit-only
+`NodeSchedEvent::ForgeBaseSelected` is the data-only WITNESS of the decision (never read by any authority). **None of
+these chokepoints move; the forge stays subordinate (it advances no tip directly).** NO RO-LIVE flip (the run-4
+cert-free local-tip-forge a real Haskell relay adopted is the C2-LOCAL rung-1 mechanism, not bounty acceptance).
+
 ### Domain: recovered seed-epoch consensus inputs (N-F-A; CONSUMED in N-F-C, exercised by the N-F-E forge tick + the N-F-F On arm + the N-F-G-A current-constants tick)
 
 | Layer | Module | Color | Role |
@@ -2305,7 +2359,18 @@ recovered/bootstrapped state + the same ordered canonical block feed + the same 
 **N-F-G-A note:** the S1 genesis-consistency pinning harness drives the REAL `bootstrap_initial_state`
 warm-start against the committed Ade-as-leader reference fixture and pins the recovered values — the fixture
 is **evidence input, never runtime authority**. `warm_start_recovery` is the single production restart owner
-(CN-NODE-01).
+(CN-NODE-01). **N-AH note (DC-NODE-22, warm-start forge-mode re-entry):** `bootstrap_initial_state` /
+`warm_start_recovery` now ALSO compute the additive DERIVED field `BootstrapState.replayed_anchor_block_no:
+Option<u64>` (`= recovered_tip.block_no − admit_count`; `None` on cold-start / first-run) — an auditable recovery
+SUMMARY, **NOT an independently persisted chain point** and **NOT a new authoritative WAL / durable surface** (no
+new recovery engine; recovery still composes the existing authorities; option-b′, an independently persisted anchor
+tip, was explicitly NOT taken — §7 candidate #9). The GREEN-by-fn `node_sync::warm_start_forge_mode(venue_role,
+recovered_tip, replayed_anchor_block_no)` READS it to decide forge-mode re-entry: in a rung-1 single-producer
+venue whose recovered tip is ABOVE the replay anchor it re-enters `SingleProducerExtendOwnDurableSpine{current_tip
+= ChainDb::tip}` (so a follow-link EOF after restart cannot re-introduce the catch-up dependency DC-NODE-20
+retired), else it FAILS CLOSED to `InitialCatchupRequired` — never a silent forge. `pump_block` stays the SOLE
+durable admit authority (the re-entry only sets the forge MODE / reads the recovered tip; it admits nothing);
+DC-CONS-03 untouched (`ci_check_warm_start_re_entry.sh`).
 
 ### Domain: N2N tag-24 wire envelope (N-X)
 
@@ -2463,7 +2528,9 @@ ACCEPTS it is the operator-gated RO-LIVE-01 leg (peer ACCEPT NOT claimed here).
 | Feed header-validation view from the recovered consensus surface *(NEW, N-F-G-P / DC-CINPUT-04)* | `ade_node::node_lifecycle` (RED — feed header/ledger Step-5/7 validation) | sources the leader-threshold view via the BLUE `PoolDistrView::from_seed_epoch_consensus_inputs`; **NO new closed enum** | The feed's header-step + ledger Step-5/7 validation derives its leader-threshold stake-distribution view (+ the VRF-keyhash / ASC / total-active-stake inputs) from the **recovered consensus surface** (`from_seed_epoch_consensus_inputs`, the same projection the forge handoff consumes), NOT a defaulted / empty distribution — so a valid live block 0 is ingested (`VerificationFailed` gone). The verdict stays BLUE (Steps 5 + 7 are BLUE authorities); G-P only sources the VIEW. **A closed RED view-provenance threading (a surface REDUCTION), NOT an extension point.** Backs **DC-CINPUT-04**. A change to the feed view = a strengthening of **DC-CINPUT-04** (`ci_check_feed_leader_threshold_view.sh` — the feed header-validation view is derived from the recovered consensus surface, never a defaulted / empty distribution). |
 | Serve-listener lifetime decoupled from feed end *(NEW, N-F-G-K / DC-NODE-09)* | `ade_node::node_lifecycle` (RED — the serve sibling on the `On` arm) | RED lifetime fence; **NO new closed enum / variant** | The `--mode node` serve listener's lifetime is **independent of the live feed's end** — the serve sibling (`run_node_serve_task`, spawned OUTSIDE `run_relay_loop`) stays up serving past feed-end, so a follower mid-fetch keeps fetching (validated against the live C1 follower reaching `:3002`). RED, read-only over the self-accepted `ServedChainView`; admits nothing, advances no durable tip, makes no peer-acceptance claim. **A closed RED serve-lifetime fence (a surface REDUCTION), NOT an extension point.** Backs **DC-NODE-09**. A change to the serve lifetime = a strengthening of **DC-NODE-09** (`ci_check_node_serve_lifetime.sh` — the serve listener's lifetime is independent of the feed source's end); `run_relay_loop`'s containment is byte-unchanged (the serve task lives outside it). |
 | `PrevHash` *(NEW, N-F-G-J S2)* | `ade_types::shelley::block` (BLUE) | 2 (`Genesis` = CBOR null / `Block(Hash32)` = hash32) | The closed Cardano header `prev_hash` wire grammar `$hash32 / null` (cardano-ledger `PrevHash = GenesisHash / BlockHash`), replacing the prior flat `prev_hash: Hash32` field (**456 → 457** canonical types). **NOT `#[non_exhaustive]`.** ONE **POSITION-BLIND** BLUE codec authority — `ade_codec::shelley::block::decode_prev_hash` decodes `null -> Genesis` / `hash32 -> Block` as a pure function of the CBOR token (NEVER `block_number`); the `ShelleyHeaderBody` `AdeEncode` writes `Genesis -> write_null` / `Block(h) -> write_bytes_canonical`. The `null` grammar is scoped to **header_body ONLY** — it MUST NOT leak into the chain-sync/block-fetch `Point`/`Tip` codec (`Point::Origin` stays `array(0)`). The position-AWARE coupling (`block_number 0 <=> Genesis`) lives in the SEPARATE single BLUE `ade_ledger::block_validity::header_position::check_header_position`, NEVER in `ade_codec`. **A closed BLUE sum (a surface REDUCTION over the wire grammar), NOT an extension point.** Backs **CN-WIRE-09**. New variant = a `decode_prev_hash` arm + an `AdeEncode` arm + a strengthening of **CN-WIRE-09** (`ci_check_prevhash_single_wire_authority.sh`); the codec stays POSITION-BLIND, the null grammar stays header_body-scoped, and the single wire + single position authority MUST NOT be duplicated. |
-| `NodeSchedEvent` + `FeedReason` + `ForgeOutcome` *(NEW, N-F-G-J S1)* | `ade_node::live_log::sched_event` (GREEN) | `NodeSchedEvent` 5 (`FeedUnavailable{reason}` / `ForgeTickConsidered` / `ForgeTickSkipped{reason}` / `ForgeAttempted` / `ForgeResult{outcome}`); `FeedReason` 3 (`NoBlockAvailable` / `CleanEmpty` / `UnknownDisconnected`); `ForgeOutcome` 4 (`Succeeded` / `NotLeader` / `Failed` / `NoTipAvailable`) | The closed `--mode node` feed/forge **scheduling-event vocabulary**, byte-deterministically JSONL-encoded by `live_log::sched_writer`. **None is `#[non_exhaustive]`; there is deliberately NO catch-all / `Other` variant and no stringly-typed field** (`reason`/`outcome` are the closed enums; `as_str` is the stable discriminator). **EMIT-ONLY:** the GREEN planner never constructs or reads a `NodeSchedEvent`; the relay loop (`run_relay_loop_with_sched`) emits them around the planner call + the `LoopStep` arms, recording the scheduling decision WITHOUT altering it (`FeedReason::eligible` mirrors the planner's forge-eligibility predicate, but the event is observation only). Allow-list + negative tests. Lives in `ade_node` (NOT a BLUE `core_paths` entry), so **NOT canonical-counted**. **A closed diagnostic vocabulary (a surface REDUCTION), NOT an extension point.** Backs **CN-NODE-04**. New event/reason/outcome = an exhaustive-`match` arm in the encoder (compile error until wired + allow-listed) + a negative test + a strengthening of **CN-NODE-04** (`ci_check_node_sched_events_emit_only.sh` — the planner must never name the vocabulary). |
+| `NodeSchedEvent` + `FeedReason` + `ForgeOutcome` *(N-F-G-J S1; +`ForgeBaseSelected` + enriched `ForgeResult` + `ForgeBaseSource` + `ForgeModeKind`, N-AH S4a)* | `ade_node::live_log::sched_event` (GREEN) | `NodeSchedEvent` **6** (`FeedUnavailable{reason}` / `ForgeTickConsidered` / `ForgeTickSkipped{reason}` / `ForgeAttempted` / **`ForgeBaseSelected{forge_mode, forge_base_source, forge_base_hash, forge_base_block_no, followed_peer_tip_{block_no,hash}, cert_path_present}`** / `ForgeResult{outcome, self_admit_via_pump_block, entered_forge_mode}`); `FeedReason` 3 (`NoBlockAvailable` / `CleanEmpty` / `UnknownDisconnected`); `ForgeOutcome` 4 (`Succeeded` / `NotLeader` / `Failed` / `NoTipAvailable`); `ForgeBaseSource` **1** (`LocalChaindbTip`); `ForgeModeKind` **3** (`InitialCatchupRequired` / `CaughtUpToPeerTip` / `SingleProducerExtendOwnDurableSpine`) | The closed `--mode node` feed/forge **scheduling-event vocabulary**, byte-deterministically JSONL-encoded by `live_log::sched_writer`. **None is `#[non_exhaustive]`; there is deliberately NO catch-all / `Other` variant and no stringly-typed field** (`reason`/`outcome`/`forge_base_source`/`forge_mode` are the closed enums; `as_str`/`discriminator` are the stable strings). **EMIT-ONLY:** the GREEN planner never constructs or reads a `NodeSchedEvent`; the relay loop (`run_relay_loop_with_sched`) emits them around the planner call + the `LoopStep` arms, recording the scheduling decision WITHOUT altering it. **N-AH S4a (CN-NODE-04 strengthened):** the new `ForgeBaseSelected` variant WITNESSES the **DC-NODE-20** forge-base decision DIRECTLY (the base is always the local selected durable tip — `ForgeBaseSource` is the closed 1-variant `LocalChaindbTip`, with NO peer-tip / cert source: a peer-tip / cert `forge_base_source` is fail-closed by DC-NODE-20/21), and `ForgeResult` is enriched with `self_admit_via_pump_block` (a `Succeeded` forge admitted durably via `admit_forged_block_durably` → `pump_block`, DC-NODE-12) + `entered_forge_mode`. RED evidence in NATURE (it serializes a decision already made) but GREEN-by-content code — the single closed-enum JSONL authority; a new variant is a compile error + an allow-list-test failure until wired. Allow-list + negative tests. Lives in `ade_node` (NOT a BLUE `core_paths` entry), so **NOT canonical-counted**. **A closed emit-only diagnostic vocabulary (a surface REDUCTION), NOT an extension point.** Backs **CN-NODE-04** (`strengthened_in += "PHASE4-N-AH"`). New event/reason/outcome/base-source/mode-kind = an exhaustive-`match` arm in the encoder (compile error until wired + allow-listed) + a negative test + a strengthening of **CN-NODE-04** (`ci_check_node_sched_events_emit_only.sh` + `ci_check_live_transcript_forge_base.sh` — the planner must never name the vocabulary, the closed `ForgeBaseSource` stays `LocalChaindbTip` only). |
+| `ForgeMode` (the forge-mode state machine) *(N-AF declared; FOLDED 4→3 + cert-promotion REMOVED, N-AH S1 / DC-NODE-20)* | `ade_node::node_sync` (GREEN-by-content, the GREEN forge-decision fns inside RED `node_sync`) | **3** (`InitialCatchupRequired` / `CaughtUpToPeerTip{peer_tip}` / `SingleProducerExtendOwnDurableSpine{adopted_root, current_tip}`) | The closed forge-mode state machine driving the `--mode node` forge base, with NO booleans. **N-AF** declared it as a **4**-state machine (`… -> FirstOwnBlockServed -> SingleProducerExtendOwnDurableSpine`) gated by an explicit RED venue-adoption **certificate**. **N-AH S1 (DC-NODE-20) FOLDED OUT the `FirstOwnBlockServed` cert-wait intermediate** (now **3**-state): the transition `CaughtUpToPeerTip -> SingleProducerExtendOwnDurableSpine{current_tip = ChainDb::tip}` is **DIRECT on a real self-admit through `pump_block`** (`forge_mode_after_admit`, which advances ONLY on an actual admit, never on a `not_leader` tick), with **NO cert read**. The GREEN transitions are pure / total / deterministic (`forge_mode_after_admit` / `warm_start_forge_mode` / `single_producer_forge_decision` / `venue_policy`); the 6-condition fence (`single_producer_forge_decision`) fails closed `ForgeRefused::SingleProducerFenceViolation`. **NOT `#[non_exhaustive]`; no catch-all.** Lives in `ade_node`, so **NOT canonical-counted**. **A closed state machine (a surface REDUCTION — N-AH removed a state + the cert authority), NOT an extension point.** Backs **DC-NODE-20** (+ DC-NODE-18/19/22). A new state = a transition arm (no wildcard) + a strengthening of **DC-NODE-20** (`ci_check_local_durable_forge_base.sh` — the extend state is entered directly on self-admit, NO cert, under the 6-condition observed-feed fence; `ChainDb::tip` is the forge base; `pump_block` stays the sole durable admit; DC-CONS-03 untouched). **The `VenueAdoptionCertificate` type + `read_adoption_cert` / `parse_hex32` are FULLY REMOVED (DC-NODE-21) — they MUST NOT be re-introduced as forge authority.** |
+| `VenuePolicy` (the loop-continuation policy) *(NEW, N-AG / DC-NODE-19)* | `ade_node::run_loop_planner` (GREEN) | **2** (`HaltOnFeedEnd` / `ContinueInSingleProducerExtend`) | The closed GREEN **5th `plan_loop_step` input** — the 32-case total table (4 `LoopState` × 2 sync × 2 forge-slot × … resolved by the policy). Under `ContinueInSingleProducerExtend` a drained, ENDED feed CONTINUES the certified single-producer forge cadence (instead of `HaltCleanly`); `HaltOnFeedEnd` reproduces the **verbatim prior N-F-D feed-end-halts** behaviour (the default `VenueRole::Unknown` path). The `(VenueRole, ForgeMode) -> VenuePolicy` projection `node_sync::venue_policy` is **content-blind** (reads only the role + the forge-mode discriminant, never a tip/hash/slot); the planner consumes the resulting yes/no, NEVER the mode itself (the planner still cannot express an authority decision; `pump_block` stays the sole durable tip-advance authority and `SyncOnce` still drains feed work before any `ForgeTick`). **NOT `#[non_exhaustive]`; no catch-all.** Lives in `ade_node`, so **NOT canonical-counted**. **A closed planner input (a surface REDUCTION), NOT an extension point.** Backs **DC-NODE-19**. A new policy variant = a `plan_loop_step` arm (no wildcard, no re-derivation of the venue truth from a RED `LoopState` "lie") + a content-blind `venue_policy` arm + a strengthening of **DC-NODE-19** (`ci_check_single_producer_loop_continuation.sh` + `ci_check_loop_planner_closed.sh`). |
 | `BlockValidityError::HeaderPositionInvalid` *(NEW additive variant, N-F-G-J S3)* | `ade_ledger::block_validity` (BLUE) | additive variant `{ block_number, expected, actual }`-shape on the closed `BlockValidityError` sum | The closed fail-closed signal raised by the single BLUE position authority `check_header_position` (`block_number 0 <=> Genesis`). Added **additively, no wildcard**; it folds into the **UNCHANGED** closed `BlockRejectClass::HeaderInvalid` (verdict.rs — **NO new reject class**). Surfaced by `decode_block` BEFORE the header authority. **A closed additive enum variant (a surface REDUCTION), NOT an extension point.** Backs **CN-WIRE-09 / DC-NODE-08**. New variant = a `check_header_position` arm + a `BlockRejectClass` mapping arm (folding into an existing coarse class) + a strengthening of **CN-WIRE-09**; non-secret position primitives only. |
 | `BlockRejectClass` *(DELIBERATELY NOT EXTENDED, N-F-G-J S3)* | `ade_ledger::block_validity::verdict` (BLUE) | UNCHANGED — `HeaderPositionInvalid` maps to the existing `HeaderInvalid` coarse class | The closed coarse block-reject taxonomy. **S3 reused the existing `HeaderInvalid` for the position-rule failure — NO new variant added** (`verdict.rs`: `BlockValidityError::HeaderPositionInvalid { .. } => BlockRejectClass::HeaderInvalid`). A position-rule violation is surfaced through the existing coarse class, keeping the set additively stable. New variant = a strengthening of the verdict contract; closed, no wildcard. |
 | `NodeForgeError::RecoveredTipMissingBlockNo` *(NEW additive variant, N-F-G-J S4)* | `ade_node::node_sync` (RED) | additive variant on the closed `NodeForgeError` sum (now 2: `MissingRecoveredConsensusInputs` / `RecoveredTipMissingBlockNo`) | The closed cold-start fail-closed edge: a `Some(tip)` without a block height fails closed (`forge_header_position` returns `Err(RecoveredTipMissingBlockNo)`), **never `.unwrap_or(1)`**. **A closed additive enum variant (a surface REDUCTION), NOT an extension point.** Backs **DC-NODE-08**. New variant = a `forge_header_position` arm + a strengthening of **DC-NODE-08 / CN-CINPUT-03**. |
@@ -2488,7 +2555,7 @@ ACCEPTS it is the operator-gated RO-LIVE-01 leg (peer ACCEPT NOT claimed here).
 | `LoopStep` *(EXTENDED 3→4, N-F-E)* | `ade_node::run_loop_planner` (GREEN) | 4 (`SyncOnce` / `ForgeTick` / `Idle` / `HaltCleanly`) | The closed live-run iteration vocabulary the GREEN planner emits. **N-F-E added `ForgeTick`** (3→4). It **cannot express an authority decision**. A **CE-not-law additively-evolvable closed planner enum** (like `WalEntry`). New variant = a `plan_loop_step` arm + a fenced RED `run_relay_loop` branch + a strengthening of **CN-NODE-02 / DC-NODE-05** (`ci_check_loop_planner_closed.sh` + `ci_check_node_run_loop_containment.sh`). |
 | `ForgeSlotStatus` *(N-F-E)* | `ade_node::run_loop_planner` (GREEN) | 2 (`Due` / `NotDue`) | The **content-blind** forge-slot planner input. The planner learns only whether a slot is *due*, NEVER who is a leader (eligibility is BLUE inside `forge_one_from_recovered`). Derived by the pure `forge_slot_status` monotonic guard (the only `SlotNo`-observing fn in the module). New variant = a `plan_loop_step` arm + a strengthening of **DC-NODE-05** (`ci_check_loop_planner_closed.sh`). |
 | `ForgeActivation` *(N-F-E; real operator material N-F-F; current pparams N-F-G-A; opt-in `handoff_tx` N-F-G-B)* | `ade_node::node_lifecycle` (RED) | closed opt-in struct (`clock` / `coordinator_state` / `recovered` / `shell` / `pool_id` / `pparams` / `protocol_version` / `anchor_millis` / `start_slot` / `slot_length_ms` / `last_slot_alignment_fail` / `handoff_tx: Option<mpsc::UnboundedSender<SelfAcceptedHandoff>>` / private `last_forged_slot`+`pending_slot` / `hermetic_forge_outcomes`) | The **opt-in forge-activation bundle** threaded into `run_relay_loop` as `forge: Option<&mut ForgeActivation>`. `Some` activates exactly one fenced `forge_one_from_recovered` per `ForgeTick`, advancing no durable tip and serving/admitting/gossiping nothing in the loop body; `None` reproduces N-F-D relay. N-F-G-B: the opt-in `handoff_tx` carries the surfaced `SelfAcceptedHandoff` to the sibling serve task (set via `with_handoff_sender`). **A closed activation surface, NOT an extension point.** A new field = a struct addition behind the closed activation contract + a strengthening of **DC-NODE-05 / DC-NODE-06**. |
-| `Mode` (run-mode set) *(N-F-C)* | `ade_node::cli` (RED) | 5 (`WireOnly` / `Admission` / `KeyGenKes` / `Produce` / `Node`) | The CLOSED `--mode` taxonomy. **NOT `#[non_exhaustive]`**; `Mode::parse` + `main.rs` dispatch are total with **NO wildcard arm**. New variant = a `Mode::parse` arm + an explicit wildcard-free `main.rs` arm + a strengthening of **CN-NODE-MODE-01** (`ci_check_node_mode_closure.sh`). _(N-F-F/N-F-G-A/N-F-G-C added NO `Mode` variant — the operator-key + `--peer` flags are OPTIONAL ingress on the existing `--mode node` arm; N-F-G-D added NO `Mode` variant and NO new argv flag — the `cli.rs` flag set is pinned to a 28-flag closed allow-list by `ci_check_node_path_fidelity.sh`, and the C1 dry-run is a HARNESS, not a runtime mode.)_ _(N-F-G-J added NO `Mode` variant and NO new argv flag — the cold-start forge fires through the existing `--mode node` arm; the CLI flag allow-list is unchanged and stays fenced by `ci_check_node_path_fidelity.sh`.)_ |
+| `Mode` (run-mode set) *(N-F-C; --mode node flag set 28→29 then cert-flag removed, N-AF/N-AH)* | `ade_node::cli` (RED) | 5 (`WireOnly` / `Admission` / `KeyGenKes` / `Produce` / `Node`) | The CLOSED `--mode` taxonomy. **NOT `#[non_exhaustive]`**; `Mode::parse` + `main.rs` dispatch are total with **NO wildcard arm**. New variant = a `Mode::parse` arm + an explicit wildcard-free `main.rs` arm + a strengthening of **CN-NODE-MODE-01** (`ci_check_node_mode_closure.sh`). _(N-F-F/N-F-G-A/N-F-G-C added NO `Mode` variant — the operator-key + `--peer` flags are OPTIONAL ingress on the existing `--mode node` arm; N-F-G-D added NO `Mode` variant and NO new argv flag — the `cli.rs` flag set is pinned to a closed allow-list by `ci_check_node_path_fidelity.sh`, and the C1 dry-run is a HARNESS, not a runtime mode.)_ _(N-F-G-J added NO `Mode` variant and NO new argv flag.)_ **_(N-AF/N-AH: NO `Mode` variant; the `--mode node` flag ALLOW-LIST changed: N-AF added `--single-producer-venue` AND `--adoption-cert-path` (DC-NODE-18), then N-AH S2 REMOVED `--adoption-cert-path` (DC-NODE-21 — the cert is harness-owned evidence, never a node forge-base input); the allow-list is now pinned at **29** flags and the cert flag MUST NEVER be re-added — `ci_check_node_path_fidelity.sh`.)_** |
 | `PeerAcceptEvent` *(N-F-C; consumed via `ba02_pass` N-F-G-C)* | `ade_node::ba02_evidence` (GREEN) | 2 (`PeerServedBlock` / `PeerChainTip`) | The CLOSED **allow-list** of peer-acceptance signals; `parse_peer_accept_events` recognizes ONLY these two discriminators. UNCHANGED by N-F-G-C (only consumed by the new RED `ba02_pass` I/O). New variant = a parser allow-list arm + a strengthening of **RO-LIVE-06**. |
 | `PeerAcceptSource` *(N-F-C)* | `ade_node::ba02_evidence` (GREEN) | 3 (`ServedBlock` / `ChainTip` / `ServedBlockAndChainTip`) | The closed typed provenance of the accepting signal. New variant = a `correlate` source arm + a strengthening of RO-LIVE-06. |
 | `NoEvidenceReason` *(N-F-C)* | `ade_node::ba02_evidence` (GREEN) | 4 (`NoPeerAccept` / `HashMismatch` / `ChainPointMismatch` / `ConflictingPeerSignals`) | The closed reason sum for `BA02Outcome::NoEvidence` — NoEvidence is the DEFAULT. New variant = a `correlate` classify arm + a strengthening of RO-LIVE-06. |
@@ -2557,6 +2624,27 @@ ACCEPTS it is the operator-gated RO-LIVE-01 leg (peer ACCEPT NOT claimed here).
 | Per-protocol tag-24 compositions *(N-X)* | `ade_network::codec::{block_fetch, chain_sync}` | A new CBOR-in-CBOR composition attaches as a `compose_*` / `decompose_*` pair delegating to the single `ade_codec::{wrap_tag24, unwrap_tag24}` authority (CN-WIRE-08). |
 | Bootstrap-source production compositions *(N-Z; +N-F-A sidecar tail)* | `ade_runtime::{genesis_bootstrap, mithril_bootstrap}` | A new bootstrap-source production entry attaches as a **composition-only RED twin** of `bootstrap_from_{conway_genesis, mithril_snapshot}`: import/parse + (if a point is attested) mint the anchor from an operator-independent origin + verify-before-bootstrap (fail-closed) + route through the single `bootstrap_initial_state` authority + the N-F-A sidecar tail. **No new authority, no new `*Anchor` trait/plugin, no new `SeedProvenance` variant unless the source genuinely differs** (CN-MITHRIL-01 / CN-NODE-01 / DC-MITHRIL-02 / CN-CINPUT-02). |
 
+> **Note (N-AF … N-AH is NOT a new extension point — the span adds ONLY closed surfaces + a derived recovery
+> field, and REMOVES the cert).** The whole `f87d0056..HEAD` span (N-AF + N-AG + N-AH) introduces **NO extensible /
+> negotiated / plugin / runtime-registered surface.** The new surfaces are all CLOSED: the GREEN `VenuePolicy`
+> (closed 2-variant planner input), `ForgeBaseSource` (closed 1-variant `LocalChaindbTip`), `ForgeModeKind` (closed
+> 3-variant), the enriched closed `NodeSchedEvent` (emit-only — `ForgeBaseSelected` + enriched `ForgeResult`), and
+> the GREEN `ForgeMode` state machine (FOLDED 4→3). The forge-base **AUTHORITY** is the EXISTING BLUE `ChainDb::tip`
+> read under the closed `DC-NODE-20` 6-condition fence — **a REUSE of the BLUE durable-store read, NOT a new
+> authority / chokepoint / plugin** (`pump_block` stays the sole durable tip-advance authority; `DC-CONS-03` stays
+> the rung-2 fork-choice authority, untouched). N-AH is a **surface REDUCTION**: it REMOVED the
+> `VenueAdoptionCertificate` type + the `read_adoption_cert` / `parse_hex32` parsers + the `--adoption-cert-path`
+> flag (DC-NODE-21 — a hard boundary: they must not creep back). The lone new FIELD,
+> `BootstrapState.replayed_anchor_block_no: Option<u64>`, is a DERIVED warm-start recovery summary (NOT a persisted
+> chain point, NOT a new WAL / durable surface). **There is no plugin trait, no `Box<dyn _>`, no runtime-registered
+> handler, no negotiated surface, no new `--mode node` flag (the allow-list NET went to 29 + lost the cert flag),
+> no new `NodeBlockSource` / `WalEntry` / `CoordinatorEvent` / `Mode` variant, and no new BLUE authority.** The
+> closed surfaces belong in the Closed table above (and §4 Frozen). **DEFERRED storage-hardening seam (option-b′,
+> explicitly NOT taken here — candidate #9 in §7):** an INDEPENDENTLY PERSISTED anchor tip (a real durable chain
+> point keyed in the ChainDb / WAL, replacing the derived `replayed_anchor_block_no` summary) would attach as a new
+> persisted record behind the existing durable-store writers (`pump_block` / `bootstrap_initial_state` / the WAL
+> schema) — a future hardening slice, not an attach point taken at this HEAD.
+>
 > **Note (N-U realizes a SECOND impl of an EXISTING closed extension point — it adds NO new extensible /
 > negotiated / plugin surface).** The N-U serve projection `ChainDbServedSource` is a **second impl of the
 > ALREADY-CLOSED serve read-side trait seams** `ServedHeaderLookup` / `ServedRangeLookup` (the produce-mode
@@ -2725,6 +2813,66 @@ ACCEPTS it is the operator-gated RO-LIVE-01 leg (peer ACCEPT NOT claimed here).
   tip** (durable block-1+ progression is N-U). **NO RO-LIVE flip** (`RO-LIVE-01` stays `partial`); the cold-start
   eligibility signal is general (forge-configured + valid recovered base), **never a private-only / C1-only
   flag**. (`ci_check_genesis_successor_reachability.sh`.)
+- **Rung-1 single-producer forge base is the LOCAL durable `ChainDb::tip` under a fixed observed-feed fence; the
+  adoption cert is REMOVED; warm-start re-enters on the recovered own-spine tip (N-AH, DC-NODE-20 + DC-NODE-21 +
+  DC-NODE-22 — load-bearing; do NOT soften / do NOT broaden / do NOT re-introduce the cert).** In a declared rung-1
+  single-producer venue (`VenueRole::SingleProducer`), after Ade self-admits a valid forged block through
+  `pump_block` onto its LOCAL durable ChainDB spine, the next forge base is Ade's **LOCAL SELECTED DURABLE TIP**
+  (`ChainDb::tip`) — **NOT `followed_peer_tip` and NOT an operator adoption certificate** (`DC-NODE-20`). The extend
+  state is **ENTERED DIRECTLY on self-admit** (`node_sync::forge_mode_after_admit`; the N-AF `FirstOwnBlockServed`
+  cert-wait intermediate is FOLDED OUT — `ForgeMode` is now 3-state), and `single_producer_forge_decision` derives
+  the base under a **6-condition fence** that FAILS CLOSED (`ForgeRefused::SingleProducerFenceViolation`) on ANY
+  failure (no silent fallback to `followed_peer_tip` / the cert): (1) `VenueRole::SingleProducer`; (2) **NO
+  competing block observed on the canonical peer receive stream since catch-up / self-admit — an OBSERVED-FEED
+  fence, NOT fork-choice; if observed, fail closed, do NOT resolve (that is rung 2)**; (3) the relay is
+  non-producing; (4) the block was admitted through `pump_block` (`DC-NODE-05` / `DC-NODE-12` stay the SOLE durable
+  admit authority — `DC-NODE-20` only READS the tip `pump_block` produced; it advances no tip); (5) the ChainDB
+  spine is contiguous + servable; (6) no fork-choice decision is required (in rung 1 mechanically DERIVED from (2)
+  — no competing candidate ⇒ the local spine head is the degenerate selected tip). `forge_followed_tip_admission`
+  (`DC-NODE-15`) **REMAINS the INITIAL catch-up gate** (`durable == followed` before the FIRST own-forge — the gate
+  is PHASE-SPLIT, not removed; verified via the `run_relay_loop_with_sched -> dc_node_15_refusal ->
+  forge_followed_tip_admission` call chain); `DC-NODE-20` supersedes ONLY the **repeated post-self-admit `durable
+  == followed` re-check** (which fired `NoTipAvailable` forever once Ade self-admitted a block the non-producing
+  relay never re-announces). **The adoption certificate is FULLY REMOVED** (`DC-NODE-21` — the
+  `VenueAdoptionCertificate` type + `read_adoption_cert` / `parse_hex32` parsers + the `--adoption-cert-path` flag
+  are DELETED from `ade_node`; the cert is rung-1 RED operator EVIDENCE parsed by the harness OUTSIDE the node,
+  never a forge-base input; it must NEVER creep back as authority and must NEVER appear in multi-producer / preprod
+  / production forge paths). **Warm-start re-entry** (`DC-NODE-22`): if `warm_start_recovery` yields a durable local
+  `ChainDb::tip` ABOVE the recovered bootstrap anchor (`node_sync::warm_start_forge_mode`, reading the derived
+  `BootstrapState.replayed_anchor_block_no`), forge mode re-enters `SingleProducerExtendOwnDurableSpine{current_tip
+  = ChainDb::tip}` under the same fence WITHOUT a fresh followed-peer catch-up — fail closed to
+  `InitialCatchupRequired` otherwise (so a follow-link EOF after restart cannot re-introduce the catch-up
+  dependency `DC-NODE-20` retired). In rung 1 "selected" is **DEGENERATE** (no competing candidate ⇒ local ChainDB
+  head = selected tip); **rung 2 MUST replace this with real fork-choice (`DC-CONS-03`, UNTOUCHED here)**. The
+  forge-base decision is witnessed by the closed emit-only `NodeSchedEvent::ForgeBaseSelected` sched transcript
+  (`CN-NODE-04` strengthened). **NO RO-LIVE flip** — the run-4 transcript (a real Haskell relay adopting cert-free
+  local-tip-forged blocks, sustained > k across a follow-link EOF + a restart) is the C2-LOCAL rung-1 mechanism,
+  NOT operator-witnessed bounty acceptance (`RO-LIVE-01` stays `partial`). Gates `ci_check_local_durable_forge_base.sh`
+  (DC-NODE-20) + `ci_check_cert_evidence_only.sh` (DC-NODE-21) + `ci_check_warm_start_re_entry.sh` (DC-NODE-22) +
+  `ci_check_node_path_fidelity.sh` (the 29-flag `--mode node` allow-list, cert flag gone) + the carried
+  `ci_check_single_producer_extend_own_spine.sh` (DC-NODE-18) + `ci_check_single_producer_loop_continuation.sh`
+  (DC-NODE-19) + `ci_check_live_transcript_forge_base.sh` (the forge-base evidence). All four DC-NODE-20/21/22 + the
+  carried DC-NODE-18/19 are `tier = derived` (C2-LOCAL single-producer liveness/compat); the true-tier laws
+  underneath (`pump_block` durability `DC-NODE-12`, replay-equivalence `T-REC-05`) are UNCHANGED.
+- **Single-producer forge loop continues past a clean structural feed EOF, fenced to the certified run (N-AG,
+  DC-NODE-19 — load-bearing).** In a certified single-producer venue ALREADY in the extend state
+  (`ForgeMode::SingleProducerExtendOwnDurableSpine`), a `LoopState::Ending` caused SOLELY by a clean structural feed
+  EOF (the Ade→relay follow link closing/draining) no longer terminates the forge loop — the GREEN 5th
+  `plan_loop_step` input `VenuePolicy::ContinueInSingleProducerExtend` continues forging the OWN certified spine
+  (each admitted via `pump_block`, `DC-NODE-12`), FENCED to the **7 certified-run conditions** and failing closed
+  (verbatim `HaltCleanly` / typed refusal, never a silent forge) on ANY of: not `VenueRole::SingleProducer`; not
+  the extend state; operator shutdown; a forge-validity bound failing (off-epoch `DC-EPOCH-03` / beyond forecast
+  horizon `DC-CONS-09` / KES-period invalid); a competing chain observed before EOF; relay-producing evidence; the
+  venue fence otherwise tripping. **NO numeric "max blind forges" cap** (an artificial operator policy, not a
+  Cardano semantic invariant — the certified-run fence + the existing BLUE bounds + operator shutdown bound it).
+  This RELOCATES the loop's termination authority off feed-liveness onto operator shutdown / fatal error (the same
+  move `DC-NODE-09` made for the serve-listener lifetime) while PRESERVING `DC-NODE-05`: the forge advances NO
+  durable tip directly, `run_node_sync -> pump_block` stays the SOLE durable tip-advance authority, and available
+  feed work still drains via `SyncOnce` BEFORE any `ForgeTick`. The default `VenueRole::Unknown` venue takes the
+  verbatim prior HaltCleanly-on-feed-end path. Only a CLEAN structural EOF is continued; a `LoopState::Ending`
+  representing a real shutdown or a fatal source failure exits via `Err`/fail-fast and is NEVER continued. A
+  loop-lifecycle refinement, NOT a fork-choice change — `DC-CONS-03` UNTOUCHED, the continuation never
+  selects/reorders/prefers chains (`ci_check_single_producer_loop_continuation.sh`).
 - **`--mode node` feed/forge scheduling-event vocabulary is closed + emit-only (N-F-G-J S1, CN-NODE-04).** The
   GREEN `ade_node::live_log::{sched_event, sched_writer}` `NodeSchedEvent` / `FeedReason` / `ForgeOutcome` are
   closed enums (none `#[non_exhaustive]`; no catch-all / `Other`; no stringly field), byte-deterministically
@@ -2977,7 +3125,7 @@ How new modules enter the workspace.
 | Color | Naming convention | Build-config flags | May depend on | MUST NOT depend on |
 |-------|-------------------|--------------------|----------------|--------------------|
 | **BLUE** | `ade_*` crate, or a BLUE `ade_network` submodule path in `.idd-config.json` `core_paths`; `// Core Contract:` + `//! BLUE …` banner first line | `#![deny(unsafe_code)]`, `deny(unwrap_used / expect_used / panic / float_arithmetic)`; no `#[cfg(feature = …)]` semantic gating | Other BLUE modules only (`ade_types` ← `ade_codec`/`ade_crypto` ← `ade_core` ← `ade_ledger`/`ade_plutus`; `ade_network` BLUE submodules ← `ade_codec`+`ade_types`) | `ade_runtime`, `ade_node`, `ade_core_interop`, the RED half of `ade_network`; std runtime / I/O / clock / rand / `HashMap` / float / async |
-| **GREEN** | `ade_testkit` crate, `ade_network::session`, or a GREEN-by-content sub-tree inside `ade_runtime` / `ade_node` (incl. `forward_sync::reducer`, `seed_consensus_merge` (N-F-A), `consensus_inputs::protocol_params` + `consensus_inputs::canonical::require_forge_current_pparams` (N-F-G-A), `clock::checked_millis_to_slot` (N-F-G-A), `ba02_evidence` (N-F-C), `producer::self_accepted_handoff` (N-F-G-B), `run_loop_planner` (N-F-D/N-F-E), `forge_intent` (N-F-F), `node_sync::forge_epoch_admission` (N-F-G-A, GREEN-by-fn), `rehearsal_evidence` (N-F-G-D, the non-promotable `PrivateRehearsalManifest` envelope), `live_log::{sched_event, sched_writer}` (N-F-G-J, the closed emit-only `NodeSchedEvent` / `FeedReason` / `ForgeOutcome` scheduling vocabulary + its byte-deterministic JSONL encoder), `node_sync::forge_header_position` + `node_lifecycle::may_cold_start_forge` (N-F-G-J, GREEN-by-fn — the cold-start header-position + permission decisions inside RED `ade_node`), `harness::sync_diff`, `consensus::genesis_pinning` (N-F-G-A, `#[cfg(test)]`)) with a `//! GREEN …` / `// GREEN` banner | Same deny attributes as BLUE; a purity CI gate per sub-tree (`run_loop_planner`: `ci_check_loop_planner_closed.sh`; `forge_intent`: `ci_check_forge_intent_closed.sh`; `protocol_params` + `require_forge_current_pparams`: `ci_check_recovered_ledger_pparams_sourced.sh`; `forge_epoch_admission`: `ci_check_node_forge_single_epoch_fail_closed.sh`; `self_accepted_handoff`: `ci_check_served_chain_handoff_fence.sh`; `genesis_pinning`: `ci_check_genesis_consistency_fixture_present.sh`; `rehearsal_evidence`: `ci_check_rehearsal_manifest_schema.sh`) | BLUE modules | RED modules in non-test deps; nondeterminism; secret material; float; participation in authoritative outputs |
+| **GREEN** | `ade_testkit` crate, `ade_network::session`, or a GREEN-by-content sub-tree inside `ade_runtime` / `ade_node` (incl. `forward_sync::reducer`, `seed_consensus_merge` (N-F-A), `consensus_inputs::protocol_params` + `consensus_inputs::canonical::require_forge_current_pparams` (N-F-G-A), `clock::checked_millis_to_slot` (N-F-G-A), `ba02_evidence` (N-F-C), `producer::self_accepted_handoff` (N-F-G-B), `run_loop_planner` (N-F-D/N-F-E), `forge_intent` (N-F-F), `node_sync::forge_epoch_admission` (N-F-G-A, GREEN-by-fn), `rehearsal_evidence` (N-F-G-D, the non-promotable `PrivateRehearsalManifest` envelope), `live_log::{sched_event, sched_writer}` (N-F-G-J, the closed emit-only `NodeSchedEvent` / `FeedReason` / `ForgeOutcome` scheduling vocabulary + its byte-deterministic JSONL encoder), `node_sync::forge_header_position` + `node_lifecycle::may_cold_start_forge` (N-F-G-J, GREEN-by-fn — the cold-start header-position + permission decisions inside RED `ade_node`), `node_sync::{forge_followed_tip_admission (N-AE), forge_mode_after_admit, warm_start_forge_mode, single_producer_forge_decision, venue_policy} (N-AF/N-AH, GREEN-by-fn — the closed pure/total/deterministic forge-mode + forge-base-fence + warm-start-re-entry + venue-policy classifiers inside RED node_sync)`, `harness::sync_diff`, `consensus::genesis_pinning` (N-F-G-A, `#[cfg(test)]`)) with a `//! GREEN …` / `// GREEN` banner | Same deny attributes as BLUE; a purity CI gate per sub-tree (`run_loop_planner`: `ci_check_loop_planner_closed.sh`; `forge_intent`: `ci_check_forge_intent_closed.sh`; `protocol_params` + `require_forge_current_pparams`: `ci_check_recovered_ledger_pparams_sourced.sh`; `forge_epoch_admission`: `ci_check_node_forge_single_epoch_fail_closed.sh`; `self_accepted_handoff`: `ci_check_served_chain_handoff_fence.sh`; `genesis_pinning`: `ci_check_genesis_consistency_fixture_present.sh`; `rehearsal_evidence`: `ci_check_rehearsal_manifest_schema.sh`) | BLUE modules | RED modules in non-test deps; nondeterminism; secret material; float; participation in authoritative outputs |
 | **RED** | `ade_runtime`, `ade_node`, `ade_core_interop`, `ade_network::mux::transport` (incl. `forward_sync::pump`, `mithril_import`, `genesis_bootstrap`, `mithril_bootstrap` (N-Z), `seed_consensus_provenance` (N-F-A), `recovery::restart`, `node_lifecycle` (incl. `run_relay_loop` + `ForgeActivation` + `spawn_live_wire_pump_source`, N-F-D/N-F-E/N-F-G-A/N-F-G-C), `node_sync` (N-F-C), `ba02_pass` (N-F-G-C, the operator-pass BA-02 evidence I/O), `rehearsal_pass` (N-F-G-D, the rehearsal-evidence I/O reusing `ba02_pass::correlate_peer_log_file`), the N-F-G-J cold-start wiring in `node_lifecycle` (`may_cold_start_forge` permission gate, GREEN-by-fn) + `node_sync` (`forge_header_position` + the additive `NodeForgeError::RecoveredTipMissingBlockNo`), `operator_forge` (N-F-F; N-F-G-A real parsers), `admission::{seed_to_snapshot, bootstrap}` (N-F-G-A current-pparams install; N-F-G-C `build_n2n_version_table` `pub(crate)`); `*_mode.rs` for mode handlers); `//! RED …` banner | tokio/std/I/O allowed; the `Clock` seam is the SOLE wall-clock observation reachable from a relay-loop/orchestrator driver (N-F-G-A: the forge path uses the checked `checked_millis_to_slot`); key custody confined to `ProducerShell` | Any module | — (RED is the leaf) |
 
 ### New module checklist
@@ -3112,12 +3260,18 @@ How new modules enter the workspace.
     (iv) keep the record a single closed canonical type with the SOLE codec (no `Default`, no `#[non_exhaustive]`,
     `BTreeMap`-ordered) — the field is additive ONLY behind the version gate, NOT a new TYPE.
 
-### CI gates that enforce the boundary (142 total; the N-AE.F / N-AE / N-AC / N-AB / N-AA / N-U / N-F-G-K…G-R / N-F-G-J / N-F-G-D / N-F-G-E / N-F-G-C / N-F-G-B / N-F-G-A / N-F-F / N-F-D-E / N-F-C / N-F-A / N-Z / N-Y / producer / network set)
+### CI gates that enforce the boundary (148 total; the N-AH / N-AG / N-AF / N-AE.F / N-AE / N-AC / N-AB / N-AA / N-U / N-F-G-K…G-R / N-F-G-J / N-F-G-D / N-F-G-E / N-F-G-C / N-F-G-B / N-F-G-A / N-F-F / N-F-D-E / N-F-C / N-F-A / N-Z / N-Y / producer / network set)
 
 | Script | Enforces | Cluster |
 |---|---|---|
+| `ci_check_local_durable_forge_base.sh` *(NEW N-AH S1)* | **DC-NODE-20** — in a declared rung-1 single-producer venue, after Ade self-admits a valid forged block through `pump_block` onto its local durable ChainDB spine, the forge base is the LOCAL selected durable tip (`ChainDb::tip`) — **NOT `followed_peer_tip` and NOT an operator adoption certificate**; the extend state is ENTERED DIRECTLY on self-admit (`node_sync::forge_mode_after_admit`, the `FirstOwnBlockServed` cert-wait FOLDED OUT — `ForgeMode` 3-state); the 6-condition fence holds (incl. the OBSERVED-FEED competing-block fail-closed — **NOT fork-choice**; relay non-producing; admitted via `pump_block`; spine contiguous/servable; no fork-choice required), failing closed `ForgeRefused::SingleProducerFenceViolation`; `forge_followed_tip_admission` REMAINS the DC-NODE-15 INITIAL catch-up gate (phase-split, verified via `run_relay_loop_with_sched -> dc_node_15_refusal -> forge_followed_tip_admission`); `pump_block` stays the sole durable admit authority (the forge advances no tip directly); DC-CONS-03 untouched. | N-AH |
+| `ci_check_cert_evidence_only.sh` *(NEW N-AH S2)* | **DC-NODE-21** — the file-based operator adoption certificate is rung-1 RED EVIDENCE-ONLY, NEVER forge authority: the `VenueAdoptionCertificate` type + `read_adoption_cert` / `parse_hex32` parsers + the `--adoption-cert-path` flag are **FULLY DELETED** from `ade_node` (the cert parser is GONE, not just demoted); the gate asserts NO cert token in the forge path (run-4 transcript: `cert_path_present=false` ×461, `cert_path_present:true` count = 0). Paired with `ci_check_node_path_fidelity.sh` (the 28→29 `--mode node` flag reconcile, cert flag gone). The cert MUST be removed/replaced by node-local selected-chain / fork-choice authority (DC-CONS-03) before rung 2 / preprod — it can never become chain-selection or durable authority. | N-AH |
+| `ci_check_warm_start_re_entry.sh` *(NEW N-AH S4b)* | **DC-NODE-22** — `node_sync::warm_start_forge_mode` (GREEN, fail-closed) re-enters `SingleProducerExtendOwnDurableSpine{current_tip = ChainDb::tip}` ONLY for a single-producer venue whose recovered tip is ABOVE the replay anchor (`replayed_anchor_block_no = recovered_tip.block_no − admit_count`, a DERIVED recovery summary on `BootstrapState`, NOT the raw WAL count); every other case fails closed to `InitialCatchupRequired` (never silently forges) — so a follow-link EOF after restart cannot re-introduce the catch-up dependency DC-NODE-20 retired; `pump_block` remains the SOLE durable admit authority (this rule only sets the forge MODE / reads the recovered tip; it admits nothing); DC-CONS-03 untouched (rung-2). | N-AH |
+| `ci_check_live_transcript_forge_base.sh` *(NEW N-AH S4a)* | **CN-NODE-04 / DC-NODE-20 evidence** — the closed emit-only `NodeSchedEvent::ForgeBaseSelected` variant (`forge_mode` / `forge_base_source` / `forge_base_hash` / `forge_base_block_no` / `followed_peer_tip_{block_no,hash}` / `cert_path_present`) + the enriched `ForgeResult{outcome, self_admit_via_pump_block, entered_forge_mode}` WITNESS the DC-NODE-20 forge-base decision in the JSONL transcript; the closed `ForgeBaseSource` set is `LocalChaindbTip` ONLY (a peer-tip / cert source is fail-closed); emit-only (it serializes a decision already made — never read by the planner / any authority); the `live_log::sched_writer` is the single closed-enum JSONL authority (a new variant is a compile error + an allow-list-test failure until wired). `CN-NODE-04` `strengthened_in += "PHASE4-N-AH"`. | N-AH |
+| `ci_check_single_producer_loop_continuation.sh` *(NEW N-AG)* | **DC-NODE-19** — in a certified single-producer venue already in the extend state, the GREEN 5th `plan_loop_step` input `VenuePolicy::ContinueInSingleProducerExtend` (the 32-case total table; the content-blind `node_sync::venue_policy` projection) continues forging the OWN certified spine past a CLEAN structural feed EOF, FENCED to the 7 certified-run conditions and failing closed (verbatim `HaltCleanly` / typed refusal) on any (not single-producer / not extend-state / operator shutdown / forge-validity bound fails / competing chain observed / relay-producing / venue fence trips); **NO numeric "max blind forges" cap**; `SyncOnce` still drains feed work BEFORE any `ForgeTick`; `pump_block` stays the SOLE durable tip-advance authority (`DC-NODE-05` preserved); only a clean EOF is continued (a real shutdown / fatal source failure `Err`s); the default `VenueRole::Unknown` venue takes the verbatim prior HaltCleanly-on-feed-end path; DC-CONS-03 untouched. | N-AG |
+| `ci_check_single_producer_extend_own_spine.sh` *(NEW N-AF)* | **DC-NODE-18** — the `ForgeMode` state machine is total/deterministic with NO booleans; `forge_mode_after_admit` advances ONLY on an actual admit (never a `not_leader` tick); the single-producer fence fails closed `ForgeRefused::SingleProducerFenceViolation`; the forge extends on the durable tip without requiring `followed == durable`; warm-start replay is byte-identical over a K-own-forged chain (`T-REC-05`). **NOTE (superseded by N-AH):** the N-AF cert-promotion-into-extend mechanism it originally also fenced (a promotion requiring an explicit certificate matched by chain-point identity) is FOLDED OUT by DC-NODE-20 (the cert removed, the transition direct on self-admit) — this gate carries forward only the still-true forge-mode-totality / fail-closed-fence / no-chain-selector / durable-tip-extend clauses; `DC-NODE-18` `strengthened_in += "PHASE4-N-AH"`. | N-AF / N-AH |
 | `ci_check_receive_idempotency.sh` *(NEW N-AE.F)* | **DC-NODE-16** — receive idempotency at the durable-admit chokepoint: in RED `ade_runtime::forward_sync::pump::pump_block`, immediately after `decode_block` and BEFORE the BLUE chokepoint reducer, the no-op is **HASH-keyed** (`get_block_by_hash(&decoded.block_hash)`, never slot-only); the `return Ok(None)` is **gated by that hit** (a byte-identical already-stored block — same slot, same hash — is skipped: no reducer step, no WAL append, no tip change, replay-equivalent); the slot is cross-checked (`stored.slot == decoded.header_input.slot`); a DIFFERENT block (different hash) at/before the last-applied slot returns `None`, reaches the UNCHANGED BLUE header authority, and fails closed (`SlotBeforeLastApplied`). **Non-vacuous** (the gate must find the hash-keyed query + the gated early return + the slot cross-check in the production region of `pump.rs`). No fork-choice, no skip-past (`DC-CONS-03` untouched); `pump_block` stays the sole durable tip authority (`DC-NODE-12`). | N-AE.F |
-| `ci_check_forge_followed_tip_admission.sh` *(NEW N-AE A)* | **DC-NODE-15 + DC-CONS-24** — the `--mode node` `ForgeTick` `selected_tip` has **NO `recovered.tip` fallback** as a forge base; a forge fires only when the durable servable tip equals the followed peer tip (`hash` AND `block_no`), else it returns the typed `ForgeRefused::NotCaughtUp { local_servable_tip, followed_peer_tip, reason }` (a structured value, NOT a log line); the forged successor's `prev_hash` byte-equals the followed peer tip hash AND `block_no == followed_tip.block_no + 1` (parent identity is the canonical hash, never inferred from block number); and the followed-peer-tip signal NEVER reaches `select_best_chain` / `chain_selector` (admissibility-only, never a chain selector). The forge-admissibility sibling of `ci_check_node_forge_single_epoch_fail_closed.sh` (DC-EPOCH-03). | N-AE |
+| `ci_check_forge_followed_tip_admission.sh` *(N-AE A; PHASE-SPLIT in place N-AH S1 for the DC-NODE-20 call chain)* | **DC-NODE-15 (INITIAL catch-up gate) + DC-CONS-24** — the `--mode node` `ForgeTick` `selected_tip` has **NO `recovered.tip` fallback** as a forge base; the INITIAL forge (before the first own-forge) fires only when the durable servable tip equals the followed peer tip (`hash` AND `block_no`), else it returns the typed `ForgeRefused::NotCaughtUp { local_servable_tip, followed_peer_tip, reason }` (a structured value, NOT a log line); a `CaughtUp` forged successor's `prev_hash` byte-equals the followed peer tip hash AND `block_no == followed_tip.block_no + 1` (parent identity is the canonical hash, never inferred from block number); and the followed-peer-tip signal NEVER reaches `select_best_chain` / `chain_selector` (admissibility-only, never a chain selector). **N-AH S1 PHASE-SPLIT (DC-NODE-20):** the gate was modified IN PLACE to fence that `forge_followed_tip_admission` is the INITIAL catch-up gate ONLY (reached via `run_relay_loop_with_sched -> dc_node_15_refusal -> forge_followed_tip_admission`); the POST-self-admit forge base is the LOCAL `ChainDb::tip` with NO followed re-check (DC-NODE-20, `ci_check_local_durable_forge_base.sh`) — the gate is preserved, not removed. The forge-admissibility sibling of `ci_check_node_forge_single_epoch_fail_closed.sh` (DC-EPOCH-03). | N-AE / N-AH |
 | `ci_check_recovered_anchor_intersectable.sh` *(NEW N-AE B)* | **DC-NODE-14 (anchor/parent clause)** — the recovered/forged parent is peer-intersectable via a **FindIntersect-ONLY**, **proof-gated** projection in `ChainDbServedSource::intersect` (`ade_runtime::network::served_chain_projection`): it advertises the `prev_hash` of the EARLIEST servable `StoredBlock` (the private bounded helper `earliest_servable_block_prev_hash`, reads exactly one block — DC-SERVEMEM-01) as an intersect point IFF a real servable successor exists; it serves **NO bytes** for that point (`get_block_by_hash` / `serve_range` / BlockFetch refuse structurally — no synthetic `StoredBlock`, no synthetic CBOR); recover-only (no `StoredBlock`) and `PrevHash::Genesis` fail closed (no projection). Option A (materialize anchor bytes) explicitly NOT taken. The serve-side completion of the DC-NODE-13 projection (`ci_check_served_chain_projection.sh`). | N-AE |
 | `ci_check_recover_follow_wal_lineage.sh` *(NEW N-AE C)* | **DC-WAL-02 + T-REC-05 (strengthened)** — both `node_lifecycle` live `ForwardSyncState::new` prior-fp seeds are `fingerprint(&state.ledger)` (the recovered ledger tip being extended), NEVER `Hash32([0u8;32])` / zero / `default()` — so the first followed `AdmitBlock` chains from the WAL-tail post_fp and a recover→followed store warm-starts replay-equivalently (it was failing `ChainBreak`, exit 42); WAL `verify_chain` / `replay_from_anchor` carry NO new accept-break/skip path (the fix seeds the chain correctly, it does NOT loosen recovery). | N-AE |
 | `ci_check_kes_evolution_before_sign.sh` *(NEW N-AC S1)* | **DC-CRYPTO-10** — the forge's SINGLE real KES sign (`ade_node::produce_mode::run_real_forge_inner` step 3) uses the EVOLVING `kes_sign_header_advancing` (NOT the raw `kes_sign_header` / `kes_sign_at`); `kes_sign_header_advancing` (`producer_shell`) calls `kes_advance_to(period)` VERBATIM BEFORE `kes_sign_header` (no `period + 1` / `period - 1` mutation); `kes_advance_to` → `kes_update` retains BOTH fail-closed guards (`EvolutionBackwards` on a backwards period / `EvolutionExhausted` beyond the key lifetime); and signing stays in RED `ade_runtime` (the standing `ci_check_no_signing_in_blue.sh` is the BLUE `T-KEY-01` fence — no `kes_sign` / `SigningKey` in BLUE). **Non-vacuous** (pre-S1 the forge used the raw `.kes_sign_header(`). The evolve-before-sign companion to `ci_check_unsigned_header_preimage_single_source.sh` (CN-KES-HEADER-01). | N-AC |
@@ -3136,7 +3290,7 @@ How new modules enter the workspace.
 | `ci_check_prevhash_single_wire_authority.sh` *(NEW N-F-G-J S2)* | **CN-WIRE-09** — the header `prev_hash` is the closed sum `PrevHash = Genesis / Block(Hash32)` ($hash32/null); the SINGLE POSITION-BLIND BLUE codec authority is `ade_codec::shelley::block::decode_prev_hash` (decodes the CBOR token, NEVER `block_number`); the `null` grammar is scoped to header_body ONLY — it MUST NOT leak into the chain-sync/block-fetch `Point`/`Tip` codec (`Point::Origin` stays `array(0)`); no second wire authority, no all-zero/fingerprint stand-in for the genesis predecessor. | N-F-G-J |
 | `ci_check_genesis_successor_reachability.sh` *(NEW N-F-G-J S4)* | **DC-NODE-08** — the both-`None`-tip `LoopStep::ForgeTick` arm derives `(0, PrevHash::Genesis)` via the GREEN `node_sync::forge_header_position` (a `Some`-without-height edge fails closed `NodeForgeError::RecoveredTipMissingBlockNo`, never `.unwrap_or(1)`) and forges block 0 through the SAME `run_real_forge → self_accept → SelfAcceptedHandoff` path; permission gated by the GREEN `node_lifecycle::may_cold_start_forge` (recovered lineage + forge-intent + forge-eligible feed); the forge holds NO `ChainDb` handle (no durable tip); scoped to the hermetic cold-start (no `genesis_forged` latch); the eligibility signal is general (never a private-only / C1-only flag). | N-F-G-J |
 | `ci_check_node_sched_events_emit_only.sh` *(NEW N-F-G-J S1)* | **CN-NODE-04** — the GREEN `ade_node::live_log::{sched_event, sched_writer}` `NodeSchedEvent` / `FeedReason` / `ForgeOutcome` are CLOSED (none `#[non_exhaustive]`; no catch-all / `Other`; no stringly field) and EMIT-ONLY — the GREEN run-loop planner must NEVER name the vocabulary; the relay loop emits them around the planner call + the `LoopStep` arms, recording the scheduling decision WITHOUT altering it; allow-list + negative tests. | N-F-G-J |
-| `ci_check_node_path_fidelity.sh` *(NEW N-F-G-D S1)* | **CN-REHEARSAL-FIDELITY-01 (clause 1, path fidelity)** — guard (a): the `crates/ade_node/src/cli.rs` argv flag-literal set equals the pinned closed **28-flag** allow-list (G-D adds none; a private-only / venue flag — `--private-net` / `--from-genesis` / `--devnet` / `--rehearsal` — trips it); guard (b): no fn whose name carries BOTH `genesis` and `consensus` (a from-genesis consensus-inputs constructor; line comments stripped first) AND `node_lifecycle.rs` sources consensus inputs via the shared `import_live_consensus_inputs`. The C1 dry-run differs from the preprod pass ONLY in operator INPUTS + the evidence LABEL — never in code. | N-F-G-D |
+| `ci_check_node_path_fidelity.sh` *(N-F-G-D S1; 28→29-flag reconcile + cert-flag removed, N-AF/N-AH S2)* | **CN-REHEARSAL-FIDELITY-01 (clause 1, path fidelity)** — guard (a): the `crates/ade_node/src/cli.rs` argv flag-literal set equals the pinned closed allow-list (now **29** flags: the 28-flag set + the N-AF `--single-producer-venue`; a private-only / venue flag — `--private-net` / `--from-genesis` / `--devnet` / `--rehearsal` — trips it). **N-AH S2 reconcile (DC-NODE-21):** the N-AF `--adoption-cert-path` flag was REMOVED from the allow-list (the cert is harness-owned evidence, never a node forge-base input — it must NEVER be re-added); the 28→29 net is +1 venue flag, −1 cert flag, +1 single-producer-venue. guard (b): no fn whose name carries BOTH `genesis` and `consensus` (a from-genesis consensus-inputs constructor; line comments stripped first) AND `node_lifecycle.rs` sources consensus inputs via the shared `import_live_consensus_inputs`. The C1 dry-run differs from the preprod pass ONLY in operator INPUTS + the evidence LABEL — never in code. | N-F-G-D / N-AH |
 | `ci_check_rehearsal_manifest_schema.sh` *(NEW N-F-G-D S2; hardened S4)* | **CN-REHEARSAL-FIDELITY-01 (clause 2, evidence non-promotability)** — when a committed `docs/evidence/phase4-n-f-g-d-private-rehearsal-*.toml` is present, verify the closed 12-field schema + `schema_version == 1` + `is_rehearsal = true` + `not_bounty_evidence = true` + a `venue` of `private-testnet*` + `peer_log_file_sha256` == sha256(the committed peer-log fixture). THREE non-promotability barriers: the distinct `docs/evidence/` home; the rehearsal markers; and a fail-closed cross-check that NO rehearsal marker appears in any `.toml` under EITHER bounty home (active `docs/clusters/PHASE4-N-F-G-C/` AND archived `docs/clusters/completed/PHASE4-N-F-G-C/` — EXISTING-homes list built first, fail-closed on grep rc≥2). Vacuously satisfied when none committed (C1 dry-run `blocked_until_operator_c1_net_executed`). The no-synthetic-rehearsal-manifest + no-bounty-home-leak enforcer; flips NO RO-LIVE rule. | N-F-G-D |
 | `ci_check_live_feed_memory_bounds.sh` *(NEW N-F-G-E S1)* | **DC-LIVEMEM-01** — both live-feed memory bounds are CLOSED LITERAL constants (`MAX_REASSEMBLY_TAIL_BYTES = 16 MiB` in `session/core.rs`; `MAX_WIRE_PUMP_LOOKAHEAD = 256` in `node_sync.rs`) AND not wired to CLI / env / config (the no-escape-hatch guard 3; line comments stripped first so the doc-comments naming "CLI / env / config" do not self-trip). The reassembly cap fails closed via the additive `SessionError::ReassemblyBufferOverflow` (no wildcard; sole consumer `mux_pump::session_err_to_halt`). | N-F-G-E |
 | `ci_check_ba02_evidence_manifest_schema.sh` *(NEW N-F-G-C S2)* | **RO-LIVE-06 / CN-OPERATOR-EVIDENCE-01 (BA-02 manifest schema)** — when a committed `docs/clusters/PHASE4-N-F-G-C/CE-G-C-LIVE_*.toml` is present, verify the closed 8-field schema + `schema_version == 1` + `peer_log_file_sha256` == sha256(the committed peer-log fixture). Vacuously satisfied when none committed. The no-synthetic-manifest enforcer. | N-F-G-C |
@@ -3239,10 +3393,21 @@ How new modules enter the workspace.
 > decoded.header_input.slot`). **0 retired, 0 modified-in-place** (every other gate byte-unchanged; RED-only, 0 BLUE
 > diff — the standing `ci_check_no_signing_in_blue.sh` / containment / served-projection / bounded-serve fences are
 > all byte-unchanged). Unlike DC-PROTO-10 (test-enforced), DC-NODE-16 mints a dedicated gate.
+> **N-AF + N-AG + N-AH added 6 (142 → 148): +6 NEW** `ci_check_single_producer_extend_own_spine.sh` (N-AF,
+> DC-NODE-18) + `ci_check_single_producer_loop_continuation.sh` (N-AG, DC-NODE-19) +
+> `ci_check_local_durable_forge_base.sh` (N-AH S1, DC-NODE-20) + `ci_check_cert_evidence_only.sh` (N-AH S2,
+> DC-NODE-21) + `ci_check_warm_start_re_entry.sh` (N-AH S4b, DC-NODE-22) + `ci_check_live_transcript_forge_base.sh`
+> (N-AH S4a, CN-NODE-04 / DC-NODE-20 evidence). **2 modified IN PLACE (not added; 0 retired):**
+> `ci_check_forge_followed_tip_admission.sh` (phase-split for the DC-NODE-20 call chain — the INITIAL catch-up gate
+> ONLY; the post-self-admit base is the local `ChainDb::tip`) + `ci_check_node_path_fidelity.sh` (the S2
+> cert-removal 28→29 `--mode node` flag reconcile). Verified mechanically: `git diff --name-status 6363683e..HEAD --
+> 'ci/ci_check_*.sh'` lists exactly 6 `A` + 2 `M`, 0 `D`. RED/GREEN-only across the span; 0 BLUE diff; the standing
+> `ci_check_no_signing_in_blue.sh` / containment / served-projection / bounded-serve / DC-CONS-03 fences are all
+> byte-unchanged.
 > _(The G-H gates `ci_check_single_serve_dispatch_authority.sh` + `ci_check_serve_listener_magic_aware.sh` are part
-> of the 141 total at HEAD but are NOT row-detailed in this table — see the G-H-gap note in the header.)_
-> Earlier-cluster gates (N-A..N-P, the N-M-* set, the N-L wire-session set) are present in the 141 total; the full
-> list is `ls ci/ci_check_*.sh` (= **141**).
+> of the 148 total at HEAD but are NOT row-detailed in this table — see the G-H-gap note in the header.)_
+> Earlier-cluster gates (N-A..N-P, the N-M-* set, the N-L wire-session set) are present in the 148 total; the full
+> list is `ls ci/ci_check_*.sh` (= **148**).
 
 ---
 
@@ -3459,6 +3624,39 @@ How new modules enter the workspace.
 
 ### Project-specific additions (Ade)
 
+- **Local-tip forge-base authority + cert removal + warm-start re-entry honest scope + boundary (N-AH, folding in
+  N-AF/N-AG, load-bearing — do NOT soften / do NOT broaden / do NOT re-introduce the cert):** The span re-homes the
+  rung-1 single-producer forge BASE off the followed-peer-tip / cert path onto the LOCAL durable `ChainDb::tip`,
+  REMOVES the adoption cert, and lets the certified loop survive a follow-link EOF + a restart — and **nothing
+  more**. The hard boundaries (all mechanically fenced): **(1) The forge base is `ChainDb::tip` ONLY under the
+  DC-NODE-20 6-condition fence** — `single_producer_forge_decision` fails closed `ForgeRefused::SingleProducerFenceViolation`
+  on ANY of: not `VenueRole::SingleProducer`; a competing block observed on the canonical receive stream (an
+  OBSERVED-FEED fence — **NOT fork-choice**; if observed, fail closed, do NOT resolve — that is rung 2); the relay
+  producing; the block not admitted via `pump_block`; the spine non-contiguous; a fork-choice decision required
+  (`ci_check_local_durable_forge_base.sh`). **(2) NO cert as forge authority** — the `VenueAdoptionCertificate` type
+  + `read_adoption_cert` / `parse_hex32` parsers + the `--adoption-cert-path` flag are FULLY DELETED from `ade_node`
+  (DC-NODE-21, `ci_check_cert_evidence_only.sh` + `ci_check_node_path_fidelity.sh`); the cert is rung-1 RED operator
+  EVIDENCE parsed by the harness OUTSIDE the node, and MUST NEVER creep back as authority / into multi-producer /
+  preprod / production. **(3) DC-NODE-15 is PRESERVED as the INITIAL catch-up gate** (phase-split, not removed —
+  `durable == followed` before the FIRST own-forge; DC-NODE-20 supersedes ONLY the repeated post-self-admit
+  re-check). **(4) `pump_block` stays the SOLE durable tip-advance authority** (DC-NODE-05 / DC-NODE-12 — DC-NODE-20
+  only READS the tip `pump_block` produced; it admits nothing, advances no tip). **(5) NO fork-choice / multi-producer
+  intake** — `select_best_chain` / `fork_choice` / DC-CONS-03 stay the rung-2 authority, UNTOUCHED; the loop
+  continuation (N-AG, DC-NODE-19) and the warm-start re-entry (N-AH, DC-NODE-22) never select/reorder/prefer chains.
+  **(6) Warm-start re-entry is fenced to rung-1 single-producer** (`warm_start_forge_mode` fails closed to
+  `InitialCatchupRequired` unless the recovered tip is above the replay anchor — `ci_check_warm_start_re_entry.sh`);
+  the `replayed_anchor_block_no` summary is a DERIVED recovery value on `BootstrapState`, NOT a persisted chain point
+  (the independently-persisted-anchor option-b′ was explicitly NOT taken — candidate #9 in §7). **NARROW — the span
+  is GREEN/RED-only (0 BLUE diff, 0 new canonical type);** the new `VenuePolicy` / `ForgeBaseSource` / `ForgeModeKind`
+  + the enriched `NodeSchedEvent` are closed GREEN sched/planner surfaces in `ade_node`, NOT canonical types /
+  registries; the `ForgeMode` 4→3 fold + the removed cert are surface REDUCTIONS. **NO RO-LIVE flip** — the run-4
+  transcript (a real Haskell relay adopting cert-free local-tip-forged blocks, sustained > k across a follow-link
+  EOF + a restart; `docs/evidence/phase4-n-ah-ce-ah-6-close.{md,jsonl}`) is the C2-LOCAL rung-1 mechanism, NOT
+  operator-witnessed bounty acceptance (only a committed `ba02_evidence::correlate` manifest over the preprod tip
+  advances `RO-LIVE-01`, which stays `partial` / operator-gated). DC-NODE-20/21/22 are `tier = derived` and
+  `enforced`; DC-NODE-18 `enforced` (N-AF) + DC-NODE-19 `declared` (N-AG, the gate landed, enforcement re-homed onto
+  DC-NODE-20); `CN-NODE-04` + `DC-NODE-19` `strengthened_in += "PHASE4-N-AH"`; no rule weakened; `DC-CONS-03`
+  untouched.
 - **Receive-idempotency honest scope + boundary (N-AE.F, load-bearing — do NOT soften / do NOT broaden):** N-AE.F
   makes the receive path NO-OP a byte-identical already-applied block re-announced by the peer (the post-CE-A5
   echo: after the relay adopted Ade's forged block 17 it served that block BACK over Ade's follow link, and the
@@ -3767,6 +3965,28 @@ How new modules enter the workspace.
 > Surfaced honestly per IDD: these are **declared** future attach points, not closed surfaces. Each is named
 > in a registry rule or a cluster CLOSURE record.
 >
+> **N-AF + N-AG + N-AH re-home the rung-1 forge-base AUTHORITY onto the local durable tip, REMOVE the cert, and
+> survive feed-EOF + restart — they OPEN NO new openly-extensible attach point, but DO surface ONE new candidate
+> (#9) and sharpen the existing candidate #8.** PHASE4-N-AH made the rung-1 single-producer forge base Ade's LOCAL
+> selected durable `ChainDb::tip` (`DC-NODE-20`, enforced — under a 6-condition OBSERVED-FEED fence, NOT
+> fork-choice), FULLY REMOVED the adoption certificate (`DC-NODE-21`, enforced — `VenueAdoptionCertificate` +
+> `read_adoption_cert` / `parse_hex32` + `--adoption-cert-path` DELETED; the cert is harness-owned evidence, a hard
+> rung-2 removal boundary), and made warm-start re-enter the extend state on the recovered own-spine tip
+> (`DC-NODE-22`, enforced); N-AG made the certified loop continue past a clean feed EOF (`DC-NODE-19`, the gate
+> landed, full enforcement re-homed onto DC-NODE-20); N-AF was the predecessor (`DC-NODE-18`, the cert-gated
+> extend, now SUPERSEDED). All are TIGHTENINGS / REDUCTIONS of the existing rung-1 forge path — the forge base is
+> the EXISTING BLUE `ChainDb::tip` read, `pump_block` stays the sole durable tip authority, and `DC-CONS-03` (the
+> rung-2 fork-choice authority) is UNTOUCHED. The span is **GREEN/RED-only (0 BLUE diff, 0 new canonical type)** and
+> does **NOT** flip any RO-LIVE rule — the run-4 transcript (a real Haskell relay adopting cert-free
+> local-tip-forged blocks, sustained > k across a follow-link EOF + a restart) is the C2-LOCAL rung-1 mechanism,
+> NOT operator-witnessed bounty acceptance (`RO-LIVE-01` stays `partial` / operator-gated). **TWO §7 effects:**
+> **(a) NEW candidate #9 — the independently-persisted recovery anchor (option-b′),** the storage-hardening seam
+> N-AH S4b explicitly did NOT take (it used a DERIVED `replayed_anchor_block_no` summary instead). **(b) candidate
+> #8 (multi-producer fork-choice / rung 2) is SHARPENED** — it is now ALSO the hard removal boundary for the
+> rung-1 local-tip degenerate selected-tip authority + the (already-removed) cert (DC-NODE-20/21 both name rung 2
+> + `DC-CONS-03` as the required replacement). The N-AF cert-promotion candidate is NOT carried (the cert is gone).
+> All other candidates (#0–#7) are carried UNCHANGED.
+>
 > **N-AE.F adds an idempotency guard INSIDE the existing RED durable-admit chokepoint — it OPENS NO new attach
 > point, adds NO new closed/extensible registry, and surfaces NO new candidate seam.** PHASE4-N-AE.F makes the
 > receive path NO-OP a byte-identical already-applied block re-announced by the peer (the post-CE-A5 echo):
@@ -4024,7 +4244,32 @@ How new modules enter the workspace.
    §2/§11 and `docs/planning/c2-local-discovered-gaps.md`). _Confirm: when wired, fork-choice attaches to the
    EXISTING BLUE `fork_choice` / `select_best_chain` authority (it is NOT a new seam — the authority already
    exists); the followed-peer-tip admissibility signal MUST remain admissibility-only and MUST NOT be promoted into
-   a chain selector._
+   a chain selector._ **N-AH SHARPENED this candidate (DC-NODE-20/21):** rung 1 now derives the forge base from
+   the LOCAL durable `ChainDb::tip` where "selected" is DEGENERATE (no competing candidate observed ⇒ the local
+   ChainDB head IS the selected tip); **rung 2 MUST REPLACE this degenerate authority with real fork-choice
+   (`DC-CONS-03`)** — when a competing candidate is observed on the receive stream, the DC-NODE-20 observed-feed
+   fence FAILS CLOSED (it does NOT resolve), and that resolution is exactly the rung-2 fork-choice work. Rung 2 is
+   ALSO the hard removal boundary for the already-removed adoption cert (DC-NODE-21 — the cert can never become
+   chain-selection or durable authority) and for the rung-1 local-tip degenerate selected-tip authority. _Confirm:
+   the rung-2 cluster (a) attaches fork-choice to the EXISTING BLUE `select_best_chain` / `fork_choice` (DC-CONS-03,
+   not a new seam), (b) replaces the DC-NODE-20 observed-feed fail-closed with real competing-chain resolution, and
+   (c) does NOT re-introduce the cert or the followed-peer-tip / local-tip degenerate selected-tip as authority._
+
+9. **Independently-persisted recovery anchor — option-b′ (NEW, DECLARED future storage-hardening seam; explicitly
+   NOT taken at N-AH).** N-AH S4b (DC-NODE-22) distinguishes a bare-anchor warm-start recovery from a recovery with
+   a replayed own-spine continuation via the **DERIVED** `BootstrapState.replayed_anchor_block_no: Option<u64>`
+   (`= recovered_tip.block_no − admit_count`, an auditable recovery SUMMARY, NOT a persisted chain point, NOT a new
+   WAL / durable surface). **Option-b′ — an INDEPENDENTLY PERSISTED anchor tip** (a real durable chain point keyed
+   in the ChainDb / WAL recording the bootstrap-anchor boundary directly, rather than reconstructing it from the
+   recovered tip minus the replayed admit count) — was explicitly NOT taken here (recorded in the N-AH S4b seam-
+   resolution doc `83e5d269` + the cluster doc). It would attach as a NEW persisted record behind the EXISTING
+   durable-store writers (`pump_block` / `bootstrap_initial_state` / the append-only WAL schema — `WalEntry` is a
+   CE-not-law additively-evolvable surface), NOT a new authority / plugin / chokepoint. A future storage-hardening
+   slice owns it. _Confirm: when wired, option-b′ persists the anchor through the EXISTING durable writers (no new
+   chokepoint, no second durable tip-advance path — `pump_block` stays the sole durable tip authority); the derived
+   `replayed_anchor_block_no` summary may then be RETIRED in favor of the persisted point; and the DC-NODE-22
+   rung-1-single-producer fence stays intact (warm-start re-entry stays fail-closed to `InitialCatchupRequired`
+   outside the venue)._
 
 ### Operator-pass execution gates (schema enforced, execution blocked)
 
@@ -4059,6 +4304,64 @@ How new modules enter the workspace.
 
 ## Generation notes
 
+- **Regenerated (cluster-close refresh covering THREE clusters — PHASE4-N-AF + N-AG + N-AH) at HEAD `5858288e`**
+  (`git rev-parse --short HEAD` — the PHASE4-N-AH close), applied DIRECTLY to the on-disk SEAMS. This refresh ALSO
+  pays the SEAMS debt deferred at the N-AF close (the N-AF `/head-deltas` recorded "CODEMAP/SEAMS refresh deferred
+  this close … the next cluster refresh must include baseline `f87d0056`"). The prior on-disk SEAMS was pinned at
+  the PHASE4-N-AE.F follow-on (`6363683e` / **458** canonical types / **142** CI / **341** rules). It is brought
+  current to HEAD `5858288e` (**458** canonical types / **148** CI / **347** rules), folding in **PHASE4-N-AF**
+  (single-producer extend-own-durable-spine, `DC-NODE-18`), **PHASE4-N-AG** (loop-continuation-after-feed-EOF,
+  `DC-NODE-19`), and **PHASE4-N-AH** (local selected durable chain forge-base authority + cert evidence-only +
+  single-producer warm-start re-entry, `DC-NODE-20`/`21`/`22`). The diff range narrated is `f87d0056..HEAD`.
+- **What the span did to the seam surface:** it RE-HOMED the rung-1 single-producer forge BASE off the
+  followed-peer-tip / cert path onto the LOCAL durable `ChainDb::tip` under a fixed observed-feed fence (DC-NODE-20),
+  ADDED four closed (version-gated / frozen — NOT openly extensible) surfaces — the GREEN `VenuePolicy` (planner
+  5th input), `ForgeBaseSource` (closed 1-variant), `ForgeModeKind` (closed 3-variant), and the enriched closed
+  emit-only `NodeSchedEvent` (the `ForgeBaseSelected` + enriched `ForgeResult`) — folded `ForgeMode` 4→3, REMOVED
+  two surfaces (the `VenueAdoptionCertificate` type + `read_adoption_cert` / `parse_hex32` parsers + the
+  `--adoption-cert-path` flag — DC-NODE-21, a hard boundary), and added one DERIVED field
+  (`BootstrapState.replayed_anchor_block_no`, a warm-start recovery summary — NOT a persisted chain point).
+  **NO new ingress surface, NO new openly-extensible / plugin / negotiated registry, NO new version-gated contract,
+  NO new BLUE authority or canonical type.** The forge base is the EXISTING BLUE `ChainDb::tip` read; `pump_block`
+  stays the sole durable tip-advance authority; `DC-CONS-03` (rung-2 fork-choice) is UNTOUCHED.
+- **Span delta spot-checked at HEAD `5858288e` (grep/ls/git only — no `cargo`):** `git diff f87d0056..HEAD` touches
+  **SIX** source `.rs` files, **NONE under the BLUE `core_paths`, with ZERO new BLUE `struct`/`enum`:** GREEN
+  `crates/ade_node/src/{node_sync.rs, run_loop_planner.rs, live_log/sched_event.rs, live_log/sched_writer.rs}`, RED
+  `crates/ade_node/src/{node_lifecycle.rs, cli.rs}`, and RED `crates/ade_runtime/src/bootstrap.rs`. `git diff
+  f87d0056..HEAD` over the BLUE `core_paths` trees touches **no** file and adds **zero** `^+(pub )?(struct|enum)`
+  lines (verified mechanically; 458 canonical types unchanged). Source confirms: `node_sync::ForgeMode` is now a
+  3-variant enum (the `FirstOwnBlockServed` intermediate folded out); `run_loop_planner::VenuePolicy` is the closed
+  2-variant `HaltOnFeedEnd | ContinueInSingleProducerExtend`; `live_log::sched_event::{ForgeBaseSource (1-variant
+  LocalChaindbTip), ForgeModeKind (3-variant), NodeSchedEvent::ForgeBaseSelected}` are present; `cli.rs` has NO
+  `adoption` token (the `--adoption-cert-path` flag is gone); `VenueAdoptionCertificate` / `read_adoption_cert` /
+  `parse_hex32` appear NOWHERE in `ade_node/src` except a single removal comment; `ade_runtime::bootstrap::BootstrapState`
+  carries the additive `replayed_anchor_block_no: Option<u64>` field. The SIX NEW gates
+  (`ci_check_single_producer_extend_own_spine.sh`, `ci_check_single_producer_loop_continuation.sh`,
+  `ci_check_local_durable_forge_base.sh`, `ci_check_cert_evidence_only.sh`, `ci_check_warm_start_re_entry.sh`,
+  `ci_check_live_transcript_forge_base.sh`) are present; `git diff --name-status 6363683e..HEAD -- 'ci/ci_check_*.sh'`
+  lists exactly 6 `A` + 2 `M` (`ci_check_forge_followed_tip_admission.sh` + `ci_check_node_path_fidelity.sh`), 0 `D`.
+  `ls ci/ci_check_*.sh | wc -l` = **148**; `grep -cE '^id = ' docs/ade-invariant-registry.toml` = **347** (213
+  enforced / 20 partial / 114 declared; DC-NODE-20/21/22 `enforced`, DC-NODE-17/19 `declared`, DC-NODE-18 `enforced`).
+- **Cross-reference check (CODEMAP ↔ SEAMS ↔ registry) at the N-AH refresh — read honestly:** all three AGREE at
+  HEAD `5858288e` (**458 / 148 / 347**). The CODEMAP was regenerated at `5858288e` (per its header) and carries the
+  N-AF/N-AG/N-AH RED/GREEN additions (`ForgeMode` 3-state, `VenuePolicy`, `ForgeBaseSource`/`ForgeModeKind` +
+  `NodeSchedEvent::ForgeBaseSelected`, `warm_start_forge_mode`, `BootstrapState.replayed_anchor_block_no`) + the
+  REMOVALS (the cert type/parsers/flag) + the +6 CI gates + DC-NODE-20/21/22. No stale module references in this
+  SEAMS; every module it newly cites is inventoried in the CODEMAP, in the SAME TCB color (`node_sync` +
+  `node_lifecycle` RED with GREEN-by-fn classifiers; `run_loop_planner` + `live_log::{sched_event, sched_writer}`
+  GREEN; `ade_runtime::bootstrap` RED).
+- **Candidate seams surfaced for confirm/reject (this refresh):** **ONE NEW — candidate #9 (the independently-persisted
+  recovery anchor, option-b′),** the storage-hardening seam N-AH S4b explicitly did NOT take (it used the DERIVED
+  `replayed_anchor_block_no` summary). Plus **candidate #8 (multi-producer fork-choice / rung 2) is SHARPENED** — it
+  is now also the hard removal boundary for the rung-1 local-tip degenerate selected-tip authority + the
+  already-removed cert (DC-NODE-20/21 both name rung 2 + `DC-CONS-03` as the required replacement). **No new
+  openly-extensible / plugin / negotiated registry, no new ingress surface, no new version-gated contract were
+  introduced;** the four NEW surfaces are CLOSED (planner input + sched/diagnostic enums + a state machine), and the
+  cert REMOVAL is a surface reduction. The N-AF cert-promotion candidate is NOT carried (the cert is gone). **Two
+  human-judgment confirm items are outstanding** (candidate #8 rung-2 fork-choice attaches to the existing BLUE
+  `select_best_chain` / `fork_choice` authority and must not re-introduce the cert / local-tip degenerate selected-tip
+  as authority; candidate #9 option-b′ persists through the existing durable writers with no second tip-advance path)
+  — see §7.
 - **Regenerated (single-slice follow-on refresh, PHASE4-N-AE.F) at HEAD `6363683e`** (`git rev-parse --short
   HEAD` — the *AE.F receive idempotency* commit), applied DIRECTLY to the on-disk SEAMS. The prior on-disk SEAMS
   was pinned at the PHASE4-N-AE close (`a76672b9` / **458** canonical types / **141** CI / **340** rules). This
