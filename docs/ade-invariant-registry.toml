@@ -7065,12 +7065,14 @@ PraosChainDepState -- INCLUDING any rollback+reselection. A live rollback is rec
 (append-only, canonical bytes -- CN-WAL-01) such that replay re-invokes the SAME
 materialize / reducer authority (CN-STORE-07 / DC-CONS-20) at that point; the durable record is
 NOT a second rollback implementation. No implicit live-only rollback: a rollback that happened
-live MUST be reproducible on recovery (T-REC-03/05, DC-CONS-06/22). OQ-1 (the WAL-marker vs
-proven-tail-reconciliation mechanism) MUST be decided before this is enforced.
+live MUST be reproducible on recovery (T-REC-03/05, DC-CONS-06/22). OQ-1 RESOLVED -> A (the
+version-gated WalEntry::RollBack marker re-invoking the existing rollback / materialize
+authority on replay; option B WAL-tail reconciliation rejected); enforced when the AI-S1 BLUE
+foundation + replay-equivalence land.
 """
 source = "docs/planning/phase4-n-ai-live-fork-choice-invariants.md (section 4, OQ-1)"
 cross_ref = ["DC-CONS-06", "DC-CONS-22", "DC-CONS-20", "CN-STORE-07", "CN-WAL-01", "T-REC-03", "T-REC-05", "DC-NODE-26"]
-code_locus = "CANDIDATE (pending /cluster-plan; OQ-1 mechanism decision REQUIRED first): either a version-gated WalEntry::RollBack marker (crates/ade_ledger/src/wal/) replayed through the existing rollback authority, OR a proven WAL-tail reconciliation (crates/ade_runtime/src/recovery/restart.rs). No implicit live-only rollback."
+code_locus = "CANDIDATE (pending /cluster-plan; OQ-1 RESOLVED -> A, see docs/planning/phase4-n-ai-oq1-rollback-durability-decision.md): a version-gated additive WalEntry::RollBack {to_point, reason, prior_tip, selected_tip} marker (crates/ade_ledger/src/wal/event.rs tag/encode/decode) whose replay arm in crates/ade_ledger/src/wal/replay.rs re-invokes the EXISTING materialize_rolled_back_state (CN-STORE-07) + lockstep commit_rollback (DC-CONS-20) and re-anchors the fingerprint chain to the materialized rolled-back fp. Append-only WAL preserved (CN-WAL-01); NOT a second rollback implementation. Option B (WAL-tail reconciliation) REJECTED."
 tests = []
 ci_script = ""
 status = "declared"
