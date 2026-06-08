@@ -5420,7 +5420,7 @@ code_locus = "crates/ade_node/src/node_lifecycle.rs"
 tests = ["relay_loop_syncs_then_halts_clean_on_source_end", "relay_loop_halts_clean_on_shutdown_no_partial_write", "relay_loop_idles_then_syncs_on_incremental_feed", "relay_loop_fails_closed_on_unapplyable_block", "plan_loop_step_forge_precedence_table_is_total"]
 ci_script = "ci_check_node_run_loop_containment.sh, ci_check_loop_planner_closed.sh"
 introduced_in = "PHASE4-N-F-D"
-strengthened_in = ["PHASE4-N-F-E"]
+strengthened_in = ["PHASE4-N-F-E", "PHASE4-N-AH"]
 status = "enforced"
 evidence_notes_s2 = "PHASE4-N-F-D S2 (relay loop wired): ade_node::node_lifecycle::run_relay_loop is the single live-run owner — both FirstRun and WarmStart converge into it (no print-and-exit), the GREEN plan_loop_step drives each step over the closed { SyncOnce, Idle, HaltCleanly } vocabulary, and the tip advances ONLY via run_node_sync -> pump_block. ci_check_node_run_loop_containment.sh fences the loop body (no direct pump_block / manual tip advance / forge / evidence / verdict / follower / second bootstrap). run_node_sync is UNMODIFIED (ci_check_node_sync_via_pump.sh still green). Hermetic only — no live peer (RO-LIVE-01 follow-on)."
 
@@ -5461,7 +5461,7 @@ code_locus = "crates/ade_node/src/node_lifecycle.rs (run_relay_loop driver), cra
 tests = ["relay_loop_two_clean_runs_byte_identical"]
 ci_script = "ci_check_node_run_loop_containment.sh"
 introduced_in = "PHASE4-N-F-D"
-strengthened_in = ["PHASE4-N-F-E"]
+strengthened_in = ["PHASE4-N-F-E", "PHASE4-N-AH"]
 status = "enforced"
 evidence_notes_s3a = "PHASE4-N-F-D S3a (2026-05-31): relay_loop_two_clean_runs_byte_identical proves two clean run_relay_loop runs over identical inputs (same recovered-state seed, same ordered in-memory multi-block feed, same shutdown schedule) yield byte-identical tip (slot+hash), WAL image, and captured checkpoint slots. Deterministic orchestration absent crash interference; test-only (the loop is RED orchestration over the pure GREEN planner + the deterministic run_node_sync->pump_block seam). Crash-at-boundary recovery is S3b."
 
@@ -5492,7 +5492,7 @@ code_locus = "crates/ade_node/src/node_lifecycle.rs, crates/ade_node/src/run_loo
 tests = ["plan_loop_step_forge_precedence_table_is_total", "forge_slot_guard_none_is_due", "forge_slot_guard_at_most_once_per_slot", "forge_slot_guard_rejects_past_slot", "relay_loop_forge_slot_derived_via_clock_seam", "relay_loop_forge_tick_attempts_forge_advances_no_tip", "relay_loop_without_producer_material_matches_nfd_relay", "relay_loop_forge_two_runs_byte_identical", "forge_tick_rotated_kes_period_skips_no_retroactive_sign", "forge_tick_off_epoch_slot_fails_closed_local"]
 ci_script = "ci/ci_check_loop_planner_closed.sh, ci/ci_check_node_run_loop_containment.sh, ci/ci_check_genesis_consistency_fixture_present.sh"
 introduced_in = "PHASE4-N-F-E"
-strengthened_in = ["PHASE4-N-F-F", "PHASE4-N-F-G-A", "PHASE4-N-AE"]
+strengthened_in = ["PHASE4-N-F-F", "PHASE4-N-F-G-A", "PHASE4-N-AE", "PHASE4-N-AH"]
 status = "enforced"
 evidence_notes = """
 PHASE4-N-F-E invariant sketch (2026-05-31, /invariants gate). Declared at sketch;
@@ -6108,7 +6108,7 @@ tests = [
 ci_script = "ci/ci_check_node_sched_events_emit_only.sh"
 status = "enforced"
 introduced_in = "PHASE4-N-F-G-J"
-strengthened_in = []
+strengthened_in = ["PHASE4-N-AH"]
 cluster = "PHASE4-N-F-G-J"
 
 [[rules]]
@@ -6514,7 +6514,7 @@ tests = ["forge_tick_durable_admit_advances_tip", "forge_successor_builds_block_
 ci_script = "ci/ci_check_forged_durable_admit_via_pump.sh, ci/ci_check_node_run_loop_containment.sh"
 status = "enforced"
 introduced_in = "PHASE4-N-U"
-strengthened_in = []
+strengthened_in = ["PHASE4-N-AH"]
 evidence_notes = "PHASE4-N-U S1 (2026-06-05). ENFORCED. ade_node::node_sync::admit_forged_block_durably feeds the self-accepted handoff's bytes (accepted().as_bytes(), no re-encode) into the existing forward_sync::pump_block chokepoint (StoreBlockBytes -> AppendWal -> AdvanceTip, durable-before-tip); the ForgeTick arm calls it before the G-R serve handoff. pump_block advances state.receive + the durable ChainDb together, so the next forge builds N+1 (forge_successor_builds_block_1_from_durable_tip). The forge advances no durable tip directly (DC-NODE-05 preserved; ci_check_node_run_loop_containment.sh allow-lists the 2nd fenced tip-advancer + forbids direct pump_block/put_block/AdvanceTip/rollback in the loop body). ci_check_forged_durable_admit_via_pump.sh fences the driver (routes through pump_block, no re-encode, no fork-choice, no manual tip advance). OQ-a resolved as supersede-via-cross-ref: DC-NODE-05 PRESERVED."
 
 [[rules]]
@@ -6559,7 +6559,7 @@ tests = ["forge_kill_then_warm_start_recovers_same_tip_via_forward_replay", "for
 ci_script = ""
 status = "enforced"
 introduced_in = "PHASE4-N-U"
-strengthened_in = ["PHASE4-N-AD", "PHASE4-N-AE"]
+strengthened_in = ["PHASE4-N-AD", "PHASE4-N-AE", "PHASE4-N-AH"]
 evidence_notes = "PHASE4-N-U S2 (2026-06-05). ENFORCED (test-enforced; no dedicated CI gate). A forged-block durable tip carries NO snapshot-at-tip (admit_forged_block_durably captures none); warm_start_recovery recovers it by FORWARD-REPLAY from the genesis slot-0 snapshot over the durable WAL block, and its fingerprint guard asserts the recovered ledger fp == the WAL-tail post_fp -- so reaching Ok with the same tip is byte-identical replay equivalence (forge_kill_then_warm_start_recovers_same_tip_via_forward_replay: forge block 0 -> admit -> kill -> reopen -> warm_start_recovery -> recovered tip slot+hash == the pre-kill durable tip). Rides the existing snapshot + forward-replay recovery law (the bootstrap_initial_state warm-start branch, already proven by recover_node_state's recovery_crash_at_phase_sync_byte_identical) -- no new durability law. True-tier: extends T-REC-01/02/03 from received-only to forged+received durable progression. PHASE4-N-AD (2026-06-06) STRENGTHENS: forge_tip_successor_kill_then_warm_start_recovers_block_one extends the proof from a single block-0 forge to a multi-block forged progression -- forge block 0 -> admit -> forge block 1 on the durable NON-Origin tip -> admit -> kill -> warm_start_recovery recovers block 1 byte-identically (no ChainBreak), proving the block-N -> block-N+1 prior_fp chains across WAL replay. The C1 cold-start seed -> block-0 ChainBreak (seed ledger fp vs the PrevHash::Genesis/null prior) is a C1 genesis-successor-only durability limitation, NOT a C2 tip-successor blocker -- C2 enters from a non-Origin recovered tip. PHASE4-N-AE.C (2026-06-07) STRENGTHENS to recover->FOLLOW->warm-start: the CE-A5 live run found node_lifecycle seeding the follow ForwardSyncState prior_fp with zero (not fingerprint(&state.ledger).combined), breaking replay-equivalence of a recover->followed store (warm-start ChainBreak@1, exit 42). recover_follow_kill_warm_start_chains_from_ledger_fp proves warm-start recovers the same followed tip; recover_follow_two_runs_byte_identical proves same recover base + same followed block -> byte-identical recovered tip + WAL image, after the fix."
 
 [[rules]]
@@ -6650,7 +6650,7 @@ tests = ["forge_refused_not_caught_up", "forge_base_falls_back_to_snapshot_ancho
 ci_script = "ci/ci_check_forge_followed_tip_admission.sh"
 status = "enforced"
 introduced_in = "PHASE4-N-AE"
-strengthened_in = []
+strengthened_in = ["PHASE4-N-AH"]
 evidence_notes = "PHASE4-N-AE.A (2026-06-06). ENFORCED. The --mode node ForgeTick recovered.tip forge-base fallback (node_lifecycle.rs:1102 `None => act.recovered.tip.clone()`) is removed: the forge base is the durable servable tip (ChainDb::tip(); the recovered snapshot anchor is never a forge base). A closed GREEN classifier forge_followed_tip_admission(durable_servable_tip, followed_peer_tip) returns CaughtUp iff BOTH tips are present AND hash AND block_no are equal, else NotCaughtUp{reason} (NoFollowedPeerTip | NoDurableServableTip | TipMismatch). On the recovered/following path the ForgeTick arm calls the classifier BEFORE the single fenced forge_one_from_recovered; NotCaughtUp records a typed ForgeRefused::NotCaughtUp{local_servable_tip, followed_peer_tip, reason} into ForgeActivation.last_forge_refused (a structured LOCAL observation, never a log-string-only path) and the forge does not fire (no state transition, tip unchanged) -- mechanically distinct from a forge Failed. The followed-peer-tip signal (FollowedPeerTipSignal) is sourced from the SAME run_admission_wire_pump stream (the AdmissionPeerEvent::TipUpdate events NodeBlockSource skips for sync are recorded as a write-only side effect); it is a forge-ADMISSIBILITY input only and never reaches select_best_chain/chain_selector/fork_choice (gate (d) static-grep enforced). The from-genesis cold-start (recovered.tip None) is upstream of the gate (DC-NODE-08). Gate: ci_check_forge_followed_tip_admission.sh."
 
 [[rules]]
@@ -6747,7 +6747,7 @@ tests = ["forge_mode_transitions_are_total_and_deterministic", "extend_own_spine
 ci_script = "ci/ci_check_single_producer_extend_own_spine.sh"
 status = "enforced"
 introduced_in = "PHASE4-N-AF"
-strengthened_in = []
+strengthened_in = ["PHASE4-N-AH"]
 evidence_notes = "Rung-1 Finding B fix (2026-06-07), introduced after OQ-1 disproved DC-NODE-17-as-fix (the relay does NOT re-announce Ade's own adopted block). ENFORCED for the SCOPED core invariant ONLY (successor extension after an explicit adoption certificate -- see the statement SCOPE BOUNDARY); NOT for sustained-past-k. Tier=derived (Cardano-compatibility/liveness for the C2-LOCAL single-producer relay spine); the true-tier laws underneath are unchanged. HERMETIC ENFORCEMENT: ci/ci_check_single_producer_extend_own_spine.sh + 6 ade_node node_sync tests -- forge-mode state machine total/deterministic; promotion requires an explicit certificate matched by chain-point identity (hash+block_no), never self-admit-inferred, slot ignored; extend forges on the durable tip without followed==durable; fail-closed SingleProducerFenceViolation on each of 5 conditions; warm-start replay byte-identical over a K=3 own-forged chain (T-REC-05); forge_mode_after_admit advances ONLY on an actual admit (not on a not_leader tick). BLUE UNCHANGED: pump_block durable admission stays authoritative+idempotent (DC-NODE-16); ledger/chain_dep/WAL unchanged; successor construction derives from the evolved admitted spine (DC-NODE-10/DC-CONS-24); chain selection (DC-CONS-03) stays the sole follow/fork authority. LIVE CORE PROOF (CE-AF-6a; C2-LOCAL cardano-testnet magic 42, run c2t7, 2026-06-07; docs/evidence/phase4-n-af-extend-own-spine.{md,jsonl}): Ade forged block 11 -> the non-producing Haskell relay adopted it -> the operator/harness wrote the RED venue-adoption certificate (11 327 7e67cd0d...) -> Ade promoted (own_tip == cert by chain-point identity) -> Ade forged block 12 from its OWN durable adopted spine -> the relay adopted block 12, with NO echo of block 11 back to Ade. Two live-surfaced loop bugs were found + fixed en route, BOTH missed by the hermetic suite + the IDD/security reviews (the live gate's value): (1) the post-forge mode advancement fired on a not_leader tick (forged=true but nothing admitted), wrongly promoting before any block; (2) the cert promotion used full TipPoint equality incl. slot instead of chain-point identity. DEFERRED, NOT claimed here (CE-AF-6b): sustained production past k, relay ImmutableDB settlement, follow-link liveness, and forge-loop continuation after the Ade->relay follow link EOFs. The c2t7 run stopped at 2 blocks because that follow link EOF'd (relay idle timeout; no keep-alive) and the loop currently treats the follow source as a lifecycle authority -- scoped to DC-NODE-19 (single-producer extend-mode loop continuation after follow EOF), which touches DC-NODE-05 (forge subordinate to the sync spine). OQ-KA (follow-link keep-alive) remains a separate non-blocking diagnostic."
 
 [[rules]]
@@ -6786,7 +6786,7 @@ tests = []
 ci_script = ""
 status = "declared"
 introduced_in = "TBD"
-strengthened_in = []
+strengthened_in = ["PHASE4-N-AH"]
 evidence_notes = """
 CE-AF-6b, deferred from DC-NODE-18 (PHASE4-N-AF). DECLARED at /invariants (2026-06-08, user-approved
 framing); enforced only when the slice lands with ALL of: the GREEN plan_loop_step 5th-input totality gate
@@ -6845,13 +6845,13 @@ fork-choice / multi-producer (rung 2), and preprod are OUT of scope.
 source = "docs/planning/local-selected-durable-chain-forge-base-invariants.md"
 cross_ref = ["DC-NODE-05", "DC-NODE-12", "DC-NODE-15", "DC-NODE-18", "DC-NODE-19", "DC-NODE-21", "DC-CONS-03", "DC-CONS-23", "T-REC-03", "T-REC-05"]
 code_locus = "CANDIDATE (pending /cluster-plan): crates/ade_node/src/node_lifecycle.rs (the proceed_to_forge gate -- replace the post-self-admit durable_servable_tip == followed_peer_tip re-check + the read_adoption_cert promotion with a local-selected-durable-tip authority derived from ChainDb::tip, fenced); crates/ade_node/src/node_sync.rs (the ForgeMode transition CaughtUpToPeerTip -> SingleProducerExtendOwnDurableSpine becomes DIRECT on self-admit, folding out the cert-gated FirstOwnBlockServed intermediate; the observed-feed competing-block fence). REUSES BLUE ChainDb::tip + pump_block (no new BLUE authority)."
-tests = []
-ci_script = ""
-status = "declared"
+tests = ["caughtup_self_admit_enters_extend_directly_no_cert", "post_self_admit_forges_on_local_tip_durable_ne_followed_no_cert", "local_spine_sustains_two_successors_no_cert", "local_spine_two_runs_byte_identical"]
+ci_script = "ci/ci_check_local_durable_forge_base.sh, ci/ci_check_forge_followed_tip_admission.sh"
+status = "enforced"
 introduced_in = "PHASE4-N-AH"
 strengthened_in = []
 evidence_notes = """
-Motivated by the run-4 live finding (2026-06-08): Ade forged block 11, a real Haskell relay adopted
+ENFORCED at PHASE4-N-AH close (2026-06-08): S1 (b0fb8817) makes the forge base ChainDb::tip under the 6-condition fence (direct CaughtUpToPeerTip -> extend; observed-feed competing-block fail-closed); ci_check_local_durable_forge_base.sh + the DC-NODE-20 phase-split half of ci_check_forge_followed_tip_admission.sh green. CE-AH-6 live bar met by run-4 (docs/evidence/phase4-n-ah-ce-ah-6-close.{md,jsonl}): cert-free local-tip forge, sustained > k immutable across a follow-link EOF, a real Haskell relay adopting. Motivated by the run-4 live finding (2026-06-08): Ade forged block 11, a real Haskell relay adopted
 it, but Ade returned no_tip_available every subsequent tick because the proceed_to_forge gate
 required durable_servable_tip == followed_peer_tip -- which fails the instant Ade self-admits a block
 the non-producing relay does not re-announce -- and the only escape (cert-promotion into extend mode)
@@ -6884,13 +6884,13 @@ a forge-loop precondition.
 source = "docs/planning/local-selected-durable-chain-forge-base-invariants.md"
 cross_ref = ["DC-NODE-20", "DC-NODE-18", "DC-NODE-19", "DC-CONS-03"]
 code_locus = "CANDIDATE (pending /cluster-plan): crates/ade_node/src/node_lifecycle.rs (read_adoption_cert demoted to an evidence-only transcript record, REMOVED from the forge-base / proceed_to_forge path); a CI gate asserting the cert is never a forge-base input and never present in multi-producer/preprod/production forge paths."
-tests = []
-ci_script = ""
-status = "declared"
+tests = ["caughtup_self_admit_enters_extend_directly_no_cert", "post_self_admit_forges_on_local_tip_durable_ne_followed_no_cert", "local_spine_cert_file_absent_from_replay_surface"]
+ci_script = "ci/ci_check_cert_evidence_only.sh, ci/ci_check_node_path_fidelity.sh"
+status = "enforced"
 introduced_in = "PHASE4-N-AH"
 strengthened_in = []
 evidence_notes = """
-DECLARED at /invariants (2026-06-08, user-approved). Separated from DC-NODE-20 (OQ-20-3) because 'cert
+ENFORCED at PHASE4-N-AH close (2026-06-08): S2 (050237e9) FULLY DELETED read_adoption_cert / parse_hex32 / VenueAdoptionCertificate / --adoption-cert-path -- the cert parser is GONE, not just demoted; ci_check_cert_evidence_only.sh asserts no cert token in the forge path, ci_check_node_path_fidelity.sh keeps the --mode node flag set honest (28->29 reconcile). Run-4 transcript: cert_path_present=false x461, cert_path_present:true count = 0. DECLARED at /invariants (2026-06-08, user-approved). Separated from DC-NODE-20 (OQ-20-3) because 'cert
 is evidence-only, never authority' is independently enforceable and needs a hard rung-2 removal
 boundary -- folding it into DC-NODE-20 would make it easier for the shim to creep back into later
 slices as authority. Enforced when the slice demotes read_adoption_cert to a transcript-only evidence
@@ -6929,13 +6929,13 @@ peer-state lifecycle (DC-CONS-03, untouched).
 source = "docs/planning/local-selected-durable-chain-forge-base-invariants.md"
 cross_ref = ["DC-NODE-20", "DC-NODE-19", "DC-NODE-15", "DC-NODE-12", "DC-NODE-05", "T-REC-05", "CN-NODE-02", "DC-CONS-03"]
 code_locus = "CANDIDATE (pending S4b): crates/ade_node/src/node_lifecycle.rs -- the warm-start arm of run_node_lifecycle_inner: after warm_start_recovery + declare_single_producer_venue, derive forge_mode = SingleProducerExtendOwnDurableSpine{current_tip = recovered ChainDb::tip} when venue_role == SingleProducer AND the recovered tip is above the bootstrap anchor / own-spine threshold, fenced as in the statement. REUSES the DC-NODE-20 fence + ChainDb::tip + pump_block (no new BLUE authority)."
-tests = []
-ci_script = ""
-status = "declared"
+tests = ["warm_start_reentry_requires_tip_above_recovered_anchor", "warm_start_single_producer_re_enters_extend_and_forges"]
+ci_script = "ci/ci_check_warm_start_re_entry.sh"
+status = "enforced"
 introduced_in = "PHASE4-N-AH"
 strengthened_in = []
 evidence_notes = """
-DECLARED 2026-06-08 from the PHASE4-N-AH S4 live run-2 (docs/evidence/phase4-n-ah-live-run-2-partial.{md,jsonl}):
+ENFORCED at PHASE4-N-AH close (2026-06-08): S4b (e7b9be7e) -- warm_start_forge_mode (GREEN, fail-closed) re-enters SingleProducerExtendOwnDurableSpine{current_tip = ChainDb::tip} only for a single-producer venue whose recovered tip is above the replay anchor (replayed_anchor_block_no = recovered_tip.block_no - admit_count, a DERIVED recovery summary on BootstrapState, NOT the raw WAL count); every other case fails closed to InitialCatchupRequired; ci_check_warm_start_re_entry.sh green. CE-AH-6 run-4 closed point 8 LIVE: post-restart forge_mode=single_producer_extend_own_durable_spine, followed_peer_tip=null, post_forge=2, the relay adopted post-restart. DECLARED 2026-06-08 from the PHASE4-N-AH S4 live run-2 (docs/evidence/phase4-n-ah-live-run-2-partial.{md,jsonl}):
 run-2 proved the DC-NODE-20 forge-base transcript is now DIRECT (249 forge_base_selected, all
 local_chaindb_tip + cert_path_present=false; 10 self_admit_via_pump_block) and warm-start RECOVERY is
 clean (ws_err=0, no ChainBreak, relay 18->20 no rollback), BUT post-restart the node emitted 96

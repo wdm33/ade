@@ -155,5 +155,25 @@ T-REC-03 + T-REC-05.
   (`strengthened_in += PHASE4-N-AG`). `DC-CONS-03` explicitly untouched.
 
 ## §11 Close record
-**OPEN — filled at `/cluster-close`.** (DC-NODE-19 declared→enforced; CE-AG-1..6 status; commits; reviews;
-registry delta; four-grounding-doc refresh incl. the deferred CODEMAP+SEAMS @ baseline `f87d0056`.)
+**SUPERSEDED-CLOSE 2026-06-08** (partial close — hermetic core complete, live CE re-homed).
+
+- **Hermetic core (CE-AG-1..4) COMPLETE:** S1 GREEN planner VenuePolicy (`b9ef6e69`), S2 RED loop
+  continuation past feed-EOF (`46098c8c`), S3 replay-equivalence (`a65e2039`). The 32-case planner
+  totality, the 7-condition fail-closed continuation, and the post-feed-end replay-equivalence all
+  landed and pass.
+- **CE-AG-5 (live sustained proof = CE-AF-6b) SUPERSEDED / RE-HOMED to PHASE4-N-AH CE-AH-6.** The
+  DC-NODE-18 cert-promotion mechanism CE-AG-5 relied on to ENTER the extend state was retired by
+  DC-NODE-20 (the run-4 finding: the operator cert had leaked from evidence into forge-loop
+  authority). The live sustained-past-k proof now runs on the DC-NODE-20 local-tip path and is **MET by
+  PHASE4-N-AH run-4** (`docs/evidence/phase4-n-ah-ce-ah-6-close.{md,jsonl}`).
+- **DC-NODE-19 stays `declared`/partial — NOT flipped to enforced here.** The planned CE-AG-6 flip was
+  gated on the live CE-AG-5, which is superseded. DC-NODE-19 (continue-past-EOF in the extend state)
+  remains valid hermetic infrastructure; it is **strengthened by PHASE4-N-AH** (`strengthened_in +=
+  PHASE4-N-AH`) — the extend state it continues is now ENTERED via local self-admit (DC-NODE-20), not
+  the cert — but it is **NOT overclaimed as independent live architecture** (that is DC-NODE-20).
+- **Strengthenings recorded under PHASE4-N-AH** (the live-proven cluster that subsumes this hermetic
+  core): DC-NODE-05 / DC-NODE-12 / DC-NODE-15 / DC-NODE-18 / DC-NODE-19 / T-REC-03 / T-REC-05 /
+  CN-NODE-02 / CN-NODE-04 carry `strengthened_in += PHASE4-N-AH`; the planned `+= PHASE4-N-AG` is folded
+  into N-AH rather than double-credited. **DC-CONS-03 untouched.**
+- **Grounding docs** refreshed at the N-AH close (incl. the CODEMAP+SEAMS deferred at the N-AF baseline
+  `f87d0056`).

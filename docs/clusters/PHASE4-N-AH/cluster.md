@@ -173,7 +173,23 @@ T-REC-03/05 extend to cover cert-free local-tip-derived successors.
   waiting for the cert. Hard requirement (above) holds either way.
 
 ## 11. Cluster Close Record
-*OPEN — filled at `/cluster-close` (CE-AH-7).*
+**CLOSED 2026-06-08 (CE-AH-7).** DC-NODE-20 (local selected durable chain forge-base
+authority) + DC-NODE-21 (cert evidence-only) + DC-NODE-22 (warm-start re-entry) all flipped
+`declared` → `enforced`.
+
+**All CEs pass mechanically:**
+- **CE-AH-1/2** (DC-NODE-20 forge-base + 6-condition fence) — `caughtup_self_admit_enters_extend_directly_no_cert`, `post_self_admit_forges_on_local_tip_durable_ne_followed_no_cert`; `ci_check_local_durable_forge_base.sh` + the phase-split half of `ci_check_forge_followed_tip_admission.sh` (repaired at close, `2cc6ce25`).
+- **CE-AH-3** (DC-NODE-21) — cert parser fully deleted (S2 `050237e9`); `ci_check_cert_evidence_only.sh` + `ci_check_node_path_fidelity.sh`.
+- **CE-AH-4** (replay) — `local_spine_two_runs_byte_identical`, `local_spine_kill_warm_start_byte_identical`, `local_spine_cert_file_absent_from_replay_surface`.
+- **CE-AH-5** (core acceptance) — `local_spine_sustains_two_successors_no_cert`.
+- **CE-AH-6** (operator-gated live) — **MET by run-4**, full 8+3 bar; `docs/evidence/phase4-n-ah-ce-ah-6-close.{md,jsonl}` (run-1/2/3 partials documented alongside).
+- **CE-AH-8** (DC-NODE-22) — `warm_start_reentry_requires_tip_above_recovered_anchor`, `warm_start_single_producer_re_enters_extend_and_forges`; `ci_check_warm_start_re_entry.sh`.
+
+**Strengthened (`strengthened_in += PHASE4-N-AH`):** DC-NODE-05, DC-NODE-12, DC-NODE-15, DC-NODE-18, DC-NODE-19, T-REC-03, T-REC-05, CN-NODE-02, CN-NODE-04. **DC-CONS-03 untouched** (rung-2 fork-choice successor). DC-NODE-19 stays `declared`/partial — strengthened by AH, **not** overclaimed as independent live architecture (the live forge architecture is DC-NODE-20). **Gates: 148/148 green.**
+
+**Honest scope:** CE-AH-6 is a **C2-LOCAL** proof — cert-free single-producer block production against a real Haskell relay, sustained > k immutable across a follow-link EOF, warm-start resumption — **NOT preprod / bounty completion.** Carry-forward: **AH-FOLLOW-1** (competing-block fence broadening, rung-1 hardening); the independent-anchor-tip persistence (DC-NODE-22 option b′) as a deferred storage-hardening slice.
+
+**Supersedes PHASE4-N-AG:** its hermetic core (CE-AG-1..4) is complete; its live sustained CE (CE-AG-5 = CE-AF-6b) is **re-homed here as CE-AH-6** (see the N-AG close record).
 
 ## 12. Follow-ons & Notes (surfaced during S1)
 - **AH-FOLLOW-1 (rung-1 hardening; NOT an S1 blocker):** broaden the DC-NODE-20
