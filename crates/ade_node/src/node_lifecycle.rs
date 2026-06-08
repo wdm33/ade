@@ -92,9 +92,9 @@ use crate::forge_intent::{classify_forge_intent, ForgeIntent};
 use crate::node_sync::{
     admit_forged_block_durably, forge_followed_tip_admission, forge_mode_after_admit,
     forge_mode_on_caughtup, forge_one_from_recovered, run_node_sync,
-    single_producer_forge_decision, ForgeFollowedTipAdmission, ForgeMode, ForgeRefused,
-    NodeBlockSource, NodeForgeOutcome, SingleProducerForgeDecision, VenueAdoptionCertificate,
-    VenueRole,
+    single_producer_forge_decision, venue_policy, ForgeFollowedTipAdmission, ForgeMode,
+    ForgeRefused, NodeBlockSource, NodeForgeOutcome, SingleProducerFenceReason,
+    SingleProducerForgeDecision, VenueAdoptionCertificate, VenueRole,
 };
 use crate::operator_forge;
 use crate::run_loop_planner::{
@@ -1180,17 +1180,16 @@ pub async fn run_relay_loop_with_sched(
         // the (unchanged) planner call so the HaltCleanly arm can emit the
         // forge_tick_skipped diagnostic without consulting the planner output.
         let forge_was_due = matches!(forge_slot, ForgeSlotStatus::Due);
-        // PHASE4-N-AG S1 (DC-NODE-19): the default venue policy (HaltOnFeedEnd)
-        // preserves the prior feed-end-halts behavior VERBATIM; S2 replaces this
-        // with venue_policy(act.venue_role, &act.forge_mode) so a certified
-        // single-producer extend venue continues forging past a structural feed EOF.
-        match plan_loop_step(
-            loop_state,
-            sync_status,
-            forge_slot,
-            shutdown_status,
-            VenuePolicy::HaltOnFeedEnd,
-        ) {
+        // PHASE4-N-AG S2 (DC-NODE-19): a certified single-producer venue in the
+        // extend state continues forging past a structural feed EOF; every other
+        // venue (incl. forge-off / relay-only) keeps the verbatim HaltOnFeedEnd
+        // behavior. `policy` is a content-blind projection of (venue_role,
+        // forge_mode) — the planner never sees the venue/mode details.
+        let policy = match forge.as_deref() {
+            Some(act) => venue_policy(act.venue_role, &act.forge_mode),
+            None => VenuePolicy::HaltOnFeedEnd,
+        };
+        match plan_loop_step(loop_state, sync_status, forge_slot, shutdown_status, policy) {
             LoopStep::SyncOnce => {
                 run_node_sync(source, state, chaindb, wal, era_schedule, ledger_view)
                     .await
@@ -1269,7 +1268,32 @@ pub async fn run_relay_loop_with_sched(
                     // transition, tip unchanged; the typed refusal is recorded (never
                     // log-only). `proceed_to_forge` is a per-tick control flag, NOT
                     // the mode (the mode is the `ForgeMode` enum on `act`).
-                    let proceed_to_forge: bool = if act.venue_role == VenueRole::SingleProducer {
+                    // DC-NODE-19 (S2) — certified-run fence, condition 7: on a
+                    // CONTINUATION tick (the follow-link feed has EOF'd ⇒ loop_state
+                    // == Ending) the extend forge requires the venue-adoption
+                    // certificate to remain present + well-formed; absent/malformed ⇒
+                    // fail closed (no continuation), recorded as a typed fence
+                    // violation. The pre-EOF (Continuing) path is unchanged.
+                    // read_adoption_cert is RED admissibility only (never persisted /
+                    // replay-visible).
+                    let continuation_cert_missing = act.venue_role == VenueRole::SingleProducer
+                        && loop_state == LoopState::Ending
+                        && matches!(
+                            act.forge_mode,
+                            ForgeMode::SingleProducerExtendOwnDurableSpine { .. }
+                        )
+                        && read_adoption_cert(&act.adoption_cert_path).is_none();
+                    let proceed_to_forge: bool = if continuation_cert_missing {
+                        act.last_forge_refused = Some(ForgeRefused::SingleProducerFenceViolation {
+                            reason:
+                                SingleProducerFenceReason::AdoptionCertificateMissingOrMalformed,
+                            durable_tip: durable_servable_tip.clone(),
+                            followed_peer_tip: followed_peer_tip.clone(),
+                            observed_peer_tip: followed_peer_tip.clone(),
+                            venue_role: act.venue_role,
+                        });
+                        false
+                    } else if act.venue_role == VenueRole::SingleProducer {
                         let cert = if matches!(act.forge_mode, ForgeMode::FirstOwnBlockServed { .. })
                         {
                             read_adoption_cert(&act.adoption_cert_path)
@@ -1473,9 +1497,33 @@ pub async fn run_relay_loop_with_sched(
                         reason: source.feed_reason(),
                     });
                 }
-                tokio::select! {
-                    _ = source.wait_ready() => {}
-                    _ = shutdown.changed() => {}
+                // DC-NODE-19 (S2): in continue-mode the feed has EOF'd —
+                // `LoopState::Ending` is only reachable here under
+                // `ContinueInSingleProducerExtend` (HaltOnFeedEnd + Ending =>
+                // HaltCleanly, never Idle). The dead feed's `wait_ready` would park
+                // forever and starve the forge cadence, so wake on the slot-cadence
+                // timer or shutdown instead. A live (Continuing) feed keeps the
+                // feed-driven wait. Outputs stay deterministic under the injected
+                // clock schedule (the sleep paces; the clock decides slots).
+                match loop_state {
+                    LoopState::Ending => {
+                        let poll = std::time::Duration::from_millis(
+                            forge
+                                .as_deref()
+                                .map(|a| u64::from(a.slot_length_ms))
+                                .unwrap_or(1_000),
+                        );
+                        tokio::select! {
+                            _ = tokio::time::sleep(poll) => {}
+                            _ = shutdown.changed() => {}
+                        }
+                    }
+                    LoopState::Continuing => {
+                        tokio::select! {
+                            _ = source.wait_ready() => {}
+                            _ = shutdown.changed() => {}
+                        }
+                    }
                 }
             }
             LoopStep::HaltCleanly => {

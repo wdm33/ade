@@ -815,6 +815,12 @@ pub enum SingleProducerFenceReason {
     /// The recovered anchor is the k=0 snapshot-conflict edge (the frozen relay tip
     /// equals the recover anchor). DC-NODE-18 does not apply there.
     RecoveredAnchorK0SnapshotConflict,
+    /// DC-NODE-19 (PHASE4-N-AG S2): on a continuation tick (the follow-link feed
+    /// has EOF'd) the venue-adoption certificate is absent or unreadable — the
+    /// certified-run fence is not satisfied, so the continuation fails closed.
+    /// RED-constructed by the node-lifecycle cert gate; never produced by the pure
+    /// single_producer_forge_decision (whose extend-state fence is unchanged).
+    AdoptionCertificateMissingOrMalformed,
 }
 
 /// DC-NODE-18: the per-ForgeTick decision for the single-producer forge mode. Pure
@@ -5037,6 +5043,435 @@ mod tests {
                 adopted_root: own,
                 current_tip: next,
             }
+        );
+    }
+
+    // ===== PHASE4-N-AG S2 (DC-NODE-19): RED loop continuation past feed-EOF =====
+
+    use ade_network::chain_sync::server::ServedHeaderLookup;
+    use ade_runtime::network::ChainDbServedSource;
+
+    /// Always-leader single-producer harness with a durable block 0 already
+    /// forged + admitted, ready to drive `run_relay_loop` in the DC-NODE-18
+    /// extend state. Mirrors the always-leader setup of
+    /// `extend_own_spine_two_runs_byte_identical`, then forges + admits block 0.
+    struct S2Lead {
+        _dir: TempDir,
+        chaindb: PersistentChainDb,
+        wal: FileWalStore,
+        state: ForwardSyncState,
+        shell: ProducerShell,
+        recovered: BootstrapState,
+        ledger_view: PoolDistrView,
+        era_schedule: EraSchedule,
+        pool_id: Hash28,
+        block0_tip: TipPoint,
+    }
+
+    fn s2_extend_lead() -> S2Lead {
+        use ade_ledger::seed_consensus_inputs::{
+            encode_seed_epoch_consensus_inputs, SeedEpochConsensusInputs,
+        };
+        use ade_runtime::seed_consensus_provenance::append_seed_epoch_provenance;
+
+        let eta0 = Nonce(Hash32([0xCD; 32]));
+        let anchor_fp = Hash32([0xA0; 32]);
+        let genesis_base = || {
+            let mut ledger = LedgerState::new(CardanoEra::Conway);
+            ledger.epoch_state.epoch = EpochNo(0);
+            let mut chain_dep = PraosChainDepState::empty();
+            chain_dep.epoch_nonce = Nonce(Hash32([0xCD; 32]));
+            chain_dep.evolving_nonce = Nonce(Hash32([0xCD; 32]));
+            (ledger, chain_dep)
+        };
+        let era_schedule = EraSchedule::new(
+            BootstrapAnchorHash(Hash32([0u8; 32])),
+            0,
+            vec![EraSummary {
+                era: CardanoEra::Conway,
+                start_slot: SlotNo(0),
+                start_epoch: EpochNo(0),
+                slot_length_ms: 1_000,
+                epoch_length_slots: 432_000,
+                safe_zone_slots: 432_000,
+            }],
+        )
+        .expect("era schedule");
+        let mut shell = l5_synth_shell(0x31, 0x41, 0x59);
+        let cold_vk = shell.cold_vk();
+        let vrf_vk = shell.vrf_verification_key();
+        let pool_id: Hash28 = ade_crypto::blake2b::blake2b_224(&cold_vk.0);
+        let vrf_keyhash: Hash32 = ade_crypto::blake2b::blake2b_256(&vrf_vk.0);
+        let mut pools: BTreeMap<Hash28, PoolEntry> = BTreeMap::new();
+        pools.insert(
+            pool_id.clone(),
+            PoolEntry {
+                active_stake: 1,
+                vrf_keyhash,
+            },
+        );
+        let sidecar = SeedEpochConsensusInputs {
+            anchor_fp: anchor_fp.clone(),
+            epoch_no: EpochNo(0),
+            epoch_nonce: eta0.clone(),
+            active_slots_coeff: ActiveSlotsCoeff { numer: 1, denom: 1 },
+            total_active_stake: 1,
+            pool_distribution: pools,
+        };
+        let sidecar_bytes = encode_seed_epoch_consensus_inputs(&sidecar);
+        let ledger_view = PoolDistrView::from_seed_epoch_consensus_inputs(&sidecar);
+        let (l_r, c_r) = genesis_base();
+        let recovered = BootstrapState {
+            ledger: l_r,
+            chain_dep: c_r,
+            tip: None,
+            seed_epoch_consensus_inputs: Some(sidecar.clone()),
+        };
+
+        let dir = TempDir::new().unwrap();
+        let chaindb =
+            PersistentChainDb::open(PersistentChainDbOptions::at(dir.path().join("chain.db")))
+                .unwrap();
+        let mut wal = FileWalStore::open(dir.path().join("wal")).unwrap();
+        chaindb
+            .put_seed_epoch_consensus_inputs(&anchor_fp, &sidecar_bytes)
+            .unwrap();
+        append_seed_epoch_provenance(&mut wal, &anchor_fp, EpochNo(0), &sidecar_bytes).unwrap();
+        let (l_s, c_s) = genesis_base();
+        PersistentSnapshotCache::new(&chaindb)
+            .capture(SlotNo(0), &l_s, &c_s)
+            .unwrap();
+        let (l_a, c_a) = genesis_base();
+        let mut state = ForwardSyncState::new(
+            ReceiveState::new(l_a, c_a),
+            anchor_fp.clone(),
+            SnapshotCadence::DEFAULT,
+        );
+
+        // Forge block 0 (genesis successor, slot 1) and admit it durably so the
+        // durable servable tip is block 0 — the extend state's `current_tip`.
+        let (event0, handoff0) = forge_one_from_recovered(
+            &recovered,
+            &recovered.chain_dep,
+            &recovered.ledger,
+            None,
+            &mut shell,
+            &pool_id,
+            &ProtocolParameters::default(),
+            &era_schedule,
+            1,
+            0,
+            ProtocolVersion { major: 9, minor: 0 },
+        )
+        .expect("forge block 0 over the recovered genesis base");
+        let handoff0 = match (event0, handoff0) {
+            (CoordinatorEvent::ForgeSucceeded { .. }, Some(h)) => h,
+            (ev, _) => panic!("expected block-0 ForgeSucceeded, got {ev:?}"),
+        };
+        admit_forged_block_durably(
+            &handoff0,
+            &mut state,
+            &chaindb,
+            &mut wal,
+            &era_schedule,
+            &ledger_view,
+        )
+        .expect("durable admit block 0")
+        .expect("tip 0 advanced");
+        let (s0, h0, bn0) = ChainDbServedSource::new(&chaindb)
+            .tip()
+            .expect("served tip after block 0");
+        let block0_tip = TipPoint {
+            slot: s0,
+            hash: h0,
+            block_no: bn0,
+        };
+
+        S2Lead {
+            _dir: dir,
+            chaindb,
+            wal,
+            state,
+            shell,
+            recovered,
+            ledger_view,
+            era_schedule,
+            pool_id,
+            block0_tip,
+        }
+    }
+
+    /// A valid venue-adoption certificate line (`<block_no> <slot> <hash_hex64>`)
+    /// for the given own tip — the format `read_adoption_cert` parses.
+    fn s2_cert_for(tip: &TipPoint) -> String {
+        let hex: String = tip.hash.0.iter().map(|b| format!("{b:02x}")).collect();
+        format!("{} {} {}", tip.block_no, tip.slot.0, hex)
+    }
+
+    /// CE-AG-2: a certified single-producer venue in the DC-NODE-18 extend state
+    /// forges its successor PAST a structural feed EOF — the loop does NOT
+    /// HaltCleanly on the ended feed; the durable tip advances 0 -> 1.
+    #[tokio::test]
+    async fn single_producer_extend_continues_past_feed_eof() {
+        let mut lead = s2_extend_lead();
+        let cert_path = lead._dir.path().join("cert_continue");
+        std::fs::write(&cert_path, s2_cert_for(&lead.block0_tip)).unwrap();
+        let coordinator = s2_coordinator_state();
+        let mut clock = DeterministicClock::new(0, vec![2_000]); // slot 2 -> block 1
+        let mut act = ForgeActivation::new(
+            &mut clock,
+            &coordinator,
+            &lead.recovered,
+            &mut lead.shell,
+            lead.pool_id.clone(),
+            ProtocolParameters::default(),
+            ProtocolVersion { major: 9, minor: 0 },
+            0,
+            SlotNo(0),
+            1_000,
+        );
+        act.declare_single_producer_venue(Some(cert_path));
+        act.forge_mode = ForgeMode::SingleProducerExtendOwnDurableSpine {
+            adopted_root: lead.block0_tip.clone(),
+            current_tip: lead.block0_tip.clone(),
+        };
+        let mut source = NodeBlockSource::in_memory(vec![]); // ENDED feed
+        let (sd_tx, mut sd_rx) = watch::channel(false);
+        let loop_fut = run_relay_loop(
+            &mut lead.state,
+            &mut source,
+            &lead.chaindb,
+            &mut lead.wal,
+            &lead.era_schedule,
+            &lead.ledger_view,
+            &mut sd_rx,
+            Some(&mut act),
+        );
+        // The loop forges block 1 synchronously (past the ended feed), parks at
+        // the continue-mode Idle, and shutdown halts it.
+        let driver = async {
+            let _ = sd_tx.send(true);
+        };
+        let (loop_res, _) = tokio::join!(loop_fut, driver);
+        loop_res.expect("loop halts cleanly on shutdown");
+        drop(act);
+        let (_s, _h, bn) = ChainDbServedSource::new(&lead.chaindb)
+            .tip()
+            .expect("durable tip after the run");
+        assert_eq!(
+            bn, 1,
+            "the single-producer extend venue forged block 1 PAST the feed EOF"
+        );
+    }
+
+    /// CE-AG-2: the default (`Unknown`) venue keeps the verbatim prior behavior —
+    /// a structural feed EOF HaltCleanly's the loop; no forge past the feed.
+    #[tokio::test]
+    async fn unknown_venue_still_halts_on_feed_eof() {
+        let mut lead = s2_extend_lead();
+        let coordinator = s2_coordinator_state();
+        let mut clock = DeterministicClock::new(0, vec![2_000]);
+        // No declare_single_producer_venue, default forge_mode -> venue_policy is
+        // HaltOnFeedEnd, so an ended feed halts cleanly before any ForgeTick.
+        let mut act = ForgeActivation::new(
+            &mut clock,
+            &coordinator,
+            &lead.recovered,
+            &mut lead.shell,
+            lead.pool_id.clone(),
+            ProtocolParameters::default(),
+            ProtocolVersion { major: 9, minor: 0 },
+            0,
+            SlotNo(0),
+            1_000,
+        );
+        let mut source = NodeBlockSource::in_memory(vec![]); // ENDED feed
+        let (_sd_tx, mut sd_rx) = watch::channel(false);
+        run_relay_loop(
+            &mut lead.state,
+            &mut source,
+            &lead.chaindb,
+            &mut lead.wal,
+            &lead.era_schedule,
+            &lead.ledger_view,
+            &mut sd_rx,
+            Some(&mut act),
+        )
+        .await
+        .expect("Unknown venue halts cleanly on the ended feed");
+        drop(act);
+        let (_s, _h, bn) = ChainDbServedSource::new(&lead.chaindb)
+            .tip()
+            .expect("durable tip after the run");
+        assert_eq!(bn, 0, "Unknown venue must NOT forge past the feed EOF");
+    }
+
+    /// CE-AG-2: only a CLEAN structural feed EOF is continued. A fatal source
+    /// error (an undecodable block) exits via Err/fail-fast in the SyncOnce arm —
+    /// never continued, even in the single-producer extend venue.
+    #[tokio::test]
+    async fn fatal_source_error_fails_fast_not_continued() {
+        let mut lead = s2_extend_lead();
+        let cert_path = lead._dir.path().join("cert_fatal");
+        std::fs::write(&cert_path, s2_cert_for(&lead.block0_tip)).unwrap();
+        let coordinator = s2_coordinator_state();
+        let mut clock = DeterministicClock::new(0, vec![2_000]);
+        let mut act = ForgeActivation::new(
+            &mut clock,
+            &coordinator,
+            &lead.recovered,
+            &mut lead.shell,
+            lead.pool_id.clone(),
+            ProtocolParameters::default(),
+            ProtocolVersion { major: 9, minor: 0 },
+            0,
+            SlotNo(0),
+            1_000,
+        );
+        act.declare_single_producer_venue(Some(cert_path));
+        act.forge_mode = ForgeMode::SingleProducerExtendOwnDurableSpine {
+            adopted_root: lead.block0_tip.clone(),
+            current_tip: lead.block0_tip.clone(),
+        };
+        // An undecodable block: WorkAvailable -> SyncOnce -> run_node_sync Err.
+        let mut source = NodeBlockSource::in_memory(vec![vec![0xDE, 0xAD, 0xBE, 0xEF]]);
+        let (_sd_tx, mut sd_rx) = watch::channel(false);
+        let res = run_relay_loop(
+            &mut lead.state,
+            &mut source,
+            &lead.chaindb,
+            &mut lead.wal,
+            &lead.era_schedule,
+            &lead.ledger_view,
+            &mut sd_rx,
+            Some(&mut act),
+        )
+        .await;
+        drop(act);
+        assert!(
+            res.is_err(),
+            "a fatal source error must fail-fast (Err), never be continued: {res:?}"
+        );
+    }
+
+    /// CE-AG-3 (condition 7): the continuation fails closed when the venue-adoption
+    /// certificate is absent/malformed — the per-continuation cert re-validation
+    /// records `AdoptionCertificateMissingOrMalformed` and forges nothing.
+    #[tokio::test]
+    async fn continuation_fails_closed_per_fence_reason() {
+        let mut lead = s2_extend_lead();
+        let coordinator = s2_coordinator_state();
+        let mut clock = DeterministicClock::new(0, vec![2_000]);
+        let mut act = ForgeActivation::new(
+            &mut clock,
+            &coordinator,
+            &lead.recovered,
+            &mut lead.shell,
+            lead.pool_id.clone(),
+            ProtocolParameters::default(),
+            ProtocolVersion { major: 9, minor: 0 },
+            0,
+            SlotNo(0),
+            1_000,
+        );
+        // Single-producer extend venue, but NO certificate (adoption_cert_path None).
+        act.declare_single_producer_venue(None);
+        act.forge_mode = ForgeMode::SingleProducerExtendOwnDurableSpine {
+            adopted_root: lead.block0_tip.clone(),
+            current_tip: lead.block0_tip.clone(),
+        };
+        let mut source = NodeBlockSource::in_memory(vec![]); // ENDED feed
+        let (sd_tx, mut sd_rx) = watch::channel(false);
+        let loop_fut = run_relay_loop(
+            &mut lead.state,
+            &mut source,
+            &lead.chaindb,
+            &mut lead.wal,
+            &lead.era_schedule,
+            &lead.ledger_view,
+            &mut sd_rx,
+            Some(&mut act),
+        );
+        let driver = async {
+            let _ = sd_tx.send(true);
+        };
+        let (loop_res, _) = tokio::join!(loop_fut, driver);
+        loop_res.expect("loop halts cleanly on shutdown");
+        assert!(
+            matches!(
+                act.last_forge_refused,
+                Some(ForgeRefused::SingleProducerFenceViolation {
+                    reason: SingleProducerFenceReason::AdoptionCertificateMissingOrMalformed,
+                    ..
+                })
+            ),
+            "an absent certificate must fail the continuation closed with the cert reason, got {:?}",
+            act.last_forge_refused
+        );
+        drop(act);
+        let (_s, _h, bn) = ChainDbServedSource::new(&lead.chaindb)
+            .tip()
+            .expect("durable tip after the run");
+        assert_eq!(bn, 0, "no certificate => no continuation forge (tip unchanged)");
+    }
+
+    /// CE-AG-3: in continue-mode the Idle wait wakes on the slot-cadence timer
+    /// (not the dead feed's wait_ready), so the loop forges the NEXT due slot
+    /// across an Idle — durable tip advances 0 -> 1 -> 2 with no feed activity.
+    #[tokio::test]
+    async fn idle_under_dead_feed_wakes_on_clock_tick() {
+        let mut lead = s2_extend_lead();
+        let cert_path = lead._dir.path().join("cert_idle");
+        std::fs::write(&cert_path, s2_cert_for(&lead.block0_tip)).unwrap();
+        let coordinator = s2_coordinator_state();
+        // slot_length 10ms (the Idle timer): clock ticks for slot 2, slot 2
+        // (NotDue -> Idle), slot 3. The timer wakeup re-reads the clock + forges 3.
+        let mut clock = DeterministicClock::new(0, vec![20, 20, 30]);
+        let mut act = ForgeActivation::new(
+            &mut clock,
+            &coordinator,
+            &lead.recovered,
+            &mut lead.shell,
+            lead.pool_id.clone(),
+            ProtocolParameters::default(),
+            ProtocolVersion { major: 9, minor: 0 },
+            0,
+            SlotNo(0),
+            10,
+        );
+        act.declare_single_producer_venue(Some(cert_path));
+        act.forge_mode = ForgeMode::SingleProducerExtendOwnDurableSpine {
+            adopted_root: lead.block0_tip.clone(),
+            current_tip: lead.block0_tip.clone(),
+        };
+        let mut source = NodeBlockSource::in_memory(vec![]); // ENDED feed
+        let (sd_tx, mut sd_rx) = watch::channel(false);
+        let loop_fut = run_relay_loop(
+            &mut lead.state,
+            &mut source,
+            &lead.chaindb,
+            &mut lead.wal,
+            &lead.era_schedule,
+            &lead.ledger_view,
+            &mut sd_rx,
+            Some(&mut act),
+        );
+        // Let the 10ms Idle timer fire (waking the loop to forge slot 3) before
+        // shutting down. If the Idle parked on the dead feed instead, block 2
+        // would never be forged.
+        let driver = async {
+            tokio::time::sleep(std::time::Duration::from_millis(300)).await;
+            let _ = sd_tx.send(true);
+        };
+        let (loop_res, _) = tokio::join!(loop_fut, driver);
+        loop_res.expect("loop halts cleanly on shutdown");
+        drop(act);
+        let (_s, _h, bn) = ChainDbServedSource::new(&lead.chaindb)
+            .tip()
+            .expect("durable tip after the run");
+        assert_eq!(
+            bn, 2,
+            "the Idle timer woke the loop to forge block 2 across the dead-feed Idle"
         );
     }
 }
