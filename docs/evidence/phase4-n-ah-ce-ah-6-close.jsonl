@@ -1,0 +1,14 @@
+{"event":"run_meta","run":"phase4-n-ah-ce-ah-6-close","date":"2026-06-08","venue":"rung1-auto C2-LOCAL (cardano-testnet magic 42, k=5, 2-pool, sigma~0.5)","status":"CE_AH_6_MET","headline":"FULL 8+3 BAR MET on a real wire in ONE run -- cert-free DC-NODE-20 local-tip forge + DC-NODE-21 cert-free + DC-NODE-22 warm-start re-entry. CE-AH-6 close."}
+{"event":"1_catch_up","forge_mode":"caught_up_to_peer_tip","forge_base_block_no":10,"followed_peer_tip_block_no":10,"note":"caught up once to the recovered/peer tip (block 10)"}
+{"event":"2_self_admit_via_pump_block","self_admit_via_pump_block_count":18,"note":"18 forge_result{self_admit_via_pump_block=true}"}
+{"event":"3_direct_extend_mode","entered_forge_mode":"single_producer_extend_own_durable_spine"}
+{"event":"4_forge_from_chaindb_tip","forge_base_source":"local_chaindb_tip","forge_base_selected_count_prekill":461}
+{"event":"5_relay_adopts","added_to_current_chain":17,"relay_producing":false,"trace_forge":0,"peer":"cardano-node 11.0.1"}
+{"event":"6_follow_link_eof","pre_kill_eof":1,"post_restart_eof":1,"note":"sustained past a follow-link EOF BOTH before and after the warm-start"}
+{"event":"7_immutable_settlement","anchor_block":10,"relay_tip_pre":25,"relay_tip_post":29,"k":5,"ade_blocks_immutable_approx":14,"note":"anchor block 10; Ade forged 11-28; relay tip 29 => immutable ~24 => ~14 Ade blocks k-deep, > k=5"}
+{"event":"8_warm_start","ws_err":0,"chainbreak":false,"relay_no_rollback":true,"post_restart_first_forge_mode":"single_producer_extend_own_durable_spine","post_restart_first_forge_base_block_no":28,"post_restart_followed_peer_tip":null,"post_forge_succeeded":2,"post_adopt":16,"note":"DC-NODE-22: post-restart re-entered extend DIRECTLY from the recovered tip (block 28) with NO follow-link catch-up (followed_peer_tip=null); forged 2 successors; relay adopted post-restart. Recovery clean (ws_err=0, no rollback)."}
+{"event":"neg_1_no_cert_flag","single_producer_venue":true,"adoption_cert_path_present":false,"binary_rejects_flag":true}
+{"event":"neg_2_no_cert_read","cert_path_present_true_count":0,"only_cert":"KES opcert"}
+{"event":"neg_3_no_cert_in_forge_authority","cert_path_present_false_count":461,"ci_check_cert_evidence_only":"green"}
+{"event":"bar_verdict","all_8_positive":true,"all_3_negative":true,"verdict":"CE-AH-6 MET","architecture":"DC-NODE-20 + DC-NODE-21 + DC-NODE-22 all proven live in ONE run"}
+{"event":"provenance","raw":"operator scratch ~/.cardano-rung1-host/s4-run4-20260608T130541Z (ws-pre-node.jsonl, node-run-postrestart.{jsonl,log}, c2-relay.log, ws-pre/post-relay-tip.json); run-1/2/3 partials preserved at their own dirs"}
