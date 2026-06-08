@@ -87,6 +87,23 @@ pub enum LoopState {
     Ending,
 }
 
+/// Venue-policy input (PHASE4-N-AG S1, DC-NODE-19). The closed, content-blind
+/// projection of whether a structural feed-end should HALT the loop (the prior
+/// default) or, in a certified single-producer extend venue, let it CONTINUE
+/// forging its own durable spine past the feed EOF. A yes/no, never a block /
+/// hash / slot / tip / verdict — it keeps `plan_loop_step` unable to observe the
+/// venue/mode details (the `(VenueRole, ForgeMode) -> VenuePolicy` projection
+/// lives in `node_sync`, which owns those domain types). `HaltOnFeedEnd` reduces
+/// the table EXACTLY to the prior 4-input behavior.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum VenuePolicy {
+    /// Default: a structural feed-end halts the loop (verbatim prior behavior).
+    HaltOnFeedEnd,
+    /// Certified single-producer extend venue: a structural feed-end does NOT
+    /// halt the loop — it continues forging its own durable spine (DC-NODE-19).
+    ContinueInSingleProducerExtend,
+}
+
 /// The closed set of lifecycle steps the relay loop may take. This is the
 /// whole vocabulary — there is deliberately no variant that could encode an
 /// authority decision (apply / admit / evidence). `ForgeTick` schedules a forge
@@ -110,39 +127,55 @@ pub enum LoopStep {
     HaltCleanly,
 }
 
-/// Select the next relay-loop step from the four closed lifecycle inputs.
+/// Select the next relay-loop step from the five closed lifecycle inputs.
 ///
 /// Pure, total, and deterministic: same inputs => same [`LoopStep`], with no
 /// I/O, clock, allocation, or `await`. Precedence
-/// (shutdown -> sync -> terminal feed-end -> forge -> idle):
+/// (shutdown -> sync -> feed-end[venue-policy] -> forge -> idle):
 ///
 /// 1. a requested shutdown halts promptly at the next boundary (it does not
 ///    start new work);
 /// 2. otherwise, available relay work drains first (even while the feed is
 ///    ending) — produce is subordinate to the sync spine;
-/// 3. a drained, **ended** feed halts cleanly **even if a forge slot is due** —
-///    the loop must not forge after the input feed is exhausted, so its
-///    terminal behavior never depends on a producer branch N-F-D did not have;
+/// 3. a drained, **ended** feed: by default ([`VenuePolicy::HaltOnFeedEnd`]) it
+///    halts cleanly **even if a forge slot is due** — the loop must not forge past
+///    an exhausted feed; but in a certified single-producer extend venue
+///    ([`VenuePolicy::ContinueInSingleProducerExtend`], DC-NODE-19) a feed-end does
+///    NOT halt — a due slot forges its own durable spine, otherwise it idles;
 /// 4. on an open (continuing) feed, a due forge slot fires a forge tick;
 /// 5. otherwise an open feed with no work and nothing due idles.
 ///
-/// Reduction property: with [`ForgeSlotStatus::NotDue`] the table collapses
-/// **exactly** to the N-F-D 3-input relay mapping. Total over all 2x2x2x2
-/// input combinations via an exhaustive `match` with no wildcard arm.
+/// Reduction properties: with [`ForgeSlotStatus::NotDue`] the table collapses to
+/// the N-F-D relay mapping; and with [`VenuePolicy::HaltOnFeedEnd`] it reproduces
+/// the prior 4-input table EXACTLY (the DC-NODE-19 S1 reduction obligation). Total
+/// over all 2x2x2x2x2 input combinations via an exhaustive `match` with no
+/// wildcard arm.
 pub fn plan_loop_step(
     loop_state: LoopState,
     sync_status: SyncStatus,
     forge_slot_status: ForgeSlotStatus,
     shutdown_status: ShutdownStatus,
+    venue_policy: VenuePolicy,
 ) -> LoopStep {
     match shutdown_status {
         ShutdownStatus::ShutdownRequested => LoopStep::HaltCleanly,
         ShutdownStatus::Running => match sync_status {
             SyncStatus::WorkAvailable => LoopStep::SyncOnce,
             SyncStatus::NoWorkReady => match loop_state {
-                // Terminal feed-end halts cleanly even when a forge slot is due:
-                // produce stays subordinate; the loop never forges past the feed.
-                LoopState::Ending => LoopStep::HaltCleanly,
+                // Terminal feed-end. Default (HaltOnFeedEnd): halt cleanly even
+                // when a forge slot is due — produce stays subordinate; the loop
+                // never forges past an exhausted feed. DC-NODE-19
+                // (ContinueInSingleProducerExtend): a certified single-producer
+                // extend venue does NOT halt on a structural feed-end — a due slot
+                // forges its own durable spine, otherwise it idles to the next
+                // clock tick / shutdown.
+                LoopState::Ending => match venue_policy {
+                    VenuePolicy::HaltOnFeedEnd => LoopStep::HaltCleanly,
+                    VenuePolicy::ContinueInSingleProducerExtend => match forge_slot_status {
+                        ForgeSlotStatus::Due => LoopStep::ForgeTick,
+                        ForgeSlotStatus::NotDue => LoopStep::Idle,
+                    },
+                },
                 LoopState::Continuing => match forge_slot_status {
                     ForgeSlotStatus::Due => LoopStep::ForgeTick,
                     ForgeSlotStatus::NotDue => LoopStep::Idle,
@@ -185,10 +218,53 @@ mod tests {
     const FORGES: [ForgeSlotStatus; 2] = [ForgeSlotStatus::Due, ForgeSlotStatus::NotDue];
     const SHUTDOWNS: [ShutdownStatus; 2] =
         [ShutdownStatus::Running, ShutdownStatus::ShutdownRequested];
+    // PHASE4-N-AG S1 (DC-NODE-19): the 5th planner dimension.
+    const VENUES: [VenuePolicy; 2] = [
+        VenuePolicy::HaltOnFeedEnd,
+        VenuePolicy::ContinueInSingleProducerExtend,
+    ];
 
-    /// Expected output for every one of the 16 input combinations
-    /// (precedence: shutdown -> sync -> terminal feed-end -> forge -> idle).
-    fn expected(s: LoopState, y: SyncStatus, f: ForgeSlotStatus, d: ShutdownStatus) -> LoopStep {
+    /// Expected output for every one of the 32 input combinations (precedence:
+    /// shutdown -> sync -> feed-end[venue-policy] -> forge -> idle). The only
+    /// venue-policy-sensitive cell is `Ending` + `Running` + `NoWorkReady`.
+    fn expected(
+        s: LoopState,
+        y: SyncStatus,
+        f: ForgeSlotStatus,
+        d: ShutdownStatus,
+        v: VenuePolicy,
+    ) -> LoopStep {
+        match d {
+            ShutdownStatus::ShutdownRequested => LoopStep::HaltCleanly,
+            ShutdownStatus::Running => match y {
+                SyncStatus::WorkAvailable => LoopStep::SyncOnce,
+                SyncStatus::NoWorkReady => match s {
+                    LoopState::Ending => match v {
+                        VenuePolicy::HaltOnFeedEnd => LoopStep::HaltCleanly,
+                        VenuePolicy::ContinueInSingleProducerExtend => match f {
+                            ForgeSlotStatus::Due => LoopStep::ForgeTick,
+                            ForgeSlotStatus::NotDue => LoopStep::Idle,
+                        },
+                    },
+                    LoopState::Continuing => match f {
+                        ForgeSlotStatus::Due => LoopStep::ForgeTick,
+                        ForgeSlotStatus::NotDue => LoopStep::Idle,
+                    },
+                },
+            },
+        }
+    }
+
+    /// The FROZEN pre-S1 4-input table (the PHASE4-N-F-E precedence). The
+    /// DC-NODE-19 S1 reduction obligation: `plan_loop_step(.., HaltOnFeedEnd)`
+    /// reproduces this EXACTLY for all 16 prior combinations. Kept independent of
+    /// `expected` so the reduction is checked against a frozen oracle.
+    fn prior_expected(
+        s: LoopState,
+        y: SyncStatus,
+        f: ForgeSlotStatus,
+        d: ShutdownStatus,
+    ) -> LoopStep {
         match d {
             ShutdownStatus::ShutdownRequested => LoopStep::HaltCleanly,
             ShutdownStatus::Running => match y {
@@ -221,14 +297,16 @@ mod tests {
 
     #[test]
     fn plan_loop_step_forge_precedence_table_is_total() {
+        // The default-policy (HaltOnFeedEnd) table is total over the 16 prior
+        // inputs and matches the precedence oracle.
         let mut count = 0;
         for &s in &STATES {
             for &y in &SYNCS {
                 for &f in &FORGES {
                     for &d in &SHUTDOWNS {
                         assert_eq!(
-                            plan_loop_step(s, y, f, d),
-                            expected(s, y, f, d),
+                            plan_loop_step(s, y, f, d, VenuePolicy::HaltOnFeedEnd),
+                            expected(s, y, f, d, VenuePolicy::HaltOnFeedEnd),
                             "case {s:?},{y:?},{f:?},{d:?}"
                         );
                         count += 1;
@@ -236,18 +314,65 @@ mod tests {
                 }
             }
         }
-        assert_eq!(count, 16, "all 2x2x2x2 input combinations must be covered");
+        assert_eq!(
+            count, 16,
+            "all 2x2x2x2 default-policy combinations must be covered"
+        );
+    }
+
+    #[test]
+    fn plan_loop_step_venue_policy_table_is_total() {
+        // PHASE4-N-AG S1 (CE-AG-1): total over all 2^5 = 32 input combinations,
+        // matching the independent precedence oracle; exhaustive, no wildcard.
+        let mut count = 0;
+        for &s in &STATES {
+            for &y in &SYNCS {
+                for &f in &FORGES {
+                    for &d in &SHUTDOWNS {
+                        for &v in &VENUES {
+                            assert_eq!(
+                                plan_loop_step(s, y, f, d, v),
+                                expected(s, y, f, d, v),
+                                "case {s:?},{y:?},{f:?},{d:?},{v:?}"
+                            );
+                            count += 1;
+                        }
+                    }
+                }
+            }
+        }
+        assert_eq!(count, 32, "all 2x2x2x2x2 input combinations must be covered");
+    }
+
+    #[test]
+    fn plan_loop_step_halt_policy_reduces_to_prior_16() {
+        // PHASE4-N-AG S1 (CE-AG-1): VenuePolicy::HaltOnFeedEnd reproduces the
+        // FROZEN pre-S1 4-input table EXACTLY for every prior combination —
+        // behavior-preserving until S2 threads the real policy.
+        for &s in &STATES {
+            for &y in &SYNCS {
+                for &f in &FORGES {
+                    for &d in &SHUTDOWNS {
+                        assert_eq!(
+                            plan_loop_step(s, y, f, d, VenuePolicy::HaltOnFeedEnd),
+                            prior_expected(s, y, f, d),
+                            "reduction case {s:?},{y:?},{f:?},{d:?}"
+                        );
+                    }
+                }
+            }
+        }
     }
 
     #[test]
     fn plan_loop_step_reduces_to_relay_table_when_forge_notdue() {
-        // With forge inactive (NotDue), the planner must reproduce the N-F-D
-        // relay mapping exactly over the remaining 8 combinations.
+        // With forge inactive (NotDue) AND the default policy, the planner must
+        // reproduce the N-F-D relay mapping exactly over the 8 combinations.
         for &s in &STATES {
             for &y in &SYNCS {
                 for &d in &SHUTDOWNS {
                     assert_eq!(
-                        plan_loop_step(s, y, ForgeSlotStatus::NotDue, d),
+                        plan_loop_step(s, y, ForgeSlotStatus::NotDue, d, VenuePolicy::HaltOnFeedEnd),
                         relay_expected(s, y, d),
                         "NotDue reduction case {s:?},{y:?},{d:?}"
                     );
@@ -258,16 +383,18 @@ mod tests {
 
     #[test]
     fn plan_loop_step_notdue_never_returns_forge_tick() {
-        // S1 caller (run_relay_loop) always passes NotDue, so ForgeTick is
-        // structurally unreachable there. Prove it across every combination.
+        // NotDue never yields ForgeTick under ANY venue policy — a forge tick
+        // requires a due slot; continuation never fabricates one.
         for &s in &STATES {
             for &y in &SYNCS {
                 for &d in &SHUTDOWNS {
-                    assert_ne!(
-                        plan_loop_step(s, y, ForgeSlotStatus::NotDue, d),
-                        LoopStep::ForgeTick,
-                        "NotDue must never yield ForgeTick: {s:?},{y:?},{d:?}"
-                    );
+                    for &v in &VENUES {
+                        assert_ne!(
+                            plan_loop_step(s, y, ForgeSlotStatus::NotDue, d, v),
+                            LoopStep::ForgeTick,
+                            "NotDue must never yield ForgeTick: {s:?},{y:?},{d:?},{v:?}"
+                        );
+                    }
                 }
             }
         }
@@ -275,24 +402,38 @@ mod tests {
 
     #[test]
     fn forge_suppressed_when_feed_ending() {
-        // A due forge slot is suppressed once the feed has ended — the loop
-        // halts cleanly rather than forge past an exhausted input feed.
+        // Default policy (HaltOnFeedEnd): a due forge slot is suppressed once the
+        // feed has ended — the loop halts cleanly rather than forge past it.
         assert_eq!(
             plan_loop_step(
                 LoopState::Ending,
                 SyncStatus::NoWorkReady,
                 ForgeSlotStatus::Due,
                 ShutdownStatus::Running,
+                VenuePolicy::HaltOnFeedEnd,
             ),
             LoopStep::HaltCleanly,
         );
-        // ForgeTick fires only on a live (continuing) feed with a due slot.
+        // DC-NODE-19: in a certified single-producer extend venue the SAME
+        // feed-end + due slot forges the own durable spine (NOT suppressed).
+        assert_eq!(
+            plan_loop_step(
+                LoopState::Ending,
+                SyncStatus::NoWorkReady,
+                ForgeSlotStatus::Due,
+                ShutdownStatus::Running,
+                VenuePolicy::ContinueInSingleProducerExtend,
+            ),
+            LoopStep::ForgeTick,
+        );
+        // ForgeTick also fires on a live (continuing) feed with a due slot.
         assert_eq!(
             plan_loop_step(
                 LoopState::Continuing,
                 SyncStatus::NoWorkReady,
                 ForgeSlotStatus::Due,
                 ShutdownStatus::Running,
+                VenuePolicy::HaltOnFeedEnd,
             ),
             LoopStep::ForgeTick,
         );
@@ -304,9 +445,11 @@ mod tests {
             for &y in &SYNCS {
                 for &f in &FORGES {
                     for &d in &SHUTDOWNS {
-                        let a = plan_loop_step(s, y, f, d);
-                        let b = plan_loop_step(s, y, f, d);
-                        assert_eq!(a, b, "deterministic for {s:?},{y:?},{f:?},{d:?}");
+                        for &v in &VENUES {
+                            let a = plan_loop_step(s, y, f, d, v);
+                            let b = plan_loop_step(s, y, f, d, v);
+                            assert_eq!(a, b, "deterministic for {s:?},{y:?},{f:?},{d:?},{v:?}");
+                        }
                     }
                 }
             }
@@ -315,31 +458,38 @@ mod tests {
 
     #[test]
     fn shutdown_halts_even_with_work_available() {
-        // Shutdown takes precedence over available work, a due forge, and a
-        // live feed.
-        assert_eq!(
-            plan_loop_step(
-                LoopState::Continuing,
-                SyncStatus::WorkAvailable,
-                ForgeSlotStatus::Due,
-                ShutdownStatus::ShutdownRequested,
-            ),
-            LoopStep::HaltCleanly,
-        );
+        // Shutdown takes precedence over available work, a due forge, a live
+        // feed, AND the continue-venue policy.
+        for &v in &VENUES {
+            assert_eq!(
+                plan_loop_step(
+                    LoopState::Continuing,
+                    SyncStatus::WorkAvailable,
+                    ForgeSlotStatus::Due,
+                    ShutdownStatus::ShutdownRequested,
+                    v,
+                ),
+                LoopStep::HaltCleanly,
+            );
+        }
     }
 
     #[test]
     fn available_work_drains_before_forge_and_ending() {
-        // Work drains even while the feed is ending and a forge slot is due.
-        assert_eq!(
-            plan_loop_step(
-                LoopState::Ending,
-                SyncStatus::WorkAvailable,
-                ForgeSlotStatus::Due,
-                ShutdownStatus::Running,
-            ),
-            LoopStep::SyncOnce,
-        );
+        // Work drains even while the feed is ending and a forge slot is due —
+        // under both venue policies (DC-NODE-05 clause-2 preserved).
+        for &v in &VENUES {
+            assert_eq!(
+                plan_loop_step(
+                    LoopState::Ending,
+                    SyncStatus::WorkAvailable,
+                    ForgeSlotStatus::Due,
+                    ShutdownStatus::Running,
+                    v,
+                ),
+                LoopStep::SyncOnce,
+            );
+        }
     }
 
     #[test]
@@ -350,6 +500,7 @@ mod tests {
                 SyncStatus::NoWorkReady,
                 ForgeSlotStatus::NotDue,
                 ShutdownStatus::Running,
+                VenuePolicy::HaltOnFeedEnd,
             ),
             LoopStep::Idle,
         );

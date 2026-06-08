@@ -49,6 +49,7 @@ use ade_types::{BlockNo, EpochNo, Hash28, SlotNo};
 use tokio::sync::mpsc;
 
 use crate::produce_mode::{run_real_forge, ForgeRequestContext};
+use crate::run_loop_planner::VenuePolicy;
 use ade_runtime::producer::self_accepted_handoff::SelfAcceptedHandoff;
 
 /// PHASE4-N-F-G-E S1 (DC-LIVEMEM-01): the maximum blocks the content-blind
@@ -996,6 +997,23 @@ pub fn single_producer_forge_decision(
                 _ => violation(SingleProducerFenceReason::PeerTipDisagreesWithSpine),
             }
         }
+    }
+}
+
+/// DC-NODE-19 (PHASE4-N-AG S1): the GREEN projection from the forge-mode domain
+/// to the closed planner [`VenuePolicy`] input. Returns
+/// `ContinueInSingleProducerExtend` ONLY in an explicitly declared single-producer
+/// venue that has reached the DC-NODE-18 extend state
+/// (`SingleProducerExtendOwnDurableSpine`); otherwise `HaltOnFeedEnd` — the
+/// verbatim prior feed-end-halts behaviour. Pure / total / content-blind: it reads
+/// only the venue role and the forge-mode discriminant, never a tip / hash / slot.
+/// The planner consumes the resulting yes/no, never the mode itself.
+pub fn venue_policy(venue_role: VenueRole, forge_mode: &ForgeMode) -> VenuePolicy {
+    match (venue_role, forge_mode) {
+        (VenueRole::SingleProducer, ForgeMode::SingleProducerExtendOwnDurableSpine { .. }) => {
+            VenuePolicy::ContinueInSingleProducerExtend
+        }
+        _ => VenuePolicy::HaltOnFeedEnd,
     }
 }
 
@@ -4697,6 +4715,51 @@ mod tests {
             hash: Hash32([h; 32]),
             block_no,
         }
+    }
+
+    /// CE-AG-1 (DC-NODE-19 S1): the venue-policy projection yields
+    /// `ContinueInSingleProducerExtend` ONLY for the single-producer extend state;
+    /// every other VenueRole × ForgeMode is `HaltOnFeedEnd`.
+    #[test]
+    fn venue_policy_projection_is_continue_only_in_extend() {
+        let a = tp(11, 145, 0xBB);
+        let modes = [
+            ForgeMode::InitialCatchupRequired,
+            ForgeMode::CaughtUpToPeerTip {
+                peer_tip: a.clone(),
+            },
+            ForgeMode::FirstOwnBlockServed {
+                own_tip: a.clone(),
+                parent_peer_tip: a.clone(),
+            },
+            ForgeMode::SingleProducerExtendOwnDurableSpine {
+                adopted_root: a.clone(),
+                current_tip: a.clone(),
+            },
+        ];
+        for role in [VenueRole::Unknown, VenueRole::SingleProducer] {
+            for mode in &modes {
+                let want = if role == VenueRole::SingleProducer
+                    && matches!(mode, ForgeMode::SingleProducerExtendOwnDurableSpine { .. })
+                {
+                    VenuePolicy::ContinueInSingleProducerExtend
+                } else {
+                    VenuePolicy::HaltOnFeedEnd
+                };
+                assert_eq!(venue_policy(role, mode), want, "role={role:?} mode={mode:?}");
+            }
+        }
+        // The ONLY Continue case, asserted directly.
+        assert_eq!(
+            venue_policy(
+                VenueRole::SingleProducer,
+                &ForgeMode::SingleProducerExtendOwnDurableSpine {
+                    adopted_root: a.clone(),
+                    current_tip: a,
+                },
+            ),
+            VenuePolicy::ContinueInSingleProducerExtend,
+        );
     }
 
     /// CE-AF-1: the forge-mode transitions are total + deterministic — each fires

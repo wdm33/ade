@@ -99,7 +99,7 @@ use crate::node_sync::{
 use crate::operator_forge;
 use crate::run_loop_planner::{
     forge_slot_status, plan_loop_step, ForgeSlotStatus, LoopState, LoopStep, ShutdownStatus,
-    SyncStatus,
+    SyncStatus, VenuePolicy,
 };
 use crate::EXIT_GENERIC_STARTUP;
 
@@ -1180,7 +1180,17 @@ pub async fn run_relay_loop_with_sched(
         // the (unchanged) planner call so the HaltCleanly arm can emit the
         // forge_tick_skipped diagnostic without consulting the planner output.
         let forge_was_due = matches!(forge_slot, ForgeSlotStatus::Due);
-        match plan_loop_step(loop_state, sync_status, forge_slot, shutdown_status) {
+        // PHASE4-N-AG S1 (DC-NODE-19): the default venue policy (HaltOnFeedEnd)
+        // preserves the prior feed-end-halts behavior VERBATIM; S2 replaces this
+        // with venue_policy(act.venue_role, &act.forge_mode) so a certified
+        // single-producer extend venue continues forging past a structural feed EOF.
+        match plan_loop_step(
+            loop_state,
+            sync_status,
+            forge_slot,
+            shutdown_status,
+            VenuePolicy::HaltOnFeedEnd,
+        ) {
             LoopStep::SyncOnce => {
                 run_node_sync(source, state, chaindb, wal, era_schedule, ledger_view)
                     .await
