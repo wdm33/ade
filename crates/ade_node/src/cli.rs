@@ -136,11 +136,6 @@ pub struct Cli {
     /// (relay non-producing, Ade sole producer), enabling DC-NODE-18
     /// extend-own-durable-spine behind the fail-closed fence. Default `false`.
     pub single_producer_venue: bool,
-    /// `--adoption-cert-path PATH`: the RED venue-adoption certificate file
-    /// (admissibility-only — never persisted / replay-visible). Names the own
-    /// tip the relay adopted; read only while awaiting promotion. Only
-    /// meaningful with `--single-producer-venue`.
-    pub adoption_cert_path: Option<PathBuf>,
 }
 
 /// Closed admission-mode CLI bundle (B5).
@@ -253,7 +248,6 @@ impl Cli {
         let mut evidence_log: Option<PathBuf> = None;
         let mut max_slots: Option<u64> = None;
         let mut single_producer_venue = false;
-        let mut adoption_cert_path: Option<PathBuf> = None;
 
         while let Some(arg) = iter.next() {
             match arg.as_str() {
@@ -295,12 +289,6 @@ impl Cli {
                 // PHASE4-N-AF (DC-NODE-18) — single-producer venue declaration.
                 "--single-producer-venue" => {
                     single_producer_venue = true;
-                }
-                "--adoption-cert-path" => {
-                    let v = iter.next().ok_or_else(|| {
-                        CliError::FlagMissingValue("--adoption-cert-path".to_string())
-                    })?;
-                    adoption_cert_path = Some(PathBuf::from(v));
                 }
                 "--mode" => {
                     let v = iter
@@ -493,7 +481,6 @@ impl Cli {
             evidence_log,
             max_slots,
             single_producer_venue,
-            adoption_cert_path,
         })
     }
 

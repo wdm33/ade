@@ -762,18 +762,8 @@ pub enum VenueRole {
     SingleProducer,
 }
 
-/// Explicit RED venue-adoption certificate: operator/harness-supplied evidence
-/// that the relay adopted Ade's own block at `adopted_tip`. ADMISSIBILITY evidence
-/// ONLY — it MUST NOT be persisted as authoritative chain state and MUST NOT alter
-/// replay-visible durable state; it advances ONLY the RED/GREEN forge-mode state.
-/// Relay adoption is NEVER inferred from self-admit; only this certificate promotes
-/// the forge mode into the extend state.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct VenueAdoptionCertificate {
-    /// The own-forged tip the relay is certified (by the operator/harness) to have
-    /// adopted.
-    pub adopted_tip: TipPoint,
-}
+// DC-NODE-21 (PHASE4-N-AH S2): the VenueAdoptionCertificate type is REMOVED from
+// ade_node — the cert is operator evidence parsed by the harness, never a forge input.
 
 /// DC-NODE-18: the explicit single-producer forge mode (NO booleans). The forge
 /// scheduler walks this enum; the BLUE durable-admit + chain-selection paths are
@@ -807,12 +797,6 @@ pub enum SingleProducerFenceReason {
     /// The recovered anchor is the k=0 snapshot-conflict edge (the frozen relay tip
     /// equals the recover anchor). DC-NODE-18 does not apply there.
     RecoveredAnchorK0SnapshotConflict,
-    /// DC-NODE-19 (PHASE4-N-AG S2): on a continuation tick (the follow-link feed
-    /// has EOF'd) the venue-adoption certificate is absent or unreadable — the
-    /// certified-run fence is not satisfied, so the continuation fails closed.
-    /// RED-constructed by the node-lifecycle cert gate; never produced by the pure
-    /// single_producer_forge_decision (whose extend-state fence is unchanged).
-    AdoptionCertificateMissingOrMalformed,
 }
 
 /// DC-NODE-18: the per-ForgeTick decision for the single-producer forge mode. Pure
@@ -5108,8 +5092,9 @@ mod tests {
         }
     }
 
-    /// A valid venue-adoption certificate line (`<block_no> <slot> <hash_hex64>`)
-    /// for the given own tip — the format `read_adoption_cert` parses.
+    /// A venue-adoption certificate line (`<block_no> <slot> <hash_hex64>`) for the
+    /// given own tip. DC-NODE-21: the node never reads this — tests that write it
+    /// assert the forge proceeds on the local tip regardless (cert present, ignored).
     fn s2_cert_for(tip: &TipPoint) -> String {
         let hex: String = tip.hash.0.iter().map(|b| format!("{b:02x}")).collect();
         format!("{} {} {}", tip.block_no, tip.slot.0, hex)
@@ -5137,7 +5122,7 @@ mod tests {
             SlotNo(0),
             1_000,
         );
-        act.declare_single_producer_venue(Some(cert_path));
+        act.declare_single_producer_venue();
         act.forge_mode = ForgeMode::SingleProducerExtendOwnDurableSpine {
             adopted_root: lead.block0_tip.clone(),
             current_tip: lead.block0_tip.clone(),
@@ -5235,7 +5220,7 @@ mod tests {
             SlotNo(0),
             1_000,
         );
-        act.declare_single_producer_venue(Some(cert_path));
+        act.declare_single_producer_venue();
         act.forge_mode = ForgeMode::SingleProducerExtendOwnDurableSpine {
             adopted_root: lead.block0_tip.clone(),
             current_tip: lead.block0_tip.clone(),
@@ -5262,7 +5247,7 @@ mod tests {
     }
 
     /// CE-AH-2 (DC-NODE-20): the continue-past-EOF path NO LONGER requires a cert.
-    /// In the extend state with NO certificate (adoption_cert_path None), a feed EOF
+    /// In the extend state with NO certificate (no cert present), a feed EOF
     /// continues the loop and forges the next successor on the local durable spine —
     /// DC-NODE-19's continue-past-EOF core is preserved; its cert-fence clause is
     /// superseded by DC-NODE-20 (the forge base is the local ChainDb::tip).
@@ -5283,8 +5268,8 @@ mod tests {
             SlotNo(0),
             1_000,
         );
-        // Single-producer extend venue, NO certificate (adoption_cert_path None).
-        act.declare_single_producer_venue(None);
+        // Single-producer extend venue, NO certificate (no cert present).
+        act.declare_single_producer_venue();
         act.forge_mode = ForgeMode::SingleProducerExtendOwnDurableSpine {
             adopted_root: lead.block0_tip.clone(),
             current_tip: lead.block0_tip.clone(),
@@ -5340,7 +5325,7 @@ mod tests {
             SlotNo(0),
             10,
         );
-        act.declare_single_producer_venue(Some(cert_path));
+        act.declare_single_producer_venue();
         act.forge_mode = ForgeMode::SingleProducerExtendOwnDurableSpine {
             adopted_root: lead.block0_tip.clone(),
             current_tip: lead.block0_tip.clone(),
@@ -5399,8 +5384,8 @@ mod tests {
             SlotNo(0),
             10,
         );
-        // NO certificate (adoption_cert_path None) — the forge base is the local tip.
-        act.declare_single_producer_venue(None);
+        // NO certificate (no cert present) — the forge base is the local tip.
+        act.declare_single_producer_venue();
         act.forge_mode = ForgeMode::SingleProducerExtendOwnDurableSpine {
             adopted_root: lead.block0_tip.clone(),
             current_tip: lead.block0_tip.clone(),
@@ -5477,7 +5462,7 @@ mod tests {
             SlotNo(0),
             1_000,
         );
-        act.declare_single_producer_venue(Some(cert_path));
+        act.declare_single_producer_venue();
         act.forge_mode = ForgeMode::SingleProducerExtendOwnDurableSpine {
             adopted_root: lead.block0_tip.clone(),
             current_tip: lead.block0_tip.clone(),

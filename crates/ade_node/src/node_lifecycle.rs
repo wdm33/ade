@@ -94,7 +94,7 @@ use crate::node_sync::{
     forge_mode_on_caughtup, forge_one_from_recovered, run_node_sync,
     single_producer_forge_decision, venue_policy, ForgeFollowedTipAdmission, ForgeMode,
     ForgeRefused, NodeBlockSource, NodeForgeOutcome, SingleProducerForgeDecision,
-    VenueAdoptionCertificate, VenueRole,
+    VenueRole,
 };
 use crate::operator_forge;
 use crate::run_loop_planner::{
@@ -613,7 +613,7 @@ async fn run_node_lifecycle_inner(
             // single-producer venue, enable extend-own-spine behind the fence.
             // Absent the flag, `venue_role` stays Unknown ⇒ pure DC-NODE-15.
             if cli.single_producer_venue {
-                activation.declare_single_producer_venue(cli.adoption_cert_path.clone());
+                activation.declare_single_producer_venue();
             }
             // PHASE4-N-F-G-J S1 (CN-NODE-04): emit the closed feed/forge
             // scheduling diagnostics to stderr (emit-only; never alters
@@ -962,10 +962,6 @@ pub struct ForgeActivation<'a> {
     /// fails closed, so a node that does NOT explicitly declare a single-producer
     /// venue forges EXACTLY as the prior DC-NODE-15-only path (no behavior change).
     pub venue_role: VenueRole,
-    /// DC-NODE-18: path to the RED venue-adoption certificate file (operator/harness
-    /// -supplied; admissibility-only — never persisted, never replay-visible). Read
-    /// only while in `FirstOwnBlockServed` to promote into the extend state.
-    pub adoption_cert_path: Option<std::path::PathBuf>,
 }
 
 impl<'a> ForgeActivation<'a> {
@@ -1000,62 +996,23 @@ impl<'a> ForgeActivation<'a> {
             last_forge_refused: None,
             forge_mode: ForgeMode::InitialCatchupRequired,
             venue_role: VenueRole::Unknown,
-            adoption_cert_path: None,
         }
     }
 
     /// DC-NODE-18: declare this an explicitly single-producer venue (relay
     /// non-producing, Ade sole producer), enabling extend-own-spine behind the
-    /// fail-closed fence. `cert_path` is the RED venue-adoption certificate file.
-    /// If un-called, `venue_role` stays `Unknown` ⇒ the extend path never activates
-    /// and the forge stays pure DC-NODE-15.
-    pub fn declare_single_producer_venue(&mut self, cert_path: Option<std::path::PathBuf>) {
+    /// fail-closed fence. If un-called, `venue_role` stays `Unknown` ⇒ the extend
+    /// path never activates and the forge stays pure DC-NODE-15. (DC-NODE-21: the
+    /// adoption certificate is NOT a forge input — the harness owns it as evidence.)
+    pub fn declare_single_producer_venue(&mut self) {
         self.venue_role = VenueRole::SingleProducer;
-        self.adoption_cert_path = cert_path;
     }
 }
 
-/// DC-NODE-18 (PHASE4-N-AF) — RED loop glue.
-
-/// Decode a 64-char hex string into 32 bytes (the adopted-tip hash in the
-/// venue-adoption certificate file). `None` on any malformed input.
-// DC-NODE-20: not used by forge authority (the forge base is ChainDb::tip);
-// retained for S2 (DC-NODE-21) evidence-only transcript work.
-#[allow(dead_code)]
-fn parse_hex32(s: &str) -> Option<[u8; 32]> {
-    if s.len() != 64 {
-        return None;
-    }
-    let mut out = [0u8; 32];
-    for (i, byte) in out.iter_mut().enumerate() {
-        *byte = u8::from_str_radix(s.get(2 * i..2 * i + 2)?, 16).ok()?;
-    }
-    Some(out)
-}
-
-/// DC-NODE-18: read the RED venue-adoption certificate from `path`. The file is
-/// three whitespace-separated tokens — `<block_no> <slot> <hash_hex64>` — naming the
-/// own-forged tip the operator/harness certifies the relay adopted. ADMISSIBILITY
-/// evidence ONLY: it advances the RED forge-mode and is NEVER persisted or
-/// replay-visible. `None` if absent / unset / malformed (fail-closed: no promotion
-/// without a well-formed certificate).
-// DC-NODE-20: not used by forge authority; retained for S2 (DC-NODE-21)
-// evidence-only transcript work.
-#[allow(dead_code)]
-fn read_adoption_cert(path: &Option<std::path::PathBuf>) -> Option<VenueAdoptionCertificate> {
-    let content = std::fs::read_to_string(path.as_ref()?).ok()?;
-    let mut it = content.split_whitespace();
-    let block_no: u64 = it.next()?.parse().ok()?;
-    let slot: u64 = it.next()?.parse().ok()?;
-    let hash = parse_hex32(it.next()?)?;
-    Some(VenueAdoptionCertificate {
-        adopted_tip: TipPoint {
-            slot: SlotNo(slot),
-            hash: Hash32(hash),
-            block_no,
-        },
-    })
-}
+// DC-NODE-21 (PHASE4-N-AH S2): the adoption-certificate parser is REMOVED from
+// ade_node entirely — the operator harness owns cert/evidence parsing outside the
+// forge loop. The cert is never a forge input (DC-NODE-20: the forge base is
+// ChainDb::tip).
 
 /// DC-NODE-15 forge-on-followed-tip refusal, factored so the DC-NODE-18
 /// `UseInitialCatchupGate` path and the default (non-single-producer) path share ONE
@@ -2301,7 +2258,6 @@ mod tests {
             evidence_log: None,
             max_slots: None,
             single_producer_venue: false,
-            adoption_cert_path: None,
         };
         Fixture { _dir: dir, cli }
     }
@@ -2884,7 +2840,6 @@ mod tests {
             evidence_log: None,
             max_slots: None,
             single_producer_venue: false,
-            adoption_cert_path: None,
         }
     }
 

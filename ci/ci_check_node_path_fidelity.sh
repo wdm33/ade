@@ -58,6 +58,7 @@ PINNED_FLAGS="$(cat <<'EOF'
 --seed-block-hash
 --seed-file
 --seed-point-slot
+--single-producer-venue
 --snapshot-dir
 --snapshot-store
 --tip-read-timeout-secs
@@ -96,6 +97,6 @@ if [[ -f "$NODE_LIFECYCLE" ]] && ! grep -q 'import_live_consensus_inputs' "$NODE
 fi
 
 if (( FAIL == 0 )); then
-    echo "OK (node path fidelity): cli.rs flag set matches the pinned closed allow-list (28 flags); no from-genesis consensus-inputs constructor; node path sources consensus inputs via the shared import_live_consensus_inputs (CN-REHEARSAL-FIDELITY-01 clause 1)."
+    echo "OK (node path fidelity): cli.rs flag set matches the pinned closed allow-list (29 flags incl. the DC-NODE-18 --single-producer-venue; the DC-NODE-21-retired --adoption-cert-path is gone); no from-genesis consensus-inputs constructor; node path sources consensus inputs via the shared import_live_consensus_inputs (CN-REHEARSAL-FIDELITY-01 clause 1)."
 fi
 exit $FAIL
