@@ -5763,4 +5763,84 @@ mod tests {
             "the cert's bogus adopted-tip hash never enters the durable/served bytes"
         );
     }
+
+    // ===== PHASE4-N-AH S4a (CN-NODE-04 / DC-NODE-20 evidence): the --mode node sched
+    //       transcript witnesses the forge-base decision =====
+
+    /// CE-AH-6 prerequisite (S4a): driving the local-spine forge with a captured
+    /// `NodeSchedLogWriter<Vec<u8>>` sink, the emitted JSONL transcript directly
+    /// witnesses the DC-NODE-20 forge base — `ForgeBaseSelected{forge_base_source=
+    /// local_chaindb_tip, forge_mode=single_producer_extend_own_durable_spine,
+    /// cert_path_present=false}` + `ForgeResult{self_admit_via_pump_block=true}` — so
+    /// run-2's claims 2/3/4 are mechanically observable, not merely implied.
+    #[tokio::test]
+    async fn forge_base_selected_transcript_witnesses_local_tip() {
+        let mut lead = s2_extend_lead();
+        let coordinator = s2_coordinator_state();
+        let mut clock = DeterministicClock::new(0, vec![20, 20, 30]);
+        let mut act = ForgeActivation::new(
+            &mut clock,
+            &coordinator,
+            &lead.recovered,
+            &mut lead.shell,
+            lead.pool_id.clone(),
+            ProtocolParameters::default(),
+            ProtocolVersion { major: 9, minor: 0 },
+            0,
+            SlotNo(0),
+            10,
+        );
+        act.declare_single_producer_venue();
+        act.forge_mode = ForgeMode::SingleProducerExtendOwnDurableSpine {
+            adopted_root: lead.block0_tip.clone(),
+            current_tip: lead.block0_tip.clone(),
+        };
+        let mut source = NodeBlockSource::in_memory(vec![]);
+        let (sd_tx, mut sd_rx) = watch::channel(false);
+        let mut sched_log = crate::live_log::NodeSchedLogWriter::new(Vec::<u8>::new());
+        let loop_fut = crate::node_lifecycle::run_relay_loop_with_sched(
+            &mut lead.state,
+            &mut source,
+            &lead.chaindb,
+            &mut lead.wal,
+            &lead.era_schedule,
+            &lead.ledger_view,
+            &mut sd_rx,
+            Some(&mut act),
+            Some(&mut sched_log),
+        );
+        let driver = async {
+            tokio::time::sleep(std::time::Duration::from_millis(300)).await;
+            let _ = sd_tx.send(true);
+        };
+        let (loop_res, _) = tokio::join!(loop_fut, driver);
+        loop_res.expect("loop halts cleanly on shutdown");
+        drop(act);
+        let jsonl = String::from_utf8(sched_log.into_inner()).expect("utf8 transcript");
+
+        assert!(
+            jsonl.contains("\"event\":\"forge_base_selected\""),
+            "the transcript must witness ForgeBaseSelected; got:\n{jsonl}"
+        );
+        assert!(
+            jsonl.contains("\"forge_base_source\":\"local_chaindb_tip\""),
+            "the forge base must be witnessed as the local ChainDb tip"
+        );
+        assert!(
+            jsonl.contains("\"forge_mode\":\"single_producer_extend_own_durable_spine\""),
+            "the forge mode must be witnessed as the extend state"
+        );
+        assert!(
+            jsonl.contains("\"cert_path_present\":false"),
+            "cert_path_present must be witnessed false (DC-NODE-21)"
+        );
+        assert!(
+            jsonl.contains("\"self_admit_via_pump_block\":true"),
+            "a succeeded forge must witness self-admit via pump_block"
+        );
+        assert!(
+            !jsonl.contains("adoption_cert") && !jsonl.contains("read_adoption"),
+            "no adoption-cert token may appear in the sched transcript"
+        );
+    }
 }

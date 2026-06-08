@@ -31,6 +31,8 @@
 //! operational/diagnostic tier ONLY — never a consensus/acceptance/BA-02 signal,
 //! never replay-equivalence-weighted.
 
+use ade_types::Hash32;
+
 /// Closed feed-state taxonomy (`CN-NODE-04`): WHY a feed yielded no block, with
 /// a fail-closed eligibility split. No catch-all / `Other`; adding a variant is
 /// a compile error at every exhaustive `match` until wired + allow-listed.
@@ -112,6 +114,48 @@ impl ForgeOutcome {
     }
 }
 
+/// Closed forge-base source (`CN-NODE-04` / DC-NODE-20 evidence): WHERE the forge base
+/// came from. In rung-1 single-producer mode the base is always the local selected
+/// durable tip (`ChainDb::tip`); the closed set has no peer-tip / cert source — those
+/// are fail-closed by DC-NODE-20/21. Operational/diagnostic tier ONLY.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ForgeBaseSource {
+    /// The forge base is Ade's own local selected durable tip (`ChainDb::tip`).
+    LocalChaindbTip,
+}
+
+impl ForgeBaseSource {
+    /// Stable discriminator emitted as the JSON `forge_base_source` field.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::LocalChaindbTip => "local_chaindb_tip",
+        }
+    }
+}
+
+/// Closed forge-mode discriminator (`CN-NODE-04`): a Copy mirror of the GREEN
+/// `node_sync::ForgeMode` state for the diagnostic transcript only — never read by
+/// the planner or any authority path.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ForgeModeKind {
+    InitialCatchupRequired,
+    CaughtUpToPeerTip,
+    SingleProducerExtendOwnDurableSpine,
+}
+
+impl ForgeModeKind {
+    /// Stable discriminator emitted as the JSON `forge_mode` / `entered_forge_mode` field.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::InitialCatchupRequired => "initial_catchup_required",
+            Self::CaughtUpToPeerTip => "caught_up_to_peer_tip",
+            Self::SingleProducerExtendOwnDurableSpine => {
+                "single_producer_extend_own_durable_spine"
+            }
+        }
+    }
+}
+
 /// Closed `--mode node` feed/forge scheduling event vocabulary (`CN-NODE-04`).
 ///
 /// The whole vocabulary — there is deliberately no catch-all / `Other` variant
@@ -121,7 +165,9 @@ impl ForgeOutcome {
 ///
 /// EMIT-ONLY: the GREEN planner never constructs or reads a `NodeSchedEvent`;
 /// the relay loop emits them around the planner call + the `LoopStep` arms.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+// Clone (not Copy): `ForgeBaseSelected` carries `Hash32`, which is not `Copy`. The
+// event is only ever constructed + borrowed (`record(&event)`), never moved-then-reused.
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub enum NodeSchedEvent {
     /// The feed yielded no block at this boundary; `reason` is the closed
     /// taxonomy classification (eligible vs ineligible).
@@ -135,8 +181,28 @@ pub enum NodeSchedEvent {
     /// A forge attempt is about to run (a due forge slot on a live feed with a
     /// selected tip).
     ForgeAttempted,
+    /// DC-NODE-20 forge-base evidence: the forge base for this tick was selected as
+    /// the local selected durable tip (`ChainDb::tip`) — NOT the followed peer tip and
+    /// NOT a cert. RED evidence: it serializes the decision already made; it is never
+    /// read by the planner or any authority path.
+    ForgeBaseSelected {
+        forge_mode: ForgeModeKind,
+        forge_base_source: ForgeBaseSource,
+        forge_base_hash: Hash32,
+        forge_base_block_no: u64,
+        followed_peer_tip_block_no: Option<u64>,
+        followed_peer_tip_hash: Option<Hash32>,
+        cert_path_present: bool,
+    },
     /// A forge attempt completed; `outcome` is the closed forge-result.
-    ForgeResult { outcome: ForgeOutcome },
+    /// `self_admit_via_pump_block` records that a `Succeeded` forge was admitted to the
+    /// durable tip through `admit_forged_block_durably` (the `pump_block` chokepoint,
+    /// DC-NODE-12); `entered_forge_mode` is the forge mode at the tick.
+    ForgeResult {
+        outcome: ForgeOutcome,
+        self_admit_via_pump_block: bool,
+        entered_forge_mode: ForgeModeKind,
+    },
 }
 
 impl NodeSchedEvent {
@@ -149,6 +215,7 @@ impl NodeSchedEvent {
             Self::ForgeTickConsidered => "forge_tick_considered",
             Self::ForgeTickSkipped { .. } => "forge_tick_skipped",
             Self::ForgeAttempted => "forge_attempted",
+            Self::ForgeBaseSelected { .. } => "forge_base_selected",
             Self::ForgeResult { .. } => "forge_result",
         }
     }
@@ -203,8 +270,19 @@ mod tests {
                 reason: FeedReason::NoBlockAvailable,
             },
             NodeSchedEvent::ForgeAttempted,
+            NodeSchedEvent::ForgeBaseSelected {
+                forge_mode: ForgeModeKind::SingleProducerExtendOwnDurableSpine,
+                forge_base_source: ForgeBaseSource::LocalChaindbTip,
+                forge_base_hash: Hash32([0u8; 32]),
+                forge_base_block_no: 1,
+                followed_peer_tip_block_no: Some(0),
+                followed_peer_tip_hash: Some(Hash32([1u8; 32])),
+                cert_path_present: false,
+            },
             NodeSchedEvent::ForgeResult {
                 outcome: ForgeOutcome::Succeeded,
+                self_admit_via_pump_block: true,
+                entered_forge_mode: ForgeModeKind::SingleProducerExtendOwnDurableSpine,
             },
         ];
         let produced: BTreeSet<&str> = all.iter().map(|e| e.discriminator()).collect();
@@ -213,6 +291,7 @@ mod tests {
             "forge_tick_considered",
             "forge_tick_skipped",
             "forge_attempted",
+            "forge_base_selected",
             "forge_result",
         ]
         .into_iter()

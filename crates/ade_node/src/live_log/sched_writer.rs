@@ -16,6 +16,8 @@
 
 use std::io::{self, Write};
 
+use ade_types::Hash32;
+
 use super::sched_event::NodeSchedEvent;
 
 /// JSONL sink for [`NodeSchedEvent`]. Wraps any `Write` impl (an `io::Stderr`
@@ -77,12 +79,88 @@ fn encode_event(event: &NodeSchedEvent, out: &mut String) {
             push_key_str(out, "reason", reason.as_str());
         }
         NodeSchedEvent::ForgeAttempted => {}
-        NodeSchedEvent::ForgeResult { outcome } => {
+        NodeSchedEvent::ForgeBaseSelected {
+            forge_mode,
+            forge_base_source,
+            forge_base_hash,
+            forge_base_block_no,
+            followed_peer_tip_block_no,
+            followed_peer_tip_hash,
+            cert_path_present,
+        } => {
+            out.push(',');
+            push_key_str(out, "forge_mode", forge_mode.as_str());
+            out.push(',');
+            push_key_str(out, "forge_base_source", forge_base_source.as_str());
+            out.push(',');
+            push_key_hash(out, "forge_base_hash", forge_base_hash);
+            out.push(',');
+            push_key_u64(out, "forge_base_block_no", *forge_base_block_no);
+            out.push(',');
+            push_key_opt_u64(out, "followed_peer_tip_block_no", *followed_peer_tip_block_no);
+            out.push(',');
+            push_key_opt_hash(out, "followed_peer_tip_hash", followed_peer_tip_hash);
+            out.push(',');
+            push_key_bool(out, "cert_path_present", *cert_path_present);
+        }
+        NodeSchedEvent::ForgeResult {
+            outcome,
+            self_admit_via_pump_block,
+            entered_forge_mode,
+        } => {
             out.push(',');
             push_key_str(out, "outcome", outcome.as_str());
+            out.push(',');
+            push_key_bool(out, "self_admit_via_pump_block", *self_admit_via_pump_block);
+            out.push(',');
+            push_key_str(out, "entered_forge_mode", entered_forge_mode.as_str());
         }
     }
     out.push('}');
+}
+
+fn push_key_u64(out: &mut String, key: &str, val: u64) {
+    out.push('"');
+    push_json_str_body(out, key);
+    out.push_str("\":");
+    out.push_str(&val.to_string());
+}
+
+fn push_key_bool(out: &mut String, key: &str, val: bool) {
+    out.push('"');
+    push_json_str_body(out, key);
+    out.push_str(if val { "\":true" } else { "\":false" });
+}
+
+fn push_key_opt_u64(out: &mut String, key: &str, val: Option<u64>) {
+    match val {
+        Some(v) => push_key_u64(out, key, v),
+        None => {
+            out.push('"');
+            push_json_str_body(out, key);
+            out.push_str("\":null");
+        }
+    }
+}
+
+/// Lowercase-hex the 32-byte hash as a JSON string (deterministic; no float/locale).
+fn push_key_hash(out: &mut String, key: &str, hash: &Hash32) {
+    let mut hex = String::with_capacity(64);
+    for b in hash.0.iter() {
+        hex.push_str(&format!("{b:02x}"));
+    }
+    push_key_str(out, key, &hex);
+}
+
+fn push_key_opt_hash(out: &mut String, key: &str, hash: &Option<Hash32>) {
+    match hash {
+        Some(h) => push_key_hash(out, key, h),
+        None => {
+            out.push('"');
+            push_json_str_body(out, key);
+            out.push_str("\":null");
+        }
+    }
 }
 
 fn push_key_str(out: &mut String, key: &str, val: &str) {
@@ -117,6 +195,7 @@ const SCHED_DISCRIMINATORS: &[&str] = &[
     "forge_tick_considered",
     "forge_tick_skipped",
     "forge_attempted",
+    "forge_base_selected",
     "forge_result",
 ];
 
@@ -125,7 +204,7 @@ const SCHED_DISCRIMINATORS: &[&str] = &[
 #[allow(clippy::expect_used)]
 #[allow(clippy::panic)]
 mod tests {
-    use super::super::sched_event::{FeedReason, ForgeOutcome};
+    use super::super::sched_event::{FeedReason, ForgeBaseSource, ForgeModeKind, ForgeOutcome};
     use super::*;
 
     fn emit_to_vec(events: &[NodeSchedEvent]) -> Vec<u8> {
@@ -147,6 +226,8 @@ mod tests {
             NodeSchedEvent::ForgeAttempted,
             NodeSchedEvent::ForgeResult {
                 outcome: ForgeOutcome::Succeeded,
+                self_admit_via_pump_block: true,
+                entered_forge_mode: ForgeModeKind::SingleProducerExtendOwnDurableSpine,
             },
         ];
         let bytes = emit_to_vec(&events);
@@ -183,10 +264,38 @@ mod tests {
             },
             NodeSchedEvent::ForgeResult {
                 outcome: ForgeOutcome::NotLeader,
+                self_admit_via_pump_block: false,
+                entered_forge_mode: ForgeModeKind::CaughtUpToPeerTip,
             },
         ];
         let a = emit_to_vec(&events);
         let b = emit_to_vec(&events);
         assert_eq!(a, b);
+    }
+
+    #[test]
+    fn sched_writer_serializes_forge_base_selected_canonically() {
+        let bytes = emit_to_vec(&[NodeSchedEvent::ForgeBaseSelected {
+            forge_mode: ForgeModeKind::SingleProducerExtendOwnDurableSpine,
+            forge_base_source: ForgeBaseSource::LocalChaindbTip,
+            forge_base_hash: Hash32([0xab; 32]),
+            forge_base_block_no: 2,
+            followed_peer_tip_block_no: Some(1),
+            followed_peer_tip_hash: None,
+            cert_path_present: false,
+        }]);
+        let s = std::str::from_utf8(&bytes).expect("utf8");
+        let hex = "ab".repeat(32);
+        let expected = format!(
+            "{{\"event\":\"forge_base_selected\",\
+\"forge_mode\":\"single_producer_extend_own_durable_spine\",\
+\"forge_base_source\":\"local_chaindb_tip\",\
+\"forge_base_hash\":\"{hex}\",\
+\"forge_base_block_no\":2,\
+\"followed_peer_tip_block_no\":1,\
+\"followed_peer_tip_hash\":null,\
+\"cert_path_present\":false}}\n"
+        );
+        assert_eq!(s, expected);
     }
 }

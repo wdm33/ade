@@ -446,10 +446,15 @@ async fn run_node_lifecycle_inner(
                 SnapshotCadence::DEFAULT,
             );
             let mut source = NodeBlockSource::in_memory(Vec::new());
-            // PHASE4-N-F-G-J S1 (CN-NODE-04): emit the closed feed/forge
-            // scheduling diagnostics to stderr (emit-only; never alters
-            // scheduling). The C1 rerun captures these.
-            let mut sched_log = crate::live_log::NodeSchedLogWriter::new(std::io::stderr());
+            // PHASE4-N-AH S4a (CN-NODE-04 / DC-NODE-20): emit the closed feed/forge
+            // sched transcript to the --log JSONL file (node-run.jsonl) — the canonical
+            // evidence artifact (stderr fallback); emit-only, never alters scheduling.
+            let sched_sink: Box<dyn std::io::Write> = match std::fs::File::create(&cli.log_path)
+            {
+                Ok(f) => Box::new(f),
+                Err(_) => Box::new(std::io::stderr()),
+            };
+            let mut sched_log = crate::live_log::NodeSchedLogWriter::new(sched_sink);
             run_relay_loop_with_sched(
                 &mut fwd,
                 &mut source,
@@ -619,7 +624,12 @@ async fn run_node_lifecycle_inner(
             // scheduling diagnostics to stderr (emit-only; never alters
             // scheduling). The forge-on path the C1 rerun exercises —
             // forge_tick_skipped{reason} reveals the empty-feed halt.
-            let mut sched_log = crate::live_log::NodeSchedLogWriter::new(std::io::stderr());
+            let sched_sink: Box<dyn std::io::Write> = match std::fs::File::create(&cli.log_path)
+            {
+                Ok(f) => Box::new(f),
+                Err(_) => Box::new(std::io::stderr()),
+            };
+            let mut sched_log = crate::live_log::NodeSchedLogWriter::new(sched_sink);
             run_relay_loop_with_sched(
                 &mut fwd,
                 &mut source,
@@ -1071,6 +1081,20 @@ pub async fn run_relay_loop(
     .await
 }
 
+/// Map the GREEN `node_sync::ForgeMode` state to the closed diagnostic
+/// `live_log::ForgeModeKind` for the RED sched transcript (CN-NODE-04 / DC-NODE-20
+/// evidence). Emit-only projection; never read back into any authority path.
+fn forge_mode_kind(m: &ForgeMode) -> crate::live_log::ForgeModeKind {
+    use crate::live_log::ForgeModeKind;
+    match m {
+        ForgeMode::InitialCatchupRequired => ForgeModeKind::InitialCatchupRequired,
+        ForgeMode::CaughtUpToPeerTip { .. } => ForgeModeKind::CaughtUpToPeerTip,
+        ForgeMode::SingleProducerExtendOwnDurableSpine { .. } => {
+            ForgeModeKind::SingleProducerExtendOwnDurableSpine
+        }
+    }
+}
+
 /// Relay loop with an optional emit-only CN-NODE-04 diagnostic sink
 /// (PHASE4-N-F-G-J S1). The binary `--mode node` path passes a real sink; the
 /// sink is best-effort and NEVER alters the loop's scheduling / control flow,
@@ -1302,6 +1326,35 @@ pub async fn run_relay_loop_with_sched(
                         }
                     };
                     if proceed_to_forge && (cold_start_permitted || selected_tip.is_some()) {
+                        // DC-NODE-20 forge-base evidence (RED, emit-only): in a
+                        // single-producer venue the forge base is the local selected
+                        // durable tip (`selected_tip` == ChainDb::tip) — NOT the followed
+                        // peer tip and NOT a cert. Serializes the decision already made.
+                        if act.venue_role == VenueRole::SingleProducer {
+                            // The forge base == the local durable ChainDb tip (block_no
+                            // carried by ChainDbServedSource; `selected_tip`/ChainTip has
+                            // only slot+hash). Same tip, just enriched for the transcript.
+                            if let Some((_, base_hash, base_block_no)) =
+                                ChainDbServedSource::new(chaindb).tip()
+                            {
+                                if let Some(s) = sched.as_deref_mut() {
+                                    s.record(&crate::live_log::NodeSchedEvent::ForgeBaseSelected {
+                                        forge_mode: forge_mode_kind(&act.forge_mode),
+                                        forge_base_source:
+                                            crate::live_log::ForgeBaseSource::LocalChaindbTip,
+                                        forge_base_hash: base_hash,
+                                        forge_base_block_no: base_block_no,
+                                        followed_peer_tip_block_no: followed_peer_tip
+                                            .as_ref()
+                                            .map(|t| t.block_no),
+                                        followed_peer_tip_hash: followed_peer_tip
+                                            .as_ref()
+                                            .map(|t| t.hash.clone()),
+                                        cert_path_present: false,
+                                    });
+                                }
+                            }
+                        }
                         if let Some(s) = sched.as_deref_mut() {
                             s.record(&crate::live_log::NodeSchedEvent::ForgeAttempted);
                         }
@@ -1412,6 +1465,8 @@ pub async fn run_relay_loop_with_sched(
                                 if let Some(s) = sched.as_deref_mut() {
                                     s.record(&crate::live_log::NodeSchedEvent::ForgeResult {
                                         outcome: forge_outcome,
+                                        self_admit_via_pump_block: admitted,
+                                        entered_forge_mode: forge_mode_kind(&act.forge_mode),
                                     });
                                 }
                             }
@@ -1424,6 +1479,8 @@ pub async fn run_relay_loop_with_sched(
                     if let Some(s) = sched.as_deref_mut() {
                         s.record(&crate::live_log::NodeSchedEvent::ForgeResult {
                             outcome: crate::live_log::ForgeOutcome::NoTipAvailable,
+                            self_admit_via_pump_block: false,
+                            entered_forge_mode: forge_mode_kind(&act.forge_mode),
                         });
                     }
                 }
