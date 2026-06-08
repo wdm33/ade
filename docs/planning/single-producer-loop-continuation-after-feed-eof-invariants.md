@@ -82,12 +82,11 @@ of these hold:
 1. not `VenueRole::SingleProducer`;
 2. not `ForgeMode::SingleProducerExtendOwnDurableSpine`;
 3. operator shutdown requested;
-4. the slot is outside existing forge-valid bounds (off-epoch DC-EPOCH-03 / beyond forecast horizon
-   DC-CONS-09 / KES period);
-5. a KES / forecast / epoch fence fails;
-6. a competing chain was observed **before** EOF;
-7. relay-producing evidence exists;
-8. the venue certificate is absent or malformed.
+4. existing forge-validity bounds fail (off-epoch DC-EPOCH-03 / beyond forecast horizon DC-CONS-09 /
+   KES-period invalid);
+5. a competing chain was observed **before** EOF;
+6. relay-producing evidence exists;
+7. the venue certificate is absent or malformed.
 
 And, independently, these must never be possible:
 
@@ -168,7 +167,7 @@ Termination (the bounds):
   cancellation-safe wait so `Ending` + `SingleProducer` + `NotDue` idles to the next clock tick / shutdown,
   not forever on a dead `wait_ready()`. A cluster-doc detail, not a new invariant.
 - **OQ-19-2 — RESOLVED (no numeric cap; certified-run fence).** The venue declaration + existing BLUE
-  fences + operator shutdown bound the continuation; the §2 eight-condition fail-closed fence keeps it tied
+  fences + operator shutdown bound the continuation; the §2 seven-condition fail-closed fence keeps it tied
   to the certified single-producer run. No "max blind forges" magic number.
 - **OQ-19-3 / OQ-KA — RESOLVED (out of scope).** Follow-link keep-alive / reconnect (so the feed stays alive
   and Ade keeps observing the peer) is the **complementary cousin** approach, **not** DC-NODE-19. DC-NODE-19
