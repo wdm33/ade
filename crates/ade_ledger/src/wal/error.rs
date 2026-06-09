@@ -46,4 +46,10 @@ pub enum WalError {
     /// `initial_ledger_fingerprint`. The sidecar provenance is
     /// bound to a different anchor; fail closed.
     ProvenanceAnchorMismatch { expected: Hash32, actual: Hash32 },
+    /// PHASE4-N-AI AI-S1: a `WalEntry::RollBack` named a `to_point`
+    /// that is not an effective in-chain `AdmitBlock` point (by slot,
+    /// then by hash via the replay re-anchor lookup). Rollback-to-anchor
+    /// (rolling back the entire admitted chain) is out of scope for
+    /// AI-S1 and also fails here. Authority-fatal (fail closed).
+    RollbackTargetNotInChain { entry_index: u64, to_slot: u64 },
 }

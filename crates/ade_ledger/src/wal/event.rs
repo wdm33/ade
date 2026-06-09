@@ -28,14 +28,16 @@ use ade_codec::cbor::{
     canonical_width, read_array_header, read_bytes, read_uint, write_array_header,
     write_bytes_canonical, write_uint_canonical, ContainerEncoding, IntWidth,
 };
-use ade_types::{EpochNo, Hash32, SlotNo};
+use ade_types::{BlockNo, EpochNo, Hash32, SlotNo};
 
 use super::error::WalError;
 
 /// Wire tag for `WalEntry::AdmitBlock`.
 pub const TAG_ADMIT_BLOCK: u64 = 0;
-// Tags 1 (RollBackward) and 2 (CaptureSnapshot) are RESERVED for
-// future additive block-transition entries; never reused.
+/// Wire tag for `WalEntry::RollBack` (PHASE4-N-AI). Tag 1 is RollBack,
+/// fulfilling the previously reserved RollBackward slot. Tag 2
+/// (CaptureSnapshot) remains RESERVED; never reused.
+pub const TAG_ROLLBACK: u64 = 1;
 /// Wire tag for `WalEntry::SeedEpochConsensusInputsImported`
 /// (PHASE4-N-F-A A3a). Append-only: the next free tag after the
 /// reserved 1/2.
@@ -70,6 +72,59 @@ pub enum WalEntry {
         sidecar_hash: Hash32,
         epoch_no: EpochNo,
     },
+    /// PHASE4-N-AI AI-S1 (OQ-1 mechanism A): a DURABLE MARKER that a
+    /// rollback to `to_point` occurred. It records that a rollback
+    /// happened; it does NOT decide or materialize one. Replay
+    /// re-anchors the fingerprint chain to `to_point`'s in-chain
+    /// `post_fp` (fp-only); the recovery/materialize layer re-invokes
+    /// the EXISTING `materialize_rolled_back_state` + lockstep
+    /// authority. `prior_tip` / `selected_tip` / `reason` are
+    /// audit/reconciliation fields ONLY — replay never sets the durable
+    /// tip from `selected_tip`. Tag 1 (the reserved RollBackward slot);
+    /// append-only (CN-WAL-01); re-anchors (does not extend) the
+    /// AdmitBlock fingerprint chain.
+    RollBack {
+        to_point: RollbackPoint,
+        reason: RollbackReason,
+        prior_tip: RollbackPoint,
+        selected_tip: RollbackPoint,
+    },
+}
+
+/// A chain point recorded in a `WalEntry::RollBack` — slot + hash +
+/// block_no. Carries `block_no` so an auditor can compute rollback
+/// depth without a separate lookup.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RollbackPoint {
+    pub slot: SlotNo,
+    pub hash: Hash32,
+    pub block_no: BlockNo,
+}
+
+/// Closed reason a `WalEntry::RollBack` was recorded. uint wire code;
+/// an unknown code fails closed on decode.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RollbackReason {
+    /// A peer-origin chain won Praos fork-choice (DC-CONS-03).
+    ForkChoiceWin,
+    /// The followed peer's chain-sync delivered a RollBackward.
+    PeerRollBackward,
+}
+
+impl RollbackReason {
+    pub fn wire_code(self) -> u64 {
+        match self {
+            Self::ForkChoiceWin => 0,
+            Self::PeerRollBackward => 1,
+        }
+    }
+    pub fn from_wire_code(code: u64) -> Option<Self> {
+        match code {
+            0 => Some(Self::ForkChoiceWin),
+            1 => Some(Self::PeerRollBackward),
+            _ => None,
+        }
+    }
 }
 
 /// Closed tag for the block-validity verdict. Mirrors the BLUE
@@ -156,8 +211,27 @@ pub fn encode_wal_entry(entry: &WalEntry) -> Vec<u8> {
             write_bytes_canonical(&mut buf, &sidecar_hash.0);
             write_uint_canonical(&mut buf, epoch_no.0);
         }
+        WalEntry::RollBack {
+            to_point,
+            reason,
+            prior_tip,
+            selected_tip,
+        } => {
+            write_uint_canonical(&mut buf, TAG_ROLLBACK);
+            write_array_header(&mut buf, ContainerEncoding::Definite(10, canonical_width(10)));
+            write_rollback_point(&mut buf, to_point);
+            write_uint_canonical(&mut buf, reason.wire_code());
+            write_rollback_point(&mut buf, prior_tip);
+            write_rollback_point(&mut buf, selected_tip);
+        }
     }
     buf
+}
+
+fn write_rollback_point(buf: &mut Vec<u8>, p: &RollbackPoint) {
+    write_uint_canonical(buf, p.slot.0);
+    write_bytes_canonical(buf, &p.hash.0);
+    write_uint_canonical(buf, p.block_no.0);
 }
 
 /// Canonical CBOR decode for a single entry.
@@ -202,6 +276,26 @@ pub fn decode_wal_entry(bytes: &[u8]) -> Result<(WalEntry, usize), WalError> {
                 o,
             ))
         }
+        TAG_ROLLBACK => {
+            expect_definite_array(bytes, &mut o, 10, "RollBack payload")?;
+            let to_point = read_rollback_point(bytes, &mut o)?;
+            let (reason_code, _w) = read_uint(bytes, &mut o).map_err(WalError::Decode)?;
+            let reason =
+                RollbackReason::from_wire_code(reason_code).ok_or(WalError::Structural {
+                    reason: "unknown rollback reason code",
+                })?;
+            let prior_tip = read_rollback_point(bytes, &mut o)?;
+            let selected_tip = read_rollback_point(bytes, &mut o)?;
+            Ok((
+                WalEntry::RollBack {
+                    to_point,
+                    reason,
+                    prior_tip,
+                    selected_tip,
+                },
+                o,
+            ))
+        }
         _ => Err(WalError::Structural {
             reason: "unknown wal entry tag",
         }),
@@ -240,6 +334,17 @@ fn read_hash32(bytes: &[u8], offset: &mut usize) -> Result<Hash32, WalError> {
     let mut arr = [0u8; 32];
     arr.copy_from_slice(&h);
     Ok(Hash32(arr))
+}
+
+fn read_rollback_point(bytes: &[u8], offset: &mut usize) -> Result<RollbackPoint, WalError> {
+    let (slot, _w) = read_uint(bytes, offset).map_err(WalError::Decode)?;
+    let hash = read_hash32(bytes, offset)?;
+    let (block_no, _w) = read_uint(bytes, offset).map_err(WalError::Decode)?;
+    Ok(RollbackPoint {
+        slot: SlotNo(slot),
+        hash,
+        block_no: BlockNo(block_no),
+    })
 }
 
 #[cfg(test)]
@@ -348,6 +453,7 @@ mod tests {
                 assert_eq!(sidecar_hash.0[0], 0x22);
                 assert_eq!(epoch_no.0, 576);
             }
+            WalEntry::RollBack { .. } => unreachable!("sample() is an AdmitBlock"),
         }
     }
 

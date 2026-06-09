@@ -1691,6 +1691,10 @@ pub(crate) fn warm_start_recovery(
         .find_map(|entry| match entry {
             ade_ledger::wal::WalEntry::AdmitBlock { slot, .. } => Some(*slot),
             ade_ledger::wal::WalEntry::SeedEpochConsensusInputsImported { .. } => None,
+            // PHASE4-N-AI AI-S1: a RollBack is not an AdmitBlock and
+            // does not define the WAL-tail slot. No RollBack entries are
+            // produced until AI-S3 makes recovery rollback-aware.
+            ade_ledger::wal::WalEntry::RollBack { .. } => None,
         })
         .unwrap_or(SlotNo(0));
     chaindb

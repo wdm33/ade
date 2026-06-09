@@ -95,18 +95,34 @@ pub fn replay_from_anchor(
     entries: &[WalEntry],
     block_bytes: &BTreeMap<Hash32, Vec<u8>>,
 ) -> Result<ReplayOutcome, WalError> {
+    // Pre-pass (PHASE4-N-AI AI-S1): determine which AdmitBlock entries
+    // a later RollBack supersedes, and validate each RollBack target is
+    // an active in-chain point (by slot). fp-ONLY — no materialize here;
+    // the recovery/materialize layer re-invokes
+    // `materialize_rolled_back_state` (AI-S3 / the Layer-2 hermetic test).
+    let superseded = compute_superseded(entries)?;
+
     let mut prev_post_fp = anchor_initial_ledger_fp.clone();
     let mut provenance: Option<RecoveredBootstrapProvenance> = None;
     let mut admit_count: u64 = 0;
+    // Effective AdmitBlock point (slot, hash) -> post_fp, for the
+    // RollBack re-anchor lookup.
+    let mut point_fp: BTreeMap<(u64, [u8; 32]), Hash32> = BTreeMap::new();
 
     for (index, entry) in entries.iter().enumerate() {
         match entry {
             WalEntry::AdmitBlock {
                 prior_fp,
                 block_hash,
+                slot,
                 post_fp,
                 ..
             } => {
+                // Superseded by a later RollBack: abandoned. Its bytes
+                // are NOT required and it does not advance the fp chain.
+                if superseded[index] {
+                    continue;
+                }
                 // Block-transition chain link (unchanged authority).
                 if *prior_fp != prev_post_fp {
                     return Err(WalError::ChainBreak {
@@ -120,8 +136,27 @@ pub fn replay_from_anchor(
                         block_hash: block_hash.clone(),
                     });
                 }
+                point_fp.insert((slot.0, block_hash.0), post_fp.clone());
                 prev_post_fp = post_fp.clone();
                 admit_count += 1;
+            }
+            WalEntry::RollBack { to_point, .. } => {
+                // Re-anchor the fp chain to the EXISTING in-chain
+                // `post_fp` at `to_point` (an already-verified
+                // fingerprint, NOT a recorded rollback fp). fp-ONLY:
+                // this does NOT materialize state. `selected_tip` /
+                // `prior_tip` are audit fields and are NOT consulted for
+                // the re-anchor (no durable tip is set from metadata).
+                let key = (to_point.slot.0, to_point.hash.0);
+                match point_fp.get(&key) {
+                    Some(fp) => prev_post_fp = fp.clone(),
+                    None => {
+                        return Err(WalError::RollbackTargetNotInChain {
+                            entry_index: index as u64,
+                            to_slot: to_point.slot.0,
+                        })
+                    }
+                }
             }
             WalEntry::SeedEpochConsensusInputsImported {
                 anchor_fp,
@@ -155,6 +190,46 @@ pub fn replay_from_anchor(
         provenance,
         admit_count,
     })
+}
+
+/// Pre-pass (PHASE4-N-AI AI-S1): for each `RollBack`, mark the
+/// `AdmitBlock` entries it supersedes (the abandoned branch above
+/// `to_point`) and validate the target is an active in-chain point by
+/// slot. Pure, deterministic; no materialize. The authoritative
+/// (slot, hash) re-anchor check happens in the main walk via `point_fp`.
+///
+/// Rollback-to-anchor (an empty active stack at the target) is out of
+/// scope for AI-S1 and fails closed (`RollbackTargetNotInChain`).
+pub(crate) fn compute_superseded(entries: &[WalEntry]) -> Result<Vec<bool>, WalError> {
+    let mut superseded = vec![false; entries.len()];
+    // Stack of active (effective) AdmitBlock (entry_index, slot).
+    let mut active: Vec<(usize, u64)> = Vec::new();
+    for (i, entry) in entries.iter().enumerate() {
+        match entry {
+            WalEntry::AdmitBlock { slot, .. } => active.push((i, slot.0)),
+            WalEntry::RollBack { to_point, .. } => {
+                while let Some(&(idx, s)) = active.last() {
+                    if s > to_point.slot.0 {
+                        superseded[idx] = true;
+                        active.pop();
+                    } else {
+                        break;
+                    }
+                }
+                match active.last() {
+                    Some(&(_, s)) if s == to_point.slot.0 => {}
+                    _ => {
+                        return Err(WalError::RollbackTargetNotInChain {
+                            entry_index: i as u64,
+                            to_slot: to_point.slot.0,
+                        })
+                    }
+                }
+            }
+            WalEntry::SeedEpochConsensusInputsImported { .. } => {}
+        }
+    }
+    Ok(superseded)
 }
 
 #[cfg(test)]

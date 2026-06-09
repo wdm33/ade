@@ -55,12 +55,26 @@ pub trait WalStore: Send + Sync {
     /// future entry variant forces this walk to be revisited.
     fn verify_chain(&self, anchor_fp: &Hash32) -> Result<(), WalError> {
         let entries = self.read_all()?;
+        // PHASE4-N-AI AI-S1: rollback-aware. Shares the supersede
+        // pre-pass with `replay_from_anchor`; on a RollBack it
+        // re-anchors the fp chain to the in-chain `post_fp` at
+        // `to_point`. fp-only — no materialize here.
+        let superseded = crate::wal::replay::compute_superseded(&entries)?;
         let mut prev_post_fp: Hash32 = anchor_fp.clone();
+        let mut point_fp: std::collections::BTreeMap<(u64, [u8; 32]), Hash32> =
+            std::collections::BTreeMap::new();
         for (index, entry) in entries.iter().enumerate() {
             match entry {
                 WalEntry::AdmitBlock {
-                    prior_fp, post_fp, ..
+                    prior_fp,
+                    block_hash,
+                    slot,
+                    post_fp,
+                    ..
                 } => {
+                    if superseded[index] {
+                        continue;
+                    }
                     if *prior_fp != prev_post_fp {
                         return Err(WalError::ChainBreak {
                             entry_index: index as u64,
@@ -68,7 +82,20 @@ pub trait WalStore: Send + Sync {
                             actual_prior_fp: prior_fp.clone(),
                         });
                     }
+                    point_fp.insert((slot.0, block_hash.0), post_fp.clone());
                     prev_post_fp = post_fp.clone();
+                }
+                WalEntry::RollBack { to_point, .. } => {
+                    let key = (to_point.slot.0, to_point.hash.0);
+                    match point_fp.get(&key) {
+                        Some(fp) => prev_post_fp = fp.clone(),
+                        None => {
+                            return Err(WalError::RollbackTargetNotInChain {
+                                entry_index: index as u64,
+                                to_slot: to_point.slot.0,
+                            })
+                        }
+                    }
                 }
                 WalEntry::SeedEpochConsensusInputsImported { .. } => {
                     // Not part of the block-transition chain.

@@ -100,6 +100,7 @@ fn wal_replay_from_anchor_post_fp_matches_wal_tail() {
         WalEntry::SeedEpochConsensusInputsImported { .. } => {
             panic!("this chain has no provenance entry")
         }
+        WalEntry::RollBack { .. } => panic!("this chain has no rollback entry"),
     };
     assert_eq!(final_fp.tail_fp, expected);
 }
