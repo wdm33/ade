@@ -57,7 +57,7 @@ use ade_ledger::consensus_view::PoolDistrView;
 use ade_ledger::fingerprint::fingerprint;
 use ade_ledger::state::LedgerState;
 use ade_ledger::seed_consensus_inputs::decode_seed_epoch_consensus_inputs;
-use ade_ledger::wal::{replay_from_anchor, WalStore};
+use ade_ledger::wal::{replay_from_anchor, RollbackPoint, RollbackReason, WalEntry, WalStore};
 use ade_runtime::bootstrap::{
     bootstrap_initial_state, BootstrapInputs, BootstrapState, SeedEpochConsensusSource,
 };
@@ -71,7 +71,7 @@ use ade_runtime::mithril_import::import_mithril_manifest_from_bytes;
 use ade_runtime::seed_import::import_cardano_cli_json_utxo;
 use ade_runtime::wal::FileWalStore;
 use ade_types::shelley::block::ProtocolVersion;
-use ade_types::{CardanoEra, EpochNo, Hash28, Hash32, SlotNo};
+use ade_types::{BlockNo, CardanoEra, EpochNo, Hash28, Hash32, SlotNo};
 use tokio::net::TcpListener;
 use tokio::sync::{mpsc, watch};
 
@@ -79,19 +79,25 @@ use ade_core::consensus::ledger_view::LedgerView;
 use ade_ledger::pparams::ProtocolParameters;
 use ade_ledger::receive::ReceiveState;
 use ade_runtime::clock::{checked_millis_to_slot, Clock, SlotAlignmentError, SystemClock};
-use ade_runtime::forward_sync::ForwardSyncState;
+use ade_runtime::forward_sync::{pump_block, ForwardSyncState, PumpError, SnapshotSink};
 use ade_runtime::producer::coordinator::{
     coordinator_init, CoordinatorConfig, CoordinatorEvent, CoordinatorState, LedgerSnapshotRef,
 };
 use ade_runtime::producer::producer_shell::ProducerShell;
-use ade_runtime::rollback::SnapshotCadence;
+use ade_runtime::rollback::{ChainDbBlockSource, PersistentSnapshotCache, SnapshotCadence};
+use ade_ledger::rollback::{
+    commit_rollback, materialize_rolled_back_state, CommitRollbackError, MaterializeError,
+    TargetPoint,
+};
+use ade_core::consensus::events::ChainEvent;
+use ade_runtime::receive::ChainDbWriter;
 
 use crate::admission::bootstrap::build_n2n_version_table;
 use crate::cli::Cli;
 use crate::forge_intent::{classify_forge_intent, ForgeIntent};
 use crate::node_sync::{
-    admit_forged_block_durably, forge_followed_tip_admission, forge_mode_after_admit,
-    forge_mode_on_caughtup, forge_one_from_recovered, run_node_sync,
+    admit_forged_block_durably, durable_tip_matches, forge_followed_tip_admission,
+    forge_mode_after_admit, forge_mode_on_caughtup, forge_one_from_recovered, run_node_sync,
     single_producer_forge_decision, venue_policy, ForgeFollowedTipAdmission, ForgeMode,
     ForgeRefused, NodeBlockSource, NodeForgeOutcome, SingleProducerForgeDecision,
     VenueRole,
@@ -2108,6 +2114,187 @@ fn may_cold_start_forge(
     feed_eligible: bool,
 ) -> bool {
     !selected_tip_present && has_recovered_lineage && feed_eligible
+}
+
+// =====================================================================
+// PHASE4-N-AI AI-S3 — live fork-choice apply driver (DC-NODE-25 + DC-NODE-26;
+// CE-AI-1 production half). RED composition over the EXISTING enforced
+// authorities — owns no decision (the chain_selector orchestrator owns
+// select_best_chain) and never calls a chain selector. Latent until AI-S4
+// wires it into the receive loop.
+// =====================================================================
+
+/// The durable tip after an applied `ChainEvent`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AppliedTip {
+    pub slot: SlotNo,
+    pub hash: Hash32,
+}
+
+/// Closed apply-driver failure surface. Every variant halts the apply
+/// deterministically; none silently diverges.
+#[derive(Debug)]
+pub enum ApplyError {
+    /// `materialize_rolled_back_state` failed (e.g. RollbackTooDeep — the
+    /// fork point is beyond retention / k; DC-CONS-05/06 fail-closed).
+    Materialize(MaterializeError),
+    /// `commit_rollback` failed — its irreversible-step-first shape leaves
+    /// `fwd.receive` + ChainDb unchanged, and NO WAL record is appended.
+    CommitRollback(CommitRollbackError),
+    /// The durable rollback record could not be appended AFTER a successful
+    /// `commit_rollback`. Fail-fast (recovery hardening is AI-S4/S5).
+    Wal(ade_ledger::wal::WalError),
+    /// A `ChainSelected` roll-forward through `pump_block` failed (e.g. an
+    /// invalid body — no tip advance).
+    Pump(PumpError),
+    /// A `ChainSelected` was applied without the roll-forward block bytes.
+    MissingRollForwardBlock,
+    /// DC-NODE-26: after apply, the durable ChainDb tip != the event's target.
+    ReconciliationMismatch {
+        expected_slot: SlotNo,
+        expected_hash: Hash32,
+        actual: Option<ChainTip>,
+    },
+}
+
+/// PHASE4-N-AI AI-S3 (DC-NODE-25 + DC-NODE-26; CE-AI-1 production half): apply
+/// ONE fork-choice `ChainEvent` to the live durable spine (`fwd`) using ONLY
+/// the existing enforced authorities. RED composition — owns no decision and
+/// never calls `select_best_chain` / `fork_choice` / a chain selector.
+///
+/// Per event:
+///   - `RolledBack { to_point, .. }`: (1) `materialize_rolled_back_state`
+///     (CN-STORE-07) → (2) `commit_rollback` over the live `fwd.receive`
+///     (DC-CONS-20 lockstep over ChainDb + ledger + chain_dep) → (3) re-anchor
+///     `fwd.prior_fp` to the rolled-back ledger fp → (4) append
+///     `WalEntry::RollBack` (AI-S1) **only after** the commit succeeds → (5)
+///     reconcile (DC-NODE-26).
+///   - `ChainSelected { new_tip, .. }`: roll FORWARD via `pump_block`
+///     (DC-NODE-05/12 — the sole durable admit; header→body coherent) →
+///     reconcile.
+///   - `Rejected` (and the non-orchestrator `ChainExtended` / `RolledForward`,
+///     which `process_stream_input` never emits): no durable change.
+///
+/// `Ok(None)` = no durable change; `Ok(Some(tip))` = the new durable tip.
+#[allow(clippy::too_many_arguments)]
+pub fn apply_chain_event<D, S>(
+    fwd: &mut ForwardSyncState,
+    chaindb: &D,
+    wal: &mut dyn WalStore,
+    snapshots: &S,
+    event: &ChainEvent,
+    reason: RollbackReason,
+    roll_forward_block: Option<&[u8]>,
+    era_schedule: &EraSchedule,
+    ledger_view: &dyn LedgerView,
+) -> Result<Option<AppliedTip>, ApplyError>
+where
+    D: ChainDb + SnapshotStore,
+    S: SnapshotSink,
+{
+    match event {
+        ChainEvent::RolledBack { to_point, .. } => {
+            let target = TargetPoint {
+                slot: to_point.slot,
+                hash: to_point.hash.clone(),
+            };
+            // (1) Materialize the rolled-back state via the SOLE authority.
+            let reader = PersistentSnapshotCache::new(chaindb);
+            let source = ChainDbBlockSource::new(chaindb);
+            let (new_ledger, new_chain_dep) = materialize_rolled_back_state(
+                target.clone(),
+                &reader,
+                &source,
+                era_schedule,
+                ledger_view,
+            )
+            .map_err(ApplyError::Materialize)?;
+            // Capture the abandoned (pre-rollback) tip + the rolled-back
+            // block_no for the audit record BEFORE the commit mutates state.
+            let prior_block_no = fwd.receive.chain_dep.last_block_no.map(|b| b.0).unwrap_or(0);
+            let prior_slot = fwd.receive.chain_dep.last_slot.map(|s| s.0).unwrap_or(0);
+            let prior_hash = chaindb
+                .tip()
+                .ok()
+                .flatten()
+                .map(|t| t.hash)
+                .unwrap_or(Hash32([0u8; 32]));
+            let to_block_no = new_chain_dep.last_block_no.map(|b| b.0).unwrap_or(0);
+            // (2) Commit the rollback (DC-CONS-20 lockstep over the live
+            //     ReceiveState + ChainDb). Irreversible-step-first: on failure
+            //     state is unchanged and NO WAL record is written below.
+            {
+                let mut writer = ChainDbWriter::new(chaindb);
+                commit_rollback(
+                    &mut fwd.receive,
+                    target,
+                    new_ledger,
+                    new_chain_dep,
+                    &mut writer,
+                )
+                .map_err(ApplyError::CommitRollback)?;
+            }
+            // (3) Re-anchor the WAL running fingerprint to the rolled-back fp.
+            let rolled_back_fp = fingerprint(&fwd.receive.ledger).combined;
+            fwd.prior_fp = rolled_back_fp;
+            // (4) Append the durable rollback record — ONLY after commit.
+            let rb_point = RollbackPoint {
+                slot: to_point.slot,
+                hash: to_point.hash.clone(),
+                block_no: BlockNo(to_block_no),
+            };
+            wal.append(WalEntry::RollBack {
+                to_point: rb_point.clone(),
+                reason,
+                prior_tip: RollbackPoint {
+                    slot: SlotNo(prior_slot),
+                    hash: prior_hash,
+                    block_no: BlockNo(prior_block_no),
+                },
+                // selected_tip is audit-only (AI-S1): at rollback time the new
+                // chain's root is the rollback target (extended by subsequent
+                // ChainSelected events). Replay never sets the durable tip from it.
+                selected_tip: rb_point,
+            })
+            .map_err(ApplyError::Wal)?;
+            // (5) Reconcile (DC-NODE-26): the durable tip must be the target.
+            let tip = chaindb.tip().ok().flatten();
+            if !durable_tip_matches(tip.as_ref(), to_point.slot, &to_point.hash) {
+                return Err(ApplyError::ReconciliationMismatch {
+                    expected_slot: to_point.slot,
+                    expected_hash: to_point.hash.clone(),
+                    actual: tip,
+                });
+            }
+            Ok(Some(AppliedTip {
+                slot: to_point.slot,
+                hash: to_point.hash.clone(),
+            }))
+        }
+        ChainEvent::ChainSelected { new_tip, .. } => {
+            let bytes = roll_forward_block.ok_or(ApplyError::MissingRollForwardBlock)?;
+            // Roll forward through the SOLE durable admit authority
+            // (DC-NODE-05/12); pump_block validates the body (header→body
+            // coherent — no tip advance without a validated body).
+            pump_block(fwd, chaindb, wal, snapshots, bytes, era_schedule, ledger_view)
+                .map_err(ApplyError::Pump)?;
+            let tip = chaindb.tip().ok().flatten();
+            if !durable_tip_matches(tip.as_ref(), new_tip.slot, &new_tip.hash) {
+                return Err(ApplyError::ReconciliationMismatch {
+                    expected_slot: new_tip.slot,
+                    expected_hash: new_tip.hash.clone(),
+                    actual: tip,
+                });
+            }
+            Ok(Some(AppliedTip {
+                slot: new_tip.slot,
+                hash: new_tip.hash.clone(),
+            }))
+        }
+        ChainEvent::Rejected { .. }
+        | ChainEvent::ChainExtended { .. }
+        | ChainEvent::RolledForward { .. } => Ok(None),
+    }
 }
 
 #[cfg(test)]

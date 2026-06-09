@@ -860,6 +860,22 @@ pub fn resolve_disposition(class: ReceiveClass, venue: VenueRole) -> ReceiveDisp
     }
 }
 
+/// PHASE4-N-AI AI-S3 (DC-NODE-26): pure decision/durable reconciliation —
+/// does the durable `ChainDb` tip match the fork-choice decision's resulting
+/// point? The apply driver uses this to fail-fast on any post-apply
+/// divergence between the orchestrator's decision and the persisted spine.
+/// Pure / total: an absent tip never matches.
+pub fn durable_tip_matches(
+    tip: Option<&ChainTip>,
+    expected_slot: SlotNo,
+    expected_hash: &Hash32,
+) -> bool {
+    match tip {
+        Some(t) => t.slot == expected_slot && t.hash == *expected_hash,
+        None => false,
+    }
+}
+
 // DC-NODE-21 (PHASE4-N-AH S2): the VenueAdoptionCertificate type is REMOVED from
 // ade_node — the cert is operator evidence parsed by the harness, never a forge input.
 
