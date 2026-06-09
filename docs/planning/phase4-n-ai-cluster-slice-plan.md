@@ -80,13 +80,20 @@ branch resurrects; see the OQ-1 decision record).
     (wire-signal precursor) — **TCB: RED** (`ade_runtime::admission`). *Resolves OQ-3 (the
     rollback point becomes available on the wire).* **Merges latent** — adds + tests the event;
     the live loop does not consume it until AI-S4b. NOT fork-choice wiring.
-  - **AI-S4b — Live receive-loop fork-choice wiring + forge gate** — invariant: the live receive
+  - **AI-S4b-i — Participant venue declaration (inert)** — invariant: the venue is an explicit,
+    closed declaration (`--participant-venue` → `VenueRole::Participant`); `Unknown`/absent fails
+    closed to the conservative non-fork-choice path; no silent inference either direction —
+    resolves OQ-5 — **TCB: RED** (`ade_node::cli`/`node_lifecycle`). **Truly inert:** recognizes
+    the mode value ONLY — no fork-choice routing, no forge-decision change, no `SingleProducer`
+    change. Merges with no live behavior flip.
+  - **AI-S4b-ii — Live fork-choice routing + forge gate (the flip)** — invariant: the live receive
     loop consumes the surfaced rollback signal → `StreamInput::RollBack` → orchestrator →
     `apply_chain_event`, drives detector → resolver on the Participant path (SingleProducer
     fail-closed unchanged), and forging refuses while a re-selection is pending — addresses
     CE-AI-2 (live) + CE-AI-3 (live) + CE-AI-4 — **TCB: RED** (`ade_node::node_lifecycle`/
-    `node_sync`). *Resolves OQ-5 (venue declaration + fail-safe default); consumes the OQ-3
-    signal from AI-S4a.* The go-live behavior flip.
+    `node_sync`). The routing + pending-state + forge gate are **irreducible** (splitting them
+    would leave live fork-choice without the producer-race fence). Consumes the OQ-3 signal from
+    AI-S4a. The go-live behavior flip.
   - **AI-S5 — Convergence evidence + operator pass** — invariant: chain selection is
     deterministic + arrival-order-independent (hermetic), and Ade converges with a Haskell
     producer on the same tip (operator-gated), via a closed derived-tier evidence vocabulary
@@ -112,8 +119,9 @@ branch resurrects; see the OQ-1 decision record).
   slice ships the harness + the closed evidence vocabulary + the hermetic arrival-order proof
   (CE-AI-5); the operator executes the live convergence pass.
 - **Mergeable units:** each slice independently leaves the system fully correct. AI-S1/S2/S3/S4a
-  add tested capability that is latent until AI-S4b wires it; AI-S4b is the go-live behavior
-  change (SingleProducer unchanged, Participant resolves, forge-safe via DC-NODE-28); AI-S5 closes with
+  add tested / config capability that is latent until AI-S4b-ii wires it (AI-S4b-i declares the
+  Participant venue but is inert); AI-S4b-ii is the go-live behavior change (SingleProducer
+  unchanged, Participant resolves, forge-safe via DC-NODE-28); AI-S5 closes with
   evidence + the operator pass. No slice temporarily weakens an invariant (the forge-race fence
   DC-NODE-28 lands in the same slice that introduces the pending-decision state).
 - **The one BLUE touch:** AI-S1's `WalEntry::RollBack` + replay arm, sanctioned by the existing
@@ -128,6 +136,6 @@ branch resurrects; see the OQ-1 decision record).
   point) → AI-S4a (surface the point on the wire) → AI-S4b (consume it).
 - **OQ-4** (snapshot availability ≤ the fork point within k; DC-CONS-05 bound) → AI-S3.
 - **OQ-5** (venue declaration: reuse `--single-producer-venue`; default fail-safe to the
-  conservative SingleProducer arm) → AI-S2/AI-S4b.
+  conservative SingleProducer arm) → AI-S2/AI-S4b-i.
 - **OQ-6** (convergence evidence shape: closed, derived-tier, non-overstating) → AI-S5.
 - **OQ-1** — RESOLVED → A (decision record). The mechanism is fixed; AI-S1 implements it.
