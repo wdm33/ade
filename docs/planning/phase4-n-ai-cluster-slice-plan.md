@@ -86,7 +86,7 @@ branch resurrects; see the OQ-1 decision record).
     resolves OQ-5 — **TCB: RED** (`ade_node::cli`/`node_lifecycle`). **Truly inert:** recognizes
     the mode value ONLY — no fork-choice routing, no forge-decision change, no `SingleProducer`
     change. Merges with no live behavior flip.
-  - **AI-S4b-ii — Live fork-choice routing + forge gate (the flip)** — invariant: the live receive
+  - **AI-S4b-ii — Live rollback-follow routing + forge gate (the flip)** — invariant: the live receive
     loop classifies every block (detector + venue resolver) and, for Participant, follows the
     peer's `RollBackward` reorg: `RollBackward(point)` → durable-point lookup (fail closed if not
     in chain / beyond-k / crossing immutable) → construct `ChainEvent::RolledBack` →
