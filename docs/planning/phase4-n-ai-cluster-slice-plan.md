@@ -87,13 +87,18 @@ branch resurrects; see the OQ-1 decision record).
     the mode value ONLY — no fork-choice routing, no forge-decision change, no `SingleProducer`
     change. Merges with no live behavior flip.
   - **AI-S4b-ii — Live fork-choice routing + forge gate (the flip)** — invariant: the live receive
-    loop consumes the surfaced rollback signal → `StreamInput::RollBack` → orchestrator →
-    `apply_chain_event`, drives detector → resolver on the Participant path (SingleProducer
-    fail-closed unchanged), and forging refuses while a re-selection is pending — addresses
-    CE-AI-2 (live) + CE-AI-3 (live) + CE-AI-4 — **TCB: RED** (`ade_node::node_lifecycle`/
-    `node_sync`). The routing + pending-state + forge gate are **irreducible** (splitting them
-    would leave live fork-choice without the producer-race fence). Consumes the OQ-3 signal from
-    AI-S4a. The go-live behavior flip.
+    loop classifies every block (detector + venue resolver) and, for Participant, follows the
+    peer's `RollBackward` reorg: `RollBackward(point)` → durable-point lookup (fail closed if not
+    in chain / beyond-k / crossing immutable) → construct `ChainEvent::RolledBack` →
+    `apply_chain_event` (S3). NOT `process_stream_input` (the orchestrator's in-memory ring is
+    header-arrival-populated, empty on the live block/pump path; the loop never calls
+    `select_best_chain`). Bare competing blocks fail closed (all venues); SingleProducer/Unknown
+    unchanged. Forging refuses while a rollback/apply is pending — addresses CE-AI-2 (live) +
+    CE-AI-3 (live) + CE-AI-4 — **TCB: RED** (`ade_node::node_lifecycle`/`node_sync`). The routing +
+    pending-state + forge gate are **irreducible** (splitting would leave live fork-choice without
+    the producer-race fence). Consumes the OQ-3 signal from AI-S4a. **Proves single-best-peer
+    rollback following (replay-equivalent peer-branch adoption), NOT multi-candidate live
+    selection** (full CN-CONS-03 = CE-AI-6/AI-S5 + a later multi-peer slice). The go-live flip.
   - **AI-S5 — Convergence evidence + operator pass** — invariant: chain selection is
     deterministic + arrival-order-independent (hermetic), and Ade converges with a Haskell
     producer on the same tip (operator-gated), via a closed derived-tier evidence vocabulary
