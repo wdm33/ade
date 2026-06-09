@@ -28,7 +28,7 @@ resurrect the abandoned branch.
   `ade_ledger::rollback::{materialize_rolled_back_state, commit_rollback}`,
   `ade_core::consensus::rollback::apply_rollback`.
 - **State machines affected:** none (the rollback *authority* is reused, not changed).
-- **Persistence impact:** **one new WAL record shape** — `WalEntry::RollBack` at tag 4 (additive,
+- **Persistence impact:** **one new WAL record shape** — `WalEntry::RollBack` at tag 1 (the reserved RollBackward slot; additive,
   version-gated; append-only).
 - **Network-visible impact:** none.
 - **Out of scope:** production recovery rewire + live RollBack *production* — **AI-S3** (RED);
@@ -91,12 +91,12 @@ and produces no RollBack entry at runtime.**
   MUST NOT set the durable tip from `selected_tip` without validating/applying the selected branch —
   this guards against header-only adoption via WAL metadata.
 - **Persistence — new WAL record shape (pinned canonical CBOR):**
-  `array(2)[ uint 4, array(10)[ to_slot:uint, to_hash:bytes(32), to_block_no:uint, reason_code:uint,
+  `array(2)[ uint 1, array(10)[ to_slot:uint, to_hash:bytes(32), to_block_no:uint, reason_code:uint,
   prior_slot:uint, prior_hash:bytes(32), prior_block_no:uint, selected_slot:uint, selected_hash:bytes(32),
   selected_block_no:uint ] ]` — definite-length, canonical widths, via the existing
   `write_uint_canonical`/`write_bytes_canonical`/`write_array_header`; decode mirrors via
-  `expect_definite_array(.., 10, "RollBack payload")` + `read_uint`/`read_hash32`. Tag 4 (after
-  `AdmitBlock`=0, reserved 1/2, `Seed`=3); the unknown-tag fall-through (`Structural "unknown wal entry
+  `expect_definite_array(.., 10, "RollBack payload")` + `read_uint`/`read_hash32`. Tag 1 — the reserved RollBackward slot (after
+  `AdmitBlock`=0; tag 2 CaptureSnapshot reserved; `Seed`=3); the unknown-tag fall-through (`Structural "unknown wal entry
   tag"`) is unchanged.
 - **State transitions:** none new — `apply_rollback`/`materialize_rolled_back_state`/`commit_rollback`
   reused verbatim.
@@ -127,7 +127,7 @@ and produces no RollBack entry at runtime.**
 - [ ] `rollback_exceeding_k_or_crossing_immutable_rejected` — via `apply_rollback`/`materialize` bounds →
   `ExceededRollback`/`ForkBeforeImmutableTip` (DC-CONS-05/06); replay never applies it.
 - [ ] `replay_with_rollback_two_runs_byte_identical` (T-REC-03).
-- [ ] New gate **`ci/ci_check_wal_rollback_replay_equiv.sh`** green (asserts: tag-4 variant in all four
+- [ ] New gate **`ci/ci_check_wal_rollback_replay_equiv.sh`** green (asserts: tag-1 variant in all four
   exhaustive matches; the Layer-2 test re-invokes `materialize_rolled_back_state` and does NOT
   re-implement rollback; no recorded-fp-trust; no new WAL mutation method; durable tip not set from
   `selected_tip`).
@@ -160,7 +160,7 @@ detector/loop/forge-gate (AI-S2/S4); no convergence evidence (AI-S5); no multi-p
 fork-choice/consensus; no performance work; no config/feature flags.
 
 ## 16. Completion Checklist
-- [ ] `WalEntry::RollBack` (tag 4) + `RollbackReason` added; all four exhaustive matches updated.
+- [ ] `WalEntry::RollBack` (tag 1) + `RollbackReason` added; all four exhaustive matches updated.
 - [ ] All new data canonically encoded; non-canonical + unknown-tag + malformed rejected deterministically.
 - [ ] fp-chain replay rollback-aware (re-anchor to in-chain `post_fp`; superseded bytes not required); no materialize call inside the fp-walk.
 - [ ] Layer-2 hermetic test proves replay re-invokes `materialize_rolled_back_state` + lockstep, recovers selected-not-abandoned, byte-identical.

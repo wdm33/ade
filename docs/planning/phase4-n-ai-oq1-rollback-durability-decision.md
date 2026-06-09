@@ -75,7 +75,7 @@ a **linear** WAL; `commit_rollback` leaves no durable record; `replay_from_ancho
 ## A — the chosen mechanism (shape only; not implementation)
 
 A version-gated additive **`WalEntry::RollBack { to_point, reason, prior_tip, selected_tip }`**
-(next free tag = 4; after `AdmitBlock`=0 / `SeedEpochConsensusInputsImported`=3):
+(tag 1 — the reserved RollBackward slot; `AdmitBlock`=0 / tag 2 CaptureSnapshot reserved / `SeedEpochConsensusInputsImported`=3):
 - **Append-only** — a new append, never a WAL mutation (CN-WAL-01 preserved).
 - **Canonical bytes** — deterministic CBOR; tag-gated; a decoder that does not know the tag
   fails closed (the existing `WalEntry` walks `match` exhaustively — a new variant is a
