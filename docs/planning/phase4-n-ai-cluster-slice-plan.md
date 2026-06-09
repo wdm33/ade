@@ -73,11 +73,20 @@ branch resurrects; see the OQ-1 decision record).
     ChainDb tip after apply — addresses CE-AI-1 (production) + CE-AI-3 — **TCB: RED + GREEN
     (reused BLUE)**. *Resolves OQ-2 (decision-state ownership), OQ-4 (snapshot ≤ fork point
     within k).*
-  - **AI-S4 — Live receive-loop wiring + forge gate** — invariant: the live receive loop drives
-    detector → orchestrator → apply driver on the Participant path (SingleProducer fail-closed
-    unchanged), and forging refuses while a decision is pending — addresses CE-AI-2 (live) +
-    CE-AI-3 (live) + CE-AI-4 — **TCB: RED** (`ade_node::node_lifecycle`/`node_sync`). *Resolves
-    OQ-3 (peer-driven rollback point), OQ-5 (venue declaration + fail-safe default).*
+  - **AI-S4a — Wire rollback signal preservation** — invariant: the RED admission wire pump
+    preserves the peer's chain-sync `RollBackward` **point** as a closed `AdmissionPeerEvent`
+    variant (today the point is discarded → `TipUpdate` only), fail-closed on a malformed/
+    unsupported point; `Block`/`TipUpdate`/`Disconnected` unchanged — addresses CE-AI-2
+    (wire-signal precursor) — **TCB: RED** (`ade_runtime::admission`). *Resolves OQ-3 (the
+    rollback point becomes available on the wire).* **Merges latent** — adds + tests the event;
+    the live loop does not consume it until AI-S4b. NOT fork-choice wiring.
+  - **AI-S4b — Live receive-loop fork-choice wiring + forge gate** — invariant: the live receive
+    loop consumes the surfaced rollback signal → `StreamInput::RollBack` → orchestrator →
+    `apply_chain_event`, drives detector → resolver on the Participant path (SingleProducer
+    fail-closed unchanged), and forging refuses while a re-selection is pending — addresses
+    CE-AI-2 (live) + CE-AI-3 (live) + CE-AI-4 — **TCB: RED** (`ade_node::node_lifecycle`/
+    `node_sync`). *Resolves OQ-5 (venue declaration + fail-safe default); consumes the OQ-3
+    signal from AI-S4a.* The go-live behavior flip.
   - **AI-S5 — Convergence evidence + operator pass** — invariant: chain selection is
     deterministic + arrival-order-independent (hermetic), and Ade converges with a Haskell
     producer on the same tip (operator-gated), via a closed derived-tier evidence vocabulary
@@ -102,9 +111,9 @@ branch resurrects; see the OQ-1 decision record).
   is operator-gated, consistent with the project's live-CE tier doctrine (as CE-AH-6 was) — the
   slice ships the harness + the closed evidence vocabulary + the hermetic arrival-order proof
   (CE-AI-5); the operator executes the live convergence pass.
-- **Mergeable units:** each slice independently leaves the system fully correct. AI-S1/S2/S3 add
-  tested capability that is latent until AI-S4 wires it; AI-S4 is the go-live behavior change
-  (SingleProducer unchanged, Participant resolves, forge-safe via DC-NODE-28); AI-S5 closes with
+- **Mergeable units:** each slice independently leaves the system fully correct. AI-S1/S2/S3/S4a
+  add tested capability that is latent until AI-S4b wires it; AI-S4b is the go-live behavior
+  change (SingleProducer unchanged, Participant resolves, forge-safe via DC-NODE-28); AI-S5 closes with
   evidence + the operator pass. No slice temporarily weakens an invariant (the forge-race fence
   DC-NODE-28 lands in the same slice that introduces the pending-decision state).
 - **The one BLUE touch:** AI-S1's `WalEntry::RollBack` + replay arm, sanctioned by the existing
@@ -116,9 +125,9 @@ branch resurrects; see the OQ-1 decision record).
 - **OQ-2** (decision-state ownership: rebuild `ChainSelectorState` per decision vs hold
   `OrchestratorState` in lockstep) → AI-S3.
 - **OQ-3** (rollback-point identification: peer chain-sync `RollBackward` vs Ade-derived fork
-  point) → AI-S4.
+  point) → AI-S4a (surface the point on the wire) → AI-S4b (consume it).
 - **OQ-4** (snapshot availability ≤ the fork point within k; DC-CONS-05 bound) → AI-S3.
 - **OQ-5** (venue declaration: reuse `--single-producer-venue`; default fail-safe to the
-  conservative SingleProducer arm) → AI-S2/AI-S4.
+  conservative SingleProducer arm) → AI-S2/AI-S4b.
 - **OQ-6** (convergence evidence shape: closed, derived-tier, non-overstating) → AI-S5.
 - **OQ-1** — RESOLVED → A (decision record). The mechanism is fixed; AI-S1 implements it.
