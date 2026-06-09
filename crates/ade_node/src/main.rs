@@ -187,5 +187,10 @@ fn print_cli_error(e: &CliError) {
         CliError::InvalidMaxSlots(s) => {
             eprintln!("ade_node: --max-slots {} is not a valid u64", s);
         }
+        CliError::ConflictingVenue => {
+            eprintln!(
+                "ade_node: --single-producer-venue and --participant-venue are mutually exclusive"
+            );
+        }
     }
 }

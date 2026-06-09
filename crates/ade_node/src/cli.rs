@@ -136,6 +136,12 @@ pub struct Cli {
     /// (relay non-producing, Ade sole producer), enabling DC-NODE-18
     /// extend-own-durable-spine behind the fail-closed fence. Default `false`.
     pub single_producer_venue: bool,
+    /// `--participant-venue`: declare an explicitly participant venue (Ade is
+    /// one producer among several; a competing peer chain is resolved by
+    /// fork-choice in AI-S4b-ii). Mutually exclusive with
+    /// `--single-producer-venue`. Default `false`. AI-S4b-i: inert until the
+    /// live wiring lands.
+    pub participant_venue: bool,
 }
 
 /// Closed admission-mode CLI bundle (B5).
@@ -178,6 +184,8 @@ pub enum CliError {
     // PHASE4-N-Q — Produce-mode errors.
     ProduceMissingFlag(&'static str),
     InvalidMaxSlots(String),
+    // PHASE4-N-AI AI-S4b-i (OQ-5) — a venue is exactly one role; never both.
+    ConflictingVenue,
 }
 
 /// Closed PHASE4-N-Q `produce` CLI bundle.
@@ -248,6 +256,7 @@ impl Cli {
         let mut evidence_log: Option<PathBuf> = None;
         let mut max_slots: Option<u64> = None;
         let mut single_producer_venue = false;
+        let mut participant_venue = false;
 
         while let Some(arg) = iter.next() {
             match arg.as_str() {
@@ -289,6 +298,10 @@ impl Cli {
                 // PHASE4-N-AF (DC-NODE-18) — single-producer venue declaration.
                 "--single-producer-venue" => {
                     single_producer_venue = true;
+                }
+                // PHASE4-N-AI AI-S4b-i (OQ-5): explicit participant venue.
+                "--participant-venue" => {
+                    participant_venue = true;
                 }
                 "--mode" => {
                     let v = iter
@@ -451,6 +464,11 @@ impl Cli {
         } else {
             genesis_path.ok_or(CliError::MissingGenesisPath)?
         };
+        // PHASE4-N-AI AI-S4b-i (OQ-5): a venue is exactly one role -- declaring
+        // both single-producer AND participant is contradictory; fail closed.
+        if single_producer_venue && participant_venue {
+            return Err(CliError::ConflictingVenue);
+        }
         Ok(Self {
             genesis_path,
             network,
@@ -481,6 +499,7 @@ impl Cli {
             evidence_log,
             max_slots,
             single_producer_venue,
+            participant_venue,
         })
     }
 

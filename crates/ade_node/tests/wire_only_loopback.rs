@@ -231,6 +231,7 @@ fn make_cli(peer_addr: std::net::SocketAddr, log_path: PathBuf, mode: Mode) -> C
         evidence_log: None,
         max_slots: None,
         single_producer_venue: false,
+        participant_venue: false,
     }
 }
 

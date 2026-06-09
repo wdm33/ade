@@ -645,6 +645,12 @@ async fn run_node_lifecycle_inner(
                     state.replayed_anchor_block_no,
                 );
             }
+            // PHASE4-N-AI AI-S4b-i (OQ-5): declare an explicitly participant
+            // venue. INERT here -- only sets venue_role; AI-S4b-ii wires the
+            // live fork-choice routing + forge gate that consume it.
+            if cli.participant_venue {
+                activation.declare_participant_venue();
+            }
             // PHASE4-N-F-G-J S1 (CN-NODE-04): emit the closed feed/forge
             // scheduling diagnostics to stderr (emit-only; never alters
             // scheduling). The forge-on path the C1 rerun exercises —
@@ -1041,6 +1047,15 @@ impl<'a> ForgeActivation<'a> {
     /// adoption certificate is NOT a forge input — the harness owns it as evidence.)
     pub fn declare_single_producer_venue(&mut self) {
         self.venue_role = VenueRole::SingleProducer;
+    }
+
+    /// PHASE4-N-AI AI-S4b-i (OQ-5): declare an explicitly participant venue.
+    /// INERT until AI-S4b-ii wires the live fork-choice routing -- it only sets
+    /// the role; no existing live consumer branches on `Participant` yet, so the
+    /// loop reaches the same fallback as `Unknown` until then. `Participant` is a
+    /// distinct declared venue, NOT semantically `Unknown`.
+    pub fn declare_participant_venue(&mut self) {
+        self.venue_role = VenueRole::Participant;
     }
 }
 
@@ -2538,6 +2553,7 @@ mod tests {
             evidence_log: None,
             max_slots: None,
             single_producer_venue: false,
+            participant_venue: false,
         };
         Fixture { _dir: dir, cli }
     }
@@ -3120,6 +3136,7 @@ mod tests {
             evidence_log: None,
             max_slots: None,
             single_producer_venue: false,
+            participant_venue: false,
         }
     }
 
