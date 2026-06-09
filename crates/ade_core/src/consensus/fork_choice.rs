@@ -340,4 +340,89 @@ mod tests {
             other => panic!("expected TiebreakerLossKeepCurrent, got {:?}", other),
         }
     }
+
+    // ===== PHASE4-N-AI AI-S5 (CE-AI-5, CN-CONS-01) — arrival-order-independence =====
+    // select_best_chain is the sole chain-selection authority (DC-CONS-03); proving
+    // it picks the same fork-choice-maximal tip regardless of candidate presentation
+    // order is the CN-CONS-01 determinism proof. (The orchestrator delegates every
+    // selection to select_best_chain, so its order-independence follows.)
+
+    fn permute<T: Clone>(items: &[T]) -> Vec<Vec<T>> {
+        if items.len() <= 1 {
+            return vec![items.to_vec()];
+        }
+        let mut out = Vec::new();
+        for i in 0..items.len() {
+            let mut rest = items.to_vec();
+            let head = rest.remove(i);
+            for mut p in permute(&rest) {
+                p.insert(0, head.clone());
+                out.push(p);
+            }
+        }
+        out
+    }
+
+    fn winner_tip(s: &ChainSelectorState, cands: &[CandidateFragment]) -> Point {
+        select_best_chain(s, cands).unwrap().0.current_tip
+    }
+
+    fn frag(
+        headers: Vec<crate::consensus::header_summary::ValidatedHeaderSummary>,
+        view: TiebreakerView,
+    ) -> CandidateFragment {
+        CandidateFragment {
+            anchor: Point {
+                slot: SlotNo(100),
+                hash: Hash32([0x11; 32]),
+            },
+            anchor_block_no: BlockNo(50),
+            headers,
+            select_view: view,
+            rollback_depth: BlockDistance(0),
+        }
+    }
+
+    #[test]
+    fn select_best_chain_arrival_order_independent_distinct_heights() {
+        let s = state(100, 50, 50, 25, 2160);
+        let a = frag(vec![header(101, 51, 0xA1)], tv(101, 0xaa, 5, 0x01));
+        let b = frag(
+            vec![header(101, 51, 0xB1), header(102, 52, 0xB2)],
+            tv(102, 0xaa, 5, 0x01),
+        );
+        let c = frag(
+            vec![
+                header(101, 51, 0xC1),
+                header(102, 52, 0xC2),
+                header(103, 53, 0xC3),
+            ],
+            tv(103, 0xaa, 5, 0x01),
+        );
+        let cands = vec![a, b, c];
+        let expected = winner_tip(&s, &cands);
+        let perms = permute(&cands);
+        assert_eq!(perms.len(), 6, "3! permutations of the candidate set");
+        for perm in perms {
+            assert_eq!(
+                winner_tip(&s, &perm),
+                expected,
+                "the converged tip must not depend on candidate arrival order"
+            );
+        }
+    }
+
+    #[test]
+    fn select_best_chain_arrival_order_independent_tiebreaker() {
+        let s = state(100, 50, 50, 25, 2160);
+        // Equal height (block 51 > current 50); the tiebreaker decides (lower slot wins).
+        let d = frag(vec![header(101, 51, 0xD1)], tv(101, 0xaa, 5, 0x01));
+        let e = frag(vec![header(101, 51, 0xE1)], tv(102, 0xaa, 5, 0x01));
+        let expected = winner_tip(&s, &[d.clone(), e.clone()]);
+        assert_eq!(
+            winner_tip(&s, &[e, d]),
+            expected,
+            "the tiebreaker winner must not depend on arrival order"
+        );
+    }
 }
