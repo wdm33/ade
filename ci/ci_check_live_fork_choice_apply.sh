@@ -36,30 +36,34 @@ strip_for_grep() {
 [[ -f "$NL" ]] || fail "missing $NL"
 [[ -f "$TEST" ]] || fail "missing $TEST"
 
+# NOTE: greps use here-strings (`<<<`), NOT `echo "$VAR" | grep -q` / `strip | grep -q`,
+# which under `set -o pipefail` false-fail when grep -q matches early and SIGPIPEs the
+# producer of a large stripped file (bit this gate after AI-S4b-ii grew node_sync).
 PROD=$(strip_for_grep "$NL")
-echo "$PROD" | grep -qE 'pub fn apply_chain_event' || fail "apply_chain_event missing"
+grep -qE 'pub fn apply_chain_event' <<< "$PROD" || fail "apply_chain_event missing"
 
-# The apply_chain_event region (it is the last item before the stripped test module).
-REGION=$(echo "$PROD" | awk '/pub fn apply_chain_event/{f=1} f{print}')
+# The apply_chain_event region -- bounded BEFORE run_participant_sync (AI-S4b-ii),
+# the next fn after apply_chain_event in the stripped output.
+REGION=$(awk '/pub fn apply_chain_event/{f=1} /pub async fn run_participant_sync/{f=0} f{print}' <<< "$PROD")
 
 # 1. Reuse, not reimplement.
 for needle in materialize_rolled_back_state commit_rollback pump_block 'WalEntry::RollBack'; do
-    echo "$REGION" | grep -qF "$needle" || fail "apply_chain_event must use ${needle} (reuse, not reimplement)"
+    grep -qF "$needle" <<< "$REGION" || fail "apply_chain_event must use ${needle} (reuse, not reimplement)"
 done
 
 # 2. Applies, never selects; no second rollback path.
 for needle in select_best_chain fork_choice chain_selector; do
-    if echo "$REGION" | grep -qE "\b${needle}\b"; then
+    if grep -qE "\b${needle}\b" <<< "$REGION"; then
         fail "apply_chain_event must not reference ${needle} (the orchestrator owns selection — DC-CONS-03)"
     fi
 done
-if echo "$REGION" | grep -qE 'rollback_to_slot'; then
+if grep -qE 'rollback_to_slot' <<< "$REGION"; then
     fail "apply_chain_event must not call rollback_to_slot directly (commit_rollback owns the ChainDb rollback)"
 fi
 
 # 3. WAL-after-commit ordering (commit-fail => no WAL).
-COMMIT_LN=$(echo "$REGION" | grep -nE 'commit_rollback\(' | head -1 | cut -d: -f1)
-WALAPP_LN=$(echo "$REGION" | grep -nE 'wal\.append\(WalEntry::RollBack' | head -1 | cut -d: -f1)
+COMMIT_LN=$(grep -nE 'commit_rollback\(' <<< "$REGION" | head -1 | cut -d: -f1)
+WALAPP_LN=$(grep -nE 'wal\.append\(WalEntry::RollBack' <<< "$REGION" | head -1 | cut -d: -f1)
 if [[ -z "${COMMIT_LN:-}" || -z "${WALAPP_LN:-}" ]]; then
     fail "could not locate commit_rollback / wal.append(WalEntry::RollBack) for the ordering check"
 elif (( WALAPP_LN <= COMMIT_LN )); then
@@ -67,7 +71,8 @@ elif (( WALAPP_LN <= COMMIT_LN )); then
 fi
 
 # 4. GREEN reconciliation helper (DC-NODE-26).
-strip_for_grep "$NS" | grep -qE 'pub fn durable_tip_matches' \
+NSP=$(strip_for_grep "$NS")
+grep -qE 'pub fn durable_tip_matches' <<< "$NSP" \
     || fail "durable_tip_matches (DC-NODE-26 reconciliation) missing"
 
 # 5. Hermetic tests present.

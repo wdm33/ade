@@ -248,6 +248,9 @@ fn forge_refused_not_caught_up() {
         ForgeRefused::SingleProducerFenceViolation { .. } => {
             panic!("expected NotCaughtUp, got SingleProducerFenceViolation")
         }
+        ForgeRefused::ReselectionPending => {
+            panic!("expected NotCaughtUp, got ReselectionPending")
+        }
     }
 }
 

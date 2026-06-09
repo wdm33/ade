@@ -68,6 +68,17 @@ const MAX_WIRE_PUMP_LOOKAHEAD: usize = 256;
 /// One ordered source only (E1). [`NodeBlockSource::next_block`] yields
 /// ONLY `AdmissionPeerEvent::Block` payloads, in arrival order; it never
 /// surfaces a verdict / tip-agreement / follow decision (E2).
+/// PHASE4-N-AI AI-S4b-ii: one ordered receive item from a peer — a block to
+/// admit, or a rollback signal (the wire `RollBackward` point, surfaced by
+/// AI-S4a). The live loop drains these in arrival order so a rollback is
+/// processed at its exact position between blocks. Content-blind w.r.t. block
+/// bytes (a `Block` is opaque bytes; a `RollBack` carries the wire point).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum NodeSyncItem {
+    Block(Vec<u8>),
+    RollBack(Point),
+}
+
 pub enum NodeBlockSource {
     /// One peer's `run_admission_wire_pump` event stream. The pump is
     /// the N2N `BlockFetch` source; this taps its raw `Block` events —
@@ -86,7 +97,7 @@ pub enum NodeBlockSource {
     /// lookahead drains).
     WirePump {
         rx: mpsc::Receiver<AdmissionPeerEvent>,
-        lookahead: VecDeque<Vec<u8>>,
+        lookahead: VecDeque<NodeSyncItem>,
         disconnected: bool,
         /// PHASE4-N-AE.A (DC-NODE-15): the followed-peer-tip admissibility
         /// signal, updated as a write-only side effect when the wire stream
@@ -102,7 +113,7 @@ pub enum NodeBlockSource {
     /// set explicitly by hermetic tests (the in-memory feed observes no live
     /// `TipUpdate`).
     InMemory {
-        blocks: VecDeque<Vec<u8>>,
+        blocks: VecDeque<NodeSyncItem>,
         followed_peer_tip: FollowedPeerTipSignal,
     },
 }
@@ -111,7 +122,16 @@ impl NodeBlockSource {
     /// Build an in-memory source from an ordered block-bytes sequence.
     pub fn in_memory(blocks: Vec<Vec<u8>>) -> Self {
         Self::InMemory {
-            blocks: VecDeque::from(blocks),
+            blocks: blocks.into_iter().map(NodeSyncItem::Block).collect(),
+            followed_peer_tip: FollowedPeerTipSignal::new(),
+        }
+    }
+
+    /// PHASE4-N-AI AI-S4b-ii: in-memory source from explicit ordered items
+    /// (`Block` | `RollBack`) — hermetic rollback-follow tests.
+    pub fn in_memory_items(items: Vec<NodeSyncItem>) -> Self {
+        Self::InMemory {
+            blocks: VecDeque::from(items),
             followed_peer_tip: FollowedPeerTipSignal::new(),
         }
     }
@@ -125,7 +145,7 @@ impl NodeBlockSource {
         followed_peer_tip: Option<TipPoint>,
     ) -> Self {
         Self::InMemory {
-            blocks: VecDeque::from(blocks),
+            blocks: blocks.into_iter().map(NodeSyncItem::Block).collect(),
             followed_peer_tip: FollowedPeerTipSignal {
                 latest: followed_peer_tip,
             },
@@ -164,7 +184,7 @@ impl NodeBlockSource {
     /// blocks; never inspects block content. RED scheduling only.
     fn pump_lookahead(
         rx: &mut mpsc::Receiver<AdmissionPeerEvent>,
-        lookahead: &mut VecDeque<Vec<u8>>,
+        lookahead: &mut VecDeque<NodeSyncItem>,
         disconnected: &mut bool,
         followed_peer_tip: &mut FollowedPeerTipSignal,
     ) {
@@ -181,7 +201,7 @@ impl NodeBlockSource {
             }
             match rx.try_recv() {
                 Ok(AdmissionPeerEvent::Block { block_bytes, .. }) => {
-                    lookahead.push_back(block_bytes);
+                    lookahead.push_back(NodeSyncItem::Block(block_bytes));
                 }
                 // PHASE4-N-AE.A (DC-NODE-15): a TipUpdate is STILL skipped for
                 // sync (it is not a block and not a sync tip authority), but it
@@ -191,11 +211,11 @@ impl NodeBlockSource {
                     followed_peer_tip.observe(&tip);
                     continue;
                 }
-                // PHASE4-N-AI AI-S4a: the rollback signal is PRESERVED on the wire
-                // but NOT consumed here -- latent until AI-S4b wires detector ->
-                // orchestrator -> apply. No fork-choice / orchestrator / ChainDb / forge.
-                Ok(AdmissionPeerEvent::RollBackward { .. }) => {
-                    continue;
+                // PHASE4-N-AI AI-S4b-ii: the rollback signal is now CONSUMED --
+                // queued as an ordered NodeSyncItem::RollBack so the live loop
+                // processes it at its exact position between blocks.
+                Ok(AdmissionPeerEvent::RollBackward { point, .. }) => {
+                    lookahead.push_back(NodeSyncItem::RollBack(point));
                 }
                 Ok(AdmissionPeerEvent::Disconnected { .. }) => {
                     *disconnected = true;
@@ -227,7 +247,7 @@ impl NodeBlockSource {
     /// `next_block` in a loop to drain the currently-available batch and
     /// returns at the boundary. The content-blind lookahead (filled by the
     /// readiness peeks) is drained ONLY here.
-    pub async fn next_block(&mut self) -> Option<Vec<u8>> {
+    pub async fn next_item(&mut self) -> Option<NodeSyncItem> {
         match self {
             Self::InMemory { blocks, .. } => blocks.pop_front(),
             Self::WirePump {
@@ -343,7 +363,7 @@ impl NodeBlockSource {
                 loop {
                     match rx.recv().await {
                         Some(AdmissionPeerEvent::Block { block_bytes, .. }) => {
-                            lookahead.push_back(block_bytes);
+                            lookahead.push_back(NodeSyncItem::Block(block_bytes));
                             return;
                         }
                         // PHASE4-N-AE.A (DC-NODE-15): a TipUpdate does not end
@@ -354,11 +374,11 @@ impl NodeBlockSource {
                             followed_peer_tip.observe(&tip);
                             continue;
                         }
-                        // PHASE4-N-AI AI-S4a: rollback signal PRESERVED but NOT
-                        // consumed here -- latent until AI-S4b. No fork-choice /
-                        // orchestrator / ChainDb / forge.
-                        Some(AdmissionPeerEvent::RollBackward { .. }) => {
-                            continue;
+                        // PHASE4-N-AI AI-S4b-ii: a rollback IS work -- queue it as
+                        // an ordered NodeSyncItem::RollBack and stop waiting.
+                        Some(AdmissionPeerEvent::RollBackward { point, .. }) => {
+                            lookahead.push_back(NodeSyncItem::RollBack(point));
+                            return;
                         }
                         Some(AdmissionPeerEvent::Disconnected { .. }) => {
                             *disconnected = true;
@@ -388,6 +408,10 @@ pub enum NodeSyncError {
     /// failed. The tip advanced durably but its recovery snapshot could not
     /// be written — fail closed rather than report an unrecoverable tip.
     Capture(String),
+    /// PHASE4-N-AI AI-S4b-ii: a `RollBack` item reached the SingleProducer/Unknown
+    /// sync path (`run_node_sync`). Those venues do not follow peer rollbacks —
+    /// fail closed (the Participant path handles rollbacks in `node_lifecycle`).
+    UnexpectedRollback,
 }
 
 /// L4b — the durable validated-apply driver: the FIRST production caller of
@@ -429,7 +453,14 @@ where
 {
     let mut selected_tip: Option<PumpTip> = None;
 
-    while let Some(block_bytes) = source.next_block().await {
+    while let Some(item) = source.next_item().await {
+        // PHASE4-N-AI AI-S4b-ii: SingleProducer/Unknown do not follow peer
+        // rollbacks -- a RollBack item on this path fails closed (the Participant
+        // rollback-follow path is wired in node_lifecycle).
+        let block_bytes = match item {
+            NodeSyncItem::Block(b) => b,
+            NodeSyncItem::RollBack(_) => return Err(NodeSyncError::UnexpectedRollback),
+        };
         // The SOLE tip-advancing call on the lifecycle sync path. Its
         // internal cadence checkpoint marker is a no-op here
         // (`NoCheckpointSink`); the REAL recovery snapshot is captured
@@ -686,6 +717,22 @@ pub enum ForgeRefused {
         observed_peer_tip: Option<TipPoint>,
         venue_role: VenueRole,
     },
+    /// PHASE4-N-AI AI-S4b-ii (DC-NODE-28): a fork-choice re-selection (rollback
+    /// apply) is unresolved — the producer refuses to forge on the stale
+    /// pre-resolution tip. No state transition; tip unchanged.
+    ReselectionPending,
+}
+
+/// PHASE4-N-AI AI-S4b-ii (DC-NODE-28): the forge gate's refusal when a
+/// fork-choice re-selection is unresolved. Pure / total. `Some(ReselectionPending)`
+/// iff a rollback/apply is pending — the ForgeTick must NOT forge on the stale
+/// pre-resolution tip.
+pub fn pending_reselection_forge_refusal(pending_reselection: bool) -> Option<ForgeRefused> {
+    if pending_reselection {
+        Some(ForgeRefused::ReselectionPending)
+    } else {
+        None
+    }
 }
 
 /// PHASE4-N-AE.A: the closed outcome of one `--mode node` ForgeTick attempt.
@@ -1316,12 +1363,12 @@ mod tests {
     #[tokio::test]
     async fn in_memory_source_yields_blocks_in_order_then_none() {
         let mut src = NodeBlockSource::in_memory(vec![block(0xA1), block(0xA2), block(0xA3)]);
-        assert_eq!(src.next_block().await, Some(block(0xA1)));
-        assert_eq!(src.next_block().await, Some(block(0xA2)));
-        assert_eq!(src.next_block().await, Some(block(0xA3)));
-        assert_eq!(src.next_block().await, None);
+        assert_eq!(src.next_item().await, Some(NodeSyncItem::Block(block(0xA1))));
+        assert_eq!(src.next_item().await, Some(NodeSyncItem::Block(block(0xA2))));
+        assert_eq!(src.next_item().await, Some(NodeSyncItem::Block(block(0xA3))));
+        assert_eq!(src.next_item().await, None);
         // Idempotent at end-of-feed.
-        assert_eq!(src.next_block().await, None);
+        assert_eq!(src.next_item().await, None);
     }
 
     #[tokio::test]
@@ -1345,17 +1392,16 @@ mod tests {
         drop(tx); // close the channel after the ordered blocks
 
         let mut src = NodeBlockSource::from_wire_pump(rx);
-        assert_eq!(src.next_block().await, Some(block(0xB1)));
-        assert_eq!(src.next_block().await, Some(block(0xB2)));
-        assert_eq!(src.next_block().await, None, "closed channel ends the feed");
+        assert_eq!(src.next_item().await, Some(NodeSyncItem::Block(block(0xB1))));
+        assert_eq!(src.next_item().await, Some(NodeSyncItem::Block(block(0xB2))));
+        assert_eq!(src.next_item().await, None, "closed channel ends the feed");
     }
 
     #[tokio::test]
-    async fn wire_pump_rollbackward_event_is_latent_until_s4b() {
-        // AI-S4a: NodeBlockSource skips RollBackward exactly like TipUpdate --
-        // the rollback signal is preserved on the wire but NOT consumed by the
-        // live sync path here (no apply_chain_event / StreamInput::RollBack /
-        // ChainDb mutation / forge). AI-S4b wires it.
+    async fn wire_pump_yields_rollback_as_ordered_sync_item() {
+        // AI-S4b-ii: NodeBlockSource now CONSUMES RollBackward -- next_item yields
+        // it as an ordered NodeSyncItem::RollBack at its exact position between
+        // blocks (was: skipped/latent in AI-S4a).
         let (tx, rx) = mpsc::channel::<AdmissionPeerEvent>(16);
         let rollback = || AdmissionPeerEvent::RollBackward {
             peer: "p".to_string(),
@@ -1389,13 +1435,22 @@ mod tests {
         drop(tx);
 
         let mut src = NodeBlockSource::from_wire_pump(rx);
+        let rb = NodeSyncItem::RollBack(Point::Block {
+            slot: SlotNo(50),
+            hash: Hash32([0x33; 32]),
+        });
+        // Items arrive in order: RollBack, Block(C1), RollBack, Block(C2).
+        assert_eq!(src.next_item().await, Some(rb.clone()));
         assert_eq!(
-            src.next_block().await,
-            Some(block(0xC1)),
-            "RollBackward is skipped, never yielded as a block"
+            src.next_item().await,
+            Some(NodeSyncItem::Block(block(0xC1)))
         );
-        assert_eq!(src.next_block().await, Some(block(0xC2)));
-        assert_eq!(src.next_block().await, None);
+        assert_eq!(src.next_item().await, Some(rb));
+        assert_eq!(
+            src.next_item().await,
+            Some(NodeSyncItem::Block(block(0xC2)))
+        );
+        assert_eq!(src.next_item().await, None);
     }
 
     // ===== L4b: durable validated apply (hermetic, real persistent stores) =====
@@ -1727,9 +1782,9 @@ mod tests {
         drop(tx);
 
         let mut src = NodeBlockSource::from_wire_pump(rx);
-        assert_eq!(src.next_block().await, Some(block(0xC1)));
+        assert_eq!(src.next_item().await, Some(NodeSyncItem::Block(block(0xC1))));
         assert_eq!(
-            src.next_block().await,
+            src.next_item().await,
             None,
             "disconnect ends the feed; later queued blocks are not surfaced"
         );
@@ -1785,12 +1840,12 @@ mod tests {
         assert!(src.has_work_ready(), "buffered block is ready");
         assert!(!src.is_ended(), "not ended while a block is buffered");
         // Delivery order preserved through the lookahead.
-        assert_eq!(src.next_block().await, Some(block(0xD1)));
-        assert_eq!(src.next_block().await, Some(block(0xD2)));
+        assert_eq!(src.next_item().await, Some(NodeSyncItem::Block(block(0xD1))));
+        assert_eq!(src.next_item().await, Some(NodeSyncItem::Block(block(0xD2))));
         // Drained + channel closed ⇒ ended.
         assert!(!src.has_work_ready(), "no more work");
         assert!(src.is_ended(), "disconnected + drained ⇒ ended");
-        assert_eq!(src.next_block().await, None);
+        assert_eq!(src.next_item().await, None);
     }
 
     #[tokio::test]
@@ -4255,7 +4310,7 @@ mod tests {
         drop(tx); // close the feed so it ends after draining
         let mut source = NodeBlockSource::from_wire_pump(rx);
         let mut got = Vec::new();
-        while let Some(b) = source.next_block().await {
+        while let Some(NodeSyncItem::Block(b)) = source.next_item().await {
             got.push(b[0]);
         }
         assert_eq!(

@@ -56,17 +56,19 @@ for needle in apply_chain_event 'StreamInput::RollBack' select_best_chain chain_
     fi
 done
 
-# 5. The live sync path skips RollBackward (latent), does not consume it yet.
+# 5. AI-S4b-ii flipped the AI-S4a latent skip: node_sync now CONSUMES RollBackward
+#    as an ordered NodeSyncItem::RollBack. node_sync still does not call the live
+#    apply itself (apply_chain_event / StreamInput live in node_lifecycle).
 NSP=$(strip_for_grep "$NS")
-echo "$NSP" | grep -qE 'AdmissionPeerEvent::RollBackward \{ \.\. \}' \
-    || fail "node_sync has no latent skip-arm for RollBackward"
+grep -qE 'NodeSyncItem::RollBack\(point\)' <<< "$NSP" \
+    || fail "node_sync must queue RollBackward as NodeSyncItem::RollBack (AI-S4b-ii consumes it)"
 for needle in apply_chain_event 'StreamInput::RollBack'; do
-    if echo "$NSP" | grep -qF "$needle"; then
-        fail "node_sync must not consume RollBackward yet (found ${needle}) -- that is AI-S4b"
+    if grep -qF "$needle" <<< "$NSP"; then
+        fail "node_sync must not call ${needle} (the live apply lives in node_lifecycle)"
     fi
 done
 
 if (( FAILED == 0 )); then
-    echo "OK: wire rollback signal preserved (AI-S4a, latent until AI-S4b)"
+    echo "OK: wire rollback signal preserved + consumed as NodeSyncItem (AI-S4a + AI-S4b-ii)"
 fi
 exit $FAILED

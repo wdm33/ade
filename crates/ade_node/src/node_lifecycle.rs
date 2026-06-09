@@ -79,7 +79,7 @@ use ade_core::consensus::ledger_view::LedgerView;
 use ade_ledger::pparams::ProtocolParameters;
 use ade_ledger::receive::ReceiveState;
 use ade_runtime::clock::{checked_millis_to_slot, Clock, SlotAlignmentError, SystemClock};
-use ade_runtime::forward_sync::{pump_block, ForwardSyncState, PumpError, SnapshotSink};
+use ade_runtime::forward_sync::{pump_block, ForwardSyncState, NoCheckpointSink, PumpError, SnapshotSink};
 use ade_runtime::producer::coordinator::{
     coordinator_init, CoordinatorConfig, CoordinatorEvent, CoordinatorState, LedgerSnapshotRef,
 };
@@ -89,18 +89,20 @@ use ade_ledger::rollback::{
     commit_rollback, materialize_rolled_back_state, CommitRollbackError, MaterializeError,
     TargetPoint,
 };
-use ade_core::consensus::events::ChainEvent;
+use ade_core::consensus::events::{BlockDistance, ChainEvent, Point};
+use ade_ledger::block_validity::decode_block;
 use ade_runtime::receive::ChainDbWriter;
 
 use crate::admission::bootstrap::build_n2n_version_table;
 use crate::cli::Cli;
 use crate::forge_intent::{classify_forge_intent, ForgeIntent};
 use crate::node_sync::{
-    admit_forged_block_durably, durable_tip_matches, forge_followed_tip_admission,
-    forge_mode_after_admit, forge_mode_on_caughtup, forge_one_from_recovered, run_node_sync,
-    single_producer_forge_decision, venue_policy, ForgeFollowedTipAdmission, ForgeMode,
-    ForgeRefused, NodeBlockSource, NodeForgeOutcome, SingleProducerForgeDecision,
-    VenueRole,
+    admit_forged_block_durably, classify_receive, durable_tip_matches,
+    forge_followed_tip_admission, forge_mode_after_admit, forge_mode_on_caughtup,
+    forge_one_from_recovered, pending_reselection_forge_refusal, resolve_disposition, run_node_sync,
+    single_producer_forge_decision, venue_policy, CandidateSummary, ForgeFollowedTipAdmission,
+    ForgeMode, ForgeRefused, NodeBlockSource, NodeForgeOutcome, NodeSyncError, NodeSyncItem,
+    ReceiveDisposition, SingleProducerForgeDecision, VenueRole,
 };
 use crate::operator_forge;
 use crate::run_loop_planner::{
@@ -1003,6 +1005,11 @@ pub struct ForgeActivation<'a> {
     /// fails closed, so a node that does NOT explicitly declare a single-producer
     /// venue forges EXACTLY as the prior DC-NODE-15-only path (no behavior change).
     pub venue_role: VenueRole,
+    /// PHASE4-N-AI AI-S4b-ii (DC-NODE-28): a fork-choice re-selection (rollback
+    /// apply) is in flight. Set before `apply_chain_event`, cleared only after it
+    /// returns. The ForgeTick gate refuses while set — no forge on a stale
+    /// pre-resolution tip (the producer race).
+    pub pending_reselection: bool,
 }
 
 impl<'a> ForgeActivation<'a> {
@@ -1037,6 +1044,7 @@ impl<'a> ForgeActivation<'a> {
             last_forge_refused: None,
             forge_mode: ForgeMode::InitialCatchupRequired,
             venue_role: VenueRole::Unknown,
+            pending_reselection: false,
         }
     }
 
@@ -1218,9 +1226,34 @@ pub async fn run_relay_loop_with_sched(
         };
         match plan_loop_step(loop_state, sync_status, forge_slot, shutdown_status, policy) {
             LoopStep::SyncOnce => {
-                run_node_sync(source, state, chaindb, wal, era_schedule, ledger_view)
+                // PHASE4-N-AI AI-S4b-ii: an explicitly-declared Participant venue
+                // routes the live receive path through the fork-choice follow
+                // (detector + rollback-apply); every other venue keeps the
+                // verbatim extend-only run_node_sync path.
+                let is_participant = forge
+                    .as_deref()
+                    .map(|a| a.venue_role == VenueRole::Participant)
+                    .unwrap_or(false);
+                if is_participant {
+                    let act = forge
+                        .as_deref_mut()
+                        .expect("Participant venue implies forge activation present");
+                    run_participant_sync(
+                        source,
+                        state,
+                        chaindb,
+                        wal,
+                        era_schedule,
+                        ledger_view,
+                        &mut act.pending_reselection,
+                    )
                     .await
                     .map_err(|e| NodeLifecycleError::RelaySync(format!("{e:?}")))?;
+                } else {
+                    run_node_sync(source, state, chaindb, wal, era_schedule, ledger_view)
+                        .await
+                        .map_err(|e| NodeLifecycleError::RelaySync(format!("{e:?}")))?;
+                }
             }
             LoopStep::ForgeTick => {
                 if let Some(s) = sched.as_deref_mut() {
@@ -1239,7 +1272,11 @@ pub async fn run_relay_loop_with_sched(
                 // reimplementation). Out of range => skip: no forge, no
                 // `last_forged_slot` update (S3b proves the fail-closed path).
                 let mut forged = false;
-                if let Some(kes_period) = act.coordinator_state.kes_period_for_slot(slot.0) {
+                if let Some(refusal) = pending_reselection_forge_refusal(act.pending_reselection) {
+                    // DC-NODE-28: a fork-choice re-selection is unresolved -- refuse
+                    // the forge (typed), never forge on the stale pre-resolution tip.
+                    act.last_forge_refused = Some(refusal);
+                } else if let Some(kes_period) = act.coordinator_state.kes_period_for_slot(slot.0) {
                     // PHASE4-N-AE.A (DC-NODE-15): the forge base is the DURABLE
                     // servable tip — `ChainDb::tip()`. The recovered snapshot
                     // anchor is NEVER a forge base (the `recovered.tip` fallback
@@ -2312,6 +2349,125 @@ where
     }
 }
 
+/// PHASE4-N-AI AI-S4b-ii: the live Participant receive routing. Drains the
+/// source's ordered items and routes each, gated on `VenueRole::Participant`:
+///   - `Block`: decode → `CandidateSummary` + `in_spine` (ChainDb) →
+///     `classify_receive` → `resolve_disposition(Participant)` → `AlreadyHave`
+///     drop / `LinearExtend` `pump_block` / `Competing` fail-closed (a bare
+///     competing block has no safe fork point — single-best-peer).
+///   - `RollBack(point)`: verify `point` is in the durable ChainDb (fail-closed
+///     if absent / Origin) → construct `ChainEvent::RolledBack` → set
+///     `pending_reselection` → `apply_chain_event` → clear pending ONLY after
+///     the apply returns (reconcile/failure handling complete; DC-NODE-28).
+///
+/// `pump_block` stays the sole roll-forward admit; the loop never calls
+/// `select_best_chain` / `process_stream_input` (DC-CONS-03 honored). The
+/// rollback's within-k bound is enforced by `apply_chain_event`'s materialize.
+#[allow(clippy::too_many_arguments)]
+pub async fn run_participant_sync<D>(
+    source: &mut NodeBlockSource,
+    state: &mut ForwardSyncState,
+    chaindb: &D,
+    wal: &mut dyn WalStore,
+    era_schedule: &EraSchedule,
+    ledger_view: &dyn LedgerView,
+    pending_reselection: &mut bool,
+) -> Result<(), NodeSyncError>
+where
+    D: ChainDb + SnapshotStore,
+{
+    while let Some(item) = source.next_item().await {
+        match item {
+            NodeSyncItem::Block(bytes) => {
+                // Durable tip (the detector's reference). With no durable tip yet
+                // the cold-start path is out of scope for this slice -- extend via
+                // the sole admit authority (pump_block), the existing behavior.
+                let durable = ChainDb::tip(chaindb).map_err(|e| NodeSyncError::Pump(format!("{e:?}")))?;
+                let durable_tip = match durable {
+                    Some(t) => TipPoint {
+                        slot: t.slot,
+                        hash: t.hash,
+                        block_no: state.receive.chain_dep.last_block_no.map(|b| b.0).unwrap_or(0),
+                    },
+                    None => {
+                        pump_block(state, chaindb, wal, &NoCheckpointSink, &bytes, era_schedule, ledger_view)
+                            .map_err(|e| NodeSyncError::Pump(format!("{e:?}")))?;
+                        continue;
+                    }
+                };
+                // Decode the candidate header for classification (slot, block_no,
+                // hash, prev_hash) -- the AI-S2 detector input.
+                let decoded =
+                    decode_block(&bytes).map_err(|e| NodeSyncError::Pump(format!("decode: {e:?}")))?;
+                let candidate = CandidateSummary {
+                    slot: decoded.header_input.slot,
+                    block_no: decoded.header_input.block_no,
+                    hash: decoded.block_hash.clone(),
+                    prev_hash: decoded.prev_hash.clone(),
+                };
+                let in_spine = chaindb
+                    .get_block_by_hash(&candidate.hash)
+                    .map_err(|e| NodeSyncError::Pump(format!("{e:?}")))?
+                    .is_some();
+                let class = classify_receive(durable_tip, &candidate, in_spine);
+                match resolve_disposition(class, VenueRole::Participant) {
+                    ReceiveDisposition::AlreadyHave => { /* known echo -- drop */ }
+                    ReceiveDisposition::LinearExtend => {
+                        pump_block(state, chaindb, wal, &NoCheckpointSink, &bytes, era_schedule, ledger_view)
+                            .map_err(|e| NodeSyncError::Pump(format!("{e:?}")))?;
+                    }
+                    // A bare competing block (non-linear, no prior RollBackward) has
+                    // no safe fork point -- fail closed (multi-candidate selection is
+                    // a later multi-peer slice).
+                    ReceiveDisposition::NeedsForkChoice
+                    | ReceiveDisposition::RefuseSingleProducer => {
+                        return Err(NodeSyncError::UnexpectedRollback);
+                    }
+                }
+            }
+            NodeSyncItem::RollBack(wire_point) => {
+                // Verify the rollback point is in the durable chain -- no fabricated
+                // block_no, no Origin (AI-S4a already fails Origin at the wire).
+                let (slot, hash) = match wire_point {
+                    ade_network::codec::chain_sync::Point::Block { slot, hash } => (slot, hash),
+                    ade_network::codec::chain_sync::Point::Origin => {
+                        return Err(NodeSyncError::UnexpectedRollback);
+                    }
+                };
+                if chaindb
+                    .get_block_by_hash(&hash)
+                    .map_err(|e| NodeSyncError::Pump(format!("{e:?}")))?
+                    .is_none()
+                {
+                    return Err(NodeSyncError::UnexpectedRollback);
+                }
+                let event = ChainEvent::RolledBack {
+                    to_point: Point { slot, hash },
+                    depth: BlockDistance(0),
+                };
+                // DC-NODE-28: set pending BEFORE apply; clear ONLY after apply
+                // returns (reconcile/failure handling complete) -- no forge may
+                // slip through between rollback start and durable settlement.
+                *pending_reselection = true;
+                let applied = apply_chain_event(
+                    state,
+                    chaindb,
+                    wal,
+                    &NoCheckpointSink,
+                    &event,
+                    RollbackReason::PeerRollBackward,
+                    None,
+                    era_schedule,
+                    ledger_view,
+                );
+                *pending_reselection = false;
+                applied.map_err(|e| NodeSyncError::Pump(format!("apply_chain_event: {e:?}")))?;
+            }
+        }
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 #[allow(clippy::unwrap_used)]
 #[allow(clippy::expect_used)]
@@ -2381,7 +2537,7 @@ mod tests {
         // immediately → the feed is closed → next_block yields None.
         let mut empty = spawn_live_wire_pump_source(&[], 1, None);
         assert!(
-            empty.next_block().await.is_none(),
+            empty.next_item().await.is_none(),
             "empty --peer must yield an ended feed (no block, no graft)"
         );
         // Unparseable addr: logged-and-skipped (C3), no pump task → ended feed.
@@ -2391,7 +2547,7 @@ mod tests {
             None,
         );
         assert!(
-            bad.next_block().await.is_none(),
+            bad.next_item().await.is_none(),
             "an unparseable --peer must be skipped, yielding an ended feed (never fatal)"
         );
     }

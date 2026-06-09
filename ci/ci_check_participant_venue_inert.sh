@@ -56,16 +56,10 @@ grep -qE 'CliError::ConflictingVenue' <<< "$CLIP" || fail "ConflictingVenue erro
 grep -qE 'let mut participant_venue = false' <<< "$CLIP" \
     || fail "participant_venue must default to false (no inference from absence)"
 
-# 4. INERT: no live routing wired yet; exactly one VenueRole::Participant (the setter).
-for needle in classify_receive resolve_disposition process_stream_input; do
-    if grep -qF "$needle" <<< "$NLP"; then
-        fail "node_lifecycle must not wire ${needle} yet (AI-S4b-ii)"
-    fi
-done
-PCOUNT=$(grep -cE 'VenueRole::Participant' <<< "$NLP")
-if [[ "$PCOUNT" -ne 1 ]]; then
-    fail "expected exactly 1 VenueRole::Participant (the setter); found $PCOUNT -- a routing branch leaked in"
-fi
+# 4. (AI-S4b-i was inert -- node_lifecycle wired no live routing. AI-S4b-ii flipped
+#    that: it wires classify_receive / resolve_disposition / apply_chain_event for
+#    the Participant venue. The inertness assertion is therefore retired here; the
+#    live wiring is enforced by ci_check_live_fork_choice_wiring.sh.)
 
 # 5. SingleProducer path unchanged.
 grep -qE 'fn declare_single_producer_venue' <<< "$NLP" || fail "declare_single_producer_venue removed"
