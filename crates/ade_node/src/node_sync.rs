@@ -45,7 +45,7 @@ use ade_runtime::producer::coordinator::CoordinatorEvent;
 use ade_runtime::producer::producer_shell::ProducerShell;
 use ade_runtime::rollback::PersistentSnapshotCache;
 use ade_types::shelley::block::{PrevHash, ProtocolVersion};
-use ade_types::{BlockNo, EpochNo, Hash28, SlotNo};
+use ade_types::{BlockNo, EpochNo, Hash28, Hash32, SlotNo};
 use tokio::sync::mpsc;
 
 use crate::produce_mode::{run_real_forge, ForgeRequestContext};
@@ -756,10 +756,108 @@ impl FollowedPeerTipSignal {
 /// admissibility input, NOT a global semantics knob.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum VenueRole {
-    /// Not declared single-producer — the extend fence fails closed.
+    /// Not declared single-producer — the extend fence fails closed. Also the
+    /// conservative fail-closed default for the AI-S2 venue-split resolver:
+    /// `Unknown` is NEVER inferred to be a valid configured mode (OQ-5).
     Unknown,
     /// Explicitly declared single-producer: relay non-producing, Ade sole producer.
     SingleProducer,
+    /// PHASE4-N-AI AI-S2 (DC-NODE-24): explicitly declared participant — Ade is one
+    /// producer among several; a competing peer candidate is resolved by fork-choice
+    /// (DC-CONS-03), not refused. The CLI/declaration wiring is AI-S4.
+    Participant,
+}
+
+// =====================================================================
+// PHASE4-N-AI AI-S2 — shared receive detector (DC-NODE-23) + venue-split
+// resolver (DC-NODE-24). GREEN, pure, total. Latent until AI-S4 wires it
+// into the live receive loop. The detector is venue-BLIND (its signature
+// has no VenueRole); the resolver alone applies venue policy. Neither
+// references select_best_chain / fork_choice / a chain selector / ChainDb /
+// clock — DC-CONS-03 stays the chain-selection authority (AI-S4 hands the
+// NeedsForkChoice case to the existing chain_selector orchestrator).
+// =====================================================================
+
+/// PHASE4-N-AI AI-S2: a peer-origin candidate header summary the detector
+/// classifies against Ade's durable tip. `prev_hash` is the closed
+/// `Genesis | Block` wire grammar (`ade_types::PrevHash`) — a `Genesis`
+/// parent can never linearly extend a non-genesis tip.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CandidateSummary {
+    pub slot: SlotNo,
+    pub block_no: BlockNo,
+    pub hash: Hash32,
+    pub prev_hash: PrevHash,
+}
+
+/// DC-NODE-23: the venue-BLIND classification of a received candidate —
+/// what KIND of candidate is this, not what the venue may do with it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ReceiveClass {
+    /// Already part of Ade's admitted spine / own-served lineage (the folded
+    /// AH-FOLLOW-1 predicate). A duplicate / echo — never a competing candidate.
+    AlreadyHave,
+    /// A linear extension of the durable tip (parent == tip, height == tip + 1).
+    LinearExtend,
+    /// Neither known nor a linear extension — a competing candidate. The
+    /// venue-split resolver (DC-NODE-24) decides what to do with it.
+    Competing,
+}
+
+/// DC-NODE-24: the venue-split disposition of a received candidate — what
+/// this venue is ALLOWED to do with the candidate.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ReceiveDisposition {
+    /// Already held — drop (idempotent).
+    AlreadyHave,
+    /// Linear extension — admit via the existing durable-admit path (pump_block).
+    LinearExtend,
+    /// SingleProducer (or Unknown, fail-closed): refuse the competing candidate —
+    /// the DC-NODE-20 behaviour, never adopt a peer chain.
+    RefuseSingleProducer,
+    /// Participant: resolve the competing candidate via fork-choice (DC-CONS-03),
+    /// handed to the chain_selector orchestrator by AI-S4.
+    NeedsForkChoice,
+}
+
+/// DC-NODE-23: classify a received candidate against the durable tip.
+/// PURE / TOTAL / venue-BLIND — derived solely from the durable tip, the
+/// candidate summary, and the RED-computed `in_spine` membership flag (AI-S4
+/// computes it from ChainDb; this function never queries ChainDb). Observes no
+/// venue, no wall-clock, no network state, and NEVER selects / reorders /
+/// prefers chains.
+pub fn classify_receive(
+    durable_tip: TipPoint,
+    candidate: &CandidateSummary,
+    in_spine: bool,
+) -> ReceiveClass {
+    if in_spine {
+        return ReceiveClass::AlreadyHave;
+    }
+    let extends = matches!(&candidate.prev_hash, PrevHash::Block(h) if *h == durable_tip.hash)
+        && candidate.block_no.0 == durable_tip.block_no + 1;
+    if extends {
+        ReceiveClass::LinearExtend
+    } else {
+        ReceiveClass::Competing
+    }
+}
+
+/// DC-NODE-24: resolve the venue-blind class into a venue-gated disposition.
+/// PURE / TOTAL over the closed `VenueRole`. Only `Competing` is venue-gated —
+/// `AlreadyHave` / `LinearExtend` pass through (the fast path is never routed to
+/// fork-choice). `Unknown` yields `RefuseSingleProducer` as a FAIL-CLOSED
+/// disposition, NOT an inferred SingleProducer venue (OQ-5).
+pub fn resolve_disposition(class: ReceiveClass, venue: VenueRole) -> ReceiveDisposition {
+    match class {
+        ReceiveClass::AlreadyHave => ReceiveDisposition::AlreadyHave,
+        ReceiveClass::LinearExtend => ReceiveDisposition::LinearExtend,
+        ReceiveClass::Competing => match venue {
+            VenueRole::Participant => ReceiveDisposition::NeedsForkChoice,
+            VenueRole::SingleProducer => ReceiveDisposition::RefuseSingleProducer,
+            VenueRole::Unknown => ReceiveDisposition::RefuseSingleProducer,
+        },
+    }
 }
 
 // DC-NODE-21 (PHASE4-N-AH S2): the VenueAdoptionCertificate type is REMOVED from
