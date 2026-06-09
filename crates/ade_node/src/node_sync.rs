@@ -412,6 +412,15 @@ pub enum NodeSyncError {
     /// sync path (`run_node_sync`). Those venues do not follow peer rollbacks —
     /// fail closed (the Participant path handles rollbacks in `node_lifecycle`).
     UnexpectedRollback,
+    /// PHASE4-N-AI AI-S6 (DC-NODE-29): a peer `RollBackward` named a hash that IS in
+    /// the durable chain but claimed a slot different from the stored slot. A rollback
+    /// target is one coherent durable chain point; a peer slot decoupled from the
+    /// stored hash is mixed authority — fail closed BEFORE any durable mutation.
+    RollbackPointSlotMismatch {
+        peer_slot: SlotNo,
+        stored_slot: SlotNo,
+        hash: Hash32,
+    },
 }
 
 /// L4b — the durable validated-apply driver: the FIRST production caller of

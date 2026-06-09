@@ -7101,3 +7101,26 @@ ci_script = ""
 status = "declared"
 introduced_in = "PHASE4-N-AI"
 strengthened_in = []
+
+[[rules]]
+id = "DC-NODE-29"
+tier = "derived"
+statement = """
+Live rollback target canonical binding (rung-2; AI-S6 H-1 remediation). For a peer
+RollBackward(point) on the live Participant path, the rollback target MUST be resolved against
+the durable ChainDb and use the stored chain point (stored slot + hash) as the SOLE authority.
+The peer-supplied slot MUST equal the stored slot for that hash; on any mismatch (or unknown
+hash, or Origin) the path fails closed with a typed error BEFORE commit_rollback, BEFORE
+WalEntry::RollBack, BEFORE any ChainDb / LedgerState / PraosChainDepState mutation. No rollback
+target may be built from mixed peer/local authority (peer-supplied slot + locally-verified
+hash). Reconciliation (DC-NODE-26) remains the post-apply backstop but is NOT the only defense.
+"""
+source = "docs/clusters/PHASE4-N-AI/S6-rollback-target-slot-hash-binding.md (H-1 remediation)"
+cross_ref = ["DC-NODE-25", "DC-NODE-26", "DC-NODE-23", "CN-STORE-07", "DC-CONS-20"]
+code_locus = "crates/ade_node/src/node_lifecycle.rs (run_participant_sync RollBack arm) over crates/ade_runtime/src/chaindb get_block_by_hash. RED shell binding; reuses the enforced rollback authorities; no new BLUE."
+tests = ["rollback_slot_hash_mismatch_fails_before_mutation", "participant_rollback_applies_durably", "participant_rollback_to_unknown_point_fails_closed"]
+ci_script = "ci/ci_check_rollback_target_canonical_binding.sh"
+status = "enforced"
+introduced_in = "PHASE4-N-AI"
+strengthened_in = []
+attack_rationale = "Closes H-1 (cluster-close security review): a Byzantine peer's RollBackward naming a real in-chain hash with an arbitrary lower slot would truncate the durable chain to a peer-chosen depth (mixed peer/local authority) and brick the node; reconciliation caught the slot/hash mismatch only AFTER commit_rollback + WalEntry::RollBack had mutated disk. Pre-commit canonical target binding rejects it with a typed error and zero durable mutation."

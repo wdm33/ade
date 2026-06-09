@@ -201,6 +201,59 @@ async fn participant_rollback_beyond_k_fails_closed_clears_pending() {
     assert!(!pending);
 }
 
+#[tokio::test]
+async fn rollback_slot_hash_mismatch_fails_before_mutation() {
+    // AI-S6 (DC-NODE-29 / H-1): a peer names a real in-chain hash (0xF0, stored at
+    // slot 100) but a DIFFERENT slot (99) -- mixed peer/local authority. Must fail
+    // closed BEFORE any durable mutation. The 7 must-holds: typed error; no
+    // commit_rollback; no WAL RollBack; ChainDb tip unchanged; ledger unchanged;
+    // chain_dep unchanged; replay clean (the WAL is untouched -> not bricked).
+    let db = db_with_fork_and_snapshot(); // tip 102/0xA2; 0xF0 stored at slot 100
+    let tip_before = db.tip().unwrap().unwrap();
+    let mut fwd = fwd_at(52);
+    let ledger_fp_before = fingerprint(&fwd.receive.ledger).combined;
+    let chain_dep_before = fwd.receive.chain_dep.clone();
+    let prior_fp_before = fwd.prior_fp.clone();
+    let mut wal = VecWal::default();
+    let mut pending = false;
+    // 0xF0 IS in the chain (at slot 100); the peer claims slot 99 -> mismatch.
+    let mut src = NodeBlockSource::in_memory_items(vec![rollback_item(99, 0xF0)]);
+    let err = run_participant_sync(
+        &mut src,
+        &mut fwd,
+        &db,
+        &mut wal,
+        &min_schedule(),
+        &view_stub(),
+        &mut pending,
+    )
+    .await
+    .expect_err("a slot/hash-mismatched rollback target must fail closed");
+    // (1) typed error binding the peer slot vs the stored slot.
+    assert!(
+        matches!(
+            err,
+            NodeSyncError::RollbackPointSlotMismatch { peer_slot, stored_slot, .. }
+                if peer_slot == SlotNo(99) && stored_slot == SlotNo(100)
+        ),
+        "got {err:?}"
+    );
+    // (2)+(3) no commit_rollback / no WAL RollBack append -- the WAL is untouched.
+    assert!(wal.read_all().unwrap().is_empty(), "no durable WAL mutation");
+    // (4) ChainDb tip unchanged (no truncation of the durable chain).
+    let tip_after = db.tip().unwrap().unwrap();
+    assert_eq!(tip_after.slot, tip_before.slot);
+    assert_eq!(tip_after.hash, tip_before.hash);
+    // (5) ledger unchanged.
+    assert_eq!(fingerprint(&fwd.receive.ledger).combined, ledger_fp_before);
+    // (6) chain_dep unchanged (+ the WAL anchor fp).
+    assert_eq!(fwd.receive.chain_dep, chain_dep_before);
+    assert_eq!(fwd.prior_fp, prior_fp_before);
+    // (7) pending never set (failed before the set) -> a forge tick is unblocked,
+    //     and the untouched WAL replays clean (the node is not bricked).
+    assert!(!pending);
+}
+
 // ---------- SP/Unknown reject rollback; the forge gate helper ----------
 
 #[tokio::test]

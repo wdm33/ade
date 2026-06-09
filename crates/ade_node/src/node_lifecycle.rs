@@ -1235,9 +1235,17 @@ pub async fn run_relay_loop_with_sched(
                     .map(|a| a.venue_role == VenueRole::Participant)
                     .unwrap_or(false);
                 if is_participant {
-                    let act = forge
-                        .as_deref_mut()
-                        .expect("Participant venue implies forge activation present");
+                    // AI-S6 (Sec W-3): fail closed with a typed error rather than
+                    // panic if a Participant venue lacks a forge activation
+                    // (defensive -- is_participant already implies forge.is_some()).
+                    let act = match forge.as_deref_mut() {
+                        Some(a) => a,
+                        None => {
+                            return Err(NodeLifecycleError::MissingFlag(
+                                "participant-venue requires a forge activation (operator keys)",
+                            ))
+                        }
+                    };
                     run_participant_sync(
                         source,
                         state,
@@ -1749,9 +1757,13 @@ pub(crate) fn warm_start_recovery(
         .find_map(|entry| match entry {
             ade_ledger::wal::WalEntry::AdmitBlock { slot, .. } => Some(*slot),
             ade_ledger::wal::WalEntry::SeedEpochConsensusInputsImported { .. } => None,
-            // PHASE4-N-AI AI-S1: a RollBack is not an AdmitBlock and
-            // does not define the WAL-tail slot. No RollBack entries are
-            // produced until AI-S3 makes recovery rollback-aware.
+            // PHASE4-N-AI AI-S6: a RollBack is not an AdmitBlock and does not
+            // define the WAL-tail slot. AI-S3/S4b-ii DO produce RollBack entries
+            // (the live Participant reorg-follow); skipping them in this reverse
+            // scan is safe because the load-bearing recovery floor is the durable
+            // ChainDb trim (commit_rollback trims at apply time) + the
+            // rollback-aware T-REC-05 fingerprint check in replay_from_anchor --
+            // NOT this scan.
             ade_ledger::wal::WalEntry::RollBack { .. } => None,
         })
         .unwrap_or(SlotNo(0));
@@ -2434,15 +2446,32 @@ where
                         return Err(NodeSyncError::UnexpectedRollback);
                     }
                 };
-                if chaindb
+                // AI-S6 (DC-NODE-29): resolve the wire hash against the durable
+                // ChainDb and use the STORED chain point as the sole authority. The
+                // peer-supplied slot MUST equal the stored slot for the hash; an
+                // unknown hash or a slot mismatch fails closed HERE -- before
+                // apply_chain_event, i.e. before commit_rollback / WalEntry::RollBack
+                // / any durable mutation. The peer slot never constructs `to_point`
+                // (a target built from peer slot + local hash is mixed authority).
+                let stored = match chaindb
                     .get_block_by_hash(&hash)
                     .map_err(|e| NodeSyncError::Pump(format!("{e:?}")))?
-                    .is_none()
                 {
-                    return Err(NodeSyncError::UnexpectedRollback);
+                    Some(s) => s,
+                    None => return Err(NodeSyncError::UnexpectedRollback),
+                };
+                if slot != stored.slot {
+                    return Err(NodeSyncError::RollbackPointSlotMismatch {
+                        peer_slot: slot,
+                        stored_slot: stored.slot,
+                        hash,
+                    });
                 }
                 let event = ChainEvent::RolledBack {
-                    to_point: Point { slot, hash },
+                    to_point: Point {
+                        slot: stored.slot,
+                        hash,
+                    },
                     depth: BlockDistance(0),
                 };
                 // DC-NODE-28: set pending BEFORE apply; clear ONLY after apply

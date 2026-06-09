@@ -170,9 +170,13 @@ where
         .find_map(|entry| match entry {
             WalEntry::AdmitBlock { slot, .. } => Some(*slot),
             WalEntry::SeedEpochConsensusInputsImported { .. } => None,
-            // PHASE4-N-AI AI-S1: a RollBack is not an AdmitBlock and
-            // does not define the WAL-tail slot. No RollBack entries are
-            // produced until AI-S3 makes recovery rollback-aware.
+            // PHASE4-N-AI AI-S6: a RollBack is not an AdmitBlock and does not
+            // define the WAL-tail slot. AI-S3/S4b-ii DO produce RollBack entries
+            // (the live Participant reorg-follow); skipping them in this reverse
+            // scan is safe because the load-bearing recovery floor is the durable
+            // ChainDb trim (commit_rollback trims at apply time) + the
+            // rollback-aware T-REC-05 fingerprint check in replay_from_anchor --
+            // NOT this scan.
             WalEntry::RollBack { .. } => None,
         })
         .unwrap_or(SlotNo(0));
