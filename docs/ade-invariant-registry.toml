@@ -7124,3 +7124,58 @@ status = "enforced"
 introduced_in = "PHASE4-N-AI"
 strengthened_in = []
 attack_rationale = "Closes H-1 (cluster-close security review): a Byzantine peer's RollBackward naming a real in-chain hash with an arbitrary lower slot would truncate the durable chain to a peer-chosen depth (mixed peer/local authority) and brick the node; reconciliation caught the slot/hash mismatch only AFTER commit_rollback + WalEntry::RollBack had mutated disk. Pre-commit canonical target binding rejects it with a typed error and zero durable mutation."
+
+[[rules]]
+id = "DC-NODE-30"
+tier = "derived"
+statement = """
+Participant-path convergence evidence emission (PHASE4-N-AJ). The live
+`--mode node --participant-venue` rollback-follow path emits the existing closed
+AgreementVerdict vocabulary to a dedicated `--convergence-evidence-path` JSONL as a
+deterministic GREEN side-output of already-authoritative outcomes:
+  - BlockReceived for EACH peer block considered by the receive path (before
+    drop/admit/refuse),
+  - BlockAdmitted per pump_block admit,
+  - AgreementVerdict = verdict::derive(outcome, observed_peer_tip),
+each carrying consensus_inputs_fingerprint_hex. MUST NOT become authority: never gates
+admission, never triggers or parameterizes a rollback, never influences fork-choice,
+never mutates the durable chain. pump_block stays the sole roll-forward admit;
+apply_chain_event the sole rollback authority; classify_receive unchanged. Emit-only on
+Diverged. An evidence write failure is non-fatal to authority (the node continues
+consensus operation; the sink is distinct from the authoritative WAL), but the
+convergence-evidence transcript is then marked incomplete/unusable for CE-AI-6 -- it MUST
+NOT silently produce a partial transcript that later passes the gate. No path supplied =>
+no file and node behavior byte-unchanged. No new evidence enum; no BLUE change.
+"""
+source = "docs/planning/phase4-n-aj-participant-convergence-evidence-invariants.md §1 (I-AJ-1) + §7 (D-1/D-2/D-3)"
+cross_ref = ["DC-NODE-23", "DC-NODE-29", "DC-ADMIT-04", "DC-ADMIT-08", "DC-EVIDENCE-03", "DC-CONS-03", "CN-CONS-03"]
+code_locus = "crates/ade_node/src/node_lifecycle.rs (run_participant_sync emission), crates/ade_node/src/admission/verdict.rs (derive, reused), crates/ade_node/src/admission_log/ (vocabulary/writer, reused against the --convergence-evidence-path sink), crates/ade_node/src/cli.rs (--convergence-evidence-path)"
+tests = []
+ci_script = ""
+status = "declared"
+introduced_in = "PHASE4-N-AJ"
+strengthened_in = []
+
+[[rules]]
+id = "DC-EVIDENCE-03"
+tier = "derived"
+statement = """
+Convergence-through-reorg transcript shape (CE-AI-6; PHASE4-N-AJ). The participant
+convergence pass produces ONE JSONL transcript with AT LEAST:
+  - a strict slot regression in the OBSERVED PEER BLOCK sequence (a peer RollBackward was
+    actually followed), and
+  - >= 1 AgreementVerdict { kind: "agreed" } at the re-converged tip.
+And AT MOST:
+  - 0 AgreementVerdict { kind: "diverged" }.
+The .md manifest binds the .jsonl sha256. Vacuous-until-committed; validated by
+ci/ci_check_convergence_evidence_schema.sh. A boring same-tip-only run (no regression) is
+NOT sufficient. SINGLE-BEST-PEER scope -- NOT full multi-peer Cardano ChainSel.
+"""
+source = "docs/planning/phase4-n-aj-participant-convergence-evidence-invariants.md §1 (I-AJ-5) + §9"
+cross_ref = ["DC-NODE-30", "CN-CONS-03", "DC-EVIDENCE-01", "DC-ADMIT-08"]
+code_locus = "ci/ci_check_convergence_evidence_schema.sh (gate), docs/evidence/phase4-n-ai-convergence-pass.{jsonl,md} (operator-produced, post-AJ), docs/active/phase4-n-ai-convergence-runbook.md"
+tests = []
+ci_scripts = []
+status = "declared"
+introduced_in = "PHASE4-N-AJ"
+strengthened_in = []
