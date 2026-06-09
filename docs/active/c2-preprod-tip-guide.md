@@ -15,9 +15,20 @@
 > cardano-node 11.0.1 relay committed an Ade-forged block (§5b; PHASE4-N-AE.A/B/C/E; the
 > closer was AE.E's chain-sync-server cursor fix, DC-PROTO-10; post-adoption echo fixed by
 > AE.F, DC-NODE-16). It is a **non-promotable private-venue rehearsal** — it strengthened but
-> did NOT flip CN-CONS-06 / RO-LIVE-01. Next work is the **§7b robustness ladder** (rung 1
-> sustained + epoch on C2-LOCAL → rung 2 multi-producer fork-choice → rung 3 preprod). Status
-> detail: §5b + §7 + §7b.
+> did NOT flip CN-CONS-06 / RO-LIVE-01. Status detail: §5b + §7 + §7b.
+>
+> **SINCE — post-CE-A5 progression (read before acting):**
+> - **CE-AH-6 (2026-06-08) — §7b rung 1 LARGELY CLOSED.** A real non-producing Haskell relay
+>   sustained adoption of Ade-forged blocks **past `k`** with **restart/warm-start durability**,
+>   live (DC-NODE-20/21/22 proven; `docs/evidence/phase4-n-ah-ce-ah-6-close.*`). Lone rung-1
+>   remainder: the **epoch transition**. Still non-promotable; flips no RO-LIVE rule.
+> - **PHASE4-N-AI (2026-06-09) — live single-best-peer rollback-FOLLOW** (the receive/follow half
+>   of rung 2; DC-NODE-23..29). Its live transcript **CE-AI-6** is operator-gated /
+>   vacuous-until-committed, so `CN-CONS-03` stays `declared`. Multi-candidate fork-choice (the
+>   *select* half) remains owed.
+> - **Preprod ADE1 pool REGISTERED (2026-06-09)** — `docs/evidence/preprod-pool-registration.md`;
+>   pledge stake active **~epoch 295 (~2026-06-15)**, so rung-3's ~2-epoch stake gate now runs in
+>   parallel. Electability (faucet delegation) pending; **no acceptance, no RO-LIVE flip.**
 
 ---
 
@@ -149,7 +160,7 @@ forge block 0). With the `d`-bridge venue and Ade entering by **recover**, it is
 | Half | Needs Ade stake? | Status | How |
 |---|---|---|---|
 | **RECOVER** the real non-Origin Conway tip | **No** | **Proven** (N-M-C / N-M-A1.1; RO-LIVE-05 enforced @ slot 124140368) | Mithril snapshot (UTxO) + `build_consensus_inputs_bundle.sh` (consensus inputs) + `import_live_consensus_inputs` + admission `seed_to_snapshot` @ the tip |
-| **FORGE tip+1 + real-peer ADOPT** | **Yes** | **Gated on Ade *active* stake in the target chain** | C2-LOCAL: already active by the §5b bootstrap precondition (rehearse here first). C2-preprod: register the pool + delegate + wait ~2 epochs (~10 days). |
+| **FORGE tip+1 + real-peer ADOPT** | **Yes** | **Gated on Ade *active* stake in the target chain** | C2-LOCAL: already active by the §5b bootstrap precondition (rehearse here first). C2-preprod: pool **ADE1 registered epoch 293 (2026-06-09); pledge stake active ~epoch 295** (`preprod-pool-registration.md`) — faucet delegation (electability) still pending. |
 
 **The stake gate is unavoidable and no snapshot bypasses it.** For a peer to *adopt*
 Ade's block tip+1, it validates the VRF leader proof against Ade's pool's stake fraction
@@ -385,10 +396,17 @@ registered + active on preprod.**
   hermetic (PHASE4-N-AD). **The C2-LOCAL adoption manifest (CE-A5, 2026-06-07): a real Haskell
   relay committed an Ade-forged block** (§5b; PHASE4-N-AE.A/B/C/E; echo fixed by AE.F) — a
   **non-promotable private-venue rehearsal** that does NOT flip any RO-LIVE rule on its own.
-- **Owed — the robustness ladder (§7b), in order:** rung 1 sustained / settlement-beyond-k +
-  the epoch transition (C2-LOCAL single-producer, cheap — the NEXT step); rung 2 multi-producer
-  fork-choice (C2-LOCAL, a new cluster); rung 3 C2-preprod register (~2-epoch gate) + the
-  operator pass → `Ba02Manifest`.
+  **§7b rung 1 largely closed (CE-AH-6, 2026-06-08):** the relay sustained adoption **past `k`**
+  with **restart/warm-start durability** (DC-NODE-20/21/22 live; `phase4-n-ah-ce-ah-6-close.*`) —
+  the **epoch transition** is the lone remainder; still non-promotable. **Live single-best-peer
+  rollback-FOLLOW (PHASE4-N-AI, 2026-06-09; DC-NODE-23..29):** the CE-AI-6 transcript is
+  operator-gated / vacuous-until-committed (`CN-CONS-03` `declared`).
+- **Owed — the robustness ladder (§7b):** rung 1's **epoch transition** (the lone single-producer
+  remainder — settlement-beyond-k + restart durability now done by CE-AH-6); the **CE-AI-6 commit**
+  (rollback-follow live transcript); rung 2 multi-producer **multi-candidate** fork-choice (C2-LOCAL,
+  a new cluster — the *select* half PHASE4-N-AI did **not** do); rung 3 C2-preprod operator pass →
+  `Ba02Manifest` (**stake gate now ticking** — ADE1 registered, active ~epoch 295; electability /
+  faucet delegation pending).
 - **`CN-CONS-06` / `RO-LIVE-01` live halves flip ONLY** on committed `correlate` evidence over
   a real **preprod** peer log — never on recover/forge/serve alone, and never on the local
   rehearsal (non-promotable). The CE-A5 manifest is rehearsal evidence: it **strengthened**
@@ -411,16 +429,15 @@ cross-period KES is already covered by N-AC / N-P).
 
 | Rung | Venue | Failure class isolated | Likely new work | "Done" = |
 |---|---|---|---|---|
-| **1** | C2-LOCAL, single-producer (the existing CE-A5 harness) | operational stability · **settlement beyond k** · **epoch transition** · restart durability | DC-NODE-19 (loop-continuation, hermetic) → **DC-NODE-20/21** (forge base = local `ChainDb::tip`; cert evidence-only) for the live sustained leg; later epoch-transition slice if exposed | several Ade blocks settle `>k` into the relay's ImmutableDB · **1 epoch crossed** with adoption continuing · survives a **mid-run kill→warm-start** |
-| **2** | C2-LOCAL, multi-producer (un-freeze a 2nd pool so it competes) | **fork-choice / rollback** — DC-CONS-03, never exercised live | a live fork-choice cluster (**real** new work) | Ade selects the best chain across a real fork **and** recovers from losing one |
-| **3** | preprod | real network · stake · load · adversaries | SPO registration + ~2-epoch stake gate + operator wiring | a registered Ade SPO's block accepted on preprod → `Ba02Manifest` (flips RO-LIVE-01 / CN-CONS-06 live half) |
+| **1** | C2-LOCAL, single-producer (the existing CE-A5 harness) | operational stability · **settlement beyond k** · **epoch transition** · restart durability | DC-NODE-19 (loop-continuation, hermetic) → **DC-NODE-20/21/22** (forge base = local `ChainDb::tip`; cert evidence-only) for the live sustained leg; later epoch-transition slice if exposed | ✅ settle `>k` + ✅ **mid-run kill→warm-start** (CE-AH-6 run-4, 2026-06-08) · ⬜ **1 epoch crossed** with adoption continuing (lone remainder) |
+| **2** | C2-LOCAL, multi-producer (un-freeze a 2nd pool so it competes) | **fork-choice / rollback** — DC-CONS-03; **rollback-FOLLOW half implemented + live-routed** (PHASE4-N-AI; CE-AI-6 transcript pending), multi-candidate **SELECT** half not yet | a live fork-choice cluster (**real** new work) | Ade selects the best chain across a real fork **and** recovers from losing one (rollback-FOLLOW half done — DC-NODE-23..29; multi-candidate SELECT half owed) |
+| **3** | preprod | real network · stake · load · adversaries | SPO registration **DONE (ADE1, epoch 293; active ~epoch 295)** + electability (faucet delegation) + operator wiring | a registered Ade SPO's block accepted on preprod → `Ba02Manifest` (flips RO-LIVE-01 / CN-CONS-06 live half) |
 
-**Rung 1 is the cheap, high-value next step** (and validates AE.F): run the existing CE-A5
-harness ~5 min (**settlement beyond k** — strictly stronger than the one-block manifest:
-Ade's blocks become the relay's *immutable* history, not just its *selected* tip), then
-continue past slot 2000 (one **epoch**). The epoch transition is single-producer and the path
-most likely to surface a gap — Ade's `--mode node` loop has not been shown to roll
-nonce / re-snapshot stake / recompute leadership live. **Find that here, not in preprod.**
+**Rung 1 settlement-beyond-k + restart durability are DONE (CE-AH-6, 2026-06-08).** The lone
+rung-1 remainder is the **epoch transition**: continue a single-producer run past slot 2000
+(one **epoch**) — the path most likely to surface a gap, since Ade's `--mode node` loop has not
+been shown to roll nonce / re-snapshot stake / recompute leadership live. **Find that here, not
+in preprod.** (The CE-A5/CE-AH-6 harness `~/.cardano-rung1-host/rung1-auto.sh` is reusable.)
 
 **Honest scope (at any rung length):** rung 1 proves operational stability + settlement, NOT
 fork-choice (single producer → one chain → DC-CONS-03 never fires) and NOT real-stake
@@ -484,6 +501,33 @@ loop-continuation remainder is **DC-NODE-19**.
 > superseded/re-homed here; DC-NODE-19 remains declared/partial until exercised on the local-tip
 > authority path. The cert is scaffolding, not architecture: it must be removed/replaced by node-local
 > selected-chain / fork-choice authority before rung 2 / preprod.
+>
+> **Update — §7b rung 1 LARGELY CLOSED (CE-AH-6, 2026-06-08):** the re-homed DC-NODE-20 path was
+> exercised live (run-4) and met the full §12 bar in one cert-free C2-LOCAL run against a real
+> non-producing relay: catch-up once · self-admit via `pump_block` · extend from `ChainDb::tip`
+> cert-free ×461 · **relay `AddedToCurrentChain=17` (relay `TraceForge=0`)** · EOF-continuation
+> pre+post-restart · **>k settlement (~14 Ade blocks k-deep past k=5)** · **warm-start/restart
+> durability**. DC-NODE-20 + DC-NODE-21 + DC-NODE-22 proven live. Evidence
+> `docs/evidence/phase4-n-ah-ce-ah-6-close.{md,jsonl}` (+ `phase4-n-ah-live-run-{1,2,3}*` partials).
+> **Lone rung-1 remainder: the epoch transition.** Still non-promotable; flips no RO-LIVE rule.
+>
+> **Update — live single-best-peer rollback-FOLLOW (PHASE4-N-AI, 2026-06-09):** the receive/follow
+> half of rung 2 now exists live — Ade (`--mode node --participant-venue`) follows ONE peer through
+> that peer's `RollBackward` and replay-equivalently re-converges (DC-NODE-23..29;
+> `run_participant_sync`). The close-gate security review caught + remediated a HIGH (H-1: the
+> rollback target must bind to the durable **stored** slot/hash, not the peer-supplied slot —
+> AI-S6 / DC-NODE-29). Its live transcript **CE-AI-6** is operator-gated / vacuous-until-committed
+> (`ci/ci_check_convergence_evidence_schema.sh`), so `CN-CONS-03` stays `declared` until committed.
+> This is **single-best-peer scope, NOT full multi-peer ChainSel** — the **multi-candidate SELECT
+> half** of rung 2 remains owed (a real new cluster). The §7b ladder is the producer/forge axis;
+> this is the parallel live receive/follow capability.
+>
+> **Update — rung-3 stake gate now ticking (2026-06-09):** the preprod **ADE1** pool is registered
+> (`docs/evidence/preprod-pool-registration.md`; pool `pool1gkgwpms…`, tx `64a977cc…`, epoch 293),
+> **pledge stake active ~epoch 295 (~2026-06-15)** — so the ~2-epoch (~10-day) stake gate runs in
+> parallel with the rung-1-remainder / rung-2 work. **Pool registered ≠ Ade ready:** electability
+> needs the faucet stake delegation (pledge alone is negligible vs ~912M tADA total), and no
+> block-production / acceptance claim is made — `RO-LIVE-01` stays `partial`, no RO-LIVE flip.
 
 ---
 
