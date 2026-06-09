@@ -370,6 +370,11 @@ fn spawn_wire_pumps_for_admission(
                         RuntimeAdmissionPeerEvent::Disconnected { peer } => {
                             AdmissionPeerEvent::Disconnected { peer }
                         }
+                        // PHASE4-N-AI AI-S4a: the admission-mode runner path does
+                        // not consume rollback signals; the live --mode node path
+                        // consumes them via node_sync. Not forwarded here -- this is
+                        // NOT a rollback->TipUpdate downgrade, just a non-consuming path.
+                        RuntimeAdmissionPeerEvent::RollBackward { .. } => continue,
                     };
                     if pump_tx.send(translated).await.is_err() {
                         // Runner has dropped its receiver — exit

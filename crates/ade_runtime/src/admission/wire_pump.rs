@@ -70,6 +70,13 @@ pub enum AdmissionPeerEvent {
     /// The peer's chain-sync tip changed. Used as the comparison
     /// input by the runner's next `verdict::derive` call.
     TipUpdate { peer: String, tip: Tip },
+    /// PHASE4-N-AI AI-S4a: the peer announced a chain-sync rollback to
+    /// `point` (always a concrete `Block` point — `Origin` fails closed at the
+    /// pump). The closed authority signal for fork-choice / durable rollback;
+    /// the live loop consumes it in AI-S4b (latent until then). `tip` is the
+    /// peer's post-rollback tip, carried for transcript / consistency parity
+    /// with `TipUpdate`. A rollback is NEVER represented as a `TipUpdate` only.
+    RollBackward { peer: String, point: Point, tip: Tip },
     /// Peer connection closed (clean EOF, protocol error, or
     /// transport drop). The runner uses this for clean-shutdown
     /// accounting.
@@ -112,6 +119,11 @@ pub enum AdmissionWirePumpError {
     TransportRead,
     /// Transport-level error writing outbound bytes.
     TransportWrite,
+    /// PHASE4-N-AI AI-S4a: the peer sent a chain-sync `RollBackward` to
+    /// `Origin` (rollback-to-genesis). Unsupported for single-best-peer within
+    /// k — fail closed (drop the peer) rather than surface a rollback point
+    /// this rung cannot apply.
+    UnsupportedRollbackPoint,
 }
 
 /// SOLE per-peer wire-pump entry (CN-PUMP-01). Drives chain-sync
@@ -412,13 +424,35 @@ async fn handle_chain_sync(
                 }
             }
         }
-        ChainSyncMessage::RollBackward { point: _, tip } => {
-            emit(events_out, peer_addr, tip_update(peer_addr, tip)).await?;
+        ChainSyncMessage::RollBackward { point, tip } => {
+            // PHASE4-N-AI AI-S4a: preserve the rollback POINT as a closed event
+            // (was: discarded -> TipUpdate only). A rollback is NEVER
+            // represented as a TipUpdate only. `Origin` (rollback-to-genesis)
+            // is unsupported for single-best-peer within k -> fail closed.
+            // Latent: the live loop consumes this in AI-S4b; the pump only
+            // preserves the signal here -- no orchestrator / ChainDb / forge.
+            match point {
+                point @ Point::Block { .. } => {
+                    emit(
+                        events_out,
+                        peer_addr,
+                        AdmissionPeerEvent::RollBackward {
+                            peer: peer_addr.to_string(),
+                            point,
+                            tip,
+                        },
+                    )
+                    .await?;
+                }
+                Point::Origin => {
+                    return Err(AdmissionWirePumpResult::Error(
+                        AdmissionWirePumpError::UnsupportedRollbackPoint,
+                    ));
+                }
+            }
             *chain_sync_in_flight = false;
-            // Rollback: don't block-fetch; just request the
-            // next chain-sync message so we can pick up where
-            // the peer is going. (Replaying rollbacks against
-            // already-admitted blocks is a future cluster.)
+            // Don't block-fetch; request the next chain-sync message so we can
+            // pick up where the peer is going.
             queue_chain_sync_request_next(outbox);
             *chain_sync_in_flight = true;
             Ok(())
@@ -803,6 +837,99 @@ mod tests {
                 hash: Hash32([0x11; 32]),
             },
             block_no: slot,
+        }
+    }
+
+    // PHASE4-N-AI AI-S4a — wire rollback signal preservation.
+
+    #[tokio::test]
+    async fn wire_pump_rollbackward_block_preserves_point() {
+        let (tx, mut rx) = mpsc::channel::<AdmissionPeerEvent>(8);
+        let mut outbox: VecDeque<ByteChunkIn> = VecDeque::new();
+        let (mut csf, mut bff) = (false, false);
+        let point = Point::Block {
+            slot: SlotNo(100),
+            hash: Hash32([0xF0; 32]),
+        };
+        let tip = fake_tip(105);
+        let r = handle_chain_sync(
+            ChainSyncMessage::RollBackward {
+                point: point.clone(),
+                tip: tip.clone(),
+            },
+            "peer",
+            &tx,
+            &mut outbox,
+            &mut csf,
+            &mut bff,
+        )
+        .await;
+        assert!(r.is_ok());
+        match rx.try_recv().expect("a RollBackward event is emitted") {
+            AdmissionPeerEvent::RollBackward {
+                point: got_point,
+                tip: got_tip,
+                ..
+            } => {
+                assert_eq!(got_point, point, "the rollback point is preserved verbatim");
+                assert_eq!(got_tip, tip);
+            }
+            _ => panic!("expected AdmissionPeerEvent::RollBackward"),
+        }
+    }
+
+    #[tokio::test]
+    async fn wire_pump_rollbackward_origin_fails_closed() {
+        let (tx, mut rx) = mpsc::channel::<AdmissionPeerEvent>(8);
+        let mut outbox: VecDeque<ByteChunkIn> = VecDeque::new();
+        let (mut csf, mut bff) = (false, false);
+        let r = handle_chain_sync(
+            ChainSyncMessage::RollBackward {
+                point: Point::Origin,
+                tip: fake_tip(105),
+            },
+            "peer",
+            &tx,
+            &mut outbox,
+            &mut csf,
+            &mut bff,
+        )
+        .await;
+        assert!(
+            matches!(
+                r,
+                Err(AdmissionWirePumpResult::Error(
+                    AdmissionWirePumpError::UnsupportedRollbackPoint
+                ))
+            ),
+            "rollback-to-Origin fails closed"
+        );
+        assert!(rx.try_recv().is_err(), "no event is emitted on Origin fail-closed");
+    }
+
+    #[tokio::test]
+    async fn wire_pump_intersectfound_still_emits_tipupdate_unchanged() {
+        // The TipUpdate path is unchanged by AI-S4a (only RollBackward changed).
+        let (tx, mut rx) = mpsc::channel::<AdmissionPeerEvent>(8);
+        let mut outbox: VecDeque<ByteChunkIn> = VecDeque::new();
+        let (mut csf, mut bff) = (false, false);
+        let tip = fake_tip(42);
+        let r = handle_chain_sync(
+            ChainSyncMessage::IntersectFound {
+                point: Point::Origin,
+                tip: tip.clone(),
+            },
+            "peer",
+            &tx,
+            &mut outbox,
+            &mut csf,
+            &mut bff,
+        )
+        .await;
+        assert!(r.is_ok());
+        match rx.try_recv().expect("a TipUpdate event") {
+            AdmissionPeerEvent::TipUpdate { tip: got, .. } => assert_eq!(got, tip),
+            _ => panic!("expected AdmissionPeerEvent::TipUpdate"),
         }
     }
 

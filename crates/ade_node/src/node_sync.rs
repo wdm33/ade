@@ -191,6 +191,12 @@ impl NodeBlockSource {
                     followed_peer_tip.observe(&tip);
                     continue;
                 }
+                // PHASE4-N-AI AI-S4a: the rollback signal is PRESERVED on the wire
+                // but NOT consumed here -- latent until AI-S4b wires detector ->
+                // orchestrator -> apply. No fork-choice / orchestrator / ChainDb / forge.
+                Ok(AdmissionPeerEvent::RollBackward { .. }) => {
+                    continue;
+                }
                 Ok(AdmissionPeerEvent::Disconnected { .. }) => {
                     *disconnected = true;
                     break;
@@ -346,6 +352,12 @@ impl NodeBlockSource {
                         // we keep waiting for the next block.
                         Some(AdmissionPeerEvent::TipUpdate { tip, .. }) => {
                             followed_peer_tip.observe(&tip);
+                            continue;
+                        }
+                        // PHASE4-N-AI AI-S4a: rollback signal PRESERVED but NOT
+                        // consumed here -- latent until AI-S4b. No fork-choice /
+                        // orchestrator / ChainDb / forge.
+                        Some(AdmissionPeerEvent::RollBackward { .. }) => {
                             continue;
                         }
                         Some(AdmissionPeerEvent::Disconnected { .. }) => {
@@ -1336,6 +1348,54 @@ mod tests {
         assert_eq!(src.next_block().await, Some(block(0xB1)));
         assert_eq!(src.next_block().await, Some(block(0xB2)));
         assert_eq!(src.next_block().await, None, "closed channel ends the feed");
+    }
+
+    #[tokio::test]
+    async fn wire_pump_rollbackward_event_is_latent_until_s4b() {
+        // AI-S4a: NodeBlockSource skips RollBackward exactly like TipUpdate --
+        // the rollback signal is preserved on the wire but NOT consumed by the
+        // live sync path here (no apply_chain_event / StreamInput::RollBack /
+        // ChainDb mutation / forge). AI-S4b wires it.
+        let (tx, rx) = mpsc::channel::<AdmissionPeerEvent>(16);
+        let rollback = || AdmissionPeerEvent::RollBackward {
+            peer: "p".to_string(),
+            point: Point::Block {
+                slot: SlotNo(50),
+                hash: Hash32([0x33; 32]),
+            },
+            tip: Tip {
+                point: Point::Block {
+                    slot: SlotNo(50),
+                    hash: Hash32([0x33; 32]),
+                },
+                block_no: 50,
+            },
+        };
+        // Interleave rollback noise with the ordered blocks.
+        tx.send(rollback()).await.unwrap();
+        tx.send(AdmissionPeerEvent::Block {
+            peer: "p".to_string(),
+            block_bytes: block(0xC1),
+        })
+        .await
+        .unwrap();
+        tx.send(rollback()).await.unwrap();
+        tx.send(AdmissionPeerEvent::Block {
+            peer: "p".to_string(),
+            block_bytes: block(0xC2),
+        })
+        .await
+        .unwrap();
+        drop(tx);
+
+        let mut src = NodeBlockSource::from_wire_pump(rx);
+        assert_eq!(
+            src.next_block().await,
+            Some(block(0xC1)),
+            "RollBackward is skipped, never yielded as a block"
+        );
+        assert_eq!(src.next_block().await, Some(block(0xC2)));
+        assert_eq!(src.next_block().await, None);
     }
 
     // ===== L4b: durable validated apply (hermetic, real persistent stores) =====
