@@ -7,7 +7,7 @@
 ## 2. Slice Header
 - **Slice Name:** Rollback WAL durability foundation (`WalEntry::RollBack` + rollback-aware fp replay).
 - **Cluster:** PHASE4-N-AI — live fork-choice wiring (rung-2, single-best-peer).
-- **Status:** Proposed.
+- **Status:** Merged.
 - **Cluster Exit Criteria Addressed:**
   - [ ] **CE-AI-1** (`DC-NODE-27` rollback replay-equivalence) — *mechanism half; production half is AI-S3.*
 - **Slice Dependencies:** none (first slice; AI-S2…S5 depend on it).

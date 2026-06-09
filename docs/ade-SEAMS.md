@@ -3,24 +3,45 @@
 > **Status:** Living architectural document. Regenerated; not hand-edited.
 > Per-project instance of `~/.claude/methodology/templates/seams.md`.
 
-> 11 crates, **458 canonical types**, **148 CI checks** at HEAD (`5858288e`, PHASE4-N-AH — local selected durable chain forge-base authority: after Ade self-admits a forged block through `pump_block`, the next forge base is its OWN local durable tip (`ChainDb::tip`), NOT a followed peer tip and NOT an adoption cert; the cert is REMOVED — `DC-NODE-20` / `DC-NODE-21` / `DC-NODE-22`).
-> Reads the CODEMAP (`docs/ade-CODEMAP.md` — **458 canonical types / 148 CI / 347 rules**, regenerated at `5858288e`,
-> the PHASE4-N-AH close) for the module list + TCB colors, and the invariant registry
-> (`docs/ade-invariant-registry.toml` — **347 entries** at HEAD `5858288e`: 213 enforced / 20 partial / 114 declared)
+> 11 crates, **460 canonical types**, **157 CI checks** at HEAD (`5ec841c8`, PHASE4-N-AI — live fork-choice rollback-follow wiring, **single-best-peer FOLLOW, NOT full ChainSel**: on the live Participant `--mode node` receive path a peer-origin item is classified ONCE venue-blind, a competing candidate is resolved by the EXISTING `chain_selector` → BLUE `select_best_chain` (`DC-CONS-03`), a peer `RollBackward` is bound to the durable `ChainDb` stored slot+hash (`DC-NODE-29`) and recorded as the new append-only durable `WalEntry::RollBack` MARKER; `pump_block` stays the sole roll-forward durable admit — `DC-NODE-23`…`DC-NODE-29`. **`CN-CONS-03` (full multi-peer ChainSel convergence) is NOT flipped — it stays `partial`.**).
+> Reads the CODEMAP (`docs/ade-CODEMAP.md` — **460 canonical types / 157 CI / 354 rules**, regenerated at `5ec841c8`,
+> the PHASE4-N-AI close) for the module list + TCB colors, and the invariant registry
+> (`docs/ade-invariant-registry.toml` — **354 entries** at HEAD `5ec841c8`: 221 enforced / 19 partial / 114 declared)
 > for the rule IDs that gate each closed surface. **Count reconciliation (load-bearing — read honestly): this SEAMS,
-> the on-disk CODEMAP, and the registry all AGREE at HEAD `5858288e` (458 / 148 / 347).** The whole
-> `f87d0056..HEAD` span (PHASE4-N-AF + N-AG + N-AH) is **GREEN/RED-only — ZERO BLUE diff, ZERO new canonical type**:
-> six source files changed and **none is in the BLUE `core_paths`** — GREEN `ade_node::{node_sync, run_loop_planner,
-> live_log/sched_event, live_log/sched_writer}`, RED `ade_node::{node_lifecycle, cli}`, and RED
-> `ade_runtime::bootstrap`. No new crate, no new module, no TCB-color change.
+> the on-disk CODEMAP, and the registry all AGREE at HEAD `5ec841c8` (460 / 157 / 354).** PHASE4-N-AI is the
+> **FIRST BLUE delta since the G-N span** — it is **BLUE+RED+GREEN**: the BLUE `ade_ledger::wal::event` gains the
+> closed-sum variant `WalEntry::RollBack` (tag 1 — the reserved RollBackward slot) plus its two NEW closed payload
+> types `RollbackPoint` + `RollbackReason` (canonical types **458 → 460, +2**); `WalError::RollbackTargetNotInChain`
+> is a variant on the existing closed `WalError` (not a new struct/enum); the BLUE `select_best_chain` PRODUCTION
+> path is **byte-unchanged** (the `fork_choice.rs` touch is a `#[cfg(test)]`-only arrival-order proof for `CN-CONS-01`).
+> The RED/GREEN surfaces are in `ade_node::{node_sync, node_lifecycle, cli}` + `ade_runtime::admission::wire_pump` +
+> `ade_runtime::consensus::chain_selector`. No new crate, no new module, no TCB-color change.
 > **TCB-color note (per CODEMAP, still accurate):** `node_sync` + `node_lifecycle` are **RED** (they drive the apply
 > path + own the persistent-store reads + the forge wrap); their forge-decision fns
 > (`forge_mode_after_admit` / `warm_start_forge_mode` / `single_producer_forge_decision` / `venue_policy` /
 > `forge_followed_tip_admission`) are **GREEN-by-function** (pure / total / deterministic) inside the RED host;
 > `run_loop_planner` + `live_log::{sched_event, sched_writer}` are GREEN-by-content; `ade_runtime::bootstrap` is RED.
 >
-> **What this span did to the seam surface (the PHASE4-N-AH cluster close also pays the SEAMS debt deferred since
-> the PHASE4-N-AF baseline `f87d0056`).** Three closures, all on the `--mode node` single-producer (rung-1) forge
+> **What the PHASE4-N-AI cluster close did to the seam surface.** It wired the **live Participant `--mode node`
+> rollback-follow** receive path — **single-best-peer FOLLOW, NOT full multi-peer ChainSel**. **No new ingress
+> surface** (the live feed is the EXISTING N2N inbound wire; rollbacks now ride it as `NodeSyncItem::RollBack(Point)`
+> interleaved at their exact position), **no new openly-extensible / plugin / negotiated registry**, and **no second
+> chain-selection authority** (a competing Participant candidate is routed to the EXISTING `ade_runtime::consensus::chain_selector`
+> orchestrator → BLUE `select_best_chain`, `DC-CONS-03`). The span ADDED a set of CLOSED (version-gated / closed-enum)
+> surfaces — the BLUE durable `WalEntry::RollBack` MARKER (tag 1) + its `RollbackPoint` / `RollbackReason` payloads +
+> `WalError::RollbackTargetNotInChain`; the RED `node_sync` detector/resolver vocabulary `NodeSyncItem` /
+> `ReceiveClass` / `ReceiveDisposition` + the extended `NodeSyncError` + `ForgeRefused::ReselectionPending`; the RED
+> wire-pump `AdmissionPeerEvent::RollBackward` (the rollback POINT preserved); and the explicit `VenueRole`
+> Participant path — and REMOVED nothing. It bound the live rollback TARGET to the durable `ChainDb` stored slot+hash
+> as the SOLE authority (`DC-NODE-29` — no peer/local mixed authority), kept `pump_block` the **sole roll-forward
+> durable admit** (a fork-choice win is durably adopted ONLY when its BODIES validate+apply), and left `DC-CONS-03`
+> (the BLUE Praos fork-choice contract) the SINGLE selector — **routed-to, never duplicated.** It did NOT flip any
+> RO-LIVE rule and **did NOT flip `CN-CONS-03`** (full multi-peer ChainSel stays `partial` — explicitly out of scope).
+> **ONE forward seam is surfaced as a candidate (NOT asserted wired):** `chain_selector::process_rollback` (the
+> orchestrator rollback path) is **test-only today** (no live caller — §7).
+>
+> **What the carried PHASE4-N-AH span did (folded in N-AG + N-AF, paid the SEAMS debt deferred since the
+> PHASE4-N-AF baseline `f87d0056`).** Three closures, all on the `--mode node` single-producer (rung-1) forge
 > spine. **No new ingress surface, no new extensible / plugin / negotiated registry, no new version-gated contract,
 > no new BLUE authority.** The span ADDED four closed (version-gated / frozen — NOT openly extensible) surfaces, and
 > REMOVED two (a hard `DC-NODE-21` boundary — they must not creep back). It re-homed the forge-base AUTHORITY from
@@ -28,6 +49,139 @@
 > `pump_block` the sole durable tip-advance authority and `DC-CONS-03` (the frozen rung-2 Praos fork-choice
 > contract) UNTOUCHED.
 >
+> ### PHASE4-N-AI cluster close (`5ec841c8`) — live fork-choice rollback-follow wiring (single-best-peer FOLLOW, NOT full ChainSel; `DC-NODE-23`…`DC-NODE-29`)
+
+>
+> **This regeneration is a single-cluster cluster-close refresh, applied directly to the on-disk SEAMS.** The prior
+> on-disk SEAMS was pinned at the PHASE4-N-AH close (`5858288e` / **458** canonical types / **148** CI / **347**
+> rules). It is brought current to HEAD `5ec841c8` (the *PHASE4-N-AI close* — **460** canonical types / **157** CI /
+> **354** rules). It splices the **single closed cluster PHASE4-N-AI** — the live Participant `--mode node`
+> rollback-follow receive path: every peer-origin item is classified ONCE venue-blind, a competing Participant
+> candidate is resolved by the EXISTING `chain_selector` orchestrator → BLUE `select_best_chain` (`DC-CONS-03`), a
+> peer `RollBackward` is bound to the durable `ChainDb` stored slot+hash and applied durably via the existing
+> rollback authority + recorded as the NEW append-only durable `WalEntry::RollBack` marker, and the forge is
+> disabled while a re-selection is pending. **HONESTY (load-bearing — do NOT soften / do NOT broaden):** this is
+> **single-best-peer rollback-FOLLOW**, the C2 rung-2 mechanism — it is **NOT full multi-peer ChainSel convergence**;
+> **`CN-CONS-03` was NOT flipped to enforced** (it stays `partial` — explicitly out of scope), and **no RO-LIVE rule
+> is flipped** (`RO-LIVE-01` stays `partial` / operator-gated).
+>
+> **N-AI is the FIRST BLUE delta since the G-N span — BLUE+RED+GREEN (`458 → 460`, +2 BLUE canonical types).** The
+> BLUE delta is tightly bounded: `ade_ledger::wal::event` gains the closed-sum variant `WalEntry::RollBack {to_point,
+> reason, prior_tip, selected_tip}` (tag 1 — the previously-reserved RollBackward slot; tag 2 `CaptureSnapshot` stays
+> reserved) plus its two NEW closed payload types `RollbackPoint {slot, hash, block_no}` + `RollbackReason
+> {ForkChoiceWin | PeerRollBackward}` (the +2). `WalError::RollbackTargetNotInChain` is a variant on the EXISTING
+> closed `WalError` (not a new struct/enum). **The BLUE `select_best_chain` PRODUCTION path is byte-unchanged** — the
+> `ade_core::consensus::fork_choice` touch is a `#[cfg(test)]`-only arrival-order proof for `CN-CONS-01`, adding no
+> production code. The RED/GREEN surfaces live in `ade_node::{node_sync, node_lifecycle, cli}`,
+> `ade_runtime::admission::wire_pump`, and `ade_runtime::consensus::chain_selector`. The seam-relevant changes —
+> recorded under §1 (the EXISTING N2N inbound wire now carries rollbacks; the live Participant receive path gains a
+> venue-split classify→resolve→apply reduction; **no new ingress surface, no reordered roll-forward pipeline**), §2
+> (the consensus/storage durable-apply domain gains the live rollback path: detector/resolver GREEN evidence → BLUE
+> `select_best_chain` authority → durable apply via the existing `materialize_rolled_back_state` + lockstep
+> `commit_rollback` + `pump_block`), §3 (the NEW closed surfaces below + the `WalEntry::RollBack` tag-1 use of the
+> Extensible append-only WAL), §4 (the `WalEntry::RollBack` version-gated append-only tag-1 addition — a DURABLE
+> MARKER, not a second rollback impl), §5 (+9 CI gates, 148 → 157; the +2 BLUE types), §6 (the new RED venue-split /
+> canonical-target-binding / single-roll-forward-admit prohibitions), and §7 (the **forward seam candidate** —
+> `chain_selector::process_rollback` is test-only today) — are:
+>
+> **NEW closed surfaces (closed discriminants — extension is version-gated / closed, NOT openly extensible; §3 Closed):**
+> - **`WalEntry::RollBack` + `RollbackPoint` + `RollbackReason`** (BLUE `ade_ledger::wal::event`, `DC-NODE-25` /
+>   `DC-NODE-27`). The closed-sum durable rollback MARKER at **tag 1** (version-gated, the reserved RollBackward slot;
+>   tag 2 `CaptureSnapshot` stays reserved). `RollbackReason` is a closed 2-variant `{ForkChoiceWin | PeerRollBackward}`
+>   (uint wire code; an unknown code fails closed). `RollbackPoint` is a closed 3-field struct `{slot, hash, block_no}`.
+>   The marker's replay arm re-anchors the fp chain to `to_point`'s EXISTING in-chain `post_fp` and re-invokes the
+>   EXISTING `materialize_rolled_back_state` + lockstep `commit_rollback` — **NOT a second rollback implementation**.
+>   The +2 new BLUE canonical types (`458 → 460`).
+> - **`WalError::RollbackTargetNotInChain`** (BLUE `ade_ledger::wal::error`, `DC-NODE-27`) — an additive variant on
+>   the EXISTING closed `WalError`: a rollback target not in the active chain fails closed on replay (not a new type).
+> - **`NodeSyncItem`** (RED `ade_node::node_sync`, `DC-PUMP-01`) — the closed 2-variant ordered live-feed item
+>   `{Block | RollBack(Point)}`. The ordered feed now carries rollbacks interleaved at their exact position; the
+>   rollback POINT is preserved end-to-end.
+> - **`ReceiveClass`** (RED `ade_node::node_sync`, `DC-NODE-23`) — the closed 3-variant **venue-BLIND** classification
+>   `{AlreadyHave | LinearExtend | Competing}`. `classify_receive(durable_tip, candidate, in_spine)` is PURE / TOTAL,
+>   observes no venue / wall-clock / network state, and NEVER selects / reorders / prefers chains.
+> - **`ReceiveDisposition`** (RED `ade_node::node_sync`, `DC-NODE-24`) — the closed 4-variant **venue-SPLIT**
+>   resolution `{AlreadyHave | LinearExtend | NeedsForkChoice | RefuseSingleProducer}`. `resolve_disposition(class,
+>   venue)` is TOTAL over the closed venue set: SingleProducer/Unknown ⇒ `RefuseSingleProducer` (the `DC-NODE-20`
+>   rung-1 fail-closed, byte-unchanged); Participant ⇒ `NeedsForkChoice` (routed to `chain_selector` → BLUE
+>   `select_best_chain`). A raw `followed_peer_tip` NEVER reaches `select_best_chain`.
+> - **`NodeSyncError`** (RED `ade_node::node_sync`) — extended to the closed 4-variant `{Pump | Capture |
+>   UnexpectedRollback | RollbackPointSlotMismatch}`. On the SingleProducer/Unknown path `run_node_sync` returns
+>   `UnexpectedRollback` on ANY `NodeSyncItem::RollBack` (a rung-1 fail-closed); `RollbackPointSlotMismatch` is the
+>   `DC-NODE-29` canonical-binding fail-closed (the peer slot did not equal the stored slot for the hash).
+> - **`ForgeRefused::ReselectionPending`** (RED `ade_node::node_sync`, `DC-NODE-28`) — a NEW variant on the closed
+>   `ForgeRefused` sum: a pending fork-choice re-selection DISABLES forging (`ForgeActivation.pending_reselection` →
+>   `pending_reselection_forge_refusal` → typed `ForgeRefused::ReselectionPending`); the forge never builds on a
+>   stale pre-resolution local tip.
+> - **`AdmissionPeerEvent::RollBackward {peer, point, tip}`** (RED `ade_runtime::admission::wire_pump`, `DC-PUMP-01`)
+>   — the closed wire-pump rollback signal: a chain-sync `RollBackward` surfaces with the rollback POINT preserved
+>   (never discarded / downgraded to a `TipUpdate`-only); a `RollBackward(Origin)` fails closed
+>   (`AdmissionWirePumpError::UnsupportedRollbackPoint`, drop the peer). The `TipUpdate` path is unchanged.
+>
+> **The venue seam (closed, EXPLICIT — `VenueRole`; §3 Closed cross-ref).** `VenueRole {Unknown | SingleProducer |
+>   Participant}` (RED/GREEN `ade_node::node_sync`; declared via the closed CLI flags `--single-producer-venue` /
+>   `--participant-venue`). Venue is **explicitly declared** — fail-closed on `Unknown` and on conflicting flags (the
+>   two flags together is rejected at parse), with **NO silent inference either direction** (`Unknown` is never
+>   inferred to be a valid configured mode — OQ-5). **The Participant venue is the ONLY path that reaches the live
+>   rollback-follow routing** (`NeedsForkChoice` → `chain_selector` → `select_best_chain`); SingleProducer/Unknown
+>   stay the verbatim `DC-NODE-20` rung-1 fail-closed (any rollback ⇒ `UnexpectedRollback`).
+>
+> **`DC-NODE-29` canonical rollback-target binding (the H-1 security remediation).** A live peer `RollBackward(point)`
+>   rollback target is resolved against the durable `ChainDb` and uses the **STORED chain point (stored slot + hash)
+>   as the SOLE authority** — the peer-supplied slot MUST equal the stored slot for that hash; on any mismatch /
+>   unknown hash / `Origin` the path fails closed with a typed error BEFORE `commit_rollback`, BEFORE the
+>   `WalEntry::RollBack` append, and BEFORE any ChainDb / LedgerState / PraosChainDepState mutation. A target built
+>   from peer slot + local hash is **mixed authority and is forbidden** (closes the Byzantine-peer truncation finding).
+>   `pump_block` stays the SOLE roll-forward durable admit — a fork-choice win is durably adopted ONLY when its
+>   BODIES validate+apply (no header-only tip advance).
+>
+> **The convergence-evidence seam (vacuous-until-committed, REUSES the existing vocabulary).** `ci_check_convergence_evidence_schema.sh`
+>   (CE-AI-5) is a schema gate over the convergence-evidence manifest — it REUSES the existing `AgreementVerdict` /
+>   live-log vocabulary; **NO new evidence enum is introduced.** RED evidence ONLY: it records the single-best-peer
+>   rollback-follow convergence and makes NO peer-acceptance claim (CE-AI-6 vacuous-until-committed; `RO-LIVE-01`
+>   stays operator-gated).
+>
+> **FORWARD SEAM (surfaced as a candidate — NOT asserted wired; §7).** `ade_runtime::consensus::chain_selector::process_rollback`
+>   (the orchestrator rollback path) is **test-only today** — its `StreamInput::RollBack` entry is exercised only
+>   inside `#[cfg(test)]`; there is NO live caller of `process_stream_input` with `StreamInput::RollBack` from any
+>   production path. The live Participant rollback path goes through `node_lifecycle::run_participant_sync` →
+>   `apply_chain_event(ChainEvent::RolledBack)` → `materialize_rolled_back_state` → `commit_rollback`, NOT through
+>   the orchestrator's `process_rollback`. **If `process_rollback` is ever wired to a live peer feed, it would need
+>   the same `DC-NODE-29` canonical rollback-target binding** (the durable `ChainDb` stored slot+hash as sole
+>   authority, fail-closed before any mutation). Recorded as a future attach-point requiring the binding.
+>
+> **Registry → 354 rules** (221 enforced / 19 partial / 114 declared). **SEVEN NEW** (all `introduced_in =
+> "PHASE4-N-AI"`, all `enforced`): `DC-NODE-23` (shared venue-blind receive-side fork-choice detector), `DC-NODE-24`
+> (venue-split resolver), `DC-NODE-25` (live fork-choice durable apply authority — via the existing reducer +
+> materialize + `pump_block`), `DC-NODE-26` (selector↔durable reconciliation — after any applied decision
+> `selector.current_tip == ChainDb::tip`), `DC-NODE-27` (rollback+reselection replay-equivalence — the
+> `WalEntry::RollBack` marker re-invokes the existing authority), `DC-NODE-28` (no-forge-across-unresolved-reselection),
+> `DC-NODE-29` (live rollback-target canonical binding / AI-S6 H-1 remediation). **Status flips vs the on-disk base
+> (213 enforced / 20 partial / 114 declared):** enforced 213 → 221 (+8 — the 7 new + one existing partial→enforced),
+> partial 20 → 19, declared 114 unchanged. **Strengthened (`strengthened_in += "PHASE4-N-AI"` on 13):** `CN-CONS-01`,
+> `CN-CONS-03`, `DC-CONS-03`, `DC-CONS-05`, `DC-CONS-06`, `DC-CONS-20`, `CN-STORE-07`, `DC-PUMP-01`, `T-REC-03`,
+> `T-REC-05`, `DC-NODE-05`, `DC-NODE-12`, `DC-NODE-20`. **No rule weakened. `CN-CONS-03` NOT flipped to enforced** —
+> it stays `partial` (single-best-peer venue only; full multi-peer ChainSel out of scope). **NET +9 CI gates (148 →
+> 157), all ADDED (0 modified, 0 removed):** `ci_check_wal_rollback_replay_equiv.sh` (DC-NODE-27),
+> `ci_check_receive_detector_venue_split.sh` (DC-NODE-23/24), `ci_check_live_fork_choice_apply.sh` +
+> `ci_check_live_fork_choice_wiring.sh` (DC-NODE-25/26/28), `ci_check_wire_rollback_signal_preserved.sh`
+> (DC-PUMP-01 / AI-S4a), `ci_check_participant_venue_inert.sh` (DC-NODE-28 / AI-S4b-i),
+> `ci_check_rollback_target_canonical_binding.sh` (DC-NODE-29 / AI-S6),
+> `ci_check_chain_selection_arrival_order_independent.sh` (CN-CONS-01 / AI-S5),
+> `ci_check_convergence_evidence_schema.sh` (CE-AI-5 / AI-S5).
+>
+> **Boundary honesty (load-bearing — do NOT soften / do NOT broaden).** N-AI wires single-best-peer rollback-FOLLOW
+> on the live Participant `--mode node` path — and **nothing more**. There is **NO full multi-peer ChainSel**
+> (`CN-CONS-03` stays `partial`); **NO second chain-selection authority** (Participant competing candidates route to
+> the UNCHANGED BLUE `select_best_chain` — N-AI adds no second selector); **NO second roll-forward durable admit**
+> (`pump_block` stays the sole roll-forward admit; a fork-choice win is durably adopted ONLY when its BODIES
+> validate+apply); **NO mixed peer/local rollback authority** (the durable `ChainDb` stored slot+hash is the SOLE
+> rollback-target authority, `DC-NODE-29`); **NO new ingress surface** (the live feed is the EXISTING N2N inbound
+> wire; rollbacks ride it as `NodeSyncItem::RollBack(Point)`); and **NO RO-LIVE flip** (`RO-LIVE-01` stays
+> `partial` / operator-gated; the convergence evidence is vacuous-until-committed and makes no peer-acceptance claim).
+> The carried PHASE4-N-AH through G-A history below is carried UNCHANGED.
+>
+
 > ### PHASE4-N-AH cluster close (`5858288e`) — local selected durable chain forge-base authority + cert evidence-only + single-producer warm-start re-entry (`DC-NODE-20` / `DC-NODE-21` / `DC-NODE-22`); folds in N-AG + N-AF
 
 >
@@ -1452,6 +1606,24 @@
 > the only G-C-added I/O); a missing/unreadable file fails closed (`io::Error`), never a synthesized
 > acceptance.
 >
+> **N-AI note (live rollback-follow on the EXISTING wire — single-best-peer FOLLOW, NOT full ChainSel):** the live
+> `--mode node` feed now carries **rollbacks** alongside roll-forwards, on the SAME N2N inbound wire surface (below)
+> — **no new ingress surface, no new reduction target, no reordered roll-forward pipeline.** A chain-sync
+> `RollBackward` surfaces from the EXISTING wire-pump as the closed `AdmissionPeerEvent::RollBackward {peer, point,
+> tip}` (the rollback POINT preserved; `RollBackward(Origin)` fails closed), and the ordered feed carries it as
+> `NodeSyncItem::RollBack(Point)` interleaved at its exact position. On the live **Participant** receive path the
+> reduction adds a venue-split **classify → resolve → apply** step BEFORE any authoritative transition: every
+> peer-origin item is classified ONCE venue-blind (`classify_receive` → closed `ReceiveClass`), then split by the
+> EXPLICITLY-DECLARED venue (`resolve_disposition` → closed `ReceiveDisposition`) — SingleProducer/Unknown ⇒ the
+> verbatim `DC-NODE-20` rung-1 fail-closed (`UnexpectedRollback`), Participant ⇒ `NeedsForkChoice` routed to the
+> EXISTING `chain_selector` orchestrator → BLUE `select_best_chain` (`DC-CONS-03`, the SINGLE selector — routed-to,
+> never duplicated). A peer rollback target is bound to the durable `ChainDb` stored slot+hash as the SOLE authority
+> (`DC-NODE-29` — peer slot must equal the stored slot for the hash, else fail closed BEFORE any mutation) and
+> recorded as the closed BLUE durable `WalEntry::RollBack` marker. **`pump_block` stays the SOLE roll-forward durable
+> admit** (a fork-choice win is durably adopted ONLY when its BODIES validate+apply). **HONEST SCOPE:** this is
+> single-best-peer rollback-FOLLOW — **NOT full multi-peer ChainSel** (`CN-CONS-03` stays `partial`), and it flips no
+> RO-LIVE rule.
+>
 > **N-F-G-A note:** the `--mode node` forge path sources REAL forge constants. The cardano-cli protocol-
 > parameters JSON (the `protocol_params_json` preimage) is ingested by the GREEN `consensus_inputs::protocol_params`
 > parser into a canonical BLUE `ProtocolParameters` (no float — exact `Rational` or fail closed), hash-bound to
@@ -2124,6 +2296,35 @@ the forge is observable at a due leader slot, but **peer ACCEPT is operator-gate
 only by an operator-captured peer log through `correlate`. Ade self-accept / served-block / wire success ≠ peer
 acceptance. BA-02 satisfied nowhere.
 
+### Domain: live fork-choice rollback-follow — GREEN detector/resolver vs. BLUE `select_best_chain` authority vs. durable apply (single-best-peer FOLLOW, NOT full ChainSel; N-AI)
+
+| Layer | Module | Color | Role |
+|-------|--------|-------|------|
+| **Data-only venue-blind detector** | `ade_node::node_sync::classify_receive` (closed `ReceiveClass`) | GREEN-by-function | Classifies a received candidate against the durable tip — PURE / TOTAL / venue-BLIND (observes no venue / clock / network state). **NEVER selects / reorders / prefers chains.** Decides nothing authoritative — it labels what KIND the candidate is. |
+| **Data-only venue-split resolver** | `ade_node::node_sync::resolve_disposition` (closed `ReceiveDisposition`) | GREEN-by-function | TOTAL over the closed venue set: SingleProducer/Unknown ⇒ `RefuseSingleProducer` (the DC-NODE-20 rung-1 fail-closed, byte-unchanged); Participant ⇒ `NeedsForkChoice`. **A raw `followed_peer_tip` NEVER reaches `select_best_chain`.** Routes; decides nothing authoritative. |
+| **Authoritative chain selection (THE single selector — UNMODIFIED)** | `ade_core::consensus::fork_choice::select_best_chain` via the `ade_runtime::consensus::chain_selector` orchestrator | BLUE (selector) + GREEN (orchestrator) | The SOLE fork-choice authority (DC-CONS-03). A competing Participant candidate is HANDED to the EXISTING orchestrator → `select_best_chain` — **routed-to, never duplicated; N-AI adds no second selector.** The production `select_best_chain` is byte-unchanged (the `fork_choice.rs` touch is a `#[cfg(test)]`-only arrival-order proof, CN-CONS-01). |
+| **Authoritative rollback-target binding** | `ade_node::node_lifecycle::run_participant_sync` (DC-NODE-29) | RED resolve + BLUE-bound | A peer `RollBackward(point)` is resolved against the durable `ChainDb`: the STORED chain point (stored slot + hash) is the SOLE authority; the peer slot MUST equal the stored slot for that hash, else fail closed (`RollbackPointSlotMismatch`) BEFORE any mutation. `to_point` is constructed from the STORED slot (never peer slot — mixed authority forbidden). |
+| **Authoritative durable apply (the existing authorities — UNMODIFIED)** | `ade_node::node_lifecycle::apply_chain_event` → `ade_ledger`/`ade_runtime` `materialize_rolled_back_state` (CN-STORE-07) + lockstep `commit_rollback` (DC-CONS-20) + `pump_block` (DC-NODE-05/12) | RED driver + BLUE apply | A `RolledBack` outcome is applied to the durable stores ONLY via the EXISTING enforced authorities; a `ChainSelected` win's BODIES validate+apply via `pump_block`. **`pump_block` stays the SOLE roll-forward durable admit** (no header-only tip advance). After any applied decision `selector.current_tip == ChainDb::tip` (DC-NODE-26; mismatch fails fast). |
+| **Authoritative durable rollback MARKER** | `ade_ledger::wal::event::WalEntry::RollBack` (tag 1) | BLUE | The append-only durable marker; its replay arm RE-INVOKES `materialize_rolled_back_state` + `commit_rollback` (NOT a second rollback impl) — byte-identical recovery incl. rollback+reselection (DC-NODE-27). |
+| **Forge fail-closed under pending re-selection** | `ade_node::node_sync` `pending_reselection_forge_refusal` → `ForgeRefused::ReselectionPending` (DC-NODE-28) | GREEN-by-function | A pending fork-choice re-selection DISABLES forging — the forge never builds on a stale pre-resolution local tip. |
+
+**Rule (N-AI live fork-choice rollback-follow; `ci_check_receive_detector_venue_split.sh` + `ci_check_live_fork_choice_apply.sh`
++ `ci_check_live_fork_choice_wiring.sh` + `ci_check_rollback_target_canonical_binding.sh` + `ci_check_wal_rollback_replay_equiv.sh`
++ `ci_check_chain_selection_arrival_order_independent.sh`):** the detector + resolver are **GREEN evidence** (they
+label + route already-observed candidates; they never select / reorder / prefer chains and a raw `followed_peer_tip`
+never reaches the selector); the **single chain-selection authority is the UNCHANGED BLUE `select_best_chain`** —
+N-AI routes competing Participant candidates to the EXISTING `chain_selector` orchestrator, it adds **no second
+selector**. The rollback TARGET is bound to the durable `ChainDb` stored slot+hash as the **SOLE authority**
+(DC-NODE-29, fail-closed before any mutation — no peer/local mixed authority), durable apply REUSES the EXISTING
+`materialize_rolled_back_state` + `commit_rollback` + `pump_block` authorities (no second apply / tip-advance /
+rollback-materialize path), and the durable rollback MARKER (`WalEntry::RollBack`, tag 1) re-invokes that same
+authority on replay. **None of these chokepoints move.** **Honest scope:** this is **single-best-peer rollback-FOLLOW
+on the explicitly-declared Participant venue** — **NOT full multi-peer ChainSel convergence** (`CN-CONS-03` stays
+`partial`, explicitly out of scope), and it flips no RO-LIVE rule (the convergence evidence is vacuous-until-committed
+and makes no peer-acceptance claim). **Forward seam (NOT wired):** the orchestrator's own `chain_selector::process_rollback`
+is test-only today (§7) — the LIVE Participant rollback path goes through `node_lifecycle::run_participant_sync` →
+`apply_chain_event`, NOT through `process_rollback`.
+
 ### Domain: BA-02 operator-pass evidence — RED file I/O vs. GREEN correlator vs. BLUE-minted hash (N-F-C; I/O wired N-F-G-C)
 
 | Layer | Module | Color | Role |
@@ -2514,6 +2715,16 @@ ACCEPTS it is the operator-gated RO-LIVE-01 leg (peer ACCEPT NOT claimed here).
 
 | Registry | Location | Count | Change Rule |
 |----------|----------|-------|-------------|
+| `WalEntry::RollBack` + `RollbackPoint` + `RollbackReason` *(NEW BLUE, N-AI / DC-NODE-25 / DC-NODE-27)* | `ade_ledger::wal::event` (BLUE) | `WalEntry::RollBack` = the closed-sum variant at **wire tag 1** (the reserved RollBackward slot; tag 2 `CaptureSnapshot` stays RESERVED); `RollbackReason` **2** (`ForkChoiceWin` / `PeerRollBackward`, uint wire code); `RollbackPoint` = closed 3-field struct (`slot` / `hash` / `block_no`) | The closed durable rollback MARKER + its closed payload types — the **+2 new BLUE canonical types** (`458 → 460`; `RollbackPoint` + `RollbackReason`). **`WalEntry` is version-gated APPEND-ONLY** (tag 1 fulfils the previously-reserved RollBackward slot; tag 2 is untouched; `AdmitBlock` = 0, `SeedEpochConsensusInputsImported` = 3). `RollbackReason::from_wire_code` fails closed on an unknown code; `decode` rejects a non-canonical buffer. **The marker is a DURABLE MARKER re-invoking the EXISTING rollback authority on replay — NOT a second rollback implementation:** its replay arm re-anchors the fp chain to `to_point`'s EXISTING in-chain `post_fp` and re-invokes the EXISTING `materialize_rolled_back_state` (CN-STORE-07) + lockstep `commit_rollback` (DC-CONS-20). **NOT `#[non_exhaustive]`; no catch-all.** **A closed version-gated additive WAL variant + closed payload types (a surface ADDITION behind the WAL schema), NOT an extension point.** Backs **DC-NODE-25 / DC-NODE-27**. A new reason / payload field = a `from_wire_code` arm + an encode/decode arm + a `WalEntry` tag (append-only, never reuse tag 2) + a strengthening of **DC-NODE-27** (`ci_check_wal_rollback_replay_equiv.sh`); the marker MUST stay a re-invocation of the existing rollback authority (no second materialize / commit / rollback impl). See also the Extensible append-only WAL row (tag 1 now USED). |
+| `WalError::RollbackTargetNotInChain` *(NEW BLUE variant, N-AI / DC-NODE-27)* | `ade_ledger::wal::error` (BLUE) | additive variant `{ entry_index, to_slot }` on the EXISTING closed `WalError` sum | The closed fail-closed signal raised on replay when a recorded `WalEntry::RollBack` target is **not in the active chain**. Added **additively, no wildcard** (a variant on the existing `WalError`, NOT a new type — the +2 above are the only new BLUE types). **A closed additive enum variant (a surface REDUCTION / fail-closed wall), NOT an extension point.** Backs **DC-NODE-27**. New variant = a `replay` / `store_trait` arm + a strengthening of **DC-NODE-27**; non-secret slot/index primitives only. |
+| `NodeSyncItem` *(NEW, N-AI / DC-PUMP-01)* | `ade_node::node_sync` (RED) | 2 (`Block` / `RollBack(Point)`) | The closed ordered live-feed item. The ordered feed now carries rollbacks as `RollBack(Point)` **interleaved at their exact position** (the rollback POINT preserved — never collapsed to a tip-only signal); `Block` is the existing roll-forward item. **NOT `#[non_exhaustive]`; no catch-all.** Lives in `ade_node`, so **NOT canonical-counted**. **A closed feed-item vocabulary (a surface REDUCTION), NOT an extension point.** Backs **DC-PUMP-01**. A new item kind = a `next` / consume arm (no wildcard) + a strengthening of **DC-PUMP-01** (`ci_check_wire_rollback_signal_preserved.sh`); the rollback POINT must stay preserved end-to-end, never downgraded. |
+| `ReceiveClass` *(NEW, N-AI / DC-NODE-23)* | `ade_node::node_sync` (RED — GREEN-by-function `classify_receive`) | 3 (`AlreadyHave` / `LinearExtend` / `Competing`) | The closed **venue-BLIND** classification of a received candidate (what KIND it is, not what the venue may do). `classify_receive(durable_tip, candidate, in_spine)` is **PURE / TOTAL**, derived SOLELY from the durable tip + the candidate summary + the RED-computed `in_spine` membership flag — it observes **no venue, no wall-clock, no network state**, and **NEVER selects / reorders / prefers chains** (the membership flag is computed from ChainDb by AI-S4; the fn never queries ChainDb). **NOT `#[non_exhaustive]`; no catch-all.** Lives in `ade_node`, so **NOT canonical-counted**. **A closed classifier vocabulary (a surface REDUCTION), NOT an extension point.** Backs **DC-NODE-23**. A new class = a `classify_receive` arm (no wildcard) + a strengthening of **DC-NODE-23** (`ci_check_receive_detector_venue_split.sh`); the classifier MUST stay venue-blind + never select/reorder/prefer chains. |
+| `ReceiveDisposition` *(NEW, N-AI / DC-NODE-24)* | `ade_node::node_sync` (RED — `resolve_disposition`) | 4 (`AlreadyHave` / `LinearExtend` / `NeedsForkChoice` / `RefuseSingleProducer`) | The closed **venue-SPLIT** disposition (what THIS venue is allowed to do with the candidate). `resolve_disposition(class, venue)` is **TOTAL over the closed venue set**: SingleProducer/Unknown ⇒ `RefuseSingleProducer` (the **DC-NODE-20** rung-1 fail-closed, byte-unchanged — never adopt a peer chain); Participant ⇒ `NeedsForkChoice` (handed to the EXISTING `chain_selector` orchestrator → BLUE `select_best_chain`, **DC-CONS-03**); `AlreadyHave` ⇒ drop (idempotent); `LinearExtend` ⇒ admit via the existing `pump_block`. **A raw `followed_peer_tip` NEVER reaches `select_best_chain`.** **NOT `#[non_exhaustive]`; no catch-all.** Lives in `ade_node`, so **NOT canonical-counted**. **A closed venue-split resolver vocabulary (a surface REDUCTION), NOT an extension point.** Backs **DC-NODE-24**. A new disposition = a `resolve_disposition` arm (no wildcard) + a strengthening of **DC-NODE-24** (`ci_check_receive_detector_venue_split.sh`); the resolver MUST stay total over the closed venue set, route competing Participant candidates to the EXISTING selector (no second selector), and keep SingleProducer/Unknown fail-closed. |
+| `NodeSyncError` *(EXTENDED 2→4, N-AI / DC-NODE-29)* | `ade_node::node_sync` (RED) | 4 (`Pump` / `Capture` / `UnexpectedRollback` / `RollbackPointSlotMismatch`) | The closed sync-driver fail-closed halt set, EXTENDED with two rollback fail-closeds. `UnexpectedRollback` — a `NodeSyncItem::RollBack` reached the **SingleProducer/Unknown** path (rung-1 fail-closed; `run_node_sync` returns it; the Participant path handles rollbacks in `node_lifecycle`). `RollbackPointSlotMismatch { peer_slot, stored_slot }` — the **DC-NODE-29** canonical-binding fail-closed (the peer-supplied slot did not equal the durable `ChainDb` stored slot for that hash). Added **additively, no wildcard.** **A closed additive fail-closed set (a surface REDUCTION), NOT an extension point.** Backs **DC-NODE-29** (+ the rung-1 fail-closed). New variant = a strengthening of **DC-NODE-29** (`ci_check_rollback_target_canonical_binding.sh` + `ci_check_receive_detector_venue_split.sh`); non-secret slot primitives only. |
+| `ForgeRefused::ReselectionPending` *(NEW variant, N-AI / DC-NODE-28)* | `ade_node::node_sync` (RED) | additive variant on the closed `ForgeRefused` sum | The closed fail-closed signal that DISABLES forging while a fork-choice re-selection is pending: `ForgeActivation.pending_reselection` → `pending_reselection_forge_refusal` (pure / total, `Some(ReselectionPending)`) → typed `ForgeRefused::ReselectionPending`. **The forge never builds on a stale pre-resolution local tip.** Added **additively, no wildcard.** Lives in `ade_node`, so **NOT canonical-counted**. **A closed additive fail-closed refusal (a surface REDUCTION), NOT an extension point.** Backs **DC-NODE-28**. New variant = a `pending_reselection_forge_refusal` / forge-gate arm + a strengthening of **DC-NODE-28** (`ci_check_participant_venue_inert.sh` + `ci_check_live_fork_choice_wiring.sh`). |
+| `AdmissionPeerEvent::RollBackward {peer, point, tip}` *(NEW variant, N-AI / DC-PUMP-01)* | `ade_runtime::admission::wire_pump` (RED) | additive variant on the closed `AdmissionPeerEvent` sum; paired with the additive `AdmissionWirePumpError::UnsupportedRollbackPoint` | The closed wire-pump rollback signal: a chain-sync `RollBackward` surfaces with the rollback **POINT preserved** (never discarded / downgraded to a `TipUpdate`-only). A `RollBackward(Origin)` fails closed (`UnsupportedRollbackPoint`, drop the peer). The `TipUpdate` path is **unchanged** by AI-S4a (only `RollBackward` changed). Added **additively, no wildcard.** Lives in `ade_runtime`, so **NOT canonical-counted**. **A closed additive wire-signal variant (a surface REDUCTION over the EXISTING `ChainSyncMessage` grammar — the closed `Point` / `Tip` types are reused UNCHANGED), NOT an extension point.** Backs **DC-PUMP-01** (`strengthened_in += "PHASE4-N-AI"`). New variant = a `process_message` arm (no wildcard) + a strengthening of **DC-PUMP-01** (`ci_check_wire_rollback_signal_preserved.sh`); the rollback POINT must stay preserved, `Origin` must fail closed, and the closed `Point` / `ChainSyncMessage` grammar MUST NOT be widened. |
+| `VenueRole` (the explicit declared-venue seam) *(N-AF declared; Participant path live N-AI / DC-NODE-24)* | `ade_node::node_sync` (RED/GREEN; declared via `ade_node::cli` flags `--single-producer-venue` / `--participant-venue`) | 3 (`Unknown` / `SingleProducer` / `Participant`) | The closed declared-venue role. **Venue is EXPLICITLY DECLARED** — the two CLI flags are mutually exclusive (declaring both is rejected at `cli.rs` parse, fail-closed), and **`Unknown` is NEVER inferred to be a valid configured mode** (OQ-5: no silent inference EITHER direction). **N-AI added the live `Participant` path:** `Participant` is the **ONLY** role that reaches the live rollback-follow routing (`resolve_disposition` → `NeedsForkChoice` → `chain_selector` → BLUE `select_best_chain`, DC-CONS-03); `SingleProducer`/`Unknown` stay the verbatim **DC-NODE-20** rung-1 fail-closed (ANY rollback ⇒ `NodeSyncError::UnexpectedRollback`). **NOT `#[non_exhaustive]`; no catch-all.** Lives in `ade_node`, so **NOT canonical-counted**. **A closed declared-role enum (a surface REDUCTION), NOT an extension point.** Backs **DC-NODE-24** (+ DC-NODE-18/20). A new role = a `resolve_disposition` / fence arm (no wildcard) + a `cli.rs` declaration arm (mutually-exclusive, fail-closed on conflict) + a strengthening of **DC-NODE-24** (`ci_check_receive_detector_venue_split.sh` + `ci_check_participant_venue_inert.sh`); a role MUST be explicitly declared (never inferred), and only an explicit Participant declaration may reach fork-choice. |
+| Convergence-evidence manifest schema *(NEW, N-AI / CE-AI-5; REUSES the existing vocabulary)* | `ci_check_convergence_evidence_schema.sh` + the convergence-evidence manifest under `docs/evidence/` | closed schema over the EXISTING `AgreementVerdict` / live-log vocabulary — **NO new evidence enum** | The closed convergence-evidence schema for the single-best-peer rollback-follow convergence. **It REUSES the existing `AgreementVerdict` / live-log JSONL vocabulary — N-AI introduces NO new evidence enum.** RED evidence ONLY: it records the convergence and makes **NO peer-acceptance claim** (CE-AI-6 vacuous-until-committed; `RO-LIVE-01` stays operator-gated). **Vacuously satisfied when none is committed** (the typical state). **A closed evidence schema reusing a closed vocabulary (a surface REDUCTION), NOT an extension point / new evidence enum.** Backs **CE-AI-5**. A committed convergence manifest MUST conform; a new evidence field = a strengthening of the schema gate (`ci_check_convergence_evidence_schema.sh`) over the EXISTING vocabulary — **no new evidence enum may be introduced**, and it flips NO RO-LIVE rule. |
 | `ServedChainSource` *(NEW, N-U / DC-NODE-13 — serve BOUNDED N-AA / DC-SERVEMEM-01; DC-NODE-07 PRESERVED)* | `ade_runtime::network::serve_dispatch` (RED) | 2 (`Snapshot(&ServedChainView)` / `DurableChainDb(&dyn ChainDb)`) | The closed read-source selector read by the SINGLE serve-dispatch authority `dispatch_server_frame_event_to_outbound`. `Snapshot` is the `--mode produce` in-memory `ServedChainSnapshot`/`ServedChainView` accumulator path; `DurableChainDb` is the `--mode node` durable-chain projection (NEW in N-U — `ChainDbServedSource`). **ONE dispatch, TWO read sources** — the serve authority does NOT fork; the source enum selects which read-side the single dispatch reads from (DC-NODE-07 preserved — `ci_check_served_chain_projection.sh` pins exactly one `dispatch_server_frame_event_to_outbound`). **NOT `#[non_exhaustive]`**; the dispatch `match` is total with NO wildcard. **A closed read-source selector (a surface REDUCTION), NOT an extension point.** Backs **DC-NODE-13**. A new read source = a `ServedChainSource` variant + a `dispatch_server_frame_event_to_outbound` arm (no wildcard) + a strengthening of **DC-NODE-13** (`ci_check_served_chain_projection.sh`); the single serve dispatch MUST NOT be duplicated, and the new read source MUST implement the same closed serve seams (`ServedHeaderLookup` / `ServedRangeLookup`). |
 | `ServeRangeOutcome` *(NEW, N-AA / DC-SERVEMEM-01)* | `ade_runtime::network::served_chain_projection` (RED, `//! RED`) | 4 (`Served(Vec<(SlotNo, Hash32, Vec<u8>)>)` / `Empty` / `CapExceeded` / `ReadError`) | The closed internal outcome of the BOUNDED `--mode node` BlockFetch serve read. **Every non-`Served` variant maps to an empty `Vec` → the BLUE reducer's wire `NoBlocks`** — `CapExceeded` on an oversized range (decided BY THE FIXED BOUND `MAX_SERVE_RANGE_BLOCKS`, **before** any decode), `Empty` on an out-of-chain or inverted (`from > to`) window, `ReadError` on an in-range block the single BLUE `decode_block` cannot authenticate (the serve never emits a block it cannot authenticate). **NOT `#[non_exhaustive]`; no catch-all.** It is a serve-READ outcome, **NOT a dispatch** (the single `dispatch_server_frame_event_to_outbound` is unchanged — DC-NODE-07 preserved); lives in `ade_runtime` (not a BLUE `core_paths` entry), so **NOT canonical-counted**. **A closed fail-closed reason vocabulary (a surface REDUCTION), NOT an extension point.** Backs **DC-SERVEMEM-01**. A new reason = a `range_bytes_with_outcome` arm (no wildcard) + every non-`Served` arm still mapping to `NoBlocks` + a strengthening of **DC-SERVEMEM-01** (`ci_check_serve_range_bounded.sh`); the fixed cap MUST NOT become configurable, and no second block-hash authority may be introduced. |
 | `CappedSlotRange` *(NEW, N-AA / DC-SERVEMEM-01)* | `ade_runtime::chaindb::types` (RED) | closed value struct (`blocks: Vec<(SlotNo, Vec<u8>)>` / `truncated: bool`) | The result of the bounded **hash-free** ChainDb read primitive `range_bytes_capped(from, to, max)`: `blocks` holds at most `max` `(slot, bytes)` pairs in slot-ascending order; `truncated = true` when the requested range contained MORE than `max` blocks (the per-request serve cap was exceeded) — the serve uses `truncated` to fail closed (`ServeRangeOutcome::CapExceeded`) and to distinguish "cap exceeded" from "genuinely empty". A RED storage value type, **NOT canonical-counted**. **A closed value struct (a surface REDUCTION), NOT an extension point.** Backs **DC-SERVEMEM-01**. A new field = a struct addition behind the bounded-read contract + a strengthening of **DC-SERVEMEM-01**; the primitive MUST stay hash-free (no `SLOT_BY_HASH` scan) and read at most `max + 1` blocks lazily. |
@@ -2611,7 +2822,7 @@ ACCEPTS it is the operator-gated RO-LIVE-01 leg (peer ACCEPT NOT claimed here).
 | Registry | Location | Extension Rule |
 |----------|----------|----------------|
 | Served read-side trait seams `ServedHeaderLookup` / `ServedRangeLookup` *(impls extended N-U; durable impl BOUNDED N-AA)* | `ade_network::chain_sync::server::ServedHeaderLookup` + `ade_network::block_fetch::server::ServedRangeLookup` (BLUE reducers) — impls in `ade_runtime` | **THE closed read-side extension surface for the serve reducers.** A new served read-side attaches by IMPLEMENTING these two BLUE trait seams; the BLUE serve reducers + the single `dispatch_server_frame_event_to_outbound` are reused UNCHANGED. **Two impls exist at HEAD:** the produce-mode snapshot impl `ade_runtime::producer::served_chain_lookups::ServedChainLookups` (over `ServedChainSnapshot`) and the NEW N-U durable-chain impl `ade_runtime::network::served_chain_projection::ChainDbServedSource` (over the durable ChainDb — DC-NODE-13). A new impl MUST serve already-durable / already-self-accepted bytes VERBATIM (no re-encode — DC-CONS-17), reuse the single `block_header_bytes` (DC-CONS-18) + `decode_block` (NO parallel splitter, NO `AcceptedBlock` reconstruction), and be selected through a closed `ServedChainSource` variant (NOT a `Box<dyn _>` registry / negotiated surface) — provenance MUST stay structural (durable ChainDb ⇐ `pump_block` / self-accept). **N-AA (DC-SERVEMEM-01): the `--mode node` `ChainDbServedSource` BlockFetch read is now BOUNDED** — it reads via the bounded hash-free ChainDb primitives `range_bytes_capped` + `last_block_bytes` (NOT `iter_from_slot` / `chaindb.tip()`), caps each peer request at the fixed non-configurable `MAX_SERVE_RANGE_BLOCKS = 256`, and fails closed (`ServeRangeOutcome`) on an oversized / inverted / undecodable range; a NEW serve impl MUST likewise read via bounded primitives and cap per request (no unbounded materialization, no `SLOT_BY_HASH` scan). `ci_check_served_chain_projection.sh` + `ci_check_serve_range_bounded.sh`. |
-| Ade-native WAL (append-only) | `ade_runtime::wal` (GREEN-by-content) + `ade_ledger::wal::event` (BLUE encoder/decoder) | Append-only; committed entries are never mutated (`ci_check_wal_append_only.sh`). **`WalEntry` is a deliberately CE-not-law surface** — additively evolvable behind the WAL schema (append-only wire tags; `AdmitBlock` = 0, `SeedEpochConsensusInputsImported` = 3, tags 1/2 reserved). An acceptance criterion, NOT a frozen registry-law enum. |
+| Ade-native WAL (append-only) | `ade_runtime::wal` (GREEN-by-content) + `ade_ledger::wal::event` (BLUE encoder/decoder) | Append-only; committed entries are never mutated (`ci_check_wal_append_only.sh`). **`WalEntry` is a deliberately CE-not-law surface** — additively evolvable behind the WAL schema (append-only wire tags; `AdmitBlock` = 0, **`RollBack` = 1 (NEW, N-AI — the durable rollback MARKER, see §3 Closed)**, `SeedEpochConsensusInputsImported` = 3, **tag 2 `CaptureSnapshot` still RESERVED**). An acceptance criterion, NOT a frozen registry-law enum. **N-AI added the tag-1 `RollBack` variant** — a DURABLE MARKER re-invoking the EXISTING rollback authority on replay (NOT a second rollback impl); a new variant attaches as a new append-only tag (NEVER reuse tag 2) + a strengthening of the owning DC rule (`ci_check_wal_rollback_replay_equiv.sh` / `ci_check_wal_append_only.sh`). |
 | Seed-epoch sidecar store (anchor-fp-keyed) *(N-F-A; consumed N-F-C)* | `ade_runtime::chaindb::SnapshotStore::{put,get,list}_seed_epoch_consensus_*` | A new entry is `put` only on the verified-bootstrap composition path, keyed by `anchor_fp` in a namespace disjoint from the slot-keyed snapshot space; idempotent on identical bytes (redb `seed_cinputs_by_anchor_fp` table, `SCHEMA_VERSION = 3`). N-F-C consumes it via `list_seed_epoch_consensus_anchor_fps` + `get_seed_epoch_consensus_inputs` on the WarmStart arm. The forge-time path may NOT `put` here (CN-CINPUT-02). |
 | `PerPeerOutbound` map *(N-S-B)* | `ade_runtime::network::outbound_command` — `Arc<RwLock<BTreeMap<PeerId, mpsc::Sender<OutboundCommand>>>>` | Grows at runtime; **`BTreeMap`, not `HashMap`** — deterministic iteration; no cross-peer byte leakage (CN-PEER-OUTBOUND-MAP-01, DC-OUTBOUND-FIFO-01). |
 | `OpCertCounterMap` | `ade_core::consensus::praos_state` (BLUE) | Grows as op-certs are observed; deterministic ordering. |
@@ -3052,15 +3263,19 @@ ACCEPTS it is the operator-gated RO-LIVE-01 leg (peer ACCEPT NOT claimed here).
 - **Sum6KES algorithm + 608-byte cardano-cli skey envelope** — byte-identical to Haskell `cardano-base`;
   `raw_deserialize_signing_key_kes` is the structural validator (DC-CRYPTO-04..09).
 - **Wire format / encoding**: `postcard` / CBOR per the pinned manifest versions; field order = wire order where
-  applicable. **All 458 canonical types**: existing wire formats frozen; new types may be added behind a version
-  gate (the lone canonical-type add in the G-K…G-R span is the closed `ArrayHead` enum, G-M — 457 → 458). **Hash algorithms**: `blake2b_256` / `blake2b_224` — algorithm immutable per version.
+  applicable. **All 460 canonical types**: existing wire formats frozen; new types may be added behind a version
+  gate (the canonical-type adds since the prior refresh are the closed `ArrayHead` enum, G-M — 457 → 458; and the
+  N-AI closed `RollbackPoint` + `RollbackReason` WAL-marker payload types — 458 → 460). **Hash algorithms**: `blake2b_256` / `blake2b_224` — algorithm immutable per version.
 
 ### Version-gated (can evolve across major versions)
 
 - New variants in the closed message / event / classifier taxonomies (`Mode`, `LoopStep`, `CoordinatorEvent`,
   `SeedProvenance`, `SyncEffect`, `ExpectedVrfInput`, `BA02Outcome`, `PeerAcceptEvent`, `PrevHash` (N-F-G-J),
   `NodeSchedEvent` / `FeedReason` / `ForgeOutcome` (N-F-G-J), `ArrayHead` (N-F-G-M — the FindIntersect two-form
-  array-head grammar), …) — each requires a new envelope/schema version +
+  array-head grammar), `WalEntry::RollBack` + `RollbackReason` (N-AI — the durable rollback MARKER + its reason
+  code), `NodeSyncItem` / `ReceiveClass` / `ReceiveDisposition` / `ForgeRefused::ReselectionPending` /
+  `AdmissionPeerEvent::RollBackward` / `VenueRole` (N-AI — the rollback-follow detector/resolver/venue vocabulary),
+  …) — each requires a new envelope/schema version +
   a wildcard-free dispatch arm + a registry-rule strengthening. **`PrevHash`** additionally requires the codec
   to stay POSITION-BLIND, the `null` grammar to stay header_body-scoped (out of the `Point`/`Tip` codec), and the
   single wire + single position authority to stay un-duplicated (CN-WIRE-09); **the `NodeSchedEvent` family** must
@@ -3076,8 +3291,10 @@ ACCEPTS it is the operator-gated RO-LIVE-01 leg (peer ACCEPT NOT claimed here).
   **version-GATED field add**: the recovered eta0 is additive ONLY behind the `1 → 2` bump, fenced by
   `ci_check_warmstart_eta0_overlay.sh` (T-REC-04 / DC-CINPUT-03).
 - Canonical type schema additions (new fields appended; sort/dedup + `BTreeMap` ordering invariants preserved).
-- `WalEntry` wire tags (append-only: `AdmitBlock` = 0, `SeedEpochConsensusInputsImported` = 3; 1/2 reserved) — a
-  CE-not-law additively-evolvable surface.
+- `WalEntry` wire tags (append-only: `AdmitBlock` = 0, **`RollBack` = 1 (N-AI — the durable rollback MARKER; a
+  DURABLE MARKER re-invoking the EXISTING rollback authority on replay, NOT a second rollback impl)**,
+  `SeedEpochConsensusInputsImported` = 3; **tag 2 `CaptureSnapshot` still reserved**) — a CE-not-law
+  additively-evolvable surface. A new tag is append-only (NEVER reuse tag 2).
 - The N-F-G-E memory bounds (`MAX_REASSEMBLY_TAIL_BYTES = 16 MiB`, `MAX_WIRE_PUMP_LOOKAHEAD = 256`), the N-AA
   serve-range cap (`MAX_SERVE_RANGE_BLOCKS = 256`, symmetric) AND the N-AB outbound segmentation cap
   (`MAX_OUTBOUND_PAYLOAD_BYTES = 16 MiB`, the symmetric outbound counterpart of `MAX_REASSEMBLY_TAIL_BYTES`) —
@@ -3260,10 +3477,19 @@ How new modules enter the workspace.
     (iv) keep the record a single closed canonical type with the SOLE codec (no `Default`, no `#[non_exhaustive]`,
     `BTreeMap`-ordered) — the field is additive ONLY behind the version gate, NOT a new TYPE.
 
-### CI gates that enforce the boundary (148 total; the N-AH / N-AG / N-AF / N-AE.F / N-AE / N-AC / N-AB / N-AA / N-U / N-F-G-K…G-R / N-F-G-J / N-F-G-D / N-F-G-E / N-F-G-C / N-F-G-B / N-F-G-A / N-F-F / N-F-D-E / N-F-C / N-F-A / N-Z / N-Y / producer / network set)
+### CI gates that enforce the boundary (157 total; the N-AI / N-AH / N-AG / N-AF / N-AE.F / N-AE / N-AC / N-AB / N-AA / N-U / N-F-G-K…G-R / N-F-G-J / N-F-G-D / N-F-G-E / N-F-G-C / N-F-G-B / N-F-G-A / N-F-F / N-F-D-E / N-F-C / N-F-A / N-Z / N-Y / producer / network set)
 
 | Script | Enforces | Cluster |
 |---|---|---|
+| `ci_check_wal_rollback_replay_equiv.sh` *(NEW N-AI AI-S1)* | **DC-NODE-27** — the ordered live receive-event sequence (RollForward headers, RollBackward points, body deliveries) replayed against the same anchor + durable log produces a BYTE-IDENTICAL durable tip + ledger fp + PraosChainDepState INCLUDING rollback+reselection; a live rollback is recorded durably as the append-only canonical `WalEntry::RollBack` MARKER (tag 1) whose replay arm re-anchors the fp chain to `to_point`'s EXISTING in-chain `post_fp` and re-invokes the EXISTING `materialize_rolled_back_state` + lockstep `commit_rollback` — **NOT a second rollback implementation**; a rollback target not in the active chain fails closed (`RollbackTargetNotInChain`). | N-AI |
+| `ci_check_receive_detector_venue_split.sh` *(NEW N-AI AI-S2)* | **DC-NODE-23 + DC-NODE-24** — a peer-origin item is classified ONCE venue-blind by the pure total `classify_receive(durable_tip, candidate, in_spine) -> ReceiveClass {AlreadyHave | LinearExtend | Competing}` (observes no venue / clock / network state; NEVER selects / reorders / prefers chains); `resolve_disposition(class, venue)` is TOTAL over the closed venue set — SingleProducer/Unknown ⇒ `RefuseSingleProducer` (the DC-NODE-20 fail-closed, byte-unchanged), Participant ⇒ `NeedsForkChoice` routed to the EXISTING `chain_selector` → BLUE `select_best_chain` (DC-CONS-03); a raw `followed_peer_tip` NEVER reaches `select_best_chain`. | N-AI |
+| `ci_check_live_fork_choice_apply.sh` *(NEW N-AI AI-S3)* | **DC-NODE-25 + DC-NODE-26 + DC-NODE-27** — a `ChainSelected`/`RolledBack` outcome is applied to the durable stores ONLY via the EXISTING enforced authorities (lockstep reducer DC-CONS-20 + `materialize_rolled_back_state` CN-STORE-07 + `pump_block` DC-NODE-05/12); NO second apply / tip-advance / rollback-materialize path; a fork-choice win is durably adopted ONLY when its BODIES validate+apply (no header-only tip advance); after any applied decision the orchestrator `selector.current_tip` EQUALS the durable `ChainDb::tip` (mismatch fails fast); a rejected decision makes no durable change. | N-AI |
+| `ci_check_live_fork_choice_wiring.sh` *(NEW N-AI AI-S3/S4b)* | **DC-NODE-25 + DC-NODE-28** — the live `--mode node` receive path wires the detector → resolver → EXISTING `chain_selector` orchestrator → durable apply, and the forge is DISABLED while a fork-choice re-selection is pending (typed `ForgeRefused::ReselectionPending`; the forge never builds on a stale pre-resolution local tip). | N-AI |
+| `ci_check_wire_rollback_signal_preserved.sh` *(NEW N-AI AI-S4a)* | **DC-PUMP-01** — the feed-side WirePump surfaces a chain-sync `RollBackward` as the closed `AdmissionPeerEvent::RollBackward {peer, point, tip}` (the rollback POINT preserved — never discarded / downgraded to a `TipUpdate`-only); a `RollBackward(Origin)` fails closed (`UnsupportedRollbackPoint`, drop the peer). `DC-PUMP-01` `strengthened_in += "PHASE4-N-AI"`. | N-AI |
+| `ci_check_participant_venue_inert.sh` *(NEW N-AI AI-S4b-i)* | **DC-NODE-28** — a declared Participant venue is INERT before the live flip (it changes no behavior until the rollback-follow routing is wired); a producer tick during a pending re-selection fails closed (typed `ForgeRefused::ReselectionPending`), never forges on the old local tip. | N-AI |
+| `ci_check_rollback_target_canonical_binding.sh` *(NEW N-AI AI-S6; H-1 remediation)* | **DC-NODE-29** — a live peer `RollBackward(point)` rollback target is resolved against the durable `ChainDb` and uses the STORED chain point (stored slot + hash) as the SOLE authority; the peer-supplied slot MUST equal the stored slot for that hash; on any mismatch / unknown hash / `Origin` the path fails closed with a typed error (`RollbackPointSlotMismatch`) BEFORE `commit_rollback`, BEFORE `WalEntry::RollBack`, BEFORE any ChainDb / LedgerState / PraosChainDepState mutation (closes the Byzantine-peer truncation finding — mixed peer/local authority is FORBIDDEN; `to_point` is built from the STORED slot, never peer slot). | N-AI |
+| `ci_check_chain_selection_arrival_order_independent.sh` *(NEW N-AI AI-S5)* | **CN-CONS-01** — `select_best_chain` picks the same fork-choice-maximal tip regardless of candidate presentation order (the arrival-order-permutation determinism proof over the UNCHANGED production `select_best_chain`; the orchestrator delegates every selection to it, so its order-independence follows). The `fork_choice.rs` touch is `#[cfg(test)]`-only. | N-AI |
+| `ci_check_convergence_evidence_schema.sh` *(NEW N-AI AI-S5)* | **CE-AI-5** — the convergence-evidence manifest matches the closed schema (REUSING the existing `AgreementVerdict` / live-log vocabulary — NO new evidence enum); RED evidence ONLY — it records the single-best-peer rollback-follow convergence, makes NO peer-acceptance claim (`RO-LIVE-01` stays operator-gated, CE-AI-6 vacuous-until-committed). | N-AI |
 | `ci_check_local_durable_forge_base.sh` *(NEW N-AH S1)* | **DC-NODE-20** — in a declared rung-1 single-producer venue, after Ade self-admits a valid forged block through `pump_block` onto its local durable ChainDB spine, the forge base is the LOCAL selected durable tip (`ChainDb::tip`) — **NOT `followed_peer_tip` and NOT an operator adoption certificate**; the extend state is ENTERED DIRECTLY on self-admit (`node_sync::forge_mode_after_admit`, the `FirstOwnBlockServed` cert-wait FOLDED OUT — `ForgeMode` 3-state); the 6-condition fence holds (incl. the OBSERVED-FEED competing-block fail-closed — **NOT fork-choice**; relay non-producing; admitted via `pump_block`; spine contiguous/servable; no fork-choice required), failing closed `ForgeRefused::SingleProducerFenceViolation`; `forge_followed_tip_admission` REMAINS the DC-NODE-15 INITIAL catch-up gate (phase-split, verified via `run_relay_loop_with_sched -> dc_node_15_refusal -> forge_followed_tip_admission`); `pump_block` stays the sole durable admit authority (the forge advances no tip directly); DC-CONS-03 untouched. | N-AH |
 | `ci_check_cert_evidence_only.sh` *(NEW N-AH S2)* | **DC-NODE-21** — the file-based operator adoption certificate is rung-1 RED EVIDENCE-ONLY, NEVER forge authority: the `VenueAdoptionCertificate` type + `read_adoption_cert` / `parse_hex32` parsers + the `--adoption-cert-path` flag are **FULLY DELETED** from `ade_node` (the cert parser is GONE, not just demoted); the gate asserts NO cert token in the forge path (run-4 transcript: `cert_path_present=false` ×461, `cert_path_present:true` count = 0). Paired with `ci_check_node_path_fidelity.sh` (the 28→29 `--mode node` flag reconcile, cert flag gone). The cert MUST be removed/replaced by node-local selected-chain / fork-choice authority (DC-CONS-03) before rung 2 / preprod — it can never become chain-selection or durable authority. | N-AH |
 | `ci_check_warm_start_re_entry.sh` *(NEW N-AH S4b)* | **DC-NODE-22** — `node_sync::warm_start_forge_mode` (GREEN, fail-closed) re-enters `SingleProducerExtendOwnDurableSpine{current_tip = ChainDb::tip}` ONLY for a single-producer venue whose recovered tip is ABOVE the replay anchor (`replayed_anchor_block_no = recovered_tip.block_no − admit_count`, a DERIVED recovery summary on `BootstrapState`, NOT the raw WAL count); every other case fails closed to `InitialCatchupRequired` (never silently forges) — so a follow-link EOF after restart cannot re-introduce the catch-up dependency DC-NODE-20 retired; `pump_block` remains the SOLE durable admit authority (this rule only sets the forge MODE / reads the recovered tip; it admits nothing); DC-CONS-03 untouched (rung-2). | N-AH |
@@ -3555,7 +3781,26 @@ How new modules enter the workspace.
   overlay the recovered `epoch_nonce` (eta0) from the v2 sidecar onto `chain_dep.epoch_nonce` (the forge VRF input
   is `praos_vrf_input(slot, epoch_nonce)`); a v1 sidecar MUST fail closed `UnknownVersion`, NEVER default eta0 to
   zero (T-REC-04 / DC-CINPUT-03). The whole G-K…G-R span MUST leave `run_relay_loop`'s containment + the
-  served-chain handoff fence byte-unchanged.**
+  served-chain handoff fence byte-unchanged.** **(N-AI — live fork-choice rollback-follow, single-best-peer FOLLOW)
+  the live Participant `--mode node` receive path MUST classify every peer-origin item ONCE venue-blind
+  (`classify_receive`), resolve it by the EXPLICITLY-DECLARED venue (`resolve_disposition`), and route a competing
+  Participant candidate to the EXISTING `ade_runtime::consensus::chain_selector` orchestrator → BLUE
+  `select_best_chain` — **NEVER a second chain-selection authority**, and a raw `followed_peer_tip` MUST NEVER reach
+  `select_best_chain`; SingleProducer/Unknown MUST stay the verbatim DC-NODE-20 rung-1 fail-closed (`UnexpectedRollback`
+  on any rollback). A peer `RollBackward(point)` rollback target MUST be bound to the durable `ChainDb` STORED chain
+  point (stored slot + hash) as the SOLE authority — the peer slot MUST equal the stored slot for that hash, else
+  fail closed (`RollbackPointSlotMismatch`) BEFORE `commit_rollback` / `WalEntry::RollBack` / any ChainDb /
+  LedgerState / PraosChainDepState mutation; `to_point` MUST be built from the STORED slot (never peer slot — mixed
+  authority is FORBIDDEN, DC-NODE-29). Durable apply MUST REUSE the EXISTING `materialize_rolled_back_state` +
+  lockstep `commit_rollback` + `pump_block` authorities — **NO second apply / tip-advance / rollback-materialize
+  path**; `pump_block` MUST stay the SOLE roll-forward durable admit (a fork-choice win durably adopted ONLY when
+  its BODIES validate+apply); the durable rollback MARKER (`WalEntry::RollBack`, tag 1) MUST re-invoke that same
+  authority on replay (byte-identical recovery, DC-NODE-25/26/27); the forge MUST be DISABLED while a re-selection
+  is pending (`ForgeRefused::ReselectionPending`, DC-NODE-28). The `chain_selector::process_rollback` orchestrator
+  path is test-only — it MUST NOT be wired to a live peer feed WITHOUT the DC-NODE-29 canonical target binding.
+  (`ci_check_receive_detector_venue_split.sh` / `ci_check_live_fork_choice_apply.sh` /
+  `ci_check_live_fork_choice_wiring.sh` / `ci_check_rollback_target_canonical_binding.sh` /
+  `ci_check_wal_rollback_replay_equiv.sh` / `ci_check_wire_rollback_signal_preserved.sh`.)**
 - **(N-AA, DC-SERVEMEM-01 — RED serve path) the peer-driven `--mode node` serve MUST be bounded and fail
   closed; it MUST NOT amplify peer-driven storage/CPU.** The `--mode node` durable-chain serve
   (`ChainDbServedSource`) MUST read each peer BlockFetch range via the bounded **hash-free** ChainDb
@@ -3623,6 +3868,33 @@ How new modules enter the workspace.
   authority — DC-NODE-12). **NO RO-LIVE flip** (`ci_check_receive_idempotency.sh`).**
 
 ### Project-specific additions (Ade)
+
+- **Live fork-choice rollback-follow honest scope + boundary (N-AI, load-bearing — do NOT soften / do NOT broaden /
+  do NOT overstate as full ChainSel):** N-AI wires **single-best-peer rollback-FOLLOW** on the live Participant
+  `--mode node` receive path — and **nothing more**. The hard boundaries (all mechanically fenced): **(1) NOT full
+  multi-peer ChainSel** — `CN-CONS-03` is **NOT flipped to enforced** (it stays `partial`, explicitly out of scope);
+  the cluster proves single-best-peer FOLLOW, not multi-peer convergence. **(2) The detector + resolver are GREEN
+  EVIDENCE, NOT authority** — `classify_receive` is PURE / TOTAL / venue-BLIND and NEVER selects / reorders /
+  prefers chains; `resolve_disposition` only ROUTES; a raw `followed_peer_tip` NEVER reaches the selector
+  (DC-NODE-23/24). **(3) ONE chain-selection authority** — a competing Participant candidate is routed to the
+  EXISTING `chain_selector` → BLUE `select_best_chain` (DC-CONS-03, byte-unchanged in production); N-AI adds **NO
+  second selector** (the `fork_choice.rs` touch is `#[cfg(test)]`-only, CN-CONS-01). **(4) Venue is EXPLICIT,
+  fail-closed** — declared via `--single-producer-venue` / `--participant-venue` (mutually exclusive, rejected at
+  parse if both); `Unknown` is NEVER inferred (OQ-5); ONLY an explicit Participant declaration reaches the
+  rollback-follow routing. **(5) Canonical rollback-target binding** — the durable `ChainDb` stored slot+hash is the
+  SOLE rollback-target authority (DC-NODE-29); the peer slot must equal the stored slot for the hash, else fail
+  closed BEFORE any mutation; mixed peer/local authority is FORBIDDEN. **(6) `pump_block` stays the SOLE roll-forward
+  durable admit** — a fork-choice win is durably adopted ONLY when its BODIES validate+apply (no header-only tip
+  advance); durable rollback REUSES the EXISTING `materialize_rolled_back_state` + `commit_rollback` authorities; the
+  `WalEntry::RollBack` tag-1 marker re-invokes them on replay (NOT a second rollback impl, DC-NODE-25/27). **(7) The
+  forge is DISABLED while a re-selection is pending** (`ForgeRefused::ReselectionPending`, DC-NODE-28 — never builds
+  on a stale pre-resolution local tip). **(8) FORWARD SEAM, NOT wired** — `chain_selector::process_rollback` is
+  test-only today (no live caller); if ever wired to a live peer feed it MUST carry the same DC-NODE-29 binding.
+  **NO RO-LIVE flip** — the convergence evidence is vacuous-until-committed and makes no peer-acceptance claim
+  (`RO-LIVE-01` stays `partial` / operator-gated). The +2 BLUE canonical types (`RollbackPoint` / `RollbackReason`)
+  are closed payload types of the version-gated append-only `WalEntry::RollBack` marker; no openly-extensible
+  registry, no new ingress surface, no second tip-advance path. Seven rules `DC-NODE-23`…`DC-NODE-29` `enforced`; 13
+  strengthenings (`strengthened_in += "PHASE4-N-AI"`); no rule weakened; `CN-CONS-03` NOT flipped.
 
 - **Local-tip forge-base authority + cert removal + warm-start re-entry honest scope + boundary (N-AH, folding in
   N-AF/N-AG, load-bearing — do NOT soften / do NOT broaden / do NOT re-introduce the cert):** The span re-homes the
@@ -3965,6 +4237,33 @@ How new modules enter the workspace.
 > Surfaced honestly per IDD: these are **declared** future attach points, not closed surfaces. Each is named
 > in a registry rule or a cluster CLOSURE record.
 >
+> **N-AI wires single-best-peer rollback-FOLLOW and surfaces ONE new candidate — the test-only orchestrator
+> rollback path — while SHARPENING candidate #7/#8 (full multi-peer ChainSel / rung 2).** PHASE4-N-AI wired the
+> live Participant `--mode node` rollback-follow receive path (`DC-NODE-23`…`DC-NODE-29`, all enforced): a
+> peer-origin item is classified ONCE venue-blind, a competing Participant candidate is routed to the EXISTING
+> `chain_selector` → BLUE `select_best_chain` (`DC-CONS-03`), a peer `RollBackward` is bound to the durable
+> `ChainDb` stored slot+hash (`DC-NODE-29`) and applied durably via the EXISTING `materialize_rolled_back_state` +
+> `commit_rollback` + the new append-only `WalEntry::RollBack` marker. It OPENS **no new openly-extensible attach
+> point** (the detector/resolver/venue surfaces are all CLOSED enums; the WAL marker is version-gated append-only;
+> the live feed is the EXISTING N2N inbound wire). **TWO §7 effects:**
+> **(a) NEW candidate #10 — the forward seam `chain_selector::process_rollback` (test-only today; NOT asserted
+> wired).** The orchestrator's own rollback path (`ade_runtime::consensus::chain_selector::process_rollback`, reached
+> via `process_stream_input(StreamInput::RollBack)`) is exercised ONLY inside `#[cfg(test)]` — there is **NO live
+> caller** from any production path. The LIVE Participant rollback path instead goes through
+> `node_lifecycle::run_participant_sync` → `apply_chain_event(ChainEvent::RolledBack)` →
+> `materialize_rolled_back_state` → `commit_rollback`. **If `process_rollback` is ever wired to a live peer feed
+> (e.g. when the orchestrator becomes the live multi-peer ChainSel driver — candidate #7/#8), it would need the SAME
+> `DC-NODE-29` canonical rollback-target binding** (the durable `ChainDb` stored slot+hash as the SOLE authority,
+> fail-closed before any mutation, `to_point` built from the stored slot never the peer slot). Recorded as a future
+> attach-point REQUIRING the binding — surfaced for the user to confirm/reject the framing.
+> **(b) candidate #7/#8 (full multi-peer ChainSel / rung 2) is SHARPENED** — N-AI proves **single-best-peer
+> rollback-FOLLOW** but explicitly does **NOT** flip `CN-CONS-03` (full multi-peer ChainSel convergence stays
+> `partial`); the full-convergence rung remains a declared FUTURE cluster that attaches to the EXISTING BLUE
+> `select_best_chain` authority (routed-to, never duplicated) and MUST carry the `DC-NODE-29` binding on the
+> orchestrator rollback path (candidate #10). N-AI flips **no RO-LIVE rule** (the convergence evidence is
+> vacuous-until-committed and makes no peer-acceptance claim; `RO-LIVE-01` stays `partial` / operator-gated). All
+> other candidates (#0–#6, #9) and the carried items are UNCHANGED.
+>
 > **N-AF + N-AG + N-AH re-home the rung-1 forge-base AUTHORITY onto the local durable tip, REMOVE the cert, and
 > survive feed-EOF + restart — they OPEN NO new openly-extensible attach point, but DO surface ONE new candidate
 > (#9) and sharpen the existing candidate #8.** PHASE4-N-AH made the rung-1 single-producer forge base Ade's LOCAL
@@ -4304,6 +4603,76 @@ How new modules enter the workspace.
 
 ## Generation notes
 
+- **Regenerated (single-cluster cluster-close refresh, PHASE4-N-AI) at HEAD `5ec841c8`** (`git rev-parse --short
+  HEAD` — the *PHASE4-N-AI close*), applied DIRECTLY to the on-disk SEAMS. The prior on-disk SEAMS was pinned at the
+  PHASE4-N-AH close (`5858288e` / **458** canonical types / **148** CI / **347** rules). It is brought current to
+  HEAD `5ec841c8` (**460** canonical types / **157** CI / **354** rules), folding in **PHASE4-N-AI** (live
+  fork-choice rollback-follow wiring — single-best-peer FOLLOW, NOT full ChainSel; `DC-NODE-23`…`DC-NODE-29`). The
+  diff range narrated is `8e2c3672..HEAD` (the prior `head_deltas_baseline`).
+- **What the cluster did to the seam surface:** it wired the **live Participant `--mode node` rollback-follow**
+  receive path — a venue-blind classify (`ReceiveClass`) → venue-split resolve (`ReceiveDisposition`) → route a
+  competing Participant candidate to the EXISTING `chain_selector` → BLUE `select_best_chain` (`DC-CONS-03`) → bind
+  the rollback target to the durable `ChainDb` stored slot+hash (`DC-NODE-29`) → apply durably via the EXISTING
+  `materialize_rolled_back_state` + `commit_rollback` + the NEW append-only `WalEntry::RollBack` marker. It ADDED a
+  set of CLOSED surfaces (the BLUE `WalEntry::RollBack` + `RollbackPoint` + `RollbackReason` + `WalError::RollbackTargetNotInChain`;
+  the RED `NodeSyncItem` / `ReceiveClass` / `ReceiveDisposition` / extended `NodeSyncError` / `ForgeRefused::ReselectionPending`;
+  the RED `AdmissionPeerEvent::RollBackward`; the explicit `VenueRole` Participant path) and REMOVED nothing.
+  **NO new ingress surface** (the live feed is the EXISTING N2N inbound wire; rollbacks ride it as
+  `NodeSyncItem::RollBack(Point)`), **NO new openly-extensible / plugin / negotiated registry**, **NO second
+  chain-selection authority** (routed to the UNCHANGED `select_best_chain`), **NO second roll-forward durable admit**
+  (`pump_block` stays sole), **NO RO-LIVE flip**, and **`CN-CONS-03` NOT flipped** (full multi-peer ChainSel out of
+  scope). **+2 BLUE canonical types** (`RollbackPoint` / `RollbackReason` — the FIRST BLUE delta since the G-N span).
+- **Span delta spot-checked at HEAD `5ec841c8` (grep/ls/git only — no `cargo`):** `ls ci/ci_check_*.sh | wc -l` =
+  **157**; `grep -cE '^id = ' docs/ade-invariant-registry.toml` = **354** (221 enforced / 19 partial / 114
+  declared); the BLUE canonical-type grep (6 BLUE crate `src/` trees + the 9 BLUE `ade_network` submodule paths) =
+  **460** (350 BLUE crates + 110 `ade_network` BLUE submodules). The seven new rules `DC-NODE-23`…`DC-NODE-29` are
+  present and ALL `status = "enforced"`. The NINE new gates (`ci_check_wal_rollback_replay_equiv.sh`,
+  `ci_check_receive_detector_venue_split.sh`, `ci_check_live_fork_choice_apply.sh`,
+  `ci_check_live_fork_choice_wiring.sh`, `ci_check_wire_rollback_signal_preserved.sh`,
+  `ci_check_participant_venue_inert.sh`, `ci_check_rollback_target_canonical_binding.sh`,
+  `ci_check_chain_selection_arrival_order_independent.sh`, `ci_check_convergence_evidence_schema.sh`) are present.
+  Source confirms: `ade_ledger::wal::event::{WalEntry::RollBack, RollbackPoint, RollbackReason}` (tag 1; tag 2
+  `CaptureSnapshot` reserved); `ade_ledger::wal::error::WalError::RollbackTargetNotInChain`;
+  `ade_node::node_sync::{NodeSyncItem, ReceiveClass, ReceiveDisposition, ForgeRefused::ReselectionPending}` +
+  `NodeSyncError {Pump | Capture | UnexpectedRollback | RollbackPointSlotMismatch}`;
+  `ade_runtime::admission::wire_pump::{AdmissionPeerEvent::RollBackward, AdmissionWirePumpError::UnsupportedRollbackPoint}`;
+  the `cli.rs` `--single-producer-venue` / `--participant-venue` flags (mutually exclusive, rejected if both); the
+  `node_lifecycle.rs` DC-NODE-29 binding (the rollback `to_point` is built from the STORED slot at
+  `node_lifecycle.rs:~2453-2470` BEFORE `apply_chain_event` at `:~2481`). The production `select_best_chain` is
+  byte-unchanged (the `ade_core::consensus::fork_choice` touch is a `#[cfg(test)]`-only arrival-order proof).
+- **Cross-reference check (CODEMAP ↔ SEAMS ↔ registry) at the N-AI refresh — read honestly:** all three AGREE on the
+  counts at HEAD `5ec841c8` (**460 / 157 / 354**). The CODEMAP was regenerated at `5ec841c8` (per its header,
+  "Active cluster at HEAD: PHASE4-N-AI … CLOSED") and carries the N-AI BLUE+RED+GREEN additions (the `WalEntry::RollBack`
+  marker + payloads in its "Closed enums / registries (for SEAMS cross-reference)" section + the +9 gate rows +
+  DC-NODE-23…29). No stale module references in this SEAMS; every module it newly cites for N-AI is inventoried in
+  the CODEMAP in the SAME TCB color (`ade_ledger::wal` BLUE; `ade_node::{node_sync, node_lifecycle, cli}` RED with
+  GREEN-by-fn detector/resolver/forge-decision fns; `ade_runtime::{admission::wire_pump, consensus::chain_selector}`
+  RED/GREEN).
+- **Cross-reference WARNING (one honest discrepancy — registry is canonical):** the task brief + the CODEMAP header
+  describe `CN-CONS-03` as staying **`partial`**, but the **registry ground truth at HEAD is `status = "declared"`**
+  for `CN-CONS-03` (verified `grep`). The load-bearing fact is identical either way — **`CN-CONS-03` was NOT flipped
+  to `enforced`; full multi-peer ChainSel convergence remains out of scope** — but this SEAMS does NOT assert the
+  specific label `partial` for `CN-CONS-03` (the registry says `declared`). The registry's status breakdown
+  (221 enforced / 19 partial / 114 declared) is the canonical source; the "partial" wording in the CODEMAP header
+  is a labeling drift, NOT a count discrepancy (all three docs agree on 354 / 221 / 19 / 114). Flagged for the next
+  CODEMAP/registry reconciliation.
+- **Candidate seams surfaced for confirm/reject (this refresh):** **ONE NEW — candidate #10 (the forward seam
+  `chain_selector::process_rollback`).** The orchestrator's own rollback path is **test-only today** (verified:
+  `StreamInput::RollBack` is constructed in exactly three places — `ade_testkit/tests/consensus_stream_replay.rs`
+  lines 243/313 and `chain_selector.rs` lines 452/487, the latter inside `#[cfg(test)] mod tests` at line 270; there
+  is **NO live caller** of `process_stream_input(StreamInput::RollBack)` from any production path, and
+  `node_lifecycle.rs` has **zero** `process_rollback` calls — the live Participant rollback path uses
+  `apply_chain_event(ChainEvent::RolledBack)`). **If it is ever wired to a live peer feed, it would need the SAME
+  `DC-NODE-29` canonical rollback-target binding** (durable `ChainDb` stored slot+hash as the sole authority,
+  fail-closed before any mutation). Surfaced as a future attach-point requiring the binding — **NOT asserted wired**.
+  Plus **candidate #7/#8 (full multi-peer ChainSel / rung 2) is SHARPENED** — N-AI proves single-best-peer FOLLOW
+  but does NOT flip `CN-CONS-03`; the full-convergence rung attaches to the EXISTING BLUE `select_best_chain`
+  (routed-to, never duplicated) and must carry the `DC-NODE-29` binding on the orchestrator rollback path
+  (candidate #10). **Open questions for the user (framed honestly):** (1) confirm candidate #10's framing —
+  `chain_selector::process_rollback` is a deliberate test-only orchestrator path today; is wiring it to a live
+  multi-peer feed (with the DC-NODE-29 binding) the intended rung-2 attach-point, or should the live path stay on
+  `node_lifecycle::run_participant_sync`? (2) confirm the `CN-CONS-03` label reconciliation (registry `declared` vs.
+  CODEMAP-header `partial`) — both mean "not flipped"; which label should the next refresh standardize on?
 - **Regenerated (cluster-close refresh covering THREE clusters — PHASE4-N-AF + N-AG + N-AH) at HEAD `5858288e`**
   (`git rev-parse --short HEAD` — the PHASE4-N-AH close), applied DIRECTLY to the on-disk SEAMS. This refresh ALSO
   pays the SEAMS debt deferred at the N-AF close (the N-AF `/head-deltas` recorded "CODEMAP/SEAMS refresh deferred

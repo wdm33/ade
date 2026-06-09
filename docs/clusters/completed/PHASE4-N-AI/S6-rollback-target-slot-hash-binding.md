@@ -6,7 +6,7 @@
 
 ## 2. Slice Header
 - **Slice Name:** Rollback-target slot/hash canonical binding (H-1 remediation).
-- **Cluster:** PHASE4-N-AI. **Status:** Proposed.
+- **Cluster:** PHASE4-N-AI. **Status:** Merged.
 - **CE Addressed:** remediates **H-1** under **CE-AI-3** (the live rollback apply path);
   **introduces + enforces DC-NODE-29**. Hardens CE-AI-3's fail-closed bar.
 - **Dependency:** the AI-S3/S4b-ii live rollback path (`run_participant_sync`).

@@ -14,7 +14,7 @@
 ## 2. Slice Header
 - **Slice Name:** Live single-best-peer rollback-follow routing + receive classification +
   DC-NODE-28 forge gate.
-- **Cluster:** PHASE4-N-AI. **Status:** Proposed.
+- **Cluster:** PHASE4-N-AI. **Status:** Merged.
 - **CE Addressed:** **CE-AI-2 (live)** (DC-NODE-23/24 run on the live path), **CE-AI-3 (live)**
   (DC-NODE-25/26 — durable rollback apply + reconcile on the live path), **CE-AI-4** (DC-NODE-28).
 - **Dependencies:** AI-S2 (detector), AI-S3 (`apply_chain_event`), AI-S4a

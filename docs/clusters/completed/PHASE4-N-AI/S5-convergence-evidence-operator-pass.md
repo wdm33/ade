@@ -8,7 +8,7 @@
 ## 2. Slice Header
 - **Slice Name:** Arrival-order-independence proof (hermetic) + convergence-pass evidence harness
   (operator-gated).
-- **Cluster:** PHASE4-N-AI. **Status:** Proposed.
+- **Cluster:** PHASE4-N-AI. **Status:** Merged.
 - **CE Addressed:** **CE-AI-5** (`CN-CONS-01` deterministic, arrival-order-independent — hermetic)
   + **CE-AI-6** (`CN-CONS-03` live convergence — operator-gated, derived-tier).
 - **Dependencies:** the existing BLUE `select_best_chain` (DC-CONS-03) + the existing

@@ -1248,10 +1248,10 @@ statement = "Chain selection must be deterministic for the same candidate chains
 source = "classification_table.md §D"
 cross_ref = ["T-DET-01", "T-CONS-01", "DC-CONS-03", "DC-CONS-05", "DC-CONSENSUS-01", "DC-CONS-15"]
 code_locus = "crates/ade_core/src/consensus/fork_choice.rs, crates/ade_core/src/consensus/candidate.rs"
-tests = ["replay_is_deterministic", "reject_reason_bytes_are_stable", "higher_block_no_wins", "equal_block_no_tiebreaker_decides"]
-ci_script = "ci/ci_check_no_density_in_fork_choice.sh"
-status = "partial"
-strengthened_in = ["PHASE4-N-B"]
+tests = ["replay_is_deterministic", "reject_reason_bytes_are_stable", "higher_block_no_wins", "equal_block_no_tiebreaker_decides", "select_best_chain_arrival_order_independent_distinct_heights", "select_best_chain_arrival_order_independent_tiebreaker"]
+ci_script = "ci/ci_check_no_density_in_fork_choice.sh, ci/ci_check_chain_selection_arrival_order_independent.sh"
+status = "enforced"
+strengthened_in = ["PHASE4-N-B", "PHASE4-N-AI"]
 attack_rationale = "Prevents fork-choice drift."
 evidence_notes = "Universal: any consensus system must have deterministic fork choice. Evidence: SelectView in ouroboros-consensus depends only on BlockNo + TiebreakerView."
 
@@ -1279,9 +1279,9 @@ code_locus = "crates/ade_core/src/consensus/fork_choice.rs"
 tests = ["higher_block_no_wins", "equal_block_no_tiebreaker_decides", "tiebreaker_loss_keeps_current"]
 ci_script = "ci/ci_check_no_density_in_fork_choice.sh"
 status = "declared"
-strengthened_in = ["PHASE4-N-B"]
+strengthened_in = ["PHASE4-N-B", "PHASE4-N-AI"]
 attack_rationale = "Prevents ad hoc operator heuristics from becoming consensus inputs."
-evidence_notes = "Cardano-specific constraints on convergence mechanism beyond universal replay-equivalent convergence."
+evidence_notes = "Cardano-specific constraints on convergence mechanism beyond universal replay-equivalent convergence. PHASE4-N-AI exercised the single-best-peer rollback-follow venue only (CE-AI-6 operator-gated, vacuous-until-committed); full multi-peer ChainSel remains out of scope -- NOT flipped to enforced."
 
 [[rules]]
 id = "CN-CONS-04"
@@ -1961,7 +1961,7 @@ code_locus = "crates/ade_core/src/consensus/fork_choice.rs, crates/ade_core/src/
 tests = ["consensus::fork_choice::tests::tiebreaker_prefer_lower_slot_wins", "consensus::fork_choice::tests::tiebreaker_prefer_higher_op_cert_wins_on_equal_slot_and_issuer", "consensus::fork_choice::tests::tiebreaker_prefer_lower_vrf_value_wins_on_full_tie", "consensus::fork_choice::tests::no_candidates_returns_no_candidates_error", "consensus::fork_choice::tests::equal_to_current_keeps_current_via_tiebreaker_loss", "consensus::candidate::tests::tiebreaker_view_eq_is_field_wise", "consensus::candidate::tests::candidate_fragment_carries_anchor_block_no", "higher_block_no_wins", "equal_block_no_tiebreaker_decides", "fork_before_immutable_tip_rejected", "exceeded_rollback_rejected", "tiebreaker_loss_keeps_current", "replay_is_deterministic", "reject_reason_bytes_are_stable", "no_candidates_returns_error"]
 ci_script = "ci/ci_check_no_density_in_fork_choice.sh, ci/ci_check_no_chaindb_in_consensus_blue.sh, ci/ci_check_no_float_in_consensus.sh, ci/ci_check_consensus_closed_enums.sh"
 status = "enforced"
-strengthened_in = ["PHASE4-N-B"]
+strengthened_in = ["PHASE4-N-B", "PHASE4-N-AI"]
 pinned_reference = "cardano-node 11.0.1 (ouroboros-consensus version per its cabal.project.freeze); PraosTiebreaker SelectView shape forward-compatible from the 10.6.2 release the ordering was originally validated against"
 
 [[rules]]
@@ -1986,7 +1986,7 @@ code_locus = "crates/ade_core/src/consensus/rollback.rs, crates/ade_core/src/con
 tests = ["consensus::rollback::tests::rollback_preserves_immutable_tip", "consensus::rollback::tests::rollback_preserves_security_param", "consensus::rollback::tests::rollback_with_zero_depth_is_noop", "consensus::rollback::tests::rollback_to_equal_block_no_as_immutable_succeeds", "consensus::rollback::tests::rollback_to_one_below_immutable_rejected", "rollback_within_k_succeeds", "rollback_exceeding_k_rejected_with_typed_reason", "rollback_before_immutable_tip_rejected", "rollback_event_bytes_are_stable", "rollback_is_deterministic", "rollback_equivalent_to_truncated_replay"]
 ci_script = "ci/ci_check_consensus_closed_enums.sh, ci/ci_check_no_chaindb_in_consensus_blue.sh"
 status = "enforced"
-strengthened_in = ["PHASE4-N-B"]
+strengthened_in = ["PHASE4-N-B", "PHASE4-N-AI"]
 
 [[rules]]
 id = "DC-CONS-06"
@@ -1998,7 +1998,7 @@ code_locus = "crates/ade_core/src/consensus/rollback.rs"
 tests = ["rollback_equivalent_to_truncated_replay", "rollback_is_deterministic", "rollback_within_k_succeeds", "rollback_before_immutable_tip_rejected", "rollback_event_bytes_are_stable", "consensus::rollback::tests::rollback_to_one_below_immutable_rejected", "consensus::rollback::tests::rollback_preserves_immutable_tip"]
 ci_script = "ci/ci_check_consensus_closed_enums.sh"
 status = "enforced"
-strengthened_in = ["PHASE4-N-B"]
+strengthened_in = ["PHASE4-N-B", "PHASE4-N-AI"]
 
 [[rules]]
 id = "DC-CONS-07"
@@ -2774,7 +2774,7 @@ status = "enforced"
 authority_surface = "receive-side atomic admit + rollback over ChainDb + LedgerState + PraosChainDepState"
 cluster = "PHASE4-N-H + PHASE4-N-I"
 introduced_in = "PHASE4-N-H"
-strengthened_in = ["PHASE4-N-I", "PHASE4-N-J", "PHASE4-N-Y"]
+strengthened_in = ["PHASE4-N-I", "PHASE4-N-J", "PHASE4-N-Y", "PHASE4-N-AI"]
 evidence = ["Admit-side (N-H): block_delivered atomically advances chain_write -> ledger -> chain_dep with staged-then-committed shape; failure leaves state unchanged (test receive_apply_block_delivered_validity_invalid_rejects).", "Rollback-side (N-I): roll_backward calls materialize_rolled_back_state + commit_rollback; commit_rollback's irreversible-step-first shape leaves state unchanged on chain_write failure (commit_rollback_chain_write_failure_leaves_state_unchanged); pending headers reset on successful commit.", "End-to-end: rollback_then_continue_admit_equals_straight_line_admit proves snapshot+rollback yields the same ledger fingerprint as straight-line admit — snapshotting is a pure cache.", "Restart-safe rollback (N-J): PersistentSnapshotCache bridges framing::{encode,decode}_snapshot to SnapshotStore; cross-impl equivalence with InMemorySnapshotCache proven via persistent_cache_matches_in_memory_cache_semantics — restart-safe rollback now possible without weakening lockstep."]
 
 [[rules]]
@@ -2940,7 +2940,7 @@ ci_script = "ci/ci_check_rollback_materialize_closure.sh"
 status = "enforced"
 authority_surface = "rollback materialization"
 cluster = "PHASE4-N-I"
-strengthened_in = ["PHASE4-N-J", "PHASE4-N-K"]
+strengthened_in = ["PHASE4-N-J", "PHASE4-N-K", "PHASE4-N-AI"]
 evidence = ["ci_check_rollback_materialize_closure.sh enforces single-authority via grep: no other pub fn in rollback/* returns (LedgerState, PraosChainDepState). The driver composes one SnapshotReader::nearest_le + BlockSource::blocks_in_range + per-block block_validity (positive grep for block_validity call site).", "The function takes narrow read-only traits (SnapshotReader, BlockSource), not concrete chain stores — production impls in ade_runtime (S4) go through the same single composition path.", "N-J: the second production SnapshotReader impl (PersistentSnapshotCache) goes through the SAME single materialize composition — cross-impl equivalence with InMemorySnapshotCache proven via persistent_cache_matches_in_memory_cache_semantics. CN-STORE-08 (the snapshot-encoder counterpart to CN-STORE-07) also lands.", "PHASE4-N-K strengthening: bootstrap warm-start branch routes directly through materialize_rolled_back_state (see ade_runtime::bootstrap), and ade_node binary calls bootstrap_initial_state exactly once (ci/ci_check_node_binary_uses_single_bootstrap.sh). bootstrap_warm_start_equals_direct_materialize proves bootstrap-warm-start = direct-materialize equivalence."]
 attack_rationale = "A parallel materializer can produce a rolled-back state inconsistent with what block_validity would compute, allowing peer-controlled state divergence."
 evidence_notes = "Enforcement is type-level: materialize_rolled_back_state is the sole pub fn returning the rolled-back state tuple. The function takes narrow read-only traits (SnapshotReader, BlockSource), not concrete chain stores — test-side and production-side go through the same single composition."
@@ -4324,7 +4324,7 @@ tests = [
 ]
 ci_scripts = ["ci/ci_check_admission_wire_pump_closure.sh", "ci/ci_check_admission_no_red_verdicts.sh"]
 status = "enforced"
-strengthened_in = ["PHASE4-N-M-FOLLOW"]
+strengthened_in = ["PHASE4-N-M-FOLLOW", "PHASE4-N-AI"]
 
 [[rules]]
 id = "DC-PUMP-02"
@@ -5461,7 +5461,7 @@ code_locus = "crates/ade_node/src/node_lifecycle.rs (run_relay_loop driver), cra
 tests = ["relay_loop_two_clean_runs_byte_identical"]
 ci_script = "ci_check_node_run_loop_containment.sh"
 introduced_in = "PHASE4-N-F-D"
-strengthened_in = ["PHASE4-N-F-E", "PHASE4-N-AH"]
+strengthened_in = ["PHASE4-N-F-E", "PHASE4-N-AH", "PHASE4-N-AI"]
 status = "enforced"
 evidence_notes_s3a = "PHASE4-N-F-D S3a (2026-05-31): relay_loop_two_clean_runs_byte_identical proves two clean run_relay_loop runs over identical inputs (same recovered-state seed, same ordered in-memory multi-block feed, same shutdown schedule) yield byte-identical tip (slot+hash), WAL image, and captured checkpoint slots. Deterministic orchestration absent crash interference; test-only (the loop is RED orchestration over the pure GREEN planner + the deterministic run_node_sync->pump_block seam). Crash-at-boundary recovery is S3b."
 
@@ -5492,7 +5492,7 @@ code_locus = "crates/ade_node/src/node_lifecycle.rs, crates/ade_node/src/run_loo
 tests = ["plan_loop_step_forge_precedence_table_is_total", "forge_slot_guard_none_is_due", "forge_slot_guard_at_most_once_per_slot", "forge_slot_guard_rejects_past_slot", "relay_loop_forge_slot_derived_via_clock_seam", "relay_loop_forge_tick_attempts_forge_advances_no_tip", "relay_loop_without_producer_material_matches_nfd_relay", "relay_loop_forge_two_runs_byte_identical", "forge_tick_rotated_kes_period_skips_no_retroactive_sign", "forge_tick_off_epoch_slot_fails_closed_local"]
 ci_script = "ci/ci_check_loop_planner_closed.sh, ci/ci_check_node_run_loop_containment.sh, ci/ci_check_genesis_consistency_fixture_present.sh"
 introduced_in = "PHASE4-N-F-E"
-strengthened_in = ["PHASE4-N-F-F", "PHASE4-N-F-G-A", "PHASE4-N-AE", "PHASE4-N-AH"]
+strengthened_in = ["PHASE4-N-F-F", "PHASE4-N-F-G-A", "PHASE4-N-AE", "PHASE4-N-AH", "PHASE4-N-AI"]
 status = "enforced"
 evidence_notes = """
 PHASE4-N-F-E invariant sketch (2026-05-31, /invariants gate). Declared at sketch;
@@ -6514,7 +6514,7 @@ tests = ["forge_tick_durable_admit_advances_tip", "forge_successor_builds_block_
 ci_script = "ci/ci_check_forged_durable_admit_via_pump.sh, ci/ci_check_node_run_loop_containment.sh"
 status = "enforced"
 introduced_in = "PHASE4-N-U"
-strengthened_in = ["PHASE4-N-AH"]
+strengthened_in = ["PHASE4-N-AH", "PHASE4-N-AI"]
 evidence_notes = "PHASE4-N-U S1 (2026-06-05). ENFORCED. ade_node::node_sync::admit_forged_block_durably feeds the self-accepted handoff's bytes (accepted().as_bytes(), no re-encode) into the existing forward_sync::pump_block chokepoint (StoreBlockBytes -> AppendWal -> AdvanceTip, durable-before-tip); the ForgeTick arm calls it before the G-R serve handoff. pump_block advances state.receive + the durable ChainDb together, so the next forge builds N+1 (forge_successor_builds_block_1_from_durable_tip). The forge advances no durable tip directly (DC-NODE-05 preserved; ci_check_node_run_loop_containment.sh allow-lists the 2nd fenced tip-advancer + forbids direct pump_block/put_block/AdvanceTip/rollback in the loop body). ci_check_forged_durable_admit_via_pump.sh fences the driver (routes through pump_block, no re-encode, no fork-choice, no manual tip advance). OQ-a resolved as supersede-via-cross-ref: DC-NODE-05 PRESERVED."
 
 [[rules]]
@@ -6559,7 +6559,7 @@ tests = ["forge_kill_then_warm_start_recovers_same_tip_via_forward_replay", "for
 ci_script = ""
 status = "enforced"
 introduced_in = "PHASE4-N-U"
-strengthened_in = ["PHASE4-N-AD", "PHASE4-N-AE", "PHASE4-N-AH"]
+strengthened_in = ["PHASE4-N-AD", "PHASE4-N-AE", "PHASE4-N-AH", "PHASE4-N-AI"]
 evidence_notes = "PHASE4-N-U S2 (2026-06-05). ENFORCED (test-enforced; no dedicated CI gate). A forged-block durable tip carries NO snapshot-at-tip (admit_forged_block_durably captures none); warm_start_recovery recovers it by FORWARD-REPLAY from the genesis slot-0 snapshot over the durable WAL block, and its fingerprint guard asserts the recovered ledger fp == the WAL-tail post_fp -- so reaching Ok with the same tip is byte-identical replay equivalence (forge_kill_then_warm_start_recovers_same_tip_via_forward_replay: forge block 0 -> admit -> kill -> reopen -> warm_start_recovery -> recovered tip slot+hash == the pre-kill durable tip). Rides the existing snapshot + forward-replay recovery law (the bootstrap_initial_state warm-start branch, already proven by recover_node_state's recovery_crash_at_phase_sync_byte_identical) -- no new durability law. True-tier: extends T-REC-01/02/03 from received-only to forged+received durable progression. PHASE4-N-AD (2026-06-06) STRENGTHENS: forge_tip_successor_kill_then_warm_start_recovers_block_one extends the proof from a single block-0 forge to a multi-block forged progression -- forge block 0 -> admit -> forge block 1 on the durable NON-Origin tip -> admit -> kill -> warm_start_recovery recovers block 1 byte-identically (no ChainBreak), proving the block-N -> block-N+1 prior_fp chains across WAL replay. The C1 cold-start seed -> block-0 ChainBreak (seed ledger fp vs the PrevHash::Genesis/null prior) is a C1 genesis-successor-only durability limitation, NOT a C2 tip-successor blocker -- C2 enters from a non-Origin recovered tip. PHASE4-N-AE.C (2026-06-07) STRENGTHENS to recover->FOLLOW->warm-start: the CE-A5 live run found node_lifecycle seeding the follow ForwardSyncState prior_fp with zero (not fingerprint(&state.ledger).combined), breaking replay-equivalence of a recover->followed store (warm-start ChainBreak@1, exit 42). recover_follow_kill_warm_start_chains_from_ledger_fp proves warm-start recovers the same followed tip; recover_follow_two_runs_byte_identical proves same recover base + same followed block -> byte-identical recovered tip + WAL image, after the fix."
 
 [[rules]]
@@ -6849,7 +6849,7 @@ tests = ["caughtup_self_admit_enters_extend_directly_no_cert", "forge_base_selec
 ci_script = "ci/ci_check_local_durable_forge_base.sh, ci/ci_check_forge_followed_tip_admission.sh"
 status = "enforced"
 introduced_in = "PHASE4-N-AH"
-strengthened_in = []
+strengthened_in = ["PHASE4-N-AI"]
 evidence_notes = """
 ENFORCED at PHASE4-N-AH close (2026-06-08): S1 (b0fb8817) makes the forge base ChainDb::tip under the 6-condition fence (direct CaughtUpToPeerTip -> extend; observed-feed competing-block fail-closed); ci_check_local_durable_forge_base.sh + the DC-NODE-20 phase-split half of ci_check_forge_followed_tip_admission.sh green. CE-AH-6 live bar met by run-4 (docs/evidence/phase4-n-ah-ce-ah-6-close.{md,jsonl}): cert-free local-tip forge, sustained > k immutable across a follow-link EOF, a real Haskell relay adopting. Motivated by the run-4 live finding (2026-06-08): Ade forged block 11, a real Haskell relay adopted
 it, but Ade returned no_tip_available every subsequent tick because the proceed_to_forge gate
@@ -6982,9 +6982,9 @@ chains (that is select_best_chain / DC-CONS-03).
 source = "docs/planning/phase4-n-ai-live-fork-choice-invariants.md (I-5)"
 cross_ref = ["DC-NODE-20", "DC-NODE-24", "DC-NODE-15", "DC-NODE-16", "DC-CONS-03"]
 code_locus = "CANDIDATE (pending /cluster-plan): crates/ade_node/src/node_sync.rs (a GREEN-by-function classifier over the durable tip + the arriving candidate header summary; sibling to forge_followed_tip_admission / single_producer_forge_decision)."
-tests = []
-ci_script = ""
-status = "declared"
+tests = ["classify_already_have_when_in_spine", "classify_linear_extend_on_exact_parent_and_block_no", "classify_competing_on_nonmatching_parent", "classify_competing_on_wrong_block_no", "classify_competing_on_genesis_prev_hash", "resolve_passthrough_already_have_and_linear_extend"]
+ci_script = "ci/ci_check_receive_detector_venue_split.sh"
+status = "enforced"
 introduced_in = "PHASE4-N-AI"
 strengthened_in = []
 
@@ -7005,9 +7005,9 @@ followed_peer_tip signal MUST NOT reach select_best_chain.
 source = "docs/planning/phase4-n-ai-live-fork-choice-invariants.md (I-6)"
 cross_ref = ["DC-NODE-23", "DC-NODE-20", "DC-NODE-15", "DC-CONS-03", "CN-CONS-01"]
 code_locus = "CANDIDATE (pending /cluster-plan): crates/ade_node/src/node_sync.rs (the venue->resolver projection) + crates/ade_node/src/node_lifecycle.rs (the receive arm dispatching to the chain_selector orchestrator on the Participant path; the SingleProducer path keeps the DC-NODE-20 fail-closed)."
-tests = []
-ci_script = ""
-status = "declared"
+tests = ["resolve_singleproducer_competing_refuses", "resolve_participant_competing_needs_fork_choice", "resolve_participant_already_have_and_linear_extend_do_not_call_fork_choice", "resolve_unknown_venue_fails_closed"]
+ci_script = "ci/ci_check_receive_detector_venue_split.sh"
+status = "enforced"
 introduced_in = "PHASE4-N-AI"
 strengthened_in = []
 
@@ -7028,9 +7028,9 @@ advance). A TiebreakerLossKeepCurrent outcome makes no durable change.
 source = "docs/planning/phase4-n-ai-live-fork-choice-invariants.md (I-2, I-3, I-4, I-11)"
 cross_ref = ["DC-CONS-20", "CN-STORE-07", "DC-NODE-05", "DC-NODE-12", "DC-NODE-13", "DC-CONS-03"]
 code_locus = "CANDIDATE (pending /cluster-plan): crates/ade_node/src/node_lifecycle.rs (the RED apply driver) over crates/ade_ledger/src/receive/reducer.rs + crates/ade_ledger/src/rollback/* + crates/ade_runtime/src/forward_sync/pump.rs. REUSES the enforced authorities; no new BLUE."
-tests = []
-ci_script = ""
-status = "declared"
+tests = ["apply_rolledback_rolls_back_and_appends_wal_record_after_commit", "apply_chain_selected_invalid_body_fails_via_pump_no_advance", "apply_chain_selected_without_block_bytes_fails_closed", "participant_rollback_applies_durably", "participant_block_with_no_durable_tip_pumps"]
+ci_script = "ci/ci_check_live_fork_choice_apply.sh, ci/ci_check_live_fork_choice_wiring.sh"
+status = "enforced"
 introduced_in = "PHASE4-N-AI"
 strengthened_in = []
 
@@ -7048,9 +7048,9 @@ selector ahead of, behind, or forked from the durable spine.
 source = "docs/planning/phase4-n-ai-live-fork-choice-invariants.md (I-7)"
 cross_ref = ["DC-NODE-25", "DC-NODE-27", "DC-CONS-20", "DC-NODE-12"]
 code_locus = "CANDIDATE (pending /cluster-plan): crates/ade_node/src/node_sync.rs / node_lifecycle.rs (the reconciliation projection: derive ChainSelectorState from the durable stores, or hold OrchestratorState in lockstep -- OQ-2)."
-tests = []
-ci_script = ""
-status = "declared"
+tests = ["apply_reconciliation_mismatch_fails_fast", "apply_rejected_makes_no_durable_change"]
+ci_script = "ci/ci_check_live_fork_choice_apply.sh"
+status = "enforced"
 introduced_in = "PHASE4-N-AI"
 strengthened_in = []
 
@@ -7073,9 +7073,9 @@ foundation + replay-equivalence land.
 source = "docs/planning/phase4-n-ai-live-fork-choice-invariants.md (section 4, OQ-1)"
 cross_ref = ["DC-CONS-06", "DC-CONS-22", "DC-CONS-20", "CN-STORE-07", "CN-WAL-01", "T-REC-03", "T-REC-05", "DC-NODE-26"]
 code_locus = "CANDIDATE (pending /cluster-plan; OQ-1 RESOLVED -> A, see docs/planning/phase4-n-ai-oq1-rollback-durability-decision.md): a version-gated additive WalEntry::RollBack {to_point, reason, prior_tip, selected_tip} marker (crates/ade_ledger/src/wal/event.rs tag/encode/decode) whose replay arm in crates/ade_ledger/src/wal/replay.rs re-invokes the EXISTING materialize_rolled_back_state (CN-STORE-07) + lockstep commit_rollback (DC-CONS-20) and re-anchors the fingerprint chain to the materialized rolled-back fp. Append-only WAL preserved (CN-WAL-01); NOT a second rollback implementation. Option B (WAL-tail reconciliation) REJECTED."
-tests = []
-ci_script = ""
-status = "declared"
+tests = ["apply_rolledback_replays_byte_identical_recovers_forkpoint", "replay_with_rollback_recovers_selected_not_abandoned", "replay_with_rollback_two_runs_byte_identical", "rollback_replay_reanchor_fp_equals_materialized_fp"]
+ci_script = "ci/ci_check_wal_rollback_replay_equiv.sh, ci/ci_check_live_fork_choice_apply.sh"
+status = "enforced"
 introduced_in = "PHASE4-N-AI"
 strengthened_in = []
 
@@ -7096,9 +7096,9 @@ into block production. Derived tier with a true-tier authority consequence.
 source = "docs/planning/phase4-n-ai-live-fork-choice-invariants.md (I-12)"
 cross_ref = ["DC-NODE-23", "DC-NODE-24", "DC-NODE-20", "DC-NODE-05", "DC-CONS-13"]
 code_locus = "CANDIDATE (pending /cluster-plan): crates/ade_node/src/node_sync.rs (the forge gate -- extend single_producer_forge_decision / the Participant forge-base selection with a pending-resolution fence) + node_lifecycle.rs (the ForgeTick arm respects the pending state)."
-tests = []
-ci_script = ""
-status = "declared"
+tests = ["pending_reselection_forge_refusal_gate", "participant_rollback_beyond_k_fails_closed_clears_pending", "singleproducer_rollback_refused_by_run_node_sync"]
+ci_script = "ci/ci_check_live_fork_choice_wiring.sh, ci/ci_check_participant_venue_inert.sh"
+status = "enforced"
 introduced_in = "PHASE4-N-AI"
 strengthened_in = []
 

@@ -7,7 +7,7 @@
 ## 2. Slice Header
 - **Slice Name:** Live fork-choice apply driver (durable rollback/extend over `ForwardSyncState`)
   + decision/durable reconciliation.
-- **Cluster:** PHASE4-N-AI. **Status:** Proposed.
+- **Cluster:** PHASE4-N-AI. **Status:** Merged.
 - **Cluster Exit Criteria Addressed:**
   - [ ] **CE-AI-1** (`DC-NODE-27` rollback replay-equivalence) — **live-production half** (the live
     `WalEntry::RollBack` is now *produced* on durable rollback + proven replay-equivalent

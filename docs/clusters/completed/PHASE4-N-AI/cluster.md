@@ -84,7 +84,44 @@ AI-S1 introduces the **one** new canonical type — `WalEntry::RollBack` (additi
 - **OQ-6 (convergence evidence shape) [S5]:** closed, derived-tier vocabulary extending the existing live-transcript style; never overstates (no full-ChainSel claim).
 
 ## 11. Cluster Close Record
-*(Filled at `/cluster-close`.)* Active — AI-S1 next.
+
+**CLOSED 2026-06-09.** PHASE4-N-AI proves live single-best-peer rollback-following and
+replay-equivalent reorg adoption in Participant mode. It does not prove full multi-peer candidate
+comparison or full Cardano ChainSel coverage.
+
+**Slices (all merged):** AI-S1 (rollback WAL durability), AI-S2 (detector + venue-split resolver),
+AI-S3 (apply driver + reconciliation), AI-S4a (wire rollback signal), AI-S4b-i (Participant venue
+declaration), AI-S4b-ii (live rollback-follow routing + forge gate), AI-S5 (convergence evidence +
+operator pass), AI-S6 (rollback-target slot/hash canonical binding — H-1 remediation).
+
+**Registry (CE-AI-7):** DC-NODE-23/24/25/26/27/28 declared→enforced; DC-NODE-29 introduced+enforced
+(AI-S6); CN-CONS-01 partial→enforced. **CN-CONS-03 NOT flipped** — its statement is broad
+multi-node convergence; only `strengthened_in += PHASE4-N-AI` with a scoped evidence note
+(single-best-peer venue exercised; CE-AI-6 operator-gated, vacuous-until-committed). Carry-forward
+strengthenings: DC-PUMP-01, DC-NODE-05/12/20, DC-CONS-20, CN-STORE-07, DC-CONS-03/05/06, T-REC-03/05.
+
+**Reviews:** IDD reviewer — clean (no BLOCK). Security review — found HIGH **H-1** (the live rollback
+target was built from the peer slot + the locally-verified hash → a single Byzantine `RollBackward`
+could truncate the durable chain and brick the node); remediated in **AI-S6** (pre-commit canonical
+target binding; DC-NODE-29). Security re-review: **H-1 CLOSED**, no new findings.
+
+**Close-record notes (carried, not blocking):**
+- **Sec W-1:** no explicit k-floor on the live rollback path; depth is bounded by snapshot retention
+  (materialize is the within-k authority per OQ-4). If snapshot cadence ever retains deeper than k,
+  an over-deep peer-driven rollback would be permitted — revisit if cadence changes.
+- **IDD W-b:** DC-NODE-28 is enforced **structurally** by sequential loop ordering (sync + forge are
+  distinct `LoopStep`s; the rollback apply completes within `SyncOnce` before any `ForgeTick`).
+  `pending_reselection` is forward-defense for a future interruptible apply, NOT the currently
+  observed live enforcer.
+- **Forward OQ (AI-S6 re-review):** `chain_selector::process_rollback` (the orchestrator rollback
+  path) is test-only today (no live caller). If ever wired to a live peer feed, it needs the same
+  DC-NODE-29 canonical target binding (slot bound to the stored hash, validated pre-mutation).
+
+**CEs all pass (mechanical):** CE-AI-1 `ci_check_wal_rollback_replay_equiv.sh`; CE-AI-2
+`ci_check_receive_detector_venue_split.sh`; CE-AI-3 `ci_check_live_fork_choice_apply.sh` +
+`ci_check_live_fork_choice_wiring.sh`; CE-AI-4 `ci_check_live_fork_choice_wiring.sh`; CE-AI-5
+`ci_check_chain_selection_arrival_order_independent.sh`; CE-AI-6 `ci_check_convergence_evidence_schema.sh`
+(vacuous-until-committed); + AI-S6 `ci_check_rollback_target_canonical_binding.sh`. `cargo test -p ade_node` green.
 
 ## 12. Follow-ons & Notes
 - **Multi-peer candidate comparison (full Cardano ChainSel):** explicitly **out of scope** — a later hardening cluster. This cluster proves one live competing-chain resolution path end-to-end (single-best-peer).

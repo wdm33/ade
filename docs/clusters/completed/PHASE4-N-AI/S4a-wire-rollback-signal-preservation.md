@@ -7,7 +7,7 @@
 ## 2. Slice Header
 - **Slice Name:** Preserve the peer's chain-sync `RollBackward` point as a closed
   `AdmissionPeerEvent`.
-- **Cluster:** PHASE4-N-AI. **Status:** Proposed.
+- **Cluster:** PHASE4-N-AI. **Status:** Merged.
 - **Role:** **Cluster prerequisite for CE-AI-2 / CE-AI-3 live wiring** (NOT a CE prover): it
   preserves the chain-sync rollback point so AI-S4b can route it into detector / orchestrator /
   apply. AI-S4a proves no detector/resolver/apply behavior itself.

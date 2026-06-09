@@ -8,7 +8,7 @@
 ## 2. Slice Header
 - **Slice Name:** Shared receive detector (venue-blind) + venue-split resolver.
 - **Cluster:** PHASE4-N-AI — live fork-choice wiring (rung-2, single-best-peer).
-- **Status:** Proposed.
+- **Status:** Merged.
 - **Cluster Exit Criteria Addressed:**
   - [ ] **CE-AI-2** (`DC-NODE-23` detector + `DC-NODE-24` venue-split resolver).
 - **Slice Dependencies:** AI-S1 (closed) — cluster slice ordering, not a code dependency.

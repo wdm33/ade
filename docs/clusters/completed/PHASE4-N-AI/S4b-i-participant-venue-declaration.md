@@ -6,7 +6,7 @@
 
 ## 2. Slice Header
 - **Slice Name:** Explicit, closed Participant venue declaration (`VenueRole::Participant` via CLI).
-- **Cluster:** PHASE4-N-AI. **Status:** Proposed.
+- **Cluster:** PHASE4-N-AI. **Status:** Merged.
 - **Role:** Resolves **OQ-5** (venue is explicit + closed; `Unknown`/absent fails closed; no
   silent inference). A **precursor** for CE-AI-2 (live, AI-S4b-ii) — not a CE prover; it proves no
   fork-choice/forge behavior.

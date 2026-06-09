@@ -4,212 +4,226 @@
 >
 > Regenerate with `/head-deltas <baseline>` after every cluster close. Baseline is recorded in `.idd-config.json` `head_deltas_baseline`.
 
-> Baseline: `f87d0056` (PHASE4-N-AF S1 — enforce DC-NODE-18 core (extend-after-cert) + 2 live-surfaced loop fixes, 2026-06-07 23:59)
-> HEAD: `5858288e` (PHASE4-N-AH registry close — DC-NODE-20/21/22 enforced; N-AG superseded, 2026-06-08 20:54)
-> Span: **the PHASE4-N-AF close tail + the PHASE4-N-AG cluster (single-producer loop-continuation-after-feed-EOF, `DC-NODE-19`; superseded-close) THEN the PHASE4-N-AH cluster (local selected durable chain forge-base authority `DC-NODE-20` + cert evidence-only `DC-NODE-21` + single-producer warm-start re-entry `DC-NODE-22`)** — two pivoting single-theme clusters that retired the N-AF operator-certificate forge mechanism and re-homed the sustained-past-k liveness proof onto a **cert-free local-tip** forge path, live-proven on **C2-LOCAL** (run-4).
-> **32 commits** (no merges), **48 files changed, +5155 / −743 lines**. The production change is **RED/GREEN-only on the `ade_node` + `ade_runtime` shells** across **six** source files (`ade_node::{node_sync, run_loop_planner, node_lifecycle, cli, live_log::sched_event, live_log::sched_writer}` + `ade_runtime::bootstrap`) — **ZERO BLUE change, ZERO new BLUE module, ZERO new canonical type** (`git diff f87d0056..HEAD` over the BLUE `core_paths` trees touches no file and adds zero `pub struct/enum` lines; no `Cargo.toml` changed; still 11 crates).
+> Baseline: `8e2c3672` (PHASE4-N-AH close — DC-NODE-20/21/22 enforced; local-tip forge-base authority, 2026-06-08 21:58)
+> HEAD: `5ec841c8` (PHASE4-N-AI AI-S6 — rollback-target slot/hash canonical binding, H-1 remediation, 2026-06-09 16:26)
+> Span: **the PHASE4-N-AI cluster — live fork-choice rollback-follow wiring of the EXISTING `ade_runtime::consensus::chain_selector` orchestrator + BLUE `select_best_chain` into the live `--mode node` receive path (single-best-peer FOLLOW, NOT full ChainSel; `DC-NODE-23`…`DC-NODE-29`)** — preceded by the N-AH baseline-bump chore and folding **one unrelated docs commit** (a preprod pool-registration evidence manifest).
+> **26 commits** (no merges), **46 files changed, +5350 / −53 lines**. **This span CHANGES BLUE — the FIRST BLUE delta since the G-N span: +2 canonical types** (`458 → 460`, verified mechanically: `git grep -hE '^(pub )?(struct|enum) '` over the BLUE `core_paths` trees is `458 → 460`; the +2 are the NEW `ade_ledger::wal::event::{RollbackPoint, RollbackReason}` payload types of the new closed-sum variant `WalEntry::RollBack`; `ade_ledger` `177 → 179`; `git diff 8e2c3672..HEAD -- '**/Cargo.toml' 'Cargo.toml'` empty — still **11 crates**). The span touches exactly **three** BLUE files — `ade_ledger::wal::{event, replay}` (the new version-gated durable MARKER + replay arm) + `ade_ledger::wal::{error, mod, store_trait}` (closed error + accessor plumbing) + `ade_core::consensus::fork_choice` (**production UNCHANGED — `select_best_chain` byte-identical; the only hunk is `@@ -340,4 +340,89 @@ mod tests`, a `#[cfg(test)]`-only arrival-order-permutation determinism proof for `CN-CONS-01`**). Everything else is RED/GREEN on the `ade_node` + `ade_runtime` shells.
 
-> **Baseline note (load-bearing — read before §0).** This window's baseline is **`f87d0056`**, the
-> PHASE4-N-AF S1 close (the prior HEAD_DELTAS HEAD) — and it is **valid**: `git rev-parse f87d0056`
-> resolves and `git merge-base f87d0056 HEAD == f87d0056` (it is a strict ancestor of HEAD; `f87d0056`
-> carries no tag). HEAD is **`5858288e`** (the PHASE4-N-AH registry-close + close-records commit). The
-> config baseline at the start of this regen was already `f87d0056` (the previous close bumped it), so the
-> window measures cleanly from the recorded baseline forward. The span has **three parts**: (1) the
-> **PHASE4-N-AF close tail** — `600581e8` (the formal `Close PHASE4-N-AF` commit that archived the N-AF
-> cluster docs to `docs/clusters/completed/PHASE4-N-AF/`) + `2d99cdf2` (the C2-guide §7b record of the
-> DC-NODE-18 core close); these are **docs/archive only**, zero production code, zero registry rule; (2) the
-> **PHASE4-N-AG cluster** (`DC-NODE-19`, single-producer loop-continuation-after-feed-EOF) — declared at
-> `/invariants` (`7e1e8276`), cluster/slice docs + S1 GREEN planner + S2 RED loop continuation + S3 replay
-> tests, **superseded-closed** (its hermetic core CE-AG-1..4 is complete; its live CE re-homed to N-AH;
-> `DC-NODE-19` stays `declared`); and (3) the **PHASE4-N-AH cluster** (`DC-NODE-20` / `DC-NODE-21` /
-> `DC-NODE-22`) — the live-proven cluster that **retired the operator-certificate forge mechanism** and made
-> the post-self-admit forge base the **local durable `ChainDb::tip`**. The closer bumps `head_deltas_baseline`
-> `f87d0056 → <close SHA>` after this regen so the next cluster measures from here.
+> **Baseline note (load-bearing — read before §0).** This window's baseline is **`8e2c3672`**, the
+> PHASE4-N-AH close (the prior HEAD_DELTAS HEAD), and it is **valid**: `git rev-parse 8e2c3672` resolves and
+> `git merge-base 8e2c3672 HEAD == 8e2c3672` (it is a strict ancestor of HEAD; `8e2c3672` carries no tag).
+> HEAD is **`5ec841c8`** (the PHASE4-N-AI AI-S6 H-1 remediation — the last cluster commit). The config
+> baseline at the start of this regen was already `8e2c3672` (the previous close bumped it), so the window
+> measures cleanly from the recorded baseline forward. The span has **three parts**: (1) the **N-AH
+> baseline-bump chore** — `c66fa9a9` (`chore(idd): bump head_deltas_baseline to the PHASE4-N-AH close`),
+> config-only, zero code, zero rule; (2) the **PHASE4-N-AI cluster** (`DC-NODE-23`…`DC-NODE-29`) — invariants
+> sketch (`d92f9ce8`) + OQ-1 resolution (`80862c7f`) + cluster/slice docs + the eight slices AI-S1…AI-S6 +
+> close (`5ec841c8`); and (3) **one unrelated docs commit** — `cbad2ae3` (`docs(evidence): add preprod ADE1
+> pool registration manifest`), docs-only, folded into the span but **not** part of N-AI. The closer bumps
+> `head_deltas_baseline` `8e2c3672 → <close SHA>` after this regen (a separate post-close step) so the next
+> cluster measures from here.
 
-This window is **led by PHASE4-N-AH — local selected durable chain forge-base authority (`DC-NODE-20`),
-paired with cert-evidence-only (`DC-NODE-21`) and warm-start re-entry (`DC-NODE-22`).** It is the
-**production correction** of the N-AF cert-promotion mechanism, surfaced by a live finding, and the headline
-is a **brutally clear, honest boundary** that must be read in full:
+This window is **led by PHASE4-N-AI — live fork-choice rollback-follow wiring (single-best-peer FOLLOW).** It
+takes the EXISTING enforced BLUE fork-choice / rollback core (`select_best_chain` `DC-CONS-03`,
+`materialize_rolled_back_state` `CN-STORE-07`, the lockstep `receive::reducer` `DC-CONS-20`, `pump_block`
+`DC-NODE-05/12`) and **wires it into the live `--mode node` receive path** so that, on a declared Participant
+venue, Ade **follows ONE peer's chain-sync `RollBackward` reorg end-to-end** — durable-point lookup →
+`ChainEvent::RolledBack` → materialize + lockstep + a durable `WalEntry::RollBack` marker + `pump_block`
+roll-forward — replay-equivalently. The headline must be read with its **boundary intact**:
 
-> **PHASE4-N-AH made Ade sustain CERT-FREE single-producer block production on C2-LOCAL (`cardano-testnet`
-> magic 42) against a real Haskell relay (`cardano-node 11.0.1`): Ade forged on its OWN local durable
-> `ChainDb::tip`, crossed a follow-link EOF, settled `> k` blocks immutable in the relay's ImmutableDB, and
-> RESUMED forging after a hard restart (run-4, `docs/evidence/phase4-n-ah-ce-ah-6-close.{md,jsonl}`). This is
-> NOT preprod. This is NOT bounty completion. `RO-LIVE-01` stays operator-gated / partial.**
+> **PHASE4-N-AI wired single-best-peer rollback-FOLLOW into the live receive path: Ade detects a peer-origin
+> non-spine candidate ONCE (venue-blind), and on a Participant venue follows that ONE peer's `RollBackward`
+> reorg through the EXISTING `chain_selector` → BLUE `select_best_chain` durable-apply path, recording the
+> rollback as a version-gated `WalEntry::RollBack` durable marker that re-invokes the existing rollback
+> authority on replay. This is NOT full multi-peer Cardano ChainSel. `CN-CONS-03` was NOT flipped to enforced
+> (it stays `declared`, strengthened only — only the single-best-peer venue was exercised). `pump_block` stays
+> the SOLE roll-forward durable admit; the SingleProducer venue stays fail-closed unchanged
+> (`DC-NODE-20`/`DC-NODE-24` `RefuseSingleProducer`). There is NO `RO-LIVE` flip — CE-AI-6 is the
+> operator-gated convergence transcript, vacuous-until-committed.**
 
-The arc to that result is itself load-bearing — **the N-AF operator-adoption certificate had leaked from
-evidence into forge-loop authority**, which is why this window retires it:
+The arc to that result is load-bearing — the rollback-durability foundation lands and is proven **first**,
+then the detector, then the apply driver, then the wire-signal preservation, then the go-live flip, then the
+convergence evidence, then a cluster-close security remediation:
 
-- **PHASE4-N-AG / `DC-NODE-19` (declared; superseded-close).** The CE-AF-6b follow-on deferred from
-  PHASE4-N-AF. In a declared single-producer venue **already in** the DC-NODE-18 extend state, a
-  `LoopState::Ending` caused **solely by structural feed EOF** (the Ade→relay follow link draining) must not
-  by itself terminate the forge loop — the loop continues forging successors on its own certified durable
-  spine, fenced to the certified single-producer run, until explicit shutdown / fatal error / a BLUE
-  forge-validity bound / a competing chain. The GREEN `plan_loop_step` gains an explicit **5th content-blind
-  `VenuePolicy` input** (`HaltOnFeedEnd | ContinueInSingleProducerExtend`) → a **32-case total table**, with a
-  GREEN `(VenueRole, ForgeMode) → VenuePolicy` projection; the RED `run_relay_loop_with_sched` threads the
-  policy and replaces the `Idle`-under-dead-feed wait with a cancellation-safe clock-tick / shutdown `select!`
-  (OQ-19-1). It relocates the loop's termination authority off feed-liveness onto explicit operator shutdown
-  (the same move DC-NODE-09 made for the serve-listener lifetime) while preserving DC-NODE-05 (`pump_block`
-  stays the sole durable tip-advance authority; feed work drains via `SyncOnce` before any `ForgeTick`). New
-  gate `ci/ci_check_single_producer_loop_continuation.sh`. **N-AG was superseded-closed:** the hermetic core
-  (CE-AG-1..4) landed and passes, but the DC-NODE-18 cert-promotion mechanism CE-AG-5 relied on to *enter* the
-  extend state was retired by DC-NODE-20, so the live sustained-past-k proof (= CE-AF-6b) re-homes to N-AH
-  CE-AH-6. `DC-NODE-19` therefore stays **`declared`** (the planned `declared → enforced` flip was gated on
-  the now-superseded live CE) and is **strengthened by N-AH** — the extend state it continues is now *entered*
-  via local self-admit, not the cert.
-- **PHASE4-N-AH / `DC-NODE-20` (NEW, enforced — the production fix).** The run-4 live finding: Ade forged
-  block 11, a real Haskell relay **adopted** it, but Ade returned `no_tip_available` every subsequent tick
-  because the `proceed_to_forge` gate required `durable_servable_tip == followed_peer_tip` — which fails the
-  instant Ade self-admits a block the non-producing relay does not re-announce — and the only escape (the
-  DC-NODE-18 cert-promotion into extend mode) **raced and lost** to the follow-link EOF. The cert had become
-  forge authority. `DC-NODE-20` makes the **next forge base, post-self-admit, the local selected durable tip**
-  (`ChainDb::tip` — the head of Ade's own admitted ChainDB spine), **not** `followed_peer_tip` and **not** the
-  cert. It **retires**, as forge authority, the repeated post-self-admit `durable == followed` re-check **and**
-  the DC-NODE-18 cert-promotion mechanism; the `ForgeMode::FirstOwnBlockServed` cert-wait intermediate is
-  **folded out** of the enum (now a 3-state machine `InitialCatchupRequired → CaughtUpToPeerTip →
-  SingleProducerExtendOwnDurableSpine`), and the transition is **direct** on a real self-admit. It engages
-  only under a **6-condition fail-closed fence** (VenueRole::SingleProducer; **no competing block observed**
-  on the canonical receive stream since catch-up — an OBSERVED-FEED fence, **not** fork-choice; relay
-  non-producing; admitted via `pump_block`; spine contiguous/servable; no fork-choice required — mechanically
-  **derived** from the observed-feed fence). `DC-NODE-15` **remains** the *initial* catch-up gate (`durable ==
-  followed` before the first own-forge); DC-NODE-20 supersedes **only** the repeated post-self-admit re-check.
-  In rung 1 "selected" is **degenerate** (no competing candidate ⇒ local ChainDB head = selected tip); rung 2
-  must replace this with real fork-choice (`DC-CONS-03`, **untouched**). New gate
-  `ci/ci_check_local_durable_forge_base.sh` + the DC-NODE-20 phase-split half of
-  `ci_check_forge_followed_tip_admission.sh`.
-- **PHASE4-N-AH / `DC-NODE-21` (NEW, enforced — cert is evidence-only).** Separated from DC-NODE-20 (OQ-20-3)
-  because "cert is evidence-only, never authority" is independently enforceable and needs a **hard rung-2
-  removal boundary**. The file-based operator adoption certificate is a rung-1 RED **evidence-only** shim: it
-  may prove relay adoption for the transcript/bounty bundle, but must **never** control forge-base selection
-  or any durable authority, and must never appear in multi-producer/preprod/production forge paths. S2 went
-  further than demotion: it **fully deleted** `read_adoption_cert` / `parse_hex32` / `VenueAdoptionCertificate`
-  / `--adoption-cert-path` — the cert parser is **gone** from `ade_node` production, not merely fenced. New
-  gate `ci/ci_check_cert_evidence_only.sh` + `ci_check_node_path_fidelity.sh` (the flag-set 28→29 reconcile).
-- **PHASE4-N-AH / `DC-NODE-22` (NEW, enforced — warm-start re-entry).** Found by the S4 run-2 partial:
-  warm-start recovery was clean, but forge-resumption stalled in `NoTipAvailable` forever because warm-start
-  re-initialized `forge_mode = InitialCatchupRequired`, which needs a fresh follow-link catch-up — and the
-  follow link EOF'd first, re-introducing (through restart) the exact follow-link dependency DC-NODE-20
-  retired. `DC-NODE-22` is the **warm-start analog of DC-NODE-20**: if warm-start recovery yields a durable
-  local `ChainDb::tip` **above** the recovered bootstrap anchor (proving an own-forged continuation spine),
-  forge mode **re-enters** `SingleProducerExtendOwnDurableSpine{current_tip = ChainDb::tip}` under the
-  DC-NODE-20 fence **without** a fresh followed-peer catch-up; every other case **fails closed** to
-  `InitialCatchupRequired`. The new GREEN `warm_start_forge_mode(venue_role, recovered_tip,
-  replayed_anchor_block_no)` keys off `replayed_anchor_block_no` — a **derived recovery summary** on
-  `BootstrapState` (`recovered_tip.block_no − admit_count`), **NOT** an independently persisted chain point.
-  New gate `ci/ci_check_warm_start_re_entry.sh`.
+- **PHASE4-N-AI / AI-S1 / `DC-NODE-27` (rollback durability foundation — the OQ-1 mechanism, BLUE).** OQ-1
+  ("how is a live rollback made replay-equivalent?") **resolved → A**: a version-gated additive `WalEntry::RollBack
+  { to_point, reason, prior_tip, selected_tip }` at the **reserved RollBackward tag 1** + a `replay_from_anchor`
+  `RollBack` arm that **re-invokes** the existing `materialize_rolled_back_state` (`CN-STORE-07`) + lockstep
+  reducer (`DC-CONS-20`) and re-anchors the fp chain to `to_point`'s in-chain `post_fp` — replacing today's
+  `ChainBreak` with a faithful linear-with-rollbacks replay. **It is a durable MARKER, NOT a second rollback
+  implementation.** Two new BLUE canonical payload types ship with it: `RollbackPoint` (slot + hash + block_no)
+  and the closed `RollbackReason` (uint wire code; rung-1 sole variant `PeerRollBackward`). Append-only
+  preserved. Option B (WAL-tail reconciliation) was **rejected**. New gate
+  `ci_check_wal_rollback_replay_equiv.sh` (CE-AI-1). *(Without this, a live rollback either `ChainBreak`s on
+  restart or resurrects the abandoned branch.)* `DC-NODE-27 → enforced` at close.
+- **PHASE4-N-AI / AI-S2 / `DC-NODE-23` + `DC-NODE-24` (shared detector + venue-split resolver — GREEN).** A
+  pure total venue-blind classifier `(durable_tip, candidate_header_summary) → ReceiveDisposition { AlreadyHave
+  | LinearExtend | RefuseSingleProducer | NeedsForkChoice }` (`DC-NODE-23`) — an already-known peer echo is
+  `AlreadyHave`, **never** a competing candidate merely because it is not a fresh extension; it observes no
+  venue, no wall-clock, no network state, and **never** calls `select_best_chain`. The venue-split resolver
+  (`DC-NODE-24`) is **total over the closed venue set**: `VenueRole::SingleProducer ⇒ fail closed` (the
+  `DC-NODE-20` rung-1 behavior, byte-unchanged); `VenueRole::Participant ⇒ NeedsForkChoice ⇒` the EXISTING
+  `chain_selector` orchestrator → BLUE `select_best_chain` (`DC-CONS-03`); an undeclared/unknown venue takes the
+  conservative `SingleProducer` refuse arm (**no silent inference** either direction). New gate
+  `ci_check_receive_detector_venue_split.sh` (CE-AI-2). `DC-NODE-23/24 → enforced` at close.
+- **PHASE4-N-AI / AI-S3 / `DC-NODE-25` + `DC-NODE-26` (live apply driver + reconciliation — RED+GREEN).** A
+  `ChainSelected`/`RolledBack` outcome from the orchestrator is applied to the durable stores **ONLY** via the
+  already-enforced authorities (`materialize_rolled_back_state` `CN-STORE-07` + lockstep `roll_backward`
+  `DC-CONS-20` + `WalEntry::RollBack` append (S1) + `pump_block` roll-forward `DC-NODE-05/12`) — **no second
+  apply path, no second tip-advance, no second rollback-materialize** (`DC-NODE-25`). A fork-choice win is
+  **provisional**: durably adopted **only** when its BODIES validate and apply through `pump_block` (no
+  header-only tip advance); a `TiebreakerLossKeepCurrent` outcome makes no durable change. After **every** applied
+  decision, the orchestrator's `selector.current_tip == ChainDb::tip` (and chain_dep == durable
+  `PraosChainDepState`) — the in-memory decision state never diverges from the persisted authority (`DC-NODE-26`).
+  New gates `ci_check_live_fork_choice_apply.sh` + `ci_check_live_fork_choice_wiring.sh` (CE-AI-3). `DC-NODE-25/26
+  → enforced` at close.
+- **PHASE4-N-AI / AI-S4a / `DC-PUMP-01` (strengthened) (wire rollback signal preservation — RED).** The
+  admission wire pump now **preserves** the peer's chain-sync `RollBackward` **point** as a closed
+  `AdmissionPeerEvent::RollBackward { peer, point, tip }` variant — **previously the point was discarded and a
+  `TipUpdate` emitted only**; "a rollback is NEVER represented as a `TipUpdate` only." A `RollBackward(Origin)`
+  (rollback-to-genesis) is **unsupported for single-best-peer within k** and **fails closed**
+  (`UnsupportedRollbackPoint` — drop the peer). `Block`/`TipUpdate`/`Disconnected` unchanged. The event **merges
+  latent** — the live loop does not consume it until AI-S4b-ii. This is wire-signal preservation, **NOT**
+  fork-choice wiring. New gate `ci_check_wire_rollback_signal_preserved.sh`; `DC-PUMP-01` gains
+  `strengthened_in += PHASE4-N-AI`.
+- **PHASE4-N-AI / AI-S4b-i / `DC-NODE-28` (Participant venue declaration — RED, inert).** An explicit, closed
+  venue declaration (`--participant-venue → VenueRole::Participant`, mutually exclusive with
+  `--single-producer-venue` → `CliError::ConflictingVenue`); `Unknown`/absent stays the conservative
+  non-fork-choice path; **no silent inference** either direction. **Truly inert** — it recognizes the mode value
+  only: it does NOT route to fork-choice, does NOT change any forge decision, does NOT alter `SingleProducer`
+  behavior. New gate `ci_check_participant_venue_inert.sh` (CE-AI-2 venue precursor / OQ-5). Merges with **no
+  live behavior flip**.
+- **PHASE4-N-AI / AI-S4b-ii / `DC-NODE-28` (enforced) (live rollback-follow routing + forge gate — RED, THE
+  GO-LIVE FLIP).** The live receive loop now classifies every block (S2 detector + venue resolver). **RollBack
+  path (Participant):** `RollBackward(point)` → verify `point` is in the durable ChainDb → compute
+  `to_block_no`+`depth` from the durable chain → construct `ChainEvent::RolledBack` → `apply_chain_event` (S3:
+  materialize + lockstep + `WalEntry::RollBack`, replay-equivalent). A point not in the durable chain /
+  beyond-k / crossing the immutable tip **fails closed** (no fabricated block_no). **This is NOT
+  `process_stream_input`** — the orchestrator's in-memory rollback ring is header-arrival-populated and empty on
+  the live block/pump follow path; the loop never calls `select_best_chain` (`DC-CONS-03` honored). **Block
+  path:** `AlreadyHave → drop`, `LinearExtend → pump_block`, a bare competing block (non-linear `RollForward`
+  without a prior `RollBackward`) → **fail closed (all venues)** (no safe fork point); `SingleProducer`/`Unknown`
+  keep the `DC-NODE-20`/existing fail-closed. **Forge gate (`DC-NODE-28`, lands together — irreducible):** while
+  a rollback/apply is pending, forging refuses (`ForgeRefused::ReselectionPending`) — **never forges on the stale
+  pre-resolution tip**. New gate `ci_check_live_fork_choice_wiring.sh` (CE-AI-3 live + CE-AI-4). **Honesty:**
+  this proves single-best-peer rollback *following* (replay-equivalent peer-branch adoption), **NOT**
+  multi-candidate live `select_best_chain` selection.
+- **PHASE4-N-AI / AI-S5 / `CN-CONS-01` (flipped) (convergence evidence + operator pass — RED + hermetic).**
+  **Hermetic (CE-AI-5, `CN-CONS-01`):** for a fixed competing-candidate set, `select_best_chain` converges on
+  the fork-choice-maximal chain regardless of arrival order — a `#[cfg(test)]` permutation proof over
+  `fork_choice` (distinct-heights + tiebreaker). New gate
+  `ci_check_chain_selection_arrival_order_independent.sh`. **Operator-gated (CE-AI-6, `CN-CONS-03`):** a closed
+  derived-tier evidence vocabulary for a committed transcript
+  (`docs/active/phase4-n-ai-convergence-runbook.md` + a `convergence-pass.{md,jsonl}`) where Ade + ≥1 Haskell
+  producer on a competing-producer venue converge on the same tip; new schema gate
+  `ci_check_convergence_evidence_schema.sh` (**vacuous-until-committed, sha256-bound**). `CN-CONS-01 →
+  enforced`; **`CN-CONS-03` NOT flipped** — its statement is broad and CE-AI-6 is operator-gated, so it stays
+  `declared`, strengthened only.
+- **PHASE4-N-AI / AI-S6 / `DC-NODE-29` (NEW, enforced) (rollback-target slot/hash canonical binding — H-1
+  security remediation, found at cluster-close).** The per-cluster security review surfaced **H-1**: the live
+  Participant `RollBackward` path could build a rollback target from **mixed peer/local authority**
+  (peer-supplied slot + locally-verified hash), which a malicious peer could exploit to truncate the durable
+  chain and brick the node. `DC-NODE-29` makes the rollback target resolve against the durable `ChainDb` and use
+  the **stored chain point (stored slot + hash) as the SOLE authority**: the peer-supplied slot MUST equal the
+  stored slot for that hash; on **any** mismatch (or unknown hash, or Origin) the path **fails closed with a
+  typed error BEFORE `commit_rollback`, BEFORE `WalEntry::RollBack`, BEFORE any ChainDb/LedgerState/PraosChainDepState
+  mutation**. New variants `NodeSyncError::{UnexpectedRollback, RollbackPointSlotMismatch}`. Reconciliation
+  (`DC-NODE-26`) remains the post-apply backstop but is **NOT** the only defense. New gate
+  `ci_check_rollback_target_canonical_binding.sh`. Security re-review: **H-1 CLOSED, no new findings.**
 
-**The N-AF cert mechanism is superseded — recorded honestly.** N-AH **folded out** the `FirstOwnBlockServed`
-cert-wait state (the `ForgeMode` enum is now 3-state) and **removed** the `VenueAdoptionCertificate` type +
-cert parser. The N-AF cert-promotion mechanism is gone; the extend state is now entered **directly** on local
-self-admit. The N-AF live proof (run c2t7 — block 11 forged WITHOUT echo after an adoption certificate)
-**validated the cert-free architecture** that N-AH then made the production path. `DC-NODE-18` is retained
-(`strengthened_in += PHASE4-N-AH`), its core authority intact; only the cert-into-extend *mechanism* is
-retired.
-
-**+0 BLUE canonical type** (the span touches **no** BLUE `core_paths` file). **No `RO-LIVE` rule flipped**
-this span — `RO-LIVE-01` stays operator-gated; the run-4 C2-LOCAL transcript is the rung-1 mechanism, not
-operator-witnessed bounty acceptance on preprod.
+**+2 BLUE canonical types** (`RollbackPoint` + `RollbackReason` — the first BLUE delta since G-N), one new
+closed BLUE WAL variant (`WalEntry::RollBack`), and one new closed BLUE error (`WalError::RollbackTargetNotInChain`).
+**No `RO-LIVE` rule flipped** this span — `RO-LIVE-01` stays operator-gated; CE-AI-6 is the convergence
+transcript, vacuous-until-committed.
 
 ## 0. Headline
 
-| Count | Baseline (`f87d0056`) | HEAD (`5858288e`) | Δ |
+| Count | Baseline (`8e2c3672`) | HEAD (`5ec841c8`) | Δ |
 |---|---|---|---|
-| CI gates (`ci/ci_check_*.sh`) | 143 | **148** | **+5** — **five NEW gates** (`--diff-filter=A` over `ci/`): `ci_check_single_producer_loop_continuation.sh` (N-AG, DC-NODE-19), `ci_check_local_durable_forge_base.sh` (N-AH, DC-NODE-20), `ci_check_cert_evidence_only.sh` (N-AH, DC-NODE-21), `ci_check_warm_start_re_entry.sh` (N-AH, DC-NODE-22), `ci_check_live_transcript_forge_base.sh` (N-AH S4a, CN-NODE-04 / DC-NODE-20 evidence). **No gate removed** (`--diff-filter=D` over `ci/` empty). **Three gates modified in place** (`--diff-filter=M`): `ci_check_forge_followed_tip_admission.sh` (phase-split for the DC-NODE-20 call chain), `ci_check_node_path_fidelity.sh` (flag-set 28→29 reconcile), `ci_check_single_producer_extend_own_spine.sh` (DC-NODE-20 folds out `FirstOwnBlockServed` + the cert-promotion arm). |
-| Registry rules (`docs/ade-invariant-registry.toml`) | 343 | **347** | **+4** — four NEW rules: **`DC-NODE-19`** (declared, N-AG) + **`DC-NODE-20`** + **`DC-NODE-21`** + **`DC-NODE-22`** (all enforced, N-AH). **Zero removed** (`diff` of the sorted `id =` lists shows exactly the four additions `DC-NODE-19/20/21/22` and no removal). |
-| Registry status (enforced / partial / declared) | 210 / 20 / 113 | **213 / 20 / 114** | **+3 enforced** (`DC-NODE-20` / `DC-NODE-21` / `DC-NODE-22`) **+1 declared** (`DC-NODE-19`). Partial count **unchanged** (20). |
-| Registry strengthenings | — | **9** | **`strengthened_in += "PHASE4-N-AH"`** on **9** existing rules: `CN-NODE-02`, `CN-NODE-04`, `DC-NODE-05`, `DC-NODE-12`, `DC-NODE-15`, `DC-NODE-18`, `DC-NODE-19`, `T-REC-03`, `T-REC-05`. **No `PHASE4-N-AG` strengthening tag exists** — the planned N-AG strengthenings were **folded into N-AH** (the live-proven cluster) rather than double-credited (`git grep` of `strengthened_in` for `PHASE4-N-AG` = 0). No rule weakened. |
-| BLUE canonical types | 458 | **458** | **0** — **BLUE-untouched.** The span touches **no** BLUE `core_paths` file (`git diff f87d0056..HEAD` over the BLUE trees is empty and adds zero `pub struct/enum`). The new GREEN forge-mode machinery (`warm_start_forge_mode`, the `VenuePolicy` projection, the `single_producer_forge_decision` rewire) and the new RED `BootstrapState.replayed_anchor_block_no` derived summary all live **outside** `core_paths`. |
-| Grounding docs (CODEMAP / SEAMS / TRACEABILITY) | last regenerated to **`6363683e`** (the AE.F close); carried **DC-NODE-16** but **not** DC-NODE-17/18/19/20/21/22 — the deferred N-AF + N-AG CODEMAP debt | **REGENERATED this close** to HEAD `5858288e` — 458 types / 148 CI / 347 rules; carry DC-NODE-18/19/20/21/22 + all five new gates | This close **pays the deferred N-AF + N-AG CODEMAP debt**: CODEMAP + SEAMS + TRACEABILITY were regenerated to fold the whole `6363683e..5858288e` span. Cross-reference verified: CODEMAP carries `DC-NODE-20` (×26), `DC-NODE-21` (×12), `DC-NODE-22` (×16), `DC-NODE-19` (×16), and all five new gates; TRACEABILITY carries the `DC-NODE-20/21/22 ↔ gate` rows. **No staleness this close.** |
+| CI gates (`ci/ci_check_*.sh`) | 148 | **157** | **+9** — **nine NEW gates** (`--diff-filter=A` over `ci/`): `ci_check_wal_rollback_replay_equiv.sh` (AI-S1, `DC-NODE-27`), `ci_check_receive_detector_venue_split.sh` (AI-S2, `DC-NODE-23/24`), `ci_check_live_fork_choice_apply.sh` (AI-S3, `DC-NODE-25/26`), `ci_check_live_fork_choice_wiring.sh` (AI-S3/S4b-ii, `DC-NODE-25/26/28`), `ci_check_wire_rollback_signal_preserved.sh` (AI-S4a, `DC-PUMP-01`), `ci_check_participant_venue_inert.sh` (AI-S4b-i, `DC-NODE-28`), `ci_check_chain_selection_arrival_order_independent.sh` (AI-S5, `CN-CONS-01`), `ci_check_convergence_evidence_schema.sh` (AI-S5, CE-AI-6), `ci_check_rollback_target_canonical_binding.sh` (AI-S6, `DC-NODE-29`). **Zero gates modified in place; zero removed** (`--diff-filter=M` / `--diff-filter=D` over `ci/` empty). |
+| Registry rules (`docs/ade-invariant-registry.toml`) | 347 | **354** | **+7** — seven NEW rules `DC-NODE-23`…`DC-NODE-29`, all `enforced`. **Zero removed** (`diff` of the sorted `id =` lists shows exactly the seven `DC-NODE-23..29` additions and no removal). |
+| Registry status (enforced / partial / declared) | 213 / 20 / 114 | **221 / 19 / 114** | **+8 enforced** (the 7 new `DC-NODE-23..29` + **`CN-CONS-01` flipped `partial → enforced`**), **−1 partial** (`CN-CONS-01`). Declared **unchanged** (114). |
+| Registry strengthenings | — | **13** | **`strengthened_in += "PHASE4-N-AI"`** on **13** existing rules: `CN-CONS-01`, **`CN-CONS-03`** (strengthened **but NOT flipped** — stays `declared`), `CN-STORE-07`, `DC-CONS-03`, `DC-CONS-05`, `DC-CONS-06`, `DC-CONS-20`, `DC-NODE-05`, `DC-NODE-12`, `DC-NODE-20`, `DC-PUMP-01`, `T-REC-03`, `T-REC-05`. No rule weakened. |
+| BLUE canonical types | 458 | **460** | **+2** — **the FIRST BLUE delta since the G-N span.** `git grep -hE '^(pub )?(struct\|enum) '` over the BLUE `core_paths` trees is `458 → 460`; the +2 are `ade_ledger::wal::event::{RollbackPoint, RollbackReason}` (the payload types of the new closed-sum `WalEntry::RollBack`). `ade_ledger` `177 → 179`; `ade_core::consensus::fork_choice` production is **byte-identical** (the only hunk is a `#[cfg(test)]` permutation proof). No `Cargo.toml` changed — still 11 crates. |
+| Grounding docs | CODEMAP **regenerated to `5ec841c8`** this close (460 types / 157 CI / 354 rules); SEAMS + TRACEABILITY last regenerated to **`5858288e`** (the N-AH close) | CODEMAP **current** — carries `DC-NODE-23` ×14, `DC-NODE-24` ×3, `DC-NODE-25` ×13, `DC-NODE-26` ×3, `DC-NODE-27` ×10, `DC-NODE-28` ×11, `DC-NODE-29` ×16, `DC-PUMP-01` ×13, `RollbackPoint`/`RollbackReason`/`WalEntry::RollBack`, the BLUE count `460`, and all nine new gates. **SEAMS + TRACEABILITY are one cluster STALE** — they do **not** yet carry `DC-NODE-23..29` (grep = 0). | CODEMAP cross-reference **verified, no staleness**. **SEAMS + TRACEABILITY are refresh-on-this-close items** (the registry holds the seven new rules + their gate bindings authoritatively at HEAD, 354 rules). See the cross-reference warning at the end of §5. |
 
-> **No grounding-doc deferral this close (load-bearing).** Unlike the N-AF close (which deferred CODEMAP/SEAMS),
-> **PHASE4-N-AH regenerated all four grounding docs**, paying the deferred N-AF + N-AG debt: the CODEMAP is
-> pinned at `5858288e` and explicitly folds the `6363683e..5858288e` span (N-AF DC-NODE-18, N-AG DC-NODE-19,
-> N-AH DC-NODE-20/21/22). The new GREEN/RED additions are in `ade_node` + `ade_runtime` — the host modules
-> (`node_sync` GREEN, `run_loop_planner` GREEN, `node_lifecycle` RED, `cli` RED, `live_log::{sched_event,
-> sched_writer}` GREEN, `ade_runtime::bootstrap` RED) are all in CODEMAP, and the span adds **no module, no
-> BLUE seam, no new persistence surface** (`replayed_anchor_block_no` is a *derived* recovery summary, never
-> independently persisted; the cert is now removed from production; `VenuePolicy` is RED/GREEN scheduling).
-> The registry holds DC-NODE-19/20/21/22 + their gate bindings authoritatively at HEAD (347 rules).
+> **Grounding-doc state this close (load-bearing).** **CODEMAP was regenerated to `5ec841c8`** and is current
+> for the whole `8e2c3672..5ec841c8` span (it carries all seven `DC-NODE-23..29` rules, `DC-PUMP-01`, the new
+> BLUE types `RollbackPoint`/`RollbackReason`/`WalEntry::RollBack`, the BLUE count `460`, and all nine new
+> gates). **SEAMS + TRACEABILITY remain pinned at `5858288e`** (the N-AH close) and are **one cluster stale** —
+> they do not yet carry `DC-NODE-23..29` (grep count 0). The invariant registry holds the seven new rules + all
+> nine gate bindings + the thirteen strengthenings authoritatively at HEAD (**354 rules**); the SEAMS +
+> TRACEABILITY refresh to `5ec841c8` is a follow-on item this close (surfaced in §5).
 
 The slice↔rule↔gate map for this window:
 
 | Slice | Rule(s) | Gate | What shipped |
 |---|---|---|---|
-| **AG.S1** (`b9ef6e69`) | **`DC-NODE-19`** (declared) | — | GREEN `plan_loop_step` gains the 5th content-blind `VenuePolicy` input → 32-case total table + the `(VenueRole, ForgeMode) → VenuePolicy` projection; default `HaltOnFeedEnd` reduces to the prior 16-case behavior. |
-| **AG.S2** (`46098c8c`) | **`DC-NODE-19`** | **`ci_check_single_producer_loop_continuation.sh`** (NEW) | RED `run_relay_loop_with_sched` threads the policy; continues past a structural feed EOF only in the certified single-producer extend state; default `Unknown` halts verbatim; fatal source failure still `Err`/fail-fast; the `Idle`-under-dead-feed clock-tick wakeup (OQ-19-1). |
-| **AG.S3** (`a65e2039`) | strengthen `T-REC-03`, `T-REC-05` | — (tests) | Replay-equivalence over a post-feed-end chain — two-runs + kill/warm-start byte-identical; the feed-end event appends nothing to the WAL. |
-| **AH.S1** (`b0fb8817`) | **`DC-NODE-20`** (NEW, enforced) | **`ci_check_local_durable_forge_base.sh`** (NEW) + `ci_check_forge_followed_tip_admission.sh` (phase-split) | Forge base = local durable `ChainDb::tip` post-self-admit; the direct `CaughtUpToPeerTip → SingleProducerExtendOwnDurableSpine` transition (the `FirstOwnBlockServed` cert-wait folded out of `ForgeMode`); the 6-condition fail-closed fence with the observed-feed competing-block predicate. |
-| **AH.S2** (`050237e9`) | **`DC-NODE-21`** (NEW, enforced) | **`ci_check_cert_evidence_only.sh`** (NEW) + `ci_check_node_path_fidelity.sh` (28→29 reconcile) | Adoption certificate is evidence-only — `read_adoption_cert` / `parse_hex32` / `VenueAdoptionCertificate` / `--adoption-cert-path` **fully deleted** from `ade_node`; the cert never feeds forge-base selection and never appears in multi-producer/preprod/production. |
-| **AH.S3** (`dad29b43`) | strengthen `T-REC-03`, `T-REC-05` | — (tests) | Replay-equivalence over the local-tip-derived post-self-admit chain — removing the RED cert/timing from the authority path makes the forge MORE deterministic / replay-equivalent. |
-| **AH.S4a** (`7049d813`) | strengthen **`CN-NODE-04`** | **`ci_check_live_transcript_forge_base.sh`** (NEW) | The closed emit-only `NodeSchedEvent` vocabulary gains a `ForgeBaseSelected` event (`forge_base_source = local_chaindb_tip`, the entered mode, `cert_path_present`) + an enriched `ForgeResult` (`self_admit_via_pump_block`); RED evidence only — serializes the decision already made, never read by the planner. |
-| **AH.S4b** (`e7b9be7e`) | **`DC-NODE-22`** (NEW, enforced) | **`ci_check_warm_start_re_entry.sh`** (NEW) | NEW GREEN `warm_start_forge_mode` re-enters `SingleProducerExtendOwnDurableSpine{current_tip = ChainDb::tip}` for a single-producer venue whose recovered tip is above the replay anchor, fenced; the RED `BootstrapState.replayed_anchor_block_no` derived recovery summary. |
-| **AH.S4** (run-1/2/3/4 evidence) | **`DC-NODE-20/21/22`** (live re-home of CE-AF-6b) | — (evidence) | Operator-gated live acceptance = CE-AH-6: cert-free local-tip forge, sustained `> k` immutable across a follow-link EOF + a hard restart, a real Haskell relay adopting (run-4, `docs/evidence/phase4-n-ah-ce-ah-6-close.{md,jsonl}`). |
+| **AI-S1** (`cced0214`) | **`DC-NODE-27`** (NEW, enforced) | **`ci_check_wal_rollback_replay_equiv.sh`** (NEW) | **BLUE.** Version-gated additive `WalEntry::RollBack { to_point, reason, prior_tip, selected_tip }` (reserved tag 1) + the two BLUE payload types `RollbackPoint` / `RollbackReason` + the closed `WalError::RollbackTargetNotInChain`; `replay_from_anchor` `RollBack` arm re-invokes the existing `materialize_rolled_back_state` + lockstep reducer (a MARKER, not a reimpl). OQ-1 → A (option B rejected). **Lands + proven FIRST.** |
+| **AI-S2** (`47c0f487`) | **`DC-NODE-23`** + **`DC-NODE-24`** (NEW, enforced) | **`ci_check_receive_detector_venue_split.sh`** (NEW) | **GREEN** (`ade_node::node_sync`). Pure total venue-blind detector (4 dispositions; `AlreadyHave` for a known echo; never calls `select_best_chain`) + venue-split resolver (`SingleProducer → refuse`, `Participant → NeedsForkChoice`; unknown venue fails closed). New closed types `NodeSyncItem` / `ReceiveClass` / `ReceiveDisposition` / `CandidateSummary`. |
+| **AI-S3** (`7f78dd98`) | **`DC-NODE-25`** + **`DC-NODE-26`** (NEW, enforced) | **`ci_check_live_fork_choice_apply.sh`** + **`ci_check_live_fork_choice_wiring.sh`** (NEW) | **RED+GREEN** (`ade_node::node_lifecycle` apply driver). Durable apply via materialize + lockstep + `WalEntry::RollBack` + `pump_block` (no second apply path; provisional until bodies apply); `selector.current_tip == ChainDb::tip` after every decision. New types `AppliedTip` / `ApplyError`. |
+| **AI-S4a** (`30b5727c`) | strengthen **`DC-PUMP-01`** | **`ci_check_wire_rollback_signal_preserved.sh`** (NEW) | **RED** (`ade_runtime::admission::wire_pump`). `AdmissionPeerEvent::RollBackward { peer, point, tip }` preserved as a closed event (was discarded → `TipUpdate` only); `Origin` fails closed `UnsupportedRollbackPoint`. Merges **latent**. |
+| **AI-S4b-i** (`04f358bd`) | (`DC-NODE-28` precursor / OQ-5) | **`ci_check_participant_venue_inert.sh`** (NEW) | **RED** (`ade_node::cli` + `main` + `node_lifecycle`). `--participant-venue → VenueRole::Participant` (mutually exclusive with `--single-producer-venue` → `CliError::ConflictingVenue`); **truly inert** — recognizes the mode value only, no live behavior flip. |
+| **AI-S4b-ii** (`af51b3c8`) | **`DC-NODE-28`** (NEW, enforced) | **`ci_check_live_fork_choice_wiring.sh`** (NEW; CE-AI-4 folded in) | **RED** (`ade_node::node_lifecycle` + `node_sync`). **The go-live flip.** Live loop classifies every block; Participant `RollBackward(point)` → durable-point lookup → `ChainEvent::RolledBack` → `apply_chain_event` (NOT `process_stream_input`; never calls `select_best_chain`); bare competing block fails closed (all venues); forge gate `ForgeRefused::ReselectionPending` while a decision is pending. Single-best-peer FOLLOW, **not** multi-candidate selection. |
+| **AI-S5** (`a8d93ba4`) | **`CN-CONS-01`** (`partial → enforced`); `CN-CONS-03` strengthen (**NOT flipped**) | **`ci_check_chain_selection_arrival_order_independent.sh`** + **`ci_check_convergence_evidence_schema.sh`** (NEW) | **RED + hermetic.** CE-AI-5: `#[cfg(test)]` arrival-order-permutation proof for `select_best_chain` in `fork_choice` (`CN-CONS-01`). CE-AI-6: closed derived-tier convergence-evidence vocabulary + runbook (operator-gated, **vacuous-until-committed**, sha256-bound) — proves the exercised venue, NOT full multi-peer ChainSel. **Last slice.** |
+| **AI-S6** (`5ec841c8`) | **`DC-NODE-29`** (NEW, enforced) | **`ci_check_rollback_target_canonical_binding.sh`** (NEW) | **RED** (`ade_node::node_sync` + `node_lifecycle`; `ade_runtime::recovery::restart` WAL-tail scan). **H-1 security remediation** (found at cluster-close). Rollback target uses the durable stored chain point (stored slot + hash) as the SOLE authority; peer slot must equal stored slot for the hash; **any** mismatch / unknown hash / Origin fails closed with a typed error **before** any mutation, WAL append, or `commit_rollback`. New errors `NodeSyncError::{UnexpectedRollback, RollbackPointSlotMismatch}`. |
+| **close** (CE-AI-7) | `DC-NODE-23..29` enforced; `CN-CONS-01` partial→enforced; 13 strengthenings | — | Registry close (354 rules); CODEMAP regenerated to `5ec841c8`; SEAMS + TRACEABILITY refresh owed. |
 
 The per-commit shape (selected — the full verbatim log is §1):
 
 | Commit | Kind | What it did | Code / CI / registry effect |
 |--------|------|-------------|-----------------------------|
-| `600581e8` | close (N-AF) | Close PHASE4-N-AF — archive cluster docs to `docs/clusters/completed/PHASE4-N-AF/` | **0 code / 0 CI / 0 registry rule**; cluster-doc archive renames |
-| `2d99cdf2` | docs (c2-guide) | Record PHASE4-N-AF / DC-NODE-18 core close in §7b (boundary preserved) | **0 code / 0 CI / 0 registry** |
-| `7e1e8276` | docs (invariants) | DC-NODE-19 single-producer loop-continuation-after-feed-EOF sketch (declared) | **0 code / 0 CI**; registry: **`DC-NODE-19` declared** |
-| `b9ef6e69` | feat (AG.S1) | GREEN planner VenuePolicy input (32-case total table) | **GREEN code** (`run_loop_planner.rs`) |
-| `46098c8c` | feat (AG.S2) | RED loop continuation past feed-EOF | **RED+GREEN code** (`node_lifecycle.rs` policy threading + clock-tick wait); **+1 CI** (`ci_check_single_producer_loop_continuation.sh`) |
-| `a65e2039` | test (AG.S3) | Replay-equivalence over a post-feed-end chain | **test-only** |
-| `b261589d` | docs (invariants) | DC-NODE-20/21 invariants + registry + cluster plan | **0 code / 0 CI**; registry: **`DC-NODE-20` / `DC-NODE-21` declared** |
-| `b0fb8817` | feat (AH.S1) | Forge base = local durable `ChainDb::tip`; self-admit enters extend (DC-NODE-20) | **GREEN+RED code** (`node_sync.rs` direct transition + 6-condition fence; `node_lifecycle.rs` `proceed_to_forge` rewire + `dc_node_15_refusal`); **+1 CI** (`ci_check_local_durable_forge_base.sh`) + phase-split of `ci_check_forge_followed_tip_admission.sh` + edit of `ci_check_single_producer_extend_own_spine.sh` |
-| `050237e9` | feat (AH.S2) | Adoption certificate is evidence-only, never forge authority (DC-NODE-21) | **GREEN+RED code** (full deletion of `read_adoption_cert` / `parse_hex32` / `VenueAdoptionCertificate`; `cli.rs` `--adoption-cert-path` removed); **+1 CI** (`ci_check_cert_evidence_only.sh`) + edit of `ci_check_node_path_fidelity.sh` |
-| `dad29b43` | test (AH.S3) | Replay-equivalence over the local-tip-derived chain | **test-only** |
-| `7049d813` | feat (AH.S4a) | Live transcript forge-base evidence (RED, CN-NODE-04) | **GREEN code** (`live_log::{sched_event, sched_writer}` `ForgeBaseSelected` + enriched `ForgeResult`); **+1 CI** (`ci_check_live_transcript_forge_base.sh`) |
-| `e7b9be7e` | feat (AH.S4b) | Single-producer warm-start re-entry (DC-NODE-22) | **GREEN+RED code** (`node_sync.rs` `warm_start_forge_mode`; `node_lifecycle.rs` warm-start arm; `ade_runtime::bootstrap.rs` `replayed_anchor_block_no`); **+1 CI** (`ci_check_warm_start_re_entry.sh`) |
-| `2cc6ce25` | fix (ci) | Repair `ci_check_forge_followed_tip_admission` for the DC-NODE-20 call chain | **CI-only** (the phase-split call-chain verification) |
-| `5858288e` | docs (N-AH close) | Registry close + close records — DC-NODE-20/21/22 enforced; N-AG superseded | registry: **`DC-NODE-20/21/22` declared → enforced** + 9 `strengthened_in += PHASE4-N-AH`; N-AH cluster-doc archive; all four grounding docs refreshed |
+| `c66fa9a9` | chore (idd) | Bump `head_deltas_baseline` to the PHASE4-N-AH close (`8e2c3672`); registry 347 | **0 code / 0 CI / 0 rule**; `.idd-config.json` only |
+| `d92f9ce8` | docs (invariants) | DC-NODE-23..28 invariants sketch (declared) | **0 code / 0 CI**; registry: `DC-NODE-23..28` declared |
+| `80862c7f` | docs | OQ-1 resolved → A (`WalEntry::RollBack` marker) | **0 code / 0 CI / 0 rule** |
+| `cced0214` | feat (AI-S1) | Rollback WAL durability foundation (`WalEntry::RollBack`) | **BLUE code** (`ade_ledger::wal::{event, replay, error, mod, store_trait}`); **+2 BLUE types**; **+1 CI** (`ci_check_wal_rollback_replay_equiv.sh`) |
+| `47c0f487` | feat (AI-S2) | Shared detector + venue-split resolver (`DC-NODE-23/24`) | **GREEN code** (`node_sync.rs`); **+1 CI** (`ci_check_receive_detector_venue_split.sh`) |
+| `7f78dd98` | feat (AI-S3) | Live fork-choice apply driver + reconciliation (`DC-NODE-25/26`) | **RED+GREEN code** (`node_lifecycle.rs` + `node_sync.rs`); **+2 CI** (`ci_check_live_fork_choice_apply.sh` + `ci_check_live_fork_choice_wiring.sh`) |
+| `30b5727c` | feat (AI-S4a) | Wire rollback signal preservation (`DC-PUMP-01`) | **RED code** (`ade_runtime::admission::wire_pump` + `admission/bootstrap.rs` non-consuming note); **+1 CI** (`ci_check_wire_rollback_signal_preserved.sh`) |
+| `04f358bd` | feat (AI-S4b-i) | Participant venue declaration (inert) (OQ-5) | **RED code** (`cli.rs` + `main.rs` + `node_lifecycle.rs`); **+1 CI** (`ci_check_participant_venue_inert.sh`) |
+| `af51b3c8` | feat (AI-S4b-ii) | Live rollback-follow routing + forge gate (the go-live flip) | **RED code** (`node_lifecycle.rs` + `node_sync.rs`); **+1 CI** (`ci_check_live_fork_choice_wiring.sh`) |
+| `a8d93ba4` | feat (AI-S5) | Convergence evidence + operator pass (CE-AI-5 + CE-AI-6) | **RED + hermetic** (`fork_choice.rs` `#[cfg(test)]`; runbook); **+2 CI** (`ci_check_chain_selection_arrival_order_independent.sh` + `ci_check_convergence_evidence_schema.sh`); registry: `CN-CONS-01 → enforced` |
+| `cbad2ae3` | docs (evidence) | Add preprod ADE1 pool registration manifest | **0 code / 0 CI / 0 rule** — **UNRELATED to N-AI**, folded into the span |
+| `5ec841c8` | fix (AI-S6) | Rollback-target slot/hash canonical binding (H-1 remediation) | **RED code** (`node_sync.rs` + `node_lifecycle.rs` + `restart.rs`); **+1 CI** (`ci_check_rollback_target_canonical_binding.sh`); registry: `DC-NODE-29` introduced+enforced + `DC-NODE-23..28` enforced + 13 strengthenings |
 
 ## 1. Commit Log (newest first)
 
 | Hash | Type | Summary |
 |------|------|---------|
-| `5858288e` | docs | docs(phase4-n-ah): registry close + close records — DC-NODE-20/21/22 enforced; N-AG superseded |
-| `2cc6ce25` | fix | fix(ci): repair ci_check_forge_followed_tip_admission for the DC-NODE-20 call chain |
-| `1159fba9` | docs | docs(phase4-n-ah): CE-AH-6 MET — full 8+3 live bar (run-4); DC-NODE-20/21/22 proven live |
-| `c9183f08` | docs | docs(phase4-n-ah): S4 live run-3 — DC-NODE-22 warm-start re-entry CONFIRMED live (point 8 closed) |
-| `e7b9be7e` | feat | feat(phase4-n-ah): S4b — single-producer warm-start re-entry (DC-NODE-22) |
-| `83e5d269` | docs | docs(phase4-n-ah): S4b seam resolution — replayed_anchor_block_no (a', derived recovery summary) |
-| `16792f58` | docs | docs(phase4-n-ah): S4b authority — DC-NODE-22 single-producer warm-start re-entry (found by run-2) |
-| `2bebd730` | docs | docs(phase4-n-ah): S4 live run-2 PARTIAL — forge-base transcript direct; warm-start re-entry gap found |
-| `7049d813` | feat | feat(phase4-n-ah): S4a — live transcript forge-base evidence (RED, CN-NODE-04) |
-| `838de78b` | docs | docs(phase4-n-ah): S4a slice doc — live transcript forge-base evidence (RED, CN-NODE-04) |
-| `f5c5b393` | docs | docs(phase4-n-ah): S4 live run-1 PARTIAL — cert-free DC-NODE-20 architectural validation |
-| `5c51ec44` | docs | docs(phase4-n-ah): S4 slice doc — operator-gated live acceptance (CE-AH-6, cert-free local-tip path) |
-| `dad29b43` | test | test(phase4-n-ah): S3 — replay-equivalence over the local-tip-derived chain (CE-AH-4, zero production) |
-| `1eda02b8` | docs | docs(phase4-n-ah): S3 slice doc — replay-equivalence over the local-tip-derived chain (CE-AH-4, test-only) |
-| `dc24aada` | docs | docs(phase4-n-ah): record CN-REHEARSAL-FIDELITY-01 28->29 reconciliation (S2 premise correction) |
-| `050237e9` | feat | feat(phase4-n-ah): S2 — adoption certificate is evidence-only, never forge authority (DC-NODE-21) |
-| `d04c2a9e` | docs | docs(phase4-n-ah): S2 slice doc — adoption certificate is evidence-only (DC-NODE-21, full removal) |
-| `b0fb8817` | feat | feat(phase4-n-ah): S1 — forge base = local durable ChainDb::tip; self-admit enters extend (DC-NODE-20) |
-| `4a58755f` | docs | docs(phase4-n-ah): S1 slice doc — forge-base authority rewire (DC-NODE-20, self-admit enters extend) |
-| `c72cc9b5` | docs | docs(phase4-n-ah): cluster doc + c2-guide pivot boundary (DC-NODE-20/21 — forge-base = local tip, cert evidence-only) |
-| `b261589d` | docs | docs(phase4-n-ah): DC-NODE-20/21 invariants + registry + cluster plan — forge-base = local durable tip, cert evidence-only |
-| `267364b9` | docs | docs(phase4-n-ag): S4 slice doc — operator-gated live acceptance / CE-AF-6b (DC-NODE-19) |
-| `a65e2039` | test | test(phase4-n-ag): S3 — replay-equivalence over a post-feed-end chain (DC-NODE-19, CE-AG-4) |
-| `6790d6e6` | docs | docs(phase4-n-ag): S3 slice doc — replay-equivalence over a post-feed-end chain (DC-NODE-19, CE-AG-4) |
-| `46098c8c` | feat | feat(phase4-n-ag): S2 — RED loop continuation past feed-EOF (DC-NODE-19, CE-AG-2/3) |
-| `17ec5a57` | docs | docs(phase4-n-ag): S2 slice doc — RED loop continuation past feed-EOF (DC-NODE-19, CE-AG-2/3) |
-| `b9ef6e69` | feat | feat(phase4-n-ag): S1 — GREEN planner VenuePolicy input (DC-NODE-19, CE-AG-1) |
-| `022fba91` | docs | docs(phase4-n-ag): S1 slice doc — GREEN planner VenuePolicy refinement (DC-NODE-19, CE-AG-1) |
-| `c87f7109` | docs | docs(phase4-n-ag): cluster-slice plan + cluster doc — single-producer loop-continuation-after-feed-EOF (DC-NODE-19) |
-| `7e1e8276` | docs | docs(dc-node-19): single-producer loop-continuation-after-feed-EOF invariants sketch + DC-NODE-19 (declared) |
-| `2d99cdf2` | docs | docs(c2-guide): record PHASE4-N-AF / DC-NODE-18 core close in §7b (boundary preserved) |
-| `600581e8` | close | Close PHASE4-N-AF — DC-NODE-18 single-producer extend-after-certificate (scoped core enforced) |
+| `5ec841c8` | fix | fix(phase4-n-ai): AI-S6 -- rollback-target slot/hash canonical binding (H-1 remediation) |
+| `197f6332` | docs | docs(phase4-n-ai): slice doc AI-S6 -- rollback-target slot/hash binding (H-1 remediation) |
+| `cbad2ae3` | docs | docs(evidence): add preprod ADE1 pool registration manifest |
+| `a8d93ba4` | feat | feat(phase4-n-ai): AI-S5 -- convergence evidence + operator pass (CE-AI-5 + CE-AI-6) [last slice] |
+| `23ce2697` | docs | docs(phase4-n-ai): slice doc AI-S5 -- convergence evidence + operator pass (last slice) |
+| `af51b3c8` | feat | feat(phase4-n-ai): AI-S4b-ii -- live rollback-follow routing + forge gate (the go-live flip) |
+| `a52df6c4` | docs | docs(phase4-n-ai): slice doc AI-S4b-ii -- live rollback-follow routing + forge gate |
+| `fbe33112` | docs | docs(phase4-n-ai): correct AI-S4b-ii live authority path (direct RolledBack, not orchestrator) |
+| `04f358bd` | feat | feat(phase4-n-ai): AI-S4b-i -- Participant venue declaration (inert) (OQ-5) |
+| `8cbf1242` | docs | docs(phase4-n-ai): slice doc AI-S4b-i -- Participant venue declaration (inert) |
+| `4d1bc4cc` | docs | docs(phase4-n-ai): sub-split AI-S4b into S4b-i (venue, inert) + S4b-ii (flip) |
+| `30b5727c` | feat | feat(phase4-n-ai): AI-S4a -- wire rollback signal preservation (DC-PUMP-01) |
+| `60ad1c25` | docs | docs(phase4-n-ai): slice doc AI-S4a -- wire rollback signal preservation |
+| `471835a2` | docs | docs(phase4-n-ai): split AI-S4 into S4a (wire rollback signal) + S4b (live loop) |
+| `7f78dd98` | feat | feat(phase4-n-ai): AI-S3 -- live fork-choice apply driver + reconciliation (DC-NODE-25/26) |
+| `3a9bdcc5` | docs | docs(phase4-n-ai): slice doc AI-S3 -- live fork-choice apply driver + reconciliation |
+| `47c0f487` | feat | feat(phase4-n-ai): AI-S2 -- shared detector + venue-split resolver (DC-NODE-23/24) |
+| `0090987c` | docs | docs(phase4-n-ai): slice doc AI-S2 -- shared detector + venue-split resolver |
+| `cced0214` | feat | feat(phase4-n-ai): AI-S1 -- rollback WAL durability foundation (WalEntry::RollBack) |
+| `7b37c6fd` | docs | docs(phase4-n-ai): correct rollback WAL tag 4 -> 1 (reserved RollBackward slot) |
+| `8fab31bc` | docs | docs(phase4-n-ai): slice doc AI-S1 -- rollback WAL durability foundation |
+| `3ed9e67a` | docs | docs(phase4-n-ai): cluster doc -- live fork-choice wiring (AI-S1..S5) |
+| `19676365` | docs | docs(phase4-n-ai): cluster-slice plan -- AI-S1..S5 (rollback-foundation-first) |
+| `80862c7f` | docs | docs(phase4-n-ai): OQ-1 resolved -> A (WalEntry::RollBack marker) |
+| `d92f9ce8` | docs | docs(phase4-n-ai): invariants sketch + DC-NODE-23..28 declared |
+| `c66fa9a9` | chore | chore(idd): bump head_deltas_baseline to the PHASE4-N-AH close (8e2c3672); registry 347 |
 
-No merge commits in the span. **32 commits, zero unclassified.** All but two carry an explicit
-conventional-commits prefix (`docs(...)` / `feat(...)` / `fix(...)` / `test(...)`). The two prefix-less
-subjects — `600581e8` (`Close PHASE4-N-AF …`) and `1159fba9` (`docs(phase4-n-ah): CE-AH-6 MET …`, prefixed)
-— classify by diff scope: `600581e8` is a cluster-doc archive + registry close (**close**, docs/archive only,
-zero production code). The `feat(...)` commits (`b9ef6e69`, `46098c8c`, `b0fb8817`, `050237e9`, `7049d813`,
-`e7b9be7e`) are the production GREEN/RED changes; the `test(...)` commits (`a65e2039`, `dad29b43`) are
-test-only; `2cc6ce25` is a CI-only repair. The N-AF close tail landed 2026-06-07; all N-AG + N-AH work landed
-2026-06-08.
+No merge commits in the span. **26 commits, zero unclassified.** Every subject carries an explicit
+conventional-commits prefix (`chore(...)` / `docs(...)` / `feat(...)` / `fix(...)`). The `feat(...)` commits
+(`cced0214`, `47c0f487`, `7f78dd98`, `30b5727c`, `04f358bd`, `af51b3c8`, `a8d93ba4`) are the production
+BLUE/RED/GREEN changes; `5ec841c8` is the `fix(...)` H-1 remediation; the rest are `docs(...)` slice/cluster/
+invariants docs and the `chore(...)` baseline bump. **`cbad2ae3`** (`docs(evidence): add preprod ADE1 pool
+registration manifest`) is **unrelated to PHASE4-N-AI** — a docs-only preprod pool-registration evidence
+manifest, folded into the span but not cluster work. All commits landed 2026-06-08 / 2026-06-09.
 
 > **Note (commit-attribution policy).** Per this repo's `CLAUDE.md` override (vibe-coded-node bounty
 > trailer requirement), commits in this repo carry a `Co-Authored-By:` model-attribution trailer; that
@@ -218,280 +232,280 @@ test-only; `2cc6ce25` is a CI-only repair. The N-AF close tail landed 2026-06-07
 
 ## 2. New Modules
 
-**None.** `git diff --diff-filter=A --name-only f87d0056..HEAD -- '*.rs'` shows **no new `.rs` source file**
-(not even a test file), no new crate, no new `Cargo.toml`, no new workspace (`git diff --name-only … '**/Cargo.toml'`
-is empty; still 11 crates). The whole span is **modification only** — it rewrites the GREEN forge-mode
-machinery **inside the existing** `crates/ade_node/src/node_sync.rs` (folding out `FirstOwnBlockServed`,
-adding `warm_start_forge_mode` and the `VenuePolicy` projection, removing the cert), the GREEN planner
-**inside the existing** `crates/ade_node/src/run_loop_planner.rs` (the 5th `VenuePolicy` input), the RED loop
-**inside the existing** `crates/ade_node/src/node_lifecycle.rs` (the `dc_node_15_refusal` helper, the
-`proceed_to_forge` rewire, the warm-start arm, the cert-read removal), the closed emit-only sched vocabulary
-**inside the existing** `crates/ade_node/src/live_log/{sched_event.rs, sched_writer.rs}` (the `ForgeBaseSelected`
-event + enriched `ForgeResult`), the CLI **inside the existing** `crates/ade_node/src/cli.rs` (the
-`--adoption-cert-path` flag removed), and one additive derived field **inside the existing**
-`crates/ade_runtime/src/bootstrap.rs` (`BootstrapState.replayed_anchor_block_no`). The only added files this
-span are **five CI gates** (§5), the N-AG + N-AH **cluster + slice + plan docs**, the N-AG/N-AH **invariants
-docs**, and the **N-AH live-run evidence** (`docs/evidence/phase4-n-ah-{live-run-1,live-run-2,live-run-3,ce-ah-6-close}.{md,jsonl}`).
+**None.** `git diff --diff-filter=A --name-only 8e2c3672..HEAD -- 'crates/**/*.rs'` lists **five** new `.rs`
+files, but **all five are integration tests** (`crates/*/tests/`), not library modules:
+`crates/ade_ledger/tests/wal_rollback_ai_s1.rs`, `crates/ade_node/tests/{apply_driver_ai_s3,
+live_fork_choice_ai_s4bii, participant_venue_ai_s4bi, receive_detector_ai_s2}.rs`. There is **no new crate, no
+new `Cargo.toml`, no new library module, no new workspace** (`git diff --name-only … '**/Cargo.toml'` is
+empty; still **11 crates**). The whole span is **modification only** — the new BLUE authority is a new *variant*
++ payload types **inside the existing** `crates/ade_ledger/src/wal/event.rs`, and the new GREEN/RED machinery is
+added **inside the existing** `ade_node` + `ade_runtime` source files (§3). The other added files this span are
+the **nine CI gates** (§5), the N-AI **cluster + eight slice docs** (`docs/clusters/PHASE4-N-AI/`), the N-AI
+**plan + invariants + OQ docs** (`docs/planning/`), the **convergence runbook**
+(`docs/active/phase4-n-ai-convergence-runbook.md`), and the **unrelated preprod pool-registration evidence**
+(`docs/evidence/preprod-pool-registration.md`).
 
-> **Cross-reference (CODEMAP/SEAMS) — no new surface, no new module, no new BLUE seam.** The span adds **no
-> module and no BLUE seam** — the new GREEN machinery is in `ade_node::{node_sync, run_loop_planner,
-> live_log::*}` and the new behavior is a **RED** loop rewire (`node_lifecycle`) + one additive RED derived
-> field (`ade_runtime::bootstrap`). All host modules are already in CODEMAP, which was **regenerated this
-> close** to fold the whole span (it carries `DC-NODE-20` ×26, `DC-NODE-21` ×12, `DC-NODE-22` ×16,
-> `DC-NODE-19` ×16, `VenuePolicy`, `warm_start_forge_mode`, `replayed_anchor_block_no`, `ForgeBaseSelected`,
-> and all five new gates). The span removes a surface (`VenueAdoptionCertificate` + cert parser) rather than
-> adding one, and adds **no new authoritative persistence surface** (`replayed_anchor_block_no` is a *derived*
-> recovery summary, never independently persisted). No cross-reference warning.
+> **Cross-reference (CODEMAP) — no new module; new BLUE *types* carried by CODEMAP.** The span adds **no
+> module** — the new BLUE canonical types (`RollbackPoint`, `RollbackReason`) and the new closed WAL variant
+> (`WalEntry::RollBack`) live **inside** the existing `ade_ledger::wal::event` module, and the new GREEN/RED
+> types (`NodeSyncItem`, `ReceiveClass`, `ReceiveDisposition`, `CandidateSummary`, `AppliedTip`, `ApplyError`)
+> live **inside** `ade_node::{node_sync, node_lifecycle}`. **CODEMAP was regenerated this close** and carries
+> all of them (`RollbackPoint` ×26, `RollbackReason` ×15, `WalEntry::RollBack` ×27, the BLUE count `460`). No
+> cross-reference warning for §2.
 
 ## 3. Modules Modified
 
-Six source modules changed this span — **`ade_node` (GREEN + RED) + `ade_runtime` (RED shell)**, **+0 BLUE
-canonical type**:
+Thirteen source files across **three crates** changed — **`ade_ledger::wal` (BLUE, the new durable rollback
+marker) + `ade_core::consensus::fork_choice` (BLUE, `#[cfg(test)]`-only) + `ade_node` (GREEN + RED) +
+`ade_runtime` (RED shell)**, **+2 BLUE canonical types**:
 
 | Module | Color / scope | Key changes |
 |--------|---------------|-------------|
-| `ade_node::node_sync` (`crates/ade_node/src/node_sync.rs`) | **GREEN** classifier, +1351 / heavy | **AH.S1 (`b0fb8817`) — DC-NODE-20 forge-base rewire:** `forge_mode_after_admit` now enters `SingleProducerExtendOwnDurableSpine{current_tip = own}` **directly** on a real self-admit from `CaughtUpToPeerTip` — the `FirstOwnBlockServed` cert-wait variant is **folded out** of `ForgeMode` (now a 3-state machine `InitialCatchupRequired → CaughtUpToPeerTip → SingleProducerExtendOwnDurableSpine`). `single_producer_forge_decision` is rewired: **no cert-promotion / await-cert arm** (the cert is evidence-only, DC-NODE-21), it derives the forge base from the local durable spine head under the **6-condition fence** (the observed-feed competing-block predicate; fail-closed `ForgeRefused::SingleProducerFenceViolation` over the closed `SingleProducerFenceReason`). `forge_followed_tip_admission` **remains** the DC-NODE-15 *initial* catch-up classifier. **AG.S1/S2 — DC-NODE-19:** the reused `single_producer_forge_decision` / `SingleProducerFenceReason` continuation fence (unchanged behavior; consumed by the planner-threaded continuation). **AH.S4b (`e7b9be7e`) — DC-NODE-22:** the NEW GREEN `warm_start_forge_mode(venue_role, recovered_tip, replayed_anchor_block_no)` re-enters the extend state for a single-producer venue whose recovered tip is above the replay anchor; fails closed to `InitialCatchupRequired` otherwise. **AH.S2 (`050237e9`):** `VenueAdoptionCertificate` **REMOVED**. **No BLUE type; the GREEN decision never references a chain selector (`DC-CONS-03` untouched).** Tests added: `caughtup_self_admit_enters_extend_directly_no_cert`, `local_spine_sustains_two_successors_no_cert`, `local_spine_two_runs_byte_identical`, `warm_start_reentry_requires_tip_above_recovered_anchor`, `warm_start_single_producer_re_enters_extend_and_forges`. |
-| `ade_node::run_loop_planner` (`crates/ade_node/src/run_loop_planner.rs`) | **GREEN** planner, +259 | **AG.S1 (`b9ef6e69`) — DC-NODE-19:** `plan_loop_step` gains an explicit **5th content-blind `VenuePolicy` input** (`HaltOnFeedEnd | ContinueInSingleProducerExtend`) → a **32-case total table** (no wildcard); a GREEN `(VenueRole, ForgeMode) → VenuePolicy` projection yields `ContinueInSingleProducerExtend` **only** when `venue == SingleProducer && mode == SingleProducerExtendOwnDurableSpine`, else `HaltOnFeedEnd` (verbatim prior). The default `HaltOnFeedEnd` path **reduces** to the prior 16-case behavior. The planner stays content-blind (no `SlotNo`) and **emit-only** (it may emit but must not consume CN-NODE-04 events). **No RED `LoopState` re-derivation** (OQ-19-6 — the feed-ended truth is stated plainly). Tests: `plan_loop_step_venue_policy_table_is_total`, `plan_loop_step_halt_policy_reduces_to_prior_16`, `venue_policy_projection_is_continue_only_in_extend`. **No new type; no BLUE change.** |
-| `ade_node::node_lifecycle` (`crates/ade_node/src/node_lifecycle.rs`) | **RED** loop, +228 / heavy | **AH.S1 (`b0fb8817`) — DC-NODE-20:** the `proceed_to_forge` gate is rewired — **post-self-admit** the forge base derives from the **local durable tip** (`ChainDb::tip`), **not** `durable == followed`, **not** `read_adoption_cert`; the DC-NODE-15 initial-catch-up refusal moves into the named `dc_node_15_refusal` helper (the call chain `run_relay_loop_with_sched → dc_node_15_refusal → forge_followed_tip_admission`, both links verified by the phase-split gate). **AG.S2 (`46098c8c`) — DC-NODE-19:** `run_relay_loop_with_sched` derives `VenuePolicy` from `(act.venue_role, act.forge_mode)` and threads it to the planner; the `Idle`-under-dead-feed wait is replaced with a cancellation-safe clock-tick / `shutdown.changed()` `select!` (OQ-19-1 — the dead feed is no longer the lifecycle authority, the injected clock is the forge-cadence authority). **AH.S2 (`050237e9`):** `read_adoption_cert` / `parse_hex32` **REMOVED** from the forge path. **AH.S4b (`e7b9be7e`) — DC-NODE-22:** the warm-start arm calls `warm_start_forge_mode` to derive the re-entry forge mode from the recovered own-spine tip. **No new type in this module; no BLUE change.** |
-| `ade_node::live_log::sched_event` (`crates/ade_node/src/live_log/sched_event.rs`) | **GREEN** closed vocabulary, +83 | **AH.S4a (`7049d813`) — CN-NODE-04 (strengthened):** the closed emit-only `NodeSchedEvent` enum gains a `ForgeBaseSelected` variant (`forge_base_source`, the entered forge mode, `cert_path_present`) + an **enriched** `ForgeResult` (adds `self_admit_via_pump_block`), plus the mirror enums `ForgeBaseSource` (e.g. `local_chaindb_tip`) and `ForgeModeKind` (re-exported via `live_log::mod`). **Operational/diagnostic tier ONLY** — never a consensus-evidence/acceptance/BA-02 signal; emitting changes no forge scheduling/base/authority, and the planner **must not** consume these events. **No BLUE change.** |
-| `ade_node::live_log::sched_writer` (`crates/ade_node/src/live_log/sched_writer.rs`) | **GREEN** emit-only writer, +113 | **AH.S4a (`7049d813`):** the exhaustive JSONL encoder is extended to serialize the new `ForgeBaseSelected` event + the enriched `ForgeResult` to the `--log` sink — emit-only, one-directional (`planner → log`). A new variant is a compile error at the exhaustive encoder until wired + allow-listed (CN-NODE-04 closedness). **No BLUE change.** |
-| `ade_node::cli` (`crates/ade_node/src/cli.rs`) | **RED**, −13 | **AH.S2 (`050237e9`) — DC-NODE-21:** the `--adoption-cert-path` flag and its `Cli.adoption_cert_path` field + parse arm are **REMOVED** (the cert is no longer a node input). `--single-producer-venue` (the DC-NODE-18 venue declaration) is **retained**. The `ci_check_node_path_fidelity.sh` pinned flag set reconciles 28→29 (adds the pre-existing legitimate `--single-producer-venue`, never re-adds `--adoption-cert-path`). **No new type; no BLUE change.** |
-| `ade_runtime::bootstrap` (`crates/ade_runtime/src/bootstrap.rs`) | **RED** shell, +12 | **AH.S4b (`e7b9be7e`) — DC-NODE-22:** `BootstrapState` gains an **additive** `replayed_anchor_block_no: Option<u64>` — a **derived warm-start recovery summary** (`recovered_tip.block_no − replayed_admit_count`), explicitly **NOT an independently persisted chain point**; `None` on cold-start / first-run / `NotRequired` warm-start (only `warm_start_recovery` populates it). It distinguishes bare-anchor recovery from recovery with a replayed local continuation spine, feeding the DC-NODE-22 re-entry decision. **No new persistence surface; no BLUE change.** |
+| `ade_ledger::wal` (`event.rs` +109/−3, `replay.rs` +75, `error.rs` +6, `store_trait.rs` +28/−1, `mod.rs` +2/−2) | **BLUE** authority, +2 canonical types | **AI-S1 (`cced0214`) — DC-NODE-27:** new version-gated additive `WalEntry::RollBack { to_point: RollbackPoint, reason: RollbackReason, prior_tip: RollbackPoint, selected_tip: RollbackPoint }` at the **reserved RollBackward tag 1** (`TAG_ROLLBACK = 1`; tag 2 `CaptureSnapshot` stays reserved); the **+2 new BLUE canonical payload types** `RollbackPoint` (slot + hash + block_no) and the closed `RollbackReason` (uint wire code; sole rung-1 variant `PeerRollBackward`, `from_code`/code round-trip); a new closed `WalError::RollbackTargetNotInChain` + accessor plumbing (`store_trait`). `replay.rs` gains a `RollBack` arm that **re-invokes** the existing `materialize_rolled_back_state` (CN-STORE-07) + lockstep `commit_rollback` (DC-CONS-20) and re-anchors `prev_post_fp` to `to_point`'s in-chain `post_fp` — replacing today's `ChainBreak` with a faithful linear-with-rollbacks replay. **A durable MARKER, NOT a second rollback implementation.** Append-only preserved. `ade_ledger` BLUE type count `177 → 179`. |
+| `ade_core::consensus::fork_choice` (`fork_choice.rs` +85) | **BLUE** — `#[cfg(test)]` only | **AI-S5 (`a8d93ba4`) — CN-CONS-01:** the **production `select_best_chain` is byte-identical** — the only hunk is `@@ -340,4 +340,89 @@ mod tests`, a `#[cfg(test)]` arrival-order-permutation determinism proof (`select_best_chain_arrival_order_independent_distinct_heights`, `select_best_chain_arrival_order_independent_tiebreaker`) showing the converged tip is the fork-choice-maximal chain regardless of candidate arrival order. **+0 production change; +0 canonical type** (the +2 BLUE types are in `ade_ledger::wal`, not here). |
+| `ade_node::node_sync` (`node_sync.rs` +263/−25) | **GREEN** detector/resolver, heavy | **AI-S2 (`47c0f487`) — DC-NODE-23/24:** the pure total venue-blind detector (`classify_receive` → `ReceiveClass`/`ReceiveDisposition { AlreadyHave \| LinearExtend \| RefuseSingleProducer \| NeedsForkChoice }`) + the venue-split resolver (`resolve_disposition`: `SingleProducer → refuse`, `Participant → NeedsForkChoice`; unknown venue fails closed); new closed types `NodeSyncItem { Block \| RollBack(RollbackPoint) }`, `ReceiveClass`, `ReceiveDisposition`, `CandidateSummary`; the detector **never** calls `select_best_chain`. **AI-S4b-ii (`af51b3c8`) — DC-NODE-28:** `pending_reselection_forge_refusal` → `Some(ForgeRefused::ReselectionPending)` while a decision is pending (a pure/total producer-race fence). **AI-S6 (`5ec841c8`) — DC-NODE-29:** the new closed `NodeSyncError::{UnexpectedRollback, RollbackPointSlotMismatch}`; the SingleProducer arm returns `UnexpectedRollback` on any `NodeSyncItem::RollBack` (never adopts a peer rollback); the rollback-target slot is bound to the durable stored slot for the hash and fails closed on mismatch. **The GREEN decision never references a chain selector (`DC-CONS-03` honored).** |
+| `ade_node::node_lifecycle` (`node_lifecycle.rs` +406/−13) | **RED** apply driver + loop, heavy | **AI-S3 (`7f78dd98`) — DC-NODE-25/26:** the RED `apply_chain_event` durable-apply driver (materialize + lockstep `roll_backward` + `WalEntry::RollBack` append + `pump_block` roll-forward — **no second apply path**; provisional until bodies apply) + the reconciliation assert (`selector.current_tip == ChainDb::tip` after every decision); new types `AppliedTip` / `ApplyError`. **AI-S4b-ii (`af51b3c8`) — DC-NODE-28 (the flip):** `run_participant_sync` classifies every block; the RollBack path resolves the durable point → `ChainEvent::RolledBack` → `apply_chain_event` (**NOT `process_stream_input`**; the loop never calls `select_best_chain`); a bare competing block fails closed; `ForgeActivation.pending_reselection` gates the forge. **AI-S4b-i (`04f358bd`):** `declare_participant_venue` (inert venue recognition). **AI-S6 (`5ec841c8`) — DC-NODE-29:** the rollback-target canonical binding wired through the live RollBack arm (stored slot+hash sole authority; fails closed pre-mutation). **No new BLUE type.** |
+| `ade_runtime::admission::wire_pump` (`wire_pump.rs` +133/−6) | **RED** shell, heavy | **AI-S4a (`30b5727c`) — DC-PUMP-01 (strengthened):** `AdmissionPeerEvent` gains a closed `RollBackward { peer, point: Point, tip: Tip }` variant — the peer's chain-sync `RollBackward` **point** is **preserved as a closed event** (was discarded → `TipUpdate` only; "a rollback is NEVER represented as a `TipUpdate` only"). `RollBackward(Origin)` is **unsupported for single-best-peer within k** and **fails closed** (`UnsupportedRollbackPoint`). `Block`/`TipUpdate`/`Disconnected` unchanged. Merges **latent** (the live loop consumes it at AI-S4b-ii). **No new BLUE type.** |
+| `ade_node::cli` (`cli.rs` +19) + `ade_node::main` (`main.rs` +5) | **RED**, additive | **AI-S4b-i (`04f358bd`):** `--participant-venue → VenueRole::Participant`, **mutually exclusive** with `--single-producer-venue` (a new `CliError::ConflictingVenue` rendered in `main.rs`); `Unknown`/absent stays the conservative non-fork-choice path; **no silent inference**. Truly inert — recognizes the mode value only. **No new BLUE type.** |
+| `ade_runtime::recovery::restart` (`restart.rs` +8) + `ade_node::admission::bootstrap` (`bootstrap.rs` +5) | **RED** shell, additive | **AI-S6 (`5ec841c8`):** the WAL-tail reverse scan skips `WalEntry::RollBack` (a `RollBack` is not an `AdmitBlock` and does not define the WAL-tail slot — safe because the recovery floor is the durable ChainDb trim + the rollback-aware T-REC-05 fingerprint check in `replay_from_anchor`, not this scan). **AI-S4a (`30b5727c`):** `bootstrap.rs` documents the admission-mode runner as a **non-consuming** rollback path (`RollBackward { .. } => continue` — not a rollback→`TipUpdate` downgrade; the live `--mode node` path consumes via `node_sync`). **No new BLUE type.** |
 
-> **No BLUE change this span (load-bearing).** `git diff f87d0056..HEAD` over the BLUE `core_paths` trees is
-> **empty** — the span touches **no** BLUE file and adds **zero** `pub struct/enum` lines there. The fix is
-> deliberately **GREEN (the forge-mode machinery, the planner projection, the warm-start decision, the closed
-> sched vocabulary) + RED (the loop rewire, the CLI, the derived bootstrap summary)**. The BLUE
-> canonical-type count is **458 → 458**. The header / body authorities, the KES verifier, forge eligibility,
-> the closed wire grammar, the `pump_block` durable-admit chokepoint (`DC-NODE-05`/`DC-NODE-12`/`DC-NODE-16`),
-> `ChainDb::tip`, and chain selection (`DC-CONS-03`) are all **unchanged** — the span only changes *which
-> tip* the forge gate reads (the local durable tip) and *when* the loop continues, for a declared
-> single-producer venue. **Two test/loopback files** were touched additively (`crates/ade_node/tests/wire_only_loopback.rs`
-> −1) — test-only, no production-code change. |
+> **BLUE change this span (load-bearing).** Unlike the prior several windows, this span **does** touch BLUE —
+> `git grep -hE '^(pub )?(struct\|enum) '` over the BLUE `core_paths` trees is **`458 → 460`** (the +2 being
+> `ade_ledger::wal::event::{RollbackPoint, RollbackReason}`). It is the **first BLUE delta since the G-N span**.
+> Three BLUE files change: `ade_ledger::wal::{event, replay}` (production — the new closed `WalEntry::RollBack`
+> durable MARKER + its replay arm) + `ade_ledger::wal::{error, mod, store_trait}` (closed error + accessors) +
+> `ade_core::consensus::fork_choice` (**`#[cfg(test)]`-only** — `select_best_chain` production is byte-identical).
+> The new BLUE authority is a durable MARKER that **re-invokes the existing rollback authority on replay** — it
+> is **NOT** a second rollback implementation; `pump_block` stays the SOLE roll-forward durable admit
+> (`DC-NODE-05`/`DC-NODE-12` reused unchanged); `materialize_rolled_back_state` (`CN-STORE-07`), the lockstep
+> `receive::reducer` (`DC-CONS-20`), and `select_best_chain` (`DC-CONS-03`) production are **reused, not built**.
+> **Two test files** (`crates/ade_node/tests/wire_only_loopback.rs` +1,
+> `crates/ade_node/tests/phase4_n_ae_recover_serve_continuity_diag.rs` +3) and one runtime test
+> (`crates/ade_runtime/tests/wal_replay_from_anchor.rs` +1) were touched additively — test-only.
 
 ## 4. Feature Flags
 
-**No project feature-flag deltas.** Ade declares no `[features]` table in any workspace `Cargo.toml`, and
-**no `Cargo.toml` changed in this window** (`git diff --name-only f87d0056..HEAD -- '**/Cargo.toml' 'Cargo.toml'`
-is empty). No `#[cfg(feature = …)]` gate was introduced. The notable CLI-flag delta this span is a
-**removal**: `--adoption-cert-path` was **deleted** (DC-NODE-21 — the cert is no longer a node input), while
-`--single-producer-venue` (the DC-NODE-18 venue declaration) is **retained**. These are CLI flags parsed into
-`Cli`, **not** Cargo feature flags, env vars, or compile-time `cfg`. **Coupling note:** with
-`--adoption-cert-path` gone, the forge path has **no cert input at all** — the cert (if used for the
-transcript) is parsed by the operator harness **outside** the node; the `single_producer_forge_decision`
-fence still **fails closed** (`VenueNotDeclaredSingleProducer`) if the extend machinery is reached without an
-explicitly declared single-producer venue. The DC-NODE-21 gate `ci_check_cert_evidence_only.sh` enforces that
-no cert token survives in the forge path.
+**No project feature-flag deltas.** Ade declares no `[features]` table in any workspace `Cargo.toml`, and **no
+`Cargo.toml` changed in this window** (`git diff --name-only 8e2c3672..HEAD -- '**/Cargo.toml' 'Cargo.toml'`
+is empty). No `#[cfg(feature = …)]` gate was introduced and no `compile_error!` coupling was added (`git diff
+8e2c3672..HEAD` grep for both is empty). The notable CLI-flag delta this span is an **addition**:
+`--participant-venue` (AI-S4b-i — declares `VenueRole::Participant`), **mutually exclusive** with the
+N-AF-introduced `--single-producer-venue` (a new `CliError::ConflictingVenue` is raised if both are passed).
+These are CLI flags parsed into `Cli`, **not** Cargo feature flags, env vars, or compile-time `cfg`. **Coupling
+note:** the two venue flags are **mutually exclusive** (enforced at CLI parse, fail-closed); an absent/unknown
+venue takes the conservative non-fork-choice (`SingleProducer`/`Unknown`) path — **no silent inference** of
+`Participant` from network traffic and no silent inference of `SingleProducer` for a configured participant
+node (`DC-NODE-24`). The gates `ci_check_participant_venue_inert.sh` (venue recognized but inert) and
+`ci_check_receive_detector_venue_split.sh` (unknown venue fails closed) fence the coupling.
 
-## 5. CI Checks (143 → 148; +5 new gates, 3 gates modified in place, 0 gates removed)
+## 5. CI Checks (148 → 157; +9 new gates, 0 modified in place, 0 removed)
 
-Five new gates this span; three modified in place; no gate removed. `git diff --diff-filter=A f87d0056..HEAD
--- ci/` lists exactly the five gates below; `--diff-filter=M` lists the three modified; `--diff-filter=D`
-over `ci/` is **empty**.
+Nine new gates this span; **zero modified in place; zero removed**. `git diff --diff-filter=A 8e2c3672..HEAD
+-- ci/` lists exactly the nine gates below; `--diff-filter=M` and `--diff-filter=D` over `ci/` are **empty**.
+The grouping mirrors the AI-S1…AI-S6 slice progression.
 
-### PHASE4-N-AG gate (`46098c8c`)
-
-| Check | Status | Origin / change | What it checks |
-|-------|--------|-----------------|----------------|
-| `ci_check_single_producer_loop_continuation.sh` | **New** | PHASE4-N-AG (`46098c8c`); `DC-NODE-19` | Fences the loop-continuation-after-feed-EOF surface: the explicit **5th `VenuePolicy` input** to `plan_loop_step` + the **32-case no-wildcard** total table + the default-`HaltCleanly`-preserved reduction + the continuation fence **reused (not re-implemented)** from DC-NODE-18 (`SingleProducerFenceReason`) + **no-BLUE-token** in the changed region + the clock-bounded `Idle`-under-dead-feed wait (no busy-spin, no waiting forever on a dead feed). |
-
-### PHASE4-N-AH gates (`b0fb8817`, `050237e9`, `7049d813`, `e7b9be7e`)
+### PHASE4-N-AI gates — rollback durability + detector (AI-S1 / AI-S2)
 
 | Check | Status | Origin / change | What it checks |
 |-------|--------|-----------------|----------------|
-| `ci_check_local_durable_forge_base.sh` | **New** | PHASE4-N-AH S1 (`b0fb8817`); `DC-NODE-20` | The post-self-admit forge base is the local durable `ChainDb::tip` (not `followed_peer_tip`, not a cert); the **direct** `CaughtUpToPeerTip → SingleProducerExtendOwnDurableSpine` transition (`forge_mode_after_admit`); the **6-condition fail-closed fence** (incl. the observed-feed competing-block predicate); no silent fallback to followed/cert. |
-| `ci_check_cert_evidence_only.sh` | **New** | PHASE4-N-AH S2 (`050237e9`); `DC-NODE-21` | No cert token (`VenueAdoptionCertificate` / `read_adoption_cert` / `adoption_cert`) survives in the `ade_node` forge path; the cert never feeds forge-base selection and never appears in multi-producer/preprod/production forge paths. (Run-4 transcript: `cert_path_present=false` ×461, `cert_path_present:true` count = 0.) |
-| `ci_check_warm_start_re_entry.sh` | **New** | PHASE4-N-AH S4b (`e7b9be7e`); `DC-NODE-22` | `warm_start_forge_mode` re-enters `SingleProducerExtendOwnDurableSpine{current_tip = ChainDb::tip}` **only** for a single-producer venue whose recovered tip is above the replay anchor (`replayed_anchor_block_no`); every other case **fails closed** to `InitialCatchupRequired`; the re-entry reads the recovered tip, advances no tip (pump_block stays sole admit authority). |
-| `ci_check_live_transcript_forge_base.sh` | **New** | PHASE4-N-AH S4a (`7049d813`); `CN-NODE-04` / `DC-NODE-20` evidence | The closed emit-only `NodeSchedEvent` vocabulary carries the `ForgeBaseSelected` event (`forge_base_source = local_chaindb_tip`, the entered mode, `cert_path_present`) + the enriched `ForgeResult` (`self_admit_via_pump_block`); **emit-only** (serializes the decision already made, never read by the planner / any authority path). |
+| `ci_check_wal_rollback_replay_equiv.sh` | **New** | AI-S1 (`cced0214`); `DC-NODE-27` | A WAL with a `RollBack` entry replays **byte-identically** (the rolled-back-then-reselected chain recovers the *selected* tip, never the abandoned branch); the `RollBack` replay arm invokes `materialize_rolled_back_state` / the lockstep reducer (**not** a reimpl); append-only preserved; the version-gated tag-1 marker decodes closed. |
+| `ci_check_receive_detector_venue_split.sh` | **New** | AI-S2 (`47c0f487`); `DC-NODE-23` / `DC-NODE-24` | The classifier is **total** over the 4 dispositions; `SingleProducer → refuse`, `Participant → NeedsForkChoice`; `AlreadyHave` for a known echo; the detector **never calls `select_best_chain`**; an unknown/invalid venue **fails closed** (no silent inference). |
 
-### Gates modified in place (no add, no remove)
+### PHASE4-N-AI gates — live apply + wire signal (AI-S3 / AI-S4a)
 
-| Check | Change | Why |
-|-------|--------|-----|
-| `ci_check_forge_followed_tip_admission.sh` | **Modified** (`b0fb8817` + repaired at `2cc6ce25`) | **Phase-split for the DC-NODE-20 call chain.** The DC-NODE-15 *initial* catch-up gate is now verified via the call chain `run_relay_loop_with_sched → dc_node_15_refusal → forge_followed_tip_admission` (**both links** asserted — the prior loop-body grep was stale once the call moved into the `dc_node_15_refusal` helper), while the **post-self-admit** forge base is asserted as the local `ChainDb::tip` with **no followed re-check** — part (a). This encodes the DC-NODE-15 / DC-NODE-20 phase split: initial catch-up requires `durable == followed`; post-self-admit local-tip mode does not. |
-| `ci_check_node_path_fidelity.sh` | **Modified** (`050237e9`) | **Flag-set 28→29 reconcile.** The pinned closed `--mode node` allow-list adds the pre-existing legitimate `--single-producer-venue` (N-AF-introduced, legitimately missing from PINNED since N-AF) and confirms the DC-NODE-21-retired `--adoption-cert-path` is **gone** and was never in the pinned set. CN-REHEARSAL-FIDELITY-01 preserved: no from-genesis/devnet/backdoor flag added. |
-| `ci_check_single_producer_extend_own_spine.sh` | **Modified** (`b0fb8817`) | **DC-NODE-20 folds out the cert-wait.** The DC-NODE-18 gate now asserts the 3-state `ForgeMode` enum (`FirstOwnBlockServed` **removed**), that `forge_mode_after_admit` enters the extend state **directly** on self-admit, and that `single_producer_forge_decision` has **no** cert-promotion / await-cert arm (the cert is evidence-only). The DC-NODE-18 *core* (no-bool mode, fail-closed fence, no chain selector, mode-aware loop preserving the DC-NODE-15 default) is preserved. |
+| Check | Status | Origin / change | What it checks |
+|-------|--------|-----------------|----------------|
+| `ci_check_live_fork_choice_apply.sh` | **New** | AI-S3 (`7f78dd98`); `DC-NODE-25` / `DC-NODE-26` | A `ChainSelected`/`RolledBack` requiring rollback applies via materialize + lockstep + `WalEntry::RollBack` + `pump_block`; **no header-only tip advance**; `selector.current_tip == ChainDb::tip` after apply; **no second apply / tip-advance / rollback-materialize path**. |
+| `ci_check_live_fork_choice_wiring.sh` | **New** | AI-S3 / AI-S4b-ii (`7f78dd98` / `af51b3c8`); `DC-NODE-25/26/28` | The live Participant path **follows a peer's `RollBackward` reorg end-to-end** (single-best-peer: durable-point lookup → `ChainEvent::RolledBack` → `apply_chain_event`; bare competing blocks fail closed — **not** multi-candidate selection); the forge gate `ForgeRefused::ReselectionPending` fires while a decision is pending (CE-AI-4 folded in). |
+| `ci_check_wire_rollback_signal_preserved.sh` | **New** | AI-S4a (`30b5727c`); `DC-PUMP-01` (strengthening) | The admission wire pump preserves the peer's chain-sync `RollBackward` **point** as a closed `AdmissionPeerEvent` variant (was discarded → `TipUpdate` only); a rollback is **never** a `TipUpdate` only; `Origin` fails closed (`UnsupportedRollbackPoint`); `Block`/`TipUpdate`/`Disconnected` unchanged. |
 
-> **Cross-reference (TRACEABILITY) — refreshed this close, no removal.** The new rule↔gate bindings
-> (`DC-NODE-19 ↔ ci_check_single_producer_loop_continuation.sh`, `DC-NODE-20 ↔ ci_check_local_durable_forge_base.sh`
-> + the phase-split half of `ci_check_forge_followed_tip_admission.sh`, `DC-NODE-21 ↔ ci_check_cert_evidence_only.sh`
-> + `ci_check_node_path_fidelity.sh`, `DC-NODE-22 ↔ ci_check_warm_start_re_entry.sh`, `CN-NODE-04 ↔ ci_check_live_transcript_forge_base.sh`)
-> are recorded **both** in the registry at HEAD **and** in the regenerated TRACEABILITY (which carries
-> `DC-NODE-20` ×29, `DC-NODE-21` ×17, `DC-NODE-22` ×10, `DC-NODE-19` ×16). **No rule↔gate binding was
-> removed.** None of the five new gates is an orphan — each enforces exactly its named rule. `DC-NODE-19` is
-> **declared** with a populated `ci_script` (`ci_check_single_producer_loop_continuation.sh`) but stays
-> `declared` because its live CE was superseded (the hermetic gate is green; the status flip was gated on the
-> re-homed live CE). |
+### PHASE4-N-AI gates — venue, convergence, H-1 remediation (AI-S4b-i / AI-S5 / AI-S6)
+
+| Check | Status | Origin / change | What it checks |
+|-------|--------|-----------------|----------------|
+| `ci_check_participant_venue_inert.sh` | **New** | AI-S4b-i (`04f358bd`); `DC-NODE-28` (venue precursor / OQ-5) | The `--participant-venue` declaration is recognized as a closed mode value but is **inert** — it does NOT route to fork-choice, does NOT change any forge decision, does NOT alter `SingleProducer` behavior; mutually exclusive with `--single-producer-venue` (`CliError::ConflictingVenue`); no silent inference either direction. |
+| `ci_check_chain_selection_arrival_order_independent.sh` | **New** | AI-S5 (`a8d93ba4`); `CN-CONS-01` | For a fixed competing-candidate set, the converged tip is the fork-choice-maximal chain **regardless of arrival order** (a `#[cfg(test)]` permutation proof over `select_best_chain` — distinct heights + tiebreaker). |
+| `ci_check_convergence_evidence_schema.sh` | **New** | AI-S5 (`a8d93ba4`); CE-AI-6 (`CN-CONS-03` operator-gated) | The convergence-evidence transcript is a **closed derived-tier vocabulary** (allow-listed event kinds), **vacuous-until-committed**, sha256-bound; Ade + ≥1 Haskell producer converge on the same tip; **proves the exercised venue, NOT full multi-peer ChainSel.** |
+| `ci_check_rollback_target_canonical_binding.sh` | **New** | AI-S6 (`5ec841c8`); `DC-NODE-29` (H-1 remediation) | The live Participant rollback target uses the durable `ChainDb` stored chain point (stored slot + hash) as the **SOLE authority**; the peer-supplied slot **must equal** the stored slot for that hash; **any** mismatch / unknown hash / Origin **fails closed with a typed error BEFORE `commit_rollback`, BEFORE `WalEntry::RollBack`, BEFORE any ChainDb/LedgerState/PraosChainDepState mutation**; no mixed peer/local authority. |
+
+> **Cross-reference (TRACEABILITY + SEAMS) — STALE this close; refresh owed.** The nine new rule↔gate bindings
+> are recorded **in the registry at HEAD** (`docs/ade-invariant-registry.toml`, 354 rules) and in the
+> **regenerated CODEMAP** (`5ec841c8`). They are **NOT yet in TRACEABILITY or SEAMS**, which remain pinned at
+> the N-AH close `5858288e` (`grep -c` of `DC-NODE-23`/`DC-NODE-27`/`DC-NODE-29` in TRACEABILITY = 0; SEAMS
+> header still reads "458 canonical types, 148 CI checks at HEAD `5858288e`"). **None of the nine new gates is
+> an orphan** — each enforces exactly its named rule, recorded in the registry. **Action:** regenerate SEAMS +
+> TRACEABILITY to `5ec841c8` as a follow-on this close so every §5 gate appears in TRACEABILITY enforcing its
+> named invariant; until then the registry is authoritative for the new bindings. (`DC-PUMP-01` already appears
+> ×1 in TRACEABILITY from a prior pass; its new AI-S4a gate `ci_check_wire_rollback_signal_preserved.sh` is the
+> refresh delta.)
 
 ## 6. Canonical Type Registry Delta
 
 **n/a — no separate canonical-type registry is configured** (`canonical_type_registry: null`);
-canonical-type rules live inline in the invariant registry under family **T**. **No BLUE canonical type was
-added or removed in this window** — the BLUE count is unchanged (**458 → 458**; `git diff f87d0056..HEAD`
-over the BLUE `core_paths` trees is empty and adds zero `pub struct/enum`). This window in fact **removed** a
-GREEN type (`VenueAdoptionCertificate`, the N-AF cert carrier) along with the cert parser; the new pub items
-that carry a chain point — the GREEN `warm_start_forge_mode` decision and the RED
-`BootstrapState.replayed_anchor_block_no` derived summary — are **outside** `core_paths` and are **not** BLUE
-canonical types. No `Cargo.toml` changed.
+canonical-type rules live inline in the invariant registry under family **T**. **This window ADDED +2 BLUE
+canonical types — the first BLUE delta since the G-N span:** the BLUE count is `458 → 460` (`git grep -hE
+'^(pub )?(struct|enum) '` over the BLUE `core_paths` trees), the +2 being `ade_ledger::wal::event::{RollbackPoint,
+RollbackReason}` — the payload types of the new closed-sum WAL variant `WalEntry::RollBack` (`ade_ledger` `177
+→ 179`). **Zero BLUE canonical types were removed.** The variant itself (`WalEntry::RollBack`) and the new
+closed error (`WalError::RollbackTargetNotInChain`) are additive extensions of existing closed enums — not new
+top-level types and not removals. No `Cargo.toml` changed.
 
-## 7. Normative / Invariant Rule Delta (343 → 347; +4 rules, 9 strengthenings, zero removals)
+## 7. Normative / Invariant Rule Delta (347 → 354; +7 rules, 13 strengthenings, zero removals)
 
-**Four rule IDs were added; zero removed** (343 → 347; `diff` of the sorted `id =` lists shows exactly the
-four additions `DC-NODE-19` / `DC-NODE-20` / `DC-NODE-21` / `DC-NODE-22` and no removal). The status tally
-moves **210 → 213 enforced** (`DC-NODE-20` / `DC-NODE-21` / `DC-NODE-22`) and **113 → 114 declared**
-(`DC-NODE-19`); the 20 partial **unchanged**.
+**Seven rule IDs were added; zero removed** (`347 → 354`; `diff` of the sorted `id =` lists shows exactly the
+seven additions `DC-NODE-23` … `DC-NODE-29` and no removal). The status tally moves **213 → 221 enforced**
+(the 7 new `DC-NODE-23..29` + `CN-CONS-01` flipped `partial → enforced`) and **20 → 19 partial** (`CN-CONS-01`);
+the 114 declared **unchanged**.
 
 *(The configured `normative_docs` — the CE-79 tier-gate statement + addendum, the three contract docs, the
 CE-73 reclassification, and `CLAUDE.md` — were **not** changed this span: `git diff --name-only
-f87d0056..HEAD` over those paths is empty. The rule-count delta is entirely the invariant-registry change
-below.)*
+8e2c3672..HEAD` over those paths is empty. The rule-count delta is entirely the invariant-registry change.)*
 
-**New rules (`+4`):**
+**New rules (`+7`, all `enforced`, all `introduced_in = "PHASE4-N-AI"`):**
 
 | Rule | Family / Tier · Status | Statement (summary) |
 |------|------------------------|---------------------|
-| `DC-NODE-20` | DC / `derived` · **enforced** (`introduced_in = "PHASE4-N-AH"`) | **Local selected durable chain forge-base authority (rung-1 single-producer).** After Ade self-admits a valid forged block through `pump_block` (DC-NODE-12) onto its local durable ChainDB spine, the next forge base is Ade's **LOCAL SELECTED DURABLE TIP** (`ChainDb::tip`) — **NOT** `followed_peer_tip`, **NOT** an operator adoption certificate. **Retires** (as forge authority) the repeated post-self-admit `durable == followed` re-check **and** the DC-NODE-18 cert-promotion mechanism; the `FirstOwnBlockServed` cert-wait intermediate is **folded out** (direct `CaughtUpToPeerTip → SingleProducerExtendOwnDurableSpine` on self-admit, no cert read). Engages only under a **6-condition fence**; ANY failure **fails closed** (no silent fallback): VenueRole::SingleProducer; **no competing block observed** on the canonical receive stream (an OBSERVED-FEED fence, **not** fork-choice); relay non-producing; admitted via `pump_block` (DC-NODE-05 stays the sole durable admit authority); spine contiguous/servable; no fork-choice required — mechanically **derived** from the observed-feed fence. `DC-NODE-15` remains the **initial** catch-up gate; DC-NODE-20 supersedes **only** the repeated post-self-admit re-check. In rung 1 "selected" is **degenerate**; rung 2 must replace this with real fork-choice (`DC-CONS-03`, untouched). `ci_script = ci/ci_check_local_durable_forge_base.sh, ci/ci_check_forge_followed_tip_admission.sh`; `cross_ref = [DC-NODE-05, DC-NODE-12, DC-NODE-15, DC-NODE-18, DC-NODE-19, DC-NODE-21, DC-CONS-03, DC-CONS-23, T-REC-03, T-REC-05]`. |
-| `DC-NODE-21` | DC / `derived` · **enforced** (`introduced_in = "PHASE4-N-AH"`) | **Adoption certificate is rung-1 evidence-only, never forge authority.** The file-based operator adoption certificate is a rung-1 RED **EVIDENCE-ONLY** shim — it MAY prove relay adoption for the transcript/bounty bundle, but MUST **NEVER** control forge-base selection (DC-NODE-20 derives the base from the local durable ChainDB tip) or any durable authority, and MUST NEVER appear in multi-producer/preprod/production forge paths. **Hard removal boundary:** the shim exists ONLY because Ade lacks full multi-producer fork-choice + peer-state lifecycle; it must be removed/replaced by node-local selected-chain / fork-choice authority (DC-CONS-03) before rung 2 / preprod. **S2 fully DELETED** `read_adoption_cert` / `parse_hex32` / `VenueAdoptionCertificate` / `--adoption-cert-path` (the parser is gone, not just demoted). `ci_script = ci/ci_check_cert_evidence_only.sh, ci/ci_check_node_path_fidelity.sh`; `cross_ref = [DC-NODE-20, DC-NODE-18, DC-NODE-19, DC-CONS-03]`. |
-| `DC-NODE-22` | DC / `derived` · **enforced** (`introduced_in = "PHASE4-N-AH"`) | **Single-producer warm-start re-entry derives forge mode from the recovered local durable spine.** If warm-start recovery yields a durable local `ChainDb::tip` **above** the recovered bootstrap anchor (proving an own-forged continuation of Ade's own spine, not the bare imported anchor), forge mode MUST re-enter `SingleProducerExtendOwnDurableSpine{current_tip = ChainDb::tip}` under the DC-NODE-20 fence, **WITHOUT** a fresh followed-peer catch-up. The warm-start analog of DC-NODE-20. Without it, warm-start re-inits `forge_mode = InitialCatchupRequired` and, if the follow link EOFs first, the node stalls in `NoTipAvailable` forever — re-introducing through restart the exact follow-link dependency DC-NODE-20 retired. Engages only under a **9-condition fence**; ANY failure **fails closed** (fall back to `InitialCatchupRequired`). The `replayed_anchor_block_no` (= `recovered_tip.block_no − admit_count`) is a **DERIVED recovery summary** on `BootstrapState`, NOT an independently persisted chain point. `ci_script = ci/ci_check_warm_start_re_entry.sh`; `cross_ref = [DC-NODE-20, DC-NODE-19, DC-NODE-15, DC-NODE-12, DC-NODE-05, T-REC-05, CN-NODE-02, DC-CONS-03]`. |
-| `DC-NODE-19` | DC / `derived` · **declared** (`introduced_in = "TBD"`) | **Single-producer forge-loop continuation after follow-link EOF.** In a declared single-producer venue already in the DC-NODE-18 extend state, a `LoopState::Ending` caused **solely by structural feed EOF** MUST NOT by itself terminate the forge loop; the loop continues forging successors on its OWN certified durable spine (each admitted via `pump_block`, DC-NODE-12), **fenced** to the certified single-producer run and **failing closed** (verbatim `HaltCleanly` / typed refusal, never a silent forge) on any of **7** conditions. Relocates the loop's termination authority off feed-liveness onto explicit operator shutdown / fatal error (the move DC-NODE-09 made for the serve-listener lifetime) while preserving DC-NODE-05 (`pump_block` sole tip-advance; feed work drains via `SyncOnce` first). Only a clean structural feed EOF is continued; a fatal source failure exits via `Err`/fail-fast. **Declared** at `/invariants` (N-AG); enforced only when the slice lands with the GREEN 32-case totality + the certified-run continuation fence + replay-equivalence over a post-feed-end chain + a committed sustained-past-k live transcript. **Superseded-close:** the hermetic core (CE-AG-1..4) landed and passes, but the live CE re-homed to N-AH CE-AH-6 (the cert-promotion entry mechanism was retired by DC-NODE-20), so DC-NODE-19 stays `declared` and is **strengthened by N-AH** (the extend state it continues is now entered via local self-admit). `ci_script = ci/ci_check_single_producer_loop_continuation.sh`; `cross_ref = [DC-NODE-18, DC-NODE-05, DC-NODE-09, DC-NODE-12, CN-NODE-02, T-REC-03, T-REC-05, DC-CONS-03, DC-EPOCH-03, DC-CONS-09]`. |
+| `DC-NODE-23` | DC / `derived` · **enforced** | **Shared receive-side fork-choice detector (rung-2).** A peer-origin candidate **not** already part of Ade's admitted durable spine / own-served lineage — incl. a header that does not build on `ChainDb::tip` — is classified **ONCE, venue-blind**, by a pure total predicate `(durable_tip, candidate_header_summary) → ReceiveDisposition { AlreadyHave \| LinearExtend \| RefuseSingleProducer \| NeedsForkChoice }`. A duplicate/already-known peer echo is `AlreadyHave`, never a competing candidate merely for not being a fresh extension. Observes no venue / wall-clock / network state; the single classification point both the SingleProducer fail-closed arm (`DC-NODE-20`) and the Participant fork-choice arm (`DC-NODE-24`) consume. **Never selects/reorders/prefers chains** (that is `select_best_chain` / `DC-CONS-03`). |
+| `DC-NODE-24` | DC / `derived` · **enforced** | **Venue-split fork-choice resolver (rung-2).** The `DC-NODE-23` non-spine consequent is gated by venue, **total over the closed venue set**: `SingleProducer ⇒ fail closed` (the `DC-NODE-20` rung-1 behavior, byte-unchanged — never adopt a peer candidate); `Participant ⇒ NeedsForkChoice ⇒` the existing `chain_selector` orchestrator (`process_stream_input → select_best_chain`, `DC-CONS-03`). Venue input is explicit and **fail-safe** (undeclared/unknown ⇒ conservative SingleProducer refuse). In Participant mode the peer's **VALIDATED** header summary (post `validate_and_apply_header`) becomes a candidate; a raw `followed_peer_tip` signal MUST NOT reach `select_best_chain`. |
+| `DC-NODE-25` | DC / `derived` · **enforced** | **Live fork-choice durable application authority (rung-2).** A `ChainSelected`/`RolledBack` outcome is applied to the durable stores **ONLY** via the existing enforced authorities: the lockstep receive reducer (`DC-CONS-20`) + `materialize_rolled_back_state` (`CN-STORE-07`) for the rollback target + `pump_block` (`DC-NODE-05/12`) for roll-forward. **No second apply path, no second tip-advance, no second rollback-materialize.** A fork-choice win is **provisional** — durably adopted ONLY when its BODIES validate and apply through `pump_block` (no header-only tip advance). A `TiebreakerLossKeepCurrent` outcome makes no durable change. |
+| `DC-NODE-26` | DC / `derived` · **enforced** | **Decision / durable reconciliation (rung-2).** After any applied receive decision, `selector.current_tip == durable ChainDb::tip` (and orchestrator `chain_dep == durable PraosChainDepState`). The in-memory decision state never diverges from the persisted authority: the orchestrator decides, the durable lockstep path applies, and the two are reconciled **every decision**. No applied decision leaves the selector ahead of / behind / forked from the durable spine. |
+| `DC-NODE-27` | DC / `derived` · **enforced** | **Rollback+reselection replay-equivalence (rung-2).** The ordered live receive-event sequence (RollForward headers, RollBackward points, body deliveries) replayed against the same bootstrap anchor + durable log produces a **BYTE-IDENTICAL** durable tip + ledger fingerprint + `PraosChainDepState` — **including any rollback+reselection**. A live rollback is recorded durably (append-only canonical bytes — `CN-WAL-01`) such that replay re-invokes the SAME materialize/reducer authority (`CN-STORE-07`/`DC-CONS-20`); the durable record is **NOT** a second rollback implementation. **OQ-1 RESOLVED → A** (the version-gated `WalEntry::RollBack` marker; option B WAL-tail reconciliation rejected). |
+| `DC-NODE-28` | DC / `derived` · **enforced** | **No forge across unresolved re-selection (rung-2).** Once a peer-origin candidate is classified `NeedsForkChoice` (`DC-NODE-23`) in a Participant venue, forging is **DISABLED** until the outcome is either (a) durably applied and reconciled (`DC-NODE-25/26`) or (b) rejected with durable state unchanged. The forge base is **NEVER** selected from a stale pre-resolution `ChainDb::tip` while a decision is pending — a producer tick during a pending decision **fails closed** (`ForgeRefused::ReselectionPending`), never forges on the old local tip. A producer-race fence distinct from `pump_block` admit / rollback replay / reconciliation, so it carries its own evidence. |
+| `DC-NODE-29` | DC / `derived` · **enforced** (AI-S6 H-1 remediation) | **Live rollback target canonical binding (rung-2).** For a peer `RollBackward(point)` on the live Participant path, the rollback target MUST be resolved against the durable `ChainDb` and use the **stored chain point (stored slot + hash) as the SOLE authority**. The peer-supplied slot MUST equal the stored slot for that hash; on **any** mismatch (or unknown hash, or Origin) the path **fails closed with a typed error BEFORE `commit_rollback`, BEFORE `WalEntry::RollBack`, BEFORE any ChainDb/LedgerState/PraosChainDepState mutation**. No rollback target may be built from mixed peer/local authority (peer slot + locally-verified hash). Reconciliation (`DC-NODE-26`) remains the post-apply backstop but is **NOT** the only defense. |
 
-**Strengthenings (`strengthened_in += "PHASE4-N-AH"`) — 9:** `CN-NODE-02` (the run-loop lifecycle owner now
-covers the warm-start wiring + the loop's termination authority = explicit operator shutdown / fatal error,
-not accidental feed EOF), `CN-NODE-04` (the closed emit-only sched vocabulary now also carries the DC-NODE-20
-forge-base evidence — `ForgeBaseSelected` + enriched `ForgeResult`), `DC-NODE-05` (feed work still drains
-before forge; the forge advances no durable tip directly — preserved across the local-tip rewire),
-`DC-NODE-12` (own-forged durable admit chokepoint — the local-tip forge base only READS the tip `pump_block`
-produced), `DC-NODE-15` (the `durable == followed` gate is now the **initial** catch-up gate only,
-phase-split from the retired post-self-admit re-check), `DC-NODE-18` (the proven extend state is now entered
-via local self-admit, not the cert; the `FirstOwnBlockServed` cert-wait is folded out), `DC-NODE-19` (the
-continue-past-EOF extend state now survives warm-start), `T-REC-03` + `T-REC-05` (replay-equivalence now
-covers cert-free local-tip-derived successors **and** post-warm-start forge resumption). **`DC-CONS-03`
-explicitly untouched** (rung-2 fork-choice successor). **No `PHASE4-N-AG` strengthening tag exists** — the
-planned N-AG strengthenings were **folded into N-AH** (the live-proven cluster) to avoid double-crediting.
-No rule was weakened.
+**Strengthenings (`strengthened_in += "PHASE4-N-AI"`) — 13:** `CN-CONS-01` (also flipped `partial →
+enforced` — the arrival-order determinism of `select_best_chain` now has a permutation proof + gate),
+**`CN-CONS-03`** (strengthened **but NOT flipped** — only the single-best-peer venue was exercised; its broad
+multi-peer ChainSel statement stays `declared`, with CE-AI-6 operator-gated/vacuous-until-committed),
+`CN-STORE-07` (the rollback-materialize authority is now re-invoked from the live apply driver **and** from the
+`WalEntry::RollBack` replay arm), `DC-CONS-03` (`select_best_chain` is now the live Participant fork-choice
+authority, reused unchanged — production byte-identical), `DC-CONS-05` + `DC-CONS-06` (rollback apply +
+replay-equivalence now span live rollback+reselection), `DC-CONS-20` (the lockstep receive reducer is the live
+durable-apply authority for both roll-forward and roll-backward), `DC-NODE-05` + `DC-NODE-12` (`pump_block`
+stays the SOLE roll-forward durable admit on the live fork-choice path), `DC-NODE-20` (the SingleProducer venue
+stays fail-closed unchanged under the new detector/resolver — `RefuseSingleProducer`), `DC-PUMP-01` (the
+admission wire pump now preserves the rollback **point** as a closed event, no longer downgraded to a
+`TipUpdate`), `T-REC-03` + `T-REC-05` (replay-equivalence now covers rollback+reselection — two-runs +
+kill/warm-start byte-identical incl. a `RollBack` WAL entry). **No rule was weakened.**
 
-> **The brutally clear boundary — what PHASE4-N-AH closes (and what it does not).** PHASE4-N-AH enforced
-> **`DC-NODE-20` / `DC-NODE-21` / `DC-NODE-22`**: **Ade sustained cert-free single-producer block production
-> on C2-LOCAL (`cardano-testnet` magic 42) against a real Haskell relay (`cardano-node 11.0.1`)** — Ade
-> forged on its OWN local durable `ChainDb::tip`, **crossed a follow-link EOF**, settled **`> k` blocks
-> immutable** in the relay's ImmutableDB, and **RESUMED forging after a hard restart** (run-4,
-> `docs/evidence/phase4-n-ah-ce-ah-6-close.{md,jsonl}`; the full 8+3 bar). This is **NOT preprod. This is NOT
-> bounty completion.** `RO-LIVE-01` stays **operator-gated / partial** — the run-4 C2-LOCAL transcript is the
-> rung-1 mechanism, **not** operator-witnessed bounty acceptance on preprod. Rung-2 fork-choice +
-> multi-producer + preprod are explicitly out of scope; the observed-feed competing-block fence **fails
-> closed** (never resolves — that is rung 2). **No `RO-LIVE` rule flipped** this span. |
+> **The boundary — what PHASE4-N-AI closes (and what it does not).** PHASE4-N-AI wired **single-best-peer
+> rollback-FOLLOW** into the live `--mode node` receive path: Ade detects a peer-origin non-spine candidate
+> ONCE (venue-blind, `DC-NODE-23`), and on a Participant venue follows that ONE peer's `RollBackward` reorg
+> through the EXISTING `chain_selector` → BLUE `select_best_chain` (`DC-CONS-03`) durable-apply path
+> (`DC-NODE-24/25/26`), recording the rollback as a version-gated `WalEntry::RollBack` durable marker that
+> re-invokes the existing rollback authority on replay (`DC-NODE-27`), refusing to forge across a pending
+> decision (`DC-NODE-28`), with the rollback target bound to the durable stored point as the sole authority
+> (`DC-NODE-29`). **This is NOT full multi-peer Cardano ChainSel.** It maintains **no** multi-peer candidate
+> set, adds **no** second selection authority, and **`CN-CONS-03` was NOT flipped to enforced** (it stays
+> `declared`, strengthened only, with the explicit honesty note that only the single-best-peer venue was
+> exercised). The sole new BLUE authority is `WalEntry::RollBack` (a durable MARKER, not a second rollback
+> impl); `pump_block` stays the SOLE roll-forward durable admit (`DC-NODE-05`/`DC-NODE-12` unchanged); the
+> SingleProducer venue stays **fail-closed unchanged** (`run_node_sync` returns `NodeSyncError::UnexpectedRollback`
+> on any peer rollback; `DC-NODE-20`/`DC-NODE-24` `RefuseSingleProducer`); and there is **NO `RO-LIVE` flip**
+> (`RO-LIVE-01` stays operator-gated; CE-AI-6 is the operator-pass convergence transcript,
+> **vacuous-until-committed**).
 
-**No rule was removed (expected: 0).** The registry delta is **four new rules (`DC-NODE-20`/`21`/`22`
-enforced + `DC-NODE-19` declared), nine `strengthened_in += PHASE4-N-AH` appends, zero removals** —
-consistent with append-only registry discipline. **Note on the N-AF cert mechanism:** retiring the
-cert-into-extend *mechanism* (DC-NODE-20 folds out `FirstOwnBlockServed`; DC-NODE-21 deletes the parser) is
-**not** a rule removal or weakening — `DC-NODE-18` is **retained** (`strengthened_in += PHASE4-N-AH`), its
-statement and ID unchanged, its scope-boundary note intact; only the *implementation mechanism* it described
-is superseded by a stronger cert-free path. No discipline violation.
+**No rule was removed (expected: 0).** The registry delta is **seven new rules (`DC-NODE-23..29`, all
+enforced), one existing rule flipped (`CN-CONS-01` partial → enforced), thirteen `strengthened_in +=
+PHASE4-N-AI` appends, zero removals** — consistent with append-only registry discipline. **No anomaly.**
 
-## Working tree at HEAD `5858288e`
+## Working tree at HEAD `5ec841c8`
 
-Clean of tracked changes from this span — the N-AF close tail, the N-AG cluster (invariants → cluster/slice
-docs → S1/S2/S3), and the N-AH cluster (invariants → cluster/slice docs → S1/S2/S3/S4a/S4b → close) are all
-committed. `git status --short` shows only an untracked `.mithril-scratch/` (operator scratch, ignored).
-**This regen runs *after* all 32 span commits** (the N-AH close `5858288e` is HEAD for this window); the
-registry records `DC-NODE-19/20/21/22` + their gate bindings authoritatively at HEAD (347 rules), and all
-four grounding docs (CODEMAP/SEAMS/TRACEABILITY) were regenerated this close to `5858288e`. The remaining
-close-pass action is the baseline bump (`f87d0056 → 5858288e`, performed by the closer).
+Clean of tracked changes from this span — the N-AH baseline-bump chore, the N-AI cluster (invariants → OQ-1 →
+cluster/slice docs → AI-S1…AI-S6 → close), and the unrelated `cbad2ae3` preprod evidence commit are all
+committed. `git status --short` shows only an untracked `.mithril-scratch/` (operator scratch, ignored). **This
+regen runs *after* all 26 span commits** (the AI-S6 close `5ec841c8` is HEAD for this window); the registry
+records `DC-NODE-23..29` + their nine gate bindings authoritatively at HEAD (**354 rules**), and **CODEMAP was
+regenerated this close to `5ec841c8`**. The remaining close-pass actions are (1) the SEAMS + TRACEABILITY
+refresh to `5ec841c8` (surfaced in §5) and (2) the baseline bump (`8e2c3672 → 5ec841c8`), both separate
+post-close steps.
 
-> **Cluster-context note.** PHASE4-N-AH is **formally closed** — its cluster doc carries the §11 close record
-> (CE-AH-7), and PHASE4-N-AG is **superseded-closed** (its §11 records the partial close; its hermetic core
-> is complete and its live CE re-homed to N-AH). Both clusters' docs live under `docs/clusters/PHASE4-N-A{G,H}/`;
-> whether they are moved to `docs/clusters/completed/` is a close-pass bookkeeping decision separate from this
-> HEAD_DELTAS regen (the N-AF docs were archived to `docs/clusters/completed/PHASE4-N-AF/` by `600581e8`).
+> **Cluster-context note.** PHASE4-N-AI is **formally closed** — its cluster doc (`docs/clusters/PHASE4-N-AI/cluster.md`)
+> carries the §11 close record (CE-AI-7: `DC-NODE-23..28` declared→enforced, `DC-NODE-29` introduced+enforced
+> at AI-S6, `CN-CONS-01` partial→enforced, **`CN-CONS-03` NOT flipped**, 13 strengthenings) and the H-1
+> security-remediation record (H-1 CLOSED, no new findings). Whether the cluster docs are moved to
+> `docs/clusters/completed/PHASE4-N-AI/` is a close-pass bookkeeping decision separate from this HEAD_DELTAS
+> regen.
 
 ## Honest residual (window scope)
 
-PHASE4-N-AH **closed the cert-free local-tip single-producer forge core** — Ade sustained block production on
-its own local durable spine across a follow-link EOF + a restart, live-proven on C2-LOCAL (run-4). The honest
-residual:
+PHASE4-N-AI **wired single-best-peer rollback-FOLLOW into the live receive path** and made it
+replay-equivalent + fail-closed. The honest residual:
 
-- **The headline boundary (verbatim, brutally clear).** Ade sustained **cert-free single-producer block
-  production on C2-LOCAL** (`cardano-testnet` magic 42) against a real Haskell relay (`cardano-node 11.0.1`),
-  **crossed a follow-link EOF**, settled **`> k` blocks immutable**, and **resumed forging after a hard
-  restart** (run-4, `docs/evidence/phase4-n-ah-ce-ah-6-close.{md,jsonl}`). **NOT preprod. NOT bounty
-  completion. `RO-LIVE-01` stays operator-gated / partial.**
-- **The run-4 live finding redirected the fix.** The N-AF operator-adoption certificate had **leaked from
-  evidence into forge-loop authority**: post-self-admit, the `proceed_to_forge` gate required `durable ==
-  followed` (which fails the instant the non-producing relay does not re-announce Ade's block), and the only
-  escape (cert-promotion) **raced and lost** to the follow-link EOF. `DC-NODE-20` makes the post-self-admit
-  forge base the **local durable `ChainDb::tip`** under a 6-condition fence; `DC-NODE-21` **deletes** the cert
-  from production (evidence-only); `DC-NODE-22` makes warm-start **re-enter** the extend state on the
-  recovered own-spine tip so a restart does not re-introduce the follow-link dependency.
-- **PHASE4-N-AG is superseded — its hermetic core stands.** N-AG's CE-AG-1..4 (the 32-case planner totality,
-  the 7-condition fail-closed continuation, the post-feed-end replay-equivalence) **landed and pass** as
-  hermetic infrastructure (`DC-NODE-19`). Its live sustained CE (CE-AG-5 = CE-AF-6b) was **re-homed** to N-AH
-  CE-AH-6 because the cert-promotion entry mechanism it relied on was retired by DC-NODE-20. `DC-NODE-19`
-  stays **`declared`** (not overclaimed as independent live architecture — the live forge architecture is
-  DC-NODE-20) and is **strengthened by N-AH**.
-- **GREEN+RED only, +0 BLUE / +0 BLUE type / no new persistence surface.** The span touches **no** BLUE file;
-  the fix is the GREEN forge-mode machinery + planner projection + warm-start decision + closed sched
-  vocabulary (`ade_node::{node_sync, run_loop_planner, live_log::*}`) + the RED loop rewire + CLI removal +
-  the additive derived bootstrap summary (`ade_node::{node_lifecycle, cli}` + `ade_runtime::bootstrap`). The
-  cert is **removed** from production (not just demoted); `replayed_anchor_block_no` is a **derived** recovery
-  summary, never independently persisted. BLUE canonical-type count **458 → 458**; `pump_block` durable
-  admission (`DC-NODE-05`/`DC-NODE-12`/`DC-NODE-16`), `ChainDb::tip`, ledger/chain_dep/WAL, and chain
-  selection (`DC-CONS-03`) are all unchanged.
-- **`DC-CONS-03` untouched; the fence fails closed, never resolves.** The local-tip authority is gated behind
-  `VenueRole::SingleProducer`; the observed-feed competing-block predicate **fails closed** on any peer-origin
-  non-spine block — **no fork resolution** is attempted (that is rung 2). `DC-CONS-03` stays the sole
-  follow/fork authority; the continuation/forge-base decision never selects/reorders/prefers chains. The five
-  new gates fence: local-tip-forge-base + 6-condition-fence (S1), cert-not-in-forge-path (S2), warm-start
-  re-entry fail-closed (S4b), forge-base-evidence emit-only (S4a), and loop-continuation 32-case +
-  fence-reused + clock-bounded (N-AG).
-- **N-AF close tail is the span head (docs/archive only).** `600581e8` (the formal `Close PHASE4-N-AF`,
-  archiving the cluster docs) and `2d99cdf2` (the C2-guide §7b record) are **docs/archive only** (no `.rs` /
-  `.sh`); they added **no** rule. The registry was already at 343 from the N-AF impl.
-- **Grounding-doc debt paid this close.** Unlike the N-AF close (which deferred CODEMAP/SEAMS), PHASE4-N-AH
-  **regenerated all four grounding docs** to `5858288e`, folding the whole `6363683e..5858288e` span (N-AF
-  DC-NODE-18, N-AG DC-NODE-19, N-AH DC-NODE-20/21/22). CODEMAP/SEAMS/TRACEABILITY now carry
-  DC-NODE-18/19/20/21/22 + all five new gates — **no staleness this close**. The next cluster's
-  `/head-deltas` measures from `5858288e`.
-- **Carry-forward (rung-1 hardening, not blockers).** **AH-FOLLOW-1:** broaden the DC-NODE-20 competing-block
-  fence from the observed-tip `block_no`/hash checks to a RED-computed "peer-origin candidate not in Ade's
-  admitted spine / own-served lineage" flag (ChainDb spine-membership) threaded into the GREEN fence —
-  classify as rung-1 hardening before multi-producer / rung 2. The independent-anchor-tip persistence
-  (DC-NODE-22 option b′) is a deferred storage-hardening slice. **OQ-KA** (follow-link keep-alive / reconnect)
-  remains a separate non-blocking cousin.
+- **The headline boundary (verbatim).** Ade now **follows ONE peer's chain-sync `RollBackward` reorg
+  end-to-end** on a declared Participant venue — durable-point lookup → `ChainEvent::RolledBack` → materialize
+  + lockstep + a version-gated `WalEntry::RollBack` durable marker + `pump_block` roll-forward,
+  replay-equivalently and fail-closed. **This is single-best-peer rollback-following, NOT full multi-peer
+  Cardano ChainSel.**
+- **`CN-CONS-03` was NOT flipped (load-bearing).** The cluster plan intended `CN-CONS-03` (live convergence) to
+  flip declared→enforced, but the **close held it `declared`, strengthened only**: its statement is broad
+  (full multi-peer ChainSel) and the live convergence evidence (CE-AI-6) is **operator-gated and
+  vacuous-until-committed** — only the single-best-peer venue was exercised. Promoting it requires the
+  committed operator convergence transcript **plus** a later multi-peer candidate-set slice.
+- **`pump_block` stays the sole admit; SingleProducer unchanged.** The roll-forward durable admit authority is
+  unchanged (`DC-NODE-05`/`DC-NODE-12`); the SingleProducer venue stays **fail-closed unchanged**
+  (`NodeSyncError::UnexpectedRollback` on any peer rollback; `DC-NODE-20`/`DC-NODE-24` `RefuseSingleProducer`).
+  N-AI adds a **follow** path for a Participant venue; it does not change the producer path.
+- **First BLUE delta since G-N — a durable marker, not a second rollback impl.** +2 BLUE canonical types
+  (`RollbackPoint`, `RollbackReason`), one new closed BLUE WAL variant (`WalEntry::RollBack`), one new closed
+  BLUE error (`WalError::RollbackTargetNotInChain`). The marker **re-invokes the existing
+  `materialize_rolled_back_state` + lockstep reducer on replay** — it is not a second rollback implementation.
+  `select_best_chain` production is **byte-identical** (the only `fork_choice` change is a `#[cfg(test)]`
+  permutation proof). BLUE count `458 → 460`.
+- **H-1 remediated at cluster-close (AI-S6 / `DC-NODE-29`).** The per-cluster security review found that the
+  live RollBack path could build a rollback target from mixed peer/local authority (a malicious peer could
+  truncate the durable chain and brick the node); AI-S6 bound the target to the durable stored chain point
+  (stored slot + hash, validated **pre-mutation**, fail-closed). Security re-review: **H-1 CLOSED, no new
+  findings.** A forward OQ remains: the orchestrator's `chain_selector::process_rollback` path should also be
+  aligned with the `DC-NODE-29` canonical target binding (it is not on the live block/pump follow path today).
+- **No `RO-LIVE` flip.** CE-AI-6 is the operator-gated convergence transcript (vacuous-until-committed,
+  sha256-bound). `RO-LIVE-01` stays operator-gated / partial. No `RO-LIVE` registry status changed this span.
+- **SEAMS + TRACEABILITY refresh owed this close.** CODEMAP was regenerated to `5ec841c8` and is current;
+  SEAMS + TRACEABILITY remain pinned at the N-AH close `5858288e` and do not yet carry `DC-NODE-23..29`. The
+  registry holds the seven new rules + nine gate bindings + thirteen strengthenings authoritatively at HEAD
+  (354 rules) in the interim. Regenerating SEAMS + TRACEABILITY to `5ec841c8` is the named follow-on.
+- **One unrelated commit folded into the span.** `cbad2ae3` (`docs(evidence): add preprod ADE1 pool
+  registration manifest`,`docs/evidence/preprod-pool-registration.md`) is docs-only and **not** PHASE4-N-AI
+  work; it sits inside the `8e2c3672..HEAD` range and is recorded in §1 for completeness.
+
+---
+
+## Historical — PHASE4-N-AG superseded + PHASE4-N-AH local-tip forge-base authority (`f87d0056 → 5858288e`)
+
+> The section below is the **previous** HEAD_DELTAS lead, preserved in condensed form. It narrated the
+> `f87d0056 → 5858288e` span: the **PHASE4-N-AF close tail** (`600581e8` + `2d99cdf2`, docs/archive only) +
+> the **PHASE4-N-AG cluster** (single-producer loop-continuation-after-feed-EOF, `DC-NODE-19`;
+> **superseded-close** — hermetic core CE-AG-1..4 complete, live CE re-homed to N-AH) + the **PHASE4-N-AH
+> cluster** (local selected durable chain forge-base authority `DC-NODE-20` + cert evidence-only `DC-NODE-21`
+> + single-producer warm-start re-entry `DC-NODE-22`). **32 commits, 48 files, +5155 / −743.** **RED/GREEN-only
+> — ZERO BLUE change, 458 → 458 canonical types** (six source files in `ade_node` + `ade_runtime`). CI gates
+> **143 → 148** (+5: `single_producer_loop_continuation`, `local_durable_forge_base`, `cert_evidence_only`,
+> `warm_start_re_entry`, `live_transcript_forge_base`; 3 modified in place; 0 removed). Registry **343 → 347**
+> (+4: `DC-NODE-19` declared + `DC-NODE-20/21/22` enforced; 9 strengthenings, all `PHASE4-N-AH`; 0 removed).
+> Headline (honest boundary): Ade sustained **cert-free single-producer block production on C2-LOCAL**
+> (`cardano-testnet` magic 42) against a real Haskell relay (`cardano-node 11.0.1`) — forged on its OWN local
+> durable `ChainDb::tip`, crossed a follow-link EOF, settled `> k` immutable, and resumed forging after a hard
+> restart (run-4, `docs/evidence/phase4-n-ah-ce-ah-6-close.{md,jsonl}`). NOT preprod. NOT bounty completion.
+> No `RO-LIVE` flip. The N-AF operator-adoption certificate had leaked from evidence into forge-loop authority;
+> N-AH retired it (folded out the `FirstOwnBlockServed` cert-wait `ForgeMode` state + **deleted** the
+> `VenueAdoptionCertificate` type + cert parser + `--adoption-cert-path` flag). All four grounding docs were
+> regenerated at the N-AH close (paying the deferred N-AF + N-AG CODEMAP debt). The full §§0–7 narrative is
+> recoverable from this doc's git history at `5858288e`.
 
 ---
 
 ## Historical — PHASE4-N-AF single-producer extend-own-durable-spine (`6363683e → f87d0056`)
 
-> The section below is the **previous** HEAD_DELTAS lead, preserved in condensed form. It was a
-> **single-slice cluster lead** narrating the `6363683e → f87d0056` span: the PHASE4-N-AE.F close
-> grounding-doc refresh (`d3f52e7c`, the baseline's own docs commit, span head) + a C2-guide doc (`1302417d`)
-> followed by the **OQ-1 / DC-NODE-17 investigation** (`bd1a7a73` declared DC-NODE-17 → `dadf4743`
-> live-disproved it as the fix) and the **PHASE4-N-AF cluster** (single slice AF.S1 — `DC-NODE-18`,
-> single-producer extend-own-durable-spine). Counts here are the figures **at `f87d0056`** (343 rules, 143 CI
-> gates, 458 canonical types); the current window measures **forward** from `f87d0056`. The full §§0–7
-> narrative is recoverable from this doc's git history at `f87d0056`.
-
-> Baseline: `6363683e` (AE.F receive idempotency — survive the post-adoption echo, 2026-06-07 13:40)
-> HEAD: `f87d0056` (PHASE4-N-AF S1 — enforce DC-NODE-18 core (extend-after-cert) + 2 live-surfaced loop fixes, 2026-06-07 23:59)
-> Span: **the PHASE4-N-AE.F close grounding refresh + the OQ-1 / DC-NODE-17 investigation + the PHASE4-N-AF cluster (DC-NODE-18)** — 8 commits, 19 files, +2489 / −456.
-
-PHASE4-N-AF enforced **`DC-NODE-18`**: a mode-aware ForgeTick gate (the `ForgeMode` enum — at N-AF a 4-state
-`InitialCatchupRequired → CaughtUpToPeerTip → FirstOwnBlockServed → SingleProducerExtendOwnDurableSpine`,
-GREEN transition fn, no booleans) let a declared single-producer venue forge on Ade's **OWN durable spine
-WITHOUT a relay echo**, **after** an explicit RED venue-adoption certificate matched by **chain-point
-identity** (hash + block_no), **never** inferred from self-admit; fail-closed
-`ForgeRefused::SingleProducerFenceViolation`; the certificate was **admissibility-only** (never persisted /
-replay-visible); the default `VenueRole::Unknown` path was the verbatim prior `DC-NODE-15` gate.
-**N-AF-window headline (at `f87d0056`):** Registry **341 → 343** (+DC-NODE-17 declared + DC-NODE-18 enforced;
-0 strengthenings; 0 removed; status 209 → 210 enforced). CI gates **142 → 143** (+1
-`ci_check_single_producer_extend_own_spine.sh`; 0 modified / 0 removed). **GREEN+RED only — BLUE canonical
-types 458 → 458** (no BLUE file touched). Two live-surfaced loop fixes (a `not_leader`-advance bug + a
-cert-match-too-strict-on-slot bug) landed in the close commit, both missed by the hermetic suite + the
-IDD/security reviews. **No `RO-LIVE` flip.** The N-AF live proof (run c2t7 — block 11 forged WITHOUT echo
-after an adoption certificate) **validated the cert-free architecture** that **PHASE4-N-AH then made the
-production path** (folding out `FirstOwnBlockServed` + removing the cert — see the current lead).
-CODEMAP/SEAMS/TRACEABILITY refresh was **deferred** at the N-AF close and **paid in full at the N-AH close**.
+> Preserved as a pointer. A **single-slice cluster lead** narrating the `6363683e → f87d0056` span: the
+> PHASE4-N-AE.F close grounding-doc refresh (`d3f52e7c`, span head) + a C2-guide doc (`1302417d`) followed by
+> the **OQ-1 / DC-NODE-17 investigation** (`bd1a7a73` declared DC-NODE-17 → `dadf4743` live-disproved it as the
+> fix) and the **PHASE4-N-AF cluster** (single slice AF.S1 — `DC-NODE-18`, single-producer
+> extend-own-durable-spine). Counts at `f87d0056`: 343 rules, 143 CI gates, 458 canonical types. **GREEN+RED
+> only — BLUE 458 → 458.** New gate `ci_check_single_producer_extend_own_spine.sh`. `DC-NODE-17` declared then
+> live-disproved (the relay does NOT re-announce Ade's own block) and retained safety/observation-only; the
+> actual fix was `DC-NODE-18`. No `RO-LIVE` flip. CODEMAP/SEAMS/TRACEABILITY refresh was deferred at the N-AF
+> close and paid at the N-AH close. The full §§0–7 narrative is recoverable from this doc's git history at
+> `f87d0056`.
 
 ---
 
@@ -503,7 +517,7 @@ CODEMAP/SEAMS/TRACEABILITY refresh was **deferred** at the N-AF close and **paid
 > hash, same slot) is an idempotent no-op at `pump_block`, so a continuous recover→follow run survives the
 > post-adoption echo instead of exiting 43). Counts at `6363683e`: 341 rules, 142 CI gates, 458 canonical
 > types. **RED chokepoint only — BLUE 458 → 458.** New gate `ci_check_receive_idempotency.sh`. No `RO-LIVE`
-> flip. The full §§0–7 narrative is recoverable from this doc's git history at `6363683e` / `d3f52e7c`.
+> flip. The full §§0–7 narrative is recoverable from this doc's git history at `6363683e`.
 
 ---
 
@@ -534,93 +548,90 @@ CODEMAP/SEAMS/TRACEABILITY refresh was **deferred** at the N-AF close and **paid
 > forged-block durability — `DC-NODE-12`, `DC-CONS-23`, `DC-WAL-04`, `T-REC-05`, `DC-NODE-13`; one new RED
 > module `served_chain_projection`; 328 → 333 rules); and the **G-K…G-R + C1 multi-cluster catch-up**
 > (`550eec3a → 65954fa3`, eight clusters toward a live genesis-successor follower — 319 → 328 rules, 126 →
-> 134 CI gates, the one BLUE canonical type `ArrayHead` 457 → 458). The full §§0–7 narrative for each is
-> recoverable from this doc's git history at the respective HEADs.
+> 134 CI gates, the one BLUE canonical type `ArrayHead` 457 → 458 — the **last BLUE delta before this
+> window's `WalEntry::RollBack` types**). The full §§0–7 narrative for each is recoverable from this doc's
+> git history at the respective HEADs.
 
 ---
 
 ## Generation notes
 
-### Regen `f87d0056 → 5858288e` (PHASE4-N-AG superseded + PHASE4-N-AH local-tip forge-base authority — current lead)
+### Regen `8e2c3672 → 5ec841c8` (PHASE4-N-AI live fork-choice rollback-follow wiring — current lead)
 
-- **Baseline valid; two pivoting single-theme clusters preceded by the N-AF close tail.** Run against
-  `f87d0056` (the PHASE4-N-AF S1 close, the prior HEAD_DELTAS HEAD), which `git rev-parse` resolves and `git
-  merge-base f87d0056 HEAD` confirms is a strict ancestor of HEAD `5858288e` (`f87d0056` carries no tag). The
-  start-of-regen config baseline was already `f87d0056` (the previous close bumped it). The closer bumps
-  `head_deltas_baseline` `f87d0056 → 5858288e` after this regen.
-- **Counts are mechanical (git/grep/ls):** commit log + `--shortstat` over `f87d0056..HEAD` (**32** commits,
-  no merges / **48** files / **+5155 / −743**); CI gate count via `git ls-tree -r --name-only <ref> ci/ |
-  grep -cE 'ci_check_.*\.sh$'` at each ref (**143 → 148**; `--diff-filter=A` over `ci/` = the five new gates;
-  `--diff-filter=M` = the three modified gates — `ci_check_forge_followed_tip_admission.sh`,
-  `ci_check_node_path_fidelity.sh`, `ci_check_single_producer_extend_own_spine.sh`; `--diff-filter=D` over
-  `ci/` **empty**); registry rule count via `grep -cE '^id = '` at each ref (**343 → 347**; `diff` of sorted
-  `id =` lists shows the four additions `DC-NODE-19/20/21/22`, zero removals); registry status via `grep -E
-  '^status = ' | sort | uniq -c` (**210 → 213 enforced**, **113 → 114 declared**, 20 partial unchanged);
-  strengthenings = **9** (a `python` scan of `strengthened_in` lines shows `PHASE4-N-AH` appended to
-  CN-NODE-02 / CN-NODE-04 / DC-NODE-05 / DC-NODE-12 / DC-NODE-15 / DC-NODE-18 / DC-NODE-19 / T-REC-03 /
-  T-REC-05; **zero** `PHASE4-N-AG` strengthening tag — folded into N-AH); BLUE canonical types via a `git
-  diff f87d0056..HEAD` over the BLUE `core_paths` trees (**empty diff, zero `pub struct/enum` → 458 → 458**).
-- **Note (brief vs. git — the third modified gate).** The close brief named two in-place gate edits
-  (`ci_check_forge_followed_tip_admission.sh`, `ci_check_node_path_fidelity.sh`). `git diff --diff-filter=M`
-  over `ci/` shows a **third**: `ci_check_single_producer_extend_own_spine.sh` was edited at AH.S1
-  (`b0fb8817`) so the DC-NODE-18 gate asserts the **3-state** `ForgeMode` (the `FirstOwnBlockServed` cert-wait
-  **removed**) and the cert-promotion-free `forge_mode_after_admit`. Recorded faithfully (git is authoritative);
-  the §0 / §5 counts read **3 gates modified**, not 2.
-- **GREEN+RED-only span — no BLUE file, +0 BLUE canonical type, no Cargo.toml change.** `git diff
-  --name-status f87d0056..HEAD` shows the only production-code change is six source files in `ade_node` +
-  `ade_runtime` (`node_sync.rs`, `run_loop_planner.rs`, `node_lifecycle.rs`, `cli.rs`,
-  `live_log/{sched_event,sched_writer}.rs`, `ade_runtime/src/bootstrap.rs`) and `git diff f87d0056..HEAD` over
-  the BLUE trees is **empty**. No new `.rs` *source* file. `git diff --name-only … '**/Cargo.toml' 'Cargo.toml'`
-  is empty (no feature-flag delta; the notable CLI-flag delta is a **removal**, `--adoption-cert-path`).
-  **Classification note:** `node_sync.rs` + `run_loop_planner.rs` + `live_log/{sched_event,sched_writer}.rs`
-  are **GREEN** (pure/total/deterministic, no I/O / emit-only); `node_lifecycle.rs` + `cli.rs` are **RED**
-  (the loop + CLI); `ade_runtime::bootstrap` is the **RED** shell. `ade_node` is neither a BLUE `core_paths`
-  crate nor `ade_runtime` (the RED shell crate); per the project's TCB scoping the new GREEN/RED items are
-  non-BLUE.
-- **Registry delta is +4 rules (three enforced, one declared) + 9 strengthenings, NOT a removal.**
-  `DC-NODE-20` / `DC-NODE-21` are declared (`b261589d`) then flipped declared → enforced at the N-AH close
-  `5858288e`; `DC-NODE-22` is declared (S4b authority `16792f58`) then enforced at close; `DC-NODE-19` is
-  declared (`7e1e8276`) and **stays declared** (its live CE was superseded — N-AG superseded-close). The
-  sorted-id `diff` confirms zero removals. Retiring the N-AF cert mechanism (folding out `FirstOwnBlockServed`,
-  deleting the parser) is **not** a rule removal — `DC-NODE-18` is retained + strengthened.
-- **Span head is the N-AF close tail (`600581e8` + `2d99cdf2`).** Both are **docs/archive only** (`git show
-  --name-only` has no `.rs` / `.sh`); `600581e8` archived the N-AF cluster docs to
-  `docs/clusters/completed/PHASE4-N-AF/`. The registry was already at 343 from the N-AF impl; neither added a
-  rule.
-- **No `RO-LIVE` flip; CE-AH-6 is the live-proven core on the cert-free path.** N-AH's DC-NODE-20/21/22 are
-  recorded `enforced` for the rung-1 single-producer scope, backed by hermetic enforcement (the five gates +
-  the unit/replay tests) + the run-4 C2-LOCAL live proof (cert-free local-tip forge, sustained `> k`
-  immutable across a follow-link EOF + a restart, a real Haskell relay adopting). It does **NOT** claim
-  preprod or bounty completion. No `RO-LIVE` registry status changed this span (`RO-LIVE-01` stays
-  operator-gated / partial).
-- **Normative docs unchanged this span.** `git diff --name-only f87d0056..HEAD` over the configured
+- **Baseline valid; one single-theme cluster + an unrelated docs commit, preceded by the N-AH baseline-bump
+  chore.** Run against `8e2c3672` (the PHASE4-N-AH close, the prior HEAD_DELTAS HEAD), which `git rev-parse`
+  resolves and `git merge-base 8e2c3672 HEAD` confirms is a strict ancestor of HEAD `5ec841c8` (`8e2c3672`
+  carries no tag). The start-of-regen config baseline was already `8e2c3672`. The closer bumps
+  `head_deltas_baseline` `8e2c3672 → 5ec841c8` as a **separate post-close step** (NOT performed by this regen).
+- **Counts are mechanical (git/grep/ls):** commit log + `--shortstat` over `8e2c3672..HEAD` (**26** commits, no
+  merges / **46** files / **+5350 / −53**); CI gate count via `ls ci/ci_check_*.sh | wc -l` + `git ls-tree -r
+  --name-only <ref> ci/ | grep -c` at each ref (**148 → 157**; `--diff-filter=A` over `ci/ci_check_*.sh` = the
+  nine new gates; `--diff-filter=M` and `--diff-filter=D` over `ci/` **empty**); registry rule count via `grep
+  -cE '^\[\[rules\]\]'` at each ref (**347 → 354**; `comm`/`diff` of the sorted `id =` lists shows the seven
+  additions `DC-NODE-23..29`, zero removals); registry status via `grep -E '^status = ' | sort | uniq -c`
+  (**213 → 221 enforced**, **20 → 19 partial**, 114 declared unchanged); the enforced/partial delta reconciled
+  by an `awk` id↔status `comm` showing the newly-enforced set is exactly `{CN-CONS-01, DC-NODE-23..29}` and the
+  de-partialed set is exactly `{CN-CONS-01}`; strengthenings = **13** (an `awk` scan of `strengthened_in` lines
+  shows `PHASE4-N-AI` appended to `CN-CONS-01`, `CN-CONS-03`, `CN-STORE-07`, `DC-CONS-03`, `DC-CONS-05`,
+  `DC-CONS-06`, `DC-CONS-20`, `DC-NODE-05`, `DC-NODE-12`, `DC-NODE-20`, `DC-PUMP-01`, `T-REC-03`, `T-REC-05`);
+  BLUE canonical types via `git grep -hE '^(pub )?(struct|enum) '` over the BLUE `core_paths` trees at each ref
+  (**458 → 460**; the +2 in `ade_ledger::wal::event`).
+- **First BLUE delta since G-N — +2 canonical types, three BLUE files (one `#[cfg(test)]`-only).** `git diff
+  --name-status 8e2c3672..HEAD` over the BLUE trees shows exactly three BLUE files: `ade_ledger::wal::{event,
+  replay, error, mod, store_trait}` (production — the new closed `WalEntry::RollBack` durable MARKER + its
+  replay arm + the two BLUE payload types + the closed error) and `ade_core::consensus::fork_choice` (**only a
+  `#[cfg(test)]` permutation proof — `@@ -340,4 +340,89 @@ mod tests`; production `select_best_chain`
+  byte-identical**). `git diff --name-only … '**/Cargo.toml' 'Cargo.toml'` is empty (no feature-flag delta;
+  the notable CLI-flag delta is an **addition**, `--participant-venue`, mutually exclusive with
+  `--single-producer-venue`).
+- **No new module — the five new `.rs` files are all tests.** `git diff --diff-filter=A --name-only … 'crates/**/*.rs'`
+  lists `wal_rollback_ai_s1.rs` + four `ade_node` test files, all under `crates/*/tests/`. The new BLUE types +
+  variant live **inside** the existing `ade_ledger::wal::event`; the new GREEN/RED types live **inside** the
+  existing `ade_node::{node_sync, node_lifecycle}`.
+- **Registry delta is +7 rules (all enforced) + 1 flip + 13 strengthenings, NOT a removal.** `DC-NODE-23..28`
+  were declared at `/invariants` (`d92f9ce8`) then flipped declared→enforced at the close; `DC-NODE-29` was
+  introduced **and** enforced by AI-S6 (`5ec841c8`); `CN-CONS-01` flipped `partial → enforced` (AI-S5); the
+  sorted-id `comm` confirms zero removals. **`CN-CONS-03` was NOT flipped** — it stays `declared` (strengthened
+  only), recorded faithfully against the cluster doc's close record (the plan intended a flip; the close held
+  it, single-best-peer scope).
+- **Classification note (TCB).** `ade_node::node_sync` is **GREEN** (pure/total/deterministic detector +
+  resolver, no I/O); `ade_node::node_lifecycle` + `cli` + `main` are **RED** (the loop + CLI);
+  `ade_runtime::{admission::wire_pump, recovery::restart}` and `ade_node::admission::bootstrap` are the **RED**
+  shell; `ade_ledger::wal` + `ade_core::consensus::fork_choice` are **BLUE** (`core_paths`). `ade_node` is
+  neither a BLUE `core_paths` crate nor `ade_runtime` (the RED shell crate); per the project's TCB scoping the
+  new `ade_node` GREEN/RED types are non-BLUE.
+- **No `RO-LIVE` flip; CE-AI-6 is operator-gated/vacuous.** N-AI's `DC-NODE-23..29` are recorded `enforced` for
+  the single-best-peer rung-2 follow scope, backed by hermetic enforcement (the nine gates + unit/replay
+  tests). CE-AI-6 (live convergence) is operator-gated, vacuous-until-committed, sha256-bound — **NOT** a
+  bounty/preprod claim. No `RO-LIVE` registry status changed this span (`RO-LIVE-01` stays operator-gated /
+  partial).
+- **Normative docs unchanged this span.** `git diff --name-only 8e2c3672..HEAD` over the configured
   `normative_docs` (CE-79 statement + addendum, the three contract docs, CE-73 reclassification, `CLAUDE.md`)
   is empty — the §7 delta is entirely the invariant-registry change.
-- **§1 commit log verbatim from `git log --oneline --no-merges` (newest first).** The per-slice synthesis is
-  in §0/§3. All but two subjects carry a `docs(...)` / `feat(...)` / `fix(...)` / `test(...)` prefix; the
-  prefix-less `600581e8` (`Close PHASE4-N-AF …`) classifies by diff scope as **close** (docs/archive only).
-- **Doc-refresh state — all four grounding docs REGENERATED this close.** Unlike the N-AF close (which
-  deferred CODEMAP/SEAMS), PHASE4-N-AH regenerated CODEMAP + SEAMS + TRACEABILITY to `5858288e`, paying the
-  deferred N-AF + N-AG debt. Cross-reference verified by `grep -c`: CODEMAP carries `DC-NODE-20` ×26 /
-  `DC-NODE-21` ×12 / `DC-NODE-22` ×16 / `DC-NODE-19` ×16 + all five new gates + `VenuePolicy` /
-  `warm_start_forge_mode` / `replayed_anchor_block_no` / `ForgeBaseSelected`; TRACEABILITY carries the
-  `DC-NODE-20/21/22 ↔ gate` rows (`DC-NODE-20` ×29 / `DC-NODE-21` ×17 / `DC-NODE-22` ×10). **No staleness;
-  no cross-reference warning.**
-- **Working tree clean.** This regen runs *after* all 32 span commits (the N-AH close `5858288e` is HEAD for
+- **§1 commit log verbatim from `git log --oneline --no-merges` (newest first).** The per-slice synthesis is in
+  §0/§3. Every subject carries a conventional-commits prefix; `cbad2ae3` (`docs(evidence): … pool registration
+  manifest`) is **unrelated to N-AI** and recorded as such (docs-only, folded into the span by date range).
+- **Doc-refresh state — CODEMAP current, SEAMS + TRACEABILITY one cluster STALE (refresh owed).** CODEMAP was
+  regenerated to `5ec841c8` (verified by `grep -c`: it carries `DC-NODE-23` ×14 / `DC-NODE-24` ×3 / `DC-NODE-25`
+  ×13 / `DC-NODE-26` ×3 / `DC-NODE-27` ×10 / `DC-NODE-28` ×11 / `DC-NODE-29` ×16 / `DC-PUMP-01` ×13 +
+  `RollbackPoint`/`RollbackReason`/`WalEntry::RollBack` + BLUE count `460` + all nine new gates). **SEAMS +
+  TRACEABILITY remain pinned at `5858288e`** (`grep -c DC-NODE-23/27/29` in TRACEABILITY = 0; SEAMS header still
+  "458 canonical types, 148 CI checks at `5858288e`"). **Cross-reference warning surfaced in §5:** regenerate
+  SEAMS + TRACEABILITY to `5ec841c8` as a follow-on this close; the registry holds the new bindings
+  authoritatively in the interim (354 rules). No orphan gate — each of the nine enforces its named rule.
+- **Working tree clean.** This regen runs *after* all 26 span commits (the AI-S6 close `5ec841c8` is HEAD for
   this window); `git status --short` shows only an untracked `.mithril-scratch/` (operator scratch, ignored).
-  The remaining close-pass action is the baseline bump `f87d0056 → 5858288e`.
+  The remaining close-pass actions are the SEAMS + TRACEABILITY refresh and the baseline bump `8e2c3672 →
+  5ec841c8` (both separate post-close steps; this regen does **not** touch `.idd-config.json` `head_deltas_baseline`).
 
-### Regen `6363683e → f87d0056` (PHASE4-N-AF single-producer extend-own-durable-spine — prior lead)
+### Regen `f87d0056 → 5858288e` (PHASE4-N-AG superseded + PHASE4-N-AH local-tip forge-base authority — prior lead)
 
-- **Single-slice cluster lead** preceded by a docs-only investigation arc, measured from `6363683e` (the
-  PHASE4-N-AE.F idempotency fix). **8** commits / **19** files / **+2489 / −456** (the AE.F-close grounding
-  refresh `d3f52e7c` dominates the doc churn; the AF.S1 impl is the only production change — GREEN
-  `node_sync.rs`, RED `node_lifecycle.rs` + `cli.rs`); CI gates **142 → 143** (+1
-  `ci_check_single_producer_extend_own_spine.sh`; 0 modified / 0 removed); registry **341 → 343** (+DC-NODE-17
-  declared + DC-NODE-18 enforced; 0 strengthenings; 0 removed; status 209 → 210 enforced); BLUE canonical
-  types **458 → 458** (GREEN+RED only — no BLUE file touched). `DC-NODE-17` was declared then **live-disproved**
-  as the fix (the relay does NOT re-announce Ade's own block) and retained safety/observation-only; the actual
-  fix was `DC-NODE-18` (extend the chain Ade is building). Two live-surfaced loop fixes landed in the close
-  commit, both missed by the hermetic suite + the IDD/security reviews. CODEMAP/SEAMS/TRACEABILITY refresh was
-  **deferred** at the N-AF close and **paid at the N-AH close** (the current lead). No `RO-LIVE` flip. Full
-  notes recoverable from this doc's git history at `f87d0056`.
+- **Two pivoting single-theme clusters preceded by the N-AF close tail**, measured from `f87d0056` (the
+  PHASE4-N-AF S1 close). **32** commits / **48** files / **+5155 / −743**; CI gates **143 → 148** (+5 new, 3
+  modified in place, 0 removed); registry **343 → 347** (+4: `DC-NODE-19` declared + `DC-NODE-20/21/22`
+  enforced; 9 strengthenings all `PHASE4-N-AH`; 0 removed; status 210 → 213 enforced, 113 → 114 declared, 20
+  partial unchanged); BLUE canonical types **458 → 458** (GREEN+RED only — no BLUE file touched). N-AG was
+  superseded-closed (hermetic core CE-AG-1..4 complete; live CE re-homed to N-AH CE-AH-6); the N-AF cert
+  mechanism was retired (folded out `FirstOwnBlockServed`, deleted the parser + flag). All four grounding docs
+  were regenerated at the N-AH close (paying the deferred N-AF + N-AG CODEMAP debt). No `RO-LIVE` flip. Full
+  notes recoverable from this doc's git history at `5858288e`.
