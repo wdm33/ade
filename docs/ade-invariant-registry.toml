@@ -4038,6 +4038,16 @@ BOTH DIRECTIONS:
 Per memory [[feedback-shell-must-not-overstate-semantic-truth]]
 the per-mode-isolation discipline shipped at PHASE4-N-L-LIVE
 carries forward.
+
+PHASE4-N-AJ extends this to a THIRD isolated closed-vocabulary
+file: the convergence-evidence transcript
+(--convergence-evidence-path) carries ONLY the closed 3-variant
+convergence subset {block_received, block_admitted,
+agreement_verdict} via the ConvergenceEvidenceSink wrapper (no
+inner-writer accessor); it emits no sched/forge/wire-only
+literals and none of the excluded admission-lifecycle variants.
+ci/ci_check_convergence_evidence_vocabulary_closed.sh is the
+file-tree half.
 """
 source = "docs/planning/phase4-n-m-b-admission-invariants.md §1 (I-B4) + §2 (¬P-B10)"
 cross_ref = ["RO-LIVE-04"]
@@ -4053,8 +4063,9 @@ tests = [
     "ade_node::admission_log::writer::tests::admission_log_writer_omits_optional_fields_when_none",
     "ade_node::admission_log::writer::tests::admission_log_writer_lines_are_parseable_as_one_json_object_per_line",
 ]
-ci_scripts = ["ci/ci_check_admission_log_vocabulary_closed.sh"]
+ci_scripts = ["ci/ci_check_admission_log_vocabulary_closed.sh", "ci/ci_check_convergence_evidence_vocabulary_closed.sh"]
 status = "enforced"
+strengthened_in = ["PHASE4-N-AJ"]
 
 [[rules]]
 id = "DC-ADMIT-05"

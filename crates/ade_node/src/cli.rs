@@ -142,6 +142,13 @@ pub struct Cli {
     /// `--single-producer-venue`. Default `false`. AI-S4b-i: inert until the
     /// live wiring lands.
     pub participant_venue: bool,
+    /// `--convergence-evidence-path`: PHASE4-N-AJ AJ-S1. Optional path for the
+    /// dedicated convergence-evidence JSONL sink (`--mode node` participant
+    /// venue). `None` => no convergence-evidence file is opened or written;
+    /// consensus behavior and existing logs are unchanged. INERT in AJ-S1
+    /// (parsed but not yet read by the node lifecycle; the participant-path
+    /// emission flip is AJ-S2).
+    pub convergence_evidence_path: Option<PathBuf>,
 }
 
 /// Closed admission-mode CLI bundle (B5).
@@ -257,6 +264,7 @@ impl Cli {
         let mut max_slots: Option<u64> = None;
         let mut single_producer_venue = false;
         let mut participant_venue = false;
+        let mut convergence_evidence_path: Option<PathBuf> = None;
 
         while let Some(arg) = iter.next() {
             match arg.as_str() {
@@ -302,6 +310,13 @@ impl Cli {
                 // PHASE4-N-AI AI-S4b-i (OQ-5): explicit participant venue.
                 "--participant-venue" => {
                     participant_venue = true;
+                }
+                // PHASE4-N-AJ AJ-S1: dedicated convergence-evidence sink path.
+                "--convergence-evidence-path" => {
+                    let v = iter.next().ok_or_else(|| {
+                        CliError::FlagMissingValue("--convergence-evidence-path".to_string())
+                    })?;
+                    convergence_evidence_path = Some(PathBuf::from(v));
                 }
                 "--mode" => {
                     let v = iter
@@ -500,6 +515,7 @@ impl Cli {
             max_slots,
             single_producer_venue,
             participant_venue,
+            convergence_evidence_path,
         })
     }
 
@@ -1045,5 +1061,38 @@ mod tests {
             "/tmp/kes.ade.skey",
         ])
         .expect("parse without --genesis-path");
+    }
+
+    // =====================================================================
+    // PHASE4-N-AJ AJ-S1 — --convergence-evidence-path (inert flag plumbing)
+    // =====================================================================
+
+    #[test]
+    fn cli_parses_convergence_evidence_path() {
+        // Absent => None (no convergence-evidence file; behavior unchanged).
+        let cli = parse(&["--genesis-path", "/g"]).expect("parse");
+        assert!(cli.convergence_evidence_path.is_none());
+        // Present => Some(path).
+        let cli = parse(&[
+            "--genesis-path",
+            "/g",
+            "--convergence-evidence-path",
+            "/tmp/conv.jsonl",
+        ])
+        .expect("parse");
+        assert_eq!(
+            cli.convergence_evidence_path,
+            Some(PathBuf::from("/tmp/conv.jsonl"))
+        );
+    }
+
+    #[test]
+    fn cli_convergence_evidence_path_requires_value() {
+        let err = parse(&["--genesis-path", "/g", "--convergence-evidence-path"])
+            .expect_err("must reject missing value");
+        assert_eq!(
+            err,
+            CliError::FlagMissingValue("--convergence-evidence-path".to_string())
+        );
     }
 }

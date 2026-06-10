@@ -18,6 +18,7 @@ pub mod admission_log;
 pub mod ba02_evidence;
 pub mod ba02_pass;
 pub mod cli;
+pub mod convergence_evidence;
 pub mod forge_intent;
 pub mod key_gen;
 pub mod live_log;

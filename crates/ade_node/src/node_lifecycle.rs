@@ -2739,6 +2739,7 @@ mod tests {
             max_slots: None,
             single_producer_venue: false,
             participant_venue: false,
+            convergence_evidence_path: None,
         };
         Fixture { _dir: dir, cli }
     }
@@ -3322,6 +3323,7 @@ mod tests {
             max_slots: None,
             single_producer_venue: false,
             participant_venue: false,
+            convergence_evidence_path: None,
         }
     }
 
