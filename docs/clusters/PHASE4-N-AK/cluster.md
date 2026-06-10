@@ -5,16 +5,25 @@
 > differs): the N-AH binary follows the frozen relay from a bare block-8 anchor
 > (`caught_up_to_peer_tip`, `forge_base_block_no=13`, 29 forges); the current binary halts at
 > `UnsupportedRollbackPoint`.
+>
+> **Option A (persist).** The recovered store does NOT carry the anchor `(slot, hash)` point today
+> (the sidecar + WAL provenance carry only `anchor_fp`; the FirstRun arm gets the point from the CLI).
+> N-AH "worked" only by re-syncing from genesis on `RollBackward(Origin)` — never using the anchor.
+> AK **persists the bootstrap anchor point as additive, replayable recovery provenance** and resolves
+> the live-follow start from it — store-derived, never CLI-re-supplied at restart.
 
 ## Primary invariant
 
 **DC-NODE-31** (declared here, targeted **enforced** at close): *After recovery from a non-Origin
-bootstrap anchor, the live-follow start tip exposed by `BootstrapState` resolves to the recovered
-anchor tip (slot + real hash) whenever ChainDb has no servable post-anchor block; resolution order =
-servable ChainDb tip → recovered anchor (non-Origin) → Origin/None only if truly Origin. Does not
-change `ChainDb::tip()` semantics and does not synthesize a servable block; AI-S4a
-`RollBackward(Origin)` fail-close unchanged; replay-equivalent (extends T-REC-05 to the recovered tip
-surface).*
+bootstrap anchor, the recovered store persists the bootstrap anchor point `(slot, hash)` as replayable
+recovery provenance, bound to the recovered anchor fingerprint. On warm-start, `BootstrapState`
+resolves the live-follow start tip from that persisted anchor point whenever ChainDb has no servable
+post-anchor block; resolution = servable ChainDb tip → persisted recovered anchor point (non-Origin +
+provenance-bound) → Origin/None only if truly Origin/cold-start. A non-Origin recovered store whose
+anchor-point record is missing/malformed/fingerprint-mismatched fails closed. Does not change
+`ChainDb::tip()` semantics, does not synthesize a servable block, does not weaken `RollBackward(Origin)`
+fail-close. Replay-equivalent (extends T-REC-05). The persisted anchor point is the durable restart
+authority — NOT CLI re-supply (CLI seed-point is first-run input only).*
 
 **CN-CONS-03 untouched — stays `declared`.** AK restores the live recover→follow path so the CE-AI-6
 operator pass (N-AJ follow-on) becomes runnable again; AK does **not** emit convergence evidence or
@@ -22,102 +31,109 @@ flip CN-CONS-03.
 
 ## Normative anchors
 
-- `docs/planning/phase4-n-ak-recovered-anchor-tip-invariants.md` (AK-INV-1..6, prohibitions, the TCB
-  call, the OQ steers, the acceptance bar).
+- `docs/planning/phase4-n-ak-recovered-anchor-tip-invariants.md` (AK-INV-1..6, the Option-A persist
+  design, prohibitions, OQ steers, the acceptance bar).
 - DC-NODE-23..29 (N-AI single-best-peer rollback-follow; AI-S4a Origin fail-close
   `crates/ade_runtime/src/admission/wire_pump.rs:447` — **preserved**).
 - T-REC-05 (recovered ledger fp == WAL-tail post_fp — this cluster extends replay-equivalence to the
   recovered *tip* surface).
-- CE-AH-6 close evidence (the live recover→follow this cluster restores).
+- DC-MITHRIL-02 (the anchor `seed_point` binding — the canonical-input source the persisted record
+  carries).
+- CE-AH-6 close evidence (the live recover→follow this cluster restores, replacing N-AH's
+  re-sync-from-genesis with FindIntersect-at-the-anchor).
 
 ## Entry Conditions (guaranteed by prior clusters)
 
 - N-M-A: the bootstrap anchor `seed_point` (slot+hash) is minted from `seed_slot`/`seed_block_hash`
-  (`crates/ade_runtime/src/mithril_bootstrap.rs`) — **the recovered anchor is already recorded.**
-- N-AH (DC-NODE-20/22): warm-start recovery + `replayed_anchor_block_no` derivation (bare-anchor vs
-  replayed-spine distinction).
+  (`mithril_bootstrap.rs`) at recover — but **today it is NOT persisted loadably** (the sidecar
+  `SeedEpochConsensusInputs` + the WAL `RecoveredBootstrapProvenance` carry only `anchor_fp`). AK adds
+  that persistence.
+- N-AH (DC-NODE-20/22): warm-start recovery + `replayed_anchor_block_no` derivation.
 - N-AI (DC-NODE-23..29): single-best-peer rollback-follow; AI-S4a Origin fail-close.
 - `bootstrap_initial_state` (`crates/ade_runtime/src/bootstrap.rs`) is the single recovery authority;
   `ChainDb::tip()` returns `Some` only for servable post-anchor blocks.
 
 ## Exit Criteria (CI-verifiable — named checks, not intent)
 
-- **CE-AK-1** (recovery resolution, hermetic): `ade_runtime` tests on
-  `bootstrap_initial_state` / `resolve_live_follow_start` —
-  POSITIVE `bootstrap_bare_anchor_recovery_surfaces_anchor_as_live_follow_tip` (snapshot @ non-Origin
-  anchor, `admit_count==0` ⇒ live-follow tip == anchor slot+real-hash);
-  NEGATIVE `bootstrap_true_origin_recovery_surfaces_none_tip` (cold-start, empty snapshot set ⇒ tip ==
-  `None`);
-  POST-ANCHOR `bootstrap_servable_chaindb_tip_wins_over_anchor` (ChainDb has servable post-anchor
-  blocks ⇒ servable ChainDb tip wins). `cargo test -p ade_runtime` green.
-- **CE-AK-2** (live-follow start point, hermetic): `ade_node` test
+- **CE-AK-1** (persistence + resolution, hermetic — `ade_runtime`):
+  - `bootstrap_recover_persists_anchor_point_sidecar` — seed/recover writes the anchor-point provenance
+    record (bound to `anchor_fp`).
+  - `warm_start_loads_persisted_anchor_point` — warm-start loads it and resolves it as the live-follow
+    start tip for a bare-anchor recovery.
+  - `warm_start_non_origin_anchor_missing_anchor_point_fails_closed` — a non-Origin recovered store
+    with no anchor-point record ⇒ fail closed (no Origin fallback).
+  - `warm_start_anchor_point_fingerprint_mismatch_fails_closed` — a record not bound to the recovered
+    `anchor_fp` ⇒ fail closed.
+  - `same_store_same_anchor_point_same_findintersect_start` — replay-equivalence of the tip surface.
+  - `bootstrap_bare_anchor_recovery_surfaces_anchor_as_live_follow_tip` (bare anchor ⇒ tip == anchor
+    slot+real-hash); `bootstrap_true_origin_recovery_surfaces_none_tip` (cold-start ⇒ tip == None);
+    `bootstrap_servable_chaindb_tip_wins_over_anchor` (post-anchor ⇒ servable ChainDb tip wins);
+    `resolve_live_follow_start_treats_zero_hash_anchor_as_origin` (pure-fn unit).
+  - `cargo test -p ade_runtime` green.
+- **CE-AK-2** (live-follow start point, hermetic — `ade_node`):
   `recovered_bare_anchor_findintersect_starts_at_anchor_not_origin` — a bare-anchor warm-start ⇒
   `spawn_live_wire_pump_source` start_point == the anchor `Block` point (NOT `Origin`) ⇒ the AI-S4a
   Origin fail-close is not reached. `cargo test -p ade_node` green.
-- **CE-AK-3** (live regression re-verification — operator-run, mechanically checked): the FIXED binary,
-  on the **SAME** frozen venue/store/relay the A/B used, `--mode node --single-producer-venue`:
-  - FindIntersect starts from the **recovered anchor, not Origin**;
+- **CE-AK-3** (live regression re-verification — operator-run at close): the FIXED binary, on the
+  **SAME** frozen venue/store/relay the A/B used, `--mode node --single-producer-venue`:
+  - FindIntersect starts from the **persisted recovered anchor, not Origin**;
   - relay catch-up **reaches the frozen relay tip**;
-  - **`forge_base_block_no == frozen relay tip block_no`** (the strongest live signal — the
-    recovered-anchor start point restored the exact follow path; not merely "it forges");
-  - **0** `UnsupportedRollbackPoint` in the run log.
+  - **`forge_base_block_no == frozen relay tip block_no`** (the strongest live signal — the persisted
+    anchor restored the exact follow path; not merely "it forges");
+  - **0** `UnsupportedRollbackPoint`.
 
-  Run at close (the N-AH worktree binary + the frozen `c2-relay` are already standing). Evidence kept
-  outside-repo (scrubbed in-repo note only).
-- **CE-AK-4** (no collateral): `cargo test --workspace` green; `warm_start_recovers_seed_epoch_consensus_inputs_byte_identical`
-  + `warm_start_dispatch_succeeds_end_to_end` (`node_lifecycle.rs`) + the T-REC-05 tests stay green;
-  the three `ci/ci_check_convergence_evidence_{vocabulary_closed,emit_only,schema}.sh` gates stay
-  green; the `ChainDb::tip()` contract is unchanged.
+  Run at close (the N-AH worktree binary + the frozen `c2-relay` are standing). Evidence outside-repo
+  (scrubbed in-repo note only). **NOTE:** the fixed binary must RE-RECOVER (to write the persisted
+  anchor-point record into the store) before the `--mode node` follow — the pre-AK store lacks it.
+- **CE-AK-4** (no collateral): `cargo test --workspace` green;
+  `warm_start_recovers_seed_epoch_consensus_inputs_byte_identical` +
+  `warm_start_dispatch_succeeds_end_to_end` + the T-REC-05 tests stay green; the three
+  `ci/ci_check_convergence_evidence_*.sh` gates green; the `ChainDb::tip()` contract is unchanged.
 
 ## Expected Slice Types
 
 - **AK-S1** (single slice — a narrow regression is not over-split) — the BLUE recovery-decision fix +
-  its mechanical proof (CE-AK-1, CE-AK-2, CE-AK-3). Add deterministic
-  `resolve_live_follow_start(servable_chaindb_tip, recovered_anchor) -> Option<ChainTip>`;
-  `bootstrap_initial_state` exposes it as the `BootstrapState` live-follow start tip; thread the
-  existing `BootstrapAnchor.seed_point` into `bootstrap_initial_state`. The wire-pump consumer
-  (`spawn_live_wire_pump_source`) and AI-S4a are **unchanged**.
+  the additive anchor-point persistence + their mechanical proof (CE-AK-1, CE-AK-2, CE-AK-3). (1) Add
+  an additive persisted anchor-point provenance record (`(slot, hash)` bound to `anchor_fp`); (2) write
+  it at seed/recover; (3) load it at warm-start (fail closed on missing/malformed/mismatch for a
+  non-Origin store); (4) add `resolve_live_follow_start` + extend `BootstrapInputs` with
+  `recovered_anchor: Option<ChainTip>`, sourced from the loaded record, so `bootstrap_initial_state`
+  exposes it as the live-follow start tip. The wire-pump consumer + AI-S4a are **unchanged**.
 
 ## TCB Color Map (FC/IS Partition)
 
-- **BLUE** — `resolve_live_follow_start` + the `BootstrapState` live-follow start tip resolution
-  (`crates/ade_runtime/src/bootstrap.rs`): the authoritative deterministic recovery decision (what
-  point the node recovered to) — it governs the FindIntersect start point, live-follow behavior, and
-  replay-equivalent recovery state. Hosted in a crate that also carries RED I/O; the *decision* is
-  BLUE regardless of host.
-- **Canonical input** — the recovered anchor `seed_point` (`BootstrapAnchor`, minted from
-  `seed_slot`/`seed_block_hash`).
+- **BLUE** — `resolve_live_follow_start`, the persisted anchor-point provenance record (content + the
+  `anchor_fp` binding), and the `BootstrapState` live-follow start tip resolution
+  (`crates/ade_runtime/src/bootstrap.rs` + the anchor-point store surface): the authoritative,
+  replay-equivalent recovery decision. The *write* at recover is RED I/O of a BLUE-authoritative
+  record; the *load + bind + resolve* is BLUE.
+- **Canonical input** — the recovered anchor `seed_point` (`BootstrapAnchor`).
 - **RED (unchanged)** — `spawn_live_wire_pump_source` / the wire pump (`node_lifecycle.rs`,
-  `wire_pump.rs`): consumes the resolved tip; not modified.
-- **Out of scope** — `ChainDb::tip()` (storage contract unchanged); ledger materialization
-  (`bootstrap.rs:216` null-hash target, OQ-AK-2); admission orchestration (OQ-AK-3); N-AJ evidence
-  emission.
+  `wire_pump.rs`).
+- **Out of scope** — `ChainDb::tip()` (storage contract); ledger materialization (`bootstrap.rs:216`,
+  OQ-AK-2); admission orchestration (OQ-AK-3); N-AJ evidence.
 
 ## Forbidden during this cluster (slices inherit)
 
-- Do NOT weaken AI-S4a — `RollBackward(Origin)` stays fail-closed.
-- Do NOT modify peer/relay behavior.
-- Do NOT special-case the venue harness.
-- Do NOT make ChainDb invent/synthesize a servable block.
-- Do NOT use WAL `admit_count` as the anchor-hash proxy.
-- Do NOT touch N-AJ evidence emission.
-- Do NOT alter ledger materialization (`bootstrap.rs:216` null-hash target) unless a test proves
-  materialization currently depends on the placeholder (OQ-AK-2 — out of scope by default).
-- Do NOT redesign admission orchestration — `--mode admission` is in scope ONLY if it consumes the
-  same `resolve_live_follow_start` helper (OQ-AK-3), else diagnostic/out-of-scope.
-- Do NOT flip CN-CONS-03.
+Weakening AI-S4a · modifying peer/relay behavior · special-casing the venue harness · making ChainDb
+invent/synthesize a servable block · using WAL `admit_count` (or any guess) as the anchor point ·
+**using CLI re-supply as the durable restart fix (warm-start must be store-derived; CLI seed-point is
+first-run input only)** · touching N-AJ evidence emission · altering ledger materialization
+(`bootstrap.rs:216`) unless a test proves dependence (OQ-AK-2) · redesigning admission orchestration
+(OQ-AK-3) · flipping CN-CONS-03.
 
 ## Registry declarations (this cluster-doc appends as `declared`)
 
 - **DC-NODE-31** (family DC, derived, `introduced_in = PHASE4-N-AK`, status `declared`) — statement as
-  the Primary invariant above (verbatim, including *"does not change `ChainDb::tip()` semantics and
-  does not synthesize a servable block"*). `tests = []` (AK-S1 populates the four named tests);
-  `ci_script = ""` (Rust-test-enforced; CE-AK-3 is the operator-run live verification).
-- Strengthening note (do **not** flip now): T-REC-05 may gain the recovery-tip test in its `tests` at
-  AK close (`strengthened_in += PHASE4-N-AK`).
+  the Primary invariant above (verbatim, incl. *"persisted as replayable recovery provenance"* and the
+  storage-boundary phrases). `tests = []` (AK-S1 populates the named tests); `ci_script = ""`
+  (Rust-test-enforced; CE-AK-3 is the operator-run live verification).
+- Strengthening note (do **not** flip now): T-REC-05 may gain the recovered-tip replay test in its
+  `tests` at AK close (`strengthened_in += PHASE4-N-AK`).
 
 ## Close-record note (preserve verbatim at `/cluster-close`)
 
-> **AK fixes a regression in the live-follow start surface. It does NOT make ChainDb serve the anchor
-> as a block, does NOT weaken rollback-to-Origin rejection, and does NOT claim full ChainSel
-> convergence.**
+> **AK persists the recovered anchor point as replayable recovery provenance and resolves the
+> live-follow start from it. It does NOT make ChainDb serve the anchor as a block, does NOT weaken
+> rollback-to-Origin rejection, does NOT depend on CLI re-supply at restart, and does NOT claim full
+> ChainSel convergence.**
