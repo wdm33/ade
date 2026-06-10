@@ -7236,6 +7236,37 @@ tests = [
 ]
 ci_script = ""
 status = "enforced_scaffolding"
-open_obligation = "Hermetic mechanical enforcement (CE-AK-1 ade_runtime + CE-AK-2 ade_node, the tests above) is GREEN: persist -> load + fail-closed verify -> resolve a bare-anchor recovery to the persisted anchor point (not Origin), with replay-equivalence. CE-AK-3, the live operator re-verification (the FIXED binary re-recovers to write the anchor-point record, then `--mode node --single-producer-venue` on the frozen c2-relay => FindIntersect from the persisted anchor, forge_base_block_no == frozen relay tip block_no, 0 UnsupportedRollbackPoint), is operator-run at cluster close. Flip to `enforced` at /cluster-close after CE-AK-3; T-REC-05 gains the recovered-tip replay test (strengthened_in += PHASE4-N-AK) at the same close."
+open_obligation = "Hermetic mechanical enforcement (CE-AK-1 ade_runtime + CE-AK-2 ade_node, the tests above) is GREEN. CE-AK-3 LIVE (2026-06-10, fixed binary 8bb1c402, frozen c2-relay venue): the Origin regression is FIXED -- the re-recovered store carries the anchor-point record and FindIntersect started at the anchor with 0 UnsupportedRollbackPoint (DC-NODE-31 proven live). BUT the single-producer follow then halts at the NEXT layer (run_node_sync UnexpectedRollback on the relay's post-intersection RollBackward(anchor), because a bare anchor is a snapshot, not a stored block) -- so CE-AK-3's full end-to-end (catch up to the frozen relay tip, forge_base_block_no==13) is GATED on AK-S2 (DC-NODE-32: run_node_sync accepts rollback-to-recovered-anchor as an idempotent no-op; the forward path is already enforced by pump_block, verified by the OQ-AK-S2-2 probe). Flip DC-NODE-31 to `enforced` at /cluster-close after CE-AK-3 passes end-to-end (post-AK-S2); T-REC-05 gains the recovered-tip replay test (strengthened_in += PHASE4-N-AK) at the same close."
+introduced_in = "PHASE4-N-AK"
+strengthened_in = []
+
+[[rules]]
+id = "DC-NODE-32"
+tier = "derived"
+statement = """
+Recovered-anchor rollback boundary on the single-producer live-follow path (PHASE4-N-AK AK-S2).
+After recovery to a bare bootstrap anchor, the single-producer follow path (run_node_sync) accepts
+a peer RollBackward whose target binds EXACTLY (slot AND hash) to the persisted recovered anchor
+point (DC-NODE-31 / BootstrapState.tip) as an IDEMPOTENT NO-OP boundary rewind: no WAL, no ChainDb
+mutation, no ledger mutation, no cursor. The anchor is a recovery snapshot boundary, NOT a stored
+servable block, and is NEVER synthesized into one (ChainDb::tip()/last_block_bytes/serve never
+return it). RollBackward(Origin) still fails closed (AI-S4a unchanged); every non-anchor,
+non-Origin rollback fails closed; the accepted point must bind to the PERSISTED anchor on slot AND
+hash, never peer-supplied alone. The anchor point consumed by run_node_sync is the single authority
+(BootstrapState.tip), threaded in -- NEVER re-read from the store inside the loop. The first forward
+block after the anchor admits through the EXISTING sole pump_block path (its prev_hash binds the
+recovered chain_dep) -- AK-S2 adds NO forward-link code (verified live by the OQ-AK-S2-2 probe:
+blocks 9-13 admitted via local_chaindb_tip, caught up to the relay tip, 0 errors). Recover->follow
+on the single-producer path is replay-equivalent (extends T-REC-05/DC-NODE-31 to the follow): same
+store + same ordered peer feed => byte-identical post-state and admit sequence. SCOPE: does NOT add
+general stored-block rollback-follow on the single-producer path (out of scope), and does NOT touch
+the participant path (run_participant_sync @ node_lifecycle.rs -- a separate follow-on obligation).
+"""
+source = "docs/planning/phase4-n-ak-s2-recovered-anchor-boundary-invariants.md + docs/clusters/PHASE4-N-AK/cluster.md"
+cross_ref = ["DC-NODE-31", "DC-NODE-29", "DC-NODE-23", "T-REC-05", "CN-CONS-03"]
+code_locus = "crates/ade_node/src/node_sync.rs (run_node_sync -- single-producer RollBack handler accepts rollback-to-recovered-anchor as no-op; threaded recovered anchor), crates/ade_node/src/node_lifecycle.rs (threads BootstrapState.tip into run_node_sync; run_participant_sync UNCHANGED -- separate follow-on), crates/ade_runtime/src/admission/wire_pump.rs:447 (AI-S4a Origin fail-close -- UNCHANGED)"
+tests = []
+ci_script = ""
+status = "declared"
 introduced_in = "PHASE4-N-AK"
 strengthened_in = []
