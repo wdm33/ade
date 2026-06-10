@@ -22,6 +22,7 @@ pub mod network;
 pub mod orchestrator;
 pub mod producer;
 pub mod receive;
+pub mod recovered_anchor;
 pub mod recovery;
 pub mod rollback;
 pub mod seed_consensus_merge;

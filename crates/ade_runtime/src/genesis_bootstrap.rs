@@ -139,6 +139,10 @@ where
         // sidecar to demand (the composer writes the sidecar after
         // bootstrap, it does not consume one).
         seed_epoch_consensus_source: SeedEpochConsensusSource::NotRequired,
+        // AK-S1: cold-start composition resolves no recovered anchor (the
+        // composer persists the anchor-point record after bootstrap; the
+        // warm-start recover path is what loads + resolves it).
+        recovered_anchor: None,
     })
     .map_err(GenesisBootstrapError::Bootstrap)?;
 

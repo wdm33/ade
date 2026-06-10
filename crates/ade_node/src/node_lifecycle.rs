@@ -61,6 +61,7 @@ use ade_ledger::wal::{replay_from_anchor, RollbackPoint, RollbackReason, WalEntr
 use ade_runtime::bootstrap::{
     bootstrap_initial_state, BootstrapInputs, BootstrapState, SeedEpochConsensusSource,
 };
+use ade_runtime::recovered_anchor::load_recovered_anchor_point;
 use ade_runtime::admission::{dial_for_admission, run_admission_wire_pump, AdmissionPeerEvent};
 use ade_runtime::chaindb::{
     ChainDb, ChainTip, PersistentChainDb, PersistentChainDbOptions, SnapshotStore,
@@ -781,19 +782,32 @@ const LIVE_WIRE_PUMP_CHANNEL_CAP: usize = 64;
 /// logged-and-dropped — never fatal, never a fabricated address, never a silent
 /// tip graft. If no peer yields a live pump, the feed ends and the relay loop
 /// halts clean (the same outcome as the empty source).
+/// PHASE4-N-AK AK-S1 (DC-NODE-31): the FindIntersect start point for the live
+/// wire pump. A recovered live-follow tip — the `BootstrapState.tip` that
+/// `resolve_live_follow_start` produced (a servable ChainDb tip OR the persisted
+/// recovered anchor) — becomes a `Point::Block`; only a truly Origin /
+/// cold-start (`None`) starts from `Point::Origin`. Behavior-IDENTICAL to the
+/// prior inline match, extracted so the start-point choice is a single testable
+/// authority (CE-AK-2): a bare-anchor recovery now passes `Some(anchor)` here,
+/// so the pump FindIntersects at the anchor, not Origin. The wire pump's
+/// dial / transmit / receive behavior is otherwise UNCHANGED.
+fn wire_pump_start_point(recovered_tip: Option<&ChainTip>) -> ade_network::codec::chain_sync::Point {
+    match recovered_tip {
+        Some(t) => ade_network::codec::chain_sync::Point::Block {
+            slot: t.slot,
+            hash: t.hash.clone(),
+        },
+        None => ade_network::codec::chain_sync::Point::Origin,
+    }
+}
+
 fn spawn_live_wire_pump_source(
     peer_addrs: &[String],
     network_magic: u32,
     recovered_tip: Option<&ChainTip>,
 ) -> NodeBlockSource {
     let our_versions = build_n2n_version_table(network_magic);
-    let start_point = match recovered_tip {
-        Some(t) => ade_network::codec::chain_sync::Point::Block {
-            slot: t.slot,
-            hash: t.hash.clone(),
-        },
-        None => ade_network::codec::chain_sync::Point::Origin,
-    };
+    let start_point = wire_pump_start_point(recovered_tip);
     let (events_tx, events_rx) = mpsc::channel::<AdmissionPeerEvent>(LIVE_WIRE_PUMP_CHANNEL_CAP);
     for raw_addr in peer_addrs {
         let addr: std::net::SocketAddr = match raw_addr.parse() {
@@ -1814,10 +1828,26 @@ pub(crate) fn warm_start_recovery(
         .rollback_to_slot(wal_tail_slot)
         .map_err(|e| NodeLifecycleError::OnDiskRead(format!("rollback_to_slot: {e:?}")))?;
 
-    // 5. The single authority. RequiredFromRecoveredProvenance runs the
+    // 5. PHASE4-N-AK AK-S1 (DC-NODE-31): load + fail-closed verify the
+    //    persisted recovered anchor point for THIS (non-Origin) recovered
+    //    lineage. `warm_start_recovery` is only reached once a seed-epoch anchor
+    //    lineage was discovered (step 1), so the store is definitively
+    //    non-Origin — a missing / malformed / fingerprint-mismatched anchor-point
+    //    record halts here, never a silent Origin fallback. The loaded
+    //    `(slot, hash)` is the canonical live-follow start input: it makes a
+    //    bare-anchor recovery FindIntersect at the anchor, not Origin (which the
+    //    relay answers with RollBackward(Origin), tripping the AI-S4a Origin
+    //    fail-close). Store-derived, never CLI re-supply.
+    let recovered_anchor = load_recovered_anchor_point(chaindb, &anchor_fp)
+        .map_err(|e| NodeLifecycleError::WarmStartBootstrap(format!("anchor-point load: {e:?}")))?;
+
+    // 6. The single authority. RequiredFromRecoveredProvenance runs the
     //    fail-closed sidecar verify chain; its warm-start branch forward-replays
     //    from the nearest snapshot ≤ the (reconciled) tip over the preserved
     //    bytes (the SOLE consumer of era_schedule / ledger_view).
+    //    `resolve_live_follow_start(chaindb.tip(), recovered_anchor)` then sets
+    //    `BootstrapState.tip`: a servable ChainDb tip still wins (a recovered
+    //    local continuation spine); a bare anchor surfaces `recovered_anchor`.
     let mut recovered = bootstrap_initial_state(BootstrapInputs {
         chaindb,
         snapshot_store: chaindb,
@@ -1827,10 +1857,11 @@ pub(crate) fn warm_start_recovery(
         seed_epoch_consensus_source: SeedEpochConsensusSource::RequiredFromRecoveredProvenance(
             provenance,
         ),
+        recovered_anchor: Some(recovered_anchor),
     })
     .map_err(|e| NodeLifecycleError::WarmStartBootstrap(format!("{e:?}")))?;
 
-    // 6. PHASE4-N-U S2 (T-REC-05): the recovered ledger fingerprint MUST equal
+    // 7. PHASE4-N-U S2 (T-REC-05): the recovered ledger fingerprint MUST equal
     //    the WAL-tail post_fp (when ≥1 AdmitBlock) — a deterministic fail-fast,
     //    never a silent recovery divergence (the WAL is the admission authority).
     if admit_count > 0 {
@@ -2982,6 +3013,7 @@ mod tests {
 
     use ade_core::consensus::praos_state::Nonce;
     use ade_ledger::consensus_view::PoolEntry;
+    use ade_ledger::recovered_anchor_point::{encode_recovered_anchor_point, RecoveredAnchorPoint};
     use ade_ledger::seed_consensus_inputs::{
         encode_seed_epoch_consensus_inputs, SeedEpochConsensusInputs,
     };
@@ -2994,6 +3026,13 @@ mod tests {
     const WARM_ANCHOR_FP: Hash32 = Hash32([0x5A; 32]);
     const WARM_EPOCH: EpochNo = EpochNo(576);
     const WARM_TIP_SLOT: u64 = 23_013_663;
+    // PHASE4-N-AK AK-S1: the recovered anchor POINT (below the tip; a real,
+    // non-Origin block hash). At seed/recover the shared persist authority
+    // writes this record alongside the seed-epoch sidecar (DC-NODE-31); the
+    // warm-start anchor-point load fails closed without it, so every recovered
+    // store the harness builds must carry it.
+    const WARM_ANCHOR_SLOT: u64 = 23_013_600;
+    const WARM_ANCHOR_HASH: Hash32 = Hash32([0x2e; 32]);
 
     struct WarmDirs {
         _dir: TempDir,
@@ -3043,6 +3082,24 @@ mod tests {
         }
     }
 
+    /// PHASE4-N-AK AK-S1 (DC-NODE-31): persist the recovered anchor-point
+    /// record bound to `WARM_ANCHOR_FP`, mirroring what
+    /// `seed_epoch_lineage::persist_seed_epoch_consensus_inputs` writes at
+    /// seed/recover. A recovered store the warm-start can recover from MUST
+    /// carry this record (the warm-start anchor-point load fails closed
+    /// otherwise); the durable-tip builders below write it so every existing
+    /// warm-start test keeps a valid post-AK store.
+    fn put_warm_anchor_point(chaindb: &PersistentChainDb) {
+        let ap = RecoveredAnchorPoint {
+            anchor_fp: WARM_ANCHOR_FP,
+            slot: SlotNo(WARM_ANCHOR_SLOT),
+            block_hash: WARM_ANCHOR_HASH,
+        };
+        chaindb
+            .put_recovered_anchor_point(&WARM_ANCHOR_FP, &encode_recovered_anchor_point(&ap))
+            .unwrap();
+    }
+
     /// Put a block at `slot` and capture a bare-Conway snapshot AT that
     /// same slot. With the snapshot exactly at the tip, the warm-start's
     /// `materialize_rolled_back_state` takes its degenerate branch and never
@@ -3061,6 +3118,11 @@ mod tests {
         PersistentSnapshotCache::new(chaindb)
             .capture(SlotNo(slot), &ledger, &chain_dep)
             .unwrap();
+        // AK-S1: a recovered store carries the anchor-point record. With a
+        // servable tip present, `resolve_live_follow_start` still returns that
+        // tip (the anchor is below it) — these tests' tip assertions are
+        // unchanged; the record only lets the warm-start load succeed.
+        put_warm_anchor_point(chaindb);
     }
 
     /// PHASE4-N-U S2: a REALISTIC durable tip — a block, its WAL `AdmitBlock`,
@@ -3091,6 +3153,10 @@ mod tests {
         PersistentSnapshotCache::new(chaindb)
             .capture(SlotNo(slot), &ledger, &chain_dep)
             .unwrap();
+        // AK-S1: as in `put_tip_and_snapshot`, a recovered store carries the
+        // anchor-point record; with a servable tip the resolver still prefers
+        // it, so the tip assertions are unchanged.
+        put_warm_anchor_point(chaindb);
     }
 
     #[test]
@@ -3123,6 +3189,76 @@ mod tests {
         assert_eq!(encode_seed_epoch_consensus_inputs(&recovered), bytes);
         // Recovered tip matches the persisted tip.
         assert_eq!(state.tip.map(|t| t.slot.0), Some(WARM_TIP_SLOT));
+    }
+
+    /// Capture a bare-Conway snapshot AT `slot` with NO stored block — a BARE
+    /// anchor: `chaindb.tip()` stays `None` (no servable post-anchor block),
+    /// the exact pre-AK regression precondition.
+    fn put_bare_anchor_snapshot(chaindb: &PersistentChainDb, slot: u64) {
+        let ledger = LedgerState::new(CardanoEra::Conway);
+        let chain_dep = PraosChainDepState::genesis(Nonce(Hash32([0xCD; 32])));
+        PersistentSnapshotCache::new(chaindb)
+            .capture(SlotNo(slot), &ledger, &chain_dep)
+            .unwrap();
+    }
+
+    #[test]
+    fn recovered_bare_anchor_findintersect_starts_at_anchor_not_origin() {
+        // CE-AK-2 (DC-NODE-31): a BARE-anchor warm-start (snapshot at the
+        // anchor slot, NO servable post-anchor block, so `chaindb.tip()` is
+        // None) resolves the live-follow start tip to the persisted anchor
+        // POINT — so the wire pump FindIntersects at the anchor `Block` point,
+        // NOT `Origin`. The pre-AK regression returned tip=None here -> Origin
+        // -> the relay's RollBackward(Origin) tripped the AI-S4a fail-close.
+        let d = fresh_warm_dirs();
+        let record = warm_sample_record(WARM_ANCHOR_FP, WARM_EPOCH);
+        let bytes = encode_seed_epoch_consensus_inputs(&record);
+        {
+            let (chaindb, mut wal) = open_warm_stores(&d);
+            chaindb
+                .put_seed_epoch_consensus_inputs(&WARM_ANCHOR_FP, &bytes)
+                .unwrap();
+            append_seed_epoch_provenance(&mut wal, &WARM_ANCHOR_FP, WARM_EPOCH, &bytes).unwrap();
+            // The recovered anchor POINT (real, non-Origin hash) — persisted at
+            // seed/recover, loaded + verified at warm-start.
+            put_warm_anchor_point(&chaindb);
+            // A BARE anchor: a snapshot AT the anchor slot, NO servable block
+            // above it. No AdmitBlock entries either (admit_count == 0).
+            put_bare_anchor_snapshot(&chaindb, WARM_ANCHOR_SLOT);
+            // stores dropped here -> restart boundary.
+        }
+
+        let (chaindb, wal) = open_warm_stores(&d);
+        let state = warm_start_recovery(&chaindb, &wal).expect("bare-anchor warm-start recovers");
+
+        // The live-follow start tip is the persisted anchor (slot + REAL hash),
+        // NOT None — the durable restart authority is the store, not the CLI.
+        let expected = ChainTip {
+            slot: SlotNo(WARM_ANCHOR_SLOT),
+            hash: WARM_ANCHOR_HASH,
+        };
+        assert_eq!(
+            state.tip.as_ref(),
+            Some(&expected),
+            "bare-anchor recovery surfaces the persisted anchor as the live-follow tip"
+        );
+
+        // And the wire pump's FindIntersect start point is that anchor `Block`,
+        // NOT `Origin` (so the AI-S4a Origin fail-close is never reached).
+        let start = wire_pump_start_point(state.tip.as_ref());
+        assert_eq!(
+            start,
+            ade_network::codec::chain_sync::Point::Block {
+                slot: SlotNo(WARM_ANCHOR_SLOT),
+                hash: WARM_ANCHOR_HASH,
+            },
+            "FindIntersect must start at the anchor Block point, not Origin"
+        );
+        assert_ne!(
+            start,
+            ade_network::codec::chain_sync::Point::Origin,
+            "a bare-anchor recovery must NOT FindIntersect from Origin"
+        );
     }
 
     #[tokio::test]

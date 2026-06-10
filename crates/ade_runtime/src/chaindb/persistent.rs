@@ -37,6 +37,14 @@ const SNAPSHOTS_BY_SLOT: TableDefinition<u64, &[u8]> =
 /// created lazily on first write / read like every other table here).
 const SEED_CINPUTS_BY_ANCHOR_FP: TableDefinition<&[u8; 32], &[u8]> =
     TableDefinition::new("seed_cinputs_by_anchor_fp");
+/// Anchor-fp-keyed recovered anchor-point provenance table (AK-S1,
+/// DC-NODE-31). Keyed by the 32-byte anchor fingerprint; disjoint from both
+/// the slot-keyed `snapshots_by_slot` and the `seed_cinputs_by_anchor_fp`
+/// namespaces. Created lazily on first write; opening an older file without
+/// this table reads as "no anchor-point record" (Ok(None)), which the
+/// warm-start load treats as a fail-closed condition for a non-Origin store.
+const RECOVERED_ANCHOR_POINT_BY_ANCHOR_FP: TableDefinition<&[u8; 32], &[u8]> =
+    TableDefinition::new("recovered_anchor_point_by_anchor_fp");
 const META: TableDefinition<&str, &[u8]> = TableDefinition::new("meta");
 
 /// Schema version. Bumped from 1 to 2 in S-35 to add the
@@ -699,6 +707,65 @@ impl SnapshotStore for PersistentChainDb {
             .map(|(k, _)| Hash32(*k.value()))
             .collect();
         Ok(fps)
+    }
+
+    fn put_recovered_anchor_point(
+        &self,
+        anchor_fp: &Hash32,
+        bytes: &[u8],
+    ) -> Result<(), ChainDbError> {
+        let _guard = self.write_lock.lock().map_err(lock_poisoned)?;
+        let txn = self.begin_write()?;
+
+        // Conflict / idempotency check, mirroring put_seed_epoch_consensus_inputs.
+        let conflict = {
+            let table = txn
+                .open_table(RECOVERED_ANCHOR_POINT_BY_ANCHOR_FP)
+                .map_err(map_table_err)?;
+            let existing = table
+                .get(&anchor_fp.0)
+                .map_err(map_storage_err)?
+                .map(|v| v.value().to_vec());
+            existing
+        };
+
+        match conflict {
+            Some(existing_bytes) if existing_bytes == bytes => {
+                txn.commit().map_err(map_commit_err)?;
+                return Ok(());
+            }
+            Some(_) => {
+                return Err(ChainDbError::InvalidOperation(format!(
+                    "recovered anchor point for anchor_fp {anchor_fp} already occupied by different bytes",
+                )));
+            }
+            None => {}
+        }
+
+        {
+            let mut table = txn
+                .open_table(RECOVERED_ANCHOR_POINT_BY_ANCHOR_FP)
+                .map_err(map_table_err)?;
+            table
+                .insert(&anchor_fp.0, bytes)
+                .map_err(map_storage_err)?;
+        }
+        txn.commit().map_err(map_commit_err)?;
+        Ok(())
+    }
+
+    fn get_recovered_anchor_point(
+        &self,
+        anchor_fp: &Hash32,
+    ) -> Result<Option<Vec<u8>>, ChainDbError> {
+        let txn = self.db.begin_read().map_err(map_txn_err)?;
+        let table = match txn.open_table(RECOVERED_ANCHOR_POINT_BY_ANCHOR_FP) {
+            Ok(t) => t,
+            Err(redb::TableError::TableDoesNotExist(_)) => return Ok(None),
+            Err(e) => return Err(map_table_err(e)),
+        };
+        let bytes = table.get(&anchor_fp.0).map_err(map_storage_err)?;
+        Ok(bytes.map(|v| v.value().to_vec()))
     }
 }
 

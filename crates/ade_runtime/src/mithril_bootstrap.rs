@@ -159,6 +159,10 @@ where
         // A3b: Mithril composition is a cold-start; no recovered
         // sidecar to demand (the composer writes it after bootstrap).
         seed_epoch_consensus_source: SeedEpochConsensusSource::NotRequired,
+        // AK-S1: cold-start composition resolves no recovered anchor (the
+        // composer persists the anchor-point record after bootstrap, like the
+        // sidecar; the warm-start recover path is what loads + resolves it).
+        recovered_anchor: None,
     })
     .map_err(MithrilBootstrapError::Bootstrap)?;
 

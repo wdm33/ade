@@ -217,6 +217,9 @@ pub async fn run_produce_mode(cli: ProduceCli, shutdown_rx: watch::Receiver<bool
             // path is a later production-wiring slice, not this.
             seed_epoch_consensus_source:
                 ade_runtime::bootstrap::SeedEpochConsensusSource::NotRequired,
+            // AK-S1: cold-start, not the recover→follow path; `None` preserves
+            // the prior tip behavior.
+            recovered_anchor: None,
         },
     ) {
         Ok(t) => t,
@@ -1585,6 +1588,7 @@ mod tests {
                 genesis_initial: Some((seed_ledger, seed_chain_dep)),
                 seed_epoch_consensus_source:
                     ade_runtime::bootstrap::SeedEpochConsensusSource::NotRequired,
+                recovered_anchor: None,
             },
         )
         .expect("cold-start bootstrap");

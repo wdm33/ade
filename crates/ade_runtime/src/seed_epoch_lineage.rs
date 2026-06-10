@@ -25,6 +25,7 @@
 //! genesis-derived eta0/stake/ASC constructor.
 
 use ade_ledger::bootstrap_anchor::BootstrapAnchor;
+use ade_ledger::recovered_anchor_point::{encode_recovered_anchor_point, RecoveredAnchorPoint};
 use ade_ledger::seed_consensus_inputs::encode_seed_epoch_consensus_inputs;
 use ade_ledger::wal::{WalError, WalStore};
 use ade_types::EpochNo;
@@ -79,6 +80,24 @@ where
     let bytes = encode_seed_epoch_consensus_inputs(&record);
     snapshot_store
         .put_seed_epoch_consensus_inputs(&anchor_fp, &bytes)
+        .map_err(SeedEpochLineagePersistError::Persist)?;
+    // AK-S1 (DC-NODE-31): persist the recovered anchor POINT (slot, hash)
+    // alongside the consensus-inputs sidecar, bound to the same `anchor_fp`, so
+    // a warm-start recover resolves the live-follow start tip from the store --
+    // never CLI re-supply. A SEPARATE additive record; it does not touch the
+    // sidecar's shape or `sidecar_hash`/provenance binding. Written BEFORE the
+    // WAL provenance commit point (consistent with the sidecar put): a crash
+    // between the puts and the WAL append leaves the store recovered as "not
+    // imported" (the WAL provenance is the discovery+commit gate), preserving
+    // the existing fail-closed semantics. A store carrying the sidecar+WAL but
+    // missing this record fails closed at the warm-start anchor-point load.
+    let anchor_point = RecoveredAnchorPoint {
+        anchor_fp: anchor_fp.clone(),
+        slot: anchor.seed_point.slot,
+        block_hash: anchor.seed_point.block_hash.clone(),
+    };
+    snapshot_store
+        .put_recovered_anchor_point(&anchor_fp, &encode_recovered_anchor_point(&anchor_point))
         .map_err(SeedEpochLineagePersistError::Persist)?;
     append_seed_epoch_provenance(wal, &anchor_fp, epoch_no, &bytes)
         .map_err(SeedEpochLineagePersistError::ProvenanceWal)
@@ -169,5 +188,50 @@ mod tests {
         let prov = out.provenance.expect("provenance recovered");
         assert_eq!(prov.anchor_fp, anchor_fp);
         assert_eq!(prov.epoch_no, EPOCH);
+    }
+
+    /// PHASE4-N-AK AK-S1 CE-AK-1 (DC-NODE-31): the shared persist authority
+    /// also writes the additive recovered anchor-POINT record — the anchor's
+    /// `(slot, block_hash)` bound to the SAME `anchor_fp` as the seed-epoch
+    /// sidecar — so a warm-start recover can resolve the live-follow start tip
+    /// from the store. A real (non-Origin) seed point is used: the case AK
+    /// restores.
+    #[test]
+    fn bootstrap_recover_persists_anchor_point_sidecar() {
+        use ade_ledger::recovered_anchor_point::decode_recovered_anchor_point;
+        let db = InMemoryChainDb::new();
+        let mut wal = VecWal {
+            entries: Vec::new(),
+        };
+        let anchor = mint(MintInputs {
+            network_magic: 42,
+            genesis_hash: Hash32([0x11; 32]),
+            seed_slot: SlotNo(188),
+            seed_block_hash: Hash32([0x2e; 32]),
+            seed_artifact_hash: Hash32([0x22; 32]),
+            imported_utxo_fingerprint: UtxoFingerprint(Hash32([0x33; 32])),
+            initial_ledger_fingerprint: Hash32([0x42; 32]),
+            seed_provenance: SeedProvenance::CardanoCliJson,
+        });
+        let inputs = sample_inputs();
+
+        persist_seed_epoch_consensus_inputs(&db, &mut wal, &anchor, &inputs).expect("persist");
+
+        let anchor_fp = anchor.initial_ledger_fingerprint.clone();
+        let stored = db
+            .get_recovered_anchor_point(&anchor_fp)
+            .expect("get anchor point")
+            .expect("anchor point present after persist");
+        let record = decode_recovered_anchor_point(&stored).expect("decode anchor point");
+        // Bound to the anchor lineage and carrying the anchor's own seed point.
+        assert_eq!(record.anchor_fp, anchor_fp);
+        assert_eq!(record.slot, anchor.seed_point.slot);
+        assert_eq!(record.block_hash, anchor.seed_point.block_hash);
+        // Co-located with the seed-epoch sidecar under the same key (both
+        // discoverable lineage records for the same recovered anchor).
+        assert!(db
+            .get_seed_epoch_consensus_inputs(&anchor_fp)
+            .expect("get sidecar")
+            .is_some());
     }
 }

@@ -205,6 +205,7 @@ mod tests {
             seed_epoch_consensus_source: SeedEpochConsensusSource::RequiredFromRecoveredProvenance(
                 provenance,
             ),
+            recovered_anchor: None,
         })
         .expect("warm-start recovers")
     }

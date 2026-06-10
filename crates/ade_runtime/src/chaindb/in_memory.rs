@@ -41,6 +41,10 @@ struct Inner {
     // disjoint from `snapshots` above, keyed by the 32-byte anchor
     // fingerprint — never a reserved sentinel slot.
     seed_consensus_inputs: BTreeMap<Hash32, Vec<u8>>,
+    // Anchor-fp-keyed recovered anchor-point provenance record (AK-S1,
+    // DC-NODE-31). Disjoint from both `snapshots` and
+    // `seed_consensus_inputs`; keyed by the same 32-byte anchor fingerprint.
+    recovered_anchor_points: BTreeMap<Hash32, Vec<u8>>,
 }
 
 impl InMemoryChainDb {
@@ -245,5 +249,33 @@ impl SnapshotStore for InMemoryChainDb {
         let inner = self.inner.lock().map_err(lock_poisoned)?;
         // BTreeMap keys are already ascending; clone into an owned Vec.
         Ok(inner.seed_consensus_inputs.keys().cloned().collect())
+    }
+
+    fn put_recovered_anchor_point(
+        &self,
+        anchor_fp: &Hash32,
+        bytes: &[u8],
+    ) -> Result<(), ChainDbError> {
+        let mut inner = self.inner.lock().map_err(lock_poisoned)?;
+        if let Some(existing) = inner.recovered_anchor_points.get(anchor_fp) {
+            if existing.as_slice() != bytes {
+                return Err(ChainDbError::InvalidOperation(format!(
+                    "recovered anchor point for anchor_fp {anchor_fp} already occupied by different bytes",
+                )));
+            }
+            return Ok(());
+        }
+        inner
+            .recovered_anchor_points
+            .insert(anchor_fp.clone(), bytes.to_vec());
+        Ok(())
+    }
+
+    fn get_recovered_anchor_point(
+        &self,
+        anchor_fp: &Hash32,
+    ) -> Result<Option<Vec<u8>>, ChainDbError> {
+        let inner = self.inner.lock().map_err(lock_poisoned)?;
+        Ok(inner.recovered_anchor_points.get(anchor_fp).cloned())
     }
 }

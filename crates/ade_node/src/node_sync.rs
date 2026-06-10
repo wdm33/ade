@@ -1534,6 +1534,30 @@ mod tests {
         c.blocks[idx].clone()
     }
 
+    /// PHASE4-N-AK AK-S1 (DC-NODE-31): persist the recovered anchor-point record
+    /// bound to `anchor_fp`, mirroring what
+    /// `seed_epoch_lineage::persist_seed_epoch_consensus_inputs` writes at
+    /// seed/recover. These kill→warm-start fixtures hand-seed the anchor lineage
+    /// (sidecar + WAL provenance); post-AK a recovered store must ALSO carry the
+    /// anchor-point record or `warm_start_recovery`'s fail-closed anchor-point
+    /// load halts. The recovered tip in these tests is the servable synced /
+    /// forged tip they advance, so this placeholder anchor point is never the
+    /// resolved start (the servable ChainDb tip wins in `resolve_live_follow_start`)
+    /// — it only satisfies the presence check.
+    fn seed_anchor_point(chaindb: &PersistentChainDb, anchor_fp: &Hash32) {
+        use ade_ledger::recovered_anchor_point::{
+            encode_recovered_anchor_point, RecoveredAnchorPoint,
+        };
+        let ap = RecoveredAnchorPoint {
+            anchor_fp: anchor_fp.clone(),
+            slot: SlotNo(1),
+            block_hash: Hash32([0x2e; 32]),
+        };
+        chaindb
+            .put_recovered_anchor_point(anchor_fp, &encode_recovered_anchor_point(&ap))
+            .unwrap();
+    }
+
     fn fresh_state(eta0: [u8; 32]) -> ForwardSyncState {
         let mut ledger = LedgerState::new(CardanoEra::Conway);
         ledger.epoch_state.epoch = EPOCH_576;
@@ -1704,6 +1728,7 @@ mod tests {
                 .put_seed_epoch_consensus_inputs(&anchor_fp, &sidecar_bytes)
                 .unwrap();
             append_seed_epoch_provenance(&mut wal, &anchor_fp, EPOCH_576, &sidecar_bytes).unwrap();
+            seed_anchor_point(&chaindb, &anchor_fp);
 
             // L4b durable apply over one ordered source.
             let mut state = fresh_state(c.epoch_nonce);
@@ -2268,6 +2293,7 @@ mod tests {
                 .put_seed_epoch_consensus_inputs(&anchor_fp, &sidecar_bytes)
                 .unwrap();
             append_seed_epoch_provenance(&mut wal, &anchor_fp, EPOCH_576, &sidecar_bytes).unwrap();
+            seed_anchor_point(&chaindb, &anchor_fp);
 
             let mut state = fresh_state(c.epoch_nonce);
             let mut source = NodeBlockSource::in_memory(vec![bytes.clone()]);
@@ -2386,6 +2412,7 @@ mod tests {
                 .put_seed_epoch_consensus_inputs(&anchor_fp, &sidecar_bytes)
                 .unwrap();
             append_seed_epoch_provenance(&mut wal, &anchor_fp, EPOCH_576, &sidecar_bytes).unwrap();
+            seed_anchor_point(&chaindb, &anchor_fp);
 
             // The recover base ledger the follow extends; the prior_fp seed is
             // the value under test (the live node_lifecycle wiring's seed).
@@ -2576,6 +2603,7 @@ mod tests {
             .put_seed_epoch_consensus_inputs(&anchor_fp, &sidecar_bytes)
             .unwrap();
         append_seed_epoch_provenance(&mut wal, &anchor_fp, EPOCH_576, &sidecar_bytes).unwrap();
+        seed_anchor_point(&chaindb, &anchor_fp);
 
         let mut ledger = LedgerState::new(CardanoEra::Conway);
         ledger.epoch_state.epoch = EPOCH_576;
@@ -3033,6 +3061,7 @@ mod tests {
                 .put_seed_epoch_consensus_inputs(&anchor_fp, &sidecar_bytes)
                 .unwrap();
             append_seed_epoch_provenance(&mut wal, &anchor_fp, EpochNo(0), &sidecar_bytes).unwrap();
+            seed_anchor_point(&chaindb, &anchor_fp);
             // The genesis slot-0 snapshot — the forward-replay base.
             let (l_s, c_s) = genesis_base();
             PersistentSnapshotCache::new(&chaindb)
@@ -3191,6 +3220,7 @@ mod tests {
                 .put_seed_epoch_consensus_inputs(&anchor_fp, &sidecar_bytes)
                 .unwrap();
             append_seed_epoch_provenance(&mut wal, &anchor_fp, EpochNo(0), &sidecar_bytes).unwrap();
+            seed_anchor_point(&chaindb, &anchor_fp);
             let (l_s, c_s) = genesis_base();
             PersistentSnapshotCache::new(&chaindb)
                 .capture(SlotNo(0), &l_s, &c_s)
@@ -3398,6 +3428,7 @@ mod tests {
                 .put_seed_epoch_consensus_inputs(&anchor_fp, &sidecar_bytes)
                 .unwrap();
             append_seed_epoch_provenance(&mut wal, &anchor_fp, EpochNo(0), &sidecar_bytes).unwrap();
+            seed_anchor_point(&chaindb, &anchor_fp);
             let (l_s, c_s) = genesis_base();
             PersistentSnapshotCache::new(&chaindb)
                 .capture(SlotNo(0), &l_s, &c_s)
@@ -5301,6 +5332,7 @@ mod tests {
             .put_seed_epoch_consensus_inputs(&anchor_fp, &sidecar_bytes)
             .unwrap();
         append_seed_epoch_provenance(&mut wal, &anchor_fp, EpochNo(0), &sidecar_bytes).unwrap();
+        seed_anchor_point(&chaindb, &anchor_fp);
         let (l_s, c_s) = genesis_base();
         PersistentSnapshotCache::new(&chaindb)
             .capture(SlotNo(0), &l_s, &c_s)

@@ -182,4 +182,30 @@ pub trait SnapshotStore: Send + Sync {
     /// epoch binding) still applies and is the actual authority. Empty when no
     /// sidecar has been persisted.
     fn list_seed_epoch_consensus_anchor_fps(&self) -> Result<Vec<Hash32>, ChainDbError>;
+
+    /// Persist the recovered anchor-point provenance record, keyed by the
+    /// anchor fingerprint (`anchor_fp`). PHASE4-N-AK AK-S1 (DC-NODE-31). This
+    /// is a surface **disjoint** from both the slot-keyed snapshot namespace
+    /// and the seed-epoch consensus-inputs sidecar — its own anchor-fp-keyed
+    /// space, so a `put_recovered_anchor_point(fp, …)` can never collide with
+    /// any `put_snapshot(slot, …)` or `put_seed_epoch_consensus_inputs(fp, …)`.
+    /// The record's bytes are the canonical [`ade_ledger::recovered_anchor_point`]
+    /// encoding of `(slot, hash)` bound to `anchor_fp`. Idempotent if the same
+    /// bytes were already stored for the same `anchor_fp`; conflicting bytes for
+    /// the same `anchor_fp` return `InvalidOperation` (mirrors `put_snapshot`).
+    fn put_recovered_anchor_point(
+        &self,
+        anchor_fp: &Hash32,
+        bytes: &[u8],
+    ) -> Result<(), ChainDbError>;
+
+    /// Look up the recovered anchor-point provenance record by `anchor_fp`.
+    /// `Ok(None)` if absent (a pre-AK store, or a torn write before the WAL
+    /// commit point) — the warm-start load fails closed on absence for a
+    /// non-Origin recovered store (DC-NODE-31). Disjoint from the slot-keyed
+    /// and seed-epoch sidecar namespaces.
+    fn get_recovered_anchor_point(
+        &self,
+        anchor_fp: &Hash32,
+    ) -> Result<Option<Vec<u8>>, ChainDbError>;
 }

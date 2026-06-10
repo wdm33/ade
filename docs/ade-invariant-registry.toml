@@ -7220,9 +7220,22 @@ unchanged. The wire-pump consumer (spawn_live_wire_pump_source) is UNCHANGED.
 """
 source = "docs/planning/phase4-n-ak-recovered-anchor-tip-invariants.md (AK-INV-1) + docs/clusters/PHASE4-N-AK/cluster.md"
 cross_ref = ["DC-NODE-20", "DC-NODE-22", "DC-NODE-23", "DC-NODE-29", "T-REC-05", "CN-CONS-03"]
-code_locus = "crates/ade_runtime/src/bootstrap.rs (bootstrap_initial_state, resolve_live_follow_start, BootstrapState live-follow start tip), crates/ade_runtime/src/mithril_bootstrap.rs (BootstrapAnchor.seed_point -- canonical input), crates/ade_node/src/node_lifecycle.rs (spawn_live_wire_pump_source -- UNCHANGED consumer), crates/ade_runtime/src/admission/wire_pump.rs:447 (AI-S4a -- UNCHANGED)"
-tests = []
+code_locus = "crates/ade_ledger/src/recovered_anchor_point.rs (RecoveredAnchorPoint type + sole canonical CBOR codec), crates/ade_runtime/src/bootstrap.rs (resolve_live_follow_start -- private tip resolver; BootstrapInputs.recovered_anchor canonical input; BootstrapState live-follow start tip), crates/ade_runtime/src/recovered_anchor.rs (load_recovered_anchor_point -- load + fail-closed verify, kept out of bootstrap.rs to preserve CN-NODE-01 single-pub-fn), crates/ade_runtime/src/seed_epoch_lineage.rs (persist_seed_epoch_consensus_inputs -- writes the anchor-point record at seed/recover), crates/ade_runtime/src/chaindb/{mod,in_memory,persistent}.rs (put/get_recovered_anchor_point anchor-fp-keyed store surface), crates/ade_node/src/node_lifecycle.rs (warm_start_recovery loads + threads recovered_anchor; wire_pump_start_point / spawn_live_wire_pump_source -- UNCHANGED consumer of the resolved tip), crates/ade_runtime/src/mithril_bootstrap.rs (BootstrapAnchor.seed_point -- canonical input), crates/ade_runtime/src/admission/wire_pump.rs:447 (AI-S4a -- UNCHANGED)"
+tests = [
+    "crates/ade_runtime/src/bootstrap.rs::resolve_live_follow_start_treats_zero_hash_anchor_as_origin",
+    "crates/ade_runtime/src/bootstrap.rs::bootstrap_bare_anchor_recovery_surfaces_anchor_as_live_follow_tip",
+    "crates/ade_runtime/src/bootstrap.rs::bootstrap_true_origin_recovery_surfaces_none_tip",
+    "crates/ade_runtime/src/bootstrap.rs::bootstrap_servable_chaindb_tip_wins_over_anchor",
+    "crates/ade_runtime/src/bootstrap.rs::warm_start_loads_persisted_anchor_point",
+    "crates/ade_runtime/src/bootstrap.rs::warm_start_non_origin_anchor_missing_anchor_point_fails_closed",
+    "crates/ade_runtime/src/bootstrap.rs::warm_start_anchor_point_fingerprint_mismatch_fails_closed",
+    "crates/ade_runtime/src/bootstrap.rs::same_store_same_anchor_point_same_findintersect_start",
+    "crates/ade_runtime/src/seed_epoch_lineage.rs::bootstrap_recover_persists_anchor_point_sidecar",
+    "crates/ade_ledger/src/recovered_anchor_point.rs::recovered_anchor_point_round_trips_byte_identical",
+    "crates/ade_node/src/node_lifecycle.rs::recovered_bare_anchor_findintersect_starts_at_anchor_not_origin",
+]
 ci_script = ""
-status = "declared"
+status = "enforced_scaffolding"
+open_obligation = "Hermetic mechanical enforcement (CE-AK-1 ade_runtime + CE-AK-2 ade_node, the tests above) is GREEN: persist -> load + fail-closed verify -> resolve a bare-anchor recovery to the persisted anchor point (not Origin), with replay-equivalence. CE-AK-3, the live operator re-verification (the FIXED binary re-recovers to write the anchor-point record, then `--mode node --single-producer-venue` on the frozen c2-relay => FindIntersect from the persisted anchor, forge_base_block_no == frozen relay tip block_no, 0 UnsupportedRollbackPoint), is operator-run at cluster close. Flip to `enforced` at /cluster-close after CE-AK-3; T-REC-05 gains the recovered-tip replay test (strengthened_in += PHASE4-N-AK) at the same close."
 introduced_in = "PHASE4-N-AK"
 strengthened_in = []

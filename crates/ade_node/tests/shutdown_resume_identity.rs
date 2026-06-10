@@ -211,6 +211,7 @@ async fn shutdown_then_resume_produces_byte_identical_state() {
         ledger_view: view_arc.as_ref(),
         genesis_initial: None,
         seed_epoch_consensus_source: SeedEpochConsensusSource::NotRequired,
+        recovered_anchor: None,
     })
     .expect("bootstrap again");
     assert_eq!(

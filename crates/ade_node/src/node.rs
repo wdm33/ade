@@ -113,6 +113,16 @@ impl NodeRunError {
                 | BootstrapError::SeedConsensusBindingMismatch { .. }
                 | BootstrapError::SeedConsensusSidecarDecode(_),
             ) => EXIT_AUTHORITY_FATAL_DECODE,
+            // AK-S1 (DC-NODE-31): a non-Origin recovered store whose anchor-point
+            // record is missing / malformed / fingerprint-mismatched is a
+            // fail-closed authority-fatal halt (the recovered live-follow start
+            // could not be trusted) — same decode/binding class as the
+            // seed-consensus warm-start failures above.
+            NodeRunError::Bootstrap(
+                BootstrapError::RecoveredAnchorPointMissing { .. }
+                | BootstrapError::RecoveredAnchorPointDecode(_)
+                | BootstrapError::RecoveredAnchorPointBindingMismatch { .. },
+            ) => EXIT_AUTHORITY_FATAL_DECODE,
             NodeRunError::AuthorityFatal(OrchestratorError::AuthorityFatal(kind)) => match kind {
                 AuthorityFatalKind::ChainWriteIo => EXIT_AUTHORITY_FATAL_IO,
                 AuthorityFatalKind::SnapshotDecodeUnknownVersion
@@ -167,6 +177,9 @@ where
         // A3b: this orchestrator entry is not the production
         // recovered-sidecar warm-start path (deferred slice).
         seed_epoch_consensus_source: SeedEpochConsensusSource::NotRequired,
+        // AK-S1: not the live recover→follow path; no anchor-point resolution
+        // (the resolver leaves the prior tip behavior exactly with `None`).
+        recovered_anchor: None,
     })
     .map_err(NodeRunError::Bootstrap)?;
 

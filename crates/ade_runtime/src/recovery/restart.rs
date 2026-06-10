@@ -203,6 +203,12 @@ where
         // recovery helper; it does not demand the seed-epoch sidecar
         // (the production warm-start wiring is a later slice).
         seed_epoch_consensus_source: SeedEpochConsensusSource::NotRequired,
+        // AK-S1: test-only secondary recovery — it does not resolve the
+        // recovered anchor point (the production live recover→follow path that
+        // loads + resolves it is `node_lifecycle::warm_start_recovery`). With
+        // `None` the resolver preserves this helper's prior tip behavior
+        // exactly (servable ChainDb tip wins; bare anchor ⇒ None as before).
+        recovered_anchor: None,
     })
     .map_err(NodeRecoveryError::Bootstrap)?;
 

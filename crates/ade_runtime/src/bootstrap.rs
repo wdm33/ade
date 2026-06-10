@@ -30,6 +30,7 @@ use ade_crypto::blake2b_256;
 use ade_ledger::rollback::{
     materialize_rolled_back_state, MaterializeError, TargetPoint,
 };
+use ade_ledger::recovered_anchor_point::RecoveredAnchorPointError;
 use ade_ledger::seed_consensus_inputs::{
     decode_seed_epoch_consensus_inputs, encode_seed_epoch_consensus_inputs,
     SeedConsensusInputsError, SeedEpochConsensusInputs,
@@ -83,6 +84,17 @@ where
     /// seed-epoch consensus-input sidecar. `NotRequired` for every
     /// current caller (cold-start / not-yet-wired warm-start).
     pub seed_epoch_consensus_source: SeedEpochConsensusSource,
+    /// PHASE4-N-AK AK-S1 (DC-NODE-31): the persisted recovered anchor point,
+    /// loaded + fail-closed verified by the recover path
+    /// (`warm_start_recovery`) and threaded in as a canonical input. `None`
+    /// for cold-start / true-Origin and for every non-recover caller (which
+    /// preserves the pre-AK tip behavior exactly); `Some` only on a warm-start
+    /// recovery whose anchor-point record loaded and bound to the recovered
+    /// `anchor_fp`. [`bootstrap_initial_state`] resolves the live-follow start
+    /// tip from it via [`resolve_live_follow_start`] when ChainDb has no
+    /// servable post-anchor block, so a bare-anchor recovery starts the
+    /// FindIntersect at the anchor, not Origin.
+    pub recovered_anchor: Option<ChainTip>,
 }
 
 /// Output of [`bootstrap_initial_state`] (PHASE4-N-F-A A3b). A
@@ -149,6 +161,22 @@ pub enum BootstrapError {
     /// A3b: the sidecar bytes failed `decode_seed_epoch_consensus_inputs`
     /// (malformed / unknown version / non-canonical). Fail-closed.
     SeedConsensusSidecarDecode(SeedConsensusInputsError),
+    /// AK-S1 (DC-NODE-31): the recover path demanded the persisted recovered
+    /// anchor-point record for `anchor_fp`, but none was stored — a non-Origin
+    /// recovered store missing its anchor-point provenance. Fail-closed (no
+    /// silent Origin fallback); re-recover to write the record.
+    RecoveredAnchorPointMissing { anchor_fp: Hash32 },
+    /// AK-S1: the recovered anchor-point bytes failed
+    /// `decode_recovered_anchor_point` (malformed / unknown version /
+    /// non-canonical / trailing bytes). Fail-closed.
+    RecoveredAnchorPointDecode(RecoveredAnchorPointError),
+    /// AK-S1: the decoded anchor-point record's `anchor_fp` did not match the
+    /// recovered `anchor_fp` it was loaded for — the record is not bound to
+    /// this recovered lineage. Fail-closed.
+    RecoveredAnchorPointBindingMismatch {
+        expected_anchor_fp: Hash32,
+        actual_anchor_fp: Hash32,
+    },
 }
 
 /// The SOLE bootstrap authority. Cold-start vs warm-start is a
@@ -259,12 +287,54 @@ where
     Ok(BootstrapState {
         ledger,
         chain_dep,
-        tip,
+        // AK-S1 (DC-NODE-31): the live-follow start tip. A servable ChainDb tip
+        // (a real post-anchor block) always wins; otherwise — a BARE-anchor
+        // recovery, where `chaindb.tip()` is `None` because no servable block
+        // exists above the anchor — fall back to the persisted recovered anchor
+        // point (when the recover path loaded one). This is the FindIntersect
+        // start surface ONLY; the materialization `target` above (OQ-AK-2) and
+        // `ChainDb::tip()` are untouched, and a synthetic block is never made.
+        tip: resolve_live_follow_start(tip, inputs.recovered_anchor),
         seed_epoch_consensus_inputs,
         // Cold-start / first-run / NotRequired warm-start: no replay anchor summary.
         // `warm_start_recovery` overrides this with the derived value when it replays.
         replayed_anchor_block_no: None,
     })
+}
+
+/// BLUE live-follow start-tip resolution (PHASE4-N-AK AK-S1, DC-NODE-31).
+/// Pure and total — the single authority for which point a recovered node
+/// FindIntersects from when starting its live follow.
+///
+/// Resolution order:
+///   1. a servable ChainDb tip (a real post-anchor block durable in the store)
+///      always wins;
+///   2. else the persisted recovered anchor point, IF it is non-Origin
+///      (non-zero hash) — a bare-anchor recovery surfaces the anchor as the
+///      FindIntersect start so the wire pump does not start from Origin (which
+///      the relay answers with `RollBackward(Origin)`, tripping the AI-S4a
+///      fail-close);
+///   3. else `None` (truly Origin / cold-start).
+///
+/// A zero/null-hash `recovered_anchor` is treated as Origin (rule 3): a genesis
+/// seed point carries no block a peer could intersect, so it is not a usable
+/// start. This does NOT change `ChainDb::tip()` semantics and never synthesizes
+/// a servable block — it only chooses the start point from already-authoritative
+/// inputs.
+///
+/// Module-private: the sole caller is [`bootstrap_initial_state`] (kept so
+/// `bootstrap.rs` stays the single-`pub fn` bootstrap authority, CN-NODE-01).
+fn resolve_live_follow_start(
+    servable_chaindb_tip: Option<ChainTip>,
+    recovered_anchor: Option<ChainTip>,
+) -> Option<ChainTip> {
+    if let Some(tip) = servable_chaindb_tip {
+        return Some(tip);
+    }
+    match recovered_anchor {
+        Some(anchor) if anchor.hash != Hash32([0u8; 32]) => Some(anchor),
+        _ => None,
+    }
 }
 
 /// A3b warm-start verification chain: restore the anchor-keyed
@@ -331,6 +401,8 @@ where
 #[allow(clippy::panic)]
 mod tests {
     use super::*;
+
+    use crate::recovered_anchor::load_recovered_anchor_point;
 
     use std::collections::BTreeMap;
 
@@ -411,6 +483,7 @@ mod tests {
             ledger_view: &view,
             genesis_initial: Some(genesis.clone()),
             seed_epoch_consensus_source: SeedEpochConsensusSource::NotRequired,
+            recovered_anchor: None,
         })
         .expect("bootstrap");
         assert_eq!(result.ledger.epoch_state.epoch, EPOCH_576);
@@ -434,6 +507,7 @@ mod tests {
             ledger_view: &view,
             genesis_initial: None,
             seed_epoch_consensus_source: SeedEpochConsensusSource::NotRequired,
+            recovered_anchor: None,
         })
         .expect_err("must fail");
         assert!(matches!(err, BootstrapError::GenesisRequiredButAbsent));
@@ -505,6 +579,7 @@ mod tests {
             ledger_view: &view,
             genesis_initial: None,
             seed_epoch_consensus_source: SeedEpochConsensusSource::NotRequired,
+            recovered_anchor: None,
         })
         .expect("warm bootstrap");
 
@@ -529,6 +604,7 @@ mod tests {
                 ledger_view: &view,
                 genesis_initial: Some((genesis_ledger.clone(), genesis_chain_dep.clone())),
                 seed_epoch_consensus_source: SeedEpochConsensusSource::NotRequired,
+                recovered_anchor: None,
             })
             .expect("bootstrap")
         };
@@ -616,6 +692,7 @@ mod tests {
             ledger_view: &view,
             genesis_initial: None,
             seed_epoch_consensus_source: SeedEpochConsensusSource::NotRequired,
+            recovered_anchor: None,
         })
         .expect("bootstrap");
 
@@ -737,6 +814,7 @@ mod tests {
             genesis_initial: None,
             seed_epoch_consensus_source:
                 SeedEpochConsensusSource::RequiredFromRecoveredProvenance(provenance),
+            recovered_anchor: None,
         })
         .expect("required warm-start");
 
@@ -777,6 +855,7 @@ mod tests {
             genesis_initial: None,
             seed_epoch_consensus_source:
                 SeedEpochConsensusSource::RequiredFromRecoveredProvenance(provenance),
+            recovered_anchor: None,
         })
         .expect("required warm-start");
 
@@ -809,6 +888,7 @@ mod tests {
             ledger_view: &view,
             genesis_initial: None,
             seed_epoch_consensus_source: SeedEpochConsensusSource::NotRequired,
+            recovered_anchor: None,
         })
         .expect("not-required warm-start");
         assert!(out.seed_epoch_consensus_inputs.is_none());
@@ -836,6 +916,7 @@ mod tests {
             genesis_initial: Some(genesis),
             seed_epoch_consensus_source:
                 SeedEpochConsensusSource::RequiredFromRecoveredProvenance(provenance),
+            recovered_anchor: None,
         })
         .expect("cold-start ignores the source");
         assert!(out.tip.is_none());
@@ -860,6 +941,7 @@ mod tests {
             genesis_initial: None,
             seed_epoch_consensus_source:
                 SeedEpochConsensusSource::RequiredFromRecoveredProvenance(provenance),
+            recovered_anchor: None,
         })
         .expect_err("missing sidecar must fail closed");
         assert!(
@@ -885,6 +967,7 @@ mod tests {
             genesis_initial: None,
             seed_epoch_consensus_source:
                 SeedEpochConsensusSource::RequiredFromRecoveredProvenance(provenance),
+            recovered_anchor: None,
         })
         .expect_err("hash mismatch must fail closed");
         assert!(
@@ -923,6 +1006,7 @@ mod tests {
             genesis_initial: None,
             seed_epoch_consensus_source:
                 SeedEpochConsensusSource::RequiredFromRecoveredProvenance(provenance),
+            recovered_anchor: None,
         })
         .expect_err("anchor binding mismatch must fail closed");
         assert!(
@@ -958,6 +1042,7 @@ mod tests {
             genesis_initial: None,
             seed_epoch_consensus_source:
                 SeedEpochConsensusSource::RequiredFromRecoveredProvenance(provenance),
+            recovered_anchor: None,
         })
         .expect_err("epoch binding mismatch must fail closed");
         assert!(
@@ -992,6 +1077,7 @@ mod tests {
             genesis_initial: None,
             seed_epoch_consensus_source:
                 SeedEpochConsensusSource::RequiredFromRecoveredProvenance(provenance),
+            recovered_anchor: None,
         })
         .expect_err("malformed sidecar must fail closed");
         assert!(
@@ -1036,5 +1122,290 @@ mod tests {
                 "production bootstrap must not reference forge-time bundle token `{tok}` (no consensus-inputs-path fallback)"
             );
         }
+    }
+
+    // ===== PHASE4-N-AK AK-S1: recovered-anchor live-follow start (DC-NODE-31) =====
+
+    /// Build a BARE-anchor warm-startable `InMemoryChainDb`: a snapshot
+    /// captured at the anchor slot, with NO stored block — so `chaindb.tip()`
+    /// is `None` (no servable post-anchor block) yet `list_snapshot_slots()` is
+    /// non-empty, the exact shape `warm_start_recovery` faces for a recovered
+    /// anchor. Returns the `(db, schedule, view, anchor_slot)`. Mirrors
+    /// `warm_started_db` minus the `put_block`.
+    fn bare_anchor_db() -> (InMemoryChainDb, EraSchedule, PoolDistrView, SlotNo) {
+        let (corpus, view) = corpus_view();
+        let sched = schedule();
+        let idx = (0..corpus.blocks.len())
+            .min_by_key(|&i| {
+                let env = decode_block_envelope(&corpus.blocks[i]).expect("env");
+                env.block_end - env.block_start
+            })
+            .expect("non-empty");
+        let bytes = corpus.blocks[idx].clone();
+        let decoded = decode_block(&bytes).expect("decode");
+        let snapshot_slot = decoded.header_input.slot;
+
+        let (mut ledger, mut chain_dep) = fresh_genesis(corpus.epoch_nonce);
+        use ade_ledger::block_validity::transition::{block_validity, BlockValidityOutcome};
+        use ade_ledger::block_validity::verdict::BlockValidityVerdict;
+        let BlockValidityOutcome {
+            verdict,
+            ledger: new_ledger,
+            chain_dep: new_chain_dep,
+        } = block_validity(&ledger, &chain_dep, &sched, &view, &bytes);
+        match verdict {
+            BlockValidityVerdict::Valid { .. } => {
+                ledger = new_ledger;
+                chain_dep = new_chain_dep;
+            }
+            BlockValidityVerdict::Invalid { error, .. } => {
+                panic!("seed block must be valid, got {error:?}")
+            }
+        }
+
+        let db = InMemoryChainDb::new();
+        // NO `put_block`: this is a bare anchor (snapshot only, no servable
+        // post-anchor block). Capture the snapshot at the anchor slot.
+        PersistentSnapshotCache::new(&db)
+            .capture(snapshot_slot, &ledger, &chain_dep)
+            .expect("capture");
+        (db, sched, view, snapshot_slot)
+    }
+
+    const AK_ANCHOR_FP: Hash32 = Hash32([0x42; 32]);
+    // A real (non-zero) anchor block hash — the recovered-tip case AK restores.
+    const AK_ANCHOR_HASH: Hash32 = Hash32([0x2e; 32]);
+
+    #[test]
+    fn resolve_live_follow_start_treats_zero_hash_anchor_as_origin() {
+        // Pure-fn unit (CE-AK-1). Resolution order: servable -> non-Origin
+        // recovered anchor -> None; a zero-hash anchor is Origin (None).
+        let zero = ChainTip {
+            slot: SlotNo(188),
+            hash: Hash32([0u8; 32]),
+        };
+        let real = ChainTip {
+            slot: SlotNo(188),
+            hash: AK_ANCHOR_HASH,
+        };
+        let servable = ChainTip {
+            slot: SlotNo(200),
+            hash: Hash32([0xAB; 32]),
+        };
+        // (3) zero-hash anchor is truly Origin => None.
+        assert_eq!(resolve_live_follow_start(None, Some(zero)), None);
+        // (2) a non-Origin recovered anchor surfaces as the start tip.
+        assert_eq!(
+            resolve_live_follow_start(None, Some(real.clone())),
+            Some(real.clone())
+        );
+        // (1) a servable ChainDb tip always wins, even over a real anchor.
+        assert_eq!(
+            resolve_live_follow_start(Some(servable.clone()), Some(real)),
+            Some(servable)
+        );
+        // No inputs => None (true Origin / cold-start).
+        assert_eq!(resolve_live_follow_start(None, None), None);
+    }
+
+    #[test]
+    fn bootstrap_bare_anchor_recovery_surfaces_anchor_as_live_follow_tip() {
+        // A bare-anchor warm-start with a loaded recovered anchor (non-zero
+        // hash) surfaces that anchor (slot + REAL hash) as the live-follow tip
+        // -- NOT None. The materialization target used a null hash internally
+        // (OQ-AK-2, unchanged); the live-follow tip carries the real hash.
+        let (db, sched, view, anchor_slot) = bare_anchor_db();
+        let anchor_tip = ChainTip {
+            slot: anchor_slot,
+            hash: AK_ANCHOR_HASH,
+        };
+        let out = bootstrap_initial_state(BootstrapInputs {
+            chaindb: &db,
+            snapshot_store: &db,
+            era_schedule: &sched,
+            ledger_view: &view,
+            genesis_initial: None,
+            seed_epoch_consensus_source: SeedEpochConsensusSource::NotRequired,
+            recovered_anchor: Some(anchor_tip.clone()),
+        })
+        .expect("bare-anchor bootstrap");
+        assert_eq!(out.tip, Some(anchor_tip));
+    }
+
+    #[test]
+    fn bootstrap_true_origin_recovery_surfaces_none_tip() {
+        // A true cold-start (empty store) with no recovered anchor resolves to
+        // None -- live-follow starts from Origin, correctly.
+        let db = InMemoryChainDb::new();
+        let (_corpus, view) = corpus_view();
+        let sched = schedule();
+        let genesis = fresh_genesis([0xAB; 32]);
+        let out = bootstrap_initial_state(BootstrapInputs {
+            chaindb: &db,
+            snapshot_store: &db,
+            era_schedule: &sched,
+            ledger_view: &view,
+            genesis_initial: Some(genesis),
+            seed_epoch_consensus_source: SeedEpochConsensusSource::NotRequired,
+            recovered_anchor: None,
+        })
+        .expect("cold-start");
+        assert!(out.tip.is_none(), "true Origin / cold-start has no tip");
+    }
+
+    #[test]
+    fn bootstrap_servable_chaindb_tip_wins_over_anchor() {
+        // A warm-start with a SERVABLE post-anchor block (chaindb.tip() Some)
+        // resolves to the servable tip, NEVER the recovered anchor -- even when
+        // a (bogus, different) recovered anchor is supplied.
+        let (db, sched, view) = warm_started_db();
+        let servable = ChainDb::tip(&db)
+            .expect("tip")
+            .expect("warm_started_db has a servable block");
+        let bogus_anchor = ChainTip {
+            slot: SlotNo(999_999),
+            hash: Hash32([0xEE; 32]),
+        };
+        let out = bootstrap_initial_state(BootstrapInputs {
+            chaindb: &db,
+            snapshot_store: &db,
+            era_schedule: &sched,
+            ledger_view: &view,
+            genesis_initial: None,
+            seed_epoch_consensus_source: SeedEpochConsensusSource::NotRequired,
+            recovered_anchor: Some(bogus_anchor.clone()),
+        })
+        .expect("warm-start");
+        assert_eq!(out.tip, Some(servable));
+        assert_ne!(out.tip, Some(bogus_anchor), "servable tip wins over anchor");
+    }
+
+    #[test]
+    fn warm_start_loads_persisted_anchor_point() {
+        // The store -> load -> resolve chain: persist the anchor-point record,
+        // load + verify it (BLUE), then bootstrap resolves it as the tip.
+        use ade_ledger::recovered_anchor_point::{
+            encode_recovered_anchor_point, RecoveredAnchorPoint,
+        };
+        let (db, sched, view, anchor_slot) = bare_anchor_db();
+        let record = RecoveredAnchorPoint {
+            anchor_fp: AK_ANCHOR_FP,
+            slot: anchor_slot,
+            block_hash: AK_ANCHOR_HASH,
+        };
+        db.put_recovered_anchor_point(&AK_ANCHOR_FP, &encode_recovered_anchor_point(&record))
+            .expect("put");
+
+        let loaded = load_recovered_anchor_point(&db, &AK_ANCHOR_FP).expect("load");
+        assert_eq!(
+            loaded,
+            ChainTip {
+                slot: anchor_slot,
+                hash: AK_ANCHOR_HASH
+            }
+        );
+
+        let out = bootstrap_initial_state(BootstrapInputs {
+            chaindb: &db,
+            snapshot_store: &db,
+            era_schedule: &sched,
+            ledger_view: &view,
+            genesis_initial: None,
+            seed_epoch_consensus_source: SeedEpochConsensusSource::NotRequired,
+            recovered_anchor: Some(loaded.clone()),
+        })
+        .expect("warm-start");
+        assert_eq!(out.tip, Some(loaded));
+    }
+
+    #[test]
+    fn warm_start_non_origin_anchor_missing_anchor_point_fails_closed() {
+        // A non-Origin recovered store (snapshot present) with NO anchor-point
+        // record fails closed at the load -- no silent Origin fallback.
+        let (db, _sched, _view, _slot) = bare_anchor_db();
+        let err = load_recovered_anchor_point(&db, &AK_ANCHOR_FP)
+            .expect_err("missing anchor-point record must fail closed");
+        assert!(
+            matches!(&err, BootstrapError::RecoveredAnchorPointMissing { anchor_fp } if *anchor_fp == AK_ANCHOR_FP),
+            "got {err:?}"
+        );
+    }
+
+    #[test]
+    fn warm_start_anchor_point_fingerprint_mismatch_fails_closed() {
+        // A record whose BODY anchor_fp does not bind the recovered anchor_fp
+        // it is loaded for fails closed (BindingMismatch). Store a record whose
+        // body fp = X under key Y, then load by Y.
+        use ade_ledger::recovered_anchor_point::{
+            encode_recovered_anchor_point, RecoveredAnchorPoint,
+        };
+        let (db, _sched, _view, anchor_slot) = bare_anchor_db();
+        let body_fp = Hash32([0x99; 32]);
+        let record = RecoveredAnchorPoint {
+            anchor_fp: body_fp.clone(),
+            slot: anchor_slot,
+            block_hash: AK_ANCHOR_HASH,
+        };
+        // Store under AK_ANCHOR_FP but with a body bound to a different fp.
+        db.put_recovered_anchor_point(&AK_ANCHOR_FP, &encode_recovered_anchor_point(&record))
+            .expect("put under AK_ANCHOR_FP");
+
+        let err = load_recovered_anchor_point(&db, &AK_ANCHOR_FP)
+            .expect_err("anchor-point binding mismatch must fail closed");
+        assert!(
+            matches!(
+                &err,
+                BootstrapError::RecoveredAnchorPointBindingMismatch { actual_anchor_fp, expected_anchor_fp }
+                    if *actual_anchor_fp == body_fp && *expected_anchor_fp == AK_ANCHOR_FP
+            ),
+            "got {err:?}"
+        );
+    }
+
+    #[test]
+    fn same_store_same_anchor_point_same_findintersect_start() {
+        // Replay-equivalence of the recovered-tip surface (extends T-REC-05):
+        // the same store + same persisted anchor point => byte-identical loaded
+        // ChainTip => byte-identical BootstrapState.tip (the FindIntersect
+        // start) AND byte-identical recovered ledger.
+        use ade_ledger::recovered_anchor_point::{
+            encode_recovered_anchor_point, RecoveredAnchorPoint,
+        };
+        let (db, sched, view, anchor_slot) = bare_anchor_db();
+        let record = RecoveredAnchorPoint {
+            anchor_fp: AK_ANCHOR_FP,
+            slot: anchor_slot,
+            block_hash: AK_ANCHOR_HASH,
+        };
+        db.put_recovered_anchor_point(&AK_ANCHOR_FP, &encode_recovered_anchor_point(&record))
+            .expect("put");
+
+        let load_and_bootstrap = || {
+            let loaded = load_recovered_anchor_point(&db, &AK_ANCHOR_FP).expect("load");
+            bootstrap_initial_state(BootstrapInputs {
+                chaindb: &db,
+                snapshot_store: &db,
+                era_schedule: &sched,
+                ledger_view: &view,
+                genesis_initial: None,
+                seed_epoch_consensus_source: SeedEpochConsensusSource::NotRequired,
+                recovered_anchor: Some(loaded),
+            })
+            .expect("warm-start")
+        };
+        let r1 = load_and_bootstrap();
+        let r2 = load_and_bootstrap();
+        assert_eq!(r1.tip, r2.tip, "same store => same FindIntersect start tip");
+        assert_eq!(
+            r1.tip,
+            Some(ChainTip {
+                slot: anchor_slot,
+                hash: AK_ANCHOR_HASH
+            })
+        );
+        assert_eq!(
+            fingerprint(&r1.ledger).combined,
+            fingerprint(&r2.ledger).combined
+        );
     }
 }
