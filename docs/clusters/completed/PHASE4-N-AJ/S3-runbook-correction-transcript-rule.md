@@ -6,7 +6,7 @@
 
 ## 2. Slice Header
 - **Slice Name:** Convergence runbook correction + DC-EVIDENCE-03 tie-in.
-- **Cluster:** PHASE4-N-AJ. **Status:** Proposed.
+- **Cluster:** PHASE4-N-AJ. **Status:** Merged.
 - **Cluster Exit Criteria Addressed:** **CE-AJ-4** (transcript-shape rule + corrected runbook).
 - **Dependencies:** AJ-S1 (`--convergence-evidence-path`), AJ-S2 (the emission).
 

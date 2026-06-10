@@ -26,6 +26,13 @@
 >   of rung 2; DC-NODE-23..29). Its live transcript **CE-AI-6** is operator-gated /
 >   vacuous-until-committed, so `CN-CONS-03` stays `declared`. Multi-candidate fork-choice (the
 >   *select* half) remains owed.
+> - **PHASE4-N-AJ (2026-06-10) — CE-AI-6 bridge gap CLOSED.** The participant rollback-follow path
+>   now EMITS the convergence evidence (`block_received` / `block_admitted` / `agreement_verdict` via
+>   the reused GREEN reducer) to a dedicated `--convergence-evidence-path` sink (DC-NODE-30 enforced;
+>   DC-EVIDENCE-03 enforced_scaffolding). **CE-AI-6 is now PRODUCIBLE** — a single `--mode node
+>   --participant-venue --convergence-evidence-path …` run yields a gate-valid transcript; the
+>   operator pass is **unblocked**. `CN-CONS-03` still `declared` (flips only on the committed
+>   transcript). Evidence-only; no BLUE change.
 > - **Preprod ADE1 pool REGISTERED (2026-06-09)** — `docs/evidence/preprod-pool-registration.md`;
 >   pledge stake active **~epoch 295 (~2026-06-15)**, so rung-3's ~2-epoch stake gate now runs in
 >   parallel. Electability (faucet delegation) pending; **no acceptance, no RO-LIVE flip.**
@@ -430,7 +437,7 @@ cross-period KES is already covered by N-AC / N-P).
 | Rung | Venue | Failure class isolated | Likely new work | "Done" = |
 |---|---|---|---|---|
 | **1** | C2-LOCAL, single-producer (the existing CE-A5 harness) | operational stability · **settlement beyond k** · **epoch transition** · restart durability | DC-NODE-19 (loop-continuation, hermetic) → **DC-NODE-20/21/22** (forge base = local `ChainDb::tip`; cert evidence-only) for the live sustained leg; later epoch-transition slice if exposed | ✅ settle `>k` + ✅ **mid-run kill→warm-start** (CE-AH-6 run-4, 2026-06-08) · ⬜ **1 epoch crossed** with adoption continuing (lone remainder) |
-| **2** | C2-LOCAL, multi-producer (un-freeze a 2nd pool so it competes) | **fork-choice / rollback** — DC-CONS-03; **rollback-FOLLOW half implemented + live-routed** (PHASE4-N-AI; CE-AI-6 transcript pending), multi-candidate **SELECT** half not yet | a live fork-choice cluster (**real** new work) | Ade selects the best chain across a real fork **and** recovers from losing one (rollback-FOLLOW half done — DC-NODE-23..29; multi-candidate SELECT half owed) |
+| **2** | C2-LOCAL, multi-producer (un-freeze a 2nd pool so it competes) | **fork-choice / rollback** — DC-CONS-03; **rollback-FOLLOW half implemented + live-routed** (PHASE4-N-AI) + **convergence-evidence emission wired** (PHASE4-N-AJ; DC-NODE-30) so **CE-AI-6 is now producible** via `--convergence-evidence-path`, multi-candidate **SELECT** half not yet | a live fork-choice cluster (**real** new work) | Ade selects the best chain across a real fork **and** recovers from losing one (rollback-FOLLOW half done — DC-NODE-23..29; CE-AI-6 producible — PHASE4-N-AJ; multi-candidate SELECT half owed) |
 | **3** | preprod | real network · stake · load · adversaries | SPO registration **DONE (ADE1, epoch 293; active ~epoch 295)** + electability (faucet delegation) + operator wiring | a registered Ade SPO's block accepted on preprod → `Ba02Manifest` (flips RO-LIVE-01 / CN-CONS-06 live half) |
 
 **Rung 1 settlement-beyond-k + restart durability are DONE (CE-AH-6, 2026-06-08).** The lone
@@ -521,6 +528,20 @@ loop-continuation remainder is **DC-NODE-19**.
 > This is **single-best-peer scope, NOT full multi-peer ChainSel** — the **multi-candidate SELECT
 > half** of rung 2 remains owed (a real new cluster). The §7b ladder is the producer/forge axis;
 > this is the parallel live receive/follow capability.
+>
+> **Update — CE-AI-6 bridge CLOSED (PHASE4-N-AJ, 2026-06-10):** the gap that blocked CE-AI-6 — the
+> rollback-follow (node path) emitted no agreement evidence, while the mode that did (`--mode
+> admission`) ignored rollbacks (`bootstrap.rs` `RollBackward => continue`) — is closed. PHASE4-N-AJ
+> wires the existing GREEN `AgreementVerdict` reducer into `run_participant_sync` as an **emit-only**
+> side-output to a dedicated `--convergence-evidence-path` sink: `block_received` (every considered
+> peer block) / `block_admitted` (per `pump_block` admit) / `agreement_verdict` (`verdict::derive`).
+> DC-NODE-30 enforced; DC-EVIDENCE-03 enforced_scaffolding; DC-ADMIT-04 strengthened. Both close-gate
+> reviews (IDD + security) CLEAN — no BLUE change, evidence never becomes authority, a write failure
+> is non-fatal but surfaced (poisons the transcript, never halts the loop). **CE-AI-6 is now
+> PRODUCIBLE**: the operator pass is a clean `--mode node --participant-venue
+> --convergence-evidence-path …` run (σ=0 pure follower) per the corrected runbook; committing the
+> transcript flips `CN-CONS-03`'s live evidence (still single-best-peer scope, NOT full ChainSel).
+> Until then `CN-CONS-03` stays `declared`.
 >
 > **Update — rung-3 stake gate now ticking (2026-06-09):** the preprod **ADE1** pool is registered
 > (`docs/evidence/preprod-pool-registration.md`; pool `pool1gkgwpms…`, tx `64a977cc…`, epoch 293),

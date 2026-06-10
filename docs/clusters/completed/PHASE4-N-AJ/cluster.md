@@ -53,8 +53,9 @@ discipline (**DC-ADMIT-08** / `feedback-evidence-reducers-are-green-not-authorit
 - [ ] **CE-AJ-3** (evidence-only guards): NEW `ci/ci_check_convergence_evidence_emit_only.sh`
   (here-strings) asserts the verdict/emit result never feeds
   `classify_receive`/`apply_chain_event`/`pump_block`/forge control flow and the sink is distinct
-  from the WAL append; Rust tests `participant_diverged_verdict_is_emit_only_no_halt` +
-  `participant_convergence_write_failure_non_fatal_to_authority` +
+  from the WAL append; Rust tests `convergence_evidence_write_failure_poisons_and_is_surfaced` +
+  `convergence_evidence_context_marks_incomplete_on_write_failure` +
+  `participant_block_received_does_not_imply_admission` +
   `participant_convergence_evidence_replay_byte_identical` pass. *(Targets DC-NODE-30 guards.)*
 - [ ] **CE-AJ-4** (transcript-shape rule + corrected runbook):
   `ci/ci_check_convergence_evidence_schema.sh --self-test` green (accept valid / reject diverged /

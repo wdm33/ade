@@ -6,7 +6,7 @@
 
 ## 2. Slice Header
 - **Slice Name:** Dedicated convergence-evidence sink + `--convergence-evidence-path` + closed-vocabulary writer (inert).
-- **Cluster:** PHASE4-N-AJ. **Status:** Proposed.
+- **Cluster:** PHASE4-N-AJ. **Status:** Merged.
 - **Cluster Exit Criteria Addressed:** **CE-AJ-1** (dedicated/opt-in/isolated sink; no path ⇒ no file; closed vocabulary). *(CE-AJ-2/3/4 explicitly out of scope.)*
 - **Dependencies:** PHASE4-N-M-B (`AdmissionLogWriter` + `AdmissionLogEvent`, reused unchanged); PHASE4-N-AI (the participant venue exists — **not** touched here).
 

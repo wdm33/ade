@@ -9,7 +9,7 @@
 
 ## 2. Slice Header
 - **Slice Name:** Wire `ConvergenceEvidenceSink` into `run_participant_sync` (emit-only convergence evidence).
-- **Cluster:** PHASE4-N-AJ. **Status:** Proposed.
+- **Cluster:** PHASE4-N-AJ. **Status:** Merged.
 - **Cluster Exit Criteria Addressed:** **CE-AJ-2** (participant emits convergence evidence; hermetic gate-accept) + **CE-AJ-3** (evidence-only guards). *(CE-AJ-1 done in AJ-S1; CE-AJ-4 is AJ-S3.)*
 - **Dependencies:** AJ-S1 (the sink + `--convergence-evidence-path`); PHASE4-N-AI (`run_participant_sync`); PHASE4-N-M-B (`verdict::derive`, `AdmissionLogEvent`).
 
