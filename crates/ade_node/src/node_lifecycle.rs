@@ -553,6 +553,14 @@ async fn run_node_lifecycle_inner(
                 fingerprint(&state.ledger).combined,
                 SnapshotCadence::DEFAULT,
             );
+            // PHASE4-N-AK AK-S2 (DC-NODE-32): thread the already-loaded recovered
+            // anchor point (AK-S1 / BootstrapState.tip) into the forward-sync state
+            // — the SINGLE anchor authority — so run_node_sync recognises the relay's
+            // post-intersection RollBackward(anchor) as an idempotent boundary rewind
+            // (a bare anchor is a recovery snapshot, not a stored block). This is the
+            // SAME value the wire pump FindIntersects at below; never re-read from the
+            // store inside the loop.
+            fwd.recovered_anchor = state.tip.clone();
             // PHASE4-N-F-G-C S1: wire a LIVE WirePump feed when an upstream peer
             // is configured (`--peer`). Empty `--peer` keeps the prior empty
             // source (forge-CAPABLE, halts clean — the `On` arm is observable

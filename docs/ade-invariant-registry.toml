@@ -7236,7 +7236,7 @@ tests = [
 ]
 ci_script = ""
 status = "enforced_scaffolding"
-open_obligation = "Hermetic mechanical enforcement (CE-AK-1 ade_runtime + CE-AK-2 ade_node, the tests above) is GREEN. CE-AK-3 LIVE (2026-06-10, fixed binary 8bb1c402, frozen c2-relay venue): the Origin regression is FIXED -- the re-recovered store carries the anchor-point record and FindIntersect started at the anchor with 0 UnsupportedRollbackPoint (DC-NODE-31 proven live). BUT the single-producer follow then halts at the NEXT layer (run_node_sync UnexpectedRollback on the relay's post-intersection RollBackward(anchor), because a bare anchor is a snapshot, not a stored block) -- so CE-AK-3's full end-to-end (catch up to the frozen relay tip, forge_base_block_no==13) is GATED on AK-S2 (DC-NODE-32: run_node_sync accepts rollback-to-recovered-anchor as an idempotent no-op; the forward path is already enforced by pump_block, verified by the OQ-AK-S2-2 probe). Flip DC-NODE-31 to `enforced` at /cluster-close after CE-AK-3 passes end-to-end (post-AK-S2); T-REC-05 gains the recovered-tip replay test (strengthened_in += PHASE4-N-AK) at the same close."
+open_obligation = "Hermetic mechanical enforcement (CE-AK-1 ade_runtime + CE-AK-2 ade_node, the tests above) is GREEN. CE-AK-3 LIVE end-to-end PASSED (2026-06-10, frozen c2-relay venue) across AK-S1 + AK-S2 (DC-NODE-32): re-recover -> FindIntersect at the anchor (0 UnsupportedRollbackPoint, DC-NODE-31) -> RollBackward(anchor) idempotent no-op (0 UnexpectedRollback, DC-NODE-32) -> caught up to forge_base_block_no=13 (== frozen relay tip; forge_base_source=local_chaindb_tip, forge_mode=caught_up_to_peer_tip). The recover->follow is restored end-to-end; the post-N-AH regression is remediated. Flip DC-NODE-31 + DC-NODE-32 -> enforced + strengthen T-REC-05 (strengthened_in += PHASE4-N-AK) at /cluster-close + regen grounding docs."
 introduced_in = "PHASE4-N-AK"
 strengthened_in = []
 
@@ -7264,9 +7264,18 @@ the participant path (run_participant_sync @ node_lifecycle.rs -- a separate fol
 """
 source = "docs/planning/phase4-n-ak-s2-recovered-anchor-boundary-invariants.md + docs/clusters/PHASE4-N-AK/cluster.md"
 cross_ref = ["DC-NODE-31", "DC-NODE-29", "DC-NODE-23", "T-REC-05", "CN-CONS-03"]
-code_locus = "crates/ade_node/src/node_sync.rs (run_node_sync -- single-producer RollBack handler accepts rollback-to-recovered-anchor as no-op; threaded recovered anchor), crates/ade_node/src/node_lifecycle.rs (threads BootstrapState.tip into run_node_sync; run_participant_sync UNCHANGED -- separate follow-on), crates/ade_runtime/src/admission/wire_pump.rs:447 (AI-S4a Origin fail-close -- UNCHANGED)"
-tests = []
+code_locus = "crates/ade_runtime/src/forward_sync/reducer.rs (ForwardSyncState.recovered_anchor -- the threaded anchor field, default None), crates/ade_node/src/node_sync.rs (run_node_sync -- single-producer RollBack handler accepts rollback-to-recovered-anchor (exact slot AND hash) as idempotent no-op), crates/ade_node/src/node_lifecycle.rs (ON arm sets fwd.recovered_anchor = BootstrapState.tip; run_participant_sync UNCHANGED -- separate follow-on), crates/ade_runtime/src/admission/wire_pump.rs:447 (AI-S4a Origin fail-close -- UNCHANGED)"
+tests = [
+    "crates/ade_node/tests/live_fork_choice_ai_s4bii.rs::ak_s2_rollback_to_recovered_anchor_is_idempotent_noop",
+    "crates/ade_node/tests/live_fork_choice_ai_s4bii.rs::ak_s2_rollback_to_origin_fails_closed_even_with_anchor",
+    "crates/ade_node/tests/live_fork_choice_ai_s4bii.rs::ak_s2_non_anchor_rollback_fails_closed_slot_and_hash_bound",
+    "crates/ade_node/tests/live_fork_choice_ai_s4bii.rs::ak_s2_no_recovered_anchor_still_fails_closed",
+    "crates/ade_node/tests/live_fork_choice_ai_s4bii.rs::ak_s2_after_anchor_noop_forward_block_reaches_pump_block_validation_holds",
+    "crates/ade_node/src/node_sync.rs::ak_s2_valid_forward_block_admits_after_recovered_anchor_noop",
+    "crates/ade_node/tests/live_fork_choice_ai_s4bii.rs::singleproducer_rollback_refused_by_run_node_sync",
+]
 ci_script = ""
-status = "declared"
+status = "enforced_scaffolding"
+open_obligation = "Hermetic mechanical enforcement (CE-AK-S2-1..6, the tests above) is GREEN: recovered-anchor rollback idempotent no-op (no WAL/ChainDb/ledger/chain_dep mutation); Origin + non-anchor + slot-only + hash-only + no-recovered-anchor all FAIL CLOSED; the forward block admits through the EXISTING pump_block after the no-op. CE-AK-3 LIVE end-to-end PASSED (2026-06-10, AK-S2 binary, frozen c2-relay venue): re-recover -> FindIntersect at anchor (0 UnsupportedRollbackPoint) -> RollBackward(anchor) idempotent no-op (0 UnexpectedRollback) -> caught up to forge_base_block_no=13 (== frozen relay tip; forge_base_source=local_chaindb_tip, forge_mode=caught_up_to_peer_tip, 76 ticks, no halt). Flip DC-NODE-31 + DC-NODE-32 -> enforced + strengthen T-REC-05 (strengthened_in += PHASE4-N-AK) at /cluster-close + regen grounding docs."
 introduced_in = "PHASE4-N-AK"
 strengthened_in = []

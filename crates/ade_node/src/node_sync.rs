@@ -463,12 +463,27 @@ where
     let mut selected_tip: Option<PumpTip> = None;
 
     while let Some(item) = source.next_item().await {
-        // PHASE4-N-AI AI-S4b-ii: SingleProducer/Unknown do not follow peer
-        // rollbacks -- a RollBack item on this path fails closed (the Participant
-        // rollback-follow path is wired in node_lifecycle).
+        // PHASE4-N-AK AK-S2 (DC-NODE-32): a RollBackward binding EXACTLY (slot AND
+        // hash) to the recovered anchor (AK-S1 / BootstrapState.tip, threaded via
+        // ForwardSyncState) is an idempotent NO-OP boundary rewind — the node is
+        // already at the anchor (a recovery snapshot, NOT a stored block), so no
+        // commit_rollback, no WalEntry::RollBack, no ChainDb / ledger / chain_dep /
+        // cursor mutation; just continue to the next item. The ONLY accepted rollback
+        // is the recovered anchor, bound on BOTH slot and hash (never slot-alone,
+        // never hash-alone). RollBackward(Origin) and EVERY other point still FAIL
+        // CLOSED (AI-S4a unchanged; non-anchor / no-recovered-anchor fail closed). The
+        // Participant rollback-follow path is separate (run_participant_sync in
+        // node_lifecycle — NOT touched).
         let block_bytes = match item {
             NodeSyncItem::Block(b) => b,
-            NodeSyncItem::RollBack(_) => return Err(NodeSyncError::UnexpectedRollback),
+            NodeSyncItem::RollBack(point) => match (&state.recovered_anchor, &point) {
+                (Some(anchor), Point::Block { slot, hash })
+                    if *slot == anchor.slot && *hash == anchor.hash =>
+                {
+                    continue;
+                }
+                _ => return Err(NodeSyncError::UnexpectedRollback),
+            },
         };
         // The SOLE tip-advancing call on the lifecycle sync path. Its
         // internal cadence checkpoint marker is a no-op here
@@ -1621,6 +1636,58 @@ mod tests {
         assert!(
             snap.is_some(),
             "run_node_sync must capture a tip checkpoint via PersistentSnapshotCache (E4)"
+        );
+    }
+
+    #[tokio::test]
+    async fn ak_s2_valid_forward_block_admits_after_recovered_anchor_noop() {
+        // PHASE4-N-AK AK-S2 CE-AK-S2-4 (DC-NODE-32): after the recovered-anchor
+        // rollback no-op, a VALID forward block admits through the EXISTING
+        // pump_block and the tip advances -- the no-op neither blocks nor consumes
+        // the subsequent block (the recovered chain_dep already links it; AK-S2
+        // adds no forward-link code). Mirrors node_sync_pump_advances_recoverable_tip
+        // with the relay's post-intersection RollBackward(anchor) prepended.
+        let (c, view) = corpus_view();
+        let sched = schedule();
+        let bytes = pick_lightest(&c);
+
+        let dir = TempDir::new().unwrap();
+        let chaindb =
+            PersistentChainDb::open(PersistentChainDbOptions::at(dir.path().join("chain.db")))
+                .unwrap();
+        let mut wal = FileWalStore::open(dir.path().join("wal")).unwrap();
+        let mut state = fresh_state(c.epoch_nonce);
+        // The recovered anchor boundary point the relay rewinds to (arbitrary; the
+        // forward corpus block is at a much later slot, no collision).
+        let anchor = ChainTip {
+            slot: SlotNo(7),
+            hash: Hash32([0x2e; 32]),
+        };
+        state.recovered_anchor = Some(anchor.clone());
+        let mut source = NodeBlockSource::in_memory_items(vec![
+            NodeSyncItem::RollBack(ade_network::codec::chain_sync::Point::Block {
+                slot: anchor.slot,
+                hash: anchor.hash.clone(),
+            }),
+            NodeSyncItem::Block(bytes.clone()),
+        ]);
+
+        let tip = run_node_sync(&mut source, &mut state, &chaindb, &mut wal, &sched, &view)
+            .await
+            .expect("sync ok (anchor rollback no-op, then forward admit)")
+            .expect("tip advanced through pump_block after the no-op");
+
+        // The forward block admitted (tip advanced via pump_block) despite the
+        // leading rollback-to-anchor no-op.
+        let chain_tip = ChainDb::tip(&chaindb).expect("tip").expect("non-empty");
+        assert_eq!(chain_tip.slot, tip.slot);
+        assert_eq!(chain_tip.hash, tip.hash);
+        let entries = wal.read_all().expect("read_all");
+        assert!(
+            entries
+                .iter()
+                .any(|e| matches!(e, WalEntry::AdmitBlock { slot, .. } if *slot == tip.slot)),
+            "the forward block must admit via pump_block (AdmitBlock at the advanced tip) after the no-op"
         );
     }
 

@@ -22,7 +22,7 @@ use ade_node::node_sync::{
     pending_reselection_forge_refusal, run_node_sync, ForgeRefused, NodeBlockSource, NodeSyncError,
     NodeSyncItem,
 };
-use ade_runtime::chaindb::{ChainDb, InMemoryChainDb, StoredBlock};
+use ade_runtime::chaindb::{ChainDb, ChainTip, InMemoryChainDb, StoredBlock};
 use ade_runtime::forward_sync::ForwardSyncState;
 use ade_runtime::rollback::{PersistentSnapshotCache, SnapshotCadence};
 use ade_testkit::validity::ConwayValidityCorpus;
@@ -278,6 +278,118 @@ async fn singleproducer_rollback_refused_by_run_node_sync() {
         .await
         .expect_err("SP/Unknown do not follow peer rollbacks");
     assert!(matches!(err, NodeSyncError::UnexpectedRollback), "got {err:?}");
+}
+
+// ---------- PHASE4-N-AK AK-S2 (DC-NODE-32): recovered-anchor rollback no-op ----------
+
+fn anchor_tip(slot: u64, hash: u8) -> ChainTip {
+    ChainTip {
+        slot: SlotNo(slot),
+        hash: h(hash),
+    }
+}
+
+#[tokio::test]
+async fn ak_s2_rollback_to_recovered_anchor_is_idempotent_noop() {
+    // CE-AK-S2-1: a RollBackward binding EXACTLY (slot AND hash) to the recovered
+    // anchor is an idempotent no-op -- run_node_sync returns Ok with NO durable
+    // mutation (the node is already at the anchor; a bare anchor is a snapshot).
+    let db = InMemoryChainDb::new(); // bare anchor: no stored blocks
+    let mut fwd = fwd_at(8);
+    fwd.recovered_anchor = Some(anchor_tip(188, 0x2e));
+    let mut wal = VecWal::default();
+    let ledger_fp_before = fingerprint(&fwd.receive.ledger).combined;
+    let chain_dep_before = fwd.receive.chain_dep.clone();
+    let mut src = NodeBlockSource::in_memory_items(vec![rollback_item(188, 0x2e)]);
+    let out = run_node_sync(&mut src, &mut fwd, &db, &mut wal, &min_schedule(), &view_stub())
+        .await
+        .expect("rollback-to-recovered-anchor is an accepted no-op");
+    assert!(out.is_none(), "a no-op rollback advances no tip");
+    // No durable mutation: WAL empty, ChainDb tip absent, ledger + chain_dep intact.
+    assert!(wal.entries.is_empty(), "no WAL append on the no-op");
+    assert!(db.tip().unwrap().is_none(), "no ChainDb mutation");
+    assert_eq!(fingerprint(&fwd.receive.ledger).combined, ledger_fp_before);
+    assert_eq!(fwd.receive.chain_dep, chain_dep_before);
+}
+
+#[tokio::test]
+async fn ak_s2_rollback_to_origin_fails_closed_even_with_anchor() {
+    // CE-AK-S2-2: RollBackward(Origin) still fails closed (AI-S4a), even when a
+    // recovered anchor is present.
+    let db = InMemoryChainDb::new();
+    let mut fwd = fwd_at(8);
+    fwd.recovered_anchor = Some(anchor_tip(188, 0x2e));
+    let mut wal = VecWal::default();
+    let mut src = NodeBlockSource::in_memory_items(vec![NodeSyncItem::RollBack(WirePoint::Origin)]);
+    let err = run_node_sync(&mut src, &mut fwd, &db, &mut wal, &min_schedule(), &view_stub())
+        .await
+        .expect_err("Origin rollback must fail closed");
+    assert!(matches!(err, NodeSyncError::UnexpectedRollback), "got {err:?}");
+}
+
+#[tokio::test]
+async fn ak_s2_non_anchor_rollback_fails_closed_slot_and_hash_bound() {
+    // CE-AK-S2-3: the accepted rollback binds BOTH slot and hash -- a fully
+    // different point, a slot-only match, and a hash-only match all fail closed
+    // (never slot-alone, never hash-alone).
+    let anchor = anchor_tip(188, 0x2e);
+    for (label, item) in [
+        ("different slot+hash", rollback_item(999, 0xFF)),
+        ("slot match, hash differs", rollback_item(188, 0xFF)),
+        ("hash match, slot differs", rollback_item(999, 0x2e)),
+    ] {
+        let db = InMemoryChainDb::new();
+        let mut fwd = fwd_at(8);
+        fwd.recovered_anchor = Some(anchor.clone());
+        let mut wal = VecWal::default();
+        let mut src = NodeBlockSource::in_memory_items(vec![item]);
+        let err = run_node_sync(&mut src, &mut fwd, &db, &mut wal, &min_schedule(), &view_stub())
+            .await
+            .unwrap_err();
+        assert!(
+            matches!(err, NodeSyncError::UnexpectedRollback),
+            "{label}: got {err:?}"
+        );
+    }
+}
+
+#[tokio::test]
+async fn ak_s2_no_recovered_anchor_still_fails_closed() {
+    // CE-AK-S2-6 (preserved): with NO recovered anchor (cold-start / non-recover
+    // caller), ANY rollback still fails closed -- the pre-AK-S2 behavior is exact.
+    let db = InMemoryChainDb::new();
+    let mut fwd = fwd_at(8); // recovered_anchor defaults to None
+    assert!(fwd.recovered_anchor.is_none());
+    let mut wal = VecWal::default();
+    let mut src = NodeBlockSource::in_memory_items(vec![rollback_item(188, 0x2e)]);
+    let err = run_node_sync(&mut src, &mut fwd, &db, &mut wal, &min_schedule(), &view_stub())
+        .await
+        .expect_err("no recovered anchor => any rollback fails closed");
+    assert!(matches!(err, NodeSyncError::UnexpectedRollback), "got {err:?}");
+}
+
+#[tokio::test]
+async fn ak_s2_after_anchor_noop_forward_block_reaches_pump_block_validation_holds() {
+    // CE-AK-S2-5: after the anchor no-op, the subsequent (here malformed) block
+    // reaches the EXISTING pump_block, which fails closed on validation -- proving
+    // AK-S2 added NO forward-admit logic and did not turn the rollback into a
+    // skip-the-next-block: the error is a Pump validation error, NOT
+    // UnexpectedRollback and NOT a silent accept.
+    let db = InMemoryChainDb::new();
+    let mut fwd = fwd_at(8);
+    fwd.recovered_anchor = Some(anchor_tip(188, 0x2e));
+    let mut wal = VecWal::default();
+    let mut src = NodeBlockSource::in_memory_items(vec![
+        rollback_item(188, 0x2e),                          // anchor no-op
+        NodeSyncItem::Block(vec![0xDE, 0xAD, 0xBE, 0xEF]), // malformed -> pump_block rejects
+    ]);
+    let err = run_node_sync(&mut src, &mut fwd, &db, &mut wal, &min_schedule(), &view_stub())
+        .await
+        .expect_err("the forward block reaches pump_block, which rejects the malformed bytes");
+    assert!(
+        matches!(err, NodeSyncError::Pump(_)),
+        "got {err:?} (must be a Pump validation error, NOT UnexpectedRollback)"
+    );
 }
 
 #[test]

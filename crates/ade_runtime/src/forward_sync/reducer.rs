@@ -36,7 +36,7 @@ use ade_ledger::receive::{
 use ade_ledger::wal::{BlockVerdictTag, WalEntry};
 use ade_types::{BlockNo, Hash32, SlotNo};
 
-use crate::chaindb::StoredBlock;
+use crate::chaindb::{ChainTip, StoredBlock};
 use crate::rollback::cadence::{should_snapshot_after_block, SnapshotCadence};
 
 /// Closed forward-sync effect set. The RED pump applies these in the
@@ -136,11 +136,23 @@ pub struct ForwardSyncState {
     pub prior_fp: Hash32,
     pub cadence: SnapshotCadence,
     pub last_checkpoint: Option<SlotNo>,
+    /// PHASE4-N-AK AK-S2 (DC-NODE-32): the recovered bootstrap anchor point
+    /// (AK-S1 / DC-NODE-31 / `BootstrapState.tip`), carried so the
+    /// single-producer follow (`run_node_sync`) can recognise the relay's
+    /// post-intersection `RollBackward(anchor)` as an idempotent boundary
+    /// rewind. A replay-derivable, store-derived value (the SINGLE anchor
+    /// authority — `run_node_sync` consumes this, never re-reads the store).
+    /// `None` for cold-start / non-recover callers (pre-AK-S2 behaviour: any
+    /// rollback fails closed). It is NOT a servable block and is never
+    /// synthesized into one.
+    pub recovered_anchor: Option<ChainTip>,
 }
 
 impl ForwardSyncState {
     /// Seed from the verified anchor: the receive sub-state plus the
     /// anchor's initial ledger fingerprint as the first WAL link.
+    /// `recovered_anchor` defaults to `None`; the recover path
+    /// (`run_node_lifecycle`) sets it from `BootstrapState.tip` (AK-S2).
     pub fn new(
         receive: ReceiveState,
         anchor_fingerprint: Hash32,
@@ -151,6 +163,7 @@ impl ForwardSyncState {
             prior_fp: anchor_fingerprint,
             cadence,
             last_checkpoint: None,
+            recovered_anchor: None,
         }
     }
 }
