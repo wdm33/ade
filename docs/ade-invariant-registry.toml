@@ -7161,8 +7161,16 @@ no file and node behavior byte-unchanged. No new evidence enum; no BLUE change.
 source = "docs/planning/phase4-n-aj-participant-convergence-evidence-invariants.md §1 (I-AJ-1) + §7 (D-1/D-2/D-3)"
 cross_ref = ["DC-NODE-23", "DC-NODE-29", "DC-ADMIT-04", "DC-ADMIT-08", "DC-EVIDENCE-03", "DC-CONS-03", "CN-CONS-03"]
 code_locus = "crates/ade_node/src/node_lifecycle.rs (run_participant_sync emission), crates/ade_node/src/admission/verdict.rs (derive, reused), crates/ade_node/src/admission_log/ (vocabulary/writer, reused against the --convergence-evidence-path sink), crates/ade_node/src/cli.rs (--convergence-evidence-path)"
-tests = []
-ci_script = ""
+tests = [
+    "ade_node::convergence_evidence::tests::convergence_evidence_absent_path_emits_no_file",
+    "ade_node::convergence_evidence::tests::convergence_evidence_writer_emits_closed_vocabulary",
+    "ade_node::convergence_evidence::tests::convergence_evidence_write_failure_poisons_and_is_surfaced",
+    "ade_node::convergence_evidence::tests::convergence_evidence_context_marks_incomplete_on_write_failure",
+    "participant_cold_start_admit_emits_received_admitted_agreed",
+    "participant_block_received_does_not_imply_admission",
+    "participant_convergence_evidence_replay_byte_identical",
+]
+ci_script = "ci/ci_check_convergence_evidence_emit_only.sh, ci/ci_check_convergence_evidence_vocabulary_closed.sh, ci/ci_check_convergence_evidence_schema.sh"
 status = "declared"
 introduced_in = "PHASE4-N-AJ"
 strengthened_in = []

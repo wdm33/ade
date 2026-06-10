@@ -28,6 +28,13 @@ use ade_runtime::rollback::{PersistentSnapshotCache, SnapshotCadence};
 use ade_testkit::validity::ConwayValidityCorpus;
 use ade_types::{CardanoEra, EpochNo, Hash28, Hash32, SlotNo};
 
+use std::cell::RefCell;
+use std::io::Write;
+use std::rc::Rc;
+
+use ade_ledger::receive::events::TipPoint;
+use ade_node::convergence_evidence::{ConvergenceEvidence, ConvergenceEvidenceSink};
+
 // ---------- shared helpers ----------
 
 fn h(b: u8) -> Hash32 {
@@ -128,6 +135,7 @@ async fn participant_rollback_applies_durably() {
         &min_schedule(),
         &view_stub(),
         &mut pending,
+        None,
     )
     .await
     .expect("rollback applies");
@@ -161,6 +169,7 @@ async fn participant_rollback_to_unknown_point_fails_closed() {
         &min_schedule(),
         &view_stub(),
         &mut pending,
+        None,
     )
     .await
     .expect_err("unknown rollback point must fail closed");
@@ -192,6 +201,7 @@ async fn participant_rollback_beyond_k_fails_closed_clears_pending() {
         &min_schedule(),
         &view_stub(),
         &mut pending,
+        None,
     )
     .await
     .expect_err("no snapshot -> fail closed");
@@ -226,6 +236,7 @@ async fn rollback_slot_hash_mismatch_fails_before_mutation() {
         &min_schedule(),
         &view_stub(),
         &mut pending,
+        None,
     )
     .await
     .expect_err("a slot/hash-mismatched rollback target must fail closed");
@@ -353,6 +364,7 @@ async fn participant_bare_competing_block_fails_closed() {
         &corpus_schedule(),
         &view,
         &mut pending,
+        None,
     )
     .await
     .expect_err("a bare competing block has no fork point -> fail closed");
@@ -392,9 +404,177 @@ async fn participant_block_with_no_durable_tip_pumps() {
         &corpus_schedule(),
         &view,
         &mut pending,
+        None,
     )
     .await
     .expect("cold-start block admits via pump_block");
     let tip = db.tip().unwrap().unwrap();
     assert_eq!(tip.hash, decoded.block_hash);
+}
+
+// ---------- AJ-S2 (DC-NODE-30): convergence evidence emission ----------
+// Evidence observes authority; evidence never becomes authority. These drive
+// the SAME run_participant_sync path with a convergence-evidence sink and assert
+// the emitted JSONL, without changing any consensus/rollback/admit behavior.
+
+/// A `Write` backed by a shared buffer the test reads after the run.
+#[derive(Clone, Default)]
+struct SharedBuf(Rc<RefCell<Vec<u8>>>);
+impl Write for SharedBuf {
+    fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+        self.0.borrow_mut().extend_from_slice(buf);
+        Ok(buf.len())
+    }
+    fn flush(&mut self) -> std::io::Result<()> {
+        Ok(())
+    }
+}
+impl SharedBuf {
+    fn text(&self) -> String {
+        String::from_utf8(self.0.borrow().clone()).expect("utf8")
+    }
+}
+
+fn evidence_over(buf: &SharedBuf) -> ConvergenceEvidence {
+    ConvergenceEvidence::new(
+        ConvergenceEvidenceSink::with_writer(Box::new(buf.clone())),
+        &h(0xCC),
+        "127.0.0.1:3001".to_string(),
+    )
+}
+
+/// Cold-start ForwardSyncState seeded with the corpus epoch nonce (mirrors
+/// `participant_block_with_no_durable_tip_pumps`).
+fn cold_start_fwd(c: &ConwayValidityCorpus) -> ForwardSyncState {
+    ForwardSyncState::new(
+        ReceiveState::new(LedgerState::new(CardanoEra::Conway), {
+            let mut s = PraosChainDepState::empty();
+            s.epoch_nonce = Nonce(Hash32(c.epoch_nonce));
+            s.evolving_nonce = Nonce(Hash32(c.epoch_nonce));
+            s
+        }),
+        fingerprint(&LedgerState::new(CardanoEra::Conway)).combined,
+        SnapshotCadence::DEFAULT,
+    )
+}
+
+#[tokio::test]
+async fn participant_cold_start_admit_emits_received_admitted_agreed() {
+    // A cold-start admit (None durable tip -> pump_block) with the followed peer
+    // tip set to the admitted block emits block_received (peer input) +
+    // block_admitted (local admission) + agreement_verdict{agreed}; 0 diverged.
+    let (c, view) = corpus_view();
+    let block = pick_lightest(&c);
+    let decoded = decode_block(&block).expect("decode");
+    let tip = TipPoint {
+        slot: decoded.header_input.slot,
+        hash: decoded.block_hash.clone(),
+        block_no: decoded.header_input.block_no.0,
+    };
+    let db = InMemoryChainDb::new();
+    let mut fwd = cold_start_fwd(&c);
+    let mut wal = VecWal::default();
+    let mut pending = false;
+    let mut src =
+        NodeBlockSource::in_memory_with_followed_tip(vec![block], Some(tip));
+    let buf = SharedBuf::default();
+    let mut ev = evidence_over(&buf);
+    run_participant_sync(
+        &mut src,
+        &mut fwd,
+        &db,
+        &mut wal,
+        &corpus_schedule(),
+        &view,
+        &mut pending,
+        Some(&mut ev),
+    )
+    .await
+    .expect("cold-start admit");
+    let out = buf.text();
+    assert!(out.contains(r#""event":"block_received""#), "peer input: {out}");
+    assert!(out.contains(r#""event":"block_admitted""#), "local admission: {out}");
+    assert!(out.contains(r#""event":"agreement_verdict""#));
+    assert!(out.contains(r#""kind":"agreed""#), "followed tip == admitted tip: {out}");
+    assert!(!out.contains("diverged"), "no divergence following one peer");
+    assert!(!ev.is_incomplete());
+}
+
+#[tokio::test]
+async fn participant_block_received_does_not_imply_admission() {
+    // A bare competing block is REFUSED (fail closed) -- block_received is emitted
+    // (peer input) but NO block_admitted (admission is local + authoritative).
+    let (c, view) = corpus_view();
+    let block = pick_lightest(&c);
+    let decoded = decode_block(&block).expect("decode");
+    let db = InMemoryChainDb::new();
+    db.put_block(&stored(decoded.header_input.slot.0.saturating_sub(1), 0xEE))
+        .unwrap();
+    let mut fwd = fwd_at(decoded.header_input.block_no.0.saturating_sub(1));
+    let mut wal = VecWal::default();
+    let mut pending = false;
+    let mut src = NodeBlockSource::in_memory_items(vec![NodeSyncItem::Block(block)]);
+    let buf = SharedBuf::default();
+    let mut ev = evidence_over(&buf);
+    // Fails closed on the bare competing block; the transcript is still recorded.
+    let _ = run_participant_sync(
+        &mut src,
+        &mut fwd,
+        &db,
+        &mut wal,
+        &corpus_schedule(),
+        &view,
+        &mut pending,
+        Some(&mut ev),
+    )
+    .await;
+    let out = buf.text();
+    assert!(out.contains(r#""event":"block_received""#), "peer input recorded");
+    assert!(
+        !out.contains(r#""event":"block_admitted""#),
+        "a refused block is NOT admitted: {out}"
+    );
+}
+
+#[tokio::test]
+async fn participant_convergence_evidence_replay_byte_identical() {
+    // Same recovered store + same ordered events => byte-identical evidence
+    // (no wall-clock; OQ-AJ-6). Evidence replay-equivalence.
+    async fn run() -> String {
+        let (c, view) = corpus_view();
+        let block = pick_lightest(&c);
+        let decoded = decode_block(&block).expect("decode");
+        let tip = TipPoint {
+            slot: decoded.header_input.slot,
+            hash: decoded.block_hash.clone(),
+            block_no: decoded.header_input.block_no.0,
+        };
+        let db = InMemoryChainDb::new();
+        let mut fwd = cold_start_fwd(&c);
+        let mut wal = VecWal::default();
+        let mut pending = false;
+        let mut src = NodeBlockSource::in_memory_with_followed_tip(
+            vec![block],
+            Some(tip),
+        );
+        let buf = SharedBuf::default();
+        let mut ev = evidence_over(&buf);
+        run_participant_sync(
+            &mut src,
+            &mut fwd,
+            &db,
+            &mut wal,
+            &corpus_schedule(),
+            &view,
+            &mut pending,
+            Some(&mut ev),
+        )
+        .await
+        .expect("admit");
+        buf.text()
+    }
+    let a = run().await;
+    let b = run().await;
+    assert!(!a.is_empty());
+    assert_eq!(a, b, "convergence evidence is replay-byte-identical");
 }

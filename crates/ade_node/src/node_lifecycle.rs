@@ -79,7 +79,9 @@ use ade_core::consensus::ledger_view::LedgerView;
 use ade_ledger::pparams::ProtocolParameters;
 use ade_ledger::receive::ReceiveState;
 use ade_runtime::clock::{checked_millis_to_slot, Clock, SlotAlignmentError, SystemClock};
-use ade_runtime::forward_sync::{pump_block, ForwardSyncState, NoCheckpointSink, PumpError, SnapshotSink};
+use ade_runtime::forward_sync::{
+    pump_block, ForwardSyncState, NoCheckpointSink, PumpError, PumpTip, SnapshotSink,
+};
 use ade_runtime::producer::coordinator::{
     coordinator_init, CoordinatorConfig, CoordinatorEvent, CoordinatorState, LedgerSnapshotRef,
 };
@@ -96,6 +98,7 @@ use ade_runtime::receive::ChainDbWriter;
 use crate::admission::bootstrap::build_n2n_version_table;
 use crate::cli::Cli;
 use crate::forge_intent::{classify_forge_intent, ForgeIntent};
+use crate::convergence_evidence::{ConvergenceEvidence, ConvergenceEvidenceSink};
 use crate::node_sync::{
     admit_forged_block_durably, classify_receive, durable_tip_matches,
     forge_followed_tip_admission, forge_mode_after_admit, forge_mode_on_caughtup,
@@ -473,6 +476,7 @@ async fn run_node_lifecycle_inner(
                 shutdown,
                 None,
                 Some(&mut sched_log),
+                None,
             )
             .await?;
             eprintln!(
@@ -663,6 +667,30 @@ async fn run_node_lifecycle_inner(
                 Err(_) => Box::new(std::io::stderr()),
             };
             let mut sched_log = crate::live_log::NodeSchedLogWriter::new(sched_sink);
+            // PHASE4-N-AJ AJ-S2 (DC-NODE-30): build the convergence-evidence
+            // context. Disabled sink when --convergence-evidence-path is absent
+            // (no file; consensus + existing logs unchanged). Oracle binding = the
+            // imported bundle fingerprint (canonical.fingerprint, DC-ADMIT-10
+            // parity) when the convergence pass supplies --consensus-inputs-path,
+            // else the recovered-oracle ledger fingerprint.
+            let mut convergence = {
+                let sink = ConvergenceEvidenceSink::open(cli.convergence_evidence_path.as_deref())
+                    .map_err(|e| {
+                        NodeLifecycleError::ChainDbOpen(format!(
+                            "convergence-evidence: {:?}",
+                            e.kind()
+                        ))
+                    })?;
+                let fp: Hash32 = cli
+                    .convergence_evidence_path
+                    .as_ref()
+                    .and(cli.consensus_inputs_path.as_ref())
+                    .and_then(|p| import_live_consensus_inputs(p).ok())
+                    .map(|c| c.fingerprint)
+                    .unwrap_or_else(|| fingerprint(&fwd.receive.ledger).combined);
+                let peer_label = cli.peer_addrs.first().cloned().unwrap_or_default();
+                ConvergenceEvidence::new(sink, &fp, peer_label)
+            };
             run_relay_loop_with_sched(
                 &mut fwd,
                 &mut source,
@@ -673,8 +701,18 @@ async fn run_node_lifecycle_inner(
                 shutdown,
                 Some(&mut activation),
                 Some(&mut sched_log),
+                Some(&mut convergence),
             )
             .await?;
+            // PHASE4-N-AJ AJ-S2 (DC-NODE-30 / G1): a sink write failure poisons the
+            // transcript -- non-fatal to authority, but the operator must NOT commit
+            // an incomplete transcript for CE-AI-6.
+            if convergence.is_incomplete() {
+                eprintln!(
+                    "ade_node --mode node: convergence-evidence transcript INCOMPLETE \
+                     (a sink write failed) -- do NOT commit it for CE-AI-6."
+                );
+            }
             // PHASE4-N-U S3: no handoff channel / push sibling to drain — the
             // serve task reads the durable ChainDb directly. Drop the forge
             // activation (releases its &mut borrows on clock/shell), then await
@@ -1124,7 +1162,7 @@ pub async fn run_relay_loop(
     forge: Option<&mut ForgeActivation<'_>>,
 ) -> Result<(), NodeLifecycleError> {
     run_relay_loop_with_sched(
-        state, source, chaindb, wal, era_schedule, ledger_view, shutdown, forge, None,
+        state, source, chaindb, wal, era_schedule, ledger_view, shutdown, forge, None, None,
     )
     .await
 }
@@ -1157,6 +1195,10 @@ pub async fn run_relay_loop_with_sched(
     shutdown: &mut watch::Receiver<bool>,
     mut forge: Option<&mut ForgeActivation<'_>>,
     mut sched: Option<&mut dyn crate::live_log::NodeSchedSink>,
+    // PHASE4-N-AJ AJ-S2 (DC-NODE-30): emit-only convergence evidence, threaded to
+    // the Participant receive path. `None` on the forge-off / wrapper / test
+    // callers. Evidence observes authority; it never becomes authority.
+    mut convergence: Option<&mut ConvergenceEvidence>,
 ) -> Result<(), NodeLifecycleError> {
     loop {
         let shutdown_status = if *shutdown.borrow() {
@@ -1254,6 +1296,7 @@ pub async fn run_relay_loop_with_sched(
                         era_schedule,
                         ledger_view,
                         &mut act.pending_reselection,
+                        convergence.as_deref_mut(),
                     )
                     .await
                     .map_err(|e| NodeLifecycleError::RelaySync(format!("{e:?}")))?;
@@ -2376,6 +2419,26 @@ where
 /// `select_best_chain` / `process_stream_input` (DC-CONS-03 honored). The
 /// rollback's within-k bound is enforced by `apply_chain_event`'s materialize.
 #[allow(clippy::too_many_arguments)]
+/// PHASE4-N-AJ AJ-S2 (DC-NODE-30): on a successful `pump_block` admit, emit the
+/// `block_admitted` + `agreement_verdict` convergence evidence as a GREEN
+/// side-output. No-op when the sink is absent or the pump was an idempotent
+/// no-op (`None`). `post_fp` is the post-admit recovered ledger fingerprint;
+/// the peer tip is the observed followed-peer tip (`None` => `Origin`). The
+/// verdict is emit-only -- it is NEVER read back into any authority path.
+fn emit_participant_admit(
+    evidence: Option<&mut ConvergenceEvidence>,
+    state: &ForwardSyncState,
+    source: &NodeBlockSource,
+    pumped: Option<PumpTip>,
+) {
+    if let (Some(ev), Some(tip)) = (evidence, pumped) {
+        let post_fp = fingerprint(&state.receive.ledger).combined;
+        let peer_tip = source.followed_peer_tip_signal().tip();
+        ev.emit_admit_and_verdict(tip.slot.0, &tip.hash, &post_fp, peer_tip);
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
 pub async fn run_participant_sync<D>(
     source: &mut NodeBlockSource,
     state: &mut ForwardSyncState,
@@ -2384,6 +2447,9 @@ pub async fn run_participant_sync<D>(
     era_schedule: &EraSchedule,
     ledger_view: &dyn LedgerView,
     pending_reselection: &mut bool,
+    // PHASE4-N-AJ AJ-S2 (DC-NODE-30): emit-only convergence evidence. `None` =>
+    // no emission. Evidence observes authority; it never becomes authority.
+    mut evidence: Option<&mut ConvergenceEvidence>,
 ) -> Result<(), NodeSyncError>
 where
     D: ChainDb + SnapshotStore,
@@ -2391,6 +2457,17 @@ where
     while let Some(item) = source.next_item().await {
         match item {
             NodeSyncItem::Block(bytes) => {
+                // AJ-S2 (DC-NODE-30): decode first so the convergence evidence can
+                // record EVERY considered peer block (peer input) BEFORE the route
+                // decides drop/admit/refuse. `block_received` is evidence of peer
+                // input, not of local admission.
+                let decoded =
+                    decode_block(&bytes).map_err(|e| NodeSyncError::Pump(format!("decode: {e:?}")))?;
+                let cand_slot = decoded.header_input.slot;
+                let cand_hash = decoded.block_hash.clone();
+                if let Some(ev) = evidence.as_deref_mut() {
+                    ev.emit_block_received(cand_slot.0, &cand_hash);
+                }
                 // Durable tip (the detector's reference). With no durable tip yet
                 // the cold-start path is out of scope for this slice -- extend via
                 // the sole admit authority (pump_block), the existing behavior.
@@ -2402,19 +2479,16 @@ where
                         block_no: state.receive.chain_dep.last_block_no.map(|b| b.0).unwrap_or(0),
                     },
                     None => {
-                        pump_block(state, chaindb, wal, &NoCheckpointSink, &bytes, era_schedule, ledger_view)
+                        let pumped = pump_block(state, chaindb, wal, &NoCheckpointSink, &bytes, era_schedule, ledger_view)
                             .map_err(|e| NodeSyncError::Pump(format!("{e:?}")))?;
+                        emit_participant_admit(evidence.as_deref_mut(), state, source, pumped);
                         continue;
                     }
                 };
-                // Decode the candidate header for classification (slot, block_no,
-                // hash, prev_hash) -- the AI-S2 detector input.
-                let decoded =
-                    decode_block(&bytes).map_err(|e| NodeSyncError::Pump(format!("decode: {e:?}")))?;
                 let candidate = CandidateSummary {
-                    slot: decoded.header_input.slot,
+                    slot: cand_slot,
                     block_no: decoded.header_input.block_no,
-                    hash: decoded.block_hash.clone(),
+                    hash: cand_hash,
                     prev_hash: decoded.prev_hash.clone(),
                 };
                 let in_spine = chaindb
@@ -2423,14 +2497,21 @@ where
                     .is_some();
                 let class = classify_receive(durable_tip, &candidate, in_spine);
                 match resolve_disposition(class, VenueRole::Participant) {
-                    ReceiveDisposition::AlreadyHave => { /* known echo -- drop */ }
+                    // Known echo -- drop; `block_received` already recorded, no admit,
+                    // no verdict (block_received does not imply admission).
+                    ReceiveDisposition::AlreadyHave => {}
                     ReceiveDisposition::LinearExtend => {
-                        pump_block(state, chaindb, wal, &NoCheckpointSink, &bytes, era_schedule, ledger_view)
+                        // pump_block is the SOLE roll-forward admit (unchanged). Only
+                        // a successful admit emits block_admitted + agreement_verdict
+                        // (the verdict is emit-only -- it never influences routing).
+                        let pumped = pump_block(state, chaindb, wal, &NoCheckpointSink, &bytes, era_schedule, ledger_view)
                             .map_err(|e| NodeSyncError::Pump(format!("{e:?}")))?;
+                        emit_participant_admit(evidence.as_deref_mut(), state, source, pumped);
                     }
                     // A bare competing block (non-linear, no prior RollBackward) has
                     // no safe fork point -- fail closed (multi-candidate selection is
-                    // a later multi-peer slice).
+                    // a later multi-peer slice). `block_received` already recorded;
+                    // no block_admitted.
                     ReceiveDisposition::NeedsForkChoice
                     | ReceiveDisposition::RefuseSingleProducer => {
                         return Err(NodeSyncError::UnexpectedRollback);

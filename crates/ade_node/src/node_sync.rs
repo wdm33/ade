@@ -1892,6 +1892,7 @@ mod tests {
             &mut shutdown,
             None,
             Some(&mut sched_log),
+            None,
         )
         .await
         .expect("relay loop halts cleanly on a drained feed");
@@ -6080,6 +6081,7 @@ mod tests {
             &mut sd_rx,
             Some(&mut act),
             Some(&mut sched_log),
+            None,
         );
         let driver = async {
             tokio::time::sleep(std::time::Duration::from_millis(300)).await;
