@@ -7279,3 +7279,38 @@ status = "enforced"
 open_obligation = "ENFORCED at PHASE4-N-AK /cluster-close. Hermetic CE-AK-S2-1..6 GREEN (recovered-anchor rollback idempotent no-op, no WAL/ChainDb/ledger/chain_dep mutation; Origin + non-anchor + slot-only + hash-only + no-recovered-anchor all FAIL CLOSED; forward block admits through the EXISTING pump_block after the no-op) + CE-AK-3 LIVE end-to-end PASSED (0 UnsupportedRollbackPoint + 0 UnexpectedRollback, caught up to relay tip 13). SCOPE (deliberately narrow): single-producer run_node_sync recovered-anchor rollback-to-intersection ONLY -- does NOT claim full rollback-follow parity (the participant path run_participant_sync is a SEPARATE follow-on, NOT proven here) and does NOT claim full ChainSel convergence. The anchor is NEVER synthesized or served as a ChainDb block; AI-S4a RollBackward(Origin) rejection + pump_block + block_validity UNCHANGED."
 introduced_in = "PHASE4-N-AK"
 strengthened_in = []
+
+[[rules]]
+id = "DC-NODE-33"
+tier = "derived"
+statement = """
+Participant-path recovered-anchor rollback boundary (PHASE4-N-AL) -- the participant MIRROR of
+DC-NODE-32. On the participant live-follow path (run_participant_sync), a peer RollBackward whose
+target binds EXACTLY (slot AND hash) to the persisted recovered anchor point (DC-NODE-31 /
+BootstrapState.tip, carried in ForwardSyncState.recovered_anchor) is accepted as an IDEMPOTENT NO-OP
+boundary rewind: no commit_rollback, no WalEntry::RollBack, no ChainDb / ledger / chain_dep mutation,
+no cursor, no pending_reselection. The anchor is a recovery snapshot boundary, NOT a stored servable
+block, and is NEVER synthesized into one (ChainDb::tip()/serve never return it). The anchor branch is
+evaluated BEFORE the existing DC-NODE-29 stored-block resolution: RollBackward(Origin) still fails
+closed (AI-S4a unchanged); every non-anchor, non-Origin rollback still resolves through the EXISTING
+DC-NODE-29 authority (get_block_by_hash + stored slot/hash binding -> apply_chain_event or fail closed)
+UNCHANGED; the accepted anchor point binds to the PERSISTED anchor on slot AND hash, never peer-supplied
+alone. The anchor consumed by run_participant_sync is the single authority (state.recovered_anchor, set
+once in the forge-ON arm at node_lifecycle.rs:563 and threaded via run_relay_loop_with_sched -- never
+re-read from the store inside the loop). The first forward block after the anchor no-op admits through
+the EXISTING sole pump_block path (its prev_hash binds the recovered chain_dep) -- AL adds NO
+forward-link code. Recover->follow on the participant path is replay-equivalent (extends T-REC-05 /
+DC-NODE-31 / DC-NODE-32 to the participant follow): same store + same ordered peer feed => byte-identical
+post-state and admit sequence. DC-NODE-32 stays scoped to run_node_sync (NOT broadened; this is a
+distinct sibling rule). SCOPE: the recovered-anchor rollback-to-intersection case ONLY; does NOT add
+general multi-candidate fork-choice, does NOT change N-AJ evidence emission (DC-NODE-30), does NOT flip
+CN-CONS-03.
+"""
+source = "docs/planning/phase4-n-al-participant-recovered-anchor-boundary-invariants.md + docs/clusters/PHASE4-N-AL/cluster.md"
+cross_ref = ["DC-NODE-32", "DC-NODE-31", "DC-NODE-29", "DC-NODE-23", "T-REC-05", "CN-CONS-03"]
+code_locus = "crates/ade_node/src/node_lifecycle.rs (run_participant_sync RollBack handler -- recovered-anchor exact slot+hash no-op evaluated BEFORE the DC-NODE-29 durable-membership resolution; reads state.recovered_anchor set in the forge-ON arm at node_lifecycle.rs:563), crates/ade_runtime/src/forward_sync/reducer.rs (ForwardSyncState.recovered_anchor -- the existing AK-S2 field, reused unchanged), crates/ade_runtime/src/admission/wire_pump.rs:447 (AI-S4a Origin fail-close -- UNCHANGED)"
+tests = []
+ci_script = ""
+status = "declared"
+introduced_in = "PHASE4-N-AL"
+strengthened_in = []
