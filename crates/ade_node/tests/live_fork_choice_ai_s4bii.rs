@@ -690,3 +690,197 @@ async fn participant_convergence_evidence_replay_byte_identical() {
     assert!(!a.is_empty());
     assert_eq!(a, b, "convergence evidence is replay-byte-identical");
 }
+
+// ---------- PHASE4-N-AL (DC-NODE-33): participant recovered-anchor boundary ----------
+// The participant MIRROR of DC-NODE-32 (run_node_sync). A bare-anchor participant
+// recover->follow must accept the relay's post-IntersectFound RollBackward(anchor) as
+// an idempotent no-op; everything else (Origin, non-anchor, stored-block rollbacks) is
+// unchanged. These prove CE-AL-1..5.
+
+/// CE-AL-1: a RollBackward binding EXACTLY (slot AND hash) to the persisted recovered
+/// anchor is an idempotent no-op -- the anchor is a recovery snapshot boundary, NOT a
+/// stored servable block (so it is absent from the ChainDb). No durable mutation.
+#[tokio::test]
+async fn participant_rollback_to_recovered_anchor_is_noop() {
+    let db = InMemoryChainDb::new(); // bare-anchor recovery: no servable blocks
+    let mut fwd = fwd_at(52);
+    fwd.recovered_anchor = Some(ChainTip {
+        slot: SlotNo(188),
+        hash: h(0xA8),
+    });
+    let mut wal = VecWal::default();
+    let mut pending = false;
+    let mut src = NodeBlockSource::in_memory_items(vec![rollback_item(188, 0xA8)]);
+    run_participant_sync(
+        &mut src,
+        &mut fwd,
+        &db,
+        &mut wal,
+        &min_schedule(),
+        &view_stub(),
+        &mut pending,
+        None,
+    )
+    .await
+    .expect("rollback-to-recovered-anchor is an idempotent no-op");
+    // No durable effect: tip still None (empty db -- the anchor never becomes a stored
+    // block), no WAL RollBack, pending never set.
+    assert!(
+        db.tip().unwrap().is_none(),
+        "the anchor must never be synthesized into a stored block"
+    );
+    assert!(!wal
+        .read_all()
+        .unwrap()
+        .iter()
+        .any(|e| matches!(e, WalEntry::RollBack { .. })));
+    assert!(!pending);
+}
+
+/// CE-AL-2: RollBackward(Origin) still fails closed (AI-S4a) even with a recovered
+/// anchor set -- Origin is rejected during point extraction, BEFORE the DC-NODE-33 branch.
+#[tokio::test]
+async fn participant_rollback_origin_fails_closed() {
+    let db = InMemoryChainDb::new();
+    let mut fwd = fwd_at(52);
+    fwd.recovered_anchor = Some(ChainTip {
+        slot: SlotNo(188),
+        hash: h(0xA8),
+    });
+    let mut wal = VecWal::default();
+    let mut pending = false;
+    let mut src = NodeBlockSource::in_memory_items(vec![NodeSyncItem::RollBack(WirePoint::Origin)]);
+    let err = run_participant_sync(
+        &mut src,
+        &mut fwd,
+        &db,
+        &mut wal,
+        &min_schedule(),
+        &view_stub(),
+        &mut pending,
+        None,
+    )
+    .await
+    .expect_err("Origin rollback must fail closed even with a recovered anchor");
+    assert!(matches!(err, NodeSyncError::UnexpectedRollback), "got {err:?}");
+}
+
+/// CE-AL-3: the anchor no-op binds BOTH slot AND hash -- a different point, a slot-only
+/// match, and a hash-only match all FAIL CLOSED (never the no-op); they fall through to
+/// the unchanged DC-NODE-29 resolution (get_block_by_hash -> None on a bare-anchor store).
+#[tokio::test]
+async fn participant_rollback_non_anchor_fails_closed() {
+    let anchor = ChainTip {
+        slot: SlotNo(188),
+        hash: h(0xA8),
+    };
+    for (slot, hash, label) in [
+        (200u64, 0xB1u8, "different slot+hash"),
+        (188u64, 0xB2u8, "slot-only match (hash differs)"),
+        (200u64, 0xA8u8, "hash-only match (slot differs)"),
+    ] {
+        let db = InMemoryChainDb::new(); // none of these are stored
+        let mut fwd = fwd_at(52);
+        fwd.recovered_anchor = Some(anchor.clone());
+        let mut wal = VecWal::default();
+        let mut pending = false;
+        let mut src = NodeBlockSource::in_memory_items(vec![rollback_item(slot, hash)]);
+        let err = run_participant_sync(
+            &mut src,
+            &mut fwd,
+            &db,
+            &mut wal,
+            &min_schedule(),
+            &view_stub(),
+            &mut pending,
+            None,
+        )
+        .await
+        .unwrap_err();
+        assert!(
+            matches!(err, NodeSyncError::UnexpectedRollback),
+            "{label}: got {err:?}"
+        );
+        assert!(!pending, "{label}: pending must stay clear (fail before apply)");
+    }
+}
+
+/// CE-AL-4: after the recovered-anchor rollback no-op, the FIRST forward block admits
+/// through the EXISTING cold-start pump_block path (DC-NODE-33 adds no forward-link
+/// code) -- the participant analog of the AK-S2 OQ #2 probe.
+#[tokio::test]
+async fn participant_first_forward_after_anchor_noop_admits_via_pump_block() {
+    let (c, view) = corpus_view();
+    let block = pick_lightest(&c);
+    let decoded = decode_block(&block).expect("decode");
+    let db = InMemoryChainDb::new();
+    let mut fwd = cold_start_fwd(&c);
+    // The bare boundary the feed rewinds to first (absent from the ChainDb).
+    fwd.recovered_anchor = Some(ChainTip {
+        slot: SlotNo(1),
+        hash: h(0xA8),
+    });
+    let mut wal = VecWal::default();
+    let mut pending = false;
+    let mut src = NodeBlockSource::in_memory_items(vec![
+        rollback_item(1, 0xA8),
+        NodeSyncItem::Block(block),
+    ]);
+    run_participant_sync(
+        &mut src,
+        &mut fwd,
+        &db,
+        &mut wal,
+        &corpus_schedule(),
+        &view,
+        &mut pending,
+        None,
+    )
+    .await
+    .expect("anchor no-op, then the forward block admits via pump_block");
+    let tip = db.tip().unwrap().unwrap();
+    assert_eq!(
+        tip.hash, decoded.block_hash,
+        "the forward block admitted through the existing pump_block after the no-op"
+    );
+}
+
+/// CE-AL-5: DC-NODE-29 preserved -- with a recovered anchor set, a rollback to an
+/// actually-stored block (NOT the anchor) still routes through the unchanged
+/// apply_chain_event stored-block authority; the DC-NODE-33 branch did not capture it.
+#[tokio::test]
+async fn participant_stored_block_rollback_still_applies() {
+    let db = db_with_fork_and_snapshot(); // 100/0xF0 stored (+101/102), snapshot @ 100
+    let mut fwd = fwd_at(52);
+    // The anchor is a DIFFERENT point (50/0xCC) -- not the rollback target.
+    fwd.recovered_anchor = Some(ChainTip {
+        slot: SlotNo(50),
+        hash: h(0xCC),
+    });
+    let mut wal = VecWal::default();
+    let mut pending = false;
+    let mut src = NodeBlockSource::in_memory_items(vec![rollback_item(100, 0xF0)]);
+    run_participant_sync(
+        &mut src,
+        &mut fwd,
+        &db,
+        &mut wal,
+        &min_schedule(),
+        &view_stub(),
+        &mut pending,
+        None,
+    )
+    .await
+    .expect("a stored-block rollback still applies via apply_chain_event");
+    let tip = db.tip().unwrap().unwrap();
+    assert_eq!(tip.slot, SlotNo(100));
+    assert_eq!(tip.hash, h(0xF0));
+    assert!(
+        wal.read_all()
+            .unwrap()
+            .iter()
+            .any(|e| matches!(e, WalEntry::RollBack { .. })),
+        "the stored-block rollback produced a durable WAL RollBack (DC-NODE-29 path intact)"
+    );
+    assert!(!pending);
+}

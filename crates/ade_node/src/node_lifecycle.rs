@@ -2566,6 +2566,23 @@ where
                         return Err(NodeSyncError::UnexpectedRollback);
                     }
                 };
+                // DC-NODE-33 (PHASE4-N-AL) -- the participant mirror of DC-NODE-32.
+                // The recovered bootstrap anchor (DC-NODE-31 / state.recovered_anchor,
+                // set in the forge-ON arm at :563) is an authoritative local boundary
+                // point: the relay's standard post-IntersectFound RollBackward(anchor)
+                // (exact slot AND hash) is an idempotent no-op -- the node is already at
+                // the anchor, a recovery snapshot boundary that is NOT a stored servable
+                // block, so the DC-NODE-29 resolution below would otherwise fail closed
+                // (get_block_by_hash(anchor) -> None) before the first forward admit.
+                // Evaluated BEFORE get_block_by_hash; every non-anchor rollback still
+                // falls through to the unchanged DC-NODE-29 stored-block authority, and
+                // Origin already failed closed above (AI-S4a). No durable mutation, no
+                // pending_reselection; never re-read from the store.
+                if let Some(anchor) = &state.recovered_anchor {
+                    if slot == anchor.slot && hash == anchor.hash {
+                        continue;
+                    }
+                }
                 // AI-S6 (DC-NODE-29): resolve the wire hash against the durable
                 // ChainDb and use the STORED chain point as the sole authority. The
                 // peer-supplied slot MUST equal the stored slot for the hash; an
