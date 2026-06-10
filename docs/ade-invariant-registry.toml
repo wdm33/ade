@@ -7321,3 +7321,37 @@ status = "enforced"
 open_obligation = "ENFORCED at PHASE4-N-AL /cluster-close. Hermetic CE-AL-1..6 GREEN (participant recovered-anchor rollback idempotent no-op -- no WAL/ChainDb/ledger/chain_dep mutation, pending_reselection unset; Origin + non-anchor + slot-only + hash-only all FAIL CLOSED via the unchanged DC-NODE-29 stored-block resolution; first forward block admits through the EXISTING pump_block after the no-op; a real stored-block rollback still routes through apply_chain_event) + CE-AL-3-LIVE PASSED end-to-end (2026-06-10, FRESH 2-pool cardano-testnet venue, magic 42): fresh bare-anchor recover @ slot 741 -> peer RollBackward(741) no-op'd -> first forward block admitted @ slot 777 -> converged to agreement_verdict{agreed} @ slot 801 (our_hash == peer_hash, exact match) -> 0 UnexpectedRollback + 0 UnsupportedRollbackPoint + 0 diverged. Live transcript OUTSIDE-REPO (~/.cardano-ceai6/al-inputs/CE-AL-3-LIVE.jsonl; scrubbed in-repo note only). SCOPE (deliberately narrow): participant run_participant_sync recovered-anchor rollback-to-intersection ONLY -- the participant MIRROR of DC-NODE-32 (single-producer run_node_sync). Does NOT prove CE-AI-6 reorg convergence, full ChainSel, or natural reorg capture (CE-AI-6 is a SEPARATE induced-reorg operator pass). DC-NODE-32 NOT broadened (distinct sibling). Both close-gate reviews CLEAN (IDD 0 BLOCK/0 WARN; security 0 BLOCK / 1 LOW doc-WARN = this flip)."
 introduced_in = "PHASE4-N-AL"
 strengthened_in = []
+
+[[rules]]
+id = "DC-PUMP-03"
+tier = "derived"
+statement = """
+Wire-pump keep-alive client (PHASE4-N-AM). The admission wire pump (run_admission_wire_pump -- the SOLE
+per-peer pump, CN-PUMP-01) runs the N2N keep-alive CLIENT (mini-protocol 8): on a cadence STRICTLY under
+the peer's keep-alive timeout (~97s observed) it sends KeepAliveMessage::KeepAlive(cookie) (Initiator)
+via the EXISTING outbound OutboundFrame path, advancing the REUSED BLUE ade_network::keep_alive state
+machine (keep_alive_transition: ClientIdle -> ServerHasAgency{cookie}); on the inbound
+MsgResponseKeepAlive(cookie') it advances the SAME state machine (ServerHasAgency{cookie} + Server ->
+ClientIdle, validating cookie' == cookie). WIRE-ONLY: the keep-alive client produces no canonical input,
+no WAL entry, and NO AdmissionPeerEvent (Block / TipUpdate / RollBackward / Disconnected) -- it never
+affects admission, the durable chain, fork-choice, the convergence-evidence vocabulary,
+replay-equivalence, or any BLUE state (the DC-PUMP-01 emit-set stays unwidened). MUST NOT: redefine the
+BLUE keep-alive grammar (reuse ade_network::keep_alive + ::codec::keep_alive); use a cadence >= the peer
+timeout; send a new MsgKeepAlive while one is in flight (respect ServerHasAgency agency); block / starve
+/ reorder the chain-sync or block-fetch flow; dispatch a keep-alive frame as a chain-sync/block-fetch
+event (closed match over AcceptedMiniProtocol); silently swallow a grammar violation (fail closed via
+AdmissionWirePumpError::KeepAlive -- drop the peer); use rand / wall-clock for the cookie (monotonic u16
+counter); implement a keep-alive SERVER/responder (client only -- the responder is a CE-AM-LIVE-gated
+follow-on). With the client running, a live participant AND single-producer follow sustains past the
+~97s keep-alive deadline -- the prerequisite that makes the CE-AI-6 induced-reorg convergence capture
+runnable. SCOPE: the keep-alive client ONLY; does NOT add multi-peer ChainSel, does NOT flip CN-CONS-03,
+does NOT broaden CN-PUMP-01 / DC-PUMP-01 / DC-PUMP-02 (cross-refs, preserved).
+"""
+source = "docs/planning/phase4-n-am-wire-pump-keepalive-sustain-invariants.md + docs/clusters/PHASE4-N-AM/cluster.md"
+cross_ref = ["CN-PUMP-01", "DC-PUMP-01", "DC-PUMP-02", "DC-NODE-30", "CN-CONS-03"]
+code_locus = "crates/ade_runtime/src/admission/wire_pump.rs (run_admission_wire_pump -- the keep-alive client: a tokio::select! cadence sends MsgKeepAlive Initiator under the peer timeout via the existing OutboundFrame path, advances the reused BLUE ade_network::keep_alive state machine, and validates the echoed cookie on the inbound DeliverPeerFrame{KeepAlive}; wire-only -- emits no AdmissionPeerEvent; AdmissionWirePumpError::KeepAlive fail-closed), crates/ade_network/src/keep_alive/transition.rs (BLUE keep_alive_transition -- REUSED, unchanged), crates/ade_network/src/codec/keep_alive.rs (BLUE KeepAliveMessage codec -- REUSED, unchanged)"
+tests = []
+ci_scripts = []
+status = "declared"
+introduced_in = "PHASE4-N-AM"
+strengthened_in = []
