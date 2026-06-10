@@ -26,8 +26,15 @@ arrival-order-independence of the selection authority is already proven by CE-AI
 ## Steps
 
 1. Recover Ade's durable tip (Mithril → recover), per the C2 guide.
-2. Start Ade: `ade_node --mode node --participant-venue <keys/paths>`, capturing the
-   verbatim JSONL live log to `docs/evidence/phase4-n-ai-convergence-pass.jsonl`.
+2. Start Ade **keyed-but-unstaked (σ=0)** so it is a pure follower (Ade never wins a slot ⇒
+   never forges ⇒ no self-forged competing block ⇒ no `diverged`):
+   `ade_node --mode node --participant-venue <keys/paths>
+   --convergence-evidence-path docs/evidence/phase4-n-ai-convergence-pass.jsonl`.
+   The convergence-evidence sink (PHASE4-N-AJ AJ-S1/S2, DC-NODE-30) writes the closed
+   `block_received` / `block_admitted` / `agreement_verdict` transcript **directly** to that
+   path. It is a **dedicated** file — **not** the sched/`forge_*` `--log` (that log is a
+   separate, non-gate-valid artifact). Absent `--convergence-evidence-path`, no transcript is
+   written and node behavior is unchanged.
 3. Drive a peer reorg: have the competing Haskell producer extend a branch that wins,
    so the followed peer issues a `RollBackward` — Ade follows it (AI-S4b-ii:
    `run_participant_sync` → `apply_chain_event` → `WalEntry::RollBack`).
