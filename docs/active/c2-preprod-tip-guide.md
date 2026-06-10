@@ -33,6 +33,23 @@
 >   --participant-venue --convergence-evidence-path …` run yields a gate-valid transcript; the
 >   operator pass is **unblocked**. `CN-CONS-03` still `declared` (flips only on the committed
 >   transcript). Evidence-only; no BLUE change.
+> - **PHASE4-N-AK (2026-06-10) — recover→follow REGRESSION remediated (the CE-AI-6 pass blocker).**
+>   The CE-AI-6 operator-pass attempt surfaced a live regression: a BARE-anchor recovery (a snapshot
+>   at the tip with no servable post-anchor block — exactly what admission `seed_to_snapshot`
+>   produces) left `BootstrapState.tip = None`, so the wire pump FindIntersected from **Origin** →
+>   the relay's `RollBackward(Origin)` hit **AI-S4a** (the CORRECT N-AI fail-close, added when AI-S4a
+>   began rejecting Origin) → halt. **AK-S1** persists the recovered bootstrap anchor point as
+>   replayable provenance (DC-NODE-31) + resolves the live-follow start from it (FindIntersect at the
+>   anchor, NOT Origin); **AK-S2** accepts the relay's post-intersection `RollBackward(anchor)` on the
+>   single-producer path as an idempotent no-op (only when slot **and** hash bind the persisted
+>   anchor; DC-NODE-32), after which `pump_block` resumes catch-up. **CE-AK-3 live PASSED end-to-end**
+>   on the frozen rung-1-shape venue: 0 `UnsupportedRollbackPoint` + 0 `UnexpectedRollback`, caught up
+>   to the frozen relay tip (`forge_base_block_no == relay tip`, `local_chaindb_tip`). **DC-NODE-31 +
+>   DC-NODE-32 enforced.** The recover→follow leg the C2 path depends on is RESTORED — **re-recover
+>   with the AK-fixed binary** so the store carries the anchor-point record (a pre-AK store lacks it
+>   and fails closed). Did NOT weaken AI-S4a `RollBackward(Origin)` rejection, synthesize/serve the
+>   anchor as a ChainDb block, or change `pump_block` / `ChainDb::tip()`; no full rollback-follow
+>   parity (participant path separate) and no full ChainSel convergence claim. N-AJ / CE-AI-6 unpaused.
 > - **Preprod ADE1 pool REGISTERED (2026-06-09)** — `docs/evidence/preprod-pool-registration.md`;
 >   pledge stake active **~epoch 295 (~2026-06-15)**, so rung-3's ~2-epoch stake gate now runs in
 >   parallel. Electability (faucet delegation) pending; **no acceptance, no RO-LIVE flip.**
