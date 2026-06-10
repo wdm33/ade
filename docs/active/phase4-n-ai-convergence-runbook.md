@@ -129,6 +129,18 @@ CE-AL-3-LIVE PASS = first `block_admitted` (slot > anchor) with 0 `UnexpectedRol
 
 ## Inducing the reorg (CE-AI-6 — approach A, the remaining pass)
 
+> **⛔ GATED on PHASE4-N-AM (wire-pump keep-alive client) — confirmed LIVE 2026-06-11.** The CE-AI-6
+> reorg capture is **not runnable until PHASE4-N-AM lands**. The wire pump never sends N2N keep-alives
+> (`crates/ade_runtime/src/admission/wire_pump.rs:283` drops them — "no consumer"), so a live follow is
+> `ShutdownPeer`'d by the peer after the ~97s keep-alive timeout — node1's log:
+> `ExceededTimeLimit (KeepAlive) ClientHasAgency`, `miniProtocol 8` (the sustain-test EOF'd at ~96s after
+> 3 blocks, while node1 kept producing). Cranking the relay's `ProtocolIdleTimeout` (3600s) did **NOT**
+> help — wrong mechanism. And because the convergence sink truncates (`ConvergenceEvidenceSink::open` =
+> `File::create`), an EOF-reattach harness **cannot** preserve a continuous transcript (and stitching is
+> forbidden) — so CE-AI-6 needs a **SUSTAINED** follow, which needs the keep-alive client. See
+> `docs/planning/phase4-n-am-wire-pump-keepalive-sustain-invariants.md`. The partition→heal procedure
+> below is correct and stands; it can only be EXECUTED once the follow sustains.
+
 Natural reorgs at f=0.05 with 2 equal pools are rare (~1 per ~33-min epoch in a
 fast-propagation local net), so CE-AI-6 needs an **induced** reorg via **partition → heal**:
 run the two pools so they can be network-partitioned (separate containers on a docker **bridge**
