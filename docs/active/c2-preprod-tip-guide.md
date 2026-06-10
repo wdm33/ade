@@ -14,8 +14,8 @@
 > **MILESTONE (2026-06-07): the C2-LOCAL adoption manifest (CE-A5) is PROVEN** — a real
 > cardano-node 11.0.1 relay committed an Ade-forged block (§5b; PHASE4-N-AE.A/B/C/E; the
 > closer was AE.E's chain-sync-server cursor fix, DC-PROTO-10; post-adoption echo fixed by
-> AE.F, DC-NODE-16). It is a **non-promotable private-venue rehearsal** — it strengthened but
-> did NOT flip CN-CONS-06 / RO-LIVE-01. Status detail: §5b + §7 + §7b.
+> AE.F, DC-NODE-16). It is a **non-promotable private-venue rehearsal** — CE-A5 strengthened `CN-CONS-06`, which is **already enforced**, but did not
+> discharge its preprod-live `open_obligation`. `RO-LIVE-01` remains `partial`. Status detail: §5b + §7 + §7b.
 >
 > **SINCE — post-CE-A5 progression (read before acting):**
 > - **CE-AH-6 (2026-06-08) — §7b rung 1 LARGELY CLOSED.** A real non-producing Haskell relay
@@ -50,6 +50,36 @@
 >   and fails closed). Did NOT weaken AI-S4a `RollBackward(Origin)` rejection, synthesize/serve the
 >   anchor as a ChainDb block, or change `pump_block` / `ChainDb::tip()`; no full rollback-follow
 >   parity (participant path separate) and no full ChainSel convergence claim. N-AJ / CE-AI-6 unpaused.
+>   **VENUE — do NOT run CE-AI-6 on the AK venue.** The standing venue (`c2-relay` + `~/.cardano-ceai6`
+>   + `store-ak3final`) is the **frozen rung-1 AK-validation** shape: a single NON-PRODUCING relay
+>   serving a frozen chain. It PROVES the recover→follow restoration (CE-AK-3), but it **cannot satisfy
+>   CE-AI-6** — the CE-AI-6 gate (DC-EVIDENCE-03) requires a peer `RollBackward` / **strict slot
+>   regression** in the observed peer-block sequence, and a frozen non-producing relay never rolls back.
+>   **For CE-AI-6 use the rung-2 multi-producer reorg venue (§7b rung 2 — un-freeze a 2nd pool so it
+>   competes).** Running the CE-AI-6 gate on the frozen rung-1 venue fails for lack of a regression and
+>   falsely reads as a node regression.
+> - **PHASE4-N-AL (2026-06-10) — participant-path recovered-anchor boundary (`DC-NODE-33`), the participant
+>   MIRROR of N-AK's `DC-NODE-32`.** N-AK fixed the bare-anchor recover→follow rollback no-op for the
+>   SINGLE-PRODUCER path (`run_node_sync`) and deferred the PARTICIPANT path (`run_participant_sync`) as
+>   "OQ #4 — a separate follow-on." CE-AI-6 runs the participant path, so it was BLOCKED: a bare-anchor
+>   participant recover halted at the relay's standard post-`IntersectFound` `RollBackward(anchor)`
+>   (`get_block_by_hash(anchor) → None → UnexpectedRollback`) before admitting any block. DC-NODE-33 adds the
+>   participant no-op (exact slot AND hash match to the persisted recovered anchor, evaluated BEFORE the
+>   DC-NODE-29 stored-block resolution; RED `ade_node` only, no BLUE change). **CE-AL-3-LIVE PASSED
+>   end-to-end** on a FRESH 2-pool `cardano-testnet` venue (magic 42): fresh bare-anchor recover @ slot 741 →
+>   `RollBackward(741)` no-op'd → first forward block admitted @ slot 777 → converged to
+>   `agreement_verdict{agreed}` @ slot 801 (`our_hash == peer_hash`, exact match) → **0 UnexpectedRollback /
+>   0 UnsupportedRollbackPoint / 0 diverged**. Proves participant↔single-producer recover→follow parity. Does
+>   NOT prove CE-AI-6 reorg convergence, full ChainSel, or natural reorg capture — **CE-AI-6 (a peer
+>   `RollBackward` / strict slot regression Ade follows + re-converges) is a SEPARATE induced-reorg operator
+>   pass** (approach A: partition→heal a 2-pool venue; commands in the runbook below). **VENUE LESSONS
+>   (anti-drift + reproducibility):** (1) do NOT un-freeze a long-idle frozen venue — if wall-clock outran the
+>   frozen tip beyond the forecast horizon the node logs `BlockchainTime.CurrentSlotUnknown` and never forges
+>   (deadlock); build a FRESH venue (`systemStart ≈ now`). (2) `cardano-testnet`'s "node1 was unable to
+>   produce any blocks for 45s" is a FLAKY startup check (f=0.05 leadership luck) — RETRY with fresh
+>   output-dirs (the N-AL venue won on attempt 2; the prior ceai6 venue on attempt 4). (3) the exact
+>   fresh-venue + recover + participant-follow commands are in
+>   `docs/active/phase4-n-ai-convergence-runbook.md`.
 > - **Preprod ADE1 pool REGISTERED (2026-06-09)** — `docs/evidence/preprod-pool-registration.md`;
 >   pledge stake active **~epoch 295 (~2026-06-15)**, so rung-3's ~2-epoch stake gate now runs in
 >   parallel. Electability (faucet delegation) pending; **no acceptance, no RO-LIVE flip.**
@@ -431,10 +461,12 @@ registered + active on preprod.**
   a new cluster — the *select* half PHASE4-N-AI did **not** do); rung 3 C2-preprod operator pass →
   `Ba02Manifest` (**stake gate now ticking** — ADE1 registered, active ~epoch 295; electability /
   faucet delegation pending).
-- **`CN-CONS-06` / `RO-LIVE-01` live halves flip ONLY** on committed `correlate` evidence over
-  a real **preprod** peer log — never on recover/forge/serve alone, and never on the local
-  rehearsal (non-promotable). The CE-A5 manifest is rehearsal evidence: it **strengthened**
-  CN-CONS-06 (first live cross-impl acceptance) but did **NOT** flip it.
+- **The live bounty bar discharges ONLY** on committed `correlate` evidence over a real **preprod**
+  peer log — never on recover/forge/serve alone, and never on the local rehearsal (non-promotable).
+  Precisely: `CN-CONS-06` is **already `enforced`** (its core semantic claim is proven), with its
+  **preprod-live `open_obligation` still open**; `RO-LIVE-01` remains **`partial`**, awaiting that
+  live/preprod evidence. CE-A5 **strengthened** `CN-CONS-06` (first live cross-impl acceptance) but
+  did **not** discharge its preprod-live `open_obligation`, and did **not** flip `RO-LIVE-01`.
 
 ---
 

@@ -7,7 +7,7 @@ rewind, so a bare-anchor participant recover→follow completes through the exis
 single slice of PHASE4-N-AL — the participant MIRROR of AK-S2 / DC-NODE-32.
 
 ## 2. Slice Header
-- **Cluster:** PHASE4-N-AL. **Status:** Planned.
+- **Cluster:** PHASE4-N-AL. **Status:** Merged (impl `e87e8a43`; authority docs `f8275c55`).
 - **Cluster Exit Criteria Addressed:** CE-AL-1..6 (hermetic) + CE-AL-3-LIVE (live preflight — the
   CE-AI-6 gate).
 - **Primary registry rule:** DC-NODE-33 (`declared` → targeted `enforced` at AL close).

@@ -4,178 +4,158 @@
 >
 > Regenerate with `/head-deltas <baseline>` after every cluster close. Baseline is recorded in `.idd-config.json` `head_deltas_baseline`.
 
-> Baseline: `b1bed361` (PHASE4-N-AJ AJ-S3 — convergence runbook correction + DC-EVIDENCE-03 transcript-shape rule, 2026-06-10 09:35)
-> HEAD: `b4c0983d` (PHASE4-N-AK AK-S2 — recovered-anchor rollback no-op completes live follow, DC-NODE-32, 2026-06-10 17:34)
-> Span: **the PHASE4-N-AK cluster — a post-N-AH/N-AI/N-AJ live recover→follow regression remediation: persist the bootstrap anchor POINT as durable recovery provenance and resolve the live-follow FindIntersect START from it (so a bare-anchor recovery starts at the anchor, not Origin — `DC-NODE-31`), then accept the peer's post-intersection `RollBackward(anchor)` as an idempotent boundary no-op so the single-producer follow loop catches up to the relay tip (`DC-NODE-32`)** — preceded by the **N-AJ close commit** (`bbdc3585`, the prior-window grounding/registry close + baseline bump that this regen measures forward from).
-> **7 commits** (no merges), **33 files changed, +2647 / −544 lines**. **This span DOES touch BLUE — +2 canonical types**: one NEW BLUE module `crates/ade_ledger/src/recovered_anchor_point.rs` (+318) ships `RecoveredAnchorPoint` (the closed, version-gated, byte-canonical anchor-point record) + its closed error sum `RecoveredAnchorPointError` + the sole canonical CBOR codec — the BLUE `pub struct`/`pub enum` count over the `core_paths` trees moves **456 → 458** (`git diff b1bed361..HEAD` over the BLUE trees adds exactly those two `^+(pub )?(struct|enum)` lines and no removal). No `Cargo.toml` changed (`git diff b1bed361..HEAD -- '**/Cargo.toml'` empty — still **11 crates**); **CI gates unchanged at 159** (`--diff-filter=A/M/D` over `ci/` all empty — no new/modified/removed gate); **registry 356 → 358** (+2 rules `DC-NODE-31` + `DC-NODE-32`, both enforced; `T-REC-05` strengthened `+= PHASE4-N-AK`; zero removals). The rest of the change is the RED `ade_runtime` recovery/bootstrap/storage shell (`bootstrap.rs`, `recovered_anchor.rs` NEW, `chaindb/{mod,in_memory,persistent}.rs`, `seed_epoch_lineage.rs`, `forward_sync/reducer.rs`) and the `ade_node` shell (`node_lifecycle.rs`, `node_sync.rs`, `node.rs`), plus mechanical `recovered_anchor: None` struct-init touches at every existing construction site.
+> Baseline: `b4c0983d` (PHASE4-N-AK AK-S2 — recovered-anchor rollback no-op completes live follow, DC-NODE-32, 2026-06-10 17:34)
+> HEAD: `e87e8a43` (PHASE4-N-AL AL-S1 — participant recovered-anchor rollback no-op, DC-NODE-33, 2026-06-10 21:43)
+> Span: **the PHASE4-N-AL cluster — the PARTICIPANT-path recovered-anchor rollback no-op, the participant MIRROR of N-AK's single-producer `DC-NODE-32`: `run_participant_sync` now accepts a peer `RollBackward` binding EXACTLY (slot AND hash) to the persisted recovered anchor (`state.recovered_anchor`, from `DC-NODE-31`) as an idempotent boundary no-op, evaluated BEFORE the unchanged `DC-NODE-29` stored-block resolution (`DC-NODE-33`)** — preceded by the **N-AK close commit** (`efa2a44e`, which flipped `DC-NODE-31`/`DC-NODE-32` `enforced_scaffolding → enforced` and regenerated all four grounding docs to `b4c0983d`) and a **C2-guide remediation note** (`c3ec7466`, records the N-AK recover→follow regression fix).
+> **4 commits** (no merges), **14 files changed, +1792 / −825 lines**. **This span does NOT touch BLUE** — `git diff b4c0983d..HEAD` over the `core_paths` BLUE trees is **empty** (no `^+(pub )?(struct|enum)` line in any BLUE tree; **456 → 456** BLUE `pub struct`/`pub enum`, **462 → 462** by CODEMAP's whole-tree metric). **NO new crate** (`git diff --name-only … '**/Cargo.toml'` empty — still **11 crates**), **NO new module** (`git diff --diff-filter=A --name-only … 'crates/**/*.rs'` empty), **NO new canonical type**, and **NO new CI gate** (`--diff-filter=A/M/D` over `ci/` all **empty**; `ls ci/ci_check_*.sh | wc -l` = **159** at both refs). **Registry 358 → 359** (+1 rule `DC-NODE-33`, enforced at close; `T-REC-05` **NOT** re-strengthened — **zero strengthenings** this window; zero removals). The entire production change is **17 added lines** of RED follow-loop code in `crates/ade_node/src/node_lifecycle.rs` (`run_participant_sync` `RollBack` handler) plus **5** hermetic `participant_*` tests in `crates/ade_node/tests/live_fork_choice_ai_s4bii.rs` (+194). The remaining +1581 / −825 is the in-span **N-AK close** (`efa2a44e`) regenerating the four grounding docs + archiving the N-AK cluster docs + the N-AL cluster/slice/invariants docs (`f8275c55`).
 
-> **Baseline note (load-bearing — read before §0).** This window's baseline is **`b1bed361`**, the
-> PHASE4-N-AJ AJ-S3 close (the prior HEAD_DELTAS HEAD), and it is **valid**: `git rev-parse b1bed361` resolves and
-> `git merge-base b1bed361 HEAD == b1bed361` (it is a strict ancestor of HEAD; `b1bed361` carries no tag). HEAD is
-> **`b4c0983d`** (the PHASE4-N-AK AK-S2 impl — the recovered-anchor rollback no-op that completes the live
-> follow). The config baseline at the start of this regen was already `b1bed361` (the previous close's commit
-> `bbdc3585` bumped it `e99a86c7 → b1bed361` — and `bbdc3585` is the **first** commit in this span), so the window
-> measures cleanly from the recorded baseline forward. The span has **two parts**: (1) the **PHASE4-N-AJ close
-> commit** — `bbdc3585` (`Close PHASE4-N-AJ — participant-path convergence evidence emission`), which committed
-> the N-AJ close artifacts the previous regen ran against as uncommitted working-tree changes (registry status
-> flips `DC-NODE-30 → enforced` + `DC-EVIDENCE-03 → enforced_scaffolding`, the HEAD_DELTAS refresh, the cluster
-> archive, the c2-guide sync, the baseline bump) — **docs/registry/config only, 0 code, 0 net new rule** (registry
-> 354→356 was its delta, already reflected at this baseline); and (2) the **PHASE4-N-AK cluster** (`DC-NODE-31` +
-> `DC-NODE-32`) — cluster authority doc + invariants sketch (`c8e44386`, declares `DC-NODE-31`) + the AK-S1 slice
-> doc (`f3f1e7ac`) + the AK-S1 impl (`8bb1c402` and its correction `7b3b6779`) + the AK-S2 authority doc
-> (`f14dee20`, declares `DC-NODE-32`) + the AK-S2 impl (`b4c0983d`). **The cluster-close registry flips + grounding
-> refresh + archive are an uncommitted working-tree close-pass at this regen** (see the working-tree note below).
+> **Baseline note (load-bearing — read before §0).** This window's baseline is **`b4c0983d`**, the
+> PHASE4-N-AK AK-S2 close (the prior HEAD_DELTAS HEAD), and it is **valid**: `git rev-parse b4c0983d` resolves and
+> `git merge-base b4c0983d HEAD == b4c0983d` (it is a strict ancestor of HEAD; `b4c0983d` carries no tag). HEAD is
+> **`e87e8a43`** (the PHASE4-N-AL AL-S1 impl — the participant-path recovered-anchor rollback no-op). At the start
+> of this regen the **working-tree** config baseline was already `b4c0983d` (the previous close's bump
+> `b1bed361 → b4c0983d` is itself an uncommitted working-tree step from the N-AK close-pass; the **committed**
+> `.idd-config.json` at HEAD still reads `b1bed361`), so the window measures cleanly from the recorded working-tree
+> baseline forward. The span has **three parts**: (1) the **PHASE4-N-AK close commit** — `efa2a44e`
+> (`Close PHASE4-N-AK …`), which flipped `DC-NODE-31` + `DC-NODE-32` `enforced_scaffolding → enforced`, regenerated
+> CODEMAP/SEAMS/TRACEABILITY/HEAD_DELTAS to `b4c0983d`, and archived the N-AK cluster docs — **docs/registry only,
+> 0 code, 0 net new rule** (registry stayed 358); (2) a **C2-guide remediation note** — `c3ec7466`
+> (`docs(c2-guide): record PHASE4-N-AK recover→follow remediation`), docs-only, records the N-AK fix history, **not
+> N-AL work**; and (3) the **PHASE4-N-AL cluster** (`DC-NODE-33`) — cluster authority doc + invariants sketch +
+> AL-S1 slice doc declaring `DC-NODE-33` (`f8275c55`) + the AL-S1 impl (`e87e8a43`). **The cluster-close registry
+> flip + grounding-doc/config touch + archive are an uncommitted working-tree close-pass at this regen** (see the
+> working-tree note below).
 >
 > **Working-tree note (load-bearing).** At the time of this regen there are **UNCOMMITTED working-tree changes** —
-> the N-AK close artifacts (registry status flips to `enforced` for `DC-NODE-31`/`DC-NODE-32`, the `T-REC-05`
-> strengthening, slice-doc `Merged` flips, the cluster-doc archive move, and this HEAD_DELTAS refresh).
-> **§1 narrates the COMMITTED span `b1bed361..b4c0983d` verbatim from `git log`.** The rule **STATUS** in §0/§7 is
-> read from the **CURRENT working-tree** `docs/ade-invariant-registry.toml` so the prose reflects the close state
-> (`DC-NODE-31` **enforced**, `DC-NODE-32` **enforced**, `T-REC-05` **strengthened** `+= PHASE4-N-AK`). The
-> operator bumps `head_deltas_baseline` `b1bed361 → b4c0983d` as a separate post-close step so the next cluster
-> measures from here.
+> the N-AL close artifacts (the `DC-NODE-33 declared → enforced` flip + its `tests` array populated in the registry,
+> the AL-S1 slice-doc `Merged` flip, the c2-guide/runbook sync, the CODEMAP HEAD-pin touch, the config baseline bump,
+> and this HEAD_DELTAS refresh). **§1 narrates the COMMITTED span `b4c0983d..e87e8a43` verbatim from `git log`.** The
+> rule **STATUS** in §0/§7 is read from the **CURRENT working-tree** `docs/ade-invariant-registry.toml` so the prose
+> reflects the close state (`DC-NODE-33` **enforced**, **359** rules). The operator bumps `head_deltas_baseline`
+> `b4c0983d → e87e8a43` as the **post-close step this regen performs** (the prior N-AK bump `b1bed361 → b4c0983d` was
+> left uncommitted in the working tree; this regen advances it to `e87e8a43`).
 
-This window is **led by PHASE4-N-AK — the recovered-anchor live-follow start + rollback boundary.** It is a
-**regression remediation** of the live `recover → follow` path that N-AH/N-AI/N-AJ stood up: after recovery from a
-**bare bootstrap anchor** (a recovery snapshot captured at the anchor slot with **no servable post-anchor block**
-durable in the `ChainDb`), the prior code had no durable record of WHERE the anchor was, so warm-start resolved the
-live-follow FindIntersect start to **Origin** — and the peer's post-intersection `RollBackward(anchor)` then failed
-closed (`UnsupportedRollbackPoint` / `UnexpectedRollback`), stalling the follow before it could catch up. N-AK
-fixes this **end-to-end** in two slices, the first BLUE-touching and the second a fail-closed RED follow-loop
-boundary:
+This window is **led by PHASE4-N-AL — the participant-path recovered-anchor rollback boundary.** It is the
+**participant MIRROR** of N-AK's `DC-NODE-32` (which fixed the single-producer `run_node_sync` path): after recovery
+from a **bare bootstrap anchor** (a recovery snapshot captured at the anchor slot with **no servable post-anchor
+block** durable in the `ChainDb`), the relay's standard post-`IntersectFound` `RollBackward(anchor)` would, on the
+PARTICIPANT path (`run_participant_sync`), fall through to the `DC-NODE-29` stored-block resolution — where
+`get_block_by_hash(anchor)` returns `None` (the anchor is a snapshot boundary, NOT a stored servable block) and the
+follow fails closed BEFORE the first forward admit. N-AL closes that participant-side gap with a **single, narrow,
+fail-closed RED follow-loop boundary**:
 
-> **PHASE4-N-AK persists the bootstrap anchor POINT `(slot, hash)` as a closed, version-gated, byte-canonical,
-> fingerprint-bound recovery-provenance record (`RecoveredAnchorPoint`, a NEW BLUE type) and resolves the
-> live-follow FindIntersect start from it whenever the `ChainDb` has no servable post-anchor block — so a
-> bare-anchor recovery starts the follow AT THE ANCHOR, not Origin (`DC-NODE-31`). It then accepts the peer's
-> post-intersection `RollBackward` whose target binds EXACTLY (slot AND hash) to that persisted anchor as an
-> IDEMPOTENT NO-OP boundary rewind on the single-producer follow loop (no WAL, no `ChainDb`/ledger/`chain_dep`/
-> cursor mutation), so the loop continues and the forward blocks admit through the EXISTING `pump_block`,
-> catching up to the relay tip (`DC-NODE-32`). The anchor is a recovery snapshot BOUNDARY, **never** synthesized
-> into a servable block (`ChainDb::tip()` / `last_block_bytes` / serve never return it); `RollBackward(Origin)`
-> and **every** non-anchor rollback still FAIL CLOSED (AI-S4a unchanged); the accepted point binds to the
-> PERSISTED anchor on slot AND hash, never peer-supplied alone. The persisted anchor point is the durable restart
-> authority — NOT CLI re-supply. Same recovered store + same ordered peer feed ⇒ byte-identical post-state and
-> admit sequence (extends `T-REC-05` to the recovered tip + follow surface). +2 BLUE canonical types; NO new CI
-> gate; NO `RO-LIVE` flip.**
+> **PHASE4-N-AL accepts, on the participant live-follow path (`run_participant_sync`), a peer `RollBackward` whose
+> target binds EXACTLY (slot AND hash) to the persisted recovered anchor point (`DC-NODE-31` / `BootstrapState.tip`,
+> carried in `ForwardSyncState.recovered_anchor`) as an IDEMPOTENT NO-OP boundary rewind — no `commit_rollback`, no
+> `WalEntry::RollBack`, no `ChainDb`/ledger/`chain_dep` mutation, no cursor, no `pending_reselection` — evaluated
+> BEFORE the unchanged `DC-NODE-29` `get_block_by_hash` stored-block resolution (`DC-NODE-33`). The anchor is a
+> recovery snapshot BOUNDARY, **never** synthesized into a servable block (`ChainDb::tip()` / serve never return it);
+> `RollBackward(Origin)` still FAILS CLOSED (AI-S4a unchanged); **every** non-anchor, non-Origin rollback still
+> resolves through the EXISTING `DC-NODE-29` authority UNCHANGED (a real stored-block rollback still routes through
+> `apply_chain_event`, slot-only / hash-only near-misses still fail closed); the accepted point binds to the
+> PERSISTED anchor on slot AND hash, never peer-supplied alone. The anchor consumed by `run_participant_sync` is the
+> single authority (`state.recovered_anchor`, set once in the forge-ON arm at `node_lifecycle.rs:563` and threaded
+> via `run_relay_loop_with_sched`) — **NEVER re-read from the store inside the loop**. The first forward block after
+> the anchor no-op admits through the EXISTING sole `pump_block` path — AL adds **NO** forward-link code. Recover→
+> follow on the participant path is replay-equivalent (extends `T-REC-05` / `DC-NODE-31` / `DC-NODE-32` to the
+> participant follow). `DC-NODE-32` stays scoped to `run_node_sync` (**NOT** broadened — a distinct sibling rule).
+> NO BLUE change; NO new module; NO new canonical type; NO new CI gate; NO `RO-LIVE` flip.**
 
-The arc is two slices — the persisted anchor-point provenance + start resolver lands FIRST (BLUE type + codec +
-store surface + bootstrap resolver), then the follow-loop rollback boundary completes the catch-up:
+The cluster is a **single slice** — the participant-path boundary mirrors the AK-S2 single-producer boundary,
+reusing the EXISTING `ForwardSyncState.recovered_anchor` field (the AK-S2 carrier) unchanged:
 
-- **PHASE4-N-AK / AK-S1 / `DC-NODE-31` (enforced) (recovered-anchor live-follow start authority — BLUE type +
-  codec + store surface + bootstrap resolver, RED load).** A new BLUE module
-  `crates/ade_ledger/src/recovered_anchor_point.rs` ships **`RecoveredAnchorPoint`** — the closed record
-  `{ anchor_fp: Hash32, slot: SlotNo, block_hash: Hash32 }` (all fields required at construction; no `Default`,
-  no `#[non_exhaustive]`) — and its closed error sum **`RecoveredAnchorPointError`** (`MalformedCbor` /
-  `UnknownVersion { expected, found }` / `Structural { reason }` / `TrailingBytes { extra }`), plus the **sole**
-  canonical CBOR codec (`encode_recovered_anchor_point` / `decode_recovered_anchor_point`, a 4-element array
-  `[ RECOVERED_ANCHOR_POINT_SCHEMA_VERSION=1, anchor_fp, slot, block_hash ]`; decode rejects unknown version /
-  short hash / trailing bytes and verifies a byte-canonical round-trip — a CN-CINPUT-01 analog). The anchor-fp-keyed
-  durable surface is the new `SnapshotStore::{put,get}_recovered_anchor_point` (redb table
-  `recovered_anchor_point_by_anchor_fp`, in `chaindb/{mod,in_memory,persistent}.rs`). The write site is the shared
-  `seed_epoch_lineage::persist_seed_epoch_consensus_inputs` (which already persists the seed-epoch sidecar — the
-  anchor-point record is a **separate** additive record sharing the same `anchor_fp` key, NOT touching the
-  sidecar's shape/schema/hash). On warm-start, the new RED `crates/ade_runtime/src/recovered_anchor.rs`
-  (`load_recovered_anchor_point` — load + fail-closed verify, kept OUT of `bootstrap.rs` to preserve the
-  `CN-NODE-01` single-`pub fn` bootstrap closure) loads the record and binds it; `bootstrap.rs` gains a new
-  `BootstrapInputs.recovered_anchor` field and the private total resolver `resolve_live_follow_start(tip,
-  recovered_anchor)` (resolution order: **servable `ChainDb` tip → persisted non-Origin anchor point → Origin/None
-  only if truly cold-start**; a zero/null-hash anchor is treated as Origin). Three new fail-closed `BootstrapError`
-  variants — `RecoveredAnchorPointMissing { anchor_fp }`, `RecoveredAnchorPointDecode(RecoveredAnchorPointError)`,
-  `RecoveredAnchorPointBindingMismatch { expected_anchor_fp, actual_anchor_fp }` — make a non-Origin recovered store
-  whose anchor-point record is missing / malformed / fingerprint-mismatched a deterministic halt **before** live
-  follow starts (never a silent Origin fallback). `ChainDb::tip()` semantics unchanged; no servable block
-  synthesized; the wire-pump consumer (`spawn_live_wire_pump_source`) unchanged. **`DC-NODE-31 → enforced`** (11
-  hermetic tests across `bootstrap.rs` / `seed_epoch_lineage.rs` / `recovered_anchor_point.rs` /
-  `node_lifecycle.rs`; **no dedicated CI gate** — enforced by the unit/integration suite + the existing
-  `ci_check_bootstrap_closure.sh` single-`pub fn` fence). *(The `7b3b6779` correction — "OQ-AK-1 corrected" —
-  refined the persisted provenance within AK-S1 before the AK-S2 doc; same slice.)*
-- **PHASE4-N-AK / AK-S2 / `DC-NODE-32` (enforced) (recovered-anchor rollback boundary completes the live follow —
-  RED follow-loop no-op + fail-closed fence).** `forward_sync/reducer.rs` gains a `ForwardSyncState.recovered_anchor:
-  Option<ChainTip>` field (default `None`; the recover path sets it to `BootstrapState.tip`). The single-producer
-  `node_sync::run_node_sync` `RollBack` handler now matches `(&state.recovered_anchor, &point)`: a `RollBackward`
-  whose target binds **EXACTLY (slot AND hash)** to the persisted recovered anchor is an **idempotent NO-OP**
-  (`continue` — no `commit_rollback`, no `WalEntry::RollBack`, no `ChainDb`/ledger/`chain_dep`/cursor mutation);
-  **every other point still `Err(NodeSyncError::UnexpectedRollback)`** — `RollBackward(Origin)` fails closed
-  (AI-S4a unchanged), every non-anchor non-Origin rollback fails closed, and slot-only / hash-only near-misses fail
-  closed (the bind is slot **AND** hash, never peer-supplied alone). The anchor point consumed by the loop is the
-  single authority (`BootstrapState.tip`), threaded in — **NEVER re-read from the store inside the loop**. The
-  first forward block after the anchor admits through the **EXISTING** sole `pump_block` path (its `prev_hash` binds
-  the recovered `chain_dep`) — **AK-S2 adds NO forward-link code**. `node_lifecycle.rs` sets `fwd.recovered_anchor =
-  BootstrapState.tip` on the ON arm; **`run_participant_sync` is UNCHANGED** (a separate follow-on). **`DC-NODE-32 →
-  enforced`** (6 hermetic CEs `ak_s2_*` in `live_fork_choice_ai_s4bii.rs` + a `node_sync.rs` unit test:
-  idempotent-no-op; Origin-fails-closed-even-with-anchor; non-anchor-fails-closed-slot-and-hash-bound;
-  no-recovered-anchor-still-fails-closed; forward-block-reaches-pump-block-after-no-op; single-producer rollback
-  refused; **no new CI gate**). **Honesty:** SCOPE is the **single-producer `run_node_sync` recovered-anchor
-  rollback-to-intersection ONLY** — it does NOT add general stored-block rollback-follow on the single-producer
-  path, does NOT touch the participant path, and does NOT claim full ChainSel convergence.
+- **PHASE4-N-AL / AL-S1 / `DC-NODE-33` (enforced) (participant recovered-anchor rollback no-op — RED follow-loop
+  no-op + fail-closed fence, before `DC-NODE-29`).** `crates/ade_node/src/node_lifecycle.rs`'s `run_participant_sync`
+  `RollBack` handler gains a **17-line** anchor branch immediately AFTER the existing `RollBackward(Origin)`
+  fail-close (AI-S4a, `wire_pump.rs:447`, unchanged) and immediately BEFORE the `DC-NODE-29` `get_block_by_hash`
+  durable-membership resolution: `if let Some(anchor) = &state.recovered_anchor { if slot == anchor.slot && hash ==
+  anchor.hash { continue; } }`. A `RollBackward` binding EXACTLY (slot AND hash) to the persisted recovered anchor is
+  an **idempotent NO-OP** (`continue` — the node is already at the anchor, a recovery snapshot boundary that
+  `get_block_by_hash` would otherwise resolve to `None`, failing the follow closed before the first forward admit);
+  **every other point still flows through the UNCHANGED `DC-NODE-29` authority** (a real stored-block rollback
+  resolves the wire hash against the durable `ChainDb`, requires the peer-supplied slot to equal the stored slot,
+  and either `apply_chain_event`s or fails closed). No new field, no new type — the branch reads the EXISTING
+  `ForwardSyncState.recovered_anchor` (AK-S2's carrier, `crates/ade_runtime/src/forward_sync/reducer.rs`), which the
+  forge-ON arm already sets to `state.tip.clone()` (`BootstrapState.tip`, `node_lifecycle.rs:563`) and threads in via
+  `run_relay_loop_with_sched`. The anchor is **NEVER re-read from the store inside the loop**; the first forward block
+  after the no-op admits through the EXISTING sole `pump_block` (its `prev_hash` binds the recovered `chain_dep`). The
+  test file `crates/ade_node/tests/live_fork_choice_ai_s4bii.rs` gains **5** hermetic `participant_*` CEs
+  (`participant_rollback_to_recovered_anchor_is_noop` — CE-AL-1; `participant_rollback_origin_fails_closed` — Origin
+  fails closed even with a recovered anchor present, AI-S4a; `participant_rollback_non_anchor_fails_closed` — a
+  non-anchor rollback fails closed, slot AND hash bound; `participant_first_forward_after_anchor_noop_admits_via_pump_block`
+  — the forward block after the no-op reaches `pump_block` and admits; `participant_stored_block_rollback_still_applies`
+  — a real durable stored-block rollback still routes through the UNCHANGED `DC-NODE-29` `apply_chain_event`). **`DC-NODE-33
+  → enforced`** at close (5 named tests; **no dedicated CI gate** — `ci_script = ""`, enforced by the unit/integration
+  suite, matching the `DC-NODE-31` / `DC-NODE-32` test-enforced precedent). **Honesty:** SCOPE is the **participant
+  `run_participant_sync` recovered-anchor rollback-to-intersection ONLY** — it does NOT add general multi-candidate
+  fork-choice, does NOT change the N-AJ evidence emission (`DC-NODE-30`), does NOT flip `CN-CONS-03`, and does NOT
+  broaden `DC-NODE-32` (which stays scoped to `run_node_sync`).
 
-**+2 BLUE canonical types** (`RecoveredAnchorPoint` + `RecoveredAnchorPointError`, both in the new BLUE module
-`ade_ledger::recovered_anchor_point`; 456 → 458 BLUE `pub struct`/`pub enum` lines). **No `RO-LIVE` rule flipped** —
-`RO-LIVE-01` stays operator-gated. The live **CE-AK-3** end-to-end pass IS recorded as `enforced`-backing evidence
-for `DC-NODE-31` + `DC-NODE-32` (2026-06-10, frozen c2-relay venue: re-recover → FindIntersect at the persisted
-anchor → `RollBackward(anchor)` idempotent no-op → caught up to `forge_base_block_no=13` == the frozen relay tip;
-**0 `UnsupportedRollbackPoint` + 0 `UnexpectedRollback`**), NOT a bounty/preprod completion claim.
+**NO BLUE change this span** — `git diff b4c0983d..HEAD` over the BLUE `core_paths` trees is empty; **0** new canonical
+type (456 → 456 BLUE / 462 → 462 whole-tree). **No `RO-LIVE` rule flipped** — `RO-LIVE-01` stays operator-gated. The
+live **CE-AL-3-LIVE** end-to-end pass IS recorded as `enforced`-backing evidence for `DC-NODE-33` (2026-06-10, on a
+**FRESH 2-pool `cardano-testnet` venue**, magic 42: fresh **bare-anchor recover @ slot 741** → peer
+`RollBackward(741)` idempotent no-op → first forward block **admitted @ slot 777** → converged to
+`agreement_verdict{agreed}` **@ slot 801** with `our_hash == peer_hash` (exact match), **0 `UnexpectedRollback` + 0
+`UnsupportedRollbackPoint` + 0 diverged**; the live transcript is **OUTSIDE-REPO**, scrubbed in-repo note only). It is
+**NOT** preprod, **NOT** bounty completion, and **does NOT prove CE-AI-6 reorg convergence, full ChainSel, or natural
+reorg capture** (CE-AI-6 is a SEPARATE induced-reorg operator pass).
 
 ## 0. Headline
 
-| Count | Baseline (`b1bed361`) | HEAD (`b4c0983d` + close working-tree) | Δ |
+| Count | Baseline (`b4c0983d`, committed) | HEAD (`e87e8a43` + close working-tree) | Δ |
 |---|---|---|---|
-| CI gates (`ci/ci_check_*.sh`) | 159 | **159** | **±0** — **no gate added, modified, or removed** (`--diff-filter=A` / `--diff-filter=M` / `--diff-filter=D` over `ci/` all **empty**). `DC-NODE-31` + `DC-NODE-32` carry **`ci_script = ""`** — they are enforced by the unit/integration test suite (11 + 7 named tests) plus the EXISTING `ci_check_bootstrap_closure.sh` single-`pub fn` fence (the new RED `recovered_anchor.rs` was deliberately kept OUT of `bootstrap.rs` to preserve `CN-NODE-01`). |
-| Registry rules (`docs/ade-invariant-registry.toml`) | 356 | **358** | **+2** — two NEW rules `DC-NODE-31` + `DC-NODE-32`. **Zero removed** (`diff` of the sorted `id =` lists shows exactly the two additions and no removal). |
-| Registry status (enforced / enforced_scaffolding / partial / declared) | 221 / 1 / 19 / 116 | **224 / 1 / 19 / 114** | **+3 enforced**, **−2 declared** (the `enforced_scaffolding=1` and `partial=19` unchanged). The +3 enforced = the two NEW N-AK rules (`DC-NODE-31`, `DC-NODE-32`) **plus `DC-NODE-30`**, which was `declared` at baseline `b1bed361` (the committed AJ-S3 state) and flipped to `enforced` by the **N-AJ close commit `bbdc3585`** (the first commit in this span); the two declared exits are `DC-NODE-30` (→ enforced) and `DC-EVIDENCE-03` (→ enforced_scaffolding, also by `bbdc3585`). |
-| Registry strengthenings | — | **1** | **`strengthened_in += "PHASE4-N-AK"`** on **1** existing rule: **`T-REC-05`** (replay-equivalence now extends to the recovered tip surface AND the single-producer follow: same recovered store + same WAL ⇒ same anchor point ⇒ same `BootstrapState.tip` ⇒ same FindIntersect start AND same admit sequence). No rule weakened; no rule removed. |
-| BLUE canonical types | 456 | **458** | **+2** — `RecoveredAnchorPoint` (struct) + `RecoveredAnchorPointError` (enum), both in the NEW BLUE module `crates/ade_ledger/src/recovered_anchor_point.rs`. `git diff b1bed361..HEAD` over the BLUE `core_paths` trees adds exactly those two `^+(pub )?(struct\|enum)` lines and removes none. No `Cargo.toml` changed — still 11 crates. |
-| Grounding docs | CODEMAP / SEAMS / TRACEABILITY all pinned at **`5ec841c8`** (the N-AI close — 460 types-by-old-count / 157 CI / 354 rules), already **one cluster stale at baseline** (they do not carry the N-AJ `DC-NODE-30` / `DC-EVIDENCE-03` / `convergence_evidence` module / the two N-AJ gates) | Still pinned at **`5ec841c8`** — now **two clusters stale**: they additionally do not carry `DC-NODE-31`, `DC-NODE-32`, the NEW BLUE `ade_ledger::recovered_anchor_point` module, the NEW RED `ade_runtime::recovered_anchor` module, the new `SnapshotStore` `recovered_anchor_point` surface, or the `BootstrapInputs.recovered_anchor` / `ForwardSyncState.recovered_anchor` fields (grep = 0). | **CODEMAP + SEAMS + TRACEABILITY are now two clusters STALE** — the registry holds the four new rules (N-AJ's two + N-AK's two) + their bindings authoritatively at HEAD (**358 rules**); the refresh to `b4c0983d` is a follow-on item this close. See the cross-reference warnings at the end of §2 and §5. |
+| CI gates (`ci/ci_check_*.sh`) | 159 | **159** | **±0** — **no gate added, modified, or removed** (`--diff-filter=A` / `--diff-filter=M` / `--diff-filter=D` over `ci/` all **empty**; `ls ci/ci_check_*.sh \| wc -l` = 159 at both refs). `DC-NODE-33` carries **`ci_script = ""`** — it is test-enforced (5 named tests), matching the `DC-NODE-31` / `DC-NODE-32` / `DC-PROTO-10` precedent. |
+| Registry rules (`docs/ade-invariant-registry.toml`) | 358 | **359** | **+1** — one NEW rule `DC-NODE-33`. **Zero removed** (`diff` of the sorted `id =` lists shows exactly the single addition `DC-NODE-33` and no removal). |
+| Registry status (enforced / enforced_scaffolding / partial / declared) | 222 / 3 / 19 / 114 | **225 / 1 / 19 / 114** | **+3 enforced**, **−2 enforced_scaffolding** (`partial=19` and `declared=114` net unchanged). The reconciliation: the **in-span N-AK close commit `efa2a44e`** flipped `DC-NODE-31` + `DC-NODE-32` `enforced_scaffolding → enforced` (+2 enforced, −2 enforced_scaffolding — at the COMMITTED baseline `b4c0983d` both were still `enforced_scaffolding`), and the **N-AL working-tree close** flips the NEW `DC-NODE-33` `declared → enforced` (+1 enforced) — its declaration by `f8275c55` had moved `declared` 114→115, and the close flip moves it back to 114. Net: +3 enforced, −2 enforced_scaffolding, declared/partial unchanged. |
+| Registry strengthenings | — | **0** | **No `strengthened_in += "PHASE4-N-AL"` on any rule.** `DC-NODE-33` *cross-refs* `DC-NODE-32` / `DC-NODE-31` / `DC-NODE-29` / `DC-NODE-23` / `T-REC-05` / `CN-CONS-03` in its statement (its replay-equivalence "extends `T-REC-05`/`DC-NODE-31`/`DC-NODE-32` to the participant follow"), but it does **not** append `PHASE4-N-AL` to any existing rule's `strengthened_in` (`grep 'strengthened_in.*PHASE4-N-AL'` = 0 matches). No rule weakened; no rule removed. |
+| BLUE canonical types | 456 | **456** | **±0** — `git diff b4c0983d..HEAD` over the BLUE `core_paths` trees is **empty** (no `^+(pub )?(struct\|enum)` line in any BLUE tree). By CODEMAP's whole-tree metric: **462 → 462**. No `Cargo.toml` changed — still 11 crates. The only production change is **17 RED lines** in `node_lifecycle.rs` (a follow-loop branch reading the EXISTING `ForwardSyncState.recovered_anchor` field) — no new field, no new type. |
+| Grounding docs | CODEMAP / SEAMS / TRACEABILITY all regenerated to **`b4c0983d`** by the in-span N-AK close `efa2a44e` (462 canonical types / 159 CI / 358 rules; they carry `DC-NODE-31` / `DC-NODE-32` / `RecoveredAnchorPoint` + the N-AJ `convergence_evidence` + N-AK `recovered_anchor` modules — the prior two-cluster doc-refresh debt was PAID at the N-AK close) | Still pinned at **`b4c0983d`** — now **one cluster stale**: none yet carries `DC-NODE-33` (`grep -c DC-NODE-33` in each = 0). N-AL adds **NO new module and NO new type**, so CODEMAP's module/type inventory (462 types / 11 crates) stays accurate; only **TRACEABILITY** owes the new `DC-NODE-33` four-cell row, and SEAMS/CODEMAP owe at most a HEAD-pin/count refresh. | **CODEMAP + SEAMS + TRACEABILITY are now ONE cluster STALE** (missing `DC-NODE-33` only) — the registry holds `DC-NODE-33` + its bindings authoritatively at HEAD (**359 rules**); the refresh to `e87e8a43` is a follow-on item this close. See the cross-reference warning at the end of §5. |
 
-> **Grounding-doc state this close (load-bearing).** **CODEMAP, SEAMS, and TRACEABILITY all remain pinned at
-> `5ec841c8`** (the N-AI close) and are now **two clusters stale** (N-AJ + N-AK). None carries `DC-NODE-31`,
-> `DC-NODE-32`, the new BLUE `ade_ledger::recovered_anchor_point` module, the new RED `ade_runtime::recovered_anchor`
-> module, or the new `recovered_anchor_point` store surface; `grep -c` of `RecoveredAnchorPoint` / `DC-NODE-31` /
-> `DC-NODE-32` in all three is 0. The invariant registry holds the two new rules + the `T-REC-05` strengthening
-> authoritatively at HEAD (**358 rules**); the CODEMAP + SEAMS + TRACEABILITY refresh to `b4c0983d` is a follow-on
-> item this close (surfaced in §2 and §5). **The N-AJ refresh debt is now folded into the same follow-on.**
+> **Grounding-doc state this close (load-bearing).** **CODEMAP, SEAMS, and TRACEABILITY were all regenerated to
+> `b4c0983d` at the N-AK close `efa2a44e`** (the in-span first commit), which paid the two-cluster debt the prior
+> HEAD_DELTAS recorded — they now carry `DC-NODE-31`, `DC-NODE-32`, `RecoveredAnchorPoint`, the N-AJ
+> `convergence_evidence` module, and the N-AK `recovered_anchor` module. They are now **one cluster stale** (N-AL):
+> `grep -c DC-NODE-33` in all three is **0**. Because N-AL introduces **no new module and no new canonical type**,
+> CODEMAP's structural inventory (462 types / 11 crates) is unaffected; the only owed refresh is the `DC-NODE-33`
+> four-cell row in TRACEABILITY (plus a HEAD-pin/count bump to `e87e8a43` / 359 rules across all three). The invariant
+> registry holds `DC-NODE-33` + its `tests` binding authoritatively at HEAD (**359 rules**); the
+> CODEMAP + SEAMS + TRACEABILITY refresh to `e87e8a43` is the follow-on item this close (surfaced in §5).
 
 The slice↔rule↔gate map for this window:
 
 | Slice | Rule(s) | Gate | What shipped |
 |---|---|---|---|
-| **N-AJ close** (`bbdc3585`) | flip `DC-NODE-30 → enforced`; `DC-EVIDENCE-03 → enforced_scaffolding`; `DC-ADMIT-04` strengthened (all PHASE4-N-AJ) | — (no new gate) | **docs/registry/config only — 0 code.** Committed the N-AJ close artifacts the previous regen ran against as uncommitted working-tree (HEAD_DELTAS refresh `e99a86c7..b1bed361`, registry 354→356, cluster archive, c2-guide sync, baseline bump `e99a86c7 → b1bed361`). Folded into this span because it sits inside `b1bed361..HEAD`; it is **not** N-AK work. |
-| **cluster doc** (`c8e44386`) | `DC-NODE-31` **declared** | — | N-AK cluster authority doc + invariants sketch; declares `DC-NODE-31`. Also declares `DC-NODE-32` placeholder ahead of AK-S2's authority doc. |
-| **AK-S1** (`8bb1c402` + correction `7b3b6779`) | **`DC-NODE-31`** (NEW, → enforced at close) | (none — `ci_script=""`; reuses `ci_check_bootstrap_closure.sh`) | **BLUE type + codec + store surface + bootstrap resolver, RED load.** NEW BLUE `recovered_anchor_point.rs` (`RecoveredAnchorPoint` + `RecoveredAnchorPointError` + sole CBOR codec); NEW RED `recovered_anchor.rs` (`load_recovered_anchor_point`); `SnapshotStore::{put,get}_recovered_anchor_point` (redb `recovered_anchor_point_by_anchor_fp`); `BootstrapInputs.recovered_anchor` + `resolve_live_follow_start` + 3 new fail-closed `BootstrapError` variants; write at `persist_seed_epoch_consensus_inputs`. |
-| **AK-S2** (`f14dee20` doc, `b4c0983d` impl) | **`DC-NODE-32`** (NEW, → enforced at close); `T-REC-05` strengthened | (none — `ci_script=""`) | **RED follow-loop no-op + fail-closed fence.** `ForwardSyncState.recovered_anchor` field; `run_node_sync` `RollBack` handler accepts `RollBackward(anchor)` (exact slot AND hash) as idempotent no-op, all else `UnexpectedRollback`; forward block admits via EXISTING `pump_block`. **Last slice — the cluster-close flips/archive are the in-progress working-tree close.** |
+| **N-AK close** (`efa2a44e`) | flip `DC-NODE-31 → enforced`; `DC-NODE-32 → enforced` (both `enforced_scaffolding → enforced`); CODEMAP/SEAMS/TRACEABILITY/HEAD_DELTAS regenerated to `b4c0983d` | — (no new gate) | **docs/registry only — 0 code.** Closed the N-AK cluster: flipped the two recovered-anchor rules to `enforced`, regenerated all four grounding docs to `b4c0983d` (paying the two-cluster refresh debt), and archived the N-AK cluster/slice docs to `docs/clusters/completed/PHASE4-N-AK/`. Folded into this span because it sits inside `b4c0983d..HEAD`; it is **not** N-AL work. |
+| **c2-guide note** (`c3ec7466`) | — | — | **docs-only — 0 code / 0 rule.** Records the PHASE4-N-AK recover→follow regression remediation history in `docs/active/c2-preprod-tip-guide.md` (the CE-AI-6 pass blocker + the AK-S1/AK-S2 fix + CE-AK-3 live result). **Not N-AL work.** |
+| **cluster doc + AL-S1 doc** (`f8275c55`) | `DC-NODE-33` **declared** | — | N-AL cluster authority doc + invariants sketch + AL-S1 slice doc; declares `DC-NODE-33`. 0 code. |
+| **AL-S1** (`e87e8a43`) | **`DC-NODE-33`** (NEW, → enforced at close) | (none — `ci_script=""`; test-enforced) | **RED follow-loop no-op + fail-closed fence.** `run_participant_sync` `RollBack` handler in `node_lifecycle.rs` (+17) gains the recovered-anchor exact-(slot AND hash) idempotent no-op, evaluated BEFORE the unchanged `DC-NODE-29` `get_block_by_hash` resolution; reads the EXISTING `ForwardSyncState.recovered_anchor`. +5 hermetic `participant_*` tests in `live_fork_choice_ai_s4bii.rs`. **Last slice — the cluster-close flip/archive/baseline-bump are the in-progress working-tree close.** |
 
 The per-commit shape (the full verbatim log is §1):
 
 | Commit | Kind | What it did | Code / CI / registry effect |
 |--------|------|-------------|-----------------------------|
-| `bbdc3585` | (close) | Close PHASE4-N-AJ — participant-path convergence evidence emission (the CE-AI-6 bridge) | **0 code / 0 CI**; docs/registry/config: HEAD_DELTAS `e99a86c7..b1bed361`, registry 354→356 (`DC-NODE-30 → enforced`, `DC-EVIDENCE-03 → enforced_scaffolding`, `DC-ADMIT-04` strengthened), cluster archive, c2-guide sync, baseline bump `e99a86c7 → b1bed361`. **N-AJ, not N-AK** |
-| `c8e44386` | docs (phase4-n-ak) | Cluster authority doc + invariants sketch; declare `DC-NODE-31` | **0 code / 0 CI**; registry: `DC-NODE-31` declared |
-| `f3f1e7ac` | docs (AK-S1) | Slice doc AK-S1 — recovered-anchor live-follow start | **0 code / 0 CI / 0 rule** |
-| `7b3b6779` | revise (AK-S1) | Persist recovered anchor-point provenance (OQ-AK-1 corrected) | **BLUE+RED code** (correction within AK-S1 — refines the persisted provenance); part of the AK-S1 impl |
-| `8bb1c402` | feat (AK-S1) | Persist recovered anchor point for live follow start (`DC-NODE-31`) | **BLUE+RED code** (NEW BLUE `recovered_anchor_point.rs` + NEW RED `recovered_anchor.rs` + `bootstrap.rs` + `chaindb/{mod,in_memory,persistent}.rs` + `seed_epoch_lineage.rs` + the `recovered_anchor: None` struct-init touches); **+2 BLUE types**; **+0 CI**; registry: `DC-NODE-31` → enforced at close |
-| `f14dee20` | docs (AK-S2) | AK-S2 authority — recovered-anchor follow-rollback boundary (`DC-NODE-32`) | **0 code / 0 CI**; registry: `DC-NODE-32` declared |
-| `b4c0983d` | feat (AK-S2) | AK-S2 — recovered-anchor rollback no-op completes live follow (`DC-NODE-32`) | **RED code** (`forward_sync/reducer.rs` `ForwardSyncState.recovered_anchor` + `node_sync.rs` `run_node_sync` rollback no-op + `node_lifecycle.rs` ON-arm wiring); **+0 BLUE type**; **+0 CI**; registry: `DC-NODE-32` → enforced + `T-REC-05` strengthened at close |
+| `efa2a44e` | (close) | Close PHASE4-N-AK — recovered anchor is the live recover→follow authority (DC-NODE-31 + DC-NODE-32 enforced) | **0 code / 0 CI**; docs/registry: flipped `DC-NODE-31` + `DC-NODE-32` `enforced_scaffolding → enforced`, regenerated CODEMAP/SEAMS/TRACEABILITY/HEAD_DELTAS to `b4c0983d`, archived N-AK cluster docs. Registry count unchanged (358). **N-AK, not N-AL** |
+| `c3ec7466` | docs (c2-guide) | Record PHASE4-N-AK recover→follow remediation | **0 code / 0 CI / 0 rule**; `docs/active/c2-preprod-tip-guide.md` only. **Not N-AL work** |
+| `f8275c55` | docs (phase4-n-al) | Participant recovered-anchor boundary authority; declare `DC-NODE-33` | **0 code / 0 CI**; registry: `DC-NODE-33` declared; + N-AL cluster/slice/invariants docs |
+| `e87e8a43` | feat (phase4-n-al) | AL-S1 — participant recovered-anchor rollback no-op (`DC-NODE-33`) | **RED code** (`node_lifecycle.rs` `run_participant_sync` rollback no-op, +17, reading the EXISTING `recovered_anchor` field) + 5 tests (`live_fork_choice_ai_s4bii.rs`, +194); **+0 BLUE type**; **+0 module**; **+0 CI**; registry: `DC-NODE-33` → enforced at close |
 
 ## 1. Commit Log (newest first)
 
 | Hash | Type | Summary |
 |------|------|---------|
-| `b4c0983d` | feat | feat(phase4-n-ak): AK-S2 -- recovered-anchor rollback no-op completes live follow (DC-NODE-32) |
-| `f14dee20` | docs | docs(phase4-n-ak): AK-S2 authority -- recovered-anchor follow-rollback boundary (DC-NODE-32) |
-| `8bb1c402` | feat | feat(phase4-n-ak): persist recovered anchor point for live follow start |
-| `7b3b6779` | revise | revise(phase4-n-ak): persist recovered anchor-point provenance (OQ-AK-1 corrected) |
-| `f3f1e7ac` | docs | docs(phase4-n-ak): slice doc AK-S1 -- recovered-anchor live-follow start |
-| `c8e44386` | docs | docs(phase4-n-ak): cluster authority doc + invariants sketch; declare DC-NODE-31 |
-| `bbdc3585` | (close) | Close PHASE4-N-AJ — participant-path convergence evidence emission (the CE-AI-6 bridge) |
+| `e87e8a43` | feat | feat(phase4-n-al): AL-S1 -- participant recovered-anchor rollback no-op (DC-NODE-33) |
+| `f8275c55` | docs | docs(phase4-n-al): participant recovered-anchor boundary authority; declare DC-NODE-33 |
+| `c3ec7466` | docs | docs(c2-guide): record PHASE4-N-AK recover->follow remediation |
+| `efa2a44e` | (close) | Close PHASE4-N-AK — recovered anchor is the live recover->follow authority (DC-NODE-31 + DC-NODE-32 enforced) |
 
-No merge commits in the span. **7 commits, zero unclassified.** Six subjects carry an explicit
-conventional-commits prefix (`docs(...)` / `feat(...)` / `revise(...)`); the seventh (`bbdc3585`, `Close
-PHASE4-N-AJ …`) is the prior-window **close commit** (no prefix — the project's close-commit convention), folded
-into this span because it sits inside `b1bed361..HEAD`. The production code lands in the two `feat(...)` commits
-(`8bb1c402` AK-S1 + `b4c0983d` AK-S2) and the AK-S1 `revise(...)` correction (`7b3b6779`); the rest are `docs(...)`
-slice/cluster docs. **`bbdc3585`** is **N-AJ close work, not PHASE4-N-AK** (docs/registry/config only — 0 code). All
-commits landed 2026-06-10.
+No merge commits in the span. **4 commits, zero unclassified.** Three subjects carry an explicit
+conventional-commits prefix (`feat(...)` / `docs(...)`); the fourth (`efa2a44e`, `Close PHASE4-N-AK …`) is the
+prior-window **close commit** (no prefix — the project's close-commit convention), folded into this span because it
+sits inside `b4c0983d..HEAD`. The **only** production code lands in the single `feat(...)` commit (`e87e8a43` AL-S1);
+the two `docs(...)` commits are the N-AL cluster/slice docs (`f8275c55`) and a C2-guide remediation note for the
+PRIOR cluster (`c3ec7466`). **`efa2a44e` is N-AK close work, not PHASE4-N-AL** (docs/registry only — 0 code), and
+**`c3ec7466` documents N-AK, not N-AL.** All commits landed 2026-06-10.
 
 > **Note (commit-attribution policy).** Per this repo's `CLAUDE.md` override (vibe-coded-node bounty
 > trailer requirement), commits in this repo carry a `Co-Authored-By:` model-attribution trailer; that
@@ -184,224 +164,225 @@ commits landed 2026-06-10.
 
 ## 2. New Modules
 
-**Two new modules — one BLUE (`ade_ledger::recovered_anchor_point`) + one RED (`ade_runtime::recovered_anchor`).**
-`git diff --diff-filter=A --name-only b1bed361..HEAD -- 'crates/**/*.rs'` lists exactly **two** new `.rs` library
-modules: `crates/ade_ledger/src/recovered_anchor_point.rs` (+318, registered in `crates/ade_ledger/src/lib.rs`)
-and `crates/ade_runtime/src/recovered_anchor.rs` (+72, registered in `crates/ade_runtime/src/lib.rs`). There is
-**no new crate, no new `Cargo.toml`, no new workspace** (`git diff --name-only … '**/Cargo.toml'` is empty; still
-**11 crates**).
+**No new modules this window.** `git diff --diff-filter=A --name-only b4c0983d..HEAD -- 'crates/**/*.rs'` is
+**empty** — N-AL adds no new library module and no new test file (the 5 new tests are added to the EXISTING
+`crates/ade_node/tests/live_fork_choice_ai_s4bii.rs`). There is **no new crate, no new `Cargo.toml`, no new
+workspace** (`git diff --name-only … '**/Cargo.toml'` is empty; still **11 crates**). The N-AL change is confined to
+**one existing source file** (`node_lifecycle.rs`) plus the one existing test file (§3).
 
-| Module | Color | Purpose | Key sub-paths | Added in (cluster/slice) |
-|--------|-------|---------|---------------|--------------------------|
-| `ade_ledger::recovered_anchor_point` | **BLUE** | The closed, version-gated, byte-canonical record of the bootstrap anchor POINT `(slot, hash)` the recovered store was seeded at — persisted as replayable recovery provenance, bound to the recovered anchor fingerprint (`anchor_fp`). The durable restart authority for the live-follow FindIntersect start tip (`DC-NODE-31`). Separate additive record from `SeedEpochConsensusInputs`; shares the `anchor_fp` key. | `RecoveredAnchorPoint { anchor_fp: Hash32, slot: SlotNo, block_hash: Hash32 }` (no `Default`, no `#[non_exhaustive]`), `RecoveredAnchorPointError { MalformedCbor \| UnknownVersion \| Structural \| TrailingBytes }`, `encode_recovered_anchor_point` / `decode_recovered_anchor_point` (sole codec pair), `RECOVERED_ANCHOR_POINT_SCHEMA_VERSION = 1` | **PHASE4-N-AK AK-S1** (`8bb1c402`) |
-| `ade_runtime::recovered_anchor` | **RED** (store-read I/O of a BLUE record; the decode + binding check are BLUE) | The recover-time load + fail-closed verify of the persisted anchor-point record. Companion to `bootstrap::resolve_live_follow_start` — kept OUT of `bootstrap.rs` so that module stays the single-`pub fn` bootstrap authority (`CN-NODE-01`, `ci_check_bootstrap_closure.sh`). Mirrors `bootstrap::restore_seed_epoch_consensus_inputs`. | `load_recovered_anchor_point<S: SnapshotStore>(store, anchor_fp) -> Result<ChainTip, BootstrapError>` — one `SnapshotStore::get_recovered_anchor_point` read + `decode_recovered_anchor_point` + the `anchor_fp` binding check; missing/malformed/mismatched ⇒ fail-closed, never silent Origin | **PHASE4-N-AK AK-S1** (`8bb1c402`) |
-
-> **Cross-reference (CODEMAP) — STALE: new modules NOT yet in CODEMAP.** Neither new module
-> (`ade_ledger::recovered_anchor_point` BLUE, `ade_runtime::recovered_anchor` RED) nor its types
-> (`RecoveredAnchorPoint`, `RecoveredAnchorPointError`) is in CODEMAP — CODEMAP is pinned at `5ec841c8` (the N-AI
-> close) and predates both N-AJ and N-AK (`grep -c RecoveredAnchorPoint` in CODEMAP = 0). **Action:** regenerate
-> CODEMAP to `b4c0983d` so the new BLUE module appears in CODEMAP §BLUE (with its `Creates`/`Interprets`/`MUST
-> NOT` rows) and the new RED module in §RED; until then the registry (`DC-NODE-31` `code_locus`) + this doc are
-> authoritative for the modules. **This is a refresh-on-this-close item, not a discipline gap** — both modules ship
-> fully tested; the registry holds their bindings at HEAD. (The N-AJ `ade_node::convergence_evidence` module is
-> ALSO still absent from CODEMAP — fold both into the one CODEMAP regen.)
+> **Cross-reference (CODEMAP) — no new module to register.** Because N-AL introduces no module and no canonical
+> type, CODEMAP's module inventory (11 crates / 462 canonical types, regenerated to `b4c0983d` at the N-AK close
+> `efa2a44e`) remains structurally accurate at HEAD. The single new rule `DC-NODE-33` attaches to the EXISTING RED
+> `ade_node::node_lifecycle` module (already in CODEMAP §RED) — only its rule↔enforcement binding (TRACEABILITY)
+> needs the refresh (§5).
 
 ## 3. Modules Modified
 
-Beyond the two new modules (§2), **eleven existing source files across three crates** changed — `ade_ledger`
-(crate root only), `ade_runtime` (bootstrap + storage + recovery + seed-epoch), and `ade_node` (lifecycle + sync +
-node), plus mechanical struct-init touches. The substantive changes group cleanly by slice:
+Beyond the (zero) new modules (§2), **one existing source file and one existing test file** changed for the N-AL
+production work — both in `ade_node`. (The remaining span churn is the in-span N-AK close `efa2a44e` regenerating
+the four grounding docs + archiving cluster docs, and `f8275c55`/`c3ec7466` adding N-AL/c2-guide docs — docs only.)
+The substantive change is a single, narrow follow-loop branch:
 
 | Module | Color / scope | Key changes |
 |--------|---------------|-------------|
-| `ade_runtime::bootstrap` (`bootstrap.rs` +373/−…) | **RED** shell with **BLUE** resolver, additive | **AK-S1 (`8bb1c402`):** new `BootstrapInputs.recovered_anchor: Option<ChainTip>` canonical input; new **pure, total** private resolver `resolve_live_follow_start(tip, recovered_anchor)` (resolution order servable `ChainDb` tip → persisted non-Origin anchor point → Origin/None; a zero/null-hash anchor ⇒ Origin); `bootstrap_initial_state` now resolves the live-follow start tip from it. **Three new fail-closed `BootstrapError` variants** — `RecoveredAnchorPointMissing { anchor_fp }`, `RecoveredAnchorPointDecode(RecoveredAnchorPointError)`, `RecoveredAnchorPointBindingMismatch { expected_anchor_fp, actual_anchor_fp }`. `ChainDb::tip()` semantics unchanged; no servable block synthesized. Hosts 8 of the `DC-NODE-31` tests. |
-| `ade_runtime::chaindb` (`mod.rs` +26, `persistent.rs` +67, `in_memory.rs` +32) | **RED** store surface, additive | **AK-S1 (`8bb1c402`):** new `SnapshotStore::{put,get}_recovered_anchor_point` trait methods (anchor-fp-keyed; the record's bytes are the canonical `ade_ledger::recovered_anchor_point` form). `persistent.rs` adds the redb `TableDefinition` `recovered_anchor_point_by_anchor_fp` (a distinct key-space — cannot collide with existing tables; a missing table on `get` returns `Ok(None)`). `in_memory.rs` adds the in-memory analog. Existing tables/methods untouched. |
-| `ade_runtime::seed_epoch_lineage` (`seed_epoch_lineage.rs` +64) | **RED** persist driver, additive | **AK-S1 (`8bb1c402`):** `persist_seed_epoch_consensus_inputs` now ALSO writes the `RecoveredAnchorPoint` record (`put_recovered_anchor_point(anchor_fp, encode_recovered_anchor_point(&ap))`) at seed/recover — a **separate** additive record sharing the `anchor_fp` key, NOT touching the seed-epoch sidecar's shape / schema version / `sidecar_hash`. New error path via `SeedEpochLineagePersistError::Persist`. Hosts the `bootstrap_recover_persists_anchor_point_sidecar` test (CE-AK-1). |
-| `ade_runtime::forward_sync::reducer` (`reducer.rs` +15/−…) | **GREEN/RED** state carrier, additive | **AK-S2 (`b4c0983d`):** `ForwardSyncState` gains `recovered_anchor: Option<ChainTip>` (default `None`; the recover path sets it to `BootstrapState.tip`). Documented as a recovery snapshot boundary — NOT a servable block, never synthesized. No reducer decision logic changed. |
-| `ade_node::node_lifecycle` (`node_lifecycle.rs` +162/−…) | **RED** loop + recover driver, additive | **AK-S1 (`8bb1c402`):** `warm_start_recovery` calls `load_recovered_anchor_point(chaindb, &anchor_fp)` once the recovered `anchor_fp` is discovered and threads the result into `BootstrapInputs.recovered_anchor`, so `resolve_live_follow_start(chaindb.tip(), recovered_anchor)` sets the live-follow start tip. **AK-S2 (`b4c0983d`):** the ON arm sets `fwd.recovered_anchor = state.tip.clone()` (the `BootstrapState.tip` single authority). **`run_participant_sync` UNCHANGED** (a separate follow-on). Hosts the `recovered_bare_anchor_findintersect_starts_at_anchor_not_origin` test. |
-| `ade_node::node_sync` (`node_sync.rs` +107/−…) | **GREEN/RED** single-producer follow loop, additive | **AK-S2 (`b4c0983d`):** the `run_node_sync` `RollBack` handler now matches `(&state.recovered_anchor, &point)` — a `RollBackward` binding EXACTLY (slot AND hash) to the persisted recovered anchor is an idempotent NO-OP (`continue` — no `commit_rollback` / `WalEntry::RollBack` / `ChainDb`/ledger/`chain_dep`/cursor mutation); every other point ⇒ `Err(NodeSyncError::UnexpectedRollback)` (Origin + non-anchor + slot-only + hash-only all fail closed). The forward block after the anchor admits via the EXISTING `pump_block`. Hosts the `ak_s2_valid_forward_block_admits_after_recovered_anchor_noop` unit test. |
-| `ade_node::node` (`node.rs` +13), `ade_node::produce_mode` (`produce_mode.rs` +4), `ade_runtime::genesis_bootstrap` (+4), `ade_runtime::mithril_bootstrap` (+4), `ade_runtime::recovery::restart` (+6), `ade_testkit::consensus::genesis_pinning` (+1), `ade_ledger::lib` / `ade_runtime::lib` (+1 each) | mechanical / crate-root | **AK-S1/S2:** mechanical `recovered_anchor: None` struct-init additions at every existing `BootstrapInputs` / `ForwardSyncState` construction site (the new field's default — `None` ⇒ pre-AK behavior verbatim; first-run genesis/Mithril bootstrap supplies no recovered anchor, only the warm-start recover path does). `lib.rs` of each new module's crate adds the `pub mod` registration (§2). Behavior-preserving; no new type. |
+| `ade_node::node_lifecycle` (`node_lifecycle.rs` +17) | **RED** participant follow loop, additive | **AL-S1 (`e87e8a43`):** the `run_participant_sync` `RollBack` handler gains a **17-line** recovered-anchor branch immediately AFTER the existing `RollBackward(Origin)` fail-close (AI-S4a, unchanged) and immediately BEFORE the `DC-NODE-29` `get_block_by_hash` stored-block resolution: `if let Some(anchor) = &state.recovered_anchor { if slot == anchor.slot && hash == anchor.hash { continue; } }` — a `RollBackward` binding EXACTLY (slot AND hash) to the persisted recovered anchor is an idempotent NO-OP (`continue` — no `commit_rollback` / `WalEntry::RollBack` / `ChainDb`/ledger/`chain_dep` mutation / cursor / `pending_reselection`); every other point flows through the UNCHANGED `DC-NODE-29` authority (`get_block_by_hash` + stored slot/hash binding → `apply_chain_event` or fail closed). Reads the EXISTING `ForwardSyncState.recovered_anchor` field (AK-S2's carrier), set once in the forge-ON arm at `:563` and threaded via `run_relay_loop_with_sched`; **never re-read from the store inside the loop**. **No new field, no new type. `DC-NODE-32` NOT broadened** (it stays scoped to `run_node_sync`; this is a distinct sibling on the participant path). |
+| `ade_node::tests::live_fork_choice_ai_s4bii` (`live_fork_choice_ai_s4bii.rs` +194) | **test**, additive | **AL-S1 (`e87e8a43`):** **5** new hermetic `participant_*` CEs — `participant_rollback_to_recovered_anchor_is_noop`, `participant_rollback_origin_fails_closed`, `participant_rollback_non_anchor_fails_closed`, `participant_first_forward_after_anchor_noop_admits_via_pump_block`, `participant_stored_block_rollback_still_applies` (the registry-named enforcement for `DC-NODE-33`). The 8 pre-existing `participant_*` tests (from N-AI/N-AJ) are unchanged. |
 
-> **BLUE change this span (load-bearing).** Unlike the immediately-prior N-AJ window (evidence-only, 0 BLUE), this
-> span **adds a BLUE module**: `git diff b1bed361..HEAD` over the BLUE `core_paths` trees lists
-> `crates/ade_ledger/src/recovered_anchor_point.rs` (new) and adds exactly **two** `^+(pub )?(struct\|enum)` lines
-> (`RecoveredAnchorPoint`, `RecoveredAnchorPointError`) — BLUE count **456 → 458**. The BLUE surface is the closed
-> anchor-point record + its sole canonical codec; everything else (the load, the store surface, the bootstrap
-> resolver wiring, the follow-loop no-op) is the RED `ade_runtime` / `ade_node` shell. The decode + `anchor_fp`
-> binding check inside the RED `recovered_anchor.rs` load are BLUE-authoritative (the codec is the sole authority);
-> the `SnapshotStore` read itself is RED I/O.
+> **No BLUE change this span (load-bearing).** Like the N-AJ window (and unlike N-AI / N-AK), this span is
+> **BLUE-empty**: `git diff b4c0983d..HEAD` over the BLUE `core_paths` trees is empty (no file touched, no
+> `^+(pub )?(struct\|enum)` line) — BLUE count **456 → 456** (462 → 462 whole-tree). The single production change is
+> **17 RED lines** in the `ade_node` shell, reading an EXISTING field; everything BLUE-authoritative
+> (`pump_block`, the `DC-NODE-29` durable-membership resolution, `ChainDb::tip()`, the `RecoveredAnchorPoint` codec)
+> is untouched.
 
 ## 4. Feature Flags
 
 **No project feature-flag deltas.** Ade declares no `[features]` table in any workspace `Cargo.toml`, and **no
-`Cargo.toml` changed in this window** (`git diff --name-only b1bed361..HEAD -- '**/Cargo.toml' 'Cargo.toml'` is
+`Cargo.toml` changed in this window** (`git diff --name-only b4c0983d..HEAD -- '**/Cargo.toml' 'Cargo.toml'` is
 empty). No `#[cfg(feature = …)]` gate was introduced and no `compile_error!` coupling was added. **No new CLI flag
-this span either** — the new behavior is a NEW typed struct field (`BootstrapInputs.recovered_anchor` /
-`ForwardSyncState.recovered_anchor`, default `None`), not a flag: it is populated by the recover path itself
-(`warm_start_recovery` → `load_recovered_anchor_point`), and a `None` recovered anchor reproduces pre-AK behavior
-verbatim (first-run genesis/Mithril bootstrap supplies `None`). The durable restart authority is the **persisted
-anchor-point record**, explicitly NOT CLI re-supply (`DC-NODE-31`: "the persisted anchor point is the durable
-restart authority — NOT CLI re-supply").
+this span either** — N-AL adds no new struct field and no new flag: the new behavior reads the EXISTING
+`ForwardSyncState.recovered_anchor` field (AK-S2's carrier, populated by the recover path's forge-ON arm), so a
+participant follow over a store with no recovered anchor (`recovered_anchor == None`) reproduces pre-AL behavior
+verbatim. The durable restart authority remains the **persisted anchor-point record** (`DC-NODE-31`), explicitly NOT
+CLI re-supply.
 
 ## 5. CI Checks (159 → 159; no gate added, modified, or removed)
 
-**Zero CI-script changes this span.** `git diff --diff-filter=A b1bed361..HEAD -- ci/`,
+**Zero CI-script changes this span.** `git diff --diff-filter=A b4c0983d..HEAD -- ci/`,
 `--diff-filter=M`, and `--diff-filter=D` over `ci/` are **all empty** — no gate was added, modified in place, or
-removed; the count holds at **159**. Both new rules carry **`ci_script = ""`**: they are enforced by the
-unit/integration **test suite** (the `code_locus`-named tests below) plus the EXISTING
-`ci_check_bootstrap_closure.sh` single-`pub fn` fence (which is **why** `load_recovered_anchor_point` was placed in
-the NEW `ade_runtime::recovered_anchor` module rather than in `bootstrap.rs` — to keep `bootstrap.rs`'s single-pub-fn
-closure intact under that gate, preserving `CN-NODE-01`).
+removed; `ls ci/ci_check_*.sh | wc -l` = **159** at both refs. The new rule carries **`ci_script = ""`**: it is
+enforced by the **unit/integration test suite** (the 5 `participant_*` tests named below), matching the
+`DC-NODE-31` / `DC-NODE-32` / `DC-PROTO-10` / `T-REC-05` test-enforced precedent (a recovered-anchor follow-loop
+boundary is a behavioral property of the `run_participant_sync` reducer path, exercised directly by the hermetic CEs
+rather than by a textual gate).
 
-### PHASE4-N-AK enforcement (AK-S1 / AK-S2) — test-suite + existing-gate-backed, no new gate
+### PHASE4-N-AL enforcement (AL-S1) — test-suite-backed, no new gate
 
 | Rule | Enforced by | What it checks |
 |------|-------------|----------------|
-| `DC-NODE-31` | `ci_script=""`; 11 named tests + EXISTING `ci_check_bootstrap_closure.sh` | The persisted anchor point round-trips byte-identically (`recovered_anchor_point_round_trips_byte_identical`); a zero-hash anchor resolves to Origin; a bare-anchor recovery surfaces the anchor as the live-follow tip; a true-Origin recovery surfaces `None`; a servable `ChainDb` tip wins over the anchor; warm-start loads the persisted record; missing / fingerprint-mismatched record fails closed; same store ⇒ same FindIntersect start; persist writes the anchor-point sidecar; FindIntersect starts at the anchor not Origin. `bootstrap.rs` stays single-`pub fn` (the load lives in `recovered_anchor.rs`). |
-| `DC-NODE-32` | `ci_script=""`; 7 named tests | `RollBackward(anchor)` (exact slot AND hash) is an idempotent no-op; `RollBackward(Origin)` fails closed even with a recovered anchor present; a non-anchor rollback fails closed (slot AND hash bound); no-recovered-anchor still fails closed; the forward block after the no-op reaches `pump_block` and admits (tip advances); the single-producer path refuses a generic rollback via `run_node_sync`. |
+| `DC-NODE-33` | `ci_script=""`; 5 named tests | `RollBackward(anchor)` (exact slot AND hash) is an idempotent no-op on the participant path (`participant_rollback_to_recovered_anchor_is_noop`); `RollBackward(Origin)` fails closed even with a recovered anchor present (`participant_rollback_origin_fails_closed`, AI-S4a); a non-anchor rollback fails closed, slot AND hash bound (`participant_rollback_non_anchor_fails_closed`); the forward block after the no-op reaches `pump_block` and admits (`participant_first_forward_after_anchor_noop_admits_via_pump_block`); a real durable stored-block rollback still routes through the UNCHANGED `DC-NODE-29` `apply_chain_event` (`participant_stored_block_rollback_still_applies`). |
 
-> **Cross-reference (CODEMAP + SEAMS + TRACEABILITY) — STALE this close; refresh owed.** The new rule↔enforcement
-> bindings (`DC-NODE-31` ↔ its 11 tests + `ci_check_bootstrap_closure.sh`; `DC-NODE-32` ↔ its 7 tests) are recorded
-> **in the registry at HEAD** (`docs/ade-invariant-registry.toml`, 358 rules). They are **NOT yet in TRACEABILITY,
-> SEAMS, or CODEMAP**, all three of which remain pinned at the N-AI close `5ec841c8` (`grep -c` of `DC-NODE-31` /
-> `DC-NODE-32` in each = 0). **No gate is orphaned** (no gate was added). **TRACEABILITY note:** because both new
-> rules carry `ci_script=""`, TRACEABILITY's enforcement column for them is the **test suite**, not a `ci_check_*`
-> script — this is intentional (the existing `ci_check_bootstrap_closure.sh` fences the single-pub-fn closure that
-> makes the placement safe, but does not itself check the anchor-point semantics). **Action:** regenerate CODEMAP +
-> SEAMS + TRACEABILITY to `b4c0983d` as a follow-on this close (folding in the still-pending N-AJ refresh) so the
-> two new modules appear in CODEMAP and every N-AJ + N-AK rule appears in TRACEABILITY with its named enforcement;
-> until then the registry is authoritative for the new bindings.
+> **Cross-reference (CODEMAP + SEAMS + TRACEABILITY) — ONE cluster stale this close; refresh owed.** The new
+> rule↔enforcement binding (`DC-NODE-33` ↔ its 5 tests) is recorded **in the registry at HEAD**
+> (`docs/ade-invariant-registry.toml`, 359 rules). It is **NOT yet in TRACEABILITY, SEAMS, or CODEMAP**, all three of
+> which were regenerated to the N-AK close `b4c0983d` (`grep -c DC-NODE-33` in each = 0). **No gate is orphaned** (no
+> gate was added). **TRACEABILITY note:** because `DC-NODE-33` carries `ci_script=""`, TRACEABILITY's enforcement
+> column for it is the **test suite**, not a `ci_check_*` script — intentional (the participant-path no-op is a
+> reducer-path behavioral property). **No new module / no new type**, so CODEMAP's structural inventory needs no
+> change — only the HEAD-pin/count bump. **Action:** regenerate CODEMAP + SEAMS + TRACEABILITY to `e87e8a43` as a
+> follow-on this close so `DC-NODE-33` appears in TRACEABILITY with its named enforcement and all three docs pin to
+> the N-AL HEAD; until then the registry is authoritative for the new binding.
 
 ## 6. Canonical Type Registry Delta
 
 **n/a — no separate canonical-type registry is configured** (`canonical_type_registry: null`);
-canonical-type rules live inline in the invariant registry under family **T**. **This window ADDED 2 BLUE
-canonical types:** the BLUE `pub struct`/`pub enum` count over the `core_paths` trees is **`456 → 458`** —
-`RecoveredAnchorPoint` (struct) + `RecoveredAnchorPointError` (enum), both in the NEW BLUE module
-`crates/ade_ledger/src/recovered_anchor_point.rs` (the `ade_ledger` crate is the first BLUE `core_paths` entry).
-`git diff b1bed361..HEAD` over the BLUE trees adds exactly those two `^+(pub )?(struct|enum)` lines and removes
-none. **Zero BLUE canonical types were removed.** No `Cargo.toml` changed (still 11 crates). The new RED types this
-window are confined to method signatures / struct fields (`SnapshotStore::{put,get}_recovered_anchor_point`,
-`BootstrapInputs.recovered_anchor`, `ForwardSyncState.recovered_anchor`, the 3 new `BootstrapError` variants) — RED
-shell surface, outside the BLUE canonical-type count.
+canonical-type rules live inline in the invariant registry under family **T**. **This window added ZERO BLUE
+canonical types:** the BLUE `pub struct`/`pub enum` count over the `core_paths` trees is **`456 → 456`** (462 → 462
+by CODEMAP's whole-tree metric) — `git diff b4c0983d..HEAD` over the BLUE trees is **empty** (no file touched, no
+`^+(pub )?(struct|enum)` line). **Zero BLUE canonical types added; zero removed.** No `Cargo.toml` changed (still 11
+crates). N-AL introduces **no new type at any tier** — the production change is a 17-line RED follow-loop branch
+reading the EXISTING `ForwardSyncState.recovered_anchor` field.
 
-## 7. Normative / Invariant Rule Delta (356 → 358; +2 rules, 1 strengthening, zero removals)
+## 7. Normative / Invariant Rule Delta (358 → 359; +1 rule, 0 strengthenings, zero removals)
 
-**Two rule IDs were added; zero removed** (`356 → 358`; `diff` of the sorted `id =` lists shows exactly the two
-additions `DC-NODE-31` + `DC-NODE-32` and no removal). The status tally moves **221 → 224 enforced** and **116 →
-114 declared** (the `enforced_scaffolding = 1` and `partial = 19` unchanged). The +3 enforced / −2 declared
-reconciles as: the two NEW N-AK rules land **enforced** (+2 enforced), **and** the **N-AJ close commit `bbdc3585`**
-(the first commit in this span) flipped `DC-NODE-30 declared → enforced` (+1 enforced, −1 declared) and
-`DC-EVIDENCE-03 declared → enforced_scaffolding` (−1 declared, +1 enforced_scaffolding — but that tier was already
-1 at baseline because the committed AJ-S3 baseline had it `declared`; net the two declared exits are `DC-NODE-30` +
-`DC-EVIDENCE-03`).
+**One rule ID was added; zero removed** (`358 → 359`; `diff` of the sorted `id =` lists shows exactly the single
+addition `DC-NODE-33` and no removal). The status tally moves **222 → 225 enforced** and **3 → 1
+enforced_scaffolding** (the `partial = 19` and `declared = 114` net unchanged). The +3-enforced / −2-enforced_scaffolding
+reconciles as: the **in-span N-AK close commit `efa2a44e`** (the first commit in this span) flipped `DC-NODE-31` +
+`DC-NODE-32` `enforced_scaffolding → enforced` (+2 enforced, −2 enforced_scaffolding — at the committed baseline
+`b4c0983d` both were still `enforced_scaffolding`), **and** the N-AL working-tree close flips the NEW `DC-NODE-33`
+`declared → enforced` (+1 enforced; its declaration by `f8275c55` had transiently moved `declared` 114→115, the close
+flip returns it to 114).
 
 *(The configured `normative_docs` — the CE-79 tier-gate statement + addendum, the three contract docs, the
-CE-73 reclassification, and `CLAUDE.md` — were **not** changed this span: `git diff --name-only b1bed361..HEAD`
+CE-73 reclassification, and `CLAUDE.md` — were **not** changed this span: `git diff --name-only b4c0983d..HEAD`
 over those paths is empty. The rule-count delta is entirely the invariant-registry change.)*
 
-**New rules (`+2`, both `introduced_in = "PHASE4-N-AK"`, both enforced):**
+**New rule (`+1`, `introduced_in = "PHASE4-N-AL"`, enforced):**
 
 | Rule | Family / Tier · Status | Statement (summary) |
 |------|------------------------|---------------------|
-| `DC-NODE-31` | DC / `derived` · **enforced** | **Recovered-anchor live-follow start authority.** After recovery from a non-Origin bootstrap anchor, the recovered store PERSISTS the bootstrap anchor point `(slot, hash)` as replayable recovery provenance, bound to the recovered `anchor_fp`. On warm-start, `BootstrapState` resolves the live-follow start tip from that persisted anchor point whenever `ChainDb` has no servable post-anchor block; resolution order = servable `ChainDb` tip → persisted recovered anchor point (non-Origin + provenance-bound) → Origin/None only if truly cold-start. A non-Origin recovered store whose anchor-point record is missing / malformed / fingerprint-mismatched **FAILS CLOSED before live follow starts**. Same recovered store + same WAL ⇒ same anchor point ⇒ same `BootstrapState.tip` ⇒ same FindIntersect start (replay-equivalent; extends `T-REC-05` to the recovered tip surface). **MUST NOT:** the persisted anchor point is the durable restart authority, **NOT** CLI re-supply (CLI seed-point is first-run input only); does **not** change `ChainDb::tip()` semantics and does **not** synthesize a servable block; AI-S4a `RollBackward(Origin)` fail-close unchanged; the wire-pump consumer (`spawn_live_wire_pump_source`) UNCHANGED. |
-| `DC-NODE-32` | DC / `derived` · **enforced** | **Recovered-anchor rollback boundary on the single-producer live-follow path (AK-S2).** After recovery to a bare bootstrap anchor, `run_node_sync` accepts a peer `RollBackward` whose target binds EXACTLY (slot AND hash) to the persisted recovered anchor point (`DC-NODE-31` / `BootstrapState.tip`) as an IDEMPOTENT NO-OP boundary rewind: no WAL, no `ChainDb` mutation, no ledger mutation, no cursor. **MUST NOT:** the anchor is a recovery snapshot boundary, **NOT** a stored servable block, and is **NEVER** synthesized into one (`ChainDb::tip()` / `last_block_bytes` / serve never return it); `RollBackward(Origin)` still fails closed (AI-S4a unchanged); every non-anchor, non-Origin rollback fails closed; the accepted point must bind to the PERSISTED anchor on slot AND hash, **never peer-supplied alone**; the anchor point consumed by the loop is the single authority (`BootstrapState.tip`), threaded in — **NEVER re-read from the store inside the loop**. The first forward block after the anchor admits through the EXISTING sole `pump_block` path (AK-S2 adds **no** forward-link code). Recover→follow on the single-producer path is replay-equivalent (extends `T-REC-05`/`DC-NODE-31` to the follow). **SCOPE:** does NOT add general stored-block rollback-follow on the single-producer path, and does NOT touch the participant path (`run_participant_sync` — a separate follow-on). |
+| `DC-NODE-33` | DC / `derived` · **enforced** | **Participant-path recovered-anchor rollback boundary (the participant MIRROR of `DC-NODE-32`).** On the participant live-follow path (`run_participant_sync`), a peer `RollBackward` whose target binds EXACTLY (slot AND hash) to the persisted recovered anchor point (`DC-NODE-31` / `BootstrapState.tip`, carried in `ForwardSyncState.recovered_anchor`) is accepted as an IDEMPOTENT NO-OP boundary rewind: no `commit_rollback`, no `WalEntry::RollBack`, no `ChainDb`/ledger/`chain_dep` mutation, no cursor, no `pending_reselection`. The anchor branch is evaluated **BEFORE** the existing `DC-NODE-29` stored-block resolution. Recover→follow on the participant path is replay-equivalent (extends `T-REC-05` / `DC-NODE-31` / `DC-NODE-32` to the participant follow). **MUST NOT:** the anchor is a recovery snapshot boundary, **NOT** a stored servable block, and is **NEVER** synthesized into one (`ChainDb::tip()`/serve never return it); `RollBackward(Origin)` still fails closed (AI-S4a unchanged); every non-anchor, non-Origin rollback still resolves through the EXISTING `DC-NODE-29` authority UNCHANGED; the accepted point binds to the PERSISTED anchor on slot AND hash, **never peer-supplied alone**; the anchor consumed by the loop is the single authority (`state.recovered_anchor`, set in the forge-ON arm at `node_lifecycle.rs:563`), threaded in — **NEVER re-read from the store inside the loop**; the first forward block after the anchor no-op admits through the EXISTING sole `pump_block` (AL adds **no** forward-link code); `DC-NODE-32` stays scoped to `run_node_sync` (**NOT broadened**). **SCOPE:** the recovered-anchor rollback-to-intersection case ONLY; does NOT add general multi-candidate fork-choice, does NOT change N-AJ evidence emission (`DC-NODE-30`), does NOT flip `CN-CONS-03`. |
 
-**Strengthenings (`strengthened_in += "PHASE4-N-AK"`) — 1:** `T-REC-05` (replay-equivalence now extends to the
-recovered tip surface AND the single-producer follow: same recovered store + same WAL ⇒ same persisted anchor point
-⇒ same `BootstrapState.tip` ⇒ same FindIntersect start, and same store + same ordered peer feed ⇒ byte-identical
-post-state and admit sequence across the recovered-anchor rollback no-op + forward catch-up). **No rule was
-weakened.**
+**Strengthenings (`strengthened_in += "PHASE4-N-AL"`) — 0:** no existing rule's `strengthened_in` gained
+`PHASE4-N-AL` (`grep 'strengthened_in.*PHASE4-N-AL'` = 0). `DC-NODE-33` *cross-refs* `T-REC-05` / `DC-NODE-31` /
+`DC-NODE-32` / `DC-NODE-29` / `DC-NODE-23` / `CN-CONS-03` in its statement, but those are `cross_ref` pointers, not
+`strengthened_in` appends. **No rule was weakened.**
 
-**No rule was removed (expected: 0).** The registry delta is **two new rules (`DC-NODE-31` + `DC-NODE-32`, both
-enforced), one `strengthened_in += PHASE4-N-AK` append (`T-REC-05`), zero removals** — consistent with append-only
-registry discipline. **No anomaly.** (The +3-enforced / −2-declared tally includes the `DC-NODE-30` /
-`DC-EVIDENCE-03` flips carried by the in-span N-AJ close commit `bbdc3585`, accounted above.)
+**No rule was removed (expected: 0).** The registry delta is **one new rule (`DC-NODE-33`, enforced), zero
+strengthenings, zero removals** — consistent with append-only registry discipline. **No anomaly.** (The
++3-enforced / −2-enforced_scaffolding tally includes the `DC-NODE-31` / `DC-NODE-32` `enforced_scaffolding → enforced`
+flips carried by the in-span N-AK close commit `efa2a44e`, accounted above.)
 
 ## Honest residual (window scope)
 
-PHASE4-N-AK **remediated the live recover→follow regression** by giving the recovered store a durable record of its
-bootstrap anchor point and resolving the live-follow start (and the follow's first rollback) from it. The honest
-residual:
+PHASE4-N-AL **closed the participant-side half of the recovered-anchor rollback boundary** — the participant MIRROR
+of N-AK's single-producer `DC-NODE-32`. The honest residual:
 
-- **The headline boundary (verbatim).** Ade now **persists the bootstrap anchor point** as fingerprint-bound,
-  version-gated, byte-canonical recovery provenance (`RecoveredAnchorPoint`), resolves the live-follow FindIntersect
-  start from it (bare-anchor recovery starts AT the anchor, not Origin — `DC-NODE-31`), and accepts the peer's
-  post-intersection `RollBackward(anchor)` (exact slot AND hash) as an idempotent boundary no-op so the
-  single-producer follow loop catches up (`DC-NODE-32`). **The anchor is a recovery BOUNDARY, never a servable
-  block** — `ChainDb::tip()` / serve never return it; `pump_block` stays the sole roll-forward admit.
-- **CE-AK-3 is `enforced`-backing evidence, NOT a `RO-LIVE` flip.** The live end-to-end pass (2026-06-10, frozen
-  c2-relay venue: re-recover → FindIntersect at the persisted anchor → `RollBackward(anchor)` idempotent no-op →
-  caught up to `forge_base_block_no=13` == the frozen relay tip; **0 `UnsupportedRollbackPoint` + 0
-  `UnexpectedRollback`**) backs `DC-NODE-31` + `DC-NODE-32` as enforced. It is **NOT** preprod, **NOT** bounty
-  completion. `RO-LIVE-01` stays operator-gated / partial; no `RO-LIVE` registry status changed this span.
-- **Scope is deliberately narrow (load-bearing).** `DC-NODE-32` covers the **single-producer `run_node_sync`
-  recovered-anchor rollback-to-intersection ONLY**. It does **not** add general stored-block rollback-follow on the
-  single-producer path, does **not** touch the participant path (`run_participant_sync` is a **separate
-  follow-on**, explicitly NOT proven here), and does **not** claim full multi-peer ChainSel convergence. Restoring
-  the participant path's recover→follow (to resume N-AJ / CE-AI-6 there) is the named follow-on.
-- **+2 BLUE canonical types — a BLUE-touching window.** `RecoveredAnchorPoint` + `RecoveredAnchorPointError`
-  (456 → 458) in the new BLUE `ade_ledger::recovered_anchor_point` module, with the sole canonical CBOR codec. The
-  rest is RED `ade_runtime` / `ade_node` shell. The new BLUE surface is a closed, version-gated record + codec; it
-  does not widen any existing BLUE authority.
-- **Missing/malformed/mismatched anchor record fails closed — never a silent Origin fallback.** Three new
-  fail-closed `BootstrapError` variants (`RecoveredAnchorPointMissing` / `RecoveredAnchorPointDecode` /
-  `RecoveredAnchorPointBindingMismatch`) make a non-Origin recovered store with a bad anchor-point record a
-  deterministic halt **before** live follow starts.
-- **No new CI gate; enforced by the test suite + an existing closure fence.** Both rules carry `ci_script=""`; the
-  18 named tests + `ci_check_bootstrap_closure.sh` (the single-pub-fn fence that motivated placing the load in a
-  separate module) are the mechanical enforcement.
-- **CODEMAP + SEAMS + TRACEABILITY refresh owed this close — now TWO clusters behind.** All three remain pinned at
-  the N-AI close `5ec841c8` and do not yet carry the N-AJ rules/module/gates **or** the N-AK rules + the two new
-  modules. The registry holds all four new rules + the `T-REC-05` strengthening authoritatively at HEAD (358 rules)
-  in the interim. Regenerating CODEMAP + SEAMS + TRACEABILITY to `b4c0983d` (folding in the pending N-AJ refresh) is
-  the named follow-on (surfaced in §2 and §5).
-- **One in-span commit is prior-window close work.** `bbdc3585` (`Close PHASE4-N-AJ …`) is docs/registry/config
-  only (0 code) — it committed the N-AJ close artifacts the previous regen ran against as uncommitted working-tree
-  (registry 354→356, the `DC-NODE-30`/`DC-EVIDENCE-03` flips, the baseline bump). It sits inside `b1bed361..HEAD`
-  and is recorded in §1/§0 for completeness, but it is **not** PHASE4-N-AK work.
+- **The headline boundary (verbatim).** On the participant live-follow path (`run_participant_sync`), the peer's
+  post-intersection `RollBackward(anchor)` (exact slot AND hash to the persisted recovered anchor) is now an
+  idempotent boundary no-op, evaluated BEFORE the unchanged `DC-NODE-29` stored-block resolution, so the participant
+  follow catches up instead of failing closed on `get_block_by_hash(anchor) → None` (`DC-NODE-33`). **The anchor is a
+  recovery BOUNDARY, never a servable block** — `ChainDb::tip()` / serve never return it; `pump_block` stays the sole
+  roll-forward admit; every non-anchor rollback still flows through the EXISTING `DC-NODE-29` authority.
+- **CE-AL-3-LIVE is `enforced`-backing evidence, NOT a `RO-LIVE` flip.** The live end-to-end pass (2026-06-10, FRESH
+  2-pool `cardano-testnet` venue, magic 42: bare-anchor recover @ slot 741 → `RollBackward(741)` idempotent no-op →
+  first admit @ slot 777 → `agreement_verdict{agreed}` @ slot 801 with `our_hash == peer_hash` exact match; **0
+  `UnexpectedRollback` + 0 `UnsupportedRollbackPoint` + 0 diverged**; transcript OUTSIDE-REPO) backs `DC-NODE-33` as
+  enforced. It is **NOT** preprod, **NOT** bounty completion. `RO-LIVE-01` stays operator-gated / partial; no
+  `RO-LIVE` registry status changed this span.
+- **Does NOT prove CE-AI-6 / full ChainSel (load-bearing).** `DC-NODE-33` covers the **participant
+  `run_participant_sync` recovered-anchor rollback-to-intersection ONLY**. It does **not** add general multi-candidate
+  fork-choice, does **not** prove **CE-AI-6** reorg convergence or natural reorg capture (CE-AI-6 is a SEPARATE
+  induced-reorg operator pass), does **not** change the N-AJ convergence-evidence emission (`DC-NODE-30`), does
+  **not** flip `CN-CONS-03`, and does **not** broaden `DC-NODE-32` (which stays scoped to the single-producer
+  `run_node_sync`). The recovered-anchor rollback boundary is now closed on **both** the single-producer (`DC-NODE-32`)
+  and participant (`DC-NODE-33`) follow paths; full ChainSel convergence remains the named follow-on.
+- **NO BLUE change — a BLUE-empty window.** `git diff b4c0983d..HEAD` over the BLUE `core_paths` trees is empty
+  (456 → 456 / 462 → 462). The single production change is 17 RED lines in `node_lifecycle.rs` reading the EXISTING
+  `ForwardSyncState.recovered_anchor` field; everything BLUE-authoritative (`pump_block`, the `DC-NODE-29` resolution,
+  `ChainDb::tip()`, the `RecoveredAnchorPoint` codec) is untouched.
+- **No new module, no new type, no new CLI flag, no new field.** N-AL reuses AK-S2's `ForwardSyncState.recovered_anchor`
+  carrier unchanged; a participant follow over a store with no recovered anchor reproduces pre-AL behavior verbatim.
+- **No new CI gate; enforced by the test suite.** `DC-NODE-33` carries `ci_script=""`; the 5 named `participant_*`
+  tests are the mechanical enforcement (matching the `DC-NODE-31` / `DC-NODE-32` precedent).
+- **CODEMAP + SEAMS + TRACEABILITY refresh owed this close — now ONE cluster behind.** All three were regenerated to
+  the N-AK close `b4c0983d` (the prior two-cluster debt was PAID at `efa2a44e`) and now lack only `DC-NODE-33`
+  (`grep -c` in each = 0). Because N-AL adds no module and no type, only TRACEABILITY's `DC-NODE-33` row (plus a
+  HEAD-pin/count bump to `e87e8a43` / 359 rules) is owed. The registry holds `DC-NODE-33` + its binding
+  authoritatively at HEAD (359 rules) in the interim. Regenerating CODEMAP + SEAMS + TRACEABILITY to `e87e8a43` is the
+  named follow-on (surfaced in §5).
+- **Two in-span commits are prior-window / cross-cluster.** `efa2a44e` (`Close PHASE4-N-AK …`) is docs/registry only
+  (0 code) — it flipped `DC-NODE-31`/`DC-NODE-32` to enforced and regenerated all four grounding docs to `b4c0983d`;
+  `c3ec7466` (`docs(c2-guide): record PHASE4-N-AK …`) is a docs-only remediation note for the PRIOR cluster. Both sit
+  inside `b4c0983d..HEAD` and are recorded in §1/§0 for completeness, but neither is PHASE4-N-AL work.
 
-## Working tree at HEAD `b4c0983d` (close in progress)
+## Working tree at HEAD `e87e8a43` (close in progress)
 
-**There are UNCOMMITTED working-tree changes at this regen** — the N-AK close artifacts: registry status flips
-(`DC-NODE-31` → enforced, `DC-NODE-32` → enforced, `T-REC-05` strengthened `+= PHASE4-N-AK`), slice-doc `Merged`
-flips, the cluster-doc archive move to `docs/clusters/completed/PHASE4-N-AK/`, and this HEAD_DELTAS refresh. §1
-narrates the **committed** span `b1bed361..b4c0983d` verbatim; §0/§7 read rule **status** from the **current
-working-tree** registry (so the prose reflects `DC-NODE-31` enforced / `DC-NODE-32` enforced / `T-REC-05`
-strengthened). The remaining close-pass actions are (1) committing the close artifacts, (2) the CODEMAP + SEAMS +
-TRACEABILITY refresh to `b4c0983d` (surfaced in §2/§5, folding in the pending N-AJ refresh), and (3) the baseline
-bump (`b1bed361 → b4c0983d`) — all separate post-close steps; **this regen does not touch `.idd-config.json`
-`head_deltas_baseline`.**
+**There are UNCOMMITTED working-tree changes at this regen** — the N-AL close artifacts: the registry flip
+(`DC-NODE-33 → enforced` + its `tests` array populated), the AL-S1 slice-doc `Merged` flip, the c2-guide / N-AI
+convergence-runbook sync, the CODEMAP HEAD-pin touch, the `.idd-config.json` baseline bump, and this HEAD_DELTAS
+refresh. §1 narrates the **committed** span `b4c0983d..e87e8a43` verbatim; §0/§7 read rule **status** from the
+**current working-tree** registry (so the prose reflects `DC-NODE-33` enforced / 359 rules). The remaining close-pass
+actions are (1) committing the close artifacts, and (2) the CODEMAP + SEAMS + TRACEABILITY refresh to `e87e8a43`
+(surfaced in §5). **This regen DOES perform the baseline bump** (`b4c0983d → e87e8a43` in `.idd-config.json`
+`head_deltas_baseline`, with the `_head_deltas_baseline_doc` lead prepended for N-AL and the N-AK paragraph demoted
+to "PRIOR baseline"), per the task's post-close step.
 
-> **Cluster-context note.** PHASE4-N-AK closes with AK-S2 (`b4c0983d`) as the last slice — the final rule flips
-> (`DC-NODE-31 → enforced`, `DC-NODE-32 → enforced`, `T-REC-05` strengthened) are carried by the in-progress
-> working-tree close, alongside moving the cluster docs to `docs/clusters/completed/PHASE4-N-AK/`.
+> **Cluster-context note.** PHASE4-N-AL closes with AL-S1 (`e87e8a43`) as the single/last slice — the final rule
+> flip (`DC-NODE-33 → enforced`) is carried by the in-progress working-tree close, alongside moving the cluster docs
+> to `docs/clusters/completed/PHASE4-N-AL/`.
+
+---
+
+## Historical — PHASE4-N-AK recovered-anchor live-follow start + rollback boundary (`b1bed361 → b4c0983d`)
+
+> The section below is the **previous** HEAD_DELTAS lead, preserved in condensed form. It narrated the
+> `b1bed361 → b4c0983d` span (measured from the PHASE4-N-AJ close `b1bed361`): the **N-AJ close commit**
+> (`bbdc3585`, docs/registry/config only — registry 354→356, `DC-NODE-30 → enforced` + `DC-EVIDENCE-03 →
+> enforced_scaffolding`, baseline bump `e99a86c7 → b1bed361`) + the **PHASE4-N-AK cluster** (two slices AK-S1 +
+> AK-S2) — a post-N-AH/N-AI/N-AJ live recover→follow regression remediation. **7 commits, 33 files, +2647 / −544.**
+> **This span TOUCHED BLUE — +2 canonical types** (`456 → 458`): one NEW BLUE module
+> `crates/ade_ledger/src/recovered_anchor_point.rs` shipping `RecoveredAnchorPoint` (the closed, version-gated,
+> byte-canonical anchor-point record) + `RecoveredAnchorPointError` + the sole canonical CBOR codec
+> (`RECOVERED_ANCHOR_POINT_SCHEMA_VERSION = 1`). It also added one NEW RED module
+> `crates/ade_runtime/src/recovered_anchor.rs` (`load_recovered_anchor_point` — kept OUT of `bootstrap.rs` to
+> preserve the `CN-NODE-01` single-`pub fn` closure). **AK-S1 / `DC-NODE-31`** (enforced): persist the bootstrap
+> anchor POINT as fingerprint-bound recovery provenance + resolve the live-follow FindIntersect start from it
+> (`resolve_live_follow_start`: servable `ChainDb` tip → persisted non-Origin anchor → Origin/None) so a bare-anchor
+> recovery starts AT the anchor, not Origin; new `SnapshotStore::{put,get}_recovered_anchor_point` (redb
+> `recovered_anchor_point_by_anchor_fp`); 3 new fail-closed `BootstrapError` variants. **AK-S2 / `DC-NODE-32`**
+> (enforced): the single-producer `run_node_sync` `RollBack` handler accepts `RollBackward(anchor)` (exact slot AND
+> hash) as an idempotent no-op, all else `UnexpectedRollback`; new `ForwardSyncState.recovered_anchor` field; forward
+> block admits via the EXISTING `pump_block`. CI gates **159 → 159** (both rules `ci_script=""`, backstopped by
+> `ci_check_bootstrap_closure.sh`). Registry **356 → 358** (+2: `DC-NODE-31` + `DC-NODE-32` enforced; `T-REC-05`
+> strengthened `+= PHASE4-N-AK`; 0 removed). **At this close, the N-AK close commit `efa2a44e` regenerated all four
+> grounding docs to `b4c0983d`** (paying the two-cluster CODEMAP/SEAMS/TRACEABILITY refresh debt the N-AK HEAD_DELTAS
+> lead had recorded). Live **CE-AK-3** (2026-06-10, frozen c2-relay) PASSED end-to-end: re-recover → FindIntersect at
+> the persisted anchor → `RollBackward(anchor)` idempotent no-op → caught up to `forge_base_block_no=13` == the frozen
+> relay tip, **0 `UnsupportedRollbackPoint` + 0 `UnexpectedRollback`**. **NO `RO-LIVE` flip.** SCOPE was the
+> single-producer `run_node_sync` path ONLY — the participant path was the named follow-on, closed by **PHASE4-N-AL /
+> `DC-NODE-33`** (this doc's current lead). The full §§0–7 narrative is recoverable from this doc's git history at
+> `b4c0983d`.
 
 ---
 
 ## Historical — PHASE4-N-AJ Participant-path convergence evidence emission (`e99a86c7 → b1bed361`)
 
-> The section below is the **previous** HEAD_DELTAS lead, preserved in condensed form. It narrated the
-> `e99a86c7 → b1bed361` span (measured from the PHASE4-N-AI close `e99a86c7`): the **N-AI baseline-bump chore**
-> (`c1f4c876`) + **one unrelated docs commit** (`c95e2592`, a C2-guide sync) + the **PHASE4-N-AJ cluster** —
-> Participant-path convergence evidence emission, the CE-AI-6 bridge. **9 commits, 19 files, +1813 / −35.**
-> **EVIDENCE-ONLY — ZERO BLUE change, 460 canonical types unchanged** (the first window since G-N not to touch
-> BLUE; counted by the old whole-tree metric). It took the EXISTING N-AI single-best-peer rollback-follow receive
-> path and added a **deterministic GREEN evidence side-output** — emitting the EXISTING closed `AgreementVerdict`
-> vocabulary (`block_received` / `block_admitted` / `agreement_verdict` via `verdict::derive`) to a dedicated
-> `--convergence-evidence-path` JSONL sink (the new GREEN/RED module `ade_node::convergence_evidence` —
-> `ConvergenceEvidenceSink` over `Box<dyn Write>` with exactly 3 emit methods + NO raw-writer accessor;
-> `EvidenceEmitResult { Written | Disabled | FailedAndPoisoned }`). CI gates **157 → 159** (+2:
-> `ci_check_convergence_evidence_{vocabulary_closed,emit_only}.sh`; the schema gate reused from N-AI AI-S5; 0
-> modified, 0 removed). Registry **354 → 356** (+2: `DC-NODE-30` enforced + `DC-EVIDENCE-03` enforced_scaffolding;
-> `DC-ADMIT-04` strengthened; **`CN-CONS-03` NOT flipped** — stays `declared`, single-best-peer scope; 0 removed).
-> Headline (honest boundary): the live `--mode node --participant-venue` rollback-follow path now emits
-> convergence EVIDENCE — **NOT authority** (never gates admission, never triggers a rollback, never influences
-> fork-choice, never mutates the durable chain; `pump_block` stays the sole roll-forward admit). `DC-EVIDENCE-03`
-> (the convergence-through-reorg transcript shape) is **vacuous-until-committed** — the operator-produced
-> transcript is not yet committed. **NO `RO-LIVE` flip.** *(The N-AJ close artifacts — registry flips, HEAD_DELTAS
-> refresh, archive, baseline bump — were committed by `bbdc3585`, the first commit of the SUCCEEDING N-AK window.)*
-> The full §§0–7 narrative is recoverable from this doc's git history at `b1bed361`.
+> Preserved as a pointer. It narrated the `e99a86c7 → b1bed361` span (measured from the PHASE4-N-AI close
+> `e99a86c7`): the **N-AI baseline-bump chore** (`c1f4c876`) + **one unrelated docs commit** (`c95e2592`, a C2-guide
+> sync) + the **PHASE4-N-AJ cluster** — Participant-path convergence evidence emission, the CE-AI-6 bridge.
+> **9 commits, 19 files, +1813 / −35.** **EVIDENCE-ONLY — ZERO BLUE change, 460 canonical types unchanged** (the
+> first window since G-N not to touch BLUE; old whole-tree metric). It took the EXISTING N-AI single-best-peer
+> rollback-follow receive path and added a **deterministic GREEN evidence side-output** — emitting the EXISTING
+> closed `AgreementVerdict` vocabulary (`block_received` / `block_admitted` / `agreement_verdict` via
+> `verdict::derive`) to a dedicated `--convergence-evidence-path` JSONL sink (the new GREEN/RED module
+> `ade_node::convergence_evidence`). CI gates **157 → 159** (+2). Registry **354 → 356** (+2: `DC-NODE-30` enforced +
+> `DC-EVIDENCE-03` enforced_scaffolding; `DC-ADMIT-04` strengthened; **`CN-CONS-03` NOT flipped**; 0 removed).
+> Headline (honest boundary): the live `--mode node --participant-venue` rollback-follow path now emits convergence
+> EVIDENCE — **NOT authority**. **NO `RO-LIVE` flip.** *(The N-AJ close artifacts were committed by `bbdc3585`, the
+> first commit of the SUCCEEDING N-AK window.)* The full §§0–7 narrative is recoverable from this doc's git history at
+> `b1bed361`.
 
 ---
 
@@ -481,82 +462,75 @@ bump (`b1bed361 → b4c0983d`) — all separate post-close steps; **this regen d
 
 ## Generation notes
 
-### Regen `b1bed361 → b4c0983d` (PHASE4-N-AK recovered-anchor live-follow start + rollback boundary — current lead)
+### Regen `b4c0983d → e87e8a43` (PHASE4-N-AL participant recovered-anchor rollback no-op — current lead)
 
-- **Baseline valid; one single-theme cluster + the prior-window close commit.** Run against `b1bed361` (the
-  PHASE4-N-AJ AJ-S3 close, the prior HEAD_DELTAS HEAD), which `git rev-parse` resolves and `git merge-base
-  b1bed361 HEAD` confirms is a strict ancestor of HEAD `b4c0983d` (`b1bed361` carries no tag). The start-of-regen
-  config baseline was already `b1bed361` (bumped by the previous close's `bbdc3585`, which is the **first** commit
-  in this span). The operator bumps `head_deltas_baseline` `b1bed361 → b4c0983d` as a **separate post-close step**
-  (NOT performed by this regen).
-- **Counts are mechanical (git/grep/ls):** commit log + `--shortstat` over `b1bed361..HEAD` (**7** commits, no
-  merges / **33** files / **+2647 / −544**); CI gate count via `git ls-tree -r --name-only <ref> ci/ | grep -c
-  ci_check_.*\.sh` at each ref (**159 → 159**; `--diff-filter=A/M/D` over `ci/` all **empty**); registry rule count
-  via `grep -cP '^id = "'` at each ref (**356 → 358**; `comm`/`diff` of the sorted `id =` lists shows exactly the
-  two additions `DC-NODE-31` + `DC-NODE-32`, zero removals); registry status via `grep -oP '^status = "\K[^"]+' |
-  sort | uniq -c` at each ref (**221 → 224 enforced**, **116 → 114 declared**, `enforced_scaffolding=1` + `partial=19`
-  unchanged); strengthening = **1** (`strengthened_in += "PHASE4-N-AK"` appears once, on `T-REC-05`); BLUE
-  canonical types **456 → 458** (the `git diff b1bed361..HEAD` over the BLUE `core_paths` trees adds exactly two
-  `^+(pub )?(struct|enum)` lines in the new `recovered_anchor_point.rs`).
-- **BLUE count metric note.** This regen counts BLUE canonical types as `pub struct`/`pub enum` declarations over
-  the configured BLUE `core_paths` trees (`ade_ledger` / `ade_codec` / `ade_types` / `ade_crypto` / `ade_plutus` /
-  `ade_core` / the BLUE `ade_network` submodules) — **456 → 458** here. Prior windows in this doc reported a
-  whole-tree "458/460 canonical types" figure (a coarser count); the historical pointers retain that number with an
-  "(old metric)" note. The **delta** (+2) is the load-bearing fact and is metric-independent: exactly two new BLUE
-  `pub struct`/`pub enum` (`RecoveredAnchorPoint`, `RecoveredAnchorPointError`), zero removed.
-- **STATUS read from the CURRENT working tree (load-bearing).** There are **uncommitted** N-AK close artifacts at
-  this regen (registry status flips, slice-doc `Merged` flips, the cluster-doc archive, this HEAD_DELTAS refresh).
-  §1 narrates the **committed** span `b1bed361..b4c0983d` verbatim; §0/§7 read rule **status** from the **current
-  working-tree** `docs/ade-invariant-registry.toml` so the prose reflects the close state (`DC-NODE-31` enforced,
-  `DC-NODE-32` enforced, `T-REC-05` strengthened). The registry-count deltas above were verified against the
-  current working-tree registry (358 rules); the baseline-side counts via `git show
-  b1bed361:docs/ade-invariant-registry.toml` (356 rules).
-- **BLUE change this span (NOT evidence-only).** Unlike the prior N-AJ window, `git diff b1bed361..HEAD` over the
-  BLUE `core_paths` trees lists the new file `crates/ade_ledger/src/recovered_anchor_point.rs` and adds two BLUE
-  `pub struct`/`pub enum` (`RecoveredAnchorPoint`, `RecoveredAnchorPointError`). `git diff --name-only …
-  '**/Cargo.toml' 'Cargo.toml'` is empty (no manifest/feature-flag delta; no new CLI flag — the new behavior is a
-  typed struct field defaulting to `None`).
-- **Two new modules — both new `.rs` are library modules, not tests.** `git diff --diff-filter=A --name-only …
-  'crates/**/*.rs'` lists exactly two new `.rs`: `crates/ade_ledger/src/recovered_anchor_point.rs` (BLUE) and
-  `crates/ade_runtime/src/recovered_anchor.rs` (RED), each registered in its crate's `lib.rs`. No new crate /
-  `Cargo.toml` / workspace — still 11 crates.
-- **Registry delta is +2 rules + 1 strengthening, NOT a removal.** `DC-NODE-31` declared at the cluster doc
-  (`c8e44386`) then flipped to enforced at close; `DC-NODE-32` declared at the AK-S2 authority doc (`f14dee20`)
-  then flipped to enforced at close; `T-REC-05` gained `strengthened_in += PHASE4-N-AK`. The sorted-id `comm`
-  confirms zero removals. The +3-enforced / −2-declared status tally additionally reflects the `DC-NODE-30 →
-  enforced` + `DC-EVIDENCE-03 → enforced_scaffolding` flips carried by the in-span **N-AJ close commit**
-  (`bbdc3585`).
-- **No new CI gate — enforced by tests + an existing closure fence.** Both new rules carry `ci_script=""`. They are
-  enforced by the unit/integration suite (11 named tests for `DC-NODE-31`, 7 for `DC-NODE-32`) plus the EXISTING
-  `ci_check_bootstrap_closure.sh` single-`pub fn` fence — which is **why** the load was placed in a separate
-  `ade_runtime::recovered_anchor` module (to keep `bootstrap.rs`'s single-pub-fn closure intact, preserving
-  `CN-NODE-01`). No `--diff-filter=A/M/D` change over `ci/`.
-- **Classification note (TCB).** The new `ade_ledger::recovered_anchor_point` is **BLUE** (the closed record + sole
-  canonical codec; `ade_ledger` is the first BLUE `core_paths` entry). The new `ade_runtime::recovered_anchor` is
-  **RED** for the `SnapshotStore` read I/O but the decode (via the sole codec) + the `anchor_fp` binding check are
-  BLUE-authoritative. `ade_runtime::bootstrap`'s `resolve_live_follow_start` is a pure/total BLUE resolver inside
-  the RED shell crate; the `chaindb` store surface + `node_lifecycle`/`node_sync` wiring are RED/GREEN shell.
-- **No `RO-LIVE` flip; CE-AK-3 is enforced-backing evidence.** `DC-NODE-31` + `DC-NODE-32` are recorded `enforced`
-  (hermetic CEs + the live CE-AK-3 end-to-end pass at the frozen c2-relay venue: 0 `UnsupportedRollbackPoint` + 0
-  `UnexpectedRollback`, caught up to relay tip 13). This is **NOT** a bounty/preprod claim. No `RO-LIVE` registry
-  status changed (`RO-LIVE-01` stays operator-gated / partial).
-- **Normative docs unchanged this span.** `git diff --name-only b1bed361..HEAD` over the configured `normative_docs`
-  (CE-79 statement + addendum, the three contract docs, CE-73 reclassification, `CLAUDE.md`) is empty — the §7
-  delta is entirely the invariant-registry change.
-- **§1 commit log verbatim from `git log` (newest first).** The per-slice synthesis is in §0/§3. Six subjects carry
-  a conventional-commits prefix; the seventh (`bbdc3585`, `Close PHASE4-N-AJ …`) is the prior-window **close
-  commit** (no prefix, per the project's close-commit convention) and is **N-AJ work, not N-AK** (docs/registry/
-  config only, 0 code), folded into the span by commit range.
-- **Doc-refresh state — CODEMAP + SEAMS + TRACEABILITY now TWO clusters STALE (refresh owed).** All three remain
-  pinned at the N-AI close `5ec841c8` (`grep -c DC-NODE-31 / DC-NODE-32 / RecoveredAnchorPoint` in each = 0; they
-  also still lack the N-AJ `DC-NODE-30` / `DC-EVIDENCE-03` / `convergence_evidence` module). **Cross-reference
-  warnings surfaced in §2 (two new modules not in CODEMAP) and §5 (new rules not in TRACEABILITY; note that both
-  carry `ci_script=""`, so TRACEABILITY's enforcement column is the test suite).** Regenerate CODEMAP + SEAMS +
-  TRACEABILITY to `b4c0983d` as a follow-on this close (folding in the pending N-AJ refresh); the registry holds the
-  four new rules + the `T-REC-05` strengthening authoritatively in the interim (358 rules). No orphan gate (no gate
-  was added).
-- **Working tree NOT clean.** This regen runs with the N-AK close artifacts **uncommitted** (registry status flips
-  + slice-doc `Merged` flips + cluster-doc archive + this HEAD_DELTAS refresh). The remaining close-pass actions are
-  committing the close artifacts, the CODEMAP + SEAMS + TRACEABILITY refresh, and the baseline bump (`b1bed361 →
-  b4c0983d`) — all separate post-close steps; this regen does **not** touch `.idd-config.json`
-  `head_deltas_baseline`.
+- **Baseline valid; one single-slice cluster + the prior-window close commit + one cross-cluster docs note.** Run
+  against `b4c0983d` (the PHASE4-N-AK AK-S2 close, the prior HEAD_DELTAS HEAD), which `git rev-parse` resolves and
+  `git merge-base b4c0983d HEAD` confirms is a strict ancestor of HEAD `e87e8a43` (`b4c0983d` carries no tag). The
+  start-of-regen **working-tree** config baseline was already `b4c0983d` (the previous N-AK close's bump
+  `b1bed361 → b4c0983d` is itself an uncommitted working-tree step; the **committed** `.idd-config.json` at HEAD still
+  reads `b1bed361`). This regen **performs the baseline bump** `b4c0983d → e87e8a43` as the task's post-close step.
+- **Counts are mechanical (git/grep/ls):** commit log + `--shortstat` over `b4c0983d..HEAD` (**4** commits, no
+  merges / **14** files / **+1792 / −825**); CI gate count via `ls ci/ci_check_*.sh | wc -l` = **159** at HEAD and
+  `git ls-tree -r --name-only b4c0983d ci/ | grep -c ci_check_.*\.sh` = **159** at baseline (`--diff-filter=A/M/D`
+  over `ci/` all **empty**); registry rule count via `grep -c '^id = '` at each ref (**358 → 359**; `diff` of the
+  sorted `id =` lists shows exactly the single addition `DC-NODE-33`, zero removals); registry status via
+  `grep '^status = ' | sort | uniq -c` (committed baseline `b4c0983d` = **222 enforced / 3 enforced_scaffolding / 19
+  partial / 114 declared**; working-tree close = **225 / 1 / 19 / 114**); strengthening = **0** (`grep
+  'strengthened_in.*PHASE4-N-AL'` = 0 matches); BLUE canonical types **456 → 456** (`git diff b4c0983d..HEAD` over
+  the BLUE `core_paths` trees is **empty**).
+- **NO BLUE change this span.** `git diff b4c0983d..HEAD` over the configured BLUE `core_paths` trees (`ade_ledger` /
+  `ade_codec` / `ade_types` / `ade_crypto` / `ade_plutus` / `ade_core` / the BLUE `ade_network` submodules) is empty
+  — no file touched, no `^+(pub )?(struct|enum)` line. BLUE count **456 → 456** (462 → 462 whole-tree). `git diff
+  --name-only … '**/Cargo.toml' 'Cargo.toml'` is empty (no manifest/feature-flag delta; no new CLI flag — N-AL adds
+  no struct field, reading the EXISTING `ForwardSyncState.recovered_anchor`).
+- **No new module.** `git diff --diff-filter=A --name-only b4c0983d..HEAD -- 'crates/**/*.rs'` is empty — no new
+  library module and no new test file (the 5 tests are added to the EXISTING `live_fork_choice_ai_s4bii.rs`). No new
+  crate / `Cargo.toml` / workspace — still 11 crates.
+- **Production change is 17 RED lines + 5 tests.** The only `crates/**/*.rs` files in the span are
+  `crates/ade_node/src/node_lifecycle.rs` (+17 — the `run_participant_sync` recovered-anchor no-op branch, evaluated
+  BEFORE the `DC-NODE-29` `get_block_by_hash` resolution) and `crates/ade_node/tests/live_fork_choice_ai_s4bii.rs`
+  (+194 — 5 new `participant_*` CEs). Everything else in the +1792/−825 is the in-span N-AK close `efa2a44e`
+  regenerating the four grounding docs + archiving cluster docs, and `f8275c55`/`c3ec7466` docs.
+- **Registry delta is +1 rule, 0 strengthenings, NOT a removal.** `DC-NODE-33` declared at the cluster/slice doc
+  (`f8275c55`) then flipped to enforced at close (working tree). The sorted-id `diff` confirms zero removals. No
+  existing rule's `strengthened_in` gained `PHASE4-N-AL`. The +3-enforced / −2-enforced_scaffolding status tally
+  additionally reflects the `DC-NODE-31` + `DC-NODE-32` `enforced_scaffolding → enforced` flips carried by the in-span
+  **N-AK close commit** (`efa2a44e`); at the COMMITTED baseline `b4c0983d` both were still `enforced_scaffolding`.
+- **No new CI gate — enforced by tests.** `DC-NODE-33` carries `ci_script=""`; enforced by the 5 named
+  `participant_*` tests (matching the `DC-NODE-31` / `DC-NODE-32` / `DC-PROTO-10` test-enforced precedent — a
+  reducer-path behavioral property exercised by hermetic CEs, not a textual gate). No `--diff-filter=A/M/D` change
+  over `ci/`.
+- **STATUS read from the CURRENT working tree (load-bearing).** There are **uncommitted** N-AL close artifacts at
+  this regen (the `DC-NODE-33` flip + `tests` array, the AL-S1 slice-doc `Merged` flip, the c2-guide/runbook sync,
+  the CODEMAP HEAD-pin touch, the config baseline bump, this HEAD_DELTAS refresh). §1 narrates the **committed** span
+  `b4c0983d..e87e8a43` verbatim; §0/§7 read rule **status** from the **current working-tree**
+  `docs/ade-invariant-registry.toml` (359 rules, `DC-NODE-33` enforced). The baseline-side counts via `git show
+  b4c0983d:docs/ade-invariant-registry.toml` (358 rules, committed status 222/3/19/114).
+- **No `RO-LIVE` flip; CE-AL-3-LIVE is enforced-backing evidence.** `DC-NODE-33` is recorded `enforced` (hermetic CEs
+  + the live CE-AL-3-LIVE end-to-end pass on a FRESH 2-pool `cardano-testnet` venue: bare-anchor recover @ slot 741 →
+  `RollBackward(741)` no-op → admit @ 777 → agreed @ 801 exact-hash-match, 0 `UnexpectedRollback` + 0
+  `UnsupportedRollbackPoint` + 0 diverged; transcript OUTSIDE-REPO). This is **NOT** a bounty/preprod claim and does
+  **NOT** prove CE-AI-6 reorg / full ChainSel. No `RO-LIVE` registry status changed (`RO-LIVE-01` stays
+  operator-gated / partial).
+- **Normative docs unchanged this span.** `git diff --name-only b4c0983d..HEAD` over the configured `normative_docs`
+  (CE-79 statement + addendum, the three contract docs, CE-73 reclassification, `CLAUDE.md`) is empty — the §7 delta
+  is entirely the invariant-registry change.
+- **§1 commit log verbatim from `git log` (newest first).** The per-slice synthesis is in §0/§3. Three subjects carry
+  a conventional-commits prefix (`feat(...)` / two `docs(...)`); the fourth (`efa2a44e`, `Close PHASE4-N-AK …`) is the
+  prior-window **close commit** (no prefix, per the project's close-commit convention) and is **N-AK work, not N-AL**
+  (docs/registry only, 0 code); `c3ec7466` is a docs-only remediation note for the PRIOR cluster (also not N-AL).
+- **Doc-refresh state — CODEMAP + SEAMS + TRACEABILITY now ONE cluster STALE (refresh owed).** All three were
+  regenerated to the N-AK close `b4c0983d` by the in-span `efa2a44e` (paying the prior two-cluster debt) and carry
+  `DC-NODE-31` / `DC-NODE-32` / `RecoveredAnchorPoint` + the N-AJ/N-AK modules; they lack only `DC-NODE-33`
+  (`grep -c DC-NODE-33` in each = 0). N-AL adds **no module and no type**, so CODEMAP's structural inventory is
+  unaffected — only the `DC-NODE-33` four-cell row in TRACEABILITY (plus a HEAD-pin/count bump to `e87e8a43` / 359
+  rules across all three) is owed. **Cross-reference warning surfaced in §5.** Regenerate CODEMAP + SEAMS +
+  TRACEABILITY to `e87e8a43` as a follow-on this close; the registry holds `DC-NODE-33` + its binding authoritatively
+  in the interim (359 rules). No orphan gate (no gate was added).
+- **Working tree NOT clean.** This regen runs with the N-AL close artifacts **uncommitted** (registry flip + `tests`
+  array, slice-doc `Merged` flip, c2-guide/runbook sync, CODEMAP HEAD-pin touch, config baseline bump, this
+  HEAD_DELTAS refresh). The remaining close-pass actions are committing the close artifacts and the CODEMAP + SEAMS +
+  TRACEABILITY refresh to `e87e8a43`. **This regen DOES perform the `.idd-config.json` baseline bump** `b4c0983d →
+  e87e8a43` (the prior N-AK bump `b1bed361 → b4c0983d` was left uncommitted; this regen advances it to `e87e8a43`),
+  per the task's post-close step.

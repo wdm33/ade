@@ -7309,8 +7309,15 @@ CN-CONS-03.
 source = "docs/planning/phase4-n-al-participant-recovered-anchor-boundary-invariants.md + docs/clusters/PHASE4-N-AL/cluster.md"
 cross_ref = ["DC-NODE-32", "DC-NODE-31", "DC-NODE-29", "DC-NODE-23", "T-REC-05", "CN-CONS-03"]
 code_locus = "crates/ade_node/src/node_lifecycle.rs (run_participant_sync RollBack handler -- recovered-anchor exact slot+hash no-op evaluated BEFORE the DC-NODE-29 durable-membership resolution; reads state.recovered_anchor set in the forge-ON arm at node_lifecycle.rs:563), crates/ade_runtime/src/forward_sync/reducer.rs (ForwardSyncState.recovered_anchor -- the existing AK-S2 field, reused unchanged), crates/ade_runtime/src/admission/wire_pump.rs:447 (AI-S4a Origin fail-close -- UNCHANGED)"
-tests = []
+tests = [
+    "crates/ade_node/tests/live_fork_choice_ai_s4bii.rs::participant_rollback_to_recovered_anchor_is_noop",
+    "crates/ade_node/tests/live_fork_choice_ai_s4bii.rs::participant_rollback_origin_fails_closed",
+    "crates/ade_node/tests/live_fork_choice_ai_s4bii.rs::participant_rollback_non_anchor_fails_closed",
+    "crates/ade_node/tests/live_fork_choice_ai_s4bii.rs::participant_first_forward_after_anchor_noop_admits_via_pump_block",
+    "crates/ade_node/tests/live_fork_choice_ai_s4bii.rs::participant_stored_block_rollback_still_applies",
+]
 ci_script = ""
-status = "declared"
+status = "enforced"
+open_obligation = "ENFORCED at PHASE4-N-AL /cluster-close. Hermetic CE-AL-1..6 GREEN (participant recovered-anchor rollback idempotent no-op -- no WAL/ChainDb/ledger/chain_dep mutation, pending_reselection unset; Origin + non-anchor + slot-only + hash-only all FAIL CLOSED via the unchanged DC-NODE-29 stored-block resolution; first forward block admits through the EXISTING pump_block after the no-op; a real stored-block rollback still routes through apply_chain_event) + CE-AL-3-LIVE PASSED end-to-end (2026-06-10, FRESH 2-pool cardano-testnet venue, magic 42): fresh bare-anchor recover @ slot 741 -> peer RollBackward(741) no-op'd -> first forward block admitted @ slot 777 -> converged to agreement_verdict{agreed} @ slot 801 (our_hash == peer_hash, exact match) -> 0 UnexpectedRollback + 0 UnsupportedRollbackPoint + 0 diverged. Live transcript OUTSIDE-REPO (~/.cardano-ceai6/al-inputs/CE-AL-3-LIVE.jsonl; scrubbed in-repo note only). SCOPE (deliberately narrow): participant run_participant_sync recovered-anchor rollback-to-intersection ONLY -- the participant MIRROR of DC-NODE-32 (single-producer run_node_sync). Does NOT prove CE-AI-6 reorg convergence, full ChainSel, or natural reorg capture (CE-AI-6 is a SEPARATE induced-reorg operator pass). DC-NODE-32 NOT broadened (distinct sibling). Both close-gate reviews CLEAN (IDD 0 BLOCK/0 WARN; security 0 BLOCK / 1 LOW doc-WARN = this flip)."
 introduced_in = "PHASE4-N-AL"
 strengthened_in = []
