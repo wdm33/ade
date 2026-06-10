@@ -3,12 +3,12 @@
 > **Status:** Living architectural document. Regenerated; not hand-edited.
 > Per-project instance of `~/.claude/methodology/templates/seams.md`.
 
-> 11 crates, **460 canonical types**, **157 CI checks** at HEAD (`5ec841c8`, PHASE4-N-AI — live fork-choice rollback-follow wiring, **single-best-peer FOLLOW, NOT full ChainSel**: on the live Participant `--mode node` receive path a peer-origin item is classified ONCE venue-blind, a competing candidate is resolved by the EXISTING `chain_selector` → BLUE `select_best_chain` (`DC-CONS-03`), a peer `RollBackward` is bound to the durable `ChainDb` stored slot+hash (`DC-NODE-29`) and recorded as the new append-only durable `WalEntry::RollBack` MARKER; `pump_block` stays the sole roll-forward durable admit — `DC-NODE-23`…`DC-NODE-29`. **`CN-CONS-03` (full multi-peer ChainSel convergence) is NOT flipped — it stays `partial`.**).
-> Reads the CODEMAP (`docs/ade-CODEMAP.md` — **460 canonical types / 157 CI / 354 rules**, regenerated at `5ec841c8`,
-> the PHASE4-N-AI close) for the module list + TCB colors, and the invariant registry
-> (`docs/ade-invariant-registry.toml` — **354 entries** at HEAD `5ec841c8`: 221 enforced / 19 partial / 114 declared)
+> 11 crates, **462 canonical types**, **159 CI checks** at HEAD (`b4c0983d`, PHASE4-N-AK — recovered-anchor live-follow start + recovered-anchor rollback no-op, **single-producer FOLLOW**: after recovery from a non-Origin bootstrap anchor the recovered store persists the bootstrap anchor point `(slot, block_hash)` bound to the recovered `anchor_fp` as replayable provenance, warm-start resolves the live-follow start tip from it (`resolve_live_follow_start`), the WirePump FindIntersects at that anchor (never blind Origin), and a peer `RollBackward` binding EXACTLY (slot AND hash) to the persisted anchor is an IDEMPOTENT NO-OP boundary rewind — every other rollback (Origin, slot-only, hash-only, no-anchor) still fails closed; `pump_block` stays the sole roll-forward durable admit — `DC-NODE-31` / `DC-NODE-32`. The sole new BLUE authority is the version-gated closed `RecoveredAnchorPoint` record + its SOLE canonical CBOR codec (`ade_ledger::recovered_anchor_point`; a SEPARATE additive record from `SeedEpochConsensusInputs`, version-gated `RECOVERED_ANCHOR_POINT_SCHEMA_VERSION = 1`). **`CN-CONS-03` (full multi-peer ChainSel convergence) is NOT flipped — it stays `partial`/`declared`; `RO-LIVE-01` stays operator-gated.**).
+> Reads the CODEMAP (`docs/ade-CODEMAP.md` — **462 canonical types / 159 CI / 358 rules**, regenerated at `b4c0983d`,
+> the PHASE4-N-AK close) for the module list + TCB colors, and the invariant registry
+> (`docs/ade-invariant-registry.toml` — **358 entries** at HEAD `b4c0983d`: 224 enforced / 19 partial / 114 declared / 1 enforced_scaffolding)
 > for the rule IDs that gate each closed surface. **Count reconciliation (load-bearing — read honestly): this SEAMS,
-> the on-disk CODEMAP, and the registry all AGREE at HEAD `5ec841c8` (460 / 157 / 354).** PHASE4-N-AI is the
+> the on-disk CODEMAP, and the registry all AGREE at HEAD `b4c0983d` (462 / 159 / 358).** The carried PHASE4-N-AI is the
 > **FIRST BLUE delta since the G-N span** — it is **BLUE+RED+GREEN**: the BLUE `ade_ledger::wal::event` gains the
 > closed-sum variant `WalEntry::RollBack` (tag 1 — the reserved RollBackward slot) plus its two NEW closed payload
 > types `RollbackPoint` + `RollbackReason` (canonical types **458 → 460, +2**); `WalError::RollbackTargetNotInChain`
@@ -48,6 +48,147 @@
 > the followed-peer-tip / cert path onto the local durable `ChainDb::tip` under a deterministic fence, leaving
 > `pump_block` the sole durable tip-advance authority and `DC-CONS-03` (the frozen rung-2 Praos fork-choice
 > contract) UNTOUCHED.
+>
+> ### PHASE4-N-AK cluster close (`b4c0983d`) — recovered-anchor live-follow start + recovered-anchor rollback no-op (`DC-NODE-31` / `DC-NODE-32`); folds in N-AJ
+
+>
+> **This regeneration is a cluster-close refresh covering TWO clusters, applied directly to the on-disk SEAMS.** The
+> prior on-disk SEAMS was pinned at the PHASE4-N-AI close (`5ec841c8` / **460** canonical types / **157** CI / **354**
+> rules). It is brought current to HEAD `b4c0983d` (the PHASE4-N-AK close — **462** canonical types / **159** CI /
+> **358** rules) and folds in BOTH **PHASE4-N-AJ** (participant-path convergence evidence emission — the CE-AI-6
+> bridge, `DC-NODE-30`; evidence-only, ZERO BLUE change, +2 CI gates) and **PHASE4-N-AK** (recovered-anchor
+> live-follow start + recovered-anchor rollback no-op, `DC-NODE-31` / `DC-NODE-32`; BLUE+RED+GREEN, +2 BLUE canonical
+> types, ZERO CI gates — both N-AK rules TEST-ENFORCED). The N-AJ close (`b1bed361`) had refreshed the OTHER three
+> grounding docs but left this SEAMS at the N-AI pin; this regen pays that one-cluster debt AND adds N-AK.
+>
+> **HONESTY (load-bearing — do NOT soften / do NOT broaden).** N-AJ + N-AK add **NO new ingress surface**, **NO new
+> openly-extensible / plugin / negotiated / runtime-registered registry**, **NO second chain-selection authority**,
+> and **NO second roll-forward durable admit** (`pump_block` stays sole). Every surface they add is CLOSED / additive
+> (closed discriminants, version-gated, sorted/disjoint store namespace). **`CN-CONS-03` is NOT flipped** (full
+> multi-peer ChainSel stays out of scope), and **NO RO-LIVE rule is flipped** (`RO-LIVE-01` stays operator-gated; the
+> N-AK CE-AK-3 live transcript re-recovers → FindIntersects at the persisted anchor → idempotent-no-ops the relay's
+> `RollBackward(anchor)` → catches up to the frozen c2-relay tip, restoring the recover→follow path to resume N-AJ /
+> CE-AI-6 — it does NOT claim full ChainSel convergence).
+>
+> #### PHASE4-N-AK (recovered-anchor live-follow start + rollback no-op) — the seam-relevant changes
+>
+> **The one new BLUE authority + canonical record (the load-bearing structural change).** N-AK adds the NEW BLUE
+> module `ade_ledger::recovered_anchor_point` — the closed, version-gated, byte-canonical record `RecoveredAnchorPoint
+> {anchor_fp: Hash32, slot: SlotNo, block_hash: Hash32}` (the durable `(slot, block_hash)` the recovered store was
+> seeded at, bound to the recovered anchor fingerprint) + its SOLE canonical CBOR codec pair
+> `encode_/decode_recovered_anchor_point` (the `array(4) [version, anchor_fp, slot, block_hash]` wire form with
+> `RECOVERED_ANCHOR_POINT_SCHEMA_VERSION = 1` written into byte 0; no `Default`, no `#[non_exhaustive]`) + the closed
+> error sum `RecoveredAnchorPointError {MalformedCbor | UnknownVersion {expected, found} | Structural {reason} |
+> TrailingBytes {extra}}` — **the +2 new BLUE canonical types (`460 → 462`)**. It is a **SEPARATE additive record from
+> `SeedEpochConsensusInputs`** (disjoint shape, disjoint `RECOVERED_ANCHOR_POINT_SCHEMA_VERSION = 1` version line,
+> disjoint anchor-fp-keyed `SnapshotStore` surface — it does NOT touch the seed-epoch sidecar's shape / schema /
+> `sidecar_hash` / provenance binding). The Origin distinction (a zero/null `block_hash` is a genesis seed point,
+> NEVER a usable live-follow start) lives in the RESOLVER (`ade_runtime::bootstrap::resolve_live_follow_start`), NOT
+> the codec — so the closed record stays a pure round-trippable data carrier. **Where new work attaches:** a new
+> recovered/canonical record with a SOLE codec follows the CN-CINPUT-01 pattern (single BLUE module, version-gated
+> decoder, `BTreeMap`-ordered/byte-canonical, no `Default`/`#[non_exhaustive]` — §5 checklist item 8).
+>
+> **The BLUE load+verify fn (kept OUT of `bootstrap.rs`).** `ade_runtime::recovered_anchor::load_recovered_anchor_point
+> (snapshot_store, expected_anchor_fp) -> Result<ChainTip, BootstrapError>` is the BLUE-by-content load: a single
+> `SnapshotStore::get_recovered_anchor_point` read (RED I/O of a BLUE-authoritative record) + the decode via the SOLE
+> `ade_ledger::recovered_anchor_point` codec + an `anchor_fp` binding check. It is kept OUT of `bootstrap.rs` so
+> `bootstrap_initial_state` stays the single `pub fn` bootstrap authority (CN-NODE-01) — it mirrors
+> `restore_seed_epoch_consensus_inputs`. On the recover path a missing / malformed / fingerprint-mismatched record is
+> a deterministic FAIL-CLOSED halt, NEVER a silent Origin fallback. It advances no tip, writes nothing, mutates no
+> ChainDb/ledger.
+>
+> **NEW closed surfaces (closed discriminants — extension is version-gated / closed, NOT openly extensible; §3 Closed):**
+> - **`RecoveredAnchorPoint`** (BLUE `ade_ledger::recovered_anchor_point`, `DC-NODE-31`) — the closed version-gated
+>   record + its SOLE codec (the +1 record canonical type). `decode` rejects an unknown version / short hash bytes /
+>   trailing bytes / any non-byte-canonical encoding (re-encode != input) fail-fast.
+> - **`RecoveredAnchorPointError`** (BLUE `ade_ledger::recovered_anchor_point`, `DC-NODE-31`) — the closed 4-variant
+>   encode/decode error sum (the +1 error canonical type).
+> - **`BootstrapError::{RecoveredAnchorPointMissing {anchor_fp} | RecoveredAnchorPointDecode(RecoveredAnchorPointError)
+>   | RecoveredAnchorPointBindingMismatch {expected_anchor_fp, actual_anchor_fp}}`** (RED `ade_runtime::bootstrap`,
+>   `DC-NODE-31`) — 3 NEW additive variants on the closed `BootstrapError` sum (RED orchestration error variants over
+>   the BLUE `RecoveredAnchorPointError`; NOT canonical-counted). No wildcard.
+>
+> **NEW additive store namespace (closed / disjoint — §3 Extensible; §4 Frozen for the redb table).** `ade_runtime::
+> chaindb::SnapshotStore::{put,get}_recovered_anchor_point(anchor_fp, …)` is a DISJOINT anchor-fp-keyed namespace —
+> `in_memory` a `BTreeMap<Hash32, Vec<u8>>`, `persistent` the NEW redb table `recovered_anchor_point_by_anchor_fp`.
+> It MUST NOT collide with the slot-keyed snapshot space (`put_snapshot`) or the seed-epoch consensus-inputs sidecar
+> space (`put_seed_epoch_consensus_inputs`); the stored bytes MUST be the canonical `ade_ledger::recovered_anchor_point`
+> encoding (no re-encode / hand-roll); `put` is idempotent on identical bytes + `InvalidOperation` on conflicting
+> bytes (mirrors `put_snapshot`). **The redb table is ADDITIVE — NO `SCHEMA_VERSION` bump** (redb `SCHEMA_VERSION`
+> stays at 3): a pre-AK store reads it as `TableDoesNotExist → Ok(None)` and FAILS CLOSED at the warm-start
+> anchor-point load (the store, not the table read, fails closed on absence). `seed_epoch_lineage::
+> persist_seed_epoch_consensus_inputs` now ALSO writes this record at seed/recover, BEFORE the WAL provenance commit
+> point (the WAL provenance stays the discovery+commit gate; a store carrying the sidecar+WAL but missing this record
+> fails closed at warm-start).
+>
+> **NEW typed Option fields (additive, default `None` — no new wire/runtime negotiation).** `BootstrapInputs.recovered_anchor:
+> Option<ChainTip>` (the canonical live-follow start input `bootstrap_initial_state` reads) and `ForwardSyncState.recovered_anchor:
+> Option<ChainTip>` (GREEN `ade_runtime::forward_sync::reducer` — the threaded recovered-anchor authority the
+> single-producer RollBack handler reads, replay-derivable, default `None`). Both are additive typed fields; neither
+> introduces a new wire / runtime-negotiated surface. The GREEN `forward_sync::reducer` field is NOT a servable block,
+> is never persisted as one, and the new `step` arms never advance the tip from it.
+>
+> **The resolver (closed, pure, module-private).** `ade_runtime::bootstrap::resolve_live_follow_start(servable_chaindb_tip,
+> recovered_anchor) -> Option<ChainTip>` is the pure, total, module-private tip resolver (sole caller
+> `bootstrap_initial_state`, to preserve CN-NODE-01): servable `ChainDb::tip()` wins → else the persisted recovered
+> anchor IFF non-Origin (non-zero `block_hash`) → else `None`. It treats a zero/null-hash recovered anchor as Origin
+> (a genesis seed point carries no peer-intersectable block, so it is NOT a usable start), changes no `ChainDb::tip()`
+> semantics, synthesizes no servable block, and sets ONLY `BootstrapState.tip` (the FindIntersect start surface). The
+> WirePump FindIntersect start is derived from the SAME recovered tip via `ade_node::node_lifecycle::wire_pump_start_point`
+> (an UNCHANGED consumer of the resolved tip).
+>
+> **The rollback boundary (closed predicate, single-producer follow path).** `ade_node::node_sync::run_node_sync`'s
+> RollBack handler now accepts a peer `RollBackward` binding EXACTLY (slot AND hash) to the threaded recovered anchor
+> (`BootstrapState.tip`, threaded as `ForwardSyncState.recovered_anchor`) as an IDEMPOTENT NO-OP boundary rewind
+> (`continue` — no `commit_rollback`, no `WalEntry::RollBack`, no ChainDb / ledger / chain_dep / cursor mutation; the
+> anchor is a recovery-snapshot boundary, NEVER synthesized into a servable block). **EVERY other rollback** —
+> `RollBackward(Origin)` (the AI-S4a fail-close, UNCHANGED), a non-anchor point, a slot-only or hash-only match, or a
+> `RollBack` with no recovered anchor — still FAILS CLOSED (`NodeSyncError::UnexpectedRollback` — REUSED, no new
+> variant). The accepted point binds to the PERSISTED anchor on slot AND hash, NEVER peer-supplied alone; the anchor
+> consumed is the single `BootstrapState.tip` threaded in, NEVER re-read from the store inside the loop. The first
+> forward block after the anchor admits through the EXISTING sole `pump_block` path (AK-S2 adds NO forward-link code).
+> The Participant rollback-follow path (`run_participant_sync`) is SEPARATE and UNTOUCHED. **DC-CONS-03 untouched.**
+>
+> **Registry → 358 rules** (224 enforced / 19 partial / 114 declared / 1 enforced_scaffolding). **N-AK: TWO NEW**
+> (both `introduced_in = "PHASE4-N-AK"`, both `enforced`, both `tier = derived`, both **TEST-ENFORCED** `ci_script =
+> ""`): `DC-NODE-31` (recovered-anchor live-follow start authority; `cross_ref = [DC-NODE-20, DC-NODE-22, DC-NODE-23,
+> DC-NODE-29, T-REC-05, CN-CONS-03]`) + `DC-NODE-32` (recovered-anchor rollback boundary on the single-producer follow
+> path; `cross_ref = [DC-NODE-31, DC-NODE-29, DC-NODE-23, T-REC-05, CN-CONS-03]`). **No rule weakened. `CN-CONS-03`
+> NOT flipped** (stays `partial`/`declared`). **NET +0 CI gates** — N-AK added ZERO `ci_check_*.sh` (`git diff
+> --name-status b1bed361..HEAD -- 'ci/ci_check_*.sh'` is empty); both rules are TEST-ENFORCED (consistent with the
+> project's prior test-enforced `DC-PROTO-10` / `T-REC-05`). The +2 CI gates vs the N-AI pin are BOTH from N-AJ
+> (below). **GAP surfaced (not guessed):** no dedicated `ci_check_*.sh` scans the N-AK rules' STRUCTURAL shape ("the
+> load is the SOLE recovered-anchor-point decode site", "the rollback no-op binds on slot AND hash", "the anchor is
+> never synthesized into a servable block") — the enforcement is the named test suites only (§7 candidate).
+>
+> #### PHASE4-N-AJ (participant-path convergence evidence emission — the CE-AI-6 bridge) — the seam-relevant changes
+>
+> **What it did to the seam surface.** N-AJ is **evidence-only, ZERO BLUE change** (`460 → 460` canonical types; the
+> first BLUE-empty span since the G-N window). It closed the bridge gap where the rollback-follow (node) path emitted
+> no agreement evidence while `--mode admission` ignored rollbacks. It added the GREEN module
+> `ade_node::convergence_evidence` — a closed `ConvergenceEvidenceSink` over `Box<dyn Write>` (RED file I/O
+> underneath, **no raw-writer accessor**) emitting the REUSED closed `AgreementVerdict` vocabulary (`block_received` /
+> `block_admitted` / `agreement_verdict` via `verdict::derive`) to a dedicated `--convergence-evidence-path` JSONL
+> sink as an EMIT-ONLY GREEN side-output. **NO new ingress surface, NO new wire authority, NO new BLUE authority, NO
+> openly-extensible registry.**
+>
+> **NEW closed surfaces (closed discriminants / closed JSONL vocabulary — §3 Closed):**
+> - **`ConvergenceEvidenceSink`** (GREEN `ade_node::convergence_evidence`, `DC-NODE-30` / `DC-EVIDENCE-03`) — the
+>   closed-vocabulary emit-only sink. **EMIT-ONLY:** a write-failure surfaces + poisons + marks incomplete
+>   (`EvidenceEmitResult::FailedAndPoisoned`), is NEVER swallowed, NEVER halts the authority path; emit-only on
+>   `Diverged`; an absent `--convergence-evidence-path` leaves the byte output UNCHANGED; no raw-writer accessor.
+> - **`EvidenceEmitResult {Written | Disabled | FailedAndPoisoned}`** (GREEN `ade_node::convergence_evidence`,
+>   `DC-NODE-30`) — the closed 3-variant emit result. Lives in `ade_node`, so NOT canonical-counted.
+> - **The convergence-evidence file vocabulary is the REUSED closed `AgreementVerdict` vocabulary** — N-AJ introduces
+>   NO new evidence enum; the closed-vocab isolation (`DC-ADMIT-04`, strengthened by N-AJ) extends to this file (no
+>   open/wildcard event variant, no stringly-authoritative field).
+>
+> **Registry (N-AJ): TWO NEW** — `DC-NODE-30` (participant-path convergence evidence emission; `enforced`;
+> `ci_check_convergence_evidence_vocabulary_closed.sh` + `ci_check_convergence_evidence_emit_only.sh`) +
+> `DC-EVIDENCE-03` (convergence-through-reorg transcript shape; `enforced_scaffolding`;
+> `ci_check_convergence_evidence_schema.sh` vacuous-until-committed — the real transcript pending the operator pass) +
+> 1 strengthening (`DC-ADMIT-04`). **`CN-CONS-03` NOT flipped** (CE-AI-6 now PRODUCIBLE + mechanically checkable; the
+> flip is the follow-on operator pass ONLY). **NET +2 CI gates** (157 → 159, both ADDED).
 >
 > ### PHASE4-N-AI cluster close (`5ec841c8`) — live fork-choice rollback-follow wiring (single-best-peer FOLLOW, NOT full ChainSel; `DC-NODE-23`…`DC-NODE-29`)
 
@@ -2487,6 +2628,34 @@ tick now also runs the off-epoch `forge_epoch_admission` guard (via `EraSchedule
 the projection stays the SOLE leadership source. `produce_mode` stays diagnostic and still passes
 `SeedEpochConsensusSource::NotRequired`.
 
+### Domain: recovered-anchor live-follow start + recovered-anchor rollback boundary (N-AK — a SEPARATE additive record from the seed-epoch sidecar above)
+
+| Layer | Module | Color | Role |
+|-------|--------|-------|------|
+| **Authoritative canonical record + SOLE codec** | `ade_ledger::recovered_anchor_point` (`RecoveredAnchorPoint {anchor_fp, slot, block_hash}`, `encode_/decode_recovered_anchor_point`, `RECOVERED_ANCHOR_POINT_SCHEMA_VERSION = 1`) | BLUE | The closed recovered-anchor-point record + its SOLE version-gated, byte-canonical encoder/decoder pair (the `array(4) [version, anchor_fp, slot, block_hash]` wire form). `decode` fail-closes on unknown version, wrong array shape, short hash, trailing bytes, and any non-byte-canonical encoding (re-encode != input) — closed 4-variant `RecoveredAnchorPointError`. No `Default`, no `#[non_exhaustive]`. No second codec. **A SEPARATE additive record from `SeedEpochConsensusInputs`** (disjoint shape/schema/sidecar binding). (DC-NODE-31; the CN-CINPUT-01 analog.) |
+| **Data-only anchor-point store** | `ade_runtime::chaindb::SnapshotStore::{put,get}_recovered_anchor_point` | RED | A DISJOINT anchor-fp-keyed namespace (`in_memory` `BTreeMap<Hash32, Vec<u8>>`; `persistent` the ADDITIVE redb table `recovered_anchor_point_by_anchor_fp`) — disjoint from BOTH the slot-keyed snapshot space AND the seed-epoch sidecar space. Stores the canonical `recovered_anchor_point` encoding verbatim (no re-encode/hand-roll); idempotent on identical bytes, `InvalidOperation` on conflicting bytes. **NO `SCHEMA_VERSION` bump** (a pre-AK store reads `TableDoesNotExist → Ok(None)`). No semantic decision. (DC-NODE-31.) |
+| **Data-only anchor-point appender** | `ade_runtime::seed_epoch_lineage::persist_seed_epoch_consensus_inputs` (anchor-point write) | RED | At seed/recover, ALSO writes the `RecoveredAnchorPoint` record (`put_recovered_anchor_point(anchor_fp, encode_recovered_anchor_point(RecoveredAnchorPoint {anchor_fp, slot = anchor.seed_point.slot, block_hash = anchor.seed_point.block_hash}))`) BEFORE the WAL provenance commit point — so the WAL provenance stays the discovery+commit gate (a store carrying the sidecar+WAL but missing this record fails closed at warm-start). No semantic decision. |
+| **Authoritative load + fail-closed verify** | `ade_runtime::recovered_anchor::load_recovered_anchor_point` (kept OUT of `bootstrap.rs`) | RED read + BLUE verify | The `get_recovered_anchor_point` read is the only RED step; the decode via the SOLE `ade_ledger::recovered_anchor_point` codec + the `anchor_fp` binding check are BLUE, fail-closed via the 3 `BootstrapError::RecoveredAnchorPoint{Missing, Decode, BindingMismatch}` variants. **MUST NOT** silently fall back to Origin on the recover path (a missing / malformed / fingerprint-mismatched record HALTS). Kept OUT of `bootstrap.rs` to preserve the CN-NODE-01 single-`pub fn` authority (mirrors `restore_seed_epoch_consensus_inputs`). (DC-NODE-31.) |
+| **Authoritative live-follow start resolution** | `ade_runtime::bootstrap::resolve_live_follow_start` (module-private; sole caller `bootstrap_initial_state`) | GREEN composition (BLUE-decided) | Pure / total / module-private: servable `ChainDb::tip()` wins → else the persisted recovered anchor IFF non-Origin (non-zero `block_hash`) → else `None`. Treats a zero/null-hash anchor as Origin (NOT a usable start). Sets ONLY `BootstrapState.tip` from already-authoritative inputs; the materialization `target` + `ChainDb::tip()` are UNTOUCHED; synthesizes no servable block. The canonical input is `BootstrapInputs.recovered_anchor: Option<ChainTip>`. (DC-NODE-31.) |
+| **Consume-side FindIntersect start** | `ade_node::node_lifecycle::wire_pump_start_point` (+ `warm_start_recovery` anchor-point load/thread) | RED (driver) | `warm_start_recovery` loads the record (`load_recovered_anchor_point`), threads the returned `ChainTip` as `BootstrapInputs.recovered_anchor`; the new private helper `wire_pump_start_point(recovered_tip) -> ade_network::codec::chain_sync::Point` resolves the live WirePump FindIntersect start from the SAME recovered tip (`Block {slot, hash}` for a real recovered tip, `Origin` only when truly Origin) — so a bare-anchor recovery FindIntersects at the anchor, NEVER blind Origin (which the relay answers `RollBackward(Origin)`, tripping the AI-S4a fail-close). (DC-NODE-31.) |
+| **Consume-side rollback boundary** | `ade_node::node_sync::run_node_sync` (RollBack handler) | RED (driver, BLUE-decided) | Reads the threaded `ForwardSyncState.recovered_anchor` (the SINGLE anchor authority — `BootstrapState.tip`, NEVER re-read from the store inside the loop). A peer `RollBackward` binding EXACTLY (slot AND hash) to it is an IDEMPOTENT NO-OP (`continue` — no `commit_rollback`, no `WalEntry::RollBack`, no ChainDb/ledger/chain_dep/cursor mutation); EVERY other rollback (Origin, non-anchor, slot-only, hash-only, no-anchor) fails closed (`NodeSyncError::UnexpectedRollback` — REUSED). The first forward block after the anchor admits through the EXISTING sole `pump_block` path. (DC-NODE-32.) |
+
+**Rule (DC-NODE-31 / DC-NODE-32):** the recovered anchor point is a **closed canonical record with a SOLE codec**,
+a **SEPARATE additive record from `SeedEpochConsensusInputs`** (disjoint shape / schema version / store namespace —
+it MUST NOT touch the seed-epoch sidecar's shape, `sidecar_hash`, or provenance binding). The RED/GREEN shells store,
+append, load, and resolve; **all semantic decisions (decode, the `anchor_fp` binding check, the Origin distinction)
+live in BLUE.** Population is contained to `seed_epoch_lineage::persist_seed_epoch_consensus_inputs` (seed/recover,
+before the WAL commit). The warm-start load lives in the single `ade_runtime::recovered_anchor` module (kept OUT of
+`bootstrap.rs`) and the resolution in the module-private `resolve_live_follow_start` (sole caller
+`bootstrap_initial_state`) — **neither chokepoint moves the single bootstrap authority** (CN-NODE-01). The Origin
+distinction is the RESOLVER's job, NEVER smuggled into the codec (a zero-hash record stays a representable,
+round-trippable value). The rollback no-op binds on the PERSISTED anchor (slot AND hash), NEVER peer-supplied alone;
+the single-producer follow path stays replay-equivalent (extends T-REC-05 / DC-NODE-31). SCOPE: it MUST NOT add
+general stored-block rollback-follow on the single-producer path, and MUST NOT touch the Participant path
+(`run_participant_sync` — a separate follow-on). `pump_block` stays the sole roll-forward durable admit; DC-CONS-03
+untouched. Both rules are **TEST-ENFORCED** (`ci_script = ""`) — see the §7 candidate for the absent structural gate.
+
+
 ### Domain: node lifecycle + BA-02 evidence (N-F-C; BA-02 file I/O wired N-F-G-C)
 
 | Layer | Module | Color | Role |
@@ -2717,6 +2886,10 @@ ACCEPTS it is the operator-gated RO-LIVE-01 leg (peer ACCEPT NOT claimed here).
 |----------|----------|-------|-------------|
 | `WalEntry::RollBack` + `RollbackPoint` + `RollbackReason` *(NEW BLUE, N-AI / DC-NODE-25 / DC-NODE-27)* | `ade_ledger::wal::event` (BLUE) | `WalEntry::RollBack` = the closed-sum variant at **wire tag 1** (the reserved RollBackward slot; tag 2 `CaptureSnapshot` stays RESERVED); `RollbackReason` **2** (`ForkChoiceWin` / `PeerRollBackward`, uint wire code); `RollbackPoint` = closed 3-field struct (`slot` / `hash` / `block_no`) | The closed durable rollback MARKER + its closed payload types — the **+2 new BLUE canonical types** (`458 → 460`; `RollbackPoint` + `RollbackReason`). **`WalEntry` is version-gated APPEND-ONLY** (tag 1 fulfils the previously-reserved RollBackward slot; tag 2 is untouched; `AdmitBlock` = 0, `SeedEpochConsensusInputsImported` = 3). `RollbackReason::from_wire_code` fails closed on an unknown code; `decode` rejects a non-canonical buffer. **The marker is a DURABLE MARKER re-invoking the EXISTING rollback authority on replay — NOT a second rollback implementation:** its replay arm re-anchors the fp chain to `to_point`'s EXISTING in-chain `post_fp` and re-invokes the EXISTING `materialize_rolled_back_state` (CN-STORE-07) + lockstep `commit_rollback` (DC-CONS-20). **NOT `#[non_exhaustive]`; no catch-all.** **A closed version-gated additive WAL variant + closed payload types (a surface ADDITION behind the WAL schema), NOT an extension point.** Backs **DC-NODE-25 / DC-NODE-27**. A new reason / payload field = a `from_wire_code` arm + an encode/decode arm + a `WalEntry` tag (append-only, never reuse tag 2) + a strengthening of **DC-NODE-27** (`ci_check_wal_rollback_replay_equiv.sh`); the marker MUST stay a re-invocation of the existing rollback authority (no second materialize / commit / rollback impl). See also the Extensible append-only WAL row (tag 1 now USED). |
 | `WalError::RollbackTargetNotInChain` *(NEW BLUE variant, N-AI / DC-NODE-27)* | `ade_ledger::wal::error` (BLUE) | additive variant `{ entry_index, to_slot }` on the EXISTING closed `WalError` sum | The closed fail-closed signal raised on replay when a recorded `WalEntry::RollBack` target is **not in the active chain**. Added **additively, no wildcard** (a variant on the existing `WalError`, NOT a new type — the +2 above are the only new BLUE types). **A closed additive enum variant (a surface REDUCTION / fail-closed wall), NOT an extension point.** Backs **DC-NODE-27**. New variant = a `replay` / `store_trait` arm + a strengthening of **DC-NODE-27**; non-secret slot/index primitives only. |
+| `RecoveredAnchorPoint` + `RecoveredAnchorPointError` *(NEW BLUE, N-AK / DC-NODE-31)* | `ade_ledger::recovered_anchor_point` (BLUE) | `RecoveredAnchorPoint` = closed 3-field record (`anchor_fp: Hash32` / `slot: SlotNo` / `block_hash: Hash32`) with a SOLE codec (`encode_/decode_recovered_anchor_point`, the `array(4) [version, anchor_fp, slot, block_hash]` wire form, `RECOVERED_ANCHOR_POINT_SCHEMA_VERSION = 1` in byte 0); `RecoveredAnchorPointError` **4** (`MalformedCbor` / `UnknownVersion {expected, found}` / `Structural {reason}` / `TrailingBytes {extra}`) | The closed, version-gated, byte-canonical recovered-anchor-point record + its closed error sum — the **+2 new BLUE canonical types** (`460 → 462`; `ade_ledger` 179 → 181). `decode_recovered_anchor_point` is the SOLE decoder: it rejects an unknown version, wrong array shape, short hash bytes, trailing bytes, and any non-byte-canonical encoding (a structurally valid but non-canonical buffer decodes to the same value but re-encodes to different bytes → rejected `MalformedCbor`). **No `Default`, no `#[non_exhaustive]`** (all fields required at construction); no I/O / clock / float / `HashMap`. It is a **SEPARATE additive record from `SeedEpochConsensusInputs`** — disjoint shape, disjoint version line, disjoint anchor-fp-keyed store namespace; it MUST NOT touch the seed-epoch sidecar's shape / schema / `sidecar_hash` / provenance binding, nor share its codec or store namespace. The Origin distinction (a zero/null `block_hash` is a genesis seed point, never a usable start) lives in the RESOLVER (`resolve_live_follow_start`), NOT the codec (a zero-hash record is a representable, round-trippable value). **A closed version-gated canonical record with a SOLE codec (a surface ADDITION behind the schema version), NOT an extension point.** Backs **DC-NODE-31** (test-enforced, `ci_script = ""`). A new field / version = a `decode` arm + a `RECOVERED_ANCHOR_POINT_SCHEMA_VERSION` bump + a strengthening of **DC-NODE-31**; the codec MUST stay the SOLE encode/decode site (the RED `recovered_anchor::load_recovered_anchor_point` + `seed_epoch_lineage` MUST reuse it, never hand-roll), byte-canonical, version-gated, and a SEPARATE record from the seed-epoch sidecar. See also the Extensible recovered-anchor-point store row + the §2 recovered-anchor domain. |
+| `BootstrapError::{RecoveredAnchorPointMissing, RecoveredAnchorPointDecode, RecoveredAnchorPointBindingMismatch}` *(NEW BLUE variants, N-AK / DC-NODE-31)* | `ade_runtime::bootstrap` (RED orchestration over the BLUE record) | 3 additive variants on the EXISTING closed `BootstrapError` sum (`RecoveredAnchorPointMissing {anchor_fp}` / `RecoveredAnchorPointDecode(RecoveredAnchorPointError)` / `RecoveredAnchorPointBindingMismatch {expected_anchor_fp, actual_anchor_fp}`) | The closed fail-closed signals raised by `recovered_anchor::load_recovered_anchor_point` on the recover path: a missing record (`Missing`), a decode failure (`Decode`, wrapping the BLUE `RecoveredAnchorPointError`), or an `anchor_fp` binding mismatch (`BindingMismatch`). Added **additively, no wildcard** (RED orchestration variants over the BLUE `RecoveredAnchorPointError`; lives in `ade_runtime`, so **NOT canonical-counted** — the +2 above are the only new BLUE types). A non-Origin recovered store with no anchor-point record HALTS — NEVER a silent Origin fallback. **A closed additive fail-closed set (a surface REDUCTION / fail-closed wall), NOT an extension point.** Backs **DC-NODE-31**. New variant = a `load_recovered_anchor_point` arm + a strengthening of **DC-NODE-31**; non-secret fingerprint primitives only; the recover path MUST stay fail-closed (never a silent Origin fallback). |
+| `ConvergenceEvidenceSink` *(NEW, N-AJ / DC-NODE-30 / DC-EVIDENCE-03)* | `ade_node::convergence_evidence` (GREEN-by-content) | a closed-vocabulary emit-only sink over `Box<dyn Write>` (RED file I/O underneath; **no raw-writer accessor**); emits the REUSED closed `AgreementVerdict` vocabulary (`block_received` / `block_admitted` / `agreement_verdict` via `verdict::derive`) to a dedicated `--convergence-evidence-path` JSONL sink | The closed-vocabulary convergence-evidence sink for the live Participant rollback-follow path — the CE-AI-6 bridge that closed the gap where the rollback-follow (node) path emitted no agreement evidence while `--mode admission` ignored rollbacks. **EMIT-ONLY:** a write-failure surfaces + poisons + marks incomplete (`EvidenceEmitResult::FailedAndPoisoned`), is NEVER swallowed, NEVER halts the authority path; emit-only on `Diverged`; an absent path leaves the byte output UNCHANGED; no raw-writer accessor. It REUSES the existing closed `AgreementVerdict` vocabulary — **N-AJ introduces NO new evidence enum** (the closed-vocab isolation `DC-ADMIT-04`, strengthened by N-AJ, extends to this file). Lives in `ade_node`, so **NOT canonical-counted**. **A closed emit-only side-output reusing a closed vocabulary (a surface REDUCTION), NOT an extension point / new evidence enum.** Backs **DC-NODE-30** + **DC-EVIDENCE-03** (`enforced_scaffolding`). A new emitted field = a strengthening of the schema gate (`ci_check_convergence_evidence_vocabulary_closed.sh` + `ci_check_convergence_evidence_emit_only.sh` + the vacuous-until-committed `ci_check_convergence_evidence_schema.sh`) over the EXISTING vocabulary — no open variant may be introduced, the sink stays emit-only / never halts authority, and it flips NO RO-LIVE rule. |
+| `EvidenceEmitResult` *(NEW, N-AJ / DC-NODE-30)* | `ade_node::convergence_evidence` (GREEN-by-content) | 3 (`Written` / `Disabled` / `FailedAndPoisoned`) | The closed emit-result of `ConvergenceEvidenceSink`: `Written` (the verdict was emitted), `Disabled` (no `--convergence-evidence-path` — byte-unchanged), `FailedAndPoisoned` (a write failure — surfaced + poisons the sink + marks incomplete, never swallowed, never halts the authority). **NOT `#[non_exhaustive]`; no catch-all.** Lives in `ade_node`, so **NOT canonical-counted**. **A closed emit-result vocabulary (a surface REDUCTION), NOT an extension point.** Backs **DC-NODE-30**. A new variant = an emit arm (no wildcard) + a strengthening of **DC-NODE-30** (`ci_check_convergence_evidence_emit_only.sh`); the sink MUST stay emit-only (a write failure poisons but never halts authority). |
 | `NodeSyncItem` *(NEW, N-AI / DC-PUMP-01)* | `ade_node::node_sync` (RED) | 2 (`Block` / `RollBack(Point)`) | The closed ordered live-feed item. The ordered feed now carries rollbacks as `RollBack(Point)` **interleaved at their exact position** (the rollback POINT preserved — never collapsed to a tip-only signal); `Block` is the existing roll-forward item. **NOT `#[non_exhaustive]`; no catch-all.** Lives in `ade_node`, so **NOT canonical-counted**. **A closed feed-item vocabulary (a surface REDUCTION), NOT an extension point.** Backs **DC-PUMP-01**. A new item kind = a `next` / consume arm (no wildcard) + a strengthening of **DC-PUMP-01** (`ci_check_wire_rollback_signal_preserved.sh`); the rollback POINT must stay preserved end-to-end, never downgraded. |
 | `ReceiveClass` *(NEW, N-AI / DC-NODE-23)* | `ade_node::node_sync` (RED — GREEN-by-function `classify_receive`) | 3 (`AlreadyHave` / `LinearExtend` / `Competing`) | The closed **venue-BLIND** classification of a received candidate (what KIND it is, not what the venue may do). `classify_receive(durable_tip, candidate, in_spine)` is **PURE / TOTAL**, derived SOLELY from the durable tip + the candidate summary + the RED-computed `in_spine` membership flag — it observes **no venue, no wall-clock, no network state**, and **NEVER selects / reorders / prefers chains** (the membership flag is computed from ChainDb by AI-S4; the fn never queries ChainDb). **NOT `#[non_exhaustive]`; no catch-all.** Lives in `ade_node`, so **NOT canonical-counted**. **A closed classifier vocabulary (a surface REDUCTION), NOT an extension point.** Backs **DC-NODE-23**. A new class = a `classify_receive` arm (no wildcard) + a strengthening of **DC-NODE-23** (`ci_check_receive_detector_venue_split.sh`); the classifier MUST stay venue-blind + never select/reorder/prefer chains. |
 | `ReceiveDisposition` *(NEW, N-AI / DC-NODE-24)* | `ade_node::node_sync` (RED — `resolve_disposition`) | 4 (`AlreadyHave` / `LinearExtend` / `NeedsForkChoice` / `RefuseSingleProducer`) | The closed **venue-SPLIT** disposition (what THIS venue is allowed to do with the candidate). `resolve_disposition(class, venue)` is **TOTAL over the closed venue set**: SingleProducer/Unknown ⇒ `RefuseSingleProducer` (the **DC-NODE-20** rung-1 fail-closed, byte-unchanged — never adopt a peer chain); Participant ⇒ `NeedsForkChoice` (handed to the EXISTING `chain_selector` orchestrator → BLUE `select_best_chain`, **DC-CONS-03**); `AlreadyHave` ⇒ drop (idempotent); `LinearExtend` ⇒ admit via the existing `pump_block`. **A raw `followed_peer_tip` NEVER reaches `select_best_chain`.** **NOT `#[non_exhaustive]`; no catch-all.** Lives in `ade_node`, so **NOT canonical-counted**. **A closed venue-split resolver vocabulary (a surface REDUCTION), NOT an extension point.** Backs **DC-NODE-24**. A new disposition = a `resolve_disposition` arm (no wildcard) + a strengthening of **DC-NODE-24** (`ci_check_receive_detector_venue_split.sh`); the resolver MUST stay total over the closed venue set, route competing Participant candidates to the EXISTING selector (no second selector), and keep SingleProducer/Unknown fail-closed. |
@@ -2824,6 +2997,7 @@ ACCEPTS it is the operator-gated RO-LIVE-01 leg (peer ACCEPT NOT claimed here).
 | Served read-side trait seams `ServedHeaderLookup` / `ServedRangeLookup` *(impls extended N-U; durable impl BOUNDED N-AA)* | `ade_network::chain_sync::server::ServedHeaderLookup` + `ade_network::block_fetch::server::ServedRangeLookup` (BLUE reducers) — impls in `ade_runtime` | **THE closed read-side extension surface for the serve reducers.** A new served read-side attaches by IMPLEMENTING these two BLUE trait seams; the BLUE serve reducers + the single `dispatch_server_frame_event_to_outbound` are reused UNCHANGED. **Two impls exist at HEAD:** the produce-mode snapshot impl `ade_runtime::producer::served_chain_lookups::ServedChainLookups` (over `ServedChainSnapshot`) and the NEW N-U durable-chain impl `ade_runtime::network::served_chain_projection::ChainDbServedSource` (over the durable ChainDb — DC-NODE-13). A new impl MUST serve already-durable / already-self-accepted bytes VERBATIM (no re-encode — DC-CONS-17), reuse the single `block_header_bytes` (DC-CONS-18) + `decode_block` (NO parallel splitter, NO `AcceptedBlock` reconstruction), and be selected through a closed `ServedChainSource` variant (NOT a `Box<dyn _>` registry / negotiated surface) — provenance MUST stay structural (durable ChainDb ⇐ `pump_block` / self-accept). **N-AA (DC-SERVEMEM-01): the `--mode node` `ChainDbServedSource` BlockFetch read is now BOUNDED** — it reads via the bounded hash-free ChainDb primitives `range_bytes_capped` + `last_block_bytes` (NOT `iter_from_slot` / `chaindb.tip()`), caps each peer request at the fixed non-configurable `MAX_SERVE_RANGE_BLOCKS = 256`, and fails closed (`ServeRangeOutcome`) on an oversized / inverted / undecodable range; a NEW serve impl MUST likewise read via bounded primitives and cap per request (no unbounded materialization, no `SLOT_BY_HASH` scan). `ci_check_served_chain_projection.sh` + `ci_check_serve_range_bounded.sh`. |
 | Ade-native WAL (append-only) | `ade_runtime::wal` (GREEN-by-content) + `ade_ledger::wal::event` (BLUE encoder/decoder) | Append-only; committed entries are never mutated (`ci_check_wal_append_only.sh`). **`WalEntry` is a deliberately CE-not-law surface** — additively evolvable behind the WAL schema (append-only wire tags; `AdmitBlock` = 0, **`RollBack` = 1 (NEW, N-AI — the durable rollback MARKER, see §3 Closed)**, `SeedEpochConsensusInputsImported` = 3, **tag 2 `CaptureSnapshot` still RESERVED**). An acceptance criterion, NOT a frozen registry-law enum. **N-AI added the tag-1 `RollBack` variant** — a DURABLE MARKER re-invoking the EXISTING rollback authority on replay (NOT a second rollback impl); a new variant attaches as a new append-only tag (NEVER reuse tag 2) + a strengthening of the owning DC rule (`ci_check_wal_rollback_replay_equiv.sh` / `ci_check_wal_append_only.sh`). |
 | Seed-epoch sidecar store (anchor-fp-keyed) *(N-F-A; consumed N-F-C)* | `ade_runtime::chaindb::SnapshotStore::{put,get,list}_seed_epoch_consensus_*` | A new entry is `put` only on the verified-bootstrap composition path, keyed by `anchor_fp` in a namespace disjoint from the slot-keyed snapshot space; idempotent on identical bytes (redb `seed_cinputs_by_anchor_fp` table, `SCHEMA_VERSION = 3`). N-F-C consumes it via `list_seed_epoch_consensus_anchor_fps` + `get_seed_epoch_consensus_inputs` on the WarmStart arm. The forge-time path may NOT `put` here (CN-CINPUT-02). |
+| Recovered-anchor-point store (anchor-fp-keyed, DISJOINT) *(NEW, N-AK / DC-NODE-31)* | `ade_runtime::chaindb::SnapshotStore::{put,get}_recovered_anchor_point` (RED) — `in_memory` `BTreeMap<Hash32, Vec<u8>>` + the additive redb table `recovered_anchor_point_by_anchor_fp` | A new entry is `put` only at seed/recover (by `seed_epoch_lineage::persist_seed_epoch_consensus_inputs`, BEFORE the WAL provenance commit point), keyed by `anchor_fp` in a namespace **DISJOINT from BOTH** the slot-keyed snapshot space (`put_snapshot`) **AND** the seed-epoch consensus-inputs sidecar space (`put_seed_epoch_consensus_inputs`); the stored bytes MUST be the canonical `ade_ledger::recovered_anchor_point` encoding (no re-encode / hand-roll); idempotent on identical bytes, `InvalidOperation` on conflicting bytes (mirrors `put_snapshot`). **The redb table is ADDITIVE — NO `SCHEMA_VERSION` bump** (redb `SCHEMA_VERSION` stays at **3**): a pre-AK store reads it as `TableDoesNotExist → Ok(None)` and the warm-start anchor-point load — NOT the table read — fails closed on absence (`BootstrapError::RecoveredAnchorPointMissing`). The read is consumed by `recovered_anchor::load_recovered_anchor_point` on the recover path (`get_recovered_anchor_point`). The forge-time path may NOT `put` here. (DC-NODE-31; `ci_script = ""`, test-enforced.) |
 | `PerPeerOutbound` map *(N-S-B)* | `ade_runtime::network::outbound_command` — `Arc<RwLock<BTreeMap<PeerId, mpsc::Sender<OutboundCommand>>>>` | Grows at runtime; **`BTreeMap`, not `HashMap`** — deterministic iteration; no cross-peer byte leakage (CN-PEER-OUTBOUND-MAP-01, DC-OUTBOUND-FIFO-01). |
 | `OpCertCounterMap` | `ade_core::consensus::praos_state` (BLUE) | Grows as op-certs are observed; deterministic ordering. |
 | `ServedChainSnapshot` (served blocks) | `ade_ledger::producer::served_chain` (BLUE) | Grows via `served_chain_admit` only; `push_atomic` is the sole publisher. (The N-F-E/N-F-F/N-F-G-A relay-loop forge tick does NOT publish here; N-F-G-B publishes via the sibling task's single `push_atomic` fed by `into_accepted()`.) |
@@ -2835,6 +3009,28 @@ ACCEPTS it is the operator-gated RO-LIVE-01 leg (peer ACCEPT NOT claimed here).
 | Per-protocol tag-24 compositions *(N-X)* | `ade_network::codec::{block_fetch, chain_sync}` | A new CBOR-in-CBOR composition attaches as a `compose_*` / `decompose_*` pair delegating to the single `ade_codec::{wrap_tag24, unwrap_tag24}` authority (CN-WIRE-08). |
 | Bootstrap-source production compositions *(N-Z; +N-F-A sidecar tail)* | `ade_runtime::{genesis_bootstrap, mithril_bootstrap}` | A new bootstrap-source production entry attaches as a **composition-only RED twin** of `bootstrap_from_{conway_genesis, mithril_snapshot}`: import/parse + (if a point is attested) mint the anchor from an operator-independent origin + verify-before-bootstrap (fail-closed) + route through the single `bootstrap_initial_state` authority + the N-F-A sidecar tail. **No new authority, no new `*Anchor` trait/plugin, no new `SeedProvenance` variant unless the source genuinely differs** (CN-MITHRIL-01 / CN-NODE-01 / DC-MITHRIL-02 / CN-CINPUT-02). |
 
+> **Note (N-AJ + N-AK are NOT new extension points — both spans add ONLY closed / additive surfaces).** Neither
+> PHASE4-N-AJ nor PHASE4-N-AK introduces an extensible / negotiated / plugin / `Box<dyn _>` / runtime-registered
+> surface. **N-AJ** is evidence-only (ZERO BLUE change): the GREEN `ConvergenceEvidenceSink` is a closed emit-only
+> sink reusing the EXISTING closed `AgreementVerdict` vocabulary — no new evidence enum, no raw-writer accessor, no
+> open variant; it belongs in the Closed table above (and is gated emit-only). **N-AK** adds the closed version-gated
+> BLUE record `RecoveredAnchorPoint` + its SOLE codec (a SEPARATE additive record from `SeedEpochConsensusInputs`),
+> the closed `BootstrapError` additions, two additive typed `Option<ChainTip>` fields (`BootstrapInputs.recovered_anchor`
+> + the GREEN `ForwardSyncState.recovered_anchor`, default `None`), and ONE additive store row — the DISJOINT
+> anchor-fp-keyed `SnapshotStore::{put,get}_recovered_anchor_point` (the redb table `recovered_anchor_point_by_anchor_fp`,
+> ADDITIVE, **no `SCHEMA_VERSION` bump** — a pre-AK store reads `TableDoesNotExist → Ok(None)`). The new store row is
+> in the Extensible table above; it is **append/disjoint-by-construction**, NOT a negotiated / plugin surface — a new
+> entry is `put` only at seed/recover, keyed by `anchor_fp`, in a namespace disjoint from BOTH the slot-keyed snapshot
+> space and the seed-epoch sidecar space. **No plugin trait, no `Box<dyn _>`, no runtime-registered handler, no
+> negotiated surface, no new `--mode node` flag (N-AJ added `--convergence-evidence-path`, an emit-only side-output
+> path; N-AK added none), no new `NodeBlockSource` / `WalEntry` / `CoordinatorEvent` / `Mode` variant, and (N-AK) ONE
+> new BLUE authority — the closed `RecoveredAnchorPoint` record + its SOLE codec + the BLUE load+verify fn
+> `load_recovered_anchor_point` (kept OUT of `bootstrap.rs`, CN-NODE-01).** The resolver `resolve_live_follow_start`
+> is a REUSE of already-authoritative inputs (the servable `ChainDb::tip()` + the recovered anchor) — NOT a new
+> authority / chokepoint / plugin (`pump_block` stays the sole roll-forward durable admit; `DC-CONS-03` stays the
+> rung-2 fork-choice authority, untouched). The closed surfaces belong in the Closed table above (and §4 Frozen /
+> version-gated).
+>
 > **Note (N-AF … N-AH is NOT a new extension point — the span adds ONLY closed surfaces + a derived recovery
 > field, and REMOVES the cert).** The whole `f87d0056..HEAD` span (N-AF + N-AG + N-AH) introduces **NO extensible /
 > negotiated / plugin / runtime-registered surface.** The new surfaces are all CLOSED: the GREEN `VenuePolicy`
@@ -3266,6 +3462,20 @@ ACCEPTS it is the operator-gated RO-LIVE-01 leg (peer ACCEPT NOT claimed here).
   applicable. **All 460 canonical types**: existing wire formats frozen; new types may be added behind a version
   gate (the canonical-type adds since the prior refresh are the closed `ArrayHead` enum, G-M — 457 → 458; and the
   N-AI closed `RollbackPoint` + `RollbackReason` WAL-marker payload types — 458 → 460). **Hash algorithms**: `blake2b_256` / `blake2b_224` — algorithm immutable per version.
+- **The recovered-anchor-point wire envelope is closed + byte-canonical at version 1 (N-AK, DC-NODE-31 —
+  load-bearing).** `RecoveredAnchorPoint` (`ade_ledger::recovered_anchor_point`) serializes as the closed
+  `array(4) [version, anchor_fp, slot, block_hash]` with `RECOVERED_ANCHOR_POINT_SCHEMA_VERSION = 1` written into
+  byte 0; `encode_/decode_recovered_anchor_point` is the SOLE codec pair. `decode` fail-closes on an unknown
+  version, wrong array shape, short hash bytes, trailing bytes, and ANY non-byte-canonical encoding (a structurally
+  valid but non-canonical buffer decodes to the same value but re-encodes to different bytes and is rejected
+  `MalformedCbor`). It is a **SEPARATE additive record from `SeedEpochConsensusInputs`** — disjoint shape, disjoint
+  version line, disjoint anchor-fp-keyed store namespace; the closed record stays a pure data carrier (the Origin
+  distinction lives in `resolve_live_follow_start`, never the codec). No `Default`, no `#[non_exhaustive]`. The
+  persisted bytes live in the ADDITIVE redb table `recovered_anchor_point_by_anchor_fp` — a NEW table that does NOT
+  bump redb `SCHEMA_VERSION` (stays at 3; a pre-AK store reads `TableDoesNotExist → Ok(None)` and the warm-start
+  load fails closed on absence). A change to the wire shape = a `RECOVERED_ANCHOR_POINT_SCHEMA_VERSION` bump + a
+  `decode` arm + a strengthening of **DC-NODE-31** (test-enforced, `ci_script = ""`); the codec MUST stay the SOLE
+  encode/decode site (the RED load + `seed_epoch_lineage` reuse it, never hand-roll).
 
 ### Version-gated (can evolve across major versions)
 
@@ -3275,6 +3485,8 @@ ACCEPTS it is the operator-gated RO-LIVE-01 leg (peer ACCEPT NOT claimed here).
   array-head grammar), `WalEntry::RollBack` + `RollbackReason` (N-AI — the durable rollback MARKER + its reason
   code), `NodeSyncItem` / `ReceiveClass` / `ReceiveDisposition` / `ForgeRefused::ReselectionPending` /
   `AdmissionPeerEvent::RollBackward` / `VenueRole` (N-AI — the rollback-follow detector/resolver/venue vocabulary),
+  `RecoveredAnchorPointError` + the closed `BootstrapError::RecoveredAnchorPoint{Missing,Decode,BindingMismatch}`
+  additions (N-AK — the recovered-anchor-point load/verify error set),
   …) — each requires a new envelope/schema version +
   a wildcard-free dispatch arm + a registry-rule strengthening. **`PrevHash`** additionally requires the codec
   to stay POSITION-BLIND, the `null` grammar to stay header_body-scoped (out of the `Point`/`Tip` codec), and the
@@ -3283,8 +3495,15 @@ ACCEPTS it is the operator-gated RO-LIVE-01 leg (peer ACCEPT NOT claimed here).
 - The `Ba02Manifest` schema (`BA02_MANIFEST_SCHEMA_VERSION = 1`) — additions bump the schema version; the N-F-G-C
   `CE-G-C-LIVE_*.toml` operator-pass manifest schema (8 closed keys) evolves with it (RO-LIVE-06 /
   CN-OPERATOR-EVIDENCE-01).
-- The redb `chaindb` `SCHEMA_VERSION` (currently **v3**, anchor-fp-keyed seed-epoch sidecar namespace) — a
-  versioned gate, not a frozen contract (N-F-A).
+- The redb `chaindb` `SCHEMA_VERSION` (currently **v3**, anchor-fp-keyed seed-epoch sidecar namespace + — N-AK —
+  the ADDITIVE anchor-fp-keyed `recovered_anchor_point_by_anchor_fp` table) — a versioned gate, not a frozen
+  contract (N-F-A; the N-AK table is ADDITIVE — it does NOT bump `SCHEMA_VERSION`, a pre-AK store reads it as
+  `TableDoesNotExist → Ok(None)`).
+- The **`RECOVERED_ANCHOR_POINT_SCHEMA_VERSION = 1`** (N-AK — the closed `RecoveredAnchorPoint {anchor_fp, slot,
+  block_hash}` record carried in the `array(4) [version, anchor_fp, slot, block_hash]` wire form) decoder —
+  version-gated; a non-v1 buffer fails closed `UnknownVersion`. A SEPARATE additive record from the seed-epoch
+  sidecar (disjoint shape / schema / store namespace); the codec is the SOLE encode/decode site (DC-NODE-31,
+  test-enforced).
 - The `ANCHOR_SCHEMA_VERSION = 2` (`SeedProvenance`) + the **`SEED_CINPUT_SCHEMA_VERSION = 2`** (N-F-G-N — the
   7-field `SeedEpochConsensusInputs` carrying the additive `epoch_nonce: Nonce` eta0 field; a v1 sidecar decodes
   as `UnknownVersion`, never zero-eta0) decoders — version-gated. The schema bump is the canonical example of a
@@ -3342,8 +3561,8 @@ How new modules enter the workspace.
 | Color | Naming convention | Build-config flags | May depend on | MUST NOT depend on |
 |-------|-------------------|--------------------|----------------|--------------------|
 | **BLUE** | `ade_*` crate, or a BLUE `ade_network` submodule path in `.idd-config.json` `core_paths`; `// Core Contract:` + `//! BLUE …` banner first line | `#![deny(unsafe_code)]`, `deny(unwrap_used / expect_used / panic / float_arithmetic)`; no `#[cfg(feature = …)]` semantic gating | Other BLUE modules only (`ade_types` ← `ade_codec`/`ade_crypto` ← `ade_core` ← `ade_ledger`/`ade_plutus`; `ade_network` BLUE submodules ← `ade_codec`+`ade_types`) | `ade_runtime`, `ade_node`, `ade_core_interop`, the RED half of `ade_network`; std runtime / I/O / clock / rand / `HashMap` / float / async |
-| **GREEN** | `ade_testkit` crate, `ade_network::session`, or a GREEN-by-content sub-tree inside `ade_runtime` / `ade_node` (incl. `forward_sync::reducer`, `seed_consensus_merge` (N-F-A), `consensus_inputs::protocol_params` + `consensus_inputs::canonical::require_forge_current_pparams` (N-F-G-A), `clock::checked_millis_to_slot` (N-F-G-A), `ba02_evidence` (N-F-C), `producer::self_accepted_handoff` (N-F-G-B), `run_loop_planner` (N-F-D/N-F-E), `forge_intent` (N-F-F), `node_sync::forge_epoch_admission` (N-F-G-A, GREEN-by-fn), `rehearsal_evidence` (N-F-G-D, the non-promotable `PrivateRehearsalManifest` envelope), `live_log::{sched_event, sched_writer}` (N-F-G-J, the closed emit-only `NodeSchedEvent` / `FeedReason` / `ForgeOutcome` scheduling vocabulary + its byte-deterministic JSONL encoder), `node_sync::forge_header_position` + `node_lifecycle::may_cold_start_forge` (N-F-G-J, GREEN-by-fn — the cold-start header-position + permission decisions inside RED `ade_node`), `node_sync::{forge_followed_tip_admission (N-AE), forge_mode_after_admit, warm_start_forge_mode, single_producer_forge_decision, venue_policy} (N-AF/N-AH, GREEN-by-fn — the closed pure/total/deterministic forge-mode + forge-base-fence + warm-start-re-entry + venue-policy classifiers inside RED node_sync)`, `harness::sync_diff`, `consensus::genesis_pinning` (N-F-G-A, `#[cfg(test)]`)) with a `//! GREEN …` / `// GREEN` banner | Same deny attributes as BLUE; a purity CI gate per sub-tree (`run_loop_planner`: `ci_check_loop_planner_closed.sh`; `forge_intent`: `ci_check_forge_intent_closed.sh`; `protocol_params` + `require_forge_current_pparams`: `ci_check_recovered_ledger_pparams_sourced.sh`; `forge_epoch_admission`: `ci_check_node_forge_single_epoch_fail_closed.sh`; `self_accepted_handoff`: `ci_check_served_chain_handoff_fence.sh`; `genesis_pinning`: `ci_check_genesis_consistency_fixture_present.sh`; `rehearsal_evidence`: `ci_check_rehearsal_manifest_schema.sh`) | BLUE modules | RED modules in non-test deps; nondeterminism; secret material; float; participation in authoritative outputs |
-| **RED** | `ade_runtime`, `ade_node`, `ade_core_interop`, `ade_network::mux::transport` (incl. `forward_sync::pump`, `mithril_import`, `genesis_bootstrap`, `mithril_bootstrap` (N-Z), `seed_consensus_provenance` (N-F-A), `recovery::restart`, `node_lifecycle` (incl. `run_relay_loop` + `ForgeActivation` + `spawn_live_wire_pump_source`, N-F-D/N-F-E/N-F-G-A/N-F-G-C), `node_sync` (N-F-C), `ba02_pass` (N-F-G-C, the operator-pass BA-02 evidence I/O), `rehearsal_pass` (N-F-G-D, the rehearsal-evidence I/O reusing `ba02_pass::correlate_peer_log_file`), the N-F-G-J cold-start wiring in `node_lifecycle` (`may_cold_start_forge` permission gate, GREEN-by-fn) + `node_sync` (`forge_header_position` + the additive `NodeForgeError::RecoveredTipMissingBlockNo`), `operator_forge` (N-F-F; N-F-G-A real parsers), `admission::{seed_to_snapshot, bootstrap}` (N-F-G-A current-pparams install; N-F-G-C `build_n2n_version_table` `pub(crate)`); `*_mode.rs` for mode handlers); `//! RED …` banner | tokio/std/I/O allowed; the `Clock` seam is the SOLE wall-clock observation reachable from a relay-loop/orchestrator driver (N-F-G-A: the forge path uses the checked `checked_millis_to_slot`); key custody confined to `ProducerShell` | Any module | — (RED is the leaf) |
+| **GREEN** | `ade_testkit` crate, `ade_network::session`, or a GREEN-by-content sub-tree inside `ade_runtime` / `ade_node` (incl. `forward_sync::reducer` (N-Y; +the additive `ForwardSyncState.recovered_anchor: Option<ChainTip>` field N-AK, replay-derivable / default `None`), `seed_consensus_merge` (N-F-A), `consensus_inputs::protocol_params` + `consensus_inputs::canonical::require_forge_current_pparams` (N-F-G-A), `clock::checked_millis_to_slot` (N-F-G-A), `ba02_evidence` (N-F-C), `producer::self_accepted_handoff` (N-F-G-B), `run_loop_planner` (N-F-D/N-F-E), `forge_intent` (N-F-F), `node_sync::forge_epoch_admission` (N-F-G-A, GREEN-by-fn), `rehearsal_evidence` (N-F-G-D, the non-promotable `PrivateRehearsalManifest` envelope), `live_log::{sched_event, sched_writer}` (N-F-G-J, the closed emit-only `NodeSchedEvent` / `FeedReason` / `ForgeOutcome` scheduling vocabulary + its byte-deterministic JSONL encoder), `node_sync::forge_header_position` + `node_lifecycle::may_cold_start_forge` (N-F-G-J, GREEN-by-fn — the cold-start header-position + permission decisions inside RED `ade_node`), `node_sync::{forge_followed_tip_admission (N-AE), forge_mode_after_admit, warm_start_forge_mode, single_producer_forge_decision, venue_policy} (N-AF/N-AH, GREEN-by-fn — the closed pure/total/deterministic forge-mode + forge-base-fence + warm-start-re-entry + venue-policy classifiers inside RED node_sync)`, `harness::sync_diff`, `consensus::genesis_pinning` (N-F-G-A, `#[cfg(test)]`)) with a `//! GREEN …` / `// GREEN` banner | Same deny attributes as BLUE; a purity CI gate per sub-tree (`run_loop_planner`: `ci_check_loop_planner_closed.sh`; `forge_intent`: `ci_check_forge_intent_closed.sh`; `protocol_params` + `require_forge_current_pparams`: `ci_check_recovered_ledger_pparams_sourced.sh`; `forge_epoch_admission`: `ci_check_node_forge_single_epoch_fail_closed.sh`; `self_accepted_handoff`: `ci_check_served_chain_handoff_fence.sh`; `genesis_pinning`: `ci_check_genesis_consistency_fixture_present.sh`; `rehearsal_evidence`: `ci_check_rehearsal_manifest_schema.sh`) | BLUE modules | RED modules in non-test deps; nondeterminism; secret material; float; participation in authoritative outputs |
+| **RED** | `ade_runtime`, `ade_node`, `ade_core_interop`, `ade_network::mux::transport` (incl. `forward_sync::pump`, `mithril_import`, `genesis_bootstrap`, `mithril_bootstrap` (N-Z), `seed_consensus_provenance` (N-F-A), `recovery::restart`, `recovered_anchor` (N-AK — `load_recovered_anchor_point`, the BLUE-by-content load+verify kept OUT of `bootstrap.rs`), `seed_epoch_lineage` (incl. the N-AK anchor-point write at seed/recover), `chaindb` (incl. the N-AK DISJOINT anchor-fp-keyed `SnapshotStore::{put,get}_recovered_anchor_point` + the additive redb table `recovered_anchor_point_by_anchor_fp`), `node_lifecycle` (incl. `run_relay_loop` + `ForgeActivation` + `spawn_live_wire_pump_source`, N-F-D/N-F-E/N-F-G-A/N-F-G-C; +the N-AK `warm_start_recovery` anchor-point load/thread + the `wire_pump_start_point` FindIntersect-start helper), `node_sync` (N-F-C), `ba02_pass` (N-F-G-C, the operator-pass BA-02 evidence I/O), `rehearsal_pass` (N-F-G-D, the rehearsal-evidence I/O reusing `ba02_pass::correlate_peer_log_file`), the N-F-G-J cold-start wiring in `node_lifecycle` (`may_cold_start_forge` permission gate, GREEN-by-fn) + `node_sync` (`forge_header_position` + the additive `NodeForgeError::RecoveredTipMissingBlockNo`), `operator_forge` (N-F-F; N-F-G-A real parsers), `admission::{seed_to_snapshot, bootstrap}` (N-F-G-A current-pparams install; N-F-G-C `build_n2n_version_table` `pub(crate)`); `*_mode.rs` for mode handlers); `//! RED …` banner | tokio/std/I/O allowed; the `Clock` seam is the SOLE wall-clock observation reachable from a relay-loop/orchestrator driver (N-F-G-A: the forge path uses the checked `checked_millis_to_slot`); key custody confined to `ProducerShell` | Any module | — (RED is the leaf) |
 
 ### New module checklist
 
@@ -3477,10 +3696,12 @@ How new modules enter the workspace.
     (iv) keep the record a single closed canonical type with the SOLE codec (no `Default`, no `#[non_exhaustive]`,
     `BTreeMap`-ordered) — the field is additive ONLY behind the version gate, NOT a new TYPE.
 
-### CI gates that enforce the boundary (157 total; the N-AI / N-AH / N-AG / N-AF / N-AE.F / N-AE / N-AC / N-AB / N-AA / N-U / N-F-G-K…G-R / N-F-G-J / N-F-G-D / N-F-G-E / N-F-G-C / N-F-G-B / N-F-G-A / N-F-F / N-F-D-E / N-F-C / N-F-A / N-Z / N-Y / producer / network set)
+### CI gates that enforce the boundary (159 total; the N-AJ / N-AI / N-AH / N-AG / N-AF / N-AE.F / N-AE / N-AC / N-AB / N-AA / N-U / N-F-G-K…G-R / N-F-G-J / N-F-G-D / N-F-G-E / N-F-G-C / N-F-G-B / N-F-G-A / N-F-F / N-F-D-E / N-F-C / N-F-A / N-Z / N-Y / producer / network set; **PHASE4-N-AK added 0 gates — both N-AK rules `DC-NODE-31` / `DC-NODE-32` are TEST-ENFORCED, `ci_script = ""`**)
 
 | Script | Enforces | Cluster |
 |---|---|---|
+| `ci_check_convergence_evidence_vocabulary_closed.sh` *(NEW N-AJ)* | **DC-NODE-30 / DC-ADMIT-04** — the `--convergence-evidence-path` sink (`ade_node::convergence_evidence::ConvergenceEvidenceSink`) emits the REUSED CLOSED `AgreementVerdict` vocabulary ONLY (`block_received` / `block_admitted` / `agreement_verdict` via `verdict::derive`); an open/wildcard variant or a stringly-authoritative field is a compile error + an allow-list-test failure. NO new evidence enum. | N-AJ |
+| `ci_check_convergence_evidence_emit_only.sh` *(NEW N-AJ)* | **DC-NODE-30 / DC-EVIDENCE-03** — the convergence-evidence sink is EMIT-ONLY: a write-failure surfaces + poisons + marks incomplete (`EvidenceEmitResult::FailedAndPoisoned`), is NEVER swallowed, NEVER halts the authority path; emit-only on `Diverged`; an absent path leaves the byte output UNCHANGED; no raw-writer accessor. (The convergence-through-reorg transcript shape `DC-EVIDENCE-03` is `enforced_scaffolding` via the vacuous-until-committed `ci_check_convergence_evidence_schema.sh` — the real transcript is pending the operator pass.) | N-AJ |
 | `ci_check_wal_rollback_replay_equiv.sh` *(NEW N-AI AI-S1)* | **DC-NODE-27** — the ordered live receive-event sequence (RollForward headers, RollBackward points, body deliveries) replayed against the same anchor + durable log produces a BYTE-IDENTICAL durable tip + ledger fp + PraosChainDepState INCLUDING rollback+reselection; a live rollback is recorded durably as the append-only canonical `WalEntry::RollBack` MARKER (tag 1) whose replay arm re-anchors the fp chain to `to_point`'s EXISTING in-chain `post_fp` and re-invokes the EXISTING `materialize_rolled_back_state` + lockstep `commit_rollback` — **NOT a second rollback implementation**; a rollback target not in the active chain fails closed (`RollbackTargetNotInChain`). | N-AI |
 | `ci_check_receive_detector_venue_split.sh` *(NEW N-AI AI-S2)* | **DC-NODE-23 + DC-NODE-24** — a peer-origin item is classified ONCE venue-blind by the pure total `classify_receive(durable_tip, candidate, in_spine) -> ReceiveClass {AlreadyHave | LinearExtend | Competing}` (observes no venue / clock / network state; NEVER selects / reorders / prefers chains); `resolve_disposition(class, venue)` is TOTAL over the closed venue set — SingleProducer/Unknown ⇒ `RefuseSingleProducer` (the DC-NODE-20 fail-closed, byte-unchanged), Participant ⇒ `NeedsForkChoice` routed to the EXISTING `chain_selector` → BLUE `select_best_chain` (DC-CONS-03); a raw `followed_peer_tip` NEVER reaches `select_best_chain`. | N-AI |
 | `ci_check_live_fork_choice_apply.sh` *(NEW N-AI AI-S3)* | **DC-NODE-25 + DC-NODE-26 + DC-NODE-27** — a `ChainSelected`/`RolledBack` outcome is applied to the durable stores ONLY via the EXISTING enforced authorities (lockstep reducer DC-CONS-20 + `materialize_rolled_back_state` CN-STORE-07 + `pump_block` DC-NODE-05/12); NO second apply / tip-advance / rollback-materialize path; a fork-choice win is durably adopted ONLY when its BODIES validate+apply (no header-only tip advance); after any applied decision the orchestrator `selector.current_tip` EQUALS the durable `ChainDb::tip` (mismatch fails fast); a rejected decision makes no durable change. | N-AI |
@@ -3869,6 +4090,50 @@ How new modules enter the workspace.
 
 ### Project-specific additions (Ade)
 
+- **Recovered-anchor live-follow start + recovered-anchor rollback no-op honest scope + boundary (N-AK,
+  load-bearing — do NOT soften / do NOT broaden / do NOT overstate as full ChainSel or as a bounty win):** N-AK
+  makes a bare-anchor recovery (no servable post-anchor block) FindIntersect at the persisted recovered anchor and
+  accept the relay's boundary `RollBackward(anchor)` as an idempotent no-op — and **nothing more**. The hard
+  boundaries (all TEST-ENFORCED — `ci_script = ""`, no dedicated structural gate; see the §7 candidate): **(1) ONE
+  new BLUE authority** — the closed version-gated `RecoveredAnchorPoint` record + its SOLE codec
+  (`ade_ledger::recovered_anchor_point`, `RECOVERED_ANCHOR_POINT_SCHEMA_VERSION = 1`) + the BLUE load+verify fn
+  `load_recovered_anchor_point` (kept OUT of `bootstrap.rs`, CN-NODE-01); a SEPARATE additive record from
+  `SeedEpochConsensusInputs` (disjoint shape / schema / store namespace). **(2) The codec is the SOLE encode/decode
+  site** — byte-canonical, version-gated, no `Default` / `#[non_exhaustive]`; the RED load + `seed_epoch_lineage`
+  MUST reuse it, never hand-roll. **(3) The Origin distinction lives in the RESOLVER, not the codec** — a zero-hash
+  record is a representable round-trippable value; `resolve_live_follow_start` (pure / total / module-private) treats
+  it as Origin (not a usable start). **(4) FAIL-CLOSED on the recover path** — a non-Origin recovered store with a
+  missing / malformed / fingerprint-mismatched anchor-point record HALTS (`BootstrapError::RecoveredAnchorPoint{Missing,
+  Decode, BindingMismatch}`), NEVER a silent Origin fallback. **(5) The store namespace is DISJOINT** — the
+  anchor-fp-keyed `SnapshotStore::{put,get}_recovered_anchor_point` (redb table `recovered_anchor_point_by_anchor_fp`,
+  ADDITIVE, **no `SCHEMA_VERSION` bump**) MUST NOT collide with the slot-keyed snapshot or seed-epoch sidecar spaces;
+  a pre-AK store reads `TableDoesNotExist → Ok(None)`. **(6) The rollback no-op binds on the PERSISTED anchor (slot
+  AND hash)** — `BootstrapState.tip` threaded as `ForwardSyncState.recovered_anchor` is the single authority (NEVER
+  re-read from the store inside the loop, NEVER peer-supplied alone); a slot-only / hash-only / Origin / non-anchor /
+  no-anchor rollback fails closed (`NodeSyncError::UnexpectedRollback`). **(7) `pump_block` stays the SOLE roll-forward
+  durable admit** — the first forward block after the anchor admits through it; AK-S2 adds NO forward-link code;
+  recover→follow stays replay-equivalent (extends T-REC-05 / DC-NODE-31). **(8) SCOPE** — N-AK adds NO general
+  stored-block rollback-follow on the single-producer path and does NOT touch the Participant path
+  (`run_participant_sync` — a separate follow-on). **NO RO-LIVE flip, `CN-CONS-03` NOT flipped, DC-CONS-03 untouched.**
+  Two rules `DC-NODE-31` / `DC-NODE-32` `enforced` (test-enforced); the +2 BLUE canonical types
+  (`RecoveredAnchorPoint` / `RecoveredAnchorPointError`); no openly-extensible registry, no new ingress surface, no
+  second tip-advance path.
+
+- **Participant-path convergence evidence emission honest scope + boundary (N-AJ, load-bearing — do NOT overstate as
+  acceptance / convergence):** N-AJ emits the REUSED closed `AgreementVerdict` vocabulary from the live Participant
+  rollback-follow path to a dedicated `--convergence-evidence-path` JSONL sink — and **nothing more** (ZERO BLUE
+  change). The hard boundaries (mechanically fenced): **(1) EMIT-ONLY** — `ConvergenceEvidenceSink` is a GREEN
+  side-output over `Box<dyn Write>`; a write-failure surfaces + poisons + marks incomplete
+  (`EvidenceEmitResult::FailedAndPoisoned`), is NEVER swallowed, NEVER halts the authority path; emit-only on
+  `Diverged`; an absent path leaves the byte output UNCHANGED; no raw-writer accessor. **(2) NO new evidence enum** —
+  it REUSES the existing closed `AgreementVerdict` vocabulary; the closed-vocab isolation (`DC-ADMIT-04`) extends to
+  this file (no open variant, no stringly-authoritative field). **(3) NO acceptance / convergence claim** —
+  `DC-EVIDENCE-03` is `enforced_scaffolding` (the schema gate is vacuous-until-committed; the real transcript is
+  pending the operator pass); `CN-CONS-03` is NOT flipped (CE-AI-6 is now PRODUCIBLE + mechanically checkable, the
+  flip is the follow-on operator pass ONLY); NO RO-LIVE flip (`RO-LIVE-01` stays operator-gated). Two rules
+  `DC-NODE-30` (`enforced`) + `DC-EVIDENCE-03` (`enforced_scaffolding`); +2 CI gates
+  (`ci_check_convergence_evidence_{vocabulary_closed,emit_only}.sh`); 1 strengthening (`DC-ADMIT-04`).
+
 - **Live fork-choice rollback-follow honest scope + boundary (N-AI, load-bearing — do NOT soften / do NOT broaden /
   do NOT overstate as full ChainSel):** N-AI wires **single-best-peer rollback-FOLLOW** on the live Participant
   `--mode node` receive path — and **nothing more**. The hard boundaries (all mechanically fenced): **(1) NOT full
@@ -4237,6 +4502,28 @@ How new modules enter the workspace.
 > Surfaced honestly per IDD: these are **declared** future attach points, not closed surfaces. Each is named
 > in a registry rule or a cluster CLOSURE record.
 >
+> **N-AK + N-AJ open NO new openly-extensible attach point, and surface ONE gap candidate — the absent N-AK
+> STRUCTURAL CI gate.** Both spans add only CLOSED / additive surfaces (the N-AK `RecoveredAnchorPoint` record + SOLE
+> codec + disjoint store namespace; the N-AJ emit-only `ConvergenceEvidenceSink` reusing the existing closed
+> vocabulary). Neither adds a plugin / negotiated / runtime-registered surface, a new ingress surface, or a second
+> tip-advance / chain-selection authority. **ONE §7 effect:**
+> **(a) NEW candidate #11 — the absent N-AK structural CI gate (a GAP, not a wired seam — surfaced honestly, not
+> guessed).** Both N-AK rules `DC-NODE-31` / `DC-NODE-32` are **TEST-ENFORCED** (`ci_script = ""`) — the enforcement
+> is the named test suites in their registry `tests` arrays (e.g. `recovered_anchor_point_round_trips_byte_identical`,
+> `resolve_live_follow_start_treats_zero_hash_anchor_as_origin`, `warm_start_non_origin_anchor_missing_anchor_point_fails_closed`,
+> `ak_s2_rollback_to_recovered_anchor_is_idempotent_noop`, `ak_s2_non_anchor_rollback_fails_closed_slot_and_hash_bound`).
+> There is **NO dedicated `ci_check_*.sh`** that scans the rules' STRUCTURAL shape — e.g. "`decode_recovered_anchor_point`
+> is the SOLE recovered-anchor-point decode site (no parallel/hand-rolled decode in the RED load or
+> `seed_epoch_lineage`)", "the rollback no-op binds on slot AND hash (never slot-alone / hash-alone / peer-supplied)",
+> "the recovered anchor is never synthesized into a servable block (`ChainDb::tip()` / `last_block_bytes` / serve
+> never return it)", or "the recovered-anchor-point store namespace is disjoint from the snapshot + seed-epoch
+> sidecar namespaces". A future hardening slice MAY add such a structural gate (a strengthening of `DC-NODE-31` /
+> `DC-NODE-32`) — consistent with the project's prior test-enforced rules (`DC-PROTO-10`, `T-REC-05`) that likewise
+> mint no gate. Surfaced for the user to confirm/reject the framing; it is a candidate, NOT a wired seam.
+> **(b) candidate #10 (the forward seam `chain_selector::process_rollback`, test-only) is UNCHANGED by N-AK/N-AJ** —
+> the N-AK single-producer rollback no-op rides `run_node_sync` (not the orchestrator), and the Participant path
+> (`run_participant_sync`) is untouched; the orchestrator `process_rollback` remains test-only with no live caller.
+>
 > **N-AI wires single-best-peer rollback-FOLLOW and surfaces ONE new candidate — the test-only orchestrator
 > rollback path — while SHARPENING candidate #7/#8 (full multi-peer ChainSel / rung 2).** PHASE4-N-AI wired the
 > live Participant `--mode node` rollback-follow receive path (`DC-NODE-23`…`DC-NODE-29`, all enforced): a
@@ -4603,6 +4890,75 @@ How new modules enter the workspace.
 
 ## Generation notes
 
+- **Regenerated (cluster-close refresh covering TWO clusters, PHASE4-N-AK folding in PHASE4-N-AJ) at HEAD
+  `b4c0983d`** (`git rev-parse --short HEAD` — the *PHASE4-N-AK close*), applied DIRECTLY to the on-disk SEAMS. The
+  prior on-disk SEAMS was pinned at the PHASE4-N-AI close (`5ec841c8` / **460** canonical types / **157** CI / **354**
+  rules). It is brought current to HEAD `b4c0983d` (**462** canonical types / **159** CI / **358** rules), folding in
+  BOTH **PHASE4-N-AJ** (participant-path convergence evidence emission — the CE-AI-6 bridge, `DC-NODE-30`;
+  evidence-only, ZERO BLUE change, +2 CI gates) AND **PHASE4-N-AK** (recovered-anchor live-follow start +
+  recovered-anchor rollback no-op, `DC-NODE-31` / `DC-NODE-32`; BLUE+RED+GREEN, +2 BLUE canonical types, ZERO CI
+  gates — both N-AK rules TEST-ENFORCED). The N-AJ close (`b1bed361`) refreshed the OTHER three grounding docs but
+  left this SEAMS at the N-AI pin; this regen pays that one-cluster debt AND adds N-AK. It reads the regenerated
+  CODEMAP (`docs/ade-CODEMAP.md`, regenerated at `b4c0983d`) — specifically its "Closed enums / registries (for SEAMS
+  cross-reference)" section, which carries the N-AK `RecoveredAnchorPoint` + `RecoveredAnchorPointError` + the
+  `BootstrapError` additions, and the N-AJ `EvidenceEmitResult` + reused `AgreementVerdict` convergence-evidence
+  vocabulary.
+- **What the N-AK cluster did to the seam surface:** it added ONE new BLUE module + authority
+  (`ade_ledger::recovered_anchor_point` — the closed version-gated `RecoveredAnchorPoint` record + its SOLE canonical
+  CBOR codec, `RECOVERED_ANCHOR_POINT_SCHEMA_VERSION = 1`; +2 BLUE canonical types, `460 → 462`), ONE BLUE load+verify
+  fn (`ade_runtime::recovered_anchor::load_recovered_anchor_point`, kept OUT of `bootstrap.rs` to preserve the
+  CN-NODE-01 single-`pub fn` authority), ONE DISJOINT anchor-fp-keyed store namespace (the
+  `SnapshotStore::{put,get}_recovered_anchor_point` methods + the ADDITIVE redb table
+  `recovered_anchor_point_by_anchor_fp`, **no `SCHEMA_VERSION` bump**), the 3 closed `BootstrapError::RecoveredAnchorPoint*`
+  variants, two additive typed `Option<ChainTip>` fields (`BootstrapInputs.recovered_anchor` + the GREEN
+  `ForwardSyncState.recovered_anchor`), the pure module-private resolver `resolve_live_follow_start`, and the RED
+  `node_lifecycle` / `node_sync` follow wiring (`wire_pump_start_point`; the `run_node_sync` recovered-anchor
+  idempotent-no-op-vs-fail-closed RollBack predicate). It is a **SEPARATE additive record from
+  `SeedEpochConsensusInputs`** (disjoint shape / schema / store namespace). **NO new ingress surface, NO new
+  openly-extensible / plugin / negotiated registry, NO second chain-selection authority (DC-CONS-03 untouched), NO
+  second roll-forward durable admit (`pump_block` stays sole), NO RO-LIVE flip, `CN-CONS-03` NOT flipped.** Both
+  rules `DC-NODE-31` / `DC-NODE-32` are TEST-ENFORCED (`ci_script = ""`).
+- **What the N-AJ cluster did to the seam surface:** it added ONE GREEN module (`ade_node::convergence_evidence` —
+  the closed emit-only `ConvergenceEvidenceSink` over `Box<dyn Write>` + `EvidenceEmitResult`) reusing the EXISTING
+  closed `AgreementVerdict` vocabulary to a dedicated `--convergence-evidence-path` sink. ZERO BLUE change
+  (`460 → 460`). **NO new evidence enum, NO new ingress / wire / BLUE authority, NO openly-extensible registry, NO
+  RO-LIVE flip, `CN-CONS-03` NOT flipped** (CE-AI-6 now PRODUCIBLE + mechanically checkable; the flip is the
+  follow-on operator pass ONLY). +2 CI gates (`ci_check_convergence_evidence_{vocabulary_closed,emit_only}.sh`).
+- **Span delta spot-checked at HEAD `b4c0983d` (grep/ls/git only — no `cargo`):** `ls ci/ci_check_*.sh | wc -l` =
+  **159**; `grep -cE '^id = ' docs/ade-invariant-registry.toml` = **358** (224 enforced / 19 partial / 114 declared /
+  1 enforced_scaffolding); the BLUE canonical-type grep (6 BLUE crate `src/` trees + the 9 BLUE `ade_network`
+  submodule paths) = **462** (352 BLUE crates — `ade_ledger` 179 → 181 — + 110 `ade_network` BLUE submodules). The
+  four new rules `DC-NODE-30` (enforced) / `DC-EVIDENCE-03` (enforced_scaffolding) / `DC-NODE-31` (enforced) /
+  `DC-NODE-32` (enforced) are present. **N-AK added 0 CI gates** — `git diff --name-status b1bed361..HEAD --
+  'ci/ci_check_*.sh'` is empty; the +2 vs the N-AI pin are the N-AJ `ci_check_convergence_evidence_vocabulary_closed.sh`
+  + `ci_check_convergence_evidence_emit_only.sh`. Source confirms:
+  `ade_ledger::recovered_anchor_point::{RecoveredAnchorPoint, RecoveredAnchorPointError, encode_recovered_anchor_point,
+  decode_recovered_anchor_point, RECOVERED_ANCHOR_POINT_SCHEMA_VERSION}`;
+  `ade_runtime::recovered_anchor::load_recovered_anchor_point`; `ade_runtime::bootstrap::{resolve_live_follow_start,
+  BootstrapInputs.recovered_anchor, BootstrapError::RecoveredAnchorPoint{Missing,Decode,BindingMismatch}}`;
+  `ade_runtime::chaindb::SnapshotStore::{put,get}_recovered_anchor_point` + the redb table
+  `recovered_anchor_point_by_anchor_fp`; `ade_runtime::forward_sync::reducer` `ForwardSyncState.recovered_anchor`;
+  `ade_node::node_lifecycle::wire_pump_start_point` + `warm_start_recovery`; `ade_node::node_sync::run_node_sync` (the
+  recovered-anchor RollBack predicate); `ade_node::convergence_evidence::{ConvergenceEvidenceSink, EvidenceEmitResult}`.
+- **Cross-reference check (CODEMAP ↔ SEAMS ↔ registry) at the N-AK refresh — read honestly:** all three AGREE on the
+  counts at HEAD `b4c0983d` (**462 / 159 / 358**). The CODEMAP was regenerated at `b4c0983d` (per its header,
+  "Active cluster at HEAD: PHASE4-N-AK … CLOSED") and carries the N-AK + N-AJ additions in its "Closed enums /
+  registries" section. No stale module references in this SEAMS; every module it newly cites is inventoried in the
+  CODEMAP in the SAME TCB color (`ade_ledger::recovered_anchor_point` BLUE; `ade_runtime::recovered_anchor`
+  BLUE-by-content; `ade_runtime::{bootstrap, chaindb, seed_epoch_lineage}` RED with the GREEN `forward_sync::reducer`
+  field; `ade_node::{node_lifecycle, node_sync}` RED; `ade_node::convergence_evidence` GREEN).
+- **Cross-reference WARNING (carried, registry is canonical):** the task brief + the CODEMAP header describe
+  `CN-CONS-03` as staying **`partial`**, but the **registry ground truth is `status = "declared"`** for `CN-CONS-03`.
+  The load-bearing fact is identical — **`CN-CONS-03` was NOT flipped to `enforced`; full multi-peer ChainSel
+  convergence remains out of scope** — but this SEAMS does not assert the specific label `partial` for `CN-CONS-03`
+  (the registry says `declared`). Flagged for the next CODEMAP/registry reconciliation.
+- **Candidate seams surfaced for confirm/reject (this refresh):** **ONE NEW — candidate #11 (the absent N-AK
+  STRUCTURAL CI gate; a GAP, not a wired seam).** Both N-AK rules `DC-NODE-31` / `DC-NODE-32` are TEST-ENFORCED
+  (`ci_script = ""`) — the enforcement is the named test suites only; there is NO dedicated `ci_check_*.sh` scanning
+  the rules' structural shape (sole-decode-site / slot-AND-hash binding / never-synthesize-a-servable-block /
+  disjoint store namespace). Surfaced honestly (consistent with the prior test-enforced `DC-PROTO-10` / `T-REC-05`),
+  for the user to confirm/reject the framing. Candidate #10 (the test-only orchestrator `chain_selector::process_rollback`)
+  is unchanged by N-AK/N-AJ.
 - **Regenerated (single-cluster cluster-close refresh, PHASE4-N-AI) at HEAD `5ec841c8`** (`git rev-parse --short
   HEAD` — the *PHASE4-N-AI close*), applied DIRECTLY to the on-disk SEAMS. The prior on-disk SEAMS was pinned at the
   PHASE4-N-AH close (`5858288e` / **458** canonical types / **148** CI / **347** rules). It is brought current to

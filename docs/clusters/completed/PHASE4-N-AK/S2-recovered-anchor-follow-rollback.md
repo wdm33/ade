@@ -7,7 +7,7 @@ rewind, so the recover→follow completes through the existing `pump_block`. The
 of PHASE4-N-AK.
 
 ## 2. Slice Header
-- **Cluster:** PHASE4-N-AK. **Status:** Proposed.
+- **Cluster:** PHASE4-N-AK. **Status:** Merged (commit `b4c0983d`).
 - **Cluster Exit Criteria Addressed:** CE-AK-S2-1..5 (hermetic) + CE-AK-3 (live, end-to-end — spans
   AK-S1 + AK-S2).
 - **Primary registry rule:** DC-NODE-32 (`declared` → targeted `enforced` at AK close).
@@ -27,8 +27,9 @@ block, weakening `RollBackward(Origin)` rejection, or touching `pump_block`.
   (`crates/ade_node/src/node_sync.rs`): pure `(peer_point, recovered_anchor) → {AnchorNoop,
   FailClosed}`. The authoritative decision "is this rollback target the recovered boundary?".
 - **Canonical input** — the recovered anchor point `BootstrapState.tip` (AK-S1 / DC-NODE-31).
-- **RED (wiring)** — threading `BootstrapState.tip` from `run_node_lifecycle` through
-  `run_relay_loop_with_sched` into `run_node_sync` (`crates/ade_node/src/node_lifecycle.rs`).
+- **RED (wiring)** — carrying `BootstrapState.tip` in the `ForwardSyncState.recovered_anchor` field
+  (set in the forge-ON arm of `run_node_lifecycle`; the field already flows through
+  `run_relay_loop_with_sched` into `run_node_sync`). `crates/ade_node/src/node_lifecycle.rs`.
 - **RED / UNCHANGED** — `pump_block`, `block_validity` (the forward admit — already enforces the
   first-forward link); `run_participant_sync` (participant path — separate follow-on);
   `spawn_live_wire_pump_source` / wire pump; AI-S4a (`wire_pump.rs:447`); `ChainDb::tip()` / serve.
@@ -48,11 +49,14 @@ block, weakening `RollBackward(Origin)` rejection, or touching `pump_block`.
 
 ## 9. Design Summary
 - **Single authority + threading (OQ #1 resolved).** The recovered anchor point lives once in
-  `BootstrapState.tip` (AK-S1). Thread it (an `Option<ChainTip>`) from `run_node_lifecycle` (both
-  forge-OFF and forge-ON arms) through `run_relay_loop_with_sched` into `run_node_sync` as a new
-  parameter. **NEVER re-read the store inside `run_node_sync`** (that would create a second anchor
-  authority). `None` ⇒ the pre-AK-S2 behavior (any rollback fails closed) — cold-start / no-recovered-
-  anchor callers are unchanged.
+  `BootstrapState.tip` (AK-S1). Carry it in a new `ForwardSyncState.recovered_anchor: Option<ChainTip>`
+  field (default `None`) — the forward-sync state already flows `run_node_lifecycle` →
+  `run_relay_loop_with_sched` → `run_node_sync`, so this threads the anchor with no positional-param
+  churn across the ~35 run-loop call sites. Set it from `BootstrapState.tip` in the forge-ON arm (the
+  live-follow path); the forge-OFF arm wires an empty source (no live peer), so its `run_node_sync`
+  never receives a rollback and `None` is correct. **NEVER re-read the store inside `run_node_sync`**
+  (that would create a second anchor authority). `None` ⇒ the pre-AK-S2 behavior (any rollback fails
+  closed) — cold-start / no-recovered-anchor callers are unchanged.
 - **Guarded no-op (the only behavioral change).** In `run_node_sync`'s item loop, replace
   `NodeSyncItem::RollBack(_) => Err(UnexpectedRollback)` with: if the rollback point is a
   `Point::Block { slot, hash }` and `(slot, hash) == recovered_anchor` (slot **AND** hash), `continue`

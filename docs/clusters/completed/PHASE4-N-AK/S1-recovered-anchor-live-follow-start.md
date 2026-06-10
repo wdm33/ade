@@ -5,7 +5,7 @@ Persist the recovered bootstrap anchor point as replayable recovery provenance, 
 live-follow start tip from it. The ONLY slice of PHASE4-N-AK (a narrow post-N-AH regression-remediation).
 
 ## 2. Slice Header
-- **Cluster:** PHASE4-N-AK. **Status:** Proposed.
+- **Cluster:** PHASE4-N-AK. **Status:** Merged (commit `8bb1c402`).
 - **Cluster Exit Criteria Addressed:** CE-AK-1, CE-AK-2, CE-AK-3 (and CE-AK-4 no-collateral).
 - **Primary registry rule:** DC-NODE-31 (`declared` → targeted `enforced` at AK close).
 
