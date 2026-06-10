@@ -7198,3 +7198,26 @@ ci_scripts = ["ci/ci_check_convergence_evidence_schema.sh"]
 status = "enforced_scaffolding"
 introduced_in = "PHASE4-N-AJ"
 strengthened_in = []
+
+[[rules]]
+id = "DC-NODE-31"
+tier = "derived"
+statement = """
+Recovered-anchor live-follow start authority (PHASE4-N-AK). After recovery from a
+non-Origin bootstrap anchor, the live-follow start tip exposed by BootstrapState resolves
+to the recovered anchor tip (slot + real hash) whenever ChainDb has no servable
+post-anchor block; resolution order = servable ChainDb tip -> recovered anchor
+(non-Origin) -> Origin/None only if truly Origin. Does not change ChainDb::tip() semantics
+and does not synthesize a servable block. AI-S4a RollBackward(Origin) fail-close unchanged.
+Replay-equivalent (extends T-REC-05 to the recovered tip surface). Restores the N-AH live
+recover->follow path regressed (exposed, not caused) by AI-S4a's stricter Origin refusal;
+the wire-pump consumer (spawn_live_wire_pump_source) is UNCHANGED.
+"""
+source = "docs/planning/phase4-n-ak-recovered-anchor-tip-invariants.md (AK-INV-1) + docs/clusters/PHASE4-N-AK/cluster.md"
+cross_ref = ["DC-NODE-20", "DC-NODE-22", "DC-NODE-23", "DC-NODE-29", "T-REC-05", "CN-CONS-03"]
+code_locus = "crates/ade_runtime/src/bootstrap.rs (bootstrap_initial_state, resolve_live_follow_start, BootstrapState live-follow start tip), crates/ade_runtime/src/mithril_bootstrap.rs (BootstrapAnchor.seed_point -- canonical input), crates/ade_node/src/node_lifecycle.rs (spawn_live_wire_pump_source -- UNCHANGED consumer), crates/ade_runtime/src/admission/wire_pump.rs:447 (AI-S4a -- UNCHANGED)"
+tests = []
+ci_script = ""
+status = "declared"
+introduced_in = "PHASE4-N-AK"
+strengthened_in = []
