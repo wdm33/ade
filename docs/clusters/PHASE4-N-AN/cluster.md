@@ -81,10 +81,15 @@ the constant epoch nonce); a multi-epoch rollback's nonce-evolution is a named o
 - **CE-AN-6** (no collateral): `cargo test -p ade_ledger` + `cargo test -p ade_runtime` green; the
   existing `materialize` / `commit_rollback` / `block_validity` / recover tests stay green;
   `ci_check_warmstart_eta0_overlay.sh` still passes (the live overlay is unchanged).
-- **CE-AN-LIVE** (the CE-AI-6 reorg capture — operator-run at close; the deliverable AN unblocks): the
-  preserved bridge venue re-run ⇒ the reorg-follow's `materialize` SUCCEEDS ⇒ Ade follows the
-  `RollBackward` (strict slot regression) ⇒ re-converges `agreement_verdict{agreed}`, **0 diverged**,
-  ONE continuous transcript, sha-bound (`ci_check_convergence_evidence_schema.sh`, DC-EVIDENCE-03).
+- **CE-AN-LIVE** ✅ **PASSED** (2026-06-11, fresh hermetic 2-pool bridge venue, magic 42): bare-anchor
+  recover @ slot 162 → follow cn2 → induced reorg (short partition + `docker network connect` re-peer;
+  cn1 led a shallow round, depth 2 ≤ k=5 → cn2 reorged to cn1) → Ade FOLLOWED the `RollBackward`: strict
+  slot **regression admit 371 → 361** → re-converged `agreement_verdict{agreed}` @ slot 383 with
+  `our_hash_hex == peer_hash_hex` (5b65db35…, the reorged cn1 tip) → 16 admits, 2 agreed, **0 diverged**,
+  Ade ALIVE, **0 VrfCert** (the eta0 overlay held through the live rollback — without AN-S2 Ade died here).
+  Transcript OUTSIDE-REPO (`~/.cardano-ceai6/ceai6-capture/`, bridge-venue methodology internal; scrubbed
+  note only), convergence sha256 = `f3553aaa948f43b08c55a859421dcb8b048d16680e97ca20b9f8acd27aa28b01`;
+  `ci_check_convergence_evidence_schema.sh` OK.
 
 ## Expected Slice Types
 
