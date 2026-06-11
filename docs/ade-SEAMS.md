@@ -3,12 +3,22 @@
 > **Status:** Living architectural document. Regenerated; not hand-edited.
 > Per-project instance of `~/.claude/methodology/templates/seams.md`.
 
-> 11 crates, **462 canonical types**, **159 CI checks** at HEAD (`e87e8a43`, PHASE4-N-AL CLOSE — participant-path recovered-anchor rollback no-op `DC-NODE-33` (the participant MIRROR of N-AK's `DC-NODE-32`: `run_participant_sync` accepts a peer `RollBackward` matching the persisted recovered anchor on slot AND hash as an idempotent no-op, evaluated BEFORE the unchanged DC-NODE-29 resolution; RED-only `node_lifecycle.rs`; adds **NO new seam, module, canonical type, or CI gate** — registry 358 → **359** / **225** enforced; CE-AL-3-LIVE proven live on a fresh 2-pool cardano-testnet; does NOT prove CE-AI-6 reorg / full ChainSel). Targeted delta-refresh: this HEAD-pin is bumped + the N-AL note added; the body's count references stay pinned at the N-AK state, reconciled by the next full `/seams`. PRIOR: PHASE4-N-AK — recovered-anchor live-follow start + recovered-anchor rollback no-op, **single-producer FOLLOW**: after recovery from a non-Origin bootstrap anchor the recovered store persists the bootstrap anchor point `(slot, block_hash)` bound to the recovered `anchor_fp` as replayable provenance, warm-start resolves the live-follow start tip from it (`resolve_live_follow_start`), the WirePump FindIntersects at that anchor (never blind Origin), and a peer `RollBackward` binding EXACTLY (slot AND hash) to the persisted anchor is an IDEMPOTENT NO-OP boundary rewind — every other rollback (Origin, slot-only, hash-only, no-anchor) still fails closed; `pump_block` stays the sole roll-forward durable admit — `DC-NODE-31` / `DC-NODE-32`. The sole new BLUE authority is the version-gated closed `RecoveredAnchorPoint` record + its SOLE canonical CBOR codec (`ade_ledger::recovered_anchor_point`; a SEPARATE additive record from `SeedEpochConsensusInputs`, version-gated `RECOVERED_ANCHOR_POINT_SCHEMA_VERSION = 1`). **`CN-CONS-03` (full multi-peer ChainSel convergence) is NOT flipped — it stays `partial`/`declared`; `RO-LIVE-01` stays operator-gated.**).
+> 11 crates, **462 canonical types**, **161 CI checks** at HEAD (`b8860b16`, PHASE4-N-AM + PHASE4-N-AN CLOSE — two CE-AI-6-unblock clusters, BOTH CLOSED-surface). **PHASE4-N-AN (`T-REC-06`):** a BLUE replay-equivalence fix — `materialize_rolled_back_state` (the SOLE rolled-back-state authority, `CN-STORE-07`) now reconstructs the replay `chain_dep` with the SAME recovered seed-epoch `eta0` the live-admit path uses, via the NEW single BLUE overlay authority `PraosChainDepState::overlay_recovered_eta0` (`ade_core::consensus::praos_state`) — the SAME overlay shared by WarmStart bootstrap (`T-REC-04`) and the rollback-materialize path, so a block that validates on live admit no longer fails rollback-replay VRF against the persisted snapshot's `Nonce::ZERO` placeholder. `materialize_rolled_back_state` gains an ADDITIVE `recovered_eta0: Option<&Nonce>` param (and `RollbackContext` an additive `recovered_eta0: Option<&'a Nonce>` field — both reuse the EXISTING closed `Nonce` type); **NO new canonical type** (462 → 462), **NO new module**, **NO new extension point** — the overlay is a single CLOSED authority (a method on the existing closed `PraosChainDepState`), and VRF strength is UNCHANGED (a block whose VRF verifies against NEITHER `eta0` nor the placeholder still fails closed — the overlay is NOT a bypass). **PHASE4-N-AM (`DC-PUMP-03`):** a RED-only wire-pump keep-alive CLIENT (mini-protocol 8) in `ade_runtime::admission::wire_pump` — `run_admission_wire_pump` now sends `MsgKeepAlive` on a ~20s cadence (the closed literal `KEEP_ALIVE_CADENCE`, strictly under the peer's ~97s keep-alive timeout) via the EXISTING outbound frame path, **REUSING the closed BLUE `ade_network::keep_alive` state machine + `ade_network::codec::keep_alive` grammar** (NOT redefined), and validates the echoed cookie on the inbound `MsgResponseKeepAlive` — so a live participant/single-producer follow SUSTAINS past the keep-alive deadline instead of EOFing. It is **wire-only**: no canonical input, no WAL entry, **NO `AdmissionPeerEvent`**; a grammar violation fails closed via the additive `AdmissionWirePumpError::KeepAlive` variant (drop the peer). **This is a wire-only client over the EXISTING closed mini-protocol-8 contract — NOT a new extensible seam, NOT a new registry, NOT a keep-alive server/responder.** Registry 359 → **361** (`DC-PUMP-03` enforced + `T-REC-06` enforced; **227** enforced / 114 declared / 19 partial / 1 enforced_scaffolding) + 1 strengthening (`DC-PUMP-02` `strengthened_in += PHASE4-N-AN` — the AI-S4a distinct `RollBackward` event refinement, a CI stale-gate triage). **NET +2 CI gates** (159 → 161, both ADDED: `ci_check_keep_alive_wire_only.sh`, `ci_check_rollback_materialize_eta0.sh`). CE-AM-LIVE + CE-AN-LIVE proven on a fresh hermetic 2-pool `cardano-testnet` bridge venue (keep-alive sustained 152s; induced reorg followed `RollBackward` slot regression 371→361 → re-converged `agreed` @ 383, 0 diverged, 0 VrfCert — the `eta0` overlay held through the live rollback; transcripts OUTSIDE-REPO). **`CN-CONS-03` (full multi-peer ChainSel convergence) is NOT flipped — it stays `declared`; `RO-LIVE-01` stays operator-gated; NO RO-LIVE flip.** The CE-AI-6 induced-reorg convergence capture is now RUNNABLE + was run (CE-AN-LIVE), but the broad CN-CONS-03 flip remains the named follow-on.
+>
+> **CI-only stale-gate triage carried in this span (no new authority surface).** Besides the 2 added gates: `ci_check_node_path_fidelity.sh` — its `--mode node` flag allow-list (the cli.rs flag SET is a CLOSED allow-list; the gate is its CI mirror) was extended with **two legitimately-added, path-PRESERVING flags from later clusters** — `--participant-venue` (N-AI, the σ=0 participant role; the `--mode node` admit path is UNCHANGED, mirroring the pinned `--single-producer-venue`) and `--convergence-evidence-path` (N-AJ, an emit-only evidence sink, like `--evidence-log`); the PINNED list is now **31** flags (both flags PRE-EXISTED in `cli.rs` since N-AI/N-AJ — the span only added them to the allow-list; the path-diverging private flags stay excluded; the gate's OK-echo text still reads "29" — a cosmetic echo-string lag, the enforced list is 31). `ci_check_admission_wire_pump_closure.sh` + `ci_check_lifecycle_owner_uses_bootstrap_initial_state.sh` had gate-fix edits (the wire-pump-closure gate extended for the keep-alive dispatch arm; the lifecycle-owner gate repaired). **None of these CI edits opens a new extension point / module-addition surface.**
+>
+> **PRIOR (PHASE4-N-AL CLOSE, `e87e8a43`, targeted delta-refresh):** participant-path recovered-anchor rollback no-op `DC-NODE-33` (the participant MIRROR of N-AK's `DC-NODE-32`: `run_participant_sync` accepts a peer `RollBackward` matching the persisted recovered anchor on slot AND hash as an idempotent no-op, evaluated BEFORE the unchanged DC-NODE-29 resolution; RED-only `node_lifecycle.rs`; adds **NO new seam, module, canonical type, or CI gate** — registry 358 → 359 / 225 enforced; CE-AL-3-LIVE proven live on a fresh 2-pool cardano-testnet; does NOT prove CE-AI-6 reorg / full ChainSel). PRIOR: PHASE4-N-AK — recovered-anchor live-follow start + recovered-anchor rollback no-op, **single-producer FOLLOW**: after recovery from a non-Origin bootstrap anchor the recovered store persists the bootstrap anchor point `(slot, block_hash)` bound to the recovered `anchor_fp` as replayable provenance, warm-start resolves the live-follow start tip from it (`resolve_live_follow_start`), the WirePump FindIntersects at that anchor (never blind Origin), and a peer `RollBackward` binding EXACTLY (slot AND hash) to the persisted anchor is an IDEMPOTENT NO-OP boundary rewind — every other rollback (Origin, slot-only, hash-only, no-anchor) still fails closed; `pump_block` stays the sole roll-forward durable admit — `DC-NODE-31` / `DC-NODE-32`. The sole new BLUE authority is the version-gated closed `RecoveredAnchorPoint` record + its SOLE canonical CBOR codec (`ade_ledger::recovered_anchor_point`; a SEPARATE additive record from `SeedEpochConsensusInputs`, version-gated `RECOVERED_ANCHOR_POINT_SCHEMA_VERSION = 1`). **`CN-CONS-03` (full multi-peer ChainSel convergence) is NOT flipped — it stays `partial`/`declared`; `RO-LIVE-01` stays operator-gated.**).
 > Reads the CODEMAP (`docs/ade-CODEMAP.md` — **462 canonical types / 159 CI / 358 rules**, regenerated at `b4c0983d`,
-> the PHASE4-N-AK close) for the module list + TCB colors, and the invariant registry
-> (`docs/ade-invariant-registry.toml` — **358 entries** at HEAD `b4c0983d`: 224 enforced / 19 partial / 114 declared / 1 enforced_scaffolding)
-> for the rule IDs that gate each closed surface. **Count reconciliation (load-bearing — read honestly): this SEAMS,
-> the on-disk CODEMAP, and the registry all AGREE at HEAD `b4c0983d` (462 / 159 / 358).** The carried PHASE4-N-AI is the
+> the PHASE4-N-AK close — **two clusters stale vs this HEAD** on CI count + rule count: it predates the N-AL `DC-NODE-33`,
+> the N-AM `DC-PUMP-03`, the N-AN `T-REC-06`, and the 2 N-AM/N-AN gates; module inventory + TCB colors are STILL ACCURATE —
+> N-AL/N-AM/N-AN add **no new module + no new BLUE type**) for the module list + TCB colors, and the invariant registry
+> (`docs/ade-invariant-registry.toml` — **361 entries** at HEAD `b8860b16`: 227 enforced / 19 partial / 114 declared / 1 enforced_scaffolding)
+> for the rule IDs that gate each closed surface. **Count reconciliation (load-bearing — read honestly): the REGISTRY is the
+> canonical count source at this HEAD — it holds 361 rules incl. `DC-NODE-33` / `DC-PUMP-03` / `T-REC-06`; the on-disk CODEMAP
+> (462 / 159 / 358 @ `b4c0983d`) and the prior on-disk SEAMS pin (462 / 159 / 359 @ `e87e8a43`, the N-AL targeted
+> delta-refresh) lag this regen. This SEAMS is now at 462 / 161 / 361 (`b8860b16`); the CODEMAP picks up the
+> `DC-NODE-33` / `DC-PUMP-03` / `T-REC-06` rows + the 2 gates on its next regen, with the registry authoritative in the
+> interim.** The carried PHASE4-N-AI is the
 > **FIRST BLUE delta since the G-N span** — it is **BLUE+RED+GREEN**: the BLUE `ade_ledger::wal::event` gains the
 > closed-sum variant `WalEntry::RollBack` (tag 1 — the reserved RollBackward slot) plus its two NEW closed payload
 > types `RollbackPoint` + `RollbackReason` (canonical types **458 → 460, +2**); `WalError::RollbackTargetNotInChain`
@@ -1849,6 +1859,23 @@ SERVE-SIDE FINDINTERSECT (N-AE.E, DC-PROTO-10): on the producer SERVE direction 
   closed Point enum + the ChainSyncMessage grammar (FindIntersect/IntersectFound/RequestNext/RollForward) are
   UNCHANGED, NOT a new pipeline step / message / negotiated surface. The recovered-anchor INTERSECTABILITY it
   composes with (AE.B, DC-NODE-14) is recorded under the serve-projection surface + §3 (ChainDbServedSource).
+KEEP-ALIVE SUSTAIN (N-AM, DC-PUMP-03 — WIRE-ONLY, no pipeline change): run_admission_wire_pump (the SOLE per-peer pump,
+  CN-PUMP-01; REUSED VERBATIM by the --mode node live feed via spawn_live_wire_pump_source AND by the admission path)
+  now runs the N2N keep-alive CLIENT (mini-protocol 8) over the EXISTING outbound frame path: on a tokio::time::interval
+  cadence KEEP_ALIVE_CADENCE = 20s (a closed literal const, strictly under the peer's ~97s keep-alive timeout — NO
+  CLI/env/config override) it sends MsgKeepAlive(cookie) iff the keep-alive state is ClientIdle (a monotonic u16 cookie —
+  no rand/wall-clock), advancing the REUSED BLUE ade_network::keep_alive state machine (keep_alive_transition,
+  ClientIdle -> ServerHasAgency{cookie}); the inbound MsgResponseKeepAlive(cookie') drives the SAME state machine
+  (validates cookie' == cookie, back to ClientIdle). It is a wire-only sustain — it produces NO canonical input, NO WAL
+  entry, and emits NO AdmissionPeerEvent (it does NOT reduce to a canonical type — the cookie is a transport nonce, not
+  consensus state), so a live participant/single-producer follow SUSTAINS past the keep-alive deadline instead of EOFing
+  at ~97s (the prerequisite that makes the CE-AI-6 reorg capture runnable). A keep-alive grammar violation (cookie
+  mismatch, illegal/out-of-version message, or a response while ClientIdle) fails closed via the additive
+  AdmissionWirePumpError::KeepAlive (drop the peer) — never a silent continue. It REUSES the closed BLUE keep-alive
+  grammar (ade_network::keep_alive + ::codec::keep_alive) + the closed AcceptedMiniProtocol id-8 entry: NO new BLUE type,
+  NO new mini-protocol, NO new AdmissionPeerEvent variant, NO keep-alive server/responder, NO reorder/starve of the
+  chain-sync/block-fetch sequencing (the select! inbound arm is byte-identical to the prior recv). This is NOT a new
+  ingress surface — it is a wire-only CLIENT over the EXISTING closed mini-protocol-8 contract. ci_check_keep_alive_wire_only.sh.
 ```
 
 ### Surface: operator-captured peer-accept log → BA-02 evidence (RED file I/O wired N-F-G-C over the GREEN N-F-C correlator)
@@ -2445,7 +2472,7 @@ acceptance. BA-02 satisfied nowhere.
 | **Data-only venue-split resolver** | `ade_node::node_sync::resolve_disposition` (closed `ReceiveDisposition`) | GREEN-by-function | TOTAL over the closed venue set: SingleProducer/Unknown ⇒ `RefuseSingleProducer` (the DC-NODE-20 rung-1 fail-closed, byte-unchanged); Participant ⇒ `NeedsForkChoice`. **A raw `followed_peer_tip` NEVER reaches `select_best_chain`.** Routes; decides nothing authoritative. |
 | **Authoritative chain selection (THE single selector — UNMODIFIED)** | `ade_core::consensus::fork_choice::select_best_chain` via the `ade_runtime::consensus::chain_selector` orchestrator | BLUE (selector) + GREEN (orchestrator) | The SOLE fork-choice authority (DC-CONS-03). A competing Participant candidate is HANDED to the EXISTING orchestrator → `select_best_chain` — **routed-to, never duplicated; N-AI adds no second selector.** The production `select_best_chain` is byte-unchanged (the `fork_choice.rs` touch is a `#[cfg(test)]`-only arrival-order proof, CN-CONS-01). |
 | **Authoritative rollback-target binding** | `ade_node::node_lifecycle::run_participant_sync` (DC-NODE-29) | RED resolve + BLUE-bound | A peer `RollBackward(point)` is resolved against the durable `ChainDb`: the STORED chain point (stored slot + hash) is the SOLE authority; the peer slot MUST equal the stored slot for that hash, else fail closed (`RollbackPointSlotMismatch`) BEFORE any mutation. `to_point` is constructed from the STORED slot (never peer slot — mixed authority forbidden). |
-| **Authoritative durable apply (the existing authorities — UNMODIFIED)** | `ade_node::node_lifecycle::apply_chain_event` → `ade_ledger`/`ade_runtime` `materialize_rolled_back_state` (CN-STORE-07) + lockstep `commit_rollback` (DC-CONS-20) + `pump_block` (DC-NODE-05/12) | RED driver + BLUE apply | A `RolledBack` outcome is applied to the durable stores ONLY via the EXISTING enforced authorities; a `ChainSelected` win's BODIES validate+apply via `pump_block`. **`pump_block` stays the SOLE roll-forward durable admit** (no header-only tip advance). After any applied decision `selector.current_tip == ChainDb::tip` (DC-NODE-26; mismatch fails fast). |
+| **Authoritative durable apply (the existing authorities — UNMODIFIED; N-AN: eta0-overlaid replay `chain_dep`, `T-REC-06`)** | `ade_node::node_lifecycle::apply_chain_event` → `ade_ledger`/`ade_runtime` `materialize_rolled_back_state` (CN-STORE-07) + lockstep `commit_rollback` (DC-CONS-20) + `pump_block` (DC-NODE-05/12) | RED driver + BLUE apply | A `RolledBack` outcome is applied to the durable stores ONLY via the EXISTING enforced authorities; a `ChainSelected` win's BODIES validate+apply via `pump_block`. **`pump_block` stays the SOLE roll-forward durable admit** (no header-only tip advance). After any applied decision `selector.current_tip == ChainDb::tip` (DC-NODE-26; mismatch fails fast). **N-AN (`T-REC-06`) — additive, the CHOKEPOINT DOES NOT MOVE:** `materialize_rolled_back_state` now takes a `recovered_eta0: Option<&Nonce>` and overlays it onto the snapshot replay `chain_dep` via the SINGLE BLUE overlay authority `PraosChainDepState::overlay_recovered_eta0` (the SAME overlay WarmStart bootstrap applies, `T-REC-04`) BEFORE the unchanged replay-forward fold — so rollback-replay validates the header VRF against the SAME recovered seed-epoch nonce as live admit (replay-equivalence by construction), instead of the persisted `Nonce::ZERO` placeholder. `RollbackContext` carries the additive `recovered_eta0: Option<&'a Nonce>` (RED `apply_chain_event` threads `state.seed_epoch_consensus_inputs` eta0). **VRF strength UNCHANGED** (a block whose VRF verifies against neither eta0 nor the placeholder still fails `VrfCert` — the overlay is not a bypass); `None` keeps the snapshot nonce as-is (cold-start). **NO new canonical type, NO second materialize/overlay path** — `overlay_recovered_eta0` is the SOLE eta0-overlay authority for both bootstrap and rollback. |
 | **Authoritative durable rollback MARKER** | `ade_ledger::wal::event::WalEntry::RollBack` (tag 1) | BLUE | The append-only durable marker; its replay arm RE-INVOKES `materialize_rolled_back_state` + `commit_rollback` (NOT a second rollback impl) — byte-identical recovery incl. rollback+reselection (DC-NODE-27). |
 | **Forge fail-closed under pending re-selection** | `ade_node::node_sync` `pending_reselection_forge_refusal` → `ForgeRefused::ReselectionPending` (DC-NODE-28) | GREEN-by-function | A pending fork-choice re-selection DISABLES forging — the forge never builds on a stale pre-resolution local tip. |
 
@@ -2980,7 +3007,7 @@ ACCEPTS it is the operator-gated RO-LIVE-01 leg (peer ACCEPT NOT claimed here).
 | `OpCertParseError` *(N-R-C; reused on the node path N-F-G-A)* | `ade_runtime::producer::opcert_envelope` (RED) | closed sum | New variant = a strengthening of **CN-OPCERT-01**. The N-F-G-A `operator_forge` ingress reuses `parse_opcert_envelope` (this error type) on the node path. |
 | `UnsignedHeaderPreImageError` *(N-S-A)* | `ade_ledger::block_validity::unsigned_header_pre_image` (BLUE) | closed sum | New variant = a strengthening of **DC-KES-HEADER-01**. |
 | `SigningError` / branded `KesSignature` + `UnsignedHeaderPreImage` *(KES signing surface; REUSED — NOT extended — by N-AC)* | `ade_runtime::producer::{signing, producer_shell}` (RED) + `ade_ledger::block_validity::unsigned_header_pre_image` (BLUE) | closed sum + branded newtypes | **N-AC (DC-CRYPTO-10): adds NO new closed enum / variant and NO version-gated contract.** The new RED `kes_sign_header_advancing` evolves-then-signs by REUSING the EXISTING closed `SigningError` variants `EvolutionBackwards` (backwards / forward-secrecy) + `EvolutionExhausted` (beyond `SUM6_MAX_PERIOD = 63`) and the EXISTING branded `KesSignature` / `UnsignedHeaderPreImage` types — the closed-surface set is unchanged. New variant on `SigningError` = a strengthening of **DC-CRYPTO-04..09 / CN-KES-HEADER-01**; non-secret primitives only (no key bytes in errors). |
-| `AcceptedMiniProtocol` *(N-L; outbound segmentation REUSES it, N-AB)* | `ade_network::session` (GREEN) | closed registry | New mini-protocol = a registry entry + a `match` arm with **no wildcard accept**. **N-AB (CN-SESS-05):** the outbound `session::core::handle_outbound` segmentation carries the SAME mini-protocol id + mode across every segment of a message — it REUSES this closed registry (no new variant, no new mini-protocol) and the single `encode_inner_frame` per-frame authority. |
+| `AcceptedMiniProtocol` *(N-L; outbound segmentation REUSES it, N-AB; keep-alive CLIENT REUSES id 8, N-AM)* | `ade_network::session` (GREEN) | closed registry (incl. `KeepAlive = KEEP_ALIVE_ID = 8`) | New mini-protocol = a registry entry + a `match` arm with **no wildcard accept**. **N-AB (CN-SESS-05):** the outbound `session::core::handle_outbound` segmentation carries the SAME mini-protocol id + mode across every segment of a message — it REUSES this closed registry (no new variant, no new mini-protocol) and the single `encode_inner_frame` per-frame authority. **N-AM (`DC-PUMP-03`):** the wire-pump keep-alive CLIENT REUSES the EXISTING `KeepAlive` entry (id 8) — it adds **NO new variant + NO new mini-protocol**; the pump's inbound dispatch decodes the `KeepAlive` arm via `decode_keep_alive_message` + drives the BLUE `keep_alive_transition` (it no longer drops the arm silently), and the outbound tick frames `OutboundFrame{KeepAlive, …}` on the EXISTING outbound path. The closed dispatch stays a total `match` over `AcceptedMiniProtocol` (a keep-alive frame is NEVER mistaken for a chain-sync/block-fetch event); `ci_check_keep_alive_wire_only.sh` fences the arm decoding the message + driving the transition AND constructing NO `AdmissionPeerEvent`. |
 | `KesError` / `KesParseError` *(N-P)* | `ade_crypto::kes_sum::errors` (BLUE) | 5 / 6 variants | New variant = a strengthening of **DC-CRYPTO-08/09**; non-secret primitives only. |
 | Operator-evidence manifest TOML schema *(N-S-C)* | `ci_check_operator_evidence_manifest_schema.sh` + `docs/clusters/completed/PHASE4-N-S-C/cluster.md` | closed key set | Any committed `CE-N-S-LIVE_*.toml` MUST conform (CN-OPERATOR-EVIDENCE-01). |
 | BA-02 operator-pass manifest TOML schema *(NEW, N-F-G-C)* | `ci_check_ba02_evidence_manifest_schema.sh` + `docs/clusters/PHASE4-N-F-G-C/CE-G-C-LIVE_*.toml` | closed 8-key set (`schema_version` / `block_hash` / `slot` / `peer_log_file` / `peer_log_file_sha256` / `peer_log_capture_command` / `peer_log_filter` / `accept_event_kind`) | Any committed `CE-G-C-LIVE_*.toml` MUST conform (`schema_version == 1`) AND its `peer_log_file_sha256` MUST match the actual SHA-256 of the committed peer-log fixture it binds (CN-OPERATOR-EVIDENCE-01 / RO-LIVE-06). **Vacuously satisfied when none is committed** (the typical state — the live operator pass is `blocked_until_operator_stake_available`). The no-synthetic-manifest enforcer. |
@@ -3167,6 +3194,19 @@ ACCEPTS it is the operator-gated RO-LIVE-01 leg (peer ACCEPT NOT claimed here).
   already-correct `admission::runner` + `ade_core_interop::follow` paths. **There is NO second `unwrap_tag24` /
   hand-rolled tag-24 parse** — the single frozen authority is reused; a non-tag-24 / malformed payload fails
   closed (`ci_check_feed_tag24_unwrap.sh`).
+- **N2N keep-alive (mini-protocol 8) wire grammar + state machine is FROZEN + REUSED by the keep-alive CLIENT
+  (N-AM, DC-PUMP-03 — load-bearing).** The closed BLUE keep-alive grammar already exists: `ade_network::keep_alive`
+  (the cookie/agency/version-checked state machine `keep_alive_transition` + `KeepAliveState` / `KeepAliveAgency` /
+  `KeepAliveEvent`) + `ade_network::codec::keep_alive` (`KeepAliveMessage` / `KeepAliveCookie` + canonical
+  `encode_/decode_keep_alive_message`). N-AM's wire-pump keep-alive CLIENT **REUSES it VERBATIM** — it does NOT
+  redefine a keep-alive message, cookie, state machine, or codec, and adds NO new BLUE canonical type (462
+  unchanged). The cadence const `KEEP_ALIVE_CADENCE = 20s` is a RED closed literal (in `ade_runtime::admission::wire_pump`,
+  strictly under the peer's ~97s keep-alive timeout; **NO CLI/env/config override**). The closed `AcceptedMiniProtocol`
+  id-8 entry is reused (no new mini-protocol). A grammar violation fails closed (`AdmissionWirePumpError::KeepAlive`,
+  drop the peer). **Version-gated, not frozen-against-evolution:** the keep-alive protocol version is threaded as
+  `KeepAliveVersion::new(negotiated_version)` (the N2N version, well under the `MAX_KEEP_ALIVE_VERSION = 100` guard,
+  per DC-PROTO-06 — an explicit input, never a session global). `ci_check_keep_alive_wire_only.sh` fences the wire-only
+  reuse (decode + transition, NO `AdmissionPeerEvent`).
 - **`--mode node` serve listener lifetime is decoupled from feed end + the served tip is monotone (N-F-G-K +
   N-F-G-R, DC-NODE-09 + DC-NODE-11 — load-bearing).** The serve sibling (`run_node_serve_task`, spawned OUTSIDE
   `run_relay_loop`) stays up serving **past feed-end** (its lifetime is independent of the feed source's end —
@@ -3696,10 +3736,12 @@ How new modules enter the workspace.
     (iv) keep the record a single closed canonical type with the SOLE codec (no `Default`, no `#[non_exhaustive]`,
     `BTreeMap`-ordered) — the field is additive ONLY behind the version gate, NOT a new TYPE.
 
-### CI gates that enforce the boundary (159 total; the N-AJ / N-AI / N-AH / N-AG / N-AF / N-AE.F / N-AE / N-AC / N-AB / N-AA / N-U / N-F-G-K…G-R / N-F-G-J / N-F-G-D / N-F-G-E / N-F-G-C / N-F-G-B / N-F-G-A / N-F-F / N-F-D-E / N-F-C / N-F-A / N-Z / N-Y / producer / network set; **PHASE4-N-AK added 0 gates — both N-AK rules `DC-NODE-31` / `DC-NODE-32` are TEST-ENFORCED, `ci_script = ""`**)
+### CI gates that enforce the boundary (**161 total**; the N-AN / N-AM / N-AJ / N-AI / N-AH / N-AG / N-AF / N-AE.F / N-AE / N-AC / N-AB / N-AA / N-U / N-F-G-K…G-R / N-F-G-J / N-F-G-D / N-F-G-E / N-F-G-C / N-F-G-B / N-F-G-A / N-F-F / N-F-D-E / N-F-C / N-F-A / N-Z / N-Y / producer / network set; **PHASE4-N-AN added `ci_check_rollback_materialize_eta0.sh`; PHASE4-N-AM added `ci_check_keep_alive_wire_only.sh` (159 → 161); PHASE4-N-AL / N-AK added 0 gates — `DC-NODE-31` / `DC-NODE-32` / `DC-NODE-33` are TEST-ENFORCED, `ci_script = ""`**)
 
 | Script | Enforces | Cluster |
 |---|---|---|
+| `ci_check_rollback_materialize_eta0.sh` *(NEW N-AN)* | **T-REC-06** — the recovered seed-epoch `eta0` overlay is applied on the rollback/materialize path (`materialize_rolled_back_state`, CN-STORE-07) via the SHARED single overlay authority `PraosChainDepState::overlay_recovered_eta0` (the SAME overlay WarmStart bootstrap applies, T-REC-04), BEFORE the replay-forward fold; **no VRF bypass / skip** (a block whose VRF verifies against neither eta0 nor the placeholder still fails `VrfCert`); eta0 is sourced from the recovered sidecar (`SeedEpochConsensusInputs.epoch_nonce`), never peer/CLI/wall-clock; so live admit and rollback-replay validate the header VRF against the SAME nonce (replay-equivalence by construction). | N-AN |
+| `ci_check_keep_alive_wire_only.sh` *(NEW N-AM)* | **DC-PUMP-03 / DC-PUMP-01** — the `KeepAlive` dispatch arm in `wire_pump.rs` (a) is no longer the silent multi-protocol drop (it decodes via `decode_keep_alive_message` + drives the BLUE `keep_alive_transition`), and (b) the keep-alive handler constructs NO `AdmissionPeerEvent::*` value (wire-only — the pump emit-set is UNWIDENED). The keep-alive client REUSES the closed BLUE `ade_network::keep_alive` grammar + the closed `AcceptedMiniProtocol` id-8 entry; a grammar violation fails closed (`AdmissionWirePumpError::KeepAlive`). Mirrors the `ci_check_admission_wire_pump_closure.sh` / `ci_check_admission_no_red_verdicts.sh` grep-heuristic style. | N-AM |
 | `ci_check_convergence_evidence_vocabulary_closed.sh` *(NEW N-AJ)* | **DC-NODE-30 / DC-ADMIT-04** — the `--convergence-evidence-path` sink (`ade_node::convergence_evidence::ConvergenceEvidenceSink`) emits the REUSED CLOSED `AgreementVerdict` vocabulary ONLY (`block_received` / `block_admitted` / `agreement_verdict` via `verdict::derive`); an open/wildcard variant or a stringly-authoritative field is a compile error + an allow-list-test failure. NO new evidence enum. | N-AJ |
 | `ci_check_convergence_evidence_emit_only.sh` *(NEW N-AJ)* | **DC-NODE-30 / DC-EVIDENCE-03** — the convergence-evidence sink is EMIT-ONLY: a write-failure surfaces + poisons + marks incomplete (`EvidenceEmitResult::FailedAndPoisoned`), is NEVER swallowed, NEVER halts the authority path; emit-only on `Diverged`; an absent path leaves the byte output UNCHANGED; no raw-writer accessor. (The convergence-through-reorg transcript shape `DC-EVIDENCE-03` is `enforced_scaffolding` via the vacuous-until-committed `ci_check_convergence_evidence_schema.sh` — the real transcript is pending the operator pass.) | N-AJ |
 | `ci_check_wal_rollback_replay_equiv.sh` *(NEW N-AI AI-S1)* | **DC-NODE-27** — the ordered live receive-event sequence (RollForward headers, RollBackward points, body deliveries) replayed against the same anchor + durable log produces a BYTE-IDENTICAL durable tip + ledger fp + PraosChainDepState INCLUDING rollback+reselection; a live rollback is recorded durably as the append-only canonical `WalEntry::RollBack` MARKER (tag 1) whose replay arm re-anchors the fp chain to `to_point`'s EXISTING in-chain `post_fp` and re-invokes the EXISTING `materialize_rolled_back_state` + lockstep `commit_rollback` — **NOT a second rollback implementation**; a rollback target not in the active chain fails closed (`RollbackTargetNotInChain`). | N-AI |
@@ -4022,6 +4064,35 @@ How new modules enter the workspace.
   (`ci_check_receive_detector_venue_split.sh` / `ci_check_live_fork_choice_apply.sh` /
   `ci_check_live_fork_choice_wiring.sh` / `ci_check_rollback_target_canonical_binding.sh` /
   `ci_check_wal_rollback_replay_equiv.sh` / `ci_check_wire_rollback_signal_preserved.sh`.)**
+- **(N-AM, DC-PUMP-03 — RED wire-pump keep-alive CLIENT, WIRE-ONLY) the keep-alive client in
+  `run_admission_wire_pump` MUST stay WIRE-ONLY.** It MUST REUSE the closed BLUE `ade_network::keep_alive` state
+  machine + `ade_network::codec::keep_alive` grammar (it MUST NOT redefine a keep-alive message / cookie / state
+  machine / codec) and the closed `AcceptedMiniProtocol` id-8 entry (NO new mini-protocol). It MUST emit **NO**
+  `AdmissionPeerEvent` (Block / TipUpdate / RollBackward / Disconnected), write **NO** WAL entry, and produce **NO**
+  canonical input (the cookie is a transport nonce — it MUST NOT reach BLUE / consensus state); the pump emit-set
+  stays UNWIDENED (DC-PUMP-01). It MUST send `MsgKeepAlive` on a cadence STRICTLY UNDER the peer's keep-alive timeout
+  (the FIXED, non-configurable `KEEP_ALIVE_CADENCE = 20s` literal — **NO CLI / env / config override**), only while
+  holding `ClientHasAgency` (NEVER a new `MsgKeepAlive` while one is in flight), with a monotonic `u16` cookie
+  (**NO `rand` / wall-clock**). It MUST NOT block / starve / reorder the chain-sync or block-fetch flow (the
+  `select!` inbound arm stays byte-identical to the prior recv), MUST NOT mistake a keep-alive frame for a
+  chain-sync/block-fetch event (the dispatch stays a closed `match` over `AcceptedMiniProtocol`), and MUST fail
+  closed on a grammar violation (`AdmissionWirePumpError::KeepAlive` — drop the peer, never a silent continue). It
+  MUST NOT implement a keep-alive SERVER/responder (client only; the responder is a proof-obligation-gated follow-on).
+  (`ci_check_keep_alive_wire_only.sh`.)**
+- **(N-AN, T-REC-06 — BLUE rollback-materialize eta0 overlay; RED threading) `materialize_rolled_back_state`
+  (the SOLE rolled-back-state authority, CN-STORE-07) MUST reconstruct the replay `chain_dep` with the SAME recovered
+  seed-epoch `eta0` the live-admit path uses** — via the SINGLE BLUE overlay authority
+  `PraosChainDepState::overlay_recovered_eta0` (the SAME overlay WarmStart bootstrap applies, T-REC-04), applied
+  BEFORE the unchanged replay-forward fold. The overlay MUST stay the SOLE eta0-overlay authority shared by bootstrap
+  + materialize — **NO second materialize / overlay / rollback-replay path**, and the CN-STORE-07 chokepoint MUST NOT
+  move (it is additively parameterized with `recovered_eta0: Option<&Nonce>`, reusing the EXISTING closed `Nonce`).
+  `eta0` MUST be sourced from the recovered seed-epoch sidecar (`SeedEpochConsensusInputs.epoch_nonce`) — **NEVER**
+  peer data / wall-clock / CLI re-supply / a re-query. VRF validation strength MUST stay UNCHANGED (the rollback path
+  stays as strict as live admit — a block whose VRF verifies against NEITHER `eta0` nor the placeholder still fails
+  closed `VrfCert`; the overlay supplies the correct nonce, it is **NOT a bypass / skip**). The snapshot persistence
+  model MUST stay UNCHANGED (the snapshot keeps the `Nonce::ZERO` placeholder; the fix OVERLAYS at materialize — it
+  MUST NOT make the snapshot persist `eta0`). RED `apply_chain_event` MUST thread `state.seed_epoch_consensus_inputs`'
+  eta0 (no new RED behavior). (`ci_check_rollback_materialize_eta0.sh`.)**
 - **(N-AA, DC-SERVEMEM-01 — RED serve path) the peer-driven `--mode node` serve MUST be bounded and fail
   closed; it MUST NOT amplify peer-driven storage/CPU.** The `--mode node` durable-chain serve
   (`ChainDbServedSource`) MUST read each peer BlockFetch range via the bounded **hash-free** ChainDb
@@ -4890,6 +4961,89 @@ How new modules enter the workspace.
 
 ## Generation notes
 
+- **Regenerated (cluster-close refresh covering TWO clusters, PHASE4-N-AM + PHASE4-N-AN) at HEAD `b8860b16`**
+  (`git rev-parse --short HEAD` — the *PHASE4-N-AN close*, the head of `docs(clusters): archive PHASE4-N-AM + PHASE4-N-AN
+  to completed/`), applied DIRECTLY to the on-disk SEAMS. The prior on-disk SEAMS was a TARGETED delta-refresh pinned at
+  the PHASE4-N-AL close (`e87e8a43` / **462** canonical types / **159** CI / **359** rules — that refresh bumped the
+  HEAD-pin + added the N-AL `DC-NODE-33` note but left the body counts at the N-AK state). It is brought current to HEAD
+  `b8860b16` (**462** canonical types / **161** CI / **361** rules), folding in BOTH **PHASE4-N-AM** (`DC-PUMP-03` — the
+  RED-only wire-pump keep-alive CLIENT, mini-protocol 8; +1 CI gate) AND **PHASE4-N-AN** (`T-REC-06` — the BLUE
+  rollback-materialize recovered-`eta0` overlay; +1 CI gate). The N-AL targeted refresh had bumped this SEAMS to the
+  N-AL HEAD but reconciled no body counts; this regen reconciles the FULL count set (462 / 161 / 361) and folds the
+  N-AM/N-AN seam analysis into §1 / §2 / §3 / §5.
+- **What the N-AN cluster did to the seam surface (BLUE — a replay-equivalence fix, CLOSED-surface):** it added ONE new
+  BLUE method on the EXISTING closed `PraosChainDepState` — `overlay_recovered_eta0(&mut self, eta0: &Nonce)` (sets
+  `epoch_nonce` + `evolving_nonce` to the recovered seed-epoch eta0; `ade_core::consensus::praos_state`) — the SINGLE
+  eta0-overlay authority shared by WarmStart bootstrap (`T-REC-04`, the live-admit `chain_dep`) AND rollback
+  materialization (the replay `chain_dep`). `materialize_rolled_back_state` (the SOLE rolled-back-state authority,
+  `CN-STORE-07`) gains an ADDITIVE `recovered_eta0: Option<&Nonce>` param + overlays before the unchanged replay-forward
+  fold; `RollbackContext` (`ade_ledger::receive::reducer`) gains an additive `recovered_eta0: Option<&'a Nonce>` field;
+  RED `apply_chain_event` threads `state.seed_epoch_consensus_inputs`' eta0. **NO new canonical type** (462 → 462 — the
+  overlay is a method, the param/field reuse the EXISTING closed `Nonce`), **NO new module**, **NO new extension point**
+  (the chokepoint does not move — it is the SAME `materialize_rolled_back_state` authority, additively parameterized),
+  **NO VRF loosening** (a block whose VRF verifies against neither eta0 nor the placeholder still fails `VrfCert` — the
+  overlay is the correct nonce, not a bypass), **NO change to the snapshot persistence model** (the snapshot stays a
+  `Nonce::ZERO` placeholder; the fix OVERLAYS at materialize), **NO RO-LIVE flip**, **`CN-CONS-03` NOT flipped**. +1 CI
+  gate (`ci_check_rollback_materialize_eta0.sh`). +1 strengthening: `DC-PUMP-02` `strengthened_in += PHASE4-N-AN` (the
+  AI-S4a distinct `RollBackward` event refinement — a CI stale-gate triage, not a new authority).
+- **What the N-AM cluster did to the seam surface (RED-only — a wire-only client over an EXISTING closed contract):** it
+  added the N2N keep-alive CLIENT (mini-protocol 8) to `ade_runtime::admission::wire_pump::run_admission_wire_pump` — a
+  `tokio::time::interval(KEEP_ALIVE_CADENCE = 20s)` cadence that sends `MsgKeepAlive(cookie)` (a monotonic `u16`, no
+  rand) on the EXISTING outbound frame path + validates the echoed cookie on the inbound `MsgResponseKeepAlive`, both
+  **REUSING the closed BLUE `ade_network::keep_alive` state machine + `ade_network::codec::keep_alive` grammar** (NOT
+  redefined) and the closed `AcceptedMiniProtocol` id-8 entry. The lone additive type is the RED
+  `AdmissionWirePumpError::KeepAlive(KeepAliveError)` variant (a fail-closed drop-the-peer signal on a grammar
+  violation). **It is WIRE-ONLY** — no canonical input, no WAL entry, **NO `AdmissionPeerEvent`** (the pump emit-set is
+  UNWIDENED, `DC-PUMP-01` preserved); it does **NOT reduce to a canonical type** (the cookie is a transport nonce). **NO
+  new BLUE type** (462 → 462), **NO new module**, **NO new ingress surface, NO new mini-protocol, NO new extensible
+  registry, NO keep-alive server/responder** (client only). +1 CI gate (`ci_check_keep_alive_wire_only.sh`).
+  `CN-PUMP-01` / `DC-PUMP-01` / `DC-PUMP-02` cross-ref'd, NOT strengthened by N-AM (the keep-alive path emits no
+  `AdmissionPeerEvent`).
+- **Span delta spot-checked at HEAD `b8860b16` (grep/ls/git only — no `cargo`):** `ls ci/ci_check_*.sh | wc -l` =
+  **161** (`git diff --name-status --diff-filter=A e87e8a43..b8860b16 -- 'ci/'` = exactly `ci_check_keep_alive_wire_only.sh`
+  + `ci_check_rollback_materialize_eta0.sh`; 0 deleted); `grep -cE '^id = ' docs/ade-invariant-registry.toml` = **361**
+  (227 enforced / 19 partial / 114 declared / 1 enforced_scaffolding); the BLUE canonical-type grep (6 BLUE crate `src/`
+  trees + the 9 BLUE `ade_network` submodule paths) = **462** unchanged — `git diff --diff-filter=A e87e8a43..b8860b16 --
+  'crates/*/src'` lists 0 new source files, and the 3 BLUE files touched
+  (`ade_core::consensus::praos_state`, `ade_ledger::rollback::materialize`, `ade_ledger::receive::reducer`) add NO
+  `pub struct` / `pub enum`. The two new rules `DC-PUMP-03` (enforced) + `T-REC-06` (enforced) are present; `T-REC-06`
+  carries `ci_scripts = ["ci/ci_check_rollback_materialize_eta0.sh"]`, `cross_ref = [T-REC-04, DC-CINPUT-03, CN-STORE-07,
+  DC-NODE-27, DC-CONS-20]`, `strengthened_in = []`; `DC-PUMP-03` carries `ci_scripts =
+  ["ci/ci_check_keep_alive_wire_only.sh"]`, `cross_ref = [CN-PUMP-01, DC-PUMP-01, DC-PUMP-02, DC-NODE-30, CN-CONS-03]`,
+  `strengthened_in = []`. T-REC-04 / DC-NODE-27 were NOT strengthened (the N-AN cluster doc said "possibly"; they were
+  not).
+- **Cross-reference check (CODEMAP ↔ SEAMS ↔ registry) at this regen — read honestly:** the **REGISTRY is canonical at
+  this HEAD** (361 rules @ `b8860b16`, incl. `DC-NODE-33` / `DC-PUMP-03` / `T-REC-06`). This SEAMS is now at 462 / 161 /
+  361 (`b8860b16`). The on-disk **CODEMAP lags by TWO clusters** (462 / 159 / 358 @ `b4c0983d`, the N-AK close) — it
+  predates `DC-NODE-33` (N-AL), `DC-PUMP-03` (N-AM), `T-REC-06` (N-AN) and the 2 N-AM/N-AN gates, but its **module
+  inventory + TCB colors are STILL ACCURATE** because N-AL / N-AM / N-AN add **no new module + no new BLUE type** (the
+  N-AN BLUE `overlay_recovered_eta0` is a method on the already-inventoried `PraosChainDepState`; the N-AM keep-alive
+  client is RED wiring in the already-inventoried `ade_runtime::admission::wire_pump`). **No stale module references in
+  this SEAMS** — every module it newly cites (`ade_core::consensus::praos_state` BLUE,
+  `ade_ledger::rollback::materialize` BLUE, `ade_ledger::receive::reducer` BLUE, `ade_runtime::admission::wire_pump` RED,
+  `ade_network::{keep_alive, codec::keep_alive}` BLUE) is inventoried in the CODEMAP in the SAME TCB color. The CODEMAP
+  picks up the 3 new rule rows + 2 gate rows on its next regen; the registry is authoritative in the interim. **CARRIED
+  cross-reference WARNING (registry is canonical):** the task brief + the CODEMAP header describe `CN-CONS-03` as
+  staying **`partial`**, but the **registry ground truth is `status = "declared"`** for `CN-CONS-03`. The load-bearing
+  fact is identical — **`CN-CONS-03` was NOT flipped to `enforced`; full multi-peer ChainSel convergence remains out of
+  scope** — but this SEAMS does not assert the label `partial`. Flagged for the next CODEMAP/registry reconciliation.
+- **Candidate seams surfaced for confirm/reject (this refresh): ZERO NEW genuine extension-point candidates — both
+  N-AM and N-AN are CLOSED-surface, confirmed by source.** Detail (the determination the brief asked for): **(1)** the
+  N-AM keep-alive client is a wire-only CLIENT over the EXISTING closed mini-protocol-8 contract — it adds no new
+  mini-protocol, no new `AdmissionPeerEvent`, no new BLUE grammar, and produces no canonical type (CONFIRMED closed, not
+  a candidate). **(2)** the N-AN `overlay_recovered_eta0` is the SINGLE closed eta0-overlay authority on the existing
+  closed `PraosChainDepState`, shared by bootstrap + materialize; `materialize_rolled_back_state` is additively
+  parameterized (the SOLE CN-STORE-07 chokepoint does not move) — CONFIRMED closed, not a candidate / not a new
+  version-gated contract. **(3)** the `--mode node` CLI flag allow-list (`ci_check_node_path_fidelity.sh` PINNED_FLAGS)
+  gained 2 path-PRESERVING entries (`--participant-venue` N-AI, `--convergence-evidence-path` N-AJ) — both PRE-EXISTED
+  in `cli.rs`; the allow-list is a CLOSED set (the gate is its CI mirror), so this is a closed-allow-list extension, not
+  a new flag this span (the cli.rs flag SET stays the closed allow-list). **CARRIED candidates (unchanged by N-AM/N-AN):**
+  candidate #10 (the test-only orchestrator `chain_selector::process_rollback`, §7) and candidate #11 (the absent
+  STRUCTURAL CI gate for the test-enforced `DC-NODE-31` / `DC-NODE-32` / `DC-NODE-33` recovered-anchor rules; the new
+  `DC-PUMP-03` is gate-backed and `T-REC-06` is gate-backed, so neither adds to this gap). **One MINOR cosmetic note
+  (not a candidate, a CI hygiene item for the next pass):** `ci_check_node_path_fidelity.sh`'s OK-echo text still reads
+  "29 flags" while the enforced `PINNED_FLAGS` list is 31 (the 2 N-AN additions); the ENFORCED count is correct (31),
+  only the echo string lags.
 - **Regenerated (cluster-close refresh covering TWO clusters, PHASE4-N-AK folding in PHASE4-N-AJ) at HEAD
   `b4c0983d`** (`git rev-parse --short HEAD` — the *PHASE4-N-AK close*), applied DIRECTLY to the on-disk SEAMS. The
   prior on-disk SEAMS was pinned at the PHASE4-N-AI close (`5ec841c8` / **460** canonical types / **157** CI / **354**
