@@ -66,17 +66,26 @@ if echo "$pump_no_comments" | grep -E 'AgreementVerdict' >/dev/null 2>&1; then
     echo "$pump_no_comments" | grep -nE 'AgreementVerdict'
 fi
 
-# Guard 4: TipUpdate is queued for every chain-sync reply
-# carrying a Tip. Heuristic check — each chain-sync handler arm
-# must contain a `tip_update(` call or an `AdmissionPeerEvent::TipUpdate`
-# literal nearby.
+# Guard 4: every chain-sync reply emits a CLOSED authority event.
+# IntersectFound / IntersectNotFound / RollForward emit `tip_update(` /
+# `AdmissionPeerEvent::TipUpdate`; RollBackward emits the DISTINCT
+# `AdmissionPeerEvent::RollBackward` (PHASE4-N-AI AI-S4a — "a rollback is NEVER a
+# TipUpdate only"; the closed fork-choice / durable-rollback signal). DC-PUMP-02
+# refined for AI-S4a in the PHASE4-N-AN gate triage: the invariant is "a closed
+# event per reply", and the RollBackward reply's closed event is its own variant.
+# Heuristic: the per-arm closed event must appear within the arm.
 for arm in IntersectFound IntersectNotFound RollForward RollBackward; do
-    if ! awk -v needle="$arm" '
+    if [[ "$arm" == "RollBackward" ]]; then
+        ev='AdmissionPeerEvent::RollBackward'
+    else
+        ev='tip_update[(]|AdmissionPeerEvent::TipUpdate'
+    fi
+    if ! awk -v needle="$arm" -v ev="$ev" '
         $0 ~ ("ChainSyncMessage::"needle) { found_arm=1; ctx=0 }
-        found_arm && ctx < 10 { ctx++; if ($0 ~ /tip_update\(|AdmissionPeerEvent::TipUpdate/) print "ok"; }
+        found_arm && ctx < 20 { ctx++; if ($0 ~ ev) print "ok"; }
         found_arm && /^[[:space:]]*\}/ { found_arm=0 }
     ' "$PUMP" | grep -q '^ok$'; then
-        print_fail "wire_pump.rs: chain-sync $arm arm does not emit TipUpdate (DC-PUMP-02)"
+        print_fail "wire_pump.rs: chain-sync $arm arm does not emit its closed authority event [$ev] (DC-PUMP-02)"
     fi
 done
 

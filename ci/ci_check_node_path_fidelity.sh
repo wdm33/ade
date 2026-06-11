@@ -34,10 +34,17 @@ print_fail() { echo "FAIL (node path fidelity): $1"; FAIL=1; }
 # (from a non-G-D cluster) updates this baseline with explicit review; within G-D
 # the set is frozen — a private-only / venue flag (e.g. --private-net,
 # --from-genesis, --devnet, --rehearsal) would change the set and trip this guard.
+# PHASE4-N-AN triage (2026-06-11): baseline extended (with review) for two
+# legitimately-added, path-PRESERVING flags from later clusters —
+# --participant-venue (N-AI, the sigma=0 participant role; the --mode node admit
+# path is UNCHANGED, mirroring the pinned --single-producer-venue) and
+# --convergence-evidence-path (N-AJ, an emit-only evidence sink, like --evidence-log).
+# The path-diverging private flags above stay excluded.
 PINNED_FLAGS="$(cat <<'EOF'
 --chain-db
 --cold-skey
 --consensus-inputs-path
+--convergence-evidence-path
 --evidence-log
 --genesis-file
 --genesis-hash
@@ -53,6 +60,7 @@ PINNED_FLAGS="$(cat <<'EOF'
 --network-magic
 --opcert
 --out-file
+--participant-venue
 --peer
 --period-idx
 --seed-block-hash

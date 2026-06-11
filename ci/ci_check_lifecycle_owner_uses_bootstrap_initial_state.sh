@@ -1,5 +1,10 @@
 #!/usr/bin/env bash
-set -uo pipefail
+# NOTE: NOT `pipefail`. The guards use `<<<`/`echo | grep -q`; `grep -q` exits on
+# the first match, sending SIGPIPE upstream — under `pipefail` that made the
+# pipeline report a (spurious) non-zero, producing FLAKY false "missing" results
+# for tokens that ARE present (PHASE4-N-AN triage). The grep exit alone is the
+# check; pipefail is neither needed nor wanted here.
+set -u
 
 # PHASE4-N-F-C — node lifecycle owner single-authority gate (CN-NODE-01).
 #
@@ -81,11 +86,20 @@ OWNER_BODY="$(strip_for_grep "$OWNER")"
 # `LedgerState::new` stays permitted. The real invariant is enforced by "no
 # InMemoryChainDb" + "no materialize" + the positive composer/authority
 # requirements + the genesis/cold fences below.
-for tok in 'InMemoryChainDb' 'materialize_rolled_back_state\('; do
-    if echo "$OWNER_BODY" | grep -qE "$tok"; then
-        print_fail "owner ($(basename "$OWNER")) contains a parallel/cold initial-state path token: $tok — the owner must delegate materialization to the single bootstrap_initial_state authority (CN-NODE-01)."
-    fi
-done
+# InMemoryChainDb: forbidden anywhere in the owner (no cold storage-init).
+if grep -qE 'InMemoryChainDb' <<< "$OWNER_BODY"; then
+    print_fail "owner ($(basename "$OWNER")) contains InMemoryChainDb — cold storage-init is forbidden; initial state routes through bootstrap_initial_state (CN-NODE-01)."
+fi
+# materialize_rolled_back_state: the N-AI rollback-follow (`apply_chain_event`)
+# LEGITIMATELY materializes the rolled-back (LedgerState, PraosChainDepState) via
+# the SOLE CN-STORE-07 authority — that is fork-choice, NOT initial state. Strip
+# the `apply_chain_event` fn (top-level `pub fn …` to its column-0 `}`), then
+# forbid materialize in the remainder, so a PARALLEL/cold INITIAL-STATE
+# materialize still trips while the rollback-follow is permitted (CN-NODE-01).
+OWNER_NO_ROLLBACK="$(awk '/^pub fn apply_chain_event/{skip=1} skip&&/^}/{skip=0;next} skip{next} {print}' <<< "$OWNER_BODY")"
+if grep -qE 'materialize_rolled_back_state\(' <<< "$OWNER_NO_ROLLBACK"; then
+    print_fail "owner ($(basename "$OWNER")) materializes initial state OUTSIDE apply_chain_event — the initial-state path must delegate to the single bootstrap_initial_state authority (CN-NODE-01)."
+fi
 
 # --- guard (c-neg): no genesis/cold/graft fallback in the owner -------------
 # Mithril-only first run + recovered-only warm start: NO genesis composer, NO

@@ -4341,14 +4341,19 @@ strengthened_in = ["PHASE4-N-M-FOLLOW", "PHASE4-N-AI"]
 id = "DC-PUMP-02"
 tier = "derived"
 statement = """
-TipUpdate emitted on every chain-sync reply carrying a Tip
-(IntersectFound, IntersectNotFound, RollForward, RollBackward).
-The runner's next verdict::derive call sees the freshest peer
-comparison input.
+A CLOSED authority event is emitted on every chain-sync reply carrying a Tip:
+TipUpdate for IntersectFound / IntersectNotFound / RollForward; the DISTINCT
+AdmissionPeerEvent::RollBackward for RollBackward (PHASE4-N-AI AI-S4a -- a
+rollback is NEVER represented as a TipUpdate only; it is the closed fork-choice /
+durable-rollback signal carrying the peer's post-rollback tip). The runner's next
+verdict::derive / fork-choice call sees the freshest peer comparison input.
+(PHASE4-N-AN gate triage refined the RollBackward case to the AI-S4a event; the
+"closed event per reply" invariant is preserved -- the RollBackward reply's closed
+event is its own variant, not a generic TipUpdate.)
 """
-source = "docs/planning/phase4-n-m-c-operator-pass-invariants.md §1 (I-C7)"
+source = "docs/planning/phase4-n-m-c-operator-pass-invariants.md §1 (I-C7); refined for PHASE4-N-AI AI-S4a in the PHASE4-N-AN gate triage"
 cross_ref = ["CN-PUMP-01", "DC-PUMP-01"]
-code_locus = "crates/ade_runtime/src/admission/wire_pump.rs (handle_chain_sync IntersectFound / IntersectNotFound / RollForward / RollBackward arms all call tip_update before any other action)"
+code_locus = "crates/ade_runtime/src/admission/wire_pump.rs (handle_chain_sync: IntersectFound / IntersectNotFound / RollForward arms call tip_update; the RollBackward arm emits AdmissionPeerEvent::RollBackward -- the distinct AI-S4a fork-choice signal -- before any other action)"
 tests = [
     "admission::wire_pump::tests::pump_emits_tip_update_and_request_next_on_intersect_found_no_block_fetch",
     "admission::wire_pump::tests::pump_emits_tip_update_on_intersect_not_found",
@@ -4356,7 +4361,7 @@ tests = [
 ]
 ci_scripts = ["ci/ci_check_admission_wire_pump_closure.sh"]
 status = "enforced"
-strengthened_in = ["PHASE4-N-M-FOLLOW"]
+strengthened_in = ["PHASE4-N-M-FOLLOW", "PHASE4-N-AN"]
 
 [[rules]]
 id = "DC-ADMIT-10"
