@@ -73,10 +73,15 @@ const MAX_WIRE_PUMP_LOOKAHEAD: usize = 256;
 /// AI-S4a). The live loop drains these in arrival order so a rollback is
 /// processed at its exact position between blocks. Content-blind w.r.t. block
 /// bytes (a `Block` is opaque bytes; a `RollBack` carries the wire point).
+/// Sentinel peer label for hermetic in-memory feeds (which observe no real
+/// peer). S1 never consumes `peer` for any decision; the sentinel is provenance
+/// only and is distinguishable from a real peer address.
+pub(crate) const IN_MEMORY_PEER: &str = "<in-memory>";
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum NodeSyncItem {
-    Block(Vec<u8>),
-    RollBack(Point),
+    Block { peer: String, bytes: Vec<u8> },
+    RollBack { peer: String, point: Point },
 }
 
 pub enum NodeBlockSource {
@@ -122,7 +127,13 @@ impl NodeBlockSource {
     /// Build an in-memory source from an ordered block-bytes sequence.
     pub fn in_memory(blocks: Vec<Vec<u8>>) -> Self {
         Self::InMemory {
-            blocks: blocks.into_iter().map(NodeSyncItem::Block).collect(),
+            blocks: blocks
+                .into_iter()
+                .map(|bytes| NodeSyncItem::Block {
+                    peer: IN_MEMORY_PEER.to_string(),
+                    bytes,
+                })
+                .collect(),
             followed_peer_tip: FollowedPeerTipSignal::new(),
         }
     }
@@ -145,7 +156,13 @@ impl NodeBlockSource {
         followed_peer_tip: Option<TipPoint>,
     ) -> Self {
         Self::InMemory {
-            blocks: blocks.into_iter().map(NodeSyncItem::Block).collect(),
+            blocks: blocks
+                .into_iter()
+                .map(|bytes| NodeSyncItem::Block {
+                    peer: IN_MEMORY_PEER.to_string(),
+                    bytes,
+                })
+                .collect(),
             followed_peer_tip: FollowedPeerTipSignal {
                 latest: followed_peer_tip,
             },
@@ -200,8 +217,11 @@ impl NodeBlockSource {
                 break;
             }
             match rx.try_recv() {
-                Ok(AdmissionPeerEvent::Block { block_bytes, .. }) => {
-                    lookahead.push_back(NodeSyncItem::Block(block_bytes));
+                Ok(AdmissionPeerEvent::Block { peer, block_bytes }) => {
+                    lookahead.push_back(NodeSyncItem::Block {
+                        peer,
+                        bytes: block_bytes,
+                    });
                 }
                 // PHASE4-N-AE.A (DC-NODE-15): a TipUpdate is STILL skipped for
                 // sync (it is not a block and not a sync tip authority), but it
@@ -214,8 +234,8 @@ impl NodeBlockSource {
                 // PHASE4-N-AI AI-S4b-ii: the rollback signal is now CONSUMED --
                 // queued as an ordered NodeSyncItem::RollBack so the live loop
                 // processes it at its exact position between blocks.
-                Ok(AdmissionPeerEvent::RollBackward { point, .. }) => {
-                    lookahead.push_back(NodeSyncItem::RollBack(point));
+                Ok(AdmissionPeerEvent::RollBackward { peer, point, .. }) => {
+                    lookahead.push_back(NodeSyncItem::RollBack { peer, point });
                 }
                 Ok(AdmissionPeerEvent::Disconnected { .. }) => {
                     *disconnected = true;
@@ -362,8 +382,11 @@ impl NodeBlockSource {
                 }
                 loop {
                     match rx.recv().await {
-                        Some(AdmissionPeerEvent::Block { block_bytes, .. }) => {
-                            lookahead.push_back(NodeSyncItem::Block(block_bytes));
+                        Some(AdmissionPeerEvent::Block { peer, block_bytes }) => {
+                            lookahead.push_back(NodeSyncItem::Block {
+                                peer,
+                                bytes: block_bytes,
+                            });
                             return;
                         }
                         // PHASE4-N-AE.A (DC-NODE-15): a TipUpdate does not end
@@ -376,8 +399,8 @@ impl NodeBlockSource {
                         }
                         // PHASE4-N-AI AI-S4b-ii: a rollback IS work -- queue it as
                         // an ordered NodeSyncItem::RollBack and stop waiting.
-                        Some(AdmissionPeerEvent::RollBackward { point, .. }) => {
-                            lookahead.push_back(NodeSyncItem::RollBack(point));
+                        Some(AdmissionPeerEvent::RollBackward { peer, point, .. }) => {
+                            lookahead.push_back(NodeSyncItem::RollBack { peer, point });
                             return;
                         }
                         Some(AdmissionPeerEvent::Disconnected { .. }) => {
@@ -475,8 +498,10 @@ where
         // Participant rollback-follow path is separate (run_participant_sync in
         // node_lifecycle — NOT touched).
         let block_bytes = match item {
-            NodeSyncItem::Block(b) => b,
-            NodeSyncItem::RollBack(point) => match (&state.recovered_anchor, &point) {
+            // S1 (DC-NODE-34): peer is provenance-only on this path -- ignored,
+            // never a single-producer admission/forge/rollback decision input.
+            NodeSyncItem::Block { bytes, .. } => bytes,
+            NodeSyncItem::RollBack { point, .. } => match (&state.recovered_anchor, &point) {
                 (Some(anchor), Point::Block { slot, hash })
                     if *slot == anchor.slot && *hash == anchor.hash =>
                 {
@@ -1387,9 +1412,9 @@ mod tests {
     #[tokio::test]
     async fn in_memory_source_yields_blocks_in_order_then_none() {
         let mut src = NodeBlockSource::in_memory(vec![block(0xA1), block(0xA2), block(0xA3)]);
-        assert_eq!(src.next_item().await, Some(NodeSyncItem::Block(block(0xA1))));
-        assert_eq!(src.next_item().await, Some(NodeSyncItem::Block(block(0xA2))));
-        assert_eq!(src.next_item().await, Some(NodeSyncItem::Block(block(0xA3))));
+        assert_eq!(src.next_item().await, Some(NodeSyncItem::Block { peer: IN_MEMORY_PEER.to_string(), bytes: block(0xA1) }));
+        assert_eq!(src.next_item().await, Some(NodeSyncItem::Block { peer: IN_MEMORY_PEER.to_string(), bytes: block(0xA2) }));
+        assert_eq!(src.next_item().await, Some(NodeSyncItem::Block { peer: IN_MEMORY_PEER.to_string(), bytes: block(0xA3) }));
         assert_eq!(src.next_item().await, None);
         // Idempotent at end-of-feed.
         assert_eq!(src.next_item().await, None);
@@ -1416,8 +1441,8 @@ mod tests {
         drop(tx); // close the channel after the ordered blocks
 
         let mut src = NodeBlockSource::from_wire_pump(rx);
-        assert_eq!(src.next_item().await, Some(NodeSyncItem::Block(block(0xB1))));
-        assert_eq!(src.next_item().await, Some(NodeSyncItem::Block(block(0xB2))));
+        assert_eq!(src.next_item().await, Some(NodeSyncItem::Block { peer: "p".to_string(), bytes: block(0xB1) }));
+        assert_eq!(src.next_item().await, Some(NodeSyncItem::Block { peer: "p".to_string(), bytes: block(0xB2) }));
         assert_eq!(src.next_item().await, None, "closed channel ends the feed");
     }
 
@@ -1459,22 +1484,155 @@ mod tests {
         drop(tx);
 
         let mut src = NodeBlockSource::from_wire_pump(rx);
-        let rb = NodeSyncItem::RollBack(Point::Block {
-            slot: SlotNo(50),
-            hash: Hash32([0x33; 32]),
-        });
+        let rb = NodeSyncItem::RollBack {
+            peer: "p".to_string(),
+            point: Point::Block {
+                slot: SlotNo(50),
+                hash: Hash32([0x33; 32]),
+            },
+        };
         // Items arrive in order: RollBack, Block(C1), RollBack, Block(C2).
         assert_eq!(src.next_item().await, Some(rb.clone()));
         assert_eq!(
             src.next_item().await,
-            Some(NodeSyncItem::Block(block(0xC1)))
+            Some(NodeSyncItem::Block { peer: "p".to_string(), bytes: block(0xC1) })
         );
         assert_eq!(src.next_item().await, Some(rb));
         assert_eq!(
             src.next_item().await,
-            Some(NodeSyncItem::Block(block(0xC2)))
+            Some(NodeSyncItem::Block { peer: "p".to_string(), bytes: block(0xC2) })
         );
         assert_eq!(src.next_item().await, None);
+    }
+
+    // ===== PHASE4-N-AO S1 (DC-NODE-34, CE-AO-1): peer-identity restoration =====
+
+    #[tokio::test]
+    async fn node_sync_item_carries_peer_from_wire_pump() {
+        // The origin peer is preserved through the non-blocking pump_lookahead
+        // conversion -- a Block AND a RollBackward from peer "P1" yield NodeSyncItem
+        // values carrying peer "P1", not a discarded `..`.
+        let (tx, rx) = mpsc::channel::<AdmissionPeerEvent>(16);
+        tx.send(AdmissionPeerEvent::Block {
+            peer: "P1".to_string(),
+            block_bytes: block(0xE1),
+        })
+        .await
+        .unwrap();
+        tx.send(AdmissionPeerEvent::RollBackward {
+            peer: "P1".to_string(),
+            point: Point::Block {
+                slot: SlotNo(7),
+                hash: Hash32([0x77; 32]),
+            },
+            tip: Tip {
+                point: Point::Block {
+                    slot: SlotNo(7),
+                    hash: Hash32([0x77; 32]),
+                },
+                block_no: 7,
+            },
+        })
+        .await
+        .unwrap();
+        drop(tx);
+
+        let mut src = NodeBlockSource::from_wire_pump(rx);
+        // has_work_ready fills the lookahead via the non-blocking pump_lookahead.
+        assert!(src.has_work_ready());
+        assert_eq!(
+            src.next_item().await,
+            Some(NodeSyncItem::Block {
+                peer: "P1".to_string(),
+                bytes: block(0xE1),
+            })
+        );
+        assert_eq!(
+            src.next_item().await,
+            Some(NodeSyncItem::RollBack {
+                peer: "P1".to_string(),
+                point: Point::Block {
+                    slot: SlotNo(7),
+                    hash: Hash32([0x77; 32]),
+                },
+            })
+        );
+    }
+
+    #[tokio::test]
+    async fn node_sync_item_carries_peer_blocking_recv_path() {
+        // The origin peer is preserved through the BLOCKING recv conversion too.
+        // `wait_ready` owns the Idle-branch blocking `rx.recv()` fill (distinct from
+        // the non-blocking `next_item` top-up); it blocks until the peer "P2" event
+        // arrives, pushing a peer-tagged item into the lookahead that `next_item`
+        // then pops.
+        let (tx, rx) = mpsc::channel::<AdmissionPeerEvent>(16);
+        let mut src = NodeBlockSource::from_wire_pump(rx);
+        let sender = tokio::spawn(async move {
+            tokio::task::yield_now().await;
+            tx.send(AdmissionPeerEvent::Block {
+                peer: "P2".to_string(),
+                block_bytes: block(0xF1),
+            })
+            .await
+            .unwrap();
+        });
+        // Blocks in the wait_ready recv branch until the event arrives.
+        src.wait_ready().await;
+        sender.await.unwrap();
+        assert_eq!(
+            src.next_item().await,
+            Some(NodeSyncItem::Block {
+                peer: "P2".to_string(),
+                bytes: block(0xF1),
+            })
+        );
+    }
+
+    #[tokio::test]
+    async fn follow_single_peer_durable_output_unchanged_after_peer_threading() {
+        // peer is provenance-only -- the durable output is independent of the peer
+        // label. A single-peer FOLLOW over a feed explicitly tagged peer "P9" admits
+        // the forward block and advances the tip identically (run_node_sync ignores
+        // peer): same stored bytes, same ChainDb tip, a WAL AdmitBlock at the
+        // advanced slot. Mirrors node_sync_pump_advances_recoverable_tip.
+        let (c, view) = corpus_view();
+        let sched = schedule();
+        let bytes = pick_lightest(&c);
+
+        let dir = TempDir::new().unwrap();
+        let chaindb =
+            PersistentChainDb::open(PersistentChainDbOptions::at(dir.path().join("chain.db")))
+                .unwrap();
+        let mut wal = FileWalStore::open(dir.path().join("wal")).unwrap();
+        let mut state = fresh_state(c.epoch_nonce);
+        let mut source = NodeBlockSource::in_memory_items(vec![NodeSyncItem::Block {
+            peer: "P9".to_string(),
+            bytes: bytes.clone(),
+        }]);
+
+        let tip = run_node_sync(&mut source, &mut state, &chaindb, &mut wal, &sched, &view)
+            .await
+            .expect("single-peer follow admits")
+            .expect("tip advanced via pump_block");
+
+        let stored = ChainDb::get_block_by_hash(&chaindb, &tip.hash)
+            .expect("get")
+            .expect("block present");
+        assert_eq!(stored.bytes, bytes, "peer threading preserves wire bytes");
+        let chain_tip = ChainDb::tip(&chaindb).expect("tip").expect("non-empty");
+        assert_eq!(
+            chain_tip.slot, tip.slot,
+            "durable tip unchanged by peer threading"
+        );
+        assert_eq!(chain_tip.hash, tip.hash);
+        let entries = wal.read_all().expect("read_all");
+        assert!(
+            entries
+                .iter()
+                .any(|e| matches!(e, WalEntry::AdmitBlock { slot, .. } if *slot == tip.slot)),
+            "the forward block admits via pump_block (AdmitBlock at the advanced tip)"
+        );
     }
 
     // ===== L4b: durable validated apply (hermetic, real persistent stores) =====
@@ -1665,11 +1823,17 @@ mod tests {
         };
         state.recovered_anchor = Some(anchor.clone());
         let mut source = NodeBlockSource::in_memory_items(vec![
-            NodeSyncItem::RollBack(ade_network::codec::chain_sync::Point::Block {
-                slot: anchor.slot,
-                hash: anchor.hash.clone(),
-            }),
-            NodeSyncItem::Block(bytes.clone()),
+            NodeSyncItem::RollBack {
+                peer: IN_MEMORY_PEER.to_string(),
+                point: ade_network::codec::chain_sync::Point::Block {
+                    slot: anchor.slot,
+                    hash: anchor.hash.clone(),
+                },
+            },
+            NodeSyncItem::Block {
+                peer: IN_MEMORY_PEER.to_string(),
+                bytes: bytes.clone(),
+            },
         ]);
 
         let tip = run_node_sync(&mut source, &mut state, &chaindb, &mut wal, &sched, &view)
@@ -1883,7 +2047,7 @@ mod tests {
         drop(tx);
 
         let mut src = NodeBlockSource::from_wire_pump(rx);
-        assert_eq!(src.next_item().await, Some(NodeSyncItem::Block(block(0xC1))));
+        assert_eq!(src.next_item().await, Some(NodeSyncItem::Block { peer: "p".to_string(), bytes: block(0xC1) }));
         assert_eq!(
             src.next_item().await,
             None,
@@ -1941,8 +2105,8 @@ mod tests {
         assert!(src.has_work_ready(), "buffered block is ready");
         assert!(!src.is_ended(), "not ended while a block is buffered");
         // Delivery order preserved through the lookahead.
-        assert_eq!(src.next_item().await, Some(NodeSyncItem::Block(block(0xD1))));
-        assert_eq!(src.next_item().await, Some(NodeSyncItem::Block(block(0xD2))));
+        assert_eq!(src.next_item().await, Some(NodeSyncItem::Block { peer: "p".to_string(), bytes: block(0xD1) }));
+        assert_eq!(src.next_item().await, Some(NodeSyncItem::Block { peer: "p".to_string(), bytes: block(0xD2) }));
         // Drained + channel closed ⇒ ended.
         assert!(!src.has_work_ready(), "no more work");
         assert!(src.is_ended(), "disconnected + drained ⇒ ended");
@@ -4418,7 +4582,7 @@ mod tests {
         drop(tx); // close the feed so it ends after draining
         let mut source = NodeBlockSource::from_wire_pump(rx);
         let mut got = Vec::new();
-        while let Some(NodeSyncItem::Block(b)) = source.next_item().await {
+        while let Some(NodeSyncItem::Block { bytes: b, .. }) = source.next_item().await {
             got.push(b[0]);
         }
         assert_eq!(

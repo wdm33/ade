@@ -112,10 +112,13 @@ fn db_with_fork_and_snapshot() -> InMemoryChainDb {
 }
 
 fn rollback_item(slot: u64, hash: u8) -> NodeSyncItem {
-    NodeSyncItem::RollBack(WirePoint::Block {
-        slot: SlotNo(slot),
-        hash: h(hash),
-    })
+    NodeSyncItem::RollBack {
+        peer: "peer-1".to_string(),
+        point: WirePoint::Block {
+            slot: SlotNo(slot),
+            hash: h(hash),
+        },
+    }
 }
 
 // ---------- rollback path (Participant) ----------
@@ -320,7 +323,7 @@ async fn ak_s2_rollback_to_origin_fails_closed_even_with_anchor() {
     let mut fwd = fwd_at(8);
     fwd.recovered_anchor = Some(anchor_tip(188, 0x2e));
     let mut wal = VecWal::default();
-    let mut src = NodeBlockSource::in_memory_items(vec![NodeSyncItem::RollBack(WirePoint::Origin)]);
+    let mut src = NodeBlockSource::in_memory_items(vec![NodeSyncItem::RollBack { peer: "peer-1".to_string(), point: WirePoint::Origin }]);
     let err = run_node_sync(&mut src, &mut fwd, &db, &mut wal, &min_schedule(), &view_stub())
         .await
         .expect_err("Origin rollback must fail closed");
@@ -381,7 +384,7 @@ async fn ak_s2_after_anchor_noop_forward_block_reaches_pump_block_validation_hol
     let mut wal = VecWal::default();
     let mut src = NodeBlockSource::in_memory_items(vec![
         rollback_item(188, 0x2e),                          // anchor no-op
-        NodeSyncItem::Block(vec![0xDE, 0xAD, 0xBE, 0xEF]), // malformed -> pump_block rejects
+        NodeSyncItem::Block { peer: "peer-1".to_string(), bytes: vec![0xDE, 0xAD, 0xBE, 0xEF] }, // malformed -> pump_block rejects
     ]);
     let err = run_node_sync(&mut src, &mut fwd, &db, &mut wal, &min_schedule(), &view_stub())
         .await
@@ -467,7 +470,7 @@ async fn participant_bare_competing_block_fails_closed() {
     let mut fwd = fwd_at(decoded.header_input.block_no.0.saturating_sub(1));
     let mut wal = VecWal::default();
     let mut pending = false;
-    let mut src = NodeBlockSource::in_memory_items(vec![NodeSyncItem::Block(block)]);
+    let mut src = NodeBlockSource::in_memory_items(vec![NodeSyncItem::Block { peer: "peer-1".to_string(), bytes: block }]);
     let err = run_participant_sync(
         &mut src,
         &mut fwd,
@@ -507,7 +510,7 @@ async fn participant_block_with_no_durable_tip_pumps() {
     );
     let mut wal = VecWal::default();
     let mut pending = false;
-    let mut src = NodeBlockSource::in_memory_items(vec![NodeSyncItem::Block(block)]);
+    let mut src = NodeBlockSource::in_memory_items(vec![NodeSyncItem::Block { peer: "peer-1".to_string(), bytes: block }]);
     run_participant_sync(
         &mut src,
         &mut fwd,
@@ -625,7 +628,7 @@ async fn participant_block_received_does_not_imply_admission() {
     let mut fwd = fwd_at(decoded.header_input.block_no.0.saturating_sub(1));
     let mut wal = VecWal::default();
     let mut pending = false;
-    let mut src = NodeBlockSource::in_memory_items(vec![NodeSyncItem::Block(block)]);
+    let mut src = NodeBlockSource::in_memory_items(vec![NodeSyncItem::Block { peer: "peer-1".to_string(), bytes: block }]);
     let buf = SharedBuf::default();
     let mut ev = evidence_over(&buf);
     // Fails closed on the bare competing block; the transcript is still recorded.
@@ -749,7 +752,7 @@ async fn participant_rollback_origin_fails_closed() {
     });
     let mut wal = VecWal::default();
     let mut pending = false;
-    let mut src = NodeBlockSource::in_memory_items(vec![NodeSyncItem::RollBack(WirePoint::Origin)]);
+    let mut src = NodeBlockSource::in_memory_items(vec![NodeSyncItem::RollBack { peer: "peer-1".to_string(), point: WirePoint::Origin }]);
     let err = run_participant_sync(
         &mut src,
         &mut fwd,
@@ -824,7 +827,10 @@ async fn participant_first_forward_after_anchor_noop_admits_via_pump_block() {
     let mut pending = false;
     let mut src = NodeBlockSource::in_memory_items(vec![
         rollback_item(1, 0xA8),
-        NodeSyncItem::Block(block),
+        NodeSyncItem::Block {
+            peer: "peer-1".to_string(),
+            bytes: block,
+        },
     ]);
     run_participant_sync(
         &mut src,

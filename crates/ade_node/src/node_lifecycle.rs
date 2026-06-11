@@ -2507,7 +2507,7 @@ where
 {
     while let Some(item) = source.next_item().await {
         match item {
-            NodeSyncItem::Block(bytes) => {
+            NodeSyncItem::Block { bytes, .. } => {
                 // AJ-S2 (DC-NODE-30): decode first so the convergence evidence can
                 // record EVERY considered peer block (peer input) BEFORE the route
                 // decides drop/admit/refuse. `block_received` is evidence of peer
@@ -2569,7 +2569,7 @@ where
                     }
                 }
             }
-            NodeSyncItem::RollBack(wire_point) => {
+            NodeSyncItem::RollBack { point: wire_point, .. } => {
                 // Verify the rollback point is in the durable chain -- no fabricated
                 // block_no, no Origin (AI-S4a already fails Origin at the wire).
                 let (slot, hash) = match wire_point {
