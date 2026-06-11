@@ -317,6 +317,64 @@ mod tests {
         assert_eq!(ledger_fp(&got_ledger), ledger_fp(&direct));
     }
 
+    /// AN-S1 repro (PHASE4-N-AN, T-REC-06): rollback materialization replays the rolled-back block
+    /// against the PERSISTED-SNAPSHOT placeholder `epoch_nonce`, NOT the recovered eta0 the live-admit
+    /// path uses (WarmStart overlays eta0 onto the live chain_dep only; `materialize` reads the raw
+    /// `nearest_le` snapshot chain_dep). A block that validates on live admit (against eta0) therefore
+    /// fails rollback-materialize header VRF (against the placeholder) — a replay-equivalence VIOLATION.
+    /// This test documents the buggy behavior MECHANICALLY (repro-first); AN-S2's fix flips it so the
+    /// rollback path overlays eta0 and the block replays Valid.
+    #[test]
+    fn materialize_replays_against_placeholder_nonce_not_recovered_eta0() {
+        let (c, view) = corpus_view();
+        let eta0 = c.epoch_nonce;
+        let placeholder = [0u8; 32];
+        assert_ne!(
+            placeholder, eta0,
+            "the persisted-snapshot placeholder nonce differs from the recovered eta0"
+        );
+
+        let bytes = pick_lightest(&c);
+        let decoded = decode_block(&bytes).expect("decode");
+
+        // (a) LIVE-ADMIT control: the corpus block's VRF verifies against the recovered eta0.
+        let live = block_validity(&fresh_ledger(), &fresh_chain_dep(eta0), &schedule(), &view, &bytes);
+        assert!(
+            matches!(live.verdict, BlockValidityVerdict::Valid { .. }),
+            "live admit (eta0 chain_dep) must validate the corpus block, got {:?}",
+            live.verdict
+        );
+
+        // (b) ROLLBACK MATERIALIZE: the snapshot carries the PLACEHOLDER nonce (mirrors the persisted
+        //     snapshot; the WarmStart eta0 overlay never reaches this path). Replaying the SAME block
+        //     fails the header VRF — the divergence T-REC-06 forbids.
+        let snapshot_slot = SlotNo(decoded.header_input.slot.0 - 1);
+        let reader = OneSnapshotReader {
+            slot: snapshot_slot,
+            ledger: fresh_ledger(),
+            chain_dep: fresh_chain_dep(placeholder),
+        };
+        let source = ListBlockSource {
+            blocks: vec![(decoded.header_input.slot, bytes.clone())],
+        };
+        let target = TargetPoint {
+            slot: decoded.header_input.slot,
+            hash: decoded.block_hash.clone(),
+        };
+        let err = materialize_rolled_back_state(target, &reader, &source, &schedule(), &view)
+            .expect_err("AN-S1 repro: current code fails rollback-replay VRF against the placeholder");
+        match err {
+            MaterializeError::ReplayFailedAt { slot, error } => {
+                assert_eq!(slot, decoded.header_input.slot);
+                assert!(
+                    format!("{error:?}").contains("VrfCert"),
+                    "AN-S1: rollback replay fails on the header VRF (placeholder != eta0), got {error:?}"
+                );
+            }
+            other => panic!("AN-S1 repro: expected ReplayFailedAt VrfCert, got {other:?}"),
+        }
+    }
+
     #[test]
     fn materialize_fails_closed_on_invalid_block() {
         let (c, view) = corpus_view();
