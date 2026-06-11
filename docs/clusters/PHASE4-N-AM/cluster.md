@@ -208,13 +208,13 @@ CN-CONS-03 · running the CE-AI-6 reorg/convergence pass before CE-AM-LIVE prove
   — the keep-alive client is a NEW derived rule on the pump, not a re-scoping of the pump-authority /
   emit-vocabulary rules; those are PRESERVED (the keep-alive path emits no `AdmissionPeerEvent`, so the
   emit-set closure is unchanged). DC-PUMP-03 cross-refs them.
-- **DC-PUMP-03 banked at `enforced_scaffolding`** (PHASE4-N-AM, 2026-06-11) — CE-AM-1..6 (hermetic + the
-  new gate) GREEN + both close-gate reviews CLEAN (IDD 0 BLOCK; security 0 HIGH/MEDIUM); `tests` +
-  `ci_scripts` populated. `enforced` is **WITHHELD** until CE-AM-LIVE (the operator sustain pass) is
-  recorded — `open_obligation = blocked_until_operator_sustain_pass`, discharged as the FIRST leg of the
-  CE-AI-6 bridge-venue session (one fresh venue serves both legs; the sustain leg is the HARD GUARD on
-  starting the CE-AI-6 reorg capture). NO overclaim — mirrors the N-AJ DC-EVIDENCE-03 enforced_scaffolding
-  pattern (mechanically enforced, live transcript pending).
+- **DC-PUMP-03 `enforced`** (PHASE4-N-AM, 2026-06-11) — CE-AM-1..6 (hermetic + the new gate) GREEN + both
+  close-gate reviews CLEAN (IDD 0 BLOCK; security 0 HIGH/MEDIUM) + **CE-AM-LIVE PASSED** (the operator
+  sustain pass: recover @ slot 202 → caught up → `agreed` @ slot 241 with our_hash == peer_hash → keep-alive
+  SUSTAINED 152s vs the prior ~96s EOF, 7 ping/pong @ 20s, cookies validated, 0 grammar failures,
+  0 idle-EOF; transcript OUTSIDE-REPO, sha `b96b842a…`). Banked at `enforced_scaffolding` (`c0430322`)
+  then flipped to `enforced` once CE-AM-LIVE was recorded — NO overclaim. NOT a CE-AI-6 claim (no reorg /
+  slot regression).
 
 ## Close-record note (preserve verbatim at `/cluster-close`)
 

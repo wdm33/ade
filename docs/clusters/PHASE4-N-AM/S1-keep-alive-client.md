@@ -8,13 +8,15 @@ the REUSED BLUE `ade_network::keep_alive` state machine, and validates the echoe
 deadline instead of EOFing. The single slice of PHASE4-N-AM.
 
 ## 2. Slice Header
-- **Cluster:** PHASE4-N-AM. **Status:** Merged (impl `a1655449`; authority docs `c1b9eee2`; banked
-  `enforced_scaffolding` 2026-06-11).
+- **Cluster:** PHASE4-N-AM. **Status:** Merged + CLOSED (impl `a1655449`; authority docs `c1b9eee2`;
+  banked `enforced_scaffolding` `c0430322`; **CE-AM-LIVE PASSED 2026-06-11 → DC-PUMP-03 `enforced`**).
 - **Cluster Exit Criteria Addressed:** CE-AM-1..6 (hermetic + the new gate) **GREEN**; **CE-AM-LIVE
-  OPEN** — the operator sustain pass, discharged as the FIRST leg of the CE-AI-6 bridge-venue session
-  (one fresh venue serves both; the sustain leg is the hard guard on starting the CE-AI-6 reorg).
-- **Primary registry rule:** DC-PUMP-03 (`declared` → `enforced_scaffolding` at AM bank; `enforced`
-  ONLY after CE-AM-LIVE is recorded).
+  PASSED** — the operator sustain pass on the frozen c2-testnet relay: recover @ slot 202 → caught up
+  → `agreed` @ slot 241 (our_hash == peer_hash) → keep-alive SUSTAINED 152s (vs prior ~96s EOF), 7
+  ping/pong @ 20s, cookies validated, 0 grammar failures, 0 idle-EOF. NOT a CE-AI-6 claim (no reorg).
+  Transcript OUTSIDE-REPO (sha `b96b842a…`).
+- **Primary registry rule:** DC-PUMP-03 (`declared` → `enforced_scaffolding` → **`enforced`** after
+  CE-AM-LIVE).
 
 ## 4. Intent (invariant impact)
 Strengthen **DC-PUMP-03** `declared → enforced`: the wire pump is the SOLE driver of the per-peer N2N
@@ -57,9 +59,9 @@ on open, so SUSTAIN — not EOF-reattach — is the only path).
 - **CN-CONS-03** — untouched; AM sustains the follow, it does not add multi-peer ChainSel.
 
 ## 8. Invariants Strengthened
-- **DC-PUMP-03** `declared → enforced_scaffolding` (banked) — AM-S1 populates its `tests` (CE-AM-1..3)
-  and `ci_scripts` (`ci_check_keep_alive_wire_only.sh`); `enforced` is WITHHELD until CE-AM-LIVE (the
-  live sustain leg, in the CE-AI-6 bridge venue) is recorded.
+- **DC-PUMP-03** `declared → enforced_scaffolding → enforced` — AM-S1 populates its `tests` (CE-AM-1..3)
+  and `ci_scripts` (`ci_check_keep_alive_wire_only.sh`); flipped to `enforced` after CE-AM-LIVE (the live
+  sustain leg) PASSED on the frozen c2-testnet relay 2026-06-11.
 - No existing rule's `strengthened_in` gains `PHASE4-N-AM` — CN-PUMP-01 / DC-PUMP-01 / DC-PUMP-02 are
   cross-refs (preserved), not strengthenings (the keep-alive client is a NEW derived rule on the pump).
 

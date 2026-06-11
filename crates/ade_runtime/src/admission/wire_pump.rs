@@ -52,7 +52,8 @@ use ade_network::codec::keep_alive::{
 };
 use ade_network::codec::version::KeepAliveVersion;
 use ade_network::keep_alive::{
-    keep_alive_transition, KeepAliveAgency, KeepAliveError, KeepAliveState,
+    keep_alive_transition, KeepAliveAgency, KeepAliveError, KeepAliveEvent, KeepAliveOutput,
+    KeepAliveState,
 };
 use ade_network::handshake::state::{HandshakeError, PeerSharingFlag, VersionData};
 use ade_network::mux::frame::MuxMode;
@@ -249,6 +250,12 @@ pub async fn run_admission_wire_pump(
                     ) {
                         Ok((new_state, _output)) => {
                             keep_alive_state = new_state;
+                            // Wire-only diagnostic (DC-PUMP-03 / CE-AM-LIVE
+                            // observability): stderr only, no AdmissionPeerEvent.
+                            eprintln!(
+                                "keep_alive: ping cookie={} sent (cadence) peer={peer_addr}",
+                                cookie.0
+                            );
                             outbox_payloads.push_back(ByteChunkIn::OutboundFrame {
                                 mini_protocol: AcceptedMiniProtocol::KeepAlive,
                                 payload: encode_keep_alive_message(
@@ -658,9 +665,15 @@ fn handle_keep_alive(
     let msg = decode_keep_alive_message(payload).map_err(|_| KeepAliveError::MalformedMessage {
         reason: "keep-alive frame failed to decode",
     })?;
-    let (new_state, _output) =
+    let (new_state, output) =
         keep_alive_transition(*keep_alive_state, KeepAliveAgency::Server, version, msg)?;
     *keep_alive_state = new_state;
+    // Wire-only diagnostic (DC-PUMP-03 / CE-AM-LIVE observability): the BLUE
+    // transition validated the echoed cookie back to ClientIdle. stderr only,
+    // no AdmissionPeerEvent.
+    if let KeepAliveOutput::Event(KeepAliveEvent::PongReceived { cookie }) = output {
+        eprintln!("keep_alive: pong cookie={} validated", cookie.0);
+    }
     Ok(())
 }
 
