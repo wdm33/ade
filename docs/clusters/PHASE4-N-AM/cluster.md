@@ -208,11 +208,13 @@ CN-CONS-03 · running the CE-AI-6 reorg/convergence pass before CE-AM-LIVE prove
   — the keep-alive client is a NEW derived rule on the pump, not a re-scoping of the pump-authority /
   emit-vocabulary rules; those are PRESERVED (the keep-alive path emits no `AdmissionPeerEvent`, so the
   emit-set closure is unchanged). DC-PUMP-03 cross-refs them.
-- DC-PUMP-03 flips `declared` → `enforced` at close after CE-AM-1..6 (hermetic + the new gate) pass and
-  CE-AM-LIVE (the operator-run sustain preflight) is recorded as enforced-backing evidence — mirroring
-  the N-AL close (DC-NODE-33 enforced, CE-AL-3-LIVE backing). If CE-AM-LIVE is not run at close, the
-  mechanical client is enforced and CE-AM-LIVE is carried as a named `open_obligation`
-  (`blocked_until_operator_sustain_pass`) — NO overclaim.
+- **DC-PUMP-03 banked at `enforced_scaffolding`** (PHASE4-N-AM, 2026-06-11) — CE-AM-1..6 (hermetic + the
+  new gate) GREEN + both close-gate reviews CLEAN (IDD 0 BLOCK; security 0 HIGH/MEDIUM); `tests` +
+  `ci_scripts` populated. `enforced` is **WITHHELD** until CE-AM-LIVE (the operator sustain pass) is
+  recorded — `open_obligation = blocked_until_operator_sustain_pass`, discharged as the FIRST leg of the
+  CE-AI-6 bridge-venue session (one fresh venue serves both legs; the sustain leg is the HARD GUARD on
+  starting the CE-AI-6 reorg capture). NO overclaim — mirrors the N-AJ DC-EVIDENCE-03 enforced_scaffolding
+  pattern (mechanically enforced, live transcript pending).
 
 ## Close-record note (preserve verbatim at `/cluster-close`)
 
