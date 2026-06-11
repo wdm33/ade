@@ -7360,3 +7360,30 @@ status = "enforced"
 open_obligation = "ENFORCED at PHASE4-N-AM /cluster-close (2026-06-11). The prior blocked_until_operator_sustain_pass obligation is DISCHARGED -- CE-AM-LIVE (the operator sustain pass) PASSED. Live evidence (FROZEN c2-testnet relay 127.0.0.1:38061, magic 42; transcript OUTSIDE-REPO at ~/.cardano-ceai6/am-camlive/, scrubbed note only): a fresh bare-anchor recover @ slot 202 caught up admitting 5 blocks (slots 209,210,221,237,241) -> agreement_verdict{agreed} @ slot 241 with our_hash == peer_hash (7d4278c4..., EXACT match) -> then IDLE at the frozen tip while the keep-alive client SUSTAINED the link 152s (vs the prior ~96s EOF): 7 MsgKeepAlive on the ~20s cadence (cookies 0..6), 7 MsgResponseKeepAlive cookies VALIDATED, 0 keep-alive grammar failures, 0 idle-EOF / ShutdownPeer(KeepAlive) (the relay held Ade a hot peer the full run; its only disconnect was BearerClosed from the timeout-kill, NOT ExceededTimeLimit(KeepAlive)). Transcript sha256 = b96b842afed7d5d33bcb9279552864689708636764d045775da401ebdd558702; convergence sha256 = a86f764cb31c582818003eeb44fc40896ce729dfe957b4ba521799158c4a94a6. NOT a CE-AI-6 claim -- NO reorg / NO slot regression occurred (CE-AI-6 is a SEPARATE partition->heal reorg pass on a bridge venue). Hermetic backing: CE-AM-1 wire_pump_sends_keep_alive_on_quiescent_cadence (start_paused virtual-time -- the production run_admission_wire_pump select! emits a real proto-8 MsgKeepAlive over a loopback mux during inbound quiescence, no AdmissionPeerEvent), CE-AM-2 wire_pump_keep_alive_response_validates_cookie_no_event, CE-AM-3 wire_pump_keep_alive_cookie_mismatch_fails_closed (cookie mismatch + unsolicited-ClientIdle response + undecodable payload all -> AdmissionWirePumpError::KeepAlive fail-closed), CE-AM-4 ci_check_keep_alive_wire_only.sh GREEN (reuse-not-redefine + wire-only fence), CE-AM-5 existing pump tests unperturbed (13/13 wire_pump). Both close-gate reviews CLEAN (IDD 0 BLOCK; security 0 HIGH/MEDIUM, 1 INFO = a Byzantine bad-cookie forces a self-inflicted peer disconnect, acceptable under fail-closed). Separate (NOT N-AM): a warm-start from a caught-up store hit ReplayFailedAt slot 209 VrfCert VerificationFailed -- a BLUE recover-follow/WAL-replay concern (keep-alive is wire-only, touches no WAL/replay), deferred to its own investigation. Repo gate sweep at close = 156/159 (3 PRE-EXISTING reds byte-unrelated to N-AM: admission_wire_pump_closure / lifecycle_owner_uses_bootstrap_initial_state / node_path_fidelity, deferred to a separate stale-gate hygiene triage) + the new ci_check_keep_alive_wire_only.sh PASSES."
 introduced_in = "PHASE4-N-AM"
 strengthened_in = []
+
+[[rules]]
+id = "T-REC-06"
+tier = "true"
+statement = """
+Rollback-materialization replay-equivalence (PHASE4-N-AN). A block that validates during live admit
+(against the eta0-overlaid chain_dep, T-REC-04) MUST NOT fail rollback-materialize replay because
+materialization substituted a different nonce source. materialize_rolled_back_state (the SOLE
+rolled-back-state authority, CN-STORE-07) MUST reconstruct the replay chain_dep with the SAME recovered
+eta0 (epoch nonce) the live-admit path uses (praos_vrf_input(slot, eta0), DC-CINPUT-03); the persisted
+snapshot's placeholder / genesis epoch_nonce MUST NOT reach VRF verification on the rollback-replay path.
+Same recovered store + same ordered WAL/feed => same chain_dep inputs => same block_validity result on the
+live-admit and rollback paths. eta0 is the recovered canonical input (the seed-epoch
+SeedEpochConsensusInputs.epoch_nonce sidecar) -- never peer data, wall-clock, CLI re-supply, or a
+re-query. VRF validation strength is UNCHANGED on the rollback path (no bypass / skip / loosening). SCOPE:
+the recovered seed epoch (no epoch-boundary crossing within the follow window -- eta0 is the constant
+epoch nonce); a multi-epoch rollback nonce-evolution is a named out-of-scope follow-on. Surfaced by the
+CE-AI-6 reorg (the rollback-follow died at ReplayFailedAt VrfCert); unblocks CE-AI-6.
+"""
+source = "docs/planning/phase4-n-an-rollback-materialize-eta0-invariants.md + docs/clusters/PHASE4-N-AN/cluster.md"
+cross_ref = ["T-REC-04", "DC-CINPUT-03", "CN-STORE-07", "DC-NODE-27", "DC-CONS-20"]
+code_locus = "crates/ade_ledger/src/rollback/materialize.rs (materialize_rolled_back_state -- the SOLE rolled-back-state authority; AN-S2 overlays the recovered eta0 onto the nearest_le snapshot chain_dep before the replay-forward block_validity fold), crates/ade_ledger/src/seed_consensus_inputs.rs (SeedEpochConsensusInputs.epoch_nonce -- the persisted recovered eta0 carrier), crates/ade_node/src/node_lifecycle.rs (apply_chain_event threads state.seed_epoch_consensus_inputs eta0 into the materialize call)"
+tests = []
+ci_scripts = []
+status = "declared"
+introduced_in = "PHASE4-N-AN"
+strengthened_in = []
