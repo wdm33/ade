@@ -561,6 +561,17 @@ async fn run_node_lifecycle_inner(
             // SAME value the wire pump FindIntersects at below; never re-read from the
             // store inside the loop.
             fwd.recovered_anchor = state.tip.clone();
+            // PHASE4-N-AN (T-REC-06): thread the recovered seed-epoch eta0 into the
+            // forward-sync state (set once, alongside the anchor). On a peer
+            // RollBackward the rollback-follow (`apply_chain_event`) overlays it
+            // onto the materialize replay chain_dep so rollback replay validates the
+            // header VRF against eta0 — the SAME nonce live admit used — instead of
+            // the snapshot `Nonce::ZERO` placeholder (replay-equivalence). Sourced
+            // from the recovered sidecar, never peer/CLI/wall-clock.
+            fwd.recovered_eta0 = state
+                .seed_epoch_consensus_inputs
+                .as_ref()
+                .map(|s| s.epoch_nonce.clone());
             // PHASE4-N-F-G-C S1: wire a LIVE WirePump feed when an upstream peer
             // is configured (`--peer`). Empty `--peer` keeps the prior empty
             // source (forge-CAPABLE, halts clean — the `On` arm is observable
@@ -2353,6 +2364,7 @@ where
                 &source,
                 era_schedule,
                 ledger_view,
+                fwd.recovered_eta0.as_ref(),
             )
             .map_err(ApplyError::Materialize)?;
             // Capture the abandoned (pre-rollback) tip + the rolled-back

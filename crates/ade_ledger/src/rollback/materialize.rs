@@ -19,7 +19,7 @@
 use ade_codec::cbor::envelope::decode_block_envelope;
 use ade_core::consensus::era_schedule::EraSchedule;
 use ade_core::consensus::ledger_view::LedgerView;
-use ade_core::consensus::praos_state::PraosChainDepState;
+use ade_core::consensus::praos_state::{Nonce, PraosChainDepState};
 use ade_types::{CardanoEra, Hash32, SlotNo};
 
 use crate::block_validity::transition::{block_validity, BlockValidityOutcome};
@@ -46,6 +46,7 @@ pub fn materialize_rolled_back_state(
     source: &dyn BlockSource,
     era_schedule: &EraSchedule,
     ledger_view: &dyn LedgerView,
+    recovered_eta0: Option<&Nonce>,
 ) -> Result<(LedgerState, PraosChainDepState), MaterializeError> {
     // 1. Find nearest snapshot ≤ target.
     let (snapshot_slot, mut ledger, mut chain_dep) = match reader.nearest_le(target.slot) {
@@ -57,6 +58,20 @@ pub fn materialize_rolled_back_state(
             })
         }
     };
+
+    // PHASE4-N-AN (T-REC-06): overlay the recovered seed-epoch eta0 onto the
+    // snapshot chain_dep — the SAME overlay WarmStart bootstrap applies to the
+    // live-admit chain_dep — BEFORE the degenerate return AND the replay-forward
+    // fold, so rollback replay validates the header VRF against the same nonce as
+    // live admit (replay-equivalence). The persisted snapshot carries the
+    // `Nonce::ZERO` placeholder; eta0 is the recovered canonical input (the
+    // seed-epoch sidecar). `None` (cold-start / no recovered sidecar) keeps the
+    // snapshot's nonce as-is. NOTE: VRF strength is UNCHANGED — overlaying the
+    // correct nonce is not a bypass; a block whose VRF verifies against NEITHER
+    // eta0 nor the snapshot nonce still fails closed.
+    if let Some(eta0) = recovered_eta0 {
+        chain_dep.overlay_recovered_eta0(eta0);
+    }
 
     // 2. Degenerate: snapshot exactly at target.
     if snapshot_slot == target.slot {
@@ -246,7 +261,7 @@ mod tests {
             hash: Hash32([0u8; 32]),
         };
         let err =
-            materialize_rolled_back_state(target, &EmptyReader, &source, &schedule(), &view)
+            materialize_rolled_back_state(target, &EmptyReader, &source, &schedule(), &view, None)
                 .expect_err("must reject");
         match err {
             MaterializeError::RollbackTooDeep {
@@ -276,7 +291,7 @@ mod tests {
             hash: Hash32([0u8; 32]),
         };
         let (got_ledger, got_chain_dep) =
-            materialize_rolled_back_state(target, &reader, &source, &schedule(), &view).expect("ok");
+            materialize_rolled_back_state(target, &reader, &source, &schedule(), &view, None).expect("ok");
         assert_eq!(ledger_fp(&got_ledger), ledger_fp(&ledger));
         assert_eq!(got_chain_dep, chain_dep);
     }
@@ -302,7 +317,7 @@ mod tests {
             hash: decoded.block_hash.clone(),
         };
         let (got_ledger, _got_chain_dep) =
-            materialize_rolled_back_state(target, &reader, &source, &schedule(), &view)
+            materialize_rolled_back_state(target, &reader, &source, &schedule(), &view, None)
                 .expect("ok");
         // Fingerprint must equal direct-apply result.
         let direct = {
@@ -317,42 +332,94 @@ mod tests {
         assert_eq!(ledger_fp(&got_ledger), ledger_fp(&direct));
     }
 
-    /// AN-S1 repro (PHASE4-N-AN, T-REC-06): rollback materialization replays the rolled-back block
-    /// against the PERSISTED-SNAPSHOT placeholder `epoch_nonce`, NOT the recovered eta0 the live-admit
-    /// path uses (WarmStart overlays eta0 onto the live chain_dep only; `materialize` reads the raw
-    /// `nearest_le` snapshot chain_dep). A block that validates on live admit (against eta0) therefore
-    /// fails rollback-materialize header VRF (against the placeholder) — a replay-equivalence VIOLATION.
-    /// This test documents the buggy behavior MECHANICALLY (repro-first); AN-S2's fix flips it so the
-    /// rollback path overlays eta0 and the block replays Valid.
+    /// AN-S1→S2 (PHASE4-N-AN, T-REC-06): the persisted snapshot carries the `Nonce::ZERO` PLACEHOLDER
+    /// epoch_nonce, NOT the recovered eta0. WITHOUT the overlay (`None`) rollback materialization replays
+    /// the rolled-back block against the placeholder and fails the header VRF — the divergence AN-S1
+    /// reproduced. WITH the recovered eta0 overlaid (`Some(eta0)`) the SAME block replays Valid and the
+    /// materialized chain_dep carries eta0 — byte-equal to the live-admit nonce basis. That is the
+    /// replay-equivalence T-REC-06 demands (CE-AN-2 + CE-AN-3). The `None` arm proves the overlay — not a
+    /// VRF skip — is what fixes it.
     #[test]
-    fn materialize_replays_against_placeholder_nonce_not_recovered_eta0() {
+    fn rollback_materialize_overlays_recovered_eta0_replay_equivalent() {
         let (c, view) = corpus_view();
-        let eta0 = c.epoch_nonce;
+        let eta0_bytes = c.epoch_nonce;
         let placeholder = [0u8; 32];
         assert_ne!(
-            placeholder, eta0,
+            placeholder, eta0_bytes,
             "the persisted-snapshot placeholder nonce differs from the recovered eta0"
         );
+        let eta0 = Nonce(Hash32(eta0_bytes));
 
         let bytes = pick_lightest(&c);
         let decoded = decode_block(&bytes).expect("decode");
 
         // (a) LIVE-ADMIT control: the corpus block's VRF verifies against the recovered eta0.
-        let live = block_validity(&fresh_ledger(), &fresh_chain_dep(eta0), &schedule(), &view, &bytes);
+        let live = block_validity(&fresh_ledger(), &fresh_chain_dep(eta0_bytes), &schedule(), &view, &bytes);
         assert!(
             matches!(live.verdict, BlockValidityVerdict::Valid { .. }),
             "live admit (eta0 chain_dep) must validate the corpus block, got {:?}",
             live.verdict
         );
 
-        // (b) ROLLBACK MATERIALIZE: the snapshot carries the PLACEHOLDER nonce (mirrors the persisted
-        //     snapshot; the WarmStart eta0 overlay never reaches this path). Replaying the SAME block
-        //     fails the header VRF — the divergence T-REC-06 forbids.
+        let snapshot_slot = SlotNo(decoded.header_input.slot.0 - 1);
+        let mk_reader = || OneSnapshotReader {
+            slot: snapshot_slot,
+            ledger: fresh_ledger(),
+            chain_dep: fresh_chain_dep(placeholder),
+        };
+        let mk_source = || ListBlockSource {
+            blocks: vec![(decoded.header_input.slot, bytes.clone())],
+        };
+        let mk_target = || TargetPoint {
+            slot: decoded.header_input.slot,
+            hash: decoded.block_hash.clone(),
+        };
+
+        // (b) WITHOUT the overlay (`None`): rollback replay still fails the header VRF against the
+        //     placeholder — the bug. The overlay (not a VRF skip) is what fixes it.
+        let err =
+            materialize_rolled_back_state(mk_target(), &mk_reader(), &mk_source(), &schedule(), &view, None)
+                .expect_err("without the eta0 overlay, rollback replay fails VRF against the placeholder");
+        assert!(
+            format!("{err:?}").contains("VrfCert"),
+            "None-overlay path fails on the header VRF, got {err:?}"
+        );
+
+        // (c) WITH the overlay (`Some(eta0)`): the SAME block replays Valid AND the materialized
+        //     chain_dep carries eta0 — byte-equal to the live-admit nonce basis (replay-equivalence).
+        let (_l, got_cd) = materialize_rolled_back_state(
+            mk_target(),
+            &mk_reader(),
+            &mk_source(),
+            &schedule(),
+            &view,
+            Some(&eta0),
+        )
+        .expect("with the recovered eta0 overlaid, the rolled-back block replays Valid");
+        assert_eq!(
+            got_cd.epoch_nonce, eta0,
+            "materialized chain_dep epoch_nonce == recovered eta0"
+        );
+        assert_eq!(
+            got_cd.epoch_nonce,
+            fresh_chain_dep(eta0_bytes).epoch_nonce,
+            "rollback-materialized nonce == live-admit nonce basis (replay-equivalence)"
+        );
+    }
+
+    /// CE-AN-4 (PHASE4-N-AN, T-REC-06): the eta0 overlay is NOT a VRF bypass. Overlaying a WRONG eta0
+    /// (not the block's epoch nonce) still fails the header VRF — the fix supplies the correct recovered
+    /// nonce; it does not skip verification. Guards the cluster's "no looser than live admit" line.
+    #[test]
+    fn rollback_materialize_does_not_bypass_vrf_on_wrong_eta0() {
+        let (c, view) = corpus_view();
+        let bytes = pick_lightest(&c);
+        let decoded = decode_block(&bytes).expect("decode");
         let snapshot_slot = SlotNo(decoded.header_input.slot.0 - 1);
         let reader = OneSnapshotReader {
             slot: snapshot_slot,
             ledger: fresh_ledger(),
-            chain_dep: fresh_chain_dep(placeholder),
+            chain_dep: fresh_chain_dep([0u8; 32]),
         };
         let source = ListBlockSource {
             blocks: vec![(decoded.header_input.slot, bytes.clone())],
@@ -361,18 +428,21 @@ mod tests {
             slot: decoded.header_input.slot,
             hash: decoded.block_hash.clone(),
         };
-        let err = materialize_rolled_back_state(target, &reader, &source, &schedule(), &view)
-            .expect_err("AN-S1 repro: current code fails rollback-replay VRF against the placeholder");
-        match err {
-            MaterializeError::ReplayFailedAt { slot, error } => {
-                assert_eq!(slot, decoded.header_input.slot);
-                assert!(
-                    format!("{error:?}").contains("VrfCert"),
-                    "AN-S1: rollback replay fails on the header VRF (placeholder != eta0), got {error:?}"
-                );
-            }
-            other => panic!("AN-S1 repro: expected ReplayFailedAt VrfCert, got {other:?}"),
-        }
+        // A WRONG eta0 (all 0xAB) — not the block's epoch nonce.
+        let wrong = Nonce(Hash32([0xAB; 32]));
+        let err = materialize_rolled_back_state(
+            target,
+            &reader,
+            &source,
+            &schedule(),
+            &view,
+            Some(&wrong),
+        )
+        .expect_err("overlaying a WRONG eta0 must still fail VRF — the overlay is not a bypass");
+        assert!(
+            format!("{err:?}").contains("VrfCert"),
+            "wrong-eta0 overlay still fails the header VRF, got {err:?}"
+        );
     }
 
     #[test]
@@ -399,7 +469,7 @@ mod tests {
             hash: decoded.block_hash.clone(),
         };
         let err =
-            materialize_rolled_back_state(target, &reader, &source, &schedule(), &view)
+            materialize_rolled_back_state(target, &reader, &source, &schedule(), &view, None)
                 .expect_err("must reject invalid block");
         match err {
             MaterializeError::ReplayFailedAt { slot, .. } => {
@@ -444,7 +514,7 @@ mod tests {
             hash: decoded.block_hash.clone(),
         };
         let (replay_ledger, replay_chain_dep) =
-            materialize_rolled_back_state(target, &reader, &source, &schedule(), &view)
+            materialize_rolled_back_state(target, &reader, &source, &schedule(), &view, None)
                 .expect("replay ok");
 
         assert_eq!(

@@ -30,6 +30,7 @@
 
 use ade_core::consensus::era_schedule::EraSchedule;
 use ade_core::consensus::ledger_view::LedgerView;
+use ade_core::consensus::praos_state::Nonce;
 use ade_ledger::receive::{
     receive_apply, ReceiveEffect, ReceiveError, ReceiveEvent, ReceiveState,
 };
@@ -146,6 +147,13 @@ pub struct ForwardSyncState {
     /// rollback fails closed). It is NOT a servable block and is never
     /// synthesized into one.
     pub recovered_anchor: Option<ChainTip>,
+    /// PHASE4-N-AN (T-REC-06): the recovered seed-epoch eta0, set once at
+    /// bootstrap from `BootstrapState.seed_epoch_consensus_inputs`. Threaded into
+    /// `materialize_rolled_back_state` on the rollback-follow path so rollback
+    /// replay validates the header VRF against eta0 (replay-equivalence with live
+    /// admit), not the snapshot `Nonce::ZERO` placeholder. `None` for cold-start /
+    /// non-recover callers (the snapshot nonce is used as-is).
+    pub recovered_eta0: Option<Nonce>,
 }
 
 impl ForwardSyncState {
@@ -164,6 +172,7 @@ impl ForwardSyncState {
             cadence,
             last_checkpoint: None,
             recovered_anchor: None,
+            recovered_eta0: None,
         }
     }
 }

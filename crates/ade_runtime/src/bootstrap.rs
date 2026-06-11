@@ -249,18 +249,11 @@ where
     let reader = PersistentSnapshotCache::new(inputs.snapshot_store);
     let source = ChainDbBlockSource::new(inputs.chaindb);
 
-    let (ledger, mut chain_dep) = materialize_rolled_back_state(
-        target,
-        &reader,
-        &source,
-        inputs.era_schedule,
-        inputs.ledger_view,
-    )
-    .map_err(BootstrapError::Materialize)?;
-
-    // A3b: restore + verify the seed-epoch consensus-input sidecar
-    // when (and only when) the caller demands it. `NotRequired`
-    // preserves the pre-A3b warm-start behavior exactly.
+    // A3b: restore + verify the seed-epoch consensus-input sidecar BEFORE
+    // materialize, so the recovered eta0 can overlay the replay chain_dep.
+    // `NotRequired` preserves the pre-A3b warm-start behavior exactly. (Reordered
+    // ahead of materialize in PHASE4-N-AN; the restore is independent of the
+    // materialize result, so this changes order only, not outcome.)
     let seed_epoch_consensus_inputs = match inputs.seed_epoch_consensus_source {
         SeedEpochConsensusSource::NotRequired => None,
         SeedEpochConsensusSource::RequiredFromRecoveredProvenance(provenance) => {
@@ -268,17 +261,32 @@ where
         }
     };
 
-    // PHASE4-N-F-G-N (T-REC-04 / DC-CINPUT-03): overlay the recovered seed-epoch
-    // eta0 onto the recovered chain_dep. The snapshot materializes the
-    // ledger/chain skeleton, but its chain_dep carries the admission seed's
-    // PLACEHOLDER eta0 (`Nonce::ZERO`, admission/bootstrap.rs:164); the
-    // authoritative seed-epoch eta0 lives in the recovered consensus-input
-    // sidecar. Without this, forge/self_accept sign the header VRF over ZERO and
-    // a real Conway peer rejects it (VRFKeyBadProof). At the seed epoch (no
-    // blocks applied since the seed) the evolving nonce equals eta0, so both are
-    // set — reconstructing `genesis(eta0)`. This is the explicit recovered-input
-    // overlay, NOT a snapshot replacement; eta0 is sourced from the sidecar, not
-    // genesis-derived and not a placeholder.
+    // PHASE4-N-AN (T-REC-06): overlay the recovered eta0 INTO materialize so the
+    // replay-forward fold validates each replayed block's header VRF against eta0,
+    // NOT the snapshot's `Nonce::ZERO` placeholder. Without this, a WarmStart from
+    // a NON-bare store (the WAL carries post-anchor blocks) fails replay VRF
+    // (ReplayFailedAt VrfCert) — the SAME root cause as the live-rollback bug. For
+    // a bare-anchor recovery (degenerate snapshot-at-target, no replay) it is a
+    // no-op and the explicit post-overlay below still carries eta0.
+    let (ledger, mut chain_dep) = materialize_rolled_back_state(
+        target,
+        &reader,
+        &source,
+        inputs.era_schedule,
+        inputs.ledger_view,
+        seed_epoch_consensus_inputs.as_ref().map(|s| &s.epoch_nonce),
+    )
+    .map_err(BootstrapError::Materialize)?;
+
+    // PHASE4-N-F-G-N (T-REC-04 / DC-CINPUT-03): the explicit post-materialize
+    // recovered-eta0 overlay (the SOLE site `ci_check_warmstart_eta0_overlay.sh`
+    // checks). The snapshot's chain_dep carries the admission seed's PLACEHOLDER
+    // eta0 (`Nonce::ZERO`, admission/bootstrap.rs:164); the authoritative
+    // seed-epoch eta0 lives in the recovered consensus-input sidecar. Without
+    // this, forge/self_accept sign the header VRF over ZERO and a real Conway peer
+    // rejects it (VRFKeyBadProof). At the seed epoch (no blocks applied since the
+    // seed) the evolving nonce equals eta0, so both are set — reconstructing
+    // `genesis(eta0)`. Idempotent after the materialize overlay above.
     if let Some(sidecar) = &seed_epoch_consensus_inputs {
         chain_dep.epoch_nonce = sidecar.epoch_nonce.clone();
         chain_dep.evolving_nonce = sidecar.epoch_nonce.clone();
@@ -678,6 +686,7 @@ mod tests {
             &source,
             &sched,
             &view,
+            None,
         )
         .expect("direct");
 

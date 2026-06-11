@@ -24,7 +24,7 @@
 
 use ade_core::consensus::era_schedule::EraSchedule;
 use ade_core::consensus::ledger_view::LedgerView;
-use ade_core::consensus::praos_state::PraosChainDepState;
+use ade_core::consensus::praos_state::{Nonce, PraosChainDepState};
 use ade_types::{Hash32, SlotNo};
 
 use crate::block_validity::decode_block;
@@ -65,6 +65,10 @@ impl ReceiveState {
 pub struct RollbackContext<'a> {
     pub snapshot_reader: &'a dyn crate::rollback::SnapshotReader,
     pub block_source: &'a dyn crate::rollback::BlockSource,
+    /// PHASE4-N-AN (T-REC-06): the recovered seed-epoch eta0 overlaid onto the
+    /// materialized rollback chain_dep (replay-equivalence with live admit).
+    /// `None` keeps the snapshot nonce as-is (cold-start / no recovered sidecar).
+    pub recovered_eta0: Option<&'a Nonce>,
 }
 
 /// One step of the receive bridge. Pure, total, deterministic.
@@ -128,6 +132,7 @@ fn roll_backward<W: ChainDbWrite>(
         ctx.block_source,
         era_schedule,
         ledger_view,
+        ctx.recovered_eta0,
     )
     .map_err(map_materialize_err)?;
 

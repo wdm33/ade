@@ -7382,8 +7382,12 @@ CE-AI-6 reorg (the rollback-follow died at ReplayFailedAt VrfCert); unblocks CE-
 source = "docs/planning/phase4-n-an-rollback-materialize-eta0-invariants.md + docs/clusters/PHASE4-N-AN/cluster.md"
 cross_ref = ["T-REC-04", "DC-CINPUT-03", "CN-STORE-07", "DC-NODE-27", "DC-CONS-20"]
 code_locus = "crates/ade_ledger/src/rollback/materialize.rs (materialize_rolled_back_state -- the SOLE rolled-back-state authority; AN-S2 overlays the recovered eta0 onto the nearest_le snapshot chain_dep before the replay-forward block_validity fold), crates/ade_ledger/src/seed_consensus_inputs.rs (SeedEpochConsensusInputs.epoch_nonce -- the persisted recovered eta0 carrier), crates/ade_node/src/node_lifecycle.rs (apply_chain_event threads state.seed_epoch_consensus_inputs eta0 into the materialize call)"
-tests = []
-ci_scripts = []
-status = "declared"
+tests = [
+  "rollback_materialize_overlays_recovered_eta0_replay_equivalent (crates/ade_ledger/src/rollback/materialize.rs -- None overlay => VrfCert; Some(eta0) => Valid + materialized epoch_nonce == eta0 == the live-admit nonce basis)",
+  "rollback_materialize_does_not_bypass_vrf_on_wrong_eta0 (crates/ade_ledger/src/rollback/materialize.rs -- a WRONG eta0 still fails the header VRF: the overlay is not a bypass)",
+]
+ci_scripts = ["ci/ci_check_rollback_materialize_eta0.sh"]
+status = "enforced"
 introduced_in = "PHASE4-N-AN"
 strengthened_in = []
+open_obligation = "ENFORCED at PHASE4-N-AN AN-S2 (2026-06-11). materialize_rolled_back_state overlays the recovered seed-epoch eta0 (PraosChainDepState::overlay_recovered_eta0 -- the SINGLE overlay authority shared with WarmStart bootstrap) onto the nearest-snapshot chain_dep BEFORE the replay-forward block_validity fold, so rollback replay validates each block's header VRF against eta0, NOT the snapshot Nonce::ZERO placeholder. Threaded from the recovered sidecar via ForwardSyncState.recovered_eta0 (apply_chain_event -- the live rollback-follow that the CE-AI-6 reorg hit) AND the bootstrap WarmStart materialize (seed_epoch_consensus_inputs.epoch_nonce -- ALSO fixes warm-start replay from a NON-bare store, the SAME root cause). Repro-first: AN-S1 (commit dbf31c7a) reproduced the VrfCert mechanically; AN-S2 flipped it to Valid. Hermetic backing: CE-AN-2/3 rollback_materialize_overlays_recovered_eta0_replay_equivalent, CE-AN-4 rollback_materialize_does_not_bypass_vrf_on_wrong_eta0, CE-AN-5 ci_check_rollback_materialize_eta0.sh, CE-AN-6 no collateral (ade_ledger materialize 7/7, ade_runtime bootstrap 36/36 + receive_rollback_integration 5/5, wal_rollback_ai_s1 13/13, ade_node 338/338, ci_check_warmstart_eta0_overlay still OK). CE-AN-LIVE (the CE-AI-6 reorg transcript) is the live deliverable AN unblocks. SCOPE: the recovered seed epoch (no epoch-boundary crossing in the follow window); a multi-epoch rollback nonce-evolution is a named out-of-scope follow-on."

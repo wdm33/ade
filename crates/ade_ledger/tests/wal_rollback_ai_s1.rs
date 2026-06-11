@@ -317,6 +317,7 @@ fn rollback_replay_reanchor_fp_equals_materialized_fp() {
         &EmptySource,
         &one_era_schedule(),
         &view,
+        None,
     )
     .expect("materialize ok");
     assert_eq!(fingerprint(&got_ledger).combined, fp_l);

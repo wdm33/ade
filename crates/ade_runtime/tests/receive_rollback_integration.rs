@@ -172,6 +172,7 @@ fn rollback_branch_returns_rolled_back_on_in_memory_snapshot() {
     let ctx = RollbackContext {
         snapshot_reader: &cache,
         block_source: &source,
+        recovered_eta0: None,
     };
     let target = TargetPoint {
         slot: decoded.header_input.slot,
@@ -216,6 +217,7 @@ fn rollback_branch_returns_rollback_too_deep_when_no_snapshot() {
     let ctx = RollbackContext {
         snapshot_reader: &cache,
         block_source: &source,
+        recovered_eta0: None,
     };
     let pre_fp = ledger_fp(&state.ledger);
     let target = TargetPoint {
@@ -265,6 +267,7 @@ fn rollback_branch_state_unchanged_on_materialize_failure() {
     let ctx = RollbackContext {
         snapshot_reader: &cache,
         block_source: &source,
+        recovered_eta0: None,
     };
     let pre_fp = ledger_fp(&state.ledger);
     let pre_chain_dep = state.chain_dep.clone();
@@ -413,6 +416,7 @@ fn rollback_then_continue_admit_equals_straight_line_admit() {
         let ctx = RollbackContext {
             snapshot_reader: &cache,
             block_source: &source,
+            recovered_eta0: None,
         };
         let mut writer = ChainDbWriter::new(&db);
         receive_apply(

@@ -143,6 +143,21 @@ impl PraosChainDepState {
         }
     }
 
+    /// PHASE4-N-AN (T-REC-06 / T-REC-04): overlay the recovered seed-epoch eta0
+    /// onto the epoch + evolving nonce. The SINGLE eta0-overlay authority used by
+    /// BOTH WarmStart bootstrap (the live-admit chain_dep) and rollback
+    /// materialization (the replay chain_dep) — so live admit and rollback replay
+    /// validate the header VRF against the SAME nonce (replay-equivalence by
+    /// construction). eta0 is the recovered canonical input (the seed-epoch
+    /// consensus sidecar); the persisted snapshot carries the `Nonce::ZERO`
+    /// placeholder, which this overlays. At the seed epoch (no blocks applied
+    /// since the seed) the evolving nonce equals eta0, so both are set —
+    /// reconstructing `genesis(eta0)`'s nonce basis.
+    pub fn overlay_recovered_eta0(&mut self, eta0: &Nonce) {
+        self.epoch_nonce = eta0.clone();
+        self.evolving_nonce = eta0.clone();
+    }
+
     /// Empty state (all nonces = ZERO, no counters). Used for tests
     /// and for the type-default. NOT a valid runtime state.
     pub fn empty() -> Self {
