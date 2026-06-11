@@ -36,6 +36,7 @@
 use std::collections::VecDeque;
 use std::io;
 use std::net::SocketAddr;
+use std::time::Duration;
 
 use ade_network::codec::block_fetch::{
     decode_block_fetch_message, decompose_blockfetch_block, encode_block_fetch_message,
@@ -46,6 +47,13 @@ use ade_network::codec::chain_sync::{
     decode_chain_sync_message, encode_chain_sync_message, ChainSyncMessage, Point, Tip,
 };
 use ade_network::codec::handshake::VersionTable;
+use ade_network::codec::keep_alive::{
+    decode_keep_alive_message, encode_keep_alive_message, KeepAliveCookie, KeepAliveMessage,
+};
+use ade_network::codec::version::KeepAliveVersion;
+use ade_network::keep_alive::{
+    keep_alive_transition, KeepAliveAgency, KeepAliveError, KeepAliveState,
+};
 use ade_network::handshake::state::{HandshakeError, PeerSharingFlag, VersionData};
 use ade_network::mux::frame::MuxMode;
 use ade_network::mux::transport::{
@@ -124,7 +132,22 @@ pub enum AdmissionWirePumpError {
     /// k — fail closed (drop the peer) rather than surface a rollback point
     /// this rung cannot apply.
     UnsupportedRollbackPoint,
+    /// DC-PUMP-03 (PHASE4-N-AM): an inbound keep-alive frame violated the
+    /// keep-alive grammar (cookie mismatch, illegal transition, an
+    /// out-of-version message, or an undecodable payload). Wire-only
+    /// liveness fault — drop the peer rather than continue on a broken
+    /// keep-alive exchange.
+    KeepAlive(KeepAliveError),
 }
+
+/// Keep-alive cadence (DC-PUMP-03 / PHASE4-N-AM). The wire pump sends
+/// `MsgKeepAlive` every `KEEP_ALIVE_CADENCE` during inbound quiescence —
+/// STRICTLY under the peer's ~97s keep-alive timeout (observed live: the
+/// relay `ShutdownPeer`s a silent client at ~97s with `ExceededTimeLimit
+/// (KeepAlive) ClientHasAgency`). ~20s leaves ~3 missed-tick margin and is
+/// quieter than the 10s ecosystem default. Wall-clock cadence is a RED
+/// transport concern; it never reaches the BLUE core.
+const KEEP_ALIVE_CADENCE: Duration = Duration::from_secs(20);
 
 /// SOLE per-peer wire-pump entry (CN-PUMP-01). Drives chain-sync
 /// + block-fetch initiator state machines against `transport`
@@ -173,6 +196,21 @@ pub async fn run_admission_wire_pump(
     let mut chain_sync_in_flight = true;
     let mut block_fetch_in_flight = false;
 
+    // DC-PUMP-03 (PHASE4-N-AM): N2N keep-alive CLIENT state. The cadence
+    // sends `MsgKeepAlive` during inbound quiescence so the peer's
+    // keep-alive responder does not `ShutdownPeer` us at the ~97s timeout.
+    // The cookie is a monotonic u16 (deterministic — no rand); the BLUE
+    // `keep_alive_transition` carries the in-flight cookie and validates the
+    // echo. Wire-only: this state never produces an `AdmissionPeerEvent`.
+    let mut keep_alive_state = KeepAliveState::ClientIdle;
+    let mut next_cookie: u16 = 0;
+    let keep_alive_version = KeepAliveVersion::new(negotiated_version);
+    let mut keep_alive_timer = tokio::time::interval(KEEP_ALIVE_CADENCE);
+    keep_alive_timer.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+    // Consume the immediate first tick so the first keep-alive fires after
+    // one full cadence, not at startup.
+    keep_alive_timer.tick().await;
+
     loop {
         // 1. Flush every queued outbound payload first.
         while let Some(out_event) = outbox_payloads.pop_front() {
@@ -182,11 +220,57 @@ pub async fn run_admission_wire_pump(
             }
         }
 
-        // 2. Read the next inbound chunk.
-        let chunk = match transport.inbound.recv().await {
-            Some(c) => c,
-            None => {
-                return finalize(&peer_addr, AdmissionWirePumpResult::Eof, &events_out).await;
+        // 2. Read the next inbound chunk, OR fire a keep-alive on the
+        //    cadence during inbound quiescence (DC-PUMP-03). The inbound
+        //    arm is byte-identical to the pre-AM behaviour; mpsc `recv()`
+        //    is cancel-safe, so a keep-alive tick never drops a chunk.
+        let chunk = tokio::select! {
+            maybe_chunk = transport.inbound.recv() => match maybe_chunk {
+                Some(c) => c,
+                None => {
+                    return finalize(&peer_addr, AdmissionWirePumpResult::Eof, &events_out).await;
+                }
+            },
+            _ = keep_alive_timer.tick() => {
+                // Cadence fired during a quiescent inbound. Send
+                // `MsgKeepAlive` iff the client holds agency (no keepalive
+                // in flight — respect `ServerHasAgency`). The BLUE
+                // transition advances the state machine and carries the
+                // cookie; enqueue the frame on the EXISTING outbound path
+                // and loop back to flush it. Wire-only — no event emitted.
+                if keep_alive_state == KeepAliveState::ClientIdle {
+                    let cookie = KeepAliveCookie(next_cookie);
+                    next_cookie = next_cookie.wrapping_add(1);
+                    match keep_alive_transition(
+                        keep_alive_state,
+                        KeepAliveAgency::Client,
+                        keep_alive_version,
+                        KeepAliveMessage::KeepAlive(cookie),
+                    ) {
+                        Ok((new_state, _output)) => {
+                            keep_alive_state = new_state;
+                            outbox_payloads.push_back(ByteChunkIn::OutboundFrame {
+                                mini_protocol: AcceptedMiniProtocol::KeepAlive,
+                                payload: encode_keep_alive_message(
+                                    &KeepAliveMessage::KeepAlive(cookie),
+                                ),
+                                mode: MuxMode::Initiator,
+                                timestamp: 0,
+                            });
+                        }
+                        Err(e) => {
+                            return finalize(
+                                &peer_addr,
+                                AdmissionWirePumpResult::Error(
+                                    AdmissionWirePumpError::KeepAlive(e),
+                                ),
+                                &events_out,
+                            )
+                            .await;
+                        }
+                    }
+                }
+                continue;
             }
         };
 
@@ -280,8 +364,28 @@ pub async fn run_admission_wire_pump(
                             }
                         }
                     }
-                    AcceptedMiniProtocol::KeepAlive
-                    | AcceptedMiniProtocol::Handshake
+                    AcceptedMiniProtocol::KeepAlive => {
+                        // DC-PUMP-03 (PHASE4-N-AM): consume the peer's
+                        // `MsgResponseKeepAlive` to advance the BLUE
+                        // keep-alive state machine back to `ClientIdle`,
+                        // validating the echoed cookie. Wire-only — emits
+                        // NO `AdmissionPeerEvent`. A grammar violation
+                        // (cookie mismatch / illegal / undecodable) fails
+                        // closed (drop the peer).
+                        if let Err(e) =
+                            handle_keep_alive(&payload, &mut keep_alive_state, keep_alive_version)
+                        {
+                            return finalize(
+                                &peer_addr,
+                                AdmissionWirePumpResult::Error(
+                                    AdmissionWirePumpError::KeepAlive(e),
+                                ),
+                                &events_out,
+                            )
+                            .await;
+                        }
+                    }
+                    AcceptedMiniProtocol::Handshake
                     | AcceptedMiniProtocol::TxSubmission
                     | AcceptedMiniProtocol::LocalChainSync
                     | AcceptedMiniProtocol::LocalTxSubmission
@@ -289,11 +393,11 @@ pub async fn run_admission_wire_pump(
                     | AcceptedMiniProtocol::LocalTxMonitor
                     | AcceptedMiniProtocol::PeerSharing => {
                         // Honest-scope: the admission pump only
-                        // listens for chain-sync + block-fetch in
-                        // this cluster. Other accepted
-                        // mini-protocol frames are silently
-                        // dropped; the runner has no consumer
-                        // for them.
+                        // listens for chain-sync + block-fetch (plus
+                        // the keep-alive client above) in this
+                        // cluster. Other accepted mini-protocol
+                        // frames are silently dropped; the runner has
+                        // no consumer for them.
                     }
                 },
                 SessionEffect::HandshakeComplete { .. } => {
@@ -532,6 +636,32 @@ async fn handle_block_fetch(
             ))
         }
     }
+}
+
+/// Consume an inbound keep-alive frame (DC-PUMP-03 / PHASE4-N-AM).
+///
+/// The peer's `MsgResponseKeepAlive` advances the BLUE keep-alive state
+/// machine from `ServerHasAgency{cookie}` back to `ClientIdle`, which
+/// validates that the echoed cookie matches the outstanding request.
+/// Wire-only: this NEVER emits an `AdmissionPeerEvent`. The agency is
+/// fixed `Server` — the peer is the keep-alive SERVER on this connection
+/// (Ade is the client), so a client-originated message from the peer
+/// (`MsgKeepAlive` / `MsgDone`) is an `IllegalTransition` and fails
+/// closed; an undecodable payload is a malformed keep-alive frame. (If a
+/// live run ever shows the peer running a keep-alive CLIENT toward Ade, a
+/// responder is a scoped follow-on — CE-AM-LIVE proof obligation.)
+fn handle_keep_alive(
+    payload: &[u8],
+    keep_alive_state: &mut KeepAliveState,
+    version: KeepAliveVersion,
+) -> Result<(), KeepAliveError> {
+    let msg = decode_keep_alive_message(payload).map_err(|_| KeepAliveError::MalformedMessage {
+        reason: "keep-alive frame failed to decode",
+    })?;
+    let (new_state, _output) =
+        keep_alive_transition(*keep_alive_state, KeepAliveAgency::Server, version, msg)?;
+    *keep_alive_state = new_state;
+    Ok(())
 }
 
 /// Extract the `Point` of the block referenced by a chain-sync
@@ -1094,6 +1224,124 @@ mod tests {
             }
         }
         let _ = pump_handle.await;
+    }
+
+    // PHASE4-N-AM (DC-PUMP-03) — wire-pump keep-alive client.
+
+    #[tokio::test(start_paused = true)]
+    async fn wire_pump_sends_keep_alive_on_quiescent_cadence() {
+        // CE-AM-1: during inbound quiescence the pump sends MsgKeepAlive on
+        // the cadence so the peer's keep-alive responder does not time us
+        // out at ~97s. Under start_paused the virtual clock auto-advances to
+        // the interval deadline; the keep-alive then travels the loopback
+        // socket. Proves AM-1 (the pump sends MsgKeepAlive under the
+        // deadline) + AM-2 (wire-only: no AdmissionPeerEvent).
+        let (client_stream, server_stream) = loopback_pair().await;
+        let client_transport = spawn_duplex(client_stream, DuplexCapacity::DEFAULT);
+        let mut server_transport = spawn_duplex(server_stream, DuplexCapacity::DEFAULT);
+
+        let (events_tx, mut events_rx) = mpsc::channel::<AdmissionPeerEvent>(16);
+
+        let pump_handle = tokio::spawn(async move {
+            run_admission_wire_pump(
+                client_transport,
+                "127.0.0.1:0".into(),
+                Point::Origin,
+                14,
+                MAINNET_NETWORK_MAGIC,
+                events_tx,
+            )
+            .await
+        });
+
+        // Drain the initial FindIntersect, then stay QUIESCENT (no reply).
+        let _ = server_transport
+            .inbound
+            .recv()
+            .await
+            .expect("client sent FindIntersect");
+
+        // After the keep-alive cadence elapses (virtual clock auto-advances),
+        // the next outbound is a keep-alive frame on mini-protocol id 8
+        // carrying MsgKeepAlive. The 60s virtual timeout is a clean failure
+        // mode — the 20s interval fires first under auto-advance.
+        let ka_outbound = tokio::time::timeout(
+            Duration::from_secs(60),
+            server_transport.inbound.recv(),
+        )
+        .await
+        .expect("keep-alive sent within the cadence")
+        .expect("frame bytes");
+        let (frame, _) =
+            ade_network::mux::frame::decode_frame(&ka_outbound).expect("frame decodes");
+        assert_eq!(
+            frame.header.mini_protocol_id.get(),
+            AcceptedMiniProtocol::KEEP_ALIVE_ID,
+            "quiescent-cadence outbound must be a keep-alive frame (proto 8)"
+        );
+        match decode_keep_alive_message(&frame.payload).expect("decode keep-alive") {
+            KeepAliveMessage::KeepAlive(_) => {}
+            other => panic!("expected MsgKeepAlive, got {other:?}"),
+        }
+
+        // Wire-only: the keep-alive send emitted NO AdmissionPeerEvent.
+        assert!(
+            events_rx.try_recv().is_err(),
+            "keep-alive is wire-only — no AdmissionPeerEvent on send"
+        );
+
+        drop(server_transport);
+        let _ = pump_handle.await;
+    }
+
+    #[test]
+    fn wire_pump_keep_alive_response_validates_cookie_no_event() {
+        // CE-AM-2: an inbound MsgResponseKeepAlive matching the outstanding
+        // cookie advances the BLUE state machine back to ClientIdle. The
+        // handler has NO event channel parameter — wire-only by construction
+        // (it cannot emit an AdmissionPeerEvent).
+        let cookie = KeepAliveCookie(0x1234);
+        let mut state = KeepAliveState::ServerHasAgency { cookie };
+        let version = KeepAliveVersion::new(14);
+        let payload = encode_keep_alive_message(&KeepAliveMessage::ResponseKeepAlive(cookie));
+        handle_keep_alive(&payload, &mut state, version).expect("matched cookie validates");
+        assert_eq!(
+            state,
+            KeepAliveState::ClientIdle,
+            "back to ClientIdle after a valid pong"
+        );
+    }
+
+    #[test]
+    fn wire_pump_keep_alive_cookie_mismatch_fails_closed() {
+        // CE-AM-3: every keep-alive grammar violation fails closed.
+        let version = KeepAliveVersion::new(14);
+
+        // (a) a mismatched cookie against an outstanding request.
+        let mut state = KeepAliveState::ServerHasAgency {
+            cookie: KeepAliveCookie(0x1111),
+        };
+        let bogus =
+            encode_keep_alive_message(&KeepAliveMessage::ResponseKeepAlive(KeepAliveCookie(0x2222)));
+        let err = handle_keep_alive(&bogus, &mut state, version)
+            .expect_err("mismatched cookie must fail closed");
+        assert!(matches!(err, KeepAliveError::MalformedMessage { .. }));
+
+        // (b) a response while ClientIdle (no outstanding request).
+        let mut idle = KeepAliveState::ClientIdle;
+        let resp =
+            encode_keep_alive_message(&KeepAliveMessage::ResponseKeepAlive(KeepAliveCookie(7)));
+        let err2 = handle_keep_alive(&resp, &mut idle, version)
+            .expect_err("unsolicited response must fail closed");
+        assert!(matches!(err2, KeepAliveError::IllegalTransition { .. }));
+
+        // (c) an undecodable payload.
+        let mut st = KeepAliveState::ServerHasAgency {
+            cookie: KeepAliveCookie(1),
+        };
+        let err3 = handle_keep_alive(&[], &mut st, version)
+            .expect_err("undecodable payload must fail closed");
+        assert!(matches!(err3, KeepAliveError::MalformedMessage { .. }));
     }
 
     #[tokio::test]

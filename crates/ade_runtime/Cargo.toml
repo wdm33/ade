@@ -49,3 +49,7 @@ tokio = { version = "1", features = ["net", "rt", "rt-multi-thread", "io-util", 
 [dev-dependencies]
 tempfile = "3"
 ade_testkit = { path = "../ade_testkit" }
+# test-util: deterministic virtual-time (`#[tokio::test(start_paused)]`) for
+# the DC-PUMP-03 keep-alive cadence test. Dev-only — never in production
+# builds; cargo unifies this with the production tokio features for tests.
+tokio = { version = "1", features = ["test-util"] }
