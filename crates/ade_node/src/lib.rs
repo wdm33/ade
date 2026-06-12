@@ -31,6 +31,7 @@ pub mod produce_mode;
 pub mod rehearsal_evidence;
 pub mod rehearsal_pass;
 pub mod run_loop_planner;
+pub mod selector_state;
 pub mod wire_only;
 
 pub use cli::{Cli, CliError, KeyGenKesCli, Mode, ProduceCli};
