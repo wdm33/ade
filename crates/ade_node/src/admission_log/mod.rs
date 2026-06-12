@@ -15,6 +15,7 @@ pub mod event;
 pub mod writer;
 
 pub use event::{
-    AdmissionHaltReason, AdmissionLogEvent, AdmissionShutdownReason,
+    AdmissionHaltReason, AdmissionLogEvent, AdmissionShutdownReason, ForkChoiceEvidenceFailure,
+    ForkChoiceResult,
 };
 pub use writer::AdmissionLogWriter;

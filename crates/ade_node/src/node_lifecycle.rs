@@ -112,7 +112,8 @@ use crate::selector_state::{project_tiebreaker, ForkAnchor, PendingForkSwitch};
 use crate::admission::bootstrap::build_n2n_version_table;
 use crate::cli::Cli;
 use crate::forge_intent::{classify_forge_intent, ForgeIntent};
-use crate::convergence_evidence::{ConvergenceEvidence, ConvergenceEvidenceSink};
+use crate::admission_log::{ForkChoiceEvidenceFailure, ForkChoiceResult};
+use crate::convergence_evidence::{fork_switch_id, ConvergenceEvidence, ConvergenceEvidenceSink};
 use crate::node_sync::{
     admit_forged_block_durably, classify_receive, durable_tip_matches,
     forge_followed_tip_admission, forge_mode_after_admit, forge_mode_on_caughtup,
@@ -1402,18 +1403,42 @@ pub async fn run_relay_loop_with_sched(
                     // byte-only, never adoption authority.
                     let magic = act.network_magic;
                     if let Some(switch) = act.pending_fork_switch.clone() {
-                        let body_source: Box<dyn BranchBodySource> = match magic {
-                            Some(m) => Box::new(
-                                prefetch_branch_bodies(
-                                    &switch.winning_peer,
-                                    &switch.fork_anchor,
-                                    &switch.winner_tip,
-                                    m,
-                                )
-                                .await,
-                            ),
-                            None => Box::new(NullBranchBodySource),
-                        };
+                        // PHASE4-N-AO S9 (DC-EVIDENCE-04): the fork_switch_id ties this
+                        // apply cycle to the S3 fork_choice_selected{win} -- the SAME
+                        // canonical tuple (winning_peer + fork_anchor + winner_tip).
+                        let fsid = fork_switch_id(
+                            &switch.winning_peer,
+                            switch.fork_anchor.slot.0,
+                            &switch.fork_anchor.hash,
+                            switch.winner_tip.slot.0,
+                            &switch.winner_tip.hash,
+                        );
+                        let (body_source, fetched_count): (Box<dyn BranchBodySource>, u64) =
+                            match magic {
+                                Some(m) => {
+                                    if let Some(ev) = convergence.as_deref_mut() {
+                                        ev.emit_branch_fetch_started(
+                                            &fsid,
+                                            &switch.winning_peer,
+                                            switch.fork_anchor.slot.0,
+                                            switch.winner_tip.slot.0,
+                                        );
+                                    }
+                                    let prefetched = prefetch_branch_bodies(
+                                        &switch.winning_peer,
+                                        &switch.fork_anchor,
+                                        &switch.winner_tip,
+                                        m,
+                                    )
+                                    .await;
+                                    let n = prefetched.len() as u64;
+                                    if let Some(ev) = convergence.as_deref_mut() {
+                                        ev.emit_branch_fetch_completed(&fsid, &switch.winning_peer, n);
+                                    }
+                                    (Box::new(prefetched) as Box<dyn BranchBodySource>, n)
+                                }
+                                None => (Box::new(NullBranchBodySource), 0),
+                            };
                         let outcome = apply_fork_switch(
                             state,
                             chaindb,
@@ -1427,22 +1452,43 @@ pub async fn run_relay_loop_with_sched(
                             ledger_view,
                         )
                         .map_err(|e| NodeLifecycleError::RelaySync(format!("{e:?}")))?;
-                        // PHASE4-N-AO S6 (CE-AO-6): on a PROVEN adoption, emit the
-                        // convergence evidence for the adopted winner -- REUSING the
-                        // existing GREEN reducer (block_admitted + agreement_verdict,
-                        // DC-NODE-30), NOT a new vocabulary. The competing block's
-                        // block_received was already emitted by the S3 dispatch.
-                        // Evidence observes authority; it never becomes authority.
-                        if let ForkSwitchOutcome::Adopted { new_tip } = &outcome {
-                            if let Some(ev) = convergence.as_deref_mut() {
-                                let post_fp = fingerprint(&state.receive.ledger).combined;
-                                let peer_tip = source.followed_peer_tip_signal().tip();
-                                ev.emit_admit_and_verdict(
-                                    new_tip.slot.0,
-                                    &new_tip.hash,
-                                    &post_fp,
-                                    peer_tip,
-                                );
+                        // PHASE4-N-AO S9 (DC-EVIDENCE-04): EXACTLY ONE terminal event for
+                        // this fork_switch_id -- applied (proven adoption) OR failed
+                        // (structured closed code). Observe-only; never feeds back. On a
+                        // proven adoption the existing GREEN S6 reducer (block_admitted +
+                        // agreement_verdict, DC-NODE-30) follows for the adopted winner.
+                        match &outcome {
+                            ForkSwitchOutcome::Adopted { new_tip } => {
+                                if let Some(ev) = convergence.as_deref_mut() {
+                                    ev.emit_branch_prevalidated(
+                                        &fsid,
+                                        &switch.winning_peer,
+                                        fetched_count,
+                                    );
+                                    ev.emit_fork_switch_applied(
+                                        &fsid,
+                                        &switch.winning_peer,
+                                        new_tip.slot.0,
+                                        &new_tip.hash,
+                                    );
+                                    let post_fp = fingerprint(&state.receive.ledger).combined;
+                                    let peer_tip = source.followed_peer_tip_signal().tip();
+                                    ev.emit_admit_and_verdict(
+                                        new_tip.slot.0,
+                                        &new_tip.hash,
+                                        &post_fp,
+                                        peer_tip,
+                                    );
+                                }
+                            }
+                            ForkSwitchOutcome::ProofFailed { error } => {
+                                if let Some(ev) = convergence.as_deref_mut() {
+                                    ev.emit_fork_switch_failed(
+                                        &fsid,
+                                        &switch.winning_peer,
+                                        map_branch_proof_failure(error),
+                                    );
+                                }
                             }
                         }
                     }
@@ -2711,10 +2757,16 @@ fn dispatch_competing_fork_choice<D>(
     branch_caches: &mut BTreeMap<String, BTreeMap<Hash32, CachedHeader>>,
     pending_fork_switch: &mut Option<PendingForkSwitch>,
     pending_reselection: &mut bool,
+    mut evidence: Option<&mut ConvergenceEvidence>,
 ) -> Result<(), NodeSyncError>
 where
     D: ChainDb + SnapshotStore,
 {
+    // PHASE4-N-AO S9 (DC-EVIDENCE-04): observe-only decide-half taps. needs ->
+    // lca -> candidate -> selected. NONE feeds back into selection/apply/fence.
+    if let Some(ev) = evidence.as_deref_mut() {
+        ev.emit_needs_fork_choice(peer, decoded.header_input.slot.0, &decoded.block_hash);
+    }
     // PHASE4-N-AO S7 (DC-NODE-38): the fork anchor is the durable LAST COMMON
     // ANCESTOR, reached by walking the competing branch's preserved parent links --
     // NOT the competing block's immediate parent (durable only for a 1-deep fork;
@@ -2748,6 +2800,14 @@ where
         Ok(r) => r,
         Err(_) => return Ok(()),
     };
+    if let Some(ev) = evidence.as_deref_mut() {
+        ev.emit_lca_discovered(
+            peer,
+            lca.anchor_slot.0,
+            &lca.anchor_hash,
+            lca.headers.len() as u64,
+        );
+    }
     // The anchor binds the STORED slot + the resolved LCA hash (DC-NODE-29).
     let anchor = Point {
         slot: lca.anchor_slot,
@@ -2792,6 +2852,9 @@ where
         Ok(f) => f,
         Err(_) => return Ok(()),
     };
+    if let Some(ev) = evidence.as_deref_mut() {
+        ev.emit_candidate_fragment_built(peer, anchor.slot.0, frag.headers.len() as u64);
+    }
     // PHASE4-N-AO S6 (CE-AO-6): retain the competing block's tip `(slot, block
     // hash)` alongside the fragment -- the live BlockFetch endpoint (NOT adoption
     // authority; S4 still binds + prevalidates the fetched bytes).
@@ -2858,6 +2921,22 @@ where
     // chain (no decision, S4 not invoked).
     match decide_fork_switch(&selector_state, competing) {
         Ok(ForkSwitchDecision::Switch(switch)) => {
+            if let Some(ev) = evidence.as_deref_mut() {
+                let fsid = fork_switch_id(
+                    &switch.winning_peer,
+                    switch.fork_anchor.slot.0,
+                    &switch.fork_anchor.hash,
+                    switch.winner_tip.slot.0,
+                    &switch.winner_tip.hash,
+                );
+                ev.emit_fork_choice_selected(
+                    &fsid,
+                    &switch.winning_peer,
+                    ForkChoiceResult::Win,
+                    Some(switch.winner_tip.slot.0),
+                    Some(&switch.winner_tip.hash),
+                );
+            }
             // Fence FIRST: no forge may slip onto the stale pre-switch tip while a
             // reselection is pending (DC-NODE-28). S4 clears it after it applies.
             *pending_reselection = true;
@@ -2865,7 +2944,25 @@ where
             Ok(())
         }
         // Keep current (loss / ineligible) or an empty set — nothing applied.
-        Ok(ForkSwitchDecision::KeepCurrent) | Err(ForkChoiceError::NoCandidates) => Ok(()),
+        Ok(ForkSwitchDecision::KeepCurrent) | Err(ForkChoiceError::NoCandidates) => {
+            if let Some(ev) = evidence.as_deref_mut() {
+                let fsid = fork_switch_id(
+                    peer,
+                    lca.anchor_slot.0,
+                    &lca.anchor_hash,
+                    decoded.header_input.slot.0,
+                    &decoded.block_hash,
+                );
+                ev.emit_fork_choice_selected(
+                    &fsid,
+                    peer,
+                    ForkChoiceResult::Loss,
+                    None,
+                    None,
+                );
+            }
+            Ok(())
+        }
     }
 }
 
@@ -2977,6 +3074,7 @@ where
                             &mut branch_caches,
                             pending_fork_switch,
                             pending_reselection,
+                            evidence.as_deref_mut(),
                         )?;
                     }
                     // A single-producer venue still REFUSES a competing block (fail
@@ -3132,6 +3230,20 @@ where
 /// forging"). On a proven branch: adopt via the existing `apply_chain_event`
 /// authorities (`DC-NODE-25`) — `RolledBack(fork_anchor)` + `ChainSelected(body)×N`,
 /// recorded as `WalEntry::RollBack{ForkChoiceWin}` — then clear the fence LAST.
+/// PHASE4-N-AO S9 (DC-EVIDENCE-04): map the structured `BranchProofError` to the
+/// CLOSED `ForkChoiceEvidenceFailure` code -- the evidence vocabulary carries no
+/// free-form error string. Observe-only (the mapping never affects authority).
+fn map_branch_proof_failure(e: &BranchProofError) -> ForkChoiceEvidenceFailure {
+    match e {
+        BranchProofError::EmptyBranch => ForkChoiceEvidenceFailure::EmptyBranch,
+        BranchProofError::BodyUnavailable { .. } => ForkChoiceEvidenceFailure::BodyUnavailable,
+        BranchProofError::BodyHeaderMismatch { .. } => ForkChoiceEvidenceFailure::BodyHeaderMismatch,
+        BranchProofError::BrokenParentLink { .. } => ForkChoiceEvidenceFailure::BrokenParentLink,
+        BranchProofError::BodyInvalid { .. } => ForkChoiceEvidenceFailure::BodyInvalid,
+        BranchProofError::AnchorUnreachable => ForkChoiceEvidenceFailure::AnchorUnreachable,
+    }
+}
+
 #[allow(clippy::too_many_arguments)]
 pub fn apply_fork_switch<D>(
     state: &mut ForwardSyncState,

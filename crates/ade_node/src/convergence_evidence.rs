@@ -39,7 +39,9 @@ use ade_network::codec::chain_sync::{Point as ChainSyncPoint, Tip};
 use ade_types::{Hash32, SlotNo};
 
 use crate::admission::verdict::{derive, verdict_kind, AgreementVerdict, BlockAdmitOutcome};
-use crate::admission_log::{AdmissionLogEvent, AdmissionLogWriter};
+use crate::admission_log::{
+    AdmissionLogEvent, AdmissionLogWriter, ForkChoiceEvidenceFailure, ForkChoiceResult,
+};
 
 /// Lowercase hex of a byte slice. Local copy (mirrors `admission::runner` /
 /// `wire_only`) so the convergence transcript is byte-identical to the
@@ -163,7 +165,83 @@ impl ConvergenceEvidenceSink {
         })
     }
 
-    /// PRIVATE single funnel — the three `emit_*` methods are its only callers,
+    // PHASE4-N-AO S9 (DC-EVIDENCE-04): closed fork-choice evidence emitters. Each
+    // constructs ONE closed variant and funnels it through `emit` — observe-only,
+    // derived from already-computed authority outcomes (the sink never reads back).
+    #[allow(clippy::too_many_arguments)]
+    pub fn emit_needs_fork_choice(&mut self, peer: &str, slot: u64, block_hash_hex: &str) -> EvidenceEmitResult {
+        self.emit(AdmissionLogEvent::NeedsForkChoice {
+            peer: peer.to_string(),
+            slot,
+            block_hash_hex: block_hash_hex.to_string(),
+        })
+    }
+    pub fn emit_lca_discovered(&mut self, peer: &str, fork_anchor_slot: u64, fork_anchor_hash_hex: &str, candidate_header_count: u64) -> EvidenceEmitResult {
+        self.emit(AdmissionLogEvent::LcaDiscovered {
+            peer: peer.to_string(),
+            fork_anchor_slot,
+            fork_anchor_hash_hex: fork_anchor_hash_hex.to_string(),
+            candidate_header_count,
+        })
+    }
+    pub fn emit_candidate_fragment_built(&mut self, peer: &str, anchor_slot: u64, candidate_header_count: u64) -> EvidenceEmitResult {
+        self.emit(AdmissionLogEvent::CandidateFragmentBuilt {
+            peer: peer.to_string(),
+            anchor_slot,
+            candidate_header_count,
+        })
+    }
+    #[allow(clippy::too_many_arguments)]
+    pub fn emit_fork_choice_selected(&mut self, fork_switch_id: &str, peer: &str, result: ForkChoiceResult, winner_tip_slot: Option<u64>, winner_tip_hash_hex: Option<String>, consensus_inputs_fingerprint_hex: &str) -> EvidenceEmitResult {
+        self.emit(AdmissionLogEvent::ForkChoiceSelected {
+            fork_switch_id: fork_switch_id.to_string(),
+            peer: peer.to_string(),
+            result,
+            winner_tip_slot,
+            winner_tip_hash_hex,
+            consensus_inputs_fingerprint_hex: consensus_inputs_fingerprint_hex.to_string(),
+        })
+    }
+    pub fn emit_branch_fetch_started(&mut self, fork_switch_id: &str, peer: &str, fork_anchor_slot: u64, winner_tip_slot: u64) -> EvidenceEmitResult {
+        self.emit(AdmissionLogEvent::BranchFetchStarted {
+            fork_switch_id: fork_switch_id.to_string(),
+            peer: peer.to_string(),
+            fork_anchor_slot,
+            winner_tip_slot,
+        })
+    }
+    pub fn emit_branch_fetch_completed(&mut self, fork_switch_id: &str, peer: &str, block_count: u64) -> EvidenceEmitResult {
+        self.emit(AdmissionLogEvent::BranchFetchCompleted {
+            fork_switch_id: fork_switch_id.to_string(),
+            peer: peer.to_string(),
+            block_count,
+        })
+    }
+    pub fn emit_branch_prevalidated(&mut self, fork_switch_id: &str, peer: &str, block_count: u64) -> EvidenceEmitResult {
+        self.emit(AdmissionLogEvent::BranchPrevalidated {
+            fork_switch_id: fork_switch_id.to_string(),
+            peer: peer.to_string(),
+            block_count,
+        })
+    }
+    pub fn emit_fork_switch_applied(&mut self, fork_switch_id: &str, peer: &str, new_tip_slot: u64, new_tip_hash_hex: &str) -> EvidenceEmitResult {
+        self.emit(AdmissionLogEvent::ForkSwitchApplied {
+            fork_switch_id: fork_switch_id.to_string(),
+            peer: peer.to_string(),
+            new_tip_slot,
+            new_tip_hash_hex: new_tip_hash_hex.to_string(),
+            rollback_reason: "fork_choice_win",
+        })
+    }
+    pub fn emit_fork_switch_failed(&mut self, fork_switch_id: &str, peer: &str, failure_code: ForkChoiceEvidenceFailure) -> EvidenceEmitResult {
+        self.emit(AdmissionLogEvent::ForkSwitchFailed {
+            fork_switch_id: fork_switch_id.to_string(),
+            peer: peer.to_string(),
+            failure_code,
+        })
+    }
+
+    /// PRIVATE single funnel — the `emit_*` methods are its only callers,
     /// so no caller outside this module can construct a non-subset variant.
     /// Deliberately NOT `pub`, and there is NO accessor returning the inner
     /// [`AdmissionLogWriter`] (closed vocabulary; DC-ADMIT-04 / DC-NODE-30).
@@ -297,6 +375,127 @@ impl ConvergenceEvidence {
         );
         self.note(r2);
     }
+
+    // PHASE4-N-AO S9 (DC-EVIDENCE-04): observe-only fork-choice taps. Each wraps the
+    // closed sink emitter + `note`s a write failure (which flips `incomplete`, never
+    // alters authority). Take primitive values so this module stays decoupled from
+    // the selector/Point types; the taps extract from the authority outcomes.
+    pub fn emit_needs_fork_choice(&mut self, peer: &str, slot: u64, block_hash: &Hash32) {
+        let r = self
+            .sink
+            .emit_needs_fork_choice(peer, slot, &hex_lowercase(&block_hash.0));
+        self.note(r);
+    }
+    pub fn emit_lca_discovered(
+        &mut self,
+        peer: &str,
+        anchor_slot: u64,
+        anchor_hash: &Hash32,
+        header_count: u64,
+    ) {
+        let r = self.sink.emit_lca_discovered(
+            peer,
+            anchor_slot,
+            &hex_lowercase(&anchor_hash.0),
+            header_count,
+        );
+        self.note(r);
+    }
+    pub fn emit_candidate_fragment_built(&mut self, peer: &str, anchor_slot: u64, header_count: u64) {
+        let r = self
+            .sink
+            .emit_candidate_fragment_built(peer, anchor_slot, header_count);
+        self.note(r);
+    }
+    pub fn emit_fork_choice_selected(
+        &mut self,
+        fork_switch_id: &str,
+        peer: &str,
+        result: ForkChoiceResult,
+        winner_tip_slot: Option<u64>,
+        winner_tip_hash: Option<&Hash32>,
+    ) {
+        let r = self.sink.emit_fork_choice_selected(
+            fork_switch_id,
+            peer,
+            result,
+            winner_tip_slot,
+            winner_tip_hash.map(|h| hex_lowercase(&h.0)),
+            &self.consensus_inputs_fingerprint_hex,
+        );
+        self.note(r);
+    }
+    pub fn emit_branch_fetch_started(
+        &mut self,
+        fork_switch_id: &str,
+        peer: &str,
+        anchor_slot: u64,
+        winner_tip_slot: u64,
+    ) {
+        let r = self
+            .sink
+            .emit_branch_fetch_started(fork_switch_id, peer, anchor_slot, winner_tip_slot);
+        self.note(r);
+    }
+    pub fn emit_branch_fetch_completed(&mut self, fork_switch_id: &str, peer: &str, block_count: u64) {
+        let r = self
+            .sink
+            .emit_branch_fetch_completed(fork_switch_id, peer, block_count);
+        self.note(r);
+    }
+    pub fn emit_branch_prevalidated(&mut self, fork_switch_id: &str, peer: &str, block_count: u64) {
+        let r = self
+            .sink
+            .emit_branch_prevalidated(fork_switch_id, peer, block_count);
+        self.note(r);
+    }
+    pub fn emit_fork_switch_applied(
+        &mut self,
+        fork_switch_id: &str,
+        peer: &str,
+        new_tip_slot: u64,
+        new_tip_hash: &Hash32,
+    ) {
+        let r = self.sink.emit_fork_switch_applied(
+            fork_switch_id,
+            peer,
+            new_tip_slot,
+            &hex_lowercase(&new_tip_hash.0),
+        );
+        self.note(r);
+    }
+    pub fn emit_fork_switch_failed(
+        &mut self,
+        fork_switch_id: &str,
+        peer: &str,
+        failure_code: ForkChoiceEvidenceFailure,
+    ) {
+        let r = self
+            .sink
+            .emit_fork_switch_failed(fork_switch_id, peer, failure_code);
+        self.note(r);
+    }
+}
+
+/// PHASE4-N-AO S9 (DC-EVIDENCE-04): the bounded deterministic `fork_switch_id` that
+/// correlates one decide->apply cycle. Derived from the canonical tuple already in
+/// `PendingForkSwitch` (winning_peer + fork_anchor + winner_tip) -- a blake2b-256
+/// hex PREFIX, never free-form text. Same inputs at decide + apply => same id.
+pub fn fork_switch_id(
+    winning_peer: &str,
+    anchor_slot: u64,
+    anchor_hash: &Hash32,
+    winner_tip_slot: u64,
+    winner_tip_hash: &Hash32,
+) -> String {
+    let mut buf: Vec<u8> = Vec::new();
+    buf.extend_from_slice(winning_peer.as_bytes());
+    buf.extend_from_slice(&anchor_slot.to_be_bytes());
+    buf.extend_from_slice(&anchor_hash.0);
+    buf.extend_from_slice(&winner_tip_slot.to_be_bytes());
+    buf.extend_from_slice(&winner_tip_hash.0);
+    let h = ade_crypto::blake2b::blake2b_256(&buf);
+    hex_lowercase(&h.0[..8])
 }
 
 #[cfg(test)]
@@ -335,6 +534,81 @@ mod tests {
 
     fn h(b: u8) -> String {
         format!("{b:02x}").repeat(32)
+    }
+
+    // PHASE4-N-AO S9 (DC-EVIDENCE-04): the S4-apply acceptance -- a
+    // fork_choice_selected{win} is followed by EXACTLY ONE terminal
+    // (fork_switch_applied | fork_switch_failed), correlated by fork_switch_id.
+    #[test]
+    fn fork_choice_win_paired_with_exactly_one_terminal_applied() {
+        let buf = SharedBuf::default();
+        let mut ev = ConvergenceEvidence::new(
+            ConvergenceEvidenceSink::with_writer(Box::new(buf.clone())),
+            &Hash32([0xCC; 32]),
+        );
+        let win_hash = Hash32([0xAB; 32]);
+        let fsid = fork_switch_id("peer-1", 100, &Hash32([0x11; 32]), 130, &win_hash);
+        ev.emit_needs_fork_choice("peer-1", 130, &win_hash);
+        ev.emit_lca_discovered("peer-1", 100, &Hash32([0x11; 32]), 3);
+        ev.emit_candidate_fragment_built("peer-1", 100, 3);
+        ev.emit_fork_choice_selected(&fsid, "peer-1", ForkChoiceResult::Win, Some(130), Some(&win_hash));
+        ev.emit_branch_fetch_started(&fsid, "peer-1", 100, 130);
+        ev.emit_branch_fetch_completed(&fsid, "peer-1", 3);
+        ev.emit_branch_prevalidated(&fsid, "peer-1", 3);
+        ev.emit_fork_switch_applied(&fsid, "peer-1", 130, &win_hash);
+
+        let text = String::from_utf8(buf.0.borrow().clone()).unwrap();
+        let wins = text
+            .lines()
+            .filter(|l| l.contains("\"fork_choice_selected\"") && l.contains("\"result\":\"win\"") && l.contains(&fsid))
+            .count();
+        assert_eq!(wins, 1, "exactly one win for this fork_switch_id");
+        let terminals: Vec<&str> = text
+            .lines()
+            .filter(|l| {
+                (l.contains("\"fork_switch_applied\"") || l.contains("\"fork_switch_failed\""))
+                    && l.contains(&fsid)
+            })
+            .collect();
+        assert_eq!(terminals.len(), 1, "a win => EXACTLY ONE terminal (applied|failed), never dangling/double");
+        assert!(terminals[0].contains("\"fork_switch_applied\""), "this win adopted -> applied");
+        assert!(terminals[0].contains("\"rollback_reason\":\"fork_choice_win\""), "applied carries the closed rollback_reason");
+    }
+
+    #[test]
+    fn fork_choice_win_failed_terminal_carries_closed_code() {
+        let buf = SharedBuf::default();
+        let mut ev = ConvergenceEvidence::new(
+            ConvergenceEvidenceSink::with_writer(Box::new(buf.clone())),
+            &Hash32([0xCC; 32]),
+        );
+        let wh = Hash32([0xAB; 32]);
+        let fsid = fork_switch_id("peer-2", 50, &Hash32([0x22; 32]), 80, &wh);
+        ev.emit_fork_choice_selected(&fsid, "peer-2", ForkChoiceResult::Win, Some(80), Some(&wh));
+        ev.emit_fork_switch_failed(&fsid, "peer-2", ForkChoiceEvidenceFailure::BodyInvalid);
+        let text = String::from_utf8(buf.0.borrow().clone()).unwrap();
+        let terminals: Vec<&str> = text
+            .lines()
+            .filter(|l| {
+                (l.contains("\"fork_switch_applied\"") || l.contains("\"fork_switch_failed\""))
+                    && l.contains(&fsid)
+            })
+            .collect();
+        assert_eq!(terminals.len(), 1, "exactly one terminal");
+        assert!(
+            terminals[0].contains("\"failure_code\":\"body_invalid\""),
+            "the failure terminal carries a CLOSED code, never a free-form string"
+        );
+    }
+
+    #[test]
+    fn fork_switch_id_is_deterministic_and_bounded() {
+        let a = fork_switch_id("p", 1, &Hash32([0x01; 32]), 2, &Hash32([0x02; 32]));
+        let b = fork_switch_id("p", 1, &Hash32([0x01; 32]), 2, &Hash32([0x02; 32]));
+        assert_eq!(a, b, "same canonical tuple => same id");
+        assert_eq!(a.len(), 16, "bounded 16-hex (8-byte) prefix");
+        let c = fork_switch_id("q", 1, &Hash32([0x01; 32]), 2, &Hash32([0x02; 32]));
+        assert_ne!(a, c, "different peer => different id");
     }
 
     #[test]
