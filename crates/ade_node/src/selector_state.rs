@@ -23,6 +23,7 @@
 //! applies the rollback. S3 never applies it (the hard S3/S4 boundary).
 
 use ade_core::consensus::candidate::{CandidateFragment, TiebreakerView};
+use ade_core::consensus::events::Point;
 use ade_core::consensus::header_summary::{HeaderInput, HeaderVrf};
 use ade_core::consensus::praos_leader_value;
 use ade_types::{BlockNo, Hash32, SlotNo};
@@ -79,6 +80,17 @@ pub struct PendingForkSwitch {
     pub winning_peer: String,
     /// The winning candidate (S2-validated header summaries above the anchor).
     pub winning_candidate: CandidateFragment,
+    /// PHASE4-N-AO S6 (CE-AO-6): the selected winner's tip point `(slot, block
+    /// hash)`, retained from the competing block S3 decoded. It is the
+    /// **`BlockFetch RequestRange` upper endpoint** (`fork_anchor → winner_tip`)
+    /// the live fetch asks the winning peer for.
+    ///
+    /// **`winner_tip` is a fetch endpoint ONLY — it is NOT adoption authority.**
+    /// The fetched body must still bind to the S3-selected `ValidatedHeaderSummary`
+    /// and pass S4 `prevalidate_branch` before any rollback is committed. A peer
+    /// that serves a different body for this endpoint is rejected by S4
+    /// (`BodyHeaderMismatch`), not adopted.
+    pub winner_tip: Point,
 }
 
 #[cfg(test)]

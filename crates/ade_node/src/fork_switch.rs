@@ -321,6 +321,10 @@ mod tests {
             fork_anchor: anchor(),
             winning_peer: "peer-1".to_string(),
             winning_candidate: empty_candidate(),
+            winner_tip: Point {
+                slot: SlotNo(11),
+                hash: Hash32([0xBB; 32]),
+            },
         }
     }
 

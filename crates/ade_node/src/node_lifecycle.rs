@@ -2587,28 +2587,33 @@ enum ForkSwitchDecision {
 /// set — a lookup of *which* candidate BLUE chose, never a second selection.
 fn decide_fork_switch(
     selector_state: &ChainSelectorState,
-    competing: &BTreeMap<String, CandidateFragment>,
+    competing: &BTreeMap<String, (CandidateFragment, Point)>,
 ) -> Result<ForkSwitchDecision, ForkChoiceError> {
-    let candidates = assemble_candidate_set(competing.values().cloned().collect());
+    let candidates = assemble_candidate_set(competing.values().map(|(f, _)| f.clone()).collect());
     let (_new_state, event) = select_best_chain(selector_state, &candidates)?;
     match event {
         ChainEvent::ChainSelected { new_tip, .. } => {
-            let winner = competing.iter().find(|(_peer, c)| {
+            let winner = competing.iter().find(|(_peer, (c, _tip))| {
                 c.headers
                     .last()
                     .map(|h| h.slot == new_tip.slot && h.body_hash == new_tip.hash)
                     .unwrap_or(false)
             });
             match winner {
-                Some((peer, frag)) => Ok(ForkSwitchDecision::Switch(PendingForkSwitch {
-                    fork_anchor: ForkAnchor {
-                        slot: frag.anchor.slot,
-                        hash: frag.anchor.hash.clone(),
-                        block_no: frag.anchor_block_no,
-                    },
-                    winning_peer: peer.clone(),
-                    winning_candidate: frag.clone(),
-                })),
+                // `cand_tip` is the competing block's stored `(slot, block hash)` --
+                // the S6 BlockFetch endpoint, retained but NOT adoption authority.
+                Some((peer, (frag, cand_tip))) => {
+                    Ok(ForkSwitchDecision::Switch(PendingForkSwitch {
+                        fork_anchor: ForkAnchor {
+                            slot: frag.anchor.slot,
+                            hash: frag.anchor.hash.clone(),
+                            block_no: frag.anchor_block_no,
+                        },
+                        winning_peer: peer.clone(),
+                        winning_candidate: frag.clone(),
+                        winner_tip: cand_tip.clone(),
+                    }))
+                }
                 // Unreachable: ChainSelected.new_tip is one of the candidates' tips.
                 // Fail SAFE (keep current) rather than fabricate a switch.
                 None => Ok(ForkSwitchDecision::KeepCurrent),
@@ -2645,7 +2650,7 @@ fn dispatch_competing_fork_choice<D>(
     durable_tip: &TipPoint,
     peer: &str,
     decoded: &DecodedBlock,
-    competing: &mut BTreeMap<String, CandidateFragment>,
+    competing: &mut BTreeMap<String, (CandidateFragment, Point)>,
     pending_fork_switch: &mut Option<PendingForkSwitch>,
     pending_reselection: &mut bool,
 ) -> Result<(), NodeSyncError>
@@ -2708,7 +2713,14 @@ where
         Ok(f) => f,
         Err(_) => return Ok(()),
     };
-    competing.insert(peer.to_string(), frag);
+    // PHASE4-N-AO S6 (CE-AO-6): retain the competing block's tip `(slot, block
+    // hash)` alongside the fragment -- the live BlockFetch endpoint (NOT adoption
+    // authority; S4 still binds + prevalidates the fetched bytes).
+    let cand_tip = Point {
+        slot: decoded.header_input.slot,
+        hash: decoded.block_hash.clone(),
+    };
+    competing.insert(peer.to_string(), (frag, cand_tip));
 
     // Derive the live ChainSelectorState from DURABLE authority (Option A):
     //   current_tiebreaker = a projection from Ade's OWN durable tip block bytes,
@@ -2804,7 +2816,7 @@ where
     // peer (S1 identity). Deterministic (`BTreeMap`); each entry is that peer's
     // latest validated competing candidate. Accumulates across the drain so the
     // selector compares the full competing set (arrival-order independent).
-    let mut competing: BTreeMap<String, CandidateFragment> = BTreeMap::new();
+    let mut competing: BTreeMap<String, (CandidateFragment, Point)> = BTreeMap::new();
     while let Some(item) = source.next_item().await {
         match item {
             NodeSyncItem::Block { peer, bytes } => {
@@ -3189,6 +3201,33 @@ mod tests {
             }
         }
 
+        // A competing entry: the fragment + its tip `(slot, block hash)`. The block
+        // hash is a synthetic test value (distinct from body_hash); winner_tip is
+        // fetch-endpoint metadata, not asserted by these selection tests.
+        fn candidate(
+            anchor_slot: u64,
+            anchor_block_no: u64,
+            current_block_no: u64,
+            tip_slot: u64,
+            tip_body: u8,
+            tip_vrf_first: u8,
+        ) -> (CandidateFragment, Point) {
+            (
+                fragment(
+                    anchor_slot,
+                    anchor_block_no,
+                    current_block_no,
+                    tip_slot,
+                    tip_body,
+                    tip_vrf_first,
+                ),
+                Point {
+                    slot: SlotNo(tip_slot),
+                    hash: Hash32([tip_vrf_first; 32]),
+                },
+            )
+        }
+
         fn state(current_block_no: u64, current_slot: u64, current_vrf_first: u8, k: u64) -> ChainSelectorState {
             ChainSelectorState {
                 current_tip: Point {
@@ -3211,7 +3250,7 @@ mod tests {
         fn win_emits_switch_to_winning_peer_and_durable_anchor() {
             // Candidate tip block 101 > current 100 => ChainSelected (block-no win).
             let mut competing = BTreeMap::new();
-            competing.insert("peer-A".to_string(), fragment(50, 100, 100, 60, 0x22, 0x01));
+            competing.insert("peer-A".to_string(), candidate(50, 100, 100, 60, 0x22, 0x01));
             match decide_fork_switch(&state(100, 70, 0x05, 2160), &competing).expect("decides") {
                 ForkSwitchDecision::Switch(s) => {
                     assert_eq!(s.winning_peer, "peer-A");
@@ -3231,7 +3270,7 @@ mod tests {
             // Candidate tip block 100 == current 100; candidate slot 60 > current
             // slot 50 => current preferred (lower slot wins) => KeepCurrent.
             let mut competing = BTreeMap::new();
-            competing.insert("peer-A".to_string(), fragment(49, 99, 100, 60, 0x22, 0x01));
+            competing.insert("peer-A".to_string(), candidate(49, 99, 100, 60, 0x22, 0x01));
             assert!(matches!(
                 decide_fork_switch(&state(100, 50, 0x01, 2160), &competing).unwrap(),
                 ForkSwitchDecision::KeepCurrent
@@ -3244,7 +3283,7 @@ mod tests {
             // ExceededRollback (ineligible) => KeepCurrent, though the chain is
             // longer. (S4 keeps the independent materialize RollbackTooDeep guard.)
             let mut competing = BTreeMap::new();
-            competing.insert("peer-A".to_string(), fragment(40, 90, 100, 60, 0x22, 0x01));
+            competing.insert("peer-A".to_string(), candidate(40, 90, 100, 60, 0x22, 0x01));
             assert!(matches!(
                 decide_fork_switch(&state(100, 70, 0x05, 5), &competing).unwrap(),
                 ForkSwitchDecision::KeepCurrent
@@ -3256,8 +3295,8 @@ mod tests {
             // Two competing peers: B's tip (block 102) beats A's (block 101) => B
             // wins, and the winner is identified by the selector's returned tip.
             let mut competing = BTreeMap::new();
-            competing.insert("peer-A".to_string(), fragment(50, 100, 100, 60, 0x2A, 0x01));
-            competing.insert("peer-B".to_string(), fragment(50, 101, 100, 61, 0x2B, 0x02));
+            competing.insert("peer-A".to_string(), candidate(50, 100, 100, 60, 0x2A, 0x01));
+            competing.insert("peer-B".to_string(), candidate(50, 101, 100, 61, 0x2B, 0x02));
             match decide_fork_switch(&state(100, 70, 0x05, 2160), &competing).unwrap() {
                 ForkSwitchDecision::Switch(s) => {
                     assert_eq!(s.winning_peer, "peer-B");

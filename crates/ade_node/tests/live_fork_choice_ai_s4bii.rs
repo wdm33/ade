@@ -1317,6 +1317,11 @@ fn s4_switch(competing: &[u8], fork_anchor: ForkAnchor, peer: &str) -> PendingFo
             select_view,
             rollback_depth: BlockDistance(0),
         },
+        // The competing block's tip point -- the S6 BlockFetch endpoint.
+        winner_tip: Point {
+            slot: h.slot,
+            hash: decoded.block_hash.clone(),
+        },
     }
 }
 
@@ -1654,13 +1659,19 @@ async fn proof_failure_holds_fence_then_resolves_when_caught_up() {
 
 #[tokio::test]
 async fn live_fetch_lying_body_rejected_before_commit() {
-    // A PrefetchedBranchBodies serving a DIFFERENT block for the selected slot ->
-    // bind fails (BodyHeaderMismatch) before commit; chain unchanged, fence held.
+    // The fetch ENDPOINT is correct-looking (winner_tip = the selected block's tip),
+    // but the peer serves a DIFFERENT body for that slot -> the returned bytes do
+    // NOT bind to the S3-selected header -> BodyHeaderMismatch before commit; chain
+    // unchanged, fence held. winner_tip is an address, not adoption authority.
     let (c, view) = corpus_view();
     let competing = pick_lightest(&c);
     let decoded = decode_block(&competing).unwrap();
     let (db, anchor) = s4_fork_setup(&c, &competing, None);
     let switch = s4_switch(&competing, anchor, "peer-7");
+    assert_eq!(
+        switch.winner_tip.hash, decoded.block_hash,
+        "the fetch endpoint (winner_tip) is the correct selected tip"
+    );
     let tip_before = db.tip().unwrap().unwrap();
     let other = c
         .blocks
