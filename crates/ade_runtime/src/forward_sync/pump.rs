@@ -63,6 +63,13 @@ pub enum PumpError {
 pub struct PumpTip {
     pub slot: SlotNo,
     pub hash: Hash32,
+    /// The admitted block's VALIDATED header `prev_hash` (parent linkage), from
+    /// the same `decode_block` the reducer consumed — NEVER peer-supplied. The
+    /// genesis predecessor is carried as the all-zero hash (a from-genesis first
+    /// block; never seen on a post-switch follow descendant). Capture-only
+    /// evidence fidelity for the post-switch branch-continuity verdict
+    /// (PHASE4-N-AO S10, DC-EVIDENCE-05); not read by any authority path.
+    pub prev_hash: Hash32,
 }
 
 /// Apply one fetched block (its full era-tagged envelope) through the
@@ -136,7 +143,15 @@ where
             .map_err(PumpError::Receive)?
     };
 
-    apply_plan(db, wal, snapshots, plan.into_effects())
+    // The admitted block's validated parent link (S10 / DC-EVIDENCE-05). The
+    // genesis predecessor (CBOR null) is carried as the all-zero hash; a
+    // post-switch follow descendant always has a real `Block(parent)`.
+    let prev_hash = decoded
+        .prev_hash
+        .block_hash()
+        .cloned()
+        .unwrap_or(Hash32([0; 32]));
+    apply_plan(db, wal, snapshots, plan.into_effects(), prev_hash)
 }
 
 /// Apply an ordered effect plan. The two durability effects must be
@@ -147,6 +162,7 @@ fn apply_plan<D, S>(
     wal: &mut dyn WalStore,
     snapshots: &S,
     effects: Vec<SyncEffect>,
+    prev_hash: Hash32,
 ) -> Result<Option<PumpTip>, PumpError>
 where
     D: ChainDb,
@@ -175,7 +191,11 @@ where
                 if !(bytes_durable && wal_durable) {
                     return Err(PumpError::TipBeforeDurable);
                 }
-                tip = Some(PumpTip { slot, hash });
+                tip = Some(PumpTip {
+                    slot,
+                    hash,
+                    prev_hash: prev_hash.clone(),
+                });
             }
         }
     }

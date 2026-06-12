@@ -7265,9 +7265,21 @@ drift. GREEN, observe-only: PostSwitchContinuity is NEVER consumed by select_bes
 """
 source = "docs/clusters/PHASE4-N-AO/S10-post-switch-branch-continuity.md (S10) + docs/planning/phase4-n-ao-ce-ao-6-live-gap.md"
 cross_ref = ["DC-EVIDENCE-04", "DC-EVIDENCE-01", "DC-NODE-30", "DC-NODE-34", "DC-NODE-36", "DC-NODE-38", "CN-CONS-03", "CN-CONS-01"]
-code_locus = "CANDIDATE (pending S10 impl): crates/ade_node/src/post_switch_continuity.rs (derive_post_switch_continuity + closed PostSwitchContinuity verdict, GREEN pure reducer) + crates/ade_node/src/bin/post_switch_continuity.rs (thin transcript->verdict bin) + prev_hash_hex on block_admitted (crates/ade_node/src/admission_log/{event,writer}.rs + convergence_evidence.rs emit_block_admitted/emit_admit_and_verdict) sourced from PumpTip.prev_hash (crates/ade_runtime/src/forward_sync/pump.rs) + the fork-switch-adopt tip in crates/ade_node/src/node_lifecycle.rs. BLUE selector/walk/apply/validate UNCHANGED."
-tests = []
-ci_scripts = []
+code_locus = "crates/ade_node/src/post_switch_continuity.rs (derive_post_switch_continuity + closed PostSwitchContinuity verdict + evaluate_release_window, GREEN pure reducer) + crates/ade_node/src/bin/post_switch_continuity.rs (thin transcript->verdict bin) + prev_hash_hex on block_admitted (crates/ade_node/src/admission_log/{event,writer}.rs + convergence_evidence.rs emit_block_admitted/emit_admit_and_verdict) sourced from PumpTip.prev_hash (crates/ade_runtime/src/forward_sync/pump.rs) + ForkSwitchOutcome::Adopted.new_tip_prev + the fork-switch-adopt + admission-runner emit sites in crates/ade_node/src/node_lifecycle.rs + crates/ade_node/src/admission/runner.rs. BLUE selector/walk/apply/validate UNCHANGED."
+tests = [
+    "crates/ade_node/src/post_switch_continuity.rs::tests::continuity_ok_yields_continues_selected_branch",
+    "crates/ade_node/src/post_switch_continuity.rs::tests::broken_parent_link_yields_broken_lineage",
+    "crates/ade_node/src/post_switch_continuity.rs::tests::post_switch_diverged_yields_diverged",
+    "crates/ade_node/src/post_switch_continuity.rs::tests::win_without_terminal_yields_dangling",
+    "crates/ade_node/src/post_switch_continuity.rs::tests::continuity_verdict_ignores_peer_tip",
+    "crates/ade_node/src/post_switch_continuity.rs::tests::post_switch_continuity_replays_byte_identical",
+    "crates/ade_node/src/post_switch_continuity.rs::tests::release_window_passes_on_validated_prefix",
+    "crates/ade_node/src/post_switch_continuity.rs::tests::release_window_passes_on_agreed_descendant",
+    "crates/ade_node/src/post_switch_continuity.rs::tests::release_window_prefix_requires_a_followed_descendant",
+    "crates/ade_node/src/post_switch_continuity.rs::tests::release_window_terminal_outside_window_fails",
+    "crates/ade_node/tests/live_fork_choice_ai_s4bii.rs (new_tip_prev == decoded.prev_hash fidelity assertion)",
+]
+ci_scripts = ["ci/ci_check_post_switch_convergence_window.sh"]
 status = "declared"
 introduced_in = "PHASE4-N-AO"
 strengthened_in = []

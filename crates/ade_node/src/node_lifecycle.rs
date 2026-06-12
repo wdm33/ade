@@ -1458,7 +1458,10 @@ pub async fn run_relay_loop_with_sched(
                         // proven adoption the existing GREEN S6 reducer (block_admitted +
                         // agreement_verdict, DC-NODE-30) follows for the adopted winner.
                         match &outcome {
-                            ForkSwitchOutcome::Adopted { new_tip } => {
+                            ForkSwitchOutcome::Adopted {
+                                new_tip,
+                                new_tip_prev,
+                            } => {
                                 if let Some(ev) = convergence.as_deref_mut() {
                                     ev.emit_branch_prevalidated(
                                         &fsid,
@@ -1476,6 +1479,7 @@ pub async fn run_relay_loop_with_sched(
                                     ev.emit_admit_and_verdict(
                                         new_tip.slot.0,
                                         &new_tip.hash,
+                                        new_tip_prev,
                                         &post_fp,
                                         peer_tip,
                                     );
@@ -2667,7 +2671,7 @@ fn emit_participant_admit(
     if let (Some(ev), Some(tip)) = (evidence, pumped) {
         let post_fp = fingerprint(&state.receive.ledger).combined;
         let peer_tip = source.followed_peer_tip_signal().tip();
-        ev.emit_admit_and_verdict(tip.slot.0, &tip.hash, &post_fp, peer_tip);
+        ev.emit_admit_and_verdict(tip.slot.0, &tip.hash, &tip.prev_hash, &post_fp, peer_tip);
     }
 }
 
@@ -3307,6 +3311,13 @@ where
             });
         }
     };
+    // The adopted tip's validated parent (S10 / DC-EVIDENCE-05): the prior block
+    // in the proven branch, or the fork anchor for a single-block branch. A
+    // local, validated fact — never peer-claimed.
+    let new_tip_prev = match proven.blocks.len() {
+        1 => switch.fork_anchor.hash.clone(),
+        n => proven.blocks[n - 2].tip.hash.clone(),
+    };
 
     // ONLY NOW adopt via the existing apply authorities (DC-NODE-25). The
     // prevalidation guarantees each pump_block below succeeds (except crash -> WAL
@@ -3352,7 +3363,10 @@ where
     *pending_fork_switch = None;
     *pending_reselection = false;
     *last_fork_switch_failure = None;
-    Ok(ForkSwitchOutcome::Adopted { new_tip: final_tip })
+    Ok(ForkSwitchOutcome::Adopted {
+        new_tip: final_tip,
+        new_tip_prev,
+    })
 }
 
 /// PHASE4-N-AO S6 (CE-AO-6): live BlockFetch of the winning branch's bodies (RED).

@@ -131,12 +131,14 @@ impl ConvergenceEvidenceSink {
         &mut self,
         slot: u64,
         block_hash_hex: &str,
+        prev_hash_hex: &str,
         post_fp_hex: &str,
         consensus_inputs_fingerprint_hex: &str,
     ) -> EvidenceEmitResult {
         self.emit(AdmissionLogEvent::BlockAdmitted {
             slot,
             block_hash_hex: block_hash_hex.to_string(),
+            prev_hash_hex: prev_hash_hex.to_string(),
             post_fp_hex: post_fp_hex.to_string(),
             consensus_inputs_fingerprint_hex: consensus_inputs_fingerprint_hex.to_string(),
         })
@@ -327,12 +329,14 @@ impl ConvergenceEvidence {
         &mut self,
         slot: u64,
         block_hash: &Hash32,
+        prev_hash: &Hash32,
         post_fp: &Hash32,
         peer_tip: Option<TipPoint>,
     ) {
         let r1 = self.sink.emit_block_admitted(
             slot,
             &hex_lowercase(&block_hash.0),
+            &hex_lowercase(&prev_hash.0),
             &hex_lowercase(&post_fp.0),
             &self.consensus_inputs_fingerprint_hex,
         );
@@ -672,7 +676,7 @@ mod tests {
             EvidenceEmitResult::Disabled
         );
         assert_eq!(
-            sink.emit_block_admitted(100, &h(0xaa), &h(0xbb), &h(0xcc)),
+            sink.emit_block_admitted(100, &h(0xaa), &h(0xde), &h(0xbb), &h(0xcc)),
             EvidenceEmitResult::Disabled
         );
         assert!(!sink.is_poisoned());
@@ -687,7 +691,7 @@ mod tests {
             EvidenceEmitResult::Written
         );
         assert_eq!(
-            sink.emit_block_admitted(100, &h(0xaa), &h(0xbb), &h(0xcc)),
+            sink.emit_block_admitted(100, &h(0xaa), &h(0xde), &h(0xbb), &h(0xcc)),
             EvidenceEmitResult::Written
         );
         assert_eq!(
@@ -726,7 +730,7 @@ mod tests {
         );
         assert!(sink.is_poisoned());
         assert_eq!(
-            sink.emit_block_admitted(2, &h(0x02), &h(0x03), &h(0x04)),
+            sink.emit_block_admitted(2, &h(0x02), &h(0x05), &h(0x03), &h(0x04)),
             EvidenceEmitResult::FailedAndPoisoned
         );
     }

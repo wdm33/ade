@@ -1366,9 +1366,16 @@ async fn fork_switch_win_adopts_via_rolledback_then_chainselected() {
     )
     .expect("apply returns");
     match outcome {
-        ForkSwitchOutcome::Adopted { new_tip } => {
+        ForkSwitchOutcome::Adopted {
+            new_tip,
+            new_tip_prev,
+        } => {
             assert_eq!(new_tip.slot, decoded.header_input.slot);
             assert_eq!(new_tip.hash, decoded.block_hash);
+            // S10 (DC-EVIDENCE-05): the adopted tip's parent link is the block's
+            // OWN validated `prev_hash` (a single-block branch => the fork anchor),
+            // never peer-claimed.
+            assert_eq!(Some(&new_tip_prev), decoded.prev_hash.block_hash());
         }
         ForkSwitchOutcome::ProofFailed { error } => panic!("expected adoption, got {error:?}"),
     }

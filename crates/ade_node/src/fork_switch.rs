@@ -38,7 +38,7 @@ use ade_crypto::vrf::VrfOutput;
 use ade_ledger::block_validity::{block_validity, decode_block, BlockValidityVerdict, DecodedBlock};
 use ade_ledger::state::LedgerState;
 use ade_types::shelley::block::PrevHash;
-use ade_types::SlotNo;
+use ade_types::{Hash32, SlotNo};
 
 use crate::selector_state::{ForkAnchor, PendingForkSwitch};
 
@@ -155,8 +155,12 @@ pub struct ProvenBranch {
 /// the reason; the current durable chain is unchanged and the forge fence is held.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum ForkSwitchOutcome {
-    /// The branch was proven and durably adopted; the new durable tip.
-    Adopted { new_tip: Point },
+    /// The branch was proven and durably adopted; the new durable tip and its
+    /// validated parent hash (`new_tip_prev` — the prior applied block, or the
+    /// fork anchor for a single-block branch). The parent link is capture-only
+    /// evidence fidelity for the post-switch branch-continuity verdict
+    /// (PHASE4-N-AO S10, DC-EVIDENCE-05); not read by any authority path.
+    Adopted { new_tip: Point, new_tip_prev: Hash32 },
     /// The branch was NOT proven; no durable change, the decision retired failed.
     ProofFailed { error: BranchProofError },
 }

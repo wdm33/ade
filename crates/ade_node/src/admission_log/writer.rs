@@ -115,6 +115,7 @@ fn encode_event(event: &AdmissionLogEvent, out: &mut String) {
         AdmissionLogEvent::BlockAdmitted {
             slot,
             block_hash_hex,
+            prev_hash_hex,
             post_fp_hex,
             consensus_inputs_fingerprint_hex,
         } => {
@@ -122,6 +123,8 @@ fn encode_event(event: &AdmissionLogEvent, out: &mut String) {
             push_key_u64(out, "slot", *slot);
             out.push(',');
             push_key_str(out, "block_hash_hex", block_hash_hex);
+            out.push(',');
+            push_key_str(out, "prev_hash_hex", prev_hash_hex);
             out.push(',');
             push_key_str(out, "post_fp_hex", post_fp_hex);
             out.push(',');
@@ -425,6 +428,7 @@ mod tests {
             AdmissionLogEvent::BlockAdmitted {
                 slot: 12346,
                 block_hash_hex: "bb".repeat(32),
+                prev_hash_hex: "aa".repeat(32),
                 post_fp_hex: "cc".repeat(32),
                 consensus_inputs_fingerprint_hex: fp.clone(),
             },

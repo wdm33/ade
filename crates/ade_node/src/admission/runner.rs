@@ -292,6 +292,7 @@ where
                             ProcessedBlock::Admitted {
                                 slot,
                                 block_hash,
+                                prev_hash,
                                 next_ledger,
                                 next_chain_dep,
                             } => {
@@ -335,6 +336,7 @@ where
                                     AdmissionLogEvent::BlockAdmitted {
                                         slot: slot.0,
                                         block_hash_hex: hex_lowercase(&block_hash.0),
+                                        prev_hash_hex: hex_lowercase(&prev_hash.0),
                                         post_fp_hex: format!("{}", post_fp),
                                         consensus_inputs_fingerprint_hex: consensus_fp_hex
                                             .clone(),
@@ -456,6 +458,10 @@ enum ProcessedBlock {
     Admitted {
         slot: SlotNo,
         block_hash: Hash32,
+        /// The admitted block's validated header `prev_hash` (parent linkage;
+        /// genesis predecessor as the all-zero hash) — capture-only fidelity for
+        /// the post-switch branch-continuity verdict (S10, DC-EVIDENCE-05).
+        prev_hash: Hash32,
         next_ledger: LedgerState,
         next_chain_dep: PraosChainDepState,
     },
@@ -496,10 +502,16 @@ fn process_block(
     };
     let slot = decoded.header_input.slot;
     let block_hash = decoded.block_hash.clone();
+    let prev_hash = decoded
+        .prev_hash
+        .block_hash()
+        .cloned()
+        .unwrap_or(Hash32([0; 32]));
     match admit_via_block_validity(inner, ledger, chain_dep, era_schedule, ledger_view) {
         Ok(out) => ProcessedBlock::Admitted {
             slot,
             block_hash,
+            prev_hash,
             next_ledger: out.ledger,
             next_chain_dep: out.chain_dep,
         },

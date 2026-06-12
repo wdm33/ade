@@ -79,6 +79,11 @@ pub enum AdmissionLogEvent {
     BlockAdmitted {
         slot: u64,
         block_hash_hex: String,
+        /// The admitted block's VALIDATED header `prev_hash` (parent linkage),
+        /// from the same decode the reducer consumed — NEVER peer-supplied; the
+        /// genesis predecessor is the all-zero hash. Capture-only fidelity for
+        /// the post-switch branch-continuity verdict (S10, DC-EVIDENCE-05).
+        prev_hash_hex: String,
         post_fp_hex: String,
         consensus_inputs_fingerprint_hex: String,
     },
@@ -362,6 +367,7 @@ mod tests {
                 AdmissionLogEvent::BlockAdmitted {
                     slot: 0,
                     block_hash_hex: "aa".into(),
+                    prev_hash_hex: "cc".into(),
                     post_fp_hex: "bb".into(),
                     consensus_inputs_fingerprint_hex: "00".repeat(32),
                 },
