@@ -7224,9 +7224,12 @@ two, never dangling. The evidence
 OBSERVES already-computed authority outcomes: NO evidence event/type is ever consumed by select_best_chain
 / walk_to_durable_lca / apply_fork_switch / the forge fence, and a transcript write failure (flips
 incomplete, DC-EVIDENCE-01) cannot alter selection / apply / fence behavior. CN-CONS-03 flips ONLY when a
-committed two-producer transcript contains the full ordered chain (both-peer block_received -> the SELECT
-middle -> fork_switch_applied{rollback_reason=ForkChoiceWin} -> block_admitted -> agreement_verdict{agreed,
-our_hash==peer_hash} -> 0 diverged) -- never on stderr diagnostics.
+committed two-producer transcript passes the refined bounded post-switch window (S10): the hard fork-switch
+proof (both-peer block_received -> the SELECT middle -> fork_switch_applied{rollback_reason=ForkChoiceWin}
+at X -> block_admitted X) then PostSwitchContinuity::ContinuesSelectedBranch within the bounded window with
+a terminal of agreement_verdict{agreed, our_hash==peer_hash} at X-or-descendant OR a validated-prefix-of-peer
+(continuity holds + peer observed ahead), 0 diverged -- never on stderr diagnostics, and never on a lucky
+exact-tip moment (see DC-EVIDENCE-05 for the replayable continuity verdict the terminal is derived from).
 """
 source = "docs/planning/phase4-n-ao-ce-ao-6-live-gap.md (S9 evidence finding) + docs/clusters/PHASE4-N-AO/S9-closed-fork-choice-evidence.md"
 cross_ref = ["DC-EVIDENCE-01", "DC-EVIDENCE-02", "DC-EVIDENCE-03", "DC-NODE-34", "DC-NODE-36", "DC-NODE-37", "DC-NODE-38", "CN-CONS-01", "CN-CONS-03"]
@@ -7237,7 +7240,39 @@ status = "declared"
 introduced_in = "PHASE4-N-AO"
 strengthened_in = []
 attack_rationale = "Without closed-vocabulary evidence for the SELECT middle, a CN-CONS-03 flip would rest on stderr diagnostics + a transcript that only proves the beginning (block_received) and end (agreement) -- leaving the actual fork-choice (did Ade DISCOVER the LCA, SELECT a winner, FETCH+PREVALIDATE the branch, and APPLY the fork-switch, or did it merely follow a single peer?) unaudited. A decide-only transcript leaves the same ambiguity: selected vs applied. The fork_switch_id win->terminal pairing forces every WIN to resolve to a durable apply or a structured failure, so agreement{agreed} only supports the invariant when the winning branch was actually adopted. Closed discriminants + an emit-only allow-list + no free-form strings keep the evidence from silently widening or smuggling unaudited claims; observe-only containment keeps the evidence from ever becoming authority (a write failure must never alter selection/apply)."
-evidence_notes = "Declared at PHASE4-N-AO S9. The 2026-06-12 diverged live run informally proved the mechanism (both peers delivered, S7 LCA walk resolved forks of depth 1-7 at the durable anchor, 7 fork-choice WINs, agreed exact-hash, 0 diverged, no UnexpectedRollback) but via temporary FCDIAG stderr markers (reverted) -- NOT registry-grade. Enforced at S9 close (CE-AO-10) via ci_check_fork_choice_evidence_closed.sh + hermetic tests (vocabulary==allow-list negative test, closed-typed-fields, win-paired-with-exactly-one-terminal-by-fork_switch_id, observe-only containment, field-presence). The live CE-AO-6 flip of CN-CONS-03 is gated on a committed two-producer transcript that passes the BOUNDED, BRANCH-BOUND post-switch convergence window (ci/ci_check_post_switch_convergence_window.sh -- RELEASE/evidence-tier, NO BLUE change): the hard fork-switch proof (fork_choice_selected{win} -> branch_fetch_* -> branch_prevalidated -> fork_switch_applied{ForkChoiceWin} at X -> block_admitted X) then a bounded window (max_slots=200, max_admitted_blocks=20, fixed up front) requiring no diverged, every win terminal, every admitted block X-or-descendant (forward, no rollback below X), and agreement_verdict{agreed,our==peer} at X or a descendant in-window -- proving Ade switched, STAYED on the adopted branch, did not diverge, and reached exact agreement without a lucky exact-tip moment or freezing the venue. The bounds are an evidence-ACCEPTANCE rule only; consensus authority (select_best_chain, S4 prevalidate-before-commit, pump_block admit, WAL ForkChoiceWin, replay) is unchanged."
+evidence_notes = "Declared at PHASE4-N-AO S9. The 2026-06-12 diverged live run informally proved the mechanism (both peers delivered, S7 LCA walk resolved forks of depth 1-7 at the durable anchor, 7 fork-choice WINs, agreed exact-hash, 0 diverged, no UnexpectedRollback) but via temporary FCDIAG stderr markers (reverted) -- NOT registry-grade. Enforced at S9 close (CE-AO-10) via ci_check_fork_choice_evidence_closed.sh + hermetic tests (vocabulary==allow-list negative test, closed-typed-fields, win-paired-with-exactly-one-terminal-by-fork_switch_id, observe-only containment, field-presence). The live CE-AO-6 flip of CN-CONS-03 is gated on a committed two-producer transcript that passes the refined BOUNDED, BRANCH-BOUND post-switch convergence window (ci/ci_check_post_switch_convergence_window.sh -- RELEASE/evidence-tier, NO BLUE change; S10/DC-EVIDENCE-05): the hard fork-switch proof (fork_choice_selected{win} -> branch_fetch_* -> branch_prevalidated -> fork_switch_applied{ForkChoiceWin} at X -> block_admitted X) then PostSwitchContinuity::ContinuesSelectedBranch within a bounded window (max_slots=200, max_admitted_blocks=20, fixed up front) -- unbroken prev_hash lineage from X across every post-X block_admitted, no diverged, every win terminal -- with a convergence terminal of agreement_verdict{agreed,our==peer} at X-or-descendant OR a validated-prefix-of-peer (continuity holds + an in-window lagging with peer_slot>our_slot). This proves Ade switched, STAYED on the adopted valid branch, and did not diverge while catching up -- a real correctness property, not a lucky exact-tip moment or a frozen venue. RATIONALE for moving off exact-tip: a clean healthy follow run emits ONLY lagging (the solo producer never pauses for the follower to touch its exact tip), so exact-tip agreement is a test-harness artifact. The bounds + terminal are an evidence-ACCEPTANCE rule only; the continuity verdict reads ONLY Ade's own admitted-block lineage (peer tip never an input); consensus authority (select_best_chain, S4 prevalidate-before-commit, pump_block admit, WAL ForkChoiceWin, replay) is unchanged."
+
+[[rules]]
+id = "DC-EVIDENCE-05"
+tier = "derived"
+statement = """
+Replayable post-switch branch-continuity verdict (PHASE4-N-AO S10). After a ForkChoiceWin adoption at tip X,
+a GREEN pure reducer derive_post_switch_continuity(events) -> PostSwitchContinuity classifies Ade's OWN
+validated admitted-block lineage into a closed verdict
+{ ContinuesSelectedBranch | Diverged | BrokenLineage | DanglingForkChoiceWin | InsufficientEvidence } --
+no free-form strings. ContinuesSelectedBranch REQUIRES: unbroken prev_hash lineage from X across every post-X
+block_admitted (admitted[i].prev_hash == admitted[i-1].hash; the first post-switch follow block chains to
+X.hash), no diverged after X, and every fork_choice_selected{win} paired to a terminal
+(applied|failed|superseded). prev_hash is the admitted block's VALIDATED header field (decoded.prev_hash --
+the same canonical parent link S7's walk consumes via get_block_by_hash), NEVER peer-supplied; the peer's tip
+is NEVER an input to the verdict. REPLAY-EQUIVALENT: given the same post-switch admitted-block bytes and the
+same applied fork-switch point, the reducer yields a byte-identical PostSwitchContinuity. The reducer is the
+SINGLE implementation behind both the hermetic replay test and the live CE-AO-6 gate
+(ci/ci_check_post_switch_convergence_window.sh invokes the post_switch_continuity bin) -- no Rust/Python
+drift. GREEN, observe-only: PostSwitchContinuity is NEVER consumed by select_best_chain / walk_to_durable_lca
+/ apply_fork_switch / pump_block / the forge fence; the node does not use it to select chains -- CI and
+/cluster-close use it to enforce the release gate.
+"""
+source = "docs/clusters/PHASE4-N-AO/S10-post-switch-branch-continuity.md (S10) + docs/planning/phase4-n-ao-ce-ao-6-live-gap.md"
+cross_ref = ["DC-EVIDENCE-04", "DC-EVIDENCE-01", "DC-NODE-30", "DC-NODE-34", "DC-NODE-36", "DC-NODE-38", "CN-CONS-03", "CN-CONS-01"]
+code_locus = "CANDIDATE (pending S10 impl): crates/ade_node/src/post_switch_continuity.rs (derive_post_switch_continuity + closed PostSwitchContinuity verdict, GREEN pure reducer) + crates/ade_node/src/bin/post_switch_continuity.rs (thin transcript->verdict bin) + prev_hash_hex on block_admitted (crates/ade_node/src/admission_log/{event,writer}.rs + convergence_evidence.rs emit_block_admitted/emit_admit_and_verdict) sourced from PumpTip.prev_hash (crates/ade_runtime/src/forward_sync/pump.rs) + the fork-switch-adopt tip in crates/ade_node/src/node_lifecycle.rs. BLUE selector/walk/apply/validate UNCHANGED."
+tests = []
+ci_scripts = []
+status = "declared"
+introduced_in = "PHASE4-N-AO"
+strengthened_in = []
+attack_rationale = "Exact-tip agreement (DC-EVIDENCE-04's original terminal) is a test-harness artifact: a clean healthy follow run emits ONLY lagging because the live producer never pauses for the follower to touch its exact tip, so a CE-AO-6 flip predicated on exact agreement either never fires (false-negative on a correct node) or is gamed by freezing the venue. Worse, the original terminal checked NOTHING about the chain between X and the agreed event -- a node that switched to X then silently rolled back below X or jumped to a different branch could still surface an agreed somewhere and pass. The branch-continuity verdict closes both gaps: it forces every post-X admitted block to chain from X via its OWN validated prev_hash (a rollback-below-X or branch-jump surfaces as BrokenLineage/Diverged), and it accepts the honest catching-up terminal (validated prefix + peer ahead) without a lucky moment. Keeping the verdict's inputs to Ade's own admitted lineage (peer tip excluded) prevents a dishonest peer from manufacturing a passing transcript; replay-equivalence + a single shared implementation prevent the gate and the audited invariant from drifting; observe-only containment keeps the evidence from ever becoming authority."
+evidence_notes = "Declared at PHASE4-N-AO S10. Motivated by the 2026-06-13 scout run: a clean two-producer follow run (no switch) emitted ONLY lagging verdicts (peer perpetually 30-80 slots ahead), zero agreed, zero diverged -- a perfectly healthy follower the exact-tip gate would reject. To be flipped at S10 close via ci/ci_check_post_switch_convergence_window.sh (invoking the reducer bin) + hermetic tests (continuity-OK->ContinuesSelectedBranch, broken-parent->BrokenLineage, post-X diverged->Diverged, win-without-terminal->DanglingForkChoiceWin, ignores-peer-tip, and post_switch_continuity_replays_byte_identical). The CE-AO-6 live flip of CN-CONS-03 is the refined DC-EVIDENCE-04 gate, whose terminal is derived from this verdict."
 
 [[rules]]
 id = "DC-NODE-31"
