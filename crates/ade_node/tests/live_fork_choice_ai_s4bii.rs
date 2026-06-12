@@ -23,6 +23,7 @@ use ade_ledger::wal::{RollbackReason, WalEntry, WalError, WalStore};
 use ade_network::codec::chain_sync::Point as WirePoint;
 use ade_node::fork_switch::{
     fork_switch_fence_resolved, BranchBodySource, BranchProofError, FetchError, ForkSwitchOutcome,
+    PrefetchedBranchBodies,
 };
 use ade_node::node_lifecycle::{apply_fork_switch, run_participant_sync};
 use ade_node::selector_state::{project_tiebreaker, ForkAnchor, PendingForkSwitch};
@@ -1643,4 +1644,96 @@ async fn proof_failure_holds_fence_then_resolves_when_caught_up() {
         fork_switch_fence_resolved(&pending, true),
         "no pending + caught up -> resolved"
     );
+}
+
+// ---------- PHASE4-N-AO S6 (CE-AO-6): the live fetch source is byte-only ----------
+// The production PrefetchedBranchBodies (what the relay loop fills from a live
+// BlockFetch) is NO stronger than the hermetic doubles: a lying or short fetch is
+// rejected by S4's prove phase BEFORE commit_rollback. BlockFetch transports
+// bytes; it does not grant truth.
+
+#[tokio::test]
+async fn live_fetch_lying_body_rejected_before_commit() {
+    // A PrefetchedBranchBodies serving a DIFFERENT block for the selected slot ->
+    // bind fails (BodyHeaderMismatch) before commit; chain unchanged, fence held.
+    let (c, view) = corpus_view();
+    let competing = pick_lightest(&c);
+    let decoded = decode_block(&competing).unwrap();
+    let (db, anchor) = s4_fork_setup(&c, &competing, None);
+    let switch = s4_switch(&competing, anchor, "peer-7");
+    let tip_before = db.tip().unwrap().unwrap();
+    let other = c
+        .blocks
+        .iter()
+        .find(|b| decode_block(b).unwrap().block_hash != decoded.block_hash)
+        .unwrap()
+        .clone();
+    let mut fwd = fwd_at(decoded.header_input.block_no.0);
+    let mut wal = VecWal::default();
+    let mut pending = Some(switch.clone());
+    let mut fence = true;
+    let mut last_fail = None;
+    let mut src = PrefetchedBranchBodies::new();
+    src.insert("peer-7", decoded.header_input.slot, other); // a lying body
+    let outcome = apply_fork_switch(
+        &mut fwd, &db, &mut wal, &switch, &mut pending, &mut fence, &mut last_fail, &src,
+        &corpus_schedule(), &view,
+    )
+    .expect("apply returns");
+    assert!(
+        matches!(
+            outcome,
+            ForkSwitchOutcome::ProofFailed {
+                error: BranchProofError::BodyHeaderMismatch { .. }
+            }
+        ),
+        "a lying live body must be rejected before commit, got {outcome:?}"
+    );
+    assert_eq!(db.tip().unwrap().unwrap(), tip_before, "no commit");
+    assert!(wal.read_all().unwrap().is_empty());
+    assert!(fence, "fence held");
+}
+
+#[tokio::test]
+async fn live_fetch_short_range_rejected_before_commit() {
+    // A truncated fetch -- fewer bodies than the candidate's header count (mux/peer
+    // truncation) -> BodyUnavailable before commit; chain unchanged, fence held.
+    // Distinct from the lying-body case (a missing body, not a wrong one).
+    let (c, view) = corpus_view();
+    let competing = pick_lightest(&c);
+    let decoded = decode_block(&competing).unwrap();
+    let (db, anchor) = s4_fork_setup(&c, &competing, None);
+    // A two-header candidate: the live fetch must provide BOTH bodies.
+    let mut switch = s4_switch(&competing, anchor, "peer-7");
+    let mut second = switch.winning_candidate.headers[0].clone();
+    second.slot = SlotNo(switch.winning_candidate.headers[0].slot.0 + 1);
+    second.block_no = ade_types::BlockNo(switch.winning_candidate.headers[0].block_no.0 + 1);
+    let second_slot = second.slot;
+    switch.winning_candidate.headers.push(second);
+    let tip_before = db.tip().unwrap().unwrap();
+    let mut fwd = fwd_at(decoded.header_input.block_no.0);
+    let mut wal = VecWal::default();
+    let mut pending = Some(switch.clone());
+    let mut fence = true;
+    let mut last_fail = None;
+    // The fetch provides only the FIRST body -> the branch is short.
+    let mut src = PrefetchedBranchBodies::new();
+    src.insert("peer-7", decoded.header_input.slot, competing.clone());
+    let outcome = apply_fork_switch(
+        &mut fwd, &db, &mut wal, &switch, &mut pending, &mut fence, &mut last_fail, &src,
+        &corpus_schedule(), &view,
+    )
+    .expect("apply returns");
+    assert!(
+        matches!(
+            outcome,
+            ForkSwitchOutcome::ProofFailed {
+                error: BranchProofError::BodyUnavailable { slot }
+            } if slot == second_slot
+        ),
+        "a short (truncated) live fetch must be rejected before commit, got {outcome:?}"
+    );
+    assert_eq!(db.tip().unwrap().unwrap(), tip_before, "no commit");
+    assert!(wal.read_all().unwrap().is_empty());
+    assert!(fence, "fence held");
 }

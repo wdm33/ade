@@ -70,6 +70,49 @@ impl BranchBodySource for NullBranchBodySource {
     }
 }
 
+/// PHASE4-N-AO S6 (CE-AO-6): a `BranchBodySource` populated from bytes the relay
+/// loop pre-fetched live (`BlockFetch RequestRange` from the winning peer). The
+/// bridge between the async live fetch and the sync S4 prove seam.
+///
+/// **It carries BYTES and nothing else** — no verdict, no selection, no fence, no
+/// authority. `apply_fork_switch` (S4) is the sole adopter; a lying / short /
+/// truncated / Byzantine fetch is rejected by `prove_fork_switch` /
+/// `prevalidate_branch` BEFORE any `commit_rollback`. BlockFetch transports bytes;
+/// it does not grant truth.
+#[derive(Debug, Default)]
+pub struct PrefetchedBranchBodies {
+    bodies: std::collections::BTreeMap<(String, u64), Vec<u8>>,
+}
+
+impl PrefetchedBranchBodies {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Record a pre-fetched body for `(peer, slot)`. Bytes only.
+    pub fn insert(&mut self, peer: &str, slot: SlotNo, bytes: Vec<u8>) {
+        self.bodies.insert((peer.to_string(), slot.0), bytes);
+    }
+
+    /// How many bodies were pre-fetched (for the short-range / truncation check).
+    pub fn len(&self) -> usize {
+        self.bodies.len()
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.bodies.is_empty()
+    }
+}
+
+impl BranchBodySource for PrefetchedBranchBodies {
+    fn fetch_body(&self, peer: &str, slot: SlotNo) -> Result<Vec<u8>, FetchError> {
+        self.bodies
+            .get(&(peer.to_string(), slot.0))
+            .cloned()
+            .ok_or(FetchError::Unavailable)
+    }
+}
+
 /// Closed proof-failure surface — every variant leaves the current durable chain
 /// byte-unchanged (no `commit_rollback`).
 #[derive(Debug, Clone, PartialEq, Eq)]
