@@ -101,8 +101,8 @@ use ade_runtime::receive::ChainDbWriter;
 
 use crate::candidate_aggregator::{assemble_candidate_set, build_candidate_fragment};
 use crate::fork_switch::{
-    prevalidate_branch, BranchBodySource, BranchProofError, ForkSwitchOutcome, NullBranchBodySource,
-    ProvenBranch,
+    fork_switch_fence_resolved, prevalidate_branch, BranchBodySource, BranchProofError,
+    ForkSwitchOutcome, NullBranchBodySource, ProvenBranch,
 };
 use crate::selector_state::{project_tiebreaker, ForkAnchor, PendingForkSwitch};
 
@@ -1388,6 +1388,29 @@ pub async fn run_relay_loop_with_sched(
                             ledger_view,
                         )
                         .map_err(|e| NodeLifecycleError::RelaySync(format!("{e:?}")))?;
+                    }
+                    // PHASE4-N-AO S5 (DC-NODE-28 resolution): the forge fence clears
+                    // ONLY on a RESOLVED state -- no pending decision AND caught up to
+                    // the followed peer (the DC-NODE-15 signal). A proof failure left
+                    // the fence HELD (S4); it is never cleared as a failure side
+                    // effect. Runs unconditionally so a held fence resolves once the
+                    // participant loop catches up.
+                    let durable_servable_tip: Option<TipPoint> = ChainDbServedSource::new(chaindb)
+                        .tip()
+                        .map(|(slot, hash, block_no)| TipPoint {
+                            slot,
+                            hash,
+                            block_no,
+                        });
+                    let caught_up = matches!(
+                        forge_followed_tip_admission(
+                            durable_servable_tip,
+                            source.followed_peer_tip_signal().tip(),
+                        ),
+                        ForgeFollowedTipAdmission::CaughtUp
+                    );
+                    if fork_switch_fence_resolved(&act.pending_fork_switch, caught_up) {
+                        act.pending_reselection = false;
                     }
                 } else {
                     run_node_sync(source, state, chaindb, wal, era_schedule, ledger_view)

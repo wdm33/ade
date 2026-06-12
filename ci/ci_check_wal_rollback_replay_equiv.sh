@@ -99,6 +99,26 @@ if ! grep -qE 'recovers_selected_not_abandoned' "$TEST_RS"; then
     print_fail "AI-S1 test must prove replay recovers the selected (not abandoned) chain"
 fi
 
+# 7. PHASE4-N-AO S5 (DC-NODE-27 ext): RollbackReason::ForkChoiceWin is a closed,
+#    wire-coded reason. The replay/verify re-anchor binds `to_point` ONLY (guard #2's
+#    `{ to_point, .. }` arms ignore `reason`), so a ForkChoiceWin reselection replays
+#    byte-identically to any other RollBack -- reason-agnostic by construction. The
+#    S5 replay/crash proofs live in ade_node/tests/reselection_replay_s5.rs.
+if ! echo "$EVENT" | grep -qE '\bForkChoiceWin\b'; then
+    print_fail "RollbackReason::ForkChoiceWin must be a closed wire-coded reason (event.rs)"
+fi
+S5_TEST="$REPO_ROOT/crates/ade_node/tests/reselection_replay_s5.rs"
+if [[ -f "$S5_TEST" ]]; then
+    if ! grep -qE 'forkchoicewin_rollback_without_bodies_is_no_fake_winner' "$S5_TEST"; then
+        print_fail "S5 must prove the no-fake-winner case (forkchoicewin_rollback_without_bodies_is_no_fake_winner)"
+    fi
+    if ! grep -qE 'forkchoicewin_reselection_replays_byte_identical' "$S5_TEST"; then
+        print_fail "S5 must prove ForkChoiceWin replay-equivalence (forkchoicewin_reselection_replays_byte_identical)"
+    fi
+else
+    print_fail "S5 reselection replay proof file missing: $S5_TEST"
+fi
+
 if (( FAILED == 0 )); then
     echo "OK: rollback WAL durability foundation (CE-AI-1 / DC-NODE-27 mechanism)"
 fi

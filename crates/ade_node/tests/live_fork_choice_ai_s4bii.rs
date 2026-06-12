@@ -21,9 +21,11 @@ use ade_ledger::receive::ReceiveState;
 use ade_ledger::state::LedgerState;
 use ade_ledger::wal::{RollbackReason, WalEntry, WalError, WalStore};
 use ade_network::codec::chain_sync::Point as WirePoint;
-use ade_node::fork_switch::{BranchBodySource, BranchProofError, FetchError, ForkSwitchOutcome};
+use ade_node::fork_switch::{
+    fork_switch_fence_resolved, BranchBodySource, BranchProofError, FetchError, ForkSwitchOutcome,
+};
 use ade_node::node_lifecycle::{apply_fork_switch, run_participant_sync};
-use ade_node::selector_state::{ForkAnchor, PendingForkSwitch};
+use ade_node::selector_state::{project_tiebreaker, ForkAnchor, PendingForkSwitch};
 use ade_node::node_sync::{
     pending_reselection_forge_refusal, run_node_sync, ForgeRefused, NodeBlockSource, NodeSyncError,
     NodeSyncItem,
@@ -1574,4 +1576,71 @@ async fn too_deep_rollback_fails_closed_unchanged() {
     assert_eq!(db.tip().unwrap().unwrap(), tip_before);
     assert!(wal.read_all().unwrap().is_empty());
     assert!(fence, "fence held");
+}
+
+// ---------- PHASE4-N-AO S5 (CE-AO-5): selector==durable + fence resolution ----------
+
+#[tokio::test]
+async fn selector_equals_durable_post_forkchoicewin() {
+    // After a ForkChoiceWin adoption, the selector projection of the durable tip
+    // equals the adopted winner -- selector and durable converge (no persisted
+    // selector; S3 Option A derives it from the durable tip).
+    let (c, view) = corpus_view();
+    let competing = pick_lightest(&c);
+    let decoded = decode_block(&competing).unwrap();
+    let (db, anchor) = s4_fork_setup(&c, &competing, None);
+    let switch = s4_switch(&competing, anchor, "peer-7");
+    let mut fwd = fwd_at(decoded.header_input.block_no.0);
+    let mut wal = VecWal::default();
+    let mut pending = Some(switch.clone());
+    let mut fence = true;
+    let mut last_fail = None;
+    let src = InMemBodySource::with("peer-7", decoded.header_input.slot, competing.clone());
+    apply_fork_switch(
+        &mut fwd, &db, &mut wal, &switch, &mut pending, &mut fence, &mut last_fail, &src,
+        &corpus_schedule(), &view,
+    )
+    .expect("adopt");
+    let durable = db.tip().unwrap().unwrap();
+    let stored = db.get_block_by_hash(&durable.hash).unwrap().unwrap();
+    let tip_dec = decode_block(&stored.bytes).unwrap();
+    let projected = project_tiebreaker(&tip_dec.header_input).unwrap();
+    assert_eq!(
+        projected, switch.winning_candidate.select_view,
+        "selector projection of the durable tip == the adopted winner (selector == durable)"
+    );
+}
+
+#[tokio::test]
+async fn proof_failure_holds_fence_then_resolves_when_caught_up() {
+    // S4 proof failure HOLDS the fence; it clears ONLY on a resolved state (no
+    // pending decision AND caught up) -- never as a failure side effect.
+    let (c, view) = corpus_view();
+    let competing = pick_lightest(&c);
+    let decoded = decode_block(&competing).unwrap();
+    let (db, anchor) = s4_fork_setup(&c, &competing, None);
+    let switch = s4_switch(&competing, anchor, "peer-7");
+    let mut fwd = fwd_at(decoded.header_input.block_no.0);
+    let mut wal = VecWal::default();
+    let mut pending = Some(switch.clone());
+    let mut fence = true;
+    let mut last_fail = None;
+    let src = InMemBodySource::empty(); // proof fails: no body served
+    apply_fork_switch(
+        &mut fwd, &db, &mut wal, &switch, &mut pending, &mut fence, &mut last_fail, &src,
+        &corpus_schedule(), &view,
+    )
+    .expect("apply returns");
+    assert!(pending.is_none(), "decision retired as failed");
+    assert!(fence, "fence HELD on proof failure");
+    // The fence resolves ONLY when no pending AND caught up. The failure alone
+    // (not yet caught up) does NOT resolve it.
+    assert!(
+        !fork_switch_fence_resolved(&pending, false),
+        "not caught up -> fence stays held"
+    );
+    assert!(
+        fork_switch_fence_resolved(&pending, true),
+        "no pending + caught up -> resolved"
+    );
 }

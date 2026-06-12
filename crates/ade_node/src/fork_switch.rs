@@ -40,7 +40,7 @@ use ade_ledger::state::LedgerState;
 use ade_types::shelley::block::PrevHash;
 use ade_types::SlotNo;
 
-use crate::selector_state::ForkAnchor;
+use crate::selector_state::{ForkAnchor, PendingForkSwitch};
 
 /// The RED seam that supplies a winning branch's bodies. Hermetic in tests; the
 /// live `BlockFetch RequestRange` anchor→tip wiring is out of S4 scope (CE-AO-6)
@@ -192,6 +192,21 @@ pub fn prevalidate_branch(
     Ok(ProvenBranch { blocks })
 }
 
+/// PHASE4-N-AO S5 (DC-NODE-28 resolution): the forge fence (`pending_reselection`)
+/// clears ONLY on a RESOLVED state -- no pending fork-switch decision AND the node
+/// is caught up to the followed peer. A proof failure HOLDS the fence (it says
+/// "that branch was not proven", not "the disagreement is resolved"); the fence
+/// clears only here, when the participant loop reaches a resolved no-pending state
+/// (the held-then-resolved path; S4 clears the success path directly after
+/// reconcile). `caught_up` is the `DC-NODE-15` signal
+/// (`forge_followed_tip_admission == CaughtUp`). PURE.
+pub fn fork_switch_fence_resolved(
+    pending_fork_switch: &Option<PendingForkSwitch>,
+    caught_up: bool,
+) -> bool {
+    pending_fork_switch.is_none() && caught_up
+}
+
 /// A fetched body's re-derived header must field-match the S3-selected summary,
 /// and its recomputed body hash must match. The leader value is compared on the
 /// `praos_leader_value` basis the summary recorded (Conway/Praos); a TPraos tip is
@@ -256,6 +271,27 @@ mod tests {
             },
             rollback_depth: BlockDistance(0),
         }
+    }
+
+    fn a_switch() -> PendingForkSwitch {
+        PendingForkSwitch {
+            fork_anchor: anchor(),
+            winning_peer: "peer-1".to_string(),
+            winning_candidate: empty_candidate(),
+        }
+    }
+
+    #[test]
+    fn fence_resolved_only_when_no_pending_and_caught_up() {
+        // A decision in flight -> NOT resolved, even if caught up.
+        assert!(!fork_switch_fence_resolved(&Some(a_switch()), true));
+        // No pending but NOT caught up (still behind / disagreeing) -> NOT resolved.
+        assert!(!fork_switch_fence_resolved(&None, false));
+        // A proof failure leaves pending=None + the fence held; until caught up it
+        // stays held (this predicate is the only live clear path besides S4 success).
+        assert!(!fork_switch_fence_resolved(&Some(a_switch()), false));
+        // RESOLVED: no pending decision AND caught up to the followed peer.
+        assert!(fork_switch_fence_resolved(&None, true));
     }
 
     #[test]
