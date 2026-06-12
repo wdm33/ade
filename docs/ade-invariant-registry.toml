@@ -7205,6 +7205,39 @@ introduced_in = "PHASE4-N-AJ"
 strengthened_in = []
 
 [[rules]]
+id = "DC-EVIDENCE-04"
+tier = "derived"
+statement = """
+Closed fork-choice convergence evidence (PHASE4-N-AO S9; promotes the live SELECT proof from stderr
+diagnostics to registry-grade evidence). The live multi-candidate SELECT path emits a CLOSED, observe-only
+convergence-evidence sequence proving the WHOLE path: needs_fork_choice -> lca_discovered ->
+candidate_fragment_built -> fork_choice_selected -> branch_fetch_started -> branch_fetch_completed ->
+branch_prevalidated -> fork_switch_applied | fork_switch_failed. The 9 event discriminators EQUAL the
+emit-only allow-list (an unknown/added variant fails closed at the allow-list test, the NodeSchedEvent
+pattern); every field is bounded + typed (no free-form error strings -- failure_code is a closed enum
+mapping BranchProofError/LcaError; fork_switch_id is a bounded deterministic id = blake2b(winning_peer ||
+fork_anchor.slot || fork_anchor.hash || winner_tip.slot || winner_tip.hash) hex-prefix, never free-form
+text). For a given fork_switch_id, a fork_choice_selected{result=win} is followed by EXACTLY ONE terminal
+event (fork_switch_applied OR fork_switch_failed) -- never zero, never two, never dangling. The evidence
+OBSERVES already-computed authority outcomes: NO evidence event/type is ever consumed by select_best_chain
+/ walk_to_durable_lca / apply_fork_switch / the forge fence, and a transcript write failure (flips
+incomplete, DC-EVIDENCE-01) cannot alter selection / apply / fence behavior. CN-CONS-03 flips ONLY when a
+committed two-producer transcript contains the full ordered chain (both-peer block_received -> the SELECT
+middle -> fork_switch_applied{rollback_reason=ForkChoiceWin} -> block_admitted -> agreement_verdict{agreed,
+our_hash==peer_hash} -> 0 diverged) -- never on stderr diagnostics.
+"""
+source = "docs/planning/phase4-n-ao-ce-ao-6-live-gap.md (S9 evidence finding) + docs/clusters/PHASE4-N-AO/S9-closed-fork-choice-evidence.md"
+cross_ref = ["DC-EVIDENCE-01", "DC-EVIDENCE-02", "DC-EVIDENCE-03", "DC-NODE-34", "DC-NODE-36", "DC-NODE-37", "DC-NODE-38", "CN-CONS-01", "CN-CONS-03"]
+code_locus = "CANDIDATE (pending S9 impl): crates/ade_node/src/convergence_evidence.rs (9 new emit_* methods + ForkChoiceEvidenceFailure closed enum + ForkSwitchId) + the AdmissionLogEvent vocabulary + emit-only allow-list + observe-only emit taps in crates/ade_node/src/node_lifecycle.rs (dispatch_competing_fork_choice decide-half + the relay-loop apply-half around prefetch_branch_bodies/apply_fork_switch). BLUE selector/walk/apply UNCHANGED."
+tests = []
+ci_scripts = []
+status = "declared"
+introduced_in = "PHASE4-N-AO"
+strengthened_in = []
+attack_rationale = "Without closed-vocabulary evidence for the SELECT middle, a CN-CONS-03 flip would rest on stderr diagnostics + a transcript that only proves the beginning (block_received) and end (agreement) -- leaving the actual fork-choice (did Ade DISCOVER the LCA, SELECT a winner, FETCH+PREVALIDATE the branch, and APPLY the fork-switch, or did it merely follow a single peer?) unaudited. A decide-only transcript leaves the same ambiguity: selected vs applied. The fork_switch_id win->terminal pairing forces every WIN to resolve to a durable apply or a structured failure, so agreement{agreed} only supports the invariant when the winning branch was actually adopted. Closed discriminants + an emit-only allow-list + no free-form strings keep the evidence from silently widening or smuggling unaudited claims; observe-only containment keeps the evidence from ever becoming authority (a write failure must never alter selection/apply)."
+evidence_notes = "Declared at PHASE4-N-AO S9. The 2026-06-12 diverged live run informally proved the mechanism (both peers delivered, S7 LCA walk resolved forks of depth 1-7 at the durable anchor, 7 fork-choice WINs, agreed exact-hash, 0 diverged, no UnexpectedRollback) but via temporary FCDIAG stderr markers (reverted) -- NOT registry-grade. Enforced at S9 close (CE-AO-10) via ci_check_fork_choice_evidence_closed.sh + hermetic tests (vocabulary==allow-list negative test, closed-typed-fields, win-paired-with-exactly-one-terminal-by-fork_switch_id, observe-only containment, field-presence). The live CE-AO-6 flip of CN-CONS-03 is gated on a committed two-producer transcript asserting the full ordered chain."
+
+[[rules]]
 id = "DC-NODE-31"
 tier = "derived"
 statement = """
