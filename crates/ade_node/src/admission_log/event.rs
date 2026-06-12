@@ -102,6 +102,121 @@ pub enum AdmissionLogEvent {
     AdmissionHalted { reason: AdmissionHaltReason },
     /// Admission shutting down on signal / clean upstream drop.
     AdmissionShutdown { reason: AdmissionShutdownReason },
+
+    // PHASE4-N-AO S9 (DC-EVIDENCE-04): closed fork-choice convergence evidence --
+    // observe-only taps proving the live SELECT path (candidate discovery -> LCA ->
+    // selection -> branch proof -> fork-switch apply). NONE of these is ever read by
+    // BLUE / selection / apply / fence logic; they only OBSERVE already-computed
+    // authority outcomes.
+    /// A competing block reached the `NeedsForkChoice` dispatch (S3).
+    NeedsForkChoice {
+        peer: String,
+        slot: u64,
+        block_hash_hex: String,
+    },
+    /// The durable last-common-ancestor was discovered by the S7 walk
+    /// (`walk_to_durable_lca` OK). `candidate_header_count` is the depth of the
+    /// competing branch above the LCA.
+    LcaDiscovered {
+        peer: String,
+        fork_anchor_slot: u64,
+        fork_anchor_hash_hex: String,
+        candidate_header_count: u64,
+    },
+    /// The multi-header `CandidateFragment` was built (S2) from the LCA.
+    CandidateFragmentBuilt {
+        peer: String,
+        anchor_slot: u64,
+        candidate_header_count: u64,
+    },
+    /// `select_best_chain` decided (S3): `Win` (a competing branch is the winner) or
+    /// `Loss`. `fork_switch_id` correlates a WIN to its single terminal apply event.
+    ForkChoiceSelected {
+        fork_switch_id: String,
+        peer: String,
+        result: ForkChoiceResult,
+        winner_tip_slot: Option<u64>,
+        winner_tip_hash_hex: Option<String>,
+        consensus_inputs_fingerprint_hex: String,
+    },
+    /// S4 began block-fetching the winning branch (anchor -> winner_tip).
+    BranchFetchStarted {
+        fork_switch_id: String,
+        peer: String,
+        fork_anchor_slot: u64,
+        winner_tip_slot: u64,
+    },
+    /// S4 completed the branch fetch (`block_count` bodies).
+    BranchFetchCompleted {
+        fork_switch_id: String,
+        peer: String,
+        block_count: u64,
+    },
+    /// S4 prevalidated the complete branch (bind + link + block_validity).
+    BranchPrevalidated {
+        fork_switch_id: String,
+        peer: String,
+        block_count: u64,
+    },
+    /// S4 applied the fork-switch -- the winning branch is durably adopted
+    /// (`ForkSwitchOutcome::Adopted`). Terminal for its `fork_switch_id`.
+    ForkSwitchApplied {
+        fork_switch_id: String,
+        peer: String,
+        new_tip_slot: u64,
+        new_tip_hash_hex: String,
+        rollback_reason: &'static str,
+    },
+    /// S4 fork-switch proof failed (`ForkSwitchOutcome::ProofFailed`) -- the durable
+    /// chain is unchanged. Terminal for its `fork_switch_id`. `failure_code` is a
+    /// CLOSED enum (no free-form string).
+    ForkSwitchFailed {
+        fork_switch_id: String,
+        peer: String,
+        failure_code: ForkChoiceEvidenceFailure,
+    },
+}
+
+/// Closed result of `select_best_chain` for a competing candidate (S9 evidence).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ForkChoiceResult {
+    Win,
+    Loss,
+}
+
+impl ForkChoiceResult {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Win => "win",
+            Self::Loss => "loss",
+        }
+    }
+}
+
+/// Closed failure code for a fork-switch proof failure (S9 evidence). Maps the
+/// `BranchProofError` surface to a closed code -- NO free-form error strings in
+/// the evidence vocabulary (DC-EVIDENCE-04).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ForkChoiceEvidenceFailure {
+    EmptyBranch,
+    BodyUnavailable,
+    BodyHeaderMismatch,
+    BrokenParentLink,
+    BodyInvalid,
+    AnchorUnreachable,
+}
+
+impl ForkChoiceEvidenceFailure {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::EmptyBranch => "empty_branch",
+            Self::BodyUnavailable => "body_unavailable",
+            Self::BodyHeaderMismatch => "body_header_mismatch",
+            Self::BrokenParentLink => "broken_parent_link",
+            Self::BodyInvalid => "body_invalid",
+            Self::AnchorUnreachable => "anchor_unreachable",
+        }
+    }
 }
 
 /// Closed halt-reason sum. Each variant maps to a closed runner
@@ -156,6 +271,16 @@ impl AdmissionLogEvent {
             Self::AgreementVerdict { .. } => "agreement_verdict",
             Self::AdmissionHalted { .. } => "admission_halted",
             Self::AdmissionShutdown { .. } => "admission_shutdown",
+            // PHASE4-N-AO S9 (DC-EVIDENCE-04) closed fork-choice events.
+            Self::NeedsForkChoice { .. } => "needs_fork_choice",
+            Self::LcaDiscovered { .. } => "lca_discovered",
+            Self::CandidateFragmentBuilt { .. } => "candidate_fragment_built",
+            Self::ForkChoiceSelected { .. } => "fork_choice_selected",
+            Self::BranchFetchStarted { .. } => "branch_fetch_started",
+            Self::BranchFetchCompleted { .. } => "branch_fetch_completed",
+            Self::BranchPrevalidated { .. } => "branch_prevalidated",
+            Self::ForkSwitchApplied { .. } => "fork_switch_applied",
+            Self::ForkSwitchFailed { .. } => "fork_switch_failed",
         }
     }
 }
@@ -279,6 +404,15 @@ mod tests {
             AdmissionLogEvent::AgreementVerdict { .. } => "agreement_verdict",
             AdmissionLogEvent::AdmissionHalted { .. } => "admission_halted",
             AdmissionLogEvent::AdmissionShutdown { .. } => "admission_shutdown",
+            AdmissionLogEvent::NeedsForkChoice { .. } => "needs_fork_choice",
+            AdmissionLogEvent::LcaDiscovered { .. } => "lca_discovered",
+            AdmissionLogEvent::CandidateFragmentBuilt { .. } => "candidate_fragment_built",
+            AdmissionLogEvent::ForkChoiceSelected { .. } => "fork_choice_selected",
+            AdmissionLogEvent::BranchFetchStarted { .. } => "branch_fetch_started",
+            AdmissionLogEvent::BranchFetchCompleted { .. } => "branch_fetch_completed",
+            AdmissionLogEvent::BranchPrevalidated { .. } => "branch_prevalidated",
+            AdmissionLogEvent::ForkSwitchApplied { .. } => "fork_switch_applied",
+            AdmissionLogEvent::ForkSwitchFailed { .. } => "fork_switch_failed",
         };
     }
 

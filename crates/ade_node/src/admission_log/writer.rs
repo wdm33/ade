@@ -175,6 +175,144 @@ fn encode_event(event: &AdmissionLogEvent, out: &mut String) {
             out.push(',');
             push_key_str(out, "reason", reason.as_str());
         }
+        // PHASE4-N-AO S9 (DC-EVIDENCE-04) closed fork-choice events.
+        AdmissionLogEvent::NeedsForkChoice {
+            peer,
+            slot,
+            block_hash_hex,
+        } => {
+            out.push(',');
+            push_key_str(out, "peer", peer);
+            out.push(',');
+            push_key_u64(out, "slot", *slot);
+            out.push(',');
+            push_key_str(out, "block_hash_hex", block_hash_hex);
+        }
+        AdmissionLogEvent::LcaDiscovered {
+            peer,
+            fork_anchor_slot,
+            fork_anchor_hash_hex,
+            candidate_header_count,
+        } => {
+            out.push(',');
+            push_key_str(out, "peer", peer);
+            out.push(',');
+            push_key_u64(out, "fork_anchor_slot", *fork_anchor_slot);
+            out.push(',');
+            push_key_str(out, "fork_anchor_hash_hex", fork_anchor_hash_hex);
+            out.push(',');
+            push_key_u64(out, "candidate_header_count", *candidate_header_count);
+        }
+        AdmissionLogEvent::CandidateFragmentBuilt {
+            peer,
+            anchor_slot,
+            candidate_header_count,
+        } => {
+            out.push(',');
+            push_key_str(out, "peer", peer);
+            out.push(',');
+            push_key_u64(out, "anchor_slot", *anchor_slot);
+            out.push(',');
+            push_key_u64(out, "candidate_header_count", *candidate_header_count);
+        }
+        AdmissionLogEvent::ForkChoiceSelected {
+            fork_switch_id,
+            peer,
+            result,
+            winner_tip_slot,
+            winner_tip_hash_hex,
+            consensus_inputs_fingerprint_hex,
+        } => {
+            out.push(',');
+            push_key_str(out, "fork_switch_id", fork_switch_id);
+            out.push(',');
+            push_key_str(out, "peer", peer);
+            out.push(',');
+            push_key_str(out, "result", result.as_str());
+            if let Some(s) = winner_tip_slot {
+                out.push(',');
+                push_key_u64(out, "winner_tip_slot", *s);
+            }
+            if let Some(h) = winner_tip_hash_hex {
+                out.push(',');
+                push_key_str(out, "winner_tip_hash_hex", h);
+            }
+            out.push(',');
+            push_key_str(
+                out,
+                "consensus_inputs_fingerprint_hex",
+                consensus_inputs_fingerprint_hex,
+            );
+        }
+        AdmissionLogEvent::BranchFetchStarted {
+            fork_switch_id,
+            peer,
+            fork_anchor_slot,
+            winner_tip_slot,
+        } => {
+            out.push(',');
+            push_key_str(out, "fork_switch_id", fork_switch_id);
+            out.push(',');
+            push_key_str(out, "peer", peer);
+            out.push(',');
+            push_key_u64(out, "fork_anchor_slot", *fork_anchor_slot);
+            out.push(',');
+            push_key_u64(out, "winner_tip_slot", *winner_tip_slot);
+        }
+        AdmissionLogEvent::BranchFetchCompleted {
+            fork_switch_id,
+            peer,
+            block_count,
+        } => {
+            out.push(',');
+            push_key_str(out, "fork_switch_id", fork_switch_id);
+            out.push(',');
+            push_key_str(out, "peer", peer);
+            out.push(',');
+            push_key_u64(out, "block_count", *block_count);
+        }
+        AdmissionLogEvent::BranchPrevalidated {
+            fork_switch_id,
+            peer,
+            block_count,
+        } => {
+            out.push(',');
+            push_key_str(out, "fork_switch_id", fork_switch_id);
+            out.push(',');
+            push_key_str(out, "peer", peer);
+            out.push(',');
+            push_key_u64(out, "block_count", *block_count);
+        }
+        AdmissionLogEvent::ForkSwitchApplied {
+            fork_switch_id,
+            peer,
+            new_tip_slot,
+            new_tip_hash_hex,
+            rollback_reason,
+        } => {
+            out.push(',');
+            push_key_str(out, "fork_switch_id", fork_switch_id);
+            out.push(',');
+            push_key_str(out, "peer", peer);
+            out.push(',');
+            push_key_u64(out, "new_tip_slot", *new_tip_slot);
+            out.push(',');
+            push_key_str(out, "new_tip_hash_hex", new_tip_hash_hex);
+            out.push(',');
+            push_key_str(out, "rollback_reason", rollback_reason);
+        }
+        AdmissionLogEvent::ForkSwitchFailed {
+            fork_switch_id,
+            peer,
+            failure_code,
+        } => {
+            out.push(',');
+            push_key_str(out, "fork_switch_id", fork_switch_id);
+            out.push(',');
+            push_key_str(out, "peer", peer);
+            out.push(',');
+            push_key_str(out, "failure_code", failure_code.as_str());
+        }
     }
     out.push('}');
 }
@@ -222,6 +360,16 @@ const DISCRIMINATORS: &[&str] = &[
     "agreement_verdict",
     "admission_halted",
     "admission_shutdown",
+    // PHASE4-N-AO S9 (DC-EVIDENCE-04) closed fork-choice events.
+    "needs_fork_choice",
+    "lca_discovered",
+    "candidate_fragment_built",
+    "fork_choice_selected",
+    "branch_fetch_started",
+    "branch_fetch_completed",
+    "branch_prevalidated",
+    "fork_switch_applied",
+    "fork_switch_failed",
 ];
 
 #[cfg(test)]
