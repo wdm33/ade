@@ -101,6 +101,7 @@ use ade_runtime::receive::ChainDbWriter;
 use ade_network::codec::chain_sync::Point as WirePoint;
 
 use crate::candidate_aggregator::{assemble_candidate_set, build_candidate_fragment};
+use crate::fair_merge::{fair_merge, PER_PEER_LANE_CAP};
 use crate::lca_walk::{walk_to_durable_lca, CachedHeader};
 use crate::fork_switch::{
     fork_switch_fence_resolved, prevalidate_branch, BranchBodySource, BranchProofError,
@@ -843,7 +844,17 @@ fn spawn_live_wire_pump_source(
 ) -> NodeBlockSource {
     let our_versions = build_n2n_version_table(network_magic);
     let start_point = wire_pump_start_point(recovered_tip);
-    let (events_tx, events_rx) = mpsc::channel::<AdmissionPeerEvent>(LIVE_WIRE_PUMP_CHANNEL_CAP);
+    // PHASE4-N-AO S8 (DC-PUMP-04): the merged feed the `WirePump` consumer reads is
+    // UNCHANGED in shape (one peer-attributed event sequence). Below it, each peer
+    // now gets its OWN bounded lane drained by a fair round-robin merge — a hot peer
+    // fills only its own lane (self-backpressure) and can no longer starve the
+    // others off the participant path (the gap the S7 live retry surfaced).
+    let (merged_tx, merged_rx) = mpsc::channel::<AdmissionPeerEvent>(LIVE_WIRE_PUMP_CHANNEL_CAP);
+    // Per-peer lanes in a DETERMINISTIC order derived from the configured `--peer`
+    // list (an explicit `Vec` — never HashMap/HashSet iteration, never scheduler
+    // timing). The lane order is RED scheduling OPPORTUNITY only; it never decides
+    // fork-choice (select_best_chain stays arrival-order independent, CN-CONS-01).
+    let mut lanes: Vec<Option<mpsc::Receiver<AdmissionPeerEvent>>> = Vec::new();
     for raw_addr in peer_addrs {
         let addr: std::net::SocketAddr = match raw_addr.parse() {
             Ok(a) => a,
@@ -852,8 +863,9 @@ fn spawn_live_wire_pump_source(
                 continue;
             }
         };
+        let (lane_tx, lane_rx) = mpsc::channel::<AdmissionPeerEvent>(PER_PEER_LANE_CAP);
+        lanes.push(Some(lane_rx));
         let pump_versions = our_versions.clone();
-        let pump_tx = events_tx.clone();
         let start = start_point.clone();
         let label = raw_addr.clone();
         tokio::spawn(async move {
@@ -865,15 +877,15 @@ fn spawn_live_wire_pump_source(
                 }
             };
             let _ =
-                run_admission_wire_pump(transport, label, start, version, network_magic, pump_tx)
+                run_admission_wire_pump(transport, label, start, version, network_magic, lane_tx)
                     .await;
         });
     }
-    // Drop the builder's own sender: the spawned tasks hold their own clones, so
-    // the channel stays open while any pump runs and closes once they all end
-    // (or immediately if no `--peer` parsed → feed ends → loop halts clean).
-    drop(events_tx);
-    NodeBlockSource::from_wire_pump(events_rx)
+    // RED fair-merge: round-robin the per-peer lanes into the single merged feed.
+    // No peer parsed → empty lanes → the merge ends immediately → the feed ends →
+    // the relay loop halts clean (the same outcome as the prior empty source).
+    tokio::spawn(fair_merge(lanes, merged_tx));
+    NodeBlockSource::from_wire_pump(merged_rx)
 }
 
 /// PHASE4-N-F-G-H S2: capacity of the node-spine serve event channel (inbound

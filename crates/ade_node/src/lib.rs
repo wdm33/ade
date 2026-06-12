@@ -20,6 +20,7 @@ pub mod ba02_pass;
 pub mod candidate_aggregator;
 pub mod cli;
 pub mod convergence_evidence;
+pub mod fair_merge;
 pub mod forge_intent;
 pub mod fork_switch;
 pub mod key_gen;
