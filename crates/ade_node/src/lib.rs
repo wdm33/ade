@@ -21,6 +21,7 @@ pub mod candidate_aggregator;
 pub mod cli;
 pub mod convergence_evidence;
 pub mod forge_intent;
+pub mod fork_switch;
 pub mod key_gen;
 pub mod live_log;
 pub mod node;

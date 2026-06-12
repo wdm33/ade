@@ -100,6 +100,10 @@ use ade_types::shelley::block::PrevHash;
 use ade_runtime::receive::ChainDbWriter;
 
 use crate::candidate_aggregator::{assemble_candidate_set, build_candidate_fragment};
+use crate::fork_switch::{
+    prevalidate_branch, BranchBodySource, BranchProofError, ForkSwitchOutcome, NullBranchBodySource,
+    ProvenBranch,
+};
 use crate::selector_state::{project_tiebreaker, ForkAnchor, PendingForkSwitch};
 
 use crate::admission::bootstrap::build_n2n_version_table;
@@ -1100,6 +1104,11 @@ pub struct ForgeActivation<'a> {
     /// (latent until then). S3 sets this + `pending_reselection` but applies
     /// nothing (no rollback-commit, no body-fetch). `None` => no pending switch.
     pub pending_fork_switch: Option<PendingForkSwitch>,
+    /// PHASE4-N-AO S4 (DC-NODE-37): the last fork-switch proof failure (a structured
+    /// LOCAL observation surface — in-memory, not persisted, not evidence — so a
+    /// failed/lying/incomplete replacement branch is never a silent drop). Set when
+    /// `apply_fork_switch` could not prove the branch; cleared on a proven adoption.
+    pub last_fork_switch_failure: Option<BranchProofError>,
 }
 
 impl<'a> ForgeActivation<'a> {
@@ -1139,6 +1148,7 @@ impl<'a> ForgeActivation<'a> {
             // this post-construction; never peer-supplied (DC-NODE-36).
             security_param: SecurityParam(2160),
             pending_fork_switch: None,
+            last_fork_switch_failure: None,
         }
     }
 
@@ -1358,6 +1368,27 @@ pub async fn run_relay_loop_with_sched(
                     )
                     .await
                     .map_err(|e| NodeLifecycleError::RelaySync(format!("{e:?}")))?;
+                    // PHASE4-N-AO S4 (DC-NODE-37): consume the provisional decision S3
+                    // may have set. apply_fork_switch PROVES the branch before any
+                    // commit. The live BlockFetch RequestRange fetch is CE-AO-6, so the
+                    // relay loop uses a null body source -- a win is held (proof fails
+                    // closed, the fence stays set), never a half-switch. Hermetic
+                    // proof: the apply_fork_switch tests drive a real BranchBodySource.
+                    if let Some(switch) = act.pending_fork_switch.clone() {
+                        apply_fork_switch(
+                            state,
+                            chaindb,
+                            wal,
+                            &switch,
+                            &mut act.pending_fork_switch,
+                            &mut act.pending_reselection,
+                            &mut act.last_fork_switch_failure,
+                            &NullBranchBodySource,
+                            era_schedule,
+                            ledger_view,
+                        )
+                        .map_err(|e| NodeLifecycleError::RelaySync(format!("{e:?}")))?;
+                    }
                 } else {
                     run_node_sync(source, state, chaindb, wal, era_schedule, ledger_view)
                         .await
@@ -2909,6 +2940,169 @@ where
         }
     }
     Ok(())
+}
+
+/// PHASE4-N-AO S4 (DC-NODE-37): PROVE the selected replacement branch — fetch the
+/// bodies (RED, from the winning peer) + read-only materialize the durable fork
+/// anchor (`CN-STORE-07`) + prove the complete branch (`prevalidate_branch`, GREEN).
+/// **Performs NO durable mutation** — no `commit_rollback`, no `pump_block`, no WAL.
+/// Returns the `ProvenBranch` or a structured `BranchProofError`; the caller commits
+/// ONLY on `Ok`.
+fn prove_fork_switch<D>(
+    state: &ForwardSyncState,
+    chaindb: &D,
+    switch: &PendingForkSwitch,
+    body_source: &dyn BranchBodySource,
+    era_schedule: &EraSchedule,
+    ledger_view: &dyn LedgerView,
+) -> Result<ProvenBranch, BranchProofError>
+where
+    D: ChainDb + SnapshotStore,
+{
+    // (RED) Fetch every body of the winning branch (anchor->tip) from the winning
+    // peer. A missing body is a proof failure -- the branch is not proven.
+    let mut bodies: Vec<Vec<u8>> = Vec::with_capacity(switch.winning_candidate.headers.len());
+    for header in &switch.winning_candidate.headers {
+        let body = body_source
+            .fetch_body(&switch.winning_peer, header.slot)
+            .map_err(|_| BranchProofError::BodyUnavailable { slot: header.slot })?;
+        bodies.push(body);
+    }
+    // (RED) Read-only materialize at the durable fork anchor (DC-NODE-29 point).
+    // An unreachable anchor (beyond k / retention) fails closed HERE, before any
+    // commit -- the independent depth guard (DC-CONS-05).
+    let reader = PersistentSnapshotCache::new(chaindb);
+    let source = ChainDbBlockSource::new(chaindb);
+    let (anchor_ledger, anchor_chain_dep) = materialize_rolled_back_state(
+        TargetPoint {
+            slot: switch.fork_anchor.slot,
+            hash: switch.fork_anchor.hash.clone(),
+        },
+        &reader,
+        &source,
+        era_schedule,
+        ledger_view,
+        state.recovered_eta0.as_ref(),
+    )
+    .map_err(|_| BranchProofError::AnchorUnreachable)?;
+    // (GREEN) Prove the COMPLETE branch (bind + link + block_validity fold).
+    prevalidate_branch(
+        &switch.fork_anchor,
+        &switch.winning_candidate,
+        &bodies,
+        &anchor_ledger,
+        &anchor_chain_dep,
+        era_schedule,
+        ledger_view,
+    )
+}
+
+/// PHASE4-N-AO S4 (DC-NODE-37): the fork-switch apply driver (RED). Turns S3's
+/// provisional `PendingForkSwitch` into a durable adoption ONLY after
+/// `prove_fork_switch` proves the complete replacement branch — the proof STRICTLY
+/// precedes the irreversible `commit_rollback`.
+///
+/// **A `PendingForkSwitch` is not authority to roll back; it is only authority to
+/// attempt proof of the selected replacement branch.**
+///
+/// On a proof failure: NO durable mutation; the decision is retired as a structured
+/// `ProofFailed`; the `pending_reselection` forge fence is **HELD** (never cleared
+/// as a side effect of an unproven branch — no silent "failed winner, resume
+/// forging"). On a proven branch: adopt via the existing `apply_chain_event`
+/// authorities (`DC-NODE-25`) — `RolledBack(fork_anchor)` + `ChainSelected(body)×N`,
+/// recorded as `WalEntry::RollBack{ForkChoiceWin}` — then clear the fence LAST.
+#[allow(clippy::too_many_arguments)]
+pub fn apply_fork_switch<D>(
+    state: &mut ForwardSyncState,
+    chaindb: &D,
+    wal: &mut dyn WalStore,
+    switch: &PendingForkSwitch,
+    pending_fork_switch: &mut Option<PendingForkSwitch>,
+    pending_reselection: &mut bool,
+    last_fork_switch_failure: &mut Option<BranchProofError>,
+    body_source: &dyn BranchBodySource,
+    era_schedule: &EraSchedule,
+    ledger_view: &dyn LedgerView,
+) -> Result<ForkSwitchOutcome, NodeSyncError>
+where
+    D: ChainDb + SnapshotStore,
+{
+    // PROVE FIRST. prove_fork_switch performs no durable mutation; on failure the
+    // current chain is byte-unchanged.
+    let proven = match prove_fork_switch(
+        state,
+        chaindb,
+        switch,
+        body_source,
+        era_schedule,
+        ledger_view,
+    ) {
+        Ok(p) => p,
+        Err(error) => {
+            // Retire the decision as a STRUCTURED failure; HOLD the forge fence.
+            *last_fork_switch_failure = Some(error.clone());
+            *pending_fork_switch = None;
+            return Ok(ForkSwitchOutcome::ProofFailed { error });
+        }
+    };
+    // A proven branch is non-empty by construction; guard BEFORE the irreversible
+    // step so an empty branch can never half-switch.
+    let final_tip = match proven.blocks.last() {
+        Some(b) => b.tip.clone(),
+        None => {
+            *last_fork_switch_failure = Some(BranchProofError::EmptyBranch);
+            *pending_fork_switch = None;
+            return Ok(ForkSwitchOutcome::ProofFailed {
+                error: BranchProofError::EmptyBranch,
+            });
+        }
+    };
+
+    // ONLY NOW adopt via the existing apply authorities (DC-NODE-25). The
+    // prevalidation guarantees each pump_block below succeeds (except crash -> WAL
+    // replay). commit_rollback (irreversible) happens HERE, after proof.
+    apply_chain_event(
+        state,
+        chaindb,
+        wal,
+        &NoCheckpointSink,
+        &ChainEvent::RolledBack {
+            to_point: Point {
+                slot: switch.fork_anchor.slot,
+                hash: switch.fork_anchor.hash.clone(),
+            },
+            depth: BlockDistance(0),
+        },
+        RollbackReason::ForkChoiceWin,
+        None,
+        era_schedule,
+        ledger_view,
+    )
+    .map_err(|e| NodeSyncError::Pump(format!("fork-switch rollback: {e:?}")))?;
+    for block in &proven.blocks {
+        apply_chain_event(
+            state,
+            chaindb,
+            wal,
+            &NoCheckpointSink,
+            &ChainEvent::ChainSelected {
+                new_tip: block.tip.clone(),
+                replaced_tip: None,
+            },
+            RollbackReason::ForkChoiceWin,
+            Some(&block.bytes),
+            era_schedule,
+            ledger_view,
+        )
+        .map_err(|e| NodeSyncError::Pump(format!("fork-switch roll-forward: {e:?}")))?;
+    }
+
+    // Reconcile is enforced inside apply_chain_event (DC-NODE-26). Clear the
+    // decision + the forge fence LAST -- now resolved (ON the winner).
+    *pending_fork_switch = None;
+    *pending_reselection = false;
+    *last_fork_switch_failure = None;
+    Ok(ForkSwitchOutcome::Adopted { new_tip: final_tip })
 }
 
 #[cfg(test)]

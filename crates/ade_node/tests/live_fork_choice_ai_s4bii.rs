@@ -6,8 +6,11 @@
 
 use std::collections::BTreeMap;
 
+use ade_core::consensus::candidate::{CandidateFragment, TiebreakerView};
 use ade_core::consensus::era_schedule::EraSchedule;
-use ade_core::consensus::events::SecurityParam;
+use ade_core::consensus::events::{BlockDistance, Point, SecurityParam};
+use ade_core::consensus::header_summary::{HeaderVrf, ValidatedHeaderSummary};
+use ade_core::consensus::praos_leader_value;
 use ade_core::consensus::praos_state::{Nonce, PraosChainDepState};
 use ade_core::consensus::vrf_cert::ActiveSlotsCoeff;
 use ade_core::consensus::{BootstrapAnchorHash, EraSummary};
@@ -16,9 +19,11 @@ use ade_ledger::consensus_view::{PoolDistrView, PoolEntry};
 use ade_ledger::fingerprint::fingerprint;
 use ade_ledger::receive::ReceiveState;
 use ade_ledger::state::LedgerState;
-use ade_ledger::wal::{WalEntry, WalError, WalStore};
+use ade_ledger::wal::{RollbackReason, WalEntry, WalError, WalStore};
 use ade_network::codec::chain_sync::Point as WirePoint;
-use ade_node::node_lifecycle::run_participant_sync;
+use ade_node::fork_switch::{BranchBodySource, BranchProofError, FetchError, ForkSwitchOutcome};
+use ade_node::node_lifecycle::{apply_fork_switch, run_participant_sync};
+use ade_node::selector_state::{ForkAnchor, PendingForkSwitch};
 use ade_node::node_sync::{
     pending_reselection_forge_refusal, run_node_sync, ForgeRefused, NodeBlockSource, NodeSyncError,
     NodeSyncItem,
@@ -1171,4 +1176,402 @@ async fn participant_competing_fork_anchor_older_than_k_no_mutation() {
     );
     assert!(wal.read_all().unwrap().is_empty(), "no WAL append");
     assert!(!pending, "no forge fence when nothing is selected");
+}
+
+// ---------- PHASE4-N-AO S4 (DC-NODE-37): fork-switch apply (prove, then commit) ----------
+// A PendingForkSwitch authorizes PROOF of the selected replacement branch, not a
+// rollback. apply_fork_switch fetches + binds + links + ledger-prevalidates the
+// complete branch BEFORE the irreversible commit_rollback. A failed proof leaves
+// the durable chain byte-unchanged and HOLDS the forge fence.
+
+/// In-memory `BranchBodySource` (the hermetic S4 fetch seam; live BlockFetch is
+/// CE-AO-6). Serves a body by (peer, slot).
+struct InMemBodySource {
+    bodies: BTreeMap<(String, u64), Vec<u8>>,
+}
+impl InMemBodySource {
+    fn with(peer: &str, slot: SlotNo, bytes: Vec<u8>) -> Self {
+        let mut bodies = BTreeMap::new();
+        bodies.insert((peer.to_string(), slot.0), bytes);
+        Self { bodies }
+    }
+    fn empty() -> Self {
+        Self {
+            bodies: BTreeMap::new(),
+        }
+    }
+}
+impl BranchBodySource for InMemBodySource {
+    fn fetch_body(&self, peer: &str, slot: SlotNo) -> Result<Vec<u8>, FetchError> {
+        self.bodies
+            .get(&(peer.to_string(), slot.0))
+            .cloned()
+            .ok_or(FetchError::Unavailable)
+    }
+}
+
+/// A durable fork over the corpus (like `corpus_durable_fork`) returning the
+/// `ForkAnchor` for the `PendingForkSwitch`. `nonce` overrides the snapshot epoch
+/// nonce (Some => block_validity will fail the candidate's VRF: the invalid-body case).
+fn s4_fork_setup(
+    c: &ConwayValidityCorpus,
+    competing: &[u8],
+    nonce: Option<Hash32>,
+) -> (InMemoryChainDb, ForkAnchor) {
+    let decoded = decode_block(competing).expect("decode competing");
+    let prev = match decoded.prev_hash {
+        PrevHash::Block(h) => h,
+        PrevHash::Genesis => panic!("competing block must carry a Block prev_hash"),
+    };
+    let tip_bytes = c
+        .blocks
+        .iter()
+        .find(|b| {
+            let d = decode_block(b).expect("decode");
+            d.block_hash != decoded.block_hash && d.block_hash != prev
+        })
+        .expect("a second distinct corpus block")
+        .clone();
+    let tip_dec = decode_block(&tip_bytes).expect("decode tip");
+    let anchor_slot = decoded
+        .header_input
+        .slot
+        .0
+        .min(tip_dec.header_input.slot.0)
+        .saturating_sub(1);
+    let anchor_block_no = decoded.header_input.block_no.0.saturating_sub(1);
+    let db = InMemoryChainDb::new();
+    db.put_block(&StoredBlock {
+        hash: prev.clone(),
+        slot: SlotNo(anchor_slot),
+        bytes: vec![0xAB; 8],
+    })
+    .unwrap();
+    db.put_block(&StoredBlock {
+        hash: tip_dec.block_hash.clone(),
+        slot: tip_dec.header_input.slot,
+        bytes: tip_bytes.clone(),
+    })
+    .unwrap();
+    let n = nonce.unwrap_or(Hash32(c.epoch_nonce));
+    let mut anchor_dep = PraosChainDepState::empty();
+    anchor_dep.epoch_nonce = Nonce(n.clone());
+    anchor_dep.evolving_nonce = Nonce(n);
+    anchor_dep.last_block_no = Some(ade_types::BlockNo(anchor_block_no));
+    anchor_dep.last_slot = Some(SlotNo(anchor_slot));
+    PersistentSnapshotCache::new(&db)
+        .capture(
+            SlotNo(anchor_slot),
+            &LedgerState::new(CardanoEra::Conway),
+            &anchor_dep,
+        )
+        .unwrap();
+    (
+        db,
+        ForkAnchor {
+            slot: SlotNo(anchor_slot),
+            hash: prev,
+            block_no: ade_types::BlockNo(anchor_block_no),
+        },
+    )
+}
+
+/// Build a `PendingForkSwitch` for `competing` (a single-header branch), with the
+/// header summary derived directly from the block (S3 would have produced the same).
+fn s4_switch(competing: &[u8], fork_anchor: ForkAnchor, peer: &str) -> PendingForkSwitch {
+    let decoded = decode_block(competing).expect("decode");
+    let h = &decoded.header_input;
+    let vrf_leader_output = match &h.vrf {
+        HeaderVrf::Praos { output, .. } => praos_leader_value(output),
+        HeaderVrf::Tpraos { .. } => panic!("corpus is Conway/Praos"),
+    };
+    let mut first8 = [0u8; 8];
+    first8.copy_from_slice(&vrf_leader_output.0[0..8]);
+    let summary = ValidatedHeaderSummary {
+        slot: h.slot,
+        block_no: h.block_no,
+        body_hash: h.body_hash.clone(),
+        issuer_pool: h.issuer_pool.clone(),
+        op_cert_counter: h.op_cert_counter,
+        vrf_leader_output,
+    };
+    let select_view = TiebreakerView {
+        slot: h.slot,
+        issuer_hash: h.issuer_pool.clone(),
+        op_cert_counter: h.op_cert_counter,
+        leader_vrf_output_first_8: first8,
+    };
+    PendingForkSwitch {
+        fork_anchor: fork_anchor.clone(),
+        winning_peer: peer.to_string(),
+        winning_candidate: CandidateFragment {
+            anchor: Point {
+                slot: fork_anchor.slot,
+                hash: fork_anchor.hash.clone(),
+            },
+            anchor_block_no: fork_anchor.block_no,
+            headers: vec![summary],
+            select_view,
+            rollback_depth: BlockDistance(0),
+        },
+    }
+}
+
+#[tokio::test]
+async fn fork_switch_win_adopts_via_rolledback_then_chainselected() {
+    // Happy path: a fully proven branch is durably adopted -- RolledBack(anchor) +
+    // ChainSelected(body) with ForkChoiceWin; durable tip = selected tip; fence cleared.
+    let (c, view) = corpus_view();
+    let competing = pick_lightest(&c);
+    let decoded = decode_block(&competing).unwrap();
+    let (db, anchor) = s4_fork_setup(&c, &competing, None);
+    let switch = s4_switch(&competing, anchor, "peer-7");
+    let mut fwd = fwd_at(decoded.header_input.block_no.0);
+    let mut wal = VecWal::default();
+    let mut pending = Some(switch.clone());
+    let mut fence = true; // S3 set the fence on the win
+    let mut last_fail = None;
+    let src = InMemBodySource::with("peer-7", decoded.header_input.slot, competing.clone());
+    let outcome = apply_fork_switch(
+        &mut fwd,
+        &db,
+        &mut wal,
+        &switch,
+        &mut pending,
+        &mut fence,
+        &mut last_fail,
+        &src,
+        &corpus_schedule(),
+        &view,
+    )
+    .expect("apply returns");
+    match outcome {
+        ForkSwitchOutcome::Adopted { new_tip } => {
+            assert_eq!(new_tip.slot, decoded.header_input.slot);
+            assert_eq!(new_tip.hash, decoded.block_hash);
+        }
+        ForkSwitchOutcome::ProofFailed { error } => panic!("expected adoption, got {error:?}"),
+    }
+    assert_eq!(
+        db.tip().unwrap().unwrap().hash,
+        decoded.block_hash,
+        "durable tip = selected tip"
+    );
+    assert!(
+        wal.read_all().unwrap().iter().any(|e| matches!(
+            e,
+            WalEntry::RollBack {
+                reason: RollbackReason::ForkChoiceWin,
+                ..
+            }
+        )),
+        "a ForkChoiceWin rollback was recorded"
+    );
+    assert!(pending.is_none(), "decision cleared after adoption");
+    assert!(!fence, "forge fence cleared after reconcile");
+    assert!(last_fail.is_none());
+}
+
+#[tokio::test]
+async fn selected_peer_missing_body_leaves_chain_unchanged_fence_held() {
+    // No body served -> proof fails closed; current chain unchanged; the decision is
+    // retired as a structured failure but the forge fence is HELD (no silent resume).
+    let (c, view) = corpus_view();
+    let competing = pick_lightest(&c);
+    let decoded = decode_block(&competing).unwrap();
+    let (db, anchor) = s4_fork_setup(&c, &competing, None);
+    let switch = s4_switch(&competing, anchor, "peer-7");
+    let tip_before = db.tip().unwrap().unwrap();
+    let mut fwd = fwd_at(decoded.header_input.block_no.0);
+    let mut wal = VecWal::default();
+    let mut pending = Some(switch.clone());
+    let mut fence = true;
+    let mut last_fail = None;
+    let src = InMemBodySource::empty();
+    let outcome = apply_fork_switch(
+        &mut fwd, &db, &mut wal, &switch, &mut pending, &mut fence, &mut last_fail, &src,
+        &corpus_schedule(), &view,
+    )
+    .expect("apply returns");
+    assert!(
+        matches!(
+            outcome,
+            ForkSwitchOutcome::ProofFailed {
+                error: BranchProofError::BodyUnavailable { .. }
+            }
+        ),
+        "got {outcome:?}"
+    );
+    assert_eq!(db.tip().unwrap().unwrap(), tip_before, "no durable mutation");
+    assert!(wal.read_all().unwrap().is_empty(), "no WAL append");
+    assert!(pending.is_none(), "decision retired as failed");
+    assert!(
+        matches!(last_fail, Some(BranchProofError::BodyUnavailable { .. })),
+        "structured failure recorded"
+    );
+    assert!(fence, "forge fence HELD -- never cleared by an unproven branch");
+}
+
+#[tokio::test]
+async fn body_hash_mismatch_leaves_chain_unchanged() {
+    // A DIFFERENT block served for the selected slot -> bind fails; chain unchanged.
+    let (c, view) = corpus_view();
+    let competing = pick_lightest(&c);
+    let decoded = decode_block(&competing).unwrap();
+    let (db, anchor) = s4_fork_setup(&c, &competing, None);
+    let switch = s4_switch(&competing, anchor, "peer-7");
+    let tip_before = db.tip().unwrap().unwrap();
+    let other = c
+        .blocks
+        .iter()
+        .find(|b| decode_block(b).unwrap().block_hash != decoded.block_hash)
+        .unwrap()
+        .clone();
+    let mut fwd = fwd_at(decoded.header_input.block_no.0);
+    let mut wal = VecWal::default();
+    let mut pending = Some(switch.clone());
+    let mut fence = true;
+    let mut last_fail = None;
+    let src = InMemBodySource::with("peer-7", decoded.header_input.slot, other);
+    let outcome = apply_fork_switch(
+        &mut fwd, &db, &mut wal, &switch, &mut pending, &mut fence, &mut last_fail, &src,
+        &corpus_schedule(), &view,
+    )
+    .expect("apply returns");
+    assert!(
+        matches!(
+            outcome,
+            ForkSwitchOutcome::ProofFailed {
+                error: BranchProofError::BodyHeaderMismatch { .. }
+            }
+        ),
+        "got {outcome:?}"
+    );
+    assert_eq!(db.tip().unwrap().unwrap(), tip_before);
+    assert!(wal.read_all().unwrap().is_empty());
+    assert!(fence, "fence held");
+}
+
+#[tokio::test]
+async fn broken_parent_link_leaves_chain_unchanged() {
+    // The fork anchor HASH does not match the body's prev_hash -> link fails.
+    let (c, view) = corpus_view();
+    let competing = pick_lightest(&c);
+    let decoded = decode_block(&competing).unwrap();
+    let (db, anchor) = s4_fork_setup(&c, &competing, None);
+    // Tamper the anchor hash (slot stays, so materialize still finds the snapshot).
+    let bad_anchor = ForkAnchor {
+        slot: anchor.slot,
+        hash: h(0xDD),
+        block_no: anchor.block_no,
+    };
+    let switch = s4_switch(&competing, bad_anchor, "peer-7");
+    let tip_before = db.tip().unwrap().unwrap();
+    let mut fwd = fwd_at(decoded.header_input.block_no.0);
+    let mut wal = VecWal::default();
+    let mut pending = Some(switch.clone());
+    let mut fence = true;
+    let mut last_fail = None;
+    let src = InMemBodySource::with("peer-7", decoded.header_input.slot, competing.clone());
+    let outcome = apply_fork_switch(
+        &mut fwd, &db, &mut wal, &switch, &mut pending, &mut fence, &mut last_fail, &src,
+        &corpus_schedule(), &view,
+    )
+    .expect("apply returns");
+    assert!(
+        matches!(
+            outcome,
+            ForkSwitchOutcome::ProofFailed {
+                error: BranchProofError::BrokenParentLink { .. }
+            }
+        ),
+        "got {outcome:?}"
+    );
+    assert_eq!(db.tip().unwrap().unwrap(), tip_before);
+    assert!(wal.read_all().unwrap().is_empty());
+    assert!(fence, "fence held");
+}
+
+#[tokio::test]
+async fn invalid_body_rejected_before_commit_no_half_switch() {
+    // THE critical case: the body decodes, binds, and links -- but FAILS ledger
+    // validation (the materialized anchor carries a WRONG epoch nonce, so the
+    // block's VRF fails). The prevalidation fold rejects it BEFORE commit_rollback,
+    // so there is no half-switched durable state.
+    let (c, view) = corpus_view();
+    let competing = pick_lightest(&c);
+    let decoded = decode_block(&competing).unwrap();
+    let (db, anchor) = s4_fork_setup(&c, &competing, Some(h(0x99))); // wrong nonce
+    let switch = s4_switch(&competing, anchor, "peer-7");
+    let tip_before = db.tip().unwrap().unwrap();
+    let mut fwd = fwd_at(decoded.header_input.block_no.0);
+    let mut wal = VecWal::default();
+    let mut pending = Some(switch.clone());
+    let mut fence = true;
+    let mut last_fail = None;
+    let src = InMemBodySource::with("peer-7", decoded.header_input.slot, competing.clone());
+    let outcome = apply_fork_switch(
+        &mut fwd, &db, &mut wal, &switch, &mut pending, &mut fence, &mut last_fail, &src,
+        &corpus_schedule(), &view,
+    )
+    .expect("apply returns");
+    assert!(
+        matches!(
+            outcome,
+            ForkSwitchOutcome::ProofFailed {
+                error: BranchProofError::BodyInvalid { .. }
+            }
+        ),
+        "the invalid body must be caught BEFORE commit, got {outcome:?}"
+    );
+    assert_eq!(
+        db.tip().unwrap().unwrap(),
+        tip_before,
+        "no half-switched durable state"
+    );
+    assert!(
+        wal.read_all().unwrap().is_empty(),
+        "no commit_rollback, no WAL"
+    );
+    assert!(fence, "fence held");
+}
+
+#[tokio::test]
+async fn too_deep_rollback_fails_closed_unchanged() {
+    // A fork anchor below the oldest snapshot -> materialize RollbackTooDeep ->
+    // AnchorUnreachable, caught in prevalidation BEFORE any commit.
+    let (c, view) = corpus_view();
+    let competing = pick_lightest(&c);
+    let decoded = decode_block(&competing).unwrap();
+    let (db, anchor) = s4_fork_setup(&c, &competing, None);
+    let deep_anchor = ForkAnchor {
+        slot: SlotNo(0),
+        hash: anchor.hash.clone(),
+        block_no: anchor.block_no,
+    };
+    let switch = s4_switch(&competing, deep_anchor, "peer-7");
+    let tip_before = db.tip().unwrap().unwrap();
+    let mut fwd = fwd_at(decoded.header_input.block_no.0);
+    let mut wal = VecWal::default();
+    let mut pending = Some(switch.clone());
+    let mut fence = true;
+    let mut last_fail = None;
+    let src = InMemBodySource::with("peer-7", decoded.header_input.slot, competing.clone());
+    let outcome = apply_fork_switch(
+        &mut fwd, &db, &mut wal, &switch, &mut pending, &mut fence, &mut last_fail, &src,
+        &corpus_schedule(), &view,
+    )
+    .expect("apply returns");
+    assert!(
+        matches!(
+            outcome,
+            ForkSwitchOutcome::ProofFailed {
+                error: BranchProofError::AnchorUnreachable
+            }
+        ),
+        "got {outcome:?}"
+    );
+    assert_eq!(db.tip().unwrap().unwrap(), tip_before);
+    assert!(wal.read_all().unwrap().is_empty());
+    assert!(fence, "fence held");
 }
