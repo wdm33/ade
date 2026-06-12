@@ -7,6 +7,7 @@
 use std::collections::BTreeMap;
 
 use ade_core::consensus::era_schedule::EraSchedule;
+use ade_core::consensus::events::SecurityParam;
 use ade_core::consensus::praos_state::{Nonce, PraosChainDepState};
 use ade_core::consensus::vrf_cert::ActiveSlotsCoeff;
 use ade_core::consensus::{BootstrapAnchorHash, EraSummary};
@@ -23,6 +24,7 @@ use ade_node::node_sync::{
     NodeSyncItem,
 };
 use ade_runtime::chaindb::{ChainDb, ChainTip, InMemoryChainDb, StoredBlock};
+use ade_types::shelley::block::PrevHash;
 use ade_runtime::forward_sync::ForwardSyncState;
 use ade_runtime::rollback::{PersistentSnapshotCache, SnapshotCadence};
 use ade_testkit::validity::ConwayValidityCorpus;
@@ -138,6 +140,8 @@ async fn participant_rollback_applies_durably() {
         &min_schedule(),
         &view_stub(),
         &mut pending,
+        SecurityParam(2160),
+        &mut None,
         None,
     )
     .await
@@ -172,6 +176,8 @@ async fn participant_rollback_to_unknown_point_fails_closed() {
         &min_schedule(),
         &view_stub(),
         &mut pending,
+        SecurityParam(2160),
+        &mut None,
         None,
     )
     .await
@@ -204,6 +210,8 @@ async fn participant_rollback_beyond_k_fails_closed_clears_pending() {
         &min_schedule(),
         &view_stub(),
         &mut pending,
+        SecurityParam(2160),
+        &mut None,
         None,
     )
     .await
@@ -239,6 +247,8 @@ async fn rollback_slot_hash_mismatch_fails_before_mutation() {
         &min_schedule(),
         &view_stub(),
         &mut pending,
+        SecurityParam(2160),
+        &mut None,
         None,
     )
     .await
@@ -479,6 +489,8 @@ async fn participant_bare_competing_block_fails_closed() {
         &corpus_schedule(),
         &view,
         &mut pending,
+        SecurityParam(2160),
+        &mut None,
         None,
     )
     .await
@@ -519,6 +531,8 @@ async fn participant_block_with_no_durable_tip_pumps() {
         &corpus_schedule(),
         &view,
         &mut pending,
+        SecurityParam(2160),
+        &mut None,
         None,
     )
     .await
@@ -602,6 +616,8 @@ async fn participant_cold_start_admit_emits_received_admitted_agreed() {
         &corpus_schedule(),
         &view,
         &mut pending,
+        SecurityParam(2160),
+        &mut None,
         Some(&mut ev),
     )
     .await
@@ -640,6 +656,8 @@ async fn participant_block_received_does_not_imply_admission() {
         &corpus_schedule(),
         &view,
         &mut pending,
+        SecurityParam(2160),
+        &mut None,
         Some(&mut ev),
     )
     .await;
@@ -682,6 +700,8 @@ async fn participant_convergence_evidence_replay_byte_identical() {
             &corpus_schedule(),
             &view,
             &mut pending,
+            SecurityParam(2160),
+            &mut None,
             Some(&mut ev),
         )
         .await
@@ -722,6 +742,8 @@ async fn participant_rollback_to_recovered_anchor_is_noop() {
         &min_schedule(),
         &view_stub(),
         &mut pending,
+        SecurityParam(2160),
+        &mut None,
         None,
     )
     .await
@@ -761,6 +783,8 @@ async fn participant_rollback_origin_fails_closed() {
         &min_schedule(),
         &view_stub(),
         &mut pending,
+        SecurityParam(2160),
+        &mut None,
         None,
     )
     .await
@@ -796,6 +820,8 @@ async fn participant_rollback_non_anchor_fails_closed() {
             &min_schedule(),
             &view_stub(),
             &mut pending,
+            SecurityParam(2160),
+            &mut None,
             None,
         )
         .await
@@ -840,6 +866,8 @@ async fn participant_first_forward_after_anchor_noop_admits_via_pump_block() {
         &corpus_schedule(),
         &view,
         &mut pending,
+        SecurityParam(2160),
+        &mut None,
         None,
     )
     .await
@@ -874,6 +902,8 @@ async fn participant_stored_block_rollback_still_applies() {
         &min_schedule(),
         &view_stub(),
         &mut pending,
+        SecurityParam(2160),
+        &mut None,
         None,
     )
     .await
@@ -889,4 +919,256 @@ async fn participant_stored_block_rollback_still_applies() {
         "the stored-block rollback produced a durable WAL RollBack (DC-NODE-29 path intact)"
     );
     assert!(!pending);
+}
+
+// ---------- PHASE4-N-AO S3 (DC-NODE-36): live selector dispatch (decide-only) ----------
+// A competing block with a DURABLE fork anchor is routed to the SOLE BLUE
+// select_best_chain; a win is held as a provisional PendingForkSwitch (+ forge
+// fence) and NOTHING is applied (no rollback-commit, no body-fetch). The fork
+// anchor binds Ade's durable stored (slot, hash) -- never peer data.
+
+/// A durable fork over the Conway corpus: a real decodable durable TIP (a corpus
+/// block, so its tiebreaker projects) + a stored fork ANCHOR at the competing
+/// block's prev_hash + a snapshot AT the anchor carrying the corpus epoch nonce
+/// (degenerate materialize -> the anchor chain_dep). `anchor_block_no` =
+/// competing.block_no - 1 so the candidate validates (block_no strictly monotone).
+/// Returns (db, prev_hash, anchor_block_no).
+fn corpus_durable_fork(
+    c: &ConwayValidityCorpus,
+    competing: &[u8],
+) -> (InMemoryChainDb, Hash32, u64) {
+    let decoded = decode_block(competing).expect("decode competing");
+    let prev = match decoded.prev_hash {
+        PrevHash::Block(h) => h,
+        PrevHash::Genesis => panic!("competing block must carry a Block prev_hash"),
+    };
+    // The durable TIP = a DIFFERENT corpus block (real bytes -> project_tiebreaker).
+    // Its hash must be neither the competing block's hash nor its prev_hash (else a
+    // linear extend / already-have, not a competing fork).
+    let tip_bytes = c
+        .blocks
+        .iter()
+        .find(|b| {
+            let d = decode_block(b).expect("decode");
+            d.block_hash != decoded.block_hash && d.block_hash != prev
+        })
+        .expect("a second distinct corpus block")
+        .clone();
+    let tip_dec = decode_block(&tip_bytes).expect("decode tip");
+    let cand_slot = decoded.header_input.slot.0;
+    let tip_slot = tip_dec.header_input.slot.0;
+    // Anchor/snapshot slot: strictly below BOTH the tip (so the tip is the highest
+    // stored block) and the competing block (header slot monotonicity).
+    let anchor_slot = cand_slot.min(tip_slot).saturating_sub(1);
+    let anchor_block_no = decoded.header_input.block_no.0.saturating_sub(1);
+    let db = InMemoryChainDb::new();
+    // Stored fork anchor: bound by (slot, hash); bytes never decoded (the snapshot
+    // supplies the state).
+    db.put_block(&StoredBlock {
+        hash: prev.clone(),
+        slot: SlotNo(anchor_slot),
+        bytes: vec![0xAB; 8],
+    })
+    .unwrap();
+    // Durable TIP: real corpus bytes at its real slot (the highest stored block).
+    db.put_block(&StoredBlock {
+        hash: tip_dec.block_hash.clone(),
+        slot: tip_dec.header_input.slot,
+        bytes: tip_bytes.clone(),
+    })
+    .unwrap();
+    // Snapshot AT the anchor: corpus epoch nonce + anchor height + last_slot below
+    // the competing block's slot. Degenerate materialize returns this as-is
+    // (recovered_eta0 is None on the test fwd), so the candidate validates against
+    // the corpus nonce -- the same basis as the cold-start admit path.
+    let mut anchor_dep = PraosChainDepState::empty();
+    anchor_dep.epoch_nonce = Nonce(Hash32(c.epoch_nonce));
+    anchor_dep.evolving_nonce = Nonce(Hash32(c.epoch_nonce));
+    anchor_dep.last_block_no = Some(ade_types::BlockNo(anchor_block_no));
+    anchor_dep.last_slot = Some(SlotNo(anchor_slot));
+    PersistentSnapshotCache::new(&db)
+        .capture(
+            SlotNo(anchor_slot),
+            &LedgerState::new(CardanoEra::Conway),
+            &anchor_dep,
+        )
+        .unwrap();
+    (db, prev, anchor_block_no)
+}
+
+#[tokio::test]
+async fn participant_competing_durable_anchor_loses_no_mutation() {
+    // A competing block with a DURABLE fork anchor that validates but is SHORTER
+    // than our tip => select_best_chain is reached (the arm no longer fails closed)
+    // and returns a block-no loss => NO durable mutation, NO pending switch.
+    let (c, view) = corpus_view();
+    let competing = pick_lightest(&c);
+    let cand_block_no = decode_block(&competing).unwrap().header_input.block_no.0;
+    let (db, _prev, _anchor_bn) = corpus_durable_fork(&c, &competing);
+    let tip_before = db.tip().unwrap().unwrap();
+    // current tip height ABOVE the candidate => candidate loses on block number.
+    let mut fwd = fwd_at(cand_block_no + 50);
+    let mut wal = VecWal::default();
+    let mut pending = false;
+    let mut pending_switch: Option<ade_node::selector_state::PendingForkSwitch> = None;
+    let mut src = NodeBlockSource::in_memory_items(vec![NodeSyncItem::Block {
+        peer: "peer-1".to_string(),
+        bytes: competing,
+    }]);
+    run_participant_sync(
+        &mut src,
+        &mut fwd,
+        &db,
+        &mut wal,
+        &corpus_schedule(),
+        &view,
+        &mut pending,
+        SecurityParam(2160),
+        &mut pending_switch,
+        None,
+    )
+    .await
+    .expect("a losing competing candidate is a no-op (NOT UnexpectedRollback)");
+    assert_eq!(db.tip().unwrap().unwrap(), tip_before, "durable tip unchanged");
+    assert!(wal.read_all().unwrap().is_empty(), "no WAL append on a loss");
+    assert!(pending_switch.is_none(), "no PendingForkSwitch on a loss");
+    assert!(!pending, "no forge fence on a loss");
+}
+
+#[tokio::test]
+async fn participant_competing_durable_anchor_win_sets_pending_no_mutation() {
+    // A competing block with a DURABLE fork anchor that validates and is LONGER
+    // than our tip => select_best_chain emits ChainSelected => a PROVISIONAL
+    // PendingForkSwitch (bound to the durable stored anchor) + the DC-NODE-28 forge
+    // fence are set, and NOTHING is applied (tip + WAL byte-unchanged).
+    let (c, view) = corpus_view();
+    let competing = pick_lightest(&c);
+    let cand_block_no = decode_block(&competing).unwrap().header_input.block_no.0;
+    let (db, prev, anchor_bn) = corpus_durable_fork(&c, &competing);
+    let tip_before = db.tip().unwrap().unwrap();
+    // current tip height BELOW the candidate tip => candidate wins on block number.
+    let mut fwd = fwd_at(cand_block_no - 1);
+    let mut wal = VecWal::default();
+    let mut pending = false;
+    let mut pending_switch: Option<ade_node::selector_state::PendingForkSwitch> = None;
+    let mut src = NodeBlockSource::in_memory_items(vec![NodeSyncItem::Block {
+        peer: "peer-7".to_string(),
+        bytes: competing,
+    }]);
+    run_participant_sync(
+        &mut src,
+        &mut fwd,
+        &db,
+        &mut wal,
+        &corpus_schedule(),
+        &view,
+        &mut pending,
+        SecurityParam(2160),
+        &mut pending_switch,
+        None,
+    )
+    .await
+    .expect("a winning competing candidate decides (no apply, no error)");
+    let sw = pending_switch.expect("a fork-choice win sets PendingForkSwitch");
+    assert_eq!(sw.winning_peer, "peer-7");
+    assert_eq!(
+        sw.fork_anchor.hash, prev,
+        "the fork anchor binds Ade's durable STORED hash (never peer data)"
+    );
+    assert_eq!(sw.fork_anchor.block_no, ade_types::BlockNo(anchor_bn));
+    assert!(pending, "the win sets the DC-NODE-28 forge fence");
+    assert_eq!(
+        db.tip().unwrap().unwrap(),
+        tip_before,
+        "S3 applies NOTHING: durable tip unchanged"
+    );
+    assert!(
+        wal.read_all().unwrap().is_empty(),
+        "S3 applies NOTHING: no WAL append"
+    );
+}
+
+#[tokio::test]
+async fn participant_competing_unknown_anchor_fails_closed() {
+    // Proof center: a competing block whose prev_hash is NOT a durable stored block
+    // fails closed -- the fork anchor can only be Ade's durable stored point, never
+    // peer-supplied. (block_received is still emitted before the fail-closed.)
+    let (c, view) = corpus_view();
+    let competing = pick_lightest(&c);
+    let decoded = decode_block(&competing).unwrap();
+    let db = InMemoryChainDb::new();
+    // Store ONLY an unrelated block (hash 0xEE != the competing block's prev_hash),
+    // so get_block_by_hash(prev_hash) -> None.
+    db.put_block(&stored(decoded.header_input.slot.0.saturating_sub(1), 0xEE))
+        .unwrap();
+    let mut fwd = fwd_at(decoded.header_input.block_no.0.saturating_sub(1));
+    let mut wal = VecWal::default();
+    let mut pending = false;
+    let mut pending_switch: Option<ade_node::selector_state::PendingForkSwitch> = None;
+    let mut src = NodeBlockSource::in_memory_items(vec![NodeSyncItem::Block {
+        peer: "peer-1".to_string(),
+        bytes: competing,
+    }]);
+    let err = run_participant_sync(
+        &mut src,
+        &mut fwd,
+        &db,
+        &mut wal,
+        &corpus_schedule(),
+        &view,
+        &mut pending,
+        SecurityParam(2160),
+        &mut pending_switch,
+        None,
+    )
+    .await
+    .expect_err("an un-anchorable competing block fails closed");
+    assert!(matches!(err, NodeSyncError::UnexpectedRollback), "got {err:?}");
+    assert!(pending_switch.is_none(), "no decision on a fail-closed");
+    assert!(wal.read_all().unwrap().is_empty(), "no durable mutation");
+}
+
+#[tokio::test]
+async fn participant_competing_fork_anchor_older_than_k_no_mutation() {
+    // Negative (depth): a durable fork anchor deeper than k => select_best_chain
+    // marks the candidate ineligible (ExceededRollback) => S3 emits no selection,
+    // sets no PendingForkSwitch, makes no durable mutation, and does NOT invoke S4.
+    // (S4 keeps its own independent materialize RollbackTooDeep guard.)
+    let (c, view) = corpus_view();
+    let competing = pick_lightest(&c);
+    let cand_block_no = decode_block(&competing).unwrap().header_input.block_no.0;
+    let (db, _prev, _anchor_bn) = corpus_durable_fork(&c, &competing);
+    let tip_before = db.tip().unwrap().unwrap();
+    // rollback_depth = current - anchor; anchor = cand_block_no - 1. current =
+    // anchor + 10 => depth 10 > k(5) => ExceededRollback.
+    let mut fwd = fwd_at(cand_block_no + 9);
+    let mut wal = VecWal::default();
+    let mut pending = false;
+    let mut pending_switch: Option<ade_node::selector_state::PendingForkSwitch> = None;
+    let mut src = NodeBlockSource::in_memory_items(vec![NodeSyncItem::Block {
+        peer: "peer-1".to_string(),
+        bytes: competing,
+    }]);
+    run_participant_sync(
+        &mut src,
+        &mut fwd,
+        &db,
+        &mut wal,
+        &corpus_schedule(),
+        &view,
+        &mut pending,
+        SecurityParam(5),
+        &mut pending_switch,
+        None,
+    )
+    .await
+    .expect("a too-deep fork anchor is a no-op (not an error)");
+    assert!(pending_switch.is_none(), "too-deep => no PendingForkSwitch");
+    assert_eq!(
+        db.tip().unwrap().unwrap(),
+        tip_before,
+        "too-deep => no durable mutation"
+    );
+    assert!(wal.read_all().unwrap().is_empty(), "no WAL append");
+    assert!(!pending, "no forge fence when nothing is selected");
 }

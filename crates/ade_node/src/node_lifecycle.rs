@@ -92,9 +92,15 @@ use ade_ledger::rollback::{
     commit_rollback, materialize_rolled_back_state, CommitRollbackError, MaterializeError,
     TargetPoint,
 };
-use ade_core::consensus::events::{BlockDistance, ChainEvent, Point};
-use ade_ledger::block_validity::decode_block;
+use ade_core::consensus::events::{BlockDistance, ChainEvent, Point, SecurityParam};
+use ade_core::consensus::candidate::{CandidateFragment, ChainSelectorState};
+use ade_core::consensus::fork_choice::{select_best_chain, ForkChoiceError};
+use ade_ledger::block_validity::{decode_block, DecodedBlock};
+use ade_types::shelley::block::PrevHash;
 use ade_runtime::receive::ChainDbWriter;
+
+use crate::candidate_aggregator::{assemble_candidate_set, build_candidate_fragment};
+use crate::selector_state::{project_tiebreaker, ForkAnchor, PendingForkSwitch};
 
 use crate::admission::bootstrap::build_n2n_version_table;
 use crate::cli::Cli;
@@ -1081,6 +1087,19 @@ pub struct ForgeActivation<'a> {
     /// returns. The ForgeTick gate refuses while set — no forge on a stale
     /// pre-resolution tip (the producer race).
     pub pending_reselection: bool,
+    /// PHASE4-N-AO S3 (DC-NODE-36): the block-count rollback security parameter k
+    /// the live `select_best_chain` dispatch uses for the `rollback_depth <= k`
+    /// eligibility bound. Cardano k (preprod/mainnet 2160) by default — matching
+    /// the hardcoded `make_node_schedule` window; an explicit venue (e.g. the
+    /// CE-AO-6 two-producer venue) overrides it post-construction. Durable/config
+    /// authority, NEVER peer-supplied; S4's `materialize` keeps the final,
+    /// independent `RollbackTooDeep` authority.
+    pub security_param: SecurityParam,
+    /// PHASE4-N-AO S3 (DC-NODE-36): the PROVISIONAL fork-choice decision the live
+    /// participant dispatch emits on a `select_best_chain` win — consumed by S4
+    /// (latent until then). S3 sets this + `pending_reselection` but applies
+    /// nothing (no rollback-commit, no body-fetch). `None` => no pending switch.
+    pub pending_fork_switch: Option<PendingForkSwitch>,
 }
 
 impl<'a> ForgeActivation<'a> {
@@ -1116,6 +1135,10 @@ impl<'a> ForgeActivation<'a> {
             forge_mode: ForgeMode::InitialCatchupRequired,
             venue_role: VenueRole::Unknown,
             pending_reselection: false,
+            // Cardano k (preprod/mainnet). An explicit two-producer venue overrides
+            // this post-construction; never peer-supplied (DC-NODE-36).
+            security_param: SecurityParam(2160),
+            pending_fork_switch: None,
         }
     }
 
@@ -1329,6 +1352,8 @@ pub async fn run_relay_loop_with_sched(
                         era_schedule,
                         ledger_view,
                         &mut act.pending_reselection,
+                        act.security_param,
+                        &mut act.pending_fork_switch,
                         convergence.as_deref_mut(),
                     )
                     .await
@@ -2489,6 +2514,216 @@ fn emit_participant_admit(
     }
 }
 
+/// PHASE4-N-AO S3 (DC-NODE-36): the provisional outcome of a live fork-choice
+/// dispatch. `Switch` is a DECISION ONLY — S4 applies it; S3 never does.
+enum ForkSwitchDecision {
+    /// Keep the current durable chain (a tiebreaker loss, an ineligible reject —
+    /// incl. `ExceededRollback` for depth > k — or no eligible candidate). No
+    /// `PendingForkSwitch`, S4 not invoked, nothing applied.
+    KeepCurrent,
+    /// A strictly-preferred eligible candidate won — a PROVISIONAL switch for S4.
+    Switch(PendingForkSwitch),
+}
+
+/// PHASE4-N-AO S3 (DC-NODE-36): run the SOLE selector over the per-peer candidate
+/// set and map its verdict to a provisional decision. Pure over its inputs — no
+/// I/O, no store, no mutation; the BLUE `select_best_chain` is the only selector.
+/// On a `ChainSelected` win the winning fragment is located by MATCHING the
+/// selector's returned tip identity (slot + tip `body_hash`) against the candidate
+/// set — a lookup of *which* candidate BLUE chose, never a second selection.
+fn decide_fork_switch(
+    selector_state: &ChainSelectorState,
+    competing: &BTreeMap<String, CandidateFragment>,
+) -> Result<ForkSwitchDecision, ForkChoiceError> {
+    let candidates = assemble_candidate_set(competing.values().cloned().collect());
+    let (_new_state, event) = select_best_chain(selector_state, &candidates)?;
+    match event {
+        ChainEvent::ChainSelected { new_tip, .. } => {
+            let winner = competing.iter().find(|(_peer, c)| {
+                c.headers
+                    .last()
+                    .map(|h| h.slot == new_tip.slot && h.body_hash == new_tip.hash)
+                    .unwrap_or(false)
+            });
+            match winner {
+                Some((peer, frag)) => Ok(ForkSwitchDecision::Switch(PendingForkSwitch {
+                    fork_anchor: ForkAnchor {
+                        slot: frag.anchor.slot,
+                        hash: frag.anchor.hash.clone(),
+                        block_no: frag.anchor_block_no,
+                    },
+                    winning_peer: peer.clone(),
+                    winning_candidate: frag.clone(),
+                })),
+                // Unreachable: ChainSelected.new_tip is one of the candidates' tips.
+                // Fail SAFE (keep current) rather than fabricate a switch.
+                None => Ok(ForkSwitchDecision::KeepCurrent),
+            }
+        }
+        // Rejected (TiebreakerLossKeepCurrent / ExceededRollback /
+        // ForkBeforeImmutableTip) or any non-selection event => keep current.
+        _ => Ok(ForkSwitchDecision::KeepCurrent),
+    }
+}
+
+/// PHASE4-N-AO S3 (DC-NODE-36): the live `NeedsForkChoice` dispatch driver (RED).
+/// DECIDE-ONLY — it sets a provisional `PendingForkSwitch` + the DC-NODE-28 forge
+/// fence on a fork-choice win and APPLIES NOTHING (no `commit_rollback`, no
+/// `pump_block` of a winner, no `WalEntry::RollBack`, no body-fetch — that is S4).
+///
+/// Proof center: the fork anchor is bound to Ade's DURABLE STORED `(slot, hash)`
+/// via `get_block_by_hash(prev_hash)` — never peer-supplied; an unknown / genesis
+/// `prev_hash` fails closed (`UnexpectedRollback`). `anchor_chain_dep` comes from a
+/// READ-ONLY `materialize_rolled_back_state` at that durable anchor (no commit;
+/// passes the recovered eta0, T-REC-06). The current selector tiebreaker is a
+/// projection from Ade's OWN already-admitted durable tip block bytes (local
+/// durable authority). The conservative immutable FLOOR (the recovered anchor /
+/// genesis) is selector-state input only — it NEVER permits a rollback; the
+/// authoritative depth bound is `rollback_depth <= k` (and S4's independent
+/// `materialize` `RollbackTooDeep`).
+#[allow(clippy::too_many_arguments)]
+fn dispatch_competing_fork_choice<D>(
+    state: &ForwardSyncState,
+    chaindb: &D,
+    era_schedule: &EraSchedule,
+    ledger_view: &dyn LedgerView,
+    security_param: SecurityParam,
+    durable_tip: &TipPoint,
+    peer: &str,
+    decoded: &DecodedBlock,
+    competing: &mut BTreeMap<String, CandidateFragment>,
+    pending_fork_switch: &mut Option<PendingForkSwitch>,
+    pending_reselection: &mut bool,
+) -> Result<(), NodeSyncError>
+where
+    D: ChainDb + SnapshotStore,
+{
+    // (proof center) Resolve the fork anchor from DURABLE storage — never peer
+    // data. A genesis predecessor or an unknown parent has no stored fork point:
+    // fail closed (the bare-competing-block contract from the FOLLOW half — a
+    // competing block with no durable anchor is not selectable here).
+    let prev = match &decoded.prev_hash {
+        PrevHash::Block(h) => h.clone(),
+        PrevHash::Genesis => return Err(NodeSyncError::UnexpectedRollback),
+    };
+    let anchor_stored = match chaindb
+        .get_block_by_hash(&prev)
+        .map_err(|e| NodeSyncError::Pump(format!("{e:?}")))?
+    {
+        Some(s) => s,
+        None => return Err(NodeSyncError::UnexpectedRollback),
+    };
+    // The anchor binds the STORED slot + the resolved hash (DC-NODE-29 discipline).
+    let anchor = Point {
+        slot: anchor_stored.slot,
+        hash: prev.clone(),
+    };
+    // (proof center) anchor_chain_dep via a READ-ONLY materialize at the durable
+    // anchor — no commit, no WAL, no durable mutation; passes the recovered eta0.
+    let reader = PersistentSnapshotCache::new(chaindb);
+    let source = ChainDbBlockSource::new(chaindb);
+    let (_anchor_ledger, anchor_chain_dep) = match materialize_rolled_back_state(
+        TargetPoint {
+            slot: anchor.slot,
+            hash: prev.clone(),
+        },
+        &reader,
+        &source,
+        era_schedule,
+        ledger_view,
+        state.recovered_eta0.as_ref(),
+    ) {
+        Ok(v) => v,
+        // The anchor is unreachable (beyond retention) — keep the current validated
+        // chain (a selector fail-closed; never adopt an unreconstructable branch).
+        Err(_) => return Ok(()),
+    };
+    let anchor_block_no = anchor_chain_dep.last_block_no.unwrap_or(BlockNo(0));
+    // S2 pure construction: validate the candidate header(s) above the anchor via
+    // the BLUE authority (never minted). An invalid candidate is dropped (fail
+    // closed) — the current chain is untouched.
+    let frag = match build_candidate_fragment(
+        anchor.clone(),
+        anchor_block_no,
+        BlockNo(durable_tip.block_no),
+        &anchor_chain_dep,
+        std::slice::from_ref(&decoded.header_input),
+        ledger_view,
+        era_schedule,
+    ) {
+        Ok(f) => f,
+        Err(_) => return Ok(()),
+    };
+    competing.insert(peer.to_string(), frag);
+
+    // Derive the live ChainSelectorState from DURABLE authority (Option A):
+    //   current_tiebreaker = a projection from Ade's OWN durable tip block bytes,
+    //   immutable_tip      = a conservative FLOOR (recovered anchor / genesis) — a
+    //                        lower-bound guard, NOT an immutable tip; it never
+    //                        permits a rollback (selector-state input only),
+    //   security_param     = k (durable/config authority; the depth bound).
+    let tip_stored = match chaindb
+        .get_block_by_hash(&durable_tip.hash)
+        .map_err(|e| NodeSyncError::Pump(format!("{e:?}")))?
+    {
+        Some(s) => s,
+        // The durable tip is not a stored servable block (a bare recovery anchor) —
+        // its tiebreaker cannot be projected; keep current (conservative no-op).
+        None => return Ok(()),
+    };
+    let tip_decoded = decode_block(&tip_stored.bytes)
+        .map_err(|e| NodeSyncError::Pump(format!("decode tip: {e:?}")))?;
+    let current_tiebreaker = match project_tiebreaker(&tip_decoded.header_input) {
+        Ok(tb) => tb,
+        // A legacy / unsupported durable tip — keep current (conservative no-op).
+        Err(_) => return Ok(()),
+    };
+    let (floor_point, floor_block_no) = match &state.recovered_anchor {
+        Some(a) => (
+            Point {
+                slot: a.slot,
+                hash: a.hash.clone(),
+            },
+            // Metadata only — select_best_chain gates eligibility on the floor SLOT
+            // (+ rollback_depth <= k), never the floor block number.
+            BlockNo(0),
+        ),
+        None => (
+            Point {
+                slot: SlotNo(0),
+                hash: Hash32([0u8; 32]),
+            },
+            BlockNo(0),
+        ),
+    };
+    let selector_state = ChainSelectorState {
+        current_tip: Point {
+            slot: durable_tip.slot,
+            hash: durable_tip.hash.clone(),
+        },
+        current_tip_block_no: BlockNo(durable_tip.block_no),
+        current_tiebreaker,
+        immutable_tip: floor_point,
+        immutable_tip_block_no: floor_block_no,
+        security_param,
+    };
+
+    // The SOLE selector. A win is PROVISIONAL: set the decision + the DC-NODE-28
+    // forge fence and APPLY NOTHING. A loss / ineligible reject keeps the current
+    // chain (no decision, S4 not invoked).
+    match decide_fork_switch(&selector_state, competing) {
+        Ok(ForkSwitchDecision::Switch(switch)) => {
+            // Fence FIRST: no forge may slip onto the stale pre-switch tip while a
+            // reselection is pending (DC-NODE-28). S4 clears it after it applies.
+            *pending_reselection = true;
+            *pending_fork_switch = Some(switch);
+            Ok(())
+        }
+        // Keep current (loss / ineligible) or an empty set — nothing applied.
+        Ok(ForkSwitchDecision::KeepCurrent) | Err(ForkChoiceError::NoCandidates) => Ok(()),
+    }
+}
+
 #[allow(clippy::too_many_arguments)]
 pub async fn run_participant_sync<D>(
     source: &mut NodeBlockSource,
@@ -2498,6 +2733,12 @@ pub async fn run_participant_sync<D>(
     era_schedule: &EraSchedule,
     ledger_view: &dyn LedgerView,
     pending_reselection: &mut bool,
+    // PHASE4-N-AO S3 (DC-NODE-36): k for the live `select_best_chain` eligibility
+    // bound (durable/config authority, never peer-supplied).
+    security_param: SecurityParam,
+    // PHASE4-N-AO S3 (DC-NODE-36): the provisional fork-choice decision sink. Set
+    // on a win (S4 applies); S3 applies nothing.
+    pending_fork_switch: &mut Option<PendingForkSwitch>,
     // PHASE4-N-AJ AJ-S2 (DC-NODE-30): emit-only convergence evidence. `None` =>
     // no emission. Evidence observes authority; it never becomes authority.
     mut evidence: Option<&mut ConvergenceEvidence>,
@@ -2505,9 +2746,14 @@ pub async fn run_participant_sync<D>(
 where
     D: ChainDb + SnapshotStore,
 {
+    // PHASE4-N-AO S3 (DC-NODE-36): per-peer competing-candidate tracker, keyed by
+    // peer (S1 identity). Deterministic (`BTreeMap`); each entry is that peer's
+    // latest validated competing candidate. Accumulates across the drain so the
+    // selector compares the full competing set (arrival-order independent).
+    let mut competing: BTreeMap<String, CandidateFragment> = BTreeMap::new();
     while let Some(item) = source.next_item().await {
         match item {
-            NodeSyncItem::Block { bytes, .. } => {
+            NodeSyncItem::Block { peer, bytes } => {
                 // AJ-S2 (DC-NODE-30): decode first so the convergence evidence can
                 // record EVERY considered peer block (peer input) BEFORE the route
                 // decides drop/admit/refuse. `block_received` is evidence of peer
@@ -2546,7 +2792,7 @@ where
                     .get_block_by_hash(&candidate.hash)
                     .map_err(|e| NodeSyncError::Pump(format!("{e:?}")))?
                     .is_some();
-                let class = classify_receive(durable_tip, &candidate, in_spine);
+                let class = classify_receive(durable_tip.clone(), &candidate, in_spine);
                 match resolve_disposition(class, VenueRole::Participant) {
                     // Known echo -- drop; `block_received` already recorded, no admit,
                     // no verdict (block_received does not imply admission).
@@ -2559,12 +2805,31 @@ where
                             .map_err(|e| NodeSyncError::Pump(format!("{e:?}")))?;
                         emit_participant_admit(evidence.as_deref_mut(), state, source, pumped);
                     }
-                    // A bare competing block (non-linear, no prior RollBackward) has
-                    // no safe fork point -- fail closed (multi-candidate selection is
-                    // a later multi-peer slice). `block_received` already recorded;
-                    // no block_admitted.
-                    ReceiveDisposition::NeedsForkChoice
-                    | ReceiveDisposition::RefuseSingleProducer => {
+                    // PHASE4-N-AO S3 (DC-NODE-36): a competing block on the Participant
+                    // venue is routed to the SOLE BLUE selector. DECIDE-ONLY — a
+                    // fork-choice win is held as a provisional `PendingForkSwitch` (+
+                    // the DC-NODE-28 forge fence); S4 applies it. The fork anchor binds
+                    // Ade's durable stored point (never peer data); an un-anchorable
+                    // competing block fails closed inside the dispatch. `block_received`
+                    // already recorded; no block_admitted (S3 admits nothing).
+                    ReceiveDisposition::NeedsForkChoice => {
+                        dispatch_competing_fork_choice(
+                            state,
+                            chaindb,
+                            era_schedule,
+                            ledger_view,
+                            security_param,
+                            &durable_tip,
+                            &peer,
+                            &decoded,
+                            &mut competing,
+                            pending_fork_switch,
+                            pending_reselection,
+                        )?;
+                    }
+                    // A single-producer venue still REFUSES a competing block (fail
+                    // closed) -- multi-candidate selection is the Participant path only.
+                    ReceiveDisposition::RefuseSingleProducer => {
                         return Err(NodeSyncError::UnexpectedRollback);
                     }
                 }
@@ -2651,6 +2916,140 @@ where
 #[allow(clippy::expect_used)]
 mod tests {
     use super::*;
+
+    // ===== PHASE4-N-AO S3 (DC-NODE-36): live selector dispatch decision =====
+    // Unit tests of `decide_fork_switch` — the SOLE-selector verdict-to-decision
+    // mapping — over SYNTHETIC candidates (no I/O, no corpus). The integration
+    // wiring (durable anchor binding + read-only materialize + no mutation) is in
+    // `tests/live_fork_choice_ai_s4bii.rs`.
+    mod s3_select_dispatch {
+        use super::super::*;
+        use ade_core::consensus::candidate::TiebreakerView;
+        use ade_core::consensus::header_summary::ValidatedHeaderSummary;
+        use ade_crypto::vrf::VrfOutput;
+
+        fn tv(slot: u64, vrf_first: u8) -> TiebreakerView {
+            TiebreakerView {
+                slot: SlotNo(slot),
+                issuer_hash: Hash28([0xAA; 28]),
+                op_cert_counter: 1,
+                leader_vrf_output_first_8: [vrf_first; 8],
+            }
+        }
+
+        fn summary(slot: u64, block_no: u64, body: u8, vrf_first: u8) -> ValidatedHeaderSummary {
+            let mut out = [0u8; 64];
+            out[0..8].copy_from_slice(&[vrf_first; 8]);
+            ValidatedHeaderSummary {
+                slot: SlotNo(slot),
+                block_no: BlockNo(block_no),
+                body_hash: Hash32([body; 32]),
+                issuer_pool: Hash28([0xAA; 28]),
+                op_cert_counter: 1,
+                vrf_leader_output: VrfOutput(out),
+            }
+        }
+
+        // A one-header fragment: tip block_no = anchor_block_no + 1;
+        // rollback_depth = current_block_no - anchor_block_no.
+        fn fragment(
+            anchor_slot: u64,
+            anchor_block_no: u64,
+            current_block_no: u64,
+            tip_slot: u64,
+            tip_body: u8,
+            tip_vrf_first: u8,
+        ) -> CandidateFragment {
+            CandidateFragment {
+                anchor: Point {
+                    slot: SlotNo(anchor_slot),
+                    hash: Hash32([0x99; 32]),
+                },
+                anchor_block_no: BlockNo(anchor_block_no),
+                select_view: tv(tip_slot, tip_vrf_first),
+                rollback_depth: BlockDistance(current_block_no.saturating_sub(anchor_block_no)),
+                headers: vec![summary(tip_slot, anchor_block_no + 1, tip_body, tip_vrf_first)],
+            }
+        }
+
+        fn state(current_block_no: u64, current_slot: u64, current_vrf_first: u8, k: u64) -> ChainSelectorState {
+            ChainSelectorState {
+                current_tip: Point {
+                    slot: SlotNo(current_slot),
+                    hash: Hash32([0x11; 32]),
+                },
+                current_tip_block_no: BlockNo(current_block_no),
+                current_tiebreaker: tv(current_slot, current_vrf_first),
+                // Conservative floor at genesis (slot 0) — every anchor above it.
+                immutable_tip: Point {
+                    slot: SlotNo(0),
+                    hash: Hash32([0u8; 32]),
+                },
+                immutable_tip_block_no: BlockNo(0),
+                security_param: SecurityParam(k),
+            }
+        }
+
+        #[test]
+        fn win_emits_switch_to_winning_peer_and_durable_anchor() {
+            // Candidate tip block 101 > current 100 => ChainSelected (block-no win).
+            let mut competing = BTreeMap::new();
+            competing.insert("peer-A".to_string(), fragment(50, 100, 100, 60, 0x22, 0x01));
+            match decide_fork_switch(&state(100, 70, 0x05, 2160), &competing).expect("decides") {
+                ForkSwitchDecision::Switch(s) => {
+                    assert_eq!(s.winning_peer, "peer-A");
+                    assert_eq!(s.fork_anchor.block_no, BlockNo(100));
+                    assert_eq!(s.fork_anchor.slot, SlotNo(50));
+                    assert_eq!(
+                        s.winning_candidate.headers.last().unwrap().block_no,
+                        BlockNo(101)
+                    );
+                }
+                ForkSwitchDecision::KeepCurrent => panic!("a longer candidate must win"),
+            }
+        }
+
+        #[test]
+        fn tiebreaker_loss_keeps_current() {
+            // Candidate tip block 100 == current 100; candidate slot 60 > current
+            // slot 50 => current preferred (lower slot wins) => KeepCurrent.
+            let mut competing = BTreeMap::new();
+            competing.insert("peer-A".to_string(), fragment(49, 99, 100, 60, 0x22, 0x01));
+            assert!(matches!(
+                decide_fork_switch(&state(100, 50, 0x01, 2160), &competing).unwrap(),
+                ForkSwitchDecision::KeepCurrent
+            ));
+        }
+
+        #[test]
+        fn exceeded_rollback_keeps_current() {
+            // rollback_depth = current(100) - anchor(90) = 10 > k(5) =>
+            // ExceededRollback (ineligible) => KeepCurrent, though the chain is
+            // longer. (S4 keeps the independent materialize RollbackTooDeep guard.)
+            let mut competing = BTreeMap::new();
+            competing.insert("peer-A".to_string(), fragment(40, 90, 100, 60, 0x22, 0x01));
+            assert!(matches!(
+                decide_fork_switch(&state(100, 70, 0x05, 5), &competing).unwrap(),
+                ForkSwitchDecision::KeepCurrent
+            ));
+        }
+
+        #[test]
+        fn best_of_two_peers_wins_and_is_identified() {
+            // Two competing peers: B's tip (block 102) beats A's (block 101) => B
+            // wins, and the winner is identified by the selector's returned tip.
+            let mut competing = BTreeMap::new();
+            competing.insert("peer-A".to_string(), fragment(50, 100, 100, 60, 0x2A, 0x01));
+            competing.insert("peer-B".to_string(), fragment(50, 101, 100, 61, 0x2B, 0x02));
+            match decide_fork_switch(&state(100, 70, 0x05, 2160), &competing).unwrap() {
+                ForkSwitchDecision::Switch(s) => {
+                    assert_eq!(s.winning_peer, "peer-B");
+                    assert_eq!(s.winning_candidate.headers.last().unwrap().block_no, BlockNo(102));
+                }
+                ForkSwitchDecision::KeepCurrent => panic!("the longer of two candidates must win"),
+            }
+        }
+    }
 
     // PHASE4-N-U S3 (DC-NODE-13): the serve_gate_admits monotone-block_no test
     // (serve_gate_admits_first_block_zero_then_skips_reforged_block_zero) is
