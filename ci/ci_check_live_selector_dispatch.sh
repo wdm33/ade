@@ -32,13 +32,15 @@ if echo "$CODE" | grep -Eq 'process_stream_input|fork_choice_density|second_sele
   fail "select_best_chain must be the ONLY selector in the dispatch path"
 fi
 
-# (B) Proof center: the fork anchor is resolved from the DURABLE store
-# (get_block_by_hash) and binds the STORED slot; anchor_chain_dep via a read-only
-# materialize. No peer-supplied anchor slot/hash.
-echo "$CODE" | grep -Eq 'get_block_by_hash\(&prev\)' \
-  || fail "the fork anchor must be resolved via get_block_by_hash(&prev) (durable)"
-echo "$CODE" | grep -Eq 'slot:[[:space:]]*anchor_stored\.slot' \
-  || fail "the anchor must bind the STORED slot (anchor_stored.slot), never peer data"
+# (B) Proof center (PHASE4-N-AO S7, DC-NODE-38): the fork anchor is the durable
+# LAST COMMON ANCESTOR discovered by walk_to_durable_lca (which resolves the LCA
+# from the DURABLE store + binds its STORED slot internally), NOT the competing
+# block's immediate parent; the anchor binds lca.anchor_slot; anchor_chain_dep via
+# a read-only materialize at the LCA. No peer-supplied anchor slot/hash.
+echo "$CODE" | grep -Eq 'walk_to_durable_lca\(' \
+  || fail "the fork anchor must be discovered via the durable LCA walk (walk_to_durable_lca)"
+echo "$CODE" | grep -Eq 'slot:[[:space:]]*lca\.anchor_slot' \
+  || fail "the anchor must bind the durable LCA's STORED slot (lca.anchor_slot), never peer data"
 echo "$CODE" | grep -Eq 'materialize_rolled_back_state\(' \
   || fail "anchor_chain_dep must come from a read-only materialize_rolled_back_state"
 
@@ -63,8 +65,13 @@ if echo "$CODE" | grep -Eq 'ValidatedHeaderSummary[[:space:]]*\{'; then
   fail "the dispatch must NOT mint a ValidatedHeaderSummary (S2 validates; S3 selects)"
 fi
 
-# An absent / genesis fork anchor fails closed (the anchor is durable-only).
-echo "$CODE" | grep -Eq 'PrevHash::Genesis => return Err' \
-  || fail "a genesis/absent fork anchor must fail closed (UnexpectedRollback)"
+# A competing branch that cannot reach a durable LCA (genesis predecessor, a gap,
+# over-k, a lying parent link, a cache self-binding violation) fails closed as a
+# NO-OP -- keep the current validated chain, never adopt an un-anchorable branch.
+# (Pre-S7 this was Err(UnexpectedRollback) on a non-durable immediate parent -- the
+# live-geometry gap CE-AO-6 surfaced; S7 walks the preserved links instead.) The
+# LcaError arm of the walk match is a keep-current `Err(_) => return Ok(())`.
+echo "$CODE" | grep -Eq 'Err\(_\) => return Ok\(\(\)\)' \
+  || fail "an un-anchorable competing branch (LcaError) must fail closed as a no-op (return Ok(()))"
 
-echo "OK: live selector dispatch is sole-selector + durable-anchor-bound + read-only + decide-only (DC-NODE-36)"
+echo "OK: live selector dispatch is sole-selector + durable-LCA-anchor-bound + read-only + decide-only (DC-NODE-36/38)"

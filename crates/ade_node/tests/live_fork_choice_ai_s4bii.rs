@@ -488,8 +488,9 @@ async fn participant_bare_competing_block_fails_closed() {
     let mut fwd = fwd_at(decoded.header_input.block_no.0.saturating_sub(1));
     let mut wal = VecWal::default();
     let mut pending = false;
+    let mut pending_switch: Option<ade_node::selector_state::PendingForkSwitch> = None;
     let mut src = NodeBlockSource::in_memory_items(vec![NodeSyncItem::Block { peer: "peer-1".to_string(), bytes: block }]);
-    let err = run_participant_sync(
+    let result = run_participant_sync(
         &mut src,
         &mut fwd,
         &db,
@@ -498,12 +499,18 @@ async fn participant_bare_competing_block_fails_closed() {
         &view,
         &mut pending,
         SecurityParam(2160),
-        &mut None,
+        &mut pending_switch,
         None,
     )
-    .await
-    .expect_err("a bare competing block has no fork point -> fail closed");
-    assert!(matches!(err, NodeSyncError::UnexpectedRollback), "got {err:?}");
+    .await;
+    // PHASE4-N-AO S7 (DC-NODE-38): a bare competing block whose branch cannot reach a
+    // durable LCA (its parent is not in the cache -> BranchGap) NO-OPS, keeping the
+    // current validated chain -- not a node-halting error. Pre-S7 Err(UnexpectedRollback)
+    // was the live-geometry gap CE-AO-6 surfaced.
+    assert!(result.is_ok(), "bare competing block -> no-op keep-current, got {result:?}");
+    assert!(pending_switch.is_none(), "no fork-switch decision");
+    assert!(wal.read_all().unwrap().is_empty(), "no durable mutation");
+    assert!(!pending, "no forge fence set");
 }
 
 #[tokio::test]
@@ -1117,7 +1124,7 @@ async fn participant_competing_unknown_anchor_fails_closed() {
         peer: "peer-1".to_string(),
         bytes: competing,
     }]);
-    let err = run_participant_sync(
+    let result = run_participant_sync(
         &mut src,
         &mut fwd,
         &db,
@@ -1129,11 +1136,17 @@ async fn participant_competing_unknown_anchor_fails_closed() {
         &mut pending_switch,
         None,
     )
-    .await
-    .expect_err("an un-anchorable competing block fails closed");
-    assert!(matches!(err, NodeSyncError::UnexpectedRollback), "got {err:?}");
-    assert!(pending_switch.is_none(), "no decision on a fail-closed");
+    .await;
+    // PHASE4-N-AO S7 (DC-NODE-38): an un-anchorable competing block (its parent is
+    // neither a durable stored block nor a cached intermediate -> BranchGap) is NOT
+    // selectable; it NO-OPS, keeping the current validated chain. The fork anchor is
+    // still ONLY Ade's durable stored LCA, never peer-supplied. Pre-S7 this was a
+    // node-halting Err(UnexpectedRollback) -- the live-geometry gap CE-AO-6 surfaced;
+    // S7 walks the preserved links instead and fails closed as a no-op.
+    assert!(result.is_ok(), "un-anchorable competing block -> no-op, got {result:?}");
+    assert!(pending_switch.is_none(), "no fork-switch decision on a no-op");
     assert!(wal.read_all().unwrap().is_empty(), "no durable mutation");
+    assert!(!pending, "no forge fence set");
 }
 
 #[tokio::test]

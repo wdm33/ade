@@ -23,6 +23,7 @@ pub mod convergence_evidence;
 pub mod forge_intent;
 pub mod fork_switch;
 pub mod key_gen;
+pub mod lca_walk;
 pub mod live_log;
 pub mod node;
 pub mod node_lifecycle;

@@ -96,12 +96,12 @@ use ade_core::consensus::events::{BlockDistance, ChainEvent, Point, SecurityPara
 use ade_core::consensus::candidate::{CandidateFragment, ChainSelectorState};
 use ade_core::consensus::fork_choice::{select_best_chain, ForkChoiceError};
 use ade_ledger::block_validity::{decode_block, DecodedBlock};
-use ade_types::shelley::block::PrevHash;
 use ade_runtime::receive::ChainDbWriter;
 
 use ade_network::codec::chain_sync::Point as WirePoint;
 
 use crate::candidate_aggregator::{assemble_candidate_set, build_candidate_fragment};
+use crate::lca_walk::{walk_to_durable_lca, CachedHeader};
 use crate::fork_switch::{
     fork_switch_fence_resolved, prevalidate_branch, BranchBodySource, BranchProofError,
     ForkSwitchOutcome, NullBranchBodySource, PrefetchedBranchBodies, ProvenBranch,
@@ -2697,40 +2697,59 @@ fn dispatch_competing_fork_choice<D>(
     peer: &str,
     decoded: &DecodedBlock,
     competing: &mut BTreeMap<String, (CandidateFragment, Point)>,
+    branch_caches: &mut BTreeMap<String, BTreeMap<Hash32, CachedHeader>>,
     pending_fork_switch: &mut Option<PendingForkSwitch>,
     pending_reselection: &mut bool,
 ) -> Result<(), NodeSyncError>
 where
     D: ChainDb + SnapshotStore,
 {
-    // (proof center) Resolve the fork anchor from DURABLE storage — never peer
-    // data. A genesis predecessor or an unknown parent has no stored fork point:
-    // fail closed (the bare-competing-block contract from the FOLLOW half — a
-    // competing block with no durable anchor is not selectable here).
-    let prev = match &decoded.prev_hash {
-        PrevHash::Block(h) => h.clone(),
-        PrevHash::Genesis => return Err(NodeSyncError::UnexpectedRollback),
+    // PHASE4-N-AO S7 (DC-NODE-38): the fork anchor is the durable LAST COMMON
+    // ANCESTOR, reached by walking the competing branch's preserved parent links --
+    // NOT the competing block's immediate parent (durable only for a 1-deep fork;
+    // the live-geometry gap CE-AO-6 surfaced). Cache this competing block (an
+    // indexed memory of received preserved headers, self-bound by re-derived hash --
+    // NOT authority), then walk back to the durable stored LCA.
+    branch_caches.entry(peer.to_string()).or_default().insert(
+        decoded.block_hash.clone(),
+        CachedHeader {
+            header: decoded.header_input.clone(),
+            prev_hash: decoded.prev_hash.clone(),
+            block_hash: decoded.block_hash.clone(),
+        },
+    );
+    let branch_cache = match branch_caches.get(peer) {
+        Some(c) => c,
+        None => return Ok(()),
     };
-    let anchor_stored = match chaindb
-        .get_block_by_hash(&prev)
-        .map_err(|e| NodeSyncError::Pump(format!("{e:?}")))?
-    {
-        Some(s) => s,
-        None => return Err(NodeSyncError::UnexpectedRollback),
+    // The walk is k-bounded by BLOCK DEPTH (security_param.0; never slot distance).
+    // Any LcaError -- no durable LCA within k, a branch gap, over-k, a cache
+    // self-binding violation, a lying parent link -- keeps the current validated
+    // chain: a selector fail-closed, no durable mutation, fence untouched. The
+    // cache is evidence; the durable LCA (slot+hash, DC-NODE-29) + S2 validation +
+    // S4 body proof are authority.
+    let lca = match walk_to_durable_lca(
+        branch_cache,
+        &decoded.block_hash,
+        chaindb,
+        security_param.0,
+    ) {
+        Ok(r) => r,
+        Err(_) => return Ok(()),
     };
-    // The anchor binds the STORED slot + the resolved hash (DC-NODE-29 discipline).
+    // The anchor binds the STORED slot + the resolved LCA hash (DC-NODE-29).
     let anchor = Point {
-        slot: anchor_stored.slot,
-        hash: prev.clone(),
+        slot: lca.anchor_slot,
+        hash: lca.anchor_hash.clone(),
     };
     // (proof center) anchor_chain_dep via a READ-ONLY materialize at the durable
-    // anchor — no commit, no WAL, no durable mutation; passes the recovered eta0.
+    // LCA — no commit, no WAL, no durable mutation; passes the recovered eta0.
     let reader = PersistentSnapshotCache::new(chaindb);
     let source = ChainDbBlockSource::new(chaindb);
     let (_anchor_ledger, anchor_chain_dep) = match materialize_rolled_back_state(
         TargetPoint {
             slot: anchor.slot,
-            hash: prev.clone(),
+            hash: lca.anchor_hash.clone(),
         },
         &reader,
         &source,
@@ -2739,20 +2758,23 @@ where
         state.recovered_eta0.as_ref(),
     ) {
         Ok(v) => v,
-        // The anchor is unreachable (beyond retention) — keep the current validated
+        // The LCA is unreachable (beyond retention) — keep the current validated
         // chain (a selector fail-closed; never adopt an unreconstructable branch).
         Err(_) => return Ok(()),
     };
     let anchor_block_no = anchor_chain_dep.last_block_no.unwrap_or(BlockNo(0));
-    // S2 pure construction: validate the candidate header(s) above the anchor via
-    // the BLUE authority (never minted). An invalid candidate is dropped (fail
-    // closed) — the current chain is untouched.
+    // S2 pure construction over the COMPLETE competing branch LCA+1..=tip (multi-
+    // header — build_candidate_fragment already takes a slice). Each header is
+    // validated via the BLUE authority (never minted); an invalid / incomplete
+    // branch is dropped (fail closed) — the current chain is untouched. The
+    // rollback_depth = durable_tip - lca_block_no is the second BLOCK-DEPTH k bound,
+    // enforced downstream by select_best_chain.
     let frag = match build_candidate_fragment(
         anchor.clone(),
         anchor_block_no,
         BlockNo(durable_tip.block_no),
         &anchor_chain_dep,
-        std::slice::from_ref(&decoded.header_input),
+        &lca.headers,
         ledger_view,
         era_schedule,
     ) {
@@ -2863,6 +2885,12 @@ where
     // latest validated competing candidate. Accumulates across the drain so the
     // selector compares the full competing set (arrival-order independent).
     let mut competing: BTreeMap<String, (CandidateFragment, Point)> = BTreeMap::new();
+    // PHASE4-N-AO S7 (DC-NODE-38): per-peer competing-branch header cache — an
+    // indexed memory of received preserved headers (NOT authority), enabling the
+    // last-common-ancestor walk for live multi-block branches. Accumulates across
+    // the drain so a later, deeper competing block can walk back through the
+    // intermediate headers Ade already saw. Transient (in-memory; no durable state).
+    let mut branch_caches: BTreeMap<String, BTreeMap<Hash32, CachedHeader>> = BTreeMap::new();
     while let Some(item) = source.next_item().await {
         match item {
             NodeSyncItem::Block { peer, bytes } => {
@@ -2935,6 +2963,7 @@ where
                             &peer,
                             &decoded,
                             &mut competing,
+                            &mut branch_caches,
                             pending_fork_switch,
                             pending_reselection,
                         )?;
