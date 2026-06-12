@@ -79,3 +79,54 @@ per-peer labeling under the deep-fork interleave also needs a look.)
   follow-on slice (the multi-header live aggregation), the analog of the N-AK/AL/AM/AN clusters the
   FOLLOW half (CE-AI-6) needed.
 - Diagnostic artifacts: `~/.cardano-ceai6/ao-{smoke,select}-*` (outside the repo).
+
+---
+
+## S7 LCA-walk retry (2026-06-12): walk wired + hermetically proven; live SELECT now blocked on a SECOND gap (wire-pump multi-peer fairness)
+
+S7 (the last-common-ancestor walk, `DC-NODE-38`) shipped (`origin/main` `3b03b967`; doc + declare
+`0cce1668`): `walk_to_durable_lca` + the per-peer branch cache + the multi-header dispatch feed, 8 walk
+unit tests + `ci_check_lca_anchor_walk.sh`, `cargo test -p ade_node` green. The pre-S7 fail-close
+(`UnexpectedRollback` on a non-durable immediate parent) is gone — a competing branch that cannot reach a
+durable LCA now **no-ops** (keep current), never halts.
+
+A fresh live two-producer venue was brought up to retry CE-AO-6 with the S7 binary (venue `ceai2`, magic 42,
+common-ancestor block 13; cn1 + cn2 restarted SOLO-producing from the frozen common chain on isolated nets,
+:6001/:6002 — a real multi-block fork: cn1→block 40, cn2→block 28, distinct hashes off block 13). The S7
+SELECT run wired the live feed (operator keys → `ForgeIntent::On`; keep-alive ping/pong on BOTH peers).
+
+**Result — the live SELECT was NOT exercised, and the run surfaced the NEXT gap, distinct from S7:**
+
+- The S7 run followed cn1 cleanly to block 40 and **agreed** (21 `block_admitted`, `agreement_verdict`),
+  and — critically — did **NOT** fail-close: it ran to its bound (exit 124 = clean timeout), where the
+  pre-S7 run died at exit 43 (`UnexpectedRollback`). So S7's no-fail-close behavior holds live.
+- BUT **all 46 `block_received` were from peer `:6001` (cn1); ZERO from `:6002` (cn2)** — even though Ade
+  held a live keep-alive connection to cn2 and consumed cn2's `TipUpdate` (the verdicts carry
+  `peer_slot:675` = cn2's tip). cn2's competing branch never reached the dispatch, so S7's LCA walk was
+  never triggered.
+- **Isolating diagnostic:** Ade follows **either peer ALONE** correctly — cn1-alone agrees; cn2-alone
+  agrees (22 `block_received` from `:6002`, `block_admitted`, `agreement_verdict: agreed` @ slot 1294). The
+  failure appears ONLY with both peers connected simultaneously.
+
+**Root cause (the second gap):** `spawn_live_wire_pump_source` spawns one `run_admission_wire_pump` task per
+peer, all emitting into ONE bounded `mpsc` (`LIVE_WIRE_PUMP_CHANNEL_CAP`). The continuously-growing
+dominant peer (cn1) keeps that shared channel saturated, **starving** the other peer's pump (`send().await`
+never wins a freed slot) — so only one peer's chain is ever surfaced to the consumer. This is exactly the
+"per-peer labeling / deep-fork interleave" the original gap note flagged as "secondary characterization
+owed," and the carry-forward S7 explicitly scoped out (`DC-NODE-38`: "a competing branch arriving via
+RollBackward/FOLLOW sequencing rather than competing Block arrivals is a SEPARATE wire-interleaving
+diagnostic and must not weaken S7's competing-block LCA invariant").
+
+**Why a two-phase work-around does NOT substitute:** following cn2 then resuming to follow cn1 fails because
+the wire pump's `start_point` is Ade's CURRENT tip; once Ade is on cn2's branch, cn1 returns
+`IntersectNotFound` and delivers nothing. The competing branch can only arrive in the SIMULTANEOUS
+two-peer case — which is precisely what the fairness gap blocks.
+
+**The next slice (owed before any CN-CONS-03 flip):** a wire-pump **multi-peer fairness** fix so BOTH peers'
+branches are surfaced to the dispatch (e.g., per-peer sub-channels merged with a fair `select!`, or a
+round-robin drain, instead of one shared bounded channel that the dominant producer monopolises). Only then
+does S7's LCA walk get exercised live; only a clean two-producer SELECT transcript flips `CN-CONS-03`.
+
+**Status:** `CN-CONS-03` stays `declared`. `DC-NODE-38` (S7) stays `declared`, ready to flip at
+`/cluster-close` on its hermetic evidence; it is correct but live-latent until the wire-pump fairness slice
+lands. S7-retry diagnostics: `~/.cardano-ceai6/ao-s7-*` + `d2-*` (outside the repo).
