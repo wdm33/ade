@@ -7496,3 +7496,33 @@ introduced_in = "PHASE4-N-AO"
 strengthened_in = []
 attack_rationale = "A fork-choice win over peer-supplied/unvalidated data that triggered a rollback BEFORE validating the replacement would let a lying/Byzantine peer induce Ade to abandon a valid durable chain for one that then fails pump_block -- the H-1 truncation class (PHASE4-N-AI AI-S6 / DC-NODE-29) generalized from a peer RollBackward to an Ade-initiated reselection. Never-abandon-until-validated + the DC-NODE-29 stored-slot+hash anchor binding close it."
 evidence_notes = "Declared at PHASE4-N-AO cluster-doc; enforced at S4 close (CE-AO-4) via ci_check_fork_switch_never_abandons.sh + the reused ci_check_rollback_target_canonical_binding.sh + ci_check_live_fork_choice_apply.sh, including a negative-corpus test (invalid/incomplete winner leaves the durable chain unchanged). The security-critical slice -- its own focused per-cluster security review (S4 is the expected HIGH surface). Resolves OQ-AO-3 (selected-range fetch driver/peer/anchor/failure)."
+
+[[rules]]
+id = "DC-NODE-38"
+tier = "derived"
+statement = """
+Live multi-block fork-anchor discovery (PHASE4-N-AO S7; the live-geometry gap CE-AO-6 surfaced). A live
+competing branch is eligible for SELECT only when Ade walks its preserved parent links back to a DURABLE
+STORED fork anchor within k (BLOCK DEPTH, not slot distance), then validates the COMPLETE intermediate
+header chain from that anchor (S2 validate_and_apply_header) BEFORE selection. The per-peer branch cache is
+NOT authority -- only an indexed memory of received, preserved headers; each entry self-binds (key_hash ==
+re-derived header block hash, entry.slot == header.slot, entry.prev_hash == header.prev_hash) or the branch
+fails closed. The last-common-ancestor is the fork anchor, authoritative ONLY when ChainDb confirms slot AND
+hash (DC-NODE-29) -- never the competing block's immediate parent, never peer-supplied, never slot-only,
+never hash-only. The walk is k-bounded by BLOCK DEPTH (traversed-header count <= k AND current_tip_block_no
+minus lca_block_no <= k; no slot subtraction); over-k / branch-gap / no-durable-LCA / cache-self-binding-
+violation / lying-parent-link all fail closed with no durable mutation. A 1-deep fork degenerates to the
+prior single-step behavior. CARRY-FORWARD: a competing branch arriving via RollBackward/FOLLOW sequencing
+rather than competing Block arrivals is a SEPARATE wire-interleaving diagnostic and must not weaken this
+competing-block LCA invariant.
+"""
+source = "docs/planning/phase4-n-ao-ce-ao-6-live-gap.md + docs/clusters/PHASE4-N-AO/S7-lca-anchor-walk.md"
+cross_ref = ["DC-NODE-36", "DC-NODE-37", "DC-NODE-29", "DC-NODE-35", "DC-NODE-28", "CN-CONS-01", "CN-CONS-03"]
+code_locus = "CANDIDATE (pending S7 impl): crates/ade_node/src/node_lifecycle.rs (dispatch_competing_fork_choice -- per-peer branch cache + walk_to_durable_lca) + crates/ade_node/src/candidate_aggregator.rs (build_candidate_fragment, REUSED multi-header) + crates/ade_node/src/selector_state.rs (LcaError)"
+tests = []
+ci_scripts = []
+status = "declared"
+introduced_in = "PHASE4-N-AO"
+strengthened_in = []
+attack_rationale = "Without the LCA walk, a live multi-block competing branch fails closed (UnexpectedRollback) because its immediate parent is an intermediate block on the competing branch Ade never stored -- a correctness/liveness gap (SELECT only worked for 1-deep forks), surfaced by the CE-AO-6 live two-producer run. The walk closes it WITHOUT weakening authority: the durable stored LCA (slot+hash, DC-NODE-29) is the anchor, S2 validates the complete chain, S4 proves the bodies -- the cache is evidence only. A peer that lies about parent links, presents a gapped branch, or claims an over-k ancestor fails closed; the cache self-binding prevents a stringly map of peer claims."
+evidence_notes = "Declared at PHASE4-N-AO S7 (the live-geometry gap CE-AO-6 surfaced; docs/planning/phase4-n-ao-ce-ao-6-live-gap.md). Enforced at S7 close (CE-AO-8) via ci_check_lca_anchor_walk.sh + 8 hermetic tests (1-deep regression, multi-block LCA walk, missing-intermediate, older-than-k by block depth, lying-parent-link, cache-self-binding-violation, arrival-order permutation, S4 body-mismatch-before-commit). Unblocks the CE-AO-6 live retry (CN-CONS-03 flips only on the committed clean two-producer transcript, NOT on hermetic-green)."
