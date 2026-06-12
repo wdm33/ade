@@ -2937,6 +2937,23 @@ where
                     Some(&switch.winner_tip.hash),
                 );
             }
+            // PHASE4-N-AO S9 (DC-EVIDENCE-04): a prior provisional win being
+            // overwritten by this newer win on the same fork is SUPERSEDED -- emit
+            // its terminal so EVERY win resolves to applied | failed | superseded
+            // (the relay loop only applies the FINAL pending). Observe-only.
+            if let Some(old) = pending_fork_switch.as_ref() {
+                let old_fsid = fork_switch_id(
+                    &old.winning_peer,
+                    old.fork_anchor.slot.0,
+                    &old.fork_anchor.hash,
+                    old.winner_tip.slot.0,
+                    &old.winner_tip.hash,
+                );
+                let old_peer = old.winning_peer.clone();
+                if let Some(ev) = evidence.as_deref_mut() {
+                    ev.emit_fork_switch_superseded(&old_fsid, &old_peer);
+                }
+            }
             // Fence FIRST: no forge may slip onto the stale pre-switch tip while a
             // reselection is pending (DC-NODE-28). S4 clears it after it applies.
             *pending_reselection = true;

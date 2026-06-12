@@ -175,6 +175,14 @@ pub enum AdmissionLogEvent {
         peer: String,
         failure_code: ForkChoiceEvidenceFailure,
     },
+    /// A provisional `fork_choice_selected{win}` was SUPERSEDED by a newer win on
+    /// the same fork (the competing branch grew; the relay loop never applied this
+    /// id). Terminal for its `fork_switch_id` -- so every win resolves to exactly
+    /// one of applied / failed / superseded (DC-EVIDENCE-04), never dangling.
+    ForkSwitchSuperseded {
+        fork_switch_id: String,
+        peer: String,
+    },
 }
 
 /// Closed result of `select_best_chain` for a competing candidate (S9 evidence).
@@ -281,6 +289,7 @@ impl AdmissionLogEvent {
             Self::BranchPrevalidated { .. } => "branch_prevalidated",
             Self::ForkSwitchApplied { .. } => "fork_switch_applied",
             Self::ForkSwitchFailed { .. } => "fork_switch_failed",
+            Self::ForkSwitchSuperseded { .. } => "fork_switch_superseded",
         }
     }
 }
@@ -413,6 +422,7 @@ mod tests {
             AdmissionLogEvent::BranchPrevalidated { .. } => "branch_prevalidated",
             AdmissionLogEvent::ForkSwitchApplied { .. } => "fork_switch_applied",
             AdmissionLogEvent::ForkSwitchFailed { .. } => "fork_switch_failed",
+            AdmissionLogEvent::ForkSwitchSuperseded { .. } => "fork_switch_superseded",
         };
     }
 

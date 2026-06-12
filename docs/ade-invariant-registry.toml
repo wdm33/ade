@@ -7212,13 +7212,15 @@ Closed fork-choice convergence evidence (PHASE4-N-AO S9; promotes the live SELEC
 diagnostics to registry-grade evidence). The live multi-candidate SELECT path emits a CLOSED, observe-only
 convergence-evidence sequence proving the WHOLE path: needs_fork_choice -> lca_discovered ->
 candidate_fragment_built -> fork_choice_selected -> branch_fetch_started -> branch_fetch_completed ->
-branch_prevalidated -> fork_switch_applied | fork_switch_failed. The 9 event discriminators EQUAL the
+branch_prevalidated -> fork_switch_applied | fork_switch_failed | fork_switch_superseded. The 10 event discriminators EQUAL the
 emit-only allow-list (an unknown/added variant fails closed at the allow-list test, the NodeSchedEvent
 pattern); every field is bounded + typed (no free-form error strings -- failure_code is a closed enum
 mapping BranchProofError/LcaError; fork_switch_id is a bounded deterministic id = blake2b(winning_peer ||
 fork_anchor.slot || fork_anchor.hash || winner_tip.slot || winner_tip.hash) hex-prefix, never free-form
 text). For a given fork_switch_id, a fork_choice_selected{result=win} is followed by EXACTLY ONE terminal
-event (fork_switch_applied OR fork_switch_failed) -- never zero, never two, never dangling. The evidence
+event (fork_switch_applied OR fork_switch_failed OR fork_switch_superseded -- the last when a newer win on
+the same fork overwrites this provisional pending before the relay loop applies it) -- never zero, never
+two, never dangling. The evidence
 OBSERVES already-computed authority outcomes: NO evidence event/type is ever consumed by select_best_chain
 / walk_to_durable_lca / apply_fork_switch / the forge fence, and a transcript write failure (flips
 incomplete, DC-EVIDENCE-01) cannot alter selection / apply / fence behavior. CN-CONS-03 flips ONLY when a

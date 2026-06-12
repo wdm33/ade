@@ -240,6 +240,12 @@ impl ConvergenceEvidenceSink {
             failure_code,
         })
     }
+    pub fn emit_fork_switch_superseded(&mut self, fork_switch_id: &str, peer: &str) -> EvidenceEmitResult {
+        self.emit(AdmissionLogEvent::ForkSwitchSuperseded {
+            fork_switch_id: fork_switch_id.to_string(),
+            peer: peer.to_string(),
+        })
+    }
 
     /// PRIVATE single funnel — the `emit_*` methods are its only callers,
     /// so no caller outside this module can construct a non-subset variant.
@@ -475,6 +481,10 @@ impl ConvergenceEvidence {
             .emit_fork_switch_failed(fork_switch_id, peer, failure_code);
         self.note(r);
     }
+    pub fn emit_fork_switch_superseded(&mut self, fork_switch_id: &str, peer: &str) {
+        let r = self.sink.emit_fork_switch_superseded(fork_switch_id, peer);
+        self.note(r);
+    }
 }
 
 /// PHASE4-N-AO S9 (DC-EVIDENCE-04): the bounded deterministic `fork_switch_id` that
@@ -566,7 +576,9 @@ mod tests {
         let terminals: Vec<&str> = text
             .lines()
             .filter(|l| {
-                (l.contains("\"fork_switch_applied\"") || l.contains("\"fork_switch_failed\""))
+                (l.contains("\"fork_switch_applied\"")
+                    || l.contains("\"fork_switch_failed\"")
+                    || l.contains("\"fork_switch_superseded\""))
                     && l.contains(&fsid)
             })
             .collect();
@@ -590,7 +602,9 @@ mod tests {
         let terminals: Vec<&str> = text
             .lines()
             .filter(|l| {
-                (l.contains("\"fork_switch_applied\"") || l.contains("\"fork_switch_failed\""))
+                (l.contains("\"fork_switch_applied\"")
+                    || l.contains("\"fork_switch_failed\"")
+                    || l.contains("\"fork_switch_superseded\""))
                     && l.contains(&fsid)
             })
             .collect();
@@ -599,6 +613,42 @@ mod tests {
             terminals[0].contains("\"failure_code\":\"body_invalid\""),
             "the failure terminal carries a CLOSED code, never a free-form string"
         );
+    }
+
+    #[test]
+    fn superseded_win_pairs_to_superseded_terminal() {
+        // Two wins on the SAME fork (the competing branch grew, so winner_tip and
+        // thus fork_switch_id change). The first is superseded by the second; the
+        // second applies. Each fork_switch_id resolves to EXACTLY ONE terminal --
+        // no dangling win (the relay loop only applies the FINAL pending).
+        let buf = SharedBuf::default();
+        let mut ev = ConvergenceEvidence::new(
+            ConvergenceEvidenceSink::with_writer(Box::new(buf.clone())),
+            &Hash32([0xCC; 32]),
+        );
+        let anchor = Hash32([0x11; 32]);
+        let tip1 = Hash32([0xA1; 32]);
+        let tip2 = Hash32([0xA2; 32]);
+        let fsid1 = fork_switch_id("peer-1", 100, &anchor, 120, &tip1);
+        let fsid2 = fork_switch_id("peer-1", 100, &anchor, 130, &tip2);
+        assert_ne!(fsid1, fsid2, "a growing winner_tip => distinct ids");
+        ev.emit_fork_choice_selected(&fsid1, "peer-1", ForkChoiceResult::Win, Some(120), Some(&tip1));
+        ev.emit_fork_choice_selected(&fsid2, "peer-1", ForkChoiceResult::Win, Some(130), Some(&tip2));
+        ev.emit_fork_switch_superseded(&fsid1, "peer-1"); // win 1 overtaken by win 2
+        ev.emit_fork_switch_applied(&fsid2, "peer-1", 130, &tip2); // win 2 adopted
+        let text = String::from_utf8(buf.0.borrow().clone()).unwrap();
+        let terminals = |fsid: &str| {
+            text.lines()
+                .filter(|l| {
+                    (l.contains("\"fork_switch_applied\"")
+                        || l.contains("\"fork_switch_failed\"")
+                        || l.contains("\"fork_switch_superseded\""))
+                        && l.contains(fsid)
+                })
+                .count()
+        };
+        assert_eq!(terminals(&fsid1), 1, "the superseded win => EXACTLY ONE terminal (superseded)");
+        assert_eq!(terminals(&fsid2), 1, "the applied win => EXACTLY ONE terminal (applied)");
     }
 
     #[test]

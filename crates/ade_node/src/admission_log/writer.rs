@@ -313,6 +313,12 @@ fn encode_event(event: &AdmissionLogEvent, out: &mut String) {
             out.push(',');
             push_key_str(out, "failure_code", failure_code.as_str());
         }
+        AdmissionLogEvent::ForkSwitchSuperseded { fork_switch_id, peer } => {
+            out.push(',');
+            push_key_str(out, "fork_switch_id", fork_switch_id);
+            out.push(',');
+            push_key_str(out, "peer", peer);
+        }
     }
     out.push('}');
 }
@@ -370,6 +376,7 @@ const DISCRIMINATORS: &[&str] = &[
     "branch_prevalidated",
     "fork_switch_applied",
     "fork_switch_failed",
+    "fork_switch_superseded",
 ];
 
 #[cfg(test)]

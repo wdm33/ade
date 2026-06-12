@@ -18,7 +18,7 @@ AGG="crates/ade_node/src/candidate_aggregator.rs"
 fail() { echo "FAIL (ci_check_fork_choice_evidence_closed): $1" >&2; exit 1; }
 for f in "$EV" "$WR" "$CE" "$LCA" "$AGG"; do [ -f "$f" ] || fail "module $f missing"; done
 
-EVENTS="needs_fork_choice lca_discovered candidate_fragment_built fork_choice_selected branch_fetch_started branch_fetch_completed branch_prevalidated fork_switch_applied fork_switch_failed"
+EVENTS="needs_fork_choice lca_discovered candidate_fragment_built fork_choice_selected branch_fetch_started branch_fetch_completed branch_prevalidated fork_switch_applied fork_switch_failed fork_switch_superseded"
 
 # (A) Vocabulary == allow-list: each of the 9 closed events has a discriminator
 # (event.rs) AND is in the writer's DISCRIMINATORS allow-list (the gate's positive
@@ -60,12 +60,16 @@ if grep -Eq "if .*emit_(needs_fork_choice|lca_discovered|fork_choice_selected|fo
   fail "an evidence emit result must never gate control flow (observe-only)"
 fi
 
-# (E) The terminal pairing exists in code: a fork_switch WIN apply path emits EXACTLY
-# one of applied/failed (both present at the apply site; the hermetic test proves the
-# 1:1 fork_switch_id pairing).
+# (E) Every win resolves to EXACTLY ONE terminal -- applied / failed / superseded.
+# applied|failed at the apply site; superseded in the dispatch when a newer win
+# overwrites an older provisional pending (so the relay loop applying only the FINAL
+# pending leaves no dangling wins). The hermetic test proves the 1:1 fork_switch_id
+# pairing.
 grep -Eq "emit_fork_switch_applied\(" "crates/ade_node/src/node_lifecycle.rs" \
   || fail "the Adopted apply path must emit fork_switch_applied"
 grep -Eq "emit_fork_switch_failed\(" "crates/ade_node/src/node_lifecycle.rs" \
   || fail "the ProofFailed apply path must emit fork_switch_failed"
+grep -Eq "emit_fork_switch_superseded\(" "crates/ade_node/src/node_lifecycle.rs" \
+  || fail "an overwritten provisional win must emit fork_switch_superseded (no dangling wins)"
 
 echo "OK: fork-choice evidence is closed-vocab + allow-listed + no-free-form-strings + bounded fork_switch_id + observe-only (DC-EVIDENCE-04)"
