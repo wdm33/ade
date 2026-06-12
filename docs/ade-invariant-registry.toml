@@ -7367,6 +7367,36 @@ introduced_in = "PHASE4-N-AM"
 strengthened_in = []
 
 [[rules]]
+id = "DC-PUMP-04"
+tier = "derived"
+statement = """
+Multi-peer wire-pump fairness (PHASE4-N-AO S8; the gap the S7 live retry surfaced). When multiple peers
+are connected to the participant receive path, no connected peer may be STARVED by another continuously-
+producing peer. Each peer's run_admission_wire_pump task feeds its OWN bounded queue (per-peer channel);
+a fair merge over a DETERMINISTIC order DERIVED FROM the configured --peer order (an explicit Vec, never
+HashMap/HashSet iteration, never scheduler timing) gives each active peer bounded delivery opportunity
+(round-robin, one item per peer per round); backpressure is PER-PEER (a hot peer fills its own bounded
+queue and self-blocks), NEVER global starvation; a disconnected peer's lane is retired in place WITHOUT
+reordering the remaining peers. The merge order is RED scheduling discipline ONLY -- it may affect delivery
+OPPORTUNITY but MUST NOT decide fork-choice: select_best_chain stays arrival-order independent (CN-CONS-01),
+peer identity is preserved through the merge (DC-NODE-34), and the merged stream the consumer reads is
+unchanged in shape (one peer-attributed NodeSyncItem::Block sequence). MUST NOT: fan all peer pumps into a
+single shared bounded channel (the pre-S8 shape that lets a hot peer monopolise it); drop a peer's
+fork-choice-relevant block merely because another peer is hot; let wall-clock / rand / scheduler timing
+define peer priority or affect any BLUE selection result; change the selector / S7 / any BLUE authority.
+"""
+source = "docs/planning/phase4-n-ao-ce-ao-6-live-gap.md (S7-retry finding) + docs/clusters/PHASE4-N-AO/S8-multi-peer-wire-pump-fairness.md"
+cross_ref = ["DC-PUMP-01", "DC-PUMP-02", "DC-PUMP-03", "CN-PUMP-01", "DC-NODE-34", "DC-NODE-38", "CN-CONS-01", "CN-CONS-03"]
+code_locus = "CANDIDATE (pending S8 impl): crates/ade_node/src/node_lifecycle.rs (spawn_live_wire_pump_source -- per-peer bounded channels + a deterministic configured-order fair-merge task feeding the single WirePump rx) + a RED fair-merge helper; GREEN per-peer delivered-count evidence counter. run_admission_wire_pump (per-peer pump) + NodeBlockSource::WirePump/next_item UNCHANGED."
+tests = []
+ci_scripts = []
+status = "declared"
+attack_rationale = "Without per-peer fairness, a single continuously-producing peer monopolises the shared bounded mpsc and starves every other peer's pump -- so a competing peer's branch never reaches the participant dispatch and live multi-candidate SELECT cannot fire (the S7 live retry CE-AO-6 observed: 46 blocks all from one peer, 0 from the other, despite both connected). A Byzantine/hot peer could thereby SUPPRESS a competing honest branch from fork-choice purely by out-producing into the shared feed -- a liveness/eclipse-flavoured denial of the SELECT input, NOT a safety break (the node still fails closed, never adopts an unvalidated chain). Per-peer bounded lanes + a deterministic fair merge close it: each peer self-backpressures, no peer is starved, and the RED merge order never touches the BLUE arrival-order-independent selector."
+evidence_notes = "Declared at PHASE4-N-AO S8 (the gap the S7 live retry CE-AO-6 surfaced; docs/planning/phase4-n-ao-ce-ao-6-live-gap.md S7-retry section). Enforced at S8 close (CE-AO-9) via ci_check_wire_pump_fairness.sh + 6 hermetic fair-merge tests (hot-peer-no-starve, per-peer-backpressure-not-global, peer-identity-through-merge, deterministic-peer-order-from-config, closed-lane-removed-without-reorder, single-peer-unchanged). The FULL live multi-peer SELECT assertions (both branches observed -> NeedsForkChoice -> S7 LCA walk -> select winner -> RequestRange -> prevalidate -> ForkChoiceWin -> agreement agreed -> 0 diverged) stay on the CE-AO-6 live retry -- synthetic fairness tests do NOT pretend to prove live two-producer fork-choice convergence. CN-CONS-03 flips ONLY when CE-AO-6 actually observes both branches AND SELECT fires."
+introduced_in = "PHASE4-N-AO"
+strengthened_in = []
+
+[[rules]]
 id = "T-REC-06"
 tier = "true"
 statement = """
