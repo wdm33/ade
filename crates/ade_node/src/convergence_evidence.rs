@@ -193,19 +193,18 @@ impl ConvergenceEvidenceSink {
 pub struct ConvergenceEvidence {
     sink: ConvergenceEvidenceSink,
     consensus_inputs_fingerprint_hex: String,
-    peer_label: String,
     incomplete: bool,
 }
 
 impl ConvergenceEvidence {
     /// `fingerprint` is the DC-ADMIT-10 oracle binding (the imported bundle's
     /// `canonical.fingerprint`, or the recovered-oracle ledger fingerprint in a
-    /// warm-start). `peer_label` is the followed peer addr.
-    pub fn new(sink: ConvergenceEvidenceSink, fingerprint: &Hash32, peer_label: String) -> Self {
+    /// warm-start). Per-event peer attribution is carried by each `emit_*` call
+    /// (DC-NODE-34), not a single fixed label.
+    pub fn new(sink: ConvergenceEvidenceSink, fingerprint: &Hash32) -> Self {
         Self {
             sink,
             consensus_inputs_fingerprint_hex: hex_lowercase(&fingerprint.0),
-            peer_label,
             incomplete: false,
         }
     }
@@ -224,10 +223,15 @@ impl ConvergenceEvidence {
 
     /// `block_received` — evidence of **peer input** (not local admission), for
     /// every considered peer block, before drop/admit/refuse.
-    pub fn emit_block_received(&mut self, slot: u64, block_hash: &Hash32) {
+    pub fn emit_block_received(&mut self, peer: &str, slot: u64, block_hash: &Hash32) {
+        // DC-NODE-34 (peer identity preserved): block_received MUST carry the
+        // PER-BLOCK source peer, not a fixed sink label -- otherwise a multi-peer
+        // run mis-attributes every peer's blocks to the first peer (the evidence
+        // artifact that masked live multi-peer SELECT). `peer_label` remains the
+        // warm-start followed-peer default for single-peer / agreement contexts.
         let r = self
             .sink
-            .emit_block_received(&self.peer_label, slot, &hex_lowercase(&block_hash.0));
+            .emit_block_received(peer, slot, &hex_lowercase(&block_hash.0));
         self.note(r);
     }
 
@@ -408,10 +412,9 @@ mod tests {
         let mut ev = ConvergenceEvidence::new(
             ConvergenceEvidenceSink::with_writer(Box::new(FailingWriter)),
             &Hash32([0xCC; 32]),
-            "127.0.0.1:3001".to_string(),
         );
         assert!(!ev.is_incomplete());
-        ev.emit_block_received(100, &Hash32([0xAA; 32]));
+        ev.emit_block_received("127.0.0.1:3001", 100, &Hash32([0xAA; 32]));
         assert!(ev.is_incomplete(), "a write failure marks the transcript incomplete");
     }
 }

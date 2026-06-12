@@ -583,7 +583,6 @@ fn evidence_over(buf: &SharedBuf) -> ConvergenceEvidence {
     ConvergenceEvidence::new(
         ConvergenceEvidenceSink::with_writer(Box::new(buf.clone())),
         &h(0xCC),
-        "127.0.0.1:3001".to_string(),
     )
 }
 

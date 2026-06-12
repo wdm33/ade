@@ -172,3 +172,39 @@ S7's LCA walk get exercised and `CN-CONS-03` become reachable.
 **Status:** `CN-CONS-03`, `DC-NODE-38` (S7), `DC-PUMP-04` (S8) all stay `declared`. S8 stays as committed
 (correct + hermetically proven; the per-peer-lane architecture is the right shape, just not the live
 blocker). S8-retry diagnostics: `~/.cardano-ceai6/ao-s8-*` + `e-conv.jsonl` (outside the repo).
+
+---
+
+## THE ACTUAL BUG (2026-06-12): it was an EVIDENCE-LABELING artifact — multi-peer delivery was NEVER broken
+
+Targeted WPDIAG instrumentation (per-peer pump phase markers + the mux reader, temporary, now reverted)
+finally produced ground truth — and it **overturns the three diagnoses above**:
+
+- **Both pumps fully work.** cn2's pump reaches ENTRY, FIRST INBOUND, and runs its loop; its ChainSync
+  advances (RollForward), it block-fetches, and it **emits its blocks** (`BLOCK emit returned (true)`),
+  interleaved with cn1's. The "2nd pump stall" (and before it "channel starvation") were never real.
+- **`block_received` was MISLABELLING every block to the first peer.** `ConvergenceEvidence::emit_block_received`
+  used a FIXED `self.peer_label = cli.peer_addrs.first()` (`node_lifecycle.rs` sink construction) instead of
+  the **per-block** `NodeSyncItem::Block.peer` that is right there at the call site. So every peer's blocks
+  were tagged `:6001` — making it look like `:6002` delivered nothing.
+- **Proof:** a same-chain 2-peer run with the per-block-peer fix shows `block_received = 4 from :6001 +
+  4 from :6002`. The multi-peer wire-pump delivers BOTH peers' blocks correctly. It always did.
+
+**So the whole "wire-pump multi-peer" gap — the S7-retry "channel starvation" reading, the S8 fairness
+slice, and the "2-pump stall" — was chasing a mislabeled evidence log, not a delivery failure.**
+
+**The real fix (DC-NODE-34 peer-identity fidelity):** `emit_block_received(peer, slot, hash)` threads the
+per-block peer; the fixed `peer_label` field + `ConvergenceEvidence::new` param are removed.
+
+**S8 / `DC-PUMP-04` reassessment:** S8 stays committed — per-peer bounded lanes + a fair merge are a
+genuinely cleaner, more robust architecture than one shared bounded channel, and the slice is hermetically
+proven. But it must be recorded honestly that S8 was scoped on a mis-diagnosis and was **not** the blocker;
+the delivery worked before S8 too (the pre-S7 run's "cn2-branch hash appearing, all tagged :6001" note was
+the same artifact). Whether to amend `DC-PUMP-04`'s framing is a follow-up call.
+
+**Still owed (a FRESH venue):** confirm that in a DIVERGED two-producer run, cn2's COMPETING blocks now drive
+`NeedsForkChoice` → S7's LCA walk → `select_best_chain` → (if it wins) `ForkChoiceWin` adoption → `agreed`.
+The 2026-06-12 diverged attempt was INVALID — the ~1hr-old venue's producers had stopped forging (KES/slot
+drift; both stuck at block 12) and both pumps hit `UnsupportedRollbackPoint`, so no fork formed. A clean
+fresh-venue diverged run is the remaining live confirmation before any `CN-CONS-03` flip. Fix + same-chain
+proof diagnostics: `~/.cardano-ceai6/f-conv.jsonl` (4+4 per-peer) + `ao-wpdiag.*` (outside the repo).

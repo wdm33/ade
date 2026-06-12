@@ -725,8 +725,7 @@ async fn run_node_lifecycle_inner(
                     .and_then(|p| import_live_consensus_inputs(p).ok())
                     .map(|c| c.fingerprint)
                     .unwrap_or_else(|| fingerprint(&fwd.receive.ledger).combined);
-                let peer_label = cli.peer_addrs.first().cloned().unwrap_or_default();
-                ConvergenceEvidence::new(sink, &fp, peer_label)
+                ConvergenceEvidence::new(sink, &fp)
             };
             run_relay_loop_with_sched(
                 &mut fwd,
@@ -2915,7 +2914,7 @@ where
                 let cand_slot = decoded.header_input.slot;
                 let cand_hash = decoded.block_hash.clone();
                 if let Some(ev) = evidence.as_deref_mut() {
-                    ev.emit_block_received(cand_slot.0, &cand_hash);
+                    ev.emit_block_received(&peer, cand_slot.0, &cand_hash);
                 }
                 // Durable tip (the detector's reference). With no durable tip yet
                 // the cold-start path is out of scope for this slice -- extend via
