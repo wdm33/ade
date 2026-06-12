@@ -99,10 +99,12 @@ use ade_ledger::block_validity::{decode_block, DecodedBlock};
 use ade_types::shelley::block::PrevHash;
 use ade_runtime::receive::ChainDbWriter;
 
+use ade_network::codec::chain_sync::Point as WirePoint;
+
 use crate::candidate_aggregator::{assemble_candidate_set, build_candidate_fragment};
 use crate::fork_switch::{
     fork_switch_fence_resolved, prevalidate_branch, BranchBodySource, BranchProofError,
-    ForkSwitchOutcome, NullBranchBodySource, ProvenBranch,
+    ForkSwitchOutcome, NullBranchBodySource, PrefetchedBranchBodies, ProvenBranch,
 };
 use crate::selector_state::{project_tiebreaker, ForkAnchor, PendingForkSwitch};
 
@@ -687,6 +689,10 @@ async fn run_node_lifecycle_inner(
             if cli.participant_venue {
                 activation.declare_participant_venue();
             }
+            // PHASE4-N-AO S6 (CE-AO-6): the magic to live-BlockFetch a winning
+            // branch from the winning peer (prefetch_branch_bodies). Absent it,
+            // a fork-choice win is held by NullBranchBodySource (the fence).
+            activation.network_magic = cli.network_magic;
             // PHASE4-N-F-G-J S1 (CN-NODE-04): emit the closed feed/forge
             // scheduling diagnostics to stderr (emit-only; never alters
             // scheduling). The forge-on path the C1 rerun exercises —
@@ -1109,6 +1115,12 @@ pub struct ForgeActivation<'a> {
     /// failed/lying/incomplete replacement branch is never a silent drop). Set when
     /// `apply_fork_switch` could not prove the branch; cleared on a proven adoption.
     pub last_fork_switch_failure: Option<BranchProofError>,
+    /// PHASE4-N-AO S6 (CE-AO-6): the network magic used to dial the winning peer for
+    /// the live `BlockFetch` of a winning branch (`prefetch_branch_bodies`). `None`
+    /// (test / forge-off / no `--network-magic`) => no live fetch; a win is held by
+    /// `NullBranchBodySource` (the fence stays set). The fetch is byte-only; S4
+    /// prevalidates regardless.
+    pub network_magic: Option<u32>,
 }
 
 impl<'a> ForgeActivation<'a> {
@@ -1149,6 +1161,7 @@ impl<'a> ForgeActivation<'a> {
             security_param: SecurityParam(2160),
             pending_fork_switch: None,
             last_fork_switch_failure: None,
+            network_magic: None,
         }
     }
 
@@ -1368,14 +1381,29 @@ pub async fn run_relay_loop_with_sched(
                     )
                     .await
                     .map_err(|e| NodeLifecycleError::RelaySync(format!("{e:?}")))?;
-                    // PHASE4-N-AO S4 (DC-NODE-37): consume the provisional decision S3
-                    // may have set. apply_fork_switch PROVES the branch before any
-                    // commit. The live BlockFetch RequestRange fetch is CE-AO-6, so the
-                    // relay loop uses a null body source -- a win is held (proof fails
-                    // closed, the fence stays set), never a half-switch. Hermetic
-                    // proof: the apply_fork_switch tests drive a real BranchBodySource.
+                    // PHASE4-N-AO S4+S6 (DC-NODE-37 / CE-AO-6): consume the provisional
+                    // decision S3 may have set. When a network magic is configured,
+                    // LIVE-BlockFetch the winning branch from the winning peer
+                    // (prefetch_branch_bodies, anchor->winner_tip) and feed those bytes
+                    // to apply_fork_switch; absent a magic (test / forge-off) a win is
+                    // held by NullBranchBodySource (fence stays set). apply_fork_switch
+                    // PROVES the bytes before any commit either way -- the live fetch is
+                    // byte-only, never adoption authority.
+                    let magic = act.network_magic;
                     if let Some(switch) = act.pending_fork_switch.clone() {
-                        apply_fork_switch(
+                        let body_source: Box<dyn BranchBodySource> = match magic {
+                            Some(m) => Box::new(
+                                prefetch_branch_bodies(
+                                    &switch.winning_peer,
+                                    &switch.fork_anchor,
+                                    &switch.winner_tip,
+                                    m,
+                                )
+                                .await,
+                            ),
+                            None => Box::new(NullBranchBodySource),
+                        };
+                        let outcome = apply_fork_switch(
                             state,
                             chaindb,
                             wal,
@@ -1383,11 +1411,29 @@ pub async fn run_relay_loop_with_sched(
                             &mut act.pending_fork_switch,
                             &mut act.pending_reselection,
                             &mut act.last_fork_switch_failure,
-                            &NullBranchBodySource,
+                            body_source.as_ref(),
                             era_schedule,
                             ledger_view,
                         )
                         .map_err(|e| NodeLifecycleError::RelaySync(format!("{e:?}")))?;
+                        // PHASE4-N-AO S6 (CE-AO-6): on a PROVEN adoption, emit the
+                        // convergence evidence for the adopted winner -- REUSING the
+                        // existing GREEN reducer (block_admitted + agreement_verdict,
+                        // DC-NODE-30), NOT a new vocabulary. The competing block's
+                        // block_received was already emitted by the S3 dispatch.
+                        // Evidence observes authority; it never becomes authority.
+                        if let ForkSwitchOutcome::Adopted { new_tip } = &outcome {
+                            if let Some(ev) = convergence.as_deref_mut() {
+                                let post_fp = fingerprint(&state.receive.ledger).combined;
+                                let peer_tip = source.followed_peer_tip_signal().tip();
+                                ev.emit_admit_and_verdict(
+                                    new_tip.slot.0,
+                                    &new_tip.hash,
+                                    &post_fp,
+                                    peer_tip,
+                                );
+                            }
+                        }
                     }
                     // PHASE4-N-AO S5 (DC-NODE-28 resolution): the forge fence clears
                     // ONLY on a RESOLVED state -- no pending decision AND caught up to
@@ -3138,6 +3184,68 @@ where
     *pending_reselection = false;
     *last_fork_switch_failure = None;
     Ok(ForkSwitchOutcome::Adopted { new_tip: final_tip })
+}
+
+/// PHASE4-N-AO S6 (CE-AO-6): live BlockFetch of the winning branch's bodies (RED).
+/// The winning peer is ON the winning chain, so FOLLOWING it from the durable fork
+/// anchor yields the winning branch anchor→`winner_tip`. Reuses the existing
+/// consume client (`dial_for_admission` + `run_admission_wire_pump`) — NO new
+/// block-fetch client, NO new venue.
+///
+/// **Returns BYTES only** — a best-effort `PrefetchedBranchBodies`. It NEVER
+/// certifies selection or validity and NEVER clears the fence: a failed / partial
+/// / truncated / lying fetch is rejected by S4 `prevalidate_branch` before any
+/// `commit_rollback` (the byte-only boundary; `DC-NODE-35/37`). Bounded by a
+/// timeout so a stalled / Byzantine peer cannot hang the relay loop.
+pub async fn prefetch_branch_bodies(
+    peer_addr: &str,
+    fork_anchor: &ForkAnchor,
+    winner_tip: &Point,
+    network_magic: u32,
+) -> PrefetchedBranchBodies {
+    let mut prefetched = PrefetchedBranchBodies::new();
+    let sock: std::net::SocketAddr = match peer_addr.parse() {
+        Ok(s) => s,
+        // Unparseable / unreachable peer label -> empty (S4 holds the fence).
+        Err(_) => return prefetched,
+    };
+    let (transport, version) =
+        match dial_for_admission(sock, build_n2n_version_table(network_magic)).await {
+            Ok(v) => v,
+            // Dial / N2N handshake failed -> empty (no bytes, fence held).
+            Err(_) => return prefetched,
+        };
+    // Follow FROM the fork anchor; the peer's chain anchor->tip IS the winning
+    // branch. The pump block-fetches each forwarded block and emits it.
+    let start = WirePoint::Block {
+        slot: fork_anchor.slot,
+        hash: fork_anchor.hash.clone(),
+    };
+    let (ev_tx, mut ev_rx) = mpsc::channel::<AdmissionPeerEvent>(64);
+    let pump = tokio::spawn(run_admission_wire_pump(
+        transport,
+        sock.to_string(),
+        start,
+        version,
+        network_magic,
+        ev_tx,
+    ));
+    let _ = tokio::time::timeout(std::time::Duration::from_secs(15), async {
+        while let Some(ev) = ev_rx.recv().await {
+            if let AdmissionPeerEvent::Block { block_bytes, .. } = ev {
+                if let Ok(decoded) = decode_block(&block_bytes) {
+                    let reached_tip = decoded.block_hash == winner_tip.hash;
+                    prefetched.insert(peer_addr, decoded.header_input.slot, block_bytes);
+                    if reached_tip {
+                        break; // collected up to the selected winner tip
+                    }
+                }
+            }
+        }
+    })
+    .await;
+    pump.abort();
+    prefetched
 }
 
 #[cfg(test)]

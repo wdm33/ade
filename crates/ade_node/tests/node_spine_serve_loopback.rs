@@ -52,8 +52,13 @@ use ade_network::codec::block_fetch::{
 };
 use ade_network::codec::chain_sync::{ChainSyncMessage, Point};
 use ade_network::codec::version::{BlockFetchVersion, ChainSyncVersion};
+use ade_core::consensus::events::Point as ConsPoint;
 use ade_node::admission::bootstrap::build_n2n_version_table;
-use ade_node::node_lifecycle::{bind_serve_listener, run_node_serve_task, ServeStartError};
+use ade_node::fork_switch::BranchBodySource;
+use ade_node::node_lifecycle::{
+    bind_serve_listener, prefetch_branch_bodies, run_node_serve_task, ServeStartError,
+};
+use ade_node::selector_state::ForkAnchor;
 use ade_runtime::admission::{dial_for_admission, run_admission_wire_pump, AdmissionPeerEvent};
 use ade_runtime::chaindb::{ChainDb, InMemoryChainDb, StoredBlock};
 use ade_runtime::network::ChainDbServedSource;
@@ -506,4 +511,57 @@ async fn serve_task_terminates_on_shutdown_no_hang() {
         .await
         .expect("serve task terminates within the timeout on shutdown (no hang)")
         .expect("serve task joins cleanly (no leak)");
+}
+
+/// PHASE4-N-AO S6 (CE-AO-6): the live BlockFetch bridge. `prefetch_branch_bodies`
+/// FOLLOWS the winning peer FROM the fork anchor (reusing `dial_for_admission` +
+/// `run_admission_wire_pump` -- no new client, no new venue) and collects the
+/// winning branch's bodies anchor->winner_tip, byte-identical to what the peer
+/// served. This proves the live fetch retrieves the SELECTED branch from the
+/// winning peer (not `NullBranchBodySource`). Whether those bytes are TRUE is S4's
+/// `prevalidate_branch` (the byte-only boundary tests cover lying / short fetches).
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn prefetch_branch_bodies_loopback_fetches_winning_branch() {
+    let corpus = corpus();
+    let (bytes_a, bytes_b) = pick_two_lightest_by_slot(&corpus);
+    let acc_a = self_accept_corpus_block(&corpus, &bytes_a);
+    let acc_b = self_accept_corpus_block(&corpus, &bytes_b);
+    // The served peer is ON the winning chain A->B (A = fork anchor, B = winner).
+    let serve_chaindb = durable_chaindb(&[&acc_a, &acc_b]);
+
+    let listener = bind_serve_listener("127.0.0.1:0")
+        .await
+        .expect("bind serve listener");
+    let serve_addr = listener.local_addr().expect("serve local addr");
+    let (stop_tx, stop_rx) = watch::channel(false);
+    let serve = tokio::spawn(run_node_serve_task(listener, serve_chaindb, C1_MAGIC, stop_rx));
+
+    let da = decode_block(&bytes_a).expect("decode a");
+    let db = decode_block(&bytes_b).expect("decode b");
+    let fork_anchor = ForkAnchor {
+        slot: da.header_input.slot,
+        hash: da.block_hash.clone(),
+        block_no: da.header_input.block_no,
+    };
+    let winner_tip = ConsPoint {
+        slot: db.header_input.slot,
+        hash: db.block_hash.clone(),
+    };
+
+    // Live-fetch the winning branch from the peer (the CE-AO-6 bridge).
+    let prefetched =
+        prefetch_branch_bodies(&serve_addr.to_string(), &fork_anchor, &winner_tip, C1_MAGIC).await;
+
+    // The winner's tip body was retrieved via live BlockFetch, byte-identical.
+    let fetched = prefetched
+        .fetch_body(&serve_addr.to_string(), db.header_input.slot)
+        .expect("the winning branch tip body was live-BlockFetched (not NullBranchBodySource)");
+    assert_eq!(
+        &fetched[..],
+        &bytes_b[..],
+        "prefetch_branch_bodies fetched the winner's body byte-identical to the served block"
+    );
+
+    let _ = stop_tx.send(true);
+    let _ = serve.await;
 }
