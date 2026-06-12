@@ -130,3 +130,45 @@ does S7's LCA walk get exercised live; only a clean two-producer SELECT transcri
 **Status:** `CN-CONS-03` stays `declared`. `DC-NODE-38` (S7) stays `declared`, ready to flip at
 `/cluster-close` on its hermetic evidence; it is correct but live-latent until the wire-pump fairness slice
 lands. S7-retry diagnostics: `~/.cardano-ceai6/ao-s7-*` + `d2-*` (outside the repo).
+
+---
+
+## S8 fairness retry (2026-06-12): channel fairness was the WRONG LAYER — the live blocker is a 2-pump concurrency stall
+
+S8 (`DC-PUMP-04`, multi-peer wire-pump fairness; `4c64e779`, doc+declare `fc3db0f5`) shipped: per-peer
+bounded lanes + a deterministic round-robin `fair_merge` replacing the shared `mpsc`, 6 hermetic fairness
+tests + `ci_check_wire_pump_fairness.sh`, `cargo test -p ade_node` green. The fair-merge IS correct (it
+fairly drains any lane that has items).
+
+The CE-AO-6 retry with the S8 binary (fresh venue ceai1, common ancestor block 12; cn1→block 40, cn2→block
+30, a real multi-block fork) **still failed the same way**: 36 `block_received` ALL from `:6001`, ZERO from
+`:6002`; Ade followed cn1 and `agreed`; no competing block, no `NeedsForkChoice`.
+
+**The decisive controls reframe the gap:**
+- nproc = 16 → executor starvation of a single pump task is implausible.
+- **cn2-alone follows + admits + `agreed`** with BOTH the S7 and S8 binaries (S8: 25 blocks from `:6002`,
+  `agreement_verdict: agreed`). cn1-alone works too.
+- **cn1 + cn2 SIMULTANEOUSLY → the second peer's pump connects but never makes progress.** cn2 logged Ade
+  as a hot peer the whole run (11:03→11:09), but Ade's `:6002` pump emitted **no keep-alive and no events** —
+  its `run_admission_wire_pump` loop barely ran. So cn2's lane stayed EMPTY; `fair_merge` had nothing from
+  cn2 to merge.
+
+**Corrected diagnosis:** the live blocker is NOT shared-channel starvation (the layer S8 fixed) — it is a
+**pump-level concurrency stall**: when two `run_admission_wire_pump` tasks run concurrently, the second
+peer's pump connects (dial + handshake succeed) but its chain-sync / block-fetch loop does not progress, so
+it delivers nothing to its lane. This stall was present in the S7 run too (0 from `:6002` there as well);
+S8's channel fairness is a correct, independent improvement but is ORTHOGONAL to this bug — the merge can
+only be fair over lanes that actually receive items. The earlier "shared bounded channel starvation"
+reading (S7-retry section above) was the wrong layer.
+
+**The real next step (a focused diagnosis, not a blind slice):** instrument the per-peer
+`run_admission_wire_pump` (dial completion, FindIntersect/IntersectFound, the block-fetch BatchDone
+sequencing, the `transport.outbound`/`inbound` mux channels) for the SECOND concurrent peer to find where
+its loop stalls — a head-of-line block or a shared-resource contention between two concurrent pumps. Likely
+candidates: the two pumps' interaction with the single consumer's backpressure, or a mux/transport
+detail that only manifests with ≥2 live inbound-following sessions. Only once BOTH peers deliver does
+S7's LCA walk get exercised and `CN-CONS-03` become reachable.
+
+**Status:** `CN-CONS-03`, `DC-NODE-38` (S7), `DC-PUMP-04` (S8) all stay `declared`. S8 stays as committed
+(correct + hermetically proven; the per-peer-lane architecture is the right shape, just not the live
+blocker). S8-retry diagnostics: `~/.cardano-ceai6/ao-s8-*` + `e-conv.jsonl` (outside the repo).
