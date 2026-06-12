@@ -33,25 +33,29 @@ strip_for_grep() {
 [[ -f "$NS" ]] || fail "missing $NS"
 WPP=$(strip_for_grep "$WP")
 
+# NOTE: greps use here-strings (`<<<`), NOT `echo "$VAR" | grep -q`, which under
+# `set -o pipefail` flaky-false-fails when grep -q matches early and SIGPIPEs the
+# echo (this gate intermittently red on check #2 before the conversion).
+
 # 1. The rollback-as-TipUpdate-only downgrade is gone (point no longer discarded).
-if echo "$WPP" | grep -qE 'RollBackward \{ point: _'; then
+if grep -qE 'RollBackward \{ point: _' <<< "$WPP"; then
     fail "the rollback point is still discarded (RollBackward { point: _ ... } -> TipUpdate only)"
 fi
 
 # 2. The closed event variant exists + is emitted, carrying point: Point.
-echo "$WPP" | grep -qE 'RollBackward \{' || fail "RollBackward variant/arm missing"
-echo "$WPP" | grep -qE 'point: Point' || fail "the RollBackward event must carry point: Point"
-echo "$WPP" | grep -qE 'AdmissionPeerEvent::RollBackward \{' \
+grep -qE 'RollBackward \{' <<< "$WPP" || fail "RollBackward variant/arm missing"
+grep -qE 'point: Point' <<< "$WPP" || fail "the RollBackward event must carry point: Point"
+grep -qE 'AdmissionPeerEvent::RollBackward \{' <<< "$WPP" \
     || fail "the wire pump does not emit AdmissionPeerEvent::RollBackward"
 
 # 3. Origin fails closed.
-echo "$WPP" | grep -qE 'UnsupportedRollbackPoint' \
+grep -qE 'UnsupportedRollbackPoint' <<< "$WPP" \
     || fail "rollback-to-Origin is not fail-closed (UnsupportedRollbackPoint missing)"
 
 # 4. Preservation only -- no consumption in the wire-pump chain-sync handler.
-REGION=$(echo "$WPP" | awk '/async fn handle_chain_sync/{f=1} f{print} f&&/^}/{exit}')
+REGION=$(awk '/async fn handle_chain_sync/{f=1} f{print} f&&/^}/{exit}' <<< "$WPP")
 for needle in apply_chain_event 'StreamInput::RollBack' select_best_chain chain_selector; do
-    if echo "$REGION" | grep -qF "$needle"; then
+    if grep -qF "$needle" <<< "$REGION"; then
         fail "wire-pump chain-sync handler must not reference ${needle} (preservation only)"
     fi
 done
@@ -60,8 +64,11 @@ done
 #    as an ordered NodeSyncItem::RollBack. node_sync still does not call the live
 #    apply itself (apply_chain_event / StreamInput live in node_lifecycle).
 NSP=$(strip_for_grep "$NS")
-grep -qE 'NodeSyncItem::RollBack\(point\)' <<< "$NSP" \
-    || fail "node_sync must queue RollBackward as NodeSyncItem::RollBack (AI-S4b-ii consumes it)"
+# PHASE4-N-AO S1 (DC-NODE-34): NodeSyncItem is a struct variant carrying peer
+# (`NodeSyncItem::RollBack { peer, point }`); the consumed-not-dropped invariant
+# is unchanged.
+grep -qE 'NodeSyncItem::RollBack \{' <<< "$NSP" \
+    || fail "node_sync must queue RollBackward as NodeSyncItem::RollBack { peer, point }"
 for needle in apply_chain_event 'StreamInput::RollBack'; do
     if grep -qF "$needle" <<< "$NSP"; then
         fail "node_sync must not call ${needle} (the live apply lives in node_lifecycle)"

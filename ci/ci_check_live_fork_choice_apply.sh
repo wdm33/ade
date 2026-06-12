@@ -42,9 +42,15 @@ strip_for_grep() {
 PROD=$(strip_for_grep "$NL")
 grep -qE 'pub fn apply_chain_event' <<< "$PROD" || fail "apply_chain_event missing"
 
-# The apply_chain_event region -- bounded BEFORE run_participant_sync (AI-S4b-ii),
-# the next fn after apply_chain_event in the stripped output.
-REGION=$(awk '/pub fn apply_chain_event/{f=1} /pub async fn run_participant_sync/{f=0} f{print}' <<< "$PROD")
+# The apply_chain_event region -- bounded at the NEXT function definition after
+# apply_chain_event (PHASE4-N-AO inserted the S3/S4 fork-switch helpers, which
+# legitimately call select_best_chain, between apply_chain_event and
+# run_participant_sync; the region must be apply_chain_event's body ONLY).
+REGION=$(awk '
+    /pub fn apply_chain_event/{f=1; print; next}
+    f && /^[[:space:]]*(pub[[:space:]]+)?(async[[:space:]]+)?fn[[:space:]]/{f=0}
+    f{print}
+' <<< "$PROD")
 
 # 1. Reuse, not reimplement.
 for needle in materialize_rolled_back_state commit_rollback pump_block 'WalEntry::RollBack'; do

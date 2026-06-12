@@ -30,15 +30,20 @@ if grep -nE 'NodeSyncItem::(Block|RollBack)\(' "$NS" "$NL"; then
   fail "tuple-style NodeSyncItem construction found -- peer must be carried (struct variant)"
 fi
 
-# (C) consumers destructure-and-IGNORE peer -- no S1 decision is keyed on it.
+# (C) run_node_sync (the non-participant path) destructures-and-IGNOREs peer -- no
+# extend-only decision is keyed on it.
 grep -Eq 'NodeSyncItem::Block \{ bytes, \.\. \}' "$NS" \
   || fail "run_node_sync must ignore peer: NodeSyncItem::Block { bytes, .. }"
 grep -Eq 'NodeSyncItem::RollBack \{ point, \.\. \}' "$NS" \
   || fail "run_node_sync must ignore peer: NodeSyncItem::RollBack { point, .. }"
-grep -Eq 'NodeSyncItem::Block \{ bytes, \.\. \}' "$NL" \
-  || fail "run_participant_sync must ignore peer: NodeSyncItem::Block { bytes, .. }"
+# PHASE4-N-AO S3 (DC-NODE-36): run_participant_sync now BINDS peer in the Block arm
+# -- S1's preserved identity is CONSUMED by the live fork-switch dispatch
+# (per-peer candidate tracking). The RollBack arm still ignores peer (no
+# peer-keyed rollback decision: the stored slot+hash is the sole authority).
+grep -Eq 'NodeSyncItem::Block \{ peer, bytes \}' "$NL" \
+  || fail "run_participant_sync must bind peer for the fork-switch dispatch: NodeSyncItem::Block { peer, bytes }"
 grep -Eq 'point: wire_point, \.\.' "$NL" \
-  || fail "run_participant_sync must ignore peer (NodeSyncItem::RollBack binds 'point: wire_point, ..')"
+  || fail "run_participant_sync RollBack ignores peer (binds 'point: wire_point, ..')"
 
 # (D) NodeSyncItem stays transient -- never serialized / persisted.
 if grep -nE 'impl .* for NodeSyncItem|encode_node_sync_item|decode_node_sync_item|Serialize for NodeSyncItem|AdeEncode for NodeSyncItem' "$NS"; then

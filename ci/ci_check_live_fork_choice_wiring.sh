@@ -72,8 +72,11 @@ grep -qE 'pending_reselection_forge_refusal' <<< "$NLP" \
 
 # 6. node_sync: richer item + RollBackward queued (not dropped).
 grep -qE 'enum NodeSyncItem' <<< "$NSP" || fail "NodeSyncItem missing"
-grep -qE 'NodeSyncItem::RollBack\(point\)' <<< "$NSP" \
-    || fail "pump/wait must QUEUE RollBackward as NodeSyncItem::RollBack(point)"
+# PHASE4-N-AO S1 (DC-NODE-34) made NodeSyncItem a struct variant carrying peer:
+# `NodeSyncItem::RollBack { peer, point }`. The queued-not-dropped invariant is
+# unchanged; the pattern tracks the struct form.
+grep -qE 'NodeSyncItem::RollBack \{' <<< "$NSP" \
+    || fail "pump/wait must QUEUE RollBackward as NodeSyncItem::RollBack { peer, point }"
 
 if (( FAILED == 0 )); then
     echo "OK: live rollback-follow routing + forge gate (AI-S4b-ii)"
