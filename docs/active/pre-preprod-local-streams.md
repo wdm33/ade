@@ -82,6 +82,32 @@ NEEDS-GATE rules (CN-WIRE-07 closed-codec; DC-PROTO determinism/purity/surface; 
 header-binding), verifying each gate self-tests + completely enforces the statement, then flip —
 one well-scoped gate at a time. Umbrellas/gaps stay documented + routed, not flipped.
 
+### Stream-3 OUTCOME (2026-06-13) — DONE under the conservative bar
+
+**7 rules flipped declared→enforced (enforced 239→246, declared 113→106)** with **4 new
+self-testing structural gates** + 1 existing gate, each verified green on real code AND
+catching a synthetic violation:
+- `DC-CORE-01` (BLUE sync-only) — existing `ci_check_no_async_in_blue.sh` (already complete).
+- `CN-WIRE-07` (closed versioned message type) — NEW `ci_check_codec_message_closed.sh`.
+- `CN-CONS-04` (header↔body+context binding) — NEW `ci_check_header_body_binding.sh`.
+- `DC-PROTO-03/04` (full N2N/N2C surface) — NEW `ci_check_mini_protocol_surface.sh`.
+- `DC-PROTO-01/06` (deterministic + pure transitions) — NEW `ci_check_mini_protocol_transition_purity.sh`.
+
+**Honest residual (NOT flipped — conservative bar):**
+- `DC-PROTO-02` (transcript-equivalent *with Haskell*) → differential claim, routed to **Stream 1**.
+- All **`partial`** rules stay partial — "partial" means known remaining scope (witness binding
+  `CN-LEDGER-09`/`DC-LEDGER-05`, `DC-DIFF-01` → Stream 1; `CN-EPOCH-01`/`DC-LEDGER-04` → Stream 2;
+  `DC-CONSENSUS-02`,`CN-CRYPTO-02`,`CN-STORE-02`,`T-ERR-01`); flipping needs the scope closed, not a gate.
+- `CN-LEDGER-07` (1 test) + `CN-SNAPSHOT-01` (code_locus "TBD") — not flip-ready (thin / unrecorded locus).
+- The ~99 constitutional umbrellas (`CN-LEDGER-03`, `CN-REL-*`, `T-*` core, `OP-*`, …) stay
+  `declared` — flipping them would overstate; their enforcement is the SUM of sub-rules + the
+  stream work. Real behavioral gaps routed: `DC-NODE-19` → Stream 2; `CN-PLUTUS-*`/`CN-LEDGER-*`
+  validation → Stream 1.
+
+**Stream 3 is complete:** every genuinely-complete-but-ungated rule is now gated + flipped; every
+other open rule is honestly classified + routed (no umbrella flipped to look greener). Proceed to
+Stream 1.
+
 ---
 
 ## Stream 1 — Differential validation agreement + false-accept hunt  *(SECOND; bounty #1, local)*
