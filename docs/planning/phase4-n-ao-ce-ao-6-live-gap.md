@@ -233,7 +233,38 @@ X-or-descendant OR ≥1 admitted descendant from X while peer ahead). Strict wit
 
 **Classification of run 1: strong live fork-switch evidence; insufficient for the flip; failure reason =
 switched + admitted X but no post-switch descendant admitted before re-entering fork-choice.** Preserved
-outside the repo at `~/.cardano-ceai6/ao-s10-run1-FORKSWITCH-noext-conv.jsonl`. Remaining: a fresh-venue
-transcript where Ade **extends** the adopted winner (≥1 descendant) — re-running (the 2026-06-12 proof run did
-exactly this: 16 admits + agreed@480, so it is achievable; the variable is the winner staying dominant after
-the switch so Ade follows it forward rather than oscillating).
+outside the repo at `~/.cardano-ceai6/ao-s10-run1-FORKSWITCH-noext-conv.jsonl`.
+
+### Run-1 root-cause diagnosis (2026-06-13): NOT a wire-delivery gap — a post-switch chain HOLE on the winner
+
+CN-CONS-03 is **convergence**, not safe-adopt, so the proof must include Ade **continuing on** the selected
+branch (item #10). Run 1 stalls at #10. Decisive transcript evidence (`needs_fork_choice` carries
+`{peer, slot, hash}`; `block_received` is per-peer):
+
+- **The wire DELIVERS the winner's descendants.** `block_received` from cn2 (`:6002`) = `{…249, 298, 388,
+  422, 459}` — 388/422/459 are all **> X=298**, fetched and received. So there is **no re-intersect /
+  descendants-lost-on-the-wire gap** (an earlier sub-agent hypothesis — REFUTED by the transcript).
+- **The received descendants do not admit.** cn2's 388, 422, 459 each triggered `needs_fork_choice`
+  (classified **Competing**, not `LinearExtend`), and there are **0 post-switch `lca_discovered`** (both
+  `lca_discovered` are pre-switch). `classify_receive` needs `388.prev == tip(298).hash`; the LCA walk needs
+  to traverse `388 → … → durable`. **Both failed** ⇒ **`388.prev` is a cn2 block Ade does NOT have** — a
+  **hole in cn2's chain** between the adopted tip (298) and the incoming descendant (388). Ade can neither
+  `LinearExtend` (388 doesn't chain to 298) nor fork-choice-bridge (the walk hits the missing block →
+  `BranchGap` → no-op). Stuck at 298; both peers pile up blocks (24 cn1 + 3 cn2 `needs_fork_choice`, all
+  walk-fail) while Ade stays at 298 (`lagging`).
+
+**OPEN (S11 entry proof obligation — must instrument, NOT guess):** WHY is the intermediate cn2 block missing
+from Ade's store/cache? Candidates: the wire pump skips blocks (fetches an announced tip vs every sequential
+RollForward); the rollback during the switch dropped the bridge; the S7 branch cache evicted it; a switch
+race. A targeted instrumented diagnostic (WPDIAG-style — the discipline that resolved the peer-attribution
+bug) must log, for cn2's post-switch blocks: actual `prev_hash`, `block_no`, durable tip, and the walk's exact
+failure point — BEFORE any fix is scoped.
+
+### Next slice: S11 — Post-ForkChoiceWin forward-follow continuation
+
+Primary invariant (declared at scope): after a `ForkChoiceWin` adoption, Ade's participant path continues
+requesting/receiving/**admitting** descendants of the adopted winning branch, rather than stalling at the
+adopted tip or re-entering fork-choice churn before following forward. Entry gate = the instrumented
+confirmation above. Fix scoped ONLY to the confirmed cause (e.g. gap-fill block-fetch of the winner's range
+between adopted tip and incoming descendant, or a pump sequencing fix). Then re-run CE-AO-6; flip CN-CONS-03
+only on a full transcript (switch + ≥1 admitted descendant of X OR agreed-at-descendant, no diverged).
