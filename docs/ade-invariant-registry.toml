@@ -917,7 +917,7 @@ cross_ref = ["T-CORE-02", "DC-PROTO-01", "DC-PROTO-06", "DC-CONS-07", "DC-CONS-0
 code_locus = "crates/ade_runtime/src/consensus/chain_selector.rs, crates/ade_core_interop/src/lib.rs, crates/ade_core_interop/src/bin/live_consensus_session.rs"
 tests = ["consensus::chain_selector::tests::header_arrival_updates_state_and_selector", "consensus::chain_selector::tests::rollback_walks_back_via_recent_snapshots", "consensus::chain_selector::tests::rollback_to_block_older_than_snapshots_rejected", "consensus::chain_selector::tests::epoch_boundary_emits_no_event", "cardano_node_session_sustained_window"]
 ci_script = "ci/ci_check_no_async_in_blue.sh"
-status = "declared"
+status = "enforced"
 evidence = ["crates/ade_runtime/src/consensus/chain_selector.rs is the GREEN orchestrator that bridges BLUE ade_core::consensus transitions to RED N-A network inputs; BLUE never receives sockets or tokio types — verified by code_locus partitioning and ci_check_no_async_in_blue.sh", "crates/ade_core_interop is the RED live-peer driver crate; it depends on ade_core only via the typed Orchestrator surface and never on internal BLUE modules"]
 strengthened_in = ["PHASE4-N-A", "PHASE4-N-B"]
 
