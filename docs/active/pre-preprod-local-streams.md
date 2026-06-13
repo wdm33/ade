@@ -130,6 +130,25 @@ false-accept hunt. Cheapest venue; catches the release-blocker before preprod.
 negative corpus with zero false-accepts; witness-binding completeness (incl. required-signers)
 enforced per era with gates.
 
+### Stream-1 progress (2026-06-13)
+
+Foundation confirmed pre-existing: 10,500-block × 7-era differential verdict agreement + a 4-class
+admission adversarial false-accept corpus + per-rule tx/conservation/witness adversarial corpora.
+
+- **Slice C — double-spend gap closed** (`91f63195`). `CN-LEDGER-08` ("no input consumed more than
+  once") had ZERO tests. Added `adversarial_double_spend_consumed_input_rejects_bad_inputs` (contrast:
+  first spend accepted; re-spend of a consumed/absent input → `BadInputs` via `check_inputs_present`)
+  + F7 in the shared `adversarial_corpus()` (corpus-wide no-false-accept + replay sweeps). NOT flipped
+  — `CN-LEDGER-07/08` are universal ledger invariants; a finite corpus ≠ complete (conservative bar).
+- **Slice B — required-signer closure gate** (this commit). New `ci_check_required_signer_closure.sh`
+  locks the closed-per-era enumeration: `SignerSource` closed + complete (all 6 sources) + era-fail-
+  closed (`UnsupportedEra`), witness/closure-error sums closed; self-testing. Recorded on
+  `CN-LEDGER-09`/`DC-LEDGER-05` ci_scripts. NOT flipped — the per-era binding completeness (Byron
+  TxWitness / Shelley bootstrap / Alonzo redeemers vs the comprehensively-tested Conway path) is the
+  remaining scope; both stay `partial`.
+- **Slice A — Plutus/script differential** (remaining): the hardest, partially externally-gated by the
+  CE-88 aiken `validity_range` bug. Not yet started.
+
 ---
 
 ## Stream 2 — Epoch transition  *(THIRD; rung-1 remainder, local single-producer)*
