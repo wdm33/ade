@@ -2039,3 +2039,370 @@ async fn live_fetch_short_range_rejected_before_commit() {
     assert!(wal.read_all().unwrap().is_empty());
     assert!(fence, "fence held");
 }
+
+// ---------- bridge-gap fault-injection harness (RED / test-only) ----------
+//
+// HARD PROHIBITION: No harness-injected ordering may ever be used as evidence
+// that a peer behaved this way in production. This is ONLY a regression test for
+// Ade's RESPONSE to a missing post-fork-switch bridge (DC-NODE-39 / S11). The
+// injecting source fabricates a delivery order (withhold the bridge Y, deliver
+// the later descendant Z out of order, release Y on demand) purely to drive
+// Ade's receive path into the missing-bridge state deterministically. It is
+// `#[cfg(test)]`-scoped, never constructible from production code, and grants no
+// authority: BLUE/GREEN authority (classify_receive, the fork-choice dispatch,
+// the floor, the forge fence) is byte-unchanged and is what these tests observe.
+//
+// The NEW value over the existing direct-dispatch S11 tests
+// (`post_switch_missing_bridge_emits_structured_and_holds_fence`,
+// `late_bridge_clears_hold_on_progress`, which call dispatch_competing_fork_choice
+// DIRECTLY via run_participant_sync with a single in-memory item): this drives the
+// bridge gap through the FULL WirePump receive path
+// (mpsc -> NodeBlockSource::from_wire_pump -> pump_lookahead -> next_item ->
+// run_participant_sync -> classify_receive -> resolve_disposition ->
+// pump_block(LinearExtend) | dispatch_competing_fork_choice(Competing) -> floor)
+// with realistic withhold/deliver/release ORDERING -- proving Ade's end-to-end
+// response, not just the dispatch unit. No production seam is added: the harness
+// feeds the EXISTING public `NodeBlockSource::from_wire_pump` over a real tokio
+// channel (the same source the live wire pump fills), so the receive path is the
+// production WirePump arm, not a test-only NodeBlockSource variant.
+
+use ade_runtime::admission::AdmissionPeerEvent;
+use tokio::sync::mpsc;
+
+/// The fabricated delivery rule. `HoldFirstDescendantAfter` withholds the FIRST
+/// queued block whose `prev_hash == adopted_tip_hash` (the bridge `Y` / "X+1", a
+/// `LinearExtend` of the adopted tip X) while delivering everything after it (the
+/// later descendant `Z` / "X+2", whose parent chain therefore cannot reach a
+/// durable ancestor until Y arrives). The withheld Y is released on demand via
+/// [`BridgeGapInjectingSource::release_held`].
+#[derive(Debug, Clone)]
+enum BridgeGapRule {
+    HoldFirstDescendantAfter { adopted_tip_hash: Hash32 },
+}
+
+/// RED / test-only injecting source. Owns an ordered synthetic event queue
+/// (hermetic corpus block bytes -- NO live peer) plus the [`BridgeGapRule`], and
+/// builds a production `NodeBlockSource::WirePump` per drain carrying exactly the
+/// events the rule currently permits. The withheld bridge `Y` is parked until
+/// `release_held()` requeues it at the FRONT of the next drain (the bridge
+/// "arriving late"). `Z` is never re-ordered ahead of `Y` by the harness: the
+/// SECOND drain delivers Y first, then any still-pending descendants -- so any
+/// out-of-order admission of Z before Y would be Ade's own behavior, which the
+/// tests assert never happens.
+struct BridgeGapInjectingSource {
+    /// Ordered, not-yet-delivered synthetic blocks (peer, decoded prev_hash, bytes).
+    inner: std::collections::VecDeque<(String, PrevHash, Vec<u8>)>,
+    rule: BridgeGapRule,
+    /// The bridge `Y` withheld by the rule on the first drain; `None` until the
+    /// rule fires, then `Some` until `release_held()` is called.
+    held: Option<(String, PrevHash, Vec<u8>)>,
+    /// Whether the rule has already fired (it holds the FIRST matching descendant
+    /// only -- a single bridge gap, not every linear extension).
+    fired: bool,
+}
+
+impl BridgeGapInjectingSource {
+    /// Build from an ordered list of synthetic `(peer, bytes)` blocks. `prev_hash`
+    /// is derived by decoding each block once (the same `decode_block` the receive
+    /// path uses), so the rule matches on Ade's real parsed parent link.
+    fn new(blocks: Vec<(String, Vec<u8>)>, rule: BridgeGapRule) -> Self {
+        let inner = blocks
+            .into_iter()
+            .map(|(peer, bytes)| {
+                let prev = decode_block(&bytes).expect("decode synthetic block").prev_hash;
+                (peer, prev, bytes)
+            })
+            .collect();
+        Self {
+            inner,
+            rule,
+            held: None,
+            fired: false,
+        }
+    }
+
+    /// Produce the production WirePump `NodeBlockSource` for ONE drain. Applies the
+    /// rule (withholding the bridge `Y` on its first match), pushes the permitted
+    /// events into a real bounded tokio channel in order, and drops the sender so
+    /// the drain terminates cleanly once the buffered events are consumed (the
+    /// exact `tx.send(..); drop(tx)` shape `next_item`/`pump_lookahead` expect).
+    /// Drives the genuine WirePump arm -- not a test-only NodeBlockSource variant.
+    async fn drain_source(&mut self) -> NodeBlockSource {
+        let (tx, rx) = mpsc::channel::<AdmissionPeerEvent>(64);
+        let queued = std::mem::take(&mut self.inner);
+        for (peer, prev, bytes) in queued {
+            // Closed rule dispatch -- whether THIS block is the bridge to withhold.
+            let withhold = !self.fired
+                && match &self.rule {
+                    BridgeGapRule::HoldFirstDescendantAfter { adopted_tip_hash } => {
+                        matches!(&prev, PrevHash::Block(h) if h == adopted_tip_hash)
+                    }
+                };
+            if withhold {
+                // Withhold the bridge Y; everything after it still flows.
+                self.held = Some((peer, prev, bytes));
+                self.fired = true;
+                continue;
+            }
+            tx.send(AdmissionPeerEvent::Block {
+                peer,
+                block_bytes: bytes,
+            })
+            .await
+            .expect("buffer synthetic block");
+        }
+        drop(tx);
+        NodeBlockSource::from_wire_pump(rx)
+    }
+
+    /// Release the withheld bridge `Y`, requeuing it at the FRONT of the next
+    /// drain (the late-arriving bridge). A no-op if nothing is held.
+    fn release_held(&mut self) {
+        if let Some(held) = self.held.take() {
+            self.inner.push_front(held);
+        }
+    }
+}
+
+/// Build the bridge-gap fixture over the Conway corpus, mirroring
+/// `late_bridge_clears_hold_on_progress`: a durable tip X stored under the bridge
+/// `Y`'s `prev_hash` (so Y is a `LinearExtend` of X), and a distinct competing `Z`
+/// whose parent is neither durable nor the bridge. Returns
+/// `(db, fwd, x_hash, y_bytes, z_bytes, z_hash)`.
+fn bridge_gap_fixture(
+    c: &ConwayValidityCorpus,
+) -> (InMemoryChainDb, ForwardSyncState, Hash32, Vec<u8>, Vec<u8>, Hash32) {
+    // Y (= "X+1") -- a corpus block we admit as a LinearExtend of a synthesized
+    // durable tip X (X is stored under Y's prev_hash, one block below Y).
+    let y_bytes = pick_lightest(c);
+    let y = decode_block(&y_bytes).expect("decode Y");
+    let y_prev = match &y.prev_hash {
+        PrevHash::Block(h) => h.clone(),
+        PrevHash::Genesis => panic!("Y must carry a Block prev_hash"),
+    };
+    // Z (= "X+2") -- a DIFFERENT corpus block, competing (its parent is absent
+    // from both the branch cache and the durable store until Y bridges). Its hash
+    // differs from Y and from the durable tip X.
+    let z_bytes = c
+        .blocks
+        .iter()
+        .find(|b| {
+            let d = decode_block(b).expect("decode");
+            d.block_hash != y.block_hash && d.block_hash != y_prev
+        })
+        .expect("a second distinct corpus block")
+        .clone();
+    let z = decode_block(&z_bytes).expect("decode Z");
+
+    let db = InMemoryChainDb::new();
+    // The durable tip X = Y's parent (stored by hash; bytes irrelevant). Its slot
+    // is strictly below Y; its block_no is Y.block_no - 1 (so Y linearly extends).
+    let tip_slot = y.header_input.slot.0.saturating_sub(1);
+    let tip_block_no = y.header_input.block_no.0.saturating_sub(1);
+    db.put_block(&StoredBlock {
+        hash: y_prev.clone(),
+        slot: SlotNo(tip_slot),
+        bytes: vec![0xAB; 8],
+    })
+    .unwrap();
+    // fwd reflects the durable tip X: corpus epoch nonce (so Y's header VRF
+    // validates on the same basis as the cold-start admit), last_block_no/slot = X.
+    let fwd = {
+        let mut s = PraosChainDepState::empty();
+        s.epoch_nonce = Nonce(Hash32(c.epoch_nonce));
+        s.evolving_nonce = Nonce(Hash32(c.epoch_nonce));
+        s.last_block_no = Some(ade_types::BlockNo(tip_block_no));
+        s.last_slot = Some(SlotNo(tip_slot));
+        ForwardSyncState::new(
+            ReceiveState::new(LedgerState::new(CardanoEra::Conway), s),
+            fingerprint(&LedgerState::new(CardanoEra::Conway)).combined,
+            SnapshotCadence::DEFAULT,
+        )
+    };
+    // Z must genuinely be a bare competing block (its parent is NOT the durable
+    // tip), so it sets the hold rather than linearly extending.
+    assert_ne!(
+        z.prev_hash,
+        PrevHash::Block(y_prev.clone()),
+        "Z must be competing (parent != durable tip), not a linear extend of X"
+    );
+    (db, fwd, y_prev, y_bytes, z_bytes, z.block_hash)
+}
+
+#[tokio::test]
+async fn bridge_gap_injection_emits_missing_bridge() {
+    // Drive the FULL WirePump receive path with a fabricated bridge gap: the
+    // durable tip X is adopted; the source WITHHOLDS the bridge Y (prev == X) and
+    // DELIVERS the later descendant Z out of order. Ade must emit a structured
+    // closed missing_bridge (BranchGap), NOT admit Z (durable tip + WAL unchanged),
+    // set the hold, and HOLD the forge fence -- never a silent drop.
+    let (c, view) = corpus_view();
+    let (db, mut fwd, x_hash, y_bytes, z_bytes, z_hash) = bridge_gap_fixture(&c);
+    let tip_before = db.tip().unwrap().unwrap();
+    assert_eq!(tip_before.hash, x_hash, "durable tip starts at X");
+
+    // The source delivers [Y, Z] but the rule withholds Y (prev == X). Only Z
+    // reaches the drain -- a competing block whose bridge is absent.
+    let mut injector = BridgeGapInjectingSource::new(
+        vec![
+            ("peer-1".to_string(), y_bytes),
+            ("peer-1".to_string(), z_bytes),
+        ],
+        BridgeGapRule::HoldFirstDescendantAfter {
+            adopted_tip_hash: x_hash,
+        },
+    );
+
+    let mut wal = VecWal::default();
+    let mut pending = false;
+    let mut pending_switch: Option<ade_node::selector_state::PendingForkSwitch> = None;
+    let mut pending_missing_bridge: Option<MissingBridgeReason> = None;
+    let buf = SharedBuf::default();
+    let mut ev = evidence_over(&buf);
+
+    let mut src = injector.drain_source().await;
+    let result = run_participant_sync(
+        &mut src,
+        &mut fwd,
+        &db,
+        &mut wal,
+        &corpus_schedule(),
+        &view,
+        &mut pending,
+        SecurityParam(2160),
+        &mut pending_switch,
+        &mut pending_missing_bridge,
+        Some(&mut ev),
+    )
+    .await;
+
+    // A structured fail-closed HOLD, not a node-halting error (the drain completes).
+    assert!(
+        result.is_ok(),
+        "the bridge gap is a structured hold through the full receive path: {result:?}"
+    );
+    let out = buf.text();
+    // The withheld bridge Y was never delivered, so Z is the only peer input.
+    assert!(out.contains(r#""event":"block_received""#), "Z recorded as peer input: {out}");
+    // (1) a structured closed missing_bridge{branch_gap} -- the receive path routed
+    // Z (Competing) to the dispatch, which walked to a BranchGap (Y absent).
+    assert!(
+        out.contains(r#""event":"missing_bridge""#),
+        "the missing bridge MUST surface the structured event through the full path: {out}"
+    );
+    assert!(
+        out.contains(r#""reason":"branch_gap""#),
+        "the absent bridge maps to the closed branch_gap discriminant: {out}"
+    );
+    // (2) Z is NOT admitted -- no block_admitted, durable tip + WAL byte-unchanged.
+    assert!(
+        !out.contains(r#""event":"block_admitted""#),
+        "the un-bridgeable Z is NOT admitted: {out}"
+    );
+    assert_eq!(db.tip().unwrap().unwrap(), tip_before, "durable tip unchanged (still X)");
+    assert_ne!(db.tip().unwrap().unwrap().hash, z_hash, "Z never became the tip");
+    assert!(wal.read_all().unwrap().is_empty(), "no durable WAL mutation");
+    assert!(pending_switch.is_none(), "missing bridge is NOT a fork-switch decision");
+    // (3) the hold is set with the closed reason -> (4) the forge fence is HELD.
+    assert_eq!(
+        pending_missing_bridge,
+        Some(MissingBridgeReason::BranchGap),
+        "the missing-bridge HOLD is set"
+    );
+    assert!(
+        !fork_switch_fence_resolved(&pending_switch, &pending_missing_bridge, true),
+        "an unresolved missing bridge HOLDS the forge fence even when caught up"
+    );
+}
+
+#[tokio::test]
+async fn late_bridge_recovers_on_progress() {
+    // Continue the bridge-gap scenario: RELEASE the withheld Y and drive the source
+    // again. Y must admit as a LinearExtend (prev == X), the missing-bridge hold
+    // CLEARS only on that real forward progress, the fence-resolve predicate can
+    // become true, and Z is never admitted out of order (before Y).
+    let (c, view) = corpus_view();
+    let (db, mut fwd, x_hash, y_bytes, z_bytes, z_hash) = bridge_gap_fixture(&c);
+    let y_hash = decode_block(&y_bytes).unwrap().block_hash;
+
+    let mut injector = BridgeGapInjectingSource::new(
+        vec![
+            ("peer-1".to_string(), y_bytes),
+            ("peer-1".to_string(), z_bytes),
+        ],
+        BridgeGapRule::HoldFirstDescendantAfter {
+            adopted_tip_hash: x_hash.clone(),
+        },
+    );
+
+    let mut wal = VecWal::default();
+    let mut pending = false;
+    let mut pending_switch: Option<ade_node::selector_state::PendingForkSwitch> = None;
+    let mut pending_missing_bridge: Option<MissingBridgeReason> = None;
+
+    // Drain 1: Y withheld, Z delivered -> the missing-bridge HOLD is set.
+    let mut src1 = injector.drain_source().await;
+    run_participant_sync(
+        &mut src1,
+        &mut fwd,
+        &db,
+        &mut wal,
+        &corpus_schedule(),
+        &view,
+        &mut pending,
+        SecurityParam(2160),
+        &mut pending_switch,
+        &mut pending_missing_bridge,
+        None,
+    )
+    .await
+    .expect("drain 1 holds");
+    assert_eq!(
+        pending_missing_bridge,
+        Some(MissingBridgeReason::BranchGap),
+        "drain 1 sets the missing-bridge HOLD"
+    );
+    assert_eq!(db.tip().unwrap().unwrap().hash, x_hash, "Z did not advance the durable tip");
+    assert!(wal.read_all().unwrap().is_empty(), "drain 1 made no durable mutation");
+
+    // Release the bridge Y -> it requeues at the FRONT of the next drain.
+    injector.release_held();
+
+    // Drain 2: Y (the late bridge) delivered first -> admits as LinearExtend +
+    // CLEARS the hold. (The injector requeues only Y; the still-pending queue is
+    // empty here, so Y is the sole drain-2 event -- the harness never re-orders Z
+    // ahead of Y.)
+    let mut src2 = injector.drain_source().await;
+    run_participant_sync(
+        &mut src2,
+        &mut fwd,
+        &db,
+        &mut wal,
+        &corpus_schedule(),
+        &view,
+        &mut pending,
+        SecurityParam(2160),
+        &mut pending_switch,
+        &mut pending_missing_bridge,
+        None,
+    )
+    .await
+    .expect("drain 2 admits the late bridge");
+
+    // The LinearExtend admit cleared the hold (the bridge arrived -> forward progress).
+    assert_eq!(
+        pending_missing_bridge, None,
+        "a successful LinearExtend admit clears the missing-bridge hold"
+    );
+    // Y is the durable tip; Z (the earlier un-bridgeable competing block) was NOT
+    // admitted out of order.
+    let tip = db.tip().unwrap().unwrap();
+    assert_eq!(tip.hash, y_hash, "Y admitted as the durable tip");
+    assert_ne!(tip.hash, z_hash, "the un-bridgeable Z was never admitted out of order");
+    // With no pending decision and the hold cleared, the fence-resolve predicate
+    // can become true once caught up.
+    assert!(
+        fork_switch_fence_resolved(&pending_switch, &pending_missing_bridge, true),
+        "hold cleared + no pending switch + caught up -> the forge fence can resolve"
+    );
+}

@@ -7663,7 +7663,7 @@ run 1 surfaced (adopted cn2@298, received 388 but missed the bridge ~340, stalle
 source = "docs/planning/phase4-n-ao-ce-ao-6-live-gap.md (run-1 root-cause finding) + docs/clusters/PHASE4-N-AO/S11-post-forkchoicewin-forward-follow.md"
 cross_ref = ["DC-NODE-24", "DC-NODE-25", "DC-NODE-28", "DC-NODE-29", "DC-NODE-38", "DC-EVIDENCE-05", "DC-CONS-03", "CN-CONS-01", "CN-CONS-03"]
 code_locus = "CANDIDATE (pending S11 Phase-1 diagnosis): the fix locus is decided by the instrumented diagnostic (peer-fault vs Ade-fault). Surfaces in scope: crates/ade_runtime/src/admission/wire_pump.rs (RollForward serve/follow), crates/ade_node/src/node_sync.rs (classify_receive), crates/ade_node/src/lca_walk.rs (walk_to_durable_lca BranchGap), crates/ade_node/src/node_lifecycle.rs (post-switch follow state + apply_fork_switch intersect re-point + the fail-closed MissingBridge decision). BLUE select_best_chain / apply_fork_switch adoption authority UNCHANGED."
-tests = ["post_switch_admits_winner_descendant_x_plus_1", "post_switch_missing_bridge_emits_structured_and_holds_fence", "missing_bridge_wrong_parent_maps_closed_code", "late_bridge_clears_hold_on_progress", "missing_bridge_reason_maps_lca_error_to_closed_discriminant"]
+tests = ["post_switch_admits_winner_descendant_x_plus_1", "post_switch_missing_bridge_emits_structured_and_holds_fence", "missing_bridge_wrong_parent_maps_closed_code", "late_bridge_clears_hold_on_progress", "missing_bridge_reason_maps_lca_error_to_closed_discriminant", "bridge_gap_injection_emits_missing_bridge", "late_bridge_recovers_on_progress"]
 ci_scripts = ["ci/ci_check_missing_bridge_fail_closed.sh"]
 status = "declared"
 introduced_in = "PHASE4-N-AO"
