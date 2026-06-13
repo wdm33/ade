@@ -7699,3 +7699,33 @@ introduced_in = "PHASE4-N-AO"
 strengthened_in = []
 attack_rationale = "Without retaining the rolled-back blocks, the LCA walk cannot reconstruct a competing branch that descends through Ade's OWN recently-rolled-back chain, so every such block fails BranchGap -> MissingBridge -> fence-held. For a follower this is harmless (clears on each winner admit); for a PRODUCER it is a liveness denial -- normal competitor traffic after a fork-switch would intermittently hold the forge fence. Retaining the rolled-back blocks as EVIDENCE (not authority) restores evaluability without widening trust: the retention is self-binding (a peer cannot inject a lying header under a hash it doesn't claim), k-bounded (no unbounded memory / no over-k branch), and never the durable anchor (the LCA is still ChainDb-only, so a retained block cannot redirect selection or become a rollback target), and never bypasses S2/S4 (a retained header still validates before any adoption). The narrow retention surface -- exactly the blocks Ade rolled back -- keeps the change auditable vs caching every received header (broader trust/eviction surface) or full per-peer candidate tracking (a larger architectural change that would destabilize S1-S12)."
 evidence_notes = "Declared at PHASE4-N-AO S13. Motivated by the 2026-06-13 S11 floor-fires-live grind (preserved ~/.cardano-ceai6/ao-s11-floor-fires-live-{conv.jsonl,FFDIAG.txt}): a converging run emitted 23 missing_bridge events ALL from the LOSER cn1, all branch_gap, with cn1 block_no fully CONSECUTIVE 9->37 (Ade received the entire branch). Root: cn1 bno10-14 LinearExtend-admitted pre-switch, rolled back on cn2 adoption, never in the competing-only S7 cache -> the walk for cn1 bno15+ hits the rolled-back bno14 -> BranchGap. Enforced at S13 close via 5 hermetic tests (rollback_retains_removed_blocks_for_lca_walk, retained_blocks_are_not_anchors, retained_blocks_are_k_bounded, retained_block_hash_self_binds, genuine_gap_still_missing_bridge) + ci_check_rollback_retention_evidence.sh + the S12 harness still emitting MissingBridge on a genuine gap + a live run with the over-fire gone."
+
+[[rules]]
+id = "DC-NODE-41"
+tier = "derived"
+statement = """
+Missing-bridge range re-fetch for winner-descendant recovery (PHASE4-N-AO S14). When a post-ForkChoiceWin
+WINNING peer (the peer Ade just adopted from) presents a descendant whose parent chain is missing, Ade must
+EITHER (a) actively re-fetch the missing range from the adopted tip to that descendant via BlockFetch
+RequestRange(X+1..descendant) to that winning peer and admit it IN PARENT-LINK ORDER through pump_block (each
+body parent-link + body-hash validated before admit; X+1 then X+2 ... then the descendant), OR (b) remain
+fail-closed with a structured MissingBridge (closed failure code). It must NOT passively stall forever (the
+DC-NODE-39 floor alone cannot recover a bridge ChainSync already streamed past -- each block is delivered once,
+never re-sent), and must NOT admit out of order. The re-fetch is byte-only (BlockFetch transports bytes, NOT
+truth -- a lying/short/unservable range leaves the structured hold, no admit, no mutation), targets ONLY the
+winning peer (a non-winning-peer gap takes the unchanged floor path -- no fetch spam on loser orphans), is
+bounded-retry (deterministic, no spin), and clears the hold + fence ONLY on real admitted progress. S14 is
+RECOVERY, not selection: S3 (select_best_chain, DC-CONS-03) already decided the winner; S14 never decides a
+branch wins. pump_block remains the sole admit (BLUE unchanged); the BlockFetch byte machinery is reused from
+S6 (prefetch_branch_bodies). REPLAY-EQUIVALENT: same served range -> same admitted post-state.
+"""
+source = "docs/planning/phase4-n-ao-ce-ao-6-live-gap.md (S11 Fault-2 finding) + docs/clusters/PHASE4-N-AO/S14-missing-bridge-range-refetch.md"
+cross_ref = ["DC-NODE-39", "DC-NODE-40", "DC-NODE-37", "DC-NODE-24", "DC-NODE-25", "DC-CONS-03", "CN-CONS-01", "CN-CONS-03"]
+code_locus = "CANDIDATE (pending S14 impl): trigger in crates/ade_node/src/node_lifecycle.rs dispatch_competing_fork_choice (the MissingBridge arm, gated on the recorded post-switch winning_peer + adopted tip from PendingForkSwitch.winning_peer); re-fetch reuses prefetch_branch_bodies (node_lifecycle.rs:3539, S6 BlockFetch RequestRange byte-only); admit via the existing validate->pump_block path; closed range_refetch_started/completed + failure-code evidence in the AdmissionLogEvent vocabulary + convergence_evidence.rs. BLUE validation/select/apply/pump_block UNCHANGED."
+tests = []
+ci_scripts = []
+status = "declared"
+introduced_in = "PHASE4-N-AO"
+strengthened_in = []
+attack_rationale = "The DC-NODE-39 floor is safe (no mis-admit, no silent stall) but a passive hold cannot recover a bridge ChainSync already passed: a winning-peer descendant that arrived before its never-received bridge strands Ade fail-closed forever -- a liveness denial that, under adversarial or merely unlucky timing, prevents convergence onto the selected winning chain. Active range re-fetch closes it WITHOUT widening trust: the fetch is byte-only (a lying/short range is rejected by parent-link + body-hash validation before any pump_block admit, so a Byzantine peer cannot inject an unvalidated chain), winning-peer-only (S3 already selected, so no loser-orphan turns into a fetch-spam amplifier and no second selector is introduced), bounded-retry (no spin / no resource exhaustion), and clears the hold only on REAL admitted progress (an attempted-but-failed fetch never clears the fence). The floor remains the fail-closed fallback when the range cannot be served."
+evidence_notes = "Declared at PHASE4-N-AO S14. Motivated by the S12-harness-driven Fault-2 finding: late_bridge_recovers_on_progress admits the late bridge (tip==y_hash) but the un-bridgeable descendant is NEVER admitted (tip!=z_hash), and the dispatch MissingBridge arm issues NO re-fetch -- combined with ChainSync single-delivery, the passive floor cannot converge to a winner-descendant whose bridge was never received (run-1's stall). Enforced at S14 close via 6 hermetic tests (missing_bridge_triggers_range_refetch, refetched_bridge_admits_in_order, short_refetch_keeps_hold, lying_refetch_body_rejected, refetch_failure_structured, bounded_retry) + ci_check_missing_bridge_refetch.sh + a live CE-AO-6 run showing range_refetch_started/completed -> bridge+descendant admitted -> convergence. CN-CONS-03 flips only after the live run."
