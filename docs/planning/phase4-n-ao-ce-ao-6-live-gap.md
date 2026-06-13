@@ -208,3 +208,32 @@ The 2026-06-12 diverged attempt was INVALID — the ~1hr-old venue's producers h
 drift; both stuck at block 12) and both pumps hit `UnsupportedRollbackPoint`, so no fork formed. A clean
 fresh-venue diverged run is the remaining live confirmation before any `CN-CONS-03` flip. Fix + same-chain
 proof diagnostics: `~/.cardano-ceai6/f-conv.jsonl` (4+4 per-peer) + `ao-wpdiag.*` (outside the repo).
+
+## S10 run 1 (2026-06-13): a REAL fork-switch fired — strong evidence, but NOT a CN-CONS-03 flip under the continuity gate
+
+With the S10 binary (`811c8114`, `prev_hash` on `block_admitted`), a fresh-venue diverged run produced a
+**genuine fork-switch**: Ade followed cn1 to slot **367**, `select_best_chain` chose **cn2's branch (tip
+298)**, Ade **rolled back 367 → anchor 249** and **adopted cn2's branch to X=298**
+(`fork_switch_applied{fork_choice_win}` fsid `9dbb0569` → `block_admitted{298}` with a real
+`prev_hash_hex` → `lagging{298, peer 388}`), **0 diverged**. This proves the hardest part: **SELECT can
+abandon its current longer-slot chain and adopt the fork-choice-winning branch.**
+
+**Gate verdict: `FailNoTerminal` — correctly NOT a flip.** Ade adopted X@298 but admitted **0 descendants**
+of X before re-entering fork-choice (`needs_fork_choice` at slot 960, outside the 200-slot window, as cn1 kept
+competing). The post-switch state is a validated prefix of the winner (lagging 298 vs peer 388), but the
+continuity gate requires Ade to have **stayed on AND extended** the branch: `agreement{agreed}` at
+X-or-descendant **OR** ≥1 admitted descendant of X while the peer remains ahead.
+
+**Decision (user, 2026-06-13): keep the ≥1-descendant terminal — do NOT relax to a 0-descendant prefix.**
+Rationale: a 0-descendant adopt is already proven by S9's fork-switch evidence (`DC-EVIDENCE-04`); S10's
+value-add (`DC-EVIDENCE-05`) is proving Ade **continued on** the adopted branch. Accepting 0 descendants would
+make S10 add nothing over S9. Requiring `agreed`-only (exact convergence) was rejected as a return to exact-tip
+flakiness. The bar: `fork_switch_applied` + `block_admitted X` + no diverged + all wins terminal + (agreed at
+X-or-descendant OR ≥1 admitted descendant from X while peer ahead). Strict without being timing-impossible.
+
+**Classification of run 1: strong live fork-switch evidence; insufficient for the flip; failure reason =
+switched + admitted X but no post-switch descendant admitted before re-entering fork-choice.** Preserved
+outside the repo at `~/.cardano-ceai6/ao-s10-run1-FORKSWITCH-noext-conv.jsonl`. Remaining: a fresh-venue
+transcript where Ade **extends** the adopted winner (≥1 descendant) — re-running (the 2026-06-12 proof run did
+exactly this: 16 admits + agreed@480, so it is achievable; the variable is the winner staying dominant after
+the switch so Ade follows it forward rather than oscillating).
