@@ -164,10 +164,17 @@ admission adversarial false-accept corpus + per-rule tx/conservation/witness adv
   OPPOSITE direction (a false-REJECT / `diverge_fail`, inherited from aiken upstream, Conway `Spend`
   only); it blocks CN-PLUTUS-03 / DC-LEDGER-06 (canonical ScriptContext derivation — Ade delegates it
   to aiken), which stay `declared`. A1 (budget) is independent of CE-88.
-- **Slice A remaining:** A2 (lock the proven surface: host-env purity gate → CN-PLUTUS-04; determinism
-  + IOG-conformance budget → CN-PLUTUS-01; wrap the `diverge_pass==0` oracle in a named gate) + A3
-  (broaden the adversarial negative corpus: failing-validator / missing-redeemer / wrong-datum
-  must-reject). **Harness note:** the contiguous Plutus verdict harness currently stops early on a
+- **Slice A3 — adversarial Plutus reject corpus broadened** (this commit). Two new must-reject classes
+  ported from aiken's own vetted vectors (v1.1.21): `failing_validator_must_reject` (a Plutus V1 policy
+  `func main() Bool { false }`, aiken `test_eval_4`) and `extraneous_redeemer_must_reject` (a redeemer
+  with no matching script, aiken `eval_extraneous_redeemer`) — both assert `eval_tx_phase_two` surfaces
+  an error → ledger `Failed` → reject. Added to `ci_check_plutus_budget_cap.sh` (the gate now guards the
+  whole reject corpus: budget / failing-validator / extraneous-redeemer present + not #[ignore]'d).
+  Recorded on CN-PLUTUS-02 + DC-LEDGER-03 (kept declared/partial). Was zero adversarial Plutus reject
+  coverage before A1/A3 (the prior corpora are non-Plutus).
+- **Slice A remaining = A2** (lock the proven surface: host-env purity gate → CN-PLUTUS-04; determinism
+  + IOG-conformance budget → CN-PLUTUS-01; wrap the `diverge_pass==0` oracle in a named gate). **HAS
+  FLIP DECISIONS — bring to user.** **Harness note:** the contiguous Plutus verdict harness currently stops early on a
   cert-state divergence (`StakeAlreadyRegistered`/`StakeNotRegistered` at blocks 1/1/40), so it reaches
   ~0 passing Plutus txs — a pre-existing limitation that weakens the Plutus oracle's reach; worth a
   dedicated look in the broader Stream-1 false-accept hunt.

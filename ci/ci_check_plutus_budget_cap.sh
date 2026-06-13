@@ -72,13 +72,17 @@ grep -Eq '!s\.success' <<< "$LS" \
 grep -Eq 'PlutusEvalOutcome::Failed' <<< "$LS" \
   || fail "ledger missing the Failed rejection path for an over-budget script"
 
-# Adversarial regression test present and actually runs.
-grep -Eq 'fn under_declared_ex_units_must_reject' "$TEST" \
-  || fail "missing the under-declared adversarial regression test"
-ctx="$(grep -B3 'fn under_declared_ex_units_must_reject' "$TEST" || true)"
-if grep -Eq '#\[ignore' <<< "$ctx"; then
-  fail "the under-declared regression test is #[ignore]'d -- it must run in CI"
-fi
+# Adversarial Plutus reject corpus present and actually running (not #[ignore]'d):
+# the under-declared budget false-accept (A1) plus the broader must-reject classes
+# (a validator that returns false; an extraneous redeemer with no matching script).
+for t in under_declared_ex_units_must_reject failing_validator_must_reject extraneous_redeemer_must_reject; do
+  grep -Eq "fn $t" "$TEST" || fail "missing adversarial Plutus reject test: $t"
+  ctx="$(grep -B3 "fn $t" "$TEST" || true)"
+  if grep -Eq '#\[ignore' <<< "$ctx"; then
+    fail "adversarial reject test $t is #[ignore]'d -- it must run in CI"
+  fi
+done
 
 echo "OK: per-script declared ex_units cap enforced in ade_plutus + rejected by the ledger; \
-under-declared false-accept regression-guarded (does not flip CN-PLUTUS-02 / DC-LEDGER-03)"
+Plutus adversarial reject corpus present (budget / failing-validator / extraneous-redeemer); \
+does not flip CN-PLUTUS-02 / DC-LEDGER-03"

@@ -204,3 +204,83 @@ fn under_declared_ex_units_must_reject() {
         s.cpu,
     );
 }
+
+/// Adversarial: a Plutus validator that always evaluates to `false` must be
+/// rejected (phase-2 failure → the ledger maps it to `PlutusEvalOutcome::Failed`,
+/// collateral consumed). Ported from aiken's `test_eval_4` (v1.1.21): a Plutus V1
+/// minting policy compiled from `func main() Bool { false }`. The script logically
+/// fails, so `eval_tx_phase_two` must surface an error — never a successful verdict.
+#[test]
+fn failing_validator_must_reject() {
+    const TX4_HEX: &str = "84A80081825820275B5DA338C8B899035081EB34BFA950B634911A5DD3271B3AD6CF4C2BBA0C50010182825839000AF00CC47500BB64CFFFB783E8C42F746B4E8B8A70EDE9C08C7113ACF3BDE34D1041F5A2076EF9AA6CF4539AB1A96ED462A0300ACBDB65D5821A00111958A1581C1E8BCA1FA1D937F408AFE2FD4DBF343AB7A09CF07984071ED95B3C92A1400A825839000AF00CC47500BB64CFFFB783E8C42F746B4E8B8A70EDE9C08C7113ACF3BDE34D1041F5A2076EF9AA6CF4539AB1A96ED462A0300ACBDB65D51A029F7B29021A0002BC5009A1581C1E8BCA1FA1D937F408AFE2FD4DBF343AB7A09CF07984071ED95B3C92A1400A0B58205013DBE72526511F63B0C4A235FBBC5D09D11D42F310113AAAB1A28E01E0BDE60D81825820275B5DA338C8B899035081EB34BFA950B634911A5DD3271B3AD6CF4C2BBA0C500110825839000AF00CC47500BB64CFFFB783E8C42F746B4E8B8A70EDE9C08C7113ACF3BDE34D1041F5A2076EF9AA6CF4539AB1A96ED462A0300ACBDB65D51A02AF3659111A00041A78A30081825820065DD553FBE4E240A8F819BB9E333A7483DE4A22B65C7FB6A95CE9450F84DFF758401679B607EABEF3DBBC9AC0ABB03AFB3A979EA32243BB5B99E299290D709BB4A6C2AA528C447C2DB610A103CC9C0E7C018CAA4FC8322D8EC217620E6D4BC2EF0B03815453010000322233335734600693124C4C931250010581840100D87980821909611A00094D78F5F6";
+    const INPUTS4_HEX: &str = "8682582075a419179618ca358554fc47aeb33b6c93d12ba8f752495a4e5ef6ea0a1a099a03825820b810e77e706ccaebf7284f6c3d41e2a1eb4af5fabae452618f4175ad1b2aaded03825820975c17a4fed0051be622328efa548e206657d2b65a19224bf6ff8132571e6a50038258207453531a00f98db47c8c2b05e5c38f2c40a0be4f91d42d835bc3bc998b612a8e00825820452b2fc0d170323f86ad1e5b761dcae912774c42c1b1af4de2905a094f2f541403825820275b5da338c8b899035081eb34bfa950b634911a5dd3271b3ad6cf4c2bba0c5001";
+    const OUTPUTS4_HEX: &str = "86825839000af00cc47500bb64cfffb783e8c42f746b4e8b8a70ede9c08c7113acf3bde34d1041f5a2076ef9aa6cf4539ab1a96ed462a0300acbdb65d5821a00412c6aad581c01dd79d464e2446231d662c9422445c4cf709b691baceb8b040a34d4a14d28323232294d6174726978363701581c11638d4d600d32b2849c93314e7e6bc656fded924f30514749e1eb3ea64c28323232294d617472697830014c28323232294d617472697831014d28323232294d61747269783133014d28323232294d61747269783330014d28323232294d61747269783534014d28323232294d6174726978383601581c1e60ac8228a21f6e3685c73970584aa54504a0476c4b66f3ef5c4dd2a14c28323232294d61747269783001581c25da1064122988292665c14259ea26cb4dd96d7f04535125fea248ffa14c28323232294d61747269783001581c46214283f4b5cc5d66836a4fe743e121190f1e5b91448a1b52f1b7bfa14d28323232294d6174726978313801581c4788a484721270845917e0986ab55b51922a46b514eb7a1f871e917ca14d28323232294d6174726978323101581c6ed9951ddcd79c98bc50142ba033890815330d4de1cb4c96870a234ca24c28323232294d617472697830014c28323232294d61747269783101581c6f7fd77c85b9856bdb1cfac1afa90c65d92c3c5e2fcca4a993e7fb52a14d28323232294d6174726978323401581ca07afd05db7f0ccb144052935be97b48593e5c8435f9eb859191de81a34c28323232294d617472697830014c28323232294d617472697831014d28323232294d6174726978323101581ca5ca38805c14270ec4c3c1c2446b28a95324054fac98066c5e82a016a14d28323232294d6174726978313901581ca65e6e94d1a260dbc6c4d9319b45585fa54b83742a33a2c599df56b9a2494265727279436f616c014c426572727954616e67656c6f01581cb3e2625ebd6bd613ce904db9fedb0565eec0671054d30d08bc5edadda44c28323232294d617472697835014d28323232294d61747269783237014d28323232294d61747269783430014d28323232294d6174726978343701581ce3ef435a5910f74d890b2a7cb0d1f7288efc22c75823d57acdab9f52a14d28323232294d6174726978363101825839000af00cc47500bb64cfffb783e8c42f746b4e8b8a70ede9c08c7113acf3bde34d1041f5a2076ef9aa6cf4539ab1a96ed462a0300acbdb65d5821a0011f436a1581c11638d4d600d32b2849c93314e7e6bc656fded924f30514749e1eb3ea14d28323232294d6174726978363801825839000af00cc47500bb64cfffb783e8c42f746b4e8b8a70ede9c08c7113acf3bde34d1041f5a2076ef9aa6cf4539ab1a96ed462a0300acbdb65d5821a0011f436a1581c11638d4d600d32b2849c93314e7e6bc656fded924f30514749e1eb3ea14d28323232294d6174726978343101825839000af00cc47500bb64cfffb783e8c42f746b4e8b8a70ede9c08c7113acf3bde34d1041f5a2076ef9aa6cf4539ab1a96ed462a0300acbdb65d5821a0012378ea1581c2c04f7a15aec58b2bec5dab3d201f3e3898370b98d2f01d4ac8bc270a14d28323232294d6174726978323801825839000af00cc47500bb64cfffb783e8c42f746b4e8b8a70ede9c08c7113acf3bde34d1041f5a2076ef9aa6cf4539ab1a96ed462a0300acbdb65d5821a0011f436a1581c11638d4d600d32b2849c93314e7e6bc656fded924f30514749e1eb3ea14d28323232294d6174726978323101825839000af00cc47500bb64cfffb783e8c42f746b4e8b8a70ede9c08c7113acf3bde34d1041f5a2076ef9aa6cf4539ab1a96ed462a0300acbdb65d51a02b350d1";
+
+    let tx = decode_hex(TX4_HEX);
+    let inputs = split_array_items(&decode_hex(INPUTS4_HEX));
+    let outputs = split_array_items(&decode_hex(OUTPUTS4_HEX));
+    assert_eq!(inputs.len(), outputs.len(), "inputs/outputs must zip");
+    let resolved: Vec<(Vec<u8>, Vec<u8>)> = inputs.into_iter().zip(outputs).collect();
+
+    let result = eval_tx_phase_two(
+        &tx,
+        &resolved,
+        None,
+        (10_000_000_000, 14_000_000),
+        PREVIEW_SLOT_CONFIG,
+    );
+    assert!(
+        result.is_err(),
+        "a Plutus validator that returns false must be rejected, got: {result:?}",
+    );
+}
+
+/// Pull the body's input items (map key 0) out of a full tx CBOR, so a
+/// fixture that resolves its inputs from the body (rather than a separate
+/// array) can be zipped with explicit resolved outputs.
+fn extract_body_inputs(tx_cbor: &[u8]) -> Vec<Vec<u8>> {
+    use ade_codec::cbor::{self, ContainerEncoding};
+    let mut o = 0;
+    cbor::read_array_header(tx_cbor, &mut o).expect("tx array");
+    let n = match cbor::read_map_header(tx_cbor, &mut o).expect("body map") {
+        ContainerEncoding::Definite(n, _) => n,
+        ContainerEncoding::Indefinite => panic!("indefinite body map unsupported in fixture"),
+    };
+    for _ in 0..n {
+        let (key, _) = cbor::read_uint(tx_cbor, &mut o).expect("body key");
+        if key == 0 {
+            return split_array_items(&tx_cbor[o..]);
+        }
+        cbor::skip_item(tx_cbor, &mut o).expect("skip body value");
+    }
+    panic!("tx body has no inputs (key 0)");
+}
+
+/// Adversarial: a transaction carrying an EXTRANEOUS redeemer — one that
+/// resolves to no script — must be rejected. Ported from aiken's
+/// `eval_extraneous_redeemer` (v1.1.21): the tx declares two redeemers but
+/// the witness set provides no script the extra one can bind to, so phase-2
+/// cannot resolve it and must fail rather than silently accept.
+#[test]
+fn extraneous_redeemer_must_reject() {
+    const TXEXT_HEX: &str = "84a70082825820275b5da338c8b899035081eb34bfa950b634911a5dd3271b3ad6cf4c2bba0c5000825820275b5da338c8b899035081eb34bfa950b634911a5dd3271b3ad6cf4c2bba0c50010181825839000af00cc47500bb64cfffb783e8c42f746b4e8b8a70ede9c08c7113acf3bde34d1041f5a2076ef9aa6cf4539ab1a96ed462a0300acbdb65d51a02cf2b47021a0002aa0a0b5820fc54f302cff3a8a1cb374f5e4979e18a1d3627dcf4539637b03f5959eb8565bf0d81825820275b5da338c8b899035081eb34bfa950b634911a5dd3271b3ad6cf4c2bba0c500110825839000af00cc47500bb64cfffb783e8c42f746b4e8b8a70ede9c08c7113acf3bde34d1041f5a2076ef9aa6cf4539ab1a96ed462a0300acbdb65d51a02af51c2111a0003ff0fa40081825820065dd553fbe4e240a8f819bb9e333a7483de4a22b65c7fb6a95ce9450f84dff758402c26125a057a696079d08f2c8c9d2b8ccda9fe7cf7360c1a86712b85a91db82a3b80996b30ba6f4b2f969c93eb50694e0f6ea0bcf129080dcc07ecd9e605f00a049fd87980ff0582840000d879808219044c1a000382d48401001864821903e81903e8068149480100002221200101f5f6";
+    const OUTEXT_HEX: &str = "82825839000af00cc47500bb64cfffb783e8c42f746b4e8b8a70ede9c08c7113acf3bde34d1041f5a2076ef9aa6cf4539ab1a96ed462a0300acbdb65d51a02b3603082581d703a888d65f16790950a72daee1f63aa05add6d268434107cfa5b677121a001e8480";
+
+    let tx = decode_hex(TXEXT_HEX);
+    let inputs = extract_body_inputs(&tx);
+    let outputs = split_array_items(&decode_hex(OUTEXT_HEX));
+    assert_eq!(inputs.len(), outputs.len(), "inputs/outputs must zip");
+    let resolved: Vec<(Vec<u8>, Vec<u8>)> = inputs.into_iter().zip(outputs).collect();
+
+    let result = eval_tx_phase_two(
+        &tx,
+        &resolved,
+        None,
+        (10_000_000_000, 14_000_000),
+        PREVIEW_SLOT_CONFIG,
+    );
+    assert!(
+        result.is_err(),
+        "an extraneous redeemer with no matching script must be rejected, got: {result:?}",
+    );
+}

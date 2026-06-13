@@ -469,7 +469,7 @@ statement = "Tx/block validity agrees with Haskell node on all tested inputs"
 source = "Project constitution §3, T-DET-01, T-ERR-01"
 cross_ref = ["CN-LEDGER-03"]
 code_locus = "crates/ade_ledger/src/byron.rs, crates/ade_ledger/src/rules.rs, crates/ade_ledger/src/plutus_eval.rs"
-tests = ["check_duplicate_inputs_catches_dupes", "resolve_inputs_missing_input", "missing_witnesses_rejected", "all_eras_replay_summary", "all_plutus_boundaries_aggregate_zero_rejections", "plutus_era_contiguous_smoke", "under_declared_ex_units_must_reject"]
+tests = ["check_duplicate_inputs_catches_dupes", "resolve_inputs_missing_input", "missing_witnesses_rejected", "all_eras_replay_summary", "all_plutus_boundaries_aggregate_zero_rejections", "plutus_era_contiguous_smoke", "under_declared_ex_units_must_reject", "failing_validator_must_reject", "extraneous_redeemer_must_reject"]
 ci_script = "ci/ci_check_differential_divergence.sh, ci/ci_check_plutus_budget_cap.sh"
 status = "partial"
 authority_surface = "non-Plutus block/tx acceptance verdicts across 10,500 blocks (all 7 eras); Phase 3 lands: (a) state-backed composer for Alonzo+ with 0 false positives across 2,400 boundary-set txs, (b) Plutus evaluator wired end-to-end (mem=747528 matches aiken oracle on fixture), (c) 72+ mainnet Plutus txs reach the dispatch on 20-block windows, contiguous-corpus harness exists but full 9,436-tx oracle diff (CE-88) deferred to release-gate work"
@@ -1333,7 +1333,7 @@ statement = "Budget exhaustion and script failure must have a single determinist
 source = "classification_table.md §E"
 cross_ref = []
 code_locus = "crates/ade_plutus/src/tx_eval.rs (per-script declared ex_units cap: declared_ex_units_by_pointer derives each redeemer's declared budget; actual<=declared binds PerScriptResult.success); crates/ade_ledger/src/plutus_eval.rs (a script over its declared cap -> PlutusEvalOutcome::Failed)"
-tests = ["under_declared_ex_units_must_reject", "declared_ex_units_array_form_parsed_by_pointer", "declared_ex_units_conway_map_form_parsed_by_pointer", "extract_redeemer_fields_reads_pointer_and_ex_units", "aiken_fixture_tx_evaluates_end_to_end"]
+tests = ["under_declared_ex_units_must_reject", "failing_validator_must_reject", "extraneous_redeemer_must_reject", "declared_ex_units_array_form_parsed_by_pointer", "declared_ex_units_conway_map_form_parsed_by_pointer", "extract_redeemer_fields_reads_pointer_and_ex_units", "aiken_fixture_tx_evaluates_end_to_end"]
 ci_script = "ci/ci_check_plutus_budget_cap.sh"
 status = "declared"
 authority_surface = "Per-script declared-ex_units cap ENFORCED: a script that overruns the ex_units its redeemer declared is rejected, closing the under-declared false-accept (aiken's eval_phase_two_raw caps only at the tx-wide protocol max Ade passes as initial_budget). The CLOSED failure-shape CLASSIFICATION (BudgetExhausted vs ContextBuildFailed vs ExecutionFailed) is not yet wired through to the verdict -- stays declared."
