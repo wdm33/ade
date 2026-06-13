@@ -1319,12 +1319,12 @@ tier = "derived"
 statement = "Same script + same redeemers/datum/context + same cost model must produce identical result and budget accounting"
 source = "classification_table.md §E"
 cross_ref = []
-code_locus = ""
-tests = []
-ci_script = ""
+code_locus = "crates/ade_plutus/src/tx_eval.rs (eval_tx_phase_two: pure function of canonical inputs); crates/ade_plutus/src/evaluator.rs (pinned aiken UPLC engine)"
+tests = ["plutus_eval_is_deterministic"]
+ci_script = "ci/ci_check_plutus_eval_purity.sh"
 status = "declared"
 attack_rationale = "Prevents script-result drift across nodes."
-evidence_notes = "Cardano-specific: Plutus scripts are a Cardano feature. Evidence: script context constructed from deterministic ledger components."
+evidence_notes = "Cardano-specific: Plutus scripts are a Cardano feature. Evidence: script context constructed from deterministic ledger components. A2 (structurally supported / partially evidenced, NOT enforced): ci_check_plutus_eval_purity.sh establishes Ade-side host-environment purity and plutus_eval_is_deterministic proves repeat-eval determinism (result + ex_units byte-identical) on one fixture; the IOG conformance harness (514 cases) supports budget parity. The claim has two parts -- (A) deterministic result, (B) deterministic AND Cardano-correct budget accounting. (A) is structurally argued from the enforced purity (see CN-PLUTUS-04); (B) is COMPATIBILITY evidence, not just purity, and must be corpus-bound before flip. FULL enforcement remains PENDING a registry-bound Plutus result/budget conformance manifest (slice A4): pinned aiken commit + exact IOG corpus identity/hash, 514/514 result parity + 514/514 ex_units parity, repeatable manifest hash, CI gate fails on any diverge_pass, zero false-rejects unless classified as the known CE-88 ScriptContext-delegation blocker."
 
 [[rules]]
 id = "CN-PLUTUS-02"
@@ -1359,12 +1359,12 @@ tier = "true"
 statement = "No host-environment property may influence script results"
 source = "classification_table.md §E"
 cross_ref = ["T-CORE-02", "T-PLATFORM-01"]
-code_locus = ""
-tests = []
-ci_script = ""
-status = "declared"
+code_locus = "crates/ade_plutus/src/ (BLUE evaluator crate: passes only canonical inputs -- tx / resolved UTxOs / cost model / per-script budget / slot config, all parameters -- to the pinned aiken evaluator; the slot config is never read from the host)"
+tests = ["plutus_eval_is_deterministic"]
+ci_script = "ci/ci_check_plutus_eval_purity.sh"
+status = "enforced"
 attack_rationale = "Prevents locale, timezone, architecture, or platform leakage into execution."
-evidence_notes = "Universal: no platform-dependent behavior may affect authoritative computation. Direct consequence of T-CORE-02."
+evidence_notes = "Universal: no platform-dependent behavior may affect authoritative computation. Direct consequence of T-CORE-02. ENFORCED (A2): ci_check_plutus_eval_purity.sh mechanically forbids wall-clock / rand / env / fs / net / thread / process / HashMap / HashSet anywhere in ade_plutus/src (self-tested -- it detects an injected SystemTime::now() and clears a pure file). SCOPE: the gate covers Ade's evaluator-integration crate, not aiken's internals; the pinned aiken commit is the deterministic UPLC engine, separately validated by the IOG conformance harness."
 
 # --- F. Miniprotocols and Networking ---
 

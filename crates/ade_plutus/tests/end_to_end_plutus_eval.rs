@@ -284,3 +284,34 @@ fn extraneous_redeemer_must_reject() {
         "an extraneous redeemer with no matching script must be rejected, got: {result:?}",
     );
 }
+
+/// CN-PLUTUS-01: the same script + redeemers/datum/context + cost model must
+/// produce an identical result AND budget accounting. The evaluator is a pure
+/// function of its canonical inputs (no wall-clock / rand / host environment),
+/// so two evaluations of the same transaction must be byte-identical — same
+/// per-script success and the same consumed ex_units.
+#[test]
+fn plutus_eval_is_deterministic() {
+    let tx_cbor = decode_hex(TX_HEX);
+    let inputs = split_array_items(&decode_hex(INPUTS_HEX));
+    let outputs = split_array_items(&decode_hex(OUTPUTS_HEX));
+    let resolved: Vec<(Vec<u8>, Vec<u8>)> =
+        inputs.into_iter().zip(outputs).collect();
+
+    let eval = || {
+        eval_tx_phase_two(
+            &tx_cbor,
+            &resolved,
+            None,
+            (10_000_000_000, 14_000_000),
+            PREVIEW_SLOT_CONFIG,
+        )
+        .expect("fixture evaluates")
+    };
+    let first = eval();
+    let second = eval();
+    assert_eq!(
+        first, second,
+        "two evaluations of the same tx must be identical (result + ex_units budget)",
+    );
+}

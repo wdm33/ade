@@ -77,7 +77,7 @@ grep -Eq 'PlutusEvalOutcome::Failed' <<< "$LS" \
 # (a validator that returns false; an extraneous redeemer with no matching script).
 for t in under_declared_ex_units_must_reject failing_validator_must_reject extraneous_redeemer_must_reject; do
   grep -Eq "fn $t" "$TEST" || fail "missing adversarial Plutus reject test: $t"
-  ctx="$(grep -B3 "fn $t" "$TEST" || true)"
+  ctx="$(grep -B3 "fn $t" "$TEST" | sed -E 's://.*$::' || true)"
   if grep -Eq '#\[ignore' <<< "$ctx"; then
     fail "adversarial reject test $t is #[ignore]'d -- it must run in CI"
   fi

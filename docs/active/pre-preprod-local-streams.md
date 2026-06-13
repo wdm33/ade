@@ -172,9 +172,19 @@ admission adversarial false-accept corpus + per-rule tx/conservation/witness adv
   whole reject corpus: budget / failing-validator / extraneous-redeemer present + not #[ignore]'d).
   Recorded on CN-PLUTUS-02 + DC-LEDGER-03 (kept declared/partial). Was zero adversarial Plutus reject
   coverage before A1/A3 (the prior corpora are non-Plutus).
-- **Slice A remaining = A2** (lock the proven surface: host-env purity gate → CN-PLUTUS-04; determinism
-  + IOG-conformance budget → CN-PLUTUS-01; wrap the `diverge_pass==0` oracle in a named gate). **HAS
-  FLIP DECISIONS — bring to user.** **Harness note:** the contiguous Plutus verdict harness currently stops early on a
+- **Slice A2 DONE** (this commit): locked the proven surface with 3 self-testing gates + 1 determinism
+  test, all green. **CN-PLUTUS-04 FLIPPED declared→enforced** (`ci_check_plutus_eval_purity.sh`:
+  ade_plutus/src forbids wall-clock/rand/env/fs/net/thread/process/HashMap/HashSet; self-tested). New
+  `plutus_eval_is_deterministic` (repeat-eval byte-identical) + `ci_check_plutus_oracle_no_false_accept.sh`
+  (locks the harness `diverge_pass==0` assertion). **CN-PLUTUS-01 NOT flipped (USER DECISION): stays
+  declared** with strengthened evidence — determinism (A) is structurally argued from the purity gate, but
+  budget-accounting-matches-Cardano (B) is compatibility evidence needing a corpus-bound manifest.
+  CN-PLUTUS-03 / DC-LEDGER-06 stay declared (CE-88); DC-LEDGER-03 stays partial.
+- **NEXT (deferred from A2) = slice A4 — Plutus result/budget conformance manifest** (named A4, not A3 —
+  A3 was the committed adversarial corpus b25d1594). Acceptance: pinned aiken commit + exact IOG corpus
+  identity/hash; 514/514 result parity + 514/514 ex_units parity; repeatable manifest hash; CI gate fails
+  on any diverge_pass; zero false-rejects unless the known CE-88 ScriptContext-delegation blocker. THEN
+  CN-PLUTUS-01 flips cleanly. **Harness note:** the contiguous Plutus verdict harness currently stops early on a
   cert-state divergence (`StakeAlreadyRegistered`/`StakeNotRegistered` at blocks 1/1/40), so it reaches
   ~0 passing Plutus txs — a pre-existing limitation that weakens the Plutus oracle's reach; worth a
   dedicated look in the broader Stream-1 false-accept hunt.
