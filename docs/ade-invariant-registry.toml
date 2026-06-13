@@ -7670,3 +7670,32 @@ introduced_in = "PHASE4-N-AO"
 strengthened_in = []
 attack_rationale = "A silent post-switch stall is fail-closed (no divergence, no mis-admit) but is NOT convergence: a node that adopts the fork-choice winner then cannot follow it forward is stuck behind the canonical chain indefinitely -- a liveness failure that, under adversarial timing, lets a peer strand Ade by serving descendants out-of-order or omitting a bridge. Marking CN-CONS-03 enforced on a single capability pass (run 2) while the same binary conditionally stalls (run 1) would overstate the invariant. DC-NODE-39 forces the post-switch path to either complete in parent-link order or fail closed with a STRUCTURED reason (so the stall is observable + halts deterministically, never silent), without weakening adoption authority or admitting an unvalidated bridge. The peer's served sequence is observed evidence; the admit decision stays on Ade's validated parent links."
 evidence_notes = "Declared at PHASE4-N-AO S11. Motivated by the 2026-06-13 run-1 finding (gap doc): adopted cn2@298, the winner's descendants 388/422/459 were RECEIVED but each classified Competing with 0 post-switch lca_discovered -> 388.prev is a cn2 block Ade lacks (a HOLE), so neither LinearExtend nor LCA-bridge -> silent stall at X. Run 2 (preserved ~/.cardano-ceai6/ao-s10-run2-PASS-conv.jsonl) proved the mechanism CAN complete (adopted cn1@247, 19 chained descendants, agreed@X, 0 diverged -- passes ci_check_post_switch_convergence_window.sh). S11 entry gate = an instrumented diagnostic answering peer-fault (bridge never served) vs Ade-fault (served-then-dropped/misclassified/out-of-order) BEFORE the fix is scoped. Enforced at S11 close via the fail-closed MissingBridge gate + hermetic happy-path/missing-bridge tests + a live re-run that no longer reproduces the stall. CN-CONS-03 flips ONLY then."
+
+[[rules]]
+id = "DC-NODE-40"
+tier = "derived"
+statement = """
+Rolled-back branch evidence retention for the LCA walk (PHASE4-N-AO S13). Rolled-back blocks MAY be retained
+only as walk-visible EVIDENCE for future competing-branch reconstruction: k-bounded (block depth), hash-keyed
+(BTreeMap, never HashMap-iterated for semantic ordering), self-binding (map key == re-derived block hash; a
+mismatch fails closed, CacheSelfBindingViolation). They NEVER become durable authority, a rollback target, or
+the LCA anchor, and NEVER bypass S2 header validation or S4 body prevalidation. The durable LCA remains the
+ChainDb stored slot+hash ONLY (DC-NODE-29); the retention merely lets walk_to_durable_lca traverse non-durable
+INTERMEDIATE headers -- exactly the blocks Ade itself rolled back during a ForkChoiceWin adoption -- until it
+reaches a real durable ancestor. This closes the Fault-1 MissingBridge OVER-FIRE: after cn1->cn2 switch, cn1's
+own rolled-back blocks (admitted LinearExtend, never in the S7 competing-only branch cache) are retained so
+cn1's later competing blocks are EVALUABLE (fork-choice resolves them -- they lose) instead of falsely
+un-bridgeable (BranchGap -> MissingBridge -> fence-held on every loser block, a producer-liveness risk).
+MissingBridge (DC-NODE-39) is then reserved for a GENUINE gap (neither durable nor cache nor retention has the
+bridge -- Fault 2). REPLAY-EQUIVALENT: same rollback + same retained set -> same walk verdict.
+"""
+source = "docs/planning/phase4-n-ao-ce-ao-6-live-gap.md (S11 Fault-1 finding) + docs/clusters/PHASE4-N-AO/S13-rolled-back-branch-evidence-retention.md"
+cross_ref = ["DC-NODE-38", "DC-NODE-29", "DC-NODE-37", "DC-NODE-39", "DC-NODE-25", "DC-NODE-28", "CN-CONS-01", "CN-CONS-03"]
+code_locus = "CANDIDATE (pending S13 impl): a BTreeMap<Hash32, CachedHeader> rollback-retention cache owned in crates/ade_node/src/node_lifecycle.rs run_participant_sync (alongside branch_caches), populated in apply_fork_switch BEFORE the ChainEvent::RolledBack apply (walk old_tip->fork_anchor+1 via ChainDb, insert self-bound + k-bounded), consulted by crates/ade_node/src/lca_walk.rs walk_to_durable_lca on a per-peer-cache miss (cache.get(h).or_else(|| retention.get(h))). The durable-anchor check (chaindb.get_block_by_hash) is UNCHANGED. BLUE select/apply/validate UNCHANGED."
+tests = []
+ci_scripts = []
+status = "declared"
+introduced_in = "PHASE4-N-AO"
+strengthened_in = []
+attack_rationale = "Without retaining the rolled-back blocks, the LCA walk cannot reconstruct a competing branch that descends through Ade's OWN recently-rolled-back chain, so every such block fails BranchGap -> MissingBridge -> fence-held. For a follower this is harmless (clears on each winner admit); for a PRODUCER it is a liveness denial -- normal competitor traffic after a fork-switch would intermittently hold the forge fence. Retaining the rolled-back blocks as EVIDENCE (not authority) restores evaluability without widening trust: the retention is self-binding (a peer cannot inject a lying header under a hash it doesn't claim), k-bounded (no unbounded memory / no over-k branch), and never the durable anchor (the LCA is still ChainDb-only, so a retained block cannot redirect selection or become a rollback target), and never bypasses S2/S4 (a retained header still validates before any adoption). The narrow retention surface -- exactly the blocks Ade rolled back -- keeps the change auditable vs caching every received header (broader trust/eviction surface) or full per-peer candidate tracking (a larger architectural change that would destabilize S1-S12)."
+evidence_notes = "Declared at PHASE4-N-AO S13. Motivated by the 2026-06-13 S11 floor-fires-live grind (preserved ~/.cardano-ceai6/ao-s11-floor-fires-live-{conv.jsonl,FFDIAG.txt}): a converging run emitted 23 missing_bridge events ALL from the LOSER cn1, all branch_gap, with cn1 block_no fully CONSECUTIVE 9->37 (Ade received the entire branch). Root: cn1 bno10-14 LinearExtend-admitted pre-switch, rolled back on cn2 adoption, never in the competing-only S7 cache -> the walk for cn1 bno15+ hits the rolled-back bno14 -> BranchGap. Enforced at S13 close via 5 hermetic tests (rollback_retains_removed_blocks_for_lca_walk, retained_blocks_are_not_anchors, retained_blocks_are_k_bounded, retained_block_hash_self_binds, genuine_gap_still_missing_bridge) + ci_check_rollback_retention_evidence.sh + the S12 harness still emitting MissingBridge on a genuine gap + a live run with the over-fire gone."
