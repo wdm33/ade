@@ -4,670 +4,720 @@
 >
 > Regenerate with `/head-deltas <baseline>` after every cluster close. Baseline is recorded in `.idd-config.json` `head_deltas_baseline`.
 
-> Baseline: `e87e8a43` (PHASE4-N-AL AL-S1 — participant recovered-anchor rollback no-op, DC-NODE-33, 2026-06-10 21:43)
-> HEAD: `b8860b16` (archive PHASE4-N-AM + PHASE4-N-AN to completed/, 2026-06-11 12:48)
-> Span: **two closed clusters — PHASE4-N-AM (the wire-pump keep-alive CLIENT that sustains the live follow past the peer's ~97s keep-alive timeout, `DC-PUMP-03`) and PHASE4-N-AN (rollback-materialization replay-equivalence — the recovered seed-epoch eta0 is overlaid onto the replay `chain_dep` so a rolled-back block validates its header VRF against the SAME nonce live admit used, `T-REC-06`)** — plus a **stale-gate triage** (`89facbea`, CI-script + registry only — `DC-PUMP-02` refined for the AI-S4a `RollBackward` event + `+= PHASE4-N-AN`; two pre-existing red gates repaired) and the **cluster-doc archive** (`b8860b16`, moved both clusters to `docs/clusters/completed/`).
-> **12 commits** (no merges), **32 files changed, +2288 / −516 lines**. **This span TOUCHES BLUE but adds ZERO new canonical type** — `ade_core::consensus::praos_state`, `ade_ledger::receive::reducer`, and `ade_ledger::rollback::materialize` all changed (N-AN's eta0 overlay), but **no new `pub struct`/`pub enum`**: BLUE canonical types **462 → 462** (CODEMAP's BLUE-tree metric; **486 → 486** by the raw BLUE `pub struct`/`pub enum` grep, **921 → 921** whole-tree). **NO new crate** (`git diff --diff-filter=A '**/Cargo.toml'` empty — still **11 crates**), **NO new module** (`git diff --diff-filter=A 'crates/**/*.rs'` empty), and **NO new canonical type**. **+2 CI gates** (`ci_check_keep_alive_wire_only.sh` for `DC-PUMP-03`, `ci_check_rollback_materialize_eta0.sh` for `T-REC-06`; 3 modified in place, 0 removed — **159 → 161**). **Registry 359 → 361** (+2 rules `DC-PUMP-03` + `T-REC-06`, both enforced at close; +1 strengthening `DC-PUMP-02 += "PHASE4-N-AN"`; **zero removals**). The substantive production change is **RED** — the keep-alive client in `ade_runtime::admission::wire_pump` (+285) — plus the **BLUE** eta0-overlay authority threaded through `materialize_rolled_back_state` (`ade_ledger::rollback::materialize` +140, `ade_core::consensus::praos_state` +15) and its RED carriers (`ade_runtime::bootstrap` +51, `ade_runtime::forward_sync::reducer` +9, `ade_node::node_lifecycle` +12).
+> Baseline: `31efec44` (PHASE4-N-AO S1 — peer-identity restoration, `DC-NODE-34`, 2026-06-11 18:54)
+> HEAD: `862cd2cb` (cluster-close — flip `CN-CONS-03` enforced on the natural CE-AO-6 transcript, 2026-06-13 17:05)
+> Span: **the PHASE4-N-AO cluster — the live multi-candidate fork-choice SELECT + adopt path (slices S2–S14, with S1 at the baseline tip)**. Ade now DECIDES a fork-choice win among competing live branches, PROVES the replacement branch (fetch → bind → link → validate), COMMITS the adoption, and re-converges — on a NATURAL two-producer partition-and-reconverge venue. **This is the cluster that flipped `CN-CONS-03` `declared → enforced`** (Cardano post-partition convergence) on a committed, sha256-pinned live transcript. New rules `DC-NODE-38..41`, `DC-PUMP-04`, `DC-EVIDENCE-04`, `DC-EVIDENCE-05`; declared→enforced flips `CN-CONS-03` + `DC-NODE-34..37`.
+> **42 commits** (no merges), **50 files changed, +9797 / −98 lines**. **This span is GREEN+RED only — ZERO new BLUE canonical type and ZERO BLUE-tree change**: `git diff 31efec44..HEAD` over the configured BLUE `core_paths` trees is **empty** (the fork-choice authority `ade_core::consensus::fork_choice::select_best_chain` and the BLUE header authority `validate_and_apply_header` are REUSED unchanged — the SELECT is built on top of them, never inside them). All production code lands in **`ade_node`** (GREEN projections + RED orchestration: **+4795 / −37**) and a 22-line RED touch in **`ade_runtime::forward_sync::pump`**. **+6 new modules** (all in `ade_node`: `candidate_aggregator.rs`, `selector_state.rs`, `fork_switch.rs`, `lca_walk.rs` GREEN; `fair_merge.rs` RED; `post_switch_continuity.rs` GREEN + its `bin/`), **NO new crate** (still 11). **+11 CI gates, 6 modified in place, 0 removed** (162 → 173). **Registry 365 → 372** (+7 new rules, all enforced at HEAD; +10 strengthenings; **zero removals**). **No `Cargo.toml` change** this span (no new dependency, no feature flag); **no new CLI flag**.
 
-> **Baseline note (load-bearing — read before §0).** This window's baseline is **`e87e8a43`**, the
-> PHASE4-N-AL AL-S1 close (the prior HEAD_DELTAS HEAD), and it is **valid**: `git rev-parse e87e8a43` resolves and
-> `git merge-base e87e8a43 HEAD == e87e8a43` (it is a strict ancestor of HEAD; `e87e8a43` carries no tag). HEAD is
-> **`b8860b16`** (the cluster-doc archive that closes the N-AM + N-AN window). The **committed** `.idd-config.json`
-> baseline at HEAD already reads **`e87e8a43`** (the prior N-AL regen's bump committed cleanly), so this window measures
-> from the committed baseline forward with **no working-tree skew**. The span has **four parts**: (1) the
-> **PHASE4-N-AL close commit** — `35a851b9` (`Close PHASE4-N-AL …`), which flipped `DC-NODE-33` `declared → enforced`
-> (populating its `tests` array) and regenerated all four grounding docs to `e87e8a43` + archived the N-AL cluster docs —
-> **docs/registry only, 0 code** (registry stayed 359; this is the previously-uncommitted N-AL close-pass, now committed);
-> (2) the **PHASE4-N-AM cluster** (`DC-PUMP-03`) — the wire-pump keep-alive client (5 commits: invariants note + declare,
-> AM-S1 impl, bank, close); (3) the **PHASE4-N-AN cluster** (`T-REC-06`) — rollback-materialize eta0 replay-equivalence
-> (4 commits: declare, AN-S1 repro, AN-S2 fix, CE-AN-LIVE record); and (4) a **stale-gate triage** (`89facbea`,
-> CI + registry only) + the **archive** (`b8860b16`).
+> **Baseline note (load-bearing — read before §0).** This window's baseline is **`31efec44`**, the PHASE4-N-AO **S1**
+> commit (peer-identity restoration, `DC-NODE-34`), and it is **valid**: `git rev-parse 31efec44` resolves and
+> `git merge-base 31efec44 HEAD == 31efec44` (it is a strict ancestor of HEAD; `31efec44` carries no tag). HEAD is
+> **`862cd2cb`** (the PHASE4-N-AO cluster-close that flips `CN-CONS-03`). The cluster's **declare** commits (`a87a4eb5`
+> declaring `DC-NODE-34..37`) and the **S1 slice doc + S1 impl** (`301a4932`, `31efec44`) landed in the *preceding*
+> grounding-regen window (`b8860b16..31efec44`, opened by the prior `f167a349` regen to `b8860b16`), so they sit at or
+> *before* this baseline. **This regen therefore measures the SELECT cluster from the S1 tip forward (`31efec44..HEAD`)**
+> — S1 itself (`DC-NODE-34`, `ci_check_peer_identity_preserved.sh`) is already enforced at the baseline and appears here
+> only as the **Modified** gate the in-span stale-gate repair touched (§5). The span is **one cluster, end-to-end**:
+> S2 (BLUE-safe candidate construction) → S3 (live selector dispatch, decide-only) → S4 (fork-switch apply, prove-then-commit)
+> → S5 (reselection replay-equivalence) → S6 (live BlockFetch byte-only bridge) → S7 (LCA fork-anchor walk) → S8 (multi-peer
+> wire-pump fairness) → S9 (closed fork-choice evidence + supersession) → S10 (post-switch branch-continuity) → S11
+> (post-ForkChoiceWin forward-follow floor) → S12 (bridge-gap fault-injection harness) → S13 (rolled-back branch evidence
+> retention) → S14 (missing-bridge range re-fetch) → close (flip `CN-CONS-03`).
 >
-> **Working-tree note.** At this regen the working tree is **CLEAN** — `git status --porcelain` shows only untracked
-> scratch (`.mithril-scratch/`, `wire_smoke.jsonl`), neither part of this doc. Unlike the prior (N-AL) regen, there are
-> **no uncommitted close artifacts**: the N-AM + N-AN closes (`8b18fc8e`, the `T-REC-06` flip in `deaa6e28`, the archive
-> `b8860b16`) are all committed. §1 narrates the committed span `e87e8a43..b8860b16` verbatim from `git log`; §0/§7 read
-> rule **status** from the registry at HEAD `b8860b16` (`DC-PUMP-03` + `T-REC-06` **enforced**, **361** rules). The
-> operator bumps `head_deltas_baseline` `e87e8a43 → b8860b16` as the **post-close step this regen performs** (and demotes
-> the N-AL paragraph to "PRIOR baseline").
+> **Working-tree note.** At this regen the working tree is **CLEAN** for tracked files — `git status --porcelain` shows
+> only untracked scratch (`.mithril-scratch/`, `wire_smoke.jsonl`), neither part of this doc. The PHASE4-N-AO close
+> (`862cd2cb` — the `CN-CONS-03`/`DC-NODE-34..37` flips, the 7 new-rule enforcements, the repointed
+> `ci_check_convergence_evidence_vocabulary_closed.sh`) is committed. §1 narrates the committed span `31efec44..862cd2cb`
+> verbatim from `git log`; §0/§7 read rule **status** from the registry at HEAD `862cd2cb` (`CN-CONS-03` **enforced**,
+> **372** rules). The operator bumps `head_deltas_baseline` `b8860b16 → 862cd2cb` as the **post-close step this regen
+> performs** (and demotes the N-AM/N-AN paragraph to "PRIOR baseline"). **NB:** the *committed* `.idd-config.json`
+> baseline still reads `b8860b16` (the prior window's value); this regen advances it to `862cd2cb`.
 
-This window is **led by two tightly-paired live-readiness clusters that together unblock the CE-AI-6 induced-reorg
-convergence capture** — both surfaced by trying to run a live participant follow long enough to capture a peer reorg:
+This window is **a single cluster — PHASE4-N-AO — that turns the prior single-best-peer rollback-FOLLOW (N-AI/N-AJ,
+`DC-NODE-23..30`) into a genuine multi-candidate SELECT**: among two live competing branches, Ade DECIDES a fork-choice
+winner, PROVES the replacement branch, COMMITS the adoption, and re-converges. It is the cluster that earned the
+**`CN-CONS-03` flip** (the Cardano-specific post-partition convergence rule). The mechanism decomposes into four
+authority bands:
 
-1. **PHASE4-N-AM — the wire-pump keep-alive CLIENT.** The live follow died at ~96s with the relay
-   `ShutdownPeer`'ing a silent client (`ExceededTimeLimit (KeepAlive) ClientHasAgency`). The cluster adds the N2N
-   keep-alive client to the SOLE per-peer wire pump so the link survives the peer's ~97s keep-alive deadline.
-2. **PHASE4-N-AN — rollback-materialization replay-equivalence.** With the link sustained, the actual reorg-follow
-   then died at `ReplayFailedAt … VrfCert`: rollback-materialize was replaying the rolled-back block against the
-   persisted snapshot's `Nonce::ZERO` PLACEHOLDER nonce, not the recovered seed-epoch eta0 the live-admit path uses.
-   The cluster overlays the recovered eta0 onto the replay `chain_dep` so the rollback path validates the header VRF
-   against the SAME nonce as live admit (replay-equivalence by construction).
+1. **Decide (GREEN, BLUE-fed).** `candidate_aggregator` builds a `CandidateFragment` for each competing branch by
+   validating every header through the BLUE `validate_and_apply_header` authority; `selector_state` projects Ade's own
+   durable tip into the `ChainSelectorState`; the RED `dispatch_competing_fork_choice` calls the *unchanged* BLUE
+   `select_best_chain` (`CN-CONS-03`/`DC-CONS-03`) and emits a provisional `PendingForkSwitch` — **decide-only, no
+   rollback yet** (`DC-NODE-35`, `DC-NODE-36`).
+2. **Prove, then commit (GREEN core + RED apply).** `fork_switch::prevalidate_branch` is a PURE proof that the fetched
+   replacement bodies bind to the S3-selected headers, link from the durable fork anchor, and ledger-validate; only on a
+   complete proof does the RED `apply_fork_switch` perform the durable rollback + adopt — **a `PendingForkSwitch` is
+   authority to *attempt proof*, never to roll back** (`DC-NODE-37`, replay-equivalent reselection `CE-AO-5`).
+3. **Reach the anchor + fetch the branch (RED bytes / GREEN walk).** A live competing branch is multi-block, so its
+   immediate parent is an intermediate block Ade never stored; `lca_walk` walks the branch's preserved parent links back
+   to the durable last-common-ancestor (`DC-NODE-38`), `fair_merge` gives each peer its own bounded lane so a hot peer
+   can't starve a competing one (`DC-PUMP-04`), and the S6 live BlockFetch bridge transports the branch **bytes only —
+   never truth** (`CE-AO-6`); when the bridge to the winner is missing, the path fails closed (`DC-NODE-39`), retains the
+   rolled-back evidence the walk needs (`DC-NODE-40`), and re-fetches the missing range (`DC-NODE-41`).
+4. **Prove the SELECT on a committed transcript (GREEN evidence).** S9 adds a **closed, observe-only**
+   convergence-evidence vocabulary (`needs_fork_choice` → `lca_discovered` → `candidate_fragment_built` →
+   `fork_choice_selected` → `branch_fetch_started/completed` → `branch_prevalidated` →
+   `fork_switch_applied|failed|superseded`) so a *committed* JSONL transcript carries the SELECT middle, with every
+   fork-choice win paired to exactly one terminal (`DC-EVIDENCE-04`); S10's `post_switch_continuity` is a replayable
+   reducer that classifies Ade's own post-switch admitted lineage into a closed verdict (`DC-EVIDENCE-05`). The close ran
+   the natural CE-AO-6 two-producer pass against this checker and **flipped `CN-CONS-03`**.
 
-With both fixes the **CE-AI-6 reorg capture** ran live (recorded as `T-REC-06`-backing evidence, NOT a `RO-LIVE` flip).
+With the full path the **CE-AO-6 multi-candidate SELECT** ran live and is the FIRST `RO`/`CN`-tier convergence flip of
+the cluster (`CN-CONS-03 → enforced`), on a NATURAL (no loser-freeze) transcript pinned by sha256 OUTSIDE the repo.
 
-### PHASE4-N-AM — wire-pump keep-alive client (`DC-PUMP-03`, enforced)
+### PHASE4-N-AO — the decide band (`DC-NODE-35`, `DC-NODE-36`, enforced)
 
-> **PHASE4-N-AM runs the N2N keep-alive CLIENT (mini-protocol 8) inside `run_admission_wire_pump` — the SOLE
-> per-peer pump (`CN-PUMP-01`).** A `tokio::select!` cadence arm, firing every `KEEP_ALIVE_CADENCE = 20s` STRICTLY
-> under the peer's observed ~97s keep-alive timeout, sends `KeepAliveMessage::KeepAlive(cookie)` (Initiator) via the
-> EXISTING outbound `OutboundFrame` path and advances the REUSED BLUE `ade_network::keep_alive` state machine
-> (`keep_alive_transition`: `ClientIdle → ServerHasAgency{cookie}`); the inbound `MsgResponseKeepAlive(cookie')`
-> advances the SAME machine back to `ClientIdle`, validating `cookie' == cookie`. **WIRE-ONLY:** the keep-alive
-> client produces no canonical input, no WAL entry, and **NO `AdmissionPeerEvent`** (`Block` / `TipUpdate` /
-> `RollBackward` / `Disconnected`) — the `DC-PUMP-01` emit-set stays unwidened; it never touches admission, the
-> durable chain, fork-choice, the convergence-evidence vocabulary, replay-equivalence, or any BLUE state. The cookie
-> is a monotonic `u16` counter (deterministic — no `rand`); the cadence is wall-clock, a RED transport concern that
-> never reaches the BLUE core. A grammar violation (cookie mismatch / illegal transition / undecodable payload) fails
-> closed via `AdmissionWirePumpError::KeepAlive` — drop the peer. **MUST NOT:** redefine the BLUE keep-alive grammar
-> (reuse `ade_network::keep_alive` + `::codec::keep_alive`); use a cadence ≥ the peer timeout; send a new
-> `MsgKeepAlive` while one is in flight (respect `ServerHasAgency`); block / starve / reorder the chain-sync or
-> block-fetch flow; dispatch a keep-alive frame as a chain-sync/block-fetch event (closed match over
-> `AcceptedMiniProtocol`); implement a keep-alive SERVER/responder (client only — a responder is a CE-AM-LIVE-gated
-> follow-on). **SCOPE:** the keep-alive client ONLY — does NOT add multi-peer ChainSel, does NOT flip `CN-CONS-03`,
-> does NOT broaden `CN-PUMP-01` / `DC-PUMP-01` / `DC-PUMP-02`. RED-only; NO BLUE change; NO new module; NO new
-> canonical type.
+> **The SELECT decision is built ON TOP of the BLUE fork-choice authority, never inside it.** `select_best_chain`
+> (`crates/ade_core/src/consensus/fork_choice.rs`, `CN-CONS-03`/`DC-CONS-03`) is REUSED byte-for-byte; the BLUE tree is
+> untouched this span. The GREEN `candidate_aggregator` (`DC-NODE-35`) is a PURE projection: given a fork anchor, the
+> chain-dep AT that anchor, and a peer's candidate header inputs, it validates each header through the BLUE
+> `validate_and_apply_header` authority and assembles a `CandidateFragment` — **no minting, no store reads, no durable
+> mutation, no nondeterminism** (`OQ-AO-6 → GREEN`). The GREEN `selector_state` (`DC-NODE-36` half) derives the
+> `TiebreakerView` of a block **from Ade's own already-admitted durable tip bytes** — local durable authority, never the
+> peer tip — and carries a provisional decision toward S4. The RED `dispatch_competing_fork_choice` /
+> `decide_fork_switch` route a `NeedsForkChoice` competing block into `select_best_chain` and emit a `PendingForkSwitch`
+> on a win — **decide-only**: no rollback, no WAL entry, no ledger/chain-dep/cursor mutation at decide time.
 
-- **PHASE4-N-AM / AM-S1 / `DC-PUMP-03` (enforced) (RED keep-alive client in the wire pump).** `run_admission_wire_pump`
-  (`crates/ade_runtime/src/admission/wire_pump.rs`, +285) gains: (a) a `const KEEP_ALIVE_CADENCE: Duration =
-  Duration::from_secs(20)`; (b) per-peer keep-alive state (`keep_alive_state: KeepAliveState::ClientIdle`, a monotonic
-  `next_cookie: u16`, a `KeepAliveVersion` derived from the negotiated version, a `tokio::time::interval` with
-  `MissedTickBehavior::Delay` whose immediate first tick is consumed so the first ping fires after one full cadence);
-  (c) a `tokio::select!` over the inbound `recv()` (byte-identical to pre-AM behaviour — `mpsc recv()` is cancel-safe,
-  so a keep-alive tick never drops a chunk) and the cadence `tick()` — the cadence arm, only while `ClientIdle`,
-  drives `keep_alive_transition(…, KeepAliveAgency::Client, …, KeepAlive(cookie))`, enqueues the encoded frame on the
-  EXISTING outbound path, and `continue`s; (d) a `handle_keep_alive(payload, &mut state, version)` consuming the
-  peer's `MsgResponseKeepAlive` via `decode_keep_alive_message` + `keep_alive_transition(…, KeepAliveAgency::Server,
-  …)` — agency fixed `Server` (Ade is the client), so a client-originated message from the peer is an
-  `IllegalTransition` and fails closed, and an undecodable payload is a `MalformedMessage`. The `AcceptedMiniProtocol`
-  match's previously-silent `KeepAlive` drop is replaced by a call to `handle_keep_alive`; all other accepted
-  mini-protocols stay silently dropped. New error variant `AdmissionWirePumpError::KeepAlive(KeepAliveError)`. The
-  keep-alive paths emit only stderr diagnostics — NO `AdmissionPeerEvent`. +3 hermetic tests (CE-AM-1
-  `wire_pump_sends_keep_alive_on_quiescent_cadence`, under `#[tokio::test(start_paused)]` virtual time, asserts a real
-  proto-8 `MsgKeepAlive` over a loopback mux during inbound quiescence AND no `AdmissionPeerEvent`; CE-AM-2
-  `wire_pump_keep_alive_response_validates_cookie_no_event`; CE-AM-3 `wire_pump_keep_alive_cookie_mismatch_fails_closed`
-  — mismatch + unsolicited-`ClientIdle` response + undecodable payload all fail closed). New gate
-  `ci_check_keep_alive_wire_only.sh`. The lone manifest touch is a **dev-dependency** `tokio` `test-util` feature in
-  `crates/ade_runtime/Cargo.toml` (+4 — for the `start_paused` virtual clock; dev-only, never in production builds,
-  NOT a project `[features]` flag).
+- **PHASE4-N-AO / S2 / `DC-NODE-35` (enforced) (GREEN BLUE-safe candidate construction).** New module
+  `crates/ade_node/src/candidate_aggregator.rs` (**+409**, GREEN). A pure projection assembling `CandidateFragment`s
+  exclusively from `validate_and_apply_header` output (the BLUE header authority); performs no store reads, no minting,
+  no durable mutation, no wall-clock/`rand`/`HashMap`. The hard boundary (`DC-NODE-35`): candidate construction can never
+  manufacture a header — fragments come ONLY from the BLUE validator. New gate
+  `ci_check_candidate_construction_validated.sh`. (Commit `6bcfc9e5`.)
+- **PHASE4-N-AO / S3 / `DC-NODE-36` (enforced) (live selector dispatch — decide-only).** New module
+  `crates/ade_node/src/selector_state.rs` (**+167**, GREEN — the projection foundation, `986d8339`); the RED dispatch
+  driver lands in `node_lifecycle.rs` (`a8c12327`) as `dispatch_competing_fork_choice` + `decide_fork_switch` + the
+  `ForkSwitchDecision` enum. The live `NeedsForkChoice` arm of `run_participant_sync` routes a competing block into the
+  BLUE `select_best_chain` and emits a provisional `PendingForkSwitch` (carrying the winner tip) — **the decision is
+  Ade's, computed only from local durable authority + the protocol observables `select_best_chain` consumes**; the
+  conservative floor (the S3 hard rule) keeps the current chain on any incomplete decision. New gate
+  `ci_check_live_selector_dispatch.sh`; the `k` source-of-authority wording was corrected in `cd11c256`. (Commits
+  `1939165e`, `04f11013`, `986d8339`, `a8c12327`, `cd11c256`.)
 
-### PHASE4-N-AN — rollback-materialization replay-equivalence (`T-REC-06`, enforced)
+### PHASE4-N-AO — the prove-then-commit band (`DC-NODE-37`, `CE-AO-5`, enforced)
 
-> **PHASE4-N-AN makes rollback-materialize reconstruct the replay `chain_dep` with the SAME recovered seed-epoch eta0
-> the live-admit path uses (`T-REC-06`).** `materialize_rolled_back_state` (the SOLE rolled-back-state authority,
-> `CN-STORE-07`) gains a `recovered_eta0: Option<&Nonce>` parameter and overlays it onto the nearest-snapshot
-> `chain_dep` — via the NEW SINGLE overlay authority `PraosChainDepState::overlay_recovered_eta0` (sets both
-> `epoch_nonce` and `evolving_nonce` to eta0) — **BEFORE** the degenerate snapshot-at-target return AND before the
-> replay-forward `block_validity` fold. So a block that validates during live admit (against the eta0-overlaid
-> `chain_dep`, `T-REC-04`) MUST NOT fail rollback-materialize replay because materialization substituted a different
-> nonce source; the persisted snapshot's `Nonce::ZERO` placeholder MUST NOT reach VRF verification on the
-> rollback-replay path. Same recovered store + same ordered WAL/feed ⇒ same `chain_dep` inputs ⇒ same `block_validity`
-> result on the live-admit and rollback paths. eta0 is the recovered canonical input (the seed-epoch
-> `SeedEpochConsensusInputs.epoch_nonce` sidecar) — never peer data, wall-clock, CLI re-supply, or a re-query. **VRF
-> strength is UNCHANGED on the rollback path: NO bypass / skip / loosening** — a block whose VRF verifies against
-> NEITHER eta0 nor the snapshot nonce still fails closed (the `None` arm and the wrong-eta0 test prove the overlay,
-> not a skip, is the fix). **SCOPE:** the recovered seed epoch (no epoch-boundary crossing within the follow window —
-> eta0 is the constant epoch nonce); a multi-epoch rollback nonce-evolution is a named out-of-scope follow-on.
+> **A `PendingForkSwitch` is not authority to roll back; it is only authority to *attempt proof* of the selected
+> replacement branch.** S4 turns the S3 provisional decision into a durable adoption ONLY by proving the complete
+> replacement branch — fetched bodies, bound to the S3-selected headers, linked from the durable fork anchor, and
+> ledger-validated — and only then committing the rollback + adopt. `fork_switch::prevalidate_branch` is PURE (no I/O, no
+> store reads, no durable mutation); the durable mutation lives in the RED `apply_fork_switch`, which runs the proof
+> first and commits second. The reselection that follows is **replay-equivalent** (`CE-AO-5`): the same recovered store +
+> the same ordered branch ⇒ the same post-switch durable state and the same evidence verdict.
 
-- **PHASE4-N-AN / AN-S1 / `T-REC-06` (repro-first).** `crates/ade_ledger/tests/wal_rollback_ai_s1.rs` (+1) and the
-  `materialize.rs` test module reproduce the divergence mechanically: with the snapshot carrying the `Nonce::ZERO`
-  placeholder, rollback replay of the rolled-back block fails the header VRF (`VrfCert`) — exactly the live
-  reorg-follow death. (Commit `dbf31c7a`.)
-- **PHASE4-N-AN / AN-S2 / `T-REC-06` (enforced) (BLUE overlay authority + threading).** The fix (commit `deaa6e28`):
-  - **BLUE.** `ade_core::consensus::praos_state` (+15) adds `pub fn overlay_recovered_eta0(&mut self, eta0: &Nonce)` —
-    the SINGLE eta0-overlay authority shared by BOTH WarmStart bootstrap and rollback materialization.
-    `ade_ledger::rollback::materialize` (+140) adds the `recovered_eta0: Option<&Nonce>` param to
-    `materialize_rolled_back_state` and applies the overlay before the degenerate return and the replay fold; +2 tests
-    (`rollback_materialize_overlays_recovered_eta0_replay_equivalent` — `None ⇒ VrfCert`, `Some(eta0) ⇒ Valid` AND the
-    materialized `epoch_nonce == eta0 ==` the live-admit nonce basis; `rollback_materialize_does_not_bypass_vrf_on_wrong_eta0`
-    — a WRONG eta0 still fails the header VRF). `ade_ledger::receive::reducer` (+7) threads a
-    `recovered_eta0: Option<&'a Nonce>` field through `RollbackContext` into the `roll_backward` materialize call.
-  - **RED carriers.** `ade_runtime::forward_sync::reducer` (+9) adds `ForwardSyncState.recovered_eta0: Option<Nonce>`
-    (set once at bootstrap, `None` default). `ade_node::node_lifecycle` (+12) sets `fwd.recovered_eta0` from
-    `state.seed_epoch_consensus_inputs.epoch_nonce` alongside the recovered anchor, and threads
-    `fwd.recovered_eta0.as_ref()` into the `apply_chain_event` rollback-follow materialize call (the path the CE-AI-6
-    reorg hit). `ade_runtime::bootstrap` (+51) **reorders** the seed-epoch sidecar restore to run BEFORE
-    `materialize_rolled_back_state` and passes its eta0 into materialize — so a WarmStart from a NON-bare store (the
-    WAL carries post-anchor blocks) replays against eta0, not the placeholder (this **also** fixes warm-start replay
-    from a non-bare store, the SAME root cause); the explicit post-materialize overlay (the
-    `ci_check_warmstart_eta0_overlay.sh` site, `T-REC-04` / `DC-CINPUT-03`) is retained and is now idempotent after the
-    materialize overlay. `crates/ade_runtime/tests/receive_rollback_integration.rs` (+4) updates the new-param call sites.
-  - New gate `ci_check_rollback_materialize_eta0.sh`. **`T-REC-06 → enforced`.**
+- **PHASE4-N-AO / S4 / `DC-NODE-37` (enforced) (fork-switch apply — prove, then commit).** New module
+  `crates/ade_node/src/fork_switch.rs` (**+555**) shipping the GREEN PURE proof core (`prevalidate_branch`,
+  `BranchProofError`) + the RED `prove_fork_switch` / `apply_fork_switch` / `map_branch_proof_failure` in
+  `node_lifecycle.rs`. The proof binds the fetched bodies to the S3-selected headers, links them from the durable fork
+  anchor, and ledger-validates them via the read-only materialize; only `ForkSwitchOutcome::Adopted` commits the durable
+  rollback. New gate `ci_check_fork_switch_never_abandons.sh` (a `PendingForkSwitch` authorizes proof, not a rollback).
+  (Commits `cabb94b8`, `d63b5dac`, `5e4807e2`.)
+- **PHASE4-N-AO / S5 / `CE-AO-5` (reselection replay-equivalence + fence resolution).** New test file
+  `crates/ade_node/tests/reselection_replay_s5.rs` (**+306**) proves the post-switch reselection is replay-equivalent and
+  resolves the no-forge-across-pending-reselection fence; the modified gate `ci_check_wal_rollback_replay_equiv.sh` was
+  extended for the reselection path. (Commits `2490ef07`, `5b31bf7f`.)
 
-### Stale-gate triage + archive
+### PHASE4-N-AO — the reach-and-fetch band (`DC-NODE-38`, `DC-PUMP-04`, `CE-AO-6`, `DC-NODE-39..41`, enforced)
 
-- **Stale-gate triage (`89facbea`, CI-script + registry only, 0 source).** Three pre-existing red gates (red since the
-  N-AI/N-AJ window, byte-unrelated to N-AM) classified stale + repaired: (1) `ci_check_admission_wire_pump_closure.sh`
-  — Guard 4 refined so a `RollBackward` chain-sync reply emits its DISTINCT `AdmissionPeerEvent::RollBackward`
-  (AI-S4a, "a rollback is NEVER a TipUpdate only") rather than `tip_update` (`DC-PUMP-02` `source`/`statement` updated;
-  `strengthened_in += "PHASE4-N-AN"`); (2) `ci_check_node_path_fidelity.sh` — pinned-flag allow-list extended (with
-  review) for two legitimately-added, path-PRESERVING flags `+--participant-venue` (N-AI) and
-  `+--convergence-evidence-path` (N-AJ); the path-diverging private flags stay excluded; (3)
-  `ci_check_lifecycle_owner_uses_bootstrap_initial_state.sh` — dropped `pipefail` (the `grep -q` SIGPIPE produced
-  spurious false-"missing" results) and scoped the `materialize_rolled_back_state` forbid to EXCLUDE the
-  `apply_chain_event` fn (the N-AI rollback-follow legitimately materializes the rolled-back state via the sole
-  `CN-STORE-07` authority — that is fork-choice, NOT initial state).
-- **Archive (`b8860b16`).** Moved `docs/clusters/PHASE4-N-AM/` and `docs/clusters/PHASE4-N-AN/` to
-  `docs/clusters/completed/`. (The N-AL cluster docs were moved to `completed/` by the N-AL close `35a851b9` at the
-  start of this span; the two renames in §3 are that move.)
+> **A live competing branch is multi-block, so the SELECT must reach a DURABLE anchor and transport branch bytes without
+> ever transporting truth.** The competing block's immediate parent is an intermediate block on the competing branch Ade
+> never stored; the fork anchor is the **last common ancestor (LCA)** — a durable `ChainDb`-stored block — reached by
+> walking the competing branch's preserved parent links (`lca_walk`, `DC-NODE-38`; the per-peer cache is NOT authority,
+> only an indexed memory of received, preserved headers). When several peers feed one shared bounded channel, a
+> continuously-producing peer monopolises it and starves the others, so a competing peer's branch never reaches dispatch;
+> `fair_merge` (`DC-PUMP-04`) gives each peer its OWN bounded lane and drains them with a deterministic round-robin merge
+> — **scheduling discipline ONLY, never fork-choice** (`select_best_chain` stays arrival-order-independent, `CN-CONS-01`).
+> The S6 live BlockFetch bridge fills `PrefetchedBranchBodies` from a live `RequestRange` and carries **bytes only — no
+> selection, no admission** (`CE-AO-6`). A winner-descendant whose bridge to the durable adopted tip is missing fails
+> closed with a structured `MissingBridge` (`DC-NODE-39`, no silent stall), retains the rolled-back blocks the walk needs
+> as walk-visible EVIDENCE (`DC-NODE-40`), and actively re-fetches the missing range (`DC-NODE-41`).
 
-**BLUE IS TOUCHED this span (unlike N-AL), but adds ZERO new canonical type** — `git diff e87e8a43..HEAD` over the BLUE
-`core_paths` trees lists `ade_core/src/consensus/praos_state.rs`, `ade_ledger/src/receive/reducer.rs`,
-`ade_ledger/src/rollback/materialize.rs`, and the `ade_ledger/tests/wal_rollback_ai_s1.rs` test, but **no `^+\s*(pub )?(struct|enum)`
-line**: BLUE canonical types **462 → 462** (CODEMAP's BLUE-tree metric; 486 → 486 raw / 921 → 921 whole-tree). The new
-surfaces are a BLUE **method** (`overlay_recovered_eta0`) and new **fields** on the existing `RollbackContext` (BLUE) and
-`ForwardSyncState` (RED) — not new types. **No `RO-LIVE` rule flipped** — `RO-LIVE-01` stays operator-gated. The live
-**CE-AM-LIVE** (152s keep-alive sustain) and **CE-AN-LIVE** (CE-AI-6 reorg capture) passes are recorded as
-`enforced`-backing evidence for `DC-PUMP-03` / `T-REC-06`, NOT bounty/preprod claims (both transcripts OUTSIDE-REPO,
-scrubbed in-repo notes only).
+- **PHASE4-N-AO / S6 / `CE-AO-6` (live BlockFetch byte-only bridge).** The byte-only bridge core
+  (`PrefetchedBranchBodies` + boundary proofs, `08b2aebc`); `PendingForkSwitch` extended to carry `winner_tip` as the
+  BlockFetch endpoint (`9a85ab93`); the live BlockFetch fetch + relay-loop fill + evidence wiring (`3e0a6ad6`, touching
+  `node_lifecycle.rs` `prefetch_branch_bodies` + `node_spine_serve_loopback.rs`). New gate
+  `ci_check_live_blockfetch_byte_only.sh` (the bridge transports bytes, not truth). (Commits `1f16ff7f`, `08b2aebc`,
+  `9a85ab93`, `3e0a6ad6`, `c841f0b5`.)
+- **PHASE4-N-AO / S7 / `DC-NODE-38` (enforced) (live LCA fork-anchor walk).** New module
+  `crates/ade_node/src/lca_walk.rs` (**+411**, GREEN — read-only `ChainDb` lookups only, no durable mutation). A live
+  competing branch is eligible for SELECT only when Ade walks its preserved parent links back to a DURABLE STORED anchor
+  under a block-depth `k`-bound, with per-peer branch caching and a multi-header candidate that grows as the branch
+  grows. New gate `ci_check_lca_anchor_walk.sh`. (Commits `0cce1668`, `3b03b967`, `cabe61ff`.)
+- **PHASE4-N-AO / S8 / `DC-PUMP-04` (enforced) (multi-peer wire-pump fairness).** New module
+  `crates/ade_node/src/fair_merge.rs` (**+244**, RED). Per-peer bounded lanes + a deterministic round-robin `fair_merge`
+  (rotating cursor, closed-lane retire-in-place; no `HashMap`/wall-clock/`rand`); the per-peer pump is rewired so the
+  shared fan-in is gone. **A retry RAN and the channel-fairness layer was found to be the WRONG layer** — the real live
+  blocker was an evidence-attribution artifact (see the S8.5 fix below); S8 stays correct + proven (a cleaner per-peer
+  arch) but was not the blocker. New gate `ci_check_wire_pump_fairness.sh`. (Commits `fc3db0f5`, `4c64e779`,
+  `901650b2`.)
+- **PHASE4-N-AO / S8.5 (`6846d252`, the evidence-artifact fix).** `block_received` was mislabelling every block to the
+  FIRST peer (`convergence_evidence::emit_block_received` used a fixed `peer_label` instead of the per-block
+  `NodeSyncItem::Block.peer`); the fix threads the per-block peer through `emit_block_received(peer, slot, hash)`. This
+  overturned the S7-retry "channel starvation" and S8 "fairness/2-pump stall" diagnoses — multi-peer delivery was never
+  broken; both pumps always worked. (`convergence_evidence.rs` **+416** carries this + the S9 emitters; `fix` commit
+  `6846d252`.)
+- **PHASE4-N-AO / S11 / `DC-NODE-39` (enforced) (post-ForkChoiceWin forward-follow floor).** After a `ForkChoiceWin`
+  adoption at tip X, a competing descendant whose parent chain cannot connect to the durable adopted tip / a durable
+  stored ancestor is a **structured `MissingBridge` fail-closed** — no silent stall. New gate
+  `ci_check_missing_bridge_fail_closed.sh`. (Commits `fccebb94`, `eff880aa`, `ab47c338`; run-1 root cause in `08c2bc5b`.)
+- **PHASE4-N-AO / S12 / `DC-NODE-39` regression (`66312da0`) (bridge-gap fault-injection harness).** A deterministic
+  fault-injection harness exercising the S11 missing-bridge floor. (Delegated test infra per the inline-vs-delegated
+  discipline; production fix S11 is inline.)
+- **PHASE4-N-AO / S13 / `DC-NODE-40` (enforced) (rolled-back branch evidence retention).** Rolled-back blocks may be
+  retained ONLY as walk-visible EVIDENCE: the LCA walk consults the retention on a per-peer-cache MISS to traverse
+  non-durable parent links — **fixes the S7 LCA-walk over-fire** (the walk previously failed to reach the anchor across a
+  rolled-back segment). New gate `ci_check_rollback_retention_evidence.sh`. (Commits `f1ca350d`, `e80d4226`.)
+- **PHASE4-N-AO / S14 / `DC-NODE-41` (enforced) (missing-bridge range re-fetch).** The `DC-NODE-39` floor is SAFE but
+  PASSIVE — ChainSync streams each block once, so a winner-descendant whose bridge Ade missed can never be recovered by
+  waiting. S14 adds a latent range-recovery admit loop (`recover_missing_range` in `node_lifecycle.rs`, with a closed
+  outcome, `bb7ed9dd`) then wires the missing-bridge range re-fetch live (`2a03ac73`). New gate
+  `ci_check_missing_bridge_refetch.sh`. (Commits `6369af30`, `bb7ed9dd`, `2a03ac73`.)
+
+### PHASE4-N-AO — the closed-evidence band (`DC-EVIDENCE-04`, `DC-EVIDENCE-05`, enforced)
+
+> **A committed transcript must carry the SELECT middle in a CLOSED, observe-only vocabulary, with every fork-choice win
+> paired to exactly one terminal.** The prior `AgreementVerdict` vocabulary (`block_received` / `block_admitted` /
+> `agreement_verdict`, N-AJ) recorded only the endpoints; the SELECT (decide → fetch → prove → apply) was stderr
+> diagnostics. S9 adds 10 closed `AdmissionLogEvent` variants — `needs_fork_choice`, `lca_discovered`,
+> `candidate_fragment_built`, `fork_choice_selected`, `branch_fetch_started`, `branch_fetch_completed`,
+> `branch_prevalidated`, `fork_switch_applied`, `fork_switch_failed`, `fork_switch_superseded` — emitted **observe-only**
+> (GREEN vocab / RED sink / BLUE unchanged) so a *committed* JSONL transcript ASSERTS the SELECT. Every
+> `fork_choice_selected{win}` pairs to EXACTLY ONE terminal of `applied | failed | superseded` (`DC-EVIDENCE-04`):
+> because the `fork_switch_id` includes the winner tip, a branch that grows produces a new win per tip, so superseded
+> provisional wins emit a `fork_switch_superseded` terminal while only the final pending reaches `applied`. S10's
+> `post_switch_continuity` is a PURE replayable reducer over the closed transcript: after a `ForkChoiceWin` adoption at
+> tip X it classifies Ade's OWN validated admitted-block lineage into a closed verdict — `ContinuesSelectedBranch`
+> requires unbroken `prev_hash` lineage from X across every post-X `block_admitted`, no `diverged` after X, and every win
+> paired to a terminal (`DC-EVIDENCE-05`). The peer tip is NEVER an input to the reducer.
+
+- **PHASE4-N-AO / S9 / `DC-EVIDENCE-04` (enforced) (closed fork-choice evidence vocabulary + taps + supersession).**
+  Part 1 (`d28d665f`, latent): 10 closed `AdmissionLogEvent` variants + discriminators + writer serialization + the
+  `DISCRIMINATORS` allow-list + the closed `ForkChoiceResult` / `ForkChoiceEvidenceFailure` enums
+  (`admission_log/event.rs` **+196**, `admission_log/writer.rs` **+236**). Part 2 (`c0bae25e`): the observe-only emit
+  taps in `dispatch_competing_fork_choice` (DECIDE half) + the relay loop (APPLY half), with a `fork_switch_id` helper
+  (blake2b of peer + fork anchor + winner tip). Supersession (`a3011d71`): the 10th terminal `fork_switch_superseded`,
+  so every win pairs to exactly one of `applied | failed | superseded`. The post-switch convergence window for CE-AO-6
+  (`028b287a`). New gate `ci_check_fork_choice_evidence_closed.sh`. (Commits `a77cace4`, `d28d665f`, `c0bae25e`,
+  `a3011d71`, `028b287a`.)
+- **PHASE4-N-AO / S10 / `DC-EVIDENCE-05` (enforced) (post-switch branch-continuity reducer).** New module
+  `crates/ade_node/src/post_switch_continuity.rs` (**+676**, GREEN) + its `bin/post_switch_continuity.rs` (**+66**) — a
+  pure, total, deterministic reducer producing a closed `PostSwitchContinuity` verdict (closed sum, no free-form
+  strings; reads ONLY Ade's own admitted lineage, never the peer tip; replay-equivalent). New gate
+  `ci_check_post_switch_convergence_window.sh` (the RELEASE/EVIDENCE-tier transcript checker — NOT a BLUE consensus
+  rule). Run-1 (`08c2bc5b`) recorded a real fork-switch fired (not a flip) and surfaced the S11 continuity gap. (Commits
+  `4c4b5849`, `811c8114`, `08c2bc5b`.)
+
+### Cluster close — `CN-CONS-03` flip (`862cd2cb`)
+
+- **The close (`862cd2cb`) flipped `CN-CONS-03` `declared → enforced`** (`strengthened_in += PHASE4-N-AO`) on a
+  **NATURAL** two-producer multi-candidate SELECT pass (CE-AO-6): both Haskell producers (cn1/cn2, testnet-magic 42)
+  live throughout, NO loser-freeze, NO post-fork operator intervention — the SELECT decision is entirely Ade's. The
+  `ci_check_post_switch_convergence_window.sh` checker (over the `post_switch_continuity` replayable reducer) PASSED:
+  `ContinuesSelectedBranch`, terminal `AgreedAtSwitchTip{slot 391}` (exact agreement, `our_hash == peer_hash`), 25
+  admitted descendants chained, 0 diverged, every fork-choice win terminal. The transcript
+  (`ao-CN-CONS-03-FLIP-natural-conv.jsonl`, sha256 `6713efe9…ca13f`, captured 2026-06-13) is preserved **OUTSIDE the
+  repo** (competition-secrecy / no-credential-leak discipline; sha256-pinned in `CN-CONS-03.evidence_notes`). The close
+  also flipped `DC-NODE-34..37 → enforced`, enforced the 7 new rules, and **repointed**
+  `ci_check_convergence_evidence_vocabulary_closed.sh` to extend the AJ-era 3-literal allow-list with all 10 new
+  fork-choice literals and re-anchor its Guard 5 to the writer `DISCRIMINATORS` allow-list.
+
+**The BLUE tree is UNTOUCHED this span (GREEN+RED only)** — `git diff 31efec44..HEAD` over the configured BLUE
+`core_paths` trees is **empty**. The SELECT reuses the BLUE fork-choice authority (`select_best_chain`,
+`ade_core::consensus::fork_choice`) and the BLUE header authority (`validate_and_apply_header`) unchanged; all new code
+is GREEN (pure projections / reducers) or RED (orchestration / wire) in `ade_node` + one RED touch in
+`ade_runtime::forward_sync::pump`. **No `RO-LIVE` rule flipped** — `RO-LIVE-01` stays operator-gated. The headline flip
+is **`CN-CONS-03`** (a `CN`-family Cardano-convergence rule), on a committed, sha256-pinned NATURAL transcript.
 
 ## 0. Headline
 
-| Count | Baseline (`e87e8a43`) | HEAD (`b8860b16`) | Δ |
+| Count | Baseline (`31efec44`) | HEAD (`862cd2cb`) | Δ |
 |---|---|---|---|
-| CI gates (`ci/ci_check_*.sh`) | 159 | **161** | **+2** — `ci_check_keep_alive_wire_only.sh` (DC-PUMP-03 / N-AM) + `ci_check_rollback_materialize_eta0.sh` (T-REC-06 / N-AN), both **ADDED**. **3 modified in place** (`ci_check_admission_wire_pump_closure.sh`, `ci_check_node_path_fidelity.sh`, `ci_check_lifecycle_owner_uses_bootstrap_initial_state.sh` — the stale-gate triage). **0 removed** (`--diff-filter=D` over `ci/` is empty; `ls ci/ci_check_*.sh \| wc -l` = 159 → 161). |
-| Registry rules (`docs/ade-invariant-registry.toml`) | 359 | **361** | **+2** — two NEW rules `DC-PUMP-03` + `T-REC-06`. **Zero removed** (`comm -23` of the sorted `id =` lists is empty). |
-| Registry status (enforced / enforced_scaffolding / partial / declared) | 224 / 1 / 19 / 126 | **227 / 1 / 19 / 125** | **+3 enforced**, **−1 declared** (`enforced_scaffolding=1` and `partial=19` unchanged). Reconciliation: the two new rules close enforced (`DC-PUMP-03` + `T-REC-06`, +2 enforced — each was declared at its cluster doc then flipped at close, transiently moving `declared` +2 then −2), **and** the in-span **N-AL close commit `35a851b9`** flipped `DC-NODE-33` `declared → enforced` (+1 enforced, −1 declared — at the committed baseline `e87e8a43` it was still `declared`). Net: +3 enforced, −1 declared. |
-| Registry strengthenings | — | **+1** | **`DC-PUMP-02 += "PHASE4-N-AN"`** (the stale-gate triage refined `DC-PUMP-02` so the `RollBackward` chain-sync reply emits its distinct `AdmissionPeerEvent::RollBackward` per AI-S4a; `strengthened_in` becomes `["PHASE4-N-M-FOLLOW", "PHASE4-N-AN"]`). The new rules cross-ref existing rules (`DC-PUMP-03` → `CN-PUMP-01` / `DC-PUMP-01` / `DC-PUMP-02` / `DC-NODE-30` / `CN-CONS-03`; `T-REC-06` → `T-REC-04` / `DC-CINPUT-03` / `CN-STORE-07` / `DC-NODE-27` / `DC-CONS-20`) but append to no other rule's `strengthened_in`. No rule weakened; no rule removed. |
-| BLUE canonical types | 462 | **462** | **±0** — BLUE IS touched (N-AN's eta0 overlay in `praos_state` / `receive::reducer` / `rollback::materialize`), but **no new `pub struct`/`pub enum`** (`git diff e87e8a43..HEAD` over the BLUE trees has no `^+\s*(pub )?(struct\|enum)` line). CODEMAP's BLUE-tree metric **462 → 462**; raw BLUE grep **486 → 486**; whole-tree **921 → 921**. The new BLUE surface is a **method** (`PraosChainDepState::overlay_recovered_eta0`) + a **field** (`RollbackContext.recovered_eta0`), not a type. Still 11 crates (the only `Cargo.toml` touch is a `tokio` `test-util` **dev-dependency**, not a project feature flag). |
-| Grounding docs | CODEMAP / SEAMS / TRACEABILITY all regenerated to **`e87e8a43`** by the in-span N-AL close `35a851b9` (462 canonical types / 159 CI / 359 rules; they carry `DC-NODE-33` — CODEMAP 19 / SEAMS 1 / TRACEABILITY 4 mentions) | Still pinned at **`e87e8a43`** — now **one window (N-AM + N-AN) stale**: none carries `DC-PUMP-03` or `T-REC-06` (`grep -c` in each = 0 for both). N-AM + N-AN add **NO new module and NO new canonical type**, so CODEMAP's module/type inventory (462 types / 11 crates) stays accurate; the owed refresh is TRACEABILITY's two new rows (`DC-PUMP-03` ↔ `ci_check_keep_alive_wire_only.sh`; `T-REC-06` ↔ `ci_check_rollback_materialize_eta0.sh`) + the `DC-PUMP-02` strengthening note + a HEAD-pin/count bump (159 → 161 CI, 359 → 361 rules) across all three. | **CODEMAP + SEAMS + TRACEABILITY are now ONE window STALE** (missing `DC-PUMP-03` + `T-REC-06`; CI count 159 vs. HEAD 161) — the registry holds both new rules + their gate bindings authoritatively at HEAD (**361 rules**); the refresh to `b8860b16` is a follow-on item this close. See the cross-reference warning at the end of §5. |
+| CI gates (`ci/ci_check_*.sh`) | 162 | **173** | **+11** new (S2 `candidate_construction_validated`, S3 `live_selector_dispatch`, S4 `fork_switch_never_abandons`, S6 `live_blockfetch_byte_only`, S7 `lca_anchor_walk`, S8 `wire_pump_fairness`, S9 `fork_choice_evidence_closed`, S11 `missing_bridge_fail_closed`, S13 `rollback_retention_evidence`, S14 `missing_bridge_refetch`, CE-AO-6 `post_switch_convergence_window`). **6 modified in place** (`convergence_evidence_vocabulary_closed`, `live_fork_choice_apply`, `live_fork_choice_wiring`, `peer_identity_preserved`, `wal_rollback_replay_equiv`, `wire_rollback_signal_preserved`). **0 removed** (`--diff-filter=D` over `ci/` is empty; `ls ci/ci_check_*.sh \| wc -l` = 162 → 173). |
+| Registry rules (`docs/ade-invariant-registry.toml`) | 365 | **372** | **+7** new rules `DC-NODE-38`, `DC-NODE-39`, `DC-NODE-40`, `DC-NODE-41`, `DC-PUMP-04`, `DC-EVIDENCE-04`, `DC-EVIDENCE-05`. **Zero removed** (`comm -23` of the sorted `id =` lists is empty). |
+| Registry status (enforced / enforced_scaffolding / partial / declared) | 227 / 1 / 19 / 118 | **239 / 1 / 19 / 113** | **+12 enforced**, **−5 declared** (`enforced_scaffolding=1`, `partial=19` unchanged). Reconciliation: the 7 new rules close `enforced` (+7 enforced; declared at their slice docs then flipped at close, net 0 declared) **and** 5 prior-`declared` rules flipped `enforced` this span (`CN-CONS-03` + `DC-NODE-34..37`; +5 enforced, −5 declared). Net: +12 enforced, −5 declared. |
+| **`CN-CONS-03` (Cardano post-partition convergence)** | `declared` | **`enforced`** | **THE flip.** `strengthened_in` `["PHASE4-N-B","PHASE4-N-AI"]` → `["PHASE4-N-B","PHASE4-N-AI","PHASE4-N-AO"]`; enforced on the natural CE-AO-6 transcript (sha256 `6713efe9…`, OUTSIDE-repo). |
+| Registry strengthenings | — | **+10** | `strengthened_in += PHASE4-N-AO` on **CN-CONS-01**, **CN-CONS-03**, **DC-CONS-03**, **DC-CONS-20** (the convergence / arrival-order-independence family — the SELECT exercises them live) and **DC-NODE-24..29** (the N-AI single-best-peer rollback-follow family — the SELECT's prove-then-commit re-exercises the rollback authority). No rule weakened; no rule removed. |
+| BLUE canonical types | 462 | **462** | **±0** — the BLUE tree is **untouched** (`git diff 31efec44..HEAD` over the BLUE `core_paths` trees is empty). The SELECT reuses `select_best_chain` + `validate_and_apply_header` unchanged. CODEMAP's BLUE-tree metric **462 → 462**. Still 11 crates (no `Cargo.toml` change this span). |
+| Grounding docs | CODEMAP / SEAMS / TRACEABILITY all regenerated to **`b8860b16`** by the prior `f167a349` regen (462 canonical types / 161 CI / 361 rules) | Now **one cluster (PHASE4-N-AO) stale**: none carries the SELECT's 6 new modules or 7 new rules (`grep -c` in each = 0 for `candidate_aggregator` / `fork_switch` / `lca_walk` / `selector_state` / `post_switch_continuity` / `fair_merge` and for `DC-NODE-38..41` / `DC-PUMP-04` / `DC-EVIDENCE-04/05`); their CI pin reads **161** vs. HEAD **173**. | **CODEMAP + SEAMS + TRACEABILITY are now ONE cluster STALE** — they MISS 6 new modules, 7 new rules, the `CN-CONS-03` flip, and 11 new CI gates. The registry holds all of it authoritatively at HEAD (**372 rules**); the refresh to `862cd2cb` is the named follow-on this close. See the cross-reference warnings at the end of §2 and §5. |
 
 > **Grounding-doc state this close (load-bearing).** **CODEMAP, SEAMS, and TRACEABILITY were all regenerated to
-> `e87e8a43` at the N-AL close `35a851b9`** (the in-span first commit), so they carry `DC-NODE-33` and pin to
-> `e87e8a43` / 462 types / 159 CI / 359 rules. They are now **one window stale** (N-AM + N-AN): `grep -c DC-PUMP-03`
-> and `grep -c T-REC-06` in all three are **0**, and their CI-count pins read **159** vs. HEAD's **161**. Because
-> N-AM + N-AN introduce **no new module and no new canonical type**, CODEMAP's structural inventory (462 types / 11
-> crates) is unaffected; the owed refresh is the two new four-cell rows in TRACEABILITY (`DC-PUMP-03` +
-> `T-REC-06`, each with its new `ci_check_*` gate), the `DC-PUMP-02 += PHASE4-N-AN` strengthening note, and a
-> HEAD-pin/count bump (159 → 161 CI, 359 → 361 rules) across all three. The invariant registry holds both new rules +
-> their gate bindings authoritatively at HEAD (**361 rules**); the CODEMAP + SEAMS + TRACEABILITY refresh to
-> `b8860b16` is the follow-on item this close (surfaced in §5).
+> `b8860b16`** (the prior N-AM/N-AN window's HEAD, by `f167a349`), so they pin to `b8860b16` / 462 types / 161 CI / 361
+> rules and carry `DC-PUMP-03` + `T-REC-06` but **nothing from PHASE4-N-AO**. They are now **one cluster stale**: the
+> SELECT introduced **6 new modules**, **7 new rules**, **10 strengthenings**, the **`CN-CONS-03` flip**, and **11 new CI
+> gates** — none of which appear in CODEMAP/SEAMS/TRACEABILITY (`grep -c` for each new module/rule = 0; CI pin 161 vs.
+> HEAD 173). This is the **largest grounding-doc refresh debt** of the recent windows (prior windows added 0 modules);
+> the invariant registry holds all of it authoritatively at HEAD (**372 rules**). **Action:** regenerate CODEMAP + SEAMS
+> + TRACEABILITY to `862cd2cb` as a follow-on this close so the 6 new modules, the 7 new rules with their named gates,
+> the 10 strengthenings, and the `CN-CONS-03` flip all appear, and all three docs pin to the N-AO HEAD. Until then the
+> registry is authoritative for the new bindings.
 
-The slice↔rule↔gate map for this window:
+The slice↔rule↔gate map for this window (the full verbatim log is §1; S1 sits at the baseline tip):
 
 | Slice | Rule(s) | Gate | What shipped |
 |---|---|---|---|
-| **N-AL close** (`35a851b9`) | flip `DC-NODE-33 → enforced` (populates `tests`); CODEMAP/SEAMS/TRACEABILITY/HEAD_DELTAS regenerated to `e87e8a43` | — (no new gate) | **docs/registry only — 0 code.** Closed the N-AL cluster: flipped `DC-NODE-33` to `enforced` (the previously-uncommitted N-AL close-pass), regenerated all four grounding docs to `e87e8a43`, and archived the N-AL cluster/slice docs to `docs/clusters/completed/PHASE4-N-AL/`. Folded into this span because it sits inside `e87e8a43..HEAD`; it is **not** N-AM/N-AN work. |
-| **N-AM declare** (`6894f96f` + `c1b9eee2`) | `DC-PUMP-03` **declared** | — | N-AM keep-alive sustain finding + invariants sketch + cluster authority doc; declares `DC-PUMP-03`. 0 code. |
-| **AM-S1** (`a1655449`) | **`DC-PUMP-03`** (NEW) | `ci_check_keep_alive_wire_only.sh` (NEW) | **RED keep-alive client.** `run_admission_wire_pump` `tokio::select!` cadence sends proto-8 `MsgKeepAlive` ~20s; `handle_keep_alive` validates cookies via the reused BLUE `keep_alive_transition`; wire-only (no `AdmissionPeerEvent`); fail-closed `AdmissionWirePumpError::KeepAlive`. +3 tests. (`+285` in `wire_pump.rs`; `+4` dev-dep `tokio` `test-util`.) |
-| **N-AM bank + close** (`c0430322` → `8b18fc8e`) | `DC-PUMP-03` enforced_scaffolding → **enforced** | — | Bank (CE-AM-LIVE open), then close on the CE-AM-LIVE 152s sustain pass (`DC-PUMP-03 → enforced`). |
-| **N-AN declare** (`180292f6`) | `T-REC-06` **declared** | — | N-AN rollback-materialize eta0 replay-equivalence authority doc; declares `T-REC-06`. 0 code. |
-| **AN-S1** (`dbf31c7a`) | `T-REC-06` (repro) | — | **Repro-first.** Reproduces the rollback-materialize eta0 `VrfCert` divergence mechanically. |
-| **AN-S2** (`deaa6e28`) | **`T-REC-06`** (NEW, → enforced) | `ci_check_rollback_materialize_eta0.sh` (NEW) | **BLUE overlay authority + RED threading.** `PraosChainDepState::overlay_recovered_eta0` (new BLUE method); `materialize_rolled_back_state` gains `recovered_eta0` param + overlays before the replay fold; `RollbackContext` + `ForwardSyncState` gain `recovered_eta0`; `bootstrap.rs` reorders sidecar-restore before materialize; `node_lifecycle` threads eta0 into `apply_chain_event`. +2 BLUE tests. |
-| **CE-AN-LIVE** (`4380d02e`) | `T-REC-06` (live-validated) | — | Records the CE-AN-LIVE PASS (CE-AI-6 reorg capture): Ade followed a live `RollBackward` slot regression 371→361, re-converged `agreed` @ 383 (our==peer hash), 0 diverged, 0 `VrfCert`. |
-| **stale-gate triage** (`89facbea`) | `DC-PUMP-02 += PHASE4-N-AN` | 3 gates MODIFIED | CI-script + registry only; 0 source. Repaired 3 pre-existing red gates (see above). |
-| **archive** (`b8860b16`) | — | — | docs-only; moved PHASE4-N-AM + PHASE4-N-AN to `docs/clusters/completed/`. |
-
-The per-commit shape (the full verbatim log is §1):
-
-| Commit | Kind | What it did | Code / CI / registry effect |
-|--------|------|-------------|-----------------------------|
-| `35a851b9` | (close) | Close PHASE4-N-AL — participant-path recovered-anchor rollback boundary (DC-NODE-33) | **0 code / 0 CI**; docs/registry: flipped `DC-NODE-33 → enforced` (populates `tests`), regenerated all four grounding docs to `e87e8a43`, archived N-AL cluster docs. Registry count unchanged (359). **N-AL, not N-AM/N-AN** |
-| `6894f96f` | docs (phase4-n-am) | Record keep-alive sustain finding + invariants sketch | **0 code / 0 CI / 0 registry**; planning doc only |
-| `c1b9eee2` | docs (phase4-n-am) | Keep-alive client authority; declare DC-PUMP-03 | **0 code / 0 CI**; registry: `DC-PUMP-03` declared; + N-AM cluster doc |
-| `a1655449` | feat (phase4-n-am) | AM-S1 — wire-pump keep-alive client sustains the live follow (DC-PUMP-03) | **RED code** (`wire_pump.rs` +285) + 3 tests + dev-dep `tokio` `test-util` (+4); **+0 BLUE type**; **+0 module**; **+1 CI** (`ci_check_keep_alive_wire_only.sh`); registry: enforcement scaffolding |
-| `c0430322` | (bank) | Bank PHASE4-N-AM — DC-PUMP-03 enforced_scaffolding; CE-AM-LIVE open | **0 code / 0 CI**; registry: `DC-PUMP-03 → enforced_scaffolding` (CE-AM-LIVE open) |
-| `8b18fc8e` | (close) | Close PHASE4-N-AM — DC-PUMP-03 enforced (CE-AM-LIVE sustain pass) | **0 code / 0 CI**; registry: `DC-PUMP-03 → enforced` (152s sustain pass) |
-| `180292f6` | docs (phase4-n-an) | Rollback-materialize eta0 replay-equivalence authority; declare T-REC-06 | **0 code / 0 CI**; registry: `T-REC-06` declared; + N-AN cluster doc |
-| `dbf31c7a` | test (phase4-n-an) | AN-S1 — reproduce rollback-materialize eta0 divergence (repro-first) | **test code** (`wal_rollback_ai_s1.rs` +1, `materialize.rs` repro); **+0 BLUE type**; **+0 CI** |
-| `deaa6e28` | feat (phase4-n-an) | AN-S2 — carry recovered eta0 into rollback materialization (T-REC-06 enforced) | **BLUE code** (`praos_state.rs` +15, `materialize.rs` +140, `receive/reducer.rs` +7) + **RED** (`bootstrap.rs` +51, `forward_sync/reducer.rs` +9, `node_lifecycle.rs` +12) + tests; **+0 BLUE type**; **+0 module**; **+1 CI** (`ci_check_rollback_materialize_eta0.sh`); registry: `T-REC-06 → enforced` |
-| `4380d02e` | docs (phase4-n-an) | Record CE-AN-LIVE PASS — CE-AI-6 reorg capture (T-REC-06 live-validated) | **0 code / 0 CI / 0 registry-rule** (evidence note in `T-REC-06.open_obligation` + runbook) |
-| `89facbea` | ci (gates) | Stale-gate triage — 3 pre-existing red gates classified stale + repaired | **0 source**; CI: 3 gates MODIFIED; registry: `DC-PUMP-02` `source`/`statement` refined + `strengthened_in += PHASE4-N-AN` |
-| `b8860b16` | docs (clusters) | Archive PHASE4-N-AM + PHASE4-N-AN to completed/ | **0 code / 0 CI / 0 registry**; cluster-doc move only |
+| **N-AO declare + S1** (`a87a4eb5`, `301a4932`, `31efec44`) | declare `DC-NODE-34..37`; **`DC-NODE-34` enforced** | `ci_check_peer_identity_preserved.sh` (S1) | **At/before the baseline.** S1 (peer-identity restoration — `NodeSyncItem` carries `peer`) is the baseline tip; this regen measures from S1 forward, so `DC-NODE-34` is already enforced at `31efec44`. The gate appears as **Modified** in §5 (the stale-gate repair touched it). |
+| **S2** (`6bcfc9e5`) | **`DC-NODE-35`** (NEW module, → enforced) | `ci_check_candidate_construction_validated.sh` (NEW) | **GREEN BLUE-safe candidate construction.** New module `candidate_aggregator.rs` (+409) — pure projection from `validate_and_apply_header`. |
+| **S3** (`986d8339`, `a8c12327`, `cd11c256`) | **`DC-NODE-36`** (NEW module, → enforced) | `ci_check_live_selector_dispatch.sh` (NEW) | **Live selector dispatch — decide-only.** New module `selector_state.rs` (+167, GREEN) + RED `dispatch_competing_fork_choice` in `node_lifecycle.rs`; calls the unchanged BLUE `select_best_chain`, emits a provisional `PendingForkSwitch`. |
+| **S4** (`d63b5dac`, `5e4807e2`) | **`DC-NODE-37`** (NEW module, → enforced) | `ci_check_fork_switch_never_abandons.sh` (NEW) | **Fork-switch apply — prove, then commit.** New module `fork_switch.rs` (+555) — PURE `prevalidate_branch` + RED `apply_fork_switch`. |
+| **S5** (`5b31bf7f`) | `CE-AO-5` (reselection replay-equiv) | `ci_check_wal_rollback_replay_equiv.sh` (Modified) | Reselection replay-equivalence + fence resolution; new test file `reselection_replay_s5.rs` (+306). |
+| **S6** (`08b2aebc`, `9a85ab93`, `3e0a6ad6`) | `CE-AO-6` (byte-only bridge) | `ci_check_live_blockfetch_byte_only.sh` (NEW) | **Live BlockFetch byte-only bridge.** `PrefetchedBranchBodies` + boundary proofs; `PendingForkSwitch` carries `winner_tip`; relay-loop fill via `prefetch_branch_bodies`. |
+| **S7** (`3b03b967`) | **`DC-NODE-38`** (NEW module, → enforced) | `ci_check_lca_anchor_walk.sh` (NEW) | **Live LCA fork-anchor walk.** New module `lca_walk.rs` (+411, GREEN) — read-only ChainDb walk to the durable LCA under a `k`-bound. |
+| **S8** (`4c64e779`) | **`DC-PUMP-04`** (NEW module, → enforced) | `ci_check_wire_pump_fairness.sh` (NEW) | **Multi-peer wire-pump fairness.** New module `fair_merge.rs` (+244, RED) — per-peer lanes + round-robin merge. (NOT the live blocker — see S8.5.) |
+| **S8.5** (`6846d252`) | (`DC-NODE-34` fidelity) | — | **The evidence-artifact fix.** `block_received` per-block peer attribution; overturned the channel-fairness / 2-pump-stall diagnoses. |
+| **S9** (`d28d665f`, `c0bae25e`, `a3011d71`, `028b287a`) | **`DC-EVIDENCE-04`** (NEW, → enforced) | `ci_check_fork_choice_evidence_closed.sh` (NEW) | **Closed fork-choice evidence vocabulary + taps + supersession.** 10 closed `AdmissionLogEvent` variants; observe-only emit taps; `fork_switch_superseded` terminal (every win pairs). |
+| **S10** (`811c8114`, `08c2bc5b`) | **`DC-EVIDENCE-05`** (NEW module, → enforced) | `ci_check_post_switch_convergence_window.sh` (NEW) | **Post-switch branch-continuity reducer.** New module `post_switch_continuity.rs` (+676, GREEN) + bin — replayable closed verdict over Ade's own lineage. |
+| **S11** (`ab47c338`) | **`DC-NODE-39`** (NEW, → enforced) | `ci_check_missing_bridge_fail_closed.sh` (NEW) | **Post-ForkChoiceWin forward-follow floor.** Structured `MissingBridge` fail-closed; no silent stall. |
+| **S12** (`66312da0`) | `DC-NODE-39` regression | — (extends S11 gate) | **Bridge-gap fault-injection harness.** Deterministic regression for the S11 floor. |
+| **S13** (`e80d4226`) | **`DC-NODE-40`** (NEW, → enforced) | `ci_check_rollback_retention_evidence.sh` (NEW) | **Rolled-back branch evidence retention.** Walk-visible retention; fixes the S7 LCA-walk over-fire. |
+| **S14** (`bb7ed9dd`, `2a03ac73`) | **`DC-NODE-41`** (NEW, → enforced) | `ci_check_missing_bridge_refetch.sh` (NEW) | **Missing-bridge range re-fetch.** `recover_missing_range` admit loop + live wire. |
+| **close** (`862cd2cb`) | **`CN-CONS-03` enforced** + `DC-NODE-34..37` enforced + 7 new rules enforced + 10 strengthenings | `ci_check_convergence_evidence_vocabulary_closed.sh` (Modified — repointed) | **Flip `CN-CONS-03`** on the natural CE-AO-6 transcript. |
 
 ## 1. Commit Log (newest first)
 
 | Hash | Type | Summary |
 |------|------|---------|
-| `b8860b16` | docs | docs(clusters): archive PHASE4-N-AM + PHASE4-N-AN to completed/ |
-| `89facbea` | ci | ci(gates): stale-gate triage -- 3 pre-existing red gates classified stale + repaired |
-| `4380d02e` | docs | docs(phase4-n-an): record CE-AN-LIVE PASS -- CE-AI-6 reorg capture (T-REC-06 live-validated) |
-| `deaa6e28` | feat | feat(phase4-n-an): AN-S2 -- carry recovered eta0 into rollback materialization (T-REC-06 enforced) |
-| `dbf31c7a` | test | test(phase4-n-an): AN-S1 -- reproduce rollback-materialize eta0 divergence (T-REC-06, repro-first) |
-| `180292f6` | docs | docs(phase4-n-an): rollback-materialize eta0 replay-equivalence authority; declare T-REC-06 |
-| `8b18fc8e` | (close) | Close PHASE4-N-AM -- DC-PUMP-03 enforced (CE-AM-LIVE sustain pass) |
-| `c0430322` | (bank) | Bank PHASE4-N-AM -- DC-PUMP-03 enforced_scaffolding; CE-AM-LIVE open (CE-AI-6 venue) |
-| `a1655449` | feat | feat(phase4-n-am): AM-S1 -- wire-pump keep-alive client sustains the live follow (DC-PUMP-03) |
-| `c1b9eee2` | docs | docs(phase4-n-am): keep-alive client authority; declare DC-PUMP-03 |
-| `6894f96f` | docs | docs(phase4-n-am): record keep-alive sustain finding + invariants sketch (CE-AI-6 prerequisite) |
-| `35a851b9` | (close) | Close PHASE4-N-AL — participant-path recovered-anchor rollback boundary (DC-NODE-33) |
+| `862cd2cb` | docs | docs(phase4-n-ao): cluster-close -- flip CN-CONS-03 enforced on the natural CE-AO-6 transcript |
+| `2a03ac73` | feat | feat(phase4-n-ao): S14 part 2 -- wire the missing-bridge range re-fetch live (DC-NODE-41) |
+| `bb7ed9dd` | feat | feat(phase4-n-ao): S14 part 1 -- latent range-recovery admit loop + closed outcome (DC-NODE-41) |
+| `6369af30` | docs | docs(phase4-n-ao): scope S14 missing-bridge range re-fetch (declare DC-NODE-41) |
+| `e80d4226` | feat | feat(phase4-n-ao): S13 rolled-back branch evidence retention -- fixes the LCA-walk over-fire (DC-NODE-40) |
+| `f1ca350d` | docs | docs(phase4-n-ao): scope S13 rolled-back branch evidence retention (declare DC-NODE-40) |
+| `66312da0` | test | test(phase4-n-ao): S12 bridge-gap fault-injection harness (deterministic DC-NODE-39 regression) |
+| `ab47c338` | feat | feat(phase4-n-ao): S11 DC-NODE-39 floor -- structured MissingBridge fail-closed, no silent stall |
+| `eff880aa` | docs | docs(phase4-n-ao): scope S11 post-ForkChoiceWin forward-follow continuity (declare DC-NODE-39) |
+| `fccebb94` | docs | docs(phase4-n-ao): run-1 root cause -- post-switch chain HOLE on the winner, not a wire gap (scope S11) |
+| `08c2bc5b` | docs | docs(phase4-n-ao): record S10 run 1 -- real fork-switch fired, not a flip (continuity gate) |
+| `811c8114` | feat | feat(phase4-n-ao): S10 post-switch branch-continuity reducer + prev_hash evidence (DC-EVIDENCE-05) |
+| `4c4b5849` | docs | docs(phase4-n-ao): scope S10 post-switch branch-continuity evidence (declare DC-EVIDENCE-05) |
+| `028b287a` | feat | feat(phase4-n-ao): bounded post-switch convergence window for CE-AO-6 (DC-EVIDENCE-04) |
+| `a3011d71` | feat | feat(phase4-n-ao): S9 supersession terminal -- every fork-choice win pairs (DC-EVIDENCE-04) |
+| `c0bae25e` | feat | feat(phase4-n-ao): S9 part 2 -- observe-only fork-choice evidence taps (DC-EVIDENCE-04) |
+| `d28d665f` | feat | feat(phase4-n-ao): S9 part 1 -- closed fork-choice evidence vocabulary (DC-EVIDENCE-04, latent) |
+| `a77cace4` | docs | docs(phase4-n-ao): S9 slice doc + DC-EVIDENCE-04 declared (closed fork-choice convergence evidence) |
+| `6846d252` | fix | fix(phase4-n-ao): block_received per-block peer attribution -- the evidence artifact that masked working multi-peer SELECT |
+| `901650b2` | docs | docs(phase4-n-ao): S8 retry -- channel fairness was the wrong layer; live blocker is a 2-pump concurrency stall |
+| `4c64e779` | feat | feat(phase4-n-ao): S8 multi-peer wire-pump fairness -- DC-PUMP-04 (per-peer lanes + fair merge) |
+| `fc3db0f5` | docs | docs(phase4-n-ao): S8 slice doc + DC-PUMP-04 declared (multi-peer wire-pump fairness) |
+| `cabe61ff` | docs | docs(phase4-n-ao): record S7 live retry -- LCA walk wired, blocked on wire-pump multi-peer fairness |
+| `3b03b967` | feat | feat(phase4-n-ao): S7 live LCA fork-anchor walk -- DC-NODE-38 (multi-block branch) |
+| `0cce1668` | docs | docs(phase4-n-ao): S7 slice doc + DC-NODE-38 declared (live LCA fork-anchor walk) |
+| `c841f0b5` | docs | docs(phase4-n-ao): record the CE-AO-6 live SELECT gap (multi-block competing branch) |
+| `3e0a6ad6` | feat | feat(phase4-n-ao): S6 live BlockFetch fetch + relay integration + evidence (CE-AO-6 hermetic) |
+| `9a85ab93` | feat | feat(phase4-n-ao): S6 -- PendingForkSwitch carries winner_tip (the BlockFetch endpoint) |
+| `08b2aebc` | feat | feat(phase4-n-ao): S6 byte-only bridge core -- PrefetchedBranchBodies + boundary proofs (CE-AO-6) |
+| `1f16ff7f` | docs | docs(phase4-n-ao): S6 slice doc -- live BlockFetch bridge + two-producer operator pass (CE-AO-6) |
+| `5b31bf7f` | feat | feat(phase4-n-ao): S5 reselection replay-equivalence + fence resolution (CE-AO-5) |
+| `2490ef07` | docs | docs(phase4-n-ao): S5 slice doc -- reselection replay-equivalence + fence resolution (CE-AO-5) |
+| `d63b5dac` | feat | feat(phase4-n-ao): S4 fork-switch apply -- prove, then commit (DC-NODE-37) |
+| `5e4807e2` | ci | ci(gates): repair stale fork-choice gate patterns (PHASE4-N-AO S1/S3 drift) |
+| `cabb94b8` | docs | docs(phase4-n-ao): S4 slice doc -- fork-switch apply (prove, then commit) (DC-NODE-37) |
+| `cd11c256` | docs | docs(phase4-n-ao): S3 -- correct k source-of-authority wording |
+| `a8c12327` | feat | feat(phase4-n-ao): S3 live selector dispatch -- decide-only (DC-NODE-36) |
+| `986d8339` | feat | feat(phase4-n-ao): S3 selector-state projection foundation (DC-NODE-36, GREEN half) |
+| `04f11013` | docs | docs(phase4-n-ao): S3 doc -- Option A selector-state + conservative-floor hard rule |
+| `1939165e` | docs | docs(phase4-n-ao): S3 slice doc -- live selector dispatch (DC-NODE-36) |
+| `6bcfc9e5` | feat | feat(phase4-n-ao): S2 -- BLUE-safe candidate construction (DC-NODE-35) |
+| `01c94db1` | docs | docs(phase4-n-ao): S2 slice doc -- BLUE-safe candidate construction (DC-NODE-35) |
 
-No merge commits in the span. **12 commits, zero unclassified.** Nine subjects carry an explicit conventional-commits
-prefix (`feat(...)` ×2, `docs(...)` ×5, `test(...)` ×1, `ci(...)` ×1); the other three are project close/bank
-commits without a prefix (`8b18fc8e` Close N-AM, `c0430322` Bank N-AM — the project's close/bank convention; and
-`35a851b9` `Close PHASE4-N-AL …`, the PRIOR-window close, folded in because it sits inside `e87e8a43..HEAD`). The
-substantive production code lands in the two `feat(...)` commits (`a1655449` AM-S1 RED keep-alive, `deaa6e28` AN-S2
-BLUE+RED eta0 overlay) plus the `test(...)` AN-S1 repro (`dbf31c7a`); the `ci(...)` commit (`89facbea`) is CI-script +
-registry only (0 source). **`35a851b9` is N-AL close work, not PHASE4-N-AM/AN** (docs/registry only — 0 code).
-`35a851b9` landed 2026-06-10; everything else 2026-06-11.
+No merge commits in the span. **42 commits, zero unclassified** — every subject carries an explicit conventional-commits
+prefix: **`feat`×19**, **`docs`×20**, **`test`×1** (`66312da0` the S12 fault-injection harness), **`fix`×1**
+(`6846d252` the peer-attribution evidence artifact), **`ci`×1** (`5e4807e2` the stale fork-choice gate repair). The
+substantive production code lands in the 19 `feat(...)` commits (the SELECT decide/prove/fetch/evidence bands) plus the
+one `fix(...)`; the `ci(...)` commit is gate-only and the `test(...)` commit is the delegated fault-injection harness.
 
-> **Note (commit-attribution policy).** Per this repo's `CLAUDE.md` override (vibe-coded-node bounty
-> trailer requirement), commits in this repo carry a `Co-Authored-By:` model-attribution trailer; that
-> is an Ade-local override of the global no-AI-attribution rule and applies to **commit messages
-> only**. It does not affect this doc's content.
+> **Note (commit-attribution policy).** Per this repo's `CLAUDE.md` override (vibe-coded-node bounty trailer
+> requirement), commits in this repo carry a `Co-Authored-By:` model-attribution trailer; that is an Ade-local override
+> of the global no-AI-attribution rule and applies to **commit messages only**. It does not affect this doc's content.
 
 ## 2. New Modules
 
-**No new modules this window.** `git diff --diff-filter=A --name-only e87e8a43..HEAD -- 'crates/**/*.rs'` is
-**empty** — neither N-AM nor N-AN adds a new library module or test file (N-AM's 3 tests are added to the EXISTING
-`crates/ade_runtime/src/admission/wire_pump.rs` `mod tests`; N-AN's 2 BLUE tests to the EXISTING `materialize.rs`
-test module). There is **no new crate, no new workspace** (`git diff --diff-filter=A '**/Cargo.toml'` is empty; still
-**11 crates**). The only manifest change is a **dev-dependency** addition (`tokio` `test-util` in
-`crates/ade_runtime/Cargo.toml`) — see §4. All source changes are confined to **six existing files** (one RED for
-N-AM, three BLUE + two RED for N-AN) plus their existing test modules (§3).
+**Six new modules this window — all in `ade_node`** (`git diff --diff-filter=A --name-only 31efec44..HEAD --
+'crates/**/*.rs'` lists them plus two new test files and the `post_switch_continuity` bin). There is **no new crate, no
+new workspace** (`git diff --diff-filter=A '**/Cargo.toml'` is empty; still **11 crates**), and **no BLUE module** (the
+BLUE tree is untouched — the SELECT reuses `select_best_chain` + `validate_and_apply_header`).
 
-> **Cross-reference (CODEMAP) — no new module to register.** Because this window introduces no module and no canonical
-> type, CODEMAP's module inventory (11 crates / 462 canonical types, regenerated to `e87e8a43` at the N-AL close
-> `35a851b9`) remains structurally accurate at HEAD. `DC-PUMP-03` attaches to the EXISTING RED
-> `ade_runtime::admission::wire_pump` module; `T-REC-06` attaches to the EXISTING BLUE `ade_ledger::rollback::materialize`
-> + `ade_core::consensus::praos_state` modules (all already in CODEMAP) — only their rule↔enforcement bindings
-> (TRACEABILITY) need the refresh (§5).
+| Module | Color | Purpose | Key sub-paths | Added in |
+|--------|-------|---------|---------------|----------|
+| `ade_node::candidate_aggregator` | **GREEN** | BLUE-safe candidate construction: a PURE projection that validates each competing-branch header through the BLUE `validate_and_apply_header` authority and assembles a `CandidateFragment` for `select_best_chain` — no minting, no store reads, no durable mutation. | `crates/ade_node/src/candidate_aggregator.rs` (+409): `CandidateFragment`, `build_candidate_fragment`, the no-manufacture boundary. | PHASE4-N-AO **S2** (`DC-NODE-35`) |
+| `ade_node::selector_state` | **GREEN** | Selector-state projection for live fork-choice dispatch: derives the `TiebreakerView` / `ChainSelectorState` **from Ade's own already-admitted durable tip bytes** (local durable authority, never the peer tip) and carries the provisional decision toward S4. | `crates/ade_node/src/selector_state.rs` (+167): `project_tiebreaker`, `ChainSelectorState` projection. | PHASE4-N-AO **S3** (`DC-NODE-36`) |
+| `ade_node::fork_switch` | **GREEN** | Fork-switch prove core: a `PendingForkSwitch` is authority to *attempt proof*, not to roll back. PURE `prevalidate_branch` proves the fetched bodies bind to the S3-selected headers, link from the durable anchor, and ledger-validate; the durable commit is RED (`apply_fork_switch`, in `node_lifecycle`). | `crates/ade_node/src/fork_switch.rs` (+555): `prevalidate_branch` (pure), `BranchProofError`, `ForkSwitchOutcome`. | PHASE4-N-AO **S4** (`DC-NODE-37`) |
+| `ade_node::lca_walk` | **GREEN** | Last-common-ancestor fork-anchor walk: walks a multi-block competing branch's preserved parent links back to a DURABLE `ChainDb`-stored LCA under a block-depth `k`-bound. Read-only ChainDb lookups; the per-peer cache is NOT authority. | `crates/ade_node/src/lca_walk.rs` (+411): `walk_to_durable_lca`, per-peer branch cache, multi-header candidate. | PHASE4-N-AO **S7** (`DC-NODE-38`) |
+| `ade_node::fair_merge` | **RED** | Multi-peer wire-pump fairness: each peer gets its OWN bounded lane, drained by a deterministic round-robin merge over the configured `--peer` order — **scheduling discipline ONLY, never fork-choice** (`select_best_chain` stays arrival-order-independent). No `HashMap`/wall-clock/`rand`. | `crates/ade_node/src/fair_merge.rs` (+244): per-peer lanes, `fair_merge` (rotating cursor, closed-lane retire-in-place). | PHASE4-N-AO **S8** (`DC-PUMP-04`) |
+| `ade_node::post_switch_continuity` | **GREEN** | Replayable post-switch branch-continuity verdict: a pure, total, deterministic reducer over the closed convergence-evidence transcript classifying Ade's OWN admitted-block lineage after a `ForkChoiceWin` into a closed `PostSwitchContinuity` verdict (closed sum; reads only Ade's own lineage; the peer tip is never an input). | `crates/ade_node/src/post_switch_continuity.rs` (+676) + `crates/ade_node/src/bin/post_switch_continuity.rs` (+66): `PostSwitchContinuity`, `ContinuesSelectedBranch`, `AgreedAtSwitchTip`. | PHASE4-N-AO **S10** (`DC-EVIDENCE-05`) |
+
+Two new **test files** were also added (not library modules): `crates/ade_node/tests/reselection_replay_s5.rs` (+306,
+S5 reselection replay-equivalence) and the S6/S7/S9 taps extended the existing
+`crates/ade_node/tests/live_fork_choice_ai_s4bii.rs`.
+
+> **Cross-reference (CODEMAP) — 6 modules NOT yet registered; CODEMAP is stale.** None of `candidate_aggregator`,
+> `selector_state`, `fork_switch`, `lca_walk`, `fair_merge`, or `post_switch_continuity` appears in
+> `docs/ade-CODEMAP.md` (`grep -c` for each module name in CODEMAP = **0**) — CODEMAP is pinned to `b8860b16` (the prior
+> window, before PHASE4-N-AO). **This is a real staleness flag, not a discipline gap:** this is the first PHASE4-N-AO
+> regen, and CODEMAP/SEAMS/TRACEABILITY have not yet been regenerated for the cluster (the registry holds the new module
+> bindings authoritatively). **Action:** run `/codemap` (and `/seams`, `/traceability`) to `862cd2cb` so all 6 new
+> modules land in CODEMAP §GREEN/§RED with their authority tables, before relying on CODEMAP for the SELECT path.
 
 ## 3. Modules Modified
 
-Beyond the (zero) new modules (§2), **six existing source files** changed for the production work — one RED for
-PHASE4-N-AM, three BLUE + two RED for PHASE4-N-AN — plus their existing test modules. (The remaining span churn is the
-in-span N-AL close `35a851b9` regenerating the four grounding docs + archiving cluster docs, the N-AM/N-AN cluster
-docs, the stale-gate triage's three CI scripts + the `DC-PUMP-02` registry edit, and the `b8860b16` archive — docs/CI
-only.)
+Beyond the six new modules (§2), the production work modified **`ade_node::node_lifecycle`** (the bulk — the RED SELECT
+orchestration), the **`ade_node::admission_log`** event/writer (the closed evidence vocabulary), the
+**`ade_node::convergence_evidence`** emitter, and a small RED touch in **`ade_runtime::forward_sync::pump`**. The
+remaining span churn is the cluster/slice docs and the registry/CI edits.
 
 | Module | Color / scope | Key changes |
 |--------|---------------|-------------|
-| `ade_runtime::admission::wire_pump` (`wire_pump.rs` +285) | **RED** per-peer wire pump, additive | **PHASE4-N-AM (AM-S1, `a1655449`):** the N2N keep-alive CLIENT (`DC-PUMP-03`). New `const KEEP_ALIVE_CADENCE = 20s`; per-peer keep-alive state (`KeepAliveState`, monotonic `u16` cookie, `KeepAliveVersion`, a `tokio::time::interval` with `MissedTickBehavior::Delay`, first tick consumed); a `tokio::select!` over inbound `recv()` (byte-identical pre-AM behaviour) + the cadence `tick()` — the cadence arm sends `MsgKeepAlive` (Initiator) only while `ClientIdle`, via the EXISTING outbound `OutboundFrame` path, advancing the REUSED BLUE `keep_alive_transition`; new `handle_keep_alive` consumes `MsgResponseKeepAlive` (agency fixed `Server`) and validates the echoed cookie; the previously-silent `KeepAlive` arm of the `AcceptedMiniProtocol` match now calls it. New error variant `AdmissionWirePumpError::KeepAlive(KeepAliveError)` (fail-closed → drop the peer). **WIRE-ONLY** — no `AdmissionPeerEvent`; cookie is deterministic (no `rand`); cadence is wall-clock RED. +3 hermetic tests (`wire_pump_sends_keep_alive_on_quiescent_cadence` under `start_paused`, `…_response_validates_cookie_no_event`, `…_cookie_mismatch_fails_closed`). The BLUE `ade_network::keep_alive` grammar is REUSED, not redefined. |
-| `ade_ledger::rollback::materialize` (`materialize.rs` +140) | **BLUE** sole rolled-back-state authority (`CN-STORE-07`), additive | **PHASE4-N-AN (AN-S2, `deaa6e28`):** `materialize_rolled_back_state` gains a `recovered_eta0: Option<&Nonce>` param and overlays it onto the nearest-snapshot `chain_dep` (via `overlay_recovered_eta0`) **BEFORE** the degenerate snapshot-at-target return AND the replay-forward `block_validity` fold, so rollback replay validates each block's header VRF against eta0, NOT the snapshot `Nonce::ZERO` placeholder (`T-REC-06`). `None` (cold-start / no sidecar) keeps the snapshot nonce as-is. **VRF strength UNCHANGED** — not a bypass. +2 tests (`rollback_materialize_overlays_recovered_eta0_replay_equivalent` — `None ⇒ VrfCert`, `Some(eta0) ⇒ Valid` + materialized `epoch_nonce == eta0`; `rollback_materialize_does_not_bypass_vrf_on_wrong_eta0` — wrong eta0 still fails VRF). |
-| `ade_core::consensus::praos_state` (`praos_state.rs` +15) | **BLUE** Praos chain-dep state, additive | **PHASE4-N-AN (AN-S2, `deaa6e28`):** new `pub fn overlay_recovered_eta0(&mut self, eta0: &Nonce)` — the SINGLE eta0-overlay authority (sets both `epoch_nonce` and `evolving_nonce` to eta0), shared by BOTH WarmStart bootstrap (the live-admit `chain_dep`) and rollback materialization (the replay `chain_dep`), so live admit and rollback replay validate against the SAME nonce by construction. **New method, not a new type.** |
-| `ade_ledger::receive::reducer` (`receive/reducer.rs` +7) | **BLUE** receive bridge, additive | **PHASE4-N-AN (AN-S2, `deaa6e28`):** `RollbackContext<'a>` gains a `recovered_eta0: Option<&'a Nonce>` **field**, threaded through `roll_backward` into the `materialize_rolled_back_state` call. `None` keeps the snapshot nonce as-is. **New field, not a new type.** |
-| `ade_runtime::bootstrap` (`bootstrap.rs` +51) | **RED**/GREEN single bootstrap authority (`CN-NODE-01`), reorder + thread | **PHASE4-N-AN (AN-S2, `deaa6e28`):** **reorders** the seed-epoch consensus-input sidecar restore to run BEFORE `materialize_rolled_back_state` (the restore is independent of the materialize result — order only, not outcome) and passes its `epoch_nonce` into materialize, so a WarmStart from a NON-bare store replays against eta0 (this **also** fixes warm-start replay from a non-bare store — the SAME root cause as the live-rollback bug). The explicit post-materialize overlay (the `ci_check_warmstart_eta0_overlay.sh` site, `T-REC-04` / `DC-CINPUT-03`) is retained and now idempotent. |
-| `ade_runtime::forward_sync::reducer` (`forward_sync/reducer.rs` +9) | **RED**/GREEN forward-sync lifecycle reducer, additive | **PHASE4-N-AN (AN-S2, `deaa6e28`):** `ForwardSyncState` gains a `recovered_eta0: Option<Nonce>` **field** (set once at bootstrap from `BootstrapState.seed_epoch_consensus_inputs`, threaded into the rollback-follow materialize; `None` default for cold-start / non-recover callers). **New field, not a new type.** |
-| `ade_node::node_lifecycle` (`node_lifecycle.rs` +12) | **RED** `--mode node`, additive | **PHASE4-N-AN (AN-S2, `deaa6e28`):** sets `fwd.recovered_eta0` from `state.seed_epoch_consensus_inputs.epoch_nonce` alongside the recovered anchor (set once, never peer/CLI/wall-clock), and threads `fwd.recovered_eta0.as_ref()` into the `apply_chain_event` rollback-follow `materialize_rolled_back_state` call — the live rollback-follow path the CE-AI-6 reorg hit. |
-| `ade_ledger::tests::wal_rollback_ai_s1` (`wal_rollback_ai_s1.rs` +1) · `ade_runtime::tests::receive_rollback_integration` (+4) | **test**, additive | **PHASE4-N-AN (AN-S1 `dbf31c7a` / AN-S2 `deaa6e28`):** AN-S1 repro touch + new-param call-site updates for the `recovered_eta0` threading. |
+| `ade_node::node_lifecycle` (`node_lifecycle.rs` **+1394 / −~30**) | **RED** `--mode node` orchestration, additive | **The RED SELECT driver.** New fns: `dispatch_competing_fork_choice` + `decide_fork_switch` + the `ForkSwitchDecision` enum (S3 decide), `prove_fork_switch` + `apply_fork_switch` + `map_branch_proof_failure` (S4 prove-then-commit), `prefetch_branch_bodies` (S6 live BlockFetch fill), `recover_missing_range` (S14 range re-fetch), and the S11 `MissingBridge` fail-closed floor. The competing-fork arm of `run_participant_sync` is wired to call the unchanged BLUE `select_best_chain`; the relay loop carries the S9 observe-only emit taps (DECIDE + APPLY halves) keyed by `fork_switch_id`. S8 rewired the per-peer pump to `fair_merge` (the shared fan-in removed). All RED — no BLUE authority is moved here. |
+| `ade_node::admission_log` (`event.rs` **+196**, `writer.rs` **+236**, `mod.rs` +3) | **GREEN** closed evidence vocabulary, additive | **S9 closed fork-choice evidence vocabulary.** 10 new closed `AdmissionLogEvent` variants (`NeedsForkChoice`, `LcaDiscovered`, `CandidateFragmentBuilt`, `ForkChoiceSelected`, `BranchFetchStarted`, `BranchFetchCompleted`, `BranchPrevalidated`, `ForkSwitchApplied`, `ForkSwitchFailed`, `ForkSwitchSuperseded`) + their JSONL discriminators + writer serialization + the `DISCRIMINATORS` allow-list extension + the closed `ForkChoiceResult` / `ForkChoiceEvidenceFailure` enums. Latent at part-1; emitted by the part-2 taps. |
+| `ade_node::convergence_evidence` (`convergence_evidence.rs` **+416**) | **GREEN** evidence sink, additive | **S8.5 peer-attribution fix + S9 emitters.** `emit_block_received` now takes the per-block `(peer, slot, hash)` and threads the per-block `NodeSyncItem::Block.peer` (the fixed-`peer_label` artifact removed — it had mislabelled every block to the first peer); plus the S9 fork-choice emit helpers + the `fork_switch_id` blake2b helper. |
+| `ade_node::node_sync` (`node_sync.rs` +41) | **GREEN/RED** classifier, additive | `NodeSyncItem` peer threading + the competing-branch classification feeding the S3 dispatch. |
+| `ade_node::admission::runner` (`runner.rs` +12) | **RED**, additive | Runner wiring for the per-peer lane fan-in (S8). |
+| `ade_node::lib` (`lib.rs` +6) | — module wiring | `pub mod` declarations for the 6 new modules. |
+| `ade_runtime::forward_sync::pump` (`pump.rs` **+22 / −2**) | **RED** durable-admit chokepoint, additive | Threads the competing-branch / range-recovery hooks into the pump path (the S14 missing-bridge re-fetch admit loop). The BLUE chokepoint reducer it feeds is unchanged. |
+| `ade_node::tests::live_fork_choice_ai_s4bii` (+~830 across S3/S4/S6/S7) · `node_spine_serve_loopback` (+60) | **test**, additive | The S3 decide / S4 prove / S6 bridge / S7 walk hermetic tests + the loopback BlockFetch fill test. |
 
-> **BLUE IS touched this span (load-bearing) — but no new canonical type.** Unlike the N-AL window (BLUE-empty), N-AN
-> touches three BLUE files (`praos_state.rs`, `receive/reducer.rs`, `rollback/materialize.rs`). The new BLUE surface is
-> a **method** (`overlay_recovered_eta0`) and a **field** (`RollbackContext.recovered_eta0`) — **`git diff e87e8a43..HEAD`
-> over the BLUE trees has no `^+\s*(pub )?(struct\|enum)` line**, so BLUE canonical types are **462 → 462** (486 → 486
-> raw / 921 → 921 whole-tree). The change strengthens replay-equivalence on the rollback path without loosening VRF
-> verification (the `None`-overlay and wrong-eta0 tests prove the overlay is the fix, not a skip). N-AM is **RED-only**
-> (the `wire_pump` shell) and reuses the BLUE `ade_network::keep_alive` grammar unchanged. |
+> **The BLUE tree is UNTOUCHED this span (load-bearing).** `git diff 31efec44..HEAD` over the configured BLUE
+> `core_paths` trees is **empty** — `select_best_chain` (`ade_core::consensus::fork_choice`, `CN-CONS-03`/`DC-CONS-03`)
+> and `validate_and_apply_header` (the BLUE header authority) are REUSED byte-for-byte. The SELECT is composed ON TOP of
+> them in GREEN (pure projections / reducers) and RED (orchestration / wire). BLUE canonical types **462 → 462** (no
+> `^+\s*(pub )?(struct\|enum)` line in the BLUE-tree diff because there is no BLUE-tree diff). This is why the headline
+> flip (`CN-CONS-03`) is enforced **by exercising the existing BLUE authority live**, not by changing it.
 
 ## 4. Feature Flags
 
-**No project feature-flag deltas.** Ade declares no `[features]` table in any workspace `Cargo.toml` at either ref
-(`git grep '^\[features\]'` is empty at both `e87e8a43` and HEAD). **No `#[cfg(feature = …)]` gate was introduced**
-(`git diff e87e8a43..HEAD -- 'crates/**/*.rs' | grep '^+.*cfg(feature'` is empty) and **no `compile_error!` coupling
-was added.** The single `Cargo.toml` change is a **dev-dependency**, not a feature flag:
+**No project feature-flag deltas, and no manifest change at all this span.** Ade declares no `[features]` table in any
+workspace `Cargo.toml` at either ref (`git grep '^\[features\]'` is empty at both `31efec44` and HEAD). **No
+`#[cfg(feature = …)]` gate was introduced** (`git diff 31efec44..HEAD -- 'crates/**/*.rs' | grep -c '^+.*cfg(feature'`
+= **0**), **no `compile_error!` coupling was added** (grep = **0**), and **no `Cargo.toml` changed** (`git diff
+--name-only 31efec44..HEAD -- '**/Cargo.toml' 'Cargo.toml'` is empty — not even a dev-dependency this window, unlike the
+prior N-AM window). **No new CLI flag** — `crates/ade_node/src/cli.rs` is untouched; the SELECT reuses the existing
+`--peer` / `--participant-venue` / `--convergence-evidence-path` flags. The new `post_switch_continuity` **bin** is an
+offline transcript checker (the `ci_check_post_switch_convergence_window.sh` driver), not a runtime feature gate.
 
-| Dependency | Module | Purpose | Status |
-|------------|--------|---------|--------|
-| `tokio` `test-util` feature (dev-dependency) | `ade_runtime` (`crates/ade_runtime/Cargo.toml`) | Deterministic virtual-time (`#[tokio::test(start_paused)]`) for the DC-PUMP-03 keep-alive cadence test (CE-AM-1). **Dev-only — never in production builds; cargo unifies it with the production `tokio` features for tests.** | **New** (dev-dependency) |
+## 5. CI Checks (162 → 173; +11 new, 6 modified, 0 removed)
 
-**No new CLI flag this span** — neither N-AM nor N-AN adds a runtime flag. N-AM's keep-alive cadence is a fixed
-`const` (no flag); N-AN's eta0 source is the EXISTING recovered seed-epoch sidecar (`ForwardSyncState.recovered_eta0`,
-populated by the recover path), so a follow over a store with no recovered sidecar (`recovered_eta0 == None`)
-reproduces pre-AN behaviour verbatim. (The `--participant-venue` / `--convergence-evidence-path` flags that appear in
-the `ci_check_node_path_fidelity.sh` allow-list edit this span are **pre-existing** N-AI/N-AJ flags — the triage only
-extended the gate's pinned allow-list to recognize them; no new flag was added.)
+Seventeen CI scripts changed this span: **11 added**, **6 modified in place**, **0 removed** (`git diff --diff-filter=D`
+over `ci/` is empty; `ls ci/ci_check_*.sh | wc -l` = **162 → 173**). The 11 new gates back the SELECT cluster's rules
+(7 new rules + the `CE-AO-5` / `CE-AO-6` evidence checkers); the 6 modified gates are the in-span stale fork-choice
+gate repair (`5e4807e2`), the S5 reselection extension (`5b31bf7f`), and the close-time vocabulary repoint
+(`862cd2cb`).
 
-## 5. CI Checks (159 → 161; +2 new, 3 modified, 0 removed)
-
-Five CI scripts changed this span: **2 added**, **3 modified in place**, **0 removed** (`git diff --diff-filter=D`
-over `ci/` is empty; `ls ci/ci_check_*.sh | wc -l` = **159 → 161**). The two new gates back the two new rules; the
-three modified gates are the stale-gate triage (`89facbea`, CI + registry only).
-
-### PHASE4-N-AM / PHASE4-N-AN enforcement (new gates)
+### PHASE4-N-AO SELECT enforcement (new gates)
 
 | Check | Status | What it checks |
 |-------|--------|----------------|
-| `ci_check_keep_alive_wire_only.sh` | **New** (`DC-PUMP-03`, N-AM) | The wire-pump keep-alive client is WIRE-ONLY: `handle_keep_alive` is defined exactly once and drives the BLUE `keep_alive_transition` over a `decode_keep_alive_message` (consumes the peer's `MsgResponseKeepAlive`); its body constructs NO `AdmissionPeerEvent` (returns `Result<(), KeepAliveError>`, no event channel); the cadence tick enqueues an `OutboundFrame` on `AcceptedMiniProtocol::KeepAlive` via `encode_keep_alive_message` and synthesizes NO semantic event; the pump REUSES the BLUE `ade_network::keep_alive` grammar (does not redefine the state machine or message type). |
-| `ci_check_rollback_materialize_eta0.sh` | **New** (`T-REC-06`, N-AN) | Rollback materialization preserves the recovered eta0: (A) the SINGLE overlay authority `PraosChainDepState::overlay_recovered_eta0` exists; (B) `materialize_rolled_back_state` takes the `recovered_eta0: Option<&Nonce>` param AND applies the overlay; (C) NO VRF bypass (the replay still runs `block_validity`; no skip/unchecked); (D) eta0 is sourced from the recovered sidecar (`ForwardSyncState.recovered_eta0` via `apply_chain_event`; bootstrap via the seed-epoch sidecar) — never peer/CLI/wall-clock; (E) the replay-equivalence + no-bypass regression tests exist; (F) `T-REC-06` is enforced in the registry. |
+| `ci_check_candidate_construction_validated.sh` | **New** (`DC-NODE-35`, S2) | The candidate aggregator is BLUE-safe + PURE: fragments come ONLY from `validate_and_apply_header` output (no minting), it performs no store reads / durable mutation, and uses no nondeterminism. |
+| `ci_check_live_selector_dispatch.sh` | **New** (`DC-NODE-36`, S3) | The live `NeedsForkChoice` dispatch (`run_participant_sync`'s competing arm, via the RED `dispatch_competing_fork_choice` + `decide_fork_switch`) routes a competing block into the unchanged BLUE `select_best_chain` and emits a provisional `PendingForkSwitch` — decide-only (no rollback at decide time). |
+| `ci_check_fork_switch_never_abandons.sh` | **New** (`DC-NODE-37`, S4) | A `PendingForkSwitch` authorizes PROOF of the selected replacement branch, not a rollback: the proof (`prove_fork_switch`: fetch + read-only materialize + `prevalidate_branch`) runs first, and only `ForkSwitchOutcome::Adopted` commits the durable rollback + adopt. |
+| `ci_check_live_blockfetch_byte_only.sh` | **New** (`CE-AO-6`, S6) | The live BlockFetch bridge transports BYTES, not truth: `PrefetchedBranchBodies` (the relay-loop fill from a live `RequestRange`) carries bytes only — no selection, no admission, no fork-choice on the fetch path. |
+| `ci_check_lca_anchor_walk.sh` | **New** (`DC-NODE-38`, S7) | Live multi-block fork-anchor discovery: a live competing branch is eligible for SELECT only when Ade walks its preserved parent links back to a DURABLE STORED LCA (read-only ChainDb, `k`-bound; the per-peer cache is not authority). |
+| `ci_check_wire_pump_fairness.sh` | **New** (`DC-PUMP-04`, S8) | Multi-peer wire-pump fairness: each connected peer gets its OWN bounded lane, drained by a fair round-robin merge over a DETERMINISTIC order derived from the configured `--peer` list — scheduling only, never fork-choice (no `HashMap`/wall-clock/`rand`). |
+| `ci_check_fork_choice_evidence_closed.sh` | **New** (`DC-EVIDENCE-04`, S9) | The live SELECT path emits a CLOSED, observe-only convergence-evidence sequence (`needs_fork_choice` → `lca_discovered` → `candidate_fragment_built` → `fork_choice_selected` → `branch_fetch_*` → `branch_prevalidated` → `fork_switch_applied|failed|superseded`), with every `fork_choice_selected{win}` paired to exactly one terminal. |
+| `ci_check_missing_bridge_fail_closed.sh` | **New** (`DC-NODE-39`, S11) | After a `ForkChoiceWin` adoption at tip X, a competing descendant whose parent chain cannot connect to the durable adopted tip / a durable stored ancestor is a structured `MissingBridge` fail-closed — no silent stall. |
+| `ci_check_rollback_retention_evidence.sh` | **New** (`DC-NODE-40`, S13) | Rolled-back blocks may be retained ONLY as walk-visible EVIDENCE: the LCA walk consults the retention on a per-peer-cache MISS to traverse non-durable parent links (fixes the S7 LCA-walk over-fire). |
+| `ci_check_missing_bridge_refetch.sh` | **New** (`DC-NODE-41`, S14) | The `DC-NODE-39` floor is SAFE but PASSIVE (ChainSync streams each block once): S14's `recover_missing_range` admit loop actively re-fetches the missing range so a winner-descendant whose bridge Ade missed is recoverable. |
+| `ci_check_post_switch_convergence_window.sh` | **New** (`CE-AO-6` / `DC-EVIDENCE-04` refined + `DC-EVIDENCE-05`) | RELEASE/EVIDENCE-tier transcript checker (NOT a BLUE consensus rule): a thin driver over the `post_switch_continuity` replayable reducer asserting `ContinuesSelectedBranch` + a terminal `AgreedAtSwitchTip` + chained admitted descendants + 0 diverged + every win paired. **This is the gate the `CN-CONS-03` flip was proven against.** |
 
-### Stale-gate triage (`89facbea`) — 3 modified, no new rule
+### Modified gates — stale fork-choice repair + reselection + vocabulary repoint
 
 | Check | Status | What changed |
 |-------|--------|--------------|
-| `ci_check_admission_wire_pump_closure.sh` | **Modified** (`DC-PUMP-02`) | Guard 4 refined: a `RollBackward` chain-sync reply must emit its DISTINCT `AdmissionPeerEvent::RollBackward` (AI-S4a — "a rollback is NEVER a TipUpdate only") rather than `tip_update`; the per-arm context window widened (10→20). The `DC-PUMP-02` invariant ("a closed authority event per reply") is preserved — the RollBackward reply's closed event is its own variant. (Registry: `DC-PUMP-02` `source`/`statement` updated + `strengthened_in += PHASE4-N-AN`.) |
-| `ci_check_node_path_fidelity.sh` | **Modified** | Pinned-flag allow-list extended (with review) for two legitimately-added, path-PRESERVING flags: `+--participant-venue` (N-AI, the σ=0 participant role; the `--mode node` admit path is UNCHANGED) and `+--convergence-evidence-path` (N-AJ, an emit-only evidence sink). The path-diverging private flags (`--private-net`, `--from-genesis`, `--devnet`, `--rehearsal`) stay excluded. |
-| `ci_check_lifecycle_owner_uses_bootstrap_initial_state.sh` | **Modified** | Dropped `pipefail` (the `grep -q` SIGPIPE produced spurious false-"missing" results on tokens that ARE present); scoped the `materialize_rolled_back_state` forbid to EXCLUDE the `apply_chain_event` fn — the N-AI rollback-follow legitimately materializes the rolled-back state via the sole `CN-STORE-07` authority (fork-choice, NOT initial state), so a PARALLEL/cold INITIAL-STATE materialize still trips while the rollback-follow is permitted (`CN-NODE-01`). |
+| `ci_check_peer_identity_preserved.sh` | **Modified** (`DC-NODE-34`, S1) | The S1 gate (peer identity restored through the receive feed — `NodeSyncItem` carries `peer`). Touched by the in-span stale-gate repair (`5e4807e2`) for pattern drift after the S3 dispatch landed. (NB: this gate was ADDED at S1, *before* this baseline, so it is Modified-in-range, not new.) |
+| `ci_check_live_fork_choice_apply.sh` | **Modified** (`DC-NODE-25`/`DC-NODE-26`, N-AI) | Stale-pattern repair (`5e4807e2`): the apply-driver grep patterns updated for the S3/S4 production-region drift (the rollback-follow apply path is now reached via the SELECT's `apply_fork_switch`). |
+| `ci_check_live_fork_choice_wiring.sh` | **Modified** (N-AI rollback-follow routing) | Stale-pattern repair (`5e4807e2`): wiring grep patterns updated for the S1/S3 drift; here-strings (`<<<`) retained (pipefail+SIGPIPE on a large stripped file). |
+| `ci_check_wire_rollback_signal_preserved.sh` | **Modified** (AI-S4a) | Stale-pattern repair (`5e4807e2`): the rollback-signal-preservation patterns updated for the dispatch refactor. |
+| `ci_check_wal_rollback_replay_equiv.sh` | **Modified** (`DC-NODE-27` / `CE-AO-5`) | Extended by S5 (`5b31bf7f`) for the post-switch reselection replay-equivalence path (same recovered store + same ordered branch ⇒ same post-switch state). |
+| `ci_check_convergence_evidence_vocabulary_closed.sh` | **Modified — repointed** (`DC-ADMIT-04` / closed vocab) | The close (`862cd2cb`) extended the AJ-era 3-literal allow-list (`block_received`/`block_admitted`/`agreement_verdict`) with all 10 new fork-choice literals (`needs_fork_choice` … `fork_switch_superseded`) and **repointed Guard 5** from the AI-era schema gate to the writer `DISCRIMINATORS` allow-list (`crates/ade_node/src/admission_log/writer.rs`) — so no free-form / open vocabulary may slip in. |
 
-> **Cross-reference (CODEMAP + SEAMS + TRACEABILITY) — ONE window stale this close; refresh owed.** The two new
-> rule↔enforcement bindings (`DC-PUMP-03` ↔ `ci_check_keep_alive_wire_only.sh`; `T-REC-06` ↔
-> `ci_check_rollback_materialize_eta0.sh`) and the `DC-PUMP-02 += PHASE4-N-AN` strengthening are recorded **in the
-> registry at HEAD** (`docs/ade-invariant-registry.toml`, 361 rules). They are **NOT yet in TRACEABILITY, SEAMS, or
-> CODEMAP**, all three of which were regenerated to the N-AL close `e87e8a43` (`grep -c DC-PUMP-03` and `grep -c
-> T-REC-06` in each = 0; their CI-count pins read **159** vs. HEAD's **161**). **No gate is orphaned** — both new gates
-> bind a registry rule, and all three modified gates bind their existing rules. **No new module / no new type**, so
-> CODEMAP's structural inventory needs no change — only the two new TRACEABILITY rows, the `DC-PUMP-02` strengthening
-> note, and the HEAD-pin/count bump (159 → 161 CI, 359 → 361 rules). **Action:** regenerate CODEMAP + SEAMS +
-> TRACEABILITY to `b8860b16` as a follow-on this close so `DC-PUMP-03` + `T-REC-06` appear in TRACEABILITY with their
-> named gates and all three docs pin to the N-AN HEAD; until then the registry is authoritative for the new bindings.
+> **Cross-reference (CODEMAP + SEAMS + TRACEABILITY) — ONE cluster stale this close; the largest refresh debt of the
+> recent windows.** The 11 new rule↔enforcement bindings + the 10 strengthenings + the `CN-CONS-03` flip are recorded
+> **in the registry at HEAD** (`docs/ade-invariant-registry.toml`, 372 rules). They are **NOT yet in TRACEABILITY,
+> SEAMS, or CODEMAP**, all three pinned to `b8860b16` (`grep -c` for each new gate in TRACEABILITY = **0**; their CI-count
+> pins read **161** vs. HEAD's **173**). **No gate is orphaned** — each of the 11 new gates binds a registry rule, and
+> all 6 modified gates bind their existing rules. **Action:** regenerate CODEMAP + SEAMS + TRACEABILITY to `862cd2cb` as
+> the named follow-on this close so the SELECT's 6 modules, 7 new rules with their named gates, 10 strengthenings, and
+> the `CN-CONS-03` flip all appear and all three docs pin to the N-AO HEAD; until then the registry is authoritative.
 
 ## 6. Canonical Type Registry Delta
 
-**n/a — no separate canonical-type registry is configured** (`canonical_type_registry: null`);
-canonical-type rules live inline in the invariant registry under family **T**. **This window added ZERO BLUE
-canonical types:** `git diff e87e8a43..HEAD` over the BLUE `core_paths` trees touches three BLUE files (N-AN's eta0
-overlay) but has **no `^+\s*(pub )?(struct|enum)` line** — the new BLUE surface is a **method**
-(`PraosChainDepState::overlay_recovered_eta0`) and a **field** (`RollbackContext.recovered_eta0`), not a type. BLUE
-`pub struct`/`pub enum` over the `core_paths` trees: **`486 → 486`** raw (CODEMAP's BLUE-tree metric **`462 → 462`**;
-whole-tree **`921 → 921`**). **Zero BLUE canonical types added; zero removed.** The only `Cargo.toml` change is a
-`tokio` `test-util` dev-dependency (still 11 crates).
+**n/a — no separate canonical-type registry is configured** (`canonical_type_registry: null`); canonical-type rules
+live inline in the invariant registry under family **T**. **This window added ZERO BLUE canonical types and touched ZERO
+BLUE files:** `git diff 31efec44..HEAD` over the BLUE `core_paths` trees is **empty** — the SELECT reuses
+`select_best_chain` + `validate_and_apply_header` unchanged. BLUE `pub struct`/`pub enum` over the `core_paths` trees is
+unchanged (CODEMAP's BLUE-tree metric **`462 → 462`**). All new types (`CandidateFragment`, `ForkSwitchDecision`,
+`ForkSwitchOutcome`, `BranchProofError`, `PostSwitchContinuity`, the 10 `AdmissionLogEvent` variants, the per-peer lane
+types, etc.) live in **GREEN/RED `ade_node`**, not in the BLUE core. **Zero BLUE canonical types added; zero removed.**
 
-## 7. Normative / Invariant Rule Delta (359 → 361; +2 rules, +1 strengthening, zero removals)
+## 7. Normative / Invariant Rule Delta (365 → 372; +7 rules, +10 strengthenings, the `CN-CONS-03` flip, zero removals)
 
-**Two rule IDs were added; zero removed** (`359 → 361`; `comm -23` of the sorted `id =` lists is empty — exactly two
-additions `DC-PUMP-03` + `T-REC-06`, no removal). The status tally moves **224 → 227 enforced** and **126 → 125
-declared** (`enforced_scaffolding = 1` and `partial = 19` unchanged). The +3-enforced / −1-declared reconciles as: the
-two new rules close `enforced` (`DC-PUMP-03` + `T-REC-06`, +2 enforced — each was `declared` at its cluster doc, then
-flipped at close), **and** the in-span **N-AL close commit `35a851b9`** flipped the pre-existing `DC-NODE-33`
-`declared → enforced` (+1 enforced, −1 declared — at the committed baseline `e87e8a43` it was still `declared`, having
-been declared by `f8275c55` in the prior window).
+**Seven rule IDs were added; zero removed** (`365 → 372`; `comm -23` of the sorted `id =` lists is empty — exactly seven
+additions, no removal). The status tally moves **227 → 239 enforced** and **118 → 113 declared**
+(`enforced_scaffolding = 1`, `partial = 19` unchanged). The +12-enforced / −5-declared reconciles as: the 7 new rules
+close `enforced` (+7 enforced — each was `declared` at its slice doc then flipped at close, net 0 declared), **and** 5
+prior-`declared` rules flipped `enforced` this span (**`CN-CONS-03`** + **`DC-NODE-34..37`**; +5 enforced, −5 declared).
 
 *(The configured `normative_docs` — the CE-79 tier-gate statement + addendum, the three contract docs, the CE-73
-reclassification, and `CLAUDE.md` — were **not** changed this span: `git diff --name-only e87e8a43..HEAD` over those
+reclassification, and `CLAUDE.md` — were **not** changed this span: `git diff --name-only 31efec44..HEAD` over those
 paths is empty. The rule-count delta is entirely the invariant-registry change.)*
 
-**New rules (`+2`, both enforced):**
+**The headline flip — `CN-CONS-03` `declared → enforced`:** "After temporary partition, honest nodes must converge using
+only protocol-defined observables and declared emergency procedures." Flipped at PHASE4-N-AO (CE-AO-6) on a NATURAL
+two-producer multi-candidate SELECT pass (both Haskell producers live throughout, no loser-freeze, no post-fork operator
+intervention — the SELECT decision is entirely Ade's). Checker PASS (`ci_check_post_switch_convergence_window.sh` over
+the `post_switch_continuity` reducer): `ContinuesSelectedBranch`, terminal `AgreedAtSwitchTip{slot 391}` (exact
+agreement, `our_hash == peer_hash`), 25 admitted descendants chained, 0 diverged, every win terminal. Transcript
+`ao-CN-CONS-03-FLIP-natural-conv.jsonl` (sha256 `6713efe96ffd0e0fa304020c7784d6bbf11be0df0e3340e7feeab4d1429ca13f`,
+2026-06-13) preserved OUTSIDE the repo (competition-secrecy). **SCOPE (honest):** proves convergence for the EXERCISED
+two-producer partition-and-reconverge venue (S1–S14); NOT an unbounded multi-peer ChainSel claim; post-switch
+endless-flip-flop survival is out of scope. `strengthened_in` `["PHASE4-N-B","PHASE4-N-AI"]` →
+`["PHASE4-N-B","PHASE4-N-AI","PHASE4-N-AO"]`.
+
+**New rules (`+7`, all enforced at HEAD):**
 
 | Rule | Family / Tier · Status | Statement (summary) |
 |------|------------------------|---------------------|
-| `DC-PUMP-03` | DC / `derived` · **enforced** · `introduced_in = "PHASE4-N-AM"` | **Wire-pump keep-alive client.** `run_admission_wire_pump` (the SOLE per-peer pump, `CN-PUMP-01`) runs the N2N keep-alive CLIENT (mini-protocol 8): on a cadence STRICTLY under the peer's ~97s keep-alive timeout it sends `KeepAliveMessage::KeepAlive(cookie)` (Initiator) via the EXISTING outbound path, advancing the REUSED BLUE `ade_network::keep_alive` machine (`ClientIdle → ServerHasAgency{cookie}`); the inbound `MsgResponseKeepAlive(cookie')` advances the SAME machine back to `ClientIdle`, validating `cookie' == cookie`. **WIRE-ONLY:** no canonical input, no WAL entry, NO `AdmissionPeerEvent` (the `DC-PUMP-01` emit-set stays unwidened) — never affects admission, the durable chain, fork-choice, the convergence-evidence vocabulary, replay-equivalence, or any BLUE state. **MUST NOT:** redefine the BLUE keep-alive grammar; use a cadence ≥ the peer timeout; send a new `MsgKeepAlive` while one is in flight (respect `ServerHasAgency`); block/starve/reorder chain-sync or block-fetch; dispatch a keep-alive frame as a chain-sync/block-fetch event; silently swallow a grammar violation (fail closed via `AdmissionWirePumpError::KeepAlive` — drop the peer); use `rand`/wall-clock for the cookie (monotonic `u16`); implement a keep-alive SERVER/responder (client only — CE-AM-LIVE-gated follow-on). With the client running, a live participant AND single-producer follow sustains past the ~97s deadline — the prerequisite that makes the CE-AI-6 induced-reorg convergence capture runnable. **SCOPE:** the keep-alive client ONLY; does NOT add multi-peer ChainSel, does NOT flip `CN-CONS-03`, does NOT broaden `CN-PUMP-01` / `DC-PUMP-01` / `DC-PUMP-02` (cross-refs, preserved). |
-| `T-REC-06` | T / `true` · **enforced** · `introduced_in = "PHASE4-N-AN"` | **Rollback-materialization replay-equivalence.** A block that validates during live admit (against the eta0-overlaid `chain_dep`, `T-REC-04`) MUST NOT fail rollback-materialize replay because materialization substituted a different nonce source. `materialize_rolled_back_state` (the SOLE rolled-back-state authority, `CN-STORE-07`) MUST reconstruct the replay `chain_dep` with the SAME recovered eta0 (epoch nonce) the live-admit path uses (`praos_vrf_input(slot, eta0)`, `DC-CINPUT-03`); the persisted snapshot's placeholder / genesis `epoch_nonce` MUST NOT reach VRF verification on the rollback-replay path. Same recovered store + same ordered WAL/feed ⇒ same `chain_dep` inputs ⇒ same `block_validity` result on the live-admit and rollback paths. eta0 is the recovered canonical input (the seed-epoch `SeedEpochConsensusInputs.epoch_nonce` sidecar) — never peer data, wall-clock, CLI re-supply, or a re-query. **MUST NOT:** bypass / skip / loosen VRF validation on the rollback path (VRF strength UNCHANGED — a block whose VRF verifies against NEITHER eta0 nor the snapshot nonce still fails closed). **SCOPE:** the recovered seed epoch (no epoch-boundary crossing within the follow window — eta0 is the constant epoch nonce); a multi-epoch rollback nonce-evolution is a named out-of-scope follow-on. Surfaced by the CE-AI-6 reorg (the rollback-follow died at `ReplayFailedAt … VrfCert`); unblocks CE-AI-6. |
+| `DC-NODE-38` | DC / `derived` · **enforced** · `introduced_in = "PHASE4-N-AO"` | **Live LCA fork-anchor walk.** A live competing branch (multi-block) is eligible for SELECT only when Ade walks its preserved parent links back to a DURABLE `ChainDb`-stored last-common-ancestor under a block-depth `k`-bound; the per-peer branch cache is an indexed memory of received, preserved headers — NOT authority. Read-only ChainDb lookups; no durable mutation. |
+| `DC-NODE-39` | DC / `derived` · **enforced** · `introduced_in = "PHASE4-N-AO"` | **Post-ForkChoiceWin forward-follow floor.** After a `ForkChoiceWin` adoption at tip X, a competing descendant whose parent chain cannot connect to the durable adopted tip / a durable stored ancestor is a structured `MissingBridge` fail-closed — no silent stall (the floor is SAFE but PASSIVE; the active recovery is `DC-NODE-41`). |
+| `DC-NODE-40` | DC / `derived` · **enforced** · `introduced_in = "PHASE4-N-AO"` | **Rolled-back branch evidence retention.** Rolled-back blocks may be retained ONLY as walk-visible EVIDENCE: the LCA walk consults the retention on a per-peer-cache MISS to traverse non-durable parent links. Fixes the S7 LCA-walk over-fire (the walk failing to reach the anchor across a rolled-back segment). |
+| `DC-NODE-41` | DC / `derived` · **enforced** · `introduced_in = "PHASE4-N-AO"` | **Missing-bridge range re-fetch.** Because ChainSync streams each block once, the `DC-NODE-39` floor cannot recover a missing bridge by waiting; `recover_missing_range` is a latent range-recovery admit loop (with a closed outcome) wired live to actively re-fetch the missing range to the winner. |
+| `DC-PUMP-04` | DC / `derived` · **enforced** · `introduced_in = "PHASE4-N-AO"` | **Multi-peer wire-pump fairness.** Each connected peer gets its OWN bounded lane, drained by a deterministic round-robin merge over the configured `--peer` order, so a continuously-producing peer self-backpressures on its own lane and never starves a competing peer's branch from reaching dispatch. **Scheduling discipline ONLY — never fork-choice** (`select_best_chain` stays arrival-order-independent, `CN-CONS-01`); no `HashMap`/wall-clock/`rand`; RED-only. |
+| `DC-EVIDENCE-04` | DC / `derived` · **enforced** · `introduced_in = "PHASE4-N-AO"` | **Closed fork-choice convergence evidence.** The live SELECT path emits a CLOSED, observe-only convergence-evidence sequence (10 closed `AdmissionLogEvent` variants: `needs_fork_choice` → `lca_discovered` → `candidate_fragment_built` → `fork_choice_selected` → `branch_fetch_started/completed` → `branch_prevalidated` → `fork_switch_applied|failed|superseded`) to the convergence-evidence sink, GREEN vocab / RED sink / BLUE unchanged, so a *committed* transcript ASSERTS the SELECT middle. Every `fork_choice_selected{win}` pairs to EXACTLY ONE terminal of `applied | failed | superseded` (the per-tip `fork_switch_id` means a growing branch supersedes provisional wins; only the final pending reaches `applied`). |
+| `DC-EVIDENCE-05` | DC / `derived` · **enforced** · `introduced_in = "PHASE4-N-AO"` | **Post-switch branch-continuity verdict.** A pure, total, deterministic reducer over the closed convergence-evidence transcript classifies Ade's OWN validated admitted-block lineage after a `ForkChoiceWin` adoption at tip X into a closed `PostSwitchContinuity` verdict; `ContinuesSelectedBranch` requires unbroken `prev_hash` lineage from X across every post-X `block_admitted`, no `diverged` after X, and every `fork_choice_selected{win}` paired to a terminal. The peer tip is NEVER an input (reads only Ade's own lineage); replay-equivalent. |
 
-**Strengthenings (`strengthened_in += "PHASE4-N-AN"`) — 1:** `DC-PUMP-02` gained `PHASE4-N-AN` (its
-`strengthened_in` becomes `["PHASE4-N-M-FOLLOW", "PHASE4-N-AN"]`) — the stale-gate triage refined it so the
-`RollBackward` chain-sync reply emits its distinct `AdmissionPeerEvent::RollBackward` (AI-S4a) rather than a generic
-`TipUpdate`; the "closed authority event per reply" invariant is preserved, not weakened. The two new rules cross-ref
-existing rules (`DC-PUMP-03` → `CN-PUMP-01`/`DC-PUMP-01`/`DC-PUMP-02`/`DC-NODE-30`/`CN-CONS-03`; `T-REC-06` →
-`T-REC-04`/`DC-CINPUT-03`/`CN-STORE-07`/`DC-NODE-27`/`DC-CONS-20`) but append to no other rule's `strengthened_in`.
-**No rule was weakened.**
+**Declared → enforced flips (`+5` enforced, −5 declared):** **`CN-CONS-03`** (the headline, above) + **`DC-NODE-34`**
+(peer-identity restoration — the S1 gate, already enforced at the baseline tip), **`DC-NODE-35`** (BLUE-safe candidate
+construction), **`DC-NODE-36`** (live selector dispatch decide-only), **`DC-NODE-37`** (fork-switch apply
+prove-then-commit) — all four `DC-NODE-34..37` were declared in the preceding window (`a87a4eb5`) and flipped to
+`enforced` as their slices closed / at the cluster close.
 
-**No rule was removed (expected: 0).** The registry delta is **two new rules (`DC-PUMP-03` + `T-REC-06`, both
-enforced), one strengthening (`DC-PUMP-02`), zero removals** — consistent with append-only registry discipline. **No
-anomaly.** (The +3-enforced / −1-declared tally additionally reflects the `DC-NODE-33` `declared → enforced` flip
-carried by the in-span N-AL close commit `35a851b9`, accounted above.)
+**Strengthenings (`strengthened_in += "PHASE4-N-AO"`) — 10:** **`CN-CONS-01`** (arrival-order-independence over
+`select_best_chain` — the SELECT exercises it across competing live branches), **`CN-CONS-03`** (the flip itself),
+**`DC-CONS-03`** + **`DC-CONS-20`** (the convergence / chain-selection family), and **`DC-NODE-24`** … **`DC-NODE-29`**
+(the N-AI single-best-peer rollback-follow family — the SELECT's prove-then-commit + reselection re-exercise the
+durable rollback authority live). No rule weakened; no rule removed.
+
+**No rule was removed (expected: 0).** The registry delta is **7 new rules (all enforced), 5 declared→enforced flips
+(incl. the `CN-CONS-03` headline), 10 strengthenings, zero removals** — consistent with append-only registry discipline.
+**No anomaly.**
 
 ## Honest residual (window scope)
 
-PHASE4-N-AM + PHASE4-N-AN together **unblocked the CE-AI-6 induced-reorg convergence capture** — N-AM kept the live
-link alive past the peer's keep-alive timeout, N-AN made the reorg-follow replay-equivalent. The honest residual:
+PHASE4-N-AO turned the prior single-best-peer rollback-FOLLOW into a genuine multi-candidate SELECT and **flipped
+`CN-CONS-03`** on a NATURAL committed transcript. The honest residual:
 
-- **N-AM is WIRE-ONLY.** The keep-alive client moves bytes and sustains the link; it produces no canonical input, no
-  WAL entry, and NO `AdmissionPeerEvent` — it never affects admission, the durable chain, fork-choice, or any BLUE
-  state. **CE-AM-LIVE** (2026-06-11, FROZEN c2-testnet relay, magic 42) is `enforced`-backing evidence: a bare-anchor
-  recover caught up 5 admits → `agreement_verdict{agreed}` (exact hash) → then SUSTAINED the link **152s** (vs. the
-  prior ~96s EOF): 7 `MsgKeepAlive` on the ~20s cadence, 7 `MsgResponseKeepAlive` cookies validated, 0 grammar
-  failures, 0 `ShutdownPeer(KeepAlive)`. It is **NOT** a CE-AI-6 claim — no reorg occurred in the sustain run.
-  Transcript OUTSIDE-REPO (scrubbed note only).
-- **N-AN does NOT loosen VRF.** The eta0 overlay supplies the CORRECT recovered nonce to the rollback-replay path; it
-  does not skip or weaken VRF verification (the `None`-overlay arm fails on `VrfCert`, and a WRONG eta0 still fails —
-  both regression-tested). **CE-AN-LIVE** (2026-06-11, fresh hermetic 2-pool bridge venue, magic 42) is
-  `enforced`-backing evidence for the CE-AI-6 reorg capture: a bare-anchor recover → induced peer reorg → Ade received
-  the `RollBackward` and FOLLOWED it (strict slot REGRESSION admit 371 → 361) → re-converged to
-  `agreement_verdict{agreed}` @ slot 383 with `our_hash == peer_hash` (the reorged tip) → 16 admits, 2 agreed, 0
-  diverged, Ade ALIVE, **0 `VrfCert` / 0 `ReplayFailedAt`** — the eta0 overlay HELD through the live rollback (without
-  AN-S2 Ade died here with `ReplayFailedAt … VrfCert`; this is the live proof of the fix). Transcript OUTSIDE-REPO
-  (bridge-venue methodology stays internal; scrubbed note only).
-- **No `RO-LIVE` flip.** Neither CE-AM-LIVE nor CE-AN-LIVE is a bounty/preprod claim. `RO-LIVE-01` stays
-  operator-gated / partial; no `RO-LIVE` registry status changed this span. `CN-CONS-03` (full multi-peer ChainSel
-  convergence) is **NOT** flipped — it stays `declared`; single-best-peer rollback-FOLLOW is the proven scope.
-- **SCOPE limits (load-bearing).** N-AN covers the **recovered seed epoch** (no epoch-boundary crossing within the
-  follow window — eta0 is the constant epoch nonce); a **multi-epoch rollback nonce-evolution** is a named
-  out-of-scope follow-on. N-AM's keep-alive **responder** (Ade as keep-alive SERVER toward a peer running a keep-alive
-  client) is a CE-AM-LIVE-gated follow-on (the live run showed the peer is the keep-alive server; Ade is the client).
-- **BLUE touched, no new type.** `git diff e87e8a43..HEAD` over the BLUE trees touches `praos_state.rs` /
-  `receive/reducer.rs` / `rollback/materialize.rs` (N-AN), but adds **no `pub struct`/`pub enum`** — BLUE canonical
-  types **462 → 462** (486 → 486 raw / 921 → 921 whole-tree). The new BLUE surface is a method
-  (`overlay_recovered_eta0`) + a field (`RollbackContext.recovered_eta0`). N-AM is RED-only.
-- **A separate warm-start replay issue was OUT OF SCOPE but partially addressed.** N-AN's bootstrap reorder
-  (`bootstrap.rs`) also fixes a WarmStart-from-a-non-bare-store replay-VRF failure (the SAME root cause). A distinct
-  warm-start `ReplayFailedAt … VrfCert` symptom surfaced during the N-AM CE-AM-LIVE run (a caught-up store) was
-  deferred at the N-AM close to its own investigation; N-AN's overlay is the structural fix for that root cause, and
-  the explicit warm-start overlay (`T-REC-04`) is retained.
-- **No new module, no new type, no new CLI flag.** The only manifest change is a `tokio` `test-util` dev-dependency.
-  N-AM's cadence is a fixed `const`; N-AN's eta0 source is the EXISTING recovered sidecar (`None` reproduces pre-AN
-  behaviour verbatim).
-- **CODEMAP + SEAMS + TRACEABILITY refresh owed this close — now ONE window behind.** All three were regenerated to
-  the N-AL close `e87e8a43` (the in-span `35a851b9`) and carry `DC-NODE-33` but lack `DC-PUMP-03` + `T-REC-06`
-  (`grep -c` in each = 0 for both) and pin CI at **159** vs. HEAD's **161**. Because this window adds no module and no
-  type, only TRACEABILITY's two new four-cell rows (each with its new `ci_check_*` gate), the `DC-PUMP-02 +=
-  PHASE4-N-AN` strengthening note, and a HEAD-pin/count bump (159 → 161 CI, 359 → 361 rules) are owed. The registry
-  holds both new rules + their bindings authoritatively at HEAD (361 rules) in the interim. Regenerating CODEMAP +
-  SEAMS + TRACEABILITY to `b8860b16` is the named follow-on (surfaced in §5).
-- **Two in-span commits are prior-window / hygiene.** `35a851b9` (`Close PHASE4-N-AL …`) is docs/registry only (0
-  code) — it flipped `DC-NODE-33` to enforced and regenerated all four grounding docs to `e87e8a43`; it is N-AL work,
-  recorded in §1/§0 for completeness. `89facbea` (the stale-gate triage) is CI-script + registry only (0 source) — it
-  repaired three pre-existing red gates (red since the N-AI/N-AJ window) and refined `DC-PUMP-02`; it is not new
-  cluster authority.
+- **The flip is scoped to the EXERCISED two-producer partition-and-reconverge venue.** `CN-CONS-03 → enforced` is proven
+  for the S1–S14 two-producer venue (both Haskell producers live, no loser-freeze, the SELECT decision entirely Ade's),
+  not as an unbounded multi-peer ChainSel claim. **Post-switch endless-flip-flop survival is out of scope.** A
+  FREEZE-mode run (loser paused AFTER Ade's decision) is retained OUTSIDE the repo as a SELECT-independence diagnostic
+  ONLY — never as flip evidence (a frozen peer also breaks the reducer's peer-observed-ahead terminal).
+- **The BLUE authority is REUSED, not changed.** The SELECT is built ON TOP of `select_best_chain` + `validate_and_apply_header`;
+  `git diff 31efec44..HEAD` over the BLUE trees is empty. The flip is earned by exercising the existing BLUE authority
+  live, which is the stronger claim — but it means the SELECT's correctness rests on the GREEN projections feeding BLUE
+  faithfully (`DC-NODE-35` candidate construction is BLUE-validated; `DC-PUMP-04` fairness is scheduling-only and cannot
+  reorder the BLUE decision).
+- **The evidence is the SELECT middle, not authority.** S9's 10 closed events + S10's reducer are GREEN observe-only
+  evidence (RED sink, BLUE unchanged); they ASSERT the SELECT in a committed transcript but do not themselves decide
+  anything. The closed-vocabulary discipline (allow-list + the repointed `DISCRIMINATORS` Guard 5) keeps the transcript
+  a closed enum.
+- **The S8 fairness layer was correct but was NOT the live blocker.** The live multi-peer SELECT was masked by an
+  evidence-attribution artifact (`block_received` mislabelling every block to the first peer); the S8.5 fix
+  (`6846d252`) threaded the per-block peer and overturned the channel-fairness / 2-pump-stall diagnoses. `DC-PUMP-04`
+  stays correct + proven (a cleaner per-peer-lane arch) but is not load-bearing for the flip.
+- **No `RO-LIVE` flip.** The CE-AO-6 pass flips `CN-CONS-03` (a `CN`-family Cardano-convergence rule), not a bounty/preprod
+  `RO-LIVE` rule. `RO-LIVE-01` stays operator-gated / partial; no `RO-LIVE` registry status changed this span.
+- **CODEMAP + SEAMS + TRACEABILITY refresh owed this close — the largest debt of the recent windows.** All three are
+  pinned to `b8860b16` and miss **6 new modules**, **7 new rules**, **10 strengthenings**, the **`CN-CONS-03` flip**, and
+  **11 new CI gates** (`grep -c` for each new module/rule/gate in all three = 0; CI pin 161 vs. HEAD 173). The registry
+  holds all of it authoritatively at HEAD (372 rules); regenerating CODEMAP + SEAMS + TRACEABILITY to `862cd2cb` is the
+  named follow-on (surfaced in §2 and §5). No orphan gate (each new gate binds a registry rule).
+- **The transcript is OUTSIDE the repo.** Per competition-secrecy / no-credential-leak discipline, the natural CE-AO-6
+  flip transcript (`ao-CN-CONS-03-FLIP-natural-conv.jsonl`) lives outside the repo; it is sha256-pinned
+  (`6713efe9…ca13f`) in `CN-CONS-03.evidence_notes` so the committed registry binds the exact bytes the flip rests on.
 
-## Working tree at HEAD `b8860b16` (clean)
+## Working tree at HEAD `862cd2cb` (clean for tracked files)
 
-**The working tree is CLEAN at this regen** — `git status --porcelain` shows only untracked scratch
-(`.mithril-scratch/`, `wire_smoke.jsonl`), neither part of this doc. The N-AM and N-AN closes (the `DC-PUMP-03` /
-`T-REC-06` flips, the cluster-doc archive `b8860b16`) are all committed; the committed `.idd-config.json` baseline at
-HEAD already reads `e87e8a43` (the prior N-AL regen's bump committed cleanly). §1 narrates the committed span
-`e87e8a43..b8860b16` verbatim; §0/§7 read rule status from the registry at HEAD (`DC-PUMP-03` + `T-REC-06` enforced,
-361 rules). **This regen performs the baseline bump** (`e87e8a43 → b8860b16` in `.idd-config.json`
-`head_deltas_baseline`, with the `_head_deltas_baseline_doc` lead prepended for N-AM/N-AN and the N-AL paragraph
-demoted to "PRIOR baseline"), per the task's post-close step. The remaining close-pass action is the CODEMAP + SEAMS +
-TRACEABILITY refresh to `b8860b16` (surfaced in §5).
+**The working tree is CLEAN for tracked files at this regen** — `git status --porcelain` shows only untracked scratch
+(`.mithril-scratch/`, `wire_smoke.jsonl`), neither part of this doc. The PHASE4-N-AO close (`862cd2cb` — the
+`CN-CONS-03`/`DC-NODE-34..37` flips, the 7 new-rule enforcements, the repointed vocabulary gate) is committed; §1
+narrates the committed span `31efec44..862cd2cb` verbatim; §0/§7 read rule status from the registry at HEAD
+(`CN-CONS-03` enforced, 372 rules). **This regen performs the baseline bump** (`b8860b16 → 862cd2cb` in
+`.idd-config.json` `head_deltas_baseline`, with the `_head_deltas_baseline_doc` lead prepended for PHASE4-N-AO and the
+N-AM/N-AN paragraph demoted to "PRIOR baseline"), per the task's post-close step. **NB:** the *committed*
+`.idd-config.json` baseline still reads `b8860b16`; this regen advances it. The remaining close-pass action is the
+CODEMAP + SEAMS + TRACEABILITY refresh to `862cd2cb` (surfaced in §2 and §5).
+
+---
+
+## Historical — PHASE4-N-AM keep-alive client + PHASE4-N-AN rollback-materialize eta0 (`e87e8a43 → b8860b16`)
+
+> The section below is the **previous** HEAD_DELTAS lead, preserved in condensed form. It narrated the
+> `e87e8a43 → b8860b16` span (measured from the PHASE4-N-AL AL-S1 close `e87e8a43`): the **PHASE4-N-AL close commit**
+> (`35a851b9`, docs/registry only — flipped `DC-NODE-33 → enforced`, regenerated all four grounding docs to
+> `e87e8a43`, archived N-AL) + the **PHASE4-N-AM cluster** (`DC-PUMP-03`) + the **PHASE4-N-AN cluster** (`T-REC-06`) + a
+> **stale-gate triage** (`89facbea`) + the **cluster-doc archive** (`b8860b16`). **12 commits, 32 files, +2288 / −516.**
+> **This span TOUCHED BLUE but added ZERO new canonical type** (462 → 462; the new BLUE surface is the single METHOD
+> `PraosChainDepState::overlay_recovered_eta0` + a `recovered_eta0` param/field, not a type). **NO new crate (11), NO
+> new module, NO new CLI flag** (the only `Cargo.toml` touch was a `tokio` `test-util` **dev-dependency**). **PHASE4-N-AM
+> / `DC-PUMP-03`** (enforced): the N2N keep-alive CLIENT (mini-protocol 8) in `run_admission_wire_pump` (the sole
+> per-peer pump, `CN-PUMP-01`) on a ~20s cadence STRICTLY under the peer's ~97s timeout, advancing the REUSED BLUE
+> `ade_network::keep_alive` machine; WIRE-ONLY (no `AdmissionPeerEvent`); fail-closed `AdmissionWirePumpError::KeepAlive`;
+> RED-only. CE-AM-LIVE PASSED (152s sustain vs. the prior ~96s EOF). **PHASE4-N-AN / `T-REC-06`** (enforced,
+> `tier = true`): `materialize_rolled_back_state` (the SOLE rolled-back-state authority, `CN-STORE-07`) overlays the
+> recovered seed-epoch eta0 onto the replay `chain_dep` BEFORE the `block_validity` fold, so a rolled-back block
+> validates its header VRF against the SAME nonce live admit used, NOT the snapshot `Nonce::ZERO` placeholder; VRF
+> strength UNCHANGED (a WRONG eta0 still fails closed). CE-AN-LIVE PASSED (the CE-AI-6 reorg capture: `RollBackward`
+> slot regression 371→361, re-converged `agreed` @ 383, 0 diverged, 0 `VrfCert`). **+2 CI gates** (159 → 161;
+> `ci_check_keep_alive_wire_only.sh`, `ci_check_rollback_materialize_eta0.sh`; 3 modified by the triage; 0 removed).
+> **Registry 359 → 361** (+2 `DC-PUMP-03` + `T-REC-06`; +1 strengthening `DC-PUMP-02 += PHASE4-N-AN`; 0 removed). **NO
+> `RO-LIVE` flip; `CN-CONS-03` NOT flipped** (single-best-peer rollback-FOLLOW was the proven scope — flipped the next
+> window, PHASE4-N-AO). The full §§0–7 narrative is recoverable from this doc's git history at `b8860b16`. *(Both new CI
+> gates here are at HEAD — count 162 at this regen's baseline `31efec44`, having grown 161 → 162 in the intervening
+> `b8860b16..31efec44` window for the S1 `ci_check_peer_identity_preserved.sh`.)*
 
 ---
 
 ## Historical — PHASE4-N-AL participant recovered-anchor rollback no-op (`b4c0983d → e87e8a43`)
 
-> The section below is the **previous** HEAD_DELTAS lead, preserved in condensed form. It narrated the
-> `b4c0983d → e87e8a43` span (measured from the PHASE4-N-AK AK-S2 close `b4c0983d`): the **N-AK close commit**
-> (`efa2a44e`, docs/registry only — flipped `DC-NODE-31`/`DC-NODE-32` `enforced_scaffolding → enforced`, regenerated
-> all four grounding docs to `b4c0983d`, archived the N-AK cluster docs; registry stayed 358) + a **C2-guide
-> remediation note** (`c3ec7466`, docs-only, records the N-AK recover→follow fix) + the **PHASE4-N-AL cluster** (single
-> slice AL-S1). **4 commits, 14 files, +1792 / −825.** **This span did NOT touch BLUE** — `git diff b4c0983d..HEAD`
-> over the BLUE `core_paths` trees was empty (456 → 456 BLUE / 462 → 462 whole-tree by the prior metric); **NO new
-> crate (11), NO new module, NO new canonical type, NO new CI gate (159 → 159).** **AL-S1 / `DC-NODE-33`** (enforced):
-> the participant MIRROR of N-AK's single-producer `DC-NODE-32` — `run_participant_sync`'s `RollBack` handler gains a
-> 17-line recovered-anchor branch (`if slot == anchor.slot && hash == anchor.hash { continue; }`) evaluated AFTER the
-> `RollBackward(Origin)` fail-close (AI-S4a) and BEFORE the `DC-NODE-29` `get_block_by_hash` stored-block resolution, so
-> a peer `RollBackward` binding EXACTLY (slot AND hash) to the persisted recovered anchor (`ForwardSyncState.recovered_anchor`,
-> AK-S2's carrier, reused unchanged) is an idempotent NO-OP — no `commit_rollback` / `WalEntry::RollBack` / ChainDb /
-> ledger / chain_dep / cursor / `pending_reselection` mutation. Every non-anchor / non-Origin / slot-only / hash-only
-> rollback still routes through the UNCHANGED `DC-NODE-29` authority. **`DC-NODE-32` NOT broadened** (stays scoped to
-> `run_node_sync`; a distinct sibling). Registry **358 → 359** (+1 `DC-NODE-33`; **0 strengthenings**; 0 removals);
-> CI gates **159 → 159** (`DC-NODE-33` `ci_script=""` — test-enforced by 5 `participant_*` tests in
-> `live_fork_choice_ai_s4bii.rs`, matching the `DC-NODE-31`/`DC-NODE-32`/`DC-PROTO-10`/`T-REC-05` precedent). **At the
-> N-AL close `35a851b9` (committed in the SUCCEEDING N-AM window) all four grounding docs were regenerated to
-> `e87e8a43`.** Live **CE-AL-3-LIVE** (2026-06-10, FRESH 2-pool `cardano-testnet` venue, magic 42) PASSED end-to-end:
-> bare-anchor recover @ slot 741 → `RollBackward(741)` idempotent no-op → first admit @ slot 777 →
-> `agreement_verdict{agreed}` @ slot 801 (our_hash == peer_hash) → 0 `UnexpectedRollback` + 0 `UnsupportedRollbackPoint`
-> + 0 diverged; transcript OUTSIDE-REPO. **NO `RO-LIVE` flip.** It did NOT prove CE-AI-6 reorg convergence or full
-> ChainSel (CE-AI-6 is a SEPARATE induced-reorg operator pass — unblocked by the SUCCEEDING N-AM + N-AN window). The
-> full §§0–7 narrative is recoverable from this doc's git history at `e87e8a43`.
+> Preserved as a pointer. It narrated the `b4c0983d → e87e8a43` span (measured from the PHASE4-N-AK AK-S2 close): the
+> **N-AK close commit** (`efa2a44e`, docs/registry only — flipped `DC-NODE-31`/`DC-NODE-32` `enforced_scaffolding →
+> enforced`, regenerated all four grounding docs to `b4c0983d`; registry stayed 358) + a **C2-guide remediation note**
+> (`c3ec7466`) + the **PHASE4-N-AL cluster** (single slice AL-S1). **4 commits, 14 files, +1792 / −825.** **This span did
+> NOT touch BLUE** (462 → 462); **NO new crate (11), NO new module, NO new canonical type, NO new CI gate (159 → 159).**
+> **AL-S1 / `DC-NODE-33`** (enforced): the participant MIRROR of N-AK's single-producer `DC-NODE-32` —
+> `run_participant_sync`'s `RollBack` handler accepts a peer `RollBackward` binding EXACTLY (slot AND hash) to the
+> persisted recovered anchor as an idempotent NO-OP, evaluated AFTER the `RollBackward(Origin)` fail-close and BEFORE the
+> `DC-NODE-29` stored-block resolution. Registry **358 → 359** (+1 `DC-NODE-33`; 0 strengthenings; 0 removals). Live
+> CE-AL-3-LIVE PASSED. **NO `RO-LIVE` flip.** The full §§0–7 narrative is recoverable from this doc's git history at
+> `e87e8a43`.
 
 ---
 
 ## Historical — PHASE4-N-AK recovered-anchor live-follow start + rollback boundary (`b1bed361 → b4c0983d`)
 
-> Preserved as a pointer. It narrated the `b1bed361 → b4c0983d` span (measured from the PHASE4-N-AJ close `b1bed361`):
-> the **N-AJ close commit** (`bbdc3585`, docs/registry/config only — registry 354→356, `DC-NODE-30 → enforced` +
-> `DC-EVIDENCE-03 → enforced_scaffolding`, baseline bump `e99a86c7 → b1bed361`) + the **PHASE4-N-AK cluster** (two
-> slices AK-S1 + AK-S2) — a post-N-AH/N-AI/N-AJ live recover→follow regression remediation. **7 commits, 33 files,
-> +2647 / −544.** **This span TOUCHED BLUE — +2 canonical types** (`456 → 458` by the prior metric): one NEW BLUE
-> module `crates/ade_ledger/src/recovered_anchor_point.rs` shipping `RecoveredAnchorPoint` (the closed, version-gated,
-> byte-canonical anchor-point record) + `RecoveredAnchorPointError` + the sole canonical CBOR codec
-> (`RECOVERED_ANCHOR_POINT_SCHEMA_VERSION = 1`) + one NEW RED module `crates/ade_runtime/src/recovered_anchor.rs`
-> (`load_recovered_anchor_point`, kept OUT of `bootstrap.rs` to preserve the `CN-NODE-01` single-`pub fn` closure).
-> **AK-S1 / `DC-NODE-31`** (enforced): persist the bootstrap anchor POINT as fingerprint-bound recovery provenance +
-> resolve the live-follow FindIntersect start from it (`resolve_live_follow_start`). **AK-S2 / `DC-NODE-32`**
-> (enforced): the single-producer `run_node_sync` `RollBack` handler accepts `RollBackward(anchor)` (exact slot AND
-> hash) as an idempotent no-op; new `ForwardSyncState.recovered_anchor` field. CI gates **159 → 159** (both rules
-> `ci_script=""`). Registry **356 → 358** (+2; `T-REC-05` strengthened `+= PHASE4-N-AK`; 0 removed). Live **CE-AK-3**
-> (frozen c2-relay) PASSED end-to-end. **NO `RO-LIVE` flip.** SCOPE was the single-producer `run_node_sync` path ONLY —
-> the participant path was closed by **PHASE4-N-AL / `DC-NODE-33`**. The full §§0–7 narrative is recoverable from this
-> doc's git history at `b4c0983d`.
+> Preserved as a pointer. The **N-AJ close commit** (`bbdc3585`) + the **PHASE4-N-AK cluster** (two slices AK-S1 +
+> AK-S2) — a post-N-AH/N-AI/N-AJ live recover→follow regression remediation. **7 commits, 33 files, +2647 / −544.**
+> **This span TOUCHED BLUE — +2 canonical types** (the closed version-gated `RecoveredAnchorPoint` record +
+> `RecoveredAnchorPointError` + its sole CBOR codec in the NEW BLUE module `crates/ade_ledger/src/recovered_anchor_point.rs`,
+> plus the NEW RED module `crates/ade_runtime/src/recovered_anchor.rs`). **AK-S1 / `DC-NODE-31`** (enforced): persist the
+> bootstrap anchor POINT as fingerprint-bound recovery provenance + resolve the live-follow FindIntersect start from it.
+> **AK-S2 / `DC-NODE-32`** (enforced): the single-producer `run_node_sync` `RollBack` handler accepts `RollBackward(anchor)`
+> (exact slot AND hash) as an idempotent no-op. Registry **356 → 358** (+2; `T-REC-05` strengthened; 0 removed); CI **159
+> → 159** (both rules `ci_script=""`). **NO `RO-LIVE` flip.** The full §§0–7 narrative is recoverable from this doc's git
+> history at `b4c0983d`.
 
 ---
 
 ## Historical — PHASE4-N-AJ Participant-path convergence evidence emission (`e99a86c7 → b1bed361`)
 
-> Preserved as a pointer. It narrated the `e99a86c7 → b1bed361` span (measured from the PHASE4-N-AI close
-> `e99a86c7`): the **N-AI baseline-bump chore** (`c1f4c876`) + **one unrelated docs commit** (`c95e2592`) + the
-> **PHASE4-N-AJ cluster** — Participant-path convergence evidence emission, the CE-AI-6 bridge. **9 commits, 19 files,
-> +1813 / −35.** **EVIDENCE-ONLY — ZERO BLUE change, 460 canonical types unchanged** (old whole-tree metric). It added
-> a **deterministic GREEN evidence side-output** — emitting the EXISTING closed `AgreementVerdict` vocabulary
-> (`block_received` / `block_admitted` / `agreement_verdict` via `verdict::derive`) to a dedicated
-> `--convergence-evidence-path` JSONL sink (the new GREEN/RED module `ade_node::convergence_evidence`). CI gates
-> **157 → 159** (+2). Registry **354 → 356** (+2: `DC-NODE-30` enforced + `DC-EVIDENCE-03` enforced_scaffolding;
-> `DC-ADMIT-04` strengthened; **`CN-CONS-03` NOT flipped**; 0 removed). Headline: the live `--mode node
-> --participant-venue` rollback-follow path now emits convergence EVIDENCE — **NOT authority**. **NO `RO-LIVE` flip.**
-> *(The N-AJ close artifacts were committed by `bbdc3585`, the first commit of the SUCCEEDING N-AK window.)* The full
-> §§0–7 narrative is recoverable from this doc's git history at `b1bed361`.
+> Preserved as a pointer. The **PHASE4-N-AJ cluster** — Participant-path convergence evidence emission, the CE-AI-6
+> bridge. **9 commits, 19 files, +1813 / −35.** **EVIDENCE-ONLY — ZERO BLUE change.** It added a **deterministic GREEN
+> evidence side-output** — the EXISTING closed `AgreementVerdict` vocabulary (`block_received` / `block_admitted` /
+> `agreement_verdict` via `verdict::derive`) to a dedicated `--convergence-evidence-path` JSONL sink (the new GREEN/RED
+> module `ade_node::convergence_evidence`, now extended by PHASE4-N-AO S8.5/S9). CI **157 → 159** (+2). Registry **354 →
+> 356** (+2: `DC-NODE-30` enforced + `DC-EVIDENCE-03` enforced_scaffolding; `DC-ADMIT-04` strengthened; **`CN-CONS-03`
+> NOT flipped**; 0 removed). **NO `RO-LIVE` flip.** The full §§0–7 narrative is recoverable from this doc's git history
+> at `b1bed361`.
 
 ---
 
 ## Historical — PHASE4-N-AI live fork-choice rollback-follow wiring (`8e2c3672 → 5ec841c8` / close `e99a86c7`)
 
-> Preserved as a pointer. It narrated the `8e2c3672 → 5ec841c8` span: the **N-AH baseline-bump chore**
-> (`c66fa9a9`) + the **PHASE4-N-AI cluster** (live fork-choice rollback-follow wiring of the EXISTING
-> `chain_selector` → BLUE `select_best_chain` into the live `--mode node` receive path — single-best-peer FOLLOW,
-> NOT full ChainSel; `DC-NODE-23`…`DC-NODE-29`; close `5ec841c8`, docs/baseline `e99a86c7`) + one unrelated docs
-> commit (`cbad2ae3`). **26 commits, 46 files, +5350 / −53.** **FIRST BLUE delta since G-N: +2 canonical types**
-> (`458 → 460` by the old whole-tree metric — the `ade_ledger::wal::event::{RollbackPoint, RollbackReason}` payload
-> types of the new closed-sum `WalEntry::RollBack` durable MARKER). CI gates **148 → 157** (+9; 0 modified, 0
-> removed). Registry **347 → 354** (+7: `DC-NODE-23..29` enforced; `CN-CONS-01` flipped partial→enforced; 13
-> strengthenings; 0 removed). Headline (honest boundary): Ade follows ONE peer's chain-sync `RollBackward` reorg
-> end-to-end on a declared Participant venue — replay-equivalently and fail-closed. **Single-best-peer
-> rollback-FOLLOW, NOT full multi-peer Cardano ChainSel.** **`CN-CONS-03` was NOT flipped.** The per-cluster
-> security review found **H-1** (mixed peer/local rollback target → durable-chain truncation) → remediated by
-> **AI-S6 / `DC-NODE-29`** (durable stored point as sole authority, validated pre-mutation, fail-closed) →
-> re-review **H-1 CLOSED.** **NO `RO-LIVE` flip.** The full §§0–7 narrative is recoverable from this doc's git
-> history at `5ec841c8` / `e99a86c7`.
+> Preserved as a pointer. The **PHASE4-N-AI cluster** (live fork-choice rollback-follow wiring of the EXISTING
+> `chain_selector` → BLUE `select_best_chain` into the live `--mode node` receive path — single-best-peer FOLLOW, NOT
+> full ChainSel; `DC-NODE-23`…`DC-NODE-29`). **26 commits, 46 files, +5350 / −53.** **FIRST BLUE delta since G-N: +2
+> canonical types** (`ade_ledger::wal::event::{RollbackPoint, RollbackReason}`, the payload types of the closed-sum
+> `WalEntry::RollBack` durable MARKER). CI **148 → 157** (+9). Registry **347 → 354** (+7: `DC-NODE-23..29` enforced;
+> `CN-CONS-01` flipped partial→enforced; 13 strengthenings; 0 removed). The per-cluster security review found **H-1**
+> (mixed peer/local rollback target → durable-chain truncation) → remediated by **AI-S6 / `DC-NODE-29`** → re-review
+> **H-1 CLOSED**. **`CN-CONS-03` was NOT flipped** — single-best-peer rollback-FOLLOW (the SELECT that flips it is
+> PHASE4-N-AO). The `DC-NODE-24..29` family is **strengthened by PHASE4-N-AO** (the SELECT re-exercises the rollback
+> authority live). **NO `RO-LIVE` flip.** The full §§0–7 narrative is recoverable from this doc's git history at
+> `5ec841c8` / `e99a86c7`.
 
 ---
 
 ## Historical — PHASE4-N-AG superseded + PHASE4-N-AH local-tip forge-base authority (`f87d0056 → 5858288e`)
 
-> Preserved as a pointer. It narrated the `f87d0056 → 5858288e` span: the **PHASE4-N-AF close tail** (`600581e8`
-> + `2d99cdf2`) + the **PHASE4-N-AG cluster** (single-producer loop-continuation-after-feed-EOF, `DC-NODE-19`;
-> **superseded-close**) + the **PHASE4-N-AH cluster** (local selected durable chain forge-base authority
-> `DC-NODE-20` + cert evidence-only `DC-NODE-21` + single-producer warm-start re-entry `DC-NODE-22`). **32 commits,
-> 48 files, +5155 / −743.** **RED/GREEN-only — ZERO BLUE change, 458 → 458 (old metric).** CI gates **143 → 148**
-> (+5; 3 modified in place; 0 removed). Registry **343 → 347** (+4; 9 strengthenings; 0 removed). Headline (honest
-> boundary): Ade sustained **cert-free single-producer block production on C2-LOCAL** (`cardano-testnet` magic 42)
-> against a real Haskell relay (`cardano-node 11.0.1`) — forged on its OWN local durable `ChainDb::tip`, crossed a
-> follow-link EOF, settled `> k` immutable, and resumed forging after a hard restart (run-4). NOT preprod. NOT
-> bounty completion. No `RO-LIVE` flip. The full §§0–7 narrative is recoverable from this doc's git history at
-> `5858288e`.
+> Preserved as a pointer. The **PHASE4-N-AG cluster** (single-producer loop-continuation-after-feed-EOF, `DC-NODE-19`;
+> **superseded-close**) + the **PHASE4-N-AH cluster** (local selected durable chain forge-base authority `DC-NODE-20` +
+> cert evidence-only `DC-NODE-21` + single-producer warm-start re-entry `DC-NODE-22`). **32 commits, 48 files, +5155 /
+> −743.** **RED/GREEN-only — ZERO BLUE change.** CI **143 → 148** (+5; 3 modified; 0 removed). Registry **343 → 347**
+> (+4; 9 strengthenings; 0 removed). Headline: Ade sustained **cert-free single-producer block production on C2-LOCAL**
+> against a real Haskell relay (`cardano-node 11.0.1`). NOT preprod. No `RO-LIVE` flip. The full §§0–7 narrative is
+> recoverable from this doc's git history at `5858288e`.
 
 ---
 
-## Historical — PHASE4-N-AF single-producer extend-own-durable-spine (`6363683e → f87d0056`)
+## Historical — earlier windows (`a76672b9 → f87d0056` and before)
 
-> Preserved as a pointer. A **single-slice cluster lead** narrating the `6363683e → f87d0056` span: the
-> PHASE4-N-AE.F close grounding-doc refresh (`d3f52e7c`) + a C2-guide doc (`1302417d`) followed by the **OQ-1 /
-> DC-NODE-17 investigation** (`bd1a7a73` declared DC-NODE-17 → `dadf4743` live-disproved it as the fix) and the
-> **PHASE4-N-AF cluster** (single slice AF.S1 — `DC-NODE-18`, single-producer extend-own-durable-spine). Counts
-> at `f87d0056`: 343 rules, 143 CI gates, 458 canonical types (old metric). **GREEN+RED only — BLUE 458 → 458.**
-> New gate `ci_check_single_producer_extend_own_spine.sh`. No `RO-LIVE` flip. The full §§0–7 narrative is
-> recoverable from this doc's git history at `f87d0056`.
-
----
-
-## Historical — PHASE4-N-AE.F post-CE-A5 echo-idempotency follow-up (`a76672b9 → 6363683e`)
-
-> Preserved as a pointer. A **single-slice lead** narrating the `a76672b9 → 6363683e` span: the PHASE4-N-AE
-> close grounding-doc refresh (`62811a4e`) followed by the **PHASE4-N-AE.F** slice (`DC-NODE-16` receive
-> idempotency at the durable-admit chokepoint — a re-announced block Ade already durably holds (same hash, same
-> slot) is an idempotent no-op at `pump_block`). Counts at `6363683e`: 341 rules, 142 CI gates, 458 canonical types
-> (old metric). **RED chokepoint only — BLUE 458 → 458.** New gate `ci_check_receive_idempotency.sh`. No `RO-LIVE`
-> flip. The full §§0–7 narrative is recoverable from this doc's git history at `6363683e`.
-
----
-
-## Historical — earlier windows (`25ddeebd → a76672b9` and before)
-
-> Preserved as pointers. The **PHASE4-N-AD/N-AE CE-A5 window** (`25ddeebd → a76672b9`, recover→serve continuity +
-> forge-on-followed-tip admissibility — the CE-A5 manifest: a real `cardano-node 11.0.1` relay
-> `AddedToCurrentChain` an Ade-forged successor block; `DC-NODE-14`/`DC-NODE-15`/`DC-CONS-24`/`DC-PROTO-10`; 336 →
-> 340 rules at `a76672b9`); the **PHASE4-N-AC cluster** (KES signing evolves the operator key to the current period
-> — `DC-CRYPTO-10`; 335 → 336 rules); the **PHASE4-N-AB cluster** (outbound mux segmentation — `CN-SESS-05`; 334 →
-> 335 rules); the **PHASE4-N-AA cluster** (bounded peer-driven serve range — `DC-SERVEMEM-01`; 333 → 334 rules);
-> the **PHASE4-N-U cluster + gate-hygiene tail** (forged-block durability — `DC-NODE-12`/`DC-CONS-23`/`DC-WAL-04`/
-> `T-REC-05`/`DC-NODE-13`; 328 → 333 rules); and the **G-K…G-R + C1 multi-cluster catch-up** (`550eec3a →
-> 65954fa3`, 319 → 328 rules, 126 → 134 CI gates). The full §§0–7 narrative for each is recoverable from this
-> doc's git history at the respective HEADs.
+> Preserved as pointers. The **PHASE4-N-AF cluster** (single-producer extend-own-durable-spine, `DC-NODE-18`; 343 rules
+> / 143 CI at `f87d0056`); the **PHASE4-N-AE.F slice** (`DC-NODE-16` receive idempotency at the durable-admit
+> chokepoint; 341 rules / 142 CI at `6363683e`); the **PHASE4-N-AD/N-AE CE-A5 window** (recover→serve continuity +
+> forge-on-followed-tip admissibility — the CE-A5 manifest: a real `cardano-node 11.0.1` relay `AddedToCurrentChain` an
+> Ade-forged successor block; `DC-NODE-14`/`DC-NODE-15`/`DC-CONS-24`/`DC-PROTO-10`; 336 → 340 rules); the **PHASE4-N-AC**
+> (KES key evolves to the current period — `DC-CRYPTO-10`), **PHASE4-N-AB** (outbound mux segmentation — `CN-SESS-05`),
+> **PHASE4-N-AA** (bounded peer-driven serve range — `DC-SERVEMEM-01`), **PHASE4-N-U** (forged-block durability —
+> `DC-NODE-12`/`DC-CONS-23`/`DC-WAL-04`/`T-REC-05`/`DC-NODE-13`), and the **G-K…G-R + C1 multi-cluster catch-up**. The
+> full §§0–7 narrative for each is recoverable from this doc's git history at the respective HEADs.
 
 ---
 
 ## Generation notes
 
-### Regen `e87e8a43 → b8860b16` (PHASE4-N-AM keep-alive client + PHASE4-N-AN rollback-materialize eta0 — current lead)
+### Regen `31efec44 → 862cd2cb` (PHASE4-N-AO — live multi-candidate fork-choice SELECT + `CN-CONS-03` flip — current lead)
 
-- **Baseline valid; two closed clusters + the prior-window close commit + a stale-gate triage + an archive.** Run
-  against `e87e8a43` (the PHASE4-N-AL AL-S1 close, the prior HEAD_DELTAS HEAD), which `git rev-parse` resolves and
-  `git merge-base e87e8a43 HEAD == e87e8a43` confirms is a strict ancestor of HEAD `b8860b16` (`e87e8a43` carries no
-  tag). The committed `.idd-config.json` baseline at HEAD already reads `e87e8a43` (the prior N-AL regen's bump
-  committed cleanly). This regen **performs the baseline bump** `e87e8a43 → b8860b16` as the task's post-close step.
-- **Counts are mechanical (git/grep/ls):** commit log + `--shortstat` over `e87e8a43..HEAD` (**12** commits, no
-  merges / **32** files / **+2288 / −516**); CI gate count via `git ls-tree -r --name-only <ref> ci/ | grep -c
-  ci_check_.*\.sh` = **159** at baseline, **161** at HEAD (`--diff-filter=A` = 2 new, `--diff-filter=M` = 3,
-  `--diff-filter=D` = empty); registry rule count via `grep -c '^id = '` at each ref (**359 → 361**; `comm -23` of the
-  sorted `id =` lists is empty — exactly two additions `DC-PUMP-03` + `T-REC-06`, zero removals); registry status via
-  `grep '^status = ' | sort | uniq -c` (baseline **224 / 1 / 19 / 126**, HEAD **227 / 1 / 19 / 125**); strengthening =
-  **1** (`DC-PUMP-02 += PHASE4-N-AN`, the only `strengthened_in` line mentioning AM/AN in the registry diff); BLUE
-  canonical types **462 → 462** (`git diff e87e8a43..HEAD` over the BLUE `core_paths` trees has no
-  `^+\s*(pub )?(struct|enum)` line; raw BLUE grep 486 → 486 / whole-tree 921 → 921).
-- **BLUE IS touched but adds no canonical type.** `git diff e87e8a43..HEAD` over the configured BLUE `core_paths`
-  trees lists `ade_core/src/consensus/praos_state.rs`, `ade_ledger/src/receive/reducer.rs`,
-  `ade_ledger/src/rollback/materialize.rs` (+ the `ade_ledger/tests/wal_rollback_ai_s1.rs` test) — N-AN's eta0 overlay
-  — but no `^+\s*(pub )?(struct|enum)` line. The new BLUE surface is a method (`overlay_recovered_eta0`) + a field
-  (`RollbackContext.recovered_eta0`), not a type. N-AM is RED-only (the `wire_pump` shell), reusing the BLUE
-  `ade_network::keep_alive` grammar.
-- **No new module.** `git diff --diff-filter=A --name-only e87e8a43..HEAD -- 'crates/**/*.rs'` is empty — no new
-  library module and no new test file (N-AM's 3 tests + N-AN's 2 tests are added to EXISTING test modules). No new
-  crate / workspace — still 11 crates.
-- **Only manifest change is a dev-dependency, NOT a feature flag.** `git diff --name-only e87e8a43..HEAD --
-  '**/Cargo.toml' 'Cargo.toml'` lists only `crates/ade_runtime/Cargo.toml`, a `tokio` `test-util` **dev-dependency**
-  (for the `start_paused` virtual clock in the DC-PUMP-03 cadence test). No `[features]` table at either ref; no
-  `cfg(feature)` gate or `compile_error!` added (both greps over the span are empty). No new CLI flag.
-- **Production change is RED keep-alive (+285) + BLUE/RED eta0 threading.** The `crates/**/*.rs` files in the span:
-  `admission/wire_pump.rs` (+285, AM-S1 RED keep-alive client + 3 tests), `praos_state.rs` (+15, AN-S2 BLUE overlay
-  method), `rollback/materialize.rs` (+140, AN-S2 BLUE param/overlay + 2 tests), `receive/reducer.rs` (+7, AN-S2 BLUE
-  field), `bootstrap.rs` (+51, AN-S2 RED reorder + thread), `forward_sync/reducer.rs` (+9, AN-S2 RED field),
-  `node_lifecycle.rs` (+12, AN-S2 RED thread), + `wal_rollback_ai_s1.rs` (+1) / `receive_rollback_integration.rs`
-  (+4) test touches. Everything else in the +2288/−516 is the in-span N-AL close `35a851b9` (four grounding docs +
-  archive), the N-AM/N-AN cluster + planning docs, the stale-gate triage's three CI scripts + the `DC-PUMP-02`
-  registry edit, and the `b8860b16` archive.
-- **Registry delta is +2 rules + 1 strengthening, NOT a removal.** `DC-PUMP-03` (declared at `c1b9eee2`, enforced at
-  the N-AM close `8b18fc8e` via `c0430322` enforced_scaffolding) + `T-REC-06` (declared at `180292f6`, enforced at
-  AN-S2 `deaa6e28`). `DC-PUMP-02 += PHASE4-N-AN` (the stale-gate triage `89facbea`). The sorted-id `comm -23` confirms
-  zero removals. The +3-enforced / −1-declared status tally additionally reflects the `DC-NODE-33` `declared →
-  enforced` flip carried by the in-span **N-AL close commit** (`35a851b9`); at the COMMITTED baseline `e87e8a43`
-  `DC-NODE-33` was still `declared`.
-- **+2 CI gates, 3 modified, 0 removed.** New: `ci_check_keep_alive_wire_only.sh` (DC-PUMP-03) +
-  `ci_check_rollback_materialize_eta0.sh` (T-REC-06). Modified (stale-gate triage, 0 source):
-  `ci_check_admission_wire_pump_closure.sh` (DC-PUMP-02 RollBackward event refinement),
-  `ci_check_node_path_fidelity.sh` (allow-list +`--participant-venue` +`--convergence-evidence-path`),
-  `ci_check_lifecycle_owner_uses_bootstrap_initial_state.sh` (dropped pipefail + scoped the materialize check to
-  exclude `apply_chain_event`).
-- **No `RO-LIVE` flip; CE-AM-LIVE + CE-AN-LIVE are enforced-backing evidence.** `DC-PUMP-03` is `enforced` (hermetic
-  CE-AM-1..3 + the CE-AM-LIVE 152s keep-alive sustain pass); `T-REC-06` is `enforced` (hermetic CE-AN-2..4 + the
-  CE-AN-LIVE CE-AI-6 reorg capture: live `RollBackward` slot regression 371→361, re-converged `agreed` @ 383 exact
-  hash, 0 diverged, 0 `VrfCert`). Both transcripts OUTSIDE-REPO (scrubbed notes only). NOT bounty/preprod claims; no
-  `RO-LIVE` registry status changed (`RO-LIVE-01` stays operator-gated / partial).
-- **Normative docs unchanged this span.** `git diff --name-only e87e8a43..HEAD` over the configured `normative_docs`
-  (CE-79 statement + addendum, the three contract docs, CE-73 reclassification, `CLAUDE.md`) is empty — the §7 delta
-  is entirely the invariant-registry change.
-- **§1 commit log verbatim from `git log` (newest first).** The per-cluster synthesis is in §0/§3. Nine subjects carry
-  a conventional-commits prefix (`feat`×2 / `docs`×5 / `test`×1 / `ci`×1); the other three are project close/bank
-  commits (`8b18fc8e`, `c0430322`, and `35a851b9` `Close PHASE4-N-AL …`). `35a851b9` is **N-AL work, not N-AM/AN**
-  (docs/registry only, 0 code); `89facbea` is CI-script + registry only (0 source).
-- **Doc-refresh state — CODEMAP + SEAMS + TRACEABILITY now ONE window STALE (refresh owed).** All three were
-  regenerated to the N-AL close `e87e8a43` by the in-span `35a851b9` and carry `DC-NODE-33` (CODEMAP 19 / SEAMS 1 /
-  TRACEABILITY 4 mentions) but lack `DC-PUMP-03` + `T-REC-06` (`grep -c` in each = 0 for both) and pin CI at **159**
-  vs. HEAD's **161**. This window adds **no module and no type**, so CODEMAP's structural inventory is unaffected —
-  only TRACEABILITY's two new four-cell rows (each with its new `ci_check_*` gate), the `DC-PUMP-02 += PHASE4-N-AN`
-  strengthening note, and a HEAD-pin/count bump (159 → 161 CI, 359 → 361 rules) across all three are owed.
-  **Cross-reference warning surfaced in §5.** Regenerate CODEMAP + SEAMS + TRACEABILITY to `b8860b16` as a follow-on
-  this close; the registry holds both new rules + their bindings authoritatively in the interim (361 rules). No orphan
-  gate (both new gates bind a registry rule).
-- **Working tree CLEAN.** This regen runs with all N-AM/N-AN close artifacts committed (`git status --porcelain` =
-  untracked scratch only). **This regen performs the `.idd-config.json` baseline bump** `e87e8a43 → b8860b16` (the
-  prior N-AL bump `b4c0983d → e87e8a43` committed cleanly; this regen advances it to `b8860b16`), per the task's
-  post-close step. The remaining close-pass action is the CODEMAP + SEAMS + TRACEABILITY refresh to `b8860b16`.
+- **Baseline valid; one cluster, end-to-end.** Run against `31efec44` (the PHASE4-N-AO **S1** commit), which
+  `git rev-parse` resolves and `git merge-base 31efec44 HEAD == 31efec44` confirms is a strict ancestor of HEAD
+  `862cd2cb` (`31efec44` carries no tag). The cluster's declare (`a87a4eb5`) + S1 slice doc + S1 impl (`301a4932`,
+  `31efec44`) landed at/before this baseline (in the preceding `b8860b16..31efec44` grounding-regen window), so this
+  regen measures the SELECT from the S1 tip forward; `DC-NODE-34` is already enforced at the baseline and appears only as
+  the Modified S1 gate. This regen **performs the baseline bump** `b8860b16 → 862cd2cb` as the task's post-close step
+  (the committed `.idd-config.json` baseline still reads `b8860b16`).
+- **Counts are mechanical (git/grep/ls):** commit log + `--shortstat` over `31efec44..HEAD` (**42** commits, no merges /
+  **50** files / **+9797 / −98**); CI gate count via `git ls-tree -r --name-only <ref> ci/ | grep -c ci_check_.*\.sh` =
+  **162** at baseline, **173** at HEAD (`--diff-filter=A` = 11 new, `--diff-filter=M` = 6, `--diff-filter=D` = empty);
+  registry rule count via `grep -c '^id = '` at each ref (**365 → 372**; `comm -23` of the sorted `id =` lists is empty —
+  exactly seven additions `DC-NODE-38..41` + `DC-PUMP-04` + `DC-EVIDENCE-04/05`, zero removals); registry status via
+  `grep '^status = ' | sort | uniq -c` (baseline **227 / 1 / 19 / 118**, HEAD **239 / 1 / 19 / 113**); strengthenings =
+  **10** (`strengthened_in` lines gaining `PHASE4-N-AO`: `CN-CONS-01`, `CN-CONS-03`, `DC-CONS-03`, `DC-CONS-20`,
+  `DC-NODE-24..29`); BLUE canonical types **462 → 462** (`git diff 31efec44..HEAD` over the BLUE `core_paths` trees is
+  empty).
+- **BLUE tree UNTOUCHED — GREEN+RED only.** `git diff 31efec44..HEAD` over the configured BLUE `core_paths` trees is
+  empty; the SELECT reuses `select_best_chain` (`ade_core::consensus::fork_choice`) + `validate_and_apply_header`
+  unchanged. All production code is in `ade_node` (+4795/−37) + a 22-line RED touch in `ade_runtime::forward_sync::pump`.
+- **Six new modules, all GREEN/RED in `ade_node`.** `git diff --diff-filter=A --name-only 31efec44..HEAD --
+  'crates/**/*.rs'` lists `candidate_aggregator.rs`, `selector_state.rs`, `fork_switch.rs`, `lca_walk.rs` (GREEN),
+  `fair_merge.rs` (RED), `post_switch_continuity.rs` (GREEN) + its `bin/`, plus two new test files
+  (`reselection_replay_s5.rs`, and the existing `live_fork_choice_ai_s4bii.rs` extended). No new crate / workspace — still
+  11 crates. Module colors read from the `//! GREEN`/`//! RED` banners.
+- **No manifest change, no feature flag, no CLI flag.** `git diff --name-only 31efec44..HEAD -- '**/Cargo.toml'
+  'Cargo.toml'` is empty (not even a dev-dependency); no `[features]` table at either ref; 0 `cfg(feature)` and 0
+  `compile_error!` added; `cli.rs` untouched.
+- **Registry delta is +7 rules + 5 declared→enforced flips (incl. `CN-CONS-03`) + 10 strengthenings, NOT a removal.**
+  The 7 new rules (`DC-NODE-38..41`, `DC-PUMP-04`, `DC-EVIDENCE-04/05`) were declared at their slice docs and flipped to
+  `enforced` at close; `CN-CONS-03` + `DC-NODE-34..37` flipped `declared → enforced`. The sorted-id `comm -23` confirms
+  zero removals. The `CN-CONS-03` flip is bound in `CN-CONS-03.evidence_notes` to the sha256-pinned OUTSIDE-repo natural
+  CE-AO-6 transcript.
+- **+11 CI gates, 6 modified, 0 removed.** New: the 10 SELECT-rule gates + `ci_check_post_switch_convergence_window.sh`
+  (the CE-AO-6 transcript checker the flip was proven against). Modified: 4 by the stale fork-choice gate repair
+  (`5e4807e2` — `live_fork_choice_apply`, `live_fork_choice_wiring`, `peer_identity_preserved`,
+  `wire_rollback_signal_preserved`), 1 by S5 (`5b31bf7f` — `wal_rollback_replay_equiv`), 1 by the close (`862cd2cb` —
+  `convergence_evidence_vocabulary_closed`, repointed to the writer `DISCRIMINATORS` allow-list).
+- **The `CN-CONS-03` flip is the headline; no `RO-LIVE` flip.** `CN-CONS-03` (Cardano post-partition convergence)
+  flipped `declared → enforced` on the natural CE-AO-6 two-producer SELECT pass (checker PASS:
+  `ContinuesSelectedBranch`, `AgreedAtSwitchTip{slot 391}`, 25 chained descendants, 0 diverged, every win terminal).
+  `RO-LIVE-01` stays operator-gated / partial; no `RO-LIVE` status changed.
+- **Normative docs unchanged this span.** `git diff --name-only 31efec44..HEAD` over the configured `normative_docs`
+  (CE-79 statement + addendum, the three contract docs, CE-73 reclassification, `CLAUDE.md`) is empty — the §7 delta is
+  entirely the invariant-registry change.
+- **§1 commit log verbatim from `git log` (newest first).** The per-slice synthesis is in §0/§3. All 42 subjects carry a
+  conventional-commits prefix (`feat`×19 / `docs`×20 / `test`×1 / `fix`×1 / `ci`×1); zero unclassified.
+- **Doc-refresh state — CODEMAP + SEAMS + TRACEABILITY now ONE cluster STALE (the largest refresh debt of the recent
+  windows).** All three were regenerated to `b8860b16` (the prior window, by `f167a349`) and carry `DC-PUMP-03` /
+  `T-REC-06` but **nothing from PHASE4-N-AO** — they miss the 6 new modules, the 7 new rules, the 10 strengthenings, the
+  `CN-CONS-03` flip, and the 11 new CI gates (`grep -c` for each in all three = 0; CI pin 161 vs. HEAD 173).
+  **Cross-reference warnings surfaced in §2 and §5.** Regenerate CODEMAP + SEAMS + TRACEABILITY to `862cd2cb` as a
+  follow-on this close; the registry holds all of it authoritatively in the interim (372 rules). No orphan gate (each new
+  gate binds a registry rule).
+- **Working tree CLEAN for tracked files.** This regen runs with all PHASE4-N-AO close artifacts committed
+  (`git status --porcelain` = untracked scratch only). **This regen performs the `.idd-config.json` baseline bump**
+  `b8860b16 → 862cd2cb`, per the task's post-close step. The remaining close-pass action is the CODEMAP + SEAMS +
+  TRACEABILITY refresh to `862cd2cb`.

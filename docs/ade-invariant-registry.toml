@@ -7233,7 +7233,7 @@ exact-tip moment (see DC-EVIDENCE-05 for the replayable continuity verdict the t
 """
 source = "docs/planning/phase4-n-ao-ce-ao-6-live-gap.md (S9 evidence finding) + docs/clusters/PHASE4-N-AO/S9-closed-fork-choice-evidence.md"
 cross_ref = ["DC-EVIDENCE-01", "DC-EVIDENCE-02", "DC-EVIDENCE-03", "DC-NODE-34", "DC-NODE-36", "DC-NODE-37", "DC-NODE-38", "CN-CONS-01", "CN-CONS-03"]
-code_locus = "CANDIDATE (pending S9 impl): crates/ade_node/src/convergence_evidence.rs (9 new emit_* methods + ForkChoiceEvidenceFailure closed enum + ForkSwitchId) + the AdmissionLogEvent vocabulary + emit-only allow-list + observe-only emit taps in crates/ade_node/src/node_lifecycle.rs (dispatch_competing_fork_choice decide-half + the relay-loop apply-half around prefetch_branch_bodies/apply_fork_switch). BLUE selector/walk/apply UNCHANGED."
+code_locus = "crates/ade_node/src/admission_log/{event.rs,writer.rs} (closed fork-choice AdmissionLogEvent variants + DISCRIMINATORS allow-list + closed ForkChoiceResult/ForkChoiceEvidenceFailure) + crates/ade_node/src/convergence_evidence.rs (observe-only emitters + bounded fork_switch_id) + crates/ade_node/src/node_lifecycle.rs (observe-only decide/apply taps; never read back by authority). Gate ci/ci_check_fork_choice_evidence_closed.sh."
 tests = ["fork_choice_win_paired_with_exactly_one_terminal_applied", "fork_choice_win_failed_terminal_carries_closed_code", "superseded_win_pairs_to_superseded_terminal", "fork_switch_id_is_deterministic_and_bounded"]
 ci_scripts = ["ci/ci_check_fork_choice_evidence_closed.sh"]
 status = "enforced"
@@ -7469,7 +7469,7 @@ define peer priority or affect any BLUE selection result; change the selector / 
 """
 source = "docs/planning/phase4-n-ao-ce-ao-6-live-gap.md (S7-retry finding) + docs/clusters/PHASE4-N-AO/S8-multi-peer-wire-pump-fairness.md"
 cross_ref = ["DC-PUMP-01", "DC-PUMP-02", "DC-PUMP-03", "CN-PUMP-01", "DC-NODE-34", "DC-NODE-38", "CN-CONS-01", "CN-CONS-03"]
-code_locus = "CANDIDATE (pending S8 impl): crates/ade_node/src/node_lifecycle.rs (spawn_live_wire_pump_source -- per-peer bounded channels + a deterministic configured-order fair-merge task feeding the single WirePump rx) + a RED fair-merge helper; GREEN per-peer delivered-count evidence counter. run_admission_wire_pump (per-peer pump) + NodeBlockSource::WirePump/next_item UNCHANGED."
+code_locus = "crates/ade_node/src/fair_merge.rs (RED per-peer bounded lanes + deterministic round-robin fair_merge: rotating cursor, closed-lane retire-in-place, no HashMap/wall-clock/rand) + crates/ade_node/src/node_lifecycle.rs (spawn_live_wire_pump_source per-peer-lane fan-in). Gate ci/ci_check_wire_pump_fairness.sh."
 tests = ["hot_peer_cannot_starve_quiet_peer", "closed_lane_removed_without_reordering_remaining_peers", "peer_identity_preserved_through_merge"]
 ci_scripts = ["ci/ci_check_wire_pump_fairness.sh"]
 status = "enforced"
@@ -7524,7 +7524,7 @@ hashed), so no canonical-type or replay obligation.
 """
 source = "docs/planning/phase4-select-multicandidate-fork-choice-invariants.md (FC-2/FC-10 enabler) + docs/clusters/PHASE4-N-AO/cluster.md"
 cross_ref = ["DC-NODE-35", "DC-NODE-23", "DC-NODE-30", "CN-CONS-01", "DC-PUMP-01"]
-code_locus = "CANDIDATE (pending /slice-doc S1): crates/ade_node/src/node_sync.rs (NodeSyncItem + the from_wire_pump/next_item conversion that today discards AdmissionPeerEvent.peer), crates/ade_node/src/node_lifecycle.rs (run_participant_sync / run_node_sync item consumers), crates/ade_runtime/src/admission/wire_pump.rs (AdmissionPeerEvent.peer -- the existing carrier, unchanged)"
+code_locus = "crates/ade_node/src/node_sync.rs (NodeSyncItem::{Block,RollBack} carry the source peer) + crates/ade_node/src/node_lifecycle.rs (peer-tagged participant feed) + crates/ade_node/src/convergence_evidence.rs (per-block block_received peer attribution). Gate ci/ci_check_peer_identity_preserved.sh."
 tests = ["best_of_two_peers_wins_and_is_identified", "peer_identity_preserved_through_merge"]
 ci_scripts = ["ci/ci_check_peer_identity_preserved.sh"]
 status = "enforced"
@@ -7550,7 +7550,7 @@ this proof -- the easier color MUST NOT be picked to dodge it.
 """
 source = "docs/planning/phase4-select-multicandidate-fork-choice-invariants.md (FC-10; the BLUE-safety proof obligation) + docs/clusters/PHASE4-N-AO/cluster.md"
 cross_ref = ["DC-NODE-34", "DC-NODE-36", "DC-NODE-24", "DC-CONS-03", "CN-CONS-01"]
-code_locus = "CANDIDATE (pending /slice-doc S2): crates/ade_node/src/node_sync.rs (a NEW per-peer candidate aggregator, color pending the S2 proof), crates/ade_core/src/consensus/header_validate.rs (validate_and_apply_header -- the BLUE validation REUSED as the sole candidate source), crates/ade_runtime/src/consensus/chain_selector.rs (process_header_arrival -- the validate-then-fragment pattern reference; crates/ade_core_interop/src/follow.rs is the FORBIDDEN mint shape)"
+code_locus = "crates/ade_node/src/candidate_aggregator.rs (GREEN build_candidate_fragment -- each header validated via reused BLUE validate_and_apply_header, never minted -- + assemble_candidate_set, arrival-order independent). Gate ci/ci_check_candidate_construction_validated.sh."
 tests = ["build_candidate_fragment_assembles_from_validated_headers", "build_candidate_fragment_empty_headers_fails_closed", "build_candidate_fragment_rejects_invalid_header_fails_closed", "build_candidate_fragment_two_runs_byte_identical", "assemble_candidate_set_ordering_is_arrival_independent"]
 ci_scripts = ["ci/ci_check_candidate_construction_validated.sh"]
 status = "enforced"
@@ -7572,7 +7572,7 @@ followed_peer_tip never does.
 """
 source = "docs/planning/phase4-select-multicandidate-fork-choice-invariants.md (FC-1/FC-2) + docs/clusters/PHASE4-N-AO/cluster.md"
 cross_ref = ["DC-NODE-35", "DC-NODE-37", "DC-NODE-24", "DC-CONS-03", "CN-CONS-01", "CN-CONS-03"]
-code_locus = "CANDIDATE (pending /slice-doc S3): crates/ade_node/src/node_lifecycle.rs (run_participant_sync -- the NeedsForkChoice arm, today Err(UnexpectedRollback) at node_lifecycle.rs:2562-2569), crates/ade_core/src/consensus/fork_choice.rs (select_best_chain -- the single selector, REUSED unchanged)"
+code_locus = "crates/ade_node/src/node_lifecycle.rs (RED dispatch_competing_fork_choice + GREEN decide_fork_switch routing the live participant path into the SOLE BLUE select_best_chain; DECIDE-only -- sets PendingForkSwitch + the DC-NODE-28 fence, applies nothing) + crates/ade_node/src/selector_state.rs (ForkAnchor/PendingForkSwitch/project_tiebreaker). BLUE select_best_chain UNCHANGED. Gate ci/ci_check_live_selector_dispatch.sh."
 tests = ["win_emits_switch_to_winning_peer_and_durable_anchor", "tiebreaker_loss_keeps_current", "exceeded_rollback_keeps_current", "best_of_two_peers_wins_and_is_identified"]
 ci_scripts = ["ci/ci_check_live_selector_dispatch.sh"]
 status = "enforced"
@@ -7600,7 +7600,7 @@ pending reselection (DC-NODE-28).
 """
 source = "docs/planning/phase4-select-multicandidate-fork-choice-invariants.md (FC-5/FC-6/FC-7) + docs/clusters/PHASE4-N-AO/cluster.md"
 cross_ref = ["DC-NODE-36", "DC-NODE-25", "DC-NODE-29", "DC-NODE-27", "DC-NODE-28", "CN-STORE-07", "DC-CONS-20", "DC-NODE-05", "DC-NODE-12", "CN-CONS-03"]
-code_locus = "CANDIDATE (pending /slice-doc S4): crates/ade_node/src/node_lifecycle.rs (run_participant_sync fork-switch driver + apply_chain_event -- the existing RolledBack + ChainSelected arms, REUSED), crates/ade_runtime/src/admission/wire_pump.rs (the selected-range BlockFetch RequestRange, extending the existing single-block tip-follow fetch), crates/ade_ledger/src/wal/event.rs (RollbackReason::ForkChoiceWin -- the existing variant, constructed live for the first time)"
+code_locus = "crates/ade_node/src/fork_switch.rs (GREEN-pure prevalidate_branch: bind+link+block_validity) + crates/ade_node/src/node_lifecycle.rs (RED prove_fork_switch -- mutation-free -- then apply_fork_switch: prove-then-commit via apply_chain_event RolledBack{ForkChoiceWin}+ChainSelected, fence cleared LAST; ProofFailed holds the fence). Gate ci/ci_check_fork_switch_never_abandons.sh."
 tests = ["empty_branch_fails_closed_before_any_apply", "null_source_serves_nothing", "fork_switch_win_adopts_via_rolledback_then_chainselected", "body_hash_mismatch_leaves_chain_unchanged", "broken_parent_link_leaves_chain_unchanged", "selected_peer_missing_body_leaves_chain_unchanged_fence_held", "proof_failure_holds_fence_then_resolves_when_caught_up"]
 ci_scripts = ["ci/ci_check_fork_switch_never_abandons.sh"]
 status = "enforced"
@@ -7630,7 +7630,7 @@ competing-block LCA invariant.
 """
 source = "docs/planning/phase4-n-ao-ce-ao-6-live-gap.md + docs/clusters/PHASE4-N-AO/S7-lca-anchor-walk.md"
 cross_ref = ["DC-NODE-36", "DC-NODE-37", "DC-NODE-29", "DC-NODE-35", "DC-NODE-28", "CN-CONS-01", "CN-CONS-03"]
-code_locus = "CANDIDATE (pending S7 impl): crates/ade_node/src/node_lifecycle.rs (dispatch_competing_fork_choice -- per-peer branch cache + walk_to_durable_lca) + crates/ade_node/src/candidate_aggregator.rs (build_candidate_fragment, REUSED multi-header) + crates/ade_node/src/selector_state.rs (LcaError)"
+code_locus = "crates/ade_node/src/lca_walk.rs (walk_to_durable_lca + CachedHeader: k-bounded by block depth, self-binding by re-derived hash, durable LCA anchor is ChainDb stored slot+hash only). Gate ci/ci_check_lca_anchor_walk.sh."
 tests = ["one_block_fork_walks_in_one_step", "multi_block_branch_walks_to_durable_lca", "missing_intermediate_header_fails_closed", "ancestor_older_than_k_fails_closed_block_depth", "cache_self_binding_violation_fails_closed", "lying_parent_link_to_genesis_fails_closed", "arrival_order_permutation_walks_identical", "walk_is_deterministic"]
 ci_scripts = ["ci/ci_check_lca_anchor_walk.sh"]
 status = "enforced"
@@ -7662,7 +7662,7 @@ run 1 surfaced (adopted cn2@298, received 388 but missed the bridge ~340, stalle
 """
 source = "docs/planning/phase4-n-ao-ce-ao-6-live-gap.md (run-1 root-cause finding) + docs/clusters/PHASE4-N-AO/S11-post-forkchoicewin-forward-follow.md"
 cross_ref = ["DC-NODE-24", "DC-NODE-25", "DC-NODE-28", "DC-NODE-29", "DC-NODE-38", "DC-EVIDENCE-05", "DC-CONS-03", "CN-CONS-01", "CN-CONS-03"]
-code_locus = "CANDIDATE (pending S11 Phase-1 diagnosis): the fix locus is decided by the instrumented diagnostic (peer-fault vs Ade-fault). Surfaces in scope: crates/ade_runtime/src/admission/wire_pump.rs (RollForward serve/follow), crates/ade_node/src/node_sync.rs (classify_receive), crates/ade_node/src/lca_walk.rs (walk_to_durable_lca BranchGap), crates/ade_node/src/node_lifecycle.rs (post-switch follow state + apply_fork_switch intersect re-point + the fail-closed MissingBridge decision). BLUE select_best_chain / apply_fork_switch adoption authority UNCHANGED."
+code_locus = "crates/ade_node/src/node_lifecycle.rs (the dispatch walk-fail + materialize-fail arms emit structured MissingBridge + set pending_missing_bridge HOLD, never a silent no-op) + crates/ade_node/src/fork_switch.rs (closed MissingBridgeReason + fork_switch_fence_resolved requires pending_missing_bridge.is_none()). Gate ci/ci_check_missing_bridge_fail_closed.sh."
 tests = ["post_switch_admits_winner_descendant_x_plus_1", "post_switch_missing_bridge_emits_structured_and_holds_fence", "missing_bridge_wrong_parent_maps_closed_code", "late_bridge_clears_hold_on_progress", "missing_bridge_reason_maps_lca_error_to_closed_discriminant", "bridge_gap_injection_emits_missing_bridge", "late_bridge_recovers_on_progress"]
 ci_scripts = ["ci/ci_check_missing_bridge_fail_closed.sh"]
 status = "enforced"
