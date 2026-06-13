@@ -255,6 +255,15 @@ pub fn try_evaluate_tx(
         ade_plutus::tx_eval::MAINNET_SLOT_CONFIG,
     ) {
         Ok(result) => {
+            // A script that overran its declared ex_units cap is
+            // `success = false` (enforced in ade_plutus). cardano-ledger
+            // treats this as a phase-2 failure (ValidationTagMismatch —
+            // collateral consumed), so the tx must NOT be accepted.
+            if let Some(idx) = result.scripts.iter().position(|s| !s.success) {
+                return PlutusEvalOutcome::Failed {
+                    reason: format!("script {idx} exceeded its declared ex_units budget"),
+                };
+            }
             let total_cpu: i64 = result.scripts.iter().map(|s| s.cpu).sum();
             let total_mem: i64 = result.scripts.iter().map(|s| s.mem).sum();
             PlutusEvalOutcome::Passed {

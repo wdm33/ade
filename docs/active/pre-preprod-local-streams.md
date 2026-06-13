@@ -146,8 +146,31 @@ admission adversarial false-accept corpus + per-rule tx/conservation/witness adv
   `CN-LEDGER-09`/`DC-LEDGER-05` ci_scripts. NOT flipped — the per-era binding completeness (Byron
   TxWitness / Shelley bootstrap / Alonzo redeemers vs the comprehensively-tested Conway path) is the
   remaining scope; both stay `partial`.
-- **Slice A — Plutus/script differential** (remaining): the hardest, partially externally-gated by the
-  CE-88 aiken `validity_range` bug. Not yet started.
+- **Slice A1 — Plutus per-script budget-cap false-accept FIXED** (this commit). **Finding:** Ade's
+  phase-2 passed `initial_budget = protocol-max` to aiken's `eval_phase_two_raw`, which caps only the
+  tx-wide budget and never the per-script DECLARED ex_units. cardano-ledger caps each script at the
+  ex_units its redeemer declares → an UNDER-declared tx (script consumes > declared but < protocol-max)
+  was accepted by Ade yet rejected by cardano-node = **false-accept** (release-blocking direction; the
+  real-block oracle structurally can't surface it — on-chain valid txs never under-declare). Confirmed
+  hermetically (`under_declared_ex_units_must_reject`: declared (1,1), consumed mem=747528). **Fix
+  (BLUE):** `ade_plutus::eval_tx_phase_two` derives each redeemer's declared cap from the tx
+  (`declared_ex_units_by_pointer`, array + Conway-map forms; walk mirrors the proven
+  `ade_ledger::witness` redeemer parse) and binds `PerScriptResult.success` to `actual<=declared`;
+  `try_evaluate_tx` rejects (`Failed`) on any `!success`. Both ledger consumers (rules.rs +
+  tx_validity) reject. Self-testing gate `ci_check_plutus_budget_cap.sh`. Recorded on CN-PLUTUS-02 +
+  DC-LEDGER-03 (kept declared/partial — closed failure-shape classification + full reference diff
+  remain; conservative bar).
+- **CE-88 boundary (scope AROUND):** the aiken Conway `validity_range` ScriptContext bug is the
+  OPPOSITE direction (a false-REJECT / `diverge_fail`, inherited from aiken upstream, Conway `Spend`
+  only); it blocks CN-PLUTUS-03 / DC-LEDGER-06 (canonical ScriptContext derivation — Ade delegates it
+  to aiken), which stay `declared`. A1 (budget) is independent of CE-88.
+- **Slice A remaining:** A2 (lock the proven surface: host-env purity gate → CN-PLUTUS-04; determinism
+  + IOG-conformance budget → CN-PLUTUS-01; wrap the `diverge_pass==0` oracle in a named gate) + A3
+  (broaden the adversarial negative corpus: failing-validator / missing-redeemer / wrong-datum
+  must-reject). **Harness note:** the contiguous Plutus verdict harness currently stops early on a
+  cert-state divergence (`StakeAlreadyRegistered`/`StakeNotRegistered` at blocks 1/1/40), so it reaches
+  ~0 passing Plutus txs — a pre-existing limitation that weakens the Plutus oracle's reach; worth a
+  dedicated look in the broader Stream-1 false-accept hunt.
 
 ---
 

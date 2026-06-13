@@ -132,3 +132,75 @@ fn aiken_fixture_tx_evaluates_end_to_end() {
         Err(e) => panic!("aiken fixture should evaluate to Ok, got: {e:?}"),
     }
 }
+
+/// Adversarial: a transaction whose redeemer UNDER-DECLARES its ex_units
+/// must be rejected.
+///
+/// cardano-ledger phase-2 caps each script at the ex_units DECLARED in
+/// its redeemer; a script that overruns its declared budget fails
+/// (`ValidationTagMismatch`, collateral consumed). aiken's
+/// `eval_phase_two_raw` does NOT enforce this — it evaluates each script
+/// against the `initial_budget` (Ade passes protocol-max) and only
+/// rewrites the redeemer's ex_units to the *actual* consumption. So the
+/// per-script declared cap must be enforced by Ade.
+///
+/// This test takes the honest fixture (declares (mem=747528,
+/// cpu=217294271), == actual) and mutates the DECLARED ex_units down to
+/// (1, 1), same byte width so no other offset shifts. The script still
+/// consumes 747528 / 217294271 — far over its declared (1, 1) — so it
+/// must NOT succeed. Before the per-script-cap fix this test fails
+/// (Ade reports `success = true`); that failure is the confirmation of
+/// the budget-cap false-accept.
+#[test]
+fn under_declared_ex_units_must_reject() {
+    // redeemer = [1, 0, d87980, [747528, 217294271]] — the ex_units array
+    // is `821a000b68081a0cf3a5bf`, prefixed here by the redeemer data
+    // `d87980` to pin a unique match.
+    const HONEST_EX_UNITS: &str = "d87980821a000b68081a0cf3a5bf";
+    // Same shape, declared ex_units rewritten to (mem=1, cpu=1).
+    const UNDER_DECLARED: &str = "d87980821a000000011a00000001";
+    assert_eq!(
+        TX_HEX.matches(HONEST_EX_UNITS).count(),
+        1,
+        "redeemer ex_units must appear exactly once for a surgical mutation",
+    );
+    let mutated = TX_HEX.replace(HONEST_EX_UNITS, UNDER_DECLARED);
+
+    let tx_cbor = decode_hex(&mutated);
+    let inputs = split_array_items(&decode_hex(INPUTS_HEX));
+    let outputs = split_array_items(&decode_hex(OUTPUTS_HEX));
+    let resolved_utxos: Vec<(Vec<u8>, Vec<u8>)> =
+        inputs.into_iter().zip(outputs.into_iter()).collect();
+
+    let result = eval_tx_phase_two(
+        &tx_cbor,
+        &resolved_utxos,
+        None,
+        // Protocol max — the budget Ade currently (wrongly) caps each
+        // script at. The script is within this, so aiken runs it Ok; the
+        // declared (1, 1) cap is the smaller bound that must be enforced.
+        (10_000_000_000, 14_000_000),
+        PREVIEW_SLOT_CONFIG,
+    );
+
+    let res = result.expect("eval runs: the script is within protocol max");
+    assert_eq!(res.scripts.len(), 1, "fixture has exactly one Plutus script");
+    let s = &res.scripts[0];
+    // The script genuinely consumed far more than its declared (1, 1):
+    // aiken measures mem=747528, cpu=168699461 regardless of the declared
+    // value (it caps at `initial_budget`, not the redeemer's ex_units).
+    assert!(
+        s.mem >= 747_528 && s.cpu > 1_000_000,
+        "actual consumption measured: mem={}, cpu={}",
+        s.mem,
+        s.cpu,
+    );
+    // Over-ran its declared budget → must be rejected, not accepted.
+    assert!(
+        !s.success,
+        "script consumed mem={} cpu={} against declared (mem=1, cpu=1) — \
+         must be rejected as over-budget (false-accept if accepted)",
+        s.mem,
+        s.cpu,
+    );
+}

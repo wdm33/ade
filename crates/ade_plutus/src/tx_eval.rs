@@ -29,6 +29,8 @@
 //! `(system_start_ms, zero_slot, slot_length_ms)` for the target
 //! network.
 
+use std::collections::BTreeMap;
+
 use crate::evaluator::PlutusError;
 
 /// Per-script evaluation result.
@@ -124,19 +126,36 @@ pub fn eval_tx_phase_two(
     )
     .map_err(|e| PlutusError::DecodeFailed(format!("eval_phase_two_raw: {e}")))?;
 
+    // cardano-ledger phase-2 caps each script at the ex_units DECLARED in
+    // its redeemer; a script that overruns its declared budget fails
+    // (ValidationTagMismatch — collateral consumed). aiken evaluates each
+    // script against `initial_budget` (the caller passes the protocol
+    // max) and only rewrites the redeemer to the ACTUAL consumption — it
+    // never enforces the smaller per-script declared cap. Ade enforces it
+    // here: a script whose measured ex_units exceed what its redeemer
+    // declared is `success = false`, even though aiken returned Ok. The
+    // declared values come from the original redeemers in `tx_cbor`,
+    // keyed by the `(tag, index)` redeemer pointer.
+    let declared = declared_ex_units_by_pointer(tx_cbor);
+
     let mut scripts = Vec::with_capacity(raw_results.len());
     for (redeemer_cbor, _eval_result) in raw_results {
-        // eval_phase_two_raw returns only the redeemer bytes with the
-        // final applied ExUnits — aiken's raw wrapper strips the
-        // per-script EvalResult down to just the redeemer bytes
-        // (the redeemer carries the executed ex_units after rewriting).
-        // Extract CPU/mem from the redeemer's ex_units field.
-        let (cpu, mem) = extract_redeemer_ex_units(&redeemer_cbor)?;
+        // eval_phase_two_raw returns the redeemer bytes with the final
+        // applied (actual) ExUnits — extract its pointer + measured cost.
+        let f = extract_redeemer_fields(&redeemer_cbor)?;
+        // Fail closed: a script whose declared cap can't be recovered
+        // cannot be proven to have stayed within budget.
+        let within_declared = match declared.get(&(f.tag, f.index)) {
+            Some(&(declared_mem, declared_cpu)) => {
+                f.mem <= declared_mem && f.cpu <= declared_cpu
+            }
+            None => false,
+        };
         scripts.push(PerScriptResult {
             redeemer_cbor,
-            success: true, // raw returns Err on script failure; Ok means success
-            cpu,
-            mem,
+            success: within_declared,
+            cpu: f.cpu,
+            mem: f.mem,
             logs: Vec::new(), // raw path doesn't expose logs
         });
     }
@@ -144,15 +163,21 @@ pub fn eval_tx_phase_two(
     Ok(TxEvalResult { scripts })
 }
 
-/// Extract `(cpu, mem)` from a CBOR-encoded Redeemer.
+/// A redeemer's `(tag, index)` pointer plus its measured ex_units.
+struct RedeemerFields {
+    tag: u64,
+    index: u64,
+    mem: i64,
+    cpu: i64,
+}
+
+/// Extract `(tag, index, mem, cpu)` from a CBOR-encoded Redeemer.
 ///
-/// Redeemer format (Alonzo+ array form):
-///   `[tag, index, data, [mem, cpu]]` — position 3 is the ex_units tuple.
-///
-/// Conway map form stores redeemers differently, but
-/// `eval_phase_two_raw` re-serializes to the array form on output.
-fn extract_redeemer_ex_units(redeemer_cbor: &[u8]) -> Result<(i64, i64), PlutusError> {
-    use ade_codec::cbor::{read_array_header, read_uint, ContainerEncoding};
+/// Redeemer array form: `[tag, index, data, [mem, cpu]]`.
+/// `eval_phase_two_raw` always re-serializes its output to this form,
+/// so the returned redeemer is array-shaped even for Conway map inputs.
+fn extract_redeemer_fields(redeemer_cbor: &[u8]) -> Result<RedeemerFields, PlutusError> {
+    use ade_codec::cbor::{read_array_header, read_uint, skip_item, ContainerEncoding};
     let mut offset = 0;
     let hdr = read_array_header(redeemer_cbor, &mut offset)
         .map_err(|e| PlutusError::DecodeFailed(format!("redeemer array header: {e}")))?;
@@ -164,15 +189,23 @@ fn extract_redeemer_ex_units(redeemer_cbor: &[u8]) -> Result<(i64, i64), PlutusE
             ))
         }
     }
-    // Skip tag, index, data.
-    for _ in 0..3 {
-        ade_codec::cbor::skip_item(redeemer_cbor, &mut offset)
-            .map_err(|e| PlutusError::DecodeFailed(format!("redeemer skip: {e}")))?;
-    }
-    // ex_units = [mem, cpu]
-    let ex_hdr = read_array_header(redeemer_cbor, &mut offset)
+    let (tag, _) = read_uint(redeemer_cbor, &mut offset)
+        .map_err(|e| PlutusError::DecodeFailed(format!("redeemer tag: {e}")))?;
+    let (index, _) = read_uint(redeemer_cbor, &mut offset)
+        .map_err(|e| PlutusError::DecodeFailed(format!("redeemer index: {e}")))?;
+    // Skip data.
+    skip_item(redeemer_cbor, &mut offset)
+        .map_err(|e| PlutusError::DecodeFailed(format!("redeemer data: {e}")))?;
+    let (mem, cpu) = read_ex_units_pair(redeemer_cbor, &mut offset)?;
+    Ok(RedeemerFields { tag, index, mem, cpu })
+}
+
+/// Read an `ex_units = [mem, cpu]` pair as `(mem, cpu)`, clamped to i64.
+fn read_ex_units_pair(data: &[u8], offset: &mut usize) -> Result<(i64, i64), PlutusError> {
+    use ade_codec::cbor::{read_array_header, read_uint, ContainerEncoding};
+    let hdr = read_array_header(data, offset)
         .map_err(|e| PlutusError::DecodeFailed(format!("ex_units header: {e}")))?;
-    match ex_hdr {
+    match hdr {
         ContainerEncoding::Definite(2, _) => {}
         _ => {
             return Err(PlutusError::DecodeFailed(
@@ -180,11 +213,11 @@ fn extract_redeemer_ex_units(redeemer_cbor: &[u8]) -> Result<(i64, i64), PlutusE
             ))
         }
     }
-    let (mem, _) = read_uint(redeemer_cbor, &mut offset)
+    let (mem, _) = read_uint(data, offset)
         .map_err(|e| PlutusError::DecodeFailed(format!("ex_units mem: {e}")))?;
-    let (cpu, _) = read_uint(redeemer_cbor, &mut offset)
+    let (cpu, _) = read_uint(data, offset)
         .map_err(|e| PlutusError::DecodeFailed(format!("ex_units cpu: {e}")))?;
-    Ok((clamp(cpu), clamp(mem)))
+    Ok((clamp(mem), clamp(cpu)))
 }
 
 fn clamp(v: u64) -> i64 {
@@ -193,6 +226,186 @@ fn clamp(v: u64) -> i64 {
     } else {
         v as i64
     }
+}
+
+/// Parse the DECLARED ex_units of every redeemer in a full transaction
+/// CBOR `[body, witness_set, is_valid, aux_data]`, keyed by `(tag,
+/// index)`. Returns an empty map when the witness set carries no
+/// redeemers or the redeemer block is shaped unexpectedly — callers
+/// treat a missing pointer as fail-closed.
+///
+/// Mirrors `ade_ledger::witness` and handles both wire forms:
+///   - Alonzo/Babbage array: `[* [tag, index, data, [mem, cpu]]]`
+///   - Conway map:           `{[tag, index] => [data, [mem, cpu]]}`
+///
+/// A possible tag(258) wrapper on the redeemer block is stripped first.
+fn declared_ex_units_by_pointer(tx_cbor: &[u8]) -> BTreeMap<(u64, u64), (i64, i64)> {
+    parse_declared_ex_units(tx_cbor).unwrap_or_default()
+}
+
+fn parse_declared_ex_units(tx_cbor: &[u8]) -> Option<BTreeMap<(u64, u64), (i64, i64)>> {
+    use ade_codec::cbor::{self, ContainerEncoding};
+    let mut o = 0usize;
+    // tx = [body, witness_set, is_valid, aux_data]
+    let _ = cbor::read_array_header(tx_cbor, &mut o).ok()?;
+    cbor::skip_item(tx_cbor, &mut o).ok()?; // body
+    let ws = cbor::read_map_header(tx_cbor, &mut o).ok()?; // witness set
+    let mut declared = BTreeMap::new();
+    match ws {
+        ContainerEncoding::Definite(n, _) => {
+            for _ in 0..n {
+                read_witness_entry(tx_cbor, &mut o, &mut declared)?;
+            }
+        }
+        ContainerEncoding::Indefinite => {
+            while !cbor::is_break(tx_cbor, o).ok()? {
+                read_witness_entry(tx_cbor, &mut o, &mut declared)?;
+            }
+        }
+    }
+    Some(declared)
+}
+
+fn read_witness_entry(
+    data: &[u8],
+    o: &mut usize,
+    declared: &mut BTreeMap<(u64, u64), (i64, i64)>,
+) -> Option<()> {
+    use ade_codec::cbor;
+    let (key, _) = cbor::read_uint(data, o).ok()?;
+    if key == 5 {
+        parse_redeemer_block(data, o, declared)?;
+    } else {
+        cbor::skip_item(data, o).ok()?;
+    }
+    Some(())
+}
+
+fn parse_redeemer_block(
+    data: &[u8],
+    o: &mut usize,
+    declared: &mut BTreeMap<(u64, u64), (i64, i64)>,
+) -> Option<()> {
+    skip_optional_tag(data, o)?;
+    match data.get(*o)? >> 5 {
+        4 => parse_redeemers_array(data, o, declared),
+        5 => parse_redeemers_map(data, o, declared),
+        _ => None,
+    }
+}
+
+fn parse_redeemers_array(
+    data: &[u8],
+    o: &mut usize,
+    declared: &mut BTreeMap<(u64, u64), (i64, i64)>,
+) -> Option<()> {
+    use ade_codec::cbor::{self, ContainerEncoding};
+    let enc = cbor::read_array_header(data, o).ok()?;
+    match enc {
+        ContainerEncoding::Definite(n, _) => {
+            for _ in 0..n {
+                parse_one_array_redeemer(data, o, declared)?;
+            }
+        }
+        ContainerEncoding::Indefinite => {
+            while !cbor::is_break(data, *o).ok()? {
+                parse_one_array_redeemer(data, o, declared)?;
+            }
+            *o += 1;
+        }
+    }
+    Some(())
+}
+
+fn parse_one_array_redeemer(
+    data: &[u8],
+    o: &mut usize,
+    declared: &mut BTreeMap<(u64, u64), (i64, i64)>,
+) -> Option<()> {
+    use ade_codec::cbor::{self, ContainerEncoding};
+    let inner = cbor::read_array_header(data, o).ok()?;
+    match inner {
+        ContainerEncoding::Definite(4, _) => {}
+        _ => return None,
+    }
+    let (tag, _) = cbor::read_uint(data, o).ok()?;
+    let (index, _) = cbor::read_uint(data, o).ok()?;
+    cbor::skip_item(data, o).ok()?; // data
+    let (mem, cpu) = read_ex_units_pair(data, o).ok()?;
+    declared.insert((tag, index), (mem, cpu));
+    Some(())
+}
+
+fn parse_redeemers_map(
+    data: &[u8],
+    o: &mut usize,
+    declared: &mut BTreeMap<(u64, u64), (i64, i64)>,
+) -> Option<()> {
+    use ade_codec::cbor::{self, ContainerEncoding};
+    let enc = cbor::read_map_header(data, o).ok()?;
+    match enc {
+        ContainerEncoding::Definite(n, _) => {
+            for _ in 0..n {
+                parse_one_map_redeemer(data, o, declared)?;
+            }
+        }
+        ContainerEncoding::Indefinite => {
+            while !cbor::is_break(data, *o).ok()? {
+                parse_one_map_redeemer(data, o, declared)?;
+            }
+            *o += 1;
+        }
+    }
+    Some(())
+}
+
+fn parse_one_map_redeemer(
+    data: &[u8],
+    o: &mut usize,
+    declared: &mut BTreeMap<(u64, u64), (i64, i64)>,
+) -> Option<()> {
+    use ade_codec::cbor::{self, ContainerEncoding};
+    // key: [tag, index]
+    let khdr = cbor::read_array_header(data, o).ok()?;
+    match khdr {
+        ContainerEncoding::Definite(2, _) => {}
+        _ => return None,
+    }
+    let (tag, _) = cbor::read_uint(data, o).ok()?;
+    let (index, _) = cbor::read_uint(data, o).ok()?;
+    // value: [data, [mem, cpu]]
+    let vhdr = cbor::read_array_header(data, o).ok()?;
+    match vhdr {
+        ContainerEncoding::Definite(2, _) => {}
+        _ => return None,
+    }
+    cbor::skip_item(data, o).ok()?; // data
+    let (mem, cpu) = read_ex_units_pair(data, o).ok()?;
+    declared.insert((tag, index), (mem, cpu));
+    Some(())
+}
+
+/// Skip a CBOR tag head (major 6) if present — e.g. tag(258) on a set,
+/// or a tag wrapping the redeemer block. No-op when no tag is present.
+fn skip_optional_tag(data: &[u8], o: &mut usize) -> Option<()> {
+    let Some(&b) = data.get(*o) else {
+        return Some(());
+    };
+    if (b >> 5) == 6 {
+        let adv = match b & 0x1f {
+            0..=23 => 1,
+            24 => 2,
+            25 => 3,
+            26 => 5,
+            27 => 9,
+            _ => return None,
+        };
+        *o = o.checked_add(adv)?;
+        if *o > data.len() {
+            return None;
+        }
+    }
+    Some(())
 }
 
 // ---------------------------------------------------------------------------
@@ -268,5 +481,46 @@ mod tests {
         // Vec<u8>, bool, i64, and Vec<String>. No aiken / pallas.
         assert_eq!(r.redeemer_cbor, vec![0x84]);
         assert!(r.success);
+    }
+
+    fn decode_hex_local(s: &str) -> Vec<u8> {
+        (0..s.len())
+            .step_by(2)
+            .map(|i| u8::from_str_radix(&s[i..i + 2], 16).unwrap())
+            .collect()
+    }
+
+    #[test]
+    fn declared_ex_units_array_form_parsed_by_pointer() {
+        // tx = [body{}, wits{5: [[1, 0, d87980, [1000, 1234]]]}, true, null]
+        let tx = decode_hex_local("84a0a10581840100d87980821903e81904d2f5f6");
+        let declared = declared_ex_units_by_pointer(&tx);
+        assert_eq!(declared.get(&(1, 0)), Some(&(1000, 1234)));
+        assert_eq!(declared.len(), 1);
+    }
+
+    #[test]
+    fn declared_ex_units_conway_map_form_parsed_by_pointer() {
+        // tx = [body{}, wits{5: {[0, 0] => [d87980, [1000, 1234]]}}, true, null]
+        let tx = decode_hex_local("84a0a105a182000082d87980821903e81904d2f5f6");
+        let declared = declared_ex_units_by_pointer(&tx);
+        assert_eq!(declared.get(&(0, 0)), Some(&(1000, 1234)));
+        assert_eq!(declared.len(), 1);
+    }
+
+    #[test]
+    fn declared_ex_units_absent_when_no_redeemers() {
+        // tx = [body{}, wits{}, true, null] — empty witness set.
+        let tx = decode_hex_local("84a0a0f5f6");
+        assert!(declared_ex_units_by_pointer(&tx).is_empty());
+    }
+
+    #[test]
+    fn extract_redeemer_fields_reads_pointer_and_ex_units() {
+        // [1, 0, d87980, [1000, 1234]]
+        let redeemer = decode_hex_local("840100d87980821903e81904d2");
+        let f = extract_redeemer_fields(&redeemer).unwrap();
+        assert_eq!((f.tag, f.index), (1, 0));
+        assert_eq!((f.mem, f.cpu), (1000, 1234));
     }
 }
