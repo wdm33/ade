@@ -190,8 +190,20 @@ admission adversarial false-accept corpus + per-rule tx/conservation/witness adv
   classified skips (PV11-inactive / aiken-parser, NOT false-rejects, do NOT discharge CN-PLUTUS-03 /
   DC-LEDGER-06). SCOPE: pinned runnable corpus, not full future-era coverage. **Stream 1 Plutus thread
   (A1+A2+A3+A4) COMPLETE.**
-- **Stream 1 remaining = DC-PROTO-02** (transcript-equivalent miniprotocol with Haskell, routed from S3),
-  then Stream 1 closes → **Stream 2** (epoch transition). **Harness note:** the contiguous Plutus verdict harness currently stops early on a
+- **Stream 1 remaining = DC-PROTO-02** (transcript-equivalent miniprotocol behavior w/ Haskell, routed
+  from S3). **ASSESSED 2026-06-13 — NOT flippable hermetically.** Real-capture byte-identity round-trips
+  (decode a real cardano-node capture → re-encode → byte-identical = Ade's codec is on the Haskell wire
+  grammar) cover **10/11 surfaces**: N2N chain_sync/block_fetch/keep_alive/peer_sharing/handshake + all 5
+  N2C (`crates/ade_network/tests/*_real_capture_corpus.rs`, corpus `corpus/network/{n2n,n2c}/`). **GAP =
+  tx_submission2 N2N rich messages**: only `MsgInit` (2 bytes `81 06`) was real-captured — cardano-node
+  runs its tx-sub2 RESPONDER only against peers IT dials; Ade dialed IN so the node never opens its tx-sub2
+  server (see `corpus/network/n2n/tx_submission2/NOTES.md`). RequestTxIds/ReplyTxIds/RequestTxs/ReplyTxs are
+  synthetic-only (`tx_submission2_mempool_trace.rs`). **USER CHOSE OPTION B (next session): build the
+  SERVER-SIDE CAPTURE HARNESS** — Ade exposes an inbound listener, the docker preprod cardano-node is
+  configured to dial Ade as a `localRoots` peer with real tx traffic so it opens tx-sub2 + sends the rich
+  messages, Ade passively records → add the tx_submission2 rich-message real-capture round-trip → write a
+  gate enforcing the real-capture transcript corpus across the surface → record on DC-PROTO-02 → flip
+  declared→enforced. Then Stream 1 closes → **Stream 2** (epoch transition). **Harness note:** the contiguous Plutus verdict harness currently stops early on a
   cert-state divergence (`StakeAlreadyRegistered`/`StakeNotRegistered` at blocks 1/1/40), so it reaches
   ~0 passing Plutus txs — a pre-existing limitation that weakens the Plutus oracle's reach; worth a
   dedicated look in the broader Stream-1 false-accept hunt.
