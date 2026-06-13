@@ -102,6 +102,25 @@
 >   `docker network disconnect` + `docker restart` leaves the partitioned node **NETWORKLESS** (restart
 >   drops the disconnected net from the container config) — re-peer via `docker network connect <net> cn1`
 >   AFTER the restart; keep the partition SHORT so the fork ≤ k=5 or it is a permanent k-split.
+> - **PHASE4-N-AO (2026-06-13) — §7b RUNG 2 FULLY CLOSED: the multi-candidate fork-choice SELECT half is
+>   LIVE-PROVEN and `CN-CONS-03` is FLIPPED `declared → enforced`.** The half PHASE4-N-AI did NOT do (S1–S14:
+>   peer-identity → BLUE-safe candidate construction → live single-selector dispatch into the SOLE BLUE
+>   `select_best_chain` → fork-switch apply → replay-equivalence → live BlockFetch → LCA walk → wire-pump
+>   fairness → closed fork-choice evidence → post-switch branch-continuity → rolled-back retention →
+>   missing-bridge range re-fetch; DC-NODE-34..41 + DC-PUMP-04 + DC-EVIDENCE-04/05 all enforced). Flip
+>   evidence = a **NATURAL** CE-AO-6 two-producer pass (binary @ `2a03ac73`; **no loser-freeze, no
+>   post-fork operator intervention**, both Haskell producers live — the SELECT decision is entirely
+>   Ade's): Ade selected across a real fork, switched once (`fork_switch_applied{fork_choice_win}`),
+>   followed the winner forward **25 descendants**, terminal **`AgreedAtSwitchTip{391}`** (exact
+>   `our_hash == peer_hash`), **0 diverged**, every fork-choice win terminal — checker PASS
+>   (`ci_check_post_switch_convergence_window.sh` over the replayable `post_switch_continuity` reducer).
+>   Transcript OUTSIDE-REPO (`~/.cardano-ceai6/ao-CN-CONS-03-FLIP-natural-conv.jsonl`, sha256 `6713efe9…`,
+>   recorded in `CN-CONS-03.evidence_notes`). Close commits `862cd2cb` + `388d8073`; cross-slice security
+>   review CLEAR; **BLUE `ade_core` UNCHANGED** (`select_best_chain` reaffirmed the sole selector). A
+>   FREEZE-mode run (loser paused AFTER Ade's decision) is retained as a SELECT-independence diagnostic
+>   ONLY, never flip evidence. **Rung 2 is now FULLY CLOSED (FOLLOW + SELECT). Remaining ladder work:
+>   rung 1's lone epoch-transition remainder (non-promotable) + rung 3 preprod (the live bounty bar,
+>   stake-gated).**
 > - **Preprod ADE1 pool REGISTERED (2026-06-09)** — `docs/evidence/preprod-pool-registration.md`;
 >   pledge stake active **~epoch 295 (~2026-06-15)**, so rung-3's ~2-epoch stake gate now runs in
 >   parallel. Electability (faucet delegation) pending; **no acceptance, no RO-LIVE flip.**
@@ -478,13 +497,13 @@ registered + active on preprod.**
   LIVE-PROVEN (PHASE4-N-AI DC-NODE-23..29 + the N-AN `T-REC-06` BLUE unblock, 2026-06-11):** **CE-AI-6
   CAPTURED** — Ade followed a peer reorg (strict slot regression 371→361) and re-converged
   `agreement_verdict{agreed}` (`our_hash == peer_hash`), 0 diverged, 0 VrfCert (transcript OUTSIDE-REPO;
-  sha in `T-REC-06.open_obligation`). `CN-CONS-03` stays `declared` — it flips only on the multi-candidate
-  SELECT half.
+  sha in `T-REC-06.open_obligation`). **`CN-CONS-03` is now `enforced`** — the multi-candidate SELECT half
+  landed at PHASE4-N-AO (2026-06-13; see the SINCE note above).
 - **Owed — the robustness ladder (§7b):** rung 1's **epoch transition** (the lone single-producer
   remainder — settlement-beyond-k + restart durability now done by CE-AH-6; the CE-AI-6 rollback-FOLLOW
-  is now CAPTURED, see Proven); **rung 2's multi-candidate fork-choice SELECT half** (C2-LOCAL
-  multi-producer, a new cluster — the *select* half PHASE4-N-AI did **not** do — **the NEXT rung-2 task**,
-  `DC-CONS-03` / `CN-CONS-03`); rung 3 C2-preprod operator pass →
+  CAPTURED, see Proven); **rung 2 is now FULLY CLOSED** — its multi-candidate fork-choice SELECT half
+  landed at **PHASE4-N-AO** (2026-06-13; `CN-CONS-03` / `DC-CONS-03` enforced on a NATURAL CE-AO-6
+  transcript), so the ONLY owed rung is **rung 3 — the C2-preprod operator pass** →
   `Ba02Manifest` (**stake gate now ticking** — ADE1 registered, active ~epoch 295; electability /
   faucet delegation pending).
 - **The live bounty bar discharges ONLY** on committed `correlate` evidence over a real **preprod**
@@ -512,7 +531,7 @@ cross-period KES is already covered by N-AC / N-P).
 | Rung | Venue | Failure class isolated | Likely new work | "Done" = |
 |---|---|---|---|---|
 | **1** | C2-LOCAL, single-producer (the existing CE-A5 harness) | operational stability · **settlement beyond k** · **epoch transition** · restart durability | DC-NODE-19 (loop-continuation, hermetic) → **DC-NODE-20/21/22** (forge base = local `ChainDb::tip`; cert evidence-only) for the live sustained leg; later epoch-transition slice if exposed | ✅ settle `>k` + ✅ **mid-run kill→warm-start** (CE-AH-6 run-4, 2026-06-08) · ⬜ **1 epoch crossed** with adoption continuing (lone remainder) |
-| **2** | C2-LOCAL, multi-producer (un-freeze a 2nd pool so it competes) | **fork-choice / rollback** — DC-CONS-03; **rollback-FOLLOW half implemented + live-routed** (PHASE4-N-AI) + **convergence-evidence emission wired** (PHASE4-N-AJ; DC-NODE-30) so **CE-AI-6 CAPTURED** (2026-06-11; the N-AN `T-REC-06` rollback-materialize-eta0 overlay was the BLUE unblock — pre-fix the reorg-follow died on `ReplayFailedAt VrfCert`), multi-candidate **SELECT** half not yet | a live fork-choice cluster (**real** new work) | Ade selects the best chain across a real fork **and** recovers from losing one (rollback-FOLLOW half done — DC-NODE-23..29 + **CE-AI-6 CAPTURED** 2026-06-11; multi-candidate SELECT half owed — **the NEXT rung-2 task**) |
+| **2 ✅ DONE** | C2-LOCAL, multi-producer (un-freeze a 2nd pool so it competes) | **fork-choice / rollback** — DC-CONS-03; **rollback-FOLLOW half** CAPTURED (PHASE4-N-AI/AJ/AM/AN; CE-AI-6, 2026-06-11; the N-AN `T-REC-06` rollback-materialize-eta0 overlay was the BLUE unblock) **+ multi-candidate SELECT half DONE** (PHASE4-N-AO; CE-AO-6 NATURAL two-producer pass, 2026-06-13) | **shipped** — the live fork-choice cluster PHASE4-N-AO (S1–S14) | ✅ Ade selects the best chain across a real fork **and** recovers from losing one: rollback-FOLLOW (DC-NODE-23..29, CE-AI-6) **+** SELECT (DC-NODE-34..41 + DC-PUMP-04 + DC-EVIDENCE-04/05; **`CN-CONS-03` / `DC-CONS-03` enforced**; CE-AO-6 NATURAL pass — `AgreedAtSwitchTip{391}`, 25 descendants, 0 diverged, BLUE `ade_core` unchanged) |
 | **3** | preprod | real network · stake · load · adversaries | SPO registration **DONE (ADE1, epoch 293; active ~epoch 295)** + electability (faucet delegation) + operator wiring | a registered Ade SPO's block accepted on preprod → `Ba02Manifest` (flips RO-LIVE-01 / CN-CONS-06 live half) |
 
 **Rung 1 settlement-beyond-k + restart durability are DONE (CE-AH-6, 2026-06-08).** The lone
