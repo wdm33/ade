@@ -23,9 +23,9 @@ use ade_ledger::wal::{RollbackReason, WalEntry, WalError, WalStore};
 use ade_network::codec::chain_sync::Point as WirePoint;
 use ade_node::fork_switch::{
     fork_switch_fence_resolved, BranchBodySource, BranchProofError, FetchError, ForkSwitchOutcome,
-    MissingBridgeReason, PrefetchedBranchBodies,
+    MissingBridgeReason, PrefetchedBranchBodies, RangeRefetch, RangeRefetchOutcome,
 };
-use ade_node::node_lifecycle::{apply_fork_switch, run_participant_sync};
+use ade_node::node_lifecycle::{apply_fork_switch, recover_missing_range, run_participant_sync};
 use ade_node::selector_state::{project_tiebreaker, ForkAnchor, PendingForkSwitch};
 use ade_node::node_sync::{
     pending_reselection_forge_refusal, run_node_sync, ForgeRefused, NodeBlockSource, NodeSyncError,
@@ -1739,6 +1739,92 @@ fn apply_fork_switch_populates_rollback_retention() {
         "self-binding: the retention key IS the re-derived block_hash, never a peer claim"
     );
     assert!(!retention.is_empty(), "the rollback populated the retention");
+}
+
+// ---- PHASE4-N-AO S14 (DC-NODE-41): missing-bridge range re-fetch (LATENT core) ----
+// These exercise `recover_missing_range` -- the GREEN/BLUE admit loop over the
+// RED-fetched bytes -- directly. The dispatch trigger + async drive that call it live
+// are the S14 part-2 wiring; the live multi-block in-order admit is proven by CE-AO-6.
+
+fn s14_req(peer: &str, x_hash: &Hash32, x_slot: SlotNo, to_slot: SlotNo, to_hash: &Hash32) -> RangeRefetch {
+    RangeRefetch {
+        peer: peer.to_string(),
+        from_tip: Point { slot: x_slot, hash: x_hash.clone() },
+        to_descendant: Point { slot: to_slot, hash: to_hash.clone() },
+        fork_switch_id: "fs1".to_string(),
+        reason: MissingBridgeReason::BranchGap,
+    }
+}
+
+#[test]
+fn refetched_bridge_admits_in_order() {
+    // A re-fetched body that LinearExtends the adopted tip X is admitted via pump_block;
+    // reaching the target descendant => Admitted (the durable tip advances to it).
+    let (c, view) = corpus_view();
+    let (db, mut fwd, x_hash, y_bytes, _z_bytes, _z_hash) = bridge_gap_fixture(&c);
+    let y = decode_block(&y_bytes).unwrap();
+    let x_slot = db.tip().unwrap().unwrap().slot;
+    let mut wal = VecWal::default();
+    let mut prefetched = PrefetchedBranchBodies::new();
+    prefetched.insert("peer-1", y.header_input.slot, y_bytes.clone());
+    let req = s14_req("peer-1", &x_hash, x_slot, y.header_input.slot, &y.block_hash);
+    let outcome =
+        recover_missing_range(&mut fwd, &db, &mut wal, &prefetched, &req, &corpus_schedule(), &view);
+    assert_eq!(outcome, RangeRefetchOutcome::Admitted, "the re-fetched bridge admits + reaches Y");
+    assert_eq!(db.tip().unwrap().unwrap().hash, y.block_hash, "Y is the durable tip");
+}
+
+#[test]
+fn refetch_failure_structured() {
+    // An empty range served => a closed `Unavailable` outcome; no admit, tip unchanged.
+    let (c, view) = corpus_view();
+    let (db, mut fwd, x_hash, y_bytes, _z, _zh) = bridge_gap_fixture(&c);
+    let y = decode_block(&y_bytes).unwrap();
+    let x_slot = db.tip().unwrap().unwrap().slot;
+    let mut wal = VecWal::default();
+    let prefetched = PrefetchedBranchBodies::new(); // empty
+    let req = s14_req("peer-1", &x_hash, x_slot, y.header_input.slot, &y.block_hash);
+    let outcome =
+        recover_missing_range(&mut fwd, &db, &mut wal, &prefetched, &req, &corpus_schedule(), &view);
+    assert_eq!(outcome, RangeRefetchOutcome::Unavailable, "empty range => structured Unavailable");
+    assert_eq!(db.tip().unwrap().unwrap().hash, x_hash, "no admit on an empty range");
+}
+
+#[test]
+fn short_refetch_keeps_hold() {
+    // A served body that does NOT extend X (Z's parent is absent) is rejected by
+    // pump_block => not admitted, durable tip unchanged (the hold remains).
+    let (c, view) = corpus_view();
+    let (db, mut fwd, x_hash, _y, z_bytes, _z_hash) = bridge_gap_fixture(&c);
+    let z = decode_block(&z_bytes).unwrap();
+    let x_slot = db.tip().unwrap().unwrap().slot;
+    let mut wal = VecWal::default();
+    let mut prefetched = PrefetchedBranchBodies::new();
+    prefetched.insert("peer-1", z.header_input.slot, z_bytes.clone());
+    let req = s14_req("peer-1", &x_hash, x_slot, z.header_input.slot, &z.block_hash);
+    let outcome =
+        recover_missing_range(&mut fwd, &db, &mut wal, &prefetched, &req, &corpus_schedule(), &view);
+    assert!(!outcome.is_admitted(), "a non-extending body is NOT admitted: {outcome:?}");
+    assert_eq!(db.tip().unwrap().unwrap().hash, x_hash, "Z (no bridge) is NOT admitted -- hold remains");
+}
+
+#[test]
+fn lying_refetch_body_rejected() {
+    // A lying / undecodable body served as the range => rejected by pump_block; no
+    // admit, no durable WAL mutation, tip unchanged.
+    let (c, view) = corpus_view();
+    let (db, mut fwd, x_hash, y_bytes, _z, _zh) = bridge_gap_fixture(&c);
+    let y = decode_block(&y_bytes).unwrap();
+    let x_slot = db.tip().unwrap().unwrap().slot;
+    let mut wal = VecWal::default();
+    let mut prefetched = PrefetchedBranchBodies::new();
+    prefetched.insert("peer-1", y.header_input.slot, vec![0xDE, 0xAD, 0xBE, 0xEF]); // lying bytes
+    let req = s14_req("peer-1", &x_hash, x_slot, y.header_input.slot, &y.block_hash);
+    let outcome =
+        recover_missing_range(&mut fwd, &db, &mut wal, &prefetched, &req, &corpus_schedule(), &view);
+    assert!(!outcome.is_admitted(), "a lying body is rejected: {outcome:?}");
+    assert_eq!(db.tip().unwrap().unwrap().hash, x_hash, "no admit / no mutation on a lying body");
+    assert!(wal.read_all().unwrap().is_empty(), "no WAL mutation on a lying body");
 }
 
 #[tokio::test]

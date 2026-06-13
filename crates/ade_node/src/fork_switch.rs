@@ -103,6 +103,17 @@ impl PrefetchedBranchBodies {
     pub fn is_empty(&self) -> bool {
         self.bodies.is_empty()
     }
+
+    /// PHASE4-N-AO S14 (DC-NODE-41): the bodies fetched for `peer`, in ASCENDING SLOT
+    /// order (the `BTreeMap` key is `(peer, slot)`). The range-recovery admit loop
+    /// pumps these in order so each must parent-link to the prior admitted tip.
+    pub fn ordered_for_peer(&self, peer: &str) -> Vec<Vec<u8>> {
+        self.bodies
+            .iter()
+            .filter(|((p, _), _)| p == peer)
+            .map(|(_, b)| b.clone())
+            .collect()
+    }
 }
 
 impl BranchBodySource for PrefetchedBranchBodies {
@@ -289,6 +300,69 @@ pub fn map_lca_error(e: &LcaError) -> MissingBridgeReason {
         LcaError::NoDurableAncestorWithinK => MissingBridgeReason::NoDurableAncestorWithinK,
         LcaError::ExceededK => MissingBridgeReason::ExceededK,
         LcaError::CacheSelfBindingViolation => MissingBridgeReason::CacheSelfBindingViolation,
+    }
+}
+
+/// PHASE4-N-AO S14 (DC-NODE-41): the post-switch follow target -- recorded on a
+/// `ForkChoiceWin` adoption so the dispatch can decide whether a `MissingBridge` is
+/// ELIGIBLE for active range re-fetch. RECOVERY state, NOT selection authority: it is
+/// only consulted to decide *whether* to re-fetch the winning peer's missing
+/// descendants, never to decide which branch wins (S3 already decided).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PostSwitchFollow {
+    pub winning_peer: String,
+    pub adopted_tip: Point,
+    pub fork_switch_id: String,
+}
+
+/// PHASE4-N-AO S14 (DC-NODE-41): a pending active range re-fetch, set by the dispatch
+/// on an ELIGIBLE winning-peer descendant `MissingBridge`; consumed by the async relay
+/// loop (`prefetch_branch_bodies` -> `recover_missing_range`). The range is
+/// `from_tip(+1) .. to_descendant` from the winning peer ONLY.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct RangeRefetch {
+    pub peer: String,
+    pub from_tip: Point,
+    pub to_descendant: Point,
+    pub fork_switch_id: String,
+    pub reason: MissingBridgeReason,
+}
+
+/// PHASE4-N-AO S14 (DC-NODE-41): the CLOSED outcome of a range re-fetch attempt. No
+/// free-form strings; every path is a closed discriminant for the transcript. Only
+/// `Admitted` is forward progress (clears the hold); every other variant LEAVES the
+/// structured `MissingBridge` hold (the DC-NODE-39 floor fallback).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum RangeRefetchOutcome {
+    /// The full range was fetched, parent-link-proven, and admitted via `pump_block`.
+    Admitted,
+    /// The peer served no / an empty range.
+    Unavailable,
+    /// The range was short -- the target descendant was not reached.
+    ShortRange,
+    /// A fetched body's re-derived hash did not match what was requested.
+    BodyHeaderMismatch,
+    /// A fetched body did not parent-link to the prior admitted tip.
+    ParentLinkMismatch,
+    /// A fetched body failed BLUE ledger validation (`pump_block` rejected it).
+    ValidationFailed,
+}
+
+impl RangeRefetchOutcome {
+    /// Closed discriminator string for the convergence transcript; never free-form.
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            Self::Admitted => "admitted",
+            Self::Unavailable => "unavailable",
+            Self::ShortRange => "short_range",
+            Self::BodyHeaderMismatch => "body_header_mismatch",
+            Self::ParentLinkMismatch => "parent_link_mismatch",
+            Self::ValidationFailed => "validation_failed",
+        }
+    }
+    /// Only `Admitted` is real forward progress (clears the missing-bridge hold).
+    pub fn is_admitted(&self) -> bool {
+        matches!(self, Self::Admitted)
     }
 }
 

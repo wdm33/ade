@@ -106,7 +106,7 @@ use crate::lca_walk::{walk_to_durable_lca, CachedHeader};
 use crate::fork_switch::{
     fork_switch_fence_resolved, map_lca_error, prevalidate_branch, BranchBodySource,
     BranchProofError, ForkSwitchOutcome, MissingBridgeReason, NullBranchBodySource,
-    PrefetchedBranchBodies, ProvenBranch,
+    PrefetchedBranchBodies, ProvenBranch, RangeRefetch, RangeRefetchOutcome,
 };
 use crate::selector_state::{project_tiebreaker, ForkAnchor, PendingForkSwitch};
 
@@ -3523,6 +3523,81 @@ where
         new_tip: final_tip,
         new_tip_prev,
     })
+}
+
+/// PHASE4-N-AO S14 (DC-NODE-41): admit a re-fetched missing range in PARENT-LINK ORDER.
+/// GREEN sequencing over the RED-fetched bytes; BLUE `pump_block` is the SOLE admit --
+/// each body's parent-link + body-hash + ledger validity is enforced by the chokepoint,
+/// so a lying / out-of-order / short range is REJECTED, never admitted. Returns the
+/// closed [`RangeRefetchOutcome`]; only `Admitted` (the target descendant reached) is
+/// forward progress that clears the missing-bridge hold. Pumps the bodies the winning
+/// peer served (ascending slot order); each must linear-extend the prior admitted tip.
+///
+/// LATENT until the S14 dispatch trigger + async drive wire it (this commit ships the
+/// validated recovery unit; the live wiring is the follow-on).
+pub fn recover_missing_range<D>(
+    state: &mut ForwardSyncState,
+    chaindb: &D,
+    wal: &mut dyn WalStore,
+    prefetched: &PrefetchedBranchBodies,
+    req: &RangeRefetch,
+    era_schedule: &EraSchedule,
+    ledger_view: &dyn LedgerView,
+) -> RangeRefetchOutcome
+where
+    D: ChainDb + SnapshotStore,
+{
+    let bodies = prefetched.ordered_for_peer(&req.peer);
+    if bodies.is_empty() {
+        // The winning peer served no range -- the hold remains (no admit, no mutation).
+        return RangeRefetchOutcome::Unavailable;
+    }
+    let mut reached = false;
+    for bytes in bodies {
+        match pump_block(
+            state,
+            chaindb,
+            wal,
+            &NoCheckpointSink,
+            &bytes,
+            era_schedule,
+            ledger_view,
+        ) {
+            // Admitted as a LinearExtend of the prior tip. If it is the target
+            // descendant, the range is fully recovered.
+            Ok(Some(tip)) => {
+                if tip.hash == req.to_descendant.hash {
+                    reached = true;
+                }
+            }
+            // Idempotent no-op (already durable): if the descendant is already in the
+            // store, the range is satisfied; otherwise keep walking the served range.
+            Ok(None) => {
+                if matches!(
+                    chaindb.get_block_by_hash(&req.to_descendant.hash),
+                    Ok(Some(_))
+                ) {
+                    reached = true;
+                }
+            }
+            // The BLUE chokepoint REJECTED a fetched body (parent-link / body-hash /
+            // ledger). NOT admitted; the structured MissingBridge hold remains. A
+            // non-extending body is a parent-link mismatch; a decoded-but-invalid body
+            // is a validation failure (BlockFetch bytes are never authority).
+            Err(e) => {
+                return match e {
+                    PumpError::Receive(_) => RangeRefetchOutcome::ParentLinkMismatch,
+                    _ => RangeRefetchOutcome::ValidationFailed,
+                };
+            }
+        }
+    }
+    if reached {
+        RangeRefetchOutcome::Admitted
+    } else {
+        // Served some blocks but never reached the target descendant -- short range.
+        RangeRefetchOutcome::ShortRange
+    }
 }
 
 /// PHASE4-N-AO S6 (CE-AO-6): live BlockFetch of the winning branch's bodies (RED).

@@ -7722,7 +7722,7 @@ S6 (prefetch_branch_bodies). REPLAY-EQUIVALENT: same served range -> same admitt
 source = "docs/planning/phase4-n-ao-ce-ao-6-live-gap.md (S11 Fault-2 finding) + docs/clusters/PHASE4-N-AO/S14-missing-bridge-range-refetch.md"
 cross_ref = ["DC-NODE-39", "DC-NODE-40", "DC-NODE-37", "DC-NODE-24", "DC-NODE-25", "DC-CONS-03", "CN-CONS-01", "CN-CONS-03"]
 code_locus = "CANDIDATE (pending S14 impl): trigger in crates/ade_node/src/node_lifecycle.rs dispatch_competing_fork_choice (the MissingBridge arm, gated on the recorded post-switch winning_peer + adopted tip from PendingForkSwitch.winning_peer); re-fetch reuses prefetch_branch_bodies (node_lifecycle.rs:3539, S6 BlockFetch RequestRange byte-only); admit via the existing validate->pump_block path; closed range_refetch_started/completed + failure-code evidence in the AdmissionLogEvent vocabulary + convergence_evidence.rs. BLUE validation/select/apply/pump_block UNCHANGED."
-tests = []
+tests = ["refetched_bridge_admits_in_order", "refetch_failure_structured", "short_refetch_keeps_hold", "lying_refetch_body_rejected"]
 ci_scripts = []
 status = "declared"
 introduced_in = "PHASE4-N-AO"
