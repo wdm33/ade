@@ -1251,7 +1251,7 @@ code_locus = "crates/ade_core/src/consensus/fork_choice.rs, crates/ade_core/src/
 tests = ["replay_is_deterministic", "reject_reason_bytes_are_stable", "higher_block_no_wins", "equal_block_no_tiebreaker_decides", "select_best_chain_arrival_order_independent_distinct_heights", "select_best_chain_arrival_order_independent_tiebreaker"]
 ci_script = "ci/ci_check_no_density_in_fork_choice.sh, ci/ci_check_chain_selection_arrival_order_independent.sh"
 status = "enforced"
-strengthened_in = ["PHASE4-N-B", "PHASE4-N-AI"]
+strengthened_in = ["PHASE4-N-B", "PHASE4-N-AI", "PHASE4-N-AO"]
 attack_rationale = "Prevents fork-choice drift."
 evidence_notes = "Universal: any consensus system must have deterministic fork choice. Evidence: SelectView in ouroboros-consensus depends only on BlockNo + TiebreakerView."
 
@@ -1278,10 +1278,10 @@ cross_ref = []
 code_locus = "crates/ade_core/src/consensus/fork_choice.rs"
 tests = ["higher_block_no_wins", "equal_block_no_tiebreaker_decides", "tiebreaker_loss_keeps_current"]
 ci_script = "ci/ci_check_no_density_in_fork_choice.sh"
-status = "declared"
-strengthened_in = ["PHASE4-N-B", "PHASE4-N-AI"]
+status = "enforced"
+strengthened_in = ["PHASE4-N-B", "PHASE4-N-AI", "PHASE4-N-AO"]
 attack_rationale = "Prevents ad hoc operator heuristics from becoming consensus inputs."
-evidence_notes = "Cardano-specific constraints on convergence mechanism beyond universal replay-equivalent convergence. PHASE4-N-AI exercised the single-best-peer rollback-follow venue only (CE-AI-6 operator-gated, vacuous-until-committed); full multi-peer ChainSel remains out of scope -- NOT flipped to enforced."
+evidence_notes = "Cardano-specific constraints on convergence mechanism beyond universal replay-equivalent convergence. FLIPPED to enforced at PHASE4-N-AO (CE-AO-6) on a NATURAL two-producer multi-candidate SELECT pass: ade_node @ commit 2a03ac73; transcript ao-CN-CONS-03-FLIP-natural-conv.jsonl, sha256 6713efe96ffd0e0fa304020c7784d6bbf11be0df0e3340e7feeab4d1429ca13f, preserved OUTSIDE the repo (competition-secrecy); captured 2026-06-13. NATURAL mode -- both Haskell producers (cn1/cn2, testnet-magic 42) live throughout, NO loser-freeze, NO post-fork operator intervention; the SELECT decision is entirely Ade's. Checker PASS (ci_check_post_switch_convergence_window.sh / the post_switch_continuity replayable reducer): ContinuesSelectedBranch, terminal AgreedAtSwitchTip{slot 391} (exact agreement, our_hash==peer_hash), 25 admitted descendants chained, 0 diverged, every fork-choice win terminal. SCOPE (honest): proves convergence for the EXERCISED two-producer partition-and-reconverge venue (PHASE4-N-AO S1-S14); NOT an unbounded multi-peer ChainSel claim; post-switch endless-flip-flop survival is out of scope. A FREEZE-mode run (loser paused AFTER Ade's decision) is retained OUTSIDE the repo as a SELECT-independence diagnostic only, never as flip evidence (a frozen peer also breaks the reducer's peer-observed-ahead terminal)."
 
 [[rules]]
 id = "CN-CONS-04"
@@ -1961,7 +1961,7 @@ code_locus = "crates/ade_core/src/consensus/fork_choice.rs, crates/ade_core/src/
 tests = ["consensus::fork_choice::tests::tiebreaker_prefer_lower_slot_wins", "consensus::fork_choice::tests::tiebreaker_prefer_higher_op_cert_wins_on_equal_slot_and_issuer", "consensus::fork_choice::tests::tiebreaker_prefer_lower_vrf_value_wins_on_full_tie", "consensus::fork_choice::tests::no_candidates_returns_no_candidates_error", "consensus::fork_choice::tests::equal_to_current_keeps_current_via_tiebreaker_loss", "consensus::candidate::tests::tiebreaker_view_eq_is_field_wise", "consensus::candidate::tests::candidate_fragment_carries_anchor_block_no", "higher_block_no_wins", "equal_block_no_tiebreaker_decides", "fork_before_immutable_tip_rejected", "exceeded_rollback_rejected", "tiebreaker_loss_keeps_current", "replay_is_deterministic", "reject_reason_bytes_are_stable", "no_candidates_returns_error"]
 ci_script = "ci/ci_check_no_density_in_fork_choice.sh, ci/ci_check_no_chaindb_in_consensus_blue.sh, ci/ci_check_no_float_in_consensus.sh, ci/ci_check_consensus_closed_enums.sh"
 status = "enforced"
-strengthened_in = ["PHASE4-N-B", "PHASE4-N-AI"]
+strengthened_in = ["PHASE4-N-B", "PHASE4-N-AI", "PHASE4-N-AO"]
 pinned_reference = "cardano-node 11.0.1 (ouroboros-consensus version per its cabal.project.freeze); PraosTiebreaker SelectView shape forward-compatible from the 10.6.2 release the ordering was originally validated against"
 
 [[rules]]
@@ -2774,7 +2774,7 @@ status = "enforced"
 authority_surface = "receive-side atomic admit + rollback over ChainDb + LedgerState + PraosChainDepState"
 cluster = "PHASE4-N-H + PHASE4-N-I"
 introduced_in = "PHASE4-N-H"
-strengthened_in = ["PHASE4-N-I", "PHASE4-N-J", "PHASE4-N-Y", "PHASE4-N-AI"]
+strengthened_in = ["PHASE4-N-I", "PHASE4-N-J", "PHASE4-N-Y", "PHASE4-N-AI", "PHASE4-N-AO"]
 evidence = ["Admit-side (N-H): block_delivered atomically advances chain_write -> ledger -> chain_dep with staged-then-committed shape; failure leaves state unchanged (test receive_apply_block_delivered_validity_invalid_rejects).", "Rollback-side (N-I): roll_backward calls materialize_rolled_back_state + commit_rollback; commit_rollback's irreversible-step-first shape leaves state unchanged on chain_write failure (commit_rollback_chain_write_failure_leaves_state_unchanged); pending headers reset on successful commit.", "End-to-end: rollback_then_continue_admit_equals_straight_line_admit proves snapshot+rollback yields the same ledger fingerprint as straight-line admit — snapshotting is a pure cache.", "Restart-safe rollback (N-J): PersistentSnapshotCache bridges framing::{encode,decode}_snapshot to SnapshotStore; cross-impl equivalence with InMemorySnapshotCache proven via persistent_cache_matches_in_memory_cache_semantics — restart-safe rollback now possible without weakening lockstep."]
 
 [[rules]]
@@ -7025,7 +7025,7 @@ tests = ["resolve_singleproducer_competing_refuses", "resolve_participant_compet
 ci_script = "ci/ci_check_receive_detector_venue_split.sh"
 status = "enforced"
 introduced_in = "PHASE4-N-AI"
-strengthened_in = []
+strengthened_in = ["PHASE4-N-AO"]
 
 [[rules]]
 id = "DC-NODE-25"
@@ -7048,7 +7048,7 @@ tests = ["apply_rolledback_rolls_back_and_appends_wal_record_after_commit", "app
 ci_script = "ci/ci_check_live_fork_choice_apply.sh, ci/ci_check_live_fork_choice_wiring.sh"
 status = "enforced"
 introduced_in = "PHASE4-N-AI"
-strengthened_in = []
+strengthened_in = ["PHASE4-N-AO"]
 
 [[rules]]
 id = "DC-NODE-26"
@@ -7068,7 +7068,7 @@ tests = ["apply_reconciliation_mismatch_fails_fast", "apply_rejected_makes_no_du
 ci_script = "ci/ci_check_live_fork_choice_apply.sh"
 status = "enforced"
 introduced_in = "PHASE4-N-AI"
-strengthened_in = []
+strengthened_in = ["PHASE4-N-AO"]
 
 [[rules]]
 id = "DC-NODE-27"
@@ -7093,7 +7093,7 @@ tests = ["apply_rolledback_replays_byte_identical_recovers_forkpoint", "replay_w
 ci_script = "ci/ci_check_wal_rollback_replay_equiv.sh, ci/ci_check_live_fork_choice_apply.sh"
 status = "enforced"
 introduced_in = "PHASE4-N-AI"
-strengthened_in = []
+strengthened_in = ["PHASE4-N-AO"]
 
 [[rules]]
 id = "DC-NODE-28"
@@ -7116,7 +7116,7 @@ tests = ["pending_reselection_forge_refusal_gate", "participant_rollback_beyond_
 ci_script = "ci/ci_check_live_fork_choice_wiring.sh, ci/ci_check_participant_venue_inert.sh"
 status = "enforced"
 introduced_in = "PHASE4-N-AI"
-strengthened_in = []
+strengthened_in = ["PHASE4-N-AO"]
 
 [[rules]]
 id = "DC-NODE-29"
@@ -7138,7 +7138,7 @@ tests = ["rollback_slot_hash_mismatch_fails_before_mutation", "participant_rollb
 ci_script = "ci/ci_check_rollback_target_canonical_binding.sh"
 status = "enforced"
 introduced_in = "PHASE4-N-AI"
-strengthened_in = []
+strengthened_in = ["PHASE4-N-AO"]
 attack_rationale = "Closes H-1 (cluster-close security review): a Byzantine peer's RollBackward naming a real in-chain hash with an arbitrary lower slot would truncate the durable chain to a peer-chosen depth (mixed peer/local authority) and brick the node; reconciliation caught the slot/hash mismatch only AFTER commit_rollback + WalEntry::RollBack had mutated disk. Pre-commit canonical target binding rejects it with a typed error and zero durable mutation."
 
 [[rules]]
@@ -7234,9 +7234,9 @@ exact-tip moment (see DC-EVIDENCE-05 for the replayable continuity verdict the t
 source = "docs/planning/phase4-n-ao-ce-ao-6-live-gap.md (S9 evidence finding) + docs/clusters/PHASE4-N-AO/S9-closed-fork-choice-evidence.md"
 cross_ref = ["DC-EVIDENCE-01", "DC-EVIDENCE-02", "DC-EVIDENCE-03", "DC-NODE-34", "DC-NODE-36", "DC-NODE-37", "DC-NODE-38", "CN-CONS-01", "CN-CONS-03"]
 code_locus = "CANDIDATE (pending S9 impl): crates/ade_node/src/convergence_evidence.rs (9 new emit_* methods + ForkChoiceEvidenceFailure closed enum + ForkSwitchId) + the AdmissionLogEvent vocabulary + emit-only allow-list + observe-only emit taps in crates/ade_node/src/node_lifecycle.rs (dispatch_competing_fork_choice decide-half + the relay-loop apply-half around prefetch_branch_bodies/apply_fork_switch). BLUE selector/walk/apply UNCHANGED."
-tests = []
-ci_scripts = []
-status = "declared"
+tests = ["fork_choice_win_paired_with_exactly_one_terminal_applied", "fork_choice_win_failed_terminal_carries_closed_code", "superseded_win_pairs_to_superseded_terminal", "fork_switch_id_is_deterministic_and_bounded"]
+ci_scripts = ["ci/ci_check_fork_choice_evidence_closed.sh"]
+status = "enforced"
 introduced_in = "PHASE4-N-AO"
 strengthened_in = []
 attack_rationale = "Without closed-vocabulary evidence for the SELECT middle, a CN-CONS-03 flip would rest on stderr diagnostics + a transcript that only proves the beginning (block_received) and end (agreement) -- leaving the actual fork-choice (did Ade DISCOVER the LCA, SELECT a winner, FETCH+PREVALIDATE the branch, and APPLY the fork-switch, or did it merely follow a single peer?) unaudited. A decide-only transcript leaves the same ambiguity: selected vs applied. The fork_switch_id win->terminal pairing forces every WIN to resolve to a durable apply or a structured failure, so agreement{agreed} only supports the invariant when the winning branch was actually adopted. Closed discriminants + an emit-only allow-list + no free-form strings keep the evidence from silently widening or smuggling unaudited claims; observe-only containment keeps the evidence from ever becoming authority (a write failure must never alter selection/apply)."
@@ -7280,7 +7280,7 @@ tests = [
     "crates/ade_node/tests/live_fork_choice_ai_s4bii.rs (new_tip_prev == decoded.prev_hash fidelity assertion)",
 ]
 ci_scripts = ["ci/ci_check_post_switch_convergence_window.sh"]
-status = "declared"
+status = "enforced"
 introduced_in = "PHASE4-N-AO"
 strengthened_in = []
 attack_rationale = "Exact-tip agreement (DC-EVIDENCE-04's original terminal) is a test-harness artifact: a clean healthy follow run emits ONLY lagging because the live producer never pauses for the follower to touch its exact tip, so a CE-AO-6 flip predicated on exact agreement either never fires (false-negative on a correct node) or is gamed by freezing the venue. Worse, the original terminal checked NOTHING about the chain between X and the agreed event -- a node that switched to X then silently rolled back below X or jumped to a different branch could still surface an agreed somewhere and pass. The branch-continuity verdict closes both gaps: it forces every post-X admitted block to chain from X via its OWN validated prev_hash (a rollback-below-X or branch-jump surfaces as BrokenLineage/Diverged), and it accepts the honest catching-up terminal (validated prefix + peer ahead) without a lucky moment. Keeping the verdict's inputs to Ade's own admitted lineage (peer tip excluded) prevents a dishonest peer from manufacturing a passing transcript; replay-equivalence + a single shared implementation prevent the gate and the audited invariant from drifting; observe-only containment keeps the evidence from ever becoming authority."
@@ -7470,9 +7470,9 @@ define peer priority or affect any BLUE selection result; change the selector / 
 source = "docs/planning/phase4-n-ao-ce-ao-6-live-gap.md (S7-retry finding) + docs/clusters/PHASE4-N-AO/S8-multi-peer-wire-pump-fairness.md"
 cross_ref = ["DC-PUMP-01", "DC-PUMP-02", "DC-PUMP-03", "CN-PUMP-01", "DC-NODE-34", "DC-NODE-38", "CN-CONS-01", "CN-CONS-03"]
 code_locus = "CANDIDATE (pending S8 impl): crates/ade_node/src/node_lifecycle.rs (spawn_live_wire_pump_source -- per-peer bounded channels + a deterministic configured-order fair-merge task feeding the single WirePump rx) + a RED fair-merge helper; GREEN per-peer delivered-count evidence counter. run_admission_wire_pump (per-peer pump) + NodeBlockSource::WirePump/next_item UNCHANGED."
-tests = []
-ci_scripts = []
-status = "declared"
+tests = ["hot_peer_cannot_starve_quiet_peer", "closed_lane_removed_without_reordering_remaining_peers", "peer_identity_preserved_through_merge"]
+ci_scripts = ["ci/ci_check_wire_pump_fairness.sh"]
+status = "enforced"
 attack_rationale = "Without per-peer fairness, a single continuously-producing peer monopolises the shared bounded mpsc and starves every other peer's pump -- so a competing peer's branch never reaches the participant dispatch and live multi-candidate SELECT cannot fire (the S7 live retry CE-AO-6 observed: 46 blocks all from one peer, 0 from the other, despite both connected). A Byzantine/hot peer could thereby SUPPRESS a competing honest branch from fork-choice purely by out-producing into the shared feed -- a liveness/eclipse-flavoured denial of the SELECT input, NOT a safety break (the node still fails closed, never adopts an unvalidated chain). Per-peer bounded lanes + a deterministic fair merge close it: each peer self-backpressures, no peer is starved, and the RED merge order never touches the BLUE arrival-order-independent selector."
 evidence_notes = "Declared at PHASE4-N-AO S8 (the gap the S7 live retry CE-AO-6 surfaced; docs/planning/phase4-n-ao-ce-ao-6-live-gap.md S7-retry section). Enforced at S8 close (CE-AO-9) via ci_check_wire_pump_fairness.sh + 6 hermetic fair-merge tests (hot-peer-no-starve, per-peer-backpressure-not-global, peer-identity-through-merge, deterministic-peer-order-from-config, closed-lane-removed-without-reorder, single-peer-unchanged). The FULL live multi-peer SELECT assertions (both branches observed -> NeedsForkChoice -> S7 LCA walk -> select winner -> RequestRange -> prevalidate -> ForkChoiceWin -> agreement agreed -> 0 diverged) stay on the CE-AO-6 live retry -- synthetic fairness tests do NOT pretend to prove live two-producer fork-choice convergence. CN-CONS-03 flips ONLY when CE-AO-6 actually observes both branches AND SELECT fires."
 introduced_in = "PHASE4-N-AO"
@@ -7525,9 +7525,9 @@ hashed), so no canonical-type or replay obligation.
 source = "docs/planning/phase4-select-multicandidate-fork-choice-invariants.md (FC-2/FC-10 enabler) + docs/clusters/PHASE4-N-AO/cluster.md"
 cross_ref = ["DC-NODE-35", "DC-NODE-23", "DC-NODE-30", "CN-CONS-01", "DC-PUMP-01"]
 code_locus = "CANDIDATE (pending /slice-doc S1): crates/ade_node/src/node_sync.rs (NodeSyncItem + the from_wire_pump/next_item conversion that today discards AdmissionPeerEvent.peer), crates/ade_node/src/node_lifecycle.rs (run_participant_sync / run_node_sync item consumers), crates/ade_runtime/src/admission/wire_pump.rs (AdmissionPeerEvent.peer -- the existing carrier, unchanged)"
-tests = []
-ci_scripts = []
-status = "declared"
+tests = ["best_of_two_peers_wins_and_is_identified", "peer_identity_preserved_through_merge"]
+ci_scripts = ["ci/ci_check_peer_identity_preserved.sh"]
+status = "enforced"
 introduced_in = "PHASE4-N-AO"
 strengthened_in = []
 evidence_notes = "Declared at PHASE4-N-AO cluster-doc; enforced at S1 close (CE-AO-1) via ci_check_peer_identity_preserved.sh + a single-peer FOLLOW byte-unchanged replay test. Non-goal (hard): S1 restores peer identity ONLY -- no selection/admission/rollback/verdict change. The aggregator that CONSUMES the identity is DC-NODE-35 (latent until S3). Predecessor: PHASE4-N-AI single-best-peer FOLLOW flattened peer identity into one merged feed."
@@ -7551,9 +7551,9 @@ this proof -- the easier color MUST NOT be picked to dodge it.
 source = "docs/planning/phase4-select-multicandidate-fork-choice-invariants.md (FC-10; the BLUE-safety proof obligation) + docs/clusters/PHASE4-N-AO/cluster.md"
 cross_ref = ["DC-NODE-34", "DC-NODE-36", "DC-NODE-24", "DC-CONS-03", "CN-CONS-01"]
 code_locus = "CANDIDATE (pending /slice-doc S2): crates/ade_node/src/node_sync.rs (a NEW per-peer candidate aggregator, color pending the S2 proof), crates/ade_core/src/consensus/header_validate.rs (validate_and_apply_header -- the BLUE validation REUSED as the sole candidate source), crates/ade_runtime/src/consensus/chain_selector.rs (process_header_arrival -- the validate-then-fragment pattern reference; crates/ade_core_interop/src/follow.rs is the FORBIDDEN mint shape)"
-tests = []
-ci_scripts = []
-status = "declared"
+tests = ["build_candidate_fragment_assembles_from_validated_headers", "build_candidate_fragment_empty_headers_fails_closed", "build_candidate_fragment_rejects_invalid_header_fails_closed", "build_candidate_fragment_two_runs_byte_identical", "assemble_candidate_set_ordering_is_arrival_independent"]
+ci_scripts = ["ci/ci_check_candidate_construction_validated.sh"]
+status = "enforced"
 introduced_in = "PHASE4-N-AO"
 strengthened_in = []
 evidence_notes = "Declared at PHASE4-N-AO cluster-doc; enforced at S2 close (CE-AO-2) via ci_check_candidate_construction_validated.sh. THE load-bearing gate -- it keeps the cluster from becoming look-over-the-peers-shoulder. Resolves OQ-AO-2 (BLUE-safe construction + the fork-point chain_dep question) + OQ-AO-6 (aggregator color). Latent until S3 (DC-NODE-36) consumes it."
@@ -7573,9 +7573,9 @@ followed_peer_tip never does.
 source = "docs/planning/phase4-select-multicandidate-fork-choice-invariants.md (FC-1/FC-2) + docs/clusters/PHASE4-N-AO/cluster.md"
 cross_ref = ["DC-NODE-35", "DC-NODE-37", "DC-NODE-24", "DC-CONS-03", "CN-CONS-01", "CN-CONS-03"]
 code_locus = "CANDIDATE (pending /slice-doc S3): crates/ade_node/src/node_lifecycle.rs (run_participant_sync -- the NeedsForkChoice arm, today Err(UnexpectedRollback) at node_lifecycle.rs:2562-2569), crates/ade_core/src/consensus/fork_choice.rs (select_best_chain -- the single selector, REUSED unchanged)"
-tests = []
-ci_scripts = []
-status = "declared"
+tests = ["win_emits_switch_to_winning_peer_and_durable_anchor", "tiebreaker_loss_keeps_current", "exceeded_rollback_keeps_current", "best_of_two_peers_wins_and_is_identified"]
+ci_scripts = ["ci/ci_check_live_selector_dispatch.sh"]
+status = "enforced"
 introduced_in = "PHASE4-N-AO"
 strengthened_in = []
 evidence_notes = "Declared at PHASE4-N-AO cluster-doc; enforced at S3 close (CE-AO-3) via ci_check_live_multi_candidate_dispatch.sh + the reused ci_check_chain_selection_arrival_order_independent.sh. Wires the NeedsForkChoice consequent PHASE4-N-AI left fail-closed (DC-NODE-24 intended Participant->select_best_chain dispatch). The production select_best_chain was byte-unchanged through N-AI (the fork_choice.rs touch was a cfg(test) arrival-order proof)."
@@ -7601,9 +7601,9 @@ pending reselection (DC-NODE-28).
 source = "docs/planning/phase4-select-multicandidate-fork-choice-invariants.md (FC-5/FC-6/FC-7) + docs/clusters/PHASE4-N-AO/cluster.md"
 cross_ref = ["DC-NODE-36", "DC-NODE-25", "DC-NODE-29", "DC-NODE-27", "DC-NODE-28", "CN-STORE-07", "DC-CONS-20", "DC-NODE-05", "DC-NODE-12", "CN-CONS-03"]
 code_locus = "CANDIDATE (pending /slice-doc S4): crates/ade_node/src/node_lifecycle.rs (run_participant_sync fork-switch driver + apply_chain_event -- the existing RolledBack + ChainSelected arms, REUSED), crates/ade_runtime/src/admission/wire_pump.rs (the selected-range BlockFetch RequestRange, extending the existing single-block tip-follow fetch), crates/ade_ledger/src/wal/event.rs (RollbackReason::ForkChoiceWin -- the existing variant, constructed live for the first time)"
-tests = []
-ci_scripts = []
-status = "declared"
+tests = ["empty_branch_fails_closed_before_any_apply", "null_source_serves_nothing", "fork_switch_win_adopts_via_rolledback_then_chainselected", "body_hash_mismatch_leaves_chain_unchanged", "broken_parent_link_leaves_chain_unchanged", "selected_peer_missing_body_leaves_chain_unchanged_fence_held", "proof_failure_holds_fence_then_resolves_when_caught_up"]
+ci_scripts = ["ci/ci_check_fork_switch_never_abandons.sh"]
+status = "enforced"
 introduced_in = "PHASE4-N-AO"
 strengthened_in = []
 attack_rationale = "A fork-choice win over peer-supplied/unvalidated data that triggered a rollback BEFORE validating the replacement would let a lying/Byzantine peer induce Ade to abandon a valid durable chain for one that then fails pump_block -- the H-1 truncation class (PHASE4-N-AI AI-S6 / DC-NODE-29) generalized from a peer RollBackward to an Ade-initiated reselection. Never-abandon-until-validated + the DC-NODE-29 stored-slot+hash anchor binding close it."
@@ -7631,9 +7631,9 @@ competing-block LCA invariant.
 source = "docs/planning/phase4-n-ao-ce-ao-6-live-gap.md + docs/clusters/PHASE4-N-AO/S7-lca-anchor-walk.md"
 cross_ref = ["DC-NODE-36", "DC-NODE-37", "DC-NODE-29", "DC-NODE-35", "DC-NODE-28", "CN-CONS-01", "CN-CONS-03"]
 code_locus = "CANDIDATE (pending S7 impl): crates/ade_node/src/node_lifecycle.rs (dispatch_competing_fork_choice -- per-peer branch cache + walk_to_durable_lca) + crates/ade_node/src/candidate_aggregator.rs (build_candidate_fragment, REUSED multi-header) + crates/ade_node/src/selector_state.rs (LcaError)"
-tests = []
-ci_scripts = []
-status = "declared"
+tests = ["one_block_fork_walks_in_one_step", "multi_block_branch_walks_to_durable_lca", "missing_intermediate_header_fails_closed", "ancestor_older_than_k_fails_closed_block_depth", "cache_self_binding_violation_fails_closed", "lying_parent_link_to_genesis_fails_closed", "arrival_order_permutation_walks_identical", "walk_is_deterministic"]
+ci_scripts = ["ci/ci_check_lca_anchor_walk.sh"]
+status = "enforced"
 introduced_in = "PHASE4-N-AO"
 strengthened_in = []
 attack_rationale = "Without the LCA walk, a live multi-block competing branch fails closed (UnexpectedRollback) because its immediate parent is an intermediate block on the competing branch Ade never stored -- a correctness/liveness gap (SELECT only worked for 1-deep forks), surfaced by the CE-AO-6 live two-producer run. The walk closes it WITHOUT weakening authority: the durable stored LCA (slot+hash, DC-NODE-29) is the anchor, S2 validates the complete chain, S4 proves the bodies -- the cache is evidence only. A peer that lies about parent links, presents a gapped branch, or claims an over-k ancestor fails closed; the cache self-binding prevents a stringly map of peer claims."
@@ -7665,7 +7665,7 @@ cross_ref = ["DC-NODE-24", "DC-NODE-25", "DC-NODE-28", "DC-NODE-29", "DC-NODE-38
 code_locus = "CANDIDATE (pending S11 Phase-1 diagnosis): the fix locus is decided by the instrumented diagnostic (peer-fault vs Ade-fault). Surfaces in scope: crates/ade_runtime/src/admission/wire_pump.rs (RollForward serve/follow), crates/ade_node/src/node_sync.rs (classify_receive), crates/ade_node/src/lca_walk.rs (walk_to_durable_lca BranchGap), crates/ade_node/src/node_lifecycle.rs (post-switch follow state + apply_fork_switch intersect re-point + the fail-closed MissingBridge decision). BLUE select_best_chain / apply_fork_switch adoption authority UNCHANGED."
 tests = ["post_switch_admits_winner_descendant_x_plus_1", "post_switch_missing_bridge_emits_structured_and_holds_fence", "missing_bridge_wrong_parent_maps_closed_code", "late_bridge_clears_hold_on_progress", "missing_bridge_reason_maps_lca_error_to_closed_discriminant", "bridge_gap_injection_emits_missing_bridge", "late_bridge_recovers_on_progress"]
 ci_scripts = ["ci/ci_check_missing_bridge_fail_closed.sh"]
-status = "declared"
+status = "enforced"
 introduced_in = "PHASE4-N-AO"
 strengthened_in = []
 attack_rationale = "A silent post-switch stall is fail-closed (no divergence, no mis-admit) but is NOT convergence: a node that adopts the fork-choice winner then cannot follow it forward is stuck behind the canonical chain indefinitely -- a liveness failure that, under adversarial timing, lets a peer strand Ade by serving descendants out-of-order or omitting a bridge. Marking CN-CONS-03 enforced on a single capability pass (run 2) while the same binary conditionally stalls (run 1) would overstate the invariant. DC-NODE-39 forces the post-switch path to either complete in parent-link order or fail closed with a STRUCTURED reason (so the stall is observable + halts deterministically, never silent), without weakening adoption authority or admitting an unvalidated bridge. The peer's served sequence is observed evidence; the admit decision stays on Ade's validated parent links."
@@ -7694,7 +7694,7 @@ cross_ref = ["DC-NODE-38", "DC-NODE-29", "DC-NODE-37", "DC-NODE-39", "DC-NODE-25
 code_locus = "a BTreeMap<Hash32, CachedHeader> rollback-retention cache OWNED in crates/ade_node/src/node_lifecycle.rs ForgeActivation (cross-iteration, alongside pending_fork_switch/pending_missing_bridge -- NOT a run_participant_sync local, which is reborn empty each drain), populated in apply_fork_switch BEFORE the ChainEvent::RolledBack apply (walk old_tip->fork_anchor+1 via ChainDb decode_block, insert self-bound key==block_hash + k-bounded retain by security_param.0), consulted by crates/ade_node/src/lca_walk.rs walk_to_durable_lca on a per-peer-cache miss (cache.get(h).or_else(|| retention.get(h))). The durable-anchor check (chaindb.get_block_by_hash) is UNCHANGED. BLUE select/apply/validate UNCHANGED."
 tests = ["rollback_retains_removed_blocks_for_lca_walk", "retained_blocks_are_not_anchors", "retained_blocks_are_k_bounded", "retained_block_hash_self_binds", "genuine_gap_still_missing_bridge", "apply_fork_switch_populates_rollback_retention"]
 ci_scripts = ["ci/ci_check_rollback_retention_evidence.sh"]
-status = "declared"
+status = "enforced"
 introduced_in = "PHASE4-N-AO"
 strengthened_in = []
 attack_rationale = "Without retaining the rolled-back blocks, the LCA walk cannot reconstruct a competing branch that descends through Ade's OWN recently-rolled-back chain, so every such block fails BranchGap -> MissingBridge -> fence-held. For a follower this is harmless (clears on each winner admit); for a PRODUCER it is a liveness denial -- normal competitor traffic after a fork-switch would intermittently hold the forge fence. Retaining the rolled-back blocks as EVIDENCE (not authority) restores evaluability without widening trust: the retention is self-binding (a peer cannot inject a lying header under a hash it doesn't claim), k-bounded (no unbounded memory / no over-k branch), and never the durable anchor (the LCA is still ChainDb-only, so a retained block cannot redirect selection or become a rollback target), and never bypasses S2/S4 (a retained header still validates before any adoption). The narrow retention surface -- exactly the blocks Ade rolled back -- keeps the change auditable vs caching every received header (broader trust/eviction surface) or full per-peer candidate tracking (a larger architectural change that would destabilize S1-S12)."
@@ -7724,7 +7724,7 @@ cross_ref = ["DC-NODE-39", "DC-NODE-40", "DC-NODE-37", "DC-NODE-24", "DC-NODE-25
 code_locus = "crates/ade_node/src/fork_switch.rs: closed RangeRefetchOutcome{Admitted|Unavailable|ShortRange|BodyHeaderMismatch|ParentLinkMismatch|ValidationFailed}+as_str, RangeRefetch/PostSwitchFollow types, MAX_RANGE_REFETCH_ATTEMPTS + range_refetch_should_retry (bounded-retry RED policy), PrefetchedBranchBodies::ordered_for_peer. crates/ade_node/src/node_lifecycle.rs: recover_missing_range (pump_block sole admit, per-block block_admitted evidence); dispatch_competing_fork_choice walk-fail arm sets pending_range_refetch ONLY for a winning-peer descendant ahead of the durable tip (gated on post_switch_follow.winning_peer == peer), ALONGSIDE the DC-NODE-39 floor hold; the participant relay loop records ForgeActivation.post_switch_follow on ForkSwitchOutcome::Adopted and consumes ForgeActivation.pending_range_refetch via a staleness-guarded, bounded-retry prefetch_branch_bodies(S6, byte-only)->recover_missing_range drive, clearing the hold ONLY on RangeRefetchOutcome::Admitted. Closed range_refetch_started/completed events in crates/ade_node/src/admission_log/{event.rs,writer.rs} + emit in convergence_evidence.rs. BLUE validation/select/apply/pump_block UNCHANGED."
 tests = ["refetched_bridge_admits_in_order", "refetch_failure_structured", "short_refetch_keeps_hold", "lying_refetch_body_rejected", "missing_bridge_triggers_range_refetch", "bounded_retry"]
 ci_scripts = ["ci/ci_check_missing_bridge_refetch.sh"]
-status = "declared"
+status = "enforced"
 introduced_in = "PHASE4-N-AO"
 strengthened_in = []
 attack_rationale = "The DC-NODE-39 floor is safe (no mis-admit, no silent stall) but a passive hold cannot recover a bridge ChainSync already passed: a winning-peer descendant that arrived before its never-received bridge strands Ade fail-closed forever -- a liveness denial that, under adversarial or merely unlucky timing, prevents convergence onto the selected winning chain. Active range re-fetch closes it WITHOUT widening trust: the fetch is byte-only (a lying/short range is rejected by parent-link + body-hash validation before any pump_block admit, so a Byzantine peer cannot inject an unvalidated chain), winning-peer-only (S3 already selected, so no loser-orphan turns into a fetch-spam amplifier and no second selector is introduced), bounded-retry (no spin / no resource exhaustion), and clears the hold only on REAL admitted progress (an attempted-but-failed fetch never clears the fence). The floor remains the fail-closed fallback when the range cannot be served."
