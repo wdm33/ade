@@ -1,0 +1,55 @@
+# Plutus result/budget conformance manifest -- slice A4 (-> CN-PLUTUS-01).
+#
+# Binds the Plutus result + ex_units conformance evidence into one tamper-evident,
+# reproducible record: a PINNED evaluator, an IMMUTABLE corpus, and the exact parity
+# outcome. The behavioral proof is
+#   ade_testkit::plutus_conformance::plutus_conformance_evaluation_suite
+# (exact-count assertions, zero diverge on result AND budget). The gate
+# ci/ci_check_plutus_conformance.sh recomputes corpus_content_sha256 + manifest_sha256
+# from this file and the corpus on disk and verifies the aiken pin against Cargo.lock --
+# any drift fails.
+#
+# CN-PLUTUS-01: "Same script + redeemers/datum/context + cost model must produce
+# identical result and budget accounting." Determinism -- the (A) half -- is enforced
+# by CN-PLUTUS-04 (ci_check_plutus_eval_purity.sh). This manifest supplies the (B) half:
+# result + ex_units are byte-correct against the IOG reference across the runnable set.
+
+[evaluator]
+crate  = "aiken_uplc"
+source = "git+https://github.com/aiken-lang/aiken?tag=v1.1.21"
+commit = "42babe5d5fcdd403ed58ed924fdc2aed331ede4d"
+
+[corpus]
+repository     = "https://github.com/IntersectMBO/plutus"
+commit         = "643ddd135bfa465bc532c51e679939daf8b1e3d9"
+path           = "corpus/plutus_conformance/test-cases/uplc/evaluation"
+content_sha256 = "83e8f447555d22e74064ec2b57965cfb7d3bf9752579c017ebba39ae0bd1f260"
+version_scope  = "cardano-node 10.6.2 (PV10; PV11 builtins not active)"
+
+[outcome]
+# Result + ex_units parity vs the IOG .uplc.expected / .uplc.budget.expected oracles.
+total                = 728
+skipped              = 214   # classified below -- NOT false-rejects, NOT CE-88
+runnable             = 514   # total - skipped
+result_parity        = 514   # every runnable case: 495 byte-exact + 19 alpha-equivalent
+result_parity_exact  = 495
+result_parity_alpha  = 19    # aiken pretty-printer variable-naming; program structurally identical; budget byte-exact
+ex_units_parity      = 514   # budget byte-exact across all runnable cases
+result_mismatch      = 0
+budget_mismatch      = 0
+parse_failed         = 0
+
+[skipped_classification]
+# 214 skipped cases. None are false-rejects (result_mismatch == 0) and none are the
+# tx-level CE-88 ScriptContext-delegation blocker (that is a transaction-evaluation
+# bug, not a UPLC-term conformance case). They are not-run, for two reasons:
+pv11_not_active      = "expModInteger / caseList / caseData builtins and (con value ...) / (con (array ...)) constant syntax -- PV11 features, inactive at cardano-node 10.6.2's PV10 posture"
+aiken_v1_1_21_parser = "term/constant-case, builtin/constant/{array,value}, verifySchnorrSecp256k1Signature (32-byte message constraint), unBData CBOR-literal form -- aiken v1.1.21 parser/impl limitations; semantic parity proven elsewhere"
+
+[manifest]
+# Repeatable binding hash over the load-bearing fields, in this exact canonical form:
+#   aiken=<commit>|corpus=<commit>|corpus_content=<sha256>|total=N|skipped=N|runnable=N|
+#   exact=N|alpha=N|result_mismatch=N|budget_mismatch=N|parse_failed=N
+sha256           = "a23bfabcf444e95ac0a31bd4e7e1cf95cf04c093353907956abdc01cebb3299a"
+behavioral_proof = "ade_testkit::plutus_conformance::plutus_conformance_evaluation_suite"
+gate             = "ci/ci_check_plutus_conformance.sh"

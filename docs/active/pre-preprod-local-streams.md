@@ -180,11 +180,18 @@ admission adversarial false-accept corpus + per-rule tx/conservation/witness adv
   declared** with strengthened evidence — determinism (A) is structurally argued from the purity gate, but
   budget-accounting-matches-Cardano (B) is compatibility evidence needing a corpus-bound manifest.
   CN-PLUTUS-03 / DC-LEDGER-06 stay declared (CE-88); DC-LEDGER-03 stays partial.
-- **NEXT (deferred from A2) = slice A4 — Plutus result/budget conformance manifest** (named A4, not A3 —
-  A3 was the committed adversarial corpus b25d1594). Acceptance: pinned aiken commit + exact IOG corpus
-  identity/hash; 514/514 result parity + 514/514 ex_units parity; repeatable manifest hash; CI gate fails
-  on any diverge_pass; zero false-rejects unless the known CE-88 ScriptContext-delegation blocker. THEN
-  CN-PLUTUS-01 flips cleanly. **Harness note:** the contiguous Plutus verdict harness currently stops early on a
+- **Slice A4 DONE** (this commit): Plutus result/budget conformance manifest → **CN-PLUTUS-01 FLIPPED
+  declared→enforced.** `docs/evidence/plutus-conformance-manifest.toml` binds pinned aiken 42babe5 (vs
+  Cargo.lock) + IOG corpus 643ddd13 (content sha256 83e8f447) + repeatable/tamper-tested hash a23bfabc;
+  `plutus_conformance_evaluation_suite` now asserts the EXACT outcome (was a floor); gate
+  `ci_check_plutus_conformance.sh` (corpus-immutable + aiken-pinned + hash-intact + suite-not-weakened,
+  self-tested). Result parity 514/514 runnable = 495 byte-exact + 19 alpha-equivalent (DeBruijn-identical,
+  byte-exact ex_units → printer divergence, not semantic mismatch); ex_units 514/514 byte-exact; 214
+  classified skips (PV11-inactive / aiken-parser, NOT false-rejects, do NOT discharge CN-PLUTUS-03 /
+  DC-LEDGER-06). SCOPE: pinned runnable corpus, not full future-era coverage. **Stream 1 Plutus thread
+  (A1+A2+A3+A4) COMPLETE.**
+- **Stream 1 remaining = DC-PROTO-02** (transcript-equivalent miniprotocol with Haskell, routed from S3),
+  then Stream 1 closes → **Stream 2** (epoch transition). **Harness note:** the contiguous Plutus verdict harness currently stops early on a
   cert-state divergence (`StakeAlreadyRegistered`/`StakeNotRegistered` at blocks 1/1/40), so it reaches
   ~0 passing Plutus txs — a pre-existing limitation that weakens the Plutus oracle's reach; worth a
   dedicated look in the broader Stream-1 false-accept hunt.

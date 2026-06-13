@@ -631,27 +631,49 @@ fn plutus_conformance_evaluation_suite() {
         // Anything non-aiken-supported is explicitly skipped per
         // AIKEN_UNSUPPORTED_PATHS / PV11_ONLY_* with documented
         // rationale.
-        assert!(stats.total > 0, "no cases collected");
+        // A4 -- Plutus result/budget conformance manifest (CN-PLUTUS-01).
+        // EXACT binding against aiken v1.1.21 (42babe5) + IOG plutus-conformance
+        // corpus 643ddd13, recorded in docs/evidence/plutus-conformance-manifest.toml.
+        // The exact counts make the manifest reproducible: any aiken / corpus drift
+        // fails here and forces a re-blessed manifest. Zero diverge on result AND
+        // budget across the whole runnable set.
+        assert_eq!(
+            stats.total, 728,
+            "corpus case count changed -- re-bless the conformance manifest"
+        );
+        assert_eq!(
+            stats.skipped, 214,
+            "skipped count changed (PV11 / aiken-parser) -- re-bless the manifest"
+        );
         assert_eq!(
             stats.budget_mismatch, 0,
-            "budget parity regressed: {}",
+            "ex_units parity regressed: {} budget mismatches",
             stats.budget_mismatch
         );
         assert_eq!(
             stats.result_mismatch, 0,
-            "result mismatches detected: {}",
+            "result parity regressed: {} result mismatches",
             stats.result_mismatch
         );
-        assert_eq!(
-            stats.parse_failed, 0,
-            "parse failures detected: {}",
-            stats.parse_failed
-        );
+        assert_eq!(stats.parse_failed, 0, "parse failures: {}", stats.parse_failed);
+        // Every runnable case passes (byte-exact result OR alpha-equivalent with
+        // byte-exact budget): runnable == total - skipped == 514, all passing.
+        let runnable = stats.total - stats.skipped;
         let total_passed = stats.passed + stats.printer_divergence_passed;
-        assert!(
-            total_passed >= 510,
-            "total pass count regressed: {} (floor 510)",
-            total_passed
+        assert_eq!(runnable, 514, "runnable set changed -- re-bless the manifest");
+        assert_eq!(
+            total_passed, runnable,
+            "not all runnable cases passed: {total_passed}/{runnable}"
+        );
+        // Recorded split (see manifest): 495 byte-exact + 19 alpha-equivalent
+        // (aiken pretty-printer variable-naming, budget byte-exact).
+        assert_eq!(
+            stats.passed, 495,
+            "byte-exact pass count changed -- re-bless the manifest"
+        );
+        assert_eq!(
+            stats.printer_divergence_passed, 19,
+            "alpha-equivalent pass count changed -- re-bless the manifest"
         );
     });
 }
