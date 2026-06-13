@@ -261,6 +261,26 @@ impl ConvergenceEvidenceSink {
         })
     }
 
+    /// PHASE4-N-AO S14 (DC-NODE-41): closed range re-fetch recovery emitters --
+    /// observe-only, constructed from already-computed authority outcomes (the
+    /// `RangeRefetch` request + the `RangeRefetchOutcome` the BLUE admit produced).
+    pub fn emit_range_refetch_started(&mut self, fork_switch_id: &str, peer: &str, from_slot: u64, to_slot: u64, reason: &'static str) -> EvidenceEmitResult {
+        self.emit(AdmissionLogEvent::RangeRefetchStarted {
+            fork_switch_id: fork_switch_id.to_string(),
+            peer: peer.to_string(),
+            from_slot,
+            to_slot,
+            reason,
+        })
+    }
+    pub fn emit_range_refetch_completed(&mut self, fork_switch_id: &str, peer: &str, outcome: &'static str) -> EvidenceEmitResult {
+        self.emit(AdmissionLogEvent::RangeRefetchCompleted {
+            fork_switch_id: fork_switch_id.to_string(),
+            peer: peer.to_string(),
+            outcome,
+        })
+    }
+
     /// PRIVATE single funnel — the `emit_*` methods are its only callers,
     /// so no caller outside this module can construct a non-subset variant.
     /// Deliberately NOT `pub`, and there is NO accessor returning the inner
@@ -509,6 +529,23 @@ impl ConvergenceEvidence {
         let r = self
             .sink
             .emit_missing_bridge(peer, &hex_lowercase(&block_hash.0), reason);
+        self.note(r);
+    }
+
+    /// PHASE4-N-AO S14 (DC-NODE-41): observe-only range re-fetch recovery taps. The
+    /// `started` carries the requested range + the closed trigger reason; the
+    /// `completed` carries the closed `RangeRefetchOutcome` discriminator. A write
+    /// failure flips `incomplete`; never alters authority.
+    pub fn emit_range_refetch_started(&mut self, fork_switch_id: &str, peer: &str, from_slot: u64, to_slot: u64, reason: &'static str) {
+        let r = self
+            .sink
+            .emit_range_refetch_started(fork_switch_id, peer, from_slot, to_slot, reason);
+        self.note(r);
+    }
+    pub fn emit_range_refetch_completed(&mut self, fork_switch_id: &str, peer: &str, outcome: &'static str) {
+        let r = self
+            .sink
+            .emit_range_refetch_completed(fork_switch_id, peer, outcome);
         self.note(r);
     }
 }

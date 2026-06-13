@@ -335,6 +335,37 @@ fn encode_event(event: &AdmissionLogEvent, out: &mut String) {
             out.push(',');
             push_key_str(out, "reason", reason);
         }
+        // PHASE4-N-AO S14 (DC-NODE-41) closed range re-fetch recovery events.
+        AdmissionLogEvent::RangeRefetchStarted {
+            fork_switch_id,
+            peer,
+            from_slot,
+            to_slot,
+            reason,
+        } => {
+            out.push(',');
+            push_key_str(out, "fork_switch_id", fork_switch_id);
+            out.push(',');
+            push_key_str(out, "peer", peer);
+            out.push(',');
+            push_key_u64(out, "from_slot", *from_slot);
+            out.push(',');
+            push_key_u64(out, "to_slot", *to_slot);
+            out.push(',');
+            push_key_str(out, "reason", reason);
+        }
+        AdmissionLogEvent::RangeRefetchCompleted {
+            fork_switch_id,
+            peer,
+            outcome,
+        } => {
+            out.push(',');
+            push_key_str(out, "fork_switch_id", fork_switch_id);
+            out.push(',');
+            push_key_str(out, "peer", peer);
+            out.push(',');
+            push_key_str(out, "outcome", outcome);
+        }
     }
     out.push('}');
 }
@@ -395,6 +426,9 @@ const DISCRIMINATORS: &[&str] = &[
     "fork_switch_superseded",
     // PHASE4-N-AO S11 (DC-NODE-39) closed missing-bridge fail-closed event.
     "missing_bridge",
+    // PHASE4-N-AO S14 (DC-NODE-41) closed range re-fetch recovery events.
+    "range_refetch_started",
+    "range_refetch_completed",
 ];
 
 #[cfg(test)]
@@ -539,6 +573,34 @@ mod tests {
         assert!(!s.contains("peer_hash_hex"), "got: {s}");
         assert!(!s.contains("peer_slot"), "got: {s}");
         assert!(s.contains("\"tx_in_hex\":\"deadbeef#0\""), "got: {s}");
+    }
+
+    #[test]
+    fn admission_log_writer_emits_range_refetch_events_with_closed_fields() {
+        // PHASE4-N-AO S14 (DC-NODE-41): the started carries the range + the closed
+        // trigger reason; the completed carries the closed outcome discriminator.
+        let bytes = emit_to_vec(&[
+            AdmissionLogEvent::RangeRefetchStarted {
+                fork_switch_id: "abcd1234".into(),
+                peer: "127.0.0.1:6002".into(),
+                from_slot: 298,
+                to_slot: 388,
+                reason: "branch_gap",
+            },
+            AdmissionLogEvent::RangeRefetchCompleted {
+                fork_switch_id: "abcd1234".into(),
+                peer: "127.0.0.1:6002".into(),
+                outcome: "admitted",
+            },
+        ]);
+        let s = std::str::from_utf8(&bytes).expect("utf8");
+        let lines: Vec<&str> = s.lines().collect();
+        assert!(lines[0].contains("\"event\":\"range_refetch_started\""), "got: {}", lines[0]);
+        assert!(lines[0].contains("\"from_slot\":298"), "got: {}", lines[0]);
+        assert!(lines[0].contains("\"to_slot\":388"), "got: {}", lines[0]);
+        assert!(lines[0].contains("\"reason\":\"branch_gap\""), "got: {}", lines[0]);
+        assert!(lines[1].contains("\"event\":\"range_refetch_completed\""), "got: {}", lines[1]);
+        assert!(lines[1].contains("\"outcome\":\"admitted\""), "got: {}", lines[1]);
     }
 
     #[test]

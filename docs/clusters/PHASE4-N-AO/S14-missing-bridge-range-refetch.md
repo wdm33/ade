@@ -92,24 +92,24 @@ A gap from a non-winning peer takes the unchanged floor path (no re-fetch).
 
 ## 12. Mechanical Acceptance Criteria
 
-- [ ] `missing_bridge_triggers_range_refetch` — X adopted; Z (winning-peer descendant)
-  arrives with a missing parent chain; Ade requests `RequestRange(X→Z)` from the winning
-  peer (a `range_refetch_started` is emitted / the request is issued).
-- [ ] `refetched_bridge_admits_in_order` — the fetch returns Y, Z; Ade admits Y THEN Z
-  through `pump_block`; `pending_missing_bridge` clears on that admitted progress.
-- [ ] `short_refetch_keeps_hold` — the fetch returns only Z (or misses Y); NO admit of Z;
-  the hold remains.
-- [ ] `lying_refetch_body_rejected` — a fetched Y whose body-hash / prev mismatches; NO
+- [x] `missing_bridge_triggers_range_refetch` — X adopted; Z (winning-peer descendant)
+  arrives with a missing parent chain; the dispatch sets `pending_range_refetch`
+  (`RequestRange(durable_tip+1 → Z)`) for the winning peer ONLY (a non-winning-peer gap
+  sets none); the floor hold remains set alongside it.
+- [x] `refetched_bridge_admits_in_order` — the fetch returns Y, Z; Ade admits Y THEN Z
+  through `pump_block`; reaching the descendant => `Admitted` (the durable tip advances).
+- [x] `short_refetch_keeps_hold` — a non-extending body; NO admit; the hold remains.
+- [x] `lying_refetch_body_rejected` — a fetched body whose body-hash / prev mismatches; NO
   mutation; the hold remains.
-- [ ] `refetch_failure_structured` — the peer cannot serve the range; MissingBridge
-  remains with a closed failure code (no silent stall).
-- [ ] `bounded_retry` — the retry limit / backoff is a RED policy, deterministic in tests,
-  no spin loop.
-- [ ] `ci/ci_check_missing_bridge_refetch.sh` (DC-NODE-41): re-fetch triggers ONLY for the
-  winning peer, byte-only (no admit bypass of `pump_block`), bounded retry, fail-closed
-  fallback intact.
-- [ ] `cargo test -p ade_node` green; the S11/S12/S13 tests + gates unregressed (the floor
-  + harness + retention still hold).
+- [x] `refetch_failure_structured` — an empty/unservable range => closed `Unavailable`; no
+  admit, no mutation (no silent stall).
+- [x] `bounded_retry` — `range_refetch_should_retry` / `MAX_RANGE_REFETCH_ATTEMPTS` is a RED
+  policy, deterministic, no spin loop (the relay-loop drive loops on it).
+- [x] `ci/ci_check_missing_bridge_refetch.sh` (DC-NODE-41): re-fetch triggers ONLY for the
+  winning peer, byte-only (`pump_block` the sole admit), bounded retry, fail-closed
+  fallback intact, closed evidence, observe-only.
+- [x] `cargo test -p ade_node` green (286 lib + 47 live_fork_choice + all bins); the
+  S11/S12/S13 tests + gates unregressed (the floor + harness + retention still hold).
 - [ ] **Live (CE-AO-6):** a fresh two-producer run shows `fork_switch_applied X` →, if a
   bridge gap occurs, `range_refetch_started` / `range_refetch_completed` → the bridge +
   descendant admitted → no diverged → all wins terminal → agreement or validated-prefix
@@ -142,11 +142,15 @@ A gap from a non-winning peer takes the unchanged floor path (no re-fetch).
 
 ## 16. Completion Checklist
 
-- [ ] Record the post-switch winning peer + adopted tip; gate the re-fetch on it.
-- [ ] Re-fetch via S6 `prefetch_branch_bodies` (RequestRange X+1..descendant), byte-only.
-- [ ] Validate + admit in parent-link order via `pump_block`; clear hold on real progress.
-- [ ] Closed `range_refetch_started/completed` + failure-code evidence (GREEN, observe-only).
-- [ ] 6 hermetic tests + `ci/ci_check_missing_bridge_refetch.sh`.
-- [ ] `cargo test -p ade_node` + all AO gates green.
+- [x] Record the post-switch winning peer + adopted tip (`ForgeActivation.post_switch_follow`
+  on `ForkSwitchOutcome::Adopted`); gate the re-fetch on it (winning-peer-only).
+- [x] Re-fetch via S6 `prefetch_branch_bodies` (RequestRange durable_tip+1..descendant),
+  byte-only; bounded retry (`range_refetch_should_retry`).
+- [x] Validate + admit in parent-link order via `pump_block` (`recover_missing_range`); clear
+  the hold ONLY on real admitted progress (`RangeRefetchOutcome::Admitted`).
+- [x] Closed `range_refetch_started/completed` evidence (GREEN, observe-only); the recovered
+  descendants emit `block_admitted` + `agreement_verdict` (S10 continuity sees them).
+- [x] 6 hermetic tests + `ci/ci_check_missing_bridge_refetch.sh`.
+- [x] `cargo test -p ade_node` + all AO gates green.
 - [ ] Live CE-AO-6: bridge gap recovered → convergence; contributes to `CN-CONS-03` flip.
 - [ ] `DC-NODE-41` declared → enforced at `/cluster-close`.

@@ -22,8 +22,9 @@ use ade_ledger::state::LedgerState;
 use ade_ledger::wal::{RollbackReason, WalEntry, WalError, WalStore};
 use ade_network::codec::chain_sync::Point as WirePoint;
 use ade_node::fork_switch::{
-    fork_switch_fence_resolved, BranchBodySource, BranchProofError, FetchError, ForkSwitchOutcome,
-    MissingBridgeReason, PrefetchedBranchBodies, RangeRefetch, RangeRefetchOutcome,
+    fork_switch_fence_resolved, range_refetch_should_retry, BranchBodySource, BranchProofError,
+    FetchError, ForkSwitchOutcome, MissingBridgeReason, PostSwitchFollow, PrefetchedBranchBodies,
+    RangeRefetch, RangeRefetchOutcome, MAX_RANGE_REFETCH_ATTEMPTS,
 };
 use ade_node::node_lifecycle::{apply_fork_switch, recover_missing_range, run_participant_sync};
 use ade_node::selector_state::{project_tiebreaker, ForkAnchor, PendingForkSwitch};
@@ -153,6 +154,8 @@ async fn participant_rollback_applies_durably() {
         &mut None,
         &BTreeMap::new(),
         None,
+        &mut None,
+        None,
     )
     .await
     .expect("rollback applies");
@@ -191,6 +194,8 @@ async fn participant_rollback_to_unknown_point_fails_closed() {
         &mut None,
         &BTreeMap::new(),
         None,
+        &mut None,
+        None,
     )
     .await
     .expect_err("unknown rollback point must fail closed");
@@ -226,6 +231,8 @@ async fn participant_rollback_beyond_k_fails_closed_clears_pending() {
         &mut None,
         &mut None,
         &BTreeMap::new(),
+        None,
+        &mut None,
         None,
     )
     .await
@@ -265,6 +272,8 @@ async fn rollback_slot_hash_mismatch_fails_before_mutation() {
         &mut None,
         &mut None,
         &BTreeMap::new(),
+        None,
+        &mut None,
         None,
     )
     .await
@@ -511,6 +520,8 @@ async fn participant_bare_competing_block_fails_closed() {
         &mut None,
         &BTreeMap::new(),
         None,
+        &mut None,
+        None,
     )
     .await;
     // PHASE4-N-AO S7 (DC-NODE-38): a bare competing block whose branch cannot reach a
@@ -566,6 +577,8 @@ async fn post_switch_missing_bridge_emits_structured_and_holds_fence() {
         &mut pending_switch,
         &mut pending_missing_bridge,
         &BTreeMap::new(),
+        None,
+        &mut None,
         Some(&mut ev),
     )
     .await;
@@ -636,6 +649,8 @@ async fn missing_bridge_wrong_parent_maps_closed_code() {
         &mut None,
         &mut pending_missing_bridge,
         &BTreeMap::new(),
+        None,
+        &mut None,
         Some(&mut ev),
     )
     .await
@@ -737,6 +752,8 @@ async fn late_bridge_clears_hold_on_progress() {
         &mut pending_missing_bridge,
         &BTreeMap::new(),
         None,
+        &mut None,
+        None,
     )
     .await
     .expect("Z holds");
@@ -765,6 +782,8 @@ async fn late_bridge_clears_hold_on_progress() {
         &mut None,
         &mut pending_missing_bridge,
         &BTreeMap::new(),
+        None,
+        &mut None,
         None,
     )
     .await
@@ -818,6 +837,8 @@ async fn participant_block_with_no_durable_tip_pumps() {
         &mut None,
         &mut None,
         &BTreeMap::new(),
+        None,
+        &mut None,
         None,
     )
     .await
@@ -904,6 +925,8 @@ async fn participant_cold_start_admit_emits_received_admitted_agreed() {
         &mut None,
         &mut None,
         &BTreeMap::new(),
+        None,
+        &mut None,
         Some(&mut ev),
     )
     .await
@@ -946,6 +969,8 @@ async fn participant_block_received_does_not_imply_admission() {
         &mut None,
         &mut None,
         &BTreeMap::new(),
+        None,
+        &mut None,
         Some(&mut ev),
     )
     .await;
@@ -992,6 +1017,8 @@ async fn participant_convergence_evidence_replay_byte_identical() {
             &mut None,
             &mut None,
             &BTreeMap::new(),
+            None,
+            &mut None,
             Some(&mut ev),
         )
         .await
@@ -1037,6 +1064,8 @@ async fn participant_rollback_to_recovered_anchor_is_noop() {
         &mut None,
         &BTreeMap::new(),
         None,
+        &mut None,
+        None,
     )
     .await
     .expect("rollback-to-recovered-anchor is an idempotent no-op");
@@ -1080,6 +1109,8 @@ async fn participant_rollback_origin_fails_closed() {
         &mut None,
         &BTreeMap::new(),
         None,
+        &mut None,
+        None,
     )
     .await
     .expect_err("Origin rollback must fail closed even with a recovered anchor");
@@ -1118,6 +1149,8 @@ async fn participant_rollback_non_anchor_fails_closed() {
             &mut None,
             &mut None,
             &BTreeMap::new(),
+            None,
+            &mut None,
             None,
         )
         .await
@@ -1167,6 +1200,8 @@ async fn participant_first_forward_after_anchor_noop_admits_via_pump_block() {
         &mut None,
         &BTreeMap::new(),
         None,
+        &mut None,
+        None,
     )
     .await
     .expect("anchor no-op, then the forward block admits via pump_block");
@@ -1204,6 +1239,8 @@ async fn participant_stored_block_rollback_still_applies() {
         &mut None,
         &mut None,
         &BTreeMap::new(),
+        None,
+        &mut None,
         None,
     )
     .await
@@ -1328,6 +1365,8 @@ async fn participant_competing_durable_anchor_loses_no_mutation() {
         &mut None,
         &BTreeMap::new(),
         None,
+        &mut None,
+        None,
     )
     .await
     .expect("a losing competing candidate is a no-op (NOT UnexpectedRollback)");
@@ -1369,6 +1408,8 @@ async fn participant_competing_durable_anchor_win_sets_pending_no_mutation() {
         &mut pending_switch,
         &mut None,
         &BTreeMap::new(),
+        None,
+        &mut None,
         None,
     )
     .await
@@ -1426,6 +1467,8 @@ async fn participant_competing_unknown_anchor_fails_closed() {
         &mut None,
         &BTreeMap::new(),
         None,
+        &mut None,
+        None,
     )
     .await;
     // PHASE4-N-AO S7 (DC-NODE-38): an un-anchorable competing block (its parent is
@@ -1473,6 +1516,8 @@ async fn participant_competing_fork_anchor_older_than_k_no_mutation() {
         &mut pending_switch,
         &mut None,
         &BTreeMap::new(),
+        None,
+        &mut None,
         None,
     )
     .await
@@ -1769,7 +1814,7 @@ fn refetched_bridge_admits_in_order() {
     prefetched.insert("peer-1", y.header_input.slot, y_bytes.clone());
     let req = s14_req("peer-1", &x_hash, x_slot, y.header_input.slot, &y.block_hash);
     let outcome =
-        recover_missing_range(&mut fwd, &db, &mut wal, &prefetched, &req, &corpus_schedule(), &view);
+        recover_missing_range(&mut fwd, &db, &mut wal, &prefetched, &req, &corpus_schedule(), &view, &NodeBlockSource::in_memory_items(vec![]), None);
     assert_eq!(outcome, RangeRefetchOutcome::Admitted, "the re-fetched bridge admits + reaches Y");
     assert_eq!(db.tip().unwrap().unwrap().hash, y.block_hash, "Y is the durable tip");
 }
@@ -1785,7 +1830,7 @@ fn refetch_failure_structured() {
     let prefetched = PrefetchedBranchBodies::new(); // empty
     let req = s14_req("peer-1", &x_hash, x_slot, y.header_input.slot, &y.block_hash);
     let outcome =
-        recover_missing_range(&mut fwd, &db, &mut wal, &prefetched, &req, &corpus_schedule(), &view);
+        recover_missing_range(&mut fwd, &db, &mut wal, &prefetched, &req, &corpus_schedule(), &view, &NodeBlockSource::in_memory_items(vec![]), None);
     assert_eq!(outcome, RangeRefetchOutcome::Unavailable, "empty range => structured Unavailable");
     assert_eq!(db.tip().unwrap().unwrap().hash, x_hash, "no admit on an empty range");
 }
@@ -1803,7 +1848,7 @@ fn short_refetch_keeps_hold() {
     prefetched.insert("peer-1", z.header_input.slot, z_bytes.clone());
     let req = s14_req("peer-1", &x_hash, x_slot, z.header_input.slot, &z.block_hash);
     let outcome =
-        recover_missing_range(&mut fwd, &db, &mut wal, &prefetched, &req, &corpus_schedule(), &view);
+        recover_missing_range(&mut fwd, &db, &mut wal, &prefetched, &req, &corpus_schedule(), &view, &NodeBlockSource::in_memory_items(vec![]), None);
     assert!(!outcome.is_admitted(), "a non-extending body is NOT admitted: {outcome:?}");
     assert_eq!(db.tip().unwrap().unwrap().hash, x_hash, "Z (no bridge) is NOT admitted -- hold remains");
 }
@@ -1821,10 +1866,149 @@ fn lying_refetch_body_rejected() {
     prefetched.insert("peer-1", y.header_input.slot, vec![0xDE, 0xAD, 0xBE, 0xEF]); // lying bytes
     let req = s14_req("peer-1", &x_hash, x_slot, y.header_input.slot, &y.block_hash);
     let outcome =
-        recover_missing_range(&mut fwd, &db, &mut wal, &prefetched, &req, &corpus_schedule(), &view);
+        recover_missing_range(&mut fwd, &db, &mut wal, &prefetched, &req, &corpus_schedule(), &view, &NodeBlockSource::in_memory_items(vec![]), None);
     assert!(!outcome.is_admitted(), "a lying body is rejected: {outcome:?}");
     assert_eq!(db.tip().unwrap().unwrap().hash, x_hash, "no admit / no mutation on a lying body");
     assert!(wal.read_all().unwrap().is_empty(), "no WAL mutation on a lying body");
+}
+
+// ---- PHASE4-N-AO S14 (DC-NODE-41): the live wiring (part 2) ----
+// The dispatch ELIGIBILITY trigger + the bounded-retry policy. The async drive
+// (prefetch_branch_bodies -> recover_missing_range) is proven by the recover tests
+// above + the S6 loopback + the live CE-AO-6 run; here we prove (a) the trigger fires
+// ONLY for a winning-peer descendant ahead of the durable tip (winning-peer-only, no
+// loser/unknown-peer fetch spam) ALONGSIDE the DC-NODE-39 floor hold, and (b) the
+// retry budget is bounded (no spin loop).
+
+#[tokio::test]
+async fn missing_bridge_triggers_range_refetch() {
+    let (c, view) = corpus_view();
+    let block = pick_lightest(&c);
+    let decoded = decode_block(&block).expect("decode");
+    let z_slot = decoded.header_input.slot.0;
+    // Durable tip X stored at slot Z-1 (hash 0xEE); the competing block Z is from the
+    // WINNING peer, ahead of X, and its parent cannot bridge to a durable ancestor
+    // (an LCA-walk BranchGap -- the Fault-2 shape: a never-received winner descendant).
+    let db = InMemoryChainDb::new();
+    db.put_block(&stored(z_slot.saturating_sub(1), 0xEE)).unwrap();
+    let dt = db.tip().unwrap().unwrap();
+    let adopted_tip = Point { slot: dt.slot, hash: dt.hash.clone() };
+    let psf = PostSwitchFollow {
+        winning_peer: "peer-1".to_string(),
+        adopted_tip: adopted_tip.clone(),
+        fork_switch_id: "fs1".to_string(),
+    };
+
+    // (positive) winning peer + descendant ahead of the tip + un-bridgeable parent ->
+    // an ELIGIBLE range re-fetch (durable_tip+1 .. Z) is set ALONGSIDE the floor hold.
+    let mut fwd = fwd_at(decoded.header_input.block_no.0.saturating_sub(1));
+    let mut wal = VecWal::default();
+    let mut pending = false;
+    let mut pmb: Option<MissingBridgeReason> = None;
+    let mut prr: Option<RangeRefetch> = None;
+    let mut src = NodeBlockSource::in_memory_items(vec![NodeSyncItem::Block {
+        peer: "peer-1".to_string(),
+        bytes: block.clone(),
+    }]);
+    run_participant_sync(
+        &mut src,
+        &mut fwd,
+        &db,
+        &mut wal,
+        &corpus_schedule(),
+        &view,
+        &mut pending,
+        SecurityParam(2160),
+        &mut None,
+        &mut pmb,
+        &BTreeMap::new(),
+        Some(&psf),
+        &mut prr,
+        None,
+    )
+    .await
+    .expect("missing bridge is a structured hold, not a halt");
+    // The DC-NODE-39 floor hold is STILL set (S14 layers on it, never replaces it).
+    assert_eq!(pmb, Some(MissingBridgeReason::BranchGap), "the floor hold remains set");
+    // AND an eligible range re-fetch was set for the winning peer.
+    let req = prr.expect("a winning-peer descendant gap sets an eligible range re-fetch");
+    assert_eq!(req.peer, "peer-1", "the re-fetch targets the winning peer");
+    assert_eq!(req.from_tip, adopted_tip, "the re-fetch starts from the durable tip");
+    assert_eq!(req.to_descendant.slot.0, z_slot, "the re-fetch targets the descendant Z");
+    assert_eq!(req.to_descendant.hash, decoded.block_hash, "Z bound by its own block hash");
+    assert_eq!(req.fork_switch_id, "fs1", "correlated to the adoption's fork_switch_id");
+    assert_eq!(req.reason, MissingBridgeReason::BranchGap, "carries the closed trigger reason");
+    // The trigger is NOT an admit / mutation: durable tip unchanged.
+    assert_eq!(db.tip().unwrap().unwrap().slot.0, z_slot.saturating_sub(1), "durable tip unchanged");
+
+    // (negative) the SAME competing block, but the recorded WINNING peer is a DIFFERENT
+    // peer -> NOT eligible (winning-peer-only: no loser / unknown-peer fetch spam). The
+    // floor still holds; NO range re-fetch is set.
+    let psf_other = PostSwitchFollow {
+        winning_peer: "peer-2".to_string(),
+        adopted_tip,
+        fork_switch_id: "fs1".to_string(),
+    };
+    let mut fwd2 = fwd_at(decoded.header_input.block_no.0.saturating_sub(1));
+    let mut wal2 = VecWal::default();
+    let mut pending2 = false;
+    let mut pmb2: Option<MissingBridgeReason> = None;
+    let mut prr2: Option<RangeRefetch> = None;
+    let mut src2 = NodeBlockSource::in_memory_items(vec![NodeSyncItem::Block {
+        peer: "peer-1".to_string(),
+        bytes: block,
+    }]);
+    run_participant_sync(
+        &mut src2,
+        &mut fwd2,
+        &db,
+        &mut wal2,
+        &corpus_schedule(),
+        &view,
+        &mut pending2,
+        SecurityParam(2160),
+        &mut None,
+        &mut pmb2,
+        &BTreeMap::new(),
+        Some(&psf_other),
+        &mut prr2,
+        None,
+    )
+    .await
+    .expect("non-winning-peer gap is still a structured hold");
+    assert_eq!(pmb2, Some(MissingBridgeReason::BranchGap), "the floor still holds for a non-winning-peer gap");
+    assert!(
+        prr2.is_none(),
+        "winning-peer-only: a non-winning-peer gap sets NO range re-fetch (no fetch spam)"
+    );
+}
+
+#[test]
+fn bounded_retry() {
+    // The range re-fetch retry budget is BOUNDED (a RED policy) -- the relay-loop drive
+    // loops on range_refetch_should_retry, so a peer that cannot serve a range can never
+    // spin it forever. PURE + deterministic.
+    assert!(range_refetch_should_retry(0), "the first attempt may run");
+    assert!(MAX_RANGE_REFETCH_ATTEMPTS >= 1, "at least one attempt is allowed");
+    assert!(
+        range_refetch_should_retry(MAX_RANGE_REFETCH_ATTEMPTS - 1),
+        "retries are allowed up to the cap"
+    );
+    assert!(
+        !range_refetch_should_retry(MAX_RANGE_REFETCH_ATTEMPTS),
+        "STOPS at the cap (no spin)"
+    );
+    assert!(
+        !range_refetch_should_retry(MAX_RANGE_REFETCH_ATTEMPTS + 1),
+        "stays stopped past the cap"
+    );
+    // The bound makes the relay-loop while-loop terminate after EXACTLY the cap.
+    let mut attempts = 0u32;
+    while range_refetch_should_retry(attempts) {
+        attempts += 1;
+        assert!(attempts <= MAX_RANGE_REFETCH_ATTEMPTS, "the drive loop never exceeds the bound");
+    }
+    assert_eq!(attempts, MAX_RANGE_REFETCH_ATTEMPTS, "the drive loop runs the bounded count then halts");
 }
 
 #[tokio::test]
@@ -2429,6 +2613,8 @@ async fn bridge_gap_injection_emits_missing_bridge() {
         &mut pending_switch,
         &mut pending_missing_bridge,
         &BTreeMap::new(),
+        None,
+        &mut None,
         Some(&mut ev),
     )
     .await;
@@ -2512,6 +2698,8 @@ async fn late_bridge_recovers_on_progress() {
         &mut pending_missing_bridge,
         &BTreeMap::new(),
         None,
+        &mut None,
+        None,
     )
     .await
     .expect("drain 1 holds");
@@ -2543,6 +2731,8 @@ async fn late_bridge_recovers_on_progress() {
         &mut pending_switch,
         &mut pending_missing_bridge,
         &BTreeMap::new(),
+        None,
+        &mut None,
         None,
     )
     .await

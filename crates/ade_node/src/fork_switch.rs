@@ -366,6 +366,22 @@ impl RangeRefetchOutcome {
     }
 }
 
+/// PHASE4-N-AO S14 (DC-NODE-41): the bounded retry budget for an active range
+/// re-fetch (RED policy). A failed fetch attempt (transient dial / timeout / a
+/// peer that has not yet served the range) may retry, but only up to this many
+/// attempts -- beyond that the request is abandoned and the DC-NODE-39 floor hold
+/// remains the fail-closed fallback. Bounds the relay-loop drive so a peer that
+/// cannot serve a range can never spin it forever.
+pub const MAX_RANGE_REFETCH_ATTEMPTS: u32 = 3;
+
+/// PHASE4-N-AO S14 (DC-NODE-41): may a range re-fetch retry after `attempts_made`
+/// failed attempts? PURE + deterministic -- the relay-loop drive loops on this so
+/// the retry is BOUNDED (never a spin loop). `false` at the cap leaves the floor
+/// hold (the structured MissingBridge), never a silent stall.
+pub fn range_refetch_should_retry(attempts_made: u32) -> bool {
+    attempts_made < MAX_RANGE_REFETCH_ATTEMPTS
+}
+
 /// PHASE4-N-AO S5 (DC-NODE-28 resolution) + S11 (DC-NODE-39): the forge fence
 /// (`pending_reselection`) clears ONLY on a RESOLVED state -- no pending fork-switch
 /// decision, no unresolved missing bridge, AND the node is caught up to the followed

@@ -104,9 +104,10 @@ use crate::candidate_aggregator::{assemble_candidate_set, build_candidate_fragme
 use crate::fair_merge::{fair_merge, PER_PEER_LANE_CAP};
 use crate::lca_walk::{walk_to_durable_lca, CachedHeader};
 use crate::fork_switch::{
-    fork_switch_fence_resolved, map_lca_error, prevalidate_branch, BranchBodySource,
-    BranchProofError, ForkSwitchOutcome, MissingBridgeReason, NullBranchBodySource,
-    PrefetchedBranchBodies, ProvenBranch, RangeRefetch, RangeRefetchOutcome,
+    fork_switch_fence_resolved, map_lca_error, prevalidate_branch, range_refetch_should_retry,
+    BranchBodySource, BranchProofError, ForkSwitchOutcome, MissingBridgeReason,
+    NullBranchBodySource, PostSwitchFollow, PrefetchedBranchBodies, ProvenBranch, RangeRefetch,
+    RangeRefetchOutcome,
 };
 use crate::selector_state::{project_tiebreaker, ForkAnchor, PendingForkSwitch};
 
@@ -1155,6 +1156,21 @@ pub struct ForgeActivation<'a> {
     /// `NullBranchBodySource` (the fence stays set). The fetch is byte-only; S4
     /// prevalidates regardless.
     pub network_magic: Option<u32>,
+    /// PHASE4-N-AO S14 (DC-NODE-41): the post-`ForkChoiceWin` follow target -- the
+    /// winning peer + adopted tip + fork_switch_id, recorded on a proven adoption.
+    /// CONSULTED (read-only) by the dispatch to decide whether a `MissingBridge` for
+    /// a winning-peer descendant is ELIGIBLE for active range re-fetch. RECOVERY
+    /// state, NEVER selection authority (S3 already decided the winner). In-memory,
+    /// not persisted, not replay-visible.
+    pub post_switch_follow: Option<PostSwitchFollow>,
+    /// PHASE4-N-AO S14 (DC-NODE-41): a pending active range re-fetch the dispatch set
+    /// on an ELIGIBLE winning-peer descendant `MissingBridge` (the DC-NODE-39 floor
+    /// hold remains set ALONGSIDE it). Consumed by the relay loop: bounded-retry
+    /// `prefetch_branch_bodies` -> `recover_missing_range` (byte-only fetch, BLUE
+    /// `pump_block` is the sole admit), clearing the missing-bridge hold ONLY on real
+    /// admitted progress. A short / lying / unservable range leaves the floor hold.
+    /// In-memory, not persisted, not replay-visible.
+    pub pending_range_refetch: Option<RangeRefetch>,
 }
 
 impl<'a> ForgeActivation<'a> {
@@ -1198,6 +1214,8 @@ impl<'a> ForgeActivation<'a> {
             rollback_retention: BTreeMap::new(),
             last_fork_switch_failure: None,
             network_magic: None,
+            post_switch_follow: None,
+            pending_range_refetch: None,
         }
     }
 
@@ -1415,6 +1433,8 @@ pub async fn run_relay_loop_with_sched(
                         &mut act.pending_fork_switch,
                         &mut act.pending_missing_bridge,
                         &act.rollback_retention,
+                        act.post_switch_follow.as_ref(),
+                        &mut act.pending_range_refetch,
                         convergence.as_deref_mut(),
                     )
                     .await
@@ -1495,6 +1515,18 @@ pub async fn run_relay_loop_with_sched(
                                 // missing-bridge hold (the winning branch was durably
                                 // adopted, so the prior stranded tip is superseded).
                                 act.pending_missing_bridge = None;
+                                // PHASE4-N-AO S14 (DC-NODE-41): record the post-switch
+                                // follow target so a later MissingBridge for THIS
+                                // winning peer's descendant is eligible for active range
+                                // re-fetch (winning-peer-only). RECOVERY state, NEVER
+                                // selection authority -- a re-fetched body is still
+                                // proven by pump_block before any tip advance. A new
+                                // adoption overwrites it (self-correcting).
+                                act.post_switch_follow = Some(PostSwitchFollow {
+                                    winning_peer: switch.winning_peer.clone(),
+                                    adopted_tip: new_tip.clone(),
+                                    fork_switch_id: fsid.clone(),
+                                });
                                 if let Some(ev) = convergence.as_deref_mut() {
                                     ev.emit_branch_prevalidated(
                                         &fsid,
@@ -1526,6 +1558,94 @@ pub async fn run_relay_loop_with_sched(
                                         map_branch_proof_failure(error),
                                     );
                                 }
+                            }
+                        }
+                    }
+                    // PHASE4-N-AO S14 (DC-NODE-41): consume an eligible range re-fetch
+                    // the dispatch set for a post-ForkChoiceWin winning-peer descendant
+                    // whose bridge ChainSync streamed past (Fault 2 -- ChainSync sends
+                    // each block once, so the passive DC-NODE-39 floor cannot recover
+                    // it). ACTIVE recovery layered ON the floor: byte-only BlockFetch of
+                    // durable_tip+1..descendant from the winning peer, admitted in
+                    // parent-link order via pump_block (the SOLE admit), clearing the
+                    // missing-bridge hold ONLY on real admitted progress. A short /
+                    // lying / unservable range leaves the structured hold (the floor
+                    // fallback). Bounded retry; winning-peer-only.
+                    if let Some(req) = act.pending_range_refetch.take() {
+                        // Staleness guard: drive ONLY for the CURRENT post-switch follow
+                        // context (a newer adoption supersedes a stale request) and only
+                        // with a magic configured for the live fetch. Otherwise drop it
+                        // -- the floor hold (if still set) keeps the fence held; never a
+                        // silent stall, never a spin (take() already consumed it).
+                        let current = act
+                            .post_switch_follow
+                            .as_ref()
+                            .map(|p| {
+                                p.fork_switch_id == req.fork_switch_id && p.winning_peer == req.peer
+                            })
+                            .unwrap_or(false);
+                        if let (true, Some(m)) = (current, magic) {
+                            // The fetch start point -- `prefetch_branch_bodies` uses
+                            // only (slot, hash) for the wire FindIntersect; block_no is
+                            // not a fetch input (the served bytes are proven by
+                            // pump_block regardless).
+                            let from_anchor = ForkAnchor {
+                                slot: req.from_tip.slot,
+                                hash: req.from_tip.hash.clone(),
+                                block_no: BlockNo(0),
+                            };
+                            if let Some(ev) = convergence.as_deref_mut() {
+                                ev.emit_range_refetch_started(
+                                    &req.fork_switch_id,
+                                    &req.peer,
+                                    req.from_tip.slot.0,
+                                    req.to_descendant.slot.0,
+                                    req.reason.as_str(),
+                                );
+                            }
+                            // Bounded retry (RED policy): re-attempt the byte-only fetch
+                            // up to MAX_RANGE_REFETCH_ATTEMPTS; only Admitted is forward
+                            // progress. Each attempt re-proves via pump_block -- the
+                            // fetched bytes are never authority.
+                            let mut attempts = 0u32;
+                            let mut outcome = RangeRefetchOutcome::Unavailable;
+                            while range_refetch_should_retry(attempts) {
+                                attempts += 1;
+                                let prefetched = prefetch_branch_bodies(
+                                    &req.peer,
+                                    &from_anchor,
+                                    &req.to_descendant,
+                                    m,
+                                )
+                                .await;
+                                outcome = recover_missing_range(
+                                    state,
+                                    chaindb,
+                                    wal,
+                                    &prefetched,
+                                    &req,
+                                    era_schedule,
+                                    ledger_view,
+                                    source,
+                                    convergence.as_deref_mut(),
+                                );
+                                if outcome.is_admitted() {
+                                    break;
+                                }
+                            }
+                            if let Some(ev) = convergence.as_deref_mut() {
+                                ev.emit_range_refetch_completed(
+                                    &req.fork_switch_id,
+                                    &req.peer,
+                                    outcome.as_str(),
+                                );
+                            }
+                            // Clear the missing-bridge hold ONLY on real admitted
+                            // progress (the same DC-NODE-39 clear rule). A non-admitted
+                            // outcome LEAVES the floor hold -> the fence stays held
+                            // (fail-closed); the request is consumed (no spin).
+                            if outcome.is_admitted() {
+                                act.pending_missing_bridge = None;
                             }
                         }
                     }
@@ -2807,6 +2927,14 @@ fn dispatch_competing_fork_choice<D>(
     // blocks, consulted by `walk_to_durable_lca` on a per-peer-cache miss. Read-only
     // here; populated by `apply_fork_switch`. The LCA anchor stays ChainDb-durable only.
     rollback_retention: &BTreeMap<Hash32, CachedHeader>,
+    // PHASE4-N-AO S14 (DC-NODE-41): the post-`ForkChoiceWin` follow target (read-only)
+    // -- consulted to decide whether a `MissingBridge` for THIS winning peer's
+    // descendant is ELIGIBLE for active range re-fetch. Never selection authority.
+    post_switch_follow: Option<&PostSwitchFollow>,
+    // PHASE4-N-AO S14 (DC-NODE-41): the active range re-fetch sink. SET (alongside the
+    // DC-NODE-39 floor hold) when an un-bridgeable competing block is a winning-peer
+    // descendant ahead of the durable tip; the relay loop consumes + drives it.
+    pending_range_refetch: &mut Option<RangeRefetch>,
     mut evidence: Option<&mut ConvergenceEvidence>,
 ) -> Result<(), NodeSyncError>
 where
@@ -2861,6 +2989,33 @@ where
             let reason = map_lca_error(&e);
             if let Some(ev) = evidence.as_deref_mut() {
                 ev.emit_missing_bridge(peer, &decoded.block_hash, reason.as_str());
+            }
+            // PHASE4-N-AO S14 (DC-NODE-41): if this un-bridgeable competing block is a
+            // post-`ForkChoiceWin` WINNING-PEER descendant AHEAD of our durable tip,
+            // set an ELIGIBLE active range re-fetch (durable_tip+1 .. Z) -- the floor
+            // HOLD set below remains the fail-closed fallback. WINNING-PEER-ONLY: a
+            // loser / unknown-peer / pre-switch gap (no matching post_switch_follow, or
+            // not ahead of the tip) takes the unchanged passive floor (no fetch spam).
+            // This is a fetch TRIGGER, never selection: the recovered bytes are still
+            // proven by `pump_block` (the sole admit) before any tip advance.
+            if let Some(psf) = post_switch_follow {
+                if psf.winning_peer == peer
+                    && decoded.header_input.slot.0 > durable_tip.slot.0
+                {
+                    *pending_range_refetch = Some(RangeRefetch {
+                        peer: peer.to_string(),
+                        from_tip: Point {
+                            slot: durable_tip.slot,
+                            hash: durable_tip.hash.clone(),
+                        },
+                        to_descendant: Point {
+                            slot: decoded.header_input.slot,
+                            hash: decoded.block_hash.clone(),
+                        },
+                        fork_switch_id: psf.fork_switch_id.clone(),
+                        reason: reason.clone(),
+                    });
+                }
             }
             *pending_missing_bridge = Some(reason);
             return Ok(());
@@ -3087,6 +3242,12 @@ pub async fn run_participant_sync<D>(
     // LCA walk can bridge a competing branch that descends through Ade's rolled-back
     // chain. Owned cross-iteration in `ForgeActivation`; populated by `apply_fork_switch`.
     rollback_retention: &BTreeMap<Hash32, CachedHeader>,
+    // PHASE4-N-AO S14 (DC-NODE-41): the post-`ForkChoiceWin` follow target (read-only)
+    // + the active range re-fetch sink. On a winning-peer descendant `MissingBridge`,
+    // the dispatch sets `pending_range_refetch` (alongside the floor hold); the relay
+    // loop drives it. Threaded from `ForgeActivation`.
+    post_switch_follow: Option<&PostSwitchFollow>,
+    pending_range_refetch: &mut Option<RangeRefetch>,
     // PHASE4-N-AJ AJ-S2 (DC-NODE-30): emit-only convergence evidence. `None` =>
     // no emission. Evidence observes authority; it never becomes authority.
     mut evidence: Option<&mut ConvergenceEvidence>,
@@ -3190,6 +3351,8 @@ where
                             pending_reselection,
                             pending_missing_bridge,
                             rollback_retention,
+                            post_switch_follow,
+                            pending_range_refetch,
                             evidence.as_deref_mut(),
                         )?;
                     }
@@ -3533,8 +3696,11 @@ where
 /// forward progress that clears the missing-bridge hold. Pumps the bodies the winning
 /// peer served (ascending slot order); each must linear-extend the prior admitted tip.
 ///
-/// LATENT until the S14 dispatch trigger + async drive wire it (this commit ships the
-/// validated recovery unit; the live wiring is the follow-on).
+/// `source` + `evidence` carry the per-admitted-block convergence evidence: each
+/// recovered descendant emits `block_admitted` + `agreement_verdict` IDENTICALLY to
+/// a normal `LinearExtend` admit (so the post-switch branch-continuity gate, S10
+/// DC-EVIDENCE-05, sees the recovered descendants as followed blocks). `evidence` =
+/// `None` (the part-1 hermetic tests) emits nothing.
 pub fn recover_missing_range<D>(
     state: &mut ForwardSyncState,
     chaindb: &D,
@@ -3543,6 +3709,8 @@ pub fn recover_missing_range<D>(
     req: &RangeRefetch,
     era_schedule: &EraSchedule,
     ledger_view: &dyn LedgerView,
+    source: &NodeBlockSource,
+    mut evidence: Option<&mut ConvergenceEvidence>,
 ) -> RangeRefetchOutcome
 where
     D: ChainDb + SnapshotStore,
@@ -3564,11 +3732,14 @@ where
             ledger_view,
         ) {
             // Admitted as a LinearExtend of the prior tip. If it is the target
-            // descendant, the range is fully recovered.
+            // descendant, the range is fully recovered. Emit block_admitted +
+            // agreement_verdict for the recovered descendant (same as a normal
+            // LinearExtend admit -- S10 continuity counts it as a followed block).
             Ok(Some(tip)) => {
                 if tip.hash == req.to_descendant.hash {
                     reached = true;
                 }
+                emit_participant_admit(evidence.as_deref_mut(), state, source, Some(tip));
             }
             // Idempotent no-op (already durable): if the descendant is already in the
             // store, the range is satisfied; otherwise keep walking the served range.

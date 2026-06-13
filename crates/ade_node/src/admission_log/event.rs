@@ -201,6 +201,31 @@ pub enum AdmissionLogEvent {
         block_hash_hex: String,
         reason: &'static str,
     },
+
+    // PHASE4-N-AO S14 (DC-NODE-41): closed missing-bridge range re-fetch evidence --
+    // the DC-NODE-39 floor turned into ACTIVE, validated catch-up for a winning-peer
+    // descendant whose bridge ChainSync streamed past. Observe-only: the recovery is
+    // driven by the RangeRefetchOutcome (the BLUE pump_block admit), never by these
+    // events; no authority path reads them back.
+    /// An active range re-fetch began (`RequestRange(from_slot+1 .. to_slot)` to the
+    /// winning peer) for a post-ForkChoiceWin descendant whose parent chain was
+    /// missing. `reason` is the closed `MissingBridgeReason` that triggered it.
+    RangeRefetchStarted {
+        fork_switch_id: String,
+        peer: String,
+        from_slot: u64,
+        to_slot: u64,
+        reason: &'static str,
+    },
+    /// An active range re-fetch completed with a CLOSED outcome. Only `admitted`
+    /// cleared the missing-bridge hold; every other outcome LEFT the DC-NODE-39 floor
+    /// hold (the fail-closed fallback). `outcome` is the closed `RangeRefetchOutcome`
+    /// discriminator (no free-form string).
+    RangeRefetchCompleted {
+        fork_switch_id: String,
+        peer: String,
+        outcome: &'static str,
+    },
 }
 
 /// Closed result of `select_best_chain` for a competing candidate (S9 evidence).
@@ -310,6 +335,9 @@ impl AdmissionLogEvent {
             Self::ForkSwitchSuperseded { .. } => "fork_switch_superseded",
             // PHASE4-N-AO S11 (DC-NODE-39) closed missing-bridge fail-closed event.
             Self::MissingBridge { .. } => "missing_bridge",
+            // PHASE4-N-AO S14 (DC-NODE-41) closed range re-fetch recovery events.
+            Self::RangeRefetchStarted { .. } => "range_refetch_started",
+            Self::RangeRefetchCompleted { .. } => "range_refetch_completed",
         }
     }
 }
@@ -445,6 +473,8 @@ mod tests {
             AdmissionLogEvent::ForkSwitchFailed { .. } => "fork_switch_failed",
             AdmissionLogEvent::ForkSwitchSuperseded { .. } => "fork_switch_superseded",
             AdmissionLogEvent::MissingBridge { .. } => "missing_bridge",
+            AdmissionLogEvent::RangeRefetchStarted { .. } => "range_refetch_started",
+            AdmissionLogEvent::RangeRefetchCompleted { .. } => "range_refetch_completed",
         };
     }
 
