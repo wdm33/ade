@@ -446,6 +446,38 @@ fn adversarial_state_dependent_unaccountable_rejects() {
 }
 
 // -------------------------------------------------------------------------
+// Family 7 — double-spend: a consumed input cannot be spent again (CN-LEDGER-08).
+// -------------------------------------------------------------------------
+
+#[test]
+fn adversarial_double_spend_consumed_input_rejects_bad_inputs() {
+    // CN-LEDGER-08 -- no input may be consumed more than once in an accepted chain. Once an
+    // input is consumed it leaves the UTxO, so a SECOND spend of the same input finds it
+    // absent and `check_inputs_present` rejects BadInputs (ahead of the value rule). Proven
+    // as a contrast: the legitimate FIRST spend (input present, value balanced) is accepted;
+    // the SAME spend against the post-consumption UTxO (input absent) rejects BadInputs --
+    // never a re-spend, never a false-accept.
+    let state = CertState::new();
+    let body = base_body(900_000, 100_000); // spends the_input(); balanced vs a 1_000_000 input
+
+    // FIRST spend: the_input() present (1_000_000) -> accepted.
+    let present = utxo_with(&[(the_input(), 1_000_000)]);
+    assert!(
+        run(&body, &present, &state).is_ok(),
+        "the legitimate first spend (input present, balanced) must be accepted, got {:?}",
+        run(&body, &present, &state)
+    );
+
+    // SECOND spend (double-spend): the_input() consumed by the first spend -> absent.
+    let consumed: BTreeMap<TxIn, TxOut> = BTreeMap::new();
+    assert!(
+        matches!(run(&body, &consumed, &state), Err(LedgerError::BadInputs(_))),
+        "re-spend of an already-consumed (absent) input must reject BadInputs, got {:?}",
+        run(&body, &consumed, &state)
+    );
+}
+
+// -------------------------------------------------------------------------
 // No-false-accept: across the WHOLE adversarial set, no mutation is Valid.
 // -------------------------------------------------------------------------
 
@@ -490,6 +522,11 @@ fn adversarial_corpus() -> Vec<(ConwayTxBody, BTreeMap<TxIn, TxOut>, CertState)>
     let mut f6 = base_body(1_000_000, 200_000);
     f6.certs = Some(encode_certs(&[cert_legacy_unregistration(0x44)]));
     corpus.push((f6, utxo12, empty));
+
+    // F7: double-spend -- the_input() already consumed, so absent from the UTxO; a re-spend
+    // must reject (check_inputs_present -> BadInputs), never re-consume an input (CN-LEDGER-08).
+    let f7 = base_body(900_000, 100_000);
+    corpus.push((f7, BTreeMap::new(), CertState::new()));
 
     corpus
 }
