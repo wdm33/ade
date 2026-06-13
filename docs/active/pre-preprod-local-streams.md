@@ -47,6 +47,41 @@ reality (no tested-but-declared rules left without an explicit "real gap" reason
 **Step 1 (this stream's first deliverable):** the enforcement classification of all 132 open
 rules — `{flip-now, needs-gate-then-flip, real-gap, constitutional-flip, preprod/external}`.
 
+### Step-1 classification + conservative routing (2026-06-13)
+
+Bar (user-confirmed): **flip a rule ONLY when a gate (or gate+tests) COMPLETELY +
+mechanically enforces its statement; never flip an umbrella to look greener.** Finding:
+even the well-tested rules mostly need a *structural* gate written first (behavioral test
+suites alone don't structurally prevent a future open decoder / non-deterministic transition).
+
+- **FLIP-NOW (10)** — gate+tests, declared. On inspection only **DC-CORE-01** had a complete,
+  self-testing gate → **FLIPPED (`c27ee281`)** (`ci_check_no_async_in_blue.sh` scans every BLUE
+  core_path + self-tests its detection). The rest are NOT clean: `CN-CONS-02/05` are
+  constitutional restatements (gates touch, not full-coverage); `DC-LEDGER-02/03` → Stream 1;
+  `DC-EPOCH-01` → Stream 2; `RO-LIVE-02` operator-blocked; `DC-REF-01`/`T-ENC-01` genuinely partial.
+- **NEEDS-GATE (18)** — behaviorally well-tested, **no structural gate**. Realistic work = WRITE
+  the missing structural gate per rule, then flip. Candidates (declared, rich tests):
+  `CN-WIRE-07` (45 — needs a closed-codec-decoder gate over ade_network::codec, mirroring
+  `consensus_closed_enums`), `DC-PROTO-01/06` (90/90 — transition determinism/purity gate),
+  `DC-PROTO-02` (45 — partly differential "with Haskell"; likely partial), `DC-PROTO-03/04`
+  (6/42 — "FULL surface": must verify EVERY listed mini-protocol is implemented+tested before
+  flipping), `CN-CONS-04` (13 — header↔body binding gate), `CN-SNAPSHOT-01` (3). Partials routed:
+  `CN-LEDGER-09`/`DC-LEDGER-05` → Stream 1 (witness binding); `CN-EPOCH-01`/`DC-LEDGER-04` →
+  Stream 2; `DC-DIFF-01` → Stream 1; `DC-CONSENSUS-02`,`CN-CRYPTO-02`,`CN-STORE-02`,`T-ERR-01`,
+  `CN-LEDGER-07`(1 test, no locus) stay partial/declared.
+- **GAP-or-CONSTITUTIONAL (99)** — conservative: **do NOT flip umbrellas.** Route real behavioral
+  gaps to their stream (`DC-NODE-19` → Stream 2; the `CN-PLUTUS-*`/`CN-LEDGER-*` validation rules →
+  Stream 1); leave constitutional umbrellas (`CN-LEDGER-03` "matches reference", `CN-REL-*`,
+  `T-*` core, `OP-*`, …) `declared` until their sub-work lands. Expected net flips from Stream 3:
+  ~10-15, not ~100.
+- **PREPROD/EXTERNAL (5)** — defer (`RO-LIVE-01`, `CN-EPOCH-03`, `RO-MITHRIL-IMPORT-01`,
+  `RO-SYNC-EVIDENCE-01`, `RO-LIVE-03`).
+
+**Remaining Stream-3 work:** write the missing *structural* gates for the behaviorally-complete
+NEEDS-GATE rules (CN-WIRE-07 closed-codec; DC-PROTO determinism/purity/surface; CN-CONS-04
+header-binding), verifying each gate self-tests + completely enforces the statement, then flip —
+one well-scoped gate at a time. Umbrellas/gaps stay documented + routed, not flipped.
+
 ---
 
 ## Stream 1 — Differential validation agreement + false-accept hunt  *(SECOND; bounty #1, local)*
