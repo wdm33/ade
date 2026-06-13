@@ -249,6 +249,18 @@ impl ConvergenceEvidenceSink {
         })
     }
 
+    /// PHASE4-N-AO S11 (DC-NODE-39): a post-switch competing descendant could not be
+    /// bridged to the durable adopted tip / a durable stored ancestor within k --
+    /// structured fail-closed evidence. `reason` is the closed `MissingBridgeReason`
+    /// discriminator (no free-form strings). Observe-only.
+    pub fn emit_missing_bridge(&mut self, peer: &str, block_hash_hex: &str, reason: &'static str) -> EvidenceEmitResult {
+        self.emit(AdmissionLogEvent::MissingBridge {
+            peer: peer.to_string(),
+            block_hash_hex: block_hash_hex.to_string(),
+            reason,
+        })
+    }
+
     /// PRIVATE single funnel — the `emit_*` methods are its only callers,
     /// so no caller outside this module can construct a non-subset variant.
     /// Deliberately NOT `pub`, and there is NO accessor returning the inner
@@ -487,6 +499,16 @@ impl ConvergenceEvidence {
     }
     pub fn emit_fork_switch_superseded(&mut self, fork_switch_id: &str, peer: &str) {
         let r = self.sink.emit_fork_switch_superseded(fork_switch_id, peer);
+        self.note(r);
+    }
+
+    /// PHASE4-N-AO S11 (DC-NODE-39): observe-only missing-bridge tap. The per-block
+    /// source `peer` (DC-NODE-34) + the un-bridgeable competing block's hash + the
+    /// closed `reason`. A write failure flips `incomplete`; never alters authority.
+    pub fn emit_missing_bridge(&mut self, peer: &str, block_hash: &Hash32, reason: &'static str) {
+        let r = self
+            .sink
+            .emit_missing_bridge(peer, &hex_lowercase(&block_hash.0), reason);
         self.note(r);
     }
 }

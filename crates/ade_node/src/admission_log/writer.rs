@@ -322,6 +322,19 @@ fn encode_event(event: &AdmissionLogEvent, out: &mut String) {
             out.push(',');
             push_key_str(out, "peer", peer);
         }
+        // PHASE4-N-AO S11 (DC-NODE-39) closed missing-bridge fail-closed event.
+        AdmissionLogEvent::MissingBridge {
+            peer,
+            block_hash_hex,
+            reason,
+        } => {
+            out.push(',');
+            push_key_str(out, "peer", peer);
+            out.push(',');
+            push_key_str(out, "block_hash_hex", block_hash_hex);
+            out.push(',');
+            push_key_str(out, "reason", reason);
+        }
     }
     out.push('}');
 }
@@ -380,6 +393,8 @@ const DISCRIMINATORS: &[&str] = &[
     "fork_switch_applied",
     "fork_switch_failed",
     "fork_switch_superseded",
+    // PHASE4-N-AO S11 (DC-NODE-39) closed missing-bridge fail-closed event.
+    "missing_bridge",
 ];
 
 #[cfg(test)]

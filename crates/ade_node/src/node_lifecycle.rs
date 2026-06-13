@@ -104,8 +104,9 @@ use crate::candidate_aggregator::{assemble_candidate_set, build_candidate_fragme
 use crate::fair_merge::{fair_merge, PER_PEER_LANE_CAP};
 use crate::lca_walk::{walk_to_durable_lca, CachedHeader};
 use crate::fork_switch::{
-    fork_switch_fence_resolved, prevalidate_branch, BranchBodySource, BranchProofError,
-    ForkSwitchOutcome, NullBranchBodySource, PrefetchedBranchBodies, ProvenBranch,
+    fork_switch_fence_resolved, map_lca_error, prevalidate_branch, BranchBodySource,
+    BranchProofError, ForkSwitchOutcome, MissingBridgeReason, NullBranchBodySource,
+    PrefetchedBranchBodies, ProvenBranch,
 };
 use crate::selector_state::{project_tiebreaker, ForkAnchor, PendingForkSwitch};
 
@@ -1122,6 +1123,16 @@ pub struct ForgeActivation<'a> {
     /// (latent until then). S3 sets this + `pending_reselection` but applies
     /// nothing (no rollback-commit, no body-fetch). `None` => no pending switch.
     pub pending_fork_switch: Option<PendingForkSwitch>,
+    /// PHASE4-N-AO S11 (DC-NODE-39): a post-`ForkChoiceWin` competing descendant
+    /// could not be bridged to the durable adopted tip / a durable stored ancestor
+    /// within k. Set (with the closed reason) by the dispatch on the walk-fail /
+    /// materialize-fail paths that pre-S11 SILENTLY no-op'd; HOLDS the forge fence
+    /// (`fork_switch_fence_resolved` refuses while it is `Some`); cleared on forward
+    /// progress (a successful `LinearExtend` admit or a proven fork-switch adoption)
+    /// so it is a HOLD-until-progress, not a permanent halt. NEVER an adoption path,
+    /// a rollback target, or a reason to admit the un-bridgeable block. In-memory,
+    /// not persisted, not replay-visible.
+    pub pending_missing_bridge: Option<MissingBridgeReason>,
     /// PHASE4-N-AO S4 (DC-NODE-37): the last fork-switch proof failure (a structured
     /// LOCAL observation surface — in-memory, not persisted, not evidence — so a
     /// failed/lying/incomplete replacement branch is never a silent drop). Set when
@@ -1172,6 +1183,7 @@ impl<'a> ForgeActivation<'a> {
             // this post-construction; never peer-supplied (DC-NODE-36).
             security_param: SecurityParam(2160),
             pending_fork_switch: None,
+            pending_missing_bridge: None,
             last_fork_switch_failure: None,
             network_magic: None,
         }
@@ -1389,6 +1401,7 @@ pub async fn run_relay_loop_with_sched(
                         &mut act.pending_reselection,
                         act.security_param,
                         &mut act.pending_fork_switch,
+                        &mut act.pending_missing_bridge,
                         convergence.as_deref_mut(),
                     )
                     .await
@@ -1462,6 +1475,11 @@ pub async fn run_relay_loop_with_sched(
                                 new_tip,
                                 new_tip_prev,
                             } => {
+                                // PHASE4-N-AO S11 (DC-NODE-39): a proven fork-switch
+                                // adoption is forward progress -- clear any
+                                // missing-bridge hold (the winning branch was durably
+                                // adopted, so the prior stranded tip is superseded).
+                                act.pending_missing_bridge = None;
                                 if let Some(ev) = convergence.as_deref_mut() {
                                     ev.emit_branch_prevalidated(
                                         &fsid,
@@ -1516,7 +1534,11 @@ pub async fn run_relay_loop_with_sched(
                         ),
                         ForgeFollowedTipAdmission::CaughtUp
                     );
-                    if fork_switch_fence_resolved(&act.pending_fork_switch, caught_up) {
+                    if fork_switch_fence_resolved(
+                        &act.pending_fork_switch,
+                        &act.pending_missing_bridge,
+                        caught_up,
+                    ) {
                         act.pending_reselection = false;
                     }
                 } else {
@@ -2761,6 +2783,11 @@ fn dispatch_competing_fork_choice<D>(
     branch_caches: &mut BTreeMap<String, BTreeMap<Hash32, CachedHeader>>,
     pending_fork_switch: &mut Option<PendingForkSwitch>,
     pending_reselection: &mut bool,
+    // PHASE4-N-AO S11 (DC-NODE-39): the missing-bridge hold. Set (with the closed
+    // reason) on the walk-fail / materialize-fail paths -- a STRUCTURED fail-closed
+    // outcome that holds the forge fence, NEVER a silent no-op and NEVER an admit of
+    // the un-bridgeable block.
+    pending_missing_bridge: &mut Option<MissingBridgeReason>,
     mut evidence: Option<&mut ConvergenceEvidence>,
 ) -> Result<(), NodeSyncError>
 where
@@ -2792,9 +2819,10 @@ where
     // The walk is k-bounded by BLOCK DEPTH (security_param.0; never slot distance).
     // Any LcaError -- no durable LCA within k, a branch gap, over-k, a cache
     // self-binding violation, a lying parent link -- keeps the current validated
-    // chain: a selector fail-closed, no durable mutation, fence untouched. The
-    // cache is evidence; the durable LCA (slot+hash, DC-NODE-29) + S2 validation +
-    // S4 body proof are authority.
+    // chain (a selector fail-closed, no durable mutation) but, per S11 (DC-NODE-39),
+    // is a STRUCTURED MissingBridge that HOLDS the forge fence (no longer the pre-S11
+    // silent fence-untouched no-op). The cache is evidence; the durable LCA
+    // (slot+hash, DC-NODE-29) + S2 validation + S4 body proof are authority.
     let lca = match walk_to_durable_lca(
         branch_cache,
         &decoded.block_hash,
@@ -2802,7 +2830,21 @@ where
         security_param.0,
     ) {
         Ok(r) => r,
-        Err(_) => return Ok(()),
+        // PHASE4-N-AO S11 (DC-NODE-39): the competing branch cannot connect to a
+        // durable stored ancestor within k (branch gap / over-k / no durable
+        // ancestor / cache self-binding violation). NOT a silent no-op: emit the
+        // structured closed `MissingBridge` evidence and HOLD the forge fence
+        // (`pending_missing_bridge`). The durable chain is byte-unchanged, the block
+        // is NOT admitted -- MissingBridge is a fail-closed outcome only, never an
+        // adoption path or a reason to trust the later block.
+        Err(e) => {
+            let reason = map_lca_error(&e);
+            if let Some(ev) = evidence.as_deref_mut() {
+                ev.emit_missing_bridge(peer, &decoded.block_hash, reason.as_str());
+            }
+            *pending_missing_bridge = Some(reason);
+            return Ok(());
+        }
     };
     if let Some(ev) = evidence.as_deref_mut() {
         ev.emit_lca_discovered(
@@ -2833,9 +2875,22 @@ where
         state.recovered_eta0.as_ref(),
     ) {
         Ok(v) => v,
-        // The LCA is unreachable (beyond retention) — keep the current validated
-        // chain (a selector fail-closed; never adopt an unreconstructable branch).
-        Err(_) => return Ok(()),
+        // PHASE4-N-AO S11 (DC-NODE-39): the durable LCA is unreachable for a
+        // read-only materialize (beyond retention) -- the branch cannot be
+        // reconstructed to prove it. NOT a silent no-op: emit the structured closed
+        // `MissingBridge{lca_unreachable}` and HOLD the forge fence. The durable
+        // chain is byte-unchanged; never adopt an unreconstructable branch.
+        Err(_) => {
+            if let Some(ev) = evidence.as_deref_mut() {
+                ev.emit_missing_bridge(
+                    peer,
+                    &decoded.block_hash,
+                    MissingBridgeReason::LcaUnreachable.as_str(),
+                );
+            }
+            *pending_missing_bridge = Some(MissingBridgeReason::LcaUnreachable);
+            return Ok(());
+        }
     };
     let anchor_block_no = anchor_chain_dep.last_block_no.unwrap_or(BlockNo(0));
     // S2 pure construction over the COMPLETE competing branch LCA+1..=tip (multi-
@@ -3002,6 +3057,11 @@ pub async fn run_participant_sync<D>(
     // PHASE4-N-AO S3 (DC-NODE-36): the provisional fork-choice decision sink. Set
     // on a win (S4 applies); S3 applies nothing.
     pending_fork_switch: &mut Option<PendingForkSwitch>,
+    // PHASE4-N-AO S11 (DC-NODE-39): the missing-bridge hold. Set by the dispatch when
+    // a post-switch competing descendant cannot connect to a durable ancestor within
+    // k (a STRUCTURED fail-closed outcome holding the forge fence); CLEARED here on a
+    // successful `LinearExtend` admit (forward progress -- the bridge arrived).
+    pending_missing_bridge: &mut Option<MissingBridgeReason>,
     // PHASE4-N-AJ AJ-S2 (DC-NODE-30): emit-only convergence evidence. `None` =>
     // no emission. Evidence observes authority; it never becomes authority.
     mut evidence: Option<&mut ConvergenceEvidence>,
@@ -3072,6 +3132,14 @@ where
                         // (the verdict is emit-only -- it never influences routing).
                         let pumped = pump_block(state, chaindb, wal, &NoCheckpointSink, &bytes, era_schedule, ledger_view)
                             .map_err(|e| NodeSyncError::Pump(format!("{e:?}")))?;
+                        // PHASE4-N-AO S11 (DC-NODE-39): forward progress clears a
+                        // missing-bridge hold -- a real `LinearExtend` admit
+                        // (`Some(tip)`, not an idempotent no-op) means the bridge
+                        // arrived and Ade advanced, so the held forge fence may
+                        // resolve. An echo / no-op (`None`) does NOT clear the hold.
+                        if pumped.is_some() {
+                            *pending_missing_bridge = None;
+                        }
                         emit_participant_admit(evidence.as_deref_mut(), state, source, pumped);
                     }
                     // PHASE4-N-AO S3 (DC-NODE-36): a competing block on the Participant
@@ -3095,6 +3163,7 @@ where
                             &mut branch_caches,
                             pending_fork_switch,
                             pending_reselection,
+                            pending_missing_bridge,
                             evidence.as_deref_mut(),
                         )?;
                     }

@@ -23,7 +23,7 @@ use ade_ledger::wal::{RollbackReason, WalEntry, WalError, WalStore};
 use ade_network::codec::chain_sync::Point as WirePoint;
 use ade_node::fork_switch::{
     fork_switch_fence_resolved, BranchBodySource, BranchProofError, FetchError, ForkSwitchOutcome,
-    PrefetchedBranchBodies,
+    MissingBridgeReason, PrefetchedBranchBodies,
 };
 use ade_node::node_lifecycle::{apply_fork_switch, run_participant_sync};
 use ade_node::selector_state::{project_tiebreaker, ForkAnchor, PendingForkSwitch};
@@ -150,6 +150,7 @@ async fn participant_rollback_applies_durably() {
         &mut pending,
         SecurityParam(2160),
         &mut None,
+        &mut None,
         None,
     )
     .await
@@ -186,6 +187,7 @@ async fn participant_rollback_to_unknown_point_fails_closed() {
         &mut pending,
         SecurityParam(2160),
         &mut None,
+        &mut None,
         None,
     )
     .await
@@ -219,6 +221,7 @@ async fn participant_rollback_beyond_k_fails_closed_clears_pending() {
         &view_stub(),
         &mut pending,
         SecurityParam(2160),
+        &mut None,
         &mut None,
         None,
     )
@@ -256,6 +259,7 @@ async fn rollback_slot_hash_mismatch_fails_before_mutation() {
         &view_stub(),
         &mut pending,
         SecurityParam(2160),
+        &mut None,
         &mut None,
         None,
     )
@@ -500,6 +504,7 @@ async fn participant_bare_competing_block_fails_closed() {
         &mut pending,
         SecurityParam(2160),
         &mut pending_switch,
+        &mut None,
         None,
     )
     .await;
@@ -511,6 +516,260 @@ async fn participant_bare_competing_block_fails_closed() {
     assert!(pending_switch.is_none(), "no fork-switch decision");
     assert!(wal.read_all().unwrap().is_empty(), "no durable mutation");
     assert!(!pending, "no forge fence set");
+}
+
+// ---------- PHASE4-N-AO S11 (DC-NODE-39): post-ForkChoiceWin missing-bridge ----------
+// A post-switch competing descendant whose parent chain cannot connect to a durable
+// ancestor within k must produce a STRUCTURED MissingBridge (closed reason) + HOLD
+// the forge fence + preserve durable state + NOT admit the block -- never the pre-S11
+// SILENT no-op/stall. MissingBridge is a fail-closed outcome ONLY (never an adoption
+// path, rollback target, candidate anchor, or a reason to clear the fence).
+
+#[tokio::test]
+async fn post_switch_missing_bridge_emits_structured_and_holds_fence() {
+    let (c, view) = corpus_view();
+    let block = pick_lightest(&c);
+    let decoded = decode_block(&block).expect("decode");
+    // Durable tip X (stored at slot-1, hash 0xEE) -- the competing block Z is neither
+    // a linear extension nor already-have; its parent (a real Cardano hash) is absent
+    // from BOTH the branch cache and the durable store -> the branch cannot bridge to
+    // a durable ancestor within k (an LCA-walk BranchGap).
+    let db = InMemoryChainDb::new();
+    db.put_block(&stored(decoded.header_input.slot.0.saturating_sub(1), 0xEE))
+        .unwrap();
+    let tip_before = db.tip().unwrap().unwrap();
+    let mut fwd = fwd_at(decoded.header_input.block_no.0.saturating_sub(1));
+    let mut wal = VecWal::default();
+    let mut pending = false;
+    let mut pending_switch: Option<ade_node::selector_state::PendingForkSwitch> = None;
+    let mut pending_missing_bridge: Option<MissingBridgeReason> = None;
+    let mut src = NodeBlockSource::in_memory_items(vec![NodeSyncItem::Block {
+        peer: "peer-1".to_string(),
+        bytes: block,
+    }]);
+    let buf = SharedBuf::default();
+    let mut ev = evidence_over(&buf);
+    let result = run_participant_sync(
+        &mut src,
+        &mut fwd,
+        &db,
+        &mut wal,
+        &corpus_schedule(),
+        &view,
+        &mut pending,
+        SecurityParam(2160),
+        &mut pending_switch,
+        &mut pending_missing_bridge,
+        Some(&mut ev),
+    )
+    .await;
+    // NOT a node-halting error -- a structured fail-closed HOLD (the drain completes).
+    assert!(result.is_ok(), "missing bridge is a structured hold, not a halt: {result:?}");
+    let out = buf.text();
+    // (1) a structured MissingBridge event with a CLOSED reason was emitted -- NOT silent.
+    assert!(
+        out.contains(r#""event":"missing_bridge""#),
+        "a missing bridge MUST emit the structured event (never a silent skip): {out}"
+    );
+    assert!(
+        out.contains(r#""reason":"branch_gap""#),
+        "the bridge gap maps to the closed branch_gap discriminant: {out}"
+    );
+    // block_received was recorded (peer input) but NO block_admitted (Z is not admitted).
+    assert!(out.contains(r#""event":"block_received""#), "peer input recorded: {out}");
+    assert!(
+        !out.contains(r#""event":"block_admitted""#),
+        "the un-bridgeable block is NOT admitted: {out}"
+    );
+    // (2) the hold is set -> (3) the forge fence is HELD (not resolved) even if caught up.
+    assert_eq!(
+        pending_missing_bridge,
+        Some(MissingBridgeReason::BranchGap),
+        "the missing-bridge HOLD is set with the closed reason"
+    );
+    assert!(
+        !fork_switch_fence_resolved(&pending_switch, &pending_missing_bridge, true),
+        "an unresolved missing bridge HOLDS the forge fence"
+    );
+    // (4) NO durable mutation: the ChainDb tip is byte-unchanged, no WAL append, no
+    // fork-switch decision.
+    assert_eq!(db.tip().unwrap().unwrap(), tip_before, "durable tip unchanged");
+    assert!(wal.read_all().unwrap().is_empty(), "no durable WAL mutation");
+    assert!(pending_switch.is_none(), "MissingBridge is NOT a fork-switch decision");
+}
+
+#[tokio::test]
+async fn missing_bridge_wrong_parent_maps_closed_code() {
+    // A competing candidate whose parent is neither durable nor cached within k ->
+    // the closed BranchGap reason (a closed code, never a free-form string).
+    let (c, view) = corpus_view();
+    let block = pick_lightest(&c);
+    let decoded = decode_block(&block).expect("decode");
+    let db = InMemoryChainDb::new();
+    db.put_block(&stored(decoded.header_input.slot.0.saturating_sub(1), 0xEE))
+        .unwrap();
+    let mut fwd = fwd_at(decoded.header_input.block_no.0.saturating_sub(1));
+    let mut wal = VecWal::default();
+    let mut pending = false;
+    let mut pending_missing_bridge: Option<MissingBridgeReason> = None;
+    let mut src = NodeBlockSource::in_memory_items(vec![NodeSyncItem::Block {
+        peer: "peer-1".to_string(),
+        bytes: block,
+    }]);
+    let buf = SharedBuf::default();
+    let mut ev = evidence_over(&buf);
+    run_participant_sync(
+        &mut src,
+        &mut fwd,
+        &db,
+        &mut wal,
+        &corpus_schedule(),
+        &view,
+        &mut pending,
+        SecurityParam(2160),
+        &mut None,
+        &mut pending_missing_bridge,
+        Some(&mut ev),
+    )
+    .await
+    .expect("structured hold, not a halt");
+    assert_eq!(
+        pending_missing_bridge,
+        Some(MissingBridgeReason::BranchGap),
+        "a wrong/unheld parent maps to the closed BranchGap reason"
+    );
+    assert_eq!(
+        MissingBridgeReason::BranchGap.as_str(),
+        "branch_gap",
+        "the closed discriminant is stable"
+    );
+    let out = buf.text();
+    assert!(out.contains(r#""reason":"branch_gap""#), "closed code in evidence: {out}");
+}
+
+#[tokio::test]
+async fn late_bridge_clears_hold_on_progress() {
+    // S11 MissingBridge is a HOLD-until-progress, not a permanent halt. After a
+    // MissingBridge sets the hold, a successful LinearExtend admit (the bridge
+    // arrived) CLEARS pending_missing_bridge so the fence can resolve; the
+    // previously-failed competing Z is NOT admitted out of order.
+    let (c, view) = corpus_view();
+    // X1 = a corpus block we will admit as a LinearExtend of a synthesized durable tip
+    // (the durable tip is stored under X1's prev_hash, one block below it).
+    let x1_bytes = pick_lightest(&c);
+    let x1 = decode_block(&x1_bytes).expect("decode x1");
+    let x1_prev = match &x1.prev_hash {
+        PrevHash::Block(h) => h.clone(),
+        PrevHash::Genesis => panic!("x1 must carry a Block prev_hash"),
+    };
+    // Z = a DIFFERENT corpus block, fed first as a bare competing block (its parent is
+    // absent from cache + store) -> MissingBridge hold. Its hash must differ from X1
+    // and from the durable tip hash.
+    let z_bytes = c
+        .blocks
+        .iter()
+        .find(|b| {
+            let d = decode_block(b).expect("decode");
+            d.block_hash != x1.block_hash && d.block_hash != x1_prev
+        })
+        .expect("a second distinct corpus block")
+        .clone();
+    let z = decode_block(&z_bytes).expect("decode z");
+
+    let db = InMemoryChainDb::new();
+    // The durable tip X = X1's parent (stored by hash; bytes irrelevant). Its slot is
+    // strictly below X1; its block_no is X1.block_no - 1 (so X1 is a linear extension).
+    let tip_slot = x1.header_input.slot.0.saturating_sub(1);
+    let tip_block_no = x1.header_input.block_no.0.saturating_sub(1);
+    db.put_block(&StoredBlock {
+        hash: x1_prev.clone(),
+        slot: SlotNo(tip_slot),
+        bytes: vec![0xAB; 8],
+    })
+    .unwrap();
+    // fwd reflects the durable tip X: corpus epoch nonce (so X1's header VRF validates
+    // on the same basis as the cold-start admit), last_block_no/last_slot = X.
+    let mut fwd = {
+        let mut s = PraosChainDepState::empty();
+        s.epoch_nonce = Nonce(Hash32(c.epoch_nonce));
+        s.evolving_nonce = Nonce(Hash32(c.epoch_nonce));
+        s.last_block_no = Some(ade_types::BlockNo(tip_block_no));
+        s.last_slot = Some(SlotNo(tip_slot));
+        ForwardSyncState::new(
+            ReceiveState::new(LedgerState::new(CardanoEra::Conway), s),
+            fingerprint(&LedgerState::new(CardanoEra::Conway)).combined,
+            SnapshotCadence::DEFAULT,
+        )
+    };
+    // Z must genuinely be a bare competing block (its parent is NOT the durable tip),
+    // so it sets the hold rather than linearly extending.
+    assert_ne!(
+        z.prev_hash,
+        PrevHash::Block(x1_prev.clone()),
+        "Z must be competing (its parent is not the durable tip), not a linear extend"
+    );
+    let mut wal = VecWal::default();
+    let mut pending = false;
+    let mut pending_missing_bridge: Option<MissingBridgeReason> = None;
+
+    // Drain 1: Z alone -> MissingBridge HOLD set (the bridge is absent).
+    let mut src_z = NodeBlockSource::in_memory_items(vec![NodeSyncItem::Block {
+        peer: "peer-1".to_string(),
+        bytes: z_bytes,
+    }]);
+    run_participant_sync(
+        &mut src_z,
+        &mut fwd,
+        &db,
+        &mut wal,
+        &corpus_schedule(),
+        &view,
+        &mut pending,
+        SecurityParam(2160),
+        &mut None,
+        &mut pending_missing_bridge,
+        None,
+    )
+    .await
+    .expect("Z holds");
+    assert_eq!(
+        pending_missing_bridge,
+        Some(MissingBridgeReason::BranchGap),
+        "Z (un-bridgeable competing) sets the missing-bridge HOLD"
+    );
+    assert!(wal.read_all().unwrap().is_empty(), "Z made no durable mutation");
+    assert_eq!(db.tip().unwrap().unwrap().hash, x1_prev, "Z did not advance the durable tip");
+
+    // Drain 2: X1 (LinearExtend, the late-arriving bridge) -> admit + CLEAR the hold.
+    let mut src_x1 = NodeBlockSource::in_memory_items(vec![NodeSyncItem::Block {
+        peer: "peer-1".to_string(),
+        bytes: x1_bytes,
+    }]);
+    run_participant_sync(
+        &mut src_x1,
+        &mut fwd,
+        &db,
+        &mut wal,
+        &corpus_schedule(),
+        &view,
+        &mut pending,
+        SecurityParam(2160),
+        &mut None,
+        &mut pending_missing_bridge,
+        None,
+    )
+    .await
+    .expect("X1 admits");
+    // The LinearExtend admit cleared the hold (the bridge arrived -> forward progress).
+    assert_eq!(
+        pending_missing_bridge, None,
+        "a successful LinearExtend admit clears the missing-bridge hold"
+    );
+    // X1 is the durable tip; Z (the earlier un-bridgeable competing block) was NOT
+    // admitted out of order.
+    let tip = db.tip().unwrap().unwrap();
+    assert_eq!(tip.hash, x1.block_hash, "X1 admitted as the durable tip");
+    assert_ne!(tip.hash, z.block_hash, "the un-bridgeable Z was never admitted");
 }
 
 #[tokio::test]
@@ -547,6 +806,7 @@ async fn participant_block_with_no_durable_tip_pumps() {
         &view,
         &mut pending,
         SecurityParam(2160),
+        &mut None,
         &mut None,
         None,
     )
@@ -632,6 +892,7 @@ async fn participant_cold_start_admit_emits_received_admitted_agreed() {
         &mut pending,
         SecurityParam(2160),
         &mut None,
+        &mut None,
         Some(&mut ev),
     )
     .await
@@ -671,6 +932,7 @@ async fn participant_block_received_does_not_imply_admission() {
         &view,
         &mut pending,
         SecurityParam(2160),
+        &mut None,
         &mut None,
         Some(&mut ev),
     )
@@ -716,6 +978,7 @@ async fn participant_convergence_evidence_replay_byte_identical() {
             &mut pending,
             SecurityParam(2160),
             &mut None,
+            &mut None,
             Some(&mut ev),
         )
         .await
@@ -758,6 +1021,7 @@ async fn participant_rollback_to_recovered_anchor_is_noop() {
         &mut pending,
         SecurityParam(2160),
         &mut None,
+        &mut None,
         None,
     )
     .await
@@ -799,6 +1063,7 @@ async fn participant_rollback_origin_fails_closed() {
         &mut pending,
         SecurityParam(2160),
         &mut None,
+        &mut None,
         None,
     )
     .await
@@ -835,6 +1100,7 @@ async fn participant_rollback_non_anchor_fails_closed() {
             &view_stub(),
             &mut pending,
             SecurityParam(2160),
+            &mut None,
             &mut None,
             None,
         )
@@ -882,6 +1148,7 @@ async fn participant_first_forward_after_anchor_noop_admits_via_pump_block() {
         &mut pending,
         SecurityParam(2160),
         &mut None,
+        &mut None,
         None,
     )
     .await
@@ -917,6 +1184,7 @@ async fn participant_stored_block_rollback_still_applies() {
         &view_stub(),
         &mut pending,
         SecurityParam(2160),
+        &mut None,
         &mut None,
         None,
     )
@@ -1039,6 +1307,7 @@ async fn participant_competing_durable_anchor_loses_no_mutation() {
         &mut pending,
         SecurityParam(2160),
         &mut pending_switch,
+        &mut None,
         None,
     )
     .await
@@ -1079,6 +1348,7 @@ async fn participant_competing_durable_anchor_win_sets_pending_no_mutation() {
         &mut pending,
         SecurityParam(2160),
         &mut pending_switch,
+        &mut None,
         None,
     )
     .await
@@ -1133,6 +1403,7 @@ async fn participant_competing_unknown_anchor_fails_closed() {
         &mut pending,
         SecurityParam(2160),
         &mut pending_switch,
+        &mut None,
         None,
     )
     .await;
@@ -1179,6 +1450,7 @@ async fn participant_competing_fork_anchor_older_than_k_no_mutation() {
         &mut pending,
         SecurityParam(5),
         &mut pending_switch,
+        &mut None,
         None,
     )
     .await
@@ -1661,11 +1933,11 @@ async fn proof_failure_holds_fence_then_resolves_when_caught_up() {
     // The fence resolves ONLY when no pending AND caught up. The failure alone
     // (not yet caught up) does NOT resolve it.
     assert!(
-        !fork_switch_fence_resolved(&pending, false),
+        !fork_switch_fence_resolved(&pending, &None, false),
         "not caught up -> fence stays held"
     );
     assert!(
-        fork_switch_fence_resolved(&pending, true),
+        fork_switch_fence_resolved(&pending, &None, true),
         "no pending + caught up -> resolved"
     );
 }

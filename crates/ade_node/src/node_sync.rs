@@ -6500,4 +6500,45 @@ mod tests {
             "warm-start re-entry RESUMED forging on ChainDb::tip ({pre_block_no} -> {post_block_no}) with NO follow-link catch-up"
         );
     }
+
+    /// PHASE4-N-AO S11 (DC-NODE-39) happy path: after a ForkChoiceWin adopts tip X,
+    /// the winning peer's IMMEDIATE descendant X+1 (prev_hash == X.hash, block_no ==
+    /// X.block_no + 1) classifies as `LinearExtend` -- the post-switch forward-follow
+    /// that admits via the sole `pump_block` path (no fork-choice, no MissingBridge).
+    /// A regression guard for the in-parent-link-order continuation DC-NODE-39 requires.
+    #[test]
+    fn post_switch_admits_winner_descendant_x_plus_1() {
+        use ade_types::shelley::block::PrevHash;
+        use ade_types::BlockNo;
+        let x = TipPoint {
+            slot: SlotNo(298),
+            hash: Hash32([0xC1; 32]),
+            block_no: 247,
+        };
+        // X+1 links from X by validated prev_hash and is one block higher.
+        let x_plus_1 = CandidateSummary {
+            slot: SlotNo(340),
+            block_no: BlockNo(248),
+            hash: Hash32([0xD1; 32]),
+            prev_hash: PrevHash::Block(x.hash.clone()),
+        };
+        assert_eq!(
+            classify_receive(x.clone(), &x_plus_1, false),
+            ReceiveClass::LinearExtend,
+            "the winner's immediate descendant X+1 is a linear extension of the adopted tip X"
+        );
+        // A descendant that does NOT link from X by hash is NOT a linear extension
+        // (it is Competing -> the dispatch / MissingBridge path, never a silent admit).
+        let x_plus_2_no_bridge = CandidateSummary {
+            slot: SlotNo(388),
+            block_no: BlockNo(249),
+            hash: Hash32([0xD2; 32]),
+            prev_hash: PrevHash::Block(Hash32([0x9A; 32])), // an unheld parent (the bridge)
+        };
+        assert_eq!(
+            classify_receive(x, &x_plus_2_no_bridge, false),
+            ReceiveClass::Competing,
+            "X+2 without the bridge X+1 is NOT a linear extension -- it routes to fork-choice"
+        );
+    }
 }

@@ -188,6 +188,19 @@ pub enum AdmissionLogEvent {
         fork_switch_id: String,
         peer: String,
     },
+
+    // PHASE4-N-AO S11 (DC-NODE-39): post-ForkChoiceWin missing-bridge fail-closed.
+    /// A post-switch competing descendant could not be bridged to the durable
+    /// adopted tip / a durable stored ancestor within k -- a STRUCTURED fail-closed
+    /// outcome, NOT a silent no-op. `reason` is the closed `MissingBridgeReason`
+    /// discriminator. Observe-only: the durable chain is byte-unchanged, the block
+    /// is NOT admitted, and the forge fence is held. NEVER read by any authority
+    /// path (selection / walk / apply / fence-decision).
+    MissingBridge {
+        peer: String,
+        block_hash_hex: String,
+        reason: &'static str,
+    },
 }
 
 /// Closed result of `select_best_chain` for a competing candidate (S9 evidence).
@@ -295,6 +308,8 @@ impl AdmissionLogEvent {
             Self::ForkSwitchApplied { .. } => "fork_switch_applied",
             Self::ForkSwitchFailed { .. } => "fork_switch_failed",
             Self::ForkSwitchSuperseded { .. } => "fork_switch_superseded",
+            // PHASE4-N-AO S11 (DC-NODE-39) closed missing-bridge fail-closed event.
+            Self::MissingBridge { .. } => "missing_bridge",
         }
     }
 }
@@ -429,6 +444,7 @@ mod tests {
             AdmissionLogEvent::ForkSwitchApplied { .. } => "fork_switch_applied",
             AdmissionLogEvent::ForkSwitchFailed { .. } => "fork_switch_failed",
             AdmissionLogEvent::ForkSwitchSuperseded { .. } => "fork_switch_superseded",
+            AdmissionLogEvent::MissingBridge { .. } => "missing_bridge",
         };
     }
 

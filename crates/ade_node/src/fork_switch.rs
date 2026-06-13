@@ -40,6 +40,7 @@ use ade_ledger::state::LedgerState;
 use ade_types::shelley::block::PrevHash;
 use ade_types::{Hash32, SlotNo};
 
+use crate::lca_walk::LcaError;
 use crate::selector_state::{ForkAnchor, PendingForkSwitch};
 
 /// The RED seam that supplies a winning branch's bodies. Hermetic in tests; the
@@ -239,19 +240,74 @@ pub fn prevalidate_branch(
     Ok(ProvenBranch { blocks })
 }
 
-/// PHASE4-N-AO S5 (DC-NODE-28 resolution): the forge fence (`pending_reselection`)
-/// clears ONLY on a RESOLVED state -- no pending fork-switch decision AND the node
-/// is caught up to the followed peer. A proof failure HOLDS the fence (it says
-/// "that branch was not proven", not "the disagreement is resolved"); the fence
-/// clears only here, when the participant loop reaches a resolved no-pending state
-/// (the held-then-resolved path; S4 clears the success path directly after
-/// reconcile). `caught_up` is the `DC-NODE-15` signal
-/// (`forge_followed_tip_admission == CaughtUp`). PURE.
+/// PHASE4-N-AO S11 (DC-NODE-39): closed reason a post-`ForkChoiceWin` competing
+/// descendant could not be bridged to the durable adopted tip / a durable stored
+/// ancestor within k. **A `MissingBridge` is ONLY a structured fail-closed outcome
+/// -- never an adoption path, a rollback target, a candidate anchor, a reason to
+/// clear the fence, a reason to skip the missing parent, or a reason to trust the
+/// later block.** It HOLDS the forge fence (the fence-resolved predicate refuses
+/// while it is `Some`) and refuses the silent no-op the pre-S11 dispatch did. No
+/// durable mutation ever occurs on this path. Closed discriminant -- no free-form
+/// strings.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum MissingBridgeReason {
+    /// An intermediate header on the competing branch is absent from the cache --
+    /// the branch is incomplete (a hole) and cannot reach a durable ancestor.
+    BranchGap,
+    /// The walk reached genesis without a durable stored ancestor within k.
+    NoDurableAncestorWithinK,
+    /// The walk exceeded k traversed headers (block depth) before reaching the LCA.
+    ExceededK,
+    /// A branch-cache entry's map key != its own re-derived hash (peer-claim, not
+    /// authority) -- the cache must fail closed, never be trusted.
+    CacheSelfBindingViolation,
+    /// The durable LCA was found but is unreachable for a read-only materialize
+    /// (beyond retention) -- the branch cannot be reconstructed to prove it.
+    LcaUnreachable,
+}
+
+impl MissingBridgeReason {
+    /// Closed discriminator string -- the value emitted to the convergence-evidence
+    /// transcript. Mirrors the `LcaError` / materialize causes; never free-form.
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            Self::BranchGap => "branch_gap",
+            Self::NoDurableAncestorWithinK => "no_durable_ancestor_within_k",
+            Self::ExceededK => "exceeded_k",
+            Self::CacheSelfBindingViolation => "cache_self_binding_violation",
+            Self::LcaUnreachable => "lca_unreachable",
+        }
+    }
+}
+
+/// PHASE4-N-AO S11 (DC-NODE-39): map the closed S7 LCA-walk failure surface to the
+/// closed `MissingBridgeReason`. The materialize ("LCA unreachable") failure case
+/// is `LcaUnreachable`, set directly at its call site (it is not an `LcaError`).
+pub fn map_lca_error(e: &LcaError) -> MissingBridgeReason {
+    match e {
+        LcaError::BranchGap => MissingBridgeReason::BranchGap,
+        LcaError::NoDurableAncestorWithinK => MissingBridgeReason::NoDurableAncestorWithinK,
+        LcaError::ExceededK => MissingBridgeReason::ExceededK,
+        LcaError::CacheSelfBindingViolation => MissingBridgeReason::CacheSelfBindingViolation,
+    }
+}
+
+/// PHASE4-N-AO S5 (DC-NODE-28 resolution) + S11 (DC-NODE-39): the forge fence
+/// (`pending_reselection`) clears ONLY on a RESOLVED state -- no pending fork-switch
+/// decision, no unresolved missing bridge, AND the node is caught up to the followed
+/// peer. A proof failure HOLDS the fence (it says "that branch was not proven", not
+/// "the disagreement is resolved"); likewise an unresolved `MissingBridge` HOLDS the
+/// fence (S11 -- a node that adopted the winner but cannot bridge its descendants
+/// must not forge on the stranded tip). The fence clears only here, when the
+/// participant loop reaches a resolved no-pending state (the held-then-resolved path;
+/// S4 clears the success path directly after reconcile). `caught_up` is the
+/// `DC-NODE-15` signal (`forge_followed_tip_admission == CaughtUp`). PURE.
 pub fn fork_switch_fence_resolved(
     pending_fork_switch: &Option<PendingForkSwitch>,
+    pending_missing_bridge: &Option<MissingBridgeReason>,
     caught_up: bool,
 ) -> bool {
-    pending_fork_switch.is_none() && caught_up
+    pending_fork_switch.is_none() && pending_missing_bridge.is_none() && caught_up
 }
 
 /// A fetched body's re-derived header must field-match the S3-selected summary,
@@ -335,14 +391,40 @@ mod tests {
     #[test]
     fn fence_resolved_only_when_no_pending_and_caught_up() {
         // A decision in flight -> NOT resolved, even if caught up.
-        assert!(!fork_switch_fence_resolved(&Some(a_switch()), true));
+        assert!(!fork_switch_fence_resolved(&Some(a_switch()), &None, true));
         // No pending but NOT caught up (still behind / disagreeing) -> NOT resolved.
-        assert!(!fork_switch_fence_resolved(&None, false));
+        assert!(!fork_switch_fence_resolved(&None, &None, false));
         // A proof failure leaves pending=None + the fence held; until caught up it
         // stays held (this predicate is the only live clear path besides S4 success).
-        assert!(!fork_switch_fence_resolved(&Some(a_switch()), false));
-        // RESOLVED: no pending decision AND caught up to the followed peer.
-        assert!(fork_switch_fence_resolved(&None, true));
+        assert!(!fork_switch_fence_resolved(&Some(a_switch()), &None, false));
+        // PHASE4-N-AO S11 (DC-NODE-39): an unresolved MissingBridge HOLDS the fence
+        // even with no pending decision AND caught up -- a stranded post-switch tip
+        // must not forge until the bridge arrives (clear-on-progress) or the run ends.
+        assert!(!fork_switch_fence_resolved(
+            &None,
+            &Some(MissingBridgeReason::BranchGap),
+            true
+        ));
+        // RESOLVED: no pending decision, no missing bridge, AND caught up.
+        assert!(fork_switch_fence_resolved(&None, &None, true));
+    }
+
+    #[test]
+    fn missing_bridge_reason_maps_lca_error_to_closed_discriminant() {
+        // Every LcaError maps to a closed MissingBridgeReason with a closed
+        // discriminator string -- no free-form text reaches the evidence vocabulary.
+        assert_eq!(map_lca_error(&LcaError::BranchGap), MissingBridgeReason::BranchGap);
+        assert_eq!(
+            map_lca_error(&LcaError::NoDurableAncestorWithinK),
+            MissingBridgeReason::NoDurableAncestorWithinK
+        );
+        assert_eq!(map_lca_error(&LcaError::ExceededK), MissingBridgeReason::ExceededK);
+        assert_eq!(
+            map_lca_error(&LcaError::CacheSelfBindingViolation),
+            MissingBridgeReason::CacheSelfBindingViolation
+        );
+        assert_eq!(MissingBridgeReason::BranchGap.as_str(), "branch_gap");
+        assert_eq!(MissingBridgeReason::LcaUnreachable.as_str(), "lca_unreachable");
     }
 
     #[test]

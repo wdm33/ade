@@ -7649,8 +7649,12 @@ each via validated prev_hash == prior tip), OR fail closed with a STRUCTURED mis
 NOT silently skip a required bridge block and stall behind the winning branch. A descendant whose parent link
 Ade has not validated is never admitted (no peer-claimed bridging -- the parent must be in Ade's validated
 store / proven branch). On a genuinely missing bridge (peer serves X+2 without X+1) the post-switch admit path
-HOLDS / fails closed with a closed MissingBridge discriminant and the forge fence stays held -- never a silent
-stall and never a forced/guessed admit. REPLAY-EQUIVALENT: given the same post-switch served sequence and the
+emits a closed MissingBridge discriminant, PRESERVES the current durable chain byte-unchanged (no rollback, no
+admit, no adoption -- MissingBridge is never a rollback target / candidate anchor / fence-clear reason), HOLDS
+the forge fence (pending_missing_bridge.is_none() is now a fence-resolve precondition), and refuses the silent
+no-op -- never a silent stall and never a forced/guessed admit. The hold is HOLD-until-progress: a real
+LinearExtend admit (pump_block Some) or a proven fork-switch adoption clears it, so a late-arriving bridge
+releases the fence. REPLAY-EQUIVALENT: given the same post-switch served sequence and the
 same adopted X, Ade derives the same admit / MissingBridge outcome byte-identically. This is the robustness
 half of CN-CONS-03: convergence is not 'Ade can complete once' (S10/run 2 proved capability) but 'Ade reliably
 continues on the selected branch or fails closed structurally', closing the conditional follow-forward hole
@@ -7659,8 +7663,8 @@ run 1 surfaced (adopted cn2@298, received 388 but missed the bridge ~340, stalle
 source = "docs/planning/phase4-n-ao-ce-ao-6-live-gap.md (run-1 root-cause finding) + docs/clusters/PHASE4-N-AO/S11-post-forkchoicewin-forward-follow.md"
 cross_ref = ["DC-NODE-24", "DC-NODE-25", "DC-NODE-28", "DC-NODE-29", "DC-NODE-38", "DC-EVIDENCE-05", "DC-CONS-03", "CN-CONS-01", "CN-CONS-03"]
 code_locus = "CANDIDATE (pending S11 Phase-1 diagnosis): the fix locus is decided by the instrumented diagnostic (peer-fault vs Ade-fault). Surfaces in scope: crates/ade_runtime/src/admission/wire_pump.rs (RollForward serve/follow), crates/ade_node/src/node_sync.rs (classify_receive), crates/ade_node/src/lca_walk.rs (walk_to_durable_lca BranchGap), crates/ade_node/src/node_lifecycle.rs (post-switch follow state + apply_fork_switch intersect re-point + the fail-closed MissingBridge decision). BLUE select_best_chain / apply_fork_switch adoption authority UNCHANGED."
-tests = []
-ci_scripts = []
+tests = ["post_switch_admits_winner_descendant_x_plus_1", "post_switch_missing_bridge_emits_structured_and_holds_fence", "missing_bridge_wrong_parent_maps_closed_code", "late_bridge_clears_hold_on_progress", "missing_bridge_reason_maps_lca_error_to_closed_discriminant"]
+ci_scripts = ["ci/ci_check_missing_bridge_fail_closed.sh"]
 status = "declared"
 introduced_in = "PHASE4-N-AO"
 strengthened_in = []
