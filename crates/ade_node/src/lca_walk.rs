@@ -76,6 +76,7 @@ pub struct LcaResult {
 /// verified. Returns the LCA + the headers LCA+1..=tip in order.
 pub fn walk_to_durable_lca<D: ChainDb + ?Sized>(
     cache: &BTreeMap<Hash32, CachedHeader>,
+    retention: &BTreeMap<Hash32, CachedHeader>,
     start_hash: &Hash32,
     chaindb: &D,
     k: u64,
@@ -84,7 +85,18 @@ pub fn walk_to_durable_lca<D: ChainDb + ?Sized>(
     let mut cur_hash = start_hash.clone();
     let mut depth: u64 = 0;
     loop {
-        let entry = cache.get(&cur_hash).ok_or(LcaError::BranchGap)?;
+        // PHASE4-N-AO S13 (DC-NODE-40): on a per-peer-cache miss, consult the
+        // rollback-retention EVIDENCE -- the blocks Ade itself rolled back during a
+        // ForkChoiceWin adoption (admitted LinearExtend, so never in the competing-
+        // only branch cache). This lets the walk traverse non-durable intermediate
+        // headers until it reaches a real durable ancestor. The retention is
+        // evidence only: it provides intermediate HOPS; the LCA anchor is still the
+        // ChainDb durable slot+hash (below), never a retained block. Self-binding +
+        // the k bound apply identically to retained entries.
+        let entry = cache
+            .get(&cur_hash)
+            .or_else(|| retention.get(&cur_hash))
+            .ok_or(LcaError::BranchGap)?;
         // Self-binding: the map key MUST equal the entry's own re-derived hash.
         if entry.block_hash != cur_hash {
             return Err(LcaError::CacheSelfBindingViolation);
@@ -179,7 +191,7 @@ mod tests {
         let db = db_with_lca(0x33, 669);
         let mut cache = BTreeMap::new();
         cache.insert(h(0x34), cached(0x34, PrevHash::Block(h(0x33)), 670, 34));
-        let r = walk_to_durable_lca(&cache, &h(0x34), &db, 5).expect("1-deep walks");
+        let r = walk_to_durable_lca(&cache, &BTreeMap::new(),&h(0x34), &db, 5).expect("1-deep walks");
         assert_eq!(r.anchor_hash, h(0x33));
         assert_eq!(r.anchor_slot, SlotNo(669));
         assert_eq!(r.headers.len(), 1);
@@ -194,7 +206,7 @@ mod tests {
         cache.insert(h(0x34), cached(0x34, PrevHash::Block(h(0x33)), 670, 34));
         cache.insert(h(0x35), cached(0x35, PrevHash::Block(h(0x34)), 672, 35));
         cache.insert(h(0x36), cached(0x36, PrevHash::Block(h(0x35)), 674, 36));
-        let r = walk_to_durable_lca(&cache, &h(0x36), &db, 5).expect("multi-block walks");
+        let r = walk_to_durable_lca(&cache, &BTreeMap::new(),&h(0x36), &db, 5).expect("multi-block walks");
         assert_eq!(r.anchor_hash, h(0x33), "anchor is the durable LCA, not the immediate parent");
         // headers in order LCA+1 ..= tip: 34, 35, 36.
         let nos: Vec<u64> = r.headers.iter().map(|x| x.block_no.0).collect();
@@ -209,7 +221,7 @@ mod tests {
         cache.insert(h(0x36), cached(0x36, PrevHash::Block(h(0x35)), 674, 36));
         // 0x35 NOT cached and NOT durable -> BranchGap.
         assert_eq!(
-            walk_to_durable_lca(&cache, &h(0x36), &db, 5),
+            walk_to_durable_lca(&cache, &BTreeMap::new(),&h(0x36), &db, 5),
             Err(LcaError::BranchGap)
         );
     }
@@ -229,11 +241,11 @@ mod tests {
         cache.insert(h(0x36), cached(0x36, PrevHash::Block(h(0x35)), 606, 36));
         // 6 headers above the LCA, k=5 -> ExceededK.
         assert_eq!(
-            walk_to_durable_lca(&cache, &h(0x36), &db, 5),
+            walk_to_durable_lca(&cache, &BTreeMap::new(),&h(0x36), &db, 5),
             Err(LcaError::ExceededK)
         );
         // The same branch with k=6 succeeds (6 <= 6) -- proving the bound is exact.
-        let r = walk_to_durable_lca(&cache, &h(0x36), &db, 6).expect("6 <= k=6 walks");
+        let r = walk_to_durable_lca(&cache, &BTreeMap::new(),&h(0x36), &db, 6).expect("6 <= k=6 walks");
         assert_eq!(r.anchor_hash, h(0x30));
         assert_eq!(r.headers.len(), 6);
     }
@@ -245,7 +257,7 @@ mod tests {
         let mut cache = BTreeMap::new();
         cache.insert(h(0x34), cached(0x34, PrevHash::Genesis, 670, 34));
         assert_eq!(
-            walk_to_durable_lca(&cache, &h(0x34), &db, 5),
+            walk_to_durable_lca(&cache, &BTreeMap::new(),&h(0x34), &db, 5),
             Err(LcaError::NoDurableAncestorWithinK)
         );
     }
@@ -260,7 +272,7 @@ mod tests {
         bad.block_hash = h(0x99);
         cache.insert(h(0x34), bad); // ... but keyed under 0x34
         assert_eq!(
-            walk_to_durable_lca(&cache, &h(0x34), &db, 5),
+            walk_to_durable_lca(&cache, &BTreeMap::new(),&h(0x34), &db, 5),
             Err(LcaError::CacheSelfBindingViolation)
         );
     }
@@ -272,8 +284,8 @@ mod tests {
         cache.insert(h(0x34), cached(0x34, PrevHash::Block(h(0x33)), 670, 34));
         cache.insert(h(0x35), cached(0x35, PrevHash::Block(h(0x34)), 672, 35));
         assert_eq!(
-            walk_to_durable_lca(&cache, &h(0x35), &db, 5),
-            walk_to_durable_lca(&cache, &h(0x35), &db, 5)
+            walk_to_durable_lca(&cache, &BTreeMap::new(),&h(0x35), &db, 5),
+            walk_to_durable_lca(&cache, &BTreeMap::new(),&h(0x35), &db, 5)
         );
     }
 
@@ -298,13 +310,102 @@ mod tests {
         for (k, v) in entries.iter().rev() {
             reverse.insert(h(*k), v.clone());
         }
-        let a = walk_to_durable_lca(&forward, &h(0x36), &db, 5).expect("forward");
-        let b = walk_to_durable_lca(&reverse, &h(0x36), &db, 5).expect("reverse");
+        let a = walk_to_durable_lca(&forward, &BTreeMap::new(), &h(0x36), &db, 5).expect("forward");
+        let b = walk_to_durable_lca(&reverse, &BTreeMap::new(), &h(0x36), &db, 5).expect("reverse");
         assert_eq!(a, b, "walk is arrival-order independent");
         assert_eq!(a.anchor_hash, h(0x33));
         assert_eq!(
             a.headers.iter().map(|x| x.block_no.0).collect::<Vec<_>>(),
             vec![34, 35, 36]
+        );
+    }
+
+    // ---- PHASE4-N-AO S13 (DC-NODE-40): rolled-back branch evidence retention ----
+
+    #[test]
+    fn rollback_retains_removed_blocks_for_lca_walk() {
+        // The competing tip c(0x36) is in the per-peer CACHE; its bridge b1(0x34) +
+        // b2(0x35) -- the blocks Ade ROLLED BACK -- are in the RETENTION, not the
+        // cache. The walk must traverse the retention to reach the durable LCA(0x33),
+        // so the competing branch is evaluable (no false BranchGap over-fire).
+        let db = db_with_lca(0x33, 669);
+        let mut cache = BTreeMap::new();
+        cache.insert(h(0x36), cached(0x36, PrevHash::Block(h(0x35)), 674, 36));
+        let mut retention = BTreeMap::new();
+        retention.insert(h(0x35), cached(0x35, PrevHash::Block(h(0x34)), 672, 35));
+        retention.insert(h(0x34), cached(0x34, PrevHash::Block(h(0x33)), 670, 34));
+        let r = walk_to_durable_lca(&cache, &retention, &h(0x36), &db, 5)
+            .expect("retention bridges the rolled-back gap");
+        assert_eq!(r.anchor_hash, h(0x33), "reaches the durable LCA via retained bridges");
+        assert_eq!(
+            r.headers.iter().map(|x| x.block_no.0).collect::<Vec<_>>(),
+            vec![34, 35, 36]
+        );
+    }
+
+    #[test]
+    fn retained_blocks_are_not_anchors() {
+        // b1(0x34) is in RETENTION (prev = the durable 0x33). The walk must NOT stop
+        // at the retained b1 as the LCA -- the anchor is ChainDb-durable ONLY, so it
+        // continues to 0x33.
+        let db = db_with_lca(0x33, 669);
+        let mut cache = BTreeMap::new();
+        cache.insert(h(0x35), cached(0x35, PrevHash::Block(h(0x34)), 672, 35));
+        let mut retention = BTreeMap::new();
+        retention.insert(h(0x34), cached(0x34, PrevHash::Block(h(0x33)), 670, 34));
+        let r = walk_to_durable_lca(&cache, &retention, &h(0x35), &db, 5).expect("walks");
+        assert_eq!(r.anchor_hash, h(0x33), "anchor is the DURABLE block");
+        assert_ne!(r.anchor_hash, h(0x34), "the retained b1 is NEVER the anchor");
+    }
+
+    #[test]
+    fn retained_blocks_are_k_bounded() {
+        // A bridge entirely in retention: 6 headers above the durable LCA(0x30), k=5
+        // -> ExceededK. Retention does not let the walk exceed the block-depth bound.
+        let db = db_with_lca(0x30, 600);
+        let mut cache = BTreeMap::new();
+        cache.insert(h(0x36), cached(0x36, PrevHash::Block(h(0x35)), 606, 36));
+        let mut retention = BTreeMap::new();
+        retention.insert(h(0x35), cached(0x35, PrevHash::Block(h(0x34)), 605, 35));
+        retention.insert(h(0x34), cached(0x34, PrevHash::Block(h(0x33)), 604, 34));
+        retention.insert(h(0x33), cached(0x33, PrevHash::Block(h(0x32)), 603, 33));
+        retention.insert(h(0x32), cached(0x32, PrevHash::Block(h(0x31)), 602, 32));
+        retention.insert(h(0x31), cached(0x31, PrevHash::Block(h(0x30)), 601, 31));
+        assert_eq!(
+            walk_to_durable_lca(&cache, &retention, &h(0x36), &db, 5),
+            Err(LcaError::ExceededK)
+        );
+    }
+
+    #[test]
+    fn retained_block_hash_self_binds() {
+        // A retention entry mis-keyed: stored under 0x34 but its block_hash is 0x99.
+        // The walk's self-binding check rejects it (CacheSelfBindingViolation) -- a
+        // retained block is evidence, not a peer-claim free pass.
+        let db = db_with_lca(0x33, 669);
+        let mut cache = BTreeMap::new();
+        cache.insert(h(0x35), cached(0x35, PrevHash::Block(h(0x34)), 672, 35));
+        let mut retention = BTreeMap::new();
+        retention.insert(h(0x34), cached(0x99, PrevHash::Block(h(0x33)), 670, 34));
+        assert_eq!(
+            walk_to_durable_lca(&cache, &retention, &h(0x35), &db, 5),
+            Err(LcaError::CacheSelfBindingViolation)
+        );
+    }
+
+    #[test]
+    fn genuine_gap_still_missing_bridge() {
+        // The bridge 0x35 is in NEITHER cache NOR retention NOR durable -> BranchGap.
+        // The DC-NODE-39 fail-closed BranchGap path is preserved: retention does NOT
+        // paper over a genuine gap (the dispatch maps this LcaError to a structured
+        // fail-closed hold -- the walk itself never names that surface).
+        let db = db_with_lca(0x33, 669);
+        let mut cache = BTreeMap::new();
+        cache.insert(h(0x36), cached(0x36, PrevHash::Block(h(0x35)), 674, 36));
+        let retention = BTreeMap::new(); // empty -- 0x35 is nowhere
+        assert_eq!(
+            walk_to_durable_lca(&cache, &retention, &h(0x36), &db, 5),
+            Err(LcaError::BranchGap)
         );
     }
 }

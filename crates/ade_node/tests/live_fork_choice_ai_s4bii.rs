@@ -151,6 +151,7 @@ async fn participant_rollback_applies_durably() {
         SecurityParam(2160),
         &mut None,
         &mut None,
+        &BTreeMap::new(),
         None,
     )
     .await
@@ -188,6 +189,7 @@ async fn participant_rollback_to_unknown_point_fails_closed() {
         SecurityParam(2160),
         &mut None,
         &mut None,
+        &BTreeMap::new(),
         None,
     )
     .await
@@ -223,6 +225,7 @@ async fn participant_rollback_beyond_k_fails_closed_clears_pending() {
         SecurityParam(2160),
         &mut None,
         &mut None,
+        &BTreeMap::new(),
         None,
     )
     .await
@@ -261,6 +264,7 @@ async fn rollback_slot_hash_mismatch_fails_before_mutation() {
         SecurityParam(2160),
         &mut None,
         &mut None,
+        &BTreeMap::new(),
         None,
     )
     .await
@@ -505,6 +509,7 @@ async fn participant_bare_competing_block_fails_closed() {
         SecurityParam(2160),
         &mut pending_switch,
         &mut None,
+        &BTreeMap::new(),
         None,
     )
     .await;
@@ -560,6 +565,7 @@ async fn post_switch_missing_bridge_emits_structured_and_holds_fence() {
         SecurityParam(2160),
         &mut pending_switch,
         &mut pending_missing_bridge,
+        &BTreeMap::new(),
         Some(&mut ev),
     )
     .await;
@@ -629,6 +635,7 @@ async fn missing_bridge_wrong_parent_maps_closed_code() {
         SecurityParam(2160),
         &mut None,
         &mut pending_missing_bridge,
+        &BTreeMap::new(),
         Some(&mut ev),
     )
     .await
@@ -728,6 +735,7 @@ async fn late_bridge_clears_hold_on_progress() {
         SecurityParam(2160),
         &mut None,
         &mut pending_missing_bridge,
+        &BTreeMap::new(),
         None,
     )
     .await
@@ -756,6 +764,7 @@ async fn late_bridge_clears_hold_on_progress() {
         SecurityParam(2160),
         &mut None,
         &mut pending_missing_bridge,
+        &BTreeMap::new(),
         None,
     )
     .await
@@ -808,6 +817,7 @@ async fn participant_block_with_no_durable_tip_pumps() {
         SecurityParam(2160),
         &mut None,
         &mut None,
+        &BTreeMap::new(),
         None,
     )
     .await
@@ -893,6 +903,7 @@ async fn participant_cold_start_admit_emits_received_admitted_agreed() {
         SecurityParam(2160),
         &mut None,
         &mut None,
+        &BTreeMap::new(),
         Some(&mut ev),
     )
     .await
@@ -934,6 +945,7 @@ async fn participant_block_received_does_not_imply_admission() {
         SecurityParam(2160),
         &mut None,
         &mut None,
+        &BTreeMap::new(),
         Some(&mut ev),
     )
     .await;
@@ -979,6 +991,7 @@ async fn participant_convergence_evidence_replay_byte_identical() {
             SecurityParam(2160),
             &mut None,
             &mut None,
+            &BTreeMap::new(),
             Some(&mut ev),
         )
         .await
@@ -1022,6 +1035,7 @@ async fn participant_rollback_to_recovered_anchor_is_noop() {
         SecurityParam(2160),
         &mut None,
         &mut None,
+        &BTreeMap::new(),
         None,
     )
     .await
@@ -1064,6 +1078,7 @@ async fn participant_rollback_origin_fails_closed() {
         SecurityParam(2160),
         &mut None,
         &mut None,
+        &BTreeMap::new(),
         None,
     )
     .await
@@ -1102,6 +1117,7 @@ async fn participant_rollback_non_anchor_fails_closed() {
             SecurityParam(2160),
             &mut None,
             &mut None,
+            &BTreeMap::new(),
             None,
         )
         .await
@@ -1149,6 +1165,7 @@ async fn participant_first_forward_after_anchor_noop_admits_via_pump_block() {
         SecurityParam(2160),
         &mut None,
         &mut None,
+        &BTreeMap::new(),
         None,
     )
     .await
@@ -1186,6 +1203,7 @@ async fn participant_stored_block_rollback_still_applies() {
         SecurityParam(2160),
         &mut None,
         &mut None,
+        &BTreeMap::new(),
         None,
     )
     .await
@@ -1308,6 +1326,7 @@ async fn participant_competing_durable_anchor_loses_no_mutation() {
         SecurityParam(2160),
         &mut pending_switch,
         &mut None,
+        &BTreeMap::new(),
         None,
     )
     .await
@@ -1349,6 +1368,7 @@ async fn participant_competing_durable_anchor_win_sets_pending_no_mutation() {
         SecurityParam(2160),
         &mut pending_switch,
         &mut None,
+        &BTreeMap::new(),
         None,
     )
     .await
@@ -1404,6 +1424,7 @@ async fn participant_competing_unknown_anchor_fails_closed() {
         SecurityParam(2160),
         &mut pending_switch,
         &mut None,
+        &BTreeMap::new(),
         None,
     )
     .await;
@@ -1451,6 +1472,7 @@ async fn participant_competing_fork_anchor_older_than_k_no_mutation() {
         SecurityParam(5),
         &mut pending_switch,
         &mut None,
+        &BTreeMap::new(),
         None,
     )
     .await
@@ -1635,6 +1657,8 @@ async fn fork_switch_win_adopts_via_rolledback_then_chainselected() {
         &src,
         &corpus_schedule(),
         &view,
+        SecurityParam(2160),
+        &mut BTreeMap::new(),
     )
     .expect("apply returns");
     match outcome {
@@ -1671,6 +1695,52 @@ async fn fork_switch_win_adopts_via_rolledback_then_chainselected() {
     assert!(last_fail.is_none());
 }
 
+// PHASE4-N-AO S13 (DC-NODE-40): apply_fork_switch retains the block(s) it rolls back
+// as self-bound, walk-visible EVIDENCE -- the population half of the rollback-retention
+// cache (the walk-consult half is covered by the lca_walk unit tests).
+#[test]
+fn apply_fork_switch_populates_rollback_retention() {
+    let (c, view) = corpus_view();
+    let competing = pick_lightest(&c);
+    let decoded = decode_block(&competing).unwrap();
+    let (db, anchor) = s4_fork_setup(&c, &competing, None);
+    let switch = s4_switch(&competing, anchor, "peer-7");
+    let mut fwd = fwd_at(decoded.header_input.block_no.0);
+    let mut wal = VecWal::default();
+    let mut pending = Some(switch.clone());
+    let mut fence = true;
+    let mut last_fail = None;
+    let src = InMemBodySource::with("peer-7", decoded.header_input.slot, competing.clone());
+    // The durable block about to be rolled back when the competing branch is adopted.
+    let old_tip = db.tip().unwrap().unwrap();
+    let mut retention: BTreeMap<Hash32, ade_node::lca_walk::CachedHeader> = BTreeMap::new();
+    let outcome = apply_fork_switch(
+        &mut fwd,
+        &db,
+        &mut wal,
+        &switch,
+        &mut pending,
+        &mut fence,
+        &mut last_fail,
+        &src,
+        &corpus_schedule(),
+        &view,
+        SecurityParam(2160),
+        &mut retention,
+    )
+    .expect("apply returns");
+    assert!(matches!(outcome, ForkSwitchOutcome::Adopted { .. }), "the competing branch adopts");
+    // The rolled-back block is now retained, SELF-BOUND (map key == re-derived block_hash).
+    let retained = retention
+        .get(&old_tip.hash)
+        .expect("the rolled-back block is retained as walk evidence");
+    assert_eq!(
+        retained.block_hash, old_tip.hash,
+        "self-binding: the retention key IS the re-derived block_hash, never a peer claim"
+    );
+    assert!(!retention.is_empty(), "the rollback populated the retention");
+}
+
 #[tokio::test]
 async fn selected_peer_missing_body_leaves_chain_unchanged_fence_held() {
     // No body served -> proof fails closed; current chain unchanged; the decision is
@@ -1689,7 +1759,7 @@ async fn selected_peer_missing_body_leaves_chain_unchanged_fence_held() {
     let src = InMemBodySource::empty();
     let outcome = apply_fork_switch(
         &mut fwd, &db, &mut wal, &switch, &mut pending, &mut fence, &mut last_fail, &src,
-        &corpus_schedule(), &view,
+        &corpus_schedule(), &view, SecurityParam(2160), &mut BTreeMap::new(),
     )
     .expect("apply returns");
     assert!(
@@ -1734,7 +1804,7 @@ async fn body_hash_mismatch_leaves_chain_unchanged() {
     let src = InMemBodySource::with("peer-7", decoded.header_input.slot, other);
     let outcome = apply_fork_switch(
         &mut fwd, &db, &mut wal, &switch, &mut pending, &mut fence, &mut last_fail, &src,
-        &corpus_schedule(), &view,
+        &corpus_schedule(), &view, SecurityParam(2160), &mut BTreeMap::new(),
     )
     .expect("apply returns");
     assert!(
@@ -1774,7 +1844,7 @@ async fn broken_parent_link_leaves_chain_unchanged() {
     let src = InMemBodySource::with("peer-7", decoded.header_input.slot, competing.clone());
     let outcome = apply_fork_switch(
         &mut fwd, &db, &mut wal, &switch, &mut pending, &mut fence, &mut last_fail, &src,
-        &corpus_schedule(), &view,
+        &corpus_schedule(), &view, SecurityParam(2160), &mut BTreeMap::new(),
     )
     .expect("apply returns");
     assert!(
@@ -1811,7 +1881,7 @@ async fn invalid_body_rejected_before_commit_no_half_switch() {
     let src = InMemBodySource::with("peer-7", decoded.header_input.slot, competing.clone());
     let outcome = apply_fork_switch(
         &mut fwd, &db, &mut wal, &switch, &mut pending, &mut fence, &mut last_fail, &src,
-        &corpus_schedule(), &view,
+        &corpus_schedule(), &view, SecurityParam(2160), &mut BTreeMap::new(),
     )
     .expect("apply returns");
     assert!(
@@ -1858,7 +1928,7 @@ async fn too_deep_rollback_fails_closed_unchanged() {
     let src = InMemBodySource::with("peer-7", decoded.header_input.slot, competing.clone());
     let outcome = apply_fork_switch(
         &mut fwd, &db, &mut wal, &switch, &mut pending, &mut fence, &mut last_fail, &src,
-        &corpus_schedule(), &view,
+        &corpus_schedule(), &view, SecurityParam(2160), &mut BTreeMap::new(),
     )
     .expect("apply returns");
     assert!(
@@ -1895,7 +1965,7 @@ async fn selector_equals_durable_post_forkchoicewin() {
     let src = InMemBodySource::with("peer-7", decoded.header_input.slot, competing.clone());
     apply_fork_switch(
         &mut fwd, &db, &mut wal, &switch, &mut pending, &mut fence, &mut last_fail, &src,
-        &corpus_schedule(), &view,
+        &corpus_schedule(), &view, SecurityParam(2160), &mut BTreeMap::new(),
     )
     .expect("adopt");
     let durable = db.tip().unwrap().unwrap();
@@ -1925,7 +1995,7 @@ async fn proof_failure_holds_fence_then_resolves_when_caught_up() {
     let src = InMemBodySource::empty(); // proof fails: no body served
     apply_fork_switch(
         &mut fwd, &db, &mut wal, &switch, &mut pending, &mut fence, &mut last_fail, &src,
-        &corpus_schedule(), &view,
+        &corpus_schedule(), &view, SecurityParam(2160), &mut BTreeMap::new(),
     )
     .expect("apply returns");
     assert!(pending.is_none(), "decision retired as failed");
@@ -1979,7 +2049,7 @@ async fn live_fetch_lying_body_rejected_before_commit() {
     src.insert("peer-7", decoded.header_input.slot, other); // a lying body
     let outcome = apply_fork_switch(
         &mut fwd, &db, &mut wal, &switch, &mut pending, &mut fence, &mut last_fail, &src,
-        &corpus_schedule(), &view,
+        &corpus_schedule(), &view, SecurityParam(2160), &mut BTreeMap::new(),
     )
     .expect("apply returns");
     assert!(
@@ -2023,7 +2093,7 @@ async fn live_fetch_short_range_rejected_before_commit() {
     src.insert("peer-7", decoded.header_input.slot, competing.clone());
     let outcome = apply_fork_switch(
         &mut fwd, &db, &mut wal, &switch, &mut pending, &mut fence, &mut last_fail, &src,
-        &corpus_schedule(), &view,
+        &corpus_schedule(), &view, SecurityParam(2160), &mut BTreeMap::new(),
     )
     .expect("apply returns");
     assert!(
@@ -2272,6 +2342,7 @@ async fn bridge_gap_injection_emits_missing_bridge() {
         SecurityParam(2160),
         &mut pending_switch,
         &mut pending_missing_bridge,
+        &BTreeMap::new(),
         Some(&mut ev),
     )
     .await;
@@ -2353,6 +2424,7 @@ async fn late_bridge_recovers_on_progress() {
         SecurityParam(2160),
         &mut pending_switch,
         &mut pending_missing_bridge,
+        &BTreeMap::new(),
         None,
     )
     .await
@@ -2384,6 +2456,7 @@ async fn late_bridge_recovers_on_progress() {
         SecurityParam(2160),
         &mut pending_switch,
         &mut pending_missing_bridge,
+        &BTreeMap::new(),
         None,
     )
     .await

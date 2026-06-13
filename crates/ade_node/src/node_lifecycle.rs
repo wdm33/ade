@@ -1133,6 +1133,17 @@ pub struct ForgeActivation<'a> {
     /// a rollback target, or a reason to admit the un-bridgeable block. In-memory,
     /// not persisted, not replay-visible.
     pub pending_missing_bridge: Option<MissingBridgeReason>,
+    /// PHASE4-N-AO S13 (DC-NODE-40): walk-visible EVIDENCE of the blocks Ade itself
+    /// rolled back during a `ForkChoiceWin` adoption (admitted `LinearExtend`, so
+    /// never in the competing-only S7 branch cache). Populated by `apply_fork_switch`
+    /// BEFORE the rollback; consulted by `walk_to_durable_lca` on a per-peer-cache
+    /// miss so a competing branch that descends through Ade's own rolled-back chain
+    /// stays EVALUABLE (fork-choice resolves it) instead of a false `BranchGap` ->
+    /// `MissingBridge` over-fire. Cross-iteration (lives in the fork-switch lifecycle
+    /// state, beside `pending_*`). EVIDENCE, not authority: k-bounded (block depth),
+    /// hash-keyed `BTreeMap` (self-binding, never HashMap-iterated for ordering);
+    /// NEVER durable, the LCA anchor, a rollback target, or a bypass of S2/S4.
+    pub rollback_retention: BTreeMap<Hash32, CachedHeader>,
     /// PHASE4-N-AO S4 (DC-NODE-37): the last fork-switch proof failure (a structured
     /// LOCAL observation surface — in-memory, not persisted, not evidence — so a
     /// failed/lying/incomplete replacement branch is never a silent drop). Set when
@@ -1184,6 +1195,7 @@ impl<'a> ForgeActivation<'a> {
             security_param: SecurityParam(2160),
             pending_fork_switch: None,
             pending_missing_bridge: None,
+            rollback_retention: BTreeMap::new(),
             last_fork_switch_failure: None,
             network_magic: None,
         }
@@ -1402,6 +1414,7 @@ pub async fn run_relay_loop_with_sched(
                         act.security_param,
                         &mut act.pending_fork_switch,
                         &mut act.pending_missing_bridge,
+                        &act.rollback_retention,
                         convergence.as_deref_mut(),
                     )
                     .await
@@ -1463,6 +1476,8 @@ pub async fn run_relay_loop_with_sched(
                             body_source.as_ref(),
                             era_schedule,
                             ledger_view,
+                            act.security_param,
+                            &mut act.rollback_retention,
                         )
                         .map_err(|e| NodeLifecycleError::RelaySync(format!("{e:?}")))?;
                         // PHASE4-N-AO S9 (DC-EVIDENCE-04): EXACTLY ONE terminal event for
@@ -2788,6 +2803,10 @@ fn dispatch_competing_fork_choice<D>(
     // outcome that holds the forge fence, NEVER a silent no-op and NEVER an admit of
     // the un-bridgeable block.
     pending_missing_bridge: &mut Option<MissingBridgeReason>,
+    // PHASE4-N-AO S13 (DC-NODE-40): walk-visible EVIDENCE of Ade's own rolled-back
+    // blocks, consulted by `walk_to_durable_lca` on a per-peer-cache miss. Read-only
+    // here; populated by `apply_fork_switch`. The LCA anchor stays ChainDb-durable only.
+    rollback_retention: &BTreeMap<Hash32, CachedHeader>,
     mut evidence: Option<&mut ConvergenceEvidence>,
 ) -> Result<(), NodeSyncError>
 where
@@ -2825,6 +2844,7 @@ where
     // (slot+hash, DC-NODE-29) + S2 validation + S4 body proof are authority.
     let lca = match walk_to_durable_lca(
         branch_cache,
+        rollback_retention,
         &decoded.block_hash,
         chaindb,
         security_param.0,
@@ -3062,6 +3082,11 @@ pub async fn run_participant_sync<D>(
     // k (a STRUCTURED fail-closed outcome holding the forge fence); CLEARED here on a
     // successful `LinearExtend` admit (forward progress -- the bridge arrived).
     pending_missing_bridge: &mut Option<MissingBridgeReason>,
+    // PHASE4-N-AO S13 (DC-NODE-40): walk-visible EVIDENCE of Ade's own rolled-back
+    // blocks (read-only here), threaded into the competing-fork-choice dispatch so the
+    // LCA walk can bridge a competing branch that descends through Ade's rolled-back
+    // chain. Owned cross-iteration in `ForgeActivation`; populated by `apply_fork_switch`.
+    rollback_retention: &BTreeMap<Hash32, CachedHeader>,
     // PHASE4-N-AJ AJ-S2 (DC-NODE-30): emit-only convergence evidence. `None` =>
     // no emission. Evidence observes authority; it never becomes authority.
     mut evidence: Option<&mut ConvergenceEvidence>,
@@ -3164,6 +3189,7 @@ where
                             pending_fork_switch,
                             pending_reselection,
                             pending_missing_bridge,
+                            rollback_retention,
                             evidence.as_deref_mut(),
                         )?;
                     }
@@ -3346,6 +3372,14 @@ pub fn apply_fork_switch<D>(
     body_source: &dyn BranchBodySource,
     era_schedule: &EraSchedule,
     ledger_view: &dyn LedgerView,
+    // PHASE4-N-AO S13 (DC-NODE-40): block-depth k for the rollback-retention bound.
+    security_param: SecurityParam,
+    // PHASE4-N-AO S13 (DC-NODE-40): the walk-visible rollback-retention EVIDENCE. This
+    // is the ONLY writer -- it captures the blocks about to be rolled back (Ade's own
+    // durable chain fork_anchor+1..=old_tip) as self-bound, k-bounded evidence BEFORE
+    // the rollback removes them, so a later competing branch descending through them
+    // stays evaluable. NEVER durable / anchor / rollback-target / S2-S4 bypass.
+    rollback_retention: &mut BTreeMap<Hash32, CachedHeader>,
 ) -> Result<ForkSwitchOutcome, NodeSyncError>
 where
     D: ChainDb + SnapshotStore,
@@ -3387,6 +3421,59 @@ where
         1 => switch.fork_anchor.hash.clone(),
         n => proven.blocks[n - 2].tip.hash.clone(),
     };
+
+    // PHASE4-N-AO S13 (DC-NODE-40): retain the about-to-be-rolled-back blocks as
+    // walk-visible EVIDENCE before the rollback removes them from durable. Capture
+    // Ade's OWN durable chain old_tip -> fork_anchor+1 (EXCLUSIVE of the anchor, which
+    // stays durable) as SELF-BOUND CachedHeaders (key == re-derived block_hash, never
+    // a peer claim) so a later competing branch descending through Ade's rolled-back
+    // chain can reach a durable ancestor instead of a false BranchGap -> MissingBridge
+    // over-fire. EVIDENCE ONLY: never durable, never the LCA anchor (the walk's anchor
+    // check is ChainDb-only), never a rollback target, never an S2/S4 bypass.
+    if let Ok(Some(old_tip)) = chaindb.tip() {
+        let anchor_hash = switch.fork_anchor.hash.clone();
+        let mut cur = old_tip.hash;
+        let mut steps = 0u64;
+        // The rollback is <= k by S3 eligibility; cap the walk at k block depth.
+        while cur != anchor_hash && steps <= security_param.0 {
+            let stored = match chaindb.get_block_by_hash(&cur) {
+                Ok(Some(s)) => s,
+                _ => break,
+            };
+            let d = match decode_block(&stored.bytes) {
+                Ok(d) => d,
+                Err(_) => break,
+            };
+            let next = match d.prev_hash.block_hash() {
+                Some(h) => h.clone(),
+                None => break, // genesis -- no further parent
+            };
+            // Self-binding: only retain a stored block that re-derives to its own
+            // lookup hash; the map key IS the re-derived block_hash (never peer-claimed).
+            if d.block_hash == cur {
+                rollback_retention.insert(
+                    d.block_hash.clone(),
+                    CachedHeader {
+                        header: d.header_input.clone(),
+                        prev_hash: d.prev_hash.clone(),
+                        block_hash: d.block_hash.clone(),
+                    },
+                );
+            }
+            cur = next;
+            steps += 1;
+        }
+        // k-BOUND eviction (no unbounded growth): keep only entries within k block
+        // depth of the highest retained block (~ the latest rollback boundary).
+        if let Some(max_bno) = rollback_retention
+            .values()
+            .map(|c| c.header.block_no.0)
+            .max()
+        {
+            let cutoff = max_bno.saturating_sub(security_param.0);
+            rollback_retention.retain(|_, c| c.header.block_no.0 >= cutoff);
+        }
+    }
 
     // ONLY NOW adopt via the existing apply authorities (DC-NODE-25). The
     // prevalidation guarantees each pump_block below succeeds (except crash -> WAL

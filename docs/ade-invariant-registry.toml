@@ -7691,9 +7691,9 @@ bridge -- Fault 2). REPLAY-EQUIVALENT: same rollback + same retained set -> same
 """
 source = "docs/planning/phase4-n-ao-ce-ao-6-live-gap.md (S11 Fault-1 finding) + docs/clusters/PHASE4-N-AO/S13-rolled-back-branch-evidence-retention.md"
 cross_ref = ["DC-NODE-38", "DC-NODE-29", "DC-NODE-37", "DC-NODE-39", "DC-NODE-25", "DC-NODE-28", "CN-CONS-01", "CN-CONS-03"]
-code_locus = "CANDIDATE (pending S13 impl): a BTreeMap<Hash32, CachedHeader> rollback-retention cache owned in crates/ade_node/src/node_lifecycle.rs run_participant_sync (alongside branch_caches), populated in apply_fork_switch BEFORE the ChainEvent::RolledBack apply (walk old_tip->fork_anchor+1 via ChainDb, insert self-bound + k-bounded), consulted by crates/ade_node/src/lca_walk.rs walk_to_durable_lca on a per-peer-cache miss (cache.get(h).or_else(|| retention.get(h))). The durable-anchor check (chaindb.get_block_by_hash) is UNCHANGED. BLUE select/apply/validate UNCHANGED."
-tests = []
-ci_scripts = []
+code_locus = "a BTreeMap<Hash32, CachedHeader> rollback-retention cache OWNED in crates/ade_node/src/node_lifecycle.rs ForgeActivation (cross-iteration, alongside pending_fork_switch/pending_missing_bridge -- NOT a run_participant_sync local, which is reborn empty each drain), populated in apply_fork_switch BEFORE the ChainEvent::RolledBack apply (walk old_tip->fork_anchor+1 via ChainDb decode_block, insert self-bound key==block_hash + k-bounded retain by security_param.0), consulted by crates/ade_node/src/lca_walk.rs walk_to_durable_lca on a per-peer-cache miss (cache.get(h).or_else(|| retention.get(h))). The durable-anchor check (chaindb.get_block_by_hash) is UNCHANGED. BLUE select/apply/validate UNCHANGED."
+tests = ["rollback_retains_removed_blocks_for_lca_walk", "retained_blocks_are_not_anchors", "retained_blocks_are_k_bounded", "retained_block_hash_self_binds", "genuine_gap_still_missing_bridge", "apply_fork_switch_populates_rollback_retention"]
+ci_scripts = ["ci/ci_check_rollback_retention_evidence.sh"]
 status = "declared"
 introduced_in = "PHASE4-N-AO"
 strengthened_in = []
