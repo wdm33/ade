@@ -80,8 +80,16 @@ EPOCH_END=$((EPOCH_START + EPOCHLEN - 1))
 PROTOCOL_STATE=$(run_cli query protocol-state)
 EPOCH_NONCE=$(echo "$PROTOCOL_STATE" | python3 -c 'import json,sys; print(json.load(sys.stdin)["epochNonce"])')
 
-# 3. Stake distribution (sigma fractions).
-STAKE_DISTR_JSON=$(run_cli query stake-distribution)
+# 3. Leader-election active stake — the `go` snapshot.
+# MUST be the `go` stake (the snapshot the node uses for THIS epoch's leader
+# election), NOT `query stake-distribution`: the latter normalizes by a
+# different (larger) base, so its per-pool fraction disagrees with the node's
+# leader election by a large margin (empirically ~35% median across preprod
+# pools) — Ade would then forge on slots the node rejects. `--all-stake-pools`
+# keys by hex pool id (no bech32). See
+# docs/active/c2-preprod-epoch296-acceptance-runbook.md and the gate
+# ci/check_ade1_leader_stake_active.sh.
+STAKE_SNAPSHOT_JSON=$(run_cli query stake-snapshot --all-stake-pools)
 
 # 4. Pool state for VRF keyhashes.
 POOL_STATE_JSON=$(run_cli query pool-state --all-stake-pools)
@@ -109,7 +117,7 @@ fi
 # temp files because argv has a length limit.
 TMP_DIR=$(mktemp -d)
 trap 'rm -rf "$TMP_DIR"' EXIT
-echo "$STAKE_DISTR_JSON" > "$TMP_DIR/stake_distr.json"
+echo "$STAKE_SNAPSHOT_JSON" > "$TMP_DIR/stake_snapshot.json"
 echo "$POOL_STATE_JSON" > "$TMP_DIR/pool_state.json"
 echo "$PROTO_PARAMS_JSON" > "$TMP_DIR/proto_params.json"
 
@@ -125,7 +133,7 @@ python3 - "$OUT" \
     "$NODE_VERSION" \
     "$ASC_NUMER" \
     "$ASC_DENOM" \
-    "$TMP_DIR/stake_distr.json" \
+    "$TMP_DIR/stake_snapshot.json" \
     "$TMP_DIR/pool_state.json" \
     "$TMP_DIR/proto_params.json" <<'PYEOF'
 import hashlib
@@ -145,73 +153,42 @@ import sys
     node_version,
     asc_numer,
     asc_denom,
-    stake_distr_path,
+    stake_snapshot_path,
     pool_state_path,
     proto_params_path,
 ) = sys.argv[1:]
 
-with open(stake_distr_path) as f:
-    stake_distr = json.load(f)
+with open(stake_snapshot_path) as f:
+    stake_snapshot = json.load(f)
 with open(pool_state_path) as f:
     pool_state = json.load(f)
 with open(proto_params_path) as f:
     proto_params = json.load(f)
 
-# stake-distribution returns bech32 pool IDs ("pool1...") with
-# sigma {numerator, denominator}. The bundle expects hex pool IDs
-# (28-byte) with active_stake as an integer.
-def bech32_decode_pool_id(p_str):
-    # cardano pool IDs are Bech32 with HRP "pool".
-    import importlib
-    try:
-        bech32 = importlib.import_module("bech32")
-    except ModuleNotFoundError:
-        raise SystemExit(
-            "FATAL: python3 'bech32' package not available — apt install python3-bech32 or pip install bech32"
-        )
-    hrp, data = bech32.bech32_decode(p_str)
-    if hrp != "pool" or data is None:
-        raise ValueError(f"bad pool bech32: {p_str}")
-    decoded = bech32.convertbits(data, 5, 8, False)
-    return bytes(decoded).hex()
+# `query stake-snapshot --all-stake-pools` returns the leader-election
+# snapshots keyed by HEX pool id (no bech32): {"pools": {hex: {stakeGo,
+# stakeMark, stakeSet}}, "total": {stakeGo, ...}}. The `go` value is the
+# active stake the node uses for THIS epoch's leader election. The bundle's
+# active_stake IS that lovelace value, so Ade's sigma = active_stake /
+# sum(active_stake) == the node's go-fraction (modulo pools without a VRF).
+snap_pools = stake_snapshot.get("pools", {k: v for k, v in stake_snapshot.items() if k != "total"})
+go_by_hex = {hid.lower(): int(v.get("stakeGo", 0)) for hid, v in snap_pools.items()}
+total_stake = int(stake_snapshot.get("total", {}).get("stakeGo", 0)) or sum(go_by_hex.values())
 
-total_stake = sum(int(v["numerator"]) * (1_000_000_000_000_000_000 // max(1, int(v["denominator"]))) for v in stake_distr.values())
-
-# Build pool_distribution: hex_id -> {active_stake}
-# pool_state already keys by hex pool ID; cross-reference sigma
-# via bech32-decoded keys from stake_distr.
-sd_by_hex = {}
-for p_bech, sigma in stake_distr.items():
-    try:
-        hex_id = bech32_decode_pool_id(p_bech)
-    except Exception as e:
-        # Skip pools we can't decode (operator-side anomaly).
-        continue
-    sd_by_hex[hex_id] = sigma
-
+# Build pool_distribution: hex_id -> {active_stake = stakeGo}. pool_state
+# (hex-keyed) supplies the VRF keyhash; include only pools with a VRF and a
+# positive `go` stake (a pool with go==0 leads zero slots this epoch).
 pool_distribution = {}
 pool_vrf_keyhashes = {}
 for hex_id, ps in pool_state.items():
     vrf = ps.get("poolParams", {}).get("spsVrf")
     if not vrf:
         continue
-    sigma = sd_by_hex.get(hex_id)
-    if sigma is None:
-        # Pool in pool-state but not in stake-distribution; skip.
+    go = go_by_hex.get(hex_id.lower(), 0)
+    if go <= 0:
+        # Pool not in this epoch's leader-election `go` snapshot; skip.
         continue
-    # Convert sigma {num,denom} -> active_stake (lovelace) by
-    # scaling to the network's mainnet-equivalent active-stake
-    # base of 30B ADA = 3e16 lovelace. The exact base is
-    # implementation-detail: the bundle's pool active_stake is
-    # only used for is_leader fraction comparisons; the ratio
-    # matters, not the absolute base.
-    num = int(sigma["numerator"])
-    denom = int(sigma["denominator"])
-    if denom == 0:
-        continue
-    base = 30_000_000_000_000_000  # 3e16
-    active = (num * base) // denom
-    pool_distribution[hex_id] = {"active_stake": active}
+    pool_distribution[hex_id] = {"active_stake": go}
     pool_vrf_keyhashes[hex_id] = vrf
 
 # protocol_params_hash: blake2b-256 of a canonical JSON dump.
@@ -237,7 +214,7 @@ bundle = {
     "source_cardano_node_version": node_version,
     "source_query_command": (
         "docker exec cardano-node-preprod cardano-cli query "
-        "{tip,protocol-state,stake-distribution,pool-state,protocol-parameters}"
+        "{tip,protocol-state,stake-snapshot --all-stake-pools,pool-state,protocol-parameters}"
     ),
     "source_tip_hash_hex": tip_hash.lower(),
     "source_tip_slot": int(tip_slot),
