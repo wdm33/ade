@@ -48,7 +48,28 @@ forger it can run as **this** pool without a registration round-trip, and so the
 | Deposits spent | 500 tADA (pool) + 2 tADA (stake key) |
 | Fee | 0.204353 tADA |
 | Registered in epoch | 293 (2026-06-09) |
-| Pledge stake active | ~epoch 295 (2-epoch snapshot rule; ~5.6 days) |
+| Pledge stake active | epoch 295 (Koios `active_epoch_no`) |
+
+## Faucet pool delegation (electable stake)
+
+| Field | Value |
+|---|---|
+| Tx hash | `4a545d61cd80e00fbea3fe7d34adcded2b8d2ddf3dbd393d9279dbf2b4fb34c5` |
+| Included | block 4,820,842, epoch 294 (2026-06-14) |
+| Certificate | `pool_delegation` → `pool1gkgwpms…` |
+| Faucet stake address | `stake_test1uqgqru5w9ra8kwgfac0h5r5shekjdd93wh8lehsp8fpghfqk7hq6h` |
+| Delegated amount | ~1,000,008 tADA (`1000008344160` lovelace) |
+| Faucet stake active | epoch 296 |
+
+Verified via Koios `account_info` on the faucet stake address (`delegated_pool` =
+this pool, `total_balance` ≈ 1,000,008 tADA). The `pool_info.live_stake` aggregate
+lags the account-level view. The faucet retains control of this stake and may
+redelegate it later: it makes the pool **electable for testing**, it is not owned by
+the operator and does not count toward pledge.
+
+**Active-stake timeline:** pledge ~9,497 tADA active epoch 295; faucet ~1,000,008
+tADA active epoch 296. From ~epoch 296 the pool holds ~1.01M tADA active (~0.1% of
+total active stake) — electable, on the order of a dozen-plus leader slots per epoch.
 
 ## Verification (queried via the synced preprod gateway node)
 
@@ -87,15 +108,20 @@ epoch-293 boundary and propagates `mark → set → go`, going active at epoch 2
 }
 ```
 
-## Pending operator actions (not part of this evidence)
+## Operator actions — status (2026-06-14)
 
-- **Faucet pool delegation** — request the testnets faucet ("Delegate to a Stake
-  Pool") to delegate its stake to `pool1gkgwpms…` so the pool is *electable*
-  (pledge alone is negligible vs ~912M tADA total). Also subject to the 2-epoch rule.
-- **Conway vote delegation** — `voteDelegation` is `null`; only required to
-  withdraw rewards, not for block production.
-- **KES key + opcert** — generated only when Ade stands up as the forging node,
-  bound to **this** pool's cold/VRF lineage.
+Completed since registration:
+- **Faucet pool delegation** — DONE (section above): faucet ~1M tADA delegated to
+  the pool; active ~epoch 296.
+- **KES key + operational certificate** — DONE (2026-06-14): generated and bound to
+  this pool's cold/VRF lineage; opcert issued at KES period 970 (valid ~62 periods,
+  ~until 2026-09). Held in the operator workspace; the C2 session forges with it.
+
+Still open (not blocking, not part of this evidence):
+- **Conway vote delegation** — `voteDelegation` is `null`; only required to withdraw
+  rewards, not for block production. Optional.
+- **Relay** — still the placeholder above; to be updated to Ade's real relay via
+  re-registration once Ade stands up as the producer (C2 territory).
 
 ## Reproduction / provenance
 
