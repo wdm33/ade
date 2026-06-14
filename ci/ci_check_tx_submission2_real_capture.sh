@@ -87,18 +87,15 @@ for t in decode_rejects_bare_txid decode_rejects_wrong_txid_hash_length \
   grep -Eq "$t" <<< "$s" || fail "missing negative unit test $t -- guard 6"
 done
 
-# Evidence guard 7 (real-capture corpus + round-trip test). The captured
-# MsgReplyTxIds (era-tagged txid + indefinite array) is the rich frame that
-# exposed + validates the fix; it must be present. MsgReplyTxs needs the live
-# full-exchange (only flows when the public-preprod node has a mempool tx) and
-# is the documented live follow-up -- round-tripped by the test when present.
+# Evidence guard 7 (real-capture corpus + round-trip test). The live full
+# exchange (Init -> RequestTxIds -> ReplyTxIds -> RequestTxs -> ReplyTxs) was
+# captured against the docker public-preprod node, so the corpus carries the
+# node-originated MsgReplyTxIds (era-tagged txid + indefinite array) AND the
+# MsgReplyTxs (era-wrapped tx body in an indefinite array); both must be present.
 [ -f "$RTTEST" ] || fail "missing real-capture round-trip test: $RTTEST"
 ls "$CORPUS"/*_txsub_reply_txids_*_recv.cbor >/dev/null 2>&1 \
   || fail "no real MsgReplyTxIds capture in corpus ($CORPUS)"
-if ls "$CORPUS"/*_txsub_reply_txs_*_recv.cbor >/dev/null 2>&1; then
-  echo "note: real MsgReplyTxs capture present (live full-exchange landed)"
-else
-  echo "note: MsgReplyTxs not yet captured (live full-exchange + DC-PROTO-02 flip pending preprod tx)"
-fi
+ls "$CORPUS"/*_txsub_reply_txs_*_recv.cbor >/dev/null 2>&1 \
+  || fail "no real MsgReplyTxs capture in corpus ($CORPUS)"
 
-echo "OK: tx-submission2 codec is on cardano-node's real wire grammar -- era-tagged txid + indefinite arrays, byte-identical (TXSUB2-CODEC-REALWIRE)"
+echo "OK: tx-submission2 codec is on cardano-node's real wire grammar -- era-tagged txid + indefinite arrays, byte-identical, full exchange (TXSUB2-CODEC-REALWIRE)"

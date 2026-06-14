@@ -219,10 +219,14 @@ admission adversarial false-accept corpus + per-rule tx/conservation/witness adv
     Enforced by codec unit tests (byte-identity on the captured frame + bare/wrong-len/unterminated
     negatives) + `tx_submission2_real_capture_corpus` round-trip + `ci/ci_check_tx_submission2_real_capture.sh`
     (self-testing). Captured `ReplyTxIds`/`Init` frames committed as the regression corpus.
-  - **DC-PROTO-02 stays `declared`** (strengthened_in += TXSUB2-CODEC-REALWIRE): the FLIP awaits the
-    **live full exchange** `ReplyTxIds → RequestTxs → ReplyTxs` (AC #6) — blocked on a public-preprod
-    mempool tx (off-peak lull). Harness left running to land `MsgReplyTxs` + the transcript-equivalence
-    gate; flip then. **Harness note:** the contiguous Plutus verdict harness currently stops early on a
+  - **DC-PROTO-02 FLIPPED declared→enforced (2026-06-14).** The live full exchange landed:
+    the docker public-preprod node completed `Init → RequestTxIds → ReplyTxIds → RequestTxs → ReplyTxs`;
+    the node's `MsgReplyTxIds` (era-tagged txid + indefinite array) AND `MsgReplyTxs` (era-wrapped body +
+    indefinite array) both re-encode BYTE-IDENTICALLY (corpus `preprod_server_txsub_{reply_txids,reply_txs}_00_recv.cbor`).
+    That closes the LAST mini-protocol surface — all 11 N2N+N2C surfaces now have real-capture byte-identical
+    round-trips, so DC-PROTO-02 (transcript-equivalent with Haskell) is enforced (ci_script
+    `ci_check_tx_submission2_real_capture.sh`). **Stream 1 DC-PROTO-02 thread CLOSED.** (Cleanup: restore
+    `topology.json` + SIGHUP the node; the harness exited on capture.) **Harness note:** the contiguous Plutus verdict harness currently stops early on a
   cert-state divergence (`StakeAlreadyRegistered`/`StakeNotRegistered` at blocks 1/1/40), so it reaches
   ~0 passing Plutus txs — a pre-existing limitation that weakens the Plutus oracle's reach; worth a
   dedicated look in the broader Stream-1 false-accept hunt.

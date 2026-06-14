@@ -105,19 +105,19 @@ fn real_capture_round_trips_byte_identical() {
 
     // The node, as the tx-submission2 provider, originates MsgInit and offers
     // its mempool via MsgReplyTxIds (real, era-tagged tx ids in an indefinite
-    // array) — the rich frame that exposed + now validates the codec fix.
+    // array) and MsgReplyTxs (real era-wrapped tx bodies). All three are from
+    // the live full exchange (Init -> RequestTxIds -> ReplyTxIds -> RequestTxs
+    // -> ReplyTxs) against the docker public-preprod node, and all re-encode
+    // byte-identically above.
     assert!(saw_init, "expected the node's MsgInit among the captures");
     assert!(
         saw_reply_txids_nonempty,
         "expected a non-empty MsgReplyTxIds (real mempool tx ids) capture"
     );
-    // MsgReplyTxs requires the live full-exchange (ReplyTxIds -> RequestTxs ->
-    // ReplyTxs), which only flows when the public-preprod node has a mempool
-    // tx to deliver. It is round-tripped above when present; its capture +
-    // the DC-PROTO-02 flip are the live follow-up (the harness is left
-    // running for it). The codec already handles the ReplyTxs indefinite
-    // tx-seq (codec unit test roundtrip_every_variant).
-    let _ = saw_reply_txs;
+    assert!(
+        saw_reply_txs,
+        "expected a MsgReplyTxs (real era-wrapped tx body) capture",
+    );
 }
 
 #[test]
