@@ -53,7 +53,9 @@ case "$NETWORK" in
     preprod) DEF_CONTAINER="cardano-node-preprod"; DEF_MAGIC="1"
              DEF_CONFIG_DIR="${REPO_ROOT}/.cardano-node-preprod/config" ;;
     preview) DEF_CONTAINER="cardano-node-preview"; DEF_MAGIC="2"
-             DEF_CONFIG_DIR="${REPO_ROOT}/.cardano-node-preview/config" ;;
+             # Preview node lives OFF-repo (scratch-outside-repo rule), mirroring
+             # the in-repo preprod node; relocate with ADE_PREVIEW_DIR if needed.
+             DEF_CONFIG_DIR="${ADE_PREVIEW_DIR:-${HOME}/.cardano-node-preview}/config" ;;
     *) echo "FATAL: --network must be 'preview' or 'preprod' (got '$NETWORK')" >&2; exit 2 ;;
 esac
 CONTAINER="${ADE_LIVE_PEER_CONTAINER:-$DEF_CONTAINER}"

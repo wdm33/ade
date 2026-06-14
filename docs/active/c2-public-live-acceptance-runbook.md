@@ -82,7 +82,7 @@ pool cold-key hash; relay forging = 0; manifest `network` = preview.
 | `--network` | `preview` | `preprod` |
 | network magic | `2` | `1` |
 | node container | `cardano-node-preview` | `cardano-node-preprod` |
-| genesis dir | `.cardano-node-preview/config` | `.cardano-node-preprod/config` |
+| genesis dir | `~/.cardano-node-preview/config` (off-repo) | `.cardano-node-preprod/config` (in-repo) |
 | socket (in-container) | `/ipc/node.socket` | `/ipc/node.socket` |
 | consensus-inputs out | `~/.cardano-c2-preview/ade-inputs.json` | `~/.cardano-c2-readiness/consensus-inputs.json` |
 | snapshot dir | `~/.cardano-c2-preview/store` | `~/.cardano-c2-readiness/store` |
