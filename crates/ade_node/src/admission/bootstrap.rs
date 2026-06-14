@@ -77,6 +77,17 @@ pub enum AdmissionBootstrapError {
     BootstrapInitialState(String),
     FileWalStoreOpen(String),
     WalChainBreak(String),
+    /// The consensus-inputs bundle's `source_tip` (the chain-sync intersect
+    /// point — see `spawn_wire_pumps_for_admission`) does not equal the recovered
+    /// ledger tip (the `--seed-point`). The seed UTxO and the bundle MUST be
+    /// extracted at the same chain point; otherwise the peer rolls forward from
+    /// `source_tip` while the ledger sits at the seed, applying blocks across a
+    /// gap (a hollow hash-agreement, not a validated chain). Fail closed
+    /// (RO-LIVE-05 / admission catch-up integrity).
+    SeedBundleTipMismatch {
+        seed_slot: u64,
+        source_tip_slot: u64,
+    },
     /// LiveConsensusInputs bundle import failed (PHASE4-N-M-C
     /// CN-CONS-IN-01 / DC-CONS-IN-01).
     ConsensusInputsImport(LiveConsensusInputsImportError),
@@ -121,6 +132,27 @@ pub async fn dispatch_admission(
     }
 }
 
+/// Fail-closed consistency check: the consensus-inputs bundle's `source_tip`
+/// (used as the chain-sync intersect point in `spawn_wire_pumps_for_admission`)
+/// MUST equal the recovered ledger tip (the `--seed-point`). If they differ, the
+/// seed UTxO and the bundle were extracted at different chain points, so the peer
+/// rolls forward from `source_tip` while the ledger sits at the seed — applying
+/// blocks across a gap (a hollow hash-agreement rather than a validated chain).
+fn check_seed_bundle_tip_consistency(
+    source_tip_slot: SlotNo,
+    source_tip_hash: &Hash32,
+    seed_slot: SlotNo,
+    seed_hash: &Hash32,
+) -> Result<(), AdmissionBootstrapError> {
+    if source_tip_slot != seed_slot || source_tip_hash != seed_hash {
+        return Err(AdmissionBootstrapError::SeedBundleTipMismatch {
+            seed_slot: seed_slot.0,
+            source_tip_slot: source_tip_slot.0,
+        });
+    }
+    Ok(())
+}
+
 async fn run_admission_inner(
     acli: &AdmissionCli,
     writer: AdmissionLogWriter<File>,
@@ -159,6 +191,18 @@ async fn run_admission_inner(
     let current_pparams = canonical
         .require_forge_current_pparams()
         .map_err(|e| AdmissionBootstrapError::ForgeCurrentPParams(format!("{e:?}")))?;
+
+    // Fail-closed (RO-LIVE-05): the bundle's `source_tip` is the chain-sync
+    // intersect point (spawn_wire_pumps_for_admission); it MUST equal the
+    // recovered ledger tip (the seed point), or the peer's roll-forward applies
+    // blocks across a gap on a stale ledger (a hollow hash-agreement). The seed
+    // UTxO and the consensus-inputs bundle must be extracted at the same tip.
+    check_seed_bundle_tip_consistency(
+        canonical.source_tip_slot,
+        &canonical.source_tip_hash,
+        SlotNo(acli.seed_point_slot),
+        &seed_block_hash,
+    )?;
 
     // 4. seed_to_snapshot (uses ChainDb as the SnapshotStore).
     let chain_dep_seed = PraosChainDepState::genesis(Nonce::ZERO);
@@ -469,6 +513,31 @@ fn _snapshot_store_marker(_s: &dyn SnapshotStore) {}
 #[allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 mod tests {
     use super::*;
+
+    /// RO-LIVE-05 / #18: the bundle's `source_tip` (chain-sync intersect point)
+    /// must equal the recovered ledger tip (the seed point), else the catch-up
+    /// applies blocks across a gap. The guard fails closed on slot/hash mismatch.
+    #[test]
+    fn seed_bundle_tip_consistency_fails_closed_on_mismatch() {
+        let h1 = Hash32([1u8; 32]);
+        let h2 = Hash32([2u8; 32]);
+        // Matching slot + hash → Ok (the proper flow: seed + bundle at the same tip).
+        assert!(check_seed_bundle_tip_consistency(SlotNo(100), &h1, SlotNo(100), &h1).is_ok());
+        // Slot mismatch → fail closed.
+        assert!(matches!(
+            check_seed_bundle_tip_consistency(SlotNo(101), &h1, SlotNo(100), &h1),
+            Err(AdmissionBootstrapError::SeedBundleTipMismatch {
+                seed_slot: 100,
+                source_tip_slot: 101
+            })
+        ));
+        // Hash mismatch at the same slot → fail closed (the #18 footgun: a stale
+        // seed paired with a fresh bundle that resolves a different block).
+        assert!(matches!(
+            check_seed_bundle_tip_consistency(SlotNo(100), &h2, SlotNo(100), &h1),
+            Err(AdmissionBootstrapError::SeedBundleTipMismatch { .. })
+        ));
+    }
 
     /// PHASE4-N-M-SCHED S1 regression: the imported-window era
     /// schedule MUST use the bundle's epoch_no as `start_epoch`,
