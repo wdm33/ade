@@ -26,9 +26,14 @@
   - `go` (the snapshot the node uses for the CURRENT epoch's leader election) = **0**
     → **ADE1 leads ZERO slots now**. No accepted-block attempt is meaningful before `go > 0`.
   - Only the pledge (~9,497 tADA) sits in `mark`; the ~1,000,008 tADA faucet delegation
-    (tx `4a545d61…`, epoch 294) is not even in `mark` yet.
-  - Faucet expected **active (in `go`) ~epoch 296**; from then ADE1 holds ~1.01M tADA
-    active (~0.1% of total) ⇒ on the order of a dozen-plus leader slots per epoch.
+    (tx `4a545d61…`, epoch 294) is **not even in `mark` yet** (delegated mid-294, after
+    the boundary snapshot).
+  - **Forward timeline from the ledger snapshot (authoritative — supersedes the
+    manifest's Koios +2 "active 296"):** the faucet enters `mark` at the 294→295
+    boundary, then `mark→set→go` over three boundaries ⇒ **faucet active (in `go`) at
+    epoch 297** (~2026-06-25), holding ~1.01M tADA (~dozen-plus slots/epoch) — the
+    RELIABLE window. Epoch 296 (~2026-06-20) has only the pledge in `go` (~9.5k tADA,
+    ~0.7 expected slots/epoch) — a LONG-SHOT, not a reliable attempt.
 - **STAKE-SOURCE BUG — FOUND AND FIXED (2026-06-14):** the extractor originally built
   `pool_distribution` from `query stake-distribution`, whose per-pool fraction does
   **not** equal the node's leader-election `go` fraction (different normalization base).
@@ -42,7 +47,9 @@
   producer/forge path; the prior N-M-SCHED *admission* proofs don't forge and are
   unaffected. C2-LOCAL CE-A5 never hit it — controlled single-pool venue.)
   - ADE1 is correctly **absent** from the fixed bundle at epoch 294 (`go = 0` → leads
-    zero slots). At epoch 296 it appears with `go > 0` and the gate's ADE1 arm passes.
+    zero slots). At epoch 296 only the pledge (~9.5k tADA) is in `go` (gate passes but
+    leadership is a long-shot); at **epoch 297** the ~1M faucet is in `go` and the gate's
+    ADE1 arm passes with reliable leadership.
 
 ---
 
