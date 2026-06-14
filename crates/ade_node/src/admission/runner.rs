@@ -492,10 +492,15 @@ fn process_block(
     // the single shared ade_codec authority (no hand-rolled tag-24 parse
     // in RED). `unwrap_tag24` returns a zero-copy borrow of the inner
     // `[era, block]` storage bytes that `decode_block` consumes.
-    let inner = match ade_codec::unwrap_tag24(block_bytes) {
-        Ok(b) => b,
-        Err(_) => return ProcessedBlock::Undecodable,
-    };
+    // The runtime block-fetch handler emits `block_bytes` as the raw `[era, block]`
+    // storage array (the node_lifecycle AO path `decode_block`s it directly; the
+    // PHASE4-N-M-FRAG-era tag-24 CBOR-in-CBOR envelope is no longer applied by the
+    // runtime). Tolerate BOTH framings: strip a tag-24 wrapper if present, else use
+    // the bytes as-is. `decode_block` remains the final validator, so genuine garbage
+    // still falls to `Undecodable` and the DC-ADMIT-12 fail-close is preserved.
+    // (Venue-agnostic: confirmed live on preprod AND preview, 2026-06-14 — the
+    // unconditional unwrap rejected every raw body as Undecodable.)
+    let inner = ade_codec::unwrap_tag24(block_bytes).unwrap_or(block_bytes);
     let decoded = match decode_block(inner) {
         Ok(d) => d,
         Err(_) => return ProcessedBlock::Undecodable,
