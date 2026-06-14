@@ -1,43 +1,63 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# PHASE4-N-M-C S5 — operator-side LiveConsensusInputs bundle
-# generator.
+# PHASE4-N-M-C S5 / C2-VENUE-PARAM — operator-side LiveConsensusInputs
+# bundle generator (venue-parametric: preview or preprod).
 #
-# Reads cardano-node-preprod (docker container `cardano-node-preprod`
-# at 127.0.0.1:3001) via `docker exec cardano-cli ...` queries,
-# assembles the JSON envelope `LiveConsensusInputsRaw`
-# (`ade_runtime::consensus_inputs::json::RawConsensusInputs`)
-# expects, and writes it to the requested output path.
+# Reads the venue's cardano-node docker container via `docker exec
+# cardano-cli ...` queries, assembles the JSON envelope
+# `ade_runtime::consensus_inputs::json::RawConsensusInputs` expects, and
+# writes it to the requested output path.
 #
 # Usage:
-#   ci/build_consensus_inputs_bundle.sh <output.json>
+#   ci/build_consensus_inputs_bundle.sh [--network preview|preprod] <output.json>
+#     --network preprod (default): container cardano-node-preprod, magic 1
+#     --network preview          : container cardano-node-preview,  magic 2
+#   Env overrides (always win): ADE_LIVE_PEER_CONTAINER, ADE_LIVE_NETWORK_MAGIC,
+#   ADE_LIVE_PEER_SOCKET, ADE_LIVE_SHELLEY_GENESIS, ADE_LIVE_GENESIS_CONFIG.
 #
-# The bundle is RED / operational evidence — the BLUE admission
-# path consumes only the canonicalized form
-# (`LiveConsensusInputsCanonical`) produced by
+# The bundle is RED / operational evidence — the BLUE admission path consumes
+# only the canonicalized form (`LiveConsensusInputsCanonical`) produced by
 # `ade_runtime::consensus_inputs::import_live_consensus_inputs`.
 #
-# Doctrine:
-#   - The Shelley genesis hash is read from `.cardano-node-preprod
-#     /config/config.json` (per the local preprod runbook).
-#   - The active-slots-coefficient is `0.05` per
-#     `.cardano-node-preprod/config/shelley-genesis.json`. The
-#     bundle records the closed `numer=1, denom=20` form.
-#   - Preprod network magic is `1`.
-#   - The epoch length on preprod is `432000` slots; the bundle
-#     records `[epoch_start_slot, epoch_end_slot]` as
-#     `[tip_slot - slot_in_epoch, tip_slot - slot_in_epoch + 432000 - 1]`.
+# Doctrine (venue-general — NOTHING venue-specific is hardcoded):
+#   - Shelley genesis hash is read from the venue's config.json.
+#   - active-slots-coefficient AND epochLength are read from the venue's
+#     shelley-genesis.json (preprod: ASC 0.05->1/20, epochLength 432000;
+#     preview: epochLength 86400). Never hardcoded.
+#   - network magic comes from --network / ADE_LIVE_NETWORK_MAGIC.
+#   - pool_distribution active_stake is the leader-election `go` snapshot
+#     (query stake-snapshot --all-stake-pools), NOT query stake-distribution.
 
-if [[ $# -ne 1 ]]; then
-    echo "Usage: $0 <output.json>" >&2
+REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
+NETWORK="preprod"
+OUT=""
+while [[ $# -gt 0 ]]; do
+    case "$1" in
+        --network) NETWORK="${2:-}"; shift 2 ;;
+        -h|--help) echo "Usage: $0 [--network preview|preprod] <output.json>"; exit 0 ;;
+        --*) echo "FATAL: unknown flag '$1'" >&2; exit 2 ;;
+        *) OUT="$1"; shift ;;
+    esac
+done
+if [[ -z "$OUT" ]]; then
+    echo "Usage: $0 [--network preview|preprod] <output.json>" >&2
     exit 2
 fi
-OUT="$1"
-REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 
-CONTAINER="${ADE_LIVE_PEER_CONTAINER:-cardano-node-preprod}"
-MAGIC="${ADE_LIVE_NETWORK_MAGIC:-1}"
+# Venue defaults (env ADE_LIVE_* overrides always win). Preview = magic 2,
+# 1-day epochs; preprod = magic 1, 5-day epochs. ASC + epochLength are STILL
+# read from the venue shelley-genesis below (NEVER hardcoded), so the same
+# extractor is correct for either public venue and any short-epoch local net.
+case "$NETWORK" in
+    preprod) DEF_CONTAINER="cardano-node-preprod"; DEF_MAGIC="1"
+             DEF_CONFIG_DIR="${REPO_ROOT}/.cardano-node-preprod/config" ;;
+    preview) DEF_CONTAINER="cardano-node-preview"; DEF_MAGIC="2"
+             DEF_CONFIG_DIR="${REPO_ROOT}/.cardano-node-preview/config" ;;
+    *) echo "FATAL: --network must be 'preview' or 'preprod' (got '$NETWORK')" >&2; exit 2 ;;
+esac
+CONTAINER="${ADE_LIVE_PEER_CONTAINER:-$DEF_CONTAINER}"
+MAGIC="${ADE_LIVE_NETWORK_MAGIC:-$DEF_MAGIC}"
 SOCKET_PATH_INSIDE="${ADE_LIVE_PEER_SOCKET:-/opt/cardano/ipc/node.socket}"
 
 run_cli() {
@@ -62,7 +82,7 @@ NODE_VERSION=$(docker exec "$CONTAINER" cardano-node --version 2>&1 | head -1)
 # preprod (epochLength 432000, ASC 0.05 -> 1/20) AND any private testnet
 # (e.g. a short-epoch local rehearsal venue). Default path is the local
 # preprod shelley-genesis; override with ADE_LIVE_SHELLEY_GENESIS.
-SHELLEY_GENESIS="${ADE_LIVE_SHELLEY_GENESIS:-${REPO_ROOT}/.cardano-node-preprod/config/shelley-genesis.json}"
+SHELLEY_GENESIS="${ADE_LIVE_SHELLEY_GENESIS:-${DEF_CONFIG_DIR}/shelley-genesis.json}"
 EPOCHLEN=$(python3 -c "import json; print(int(json.load(open('${SHELLEY_GENESIS}'))['epochLength']))")
 read -r ASC_NUMER ASC_DENOM < <(python3 -c "
 import json
@@ -101,7 +121,7 @@ PROTO_PARAMS_JSON=$(run_cli query protocol-parameters)
 # 6. Genesis hash from the venue's node config (default: the local
 # preprod config; override via ADE_LIVE_GENESIS_CONFIG for another
 # venue, e.g. a private testnet — same extraction, different node).
-GENESIS_CONFIG="${ADE_LIVE_GENESIS_CONFIG:-${REPO_ROOT}/.cardano-node-preprod/config/config.json}"
+GENESIS_CONFIG="${ADE_LIVE_GENESIS_CONFIG:-${DEF_CONFIG_DIR}/config.json}"
 GENESIS_HASH=$(python3 -c "
 import json,sys
 with open('${GENESIS_CONFIG}') as f:
@@ -133,6 +153,7 @@ python3 - "$OUT" \
     "$NODE_VERSION" \
     "$ASC_NUMER" \
     "$ASC_DENOM" \
+    "$NETWORK" \
     "$TMP_DIR/stake_snapshot.json" \
     "$TMP_DIR/pool_state.json" \
     "$TMP_DIR/proto_params.json" <<'PYEOF'
@@ -153,6 +174,7 @@ import sys
     node_version,
     asc_numer,
     asc_denom,
+    network,
     stake_snapshot_path,
     pool_state_path,
     proto_params_path,
@@ -211,9 +233,17 @@ bundle = {
     # (require_forge_current_pparams): the EXACT canonical dump that
     # protocol_params_hash binds, so blake2b_256(preimage) == hash.
     "protocol_params_json": canonical_pp.decode(),
+    # Venue-tag provenance (C2-VENUE-PARAM). `network`, `epoch_length`, and
+    # `pool_distribution_source` are #[serde(default)] Option fields in
+    # RawConsensusInputs — recorded for venue routing / auditability; they do
+    # NOT enter the canonical fingerprint. `genesis_hash_hex` IS the Shelley
+    # genesis hash; `active_slots_coeff` / `source_tip_*` complete the venue tag.
+    "network": network,
+    "epoch_length": int(epoch_end) - int(epoch_start) + 1,
+    "pool_distribution_source": "cardano-cli query stake-snapshot --all-stake-pools (leader-election go stake)",
     "source_cardano_node_version": node_version,
     "source_query_command": (
-        "docker exec cardano-node-preprod cardano-cli query "
+        f"docker exec cardano-node-{network} cardano-cli query "
         "{tip,protocol-state,stake-snapshot --all-stake-pools,pool-state,protocol-parameters}"
     ),
     "source_tip_hash_hex": tip_hash.lower(),

@@ -71,6 +71,19 @@ pub struct RawConsensusInputs {
     /// forge-current-pparams install site** (`require_forge_current_pparams`).
     #[serde(default)]
     pub protocol_params_json: Option<String>,
+    /// Venue tag (C2-VENUE-PARAM): `"preview"` | `"preprod"`. Provenance only —
+    /// `#[serde(default)]` so pre-venue-param bundles still parse, and it does
+    /// NOT enter the canonical fingerprint (like `protocol_params_json`).
+    #[serde(default)]
+    pub network: Option<String>,
+    /// Venue epoch length in slots (provenance; equals
+    /// `epoch_end_slot - epoch_start_slot + 1`).
+    #[serde(default)]
+    pub epoch_length: Option<u64>,
+    /// Provenance: the cardano-cli query the `pool_distribution` active_stake
+    /// was sourced from (the leader-election `go` snapshot).
+    #[serde(default)]
+    pub pool_distribution_source: Option<String>,
 }
 
 /// Rational fraction `numer / denom` for ASC. `denom` must be
@@ -153,5 +166,35 @@ mod tests {
         );
         let err = parse_consensus_inputs_json(bad.as_bytes()).unwrap_err();
         assert!(err.to_string().to_lowercase().contains("extra_field"));
+    }
+
+    #[test]
+    fn venue_tagged_bundle_parses_and_records_network() {
+        // C2-VENUE-PARAM: a venue-tagged bundle (network / epoch_length /
+        // pool_distribution_source) must be ACCEPTED by deny_unknown_fields,
+        // and the venue tag recorded as provenance.
+        let tagged = MINIMAL.replace(
+            r#""source_tip_slot": 86400500"#,
+            concat!(
+                "\"source_tip_slot\": 86400500,\n",
+                "        \"network\": \"preview\",\n",
+                "        \"epoch_length\": 86400,\n",
+                "        \"pool_distribution_source\": \"cardano-cli query stake-snapshot --all-stake-pools (leader-election go stake)\""
+            ),
+        );
+        let raw = parse_consensus_inputs_json(tagged.as_bytes()).expect("venue-tagged parse ok");
+        assert_eq!(raw.network.as_deref(), Some("preview"));
+        assert_eq!(raw.epoch_length, Some(86400));
+        assert!(raw.pool_distribution_source.is_some());
+    }
+
+    #[test]
+    fn pre_venue_param_bundle_still_parses() {
+        // Backward-compat: a bundle with no venue tag still parses; the venue
+        // fields default to None (no fingerprint impact).
+        let raw = parse_consensus_inputs_json(MINIMAL.as_bytes()).expect("parse ok");
+        assert_eq!(raw.network, None);
+        assert_eq!(raw.epoch_length, None);
+        assert_eq!(raw.pool_distribution_source, None);
     }
 }

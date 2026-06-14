@@ -1,5 +1,12 @@
 # C2 preprod ADE1 accepted-block pass — epoch-296 runbook + readiness grounding
 
+> **PIVOT (2026-06-14):** the primary public-chain proof now goes to **Preview
+> first** (1-day epochs → stake active in ~2–3 d vs ~11 on preprod; the bounty
+> accepts preview OR preprod). This doc is now the **preprod instance** of the
+> venue-parametric guide `c2-public-live-acceptance-runbook.md`; preprod is the
+> **optional, stronger follow-up** venue. The stake-source analysis and the
+> hard-gate procedure below stay valid for the preprod run if/when taken.
+>
 > **Scope:** the bounty-critical leg — get the **public preprod** docker node to
 > validate + `AddedToCurrentChain` an **Ade-forged** block (RO-LIVE-01), now that
 > ADE1 is a registered, soon-electable pool. This doc is the **operator runbook +

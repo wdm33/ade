@@ -1,36 +1,60 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# C2 preprod epoch-296 pre-launch STAKE-EQUALITY GATE (operator-side, RED).
+# C2 public-live pre-launch STAKE-EQUALITY GATE (operator-side, RED).
+# Venue-parametric: --network preview|preprod (default preprod).
 #
-# Bounty-critical: before Ade forges with the ADE1 identity against the docker
-# preprod node, this gate proves Ade's leader-election view (the extracted
+# Bounty-critical: before Ade forges with its pool identity against the venue
+# node, this gate proves Ade's leader-election view (the extracted
 # consensus-input bundle) AGREES with the reference node's leader-election `go`
 # snapshot. If it does not, Ade would win slots the node rejects (false
-# readiness). See docs/active/c2-preprod-epoch296-acceptance-runbook.md §1.
+# readiness). See docs/active/c2-public-live-acceptance-runbook.md §1.
 #
 # Usage:
-#   ci/check_ade1_leader_stake_active.sh <consensus-inputs-bundle.json>
+#   ci/check_ade1_leader_stake_active.sh [--network preview|preprod] <consensus-inputs-bundle.json>
+#   Preview requires the pool id via env (no preprod default leaks into preview):
+#     ADE1_POOL_HEX=<28-byte hex> ADE1_POOL_BECH=<pool1...> ... --network preview <bundle>
 #
-# Exit 0  iff  ADE1 stakeGo > 0  AND  |bundle_sigma(ADE1) - goFraction(ADE1)| / goFraction < EPSILON.
-# Exit 3  = ADE1 stakeGo == 0  (stake not active for THIS epoch's leader election; expected pre-~296).
-# Exit 4  = ADE1 leader-fraction mismatch (extractor stake source != leader-election `go`; fix the extractor).
+# Exit 0  iff  pool stakeGo > 0  AND  |bundle_sigma(pool) - goFraction(pool)| / goFraction < EPSILON.
+# Exit 3  = pool stakeGo == 0  (stake not active for THIS epoch's leader election).
+# Exit 4  = pool leader-fraction mismatch (extractor stake source != leader-election `go`).
 # Exit 2  = usage / query error.
 #
 # It ALSO prints a whole-distribution consistency sample (bundle_sigma vs
 # goFraction across established pools) so the extractor's stake source can be
-# validated even when ADE1 itself is not yet active.
+# validated even when the pool itself is not yet active.
 
-if [[ $# -ne 1 ]]; then echo "Usage: $0 <consensus-inputs-bundle.json>" >&2; exit 2; fi
-BUNDLE="$1"
-[[ -f "$BUNDLE" ]] || { echo "FATAL: bundle not found: $BUNDLE" >&2; exit 2; }
+NETWORK="preprod"
+BUNDLE=""
+while [[ $# -gt 0 ]]; do
+    case "$1" in
+        --network) NETWORK="${2:-}"; shift 2 ;;
+        -h|--help) echo "Usage: $0 [--network preview|preprod] <consensus-inputs-bundle.json>"; exit 0 ;;
+        --*) echo "FATAL: unknown flag '$1'" >&2; exit 2 ;;
+        *) BUNDLE="$1"; shift ;;
+    esac
+done
+[[ -n "$BUNDLE" && -f "$BUNDLE" ]] || { echo "Usage: $0 [--network preview|preprod] <consensus-inputs-bundle.json>" >&2; exit 2; }
 
-CONTAINER="${ADE_LIVE_PEER_CONTAINER:-cardano-node-preprod}"
-MAGIC="${ADE_LIVE_NETWORK_MAGIC:-1}"
+# Venue defaults (env overrides win). The Preview pool id is deliberately NOT
+# defaulted — it is a different ledger identity and must be supplied.
+case "$NETWORK" in
+    preprod) DEF_CONTAINER="cardano-node-preprod"; DEF_MAGIC="1"
+             DEF_HEX="4590e0ee152ca3325b1cb00118ff02f1394b136ed8b2a23cfec8b070"
+             DEF_BECH="pool1gkgwpms49j3nykcukqq33lcz7yu5kymwmze2y087ezc8qqpt397" ;;
+    preview) DEF_CONTAINER="cardano-node-preview"; DEF_MAGIC="2"
+             DEF_HEX=""; DEF_BECH="" ;;
+    *) echo "FATAL: --network must be 'preview' or 'preprod' (got '$NETWORK')" >&2; exit 2 ;;
+esac
+CONTAINER="${ADE_LIVE_PEER_CONTAINER:-$DEF_CONTAINER}"
+MAGIC="${ADE_LIVE_NETWORK_MAGIC:-$DEF_MAGIC}"
 SOCKET="${ADE_LIVE_PEER_SOCKET:-/ipc/node.socket}"
-ADE_HEX="${ADE1_POOL_HEX:-4590e0ee152ca3325b1cb00118ff02f1394b136ed8b2a23cfec8b070}"
-ADE_BECH="${ADE1_POOL_BECH:-pool1gkgwpms49j3nykcukqq33lcz7yu5kymwmze2y087ezc8qqpt397}"
+ADE_HEX="${ADE1_POOL_HEX:-$DEF_HEX}"
+ADE_BECH="${ADE1_POOL_BECH:-$DEF_BECH}"
 EPSILON="${ADE_STAKE_EPSILON:-0.02}"   # 2% tolerance on the leader-fraction match
+if [[ -z "$ADE_HEX" || -z "$ADE_BECH" ]]; then
+    echo "FATAL: pool id required for --network $NETWORK; set ADE1_POOL_HEX + ADE1_POOL_BECH" >&2; exit 2
+fi
 
 run_cli() { docker exec "$CONTAINER" sh -c "export CARDANO_NODE_SOCKET_PATH=$SOCKET; cardano-cli $*"; }
 
