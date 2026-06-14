@@ -26,8 +26,9 @@ set -euo pipefail
 #     shelley-genesis.json (preprod: ASC 0.05->1/20, epochLength 432000;
 #     preview: epochLength 86400). Never hardcoded.
 #   - network magic comes from --network / ADE_LIVE_NETWORK_MAGIC.
-#   - pool_distribution active_stake is the leader-election `go` snapshot
-#     (query stake-snapshot --all-stake-pools), NOT query stake-distribution.
+#   - pool_distribution active_stake is the leader-election `set` snapshot
+#     (query stake-snapshot --all-stake-pools), NOT query stake-distribution
+#     and NOT `go` (go is the rewards snapshot — one epoch behind leadership).
 
 REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 NETWORK="preprod"
@@ -189,30 +190,33 @@ with open(pool_state_path) as f:
 with open(proto_params_path) as f:
     proto_params = json.load(f)
 
-# `query stake-snapshot --all-stake-pools` returns the leader-election
-# snapshots keyed by HEX pool id (no bech32): {"pools": {hex: {stakeGo,
-# stakeMark, stakeSet}}, "total": {stakeGo, ...}}. The `go` value is the
-# active stake the node uses for THIS epoch's leader election. The bundle's
-# active_stake IS that lovelace value, so Ade's sigma = active_stake /
-# sum(active_stake) == the node's go-fraction (modulo pools without a VRF).
+# `query stake-snapshot --all-stake-pools` returns the three snapshots keyed
+# by HEX pool id (no bech32): {"pools": {hex: {stakeGo, stakeMark, stakeSet}},
+# "total": {stakeGo, ...}}. THIS EPOCH's slot-leader election uses the `set`
+# snapshot — per cardano-ledger, `set` = current-epoch leader election, `go` =
+# current-epoch rewards, `mark` = not yet active. The bundle's active_stake IS
+# the `set` lovelace value, so Ade's sigma = active_stake / sum(active_stake)
+# == the node's set-fraction (the snapshot the chain validates leadership
+# against), modulo pools without a VRF. (Sourcing `go` here false-rejects
+# blocks from pools whose stake changed two epochs ago, e.g. set!=go.)
 snap_pools = stake_snapshot.get("pools", {k: v for k, v in stake_snapshot.items() if k != "total"})
-go_by_hex = {hid.lower(): int(v.get("stakeGo", 0)) for hid, v in snap_pools.items()}
-total_stake = int(stake_snapshot.get("total", {}).get("stakeGo", 0)) or sum(go_by_hex.values())
+set_by_hex = {hid.lower(): int(v.get("stakeSet", 0)) for hid, v in snap_pools.items()}
+total_stake = int(stake_snapshot.get("total", {}).get("stakeSet", 0)) or sum(set_by_hex.values())
 
-# Build pool_distribution: hex_id -> {active_stake = stakeGo}. pool_state
+# Build pool_distribution: hex_id -> {active_stake = stakeSet}. pool_state
 # (hex-keyed) supplies the VRF keyhash; include only pools with a VRF and a
-# positive `go` stake (a pool with go==0 leads zero slots this epoch).
+# positive `set` stake (a pool with set==0 leads zero slots this epoch).
 pool_distribution = {}
 pool_vrf_keyhashes = {}
 for hex_id, ps in pool_state.items():
     vrf = ps.get("poolParams", {}).get("spsVrf")
     if not vrf:
         continue
-    go = go_by_hex.get(hex_id.lower(), 0)
-    if go <= 0:
-        # Pool not in this epoch's leader-election `go` snapshot; skip.
+    set_stake = set_by_hex.get(hex_id.lower(), 0)
+    if set_stake <= 0:
+        # Pool not in this epoch's leader-election `set` snapshot; skip.
         continue
-    pool_distribution[hex_id] = {"active_stake": go}
+    pool_distribution[hex_id] = {"active_stake": set_stake}
     pool_vrf_keyhashes[hex_id] = vrf
 
 # protocol_params_hash: blake2b-256 of a canonical JSON dump.
@@ -242,7 +246,7 @@ bundle = {
     # genesis hash; `active_slots_coeff` / `source_tip_*` complete the venue tag.
     "network": network,
     "epoch_length": int(epoch_end) - int(epoch_start) + 1,
-    "pool_distribution_source": "cardano-cli query stake-snapshot --all-stake-pools (leader-election go stake)",
+    "pool_distribution_source": "cardano-cli query stake-snapshot --all-stake-pools (leader-election set stake)",
     "source_cardano_node_version": node_version,
     "source_query_command": (
         f"docker exec cardano-node-{network} cardano-cli query "

@@ -30,56 +30,68 @@
   `blocked_until_operator_stake_available` — now lifted by the ADE1 registration.
 - **THE STAKE TIMELINE (the gate):** `cardano-cli query stake-snapshot
   --stake-pool-id <ADE1>` at epoch 294 returned **`mark/set/go = 9497795647 / 0 / 0`**:
-  - `go` (the snapshot the node uses for the CURRENT epoch's leader election) = **0**
-    → **ADE1 leads ZERO slots now**. No accepted-block attempt is meaningful before `go > 0`.
+  - **Leader election uses the `set` snapshot** — per cardano-ledger, `set` = THIS epoch's
+    slot-leader election; `go` = the rewards snapshot (one epoch behind); `mark` = not yet
+    active. At epoch 294 ADE1 `set = 0` → **ADE1 leads ZERO slots now**. No accepted-block
+    attempt is meaningful before `set > 0`.
   - Only the pledge (~9,497 tADA) sits in `mark`; the ~1,000,008 tADA faucet delegation
     (tx `4a545d61…`, epoch 294) is **not even in `mark` yet** (delegated mid-294, after
     the boundary snapshot).
-  - **Forward timeline from the ledger snapshot (authoritative — supersedes the
-    manifest's Koios +2 "active 296"):** the faucet enters `mark` at the 294→295
-    boundary, then `mark→set→go` over three boundaries ⇒ **faucet active (in `go`) at
-    epoch 297** (~2026-06-25), holding ~1.01M tADA (~dozen-plus slots/epoch) — the
-    RELIABLE window. Epoch 296 (~2026-06-20) has only the pledge in `go` (~9.5k tADA,
-    ~0.7 expected slots/epoch) — a LONG-SHOT, not a reliable attempt.
-- **STAKE-SOURCE BUG — FOUND AND FIXED (2026-06-14):** the extractor originally built
-  `pool_distribution` from `query stake-distribution`, whose per-pool fraction does
-  **not** equal the node's leader-election `go` fraction (different normalization base).
-  The gate `ci/check_ade1_leader_stake_active.sh` measured **0/408 established pools
-  within 2%, median rel-err 35%** — i.e. Ade's leader-check (`view.rs::total_active_stake`
-  = `sum(active_stake)`, so `sigma = active_stake / sum`) would have diverged ~35%
-  per-pool from the node, forging on slots the node rejects. **Fix:**
-  `build_consensus_inputs_bundle.sh` now sources `query stake-snapshot --all-stake-pools`
-  → per-pool `stakeGo` (the leader-election snapshot), hex-keyed, no bech32. Post-fix the
-  gate measures **408/408 within 2%, median 0.00%**. (This affects only the
-  producer/forge path; the prior N-M-SCHED *admission* proofs don't forge and are
-  unaffected. C2-LOCAL CE-A5 never hit it — controlled single-pool venue.)
-  - ADE1 is correctly **absent** from the fixed bundle at epoch 294 (`go = 0` → leads
-    zero slots). At epoch 296 only the pledge (~9.5k tADA) is in `go` (gate passes but
-    leadership is a long-shot); at **epoch 297** the ~1M faucet is in `go` and the gate's
-    ADE1 arm passes with reliable leadership.
+  - **Forward timeline from the ledger snapshot (authoritative):** the faucet enters `mark`
+    at the 294→295 boundary, then rotates `mark→set` ⇒ **faucet active for leadership (in
+    `set`) at epoch 296** (~2026-06-20), holding ~1.01M tADA (~dozen-plus slots/epoch) — the
+    RELIABLE window. Epoch 295 has only the pledge in `set` (~9.5k tADA, ~0.7 expected
+    slots/epoch) — a LONG-SHOT. (Earlier drafts said "epoch 297"; that was a `go`-based
+    miscount — leadership uses `set`, one epoch ahead of `go`. See the two-step source fix
+    below.)
+- **STAKE-SOURCE BUG — FOUND AND FIXED IN TWO STEPS (2026-06-14):**
+  1. The extractor originally built `pool_distribution` from `query stake-distribution`,
+     whose per-pool fraction does **not** equal the node's leader-election fraction
+     (different normalization base) — the gate measured **0/408 within 2%, median 35%**.
+     Fixed to `query stake-snapshot --all-stake-pools` (per-pool snapshot stake, hex-keyed)
+     in `ef8ac25f`.
+  2. **But `ef8ac25f` sourced the `go` snapshot, which is the REWARDS snapshot — THIS
+     epoch's slot-leader election uses `set`** (cardano-ledger; confirmed via cardano-node
+     SPO docs). For a pool whose stake changed two epochs ago `go ≠ set`, so `go` mis-scores
+     leadership. Caught live: the admission false-rejected a *valid* on-chain block from
+     pool `85eb86b4…` (`go` σ=0.11% → ineligible; `set` σ=20.9% → eligible — which is why
+     the real chain adopted it). **Fix:** `build_consensus_inputs_bundle.sh` +
+     `check_ade1_leader_stake_active.sh` now source `stakeSet`. Post-fix the gate's
+     whole-distribution check is **410/410 within 2%, median 0.00%** (bundle σ == node `set`
+     fraction across the entire distribution).
+  - Ade's leader-check (`view.rs::total_active_stake` = `sum(active_stake)`, so
+    `sigma = active_stake / sum`) **and** `produce_mode.rs`'s leader schedule both read
+    `pool_distribution`, so the admission AND the forge path are fixed by the same bundle
+    change. (Affects the live import path; C2-LOCAL CE-A5 never hit it — single-pool venue
+    where go≈set.)
+  - ADE1 is correctly **absent** from the fixed bundle at epoch 294 (`set = 0` → leads
+    zero slots). At epoch 295 only the pledge (~9.5k tADA) is in `set` (long-shot); at
+    **epoch 296** the ~1M faucet is in `set` and the gate's ADE1 arm passes with reliable
+    leadership.
 
 ---
 
 ## 1. HARD pre-launch gate (bounty-critical — run BEFORE any live KES signature)
 
 Run these at the candidate pass epoch (≥ 296) and **do not launch the producer until
-all pass.** A `go = 0` or a `bundle-fraction ≠ go-fraction` means Ade would forge
+all pass.** A `set = 0` or a `bundle-fraction ≠ set-fraction` means Ade would forge
 slots the reference node rejects.
 
 ```
-# (a) ADE1 active (go) stake must be > 0.
+# (a) ADE1 leader-election (set) stake must be > 0.
 docker exec cardano-node-preprod sh -c \
   'export CARDANO_NODE_SOCKET_PATH=/ipc/node.socket; \
    cardano-cli query stake-snapshot --stake-pool-id pool1gkgwpms49j3nykcukqq33lcz7yu5kymwmze2y087ezc8qqpt397 --testnet-magic 1'
-# EXPECT (~epoch 296): stakeGo ≈ 1.01M tADA (NON-zero). stakeGo == 0 -> ABORT.
+# EXPECT (~epoch 296): stakeSet ≈ 1.01M tADA (NON-zero). stakeSet == 0 -> ABORT.
+# (stakeSet is THIS epoch's leader-election stake; stakeGo is rewards, one epoch behind.)
 
 # (b) Re-extract the bundle from the SAME node (shared path; never from-genesis).
 ci/build_consensus_inputs_bundle.sh ~/.cardano-c2-readiness/consensus-inputs.json
 
-# (c) Stake-equality gate: ADE1's bundle leader-fraction == the node's go-fraction.
+# (c) Stake-equality gate: ADE1's bundle leader-fraction == the node's set-fraction.
 ci/check_ade1_leader_stake_active.sh ~/.cardano-c2-readiness/consensus-inputs.json
-# PASS = (go > 0) AND (|bundle_sigma - go_fraction| < epsilon). FAIL -> ABORT + fix
-# the extractor's stake source (it must equal the leader-election `go`), NOT a
+# PASS = (set > 0) AND (|bundle_sigma - set_fraction| < epsilon). FAIL -> ABORT + fix
+# the extractor's stake source (it must equal the leader-election `set`), NOT a
 # from-genesis workaround.
 
 # (d) DEFINITIVE cross-check (optional but strongest): the node's own leader schedule
@@ -164,8 +176,8 @@ Per `phase4-n-f-g-c-operator-pass-README.md` §1–§2 (the authoritative flag s
 
 | Symptom | Class | Action |
 |---|---|---|
-| `stakeGo = 0` | not-yet-active stake | WAIT — not a real attempt before `go > 0` (§0). |
-| `bundle_sigma ≠ go_fraction` (gate (c) fails) | extraction stake-view mismatch | ABORT; fix `build_consensus_inputs_bundle.sh` to source the leader-election `go` stake (shared path — NOT a from-genesis branch). |
+| `stakeSet = 0` | not-yet-active stake | WAIT — not a real attempt before `set > 0` (§0). |
+| `bundle_sigma ≠ set_fraction` (gate (c) fails) | extraction stake-view mismatch | ABORT; fix `build_consensus_inputs_bundle.sh` to source the leader-election `set` stake (shared path — NOT a from-genesis branch). |
 | `leadership-schedule` empty this epoch | ADE1 won no slots this epoch | WAIT for an epoch with a won slot (more likely with more active stake). |
 | Ade forges, node REJECTS | leader-check divergence OR block-validity bug | Compare Ade's `Eligible` slots vs `leadership-schedule`; decode the rejected block; if leadership differs → stake-view bug (gate (c)/(d) should have caught it). |
 | `correlate` → `NoEvidence` | peer did not accept | Re-check stake/leadership/genesis-consistency; Ade self-accept ≠ peer acceptance. |
@@ -175,7 +187,7 @@ Per `phase4-n-f-g-c-operator-pass-README.md` §1–§2 (the authoritative flag s
 
 ## 5. Until epoch 296
 
-No live producer attempt is meaningful while `go = 0`. The pre-296 readiness that IS
+No live producer attempt is meaningful while `set = 0`. The pre-296 readiness that IS
 done: the producer binary builds; the consensus-input extraction runs (R1); the BA-02
 `correlate` extractor is hermetically green (18 tests); this runbook + the stake-gate
 script are in place. The next real C2 event is the **epoch-296 re-extraction + §1

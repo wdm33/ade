@@ -64,7 +64,8 @@ faucet supports "receive pool delegation" on preview/preprod). **Acceptance:**
 ```
 cardano-cli query stake-snapshot --stake-pool-id <ADE-preview pool id> --testnet-magic 2
 ```
-shows **active leader stake** (`stakeGo` > 0 once it propagates), not merely
+shows **active leader stake** (`stakeSet` > 0 once it propagates — `set` is THIS epoch's
+leader-election snapshot; `go` is the rewards snapshot, one epoch behind), not merely
 registration. Do NOT reuse preprod stake assumptions — Preview is a different ledger.
 
 ### C2-PREVIEW-RECOVER / C2-PREVIEW-BA02
@@ -96,9 +97,9 @@ always win over the `--network` defaults.
 ## 3. The hard pre-launch gate (venue-parametric — bounty-critical)
 
 Identical to the preprod instance §1, with `--network <venue>`:
-1. `cardano-cli query stake-snapshot --stake-pool-id <pool> --testnet-magic <magic>` → `stakeGo > 0`.
+1. `cardano-cli query stake-snapshot --stake-pool-id <pool> --testnet-magic <magic>` → `stakeSet > 0` (leader-election snapshot; `go` is rewards, one epoch behind).
 2. `ci/build_consensus_inputs_bundle.sh --network <venue> <bundle>` (shared path; never from-genesis).
-3. `ci/check_ade1_leader_stake_active.sh --network <venue> <bundle>` → PASS (pool `go>0` **and** bundle sigma == node go-fraction + whole-distribution consistency).
+3. `ci/check_ade1_leader_stake_active.sh --network <venue> <bundle>` → PASS (pool `set>0` **and** bundle sigma == node set-fraction + whole-distribution consistency).
 4. (strongest) `cardano-cli query leadership-schedule --current` → non-empty; Ade's leader-check produces the same slot set.
 
 Only then launch the producer. A passing gate is **necessary, not sufficient** —
