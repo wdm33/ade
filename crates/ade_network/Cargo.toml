@@ -45,6 +45,10 @@ path = "src/bin/capture_n2c_protocols.rs"
 name = "ade_tx_submission2_capture"
 path = "src/bin/capture_tx_submission2.rs"
 
+[[bin]]
+name = "ade_tx_submission2_server_capture"
+path = "src/bin/capture_tx_submission2_server.rs"
+
 [dev-dependencies]
 ade_ledger = { path = "../ade_ledger" }
 ade_testkit = { path = "../ade_testkit" }

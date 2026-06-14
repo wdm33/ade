@@ -12,12 +12,18 @@ use ade_core_interop::tx_submission::{
 };
 use ade_ledger::mempool::{AdmitOutcome, IngressSource, MempoolState, PeerId};
 use ade_network::tx_submission::{InventoryEvent, TxIdAndSize};
+use ade_network::codec::tx_submission::TxSubmissionTxId;
 use ade_testkit::mempool::{b_track_corpus_as_ingress, replay_ingress_trace, BTrackCase};
 use ade_testkit::tx_validity::build_valid;
 use ade_types::TxId;
 
 fn id(seed: u8) -> TxId {
     TxId(ade_types::Hash32([seed; 32]))
+}
+
+/// Era-tagged tx-submission2 txid (Conway = era 6) for InventoryEvent ids.
+fn sub_id(seed: u8) -> TxSubmissionTxId {
+    TxSubmissionTxId { era: 6, id: id(seed) }
 }
 
 #[test]
@@ -44,10 +50,10 @@ fn event_to_ingress_other_events_emit_nothing() {
         req: 5,
     };
     let ids_del = InventoryEvent::IdsDelivered {
-        entries: vec![TxIdAndSize { tx_id: id(0xAA), size: 100 }],
+        entries: vec![TxIdAndSize { tx_id: sub_id(0xAA), size: 100 }],
     };
     let txs_req = InventoryEvent::TxsRequested {
-        ids: vec![id(0xBB)],
+        ids: vec![sub_id(0xBB)],
     };
 
     for ev in [opened, ids_req, ids_del, txs_req] {
@@ -70,7 +76,7 @@ fn peer_accumulator_round_trip() {
         tx_bytes: vec![b"a0".to_vec(), b"a1".to_vec()],
     });
     acc.observe(&InventoryEvent::TxsRequested {
-        ids: vec![id(0x01)],
+        ids: vec![sub_id(0x01)],
     }); // ignored
     acc.observe(&InventoryEvent::TxsDelivered {
         tx_bytes: vec![b"a2".to_vec()],

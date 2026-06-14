@@ -16,8 +16,7 @@
 // `TxIdAndSize` is re-exported from the S-A2 codec module so every
 // consumer references the same canonical type.
 
-pub use crate::codec::tx_submission::TxIdAndSize;
-use ade_types::TxId;
+pub use crate::codec::tx_submission::{TxIdAndSize, TxSubmissionTxId};
 
 /// Inventory event taxonomy. Closed enum; consumers exhaustively match.
 ///
@@ -36,7 +35,7 @@ pub enum InventoryEvent {
         entries: Vec<TxIdAndSize>,
     },
     TxsRequested {
-        ids: Vec<TxId>,
+        ids: Vec<TxSubmissionTxId>,
     },
     TxsDelivered {
         tx_bytes: Vec<Vec<u8>>,

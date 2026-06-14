@@ -184,15 +184,15 @@ fn message_tag(msg: &TxSubmission2Message) -> &'static str {
 #[allow(clippy::panic)]
 mod tests {
     use super::*;
-    use crate::codec::tx_submission::TxIdAndSize;
+    use crate::codec::tx_submission::{TxIdAndSize, TxSubmissionTxId};
     use ade_types::{Hash32, TxId};
 
     fn version() -> TxSubmission2Version {
         TxSubmission2Version::new(13)
     }
 
-    fn tx_id(seed: u8) -> TxId {
-        TxId(Hash32([seed; 32]))
+    fn tx_id(seed: u8) -> TxSubmissionTxId {
+        TxSubmissionTxId { era: 6, id: TxId(Hash32([seed; 32])) }
     }
 
     fn sample_entries(n: usize) -> Vec<TxIdAndSize> {

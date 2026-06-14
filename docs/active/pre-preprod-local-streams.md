@@ -203,7 +203,26 @@ admission adversarial false-accept corpus + per-rule tx/conservation/witness adv
   configured to dial Ade as a `localRoots` peer with real tx traffic so it opens tx-sub2 + sends the rich
   messages, Ade passively records → add the tx_submission2 rich-message real-capture round-trip → write a
   gate enforcing the real-capture transcript corpus across the surface → record on DC-PROTO-02 → flip
-  declared→enforced. Then Stream 1 closes → **Stream 2** (epoch transition). **Harness note:** the contiguous Plutus verdict harness currently stops early on a
+  declared→enforced. Then Stream 1 closes → **Stream 2** (epoch transition).
+  - **OPTION B DONE (2026-06-14) + it found a REAL codec false-reject → slice TXSUB2-CODEC-REALWIRE
+    (DC-PROTO-11 ENFORCED).** New RED server-side harness `ade_tx_submission2_server_capture` (multi-shot;
+    handshake responder + chain-sync responder [IntersectFound@node-tip + AwaitReply, coalesced-msg
+    handling] + keep-alive + tx-sub CONSUMER role) + hermetic loopback test. Live against the docker
+    **public-preprod** node 11.0.1: node dials Ade (172.17.0.1:3101 via topology.json localRoots), V15
+    handshake, promotes Ade to a stable HOT peer, opens tx-sub2 and — as the CLIENT/provider — sent
+    `MsgInit` + `MsgReplyTxIds`. **Finding:** the node's `MsgReplyTxIds` real wire form is
+    `[1, 9f [[6,h'..32'],size] ff]` — an **indefinite-length entries array** + **era-tagged txids
+    `[eraIdx,hash]`** — BOTH of which Ade's codec FALSE-REJECTED ("indefinite-length array not allowed").
+    A real Cardano incompat the synthetic tests (definite arrays + bare txids) missed. **Fixed (BLUE,
+    byte-authority): `TxSubmissionTxId{era,id}`; decode accepts definite+indefinite; encode reproduces the
+    indefinite form → captured frame re-encodes BYTE-IDENTICAL; era tag preserved (no strip/guess).**
+    Enforced by codec unit tests (byte-identity on the captured frame + bare/wrong-len/unterminated
+    negatives) + `tx_submission2_real_capture_corpus` round-trip + `ci/ci_check_tx_submission2_real_capture.sh`
+    (self-testing). Captured `ReplyTxIds`/`Init` frames committed as the regression corpus.
+  - **DC-PROTO-02 stays `declared`** (strengthened_in += TXSUB2-CODEC-REALWIRE): the FLIP awaits the
+    **live full exchange** `ReplyTxIds → RequestTxs → ReplyTxs` (AC #6) — blocked on a public-preprod
+    mempool tx (off-peak lull). Harness left running to land `MsgReplyTxs` + the transcript-equivalence
+    gate; flip then. **Harness note:** the contiguous Plutus verdict harness currently stops early on a
   cert-state divergence (`StakeAlreadyRegistered`/`StakeNotRegistered` at blocks 1/1/40), so it reaches
   ~0 passing Plutus txs — a pre-existing limitation that weakens the Plutus oracle's reach; worth a
   dedicated look in the broader Stream-1 false-accept hunt.

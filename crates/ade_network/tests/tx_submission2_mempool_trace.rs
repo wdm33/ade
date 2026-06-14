@@ -22,7 +22,7 @@
 #![allow(clippy::expect_used)]
 #![allow(clippy::panic)]
 
-use ade_network::codec::tx_submission::{TxIdAndSize, TxSubmission2Message};
+use ade_network::codec::tx_submission::{TxIdAndSize, TxSubmission2Message, TxSubmissionTxId};
 use ade_network::codec::version::TxSubmission2Version;
 use ade_network::tx_submission::{
     tx_submission2_transition, InventoryEvent, TxSubmission2Agency, TxSubmission2Output,
@@ -34,8 +34,8 @@ fn v() -> TxSubmission2Version {
     TxSubmission2Version::new(13)
 }
 
-fn tx_id(seed: u8) -> TxId {
-    TxId(Hash32([seed; 32]))
+fn tx_id(seed: u8) -> TxSubmissionTxId {
+    TxSubmissionTxId { era: 6, id: TxId(Hash32([seed; 32])) }
 }
 
 /// Synthetic tx body deterministically derived from (seed, size). The
@@ -106,7 +106,7 @@ fn single_round_blocking_ad_then_fetch() -> (Vec<Step>, Vec<InventoryEvent>) {
     let (init_step, init_ev) = init();
     let (done_step, _) = done();
     let entries = vec![entry(0x01, 200), entry(0x02, 250), entry(0x03, 300)];
-    let ids: Vec<TxId> = entries.iter().map(|e| e.tx_id.clone()).collect();
+    let ids: Vec<TxSubmissionTxId> = entries.iter().map(|e| e.tx_id.clone()).collect();
     let bodies = vec![tx_body(0x01, 200), tx_body(0x02, 250), tx_body(0x03, 300)];
     let steps = vec![
         init_step,
@@ -219,7 +219,7 @@ fn single_tx_fetch() -> (Vec<Step>, Vec<InventoryEvent>) {
 fn multi_tx_fetch_partial_reply() -> (Vec<Step>, Vec<InventoryEvent>) {
     let (init_step, init_ev) = init();
     let (done_step, _) = done();
-    let ids: Vec<TxId> = (0u8..5).map(|i| tx_id(i + 0x50)).collect();
+    let ids: Vec<TxSubmissionTxId> = (0u8..5).map(|i| tx_id(i + 0x50)).collect();
     let bodies = vec![tx_body(0x50, 64), tx_body(0x51, 128), tx_body(0x52, 256)];
     let steps = vec![
         init_step,
