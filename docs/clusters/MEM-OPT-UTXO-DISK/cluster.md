@@ -4,7 +4,7 @@
 
 **Scope framing (honest — not a foregone redesign):** **MEM-OPT-UTXO-DISK owns the storage-backed UTxO memory authority surface. Its first slice is diagnostic (S0) and decides whether the next mergeable work is a contained snapshot-streaming fix or the full bounded in-memory UTxO backend.** The cluster does NOT pre-commit to an on-disk-UTxO redesign; S0's classification gates the structural slices.
 
-**Status:** **S0 (DIAGNOSTIC) scoped — structural slices deferred (S0-gated).** No BLUE change in S0.
+**Status:** **S0 (DIAGNOSTIC) DONE — verdict `bootstrap_transient_but_admission_live_working_set`.** The bootstrap serialization is fully reclaimable (the t3 forced collect returns it to ~idle — overturns the original snapshot hypothesis); the active-admission footprint (4.59 GiB owned) is a **LIVE working set** (it re-accumulates the very next block after a forced collect *during* admission). **The structural direction is decided: the on-disk / bounded in-memory UTxO backend (`DC-MEM-05` + `DC-MEM-07`), NOT the snapshot-streaming fix.** No BLUE change in S0.
 
 **Prior:** MEM-OPT-OPS closed at `e0c77492`. Its S3 owned measurement is the motivating finding: active-admission owned `RssAnon` **4.59 GiB p50 / 4.76 GiB peak** vs Ade idle owned **1.95 GiB** vs Haskell owned **2.57 GiB** → `ade_heavier`; `OP-MEM-02` stays `declared`. The residual is the `seed_to_snapshot`/`chain.db` serialization during admission. **This cluster owns that surface.**
 

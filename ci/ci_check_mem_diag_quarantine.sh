@@ -41,16 +41,24 @@ if [[ ${#DEPENDERS[@]} -eq 0 ]]; then
     fail "no crate depends on ade_mem_diag -- expected exactly ade_node"
 fi
 
-# (4) the forced collect is reachable only behind the S0 env toggle. The single
-#     caller of force_allocator_collect_for_diagnostic_only in ade_node must be
-#     co-located with the ADE_MEM_PHASE_DIAGNOSTIC guard (both in bootstrap.rs).
-# Match the CALL form (open paren), not doc-comment mentions of the fn name.
-CALLERS=$(grep -rlE 'force_allocator_collect_for_diagnostic_only\(' crates/ade_node/src/ 2>/dev/null || true)
-if [[ "$CALLERS" != "crates/ade_node/src/admission/bootstrap.rs" ]]; then
-    fail "the diagnostic collect is called from '$CALLERS' -- expected exactly crates/ade_node/src/admission/bootstrap.rs"
-fi
+# (4) the forced collect is reachable only behind the S0 env toggle. Callers must
+#     be a subset of the gated admission RED path: bootstrap.rs (t3, the root
+#     ADE_MEM_PHASE_DIAGNOSTIC toggle) and runner.rs (t5, gated on
+#     mem_phase_diagnostic, which is Some only under that toggle). Match the CALL
+#     form (open paren), not doc-comment mentions of the fn name.
+while IFS= read -r f; do
+    case "$f" in
+        crates/ade_node/src/admission/bootstrap.rs|crates/ade_node/src/admission/runner.rs|"") ;;
+        *) fail "the diagnostic collect is called from '$f' -- only the gated admission path (bootstrap.rs/runner.rs) may call it" ;;
+    esac
+done < <(grep -rlE 'force_allocator_collect_for_diagnostic_only\(' crates/ade_node/src/ 2>/dev/null)
 grep -qE 'ADE_MEM_PHASE_DIAGNOSTIC' crates/ade_node/src/admission/bootstrap.rs \
-    || fail "bootstrap.rs calls the diagnostic collect but has no ADE_MEM_PHASE_DIAGNOSTIC env guard"
+    || fail "bootstrap.rs has no ADE_MEM_PHASE_DIAGNOSTIC env guard for the diagnostic collect"
+# the runner's t5 collect (if present) must be gated on mem_phase_diagnostic.
+if grep -qE 'force_allocator_collect_for_diagnostic_only\(' crates/ade_node/src/admission/runner.rs; then
+    grep -qE 'mem_phase_diagnostic' crates/ade_node/src/admission/runner.rs \
+        || fail "runner.rs calls the diagnostic collect but does not gate it on mem_phase_diagnostic"
+fi
 
 # (5) ade_mem_diag itself does NOT deny unsafe (it is the quarantine) and is the
 #     sole home of the FFI. Sanity: it references mi_collect.

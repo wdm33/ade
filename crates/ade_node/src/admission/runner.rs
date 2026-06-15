@@ -237,6 +237,12 @@ where
     // idle-recovered-tip samples. Observe-only; RSS never feeds authority.
     let mut mem_windows = MemWindows::new();
     let mut last_admitted_slot = inputs.initial_chain_tip_slot;
+    // MEM-OPT-UTXO-DISK S0 (CE-UD-0) t5: count admits so the ONE forced collect
+    // DURING active admission lands after a stable run (>=10 admits); then admits
+    // continue, re-sampling whether owned re-accumulates or stays low. RED-only
+    // diagnostic, gated by the env toggle (mem_phase_diagnostic).
+    let mut admit_count: u64 = 0;
+    let mut t5_done = false;
     // MEM-OPT-OPS S2 (CE-OPS-2): the streaming seed-import peak, captured in bootstrap
     // RIGHT AFTER import() returns -- before the chain.db snapshot write, which is a
     // later, larger transient. `rss_hwm_kib` here is the IMPORT VmHWM (the import-
@@ -480,6 +486,35 @@ where
                                     &tail_post_fp,
                                 )
                                 .await;
+
+                                // MEM-OPT-UTXO-DISK S0 (CE-UD-0) t5: ONE forced
+                                // allocator collect DURING active admission (after
+                                // >=10 stable admits), then continued admits
+                                // re-sample. RED-only DIAGNOSTIC, gated by the env
+                                // toggle. The decisive control: t5 drops near the t3
+                                // idle baseline => the admission-time owned step is
+                                // retained-freed; t5 stays near the active level =>
+                                // it is live working set. Changes NO authoritative
+                                // output (it only returns freed memory; admission,
+                                // validation, fork choice, WAL, checkpointing, and
+                                // replay are untouched).
+                                admit_count += 1;
+                                if inputs.mem_phase_diagnostic.is_some()
+                                    && !t5_done
+                                    && admit_count >= 10
+                                {
+                                    ade_mem_diag::force_allocator_collect_for_diagnostic_only();
+                                    emit_memory_sample(
+                                        &writer,
+                                        &mut mem_windows,
+                                        "t5_active_admission_after_forced_collect",
+                                        slot.0,
+                                        slot.0,
+                                        &tail_post_fp,
+                                    )
+                                    .await;
+                                    t5_done = true;
+                                }
 
                                 let block_admit = BlockAdmitOutcome::Valid {
                                     slot,

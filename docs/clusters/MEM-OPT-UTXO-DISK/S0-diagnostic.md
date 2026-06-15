@@ -1,13 +1,13 @@
 # Slice MEM-OPT-UTXO-DISK S0 — active-admission owned-footprint diagnostic (CE-UD-0)
 
-> **Status:** Scoped — **diagnostic only (measurement, NOT a redesign).** Classifies the ~4.6 GiB active-admission owned footprint as `serialization_transient` | `live_working_set` | `mixed` via a phase-resolved owned-RSS timeline (t1–t4) + a RED-only forced-reclaim probe. Decides the cluster's structural direction.
+> **Status:** DONE — **verdict `bootstrap_transient_but_admission_live_working_set`.** The forced collect at t3 returns the entire bootstrap transient to ~idle (the `seed_to_snapshot` serialization is fully reclaimable — overturns the original hypothesis); the active-admission footprint (4.59 GiB) **RE-ACCUMULATES the very next block** after a forced collect during admission (t5: 4.59 → 1.78 → 4.59) ⇒ it is a **LIVE working set**. **Next slice: the on-disk / bounded in-memory UTxO backend (`DC-MEM-05` + `DC-MEM-07`).** Evidence: `docs/evidence/mem-opt-utxo-disk-s0-{phase-timeline,classification}-preprod.*`.
 > **Cluster:** MEM-OPT-UTXO-DISK (primary invariant `DC-MEM-05` + `DC-MEM-07`)
 > **Cluster doc:** `docs/clusters/MEM-OPT-UTXO-DISK/cluster.md` · **Prior:** MEM-OPT-OPS S3 (closed `e0c77492`)
 
 ## 2. Slice Header
 
 ### Cluster Exit Criteria Addressed
-- [ ] **CE-UD-0** (active-admission owned-footprint diagnostic): a committed run reproducing the S3 scenario (same seed, same recovered anchor, same `initial_ledger_fp` `fb7cb12a…`, same replay verdict `agreed`) + a phase-resolved owned-memory artifact (t1–t4 `RssAnon`/`Private_Dirty` + the t3 pre/post-reclaim delta) + an explicit classification ∈ {`serialization_transient`, `live_working_set`, `mixed`} + a next-slice recommendation derived from the classification. RED-only reclaim probe; no BLUE.
+- [x] **CE-UD-0** (active-admission owned-footprint diagnostic): **MET.** Committed live run (`fb7cb12a…`, replay `agreed`, 0 diverged, 34 admits) carrying the t1–t5 phase timeline + the honest verdict `bootstrap_transient_but_admission_live_working_set` + the next-slice recommendation (on-disk / bounded in-memory UTxO backend). The forced collects (t3 post-snapshot, t5 during admission) are the quarantined RED `ade_mem_diag` probe; no BLUE. Evidence + gates: `docs/evidence/mem-opt-utxo-disk-s0-{phase-timeline,classification}-preprod.*`, `ci/ci_check_mem_opt_utxo_disk_s0.sh` + `ci/ci_check_mem_diag_quarantine.sh`.
 
 ### Intent
 MEM-OPT-OPS S3 established that Ade's active-admission owned `RssAnon` (4.59 GiB p50 / 4.76 GiB peak) is **above** Haskell's owned (2.57 GiB), while Ade **idle** owned (1.95 GiB) is **below**. mimalloc (S1) already returns freed pages to the OS, yet the active footprint stays high. The question this slice answers — **before any structural redesign** — is whether that ~4.6 GiB is **retained-freed serialization memory** (the `seed_to_snapshot` transient, reclaimable), **live required working set** (the UTxO genuinely resident in heap), or **mixed**. The classification decides whether the cluster's next mergeable work is a contained snapshot-streaming fix or the full bounded in-memory UTxO backend. **S0 measures and classifies; it does not fix.**
@@ -51,22 +51,23 @@ MEM-OPT-OPS S3 established that Ade's active-admission owned `RssAnon` (4.59 GiB
   - **t1 point `seed_import`:** sampled right after `import()` returns (the existing S2 tap), before `seed_to_snapshot`. Owned ≈ baseline + the parsed UTxO map (~1–1.3 GiB).
   - **t2 point `t2_snapshot_serializing`:** owned right after `seed_to_snapshot` returns (the run-end gross VmHWM 7.79 GiB territory; the owned peak 4.76 GiB is the suspect).
   - **t3 point `t3_after_forced_allocator_collect_diagnostic_only`:** after the snapshot write, invoke the quarantined RED probe (`ade_mem_diag::force_allocator_collect_for_diagnostic_only` → `mi_collect(force=true)`), then sample owned. **The t2→t3 delta is the decisive control.**
-  - **t4 point `sustained`:** sampled during ongoing block admission (the existing S3 active-admission window).
-- **Classification rule:**
-  - **`serialization_transient`:** t3 (post-reclaim) drops sharply toward t1/idle (~1.95–2.0 GiB) AND the high owned is localized to t2 ⇒ the ~4.6 GiB is reclaimable serialization. *Next slice: a contained `seed_to_snapshot` serialization-streaming fix.*
-  - **`live_working_set`:** t3 stays high (~4.6 GiB) AND t4 sustains it ⇒ the UTxO is genuinely resident. *Next slice: the full bounded in-memory UTxO backend (redb `TxIn→TxOut` + bounded cache + k-deep changelog).*
-  - **`mixed`:** t3 drops partially (a transient component reclaims; a working-set component persists above idle but below the t2 peak) ⇒ BOTH levers apply. *Next slice: scope both; sequence the cheaper (serialization-streaming) first.*
-- The classification + the next-slice recommendation are recorded in the evidence + the slice close.
+  - **t4 point `sustained` / `mempool_admission`:** owned during ongoing block admission (the S3 active-admission level). The first `mempool_admission` is the admission STEP.
+  - **t5 point `t5_active_admission_after_forced_collect`:** in the runner loop, after ≥10 stable admits, invoke the quarantined RED probe ONCE, then sample owned; admits then continue (post-t5 re-sampling whether owned re-accumulates or stays low). **t5 is the decisive control for the admission-time footprint** — t3 only probed the bootstrap.
+- **Verdict rule** (t3 = the post-bootstrap-collect idle baseline; t4 = the active level; near-idle = within 15% of t3):
+  - **`retained_transient_bootstrap_and_admission`:** t3 drops to idle AND t5 drops near idle ⇒ BOTH the bootstrap serialization AND the admission step are reclaimable. *Next slice: a contained admission-loop allocation cleanup.*
+  - **`bootstrap_transient_but_admission_live_working_set`:** t3 drops to idle BUT t5 stays high (near t4) ⇒ the admission step is live working set. *Next slice: the full bounded in-memory / on-disk UTxO backend (redb `TxIn→TxOut` + bounded cache + k-deep changelog).*
+  - **`mixed`:** t3 partially drops AND t5 partially drops ⇒ BOTH levers apply. *Next slice: scope both; sequence the cheaper first.*
+- The verdict + the next-slice recommendation are recorded in the evidence + the slice close.
 
 ## 10. Mechanical Acceptance Criteria
-- [ ] Phase-resolved owned sampling (t1–t4) wired, RED-only, fail-soft; the run still reproduces the S3 scenario.
-- [ ] The forced-reclaim probe runs at t3, diagnostic-only (off the authoritative path), with the pre/post-reclaim owned delta recorded.
-- [ ] **Same seed, same recovered anchor, same `initial_ledger_fp` (`fb7cb12a…`), same replay verdict (`agreed`)** as S3 — the diagnostic does not perturb authority.
-- [ ] A committed **phase-resolved owned-memory artifact** (the four taps + the t3 reclaim delta), clearly labeled.
-- [ ] An **explicit classification** recorded: exactly one of {`serialization_transient`, `live_working_set`, `mixed`}.
-- [ ] A **next-slice recommendation** derived from the classification.
-- [ ] `ci/ci_check_mem_opt_utxo_disk_s0.sh` green (schema + classification ∈ the 3 closed values + replay pairing) + `--self-test`.
-- [ ] `cargo test -p ade_node` green; the diagnostic cannot influence authoritative behavior.
+- [ ] Phase-resolved owned sampling (t1, t2, t3, first admission step, t5, post-t5 admits) wired, RED-only, fail-soft; the run reproduces the S3 scenario.
+- [ ] The forced-collect probe runs at t3 (post-snapshot) AND t5 (during active admission, after ≥10 admits), diagnostic-only (off the authoritative path), owned values recorded.
+- [ ] **Same seed, same recovered anchor, same `initial_ledger_fp` (`fb7cb12a…`), same replay verdict (`agreed`), 0 diverged** — the diagnostic does not perturb authority.
+- [ ] A committed **phase-resolved owned-memory artifact** (t1–t5 + ≥12 `mempool_admission` samples), clearly labeled.
+- [ ] An **explicit verdict** recorded: exactly one of {`retained_transient_bootstrap_and_admission`, `bootstrap_transient_but_admission_live_working_set`, `mixed`}, **derived from the t3/t4/t5 behavior** (honest — consistent with the numbers).
+- [ ] A **next-slice recommendation** derived from the verdict.
+- [ ] `ci/ci_check_mem_opt_utxo_disk_s0.sh` + `ci/ci_check_mem_diag_quarantine.sh` green + `--self-test`.
+- [ ] `cargo test -p ade_node -p ade_mem_diag` green; the diagnostic cannot influence authoritative behavior.
 
 ## 11. Hard Prohibitions
 - No BLUE change; the sampler + reclaim probe are observational/diagnostic RED, never authority.

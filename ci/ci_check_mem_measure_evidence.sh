@@ -44,7 +44,7 @@ ALLOWED='^(admission_started|snapshot_imported|bootstrap_complete|admission_shut
 # MEM-OPT-UTXO-DISK S0 phase-diagnostic points (emitted only under the RED
 # ADE_MEM_PHASE_DIAGNOSTIC env toggle). The t3 label names the measurement
 # intervention (a forced allocator collect) explicitly.
-POINTS='^(seed_import|idle_recovered_tip|chain_sync_follow|block_fetch_serve|mempool_admission|wal_checkpoint_recovery|sustained|t2_snapshot_serializing|t3_after_forced_allocator_collect_diagnostic_only)$'
+POINTS='^(seed_import|idle_recovered_tip|chain_sync_follow|block_fetch_serve|mempool_admission|wal_checkpoint_recovery|sustained|t2_snapshot_serializing|t3_after_forced_allocator_collect_diagnostic_only|t5_active_admission_after_forced_collect)$'
 
 # validate_transcript <jsonl> <md> : 0 = a valid memory transcript (or absent →
 # vacuous); non-zero = reject.
