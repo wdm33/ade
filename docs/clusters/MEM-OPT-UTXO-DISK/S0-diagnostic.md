@@ -24,17 +24,17 @@ MEM-OPT-OPS S3 established that Ade's active-admission owned `RssAnon` (4.59 GiB
 - **release:** a CI gate validates the S0 schema (phase taps + classification ∈ the 3 closed values + replay pairing) — vacuous-until-committed + `--self-test`.
 
 ## 5. Scope
-- **`crates/ade_node/src/mem_measure/…` + the admission bootstrap (RED):** phase-boundary markers threaded through the existing periodic owned sampler so each owned sample is attributable to a phase ∈ a closed set: `import_done` (t1, right after `import()` returns — the S2 `seed_import` tap), `snapshot_serializing` (t2, across `seed_to_snapshot`), `post_snapshot_reclaimed` (t3, after the forced reclaim), `steady_follow` (t4, ongoing admission).
-- **The forced-reclaim/decay probe (RED, diagnostic):** at t3, an explicit allocator collect (`mi_collect(true)` via `libmimalloc-sys`) and/or a bounded decay-window wait, then re-sample owned. **The t2→t3 owned delta is the decisive control.** Gated behind a diagnostic path — never on the authoritative admission path.
-- **Evidence (GREEN/RED):** a phase-tagged owned artifact — the four phase taps' `RssAnon`/`Private_Dirty`, the t3 pre/post-reclaim delta, the classification, and the next-slice recommendation. Either a closed `phase` field on the existing `memory_measure` point or a new closed `memory_phase_sample` event (closed allow-list + negative test).
-- **New gate** `ci/ci_check_mem_opt_utxo_disk_s0.sh`: validates the phase-resolved schema + the classification ∈ {`serialization_transient`, `live_working_set`, `mixed`} + the replay pairing; vacuous-until-committed + `--self-test`.
-- **Evidence artifact:** `docs/evidence/mem-opt-utxo-disk-s0-phase-timeline-preprod.{jsonl,md}`.
+- **`crates/ade_node/src/admission/{bootstrap,runner}.rs` (RED):** under the `ADE_MEM_PHASE_DIAGNOSTIC` env toggle (absent on every normal run), the bootstrap captures owned (`RssAnon`/`Private_Dirty`) at the two extra phase boundaries and the runner emits them as closed `memory_measure` points. The four phases (reusing the existing point mechanism): `seed_import` (t1, the existing post-`import()` tap), `t2_snapshot_serializing` (t2, right after `seed_to_snapshot`), `t3_after_forced_allocator_collect_diagnostic_only` (t3), `sustained` (t4, ongoing admission — the existing S3 active-admission window).
+- **The forced-reclaim probe — QUARANTINED (RED, diagnostic):** the one `unsafe` FFI call (`mi_collect(force=true)`) lives in a tiny dedicated crate **`ade_mem_diag`** (`force_allocator_collect_for_diagnostic_only`), so `ade_node` keeps `#![deny(unsafe_code)]` with ZERO local exceptions. Invoked at t3 only behind the env toggle; it returns freed-but-retained pages to the OS, then owned is re-sampled. **The t2→t3 owned delta is the decisive control** (mimalloc's lazy `MADV_FREE` keeps freed pages resident, so without the forced collect retained-freed and live memory are indistinguishable).
+- **Evidence (GREEN/RED):** the four phase taps' `RssAnon`/`Private_Dirty` (the closed `memory_measure` points) + a separate classification record carrying the verdict + the next-slice recommendation.
+- **New gates:** `ci/ci_check_mem_opt_utxo_disk_s0.sh` (validates the 4-phase timeline + the classification ∈ {`serialization_transient`, `live_working_set`, `mixed`} + that the classification is HONEST — consistent with the t2→t3 reclaim the numbers show — + replay `agreed`; vacuous-until-committed + `--self-test`) and `ci/ci_check_mem_diag_quarantine.sh` (enforces the quarantine: `ade_node` stays `#![deny(unsafe_code)]` zero-allows; `ade_mem_diag` dep'd only by `ade_node`; the collect gated by `ADE_MEM_PHASE_DIAGNOSTIC`). The 2 new points are added to the closed POINTS vocabulary in `ci_check_mem_measure_evidence.sh`.
+- **Evidence artifacts:** `docs/evidence/mem-opt-utxo-disk-s0-phase-timeline-preprod.{jsonl,md}` (the timeline) + `…-classification.{jsonl,md}` (the verdict + next-slice).
 - **Out of scope:** ANY storage change, ANY snapshot-streaming fix, ANY on-disk UTxO. S0 measures + classifies only.
 
 ## 6. Execution Boundary
 - **BLUE:** none.
 - **GREEN:** the phase-marker / classification logic + the evidence schema + the gate.
-- **RED:** the owned sampling, the phase taps, the forced-reclaim probe (diagnostic-only, off the authoritative path). Observational; never feeds authority — the run's replay verdict, not RSS, is the validity gate.
+- **RED:** the owned sampling, the phase taps, and the forced-reclaim probe — the latter quarantined in the dedicated `ade_mem_diag` crate (the workspace's sole unsafe-FFI surface; `ade_node` stays zero-unsafe, CI-enforced). Diagnostic-only, off the authoritative path; never feeds authority — the run's replay verdict, not RSS, is the validity gate.
 
 ## 7. Invariants Preserved
 - **Replay-equivalence (`DC-WAL-03`):** the run reproduces the S3 scenario's post-state + `initial_ledger_fp` (`fb7cb12a…`) + replay verdict `agreed`. The phase taps + the reclaim probe do NOT perturb it.
@@ -48,10 +48,10 @@ MEM-OPT-OPS S3 established that Ade's active-admission owned `RssAnon` (4.59 GiB
 
 ## 9. Design Summary
 - A **phase label** is threaded through the owned sampling. The periodic owned sampler (from S3) keeps running; the admission bootstrap emits phase-boundary markers so the owned timeline buckets by phase:
-  - **t1 `import_done`:** sampled right after `import()` returns (the S2 `seed_import` tap), before `seed_to_snapshot`. Owned ≈ baseline + the parsed UTxO map (~1–1.3 GiB).
-  - **t2 `snapshot_serializing`:** the owned peak across `seed_to_snapshot` (the run-end gross VmHWM 7.79 GiB territory; the owned peak 4.76 GiB is the suspect).
-  - **t3 `post_snapshot_reclaimed`:** after the snapshot write completes, invoke the RED forced-reclaim probe (`mi_collect(true)` and/or a bounded decay wait), then sample owned. **The t2→t3 delta is the decisive control.**
-  - **t4 `steady_follow`:** sampled during ongoing block admission (the S3 active-admission window).
+  - **t1 point `seed_import`:** sampled right after `import()` returns (the existing S2 tap), before `seed_to_snapshot`. Owned ≈ baseline + the parsed UTxO map (~1–1.3 GiB).
+  - **t2 point `t2_snapshot_serializing`:** owned right after `seed_to_snapshot` returns (the run-end gross VmHWM 7.79 GiB territory; the owned peak 4.76 GiB is the suspect).
+  - **t3 point `t3_after_forced_allocator_collect_diagnostic_only`:** after the snapshot write, invoke the quarantined RED probe (`ade_mem_diag::force_allocator_collect_for_diagnostic_only` → `mi_collect(force=true)`), then sample owned. **The t2→t3 delta is the decisive control.**
+  - **t4 point `sustained`:** sampled during ongoing block admission (the existing S3 active-admission window).
 - **Classification rule:**
   - **`serialization_transient`:** t3 (post-reclaim) drops sharply toward t1/idle (~1.95–2.0 GiB) AND the high owned is localized to t2 ⇒ the ~4.6 GiB is reclaimable serialization. *Next slice: a contained `seed_to_snapshot` serialization-streaming fix.*
   - **`live_working_set`:** t3 stays high (~4.6 GiB) AND t4 sustains it ⇒ the UTxO is genuinely resident. *Next slice: the full bounded in-memory UTxO backend (redb `TxIn→TxOut` + bounded cache + k-deep changelog).*

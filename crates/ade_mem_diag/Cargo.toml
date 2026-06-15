@@ -1,0 +1,14 @@
+[package]
+name = "ade_mem_diag"
+version = "0.1.0"
+edition = "2021"
+
+# MEM-OPT-UTXO-DISK S0 -- RED DIAGNOSTIC crate. See src/lib.rs for the contract.
+# Its sole purpose is to quarantine the one unsafe FFI call the workspace needs
+# for a process-memory diagnostic (mimalloc mi_collect), so ade_node keeps
+# #![deny(unsafe_code)] with zero local allows. No BLUE crate may depend on it.
+
+[dependencies]
+# The ONLY reason this crate exists: mimalloc mi_collect(force). The `extended`
+# feature exposes it. This is the workspace's quarantined unsafe-FFI surface.
+libmimalloc-sys = { version = "0.1", features = ["extended"] }

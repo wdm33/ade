@@ -27,6 +27,9 @@ S2_MD="$EV_DIR/mem-opt-ops-s2-import-preprod-memory.md"
 # MEM-OPT-OPS S3: same schema + owned (RssAnon/Private_Dirty) fields (CE-OPS-3).
 S3_JSONL="$EV_DIR/mem-opt-ops-s3-owned-preprod-memory.jsonl"
 S3_MD="$EV_DIR/mem-opt-ops-s3-owned-preprod-memory.md"
+# MEM-OPT-UTXO-DISK S0: same schema + the t2/t3 phase-diagnostic points (CE-UD-0).
+UD_S0_JSONL="$EV_DIR/mem-opt-utxo-disk-s0-phase-timeline-preprod.jsonl"
+UD_S0_MD="$EV_DIR/mem-opt-utxo-disk-s0-phase-timeline-preprod.md"
 
 FAILED=0
 fail() { echo "FAIL: $1"; FAILED=1; }
@@ -37,7 +40,11 @@ fail() { echo "FAIL: $1"; FAILED=1; }
 ALLOWED='^(admission_started|snapshot_imported|bootstrap_complete|admission_shutdown|admission_halted|block_received|block_admitted|agreement_verdict|needs_fork_choice|lca_discovered|candidate_fragment_built|fork_choice_selected|branch_fetch_started|branch_fetch_completed|branch_prevalidated|fork_switch_applied|fork_switch_failed|fork_switch_superseded|missing_bridge|range_refetch_started|range_refetch_completed|memory_measure|memory_summary)$'
 
 # Closed measurement points (the only `point` values a memory_measure may carry).
-POINTS='^(seed_import|idle_recovered_tip|chain_sync_follow|block_fetch_serve|mempool_admission|wal_checkpoint_recovery|sustained)$'
+# t2_snapshot_serializing / t3_after_forced_allocator_collect_diagnostic_only:
+# MEM-OPT-UTXO-DISK S0 phase-diagnostic points (emitted only under the RED
+# ADE_MEM_PHASE_DIAGNOSTIC env toggle). The t3 label names the measurement
+# intervention (a forced allocator collect) explicitly.
+POINTS='^(seed_import|idle_recovered_tip|chain_sync_follow|block_fetch_serve|mempool_admission|wal_checkpoint_recovery|sustained|t2_snapshot_serializing|t3_after_forced_allocator_collect_diagnostic_only)$'
 
 # validate_transcript <jsonl> <md> : 0 = a valid memory transcript (or absent →
 # vacuous); non-zero = reject.
@@ -55,7 +62,7 @@ validate_transcript() {
     local pt
     while IFS= read -r pt; do
         grep -qE "$POINTS" <<< "$pt" || { echo "  unknown measurement point: '$pt'"; rc=1; }
-    done < <(grep -oE '"point":"[a-z_]+"' "$jsonl" | sed -E 's/.*:"([a-z_]+)"/\1/')
+    done < <(grep -oE '"point":"[a-z0-9_]+"' "$jsonl" | sed -E 's/.*:"([a-z0-9_]+)"/\1/')
 
     # (c) at least one RSS sample.
     grep -qE '"event":"memory_measure"' "$jsonl" \
@@ -155,6 +162,7 @@ validate_transcript "$JSONL_DEFAULT" "$MD_DEFAULT" || fail "committed mem-measur
 validate_transcript "$S1_JSONL" "$S1_MD" || fail "committed mem-opt-ops-s1 transcript failed validation"
 validate_transcript "$S2_JSONL" "$S2_MD" || fail "committed mem-opt-ops-s2 transcript failed validation"
 validate_transcript "$S3_JSONL" "$S3_MD" || fail "committed mem-opt-ops-s3 transcript failed validation"
+validate_transcript "$UD_S0_JSONL" "$UD_S0_MD" || fail "committed mem-opt-utxo-disk-s0 transcript failed validation"
 if (( FAILED == 0 )); then
     echo "OK: mem-measure evidence schema (vacuous-until-committed; A2 + MEM-OPT-OPS S1/S2/S3 transcripts; OP-MEM-01/OP-MEM-02, operator-gated)"
 fi

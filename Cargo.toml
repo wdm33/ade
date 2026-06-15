@@ -12,4 +12,5 @@ members = [
     "crates/ade_network",
     "crates/ade_node",
     "crates/ade_core_interop",
+    "crates/ade_mem_diag",
 ]

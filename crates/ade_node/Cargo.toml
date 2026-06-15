@@ -21,6 +21,10 @@ serde_json = "1"
 # MEM-OPT-OPS S1 (OP-MEM-02 / DC-MEM-06): process global allocator that returns
 # freed pages to the OS. Binary-only dep; never a BLUE-crate dependency.
 mimalloc = "0.1"
+# MEM-OPT-UTXO-DISK S0: the RED-only diagnostic forced-reclaim probe lives in
+# the quarantined `ade_mem_diag` crate (preserves ade_node #![deny(unsafe_code)]
+# with zero local allows). ade_node calls it only behind the S0 env toggle.
+ade_mem_diag = { path = "../ade_mem_diag" }
 
 [dev-dependencies]
 ade_testkit = { path = "../ade_testkit" }

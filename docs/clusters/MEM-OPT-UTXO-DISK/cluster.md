@@ -42,8 +42,8 @@
 ## 7. TCB Color Map
 - **BLUE:** none in S0. The structural slices keep the ledger interface UNCHANGED (`utxo_lookup`/`utxo_insert` signatures); the UTxO store is **RED behind the unchanged BLUE authority** (FC/IS) — validation is a pure function of resolved UTxO values and never branches on disk-vs-memory.
 - **GREEN:** the phase-marker / classification logic + the evidence schema.
-- **RED:** the owned sampler, the phase taps, the **forced-reclaim probe (diagnostic only)**, and (later) the storage backend.
-- **Affected gates:** new `ci/ci_check_mem_opt_utxo_disk_s0.sh` (S0 schema + classification + replay pairing); reused `ci_check_mem_opt_s3_owned.sh`, the replay corpus (`DC-WAL-03`).
+- **RED:** the owned sampler, the phase taps, the **forced-reclaim probe (diagnostic only)** — quarantined in the dedicated **`ade_mem_diag`** crate (the workspace's sole unsafe-FFI surface) so `ade_node` keeps `#![deny(unsafe_code)]` with zero local allows — and (later) the storage backend.
+- **Affected gates:** new `ci/ci_check_mem_opt_utxo_disk_s0.sh` (S0 timeline + honest classification + replay `agreed`) + `ci/ci_check_mem_diag_quarantine.sh` (the unsafe quarantine enforcement); the 2 phase points added to the closed POINTS vocabulary in `ci_check_mem_measure_evidence.sh`; reused `ci_check_mem_opt_s3_owned.sh`, the replay corpus (`DC-WAL-03`).
 
 ## 8. Forbidden During This Cluster
 1. **No BLUE semantic change** — the UTxO storage is a representation/storage change behind the unchanged ledger interface; validation never branches on disk-vs-memory.

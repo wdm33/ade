@@ -169,6 +169,30 @@ where
     /// point's owned values, before the snapshot mmap inflates gross VmRSS.
     pub seed_import_rss_anon_kib: u64,
     pub seed_import_private_dirty_kib: u64,
+    /// MEM-OPT-UTXO-DISK S0 (CE-UD-0): the phase-resolved owned diagnostic,
+    /// populated in bootstrap ONLY under the RED `ADE_MEM_PHASE_DIAGNOSTIC` env
+    /// toggle. `None` on every normal run (and in tests). Observational; the
+    /// forced-reclaim control it carries is a measurement intervention that never
+    /// feeds authority (the run's replay verdict, not RSS, gates validity).
+    pub mem_phase_diagnostic: Option<MemPhaseDiagnostic>,
+}
+
+/// MEM-OPT-UTXO-DISK S0 (CE-UD-0): owned-footprint samples at the two extra
+/// phase boundaries the diagnostic adds — t2 right after `seed_to_snapshot` (the
+/// suspected serialization transient) and t3 right after a RED-only forced
+/// allocator collect (`ade_mem_diag::force_allocator_collect_for_diagnostic_only`).
+/// The t2->t3 owned delta classifies the active-admission footprint. RED evidence
+/// only; never an authoritative input.
+#[derive(Debug, Clone)]
+pub struct MemPhaseDiagnostic {
+    pub snapshot_serializing_rss_kib: u64,
+    pub snapshot_serializing_hwm_kib: u64,
+    pub snapshot_serializing_rss_anon_kib: u64,
+    pub snapshot_serializing_private_dirty_kib: u64,
+    pub post_reclaim_rss_kib: u64,
+    pub post_reclaim_hwm_kib: u64,
+    pub post_reclaim_rss_anon_kib: u64,
+    pub post_reclaim_private_dirty_kib: u64,
 }
 
 /// SOLE admission entry point (CN-ADMIT-01).
@@ -233,6 +257,42 @@ where
         },
     )
     .await;
+    // MEM-OPT-UTXO-DISK S0 (CE-UD-0): the phase-resolved diagnostic taps, emitted
+    // ONLY under the RED `ADE_MEM_PHASE_DIAGNOSTIC` env toggle (None on every
+    // normal run). t2 = owned right after seed_to_snapshot (the suspected
+    // serialization transient); t3 = owned right after a forced allocator collect
+    // (the decisive reclaimability control). The t3 point label makes the
+    // measurement intervention explicit; RSS never feeds authority.
+    if let Some(ref d) = inputs.mem_phase_diagnostic {
+        emit(
+            &writer,
+            AdmissionLogEvent::MemoryMeasure {
+                point: "t2_snapshot_serializing",
+                slot: inputs.initial_chain_tip_slot,
+                durable_tip_slot: inputs.initial_chain_tip_slot,
+                durable_tip_fp_hex: hex_lowercase(&inputs.anchor_initial_ledger_fp.0),
+                rss_kib: d.snapshot_serializing_rss_kib,
+                rss_hwm_kib: d.snapshot_serializing_hwm_kib,
+                rss_anon_kib: d.snapshot_serializing_rss_anon_kib,
+                private_dirty_kib: d.snapshot_serializing_private_dirty_kib,
+            },
+        )
+        .await;
+        emit(
+            &writer,
+            AdmissionLogEvent::MemoryMeasure {
+                point: "t3_after_forced_allocator_collect_diagnostic_only",
+                slot: inputs.initial_chain_tip_slot,
+                durable_tip_slot: inputs.initial_chain_tip_slot,
+                durable_tip_fp_hex: hex_lowercase(&inputs.anchor_initial_ledger_fp.0),
+                rss_kib: d.post_reclaim_rss_kib,
+                rss_hwm_kib: d.post_reclaim_hwm_kib,
+                rss_anon_kib: d.post_reclaim_rss_anon_kib,
+                private_dirty_kib: d.post_reclaim_private_dirty_kib,
+            },
+        )
+        .await;
+    }
     emit_memory_sample(
         &writer,
         &mut mem_windows,
@@ -904,6 +964,7 @@ mod tests {
             seed_import_hwm_kib: 0,
             seed_import_rss_anon_kib: 0,
             seed_import_private_dirty_kib: 0,
+            mem_phase_diagnostic: None,
             consensus_inputs_fingerprint: Hash32([0xCC; 32]),
             consensus_inputs_epoch: EpochNo(0),
             consensus_inputs_epoch_start_slot: SlotNo(0),

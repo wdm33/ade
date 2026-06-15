@@ -121,6 +121,7 @@ async fn run_with_events(
         seed_import_hwm_kib: 0,
         seed_import_rss_anon_kib: 0,
         seed_import_private_dirty_kib: 0,
+        mem_phase_diagnostic: None,
         consensus_inputs_fingerprint: Hash32([0xCC; 32]),
         consensus_inputs_epoch: ade_types::EpochNo(0),
         consensus_inputs_epoch_start_slot: ade_types::SlotNo(0),

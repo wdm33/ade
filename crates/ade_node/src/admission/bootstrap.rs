@@ -55,7 +55,7 @@ use ade_types::{CardanoEra, EpochNo, Hash32, SlotNo};
 use tokio::sync::{mpsc, watch};
 
 use super::runner::{
-    run_admission, AdmissionExitCode, AdmissionInputs, AdmissionPeerEvent,
+    run_admission, AdmissionExitCode, AdmissionInputs, AdmissionPeerEvent, MemPhaseDiagnostic,
 };
 use super::seed_to_snapshot::seed_to_snapshot;
 use crate::admission_log::AdmissionLogWriter;
@@ -226,6 +226,40 @@ async fn run_admission_inner(
     )
     .map_err(|e| AdmissionBootstrapError::SeedToSnapshot(format!("{:?}", e)))?;
 
+    // MEM-OPT-UTXO-DISK S0 (CE-UD-0): phase-resolved owned diagnostic. RED-only,
+    // gated behind the `ADE_MEM_PHASE_DIAGNOSTIC` env toggle (absent on every
+    // normal run). t2 = owned RIGHT AFTER seed_to_snapshot returns (the snapshot-
+    // serialization transient is freed by now, but mimalloc's lazy MADV_FREE may
+    // retain the pages). t3 = owned right after a forced allocator collect -- the
+    // decisive control: if owned drops, the footprint was reclaimable
+    // serialization memory; if it stays, it is live working set. The collect is a
+    // MEASUREMENT INTERVENTION (ade_mem_diag -- the workspace's quarantined RED
+    // unsafe surface); it changes no authoritative output (only freed memory is
+    // returned to the OS).
+    let mem_phase_diagnostic = if std::env::var_os("ADE_MEM_PHASE_DIAGNOSTIC").is_some() {
+        let t2_rss = sample_vm_rss_kib().map(|s| s.0).unwrap_or(0);
+        let t2_hwm = sample_vm_hwm_kib().map(|h| h.0).unwrap_or(0);
+        let t2_anon = sample_rss_anon_kib().map(|s| s.0).unwrap_or(0);
+        let t2_dirty = sample_private_dirty_kib().map(|s| s.0).unwrap_or(0);
+        ade_mem_diag::force_allocator_collect_for_diagnostic_only();
+        let t3_rss = sample_vm_rss_kib().map(|s| s.0).unwrap_or(0);
+        let t3_hwm = sample_vm_hwm_kib().map(|h| h.0).unwrap_or(0);
+        let t3_anon = sample_rss_anon_kib().map(|s| s.0).unwrap_or(0);
+        let t3_dirty = sample_private_dirty_kib().map(|s| s.0).unwrap_or(0);
+        Some(MemPhaseDiagnostic {
+            snapshot_serializing_rss_kib: t2_rss,
+            snapshot_serializing_hwm_kib: t2_hwm,
+            snapshot_serializing_rss_anon_kib: t2_anon,
+            snapshot_serializing_private_dirty_kib: t2_dirty,
+            post_reclaim_rss_kib: t3_rss,
+            post_reclaim_hwm_kib: t3_hwm,
+            post_reclaim_rss_anon_kib: t3_anon,
+            post_reclaim_private_dirty_kib: t3_dirty,
+        })
+    } else {
+        None
+    };
+
     // 5. Mint anchor (kept — its lineage is persisted in step 7b).
     let anchor = mint(MintInputs {
         network_magic: acli.network_magic,
@@ -334,6 +368,7 @@ async fn run_admission_inner(
         seed_import_hwm_kib,
         seed_import_rss_anon_kib,
         seed_import_private_dirty_kib,
+        mem_phase_diagnostic,
         consensus_inputs_fingerprint,
         consensus_inputs_epoch,
         consensus_inputs_epoch_start_slot,
