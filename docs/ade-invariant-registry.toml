@@ -910,6 +910,54 @@ introduced_in = "PHASE4-N-E"
 strengthened_in = []
 
 [[rules]]
+id = "DC-MEM-05"
+tier = "derived"
+statement = "The UTxO/ledger state fingerprint and post-state are independent of the UTxO storage backend: an in-memory UTxO and an on-disk UTxO produce byte-identical replay (same WAL + checkpoint => same tail fingerprint). A memory-representation/storage change is NEVER a consensus or replay change."
+source = "Project constitution §3 (replay is the integration contract); MEM-OPT cluster plan (docs/planning/mem-opt-cluster-plan.md); DC-WAL-03"
+cross_ref = ["DC-WAL-03", "DC-MEM-04", "T-DET-01"]
+code_locus = ""
+tests = []
+ci_script = ""
+status = "declared"
+evidence_notes = "Declared at MEM-OPT scoping (2026-06-15). The load-bearing on-disk-UTxO invariant: the redb-backed UTxO (cluster MEM-OPT-UTXO-DISK) is a pure storage substitution behind the unchanged BLUE ledger interface. Enforced by extending the DC-WAL-03 / replay_from_anchor corpus to run byte-identically under both backends."
+
+[[rules]]
+id = "DC-MEM-06"
+tier = "derived"
+statement = "The UTxO/ledger state fingerprint is computed by the canonical CBOR encoder over canonically-encoded (fixed-width big-endian) keys, NEVER from a storage backend's native iteration order. Store iteration order is an implementation detail and must not enter any authoritative fingerprint."
+source = "Project constitution §4 (determinism); RFC 8949 §4.2.1; MEM-OPT cluster plan"
+cross_ref = ["DC-MEM-05", "T-DET-01"]
+code_locus = ""
+tests = []
+ci_script = ""
+status = "declared"
+evidence_notes = "Declared at MEM-OPT scoping (2026-06-15). De-risks the on-disk UTxO: redb/LMDB/RocksDB iterate in sorted key-byte order, which equals canonical order ONLY for fixed-width big-endian TxIn keys (txid ++ BE index); native-endian keys are a cross-arch footgun. The allocator (mimalloc/jemalloc) is determinism-neutral -- allocation addresses are never fingerprinted."
+
+[[rules]]
+id = "DC-MEM-07"
+tier = "derived"
+statement = "The in-memory portion of the UTxO (read cache + last-k changelog) is bounded by fixed, closed, non-configurable constants; memory pressure cannot grow it unboundedly, and the bound never changes an authoritative output."
+source = "classification_table.md §H; MEM-OPT cluster plan"
+cross_ref = ["CN-MEM-01", "DC-MEM-05"]
+code_locus = ""
+tests = []
+ci_script = ""
+status = "declared"
+evidence_notes = "Declared at MEM-OPT scoping (2026-06-15). Reuses the established fixed-closed-bound pattern (MAX_SERVE_RANGE_BLOCKS / MAX_WIRE_PUMP_LOOKAHEAD / the A1 admission budgets). The k-deep changelog window is bounded by the security parameter; the read cache by a fixed cap."
+
+[[rules]]
+id = "DC-MEM-08"
+tier = "derived"
+statement = "A compact UTxO/TxOut representation (canonical CBOR slice as the single source of truth + lazily-decoded views) preserves canonical bytes and ledger semantics: the value a ledger rule reads, and the bytes the fingerprint sees, are identical to the fully-parsed representation."
+source = "Project constitution §3 (canonical serialization); MEM-OPT cluster plan"
+cross_ref = ["DC-MEM-05", "DC-MEM-06"]
+code_locus = ""
+tests = []
+ci_script = ""
+status = "declared"
+evidence_notes = "Declared at MEM-OPT scoping (2026-06-15). Cluster MEM-OPT-COMPACT: TxOut::AlonzoPlus already keeps the raw CBOR, so compaction is a NARROWING (drop the duplicated address/coin, store ShelleyMary Value as raw bytes, intern policy-ids) with lazy-decode accessors -- never a re-encode that could change canonical bytes."
+
+[[rules]]
 id = "DC-CORE-01"
 tier = "derived"
 statement = "BLUE authoritative crates are sync-only: no async fn, .await, tokio::, async_std::, Future, futures::, task spawning, async channels, or timers. Async runtime concerns are confined to RED transport/runtime code."
@@ -1922,6 +1970,18 @@ ci_script = "ci/ci_check_mem_measure_evidence.sh"
 status = "partial"
 strengthened_in = ["MEM-MEASURE-A2"]
 evidence_notes = "PARTIAL at MEM-MEASURE-A2 (2026-06-15): committed live preprod transcript docs/evidence/mem-measure-a2-preprod-memory.jsonl (sha256 cba0bcccfd59506fcea67217c497ce1e1a918bd229156f7512246f19a26e6b5b). ade_node --mode admission warm-started from a full preprod UTxO seed at slot 125821799 (epoch 295), followed the docker peer 127.0.0.1:3001, and admitted 24 blocks (24 block_admitted + 24 agreement_verdict{lagging}, 0 diverged) INTERLEAVED with 27 memory_measure RSS samples across 4 closed measurement points (wal_checkpoint_recovery, idle_recovered_tip, mempool_admission, sustained) + a memory_summary{replay_verdict=agreed}. RSS sampling did NOT starve block validation / chain selection / persistence, and the run was replay-equivalent (clean exit, no fatal Diverged halt; the enforced DC-WAL-03). RSS p50/p95/peak ~6.87 GB (full-UTxO in-memory footprint). The memory taps are observe-only seams in the admission runner -- a mirror of the --mode node ConvergenceEvidence seams (MEM-MEASURE-A2 build); RSS magnitude never gates any authoritative output. Validated by ci/ci_check_mem_measure_evidence.sh. NOT enforced: the Haskell-node average-memory comparison (BA-08) is MEM-COMPARE-D; CN-MEM-01 partial->enforced (live bounded inbound queues) is MEM-BOUND-B."
+
+[[rules]]
+id = "OP-MEM-02"
+tier = "operational"
+statement = "Ade's owned resident memory (Private_Dirty/RssAnon) under a representative venue stays clearly below the reference Haskell cardano-node's on the same chain, WITHOUT changing ledger semantics, chain selection, persisted bytes, or replay-equivalence."
+source = "Project constitution §4b; bounty BA-08; MEM-OPT cluster plan (docs/planning/mem-opt-cluster-plan.md)"
+cross_ref = ["OP-MEM-01", "DC-MEM-05", "DC-MEM-07"]
+code_locus = ""
+tests = []
+ci_script = ""
+status = "declared"
+evidence_notes = "Declared at MEM-OPT scoping (2026-06-15). The bounty BA-08 win criterion made an invariant. Baseline (MEM-COMPARE-D, docs/evidence/mem-compare-d-preprod.{jsonl,md}): Ade 6.56 GB vs Haskell 5.50 GB on preprod (verdict ade_heavier, +19%). Target <=3.0 GB owned (aim 2.0-2.5). The MEM-OPT clusters (OPS allocator+streaming-import, UTXO-DISK on-disk UTxO, COMPACT representation) drive it; flips when the committed comparison verdict becomes ade_below + the RSS-ceiling gate is green. Every lever is a representation/storage change proven replay-equivalent (DC-MEM-05) and measured with the A2 RSS<->replay-verdict pairing."
 
 [[rules]]
 id = "OP-OPS-01"
