@@ -1216,4 +1216,40 @@ mod tests {
             "whole-buffer: expected DuplicateTxIn, got {werr:?}"
         );
     }
+
+    #[test]
+    fn streaming_rejects_exact_duplicate_string_key_but_oracle_collapses() {
+        // The HONEST asymmetry (per-cluster security review). An EXACT-duplicate JSON
+        // string key (the same "<txid>#<ix>" literally twice -- distinct from the
+        // canonical #0/#00 collision above): the streaming PRODUCTION path sees both
+        // via serde's MapAccess and fails closed (DuplicateTxIn). The whole-buffer
+        // ORACLE collapses exact string dups in its BTreeMap<String> parse (serde
+        // last-wins) and returns Ok -- so the two TEST paths DIVERGE here. cardano-cli
+        // emits unique outref keys by construction, so this input is not naturally
+        // producible; the PRODUCTION (streaming) path is the fail-closed one. This
+        // pins the asymmetry: the equivalence test covers only inputs where the two
+        // paths agree; production fails closed on ANY duplicate.
+        let dup = r#"{
+            "0000000000000000000000000000000000000000000000000000000000000006#0": {
+                "address": "addr_test1vq0ast4z2dypfrl9kg2c0garrcy085w78dls8xsx954x34cmgvp2u",
+                "value": { "lovelace": 1000000 }
+            },
+            "0000000000000000000000000000000000000000000000000000000000000006#0": {
+                "address": "addr_test1vq0ast4z2dypfrl9kg2c0garrcy085w78dls8xsx954x34cmgvp2u",
+                "value": { "lovelace": 2000000 }
+            }
+        }"#;
+        // Production (streaming): fail-closed on the exact-dup string key.
+        let err = streaming_import_str(dup).expect_err("exact-dup string key must fail closed (streaming)");
+        assert!(
+            matches!(err, JsonSeedError::DuplicateTxIn { .. }),
+            "streaming: expected DuplicateTxIn, got {err:?}"
+        );
+        // Oracle (whole-buffer, test-only): serde collapses exact-dup string keys
+        // (last-wins) -> Ok. Documented asymmetry; the oracle is NOT the production path.
+        assert!(
+            import_cardano_cli_json_utxo_from_bytes(dup.as_bytes()).is_ok(),
+            "whole-buffer oracle collapses exact-dup string keys (serde last-wins)"
+        );
+    }
 }

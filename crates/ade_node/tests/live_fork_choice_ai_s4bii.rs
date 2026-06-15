@@ -982,18 +982,23 @@ async fn participant_block_received_does_not_imply_admission() {
     );
 }
 
-/// RSS magnitude (`rss_kib`) is RED observational data (see `rss_sampler`): it
+/// Every memory-magnitude field (any `"<…>_kib"`: VmRSS `rss_kib`, VmHWM
+/// `rss_hwm_kib`, owned `rss_anon_kib` / `private_dirty_kib`, and the owned/gross
+/// summary percentiles) is RED observational data (see `rss_sampler`): it
 /// legitimately varies run-to-run (the allocator may return freed pages between
-/// runs) and so is NEVER part of a replay-byte-identity assertion. Normalize it
-/// to a fixed placeholder; every other field — including the deterministic
-/// `memory_measure` fields (point / slot / durable_tip_fp) — must still match.
-fn normalize_rss_kib(s: &str) -> String {
-    let needle = "\"rss_kib\":";
+/// runs) and so is NEVER part of a replay-byte-identity assertion. Normalize EVERY
+/// `"…_kib":<n>` to a fixed placeholder; every deterministic field — `point` /
+/// `slot` / `durable_tip_fp_hex` / hashes / verdict — must still match exactly.
+/// (S1 introduced this for `rss_kib`; S3 added owned `*_kib` fields to the same
+/// `memory_measure` line, so the masker matches the whole `*_kib` class.)
+fn normalize_memory_kib(s: &str) -> String {
+    let needle = "_kib\":";
     let mut out = String::with_capacity(s.len());
     let mut rest = s;
     while let Some(pos) = rest.find(needle) {
-        out.push_str(&rest[..pos + needle.len()]);
-        rest = &rest[pos + needle.len()..];
+        let end = pos + needle.len();
+        out.push_str(&rest[..end]);
+        rest = &rest[end..];
         let digits_end = rest.find(|c: char| !c.is_ascii_digit()).unwrap_or(rest.len());
         out.push('0');
         rest = &rest[digits_end..];
@@ -1050,9 +1055,9 @@ async fn participant_convergence_evidence_replay_byte_identical() {
     let b = run().await;
     assert!(!a.is_empty());
     assert_eq!(
-        normalize_rss_kib(&a),
-        normalize_rss_kib(&b),
-        "convergence evidence is replay-byte-identical (modulo observational rss_kib)"
+        normalize_memory_kib(&a),
+        normalize_memory_kib(&b),
+        "convergence evidence is replay-byte-identical (modulo every observational *_kib memory field)"
     );
 }
 
