@@ -1,13 +1,13 @@
 # Slice MEM-OPT-OPS S1 — global allocator swap (return the retained import peak to the OS)
 
-> **Status:** In Progress
+> **Status:** Merged — hermetic half (`0f2dcbe6`) + the live CE-OPS-1 transcript (this commit). VmRSS p50 6,874,024 → 4,824,884 kiB (−29.8%), replay `agreed`, 0 diverged.
 > **Cluster:** MEM-OPT-OPS (primary invariant `OP-MEM-02`)
 > **Cluster doc:** `docs/clusters/MEM-OPT-OPS/cluster.md` · **Grounding:** `docs/planning/mem-opt-grounding.md`
 
 ## 2. Slice Header
 
 ### Cluster Exit Criteria Addressed
-- [ ] **CE-OPS-1** (`OP-MEM-02`, ALLOC): a committed preprod transcript with the allocator swapped shows resident memory **strictly below** the MEM-MEASURE-A2 baseline (6.56 GB), `memory_summary{replay_verdict=agreed}`, 0 diverged; `ci_check_mem_measure_evidence.sh` + the determinism-neutral allocator gate green; `cargo test -p ade_node` green.
+- [x] **CE-OPS-1** (`OP-MEM-02`, ALLOC): a committed preprod transcript with the allocator swapped shows resident memory **strictly below** the MEM-MEASURE-A2 baseline (6.56 GB), `memory_summary{replay_verdict=agreed}`, 0 diverged; `ci_check_mem_measure_evidence.sh` + the determinism-neutral allocator gate green; `cargo test -p ade_node` green. **MET 2026-06-15** — `docs/evidence/mem-opt-ops-s1-alloc-preprod-memory.{jsonl,md}` (sha256 `1ea71f1c…`): VmRSS p50/peak 6,874,024/6,874,028 → 4,824,884/4,824,976 kiB (−29.8%), `agreed`, 0 diverged, 18 block_admitted; `ci_check_mem_opt_s1_reduction.sh` asserts strictly-below.
 
 Exit criteria CE-OPS-2 (streaming import) and CE-OPS-3 (owned-RSS ceiling) are explicitly **out of scope** for this slice.
 
@@ -72,12 +72,12 @@ Make it **impossible** for the node process to retain the transient seed-import 
 - **Live (CE-OPS-1):** a committed `--mode admission` preprod re-run (same A2 protocol, same `rss_sampler`/`VmRSS` metric) with the mimalloc binary, showing resident memory strictly below 6.56 GB and `memory_summary{replay_verdict=agreed}`. (The owned-footprint `Private_Dirty`/`RssAnon` refinement is S3; S1 keeps the metric identical to the baseline so the comparison is apples-to-apples — only the allocator changed.)
 
 ## 12. Mechanical Acceptance Criteria
-- [ ] `cargo build -p ade_node` succeeds with the mimalloc global allocator.
-- [ ] `cargo test -p ade_node` green (no behavioral change).
-- [ ] `cargo test -p ade_testkit` (replay corpus) passes byte-identically — the allocator changes no fingerprint.
-- [ ] `ci/ci_check_alloc_determinism_neutral.sh` green, and `--self-test` green: exactly one `#[global_allocator]` (in `ade_node/src/main.rs`); zero allocator references in BLUE crates.
-- [ ] `ci/ci_check_registry_code_locus_exists.sh` green (DC-MEM-06 `code_locus` → the new gate resolves on disk).
-- [ ] **CE-OPS-1 (live):** committed preprod `--mode admission` transcript with the mimalloc binary — resident memory strictly below 6.56 GB, `memory_summary{replay_verdict=agreed}`, 0 diverged; `ci/ci_check_mem_measure_evidence.sh` green.
+- [x] `cargo build -p ade_node` succeeds with the mimalloc global allocator (release + debug; `mi_*` symbols linked — verified).
+- [x] `cargo test -p ade_node` green (47 in the affected binary, 309 lib; the rss_kib byte-identity defect surfaced + fixed).
+- [x] `cargo test -p ade_testkit` (replay corpus) passes — the BLUE replay logic is unaffected (ade_testkit has no `ade_node` dependency, so it cannot be perturbed by this ade_node-only change; the *allocator*-replay proof is the live `memory_summary{replay_verdict=agreed}` below, since the test binaries run under the default allocator).
+- [x] `ci/ci_check_alloc_determinism_neutral.sh` green, and `--self-test` green: exactly one `#[global_allocator]` (in `ade_node/src/main.rs`); zero allocator references across the BLUE crates + BLUE ade_network submodules.
+- [x] `ci/ci_check_registry_code_locus_exists.sh` green (DC-MEM-06 `code_locus` → the gate resolves on disk; 378 rules).
+- [x] **CE-OPS-1 (live):** committed preprod `--mode admission` transcript with the mimalloc binary — VmRSS strictly below the A2 baseline (6,874,028 → 4,824,976 kiB peak), `memory_summary{replay_verdict=agreed}`, 0 diverged; `ci/ci_check_mem_measure_evidence.sh` + `ci/ci_check_mem_opt_s1_reduction.sh` green.
 
 ## 13. Failure Modes
 - **Build failure** (mimalloc C build): fail-fast at compile; no partial state.

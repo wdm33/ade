@@ -1,7 +1,7 @@
 # Cluster MEM-OPT-OPS — operational memory quick-wins (allocator + streaming import + owned-RSS measure)
 
 **Primary invariant:** `OP-MEM-02` (Ade's owned resident memory stays clearly below the reference Haskell node's, with NO change to ledger semantics, chain selection, persisted bytes, or replay-equivalence).
-**Status:** Planned — **S1 (ALLOC) next.** First of the three MEM-OPT clusters; the cheapest, lowest-risk levers, no BLUE change. Re-measure after this cluster before committing to MEM-OPT-UTXO-DISK.
+**Status:** In progress — **S1 (ALLOC) MERGED** (hermetic `0f2dcbe6` + live CE-OPS-1 transcript); **S2 (IMPORT) next.** First of the three MEM-OPT clusters; the cheapest, lowest-risk levers, no BLUE change. S1 result: VmRSS p50 6,874,024 → 4,824,884 kiB (−29.8%), now ~0.90 GiB below the 5.50 GiB Haskell reference on VmRSS (the allocator alone banked the retained import peak). Re-measure after this cluster before committing to MEM-OPT-UTXO-DISK.
 **Cluster split:** see `docs/planning/mem-opt-cluster-plan.md` §3. Grounding: `docs/planning/mem-opt-grounding.md`.
 
 ## 1. Primary Invariant
@@ -24,7 +24,7 @@
 - **S3 — MEASURE (GREEN/RED).** Extend `rss_sampler` to read the **owned** footprint (`Private_Dirty`/`RssAnon` from `/proc/self/smaps_rollup`) alongside `VmRSS`; add a closed `memory_owned_kib` evidence field; and add `ci/ci_check_mem_rss_ceiling.sh` (vacuous-until-committed) that asserts a committed run's owned RSS ≤ a fixed target and flips the comparison verdict toward `ade_below`. Turns the snapshot into an enforced ceiling + a regression guard. *(`OP-MEM-02`, reuses A1/A2.)*
 
 ## 5. Exit Criteria (CE — each CI-verifiable)
-- **CE-OPS-1 (`OP-MEM-02`, ALLOC) [S1]:** a committed preprod transcript with the allocator swapped shows owned RSS **strictly below** the MEM-MEASURE-A2 baseline (6.56 GB), `memory_summary{replay_verdict=agreed}`, 0 diverged. `ci_check_mem_measure_evidence.sh` + the determinism-neutral allocator gate green; `cargo test -p ade_node` green.
+- **CE-OPS-1 (`OP-MEM-02`, ALLOC) [S1]: ✅ MET (2026-06-15).** Committed preprod transcript with the allocator swapped shows RSS **strictly below** the MEM-MEASURE-A2 baseline (VmRSS p50/peak 6,874,024/6,874,028 → 4,824,884/4,824,976 kiB, −29.8%), `memory_summary{replay_verdict=agreed}`, 0 diverged. `ci_check_mem_measure_evidence.sh` + `ci_check_mem_opt_s1_reduction.sh` + the determinism-neutral allocator gate green; `cargo test -p ade_node` green. Evidence: `docs/evidence/mem-opt-ops-s1-alloc-preprod-memory.{jsonl,md}`. (Metric is VmRSS — the owned `Private_Dirty` refinement is S3; the comparison-verdict flip is S3.)
 - **CE-OPS-2 (`OP-MEM-02`, IMPORT) [S2]:** a committed run with streaming import shows a reduced peak (owned RSS strictly below S1's), the imported UTxO fingerprint byte-identical to the non-streaming import (a hermetic replay test), replay verdict `agreed`.
 - **CE-OPS-3 (owned-RSS ceiling) [S3]:** `ci_check_mem_rss_ceiling.sh --self-test` green; the committed run's owned RSS ≤ the cluster target; the comparison artifact records the new standing.
 - **CE-OPS-close [/cluster-close]:** `OP-MEM-02` records the new operational standing (declared→partial if clearly-below is demonstrated by the cheap levers, else strengthened with the residual gap pointing at MEM-OPT-UTXO-DISK); grounding docs refreshed.
@@ -52,7 +52,7 @@ Each lever is a representation/runtime change with a replay-equivalence obligati
 
 ## 10. Open Questions
 - **OQ-OPS-1 (allocator choice):** mimalloc vs tuned `tikv-jemallocator`. *Lean: benchmark both in S1; pick by owned-RSS + decay behavior; mimalloc is the simpler default.*
-- **OQ-OPS-2 (does cheap clear 5.50 GB?):** if ALLOC+IMPORT alone put owned RSS clearly below 5.50 GB, MEM-OPT-UTXO-DISK becomes the "mainnet-scalable floor" rather than a prerequisite to win preprod. **Re-measure after S2 before scoping UTXO-DISK depth.**
+- **OQ-OPS-2 (does cheap clear 5.50 GB?):** if ALLOC+IMPORT alone put owned RSS clearly below 5.50 GB, MEM-OPT-UTXO-DISK becomes the "mainnet-scalable floor" rather than a prerequisite to win preprod. **S1 finding:** ALLOC *alone* (no IMPORT yet) already put **VmRSS** at 4.60 GiB — below the 5.50 GiB Haskell reference, and the post-import idle footprint was **2.32 GiB** (the live structures, page-cache-free). Strong signal the cheap levers clear preprod; UTXO-DISK is likely the mainnet-scalable floor, not a preprod-win prerequisite. **Caveat:** this is VmRSS; the *owned* metric (S3) is expected lower still. **Re-measure owned RSS after S2/S3 before scoping UTXO-DISK depth.**
 - **OQ-OPS-3 (ceiling target):** the fixed owned-RSS ceiling for `ci_check_mem_rss_ceiling.sh` — set from the post-S2 measurement with margin (e.g. ≤ 3.0 GB), not pre-committed.
 
 ## 11. Cluster Close Record

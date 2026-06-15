@@ -18,6 +18,9 @@ REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 EV_DIR="$REPO_ROOT/docs/evidence"
 JSONL_DEFAULT="$EV_DIR/mem-measure-a2-preprod-memory.jsonl"
 MD_DEFAULT="$EV_DIR/mem-measure-a2-preprod-memory.md"
+# MEM-OPT-OPS S1: same schema, the allocator-swapped re-measurement (CE-OPS-1).
+S1_JSONL="$EV_DIR/mem-opt-ops-s1-alloc-preprod-memory.jsonl"
+S1_MD="$EV_DIR/mem-opt-ops-s1-alloc-preprod-memory.md"
 
 FAILED=0
 fail() { echo "FAIL: $1"; FAILED=1; }
@@ -141,9 +144,10 @@ if [[ "${1:-}" == "--self-test" ]]; then
     exit $FAILED
 fi
 
-# Default: validate the committed transcript (vacuous if absent).
+# Default: validate the committed transcript(s) (vacuous if absent).
 validate_transcript "$JSONL_DEFAULT" "$MD_DEFAULT" || fail "committed mem-measure-a2 transcript failed validation"
+validate_transcript "$S1_JSONL" "$S1_MD" || fail "committed mem-opt-ops-s1 transcript failed validation"
 if (( FAILED == 0 )); then
-    echo "OK: mem-measure-a2 evidence schema (vacuous-until-committed; OP-MEM-01, operator-gated)"
+    echo "OK: mem-measure evidence schema (vacuous-until-committed; A2 + MEM-OPT-OPS S1 transcripts; OP-MEM-01/OP-MEM-02, operator-gated)"
 fi
 exit $FAILED
