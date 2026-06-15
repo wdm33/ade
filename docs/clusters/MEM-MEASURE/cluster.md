@@ -34,7 +34,7 @@
 - **CE-MM-3 (`OP-MEM-01` live artifact) [A2]:** committed transcript `docs/evidence/mem-measure-a2-preprod-memory.{md,jsonl}` — a real `--mode node` C2-LOCAL run records RSS across the six measurement points, each sample paired with the recovered-tip identity + WAL/checkpoint fingerprint + replay verdict `Agreed`, proving no starvation of block validation / chain selection / persistence. → `OP-MEM-01 declared→partial`. `blocked_until_operator_c2local_memory_pass_executed`.
 - **CE-MM-4 (`CN-MEM-01` closure) [B]:** the bounded-admission model is wired into the live `--mode node` inbound path before authoritative validation; a live-path bounded-queue test proves the bound holds under inbound pressure. → `CN-MEM-01 partial→enforced`.
 - **CE-MM-5 (sustained) [C]:** a C2-LOCAL sustained run through `>k` settlement + one epoch transition keeps RSS bounded and the replay verdict `Agreed` throughout.
-- **CE-MM-6 (BA-08 compare) [D]:** a committed side-by-side Haskell-vs-Ade RSS comparison at the same venue/workload.
+- **CE-MM-6 (BA-08 compare) [D]:** DONE — committed side-by-side comparison `docs/evidence/mem-compare-d-preprod.{md,jsonl}` (gate `ci_check_mem_compare_evidence.sh`): Ade `--mode admission` 6.56 GB vs Haskell `cardano-node-preprod` 5.50 GB on preprod, **verdict `ade_heavier` (+19.1%)** — Ade does NOT yet match/beat Haskell. The winning memory optimization (leaner UTxO) is the follow-on (see `D-haskell-rss-comparison.md` §17).
 - **CE-MM-close [/cluster-close]:** registry flips recorded (`CN-MEM-01`, `OP-MEM-01`); the four grounding docs refreshed; cluster archived. Per-cluster security review clean.
 
 ## 6. Expected Slices

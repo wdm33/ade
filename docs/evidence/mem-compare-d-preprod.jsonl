@@ -1,0 +1,13 @@
+{"event":"haskell_rss_sample","node":"cardano-node-preprod","sample_index":0,"rss_kib":5770580}
+{"event":"haskell_rss_sample","node":"cardano-node-preprod","sample_index":1,"rss_kib":5770580}
+{"event":"haskell_rss_sample","node":"cardano-node-preprod","sample_index":2,"rss_kib":5770580}
+{"event":"haskell_rss_sample","node":"cardano-node-preprod","sample_index":3,"rss_kib":5770580}
+{"event":"haskell_rss_sample","node":"cardano-node-preprod","sample_index":4,"rss_kib":5770580}
+{"event":"haskell_rss_sample","node":"cardano-node-preprod","sample_index":5,"rss_kib":5770580}
+{"event":"haskell_rss_sample","node":"cardano-node-preprod","sample_index":6,"rss_kib":5770580}
+{"event":"haskell_rss_sample","node":"cardano-node-preprod","sample_index":7,"rss_kib":5770580}
+{"event":"haskell_rss_sample","node":"cardano-node-preprod","sample_index":8,"rss_kib":5770580}
+{"event":"haskell_rss_sample","node":"cardano-node-preprod","sample_index":9,"rss_kib":5770580}
+{"event":"haskell_rss_sample","node":"cardano-node-preprod","sample_index":10,"rss_kib":5770580}
+{"event":"haskell_rss_sample","node":"cardano-node-preprod","sample_index":11,"rss_kib":5770580}
+{"event":"comparison_summary","venue":"preprod","chain":"preprod-epoch-295","ade_node":"ade --mode admission (follow+admit)","ade_rss_kib":6874028,"haskell_node":"cardano-node-preprod (full node)","haskell_sample_count":12,"haskell_p50_kib":5770580,"haskell_p95_kib":5770580,"haskell_peak_kib":5770580,"gap_kib":1103448,"gap_pct":19.1,"verdict":"ade_heavier"}
