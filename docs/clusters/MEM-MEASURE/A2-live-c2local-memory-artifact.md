@@ -4,7 +4,10 @@
 MEM-MEASURE (primary invariant for this slice: `OP-MEM-01`).
 
 ### Status
-In Progress.
+Merged — build (closed vocab + `--mode node` seams + gate) + `--mode admission` memory seams; live preprod operator pass executed (OP-MEM-01 → partial).
+
+### Live-pass venue (reconciliation)
+The planned venue was C2-LOCAL `--mode node`, but no C2-LOCAL producing testnet was available (the saved private venues are dead / stuck at origin) and `--mode node` first-run is Mithril-only. The available live venue is the preprod docker peer via `ade_node --mode admission` (the proven RO-LIVE-05 path). The same observe-only memory taps were therefore added to the admission runner (`crates/ade_node/src/admission/runner.rs`) — a mirror of the `--mode node` `ConvergenceEvidence` seams — so the memory instrumentation now covers BOTH `--mode node` and `--mode admission`. The committed live transcript is `docs/evidence/mem-measure-a2-preprod-memory.{md,jsonl}`.
 
 ### Cluster Exit Criteria Addressed
 - [ ] CE-MM-3 (`OP-MEM-01` live C2-LOCAL memory artifact — operator-gated)
@@ -36,7 +39,7 @@ Prove operationally that **mempool/peer pressure and memory sampling do not star
   - `ci/ci_check_admission_log_vocabulary_closed.sh` — `ADMISSION_ONLY` += memory_measure/memory_summary (declaration + isolation closure).
   - `ci/ci_check_mem_measure_evidence.sh` — NEW vacuous-until-committed gate for the memory transcript.
   - `docs/ade-invariant-registry.toml` — `OP-MEM-01 declared→partial` (on the committed artifact).
-  - `docs/evidence/mem-measure-a2-c2local-memory.{md,jsonl}` — the committed transcript (operator pass).
+  - `docs/evidence/mem-measure-a2-preprod-memory.{md,jsonl}` — the committed transcript (operator pass).
 - **State machines affected:** none.
 - **Persistence impact:** none (reads WAL/ChainDb/ledger fingerprints; writes only the evidence JSONL).
 - **Network-visible impact:** none.
@@ -101,7 +104,7 @@ The RSS samples flow only into the `memory_measure`/`memory_summary` evidence fi
 - [ ] `ci_check_convergence_evidence_vocabulary_closed.sh` green with the two new variants/literals; `ci_check_admission_log_vocabulary_closed.sh` green.
 - [ ] `ci_check_mem_measure_evidence.sh` `--self-test` green (accept a valid memory transcript; reject diverged / unknown-tag / sha256-mismatch / missing-summary).
 - [ ] `cargo test -p ade_node` green; BLUE untouched.
-- [ ] **Operator pass:** committed `docs/evidence/mem-measure-a2-c2local-memory.{md,jsonl}` — memory_measure events across ≥4 of the 6 points, a memory_summary with `replay_verdict=agreed`, ≥1 `block_admitted` + `agreement_verdict` (`lagging`/`agreed`) interleaved (no starvation), 0 `diverged`, sha256-bound. Then `OP-MEM-01 declared→partial`.
+- [ ] **Operator pass:** committed `docs/evidence/mem-measure-a2-preprod-memory.{md,jsonl}` — memory_measure events across ≥4 of the 6 points, a memory_summary with `replay_verdict=agreed`, ≥1 `block_admitted` + `agreement_verdict` (`lagging`/`agreed`) interleaved (no starvation), 0 `diverged`, sha256-bound. Then `OP-MEM-01 declared→partial`.
 
 ---
 

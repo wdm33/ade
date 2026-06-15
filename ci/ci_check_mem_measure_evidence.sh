@@ -16,8 +16,8 @@ set -uo pipefail
 
 REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 EV_DIR="$REPO_ROOT/docs/evidence"
-JSONL_DEFAULT="$EV_DIR/mem-measure-a2-c2local-memory.jsonl"
-MD_DEFAULT="$EV_DIR/mem-measure-a2-c2local-memory.md"
+JSONL_DEFAULT="$EV_DIR/mem-measure-a2-preprod-memory.jsonl"
+MD_DEFAULT="$EV_DIR/mem-measure-a2-preprod-memory.md"
 
 FAILED=0
 fail() { echo "FAIL: $1"; FAILED=1; }
@@ -25,7 +25,7 @@ fail() { echo "FAIL: $1"; FAILED=1; }
 # Closed vocabulary = the convergence-evidence subset (the only variants the
 # ConvergenceEvidenceSink constructs) + the MEM-MEASURE-A2 memory events. Kept in
 # lockstep with ci_check_convergence_evidence_vocabulary_closed.sh's ALLOWED_LITERALS.
-ALLOWED='^(block_received|block_admitted|agreement_verdict|needs_fork_choice|lca_discovered|candidate_fragment_built|fork_choice_selected|branch_fetch_started|branch_fetch_completed|branch_prevalidated|fork_switch_applied|fork_switch_failed|fork_switch_superseded|missing_bridge|range_refetch_started|range_refetch_completed|memory_measure|memory_summary)$'
+ALLOWED='^(admission_started|snapshot_imported|bootstrap_complete|admission_shutdown|admission_halted|block_received|block_admitted|agreement_verdict|needs_fork_choice|lca_discovered|candidate_fragment_built|fork_choice_selected|branch_fetch_started|branch_fetch_completed|branch_prevalidated|fork_switch_applied|fork_switch_failed|fork_switch_superseded|missing_bridge|range_refetch_started|range_refetch_completed|memory_measure|memory_summary)$'
 
 # Closed measurement points (the only `point` values a memory_measure may carry).
 POINTS='^(idle_recovered_tip|chain_sync_follow|block_fetch_serve|mempool_admission|wal_checkpoint_recovery|sustained)$'

@@ -53,6 +53,7 @@ use super::verdict::{
 use crate::admission_log::{
     AdmissionHaltReason, AdmissionLogEvent, AdmissionLogWriter, AdmissionShutdownReason,
 };
+use crate::mem_measure::rss_sampler::{sample_vm_rss_kib, RssWindow};
 
 /// Live agreement diverged exit code.
 pub const EXIT_LIVE_AGREEMENT_DIVERGED: i32 = 30;
@@ -195,6 +196,29 @@ where
     )
     .await;
 
+    // MEM-MEASURE-A2 (OP-MEM-01): RSS window for the run + the post-recovery /
+    // idle-recovered-tip samples. Observe-only; RSS never feeds authority.
+    let mut rss_window = RssWindow::new();
+    let mut last_admitted_slot = inputs.initial_chain_tip_slot;
+    emit_memory_sample(
+        &writer,
+        &mut rss_window,
+        "wal_checkpoint_recovery",
+        inputs.initial_chain_tip_slot,
+        inputs.initial_chain_tip_slot,
+        &inputs.anchor_initial_ledger_fp,
+    )
+    .await;
+    emit_memory_sample(
+        &writer,
+        &mut rss_window,
+        "idle_recovered_tip",
+        inputs.initial_chain_tip_slot,
+        inputs.initial_chain_tip_slot,
+        &inputs.anchor_initial_ledger_fp,
+    )
+    .await;
+
     // Latest known peer tip. The runner uses this for the next
     // verdict::derive call; updated by `TipUpdate` events.
     let mut latest_peer_tip: Tip = Tip {
@@ -224,6 +248,8 @@ where
                         },
                     )
                     .await;
+                    emit_memory_sample(&writer, &mut rss_window, "sustained", last_admitted_slot, last_admitted_slot, &tail_post_fp).await;
+                    emit_memory_summary_evt(&writer, &rss_window, "agreed").await;
                     return AdmissionExitCode::Ok;
                 }
             }
@@ -237,6 +263,8 @@ where
                             },
                         )
                         .await;
+                        emit_memory_sample(&writer, &mut rss_window, "sustained", last_admitted_slot, last_admitted_slot, &tail_post_fp).await;
+                        emit_memory_summary_evt(&writer, &rss_window, "agreed").await;
                         return AdmissionExitCode::Ok;
                     }
                     Some(AdmissionPeerEvent::TipUpdate { tip, .. }) => {
@@ -254,6 +282,8 @@ where
                                 },
                             )
                             .await;
+                            emit_memory_sample(&writer, &mut rss_window, "sustained", last_admitted_slot, last_admitted_slot, &tail_post_fp).await;
+                            emit_memory_summary_evt(&writer, &rss_window, "agreed").await;
                             return AdmissionExitCode::Ok;
                         }
                     }
@@ -341,6 +371,20 @@ where
                                         consensus_inputs_fingerprint_hex: consensus_fp_hex
                                             .clone(),
                                     },
+                                )
+                                .await;
+
+                                // MEM-MEASURE-A2 (OP-MEM-01): per-admit RSS sample,
+                                // paired with the durable tip ledger fingerprint
+                                // (tail_post_fp). Observe-only.
+                                last_admitted_slot = slot.0;
+                                emit_memory_sample(
+                                    &writer,
+                                    &mut rss_window,
+                                    "mempool_admission",
+                                    slot.0,
+                                    slot.0,
+                                    &tail_post_fp,
                                 )
                                 .await;
 
@@ -634,6 +678,55 @@ async fn emit<W: Write + Send + 'static>(
 ) {
     let mut w = writer.lock().await;
     let _ = w.emit(&event);
+}
+
+/// MEM-MEASURE-A2 (OP-MEM-01): emit one RSS sample at a closed measurement point.
+/// Observe-only -- the RED rss_sampler reads /proc; the value flows ONLY into the
+/// evidence event + the summary accumulator, never into authority. Skipped
+/// off-Linux. Mirrors the `--mode node` `ConvergenceEvidence::emit_memory_measure`.
+async fn emit_memory_sample<W: Write + Send + 'static>(
+    writer: &Arc<Mutex<AdmissionLogWriter<W>>>,
+    rss: &mut RssWindow,
+    point: &'static str,
+    slot: u64,
+    durable_tip_slot: u64,
+    durable_tip_fp: &Hash32,
+) {
+    if let Some(s) = sample_vm_rss_kib() {
+        rss.record(s);
+        emit(
+            writer,
+            AdmissionLogEvent::MemoryMeasure {
+                point,
+                slot,
+                durable_tip_slot,
+                durable_tip_fp_hex: hex_lowercase(&durable_tip_fp.0),
+                rss_kib: s.0,
+            },
+        )
+        .await;
+    }
+}
+
+/// MEM-MEASURE-A2 (OP-MEM-01): emit the run-level memory summary. `replay_verdict`
+/// is `agreed` on a clean admission exit (no fatal Diverged/halt) -- the durable
+/// chain is then replay-equivalent by the enforced DC-WAL-03.
+async fn emit_memory_summary_evt<W: Write + Send + 'static>(
+    writer: &Arc<Mutex<AdmissionLogWriter<W>>>,
+    rss: &RssWindow,
+    replay_verdict: &'static str,
+) {
+    emit(
+        writer,
+        AdmissionLogEvent::MemorySummary {
+            sample_count: rss.count() as u64,
+            rss_p50_kib: rss.p50_kib().unwrap_or(0),
+            rss_p95_kib: rss.p95_kib().unwrap_or(0),
+            rss_peak_kib: rss.peak_kib().unwrap_or(0),
+            replay_verdict,
+        },
+    )
+    .await;
 }
 
 fn hex_lowercase(bytes: &[u8]) -> String {

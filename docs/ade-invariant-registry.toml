@@ -1916,8 +1916,12 @@ id = "OP-MEM-01"
 tier = "operational"
 statement = "Mempool pressure and peer churn must not starve block validation, chain selection, or persistence (scheduling priority)"
 source = "Project constitution §4b"
-cross_ref = ["CN-MEM-02"]
-status = "declared"
+cross_ref = ["CN-MEM-02", "CN-MEM-01", "DC-MEM-04"]
+code_locus = "crates/ade_node/src/admission/runner.rs; crates/ade_node/src/mem_measure/rss_sampler.rs; crates/ade_node/src/convergence_evidence.rs"
+ci_script = "ci/ci_check_mem_measure_evidence.sh"
+status = "partial"
+strengthened_in = ["MEM-MEASURE-A2"]
+evidence_notes = "PARTIAL at MEM-MEASURE-A2 (2026-06-15): committed live preprod transcript docs/evidence/mem-measure-a2-preprod-memory.jsonl (sha256 cba0bcccfd59506fcea67217c497ce1e1a918bd229156f7512246f19a26e6b5b). ade_node --mode admission warm-started from a full preprod UTxO seed at slot 125821799 (epoch 295), followed the docker peer 127.0.0.1:3001, and admitted 24 blocks (24 block_admitted + 24 agreement_verdict{lagging}, 0 diverged) INTERLEAVED with 27 memory_measure RSS samples across 4 closed measurement points (wal_checkpoint_recovery, idle_recovered_tip, mempool_admission, sustained) + a memory_summary{replay_verdict=agreed}. RSS sampling did NOT starve block validation / chain selection / persistence, and the run was replay-equivalent (clean exit, no fatal Diverged halt; the enforced DC-WAL-03). RSS p50/p95/peak ~6.87 GB (full-UTxO in-memory footprint). The memory taps are observe-only seams in the admission runner -- a mirror of the --mode node ConvergenceEvidence seams (MEM-MEASURE-A2 build); RSS magnitude never gates any authoritative output. Validated by ci/ci_check_mem_measure_evidence.sh. NOT enforced: the Haskell-node average-memory comparison (BA-08) is MEM-COMPARE-D; CN-MEM-01 partial->enforced (live bounded inbound queues) is MEM-BOUND-B."
 
 [[rules]]
 id = "OP-OPS-01"
