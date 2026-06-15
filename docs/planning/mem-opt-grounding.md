@@ -28,6 +28,16 @@ malloc keeps the freed pages in its per-thread arenas and rarely returns them to
 so RSS stays pinned near the import peak. This — not the live structures — is the dominant
 cost, and it is the cheapest to fix (allocator decay + streaming import).
 
+**UPDATE (MEM-OPT-OPS S1+S2 landed).** S1 (mimalloc) returns the retained peak; S2
+(streaming import) prevents it — the streaming import peak measured **3.25 GB** (vs
+~6.8 GB whole-buffer; `seed_import` VmHWM tap, byte-identical UTxO). With the import
+peak gone, **the dominant remaining memory event is `seed_to_snapshot`** (`importer`/
+bootstrap step 4): serializing the recovered ~1.9M-entry UTxO into a **~4 GB `chain.db`**
+(run VmHWM ~8 GB transient), after which the redb `chain.db` **mmaps into gross `VmRSS`**
+(~6.9 GB observed; clean, file-backed, reclaimable). This is the next target — likely
+folds into MEM-OPT-UTXO-DISK — and is why the **owned** footprint (`Private_Dirty`, S3),
+which excludes the reclaimable mmap, is the metric that matters, not gross `VmRSS`.
+
 ## B. Cardano (Haskell) memory research — how 5.50 GB happens + UTxO-HD
 
 - **The Haskell 5.50 GB is mostly GC + in-heap UTxO.** GHC's copying collector reserves

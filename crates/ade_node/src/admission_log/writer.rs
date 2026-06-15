@@ -373,6 +373,7 @@ fn encode_event(event: &AdmissionLogEvent, out: &mut String) {
             durable_tip_slot,
             durable_tip_fp_hex,
             rss_kib,
+            rss_hwm_kib,
         } => {
             out.push(',');
             push_key_str(out, "point", point);
@@ -384,12 +385,15 @@ fn encode_event(event: &AdmissionLogEvent, out: &mut String) {
             push_key_str(out, "durable_tip_fp_hex", durable_tip_fp_hex);
             out.push(',');
             push_key_u64(out, "rss_kib", *rss_kib);
+            out.push(',');
+            push_key_u64(out, "rss_hwm_kib", *rss_hwm_kib);
         }
         AdmissionLogEvent::MemorySummary {
             sample_count,
             rss_p50_kib,
             rss_p95_kib,
             rss_peak_kib,
+            rss_hwm_kib,
             replay_verdict,
         } => {
             out.push(',');
@@ -400,6 +404,8 @@ fn encode_event(event: &AdmissionLogEvent, out: &mut String) {
             push_key_u64(out, "rss_p95_kib", *rss_p95_kib);
             out.push(',');
             push_key_u64(out, "rss_peak_kib", *rss_peak_kib);
+            out.push(',');
+            push_key_u64(out, "rss_hwm_kib", *rss_hwm_kib);
             out.push(',');
             push_key_str(out, "replay_verdict", replay_verdict);
         }
@@ -499,12 +505,14 @@ mod tests {
                 durable_tip_slot: 120,
                 durable_tip_fp_hex: fp.clone(),
                 rss_kib: 4096,
+                rss_hwm_kib: 6900,
             },
             AdmissionLogEvent::MemorySummary {
                 sample_count: 7,
                 rss_p50_kib: 4000,
                 rss_p95_kib: 4200,
                 rss_peak_kib: 4500,
+                rss_hwm_kib: 6800,
                 replay_verdict: "agreed",
             },
         ];
@@ -517,11 +525,13 @@ mod tests {
         assert!(lines[0].contains(r#""durable_tip_slot":120"#));
         assert!(lines[0].contains(&format!(r#""durable_tip_fp_hex":"{fp}""#)));
         assert!(lines[0].contains(r#""rss_kib":4096"#));
+        assert!(lines[0].contains(r#""rss_hwm_kib":6900"#));
         assert!(lines[1].contains(r#""event":"memory_summary""#));
         assert!(lines[1].contains(r#""sample_count":7"#));
         assert!(lines[1].contains(r#""rss_p50_kib":4000"#));
         assert!(lines[1].contains(r#""rss_p95_kib":4200"#));
         assert!(lines[1].contains(r#""rss_peak_kib":4500"#));
+        assert!(lines[1].contains(r#""rss_hwm_kib":6800"#));
         assert!(lines[1].contains(r#""replay_verdict":"agreed""#));
     }
 

@@ -233,22 +233,28 @@ pub enum AdmissionLogEvent {
     // is the validity gate).
     /// One RSS sample at a closed measurement `point`, paired with the durable tip
     /// slot + ledger fingerprint observed there. `rss_kib` is the process resident-set
-    /// size in kibibytes (VmRSS).
+    /// size in kibibytes (VmRSS); `rss_hwm_kib` is the all-time `VmHWM` high-water mark
+    /// at that point. At the `seed_import` point `rss_hwm_kib` is the seed-import peak
+    /// captured right after import() returns (MEM-OPT-OPS S2, CE-OPS-2).
     MemoryMeasure {
         point: &'static str,
         slot: u64,
         durable_tip_slot: u64,
         durable_tip_fp_hex: String,
         rss_kib: u64,
+        rss_hwm_kib: u64,
     },
     /// Run-level memory summary emitted once at shutdown: p50/p95/peak over the run's
-    /// samples + the WAL replay verdict (`agreed` iff replaying the WAL from the
-    /// recovered anchor reproduces the final durable ledger fingerprint).
+    /// SAMPLES, the all-time `VmHWM` high-water mark (which records the seed-import
+    /// peak even after the allocator returns the pages -- MEM-OPT-OPS S2), and the WAL
+    /// replay verdict (`agreed` iff replaying the WAL from the recovered anchor
+    /// reproduces the final durable ledger fingerprint).
     MemorySummary {
         sample_count: u64,
         rss_p50_kib: u64,
         rss_p95_kib: u64,
         rss_peak_kib: u64,
+        rss_hwm_kib: u64,
         replay_verdict: &'static str,
     },
 }

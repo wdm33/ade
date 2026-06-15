@@ -60,6 +60,7 @@ use super::runner::{
 use super::seed_to_snapshot::seed_to_snapshot;
 use crate::admission_log::AdmissionLogWriter;
 use crate::cli::AdmissionCli;
+use crate::mem_measure::rss_sampler::{sample_vm_hwm_kib, sample_vm_rss_kib};
 
 /// Closed admission-bootstrap error sum. The binary maps each
 /// variant to the generic-startup exit code; this is the
@@ -161,6 +162,11 @@ async fn run_admission_inner(
     // 1. Import the JSON UTxO seed.
     let (utxo, utxo_fp) = import_cardano_cli_json_utxo(&acli.json_seed_path)
         .map_err(|e| AdmissionBootstrapError::JsonSeedImport(format!("{:?}", e)))?;
+    // MEM-OPT-OPS S2 (CE-OPS-2): capture the seed-import peak RIGHT HERE -- after
+    // import() returns, BEFORE the chain.db snapshot write (a later, larger
+    // transient). VmHWM is the import-specific peak; emitted as `seed_import`.
+    let seed_import_rss_kib = sample_vm_rss_kib().map(|s| s.0).unwrap_or(0);
+    let seed_import_hwm_kib = sample_vm_hwm_kib().map(|h| h.0).unwrap_or(0);
 
     // 2. Parse fixed-size hashes.
     let genesis_hash = parse_hash32(&acli.genesis_hash_hex)
@@ -319,6 +325,8 @@ async fn run_admission_inner(
             .to_string(),
         wal_dir: acli.wal_dir.to_string_lossy().to_string(),
         initial_chain_tip_slot: acli.seed_point_slot,
+        seed_import_rss_kib,
+        seed_import_hwm_kib,
         consensus_inputs_fingerprint,
         consensus_inputs_epoch,
         consensus_inputs_epoch_start_slot,

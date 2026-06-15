@@ -53,7 +53,7 @@ use super::verdict::{
 use crate::admission_log::{
     AdmissionHaltReason, AdmissionLogEvent, AdmissionLogWriter, AdmissionShutdownReason,
 };
-use crate::mem_measure::rss_sampler::{sample_vm_rss_kib, RssWindow};
+use crate::mem_measure::rss_sampler::{sample_vm_hwm_kib, sample_vm_rss_kib, RssWindow};
 
 /// Live agreement diverged exit code.
 pub const EXIT_LIVE_AGREEMENT_DIVERGED: i32 = 30;
@@ -156,6 +156,12 @@ where
     /// with slot `> this` are rejected pre-admit with
     /// [`AdmissionExitCode::CrossEpochUse`] (DC-ADMIT-11).
     pub consensus_inputs_epoch_end_slot: SlotNo,
+    /// MEM-OPT-OPS S2 (CE-OPS-2): process VmRSS / VmHWM captured in bootstrap
+    /// RIGHT AFTER `import_cardano_cli_json_utxo` returns, before any snapshot
+    /// write. `seed_import_hwm_kib` is the streaming-import peak (the import-
+    /// specific metric); emitted as the `seed_import` memory_measure point.
+    pub seed_import_rss_kib: u64,
+    pub seed_import_hwm_kib: u64,
 }
 
 /// SOLE admission entry point (CN-ADMIT-01).
@@ -200,6 +206,22 @@ where
     // idle-recovered-tip samples. Observe-only; RSS never feeds authority.
     let mut rss_window = RssWindow::new();
     let mut last_admitted_slot = inputs.initial_chain_tip_slot;
+    // MEM-OPT-OPS S2 (CE-OPS-2): the streaming seed-import peak, captured in bootstrap
+    // RIGHT AFTER import() returns -- before the chain.db snapshot write, which is a
+    // later, larger transient. `rss_hwm_kib` here is the IMPORT VmHWM (the import-
+    // specific metric), distinct from the run's all-time HWM in memory_summary.
+    emit(
+        &writer,
+        AdmissionLogEvent::MemoryMeasure {
+            point: "seed_import",
+            slot: inputs.initial_chain_tip_slot,
+            durable_tip_slot: inputs.initial_chain_tip_slot,
+            durable_tip_fp_hex: hex_lowercase(&inputs.anchor_initial_ledger_fp.0),
+            rss_kib: inputs.seed_import_rss_kib,
+            rss_hwm_kib: inputs.seed_import_hwm_kib,
+        },
+    )
+    .await;
     emit_memory_sample(
         &writer,
         &mut rss_window,
@@ -702,6 +724,7 @@ async fn emit_memory_sample<W: Write + Send + 'static>(
                 durable_tip_slot,
                 durable_tip_fp_hex: hex_lowercase(&durable_tip_fp.0),
                 rss_kib: s.0,
+                rss_hwm_kib: sample_vm_hwm_kib().map(|h| h.0).unwrap_or(0),
             },
         )
         .await;
@@ -723,6 +746,9 @@ async fn emit_memory_summary_evt<W: Write + Send + 'static>(
             rss_p50_kib: rss.p50_kib().unwrap_or(0),
             rss_p95_kib: rss.p95_kib().unwrap_or(0),
             rss_peak_kib: rss.peak_kib().unwrap_or(0),
+            // The all-time VmHWM high-water mark: records the seed-import peak
+            // even though mimalloc returns those pages afterward (MEM-OPT-OPS S2).
+            rss_hwm_kib: sample_vm_hwm_kib().map(|h| h.0).unwrap_or(0),
             replay_verdict,
         },
     )
@@ -831,6 +857,8 @@ mod tests {
             json_seed_path: "/seed.json".into(),
             wal_dir: "/wal".into(),
             initial_chain_tip_slot: 0,
+            seed_import_rss_kib: 0,
+            seed_import_hwm_kib: 0,
             consensus_inputs_fingerprint: Hash32([0xCC; 32]),
             consensus_inputs_epoch: EpochNo(0),
             consensus_inputs_epoch_start_slot: SlotNo(0),

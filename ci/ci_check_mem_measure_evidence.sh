@@ -21,6 +21,9 @@ MD_DEFAULT="$EV_DIR/mem-measure-a2-preprod-memory.md"
 # MEM-OPT-OPS S1: same schema, the allocator-swapped re-measurement (CE-OPS-1).
 S1_JSONL="$EV_DIR/mem-opt-ops-s1-alloc-preprod-memory.jsonl"
 S1_MD="$EV_DIR/mem-opt-ops-s1-alloc-preprod-memory.md"
+# MEM-OPT-OPS S2: same schema + the `seed_import` point, the streaming import (CE-OPS-2).
+S2_JSONL="$EV_DIR/mem-opt-ops-s2-import-preprod-memory.jsonl"
+S2_MD="$EV_DIR/mem-opt-ops-s2-import-preprod-memory.md"
 
 FAILED=0
 fail() { echo "FAIL: $1"; FAILED=1; }
@@ -31,7 +34,7 @@ fail() { echo "FAIL: $1"; FAILED=1; }
 ALLOWED='^(admission_started|snapshot_imported|bootstrap_complete|admission_shutdown|admission_halted|block_received|block_admitted|agreement_verdict|needs_fork_choice|lca_discovered|candidate_fragment_built|fork_choice_selected|branch_fetch_started|branch_fetch_completed|branch_prevalidated|fork_switch_applied|fork_switch_failed|fork_switch_superseded|missing_bridge|range_refetch_started|range_refetch_completed|memory_measure|memory_summary)$'
 
 # Closed measurement points (the only `point` values a memory_measure may carry).
-POINTS='^(idle_recovered_tip|chain_sync_follow|block_fetch_serve|mempool_admission|wal_checkpoint_recovery|sustained)$'
+POINTS='^(seed_import|idle_recovered_tip|chain_sync_follow|block_fetch_serve|mempool_admission|wal_checkpoint_recovery|sustained)$'
 
 # validate_transcript <jsonl> <md> : 0 = a valid memory transcript (or absent →
 # vacuous); non-zero = reject.
@@ -147,7 +150,8 @@ fi
 # Default: validate the committed transcript(s) (vacuous if absent).
 validate_transcript "$JSONL_DEFAULT" "$MD_DEFAULT" || fail "committed mem-measure-a2 transcript failed validation"
 validate_transcript "$S1_JSONL" "$S1_MD" || fail "committed mem-opt-ops-s1 transcript failed validation"
+validate_transcript "$S2_JSONL" "$S2_MD" || fail "committed mem-opt-ops-s2 transcript failed validation"
 if (( FAILED == 0 )); then
-    echo "OK: mem-measure evidence schema (vacuous-until-committed; A2 + MEM-OPT-OPS S1 transcripts; OP-MEM-01/OP-MEM-02, operator-gated)"
+    echo "OK: mem-measure evidence schema (vacuous-until-committed; A2 + MEM-OPT-OPS S1/S2 transcripts; OP-MEM-01/OP-MEM-02, operator-gated)"
 fi
 exit $FAILED

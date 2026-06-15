@@ -42,7 +42,7 @@ use crate::admission::verdict::{derive, verdict_kind, AgreementVerdict, BlockAdm
 use crate::admission_log::{
     AdmissionLogEvent, AdmissionLogWriter, ForkChoiceEvidenceFailure, ForkChoiceResult,
 };
-use crate::mem_measure::rss_sampler::{sample_vm_rss_kib, RssWindow};
+use crate::mem_measure::rss_sampler::{sample_vm_hwm_kib, sample_vm_rss_kib, RssWindow};
 
 /// Lowercase hex of a byte slice. Local copy (mirrors `admission::runner` /
 /// `wire_only`) so the convergence transcript is byte-identical to the
@@ -292,6 +292,7 @@ impl ConvergenceEvidenceSink {
         durable_tip_slot: u64,
         durable_tip_fp_hex: &str,
         rss_kib: u64,
+        rss_hwm_kib: u64,
     ) -> EvidenceEmitResult {
         self.emit(AdmissionLogEvent::MemoryMeasure {
             point,
@@ -299,6 +300,7 @@ impl ConvergenceEvidenceSink {
             durable_tip_slot,
             durable_tip_fp_hex: durable_tip_fp_hex.to_string(),
             rss_kib,
+            rss_hwm_kib,
         })
     }
     pub fn emit_memory_summary(
@@ -307,6 +309,7 @@ impl ConvergenceEvidenceSink {
         rss_p50_kib: u64,
         rss_p95_kib: u64,
         rss_peak_kib: u64,
+        rss_hwm_kib: u64,
         replay_verdict: &'static str,
     ) -> EvidenceEmitResult {
         self.emit(AdmissionLogEvent::MemorySummary {
@@ -314,6 +317,7 @@ impl ConvergenceEvidenceSink {
             rss_p50_kib,
             rss_p95_kib,
             rss_peak_kib,
+            rss_hwm_kib,
             replay_verdict,
         })
     }
@@ -611,6 +615,7 @@ impl ConvergenceEvidence {
                 durable_tip_slot,
                 &hex_lowercase(&durable_tip_fp.0),
                 s.0,
+                sample_vm_hwm_kib().map(|h| h.0).unwrap_or(0),
             );
             self.note(r);
         }
@@ -625,6 +630,9 @@ impl ConvergenceEvidence {
             self.rss.p50_kib().unwrap_or(0),
             self.rss.p95_kib().unwrap_or(0),
             self.rss.peak_kib().unwrap_or(0),
+            // All-time VmHWM: records the import peak even after the allocator
+            // returns the pages (MEM-OPT-OPS S2).
+            sample_vm_hwm_kib().map(|h| h.0).unwrap_or(0),
             replay_verdict,
         );
         self.note(r);

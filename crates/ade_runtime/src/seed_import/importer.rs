@@ -52,6 +52,13 @@ pub enum JsonSeedError {
     Json(serde_json::Error),
     /// TxIn key did not match `<64-hex>#<u16>` shape.
     BadTxInKey { key: String },
+    /// Two entries resolve to the SAME canonical `TxIn` (a UTxO dump has unique
+    /// outrefs by construction). Distinct JSON key strings can collide on one
+    /// `TxIn` (uppercase vs lowercase hex; `#0` vs `#00`), which would make the
+    /// streaming and whole-buffer imports pick different survivors and diverge.
+    /// Fail closed on ANY duplicate so the import is byte-identical or rejected
+    /// — never a silent, order-dependent fingerprint (DC-MEM-06).
+    DuplicateTxIn { key: String },
     /// Address bech32 decode failed or unknown HRP.
     BadAddress { addr: String },
     /// Datum hash hex was not 64 chars / valid hex.
@@ -79,18 +86,47 @@ impl From<serde_json::Error> for JsonSeedError {
     }
 }
 
-/// SOLE authority: import a cardano-cli JSON UTxO dump into
-/// canonical Ade state. CN-SEED-01.
+/// SOLE authority: import a cardano-cli JSON UTxO dump into canonical Ade
+/// state (CN-SEED-01). MEM-OPT-OPS S2: STREAMING — `Deserializer::from_reader`
+/// over a `BufReader<File>`, converting each entry to canonical form and
+/// inserting into the `BTreeMap` AS IT IS PARSED, so neither the whole-file
+/// buffer nor the intermediate `RawUtxoMap` is ever materialized (removes the
+/// ~6.8 GB import peak). Byte-identical to `import_cardano_cli_json_utxo_from_bytes`:
+/// the SAME per-entry conversion (`parse_txin_key` + `build_canonical_tx_out`)
+/// and the SAME canonical `BTreeMap`, so the fingerprint is unchanged
+/// (`DC-MEM-06` — the fingerprint is over canonical keys, never parse/iteration
+/// order). The whole-buffer variant is retained as the equivalence oracle.
 pub fn import_cardano_cli_json_utxo(
     path: &Path,
 ) -> Result<(UTxOState, UtxoFingerprint), JsonSeedError> {
-    let bytes = fs::read(path).map_err(|e| JsonSeedError::Io(e.kind()))?;
-    import_cardano_cli_json_utxo_from_bytes(&bytes)
+    let file = fs::File::open(path).map_err(|e| JsonSeedError::Io(e.kind()))?;
+    let reader = io::BufReader::new(file);
+    let mut utxos: BTreeMap<TxIn, TxOut> = BTreeMap::new();
+    let mut conv_err: Option<JsonSeedError> = None;
+    let mut de = serde_json::Deserializer::from_reader(reader);
+    let sink = CanonicalUtxoSink {
+        utxos: &mut utxos,
+        conv_err: &mut conv_err,
+    };
+    if let Err(e) = serde::de::DeserializeSeed::deserialize(sink, &mut de) {
+        // A stashed conversion error (BadTxInKey / value / script) is the real
+        // cause and takes precedence over the generic serde halt error.
+        if let Some(ce) = conv_err.take() {
+            return Err(ce);
+        }
+        return Err(JsonSeedError::from(e));
+    }
+    // Reject trailing data after the top-level object (no best-effort accept).
+    de.end().map_err(JsonSeedError::from)?;
+    let state = UTxOState { utxos };
+    let fingerprint = compute_utxo_fingerprint(&state);
+    Ok((state, fingerprint))
 }
 
-/// In-memory variant (used by tests + by the file variant above).
-/// Same single-authority guarantee; the file variant is a
-/// one-line wrapper.
+/// In-memory whole-buffer variant: parse the full `RawUtxoMap`, then convert.
+/// Retained as the streaming path's equivalence ORACLE and as the in-memory
+/// test helper. Same single-authority guarantee; same `(UTxOState, fingerprint)`
+/// as the streaming file variant on identical bytes.
 pub fn import_cardano_cli_json_utxo_from_bytes(
     bytes: &[u8],
 ) -> Result<(UTxOState, UtxoFingerprint), JsonSeedError> {
@@ -99,11 +135,79 @@ pub fn import_cardano_cli_json_utxo_from_bytes(
     for (key, entry) in raw {
         let tx_in = parse_txin_key(&key)?;
         let tx_out = build_canonical_tx_out(&entry)?;
-        utxos.insert(tx_in, tx_out);
+        // Unique-outref enforcement (DC-MEM-06): distinct JSON key strings can
+        // collide on one canonical TxIn; reject ANY duplicate so the import is
+        // byte-identical or rejected, never an order-dependent survivor.
+        if utxos.insert(tx_in, tx_out).is_some() {
+            return Err(JsonSeedError::DuplicateTxIn { key });
+        }
     }
     let state = UTxOState { utxos };
     let fingerprint = compute_utxo_fingerprint(&state);
     Ok((state, fingerprint))
+}
+
+/// Streaming sink (RED): deserializes the top-level cardano-cli UTxO map
+/// entry-by-entry, converting each via the SAME `parse_txin_key` +
+/// `build_canonical_tx_out` as the whole-buffer path and inserting into
+/// `utxos` — only one `RawUtxoEntry` is alive at a time. A conversion error is
+/// stashed into `conv_err` because the serde error returned to halt the parse
+/// cannot carry a `JsonSeedError` payload; the caller reads it back. No
+/// best-effort recovery: any conversion or JSON error halts the import.
+struct CanonicalUtxoSink<'a> {
+    utxos: &'a mut BTreeMap<TxIn, TxOut>,
+    conv_err: &'a mut Option<JsonSeedError>,
+}
+
+impl<'a, 'de> serde::de::DeserializeSeed<'de> for CanonicalUtxoSink<'a> {
+    type Value = ();
+    fn deserialize<D>(self, deserializer: D) -> Result<(), D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        deserializer.deserialize_map(self)
+    }
+}
+
+impl<'a, 'de> serde::de::Visitor<'de> for CanonicalUtxoSink<'a> {
+    type Value = ();
+
+    fn expecting(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+        f.write_str("a cardano-cli UTxO map ({\"txhash#ix\": entry, ...})")
+    }
+
+    fn visit_map<M>(self, mut map: M) -> Result<(), M::Error>
+    where
+        M: serde::de::MapAccess<'de>,
+    {
+        use serde::de::Error as _;
+        while let Some(key) = map.next_key::<String>()? {
+            let entry = map.next_value::<RawUtxoEntry>()?;
+            let tx_in = match parse_txin_key(&key) {
+                Ok(t) => t,
+                Err(e) => {
+                    *self.conv_err = Some(e);
+                    return Err(M::Error::custom("seed txin conversion error"));
+                }
+            };
+            let tx_out = match build_canonical_tx_out(&entry) {
+                Ok(t) => t,
+                Err(e) => {
+                    *self.conv_err = Some(e);
+                    return Err(M::Error::custom("seed txout conversion error"));
+                }
+            };
+            // Unique-outref enforcement (DC-MEM-06): a duplicate TxIn (e.g. a
+            // case- or leading-zero-variant key colliding on one canonical TxIn)
+            // would make the streaming and whole-buffer paths pick different
+            // survivors. Fail closed on ANY duplicate -- byte-identical or rejected.
+            if self.utxos.insert(tx_in, tx_out).is_some() {
+                *self.conv_err = Some(JsonSeedError::DuplicateTxIn { key });
+                return Err(M::Error::custom("duplicate txin in seed"));
+            }
+        }
+        Ok(())
+    }
 }
 
 /// Parse `"<64-hex>#<u16>"` → `TxIn`.
@@ -964,5 +1068,152 @@ mod tests {
         let any = state.utxos.values().next().unwrap();
         // Address bytes are non-empty (bech32 decoded properly).
         assert!(!any.address_bytes().is_empty());
+    }
+
+    // ---------- MEM-OPT-OPS S2: streaming import equivalence (DC-MEM-06) ----------
+
+    /// Write `json` to a temp file and stream-import it (the production path).
+    fn streaming_import_str(json: &str) -> Result<(UTxOState, UtxoFingerprint), JsonSeedError> {
+        use std::io::Write;
+        let mut tmp = tempfile::NamedTempFile::new().expect("temp file");
+        tmp.write_all(json.as_bytes()).expect("write fixture");
+        tmp.flush().expect("flush");
+        import_cardano_cli_json_utxo(tmp.path())
+    }
+
+    /// The core S2 equivalence: the streaming(file) path and the whole-buffer
+    /// (bytes) path must AGREE on every input — both `Ok` with the byte-identical
+    /// canonical fingerprint, or both `Err` (fail-closed identically). A streamed
+    /// fingerprint that differed would be a consensus change, not a memory win.
+    fn assert_streaming_matches_whole_buffer(label: &str, json: &str) {
+        let streamed = streaming_import_str(json);
+        let whole = import_cardano_cli_json_utxo_from_bytes(json.as_bytes());
+        match (streamed, whole) {
+            (Ok((ss, sf)), Ok((ws, wf))) => {
+                assert_eq!(sf, wf, "[{label}] streamed fingerprint must equal whole-buffer");
+                assert_eq!(
+                    ss, ws,
+                    "[{label}] streamed UTxOState must equal whole-buffer (full byte-identity, not just len/fingerprint)"
+                );
+            }
+            (Err(_), Err(_)) => { /* both fail-closed identically — equivalent */ }
+            (s, w) => panic!(
+                "[{label}] streaming vs whole-buffer disagree (streamed_ok={}, whole_ok={})",
+                s.is_ok(),
+                w.is_ok()
+            ),
+        }
+    }
+
+    /// Two textually-distinct JSON keys that collapse to the SAME canonical TxIn
+    /// (`#0` and `#00` both parse to index 0) carrying different values. The
+    /// whole-buffer path (String-keyed dedup, last-in-sorted-order) and the
+    /// streaming path (textual order) would otherwise pick different survivors
+    /// and diverge — so BOTH must fail closed with `DuplicateTxIn` (M1).
+    const COLLIDING_TXIN_ENTRY: &str = r#"{
+        "0000000000000000000000000000000000000000000000000000000000000005#0": {
+            "address": "addr_test1vq0ast4z2dypfrl9kg2c0garrcy085w78dls8xsx954x34cmgvp2u",
+            "value": { "lovelace": 1000000 }
+        },
+        "0000000000000000000000000000000000000000000000000000000000000005#00": {
+            "address": "addr_test1vq0ast4z2dypfrl9kg2c0garrcy085w78dls8xsx954x34cmgvp2u",
+            "value": { "lovelace": 2000000 }
+        }
+    }"#;
+
+    #[test]
+    fn streaming_matches_whole_buffer_across_fixtures() {
+        // Positive + negative fixtures: positives must agree on the FULL UTxOState;
+        // negatives (incl. the colliding-TxIn case) must both fail closed. Proves
+        // the streaming path never diverges from the whole-buffer oracle.
+        for (label, json) in [
+            ("minimal_two_entry", MINIMAL_TWO_ENTRY),
+            ("inline_datum", INLINE_DATUM_ENTRY),
+            ("plutus_v2_ref", PLUTUS_V2_REF_SCRIPT_ENTRY),
+            ("plutus_v1_ref", PLUTUS_V1_REF_SCRIPT_ENTRY),
+            ("plutus_v3_ref", PLUTUS_V3_REF_SCRIPT_ENTRY),
+            ("simple_script_ref", SIMPLE_SCRIPT_REF_SCRIPT_ENTRY),
+            ("unknown_type_ref", UNKNOWN_TYPE_REF_SCRIPT_ENTRY),
+            ("non_hex_ref", NON_HEX_REF_SCRIPT_ENTRY),
+            ("no_ref_baseline", NO_REF_SCRIPT_BASELINE),
+            ("byron_entry", BYRON_ENTRY),
+            ("colliding_txin", COLLIDING_TXIN_ENTRY),
+        ] {
+            assert_streaming_matches_whole_buffer(label, json);
+        }
+    }
+
+    #[test]
+    fn streaming_fingerprint_independent_of_textual_order() {
+        // The streaming visitor inserts into a BTreeMap (canonical-key order), so
+        // the fingerprint is independent of the JSON's textual entry order.
+        let reordered = r#"{
+            "0000000000000000000000000000000000000000000000000000000000000002#3": {
+                "address": "addr_test1vq0ast4z2dypfrl9kg2c0garrcy085w78dls8xsx954x34cmgvp2u",
+                "value": { "lovelace": 2000000 }
+            },
+            "0000000000000000000000000000000000000000000000000000000000000001#0": {
+                "address": "addr_test1vq0ast4z2dypfrl9kg2c0garrcy085w78dls8xsx954x34cmgvp2u",
+                "value": { "lovelace": 1000000 }
+            }
+        }"#;
+        let (_, sorted_fp) = streaming_import_str(MINIMAL_TWO_ENTRY).expect("sorted");
+        let (_, reordered_fp) = streaming_import_str(reordered).expect("reordered");
+        assert_eq!(
+            sorted_fp, reordered_fp,
+            "streamed fingerprint is independent of JSON textual order"
+        );
+    }
+
+    #[test]
+    fn streaming_rejects_garbage_fail_closed() {
+        assert!(streaming_import_str("not json at all").is_err());
+    }
+
+    #[test]
+    fn streaming_rejects_trailing_data_fail_closed() {
+        // A valid object followed by trailing junk must be rejected (no
+        // best-effort accept) — Deserializer::end() catches it.
+        let trailing = format!("{MINIMAL_TWO_ENTRY} trailing-garbage");
+        assert!(
+            streaming_import_str(&trailing).is_err(),
+            "trailing data after the top-level object must fail closed"
+        );
+    }
+
+    #[test]
+    fn streaming_surfaces_conversion_error_not_swallowed() {
+        // A structurally-valid entry whose key is not "<64hex>#<u16>" must surface
+        // the exact JsonSeedError::BadTxInKey (the stashed conversion error), NOT a
+        // generic serde halt and NOT a silently-skipped entry.
+        let bad_key = r#"{
+            "this_is_not_a_txin_key": {
+                "address": "addr_test1vq0ast4z2dypfrl9kg2c0garrcy085w78dls8xsx954x34cmgvp2u",
+                "value": { "lovelace": 1000000 }
+            }
+        }"#;
+        let err = streaming_import_str(bad_key).expect_err("bad txin key must fail");
+        assert!(
+            matches!(err, JsonSeedError::BadTxInKey { .. }),
+            "expected BadTxInKey, got {err:?}"
+        );
+    }
+
+    #[test]
+    fn streaming_rejects_duplicate_txin_fail_closed() {
+        // Two distinct key strings colliding on one canonical TxIn (`#0` vs `#00`)
+        // must fail closed with DuplicateTxIn -- never a silent, order-dependent
+        // survivor (M1 / DC-MEM-06). Both the streaming and whole-buffer paths.
+        let err = streaming_import_str(COLLIDING_TXIN_ENTRY).expect_err("duplicate txin must fail");
+        assert!(
+            matches!(err, JsonSeedError::DuplicateTxIn { .. }),
+            "streaming: expected DuplicateTxIn, got {err:?}"
+        );
+        let werr = import_cardano_cli_json_utxo_from_bytes(COLLIDING_TXIN_ENTRY.as_bytes())
+            .expect_err("whole-buffer duplicate txin must fail");
+        assert!(
+            matches!(werr, JsonSeedError::DuplicateTxIn { .. }),
+            "whole-buffer: expected DuplicateTxIn, got {werr:?}"
+        );
     }
 }
