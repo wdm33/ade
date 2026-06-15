@@ -982,10 +982,31 @@ async fn participant_block_received_does_not_imply_admission() {
     );
 }
 
+/// RSS magnitude (`rss_kib`) is RED observational data (see `rss_sampler`): it
+/// legitimately varies run-to-run (the allocator may return freed pages between
+/// runs) and so is NEVER part of a replay-byte-identity assertion. Normalize it
+/// to a fixed placeholder; every other field — including the deterministic
+/// `memory_measure` fields (point / slot / durable_tip_fp) — must still match.
+fn normalize_rss_kib(s: &str) -> String {
+    let needle = "\"rss_kib\":";
+    let mut out = String::with_capacity(s.len());
+    let mut rest = s;
+    while let Some(pos) = rest.find(needle) {
+        out.push_str(&rest[..pos + needle.len()]);
+        rest = &rest[pos + needle.len()..];
+        let digits_end = rest.find(|c: char| !c.is_ascii_digit()).unwrap_or(rest.len());
+        out.push('0');
+        rest = &rest[digits_end..];
+    }
+    out.push_str(rest);
+    out
+}
+
 #[tokio::test]
 async fn participant_convergence_evidence_replay_byte_identical() {
-    // Same recovered store + same ordered events => byte-identical evidence
-    // (no wall-clock; OQ-AJ-6). Evidence replay-equivalence.
+    // Same recovered store + same ordered events => byte-identical AUTHORITATIVE
+    // evidence (no wall-clock; OQ-AJ-6). Evidence replay-equivalence. The only
+    // nondeterministic field is the observational `rss_kib` (normalized out).
     async fn run() -> String {
         let (c, view) = corpus_view();
         let block = pick_lightest(&c);
@@ -1028,7 +1049,11 @@ async fn participant_convergence_evidence_replay_byte_identical() {
     let a = run().await;
     let b = run().await;
     assert!(!a.is_empty());
-    assert_eq!(a, b, "convergence evidence is replay-byte-identical");
+    assert_eq!(
+        normalize_rss_kib(&a),
+        normalize_rss_kib(&b),
+        "convergence evidence is replay-byte-identical (modulo observational rss_kib)"
+    );
 }
 
 // ---------- PHASE4-N-AL (DC-NODE-33): participant recovered-anchor boundary ----------

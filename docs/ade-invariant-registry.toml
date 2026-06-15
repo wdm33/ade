@@ -924,14 +924,15 @@ evidence_notes = "Declared at MEM-OPT scoping (2026-06-15). The load-bearing on-
 [[rules]]
 id = "DC-MEM-06"
 tier = "derived"
-statement = "The UTxO/ledger state fingerprint is computed by the canonical CBOR encoder over canonically-encoded (fixed-width big-endian) keys, NEVER from a storage backend's native iteration order. Store iteration order is an implementation detail and must not enter any authoritative fingerprint."
+statement = "The UTxO/ledger state fingerprint is computed by the canonical CBOR encoder over canonically-encoded (fixed-width big-endian) keys, NEVER from a storage backend's native iteration order, AND is independent of the process memory allocator (allocation addresses/sizes are never fingerprinted). Store iteration order and the allocator are implementation details and must not enter any authoritative fingerprint."
 source = "Project constitution §4 (determinism); RFC 8949 §4.2.1; MEM-OPT cluster plan"
 cross_ref = ["DC-MEM-05", "T-DET-01"]
-code_locus = ""
+code_locus = "ci/ci_check_alloc_determinism_neutral.sh; crates/ade_node/src/main.rs"
 tests = []
-ci_script = ""
-status = "declared"
-evidence_notes = "Declared at MEM-OPT scoping (2026-06-15). De-risks the on-disk UTxO: redb/LMDB/RocksDB iterate in sorted key-byte order, which equals canonical order ONLY for fixed-width big-endian TxIn keys (txid ++ BE index); native-endian keys are a cross-arch footgun. The allocator (mimalloc/jemalloc) is determinism-neutral -- allocation addresses are never fingerprinted."
+ci_script = "ci/ci_check_alloc_determinism_neutral.sh"
+status = "partial"
+introduced_in = "MEM-OPT-OPS"
+evidence_notes = "Declared at MEM-OPT scoping (2026-06-15). De-risks the on-disk UTxO: redb/LMDB/RocksDB iterate in sorted key-byte order, which equals canonical order ONLY for fixed-width big-endian TxIn keys (txid ++ BE index); native-endian keys are a cross-arch footgun. The allocator (mimalloc/jemalloc) is determinism-neutral -- allocation addresses are never fingerprinted. PARTIAL at MEM-OPT-OPS S1 (2026-06-15): the allocator-neutrality clause is now MECHANICALLY ENFORCED -- ade_node swaps the process global allocator to mimalloc (crates/ade_node/src/main.rs) and ci/ci_check_alloc_determinism_neutral.sh asserts exactly one #[global_allocator] at the RED binary entry + ZERO allocator references in any BLUE crate (the allocator type is invisible to every canonical encoder/fingerprint). The store-iteration-order clause stays DECLARED pending the on-disk UTxO (MEM-OPT-UTXO-DISK), which has no backing store yet -- hence partial, not enforced. The gate proves STATIC invisibility (the allocator type is absent from every BLUE crate + the BLUE ade_network submodules); the RUNTIME 'allocator changes no fingerprint' guarantee is carried by the standing T-DET-01 apply-block-twice fingerprint-identity corpus + DC-WAL-03 replay-equivalence, so tests=[] reflects a static-grep gate, not an unproven claim."
 
 [[rules]]
 id = "DC-MEM-07"

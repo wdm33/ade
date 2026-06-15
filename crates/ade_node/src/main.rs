@@ -38,6 +38,13 @@
 
 #![deny(unsafe_code)]
 
+// MEM-OPT-OPS S1 (OP-MEM-02 / DC-MEM-06): process-wide allocator. mimalloc
+// returns freed pages to the OS, so the transient seed-import peak no longer
+// pins RSS the way the glibc arena does. RED runtime only — allocation
+// addresses never enter a fingerprint (gate: ci_check_alloc_determinism_neutral.sh).
+#[global_allocator]
+static GLOBAL: mimalloc::MiMalloc = mimalloc::MiMalloc;
+
 use std::fs::File;
 use std::process::ExitCode;
 
