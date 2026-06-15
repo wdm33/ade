@@ -37,6 +37,8 @@ ADMISSION_ONLY=(
     "agreement_verdict"
     "admission_halted"
     "admission_shutdown"
+    "memory_measure"
+    "memory_summary"
 )
 
 WIRE_ONLY=(

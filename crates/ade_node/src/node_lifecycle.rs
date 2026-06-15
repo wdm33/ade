@@ -730,6 +730,20 @@ async fn run_node_lifecycle_inner(
                     .unwrap_or_else(|| fingerprint(&fwd.receive.ledger).combined);
                 ConvergenceEvidence::new(sink, &fp)
             };
+            // MEM-MEASURE-A2 (OP-MEM-01): idle recovered-tip + post-recovery memory
+            // samples, before the relay loop consumes any peer block. Observe-only --
+            // RSS never feeds authority; the sample is skipped off-Linux.
+            {
+                let tip_slot = fwd.recovered_anchor.as_ref().map(|t| t.slot.0).unwrap_or(0);
+                let ledger_fp = fingerprint(&fwd.receive.ledger).combined;
+                convergence.emit_memory_measure(
+                    "wal_checkpoint_recovery",
+                    tip_slot,
+                    tip_slot,
+                    &ledger_fp,
+                );
+                convergence.emit_memory_measure("idle_recovered_tip", tip_slot, tip_slot, &ledger_fp);
+            }
             run_relay_loop_with_sched(
                 &mut fwd,
                 &mut source,
@@ -743,6 +757,16 @@ async fn run_node_lifecycle_inner(
                 Some(&mut convergence),
             )
             .await?;
+            // MEM-MEASURE-A2 (OP-MEM-01): final sustained sample + run-level memory
+            // summary. The loop returned Ok, so the run completed with no fatal Diverged
+            // halt -> the durable chain is replay-equivalent by the enforced DC-WAL-03
+            // (replay verdict `agreed`). Observe-only.
+            {
+                let tip_slot = chaindb.tip().ok().flatten().map(|t| t.slot.0).unwrap_or(0);
+                let ledger_fp = fingerprint(&fwd.receive.ledger).combined;
+                convergence.emit_memory_measure("sustained", tip_slot, tip_slot, &ledger_fp);
+                convergence.emit_memory_summary("agreed");
+            }
             // PHASE4-N-AJ AJ-S2 (DC-NODE-30 / G1): a sink write failure poisons the
             // transcript -- non-fatal to authority, but the operator must NOT commit
             // an incomplete transcript for CE-AI-6.
@@ -2829,6 +2853,9 @@ fn emit_participant_admit(
         let post_fp = fingerprint(&state.receive.ledger).combined;
         let peer_tip = source.followed_peer_tip_signal().tip();
         ev.emit_admit_and_verdict(tip.slot.0, &tip.hash, &tip.prev_hash, &post_fp, peer_tip);
+        // MEM-MEASURE-A2 (OP-MEM-01): per-admit RSS sample paired with the durable tip
+        // ledger fingerprint (`post_fp`). Observe-only; RSS never feeds authority.
+        ev.emit_memory_measure("chain_sync_follow", tip.slot.0, tip.slot.0, &post_fp);
     }
 }
 

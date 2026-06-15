@@ -226,6 +226,31 @@ pub enum AdmissionLogEvent {
         peer: String,
         outcome: &'static str,
     },
+
+    // MEM-MEASURE-A2 (OP-MEM-01): closed live memory-evidence events. Observe-only --
+    // the RED rss_sampler reads /proc; NONE of these fields is read by any authority
+    // path, and RSS magnitude never gates anything (the run's replay verdict, not RSS,
+    // is the validity gate).
+    /// One RSS sample at a closed measurement `point`, paired with the durable tip
+    /// slot + ledger fingerprint observed there. `rss_kib` is the process resident-set
+    /// size in kibibytes (VmRSS).
+    MemoryMeasure {
+        point: &'static str,
+        slot: u64,
+        durable_tip_slot: u64,
+        durable_tip_fp_hex: String,
+        rss_kib: u64,
+    },
+    /// Run-level memory summary emitted once at shutdown: p50/p95/peak over the run's
+    /// samples + the WAL replay verdict (`agreed` iff replaying the WAL from the
+    /// recovered anchor reproduces the final durable ledger fingerprint).
+    MemorySummary {
+        sample_count: u64,
+        rss_p50_kib: u64,
+        rss_p95_kib: u64,
+        rss_peak_kib: u64,
+        replay_verdict: &'static str,
+    },
 }
 
 /// Closed result of `select_best_chain` for a competing candidate (S9 evidence).
@@ -338,6 +363,9 @@ impl AdmissionLogEvent {
             // PHASE4-N-AO S14 (DC-NODE-41) closed range re-fetch recovery events.
             Self::RangeRefetchStarted { .. } => "range_refetch_started",
             Self::RangeRefetchCompleted { .. } => "range_refetch_completed",
+            // MEM-MEASURE-A2 (OP-MEM-01) closed live memory-evidence events.
+            Self::MemoryMeasure { .. } => "memory_measure",
+            Self::MemorySummary { .. } => "memory_summary",
         }
     }
 }
@@ -475,6 +503,8 @@ mod tests {
             AdmissionLogEvent::MissingBridge { .. } => "missing_bridge",
             AdmissionLogEvent::RangeRefetchStarted { .. } => "range_refetch_started",
             AdmissionLogEvent::RangeRefetchCompleted { .. } => "range_refetch_completed",
+            AdmissionLogEvent::MemoryMeasure { .. } => "memory_measure",
+            AdmissionLogEvent::MemorySummary { .. } => "memory_summary",
         };
     }
 

@@ -366,6 +366,43 @@ fn encode_event(event: &AdmissionLogEvent, out: &mut String) {
             out.push(',');
             push_key_str(out, "outcome", outcome);
         }
+        // MEM-MEASURE-A2 (OP-MEM-01) closed live memory-evidence events.
+        AdmissionLogEvent::MemoryMeasure {
+            point,
+            slot,
+            durable_tip_slot,
+            durable_tip_fp_hex,
+            rss_kib,
+        } => {
+            out.push(',');
+            push_key_str(out, "point", point);
+            out.push(',');
+            push_key_u64(out, "slot", *slot);
+            out.push(',');
+            push_key_u64(out, "durable_tip_slot", *durable_tip_slot);
+            out.push(',');
+            push_key_str(out, "durable_tip_fp_hex", durable_tip_fp_hex);
+            out.push(',');
+            push_key_u64(out, "rss_kib", *rss_kib);
+        }
+        AdmissionLogEvent::MemorySummary {
+            sample_count,
+            rss_p50_kib,
+            rss_p95_kib,
+            rss_peak_kib,
+            replay_verdict,
+        } => {
+            out.push(',');
+            push_key_u64(out, "sample_count", *sample_count);
+            out.push(',');
+            push_key_u64(out, "rss_p50_kib", *rss_p50_kib);
+            out.push(',');
+            push_key_u64(out, "rss_p95_kib", *rss_p95_kib);
+            out.push(',');
+            push_key_u64(out, "rss_peak_kib", *rss_peak_kib);
+            out.push(',');
+            push_key_str(out, "replay_verdict", replay_verdict);
+        }
     }
     out.push('}');
 }
@@ -429,6 +466,9 @@ const DISCRIMINATORS: &[&str] = &[
     // PHASE4-N-AO S14 (DC-NODE-41) closed range re-fetch recovery events.
     "range_refetch_started",
     "range_refetch_completed",
+    // MEM-MEASURE-A2 (OP-MEM-01) closed live memory-evidence events.
+    "memory_measure",
+    "memory_summary",
 ];
 
 #[cfg(test)]
@@ -447,6 +487,42 @@ mod tests {
             w.emit(e).expect("emit");
         }
         w.into_inner()
+    }
+
+    #[test]
+    fn admission_log_writer_emits_memory_events() {
+        let fp = "ab".repeat(32);
+        let events = vec![
+            AdmissionLogEvent::MemoryMeasure {
+                point: "chain_sync_follow",
+                slot: 120,
+                durable_tip_slot: 120,
+                durable_tip_fp_hex: fp.clone(),
+                rss_kib: 4096,
+            },
+            AdmissionLogEvent::MemorySummary {
+                sample_count: 7,
+                rss_p50_kib: 4000,
+                rss_p95_kib: 4200,
+                rss_peak_kib: 4500,
+                replay_verdict: "agreed",
+            },
+        ];
+        let text = String::from_utf8(emit_to_vec(&events)).unwrap();
+        let lines: Vec<&str> = text.lines().collect();
+        assert_eq!(lines.len(), 2);
+        assert!(lines[0].contains(r#""event":"memory_measure""#));
+        assert!(lines[0].contains(r#""point":"chain_sync_follow""#));
+        assert!(lines[0].contains(r#""slot":120"#));
+        assert!(lines[0].contains(r#""durable_tip_slot":120"#));
+        assert!(lines[0].contains(&format!(r#""durable_tip_fp_hex":"{fp}""#)));
+        assert!(lines[0].contains(r#""rss_kib":4096"#));
+        assert!(lines[1].contains(r#""event":"memory_summary""#));
+        assert!(lines[1].contains(r#""sample_count":7"#));
+        assert!(lines[1].contains(r#""rss_p50_kib":4000"#));
+        assert!(lines[1].contains(r#""rss_p95_kib":4200"#));
+        assert!(lines[1].contains(r#""rss_peak_kib":4500"#));
+        assert!(lines[1].contains(r#""replay_verdict":"agreed""#));
     }
 
     #[test]

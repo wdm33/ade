@@ -42,6 +42,7 @@ use crate::admission::verdict::{derive, verdict_kind, AgreementVerdict, BlockAdm
 use crate::admission_log::{
     AdmissionLogEvent, AdmissionLogWriter, ForkChoiceEvidenceFailure, ForkChoiceResult,
 };
+use crate::mem_measure::rss_sampler::{sample_vm_rss_kib, RssWindow};
 
 /// Lowercase hex of a byte slice. Local copy (mirrors `admission::runner` /
 /// `wire_only`) so the convergence transcript is byte-identical to the
@@ -281,6 +282,42 @@ impl ConvergenceEvidenceSink {
         })
     }
 
+    /// MEM-MEASURE-A2 (OP-MEM-01): closed live memory-evidence emitters. Each constructs
+    /// ONE closed variant and funnels it through `emit` -- observe-only; the sink never
+    /// reads RSS back, and RSS magnitude never gates.
+    pub fn emit_memory_measure(
+        &mut self,
+        point: &'static str,
+        slot: u64,
+        durable_tip_slot: u64,
+        durable_tip_fp_hex: &str,
+        rss_kib: u64,
+    ) -> EvidenceEmitResult {
+        self.emit(AdmissionLogEvent::MemoryMeasure {
+            point,
+            slot,
+            durable_tip_slot,
+            durable_tip_fp_hex: durable_tip_fp_hex.to_string(),
+            rss_kib,
+        })
+    }
+    pub fn emit_memory_summary(
+        &mut self,
+        sample_count: u64,
+        rss_p50_kib: u64,
+        rss_p95_kib: u64,
+        rss_peak_kib: u64,
+        replay_verdict: &'static str,
+    ) -> EvidenceEmitResult {
+        self.emit(AdmissionLogEvent::MemorySummary {
+            sample_count,
+            rss_p50_kib,
+            rss_p95_kib,
+            rss_peak_kib,
+            replay_verdict,
+        })
+    }
+
     /// PRIVATE single funnel — the `emit_*` methods are its only callers,
     /// so no caller outside this module can construct a non-subset variant.
     /// Deliberately NOT `pub`, and there is NO accessor returning the inner
@@ -312,6 +349,10 @@ pub struct ConvergenceEvidence {
     sink: ConvergenceEvidenceSink,
     consensus_inputs_fingerprint_hex: String,
     incomplete: bool,
+    /// MEM-MEASURE-A2: RSS samples accumulated over the run (GREEN accumulator;
+    /// the /proc read happens in `emit_memory_measure` via the RED sampler). Used
+    /// to derive the run's p50/p95/peak for the `memory_summary`.
+    rss: RssWindow,
 }
 
 impl ConvergenceEvidence {
@@ -324,6 +365,7 @@ impl ConvergenceEvidence {
             sink,
             consensus_inputs_fingerprint_hex: hex_lowercase(&fingerprint.0),
             incomplete: false,
+            rss: RssWindow::new(),
         }
     }
 
@@ -546,6 +588,45 @@ impl ConvergenceEvidence {
         let r = self
             .sink
             .emit_range_refetch_completed(fork_switch_id, peer, outcome);
+        self.note(r);
+    }
+
+    /// MEM-MEASURE-A2 (OP-MEM-01): observe-only memory-evidence taps. `emit_memory_measure`
+    /// samples process RSS via the RED rss_sampler (the /proc read), records it for the run
+    /// summary, and emits the sample paired with the durable tip fingerprint observed at a
+    /// closed measurement point. RSS magnitude never gates; a write failure flips
+    /// `incomplete`, never alters authority. Off-Linux (no VmRSS) the sample is skipped.
+    pub fn emit_memory_measure(
+        &mut self,
+        point: &'static str,
+        slot: u64,
+        durable_tip_slot: u64,
+        durable_tip_fp: &Hash32,
+    ) {
+        if let Some(s) = sample_vm_rss_kib() {
+            self.rss.record(s);
+            let r = self.sink.emit_memory_measure(
+                point,
+                slot,
+                durable_tip_slot,
+                &hex_lowercase(&durable_tip_fp.0),
+                s.0,
+            );
+            self.note(r);
+        }
+    }
+
+    /// Emit the run-level memory summary: p50/p95/peak over the run's samples + the
+    /// `replay_verdict` (`agreed` iff the run completed with no Diverged verdict/halt, so
+    /// the durable chain is replay-equivalent by the enforced DC-WAL-03).
+    pub fn emit_memory_summary(&mut self, replay_verdict: &'static str) {
+        let r = self.sink.emit_memory_summary(
+            self.rss.count() as u64,
+            self.rss.p50_kib().unwrap_or(0),
+            self.rss.p95_kib().unwrap_or(0),
+            self.rss.peak_kib().unwrap_or(0),
+            replay_verdict,
+        );
         self.note(r);
     }
 }

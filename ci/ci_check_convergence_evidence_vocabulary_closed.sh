@@ -39,12 +39,14 @@ ALLOWED_VARIANTS=("BlockReceived" "BlockAdmitted" "AgreementVerdict" \
   "NeedsForkChoice" "LcaDiscovered" "CandidateFragmentBuilt" "ForkChoiceSelected" \
   "BranchFetchStarted" "BranchFetchCompleted" "BranchPrevalidated" \
   "ForkSwitchApplied" "ForkSwitchFailed" "ForkSwitchSuperseded" \
-  "MissingBridge" "RangeRefetchStarted" "RangeRefetchCompleted")
+  "MissingBridge" "RangeRefetchStarted" "RangeRefetchCompleted" \
+  "MemoryMeasure" "MemorySummary")
 ALLOWED_LITERALS=("block_received" "block_admitted" "agreement_verdict" \
   "needs_fork_choice" "lca_discovered" "candidate_fragment_built" "fork_choice_selected" \
   "branch_fetch_started" "branch_fetch_completed" "branch_prevalidated" \
   "fork_switch_applied" "fork_switch_failed" "fork_switch_superseded" \
-  "missing_bridge" "range_refetch_started" "range_refetch_completed")
+  "missing_bridge" "range_refetch_started" "range_refetch_completed" \
+  "memory_measure" "memory_summary")
 
 # Variants that MUST NOT be constructed in the convergence sink (the rest of
 # the AdmissionLogEvent enum — admission lifecycle events).
