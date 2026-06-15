@@ -26,6 +26,7 @@ pub mod fork_switch;
 pub mod key_gen;
 pub mod lca_walk;
 pub mod live_log;
+pub mod mem_measure;
 pub mod node;
 pub mod node_lifecycle;
 pub mod node_sync;

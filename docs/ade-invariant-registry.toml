@@ -1480,13 +1480,14 @@ id = "CN-MEM-01"
 tier = "derived"
 statement = "Untrusted inbound work must be admitted through deterministic bounded policies before consuming scarce authoritative resources"
 source = "classification_table.md §H"
-cross_ref = []
-code_locus = ""
-tests = []
-ci_script = ""
-status = "declared"
+cross_ref = ["DC-MEM-01", "DC-MEM-03", "DC-MEM-04", "CN-MEM-03"]
+code_locus = "crates/ade_node/src/mem_measure/bounded_admission.rs; crates/ade_node/src/mem_measure/runner.rs"
+tests = ["bounded_admission_respects_count_budget", "bounded_admission_respects_byte_budget", "bounded_admission_is_deterministic", "bounded_gate_under_budget_equals_unbounded", "bounded_gate_preserves_admit_verdict", "bounded_gate_no_false_accept_under_pressure", "hermetic_measurement_verdict_is_agreed", "hermetic_measurement_is_replay_stable"]
+ci_script = "ci/ci_check_bounded_inbound_admission.sh"
+status = "partial"
+strengthened_in = ["MEM-MEASURE-A1"]
 attack_rationale = "Protects against spam and resource-exhaustion attacks."
-evidence_notes = "Cardano-specific mempool admission model (tx size limits, fee thresholds, per-protocol-version rules)."
+evidence_notes = "PARTIAL at MEM-MEASURE-A1 (2026-06-15): a deterministic bounded inbound-admission gate (closed per-batch count+byte budgets MAX_INBOUND_ADMISSION_COUNT/MAX_INBOUND_ADMISSION_BYTES, head-of-line forward/shed) fronts the BLUE mempool_ingress authority in crates/ade_node/src/mem_measure/bounded_admission.rs::replay_bounded_ingress_trace. Proven hermetically: forwarded events (hence mempool_ingress calls) are <= the count budget and cumulative bytes <= the byte budget regardless of input length; verdict-preserving (a forwarded event's AdmitOutcome equals a direct call; below the cap byte-identical to replay_ingress_trace, strengthening DC-MEM-04); no false-accept under pressure (an over-budget valid tx is shed, never accepted). Paired with the A1 measurement substrate (RED /proc/self/status RSS sampler + GREEN evidence record whose replay verdict, never RSS magnitude, gates validity). NOT yet live: wiring into the --mode node inbound path is MEM-BOUND-B (partial->enforced); the operational no-starvation memory artifact is MEM-MEASURE-A2 (OP-MEM-01). Original scope: Cardano-specific mempool admission model (tx size limits, fee thresholds, per-protocol-version rules)."
 
 [[rules]]
 id = "CN-MEM-02"
