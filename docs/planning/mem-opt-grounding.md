@@ -38,6 +38,17 @@ bootstrap step 4): serializing the recovered ~1.9M-entry UTxO into a **~4 GB `ch
 folds into MEM-OPT-UTXO-DISK — and is why the **owned** footprint (`Private_Dirty`, S3),
 which excludes the reclaimable mmap, is the metric that matters, not gross `VmRSS`.
 
+**UPDATE (MEM-OPT-OPS S3 — the decisive owned measurement).** `RssAnon ≈ VmRSS` at
+every point — Ade's resident memory is almost entirely **owned anonymous heap**, so
+the S2 "chain.db mmap pollutes gross VmRSS" hypothesis was **wrong**: redb's admission
+cost is **anonymous write buffers** + the `seed_to_snapshot` serialization, counted in
+`RssAnon` (not a reclaimable mmap). Owned footprint: **idle/recovered 1.95 GiB** (below
+the ≤3 GB target — S1+S2 import-side wins are real) but **active-admission 4.59 GiB**
+(p50). Honest owned comparison: Ade 4.59 GiB vs the Haskell node's windowed owned
+**2.57 GiB** (GC-variable 2.57–3.95) → **`ade_heavier`** — the OPPOSITE of the gross
+signal. **MEM-OPT-OPS (allocator + streaming import) does NOT clear the preprod owned
+posture; the `seed_to_snapshot`/`chain.db` serialization is the gating lever → MEM-OPT-UTXO-DISK.**
+
 ## B. Cardano (Haskell) memory research — how 5.50 GB happens + UTxO-HD
 
 - **The Haskell 5.50 GB is mostly GC + in-heap UTxO.** GHC's copying collector reserves

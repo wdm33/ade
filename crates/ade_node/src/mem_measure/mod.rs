@@ -27,5 +27,8 @@ pub use evidence::{
     fingerprint_hex, pair_replay, validate_evidence, EvidenceDefect, MemEvidenceRecord,
     ReplayVerdict,
 };
-pub use rss_sampler::{sample_vm_hwm_kib, sample_vm_rss_kib, RssSampleKib, RssWindow};
+pub use rss_sampler::{
+    sample_private_dirty_kib, sample_rss_anon_kib, sample_vm_hwm_kib, sample_vm_rss_kib,
+    RssSampleKib, RssWindow,
+};
 pub use runner::run_hermetic_bounded_ingress_measurement;

@@ -1,0 +1,16 @@
+{"event":"haskell_rss_anon_sample","rss_anon_kib":4139172}
+{"event":"haskell_rss_anon_sample","rss_anon_kib":4139176}
+{"event":"haskell_rss_anon_sample","rss_anon_kib":4139176}
+{"event":"haskell_rss_anon_sample","rss_anon_kib":4139200}
+{"event":"haskell_rss_anon_sample","rss_anon_kib":3288188}
+{"event":"haskell_rss_anon_sample","rss_anon_kib":2740176}
+{"event":"haskell_rss_anon_sample","rss_anon_kib":2696416}
+{"event":"haskell_rss_anon_sample","rss_anon_kib":2696588}
+{"event":"haskell_rss_anon_sample","rss_anon_kib":2696620}
+{"event":"haskell_rss_anon_sample","rss_anon_kib":2696676}
+{"event":"haskell_rss_anon_sample","rss_anon_kib":2696696}
+{"event":"haskell_rss_anon_sample","rss_anon_kib":2696700}
+{"event":"haskell_rss_anon_sample","rss_anon_kib":2696712}
+{"event":"haskell_rss_anon_sample","rss_anon_kib":2696828}
+{"event":"haskell_rss_anon_sample","rss_anon_kib":2696828}
+{"event":"comparison_summary","metric":"owned_rss_anon_kib","ade_owned_rss_anon_kib":4813052,"ade_idle_rss_anon_kib":2042968,"haskell_owned_rss_anon_kib":2696828,"haskell_peak_rss_anon_kib":4139200,"verdict":"ade_heavier"}

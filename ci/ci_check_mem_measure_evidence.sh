@@ -24,6 +24,9 @@ S1_MD="$EV_DIR/mem-opt-ops-s1-alloc-preprod-memory.md"
 # MEM-OPT-OPS S2: same schema + the `seed_import` point, the streaming import (CE-OPS-2).
 S2_JSONL="$EV_DIR/mem-opt-ops-s2-import-preprod-memory.jsonl"
 S2_MD="$EV_DIR/mem-opt-ops-s2-import-preprod-memory.md"
+# MEM-OPT-OPS S3: same schema + owned (RssAnon/Private_Dirty) fields (CE-OPS-3).
+S3_JSONL="$EV_DIR/mem-opt-ops-s3-owned-preprod-memory.jsonl"
+S3_MD="$EV_DIR/mem-opt-ops-s3-owned-preprod-memory.md"
 
 FAILED=0
 fail() { echo "FAIL: $1"; FAILED=1; }
@@ -151,7 +154,8 @@ fi
 validate_transcript "$JSONL_DEFAULT" "$MD_DEFAULT" || fail "committed mem-measure-a2 transcript failed validation"
 validate_transcript "$S1_JSONL" "$S1_MD" || fail "committed mem-opt-ops-s1 transcript failed validation"
 validate_transcript "$S2_JSONL" "$S2_MD" || fail "committed mem-opt-ops-s2 transcript failed validation"
+validate_transcript "$S3_JSONL" "$S3_MD" || fail "committed mem-opt-ops-s3 transcript failed validation"
 if (( FAILED == 0 )); then
-    echo "OK: mem-measure evidence schema (vacuous-until-committed; A2 + MEM-OPT-OPS S1/S2 transcripts; OP-MEM-01/OP-MEM-02, operator-gated)"
+    echo "OK: mem-measure evidence schema (vacuous-until-committed; A2 + MEM-OPT-OPS S1/S2/S3 transcripts; OP-MEM-01/OP-MEM-02, operator-gated)"
 fi
 exit $FAILED

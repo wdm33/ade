@@ -60,7 +60,9 @@ use super::runner::{
 use super::seed_to_snapshot::seed_to_snapshot;
 use crate::admission_log::AdmissionLogWriter;
 use crate::cli::AdmissionCli;
-use crate::mem_measure::rss_sampler::{sample_vm_hwm_kib, sample_vm_rss_kib};
+use crate::mem_measure::rss_sampler::{
+    sample_private_dirty_kib, sample_rss_anon_kib, sample_vm_hwm_kib, sample_vm_rss_kib,
+};
 
 /// Closed admission-bootstrap error sum. The binary maps each
 /// variant to the generic-startup exit code; this is the
@@ -167,6 +169,9 @@ async fn run_admission_inner(
     // transient). VmHWM is the import-specific peak; emitted as `seed_import`.
     let seed_import_rss_kib = sample_vm_rss_kib().map(|s| s.0).unwrap_or(0);
     let seed_import_hwm_kib = sample_vm_hwm_kib().map(|h| h.0).unwrap_or(0);
+    // MEM-OPT-OPS S3: the OWNED footprint at the SAME post-import instant.
+    let seed_import_rss_anon_kib = sample_rss_anon_kib().map(|s| s.0).unwrap_or(0);
+    let seed_import_private_dirty_kib = sample_private_dirty_kib().map(|s| s.0).unwrap_or(0);
 
     // 2. Parse fixed-size hashes.
     let genesis_hash = parse_hash32(&acli.genesis_hash_hex)
@@ -327,6 +332,8 @@ async fn run_admission_inner(
         initial_chain_tip_slot: acli.seed_point_slot,
         seed_import_rss_kib,
         seed_import_hwm_kib,
+        seed_import_rss_anon_kib,
+        seed_import_private_dirty_kib,
         consensus_inputs_fingerprint,
         consensus_inputs_epoch,
         consensus_inputs_epoch_start_slot,

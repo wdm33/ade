@@ -374,6 +374,8 @@ fn encode_event(event: &AdmissionLogEvent, out: &mut String) {
             durable_tip_fp_hex,
             rss_kib,
             rss_hwm_kib,
+            rss_anon_kib,
+            private_dirty_kib,
         } => {
             out.push(',');
             push_key_str(out, "point", point);
@@ -387,6 +389,10 @@ fn encode_event(event: &AdmissionLogEvent, out: &mut String) {
             push_key_u64(out, "rss_kib", *rss_kib);
             out.push(',');
             push_key_u64(out, "rss_hwm_kib", *rss_hwm_kib);
+            out.push(',');
+            push_key_u64(out, "rss_anon_kib", *rss_anon_kib);
+            out.push(',');
+            push_key_u64(out, "private_dirty_kib", *private_dirty_kib);
         }
         AdmissionLogEvent::MemorySummary {
             sample_count,
@@ -394,6 +400,10 @@ fn encode_event(event: &AdmissionLogEvent, out: &mut String) {
             rss_p95_kib,
             rss_peak_kib,
             rss_hwm_kib,
+            owned_rss_anon_p50_kib,
+            owned_rss_anon_peak_kib,
+            owned_private_dirty_p50_kib,
+            owned_private_dirty_peak_kib,
             replay_verdict,
         } => {
             out.push(',');
@@ -406,6 +416,14 @@ fn encode_event(event: &AdmissionLogEvent, out: &mut String) {
             push_key_u64(out, "rss_peak_kib", *rss_peak_kib);
             out.push(',');
             push_key_u64(out, "rss_hwm_kib", *rss_hwm_kib);
+            out.push(',');
+            push_key_u64(out, "owned_rss_anon_p50_kib", *owned_rss_anon_p50_kib);
+            out.push(',');
+            push_key_u64(out, "owned_rss_anon_peak_kib", *owned_rss_anon_peak_kib);
+            out.push(',');
+            push_key_u64(out, "owned_private_dirty_p50_kib", *owned_private_dirty_p50_kib);
+            out.push(',');
+            push_key_u64(out, "owned_private_dirty_peak_kib", *owned_private_dirty_peak_kib);
             out.push(',');
             push_key_str(out, "replay_verdict", replay_verdict);
         }
@@ -506,6 +524,8 @@ mod tests {
                 durable_tip_fp_hex: fp.clone(),
                 rss_kib: 4096,
                 rss_hwm_kib: 6900,
+                rss_anon_kib: 2048,
+                private_dirty_kib: 1900,
             },
             AdmissionLogEvent::MemorySummary {
                 sample_count: 7,
@@ -513,6 +533,10 @@ mod tests {
                 rss_p95_kib: 4200,
                 rss_peak_kib: 4500,
                 rss_hwm_kib: 6800,
+                owned_rss_anon_p50_kib: 2048,
+                owned_rss_anon_peak_kib: 2100,
+                owned_private_dirty_p50_kib: 1900,
+                owned_private_dirty_peak_kib: 1950,
                 replay_verdict: "agreed",
             },
         ];
@@ -526,12 +550,18 @@ mod tests {
         assert!(lines[0].contains(&format!(r#""durable_tip_fp_hex":"{fp}""#)));
         assert!(lines[0].contains(r#""rss_kib":4096"#));
         assert!(lines[0].contains(r#""rss_hwm_kib":6900"#));
+        assert!(lines[0].contains(r#""rss_anon_kib":2048"#));
+        assert!(lines[0].contains(r#""private_dirty_kib":1900"#));
         assert!(lines[1].contains(r#""event":"memory_summary""#));
         assert!(lines[1].contains(r#""sample_count":7"#));
         assert!(lines[1].contains(r#""rss_p50_kib":4000"#));
         assert!(lines[1].contains(r#""rss_p95_kib":4200"#));
         assert!(lines[1].contains(r#""rss_peak_kib":4500"#));
         assert!(lines[1].contains(r#""rss_hwm_kib":6800"#));
+        assert!(lines[1].contains(r#""owned_rss_anon_p50_kib":2048"#));
+        assert!(lines[1].contains(r#""owned_rss_anon_peak_kib":2100"#));
+        assert!(lines[1].contains(r#""owned_private_dirty_p50_kib":1900"#));
+        assert!(lines[1].contains(r#""owned_private_dirty_peak_kib":1950"#));
         assert!(lines[1].contains(r#""replay_verdict":"agreed""#));
     }
 

@@ -28,11 +28,34 @@ pub fn sample_vm_hwm_kib() -> Option<RssSampleKib> {
     read_status_field_kib("VmHWM:").map(RssSampleKib)
 }
 
-/// Parse a `kB`-suffixed numeric field from `/proc/self/status`. The line shape
-/// is `Field:\t<spaces><number> kB`; the value is already in kiB.
+/// MEM-OPT-OPS S3: OWNED anonymous resident heap (`RssAnon`,
+/// `/proc/self/status`), in kiB. The owned footprint that EXCLUDES file-backed
+/// mappings (e.g. the mmap'd `chain.db`) — the apples-to-apples metric for
+/// OP-MEM-02. `RssAnon` is in `status` (not ptrace-protected), so it is readable
+/// for any process, including the reference Haskell node. `None` if unavailable.
+pub fn sample_rss_anon_kib() -> Option<RssSampleKib> {
+    read_status_field_kib("RssAnon:").map(RssSampleKib)
+}
+
+/// MEM-OPT-OPS S3: OWNED private-dirty pages (`Private_Dirty`,
+/// `/proc/self/smaps_rollup`), in kiB. `smaps_rollup` is ptrace-protected (own
+/// process only), so this is Ade-self informational — NOT used in the cross-node
+/// comparison (which uses `RssAnon`). `None` if unavailable.
+pub fn sample_private_dirty_kib() -> Option<RssSampleKib> {
+    read_proc_field_kib("/proc/self/smaps_rollup", "Private_Dirty:").map(RssSampleKib)
+}
+
+/// Parse a `kB`-suffixed numeric field from `/proc/self/status`.
 fn read_status_field_kib(field: &str) -> Option<u64> {
-    let status = fs::read_to_string("/proc/self/status").ok()?;
-    for line in status.lines() {
+    read_proc_field_kib("/proc/self/status", field)
+}
+
+/// Parse a `kB`-suffixed numeric field (`Field:\t<spaces><number> kB`) from a
+/// `/proc` file. The value is already in kiB. Fail-soft: `None` if the file is
+/// unreadable (non-Linux / ptrace-denied) or the field is absent.
+fn read_proc_field_kib(path: &str, field: &str) -> Option<u64> {
+    let contents = fs::read_to_string(path).ok()?;
+    for line in contents.lines() {
         if let Some(rest) = line.strip_prefix(field) {
             let num = rest.split_whitespace().next()?;
             return num.parse::<u64>().ok();
@@ -118,6 +141,21 @@ mod tests {
             assert!(v.0 > 0, "a running process has nonzero RSS");
         }
         // Off-Linux: `None` is acceptable (fail-soft) — no assertion.
+    }
+
+    #[test]
+    fn owned_samplers_present_on_linux() {
+        // MEM-OPT-OPS S3: the OWNED metrics. RssAnon (status) is the cross-node
+        // comparison metric; Private_Dirty (smaps_rollup) is Ade-self informational.
+        if cfg!(target_os = "linux") {
+            let anon = sample_rss_anon_kib().expect("RssAnon must be readable on linux");
+            assert!(anon.0 > 0, "a running process has a nonzero anonymous heap");
+            // smaps_rollup may be unavailable in some sandboxes; if present, > 0.
+            if let Some(pd) = sample_private_dirty_kib() {
+                assert!(pd.0 > 0, "private-dirty pages are nonzero when readable");
+            }
+        }
+        // Off-Linux / unreadable: `None` is acceptable (fail-soft).
     }
 
     #[test]

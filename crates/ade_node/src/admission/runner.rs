@@ -53,7 +53,9 @@ use super::verdict::{
 use crate::admission_log::{
     AdmissionHaltReason, AdmissionLogEvent, AdmissionLogWriter, AdmissionShutdownReason,
 };
-use crate::mem_measure::rss_sampler::{sample_vm_hwm_kib, sample_vm_rss_kib, RssWindow};
+use crate::mem_measure::rss_sampler::{
+    sample_private_dirty_kib, sample_rss_anon_kib, sample_vm_hwm_kib, sample_vm_rss_kib, RssWindow,
+};
 
 /// Live agreement diverged exit code.
 pub const EXIT_LIVE_AGREEMENT_DIVERGED: i32 = 30;
@@ -162,6 +164,11 @@ where
     /// specific metric); emitted as the `seed_import` memory_measure point.
     pub seed_import_rss_kib: u64,
     pub seed_import_hwm_kib: u64,
+    /// MEM-OPT-OPS S3: OWNED footprint captured at the SAME post-import instant
+    /// (RssAnon = anonymous heap; Private_Dirty informational) — the seed_import
+    /// point's owned values, before the snapshot mmap inflates gross VmRSS.
+    pub seed_import_rss_anon_kib: u64,
+    pub seed_import_private_dirty_kib: u64,
 }
 
 /// SOLE admission entry point (CN-ADMIT-01).
@@ -204,7 +211,7 @@ where
 
     // MEM-MEASURE-A2 (OP-MEM-01): RSS window for the run + the post-recovery /
     // idle-recovered-tip samples. Observe-only; RSS never feeds authority.
-    let mut rss_window = RssWindow::new();
+    let mut mem_windows = MemWindows::new();
     let mut last_admitted_slot = inputs.initial_chain_tip_slot;
     // MEM-OPT-OPS S2 (CE-OPS-2): the streaming seed-import peak, captured in bootstrap
     // RIGHT AFTER import() returns -- before the chain.db snapshot write, which is a
@@ -219,12 +226,16 @@ where
             durable_tip_fp_hex: hex_lowercase(&inputs.anchor_initial_ledger_fp.0),
             rss_kib: inputs.seed_import_rss_kib,
             rss_hwm_kib: inputs.seed_import_hwm_kib,
+            // OWNED at the post-import instant (S3): RssAnon excludes the chain.db
+            // mmap; the import-time owned footprint, before the snapshot write.
+            rss_anon_kib: inputs.seed_import_rss_anon_kib,
+            private_dirty_kib: inputs.seed_import_private_dirty_kib,
         },
     )
     .await;
     emit_memory_sample(
         &writer,
-        &mut rss_window,
+        &mut mem_windows,
         "wal_checkpoint_recovery",
         inputs.initial_chain_tip_slot,
         inputs.initial_chain_tip_slot,
@@ -233,7 +244,7 @@ where
     .await;
     emit_memory_sample(
         &writer,
-        &mut rss_window,
+        &mut mem_windows,
         "idle_recovered_tip",
         inputs.initial_chain_tip_slot,
         inputs.initial_chain_tip_slot,
@@ -270,8 +281,8 @@ where
                         },
                     )
                     .await;
-                    emit_memory_sample(&writer, &mut rss_window, "sustained", last_admitted_slot, last_admitted_slot, &tail_post_fp).await;
-                    emit_memory_summary_evt(&writer, &rss_window, "agreed").await;
+                    emit_memory_sample(&writer, &mut mem_windows, "sustained", last_admitted_slot, last_admitted_slot, &tail_post_fp).await;
+                    emit_memory_summary_evt(&writer, &mem_windows, "agreed").await;
                     return AdmissionExitCode::Ok;
                 }
             }
@@ -285,8 +296,8 @@ where
                             },
                         )
                         .await;
-                        emit_memory_sample(&writer, &mut rss_window, "sustained", last_admitted_slot, last_admitted_slot, &tail_post_fp).await;
-                        emit_memory_summary_evt(&writer, &rss_window, "agreed").await;
+                        emit_memory_sample(&writer, &mut mem_windows, "sustained", last_admitted_slot, last_admitted_slot, &tail_post_fp).await;
+                        emit_memory_summary_evt(&writer, &mem_windows, "agreed").await;
                         return AdmissionExitCode::Ok;
                     }
                     Some(AdmissionPeerEvent::TipUpdate { tip, .. }) => {
@@ -304,8 +315,8 @@ where
                                 },
                             )
                             .await;
-                            emit_memory_sample(&writer, &mut rss_window, "sustained", last_admitted_slot, last_admitted_slot, &tail_post_fp).await;
-                            emit_memory_summary_evt(&writer, &rss_window, "agreed").await;
+                            emit_memory_sample(&writer, &mut mem_windows, "sustained", last_admitted_slot, last_admitted_slot, &tail_post_fp).await;
+                            emit_memory_summary_evt(&writer, &mem_windows, "agreed").await;
                             return AdmissionExitCode::Ok;
                         }
                     }
@@ -402,7 +413,7 @@ where
                                 last_admitted_slot = slot.0;
                                 emit_memory_sample(
                                     &writer,
-                                    &mut rss_window,
+                                    &mut mem_windows,
                                     "mempool_admission",
                                     slot.0,
                                     slot.0,
@@ -702,20 +713,45 @@ async fn emit<W: Write + Send + 'static>(
     let _ = w.emit(&event);
 }
 
-/// MEM-MEASURE-A2 (OP-MEM-01): emit one RSS sample at a closed measurement point.
-/// Observe-only -- the RED rss_sampler reads /proc; the value flows ONLY into the
-/// evidence event + the summary accumulator, never into authority. Skipped
+/// MEM-OPT-OPS S3: the run's three memory windows — gross VmRSS + the two OWNED
+/// metrics (RssAnon = the OP-MEM-02 metric, excludes the chain.db mmap;
+/// Private_Dirty = Ade-self informational). All RED observational accumulators;
+/// never feed authority.
+#[derive(Default)]
+struct MemWindows {
+    gross: RssWindow,
+    anon: RssWindow,
+    dirty: RssWindow,
+}
+
+impl MemWindows {
+    fn new() -> Self {
+        Self::default()
+    }
+}
+
+/// MEM-MEASURE-A2 (OP-MEM-01) + S3: emit one memory sample at a closed point.
+/// Observe-only -- the RED rss_sampler reads /proc; the values flow ONLY into the
+/// evidence event + the summary accumulators, never into authority. Skipped
 /// off-Linux. Mirrors the `--mode node` `ConvergenceEvidence::emit_memory_measure`.
 async fn emit_memory_sample<W: Write + Send + 'static>(
     writer: &Arc<Mutex<AdmissionLogWriter<W>>>,
-    rss: &mut RssWindow,
+    wins: &mut MemWindows,
     point: &'static str,
     slot: u64,
     durable_tip_slot: u64,
     durable_tip_fp: &Hash32,
 ) {
     if let Some(s) = sample_vm_rss_kib() {
-        rss.record(s);
+        wins.gross.record(s);
+        let anon = sample_rss_anon_kib();
+        let dirty = sample_private_dirty_kib();
+        if let Some(a) = anon {
+            wins.anon.record(a);
+        }
+        if let Some(d) = dirty {
+            wins.dirty.record(d);
+        }
         emit(
             writer,
             AdmissionLogEvent::MemoryMeasure {
@@ -725,30 +761,37 @@ async fn emit_memory_sample<W: Write + Send + 'static>(
                 durable_tip_fp_hex: hex_lowercase(&durable_tip_fp.0),
                 rss_kib: s.0,
                 rss_hwm_kib: sample_vm_hwm_kib().map(|h| h.0).unwrap_or(0),
+                rss_anon_kib: anon.map(|a| a.0).unwrap_or(0),
+                private_dirty_kib: dirty.map(|d| d.0).unwrap_or(0),
             },
         )
         .await;
     }
 }
 
-/// MEM-MEASURE-A2 (OP-MEM-01): emit the run-level memory summary. `replay_verdict`
-/// is `agreed` on a clean admission exit (no fatal Diverged/halt) -- the durable
-/// chain is then replay-equivalent by the enforced DC-WAL-03.
+/// MEM-MEASURE-A2 (OP-MEM-01) + S3: emit the run-level memory summary.
+/// `replay_verdict` is `agreed` on a clean admission exit (no fatal Diverged/halt)
+/// -- the durable chain is then replay-equivalent by the enforced DC-WAL-03.
 async fn emit_memory_summary_evt<W: Write + Send + 'static>(
     writer: &Arc<Mutex<AdmissionLogWriter<W>>>,
-    rss: &RssWindow,
+    wins: &MemWindows,
     replay_verdict: &'static str,
 ) {
     emit(
         writer,
         AdmissionLogEvent::MemorySummary {
-            sample_count: rss.count() as u64,
-            rss_p50_kib: rss.p50_kib().unwrap_or(0),
-            rss_p95_kib: rss.p95_kib().unwrap_or(0),
-            rss_peak_kib: rss.peak_kib().unwrap_or(0),
+            sample_count: wins.gross.count() as u64,
+            rss_p50_kib: wins.gross.p50_kib().unwrap_or(0),
+            rss_p95_kib: wins.gross.p95_kib().unwrap_or(0),
+            rss_peak_kib: wins.gross.peak_kib().unwrap_or(0),
             // The all-time VmHWM high-water mark: records the seed-import peak
             // even though mimalloc returns those pages afterward (MEM-OPT-OPS S2).
             rss_hwm_kib: sample_vm_hwm_kib().map(|h| h.0).unwrap_or(0),
+            // OWNED summary (S3): RssAnon (OP-MEM-02 metric) + Private_Dirty.
+            owned_rss_anon_p50_kib: wins.anon.p50_kib().unwrap_or(0),
+            owned_rss_anon_peak_kib: wins.anon.peak_kib().unwrap_or(0),
+            owned_private_dirty_p50_kib: wins.dirty.p50_kib().unwrap_or(0),
+            owned_private_dirty_peak_kib: wins.dirty.peak_kib().unwrap_or(0),
             replay_verdict,
         },
     )
@@ -859,6 +902,8 @@ mod tests {
             initial_chain_tip_slot: 0,
             seed_import_rss_kib: 0,
             seed_import_hwm_kib: 0,
+            seed_import_rss_anon_kib: 0,
+            seed_import_private_dirty_kib: 0,
             consensus_inputs_fingerprint: Hash32([0xCC; 32]),
             consensus_inputs_epoch: EpochNo(0),
             consensus_inputs_epoch_start_slot: SlotNo(0),

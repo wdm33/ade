@@ -42,7 +42,9 @@ use crate::admission::verdict::{derive, verdict_kind, AgreementVerdict, BlockAdm
 use crate::admission_log::{
     AdmissionLogEvent, AdmissionLogWriter, ForkChoiceEvidenceFailure, ForkChoiceResult,
 };
-use crate::mem_measure::rss_sampler::{sample_vm_hwm_kib, sample_vm_rss_kib, RssWindow};
+use crate::mem_measure::rss_sampler::{
+    sample_private_dirty_kib, sample_rss_anon_kib, sample_vm_hwm_kib, sample_vm_rss_kib, RssWindow,
+};
 
 /// Lowercase hex of a byte slice. Local copy (mirrors `admission::runner` /
 /// `wire_only`) so the convergence transcript is byte-identical to the
@@ -285,6 +287,7 @@ impl ConvergenceEvidenceSink {
     /// MEM-MEASURE-A2 (OP-MEM-01): closed live memory-evidence emitters. Each constructs
     /// ONE closed variant and funnels it through `emit` -- observe-only; the sink never
     /// reads RSS back, and RSS magnitude never gates.
+    #[allow(clippy::too_many_arguments)]
     pub fn emit_memory_measure(
         &mut self,
         point: &'static str,
@@ -293,6 +296,8 @@ impl ConvergenceEvidenceSink {
         durable_tip_fp_hex: &str,
         rss_kib: u64,
         rss_hwm_kib: u64,
+        rss_anon_kib: u64,
+        private_dirty_kib: u64,
     ) -> EvidenceEmitResult {
         self.emit(AdmissionLogEvent::MemoryMeasure {
             point,
@@ -301,8 +306,11 @@ impl ConvergenceEvidenceSink {
             durable_tip_fp_hex: durable_tip_fp_hex.to_string(),
             rss_kib,
             rss_hwm_kib,
+            rss_anon_kib,
+            private_dirty_kib,
         })
     }
+    #[allow(clippy::too_many_arguments)]
     pub fn emit_memory_summary(
         &mut self,
         sample_count: u64,
@@ -310,6 +318,10 @@ impl ConvergenceEvidenceSink {
         rss_p95_kib: u64,
         rss_peak_kib: u64,
         rss_hwm_kib: u64,
+        owned_rss_anon_p50_kib: u64,
+        owned_rss_anon_peak_kib: u64,
+        owned_private_dirty_p50_kib: u64,
+        owned_private_dirty_peak_kib: u64,
         replay_verdict: &'static str,
     ) -> EvidenceEmitResult {
         self.emit(AdmissionLogEvent::MemorySummary {
@@ -318,6 +330,10 @@ impl ConvergenceEvidenceSink {
             rss_p95_kib,
             rss_peak_kib,
             rss_hwm_kib,
+            owned_rss_anon_p50_kib,
+            owned_rss_anon_peak_kib,
+            owned_private_dirty_p50_kib,
+            owned_private_dirty_peak_kib,
             replay_verdict,
         })
     }
@@ -357,6 +373,10 @@ pub struct ConvergenceEvidence {
     /// the /proc read happens in `emit_memory_measure` via the RED sampler). Used
     /// to derive the run's p50/p95/peak for the `memory_summary`.
     rss: RssWindow,
+    /// MEM-OPT-OPS S3: parallel OWNED windows — RssAnon (the OP-MEM-02 metric) +
+    /// Private_Dirty (informational) — for the owned summary percentiles.
+    rss_anon: RssWindow,
+    private_dirty: RssWindow,
 }
 
 impl ConvergenceEvidence {
@@ -370,6 +390,8 @@ impl ConvergenceEvidence {
             consensus_inputs_fingerprint_hex: hex_lowercase(&fingerprint.0),
             incomplete: false,
             rss: RssWindow::new(),
+            rss_anon: RssWindow::new(),
+            private_dirty: RssWindow::new(),
         }
     }
 
@@ -609,6 +631,14 @@ impl ConvergenceEvidence {
     ) {
         if let Some(s) = sample_vm_rss_kib() {
             self.rss.record(s);
+            let anon = sample_rss_anon_kib();
+            let dirty = sample_private_dirty_kib();
+            if let Some(a) = anon {
+                self.rss_anon.record(a);
+            }
+            if let Some(d) = dirty {
+                self.private_dirty.record(d);
+            }
             let r = self.sink.emit_memory_measure(
                 point,
                 slot,
@@ -616,6 +646,8 @@ impl ConvergenceEvidence {
                 &hex_lowercase(&durable_tip_fp.0),
                 s.0,
                 sample_vm_hwm_kib().map(|h| h.0).unwrap_or(0),
+                anon.map(|a| a.0).unwrap_or(0),
+                dirty.map(|d| d.0).unwrap_or(0),
             );
             self.note(r);
         }
@@ -633,6 +665,11 @@ impl ConvergenceEvidence {
             // All-time VmHWM: records the import peak even after the allocator
             // returns the pages (MEM-OPT-OPS S2).
             sample_vm_hwm_kib().map(|h| h.0).unwrap_or(0),
+            // OWNED summary (MEM-OPT-OPS S3): RssAnon (OP-MEM-02 metric) + Private_Dirty.
+            self.rss_anon.p50_kib().unwrap_or(0),
+            self.rss_anon.peak_kib().unwrap_or(0),
+            self.private_dirty.p50_kib().unwrap_or(0),
+            self.private_dirty.peak_kib().unwrap_or(0),
             replay_verdict,
         );
         self.note(r);

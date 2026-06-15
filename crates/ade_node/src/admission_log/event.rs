@@ -236,6 +236,10 @@ pub enum AdmissionLogEvent {
     /// size in kibibytes (VmRSS); `rss_hwm_kib` is the all-time `VmHWM` high-water mark
     /// at that point. At the `seed_import` point `rss_hwm_kib` is the seed-import peak
     /// captured right after import() returns (MEM-OPT-OPS S2, CE-OPS-2).
+    /// GROSS fields: `rss_kib` = VmRSS, `rss_hwm_kib` = all-time VmHWM. OWNED fields
+    /// (MEM-OPT-OPS S3): `rss_anon_kib` = RssAnon (anonymous heap; EXCLUDES the
+    /// file-backed chain.db mmap — the OP-MEM-02 metric); `private_dirty_kib` =
+    /// Private_Dirty from smaps_rollup (Ade-self informational, 0 if unreadable).
     MemoryMeasure {
         point: &'static str,
         slot: u64,
@@ -243,18 +247,24 @@ pub enum AdmissionLogEvent {
         durable_tip_fp_hex: String,
         rss_kib: u64,
         rss_hwm_kib: u64,
+        rss_anon_kib: u64,
+        private_dirty_kib: u64,
     },
-    /// Run-level memory summary emitted once at shutdown: p50/p95/peak over the run's
-    /// SAMPLES, the all-time `VmHWM` high-water mark (which records the seed-import
-    /// peak even after the allocator returns the pages -- MEM-OPT-OPS S2), and the WAL
-    /// replay verdict (`agreed` iff replaying the WAL from the recovered anchor
-    /// reproduces the final durable ledger fingerprint).
+    /// Run-level memory summary emitted once at shutdown. GROSS: p50/p95/peak over
+    /// the run's VmRSS samples + the all-time VmHWM. OWNED (MEM-OPT-OPS S3): p50/peak
+    /// over the RssAnon samples (the OP-MEM-02 metric) + over the Private_Dirty
+    /// samples (informational). The WAL replay verdict (`agreed` iff replaying the
+    /// WAL from the recovered anchor reproduces the final durable ledger fingerprint).
     MemorySummary {
         sample_count: u64,
         rss_p50_kib: u64,
         rss_p95_kib: u64,
         rss_peak_kib: u64,
         rss_hwm_kib: u64,
+        owned_rss_anon_p50_kib: u64,
+        owned_rss_anon_peak_kib: u64,
+        owned_private_dirty_p50_kib: u64,
+        owned_private_dirty_peak_kib: u64,
         replay_verdict: &'static str,
     },
 }
