@@ -207,6 +207,69 @@ impl UtxoFpCache {
     }
 }
 
+/// MEM-OPT-UTXO-DISK S2b-2c.1b-A.2: the EXPLICIT constant UTxO-component fingerprint
+/// for the live `track_utxo=false` path. The bootstrap computes the UTxO component
+/// ONCE (before dropping the in-memory UTxO), and the live admission supplies it to
+/// `post_fp` directly — so the node retains an explicit fingerprint instead of a
+/// 1.9M-entry in-memory UTxO. The UTxO's durability is the EXISTING snapshot; this
+/// carries only the committed-once fingerprint, NOT a second copy.
+///
+/// It is INVALID for `track_utxo=true` (which mutates the UTxO per block and needs a
+/// real UTxO state / the redb-WorkingSet path); [`utxo_component`](Self::utxo_component)
+/// fails closed there — never a silently stale fingerprint. This is NOT full live
+/// UTxO validation; it optimizes the current header/tip-following path only.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct StaticUtxoFp {
+    /// The fingerprint version this commits under (must be the production v2).
+    pub fingerprint_version: u32,
+    /// The bootstrap anchor fingerprint this UTxO component belongs to.
+    pub bootstrap_anchor: Hash32,
+    /// The constant UTxO-component fingerprint — `fingerprint_utxo_v2` of the
+    /// imported UTxO, computed once before the in-memory copy is dropped.
+    pub utxo_component_fp: Hash32,
+    /// Structural guard: this is ONLY valid while the live path runs `track_utxo=false`.
+    pub valid_only_when_track_utxo_false: bool,
+}
+
+/// Why a [`StaticUtxoFp`] may not be used (fail-closed, never a stale fingerprint).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum StaticUtxoFpError {
+    /// Used on a `track_utxo=true` path — the UTxO mutates, so a static component
+    /// would be stale; a real UTxO state / the redb-WorkingSet path is required.
+    UsedUnderTrackUtxoTrue,
+    /// The fingerprint version did not match the production v2.
+    VersionMismatch { expected: u32, found: u32 },
+}
+
+impl StaticUtxoFp {
+    /// Build from the imported UTxO state, BEFORE it is dropped — computing the UTxO
+    /// component once under the production v2 fingerprint version.
+    pub fn from_bootstrap_utxo(utxo: &UTxOState, bootstrap_anchor: Hash32) -> Self {
+        StaticUtxoFp {
+            fingerprint_version: FINGERPRINT_VERSION_V2,
+            bootstrap_anchor,
+            utxo_component_fp: fingerprint_utxo_v2(utxo),
+            valid_only_when_track_utxo_false: true,
+        }
+    }
+
+    /// The constant UTxO-component fingerprint — valid ONLY when `track_utxo` is
+    /// false. Fails closed under `track_utxo=true` or a version mismatch, so a stale
+    /// static component can never enter an authoritative `post_fp`.
+    pub fn utxo_component(&self, track_utxo: bool) -> Result<Hash32, StaticUtxoFpError> {
+        if self.fingerprint_version != FINGERPRINT_VERSION_V2 {
+            return Err(StaticUtxoFpError::VersionMismatch {
+                expected: FINGERPRINT_VERSION_V2,
+                found: self.fingerprint_version,
+            });
+        }
+        if track_utxo || !self.valid_only_when_track_utxo_false {
+            return Err(StaticUtxoFpError::UsedUnderTrackUtxoTrue);
+        }
+        Ok(self.utxo_component_fp.clone())
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Component encoders
 // ---------------------------------------------------------------------------
@@ -1087,6 +1150,54 @@ mod tests {
             fingerprint_utxo_v2(&s.utxo_state),
             "the recomputed fp matches the full scan"
         );
+    }
+
+    #[test]
+    fn static_utxo_fp_commits_to_the_imported_utxo_and_drives_post_fp() {
+        let txin = |h: u8, i: u16| TxIn {
+            tx_hash: Hash32([h; 32]),
+            index: i,
+        };
+        let mut s = LedgerState::new(CardanoEra::Conway);
+        s.utxo_state.utxos.insert(txin(0x01, 0), byron_out(100, 1));
+        s.utxo_state.utxos.insert(txin(0x02, 0), byron_out(200, 2));
+        let anchor = Hash32([0xab; 32]);
+        let sfp = StaticUtxoFp::from_bootstrap_utxo(&s.utxo_state, anchor.clone());
+        assert_eq!(sfp.fingerprint_version, FINGERPRINT_VERSION_V2);
+        assert_eq!(sfp.bootstrap_anchor, anchor);
+        assert_eq!(sfp.utxo_component_fp, fingerprint_utxo_v2(&s.utxo_state));
+        // it drives post_fp identically to the full fingerprint (track_utxo=false).
+        let utxo_fp = sfp.utxo_component(false).unwrap();
+        assert_eq!(
+            fingerprint_v2_with_utxo(&s, utxo_fp).combined,
+            fingerprint_v2(&s).combined,
+            "static-fp post_fp must equal the full fingerprint"
+        );
+    }
+
+    #[test]
+    fn static_utxo_fp_fails_closed_under_track_utxo_true_and_version_mismatch() {
+        let mut s = LedgerState::new(CardanoEra::Conway);
+        s.utxo_state.utxos.insert(
+            TxIn {
+                tx_hash: Hash32([0x01; 32]),
+                index: 0,
+            },
+            byron_out(1, 1),
+        );
+        let sfp = StaticUtxoFp::from_bootstrap_utxo(&s.utxo_state, Hash32([0; 32]));
+        // track_utxo=true MUST fail closed -- a static component would be stale.
+        assert_eq!(
+            sfp.utxo_component(true),
+            Err(StaticUtxoFpError::UsedUnderTrackUtxoTrue)
+        );
+        // a non-v2 fingerprint version MUST fail closed.
+        let mut wrong_version = sfp.clone();
+        wrong_version.fingerprint_version = FINGERPRINT_VERSION_V1;
+        assert!(matches!(
+            wrong_version.utxo_component(false),
+            Err(StaticUtxoFpError::VersionMismatch { .. })
+        ));
     }
 
     #[test]

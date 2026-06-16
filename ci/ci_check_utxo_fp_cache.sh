@@ -53,6 +53,16 @@ grep -qiE 'does NOT enable full live UTxO application' "$DOC" \
 grep -qiE 'remains OWED' "$DOC" \
     || fail "the doc does not state B (full live validation) remains owed"
 
+# (7) S2b-2c.1b-A.2: the EXPLICIT StaticUtxoFp (NOT generation magic) -- the bootstrap
+#     constant fp, computed once, fail-closed under track_utxo=true / version mismatch.
+grep -qE 'pub struct StaticUtxoFp' "$FP" || fail "StaticUtxoFp missing"
+grep -qE 'valid_only_when_track_utxo_false' "$FP" || fail "StaticUtxoFp lacks the track_utxo=false guard field"
+grep -qE 'bootstrap_anchor' "$FP" || fail "StaticUtxoFp lacks the bootstrap_anchor"
+grep -qE 'fn from_bootstrap_utxo' "$FP" || fail "StaticUtxoFp::from_bootstrap_utxo (compute-once) missing"
+grep -qE 'UsedUnderTrackUtxoTrue' "$FP" || fail "StaticUtxoFp does not fail closed under track_utxo=true"
+grep -qE 'fn static_utxo_fp_fails_closed_under_track_utxo_true' "$FP" \
+    || fail "the StaticUtxoFp fail-closed proof missing"
+
 if (( FAILED == 0 )); then
     echo "OK: cached UTxO fingerprint (S2b-2c.1b-A.1; generation-keyed, never stale; live post_fp skips the per-block scan; track_utxo=false unchanged; B owed)"
 fi
