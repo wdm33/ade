@@ -288,7 +288,14 @@ async fn run_admission_inner(
     //    block ever reached header validity, so the ZERO-nonce
     //    chain_dep was masked.)
     let mut ledger = ade_ledger::state::LedgerState::new(CardanoEra::Conway);
-    ledger.utxo_state = utxo;
+    // MEM-OPT-UTXO-DISK S2b-2c.1b-A.2: compute the constant UTxO-component fingerprint
+    // ONCE from the imported UTxO (its durable copy is the snapshot already written by
+    // seed_to_snapshot), then DROP the 1.9M-entry in-memory map. The live
+    // track_utxo=false admission needs only this fingerprint, never the retained UTxO;
+    // ledger.utxo_state stays EMPTY (UTxOState::new()).
+    let static_utxo_fp =
+        ade_ledger::fingerprint::StaticUtxoFp::from_bootstrap_utxo(&utxo, initial_fp.clone());
+    drop(utxo);
     // S2a: the runner's recovered ledger carries the oracle-bound current pparams.
     ledger.protocol_params = current_pparams.clone();
 
@@ -352,6 +359,7 @@ async fn run_admission_inner(
         wal_store,
         anchor_initial_ledger_fp: initial_fp,
         ledger,
+        static_utxo_fp: Some(static_utxo_fp),
         chain_dep,
         era_schedule: &era_schedule,
         ledger_view: &ledger_view,

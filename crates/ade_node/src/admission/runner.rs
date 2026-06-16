@@ -38,7 +38,7 @@ use ade_core::consensus::ledger_view::LedgerView;
 use ade_core::consensus::praos_state::PraosChainDepState;
 use ade_ledger::block_validity::decode_block;
 use ade_ledger::block_validity::verdict::BlockValidityError;
-use ade_ledger::fingerprint::{fingerprint_v2_with_utxo, UtxoFpCache};
+use ade_ledger::fingerprint::{fingerprint_v2_with_utxo, StaticUtxoFp, UtxoFpCache};
 use ade_ledger::receive::admit_via_block_validity;
 use ade_ledger::state::LedgerState;
 use ade_ledger::wal::{BlockVerdictTag, WalEntry, WalStore};
@@ -70,6 +70,10 @@ pub const EXIT_LIVE_WAL_APPEND_IO: i32 = 33;
 /// the same slot — DC-ADMIT-12 / ¬P-C9. Reserved for C3; the C2
 /// runner does not yet emit this exit code.
 pub const EXIT_LIVE_PEER_SENT_UNDECODABLE: i32 = 34;
+/// MEM-OPT-UTXO-DISK S2b-2c.1b-A.2: a `StaticUtxoFp` was used under `track_utxo=true`
+/// (the UTxO mutates, so a static UTxO-component fingerprint would be stale). The
+/// off-heap static path is live `track_utxo=false` ONLY; this fails closed.
+pub const EXIT_LIVE_STATIC_UTXO_FP_INVALID: i32 = 35;
 
 /// Closed exit-code sum. Maps to the binary's exit-code constants
 /// (mirroring `wire_only::EXIT_LIVE_PASS_PEER_FAILURE`).
@@ -88,6 +92,9 @@ pub enum AdmissionExitCode {
     WalAppendIo,
     /// Peer sent undecodable bytes (DC-ADMIT-12, C3-wired).
     PeerSentUndecodableBytes,
+    /// A `StaticUtxoFp` was used under `track_utxo=true` (fail-closed; MEM-OPT-UTXO-
+    /// DISK S2b-2c.1b-A.2 -- the static off-heap path is `track_utxo=false` only).
+    StaticUtxoFpInvalid,
 }
 
 impl AdmissionExitCode {
@@ -100,6 +107,7 @@ impl AdmissionExitCode {
             Self::CrossEpochUse => EXIT_LIVE_CROSS_EPOCH_USE,
             Self::WalAppendIo => EXIT_LIVE_WAL_APPEND_IO,
             Self::PeerSentUndecodableBytes => EXIT_LIVE_PEER_SENT_UNDECODABLE,
+            Self::StaticUtxoFpInvalid => EXIT_LIVE_STATIC_UTXO_FP_INVALID,
         }
     }
 }
@@ -131,6 +139,11 @@ where
     pub wal_store: S,
     pub anchor_initial_ledger_fp: Hash32,
     pub ledger: LedgerState,
+    /// MEM-OPT-UTXO-DISK S2b-2c.1b-A.2: when present (the off-heap static path) the
+    /// in-memory `ledger.utxo_state` is EMPTY and `post_fp` uses this constant UTxO
+    /// component (valid only while `track_utxo=false`). `None` keeps the full
+    /// in-memory UTxO + the A.1 generation-keyed cache.
+    pub static_utxo_fp: Option<StaticUtxoFp>,
     pub chain_dep: PraosChainDepState,
     pub era_schedule: &'a EraSchedule,
     pub ledger_view: &'a dyn LedgerView,
@@ -441,8 +454,20 @@ where
                                     },
                                 )
                                 .await;
-                                let utxo_fp =
-                                    utxo_fp_cache.utxo_fingerprint(&next_ledger.utxo_state);
+                                // MEM-OPT-UTXO-DISK S2b-2c.1b-A.2: the off-heap static
+                                // path supplies the constant UTxO component (the
+                                // in-memory UTxO is empty); else the A.1 cache. The
+                                // static path is track_utxo=false ONLY -- fail closed.
+                                let utxo_fp = match &inputs.static_utxo_fp {
+                                    Some(sfp) => match sfp.utxo_component(next_ledger.track_utxo) {
+                                        Ok(fp) => fp,
+                                        Err(_) => {
+                                            return AdmissionExitCode::StaticUtxoFpInvalid
+                                        }
+                                    },
+                                    None => utxo_fp_cache
+                                        .utxo_fingerprint(&next_ledger.utxo_state),
+                                };
                                 let post_fp =
                                     fingerprint_v2_with_utxo(&next_ledger, utxo_fp).combined;
                                 let entry = WalEntry::AdmitBlock {
@@ -996,6 +1021,7 @@ mod tests {
             wal_store: VecWalStore::new(),
             anchor_initial_ledger_fp: Hash32([0xAA; 32]),
             ledger: LedgerState::new(CardanoEra::Conway),
+            static_utxo_fp: None,
             chain_dep: PraosChainDepState::genesis(Nonce::ZERO),
             era_schedule: schedule,
             ledger_view: view,

@@ -108,6 +108,7 @@ async fn run_with_events(
         wal_store,
         anchor_initial_ledger_fp: Hash32([0xAA; 32]),
         ledger: LedgerState::new(CardanoEra::Conway),
+        static_utxo_fp: None,
         chain_dep: PraosChainDepState::genesis(Nonce::ZERO),
         era_schedule: &schedule,
         ledger_view: &view,

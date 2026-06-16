@@ -229,6 +229,7 @@ async fn run_runner_against_block(
         wal_store,
         anchor_initial_ledger_fp: Hash32([0xAA; 32]),
         ledger: LedgerState::new(CardanoEra::Conway),
+        static_utxo_fp: None,
         chain_dep: PraosChainDepState::genesis(Nonce::ZERO),
         era_schedule: &sched,
         ledger_view: &view,

@@ -27,7 +27,7 @@ grep -qE 'pub struct UtxoFpCache' "$FP" || fail "UtxoFpCache missing"
 grep -qF 'utxo_state.utxos.generation()' "$FP" || fail "the cache does not key on the UTxO generation"
 
 # (3) the live admission post_fp USES the cache and no longer does the full scan.
-grep -qF 'utxo_fp_cache.utxo_fingerprint(' "$RN" || fail "the admission post_fp does not use the cache"
+grep -qF '.utxo_fingerprint(&next_ledger.utxo_state)' "$RN" || fail "the admission post_fp does not use the cache"
 grep -qF 'fingerprint_v2_with_utxo(&next_ledger, utxo_fp)' "$RN" \
     || fail "the admission post_fp does not use the precomputed-utxo fingerprint"
 if grep -qE 'let post_fp = fingerprint\(&next_ledger\)' "$RN"; then
@@ -36,7 +36,7 @@ fi
 
 # (4) live behavior unchanged: the admission does NOT enable track_utxo=true (A keeps
 #     the static-UTxO path; B = LIVE-LEDGER-APPLY is a deliberate later slice).
-if grep -rqE 'track_utxo *= *true|track_utxo: *true' crates/ade_node/src/admission/; then
+if grep -rqE '\.track_utxo *= *true|track_utxo: *true' crates/ade_node/src/admission/; then
     fail "the live admission enables track_utxo=true -- that is slice B, not A"
 fi
 
@@ -62,6 +62,22 @@ grep -qE 'fn from_bootstrap_utxo' "$FP" || fail "StaticUtxoFp::from_bootstrap_ut
 grep -qE 'UsedUnderTrackUtxoTrue' "$FP" || fail "StaticUtxoFp does not fail closed under track_utxo=true"
 grep -qE 'fn static_utxo_fp_fails_closed_under_track_utxo_true' "$FP" \
     || fail "the StaticUtxoFp fail-closed proof missing"
+grep -qE 'fn fingerprint_v2_with_utxo_ignores_state_utxo' "$FP" \
+    || fail "the A.2 post_fp equivalence (empty-UTxO == full-UTxO) proof missing"
+
+# (8) S2b-2c.1b-A.2.2 wiring: bootstrap computes the static fp + DROPS the in-memory
+#     UTxO; the admission uses it; fail-closed exit on track_utxo=true.
+B=crates/ade_node/src/admission/bootstrap.rs
+grep -qF 'StaticUtxoFp::from_bootstrap_utxo(&utxo' "$B" \
+    || fail "bootstrap does not compute StaticUtxoFp from the imported UTxO before dropping it"
+grep -qF 'drop(utxo)' "$B" || fail "bootstrap does not drop the in-memory UTxO (the owned-RSS win)"
+if grep -qE 'ledger\.utxo_state = utxo;' "$B"; then
+    fail "bootstrap still retains the in-memory UTxO (ledger.utxo_state = utxo)"
+fi
+grep -qE 'static_utxo_fp: Option<StaticUtxoFp>' "$RN" || fail "AdmissionInputs has no static_utxo_fp field"
+grep -qF 'sfp.utxo_component(next_ledger.track_utxo)' "$RN" \
+    || fail "the admission post_fp does not resolve through StaticUtxoFp::utxo_component (with the track_utxo guard)"
+grep -qE 'StaticUtxoFpInvalid' "$RN" || fail "no fail-closed exit for static-fp under track_utxo=true"
 
 if (( FAILED == 0 )); then
     echo "OK: cached UTxO fingerprint (S2b-2c.1b-A.1; generation-keyed, never stale; live post_fp skips the per-block scan; track_utxo=false unchanged; B owed)"

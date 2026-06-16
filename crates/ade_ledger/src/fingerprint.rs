@@ -1201,6 +1201,34 @@ mod tests {
     }
 
     #[test]
+    fn fingerprint_v2_with_utxo_ignores_state_utxo_so_empty_ledger_matches_full() {
+        // MEM-OPT-UTXO-DISK S2b-2c.1b-A.2 post_fp equivalence: the off-heap path passes
+        // the constant UTxO component + an EMPTY in-memory UTxO. post_fp is INDEPENDENT
+        // of state.utxo_state (only the passed component + the non-UTxO state matter),
+        // so the empty-UTxO live ledger yields the SAME post_fp as the full-UTxO ledger
+        // given the same (static) component -- byte-identical to the old full-scan path.
+        let txin = |h: u8, i: u16| TxIn {
+            tx_hash: Hash32([h; 32]),
+            index: i,
+        };
+        let mut full = LedgerState::new(CardanoEra::Conway);
+        full.utxo_state.utxos.insert(txin(0x01, 0), byron_out(100, 1));
+        full.utxo_state.utxos.insert(txin(0x02, 7), byron_out(200, 2));
+        let empty = LedgerState::new(CardanoEra::Conway);
+        let component = fingerprint_utxo_v2(&full.utxo_state);
+        assert_eq!(
+            fingerprint_v2_with_utxo(&empty, component.clone()).combined,
+            fingerprint_v2_with_utxo(&full, component.clone()).combined,
+            "fingerprint_v2_with_utxo must use only the passed component, not state.utxo_state"
+        );
+        assert_eq!(
+            fingerprint_v2_with_utxo(&empty, component).combined,
+            fingerprint_v2(&full).combined,
+            "off-heap (empty UTxO + static fp) post_fp == full-UTxO full-scan post_fp"
+        );
+    }
+
+    #[test]
     fn different_eras_have_different_era_hashes() {
         let s_shelley = LedgerState::new(CardanoEra::Shelley);
         let s_allegra = LedgerState::new(CardanoEra::Allegra);
