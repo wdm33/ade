@@ -30,8 +30,114 @@ use super::utxo_key::{decode_utxo_key, encode_utxo_key, UTXO_KEY_LEN};
 const UTXO_TABLE: TableDefinition<&[u8; UTXO_KEY_LEN], &[u8]> =
     TableDefinition::new("utxo_anchor");
 
+/// `anchor_position -> encoded AnchorPosition`, written in the SAME write-txn as the
+/// UTxO delta so the materialized position is always consistent with the committed
+/// UTxO state (atomic; never half-applied).
+const ANCHOR_META: TableDefinition<&str, &[u8]> = TableDefinition::new("anchor_meta");
+const ANCHOR_POSITION_KEY: &str = "anchor_position";
+
 fn anchor_err<E: std::fmt::Display>(e: E) -> ChainDbError {
     ChainDbError::Corruption(format!("utxo anchor: {e}"))
+}
+
+/// The block the anchor has MATERIALIZED up to — written atomically with each delta
+/// (MEM-OPT-UTXO-DISK S2b-2c.1a) so recovery can reconcile the anchor to the WAL (the
+/// admit authority). All four fields mirror the WAL `AdmitBlock`, so a reconciliation
+/// is an exact identity comparison, not a heuristic.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct AnchorPosition {
+    pub slot: u64,
+    pub block_hash: [u8; 32],
+    pub prior_fp: [u8; 32],
+    pub post_fp: [u8; 32],
+}
+
+/// Fixed-width encoding: slot(8 BE) || block_hash(32) || prior_fp(32) || post_fp(32).
+const ANCHOR_POSITION_LEN: usize = 8 + 32 + 32 + 32;
+
+impl AnchorPosition {
+    fn encode(&self) -> [u8; ANCHOR_POSITION_LEN] {
+        let mut buf = [0u8; ANCHOR_POSITION_LEN];
+        buf[..8].copy_from_slice(&self.slot.to_be_bytes());
+        buf[8..40].copy_from_slice(&self.block_hash);
+        buf[40..72].copy_from_slice(&self.prior_fp);
+        buf[72..].copy_from_slice(&self.post_fp);
+        buf
+    }
+
+    fn decode(bytes: &[u8]) -> Result<Self, ChainDbError> {
+        if bytes.len() != ANCHOR_POSITION_LEN {
+            return Err(ChainDbError::Corruption(format!(
+                "anchor position must be {ANCHOR_POSITION_LEN} bytes, found {}",
+                bytes.len()
+            )));
+        }
+        let mut slot = [0u8; 8];
+        slot.copy_from_slice(&bytes[..8]);
+        let mut block_hash = [0u8; 32];
+        block_hash.copy_from_slice(&bytes[8..40]);
+        let mut prior_fp = [0u8; 32];
+        prior_fp.copy_from_slice(&bytes[40..72]);
+        let mut post_fp = [0u8; 32];
+        post_fp.copy_from_slice(&bytes[72..]);
+        Ok(AnchorPosition {
+            slot: u64::from_be_bytes(slot),
+            block_hash,
+            prior_fp,
+            post_fp,
+        })
+    }
+}
+
+/// One WAL `AdmitBlock` point, projected to the fields reconciliation compares.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct WalPoint {
+    pub slot: u64,
+    pub block_hash: [u8; 32],
+    pub post_fp: [u8; 32],
+}
+
+/// The deterministic restart decision when reconciling the anchor to the WAL.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum RecoveryDecision {
+    /// The anchor is at the WAL tail; nothing to do.
+    Consistent,
+    /// The anchor is behind the WAL; replay the WAL entries from index `replay_from`
+    /// (inclusive) into the anchor (re-validate + `commit_block`) to roll forward.
+    RollForward { replay_from: usize },
+    /// The anchor is inconsistent with the WAL (ahead, or a post_fp/identity mismatch
+    /// at a shared position). Halt — never silently reconcile.
+    FailClosed { reason: String },
+}
+
+/// Reconcile the anchor's materialized position to the WAL chain (the admit
+/// authority). Pure + deterministic. The anchor is ALWAYS ≤ the WAL (it commits
+/// strictly AFTER the WAL append), so an anchor position absent from the WAL chain is
+/// "ahead or diverged" → fail closed.
+pub(crate) fn reconcile(position: Option<&AnchorPosition>, wal: &[WalPoint]) -> RecoveryDecision {
+    match position {
+        None => {
+            // A fresh anchor (no committed block): replay the whole WAL.
+            if wal.is_empty() {
+                RecoveryDecision::Consistent
+            } else {
+                RecoveryDecision::RollForward { replay_from: 0 }
+            }
+        }
+        Some(p) => match wal
+            .iter()
+            .position(|w| w.post_fp == p.post_fp && w.block_hash == p.block_hash && w.slot == p.slot)
+        {
+            Some(i) if i + 1 == wal.len() => RecoveryDecision::Consistent,
+            Some(i) => RecoveryDecision::RollForward { replay_from: i + 1 },
+            None => RecoveryDecision::FailClosed {
+                reason: format!(
+                    "anchor position (slot {}) is not on the WAL chain -- ahead or diverged",
+                    p.slot
+                ),
+            },
+        },
+    }
 }
 
 /// The on-disk UTxO anchor. NOT a `UtxoStore` (the guardrail) — a RED storage
@@ -68,13 +174,17 @@ impl UtxoAnchor {
         }
     }
 
-    /// Apply one block's accepted deltas in a SINGLE write transaction: remove the
-    /// spent inputs, insert the produced outputs, commit. Atomic — a crash leaves
-    /// the old anchor valid OR the new anchor valid, never a half-applied state.
+    /// Apply one block's accepted deltas AND the new position in a SINGLE write
+    /// transaction: remove spent, insert produced, stamp `position`, commit. Atomic —
+    /// a crash leaves the old anchor (+ old position) valid OR the new anchor (+ new
+    /// position) valid, never a half-applied state and never a delta whose position
+    /// disagrees with it. The position is written AFTER the WAL append (the admit), so
+    /// the anchor never leads the WAL.
     pub(crate) fn commit_block(
         &self,
         spent: &[TxIn],
         produced: &[(TxIn, TxOut)],
+        position: &AnchorPosition,
     ) -> Result<(), ChainDbError> {
         let txn = self.db.begin_write().map_err(anchor_err)?;
         {
@@ -89,8 +199,28 @@ impl UtxoAnchor {
                 table.insert(&key, val.as_slice()).map_err(anchor_err)?;
             }
         }
+        {
+            let mut meta = txn.open_table(ANCHOR_META).map_err(anchor_err)?;
+            meta.insert(ANCHOR_POSITION_KEY, &position.encode()[..])
+                .map_err(anchor_err)?;
+        }
         txn.commit().map_err(anchor_err)?;
         Ok(())
+    }
+
+    /// The block the anchor is materialized up to (`None` on a fresh anchor). Read
+    /// back for the restart reconciliation against the WAL tail.
+    pub(crate) fn read_position(&self) -> Result<Option<AnchorPosition>, ChainDbError> {
+        let txn = self.db.begin_read().map_err(anchor_err)?;
+        let meta = match txn.open_table(ANCHOR_META) {
+            Ok(t) => t,
+            Err(redb::TableError::TableDoesNotExist(_)) => return Ok(None),
+            Err(e) => return Err(anchor_err(e)),
+        };
+        match meta.get(ANCHOR_POSITION_KEY).map_err(anchor_err)? {
+            Some(v) => Ok(Some(AnchorPosition::decode(v.value())?)),
+            None => Ok(None),
+        }
     }
 
     /// The whole anchor in canonical `TxIn` order (the checkpoint / equivalence
@@ -167,6 +297,21 @@ mod tests {
             coin: Coin(c),
         }
     }
+    fn pos(slot: u64, h: u8) -> AnchorPosition {
+        AnchorPosition {
+            slot,
+            block_hash: [h; 32],
+            prior_fp: [h.wrapping_sub(1); 32],
+            post_fp: [h; 32],
+        }
+    }
+    fn wal_point(slot: u64, h: u8) -> WalPoint {
+        WalPoint {
+            slot,
+            block_hash: [h; 32],
+            post_fp: [h; 32],
+        }
+    }
 
     /// The load-bearing S2b DC-MEM-05 proof (storage level): apply the SAME
     /// (spent, produced) per-block deltas to a BTreeMap anchor AND the redb anchor,
@@ -189,7 +334,9 @@ mod tests {
         ];
 
         for (i, (spent, produced)) in blocks.iter().enumerate() {
-            anchor.commit_block(spent, produced).expect("commit");
+            anchor
+                .commit_block(spent, produced, &pos(i as u64, i as u8))
+                .expect("commit");
             for s in spent {
                 model.remove(s);
             }
@@ -228,12 +375,14 @@ mod tests {
         {
             let anchor = UtxoAnchor::create(&path).expect("create");
             anchor
-                .commit_block(&[], &[(txin(0xab, 3), out(42, 0xab))])
+                .commit_block(&[], &[(txin(0xab, 3), out(42, 0xab))], &pos(7, 0x07))
                 .expect("commit");
         }
         let reopened = UtxoAnchor::create(&path).expect("reopen");
         assert_eq!(reopened.read(&txin(0xab, 3)).expect("read"), Some(out(42, 0xab)));
         assert_eq!(reopened.len().expect("len"), 1);
+        // the position survives the reopen too (atomic with the delta).
+        assert_eq!(reopened.read_position().expect("pos"), Some(pos(7, 0x07)));
     }
 
     /// `resolve_required` reads the present inputs into the WorkingSet seed and OMITS
@@ -248,6 +397,7 @@ mod tests {
             .commit_block(
                 &[],
                 &[(txin(0x01, 0), out(100, 1)), (txin(0x02, 0), out(200, 2))],
+                &pos(1, 0x01),
             )
             .expect("commit");
         let required: BTreeSet<TxIn> = [txin(0x01, 0), txin(0x99, 0)].into_iter().collect();
@@ -258,5 +408,61 @@ mod tests {
             "absent input omitted (not fabricated, not an error)"
         );
         assert_eq!(resolved.len(), 1);
+    }
+
+    #[test]
+    fn anchor_position_round_trips_and_rejects_wrong_length() {
+        let p = pos(123_456, 0xa5);
+        assert_eq!(AnchorPosition::decode(&p.encode()).expect("decode"), p);
+        assert!(AnchorPosition::decode(&[0u8; 10]).is_err(), "wrong length fails closed");
+    }
+
+    /// The delta and the position are written in ONE redb txn — they are always
+    /// committed together (a torn commit cannot apply the delta without the position,
+    /// or advance the position without the delta).
+    #[test]
+    fn commit_stamps_position_atomically_with_the_delta() {
+        let tmp = TempDir::new().expect("tempdir");
+        let anchor = UtxoAnchor::create(&tmp.path().join("u.redb")).expect("create");
+        assert_eq!(anchor.read_position().expect("pos"), None, "fresh anchor has no position");
+
+        anchor
+            .commit_block(&[], &[(txin(0x01, 0), out(10, 1))], &pos(5, 0x05))
+            .expect("commit");
+        assert_eq!(anchor.read_position().expect("pos"), Some(pos(5, 0x05)));
+        assert_eq!(anchor.read(&txin(0x01, 0)).expect("read"), Some(out(10, 1)));
+
+        anchor
+            .commit_block(&[txin(0x01, 0)], &[(txin(0x02, 0), out(20, 2))], &pos(6, 0x06))
+            .expect("commit");
+        assert_eq!(anchor.read_position().expect("pos"), Some(pos(6, 0x06)), "position advanced");
+        assert_eq!(anchor.read(&txin(0x01, 0)).expect("read"), None, "delta applied with it");
+    }
+
+    /// The deterministic restart decision: consistent at the tail, roll forward when
+    /// behind, replay-all when fresh, fail closed when ahead/diverged.
+    #[test]
+    fn reconcile_decides_consistent_rollforward_and_fail_closed() {
+        let wal = vec![wal_point(1, 0x01), wal_point(2, 0x02), wal_point(3, 0x03)];
+        assert_eq!(reconcile(None, &[]), RecoveryDecision::Consistent);
+        assert_eq!(
+            reconcile(None, &wal),
+            RecoveryDecision::RollForward { replay_from: 0 },
+            "fresh anchor replays the whole WAL"
+        );
+        assert_eq!(
+            reconcile(Some(&pos(3, 0x03)), &wal),
+            RecoveryDecision::Consistent,
+            "anchor at the WAL tail"
+        );
+        assert_eq!(
+            reconcile(Some(&pos(1, 0x01)), &wal),
+            RecoveryDecision::RollForward { replay_from: 1 },
+            "anchor behind -> roll forward from the next entry"
+        );
+        assert!(
+            matches!(reconcile(Some(&pos(9, 0x09)), &wal), RecoveryDecision::FailClosed { .. }),
+            "anchor position not on the WAL chain (ahead/diverged) -> fail closed"
+        );
     }
 }

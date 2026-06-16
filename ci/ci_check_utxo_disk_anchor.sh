@@ -42,7 +42,22 @@ grep -qE 'fn redb_anchor_equals_btreemap_across_block_deltas' "$A" \
     || fail "backend-equivalence (redb == BTreeMap) proof missing"
 grep -qE 'fn anchor_survives_reopen' "$A" || fail "anchor durability (reopen) proof missing"
 
+# (6) S2b-2c.1a: the anchor stamps its materialized POSITION atomically with the delta
+#     (one redb txn) and reconciles to the WAL fail-closed (the roll-forward primitive).
+grep -qE 'struct AnchorPosition' "$A" || fail "AnchorPosition (the materialized position marker) is missing"
+grep -qF 'meta.insert(ANCHOR_POSITION_KEY' "$A" \
+    || fail "commit_block does not stamp the position in the same txn (atomic with the delta)"
+grep -qE 'fn read_position' "$A" || fail "read_position (restart reconciliation) is missing"
+grep -qE 'fn reconcile' "$A" || fail "reconcile (the WAL roll-forward decision) is missing"
+grep -qE 'RecoveryDecision::FailClosed' "$A" || fail "reconcile does not fail closed on ahead/diverged"
+grep -qiE 'anchor never leads the WAL|always .{0,3} the WAL' "$A" \
+    || fail "the anchor-never-ahead invariant is not documented in the anchor"
+grep -qE 'fn commit_stamps_position_atomically_with_the_delta' "$A" \
+    || fail "the atomic position+delta proof is missing"
+grep -qE 'fn reconcile_decides_consistent_rollforward_and_fail_closed' "$A" \
+    || fail "the reconcile-decision proof is missing"
+
 if (( FAILED == 0 )); then
-    echo "OK: on-disk redb UTxO anchor (S2b; fixed-width key -> canonical TxOut; atomic per-block commit; backend-equivalent to BTreeMap; NOT a UtxoStore)"
+    echo "OK: on-disk redb UTxO anchor (S2b; fixed-width key -> canonical TxOut; atomic delta+position commit; reconcile-to-WAL roll-forward/fail-closed; backend-equivalent to BTreeMap; NOT a UtxoStore)"
 fi
 exit $FAILED

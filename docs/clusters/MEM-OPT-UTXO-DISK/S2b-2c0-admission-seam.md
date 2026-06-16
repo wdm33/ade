@@ -56,5 +56,6 @@ A block is *admitted* ⟺ it is in the WAL. The anchor is a **derived materializ
 
 ## 6. Plan
 - **2c.0 (this):** the seam spec + `ci_check_utxo_admission_seam.sh` (asserts the spec exists with the atomicity/recovery rule + the prohibitions). No live-path code.
-- **2c.1:** the live integration — the anchor-position marker + the roll-forward recovery + the admission rewire + the §4 tests.
+- **2c.1a (DONE):** the storage-level recovery primitive — `AnchorPosition` (slot/block_hash/prior_fp/post_fp) stamped **atomically with the delta** in `commit_block` (one redb txn) + `read_position` + the pure `reconcile(position, wal)` decision (Consistent / RollForward / FailClosed: anchor-ahead-or-diverged). Provable in isolation; `ci_check_utxo_disk_anchor.sh`. No admission rewire.
+- **2c.1b:** the admission rewire — decode → collect → resolve → WorkingSet → validate → `commit_block` → publish, with the roll-forward EXECUTION (reconcile → re-validate from durable bytes → commit) + the §4 live tests.
 - **2c.2:** the owned-RSS re-measure (S0/S3 scenario) — the bounty win.
