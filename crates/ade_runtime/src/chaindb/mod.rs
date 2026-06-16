@@ -25,6 +25,7 @@ mod in_memory;
 mod persistent;
 mod snapshot_contract;
 mod types;
+mod utxo_key;
 
 pub use contract::run_contract_tests;
 pub use crash_safety::{run_crash_safety_tests, KillStrategy, NoKill};
