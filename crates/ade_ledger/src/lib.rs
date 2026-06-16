@@ -48,6 +48,7 @@ pub mod snapshot;
 pub mod state;
 pub mod tx_validity;
 pub mod utxo;
+pub mod utxo_overlay;
 pub mod value;
 pub mod wal;
 pub mod witness;
