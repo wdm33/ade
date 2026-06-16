@@ -35,13 +35,14 @@ A tx can spend an output produced by an earlier tx in the SAME block — that ou
 - [x] one authoritative extractor of all required TxIns (this slice)
 - [x] era-aware + closed (Conway includes reference inputs; completeness test)
 - [x] returns a deterministic sorted `BTreeSet<TxIn>` (not a HashSet)
-- [ ] resolved working-set is `BTreeMap<TxIn, TxOut>` (a `UtxoStore`) — wiring step
-- [ ] BLUE validation receives only the resolved view — wiring step
-- [ ] no code path where BLUE can call redb / trigger disk I/O — wiring step (the anchor already is NOT a `UtxoStore`)
-- [ ] negative tests: missing pre-resolved inputs fail closed with structured errors — wiring step
-- [ ] equivalence: the resolved-view path matches the current full in-memory UTxO path — wiring step
+- [x] resolved working-set is `BTreeMap<TxIn, TxOut>` (a `UtxoStore`) — `WorkingSet`
+- [x] BLUE validation receives only the resolved view — the verdict-equivalence test validates over `WorkingSet`
+- [x] no code path where BLUE can call redb / trigger disk I/O — gate asserts no `redb`/`UtxoAnchor` in ade_ledger
+- [x] negative tests: missing pre-resolved inputs fail closed (`resolved_view_missing_input_fails_closed`)
+- [x] equivalence: resolved-view verdict == full-UTxO verdict (component level; live WAL/block-hash equivalence is the integration step)
 
-## 6. This increment (enumerate + prove); next (wire)
-- **This:** the table + `collect_required_txins` + the Conway validator refactored to use it; completeness/determinism tests; `ci_check_utxo_pre_resolve.sh`.
-- **Next:** `resolve_required_txins` (RED) + the working-set seed + block application + validate-through-resolved-view + the negative/equivalence corpus.
+## 6. Status
+- **Enumeration DONE:** the table + `collect_required_txins` + the Conway validator using it; completeness/determinism tests.
+- **Resolved-view wiring DONE (component level):** `WorkingSet` (seed + `apply_tx_acceptance` transitions; impls `UtxoStore`); `UtxoAnchor::resolve_required` (RED — the sole anchor read for validation); verdict-equivalence + intra-block produced-then-spent + missing-fail-closed proofs; `ci_check_utxo_pre_resolve.sh` (incl. the no-`redb`-in-BLUE + no-cache guardrails).
+- **NEXT — live integration:** wire `collect_required_txins_block → resolve_required → WorkingSet → validate → anchor.commit_block` into the admission path; one redb write-txn per block; prove WAL post_fp + incremental fp + block-hash agreement unchanged on the live corpus.
 - **Cache is a SEPARATE later slice** — not folded here; proven output-invariant under clear/evict/capacity change.

@@ -17,10 +17,12 @@
 //! spend inputs but script/context construction, which for Babbage/Conway pulls
 //! **reference inputs**; the completeness test fails if any class is dropped.
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 
 use ade_types::conway::tx::ConwayTxBody;
 use ade_types::tx::TxIn;
+
+use crate::utxo::{TxOut, UtxoMembership, UtxoStore};
 
 /// Every `TxIn` the validation of a Conway tx can read: spend inputs ∪ collateral
 /// inputs ∪ reference inputs. This is the EXACT set the Conway validator feeds to
@@ -51,9 +53,74 @@ pub fn collect_required_txins_block<'a>(
     required
 }
 
+/// MEM-OPT-UTXO-DISK S2b: the resolved-view WORKING-SET for one block's application
+/// (GREEN sequencing). Seeded from the anchor's pre-resolved entries (the RED reads
+/// happen BEFORE this), then advanced per ACCEPTED tx — it models the existing
+/// sequential block-application semantics, so a later tx can spend an output produced
+/// by an earlier tx in the SAME block. It is the ONLY UTxO view BLUE validation sees
+/// (it impls [`UtxoStore`]); BLUE never reaches the storage backend, and a missing
+/// input is resolved as absent (the validator fails closed) — never a late disk read.
+///
+/// NOT a general-purpose mutable UTxO map: the only transitions are seed +
+/// [`apply_tx_acceptance`](Self::apply_tx_acceptance), which model exactly the block
+/// application sequence.
+///
+/// ```text
+///   seed_required_from_anchor(required entries)        // RED resolved into memory
+///   + produced outputs from earlier txs (apply_tx_acceptance)
+///   - spent outputs as txs are accepted (apply_tx_acceptance)
+///   = the resolved view presented to BLUE (get / contains_key)
+/// ```
+#[derive(Debug, Clone)]
+pub struct WorkingSet {
+    resolved: BTreeMap<TxIn, TxOut>,
+}
+
+impl WorkingSet {
+    /// Seed from the anchor's pre-resolved required entries — the RED shell resolved
+    /// exactly `collect_required_txins(...)` from the on-disk anchor into this map.
+    pub fn seed_required_from_anchor(resolved: BTreeMap<TxIn, TxOut>) -> Self {
+        WorkingSet { resolved }
+    }
+
+    /// Advance after a tx is ACCEPTED: spent inputs leave the live set, produced
+    /// outputs enter it (so a later tx in the block can spend them). The single
+    /// explicit block-application transition — never arbitrary mutation.
+    pub fn apply_tx_acceptance(&mut self, spent: &[TxIn], produced: &[(TxIn, TxOut)]) {
+        for tx_in in spent {
+            self.resolved.remove(tx_in);
+        }
+        for (tx_in, tx_out) in produced {
+            self.resolved.insert(tx_in.clone(), tx_out.clone());
+        }
+    }
+
+    /// The number of live resolved entries.
+    pub fn len(&self) -> usize {
+        self.resolved.len()
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.resolved.is_empty()
+    }
+}
+
+impl UtxoMembership for WorkingSet {
+    fn contains_key(&self, tx_in: &TxIn) -> bool {
+        self.resolved.contains_key(tx_in)
+    }
+}
+
+impl UtxoStore for WorkingSet {
+    fn get(&self, tx_in: &TxIn) -> Option<TxOut> {
+        self.resolved.get(tx_in).cloned()
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    use ade_types::address::Address;
     use ade_types::babbage::tx::BabbageTxOut;
     use ade_types::tx::Coin;
     use ade_types::Hash32;
@@ -62,6 +129,13 @@ mod tests {
         TxIn {
             tx_hash: Hash32([h; 32]),
             index: i,
+        }
+    }
+
+    fn out(c: u64) -> TxOut {
+        TxOut::Byron {
+            address: Address::Byron(vec![0x01]),
+            coin: Coin(c),
         }
     }
 
@@ -154,5 +228,37 @@ mod tests {
         for k in [txin(0x01, 0), txin(0x90, 0), txin(0x02, 0), txin(0x10, 0)] {
             assert!(union.contains(&k), "block union must cover {k:?}");
         }
+    }
+
+    /// The sequential-application semantics the resolved view must preserve: a tx can
+    /// spend an output produced by an EARLIER tx in the same block; once spent it
+    /// leaves the working-set. A frozen pre-block snapshot would get this wrong.
+    #[test]
+    fn working_set_intra_block_produced_then_spent() {
+        let mut ws = WorkingSet::seed_required_from_anchor(BTreeMap::new());
+        let a = txin(0xaa, 0);
+        ws.apply_tx_acceptance(&[], &[(a.clone(), out(100))]);
+        assert_eq!(
+            ws.get(&a),
+            Some(out(100)),
+            "an intra-block produced output is resolvable for a later tx"
+        );
+        assert!(ws.contains_key(&a));
+        ws.apply_tx_acceptance(&[a.clone()], &[]);
+        assert_eq!(ws.get(&a), None, "a spent output leaves the working-set");
+        assert!(!ws.contains_key(&a));
+    }
+
+    #[test]
+    fn working_set_seed_resolves_anchor_entries_and_absent_is_none() {
+        let seed: BTreeMap<TxIn, TxOut> = [(txin(0x01, 0), out(500))].into_iter().collect();
+        let ws = WorkingSet::seed_required_from_anchor(seed);
+        assert_eq!(ws.get(&txin(0x01, 0)), Some(out(500)));
+        assert_eq!(
+            ws.get(&txin(0x02, 0)),
+            None,
+            "an unseeded input resolves as absent (validation fails closed), never a disk read"
+        );
+        assert_eq!(ws.len(), 1);
     }
 }

@@ -40,7 +40,43 @@ test -f "$D" || fail "the per-era dependency table (S2b-pre-resolve.md) is missi
 grep -qiE 'reference inputs.*script.context|script.context.*reference|script/context' "$D" \
     || fail "the dependency table does not document the Babbage/Conway reference-input / script-context dependency"
 
+# (5) the resolved-view WORKING-SET (GREEN) with EXPLICIT transitions only (seed +
+#     apply_tx_acceptance) -- not a general-purpose mutable UTxO map.
+grep -qE 'pub struct WorkingSet' "$P" || fail "WorkingSet (the resolved view) is missing"
+grep -qE 'fn seed_required_from_anchor' "$P" || fail "WorkingSet::seed_required_from_anchor missing"
+grep -qE 'fn apply_tx_acceptance' "$P" || fail "WorkingSet::apply_tx_acceptance (the sequential transition) missing"
+grep -qF 'impl UtxoStore for WorkingSet' "$P" || fail "WorkingSet does not impl UtxoStore (BLUE's resolved view)"
+if grep -qE 'pub fn (insert|remove|get_mut|clear)\b' "$P"; then
+    fail "WorkingSet exposes general-purpose mutation -- only seed + apply_tx_acceptance are allowed"
+fi
+
+# (6) the RED anchor-read path -- the ONLY place the anchor is read for validation.
+grep -qE 'fn resolve_required' crates/ade_runtime/src/chaindb/utxo_anchor.rs \
+    || fail "UtxoAnchor::resolve_required (the WorkingSet seed) is missing"
+
+# (7) the wiring proofs: resolved-view == full-UTxO verdict; intra-block produced-then-
+#     spent; missing input fails closed with a structured error.
+grep -qE 'fn resolved_view_verdict_equals_full_utxo_verdict' "$C" \
+    || fail "resolved-view == full-UTxO verdict-equivalence proof missing"
+grep -qE 'fn resolved_view_missing_input_fails_closed' "$C" \
+    || fail "missing-input fail-closed proof missing"
+grep -qE 'fn working_set_intra_block_produced_then_spent' "$P" \
+    || fail "intra-block produced-then-spent proof missing"
+
+# (8) GUARDRAIL: the BLUE/GREEN ledger crate NEVER reaches the storage backend.
+if grep -qE '^\s*redb\b' crates/ade_ledger/Cargo.toml; then
+    fail "ade_ledger depends on redb -- BLUE/GREEN must never reach the storage backend"
+fi
+if grep -rqE '\bUtxoAnchor\b' crates/ade_ledger/src/; then
+    fail "ade_ledger references UtxoAnchor -- BLUE/GREEN must never hold the storage backend"
+fi
+
+# (9) the bounded read cache is a SEPARATE later slice -- NOT introduced here.
+if grep -qiE '\b(cache|lru)\b' "$P"; then
+    fail "a cache appears in pre_resolve -- the bounded read cache is a separate later slice"
+fi
+
 if (( FAILED == 0 )); then
-    echo "OK: pre-resolve dependency enumeration (S2b; single era-aware closed extractor; spend+collateral+reference; deterministic sorted set; the Conway validator resolves through it)"
+    echo "OK: pre-resolve enumeration + resolved-view wiring (S2b; single closed extractor; WorkingSet seed+apply transitions; RED resolve_required; verdict-equivalent to full UTxO; intra-block + fail-closed proven; no redb/anchor in BLUE; no cache)"
 fi
 exit $FAILED

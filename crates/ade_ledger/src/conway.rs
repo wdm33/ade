@@ -455,6 +455,51 @@ mod tests {
     }
 
     #[test]
+    fn resolved_view_verdict_equals_full_utxo_verdict() {
+        // MEM-OPT-UTXO-DISK S2b: validation over the pre-resolved WORKING-SET yields
+        // the SAME verdict as over the full in-memory UTxO. The working-set is seeded
+        // with EXACTLY collect_required_txins(body) resolved from the UTxO (mirroring
+        // the RED anchor pre-resolve); validation is a pure function of the resolved
+        // values, so the verdicts must be identical.
+        let body = conway_body();
+        let utxo = utxo_with(&[(TxIn { tx_hash: Hash32([0x01; 32]), index: 0 }, 1_200_000)]);
+        let required = crate::pre_resolve::collect_required_txins(&body);
+        let seed: BTreeMap<TxIn, TxOut> = required
+            .iter()
+            .filter_map(|k| utxo.get(k).map(|v| (k.clone(), v.clone())))
+            .collect();
+        let resolved = crate::pre_resolve::WorkingSet::seed_required_from_anchor(seed);
+        let over_full = validate_conway_state_backed(
+            &body, &utxo, &empty_witness(), MAINNET_PERCENT, MAINNET_NET, PV_CONWAY, (i64::MAX, i64::MAX), &deposit_params(), &CertState::new(),
+        );
+        let over_resolved = validate_conway_state_backed(
+            &body, &resolved, &empty_witness(), MAINNET_PERCENT, MAINNET_NET, PV_CONWAY, (i64::MAX, i64::MAX), &deposit_params(), &CertState::new(),
+        );
+        assert!(over_full.is_ok() && over_resolved.is_ok());
+        assert_eq!(
+            format!("{over_full:?}"),
+            format!("{over_resolved:?}"),
+            "resolved-view verdict must equal full-UTxO verdict"
+        );
+    }
+
+    #[test]
+    fn resolved_view_missing_input_fails_closed() {
+        // A required input absent from the working-set (not in the anchor seed, not
+        // produced earlier in the block) MUST fail closed with a structured error --
+        // NEVER a late disk lookup from validation.
+        let body = conway_body();
+        let empty =
+            crate::pre_resolve::WorkingSet::seed_required_from_anchor(BTreeMap::new());
+        assert!(matches!(
+            validate_conway_state_backed(
+                &body, &empty, &empty_witness(), MAINNET_PERCENT, MAINNET_NET, PV_CONWAY, (i64::MAX, i64::MAX), &deposit_params(), &CertState::new(),
+            ),
+            Err(LedgerError::BadInputs(_))
+        ));
+    }
+
+    #[test]
     fn conway_reference_input_overlap_rejected() {
         // Conway PV 9: overlap between inputs and reference_inputs is
         // disallowed via BabbageNonDisjointRefInputs (O-28.1).

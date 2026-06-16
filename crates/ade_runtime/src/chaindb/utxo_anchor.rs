@@ -12,6 +12,7 @@
 
 #![allow(dead_code)] // wired into admission (pre-resolve + commit) in the next S2b step
 
+use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
 
 use redb::{Database, ReadableTable, ReadableTableMetadata, TableDefinition};
@@ -114,6 +115,24 @@ impl UtxoAnchor {
         Ok(out)
     }
 
+    /// Resolve the pre-resolve required set from the anchor into the `WorkingSet`
+    /// seed (the ONLY place the anchor is read for validation). An entry absent from
+    /// the anchor is simply omitted — it is either intra-block-produced (seeded into
+    /// the working-set during block application) or genuinely missing (caught
+    /// fail-closed by validation, never a late disk read). BLUE never sees the anchor.
+    pub(crate) fn resolve_required(
+        &self,
+        required: &BTreeSet<TxIn>,
+    ) -> Result<BTreeMap<TxIn, TxOut>, ChainDbError> {
+        let mut resolved = BTreeMap::new();
+        for tx_in in required {
+            if let Some(tx_out) = self.read(tx_in)? {
+                resolved.insert(tx_in.clone(), tx_out);
+            }
+        }
+        Ok(resolved)
+    }
+
     /// The number of live anchor entries.
     pub(crate) fn len(&self) -> Result<u64, ChainDbError> {
         let txn = self.db.begin_read().map_err(anchor_err)?;
@@ -134,7 +153,6 @@ mod tests {
     use ade_types::address::Address;
     use ade_types::tx::Coin;
     use ade_types::Hash32;
-    use std::collections::BTreeMap;
     use tempfile::TempDir;
 
     fn txin(h: u8, i: u16) -> TxIn {
@@ -216,5 +234,29 @@ mod tests {
         let reopened = UtxoAnchor::create(&path).expect("reopen");
         assert_eq!(reopened.read(&txin(0xab, 3)).expect("read"), Some(out(42, 0xab)));
         assert_eq!(reopened.len().expect("len"), 1);
+    }
+
+    /// `resolve_required` reads the present inputs into the WorkingSet seed and OMITS
+    /// the absent ones (intra-block-produced or genuinely missing) — it never
+    /// fabricates an entry and never fails on an absent input (that is validation's
+    /// job, fail-closed). This is the sole anchor-read path for validation.
+    #[test]
+    fn resolve_required_reads_present_omits_absent() {
+        let tmp = TempDir::new().expect("tempdir");
+        let anchor = UtxoAnchor::create(&tmp.path().join("u.redb")).expect("create");
+        anchor
+            .commit_block(
+                &[],
+                &[(txin(0x01, 0), out(100, 1)), (txin(0x02, 0), out(200, 2))],
+            )
+            .expect("commit");
+        let required: BTreeSet<TxIn> = [txin(0x01, 0), txin(0x99, 0)].into_iter().collect();
+        let resolved = anchor.resolve_required(&required).expect("resolve");
+        assert_eq!(resolved.get(&txin(0x01, 0)), Some(&out(100, 1)), "present input resolved");
+        assert!(
+            !resolved.contains_key(&txin(0x99, 0)),
+            "absent input omitted (not fabricated, not an error)"
+        );
+        assert_eq!(resolved.len(), 1);
     }
 }
