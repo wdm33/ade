@@ -35,6 +35,7 @@ pub mod mempool;
 pub mod phase;
 pub mod plutus_eval;
 pub mod pparams;
+pub mod pre_resolve;
 pub mod producer;
 pub mod rational;
 pub mod receive;

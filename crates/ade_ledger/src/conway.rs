@@ -9,7 +9,7 @@ use std::collections::BTreeSet;
 
 use ade_types::conway::cert::{CertDisposition, CoinSource, DepositEffect};
 use ade_types::conway::tx::ConwayTxBody;
-use ade_types::tx::{Coin, TxIn};
+use ade_types::tx::Coin;
 use ade_types::CardanoEra;
 
 use crate::cert_classify::classify;
@@ -82,18 +82,11 @@ pub fn validate_conway_state_backed(
         max_tx_ex_units.1,
     )?;
 
-    // 1. Input resolution (spend + collateral + reference)
-    let mut all_inputs: BTreeSet<TxIn> = body.inputs.iter().cloned().collect();
-    if let Some(col) = &body.collateral_inputs {
-        for tx_in in col {
-            all_inputs.insert(tx_in.clone());
-        }
-    }
-    if let Some(refs) = &body.reference_inputs {
-        for tx_in in refs {
-            all_inputs.insert(tx_in.clone());
-        }
-    }
+    // 1. Input resolution (spend + collateral + reference) — via the SINGLE
+    //    pre-resolve authority, so the set validated here is byte-identical to the
+    //    set the RED shell pre-resolves from the on-disk anchor (MEM-OPT-UTXO-DISK
+    //    S2b: no hidden lazy fetch can diverge from what validation reads).
+    let all_inputs = crate::pre_resolve::collect_required_txins(body);
     check_inputs_present(&all_inputs, utxo)?;
 
     // 2. Conway-gated reference-input disjointness (O-28.1)
