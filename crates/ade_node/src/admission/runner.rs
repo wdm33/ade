@@ -38,7 +38,7 @@ use ade_core::consensus::ledger_view::LedgerView;
 use ade_core::consensus::praos_state::PraosChainDepState;
 use ade_ledger::block_validity::decode_block;
 use ade_ledger::block_validity::verdict::BlockValidityError;
-use ade_ledger::fingerprint::fingerprint;
+use ade_ledger::fingerprint::{fingerprint_v2_with_utxo, UtxoFpCache};
 use ade_ledger::receive::admit_via_block_validity;
 use ade_ledger::state::LedgerState;
 use ade_ledger::wal::{BlockVerdictTag, WalEntry, WalStore};
@@ -329,6 +329,13 @@ where
     // from the anchor; updated after each successful WAL append.
     let mut tail_post_fp = inputs.anchor_initial_ledger_fp.clone();
 
+    // MEM-OPT-UTXO-DISK S2b-2c.1b-A: cache the UTxO-component fingerprint. While the
+    // live admission runs track_utxo=false the UTxO is unchanged, so its component is
+    // a constant the cache reuses (skipping the full per-block scan -- the S0 churn);
+    // any UTxO mutation bumps the generation and forces a recompute, so post_fp stays
+    // byte-identical to the full fingerprint().
+    let mut utxo_fp_cache = UtxoFpCache::new();
+
     // Mutable ledger / chain_dep traversed by each successful admit.
     let mut ledger = inputs.ledger;
     let mut chain_dep = inputs.chain_dep;
@@ -434,7 +441,10 @@ where
                                     },
                                 )
                                 .await;
-                                let post_fp = fingerprint(&next_ledger).combined;
+                                let utxo_fp =
+                                    utxo_fp_cache.utxo_fingerprint(&next_ledger.utxo_state);
+                                let post_fp =
+                                    fingerprint_v2_with_utxo(&next_ledger, utxo_fp).combined;
                                 let entry = WalEntry::AdmitBlock {
                                     prior_fp: tail_post_fp.clone(),
                                     block_hash: block_hash.clone(),

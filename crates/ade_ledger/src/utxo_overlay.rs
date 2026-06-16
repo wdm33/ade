@@ -36,6 +36,13 @@ pub struct OverlayUtxo {
     anchor: Arc<BTreeMap<TxIn, TxOut>>,
     /// `Some(out)` = inserted/updated; `None` = deleted (tombstone).
     overlay: BTreeMap<TxIn, Option<TxOut>>,
+    /// MEM-OPT-UTXO-DISK S2b-2c.1b-A: a content-mutation counter — bumped on every
+    /// insert/remove that changes the effective set, COPIED on clone (so the live
+    /// `track_utxo=false` clone-per-block path keeps the same generation), and NOT
+    /// bumped by compaction (which preserves content). The UTxO-fingerprint cache
+    /// keys on it: same generation ⟹ unchanged content ⟹ safe to reuse the fp; any
+    /// mutation bumps it, so a changed UTxO can never reuse a stale fingerprint.
+    generation: u64,
 }
 
 impl OverlayUtxo {
@@ -44,6 +51,7 @@ impl OverlayUtxo {
         OverlayUtxo {
             anchor: Arc::new(BTreeMap::new()),
             overlay: BTreeMap::new(),
+            generation: 0,
         }
     }
 
@@ -53,6 +61,7 @@ impl OverlayUtxo {
         OverlayUtxo {
             anchor: Arc::new(map),
             overlay: BTreeMap::new(),
+            generation: 0,
         }
     }
 
@@ -73,6 +82,7 @@ impl OverlayUtxo {
     /// Insert/update -- append to the overlay (amortized O(1)).
     pub fn insert(&mut self, tx_in: TxIn, tx_out: TxOut) {
         self.overlay.insert(tx_in, Some(tx_out));
+        self.generation = self.generation.wrapping_add(1);
         self.maybe_compact();
     }
 
@@ -82,6 +92,7 @@ impl OverlayUtxo {
         let current = self.get(tx_in);
         if current.is_some() {
             self.overlay.insert(tx_in.clone(), None);
+            self.generation = self.generation.wrapping_add(1);
             self.maybe_compact();
         }
         current
@@ -102,6 +113,13 @@ impl OverlayUtxo {
 
     pub fn is_empty(&self) -> bool {
         self.len() == 0
+    }
+
+    /// The content-mutation generation (MEM-OPT-UTXO-DISK S2b-2c.1b-A). Equal
+    /// generations on the SAME UTxO lineage mean the effective set is unchanged, so
+    /// a cached UTxO fingerprint is safe to reuse. Any insert/remove bumps it.
+    pub fn generation(&self) -> u64 {
+        self.generation
     }
 
     /// The effective sorted set -- the anchor with the overlay applied. O(anchor +

@@ -137,8 +137,18 @@ pub const FINGERPRINT_VERSION_V2: u32 = 2;
 /// component uses the v2 set commitment (`fingerprint_utxo_v2`). The ORACLE for
 /// S1.5b's per-block incremental maintenance. NOT yet the production `post_fp`.
 pub fn fingerprint_v2(state: &LedgerState) -> LedgerFingerprint {
+    fingerprint_v2_with_utxo(state, fingerprint_utxo_v2(&state.utxo_state))
+}
+
+/// MEM-OPT-UTXO-DISK S2b-2c.1b-A: the combined v2 fingerprint computed with a
+/// PRECOMPUTED utxo component, instead of scanning the UTxO. While the live admission
+/// runs `track_utxo=false` the UTxO is unchanged, so its component is constant and the
+/// RED admission loop supplies the cached value (via [`UtxoFpCache`]), skipping the
+/// full per-block scan (the S0 churn). The non-utxo components are cheap and always
+/// recomputed; the result is byte-identical to [`fingerprint_v2`] exactly when
+/// `utxo == fingerprint_utxo_v2(&state.utxo_state)`.
+pub fn fingerprint_v2_with_utxo(state: &LedgerState, utxo: Hash32) -> LedgerFingerprint {
     let era = fingerprint_era(state.era, state.max_lovelace_supply);
-    let utxo = fingerprint_utxo_v2(&state.utxo_state);
     let cert = fingerprint_cert(&state.cert_state);
     let epoch = fingerprint_epoch(&state.epoch_state);
     let snapshots = fingerprint_snapshots(&state.epoch_state.snapshots);
@@ -162,6 +172,38 @@ pub fn fingerprint_v2(state: &LedgerState) -> LedgerFingerprint {
         pparams,
         governance,
         combined,
+    }
+}
+
+/// MEM-OPT-UTXO-DISK S2b-2c.1b-A: caches the UTxO-component fingerprint keyed on the
+/// UTxO's generation, so the RED admission loop skips the full per-block UTxO scan
+/// WHILE the UTxO is unchanged. In the live `track_utxo=false` path the UTxO is cloned
+/// unchanged every block, so its generation — and its fingerprint — never change. Any
+/// UTxO mutation bumps the generation, so a changed UTxO MISSES the cache and is
+/// recomputed: the cache can NEVER serve a stale fingerprint. The returned value is
+/// always byte-identical to the full recompute — a pure optimization, replay-safe.
+#[derive(Debug, Clone, Default)]
+pub struct UtxoFpCache {
+    entry: Option<(u64, Hash32)>,
+}
+
+impl UtxoFpCache {
+    pub fn new() -> Self {
+        UtxoFpCache { entry: None }
+    }
+
+    /// The UTxO-component fingerprint: reuse iff the generation matches the cached
+    /// one; otherwise recompute (the full scan) and refresh the cache.
+    pub fn utxo_fingerprint(&mut self, utxo_state: &UTxOState) -> Hash32 {
+        let generation = utxo_state.utxos.generation();
+        if let Some((cached_gen, fp)) = &self.entry {
+            if *cached_gen == generation {
+                return fp.clone();
+            }
+        }
+        let fp = fingerprint_utxo_v2(utxo_state);
+        self.entry = Some((generation, fp.clone()));
+        fp
     }
 }
 
@@ -195,7 +237,7 @@ fn fingerprint_utxo(utxo: &UTxOState) -> Hash32 {
 /// write_tx_out) entry bytes as v1, so it can be maintained in O(delta)/block
 /// (S1.5b). This is the FULL recompute (the oracle); S1.5b proves the per-block
 /// incremental maintenance equals it.
-fn fingerprint_utxo_v2(utxo: &UTxOState) -> Hash32 {
+pub fn fingerprint_utxo_v2(utxo: &UTxOState) -> Hash32 {
     let mut commit = UtxoSetCommitment::empty();
     for (tx_in, tx_out) in &utxo.utxos {
         commit.add(&v2_entry_bytes(tx_in, tx_out));
@@ -991,6 +1033,59 @@ mod tests {
             fingerprint_utxo_v2(&s_overlay),
             fingerprint_utxo_v2(&s_direct),
             "overlay-split state must fingerprint identically to the direct build"
+        );
+    }
+
+    #[test]
+    fn fingerprint_v2_with_precomputed_utxo_equals_full_v2() {
+        // MEM-OPT-UTXO-DISK S2b-2c.1b-A: supplying the precomputed utxo component
+        // yields the byte-identical combined fingerprint as the full scan.
+        let txin = |h: u8, i: u16| TxIn {
+            tx_hash: Hash32([h; 32]),
+            index: i,
+        };
+        let mut s = LedgerState::new(CardanoEra::Conway);
+        s.utxo_state.utxos.insert(txin(0x01, 0), byron_out(100, 1));
+        s.utxo_state.utxos.insert(txin(0x02, 5), byron_out(200, 2));
+        let utxo_fp = fingerprint_utxo_v2(&s.utxo_state);
+        assert_eq!(
+            fingerprint_v2_with_utxo(&s, utxo_fp).combined,
+            fingerprint_v2(&s).combined,
+            "the precomputed-utxo variant must equal the full v2 fingerprint"
+        );
+    }
+
+    #[test]
+    fn utxo_fp_cache_reuses_while_unchanged_and_recomputes_on_change() {
+        // The cache may reuse ONLY while the UTxO is unchanged; any mutation bumps
+        // the generation, so a changed UTxO is recomputed (never a stale reuse).
+        let txin = |h: u8, i: u16| TxIn {
+            tx_hash: Hash32([h; 32]),
+            index: i,
+        };
+        let mut s = LedgerState::new(CardanoEra::Conway);
+        s.utxo_state.utxos.insert(txin(0x01, 0), byron_out(100, 1));
+
+        let mut cache = UtxoFpCache::new();
+        let fp1 = cache.utxo_fingerprint(&s.utxo_state);
+        assert_eq!(fp1, fingerprint_utxo_v2(&s.utxo_state), "first call == full scan");
+
+        // a CLONE keeps the same generation (the live track_utxo=false path) -> reuse.
+        let s_clone = s.clone();
+        assert_eq!(
+            cache.utxo_fingerprint(&s_clone.utxo_state),
+            fp1,
+            "unchanged UTxO (same generation) reuses the cached fp"
+        );
+
+        // a MUTATION bumps the generation -> recompute -> the new, correct fp.
+        s.utxo_state.utxos.insert(txin(0x02, 0), byron_out(200, 2));
+        let fp2 = cache.utxo_fingerprint(&s.utxo_state);
+        assert_ne!(fp2, fp1, "a changed UTxO must NOT reuse the stale fp");
+        assert_eq!(
+            fp2,
+            fingerprint_utxo_v2(&s.utxo_state),
+            "the recomputed fp matches the full scan"
         );
     }
 
