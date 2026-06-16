@@ -26,7 +26,7 @@ NOT a redundant redb anchor: `seed_to_snapshot` already durably stores the UTxO 
 
 **A.2.2 (DONE — wiring):** bootstrap computes `StaticUtxoFp::from_bootstrap_utxo(&utxo, initial_fp)` BEFORE `drop(utxo)` (the 1.9M-entry in-memory UTxO is freed; `ledger.utxo_state` stays empty; the durable copy is the snapshot already written). The admission `post_fp` uses `static_utxo_fp.utxo_component(next_ledger.track_utxo)?` (fail-closed exit `StaticUtxoFpInvalid` under `track_utxo=true`). Proven: `fingerprint_v2_with_utxo` ignores `state.utxo_state`, so the empty-UTxO live ledger yields the SAME post_fp as the full-UTxO ledger given the same component (byte-identical). `admission_replay_equivalence` + adversarial + cross-epoch green (wiring sound); ade_ledger 572 + ade_node 310 green.
 
-**A.2.2 part 2 (PENDING — the live owned-RSS re-measure):** run the S0/S3 scenario against the preprod docker peer; confirm owned RSS drops now the in-memory UTxO is gone (the BA-08 evidence).
+**A.2.2 part 2 (DONE — the live owned-RSS re-measure = BA-08 evidence):** live preprod docker peer (epoch 295, fresh 3.8 GB seed): active-admission owned RssAnon **1.94 GiB** (down 2.65 GiB / 58% from the 4.59 GiB baseline; **below Haskell 2.57 GiB** → BA-08 achieved); 36 blocks admitted, `replay_verdict` agreed, 0 diverged. Evidence: `docs/evidence/mem-opt-utxo-disk-s2b-2cA-owned-rss-remeasure.{jsonl,md}`. **A is now fully met; OP-MEM-02 can flip.**
 
 ## Acceptance criteria (the A merge gate)
 - [x] live behavior remains `track_utxo=false`
@@ -37,5 +37,5 @@ NOT a redundant redb anchor: `seed_to_snapshot` already durably stores the UTxO 
 - [x] static UTxO off heap (A.2.2): the in-memory UTxO is dropped after bootstrap; the existing snapshot is the durable off-heap copy
 - [x] track_utxo=true still requires a real UTxO / the redb-WorkingSet (StaticUtxoFp fails closed)
 - [x] post_fp equals the old post_fp for the same admitted blocks (empty-UTxO + static fp == full-UTxO full-scan; proven)
-- [ ] owned-RSS improves in the same S0/S3 scenario (A.2.2 part 2 — the live re-measure)
+- [x] owned-RSS improves (A.2.2 part 2 DONE): active-admission owned RssAnon **1.94 GiB** (−58% from the 4.59 GiB baseline; **below Haskell 2.57 GiB**); replay agreed, 0 diverged, 36 admits
 - [x] docs explicitly say B remains owed for full live validation (this doc)
