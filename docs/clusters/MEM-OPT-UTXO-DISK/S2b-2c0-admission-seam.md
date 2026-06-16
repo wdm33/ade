@@ -1,6 +1,6 @@
 # Slice MEM-OPT-UTXO-DISK S2b-2c.0 — admission seam specification
 
-> **Status:** Spec (doc + gate) — **the highest-risk step in S2b.** It composes three authorities that must NOT blur: RED storage I/O, BLUE validation, RED durable commit / WAL / checkpoint. This slice defines the seam + the atomicity/recovery rule BEFORE any live-path code (2c.1).
+> **Status:** **Spec (doc + gate) — the SEAM SPEC FOR B (`LIVE-LEDGER-APPLY` / `track_utxo=true`), documented + gated (`ci_check_utxo_admission_seam.sh`); NOT wired into the current live path.** It composes three authorities that must NOT blur: RED storage I/O, BLUE validation, RED durable commit / WAL / checkpoint. The current live admission runs `track_utxo=false` and took **PATH A** instead (`StaticUtxoFp` + drop; see `S2b-2cA-static-utxo.md`), so this seam is **B's plan — OWED** (it defines the atomicity/recovery rule for when the redb anchor becomes the live backend).
 > **Prior:** S2b pre-resolve wiring (`96118302`).
 
 ## 1. The seam (the admission loop becomes)

@@ -1,6 +1,6 @@
 # Slice MEM-OPT-UTXO-DISK S2b step 2 — pre-resolve dependency enumeration
 
-> **Status:** In progress. **Enumerate → prove → wire.** The pre-resolve plan: extract EVERY TxIn a tx's validation can read, resolve them from the anchor into an in-memory view, then validate over that view only. An incomplete list creates hidden lazy-fetch pressure — exactly the BLUE/RED boundary violation S2b forbids. The dependency table below is **part of the proof**, not just documentation.
+> **Status:** **DONE — built + proven as INFRASTRUCTURE FOR B (`LIVE-LEDGER-APPLY` / `track_utxo=true`).** **Enumerate → prove → wire.** The pre-resolve path (extract EVERY TxIn a tx's validation can read — inputs ∪ collateral ∪ reference — resolve them from the anchor into an in-memory `WorkingSet`, validate over that view only; `32e0da41`/`96118302`, gated by `ci_check_utxo_pre_resolve.sh`) is complete. It is the **B (`track_utxo=true`) live-validation path** — the current live admission runs `track_utxo=false`, so it does NOT use this path; the BA-08 owned-RSS win came from PATH A (see `S2b-2cA-static-utxo.md`). **OWED:** wiring this as the live backend. The dependency table below is **part of the proof**, not just documentation.
 > **Cluster:** MEM-OPT-UTXO-DISK · **Prior:** S2b redb anchor (`253ee718`).
 
 ## 1. The era-aware UTxO-dependency table (the proof artifact)

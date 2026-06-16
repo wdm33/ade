@@ -1,6 +1,6 @@
 # Slice MEM-OPT-UTXO-DISK S2b — on-disk redb UTxO anchor (pre-resolve architecture)
 
-> **Status:** In progress. The owned-RSS win: the UTxO anchor moves off the anonymous heap into an on-disk **redb** table behind a **pre-resolve** boundary. **Prior:** S2a (overlay representation, `252580d5`), S2b key codec (`6dc31213`).
+> **Status:** **DONE — built + proven as INFRASTRUCTURE FOR B (`LIVE-LEDGER-APPLY` / `track_utxo=true`), NOT the live backend for the current `track_utxo=false` path.** The on-disk **redb** `UtxoAnchor` (CoW `TxIn→TxOut`) + backend-equivalence (`253ee718`, gated by `ci_check_utxo_disk_anchor.sh`), behind a **pre-resolve** boundary, is complete. It is **NOT** the mechanism that delivered the BA-08 owned-RSS win — the live path is `track_utxo=false`, so that win came from PATH A (`StaticUtxoFp` + dropping the in-memory static UTxO; see `S2b-2cA-static-utxo.md`). Activating this anchor as the LIVE UTxO backend is **B's scope (OWED).** **Prior:** S2a (overlay representation, `252580d5`), S2b key codec (`6dc31213`).
 > **Cluster:** MEM-OPT-UTXO-DISK · DC-MEM-05 (backend-independent replay) + DC-MEM-06 (key order) + DC-MEM-07 (bounded in-memory).
 
 ## Intent

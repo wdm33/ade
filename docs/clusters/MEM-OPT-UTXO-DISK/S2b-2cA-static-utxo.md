@@ -1,6 +1,6 @@
 # Slice MEM-OPT-UTXO-DISK S2b-2c-A — static UTxO off-heap + cached fingerprint
 
-> **Status:** A.1 (cached fingerprint) DONE; A.2 (off-heap anchor) next. The bounty-critical (BA-08) memory win for the CURRENT live admission path, which runs `track_utxo=false` (it does NOT mutate the UTxO per block).
+> **Status:** **DONE — A.1 + A.2 COMPLETE; BA-08 owned-RSS win achieved** (**1.94 GiB < Haskell 2.57 GiB**; `OP-MEM-02` enforced, `c64ccbfa`). The bounty-critical (BA-08) memory win for the CURRENT live admission path, which runs `track_utxo=false` (it does NOT mutate the UTxO per block). A.2.2 re-measure evidence committed (`e6b623d5`); see the A.2.2 sections + acceptance criteria below.
 > **Prior:** the 2c pre-resolve + 2c.1a anchor machinery — proven infrastructure for the LATER `track_utxo=true` live-validation slice (B).
 
 ## Honest scope (the guardrail)
