@@ -34,7 +34,7 @@ use ade_types::tx::{Coin, TxIn};
 
 use crate::error::LedgerError;
 use crate::state::LedgerState;
-use crate::utxo::{utxo_delete, utxo_insert, TxOut};
+use crate::utxo::{utxo_delete, utxo_insert, utxo_lookup, TxOut};
 
 /// The two-phase validation model's classification.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -157,7 +157,7 @@ pub fn apply_phase_2_failure(
     // 1. Compute the fee credit from resolved collateral.
     let mut sum_collateral: u64 = 0;
     for tx_in in collateral_inputs {
-        let out = state.utxo_state.utxos.get(tx_in)?;
+        let out = utxo_lookup(&state.utxo_state, tx_in)?;
         let coin = match out {
             TxOut::Byron { coin, .. } => coin.0,
             TxOut::ShelleyMary { value, .. } => value.coin.0,

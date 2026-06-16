@@ -1,13 +1,13 @@
 # Slice MEM-OPT-UTXO-DISK S1 — owned-`utxo_lookup` BLUE interface change (CE-UD-1)
 
-> **Status:** Scoped — **BLUE interface-semantics slice (HIGH-RISK, PROOF-HEAVY).** Change the authoritative `utxo_lookup` to return an **owned `Option<TxOut>`** behind a `UtxoStore` seam, so S2 can later swap in an on-disk backend. The BTreeMap stays the ONLY backend; NO redb, NO on-disk state. Proven to NOT alter any verdict, fingerprint, or failure shape. **Interface-prep — NOT a memory victory (no `DC-MEM-07` flip).**
+> **Status:** DONE — owned `utxo_lookup` + the `UtxoStore` seam landed; the two production borrow sites (phase.rs apply_phase_2_failure, phase1.rs required-signers) routed through it; BTreeMap-only (no redb). **Proven behavior-invariant** (ade_ledger validity+fingerprint, ade_runtime DC-WAL-03 replay, ade_node admission_replay_equivalence + adversarial + cross-epoch — ALL green). **`DC-MEM-09` ENFORCED — interface-prep, NOT a memory victory (no `DC-MEM-07` flip, no `OP-MEM-02` movement).** S2 GATED on OQ-UD-3 (incremental fingerprint — post_fp is full-UTxO iteration per block).
 > **Cluster:** MEM-OPT-UTXO-DISK (primary invariant `DC-MEM-05` + `DC-MEM-07`)
 > **Cluster doc:** `docs/clusters/MEM-OPT-UTXO-DISK/cluster.md` · **Prior:** S0 (verdict `bootstrap_transient_but_admission_live_working_set` — the admission footprint is live ⇒ on-disk backend is the lever)
 
 ## 2. Slice Header
 
 ### Cluster Exit Criteria Addressed
-- [ ] **CE-UD-1** (S1 INTERFACE): `utxo_lookup` returns owned `Option<TxOut>`; the BTreeMap is the ONLY backend (no redb); ALL ledger-validity tests green; the replay corpus byte-identical; the UTxO fingerprint identical before/after for the same state; structured errors unchanged; no new clone-heavy path in block admission; registry marks this interface-prep (**no `DC-MEM-07` flip**).
+- [x] **CE-UD-1** (S1 INTERFACE): **MET.** `utxo_lookup` returns owned `Option<TxOut>` behind the `UtxoStore` seam; BTreeMap is the only backend; all ledger-validity tests green; replay corpus byte-identical (DC-WAL-03); the fingerprint path is untouched (trivially identical) + `owned_lookup_returns_stored_value_and_does_not_mutate`; structured errors unchanged (adversarial corpus); the per-lookup clone is a single bounded `TxOut`, never a map clone; `DC-MEM-09` ENFORCED as interface-prep (**no `DC-MEM-07` flip**). Gate: `ci/ci_check_utxo_lookup_owned.sh`.
 
 ### Intent
 S0 proved the active-admission footprint is a **live working set** ⇒ the structural lever is the on-disk UTxO backend (S2). But the current authoritative lookup `utxo_lookup(&UTxOState, &TxIn) -> Option<&TxOut>` (`ade_ledger/src/utxo.rs:116`) returns a **borrow into the BTreeMap** — an on-disk backend cannot hand out a borrow into redb without leaking storage lifetimes everywhere or inventing guard semantics that complicate validation. S1 changes the lookup to return an **owned `Option<TxOut>`** — the cleaner authority boundary — and **proves the change is authoritative-output-invariant** (verdicts, fingerprints, failure shapes unchanged). The BLUE interface change is ISOLATED from the storage swap (S2) so it can be replay-proved on its own.

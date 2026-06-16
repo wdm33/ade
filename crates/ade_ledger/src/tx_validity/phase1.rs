@@ -57,6 +57,7 @@ use ade_types::{CardanoEra, Hash32};
 
 use crate::error::LedgerError;
 use crate::state::LedgerState;
+use crate::utxo::utxo_lookup;
 use crate::witness::WitnessInfo;
 
 use super::required_signers::{required_signers, tx_derived_required_signers, ResolvedInputs, ResolvedOutput};
@@ -158,7 +159,7 @@ pub fn tx_phase_one(ledger: &LedgerState, decoded: &DecodedTx) -> Result<(), TxV
             .iter()
             .chain(decoded.body.collateral_inputs.iter().flat_map(|c| c.iter()))
         {
-            match ledger.utxo_state.utxos.get(input) {
+            match utxo_lookup(&ledger.utxo_state, input) {
                 Some(out) => {
                     resolved.insert(
                         input.clone(),

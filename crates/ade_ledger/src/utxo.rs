@@ -84,6 +84,22 @@ impl Default for UTxOState {
     }
 }
 
+/// MEM-OPT-UTXO-DISK S1: the seam for a swappable UTxO backend. The authoritative
+/// lookup returns an OWNED value, never a borrow into storage, so a later on-disk
+/// backend (S2) can resolve inputs without leaking storage lifetimes into the
+/// validity rules. In S1 the in-memory BTreeMap (`UTxOState`) is the SOLE impl;
+/// this is interface-prep — no behavioral change, no bounded-storage memory win.
+pub trait UtxoStore {
+    /// Resolve an input to its output, BY VALUE. `None` if absent.
+    fn get(&self, tx_in: &TxIn) -> Option<TxOut>;
+}
+
+impl UtxoStore for UTxOState {
+    fn get(&self, tx_in: &TxIn) -> Option<TxOut> {
+        self.utxos.get(tx_in).cloned()
+    }
+}
+
 /// Insert a UTxO — pure, returns new state.
 pub fn utxo_insert(state: &UTxOState, tx_in: TxIn, tx_out: TxOut) -> UTxOState {
     let mut new_utxos = state.utxos.clone();
@@ -112,9 +128,12 @@ pub fn utxo_delete(
     Ok((UTxOState { utxos: new_utxos }, tx_out))
 }
 
-/// Lookup a UTxO — no mutation.
-pub fn utxo_lookup<'a>(state: &'a UTxOState, tx_in: &TxIn) -> Option<&'a TxOut> {
-    state.utxos.get(tx_in)
+/// Lookup a UTxO — no mutation. Returns an OWNED value (S1: the swappable-backend
+/// interface; an on-disk backend cannot hand out a borrow into storage). The clone
+/// is a single `TxOut`, never a map clone; the resolved VALUE is identical, so no
+/// verdict / fingerprint / failure-shape change.
+pub fn utxo_lookup(state: &UTxOState, tx_in: &TxIn) -> Option<TxOut> {
+    state.get(tx_in)
 }
 
 /// Check for duplicate inputs in a list.
@@ -157,7 +176,7 @@ mod tests {
         let tx_out = make_byron_out(1_000_000);
 
         let state2 = utxo_insert(&state, tx_in.clone(), tx_out.clone());
-        assert_eq!(utxo_lookup(&state2, &tx_in), Some(&tx_out));
+        assert_eq!(utxo_lookup(&state2, &tx_in), Some(tx_out));
     }
 
     #[test]
@@ -208,5 +227,21 @@ mod tests {
         let s2 = utxo_insert(&s2, make_tx_in(0x02, 0), make_byron_out(200));
 
         assert_eq!(s1, s2);
+    }
+
+    #[test]
+    fn owned_lookup_returns_stored_value_and_does_not_mutate() {
+        // MEM-OPT-UTXO-DISK S1: the owned interface returns a value EQUAL to the
+        // stored entry (so every resolved output feeding validation + the
+        // fingerprint is identical to the borrow it replaces), and a lookup never
+        // mutates the store.
+        let tx_in = make_tx_in(0x77, 3);
+        let tx_out = make_byron_out(2_500_000);
+        let state = utxo_insert(&UTxOState::new(), tx_in.clone(), tx_out.clone());
+        let before = state.clone();
+        assert_eq!(utxo_lookup(&state, &tx_in), Some(tx_out.clone()));
+        assert_eq!(UtxoStore::get(&state, &tx_in), Some(tx_out));
+        assert_eq!(state, before, "a lookup must not mutate the store");
+        assert_eq!(utxo_lookup(&state, &make_tx_in(0x99, 0)), None);
     }
 }
