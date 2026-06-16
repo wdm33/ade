@@ -24,29 +24,28 @@
 
 ## 4. What Changes (slices)
 - **S0 — DIAGNOSTIC (GREEN/RED). Lands first.** A phase-resolved owned-RSS timeline (t1 post-import → t2 snapshot-serializing → t3 post-snapshot-after-reclaim → t4 steady-follow) + a **RED-only forced-reclaim/decay probe** at t3, classifying the ~4.6 GiB active-admission owned footprint as **`serialization_transient` | `live_working_set` | `mixed`**. NO storage change, NO BLUE. **Decides the cluster's structural direction.** *(`CE-UD-0`.)*
-- **S1+ — STRUCTURAL (DEFERRED, S0-gated; shape TBD after S0).** One of, per S0's classification:
-  - `serialization_transient` → a **contained `seed_to_snapshot` serialization-streaming fix** (don't materialize the full serialized image in heap). Steady-state owned is already below Haskell's 2.57 GiB → this alone could clear BA-08; the on-disk UTxO becomes the mainnet-scalability lever, not a preprod-win prerequisite.
-  - `live_working_set` → the **full bounded in-memory UTxO backend** (storage-backed `TxIn→TxOut` over `redb` + a bounded read cache + a k-deep changelog overlay; `DC-MEM-05`/`DC-MEM-07`), behind the unchanged BLUE ledger interface.
-  - `mixed` → scope BOTH and sequence the cheaper (serialization-streaming) first.
-  These are **not designed until S0 classifies.**
+- **S1 — INTERFACE (BLUE interface-semantics; high-risk, proof-heavy). Lands next.** Introduce a `UtxoStore` abstraction and change the authoritative lookup `utxo_lookup` to return an **owned `Option<TxOut>`** (an on-disk backend cannot hand out a borrow into storage). The BTreeMap stays the ONLY backend — NO redb, NO on-disk state yet. A **BLUE interface change**, isolated and **proven replay-equivalent** (identical verdicts, fingerprints, failure shapes) BEFORE storage is swapped underneath it. Interface-prep, NOT a memory victory — **NO `DC-MEM-07` flip in S1**. *(`CE-UD-1`.)*
+- **S2 — ON-DISK STORAGE (RED, behind the S1 interface; the owned-RSS lever). Deferred + GATED.** The copy-on-write **anchor** (redb `TxIn→TxOut`, on disk) + a **bounded in-memory k-deep changelog overlay** + a **bounded read-through cache** (non-authoritative); lookup overlay→cache→disk; mutation appends a delta (no full-map clone). `DC-MEM-05` (backend-independent replay) + `DC-MEM-07` (bounded in-memory). **S2 CANNOT START until OQ-UD-3 is answered:** block admission today computes `post_fp` by FULL-UTxO iteration per block (`runner.rs:437` → `fingerprint_utxo`), so an on-disk backend ALONE would replace heap pressure with catastrophic per-block disk iteration — S2 needs an **incremental-fingerprint** plan first. *(`CE-UD-2`.)*
 
 ## 5. Exit Criteria (CE — each CI-verifiable)
-- **CE-UD-0 (S0 DIAGNOSTIC) [S0]:** a committed run that reproduces the S3 scenario (**same seed, same recovered anchor, same `initial_ledger_fp` `fb7cb12a…`, same replay verdict `agreed`**) AND carries a **phase-resolved owned-memory artifact** (t1–t4 `RssAnon`/`Private_Dirty` + the t3 pre/post-reclaim delta) AND records an **explicit classification ∈ {`serialization_transient`, `live_working_set`, `mixed`}** AND a **next-slice recommendation derived from that classification**. The forced-reclaim probe is RED-only diagnostic. `ci/ci_check_mem_opt_utxo_disk_s0.sh` green (+ `--self-test`).
-- **CE-UD-1+ (STRUCTURAL) [S1+]: TBD after S0.** Any structural slice MUST satisfy: `DC-MEM-05` (the replay corpus runs **byte-identically under both backends**), `DC-MEM-07` (the in-memory portion is fixed-bounded), the `DC-MEM-06` store-iteration-order closure (canonical encoder over fixed-width big-endian keys; fingerprint never from native iteration), per-block atomic commit (a torn commit is rejected — negative test), and the A2 discipline (`memory_summary{replay_verdict=agreed}`). Not pre-committed.
+- **CE-UD-0 (S0 DIAGNOSTIC) [S0]: ✅ MET.** Committed live run (same seed/anchor, `initial_ledger_fp fb7cb12a…`, replay `agreed`, 0 diverged, 34 admits) + the t1–t5 phase timeline + the honest verdict `bootstrap_transient_but_admission_live_working_set` + the next-slice recommendation. `ci/ci_check_mem_opt_utxo_disk_s0.sh` + `ci/ci_check_mem_diag_quarantine.sh` green.
+- **CE-UD-1 (S1 INTERFACE) [S1]:** `utxo_lookup` returns owned `Option<TxOut>`; the BTreeMap is the ONLY backend (no redb); ALL ledger-validity tests green; the replay corpus byte-identical; the UTxO fingerprint identical before/after for the same state; structured errors unchanged; no new clone-heavy path in block admission; the registry marks this **interface-prep, not a memory victory** (**no `DC-MEM-07` flip**). A proof-heavy BLUE-interface slice.
+- **CE-UD-2 (S2 ON-DISK STORAGE) [S2]: GATED on OQ-UD-3.** `DC-MEM-05` (same replay sequence under BTreeMap AND redb → identical UTxO fingerprints, WAL/checkpoint fingerprints, replay verdicts, structured errors), `DC-MEM-07` (bounded overlay + cache, fixed closed constants), redb key order **proven** equal to the canonical `TxIn` order (a test-vector gate — else an explicit fixed-width key `txid ++ BE-u32 index`), per-block atomic commit (torn-commit rejected — negative test), cache eviction proven NOT to alter authoritative outputs, owned RSS drops to the target band.
 - **CE-UD-close [/cluster-close]:** `OP-MEM-02` records the new operational standing; if a lever clears the owned target, the comparison verdict flips `ade_heavier` → `ade_below` (the BA-08 win, honestly + mechanically gated); grounding docs refreshed.
 
 ## 6. Expected Slices
-- **S0** DIAGNOSTIC — CE-UD-0 — GREEN/RED. **Lands first; gates the rest.**
-- **S1+** STRUCTURAL — CE-UD-1+ — TBD (S0-gated). RED storage behind the unchanged BLUE ledger interface (snapshot-streaming and/or on-disk UTxO backend).
+- **S0** DIAGNOSTIC — CE-UD-0 — GREEN/RED. **DONE** (verdict: admission footprint is a live working set).
+- **S1** INTERFACE — CE-UD-1 — **BLUE** (the owned-`utxo_lookup` change, proven replay-equivalent). **Lands next.**
+- **S2** ON-DISK STORAGE — CE-UD-2 — RED behind the S1 interface (redb anchor + bounded overlay + cache). **Deferred + GATED on OQ-UD-3** (incremental fingerprint).
 
 ## 7. TCB Color Map
-- **BLUE:** none in S0. The structural slices keep the ledger interface UNCHANGED (`utxo_lookup`/`utxo_insert` signatures); the UTxO store is **RED behind the unchanged BLUE authority** (FC/IS) — validation is a pure function of resolved UTxO values and never branches on disk-vs-memory.
+- **BLUE:** none in S0. **S1 is a BLUE interface-semantics change** (`utxo_lookup` → owned `Option<TxOut>`) — proven verdict/fingerprint/failure-shape-equivalent. S2's UTxO STORE is **RED behind the S1 interface** (FC/IS) — validation is a pure function of resolved UTxO values and never branches on disk-vs-memory.
 - **GREEN:** the phase-marker / classification logic + the evidence schema.
 - **RED:** the owned sampler, the phase taps, the **forced-reclaim probe (diagnostic only)** — quarantined in the dedicated **`ade_mem_diag`** crate (the workspace's sole unsafe-FFI surface) so `ade_node` keeps `#![deny(unsafe_code)]` with zero local allows — and (later) the storage backend.
 - **Affected gates:** new `ci/ci_check_mem_opt_utxo_disk_s0.sh` (S0 timeline + honest classification + replay `agreed`) + `ci/ci_check_mem_diag_quarantine.sh` (the unsafe quarantine enforcement); the 2 phase points added to the closed POINTS vocabulary in `ci_check_mem_measure_evidence.sh`; reused `ci_check_mem_opt_s3_owned.sh`, the replay corpus (`DC-WAL-03`).
 
 ## 8. Forbidden During This Cluster
-1. **No BLUE semantic change** — the UTxO storage is a representation/storage change behind the unchanged ledger interface; validation never branches on disk-vs-memory.
+1. **No BLUE *behavioral* change** — S1 changes the `utxo_lookup` SIGNATURE (→ owned) but MUST NOT alter any verdict, fingerprint, or failure shape (proven). S2's storage swap never branches validation on disk-vs-memory. The authoritative outputs are invariant across both.
 2. **The forced-reclaim probe is RED-only DIAGNOSTIC.** It MUST NOT become authoritative behavior or a hidden dependency for passing BA-08. If a future production path needs memory-release behavior, that is scoped **separately as operational/runtime policy, never BLUE semantics.** *(Standing user guardrail.)*
 3. **No fingerprint from store iteration order** (`DC-MEM-06`) — canonical encoder over fixed-width big-endian keys only; the on-disk store's sorted-key iteration must equal RFC-8949 canonical order by key construction, never relied on natively.
 4. **No unbounded in-memory growth** (`DC-MEM-07`) — fixed, closed, non-configurable constants for the cache + the k-deep changelog.
@@ -57,9 +56,10 @@
 `DC-MEM-05`: same WAL + checkpoint ⇒ byte-identical post-state AND fingerprint, **regardless of the UTxO backend**. S0 does NOT change the backend, so it trivially preserves this (it reproduces the S3 fingerprint exactly). Every structural slice carries the **backend-independent replay corpus** (`replay_from_anchor` / the boundary+stateful corpus run under both backends) as a hard obligation.
 
 ## 10. Open Questions
-- **OQ-UD-0 (the S0 question):** is the ~4.6 GiB active-admission owned footprint `serialization_transient`, `live_working_set`, or `mixed`? **Answered by S0.**
-- **OQ-UD-1 (structural shape, S0-gated):** snapshot-serialization streaming fix vs the full bounded in-memory UTxO backend (redb `TxIn→TxOut` + bounded cache + k-deep changelog) vs both.
-- **OQ-UD-2 (mainnet scale):** if the path is on-disk, confirm it scales to mainnet ~10–15M UTxO without an owned-footprint blow-up (the point of UTxO-HD).
+- **OQ-UD-0 (the S0 question): ANSWERED** — the active-admission footprint is a **live working set** (re-accumulates after a forced collect during admission). The bootstrap serialization is fully reclaimable (not the active cost).
+- **OQ-UD-1 (structural shape): RESOLVED** — the **on-disk / bounded in-memory UTxO backend** (S2), not the snapshot-streaming fix.
+- **OQ-UD-3 (per-block `post_fp` — S2 ENTRY GATE, OPEN):** block admission computes `post_fp` by **full-UTxO iteration per block** (`runner.rs:437` → `fingerprint(&next_ledger).combined` → `fingerprint_utxo` iterates the whole map). An on-disk backend ALONE would make that a per-block disk scan. **S2 cannot start until an incremental-fingerprint plan exists** (compute `post_fp` from the per-block delta, not a full scan). S1 carries this as an explicit open obligation.
+- **OQ-UD-2 (mainnet scale):** confirm the on-disk design scales to mainnet ~10–15M UTxO without an owned blow-up (the point of UTxO-HD).
 
 ## 11. Cluster Close Record
 *(Filled at `/cluster-close`.)*
