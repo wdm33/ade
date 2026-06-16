@@ -37,8 +37,8 @@
 ## 6. Expected Slices
 - **S0** DIAGNOSTIC — CE-UD-0 — GREEN/RED. **DONE** (verdict: admission footprint is a live working set).
 - **S1** INTERFACE — CE-UD-1 — **BLUE** (owned `utxo_lookup`). **DONE** (`103361c1`, `DC-MEM-09`).
-- **S1.5** VERSIONED INCREMENTAL UTxO FINGERPRINT (v2) — CE-UD-1.5 — **BLUE** (resolves OQ-UD-3; the S2 prerequisite). Phases S1.5a (full-recompute oracle) → S1.5b (incremental == oracle). **Lands next.**
-- **S2** ON-DISK STORAGE — CE-UD-2 — RED behind the S1 interface (redb anchor + bounded overlay + cache). **Deferred + GATED on S1.5.**
+- **S1.5** VERSIONED INCREMENTAL UTxO FINGERPRINT (v2) — CE-UD-1.5 — **BLUE**. **DONE** (`aea2eba3`, `DC-MEM-10`): the Ristretto255 ECMH set commitment + the full-recompute oracle + the per-block incremental (proven == oracle) + the production cutover (`fingerprint()`=v2 everywhere, `fingerprint_v1` frozen, store `FINGERPRINT_VERSION=2` fail-closed). OQ-UD-3 resolved.
+- **S2** ON-DISK UTxO BACKEND — CE-UD-2 — the owned-RSS lever. **UNBLOCKED.** Two phases: **S2a** (overlay representation, **BLUE**, in-memory — the clone-model change, replay-proved) → **S2b** (on-disk redb anchor + bounded overlay + bounded cache, **RED** — `DC-MEM-05`/`DC-MEM-07`, the owned-RSS win). **S2a lands next.**
 
 ## 7. TCB Color Map
 - **BLUE:** none in S0. **S1 is a BLUE interface-semantics change** (`utxo_lookup` → owned `Option<TxOut>`) — proven verdict/fingerprint/failure-shape-equivalent. S2's UTxO STORE is **RED behind the S1 interface** (FC/IS) — validation is a pure function of resolved UTxO values and never branches on disk-vs-memory.
