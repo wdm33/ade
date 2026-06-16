@@ -190,7 +190,7 @@ pub fn load_genesis_utxo(dump_path: &Path) -> Result<UTxOState, HarnessError> {
         utxos.insert(tx_in, tx_out);
     }
 
-    Ok(UTxOState { utxos })
+    Ok(UTxOState::from_map(utxos))
 }
 
 fn cbor_err(e: ade_codec::CodecError) -> HarnessError {

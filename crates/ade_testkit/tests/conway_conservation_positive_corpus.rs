@@ -101,7 +101,7 @@ fn ledger_576_with_utxo(utxo: BTreeMap<TxIn, TxOut>) -> ade_ledger::state::Ledge
     let mut l = ade_ledger::state::LedgerState::new(CardanoEra::Conway);
     l.epoch_state.epoch = ade_types::EpochNo(576);
     l.track_utxo = true;
-    l.utxo_state = UTxOState { utxos: utxo };
+    l.utxo_state = UTxOState::from_map(utxo);
     // Mainnet Conway deposit params. These do not affect the corpus txs (their
     // certs are all Neutral delegations — no deposit/refund terms), but the
     // canonical surface must be present for any Conway state at track_utxo=true.

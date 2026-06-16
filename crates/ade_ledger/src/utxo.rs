@@ -9,6 +9,7 @@ use std::collections::BTreeMap;
 use ade_types::address::Address;
 use ade_types::tx::{Coin, TxIn};
 use crate::error::{DuplicateInputError, InputNotFoundError, LedgerError};
+use crate::utxo_overlay::OverlayUtxo;
 use crate::value::Value;
 
 /// Era-polymorphic transaction output.
@@ -56,16 +57,26 @@ impl TxOut {
     }
 }
 
-/// Minimal UTxO state — deterministic BTreeMap for ordered iteration.
+/// Minimal UTxO state — an overlay-backed store (MEM-OPT-UTXO-DISK S2a): an
+/// `Arc`-shared anchor + a bounded overlay, so a clone is O(overlay) and a mutation
+/// is an overlay append (no full-map clone). Iteration is canonical `TxIn` order.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct UTxOState {
-    pub utxos: BTreeMap<TxIn, TxOut>,
+    pub utxos: OverlayUtxo,
 }
 
 impl UTxOState {
     pub fn new() -> Self {
         UTxOState {
-            utxos: BTreeMap::new(),
+            utxos: OverlayUtxo::new(),
+        }
+    }
+
+    /// Build from a full UTxO map (seed import / snapshot decode): the map becomes
+    /// the shared anchor; the overlay starts empty.
+    pub fn from_map(utxos: BTreeMap<TxIn, TxOut>) -> Self {
+        UTxOState {
+            utxos: OverlayUtxo::from_map(utxos),
         }
     }
 
@@ -84,48 +95,86 @@ impl Default for UTxOState {
     }
 }
 
+/// Membership view over a UTxO set — the minimum an input-presence check needs
+/// (no value materialization). Implemented for the production stores AND any
+/// `BTreeMap<TxIn, V>`, so a test fixture can use a set-like `BTreeMap<TxIn, ()>`
+/// for pure membership while production resolves through the on-disk-capable seam.
+pub trait UtxoMembership {
+    /// `true` iff a live entry exists for `tx_in`.
+    fn contains_key(&self, tx_in: &TxIn) -> bool;
+}
+
 /// MEM-OPT-UTXO-DISK S1: the seam for a swappable UTxO backend. The authoritative
 /// lookup returns an OWNED value, never a borrow into storage, so a later on-disk
 /// backend (S2) can resolve inputs without leaking storage lifetimes into the
-/// validity rules. In S1 the in-memory BTreeMap (`UTxOState`) is the SOLE impl;
-/// this is interface-prep — no behavioral change, no bounded-storage memory win.
-pub trait UtxoStore {
+/// validity rules. Every `UtxoStore` is a [`UtxoMembership`] — membership is
+/// answerable without materializing the value.
+pub trait UtxoStore: UtxoMembership {
     /// Resolve an input to its output, BY VALUE. `None` if absent.
     fn get(&self, tx_in: &TxIn) -> Option<TxOut>;
 }
 
-impl UtxoStore for UTxOState {
-    fn get(&self, tx_in: &TxIn) -> Option<TxOut> {
-        self.utxos.get(tx_in).cloned()
+impl<V> UtxoMembership for BTreeMap<TxIn, V> {
+    fn contains_key(&self, tx_in: &TxIn) -> bool {
+        BTreeMap::contains_key(self, tx_in)
+    }
+}
+impl UtxoMembership for OverlayUtxo {
+    fn contains_key(&self, tx_in: &TxIn) -> bool {
+        OverlayUtxo::contains_key(self, tx_in)
+    }
+}
+impl UtxoMembership for UTxOState {
+    fn contains_key(&self, tx_in: &TxIn) -> bool {
+        self.utxos.contains_key(tx_in)
     }
 }
 
-/// Insert a UTxO — pure, returns new state.
+impl UtxoStore for UTxOState {
+    fn get(&self, tx_in: &TxIn) -> Option<TxOut> {
+        self.utxos.get(tx_in)
+    }
+}
+
+impl UtxoStore for OverlayUtxo {
+    fn get(&self, tx_in: &TxIn) -> Option<TxOut> {
+        OverlayUtxo::get(self, tx_in)
+    }
+}
+
+/// The in-memory map is also a `UtxoStore` — lets test fixtures keep building plain
+/// `BTreeMap`s while the validation chain resolves through the abstract seam.
+impl UtxoStore for BTreeMap<TxIn, TxOut> {
+    fn get(&self, tx_in: &TxIn) -> Option<TxOut> {
+        BTreeMap::get(self, tx_in).cloned()
+    }
+}
+
+/// Insert a UTxO — pure, returns new state. The clone is O(overlay) (the anchor
+/// `Arc` is shared) and the insert is an overlay append (O(1)) — no full-map clone
+/// (MEM-OPT-UTXO-DISK S2a).
 pub fn utxo_insert(state: &UTxOState, tx_in: TxIn, tx_out: TxOut) -> UTxOState {
-    let mut new_utxos = state.utxos.clone();
-    new_utxos.insert(tx_in, tx_out);
-    UTxOState { utxos: new_utxos }
+    let mut new_store = state.utxos.clone();
+    new_store.insert(tx_in, tx_out);
+    UTxOState { utxos: new_store }
 }
 
 /// Delete a UTxO — returns new state + the consumed output, or InputNotFoundError.
+/// The clone is O(overlay) and the delete is an overlay tombstone (O(1)) — no
+/// full-map clone (MEM-OPT-UTXO-DISK S2a). The structured `InputNotFound` shape and
+/// the resolved value are byte-identical to the BTreeMap model.
 pub fn utxo_delete(
     state: &UTxOState,
     tx_in: &TxIn,
 ) -> Result<(UTxOState, TxOut), LedgerError> {
-    let tx_out = state
-        .utxos
-        .get(tx_in)
-        .ok_or_else(|| {
-            LedgerError::InputNotFound(InputNotFoundError {
-                tx_in: tx_in.clone(),
-            })
-        })?
-        .clone();
+    let mut new_store = state.utxos.clone();
+    let tx_out = new_store.remove(tx_in).ok_or_else(|| {
+        LedgerError::InputNotFound(InputNotFoundError {
+            tx_in: tx_in.clone(),
+        })
+    })?;
 
-    let mut new_utxos = state.utxos.clone();
-    new_utxos.remove(tx_in);
-
-    Ok((UTxOState { utxos: new_utxos }, tx_out))
+    Ok((UTxOState { utxos: new_store }, tx_out))
 }
 
 /// Lookup a UTxO — no mutation. Returns an OWNED value (S1: the swappable-backend

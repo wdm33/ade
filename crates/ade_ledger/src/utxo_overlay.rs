@@ -122,9 +122,64 @@ impl OverlayUtxo {
         map
     }
 
-    /// Iterate the effective set in canonical `TxIn` order (owned entries).
-    pub fn iter(&self) -> impl Iterator<Item = (TxIn, TxOut)> {
-        self.to_map().into_iter()
+    /// Iterate the effective set in canonical `TxIn` order, BORROWING (a streaming
+    /// merge of anchor + overlay -- NO full-map materialization, so a per-block
+    /// full scan allocates nothing beyond the consumer's own use). Tombstones are
+    /// skipped; on a key collision the overlay overrides the anchor. This mirrors
+    /// `BTreeMap::iter` (zero-clone borrows), so the fingerprint / snapshot scans
+    /// keep their pre-S2a allocation profile.
+    pub fn iter(&self) -> impl Iterator<Item = (&TxIn, &TxOut)> {
+        let mut anchor = self.anchor.iter().peekable();
+        let mut overlay = self.overlay.iter().peekable();
+        std::iter::from_fn(move || loop {
+            use std::cmp::Ordering::{Equal, Greater, Less};
+            let ord = match (anchor.peek(), overlay.peek()) {
+                (Some((ak, _)), Some((ok, _))) => ak.cmp(ok),
+                (Some(_), None) => Less,    // only anchor left
+                (None, Some(_)) => Greater, // only overlay left
+                (None, None) => return None,
+            };
+            match ord {
+                Less => {
+                    // anchor key strictly smaller (or overlay exhausted): emit it.
+                    return anchor.next();
+                }
+                Greater => {
+                    // overlay key strictly smaller (or anchor exhausted): emit it
+                    // unless it is a tombstone for a key absent from the anchor.
+                    if let Some((k, slot)) = overlay.next() {
+                        if let Some(v) = slot.as_ref() {
+                            return Some((k, v));
+                        }
+                    }
+                }
+                Equal => {
+                    // same key: the overlay overrides the anchor (value or delete).
+                    anchor.next();
+                    if let Some((k, slot)) = overlay.next() {
+                        if let Some(v) = slot.as_ref() {
+                            return Some((k, v));
+                        }
+                    }
+                }
+            }
+        })
+    }
+
+    /// Iterate the live outputs in canonical `TxIn` order (borrowing).
+    pub fn values(&self) -> impl Iterator<Item = &TxOut> {
+        self.iter().map(|(_, v)| v)
+    }
+
+    /// Iterate the live inputs in canonical order (borrowing).
+    pub fn keys(&self) -> impl Iterator<Item = &TxIn> {
+        self.iter().map(|(k, _)| k)
+    }
+
+    /// `BTreeMap`-shaped alias for [`contains`](Self::contains) -- keeps the call
+    /// sites that read `.utxos.contains_key(..)` unchanged across the swap.
+    pub fn contains_key(&self, tx_in: &TxIn) -> bool {
+        self.contains(tx_in)
     }
 
     /// Fold the overlay into a FRESH anchor and clear it. The effective set is
@@ -161,6 +216,16 @@ impl PartialEq for OverlayUtxo {
     }
 }
 impl Eq for OverlayUtxo {}
+
+impl<'a> IntoIterator for &'a OverlayUtxo {
+    type Item = (&'a TxIn, &'a TxOut);
+    type IntoIter = Box<dyn Iterator<Item = (&'a TxIn, &'a TxOut)> + 'a>;
+    /// `for (tx_in, tx_out) in &store` -- the borrowing streaming merge, so the
+    /// `&state.utxos` iteration sites keep working unchanged across the swap.
+    fn into_iter(self) -> Self::IntoIter {
+        Box::new(self.iter())
+    }
+}
 
 #[cfg(test)]
 #[allow(clippy::unwrap_used)]
@@ -227,10 +292,15 @@ mod tests {
             }
             assert_eq!(store.get(&txin(0xee, 0)), None, "absent get must be None");
         }
-        // iteration order is canonical (== the BTreeMap's).
-        let iterated: Vec<_> = store.iter().collect();
+        // iteration order is canonical (== the BTreeMap's); iter() borrows.
+        let iterated: Vec<_> = store.iter().map(|(k, v)| (k.clone(), v.clone())).collect();
         let expected: Vec<_> = model.into_iter().collect();
         assert_eq!(iterated, expected, "iteration order must be canonical");
+        // values()/keys() mirror the BTreeMap's borrowing iterators.
+        let vals: Vec<_> = store.values().cloned().collect();
+        let keys: Vec<_> = store.keys().cloned().collect();
+        assert_eq!(vals, expected.iter().map(|(_, v)| v.clone()).collect::<Vec<_>>());
+        assert_eq!(keys, expected.iter().map(|(k, _)| k.clone()).collect::<Vec<_>>());
     }
 
     #[test]

@@ -941,11 +941,13 @@ tier = "derived"
 statement = "The in-memory portion of the UTxO (read cache + last-k changelog) is bounded by fixed, closed, non-configurable constants; memory pressure cannot grow it unboundedly, and the bound never changes an authoritative output."
 source = "classification_table.md §H; MEM-OPT cluster plan"
 cross_ref = ["CN-MEM-01", "DC-MEM-05"]
-code_locus = ""
-tests = []
-ci_script = ""
-status = "declared"
-evidence_notes = "Declared at MEM-OPT scoping (2026-06-15). Reuses the established fixed-closed-bound pattern (MAX_SERVE_RANGE_BLOCKS / MAX_WIRE_PUMP_LOOKAHEAD / the A1 admission budgets). The k-deep changelog window is bounded by the security parameter; the read cache by a fixed cap."
+code_locus = "crates/ade_ledger/src/utxo_overlay.rs; ci/ci_check_overlay_utxo_s2a.sh"
+tests = ["overlay_matches_btreemap_across_a_sequence", "compact_preserves_effective_set_and_clears_overlay", "clone_shares_anchor_and_is_independent", "s2a_overlay_split_fingerprints_identically_to_direct_build"]
+ci_script = "ci/ci_check_overlay_utxo_s2a.sh"
+status = "partial"
+introduced_in = "MEM-OPT-UTXO-DISK"
+strengthened_in = []
+evidence_notes = "Declared at MEM-OPT scoping (2026-06-15). Reuses the established fixed-closed-bound pattern (MAX_SERVE_RANGE_BLOCKS / MAX_WIRE_PUMP_LOOKAHEAD / the A1 admission budgets). The k-deep changelog window is bounded by the security parameter; the read cache by a fixed cap. PARTIAL at MEM-OPT-UTXO-DISK S2a (2026-06-16): the in-memory CHANGELOG/overlay bound is now MECHANICALLY ENFORCED -- ade_ledger::utxo_overlay::OverlayUtxo is an Arc-shared anchor + a BOUNDED overlay (Some=insert / None=delete tombstone) capped by the fixed, closed, non-configurable MAX_OVERLAY_ENTRIES; exceeding it folds the overlay into a fresh anchor (compact()), so the in-memory diff never grows unboundedly. A clone is O(overlay) (the anchor Arc is shared, not copied) and a mutation is an overlay append (utxo_insert/utxo_delete no longer clone the whole BTreeMap). Proven bound-invisible-to-output: overlay_matches_btreemap_across_a_sequence (effective set + len + iteration match a reference BTreeMap across an insert/remove/update sequence WITH compaction interleaved), compact_preserves_effective_set_and_clears_overlay, clone_shares_anchor_and_is_independent (cheap Arc clone + copy-on-write), s2a_overlay_split_fingerprints_identically_to_direct_build (an overlay-split state -- anchor holds a now-spent entry, overlay carries insert+tombstone -- fingerprints byte-identically to a direct build); ci_check_overlay_utxo_s2a.sh asserts the anchor/overlay shape + the bound + compaction + the &impl UtxoStore / UtxoMembership seam + no redb (in-memory only). The READ-CACHE bound clause stays DECLARED pending S2b (the on-disk redb anchor + bounded read-through cache). S2a is NOT the owned-RSS win (the anchor is still fully in memory) -- it de-risks the clone-model change before the disk swap."
 
 [[rules]]
 id = "DC-MEM-08"

@@ -19,7 +19,9 @@
 //! (`BadInputsUTxO`, `InsufficientCollateral`, etc.) for future
 //! wire-level agreement.
 
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeSet;
+#[cfg(test)]
+use std::collections::BTreeMap;
 
 use ade_crypto::blake2b::blake2b_256;
 use ade_types::tx::{Coin, TxIn};
@@ -48,9 +50,9 @@ use crate::error::{
 /// On success, returns `Ok(())`. On any missing input, returns
 /// `LedgerError::BadInputs` carrying the full missing set (not just
 /// the first one — mirrors Haskell's `NonEmptySet` payload).
-pub fn check_inputs_present<V>(
+pub fn check_inputs_present(
     inputs: &BTreeSet<TxIn>,
-    utxo: &BTreeMap<TxIn, V>,
+    utxo: &impl crate::utxo::UtxoMembership,
 ) -> Result<(), LedgerError> {
     let mut missing: BTreeSet<TxIn> = BTreeSet::new();
     for tx_in in inputs {

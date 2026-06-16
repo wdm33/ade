@@ -2285,7 +2285,7 @@ fn decode_and_phase_one(
     era: CardanoEra,
     data: &[u8],
     offset: &mut usize,
-    utxo: &std::collections::BTreeMap<ade_types::tx::TxIn, crate::utxo::TxOut>,
+    utxo: &impl crate::utxo::UtxoStore,
     wi: &crate::witness::WitnessInfo,
     collateral_percent: u16,
     current_network: u8,

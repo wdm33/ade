@@ -75,7 +75,7 @@ pub fn decode_utxo_state(bytes: &[u8]) -> Result<UTxOState, SnapshotDecodeError>
         let tx_out = read_tx_out(bytes, &mut o)?;
         utxos.insert(tx_in, tx_out);
     }
-    Ok(UTxOState { utxos })
+    Ok(UTxOState::from_map(utxos))
 }
 
 // ---------------------------------------------------------------------------

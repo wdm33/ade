@@ -118,7 +118,7 @@ pub fn import_cardano_cli_json_utxo(
     }
     // Reject trailing data after the top-level object (no best-effort accept).
     de.end().map_err(JsonSeedError::from)?;
-    let state = UTxOState { utxos };
+    let state = UTxOState::from_map(utxos);
     let fingerprint = compute_utxo_fingerprint(&state);
     Ok((state, fingerprint))
 }
@@ -142,7 +142,7 @@ pub fn import_cardano_cli_json_utxo_from_bytes(
             return Err(JsonSeedError::DuplicateTxIn { key });
         }
     }
-    let state = UTxOState { utxos };
+    let state = UTxOState::from_map(utxos);
     let fingerprint = compute_utxo_fingerprint(&state);
     Ok((state, fingerprint))
 }

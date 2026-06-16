@@ -31,7 +31,9 @@
 //!   - Actual phase-2 state delta (collateral consumption). Counting
 //!     only; state-delta apply is a separate commit.
 
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeSet;
+#[cfg(test)]
+use std::collections::BTreeMap;
 
 use ade_types::tx::TxIn;
 use ade_types::CardanoEra;
@@ -200,7 +202,7 @@ pub fn build_resolved_utxos(
     inputs: &BTreeSet<TxIn>,
     collateral: Option<&BTreeSet<TxIn>>,
     reference_inputs: Option<&BTreeSet<TxIn>>,
-    utxo: &BTreeMap<TxIn, TxOut>,
+    utxo: &impl crate::utxo::UtxoStore,
     era: CardanoEra,
 ) -> Option<Vec<(Vec<u8>, Vec<u8>)>> {
     let mut all: BTreeSet<TxIn> = inputs.iter().cloned().collect();
@@ -214,7 +216,7 @@ pub fn build_resolved_utxos(
     let mut pairs = Vec::with_capacity(all.len());
     for tx_in in &all {
         let tx_out = utxo.get(tx_in)?;
-        let pair = encode_resolved_pair(tx_in, tx_out, era)?;
+        let pair = encode_resolved_pair(tx_in, &tx_out, era)?;
         pairs.push(pair);
     }
     Some(pairs)
@@ -234,7 +236,7 @@ pub fn try_evaluate_tx(
     inputs: &BTreeSet<TxIn>,
     collateral: Option<&BTreeSet<TxIn>>,
     reference_inputs: Option<&BTreeSet<TxIn>>,
-    utxo: &BTreeMap<TxIn, TxOut>,
+    utxo: &impl crate::utxo::UtxoStore,
     era: CardanoEra,
     initial_budget: (u64, u64),
     cost_models_cbor: Option<&[u8]>,

@@ -5,7 +5,7 @@
 // - Explicit state transitions only
 // - Canonical serialization for all persisted/hashed data
 
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeSet;
 
 use ade_types::conway::cert::{CertDisposition, CoinSource, DepositEffect};
 use ade_types::conway::tx::ConwayTxBody;
@@ -23,7 +23,6 @@ use crate::late_era_validation::{
 };
 use crate::pparams::ConwayDepositParams;
 use crate::scripts::ScriptPosture;
-use crate::utxo::TxOut;
 use crate::witness::WitnessInfo;
 
 /// Classify the script posture of a Conway transaction body.
@@ -66,7 +65,7 @@ pub fn validate_conway_structure(body: &ConwayTxBody) -> Result<(), LedgerError>
 #[allow(clippy::too_many_arguments)]
 pub fn validate_conway_state_backed(
     body: &ConwayTxBody,
-    utxo: &BTreeMap<TxIn, TxOut>,
+    utxo: &impl crate::utxo::UtxoStore,
     witness_info: &WitnessInfo,
     collateral_percent: u16,
     current_network: u8,
@@ -182,7 +181,7 @@ pub fn validate_conway_state_backed(
 /// this is reached. `i128` arithmetic throughout; no float, no rounding.
 fn check_conway_coin_conservation(
     body: &ConwayTxBody,
-    utxo: &BTreeMap<TxIn, TxOut>,
+    utxo: &impl crate::utxo::UtxoStore,
     deposit_params: &ConwayDepositParams,
     cert_state: &CertState,
 ) -> Result<(), LedgerError> {

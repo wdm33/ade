@@ -1,6 +1,6 @@
 # Slice MEM-OPT-UTXO-DISK S2 — on-disk / bounded in-memory UTxO backend (CE-UD-2)
 
-> **Status:** Scoped — **the cluster centerpiece + highest risk.** Move the UTxO off the anonymous heap (the S0 live-working-set finding: ~2.8 GiB re-established every block) into a bounded in-memory **overlay + read cache** over an on-disk **redb anchor**, behind the S1 owned-lookup interface, with `post_fp` now **O(delta)/block** (the S1.5 unblock). Two phases: **S2a** (overlay representation, BLUE, in-memory — de-risks the clone-model change) → **S2b** (on-disk redb anchor, RED — the owned-RSS win).
+> **Status:** **S2a COMPLETE (2026-06-16) — S2b next.** Move the UTxO off the anonymous heap (the S0 live-working-set finding: ~2.8 GiB re-established every block) into a bounded in-memory **overlay + read cache** over an on-disk **redb anchor**, behind the S1 owned-lookup interface, with `post_fp` now **O(delta)/block** (the S1.5 unblock). Two phases: **S2a** (overlay representation, BLUE, in-memory — de-risks the clone-model change) ✅ **DONE** → **S2b** (on-disk redb anchor, RED — the owned-RSS win) ⏳.
 > **Cluster:** MEM-OPT-UTXO-DISK (`DC-MEM-05` backend-independent replay + `DC-MEM-07` bounded in-memory) · **Prior:** S1 (owned `utxo_lookup`, `103361c1`), S1.5 (incremental fingerprint + cutover, `aea2eba3`)
 
 ## 2. Slice Header
@@ -46,7 +46,7 @@ S0 proved the admission footprint is a **live working set** (re-accumulates afte
 - **`DC-WAL-03`:** replay-equivalence preserved.
 
 ## 7. Mechanical Acceptance Criteria
-- [ ] **S2a:** the overlay representation + the completed `UtxoStore` seam; ALL 39 `.utxos.` sites routed; `utxo_insert`/`delete` are overlay-append (no full-map clone — a CI/heap check); byte-identical replay + fingerprints + verdicts + errors vs pre-S2a; clone is O(overlay).
+- [x] **S2a DONE:** `OverlayUtxo` (Arc anchor + bounded overlay); all 75 `.utxos.` sites (39 prod) routed via the BTreeMap-shaped borrowing API + `UTxOState::from_map`; validation resolves through `&impl UtxoStore` / `UtxoMembership` (test fixtures keep `BTreeMap`); `utxo_insert`/`delete` are overlay-append (clone is O(overlay), no full-map clone — `ci_check_overlay_utxo_s2a.sh`); byte-identical replay + fingerprints + verdicts + errors vs pre-S2a (boundary_fingerprint_agreement + differential_utxo_set_equality + orchestrator_replay_equivalence + s2a_overlay_split_fingerprints_identically_to_direct_build all green).
 - [ ] **S2b:** the redb anchor + bounded overlay + bounded read cache; the replay corpus byte-identical under BTreeMap AND redb (`DC-MEM-05`); per-block atomic commit (a torn commit rejected — negative test); cache eviction proven non-authoritative; redb key order == canonical `TxIn` (test vector) or the fixed-width key; the bounds are fixed closed constants (`DC-MEM-07`).
 - [ ] **owned RSS** re-measured (the S3 scenario) — active-admission owned falls toward the bounded overlay+cache size; the honest comparison regenerated.
 - [ ] `cargo test` green under both backends; `ci_check_*` gates green.
@@ -65,6 +65,6 @@ S0 proved the admission footprint is a **live working set** (re-accumulates afte
 - Not mainnet-scale tuning (preprod first; OQ-UD-2 confirms mainnet scaling separately).
 
 ## 10. Completion Checklist
-- [ ] **S2a:** overlay representation + seam completion + the clone-model change; replay-equivalence proof; bounded overlay (DC-MEM-07 partial — anchor still in memory).
+- [x] **S2a DONE** (2026-06-16): overlay representation + seam completion + the clone-model change; replay-equivalence proven; bounded overlay (DC-MEM-07 → `partial`, anchor still in memory). `ci_check_overlay_utxo_s2a.sh` green.
 - [ ] **S2b:** redb anchor + bounded cache; DC-MEM-05 both-backends corpus; atomic-commit + torn-commit negative test; cache-non-authoritative proof; key-order vector; owned-RSS re-measure.
 - [ ] `DC-MEM-05`/`DC-MEM-07` enforced; `DC-MEM-06` strengthened; CE-UD-2 met → MEM-OPT-UTXO-DISK ready for /cluster-close.

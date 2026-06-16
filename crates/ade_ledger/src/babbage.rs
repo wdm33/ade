@@ -5,7 +5,7 @@
 // - Explicit state transitions only
 // - Canonical serialization for all persisted/hashed data
 
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeSet;
 
 use ade_types::babbage::tx::BabbageTxBody;
 use ade_types::tx::TxIn;
@@ -18,7 +18,6 @@ use crate::late_era_validation::{
     check_tx_ex_units_within_cap, check_tx_network_id, compute_collateral_balance,
 };
 use crate::scripts::ScriptPosture;
-use crate::utxo::TxOut;
 use crate::witness::WitnessInfo;
 
 /// Classify the script posture of a Babbage transaction body.
@@ -62,7 +61,7 @@ pub fn validate_babbage_structure(body: &BabbageTxBody) -> Result<(), LedgerErro
 /// composer docstring for rationale). S-32 integrates.
 pub fn validate_babbage_state_backed(
     body: &BabbageTxBody,
-    utxo: &BTreeMap<TxIn, TxOut>,
+    utxo: &impl crate::utxo::UtxoStore,
     witness_info: &WitnessInfo,
     collateral_percent: u16,
     current_network: u8,

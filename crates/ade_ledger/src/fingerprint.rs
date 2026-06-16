@@ -956,6 +956,45 @@ mod tests {
     }
 
     #[test]
+    fn s2a_overlay_split_fingerprints_identically_to_direct_build() {
+        // MEM-OPT-UTXO-DISK S2a: a state reached by OVERLAY mutation (the anchor
+        // still holds the now-spent 0x01; the overlay carries an insert of 0x03 and
+        // a delete tombstone for 0x01) must fingerprint byte-identically to the same
+        // effective set built directly into a fresh anchor (empty overlay). Proves
+        // the anchor/overlay split is invisible to the authoritative fingerprint.
+        let txin = |h: u8, i: u16| TxIn {
+            tx_hash: Hash32([h; 32]),
+            index: i,
+        };
+
+        let anchor: std::collections::BTreeMap<TxIn, TxOut> = [
+            (txin(0x01, 0), byron_out(100, 0x01)),
+            (txin(0x02, 0), byron_out(200, 0x02)),
+        ]
+        .into_iter()
+        .collect();
+        let s0 = UTxOState::from_map(anchor);
+        let s1 = crate::utxo::utxo_insert(&s0, txin(0x03, 0), byron_out(300, 0x03));
+        let (s_overlay, _) = crate::utxo::utxo_delete(&s1, &txin(0x01, 0)).unwrap();
+
+        // The same effective set {0x02, 0x03} built directly (anchor only).
+        let direct: std::collections::BTreeMap<TxIn, TxOut> = [
+            (txin(0x02, 0), byron_out(200, 0x02)),
+            (txin(0x03, 0), byron_out(300, 0x03)),
+        ]
+        .into_iter()
+        .collect();
+        let s_direct = UTxOState::from_map(direct);
+
+        assert_eq!(s_overlay.len(), 2, "0x01 spent, 0x02 + 0x03 live");
+        assert_eq!(
+            fingerprint_utxo_v2(&s_overlay),
+            fingerprint_utxo_v2(&s_direct),
+            "overlay-split state must fingerprint identically to the direct build"
+        );
+    }
+
+    #[test]
     fn different_eras_have_different_era_hashes() {
         let s_shelley = LedgerState::new(CardanoEra::Shelley);
         let s_allegra = LedgerState::new(CardanoEra::Allegra);

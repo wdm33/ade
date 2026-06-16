@@ -379,7 +379,7 @@ mod tests {
 
         let shelley = translate_byron_to_shelley(&state).unwrap();
         assert_eq!(shelley.utxo_state.len(), 1);
-        assert_eq!(shelley.utxo_state.utxos.get(&tx_in), Some(&tx_out));
+        assert_eq!(shelley.utxo_state.utxos.get(&tx_in), Some(tx_out.clone()));
     }
 
     #[test]
@@ -473,7 +473,7 @@ mod tests {
 
         let allegra = translate_shelley_to_allegra(&shelley).unwrap();
         assert_eq!(allegra.utxo_state.len(), 1);
-        assert_eq!(allegra.utxo_state.utxos.get(&tx_in), Some(&tx_out));
+        assert_eq!(allegra.utxo_state.utxos.get(&tx_in), Some(tx_out.clone()));
     }
 
     #[test]

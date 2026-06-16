@@ -5,7 +5,9 @@
 // - Explicit state transitions only
 // - Canonical serialization for all persisted/hashed data
 
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::BTreeSet;
+#[cfg(test)]
+use std::collections::BTreeMap;
 
 use ade_types::alonzo::tx::AlonzoTxBody;
 use ade_types::tx::TxIn;
@@ -103,7 +105,7 @@ pub(crate) fn validate_common_structure(
 /// scaffolding) invoke this function directly.
 pub fn validate_alonzo_state_backed(
     body: &AlonzoTxBody,
-    utxo: &BTreeMap<TxIn, TxOut>,
+    utxo: &impl crate::utxo::UtxoStore,
     witness_info: &WitnessInfo,
     collateral_percent: u16,
     current_network: u8,
@@ -176,7 +178,7 @@ pub fn validate_alonzo_state_backed(
 /// `check_inputs_present` first to ensure all collateral is resolvable.
 pub(crate) fn sum_collateral(
     collateral_inputs: &BTreeSet<TxIn>,
-    utxo: &BTreeMap<TxIn, TxOut>,
+    utxo: &impl crate::utxo::UtxoStore,
 ) -> (u128, bool) {
     let mut sum: u128 = 0;
     let mut any_non_ada = false;
