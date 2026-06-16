@@ -24,16 +24,23 @@ for g in 70b2faf838d2fe2cdf7d2d54a10491cbb5f572ba61e17768b7ddf8f7fd466ac4 \
     grep -qF "$g" "$SC" || fail "golden vector $g missing (frozen)"
 done
 
-# (3) explicit versioning + v1 production NOT flipped in S1.5a.
+# (3) explicit versioning + the S1.5b PRODUCTION CUTOVER: fingerprint() is v2.
 grep -qE 'FINGERPRINT_VERSION_V1: u32 = 1' "$FP" || fail "FINGERPRINT_VERSION_V1 missing"
 grep -qE 'FINGERPRINT_VERSION_V2: u32 = 2' "$FP" || fail "FINGERPRINT_VERSION_V2 missing"
 grep -qE 'fn fingerprint_utxo_v2' "$FP" || fail "fingerprint_utxo_v2 (the oracle) missing"
 grep -qE 'fn fingerprint_v2' "$FP" || fail "fingerprint_v2 missing"
-# the production fingerprint() still uses the v1 component -- no silent cutover in S1.5a.
-grep -qE 'let utxo = fingerprint_utxo\(&state\.utxo_state\);' "$FP" \
-    || fail "fingerprint() no longer uses the v1 utxo component -- S1.5a must NOT flip production"
+grep -qE 'pub struct IncrementalUtxoFp' "$FP" || fail "IncrementalUtxoFp (the per-block maintenance) missing"
+# v1 preserved as fingerprint_v1 (historical); production fingerprint() delegates to v2.
+grep -qE 'pub fn fingerprint_v1' "$FP" || fail "fingerprint_v1 (frozen historical v1) missing"
+grep -A3 -F 'pub fn fingerprint(state: &LedgerState) -> LedgerFingerprint {' "$FP" | grep -qF 'fingerprint_v2(state)' \
+    || fail "production fingerprint() does not delegate to fingerprint_v2 -- the S1.5b cutover is not in place"
+
+# (4) the fingerprint-version gate: a v1 (or unversioned) store is rejected fail-closed.
+PS=crates/ade_runtime/src/chaindb/persistent.rs
+grep -qE 'FINGERPRINT_VERSION: u32 = 2' "$PS" || fail "the store FINGERPRINT_VERSION marker is missing"
+grep -qE 'FingerprintVersionMismatch' "$PS" || fail "the fingerprint-version fail-closed gate is missing in persistent.rs"
 
 if (( FAILED == 0 )); then
-    echo "OK: v2 UTxO set commitment (named, domain-separated, versioned, golden-vector-pinned; v1 production intact)"
+    echo "OK: v2 UTxO set commitment + S1.5b cutover (named/domain-separated/golden-pinned; fingerprint()=v2; fingerprint_v1 historical; old-v1 store fail-closed)"
 fi
 exit $FAILED

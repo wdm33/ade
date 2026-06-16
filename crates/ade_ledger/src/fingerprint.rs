@@ -81,12 +81,12 @@ impl LedgerFingerprint {
     }
 }
 
-/// Compute the per-component fingerprint of a ledger state.
+/// Compute the v1 (original) per-component fingerprint -- the blake2b-over-sorted-
+/// UTxO construction. Retained for HISTORICAL v1 evidence verification; PRODUCTION
+/// now uses `fingerprint` (= `fingerprint_v2`, the S1.5b cutover).
 ///
 /// Pure function: same input always produces the same output.
-/// The `track_utxo` flag is deliberately excluded — it is a harness
-/// control, not a property of the ledger itself.
-pub fn fingerprint(state: &LedgerState) -> LedgerFingerprint {
+pub fn fingerprint_v1(state: &LedgerState) -> LedgerFingerprint {
     let era = fingerprint_era(state.era, state.max_lovelace_supply);
     let utxo = fingerprint_utxo(&state.utxo_state);
     let cert = fingerprint_cert(&state.cert_state);
@@ -113,6 +113,16 @@ pub fn fingerprint(state: &LedgerState) -> LedgerFingerprint {
         governance,
         combined,
     }
+}
+
+/// The PRODUCTION ledger fingerprint. MEM-OPT-UTXO-DISK S1.5b cutover: now v2
+/// (the incremental-capable Ristretto255 set commitment, `fingerprint_v2`). ALL
+/// production sites (admission `post_fp`, the seed anchor, snapshot encode/decode,
+/// recovery, forward-sync, produce-mode) call this, so they move to v2 TOGETHER.
+/// v1 stays as `fingerprint_v1` for HISTORICAL evidence; a v1 store is rejected by
+/// a v2 node via the bumped persistent-store schema version (fail-closed).
+pub fn fingerprint(state: &LedgerState) -> LedgerFingerprint {
+    fingerprint_v2(state)
 }
 
 /// MEM-OPT-UTXO-DISK S1.5 fingerprint versions. v1 = the original blake2b-over-
@@ -855,7 +865,7 @@ mod tests {
             TxIn { tx_hash: Hash32([0x07; 32]), index: 1 },
             byron_out(42, 0xbb),
         );
-        let f1 = fingerprint(&s);
+        let f1 = fingerprint_v1(&s);
         let f2 = fingerprint_v2(&s);
         assert_ne!(f1.utxo, f2.utxo, "v1 and v2 UTxO components must differ");
         assert_ne!(f1.combined, f2.combined);
@@ -1229,11 +1239,11 @@ mod tests {
         ];
         for (era, expected) in cases {
             let s = LedgerState::new(*era);
-            let f = fingerprint(&s);
+            let f = fingerprint_v1(&s);
             assert_eq!(
                 f.combined_hex(),
                 *expected,
-                "golden fingerprint drift for {era:?} — bump FINGERPRINT_VERSION and update golden if this is intentional"
+                "v1 golden fingerprint drift for {era:?} — fingerprint_v1 is the FROZEN historical construction (production is v2 via fingerprint)"
             );
         }
     }
@@ -1276,11 +1286,11 @@ mod tests {
         for (era, expected) in cases {
             let s = LedgerState::new(*era);
             assert_eq!(s.conway_deposit_params, None);
-            let f = fingerprint(&s);
+            let f = fingerprint_v1(&s);
             assert_eq!(
                 f.combined_hex(),
                 *expected,
-                "non-Conway fingerprint for {era:?} must be byte-identical post-migration"
+                "non-Conway v1 fingerprint for {era:?} must be byte-identical post-migration (fingerprint_v1, frozen historical)"
             );
         }
     }
@@ -1300,8 +1310,8 @@ mod tests {
             drep_activity: 20,
         });
 
-        let f_base = fingerprint(&base);
-        let f_dep = fingerprint(&with_deposits);
+        let f_base = fingerprint_v1(&base);
+        let f_dep = fingerprint_v1(&with_deposits);
 
         // Presence changes the pparams component (and the rollup), nothing else.
         assert_ne!(f_base.pparams, f_dep.pparams);

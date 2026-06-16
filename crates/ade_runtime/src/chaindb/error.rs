@@ -28,6 +28,13 @@ pub enum ChainDbError {
     /// understand. Caller chooses the migration path.
     SchemaMismatch { expected: u32, found: u32 },
 
+    /// Storage was written with a different ledger-fingerprint version
+    /// (MEM-OPT-UTXO-DISK S1.5). The fingerprint construction is part of Ade's
+    /// internal replay contract; a v1 (or unversioned) store CANNOT be replayed
+    /// by a v2 node. Fail-closed -- requires an explicit re-bootstrap, NEVER a
+    /// silent mixed-version replay. `found` is 0 if the marker is absent (v1).
+    FingerprintVersionMismatch { expected: u32, found: u32 },
+
     /// Operation invalid for the current state — e.g., rolling back
     /// to a slot beyond the tip, or putting a block whose claimed
     /// slot conflicts with an existing block at that slot.
@@ -44,6 +51,11 @@ impl fmt::Display for ChainDbError {
             ChainDbError::SchemaMismatch { expected, found } => write!(
                 f,
                 "chaindb schema mismatch: expected v{expected}, found v{found}",
+            ),
+            ChainDbError::FingerprintVersionMismatch { expected, found } => write!(
+                f,
+                "chaindb fingerprint-version mismatch: expected v{expected}, found v{found} \
+                 (v1/unversioned store rejected; a v2 node requires an explicit re-bootstrap)",
             ),
             ChainDbError::InvalidOperation(detail) => {
                 write!(f, "chaindb invalid operation: {detail}")

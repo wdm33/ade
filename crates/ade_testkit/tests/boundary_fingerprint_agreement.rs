@@ -19,7 +19,7 @@
 
 use std::path::PathBuf;
 
-use ade_ledger::fingerprint::fingerprint;
+use ade_ledger::fingerprint::fingerprint_v1;
 use ade_testkit::harness::snapshot_loader::LoadedSnapshot;
 
 fn snapshots_dir() -> PathBuf {
@@ -41,7 +41,11 @@ fn load_and_fingerprint(tarball: &str) -> Option<BoundaryHashes> {
     let snap = LoadedSnapshot::from_tarball(&path)
         .unwrap_or_else(|e| panic!("load {tarball}: {e}"));
     let state = snap.to_ledger_state();
-    let fp = fingerprint(&state);
+    // MEM-OPT-UTXO-DISK S1.5b cutover: these pins are the FROZEN v1 fingerprint of
+    // the boundary snapshots (historical regression guard). Production is v2
+    // (`fingerprint`); the v2 fingerprint of boundary data is verified via the
+    // shared 6 components + the ECMH golden vectors, so v1 pins stay load-bearing.
+    let fp = fingerprint_v1(&state);
     Some(BoundaryHashes {
         era: format!("{}", fp.era),
         utxo: format!("{}", fp.utxo),

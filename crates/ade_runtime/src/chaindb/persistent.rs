@@ -56,6 +56,12 @@ const SCHEMA_VERSION: u32 = 3;
 const MAGIC_BYTES: &[u8] = b"ADE\0CHAINDB\0";
 const META_KEY_MAGIC: &str = "magic";
 const META_KEY_SCHEMA: &str = "schema_version";
+/// MEM-OPT-UTXO-DISK S1.5b: the ledger-fingerprint version embedded in this
+/// store's WAL/anchor. SEPARATE from the (forward-compatible) schema_version: a
+/// fingerprint-version mismatch is FAIL-CLOSED (a v1 store cannot be replayed by
+/// a v2 node), never upgraded.
+const FINGERPRINT_VERSION: u32 = 2;
+const META_KEY_FINGERPRINT_VERSION: &str = "fingerprint_version";
 
 /// Sync cadence policy. Per O-34.2.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -141,6 +147,22 @@ impl PersistentChainDb {
                                         "schema_version absent".into(),
                                     )
                                 })?;
+                            // MEM-OPT-UTXO-DISK S1.5b: fingerprint-version gate.
+                            // This store embeds v2 fingerprints in its WAL/anchor;
+                            // a v1 (or unversioned) store CANNOT be replayed by a
+                            // v2 node -- fail CLOSED (no silent mixed-version
+                            // replay, no upgrade). `found` 0 = the marker is absent.
+                            let fp_version = meta
+                                .get(META_KEY_FINGERPRINT_VERSION)
+                                .map_err(map_storage_err)?
+                                .map(|v| u32_from_bytes(v.value()))
+                                .unwrap_or(0);
+                            if fp_version != FINGERPRINT_VERSION {
+                                return Err(ChainDbError::FingerprintVersionMismatch {
+                                    expected: FINGERPRINT_VERSION,
+                                    found: fp_version,
+                                });
+                            }
                             // Forward-compatible: v1 files are
                             // accepted. Schema is upgraded to current
                             // on first write below.
@@ -187,6 +209,12 @@ impl PersistentChainDb {
                 .map_err(map_storage_err)?;
             let version_bytes = SCHEMA_VERSION.to_le_bytes();
             meta.insert(META_KEY_SCHEMA, &version_bytes[..])
+                .map_err(map_storage_err)?;
+            // MEM-OPT-UTXO-DISK S1.5b: stamp the fingerprint version on every
+            // fresh store, so a later v2 node accepts it and a v1 store (lacking
+            // this marker) is rejected fail-closed.
+            let fp_version_bytes = FINGERPRINT_VERSION.to_le_bytes();
+            meta.insert(META_KEY_FINGERPRINT_VERSION, &fp_version_bytes[..])
                 .map_err(map_storage_err)?;
         }
         txn.commit().map_err(map_commit_err)?;
@@ -920,6 +948,36 @@ mod tests {
         assert!(
             matches!(result, Err(ChainDbError::Corruption(_))),
             "expected Corruption, got {result:?}",
+        );
+    }
+
+    #[test]
+    fn v1_unversioned_store_is_rejected_fail_closed() {
+        // MEM-OPT-UTXO-DISK S1.5b: a store with the correct magic + schema but NO
+        // fingerprint_version marker (a v1 / unversioned store) MUST be rejected
+        // fail-closed by a v2 node -- never silently upgraded or replayed.
+        let tmp = TempDir::new().expect("tempdir");
+        let path = tmp.path().join("v1.chaindb");
+        {
+            let db = redb::Database::create(&path).expect("create raw redb");
+            let txn = db.begin_write().expect("begin");
+            {
+                let mut t = txn
+                    .open_table::<&str, &[u8]>(redb::TableDefinition::new("meta"))
+                    .expect("open");
+                t.insert("magic", &b"ADE\0CHAINDB\0"[..]).expect("magic");
+                t.insert("schema_version", &3u32.to_le_bytes()[..]).expect("schema");
+                // deliberately NO fingerprint_version -- a v1 store.
+            }
+            txn.commit().expect("commit");
+        }
+        let result = PersistentChainDb::open(PersistentChainDbOptions::at(&path));
+        assert!(
+            matches!(
+                result,
+                Err(ChainDbError::FingerprintVersionMismatch { expected: 2, found: 0 })
+            ),
+            "expected FingerprintVersionMismatch{{expected:2,found:0}}, got {result:?}",
         );
     }
 }
