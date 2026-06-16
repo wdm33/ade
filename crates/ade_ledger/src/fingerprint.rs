@@ -187,14 +187,59 @@ fn fingerprint_utxo(utxo: &UTxOState) -> Hash32 {
 /// incremental maintenance equals it.
 fn fingerprint_utxo_v2(utxo: &UTxOState) -> Hash32 {
     let mut commit = UtxoSetCommitment::empty();
-    let mut entry = Vec::new();
     for (tx_in, tx_out) in &utxo.utxos {
-        entry.clear();
-        write_tx_in(&mut entry, tx_in);
-        write_tx_out(&mut entry, tx_out);
-        commit.add(&entry);
+        commit.add(&v2_entry_bytes(tx_in, tx_out));
     }
     commit.digest()
+}
+
+/// The canonical entry bytes (`write_tx_in ++ write_tx_out`) the v2 commitment
+/// hashes -- shared by the full recompute and the incremental maintenance, so
+/// they commit IDENTICALLY.
+fn v2_entry_bytes(tx_in: &TxIn, tx_out: &TxOut) -> Vec<u8> {
+    let mut entry = Vec::new();
+    write_tx_in(&mut entry, tx_in);
+    write_tx_out(&mut entry, tx_out);
+    entry
+}
+
+/// MEM-OPT-UTXO-DISK S1.5b: incremental maintenance of the v2 UTxO fingerprint.
+/// Wraps the set commitment; `produce`/`spend` update it in O(1) over the SAME
+/// canonical entry bytes as `fingerprint_utxo_v2` (the oracle), so the running
+/// `digest()` is PROVEN equal to the full recompute after every admitted block
+/// (the equivalence test). The on-disk backend (S2) uses this so `post_fp` is
+/// O(delta)/block, not O(n).
+///
+/// Membership is NOT tracked here -- the ledger's validation (`utxo_delete` ->
+/// `InputNotFound`) is what fails closed on a bad spend; this mirrors only VALID,
+/// post-validation deltas.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct IncrementalUtxoFp {
+    commit: UtxoSetCommitment,
+}
+
+impl IncrementalUtxoFp {
+    /// An empty UTxO set's incremental fingerprint.
+    pub fn empty() -> Self {
+        IncrementalUtxoFp {
+            commit: UtxoSetCommitment::empty(),
+        }
+    }
+
+    /// Record a produced output. Commutative; the exact inverse of `spend`.
+    pub fn produce(&mut self, tx_in: &TxIn, tx_out: &TxOut) {
+        self.commit.add(&v2_entry_bytes(tx_in, tx_out));
+    }
+
+    /// Record a spent input (the `(tx_in, tx_out)` as it lived in the set).
+    pub fn spend(&mut self, tx_in: &TxIn, tx_out: &TxOut) {
+        self.commit.remove(&v2_entry_bytes(tx_in, tx_out));
+    }
+
+    /// The v2 UTxO fingerprint component (== `fingerprint_utxo_v2` for the same set).
+    pub fn digest(&self) -> Hash32 {
+        self.commit.digest()
+    }
 }
 
 fn fingerprint_cert(cert: &CertState) -> Hash32 {
@@ -845,6 +890,59 @@ mod tests {
         };
         assert_eq!(mk(&[0, 1, 2]), mk(&[2, 0, 1]));
         assert_eq!(mk(&[0, 1, 2]), mk(&[1, 2, 0]));
+    }
+
+    #[test]
+    fn incremental_v2_equals_full_recompute_after_each_block() {
+        // MEM-OPT-UTXO-DISK S1.5b: maintaining the incremental fingerprint through
+        // produce/spend deltas yields the SAME digest as the full recompute (the
+        // S1.5a oracle, fingerprint_utxo_v2) after EVERY block.
+        let txin = |h: u8, i: u16| TxIn { tx_hash: Hash32([h; 32]), index: i };
+        let mut utxo = UTxOState::new();
+        let mut inc = IncrementalUtxoFp::empty();
+        assert_eq!(inc.digest(), fingerprint_utxo_v2(&utxo));
+
+        // Block 0: produce three.
+        for (ti, c, t) in [(txin(0x01, 0), 100u64, 0x01u8), (txin(0x02, 0), 200, 0x02), (txin(0x03, 7), 300, 0x03)] {
+            let to = byron_out(c, t);
+            utxo.utxos.insert(ti.clone(), to.clone());
+            inc.produce(&ti, &to);
+        }
+        assert_eq!(inc.digest(), fingerprint_utxo_v2(&utxo));
+
+        // Block 1: spend 0x01, produce two.
+        let spent0 = (txin(0x01, 0), byron_out(100, 0x01));
+        utxo.utxos.remove(&spent0.0);
+        inc.spend(&spent0.0, &spent0.1);
+        for (ti, c, t) in [(txin(0x10, 0), 40u64, 0x10u8), (txin(0x10, 1), 60, 0x11)] {
+            let to = byron_out(c, t);
+            utxo.utxos.insert(ti.clone(), to.clone());
+            inc.produce(&ti, &to);
+        }
+        assert_eq!(inc.digest(), fingerprint_utxo_v2(&utxo));
+
+        // Block 2: spend 0x02 and 0x10:0, produce one.
+        for (ti, c, t) in [(txin(0x02, 0), 200u64, 0x02u8), (txin(0x10, 0), 40, 0x10)] {
+            let to = byron_out(c, t);
+            utxo.utxos.remove(&ti);
+            inc.spend(&ti, &to);
+        }
+        let np = (txin(0x20, 3), byron_out(95, 0x20));
+        utxo.utxos.insert(np.0.clone(), np.1.clone());
+        inc.produce(&np.0, &np.1);
+        assert_eq!(inc.digest(), fingerprint_utxo_v2(&utxo));
+    }
+
+    #[test]
+    fn incremental_produce_spend_is_exact_inverse() {
+        let ti = TxIn { tx_hash: Hash32([0x55; 32]), index: 2 };
+        let to = byron_out(777, 0x55);
+        let mut inc = IncrementalUtxoFp::empty();
+        let empty = inc.digest();
+        inc.produce(&ti, &to);
+        assert_ne!(inc.digest(), empty);
+        inc.spend(&ti, &to);
+        assert_eq!(inc.digest(), empty, "produce then spend must return to the empty digest");
     }
 
     #[test]
