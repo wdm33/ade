@@ -25,6 +25,7 @@ mod in_memory;
 mod persistent;
 mod snapshot_contract;
 mod types;
+mod utxo_anchor;
 mod utxo_key;
 
 pub use contract::run_contract_tests;

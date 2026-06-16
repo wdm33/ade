@@ -39,4 +39,6 @@ pub use gov_state::{
     encode_gov_state, encode_pparams,
 };
 pub use ledger::{decode_ledger_state, encode_ledger_state};
-pub use utxo_state::{decode_utxo_state, encode_utxo_state};
+pub use utxo_state::{
+    decode_tx_out_canonical, decode_utxo_state, encode_tx_out_canonical, encode_utxo_state,
+};

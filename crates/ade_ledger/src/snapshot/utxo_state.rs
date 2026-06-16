@@ -134,6 +134,29 @@ fn write_tx_out(buf: &mut Vec<u8>, tx_out: &TxOut) {
     }
 }
 
+/// Canonical single-`TxOut` byte form (the snapshot value encoding) — the storage
+/// value for the on-disk UTxO anchor (MEM-OPT-UTXO-DISK S2b). Deterministic, and the
+/// SAME bytes the snapshot encoder writes, so an anchor entry and a snapshot entry
+/// for one output are byte-identical (hence fingerprint-identical).
+pub fn encode_tx_out_canonical(tx_out: &TxOut) -> Vec<u8> {
+    let mut buf = Vec::new();
+    write_tx_out(&mut buf, tx_out);
+    buf
+}
+
+/// Decode a single canonical `TxOut` (the inverse of [`encode_tx_out_canonical`]).
+/// Fails closed on trailing bytes — an anchor value is exactly one output.
+pub fn decode_tx_out_canonical(bytes: &[u8]) -> Result<TxOut, SnapshotDecodeError> {
+    let mut o = 0usize;
+    let out = read_tx_out(bytes, &mut o)?;
+    if o != bytes.len() {
+        return Err(SnapshotDecodeError::Structural {
+            reason: StructuralReason::ArrayLengthMismatch,
+        });
+    }
+    Ok(out)
+}
+
 fn read_tx_out(bytes: &[u8], o: &mut usize) -> Result<TxOut, SnapshotDecodeError> {
     expect_array(bytes, o, 3)?;
     let (tag, _n, _w) = read_any_int(bytes, o).map_err(SnapshotDecodeError::Cbor)?;
@@ -438,6 +461,25 @@ mod tests {
         assert_eq!(
             a, b,
             "encoder must depend only on BTreeMap content, not insert order"
+        );
+    }
+
+    #[test]
+    fn tx_out_canonical_roundtrips_and_rejects_trailing_bytes() {
+        // MEM-OPT-UTXO-DISK S2b: the single-TxOut anchor value codec round-trips,
+        // and fails closed on trailing bytes (an anchor value is EXACTLY one output,
+        // never a prefix of a longer buffer).
+        let out = byron_out(0x42, 7777);
+        let bytes = encode_tx_out_canonical(&out);
+        match decode_tx_out_canonical(&bytes) {
+            Ok(decoded) => assert_eq!(decoded, out, "TxOut codec must round-trip"),
+            Err(e) => panic!("round-trip decode failed: {e:?}"),
+        }
+        let mut trailing = bytes.clone();
+        trailing.push(0x00);
+        assert!(
+            decode_tx_out_canonical(&trailing).is_err(),
+            "a trailing byte must be rejected, never silently ignored"
         );
     }
 }
