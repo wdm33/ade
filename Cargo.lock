@@ -47,6 +47,7 @@ dependencies = [
  "ade_types",
  "blake2",
  "cardano-crypto",
+ "curve25519-dalek",
  "ed25519-dalek",
 ]
 

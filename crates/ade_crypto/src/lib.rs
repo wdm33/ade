@@ -17,6 +17,7 @@ pub mod error;
 pub mod kes;
 pub mod kes_sum;
 pub mod traits;
+pub mod utxo_set_commitment;
 pub mod vrf;
 
 pub use blake2b::{

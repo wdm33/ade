@@ -30,6 +30,7 @@ use ade_codec::cbor::{
     write_uint_canonical, ContainerEncoding, IntWidth, MAJOR_NEGATIVE,
 };
 use ade_crypto::blake2b::blake2b_256;
+use ade_crypto::utxo_set_commitment::UtxoSetCommitment;
 use ade_types::conway::cert::DRep;
 use ade_types::conway::governance::{GovAction, GovActionId, GovActionState, Vote};
 use ade_types::shelley::cert::StakeCredential;
@@ -114,6 +115,46 @@ pub fn fingerprint(state: &LedgerState) -> LedgerFingerprint {
     }
 }
 
+/// MEM-OPT-UTXO-DISK S1.5 fingerprint versions. v1 = the original blake2b-over-
+/// sorted UTxO component; v2 = the Ristretto255 set commitment (incremental-
+/// capable). S1.5a introduces v2 as the ORACLE without flipping production --
+/// `fingerprint` stays v1 until the v2 re-bootstrap (S1.5b). v1 and v2 are
+/// EXPLICIT and never silently mixed.
+pub const FINGERPRINT_VERSION_V1: u32 = 1;
+pub const FINGERPRINT_VERSION_V2: u32 = 2;
+
+/// The v2 ledger fingerprint -- identical to `fingerprint` EXCEPT the UTxO
+/// component uses the v2 set commitment (`fingerprint_utxo_v2`). The ORACLE for
+/// S1.5b's per-block incremental maintenance. NOT yet the production `post_fp`.
+pub fn fingerprint_v2(state: &LedgerState) -> LedgerFingerprint {
+    let era = fingerprint_era(state.era, state.max_lovelace_supply);
+    let utxo = fingerprint_utxo_v2(&state.utxo_state);
+    let cert = fingerprint_cert(&state.cert_state);
+    let epoch = fingerprint_epoch(&state.epoch_state);
+    let snapshots = fingerprint_snapshots(&state.epoch_state.snapshots);
+    let pparams = fingerprint_pparams(&state.protocol_params, state.conway_deposit_params.as_ref());
+    let governance = fingerprint_governance(state.gov_state.as_ref());
+    let combined = rollup(&[
+        &era,
+        &utxo,
+        &cert,
+        &epoch,
+        &snapshots,
+        &pparams,
+        &governance,
+    ]);
+    LedgerFingerprint {
+        era,
+        utxo,
+        cert,
+        epoch,
+        snapshots,
+        pparams,
+        governance,
+        combined,
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Component encoders
 // ---------------------------------------------------------------------------
@@ -137,6 +178,23 @@ fn fingerprint_utxo(utxo: &UTxOState) -> Hash32 {
         write_tx_out(&mut buf, tx_out);
     }
     blake2b_256(&buf)
+}
+
+/// MEM-OPT-UTXO-DISK S1.5a: the v2 UTxO fingerprint component -- a commutative
+/// Ristretto255 set commitment over the SAME canonical (write_tx_in ++
+/// write_tx_out) entry bytes as v1, so it can be maintained in O(delta)/block
+/// (S1.5b). This is the FULL recompute (the oracle); S1.5b proves the per-block
+/// incremental maintenance equals it.
+fn fingerprint_utxo_v2(utxo: &UTxOState) -> Hash32 {
+    let mut commit = UtxoSetCommitment::empty();
+    let mut entry = Vec::new();
+    for (tx_in, tx_out) in &utxo.utxos {
+        entry.clear();
+        write_tx_in(&mut entry, tx_in);
+        write_tx_out(&mut entry, tx_out);
+        commit.add(&entry);
+    }
+    commit.digest()
 }
 
 fn fingerprint_cert(cert: &CertState) -> Hash32 {
@@ -725,6 +783,68 @@ mod tests {
         let f1 = fingerprint(&s);
         let f2 = fingerprint(&s);
         assert_eq!(f1, f2);
+    }
+
+    // ---- MEM-OPT-UTXO-DISK S1.5a: the v2 fingerprint (Ristretto255 set commitment) ----
+
+    fn byron_out(coin: u64, tag: u8) -> TxOut {
+        TxOut::Byron {
+            address: ade_types::address::Address::Byron(vec![tag]),
+            coin: Coin(coin),
+        }
+    }
+
+    #[test]
+    fn fp_versions_are_explicit() {
+        assert_eq!(FINGERPRINT_VERSION_V1, 1);
+        assert_eq!(FINGERPRINT_VERSION_V2, 2);
+        assert_ne!(FINGERPRINT_VERSION_V1, FINGERPRINT_VERSION_V2);
+    }
+
+    #[test]
+    fn v1_and_v2_utxo_components_differ_only_the_utxo_changes() {
+        // The v2 UTxO component is a DIFFERENT construction -- v1 != v2, never
+        // silently interchangeable -- and ONLY the utxo component changes.
+        let mut s = LedgerState::new(CardanoEra::Shelley);
+        s.utxo_state.utxos.insert(
+            TxIn { tx_hash: Hash32([0x07; 32]), index: 1 },
+            byron_out(42, 0xbb),
+        );
+        let f1 = fingerprint(&s);
+        let f2 = fingerprint_v2(&s);
+        assert_ne!(f1.utxo, f2.utxo, "v1 and v2 UTxO components must differ");
+        assert_ne!(f1.combined, f2.combined);
+        assert_eq!(f1.era, f2.era);
+        assert_eq!(f1.cert, f2.cert);
+        assert_eq!(f1.epoch, f2.epoch);
+        assert_eq!(f1.snapshots, f2.snapshots);
+        assert_eq!(f1.pparams, f2.pparams);
+        assert_eq!(f1.governance, f2.governance);
+    }
+
+    #[test]
+    fn fingerprint_v2_is_deterministic() {
+        let s = LedgerState::new(CardanoEra::Conway);
+        assert_eq!(fingerprint_v2(&s), fingerprint_v2(&s));
+    }
+
+    #[test]
+    fn fingerprint_v2_utxo_is_insertion_order_independent() {
+        let entries = [
+            (TxIn { tx_hash: Hash32([0x01; 32]), index: 0 }, 100u64),
+            (TxIn { tx_hash: Hash32([0x02; 32]), index: 5 }, 200),
+            (TxIn { tx_hash: Hash32([0x03; 32]), index: 9 }, 300),
+        ];
+        let mk = |order: &[usize]| {
+            let mut s = LedgerState::new(CardanoEra::Conway);
+            for &i in order {
+                let (txin, coin) = &entries[i];
+                s.utxo_state.utxos.insert(txin.clone(), byron_out(*coin, 0xcc));
+            }
+            fingerprint_v2(&s).utxo
+        };
+        assert_eq!(mk(&[0, 1, 2]), mk(&[2, 0, 1]));
+        assert_eq!(mk(&[0, 1, 2]), mk(&[1, 2, 0]));
     }
 
     #[test]
