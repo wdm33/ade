@@ -34,7 +34,7 @@ A bundle is one `docs/evidence/mithril-documented-evidence_<network>_<date>.toml
 manifest plus the artifact files it references (committed in the same
 directory). Every `*_file` is relative to the manifest dir; every paired
 `*_sha256` MUST equal the real file's sha256. The validator
-(`ci/validate_mithril_documented_evidence.sh`) recomputes and compares, so a
+(`ci/ci_check_mithril_documented_evidence.sh`) recomputes and compares, so a
 hand-authored manifest with no real fixtures **fails** — the same
 "no synthetic manifest" teeth as `ci_check_ba02_evidence_manifest_schema.sh`.
 
@@ -77,17 +77,18 @@ manifest — enforced in code and by `ci_check_mithril_seed_point_independence.s
 while `verify_mithril_binding` requires the two independently-sourced **values**
 to *agree*. The negative control is the case where they disagree → fail-closed.
 
-## Promotion path (the future item-(c) flip slice — NOT this slice)
+## Promotion — COMPLETED 2026-06-17
 
-When a real bundle has been captured and committed and
-`ci/validate_mithril_documented_evidence.sh` is green over it:
+A real bundle was captured + committed
+(`docs/evidence/mithril-documented-evidence_preprod_2026-06-17.toml`, evidence commit)
+and `ci/ci_check_mithril_documented_evidence.sh` is green over it. Then, in a SEPARATE
+registry commit (strictly after the evidence commit):
 
-1. Copy this validator body to `ci/ci_check_mithril_documented_evidence.sh`
-   (it keeps the vacuous-pass-when-absent semantics, so it is safe in the gate set).
-2. Append `ci/ci_check_mithril_documented_evidence.sh` to
-   `RO-MITHRIL-IMPORT-01.ci_script` in `docs/ade-invariant-registry.toml`,
-   and add the committed bundle to its `evidence`.
-3. Flip `RO-MITHRIL-IMPORT-01.status` `partial → enforced`; record the bundle
-   path + commit in `open_obligation`/`evidence_notes`.
+1. The validator was promoted (renamed) to `ci/ci_check_mithril_documented_evidence.sh`
+   — it keeps the vacuous-pass-when-absent semantics, so it stays honest in the gate set.
+2. It was appended to `RO-MITHRIL-IMPORT-01.ci_script`, and the bundle added to `evidence`.
+3. `RO-MITHRIL-IMPORT-01.status` was flipped `partial → enforced`, scoped as a
+   release/evidence invariant (documented-interface Mithril import is validator-gated) —
+   NOT a claim of full from-genesis sync or live `track_utxo=true` ledger application.
 
 Until then the obligation is honestly open.

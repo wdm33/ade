@@ -4,7 +4,7 @@
 #   docs/evidence/mithril-documented-evidence_<network>_<YYYY-MM-DD>.toml
 # alongside the referenced artifact files (same directory), fill every
 # field, then validate with:
-#   ci/validate_mithril_documented_evidence.sh
+#   ci/ci_check_mithril_documented_evidence.sh
 #
 # Every `*_file` path is RELATIVE to this manifest's directory and MUST be
 # committed; its `*_sha256` MUST equal the real file's sha256 (the validator

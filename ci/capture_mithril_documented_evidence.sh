@@ -30,7 +30,7 @@
 # mithril-manifest.json, mithril-manifest.negative.json, node-first-run.*.log, and
 # the bundle manifest mithril-documented-evidence_<network>_<date>.toml. Review,
 # then move the manifest + artifacts into docs/evidence/ and run
-# ci/validate_mithril_documented_evidence.sh. This script commits nothing and
+# ci/ci_check_mithril_documented_evidence.sh. This script commits nothing and
 # flips no rule.
 
 set -euo pipefail
@@ -292,4 +292,4 @@ TOML
 
 log "DONE. bundle: $BUNDLE"
 log "review, then: cp $OUT/{mithril-documented-evidence_*.toml,utxo.json,consensus-inputs.json,mithril-manifest.json,mithril-manifest.negative.json,node-first-run.stderr.log} docs/evidence/"
-log "then: ci/validate_mithril_documented_evidence.sh   (RO-MITHRIL-IMPORT-01 stays partial until that bundle is committed + green)"
+log "then: ci/ci_check_mithril_documented_evidence.sh   (the wired RO-MITHRIL-IMPORT-01 gate)"

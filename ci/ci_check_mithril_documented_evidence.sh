@@ -1,16 +1,15 @@
 #!/usr/bin/env bash
 #
-# validate_mithril_documented_evidence.sh — RO-MITHRIL-IMPORT-01 item (c)
-# evidence-bundle validator (slice RO-MITHRIL-IMPORT-01-EVIDENCE-SCHEMA).
+# ci_check_mithril_documented_evidence.sh — RO-MITHRIL-IMPORT-01 gate
+# (slice RO-MITHRIL-IMPORT-01-EVIDENCE-SCHEMA; promoted from
+# ci/validate_mithril_documented_evidence.sh).
 #
-# PREPARATION TOOL — deliberately NOT named ci_check_*, and NOT wired into
-# any invariant-registry rule's ci_script. RO-MITHRIL-IMPORT-01 stays
-# `partial` until a real, validated, operator-witnessed bundle is committed.
-# See docs/active/mithril-documented-interface-runbook.md ("Turnkey tooling")
-# for the promotion path (when a real fixture lands: copy this body to
-# ci/ci_check_mithril_documented_evidence.sh, wire it onto
-# RO-MITHRIL-IMPORT-01.ci_script, flip the status). This is the SAME
-# no-theater pattern as ci_check_ba02_evidence_manifest_schema.sh.
+# A real, validator-green, operator-witnessed bundle is committed
+# (docs/evidence/mithril-documented-evidence_preprod_2026-06-17.toml), so this
+# gate is wired onto RO-MITHRIL-IMPORT-01.ci_script and the rule is `enforced`.
+# Same no-theater pattern as ci_check_ba02_evidence_manifest_schema.sh: it was
+# promoted ONLY AFTER the real fixture landed, never before — and stays honest
+# if the bundle is ever removed (vacuous-PASS when none is committed).
 #
 # Behaviour:
 #   * No committed bundle (the typical state — the documented-interface pass
@@ -18,11 +17,13 @@
 #     obligation remains open; this tool does not assert otherwise.
 #   * A committed bundle `docs/evidence/mithril-documented-evidence_*.toml`:
 #     STRICTLY validated. Every required field present; schema_version == 1;
-#     every referenced artifact exists and its recorded sha256 matches the
-#     real file bytes (the "no synthetic bundle" teeth — a hand-authored
-#     manifest with no real sha-matching fixtures FAILS); the positive
-#     episode recorded `binding_result = "pass"` at node exit 0; and the
-#     negative control fail-closed with a recognised binding error.
+#     every COMMITTED artifact (both manifests, consensus-inputs, transcript)
+#     exists and its recorded sha256 matches the real file bytes (the "no
+#     synthetic bundle" teeth — a hand-authored manifest with no real
+#     sha-matching fixtures FAILS); the multi-GB UTxO seed is out-of-tree
+#     (hash-pinned, step 3b); the positive episode recorded
+#     `binding_result = "pass"` at node exit 0; and the negative control
+#     fail-closed with a recognised binding error.
 #
 # What this proves when green over a committed bundle: the documented
 # cardano-cli -> Ade seed_import -> bootstrap_from_mithril_snapshot ->
@@ -35,7 +36,7 @@ set -euo pipefail
 REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$REPO_ROOT"
 
-TAG="validate_mithril_documented_evidence"
+TAG="ci_check_mithril_documented_evidence"
 BUNDLE_GLOB="docs/evidence/mithril-documented-evidence_*.toml"
 
 # Build the committed-bundle list. A glob that matches nothing must be the

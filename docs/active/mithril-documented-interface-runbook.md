@@ -129,21 +129,22 @@ is turnkey:
 | `docs/evidence/schemas/mithril-documented-evidence.schema.md` | field schema + promotion path. |
 | `docs/evidence/schemas/mithril-documented-evidence.manifest.template.toml` | fill-in manifest template. |
 | `ci/capture_mithril_documented_evidence.sh` | RED operator orchestrator, **non-destructive scratch venue**: downloads the snapshot into a fresh dir, runs a throwaway **frozen** (empty-topology) node, sources `certified_point` from the cert + frozen boundary (verifying tip epoch == cert epoch) independent of `operator_seed_point`, runs the positive `--mode node` first-run **and** a flipped-hash negative control, emits the sha256-bound bundle. Canonical `.cardano-node-preprod/db` is never touched. |
-| `ci/validate_mithril_documented_evidence.sh` | validator: vacuous-PASS when no bundle is committed; strict (required fields + sha256-bound artifacts + `binding_result=pass` + negative-control fail-closed) when one is. |
+| `ci/ci_check_mithril_documented_evidence.sh` | the **wired RO-MITHRIL-IMPORT-01 gate** (promoted from the `validate_` tool): vacuous-PASS when no bundle is committed; strict (committed artifacts sha256-bound + `binding_result=pass` + negative-control fail-closed + out-of-tree hash-pinned seed) when one is. |
 
 A green bundle proves the **full documented-interface chain** ran on real artifacts AND
 that the binding **discriminates** (negative control fail-closed) — not "Mithril cert
 verified" alone. (The uncommitted `.mithril-scratch/` only records the cert-verify link
 and is self-described as "strong but not airtight"; it is not item-(c)-grade.)
 
-**No `ci_check_*` gate and no registry flip ship with this slice** — the validator is a
-standalone tool (vacuous-green), deliberately *not* wired onto `RO-MITHRIL-IMPORT-01`.
-This preserves the no-document-only / no-theater line: the obligation flips only on real
-evidence, never on the presence of a schema. **Promotion path** (the future item-(c)
-flip slice): capture a real bundle → commit it under `docs/evidence/` →
-`ci/validate_mithril_documented_evidence.sh` green → copy the validator body to
-`ci/ci_check_mithril_documented_evidence.sh` → append it to `RO-MITHRIL-IMPORT-01.ci_script`
-(+ the bundle to `evidence`) → flip `partial → enforced`.
+**Promoted + enforced (2026-06-17).** The real bundle was captured + committed
+(`docs/evidence/mithril-documented-evidence_preprod_2026-06-17.toml`), and
+`ci/ci_check_mithril_documented_evidence.sh` (renamed from the `validate_` tool) is green
+over it; it is wired onto `RO-MITHRIL-IMPORT-01.ci_script` and the rule is `enforced`.
+The no-theater discipline held: the gate was promoted ONLY after the real evidence landed,
+in a registry commit separate from (and after) the evidence commit. The gate stays honest
+if the bundle is ever removed (vacuous-PASS when none is committed). The flip is scoped to
+a release/evidence invariant — NOT a claim of full from-genesis sync or live
+`track_utxo=true` ledger application.
 
 ## References
 
@@ -153,7 +154,7 @@ flip slice): capture a real bundle → commit it under `docs/evidence/` →
 - `RO-MITHRIL-IMPORT-01` (item (a) reclassified here; item (c) operator-witnessed),
   `CN-MITHRIL-01`, `CN-SEED-01`, `RO-GENESIS-REPLAY-01`.
 - Tooling: `docs/evidence/schemas/mithril-documented-evidence.schema.md`,
-  `ci/capture_mithril_documented_evidence.sh`, `ci/validate_mithril_documented_evidence.sh`,
+  `ci/capture_mithril_documented_evidence.sh`, `ci/ci_check_mithril_documented_evidence.sh`,
   `ci/build_consensus_inputs_bundle.sh`.
 - Mithril docs: bootstrap a Cardano node; mithril-client (`cardano-db --include-ancillary`,
   `utxo-hd snapshot-converter`).
