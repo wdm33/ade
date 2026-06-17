@@ -280,10 +280,11 @@ tier = "true"
 statement = "Chain selection depends only on canonical observables; same candidates -> same tip"
 source = "Project constitution §2, 01_core §12"
 cross_ref = ["CN-CONS-01"]
-code_locus = ""
-tests = []
-ci_script = ""
-status = "declared"
+code_locus = "crates/ade_core/src/consensus/fork_choice.rs, crates/ade_core/src/consensus/candidate.rs"
+tests = ["replay_is_deterministic", "reject_reason_bytes_are_stable", "higher_block_no_wins", "equal_block_no_tiebreaker_decides", "select_best_chain_arrival_order_independent_distinct_heights", "select_best_chain_arrival_order_independent_tiebreaker"]
+ci_script = "ci/ci_check_no_density_in_fork_choice.sh, ci/ci_check_chain_selection_arrival_order_independent.sh"
+status = "enforced"
+evidence_notes = "Binding to existing enforcement, NOT new semantic coverage (slice REG-T-CONS-01-BINDING, 2026-06-17). T-CONS-01 is the abstract true-tier statement of chain-selection determinism -- 'same candidate set -> same selected tip'. Its concrete enforcement is CN-CONS-01: the arrival-order-independence permutation proof (select_best_chain_arrival_order_independent_distinct_heights / _tiebreaker) establishes the selected tip is a pure function of the candidate set, independent of arrival order; replay_is_deterministic + ci_check_chain_selection_arrival_order_independent.sh + ci_check_no_density_in_fork_choice.sh lock it mechanically. This slice binds T-CONS-01 to that same code_locus / tests / ci_script. No chain-selection logic was added or changed; no new test or behaviour was introduced."
 
 [[rules]]
 id = "T-CONS-02"
