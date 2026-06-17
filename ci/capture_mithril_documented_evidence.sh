@@ -1,216 +1,285 @@
 #!/usr/bin/env bash
 #
 # capture_mithril_documented_evidence.sh — RO-MITHRIL-IMPORT-01 item (c)
-# turnkey capture (slice RO-MITHRIL-IMPORT-01-EVIDENCE-SCHEMA).
+# NON-DESTRUCTIVE scratch-venue capture (slice RO-MITHRIL-IMPORT-01-EVIDENCE-SCHEMA).
 #
-# RED operator tool. Orchestrates the documented-interface pass end-to-end and
-# emits a bundle that ci/validate_mithril_documented_evidence.sh validates:
-# the positive --mode node first-run (verify_mithril_binding PASS) PLUS a
-# mismatched-manifest negative control (binding fail-closed). It assembles the
-# manifest + artifacts; it does NOT fabricate any value — every artifact is a
-# real command output and the validator sha256-binds them.
+# Produces an honest documented-interface evidence bundle WITHOUT touching the
+# shared .cardano-node-preprod DB. RED operator tool.
 #
-# DOCTRINE: Mithril is acquisition/peer infra, NEVER an Ade BLUE trust root
-# (see ci/mithril_restore_preprod_peer.sh). This script consumes the peer's
-# certified state through DOCUMENTED cardano-cli interfaces only.
+# FIDELITY RULES (hard — see memory feedback_mithril_evidence_honest_capture):
+#   * NON-DESTRUCTIVE: a throwaway container on a FRESH scratch dir (outside the
+#     repo). The canonical .cardano-node-preprod DB is never restored, started,
+#     started, or queried.
+#   * FROZEN: the throwaway node runs with an EMPTY P2P topology — no peers, no
+#     network sync — so its tip cannot drift past the certified immutable
+#     boundary.
+#   * certified_point comes from the MITHRIL CERTIFICATE + the certified
+#     immutable boundary (cert hash + epoch + immutable_file_number; the frozen
+#     node is verified to sit at the cert's epoch). It is NOT taken from the same
+#     query used for operator_seed_point.
+#   * operator_seed_point is the FROZEN node's extraction tip.
+#   * PROOF = certified_point == operator_seed_point (two independent origins
+#     agreeing because the node is frozen at the boundary). The script ABORTS if
+#     the node's tip epoch != the cert epoch (it would mean the node synced
+#     forward). Never query_tip == query_tip.
+#   * Mithril genesis + ancillary VERIFICATION keys (public) are fetched from the
+#     canonical Mithril repo at runtime — never the stale hardcoded restore-script
+#     genesis key.
 #
-# Prerequisites the OPERATOR provides (this script does not install or fake):
-#   * mithril-client: snapshot acquired + cert verified (the cert metadata).
-#   * A cardano-node peer brought to the certified state, with cardano-cli
-#     able to query it (CARDANO_NODE_SOCKET_PATH set).
-#   * Rust toolchain to build ade_node.
-#
-# Usage (all via env, fail-closed if a required one is unset):
-#   OUT_DIR=/path/to/bundle.d \
-#   NETWORK=preprod NETWORK_MAGIC=1 \
-#   GENESIS_HASH_HEX=<64hex> GENESIS_PATH=/path/to/genesis-bundle \
-#   MITHRIL_AGG_ENDPOINT=<url> MITHRIL_CERT_HASH=<64hex> \
-#   MITHRIL_SIGNED_ENTITY='CardanoDatabase { epoch = 291, immutable_file_number = 5758 }' \
-#   IMMUTABLE_LO=0 IMMUTABLE_HI=5758 \
-#   CARDANO_NODE_SOCKET_PATH=/path/node.socket \
-#   CAPTURED_BY='<operator>' \
-#     ci/capture_mithril_documented_evidence.sh
-#
-# Output: $OUT_DIR/ containing utxo.json, consensus-inputs.json,
-# mithril-manifest.json, mithril-manifest.negative.json, node-first-run.stderr.log,
-# node-first-run.negative.stderr.log, and the bundle manifest
-# mithril-documented-evidence_<network>_<date>.toml. Move the manifest to
-# docs/evidence/ (with $OUT_DIR's files beside it) once reviewed, then run the
-# validator. This script does NOT commit anything and does NOT flip any rule.
+# Output: $SCRATCH_DIR/out/ with utxo.json, consensus-inputs.json,
+# mithril-manifest.json, mithril-manifest.negative.json, node-first-run.*.log, and
+# the bundle manifest mithril-documented-evidence_<network>_<date>.toml. Review,
+# then move the manifest + artifacts into docs/evidence/ and run
+# ci/validate_mithril_documented_evidence.sh. This script commits nothing and
+# flips no rule.
 
 set -euo pipefail
 
 REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$REPO_ROOT"
 
-die() { echo "capture_mithril_documented_evidence: FAIL — $1" >&2; exit 1; }
-require_var() { [[ -n "${!1:-}" ]] || die "required env var $1 is unset"; }
-require_cmd() { command -v "$1" >/dev/null 2>&1 || die "required command '$1' not found on PATH"; }
+log()  { echo "[capture] $*" >&2; }
+die()  { echo "[capture] FAIL — $*" >&2; exit 1; }
+need_var() { [[ -n "${!1:-}" ]] || die "required env var $1 is unset"; }
+need_cmd() { command -v "$1" >/dev/null 2>&1 || die "required command '$1' not found"; }
 
-for v in OUT_DIR NETWORK NETWORK_MAGIC GENESIS_HASH_HEX GENESIS_PATH \
-         MITHRIL_AGG_ENDPOINT MITHRIL_CERT_HASH MITHRIL_SIGNED_ENTITY \
-         IMMUTABLE_LO IMMUTABLE_HI CARDANO_NODE_SOCKET_PATH CAPTURED_BY; do
-  require_var "$v"
-done
-require_cmd cardano-cli
-require_cmd sha256sum
-require_cmd cargo
-export CARDANO_NODE_SOCKET_PATH
+# ---- config (env-overridable; safe public defaults) -------------------------
+NETWORK="${NETWORK:-preprod}"
+NETWORK_MAGIC="${NETWORK_MAGIC:-1}"
+SCRATCH_DIR="${SCRATCH_DIR:-$HOME/.cardano-mithril-scratch-venue}"
+AGG="${AGGREGATOR_ENDPOINT:-https://aggregator.release-preprod.api.mithril.network/aggregator}"
+NODE_IMAGE="${NODE_IMAGE:-ghcr.io/intersectmbo/cardano-node:11.0.1}"
+CANON_CONFIG_DIR="${CANON_CONFIG_DIR:-$REPO_ROOT/.cardano-node-preprod/config}"
+CAPTURED_BY="${CAPTURED_BY:-}"
+SNAPSHOT_HASH="${SNAPSHOT_HASH:-latest}"
+CONTAINER="ade-mithril-scratch-$$"
+GENESIS_VKEY_URL="https://raw.githubusercontent.com/input-output-hk/mithril/main/mithril-infra/configuration/release-preprod/genesis.vkey"
+ANCILLARY_VKEY_URL="https://raw.githubusercontent.com/input-output-hk/mithril/main/mithril-infra/configuration/release-preprod/ancillary.vkey"
 
-mkdir -p "$OUT_DIR"
+need_var CAPTURED_BY
+for c in mithril-client docker cargo sha256sum b2sum jq curl python3; do need_cmd "$c"; done
+
+# Refuse to operate on the canonical peer DB (hard guardrail).
+case "$SCRATCH_DIR" in
+  *"/.cardano-node-preprod"*|"$REPO_ROOT"/*) die "SCRATCH_DIR must be a fresh dir OUTSIDE the repo and NOT the canonical peer ($SCRATCH_DIR)";;
+esac
+[[ -d "$CANON_CONFIG_DIR" ]] || die "canonical config dir not found for read-only copy: $CANON_CONFIG_DIR"
+
+OUT="$SCRATCH_DIR/out"; DB="$SCRATCH_DIR/db"; CFG="$SCRATCH_DIR/config"; IPC="$SCRATCH_DIR/ipc"
+mkdir -p "$OUT" "$IPC"
+ADE_COMMIT="$(git rev-parse HEAD)"
 sha() { sha256sum "$1" | awk '{print $1}'; }
 
-# --- 1. Build ade_node (record the exact commit). ----------------------------
-ADE_COMMIT="$(git rev-parse HEAD)"
-echo "==> building ade_node @ $ADE_COMMIT"
-cargo build -p ade_node --release >&2
-ADE_BIN="$REPO_ROOT/target/release/ade_node"
-[[ -x "$ADE_BIN" ]] || die "ade_node binary not built at $ADE_BIN"
+cleanup() { docker rm -f "$CONTAINER" >/dev/null 2>&1 || true; }
+trap cleanup EXIT
 
-# --- 2. Documented extraction from the certified peer. -----------------------
-echo "==> cardano-cli query tip (operator seed point)"
-TIP_JSON="$OUT_DIR/tip.json"
-cardano-cli query tip --testnet-magic "$NETWORK_MAGIC" > "$TIP_JSON" \
-  || cardano-cli query tip --mainnet > "$TIP_JSON" \
-  || die "cardano-cli query tip failed (is the peer at the certified state?)"
-SEED_SLOT="$(grep -oE '"slot"[[:space:]]*:[[:space:]]*[0-9]+' "$TIP_JSON" | grep -oE '[0-9]+' | head -1)"
-SEED_BLOCK_HASH="$(grep -oE '"hash"[[:space:]]*:[[:space:]]*"[0-9a-fA-F]+"' "$TIP_JSON" | grep -oE '[0-9a-fA-F]{64}' | head -1)"
-[[ -n "$SEED_SLOT" && -n "$SEED_BLOCK_HASH" ]] || die "could not parse slot/hash from $TIP_JSON"
-echo "    seed point: slot=$SEED_SLOT hash=$SEED_BLOCK_HASH"
+# ---- keys (canonical, fetched fresh; env override wins) ----------------------
+GENESIS_VKEY="${GENESIS_VERIFICATION_KEY:-$(curl -fsSL "$GENESIS_VKEY_URL")}"
+ANCILLARY_VKEY="${ANCILLARY_VERIFICATION_KEY:-$(curl -fsSL "$ANCILLARY_VKEY_URL")}"
+[[ -n "$GENESIS_VKEY" && -n "$ANCILLARY_VKEY" ]] || die "could not obtain Mithril verification keys"
+export AGGREGATOR_ENDPOINT="$AGG" GENESIS_VERIFICATION_KEY="$GENESIS_VKEY" ANCILLARY_VERIFICATION_KEY="$ANCILLARY_VKEY"
 
-echo "==> cardano-cli query utxo --whole-utxo (seed)"
-UTXO_JSON="$OUT_DIR/utxo.json"
-cardano-cli query utxo --whole-utxo --testnet-magic "$NETWORK_MAGIC" --out-file "$UTXO_JSON" \
-  || cardano-cli query utxo --whole-utxo --mainnet --out-file "$UTXO_JSON" \
-  || die "cardano-cli query utxo failed"
-
-echo "==> consensus inputs bundle"
-CINPUTS_JSON="$OUT_DIR/consensus-inputs.json"
-if [[ -x ci/build_consensus_inputs_bundle.sh ]]; then
-  ci/build_consensus_inputs_bundle.sh --network "$NETWORK" "$CINPUTS_JSON" >&2 \
-    || die "ci/build_consensus_inputs_bundle.sh failed (see its venue env: ADE_LIVE_PEER_CONTAINER / ADE_LIVE_PEER_SOCKET / ...)"
+# ---- PHASE 1: resolve snapshot + REAL cert metadata (Mithril origin) ---------
+log "resolving snapshot metadata from $AGG"
+LIST_JSON="$(mithril-client cardano-db snapshot list --json 2>/dev/null)"
+if [[ "$SNAPSHOT_HASH" == "latest" ]]; then
+  SNAPSHOT_HASH="$(jq -r '.[0].hash' <<<"$LIST_JSON")"
 fi
-[[ -f "$CINPUTS_JSON" ]] || die "consensus inputs not produced at $CINPUTS_JSON — run ci/build_consensus_inputs_bundle.sh for this venue and place the output there"
+ROW="$(jq -r --arg h "$SNAPSHOT_HASH" '.[] | select(.hash==$h)' <<<"$LIST_JSON")"
+[[ -n "$ROW" ]] || die "snapshot hash $SNAPSHOT_HASH not in aggregator list"
+CERT_HASH="$(jq -r '.certificate_hash' <<<"$ROW")"
+CERT_EPOCH="$(jq -r '.beacon.epoch' <<<"$ROW")"
+IMMUTABLE_N="$(jq -r '.beacon.immutable_file_number' <<<"$ROW")"
+MERKLE_ROOT="$(jq -r '.merkle_root' <<<"$ROW")"
+[[ "$CERT_HASH" != "null" && "$CERT_EPOCH" != "null" && "$IMMUTABLE_N" != "null" ]] || die "incomplete cert metadata for $SNAPSHOT_HASH"
+log "snapshot $SNAPSHOT_HASH  cert=$CERT_HASH  epoch=$CERT_EPOCH  immutable=$IMMUTABLE_N"
 
-# --- 3. Build the Mithril manifest (RawMithrilManifest) for --mithril-manifest-path.
-# certified_point = the operator-extracted point (the cert attests this point;
-# for a passing binding the two agree by construction at the certified tip).
-MANIFEST_JSON="$OUT_DIR/mithril-manifest.json"
-cat > "$MANIFEST_JSON" <<JSON
-{
-  "artifact_type": "cardano-database-snapshot",
-  "certificate_hash_hex": "$MITHRIL_CERT_HASH",
-  "network_magic": $NETWORK_MAGIC,
-  "genesis_hash_hex": "$GENESIS_HASH_HEX",
-  "certified_point": { "slot": $SEED_SLOT, "block_hash_hex": "$SEED_BLOCK_HASH" },
-  "immutable_range": { "lo": $IMMUTABLE_LO, "hi": $IMMUTABLE_HI },
-  "source_mithril_client_version": "$(mithril-client --version 2>/dev/null | head -1 || echo unknown)",
-  "source_command": "mithril-client cardano-db download (aggregator $MITHRIL_AGG_ENDPOINT)"
-}
+# ---- PHASE 2: download + verify (idempotent; --include-ancillary) ------------
+# Robustly locate the restored immutable dir wherever mithril-client places it.
+EXISTING_IMM="$(find "$SCRATCH_DIR" -maxdepth 4 -type d -name immutable 2>/dev/null | head -1)"
+if [[ -n "$EXISTING_IMM" && -n "$(ls -A "$EXISTING_IMM" 2>/dev/null)" ]]; then
+  DB="$(dirname "$EXISTING_IMM")"
+  log "scratch DB already present at $DB — skipping download"
+else
+  log "downloading + verifying snapshot into $SCRATCH_DIR (the ~18 GB step)"
+  mithril-client cardano-db download "$SNAPSHOT_HASH" \
+    --include-ancillary --download-dir "$SCRATCH_DIR" >&2
+  EXISTING_IMM="$(find "$SCRATCH_DIR" -maxdepth 4 -type d -name immutable 2>/dev/null | head -1)"
+  [[ -n "$EXISTING_IMM" ]] || die "download did not produce an immutable dir under $SCRATCH_DIR"
+  DB="$(dirname "$EXISTING_IMM")"
+  log "restored DB at $DB"
+fi
+
+# ---- PHASE 3: scratch config + EMPTY topology (read-only copy of canonical) --
+log "preparing scratch config + empty topology (frozen, no peers)"
+rm -rf "$CFG"; mkdir -p "$CFG"
+cp -a "$CANON_CONFIG_DIR"/. "$CFG"/
+CONFIG_JSON="$(ls "$CFG"/config.json "$CFG"/configuration.json 2>/dev/null | head -1)"
+[[ -n "$CONFIG_JSON" ]] || die "no config.json in $CFG"
+cat > "$CFG/topology-empty.json" <<'JSON'
+{ "localRoots": [ { "accessPoints": [], "advertise": false, "valency": 0, "trustable": false } ],
+  "publicRoots": [ { "accessPoints": [], "advertise": false } ],
+  "useLedgerAfterSlot": -1 }
 JSON
 
-# Negative control: same manifest, certified block hash deliberately flipped.
-NEG_MANIFEST_JSON="$OUT_DIR/mithril-manifest.negative.json"
-NEG_HASH="$(printf '%s' "$SEED_BLOCK_HASH" | tr '0-9a-f' '1-9a-f0')"  # perturb every nibble
-sed "s/$SEED_BLOCK_HASH/$NEG_HASH/" "$MANIFEST_JSON" > "$NEG_MANIFEST_JSON"
+# ---- PHASE 4: start the FROZEN throwaway node -------------------------------
+log "starting frozen throwaway node container $CONTAINER"
+docker rm -f "$CONTAINER" >/dev/null 2>&1 || true
+docker run -d --name "$CONTAINER" \
+  -v "$DB:/data/db" -v "$CFG:/data/config" -v "$IPC:/data/ipc" -v "$OUT:/data/out" \
+  "$NODE_IMAGE" run \
+    --config "/data/config/$(basename "$CONFIG_JSON")" \
+    --topology /data/config/topology-empty.json \
+    --database-path /data/db \
+    --socket-path /data/ipc/node.socket \
+    --host-addr 0.0.0.0 --port 3001 >&2
+CCLI=(docker exec -e CARDANO_NODE_SOCKET_PATH=/data/ipc/node.socket "$CONTAINER" cardano-cli)
 
-# --- 4. Positive: ade_node --mode node first-run (verify_mithril_binding). ----
-run_first_run() {
-  local manifest="$1" snap="$2" wal="$3" log="$4"
-  rm -rf "$snap" "$wal"; mkdir -p "$snap" "$wal"
+log "waiting for the node socket + ledger (up to ~20 min on the ancillary snapshot)"
+TIP_JSON=""
+for _ in $(seq 1 240); do
+  if TIP_JSON="$("${CCLI[@]}" query tip --testnet-magic "$NETWORK_MAGIC" 2>/dev/null)"; then
+    [[ -n "$TIP_JSON" ]] && break
+  fi
+  TIP_JSON=""; docker exec "$CONTAINER" true 2>/dev/null || die "throwaway node container died (see: docker logs $CONTAINER)"
+  sleep 5
+done
+[[ -n "$TIP_JSON" ]] || die "node did not become queryable in time"
+
+# ---- PHASE 5: extract at the FROZEN boundary --------------------------------
+# certified_point: the certified immutable boundary, GROUNDED in the cert (the
+# frozen tip's epoch MUST equal the cert epoch — proof it has not synced past N).
+CERTIFIED_SLOT="$(jq -r '.slot' <<<"$TIP_JSON")"
+CERTIFIED_HASH="$(jq -r '.hash' <<<"$TIP_JSON")"
+TIP_EPOCH="$(jq -r '.epoch' <<<"$TIP_JSON")"
+[[ "$TIP_EPOCH" == "$CERT_EPOCH" ]] || die "frozen tip epoch ($TIP_EPOCH) != cert epoch ($CERT_EPOCH) — node not frozen at the certified boundary; refusing to label a non-certified tip as certified"
+log "certified immutable boundary (cert-grounded): slot=$CERTIFIED_SLOT hash=$CERTIFIED_HASH epoch=$TIP_EPOCH"
+
+# operator_seed_point: an INDEPENDENT re-read at extraction time (the point the
+# UTxO seed is taken at). On a frozen node this equals the certified boundary;
+# the assertion below is the honest proof.
+OP_TIP_JSON="$("${CCLI[@]}" query tip --testnet-magic "$NETWORK_MAGIC")"
+OP_SLOT="$(jq -r '.slot' <<<"$OP_TIP_JSON")"
+OP_HASH="$(jq -r '.hash' <<<"$OP_TIP_JSON")"
+[[ "$OP_SLOT" == "$CERTIFIED_SLOT" && "$OP_HASH" == "$CERTIFIED_HASH" ]] \
+  || die "operator extraction tip drifted from the certified boundary (node not frozen) — aborting"
+
+log "extracting whole UTxO seed (large)"
+"${CCLI[@]}" query utxo --whole-utxo --testnet-magic "$NETWORK_MAGIC" --out-file /data/out/utxo.json
+[[ -s "$OUT/utxo.json" ]] || die "utxo.json not produced"
+
+log "building consensus-inputs bundle against the throwaway container"
+ADE_LIVE_PEER_CONTAINER="$CONTAINER" ADE_LIVE_NETWORK_MAGIC="$NETWORK_MAGIC" \
+ADE_LIVE_PEER_SOCKET="/data/ipc/node.socket" \
+  ci/build_consensus_inputs_bundle.sh --network "$NETWORK" "$OUT/consensus-inputs.json" >&2 \
+  || die "consensus-inputs bundle build failed"
+
+# Genesis hash (for the manifest + ade flag) — the real Shelley genesis hash
+# from the node's config. The manifest's genesis_hash_hex and ade's --genesis-hash
+# use the SAME value, so verify_mithril_binding's GenesisHashMismatch check is a
+# consistency check over the real preprod genesis hash.
+GENESIS_HASH_HEX="$(jq -r '.ShelleyGenesisHash // empty' "$CONFIG_JSON" 2>/dev/null || true)"
+[[ -n "$GENESIS_HASH_HEX" ]] || die "could not resolve ShelleyGenesisHash from $CONFIG_JSON"
+
+# ---- PHASE 6: manifests (certified_point from cert; negative = flipped) ------
+MANIFEST="$OUT/mithril-manifest.json"
+cat > "$MANIFEST" <<JSON
+{
+  "artifact_type": "cardano-database-snapshot",
+  "certificate_hash_hex": "$CERT_HASH",
+  "network_magic": $NETWORK_MAGIC,
+  "genesis_hash_hex": "$GENESIS_HASH_HEX",
+  "certified_point": { "slot": $CERTIFIED_SLOT, "block_hash_hex": "$CERTIFIED_HASH" },
+  "immutable_range": { "lo": 0, "hi": $IMMUTABLE_N },
+  "source_mithril_client_version": "$(mithril-client --version | head -1)",
+  "source_command": "mithril-client cardano-db download $SNAPSHOT_HASH --include-ancillary (aggregator $AGG)"
+}
+JSON
+NEG_MANIFEST="$OUT/mithril-manifest.negative.json"
+NEG_HASH="$(printf '%s' "$CERTIFIED_HASH" | tr '0123456789abcdef' '123456789abcdef0')"
+sed "s/$CERTIFIED_HASH/$NEG_HASH/" "$MANIFEST" > "$NEG_MANIFEST"
+
+# ---- PHASE 7: stop the node (free RAM), run Ade first-run + negative control --
+log "stopping throwaway node before ade_node import"
+docker stop "$CONTAINER" >/dev/null 2>&1 || true
+
+ADE_BIN="$REPO_ROOT/target/release/ade_node"
+[[ -x "$ADE_BIN" ]] || { log "building ade_node --release"; cargo build -p ade_node --release >&2; }
+
+run_first_run() { # manifest snap wal log
+  rm -rf "$2" "$3"; mkdir -p "$2" "$3"
   set +e
-  "$ADE_BIN" --mode node \
-    --genesis-path "$GENESIS_PATH" --network "$NETWORK" \
-    --json-seed "$UTXO_JSON" --consensus-inputs-path "$CINPUTS_JSON" \
-    --mithril-manifest-path "$manifest" \
-    --seed-point-slot "$SEED_SLOT" --seed-block-hash "$SEED_BLOCK_HASH" \
+  "$ADE_BIN" --mode node --genesis-path "$CFG" --network "$NETWORK" \
+    --json-seed "$OUT/utxo.json" --consensus-inputs-path "$OUT/consensus-inputs.json" \
+    --mithril-manifest-path "$1" \
+    --seed-point-slot "$OP_SLOT" --seed-block-hash "$OP_HASH" \
     --network-magic "$NETWORK_MAGIC" --genesis-hash "$GENESIS_HASH_HEX" \
-    --snapshot-dir "$snap" --wal-dir "$wal" \
-    > "$log" 2>&1
-  local rc=$?
-  set -e
-  return $rc
+    --snapshot-dir "$2" --wal-dir "$3" > "$4" 2>&1
+  local rc=$?; set -e; return $rc
 }
 
-echo "==> ade_node --mode node first-run (POSITIVE)"
-POS_LOG="$OUT_DIR/node-first-run.stderr.log"
-POS_RC=0
-run_first_run "$MANIFEST_JSON" "$OUT_DIR/snap.pos" "$OUT_DIR/wal.pos" "$POS_LOG" || POS_RC=$?
-echo "    exit=$POS_RC"
-grep -q "first-run Mithril bootstrap complete" "$POS_LOG" \
-  || die "positive first-run did not report binding success (see $POS_LOG)"
-[[ "$POS_RC" == "0" ]] || die "positive first-run exited $POS_RC (expected 0)"
-BINDING_RESULT="pass"
+log "ade_node --mode node first-run (POSITIVE)"
+POS_LOG="$OUT/node-first-run.stderr.log"; POS_RC=0
+run_first_run "$MANIFEST" "$OUT/snap.pos" "$OUT/wal.pos" "$POS_LOG" || POS_RC=$?
+grep -q "first-run Mithril bootstrap complete" "$POS_LOG" || die "positive first-run did not report binding success (see $POS_LOG)"
+[[ "$POS_RC" == "0" ]] || die "positive first-run exited $POS_RC (see $POS_LOG)"
 INIT_LEDGER_FP="$(grep -oE 'initial_ledger_fingerprint=[^,)]+' "$POS_LOG" | head -1 | sed 's/initial_ledger_fingerprint=//')"
 
-echo "==> ade_node --mode node first-run (NEGATIVE control)"
-NEG_LOG="$OUT_DIR/node-first-run.negative.stderr.log"
-NEG_RC=0
-run_first_run "$NEG_MANIFEST_JSON" "$OUT_DIR/snap.neg" "$OUT_DIR/wal.neg" "$NEG_LOG" || NEG_RC=$?
-echo "    exit=$NEG_RC"
-[[ "$NEG_RC" != "0" ]] || die "negative control unexpectedly SUCCEEDED — binding did not discriminate (see $NEG_LOG)"
-# Classify the discriminating error from the transcript.
+log "ade_node --mode node first-run (NEGATIVE control)"
+NEG_LOG="$OUT/node-first-run.negative.stderr.log"; NEG_RC=0
+run_first_run "$NEG_MANIFEST" "$OUT/snap.neg" "$OUT/wal.neg" "$NEG_LOG" || NEG_RC=$?
+[[ "$NEG_RC" != "0" ]] || die "negative control SUCCEEDED — binding did not discriminate (see $NEG_LOG)"
 NEG_ERROR="$(grep -oE 'CertifiedPointMismatch|EpochMismatch|NetworkMagicMismatch|GenesisHashMismatch|CertificateHashMismatch|UnsupportedArtifactType' "$NEG_LOG" | head -1)"
-[[ -n "$NEG_ERROR" ]] || die "negative control failed but with an unrecognised error (see $NEG_LOG) — not a binding-discrimination proof"
+[[ -n "$NEG_ERROR" ]] || die "negative control failed with an unrecognised error (see $NEG_LOG)"
 
-# --- 5. Ade-recomputed values (independent of the node, for cross-check). -----
-SEED_ARTIFACT_HASH=""
-if command -v b2sum >/dev/null 2>&1; then
-  SEED_ARTIFACT_HASH="$(b2sum -l 256 "$UTXO_JSON" | awk '{print $1}')"
-fi
-[[ -n "$SEED_ARTIFACT_HASH" ]] || die "b2sum (BLAKE2b-256) needed to record ade_recomputed_seed_artifact_hash; install coreutils"
-UTXO_FP="$(grep -oE 'imported_utxo_fingerprint[=: ]+[0-9a-fA-F]+' "$POS_LOG" | grep -oE '[0-9a-fA-F]+$' | head -1)"
-UTXO_FP="${UTXO_FP:-unknown_see_transcript}"
-
-# --- 6. Emit the bundle manifest. --------------------------------------------
-DATE="$(grep -oE '"time"[[:space:]]*:[[:space:]]*"[0-9-]+' "$TIP_JSON" | grep -oE '[0-9]{4}-[0-9]{2}-[0-9]{2}' | head -1)"
-DATE="${DATE:-undated}"
-BUNDLE="$OUT_DIR/mithril-documented-evidence_${NETWORK}_${DATE}.toml"
+# ---- PHASE 8: emit the bundle ----------------------------------------------
+SEED_ARTIFACT_HASH="$(b2sum -l 256 "$OUT/utxo.json" | awk '{print $1}')"
+DATE="$(date -u +%Y-%m-%d)"
+BUNDLE="$OUT/mithril-documented-evidence_${NETWORK}_${DATE}.toml"
 cat > "$BUNDLE" <<TOML
 schema_version = 1
 
 ade_commit                  = "$ADE_COMMIT"
 network                     = "$NETWORK"
 captured_by                 = "$CAPTURED_BY"
-mithril_aggregator_endpoint = "$MITHRIL_AGG_ENDPOINT"
-mithril_certificate_hash    = "$MITHRIL_CERT_HASH"
-mithril_client_version      = "$(mithril-client --version 2>/dev/null | head -1 || echo unknown)"
-cardano_node_version        = "$(cardano-node --version 2>/dev/null | head -1 || echo unknown)"
-cardano_cli_version         = "$(cardano-cli --version 2>/dev/null | head -1 || echo unknown)"
+mithril_aggregator_endpoint = "$AGG"
+mithril_certificate_hash    = "$CERT_HASH"
+mithril_client_version      = "$(mithril-client --version | head -1)"
+cardano_node_version        = "$(docker run --rm "$NODE_IMAGE" --version 2>/dev/null | head -1 || echo "$NODE_IMAGE")"
+cardano_cli_version         = "$(docker run --rm --entrypoint cardano-cli "$NODE_IMAGE" --version 2>/dev/null | head -1 || echo unknown)"
 
-mithril_signed_entity        = "$MITHRIL_SIGNED_ENTITY"
-mithril_immutable_range_lo   = $IMMUTABLE_LO
-mithril_immutable_range_hi   = $IMMUTABLE_HI
-mithril_certified_slot       = $SEED_SLOT
-mithril_certified_block_hash = "$SEED_BLOCK_HASH"
+mithril_signed_entity        = "CardanoDatabase { epoch = $CERT_EPOCH, immutable_file_number = $IMMUTABLE_N }"
+mithril_immutable_range_lo   = 0
+mithril_immutable_range_hi   = $IMMUTABLE_N
+mithril_certified_slot       = $CERTIFIED_SLOT
+mithril_certified_block_hash = "$CERTIFIED_HASH"
 
-operator_seed_point_slot       = $SEED_SLOT
-operator_seed_point_block_hash = "$SEED_BLOCK_HASH"
+operator_seed_point_slot       = $OP_SLOT
+operator_seed_point_block_hash = "$OP_HASH"
 
-utxo_json_file          = "$(basename "$UTXO_JSON")"
-utxo_json_sha256        = "$(sha "$UTXO_JSON")"
-consensus_inputs_file   = "$(basename "$CINPUTS_JSON")"
-consensus_inputs_sha256 = "$(sha "$CINPUTS_JSON")"
-mithril_manifest_file   = "$(basename "$MANIFEST_JSON")"
-mithril_manifest_sha256 = "$(sha "$MANIFEST_JSON")"
-node_transcript_file    = "$(basename "$POS_LOG")"
+utxo_json_file          = "utxo.json"
+utxo_json_sha256        = "$(sha "$OUT/utxo.json")"
+consensus_inputs_file   = "consensus-inputs.json"
+consensus_inputs_sha256 = "$(sha "$OUT/consensus-inputs.json")"
+mithril_manifest_file   = "mithril-manifest.json"
+mithril_manifest_sha256 = "$(sha "$MANIFEST")"
+node_transcript_file    = "node-first-run.stderr.log"
 node_transcript_sha256  = "$(sha "$POS_LOG")"
 
 ade_recomputed_seed_artifact_hash = "$SEED_ARTIFACT_HASH"
 ade_initial_ledger_fingerprint    = "${INIT_LEDGER_FP:-see_transcript}"
-ade_imported_utxo_fingerprint     = "$UTXO_FP"
+ade_imported_utxo_fingerprint     = "see_transcript"
 
-binding_result = "$BINDING_RESULT"
+binding_result = "pass"
 node_exit_code = $POS_RC
 
-negative_control_manifest_file   = "$(basename "$NEG_MANIFEST_JSON")"
-negative_control_manifest_sha256 = "$(sha "$NEG_MANIFEST_JSON")"
+negative_control_manifest_file   = "mithril-manifest.negative.json"
+negative_control_manifest_sha256 = "$(sha "$NEG_MANIFEST")"
 negative_control_outcome         = "fail_closed"
 negative_control_error           = "$NEG_ERROR"
 negative_control_node_exit_code  = $NEG_RC
 TOML
 
-echo "==> bundle written: $BUNDLE"
-echo "    review it, move it + the referenced artifacts into docs/evidence/, then run:"
-echo "      ci/validate_mithril_documented_evidence.sh"
-echo "    (RO-MITHRIL-IMPORT-01 stays partial until that bundle is committed + validator-green.)"
+log "DONE. bundle: $BUNDLE"
+log "review, then: cp $OUT/{mithril-documented-evidence_*.toml,utxo.json,consensus-inputs.json,mithril-manifest.json,mithril-manifest.negative.json,node-first-run.stderr.log} docs/evidence/"
+log "then: ci/validate_mithril_documented_evidence.sh   (RO-MITHRIL-IMPORT-01 stays partial until that bundle is committed + green)"

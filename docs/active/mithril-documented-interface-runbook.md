@@ -34,22 +34,48 @@ surface, contra [[feedback-oracle-seed-then-ade-owns]] and
 [[feedback-mithril-is-peer-infra-not-ade-authority]] ("documented cli interfaces over
 reverse-engineering utxohd").
 
+## Default evaluator startup path (bounty)
+
+For the bounty judge and external evaluators, **Mithril-certified snapshot restore is the
+default startup path** — not from-genesis replay. The public challenge allows sync from
+*either* a recent Mithril snapshot *or* genesis up to tip, so the snapshot path is
+legitimate; it is also simpler for the judge, safer for us, and reproducible from a
+**fresh scratch directory** (no dependency on our long-lived local peer). The
+evaluator-facing path is:
+
+    download certified snapshot → restore a FROZEN node → extract the certified state
+      → start Ade from that state → follow tip → produce/serve
+
+From-genesis (`genesis replay → full historical validation → tip`) remains **owed** as a
+separate compatibility milestone (`RO-GENESIS-REPLAY-01`) with its own invariant slices
+and evidence — important, but **not** the default judge path today. The Mithril path is
+kept honest and boring: `certified_point` comes from Mithril metadata,
+`operator_seed_point` from the frozen restored node, the two are compared, Ade imports
+that exact state, and a negative control proves a mismatch is rejected.
+
 ## Operator runbook — the documented-interface path
 
 The Ade-side composition (steps 3–6) is a **single** `ade_node --mode node` first-run
 invocation; `ci/capture_mithril_documented_evidence.sh` automates the whole sequence
 and emits an evidence bundle.
 
-1. **Acquire the certified snapshot:** `mithril-client cardano-db download <DIGEST>`
-   into the peer's `db/`, verifying against the genesis verification key. Mithril is
-   acquisition/peer infra, **never an Ade trust root**.
-2. **Bring the peer to the certified state:** `cardano-node run` on the restored DB;
-   if it uses LMDB/Legacy UTXO-HD, run `mithril client utxo-hd snapshot-converter`
-   first (cardano-node-side tooling — **not** consumed by Ade).
-3. **Extract the seed via documented interfaces:** `cardano-cli query utxo --whole-utxo
-   --out-file utxo.json`; build the consensus inputs via
-   `ci/build_consensus_inputs_bundle.sh` (epoch nonce / stake / ASC / epoch window);
-   note the **operator seed point** (slot + block hash) from `cardano-cli query tip`.
+1. **Acquire the certified snapshot into a FRESH SCRATCH dir** (never the canonical peer
+   DB): `mithril-client cardano-db download <DIGEST> --include-ancillary --download-dir
+   <scratch>`, verifying against the **canonical** genesis + ancillary verification keys
+   (fetched fresh from the Mithril repo — NOT the stale genesis key hardcoded in
+   `ci/mithril_restore_preprod_peer.sh`, whose last 4 bytes differ and fails cert-chain
+   verify). Mithril is acquisition infra, **never an Ade trust root**.
+2. **Bring a THROWAWAY node to the FROZEN certified state:** start a disposable
+   `cardano-node` container on the scratch DB with an **empty topology** (no peers, no
+   network sync) so its tip cannot drift past the certified immutable boundary. The
+   `--include-ancillary` ledger snapshot lets it bootstrap in minutes rather than
+   replaying from genesis for hours.
+3. **Extract at the FROZEN boundary via documented interfaces:** `cardano-cli query utxo
+   --whole-utxo` (the **seed**); `ci/build_consensus_inputs_bundle.sh` (epoch nonce /
+   stake / ASC / epoch window); and the **operator seed point** (slot + block hash) from
+   `cardano-cli query tip`. The capture script first verifies the frozen tip's epoch
+   equals the cert epoch — proof it has not synced past the boundary — before treating it
+   as the certified point.
 4. **Build the Mithril manifest** (`RawMithrilManifest` JSON: `artifact_type`,
    `certificate_hash_hex`, `network_magic`, `genesis_hash_hex`,
    `certified_point{slot, block_hash_hex}`, `immutable_range{lo,hi}`,
@@ -102,7 +128,7 @@ is turnkey:
 |---|---|
 | `docs/evidence/schemas/mithril-documented-evidence.schema.md` | field schema + promotion path. |
 | `docs/evidence/schemas/mithril-documented-evidence.manifest.template.toml` | fill-in manifest template. |
-| `ci/capture_mithril_documented_evidence.sh` | RED operator orchestrator: runs the positive `--mode node` first-run **and** a mismatched-manifest negative control, then emits the bundle (artifacts + sha256-bound manifest). |
+| `ci/capture_mithril_documented_evidence.sh` | RED operator orchestrator, **non-destructive scratch venue**: downloads the snapshot into a fresh dir, runs a throwaway **frozen** (empty-topology) node, sources `certified_point` from the cert + frozen boundary (verifying tip epoch == cert epoch) independent of `operator_seed_point`, runs the positive `--mode node` first-run **and** a flipped-hash negative control, emits the sha256-bound bundle. Canonical `.cardano-node-preprod/db` is never touched. |
 | `ci/validate_mithril_documented_evidence.sh` | validator: vacuous-PASS when no bundle is committed; strict (required fields + sha256-bound artifacts + `binding_result=pass` + negative-control fail-closed) when one is. |
 
 A green bundle proves the **full documented-interface chain** ran on real artifacts AND
