@@ -254,6 +254,15 @@ pub enum NodeLifecycleError {
     /// its commit-point provenance is absent — treat as "not imported".
     /// Fail closed.
     WarmStartNoProvenance,
+    /// DURABLE-ADMISSION-BYTES: the WAL holds `AdmitBlock(block_hash)` but
+    /// `ChainDb::get_block_by_hash` returned `None` — the durable block bytes the
+    /// WAL admission authority requires are absent. Corrupted durable state, NOT
+    /// block absence; fail closed (never a silent skip).
+    DurableBlockBytesMissing {
+        block_hash: Hash32,
+        entry_index: usize,
+        source: &'static str,
+    },
     /// Warm-start: the persisted snapshot is below the chain tip, so
     /// recovery would require forward block replay. That is L4 durable-apply
     /// territory (and L4c's crash-window proof); L3 recovers only a
@@ -349,6 +358,7 @@ fn exit_code_for(e: &NodeLifecycleError) -> i32 {
         | NodeLifecycleError::WarmStartMultipleAnchorLineages { .. }
         | NodeLifecycleError::WarmStartWalReplay(_)
         | NodeLifecycleError::WarmStartNoProvenance
+        | NodeLifecycleError::DurableBlockBytesMissing { .. }
         | NodeLifecycleError::WarmStartForwardReplayUnsupported { .. }
         | NodeLifecycleError::WarmStartBootstrap(_) => EXIT_NODE_WARM_START_RECOVERY_FAILED,
         NodeLifecycleError::RelaySync(_)
@@ -2149,15 +2159,28 @@ pub(crate) fn warm_start_recovery(
         .read_all()
         .map_err(|e| NodeLifecycleError::WarmStartWalReplay(format!("{e:?}")))?;
     let mut block_bytes: BTreeMap<Hash32, Vec<u8>> = BTreeMap::new();
-    for entry in &entries {
+    for (entry_index, entry) in entries.iter().enumerate() {
         // Only `AdmitBlock` entries reference preserved block bytes;
         // `SeedEpochConsensusInputsImported` (A3a) entries carry no block
         // hash and are skipped.
         if let ade_ledger::wal::WalEntry::AdmitBlock { block_hash, .. } = entry {
-            if let Some(stored) = ChainDb::get_block_by_hash(chaindb, block_hash)
+            // DURABLE-ADMISSION-BYTES: a WAL `AdmitBlock` whose bytes are absent
+            // from the ChainDb is corrupted durable state, NOT block absence.
+            // Fail closed — never the prior silent skip (which masked the
+            // admission-runner persistence gap behind an empty replay map).
+            match ChainDb::get_block_by_hash(chaindb, block_hash)
                 .map_err(|e| NodeLifecycleError::OnDiskRead(format!("{e:?}")))?
             {
-                block_bytes.insert(block_hash.clone(), stored.bytes);
+                Some(stored) => {
+                    block_bytes.insert(block_hash.clone(), stored.bytes);
+                }
+                None => {
+                    return Err(NodeLifecycleError::DurableBlockBytesMissing {
+                        block_hash: block_hash.clone(),
+                        entry_index,
+                        source: "ChainDb::get_block_by_hash",
+                    });
+                }
             }
         }
     }
@@ -2521,6 +2544,17 @@ fn report(e: &NodeLifecycleError) {
         }
         NodeLifecycleError::OnDiskRead(d) => {
             eprintln!("ade_node --mode node: cannot read on-disk state: {d}");
+        }
+        NodeLifecycleError::DurableBlockBytesMissing {
+            block_hash,
+            entry_index,
+            source,
+        } => {
+            eprintln!(
+                "ade_node --mode node: warm-start FAIL-CLOSED -- WAL AdmitBlock #{entry_index} \
+                 references block {block_hash:?} whose preserved bytes are absent from the ChainDb \
+                 (via {source}); corrupted durable state, NOT block absence (DURABLE-ADMISSION-BYTES)."
+            );
         }
         NodeLifecycleError::ExtractionRead(d) => {
             eprintln!(
@@ -4867,6 +4901,98 @@ mod tests {
             ),
             "multiple lineages must fail closed, got {r:?}"
         );
+    }
+
+    #[test]
+    fn warmstart_from_real_admission_store_uses_persisted_bytes_no_mock() {
+        // DURABLE-ADMISSION-BYTES (load-bearing positive): a store written with
+        // the durable-admit contract `chaindb.put_block(bytes)` THEN
+        // `wal.append(AdmitBlock{hash})` — the EXACT ordering the admission
+        // runner now performs (admission/runner.rs), reproduced here by
+        // `put_durable_tip` — recovers across a fresh open. warm_start_recovery
+        // takes NO injected byte map: it reads the preserved bytes back out of
+        // the persistent ChainDb. Pairs with the negative below (remove the
+        // bytes -> fail closed), which together prove the recovery consumes the
+        // REAL persistent store, not a harness-supplied map.
+        let d = fresh_warm_dirs();
+        let record = warm_sample_record(WARM_ANCHOR_FP, WARM_EPOCH);
+        let bytes = encode_seed_epoch_consensus_inputs(&record);
+        {
+            let (chaindb, mut wal) = open_warm_stores(&d);
+            chaindb
+                .put_seed_epoch_consensus_inputs(&WARM_ANCHOR_FP, &bytes)
+                .unwrap();
+            append_seed_epoch_provenance(&mut wal, &WARM_ANCHOR_FP, WARM_EPOCH, &bytes).unwrap();
+            // put_block(hash=0xBB, bytes=0xAB;8) THEN wal.append(AdmitBlock{0xBB}).
+            put_durable_tip(&chaindb, &mut wal, WARM_TIP_SLOT);
+            // stores dropped here -> fresh-open / restart boundary.
+        }
+
+        let (chaindb, wal) = open_warm_stores(&d);
+        let state = warm_start_recovery(&chaindb, &wal)
+            .expect("warm-start recovers from the persisted admission store (no mock)");
+        assert_eq!(
+            state.tip.map(|t| t.slot.0),
+            Some(WARM_TIP_SLOT),
+            "recovered live-follow tip is the durably-admitted block"
+        );
+        // The preserved bytes are the REAL ones the contract wrote, retrievable
+        // by hash from the same persistent store the recovery read.
+        let back = ChainDb::get_block_by_hash(&chaindb, &Hash32([0xBB; 32]))
+            .unwrap()
+            .expect("the admitted block's bytes are durable in the ChainDb");
+        assert_eq!(
+            back.bytes,
+            vec![0xAB; 8],
+            "byte-identical preserved admission block"
+        );
+    }
+
+    #[test]
+    fn warmstart_fails_closed_when_wal_admitblock_missing_bytes() {
+        // DURABLE-ADMISSION-BYTES (load-bearing negative): a WAL AdmitBlock
+        // whose preserved bytes are ABSENT from the ChainDb is corrupted durable
+        // state, NOT block absence. warm_start_recovery must fail closed with
+        // DurableBlockBytesMissing — never the prior silent skip that masked the
+        // admission-runner persistence gap behind an empty replay map. This is
+        // the positive above MINUS the chaindb.put_block (the exact pre-fix gap).
+        let d = fresh_warm_dirs();
+        let record = warm_sample_record(WARM_ANCHOR_FP, WARM_EPOCH);
+        let bytes = encode_seed_epoch_consensus_inputs(&record);
+        let admitted_hash = Hash32([0xBB; 32]);
+        {
+            let (chaindb, mut wal) = open_warm_stores(&d);
+            chaindb
+                .put_seed_epoch_consensus_inputs(&WARM_ANCHOR_FP, &bytes)
+                .unwrap();
+            // The WAL records an admitted block, but its bytes were NEVER
+            // persisted to the ChainDb (no put_block) — the pre-fix gap.
+            let ledger = LedgerState::new(CardanoEra::Conway);
+            wal.append(ade_ledger::wal::WalEntry::AdmitBlock {
+                prior_fp: WARM_ANCHOR_FP,
+                block_hash: admitted_hash.clone(),
+                slot: SlotNo(WARM_TIP_SLOT),
+                verdict: ade_ledger::wal::BlockVerdictTag::Valid,
+                post_fp: fingerprint(&ledger).combined,
+            })
+            .unwrap();
+        }
+        let (chaindb, wal) = open_warm_stores(&d);
+        let r = warm_start_recovery(&chaindb, &wal);
+        match r {
+            Err(NodeLifecycleError::DurableBlockBytesMissing {
+                block_hash,
+                entry_index,
+                source,
+            }) => {
+                assert_eq!(block_hash, admitted_hash, "names the block whose bytes are absent");
+                assert_eq!(source, "ChainDb::get_block_by_hash", "names the failed lookup");
+                assert_eq!(entry_index, 0, "the sole WAL entry (the AdmitBlock) index");
+            }
+            other => panic!(
+                "absent admit-block bytes must fail closed with DurableBlockBytesMissing, got {other:?}"
+            ),
+        }
     }
 
     #[test]

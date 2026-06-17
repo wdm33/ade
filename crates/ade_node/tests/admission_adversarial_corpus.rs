@@ -218,6 +218,7 @@ async fn run_runner_against_block(
     let wal_store = VecWalStore::new();
     let writer_sink: Vec<u8> = Vec::new();
     let writer = AdmissionLogWriter::new(writer_sink);
+    let db = ade_runtime::chaindb::InMemoryChainDb::new();
 
     // Configure the consensus-inputs window so the block's slot
     // lies WITHIN it — the cross-epoch guard must NOT fire; we
@@ -233,6 +234,7 @@ async fn run_runner_against_block(
         chain_dep: PraosChainDepState::genesis(Nonce::ZERO),
         era_schedule: &sched,
         ledger_view: &view,
+        chaindb: &db,
         peer_events: rx,
         shutdown: sh_rx,
         peer_count: 1,

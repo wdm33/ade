@@ -128,6 +128,7 @@ async fn cross_epoch_block_triggers_halt_without_admit() {
     let wal_store = VecWalStore {
         entries: Vec::new(),
     };
+    let db = ade_runtime::chaindb::InMemoryChainDb::new();
     let inputs = AdmissionInputs {
         writer: AdmissionLogWriter::new(Vec::<u8>::new()),
         wal_store,
@@ -137,6 +138,7 @@ async fn cross_epoch_block_triggers_halt_without_admit() {
         chain_dep: PraosChainDepState::genesis(Nonce::ZERO),
         era_schedule: &schedule,
         ledger_view: &view,
+        chaindb: &db,
         peer_events: rx,
         shutdown: sh_rx,
         peer_count: 1,

@@ -7854,3 +7854,35 @@ introduced_in = "PHASE4-N-AO"
 strengthened_in = []
 attack_rationale = "The DC-NODE-39 floor is safe (no mis-admit, no silent stall) but a passive hold cannot recover a bridge ChainSync already passed: a winning-peer descendant that arrived before its never-received bridge strands Ade fail-closed forever -- a liveness denial that, under adversarial or merely unlucky timing, prevents convergence onto the selected winning chain. Active range re-fetch closes it WITHOUT widening trust: the fetch is byte-only (a lying/short range is rejected by parent-link + body-hash validation before any pump_block admit, so a Byzantine peer cannot inject an unvalidated chain), winning-peer-only (S3 already selected, so no loser-orphan turns into a fetch-spam amplifier and no second selector is introduced), bounded-retry (no spin / no resource exhaustion), and clears the hold only on REAL admitted progress (an attempted-but-failed fetch never clears the fence). The floor remains the fail-closed fallback when the range cannot be served."
 evidence_notes = "Declared at PHASE4-N-AO S14. Motivated by the S12-harness-driven Fault-2 finding: late_bridge_recovers_on_progress admits the late bridge (tip==y_hash) but the un-bridgeable descendant is NEVER admitted (tip!=z_hash), and the dispatch MissingBridge arm issues NO re-fetch -- combined with ChainSync single-delivery, the passive floor cannot converge to a winner-descendant whose bridge was never received (run-1's stall). Enforced at S14 close via 6 hermetic tests (missing_bridge_triggers_range_refetch, refetched_bridge_admits_in_order, short_refetch_keeps_hold, lying_refetch_body_rejected, refetch_failure_structured, bounded_retry) + ci_check_missing_bridge_refetch.sh + a live CE-AO-6 run showing range_refetch_started/completed -> bridge+descendant admitted -> convergence. CN-CONS-03 flips only after the live run."
+
+[[rules]]
+id = "DC-WAL-05"
+tier = "derived"
+statement = """
+Received/followed-block durable-admit is BYTES-FIRST. The live admission runner
+(run_admission) MUST persist an admitted block's preserved ORIGINAL bytes to the
+disk-backed ChainDb (ChainDb::put_block) BEFORE appending its WalEntry::AdmitBlock --
+the SAME bytes-first ordering pump_block uses (DC-NODE-12, DC-WAL-04). A put_block
+failure halts the runner fail-closed (AdmissionExitCode::DurableBlockStoreIo, exit 36)
+BEFORE the WAL append, so a WAL admission record can never outlive its block bytes.
+Symmetrically, warm_start_recovery MUST fail closed (DurableBlockBytesMissing) when a
+WAL AdmitBlock's bytes are absent from the ChainDb -- corrupted durable state, NOT block
+absence; the prior silent skip (which masked the persistence gap behind an empty replay
+map) is forbidden. bytes-without-WAL stays a tolerable orphan (DC-WAL-04 reconciliation
+drops it); WAL-without-bytes now halts fail-closed at BOTH the write and the read.
+MEMORY: the live runner holds at most ONE block's bytes at a time (received -> MOVED into
+StoredBlock -> put_block -> dropped at the admission-step end; not cloned, not cached) and
+builds NO heap-resident block-bytes collection -- BA-08 owned-RSS (OP-MEM-02) must not
+regress. The warm-start replay map is a bootstrap-only recovery surface, never live
+admission.
+"""
+source = "docs/active/durable-admission-bytes-slice.md (split-admission-authority bug, surfaced at C2-PREVIEW-BA02 when a fresh-WarmStart forge failed BlockBytesMissing on a graceful-shutdown admission store)"
+cross_ref = ["DC-WAL-01", "DC-WAL-02", "DC-WAL-03", "DC-WAL-04", "DC-NODE-12", "T-REC-05", "OP-MEM-02"]
+code_locus = "crates/ade_node/src/admission/runner.rs (run_admission ProcessedBlock::Admitted arm: StoredBlock put_block BEFORE WalEntry::AdmitBlock; AdmissionExitCode::DurableBlockStoreIo / EXIT_LIVE_DURABLE_BLOCK_STORE_IO=36 fail-closed; block bytes MOVED into StoredBlock then dropped -- no retained map); crates/ade_node/src/node_lifecycle.rs (warm_start_recovery: per-AdmitBlock ChainDb::get_block_by_hash, fail-closed NodeLifecycleError::DurableBlockBytesMissing{block_hash,entry_index,source} -- never the prior silent skip)"
+tests = ["warmstart_from_real_admission_store_uses_persisted_bytes_no_mock", "warmstart_fails_closed_when_wal_admitblock_missing_bytes"]
+ci_scripts = ["ci/ci_check_admission_runner_no_block_byte_map.sh"]
+status = "enforced"
+introduced_in = "DURABLE-ADMISSION-BYTES"
+strengthened_in = []
+attack_rationale = "A WAL admission record that outlives its block bytes is undetectable durable corruption: the admission runner reports 'agreed', the operator gracefully stops, and the NEXT start fails BlockBytesMissing during warm-start replay -- a store that looks admitted but cannot be replayed or forged from. The pre-fix runner appended AdmitBlock WAL without ever calling put_block, and warm_start_recovery SILENTLY SKIPPED missing bytes (empty replay map), so the corruption was invisible until forge time. Bytes-first ordering + the symmetric fail-closed read make the durable-admit contract total. The memory clause prevents the fix from reintroducing the MEM-OPT-UTXO-DISK regression: persistence is to disk (ChainDb), not a heap-resident byte map."
+evidence_notes = "DURABLE-ADMISSION-BYTES (2026-06-17). Surfaced during C2-PREVIEW-BA02: a fresh keyed forge (WarmStart) failed BlockBytesMissing on a store the admission runner had cleanly produced + gracefully stopped -- systematic (same hash across fresh stores, graceful exits), not unclean-shutdown corruption. Root cause: split admission authority -- pump_block (DC-NODE-12) does put_block THEN WAL, but the admission runner's Admitted arm appended WalEntry::AdmitBlock WITHOUT put_block, and warm_start_recovery silently skipped the missing bytes (pre-fix loop inserted only present bytes), masking the gap until forge-time replay. Fix: (1) runner.rs persists the preserved original bytes via ChainDb::put_block BEFORE the WAL append (bytes-first), halting DurableBlockStoreIo (exit 36) on put_block failure; (2) node_lifecycle.rs warm_start_recovery FAILS CLOSED DurableBlockBytesMissing when an AdmitBlock's bytes are absent. Proven hermetically against the real PersistentChainDb + FileWalStore drop+reopen harness (no injected byte map): warmstart_from_real_admission_store_uses_persisted_bytes_no_mock (durable-admit contract -> fresh open -> recovers, byte-identical preserved block) + warmstart_fails_closed_when_wal_admitblock_missing_bytes (AdmitBlock without put_block -> DurableBlockBytesMissing). MEMORY (no BA-08 regression): block bytes MOVED into StoredBlock and dropped per admission step (no clone retained), the live runner builds no Vec<Vec<u8>>/<_,Vec<u8>> map (ci_check_admission_runner_no_block_byte_map.sh), the StaticUtxoFp/track_utxo=false path and the post-bootstrap static-UTxO drop are UNCHANGED so OP-MEM-02 scoped evidence remains valid, and the warm-start replay map is bootstrap-only. The live write-half end-to-end proof (production admission writes the store -> fresh WarmStart forge recovers, no BlockBytesMissing) is the C2-PREVIEW-BA02 forge resume."

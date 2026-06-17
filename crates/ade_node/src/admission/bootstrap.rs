@@ -363,6 +363,7 @@ async fn run_admission_inner(
         chain_dep,
         era_schedule: &era_schedule,
         ledger_view: &ledger_view,
+        chaindb: &chaindb,
         peer_events,
         shutdown,
         peer_count: acli.peer_addrs.len() as u32,

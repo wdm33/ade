@@ -102,6 +102,7 @@ async fn run_with_events(
 
     let writer_sink: Vec<u8> = Vec::new();
     let writer = AdmissionLogWriter::new(writer_sink);
+    let db = ade_runtime::chaindb::InMemoryChainDb::new();
 
     let inputs = AdmissionInputs {
         writer,
@@ -112,6 +113,7 @@ async fn run_with_events(
         chain_dep: PraosChainDepState::genesis(Nonce::ZERO),
         era_schedule: &schedule,
         ledger_view: &view,
+        chaindb: &db,
         peer_events: rx,
         shutdown: sh_rx,
         peer_count: 1,

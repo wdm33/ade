@@ -56,6 +56,7 @@ use crate::admission_log::{
 use crate::mem_measure::rss_sampler::{
     sample_private_dirty_kib, sample_rss_anon_kib, sample_vm_hwm_kib, sample_vm_rss_kib, RssWindow,
 };
+use ade_runtime::chaindb::{ChainDb, StoredBlock};
 
 /// Live agreement diverged exit code.
 pub const EXIT_LIVE_AGREEMENT_DIVERGED: i32 = 30;
@@ -74,6 +75,10 @@ pub const EXIT_LIVE_PEER_SENT_UNDECODABLE: i32 = 34;
 /// (the UTxO mutates, so a static UTxO-component fingerprint would be stale). The
 /// off-heap static path is live `track_utxo=false` ONLY; this fails closed.
 pub const EXIT_LIVE_STATIC_UTXO_FP_INVALID: i32 = 35;
+/// DURABLE-ADMISSION-BYTES: `ChainDb::put_block` (the bytes-first half of
+/// durable-admit) failed; the runner halts BEFORE appending the `AdmitBlock`
+/// WAL entry, so a WAL admission record can never outlive its block bytes.
+pub const EXIT_LIVE_DURABLE_BLOCK_STORE_IO: i32 = 36;
 
 /// Closed exit-code sum. Maps to the binary's exit-code constants
 /// (mirroring `wire_only::EXIT_LIVE_PASS_PEER_FAILURE`).
@@ -95,6 +100,9 @@ pub enum AdmissionExitCode {
     /// A `StaticUtxoFp` was used under `track_utxo=true` (fail-closed; MEM-OPT-UTXO-
     /// DISK S2b-2c.1b-A.2 -- the static off-heap path is `track_utxo=false` only).
     StaticUtxoFpInvalid,
+    /// `ChainDb::put_block` (bytes-first durable-admit) failed; the `AdmitBlock`
+    /// WAL entry was NOT appended (DURABLE-ADMISSION-BYTES). Fail-closed.
+    DurableBlockStoreIo,
 }
 
 impl AdmissionExitCode {
@@ -108,6 +116,7 @@ impl AdmissionExitCode {
             Self::WalAppendIo => EXIT_LIVE_WAL_APPEND_IO,
             Self::PeerSentUndecodableBytes => EXIT_LIVE_PEER_SENT_UNDECODABLE,
             Self::StaticUtxoFpInvalid => EXIT_LIVE_STATIC_UTXO_FP_INVALID,
+            Self::DurableBlockStoreIo => EXIT_LIVE_DURABLE_BLOCK_STORE_IO,
         }
     }
 }
@@ -147,6 +156,12 @@ where
     pub chain_dep: PraosChainDepState,
     pub era_schedule: &'a EraSchedule,
     pub ledger_view: &'a dyn LedgerView,
+    /// DURABLE-ADMISSION-BYTES: the persistent ChainDb the admit loop writes the
+    /// preserved block bytes to BEFORE appending each `AdmitBlock` WAL entry, so a
+    /// fresh-process WarmStart can replay them (the durable-admit contract
+    /// `pump_block` already obeys). Shared with the SnapshotStore (one
+    /// `PersistentChainDb`); written via `&self` interior mutability.
+    pub chaindb: &'a dyn ChainDb,
     pub peer_events: mpsc::Receiver<AdmissionPeerEvent>,
     pub shutdown: watch::Receiver<bool>,
     pub peer_count: u32,
@@ -470,6 +485,35 @@ where
                                 };
                                 let post_fp =
                                     fingerprint_v2_with_utxo(&next_ledger, utxo_fp).combined;
+                                // DURABLE-ADMISSION-BYTES: persist the preserved
+                                // ORIGINAL block bytes BEFORE the AdmitBlock WAL
+                                // entry (bytes-first durable-admit, matching
+                                // pump_block). Bytes-without-WAL is a tolerable
+                                // orphan; WAL-without-bytes is authoritative
+                                // corruption a fresh WarmStart cannot replay.
+                                let stored = StoredBlock {
+                                    hash: block_hash.clone(),
+                                    slot,
+                                    // MOVE (not clone) the preserved bytes -- unused
+                                    // hereafter, so the durable-admit step holds at most
+                                    // ONE block's bytes, written to ChainDb then dropped
+                                    // at iteration end. No heap-resident block-bytes map
+                                    // is built in the live runner (BA-08 owned-RSS must
+                                    // not regress; the WarmStart replay map is a
+                                    // bootstrap-only surface, never live admission).
+                                    bytes: block_bytes,
+                                };
+                                if let Err(e) = inputs.chaindb.put_block(&stored) {
+                                    emit(
+                                        &writer,
+                                        AdmissionLogEvent::AdmissionHalted {
+                                            reason: AdmissionHaltReason::DurableBlockStoreIo,
+                                        },
+                                    )
+                                    .await;
+                                    let _ = e;
+                                    return AdmissionExitCode::DurableBlockStoreIo;
+                                }
                                 let entry = WalEntry::AdmitBlock {
                                     prior_fp: tail_post_fp.clone(),
                                     block_hash: block_hash.clone(),
@@ -775,6 +819,7 @@ fn halt_to_exit(reason: AdmissionHaltReason) -> AdmissionExitCode {
         AdmissionHaltReason::PeerSentUndecodableBytes => {
             AdmissionExitCode::PeerSentUndecodableBytes
         }
+        AdmissionHaltReason::DurableBlockStoreIo => AdmissionExitCode::DurableBlockStoreIo,
     }
 }
 
@@ -1015,6 +1060,7 @@ mod tests {
         shutdown: watch::Receiver<bool>,
         schedule: &'a EraSchedule,
         view: &'a NoopLedgerView,
+        chaindb: &'a dyn ChainDb,
     ) -> AdmissionInputs<'a, Vec<u8>, VecWalStore> {
         AdmissionInputs {
             writer: AdmissionLogWriter::new(Vec::<u8>::new()),
@@ -1025,6 +1071,7 @@ mod tests {
             chain_dep: PraosChainDepState::genesis(Nonce::ZERO),
             era_schedule: schedule,
             ledger_view: view,
+            chaindb,
             peer_events,
             shutdown,
             peer_count: 1,
@@ -1049,7 +1096,8 @@ mod tests {
         let (sh_tx, sh_rx) = watch::channel(false);
         let schedule = make_schedule();
         let view = NoopLedgerView;
-        let inputs = make_inputs(rx, sh_rx, &schedule, &view);
+        let db = ade_runtime::chaindb::InMemoryChainDb::new();
+        let inputs = make_inputs(rx, sh_rx, &schedule, &view, &db);
         // Schedule the shutdown signal on the executor; await the
         // runner inline (avoids the `'static` bound `tokio::spawn`
         // would require for the `&schedule` / `&view` references).
@@ -1067,7 +1115,8 @@ mod tests {
         let (_sh_tx, sh_rx) = watch::channel(false);
         let schedule = make_schedule();
         let view = NoopLedgerView;
-        let inputs = make_inputs(rx, sh_rx, &schedule, &view);
+        let db = ade_runtime::chaindb::InMemoryChainDb::new();
+        let inputs = make_inputs(rx, sh_rx, &schedule, &view, &db);
         drop(tx);
         let exit = run_admission(inputs).await;
         assert_eq!(exit, AdmissionExitCode::Ok);
@@ -1079,7 +1128,8 @@ mod tests {
         let (_sh_tx, sh_rx) = watch::channel(false);
         let schedule = make_schedule();
         let view = NoopLedgerView;
-        let inputs = make_inputs(rx, sh_rx, &schedule, &view);
+        let db = ade_runtime::chaindb::InMemoryChainDb::new();
+        let inputs = make_inputs(rx, sh_rx, &schedule, &view, &db);
         tx.send(AdmissionPeerEvent::Disconnected {
             peer: "p".into(),
         })

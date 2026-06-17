@@ -335,6 +335,10 @@ pub enum AdmissionHaltReason {
     /// adversarial by default when no peer tip exists at the
     /// same slot for a `Diverged` verdict.
     PeerSentUndecodableBytes,
+    /// `ChainDb::put_block` (bytes-first durable-admit) returned a fatal I/O
+    /// error — the `AdmitBlock` WAL entry is NOT appended, so a WAL admission
+    /// record can never outlive its block bytes (DURABLE-ADMISSION-BYTES).
+    DurableBlockStoreIo,
 }
 
 /// Closed shutdown-reason sum for clean exits.
@@ -395,6 +399,7 @@ impl AdmissionHaltReason {
             Self::BootstrapFatal => "bootstrap_fatal",
             Self::CrossEpochUse => "cross_epoch_use",
             Self::PeerSentUndecodableBytes => "peer_sent_undecodable_bytes",
+            Self::DurableBlockStoreIo => "durable_block_store_io",
         }
     }
 }
