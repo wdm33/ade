@@ -1598,6 +1598,10 @@ pub async fn run_relay_loop_with_sched(
                                         new_tip.slot.0,
                                         &new_tip.hash,
                                     );
+                                    // DC-MEM-11: the rare fork-switch-applied evidence path
+                                    // intentionally FULL-recomputes (always exact) -- it is not the
+                                    // per-block catch-up hot path, so it is not routed through the
+                                    // utxo_fp_cache (emit_participant_admit, the hot path, reuses prior_fp).
                                     let post_fp = fingerprint(&state.receive.ledger).combined;
                                     let peer_tip = source.followed_peer_tip_signal().tip();
                                     ev.emit_admit_and_verdict(
@@ -2919,6 +2923,12 @@ where
             // (3) Re-anchor the WAL running fingerprint to the rolled-back fp.
             let rolled_back_fp = fingerprint(&fwd.receive.ledger).combined;
             fwd.prior_fp = rolled_back_fp;
+            // DC-MEM-11: the ledger was REPLACED wholesale by commit_rollback, so
+            // drop the per-loop UTxO-fp cache (keyed on OverlayUtxo generation) --
+            // the next admit rebuilds it from the rolled-back state. Structural
+            // guard against cross-fork generation reuse under a future
+            // track_utxo=true; a byte-identical no-op recompute under track_utxo=false.
+            fwd.invalidate_utxo_fp_cache();
             // (4) Append the durable rollback record — ONLY after commit.
             let rb_point = RollbackPoint {
                 slot: to_point.slot,

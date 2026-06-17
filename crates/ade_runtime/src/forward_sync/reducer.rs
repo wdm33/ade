@@ -188,6 +188,20 @@ impl ForwardSyncState {
             utxo_fp_cache: UtxoFpCache::new(),
         }
     }
+
+    /// LIVE-FOLLOW-THROUGHPUT (DC-MEM-11): drop the per-loop UTxO-fingerprint
+    /// cache. The live lifecycle calls this whenever the ledger is REPLACED
+    /// wholesale (a rollback's `commit_rollback`) rather than advanced
+    /// incrementally, so the cache can never serve a component keyed on a
+    /// generation from a DIFFERENT UTxO lineage. Under the current
+    /// `track_utxo=false` follow this is belt-and-suspenders (the rolled-back
+    /// UTxO content is identical, so even a generation collision would serve the
+    /// correct constant); under a future `track_utxo=true` it is the structural
+    /// guard that makes cross-fork generation reuse safe — the cache is rebuilt
+    /// from the post-rollback state on the next admit.
+    pub fn invalidate_utxo_fp_cache(&mut self) {
+        self.utxo_fp_cache = UtxoFpCache::new();
+    }
 }
 
 /// One forward-sync step. Pure, total, deterministic. Composes the
@@ -474,5 +488,44 @@ mod tests {
         assert!(cw.admitted.is_empty(), "no block stored on chokepoint reject");
         // Running fingerprint unchanged → no WAL link advanced.
         assert_eq!(state.prior_fp, Hash32([0xA0; 32]));
+    }
+
+    #[test]
+    fn forward_sync_post_fp_cache_hit_is_byte_identical() {
+        // LIVE-FOLLOW-THROUGHPUT (DC-MEM-11): after a real admit the reducer's
+        // per-loop utxo_fp_cache is populated (a MISS) for the post-admit UTxO
+        // generation, and state.prior_fp is that first computation. This binds the
+        // cache HIT branch to the reducer's REAL post-admit cache: a subsequent
+        // lookup on the unchanged UTxO (and on a generation-preserving clone, the
+        // per-block forge pattern) MUST return the same bytes as the full
+        // fingerprint_utxo_v2 recompute. (The single-block pump test exercises only
+        // the MISS; the cache primitive's reuse/recompute is unit-proven in
+        // fingerprint.rs::utxo_fp_cache_reuses_while_unchanged_and_recomputes_on_change.)
+        let (c, view) = corpus_view();
+        let sched = schedule();
+        let bytes = pick_lightest(&c);
+        let (cache_ev, deliver_ev) = cache_and_deliver_events(&bytes);
+
+        let mut state = fresh_state(c.epoch_nonce);
+        let mut cw = RecordingChainWrite::default();
+        forward_sync_step(&mut state, cache_ev, &mut cw, &sched, &view).expect("cache");
+        forward_sync_step(&mut state, deliver_ev, &mut cw, &sched, &view).expect("admit");
+
+        // The reducer's running post_fp (cache MISS path) == the full fingerprint.
+        let full = ade_ledger::fingerprint::fingerprint(&state.receive.ledger).combined;
+        assert_eq!(state.prior_fp, full, "reducer post_fp must equal the full fingerprint()");
+
+        // Exercise the cache HIT branch on the reducer's populated cache.
+        let oracle = ade_ledger::fingerprint::fingerprint_utxo_v2(&state.receive.ledger.utxo_state);
+        let hit = state
+            .utxo_fp_cache
+            .utxo_fingerprint(&state.receive.ledger.utxo_state);
+        assert_eq!(hit, oracle, "cache HIT must be byte-identical to fingerprint_utxo_v2");
+        let cloned = state.receive.ledger.clone();
+        let hit_clone = state.utxo_fp_cache.utxo_fingerprint(&cloned.utxo_state);
+        assert_eq!(
+            hit_clone, oracle,
+            "cache HIT on a generation-preserving clone (the per-block pattern) is byte-identical"
+        );
     }
 }
