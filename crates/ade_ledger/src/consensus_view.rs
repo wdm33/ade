@@ -153,6 +153,7 @@ mod tests {
     // ===== PHASE4-N-F-A A4: recovered-surface projection =====
 
     use crate::seed_consensus_inputs::SeedEpochConsensusInputs;
+    use ade_types::SlotNo;
 
     fn sample_record() -> SeedEpochConsensusInputs {
         let mut pools = BTreeMap::new();
@@ -173,6 +174,8 @@ mod tests {
         SeedEpochConsensusInputs {
             anchor_fp: Hash32([0x5A; 32]),
             epoch_no: EpochNo(576),
+            epoch_start_slot: SlotNo(576 * 432_000),
+            epoch_length_slots: 432_000,
             epoch_nonce: ade_core::consensus::praos_state::Nonce(Hash32([0x55; 32])),
             active_slots_coeff: ActiveSlotsCoeff { numer: 5, denom: 100 },
             total_active_stake: 3_500,

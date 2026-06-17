@@ -56,7 +56,9 @@ use ade_core::consensus::BootstrapAnchorHash;
 use ade_ledger::consensus_view::PoolDistrView;
 use ade_ledger::fingerprint::fingerprint;
 use ade_ledger::state::LedgerState;
-use ade_ledger::seed_consensus_inputs::decode_seed_epoch_consensus_inputs;
+use ade_ledger::seed_consensus_inputs::{
+    decode_seed_epoch_consensus_inputs, SeedEpochConsensusInputs,
+};
 use ade_ledger::wal::{replay_from_anchor, RollbackPoint, RollbackReason, WalEntry, WalStore};
 use ade_runtime::bootstrap::{
     bootstrap_initial_state, BootstrapInputs, BootstrapState, SeedEpochConsensusSource,
@@ -301,6 +303,15 @@ pub enum NodeLifecycleError {
     /// never validate a peer's block against an empty stake view, never
     /// accept-if-missing.
     FeedMissingRecoveredConsensusInputs,
+    /// A restart-supplied shelley genesis `epochLength` disagrees with the durable
+    /// seed-epoch sidecar's persisted `epoch_length_slots`. The sidecar is the
+    /// epoch-geometry AUTHORITY (WARMSTART-ERA-SCHEDULE-VENUE / DC-CINPUT-05); a
+    /// store must not be "repaired" by passing a different venue's genesis at
+    /// restart. Fail closed.
+    RestartGenesisGeometryMismatch {
+        sidecar_epoch_length: u32,
+        genesis_epoch_length: u64,
+    },
 }
 
 /// Pure first-run-vs-warm-start classifier. A function of on-disk state
@@ -360,6 +371,7 @@ fn exit_code_for(e: &NodeLifecycleError) -> i32 {
         | NodeLifecycleError::WarmStartNoProvenance
         | NodeLifecycleError::DurableBlockBytesMissing { .. }
         | NodeLifecycleError::WarmStartForwardReplayUnsupported { .. }
+        | NodeLifecycleError::RestartGenesisGeometryMismatch { .. }
         | NodeLifecycleError::WarmStartBootstrap(_) => EXIT_NODE_WARM_START_RECOVERY_FAILED,
         NodeLifecycleError::RelaySync(_)
         | NodeLifecycleError::FeedMissingRecoveredConsensusInputs => EXIT_NODE_RELAY_SYNC_FAILED,
@@ -447,6 +459,14 @@ async fn run_node_lifecycle_inner(
         .map(|s| s.epoch_no.0);
     let tip_slot = state.tip.as_ref().map(|t| t.slot.0);
 
+    // WARMSTART-ERA-SCHEDULE-VENUE (DC-CINPUT-05): the durable sidecar is the
+    // epoch-geometry authority; a restart-supplied --genesis-file is ONLY a
+    // consistency check. Fail closed on a mismatch -- never silently honor the
+    // persisted geometry while the operator supplies a different venue's genesis.
+    if let Some(sidecar) = state.seed_epoch_consensus_inputs.as_ref() {
+        assert_restart_genesis_matches_sidecar(cli.genesis_file.as_deref(), sidecar)?;
+    }
+
     // PHASE4-N-F-F: classify forge intent from operator-key flag PRESENCE.
     // Complete set => forge on; none => relay-only; partial => fail closed.
     // This does NOT bootstrap and does NOT call Mithril — the forge base is the
@@ -466,7 +486,7 @@ async fn run_node_lifecycle_inner(
             // chain_dep into the spine (no clone); `None` reduces the planner to
             // the exact N-F-D relay behavior. Placeholders are PROVABLY UNCONSUMED
             // on the empty source (a feed-end halts the loop on iteration 1).
-            let era_schedule = make_node_schedule(SlotNo(0), EpochNo(0));
+            let era_schedule = recovered_node_schedule(&state, !cli.peer_addrs.is_empty())?;
             let ledger_view = PoolDistrView::new(
                 EpochNo(0),
                 0,
@@ -540,8 +560,7 @@ async fn run_node_lifecycle_inner(
             });
             // Real era schedule from the recovered epoch (consumed only when a
             // live feed lands; unconsumed on the empty source this cluster).
-            let era_schedule =
-                make_node_schedule(SlotNo(tip_slot.unwrap_or(0)), EpochNo(epoch.unwrap_or(0)));
+            let era_schedule = recovered_node_schedule(&state, !cli.peer_addrs.is_empty())?;
             // DC-CINPUT-04 (PHASE4-N-F-G-P): the feed header-validation view MUST be
             // the recovered consensus surface — the SAME projection the forge uses
             // (`forge_one_from_recovered` / DC-CINPUT-02b) — so Step 5 (VRF-keyhash
@@ -2204,12 +2223,17 @@ pub(crate) fn warm_start_recovery(
     let sidecar = decode_seed_epoch_consensus_inputs(&sidecar_bytes)
         .map_err(|e| NodeLifecycleError::WarmStartBootstrap(format!("sidecar decode: {e:?}")))?;
     let ledger_view = PoolDistrView::from_seed_epoch_consensus_inputs(&sidecar);
-    // From-genesis single-Conway-era: the seed epoch starts at
-    // epoch_no * epoch_length_slots (the genesis seed epoch ⇒ (0, 0), matching
-    // the live WarmStart arm's make_node_schedule). Non-genesis multi-era
-    // reconstruction is a separate concern (S2 §15 non-goal).
-    let era_schedule =
-        make_node_schedule(SlotNo(sidecar.epoch_no.0 * 432_000), sidecar.epoch_no);
+    // WARMSTART-ERA-SCHEDULE-VENUE (DC-CINPUT-05): rebuild the recovery
+    // era-schedule from the DURABLE sidecar geometry persisted at import -- the
+    // venue's real epoch_start_slot + epoch_length (preview 86400, preprod
+    // 432000, ...), NOT re-derived as epoch_no * a hardcoded length. This is the
+    // SAME geometry the import used, so forward-replay is venue-correct and
+    // replay-equivalent (the recovered store, not a restart CLI, is authority).
+    let era_schedule = make_node_schedule(
+        sidecar.epoch_start_slot,
+        sidecar.epoch_no,
+        sidecar.epoch_length_slots,
+    );
 
     // 4. PHASE4-N-U S2 (DC-WAL-04 no-orphan): reconcile the chaindb to the WAL
     //    tail BEFORE warm-start. The WAL — not chaindb.tip() — is the admission
@@ -2368,7 +2392,20 @@ fn first_run_mithril_bootstrap(
     // Era schedule for the imported epoch window (used to derive the
     // certified epoch + by the composer's authority on warm-start; the
     // cold-start branch this first run takes does not consume it).
-    let era_schedule = make_node_schedule(canonical.epoch_start_slot, canonical.epoch_no);
+    // WARMSTART-ERA-SCHEDULE-VENUE (DC-CINPUT-05): the import-window schedule uses
+    // the canonical bundle's venue geometry (epoch_length = end - start + 1), the
+    // SAME values merge_seed_epoch_consensus_inputs persists into the sidecar for
+    // warm-start recovery.
+    let canonical_epoch_length = canonical.epoch_length_slots().ok_or_else(|| {
+        NodeLifecycleError::ExtractionRead(
+            "canonical consensus_inputs: epoch window is not a valid u32 slot length".to_string(),
+        )
+    })?;
+    let era_schedule = make_node_schedule(
+        canonical.epoch_start_slot,
+        canonical.epoch_no,
+        canonical_epoch_length,
+    );
 
     // --- Epoch-consistency check (L2 §9.4), BEFORE the composer. ---
     // Parse the manifest provenance to obtain its attested certified
@@ -2448,7 +2485,17 @@ fn first_run_mithril_bootstrap(
 /// window (mirrors the established `make_schedule_for_imported_window`
 /// pattern in `produce_mode` / `admission`). `locate` resolves slots in
 /// the window to `epoch_no`.
-fn make_node_schedule(epoch_start_slot: SlotNo, epoch_no: EpochNo) -> EraSchedule {
+/// WARMSTART-ERA-SCHEDULE-VENUE (DC-CINPUT-05): the epoch geometry
+/// (`epoch_start_slot`, `epoch_length_slots`) is supplied by the caller from
+/// DURABLE/venue authority -- the recovered seed-epoch sidecar or the canonical
+/// import bundle -- NEVER hardcoded and NEVER switched on a venue name. `safe_zone`
+/// tracks the epoch length (preserving the prior `epoch_length == safe_zone`
+/// relationship). A zero `epoch_length_slots` is a caller bug, not a venue value.
+fn make_node_schedule(
+    epoch_start_slot: SlotNo,
+    epoch_no: EpochNo,
+    epoch_length_slots: u32,
+) -> EraSchedule {
     EraSchedule::new(
         BootstrapAnchorHash(Hash32([0u8; 32])),
         epoch_start_slot.0,
@@ -2457,14 +2504,15 @@ fn make_node_schedule(epoch_start_slot: SlotNo, epoch_no: EpochNo) -> EraSchedul
             start_slot: epoch_start_slot,
             start_epoch: epoch_no,
             slot_length_ms: 1_000,
-            epoch_length_slots: 432_000,
-            safe_zone_slots: 432_000,
+            epoch_length_slots,
+            safe_zone_slots: epoch_length_slots,
         }],
     )
     .unwrap_or_else(|_| {
-        // EraSchedule::new only fails on a zero epoch length, which is a
-        // constant above. Construct the same single summary again so the
-        // owner has no panic path. (Unreachable in practice.)
+        // EraSchedule::new only fails on a zero epoch length -- a caller bug
+        // (the venue geometry is never zero). Reconstruct the same single
+        // summary so the owner has no panic path. (Unreachable with non-zero
+        // venue geometry.)
         EraSchedule::new(
             BootstrapAnchorHash(Hash32([0u8; 32])),
             epoch_start_slot.0,
@@ -2473,12 +2521,69 @@ fn make_node_schedule(epoch_start_slot: SlotNo, epoch_no: EpochNo) -> EraSchedul
                 start_slot: epoch_start_slot,
                 start_epoch: epoch_no,
                 slot_length_ms: 1_000,
-                epoch_length_slots: 432_000,
-                safe_zone_slots: 432_000,
+                epoch_length_slots,
+                safe_zone_slots: epoch_length_slots,
             }],
         )
-        .expect("constant 432_000 epoch length is non-zero")
+        .expect("non-zero venue epoch length")
     })
+}
+
+/// WARMSTART-ERA-SCHEDULE-VENUE (DC-CINPUT-05): build the live-follow / forge
+/// era-schedule from the DURABLE recovered sidecar geometry -- never re-derived
+/// from the restart CLI/genesis. Mirrors the recovered `ledger_view` fail-closed
+/// posture: with a live feed wired, an absent sidecar fails closed (you cannot
+/// validate followed/forged blocks without the venue schedule); with NO feed the
+/// schedule is a provably-unconsumed inert placeholder (an explicit 1-slot
+/// genesis marker -- NOT a venue value, NO hidden 432000).
+fn recovered_node_schedule(
+    state: &BootstrapState,
+    live_feed_wired: bool,
+) -> Result<EraSchedule, NodeLifecycleError> {
+    match state.seed_epoch_consensus_inputs.as_ref() {
+        Some(s) => Ok(make_node_schedule(
+            s.epoch_start_slot,
+            s.epoch_no,
+            s.epoch_length_slots,
+        )),
+        None if live_feed_wired => Err(NodeLifecycleError::FeedMissingRecoveredConsensusInputs),
+        None => Ok(make_node_schedule(SlotNo(0), EpochNo(0), 1)),
+    }
+}
+
+/// WARMSTART-ERA-SCHEDULE-VENUE (DC-CINPUT-05): assert a restart-supplied shelley
+/// genesis agrees with the durable sidecar's epoch geometry. The sidecar is the
+/// AUTHORITY; the genesis is ONLY a consistency check. No genesis supplied (or a
+/// genesis carrying no `epochLength`) -> no check: the sidecar stands alone and
+/// the geometry it persisted at import is used regardless of the restart CLI. A
+/// present-but-MISMATCHED `epochLength` fails closed -- an operator must not
+/// "repair" a store by passing a different venue's genesis at restart.
+fn assert_restart_genesis_matches_sidecar(
+    genesis_file: Option<&std::path::Path>,
+    sidecar: &SeedEpochConsensusInputs,
+) -> Result<(), NodeLifecycleError> {
+    let Some(path) = genesis_file else {
+        return Ok(());
+    };
+    // A genesis that cannot be read/parsed is a forge-key / clock-ingress concern
+    // surfaced on the forge path; the geometry authority is the sidecar, so this
+    // check stays non-authoritative on read/parse failure (does not duplicate it).
+    let Ok(bytes) = std::fs::read(path) else {
+        return Ok(());
+    };
+    let Ok(json) = serde_json::from_slice::<serde_json::Value>(&bytes) else {
+        return Ok(());
+    };
+    let Some(genesis_epoch_length) = json.get("epochLength").and_then(|v| v.as_u64()) else {
+        return Ok(());
+    };
+    if genesis_epoch_length != sidecar.epoch_length_slots as u64 {
+        return Err(NodeLifecycleError::RestartGenesisGeometryMismatch {
+            sidecar_epoch_length: sidecar.epoch_length_slots,
+            genesis_epoch_length,
+        });
+    }
+    Ok(())
 }
 
 /// Zip the canonical consensus inputs into the leadership `PoolDistrView`
@@ -2544,6 +2649,18 @@ fn report(e: &NodeLifecycleError) {
         }
         NodeLifecycleError::OnDiskRead(d) => {
             eprintln!("ade_node --mode node: cannot read on-disk state: {d}");
+        }
+        NodeLifecycleError::RestartGenesisGeometryMismatch {
+            sidecar_epoch_length,
+            genesis_epoch_length,
+        } => {
+            eprintln!(
+                "ade_node --mode node: FAIL-CLOSED -- restart --genesis-file epochLength \
+                 {genesis_epoch_length} disagrees with the durable seed-epoch sidecar's \
+                 persisted epoch_length_slots {sidecar_epoch_length}. The recovered store's \
+                 epoch geometry is authoritative (WARMSTART-ERA-SCHEDULE-VENUE); a store must \
+                 NOT be repaired by supplying a different venue's genesis at restart."
+            );
         }
         NodeLifecycleError::DurableBlockBytesMissing {
             block_hash,
@@ -4518,6 +4635,8 @@ mod tests {
         SeedEpochConsensusInputs {
             anchor_fp,
             epoch_no: epoch,
+            epoch_start_slot: SlotNo(epoch.0 * 432_000),
+            epoch_length_slots: 432_000,
             epoch_nonce: Nonce(Hash32([0x99; 32])),
             active_slots_coeff: ActiveSlotsCoeff {
                 numer: 5,
@@ -4993,6 +5112,84 @@ mod tests {
                 "absent admit-block bytes must fail closed with DurableBlockBytesMissing, got {other:?}"
             ),
         }
+    }
+
+    #[test]
+    fn warm_start_schedule_locates_block_by_venue_geometry_not_hardcoded_432000() {
+        // WARMSTART-ERA-SCHEDULE-VENUE (DC-CINPUT-05) regression for the live
+        // C2-PREVIEW forge failure. The warm-start/forge schedule must use the
+        // VENUE epoch length, never the hardcoded preprod 432000. The prior
+        // warm-start tests all used snapshot-at-tip (DEGENERATE forward-replay),
+        // so they never called EraSchedule::locate -- this exercises it directly,
+        // the exact HFC slot->epoch step that failed live.
+        //
+        // PREVIEW (epoch_length 86400): epoch 1331 starts at 114_998_400. A
+        // followed block at slot 115_030_409 (~77 slots past the seed) is WITHIN
+        // epoch 1331, so the venue schedule LOCATES it (no SlotBeforeSystemStart).
+        let preview = make_node_schedule(SlotNo(114_998_400), EpochNo(1331), 86_400);
+        assert!(
+            preview.locate(SlotNo(115_030_409)).is_ok(),
+            "preview venue geometry must locate the followed block, got {:?}",
+            preview.locate(SlotNo(115_030_409))
+        );
+
+        // The PRE-FIX hardcoded behavior placed the era start at epoch_no*432000 =
+        // 574_992_000 -- AFTER the block. locate() then fails SlotBeforeSystemStart,
+        // the EXACT live failure: wrong geometry rejects deterministically.
+        let wrong = make_node_schedule(SlotNo(1331 * 432_000), EpochNo(1331), 432_000);
+        let err = wrong
+            .locate(SlotNo(115_030_409))
+            .expect_err("wrong (preprod-length) geometry must reject the preview block");
+        let shown = format!("{err:?}");
+        assert!(
+            shown.contains("SlotBeforeSystemStart") && shown.contains("574992000"),
+            "wrong geometry must reject deterministically as SlotBeforeSystemStart@574992000, got {shown}"
+        );
+
+        // PREPROD (epoch_length 432000): the SAME code path is venue-correct for
+        // preprod -- epoch 580 starts at 250_560_000; a block 500 slots in locates.
+        let preprod = make_node_schedule(SlotNo(580 * 432_000), EpochNo(580), 432_000);
+        assert!(
+            preprod.locate(SlotNo(580 * 432_000 + 500)).is_ok(),
+            "preprod venue geometry must locate its block"
+        );
+    }
+
+    #[test]
+    fn restart_genesis_epoch_length_mismatch_fails_closed() {
+        // WARMSTART-ERA-SCHEDULE-VENUE (DC-CINPUT-05): the durable sidecar geometry
+        // is authority; a restart --genesis-file is ONLY a consistency check. The
+        // sidecar here persists epoch_length_slots = 432_000 (preprod).
+        let dir = tempfile::tempdir().expect("tmpdir");
+        let sidecar = warm_sample_record(WARM_ANCHOR_FP, WARM_EPOCH);
+        assert_eq!(sidecar.epoch_length_slots, 432_000);
+
+        // Matching epochLength -> Ok.
+        let matching = dir.path().join("match.json");
+        std::fs::write(&matching, br#"{"epochLength": 432000}"#).unwrap();
+        assert!(assert_restart_genesis_matches_sidecar(Some(&matching), &sidecar).is_ok());
+
+        // A DIFFERENT venue's epochLength (86400 preview) -> fail closed.
+        let mismatch = dir.path().join("mismatch.json");
+        std::fs::write(&mismatch, br#"{"epochLength": 86400}"#).unwrap();
+        match assert_restart_genesis_matches_sidecar(Some(&mismatch), &sidecar) {
+            Err(NodeLifecycleError::RestartGenesisGeometryMismatch {
+                sidecar_epoch_length,
+                genesis_epoch_length,
+            }) => {
+                assert_eq!(sidecar_epoch_length, 432_000);
+                assert_eq!(genesis_epoch_length, 86_400);
+            }
+            other => panic!("mismatched genesis epochLength must fail closed, got {other:?}"),
+        }
+
+        // No genesis supplied -> sidecar stands alone, no check.
+        assert!(assert_restart_genesis_matches_sidecar(None, &sidecar).is_ok());
+
+        // A genesis without an epochLength field -> non-authoritative, no check.
+        let no_field = dir.path().join("nofield.json");
+        std::fs::write(&no_field, br#"{"systemStart": "2022-01-01T00:00:00Z"}"#).unwrap();
+        assert!(assert_restart_genesis_matches_sidecar(Some(&no_field), &sidecar).is_ok());
     }
 
     #[test]

@@ -75,11 +75,29 @@ Acceptance bar (all hold):
     without `put_block` → `DurableBlockBytesMissing`.
 - **CI:** `ci/ci_check_admission_runner_no_block_byte_map.sh` (memory guardrail).
 
-## Open obligation (live write-half)
+## Open obligation (live write-half) — DISCHARGED 2026-06-17
 
 The hermetic tests prove the **read** half (warm-start consumes the real
 ChainDb bytes / fails closed) and the contract recovers. The **write** half —
-the production admission runner actually `put_block`s, end-to-end — is proven by
-the C2-PREVIEW-BA02 forge resume: a real preview admission writes the store →
-a fresh WarmStart forge recovers it with **no** `BlockBytesMissing`. That run
-can only succeed if `run_admission` persisted the bytes.
+the production admission runner actually `put_block`s, end-to-end — was proven by
+the C2-PREVIEW-BA02 forge resume:
+
+- Fresh preview admission (fixed binary) at seed-point slot 115030332 reached
+  `agreed`, gracefully stopped (store6 = 1.1 GB).
+- The fresh WarmStart forge got **past** the durable-bytes stage with **no**
+  `BlockBytesMissing` — it built the replay block-bytes map from the ChainDb and
+  reached **forward-replay of the followed block at slot 115030409** (~77 slots
+  past the seed). The old binary died at `BlockBytesMissing(eb814250…)` on this
+  exact path; the fixed binary found the bytes. **`run_admission` persisted them
+  → write half proven.**
+
+The same run surfaced a **separate, preview-specific** bug (NOT durable-bytes):
+warm-start era-schedule reconstruction hardcodes the **preprod** epoch length
+(432000) — `make_node_schedule` (`epoch_length_slots: 432_000`) + the
+`epoch_no * 432_000` start in `warm_start_recovery`. On preview (epoch length
+86400) the warm-start schedule mismatches the venue-correct schedule the
+admission used, so forward-replay rejects slot 115030409 as
+`SlotBeforeSystemStart{first_era_start: 574992000 = 1331*432000}`. The import
+path (`make_node_schedule(canonical.epoch_start_slot, …)`) is venue-correct;
+the warm-start path must match. Tracked as the next slice
+(WARMSTART-ERA-SCHEDULE-VENUE); does not affect preprod.

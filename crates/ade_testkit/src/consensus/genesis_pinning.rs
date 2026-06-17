@@ -142,6 +142,8 @@ mod tests {
         SeedEpochConsensusInputs {
             anchor_fp: TEST_ANCHOR_FP,
             epoch_no: r.epoch_no,
+            epoch_start_slot: SlotNo(r.epoch_no.0 * 432_000),
+            epoch_length_slots: 432_000,
             epoch_nonce: r.eta0.clone(),
             active_slots_coeff: r.asc,
             total_active_stake: r.total_active_stake,

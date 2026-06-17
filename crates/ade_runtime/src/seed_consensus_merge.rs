@@ -45,6 +45,14 @@ pub enum SeedConsensusMergeError {
     /// A pool appeared in `pool_vrf_keyhashes` (VRF keyhash) but had no
     /// entry in `pool_distribution` (stake). Fail-closed: no defaulting.
     PoolMissingStake { pool: Hash28 },
+    /// The canonical epoch window (`epoch_end_slot - epoch_start_slot + 1`) is
+    /// degenerate or overflows `u32` — not a real venue epoch length. Fail
+    /// closed (WARMSTART-ERA-SCHEDULE-VENUE / DC-CINPUT-05): never persist a
+    /// defaulted geometry.
+    InvalidEpochWindow {
+        epoch_start_slot: u64,
+        epoch_end_slot: u64,
+    },
 }
 
 /// Merge the verified-bootstrap canonical consensus inputs into the
@@ -86,9 +94,23 @@ pub fn merge_seed_epoch_consensus_inputs(
         }
     }
 
+    // WARMSTART-ERA-SCHEDULE-VENUE (DC-CINPUT-05): persist the venue epoch
+    // geometry the import observed, so warm-start rebuilds the SAME era-schedule
+    // from durable state rather than re-deriving it from a restart CLI/genesis.
+    // epoch_length = end - start + 1 (the cardano-cli-reported epoch window:
+    // preview 86400, preprod 432000, ...).
+    let epoch_length_slots =
+        canonical
+            .epoch_length_slots()
+            .ok_or(SeedConsensusMergeError::InvalidEpochWindow {
+                epoch_start_slot: canonical.epoch_start_slot.0,
+                epoch_end_slot: canonical.epoch_end_slot.0,
+            })?;
     Ok(SeedEpochConsensusInputs {
         anchor_fp,
         epoch_no,
+        epoch_start_slot: canonical.epoch_start_slot,
+        epoch_length_slots,
         // PHASE4-N-F-G-N (DC-CINPUT-03): carry the imported eta0 into the
         // persisted sidecar so WarmStart can recover it onto chain_dep.
         epoch_nonce: canonical.epoch_nonce.clone(),
@@ -262,5 +284,55 @@ mod tests {
         let from_recovered_nonce = leader_vrf_input(CardanoEra::Conway, slot, &bundle.epoch_nonce);
         let from_bundle_nonce = leader_vrf_input(CardanoEra::Conway, slot, &bundle.epoch_nonce);
         assert_eq!(from_recovered_nonce, from_bundle_nonce);
+    }
+
+    #[test]
+    fn merge_persists_venue_epoch_geometry_preview_and_preprod() {
+        // WARMSTART-ERA-SCHEDULE-VENUE (DC-CINPUT-05): the merge persists the
+        // VENUE epoch geometry from the canonical window (end - start + 1), so
+        // warm-start rebuilds the SAME schedule the import used. Both venues
+        // (preview 86400, preprod 432000) -- no venue-name switch; a degenerate
+        // window fails closed (never a defaulted geometry).
+        use ade_types::SlotNo;
+
+        let mut stake = BTreeMap::new();
+        stake.insert(pool(0x01), 1_000u64);
+        let mut vrfs = BTreeMap::new();
+        vrfs.insert(pool(0x01), vrf(0x07));
+
+        // PREVIEW: epoch 1331 window [114_998_400, 115_084_799] -> length 86_400.
+        let preview_canon = LiveConsensusInputsCanonical {
+            epoch_start_slot: SlotNo(114_998_400),
+            epoch_end_slot: SlotNo(115_084_799),
+            ..test_canonical_inputs(EpochNo(1331), stake.clone(), vrfs.clone())
+        };
+        let preview =
+            merge_seed_epoch_consensus_inputs(Hash32([0x44; 32]), EpochNo(1331), &preview_canon)
+                .expect("merge preview");
+        assert_eq!(preview.epoch_start_slot, SlotNo(114_998_400));
+        assert_eq!(preview.epoch_length_slots, 86_400);
+
+        // PREPROD: epoch 580, length 432_000.
+        let preprod_canon = LiveConsensusInputsCanonical {
+            epoch_start_slot: SlotNo(580 * 432_000),
+            epoch_end_slot: SlotNo(580 * 432_000 + 432_000 - 1),
+            ..test_canonical_inputs(EpochNo(580), stake.clone(), vrfs.clone())
+        };
+        let preprod =
+            merge_seed_epoch_consensus_inputs(Hash32([0x44; 32]), EpochNo(580), &preprod_canon)
+                .expect("merge preprod");
+        assert_eq!(preprod.epoch_start_slot, SlotNo(580 * 432_000));
+        assert_eq!(preprod.epoch_length_slots, 432_000);
+
+        // Degenerate window (end < start) -> fail closed, NO defaulted geometry.
+        let bad_canon = LiveConsensusInputsCanonical {
+            epoch_start_slot: SlotNo(1000),
+            epoch_end_slot: SlotNo(999),
+            ..test_canonical_inputs(EpochNo(1), stake, vrfs)
+        };
+        assert!(matches!(
+            merge_seed_epoch_consensus_inputs(Hash32([0x44; 32]), EpochNo(1), &bad_canon),
+            Err(SeedConsensusMergeError::InvalidEpochWindow { .. })
+        ));
     }
 }

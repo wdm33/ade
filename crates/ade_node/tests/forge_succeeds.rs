@@ -774,6 +774,8 @@ fn feed_header_validates_against_recovered_surface_not_empty_view() {
     let record = SeedEpochConsensusInputs {
         anchor_fp: Hash32([0u8; 32]),
         epoch_no: epoch,
+        epoch_start_slot: SlotNo(epoch.0 * 432_000),
+        epoch_length_slots: 432_000,
         epoch_nonce: fixture.eta0_holder.epoch_nonce.clone(),
         active_slots_coeff: ActiveSlotsCoeff { numer: 1, denom: 1 },
         total_active_stake: 1,

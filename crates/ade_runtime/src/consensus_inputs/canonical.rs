@@ -79,6 +79,22 @@ pub struct LiveConsensusInputsCanonical {
     pub protocol_params_json: Option<String>,
 }
 
+impl LiveConsensusInputsCanonical {
+    /// Venue epoch length in slots, derived from the cardano-cli-reported epoch
+    /// window (`epoch_end_slot - epoch_start_slot + 1`). `None` when the window
+    /// is degenerate (`end < start`) or overflows `u32` (no real venue epoch
+    /// does), so callers fail closed rather than persist a defaulted length.
+    /// WARMSTART-ERA-SCHEDULE-VENUE (DC-CINPUT-05).
+    pub fn epoch_length_slots(&self) -> Option<u32> {
+        let len = self
+            .epoch_end_slot
+            .0
+            .checked_sub(self.epoch_start_slot.0)?
+            .checked_add(1)?;
+        u32::try_from(len).ok().filter(|&l| l > 0)
+    }
+}
+
 /// Lift a validated raw bundle into the canonical form, computing
 /// the canonical-CBOR fingerprint at lift-time. Deterministic in
 /// the raw bundle.

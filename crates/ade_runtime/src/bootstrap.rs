@@ -778,6 +778,8 @@ mod tests {
         SeedEpochConsensusInputs {
             anchor_fp,
             epoch_no: epoch,
+            epoch_start_slot: SlotNo(epoch.0 * 432_000),
+            epoch_length_slots: 432_000,
             epoch_nonce: Nonce(Hash32([0x99; 32])),
             active_slots_coeff: ActiveSlotsCoeff {
                 numer: 5,

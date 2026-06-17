@@ -1938,6 +1938,8 @@ mod tests {
         let sidecar = SeedEpochConsensusInputs {
             anchor_fp: anchor_fp.clone(),
             epoch_no: EPOCH_576,
+            epoch_start_slot: SlotNo(EPOCH_576.0 * 432_000),
+            epoch_length_slots: 432_000,
             epoch_nonce: Nonce(Hash32([0x8a; 32])),
             active_slots_coeff: ActiveSlotsCoeff {
                 numer: 5,
@@ -2505,6 +2507,8 @@ mod tests {
         let recovered_inputs = SeedEpochConsensusInputs {
             anchor_fp: anchor_fp.clone(),
             epoch_no: EPOCH_576,
+            epoch_start_slot: SlotNo(EPOCH_576.0 * 432_000),
+            epoch_length_slots: 432_000,
             epoch_nonce: Nonce(Hash32([0x8b; 32])),
             active_slots_coeff: ActiveSlotsCoeff {
                 numer: 5,
@@ -2625,6 +2629,8 @@ mod tests {
         let recovered_inputs = SeedEpochConsensusInputs {
             anchor_fp: anchor_fp.clone(),
             epoch_no: EPOCH_576,
+            epoch_start_slot: SlotNo(EPOCH_576.0 * 432_000),
+            epoch_length_slots: 432_000,
             epoch_nonce: Nonce(Hash32([0x8b; 32])),
             active_slots_coeff: ActiveSlotsCoeff {
                 numer: 5,
@@ -2817,6 +2823,8 @@ mod tests {
         let recovered_inputs = SeedEpochConsensusInputs {
             anchor_fp: anchor_fp.clone(),
             epoch_no: EPOCH_576,
+            epoch_start_slot: SlotNo(EPOCH_576.0 * 432_000),
+            epoch_length_slots: 432_000,
             epoch_nonce: Nonce(Hash32([0x8b; 32])),
             active_slots_coeff: ActiveSlotsCoeff {
                 numer: 5,
@@ -2995,6 +3003,8 @@ mod tests {
         SeedEpochConsensusInputs {
             anchor_fp: Hash32([0x5A; 32]),
             epoch_no: L5_EPOCH,
+            epoch_start_slot: SlotNo(L5_EPOCH.0 * 432_000),
+            epoch_length_slots: 432_000,
             epoch_nonce: Nonce(Hash32([0x8c; 32])),
             // asc 1/1 → every slot eligible regardless of VRF output bytes,
             // so the Eligible path is reached deterministically.
@@ -3240,6 +3250,8 @@ mod tests {
         let sidecar = SeedEpochConsensusInputs {
             anchor_fp: anchor_fp.clone(),
             epoch_no: EpochNo(0),
+            epoch_start_slot: SlotNo(0),
+            epoch_length_slots: 432_000,
             epoch_nonce: eta0.clone(),
             active_slots_coeff: ActiveSlotsCoeff { numer: 1, denom: 1 },
             total_active_stake: 1,
@@ -3400,6 +3412,8 @@ mod tests {
         let sidecar = SeedEpochConsensusInputs {
             anchor_fp: anchor_fp.clone(),
             epoch_no: EpochNo(0),
+            epoch_start_slot: SlotNo(0),
+            epoch_length_slots: 432_000,
             epoch_nonce: eta0.clone(),
             active_slots_coeff: ActiveSlotsCoeff { numer: 1, denom: 1 },
             total_active_stake: 1,
@@ -3608,6 +3622,8 @@ mod tests {
         let sidecar = SeedEpochConsensusInputs {
             anchor_fp: anchor_fp.clone(),
             epoch_no: EpochNo(0),
+            epoch_start_slot: SlotNo(0),
+            epoch_length_slots: 432_000,
             epoch_nonce: eta0.clone(),
             active_slots_coeff: ActiveSlotsCoeff { numer: 1, denom: 1 },
             total_active_stake: 1,
@@ -5010,6 +5026,8 @@ mod tests {
         SeedEpochConsensusInputs {
             anchor_fp: Hash32([0x5A; 32]),
             epoch_no: L5_EPOCH,
+            epoch_start_slot: SlotNo(L5_EPOCH.0 * 432_000),
+            epoch_length_slots: 432_000,
             epoch_nonce: Nonce(Hash32([0x8d; 32])),
             active_slots_coeff: ActiveSlotsCoeff { numer: 1, denom: 1 },
             total_active_stake: 1_000,
@@ -5538,6 +5556,8 @@ mod tests {
         let sidecar = SeedEpochConsensusInputs {
             anchor_fp: anchor_fp.clone(),
             epoch_no: EpochNo(0),
+            epoch_start_slot: SlotNo(0),
+            epoch_length_slots: 432_000,
             epoch_nonce: eta0.clone(),
             active_slots_coeff: ActiveSlotsCoeff { numer: 1, denom: 1 },
             total_active_stake: 1,

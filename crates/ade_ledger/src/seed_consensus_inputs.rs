@@ -32,16 +32,20 @@ use ade_codec::cbor::{
 };
 use ade_core::consensus::praos_state::Nonce;
 use ade_core::consensus::vrf_cert::ActiveSlotsCoeff;
-use ade_types::{EpochNo, Hash28, Hash32};
+use ade_types::{EpochNo, Hash28, Hash32, SlotNo};
 
 use crate::consensus_view::PoolEntry;
 
 /// Pinned wire schema version. Decode rejects any other (fail-closed: an old v1
-/// sidecar omitted `epoch_nonce`, so it decodes as `UnknownVersion` — never a
-/// default-to-zero eta0). Bumped 1 -> 2 by PHASE4-N-F-G-N (T-REC-04 / DC-CINPUT-03).
-pub const SEED_CINPUT_SCHEMA_VERSION: u32 = 2;
+/// sidecar omitted `epoch_nonce`, a v2 sidecar omitted the venue epoch geometry
+/// (`epoch_start_slot` / `epoch_length_slots`), so BOTH decode as
+/// `UnknownVersion` — never a default-to-zero eta0, never a re-derived or
+/// defaulted epoch length). Bumped 1 -> 2 by PHASE4-N-F-G-N (T-REC-04 /
+/// DC-CINPUT-03); 2 -> 3 by WARMSTART-ERA-SCHEDULE-VENUE (DC-CINPUT-05), which
+/// carries the venue epoch geometry as durable replay authority.
+pub const SEED_CINPUT_SCHEMA_VERSION: u32 = 3;
 
-const FIELDS_OUTER: u64 = 7;
+const FIELDS_OUTER: u64 = 9;
 const ASC_FIELDS: u64 = 2;
 const POOL_ENTRY_FIELDS: u64 = 2;
 
@@ -54,6 +58,18 @@ pub struct SeedEpochConsensusInputs {
     pub anchor_fp: Hash32,
     /// The single seed epoch these inputs are valid for.
     pub epoch_no: EpochNo,
+    /// The absolute slot at which `epoch_no` begins, exactly as the venue's
+    /// cardano-node reported it at import. WARMSTART-ERA-SCHEDULE-VENUE
+    /// (DC-CINPUT-05): epoch geometry is DURABLE REPLAY AUTHORITY — warm-start
+    /// rebuilds the SAME era-schedule the import used from this persisted value,
+    /// NOT re-derived from whatever genesis/CLI a restart happens to supply.
+    pub epoch_start_slot: SlotNo,
+    /// The venue epoch length in slots (`epoch_end_slot - epoch_start_slot + 1`
+    /// at import: preview 86400, preprod 432000, ...). Drives the recovered
+    /// `make_node_schedule`'s `epoch_length_slots` so replay is venue-correct
+    /// with NO venue-name switch and NO hidden default. `u32` matches the
+    /// `EraSummary` / genesis-parser slot-length type.
+    pub epoch_length_slots: u32,
     /// Praos epoch nonce (eta0) for `epoch_no`. Added by PHASE4-N-F-G-N so the
     /// recovered consensus inputs carry eta0 EXPLICITLY (T-REC-04); the forge VRF
     /// input is `praos_vrf_input(slot, epoch_nonce)`, and WarmStart overlays this
@@ -112,6 +128,8 @@ pub fn encode_seed_epoch_consensus_inputs(inputs: &SeedEpochConsensusInputs) -> 
     write_uint_canonical(&mut buf, SEED_CINPUT_SCHEMA_VERSION as u64);
     write_bytes_canonical(&mut buf, &inputs.anchor_fp.0);
     write_uint_canonical(&mut buf, inputs.epoch_no.0);
+    write_uint_canonical(&mut buf, inputs.epoch_start_slot.0);
+    write_uint_canonical(&mut buf, inputs.epoch_length_slots as u64);
     write_bytes_canonical(&mut buf, inputs.epoch_nonce.as_bytes());
 
     write_array_header(
@@ -162,6 +180,8 @@ pub fn decode_seed_epoch_consensus_inputs(
 
     let anchor_fp = read_hash32(bytes, &mut o)?;
     let epoch_no = EpochNo(read_u64_field(bytes, &mut o)?);
+    let epoch_start_slot = SlotNo(read_u64_field(bytes, &mut o)?);
+    let epoch_length_slots = read_u32_field(bytes, &mut o)?;
     let epoch_nonce = Nonce(read_hash32(bytes, &mut o)?);
 
     expect_definite_array(bytes, &mut o, ASC_FIELDS, "active_slots_coeff")?;
@@ -182,6 +202,8 @@ pub fn decode_seed_epoch_consensus_inputs(
     let decoded = SeedEpochConsensusInputs {
         anchor_fp,
         epoch_no,
+        epoch_start_slot,
+        epoch_length_slots,
         epoch_nonce,
         active_slots_coeff,
         total_active_stake,
@@ -338,6 +360,8 @@ mod tests {
         SeedEpochConsensusInputs {
             anchor_fp: Hash32([0x44; 32]),
             epoch_no: EpochNo(576),
+            epoch_start_slot: SlotNo(576 * 432_000),
+            epoch_length_slots: 432_000,
             epoch_nonce: Nonce(Hash32([0x55; 32])),
             active_slots_coeff: ActiveSlotsCoeff { numer: 1, denom: 20 },
             total_active_stake: 1_003_499,
@@ -359,13 +383,15 @@ mod tests {
     #[test]
     fn seed_cinput_decode_rejects_unknown_version() {
         // Splice a bad version header in front of an otherwise-valid body.
-        // The outer array header is 1 byte (0x87 for array(7)); the version
-        // (=2) is the next 1 byte (0x02). So the body after the version starts
-        // at index 2. PHASE4-N-F-G-N: the current version is 2; bad_version=1 is
-        // the old v1 sidecar (which omitted epoch_nonce) — proving it fails
-        // closed (UnknownVersion), never a default-to-zero eta0.
+        // The outer array header is 1 byte (0x89 for array(9)); the version
+        // (=3) is the next 1 byte (0x03). So the body after the version starts
+        // at index 2. WARMSTART-ERA-SCHEDULE-VENUE: the current version is 3;
+        // bad_version=1 is the old v1 sidecar (omitted epoch_nonce) and
+        // bad_version=2 is the old v2 sidecar (omitted the venue epoch geometry)
+        // — BOTH fail closed (UnknownVersion), never a default-to-zero eta0 and
+        // never a re-derived/defaulted epoch length.
         let fresh = encode_seed_epoch_consensus_inputs(&sample());
-        for bad_version in [0u64, 1, 3, 99] {
+        for bad_version in [0u64, 1, 2, 4, 99] {
             let mut buf = Vec::new();
             write_array_header(
                 &mut buf,
@@ -374,7 +400,7 @@ mod tests {
             write_uint_canonical(&mut buf, bad_version);
             buf.extend_from_slice(&fresh[2..]);
             match decode_seed_epoch_consensus_inputs(&buf) {
-                Err(SeedConsensusInputsError::UnknownVersion { expected: 2, found })
+                Err(SeedConsensusInputsError::UnknownVersion { expected: 3, found })
                     if found == bad_version as u32 => {}
                 other => panic!("expected UnknownVersion for v{bad_version}, got {other:?}"),
             }
@@ -447,6 +473,8 @@ mod tests {
         write_uint_canonical(&mut buf, SEED_CINPUT_SCHEMA_VERSION as u64);
         write_bytes_canonical(&mut buf, &s.anchor_fp.0);
         write_uint_canonical(&mut buf, s.epoch_no.0);
+        write_uint_canonical(&mut buf, s.epoch_start_slot.0);
+        write_uint_canonical(&mut buf, s.epoch_length_slots as u64);
         write_bytes_canonical(&mut buf, s.epoch_nonce.as_bytes());
         write_array_header(
             &mut buf,
