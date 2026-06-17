@@ -453,4 +453,42 @@ mod tests {
             "expected a monotone-violation header rejection from the BLUE authority, got: {s}"
         );
     }
+
+    #[test]
+    fn pump_block_post_fp_is_byte_identical_to_full_fingerprint() {
+        // LIVE-FOLLOW-THROUGHPUT: the forward-sync admit now derives the WAL
+        // post_fp via the per-loop UtxoFpCache (fingerprint_v2_with_utxo) to skip
+        // the O(n) per-block Ristretto255 UTxO recompute. The running post_fp MUST
+        // stay byte-identical to the FULL fingerprint of the post-admit ledger:
+        // the WAL chain + replay-equivalence depend on it, and
+        // emit_participant_admit reuses state.prior_fp as the evidence post_fp (so
+        // this also proves that reuse is exact).
+        let (c, view) = corpus_view();
+        let sched = schedule();
+        let bytes = pick_lightest(&c);
+        let mut state = fresh_state(c.epoch_nonce);
+        let db = InMemoryChainDb::new();
+        let mut wal = VecWal::default();
+
+        pump_block(&mut state, &db, &mut wal, &NoCheckpointSink, &bytes, &sched, &view)
+            .expect("pump")
+            .expect("tip advanced");
+
+        // The cached running fingerprint equals the full recompute.
+        let full = ade_ledger::fingerprint::fingerprint(&state.receive.ledger).combined;
+        assert_eq!(
+            state.prior_fp, full,
+            "cached WAL/evidence post_fp must be byte-identical to the full fingerprint()"
+        );
+
+        // And the durable WAL AdmitBlock entry carries that exact post_fp.
+        let entries = wal.read_all().expect("read_all");
+        assert_eq!(entries.len(), 1, "exactly one AdmitBlock entry");
+        match &entries[0] {
+            WalEntry::AdmitBlock { post_fp, .. } => {
+                assert_eq!(post_fp, &full, "WAL post_fp must equal the full fingerprint")
+            }
+            other => panic!("expected AdmitBlock, got {other:?}"),
+        }
+    }
 }

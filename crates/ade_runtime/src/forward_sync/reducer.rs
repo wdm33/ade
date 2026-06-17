@@ -31,6 +31,7 @@
 use ade_core::consensus::era_schedule::EraSchedule;
 use ade_core::consensus::ledger_view::LedgerView;
 use ade_core::consensus::praos_state::Nonce;
+use ade_ledger::fingerprint::{fingerprint_v2_with_utxo, UtxoFpCache};
 use ade_ledger::receive::{
     receive_apply, ReceiveEffect, ReceiveError, ReceiveEvent, ReceiveState,
 };
@@ -154,6 +155,17 @@ pub struct ForwardSyncState {
     /// admit), not the snapshot `Nonce::ZERO` placeholder. `None` for cold-start /
     /// non-recover callers (the snapshot nonce is used as-is).
     pub recovered_eta0: Option<Nonce>,
+    /// LIVE-FOLLOW-THROUGHPUT (MEM-OPT-UTXO-DISK reuse): a per-loop cache of the
+    /// constant UTxO-component fingerprint. Under the live `track_utxo=false`
+    /// follow the imported UTxO never mutates, so `OverlayUtxo::generation` is
+    /// stable across the per-block ledger clones and this returns the component
+    /// WITHOUT re-running the O(n) Ristretto255 set-commitment over the (preview:
+    /// ~1.9M-entry) UTxO every admit -- the catch-up bottleneck. ALWAYS
+    /// byte-identical to the full `fingerprint()` (any UTxO mutation bumps the
+    /// generation and forces a recompute), so the WAL `post_fp` chain +
+    /// replay-equivalence are unchanged: a pure optimization, NOT authoritative
+    /// state. Mirrors the admission runner's `UtxoFpCache` (the proven-fast path).
+    utxo_fp_cache: UtxoFpCache,
 }
 
 impl ForwardSyncState {
@@ -173,6 +185,7 @@ impl ForwardSyncState {
             last_checkpoint: None,
             recovered_anchor: None,
             recovered_eta0: None,
+            utxo_fp_cache: UtxoFpCache::new(),
         }
     }
 }
@@ -220,9 +233,20 @@ pub fn forward_sync_step<W: ade_ledger::receive::ChainDbWrite>(
                 bytes,
             };
 
-            // New running fingerprint = post-admit ledger fingerprint.
-            let post_fp =
-                ade_ledger::fingerprint::fingerprint(&state.receive.ledger).combined;
+            // New running fingerprint = post-admit ledger fingerprint. The UTxO
+            // component is served from the per-loop cache, so this is byte-identical
+            // to the full `fingerprint()` but skips the O(n) per-block Ristretto255
+            // UTxO recompute -- the LIVE-FOLLOW-THROUGHPUT bottleneck (~20s/block
+            // over the ~1.9M-entry UTxO). Under the live track_utxo=false follow the
+            // UTxO -- and thus its OverlayUtxo generation and this component -- is
+            // INVARIANT across blocks AND rollbacks, so the cached value is always
+            // the full recompute. Any mutation bumps the generation and forces a
+            // recompute (the cache never serves a stale component for a linear
+            // extension). Cross-fork generation reuse under a future track_utxo=true
+            // is a separate cache-invalidation-on-rollback obligation owned by
+            // LIVE-LEDGER-APPLY (DC-MEM-11 open_obligation), not this scope.
+            let utxo_fp = state.utxo_fp_cache.utxo_fingerprint(&state.receive.ledger.utxo_state);
+            let post_fp = fingerprint_v2_with_utxo(&state.receive.ledger, utxo_fp).combined;
             let wal = WalEntry::AdmitBlock {
                 prior_fp,
                 block_hash: hash.clone(),

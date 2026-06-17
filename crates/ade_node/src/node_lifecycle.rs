@@ -3007,7 +3007,14 @@ fn emit_participant_admit(
     pumped: Option<PumpTip>,
 ) {
     if let (Some(ev), Some(tip)) = (evidence, pumped) {
-        let post_fp = fingerprint(&state.receive.ledger).combined;
+        // LIVE-FOLLOW-THROUGHPUT: reuse the running post-admit fingerprint the
+        // reducer just computed on THIS admit -- `forward_sync_step` set
+        // `state.prior_fp` to the post-admit ledger fingerprint, and nothing
+        // mutates the ledger between the `pump_block` and here. Recomputing the
+        // full `fingerprint()` would re-run the O(n) Ristretto255 UTxO scan a
+        // SECOND time per block (doubling the catch-up cost). Byte-identical
+        // value; observe-only evidence -- never read back into any authority path.
+        let post_fp = state.prior_fp.clone();
         let peer_tip = source.followed_peer_tip_signal().tip();
         ev.emit_admit_and_verdict(tip.slot.0, &tip.hash, &tip.prev_hash, &post_fp, peer_tip);
         // MEM-MEASURE-A2 (OP-MEM-01): per-admit RSS sample paired with the durable tip
