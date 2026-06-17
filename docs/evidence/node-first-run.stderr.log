@@ -1,0 +1,2 @@
+ade_node --mode node: first-run Mithril bootstrap complete (anchor initial_ledger_fingerprint=Hash32(33ddc54e9afc16c3b680d53f028a33a321e3bfb7925fba8f53de2da02ceef122), epoch=295).
+ade_node --mode node: relay run loop entered and halted cleanly (recovered/bootstrapped epoch=None, tip slot=None; forge OFF — no operator keys supplied; NO live peer source wired — sync / idle / shutdown proven hermetically). NO block produced.

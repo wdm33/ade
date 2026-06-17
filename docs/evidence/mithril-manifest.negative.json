@@ -1,0 +1,10 @@
+{
+  "artifact_type": "cardano-database-snapshot",
+  "certificate_hash_hex": "f52a1d7caf690e6b64779eac5094b4e444b001d47b55320442626c2203fcfe59",
+  "network_magic": 1,
+  "genesis_hash_hex": "162d29c4e1cf6b8a84f2d692e67a3ac6bc7851bc3e6e4afe64d15778bed8bd86",
+  "certified_point": { "slot": 125928174, "block_hash_hex": "cfdb3219a6b82d887a543e0400661f5af6e945579959fe7996d913d29515df78" },
+  "immutable_range": { "lo": 0, "hi": 5829 },
+  "source_mithril_client_version": "mithril-client 0.13.9+2478748",
+  "source_command": "mithril-client cardano-db download 947d3ab34e5cc321e569a3bddda3fa74ade1de97a5668a397bc19674a2f0cbae --include-ancillary (aggregator https://aggregator.release-preprod.api.mithril.network/aggregator)"
+}

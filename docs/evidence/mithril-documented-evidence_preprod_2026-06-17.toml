@@ -1,0 +1,41 @@
+schema_version = 1
+
+ade_commit                  = "f268d3d9ab71ab6376d2cb0f69c460cfd907456d"
+network                     = "preprod"
+captured_by                 = "wdm33"
+mithril_aggregator_endpoint = "https://aggregator.release-preprod.api.mithril.network/aggregator"
+mithril_certificate_hash    = "f52a1d7caf690e6b64779eac5094b4e444b001d47b55320442626c2203fcfe59"
+mithril_client_version      = "mithril-client 0.13.9+2478748"
+cardano_node_version        = "cardano-node 11.0.1 - linux-x86_64 - ghc-9.6"
+cardano_cli_version         = "cardano-cli 11.0.0.0 - linux-x86_64 - ghc-9.6"
+
+mithril_signed_entity        = "CardanoDatabase { epoch = 295, immutable_file_number = 5829 }"
+mithril_immutable_range_lo   = 0
+mithril_immutable_range_hi   = 5829
+mithril_certified_slot       = 125928174
+mithril_certified_block_hash = "beca210895a71c7769432df3ff550e49e5d834468848ed6885c802c18404ce67"
+
+operator_seed_point_slot       = 125928174
+operator_seed_point_block_hash = "beca210895a71c7769432df3ff550e49e5d834468848ed6885c802c18404ce67"
+
+utxo_json_file          = "utxo.json"
+utxo_json_sha256        = "7e708043b59dd20dc7d3930cc8b83681e2f71e4a1a5dc972275a230443138aa6"
+consensus_inputs_file   = "consensus-inputs.json"
+consensus_inputs_sha256 = "36f00dae8beec86b491f703130d940477ab7c5bcdf0d06806e89b25aa53fbd1d"
+mithril_manifest_file   = "mithril-manifest.json"
+mithril_manifest_sha256 = "7ddc11b11d56679e59b6460f43e2af336d397d328cacc76ae9b795e84df54d86"
+node_transcript_file    = "node-first-run.stderr.log"
+node_transcript_sha256  = "181ae5c48f541d126410ff2d1d0a3b66b0cbeac542090cce1c70e4c967aa45a8"
+
+ade_recomputed_seed_artifact_hash = "860697cbdfd90893c399af2870384716653cb29a9a5103854bb7102b80c24a2d"
+ade_initial_ledger_fingerprint    = "33ddc54e9afc16c3b680d53f028a33a321e3bfb7925fba8f53de2da02ceef122"
+ade_imported_utxo_fingerprint     = "see_transcript"
+
+binding_result = "pass"
+node_exit_code = 0
+
+negative_control_manifest_file   = "mithril-manifest.negative.json"
+negative_control_manifest_sha256 = "c7e730eecf32680f9edf6dd07aa01d2ceef354ffd7228832cb1bb9a0bc221508"
+negative_control_outcome         = "fail_closed"
+negative_control_error           = "CertifiedPointMismatch"
+negative_control_node_exit_code  = 41
