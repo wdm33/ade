@@ -132,7 +132,13 @@ pub async fn run_produce_mode(cli: ProduceCli, shutdown_rx: watch::Receiver<bool
     };
 
     // 2. Initialize producer shell.
-    let mut shell = match ProducerShell::init(kes, vrf, cold, opcert) {
+    // OP-OPS-04: produce-mode (cold-start, subordinate) keeps the key at its
+    // loaded evolution; inject current_kes_period = opcert_start + evolution so
+    // the shell signs at the key's current absolute period (no re-evolution).
+    let current_kes_period = u32::try_from(opcert.kes_period)
+        .unwrap_or(u32::MAX)
+        .saturating_add(kes.current_period().0);
+    let mut shell = match ProducerShell::init(kes, vrf, cold, opcert, current_kes_period) {
         Ok(s) => s,
         Err(e) => {
             eprintln!("ade_node produce: shell init: {:?}", e);

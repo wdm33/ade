@@ -375,7 +375,7 @@ mod followed_tip {
             sigma: sigma.to_bytes().to_vec(),
         };
 
-        ProducerShell::init(kes, vrf, cold, opcert).expect("shell init")
+        ProducerShell::init(kes, vrf, cold, opcert, 0).expect("shell init")
     }
 
     /// The always-eligible leadership context for `slot` in `epoch` (pool_id =

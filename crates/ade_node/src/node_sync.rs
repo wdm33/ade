@@ -2968,7 +2968,7 @@ mod tests {
             kes_period: 0,
             sigma: sigma.to_bytes().to_vec(),
         };
-        ProducerShell::init(kes, vrf, cold, opcert).expect("shell init")
+        ProducerShell::init(kes, vrf, cold, opcert, 0).expect("shell init")
     }
 
     fn l5_era_schedule() -> EraSchedule {
@@ -5061,7 +5061,7 @@ mod tests {
 
         let sched = l5_era_schedule();
         let paths = s4_operator_material(opdir);
-        let mut shell = crate::operator_forge::load_operator_producer_shell(&paths)
+        let mut shell = crate::operator_forge::load_operator_producer_shell(&paths, 0)
             .expect("operator material loads through the production ingress");
         // Operator's own pool id, derived exactly as build_operator_forge_material.
         let op_pool = Hash28(ade_crypto::blake2b_224(&shell.cold_vk().0).0);

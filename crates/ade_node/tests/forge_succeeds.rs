@@ -118,7 +118,7 @@ fn synth_shell(cold_seed: u8, vrf_seed: u8, kes_seed: u8) -> ProducerShell {
     };
     let _vrf_vk = VrfVerificationKey(vrf_vk_bytes);
 
-    ProducerShell::init(kes, vrf, cold, opcert).expect("shell init")
+    ProducerShell::init(kes, vrf, cold, opcert, 0).expect("shell init")
 }
 
 fn era_schedule(epoch: EpochNo) -> EraSchedule {

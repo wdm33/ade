@@ -545,8 +545,14 @@ async fn run_node_lifecycle_inner(
                 anchor_millis,
                 start_slot,
                 slot_length_ms,
-            } = operator_forge::build_operator_forge_material(&paths)
-                .map_err(|e| NodeLifecycleError::ForgeKeyIngress(format!("{e}")))?;
+            } = operator_forge::build_operator_forge_material(
+                &paths,
+                // OP-OPS-04: the recovered durable tip slot anchors the operator
+                // KES period (no wall-clock in the deterministic shell; the
+                // per-block forge advances the key per forged slot).
+                state.tip.as_ref().map(|t| t.slot).unwrap_or(SlotNo(0)),
+            )
+            .map_err(|e| NodeLifecycleError::ForgeKeyIngress(format!("{e}")))?;
             // Coordinator: the genesis-anchor host for the REUSED
             // `kes_period_for_slot` (no slot→KES reimplementation). Holds no
             // secrets (CN-PROD-02).
@@ -5326,7 +5332,11 @@ mod tests {
         let mut ocbor = vec![0x82u8, 0x84, 0x58, 0x20];
         ocbor.extend_from_slice(&kes_vk);
         ocbor.push(0x00); // sequence_number 0
-        ocbor.push(0x00); // kes_period 0
+        // OP-OPS-04: the opcert covers the recovered tip's ABSOLUTE KES period
+        // (WARM_TIP_SLOT / slotsPerKESPeriod = 23_013_663 / 129_600 = 177), so the
+        // injected current period 177 lands at the opcert start (delta 0). CBOR
+        // uint 177 = 0x18 0xB1.
+        ocbor.extend_from_slice(&[0x18, 177]); // kes_period 177
         ocbor.extend_from_slice(&[0x58, 0x40]);
         ocbor.extend_from_slice(&[0u8; 64]); // sigma
         ocbor.extend_from_slice(&[0x58, 0x20]);

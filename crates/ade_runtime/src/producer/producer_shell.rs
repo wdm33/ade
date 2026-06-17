@@ -71,6 +71,15 @@ pub enum ShellInitError {
     MalformedOpCert {
         detail: &'static str,
     },
+    /// The KES key could not be evolved to the target evolution
+    /// (`current_kes_period - opcert.kes_period`): either the key is already
+    /// evolved PAST it (forward-secrecy — it can no longer sign the current
+    /// period) or the target is out of the Sum6KES range. Fail-closed
+    /// (OP-OPS-04).
+    KesEvolutionFailed {
+        key_evolution: u32,
+        target_evolution: u32,
+    },
 }
 
 /// Closed error surface for `ProducerShell::kes_sign_at` /
@@ -117,9 +126,14 @@ impl ProducerShell {
     ///   opcert-signature verification lives in
     ///   `ade_core::consensus::opcert_validate`, invoked by the
     ///   forge pipeline).
-    /// - `kes.current_period() ∈ [opcert.kes_period,
-    ///   opcert.kes_period + 63]` (KES key still covered by this
-    ///   opcert).
+    /// - the INJECTED `current_kes_period` (an ABSOLUTE KES period) ∈
+    ///   `[opcert.kes_period, opcert.kes_period + 63]` (the opcert covers the
+    ///   current period). The key is then anchored (evolution-0 ↔
+    ///   `opcert.kes_period`) and evolved to `current_kes_period -
+    ///   opcert.kes_period` so it signs at the current period. The raw key
+    ///   evolution index is NEVER compared to the absolute opcert start
+    ///   (OP-OPS-04). `current_kes_period` is injected by the RED caller from
+    ///   the genesis clock anchor — no wall-clock in this deterministic core.
     ///
     /// The cold-vkey-matches-opcert-issuer check is NOT enforced at
     /// shell-init (the opcert doesn't carry the cold vkey; opcert is
@@ -134,6 +148,7 @@ impl ProducerShell {
         vrf: VrfSigningKey,
         cold: ColdSigningKey,
         opcert: OperationalCert,
+        current_kes_period: u32,
     ) -> Result<Self, ShellInitError> {
         if opcert.hot_vkey.len() != 32 {
             return Err(ShellInitError::MalformedOpCert {
@@ -146,7 +161,6 @@ impl ProducerShell {
             });
         }
 
-        let kes_current = kes.current_period().0;
         let opcert_start = u32::try_from(opcert.kes_period).map_err(|_| {
             ShellInitError::MalformedOpCert {
                 detail: "opcert.kes_period exceeds u32 (Sum6KES anchor must fit)",
@@ -154,18 +168,39 @@ impl ProducerShell {
         })?;
         let opcert_last = opcert_start.saturating_add(ade_crypto::kes::SUM6_MAX_PERIOD);
 
-        if kes_current < opcert_start {
+        // OP-OPS-04: `opcert.kes_period` is the ABSOLUTE KES period this key's
+        // evolution-0 is certified for; the KES key's own `current_period()` is a
+        // RELATIVE evolution index. Compare the INJECTED current ABSOLUTE period
+        // (never the raw evolution index) to the opcert window, then anchor
+        // evolution-0 at `opcert_start` and evolve the key by
+        // `current_kes_period - opcert_start` so it signs at the current period.
+        if current_kes_period < opcert_start {
             return Err(ShellInitError::KesPeriodBelowOpCertStart {
-                kes_current,
+                kes_current: current_kes_period,
                 opcert_start,
             });
         }
-        if kes_current > opcert_last {
+        if current_kes_period > opcert_last {
             return Err(ShellInitError::KesPeriodPastOpCertEnd {
-                kes_current,
+                kes_current: current_kes_period,
                 opcert_last,
             });
         }
+        let target_evolution = current_kes_period - opcert_start;
+        let key_evolution = kes.current_period().0;
+        // Forward-only (forward-secrecy): `kes_update` fails closed on a backward
+        // or out-of-range target. A fresh cardano-cli key is at evolution 0; this
+        // evolves it to `target_evolution`.
+        let kes = if target_evolution == key_evolution {
+            kes
+        } else {
+            kes_update(kes, KesPeriod(target_evolution)).map_err(|_| {
+                ShellInitError::KesEvolutionFailed {
+                    key_evolution,
+                    target_evolution,
+                }
+            })?
+        };
 
         let mut kes_vkey = [0u8; 32];
         kes_vkey.copy_from_slice(&opcert.hot_vkey);
@@ -403,7 +438,7 @@ mod tests {
         use ade_crypto::kes_sum::KesAlgorithm;
         let kes_vkey = ade_crypto::kes_sum::Sum6Kes::derive_verification_key(&kes_sk_raw);
         let opcert = synth_opcert(kes_vkey, 0);
-        ProducerShell::init(kes, vrf, cold, opcert).unwrap()
+        ProducerShell::init(kes, vrf, cold, opcert, 0).unwrap()
     }
 
     #[test]
@@ -420,27 +455,20 @@ mod tests {
         let cold = synth_cold_key(0x30);
         let mut bad_opcert = synth_opcert([0x99; 32], 0);
         bad_opcert.hot_vkey = vec![0; 16]; // wrong length
-        let err = ProducerShell::init(kes, vrf, cold, bad_opcert).unwrap_err();
+        let err = ProducerShell::init(kes, vrf, cold, bad_opcert, 0).unwrap_err();
         assert!(matches!(err, ShellInitError::MalformedOpCert { .. }));
     }
 
     #[test]
     fn shell_init_rejects_kes_period_below_opcert_start() {
-        let kes_seed = [0x10; 32];
-        let mut kes = synth_kes_secret(0x10);
-        // Advance the KES key to period 5, then craft an opcert
-        // claiming to start at period 10 — kes_current < opcert_start
-        // should fail-close.
-        use crate::producer::signing::kes_update;
-        kes = kes_update(kes, KesPeriod(5)).unwrap();
+        // OP-OPS-04: the INJECTED current absolute period (5) is below an opcert
+        // anchored at absolute start 10 -> fail closed. (Pre-fix this compared the
+        // key's raw evolution index; now it compares the injected absolute period.)
+        let kes = synth_kes_secret(0x10);
         let (vrf, _) = synth_vrf_key(0x20);
         let cold = synth_cold_key(0x30);
-        let kes_sk_raw =
-            ade_crypto::kes_sum::Sum6Kes::gen_key_kes_from_seed_bytes(&kes_seed).unwrap();
-        use ade_crypto::kes_sum::KesAlgorithm;
-        let kes_vkey = ade_crypto::kes_sum::Sum6Kes::derive_verification_key(&kes_sk_raw);
-        let opcert = synth_opcert(kes_vkey, 10);
-        let err = ProducerShell::init(kes, vrf, cold, opcert).unwrap_err();
+        let opcert = synth_opcert([0xAB; 32], 10);
+        let err = ProducerShell::init(kes, vrf, cold, opcert, 5).unwrap_err();
         assert!(matches!(
             err,
             ShellInitError::KesPeriodBelowOpCertStart {
@@ -448,6 +476,58 @@ mod tests {
                 opcert_start: 10,
             }
         ));
+    }
+
+    #[test]
+    fn op_ops_04_anchors_evolution_zero_at_opcert_start_and_evolves_to_current_period() {
+        // OP-OPS-04 acceptance: a FRESH key (evolution 0) certified by an opcert
+        // with ABSOLUTE start 885; the current absolute period 887 is inside the
+        // window [885, 948]. The shell anchors evolution-0 at 885 and EVOLVES the
+        // key by delta = 887 - 885 = 2 -- it never compares the raw evolution
+        // index (0) to the absolute start (885).
+        let kes = synth_kes_secret(0x42);
+        assert_eq!(kes.current_period().0, 0, "fresh key at evolution 0");
+        let (vrf, _) = synth_vrf_key(0x20);
+        let cold = synth_cold_key(0x30);
+        let opcert = synth_opcert([0xAB; 32], 885);
+        let shell = ProducerShell::init(kes, vrf, cold, opcert, 887)
+            .expect("current period 887 in opcert window [885, 948]");
+        assert_eq!(
+            shell.kes_current_period().0,
+            2,
+            "key anchored at 885 evolves by delta 887-885=2"
+        );
+    }
+
+    #[test]
+    fn op_ops_04_fails_closed_outside_window_passes_at_boundaries() {
+        let mk = |start: u64, current: u32| {
+            let kes = synth_kes_secret(0x43);
+            let (vrf, _) = synth_vrf_key(0x20);
+            let cold = synth_cold_key(0x30);
+            let opcert = synth_opcert([0xAB; 32], start);
+            ProducerShell::init(kes, vrf, cold, opcert, current)
+        };
+        // BELOW start 885 -> fail closed (the injected ABSOLUTE period 884 is
+        // compared, never the raw key evolution index 0).
+        assert!(matches!(
+            mk(885, 884),
+            Err(ShellInitError::KesPeriodBelowOpCertStart {
+                kes_current: 884,
+                opcert_start: 885
+            })
+        ));
+        // ABOVE opcert_last (885 + 63 = 948) -> fail closed.
+        assert!(matches!(
+            mk(885, 949),
+            Err(ShellInitError::KesPeriodPastOpCertEnd {
+                kes_current: 949,
+                opcert_last: 948
+            })
+        ));
+        // Boundaries pass: start 885 (delta 0) and last 948 (delta 63).
+        assert!(mk(885, 885).is_ok(), "opcert start passes");
+        assert!(mk(885, 948).is_ok(), "opcert last (start+63) passes");
     }
 
     #[test]

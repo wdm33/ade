@@ -86,6 +86,7 @@ impl std::error::Error for OperatorForgeError {}
 /// byte. `paths` is already presence-validated (S1) — every field is present.
 pub fn load_operator_producer_shell(
     paths: &ForgePaths,
+    current_kes_period: u32,
 ) -> Result<ProducerShell, OperatorForgeError> {
     let cold = load_cold_signing_key_skey(&paths.cold).map_err(OperatorForgeError::ColdKeyLoad)?;
     let vrf = load_vrf_signing_key_skey(&paths.vrf).map_err(OperatorForgeError::VrfKeyLoad)?;
@@ -100,7 +101,8 @@ pub fn load_operator_producer_shell(
     let opcert = parse_opcert_envelope(&opcert_bytes)
         .map_err(OperatorForgeError::OpcertParse)?
         .opcert;
-    ProducerShell::init(kes, vrf, cold, opcert).map_err(OperatorForgeError::ShellInit)
+    ProducerShell::init(kes, vrf, cold, opcert, current_kes_period)
+        .map_err(OperatorForgeError::ShellInit)
 }
 
 /// The operator-material-backed forge inputs the `--mode node` arm needs to
@@ -150,14 +152,28 @@ const GENESIS_KES_PERIOD_ORIGIN_SLOT: u64 = 0;
 /// so the forge reads a truthful current protocol version, not a fabricated default.
 pub fn build_operator_forge_material(
     paths: &ForgePaths,
+    current_slot: SlotNo,
 ) -> Result<OperatorForgeMaterial, OperatorForgeError> {
-    let shell = load_operator_producer_shell(paths)?;
     // Real cardano-cli `shelley-genesis.json` ingress on the node path (S2) —
     // retires `parse_simple_genesis_json`; clock/KES/network constants ONLY.
+    // Parsed FIRST so the current absolute KES period is known before the shell
+    // init's opcert-window check (OP-OPS-04).
     let genesis_bytes = std::fs::read(&paths.genesis)
         .map_err(|_| OperatorForgeError::GenesisParse(GenesisParseError::JsonShape))?;
     let genesis = parse_shelley_genesis(&genesis_bytes, GENESIS_KES_PERIOD_ORIGIN_SLOT)
         .map_err(OperatorForgeError::GenesisParse)?;
+    // OP-OPS-04: the current ABSOLUTE KES period from the INJECTED current slot +
+    // the genesis KES anchor (no wall-clock here; the lifecycle injects the slot).
+    // Saturating: an under-anchor or overflowed period maps to a value the shell's
+    // opcert-window check rejects fail-closed.
+    let current_kes_period = u32::try_from(
+        current_slot
+            .0
+            .saturating_sub(genesis.kes_anchor_slot)
+            / genesis.slots_per_kes_period.max(1),
+    )
+    .unwrap_or(u32::MAX);
+    let shell = load_operator_producer_shell(paths, current_kes_period)?;
     // pool_id from the operator cold verification key — the one named derivation.
     let pool_id = Hash28(ade_crypto::blake2b_224(&shell.cold_vk().0).0);
     // Clock-seam anchors (DC-NODE-03 / DC-NODE-05): slot_zero_time IS slot 0's
@@ -304,12 +320,12 @@ mod tests {
     fn load_operator_producer_shell_builds_shell_from_complete_material() {
         let dir = tempfile::tempdir().unwrap();
         let paths = write_operator_material(dir.path(), 0);
-        let shell = load_operator_producer_shell(&paths).expect("complete material builds shell");
+        let shell = load_operator_producer_shell(&paths, 0).expect("complete material builds shell");
         // Public surface only — never private bytes.
         assert_eq!(shell.opcert().sequence_number, 0);
         assert_eq!(shell.opcert().kes_period, 0);
         // Deterministic public keys: a second load yields the same cold vkey.
-        let shell2 = load_operator_producer_shell(&paths).expect("re-load");
+        let shell2 = load_operator_producer_shell(&paths, 0).expect("re-load");
         assert_eq!(shell.cold_vk().0, shell2.cold_vk().0);
         let _ = shell.vrf_verification_key();
         let _ = shell.public_metadata();
@@ -320,7 +336,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let mut paths = write_operator_material(dir.path(), 0);
         paths.cold = PathBuf::from("/nonexistent/cold.skey");
-        let err = load_operator_producer_shell(&paths).expect_err("missing cold fails closed");
+        let err = load_operator_producer_shell(&paths, 0).expect_err("missing cold fails closed");
         assert!(
             matches!(err, OperatorForgeError::ColdKeyLoad(_)),
             "got {err:?}"
@@ -332,7 +348,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let mut paths = write_operator_material(dir.path(), 0);
         paths.vrf = PathBuf::from("/nonexistent/vrf.skey");
-        let err = load_operator_producer_shell(&paths).expect_err("missing vrf fails closed");
+        let err = load_operator_producer_shell(&paths, 0).expect_err("missing vrf fails closed");
         assert!(
             matches!(err, OperatorForgeError::VrfKeyLoad(_)),
             "got {err:?}"
@@ -344,7 +360,7 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let paths = write_operator_material(dir.path(), 0);
         std::fs::write(&paths.opcert, b"not json").unwrap();
-        let err = load_operator_producer_shell(&paths).expect_err("bad opcert fails closed");
+        let err = load_operator_producer_shell(&paths, 0).expect_err("bad opcert fails closed");
         assert!(
             matches!(err, OperatorForgeError::OpcertParse(_)),
             "got {err:?}"
@@ -353,13 +369,13 @@ mod tests {
 
     #[test]
     fn load_operator_producer_shell_kes_period_past_opcert_fails_closed() {
-        // KES envelope is at period 0; an opcert anchored at period 5 puts the
-        // current KES period below the opcert start => ShellInit fails closed
-        // (the carried CN-PROD-02 / I5 freshness bound at init).
+        // OP-OPS-04: the INJECTED current period (0) is below an opcert anchored
+        // at period 5, so the shell-init opcert-window check fails closed (the
+        // current absolute period is before the opcert becomes valid).
         let dir = tempfile::tempdir().unwrap();
         let paths = write_operator_material(dir.path(), 5);
         let err =
-            load_operator_producer_shell(&paths).expect_err("kes/opcert mismatch fails closed");
+            load_operator_producer_shell(&paths, 0).expect_err("period-below-opcert fails closed");
         assert!(
             matches!(err, OperatorForgeError::ShellInit(_)),
             "got {err:?}"
@@ -372,7 +388,7 @@ mod tests {
         let mut paths = write_operator_material(dir.path(), 0);
         let marker = "/super/secret/operator/cold-PATHMARKER.skey";
         paths.cold = PathBuf::from(marker);
-        let err = load_operator_producer_shell(&paths).expect_err("missing cold fails closed");
+        let err = load_operator_producer_shell(&paths, 0).expect_err("missing cold fails closed");
         let dbg = format!("{err:?}");
         let disp = format!("{err}");
         assert!(!dbg.contains("PATHMARKER"), "Debug leaked a path: {dbg}");
@@ -388,7 +404,7 @@ mod tests {
     fn build_operator_forge_material_from_complete_material() {
         let dir = tempfile::tempdir().unwrap();
         let paths = write_operator_material(dir.path(), 0);
-        let mat = build_operator_forge_material(&paths).expect("complete material builds");
+        let mat = build_operator_forge_material(&paths, SlotNo(0)).expect("complete material builds");
         // pool_id derived from the operator cold vkey — the one named place.
         let expected_pool = Hash28(ade_crypto::blake2b_224(&mat.shell.cold_vk().0).0);
         assert_eq!(mat.pool_id, expected_pool);
@@ -410,7 +426,7 @@ mod tests {
         std::fs::write(&paths.genesis, b"not json").unwrap();
         // `OperatorForgeMaterial` is deliberately not `Debug` (it holds the
         // custody `ProducerShell`), so match the result rather than `expect_err`.
-        let r = build_operator_forge_material(&paths);
+        let r = build_operator_forge_material(&paths, SlotNo(0));
         assert!(
             matches!(r, Err(OperatorForgeError::GenesisParse(_))),
             "bad genesis must fail closed"
@@ -421,8 +437,8 @@ mod tests {
     fn build_operator_forge_material_pool_id_is_deterministic() {
         let dir = tempfile::tempdir().unwrap();
         let paths = write_operator_material(dir.path(), 0);
-        let a = build_operator_forge_material(&paths).expect("build a");
-        let b = build_operator_forge_material(&paths).expect("build b");
+        let a = build_operator_forge_material(&paths, SlotNo(0)).expect("build a");
+        let b = build_operator_forge_material(&paths, SlotNo(0)).expect("build b");
         assert_eq!(a.pool_id, b.pool_id);
     }
 }
