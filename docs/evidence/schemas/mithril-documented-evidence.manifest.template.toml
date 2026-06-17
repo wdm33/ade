@@ -1,0 +1,69 @@
+# Mithril documented-interface evidence bundle — manifest TEMPLATE.
+#
+# RO-MITHRIL-IMPORT-01 item (c). Copy to
+#   docs/evidence/mithril-documented-evidence_<network>_<YYYY-MM-DD>.toml
+# alongside the referenced artifact files (same directory), fill every
+# field, then validate with:
+#   ci/validate_mithril_documented_evidence.sh
+#
+# Every `*_file` path is RELATIVE to this manifest's directory and MUST be
+# committed; its `*_sha256` MUST equal the real file's sha256 (the validator
+# recomputes and compares — a synthetic manifest fails). This template
+# itself is NOT matched by the validator glob
+# (mithril-documented-evidence_*.toml), so it never counts as a claim.
+#
+# Field schema: docs/evidence/schemas/mithril-documented-evidence.schema.md
+# Operator procedure: docs/active/mithril-documented-interface-runbook.md
+# Turnkey capture: ci/capture_mithril_documented_evidence.sh
+
+schema_version = 1
+
+# --- Provenance / environment ------------------------------------------------
+ade_commit                  = "<git rev-parse HEAD of the ade_node binary used>"
+network                     = "preprod"            # preprod | preview | mainnet
+captured_by                 = "<operator handle — this is operator-witnessed>"
+mithril_aggregator_endpoint = "<MITHRIL_AGGREGATOR_ENDPOINT used for acquisition>"
+mithril_certificate_hash    = "<64-hex Mithril certificate hash the mithril-client verified>"
+mithril_client_version      = "<mithril-client --version>"
+cardano_node_version        = "<cardano-node --version>"
+cardano_cli_version         = "<cardano-cli --version>"
+
+# --- Mithril certificate / snapshot (what the cert attests) ------------------
+mithril_signed_entity       = "<e.g. CardanoDatabase { epoch = N, immutable_file_number = M }>"
+mithril_immutable_range_lo  = 0
+mithril_immutable_range_hi  = 0
+mithril_certified_slot      = 0                    # certified_point.slot from the manifest
+mithril_certified_block_hash = "<64-hex certified_point.block_hash_hex>"
+
+# --- Operator seed point (DC-MITHRIL-02: independent ORIGIN; for a PASSING
+#     binding the VALUES equal the certified point above) -----------------------
+operator_seed_point_slot       = 0
+operator_seed_point_block_hash = "<64-hex; equals mithril_certified_block_hash on a pass>"
+
+# --- Artifacts (committed beside this manifest; sha256-bound) -----------------
+utxo_json_file        = "utxo.json"                 # cardano-cli query utxo --whole-utxo --out-file
+utxo_json_sha256      = "<sha256 of utxo.json>"
+consensus_inputs_file = "consensus-inputs.json"     # ci/build_consensus_inputs_bundle.sh output
+consensus_inputs_sha256 = "<sha256 of consensus-inputs.json>"
+mithril_manifest_file = "mithril-manifest.json"     # the --mithril-manifest-path JSON (RawMithrilManifest)
+mithril_manifest_sha256 = "<sha256 of mithril-manifest.json>"
+node_transcript_file  = "node-first-run.stderr.log" # captured ade_node --mode node stderr+exit
+node_transcript_sha256 = "<sha256 of node-first-run.stderr.log>"
+
+# --- Ade-computed (harvested from the first-run path) ------------------------
+ade_recomputed_seed_artifact_hash = "<64-hex; Ade blake2b_256_of_file(utxo.json)>"
+ade_initial_ledger_fingerprint    = "<from 'first-run Mithril bootstrap complete' transcript line>"
+ade_imported_utxo_fingerprint     = "<imported UtxoFingerprint>"
+
+# --- Binding result (positive episode) ---------------------------------------
+binding_result = "pass"      # MUST be "pass": verify_mithril_binding succeeded
+node_exit_code = 0           # MUST be 0
+
+# --- Negative control (MUST prove the binding discriminates) -----------------
+# Re-run --mode node with a manifest whose certified_point (or epoch window)
+# is deliberately mismatched; Ade MUST fail closed BEFORE storage init.
+negative_control_manifest_file   = "mithril-manifest.negative.json"
+negative_control_manifest_sha256 = "<sha256 of the mismatched manifest>"
+negative_control_outcome         = "fail_closed"
+negative_control_error           = "CertifiedPointMismatch"  # or EpochMismatch / NetworkMagicMismatch / ...
+negative_control_node_exit_code  = 1     # MUST be nonzero
