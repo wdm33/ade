@@ -53,7 +53,7 @@ hand-authored manifest with no real fixtures **fails** — the same
 | `mithril_immutable_range_lo` / `_hi` | snapshot immutable-file range. |
 | `mithril_certified_slot` / `mithril_certified_block_hash` | the cert's attested `certified_point`. |
 | `operator_seed_point_slot` / `operator_seed_point_block_hash` | the operator's **independently-extracted** seed point (DC-MITHRIL-02). |
-| `utxo_json_file` / `_sha256` | `cardano-cli query utxo --whole-utxo` output. |
+| `utxo_json_file` / `_sha256` | `cardano-cli query utxo --whole-utxo` output (the seed). **Out-of-tree large artifact** — gitignored like the repo's `*-utxo-seed.json` (multi-GB; not committed). Hash-pinned via `_sha256` + `ade_recomputed_seed_artifact_hash`; the validator sha-verifies it only if present locally, else accepts it as hash-pinned + reproducible. |
 | `consensus_inputs_file` / `_sha256` | `ci/build_consensus_inputs_bundle.sh` output. |
 | `mithril_manifest_file` / `_sha256` | the `--mithril-manifest-path` JSON (`RawMithrilManifest`). |
 | `node_transcript_file` / `_sha256` | captured `ade_node --mode node` stderr + exit. |

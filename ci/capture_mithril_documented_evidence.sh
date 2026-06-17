@@ -114,7 +114,10 @@ fi
 log "preparing scratch config + empty topology (frozen, no peers)"
 rm -rf "$CFG"; mkdir -p "$CFG"
 cp -a "$CANON_CONFIG_DIR"/. "$CFG"/
-CONFIG_JSON="$(ls "$CFG"/config.json "$CFG"/configuration.json 2>/dev/null | head -1)"
+CONFIG_JSON=""
+for cand in "$CFG/config.json" "$CFG/configuration.json"; do
+  [[ -f "$cand" ]] && { CONFIG_JSON="$cand"; break; }
+done
 [[ -n "$CONFIG_JSON" ]] || die "no config.json in $CFG"
 cat > "$CFG/topology-empty.json" <<'JSON'
 { "localRoots": [ { "accessPoints": [], "advertise": false, "valency": 0, "trustable": false } ],
@@ -138,10 +141,10 @@ CCLI=(docker exec -e CARDANO_NODE_SOCKET_PATH=/data/ipc/node.socket "$CONTAINER"
 log "waiting for the node socket + ledger (up to ~20 min on the ancillary snapshot)"
 TIP_JSON=""
 for _ in $(seq 1 240); do
-  if TIP_JSON="$("${CCLI[@]}" query tip --testnet-magic "$NETWORK_MAGIC" 2>/dev/null)"; then
-    [[ -n "$TIP_JSON" ]] && break
+  if TIP_JSON="$("${CCLI[@]}" query tip --testnet-magic "$NETWORK_MAGIC" 2>/dev/null)" && [[ -n "$TIP_JSON" ]]; then
+    break
   fi
-  TIP_JSON=""; docker exec "$CONTAINER" true 2>/dev/null || die "throwaway node container died (see: docker logs $CONTAINER)"
+  docker exec "$CONTAINER" true 2>/dev/null || die "throwaway node container died (see: docker logs $CONTAINER)"
   sleep 5
 done
 [[ -n "$TIP_JSON" ]] || die "node did not become queryable in time"
@@ -164,9 +167,16 @@ OP_HASH="$(jq -r '.hash' <<<"$OP_TIP_JSON")"
 [[ "$OP_SLOT" == "$CERTIFIED_SLOT" && "$OP_HASH" == "$CERTIFIED_HASH" ]] \
   || die "operator extraction tip drifted from the certified boundary (node not frozen) — aborting"
 
-log "extracting whole UTxO seed (large)"
-"${CCLI[@]}" query utxo --whole-utxo --testnet-magic "$NETWORK_MAGIC" --out-file /data/out/utxo.json
-[[ -s "$OUT/utxo.json" ]] || die "utxo.json not produced"
+if [[ -s "$OUT/utxo.json" ]] && head -c1 "$OUT/utxo.json" >/dev/null 2>&1; then
+  log "whole UTxO seed already present + readable at $OUT/utxo.json — reusing (same frozen certified state)"
+else
+  log "extracting whole UTxO seed (large)"
+  "${CCLI[@]}" query utxo --whole-utxo --testnet-magic "$NETWORK_MAGIC" --out-file /data/out/utxo.json
+  # cardano-cli runs as root inside the container; the bind-mounted seed lands
+  # root:root 0600. Make it readable by this (non-root) user before ade imports it.
+  docker exec "$CONTAINER" chmod 0644 /data/out/utxo.json
+  [[ -s "$OUT/utxo.json" ]] || die "utxo.json not produced"
+fi
 
 log "building consensus-inputs bundle against the throwaway container"
 ADE_LIVE_PEER_CONTAINER="$CONTAINER" ADE_LIVE_NETWORK_MAGIC="$NETWORK_MAGIC" \
@@ -223,13 +233,13 @@ POS_LOG="$OUT/node-first-run.stderr.log"; POS_RC=0
 run_first_run "$MANIFEST" "$OUT/snap.pos" "$OUT/wal.pos" "$POS_LOG" || POS_RC=$?
 grep -q "first-run Mithril bootstrap complete" "$POS_LOG" || die "positive first-run did not report binding success (see $POS_LOG)"
 [[ "$POS_RC" == "0" ]] || die "positive first-run exited $POS_RC (see $POS_LOG)"
-INIT_LEDGER_FP="$(grep -oE 'initial_ledger_fingerprint=[^,)]+' "$POS_LOG" | head -1 | sed 's/initial_ledger_fingerprint=//')"
+INIT_LEDGER_FP="$(grep -oE 'initial_ledger_fingerprint=Hash32\([0-9a-f]{64}' "$POS_LOG" | grep -oE '[0-9a-f]{64}' | head -1 || true)"
 
 log "ade_node --mode node first-run (NEGATIVE control)"
 NEG_LOG="$OUT/node-first-run.negative.stderr.log"; NEG_RC=0
 run_first_run "$NEG_MANIFEST" "$OUT/snap.neg" "$OUT/wal.neg" "$NEG_LOG" || NEG_RC=$?
 [[ "$NEG_RC" != "0" ]] || die "negative control SUCCEEDED — binding did not discriminate (see $NEG_LOG)"
-NEG_ERROR="$(grep -oE 'CertifiedPointMismatch|EpochMismatch|NetworkMagicMismatch|GenesisHashMismatch|CertificateHashMismatch|UnsupportedArtifactType' "$NEG_LOG" | head -1)"
+NEG_ERROR="$(grep -oE 'CertifiedPointMismatch|EpochMismatch|NetworkMagicMismatch|GenesisHashMismatch|CertificateHashMismatch|UnsupportedArtifactType' "$NEG_LOG" | head -1 || true)"
 [[ -n "$NEG_ERROR" ]] || die "negative control failed with an unrecognised error (see $NEG_LOG)"
 
 # ---- PHASE 8: emit the bundle ----------------------------------------------
@@ -245,7 +255,7 @@ captured_by                 = "$CAPTURED_BY"
 mithril_aggregator_endpoint = "$AGG"
 mithril_certificate_hash    = "$CERT_HASH"
 mithril_client_version      = "$(mithril-client --version | head -1)"
-cardano_node_version        = "$(docker run --rm "$NODE_IMAGE" --version 2>/dev/null | head -1 || echo "$NODE_IMAGE")"
+cardano_node_version        = "$(docker run --rm --entrypoint cardano-node "$NODE_IMAGE" --version 2>/dev/null | head -1 || echo "$NODE_IMAGE")"
 cardano_cli_version         = "$(docker run --rm --entrypoint cardano-cli "$NODE_IMAGE" --version 2>/dev/null | head -1 || echo unknown)"
 
 mithril_signed_entity        = "CardanoDatabase { epoch = $CERT_EPOCH, immutable_file_number = $IMMUTABLE_N }"
