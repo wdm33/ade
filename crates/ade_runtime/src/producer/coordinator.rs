@@ -151,22 +151,38 @@ pub struct CoordinatorState {
 }
 
 impl CoordinatorState {
-    /// Compute the KES period for a given slot.
+    /// Compute the KES evolution index to sign a block at `slot` with.
     ///
-    /// Pure arithmetic: `period = (slot - kes_anchor_slot) /
-    /// slots_per_kes_period`. Returns `None` if `slot <
-    /// kes_anchor_slot` (under-anchor) or if the computed period
-    /// exceeds `kes_max_period` (key exhausted).
+    /// The slot's ABSOLUTE KES period is `(slot - kes_anchor_slot) /
+    /// slots_per_kes_period`. The op-cert anchors the KES key's evolution 0 at its
+    /// `kes_start_period` (also absolute), so the value RETURNED is the RELATIVE
+    /// evolution index `absolute_period - kes_start_period` -- exactly what
+    /// `ProducerShell::init`'s `current_period` and the `Sum6KES` `sign_kes` /
+    /// header-period field consume (OP-OPS-04: the raw key evolution index is NEVER
+    /// the absolute period). Returns `None` if the slot is under the KES anchor,
+    /// below the op-cert's start period (key not yet valid), or beyond the key's
+    /// covered window (`> kes_max_period` evolutions -> key exhausted). A
+    /// from-genesis op-cert has `kes_start_period == 0`, so this is behaviour-
+    /// identical to the prior absolute `[0, kes_max_period]` bound there; a
+    /// real-chain op-cert (e.g. `kes_start_period = 885` on a chain at absolute
+    /// period 888) yields the small relative index (3) the signer actually needs --
+    /// previously this returned `None` (888 > kes_max_period), silently blocking
+    /// ALL block production on any non-from-genesis chain.
     pub fn kes_period_for_slot(&self, slot: u64) -> Option<u32> {
         if slot < self.genesis_anchor.kes_anchor_slot {
             return None;
         }
         let offset = slot - self.genesis_anchor.kes_anchor_slot;
-        let period = offset / self.genesis_anchor.slots_per_kes_period;
-        if period > self.genesis_anchor.kes_max_period as u64 {
+        let absolute_period = offset / self.genesis_anchor.slots_per_kes_period;
+        let start = self.opcert_meta.kes_start_period as u64;
+        if absolute_period < start {
             return None;
         }
-        Some(period as u32)
+        let evolution = absolute_period - start;
+        if evolution > self.genesis_anchor.kes_max_period as u64 {
+            return None;
+        }
+        Some(evolution as u32)
     }
 }
 
@@ -661,6 +677,38 @@ mod tests {
             hash: [hash_byte; 32],
             bytes: vec![hash_byte; len],
         }
+    }
+
+    #[test]
+    fn kes_period_for_slot_anchors_relative_to_opcert_start_period() {
+        // Regression for the BA02 block-production blocker: on a real chain the
+        // op-cert anchors the KES key at an ABSOLUTE start period (e.g. 885), and the
+        // gate must return the RELATIVE evolution index (absolute - start), bounded by
+        // the key's covered window -- NOT the raw absolute period (which exceeds
+        // kes_max_period and previously returned None for EVERY real-chain slot,
+        // silently blocking all forging).
+        const SPK: u64 = 129_600;
+        let mut cfg = test_cfg();
+        cfg.genesis_anchor.kes_max_period = 62; // preview maxKESEvolutions
+        cfg.opcert_meta.kes_start_period = 885; // a real op-cert's start period
+        let (state, _) = coordinator_init(cfg);
+
+        // A live epoch-1332 slot: absolute KES period 888 -> relative evolution 3
+        // (this returned None before the fix -> forge never KES-signed).
+        assert_eq!(state.kes_period_for_slot(115_092_757), Some(3));
+        // The op-cert's start period -> evolution 0.
+        assert_eq!(state.kes_period_for_slot(885 * SPK), Some(0));
+        // One period before the start -> key not yet valid.
+        assert_eq!(state.kes_period_for_slot(884 * SPK), None);
+        // The last covered period (start + kes_max_period) -> the final evolution.
+        assert_eq!(state.kes_period_for_slot((885 + 62) * SPK), Some(62));
+        // One period past the covered window -> key exhausted.
+        assert_eq!(state.kes_period_for_slot((885 + 63) * SPK), None);
+
+        // From-genesis behaviour (kes_start_period == 0) is preserved exactly.
+        let (gs, _) = coordinator_init(test_cfg());
+        assert_eq!(gs.kes_period_for_slot(0), Some(0));
+        assert_eq!(gs.kes_period_for_slot(3 * SPK), Some(3));
     }
 
     #[test]
