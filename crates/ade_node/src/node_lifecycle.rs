@@ -121,10 +121,12 @@ use crate::convergence_evidence::{fork_switch_id, ConvergenceEvidence, Convergen
 use crate::node_sync::{
     admit_forged_block_durably, classify_receive, durable_tip_matches,
     forge_followed_tip_admission, forge_mode_after_admit, forge_mode_on_caughtup,
-    forge_one_from_recovered, pending_reselection_forge_refusal, resolve_disposition, run_node_sync,
-    single_producer_forge_decision, venue_policy, CandidateSummary, ForgeFollowedTipAdmission,
-    ForgeMode, ForgeRefused, NodeBlockSource, NodeForgeOutcome, NodeSyncError, NodeSyncItem,
-    ReceiveDisposition, SingleProducerForgeDecision, VenueRole,
+    forge_one_from_recovered, participant_forge_decision, participant_forge_mode_after_admit,
+    participant_forge_mode_on_caughtup, pending_reselection_forge_refusal, resolve_disposition,
+    run_node_sync, single_producer_forge_decision, venue_policy, CandidateSummary,
+    ForgeFollowedTipAdmission, ForgeMode, ForgeRefused, NodeBlockSource, NodeForgeOutcome,
+    NodeSyncError, NodeSyncItem, ParticipantForgeDecision, ReceiveDisposition,
+    SingleProducerForgeDecision, VenueRole,
 };
 use crate::operator_forge;
 use crate::run_loop_planner::{
@@ -1370,6 +1372,9 @@ fn forge_mode_kind(m: &ForgeMode) -> crate::live_log::ForgeModeKind {
         ForgeMode::SingleProducerExtendOwnDurableSpine { .. } => {
             ForgeModeKind::SingleProducerExtendOwnDurableSpine
         }
+        ForgeMode::ParticipantExtendOnSelectedHead { .. } => {
+            ForgeModeKind::ParticipantExtendOnSelectedHead
+        }
     }
 }
 
@@ -1878,8 +1883,65 @@ pub async fn run_relay_loop_with_sched(
                                 }
                             }
                         }
+                    } else if act.venue_role == VenueRole::Participant {
+                        // CN-FOLLOW-01 (DC-FOLLOW-FORGE-01): a keyed Participant venue
+                        // FOLLOWS the AO-selected chain (run_participant_sync) and must
+                        // also PRODUCE on it. Mirror the single-producer two-state mode:
+                        // the DC-NODE-15 gate until the first caught-up instant latches
+                        // the extend mode, then forge on the AO-selected durable head
+                        // (ChainDb::tip) fenced by DC-NODE-28 (pending fork-choice /
+                        // reselection / missing-bridge), NOT the single-producer
+                        // observed-feed fence and NOT the per-tick DC-NODE-15 exact-
+                        // equality re-check the racing frontier makes unsatisfiable.
+                        match participant_forge_decision(
+                            &act.forge_mode,
+                            durable_servable_tip.clone(),
+                            followed_peer_tip.clone(),
+                            act.venue_role,
+                            act.pending_reselection,
+                            act.pending_fork_switch.is_some(),
+                            act.pending_missing_bridge.is_some(),
+                        ) {
+                            // ExtendOnSelectedHead forges on the AO-selected durable head.
+                            // The GREEN fence already required durable_servable_tip ==
+                            // current_tip (the forge_base it returns), and the forge below
+                            // builds on `selected_tip` (ChainDb::tip) — the SAME durable
+                            // head — so the forge base stays BLUE-sourced and byte-equals
+                            // forge_base (DC-CONS-24).
+                            ParticipantForgeDecision::ExtendOnSelectedHead { .. } => true,
+                            ParticipantForgeDecision::Refuse(refused) => {
+                                act.last_forge_refused = Some(refused);
+                                false
+                            }
+                            ParticipantForgeDecision::UseInitialCatchupGate => {
+                                match dc_node_15_refusal(
+                                    is_from_genesis_cold_start,
+                                    &durable_servable_tip,
+                                    &followed_peer_tip,
+                                ) {
+                                    Some(refused) => {
+                                        act.last_forge_refused = Some(refused);
+                                        false
+                                    }
+                                    None => {
+                                        // First caught-up instant: latch the Participant
+                                        // extend mode on the durable servable head (the
+                                        // AO-selected tip the gate just matched). The
+                                        // extend head is the durable tip, NOT the followed
+                                        // peer tip (they byte-equal here by DC-NODE-15).
+                                        if let Some(head) = durable_servable_tip.clone() {
+                                            act.forge_mode = participant_forge_mode_on_caughtup(
+                                                &act.forge_mode,
+                                                head,
+                                            );
+                                        }
+                                        true
+                                    }
+                                }
+                            }
+                        }
                     } else {
-                        // Default (non-single-producer) venue — pure DC-NODE-15.
+                        // Default (Unknown) venue — pure DC-NODE-15, unchanged.
                         match dc_node_15_refusal(
                             is_from_genesis_cold_start,
                             &durable_servable_tip,
@@ -1893,11 +1955,15 @@ pub async fn run_relay_loop_with_sched(
                         }
                     };
                     if proceed_to_forge && (cold_start_permitted || selected_tip.is_some()) {
-                        // DC-NODE-20 forge-base evidence (RED, emit-only): in a
-                        // single-producer venue the forge base is the local selected
-                        // durable tip (`selected_tip` == ChainDb::tip) — NOT the followed
-                        // peer tip and NOT a cert. Serializes the decision already made.
-                        if act.venue_role == VenueRole::SingleProducer {
+                        // DC-NODE-20 / CN-FOLLOW-01 forge-base evidence (RED, emit-only):
+                        // in a single-producer OR Participant venue the forge base is the
+                        // local selected durable tip (`selected_tip` == ChainDb::tip, the
+                        // AO-selected head for Participant) — NOT the followed peer tip and
+                        // NOT a cert. Serializes the decision already made.
+                        if matches!(
+                            act.venue_role,
+                            VenueRole::SingleProducer | VenueRole::Participant
+                        ) {
                             // The forge base == the local durable ChainDb tip (block_no
                             // carried by ChainDbServedSource; `selected_tip`/ChainTip has
                             // only slot+hash). Same tip, just enriched for the transcript.
@@ -2027,6 +2093,23 @@ pub async fn run_relay_loop_with_sched(
                                         admitted,
                                         own_tip,
                                         followed_peer_tip.clone(),
+                                    );
+                                } else if act.venue_role == VenueRole::Participant {
+                                    // CN-FOLLOW-01: advance the Participant extend head to
+                                    // the durable spine head just admitted (the forge's own
+                                    // successor) ONLY on an actual forge+admit — a no-op on
+                                    // a not_leader tick. The next ForgeTick extends N+1.
+                                    let own_tip = ChainDbServedSource::new(chaindb).tip().map(
+                                        |(slot, hash, block_no)| TipPoint {
+                                            slot,
+                                            hash,
+                                            block_no,
+                                        },
+                                    );
+                                    act.forge_mode = participant_forge_mode_after_admit(
+                                        &act.forge_mode,
+                                        admitted,
+                                        own_tip,
                                     );
                                 }
                                 if let Some(s) = sched.as_deref_mut() {

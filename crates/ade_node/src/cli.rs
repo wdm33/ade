@@ -137,10 +137,10 @@ pub struct Cli {
     /// extend-own-durable-spine behind the fail-closed fence. Default `false`.
     pub single_producer_venue: bool,
     /// `--participant-venue`: declare an explicitly participant venue (Ade is
-    /// one producer among several; a competing peer chain is resolved by
-    /// fork-choice in AI-S4b-ii). Mutually exclusive with
-    /// `--single-producer-venue`. Default `false`. AI-S4b-i: inert until the
-    /// live wiring lands.
+    /// one producer among several; a competing peer chain is resolved by the
+    /// AO fork-choice). Mutually exclusive with `--single-producer-venue`.
+    /// Default `false`. The keyed forge follows via the AO and produces on the
+    /// AO-selected durable head (CN-FOLLOW-01, fenced by DC-NODE-28).
     pub participant_venue: bool,
     /// `--convergence-evidence-path`: PHASE4-N-AJ AJ-S1. Optional path for the
     /// dedicated convergence-evidence JSONL sink (`--mode node` participant

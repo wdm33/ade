@@ -251,6 +251,9 @@ fn forge_refused_not_caught_up() {
         ForgeRefused::ReselectionPending => {
             panic!("expected NotCaughtUp, got ReselectionPending")
         }
+        ForgeRefused::ParticipantFenceViolation { .. } => {
+            panic!("expected NotCaughtUp, got ParticipantFenceViolation")
+        }
     }
 }
 

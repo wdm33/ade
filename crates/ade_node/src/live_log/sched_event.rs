@@ -141,6 +141,8 @@ pub enum ForgeModeKind {
     InitialCatchupRequired,
     CaughtUpToPeerTip,
     SingleProducerExtendOwnDurableSpine,
+    /// CN-FOLLOW-01: the Participant extend-on-selected-head steady state.
+    ParticipantExtendOnSelectedHead,
 }
 
 impl ForgeModeKind {
@@ -152,6 +154,7 @@ impl ForgeModeKind {
             Self::SingleProducerExtendOwnDurableSpine => {
                 "single_producer_extend_own_durable_spine"
             }
+            Self::ParticipantExtendOnSelectedHead => "participant_extend_on_selected_head",
         }
     }
 }

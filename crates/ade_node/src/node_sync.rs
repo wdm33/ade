@@ -770,6 +770,16 @@ pub enum ForgeRefused {
     /// apply) is unresolved — the producer refuses to forge on the stale
     /// pre-resolution tip. No state transition; tip unchanged.
     ReselectionPending,
+    /// CN-FOLLOW-01 (DC-FOLLOW-FORGE-01): the Participant extend-on-selected-head
+    /// fence refused the forge. Structured + comparable (never a stringly-authoritative
+    /// error): the named reason plus the tips + venue role observed at the gate. No
+    /// state transition was attempted; the tip is unchanged.
+    ParticipantFenceViolation {
+        reason: ParticipantForgeFenceReason,
+        durable_tip: Option<TipPoint>,
+        followed_peer_tip: Option<TipPoint>,
+        venue_role: VenueRole,
+    },
 }
 
 /// PHASE4-N-AI AI-S4b-ii (DC-NODE-28): the forge gate's refusal when a
@@ -1001,6 +1011,17 @@ pub enum ForgeMode {
         adopted_root: TipPoint,
         current_tip: TipPoint,
     },
+    /// CN-FOLLOW-01: Participant steady state — extend the AO-selected durable head.
+    /// The Participant analog of `SingleProducerExtendOwnDurableSpine`: the forge base
+    /// is `ChainDb::tip` (the head the AO/`select_best_chain` law selected, kept correct
+    /// by the participant follow), fenced by DC-NODE-28 (no pending fork-choice /
+    /// reselection) rather than the single-producer observed-feed fence. `adopted_root`
+    /// is the first caught-up head the extend latched on; `current_tip` advances with
+    /// each admitted forge.
+    ParticipantExtendOnSelectedHead {
+        adopted_root: TipPoint,
+        current_tip: TipPoint,
+    },
 }
 
 /// DC-NODE-18: why a single-producer extend-forge is fenced off (fail-closed).
@@ -1194,6 +1215,183 @@ pub fn single_producer_forge_decision(
                     }
                 }
                 _ => violation(SingleProducerFenceReason::PeerTipDisagreesWithSpine),
+            }
+        }
+        // CN-FOLLOW-01: the Participant extend mode never reaches this single-producer
+        // decision (the ForgeTick routes Participant to `participant_forge_decision`);
+        // if it ever did, fail closed -- this is not a single-producer venue.
+        ForgeMode::ParticipantExtendOnSelectedHead { .. } => {
+            violation(SingleProducerFenceReason::VenueNotDeclaredSingleProducer)
+        }
+    }
+}
+
+// =====================================================================
+// CN-FOLLOW-01 / DC-FOLLOW-FORGE-01 — Participant venue forge-on-selected-head.
+//
+// A keyed producer in the Participant venue follows the AO-selected chain
+// (run_participant_sync + fork-choice + store rewind, proven CN-CONS-03) but must
+// also PRODUCE on it at a leader slot. The single-producer two-state forge mode
+// (UseInitialCatchupGate -> SingleProducerExtendOwnDurableSpine) is mirrored here,
+// but the extend state's fence is the AO/DC-NODE-28 pending-resolution state, NOT
+// the single-producer observed-feed fence: a competing candidate is RESOLVED by the
+// AO (DC-NODE-23/38) and the resolution HOLDS the forge fence while pending, so the
+// Participant extend never needs the single-producer "fail-closed on any observed
+// competitor" rule. The decision is GREEN: it reads the AO-selected durable
+// ChainDb::tip; it never reaches select_best_chain / chain_selector / fork_choice and
+// never sees key material (signing stays RED). DC-CONS-24 (forged parent byte-equals
+// the served tip) + DC-NODE-14 (parent FindIntersect-able) still apply unchanged
+// because the forge base is the same servable ChainDb::tip.
+// =====================================================================
+
+/// CN-FOLLOW-01 / DC-FOLLOW-FORGE-01: why a Participant extend-forge is fenced off
+/// (fail-closed). The named reasons are DISTINCT from the single-producer fence — a
+/// competing candidate is resolved by the AO, never refused, so there is no
+/// observed-competitor reason here.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ParticipantForgeFenceReason {
+    /// The venue is not the declared Participant venue (fail-closed: this decision
+    /// applies ONLY to an explicit Participant venue, never inferred).
+    VenueNotDeclaredParticipant,
+    /// A fork-choice re-selection / fork-switch / missing-bridge is unresolved
+    /// (DC-NODE-28) — refuse, never forge on the stale pre-resolution tip.
+    ForkChoicePending,
+    /// No durable servable tip is available to forge on (the AO-selected head is
+    /// absent / the store read-errored / is undecodable).
+    NoDurableServableTip,
+    /// The durable servable tip does not byte-equal the extend state's `current_tip`
+    /// (slot/hash/block_no) — the head diverged from the latched extend head; fail
+    /// closed rather than forge on an unexpected base.
+    DurableTipDivergedFromExtendHead,
+}
+
+/// CN-FOLLOW-01 / DC-FOLLOW-FORGE-01: the per-ForgeTick decision for the Participant
+/// forge mode. Pure / total / deterministic GREEN — derived solely from the mode, the
+/// durable servable tip (the AO-selected head a peer would see), the followed peer
+/// tip, the venue, and the DC-NODE-28 pending-resolution flags. The followed/observed
+/// peer tips are NOT a competing-fence input here (the AO resolves competitors); the
+/// pending flags are. This never selects / reorders / prefers chains and never reaches
+/// `select_best_chain` / `chain_selector` / `fork_choice`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ParticipantForgeDecision {
+    /// Initial modes — defer to the existing DC-NODE-15 followed-tip gate until the
+    /// first caught-up instant; the extend decision does not apply yet.
+    UseInitialCatchupGate,
+    /// Extend the AO-selected durable head — forge on `forge_base` (the durable
+    /// `ChainDb::tip`).
+    ExtendOnSelectedHead { forge_base: TipPoint },
+    /// Fenced off — refuse with the structured violation.
+    Refuse(ForgeRefused),
+}
+
+/// CN-FOLLOW-01 transition: latch the Participant extend mode on the FIRST caught-up
+/// instant. `InitialCatchupRequired -> ParticipantExtendOnSelectedHead` once the
+/// DC-NODE-15 gate reports CaughtUp (durable == followed == `caught_up_tip`); the
+/// caught-up head becomes both the adopted root and the current tip (exact-equality-
+/// once then latch — the single-producer "first caught-up instant latches the extend
+/// mode" semantics, NOT a frontier-proximity re-test). Total; idempotent in any other
+/// mode (the extend state, once latched, advances only via the post-admit transition).
+pub fn participant_forge_mode_on_caughtup(mode: &ForgeMode, caught_up_tip: TipPoint) -> ForgeMode {
+    match mode {
+        ForgeMode::InitialCatchupRequired => ForgeMode::ParticipantExtendOnSelectedHead {
+            adopted_root: caught_up_tip.clone(),
+            current_tip: caught_up_tip,
+        },
+        other => other.clone(),
+    }
+}
+
+/// CN-FOLLOW-01 transition: advance `ParticipantExtendOnSelectedHead.current_tip`
+/// after a successful extend forge+admit. The Participant analog of
+/// `forge_mode_after_admit`'s extend advance: `admitted` is true IFF an actual block
+/// was forged AND durably admitted; a not_leader / no-op tick MUST NOT advance the
+/// mode. Pure / total: `!admitted`, a missing `own_tip`, or any non-extend mode
+/// returns the mode unchanged.
+pub fn participant_forge_mode_after_admit(
+    mode: &ForgeMode,
+    admitted: bool,
+    own_tip: Option<TipPoint>,
+) -> ForgeMode {
+    if !admitted {
+        return mode.clone();
+    }
+    let own = match own_tip {
+        Some(t) => t,
+        None => return mode.clone(),
+    };
+    match mode {
+        ForgeMode::ParticipantExtendOnSelectedHead { adopted_root, .. } => {
+            ForgeMode::ParticipantExtendOnSelectedHead {
+                adopted_root: adopted_root.clone(),
+                current_tip: own,
+            }
+        }
+        other => other.clone(),
+    }
+}
+
+/// CN-FOLLOW-01 / DC-FOLLOW-FORGE-01: decide the Participant forge action for this
+/// ForgeTick. Pure / deterministic GREEN. In the initial modes the existing DC-NODE-15
+/// gate governs (`UseInitialCatchupGate`). In the extend state the fence is the
+/// DC-NODE-28 pending-resolution state — `pending_reselection` (a rollback/apply in
+/// flight), `pending_fork_switch` (a provisional fork-choice win awaiting apply), or
+/// `pending_missing_bridge` (an un-bridged winner descendant) — ANY of which refuses
+/// the forge (typed). With no decision pending, the forge base is the AO-selected
+/// durable head: it must be present AND byte-equal the latched `current_tip`; a
+/// missing/diverged durable tip fails closed. The decision NEVER consults a competing
+/// observed peer tip (the AO already resolved it) and NEVER reaches a chain selector.
+pub fn participant_forge_decision(
+    mode: &ForgeMode,
+    durable_servable_tip: Option<TipPoint>,
+    followed_peer_tip: Option<TipPoint>,
+    venue_role: VenueRole,
+    pending_reselection: bool,
+    pending_fork_switch: bool,
+    pending_missing_bridge: bool,
+) -> ParticipantForgeDecision {
+    let violation = |reason: ParticipantForgeFenceReason| {
+        ParticipantForgeDecision::Refuse(ForgeRefused::ParticipantFenceViolation {
+            reason,
+            durable_tip: durable_servable_tip.clone(),
+            followed_peer_tip: followed_peer_tip.clone(),
+            venue_role,
+        })
+    };
+    match mode {
+        // Initial modes: the extend decision does not apply; the DC-NODE-15 gate governs.
+        ForgeMode::InitialCatchupRequired | ForgeMode::CaughtUpToPeerTip { .. } => {
+            ParticipantForgeDecision::UseInitialCatchupGate
+        }
+        // A SingleProducer extend mode is never reached on the Participant path; fail
+        // closed (the venue must be the declared Participant venue) rather than forge.
+        ForgeMode::SingleProducerExtendOwnDurableSpine { .. } => {
+            violation(ParticipantForgeFenceReason::VenueNotDeclaredParticipant)
+        }
+        ForgeMode::ParticipantExtendOnSelectedHead { current_tip, .. } => {
+            if venue_role != VenueRole::Participant {
+                return violation(ParticipantForgeFenceReason::VenueNotDeclaredParticipant);
+            }
+            // DC-NODE-28: a fork-choice decision is unresolved -- refuse, never forge
+            // on the stale pre-resolution tip. ALL THREE pending signals fence here.
+            if pending_reselection || pending_fork_switch || pending_missing_bridge {
+                return violation(ParticipantForgeFenceReason::ForkChoicePending);
+            }
+            // The forge base is the AO-selected durable head. It must be present and
+            // byte-equal `current_tip`; a missing/diverged durable tip fails closed.
+            match &durable_servable_tip {
+                None => violation(ParticipantForgeFenceReason::NoDurableServableTip),
+                Some(durable)
+                    if durable.hash == current_tip.hash
+                        && durable.block_no == current_tip.block_no
+                        && durable.slot == current_tip.slot =>
+                {
+                    ParticipantForgeDecision::ExtendOnSelectedHead {
+                        forge_base: durable.clone(),
+                    }
+                }
+                Some(_) => {
+                    violation(ParticipantForgeFenceReason::DurableTipDivergedFromExtendHead)
+                }
             }
         }
     }
@@ -5487,6 +5685,423 @@ mod tests {
                 current_tip: next,
             }
         );
+    }
+
+    // ===== CN-FOLLOW-01 / DC-FOLLOW-FORGE-01 — Participant forge-on-selected-head =====
+
+    /// Build the latched Participant extend mode on the given head.
+    fn participant_extend(head: &TipPoint) -> ForgeMode {
+        ForgeMode::ParticipantExtendOnSelectedHead {
+            adopted_root: head.clone(),
+            current_tip: head.clone(),
+        }
+    }
+
+    /// CN-FOLLOW-01 MAC: a keyed Participant venue, latched into the extend mode and
+    /// caught up with NO pending fork-choice, forges on the AO-selected durable head
+    /// (`ExtendOnSelectedHead`). The followed peer tip may lag (the live frontier raced
+    /// ahead) — the per-tick DC-NODE-15 exact-equality re-check is NOT applied here.
+    #[test]
+    fn participant_venue_forges_on_ao_selected_head_when_leader() {
+        let head = tp(50, 800, 0xA1); // the AO-selected durable head (ChainDb::tip)
+        let ahead = tp(51, 825, 0xA2); // the racing live frontier the follow observed
+        let mode = participant_extend(&head);
+        // First caught-up instant latches the extend mode from InitialCatchupRequired.
+        assert_eq!(
+            participant_forge_mode_on_caughtup(&ForgeMode::InitialCatchupRequired, head.clone()),
+            mode,
+        );
+        // Extend decision: forge on the durable head even though followed lags ahead.
+        let decision = participant_forge_decision(
+            &mode,
+            Some(head.clone()), // durable servable tip (the AO-selected head)
+            Some(ahead),        // followed peer tip (racing ahead — would block DC-NODE-15)
+            VenueRole::Participant,
+            false,
+            false,
+            false,
+        );
+        assert_eq!(
+            decision,
+            ParticipantForgeDecision::ExtendOnSelectedHead {
+                forge_base: head,
+            },
+            "the Participant extend forges on the AO-selected durable head, not gated by the per-tick exact-equality re-check"
+        );
+    }
+
+    /// CN-FOLLOW-01 MAC: the Participant forge base IS the AO-selected `ChainDb::tip`
+    /// (the durable servable tip) — never the followed peer tip, never a cert, never
+    /// Origin. The returned `forge_base` byte-equals the durable head, distinct from
+    /// the followed peer tip.
+    #[test]
+    fn participant_forge_base_is_ao_selected_chaindb_tip() {
+        let durable = tp(60, 900, 0xB1); // ChainDb::tip
+        let followed = tp(62, 940, 0xB2); // a DIFFERENT followed peer tip
+        let mode = participant_extend(&durable);
+        let decision = participant_forge_decision(
+            &mode,
+            Some(durable.clone()),
+            Some(followed.clone()),
+            VenueRole::Participant,
+            false,
+            false,
+            false,
+        );
+        match decision {
+            ParticipantForgeDecision::ExtendOnSelectedHead { forge_base } => {
+                assert_eq!(forge_base, durable, "forge base is the durable ChainDb::tip");
+                assert_ne!(
+                    forge_base, followed,
+                    "forge base is NEVER the followed peer tip"
+                );
+            }
+            other => panic!("expected ExtendOnSelectedHead, got {other:?}"),
+        }
+    }
+
+    /// CN-FOLLOW-01 MAC: the forge base must be the durable SERVABLE tip and byte-equal
+    /// the latched extend head at forge time. A present-and-equal durable tip yields
+    /// `ExtendOnSelectedHead` with that exact tip; an ABSENT durable tip fails closed
+    /// (`NoDurableServableTip`); a present-but-DIVERGED durable tip fails closed
+    /// (`DurableTipDivergedFromExtendHead`).
+    #[test]
+    fn participant_forge_base_is_servable_before_forge() {
+        use ParticipantForgeFenceReason as R;
+        let head = tp(70, 1000, 0xC1);
+        let mode = participant_extend(&head);
+        // present + byte-equal -> forge on exactly that servable tip.
+        assert_eq!(
+            participant_forge_decision(
+                &mode,
+                Some(head.clone()),
+                None,
+                VenueRole::Participant,
+                false,
+                false,
+                false,
+            ),
+            ParticipantForgeDecision::ExtendOnSelectedHead {
+                forge_base: head.clone(),
+            },
+        );
+        // absent durable servable tip -> fail closed (no base to serve).
+        assert!(matches!(
+            participant_forge_decision(
+                &mode,
+                None,
+                None,
+                VenueRole::Participant,
+                false,
+                false,
+                false,
+            ),
+            ParticipantForgeDecision::Refuse(ForgeRefused::ParticipantFenceViolation {
+                reason: R::NoDurableServableTip,
+                ..
+            })
+        ));
+        // present but diverged from the latched head -> fail closed.
+        let diverged = tp(71, 1025, 0xC9);
+        assert!(matches!(
+            participant_forge_decision(
+                &mode,
+                Some(diverged),
+                None,
+                VenueRole::Participant,
+                false,
+                false,
+                false,
+            ),
+            ParticipantForgeDecision::Refuse(ForgeRefused::ParticipantFenceViolation {
+                reason: R::DurableTipDivergedFromExtendHead,
+                ..
+            })
+        ));
+    }
+
+    /// CN-FOLLOW-01 MAC (DC-NODE-28): while a fork-choice decision is pending — any of
+    /// `pending_reselection` / `pending_fork_switch` / `pending_missing_bridge` —
+    /// the Participant forge is refused with a typed `ForkChoicePending` violation; no
+    /// forge on the stale pre-resolution tip.
+    #[test]
+    fn participant_forge_refused_while_fork_choice_pending() {
+        use ParticipantForgeFenceReason as R;
+        let head = tp(80, 1200, 0xD1);
+        let mode = participant_extend(&head);
+        let refused_pending = |reselect: bool, fork_switch: bool, missing_bridge: bool| {
+            matches!(
+                participant_forge_decision(
+                    &mode,
+                    Some(head.clone()),
+                    None,
+                    VenueRole::Participant,
+                    reselect,
+                    fork_switch,
+                    missing_bridge,
+                ),
+                ParticipantForgeDecision::Refuse(ForgeRefused::ParticipantFenceViolation {
+                    reason: R::ForkChoicePending,
+                    ..
+                })
+            )
+        };
+        assert!(refused_pending(true, false, false), "pending_reselection fences");
+        assert!(refused_pending(false, true, false), "pending_fork_switch fences");
+        assert!(
+            refused_pending(false, false, true),
+            "pending_missing_bridge fences"
+        );
+        // The carrier records the structured tips + venue role.
+        if let ParticipantForgeDecision::Refuse(ForgeRefused::ParticipantFenceViolation {
+            venue_role,
+            durable_tip,
+            ..
+        }) = participant_forge_decision(
+            &mode,
+            Some(head.clone()),
+            None,
+            VenueRole::Participant,
+            true,
+            false,
+            false,
+        ) {
+            assert_eq!(venue_role, VenueRole::Participant);
+            assert_eq!(durable_tip, Some(head));
+        } else {
+            panic!("expected a structured ParticipantFenceViolation");
+        }
+    }
+
+    /// CN-FOLLOW-01 MAC: a non-keyed (non-Participant) venue cannot forge via the
+    /// Participant decision. The `venue_role` lives on the `ForgeActivation`; without an
+    /// activation that declares the Participant venue, the venue defaults to `Unknown`
+    /// (and the ForgeTick never routes to the Participant decision). At the decision
+    /// level: any venue other than `Participant` in the extend mode fails closed
+    /// (`VenueNotDeclaredParticipant`), as does a SingleProducer extend mode reaching it.
+    #[test]
+    fn participant_venue_requires_forge_activation() {
+        use ParticipantForgeFenceReason as R;
+        let head = tp(90, 1400, 0xE1);
+        let mode = participant_extend(&head);
+        for venue in [VenueRole::Unknown, VenueRole::SingleProducer] {
+            assert!(
+                matches!(
+                    participant_forge_decision(
+                        &mode,
+                        Some(head.clone()),
+                        None,
+                        venue,
+                        false,
+                        false,
+                        false,
+                    ),
+                    ParticipantForgeDecision::Refuse(ForgeRefused::ParticipantFenceViolation {
+                        reason: R::VenueNotDeclaredParticipant,
+                        ..
+                    })
+                ),
+                "venue {venue:?} must not forge via the Participant decision"
+            );
+        }
+        // A SingleProducer extend mode reaching the Participant decision also fails closed.
+        let sp_mode = ForgeMode::SingleProducerExtendOwnDurableSpine {
+            adopted_root: head.clone(),
+            current_tip: head.clone(),
+        };
+        assert!(matches!(
+            participant_forge_decision(
+                &sp_mode,
+                Some(head.clone()),
+                None,
+                VenueRole::Participant,
+                false,
+                false,
+                false,
+            ),
+            ParticipantForgeDecision::Refuse(ForgeRefused::ParticipantFenceViolation {
+                reason: R::VenueNotDeclaredParticipant,
+                ..
+            })
+        ));
+        // Initial modes defer to the DC-NODE-15 gate (no extend yet), regardless of venue.
+        assert_eq!(
+            participant_forge_decision(
+                &ForgeMode::InitialCatchupRequired,
+                Some(head.clone()),
+                None,
+                VenueRole::Participant,
+                false,
+                false,
+                false,
+            ),
+            ParticipantForgeDecision::UseInitialCatchupGate,
+        );
+    }
+
+    /// CN-FOLLOW-01 MAC: the SingleProducer forge decision + its transitions are
+    /// byte-for-byte UNCHANGED by this slice. Re-asserts the existing SingleProducer
+    /// extend behavior over `single_producer_forge_decision` / `forge_mode_after_admit`
+    /// / `forge_mode_on_caughtup` exactly as before (the participant additions are a
+    /// disjoint path; the new fail-closed arm for the participant mode never fires for
+    /// any single-producer input).
+    #[test]
+    fn single_producer_forge_decision_unchanged() {
+        let peer = tp(10, 100, 0xAA);
+        let own = tp(11, 145, 0xBB);
+        // on_caughtup + after_admit transitions: unchanged.
+        let cu = forge_mode_on_caughtup(&ForgeMode::InitialCatchupRequired, peer.clone());
+        assert_eq!(
+            cu,
+            ForgeMode::CaughtUpToPeerTip {
+                peer_tip: peer.clone()
+            }
+        );
+        let ext = forge_mode_after_admit(&cu, true, Some(own.clone()), Some(peer.clone()));
+        assert_eq!(
+            ext,
+            ForgeMode::SingleProducerExtendOwnDurableSpine {
+                adopted_root: own.clone(),
+                current_tip: own.clone(),
+            }
+        );
+        // The extend decision still forges on the durable spine head (ExtendOwnSpine),
+        // unchanged by the participant additions.
+        assert_eq!(
+            single_producer_forge_decision(
+                &ext,
+                Some(own.clone()),
+                Some(own.clone()),
+                Some(own.clone()),
+                VenueRole::SingleProducer,
+                false,
+                false,
+            ),
+            SingleProducerForgeDecision::ExtendOwnSpine {
+                forge_base: own.clone(),
+            }
+        );
+        // Initial gate: unchanged.
+        assert_eq!(
+            single_producer_forge_decision(
+                &ForgeMode::InitialCatchupRequired,
+                Some(own.clone()),
+                Some(own.clone()),
+                Some(own.clone()),
+                VenueRole::SingleProducer,
+                false,
+                false,
+            ),
+            SingleProducerForgeDecision::UseInitialCatchupGate,
+        );
+        // The fence still fails closed on a non-single-producer venue.
+        assert!(matches!(
+            single_producer_forge_decision(
+                &ext,
+                Some(own.clone()),
+                Some(own.clone()),
+                None,
+                VenueRole::Unknown,
+                false,
+                false,
+            ),
+            SingleProducerForgeDecision::Refuse(ForgeRefused::SingleProducerFenceViolation {
+                reason: SingleProducerFenceReason::VenueNotDeclaredSingleProducer,
+                ..
+            })
+        ));
+    }
+
+    /// CN-FOLLOW-01 MAC (leg-1 regression): an orphaned startup that emits a structured
+    /// MissingBridge (DC-NODE-39) HOLDS the Participant forge fence — `pending_missing_bridge`
+    /// set yields a typed refusal, never a forge, never a crash. The decision refuses
+    /// regardless of how caught up the durable tip is.
+    #[test]
+    fn orphaned_startup_holds_forge_fence_participant() {
+        use ParticipantForgeFenceReason as R;
+        let head = tp(100, 1600, 0xF1);
+        let mode = participant_extend(&head);
+        // pending_missing_bridge set (the orphaned-startup / un-bridged-winner hold).
+        let decision = participant_forge_decision(
+            &mode,
+            Some(head.clone()), // durable head present + equal -> would forge if not fenced
+            None,
+            VenueRole::Participant,
+            false,
+            false,
+            true, // pending_missing_bridge -> HOLD
+        );
+        assert!(
+            matches!(
+                decision,
+                ParticipantForgeDecision::Refuse(ForgeRefused::ParticipantFenceViolation {
+                    reason: R::ForkChoicePending,
+                    ..
+                })
+            ),
+            "a held MissingBridge must refuse the forge (no forge on a stranded tip)"
+        );
+    }
+
+    /// CN-FOLLOW-01 MAC (replay-equivalence): the Participant forge decision + its
+    /// transitions are PURE — replaying the same ordered inputs yields byte-identical
+    /// decisions and modes. Two independent runs over the same input sequence
+    /// (catch-up latch -> extend forge -> post-admit advance -> pending fence) produce
+    /// equal output sequences.
+    #[test]
+    fn participant_forge_two_runs_byte_identical() {
+        let head0 = tp(110, 1800, 0x11);
+        let head1 = tp(111, 1825, 0x12);
+        // A deterministic input sequence: (durable, followed, reselect, fork_switch, bridge).
+        let run = || -> (Vec<ForgeMode>, Vec<ParticipantForgeDecision>) {
+            let mut modes = Vec::new();
+            let mut decisions = Vec::new();
+            // 1. latch the extend mode on the first caught-up instant.
+            let mut mode = participant_forge_mode_on_caughtup(
+                &ForgeMode::InitialCatchupRequired,
+                head0.clone(),
+            );
+            modes.push(mode.clone());
+            // 2. extend forge on the durable head (no pending).
+            let d1 = participant_forge_decision(
+                &mode,
+                Some(head0.clone()),
+                Some(head0.clone()),
+                VenueRole::Participant,
+                false,
+                false,
+                false,
+            );
+            decisions.push(d1);
+            // 3. post-admit advance to the next own head.
+            mode = participant_forge_mode_after_admit(&mode, true, Some(head1.clone()));
+            modes.push(mode.clone());
+            // 4. a pending fork-switch fences the next tick.
+            let d2 = participant_forge_decision(
+                &mode,
+                Some(head1.clone()),
+                Some(head1.clone()),
+                VenueRole::Participant,
+                false,
+                true,
+                false,
+            );
+            decisions.push(d2);
+            (modes, decisions)
+        };
+        let (m1, d1) = run();
+        let (m2, d2) = run();
+        assert_eq!(m1, m2, "replayed modes are byte-identical");
+        assert_eq!(d1, d2, "replayed decisions are byte-identical");
+        // Sanity: the sequence exercised both an extend forge and a pending refusal.
+        assert!(matches!(
+            d1[0],
+            ParticipantForgeDecision::ExtendOnSelectedHead { .. }
+        ));
+        assert!(matches!(
+            d1[1],
+            ParticipantForgeDecision::Refuse(ForgeRefused::ParticipantFenceViolation { .. })
+        ));
     }
 
     // ===== PHASE4-N-AG S2 (DC-NODE-19): RED loop continuation past feed-EOF =====
