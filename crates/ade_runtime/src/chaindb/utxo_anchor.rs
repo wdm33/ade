@@ -45,7 +45,7 @@ fn anchor_err<E: std::fmt::Display>(e: E) -> ChainDbError {
 /// admit authority). All four fields mirror the WAL `AdmitBlock`, so a reconciliation
 /// is an exact identity comparison, not a heuristic.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) struct AnchorPosition {
+pub struct AnchorPosition {
     pub slot: u64,
     pub block_hash: [u8; 32],
     pub prior_fp: [u8; 32],

@@ -24,6 +24,7 @@ mod error;
 mod in_memory;
 mod persistent;
 mod snapshot_contract;
+mod transient_epoch_view;
 mod types;
 mod utxo_anchor;
 mod utxo_key;
@@ -31,6 +32,11 @@ mod utxo_key;
 pub use contract::run_contract_tests;
 pub use crash_safety::{run_crash_safety_tests, KillStrategy, NoKill};
 pub use error::ChainDbError;
+pub use transient_epoch_view::{
+    is_valid_window_key, purge_transient_root, transient_root, window_key,
+    TransientEpochViewStore, TransientViewError, TRANSIENT_SUBTREE,
+};
+pub use utxo_anchor::AnchorPosition;
 pub use in_memory::InMemoryChainDb;
 pub use persistent::{PersistentChainDb, PersistentChainDbOptions, SyncCadence};
 pub use snapshot_contract::run_snapshot_contract_tests;
