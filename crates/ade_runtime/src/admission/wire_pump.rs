@@ -654,9 +654,12 @@ async fn handle_block_fetch(
 /// fixed `Server` — the peer is the keep-alive SERVER on this connection
 /// (Ade is the client), so a client-originated message from the peer
 /// (`MsgKeepAlive` / `MsgDone`) is an `IllegalTransition` and fails
-/// closed; an undecodable payload is a malformed keep-alive frame. (If a
-/// live run ever shows the peer running a keep-alive CLIENT toward Ade, a
-/// responder is a scoped follow-on — CE-AM-LIVE proof obligation.)
+/// closed; an undecodable payload is a malformed keep-alive frame.
+/// (NB: a responder over THIS outbound follow connection is NOT the adoption
+/// path — cardano-node never runs client roles over a unidirectional inbound
+/// link, so it never pulls from Ade here. Adoption is the localRoot DIAL: the
+/// relay dials Ade's `--listen` serve listener (proven live 2026-06-20). See
+/// docs/clusters/PRODUCER-PARTICIPANT-FOLLOW/ADOPTION-CHANNEL-TRANSPORT-ROLE-DISCOVERY.md.)
 fn handle_keep_alive(
     payload: &[u8],
     keep_alive_state: &mut KeepAliveState,
