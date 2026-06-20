@@ -46,6 +46,7 @@ pub mod scripts;
 pub mod seed_consensus_inputs;
 pub mod shelley;
 pub mod snapshot;
+pub mod stake_ref;
 pub mod state;
 pub mod tx_validity;
 pub mod utxo;
