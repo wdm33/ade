@@ -34,6 +34,7 @@ pub mod mary;
 pub mod mempool;
 pub mod phase;
 pub mod plutus_eval;
+pub mod pointer_resolve;
 pub mod pparams;
 pub mod pre_resolve;
 pub mod producer;

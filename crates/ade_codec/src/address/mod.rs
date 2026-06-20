@@ -8,6 +8,9 @@
 use crate::error::CodecError;
 use ade_types::address::Address;
 
+pub mod pointer;
+pub use pointer::{decode_pointer_address, decode_pointer_tail, PointerDecodeError, Ptr};
+
 /// Named decode chokepoint for Cardano addresses.
 ///
 /// Classifies the address by header byte type and returns the
